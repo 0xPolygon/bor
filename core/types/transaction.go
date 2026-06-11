@@ -636,6 +636,15 @@ func (tx *Transaction) WithSignature(signer Signer, sig []byte) (*Transaction, e
 	return &Transaction{inner: cpy, time: tx.time}, nil
 }
 
+// GetStateSyncData returns the underlying bridge event data used for state-sync
+// transactions.
+func (tx *Transaction) GetStateSyncData() []*StateSyncData {
+	if tx.Type() != StateSyncTxType {
+		return nil
+	}
+	return tx.inner.(*StateSyncTx).StateSyncData
+}
+
 // Transactions implements DerivableList for transactions.
 type Transactions []*Transaction
 

@@ -20,6 +20,7 @@ import (
 	"github.com/ethereum/go-ethereum/internal/cli/server/proto"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/ethereum/go-ethereum/rpc"
 )
 
 // chunkSize must stay below server.go:maxGRPCMessageSize so ChunkedEncoder
@@ -234,16 +235,13 @@ func headerToProtoHeader(h *types.Header) *proto.Header {
 }
 
 func (s *Server) DebugBlock(req *proto.DebugBlockRequest, stream proto.Bor_DebugBlockServer) error {
-	traceReq := &tracers.TraceBlockRequest{
-		Number: req.Number,
-		Config: &tracers.TraceConfig{
-			Config: &logger.Config{
-				EnableMemory: true,
-			},
+	config := &tracers.TraceConfig{
+		Config: &logger.Config{
+			EnableMemory: true,
 		},
 	}
 
-	res, err := s.tracerAPI.TraceBorBlock(traceReq)
+	res, err := s.tracerAPI.TraceBlockByNumber(stream.Context(), rpc.BlockNumber(req.Number), config)
 	if err != nil {
 		return err
 	}

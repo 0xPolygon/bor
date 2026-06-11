@@ -113,6 +113,7 @@ type Peer struct {
 	protoErr chan error
 	closed   chan struct{}
 	pingRecv chan struct{}
+	pongRecv chan struct{}
 	disc     chan DiscReason
 
 	// events receives message send / receive events if set
@@ -258,6 +259,7 @@ func newPeer(log log.Logger, conn *conn, protocols []Protocol) *Peer {
 		protoErr: make(chan error, len(protomap)+1), // protocols + pingLoop
 		closed:   make(chan struct{}),
 		pingRecv: make(chan struct{}, 16),
+		pongRecv: make(chan struct{}, 1),
 		log:      log.New("id", conn.node.ID(), "conn", conn.flags),
 	}
 	return p
@@ -328,24 +330,56 @@ loop:
 }
 
 func (p *Peer) pingLoop() {
+	p.pingLoopWithInterval(pingInterval)
+}
+
+func (p *Peer) pingLoopWithInterval(interval time.Duration) {
 	defer p.wg.Done()
 
-	ping := time.NewTimer(pingInterval)
+	ping := time.NewTimer(interval)
 	defer ping.Stop()
+
+	var pingSent time.Time
 
 	for {
 		select {
 		case <-ping.C:
+			measure := metrics.Enabled() && pingSent.IsZero()
+			if measure {
+				drainStalePongs(p.pongRecv)
+			}
 			if err := SendItems(p.rw, pingMsg); err != nil {
 				p.protoErr <- err
 				return
 			}
-			ping.Reset(pingInterval)
+			if measure {
+				pingSent = time.Now()
+			}
+			ping.Reset(interval)
 
 		case <-p.pingRecv:
-			SendItems(p.rw, pongMsg)
+			if err := SendItems(p.rw, pongMsg); err != nil {
+				p.protoErr <- err
+				return
+			}
+
+		case <-p.pongRecv:
+			if !pingSent.IsZero() {
+				peerPingLatencyTimer.Update(time.Since(pingSent))
+				pingSent = time.Time{}
+			}
 
 		case <-p.closed:
+			return
+		}
+	}
+}
+
+func drainStalePongs(pongRecv <-chan struct{}) {
+	for {
+		select {
+		case <-pongRecv:
+		default:
 			return
 		}
 	}
@@ -374,6 +408,13 @@ func (p *Peer) handle(msg Msg) error {
 		select {
 		case p.pingRecv <- struct{}{}:
 		case <-p.closed:
+		}
+	case msg.Code == pongMsg:
+		msg.Discard()
+		select {
+		case p.pongRecv <- struct{}{}:
+		case <-p.closed:
+		default:
 		}
 	case msg.Code == discMsg:
 		// This is the last message. We don't need to discard or

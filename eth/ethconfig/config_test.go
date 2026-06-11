@@ -15,6 +15,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdallws"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -83,7 +84,7 @@ func TestCreateConsensusEngine_OverrideHeimdallClient(t *testing.T) {
 		WithoutHeimdall:        false,
 	}
 
-	engine, err := CreateConsensusEngine(newTestBorChainConfig(), ethConfig, rawdb.NewMemoryDatabase(), nil)
+	engine, err := CreateConsensusEngine(newTestBorChainConfig(), ethConfig, rawdb.NewMemoryDatabase(), nil, vm.Config{})
 	require.NoError(t, err)
 	defer engine.Close()
 
@@ -97,7 +98,7 @@ func TestCreateConsensusEngine_CommaSeparatedHeimdallURL(t *testing.T) {
 		HeimdallURL: "http://primary:1317,http://secondary:1317",
 	}
 
-	engine, err := CreateConsensusEngine(newTestBorChainConfig(), ethConfig, rawdb.NewMemoryDatabase(), nil)
+	engine, err := CreateConsensusEngine(newTestBorChainConfig(), ethConfig, rawdb.NewMemoryDatabase(), nil, vm.Config{})
 	require.NoError(t, err)
 	defer engine.Close()
 
@@ -114,7 +115,7 @@ func TestCreateConsensusEngine_SingleHeimdallURL(t *testing.T) {
 		HeimdallURL: "http://primary:1317",
 	}
 
-	engine, err := CreateConsensusEngine(newTestBorChainConfig(), ethConfig, rawdb.NewMemoryDatabase(), nil)
+	engine, err := CreateConsensusEngine(newTestBorChainConfig(), ethConfig, rawdb.NewMemoryDatabase(), nil, vm.Config{})
 	require.NoError(t, err)
 	defer engine.Close()
 
@@ -130,7 +131,7 @@ func TestCreateConsensusEngine_WithoutHeimdall(t *testing.T) {
 	t.Parallel()
 	ethConfig := &Config{WithoutHeimdall: true}
 
-	engine, err := CreateConsensusEngine(newTestBorChainConfig(), ethConfig, rawdb.NewMemoryDatabase(), nil)
+	engine, err := CreateConsensusEngine(newTestBorChainConfig(), ethConfig, rawdb.NewMemoryDatabase(), nil, vm.Config{})
 	require.NoError(t, err)
 	defer engine.Close()
 
@@ -145,7 +146,7 @@ func TestCreateConsensusEngine_CommaSeparatedGRPC(t *testing.T) {
 		HeimdallgRPCAddress: "localhost:50051,localhost:50052",
 	}
 
-	engine, err := CreateConsensusEngine(newTestBorChainConfig(), ethConfig, rawdb.NewMemoryDatabase(), nil)
+	engine, err := CreateConsensusEngine(newTestBorChainConfig(), ethConfig, rawdb.NewMemoryDatabase(), nil, vm.Config{})
 	require.NoError(t, err)
 	defer engine.Close()
 
@@ -193,7 +194,7 @@ func TestCreateConsensusEngine_GRPCInitFailsFallsBackToHTTP(t *testing.T) {
 				HeimdallgRPCAddress: tt.grpcAddress,
 			}
 
-			engine, err := CreateConsensusEngine(newTestBorChainConfig(), ethConfig, rawdb.NewMemoryDatabase(), nil)
+			engine, err := CreateConsensusEngine(newTestBorChainConfig(), ethConfig, rawdb.NewMemoryDatabase(), nil, vm.Config{})
 			require.NoError(t, err)
 			defer engine.Close()
 
@@ -226,7 +227,7 @@ func TestCreateConsensusEngine_WSAddress(t *testing.T) {
 				HeimdallWSAddress:      tt.addr,
 			}
 
-			engine, err := CreateConsensusEngine(newTestBorChainConfig(), ethConfig, rawdb.NewMemoryDatabase(), nil)
+			engine, err := CreateConsensusEngine(newTestBorChainConfig(), ethConfig, rawdb.NewMemoryDatabase(), nil, vm.Config{})
 			require.NoError(t, err)
 			defer engine.Close()
 
@@ -249,7 +250,7 @@ func TestCreateConsensusEngine_NoWSAddress(t *testing.T) {
 		// No HeimdallWSAddress set
 	}
 
-	engine, err := CreateConsensusEngine(newTestBorChainConfig(), ethConfig, rawdb.NewMemoryDatabase(), nil)
+	engine, err := CreateConsensusEngine(newTestBorChainConfig(), ethConfig, rawdb.NewMemoryDatabase(), nil, vm.Config{})
 	require.NoError(t, err)
 	defer engine.Close()
 

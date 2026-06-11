@@ -22,6 +22,18 @@ files but not to the normal server runtime presets. A node started through
 loads the Go preset with `Bor.<Fork>Block == nil`, so `Bor.Is<Fork>(num)` never
 activates even though the genesis file looks correct.
 
+A second Bor-specific failure mode to prevent: a new VM hardfork copies the
+wrong active precompile set, accidentally dropping a Polygon-specific
+precompile or retroactively changing precompile availability for historical
+blocks. The MadhugiriPro/LisovoPro class is: P256 needed to be carried forward
+from MadhugiriPro onward, while KZG needed to remain available only for the
+historical Madhugiri through Lisovo window and be absent from LisovoPro onward.
+On mainnet, Madhugiri and MadhugiriPro activated at the same block, so only the
+MadhugiriPro boundary is externally observable there.
+For a new VM fork, copying the previous fork's precompile map is not sufficient
+evidence. The PR must state the intended precompile delta versus the previous
+fork, and the tests must assert that delta at the activation boundary.
+
 ## Trigger Conditions
 
 Apply this rule whenever a change:
@@ -67,6 +79,17 @@ For every new or changed fork, verify all of these surfaces before approving:
 - Precompile additions, removals, and gas changes must update
   `core/vm/contracts.go` registration, `ActivePrecompiles`, initialization,
   gas tables, and tests for both pre- and post-fork behavior.
+- VM hardforks must update the precompile continuity matrix in
+  `core/vm/contracts_continuity_test.go`. Compare the full active precompile
+  set, key implementation variants such as `p256Verify` and `bigModExp`, and
+  both mainnet/Amoy activation boundaries.
+- The matrix must encode the rollout intent for every non-standard or
+  special-case precompile: retained, removed, added, or gas/implementation
+  changed. A no-op copy from the previous fork needs explicit rationale.
+- A new VM hardfork must not accidentally drop P256, must not accidentally
+  re-enable KZG after LisovoPro, and must not remove KZG from historical
+  Madhugiri/MadhugiriPro/Lisovo replay unless the PR explicitly documents and
+  tests that consensus change.
 - Any change that affects block validity, transaction validity, receipt roots,
   state roots, logs bloom, RLP encoding, or fork ID must have cross-client
   parity tracked for Polygon Erigon before the rollout is considered complete.
@@ -90,3 +113,11 @@ For every new or changed fork, verify all of these surfaces before approving:
       the runtime-loaded chain config contains the new fork value?
 - [ ] If the fork changes EVM behavior or protocol encoding, is there a
       matching Erigon compatibility note, issue, or implementation?
+- [ ] If `core/vm/contracts.go`, `core/vm/jump_table.go`, `params.Rules`, or
+      a VM hardfork block changed, does the PR update or explicitly preserve
+      the precompile continuity matrix?
+- [ ] Does the PR state the intended precompile additions/removals/retentions
+      versus the previous VM fork, rather than silently copying the old map?
+- [ ] Could the diff change historical sync/replay behavior for already-produced
+      blocks by modifying an older fork's precompile map? If yes, treat it as a
+      blocking consensus risk unless the change is intentional and tested.

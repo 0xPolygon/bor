@@ -456,7 +456,8 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 	prewarmReaderCache(statedb, block, signer)
 
 	// Iterate over and process the individual transactions
-	for i, tx := range block.Transactions() {
+	txs := block.Transactions()
+	for i, tx := range txs {
 		if tx.Type() == types.StateSyncTxType {
 			continue
 		}

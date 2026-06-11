@@ -106,7 +106,8 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	}
 
 	// Iterate over and process the individual transactions
-	for i, tx := range block.Transactions() {
+	txs := block.Transactions()
+	for i, tx := range txs {
 		// Check if execution should be cancelled or not
 		select {
 		case <-interruptCtx.Done():
@@ -152,11 +153,29 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		}
 	}
 
+	// State-sync transactions (post-Madhugiri) are the last tx in body. In order to produce
+	// accurate traces for state-sync transactions, we fire the OnTxStart and OnTxEnd hooks
+	// here before calling Finalize. The hooks are already wrapped to support state-sync tx
+	// tracing. Because state-sync events are applied to state as independent EVM calls, the
+	// wrapped hooks inserts a synthetic root frame to wrap all those calls.
+	var (
+		hasStateSyncTx   = len(txs) > 0 && txs[len(txs)-1].Type() == types.StateSyncTxType
+		stateSyncReceipt *types.Receipt
+		stateSyncEndErr  error
+	)
+	if hooks := cfg.Tracer; hooks != nil && hasStateSyncTx && hooks.OnTxStart != nil && hooks.OnTxEnd != nil {
+		hooks.OnTxStart(evm.GetVMContext(), txs[len(txs)-1], params.BorSystemAddress)
+		defer func() {
+			hooks.OnTxEnd(stateSyncReceipt, stateSyncEndErr)
+		}()
+	}
+
 	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards), apply
 	// state sync event (if any), and append the receipt.
 	receiptsCountBeforeFinalize := len(receipts)
-	receipts, err = p.chain.Engine().Finalize(p.chain, header, statedb, block.Body(), receipts)
+	receipts, err = p.chain.Engine().Finalize(p.chain, header, tracingStateDB, block.Body(), receipts)
 	if err != nil {
+		stateSyncEndErr = err
 		return nil, err
 	}
 
@@ -165,12 +184,14 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		// Defense-in-depth: if insertStateSyncTransactionAndCalculateReceipt silently failed
 		// to add the receipt, the count will be off.
 		if len(block.Transactions()) != len(receipts) {
-			return nil, fmt.Errorf("%w: receipt count mismatch, txs=%d receipts=%d", ErrStateSyncMismatch, len(block.Transactions()), len(receipts))
+			stateSyncEndErr = fmt.Errorf("%w: receipt count mismatch, txs=%d receipts=%d", ErrStateSyncMismatch, len(block.Transactions()), len(receipts))
+			return nil, stateSyncEndErr
 		}
 		appliedNewStateSyncReceipt := receiptsCountBeforeFinalize+1 == len(receipts)
 
 		if appliedNewStateSyncReceipt {
 			allLogs = append(allLogs, receipts[len(receipts)-1].Logs...)
+			stateSyncReceipt = receipts[len(receipts)-1]
 		}
 	}
 

@@ -114,9 +114,9 @@ The ```bor server``` command runs the Bor client.
 
 - ```vmdebug```: Record information useful for VM and contract debugging (default: false)
 
-- ```vmtrace```: Name of tracer which should observe internal VM operations (e.g. 'json')
+- ```vmtrace```: Name of a tracer to record internal VM operations during blockchain synchronization (costly) (e.g. 'json')
 
-- ```vmtrace.jsonconfig```: Tracer configuration (JSON)
+- ```vmtrace.jsonconfig```: Tracer configuration (JSON) (default: {})
 
 - ```witness.enable```: Enable witness protocol (default: false)
 
@@ -309,6 +309,8 @@ The ```bor server``` command runs the Bor client.
 - ```nodekeyhex```: P2P node key as hex
 
 - ```nodiscover```: Disables the peer discovery mechanism (manual peer addition) (default: false)
+
+- ```p2p.nosnap```: Disable serving snap sync requests to peers (snap/1 protocol is not advertised) (default: false)
 
 - ```port```: Network listening port (default: 30303)
 

@@ -128,6 +128,12 @@ func NewEVMTxContext(msg *Message) vm.TxContext {
 	return ctx
 }
 
+// NewEVMTxContextForStateSync returns a minimal TxContext for executing
+// state-sync transactions.
+func NewEVMTxContextForStateSync() vm.TxContext {
+	return vm.TxContext{GasPrice: big.NewInt(0)}
+}
+
 // GetHashFn returns a GetHashFunc which retrieves header hashes by number
 func GetHashFn(ref *types.Header, chain ChainContext) func(n uint64) common.Hash {
 	// Cache will initially contain [refHash.parent],

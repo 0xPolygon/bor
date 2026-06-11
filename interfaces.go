@@ -303,6 +303,7 @@ type ChainValidator interface {
 	ProcessFutureMilestone(num uint64, hash common.Hash)
 	PurgeWhitelistedCheckpoint()
 	PurgeWhitelistedMilestone()
+	PurgeMilestonesAfter(block uint64)
 
 	LockMutex(endBlockNum uint64) bool
 	UnlockMutex(doLock bool, milestoneId string, endBlockNum uint64, endBlockHash common.Hash)

@@ -317,12 +317,15 @@ func ServiceGetReceiptsQuery68(chain *core.BlockChain, query GetReceiptsRequest)
 			lookups >= 2*maxReceiptsServe {
 			break
 		}
-		// Retrieve the requested block's receipts
+		// Retrieve the requested block's receipts. If receipts are empty
+		// replace the result with an rlp.EmptyList to encode in the final
+		// response.
 		results := chain.GetReceiptsRLP(hash)
-		if results == nil {
+		if len(results) == 0 {
 			if header := chain.GetHeaderByHash(hash); header == nil || header.ReceiptHash != types.EmptyRootHash {
 				continue
 			}
+			results = rlp.EmptyList
 		} else {
 			body := chain.GetBodyRLP(hash)
 			if body == nil {
@@ -365,10 +368,13 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		// with normal block receipts so no special handling needed.
 		if borCfg != nil && borCfg.IsMadhugiri(big.NewInt(int64(number))) {
 			allReceipts := chain.GetReceiptsRLP(hash)
-			if allReceipts == nil {
+			if len(allReceipts) == 0 {
 				if header := chain.GetHeaderByHash(hash); header == nil || header.ReceiptHash != types.EmptyRootHash {
 					continue
 				}
+				// If receipts are empty, replace the result with an rlp.EmptyList
+				// to encode in the final response.
+				allReceipts = rlp.EmptyList
 			}
 			body := chain.GetBodyRLP(hash)
 			if body == nil {
@@ -394,7 +400,7 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		// the final list to be sent over p2p.
 		normalReceipts := chain.GetReceiptsRLP(hash)
 		var normalReceiptsDecoded []*types.ReceiptForStorage
-		if normalReceipts != nil {
+		if len(normalReceipts) != 0 {
 			if err := rlp.DecodeBytes(normalReceipts, &normalReceiptsDecoded); err != nil {
 				log.Error("Failed to decode normal receipts", "err", err)
 				continue
@@ -404,15 +410,15 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		// Fetch state-sync transaction receipt (if any)
 		borReceipt := chain.GetBorReceiptRLPByHash(hash)
 		var borReceiptDecoded types.ReceiptForStorage
-		if borReceipt != nil {
+		if len(borReceipt) != 0 {
 			if err := rlp.DecodeBytes(borReceipt, &borReceiptDecoded); err != nil {
 				log.Error("Failed to decode state-sync receipt", "err", err)
 				continue
 			}
 		}
 
-		// Check if receipts are nil due to non existence or something else
-		if normalReceipts == nil && borReceipt == nil {
+		// Check if receipts are absent due to non existence or something else
+		if len(normalReceipts) == 0 && len(borReceipt) == 0 {
 			// Don't append empty receipt data for this block if either the local header is nil
 			// or the receipt root of header denotes existence of receipt (i.e. is not empty hash)
 			if header := chain.GetHeaderByHash(hash); header == nil || header.ReceiptHash != types.EmptyRootHash {
@@ -423,12 +429,12 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		// Track existence of bor receipts for encoding
 		var isBorReceiptPresent bool
 
-		// We atleast have some non-nil data for this block. Combine the receipts for encoding.
+		// We at least have some non-empty data for this block. Combine the receipts for encoding.
 		var blockReceipts []*types.ReceiptForStorage = make([]*types.ReceiptForStorage, 0)
-		if normalReceipts != nil {
+		if len(normalReceipts) != 0 {
 			blockReceipts = append(blockReceipts, normalReceiptsDecoded...)
 		}
-		if borReceipt != nil {
+		if len(borReceipt) != 0 {
 			isBorReceiptPresent = true
 			blockReceipts = append(blockReceipts, &borReceiptDecoded)
 		}

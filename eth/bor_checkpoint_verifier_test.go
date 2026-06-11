@@ -224,14 +224,9 @@ func findCommonAncestorWithFutureMilestones_CalculateTargetBlock_NoMatch(start u
 			continue // Skip milestones after current one
 		}
 
-		// Update target block based on milestone found (when no hash match)
-		if milestoneNum < targetBlock {
+		if milestoneNum > 0 && milestoneNum < targetBlock {
 			targetBlock = milestoneNum - 1
 		}
-	}
-
-	if targetBlock < 0 {
-		return 0
 	}
 
 	return targetBlock
@@ -410,6 +405,200 @@ func TestCheckpointMismatch_DoesNotRewind(t *testing.T) {
 	require.NotNil(t, blockAtEnd, "canonical block at end=%d must remain present", end)
 }
 
+// Whitelist matches local at rewindTo < end: blind rewind fires and purges
+// future entries above the anchor.
+func TestMilestoneMismatch_AttestedRewind_PurgesStaleWhitelist(t *testing.T) {
+	t.Parallel()
+
+	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	stack, ethBackend, headBefore := startMinedBorNode(t, 20)
+	defer stack.Close()
+	require.GreaterOrEqual(t, headBefore, uint64(20))
+
+	anchor := headBefore - 10
+	anchorHash := ethBackend.BlockChain().GetBlockByNumber(anchor).Hash()
+
+	dl := ethBackend.handler.downloader
+	dl.ProcessMilestone(anchor, anchorHash)
+
+	staleFutureBlock := headBefore - 5
+	staleLocalHash := ethBackend.BlockChain().GetBlockByNumber(staleFutureBlock).Hash()
+	staleFutureHash := common.HexToHash(mutateHexString(staleLocalHash.Hex()[2:]))
+	require.NotEqual(t, staleLocalHash, staleFutureHash)
+	dl.ProcessFutureMilestone(staleFutureBlock, staleFutureHash)
+
+	doExist, wlNum, wlHash := dl.GetWhitelistedMilestone()
+	require.True(t, doExist)
+	require.Equal(t, anchor, wlNum)
+	require.Equal(t, anchorHash, wlHash)
+	preFutureOrder, preFutureList, err := rawdb.ReadFutureMilestoneList(ethBackend.ChainDb())
+	require.NoError(t, err)
+	require.Contains(t, preFutureOrder, staleFutureBlock)
+	require.Equal(t, staleFutureHash, preFutureList[staleFutureBlock])
+
+	mismatchEnd := headBefore - 3
+	mismatchStart := mismatchEnd - 1
+	mismatchLocal := ethBackend.BlockChain().GetBlockByNumber(mismatchEnd).Hash().Hex()[2:]
+	bogusHash := mutateHexString(mismatchLocal)
+
+	verifier := newBorVerifier()
+	ethHandler := (*ethHandler)(ethBackend.handler)
+
+	_, err = verifier.verify(ctx, ethBackend, ethHandler, mismatchStart, mismatchEnd, bogusHash, false)
+	require.ErrorIs(t, err, errHashMismatch)
+
+	headAfter := ethBackend.BlockChain().CurrentBlock().Number.Uint64()
+	require.Equal(t, anchor, headAfter)
+	require.Equal(t, anchorHash, ethBackend.BlockChain().CurrentBlock().Hash())
+
+	postFutureOrder, postFutureList, _ := rawdb.ReadFutureMilestoneList(ethBackend.ChainDb())
+	require.NotContains(t, postFutureOrder, staleFutureBlock)
+	_, present := postFutureList[staleFutureBlock]
+	require.False(t, present)
+
+	doExist, wlNum, wlHash = dl.GetWhitelistedMilestone()
+	require.True(t, doExist)
+	require.Equal(t, anchor, wlNum)
+	require.Equal(t, anchorHash, wlHash)
+}
+
+// Whitelist hash differs from local at the anchor: blind rewind must refuse.
+func TestMilestoneMismatch_WhitelistHashDiffersFromLocal_DoesNotRewind(t *testing.T) {
+	t.Parallel()
+
+	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	stack, ethBackend, headBefore := startMinedBorNode(t, 20)
+	defer stack.Close()
+
+	anchor := headBefore - 10
+	localAtAnchor := ethBackend.BlockChain().GetBlockByNumber(anchor).Hash()
+	whitelistHash := common.HexToHash(mutateHexString(localAtAnchor.Hex()[2:]))
+	require.NotEqual(t, localAtAnchor, whitelistHash)
+
+	ethBackend.handler.downloader.ProcessMilestone(anchor, whitelistHash)
+
+	mismatchEnd := headBefore - 3
+	mismatchStart := mismatchEnd - 1
+	bogusHash := mutateHexString(ethBackend.BlockChain().GetBlockByNumber(mismatchEnd).Hash().Hex()[2:])
+
+	verifier := newBorVerifier()
+	ethHandler := (*ethHandler)(ethBackend.handler)
+
+	_, err := verifier.verify(ctx, ethBackend, ethHandler, mismatchStart, mismatchEnd, bogusHash, false)
+	require.ErrorIs(t, err, errHashMismatch)
+
+	require.Equal(t, headBefore, ethBackend.BlockChain().CurrentBlock().Number.Uint64())
+}
+
+// rewindTo == end (SetHead would no-op for the bad block): blind rewind must refuse.
+func TestMilestoneMismatch_WhitelistAtMismatchHeight_DoesNotRewind(t *testing.T) {
+	t.Parallel()
+
+	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	stack, ethBackend, headBefore := startMinedBorNode(t, 20)
+	defer stack.Close()
+
+	sameHeight := headBefore - 5
+	anchorLocal := ethBackend.BlockChain().GetBlockByNumber(sameHeight).Hash()
+	ethBackend.handler.downloader.ProcessMilestone(sameHeight, anchorLocal)
+
+	bogus := mutateHexString(anchorLocal.Hex()[2:])
+
+	verifier := newBorVerifier()
+	ethHandler := (*ethHandler)(ethBackend.handler)
+
+	_, err := verifier.verify(ctx, ethBackend, ethHandler, sameHeight, sameHeight, bogus, false)
+	require.ErrorIs(t, err, errHashMismatch)
+
+	require.Equal(t, headBefore, ethBackend.BlockChain().CurrentBlock().Number.Uint64())
+
+	exists, num, h := ethBackend.handler.downloader.GetWhitelistedMilestone()
+	require.True(t, exists)
+	require.Equal(t, sameHeight, num)
+	require.Equal(t, anchorLocal, h)
+}
+
+// Unattesting whitelist must not short-circuit search: a matching future
+// milestone below end becomes the rewind anchor.
+func TestMilestoneMismatch_FutureMilestoneFallback_RewindsWhenWhitelistUnattested(t *testing.T) {
+	t.Parallel()
+
+	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	stack, ethBackend, headBefore := startMinedBorNode(t, 20)
+	defer stack.Close()
+	require.GreaterOrEqual(t, headBefore, uint64(20))
+
+	dl := ethBackend.handler.downloader
+
+	sameHeight := headBefore - 5
+	sameHeightHash := ethBackend.BlockChain().GetBlockByNumber(sameHeight).Hash()
+	dl.ProcessMilestone(sameHeight, sameHeightHash)
+
+	earlier := headBefore - 12
+	earlierHash := ethBackend.BlockChain().GetBlockByNumber(earlier).Hash()
+	dl.ProcessFutureMilestone(earlier, earlierHash)
+
+	bogus := mutateHexString(sameHeightHash.Hex()[2:])
+
+	verifier := newBorVerifier()
+	ethHandler := (*ethHandler)(ethBackend.handler)
+
+	_, err := verifier.verify(ctx, ethBackend, ethHandler, sameHeight, sameHeight, bogus, false)
+	require.ErrorIs(t, err, errHashMismatch)
+
+	require.Equal(t, earlier, ethBackend.BlockChain().CurrentBlock().Number.Uint64())
+	require.Equal(t, earlierHash, ethBackend.BlockChain().CurrentBlock().Hash())
+
+	exists, _, _ := dl.GetWhitelistedMilestone()
+	require.False(t, exists)
+}
+
+// Genesis is a valid attested anchor; rewindTo==0 must not be confused with "unset".
+func TestMilestoneMismatch_GenesisAnchor_RewindsAndKeepsAttested(t *testing.T) {
+	t.Parallel()
+
+	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	stack, ethBackend, headBefore := startMinedBorNode(t, 20)
+	defer stack.Close()
+	require.Less(t, headBefore, uint64(126)) // within maxRewindLen
+
+	genesisHash := ethBackend.BlockChain().GetBlockByNumber(0).Hash()
+	ethBackend.handler.downloader.ProcessMilestone(0, genesisHash)
+
+	mismatchEnd := headBefore - 3
+	mismatchStart := mismatchEnd - 1
+	bogus := mutateHexString(ethBackend.BlockChain().GetBlockByNumber(mismatchEnd).Hash().Hex()[2:])
+
+	verifier := newBorVerifier()
+	ethHandler := (*ethHandler)(ethBackend.handler)
+
+	_, err := verifier.verify(ctx, ethBackend, ethHandler, mismatchStart, mismatchEnd, bogus, false)
+	require.ErrorIs(t, err, errHashMismatch)
+
+	require.Equal(t, uint64(0), ethBackend.BlockChain().CurrentBlock().Number.Uint64())
+	require.Equal(t, genesisHash, ethBackend.BlockChain().CurrentBlock().Hash())
+}
+
 func TestMilestoneMismatch_UnknownHash_DoesNotRewind(t *testing.T) {
 	t.Parallel()
 
@@ -539,6 +728,18 @@ func waitForHeadAtLeast(t *testing.T, ethBackend *Ethereum, target uint64, timeo
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+}
+
+// startMinedBorNode mines to target, stops the miner, returns (stack, backend,
+// head). For tests that need head stable across assertions.
+func startMinedBorNode(t *testing.T, target uint64) (*node.Node, *Ethereum, uint64) {
+	t.Helper()
+
+	stack, ethBackend := startBorNode(t, loadBorTestGenesis(t), generateTestKey(t))
+	require.NoError(t, ethBackend.StartMining())
+	waitForHeadAtLeast(t, ethBackend, target, 30*time.Second)
+	ethBackend.StopMining()
+	return stack, ethBackend, ethBackend.BlockChain().CurrentBlock().Number.Uint64()
 }
 
 func generateTestKey(t *testing.T) *ecdsa.PrivateKey {

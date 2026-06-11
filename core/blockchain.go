@@ -2244,11 +2244,14 @@ func isStateSyncReceiptPresent(decoded []*types.ReceiptForStorage) bool {
 
 // splitReceiptsAndDeriveFields separates out the state-sync receipt from the whole receipt list
 // of a block and returns the encoded lists back separately. If a state-sync receipt is found, it
-// derives the necessary fields and populates them. In case of errors or empty receipt, it returns
-// `nil` instead of `rlp.EncodeToBytes(nil)`.
+// derives the necessary fields and populates them. For empty / nil input the normal-receipts
+// return is the canonical RLP empty list and the bor-receipts return is nil (the bor-receipt
+// slot stores a single struct, so "no entry" is the correct representation there).
 func splitReceiptsAndDeriveFields(receipts rlp.RawValue, number uint64, hash common.Hash, borCfg *params.BorConfig) (rlp.RawValue, rlp.RawValue) {
-	if receipts == nil {
-		return nil, nil
+	// If there are no receipts, normalise the receipt entry to the canonical RLP
+	// empty list to match with the on-disk shape under blockReceiptsKey.
+	if len(receipts) == 0 {
+		return rlp.EmptyList, nil
 	}
 
 	// After the Madhugiri HF, no need to split receipts as all receipts for a block
@@ -2285,9 +2288,11 @@ func splitReceiptsAndDeriveFields(receipts rlp.RawValue, number uint64, hash com
 			return receipts, nil
 		}
 
-		// If no receipts left, return
+		// If no normal receipts remain after extracting the state-sync
+		// receipt, return the canonical RLP empty list rather than nil so
+		// the on-disk shape under blockReceiptsKey is consistent.
 		if len(decoded[:len(decoded)-1]) == 0 {
-			return nil, encodedStateSyncReceipt
+			return rlp.EmptyList, encodedStateSyncReceipt
 		}
 
 		// Encode back the normal (non state-sync) receipts and return

@@ -32,6 +32,10 @@ type Context struct {
 	BlockNumber *big.Int    // Number of the block the tx is contained within (zero if dangling tx or call)
 	TxIndex     int         // Index of the transaction within a block (zero if dangling tx or call)
 	TxHash      common.Hash // Hash of the transaction being traced (zero if dangling call)
+
+	// Bor specific fields used for state-sync transaction tracing
+	CumulativeGasUsed uint64 // Cumulative gas used by all prior txs in the block
+	LogIndex          int    // Number of logs emitted by all prior txs in the block
 }
 
 // Tracer represents the set of methods that must be exposed by a tracer

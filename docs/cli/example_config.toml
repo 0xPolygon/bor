@@ -11,7 +11,7 @@ ancient = ""                    # Data directory for ancient chain segments (def
 "db.engine" = "pebble"          # Used to select leveldb or pebble as database (default = pebble)
 "state.scheme" = "path"         # Used to select the state scheme (default = path)
 keystore = ""                   # Path of the directory where keystores are located
-"rpc.batchlimit" = 100          # Maximum number of messages in a batch (default=100, use 0 for no limits)
+"rpc.batch-request-limit" = 1000 # Maximum number of messages in a batch (default=1000, use 0 for no limits)
 "rpc.returndatalimit" = 100000  # Maximum size (in bytes) a result of an rpc request could have (default=100000, use 0 for no limits)
 syncmode = "full"               # Blockchain sync mode ("full", "snap" or "stateless")
 gcmode = "full"                 # Blockchain garbage collection mode ("full", "archive")
@@ -20,6 +20,10 @@ snapshot = true                 # Enables the snapshot-database mode
 ethstats = ""                   # Reporting URL of a ethstats service (nodename:secret@host:port)
 witnessprotocol = false         # Enables the wit/0 protocol
 devfakeauthor = false           # Run miner without validator set authorization [dev mode] : Use with '--bor.withoutheimdall' (default: false)
+
+# VM tracing
+vmtrace = "supply"                           # Name of a tracer to record internal VM operations during blockchain synchronization (costly)
+"vmtrace.jsonconfig" = '{"path": "output"}'  # Tracer configuration (JSON)
 
 ["eth.requiredblocks"]  # Comma separated block number-to-hash mappings to require for peering (<number>=<hash>) (default = empty map)
   "31000000" = "0x2087b9e2b353209c2c21e370c82daa12278efd0fe5f0febe6c29035352cf050e"
@@ -31,11 +35,11 @@ enable-private-tx = true # Enable private transaction relay
 bp-rpc-endpoints = [ ] # Comma separated rpc endpoints of all block producers
 
 [log]
-  vmodule = ""                    # Per-module verbosity: comma-separated list of <pattern>=<level> (e.g. eth/*=5,p2p=4)
-  json = false                    # Format logs with JSON
-  backtrace = ""                  # Request a stack trace at a specific logging statement (e.g. "block.go:271")
-  debug = true                    # Prepends log messages with call-site location (file and line number)
-  enable-block-tracking = false   # Enables additional logging of information collected while tracking block lifecycle
+  vmodule = ""                               # Per-module verbosity: comma-separated list of <pattern>=<level> (e.g. eth/*=5,p2p=4)
+  json = false                               # Format logs with JSON
+  backtrace = ""                             # Request a stack trace at a specific logging statement (e.g. "block.go:271")
+  debug = true                               # Prepends log messages with call-site location (file and line number)
+  enable-block-tracking = false              # Enables additional logging of information collected while tracking block lifecycle
 
 [p2p]
   maxpeers = 50                  # Maximum number of network peers (network disabled if set to 0)

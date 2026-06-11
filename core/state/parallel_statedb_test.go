@@ -1927,3 +1927,27 @@ func TestPDB_Witness_SharedAcrossCopyViaSetWitness(t *testing.T) {
 		t.Fatalf("finalDB.Witness().Headers = %v; want [header(42)] via PDB write", got)
 	}
 }
+
+// TestPDB_AddPreimage_ClonesAndKeepsFirst pins parity with serial
+// StateDB.AddPreimage: clone the caller's slice (opKeccak256 passes one
+// backed by EVM memory, which subsequent ops can mutate) and keep the
+// first-recorded value (don't overwrite on later AddPreimage(hash, …)).
+func TestPDB_AddPreimage_ClonesAndKeepsFirst(t *testing.T) {
+	pdb, _, _ := newTestPDB(t, 0)
+	hash := common.HexToHash("0xabcd")
+
+	preimage := []byte{1, 2, 3, 4}
+	pdb.AddPreimage(hash, preimage)
+
+	// Mutating the caller's buffer must not corrupt the recorded value.
+	preimage[0] = 0xff
+	if got := pdb.preimages[hash]; got[0] != 1 {
+		t.Fatalf("AddPreimage did not clone: caller mutation leaked into preimages, got %x", got)
+	}
+
+	// A second AddPreimage for the same hash must NOT overwrite.
+	pdb.AddPreimage(hash, []byte{9, 9, 9, 9})
+	if got := pdb.preimages[hash][0]; got != 1 {
+		t.Fatalf("AddPreimage overwrote on second call: got %x, want 0x01 (first write)", got)
+	}
+}

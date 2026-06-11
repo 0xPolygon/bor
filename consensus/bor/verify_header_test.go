@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/triedb"
@@ -536,7 +537,7 @@ func TestVerifyHeaderCachesBehavior(t *testing.T) {
 	defer chain.Stop()
 
 	// Create Bor instance
-	bor := New(cfg, rawdb.NewMemoryDatabase(), nil, sp, nil, nil, nil, false, 0)
+	bor := New(cfg, rawdb.NewMemoryDatabase(), nil, sp, nil, nil, nil, false, 0, vm.Config{})
 
 	genesis := chain.HeaderChain().GetHeaderByNumber(0)
 

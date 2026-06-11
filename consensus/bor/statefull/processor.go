@@ -3,6 +3,7 @@ package statefull
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"math/big"
 
 	"github.com/holiman/uint256"
@@ -10,14 +11,15 @@ import (
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
+	"github.com/ethereum/go-ethereum/consensus/bor/abi"
+	"github.com/ethereum/go-ethereum/consensus/bor/clerk"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rlp"
 )
-
-var systemAddress = common.HexToAddress("0xffffFFFfFFffffffffffffffFfFFFfffFFFfFFfE")
 
 type ChainContext struct {
 	Chain consensus.ChainHeaderReader
@@ -66,11 +68,10 @@ func (m Callmsg) Gas() uint64          { return m.CallMsg.Gas }
 func (m Callmsg) Value() *big.Int      { return m.CallMsg.Value }
 func (m Callmsg) Data() []byte         { return m.CallMsg.Data }
 
-// get system message
 func GetSystemMessage(toAddress common.Address, data []byte) Callmsg {
 	return Callmsg{
 		ethereum.CallMsg{
-			From:     systemAddress,
+			From:     params.BorSystemAddress,
 			Gas:      params.MaxTxGas, // should be more than enough for state-sync related syscalls
 			GasPrice: big.NewInt(0),
 			Value:    big.NewInt(0),
@@ -80,7 +81,6 @@ func GetSystemMessage(toAddress common.Address, data []byte) Callmsg {
 	}
 }
 
-// apply message
 func ApplyMessage(
 	_ context.Context,
 	msg Callmsg,
@@ -88,6 +88,7 @@ func ApplyMessage(
 	header *types.Header,
 	chainConfig *params.ChainConfig,
 	chainContext core.ChainContext,
+	vmConfig vm.Config,
 ) (uint64, error) {
 	initialGas := msg.Gas()
 
@@ -96,7 +97,8 @@ func ApplyMessage(
 
 	// Create a new environment which holds all relevant information
 	// about the transaction and calling mechanisms.
-	vmenv := vm.NewEVM(blockContext, state, chainConfig, vm.Config{})
+	vmenv := vm.NewEVM(blockContext, state, chainConfig, vmConfig)
+	vmenv.SetTxContext(core.NewEVMTxContextForStateSync())
 
 	// nolint : contextcheck
 	// Apply the transaction to the current state (included in the env)
@@ -156,4 +158,76 @@ func ApplyBorMessage(vmenv *vm.EVM, msg Callmsg) (*core.ExecutionResult, error) 
 		Err:        err,
 		ReturnData: ret,
 	}, nil
+}
+
+// ApplyStateSyncEvents replays all state-sync events from a StateSyncTx against the EVM. This
+// method is generally used for tracing. It tries to mimic the exact things which happen when
+// a state-sync is processed in a live network (via CommitState).
+//
+// ctx is checked between events so callers can abort the loop on deadline / client disconnect.
+func ApplyStateSyncEvents(ctx context.Context, vmenv *vm.EVM, tx *types.Transaction, message *core.Message, stateReceiverContract common.Address) (*core.ExecutionResult, error) {
+	events := tx.GetStateSyncData()
+	if len(events) == 0 {
+		return &core.ExecutionResult{UsedGas: 0, ReturnData: nil}, nil
+	}
+
+	// Set tx context so that opcodes like GASPRICE don't panic.
+	vmenv.SetTxContext(core.NewEVMTxContext(message))
+
+	// The actual state-sync transaction uses event time but because we don't have
+	// it here, we use the block time. The calldata will be different than what
+	// was constructed while executing the transaction but it'll be deterministic
+	// in every run.
+	stateReceiverABI := abi.StateReceiver()
+	// syncTime can be reused across calls as ABI Pack does not retain a reference
+	syncTime := new(big.Int).SetUint64(vmenv.Context.Time)
+
+	var totalGasUsed uint64
+	for _, event := range events {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		gasUsed, err := commitStateSyncEvent(vmenv, event, stateReceiverABI, stateReceiverContract, syncTime)
+		if err != nil {
+			return nil, err
+		}
+		totalGasUsed += gasUsed
+	}
+
+	return &core.ExecutionResult{
+		UsedGas: totalGasUsed,
+		Err:     nil,
+	}, nil
+}
+
+// commitStateSyncEvent encodes a single bridge event, packs the commitState calldata, and
+// applies the system call. A reverted EVM call does not surface as an error — production
+// semantics allow individual events to fail silently; the trace records the revert. Only
+// encoding / ABI failures (which indicate a programming bug, not a runtime condition)
+// return an error.
+func commitStateSyncEvent(vmenv *vm.EVM, event *types.StateSyncData, stateReceiverABI abi.ABI, stateReceiverContract common.Address, syncTime *big.Int) (uint64, error) {
+	// Convert StateSyncData to EventRecord (matching CommitState's BuildEventRecord).
+	// LogIndex and ChainID are not used by commitState but are required for RLP encoding.
+	record := &clerk.EventRecord{
+		ID:       event.ID,
+		Contract: event.Contract,
+		Data:     event.Data,
+		TxHash:   event.TxHash,
+	}
+	recordBytes, err := rlp.EncodeToBytes(record)
+	if err != nil {
+		return 0, fmt.Errorf("failed to RLP encode state-sync event %d: %w", event.ID, err)
+	}
+
+	// ABI-pack commitState(uint256 syncTime, bytes recordBytes)
+	data, err := stateReceiverABI.Pack("commitState", syncTime, recordBytes)
+	if err != nil {
+		return 0, fmt.Errorf("failed to ABI pack commitState for event %d: %w", event.ID, err)
+	}
+
+	result, _ := ApplyBorMessage(vmenv, GetSystemMessage(stateReceiverContract, data))
+	if result.Err != nil {
+		log.Debug("state-sync event reverted during trace replay", "eventID", event.ID, "err", result.Err)
+	}
+	return result.UsedGas, nil
 }
