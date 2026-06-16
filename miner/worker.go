@@ -251,6 +251,12 @@ type environment struct {
 	sidecars []*types.BlobTxSidecar
 	blobs    int
 
+	// Reserved-blockspace bookkeeping populated by runReservedClients. The
+	// scaffolding PR reads these to stamp header.BlockExtraData; in this slice
+	// they're internal-only (read by tests).
+	reservedTxCount uint32
+	reservedGasUsed uint64
+
 	mvReadMapList []map[blockstm.Key]blockstm.ReadDescriptor
 	witness       *stateless.Witness
 
@@ -286,6 +292,8 @@ func (env *environment) copy() *environment {
 		makeEnvDuration:    env.makeEnvDuration,
 		makeHeaderDuration: env.makeHeaderDuration,
 		pendingDuration:    env.pendingDuration,
+		reservedTxCount:    env.reservedTxCount,
+		reservedGasUsed:    env.reservedGasUsed,
 	}
 
 	if env.gasPool != nil {
@@ -383,6 +391,11 @@ type worker struct {
 	chain       *core.BlockChain
 
 	prio []common.Address // A list of senders to prioritize
+
+	// reservedRegistry is the source of truth for reserved-blockspace clients
+	// and their per-block gas quotas. nil disables the reserved pass — block
+	// building is byte-identical to before reserved-blockspace existed.
+	reservedRegistry reservedRegistry
 
 	// Feeds
 	pendingLogsFeed event.Feed
@@ -645,6 +658,14 @@ func (w *worker) getCurrent() *environment {
 	w.currentMu.RLock()
 	defer w.currentMu.RUnlock()
 	return w.current
+}
+
+// setReservedRegistry installs the reserved-blockspace registry the worker
+// consults during block building. A nil registry disables the reserved pass.
+func (w *worker) setReservedRegistry(r reservedRegistry) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.reservedRegistry = r
 }
 
 // setRecommitInterval updates the interval for miner sealing work recommitting.
@@ -1982,6 +2003,9 @@ func sendPlan(builderPlanCh chan<- *types.Transaction, genParams *generateParams
 	if builderPlanCh == nil || genParams == nil || plainTxs == nil {
 		return
 	}
+	if plainTxs.Empty() {
+		return
+	}
 	// Clone is O(N) pointer copies — done synchronously before the heap is consumed.
 	clone := plainTxs.clone()
 	prefetchedHashes := genParams.prefetchedTxHashes
@@ -2056,6 +2080,52 @@ func scanOverflow(
 	return bonus, remaining
 }
 
+func (w *worker) fillTransactionsNew(interrupt *atomic.Int32, env *environment, genParams *generateParams) error {
+	var emptyBlobTxs = newTransactionsByPriceAndNonce(env.signer, nil, env.header.BaseFee, &w.interruptBlockBuilding)
+
+	pendingStart := time.Now()
+	filter := w.buildDefaultFilter(env.header.BaseFee, env.header.Number)
+	filter.BlobTxs = false
+	pendingTxs := w.eth.TxPool().Pending(filter, &w.interruptBlockBuilding)
+
+	env.pendingDuration = time.Since(pendingStart)
+	pendingTimer.Update(env.pendingDuration)
+
+	sequence, err := w.sequenceTxs(env, pendingTxs)
+	if err != nil {
+		return err
+	}
+
+	// Shared channels used during builder mode. Both are nil when there is no prefetcher.
+	var builderPlanCh chan<- *types.Transaction
+	var builderGasFreedCh chan<- uint64
+	if genParams != nil && genParams.builderPlanCh != nil {
+		builderPlanCh = genParams.builderPlanCh
+		if genParams.builderGasFreedCh != nil {
+			builderGasFreedCh = genParams.builderGasFreedCh
+		}
+	}
+
+	// remainingGas returns the block gas still available for the next
+	// commitTransactions pass. Before the first pass env.gasPool is nil, so we
+	// fall back to the full header limit.
+	remainingGas := func() uint64 {
+		if env.gasPool == nil {
+			return env.header.GasLimit
+		}
+		return env.gasPool.Gas()
+	}
+
+	for _, txs := range sequence {
+		sendPlan(builderPlanCh, genParams, txs, remainingGas())
+		if err := w.commitTransactions(env, txs, emptyBlobTxs, interrupt, builderGasFreedCh); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // fillTransactions retrieves the pending transactions from the txpool and fills them
 // into the given sealing block. The transaction selection and ordering strategy can
 // be customized with the plugin in the future.
@@ -2070,7 +2140,6 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, gen
 	pendingStart := time.Now()
 
 	filter := w.buildDefaultFilter(env.header.BaseFee, env.header.Number)
-
 	filter.BlobTxs = false
 	pendingPlainTxs := w.eth.TxPool().Pending(filter, &w.interruptBlockBuilding)
 
