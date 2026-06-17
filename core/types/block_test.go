@@ -863,6 +863,76 @@ func TestGetBaseFeeParams(t *testing.T) {
 	}
 }
 
+func TestSetSealTimings(t *testing.T) {
+	t.Parallel()
+
+	cancunBlock := big.NewInt(100)
+	chainConfig := &params.ChainConfig{
+		ChainID:     big.NewInt(137),
+		CancunBlock: cancunBlock,
+	}
+
+	// Distinctive vanity and seal bytes to confirm they survive the rewrite.
+	vanity := bytes.Repeat([]byte{0xab}, ExtraVanityLength)
+	seal := bytes.Repeat([]byte{0xcd}, ExtraSealLength)
+
+	gasTarget := uint64(15000000)
+	bfcd := uint64(64)
+	timeNano := uint64(1700000000_000_000_000) + 123456789
+	encoded, err := rlp.EncodeToBytes(&BlockExtraData{
+		GasTarget:                &gasTarget,
+		BaseFeeChangeDenominator: &bfcd,
+		TimeNano:                 &timeNano,
+	})
+	if err != nil {
+		t.Fatalf("failed to encode BlockExtraData: %v", err)
+	}
+
+	extra := append(append(append([]byte{}, vanity...), encoded...), seal...)
+	header := &Header{Number: big.NewInt(200), Extra: extra}
+
+	// Use values with non-zero nanosecond components to prove full precision.
+	elapsedNano := uint64(2_648_123) // 2.648123ms
+	finalizeNano := uint64(1_500_456)
+	if err := header.SetSealTimings(elapsedNano, finalizeNano); err != nil {
+		t.Fatalf("SetSealTimings failed: %v", err)
+	}
+
+	gotElapsed, gotFinalize := header.GetSealTimings(chainConfig)
+	if gotElapsed == nil || *gotElapsed != elapsedNano {
+		t.Errorf("SealElapsedNano mismatch: got %v, want %d", gotElapsed, elapsedNano)
+	}
+	if gotFinalize == nil || *gotFinalize != finalizeNano {
+		t.Errorf("SealFinalizeNano mismatch: got %v, want %d", gotFinalize, finalizeNano)
+	}
+
+	// Vanity and seal must be untouched by the rewrite.
+	if !bytes.Equal(header.Extra[:ExtraVanityLength], vanity) {
+		t.Errorf("vanity bytes modified by SetSealTimings")
+	}
+	if !bytes.Equal(header.Extra[len(header.Extra)-ExtraSealLength:], seal) {
+		t.Errorf("seal bytes modified by SetSealTimings")
+	}
+
+	// Pre-existing optional fields must be preserved.
+	bed := header.DecodeBlockExtraData(chainConfig)
+	if bed == nil {
+		t.Fatalf("DecodeBlockExtraData returned nil after SetSealTimings")
+	}
+	if bed.TimeNano == nil || *bed.TimeNano != timeNano {
+		t.Errorf("TimeNano not preserved: got %v, want %d", bed.TimeNano, timeNano)
+	}
+	if bed.GasTarget == nil || *bed.GasTarget != gasTarget {
+		t.Errorf("GasTarget not preserved: got %v, want %d", bed.GasTarget, gasTarget)
+	}
+
+	// Short extra data must error rather than panic.
+	short := &Header{Number: big.NewInt(200), Extra: []byte{0x01, 0x02}}
+	if err := short.SetSealTimings(1, 2); err == nil {
+		t.Errorf("expected error for short extra data, got nil")
+	}
+}
+
 func TestDecodeBlockExtraData(t *testing.T) {
 	t.Parallel()
 

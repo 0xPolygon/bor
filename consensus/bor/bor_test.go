@@ -5862,6 +5862,53 @@ func TestVerifyHeader_PlaceholderTimeNanoPresent(t *testing.T) {
 	}
 }
 
+func TestVerifyHeader_PlaceholderMissingSealTimings(t *testing.T) {
+	t.Parallel()
+	s := newPlaceholderVerifySetup(t, true)
+
+	// TimeNano present but seal timings omitted.
+	gasTarget := uint64(15_000_000)
+	bfcd := uint64(64)
+	timeNano := uint64(1700000000_000_000_000)
+	extra := buildBlockExtraBytes(&types.BlockExtraData{
+		GasTarget:                &gasTarget,
+		BaseFeeChangeDenominator: &bfcd,
+		TimeNano:                 &timeNano,
+		// SealElapsedNano / SealFinalizeNano intentionally omitted
+	})
+	h := s.makeSignedChild(t, extra, big.NewInt(params.InitialBaseFee))
+
+	chain := newRawDBChain(s.db, s.cfg, h, nil, nil)
+	err := s.b.verifyHeader(chain, h, nil)
+	require.ErrorIs(t, err, errMissingSealTimings)
+}
+
+func TestVerifyHeader_PlaceholderSealTimingsPresent(t *testing.T) {
+	t.Parallel()
+	s := newPlaceholderVerifySetup(t, true)
+
+	gasTarget := uint64(15_000_000)
+	bfcd := uint64(64)
+	timeNano := uint64(1700000000_000_000_000)
+	elapsedNano := uint64(2_648_000)
+	finalizeNano := uint64(1_500_000)
+	extra := buildBlockExtraBytes(&types.BlockExtraData{
+		GasTarget:                &gasTarget,
+		BaseFeeChangeDenominator: &bfcd,
+		TimeNano:                 &timeNano,
+		SealElapsedNano:          &elapsedNano,
+		SealFinalizeNano:         &finalizeNano,
+	})
+	h := s.makeSignedChild(t, extra, big.NewInt(params.InitialBaseFee))
+
+	chain := newRawDBChain(s.db, s.cfg, h, nil, nil)
+	err := s.b.verifyHeader(chain, h, nil)
+	// Should not fail for missing seal timings (other unrelated checks may still error).
+	if err != nil {
+		require.NotErrorIs(t, err, errMissingSealTimings)
+	}
+}
+
 // placeholderVerifySetup holds shared state for verifyHeader Placeholder tests.
 type placeholderVerifySetup struct {
 	b       *Bor
