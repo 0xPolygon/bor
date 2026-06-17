@@ -176,6 +176,20 @@ runtime preset with `Bor.<Fork>Block == nil`. In that case
 `c.Bor.Is<Fork>(num)` never activates on the normal startup path even though the
 genesis file looks correct.
 
+For VM hardforks, also compare the full active precompile set across the
+previous fork, the new fork, and historical replay windows. The Pro hardfork
+failure class is a new VM fork copying the wrong precompile set: P256 must be
+carried forward from MadhugiriPro onward, KZG must remain available for
+historical Madhugiri/MadhugiriPro/Lisovo blocks, and KZG must stay absent from
+LisovoPro onward. On mainnet, Madhugiri and MadhugiriPro activated at the same
+block, so only the MadhugiriPro boundary is externally observable there.
+Changes touching `core/vm/contracts.go`, `core/vm/jump_table.go`, or
+`params.Rules` should update or explicitly preserve the precompile continuity
+matrix and boundary tests in `core/vm/contracts_continuity_test.go`. A new VM
+fork must state the intended precompile delta versus the previous fork; silently
+copying the old precompile map is a review finding unless the PR documents why
+every special-case precompile is retained.
+
 Fork-gated EVM, precompile, consensus, and miner behavior must be tested at
 `N-1`, `N`, and `N+1` for each network activation block. If the fork changes
 consensus output, track Polygon Erigon parity before treating the rollout as

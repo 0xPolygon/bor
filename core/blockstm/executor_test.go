@@ -117,7 +117,7 @@ func (t *testExecTask) Execute(mvh *MVHashMap, incarnation int) error {
 
 			sleep(op.duration)
 
-			t.readMap[k] = ReadDescriptor{k, readKind, Version{TxnIndex: result.depIdx, Incarnation: result.incarnation}}
+			t.readMap[k] = ReadDescriptor{Path: k, Kind: readKind, V: Version{TxnIndex: result.depIdx, Incarnation: result.incarnation}}
 		case writeType:
 			t.writeMap[k] = WriteDescriptor{k, version, op.val}
 		case otherType:

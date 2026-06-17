@@ -13,6 +13,94 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
+func TestPurgeAfter(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	svc := NewService(db, false, 0)
+
+	m, ok := svc.milestoneService.(*milestone)
+	if !ok {
+		t.Fatalf("expected milestoneService to be *milestone, got %T", svc.milestoneService)
+	}
+
+	hashAt := func(n uint64) common.Hash { return common.Hash{byte(n)} }
+
+	m.Process(100, hashAt(100))
+	m.ProcessFutureMilestone(80, hashAt(80))
+	m.ProcessFutureMilestone(110, hashAt(110))
+	m.ProcessFutureMilestone(130, hashAt(130))
+	// Lock state set after the ProcessFutureMilestone calls: those clear the
+	// lock when num >= LockedMilestoneNumber.
+	m.finality.Lock()
+	m.Locked = true
+	m.LockedMilestoneNumber = 120
+	m.LockedMilestoneHash = hashAt(120)
+	m.LockedMilestoneIDs = map[string]struct{}{"id1": {}}
+	_ = rawdb.WriteLockField(db, m.Locked, m.LockedMilestoneNumber, m.LockedMilestoneHash, m.LockedMilestoneIDs)
+	m.finality.Unlock()
+
+	m.PurgeAfter(90)
+
+	m.finality.RLock()
+	if m.doExist {
+		t.Fatalf("doExist must be false after purge")
+	}
+	if _, _, err := rawdb.ReadFinality[*rawdb.Milestone](db); err == nil {
+		t.Fatalf("persisted whitelist row must be deleted")
+	}
+	if m.Locked || m.LockedMilestoneNumber != 0 || len(m.LockedMilestoneIDs) != 0 {
+		t.Fatalf("lock state must be cleared")
+	}
+	if _, ok := m.FutureMilestoneList[80]; !ok {
+		t.Fatalf("future entry at 80 must be kept")
+	}
+	if _, ok := m.FutureMilestoneList[110]; ok {
+		t.Fatalf("future entry at 110 must be evicted")
+	}
+	if _, ok := m.FutureMilestoneList[130]; ok {
+		t.Fatalf("future entry at 130 must be evicted")
+	}
+	if len(m.FutureMilestoneOrder) != 1 || m.FutureMilestoneOrder[0] != 80 {
+		t.Fatalf("order must contain only 80, got %v", m.FutureMilestoneOrder)
+	}
+	m.finality.RUnlock()
+
+	// Pins the DB-delete-before-memory-clear ordering: Get's DB fallback would
+	// otherwise resurrect the row on the next call.
+	if exists, _, _ := m.Get(); exists {
+		t.Fatalf("Get() must not resurrect purged whitelist")
+	}
+}
+
+func TestPurgeAfter_MemoryFalseDiskStale(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	svc := NewService(db, false, 0)
+
+	m, ok := svc.milestoneService.(*milestone)
+	if !ok {
+		t.Fatalf("expected milestoneService to be *milestone, got %T", svc.milestoneService)
+	}
+
+	hashAt := func(n uint64) common.Hash { return common.Hash{byte(n)} }
+
+	if err := rawdb.WriteLastFinality[*rawdb.Milestone](db, 100, hashAt(100)); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	m.finality.Lock()
+	m.doExist = false
+	m.Number = 0
+	m.Hash = common.Hash{}
+	m.finality.Unlock()
+
+	m.PurgeAfter(50)
+
+	if _, _, err := rawdb.ReadFinality[*rawdb.Milestone](db); err == nil {
+		t.Fatalf("stale on-disk row must be deleted")
+	}
+	if exists, _, _ := m.Get(); exists {
+		t.Fatalf("Get() must not resurrect")
+	}
+}
+
 func TestUnlockSprintThreshold(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	svc := NewService(db, false, 0)

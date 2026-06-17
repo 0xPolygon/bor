@@ -26,6 +26,21 @@ import (
 )
 
 // StateSyncTx is a system transaction in Bor that introduces state sync events.
+//
+// # Note on address representation
+//
+// As state-sync transactions have no signature or real sender, there can be multiple
+// representations of the `from` and `to` address.
+//
+//   - The public facing methods (e.g. tx.To()) return zero address for both sender and
+//     receiver, as lot of downstream tooling like block explorers relies on this info.
+//   - The address used during actual EVM execution is different and is defined in the
+//     execution path. The sender is set to system address (defined in params.BorSystemAddress)
+//     and the receiver is set to the state-receiver contract address (defined in genesis
+//     config).
+//
+// The public facing RPC methods (e.g. eth_getTransactionByHash) uses the first representation,
+// while the tracing related RPC methods uses the second representation.
 type StateSyncTx struct {
 	StateSyncData []*StateSyncData
 }
@@ -60,7 +75,10 @@ func (tx *StateSyncTx) gasTipCap() *big.Int    { return big.NewInt(0) }
 func (tx *StateSyncTx) gasFeeCap() *big.Int    { return big.NewInt(0) }
 func (tx *StateSyncTx) value() *big.Int        { return big.NewInt(0) }
 func (tx *StateSyncTx) nonce() uint64          { return 0 }
-func (tx *StateSyncTx) to() *common.Address    { return &common.Address{} }
+
+// to returns the zero address representing the public facing RPC value. This should
+// not be used during EVM execution or tracing.
+func (tx *StateSyncTx) to() *common.Address { return &common.Address{} }
 
 func (tx *StateSyncTx) effectiveGasPrice(dst *big.Int, baseFee *big.Int) *big.Int {
 	return big.NewInt(0)

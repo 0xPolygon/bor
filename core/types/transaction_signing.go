@@ -364,6 +364,9 @@ func (s eip2930Signer) Equal(s2 Signer) bool {
 
 func (s eip2930Signer) Sender(tx *Transaction) (common.Address, error) {
 	if tx.Type() == StateSyncTxType {
+		// State-sync transactions don't carry a real signature or sender. Hence, return
+		// zero address so that the public facing API interface doesn't break. Downstream
+		// consumers (e.g. block explorers) rely on this assumption.
 		return common.Address{}, nil
 	}
 

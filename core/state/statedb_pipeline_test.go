@@ -164,8 +164,10 @@ func TestFlatDiffOverlay_DestructAndResurrect(t *testing.T) {
 	require.NoError(t, err)
 
 	addr := common.HexToAddress("0xdead02")
+	slot := common.HexToHash("0x01")
 	sdb.CreateAccount(addr)
 	sdb.SetNonce(addr, 5, 0)
+	sdb.SetState(addr, slot, common.HexToHash("0xbeef"))
 	root, _, err := sdb.CommitWithUpdate(0, false, false)
 	require.NoError(t, err)
 
@@ -189,6 +191,8 @@ func TestFlatDiffOverlay_DestructAndResurrect(t *testing.T) {
 
 	// The account should be resurrected with the new nonce from FlatDiff.Accounts.
 	require.Equal(t, uint64(10), overlayDB.GetNonce(addr))
+	require.Equal(t, common.Hash{}, overlayDB.GetState(addr, slot),
+		"destruct+resurrect FlatDiff must not expose pre-destruction storage")
 }
 
 func TestTrieOnlyReader_SkipsFlatReaders(t *testing.T) {
@@ -437,8 +441,9 @@ func TestPrefetchRoot_NormalAccountFallsBackToDataRoot(t *testing.T) {
 }
 
 // TestPrefetchRoot_NewAccountInFlatDiff verifies that an account created in
-// block N (exists in FlatDiff but not in committed state) gets prefetchRoot=zero
-// since there's nothing to prefetch at the committed parent root.
+// block N (exists in FlatDiff but not in committed state) gets the empty
+// storage root as its prefetch root since there's nothing to prefetch at the
+// committed parent root.
 func TestPrefetchRoot_NewAccountInFlatDiff(t *testing.T) {
 	db := NewDatabase(triedb.NewDatabase(rawdb.NewMemoryDatabase(), nil), nil)
 
@@ -472,11 +477,97 @@ func TestPrefetchRoot_NewAccountInFlatDiff(t *testing.T) {
 	obj := overlayDB.getStateObject(newAddr)
 	require.NotNil(t, obj)
 
-	// Account is new (not in committed state), so prefetchRoot should be zero
-	require.Equal(t, common.Hash{}, obj.prefetchRoot, "prefetchRoot should be zero for new accounts not in committed state")
+	// Account is new (not in committed state), so storage prefetching must not
+	// use the FlatDiff account's post-state root with the committed-parent
+	// reader. The empty storage root makes those prefetches a no-op.
+	require.Equal(t, types.EmptyRootHash, obj.prefetchRoot, "prefetchRoot should be empty root for new accounts not in committed state")
 
-	// getPrefetchRoot falls back to data.Root
-	require.Equal(t, obj.data.Root, obj.getPrefetchRoot(), "getPrefetchRoot should fall back to data.Root for new accounts")
+	// getPrefetchRoot returns the committed-parent-compatible root, not the
+	// FlatDiff post-state storage root.
+	require.Equal(t, types.EmptyRootHash, obj.getPrefetchRoot(), "getPrefetchRoot should return empty root for new accounts")
+}
+
+func TestSnapshotDirtyStorageSlots_UsesCommittedPrefetchRootForFlatDiff(t *testing.T) {
+	db := NewDatabase(triedb.NewDatabase(rawdb.NewMemoryDatabase(), nil), nil)
+
+	addr := common.HexToAddress("0xflat")
+	slot := common.HexToHash("0x01")
+
+	sdb, err := New(types.EmptyRootHash, db)
+	require.NoError(t, err)
+	sdb.CreateAccount(addr)
+	sdb.SetNonce(addr, 1, 0)
+	sdb.SetState(addr, slot, common.HexToHash("0xaa"))
+	sdb.Finalise(false)
+
+	committedRoot, _, err := sdb.CommitWithUpdate(0, false, false)
+	require.NoError(t, err)
+
+	committedDB, err := New(committedRoot, db)
+	require.NoError(t, err)
+	committedObj := committedDB.getStateObject(addr)
+	require.NotNil(t, committedObj)
+	committedStorageRoot := committedObj.data.Root
+	require.NotEqual(t, types.EmptyRootHash, committedStorageRoot)
+
+	postStorageRoot := crypto.Keccak256Hash([]byte("block-n-post-storage-root"))
+	require.NotEqual(t, committedStorageRoot, postStorageRoot)
+
+	diff := &FlatDiff{
+		Accounts: map[common.Address]types.StateAccount{
+			addr: {
+				Nonce:    1,
+				Balance:  uint256.NewInt(0),
+				Root:     postStorageRoot,
+				CodeHash: types.EmptyCodeHash.Bytes(),
+			},
+		},
+		Storage:     make(map[common.Address]map[common.Hash]common.Hash),
+		Destructs:   make(map[common.Address]struct{}),
+		Code:        make(map[common.Hash][]byte),
+		ReadStorage: make(map[common.Address][]common.Hash),
+	}
+
+	overlayDB, err := NewWithFlatBase(committedRoot, db, diff)
+	require.NoError(t, err)
+	overlayDB.SetState(addr, common.HexToHash("0x02"), common.HexToHash("0xbb"))
+
+	slots := overlayDB.snapshotDirtyStorageSlots()
+	require.Len(t, slots, 1)
+	require.Equal(t, addr, slots[0].addr)
+	require.Equal(t, committedStorageRoot, slots[0].root)
+	require.NotEqual(t, postStorageRoot, slots[0].root)
+}
+
+func TestSnapshotDirtyStorageSlots_SkipsNewFlatDiffAccount(t *testing.T) {
+	db := NewDatabase(triedb.NewDatabase(rawdb.NewMemoryDatabase(), nil), nil)
+
+	sdb, err := New(types.EmptyRootHash, db)
+	require.NoError(t, err)
+	committedRoot, _, err := sdb.CommitWithUpdate(0, false, false)
+	require.NoError(t, err)
+
+	addr := common.HexToAddress("0xnew")
+	diff := &FlatDiff{
+		Accounts: map[common.Address]types.StateAccount{
+			addr: {
+				Nonce:    1,
+				Balance:  uint256.NewInt(100),
+				Root:     crypto.Keccak256Hash([]byte("block-n-post-storage-root")),
+				CodeHash: types.EmptyCodeHash.Bytes(),
+			},
+		},
+		Storage:     make(map[common.Address]map[common.Hash]common.Hash),
+		Destructs:   make(map[common.Address]struct{}),
+		Code:        make(map[common.Hash][]byte),
+		ReadStorage: make(map[common.Address][]common.Hash),
+	}
+
+	overlayDB, err := NewWithFlatBase(committedRoot, db, diff)
+	require.NoError(t, err)
+	overlayDB.SetState(addr, common.HexToHash("0x01"), common.HexToHash("0xbb"))
+
+	require.Empty(t, overlayDB.snapshotDirtyStorageSlots())
 }
 
 // TestPrefetchRoot_DeepCopyPreserves verifies that stateObject.deepCopy

@@ -79,9 +79,22 @@ func NewEVMBlockContext(header *types.Header, chain ChainContext, author *common
 		random = &header.MixDigest
 	}
 
+	// Bor emits a synthetic "transfer log" on every value movement (see
+	// core/bor_fee_log.go). On non-Bor chain configs (e.g. when running
+	// Ethereum execution-spec-tests) those logs aren't part of the protocol
+	// and pollute the block bloom, so swap Transfer for the no-log variant.
+	// A nil chain (TestProcessParentBlockHash passes one) also falls into
+	// the no-log branch since we can't read a Bor config off it.
+	transferFn := EthereumTransfer
+	if chain != nil {
+		if cfg := chain.Config(); cfg != nil && cfg.Bor != nil {
+			transferFn = Transfer
+		}
+	}
+
 	return vm.BlockContext{
 		CanTransfer: CanTransfer,
-		Transfer:    Transfer,
+		Transfer:    transferFn,
 		GetHash:     GetHashFn(header, chain),
 		Coinbase:    beneficiary,
 		BlockNumber: new(big.Int).Set(header.Number),
@@ -92,6 +105,14 @@ func NewEVMBlockContext(header *types.Header, chain ChainContext, author *common
 		GasLimit:    header.GasLimit,
 		Random:      random,
 	}
+}
+
+// EthereumTransfer subtracts amount from sender and adds it to recipient,
+// matching upstream go-ethereum semantics — no Bor transfer-log emission.
+// Used by NewEVMBlockContext when ChainConfig.Bor is nil.
+func EthereumTransfer(db vm.StateDB, sender, recipient common.Address, amount *uint256.Int) {
+	db.SubBalance(sender, amount, tracing.BalanceChangeTransfer)
+	db.AddBalance(recipient, amount, tracing.BalanceChangeTransfer)
 }
 
 // NewEVMTxContext creates a new transaction context for a single transaction.
@@ -105,6 +126,12 @@ func NewEVMTxContext(msg *Message) vm.TxContext {
 		ctx.BlobFeeCap = new(big.Int).Set(msg.BlobGasFeeCap)
 	}
 	return ctx
+}
+
+// NewEVMTxContextForStateSync returns a minimal TxContext for executing
+// state-sync transactions.
+func NewEVMTxContextForStateSync() vm.TxContext {
+	return vm.TxContext{GasPrice: big.NewInt(0)}
 }
 
 // GetHashFn returns a GetHashFunc which retrieves header hashes by number
@@ -223,17 +250,26 @@ func CanTransfer(db vm.StateDB, addr common.Address, amount *uint256.Int) bool {
 
 // Transfer subtracts amount from sender and adds amount to recipient using the given Db
 func Transfer(db vm.StateDB, sender, recipient common.Address, amount *uint256.Int) {
-	// get inputs before
+	// In V2 BlockSTM, ParallelStateDB.RecordTransfer returns true and captures
+	// the transfer for log generation during settlement. The serial StateDB
+	// returns false, falling through to the original snapshot-based log path.
+	// Skipping the GetBalance/ToBig calls during V2 execution avoids the #1
+	// allocation hotspot (7 big.Ints per transfer, 819K allocs per block set).
+	if db.RecordTransfer(sender, recipient, amount) {
+		db.SubBalance(sender, amount, tracing.BalanceChangeTransfer)
+		db.AddBalance(recipient, amount, tracing.BalanceChangeTransfer)
+		return
+	}
+
+	// Serial path: full transfer log with balance snapshots.
 	input1 := db.GetBalance(sender)
 	input2 := db.GetBalance(recipient)
 
 	db.SubBalance(sender, amount, tracing.BalanceChangeTransfer)
 	db.AddBalance(recipient, amount, tracing.BalanceChangeTransfer)
 
-	// get outputs after
 	output1 := db.GetBalance(sender)
 	output2 := db.GetBalance(recipient)
 
-	// add transfer log
 	AddTransferLog(db, sender, recipient, amount.ToBig(), input1.ToBig(), input2.ToBig(), output1.ToBig(), output2.ToBig())
 }

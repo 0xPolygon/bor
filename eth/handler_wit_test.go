@@ -203,6 +203,50 @@ func TestHandleGetWitnessMetadata_EmptyHashes(t *testing.T) {
 	assert.Equal(t, 0, len(response))
 }
 
+// TestHandleGetWitnessMetadata_HashCountBound exercises the per-request hash cap.
+func TestHandleGetWitnessMetadata_HashCountBound(t *testing.T) {
+	handler := newTestHandler()
+	defer handler.close()
+
+	witHandler := (*witHandler)(handler.handler)
+	peer := newTestWitPeer()
+	defer peer.Close()
+
+	tests := []struct {
+		name    string
+		count   int
+		wantErr bool
+	}{
+		{"at limit", MaxWitnessMetadataServe, false},
+		{"one over limit", MaxWitnessMetadataServe + 1, true},
+		{"far over limit", MaxWitnessMetadataServe * 100, true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			hashes := make([]common.Hash, tc.count)
+			for i := range hashes {
+				hashes[i] = common.Hash{byte(i), byte(i >> 8), byte(i >> 16)}
+			}
+			packet := &wit.GetWitnessMetadataPacket{
+				RequestId: 44444,
+				GetWitnessMetadataRequest: &wit.GetWitnessMetadataRequest{
+					Hashes: hashes,
+				},
+			}
+
+			response, err := witHandler.handleGetWitnessMetadata(peer, packet)
+			if tc.wantErr {
+				require.Error(t, err)
+				assert.Nil(t, response)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tc.count, len(response))
+			}
+		})
+	}
+}
+
 // TestHandleGetWitnessMetadata_PageCalculation tests page calculation edge cases
 func TestHandleGetWitnessMetadata_PageCalculation(t *testing.T) {
 	handler := newTestHandler()

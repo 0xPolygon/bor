@@ -1528,6 +1528,47 @@ func TestSpanStore_HeimdallDownTimeout(t *testing.T) {
 	})
 }
 
+// TestSpanStore_PurgeCache_RaceWithPollLoop deterministically demonstrates the
+// race between PurgeCache and the background polling goroutine started by
+// NewSpanStore (span_store.go:62-89). The goroutine ticks every 200ms and calls
+// updateLatestSpan, which writes the latest span back into latestSpanCache. If a
+// tick falls between PurgeCache and the caller's next read, the "purge" is
+// silently undone. Sleeping >200ms after PurgeCache forces the race to fire
+// every run, exposing the flake that occasionally hits CI on TestSpanStore_PurgeCache.
+func TestSpanStore_PurgeCache_RaceWithPollLoop(t *testing.T) {
+	t.Parallel()
+	spanStore := NewSpanStore(&MockHeimdallClient{}, nil, "1337")
+	defer spanStore.Close()
+	ctx := t.Context()
+
+	// Prime caches and let the poll loop populate heimdallStatus.
+	span, err := spanStore.spanById(ctx, 2)
+	require.NoError(t, err)
+	spanStore.lastUsedSpan.Store(span)
+	spanStore.latestKnownSpanId.Store(4)
+	spanStore.latestSpanCache.Store(span)
+	require.Eventually(t, func() bool { return spanStore.heimdallStatus.Load() != nil },
+		500*time.Millisecond, 20*time.Millisecond,
+		"heimdallStatus must be populated by the poll loop before purge")
+
+	spanStore.PurgeCache()
+
+	// Wait past one tick of the background poll loop (200ms). On unpatched
+	// SpanStore the loop re-populates latestSpanCache during this sleep,
+	// silently undoing the purge.
+	time.Sleep(300 * time.Millisecond)
+
+	require.Nil(t, spanStore.latestSpanCache.Load(),
+		"latestSpanCache must stay nil after PurgeCache — background poll loop is racing with the purge")
+	require.Nil(t, spanStore.lastUsedSpan.Load(),
+		"lastUsedSpan must stay nil after PurgeCache")
+	require.Equal(t, uint64(0), spanStore.latestKnownSpanId.Load(),
+		"latestKnownSpanId must stay 0 after PurgeCache")
+	require.Nil(t, spanStore.heimdallStatus.Load(),
+		"heimdallStatus must be cleared by PurgeCache — otherwise stale CatchingUp:false "+
+			"lets waitUntilHeimdallIsSynced skip refreshing against a swapped heimdall client")
+}
+
 func TestSpanStore_PurgeCache(t *testing.T) {
 	t.Parallel()
 	spanStore := NewSpanStore(&MockHeimdallClient{}, nil, "1337")

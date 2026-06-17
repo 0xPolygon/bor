@@ -260,9 +260,28 @@ func opKeccak256(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 	offset, size := scope.Stack.pop(), scope.Stack.peek()
 	data := scope.Memory.GetPtr(offset.Uint64(), size.Uint64())
 
-	evm.hasher.Reset()
-	evm.hasher.Write(data)
-	evm.hasher.Read(evm.hasherBuf[:])
+	// Fast path: cache 64-byte keccak256 (Solidity mapping slot lookups).
+	// These are the most common SHA3 calls — keccak256(key ++ slot_number).
+	if len(data) == 64 && evm.Config.Keccak256Cache != nil {
+		var key [64]byte
+		copy(key[:], data)
+		if cached, ok := evm.Config.Keccak256Cache.Load(key); ok {
+			h := cached.(common.Hash)
+			if evm.Config.EnablePreimageRecording {
+				evm.StateDB.AddPreimage(h, data)
+			}
+			size.SetBytes32(h[:])
+			return nil, nil
+		}
+		evm.hasher.Reset()
+		evm.hasher.Write(data)
+		evm.hasher.Read(evm.hasherBuf[:])
+		evm.Config.Keccak256Cache.Store(key, evm.hasherBuf)
+	} else {
+		evm.hasher.Reset()
+		evm.hasher.Write(data)
+		evm.hasher.Read(evm.hasherBuf[:])
+	}
 
 	if evm.Config.EnablePreimageRecording {
 		evm.StateDB.AddPreimage(evm.hasherBuf, data)

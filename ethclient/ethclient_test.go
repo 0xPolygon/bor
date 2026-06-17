@@ -124,10 +124,24 @@ func newTestBackend(config *node.Config) (*node.Node, []*types.Block, error) {
 		return nil, nil, fmt.Errorf("can't import test blocks: %v", err)
 	}
 	// Ensure the tx indexing is fully generated
-	for ; ; time.Sleep(time.Millisecond * 100) {
+	timeout := time.NewTimer(30 * time.Second)
+	defer timeout.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	var lastErr error
+	for {
 		progress, err := ethservice.BlockChain().TxIndexProgress()
+		lastErr = err
 		if err == nil && progress.Done() {
 			break
+		}
+		select {
+		case <-timeout.C:
+			if lastErr != nil {
+				return nil, nil, fmt.Errorf("tx indexing did not complete within 30s: %v", lastErr)
+			}
+			return nil, nil, fmt.Errorf("tx indexing did not complete within 30s")
+		case <-ticker.C:
 		}
 	}
 	return n, blocks, nil

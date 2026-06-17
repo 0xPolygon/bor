@@ -97,6 +97,10 @@ type StateDB interface {
 	AddLog(*types.Log)
 	AddPreimage(common.Hash, []byte)
 
+	// RecordTransfer records a transfer for deferred log creation in parallel mode.
+	// Returns true if the transfer was recorded (parallel mode), false otherwise.
+	RecordTransfer(sender, recipient common.Address, amount *uint256.Int) bool
+
 	Witness() *stateless.Witness
 
 	AccessEvents() *state.AccessEvents

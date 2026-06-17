@@ -247,6 +247,10 @@ var (
 	DurationLimit          = big.NewInt(13)     // The decision boundary on the blocktime duration used to determine whether difficulty should go up or not.
 )
 
+// BorSystemAddress is used for doing system transactions for processing bor bridge events
+// i.e. state-sync events.
+var BorSystemAddress = common.HexToAddress("0xffffFFFfFFffffffffffffffFfFFFfffFFFfFFfE")
+
 // System contracts.
 var (
 	// SystemAddress is where the system-transaction is sent from as per EIP-4788

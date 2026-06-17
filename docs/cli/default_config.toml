@@ -3,7 +3,7 @@ identity = ""
 verbosity = 3
 vmdebug = false
 vmtrace = ""
-"vmtrace.jsonconfig" = ""
+"vmtrace.jsonconfig" = "{}"
 evm-switch-dispatch = false
 "state.size-tracking" = false
 datadir = "/var/lib/bor"
@@ -45,6 +45,7 @@ devfakeauthor = false
   txarrivalwait = "500ms"
   txannouncementonly = false
   disable-tx-propagation = false
+  nosnap = false
   [p2p.discovery]
     v4disc = true
     v5disc = true

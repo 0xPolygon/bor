@@ -74,7 +74,18 @@ import (
 	gethversion "github.com/ethereum/go-ethereum/version"
 )
 
-var MilestoneWhitelistedDelayTimer = metrics.NewRegisteredTimer("chain/milestone/whitelisteddelay", nil)
+var (
+	MilestoneWhitelistedDelayTimer = metrics.NewRegisteredTimer("chain/milestone/whitelisteddelay", nil)
+	pendingPipelinedMaskedCounter  = metrics.NewRegisteredCounter("chain/sync/pending_pipelined_masked_total", nil)
+)
+
+func hasPendingPipelinedHeadState(chain *core.BlockChain, head *types.Header) bool {
+	if !chain.HasRecentPipelinedHeadState(head.Hash(), head.Root) {
+		return false
+	}
+	pendingPipelinedMaskedCounter.Inc(1)
+	return true
+}
 
 const (
 	// This is the fairness knob for the discovery mixer. When looking for peers, we'll
@@ -244,7 +255,38 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	relayService.SetTxGetter(eth.APIBackend.GetCanonicalTransaction)
 
 	blockChainAPI := ethapi.NewBlockChainAPI(eth.APIBackend)
-	engine, err := ethconfig.CreateConsensusEngine(config.Genesis.Config, config, chainDb, blockChainAPI)
+
+	// Prepare the vm config for tracing
+	vmCfg := vm.Config{
+		EnablePreimageRecording: config.EnablePreimageRecording,
+		StatelessSelfValidation: config.StatelessSelfValidation,
+		EnableWitnessStats:      config.EnableWitnessStats,
+		EnableEVMSwitchDispatch: config.EnableEVMSwitchDispatch,
+	}
+
+	// Setup live tracer if requested
+	if config.VMTrace != "" && config.ParallelEVM.Enable {
+		log.Warn("Live tracing requested but not supported with ParallelEVM enabled. Disable ParallelEVM via `--parallelevm.enable=false` to use live tracing.")
+	} else if config.VMTrace != "" {
+		traceConfig := json.RawMessage("{}")
+		if config.VMTraceJsonConfig != "" {
+			traceConfig = json.RawMessage(config.VMTraceJsonConfig)
+		}
+		t, err := tracers.LiveDirectory.New(config.VMTrace, traceConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create tracer %s: %v", config.VMTrace, err)
+		}
+		// For tracing state-sync transactions, we need a modified tracer. We wrap the hooks
+		// of the live tracer above with a state-sync aware tracer which is used across multiple
+		// modules.
+		if borCfg := config.Genesis.Config.Bor; borCfg != nil {
+			stateReceiver := common.HexToAddress(borCfg.StateReceiverContract)
+			t = tracers.WrapStateSyncHooks(t, stateReceiver)
+		}
+		vmCfg.Tracer = t
+	}
+
+	engine, err := ethconfig.CreateConsensusEngine(config.Genesis.Config, config, chainDb, blockChainAPI, vmCfg)
 	eth.engine = engine
 	if err != nil {
 		return nil, err
@@ -269,28 +311,28 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			rawdb.WriteDatabaseVersion(chainDb, core.BlockChainVersion)
 		}
 	}
+	trieJournalDirectory := config.TrieJournalDirectory
+	if trieJournalDirectory == "" {
+		trieJournalDirectory = stack.ResolvePath("triedb")
+	}
+
 	var (
 		options = &core.BlockChainConfig{
-			TrieCleanLimit:    config.TrieCleanCache,
-			NoPrefetch:        config.NoPrefetch,
-			TrieDirtyLimit:    config.TrieDirtyCache,
-			ArchiveMode:       config.NoPruning,
-			TrieTimeLimit:     config.TrieTimeout,
-			SnapshotLimit:     config.SnapshotCache,
-			Preimages:         config.Preimages,
-			StateHistory:      config.StateHistory,
-			StateScheme:       scheme,
-			TriesInMemory:     config.TriesInMemory,
-			ChainHistoryMode:  config.HistoryMode,
-			TxLookupLimit:     int64(min(config.TransactionHistory, math.MaxInt64)),
-			AddressCacheSizes: config.AddressCacheSizes,
-			PreloadRateLimit:  config.PreloadRateLimit,
-			VmConfig: vm.Config{
-				EnablePreimageRecording: config.EnablePreimageRecording,
-				StatelessSelfValidation: config.StatelessSelfValidation,
-				EnableWitnessStats:      config.EnableWitnessStats,
-				EnableEVMSwitchDispatch: config.EnableEVMSwitchDispatch,
-			},
+			TrieCleanLimit:           config.TrieCleanCache,
+			NoPrefetch:               config.NoPrefetch,
+			TrieDirtyLimit:           config.TrieDirtyCache,
+			ArchiveMode:              config.NoPruning,
+			TrieTimeLimit:            config.TrieTimeout,
+			SnapshotLimit:            config.SnapshotCache,
+			Preimages:                config.Preimages,
+			StateHistory:             config.StateHistory,
+			StateScheme:              scheme,
+			TriesInMemory:            config.TriesInMemory,
+			ChainHistoryMode:         config.HistoryMode,
+			TxLookupLimit:            int64(min(config.TransactionHistory, math.MaxInt64)),
+			AddressCacheSizes:        config.AddressCacheSizes,
+			PreloadRateLimit:         config.PreloadRateLimit,
+			VmConfig:                 vmCfg,
 			EnablePipelinedImportSRC: config.EnablePipelinedImportSRC,
 			PipelinedImportSRCLogs:   config.PipelinedImportSRCLogs,
 			PipelinedSRCWarmSnapshot: config.PipelinedSRCWarmSnapshot,
@@ -299,22 +341,10 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			// within the data directory. The corresponding paths will be either:
 			// - DATADIR/triedb/merkle.journal
 			// - DATADIR/triedb/verkle.journal
-			TrieJournalDirectory: stack.ResolvePath("triedb"),
+			TrieJournalDirectory: trieJournalDirectory,
 			StateSizeTracking:    config.EnableStateSizeTracking,
 		}
 	)
-
-	if config.VMTrace != "" {
-		traceConfig := json.RawMessage("{}")
-		if config.VMTraceJsonConfig != "" {
-			traceConfig = json.RawMessage(config.VMTraceJsonConfig)
-		}
-		t, err := tracers.LiveDirectory.New(config.VMTrace, traceConfig)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create tracer %s: %v", config.VMTrace, err)
-		}
-		options.VmConfig.Tracer = t
-	}
 
 	checker := whitelist.NewService(chainDb, config.DisableBlindForkValidation, config.MaxBlindForkValidationLimit)
 
@@ -704,7 +734,12 @@ func (s *Ethereum) SetAuthorized(authorized bool) {
 // network protocols to start.
 func (s *Ethereum) Protocols() []p2p.Protocol {
 	protos := eth.MakeProtocols((*ethHandler)(s.handler), s.networkID, s.discmix)
-	if s.config.SnapshotCache > 0 {
+	// snap/1 is only registered when the snapshot cache is enabled and NoSnapServing is false.
+	// Setting NoSnapServing=true disables snap/1 entirely: the node will neither serve snap sync
+	// requests nor be able to sync state via snap/1 itself. The in-memory snapshot tree (used for
+	// fast local state reads) remains active regardless. Nodes that need to snap sync from peers
+	// must leave NoSnapServing=false (the default).
+	if s.config.SnapshotCache > 0 && !s.config.NoSnapServing {
 		protos = append(protos, snap.MakeProtocols((*snapHandler)(s.handler))...)
 	}
 	if s.config.WitnessProtocol {
@@ -1104,7 +1139,13 @@ func (s *Ethereum) SyncMode() downloader.SyncMode {
 	// We are in a full sync, but the associated head state is missing. To complete
 	// the head state, forcefully rerun the snap sync. Note it doesn't mean the
 	// persistent state is corrupted, just mismatch with the head block.
-	if !s.blockchain.HasState(head.Root) && !s.handler.statelessSync.Load() {
+	if !s.blockchain.HasCommittedState(head.Root) && !s.handler.statelessSync.Load() {
+		// Pipelined import can briefly expose a head whose SRC commit is still
+		// in flight. Report full sync during that bounded handoff only; once it
+		// expires, this remains a real missing-state signal.
+		if hasPendingPipelinedHeadState(s.blockchain, head) {
+			return downloader.FullSync
+		}
 		log.Info("Reenabled snap sync as chain is stateless")
 		return downloader.SnapSync
 	}

@@ -74,6 +74,10 @@ type stateObject struct {
 	// snapshot), so the cost is effectively zero.
 	prefetchRoot common.Hash
 
+	// fromFlatDiff marks objects materialized from StateDB.flatDiffRef rather
+	// than from the committed trie reader.
+	fromFlatDiff bool
+
 	// Write caches.
 	trie Trie   // storage trie, which becomes non-nil on first access
 	code []byte // contract bytecode, which gets set when code is loaded
@@ -151,7 +155,9 @@ func (s *stateObject) touch() {
 // is at committedParentRoot (the grandparent). Using block N's root would
 // cause a hash mismatch when resolving the storage trie root node. Instead,
 // we return the grandparent's storage root (stored in prefetchRoot), which
-// is consistent with the reader.
+// is consistent with the reader. If the account did not exist at the
+// committed parent root, prefetchRoot is the empty storage root and storage
+// prefetches are skipped.
 //
 // For accounts loaded from the committed state (normal path), prefetchRoot
 // is zero and we fall back to data.Root, which is already consistent.
@@ -190,13 +196,14 @@ func (s *stateObject) getTrie() (Trie, error) {
 func (s *stateObject) getPrefetchedTrie() Trie {
 	// If there's nothing to meaningfully return, let the user figure it out by
 	// pulling the trie from disk.
-	if (s.data.Root == types.EmptyRootHash && !s.db.db.TrieDB().IsVerkle()) || s.db.prefetcher == nil {
+	root := s.getPrefetchRoot()
+	if (root == types.EmptyRootHash && !s.db.db.TrieDB().IsVerkle()) || s.db.prefetcher == nil {
 		return nil
 	}
 	// Use getPrefetchRoot() so the trieID matches the one used when scheduling
 	// the prefetch. For FlatDiff accounts this is the committed parent's storage
 	// root; for normal accounts it equals data.Root (unchanged behavior).
-	return s.db.prefetcher.trie(s.addrHash, s.getPrefetchRoot())
+	return s.db.prefetcher.trie(s.addrHash, root)
 }
 
 // GetState retrieves a value associated with the given storage key.
@@ -226,18 +233,19 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 		return value
 	}
 
-	if value, cached := s.originStorage[key]; cached {
+	// Check the FlatDiff reference for storage slots from the parent block.
+	// It must beat originStorage because this object may have been cached from
+	// committedParentRoot before the FlatDiff reference was attached.
+	if value, ok, explicit := s.db.flatDiffRef.storageOverlay(s.address, key); ok {
+		if explicit {
+			flatDiffStorageHitsMeter.Mark(1)
+		}
+		s.originStorage[key] = value
 		return value
 	}
-	// Check the FlatDiff reference for storage slots from the parent block.
-	if s.db.flatDiffRef != nil {
-		if slots, ok := s.db.flatDiffRef.Storage[s.address]; ok {
-			if value, ok := slots[key]; ok {
-				flatDiffStorageHitsMeter.Mark(1)
-				s.originStorage[key] = value
-				return value
-			}
-		}
+
+	if value, cached := s.originStorage[key]; cached {
+		return value
 	}
 
 	// If the object was destructed in *this* block (and potentially resurrected),
@@ -264,9 +272,11 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 	// Use getPrefetchRoot() for the storage root so the subfetcher's trieID
 	// is consistent with the prefetcher's NodeReader state root. For FlatDiff
 	// accounts, this is the committed parent's storage root (not block N's).
-	if s.db.prefetcher != nil && s.data.Root != types.EmptyRootHash {
-		if err = s.db.prefetcher.prefetch(s.addrHash, s.getPrefetchRoot(), s.address, nil, []common.Hash{key}, true); err != nil {
-			log.Error("Failed to prefetch storage slot", "addr", s.address, "key", key, "err", err)
+	if s.db.prefetcher != nil {
+		if root := s.getPrefetchRoot(); root != types.EmptyRootHash || s.db.db.TrieDB().IsVerkle() {
+			if err = s.db.prefetcher.prefetch(s.addrHash, root, s.address, nil, []common.Hash{key}, true); err != nil {
+				log.Error("Failed to prefetch storage slot", "addr", s.address, "key", key, "err", err)
+			}
 		}
 	}
 	s.originStorage[key] = value
@@ -327,9 +337,11 @@ func (s *stateObject) finalise() {
 		s.pendingStorage[key] = value
 	}
 	// Use getPrefetchRoot() for consistency with other prefetcher calls.
-	if s.db.prefetcher != nil && len(slotsToPrefetch) > 0 && s.data.Root != types.EmptyRootHash {
-		if err := s.db.prefetcher.prefetch(s.addrHash, s.getPrefetchRoot(), s.address, nil, slotsToPrefetch, false); err != nil {
-			log.Error("Failed to prefetch slots", "addr", s.address, "slots", len(slotsToPrefetch), "err", err)
+	if s.db.prefetcher != nil && len(slotsToPrefetch) > 0 {
+		if root := s.getPrefetchRoot(); root != types.EmptyRootHash || s.db.db.TrieDB().IsVerkle() {
+			if err := s.db.prefetcher.prefetch(s.addrHash, root, s.address, nil, slotsToPrefetch, false); err != nil {
+				log.Error("Failed to prefetch slots", "addr", s.address, "slots", len(slotsToPrefetch), "err", err)
+			}
 		}
 	}
 
@@ -397,8 +409,7 @@ func (s *stateObject) updateTrie() (Trie, error) {
 		// Skip noop changes, persist actual changes
 		value, exist := s.pendingStorage[key]
 		if value == origin {
-			log.Error("Storage update was noop", "address", s.address, "slot", key)
-			continue
+			continue // noop: value unchanged (e.g. write-then-revert or write-back-original)
 		}
 		if !exist {
 			log.Error("Storage slot is not found in pending area", "address", s.address, "slot", key)
@@ -426,7 +437,9 @@ func (s *stateObject) updateTrie() (Trie, error) {
 
 	// Use getPrefetchRoot() so the trieID matches the one used during scheduling.
 	if s.db.prefetcher != nil {
-		s.db.prefetcher.used(s.addrHash, s.getPrefetchRoot(), nil, used)
+		if root := s.getPrefetchRoot(); root != types.EmptyRootHash || s.db.db.TrieDB().IsVerkle() {
+			s.db.prefetcher.used(s.addrHash, root, nil, used)
+		}
 	}
 	// When witness building is enabled without a prefetcher, storage reads
 	// went through the reader (a separate trie with its own PrevalueTracer)
@@ -569,6 +582,7 @@ func (s *stateObject) deepCopy(db *StateDB) *stateObject {
 		origin:             s.origin,
 		data:               s.data,
 		prefetchRoot:       s.prefetchRoot,
+		fromFlatDiff:       s.fromFlatDiff,
 		code:               s.code,
 		originStorage:      s.originStorage.Copy(),
 		pendingStorage:     s.pendingStorage.Copy(),

@@ -43,6 +43,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/blockstm"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/txpool/legacypool"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -315,18 +316,19 @@ func newTestWorkerBackend(t TensingObject, chainConfig *params.ChainConfig, engi
 	pool := legacypool.New(testTxPoolConfig, chain)
 	txpool, _ := txpool.New(testTxPoolConfig.PriceLimit, chain, []txpool.SubPool{pool})
 
-	return &testWorkerBackend{
+	b := &testWorkerBackend{
 		db:      db,
 		chain:   chain,
 		txPool:  txpool,
 		genesis: gspec,
 	}
+	return b
 }
 
 func (b *testWorkerBackend) BlockChain() *core.BlockChain { return b.chain }
 func (b *testWorkerBackend) TxPool() *txpool.TxPool       { return b.txPool }
 func (b *testWorkerBackend) PeerCount() int {
-	panic("unimplemented")
+	return 1
 }
 
 func (b *testWorkerBackend) newRandomTx(creation bool) *types.Transaction {
@@ -1618,6 +1620,172 @@ func TestVeblopTimerSkipsWhenPendingTasks(t *testing.T) {
 	}
 }
 
+// TestCommitWorkLeaksPendingWorkBlockWhenSyncing exercises a leak path for
+// `pendingWorkBlock`: when `commitWork` early-returns because the node is
+// still syncing, the value reserved by `newWorkLoop` is never cleared.
+// In production `miner.update()` unsubscribes from downloader events after
+// the first DoneEvent, so for a node past initial sync `w.syncing` is
+// permanently false — this bug only surfaces on fresh-startup paths, but
+// the leak is still worth fixing as a code-hygiene issue.
+//
+// Bug: commitWork's pre-fix layout read:
+//
+//	if w.syncing.Load() {
+//	    return                              // early return
+//	}
+//	defer func() {                          // defer registered AFTER the return
+//	    w.pendingWorkBlock.Store(0)
+//	}()
+//
+// During downloader-driven sync, chainHeadCh fires per imported block, the
+// chainHeadCh handler writes `pendingWorkBlock = head+1` and calls commit().
+// mainLoop then routes the newWorkReq into commitWork, which sees
+// `w.syncing == true` and bails out before the defer that would clear
+// pendingWorkBlock. The value is leaked. If `startCh` does not subsequently
+// fire to overwrite it (e.g., shouldStart=false in miner.update()), the
+// veblop fallback in newWorkLoop short-circuits on every tick.
+//
+// This test:
+//  1. Sets w.syncing=true to simulate the downloader sync window.
+//  2. Pre-sets pendingWorkBlock=42 to mimic the value newWorkLoop would have
+//     written for the next-block-in-flight.
+//  3. Directly invokes commitWork (matching what mainLoop would do).
+//  4. Asserts that pendingWorkBlock is cleared back to 0.
+//
+// Pre-fix: commitWork's early return leaves pendingWorkBlock at 42 → test fails.
+// Post-fix (move defer above the syncing check, or store 0 in that branch):
+// pendingWorkBlock cleared to 0 → test passes.
+func TestCommitWorkLeaksPendingWorkBlockWhenSyncing(t *testing.T) {
+	var (
+		engine      consensus.Engine
+		chainConfig *params.ChainConfig
+		db          = rawdb.NewMemoryDatabase()
+		ctrl        *gomock.Controller
+	)
+
+	chainConfig = &params.ChainConfig{}
+	*chainConfig = *params.BorUnittestChainConfig
+	borCfg := *chainConfig.Bor
+	chainConfig.Bor = &borCfg
+	chainConfig.Bor.RioBlock = big.NewInt(0)
+
+	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
+	defer engine.Close()
+	defer ctrl.Finish()
+
+	w, _, _ := newTestWorker(t, DefaultTestConfig(), chainConfig, engine, db, false, 0)
+	defer w.close()
+
+	// Simulate the downloader-sync window. miner.update() flips this on
+	// when downloader.StartEvent fires.
+	w.syncing.Store(true)
+
+	// Simulate a newWorkLoop chainHeadCh / veblop tick that has already
+	// reserved the next block number.
+	w.pendingWorkBlock.Store(42)
+
+	// Call commitWork directly to drive the in-sync early-return path.
+	w.commitWork(nil, false, time.Now().Unix(), false)
+
+	got := w.pendingWorkBlock.Load()
+	if got != 0 {
+		t.Fatalf("pendingWorkBlock leaked while syncing: expected 0, got %d. "+
+			"commitWork's early return on w.syncing.Load()==true skips the defer that clears the flag.", got)
+	}
+}
+
+// TestTaskLoopInterruptPreservesPendingTasks verifies taskLoop's interrupt()
+// does NOT touch pendingTasks. Cleanup belongs to Bor.Seal's onStopExit
+// hook so success-branch results aren't dropped when resultLoop is slow.
+func TestTaskLoopInterruptPreservesPendingTasks(t *testing.T) {
+	chainConfig := &params.ChainConfig{}
+	*chainConfig = *params.BorUnittestChainConfig
+	borCfg := *chainConfig.Bor
+	chainConfig.Bor = &borCfg
+	chainConfig.Bor.RioBlock = big.NewInt(0)
+
+	engine, ctrl := getFakeBorFromConfig(t, chainConfig)
+	defer engine.Close()
+	defer ctrl.Finish()
+
+	db := rawdb.NewMemoryDatabase()
+	w, _, _ := newTestWorker(t, DefaultTestConfig(), chainConfig, engine, db, false, 0)
+	defer w.close()
+
+	w.skipSealHook = func(task *task) bool { return true }
+
+	received := make(chan common.Hash, 2)
+	w.newTaskHook = func(task *task) {
+		received <- w.engine.SealHash(task.block.Header())
+	}
+
+	parent := w.chain.CurrentBlock()
+	headerA := &types.Header{
+		ParentHash: parent.Hash(),
+		Number:     new(big.Int).Add(parent.Number, common.Big1),
+		Time:       parent.Time + 1,
+		GasLimit:   parent.GasLimit,
+		Difficulty: big.NewInt(1),
+		Extra:      make([]byte, types.ExtraVanityLength+types.ExtraSealLength),
+	}
+	headerB := &types.Header{
+		ParentHash: parent.Hash(),
+		Number:     new(big.Int).Add(parent.Number, common.Big1),
+		Time:       parent.Time + 2,
+		GasLimit:   parent.GasLimit,
+		Difficulty: big.NewInt(1),
+		Extra:      make([]byte, types.ExtraVanityLength+types.ExtraSealLength),
+	}
+	blockA := types.NewBlockWithHeader(headerA)
+	blockB := types.NewBlockWithHeader(headerB)
+
+	sealHashA := w.engine.SealHash(blockA.Header())
+	sealHashB := w.engine.SealHash(blockB.Header())
+	if sealHashA == sealHashB {
+		t.Fatalf("test setup: sealhashes must differ (A=%s B=%s)", sealHashA, sealHashB)
+	}
+
+	// Task A sets prev=H_A inside taskLoop, then continues (skipSealHook).
+	select {
+	case w.taskCh <- &task{block: blockA, createdAt: time.Now()}:
+	case <-time.After(2 * time.Second):
+		t.Fatal("taskCh send timed out for task A")
+	}
+	select {
+	case <-received:
+	case <-time.After(2 * time.Second):
+		t.Fatal("newTaskHook did not fire for task A")
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	// Inject the entry a real Bor.Seal success-branch would have left,
+	// waiting for resultLoop.
+	w.pendingMu.Lock()
+	w.pendingTasks[sealHashA] = &task{block: blockA, createdAt: time.Now()}
+	w.pendingMu.Unlock()
+
+	// Task B triggers interrupt() with prev=H_A.
+	select {
+	case w.taskCh <- &task{block: blockB, createdAt: time.Now()}:
+	case <-time.After(2 * time.Second):
+		t.Fatal("taskCh send timed out for task B")
+	}
+	select {
+	case <-received:
+	case <-time.After(2 * time.Second):
+		t.Fatal("newTaskHook did not fire for task B")
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	w.pendingMu.RLock()
+	_, present := w.pendingTasks[sealHashA]
+	w.pendingMu.RUnlock()
+	if !present {
+		t.Fatalf("pendingTasks[H_A=%s] was deleted by interrupt(); cleanup must "+
+			"happen only via Bor.Seal's SealWithStopHook callback", sealHashA)
+	}
+}
+
 // TestCalculateDesiredGasLimit tests the dynamic gas limit calculation logic
 func TestCalculateDesiredGasLimit(t *testing.T) {
 	t.Parallel()
@@ -2216,14 +2384,13 @@ func TestPrefetchRaceWithSetExtra(t *testing.T) {
 			select {
 			case <-stopSignal:
 				return
-			default:
-				w.newWorkCh <- &newWorkReq{
-					interrupt: new(atomic.Int32),
-					noempty:   false,
-					timestamp: time.Now().Unix(),
-				}
-				time.Sleep(100 * time.Millisecond)
+			case w.newWorkCh <- &newWorkReq{
+				interrupt: new(atomic.Int32),
+				noempty:   false,
+				timestamp: time.Now().Unix(),
+			}:
 			}
+			time.Sleep(100 * time.Millisecond)
 		}
 	}()
 
@@ -3740,4 +3907,155 @@ func TestDisablePendingBlock(t *testing.T) {
 			return block != nil && receipts != nil && stateDB != nil
 		}, 2*time.Second, 100*time.Millisecond, "pending block, receipts and state should not be nil when DisablePendingBlock is false")
 	})
+}
+
+// TestVMConfigTracerStripped verifies that vmConfig() always returns a vm.Config
+// with Tracer == nil, even when the chain's VMConfig has a non-nil tracer set
+// (e.g. during live tracing). The chain's own VMConfig must remain unchanged.
+func TestVMConfigTracerStripped(t *testing.T) {
+	engine := clique.New(cliqueChainConfig.Clique, rawdb.NewMemoryDatabase())
+	defer engine.Close()
+
+	w, b, cleanup := newTestWorker(t, DefaultTestConfig(), cliqueChainConfig, engine, rawdb.NewMemoryDatabase(), false, 0)
+	defer cleanup()
+
+	sentinel := &tracing.Hooks{}
+	b.chain.GetVMConfig().Tracer = sentinel
+
+	got := w.vmConfig()
+	require.Nil(t, got.Tracer, "vmConfig() must strip the tracer so the miner does not conflict with live tracing")
+	require.Same(t, sentinel, b.chain.GetVMConfig().Tracer, "chain VMConfig tracer must remain unchanged after vmConfig() call")
+}
+
+// newCliqueWorkerForSizeTest spins up a clique-backed worker suitable for
+// driving commitTransaction directly. Clique is used (rather than the Bor
+// fake) because the size-tracking logic in commitTransaction is
+// consensus-agnostic and clique avoids the heimdall/span mocking surface.
+func newCliqueWorkerForSizeTest(t *testing.T) (*worker, *testWorkerBackend) {
+	t.Helper()
+
+	chainConfig := *params.AllCliqueProtocolChanges
+	chainConfig.Clique = &params.CliqueConfig{Period: 1, Epoch: 30000}
+	db := rawdb.NewMemoryDatabase()
+	engine := clique.New(chainConfig.Clique, db)
+	t.Cleanup(func() { engine.Close() })
+
+	w, b, _ := newTestWorker(t, DefaultTestConfig(), &chainConfig, engine, db, false, 0)
+	t.Cleanup(w.close)
+	return w, b
+}
+
+// newSizeTestEnv builds a fresh sealing environment and pre-loads its gas
+// pool so commitTransaction can run against it without the wider
+// commitTransactions wrapper. The caller owns env.discard().
+func newSizeTestEnv(t *testing.T, w *worker) *environment {
+	t.Helper()
+
+	env, err := w.prepareWork(&generateParams{
+		timestamp: uint64(time.Now().Unix()),
+		coinbase:  testBankAddress,
+	}, false)
+	require.NoError(t, err)
+
+	env.gasPool = new(core.GasPool).AddGas(env.header.GasLimit)
+	return env
+}
+
+// TestCommitTransactionUpdatesEnvSize verifies that commitTransaction grows
+// env.size by exactly tx.Size() for each successfully applied transaction.
+// This is the regression guard for the block size cap enforced by
+// txFitsSize: if env.size is not updated after each commit, the producer
+// would keep packing past params.MaxBlockSize.
+func TestCommitTransactionUpdatesEnvSize(t *testing.T) {
+	w, b := newCliqueWorkerForSizeTest(t)
+
+	env := newSizeTestEnv(t, w)
+	defer env.discard()
+
+	initialSize := env.size
+	require.Greater(t, initialSize, uint64(0), "env.size should be seeded with header size")
+
+	tx1 := b.newRandomTxWithNonce(false, 0)
+	_, err := w.commitTransaction(env, tx1)
+	require.NoError(t, err)
+	require.Equal(t, initialSize+tx1.Size(), env.size, "env.size should grow by tx1.Size()")
+	require.Equal(t, 1, env.tcount)
+	require.Len(t, env.txs, 1)
+
+	tx2 := b.newRandomTxWithNonce(false, 1)
+	_, err = w.commitTransaction(env, tx2)
+	require.NoError(t, err)
+	require.Equal(t, initialSize+tx1.Size()+tx2.Size(), env.size, "env.size should accumulate across commits")
+	require.Equal(t, 2, env.tcount)
+	require.Len(t, env.txs, 2)
+}
+
+// TestCommitTransactionDoesNotUpdateEnvSizeOnError verifies that env.size is
+// only credited for transactions that successfully apply. A reverted
+// transaction must not consume budget against the block size cap, which is
+// why the increment lives after the ApplyTransaction error check.
+func TestCommitTransactionDoesNotUpdateEnvSizeOnError(t *testing.T) {
+	w, _ := newCliqueWorkerForSizeTest(t)
+
+	env := newSizeTestEnv(t, w)
+	defer env.discard()
+
+	initialSize := env.size
+
+	// Nonce far above the sender's account nonce makes ApplyTransaction
+	// fail with ErrNonceTooHigh, hitting commitTransaction's error path.
+	badTx, err := types.SignTx(
+		types.NewTransaction(999, testUserAddress, big.NewInt(1), params.TxGas, big.NewInt(int64(params.InitialBaseFee)), nil),
+		types.HomesteadSigner{},
+		testBankKey,
+	)
+	require.NoError(t, err)
+
+	_, err = w.commitTransaction(env, badTx)
+	require.Error(t, err)
+	require.Equal(t, initialSize, env.size, "env.size must be unchanged when commitTransaction returns an error")
+	require.Equal(t, 0, env.tcount, "env.tcount must stay zero on error")
+	require.Len(t, env.txs, 0, "env.txs must stay empty on error")
+}
+
+// TestTxFitsSize exercises the txFitsSize cap against env.size near the
+// effective threshold (params.MaxBlockSize - maxBlockSizeBufferZone).
+// Combined with TestCommitTransactionUpdatesEnvSize (which proves
+// env.size is actually advanced), this confirms the cap is reachable in
+// practice rather than always passing because env.size never grows.
+func TestTxFitsSize(t *testing.T) {
+	signer := types.LatestSigner(params.TestChainConfig)
+	tx := types.MustSignNewTx(testBankKey, signer, &types.LegacyTx{
+		Nonce:    0,
+		To:       &testUserAddress,
+		Value:    big.NewInt(1000),
+		Gas:      params.TxGas,
+		GasPrice: big.NewInt(int64(params.InitialBaseFee)),
+	})
+	txSize := tx.Size()
+	require.Greater(t, txSize, uint64(0))
+	require.Less(t, txSize, uint64(params.MaxBlockSize))
+
+	// Derive the threshold from the constant so the table stays correct
+	// if the buffer-zone value is retuned in the future.
+	threshold := uint64(params.MaxBlockSize - maxBlockSizeBufferZone)
+	require.Greater(t, threshold, txSize, "buffer-zone leaves no room for a single tx in this test")
+
+	cases := []struct {
+		name string
+		size uint64
+		want bool
+	}{
+		{"empty env accepts tx", 0, true},
+		{"plenty of room accepts tx", threshold / 2, true},
+		{"one byte under threshold accepts tx", threshold - txSize - 1, true},
+		{"exactly at threshold rejects tx", threshold - txSize, false},
+		{"over threshold rejects tx", threshold, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := &environment{size: tc.size}
+			require.Equal(t, tc.want, env.txFitsSize(tx))
+		})
+	}
 }

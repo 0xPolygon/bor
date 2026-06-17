@@ -12,7 +12,6 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/consensus/bor/abi"
 	"github.com/ethereum/go-ethereum/consensus/bor/api"
-	"github.com/ethereum/go-ethereum/consensus/bor/contract"
 	"github.com/ethereum/go-ethereum/consensus/bor/statefull"
 	"github.com/ethereum/go-ethereum/consensus/bor/valset"
 	"github.com/ethereum/go-ethereum/core"
@@ -70,7 +69,7 @@ func (c *ChainSpanner) GetCurrentSpan(ctx context.Context, headerHash common.Has
 	toAddress := c.validatorContractAddress
 
 	result, err := c.ethAPI.CallWithState(ethapi.WithBorInternalCall(ctx), ethapi.TransactionArgs{
-		Gas:  &contract.SystemTxGas,
+		Gas:  &abi.SystemTxGas,
 		To:   &toAddress,
 		Data: &msgData,
 	}, &blockNr, state, nil, nil)
@@ -169,7 +168,7 @@ func (c *ChainSpanner) getSpanByBlock(ctx context.Context, blockNrOrHash rpc.Blo
 	spanMsgData := (hexutil.Bytes)(spanData)
 
 	spanResult, err := c.ethAPI.Call(ethapi.WithBorInternalCall(ctx), ethapi.TransactionArgs{
-		Gas:  &contract.SystemTxGas,
+		Gas:  &abi.SystemTxGas,
 		To:   &toAddress,
 		Data: &spanMsgData,
 	}, &blockNrOrHash, nil, nil)
@@ -195,7 +194,7 @@ func (c *ChainSpanner) getProducersBySpanAndIndexMethod(ctx context.Context, blo
 	producerMsgData := (hexutil.Bytes)(producerData)
 
 	result, err := c.ethAPI.Call(ethapi.WithBorInternalCall(ctx), ethapi.TransactionArgs{
-		Gas:  &contract.SystemTxGas,
+		Gas:  &abi.SystemTxGas,
 		To:   &toAddress,
 		Data: &producerMsgData,
 	}, &blockNrOrHash, nil, nil)
@@ -221,7 +220,7 @@ func (c *ChainSpanner) getFirstEndBlock(ctx context.Context, blockNrOrHash rpc.B
 	firstEndBlockMsgData := (hexutil.Bytes)(firstEndBlockData)
 
 	firstEndBlockResult, err := c.ethAPI.Call(ethapi.WithBorInternalCall(ctx), ethapi.TransactionArgs{
-		Gas:  &contract.SystemTxGas,
+		Gas:  &abi.SystemTxGas,
 		To:   &toAddress,
 		Data: &firstEndBlockMsgData,
 	}, &blockNrOrHash, nil, nil)
@@ -250,7 +249,7 @@ func (c *ChainSpanner) getBorValidatorsWithoutId(ctx context.Context, blockNrOrH
 	msgData := (hexutil.Bytes)(data)
 
 	result, err := c.ethAPI.Call(ethapi.WithBorInternalCall(ctx), ethapi.TransactionArgs{
-		Gas:  &contract.SystemTxGas,
+		Gas:  &abi.SystemTxGas,
 		To:   &toAddress,
 		Data: &msgData,
 	}, &blockNrOrHash, nil, nil)
@@ -291,7 +290,7 @@ func (c *ChainSpanner) GetCurrentValidatorsByHash(ctx context.Context, headerHas
 
 const method = "commitSpan"
 
-func (c *ChainSpanner) CommitSpan(ctx context.Context, minimalSpan borTypes.Span, validators, producers []stakeTypes.MinimalVal, state vm.StateDB, header *types.Header, chainContext core.ChainContext) error {
+func (c *ChainSpanner) CommitSpan(ctx context.Context, minimalSpan borTypes.Span, validators, producers []stakeTypes.MinimalVal, state vm.StateDB, header *types.Header, chainContext core.ChainContext, vmCfg vm.Config) error {
 	// get validators bytes
 	validatorBytes, err := rlp.EncodeToBytes(validators)
 	if err != nil {
@@ -329,7 +328,7 @@ func (c *ChainSpanner) CommitSpan(ctx context.Context, minimalSpan borTypes.Span
 	msg := statefull.GetSystemMessage(c.validatorContractAddress, data)
 
 	// apply message
-	_, err = statefull.ApplyMessage(ctx, msg, state, header, c.chainConfig, chainContext)
+	_, err = statefull.ApplyMessage(ctx, msg, state, header, c.chainConfig, chainContext, vmCfg)
 
 	return err
 }
