@@ -7119,6 +7119,25 @@ func TestPipelinedImportMetrics(t *testing.T) {
 	mismatchBefore := pipelineImportRootMismatchCounter.Snapshot().Count()
 	insertBefore := blockInsertTimer.Snapshot().Count()
 	stateCommitBefore := stateCommitTimer.Snapshot().Count()
+	pipelineExecBefore := pipelineImportExecutionTimer.Snapshot().Count()
+	overlapBefore := pipelineImportOverlapExecutionTimer.Snapshot().Count()
+	overlapBlocksBefore := pipelineImportOverlapBlocksCounter.Snapshot().Count()
+	noOverlapBlocksBefore := pipelineImportNoOverlapBlocksCounter.Snapshot().Count()
+	overlapPercentBefore := pipelineImportOverlapExecutionPercent.Snapshot().Count()
+	srcOpenBefore := pipelineImportSRCOpenStateDBTimer.Snapshot().Count()
+	srcApplyBefore := pipelineImportSRCApplyFlatDiffTimer.Snapshot().Count()
+	srcCommitBefore := pipelineImportSRCCommitTimer.Snapshot().Count()
+	execWithOverlapBefore := pipelineImportExecWithOverlapTimer.Snapshot().Count()
+	execNoOverlapBefore := pipelineImportExecNoOverlapTimer.Snapshot().Count()
+	execBucketBefore := pipelineImportExecOverlap0Timer.Snapshot().Count() +
+		pipelineImportExecOverlap1To25Timer.Snapshot().Count() +
+		pipelineImportExecOverlap25To50Timer.Snapshot().Count() +
+		pipelineImportExecOverlap50To75Timer.Snapshot().Count() +
+		pipelineImportExecOverlap75To100Timer.Snapshot().Count()
+	srcWithNextBefore := pipelineImportSRCWithNextExecTimer.Snapshot().Count()
+	srcNoNextBefore := pipelineImportSRCNoNextExecTimer.Snapshot().Count()
+	srcWithNextSumBefore := pipelineImportSRCWithNextExecTimer.Snapshot().Sum()
+	srcNoNextSumBefore := pipelineImportSRCNoNextExecTimer.Snapshot().Sum()
 
 	pipeChain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, pipelinedConfig(rawdb.HashScheme))
 	if err != nil {
@@ -7144,6 +7163,25 @@ func TestPipelinedImportMetrics(t *testing.T) {
 	mismatchDelta := pipelineImportRootMismatchCounter.Snapshot().Count() - mismatchBefore
 	insertDelta := blockInsertTimer.Snapshot().Count() - insertBefore
 	stateCommitDelta := stateCommitTimer.Snapshot().Count() - stateCommitBefore
+	pipelineExecDelta := pipelineImportExecutionTimer.Snapshot().Count() - pipelineExecBefore
+	overlapDelta := pipelineImportOverlapExecutionTimer.Snapshot().Count() - overlapBefore
+	overlapBlocksDelta := pipelineImportOverlapBlocksCounter.Snapshot().Count() - overlapBlocksBefore
+	noOverlapBlocksDelta := pipelineImportNoOverlapBlocksCounter.Snapshot().Count() - noOverlapBlocksBefore
+	overlapPercentDelta := pipelineImportOverlapExecutionPercent.Snapshot().Count() - overlapPercentBefore
+	srcOpenDelta := pipelineImportSRCOpenStateDBTimer.Snapshot().Count() - srcOpenBefore
+	srcApplyDelta := pipelineImportSRCApplyFlatDiffTimer.Snapshot().Count() - srcApplyBefore
+	srcCommitDelta := pipelineImportSRCCommitTimer.Snapshot().Count() - srcCommitBefore
+	execWithOverlapDelta := pipelineImportExecWithOverlapTimer.Snapshot().Count() - execWithOverlapBefore
+	execNoOverlapDelta := pipelineImportExecNoOverlapTimer.Snapshot().Count() - execNoOverlapBefore
+	execBucketDelta := pipelineImportExecOverlap0Timer.Snapshot().Count() +
+		pipelineImportExecOverlap1To25Timer.Snapshot().Count() +
+		pipelineImportExecOverlap25To50Timer.Snapshot().Count() +
+		pipelineImportExecOverlap50To75Timer.Snapshot().Count() +
+		pipelineImportExecOverlap75To100Timer.Snapshot().Count() - execBucketBefore
+	srcWithNextDelta := pipelineImportSRCWithNextExecTimer.Snapshot().Count() - srcWithNextBefore
+	srcNoNextDelta := pipelineImportSRCNoNextExecTimer.Snapshot().Count() - srcNoNextBefore
+	srcSplitDurationDelta := pipelineImportSRCWithNextExecTimer.Snapshot().Sum() + pipelineImportSRCNoNextExecTimer.Snapshot().Sum() -
+		srcWithNextSumBefore - srcNoNextSumBefore
 
 	if blocksDelta != numBlocks {
 		t.Errorf("pipelineImportBlocksCounter delta = %d, want %d", blocksDelta, numBlocks)
@@ -7160,6 +7198,51 @@ func TestPipelinedImportMetrics(t *testing.T) {
 	}
 	if stateCommitDelta != numBlocks {
 		t.Errorf("stateCommitTimer (parity, from SRC goroutine) delta = %d, want %d", stateCommitDelta, numBlocks)
+	}
+	if pipelineExecDelta != numBlocks {
+		t.Errorf("pipelineImportExecutionTimer delta = %d, want %d", pipelineExecDelta, numBlocks)
+	}
+	if overlapDelta != numBlocks-1 {
+		t.Errorf("pipelineImportOverlapExecutionTimer delta = %d, want %d", overlapDelta, numBlocks-1)
+	}
+	if overlapBlocksDelta+noOverlapBlocksDelta != numBlocks-1 {
+		t.Errorf("overlap/no-overlap block deltas = %d + %d, want %d", overlapBlocksDelta, noOverlapBlocksDelta, numBlocks-1)
+	}
+	if overlapPercentDelta != numBlocks-1 {
+		t.Errorf("pipelineImportOverlapExecutionPercent delta = %d, want %d", overlapPercentDelta, numBlocks-1)
+	}
+	if srcOpenDelta != numBlocks {
+		t.Errorf("pipelineImportSRCOpenStateDBTimer delta = %d, want %d", srcOpenDelta, numBlocks)
+	}
+	if srcApplyDelta != numBlocks {
+		t.Errorf("pipelineImportSRCApplyFlatDiffTimer delta = %d, want %d", srcApplyDelta, numBlocks)
+	}
+	if srcCommitDelta != numBlocks {
+		t.Errorf("pipelineImportSRCCommitTimer delta = %d, want %d", srcCommitDelta, numBlocks)
+	}
+	// Categorical execution split: every classified block lands in exactly one
+	// of with/no overlap, and the binary split must track the overlap counters.
+	if execWithOverlapDelta+execNoOverlapDelta != numBlocks-1 {
+		t.Errorf("execution with/no-overlap deltas = %d + %d, want %d", execWithOverlapDelta, execNoOverlapDelta, numBlocks-1)
+	}
+	if execWithOverlapDelta != overlapBlocksDelta {
+		t.Errorf("execution/with_overlap delta = %d, want %d (overlap blocks)", execWithOverlapDelta, overlapBlocksDelta)
+	}
+	if execNoOverlapDelta != noOverlapBlocksDelta {
+		t.Errorf("execution/no_overlap delta = %d, want %d (no-overlap blocks)", execNoOverlapDelta, noOverlapBlocksDelta)
+	}
+	if execBucketDelta != numBlocks-1 {
+		t.Errorf("execution overlap bucket deltas sum = %d, want %d", execBucketDelta, numBlocks-1)
+	}
+	// SRC split mirrors the execution split from the next-block perspective.
+	if srcWithNextDelta+srcNoNextDelta != numBlocks-1 {
+		t.Errorf("src with/no-next-exec-overlap deltas = %d + %d, want %d", srcWithNextDelta, srcNoNextDelta, numBlocks-1)
+	}
+	if srcWithNextDelta != overlapBlocksDelta {
+		t.Errorf("src/with_next_exec_overlap delta = %d, want %d (overlap blocks)", srcWithNextDelta, overlapBlocksDelta)
+	}
+	if srcWithNextDelta+srcNoNextDelta > 0 && srcSplitDurationDelta <= int64(10*time.Microsecond) {
+		t.Errorf("src overlap split recorded only %s total duration; want real SRC wall-clock, not defer-registration time", time.Duration(srcSplitDurationDelta))
 	}
 }
 

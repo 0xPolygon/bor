@@ -177,15 +177,35 @@ var (
 	// pipelined/collect covers only the wait, and the parity chain/execution
 	// timer wraps the entire persistPipelinedImport (which includes that wait),
 	// so neither pinpoints the cheap exec on its own.
-	pipelineImportCheapExecTimer           = metrics.NewRegisteredTimer("chain/imports/pipelined/cheap_exec", nil)
-	pipelineImportCheapValidationTimer     = metrics.NewRegisteredTimer("chain/imports/pipelined/cheap_validation", nil)
-	pipelineImportPostExecTimer            = metrics.NewRegisteredTimer("chain/imports/pipelined/post_exec", nil)
-	pipelineImportPostExecResidualTimer    = metrics.NewRegisteredTimer("chain/imports/pipelined/post_exec/residual", nil)
-	pipelineImportWitnessCaptureTimer      = metrics.NewRegisteredTimer("chain/imports/pipelined/witness_capture", nil)
-	pipelineImportPrefetchDetachTimer      = metrics.NewRegisteredTimer("chain/imports/pipelined/prefetch_detach", nil)
-	pipelineImportPrefetchCleanupTimer     = metrics.NewRegisteredTimer("chain/imports/pipelined/prefetch_cleanup", nil)
-	pipelineImportSRCPrefetchWaitTimer     = metrics.NewRegisteredTimer("chain/imports/pipelined/src/prefetch_wait", nil)
-	pipelineImportSRCPrefetchReportTimer   = metrics.NewRegisteredTimer("chain/imports/pipelined/src/prefetch_report", nil)
+	pipelineImportCheapExecTimer       = metrics.NewRegisteredTimer("chain/imports/pipelined/cheap_exec", nil)
+	pipelineImportCheapValidationTimer = metrics.NewRegisteredTimer("chain/imports/pipelined/cheap_validation", nil)
+	pipelineImportExecutionTimer       = metrics.NewRegisteredTimer("chain/imports/pipelined/execution", nil)
+	// Execution time split by whether the previous block's SRC was still
+	// running during this block's execution. with_overlap vs no_overlap is the
+	// direct A/B the percent buckets refine — they answer "is execution slower
+	// on overlapped blocks?" without relying on temporal correlation.
+	pipelineImportExecWithOverlapTimer    = metrics.NewRegisteredTimer("chain/imports/pipelined/execution/with_overlap", nil)
+	pipelineImportExecNoOverlapTimer      = metrics.NewRegisteredTimer("chain/imports/pipelined/execution/no_overlap", nil)
+	pipelineImportExecOverlap0Timer       = metrics.NewRegisteredTimer("chain/imports/pipelined/execution/overlap_0_percent", nil)
+	pipelineImportExecOverlap1To25Timer   = metrics.NewRegisteredTimer("chain/imports/pipelined/execution/overlap_1_25_percent", nil)
+	pipelineImportExecOverlap25To50Timer  = metrics.NewRegisteredTimer("chain/imports/pipelined/execution/overlap_25_50_percent", nil)
+	pipelineImportExecOverlap50To75Timer  = metrics.NewRegisteredTimer("chain/imports/pipelined/execution/overlap_50_75_percent", nil)
+	pipelineImportExecOverlap75To100Timer = metrics.NewRegisteredTimer("chain/imports/pipelined/execution/overlap_75_100_percent", nil)
+	pipelineImportPostExecTimer           = metrics.NewRegisteredTimer("chain/imports/pipelined/post_exec", nil)
+	pipelineImportPostExecResidualTimer   = metrics.NewRegisteredTimer("chain/imports/pipelined/post_exec/residual", nil)
+	pipelineImportWitnessCaptureTimer     = metrics.NewRegisteredTimer("chain/imports/pipelined/witness_capture", nil)
+	pipelineImportPrefetchDetachTimer     = metrics.NewRegisteredTimer("chain/imports/pipelined/prefetch_detach", nil)
+	pipelineImportPrefetchCleanupTimer    = metrics.NewRegisteredTimer("chain/imports/pipelined/prefetch_cleanup", nil)
+	pipelineImportSRCPrefetchWaitTimer    = metrics.NewRegisteredTimer("chain/imports/pipelined/src/prefetch_wait", nil)
+	pipelineImportSRCPrefetchReportTimer  = metrics.NewRegisteredTimer("chain/imports/pipelined/src/prefetch_report", nil)
+	pipelineImportSRCOpenStateDBTimer     = metrics.NewRegisteredTimer("chain/imports/pipelined/src/open_statedb", nil)
+	pipelineImportSRCApplyFlatDiffTimer   = metrics.NewRegisteredTimer("chain/imports/pipelined/src/apply_flatdiff", nil)
+	pipelineImportSRCCommitTimer          = metrics.NewRegisteredTimer("chain/imports/pipelined/src/commit", nil)
+	// SRC wall-clock split by whether the next block's execution overlapped it.
+	// The next-block-perspective counterpart to the execution split above.
+	pipelineImportSRCWithNextExecTimer     = metrics.NewRegisteredTimer("chain/imports/pipelined/src/with_next_exec_overlap", nil)
+	pipelineImportSRCNoNextExecTimer       = metrics.NewRegisteredTimer("chain/imports/pipelined/src/no_next_exec_overlap", nil)
+	pipelineImportOverlapExecutionTimer    = metrics.NewRegisteredTimer("chain/imports/pipelined/overlap/execution", nil)
 	pipelineImportCommitSnapshotTimer      = metrics.NewRegisteredTimer("chain/imports/pipelined/commit_snapshot", nil)
 	pipelineImportCollectTotalTimer        = metrics.NewRegisteredTimer("chain/imports/pipelined/collect_total", nil)
 	pipelineImportStateSyncFeedTimer       = metrics.NewRegisteredTimer("chain/imports/pipelined/state_sync_feed", nil)
@@ -198,6 +218,9 @@ var (
 	pipelineImportWarmSnapshotCollect      = metrics.NewRegisteredTimer("chain/imports/pipelined/warm_snapshot/collect", nil)
 	pipelineImportWarmSnapshotBuild        = metrics.NewRegisteredTimer("chain/imports/pipelined/warm_snapshot/build", nil)
 	pipelineImportWarmSnapshotFetchers     = metrics.NewRegisteredHistogram("chain/imports/pipelined/warm_snapshot/fetchers", nil, metrics.NewExpDecaySample(1028, 0.015))
+	pipelineImportOverlapBlocksCounter     = metrics.NewRegisteredCounter("chain/imports/pipelined/overlap/blocks", nil)
+	pipelineImportNoOverlapBlocksCounter   = metrics.NewRegisteredCounter("chain/imports/pipelined/overlap/no_overlap", nil)
+	pipelineImportOverlapExecutionPercent  = metrics.NewRegisteredHistogram("chain/imports/pipelined/overlap/execution_percent", nil, metrics.NewExpDecaySample(1028, 0.015))
 	pipelineImportSRCPrefetchSubfetchers   = metrics.NewRegisteredHistogram("chain/imports/pipelined/src/prefetch_subfetchers", nil, metrics.NewExpDecaySample(1028, 0.015))
 	pipelineImportWarmSnapshotNodes        = metrics.NewRegisteredHistogram("chain/imports/pipelined/warm_snapshot/nodes", nil, metrics.NewExpDecaySample(1028, 0.015))
 	pipelineImportWarmSnapshotBytes        = metrics.NewRegisteredHistogram("chain/imports/pipelined/warm_snapshot/bytes", nil, metrics.NewExpDecaySample(1028, 0.015))
@@ -404,6 +427,7 @@ type PipelineImportOpts struct {
 	PendingBlock        uint64          // Pending SRC block that supplied FlatDiff, if any
 	PendingHash         common.Hash     // Hash of PendingBlock, if any
 	PendingCollected    bool            // Whether PendingBlock's SRC collection had already completed at selection time
+	pendingSRC          *pendingSRCState
 }
 
 const (
@@ -502,9 +526,16 @@ type pendingSRCState struct {
 	blockHash   common.Hash
 	blockNumber uint64
 	wg          sync.WaitGroup
-	root        common.Hash
-	witness     []byte // RLP-encoded witness built by the SRC goroutine
-	err         error
+	startNanos  atomic.Int64
+	doneNanos   atomic.Int64
+	// Set by the next block's execution-metrics recording so SRC wall-clock can
+	// be split by whether that execution overlapped this SRC. classified gates
+	// the read (overlapped is only meaningful once classified is true).
+	nextExecOverlapped atomic.Bool
+	nextExecClassified atomic.Bool
+	root               common.Hash
+	witness            []byte // RLP-encoded witness built by the SRC goroutine
+	err                error
 }
 
 // pendingImportSRCState stores the state of a block whose SRC goroutine has
@@ -519,6 +550,7 @@ type pendingImportSRCState struct {
 	procTime      time.Duration // for gcproc accumulation
 	blockStart    time.Time     // block processing start — used for chain/imports/witness_ready_end_to_end
 	makeWitness   bool          // whether the SRC goroutine is producing a witness for this block
+	src           *pendingSRCState
 
 	// collectedCh is closed when auto-collection completes (verify root,
 	// write witness, trie GC). Callers block on <-collectedCh.
@@ -996,6 +1028,114 @@ func pendingImportSRCCollected(pending *pendingImportSRCState) bool {
 	}
 }
 
+func (p *pendingSRCState) markStarted(t time.Time) {
+	if p != nil {
+		p.startNanos.Store(t.UnixNano())
+	}
+}
+
+func (p *pendingSRCState) markDone(t time.Time) {
+	if p != nil {
+		p.doneNanos.Store(t.UnixNano())
+	}
+}
+
+func (p *pendingSRCState) executionOverlap(execStart, execEnd time.Time) time.Duration {
+	if p == nil || execStart.IsZero() || execEnd.IsZero() || !execEnd.After(execStart) {
+		return 0
+	}
+	srcStart := p.startNanos.Load()
+	if srcStart == 0 {
+		return 0
+	}
+	overlapStart := execStart.UnixNano()
+	if srcStart > overlapStart {
+		overlapStart = srcStart
+	}
+	overlapEnd := execEnd.UnixNano()
+	if srcDone := p.doneNanos.Load(); srcDone != 0 && srcDone < overlapEnd {
+		overlapEnd = srcDone
+	}
+	if overlapEnd <= overlapStart {
+		return 0
+	}
+	return time.Duration(overlapEnd - overlapStart)
+}
+
+func recordPipelinedImportExecutionMetrics(pipeOpts *PipelineImportOpts, execStart, execEnd time.Time) {
+	if pipeOpts == nil || execStart.IsZero() || execEnd.IsZero() || !execEnd.After(execStart) {
+		return
+	}
+	execDuration := execEnd.Sub(execStart)
+	pipelineImportExecutionTimer.Update(execDuration)
+
+	if pipeOpts.pendingSRC == nil {
+		return
+	}
+	src := pipeOpts.pendingSRC
+	overlap := src.executionOverlap(execStart, execEnd)
+	pipelineImportOverlapExecutionTimer.Update(overlap)
+	if overlap > 0 {
+		pipelineImportOverlapBlocksCounter.Inc(1)
+		pipelineImportExecWithOverlapTimer.Update(execDuration)
+	} else {
+		pipelineImportNoOverlapBlocksCounter.Inc(1)
+		pipelineImportExecNoOverlapTimer.Update(execDuration)
+	}
+
+	var percent int64
+	if execDuration > 0 {
+		percent = overlap.Nanoseconds() * 100 / execDuration.Nanoseconds()
+		pipelineImportOverlapExecutionPercent.Update(percent)
+	}
+	recordExecutionOverlapBucket(percent, execDuration)
+
+	// Record the classification so the SRC-side split can be emitted once the
+	// SRC goroutine is collected (its wall-clock isn't final yet here).
+	src.nextExecOverlapped.Store(overlap > 0)
+	src.nextExecClassified.Store(true)
+}
+
+// recordExecutionOverlapBucket files this block's execution time into the
+// bucket matching how much of it overlapped the previous SRC. percent is
+// already clamped to 0..100 (overlap can't exceed execution duration).
+func recordExecutionOverlapBucket(percent int64, execDuration time.Duration) {
+	switch {
+	case percent <= 0:
+		pipelineImportExecOverlap0Timer.Update(execDuration)
+	case percent < 25:
+		pipelineImportExecOverlap1To25Timer.Update(execDuration)
+	case percent < 50:
+		pipelineImportExecOverlap25To50Timer.Update(execDuration)
+	case percent < 75:
+		pipelineImportExecOverlap50To75Timer.Update(execDuration)
+	default:
+		pipelineImportExecOverlap75To100Timer.Update(execDuration)
+	}
+}
+
+// recordPipelinedImportSRCOverlapSplit files the SRC goroutine's full
+// wall-clock into the with/no-next-exec-overlap timer. Called after collection,
+// when doneNanos is final and the next block's execution has classified it.
+func recordPipelinedImportSRCOverlapSplit(src *pendingSRCState) {
+	if src == nil || !src.nextExecClassified.Load() {
+		return
+	}
+	start := src.startNanos.Load()
+	done := src.doneNanos.Load()
+	// done == start is legitimate (sub-resolution SRC); only reject an
+	// uninitialized start or an inverted window.
+	if start == 0 || done < start {
+		return
+	}
+	dur := time.Duration(done - start)
+	if src.nextExecOverlapped.Load() {
+		pipelineImportSRCWithNextExecTimer.Update(dur)
+	} else {
+		pipelineImportSRCNoNextExecTimer.Update(dur)
+	}
+}
+
 func flatDiffLogAttrs(diff *state.FlatDiff) []interface{} {
 	attrs := []interface{}{"hasFlatDiff", diff != nil}
 	if diff == nil {
@@ -1178,6 +1318,8 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		counter  *metrics.Counter
 		parallel bool
 		vtime    time.Duration
+		execFrom time.Time
+		execTo   time.Time
 	}
 
 	var resultChanLen int = 2
@@ -1199,7 +1341,8 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 			v2VmCfg := bc.cfg.VmConfig
 			sharedCaches.applyTo(&v2VmCfg)
 			res, err := bc.parallelProcessor.Process(block, parallelStatedb, v2VmCfg, nil, ctx)
-			blockExecutionParallelTimer.UpdateSince(pstart)
+			pend := time.Now()
+			blockExecutionParallelTimer.Update(pend.Sub(pstart))
 			var localVtime time.Duration
 			if err == nil {
 				vstart := time.Now()
@@ -1218,7 +1361,18 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 			if res == nil {
 				res = &ProcessResult{}
 			}
-			resultChan <- Result{res.Receipts, res.Logs, res.GasUsed, err, parallelStatedb, blockExecutionParallelCounter, true, localVtime}
+			resultChan <- Result{
+				receipts: res.Receipts,
+				logs:     res.Logs,
+				usedGas:  res.GasUsed,
+				err:      err,
+				statedb:  parallelStatedb,
+				counter:  blockExecutionParallelCounter,
+				parallel: true,
+				vtime:    localVtime,
+				execFrom: pstart,
+				execTo:   pend,
+			}
 		}()
 	}
 
@@ -1229,7 +1383,8 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 			pstart := time.Now()
 			statedb.StartPrefetcher("chain", witness, nil)
 			res, err := bc.processor.Process(block, statedb, bc.cfg.VmConfig, nil, ctx)
-			blockExecutionSerialTimer.UpdateSince(pstart)
+			pend := time.Now()
+			blockExecutionSerialTimer.Update(pend.Sub(pstart))
 			var localVtime time.Duration
 			if err == nil {
 				vstart := time.Now()
@@ -1242,7 +1397,18 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 			if res == nil {
 				res = &ProcessResult{}
 			}
-			resultChan <- Result{res.Receipts, res.Logs, res.GasUsed, err, statedb, blockExecutionSerialCounter, false, localVtime}
+			resultChan <- Result{
+				receipts: res.Receipts,
+				logs:     res.Logs,
+				usedGas:  res.GasUsed,
+				err:      err,
+				statedb:  statedb,
+				counter:  blockExecutionSerialCounter,
+				parallel: false,
+				vtime:    localVtime,
+				execFrom: pstart,
+				execTo:   pend,
+			}
 		}()
 	}
 
@@ -1273,6 +1439,9 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 			result.statedb.StopPrefetcher()
 			processorCount--
 		}
+	}
+	if result.err == nil {
+		recordPipelinedImportExecutionMetrics(pipeOpts, result.execFrom, result.execTo)
 	}
 
 	// With the result we plan to keep in hand, cancel the shared context
@@ -4848,7 +5017,7 @@ func (bc *BlockChain) PostExecState(header *types.Header) (*state.StateDB, error
 // WarmSnapshot from them (useWarmSnapshot=true). This keeps the import thread
 // from blocking on prefetch completion while still letting SRC benefit from
 // the execution-side warmup.
-func (bc *BlockChain) SpawnSRCGoroutine(block *types.Block, parentRoot common.Hash, flatDiff *state.FlatDiff, makeWitness bool, execWitness *stateless.Witness, allowOwnWitness bool, detachedPrefetcher *state.DetachedPrefetcher, useWarmSnapshot bool) {
+func (bc *BlockChain) SpawnSRCGoroutine(block *types.Block, parentRoot common.Hash, flatDiff *state.FlatDiff, makeWitness bool, execWitness *stateless.Witness, allowOwnWitness bool, detachedPrefetcher *state.DetachedPrefetcher, useWarmSnapshot bool) *pendingSRCState {
 	pending := &pendingSRCState{
 		blockHash:   block.Hash(),
 		blockNumber: block.NumberU64(),
@@ -4860,6 +5029,7 @@ func (bc *BlockChain) SpawnSRCGoroutine(block *types.Block, parentRoot common.Ha
 	pending.wg.Add(1)
 	bc.wg.Add(1)
 	go bc.runSRCCompute(pending, block, parentRoot, flatDiff, makeWitness, execWitness, allowOwnWitness, detachedPrefetcher, useWarmSnapshot)
+	return pending
 }
 
 func recordDetachedPrefetchStats(stats state.PrefetcherSnapshotStats, useWarmSnapshot bool) {
@@ -4937,6 +5107,10 @@ func finishDetachedPrefetcher(detachedPrefetcher *state.DetachedPrefetcher, useW
 func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block, parentRoot common.Hash, flatDiff *state.FlatDiff, makeWitness bool, execWitness *stateless.Witness, allowOwnWitness bool, detachedPrefetcher *state.DetachedPrefetcher, useWarmSnapshot bool) {
 	defer bc.wg.Done()
 	defer pending.wg.Done()
+	pending.markStarted(time.Now())
+	defer func() {
+		pending.markDone(time.Now())
+	}()
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error("Pipelined SRC: panic in SRC goroutine", "block", block.NumberU64(), "err", r)
@@ -4962,12 +5136,16 @@ func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block
 	}
 
 	warmSnapshot := finishDetachedPrefetcher(detachedPrefetcher, useWarmSnapshot)
+	openStart := time.Now()
 	tmpDB, witness, err := bc.openSRCStateDB(parentRoot, block, makeWitness, execWitness, warmSnapshot)
+	pipelineImportSRCOpenStateDBTimer.UpdateSince(openStart)
 	if err != nil {
 		pending.err = err
 		return
 	}
+	applyStart := time.Now()
 	tmpDB.ApplyFlatDiffForCommit(flatDiff)
+	pipelineImportSRCApplyFlatDiffTimer.UpdateSince(applyStart)
 
 	// Preload + read-surface histograms only fire when the witness is being
 	// produced — preloadFlatDiffReads exists solely to populate the witness
@@ -4997,7 +5175,9 @@ func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block
 	deleteEmptyObjects := bc.chainConfig.IsEIP158(block.Number())
 	commitStart := time.Now()
 	root, stateUpdate, err := tmpDB.CommitWithUpdate(block.NumberU64(), deleteEmptyObjects, bc.chainConfig.IsCancun(block.Number()))
-	stateCommitTimer.UpdateSince(commitStart)
+	commitElapsed := time.Since(commitStart)
+	pipelineImportSRCCommitTimer.Update(commitElapsed)
+	stateCommitTimer.Update(commitElapsed)
 	if err != nil {
 		log.Error("Pipelined SRC: CommitWithUpdate failed", "block", block.NumberU64(), "err", err)
 		pending.err = err
@@ -5510,7 +5690,7 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 	// discards it.
 	phaseStart = time.Now()
 	useWarmSnapshot := makeWitness && bc.cfg.PipelinedSRCWarmSnapshot
-	bc.SpawnSRCGoroutine(tmpBlock, committedRoot, flatDiff, makeWitness, execWitness, false, detachedPrefetcher, useWarmSnapshot)
+	src := bc.SpawnSRCGoroutine(tmpBlock, committedRoot, flatDiff, makeWitness, execWitness, false, detachedPrefetcher, useWarmSnapshot)
 	detachedPrefetcher = nil
 	timings.spawnSRC = time.Since(phaseStart)
 	pipelineImportSpawnSRCTimer.Update(timings.spawnSRC)
@@ -5522,6 +5702,7 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 		procTime:      time.Since(start),
 		blockStart:    start,
 		makeWitness:   makeWitness,
+		src:           src,
 		collectedCh:   make(chan struct{}),
 	}
 	bc.pendingImportSRCMu.Lock()
@@ -5628,6 +5809,9 @@ func (bc *BlockChain) collectPrevImportSRCIfAny(block *types.Block, parent *type
 	committedRoot, err := bc.collectPendingImportSRC()
 	elapsed := time.Since(collectStart)
 	pipelineImportCollectTimer.Update(elapsed)
+	// SRC wall-clock is final now (collection joined the goroutine); emit the
+	// next-exec-overlap split using the classification this block's execution set.
+	recordPipelinedImportSRCOverlapSplit(pending.src)
 	return committedRoot, elapsed, err
 }
 
@@ -5663,6 +5847,7 @@ func (bc *BlockChain) buildPipelineImportOpts(block *types.Block, parent *types.
 				PendingBlock:        pending.block.NumberU64(),
 				PendingHash:         pending.block.Hash(),
 				PendingCollected:    pendingImportSRCCollected(pending),
+				pendingSRC:          pending.src,
 			}
 			if bc.cfg.PipelinedImportSRCLogs {
 				attrs := []interface{}{"block", block.NumberU64(), "txs", len(block.Transactions())}
