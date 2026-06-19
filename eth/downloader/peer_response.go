@@ -1,0 +1,238 @@
+// Copyright 2026 The go-ethereum Authors
+// This file is part of the go-ethereum library.
+//
+// The go-ethereum library is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// The go-ethereum library is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
+
+package downloader
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"time"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/eth/downloader/whitelist"
+	"github.com/ethereum/go-ethereum/log"
+)
+
+const (
+	peerJailBackoff = 5 * time.Minute
+	peerSoftBackoff = 30 * time.Second
+
+	softFailureWindow        = 10 * time.Minute
+	softFailureJailThreshold = 4
+
+	whitelistMismatchWindow        = 30 * time.Minute
+	whitelistMismatchJailThreshold = 2
+	whitelistMismatchDropThreshold = 4
+
+	backoffPruneInterval = time.Minute
+)
+
+type peerFailureReason string
+
+const (
+	peerFailureInvalidChain      peerFailureReason = "invalid-chain"
+	peerFailurePrunedSidechain   peerFailureReason = "pruned-sidechain"
+	peerFailureBadPeer           peerFailureReason = "bad-peer"
+	peerFailureTimeout           peerFailureReason = "timeout"
+	peerFailureStalling          peerFailureReason = "stalling"
+	peerFailureUnsynced          peerFailureReason = "unsynced"
+	peerFailureEmptyHeaderSet    peerFailureReason = "empty-header-set"
+	peerFailurePeersUnavailable  peerFailureReason = "peers-unavailable"
+	peerFailureTooOld            peerFailureReason = "too-old"
+	peerFailureInvalidAncestor   peerFailureReason = "invalid-ancestor"
+	peerFailureWhitelistMismatch peerFailureReason = "whitelist-mismatch"
+)
+
+type peerResponseAction uint8
+
+const (
+	peerResponseNone peerResponseAction = iota
+	peerResponseDrop
+	peerResponseJail
+	peerResponseBackoff
+	peerResponseMismatch
+)
+
+type peerResponseDecision struct {
+	action  peerResponseAction
+	backoff time.Duration
+	reason  peerFailureReason
+}
+
+func (d *Downloader) liveOrCaptured(captured *peerConnection, id string) *peerConnection {
+	if live := d.peers.Peer(id); live != nil {
+		return live
+	}
+	return captured
+}
+
+func (d *Downloader) handleSyncFailure(peer *peerConnection, id string, err error) bool {
+	reason, ok := classifySyncFailure(err)
+	if !ok {
+		return false
+	}
+	peer = d.liveOrCaptured(peer, id)
+	if peer == nil {
+		log.Debug("Downloader peer response skipped for unknown peer", "peer", id, "reason", reason, "err", err)
+		return true
+	}
+	d.respondToPeer(peer, reason, err)
+	return true
+}
+
+func classifySyncFailure(err error) (peerFailureReason, bool) {
+	switch {
+	case isPrunedSidechainMismatch(err):
+		return peerFailurePrunedSidechain, true
+	case isTransientFailure(err):
+		return peerFailureTimeout, true
+	case isWhitelistMismatch(err):
+		return peerFailureWhitelistMismatch, true
+	case errors.Is(err, errInvalidChain):
+		return peerFailureInvalidChain, true
+	case errors.Is(err, errBadPeer):
+		return peerFailureBadPeer, true
+	case errors.Is(err, errStallingPeer):
+		return peerFailureStalling, true
+	case errors.Is(err, errUnsyncedPeer):
+		return peerFailureUnsynced, true
+	case errors.Is(err, errEmptyHeaderSet):
+		return peerFailureEmptyHeaderSet, true
+	case errors.Is(err, errPeersUnavailable):
+		return peerFailurePeersUnavailable, true
+	case errors.Is(err, errTooOld):
+		return peerFailureTooOld, true
+	case errors.Is(err, errInvalidAncestor):
+		return peerFailureInvalidAncestor, true
+	default:
+		return "", false
+	}
+}
+
+func isWhitelistMismatch(err error) bool {
+	return errors.Is(err, whitelist.ErrMismatch)
+}
+
+func isTransientFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, errTimeout) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	if errors.Is(err, errInvalidChain) || errors.Is(err, errBadPeer) || errors.Is(err, errInvalidAncestor) {
+		return false
+	}
+	return strings.Contains(err.Error(), context.DeadlineExceeded.Error())
+}
+
+func (d *Downloader) respondToPeer(peer *peerConnection, reason peerFailureReason, err error) {
+	decision := peer.responseDecision(reason)
+
+	switch decision.action {
+	case peerResponseJail:
+		d.jailPeer(peer, decision, err)
+	case peerResponseBackoff:
+		d.backoffPeer(peer, decision, err)
+	case peerResponseMismatch:
+		d.escalateMismatch(peer, decision, err)
+	case peerResponseDrop:
+		d.dropPeerForResponse(peer, decision.reason, err)
+	}
+}
+
+func (d *Downloader) benchPeer(peer *peerConnection, backoff time.Duration) {
+	peer.backoffFor(backoff)
+	d.peers.recordJail(peer, peer.backoffExpiry())
+}
+
+func (d *Downloader) jailPeer(peer *peerConnection, decision peerResponseDecision, err error) {
+	d.benchPeer(peer, decision.backoff)
+	peerJailMeter.Mark(1)
+	peer.log.Warn("Downloader: locally jailing peer", "reason", decision.reason, "err", err, "requested", common.PrettyDuration(decision.backoff), "effective", common.PrettyDuration(peer.backoffRemaining()))
+}
+
+func (d *Downloader) backoffPeer(peer *peerConnection, decision peerResponseDecision, err error) {
+	strikes := d.peers.recordSoftFailure(peer.id, time.Now())
+	if strikes >= softFailureJailThreshold {
+		d.peers.clearSoftFailures(peer.id)
+		peer.log.Warn("Downloader: escalating repeated soft failures to local jail", "reason", decision.reason, "strikes", strikes, "err", err)
+		d.jailPeer(peer, peerResponseDecision{action: peerResponseJail, backoff: peerJailBackoff, reason: decision.reason}, err)
+		return
+	}
+	d.benchPeer(peer, decision.backoff)
+	peerSoftBackoffMeter.Mark(1)
+	peer.log.Warn("Downloader: backing off peer", "reason", decision.reason, "err", err, "strikes", strikes, "requested", common.PrettyDuration(decision.backoff), "effective", common.PrettyDuration(peer.backoffRemaining()))
+}
+
+func (d *Downloader) escalateMismatch(peer *peerConnection, decision peerResponseDecision, err error) {
+	peerMismatchMeter.Mark(1)
+	strikes := d.peers.recordMismatch(peer.id, time.Now())
+	switch {
+	case strikes >= whitelistMismatchDropThreshold:
+		d.peers.clearMismatches(peer.id)
+		peer.log.Warn("Downloader: dropping peer after persistent whitelist mismatch", "reason", decision.reason, "strikes", strikes, "err", err)
+		d.dropPeerForResponse(peer, decision.reason, err)
+	case strikes >= whitelistMismatchJailThreshold:
+		peer.log.Warn("Downloader: escalating repeated whitelist mismatch to local jail", "reason", decision.reason, "strikes", strikes, "err", err)
+		d.jailPeer(peer, peerResponseDecision{action: peerResponseJail, backoff: peerJailBackoff, reason: decision.reason}, err)
+	default:
+		d.benchPeer(peer, decision.backoff)
+		peerSoftBackoffMeter.Mark(1)
+		peer.log.Warn("Downloader: backing off peer after whitelist mismatch", "reason", decision.reason, "err", err, "strikes", strikes, "requested", common.PrettyDuration(decision.backoff), "effective", common.PrettyDuration(peer.backoffRemaining()))
+	}
+}
+
+func (p *peerConnection) responseDecision(reason peerFailureReason) peerResponseDecision {
+	decision := peerResponseDecision{
+		reason: reason,
+	}
+
+	switch reason {
+	case peerFailurePrunedSidechain:
+		decision.action = peerResponseJail
+		decision.backoff = peerJailBackoff
+	case peerFailureInvalidChain, peerFailureBadPeer, peerFailureInvalidAncestor:
+		decision.action = peerResponseDrop
+	case peerFailureWhitelistMismatch:
+		decision.action = peerResponseMismatch
+		decision.backoff = peerSoftBackoff
+	case peerFailureTimeout, peerFailureStalling, peerFailureUnsynced, peerFailureEmptyHeaderSet, peerFailureTooOld:
+		decision.action = peerResponseBackoff
+		decision.backoff = peerSoftBackoff
+	default:
+		decision.action = peerResponseNone
+	}
+	return decision
+}
+
+func (d *Downloader) dropPeerForResponse(peer *peerConnection, reason peerFailureReason, err error) {
+	peer.log.Warn("Synchronisation failed, dropping peer", "reason", reason, "err", err, "mode", d.getMode())
+
+	if d.dropPeer == nil {
+		log.Warn("Downloader wants to drop peer, but peerdrop-function is not set", "peer", peer.id)
+		return
+	}
+	peerDropResponseMeter.Mark(1)
+	d.dropPeer(peer.id)
+}
+
+const sidechainGhostStateMsg = "sidechain ghost-state attack"
+
+func isPrunedSidechainMismatch(err error) bool {
+	return err != nil && strings.Contains(err.Error(), sidechainGhostStateMsg)
+}

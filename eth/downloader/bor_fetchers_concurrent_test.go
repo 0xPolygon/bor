@@ -56,13 +56,25 @@ func newTestDownloader() *Downloader {
 // schedules a header with non-empty receipts so concurrentFetch enters the
 // receipt peer selection path.
 func scheduleReceiptTask(d *Downloader) {
+	scheduleReceiptTasks(d, 1)
+}
+
+func scheduleReceiptTasks(d *Downloader, count int) {
 	d.queue.Prepare(1, SnapSync)
 
-	header := &types.Header{
-		Number:      big.NewInt(1),
-		ReceiptHash: common.HexToHash("0x1"), // non-empty so receipts get scheduled
+	var (
+		headers []*types.Header
+		hashes  []common.Hash
+	)
+	for i := 1; i <= count; i++ {
+		header := &types.Header{
+			Number:      big.NewInt(int64(i)),
+			ReceiptHash: common.Hash{byte(i)},
+		}
+		headers = append(headers, header)
+		hashes = append(hashes, header.Hash())
 	}
-	d.queue.Schedule([]*types.Header{header}, []common.Hash{header.Hash()}, 1)
+	d.queue.Schedule(headers, hashes, 1)
 }
 
 // TestConcurrentFetchReceipts_OnlyEth68Peers verifies that concurrentFetch
@@ -134,5 +146,25 @@ func TestConcurrentFetchReceipts_MixedPeers(t *testing.T) {
 
 	if !mockPeers[1].receiptRequested.Load() {
 		t.Error("eth/69 peer should have received a receipt request")
+	}
+}
+
+func TestConcurrentFetchReceipts_BackedOffPeer(t *testing.T) {
+	d := newTestDownloader()
+	scheduleReceiptTask(d)
+
+	peer := &mockPeer{id: "peer-eth69", protocol: eth.ETH69}
+	pc := newPeerConnection(peer.id, peer.protocol, peer, log.New("peer", peer.id))
+	pc.backoffFor(time.Minute)
+	if err := d.peers.Register(pc); err != nil {
+		t.Fatal(err)
+	}
+
+	err := d.concurrentFetch((*receiptQueue)(d), false)
+	if err != errPeerBackedOff {
+		t.Fatalf("expected errPeerBackedOff, got %v", err)
+	}
+	if peer.receiptRequested.Load() {
+		t.Fatal("backed-off peer should not receive a receipt request")
 	}
 }

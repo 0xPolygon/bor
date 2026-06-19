@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/rand"
 	"sort"
 	"time"
 
@@ -216,6 +215,7 @@ type skeleton struct {
 	scratchHead   uint64          // Block number of the first item in the scratch space
 
 	requests map[uint64]*headerRequest // Header requests currently running
+	reqSeq   uint64                    // Monotonic source of unique request IDs
 
 	headEvents chan *headUpdate // Notification channel for new heads
 	terminate  chan chan error  // Termination channel to abort sync
@@ -348,6 +348,40 @@ func (s *skeleton) Sync(head *types.Header, final *types.Header, force bool) err
 	}
 }
 
+func earlierBackoff(current, candidate time.Time) time.Time {
+	if candidate.IsZero() {
+		return current
+	}
+	if current.IsZero() || candidate.Before(current) {
+		return candidate
+	}
+
+	return current
+}
+
+func armBackoffTimer(prev *time.Timer, wake time.Time) (*time.Timer, <-chan time.Time) {
+	if prev != nil && !prev.Stop() {
+		select {
+		case <-prev.C:
+		default:
+		}
+	}
+	if wake.IsZero() {
+		return prev, nil
+	}
+	d := time.Until(wake)
+	if d <= 0 {
+		d = time.Nanosecond
+	}
+	if prev == nil {
+		prev = time.NewTimer(d)
+		return prev, prev.C
+	}
+	prev.Reset(d)
+
+	return prev, prev.C
+}
+
 // sync is the internal version of Sync that executes a single sync cycle, either
 // until some termination condition is reached, or until the current cycle merges
 // with a previously aborted run.
@@ -446,13 +480,28 @@ func (s *skeleton) sync(head *types.Header) (*types.Header, error) {
 		s.syncStarting()
 	}
 
+	var (
+		backoffTimer *time.Timer
+		backoffCh    <-chan time.Time
+	)
+	defer func() {
+		if backoffTimer != nil {
+			backoffTimer.Stop()
+		}
+	}()
+
 	for {
 		// Something happened, try to assign new tasks to any idle peers
+		var wake time.Time
 		if !linked {
-			s.assignTasks(responses, requestFails, cancel)
+			wake = s.assignTasks(responses, requestFails, cancel)
 		}
+		backoffTimer, backoffCh = armBackoffTimer(backoffTimer, wake)
+
 		// Wait for something to happen
 		select {
+		case <-backoffCh:
+
 		case event := <-peering:
 			// A peer joined or left, the tasks queue and allocations need to be
 			// checked for potential assignment or reassignment
@@ -696,31 +745,41 @@ func (s *skeleton) processNewHead(head *types.Header, final *types.Header) error
 	return nil
 }
 
-// assignTasks attempts to match idle peers to pending header retrievals.
-func (s *skeleton) assignTasks(success chan *headerResponse, fail chan *headerRequest, cancel chan struct{}) {
-	// Sort the peers by download capacity to use faster ones if many available
+func (s *skeleton) idleSkeletonPeers() (*peerCapacitySort, time.Time) {
 	idlers := &peerCapacitySort{
 		peers: make([]*peerConnection, 0, len(s.idles)),
 		caps:  make([]int, 0, len(s.idles)),
 	}
 	targetTTL := s.peers.rates.TargetTimeout()
 
+	var nextBackoff time.Time
 	for _, peer := range s.idles {
+		if peer.backedOff() {
+			nextBackoff = earlierBackoff(nextBackoff, peer.backoffExpiry())
+			continue
+		}
 		idlers.peers = append(idlers.peers, peer)
 		idlers.caps = append(idlers.caps, s.peers.rates.Capacity(peer.id, eth.BlockHeadersMsg, targetTTL))
 	}
 
-	if len(idlers.peers) == 0 {
-		return
-	}
-
 	sort.Sort(idlers)
+
+	return idlers, nextBackoff
+}
+
+func (s *skeleton) assignTasks(success chan *headerResponse, fail chan *headerRequest, cancel chan struct{}) time.Time {
+	// Sort the peers by download capacity to use faster ones if many available
+	idlers, nextBackoff := s.idleSkeletonPeers()
+
+	if len(idlers.peers) == 0 {
+		return nextBackoff
+	}
 
 	// Find header regions not yet downloading and fill them
 	for task, owner := range s.scratchOwners {
 		// If we're out of idle peers, stop assigning tasks
 		if len(idlers.peers) == 0 {
-			return
+			return nextBackoff
 		}
 		// Skip any tasks already filling
 		if owner != "" {
@@ -728,7 +787,7 @@ func (s *skeleton) assignTasks(success chan *headerResponse, fail chan *headerRe
 		}
 		// If we've reached the genesis, stop assigning tasks
 		if uint64(task*requestHeaders) >= s.scratchHead {
-			return
+			return nextBackoff
 		}
 		// Found a task and have peers available, assign it
 		idle := idlers.peers[0]
@@ -737,20 +796,8 @@ func (s *skeleton) assignTasks(success chan *headerResponse, fail chan *headerRe
 		idlers.caps = idlers.caps[1:]
 
 		// Matched a pending task to an idle peer, allocate a unique request id
-		var reqid uint64
+		reqid := s.newRequestID()
 
-		for {
-			reqid = uint64(rand.Int63())
-			if reqid == 0 {
-				continue
-			}
-
-			if _, ok := s.requests[reqid]; ok {
-				continue
-			}
-
-			break
-		}
 		// Generate the network query and send it to the peer
 		req := &headerRequest{
 			peer:    idle.id,
@@ -770,6 +817,12 @@ func (s *skeleton) assignTasks(success chan *headerResponse, fail chan *headerRe
 		// Inject the request into the task to block further assignments
 		s.scratchOwners[task] = idle.id
 	}
+	return nextBackoff
+}
+
+func (s *skeleton) newRequestID() uint64 {
+	s.reqSeq += 1
+	return s.reqSeq
 }
 
 // executeTask executes a single fetch request, blocking until either a result

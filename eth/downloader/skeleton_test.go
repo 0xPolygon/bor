@@ -538,6 +538,122 @@ func TestSkeletonSyncExtend(t *testing.T) {
 	}
 }
 
+func TestEarlierBackoff(t *testing.T) {
+	t.Parallel()
+
+	early := time.Unix(1000, 0)
+	late := time.Unix(2000, 0)
+
+	tests := []struct {
+		name      string
+		current   time.Time
+		candidate time.Time
+		want      time.Time
+	}{
+		{name: "zero candidate keeps current", current: late, candidate: time.Time{}, want: late},
+		{name: "zero candidate with zero current stays zero", current: time.Time{}, candidate: time.Time{}, want: time.Time{}},
+		{name: "zero current takes candidate", current: time.Time{}, candidate: late, want: late},
+		{name: "earlier candidate wins", current: late, candidate: early, want: early},
+		{name: "later candidate keeps current", current: early, candidate: late, want: early},
+		{name: "equal keeps current", current: early, candidate: early, want: early},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := earlierBackoff(tt.current, tt.candidate); !got.Equal(tt.want) {
+				t.Fatalf("earlierBackoff(%v, %v) = %v, want %v", tt.current, tt.candidate, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSkeletonAssignTasksReportsBackoff(t *testing.T) {
+	chain := []*types.Header{{Number: big.NewInt(0)}}
+
+	peerset := newPeerSet()
+	soft := newPeerConnection("soft", eth.ETH69, newSkeletonTestPeer("soft", chain), log.New("id", "soft"))
+	strong := newPeerConnection("strong", eth.ETH69, newSkeletonTestPeer("strong", chain), log.New("id", "strong"))
+	if err := peerset.Register(soft); err != nil {
+		t.Fatalf("failed to register soft peer: %v", err)
+	}
+	if err := peerset.Register(strong); err != nil {
+		t.Fatalf("failed to register strong peer: %v", err)
+	}
+
+	strong.backoffFor(2 * time.Minute)
+	soft.backoffFor(30 * time.Second)
+
+	skeleton := &skeleton{
+		peers:         peerset,
+		idles:         map[string]*peerConnection{soft.id: soft, strong.id: strong},
+		scratchSpace:  make([]*types.Header, scratchHeaders),
+		scratchOwners: make([]string, scratchHeaders/requestHeaders),
+		requests:      make(map[uint64]*headerRequest),
+	}
+
+	success := make(chan *headerResponse, 1)
+	fail := make(chan *headerRequest, 1)
+	cancel := make(chan struct{})
+
+	wake := skeleton.assignTasks(success, fail, cancel)
+	if wake.IsZero() {
+		t.Fatal("expected a non-zero backoff wakeup when all peers are backed off")
+	}
+	if until := time.Until(wake); until <= 0 || until > 30*time.Second {
+		t.Fatalf("backoff wakeup mismatch: have %v remaining, want (0, %v]", until, 30*time.Second)
+	}
+	for _, owner := range skeleton.scratchOwners {
+		if owner != "" {
+			t.Fatalf("no task should be assigned to backed-off peers, got owner %q", owner)
+		}
+	}
+}
+
+func TestSkeletonSyncWakesAfterBackoff(t *testing.T) {
+	chain := []*types.Header{{Number: big.NewInt(0)}}
+	for i := 1; i < 2*requestHeaders+2; i++ {
+		chain = append(chain, &types.Header{
+			ParentHash: chain[i-1].Hash(),
+			Number:     big.NewInt(int64(i)),
+		})
+	}
+
+	db := rawdb.NewMemoryDatabase()
+	rawdb.WriteBlock(db, types.NewBlockWithHeader(chain[0]))
+	rawdb.WriteReceipts(db, chain[0].Hash(), chain[0].Number.Uint64(), types.Receipts{})
+
+	peerset := newPeerSet()
+	testPeer := newSkeletonTestPeer("backed-off", chain)
+	peer := newPeerConnection("backed-off", eth.ETH69, testPeer, log.New("id", "backed-off"))
+	if err := peerset.Register(peer); err != nil {
+		t.Fatalf("failed to register peer: %v", err)
+	}
+	peer.backoffFor(100 * time.Millisecond)
+
+	skeleton := newSkeleton(db, peerset, func(string) {}, newHookedBackfiller())
+	if err := skeleton.Sync(chain[len(chain)-1], nil, true); err != nil {
+		t.Fatalf("failed to announce sync head: %v", err)
+	}
+	defer skeleton.Terminate()
+
+	var progress skeletonProgress
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		json.Unmarshal(rawdb.ReadSkeletonSyncStatus(db), &progress)
+		if len(progress.Subchains) == 1 && progress.Subchains[0].Tail == 1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if len(progress.Subchains) != 1 || progress.Subchains[0].Tail != 1 {
+		t.Fatalf("skeleton did not link after backoff expiry: %+v", progress.Subchains)
+	}
+	if testPeer.served.Load() == 0 {
+		t.Fatal("backed-off peer never served headers after backoff expiry")
+	}
+}
+
 // Tests that the skeleton sync correctly retrieves headers from one or more
 // peers without duplicates or other strange side effects.
 func TestSkeletonSyncRetrievals(t *testing.T) {

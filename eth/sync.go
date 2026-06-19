@@ -105,49 +105,105 @@ func (cs *chainSyncer) loop() {
 	cs.force = time.NewTimer(forceSyncCycle)
 	defer cs.force.Stop()
 
+	retry := newResettableTimer()
+	defer retry.stop()
+
 	for {
-		if op := cs.nextSyncOp(); op != nil {
+		if op, wait := cs.nextSyncOp(); op != nil {
+			retry.stop()
 			cs.startSync(op)
+		} else {
+			retry.reset(wait)
 		}
 		select {
 		case <-cs.peerEventCh:
 			// Peer information changed, recheck.
 		case err := <-cs.doneCh:
-			cs.doneCh = nil
-			cs.force.Reset(forceSyncCycle)
-			cs.forced = false
-
-			// If we've reached the merge transition but no beacon client is available, or
-			// it has not yet switched us over, keep warning the user that their infra is
-			// potentially flaky.
-			if errors.Is(err, downloader.ErrMergeTransition) && time.Since(cs.warned) > 10*time.Second {
-				log.Warn("Local chain is post-merge, waiting for beacon client sync switch-over...")
-
-				cs.warned = time.Now()
-			}
+			cs.onSyncDone(err)
 		case <-cs.force.C:
 			cs.forced = true
-
+		case <-retry.C():
+			retry.markFired()
 		case <-cs.handler.quitSync:
-			// Disable all insertion on the blockchain. This needs to happen before
-			// terminating the downloader because the downloader waits for blockchain
-			// inserts, and these can take a long time to finish.
-			cs.handler.chain.StopInsert()
-			cs.handler.downloader.Terminate()
-
-			if cs.doneCh != nil {
-				<-cs.doneCh
-			}
-
+			cs.shutdown()
 			return
 		}
 	}
 }
 
-// nextSyncOp determines whether sync is required at this time.
-func (cs *chainSyncer) nextSyncOp() *chainSyncOp {
+func (cs *chainSyncer) onSyncDone(err error) {
+	cs.doneCh = nil
+	cs.force.Reset(forceSyncCycle)
+	cs.forced = false
+
+	// If we've reached the merge transition but no beacon client is available, or
+	// it has not yet switched us over, keep warning the user that their infra is
+	// potentially flaky.
+	if errors.Is(err, downloader.ErrMergeTransition) && time.Since(cs.warned) > 10*time.Second {
+		log.Warn("Local chain is post-merge, waiting for beacon client sync switch-over...")
+
+		cs.warned = time.Now()
+	}
+}
+
+func (cs *chainSyncer) shutdown() {
+	// Disable all insertion on the blockchain. This needs to happen before
+	// terminating the downloader because the downloader waits for blockchain
+	// inserts, and these can take a long time to finish.
+	cs.handler.chain.StopInsert()
+	cs.handler.downloader.Terminate()
+
 	if cs.doneCh != nil {
-		return nil // Sync already running
+		<-cs.doneCh
+	}
+}
+
+type resettableTimer struct {
+	timer  *time.Timer
+	active bool
+}
+
+func newResettableTimer() *resettableTimer {
+	timer := time.NewTimer(time.Hour)
+	timer.Stop()
+
+	return &resettableTimer{timer: timer}
+}
+
+func (r *resettableTimer) C() <-chan time.Time {
+	return r.timer.C
+}
+
+func (r *resettableTimer) markFired() {
+	r.active = false
+}
+
+func (r *resettableTimer) stop() {
+	if !r.active {
+		return
+	}
+	if !r.timer.Stop() {
+		select {
+		case <-r.timer.C:
+		default:
+		}
+	}
+	r.active = false
+}
+
+func (r *resettableTimer) reset(wait time.Duration) {
+	r.stop()
+	if wait <= 0 {
+		return
+	}
+	r.timer.Reset(wait)
+	r.active = true
+}
+
+// nextSyncOp determines whether sync is required at this time.
+func (cs *chainSyncer) nextSyncOp() (*chainSyncOp, time.Duration) {
+	if cs.doneCh != nil {
+		return nil, 0 // Sync already running
 	}
 	// Ensure we're at minimum peer count.
 	minPeers := defaultMinSyncPeers
@@ -158,14 +214,14 @@ func (cs *chainSyncer) nextSyncOp() *chainSyncOp {
 	}
 
 	if cs.handler.peers.len() < minPeers {
-		return nil
+		return nil, 0
 	}
 	// We have enough peers, pick the one with the highest TD, but avoid going
 	// over the terminal total difficulty. Above that we expect the consensus
 	// clients to direct the chain head to sync to.
-	peer := cs.handler.peers.peerWithHighestTD()
+	peer, retry := cs.handler.peers.peerWithHighestTD(cs.handler.downloader.PeerBackoff)
 	if peer == nil {
-		return nil
+		return nil, retry
 	}
 
 	mode, ourTD := cs.modeAndLocalHead()
@@ -185,10 +241,10 @@ func (cs *chainSyncer) nextSyncOp() *chainSyncOp {
 			cs.warned = time.Now()
 		}
 
-		return nil // We're in sync
+		return nil, retry // We're in sync
 	}
 
-	return op
+	return op, 0
 }
 
 func peerToSyncOp(mode downloader.SyncMode, p *eth.Peer) *chainSyncOp {
