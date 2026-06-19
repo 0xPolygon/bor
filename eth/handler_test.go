@@ -554,7 +554,6 @@ func closePeers(peers []*ethPeer) {
 // TestSealToBroadcastTimer verifies that the sealToBroadcastTimer metric is
 // updated when minedBroadcastLoop processes a NewMinedBlockEvent with SealedAt set.
 func TestSealToBroadcastTimer(t *testing.T) {
-	t.Parallel()
 	metrics.Enable()
 
 	handler := newTestHandlerWithBlocks(1)
@@ -574,11 +573,12 @@ func TestSealToBroadcastTimer(t *testing.T) {
 		SealedAt: time.Now(),
 	})
 
-	// Give the broadcast loop time to process
-	time.Sleep(200 * time.Millisecond)
-
-	if sealToBroadcastTimer.Snapshot().Count() <= countBefore {
-		t.Error("sealToBroadcastTimer should have been updated after NewMinedBlockEvent with SealedAt")
+	deadline := time.Now().Add(2 * time.Second)
+	for sealToBroadcastTimer.Snapshot().Count() <= countBefore {
+		if time.Now().After(deadline) {
+			t.Fatal("sealToBroadcastTimer should have been updated after NewMinedBlockEvent with SealedAt")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	// Test that zero SealedAt does NOT update the timer

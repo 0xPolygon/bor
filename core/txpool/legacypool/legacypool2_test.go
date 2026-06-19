@@ -52,23 +52,26 @@ func count(t *testing.T, pool *LegacyPool) (pending int, queued int) {
 
 func fillPool(t testing.TB, pool *LegacyPool) {
 	t.Helper()
-	// Create a number of test accounts, fund them and make transactions
+	// Create enough executable transactions to exactly fill the configured pool
+	// capacity. Each account stays within AccountSlots so pending truncation
+	// does not need to penalize oversized accounts during setup.
 	executableTxs := types.Transactions{}
-	nonExecutableTxs := types.Transactions{}
-	for i := 0; i < 384; i++ {
+	target := int(pool.config.GlobalSlots + pool.config.GlobalQueue)
+	for i := 0; len(executableTxs) < target; i++ {
 		key, _ := crypto.GenerateKey()
 		pool.currentState.AddBalance(crypto.PubkeyToAddress(key.PublicKey), uint256.NewInt(10000000000), tracing.BalanceChangeUnspecified)
-		// Add executable ones
-		for j := 0; j < int(pool.config.AccountSlots); j++ {
+		for j := 0; j < int(pool.config.AccountSlots) && len(executableTxs) < target; j++ {
 			executableTxs = append(executableTxs, pricedTransaction(uint64(j), 100000, big.NewInt(300), key))
 		}
 	}
-	// Import the batch and verify that limits have been enforced
+	// Import the batch and verify the pool is full and executable.
 	pool.addRemotesSync(executableTxs)
-	pool.addRemotesSync(nonExecutableTxs)
 	pending, queued := pool.Stats()
 	slots := pool.all.Slots()
 	// sanity-check that the test prerequisites are ok (pending full)
+	if have, want := slots, target; have != want {
+		t.Fatalf("have %d, want %d", have, want)
+	}
 	if have, want := pending, slots; have != want {
 		t.Fatalf("have %d, want %d", have, want)
 	}

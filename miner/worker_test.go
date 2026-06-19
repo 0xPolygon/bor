@@ -909,13 +909,21 @@ func testCommitInterruptExperimentBor(t *testing.T, delay uint, txCount int) {
 	// Start mining!
 	w.start()
 
-	// Wait for at least one block to be mined with a proper timeout
+	// Wait for the first non-empty block. Bor can pre-seal an empty block
+	// before the full block, and the test is about the interrupted full-block
+	// path rather than the empty pre-seal event.
 	var minedBlock *types.Block
-	select {
-	case ev := <-sub.Chan():
-		minedBlock = ev.Data.(core.NewMinedBlockEvent).Block
-	case <-time.After(8 * time.Second):
-		t.Fatal("timeout waiting for block to be mined")
+	timeout := time.After(8 * time.Second)
+	for minedBlock == nil {
+		select {
+		case ev := <-sub.Chan():
+			block := ev.Data.(core.NewMinedBlockEvent).Block
+			if block != nil && block.NumberU64() > 0 && block.Transactions().Len() > 0 {
+				minedBlock = block
+			}
+		case <-timeout:
+			t.Fatal("timeout waiting for non-empty block to be mined")
+		}
 	}
 
 	w.stop()
@@ -2397,7 +2405,12 @@ func TestPrefetchGoroutineLifecycle(t *testing.T) {
 	config.Recommit = 500 * time.Millisecond
 
 	w, b, cleanup := newTestWorker(t, config, chainConfig, engine, db, false, 0)
-	defer cleanup()
+	closed := false
+	defer func() {
+		if !closed {
+			cleanup()
+		}
+	}()
 
 	// Add transactions to keep prefetch busy
 	addTransactionBatch(b, 50, false)
@@ -2424,10 +2437,10 @@ func TestPrefetchGoroutineLifecycle(t *testing.T) {
 		time.Sleep(150 * time.Millisecond)
 	}
 
-	// Stop the worker and wait for cleanup
-	// Increased wait time to allow prefetch goroutines to complete IntermediateRoot
-	w.stop()
-	time.Sleep(3 * time.Second)
+	// Close the worker so its loops cannot enqueue more prefetchers while
+	// prefetch cleanup is being measured.
+	cleanup()
+	closed = true
 
 	// Force garbage collection to surface any use-after-free issues
 	// Extra wait to ensure all goroutines complete after GC
@@ -2640,13 +2653,18 @@ func TestRapidBlockProduction_WithoutWait(t *testing.T) {
 	w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, 100, 200*time.Millisecond)
 	defer engine.Close()
 	defer ctrl.Finish()
+	closed := false
+	defer func() {
+		if !closed {
+			w.close()
+		}
+	}()
 
 	// Add many transactions
 	addTransactionBatch(b, 500, false)
 	time.Sleep(200 * time.Millisecond)
 
 	w.start()
-	defer w.stop()
 
 	goroutinesBefore := runtime.NumGoroutine()
 	t.Logf("Goroutines before test: %d", goroutinesBefore)
@@ -2673,7 +2691,8 @@ func TestRapidBlockProduction_WithoutWait(t *testing.T) {
 
 	wg.Wait()
 	t.Log("All block production requests sent, waiting for prefetch to complete...")
-	time.Sleep(5 * time.Second) // Let all prefetch complete
+	w.close()
+	closed = true
 
 	// Check for panics
 	panicCount := prefetchPanicMeter.Snapshot().Count()
