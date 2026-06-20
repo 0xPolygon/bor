@@ -281,6 +281,36 @@ func newPeerSet() *peerSet {
 	}
 }
 
+func evictOldestStrike(m map[string]softStrikeRecord) {
+	var (
+		oldestID string
+		oldest   time.Time
+	)
+	for id, record := range m {
+		if oldestID == "" || record.windowStart.Before(oldest) {
+			oldestID, oldest = id, record.windowStart
+		}
+	}
+	if oldestID != "" {
+		delete(m, oldestID)
+	}
+}
+
+func evictSoonestJail(m map[string]time.Time) {
+	var (
+		evictID string
+		soonest time.Time
+	)
+	for id, expiry := range m {
+		if evictID == "" || expiry.Before(soonest) {
+			evictID, soonest = id, expiry
+		}
+	}
+	if evictID != "" {
+		delete(m, evictID)
+	}
+}
+
 func (ps *peerSet) recordSoftFailure(id string, now time.Time) int {
 	ps.lock.Lock()
 	defer ps.lock.Unlock()
@@ -292,6 +322,10 @@ func (ps *peerSet) recordSoftFailure(id string, now time.Time) int {
 			}
 		}
 		ps.lastSoftPrune = now
+	}
+
+	if _, ok := ps.softStrikes[id]; !ok && len(ps.softStrikes) >= maxStrikeEntries {
+		evictOldestStrike(ps.softStrikes)
 	}
 
 	record := ps.softStrikes[id]
@@ -324,6 +358,10 @@ func (ps *peerSet) recordMismatch(id string, now time.Time) int {
 		ps.lastMismatchPrune = now
 	}
 
+	if _, ok := ps.mismatchStrikes[id]; !ok && len(ps.mismatchStrikes) >= maxStrikeEntries {
+		evictOldestStrike(ps.mismatchStrikes)
+	}
+
 	record := ps.mismatchStrikes[id]
 	if record.count == 0 || now.Sub(record.windowStart) > whitelistMismatchWindow {
 		record = softStrikeRecord{windowStart: now}
@@ -352,6 +390,10 @@ func (ps *peerSet) recordGhostState(id string, now time.Time) int {
 			}
 		}
 		ps.lastGhostPrune = now
+	}
+
+	if _, ok := ps.ghostStrikes[id]; !ok && len(ps.ghostStrikes) >= maxStrikeEntries {
+		evictOldestStrike(ps.ghostStrikes)
 	}
 
 	record := ps.ghostStrikes[id]
@@ -385,7 +427,12 @@ func (ps *peerSet) recordJail(peer *peerConnection, until time.Time) {
 		ps.lastJailPrune = now
 	}
 	if until.After(now) {
-		ps.jailed[peer.id] = until
+		if _, ok := ps.jailed[peer.id]; !ok && len(ps.jailed) >= maxStrikeEntries {
+			evictSoonestJail(ps.jailed)
+		}
+		if existing, ok := ps.jailed[peer.id]; !ok || until.After(existing) {
+			ps.jailed[peer.id] = until
+		}
 		if live := ps.peers[peer.id]; live != nil {
 			live.extendBackoff(until)
 		}

@@ -30,6 +30,7 @@ import (
 const (
 	peerJailBackoff = 5 * time.Minute
 	peerSoftBackoff = 30 * time.Second
+	peerDropBackoff = 30 * time.Minute
 
 	softFailureWindow        = 10 * time.Minute
 	softFailureJailThreshold = 4
@@ -42,6 +43,8 @@ const (
 	prunedSidechainDropThreshold = 2
 
 	backoffPruneInterval = time.Minute
+
+	maxStrikeEntries = 4096
 )
 
 type peerFailureReason string
@@ -148,8 +151,6 @@ func (d *Downloader) respondToPeer(peer *peerConnection, reason peerFailureReaso
 	decision := peer.responseDecision(reason)
 
 	switch decision.action {
-	case peerResponseJail:
-		d.jailPeer(peer, decision, err)
 	case peerResponseBackoff:
 		d.backoffPeer(peer, decision, err)
 	case peerResponseMismatch:
@@ -239,6 +240,7 @@ func (p *peerConnection) responseDecision(reason peerFailureReason) peerResponse
 }
 
 func (d *Downloader) dropPeerForResponse(peer *peerConnection, reason peerFailureReason, err error) {
+	d.benchPeer(peer, peerDropBackoff)
 	peer.log.Warn("Synchronisation failed, dropping peer", "reason", reason, "err", err, "mode", d.getMode())
 
 	if d.dropPeer == nil {

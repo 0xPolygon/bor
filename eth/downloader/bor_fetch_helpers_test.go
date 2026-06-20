@@ -182,7 +182,7 @@ func TestRespondToPeerDropRoutesToDropPeer(t *testing.T) {
 	t.Parallel()
 
 	dropped := make(chan string, 1)
-	d := &Downloader{dropPeer: func(id string) { dropped <- id }}
+	d := &Downloader{peers: newPeerSet(), dropPeer: func(id string) { dropped <- id }}
 	peer := newPeerConnection("peer", eth.ETH69, nil, log.New())
 
 	d.respondToPeer(peer, peerFailureInvalidChain, errInvalidChain)

@@ -699,6 +699,9 @@ func TestSkeletonSyncBacksOffOnTimeout(t *testing.T) {
 	if dropped.Load() {
 		t.Fatal("timed-out skeleton peer should not be hard-dropped")
 	}
+	if peerset.persistentBackoff("stuck") <= 0 {
+		t.Fatal("a timed-out skeleton peer must persist a jail across reconnects")
+	}
 }
 
 // Tests that the skeleton sync correctly retrieves headers from one or more
