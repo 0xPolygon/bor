@@ -182,7 +182,7 @@ func TestRespondToPeerDropRoutesToDropPeer(t *testing.T) {
 	t.Parallel()
 
 	dropped := make(chan string, 1)
-	d := &Downloader{dropPeer: func(id string) { dropped <- id }}
+	d := &Downloader{peers: newPeerSet(), dropPeer: func(id string) { dropped <- id }}
 	peer := newPeerConnection("peer", eth.ETH69, nil, log.New())
 
 	d.respondToPeer(peer, peerFailureInvalidChain, errInvalidChain)
@@ -290,7 +290,7 @@ func TestFetchStallError(t *testing.T) {
 	}{
 		{name: "not stalled never errors", stalled: false, idles: 0, capablePeers: 2, awaitingStale: 0, hasBackedOff: true, want: nil},
 		{name: "all capable peers idle but unusable", stalled: true, idles: 2, capablePeers: 2, awaitingStale: 0, hasBackedOff: false, want: errPeersUnavailable},
-		{name: "all capable peers backed off past grace", stalled: true, idles: 0, capablePeers: 2, awaitingStale: 0, hasBackedOff: true, want: errPeerBackedOff},
+		{name: "all capable peers backed off past grace", stalled: true, idles: 0, capablePeers: 2, awaitingStale: 0, hasBackedOff: true, want: ErrPeerBackedOff},
 		{name: "awaiting a late delivery keeps waiting", stalled: true, idles: 0, capablePeers: 2, awaitingStale: 1, hasBackedOff: true, want: nil},
 		{name: "no backed-off peer keeps waiting", stalled: true, idles: 1, capablePeers: 2, awaitingStale: 0, hasBackedOff: false, want: nil},
 		{name: "idle-equals-capable wins over backed-off", stalled: true, idles: 2, capablePeers: 2, awaitingStale: 0, hasBackedOff: true, want: errPeersUnavailable},
@@ -350,8 +350,8 @@ func TestCollectIdlePeersAllStalePastGraceUnblocksExit(t *testing.T) {
 	default:
 	}
 
-	if err := fetchStallError(true, len(idles), len(ids), awaitingStale, hasBackedOff); err != errPeerBackedOff {
-		t.Fatalf("all-stale-past-grace round should return errPeerBackedOff, have %v", err)
+	if err := fetchStallError(true, len(idles), len(ids), awaitingStale, hasBackedOff); err != ErrPeerBackedOff {
+		t.Fatalf("all-stale-past-grace round should return ErrPeerBackedOff, have %v", err)
 	}
 }
 

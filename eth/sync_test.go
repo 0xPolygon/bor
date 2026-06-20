@@ -19,10 +19,8 @@ package eth
 import (
 	"errors"
 	"math/big"
-	"reflect"
 	"testing"
 	"time"
-	"unsafe"
 
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core"
@@ -325,16 +323,9 @@ func newChainSyncerTestHandler(t *testing.T) (*handler, func()) {
 func setDownloaderPeerBackoff(t *testing.T, d *downloader.Downloader, id string, duration time.Duration) {
 	t.Helper()
 
-	peersField := reflect.ValueOf(d).Elem().FieldByName("peers")
-	peers := reflect.NewAt(peersField.Type(), unsafe.Pointer(peersField.UnsafeAddr())).Elem()
-	result := peers.MethodByName("Peer").Call([]reflect.Value{reflect.ValueOf(id)})
-	if len(result) != 1 || result[0].IsNil() {
+	if !d.SetPeerBackoff(id, duration) {
 		t.Fatalf("downloader peer %q not found", id)
 	}
-
-	peer := result[0].Elem()
-	backoff := peer.FieldByName("backoff")
-	reflect.NewAt(backoff.Type(), unsafe.Pointer(backoff.UnsafeAddr())).Elem().Set(reflect.ValueOf(time.Now().Add(duration)))
 }
 
 // Tests that snap sync gets disabled as soon as a real block is successfully

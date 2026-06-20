@@ -17,6 +17,7 @@
 package eth
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -72,8 +73,8 @@ func TestFakeEthPeerPrunedSidechainIsLocallyJailed(t *testing.T) {
 	}
 
 	err = handler.downloader.LegacySync(peerID, fixture.head.Hash(), fixture.td, nil, downloader.FullSync)
-	if err == nil || err.Error() != "peer is temporarily backed off" {
-		t.Fatalf("backed off sync error mismatch: have %v, want peer is temporarily backed off", err)
+	if !errors.Is(err, downloader.ErrPeerBackedOff) {
+		t.Fatalf("backed off sync error mismatch: have %v, want %v", err, downloader.ErrPeerBackedOff)
 	}
 }
 

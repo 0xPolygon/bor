@@ -1214,8 +1214,8 @@ func TestLegacySyncReturnsPeerBackedOff(t *testing.T) {
 	peer.backoffFor(30 * time.Second)
 
 	err := tester.downloader.LegacySync("peer", tester.chain.Genesis().Hash(), big.NewInt(1000), nil, FullSync)
-	if err != errPeerBackedOff {
-		t.Fatalf("sync error mismatch: have %v, want %v", err, errPeerBackedOff)
+	if err != ErrPeerBackedOff {
+		t.Fatalf("sync error mismatch: have %v, want %v", err, ErrPeerBackedOff)
 	}
 	if _, ok := tester.peers["peer"]; !ok {
 		t.Fatal("backed-off peer was dropped")

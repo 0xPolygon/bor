@@ -549,6 +549,9 @@ func (s *skeleton) sync(head *types.Header) (*types.Header, error) {
 
 		case req := <-requestFails:
 			s.revertRequest(req)
+			if peer := s.peers.Peer(req.peer); peer != nil && peer.backedOff() {
+				s.idles[req.peer] = peer
+			}
 
 		case res := <-responses:
 			// Process the batch of headers. If though processing we managed to
@@ -866,21 +869,11 @@ func (s *skeleton) executeTask(peer *peerConnection, req *headerRequest) {
 
 	case <-timeoutTimer.C:
 		// Header retrieval timed out, update the metrics
-		peer.log.Warn("Skeleton: header request timed out, dropping peer", "elapsed", ttl)
+		peer.log.Warn("Skeleton: header request timed out, backing off peer", "elapsed", ttl)
 		headerTimeoutMeter.Mark(1)
 		s.peers.rates.Update(peer.id, eth.BlockHeadersMsg, 0, 0)
+		s.peers.backoffSoftFailure(peer)
 		s.scheduleRevertRequest(req)
-
-		// At this point we either need to drop the offending peer, or we need a
-		// mechanism to allow waiting for the response and not cancel it. For now
-		// lets go with dropping since the header sizes are deterministic and the
-		// beacon sync runs exclusive (downloader is idle) so there should be no
-		// other load to make timeouts probable. If we notice that timeouts happen
-		// more often than we'd like, we can introduce a tracker for the requests
-		// gone stale and monitor them. However, in that case too, we need a way
-		// to protect against malicious peers never responding, so it would need
-		// a second, hard-timeout mechanism.
-		s.drop(peer.id)
 
 	case res := <-resCh:
 		// Headers successfully retrieved, update the metrics

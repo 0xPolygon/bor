@@ -113,6 +113,25 @@ func (p *peerConnection) extendBackoff(until time.Time) {
 	}
 }
 
+func (p *peerConnection) backoffForClaim(duration time.Duration) bool {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+
+	now := time.Now()
+	claimed := p.backoff.IsZero() || !p.backoff.After(now)
+	if until := now.Add(duration); until.After(p.backoff) {
+		p.backoff = until
+	}
+	return claimed
+}
+
+func (p *peerConnection) setBackoff(until time.Time) {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+
+	p.backoff = until
+}
+
 func (p *peerConnection) backedOff() bool {
 	p.lock.RLock()
 	defer p.lock.RUnlock()
@@ -253,9 +272,11 @@ type peerSet struct {
 	jailed            map[string]time.Time // Backoff expiry per peer ID, surviving reconnects
 	softStrikes       map[string]softStrikeRecord
 	mismatchStrikes   map[string]softStrikeRecord
+	ghostStrikes      map[string]softStrikeRecord
 	lastJailPrune     time.Time
 	lastSoftPrune     time.Time
 	lastMismatchPrune time.Time
+	lastGhostPrune    time.Time
 	rates             *msgrate.Trackers // Set of rate trackers to give the sync a common beat
 	events            event.Feed        // Feed to publish peer lifecycle events on
 
@@ -274,8 +295,52 @@ func newPeerSet() *peerSet {
 		jailed:          make(map[string]time.Time),
 		softStrikes:     make(map[string]softStrikeRecord),
 		mismatchStrikes: make(map[string]softStrikeRecord),
+		ghostStrikes:    make(map[string]softStrikeRecord),
 		rates:           msgrate.NewTrackers(log.New("proto", "eth")),
 	}
+}
+
+func evictOldestStrike(m map[string]softStrikeRecord) {
+	var (
+		oldestID string
+		oldest   time.Time
+	)
+	for id, record := range m {
+		if oldestID == "" || record.windowStart.Before(oldest) {
+			oldestID, oldest = id, record.windowStart
+		}
+	}
+	if oldestID != "" {
+		delete(m, oldestID)
+	}
+}
+
+func evictSoonestJail(m map[string]time.Time) {
+	var (
+		evictID string
+		soonest time.Time
+	)
+	for id, expiry := range m {
+		if evictID == "" || expiry.Before(soonest) {
+			evictID, soonest = id, expiry
+		}
+	}
+	if evictID != "" {
+		delete(m, evictID)
+	}
+}
+
+func (ps *peerSet) backoffSoftFailure(peer *peerConnection) (penalized, jailed bool) {
+	if !peer.backoffForClaim(peerSoftBackoff) {
+		return false, false
+	}
+	if strikes := ps.recordSoftFailure(peer.id, time.Now()); strikes >= softFailureJailThreshold {
+		ps.clearSoftFailures(peer.id)
+		peer.backoffFor(peerJailBackoff)
+		jailed = true
+	}
+	ps.recordJail(peer, peer.backoffExpiry())
+	return true, jailed
 }
 
 func (ps *peerSet) recordSoftFailure(id string, now time.Time) int {
@@ -289,6 +354,10 @@ func (ps *peerSet) recordSoftFailure(id string, now time.Time) int {
 			}
 		}
 		ps.lastSoftPrune = now
+	}
+
+	if _, ok := ps.softStrikes[id]; !ok && len(ps.softStrikes) >= maxStrikeEntries {
+		evictOldestStrike(ps.softStrikes)
 	}
 
 	record := ps.softStrikes[id]
@@ -321,6 +390,10 @@ func (ps *peerSet) recordMismatch(id string, now time.Time) int {
 		ps.lastMismatchPrune = now
 	}
 
+	if _, ok := ps.mismatchStrikes[id]; !ok && len(ps.mismatchStrikes) >= maxStrikeEntries {
+		evictOldestStrike(ps.mismatchStrikes)
+	}
+
 	record := ps.mismatchStrikes[id]
 	if record.count == 0 || now.Sub(record.windowStart) > whitelistMismatchWindow {
 		record = softStrikeRecord{windowStart: now}
@@ -338,6 +411,40 @@ func (ps *peerSet) clearMismatches(id string) {
 	delete(ps.mismatchStrikes, id)
 }
 
+func (ps *peerSet) recordGhostState(id string, now time.Time) int {
+	ps.lock.Lock()
+	defer ps.lock.Unlock()
+
+	if now.Sub(ps.lastGhostPrune) >= backoffPruneInterval {
+		for peer, record := range ps.ghostStrikes {
+			if now.Sub(record.windowStart) > prunedSidechainWindow {
+				delete(ps.ghostStrikes, peer)
+			}
+		}
+		ps.lastGhostPrune = now
+	}
+
+	if _, ok := ps.ghostStrikes[id]; !ok && len(ps.ghostStrikes) >= maxStrikeEntries {
+		evictOldestStrike(ps.ghostStrikes)
+	}
+
+	record := ps.ghostStrikes[id]
+	if record.count == 0 || now.Sub(record.windowStart) > prunedSidechainWindow {
+		record = softStrikeRecord{windowStart: now}
+	}
+	record.count += 1
+	ps.ghostStrikes[id] = record
+
+	return record.count
+}
+
+func (ps *peerSet) clearGhostStates(id string) {
+	ps.lock.Lock()
+	defer ps.lock.Unlock()
+
+	delete(ps.ghostStrikes, id)
+}
+
 func (ps *peerSet) recordJail(peer *peerConnection, until time.Time) {
 	ps.lock.Lock()
 	defer ps.lock.Unlock()
@@ -352,7 +459,12 @@ func (ps *peerSet) recordJail(peer *peerConnection, until time.Time) {
 		ps.lastJailPrune = now
 	}
 	if until.After(now) {
-		ps.jailed[peer.id] = until
+		if _, ok := ps.jailed[peer.id]; !ok && len(ps.jailed) >= maxStrikeEntries {
+			evictSoonestJail(ps.jailed)
+		}
+		if existing, ok := ps.jailed[peer.id]; !ok || until.After(existing) {
+			ps.jailed[peer.id] = until
+		}
 		if live := ps.peers[peer.id]; live != nil {
 			live.extendBackoff(until)
 		}

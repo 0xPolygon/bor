@@ -30,6 +30,7 @@ import (
 const (
 	peerJailBackoff = 5 * time.Minute
 	peerSoftBackoff = 30 * time.Second
+	peerDropBackoff = 30 * time.Minute
 
 	softFailureWindow        = 10 * time.Minute
 	softFailureJailThreshold = 4
@@ -38,7 +39,12 @@ const (
 	whitelistMismatchJailThreshold = 2
 	whitelistMismatchDropThreshold = 4
 
+	prunedSidechainWindow        = 30 * time.Minute
+	prunedSidechainDropThreshold = 2
+
 	backoffPruneInterval = time.Minute
+
+	maxStrikeEntries = 4096
 )
 
 type peerFailureReason string
@@ -62,9 +68,9 @@ type peerResponseAction uint8
 const (
 	peerResponseNone peerResponseAction = iota
 	peerResponseDrop
-	peerResponseJail
 	peerResponseBackoff
 	peerResponseMismatch
+	peerResponseGhostState
 )
 
 type peerResponseDecision struct {
@@ -127,6 +133,10 @@ func isWhitelistMismatch(err error) bool {
 	return errors.Is(err, whitelist.ErrMismatch)
 }
 
+func isSyncCancellation(err error) bool {
+	return errors.Is(err, errCanceled) || errors.Is(err, errCancelContentProcessing) || errors.Is(err, errTerminated)
+}
+
 func isTransientFailure(err error) bool {
 	if err == nil {
 		return false
@@ -144,12 +154,12 @@ func (d *Downloader) respondToPeer(peer *peerConnection, reason peerFailureReaso
 	decision := peer.responseDecision(reason)
 
 	switch decision.action {
-	case peerResponseJail:
-		d.jailPeer(peer, decision, err)
 	case peerResponseBackoff:
 		d.backoffPeer(peer, decision, err)
 	case peerResponseMismatch:
 		d.escalateMismatch(peer, decision, err)
+	case peerResponseGhostState:
+		d.escalateGhostState(peer, decision, err)
 	case peerResponseDrop:
 		d.dropPeerForResponse(peer, decision.reason, err)
 	}
@@ -160,23 +170,24 @@ func (d *Downloader) benchPeer(peer *peerConnection, backoff time.Duration) {
 	d.peers.recordJail(peer, peer.backoffExpiry())
 }
 
-func (d *Downloader) jailPeer(peer *peerConnection, decision peerResponseDecision, err error) {
-	d.benchPeer(peer, decision.backoff)
+func (d *Downloader) jailPeer(peer *peerConnection, backoff time.Duration, reason peerFailureReason, err error) {
+	d.benchPeer(peer, backoff)
 	peerJailMeter.Mark(1)
-	peer.log.Warn("Downloader: locally jailing peer", "reason", decision.reason, "err", err, "requested", common.PrettyDuration(decision.backoff), "effective", common.PrettyDuration(peer.backoffRemaining()))
+	peer.log.Warn("Downloader: locally jailing peer", "reason", reason, "err", err, "requested", common.PrettyDuration(backoff), "effective", common.PrettyDuration(peer.backoffRemaining()))
 }
 
 func (d *Downloader) backoffPeer(peer *peerConnection, decision peerResponseDecision, err error) {
-	strikes := d.peers.recordSoftFailure(peer.id, time.Now())
-	if strikes >= softFailureJailThreshold {
-		d.peers.clearSoftFailures(peer.id)
-		peer.log.Warn("Downloader: escalating repeated soft failures to local jail", "reason", decision.reason, "strikes", strikes, "err", err)
-		d.jailPeer(peer, peerResponseDecision{action: peerResponseJail, backoff: peerJailBackoff, reason: decision.reason}, err)
+	penalized, jailed := d.peers.backoffSoftFailure(peer)
+	if !penalized {
 		return
 	}
-	d.benchPeer(peer, decision.backoff)
+	if jailed {
+		peerJailMeter.Mark(1)
+		peer.log.Warn("Downloader: escalating repeated soft failures to local jail", "reason", decision.reason, "err", err, "effective", common.PrettyDuration(peer.backoffRemaining()))
+		return
+	}
 	peerSoftBackoffMeter.Mark(1)
-	peer.log.Warn("Downloader: backing off peer", "reason", decision.reason, "err", err, "strikes", strikes, "requested", common.PrettyDuration(decision.backoff), "effective", common.PrettyDuration(peer.backoffRemaining()))
+	peer.log.Warn("Downloader: backing off peer", "reason", decision.reason, "err", err, "requested", common.PrettyDuration(decision.backoff), "effective", common.PrettyDuration(peer.backoffRemaining()))
 }
 
 func (d *Downloader) escalateMismatch(peer *peerConnection, decision peerResponseDecision, err error) {
@@ -189,12 +200,24 @@ func (d *Downloader) escalateMismatch(peer *peerConnection, decision peerRespons
 		d.dropPeerForResponse(peer, decision.reason, err)
 	case strikes >= whitelistMismatchJailThreshold:
 		peer.log.Warn("Downloader: escalating repeated whitelist mismatch to local jail", "reason", decision.reason, "strikes", strikes, "err", err)
-		d.jailPeer(peer, peerResponseDecision{action: peerResponseJail, backoff: peerJailBackoff, reason: decision.reason}, err)
+		d.jailPeer(peer, peerJailBackoff, decision.reason, err)
 	default:
 		d.benchPeer(peer, decision.backoff)
 		peerSoftBackoffMeter.Mark(1)
 		peer.log.Warn("Downloader: backing off peer after whitelist mismatch", "reason", decision.reason, "err", err, "strikes", strikes, "requested", common.PrettyDuration(decision.backoff), "effective", common.PrettyDuration(peer.backoffRemaining()))
 	}
+}
+
+func (d *Downloader) escalateGhostState(peer *peerConnection, decision peerResponseDecision, err error) {
+	strikes := d.peers.recordGhostState(peer.id, time.Now())
+	if strikes >= prunedSidechainDropThreshold {
+		d.peers.clearGhostStates(peer.id)
+		peer.log.Warn("Downloader: dropping peer after repeated sidechain ghost-state attacks", "reason", decision.reason, "strikes", strikes, "err", err)
+		d.dropPeerForResponse(peer, decision.reason, err)
+		return
+	}
+	peer.log.Warn("Downloader: jailing peer for sidechain ghost-state attack", "reason", decision.reason, "strikes", strikes, "err", err)
+	d.jailPeer(peer, decision.backoff, decision.reason, err)
 }
 
 func (p *peerConnection) responseDecision(reason peerFailureReason) peerResponseDecision {
@@ -204,7 +227,7 @@ func (p *peerConnection) responseDecision(reason peerFailureReason) peerResponse
 
 	switch reason {
 	case peerFailurePrunedSidechain:
-		decision.action = peerResponseJail
+		decision.action = peerResponseGhostState
 		decision.backoff = peerJailBackoff
 	case peerFailureInvalidChain, peerFailureBadPeer, peerFailureInvalidAncestor:
 		decision.action = peerResponseDrop
@@ -221,6 +244,7 @@ func (p *peerConnection) responseDecision(reason peerFailureReason) peerResponse
 }
 
 func (d *Downloader) dropPeerForResponse(peer *peerConnection, reason peerFailureReason, err error) {
+	d.benchPeer(peer, peerDropBackoff)
 	peer.log.Warn("Synchronisation failed, dropping peer", "reason", reason, "err", err, "mode", d.getMode())
 
 	if d.dropPeer == nil {
@@ -234,5 +258,5 @@ func (d *Downloader) dropPeerForResponse(peer *peerConnection, reason peerFailur
 const sidechainGhostStateMsg = "sidechain ghost-state attack"
 
 func isPrunedSidechainMismatch(err error) bool {
-	return err != nil && strings.Contains(err.Error(), sidechainGhostStateMsg)
+	return err != nil && errors.Is(err, errInvalidChain) && strings.Contains(err.Error(), sidechainGhostStateMsg)
 }

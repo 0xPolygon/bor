@@ -192,7 +192,7 @@ func fetchStallError(stalled bool, idles, capablePeers, awaitingStale int, hasBa
 		return errPeersUnavailable
 	}
 	if awaitingStale == 0 && idles < capablePeers && hasBackedOff {
-		return errPeerBackedOff
+		return ErrPeerBackedOff
 	}
 
 	return nil
@@ -418,6 +418,7 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 			}
 
 			if req, ok := stales[peerid]; ok {
+				d.respondToPeer(event.peer, peerFailureStalling, fmt.Errorf("%w: peer left with a stale request", errStallingPeer))
 				delete(stales, peerid)
 				req.Close()
 			}
@@ -475,23 +476,21 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 				continue
 			}
 
+			d.cancelLock.RLock()
+			master := peer.id == d.cancelPeer
+			d.cancelLock.RUnlock()
+
+			if master {
+				peer.log.Debug("Downloader: master peer timed out, aborting sync", "queueKind", queue.kind(), "fails", fails)
+				d.cancel()
+				return errTimeout
+			}
+
 			if fails > 2 {
 				peer.log.Debug("Downloader: peer exceeded fail threshold, zeroing capacity", "queueKind", queue.kind(), "fails", fails)
 				queue.updateCapacity(peer, 0, 0)
 			} else {
-				d.dropPeer(peer.id)
-
-				// If this peer was the master peer, abort sync immediately
-				d.cancelLock.RLock()
-				master := peer.id == d.cancelPeer
-				d.cancelLock.RUnlock()
-
-				peer.log.Debug("Downloader: dropping peer on timeout", "queueKind", queue.kind(), "fails", fails, "master", master)
-
-				if master {
-					d.cancel()
-					return errTimeout
-				}
+				peer.log.Debug("Downloader: peer timed out, awaiting stale grace before grading", "queueKind", queue.kind(), "fails", fails)
 			}
 
 		case res := <-responses:
@@ -523,14 +522,6 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 			// peer if the data turns out to be junk.
 			res.Done <- nil
 			res.Req.Close()
-
-			if queue.kind() == witnessQueueKind {
-				for _, peer := range d.peers.AllPeers() {
-					log.Debug("Peer", "peer", peer.id, "peer", peer.peer, "queue kind", "witness")
-				}
-
-				log.Debug("Peer", "peer1", res.Req.Peer, "peer2", d.peers.Peer(res.Req.Peer), "queue kind", "witness")
-			}
 
 			// If the peer was previously banned and failed to deliver its pack
 			// in a reasonable time frame, ignore its message.

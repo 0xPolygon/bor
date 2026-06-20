@@ -85,6 +85,7 @@ type skeletonTestPeer struct {
 
 	served  atomic.Uint64 // Number of headers served by this peer
 	dropped atomic.Uint64 // Flag whether the peer was dropped (stop responding)
+	hang    atomic.Bool
 }
 
 // newSkeletonTestPeer creates a new mock peer to test the skeleton sync with.
@@ -116,6 +117,9 @@ func (p *skeletonTestPeer) RequestHeadersByNumber(origin uint64, amount int, ski
 	// peer has been dropped and should not respond any more.
 	if p.dropped.Load() != 0 {
 		return nil, errors.New("peer already dropped")
+	}
+	if p.hang.Load() {
+		return &eth.Request{Peer: p.id}, nil
 	}
 	// Skeleton sync retrieves batches of headers going backward without gaps.
 	// This ensures we can follow a clean parent progression without any reorg
@@ -651,6 +655,55 @@ func TestSkeletonSyncWakesAfterBackoff(t *testing.T) {
 	}
 	if testPeer.served.Load() == 0 {
 		t.Fatal("backed-off peer never served headers after backoff expiry")
+	}
+}
+
+func TestSkeletonSyncBacksOffOnTimeout(t *testing.T) {
+	chain := []*types.Header{{Number: big.NewInt(0)}}
+	for i := 1; i < 2*requestHeaders+2; i++ {
+		chain = append(chain, &types.Header{
+			ParentHash: chain[i-1].Hash(),
+			Number:     big.NewInt(int64(i)),
+		})
+	}
+
+	db := rawdb.NewMemoryDatabase()
+	rawdb.WriteBlock(db, types.NewBlockWithHeader(chain[0]))
+	rawdb.WriteReceipts(db, chain[0].Hash(), chain[0].Number.Uint64(), types.Receipts{})
+
+	peerset := newPeerSet()
+	peerset.rates.OverrideTTLLimit = 100 * time.Millisecond
+
+	testPeer := newSkeletonTestPeer("stuck", chain)
+	testPeer.hang.Store(true)
+	peer := newPeerConnection("stuck", eth.ETH69, testPeer, log.New("id", "stuck"))
+	if err := peerset.Register(peer); err != nil {
+		t.Fatalf("failed to register peer: %v", err)
+	}
+
+	var dropped atomic.Bool
+	skeleton := newSkeleton(db, peerset, func(string) { dropped.Store(true) }, newHookedBackfiller())
+	if err := skeleton.Sync(chain[len(chain)-1], nil, true); err != nil {
+		t.Fatalf("failed to announce sync head: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && !peer.backedOff() {
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	skeleton.Terminate()
+
+	if !peer.backedOff() {
+		t.Fatal("timed-out skeleton peer should be backed off")
+	}
+	if dropped.Load() {
+		t.Fatal("timed-out skeleton peer should not be hard-dropped")
+	}
+	if peerset.persistentBackoff("stuck") <= 0 {
+		t.Fatal("a timed-out skeleton peer must persist a jail across reconnects")
+	}
+	if _, ok := skeleton.idles["stuck"]; !ok {
+		t.Fatal("a timed-out skeleton peer must be requeued into the idle set, not stranded")
 	}
 }
 

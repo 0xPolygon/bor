@@ -87,7 +87,7 @@ var (
 	errTooOld                  = errors.New("peer's protocol version too old")
 	errNoAncestorFound         = errors.New("no common ancestor found")
 	errNoPivotHeader           = errors.New("pivot header is not found")
-	errPeerBackedOff           = errors.New("peer is temporarily backed off")
+	ErrPeerBackedOff           = errors.New("peer is temporarily backed off")
 	ErrMergeTransition         = errors.New("legacy sync reached the merge")
 )
 
@@ -387,6 +387,15 @@ func (d *Downloader) PeerBackoff(id string) time.Duration {
 	return live
 }
 
+func (d *Downloader) SetPeerBackoff(id string, duration time.Duration) bool {
+	peer := d.peers.Peer(id)
+	if peer == nil {
+		return false
+	}
+	peer.setBackoff(time.Now().Add(duration))
+	return true
+}
+
 // LegacySync tries to sync up our local block chain with a remote peer, both
 // adding various sanity checks as well as wrapping it with various log entries.
 func (d *Downloader) LegacySync(id string, head common.Hash, td, ttd *big.Int, mode SyncMode) error {
@@ -399,7 +408,7 @@ func (d *Downloader) LegacySync(id string, head common.Hash, td, ttd *big.Int, m
 		return err
 	}
 
-	if errors.Is(err, errPeerBackedOff) {
+	if errors.Is(err, ErrPeerBackedOff) || isSyncCancellation(err) {
 		return err
 	}
 
@@ -515,7 +524,7 @@ func (d *Downloader) synchronise(id string, hash common.Hash, td, ttd *big.Int, 
 			return errUnknownPeer
 		}
 		if p.backedOff() {
-			return errPeerBackedOff
+			return ErrPeerBackedOff
 		}
 	}
 

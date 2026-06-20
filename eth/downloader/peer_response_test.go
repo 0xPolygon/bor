@@ -63,6 +63,7 @@ func TestClassifySyncFailureReasons(t *testing.T) {
 		{name: "invalid chain with deadline text is not downgraded", err: fmt.Errorf("%w: %v", errInvalidChain, errors.New("invalid merkle root: "+context.DeadlineExceeded.Error())), reason: peerFailureInvalidChain, ok: true},
 		{name: "bad peer with deadline text is not downgraded", err: fmt.Errorf("%w: %v", errBadPeer, errors.New("served garbage: "+context.DeadlineExceeded.Error())), reason: peerFailureBadPeer, ok: true},
 		{name: "invalid ancestor with deadline text is not downgraded", err: fmt.Errorf("%w: %v", errInvalidAncestor, errors.New(context.DeadlineExceeded.Error())), reason: peerFailureInvalidAncestor, ok: true},
+		{name: "ghost-state text without invalid chain is unclassified", err: errors.New(sidechainGhostStateMsg)},
 		{name: "unclassified", err: errInvalidBody},
 		{name: "nil"},
 	}
@@ -89,7 +90,7 @@ func TestPeerResponseDecisionActions(t *testing.T) {
 		action  peerResponseAction
 		backoff time.Duration
 	}{
-		{name: "local jail", reason: peerFailurePrunedSidechain, action: peerResponseJail, backoff: peerJailBackoff},
+		{name: "ghost-state escalation", reason: peerFailurePrunedSidechain, action: peerResponseGhostState, backoff: peerJailBackoff},
 		{name: "drop invalid chain", reason: peerFailureInvalidChain, action: peerResponseDrop},
 		{name: "drop bad peer", reason: peerFailureBadPeer, action: peerResponseDrop},
 		{name: "drop invalid ancestor", reason: peerFailureInvalidAncestor, action: peerResponseDrop},
@@ -129,10 +130,32 @@ func TestHandleSyncFailureSkipsUnknownPeer(t *testing.T) {
 	}
 }
 
+func TestIsSyncCancellation(t *testing.T) {
+	t.Parallel()
+
+	for _, base := range []error{errCanceled, errCancelContentProcessing, errTerminated} {
+		if !isSyncCancellation(base) {
+			t.Fatalf("bare %v should be a cancellation", base)
+		}
+		if wrapped := fmt.Errorf("%w: %w", errInvalidChain, base); !isSyncCancellation(wrapped) {
+			t.Fatalf("wrapped %v should be a cancellation", base)
+		}
+	}
+	if isSyncCancellation(errInvalidChain) {
+		t.Fatal("an invalid chain is not a cancellation")
+	}
+	if isSyncCancellation(errTimeout) {
+		t.Fatal("a timeout is not a cancellation")
+	}
+	if isSyncCancellation(nil) {
+		t.Fatal("a nil error is not a cancellation")
+	}
+}
+
 func TestDropPeerForResponseWithoutDropper(t *testing.T) {
 	t.Parallel()
 
-	downloader := &Downloader{}
+	downloader := &Downloader{peers: newPeerSet()}
 	peer := newPeerConnection("peer", eth.ETH69, nil, log.New())
 	downloader.dropPeerForResponse(peer, peerFailureTooOld, errTooOld)
 }
@@ -306,6 +329,46 @@ func TestPrunedSidechainJailsPeer(t *testing.T) {
 	}
 }
 
+func TestPrunedSidechainEscalatesToDrop(t *testing.T) {
+	t.Parallel()
+
+	dropped := make(chan string, 1)
+	d := &Downloader{peers: newPeerSet(), dropPeer: func(id string) { dropped <- id }}
+	peer := newPeerConnection("ghost", eth.ETH69, nil, log.New())
+	if err := d.peers.Register(peer); err != nil {
+		t.Fatalf("failed to register peer: %v", err)
+	}
+	ghostErr := fmt.Errorf("%w: %s", errInvalidChain, sidechainGhostStateMsg)
+
+	for i := 1; i < prunedSidechainDropThreshold; i++ {
+		d.respondToPeer(peer, peerFailurePrunedSidechain, ghostErr)
+		if remaining := peer.backoffRemaining(); remaining <= peerSoftBackoff {
+			t.Fatalf("ghost-state strike %d should jail the peer: have %v, want > %v", i, remaining, peerSoftBackoff)
+		}
+		if until, ok := d.peers.jailed[peer.id]; !ok || time.Until(until) <= peerSoftBackoff {
+			t.Fatalf("ghost-state strike %d should record a long jail", i)
+		}
+		select {
+		case id := <-dropped:
+			t.Fatalf("ghost-state strike %d must jail, not drop: %q", i, id)
+		default:
+		}
+	}
+
+	d.respondToPeer(peer, peerFailurePrunedSidechain, ghostErr)
+	select {
+	case id := <-dropped:
+		if id != peer.id {
+			t.Fatalf("dropped wrong peer: have %q, want %q", id, peer.id)
+		}
+	default:
+		t.Fatal("a peer that keeps launching ghost-state attacks should eventually be dropped")
+	}
+	if _, ok := d.peers.ghostStrikes[peer.id]; ok {
+		t.Fatal("dropping a peer for repeated ghost-state should clear its tally")
+	}
+}
+
 func TestRecordSoftFailureDecays(t *testing.T) {
 	t.Parallel()
 
@@ -437,6 +500,7 @@ func TestBackoffEscalatesToJailAfterRepeatStrikes(t *testing.T) {
 		if remaining := peer.backoffRemaining(); remaining > peerSoftBackoff {
 			t.Fatalf("soft strike %d should stay within soft backoff: have %v, want <= %v", i+1, remaining, peerSoftBackoff)
 		}
+		clearPeerBackoff(peer)
 	}
 
 	d.respondToPeer(peer, peerFailureTimeout, errTimeout)
@@ -446,10 +510,54 @@ func TestBackoffEscalatesToJailAfterRepeatStrikes(t *testing.T) {
 	if until, ok := d.peers.jailed[peer.id]; !ok || time.Until(until) <= peerSoftBackoff {
 		t.Fatal("the escalating strike should record a long jail")
 	}
+	if _, ok := d.peers.softStrikes[peer.id]; ok {
+		t.Fatal("escalating soft failures to a jail should clear the soft tally")
+	}
 	select {
 	case id := <-dropped:
 		t.Fatalf("escalation must jail, not drop: %q", id)
 	default:
+	}
+}
+
+func clearPeerBackoff(peer *peerConnection) {
+	peer.lock.Lock()
+	peer.backoff = time.Time{}
+	peer.lock.Unlock()
+}
+
+func TestBackoffForClaim(t *testing.T) {
+	t.Parallel()
+
+	peer := newPeerConnection("peer", eth.ETH69, nil, log.New())
+	if !peer.backoffForClaim(peerSoftBackoff) {
+		t.Fatal("the first claim on an un-benched peer should succeed")
+	}
+	if !peer.backedOff() {
+		t.Fatal("a claimed peer should be benched")
+	}
+	if peer.backoffForClaim(peerSoftBackoff) {
+		t.Fatal("a claim on an already-benched peer should report it was already benched")
+	}
+}
+
+func TestBackoffSoftFailureDedupsWhileBenched(t *testing.T) {
+	t.Parallel()
+
+	ps := newPeerSet()
+	peer := newPeerConnection("peer", eth.ETH69, nil, log.New())
+	if err := ps.Register(peer); err != nil {
+		t.Fatalf("failed to register peer: %v", err)
+	}
+
+	if penalized, _ := ps.backoffSoftFailure(peer); !penalized {
+		t.Fatal("the first soft failure should penalize the peer")
+	}
+	if penalized, _ := ps.backoffSoftFailure(peer); penalized {
+		t.Fatal("a peer already benched must not be penalized again for a concurrent failure")
+	}
+	if got := ps.softStrikes[peer.id].count; got != 1 {
+		t.Fatalf("a benched peer must not accrue a second strike: have %d, want 1", got)
 	}
 }
 
@@ -485,6 +593,207 @@ func TestRecordMismatchIsolatesPeers(t *testing.T) {
 	ps.clearMismatches("a")
 	if got := ps.recordMismatch("a", now); got != 1 {
 		t.Fatalf("clearing must reset the mismatch tally: have %d, want 1", got)
+	}
+}
+
+func TestRecordGhostStateDecays(t *testing.T) {
+	t.Parallel()
+
+	ps := newPeerSet()
+	now := time.Now()
+
+	if got := ps.recordGhostState("peer", now); got != 1 {
+		t.Fatalf("first ghost-state count mismatch: have %d, want 1", got)
+	}
+	if got := ps.recordGhostState("peer", now.Add(time.Minute)); got != 2 {
+		t.Fatalf("second ghost-state count mismatch: have %d, want 2", got)
+	}
+	if got := ps.recordGhostState("peer", now.Add(prunedSidechainWindow+time.Second)); got != 1 {
+		t.Fatalf("a ghost-state past the window should reset the tally: have %d, want 1", got)
+	}
+}
+
+func TestRecordGhostStateIsolatesPeers(t *testing.T) {
+	t.Parallel()
+
+	ps := newPeerSet()
+	now := time.Now()
+	ps.recordGhostState("a", now)
+	ps.recordGhostState("a", now)
+
+	if got := ps.recordGhostState("b", now); got != 1 {
+		t.Fatalf("distinct peers must not share a ghost-state tally: have %d, want 1", got)
+	}
+
+	ps.clearGhostStates("a")
+	if got := ps.recordGhostState("a", now); got != 1 {
+		t.Fatalf("clearing must reset the ghost-state tally: have %d, want 1", got)
+	}
+}
+
+func TestRecordSoftFailureWindowBoundary(t *testing.T) {
+	t.Parallel()
+
+	ps := newPeerSet()
+	now := time.Now()
+
+	if got := ps.recordSoftFailure("p", now); got != 1 {
+		t.Fatalf("first strike count mismatch: have %d, want 1", got)
+	}
+	if got := ps.recordSoftFailure("p", now.Add(softFailureWindow)); got != 2 {
+		t.Fatalf("a strike exactly at the window edge must not reset the tally: have %d, want 2", got)
+	}
+}
+
+func TestRecordMismatchWindowBoundary(t *testing.T) {
+	t.Parallel()
+
+	ps := newPeerSet()
+	now := time.Now()
+
+	if got := ps.recordMismatch("p", now); got != 1 {
+		t.Fatalf("first mismatch count mismatch: have %d, want 1", got)
+	}
+	if got := ps.recordMismatch("p", now.Add(whitelistMismatchWindow)); got != 2 {
+		t.Fatalf("a mismatch exactly at the window edge must not reset the tally: have %d, want 2", got)
+	}
+}
+
+func TestRecordGhostStateWindowBoundary(t *testing.T) {
+	t.Parallel()
+
+	ps := newPeerSet()
+	now := time.Now()
+
+	if got := ps.recordGhostState("p", now); got != 1 {
+		t.Fatalf("first ghost-state count mismatch: have %d, want 1", got)
+	}
+	if got := ps.recordGhostState("p", now.Add(prunedSidechainWindow)); got != 2 {
+		t.Fatalf("a ghost-state exactly at the window edge must not reset the tally: have %d, want 2", got)
+	}
+}
+
+func TestRecordJailPrunesExpiredOnInterval(t *testing.T) {
+	t.Parallel()
+
+	ps := newPeerSet()
+	ps.jailed["expired"] = time.Now().Add(-time.Hour)
+	ps.lastJailPrune = time.Now().Add(-2 * backoffPruneInterval)
+
+	peer := newPeerConnection("fresh", eth.ETH69, nil, log.New())
+	ps.recordJail(peer, time.Now().Add(peerJailBackoff))
+
+	if _, ok := ps.jailed["expired"]; ok {
+		t.Fatal("an expired jail entry should be pruned once the prune interval elapses")
+	}
+	if _, ok := ps.jailed["fresh"]; !ok {
+		t.Fatal("the active jail entry should be recorded")
+	}
+}
+
+func TestRecordJailKeepsLongerExpiry(t *testing.T) {
+	t.Parallel()
+
+	ps := newPeerSet()
+	peer := newPeerConnection("peer", eth.ETH69, nil, log.New())
+	if err := ps.Register(peer); err != nil {
+		t.Fatalf("failed to register peer: %v", err)
+	}
+
+	long := time.Now().Add(peerJailBackoff)
+	ps.recordJail(peer, long)
+	ps.recordJail(peer, time.Now().Add(peerSoftBackoff))
+
+	if got := ps.jailed[peer.id]; got.Before(long) {
+		t.Fatalf("a shorter jail must not overwrite a longer one: have %v, want >= %v", got, long)
+	}
+}
+
+func TestStrikeMapsAreBounded(t *testing.T) {
+	t.Parallel()
+
+	ps := newPeerSet()
+	now := time.Now()
+	for i := 0; i < maxStrikeEntries+10; i++ {
+		id := fmt.Sprintf("peer-%d", i)
+		ps.recordSoftFailure(id, now)
+		ps.recordMismatch(id, now)
+		ps.recordGhostState(id, now)
+		ps.recordJail(newPeerConnection(fmt.Sprintf("jail-%d", i), eth.ETH69, nil, log.New()), now.Add(time.Hour))
+	}
+
+	if got := len(ps.softStrikes); got > maxStrikeEntries {
+		t.Fatalf("softStrikes exceeded cap: have %d, want <= %d", got, maxStrikeEntries)
+	}
+	if got := len(ps.mismatchStrikes); got > maxStrikeEntries {
+		t.Fatalf("mismatchStrikes exceeded cap: have %d, want <= %d", got, maxStrikeEntries)
+	}
+	if got := len(ps.ghostStrikes); got > maxStrikeEntries {
+		t.Fatalf("ghostStrikes exceeded cap: have %d, want <= %d", got, maxStrikeEntries)
+	}
+	if got := len(ps.jailed); got > maxStrikeEntries {
+		t.Fatalf("jailed exceeded cap: have %d, want <= %d", got, maxStrikeEntries)
+	}
+}
+
+func TestStrikeEvictionRemovesOldest(t *testing.T) {
+	t.Parallel()
+
+	ps := newPeerSet()
+	base := time.Now()
+	for i := 0; i < maxStrikeEntries; i++ {
+		ps.recordSoftFailure(fmt.Sprintf("peer-%d", i), base.Add(time.Duration(i)*time.Millisecond))
+	}
+	ps.recordSoftFailure("newcomer", base.Add(time.Duration(maxStrikeEntries)*time.Millisecond))
+
+	if _, ok := ps.softStrikes["peer-0"]; ok {
+		t.Fatal("eviction should remove the oldest strike record")
+	}
+	if _, ok := ps.softStrikes["newcomer"]; !ok {
+		t.Fatal("the newest strike record should be retained")
+	}
+	if _, ok := ps.softStrikes["peer-1"]; !ok {
+		t.Fatal("a newer strike record should not be evicted")
+	}
+}
+
+func TestJailEvictionRemovesSoonestExpiry(t *testing.T) {
+	t.Parallel()
+
+	ps := newPeerSet()
+	base := time.Now().Add(time.Hour)
+	for i := 0; i < maxStrikeEntries; i++ {
+		peer := newPeerConnection(fmt.Sprintf("jail-%d", i), eth.ETH69, nil, log.New())
+		ps.recordJail(peer, base.Add(time.Duration(i)*time.Millisecond))
+	}
+	newcomer := newPeerConnection("jail-new", eth.ETH69, nil, log.New())
+	ps.recordJail(newcomer, base.Add(time.Duration(maxStrikeEntries)*time.Millisecond))
+
+	if _, ok := ps.jailed["jail-0"]; ok {
+		t.Fatal("jail eviction should remove the soonest-expiring entry")
+	}
+	if _, ok := ps.jailed["jail-new"]; !ok {
+		t.Fatal("the new jail entry should be retained")
+	}
+}
+
+func TestDropForResponseBenchesPeer(t *testing.T) {
+	t.Parallel()
+
+	d := &Downloader{peers: newPeerSet(), dropPeer: func(string) {}}
+	peer := newPeerConnection("bad", eth.ETH69, nil, log.New())
+	if err := d.peers.Register(peer); err != nil {
+		t.Fatalf("failed to register peer: %v", err)
+	}
+
+	d.dropPeerForResponse(peer, peerFailureInvalidChain, errInvalidChain)
+
+	until, ok := d.peers.jailed[peer.id]
+	if !ok {
+		t.Fatal("a dropped peer should be benched so a same-id reconnect stays jailed")
+	}
+	if remaining := time.Until(until); remaining <= peerJailBackoff {
+		t.Fatalf("a drop should bench longer than a plain jail: have %v, want > %v", remaining, peerJailBackoff)
 	}
 }
 
