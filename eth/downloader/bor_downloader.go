@@ -399,7 +399,7 @@ func (d *Downloader) LegacySync(id string, head common.Hash, td, ttd *big.Int, m
 		return err
 	}
 
-	if errors.Is(err, errPeerBackedOff) {
+	if errors.Is(err, errPeerBackedOff) || isSyncCancellation(err) {
 		return err
 	}
 

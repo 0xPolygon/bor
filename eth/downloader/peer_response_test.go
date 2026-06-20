@@ -130,6 +130,28 @@ func TestHandleSyncFailureSkipsUnknownPeer(t *testing.T) {
 	}
 }
 
+func TestIsSyncCancellation(t *testing.T) {
+	t.Parallel()
+
+	for _, base := range []error{errCanceled, errCancelContentProcessing, errTerminated} {
+		if !isSyncCancellation(base) {
+			t.Fatalf("bare %v should be a cancellation", base)
+		}
+		if wrapped := fmt.Errorf("%w: %w", errInvalidChain, base); !isSyncCancellation(wrapped) {
+			t.Fatalf("wrapped %v should be a cancellation", base)
+		}
+	}
+	if isSyncCancellation(errInvalidChain) {
+		t.Fatal("an invalid chain is not a cancellation")
+	}
+	if isSyncCancellation(errTimeout) {
+		t.Fatal("a timeout is not a cancellation")
+	}
+	if isSyncCancellation(nil) {
+		t.Fatal("a nil error is not a cancellation")
+	}
+}
+
 func TestDropPeerForResponseWithoutDropper(t *testing.T) {
 	t.Parallel()
 

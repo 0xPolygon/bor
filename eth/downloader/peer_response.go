@@ -134,6 +134,10 @@ func isWhitelistMismatch(err error) bool {
 	return errors.Is(err, whitelist.ErrMismatch)
 }
 
+func isSyncCancellation(err error) bool {
+	return errors.Is(err, errCanceled) || errors.Is(err, errCancelContentProcessing) || errors.Is(err, errTerminated)
+}
+
 func isTransientFailure(err error) bool {
 	if err == nil {
 		return false

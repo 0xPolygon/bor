@@ -404,12 +404,7 @@ func (ps *peerSet) getAllPeers() []*ethPeer {
 // peerWithHighestTD retrieves the known peer with the currently highest total
 // difficulty.
 func (ps *peerSet) peerWithHighestTD(backoff func(string) time.Duration) (*eth.Peer, time.Duration) {
-	ps.lock.RLock()
-	peers := make([]*ethPeer, 0, len(ps.peers))
-	for _, p := range ps.peers {
-		peers = append(peers, p)
-	}
-	ps.lock.RUnlock()
+	peers := ps.getAllPeers()
 
 	var (
 		bestPeer        *eth.Peer
