@@ -63,6 +63,7 @@ func TestClassifySyncFailureReasons(t *testing.T) {
 		{name: "invalid chain with deadline text is not downgraded", err: fmt.Errorf("%w: %v", errInvalidChain, errors.New("invalid merkle root: "+context.DeadlineExceeded.Error())), reason: peerFailureInvalidChain, ok: true},
 		{name: "bad peer with deadline text is not downgraded", err: fmt.Errorf("%w: %v", errBadPeer, errors.New("served garbage: "+context.DeadlineExceeded.Error())), reason: peerFailureBadPeer, ok: true},
 		{name: "invalid ancestor with deadline text is not downgraded", err: fmt.Errorf("%w: %v", errInvalidAncestor, errors.New(context.DeadlineExceeded.Error())), reason: peerFailureInvalidAncestor, ok: true},
+		{name: "ghost-state text without invalid chain is unclassified", err: errors.New(sidechainGhostStateMsg)},
 		{name: "unclassified", err: errInvalidBody},
 		{name: "nil"},
 	}
@@ -89,7 +90,7 @@ func TestPeerResponseDecisionActions(t *testing.T) {
 		action  peerResponseAction
 		backoff time.Duration
 	}{
-		{name: "local jail", reason: peerFailurePrunedSidechain, action: peerResponseJail, backoff: peerJailBackoff},
+		{name: "ghost-state escalation", reason: peerFailurePrunedSidechain, action: peerResponseGhostState, backoff: peerJailBackoff},
 		{name: "drop invalid chain", reason: peerFailureInvalidChain, action: peerResponseDrop},
 		{name: "drop bad peer", reason: peerFailureBadPeer, action: peerResponseDrop},
 		{name: "drop invalid ancestor", reason: peerFailureInvalidAncestor, action: peerResponseDrop},
@@ -306,6 +307,46 @@ func TestPrunedSidechainJailsPeer(t *testing.T) {
 	}
 }
 
+func TestPrunedSidechainEscalatesToDrop(t *testing.T) {
+	t.Parallel()
+
+	dropped := make(chan string, 1)
+	d := &Downloader{peers: newPeerSet(), dropPeer: func(id string) { dropped <- id }}
+	peer := newPeerConnection("ghost", eth.ETH69, nil, log.New())
+	if err := d.peers.Register(peer); err != nil {
+		t.Fatalf("failed to register peer: %v", err)
+	}
+	ghostErr := fmt.Errorf("%w: %s", errInvalidChain, sidechainGhostStateMsg)
+
+	for i := 1; i < prunedSidechainDropThreshold; i++ {
+		d.respondToPeer(peer, peerFailurePrunedSidechain, ghostErr)
+		if remaining := peer.backoffRemaining(); remaining <= peerSoftBackoff {
+			t.Fatalf("ghost-state strike %d should jail the peer: have %v, want > %v", i, remaining, peerSoftBackoff)
+		}
+		if until, ok := d.peers.jailed[peer.id]; !ok || time.Until(until) <= peerSoftBackoff {
+			t.Fatalf("ghost-state strike %d should record a long jail", i)
+		}
+		select {
+		case id := <-dropped:
+			t.Fatalf("ghost-state strike %d must jail, not drop: %q", i, id)
+		default:
+		}
+	}
+
+	d.respondToPeer(peer, peerFailurePrunedSidechain, ghostErr)
+	select {
+	case id := <-dropped:
+		if id != peer.id {
+			t.Fatalf("dropped wrong peer: have %q, want %q", id, peer.id)
+		}
+	default:
+		t.Fatal("a peer that keeps launching ghost-state attacks should eventually be dropped")
+	}
+	if _, ok := d.peers.ghostStrikes[peer.id]; ok {
+		t.Fatal("dropping a peer for repeated ghost-state should clear its tally")
+	}
+}
+
 func TestRecordSoftFailureDecays(t *testing.T) {
 	t.Parallel()
 
@@ -485,6 +526,41 @@ func TestRecordMismatchIsolatesPeers(t *testing.T) {
 	ps.clearMismatches("a")
 	if got := ps.recordMismatch("a", now); got != 1 {
 		t.Fatalf("clearing must reset the mismatch tally: have %d, want 1", got)
+	}
+}
+
+func TestRecordGhostStateDecays(t *testing.T) {
+	t.Parallel()
+
+	ps := newPeerSet()
+	now := time.Now()
+
+	if got := ps.recordGhostState("peer", now); got != 1 {
+		t.Fatalf("first ghost-state count mismatch: have %d, want 1", got)
+	}
+	if got := ps.recordGhostState("peer", now.Add(time.Minute)); got != 2 {
+		t.Fatalf("second ghost-state count mismatch: have %d, want 2", got)
+	}
+	if got := ps.recordGhostState("peer", now.Add(prunedSidechainWindow+time.Second)); got != 1 {
+		t.Fatalf("a ghost-state past the window should reset the tally: have %d, want 1", got)
+	}
+}
+
+func TestRecordGhostStateIsolatesPeers(t *testing.T) {
+	t.Parallel()
+
+	ps := newPeerSet()
+	now := time.Now()
+	ps.recordGhostState("a", now)
+	ps.recordGhostState("a", now)
+
+	if got := ps.recordGhostState("b", now); got != 1 {
+		t.Fatalf("distinct peers must not share a ghost-state tally: have %d, want 1", got)
+	}
+
+	ps.clearGhostStates("a")
+	if got := ps.recordGhostState("a", now); got != 1 {
+		t.Fatalf("clearing must reset the ghost-state tally: have %d, want 1", got)
 	}
 }
 

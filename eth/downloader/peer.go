@@ -253,9 +253,11 @@ type peerSet struct {
 	jailed            map[string]time.Time // Backoff expiry per peer ID, surviving reconnects
 	softStrikes       map[string]softStrikeRecord
 	mismatchStrikes   map[string]softStrikeRecord
+	ghostStrikes      map[string]softStrikeRecord
 	lastJailPrune     time.Time
 	lastSoftPrune     time.Time
 	lastMismatchPrune time.Time
+	lastGhostPrune    time.Time
 	rates             *msgrate.Trackers // Set of rate trackers to give the sync a common beat
 	events            event.Feed        // Feed to publish peer lifecycle events on
 
@@ -274,6 +276,7 @@ func newPeerSet() *peerSet {
 		jailed:          make(map[string]time.Time),
 		softStrikes:     make(map[string]softStrikeRecord),
 		mismatchStrikes: make(map[string]softStrikeRecord),
+		ghostStrikes:    make(map[string]softStrikeRecord),
 		rates:           msgrate.NewTrackers(log.New("proto", "eth")),
 	}
 }
@@ -336,6 +339,36 @@ func (ps *peerSet) clearMismatches(id string) {
 	defer ps.lock.Unlock()
 
 	delete(ps.mismatchStrikes, id)
+}
+
+func (ps *peerSet) recordGhostState(id string, now time.Time) int {
+	ps.lock.Lock()
+	defer ps.lock.Unlock()
+
+	if now.Sub(ps.lastGhostPrune) >= backoffPruneInterval {
+		for peer, record := range ps.ghostStrikes {
+			if now.Sub(record.windowStart) > prunedSidechainWindow {
+				delete(ps.ghostStrikes, peer)
+			}
+		}
+		ps.lastGhostPrune = now
+	}
+
+	record := ps.ghostStrikes[id]
+	if record.count == 0 || now.Sub(record.windowStart) > prunedSidechainWindow {
+		record = softStrikeRecord{windowStart: now}
+	}
+	record.count += 1
+	ps.ghostStrikes[id] = record
+
+	return record.count
+}
+
+func (ps *peerSet) clearGhostStates(id string) {
+	ps.lock.Lock()
+	defer ps.lock.Unlock()
+
+	delete(ps.ghostStrikes, id)
 }
 
 func (ps *peerSet) recordJail(peer *peerConnection, until time.Time) {

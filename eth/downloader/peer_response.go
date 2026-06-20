@@ -38,6 +38,9 @@ const (
 	whitelistMismatchJailThreshold = 2
 	whitelistMismatchDropThreshold = 4
 
+	prunedSidechainWindow        = 30 * time.Minute
+	prunedSidechainDropThreshold = 2
+
 	backoffPruneInterval = time.Minute
 )
 
@@ -65,6 +68,7 @@ const (
 	peerResponseJail
 	peerResponseBackoff
 	peerResponseMismatch
+	peerResponseGhostState
 )
 
 type peerResponseDecision struct {
@@ -150,6 +154,8 @@ func (d *Downloader) respondToPeer(peer *peerConnection, reason peerFailureReaso
 		d.backoffPeer(peer, decision, err)
 	case peerResponseMismatch:
 		d.escalateMismatch(peer, decision, err)
+	case peerResponseGhostState:
+		d.escalateGhostState(peer, decision, err)
 	case peerResponseDrop:
 		d.dropPeerForResponse(peer, decision.reason, err)
 	}
@@ -197,6 +203,18 @@ func (d *Downloader) escalateMismatch(peer *peerConnection, decision peerRespons
 	}
 }
 
+func (d *Downloader) escalateGhostState(peer *peerConnection, decision peerResponseDecision, err error) {
+	strikes := d.peers.recordGhostState(peer.id, time.Now())
+	if strikes >= prunedSidechainDropThreshold {
+		d.peers.clearGhostStates(peer.id)
+		peer.log.Warn("Downloader: dropping peer after repeated sidechain ghost-state attacks", "reason", decision.reason, "strikes", strikes, "err", err)
+		d.dropPeerForResponse(peer, decision.reason, err)
+		return
+	}
+	peer.log.Warn("Downloader: jailing peer for sidechain ghost-state attack", "reason", decision.reason, "strikes", strikes, "err", err)
+	d.jailPeer(peer, peerResponseDecision{action: peerResponseJail, backoff: decision.backoff, reason: decision.reason}, err)
+}
+
 func (p *peerConnection) responseDecision(reason peerFailureReason) peerResponseDecision {
 	decision := peerResponseDecision{
 		reason: reason,
@@ -204,7 +222,7 @@ func (p *peerConnection) responseDecision(reason peerFailureReason) peerResponse
 
 	switch reason {
 	case peerFailurePrunedSidechain:
-		decision.action = peerResponseJail
+		decision.action = peerResponseGhostState
 		decision.backoff = peerJailBackoff
 	case peerFailureInvalidChain, peerFailureBadPeer, peerFailureInvalidAncestor:
 		decision.action = peerResponseDrop
@@ -234,5 +252,5 @@ func (d *Downloader) dropPeerForResponse(peer *peerConnection, reason peerFailur
 const sidechainGhostStateMsg = "sidechain ghost-state attack"
 
 func isPrunedSidechainMismatch(err error) bool {
-	return err != nil && strings.Contains(err.Error(), sidechainGhostStateMsg)
+	return err != nil && errors.Is(err, errInvalidChain) && strings.Contains(err.Error(), sidechainGhostStateMsg)
 }
