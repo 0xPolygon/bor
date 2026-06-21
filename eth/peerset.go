@@ -23,6 +23,7 @@ import (
 	"math/big"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
@@ -401,23 +402,32 @@ func (ps *peerSet) getAllPeers() []*ethPeer {
 }
 
 // peerWithHighestTD retrieves the known peer with the currently highest total
-// difficulty, but below the given PoS switchover threshold.
-func (ps *peerSet) peerWithHighestTD() *eth.Peer {
+// difficulty.
+func (ps *peerSet) peerWithHighestTD(backoff func(string) time.Duration) (*eth.Peer, time.Duration) {
 	ps.lock.RLock()
 	defer ps.lock.RUnlock()
 
 	var (
-		bestPeer *eth.Peer
-		bestTd   *big.Int
+		bestPeer        *eth.Peer
+		bestTd          *big.Int
+		shortestBackoff time.Duration
 	)
 
 	for _, p := range ps.peers {
+		if backoff != nil {
+			if remaining := backoff(p.ID()); remaining > 0 {
+				if shortestBackoff == 0 || remaining < shortestBackoff {
+					shortestBackoff = remaining
+				}
+				continue
+			}
+		}
 		if _, td := p.Head(); bestPeer == nil || td.Cmp(bestTd) > 0 {
 			bestPeer, bestTd = p.Peer, td
 		}
 	}
 
-	return bestPeer
+	return bestPeer, shortestBackoff
 }
 
 // close disconnects all peers.

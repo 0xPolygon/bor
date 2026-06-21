@@ -85,6 +85,7 @@ type skeletonTestPeer struct {
 
 	served  atomic.Uint64 // Number of headers served by this peer
 	dropped atomic.Uint64 // Flag whether the peer was dropped (stop responding)
+	hang    atomic.Bool
 }
 
 // newSkeletonTestPeer creates a new mock peer to test the skeleton sync with.
@@ -116,6 +117,9 @@ func (p *skeletonTestPeer) RequestHeadersByNumber(origin uint64, amount int, ski
 	// peer has been dropped and should not respond any more.
 	if p.dropped.Load() != 0 {
 		return nil, errors.New("peer already dropped")
+	}
+	if p.hang.Load() {
+		return &eth.Request{Peer: p.id}, nil
 	}
 	// Skeleton sync retrieves batches of headers going backward without gaps.
 	// This ensures we can follow a clean parent progression without any reorg
@@ -535,6 +539,344 @@ func TestSkeletonSyncExtend(t *testing.T) {
 				t.Errorf("test %d: subchain %d tail mismatch: have %d, want %d", i, j, progress.Subchains[j].Tail, tt.newstate[j].Tail)
 			}
 		}
+	}
+}
+
+func TestEarlierBackoff(t *testing.T) {
+	t.Parallel()
+
+	early := time.Unix(1000, 0)
+	late := time.Unix(2000, 0)
+
+	tests := []struct {
+		name      string
+		current   time.Time
+		candidate time.Time
+		want      time.Time
+	}{
+		{name: "zero candidate keeps current", current: late, candidate: time.Time{}, want: late},
+		{name: "zero candidate with zero current stays zero", current: time.Time{}, candidate: time.Time{}, want: time.Time{}},
+		{name: "zero current takes candidate", current: time.Time{}, candidate: late, want: late},
+		{name: "earlier candidate wins", current: late, candidate: early, want: early},
+		{name: "later candidate keeps current", current: early, candidate: late, want: early},
+		{name: "equal keeps current", current: early, candidate: early, want: early},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := earlierBackoff(tt.current, tt.candidate); !got.Equal(tt.want) {
+				t.Fatalf("earlierBackoff(%v, %v) = %v, want %v", tt.current, tt.candidate, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSkeletonAssignTasksReportsBackoff(t *testing.T) {
+	chain := []*types.Header{{Number: big.NewInt(0)}}
+
+	peerset := newPeerSet()
+	soft := newPeerConnection("soft", eth.ETH69, newSkeletonTestPeer("soft", chain), log.New("id", "soft"))
+	strong := newPeerConnection("strong", eth.ETH69, newSkeletonTestPeer("strong", chain), log.New("id", "strong"))
+	if err := peerset.Register(soft); err != nil {
+		t.Fatalf("failed to register soft peer: %v", err)
+	}
+	if err := peerset.Register(strong); err != nil {
+		t.Fatalf("failed to register strong peer: %v", err)
+	}
+
+	strong.backoffFor(2 * time.Minute)
+	soft.backoffFor(30 * time.Second)
+
+	skeleton := &skeleton{
+		peers:         peerset,
+		idles:         map[string]*peerConnection{soft.id: soft, strong.id: strong},
+		scratchSpace:  make([]*types.Header, scratchHeaders),
+		scratchOwners: make([]string, scratchHeaders/requestHeaders),
+		requests:      make(map[uint64]*headerRequest),
+	}
+
+	success := make(chan *headerResponse, 1)
+	fail := make(chan *headerRequest, 1)
+	cancel := make(chan struct{})
+
+	wake := skeleton.assignTasks(success, fail, cancel)
+	if wake.IsZero() {
+		t.Fatal("expected a non-zero backoff wakeup when all peers are backed off")
+	}
+	if until := time.Until(wake); until <= 0 || until > 30*time.Second {
+		t.Fatalf("backoff wakeup mismatch: have %v remaining, want (0, %v]", until, 30*time.Second)
+	}
+	for _, owner := range skeleton.scratchOwners {
+		if owner != "" {
+			t.Fatalf("no task should be assigned to backed-off peers, got owner %q", owner)
+		}
+	}
+}
+
+func TestSkeletonSyncWakesAfterBackoff(t *testing.T) {
+	chain := []*types.Header{{Number: big.NewInt(0)}}
+	for i := 1; i < 2*requestHeaders+2; i++ {
+		chain = append(chain, &types.Header{
+			ParentHash: chain[i-1].Hash(),
+			Number:     big.NewInt(int64(i)),
+		})
+	}
+
+	db := rawdb.NewMemoryDatabase()
+	rawdb.WriteBlock(db, types.NewBlockWithHeader(chain[0]))
+	rawdb.WriteReceipts(db, chain[0].Hash(), chain[0].Number.Uint64(), types.Receipts{})
+
+	peerset := newPeerSet()
+	testPeer := newSkeletonTestPeer("backed-off", chain)
+	peer := newPeerConnection("backed-off", eth.ETH69, testPeer, log.New("id", "backed-off"))
+	if err := peerset.Register(peer); err != nil {
+		t.Fatalf("failed to register peer: %v", err)
+	}
+	peer.backoffFor(100 * time.Millisecond)
+
+	skeleton := newSkeleton(db, peerset, func(string) {}, newHookedBackfiller())
+	if err := skeleton.Sync(chain[len(chain)-1], nil, true); err != nil {
+		t.Fatalf("failed to announce sync head: %v", err)
+	}
+	defer skeleton.Terminate()
+
+	var progress skeletonProgress
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		json.Unmarshal(rawdb.ReadSkeletonSyncStatus(db), &progress)
+		if len(progress.Subchains) == 1 && progress.Subchains[0].Tail == 1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if len(progress.Subchains) != 1 || progress.Subchains[0].Tail != 1 {
+		t.Fatalf("skeleton did not link after backoff expiry: %+v", progress.Subchains)
+	}
+	if testPeer.served.Load() == 0 {
+		t.Fatal("backed-off peer never served headers after backoff expiry")
+	}
+}
+
+func TestSkeletonSyncBacksOffOnTimeout(t *testing.T) {
+	chain := []*types.Header{{Number: big.NewInt(0)}}
+	for i := 1; i < 2*requestHeaders+2; i++ {
+		chain = append(chain, &types.Header{
+			ParentHash: chain[i-1].Hash(),
+			Number:     big.NewInt(int64(i)),
+		})
+	}
+
+	db := rawdb.NewMemoryDatabase()
+	rawdb.WriteBlock(db, types.NewBlockWithHeader(chain[0]))
+	rawdb.WriteReceipts(db, chain[0].Hash(), chain[0].Number.Uint64(), types.Receipts{})
+
+	peerset := newPeerSet()
+	peerset.rates.OverrideTTLLimit = 100 * time.Millisecond
+
+	testPeer := newSkeletonTestPeer("stuck", chain)
+	testPeer.hang.Store(true)
+	peer := newPeerConnection("stuck", eth.ETH69, testPeer, log.New("id", "stuck"))
+	if err := peerset.Register(peer); err != nil {
+		t.Fatalf("failed to register peer: %v", err)
+	}
+
+	var dropped atomic.Bool
+	skeleton := newSkeleton(db, peerset, func(string) { dropped.Store(true) }, newHookedBackfiller())
+	if err := skeleton.Sync(chain[len(chain)-1], nil, true); err != nil {
+		t.Fatalf("failed to announce sync head: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && !peer.backedOff() {
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	skeleton.Terminate()
+
+	if !peer.backedOff() {
+		t.Fatal("timed-out skeleton peer should be backed off")
+	}
+	if dropped.Load() {
+		t.Fatal("timed-out skeleton peer should not be hard-dropped")
+	}
+	if peerset.persistentBackoff("stuck") <= 0 {
+		t.Fatal("a timed-out skeleton peer must persist a jail across reconnects")
+	}
+	if _, ok := skeleton.idles["stuck"]; !ok {
+		t.Fatal("a timed-out skeleton peer must be requeued into the idle set, not stranded")
+	}
+}
+
+func TestSkeletonDropForInvalidHeadersBenches(t *testing.T) {
+	peerset := newPeerSet()
+	testPeer := newSkeletonTestPeer("junk", []*types.Header{{Number: big.NewInt(0)}})
+	peer := newPeerConnection("junk", eth.ETH69, testPeer, log.New("id", "junk"))
+	if err := peerset.Register(peer); err != nil {
+		t.Fatalf("failed to register peer: %v", err)
+	}
+
+	var dropped atomic.Bool
+	skeleton := newSkeleton(rawdb.NewMemoryDatabase(), peerset, func(string) { dropped.Store(true) }, newHookedBackfiller())
+	skeleton.dropForInvalidHeaders("junk")
+
+	if !peer.backedOff() {
+		t.Fatal("a peer dropped for invalid skeleton headers must be benched")
+	}
+	if !dropped.Load() {
+		t.Fatal("a peer dropped for invalid skeleton headers must be disconnected")
+	}
+	if got := peerset.persistentBackoff("junk"); got <= peerJailBackoff {
+		t.Fatalf("invalid-headers drop must persist the long drop bench across reconnects: got %v, want > %v", got, peerJailBackoff)
+	}
+}
+
+func TestSkeletonDropForInvalidHeadersWithoutDropper(t *testing.T) {
+	peerset := newPeerSet()
+	testPeer := newSkeletonTestPeer("junk", []*types.Header{{Number: big.NewInt(0)}})
+	peer := newPeerConnection("junk", eth.ETH69, testPeer, log.New("id", "junk"))
+	if err := peerset.Register(peer); err != nil {
+		t.Fatalf("failed to register peer: %v", err)
+	}
+
+	skeleton := newSkeleton(rawdb.NewMemoryDatabase(), peerset, nil, newHookedBackfiller())
+	skeleton.dropForInvalidHeaders("junk")
+
+	if !peer.backedOff() {
+		t.Fatal("invalid-headers drop must still bench the peer when no dropper is configured")
+	}
+}
+
+func TestSkeletonDropForInvalidHeadersBenchesDepartedPeer(t *testing.T) {
+	peerset := newPeerSet()
+	skeleton := newSkeleton(rawdb.NewMemoryDatabase(), peerset, func(string) {}, newHookedBackfiller())
+	skeleton.dropForInvalidHeaders("gone")
+
+	if got := peerset.persistentBackoff("gone"); got <= peerJailBackoff {
+		t.Fatalf("a departed peer that delivered invalid headers must still be benched: got %v, want > %v", got, peerJailBackoff)
+	}
+}
+
+func TestSkeletonHeaderTimeoutBacksOffPeer(t *testing.T) {
+	peerset := newPeerSet()
+	testPeer := newSkeletonTestPeer("slow", []*types.Header{{Number: big.NewInt(0)}})
+	peer := newPeerConnection("slow", eth.ETH69, testPeer, log.New("id", "slow"))
+	if err := peerset.Register(peer); err != nil {
+		t.Fatalf("failed to register peer: %v", err)
+	}
+	skeleton := newSkeleton(rawdb.NewMemoryDatabase(), peerset, func(string) {}, newHookedBackfiller())
+
+	req := &headerRequest{
+		peer:   "slow",
+		stale:  make(chan struct{}),
+		cancel: make(chan struct{}),
+		revert: make(chan *headerRequest, 1),
+	}
+	skeleton.handleHeaderTimeout(peer, req, time.Second)
+
+	if !peer.backedOff() {
+		t.Fatal("a skeleton header timeout must bench the peer")
+	}
+}
+
+func TestSkeletonHeaderTimeoutSkipsDepartedPeer(t *testing.T) {
+	peerset := newPeerSet()
+	testPeer := newSkeletonTestPeer("departed", []*types.Header{{Number: big.NewInt(0)}})
+	peer := newPeerConnection("departed", eth.ETH69, testPeer, log.New("id", "departed"))
+	if err := peerset.Register(peer); err != nil {
+		t.Fatalf("failed to register peer: %v", err)
+	}
+	skeleton := newSkeleton(rawdb.NewMemoryDatabase(), peerset, func(string) {}, newHookedBackfiller())
+
+	req := &headerRequest{
+		peer:   "departed",
+		stale:  make(chan struct{}),
+		cancel: make(chan struct{}),
+		revert: make(chan *headerRequest, 1),
+	}
+	close(req.stale)
+	skeleton.handleHeaderTimeout(peer, req, time.Second)
+
+	if peer.backedOff() {
+		t.Fatal("a header timeout for an already-reverted request must not bench the departed peer")
+	}
+	if got := peerset.persistentBackoff("departed"); got != 0 {
+		t.Fatalf("a header timeout for an already-reverted request must not jail the peer: got %v", got)
+	}
+}
+
+func TestSkeletonHandleRequestFailRequeuesBenchedPeer(t *testing.T) {
+	peerset := newPeerSet()
+	benched := newPeerConnection("benched", eth.ETH69, newSkeletonTestPeer("benched", []*types.Header{{Number: big.NewInt(0)}}), log.New("id", "benched"))
+	fresh := newPeerConnection("fresh", eth.ETH69, newSkeletonTestPeer("fresh", []*types.Header{{Number: big.NewInt(0)}}), log.New("id", "fresh"))
+	if err := peerset.Register(benched); err != nil {
+		t.Fatalf("failed to register benched peer: %v", err)
+	}
+	if err := peerset.Register(fresh); err != nil {
+		t.Fatalf("failed to register fresh peer: %v", err)
+	}
+	skeleton := newSkeleton(rawdb.NewMemoryDatabase(), peerset, func(string) {}, newHookedBackfiller())
+	skeleton.idles = make(map[string]*peerConnection)
+	skeleton.scratchHead = requestHeaders
+	skeleton.scratchOwners = make([]string, scratchHeaders/requestHeaders)
+
+	benched.backoffFor(time.Minute)
+	skeleton.handleRequestFail(&headerRequest{peer: "benched", head: requestHeaders, stale: make(chan struct{})})
+	if _, ok := skeleton.idles["benched"]; !ok {
+		t.Fatal("a benched peer must be requeued so the scheduler arms its wake-up timer")
+	}
+
+	skeleton.handleRequestFail(&headerRequest{peer: "fresh", head: requestHeaders, stale: make(chan struct{})})
+	if _, ok := skeleton.idles["fresh"]; ok {
+		t.Fatal("a non-benched failed peer must not be requeued, to avoid re-admitting a peer that delivered an unusable batch")
+	}
+}
+
+func TestSkeletonInvalidHeadersBenchesPeerEndToEnd(t *testing.T) {
+	chain := []*types.Header{{Number: big.NewInt(0)}}
+	for i := 1; i < 2*requestHeaders+2; i++ {
+		chain = append(chain, &types.Header{
+			ParentHash: chain[i-1].Hash(),
+			Number:     big.NewInt(int64(i)),
+		})
+	}
+
+	db := rawdb.NewMemoryDatabase()
+	rawdb.WriteBlock(db, types.NewBlockWithHeader(chain[0]))
+	rawdb.WriteReceipts(db, chain[0].Hash(), chain[0].Number.Uint64(), types.Receipts{})
+
+	bad := append([]*types.Header{}, chain...)
+	corrupt := *chain[len(chain)-2]
+	corrupt.Extra = []byte("corrupt skeleton header")
+	bad[len(bad)-2] = &corrupt
+	testPeer := newSkeletonTestPeer("duper", bad)
+	peerset := newPeerSet()
+	if err := peerset.Register(newPeerConnection("duper", eth.ETH69, testPeer, log.New("id", "duper"))); err != nil {
+		t.Fatalf("failed to register peer: %v", err)
+	}
+
+	var dropped atomic.Bool
+	drop := func(id string) {
+		if p := peerset.Peer(id); p != nil {
+			p.peer.(*skeletonTestPeer).dropped.Add(1)
+		}
+		dropped.Store(true)
+	}
+	skeleton := newSkeleton(db, peerset, drop, newHookedBackfiller())
+	if err := skeleton.Sync(chain[len(chain)-1], nil, true); err != nil {
+		t.Fatalf("failed to announce sync head: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && !dropped.Load() {
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	skeleton.Terminate()
+
+	if !dropped.Load() {
+		t.Fatal("a peer delivering invalid skeleton headers must be dropped")
+	}
+	if got := peerset.persistentBackoff("duper"); got <= peerJailBackoff {
+		t.Fatalf("the invalid-headers drop call site must persist the long drop bench: got %v, want > %v", got, peerJailBackoff)
 	}
 }
 
