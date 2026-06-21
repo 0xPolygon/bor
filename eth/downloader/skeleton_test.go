@@ -804,6 +804,29 @@ func TestSkeletonHeaderTimeoutSkipsDepartedPeer(t *testing.T) {
 	}
 }
 
+func TestSkeletonHandleRequestFailRequeuesLivePeer(t *testing.T) {
+	peerset := newPeerSet()
+	testPeer := newSkeletonTestPeer("live", []*types.Header{{Number: big.NewInt(0)}})
+	peer := newPeerConnection("live", eth.ETH69, testPeer, log.New("id", "live"))
+	if err := peerset.Register(peer); err != nil {
+		t.Fatalf("failed to register peer: %v", err)
+	}
+	skeleton := newSkeleton(rawdb.NewMemoryDatabase(), peerset, func(string) {}, newHookedBackfiller())
+	skeleton.idles = make(map[string]*peerConnection)
+	skeleton.scratchHead = requestHeaders
+	skeleton.scratchOwners = make([]string, scratchHeaders/requestHeaders)
+
+	if peer.backedOff() {
+		t.Fatal("test precondition: a freshly registered peer must not be backed off")
+	}
+	req := &headerRequest{peer: "live", head: requestHeaders, stale: make(chan struct{})}
+	skeleton.handleRequestFail(req)
+
+	if _, ok := skeleton.idles["live"]; !ok {
+		t.Fatal("a request failure must requeue the still-registered peer into the idle set, even without a backoff")
+	}
+}
+
 func TestSkeletonInvalidHeadersBenchesPeerEndToEnd(t *testing.T) {
 	chain := []*types.Header{{Number: big.NewInt(0)}}
 	for i := 1; i < 2*requestHeaders+2; i++ {

@@ -377,11 +377,12 @@ func (d *Downloader) UnregisterPeer(id string) error {
 }
 
 func (d *Downloader) PeerBackoff(id string) time.Duration {
+	persistent := d.peers.persistentBackoff(id)
 	var live time.Duration
 	if peer := d.peers.Peer(id); peer != nil {
 		live = peer.backoffRemaining()
 	}
-	if persistent := d.peers.persistentBackoff(id); persistent > live {
+	if persistent > live {
 		return persistent
 	}
 	return live

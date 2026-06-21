@@ -993,7 +993,7 @@ func (s *skeleton) handlePeeringEvent(event *peeringEvent) {
 
 func (s *skeleton) handleRequestFail(req *headerRequest) {
 	s.revertRequest(req)
-	if peer := s.peers.Peer(req.peer); peer != nil && peer.backedOff() {
+	if peer := s.peers.Peer(req.peer); peer != nil {
 		s.idles[req.peer] = peer
 	}
 }
