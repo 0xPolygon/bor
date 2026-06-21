@@ -475,6 +475,13 @@ func (ps *peerSet) recordJailByID(id string, until time.Time) {
 	}
 }
 
+func (ps *peerSet) clearJail(id string) {
+	ps.lock.Lock()
+	defer ps.lock.Unlock()
+
+	delete(ps.jailed, id)
+}
+
 func (ps *peerSet) persistentBackoff(id string) time.Duration {
 	ps.lock.Lock()
 	defer ps.lock.Unlock()

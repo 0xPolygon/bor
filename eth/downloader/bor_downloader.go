@@ -393,7 +393,14 @@ func (d *Downloader) SetPeerBackoff(id string, duration time.Duration) bool {
 	if peer == nil {
 		return false
 	}
-	peer.setBackoff(time.Now().Add(duration))
+	if duration <= 0 {
+		peer.setBackoff(time.Time{})
+		d.peers.clearJail(id)
+		return true
+	}
+	until := time.Now().Add(duration)
+	peer.setBackoff(until)
+	d.peers.recordJail(peer, until)
 	return true
 }
 

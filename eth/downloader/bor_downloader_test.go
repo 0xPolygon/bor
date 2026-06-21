@@ -1173,6 +1173,31 @@ func TestDownloaderPeerBackoffConsultsPersistedPenalties(t *testing.T) {
 	}
 }
 
+func TestSetPeerBackoffPersistsAndClearsJail(t *testing.T) {
+	d := &Downloader{peers: newPeerSet()}
+	peer := newPeerConnection("peer", eth.ETH69, nil, log.New("id", "peer"))
+	if err := d.peers.Register(peer); err != nil {
+		t.Fatalf("failed to register peer: %v", err)
+	}
+
+	if !d.SetPeerBackoff("peer", time.Minute) {
+		t.Fatal("SetPeerBackoff must succeed for a registered peer")
+	}
+	if remaining := d.peers.persistentBackoff("peer"); remaining <= 0 {
+		t.Fatalf("SetPeerBackoff must persist the bench in the jail map: have %v, want > 0", remaining)
+	}
+
+	if !d.SetPeerBackoff("peer", 0) {
+		t.Fatal("SetPeerBackoff with zero duration must succeed")
+	}
+	if remaining := d.peers.persistentBackoff("peer"); remaining != 0 {
+		t.Fatalf("SetPeerBackoff with zero duration must clear the persisted jail: have %v, want 0", remaining)
+	}
+	if peer.backedOff() {
+		t.Fatal("SetPeerBackoff with zero duration must clear the live backoff")
+	}
+}
+
 func TestPeerBackoffExpiry(t *testing.T) {
 	peer := newPeerConnection("peer", eth.ETH69, nil, log.New("id", "peer"))
 
