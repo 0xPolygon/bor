@@ -14,11 +14,12 @@
 // You should have received a copy of the GNU Lesser General Public License
 // along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
-// Package pebble implements the key-value database layer based on pebble.
+// Legacy pebble v1 wrapper. This file mirrors pebble.go but with V1-prefixed
+// types so that it can coexist alongside a future v2 variant in the same package.
+
 package pebble
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"runtime"
@@ -27,36 +28,18 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/cockroachdb/pebble/v2"
-	"github.com/cockroachdb/pebble/v2/bloom"
+	"github.com/cockroachdb/pebble"
+	"github.com/cockroachdb/pebble/bloom"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 )
 
-const (
-	// minCache is the minimum amount of memory in megabytes to allocate to pebble
-	// read and write caching, split half and half.
-	minCache = 16
-
-	// minHandles is the minimum number of files handles to allocate to the open
-	// database files.
-	minHandles = 16
-
-	// metricsGatheringInterval specifies the interval to retrieve pebble database
-	// compaction, io and pause stats to report to the user.
-	metricsGatheringInterval = 3 * time.Second
-
-	// degradationWarnInterval specifies how often warning should be printed if the
-	// leveldb database cannot keep up with requested writes.
-	degradationWarnInterval = time.Minute
-)
-
-// Database is a persistent key-value store based on the pebble v2 storage engine.
+// V1Database is a persistent key-value store based on the pebble v1 storage engine.
 // Apart from basic data storage functionality it also supports batch writes and
 // iterating over the keyspace in binary-alphabetical order.
-type Database struct {
+type V1Database struct {
 	fn        string     // filename for reporting
 	db        *pebble.DB // Underlying pebble storage engine
 	namespace string     // Namespace for metrics
@@ -78,8 +61,8 @@ type Database struct {
 	zombieMemTablesGauge   *metrics.Gauge   // Gauge for tracking the number of zombie memory tables
 	blockCacheHitGauge     *metrics.Gauge   // Gauge for tracking the number of total hit in the block cache
 	blockCacheMissGauge    *metrics.Gauge   // Gauge for tracking the number of total miss in the block cache
-	tableCacheHitGauge     *metrics.Gauge   // Gauge for tracking the number of total hit in the file cache
-	tableCacheMissGauge    *metrics.Gauge   // Gauge for tracking the number of total miss in the file cache
+	tableCacheHitGauge     *metrics.Gauge   // Gauge for tracking the number of total hit in the table cache
+	tableCacheMissGauge    *metrics.Gauge   // Gauge for tracking the number of total miss in the table cache
 	filterHitGauge         *metrics.Gauge   // Gauge for tracking the number of total hit in bloom filter
 	filterMissGauge        *metrics.Gauge   // Gauge for tracking the number of total miss in bloom filter
 	estimatedCompDebtGauge *metrics.Gauge   // Gauge for tracking the number of bytes that need to be compacted
@@ -87,40 +70,6 @@ type Database struct {
 	liveCompSizeGauge      *metrics.Gauge   // Gauge for tracking the size of in-progress compactions
 	liveIterGauge          *metrics.Gauge   // Gauge for tracking the number of live database iterators
 	levelsGauge            []*metrics.Gauge // Gauge for tracking the number of tables in levels
-
-	// Read and Write Amplification metrics
-	readAmpGauge       *metrics.GaugeFloat64   // Gauge for tracking read amplification
-	levelWriteAmpGauge []*metrics.GaugeFloat64 // Gauge for tracking write amplification per level
-	totalWriteAmpGauge *metrics.GaugeFloat64   // Gauge for tracking total write amplification
-
-	// Detailed I/O tracking metrics
-	walBytesWrittenMeter   *metrics.Meter // Bytes written to WAL
-	walFileCountGauge      *metrics.Gauge // Number of WAL files
-	sstBytesReadMeter      *metrics.Meter // Bytes read from SST files (compaction input)
-	sstBytesWrittenMeter   *metrics.Meter // Bytes written to SST files (compaction output)
-	flushBytesWrittenMeter *metrics.Meter // Bytes written during memtable flush
-
-	// Per-level size tracking
-	levelSizeGauge  []*metrics.Gauge // Size of each level in bytes
-	levelScoreGauge []*metrics.Gauge // Compaction score per level (>1 means needs compaction)
-
-	// Detailed WAL metrics
-	walSizeGauge         *metrics.Gauge // Current WAL size
-	walPhysicalSizeGauge *metrics.Gauge // Physical WAL size on disk
-	walObsoleteSizeGauge *metrics.Gauge // Obsolete WAL data size
-
-	// Snapshot metrics
-	snapshotCountGauge *metrics.Gauge // Number of snapshots
-
-	// Keys metrics for understanding data distribution
-	keysCountGauge []*metrics.Gauge // Number of keys per level
-
-	// Calculated amplification metrics
-	calcWriteAmpGauge   *metrics.GaugeFloat64 // Calculated write amplification: total physical writes / logical user data
-	calcReadAmpGauge    *metrics.GaugeFloat64 // Calculated read amplification (same as readamp)
-	calcSpaceAmpGauge   *metrics.GaugeFloat64 // Calculated space amplification: disk/size / actual data size
-	walWriteAmpGauge    *metrics.GaugeFloat64 // WAL write amplification: WAL physical / logical data
-	actualDataSizeGauge *metrics.Gauge        // Actual user data size (from live SST files)
 
 	quitLock sync.RWMutex    // Mutex protecting the quit channel and the closed flag
 	quitChan chan chan error // Quit channel to stop the metrics collection before closing the database
@@ -143,33 +92,29 @@ type Database struct {
 	writeOptions *pebble.WriteOptions
 }
 
-func (d *Database) onCompactionBegin(info pebble.CompactionInfo) {
+func (d *V1Database) onCompactionBegin(info pebble.CompactionInfo) {
 	if d.activeComp == 0 {
 		d.compStartTime = time.Now()
 	}
-
 	l0 := info.Input[0]
-
 	if l0.Level == 0 {
 		d.level0Comp.Add(1)
 	} else {
 		d.nonLevel0Comp.Add(1)
 	}
-
 	d.activeComp++
 }
 
-func (d *Database) onCompactionEnd(info pebble.CompactionInfo) {
+func (d *V1Database) onCompactionEnd(info pebble.CompactionInfo) {
 	if d.activeComp == 1 {
 		d.compTime.Add(int64(time.Since(d.compStartTime)))
 	} else if d.activeComp == 0 {
 		panic("should not happen")
 	}
-
 	d.activeComp--
 }
 
-func (d *Database) onWriteStallBegin(b pebble.WriteStallBeginInfo) {
+func (d *V1Database) onWriteStallBegin(b pebble.WriteStallBeginInfo) {
 	d.writeDelayStartTime = time.Now()
 	d.writeDelayCount.Add(1)
 	d.writeStalled.Store(true)
@@ -188,7 +133,7 @@ func (d *Database) onWriteStallBegin(b pebble.WriteStallBeginInfo) {
 	}
 }
 
-func (d *Database) onWriteStallEnd() {
+func (d *V1Database) onWriteStallEnd() {
 	d.writeDelayTime.Add(int64(time.Since(d.writeDelayStartTime)))
 	d.writeStalled.Store(false)
 
@@ -199,55 +144,18 @@ func (d *Database) onWriteStallEnd() {
 	d.writeDelayStartTime = time.Time{}
 }
 
-// Track SST file operations
-func (d *Database) onTableCreated(info pebble.TableCreateInfo) {
-	metrics.GetOrRegisterMeter(d.namespace+"file/sst/created", nil).Mark(1)
-	d.log.Debug("SST file created", "reason", info.Reason, "fileNum", info.FileNum)
-}
-
-func (d *Database) onTableDeleted(info pebble.TableDeleteInfo) {
-	metrics.GetOrRegisterMeter(d.namespace+"file/sst/deleted", nil).Mark(1)
-}
-
-// Track WAL (.log) file operations
-func (d *Database) onWALCreated(info pebble.WALCreateInfo) {
-	metrics.GetOrRegisterMeter(d.namespace+"file/wal/created", nil).Mark(1)
-	d.log.Debug("WAL file created", "fileNum", info.FileNum, "recycled", info.RecycledFileNum)
-}
-
-func (d *Database) onWALDeleted(info pebble.WALDeleteInfo) {
-	metrics.GetOrRegisterMeter(d.namespace+"file/wal/deleted", nil).Mark(1)
-}
-
-// panicLogger is just a noop logger to disable Pebble's internal logger.
-//
-// TODO(karalabe): Remove when Pebble sets this as the default.
-type panicLogger struct{}
-
-func (l panicLogger) Infof(format string, args ...interface{}) {
-}
-
-func (l panicLogger) Errorf(format string, args ...interface{}) {
-}
-
-func (l panicLogger) Fatalf(format string, args ...interface{}) {
-	panic(fmt.Errorf("fatal: "+format, args...))
-}
-
-// New returns a wrapped pebble DB object. The namespace is the prefix that the
+// NewV1 returns a wrapped pebble v1 DB object. The namespace is the prefix that the
 // metrics reporting should use for surfacing internal stats.
-func New(file string, cache int, handles int, namespace string, readonly bool) (*Database, error) {
+func NewV1(file string, cache int, handles int, namespace string, readonly bool) (*V1Database, error) {
 	// Ensure we have some minimal caching and file guarantees
 	if cache < minCache {
 		cache = minCache
 	}
-
 	if handles < minHandles {
 		handles = minHandles
 	}
-
 	logger := log.New("database", file)
-	logger.Info("Allocated cache and file handles", "cache", common.StorageSize(cache*1024*1024), "handles", handles, "version", "v2")
+	logger.Info("Allocated cache and file handles", "cache", common.StorageSize(cache*1024*1024), "handles", handles, "version", "v1")
 
 	// The max memtable size is limited by the uint32 offsets stored in
 	// internal/arenaskl.node, DeferredBatchOp, and flushableBatchEntry.
@@ -266,8 +174,8 @@ func New(file string, cache int, handles int, namespace string, readonly bool) (
 	// limit unchanged allows writes to be flushed more smoothly. This helps
 	// avoid compaction spikes and mitigates write stalls caused by heavy
 	// compaction workloads.
-	memTableLimit := 4
-	memTableSize := cache * 1024 * 1024 / 2 / memTableLimit
+	memTableNumber := 4
+	memTableSize := cache * 1024 * 1024 / 2 / memTableNumber
 
 	// The memory table size is currently capped at maxMemTableSize-1 due to a
 	// known bug in the pebble where maxMemTableSize is not recognized as a
@@ -278,8 +186,7 @@ func New(file string, cache int, handles int, namespace string, readonly bool) (
 	if memTableSize >= maxMemTableSize {
 		memTableSize = maxMemTableSize - 1
 	}
-
-	db := &Database{
+	db := &V1Database{
 		fn:        file,
 		log:       logger,
 		quitChan:  make(chan chan error),
@@ -294,54 +201,44 @@ func New(file string, cache int, handles int, namespace string, readonly bool) (
 		// of course). Geth is expected to handle recovery from an unclean shutdown.
 		writeOptions: pebble.NoSync,
 	}
-	numCPU := runtime.NumCPU()
 	opt := &pebble.Options{
 		// Pebble has a single combined cache area and the write
 		// buffers are taken from this too. Assign all available
 		// memory allowance for cache.
 		Cache:        pebble.NewCache(int64(cache * 1024 * 1024)),
 		MaxOpenFiles: handles,
-		// BytesPerSync was 512 KB as implicit default. Increasing it will provide fewer but larger syncs during compaction
-		BytesPerSync: 1 * 1024 * 1024,
 
 		// The size of memory table(as well as the write buffer).
 		// Note, there may have more than two memory tables in the system.
 		MemTableSize: uint64(memTableSize),
 
-		// MemTableStopWritesThreshold places a hard limit on the size
+		// MemTableStopWritesThreshold places a hard limit on the number
 		// of the existent MemTables(including the frozen one).
+		//
 		// Note, this must be the number of tables not the size of all memtables
 		// according to https://github.com/cockroachdb/pebble/blob/master/options.go#L738-L742
 		// and to https://github.com/cockroachdb/pebble/blob/master/db.go#L1892-L1903.
-		// Doubling the threshold will reduce write stalls during flush
-		MemTableStopWritesThreshold: memTableLimit * 2,
+		//
+		// MemTableStopWritesThreshold is set to twice the maximum number of
+		// allowed memtables to accommodate temporary spikes.
+		MemTableStopWritesThreshold: memTableNumber * 2,
 
 		// The default compaction concurrency(1 thread),
 		// Here use all available CPUs for faster compaction.
-		CompactionConcurrencyRange: func() (int, int) { return 1, numCPU },
+		MaxConcurrentCompactions: runtime.NumCPU,
 
 		// Per-level options. Options for at least one level must be specified. The
 		// options for the last level are used for all subsequent levels.
-		Levels: [7]pebble.LevelOptions{
-			{FilterPolicy: bloom.FilterPolicy(10)},
-			{FilterPolicy: bloom.FilterPolicy(10)},
-			{FilterPolicy: bloom.FilterPolicy(10)},
-			{FilterPolicy: bloom.FilterPolicy(10)},
-			{FilterPolicy: bloom.FilterPolicy(10)},
-			{FilterPolicy: bloom.FilterPolicy(10)},
+		Levels: []pebble.LevelOptions{
+			{TargetFileSize: 2 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
+			{TargetFileSize: 4 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
+			{TargetFileSize: 8 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
+			{TargetFileSize: 16 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
+			{TargetFileSize: 32 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
+			{TargetFileSize: 64 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
 
 			// Pebble doesn't use the Bloom filter at level6 for read efficiency.
-			{},
-		},
-		// Per-level target file sizes (replaces LevelOptions.TargetFileSize in v2).
-		TargetFileSizes: [7]int64{
-			2 * 1024 * 1024,
-			4 * 1024 * 1024,
-			8 * 1024 * 1024,
-			16 * 1024 * 1024,
-			32 * 1024 * 1024,
-			64 * 1024 * 1024,
-			128 * 1024 * 1024,
+			{TargetFileSize: 128 * 1024 * 1024},
 		},
 		ReadOnly: readonly,
 		EventListener: &pebble.EventListener{
@@ -349,10 +246,6 @@ func New(file string, cache int, handles int, namespace string, readonly bool) (
 			CompactionEnd:   db.onCompactionEnd,
 			WriteStallBegin: db.onWriteStallBegin,
 			WriteStallEnd:   db.onWriteStallEnd,
-			TableCreated:    db.onTableCreated,
-			TableDeleted:    db.onTableDeleted,
-			WALCreated:      db.onWALCreated,
-			WALDeleted:      db.onWALDeleted,
 		},
 		Logger: panicLogger{}, // TODO(karalabe): Delete when this is upstreamed in Pebble
 
@@ -375,14 +268,6 @@ func New(file string, cache int, handles int, namespace string, readonly bool) (
 		// the compaction debt as around 10GB. By reducing it to 2, the compaction
 		// debt will be less than 1GB, but with more frequent compactions scheduled.
 		L0CompactionThreshold: 2,
-
-		// FormatFlushableIngest is the minimum FormatMajorVersion supported by
-		// pebble v2. The more advanced version can be enabled later.
-		//
-		// This version is supported by both v1 and v2. It serves as the natural
-		// bridge point: a v1 database can be ratcheted up to FormatFlushableIngest
-		// using pebble v1, and then pebble v2 can open it since that's its minimum.
-		FormatMajorVersion: formatMinV2,
 	}
 	// Disable seek compaction explicitly. Check https://github.com/ethereum/go-ethereum/pull/20130
 	// for more details.
@@ -393,18 +278,16 @@ func New(file string, cache int, handles int, namespace string, readonly bool) (
 	// - there is one more overlapping sub-level0;
 	// - there is an additional 256 MB of compaction debt;
 	//
-	// The maximum concurrency is still capped by CompactionConcurrencyRange, but with
+	// The maximum concurrency is still capped by MaxConcurrentCompactions, but with
 	// these settings compactions can scale up more readily.
 	opt.Experimental.L0CompactionConcurrency = 1
-	// CompactionDebtConcurrency worker per 256 MB of compaction debt
-	opt.Experimental.CompactionDebtConcurrency = 1 << 28
+	opt.Experimental.CompactionDebtConcurrency = 1 << 28 // 256MB
 
 	// Open the db and recover any potential corruptions
 	innerDB, err := pebble.Open(file, opt)
 	if err != nil {
 		return nil, err
 	}
-
 	db.db = innerDB
 
 	db.compTimeMeter = metrics.GetOrRegisterMeter(namespace+"compact/time", nil)
@@ -433,32 +316,6 @@ func New(file string, cache int, handles int, namespace string, readonly bool) (
 	db.liveCompSizeGauge = metrics.GetOrRegisterGauge(namespace+"compact/live/size", nil)
 	db.liveIterGauge = metrics.GetOrRegisterGauge(namespace+"iter/count", nil)
 
-	// Register read and write amplification metrics
-	db.readAmpGauge = metrics.GetOrRegisterGaugeFloat64(namespace+"readamp", nil)
-	db.totalWriteAmpGauge = metrics.GetOrRegisterGaugeFloat64(namespace+"writeamp/total", nil)
-
-	// Register detailed I/O tracking metrics
-	db.walBytesWrittenMeter = metrics.GetOrRegisterMeter(namespace+"wal/bytes", nil)
-	db.walFileCountGauge = metrics.GetOrRegisterGauge(namespace+"wal/files", nil)
-	db.sstBytesReadMeter = metrics.GetOrRegisterMeter(namespace+"sst/read", nil)
-	db.sstBytesWrittenMeter = metrics.GetOrRegisterMeter(namespace+"sst/written", nil)
-	db.flushBytesWrittenMeter = metrics.GetOrRegisterMeter(namespace+"flush/bytes", nil)
-
-	// WAL size metrics
-	db.walSizeGauge = metrics.GetOrRegisterGauge(namespace+"wal/size", nil)
-	db.walPhysicalSizeGauge = metrics.GetOrRegisterGauge(namespace+"wal/physicalsize", nil)
-	db.walObsoleteSizeGauge = metrics.GetOrRegisterGauge(namespace+"wal/obsoletesize", nil)
-
-	// Snapshot metrics
-	db.snapshotCountGauge = metrics.GetOrRegisterGauge(namespace+"snapshots/count", nil)
-
-	// Calculated amplification metrics
-	db.calcWriteAmpGauge = metrics.GetOrRegisterGaugeFloat64(namespace+"amplification/write/calculated", nil)
-	db.calcReadAmpGauge = metrics.GetOrRegisterGaugeFloat64(namespace+"amplification/read/calculated", nil)
-	db.calcSpaceAmpGauge = metrics.GetOrRegisterGaugeFloat64(namespace+"amplification/space/calculated", nil)
-	db.walWriteAmpGauge = metrics.GetOrRegisterGaugeFloat64(namespace+"amplification/wal", nil)
-	db.actualDataSizeGauge = metrics.GetOrRegisterGauge(namespace+"disk/actualsize", nil)
-
 	// Start up the metrics gathering and return
 	go db.meter(metricsGatheringInterval, namespace)
 	return db, nil
@@ -466,7 +323,7 @@ func New(file string, cache int, handles int, namespace string, readonly bool) (
 
 // Close stops the metrics collection, flushes any pending data to disk and closes
 // all io accesses to the underlying key-value store.
-func (d *Database) Close() error {
+func (d *V1Database) Close() error {
 	d.quitLock.Lock()
 	defer d.quitLock.Unlock()
 	// Allow double closing, simplifies things
@@ -477,19 +334,16 @@ func (d *Database) Close() error {
 	if d.quitChan != nil {
 		errc := make(chan error)
 		d.quitChan <- errc
-
 		if err := <-errc; err != nil {
 			d.log.Error("Metrics collection failed", "err", err)
 		}
-
 		d.quitChan = nil
 	}
-
 	return d.db.Close()
 }
 
 // Has retrieves if a key is present in the key-value store.
-func (d *Database) Has(key []byte) (bool, error) {
+func (d *V1Database) Has(key []byte) (bool, error) {
 	d.quitLock.RLock()
 	defer d.quitLock.RUnlock()
 	if d.closed {
@@ -508,7 +362,7 @@ func (d *Database) Has(key []byte) (bool, error) {
 }
 
 // Get retrieves the given key if it's present in the key-value store.
-func (d *Database) Get(key []byte) ([]byte, error) {
+func (d *V1Database) Get(key []byte) ([]byte, error) {
 	d.quitLock.RLock()
 	defer d.quitLock.RUnlock()
 	if d.closed {
@@ -518,7 +372,6 @@ func (d *Database) Get(key []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	ret := make([]byte, len(dat))
 	copy(ret, dat)
 	if err = closer.Close(); err != nil {
@@ -528,7 +381,7 @@ func (d *Database) Get(key []byte) ([]byte, error) {
 }
 
 // Put inserts the given value into the key-value store.
-func (d *Database) Put(key []byte, value []byte) error {
+func (d *V1Database) Put(key []byte, value []byte) error {
 	d.quitLock.RLock()
 	defer d.quitLock.RUnlock()
 	if d.closed {
@@ -538,7 +391,7 @@ func (d *Database) Put(key []byte, value []byte) error {
 }
 
 // Delete removes the key from the key-value store.
-func (d *Database) Delete(key []byte) error {
+func (d *V1Database) Delete(key []byte) error {
 	d.quitLock.RLock()
 	defer d.quitLock.RUnlock()
 	if d.closed {
@@ -549,7 +402,7 @@ func (d *Database) Delete(key []byte) error {
 
 // DeleteRange deletes all of the keys (and values) in the range [start,end)
 // (inclusive on start, exclusive on end).
-func (d *Database) DeleteRange(start, end []byte) error {
+func (d *V1Database) DeleteRange(start, end []byte) error {
 	d.quitLock.RLock()
 	defer d.quitLock.RUnlock()
 
@@ -567,42 +420,24 @@ func (d *Database) DeleteRange(start, end []byte) error {
 
 // NewBatch creates a write-only key-value store that buffers changes to its host
 // database until a final write is called.
-func (d *Database) NewBatch() ethdb.Batch {
-	return &batch{
+func (d *V1Database) NewBatch() ethdb.Batch {
+	return &v1batch{
 		b:  d.db.NewBatch(),
 		db: d,
 	}
 }
 
 // NewBatchWithSize creates a write-only database batch with pre-allocated buffer.
-func (d *Database) NewBatchWithSize(size int) ethdb.Batch {
-	return &batch{
+func (d *V1Database) NewBatchWithSize(size int) ethdb.Batch {
+	return &v1batch{
 		b:  d.db.NewBatchWithSize(size),
 		db: d,
 	}
 }
 
-// upperBound returns the upper bound for the given prefix
-func upperBound(prefix []byte) (limit []byte) {
-	for i := len(prefix) - 1; i >= 0; i-- {
-		c := prefix[i]
-		if c == 0xff {
-			continue
-		}
-
-		limit = make([]byte, i+1)
-		copy(limit, prefix)
-		limit[i] = c + 1
-
-		break
-	}
-
-	return limit
-}
-
 // Stat returns the internal metrics of Pebble in a text format. It's a developer
 // method to read everything there is to read, independent of Pebble version.
-func (d *Database) Stat() (string, error) {
+func (d *V1Database) Stat() (string, error) {
 	return d.db.Metrics().String(), nil
 }
 
@@ -613,7 +448,7 @@ func (d *Database) Stat() (string, error) {
 // A nil start is treated as a key before all keys in the data store; a nil limit
 // is treated as a key after all keys in the data store. If both is nil then it
 // will compact entire data store.
-func (d *Database) Compact(start []byte, limit []byte) error {
+func (d *V1Database) Compact(start []byte, limit []byte) error {
 	// There is no special flag to represent the end of key range
 	// in pebble(nil in leveldb). Use an ugly hack to construct a
 	// large key to represent it.
@@ -625,17 +460,17 @@ func (d *Database) Compact(start []byte, limit []byte) error {
 	if limit == nil {
 		limit = ethdb.MaximumKey
 	}
-	return d.db.Compact(context.Background(), start, limit, true) // Parallelization is preferred
+	return d.db.Compact(start, limit, true) // Parallelization is preferred
 }
 
 // Path returns the path to the database directory.
-func (d *Database) Path() string {
+func (d *V1Database) Path() string {
 	return d.fn
 }
 
 // SyncKeyValue flushes all pending writes in the write-ahead-log to disk,
 // ensuring data durability up to that point.
-func (d *Database) SyncKeyValue() error {
+func (d *V1Database) SyncKeyValue() error {
 	// The entry (value=nil) is not written to the database; it is only
 	// added to the WAL. Writing this special log entry in sync mode
 	// automatically flushes all previous writes, ensuring database
@@ -645,13 +480,23 @@ func (d *Database) SyncKeyValue() error {
 	return d.db.Apply(b, pebble.Sync)
 }
 
+// NewIterator creates a binary-alphabetical iterator over a subset
+// of database content with a particular key prefix, starting at a particular
+// initial key (or after, if it does not exist).
+func (d *V1Database) NewIterator(prefix []byte, start []byte) ethdb.Iterator {
+	iter, _ := d.db.NewIter(&pebble.IterOptions{
+		LowerBound: append(prefix, start...),
+		UpperBound: upperBound(prefix),
+	})
+	iter.First()
+	return &v1pebbleIterator{iter: iter, moved: true, released: false}
+}
+
 // meter periodically retrieves internal pebble counters and reports them to
 // the metrics subsystem.
-func (d *Database) meter(refresh time.Duration, namespace string) {
+func (d *V1Database) meter(refresh time.Duration, namespace string) {
 	var errc chan error
-
 	timer := time.NewTimer(refresh)
-
 	defer timer.Stop()
 
 	// Create storage and warning log tracer for write delay.
@@ -660,9 +505,7 @@ func (d *Database) meter(refresh time.Duration, namespace string) {
 		compWrites [2]int64
 		compReads  [2]int64
 
-		nWrites    [2]int64
-		flushBytes [2]int64 // Add tracking for flush bytes
-		walWrites  [2]int64 // Track WAL writes separately
+		nWrites [2]int64
 
 		writeDelayTimes      [2]int64
 		writeDelayCounts     [2]int64
@@ -683,40 +526,22 @@ func (d *Database) meter(refresh time.Duration, namespace string) {
 			nonLevel0CompCount = int64(d.nonLevel0Comp.Load())
 			level0CompCount    = int64(d.level0Comp.Load())
 		)
-
 		writeDelayTimes[i%2] = writeDelayTime
 		writeDelayCounts[i%2] = writeDelayCount
 		compTimes[i%2] = compTime
 
-		var totalFlushBytes int64
 		for _, levelMetrics := range stats.Levels {
-			nWrite += int64(levelMetrics.TableBytesCompacted)
-			nWrite += int64(levelMetrics.TableBytesFlushed)
-			compWrite += int64(levelMetrics.TableBytesCompacted)
-			compRead += int64(levelMetrics.TableBytesRead)
+			nWrite += int64(levelMetrics.BytesCompacted)
+			nWrite += int64(levelMetrics.BytesFlushed)
+			compWrite += int64(levelMetrics.BytesCompacted)
+			compRead += int64(levelMetrics.BytesRead)
 		}
 
-		// Track both logical and physical WAL metrics
-		walLogicalWrites := int64(stats.WAL.BytesWritten)
-		walPhysicalSize := int64(stats.WAL.PhysicalSize)
-
-		// Calculate physical writes including WAL overhead
-		// For nWrite, we need to account for physical WAL overhead
-		// Use the ratio of physical/logical for current WAL as a multiplier
-		walOverheadRatio := 1.0
-		if stats.WAL.BytesWritten > 0 {
-			walOverheadRatio = float64(walPhysicalSize) / float64(stats.WAL.BytesWritten)
-		}
-
-		// Estimate physical writes as: SST writes + (logical WAL * overhead ratio)
-		// This gives us a better approximation of actual disk I/O
-		nWrite = compWrite + totalFlushBytes + int64(float64(walLogicalWrites)*walOverheadRatio)
+		nWrite += int64(stats.WAL.BytesWritten)
 
 		compWrites[i%2] = compWrite
 		compReads[i%2] = compRead
 		nWrites[i%2] = nWrite
-		walWrites[i%2] = walLogicalWrites
-		flushBytes[i%2] = totalFlushBytes
 
 		d.writeDelayNMeter.Mark(writeDelayCounts[i%2] - writeDelayCounts[(i-1)%2])
 		d.writeDelayMeter.Mark(writeDelayTimes[i%2] - writeDelayTimes[(i-1)%2])
@@ -748,118 +573,62 @@ func (d *Database) meter(refresh time.Duration, namespace string) {
 		d.liveMemTablesGauge.Update(stats.MemTable.Count)
 		d.zombieMemTablesGauge.Update(stats.MemTable.ZombieCount)
 		d.estimatedCompDebtGauge.Update(int64(stats.Compact.EstimatedDebt))
-		d.tableCacheHitGauge.Update(stats.FileCache.Hits)
-		d.tableCacheMissGauge.Update(stats.FileCache.Misses)
+		d.tableCacheHitGauge.Update(stats.TableCache.Hits)
+		d.tableCacheMissGauge.Update(stats.TableCache.Misses)
 		d.blockCacheHitGauge.Update(stats.BlockCache.Hits)
 		d.blockCacheMissGauge.Update(stats.BlockCache.Misses)
 		d.filterHitGauge.Update(stats.Filter.Hits)
 		d.filterMissGauge.Update(stats.Filter.Misses)
 
-		// Update read amplification metric
-		// ReadAmp returns the current read amplification of the database
-		d.readAmpGauge.Update(float64(stats.ReadAmp()))
-
-		// Track detailed I/O metrics
-		var (
-			totalSSTBytesRead    int64
-			totalSSTBytesWritten int64
-		)
-
-		// Calculate and update write amplification metrics per level
 		for i, level := range stats.Levels {
 			// Append metrics for additional layers
 			if i >= len(d.levelsGauge) {
 				d.levelsGauge = append(d.levelsGauge, metrics.GetOrRegisterGauge(namespace+fmt.Sprintf("tables/level%v", i), nil))
-				d.levelWriteAmpGauge = append(d.levelWriteAmpGauge, metrics.GetOrRegisterGaugeFloat64(namespace+fmt.Sprintf("writeamp/level%v", i), nil))
-				d.levelSizeGauge = append(d.levelSizeGauge, metrics.GetOrRegisterGauge(namespace+fmt.Sprintf("size/level%v", i), nil))
-				d.levelScoreGauge = append(d.levelScoreGauge, metrics.GetOrRegisterGauge(namespace+fmt.Sprintf("score/level%v", i), nil))
-				d.keysCountGauge = append(d.keysCountGauge, metrics.GetOrRegisterGauge(namespace+fmt.Sprintf("keys/level%v", i), nil))
 			}
-			d.levelsGauge[i].Update(level.TablesCount)
+			d.levelsGauge[i].Update(level.NumFiles)
 		}
-		// Update I/O meters (mark only the delta since last measurement)
-		if i > 1 {
-			deltaRead := totalSSTBytesRead - compReads[(i-1)%2]
-			deltaWrite := totalSSTBytesWritten - compWrites[(i-1)%2]
-			deltaWAL := walWrites[i%2] - walWrites[(i-1)%2]
-			deltaFlush := flushBytes[i%2] - flushBytes[(i-1)%2]
-
-			// Only mark positive deltas to avoid negative values
-			if deltaRead > 0 {
-				d.sstBytesReadMeter.Mark(deltaRead)
-			}
-			if deltaWrite > 0 {
-				d.sstBytesWrittenMeter.Mark(deltaWrite)
-			}
-			// Track WAL logical writes (the actual application data)
-			if deltaWAL > 0 {
-				d.walBytesWrittenMeter.Mark(deltaWAL)
-			}
-			if deltaFlush > 0 {
-				d.flushBytesWrittenMeter.Mark(deltaFlush)
-			}
-		}
-
-		// Calculate total write amplification using Pebble's built-in method
-		totalMetrics := stats.Total()
-		totalWriteAmp := totalMetrics.WriteAmp()
-		d.totalWriteAmpGauge.Update(totalWriteAmp)
-
-		// Update WAL metrics
-		d.walFileCountGauge.Update(stats.WAL.Files)
-		d.walSizeGauge.Update(int64(stats.WAL.Size))
-		d.walPhysicalSizeGauge.Update(int64(stats.WAL.PhysicalSize))
-		d.walObsoleteSizeGauge.Update(int64(stats.WAL.ObsoletePhysicalSize))
-
-		// Update snapshot count
-		d.snapshotCountGauge.Update(int64(stats.Snapshots.Count))
-
-		// Calculate and update custom amplification metrics
-		d.updateCalculatedAmplifications(stats)
 
 		// Sleep a bit, then repeat the stats collection
 		select {
 		case errc = <-d.quitChan:
 			// Quit requesting, stop hammering the database
 		case <-timer.C:
-			// Timeout, gather a new set of stats
 			timer.Reset(refresh)
+			// Timeout, gather a new set of stats
 		}
 	}
 	errc <- nil
 }
 
-// batch is a write-only batch that commits changes to its host database
-// when Write is called. A batch cannot be used concurrently.
-type batch struct {
+// v1batch is a write-only batch that commits changes to its host database
+// when Write is called. A v1batch cannot be used concurrently.
+type v1batch struct {
 	b    *pebble.Batch
-	db   *Database
+	db   *V1Database
 	size int
 }
 
 // Put inserts the given value into the batch for later committing.
-func (b *batch) Put(key, value []byte) error {
+func (b *v1batch) Put(key, value []byte) error {
 	if err := b.b.Set(key, value, nil); err != nil {
 		return err
 	}
 	b.size += len(key) + len(value)
-
 	return nil
 }
 
 // Delete inserts the key removal into the batch for later committing.
-func (b *batch) Delete(key []byte) error {
+func (b *v1batch) Delete(key []byte) error {
 	if err := b.b.Delete(key, nil); err != nil {
 		return err
 	}
 	b.size += len(key)
-
 	return nil
 }
 
 // DeleteRange removes all keys in the range [start, end) from the batch for
 // later committing, inclusive on start, exclusive on end.
-func (b *batch) DeleteRange(start, end []byte) error {
+func (b *v1batch) DeleteRange(start, end []byte) error {
 	// There is no special flag to represent the end of key range
 	// in pebble(nil in leveldb). Use an ugly hack to construct a
 	// large key to represent it.
@@ -875,12 +644,12 @@ func (b *batch) DeleteRange(start, end []byte) error {
 }
 
 // ValueSize retrieves the amount of data queued up for writing.
-func (b *batch) ValueSize() int {
+func (b *v1batch) ValueSize() int {
 	return b.size
 }
 
 // Write flushes any accumulated data to disk.
-func (b *batch) Write() error {
+func (b *v1batch) Write() error {
 	b.db.quitLock.RLock()
 	defer b.db.quitLock.RUnlock()
 	if b.db.closed {
@@ -890,15 +659,14 @@ func (b *batch) Write() error {
 }
 
 // Reset resets the batch for reuse.
-func (b *batch) Reset() {
+func (b *v1batch) Reset() {
 	b.b.Reset()
 	b.size = 0
 }
 
 // Replay replays the batch contents.
-func (b *batch) Replay(w ethdb.KeyValueWriter) error {
+func (b *v1batch) Replay(w ethdb.KeyValueWriter) error {
 	reader := b.b.Reader()
-
 	for {
 		kind, k, v, ok, err := reader.Next()
 		if !ok || err != nil {
@@ -929,162 +697,57 @@ func (b *batch) Replay(w ethdb.KeyValueWriter) error {
 	}
 }
 
-// pebbleIterator is a wrapper of underlying iterator in storage engine.
+// Close closes the batch and releases all associated resources. After it is
+// closed, any subsequent operations on this batch are undefined.
+func (b *v1batch) Close() {
+	b.b.Close()
+}
+
+// v1pebbleIterator is a wrapper of underlying iterator in storage engine.
 // The purpose of this structure is to implement the missing APIs.
 //
-// The pebble iterator is not thread-safe.
-type pebbleIterator struct {
+// The v1pebbleIterator is not thread-safe.
+type v1pebbleIterator struct {
 	iter     *pebble.Iterator
 	moved    bool
 	released bool
 }
 
-// NewIterator creates a binary-alphabetical iterator over a subset
-// of database content with a particular key prefix, starting at a particular
-// initial key (or after, if it does not exist).
-func (d *Database) NewIterator(prefix []byte, start []byte) ethdb.Iterator {
-	iter, _ := d.db.NewIter(&pebble.IterOptions{
-		LowerBound: append(prefix, start...),
-		UpperBound: upperBound(prefix),
-	})
-	iter.First()
-	return &pebbleIterator{iter: iter, moved: true, released: false}
-}
-
 // Next moves the iterator to the next key/value pair. It returns whether the
 // iterator is exhausted.
-func (iter *pebbleIterator) Next() bool {
+func (iter *v1pebbleIterator) Next() bool {
 	if iter.moved {
 		iter.moved = false
 		return iter.iter.Valid()
 	}
-
 	return iter.iter.Next()
 }
 
 // Error returns any accumulated error. Exhausting all the key/value pairs
 // is not considered to be an error.
-func (iter *pebbleIterator) Error() error {
+func (iter *v1pebbleIterator) Error() error {
 	return iter.iter.Error()
 }
 
 // Key returns the key of the current key/value pair, or nil if done. The caller
 // should not modify the contents of the returned slice, and its contents may
 // change on the next call to Next.
-func (iter *pebbleIterator) Key() []byte {
+func (iter *v1pebbleIterator) Key() []byte {
 	return iter.iter.Key()
 }
 
 // Value returns the value of the current key/value pair, or nil if done. The
 // caller should not modify the contents of the returned slice, and its contents
 // may change on the next call to Next.
-func (iter *pebbleIterator) Value() []byte {
+func (iter *v1pebbleIterator) Value() []byte {
 	return iter.iter.Value()
 }
 
 // Release releases associated resources. Release should always succeed and can
 // be called multiple times without causing error.
-func (iter *pebbleIterator) Release() {
+func (iter *v1pebbleIterator) Release() {
 	if !iter.released {
 		iter.iter.Close()
 		iter.released = true
 	}
-}
-
-// updateCalculatedAmplifications calculates and updates custom amplification metrics
-func (d *Database) updateCalculatedAmplifications(stats *pebble.Metrics) {
-	// Calculate Write Amplification for the database
-	calcWriteAmp := d.calculateDatabaseWriteAmp(stats)
-	if calcWriteAmp >= 0 {
-		d.calcWriteAmpGauge.Update(calcWriteAmp)
-	}
-
-	// Calculate WAL Write Amplification
-	walWriteAmp := d.calculateWALWriteAmp(stats)
-	if walWriteAmp >= 0 {
-		d.walWriteAmpGauge.Update(walWriteAmp)
-	}
-
-	// Calculate Read Amplification (same as Pebble's built-in metric)
-	// This represents how many levels/sublevels need to be checked for a read
-	readAmp := float64(stats.ReadAmp())
-	d.calcReadAmpGauge.Update(readAmp)
-
-	// Calculate Space Amplification: Total disk space / Actual user data size
-	// This represents how much extra space is used compared to the logical data size
-	diskSpaceUsed := int64(stats.DiskSpaceUsage())
-
-	// Calculate actual user data size (sum of all live SST file sizes)
-	// This excludes obsolete files, WAL files, and internal metadata
-	// level.Size is the CURRENT live size, which already accounts for deleted files
-	var actualDataSize int64
-	for _, level := range stats.Levels {
-		actualDataSize += level.Size
-	}
-
-	d.actualDataSizeGauge.Update(actualDataSize)
-
-	if actualDataSize > 0 {
-		// Space Amp = Total disk usage / Live data size
-		// A value of 1.0 means no amplification (ideal)
-		// A value of 2.0 means using 2x the space of actual data
-		spaceAmp := float64(diskSpaceUsed) / float64(actualDataSize)
-		d.calcSpaceAmpGauge.Update(spaceAmp)
-	}
-}
-
-// calculateDatabaseWriteAmp calculates the write amplification for database writes.
-func (d *Database) calculateDatabaseWriteAmp(stats *pebble.Metrics) float64 {
-	var totalBytesIn uint64
-	for _, level := range stats.Levels {
-		totalBytesIn += level.BytesIn
-	}
-
-	if totalBytesIn == 0 {
-		return -1
-	}
-
-	// Calculate SST writes (cumulative)
-	var totalSSTWrites uint64
-	for _, level := range stats.Levels {
-		totalSSTWrites += level.BytesFlushed + level.BytesCompacted
-	}
-
-	// WAL.BytesWritten is the cumulative physical bytes written to .log files
-	// This already includes:
-	// - Record headers and checksums
-	// - Batching overhead
-	// - fsync/sync overhead
-	//
-	// But it does NOT include:
-	// - Block alignment padding
-	// - Pre-allocated space
-	// - Recycled file space
-	//
-	// The ratio BytesWritten/BytesIn gives us the WAL encoding overhead
-	walBytesWritten := stats.WAL.BytesWritten
-
-	// Calculate total physical writes
-	totalPhysicalWrites := walBytesWritten + totalSSTWrites
-
-	// Write Amplification = Total physical writes / Logical user input
-	writeAmp := float64(totalPhysicalWrites) / float64(totalBytesIn)
-
-	return writeAmp
-}
-
-// calculateWALWriteAmp calculates WAL-specific write amplification
-func (d *Database) calculateWALWriteAmp(stats *pebble.Metrics) float64 {
-	if stats.WAL.BytesIn == 0 {
-		return -1
-	}
-
-	// WAL write amplification = Physical writes / Logical application writes
-	// This captures the overhead from:
-	// - WAL record format (headers, checksums)
-	// - Batching (multiple logical writes in one physical write)
-	// - Sync overhead
-	walWriteAmp := float64(stats.WAL.BytesWritten) / float64(stats.WAL.BytesIn)
-
-	return walWriteAmp
 }
