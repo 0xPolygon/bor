@@ -25,6 +25,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/eth/downloader"
+	"github.com/ethereum/go-ethereum/eth/downloader/whitelist"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/log"
 )
@@ -140,7 +141,7 @@ func (cs *chainSyncer) onSyncDone(err error) {
 	cs.force.Reset(forceSyncCycle)
 	cs.forced = false
 
-	if errors.Is(err, downloader.ErrPeersUnavailable) || errors.Is(err, downloader.ErrPeerBackedOff) {
+	if errors.Is(err, downloader.ErrPeersUnavailable) || errors.Is(err, downloader.ErrPeerBackedOff) || errors.Is(err, whitelist.ErrNoRemote) {
 		cs.peersUnavailableUntil = time.Now().Add(forceSyncCycle)
 		cs.peersUnavailableAtCount = cs.handler.peers.len()
 	} else {

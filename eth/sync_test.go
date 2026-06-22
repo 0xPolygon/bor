@@ -27,6 +27,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/downloader"
+	"github.com/ethereum/go-ethereum/eth/downloader/whitelist"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/eth/protocols/snap"
 	"github.com/ethereum/go-ethereum/p2p"
@@ -160,6 +161,25 @@ func TestChainSyncerCoolsOffOnPeerBackedOff(t *testing.T) {
 	syncer.onSyncDone(downloader.ErrPeerBackedOff)
 	if op, wait := syncer.nextSyncOp(); op != nil || wait <= 0 {
 		t.Fatalf("ErrPeerBackedOff must arm the retry cooldown, got op=%v wait=%v", op, wait)
+	}
+}
+
+func TestChainSyncerCoolsOffOnNoRemote(t *testing.T) {
+	handler, cleanup := newChainSyncerTestHandler(t)
+	defer cleanup()
+
+	syncer := newChainSyncer(handler)
+	syncer.force = time.NewTimer(forceSyncCycle)
+	defer syncer.force.Stop()
+
+	peer := registerPeerWithTD(t, handler.peers, 1_000_000)
+	if err := handler.downloader.RegisterPeer(peer.ID(), eth.ETH68, &ethPeer{Peer: peer}); err != nil {
+		t.Fatal(err)
+	}
+
+	syncer.onSyncDone(whitelist.ErrNoRemote)
+	if op, wait := syncer.nextSyncOp(); op != nil || wait <= 0 {
+		t.Fatalf("ErrNoRemote must arm the retry cooldown without benching, got op=%v wait=%v", op, wait)
 	}
 }
 

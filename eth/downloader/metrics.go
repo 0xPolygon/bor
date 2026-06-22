@@ -50,4 +50,5 @@ var (
 	peerDropResponseMeter = metrics.NewRegisteredMeter("eth/downloader/peer/response/drop", nil)
 	peerSoftBackoffMeter  = metrics.NewRegisteredMeter("eth/downloader/peer/response/backoff", nil)
 	peerMismatchMeter     = metrics.NewRegisteredMeter("eth/downloader/peer/response/mismatch", nil)
+	peerGhostStateMeter   = metrics.NewRegisteredMeter("eth/downloader/peer/response/ghoststate", nil)
 )

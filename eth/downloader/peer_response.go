@@ -170,6 +170,8 @@ func (d *Downloader) respondToPeer(peer *peerConnection, reason peerFailureReaso
 		d.escalateGhostState(peer, decision, err)
 	case peerResponseDrop:
 		d.dropPeerForResponse(peer, decision.reason, err)
+	case peerResponseNone:
+		peer.log.Warn("Synchronisation stalled, no peer action taken", "reason", reason, "err", err)
 	}
 }
 
@@ -211,12 +213,12 @@ func (d *Downloader) escalateMismatch(peer *peerConnection, decision peerRespons
 		d.jailPeer(peer, peerJailBackoff, decision.reason, err)
 	default:
 		d.benchPeer(peer, decision.backoff)
-		peerSoftBackoffMeter.Mark(1)
 		peer.log.Warn("Downloader: backing off peer after whitelist mismatch", "reason", decision.reason, "err", err, "strikes", strikes, "requested", common.PrettyDuration(decision.backoff), "effective", common.PrettyDuration(peer.backoffRemaining()))
 	}
 }
 
 func (d *Downloader) escalateGhostState(peer *peerConnection, decision peerResponseDecision, err error) {
+	peerGhostStateMeter.Mark(1)
 	strikes := d.peers.recordGhostState(peer.id, time.Now())
 	if strikes >= prunedSidechainDropThreshold {
 		d.peers.clearGhostStates(peer.id)
@@ -242,7 +244,7 @@ func (p *peerConnection) responseDecision(reason peerFailureReason) peerResponse
 	case peerFailureWhitelistMismatch:
 		decision.action = peerResponseMismatch
 		decision.backoff = peerSoftBackoff
-	case peerFailureTimeout, peerFailureStalling, peerFailureUnsynced, peerFailureEmptyHeaderSet, peerFailureTooOld, peerFailureDisconnected, peerFailureNoRemote:
+	case peerFailureTimeout, peerFailureStalling, peerFailureUnsynced, peerFailureEmptyHeaderSet, peerFailureTooOld, peerFailureDisconnected:
 		decision.action = peerResponseBackoff
 		decision.backoff = peerSoftBackoff
 	default:

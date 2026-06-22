@@ -58,7 +58,7 @@ func TestClassifySyncFailureReasons(t *testing.T) {
 		{name: "pruned sidechain wins over wrapped deadline", err: fmt.Errorf("%w: %s: %w", errInvalidChain, sidechainGhostStateMsg, context.DeadlineExceeded), reason: peerFailurePrunedSidechain, ok: true},
 		{name: "whitelist mismatch wrapped in invalid chain", err: fmt.Errorf("%w: %w", errInvalidChain, whitelist.ErrMismatch), reason: peerFailureWhitelistMismatch, ok: true},
 		{name: "bare whitelist mismatch", err: whitelist.ErrMismatch, reason: peerFailureWhitelistMismatch, ok: true},
-		{name: "whitelist no remote backs off", err: whitelist.ErrNoRemote, reason: peerFailureNoRemote, ok: true},
+		{name: "whitelist no remote classified", err: whitelist.ErrNoRemote, reason: peerFailureNoRemote, ok: true},
 		{name: "whitelist mismatch wins over invalid chain", err: fmt.Errorf("retrieved hash chain is invalid: %w: %w", errInvalidChain, whitelist.ErrMismatch), reason: peerFailureWhitelistMismatch, ok: true},
 		{name: "wrapped peers unavailable is not a chain fault", err: fmt.Errorf("%w: %w", errInvalidChain, ErrPeersUnavailable), reason: peerFailurePeersUnavailable, ok: true},
 		{name: "wrapped no peers is not a chain fault", err: fmt.Errorf("%w: %w", errInvalidChain, errNoPeers), reason: peerFailurePeersUnavailable, ok: true},
@@ -109,7 +109,7 @@ func TestPeerResponseDecisionActions(t *testing.T) {
 		{name: "backoff unsynced", reason: peerFailureUnsynced, action: peerResponseBackoff, backoff: peerSoftBackoff},
 		{name: "backoff empty header set", reason: peerFailureEmptyHeaderSet, action: peerResponseBackoff, backoff: peerSoftBackoff},
 		{name: "backoff disconnected", reason: peerFailureDisconnected, action: peerResponseBackoff, backoff: peerSoftBackoff},
-		{name: "backoff no remote", reason: peerFailureNoRemote, action: peerResponseBackoff, backoff: peerSoftBackoff},
+		{name: "no remote is no-op", reason: peerFailureNoRemote, action: peerResponseNone},
 		{name: "ignore peers unavailable", reason: peerFailurePeersUnavailable, action: peerResponseNone},
 		{name: "ignore unknown reason", reason: peerFailureReason("unclassified"), action: peerResponseNone},
 	}
