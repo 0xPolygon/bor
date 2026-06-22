@@ -172,6 +172,9 @@ func queueAcceptsPeer(queue typedQueue, peer *peerConnection) bool {
 }
 
 func (d *Downloader) gradeStalePeer(queue typedQueue, peer *peerConnection, stale *eth.Request) bool {
+	if stale.Sent.IsZero() {
+		stale.Sent = time.Now()
+	}
 	waited := time.Since(stale.Sent)
 	if waited <= timeoutGracePeriod {
 		return false
