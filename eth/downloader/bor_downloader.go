@@ -436,7 +436,7 @@ func (d *Downloader) LegacySync(id string, head common.Hash, td, ttd *big.Int, m
 	}
 
 	// Warn in case of any error thrown by whitelisting module
-	if errors.Is(err, whitelist.ErrNoRemote) || errors.Is(err, whitelist.ErrLongFutureChain) {
+	if errors.Is(err, whitelist.ErrLongFutureChain) {
 		log.Warn("Synchronisation failed due to whitelist validation", "peer", id, "err", err)
 		return err
 	}
@@ -2391,7 +2391,7 @@ func (d *Downloader) importBlockResultsStateless(results []*fetchResult) error {
 	// Import the batch of blocks
 	if index, err := d.blockchain.InsertChainStateless(blocks, witnesses); err != nil {
 		log.Warn("Invalid block body", "index", index, "hash", blocks[index].Hash(), "err", err)
-		return errInvalidBody // Or a more specific error if possible
+		return fmt.Errorf("%w: %w", errInvalidChain, err)
 	}
 
 	return nil

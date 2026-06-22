@@ -1083,6 +1083,7 @@ func testBlockHeaderAttackerDropping(t *testing.T, protocol uint) {
 		},
 		{name: "invalid body", result: errInvalidBody},
 		{name: "invalid receipt", result: errInvalidReceipt},
+		{name: "no ancestor found", result: errNoAncestorFound, backoff: true},
 		{name: "content processing canceled", result: errCancelContentProcessing},
 	}
 	// Run the tests and check disconnection status

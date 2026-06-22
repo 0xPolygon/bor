@@ -58,6 +58,7 @@ func TestClassifySyncFailureReasons(t *testing.T) {
 		{name: "pruned sidechain wins over wrapped deadline", err: fmt.Errorf("%w: %s: %w", errInvalidChain, sidechainGhostStateMsg, context.DeadlineExceeded), reason: peerFailurePrunedSidechain, ok: true},
 		{name: "whitelist mismatch wrapped in invalid chain", err: fmt.Errorf("%w: %w", errInvalidChain, whitelist.ErrMismatch), reason: peerFailureWhitelistMismatch, ok: true},
 		{name: "bare whitelist mismatch", err: whitelist.ErrMismatch, reason: peerFailureWhitelistMismatch, ok: true},
+		{name: "whitelist no remote backs off", err: whitelist.ErrNoRemote, reason: peerFailureNoRemote, ok: true},
 		{name: "whitelist mismatch wins over invalid chain", err: fmt.Errorf("retrieved hash chain is invalid: %w: %w", errInvalidChain, whitelist.ErrMismatch), reason: peerFailureWhitelistMismatch, ok: true},
 		{name: "wrapped peers unavailable is not a chain fault", err: fmt.Errorf("%w: %w", errInvalidChain, ErrPeersUnavailable), reason: peerFailurePeersUnavailable, ok: true},
 		{name: "wrapped no peers is not a chain fault", err: fmt.Errorf("%w: %w", errInvalidChain, errNoPeers), reason: peerFailurePeersUnavailable, ok: true},
@@ -68,8 +69,10 @@ func TestClassifySyncFailureReasons(t *testing.T) {
 		{name: "invalid chain with deadline text is not downgraded", err: fmt.Errorf("%w: %v", errInvalidChain, errors.New("invalid merkle root: "+context.DeadlineExceeded.Error())), reason: peerFailureInvalidChain, ok: true},
 		{name: "bad peer with deadline text is not downgraded", err: fmt.Errorf("%w: %v", errBadPeer, errors.New("served garbage: "+context.DeadlineExceeded.Error())), reason: peerFailureBadPeer, ok: true},
 		{name: "invalid ancestor with deadline text is not downgraded", err: fmt.Errorf("%w: %v", errInvalidAncestor, errors.New(context.DeadlineExceeded.Error())), reason: peerFailureInvalidAncestor, ok: true},
-		{name: "ghost-state text without invalid chain is unclassified", err: errors.New(sidechainGhostStateMsg)},
-		{name: "unclassified", err: errInvalidBody},
+		{name: "ghost-state text alone is pruned sidechain", err: errors.New(sidechainGhostStateMsg), reason: peerFailurePrunedSidechain, ok: true},
+		{name: "no ancestor backs off", err: errNoAncestorFound, reason: peerFailureUnsynced, ok: true},
+		{name: "invalid body handled at delivery is unclassified", err: errInvalidBody},
+		{name: "unclassified generic", err: errors.New("some unrelated failure")},
 		{name: "nil"},
 	}
 
@@ -106,6 +109,7 @@ func TestPeerResponseDecisionActions(t *testing.T) {
 		{name: "backoff unsynced", reason: peerFailureUnsynced, action: peerResponseBackoff, backoff: peerSoftBackoff},
 		{name: "backoff empty header set", reason: peerFailureEmptyHeaderSet, action: peerResponseBackoff, backoff: peerSoftBackoff},
 		{name: "backoff disconnected", reason: peerFailureDisconnected, action: peerResponseBackoff, backoff: peerSoftBackoff},
+		{name: "backoff no remote", reason: peerFailureNoRemote, action: peerResponseBackoff, backoff: peerSoftBackoff},
 		{name: "ignore peers unavailable", reason: peerFailurePeersUnavailable, action: peerResponseNone},
 		{name: "ignore unknown reason", reason: peerFailureReason("unclassified"), action: peerResponseNone},
 	}

@@ -64,6 +64,7 @@ const (
 	peerFailureInvalidAncestor   peerFailureReason = "invalid-ancestor"
 	peerFailureWhitelistMismatch peerFailureReason = "whitelist-mismatch"
 	peerFailureDisconnected      peerFailureReason = "disconnected"
+	peerFailureNoRemote          peerFailureReason = "whitelist-no-remote"
 )
 
 type peerResponseAction uint8
@@ -113,6 +114,8 @@ func classifySyncFailure(err error) (peerFailureReason, bool) {
 		return peerFailureDisconnected, true
 	case isWhitelistMismatch(err):
 		return peerFailureWhitelistMismatch, true
+	case errors.Is(err, whitelist.ErrNoRemote):
+		return peerFailureNoRemote, true
 	case errors.Is(err, ErrPeersUnavailable), errors.Is(err, errNoPeers):
 		return peerFailurePeersUnavailable, true
 	case errors.Is(err, errInvalidChain):
@@ -121,7 +124,7 @@ func classifySyncFailure(err error) (peerFailureReason, bool) {
 		return peerFailureBadPeer, true
 	case errors.Is(err, errStallingPeer):
 		return peerFailureStalling, true
-	case errors.Is(err, errUnsyncedPeer):
+	case errors.Is(err, errUnsyncedPeer), errors.Is(err, errNoAncestorFound):
 		return peerFailureUnsynced, true
 	case errors.Is(err, errEmptyHeaderSet):
 		return peerFailureEmptyHeaderSet, true
@@ -239,7 +242,7 @@ func (p *peerConnection) responseDecision(reason peerFailureReason) peerResponse
 	case peerFailureWhitelistMismatch:
 		decision.action = peerResponseMismatch
 		decision.backoff = peerSoftBackoff
-	case peerFailureTimeout, peerFailureStalling, peerFailureUnsynced, peerFailureEmptyHeaderSet, peerFailureTooOld, peerFailureDisconnected:
+	case peerFailureTimeout, peerFailureStalling, peerFailureUnsynced, peerFailureEmptyHeaderSet, peerFailureTooOld, peerFailureDisconnected, peerFailureNoRemote:
 		decision.action = peerResponseBackoff
 		decision.backoff = peerSoftBackoff
 	default:
@@ -263,5 +266,5 @@ func (d *Downloader) dropPeerForResponse(peer *peerConnection, reason peerFailur
 const sidechainGhostStateMsg = "sidechain ghost-state attack"
 
 func isPrunedSidechainMismatch(err error) bool {
-	return err != nil && errors.Is(err, errInvalidChain) && strings.Contains(err.Error(), sidechainGhostStateMsg)
+	return err != nil && strings.Contains(err.Error(), sidechainGhostStateMsg)
 }

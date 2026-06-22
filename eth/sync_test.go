@@ -144,6 +144,58 @@ func TestChainSyncerArmsRetryForBenchedHigherTDPeer(t *testing.T) {
 	}
 }
 
+func TestChainSyncerCoolsOffOnPeerBackedOff(t *testing.T) {
+	handler, cleanup := newChainSyncerTestHandler(t)
+	defer cleanup()
+
+	syncer := newChainSyncer(handler)
+	syncer.force = time.NewTimer(forceSyncCycle)
+	defer syncer.force.Stop()
+
+	peer := registerPeerWithTD(t, handler.peers, 1_000_000)
+	if err := handler.downloader.RegisterPeer(peer.ID(), eth.ETH68, &ethPeer{Peer: peer}); err != nil {
+		t.Fatal(err)
+	}
+
+	syncer.onSyncDone(downloader.ErrPeerBackedOff)
+	if op, wait := syncer.nextSyncOp(); op != nil || wait <= 0 {
+		t.Fatalf("ErrPeerBackedOff must arm the retry cooldown, got op=%v wait=%v", op, wait)
+	}
+}
+
+func TestChainSyncerCooldownSurvivesBlockAnnounce(t *testing.T) {
+	handler, cleanup := newChainSyncerTestHandler(t)
+	defer cleanup()
+
+	syncer := newChainSyncer(handler)
+	syncer.force = time.NewTimer(forceSyncCycle)
+	defer syncer.force.Stop()
+
+	peer := registerPeerWithTD(t, handler.peers, 1_000_000)
+	if err := handler.downloader.RegisterPeer(peer.ID(), eth.ETH68, &ethPeer{Peer: peer}); err != nil {
+		t.Fatal(err)
+	}
+
+	syncer.onSyncDone(downloader.ErrPeersUnavailable)
+	if syncer.peersUnavailableUntil.IsZero() {
+		t.Fatal("cooldown should be armed after ErrPeersUnavailable")
+	}
+
+	syncer.onPeerEvent()
+	if syncer.peersUnavailableUntil.IsZero() {
+		t.Fatal("a peer event with no peer-set change (e.g. a block announce) must not clear the cooldown")
+	}
+
+	peer2 := registerPeerWithTD(t, handler.peers, 2_000_000)
+	if err := handler.downloader.RegisterPeer(peer2.ID(), eth.ETH68, &ethPeer{Peer: peer2}); err != nil {
+		t.Fatal(err)
+	}
+	syncer.onPeerEvent()
+	if !syncer.peersUnavailableUntil.IsZero() {
+		t.Fatal("a genuine peer-set change must clear the cooldown")
+	}
+}
+
 func TestChainSyncerLoopRetriesBackedOffPeer(t *testing.T) {
 	handler, cleanup := newChainSyncerTestHandler(t)
 	defer cleanup()
