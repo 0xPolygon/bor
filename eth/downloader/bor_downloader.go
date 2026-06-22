@@ -2390,7 +2390,7 @@ func (d *Downloader) importBlockResultsStateless(results []*fetchResult) error {
 	}
 	// Import the batch of blocks
 	if index, err := d.blockchain.InsertChainStateless(blocks, witnesses); err != nil {
-		log.Warn("Invalid block body", "index", index, "hash", blocks[index].Hash(), "err", err)
+		log.Warn("Stateless block import failed", "index", index, "hash", blocks[index].Hash(), "err", err)
 		return fmt.Errorf("%w: %w", errInvalidChain, err)
 	}
 
