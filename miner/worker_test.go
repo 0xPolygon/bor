@@ -1034,14 +1034,10 @@ func TestCommitInterruptExperimentBor_NewTxFlow(t *testing.T) {
 
 	// Ensure that the last block was 3 and only 2/3 transactions are mined because
 	// of the 500ms timeout and 1s block time.
-	// Access w.current safely using getCurrent()
-	current := w.getCurrent()
-	if current == nil || current.header == nil {
-		t.Fatal("worker current state is not initialized")
-	}
-	assert.Equal(t, current.header.Number.Uint64(), uint64(3))
-	assert.Equal(t, current.tcount, 2)
-	assert.Equal(t, len(current.txs), 2)
+	require.Eventually(t, func() bool {
+		block := w.pendingBlock()
+		return block != nil && block.NumberU64() == 3 && block.Transactions().Len() == 2
+	}, 2*time.Second, 10*time.Millisecond, "expected pending block 3 with 2 transactions")
 }
 
 // nolint:paralleltest
