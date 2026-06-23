@@ -928,6 +928,11 @@ func (w *worker) mainLoop() {
 				if delay <= 0 {
 					continue
 				}
+                                if len(ev.Txs) == 0 {
+                                        w.newTxs.Add(0)
+                                        continue
+                                }
+
 				txs := make(map[common.Address][]*txpool.LazyTransaction, len(ev.Txs))
 				for _, tx := range ev.Txs {
 					acc, _ := types.Sender(w.current.signer, tx)
