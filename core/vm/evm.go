@@ -19,6 +19,7 @@ package vm
 import (
 	"errors"
 	"math/big"
+	"sync"
 	"sync/atomic"
 
 	"github.com/holiman/uint256"
@@ -45,6 +46,58 @@ type (
 func (evm *EVM) precompile(addr common.Address) (PrecompiledContract, bool) {
 	p, ok := evm.precompiles[addr]
 	return p, ok
+}
+
+// ecrecoverAddr is the precompile address for ecrecover (0x01).
+var ecrecoverAddr = common.BytesToAddress([]byte{0x01})
+
+// runPrecompile runs a precompiled contract with optional ecrecover caching.
+// If the precompile is ecrecover and a shared cache is configured, the cache
+// is checked before the CGo call. The prefetcher populates the cache during
+// warm-up so V2 workers typically hit it, saving ~1µs CGo overhead per call.
+func (evm *EVM) runPrecompile(p PrecompiledContract, addr common.Address, input []byte, gas uint64) ([]byte, uint64, error) {
+	cache := evm.Config.EcrecoverCache
+	if cache == nil || addr != ecrecoverAddr || len(input) > 128 {
+		return RunPrecompiledContract(p, input, gas, evm.Config.Tracer)
+	}
+	return evm.runEcrecoverWithCache(p, input, gas, cache)
+}
+
+// runEcrecoverWithCache handles the cached fast path for the ecrecover
+// precompile: input ≤ 128 bytes, cache present. Falls back to running the
+// precompile when the cache misses, then stores a successful result.
+func (evm *EVM) runEcrecoverWithCache(p PrecompiledContract, input []byte, gas uint64, cache *sync.Map) ([]byte, uint64, error) {
+	// key is zero-initialised; copy fills the prefix and leaves the rest
+	// as zeros, which matches RightPadBytes(input, 128) without the
+	// extra heap allocation. Caller already enforced len(input) <= 128.
+	var key [128]byte
+	copy(key[:], input)
+	if cached, ok := cache.Load(key); ok {
+		gasCost := p.RequiredGas(input)
+		if gas < gasCost {
+			return nil, 0, ErrOutOfGas
+		}
+		evm.traceGasChange(gas, gas-gasCost)
+		gas -= gasCost
+		if cached == nil {
+			return nil, gas, nil
+		}
+		return cached.([]byte), gas, nil
+	}
+	ret, remainingGas, err := RunPrecompiledContract(p, input, gas, evm.Config.Tracer)
+	if err == nil {
+		cache.Store(key, ret)
+	}
+	return ret, remainingGas, err
+}
+
+// traceGasChange emits a precompile gas-charge tracing event when a tracer
+// with OnGasChange is configured.
+func (evm *EVM) traceGasChange(before, after uint64) {
+	if evm.Config.Tracer == nil || evm.Config.Tracer.OnGasChange == nil {
+		return
+	}
+	evm.Config.Tracer.OnGasChange(before, after, tracing.GasChangeCallPrecompiledContract)
 }
 
 // BlockContext provides the EVM with auxiliary information. Once provided
@@ -150,13 +203,17 @@ func (evm *EVM) SetInterrupt(interrupt *atomic.Bool) {
 // state transition of a block, with the transaction context switched as
 // needed by calling evm.SetTxContext.
 func NewEVM(blockCtx BlockContext, statedb StateDB, chainConfig *params.ChainConfig, config Config) *EVM {
+	jd := newMapJumpDests()
+	if config.SharedJumpDestCache != nil {
+		jd = config.SharedJumpDestCache
+	}
 	evm := &EVM{
 		Context:     blockCtx,
 		StateDB:     statedb,
 		Config:      config,
 		chainConfig: chainConfig,
 		chainRules:  chainConfig.Rules(blockCtx.BlockNumber, blockCtx.Random != nil, blockCtx.Time),
-		jumpDests:   newMapJumpDests(),
+		jumpDests:   jd,
 		hasher:      crypto.NewKeccakState(),
 	}
 	evm.precompiles = activePrecompiledContracts(evm.chainRules)
@@ -304,7 +361,7 @@ func (evm *EVM) Call(caller common.Address, addr common.Address, input []byte, g
 	evm.Context.Transfer(evm.StateDB, caller, addr, value)
 
 	if isPrecompile {
-		ret, gas, err = RunPrecompiledContract(p, input, gas, evm.Config.Tracer)
+		ret, gas, err = evm.runPrecompile(p, addr, input, gas)
 	} else {
 		// Initialise a new contract and set the code that is to be used by the EVM.
 		code := evm.resolveCode(addr)
@@ -371,7 +428,7 @@ func (evm *EVM) CallCode(caller common.Address, addr common.Address, input []byt
 
 	// It is allowed to call precompiles, even via delegatecall
 	if p, isPrecompile := evm.precompile(addr); isPrecompile {
-		ret, gas, err = RunPrecompiledContract(p, input, gas, evm.Config.Tracer)
+		ret, gas, err = evm.runPrecompile(p, addr, input, gas)
 	} else {
 		// Initialise a new contract and set the code that is to be used by the EVM.
 		// The contract is a scoped environment for this execution context only.
@@ -417,7 +474,7 @@ func (evm *EVM) DelegateCall(originCaller common.Address, caller common.Address,
 
 	// It is allowed to call precompiles, even via delegatecall
 	if p, isPrecompile := evm.precompile(addr); isPrecompile {
-		ret, gas, err = RunPrecompiledContract(p, input, gas, evm.Config.Tracer)
+		ret, gas, err = evm.runPrecompile(p, addr, input, gas)
 	} else {
 		// Initialise a new contract and make initialise the delegate values
 		//
@@ -472,7 +529,7 @@ func (evm *EVM) StaticCall(caller common.Address, addr common.Address, input []b
 	evm.StateDB.AddBalance(addr, new(uint256.Int), tracing.BalanceChangeTouchAccount)
 
 	if p, isPrecompile := evm.precompile(addr); isPrecompile {
-		ret, gas, err = RunPrecompiledContract(p, input, gas, evm.Config.Tracer)
+		ret, gas, err = evm.runPrecompile(p, addr, input, gas)
 	} else {
 		// Initialise a new contract and set the code that is to be used by the EVM.
 		// The contract is a scoped environment for this execution context only.

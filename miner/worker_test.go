@@ -909,13 +909,21 @@ func testCommitInterruptExperimentBor(t *testing.T, delay uint, txCount int) {
 	// Start mining!
 	w.start()
 
-	// Wait for at least one block to be mined with a proper timeout
+	// Wait for the first non-empty block. Bor can pre-seal an empty block
+	// before the full block, and the test is about the interrupted full-block
+	// path rather than the empty pre-seal event.
 	var minedBlock *types.Block
-	select {
-	case ev := <-sub.Chan():
-		minedBlock = ev.Data.(core.NewMinedBlockEvent).Block
-	case <-time.After(8 * time.Second):
-		t.Fatal("timeout waiting for block to be mined")
+	timeout := time.After(8 * time.Second)
+	for minedBlock == nil {
+		select {
+		case ev := <-sub.Chan():
+			block := ev.Data.(core.NewMinedBlockEvent).Block
+			if block != nil && block.NumberU64() > 0 && block.Transactions().Len() > 0 {
+				minedBlock = block
+			}
+		case <-timeout:
+			t.Fatal("timeout waiting for non-empty block to be mined")
+		}
 	}
 
 	w.stop()
@@ -1026,14 +1034,10 @@ func TestCommitInterruptExperimentBor_NewTxFlow(t *testing.T) {
 
 	// Ensure that the last block was 3 and only 2/3 transactions are mined because
 	// of the 500ms timeout and 1s block time.
-	// Access w.current safely using getCurrent()
-	current := w.getCurrent()
-	if current == nil || current.header == nil {
-		t.Fatal("worker current state is not initialized")
-	}
-	assert.Equal(t, current.header.Number.Uint64(), uint64(3))
-	assert.Equal(t, current.tcount, 2)
-	assert.Equal(t, len(current.txs), 2)
+	require.Eventually(t, func() bool {
+		block := w.pendingBlock()
+		return block != nil && block.NumberU64() == 3 && block.Transactions().Len() == 2
+	}, 2*time.Second, 10*time.Millisecond, "expected pending block 3 with 2 transactions")
 }
 
 // nolint:paralleltest
@@ -2397,7 +2401,12 @@ func TestPrefetchGoroutineLifecycle(t *testing.T) {
 	config.Recommit = 500 * time.Millisecond
 
 	w, b, cleanup := newTestWorker(t, config, chainConfig, engine, db, false, 0)
-	defer cleanup()
+	closed := false
+	defer func() {
+		if !closed {
+			cleanup()
+		}
+	}()
 
 	// Add transactions to keep prefetch busy
 	addTransactionBatch(b, 50, false)
@@ -2424,10 +2433,10 @@ func TestPrefetchGoroutineLifecycle(t *testing.T) {
 		time.Sleep(150 * time.Millisecond)
 	}
 
-	// Stop the worker and wait for cleanup
-	// Increased wait time to allow prefetch goroutines to complete IntermediateRoot
-	w.stop()
-	time.Sleep(3 * time.Second)
+	// Close the worker so its loops cannot enqueue more prefetchers while
+	// prefetch cleanup is being measured.
+	cleanup()
+	closed = true
 
 	// Force garbage collection to surface any use-after-free issues
 	// Extra wait to ensure all goroutines complete after GC
@@ -2640,13 +2649,18 @@ func TestRapidBlockProduction_WithoutWait(t *testing.T) {
 	w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, 100, 200*time.Millisecond)
 	defer engine.Close()
 	defer ctrl.Finish()
+	closed := false
+	defer func() {
+		if !closed {
+			w.close()
+		}
+	}()
 
 	// Add many transactions
 	addTransactionBatch(b, 500, false)
 	time.Sleep(200 * time.Millisecond)
 
 	w.start()
-	defer w.stop()
 
 	goroutinesBefore := runtime.NumGoroutine()
 	t.Logf("Goroutines before test: %d", goroutinesBefore)
@@ -2673,7 +2687,8 @@ func TestRapidBlockProduction_WithoutWait(t *testing.T) {
 
 	wg.Wait()
 	t.Log("All block production requests sent, waiting for prefetch to complete...")
-	time.Sleep(5 * time.Second) // Let all prefetch complete
+	w.close()
+	closed = true
 
 	// Check for panics
 	panicCount := prefetchPanicMeter.Snapshot().Count()
@@ -3814,4 +3829,137 @@ func TestVMConfigTracerStripped(t *testing.T) {
 	got := w.vmConfig()
 	require.Nil(t, got.Tracer, "vmConfig() must strip the tracer so the miner does not conflict with live tracing")
 	require.Same(t, sentinel, b.chain.GetVMConfig().Tracer, "chain VMConfig tracer must remain unchanged after vmConfig() call")
+}
+
+// newCliqueWorkerForSizeTest spins up a clique-backed worker suitable for
+// driving commitTransaction directly. Clique is used (rather than the Bor
+// fake) because the size-tracking logic in commitTransaction is
+// consensus-agnostic and clique avoids the heimdall/span mocking surface.
+func newCliqueWorkerForSizeTest(t *testing.T) (*worker, *testWorkerBackend) {
+	t.Helper()
+
+	chainConfig := *params.AllCliqueProtocolChanges
+	chainConfig.Clique = &params.CliqueConfig{Period: 1, Epoch: 30000}
+	db := rawdb.NewMemoryDatabase()
+	engine := clique.New(chainConfig.Clique, db)
+	t.Cleanup(func() { engine.Close() })
+
+	w, b, _ := newTestWorker(t, DefaultTestConfig(), &chainConfig, engine, db, false, 0)
+	t.Cleanup(w.close)
+	return w, b
+}
+
+// newSizeTestEnv builds a fresh sealing environment and pre-loads its gas
+// pool so commitTransaction can run against it without the wider
+// commitTransactions wrapper. The caller owns env.discard().
+func newSizeTestEnv(t *testing.T, w *worker) *environment {
+	t.Helper()
+
+	env, err := w.prepareWork(&generateParams{
+		timestamp: uint64(time.Now().Unix()),
+		coinbase:  testBankAddress,
+	}, false)
+	require.NoError(t, err)
+
+	env.gasPool = new(core.GasPool).AddGas(env.header.GasLimit)
+	return env
+}
+
+// TestCommitTransactionUpdatesEnvSize verifies that commitTransaction grows
+// env.size by exactly tx.Size() for each successfully applied transaction.
+// This is the regression guard for the block size cap enforced by
+// txFitsSize: if env.size is not updated after each commit, the producer
+// would keep packing past params.MaxBlockSize.
+func TestCommitTransactionUpdatesEnvSize(t *testing.T) {
+	w, b := newCliqueWorkerForSizeTest(t)
+
+	env := newSizeTestEnv(t, w)
+	defer env.discard()
+
+	initialSize := env.size
+	require.Greater(t, initialSize, uint64(0), "env.size should be seeded with header size")
+
+	tx1 := b.newRandomTxWithNonce(false, 0)
+	_, err := w.commitTransaction(env, tx1)
+	require.NoError(t, err)
+	require.Equal(t, initialSize+tx1.Size(), env.size, "env.size should grow by tx1.Size()")
+	require.Equal(t, 1, env.tcount)
+	require.Len(t, env.txs, 1)
+
+	tx2 := b.newRandomTxWithNonce(false, 1)
+	_, err = w.commitTransaction(env, tx2)
+	require.NoError(t, err)
+	require.Equal(t, initialSize+tx1.Size()+tx2.Size(), env.size, "env.size should accumulate across commits")
+	require.Equal(t, 2, env.tcount)
+	require.Len(t, env.txs, 2)
+}
+
+// TestCommitTransactionDoesNotUpdateEnvSizeOnError verifies that env.size is
+// only credited for transactions that successfully apply. A reverted
+// transaction must not consume budget against the block size cap, which is
+// why the increment lives after the ApplyTransaction error check.
+func TestCommitTransactionDoesNotUpdateEnvSizeOnError(t *testing.T) {
+	w, _ := newCliqueWorkerForSizeTest(t)
+
+	env := newSizeTestEnv(t, w)
+	defer env.discard()
+
+	initialSize := env.size
+
+	// Nonce far above the sender's account nonce makes ApplyTransaction
+	// fail with ErrNonceTooHigh, hitting commitTransaction's error path.
+	badTx, err := types.SignTx(
+		types.NewTransaction(999, testUserAddress, big.NewInt(1), params.TxGas, big.NewInt(int64(params.InitialBaseFee)), nil),
+		types.HomesteadSigner{},
+		testBankKey,
+	)
+	require.NoError(t, err)
+
+	_, err = w.commitTransaction(env, badTx)
+	require.Error(t, err)
+	require.Equal(t, initialSize, env.size, "env.size must be unchanged when commitTransaction returns an error")
+	require.Equal(t, 0, env.tcount, "env.tcount must stay zero on error")
+	require.Len(t, env.txs, 0, "env.txs must stay empty on error")
+}
+
+// TestTxFitsSize exercises the txFitsSize cap against env.size near the
+// effective threshold (params.MaxBlockSize - maxBlockSizeBufferZone).
+// Combined with TestCommitTransactionUpdatesEnvSize (which proves
+// env.size is actually advanced), this confirms the cap is reachable in
+// practice rather than always passing because env.size never grows.
+func TestTxFitsSize(t *testing.T) {
+	signer := types.LatestSigner(params.TestChainConfig)
+	tx := types.MustSignNewTx(testBankKey, signer, &types.LegacyTx{
+		Nonce:    0,
+		To:       &testUserAddress,
+		Value:    big.NewInt(1000),
+		Gas:      params.TxGas,
+		GasPrice: big.NewInt(int64(params.InitialBaseFee)),
+	})
+	txSize := tx.Size()
+	require.Greater(t, txSize, uint64(0))
+	require.Less(t, txSize, uint64(params.MaxBlockSize))
+
+	// Derive the threshold from the constant so the table stays correct
+	// if the buffer-zone value is retuned in the future.
+	threshold := uint64(params.MaxBlockSize - maxBlockSizeBufferZone)
+	require.Greater(t, threshold, txSize, "buffer-zone leaves no room for a single tx in this test")
+
+	cases := []struct {
+		name string
+		size uint64
+		want bool
+	}{
+		{"empty env accepts tx", 0, true},
+		{"plenty of room accepts tx", threshold / 2, true},
+		{"one byte under threshold accepts tx", threshold - txSize - 1, true},
+		{"exactly at threshold rejects tx", threshold - txSize, false},
+		{"over threshold rejects tx", threshold, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := &environment{size: tc.size}
+			require.Equal(t, tc.want, env.txFitsSize(tx))
+		})
+	}
 }

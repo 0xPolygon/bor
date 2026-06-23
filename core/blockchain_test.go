@@ -6027,14 +6027,136 @@ func TestSplitReceiptsAndDeriveFields(t *testing.T) {
 		}
 		encoded, _ := rlp.EncodeToBytes(allReceipts)
 		if len(allReceipts) == 0 {
-			// Skip encoding, instead just set nil
+			// Skip encoding, instead just set nil. Mirror the normal receipt
+			// encoding to canonical RLP empty list.
 			encoded = nil
+			normalEncoded = rlp.EmptyList
+		} else if len(test.normalReceipts) == 0 && test.stateSyncReceipt != nil {
+			// In case of no normal receipts, mirror the encoding to canonical
+			// RLP empty list.
+			normalEncoded = rlp.EmptyList
 		}
 
 		// Split receipts and assert if the individual list match with the expected receipt data or not
 		normal, stateSync := splitReceiptsAndDeriveFields(encoded, 0, common.Hash{}, &mockBorCfg)
 		require.Equal(t, rlp.RawValue(normalEncoded), normal, fmt.Sprintf("case: %s, normal receipts mismatch, got: %v, expected: %v", test.name, normal, normalEncoded))
 		require.Equal(t, rlp.RawValue(stateSyncEncoded), stateSync, fmt.Sprintf("case: %s, state-sync receipts mismatch, got: %v, expected: %v", test.name, stateSync, stateSyncEncoded))
+	}
+}
+
+// TestInsertReceiptChain_NilReceiptsNormalizedToEmptyList exercises the
+// snap-sync write path: InsertReceiptChain on receiving empty/nil receipts
+// should write canonical RLP empty list (0xc0) to disk matching what
+// writeBlockWithState produces on the live-execution path.
+func TestInsertReceiptChain_NilReceiptsNormalizedToEmptyList(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+
+	cfg := *params.TestChainConfig
+	borCfg := *params.TestChainConfig.Bor
+	borCfg.Sprint = map[string]uint64{"0": 16}
+	borCfg.MadhugiriBlock = big.NewInt(0)
+	cfg.Bor = &borCfg
+
+	var engine consensus.Engine = ethash.NewFaker()
+	gspec := &Genesis{
+		Config:     &cfg,
+		Alloc:      types.GenesisAlloc{},
+		Difficulty: common.Big0,
+	}
+	chain, err := NewBlockChain(db, gspec, engine, nil)
+	if err != nil {
+		t.Fatalf("NewBlockChain: %v", err)
+	}
+	defer chain.Stop()
+
+	_, blocks, _ := GenerateChainWithGenesis(gspec, engine, 1, nil)
+	block := blocks[0]
+	if !block.Header().EmptyReceipts() {
+		t.Fatalf("expected block with empty receipt root")
+	}
+	if types.IsSprintEndBlock(&borCfg, block.NumberU64()) {
+		t.Fatalf("expected non-sprint-end block")
+	}
+
+	if _, err := chain.InsertHeaderChain([]*types.Header{block.Header()}); err != nil {
+		t.Fatalf("InsertHeaderChain: %v", err)
+	}
+	if _, err := chain.InsertReceiptChain([]*types.Block{block}, []rlp.RawValue{nil}, 0); err != nil {
+		t.Fatalf("InsertReceiptChain: %v", err)
+	}
+
+	blob := chain.GetReceiptsRLP(block.Hash())
+	if !bytes.Equal(blob, rlp.EmptyList) {
+		t.Fatalf("expected canonical empty list %x under receipts key, got %x", rlp.EmptyList, blob)
+	}
+
+	receipts := chain.GetRawReceipts(block.Hash(), block.NumberU64())
+	if receipts == nil {
+		t.Fatalf("expected non-nil empty Receipts slice, got nil")
+	}
+	if len(receipts) != 0 {
+		t.Fatalf("expected empty Receipts slice, got %d entries", len(receipts))
+	}
+}
+
+// TestInsertReceiptChain_StateSyncOnlySprintEnd_NormalizesToEmptyList extends the above
+// test with an additional state-sync receipt clubbed with nil/empty normal receipt.
+func TestInsertReceiptChain_StateSyncOnlySprintEnd_NormalizesToEmptyList(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+
+	cfg := *params.TestChainConfig
+	borCfg := *params.TestChainConfig.Bor
+	borCfg.Sprint = map[string]uint64{"0": 1} // every block is sprint-end
+	borCfg.MadhugiriBlock = nil               // pre-Madhugiri throughout
+	cfg.Bor = &borCfg
+
+	var engine consensus.Engine = ethash.NewFaker()
+	gspec := &Genesis{
+		Config:     &cfg,
+		Alloc:      types.GenesisAlloc{},
+		Difficulty: common.Big0,
+	}
+	chain, err := NewBlockChain(db, gspec, engine, nil)
+	if err != nil {
+		t.Fatalf("NewBlockChain: %v", err)
+	}
+	defer chain.Stop()
+
+	_, blocks, _ := GenerateChainWithGenesis(gspec, engine, 1, nil)
+	block := blocks[0]
+	if !types.IsSprintEndBlock(&borCfg, block.NumberU64()) {
+		t.Fatalf("expected sprint-end block at height %d", block.NumberU64())
+	}
+
+	// Build a single-element receipts list containing only a state-sync
+	// receipt (CumulativeGasUsed == 0 triggers the splitter's
+	// isStateSyncReceiptPresent heuristic).
+	stateSync := &types.ReceiptForStorage{
+		Status:            types.ReceiptStatusSuccessful,
+		CumulativeGasUsed: 0,
+	}
+	encoded, err := rlp.EncodeToBytes([]*types.ReceiptForStorage{stateSync})
+	if err != nil {
+		t.Fatalf("encode state-sync receipt: %v", err)
+	}
+
+	if _, err := chain.InsertHeaderChain([]*types.Header{block.Header()}); err != nil {
+		t.Fatalf("InsertHeaderChain: %v", err)
+	}
+	if _, err := chain.InsertReceiptChain([]*types.Block{block}, []rlp.RawValue{encoded}, 0); err != nil {
+		t.Fatalf("InsertReceiptChain: %v", err)
+	}
+
+	blob := chain.GetReceiptsRLP(block.Hash())
+	if !bytes.Equal(blob, rlp.EmptyList) {
+		t.Fatalf("expected canonical empty list %x under receipts key, got %x", rlp.EmptyList, blob)
+	}
+
+	// Sanity-check that the state-sync receipt landed under the bor-receipt
+	// slot rather than being lost during the split.
+	borBlob := rawdb.ReadBorReceiptRLP(db, block.Hash(), block.NumberU64())
+	if len(borBlob) == 0 {
+		t.Fatalf("expected state-sync receipt under bor-receipt key, got empty entry")
 	}
 }
 

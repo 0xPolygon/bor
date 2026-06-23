@@ -38,10 +38,6 @@ type AddressBiasedCache struct {
 	// Set of preloaded addresses for fast lookup
 	preloadedAddrs sync.Map // map[common.Hash]struct{}
 
-	// RW mutex to protect cache operations and prevent race conditions
-	// between async preloading and concurrent reads/writes
-	mu sync.RWMutex
-
 	// Context for canceling preload operations
 	ctx    stdcontext.Context
 	cancel stdcontext.CancelFunc
@@ -216,24 +212,28 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 		// Format: owner (32 bytes) + path
 		key := append(accountHash.Bytes(), item.path...)
 
-		// Atomically check-and-set with mutex protection to prevent race conditions.
-		// We must hold the lock across both the check and the set to guarantee that
-		// no concurrent write from the main execution path can occur between them.
-		c.mu.Lock()
+		// Skip if key already exists to avoid overwriting potentially newer data.
+		// Both Has and Set are thread-safe on fastcache (internal sharding), but
+		// the Has → Set sequence is not atomic: a flusher's Set(newer) can land
+		// between our Has(false) and our Set(older), leaving the cache holding
+		// the stale blob.
+		//
+		// Stale-blob safety has two layers:
+		//   1. reader.Node hash-checks every cache hit. A stale blob produces
+		//      a hash mismatch (Verkle's noHashCheck path is not used by Bor).
+		//   2. On hash mismatch from locCleanCache, reader.Node evicts the
+		//      offending entry and retries from disk (see reader.go's
+		//      evictCachedNode). The cache self-heals on the next read of
+		//      that key — it does not stay poisoned until natural eviction.
+		// Worst case is one extra disk fetch per stale-blob occurrence.
 		if addrCache.Has(key) {
-			// Key already exists, skip to avoid overwriting potentially newer data
-			c.mu.Unlock()
 			continue
 		}
 
-		// Store in cache while holding the lock
 		addrCache.Set(key, nodeData)
 
-		// Update counters while still holding the lock to prevent races
 		entriesLoaded++
 		totalBytesLoaded += nodeSize
-
-		c.mu.Unlock()
 
 		// Log progress periodically
 		if entriesLoaded%logInterval == 0 {
@@ -378,9 +378,6 @@ func (c *AddressBiasedCache) routeCache(key []byte) (*fastcache.Cache, bool) {
 
 // Get retrieves the value for the given key from the appropriate cache
 func (c *AddressBiasedCache) Get(key []byte) []byte {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	cache, isAddressCache := c.routeCache(key)
 	value := cache.Get(nil, key)
 
@@ -398,9 +395,6 @@ func (c *AddressBiasedCache) Get(key []byte) []byte {
 
 // Set stores the key-value pair in the appropriate cache
 func (c *AddressBiasedCache) Set(key, value []byte) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	cache, isAddressCache := c.routeCache(key)
 	cache.Set(key, value)
 
@@ -411,27 +405,18 @@ func (c *AddressBiasedCache) Set(key, value []byte) {
 
 // Has checks if the key exists in the appropriate cache
 func (c *AddressBiasedCache) Has(key []byte) bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	cache, _ := c.routeCache(key)
 	return cache.Has(key)
 }
 
 // Del removes the key from the appropriate cache
 func (c *AddressBiasedCache) Del(key []byte) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	cache, _ := c.routeCache(key)
 	cache.Del(key)
 }
 
 // Reset resets all caches
 func (c *AddressBiasedCache) Reset() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	c.commonCache.Reset()
 	c.addressCaches.Range(func(key, value any) bool {
 		cache := value.(*fastcache.Cache)

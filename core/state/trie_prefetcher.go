@@ -47,6 +47,7 @@ type triePrefetcher struct {
 	fetchers map[string]*subfetcher // Subfetchers for each trie
 	term     chan struct{}          // Channel to signal interruption
 	noreads  bool                   // Whether to ignore state-read-only prefetch requests
+	ioSem    chan struct{}          // Limits concurrent trie I/O to avoid starving execution
 
 	deliveryMissMeter *metrics.Meter
 
@@ -79,6 +80,7 @@ func newTriePrefetcher(db Database, root common.Hash, namespace string, noreads 
 		fetchers: make(map[string]*subfetcher), // Active prefetchers use the fetchers map
 		term:     make(chan struct{}),
 		noreads:  noreads,
+		ioSem:    nil, // No rate limiting — total I/O is the same regardless
 
 		deliveryMissMeter: metrics.GetOrRegisterMeter(prefix+"/deliverymiss", nil),
 
@@ -203,7 +205,7 @@ func (p *triePrefetcher) prefetch(owner common.Hash, root common.Hash, addr comm
 
 	fetcher := p.fetchers[id]
 	if fetcher == nil {
-		fetcher = newSubfetcher(p.db, p.root, owner, root, addr)
+		fetcher = newSubfetcher(p.db, p.root, owner, root, addr, p.ioSem)
 		p.fetchers[id] = fetcher
 	}
 	return fetcher.schedule(addrs, slots, read)
@@ -219,7 +221,7 @@ func (p *triePrefetcher) trie(owner common.Hash, root common.Hash) Trie {
 	// Bail if no trie was prefetched for this root
 	fetcher := p.fetchers[p.trieID(owner, root)]
 	if fetcher == nil {
-		log.Error("Prefetcher missed to load trie", "owner", owner, "root", root)
+		log.Debug("Prefetcher missed to load trie", "owner", owner, "root", root)
 		p.deliveryMissMeter.Mark(1)
 		return nil
 	}
@@ -264,6 +266,7 @@ type subfetcher struct {
 	root  common.Hash    // Root hash of the trie to prefetch
 	addr  common.Address // Address of the account that the trie belongs to
 	trie  Trie           // Trie being populated with nodes
+	ioSem chan struct{}  // Shared semaphore limiting concurrent trie I/O
 
 	tasks []*subfetcherTask // Items queued up for retrieval
 	lock  sync.Mutex        // Lock protecting the task queue
@@ -298,13 +301,28 @@ type subfetcherTask struct {
 
 // newSubfetcher creates a goroutine to prefetch state items belonging to a
 // particular root hash.
-func newSubfetcher(db Database, state common.Hash, owner common.Hash, root common.Hash, addr common.Address) *subfetcher {
+// withIO runs fn while holding the optional shared I/O semaphore (nil-safe)
+// and adds the elapsed time to fetchTime. The semaphore caps concurrent
+// trie I/O across subfetchers so prefetcher activity doesn't starve the
+// main execution path.
+func (sf *subfetcher) withIO(fn func()) {
+	if sf.ioSem != nil {
+		sf.ioSem <- struct{}{}
+		defer func() { <-sf.ioSem }()
+	}
+	start := time.Now()
+	fn()
+	sf.fetchTime += time.Since(start)
+}
+
+func newSubfetcher(db Database, state common.Hash, owner common.Hash, root common.Hash, addr common.Address, ioSem chan struct{}) *subfetcher {
 	sf := &subfetcher{
 		db:            db,
 		state:         state,
 		owner:         owner,
 		root:          root,
 		addr:          addr,
+		ioSem:         ioSem,
 		wake:          make(chan struct{}, 1),
 		stop:          make(chan struct{}),
 		term:          make(chan struct{}),
@@ -496,18 +514,18 @@ func (sf *subfetcher) loop() {
 				}
 			}
 			if len(addresses) != 0 {
-				start := time.Now()
-				if err := sf.trie.PrefetchAccount(addresses); err != nil {
-					log.Error("Failed to prefetch accounts", "err", err)
-				}
-				sf.fetchTime += time.Since(start)
+				sf.withIO(func() {
+					if err := sf.trie.PrefetchAccount(addresses); err != nil {
+						log.Error("Failed to prefetch accounts", "err", err)
+					}
+				})
 			}
 			if len(slots) != 0 {
-				start := time.Now()
-				if err := sf.trie.PrefetchStorage(sf.addr, slots); err != nil {
-					log.Error("Failed to prefetch storage", "err", err)
-				}
-				sf.fetchTime += time.Since(start)
+				sf.withIO(func() {
+					if err := sf.trie.PrefetchStorage(sf.addr, slots); err != nil {
+						log.Error("Failed to prefetch storage", "err", err)
+					}
+				})
 			}
 
 		case <-sf.stop:

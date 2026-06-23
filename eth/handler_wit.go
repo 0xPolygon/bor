@@ -20,6 +20,7 @@ const (
 	PageSize                       = 15 * 1024 * 1024  // 15 MB
 	MaximumCachedWitnessOnARequest = 200 * 1024 * 1024 // 200 MB, the maximum amount of memory a request can demand while getting witness
 	MaximumResponseSize            = 16 * 1024 * 1024  // 16 MB, helps to fast fail check
+	MaxWitnessMetadataServe        = 1024              // maximum hashes a single GetWitnessMetadata request may carry
 )
 
 // witHandler implements the eth.Backend interface to handle the various network
@@ -187,6 +188,10 @@ func (h *witHandler) handleGetWitness(peer *wit.Peer, req *wit.GetWitnessPacket)
 // This is efficient for verification purposes where we don't need the actual witness data.
 func (h *witHandler) handleGetWitnessMetadata(peer *wit.Peer, req *wit.GetWitnessMetadataPacket) ([]wit.WitnessMetadataResponse, error) {
 	log.Debug("handleGetWitnessMetadata processing request", "peer", peer.ID(), "reqID", req.RequestId, "hashes", len(req.Hashes))
+
+	if len(req.Hashes) > MaxWitnessMetadataServe {
+		return nil, fmt.Errorf("witness metadata request exceeds %d hash limit: got %d", MaxWitnessMetadataServe, len(req.Hashes))
+	}
 
 	var response []wit.WitnessMetadataResponse
 

@@ -398,3 +398,82 @@ func TestReceiptList68(t *testing.T) {
 		}
 	}
 }
+
+// emptyBodyRLP returns the RLP encoding of an empty block body shaped as
+// txTypesInBody expects: an outer list whose first field is the (empty)
+// transactions list. Mirrors what GetBodyRLP returns for an empty block.
+func emptyBodyRLP() rlp.RawValue {
+	// Outer list (0xc2) containing two empty lists (0xc0, 0xc0): [txs, uncles].
+	return rlp.RawValue{0xc2, 0xc0, 0xc0}
+}
+
+// TestBlockReceiptsToNetwork68_EmptyReceipts validates that in the final
+// network encoding in eth/68, empty receipts are handled.
+func TestBlockReceiptsToNetwork68_EmptyReceipts(t *testing.T) {
+	body := emptyBodyRLP()
+	tests := []struct {
+		name  string
+		input rlp.RawValue
+	}{
+		{"nil RawValue", nil},
+		{"zero-length RawValue", rlp.RawValue{}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := blockReceiptsToNetwork68(tc.input, body)
+			if err != nil {
+				t.Fatalf("expected fallback to canonical empty list, got err: %v", err)
+			}
+			if !bytes.Equal(out, rlp.EmptyList) {
+				t.Fatalf("expected encoded empty list %x, got %x", rlp.EmptyList, out)
+			}
+		})
+	}
+}
+
+// TestBlockReceiptsToNetwork68_MalformedInput_ReturnsError ensures that
+// error due to invalid input (unparseable blob) is surfaced to the caller.
+func TestBlockReceiptsToNetwork68_MalformedInput_ReturnsError(t *testing.T) {
+	body := emptyBodyRLP()
+	// 0x81 0x02 is an RLP single-byte string (not a list).
+	_, err := blockReceiptsToNetwork68(rlp.RawValue{0x81, 0x02}, body)
+	if err == nil {
+		t.Fatalf("expected error for malformed (non-list) receipts blob, got nil")
+	}
+}
+
+// TestBlockReceiptsToNetwork69_EmptyReceipts validates that in the final
+// network encoding in eth/69, empty receipts are handled.
+func TestBlockReceiptsToNetwork69_EmptyReceipts(t *testing.T) {
+	body := emptyBodyRLP()
+	noStateSync := func(int) bool { return false }
+	tests := []struct {
+		name  string
+		input rlp.RawValue
+	}{
+		{"nil RawValue", nil},
+		{"zero-length RawValue", rlp.RawValue{}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := blockReceiptsToNetwork69(tc.input, body, noStateSync)
+			if err != nil {
+				t.Fatalf("expected fallback to canonical empty list, got err: %v", err)
+			}
+			if !bytes.Equal(out, rlp.EmptyList) {
+				t.Fatalf("expected encoded empty list %x, got %x", rlp.EmptyList, out)
+			}
+		})
+	}
+}
+
+// TestBlockReceiptsToNetwork69_MalformedInput_ReturnsError ensures that
+// error due to invalid input (unparseable blob) is surfaced to the caller.
+func TestBlockReceiptsToNetwork69_MalformedInput_ReturnsError(t *testing.T) {
+	body := emptyBodyRLP()
+	noStateSync := func(int) bool { return false }
+	_, err := blockReceiptsToNetwork69(rlp.RawValue{0x81, 0x02}, body, noStateSync)
+	if err == nil {
+		t.Fatalf("expected error for malformed (non-list) receipts blob, got nil")
+	}
+}

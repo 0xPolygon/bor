@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -35,9 +36,10 @@ type Service struct {
 
 	disableBlindForkValidation bool   // Flag to disable additional fork validation and accept blind forks without tracing back to last whitelisted entry
 	maxForkCorrectnessLimit    uint64 // Maximum number of blocks to iterate backwards for fork correctness check
-	lastValidForkBlock         uint64 // Last known valid block for fork correctness check
-	forkValidationCache        map[common.Hash]bool
-	forkValidationCacheMu      sync.RWMutex
+
+	lastValidForkBlock    atomic.Uint64
+	forkValidationCache   map[common.Hash]bool
+	forkValidationCacheMu sync.RWMutex
 }
 
 func NewService(db ethdb.Database, disableBlindForkValidation bool, maxBlindForkValidationLimit uint64) *Service {
@@ -131,7 +133,6 @@ func NewService(db ethdb.Database, disableBlindForkValidation bool, maxBlindFork
 		},
 		disableBlindForkValidation: disableBlindForkValidation,
 		maxForkCorrectnessLimit:    maxBlindForkValidationLimit,
-		lastValidForkBlock:         0,
 		forkValidationCache:        make(map[common.Hash]bool, forkValidationCacheSize),
 	}
 }
@@ -167,6 +168,23 @@ func (s *Service) PurgeWhitelistedCheckpoint() {
 
 func (s *Service) PurgeWhitelistedMilestone() {
 	s.milestoneService.Purge()
+}
+
+// PurgeMilestonesAfter drops milestone state above block, clears the fork
+// validation cache, and caps lastValidForkBlock at block. checkForkCorrectness
+// uses max(milestoneNumber, lastValidForkBlock) as its canonical bound, so a
+// stale lastValidForkBlock would blind-accept peer chains past the rewind anchor.
+func (s *Service) PurgeMilestonesAfter(block uint64) {
+	s.milestoneService.PurgeAfter(block)
+	s.forkValidationCacheMu.Lock()
+	clear(s.forkValidationCache)
+	s.forkValidationCacheMu.Unlock()
+	for {
+		cur := s.lastValidForkBlock.Load()
+		if cur <= block || s.lastValidForkBlock.CompareAndSwap(cur, block) {
+			break
+		}
+	}
 }
 
 func (s *Service) GetWhitelistedCheckpoint() (bool, uint64, common.Hash) {
@@ -243,8 +261,8 @@ func (s *Service) checkForkCorrectness(chain []*types.Header) bool {
 	}
 
 	var lastKnownValidBlock uint64 = number
-	if s.lastValidForkBlock > number {
-		lastKnownValidBlock = s.lastValidForkBlock
+	if v := s.lastValidForkBlock.Load(); v > number {
+		lastKnownValidBlock = v
 	}
 
 	// Blind accept the chain if we've to iterate more than `maxForkCorrectnessLimit` blocks
@@ -275,7 +293,7 @@ func (s *Service) checkForkCorrectness(chain []*types.Header) bool {
 				// Cache suggests that this fork is already validated. Accept the fork
 				// and update the cache.
 				s.updateForkValidationCache(blocksChecked)
-				s.lastValidForkBlock = lastHeaderNumber
+				s.lastValidForkBlock.Store(lastHeaderNumber)
 				return true
 			}
 			// Fetch the parent block by number and hash
@@ -295,7 +313,7 @@ func (s *Service) checkForkCorrectness(chain []*types.Header) bool {
 					// If valid, cache the blocks checked already to avoid re-checking
 					// them in next import.
 					s.updateForkValidationCache(blocksChecked)
-					s.lastValidForkBlock = lastHeaderNumber
+					s.lastValidForkBlock.Store(lastHeaderNumber)
 				} else {
 					log.Info("Rejecting invalid fork after validating against last whitelisted entry", "number", number, "expected", hash, "got", header.Hash())
 				}

@@ -40,6 +40,7 @@ type milestoneService interface {
 	UnlockMutex(doLock bool, milestoneId string, endBlockNum uint64, endBlockHash common.Hash)
 	UnlockSprint(endBlockNum uint64)
 	ProcessFutureMilestone(num uint64, hash common.Hash)
+	PurgeAfter(block uint64)
 }
 
 var (
@@ -57,6 +58,9 @@ var (
 
 	// MilestonePeerMeter is a metric for collecting the number of valid peers received
 	MilestonePeerMeter = metrics.NewRegisteredMeter("chain/milestone/isvalidpeer", nil)
+
+	// PurgeAfterDBErrorMeter is a metric for tracking the purge after database errors when deleting stale milestones after a mismatch rewind
+	PurgeAfterDBErrorMeter = metrics.NewRegisteredMeter("chain/milestone/purgeafter/dberror", nil)
 )
 
 // IsValidChain checks the validity of chain by comparing it
@@ -334,6 +338,63 @@ func (m *milestone) processFutureMilestoneLocked(num uint64, hash common.Hash) {
 
 	if err := rawdb.WriteLockField(m.db, m.Locked, m.LockedMilestoneNumber, m.LockedMilestoneHash, m.LockedMilestoneIDs); err != nil {
 		log.Error("Error in writing lock data of milestone to db", "err", err)
+	}
+}
+
+// PurgeAfter drops whitelist/locked/future-queued entries strictly above block,
+// in memory and on disk. Called after a milestone-mismatch rewind so stale
+// entries from the displaced fork don't reject canonical peers.
+func (m *milestone) PurgeAfter(block uint64) {
+	m.finality.Lock()
+	defer m.finality.Unlock()
+
+	persistedNum, _, persistedErr := rawdb.ReadFinality[*rawdb.Milestone](m.db)
+	diskStale := persistedErr == nil && persistedNum > block
+	memStale := m.doExist && m.Number > block
+	if diskStale || memStale {
+		if err := rawdb.DeleteLastFinality[*rawdb.Milestone](m.db); err != nil {
+			log.Error("PurgeAfter: failed to delete stale whitelisted milestone from db; clearing memory anyway", "err", err)
+			PurgeAfterDBErrorMeter.Mark(1)
+		}
+		if memStale {
+			m.doExist = false
+			m.Number = 0
+			m.Hash = common.Hash{}
+			whitelistedMilestoneMeter.Update(0)
+		}
+	}
+
+	if m.Locked && m.LockedMilestoneNumber > block {
+		m.Locked = false
+		m.LockedMilestoneNumber = 0
+		m.LockedMilestoneHash = common.Hash{}
+		m.purgeMilestoneIDsList()
+		MilestoneIdsLengthMeter.Update(0)
+		if err := rawdb.WriteLockField(m.db, m.Locked, m.LockedMilestoneNumber, m.LockedMilestoneHash, m.LockedMilestoneIDs); err != nil {
+			log.Error("Error clearing stale milestone lock from db", "err", err)
+		}
+	}
+
+	if len(m.FutureMilestoneOrder) > 0 {
+		filteredOrder := m.FutureMilestoneOrder[:0:0]
+		for _, num := range m.FutureMilestoneOrder {
+			if num > block {
+				delete(m.FutureMilestoneList, num)
+			} else {
+				filteredOrder = append(filteredOrder, num)
+			}
+		}
+		if len(filteredOrder) != len(m.FutureMilestoneOrder) {
+			m.FutureMilestoneOrder = filteredOrder
+			if err := rawdb.WriteFutureMilestoneList(m.db, m.FutureMilestoneOrder, m.FutureMilestoneList); err != nil {
+				log.Error("Error persisting trimmed future milestone list to db", "err", err)
+			}
+			var newMax int64
+			if n := len(filteredOrder); n > 0 {
+				newMax = int64(filteredOrder[n-1])
+			}
+			FutureMilestoneMeter.Update(newMax)
+		}
 	}
 }
 

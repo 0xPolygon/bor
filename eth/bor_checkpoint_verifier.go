@@ -106,35 +106,49 @@ func borVerify(ctx context.Context, eth *Ethereum, handler *ethHandler, start ui
 		ethHandler := (*ethHandler)(eth.handler)
 
 		var (
-			rewindTo uint64
-			doExist  bool
+			rewindTo       uint64
+			rewindToSet    bool
+			rewindAttested bool
 		)
 
-		// First try the original logic to find existing whitelisted milestone/checkpoint
-		if doExist, rewindTo, _ = ethHandler.downloader.GetWhitelistedMilestone(); doExist {
-			// Use existing whitelisted milestone
-			log.Info("Using existing whitelisted milestone for rewind", "block", rewindTo)
-		} else if doExist, rewindTo, _ = ethHandler.downloader.GetWhitelistedCheckpoint(); doExist {
-			// Use existing whitelisted checkpoint
-			log.Info("Using existing whitelisted checkpoint for rewind", "block", rewindTo)
-		} else {
-			// No existing whitelisted milestone/checkpoint found
-			// For milestones, try to find the common ancestor by checking past milestones
-			if !isCheckpoint && end > 0 {
-				log.Info("No existing whitelisted milestone/checkpoint, searching for common ancestor")
-				rewindTo = findCommonAncestorWithFutureMilestones(eth, start, end, hash)
-			} else {
-				// For checkpoints or when start is 0, use simple fallback
-				if start <= 0 {
-					rewindTo = 0
-				} else {
-					rewindTo = start - 1
-				}
+		attestRewindAt := func(num uint64, expectedHash common.Hash) bool {
+			return num < end && eth.BlockChain().GetCanonicalHash(num) == expectedHash
+		}
+
+		// Try anchor sources in attestability order; a non-attesting first source
+		// must not short-circuit later attesting ones.
+		if exists, num, h := ethHandler.downloader.GetWhitelistedMilestone(); exists {
+			rewindTo, rewindToSet = num, true
+			rewindAttested = attestRewindAt(num, h)
+			log.Info("Using existing whitelisted milestone for rewind", "block", rewindTo, "attested", rewindAttested)
+		}
+
+		if !rewindAttested && !isCheckpoint && end > 0 {
+			num, attested := findCommonAncestorWithFutureMilestones(eth, start, end, hash)
+			// Race: findCommonAncestor's re-read of local-at-end may disagree
+			// with the outer mismatch check and yield (end, true).
+			if attested && num < end {
+				rewindTo, rewindToSet, rewindAttested = num, true, true
+				log.Info("Using future-milestone match for rewind", "block", rewindTo)
+			} else if !rewindToSet {
+				rewindTo, rewindToSet = num, true
+			}
+		}
+
+		if !rewindToSet {
+			// Checkpoint hash is a merkle root, never attests; used only for the
+			// refusal-log rewindTo.
+			if exists, num, _ := ethHandler.downloader.GetWhitelistedCheckpoint(); exists {
+				rewindTo = num
+				log.Info("Using existing whitelisted checkpoint for rewind", "block", rewindTo)
+			} else if start > 0 {
+				rewindTo = start - 1
 			}
 		}
 
 		if head-rewindTo > maxRewindLen {
 			rewindTo = head - maxRewindLen
+			rewindAttested = false // clamped target is not the attested block
 		}
 
 		if isCheckpoint {
@@ -166,19 +180,40 @@ func borVerify(ctx context.Context, eth *Ethereum, handler *ethHandler, start ui
 			canonicalChain = nil
 		}
 
-		// Never rewind unless we actually have a canonical chain segment to insert.
-		if len(canonicalChain) == 0 {
-			if isCheckpoint {
-				log.Warn("Checkpoint mismatch: refusing to rewind without a canonical chain segment",
-					"head", head, "rewindTo", rewindTo, "start", start, "end", end)
-			} else {
-				log.Warn("Milestone mismatch: refusing to rewind without a canonical chain segment",
-					"head", head, "rewindTo", rewindTo, "start", start, "end", end)
+		if len(canonicalChain) > 0 {
+			if reorgToFinalized(eth, head, rewindTo, canonicalChain) {
+				ethHandler.downloader.PurgeMilestonesAfter(rewindTo)
 			}
 			return hash, errHashMismatch
 		}
-		reorgToFinalized(eth, head, rewindTo, canonicalChain)
 
+		// No canonical sidechain locally. Recoverable for milestones: SetHead to
+		// an attested ancestor drops the bad-fork tip the downloader rejects as
+		// "sidechain ghost-state attack", letting canonical resync proceed.
+		// maxRewindLen keeps the target inside the in-memory trie window.
+		if !isCheckpoint && rewindAttested && head-rewindTo <= maxRewindLen {
+			log.Warn("Milestone mismatch: rewinding to attested canonical ancestor without local sidechain; canonical chain will resync from peers",
+				"head", head, "rewindTo", rewindTo, "start", start, "end", end)
+
+			defer pauseMiner(eth)()
+			if err := rewind(eth, head, rewindTo); err != nil {
+				// Chain still on bad fork; keep whitelist intact rather than weakening.
+				return hash, errHashMismatch
+			}
+			// Stale future-fork entries would reject canonical peers via
+			// IsValidChain / IsReorgAllowed / IsFutureMilestoneCompatible.
+			ethHandler.downloader.PurgeMilestonesAfter(rewindTo)
+			return hash, errHashMismatch
+		}
+
+		if isCheckpoint {
+			log.Warn("Checkpoint mismatch: refusing to rewind without a canonical chain segment",
+				"head", head, "rewindTo", rewindTo, "start", start, "end", end)
+		} else {
+			log.Warn("Milestone mismatch: refusing to rewind without a canonical chain segment",
+				"head", head, "rewindTo", rewindTo, "start", start, "end", end,
+				"attested", rewindAttested)
+		}
 		return hash, errHashMismatch
 	}
 
@@ -194,47 +229,57 @@ func borVerify(ctx context.Context, eth *Ethereum, handler *ethHandler, start ui
 	return hash, nil
 }
 
-// reorgToFinalized stops the miner if the mining process is running and rewinds back the chain
-// and inserts the chain finalized by checkpoint/milestone.
-func reorgToFinalized(eth *Ethereum, head uint64, rewindTo uint64, canonicalChain []*types.Block) {
-	// do nothing if there is no canonical chain to insert.
+// reorgToFinalized rewinds head to rewindTo and inserts canonicalChain. Returns
+// true if head actually moved (the insert is best-effort and a partial insert
+// still counts).
+func reorgToFinalized(eth *Ethereum, head uint64, rewindTo uint64, canonicalChain []*types.Block) bool {
 	if len(canonicalChain) == 0 {
 		log.Warn("Refusing to reorg finalized without canonical chain",
 			"head", head, "rewindTo", rewindTo)
-		return
+		return false
 	}
 
-	if eth.Miner() != nil && eth.Miner().Mining() {
-		ch := make(chan struct{})
-		eth.Miner().Stop(ch)
+	defer pauseMiner(eth)()
 
-		<-ch
-
-		defer eth.Miner().Start()
+	if err := rewind(eth, head, rewindTo); err != nil {
+		return false
 	}
-
-	rewind(eth, head, rewindTo)
 	insertFinalized(eth, canonicalChain)
+	return true
 }
 
-func rewind(eth *Ethereum, head uint64, rewindTo uint64) {
-	eth.handler.downloader.Cancel()
-	err := eth.blockchain.SetHead(rewindTo)
-
-	if err != nil {
-		log.Error("Error while rewinding the chain", "to", rewindTo, "err", err)
-	} else {
-		rewindLengthMeter.Mark(int64(head - rewindTo))
+// pauseMiner stops the miner and returns a restart function for the caller to
+// defer; the restart fires at the caller's return, not pauseMiner's.
+func pauseMiner(eth *Ethereum) func() {
+	if eth.Miner() == nil || !eth.Miner().Mining() {
+		return func() {}
 	}
+	ch := make(chan struct{})
+	eth.Miner().Stop(ch)
+	<-ch
+	return func() { eth.Miner().Start() }
 }
 
-// findCommonAncestorWithFutureMilestones tries to find where the local chain diverged from the milestone chain
-// by checking blocks backwards from the milestone range
-func findCommonAncestorWithFutureMilestones(eth *Ethereum, start uint64, end uint64, milestoneEndHash string) uint64 {
+// rewind cancels in-flight downloads and SetHeads to rewindTo. Callers must
+// check the error before any downstream insert or whitelist purge.
+func rewind(eth *Ethereum, head uint64, rewindTo uint64) error {
+	eth.handler.downloader.Cancel()
+	if err := eth.blockchain.SetHead(rewindTo); err != nil {
+		log.Error("Error while rewinding the chain", "to", rewindTo, "err", err)
+		return err
+	}
+	rewindLengthMeter.Mark(int64(head - rewindTo))
+	return nil
+}
+
+// findCommonAncestorWithFutureMilestones returns a candidate rewind anchor.
+// The bool is true only when local hash at the returned block matches a
+// stored milestone hash; callers must not blind-rewind on (_, false).
+func findCommonAncestorWithFutureMilestones(eth *Ethereum, start uint64, end uint64, milestoneEndHash string) (uint64, bool) {
 	// Start from the milestone start block and work backwards
 	// to find where our chain matches the expected chain
 	if start == 0 {
-		return 0
+		return 0, false
 	}
 
 	blockchain := eth.BlockChain()
@@ -245,7 +290,7 @@ func findCommonAncestorWithFutureMilestones(eth *Ethereum, start uint64, end uin
 	if localBlock != nil {
 		localHash := localBlock.Hash().Hex()[2:]
 		if localHash == milestoneEndHash {
-			return end
+			return end, true
 		}
 	}
 
@@ -268,20 +313,16 @@ func findCommonAncestorWithFutureMilestones(eth *Ethereum, start uint64, end uin
 			localBlock := blockchain.GetBlockByNumber(milestoneNum)
 			if localBlock != nil && localBlock.Hash() == milestoneHash {
 				log.Info("Found matching future milestone", "block", milestoneNum, "hash", milestoneHash)
-				return milestoneNum
+				return milestoneNum, true
 			}
 
-			if milestoneNum < targetBlock {
+			if milestoneNum > 0 && milestoneNum < targetBlock {
 				targetBlock = milestoneNum - 1
 			}
 		}
 	}
 
-	if targetBlock < 0 {
-		return 0
-	}
-
-	return targetBlock
+	return targetBlock, false
 }
 
 // insertFinalized inserts the chain finalized by checkpoint/milestone and ensures the final block is set as canonical.

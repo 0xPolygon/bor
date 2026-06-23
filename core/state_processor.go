@@ -240,7 +240,10 @@ func ApplyTransactionWithEVM(msg *Message, gp *GasPool, statedb *state.StateDB, 
 	// stop recording read and write
 	statedb.SetMVHashmap(nil)
 
-	if evm.ChainConfig().IsLondon(blockNumber) {
+	if evm.ChainConfig().IsLondon(blockNumber) && result.FeeBurnt != nil {
+		// FeeBurnt is only populated for Bor-enabled chains in stateTransition.execute
+		// (see core/state_transition.go); for non-Bor configs the base fee is
+		// implicitly burned and there's no contract to credit.
 		// Use `evm.StateDB` for using hooked state db if tracing is enabled
 		evm.StateDB.AddBalance(result.BurntContractAddress, cmath.BigIntToUint256Int(result.FeeBurnt), tracing.BalanceChangeTransfer)
 	}
@@ -253,18 +256,21 @@ func ApplyTransactionWithEVM(msg *Message, gp *GasPool, statedb *state.StateDB, 
 	// add transfer log
 	// We use `evm.StateDB` instance instead of normal `statedb` as if tracing is enabled, we may have a hooked state db instance
 	// for the fee transfer log.
-	AddFeeTransferLog(
-		evm.StateDB,
+	if evm.ChainConfig().Bor != nil {
+		// Bor-specific fee transfer log; skipped on non-Bor chain configs.
+		AddFeeTransferLog(
+			evm.StateDB,
 
-		msg.From,
-		evm.Context.Coinbase,
+			msg.From,
+			evm.Context.Coinbase,
 
-		result.FeeTipped,
-		result.SenderInitBalance,
-		coinbaseBalance.ToBig(),
-		output1.Sub(output1, result.FeeTipped),
-		output2.Add(output2, result.FeeTipped),
-	)
+			result.FeeTipped,
+			result.SenderInitBalance,
+			coinbaseBalance.ToBig(),
+			output1.Sub(output1, result.FeeTipped),
+			output2.Add(output2, result.FeeTipped),
+		)
+	}
 
 	if result.Err == vm.ErrInterrupt {
 		return nil, result.Err

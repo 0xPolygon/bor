@@ -337,7 +337,7 @@ const (
 // Block size is capped by the protocol at params.MaxBlockSize. When producing blocks, we
 // try to say below the size including a buffer zone, this is to avoid going over the
 // maximum size with auxiliary data added into the block.
-const maxBlockSizeBufferZone = 0
+const maxBlockSizeBufferZone = 1_000_000
 
 // newWorkReq represents a request for new sealing work submitting with relative interrupt notifier.
 type newWorkReq struct {
@@ -409,7 +409,8 @@ type worker struct {
 	resubmitIntervalCh chan time.Duration
 	resubmitAdjustCh   chan *intervalAdjust
 
-	wg sync.WaitGroup
+	wg         sync.WaitGroup
+	prefetchWg sync.WaitGroup
 
 	currentMu sync.RWMutex // The lock used to protect the current environment
 	current   *environment // An environment for current running cycle.
@@ -712,6 +713,7 @@ func (w *worker) close() {
 	w.running.Store(false)
 	close(w.exitCh)
 	w.wg.Wait()
+	w.prefetchWg.Wait()
 }
 
 // recalcRecommit recalculates the resubmitting interval upon feedback.
@@ -1344,6 +1346,7 @@ func (w *worker) commitTransaction(env *environment, tx *types.Transaction) ([]*
 	env.txs = append(env.txs, tx)
 	env.receipts = append(env.receipts, receipt)
 	env.tcount++
+	env.size += tx.Size()
 
 	return receipt.Logs, nil
 }
@@ -2325,7 +2328,9 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 		// when prefetch is disabled.
 		genParams.builderStarted = new(atomic.Bool)
 		genParams.builderPrefetchedTxHashes = &sync.Map{}
+		w.prefetchWg.Add(1)
 		go func() {
+			defer w.prefetchWg.Done()
 			defer func() {
 				if r := recover(); r != nil {
 					log.Error("Prefetch goroutine panicked", "err", r, "stack", string(debug.Stack()))

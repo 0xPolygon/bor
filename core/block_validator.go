@@ -19,13 +19,20 @@ package core
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/trie"
 )
+
+// intermediateRootTimer may record 2 samples per block on close V1/V2
+// races where the loser also reaches ValidateState before cancel().
+// Count and rate inflate up to ~2x; mean/p99 stay representative.
+var intermediateRootTimer = metrics.NewRegisteredTimer("chain/intermediateroot", nil)
 
 // BlockValidator is responsible for validating block headers, uncles and
 // processed state.
@@ -168,7 +175,10 @@ func (v *BlockValidator) ValidateState(block *types.Block, statedb *state.StateD
 	}
 	// Validate the state root against the received state root and throw
 	// an error if they don't match.
-	if root := statedb.IntermediateRoot(v.config.IsEIP158(header.Number)); header.Root != root {
+	irStart := time.Now()
+	root := statedb.IntermediateRoot(v.config.IsEIP158(header.Number))
+	intermediateRootTimer.UpdateSince(irStart)
+	if header.Root != root {
 		return fmt.Errorf("invalid merkle root (remote: %x local: %x) dberr: %w", header.Root, root, statedb.Error())
 	}
 

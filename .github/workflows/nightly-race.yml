@@ -2,8 +2,8 @@ name: Nightly Race Tests
 
 on:
   schedule:
-    # Run at 2 AM UTC every day
-    - cron: '0 2 * * *'
+    # Run at 3 AM UTC every day
+    - cron: '0 3 * * *'
   workflow_dispatch: # Allow manual trigger
 
 jobs:
@@ -14,6 +14,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: develop
 
       - name: Set up Go
         uses: actions/setup-go@v5

@@ -73,7 +73,6 @@ func NewMockService(db ethdb.Database) *Service {
 			MaxCapacity:          10,
 		},
 		maxForkCorrectnessLimit: 10,
-		lastValidForkBlock:      0,
 		forkValidationCache:     make(map[common.Hash]bool, 10),
 	}
 }
@@ -1375,7 +1374,7 @@ func TestForkCorrectness(t *testing.T) {
 
 		res := s.checkForkCorrectness(chainA[16:]) // 11 blocks ahead of last checkpoint
 		require.Equal(t, true, res, "expected chain to be valid")
-		require.Equal(t, uint64(0), s.lastValidForkBlock, "expected last known valid block to be 0")
+		require.Equal(t, uint64(0), s.lastValidForkBlock.Load(), "expected last known valid block to be 0")
 		require.Equal(t, 0, len(s.forkValidationCache), "expected no entries in cache")
 	})
 
@@ -1385,7 +1384,7 @@ func TestForkCorrectness(t *testing.T) {
 
 		res := s.checkForkCorrectness(chainA[16:]) // 12 blocks ahead of last milestone
 		require.Equal(t, true, res, "expected chain to be valid")
-		require.Equal(t, uint64(0), s.lastValidForkBlock, "expected last known valid block to be 0")
+		require.Equal(t, uint64(0), s.lastValidForkBlock.Load(), "expected last known valid block to be 0")
 		require.Equal(t, 0, len(s.forkValidationCache), "expected no entries in cache")
 	})
 
@@ -1395,12 +1394,12 @@ func TestForkCorrectness(t *testing.T) {
 
 		res := s.checkForkCorrectness(chainA[16:]) // 12 blocks ahead of last milestone
 		require.Equal(t, true, res, "expected chain to be valid")
-		require.Equal(t, uint64(0), s.lastValidForkBlock, "expected last known valid block to be 0")
+		require.Equal(t, uint64(0), s.lastValidForkBlock.Load(), "expected last known valid block to be 0")
 		require.Equal(t, 0, len(s.forkValidationCache), "expected no entries in cache")
 	})
 
 	t.Run("long fork: both milestone and checkpoint exist but last known block is recent", func(t *testing.T) {
-		s.lastValidForkBlock = 6 // 1 block ahead of last checkpoint
+		s.lastValidForkBlock.Store(6) // 1 block ahead of last checkpoint
 
 		res := s.checkForkCorrectness(chainA[17:]) // 11 blocks ahead of last known block
 		require.Equal(t, true, res, "expected chain to be valid")
@@ -1414,7 +1413,7 @@ func TestForkCorrectness(t *testing.T) {
 		res := s.checkForkCorrectness(chainA[17:]) // 11 blocks ahead of last known block
 		require.Equal(t, true, res, "expected chain to be valid")
 		require.Equal(t, 0, len(s.forkValidationCache), "expected no entries in cache")
-		s.lastValidForkBlock = 0
+		s.lastValidForkBlock.Store(0)
 	})
 
 	// Create a mock chain linking back to last block
@@ -1429,7 +1428,7 @@ func TestForkCorrectness(t *testing.T) {
 
 		res := s.checkForkCorrectness(chain1)
 		require.Equal(t, true, res, "expected chain to be valid")
-		require.Equal(t, chain1[1].Number.Uint64(), s.lastValidForkBlock, "expected last known valid block to be updated")
+		require.Equal(t, chain1[1].Number.Uint64(), s.lastValidForkBlock.Load(), "expected last known valid block to be updated")
 		require.Equal(t, 2, len(s.forkValidationCache), "expected two entries in cache")
 		require.Equal(t, true, s.forkValidationCache[chain1[0].Hash()], "expected cache to have valid entry")
 		require.Equal(t, true, s.forkValidationCache[chain1[1].Hash()], "expected cache to have valid entry")
@@ -1444,7 +1443,7 @@ func TestForkCorrectness(t *testing.T) {
 	t.Run("incoming chain further ahead of last chain", func(t *testing.T) {
 		res := s.checkForkCorrectness(chain2)
 		require.Equal(t, true, res, "expected chain to be valid")
-		require.Equal(t, chain2[1].Number.Uint64(), s.lastValidForkBlock, "expected last known valid block to be updated")
+		require.Equal(t, chain2[1].Number.Uint64(), s.lastValidForkBlock.Load(), "expected last known valid block to be updated")
 		require.Equal(t, 4, len(s.forkValidationCache), "expected four entries in cache") // block 21, 22, 23, 24 should be present in cache
 		require.Equal(t, true, s.forkValidationCache[chain1[0].Hash()], "expected cache to have valid entry: block 21")
 		require.Equal(t, true, s.forkValidationCache[chain1[1].Hash()], "expected cache to have valid entry: block 22")
@@ -1468,7 +1467,7 @@ func TestForkCorrectness(t *testing.T) {
 
 		// The last valid fork block shouldn't be updated as we couldn't verify the chain
 		// due to missing header. The cache except for the explicit deletion should be intact.
-		require.Equal(t, chain2[1].Number.Uint64(), s.lastValidForkBlock, "expected last known valid block to be unchanged")
+		require.Equal(t, chain2[1].Number.Uint64(), s.lastValidForkBlock.Load(), "expected last known valid block to be unchanged")
 		require.Equal(t, 3, len(s.forkValidationCache), "expected three entries in cache") // block 21, 22, 23 should be present in cache
 		require.Equal(t, true, s.forkValidationCache[chain1[0].Hash()], "expected cache to have valid entry: block 21")
 		require.Equal(t, true, s.forkValidationCache[chain1[1].Hash()], "expected cache to have valid entry: block 22")
@@ -1486,7 +1485,7 @@ func TestForkCorrectness(t *testing.T) {
 		// The fork should be valid as block 24 is present in cache (even though header is not available)
 		res := s.checkForkCorrectness(chain3)
 		require.Equal(t, true, res, "expected chain to be valid")
-		require.Equal(t, chain3[1].Number.Uint64(), s.lastValidForkBlock, "expected last known valid block to be updates") // block 26
+		require.Equal(t, chain3[1].Number.Uint64(), s.lastValidForkBlock.Load(), "expected last known valid block to be updates") // block 26
 
 		require.Equal(t, 6, len(s.forkValidationCache), "expected six entries in cache") // block 21, 22, 23, 24, 25, 26 should be present in cache
 		require.Equal(t, true, s.forkValidationCache[chain1[0].Hash()], "expected cache to have valid entry: block 21")
@@ -1531,7 +1530,7 @@ func TestForkCorrectness(t *testing.T) {
 		res := s.checkForkCorrectness(chain4[1:])
 		require.Equal(t, false, res, "expected chain to be invalid due to mismatch with milestone")
 		require.Equal(t, 0, len(s.forkValidationCache), "expected no entries in cache")
-		require.Equal(t, chain3[1].Number.Uint64(), s.lastValidForkBlock, "expected last known valid block to be unchanged")
+		require.Equal(t, chain3[1].Number.Uint64(), s.lastValidForkBlock.Load(), "expected last known valid block to be unchanged")
 	})
 }
 

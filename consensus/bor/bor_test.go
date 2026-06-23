@@ -30,6 +30,7 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -3210,6 +3211,7 @@ func (m *mockHeimdallClient) FetchMilestoneCount(ctx context.Context) (int64, er
 func (m *mockHeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
 	return &ctypes.SyncInfo{CatchingUp: false}, nil
 }
+
 func TestEncodeSigHeader_WithBaseFee(t *testing.T) {
 	t.Parallel()
 	h := &types.Header{
@@ -5701,4 +5703,50 @@ func TestVerifyHeader_PreGiugliano_NoCheck(t *testing.T) {
 	if err != nil {
 		require.NotErrorIs(t, err, errMissingGiuglianoFields)
 	}
+}
+
+// TestApplyMessage_StateSyncTxContext validates if TxContext is correctly
+// set for state-sync transactions.
+func TestApplyMessage_StateSyncTxContext(t *testing.T) {
+	t.Parallel()
+	addr1 := common.HexToAddress("0x1")
+	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
+	chain, b := newChainAndBorForTest(t, sp, defaultBorConfig(), true, addr1, uint64(time.Now().Unix()))
+
+	genesis := chain.HeaderChain().GetHeaderByNumber(0)
+	statedb := newStateDBForTest(t, genesis.Root)
+
+	// SSTORE(0, ORIGIN); SSTORE(1, GASPRICE); STOP.
+	addr := common.HexToAddress("0xc0ffee")
+	statedb.SetCode(addr, []byte{
+		0x32,       // ORIGIN
+		0x60, 0x00, // PUSH1 0
+		0x55,       // SSTORE -> slot 0 = origin
+		0x3a,       // GASPRICE
+		0x60, 0x01, // PUSH1 1
+		0x55, // SSTORE -> slot 1 = gasprice
+		0x00, // STOP
+	}, tracing.CodeChangeUnspecified)
+
+	h := &types.Header{
+		Number:     big.NewInt(1),
+		ParentHash: genesis.Hash(),
+		Time:       genesis.Time + 2,
+		Coinbase:   addr1,
+		Difficulty: big.NewInt(1),
+	}
+
+	msg := statefull.GetSystemMessage(addr, nil)
+	_, err := statefull.ApplyMessage(
+		context.Background(), msg, statedb, h, chain.Config(),
+		statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b},
+		vm.Config{},
+	)
+	require.NoError(t, err)
+
+	gotOrigin := common.BytesToAddress(statedb.GetState(addr, common.Hash{}).Bytes())
+	require.Equal(t, common.Address{}, gotOrigin, "ORIGIN must be zero address")
+
+	gotGasprice := statedb.GetState(addr, common.BigToHash(big.NewInt(1)))
+	require.Equal(t, common.Hash{}, gotGasprice, "GASPRICE must be 0")
 }
