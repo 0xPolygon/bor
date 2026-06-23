@@ -638,13 +638,13 @@ type v2Env struct {
 	vmConfig    vm.Config
 	chainConfig *params.ChainConfig
 	gasLimit    uint64
-	// jumpDests is a fallback per-v2Env JUMPDEST cache used only when the
-	// caller did NOT supply vmConfig.SharedJumpDestCache. In production,
-	// blockchain.go wires sharedCaches.jumpDests (warmed by the prefetcher)
-	// onto vmConfig and vm.NewEVM picks it up — overriding it here would
-	// throw away the prefetcher's analysis. The fallback path matters for
-	// callers that bypass ProcessBlock (benchmarks, single-block witness
-	// processing) where no shared cache is provided.
+	// jumpDests is a fallback per-v2Env JUMPDEST cache, used only when the
+	// caller didn't supply vmConfig.SharedJumpDestCache. In production,
+	// blockchain.go sets that field to the chain-global cache, which
+	// vm.NewEVM installs onto each worker — overriding it here would discard
+	// the cross-block analysis shared with the rest of the chain. The
+	// fallback matters for callers that bypass ProcessBlock (benchmarks,
+	// single-block witness processing) where no shared cache is provided.
 	jumpDests vm.JumpDestCache
 	safeBase  *state.SafeBase             // shared across all workers (with read cache)
 	recycleCh chan *state.ParallelStateDB // pool of reusable PDBs
@@ -964,7 +964,7 @@ func newV2Env(base *state.StateDB, store *blockstm.MVStore, bals *blockstm.MVBal
 	wireStorageCaches(base, sharedSafeBase)
 	// Allocate the per-v2Env fallback only when the caller didn't supply a
 	// shared cache. Production (blockchain.go) sets vmConfig.SharedJumpDestCache
-	// on the prefetcher-warmed cache, so allocating here would just be dead
+	// to the chain-global cache, so allocating here would just be dead
 	// memory. Benchmarks and single-block witness paths bypass that wiring.
 	var fallbackJumpDests vm.JumpDestCache
 	if vmConfig.SharedJumpDestCache == nil {

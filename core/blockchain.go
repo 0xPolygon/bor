@@ -787,8 +787,10 @@ func reportReaderStats(prefetch, process, parallel state.ReaderWithStats) {
 	accountHitFromPrefetchUniqueMeter.Mark(procPF.AccountHitFromPrefetchUnique + parPF.AccountHitFromPrefetchUnique)
 }
 
-// sharedBlockCaches holds VM-level caches that are shared between the
-// prefetcher goroutine and the V2 BlockSTM workers for a single block.
+// sharedBlockCaches bundles the VM-level caches passed to the prefetcher
+// goroutine and the V2 BlockSTM workers. jumpDests is the chain-global,
+// cross-block cache (owned by BlockChain); keccak and ecrecover are
+// per-block, allocated fresh for each block.
 type sharedBlockCaches struct {
 	jumpDests vm.JumpDestCache
 	keccak    *sync.Map
