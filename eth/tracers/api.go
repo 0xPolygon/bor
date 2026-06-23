@@ -1266,25 +1266,27 @@ func (api *API) TraceCallMany(ctx context.Context, bundles []Bundle, simulateCon
 	blockContext := core.NewEVMBlockContext(h, chainCtx, nil)
 	chainConfig := api.backend.ChainConfig()
 
-	// applyBlockOverride applies o to blockContext. h is the original block header
-	// and is never mutated: the n+1 fixup operates on a throwaway copy so repeated
-	// applications across bundles can't corrupt the GetHash reference.
+	// advancedGetHash resolves blockhash() once the effective block moves past the
+	// real head: the header copy is pinned at head+1 with the real head as its parent,
+	// so real blocks (<= head) resolve via the chain walk while simulated blocks above
+	// the head resolve to 0. Otherwise a contract could detect simulation by checking
+	// blockhash(head) == 0x0 (#32175). Built once and reused across bundles so its
+	// internal block-hash cache stays warm; h is never mutated.
+	hc := types.CopyHeader(h)
+	hc.ParentHash = hc.Hash()
+	hc.Number = new(big.Int).Add(hc.Number, big.NewInt(1))
+	advancedGetHash := core.GetHashFn(hc, chainCtx)
+
+	// applyBlockOverride applies o to blockContext.
 	applyBlockOverride := func(o *override.BlockOverrides, blockContext *vm.BlockContext, applyPrecompiles bool) error {
 		if err := o.Apply(blockContext); err != nil {
 			return err
 		}
 		// Once the effective block number moves past the real head — whether via an
-		// explicit Number override or the per-bundle advance — rewire GetHash so that
-		// blockhash() of the head and earlier blocks resolves to their real hashes
-		// instead of 0. Otherwise a contract can detect simulation by checking
-		// blockhash(head) == 0x0 (#32175). The copy is pinned at head+1 with the real
-		// head as its parent regardless of how far we advanced, so real blocks resolve
-		// via the chain walk while simulated blocks above the head resolve to 0.
+		// explicit Number override or the per-bundle advance — use the head+1 GetHash
+		// so blockhash(head) resolves to the real head hash instead of 0.
 		if blockContext.BlockNumber.Cmp(h.Number) > 0 {
-			hc := types.CopyHeader(h)
-			hc.ParentHash = hc.Hash()
-			hc.Number = new(big.Int).Add(hc.Number, big.NewInt(1))
-			blockContext.GetHash = core.GetHashFn(hc, chainCtx)
+			blockContext.GetHash = advancedGetHash
 		}
 		if applyPrecompiles && config.StateOverrides != nil {
 			rules := chainConfig.Rules(blockContext.BlockNumber, blockContext.Random != nil, blockContext.Time)
@@ -1328,10 +1330,27 @@ func (api *API) TraceCallMany(ctx context.Context, bundles []Bundle, simulateCon
 	}
 
 	results := make([][]interface{}, 0, len(bundles))
+	var (
+		prevNumber *big.Int
+		prevTime   uint64
+	)
 	for _, bundle := range bundles {
 		if err := applyBlockOverride(bundle.BlockOverride, &blockContext, false); err != nil {
 			return nil, err
 		}
+		// The per-bundle advance models consecutive blocks, so an absolute per-bundle
+		// BlockOverride must not move the number or timestamp backwards (mirrors
+		// eth_simulateV1).
+		if prevNumber != nil {
+			if blockContext.BlockNumber.Cmp(prevNumber) <= 0 {
+				return nil, fmt.Errorf("block numbers must be in order: %d <= %d", blockContext.BlockNumber, prevNumber)
+			}
+			if blockContext.Time <= prevTime {
+				return nil, fmt.Errorf("block timestamps must be in order: %d <= %d", blockContext.Time, prevTime)
+			}
+		}
+		prevNumber, prevTime = new(big.Int).Set(blockContext.BlockNumber), blockContext.Time
+
 		res, err := api.traceBundle(ctx, bundle.Transactions, blockContext, block, statedb, traceConfig, precompiles)
 		if err != nil {
 			return nil, err

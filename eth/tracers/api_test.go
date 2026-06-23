@@ -709,6 +709,27 @@ func TestTraceCallMany(t *testing.T) {
 		}
 	})
 
+	t.Run("config block override applies as the base for all bundles", func(t *testing.T) {
+		// config.BlockOverrides is the request-level base override (applied before any
+		// bundle). Every bundle builds on it, then advances.
+		numberCall := ethapi.TransactionArgs{From: &accounts[0].addr, To: &numberAddr}
+		cfg := &TraceCallConfig{BlockOverrides: &override.BlockOverrides{Number: (*hexutil.Big)(big.NewInt(0x4242))}}
+		bundles := []Bundle{
+			{Transactions: []ethapi.TransactionArgs{numberCall}},
+			{Transactions: []ethapi.TransactionArgs{numberCall}},
+		}
+		res, err := api.TraceCallMany(t.Context(), bundles, StateContext{BlockNumber: latest}, cfg)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got := topOfStack(t, res[0][0]); got != "0x4242" {
+			t.Fatalf("bundle 0 did not observe config block number: want 0x4242, got %s", got)
+		}
+		if got := topOfStack(t, res[1][0]); got != "0x4243" {
+			t.Fatalf("bundle 1 block number: want 0x4243 (advanced), got %s", got)
+		}
+	})
+
 	t.Run("blockhash resolves when overriding to head+1", func(t *testing.T) {
 		// Overriding the block number to head+1 must rewire GetHash so that
 		// blockhash(head) returns the real head hash instead of zero.
@@ -970,6 +991,22 @@ func TestTraceCallMany(t *testing.T) {
 					},
 				}},
 				"has both 'state' and 'stateDiff'",
+			},
+			{
+				"non-increasing block number across bundles",
+				[]Bundle{
+					{Transactions: []ethapi.TransactionArgs{send}, BlockOverride: &override.BlockOverrides{Number: (*hexutil.Big)(big.NewInt(0x500))}},
+					{Transactions: []ethapi.TransactionArgs{send}, BlockOverride: &override.BlockOverrides{Number: (*hexutil.Big)(big.NewInt(0x100))}},
+				},
+				StateContext{BlockNumber: latest}, nil, "block numbers must be in order",
+			},
+			{
+				"non-increasing block time across bundles",
+				[]Bundle{
+					{Transactions: []ethapi.TransactionArgs{send}, BlockOverride: &override.BlockOverrides{Time: func() *hexutil.Uint64 { t := hexutil.Uint64(0x9999); return &t }()}},
+					{Transactions: []ethapi.TransactionArgs{send}, BlockOverride: &override.BlockOverrides{Time: func() *hexutil.Uint64 { t := hexutil.Uint64(0x10); return &t }()}},
+				},
+				StateContext{BlockNumber: latest}, nil, "block timestamps must be in order",
 			},
 		}
 		for _, tc := range tests {
