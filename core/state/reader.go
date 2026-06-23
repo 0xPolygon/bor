@@ -416,25 +416,30 @@ func (r *trieReader) subTrieFor(addr common.Address) (Trie, error) {
 // cache and EnableConcurrentReads() on freshly opened tries so multiple
 // goroutines can read different addresses without cross-address contention.
 func (r *trieReader) subTrieConcurrent(addr common.Address) (Trie, error) {
-	if v, ok := r.subTries.Load(addr); ok {
-		return v.(Trie), nil
-	}
-	root, err := r.resolveSubRoot(addr)
-	if err != nil {
-		return nil, err
-	}
-	newTr, err := trie.NewStateTrie(trie.StorageTrieID(r.root, crypto.Keccak256Hash(addr.Bytes()), root), r.db)
-	if err != nil {
-		return nil, err
-	}
-	newTr.EnableConcurrentReads()
-	// First-writer-wins: another goroutine may have created it.
-	if existing, loaded := r.subTries.LoadOrStore(addr, newTr); loaded {
-		return existing.(Trie), nil
-	}
-	return newTr, nil
+        if v, ok := r.subTries.Load(addr); ok {
+                return v.(Trie), nil
+        }
+        // Optimize: Use r.lock to synchronize creation and prevent speculative allocation storms
+        r.lock.Lock()
+        if v, ok := r.subTries.Load(addr); ok {
+                r.lock.Unlock()
+                return v.(Trie), nil
+        }
+        root, err := r.resolveSubRoot(addr)
+        if err != nil {
+                r.lock.Unlock()
+                return nil, err
+        }
+        newTr, err := trie.NewStateTrie(trie.StorageTrieID(r.root, crypto.Keccak256Hash(addr.Bytes()), root), r.db)
+        if err != nil {
+                r.lock.Unlock()
+                return nil, err
+        }
+        newTr.EnableConcurrentReads()
+        r.subTries.Store(addr, newTr)
+        r.lock.Unlock()
+        return newTr, nil
 }
-
 // subTrieLocked is the legacy mutex-protected path. Verkle uses the
 // merged main trie; MPT uses per-address sub tries cached in subTries.
 func (r *trieReader) subTrieLocked(addr common.Address) (Trie, error) {
