@@ -729,10 +729,14 @@ func (pool *LegacyPool) Pending(filter txpool.PendingFilter, interrupt *atomic.B
 
 		txs := list.Flatten()
 
+		// Reserved-blockspace senders pay zero in-protocol fee; their txs must not
+		// be capped by the tip floor or they would never reach the miner.
+		reserved := pool.isReserved(addr)
+
 		// If the miner requests tip enforcement, cap the lists now
 		if filter.MinTip != nil || filter.GasLimitCap != 0 {
 			for i, tx := range txs {
-				if filter.MinTip != nil {
+				if filter.MinTip != nil && !reserved {
 					if tx.EffectiveGasTipIntCmp(filter.MinTip, filter.BaseFee) < 0 {
 						txs = txs[:i]
 						break
@@ -1125,7 +1129,7 @@ func (pool *LegacyPool) add(tx *types.Transaction, async bool) (replaced bool, e
 	// Try to replace an existing transaction in the pending pool
 	if list := pool.pending[from]; list != nil && list.Contains(tx.Nonce()) {
 		// Nonce already pending, check if required price bump is met
-		inserted, old := list.Add(tx, pool.config.PriceBump)
+		inserted, old := list.Add(tx, pool.config.PriceBump, pool.isReserved(from))
 		if !inserted {
 			pendingDiscardMeter.Mark(1)
 			stage2Duration = time.Since(stage2Time)
@@ -1229,7 +1233,7 @@ func (pool *LegacyPool) promoteTx(addr common.Address, hash common.Hash, tx *typ
 	}
 	list := pool.pending[addr]
 
-	inserted, old := list.Add(tx, pool.config.PriceBump)
+	inserted, old := list.Add(tx, pool.config.PriceBump, pool.isReserved(addr))
 	if !inserted {
 		// An older transaction was better, discard this
 		pool.all.Remove(hash)
@@ -2277,4 +2281,21 @@ func (pool *LegacyPool) HasPendingAuth(addr common.Address) bool {
 func (pool *LegacyPool) isFiltered(addr common.Address) bool {
 	_, exists := pool.filteredAddrs[addr]
 	return exists
+}
+
+// isReserved reports whether addr is a reserved-blockspace client active at the
+// current head. Reserved senders' zero-fee transactions bypass the pool's fee
+// floors (PIP-35 min tip, base-fee tip floor) so they are admitted, kept, and
+// surfaced to the miner. Classification is sender-based and consensus-uniform
+// (the reserved set comes from the chain config), matching the EVM fee path.
+func (pool *LegacyPool) isReserved(addr common.Address) bool {
+	cfg := pool.chainconfig
+	if cfg.Bor == nil {
+		return false
+	}
+	head := pool.currentHead.Load()
+	if head == nil || !cfg.Bor.IsReservedBlockspace(head.Number) {
+		return false
+	}
+	return cfg.Bor.IsReservedSender(addr)
 }
