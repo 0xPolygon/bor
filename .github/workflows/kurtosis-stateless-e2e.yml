@@ -80,7 +80,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: 0xPolygon/kurtosis-pos
-          ref: hv2/eip1559-and-rio-at-128
+          ref: v1.3.4
 
       # This step will free disk space and thus remove any docker images previously built
       - name: Pre kurtosis run
