@@ -134,6 +134,16 @@ type BlockExtraData struct {
 	GasTarget *uint64 `rlp:"optional"`
 	// BaseFeeChangeDenominator is the EIP-1559 base fee change denominator used by the block producer (post-Giugliano)
 	BaseFeeChangeDenominator *uint64 `rlp:"optional"`
+
+	// ReservedTxCount is the number of reserved-blockspace transactions placed at
+	// the top of the block (post-ReservedBlockspace fork). nil before the fork.
+	// These optional fields must stay last: RLP omits a trailing nil optional, and
+	// ReservedBlockspace activates after Giugliano so the fields above are always
+	// set when these are.
+	ReservedTxCount *uint32 `rlp:"optional"`
+	// ReservedGasUsed is the cumulative gas used by the reserved-region
+	// transactions (post-ReservedBlockspace fork). nil before the fork.
+	ReservedGasUsed *uint64 `rlp:"optional"`
 }
 
 // field type overrides for gencodec
@@ -542,6 +552,27 @@ func (h *Header) GetBaseFeeParams(chainConfig *params.ChainConfig) (gasTarget *u
 	}
 
 	return blockExtraData.GasTarget, blockExtraData.BaseFeeChangeDenominator
+}
+
+// GetReservedInfo extracts the reserved-blockspace tx count and cumulative gas
+// used from the block header's extra field. Returns nil, nil for pre-Cancun
+// blocks, on decode error, or for blocks that predate the ReservedBlockspace
+// fork (the optional fields are absent).
+func (h *Header) GetReservedInfo(chainConfig *params.ChainConfig) (reservedTxCount *uint32, reservedGasUsed *uint64) {
+	if !chainConfig.IsCancun(h.Number) {
+		return nil, nil
+	}
+
+	if len(h.Extra) < ExtraVanityLength+ExtraSealLength {
+		return nil, nil
+	}
+
+	var blockExtraData BlockExtraData
+	if err := rlp.DecodeBytes(h.Extra[ExtraVanityLength:len(h.Extra)-ExtraSealLength], &blockExtraData); err != nil {
+		return nil, nil
+	}
+
+	return blockExtraData.ReservedTxCount, blockExtraData.ReservedGasUsed
 }
 
 // DecodeBlockExtraData decodes the full BlockExtraData struct from the header's

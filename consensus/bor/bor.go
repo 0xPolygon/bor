@@ -106,6 +106,10 @@ var (
 	// the gas target or base fee change denominator in its extra data.
 	errMissingGiuglianoFields = errors.New("missing gas target or base fee change denominator in extra data")
 
+	// errMissingReservedBlockspaceFields is returned if a post-ReservedBlockspace
+	// block is missing the reserved tx count or reserved gas used in its extra data.
+	errMissingReservedBlockspaceFields = errors.New("missing reserved tx count or reserved gas used in extra data")
+
 	// errInvalidMixDigest is returned if a block's mix digest is non-zero.
 	errInvalidMixDigest = errors.New("non-zero mix digest")
 
@@ -501,6 +505,16 @@ func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 		gasTarget, bfcd := header.GetBaseFeeParams(c.chainConfig)
 		if gasTarget == nil || bfcd == nil {
 			return errMissingGiuglianoFields
+		}
+	}
+
+	// Post-ReservedBlockspace: verify the reserved tx count and reserved gas used
+	// are present. Presence only — value correctness (count matches the reserved
+	// region, gas within per-client quota) is enforced during block validation.
+	if c.config.IsReservedBlockspace(header.Number) {
+		reservedTxCount, reservedGasUsed := header.GetReservedInfo(c.chainConfig)
+		if reservedTxCount == nil || reservedGasUsed == nil {
+			return errMissingReservedBlockspaceFields
 		}
 	}
 
@@ -1019,6 +1033,20 @@ func (c *Bor) setGiuglianoExtraFields(header *types.Header, parent *types.Header
 	}
 }
 
+// setReservedBlockspaceExtraFields initializes the reserved-region header fields
+// for post-ReservedBlockspace blocks. The producer fills the real values during
+// block building (the reserved pass); here we ensure the fields are present
+// (non-nil) so every post-fork block is structurally valid and passes the
+// verifyHeader presence check, even when there are no reserved transactions.
+func (c *Bor) setReservedBlockspaceExtraFields(header *types.Header, blockExtraData *types.BlockExtraData) {
+	if c.config.IsReservedBlockspace(header.Number) {
+		var zeroCount uint32
+		var zeroGas uint64
+		blockExtraData.ReservedTxCount = &zeroCount
+		blockExtraData.ReservedGasUsed = &zeroGas
+	}
+}
+
 // Prepare implements consensus.Engine, preparing all the consensus fields of the
 // header for running the transactions on top.
 func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, waitOnPrepare bool) error {
@@ -1074,6 +1102,7 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 			}
 
 			c.setGiuglianoExtraFields(header, parent, blockExtraData)
+			c.setReservedBlockspaceExtraFields(header, blockExtraData)
 
 			blockExtraDataBytes, err := rlp.EncodeToBytes(blockExtraData)
 			if err != nil {
@@ -1094,6 +1123,7 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 		}
 
 		c.setGiuglianoExtraFields(header, parent, blockExtraData)
+		c.setReservedBlockspaceExtraFields(header, blockExtraData)
 
 		blockExtraDataBytes, err := rlp.EncodeToBytes(blockExtraData)
 		if err != nil {

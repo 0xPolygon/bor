@@ -789,6 +789,129 @@ func TestBlockExtraDataRLPBackwardCompatibility(t *testing.T) {
 	}
 }
 
+func TestReservedBlockExtraDataRLP(t *testing.T) {
+	t.Parallel()
+
+	gasTarget := uint64(15000000)
+	bfcd := uint64(64)
+
+	// Pre-ReservedBlockspace: reserved fields nil -> omitted from RLP, decode as nil.
+	preReserved := &BlockExtraData{
+		ValidatorBytes:           []byte{0x01},
+		TxDependency:             [][]uint64{{1}},
+		GasTarget:                &gasTarget,
+		BaseFeeChangeDenominator: &bfcd,
+	}
+	encoded, err := rlp.EncodeToBytes(preReserved)
+	if err != nil {
+		t.Fatalf("encode pre-reserved: %v", err)
+	}
+	var dec BlockExtraData
+	if err := rlp.DecodeBytes(encoded, &dec); err != nil {
+		t.Fatalf("decode pre-reserved: %v", err)
+	}
+	if dec.ReservedTxCount != nil || dec.ReservedGasUsed != nil {
+		t.Fatalf("reserved fields should be nil pre-fork, got %v %v", dec.ReservedTxCount, dec.ReservedGasUsed)
+	}
+
+	// Post-ReservedBlockspace: reserved fields set round-trip as non-nil.
+	count := uint32(3)
+	gasUsed := uint64(21000)
+	postReserved := &BlockExtraData{
+		ValidatorBytes:           []byte{0x02},
+		TxDependency:             [][]uint64{{2}},
+		GasTarget:                &gasTarget,
+		BaseFeeChangeDenominator: &bfcd,
+		ReservedTxCount:          &count,
+		ReservedGasUsed:          &gasUsed,
+	}
+	encoded, err = rlp.EncodeToBytes(postReserved)
+	if err != nil {
+		t.Fatalf("encode post-reserved: %v", err)
+	}
+	var dec2 BlockExtraData
+	if err := rlp.DecodeBytes(encoded, &dec2); err != nil {
+		t.Fatalf("decode post-reserved: %v", err)
+	}
+	if dec2.ReservedTxCount == nil || *dec2.ReservedTxCount != count {
+		t.Errorf("ReservedTxCount mismatch: got %v want %d", dec2.ReservedTxCount, count)
+	}
+	if dec2.ReservedGasUsed == nil || *dec2.ReservedGasUsed != gasUsed {
+		t.Errorf("ReservedGasUsed mismatch: got %v want %d", dec2.ReservedGasUsed, gasUsed)
+	}
+
+	// Zero values must round-trip as non-nil (post-fork block with no reserved txs).
+	zeroCount := uint32(0)
+	zeroGas := uint64(0)
+	zero := &BlockExtraData{
+		GasTarget:                &gasTarget,
+		BaseFeeChangeDenominator: &bfcd,
+		ReservedTxCount:          &zeroCount,
+		ReservedGasUsed:          &zeroGas,
+	}
+	encoded, err = rlp.EncodeToBytes(zero)
+	if err != nil {
+		t.Fatalf("encode zero-reserved: %v", err)
+	}
+	var dec3 BlockExtraData
+	if err := rlp.DecodeBytes(encoded, &dec3); err != nil {
+		t.Fatalf("decode zero-reserved: %v", err)
+	}
+	if dec3.ReservedTxCount == nil || *dec3.ReservedTxCount != 0 {
+		t.Errorf("zero ReservedTxCount should decode non-nil 0, got %v", dec3.ReservedTxCount)
+	}
+	if dec3.ReservedGasUsed == nil || *dec3.ReservedGasUsed != 0 {
+		t.Errorf("zero ReservedGasUsed should decode non-nil 0, got %v", dec3.ReservedGasUsed)
+	}
+}
+
+func TestGetReservedInfo(t *testing.T) {
+	t.Parallel()
+
+	chainConfig := &params.ChainConfig{
+		ChainID:     big.NewInt(137),
+		CancunBlock: big.NewInt(100),
+	}
+
+	buildExtra := func(bed *BlockExtraData) []byte {
+		vanity := make([]byte, ExtraVanityLength)
+		seal := make([]byte, ExtraSealLength)
+		encoded, _ := rlp.EncodeToBytes(bed)
+		extra := append(vanity, encoded...)
+		extra = append(extra, seal...)
+		return extra
+	}
+
+	count := uint32(2)
+	gasUsed := uint64(42000)
+	gasTarget := uint64(15000000)
+	bfcd := uint64(64)
+	bed := &BlockExtraData{
+		GasTarget:                &gasTarget,
+		BaseFeeChangeDenominator: &bfcd,
+		ReservedTxCount:          &count,
+		ReservedGasUsed:          &gasUsed,
+	}
+
+	// Post-Cancun header with reserved fields present.
+	postHeader := &Header{Number: big.NewInt(200), Extra: buildExtra(bed)}
+	if rc, rg := postHeader.GetReservedInfo(chainConfig); rc == nil || *rc != count || rg == nil || *rg != gasUsed {
+		t.Errorf("post-Cancun: got count=%v gas=%v want %d %d", rc, rg, count, gasUsed)
+	}
+
+	// Pre-Cancun header: getter returns nil, nil regardless of extra contents.
+	preHeader := &Header{Number: big.NewInt(50), Extra: buildExtra(bed)}
+	if rc, rg := preHeader.GetReservedInfo(chainConfig); rc != nil || rg != nil {
+		t.Errorf("pre-Cancun should return nil,nil; got %v %v", rc, rg)
+	}
+
+	// Short extra (vanity only): getter returns nil, nil.
+	short := &Header{Number: big.NewInt(200), Extra: make([]byte, ExtraVanityLength)}
+	if rc, rg := short.GetReservedInfo(chainConfig); rc != nil || rg != nil {
+		t.Errorf("short extra should return nil,nil; got %v %v", rc, rg)
+	}
+}
+
 func TestGetBaseFeeParams(t *testing.T) {
 	t.Parallel()
 

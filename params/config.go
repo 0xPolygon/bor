@@ -729,18 +729,19 @@ var (
 			BurntContract:         map[string]string{"0": "0x000000000000000000000000000000000000dead"},
 			BlockAlloc:            map[string]interface{}{},
 			// Bor hard forks
-			JaipurBlock:       big.NewInt(0),
-			DelhiBlock:        big.NewInt(0),
-			IndoreBlock:       big.NewInt(0),
-			AhmedabadBlock:    big.NewInt(0),
-			BhilaiBlock:       big.NewInt(0),
-			RioBlock:          big.NewInt(0),
-			MadhugiriBlock:    big.NewInt(0),
-			MadhugiriProBlock: big.NewInt(0),
-			DandeliBlock:      big.NewInt(0),
-			LisovoBlock:       big.NewInt(0),
-			LisovoProBlock:    big.NewInt(0),
-			ChicagoBlock:      big.NewInt(0),
+			JaipurBlock:             big.NewInt(0),
+			DelhiBlock:              big.NewInt(0),
+			IndoreBlock:             big.NewInt(0),
+			AhmedabadBlock:          big.NewInt(0),
+			BhilaiBlock:             big.NewInt(0),
+			RioBlock:                big.NewInt(0),
+			MadhugiriBlock:          big.NewInt(0),
+			MadhugiriProBlock:       big.NewInt(0),
+			DandeliBlock:            big.NewInt(0),
+			LisovoBlock:             big.NewInt(0),
+			LisovoProBlock:          big.NewInt(0),
+			ChicagoBlock:            big.NewInt(0),
+			ReservedBlockspaceBlock: big.NewInt(0),
 		},
 	}
 
@@ -958,6 +959,19 @@ type BorConfig struct {
 	LisovoProBlock             *big.Int          `json:"lisovoProBlock"`             // LisovoPro switch block (nil = no fork, 0 = already on lisovoPro)
 	GiuglianoBlock             *big.Int          `json:"giuglianoBlock"`             // Giugliano switch block (nil = no fork, 0 = already on giugliano)
 	ChicagoBlock               *big.Int          `json:"chicagoBlock"`               // Chicago switch block (nil = no fork, 0 = already on chicago)
+	ReservedBlockspaceBlock    *big.Int          `json:"reservedBlockspaceBlock"`    // ReservedBlockspace switch block (nil = no fork, 0 = already on reservedBlockspace)
+
+	// ReservedClients is the config-backed stub source for reserved-blockspace
+	// classification (allowlist + per-client quota). The registry contract
+	// (POS-3572) will replace this source without changing the query methods below.
+	ReservedClients []ReservedClient `json:"reservedClients,omitempty"`
+}
+
+// ReservedClient is one reserved-blockspace client in the config-backed stub
+// registry: whitelisted sender addresses sharing a single per-block gas quota.
+type ReservedClient struct {
+	Addresses []common.Address `json:"addresses"`
+	QuotaGas  uint64           `json:"quotaGas"`
 }
 
 // String implements the stringer interface, returning the consensus engine details.
@@ -1035,6 +1049,47 @@ func (c *BorConfig) IsGiugliano(number *big.Int) bool {
 
 func (c *BorConfig) IsChicago(number *big.Int) bool {
 	return isBlockForked(c.ChicagoBlock, number)
+}
+
+func (c *BorConfig) IsReservedBlockspace(number *big.Int) bool {
+	return isBlockForked(c.ReservedBlockspaceBlock, number)
+}
+
+// IsReservedSender reports whether addr is a whitelisted sender of any
+// reserved-blockspace client. Config-backed stub; the registry contract
+// (POS-3572) replaces the source without changing this signature.
+func (c *BorConfig) IsReservedSender(addr common.Address) bool {
+	for i := range c.ReservedClients {
+		for _, a := range c.ReservedClients[i].Addresses {
+			if a == addr {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ReservedQuotaOf returns the per-block reserved gas quota of the client that
+// owns addr, or 0 if addr is not a reserved sender.
+func (c *BorConfig) ReservedQuotaOf(addr common.Address) uint64 {
+	for i := range c.ReservedClients {
+		for _, a := range c.ReservedClients[i].Addresses {
+			if a == addr {
+				return c.ReservedClients[i].QuotaGas
+			}
+		}
+	}
+	return 0
+}
+
+// ReservedCapacity returns the sum of all reserved clients' per-block gas
+// quotas — the capacity removed from the EIP-1559 normal region.
+func (c *BorConfig) ReservedCapacity() uint64 {
+	var total uint64
+	for i := range c.ReservedClients {
+		total += c.ReservedClients[i].QuotaGas
+	}
+	return total
 }
 
 // GetTargetGasPercentage returns the target gas percentage for gas limit calculation.
@@ -1247,6 +1302,9 @@ func (c *ChainConfig) Description() string {
 		}
 		if c.Bor.ChicagoBlock != nil {
 			banner += fmt.Sprintf(" - Chicago:                   #%-8v\n", c.Bor.ChicagoBlock)
+		}
+		if c.Bor.ReservedBlockspaceBlock != nil {
+			banner += fmt.Sprintf(" - ReservedBlockspace:          #%-8v\n", c.Bor.ReservedBlockspaceBlock)
 		}
 		return banner
 	}
@@ -1887,6 +1945,7 @@ type Rules struct {
 	IsLisovo                                                bool
 	IsLisovoPro                                             bool
 	IsChicago                                               bool
+	IsReservedBlockspace                                    bool
 }
 
 // Rules ensures c's ChainID is not nil.
@@ -1899,29 +1958,30 @@ func (c *ChainConfig) Rules(num *big.Int, isMerge bool, _ uint64) Rules {
 	isMerge = isMerge && c.IsLondon(num)
 	isVerkle := isMerge && c.IsVerkle(num)
 	return Rules{
-		ChainID:          new(big.Int).Set(chainID),
-		IsHomestead:      c.IsHomestead(num),
-		IsEIP150:         c.IsEIP150(num),
-		IsEIP155:         c.IsEIP155(num),
-		IsEIP158:         c.IsEIP158(num),
-		IsByzantium:      c.IsByzantium(num),
-		IsConstantinople: c.IsConstantinople(num),
-		IsPetersburg:     c.IsPetersburg(num),
-		IsIstanbul:       c.IsIstanbul(num),
-		IsBerlin:         c.IsBerlin(num),
-		IsEIP2929:        c.IsBerlin(num) && !isVerkle,
-		IsLondon:         c.IsLondon(num),
-		IsMerge:          isMerge,
-		IsShanghai:       c.IsShanghai(num),
-		IsCancun:         c.IsCancun(num),
-		IsPrague:         c.IsPrague(num),
-		IsVerkle:         c.IsVerkle(num),
-		IsOsaka:          c.IsOsaka(num),
-		IsEIP4762:        c.IsVerkle(num),
-		IsMadhugiri:      c.Bor != nil && c.Bor.IsMadhugiri(num),
-		IsMadhugiriPro:   c.Bor != nil && c.Bor.IsMadhugiriPro(num),
-		IsLisovo:         c.Bor != nil && c.Bor.IsLisovo(num),
-		IsLisovoPro:      c.Bor != nil && c.Bor.IsLisovoPro(num),
-		IsChicago:        c.Bor != nil && c.Bor.IsChicago(num),
+		ChainID:              new(big.Int).Set(chainID),
+		IsHomestead:          c.IsHomestead(num),
+		IsEIP150:             c.IsEIP150(num),
+		IsEIP155:             c.IsEIP155(num),
+		IsEIP158:             c.IsEIP158(num),
+		IsByzantium:          c.IsByzantium(num),
+		IsConstantinople:     c.IsConstantinople(num),
+		IsPetersburg:         c.IsPetersburg(num),
+		IsIstanbul:           c.IsIstanbul(num),
+		IsBerlin:             c.IsBerlin(num),
+		IsEIP2929:            c.IsBerlin(num) && !isVerkle,
+		IsLondon:             c.IsLondon(num),
+		IsMerge:              isMerge,
+		IsShanghai:           c.IsShanghai(num),
+		IsCancun:             c.IsCancun(num),
+		IsPrague:             c.IsPrague(num),
+		IsVerkle:             c.IsVerkle(num),
+		IsOsaka:              c.IsOsaka(num),
+		IsEIP4762:            c.IsVerkle(num),
+		IsMadhugiri:          c.Bor != nil && c.Bor.IsMadhugiri(num),
+		IsMadhugiriPro:       c.Bor != nil && c.Bor.IsMadhugiriPro(num),
+		IsLisovo:             c.Bor != nil && c.Bor.IsLisovo(num),
+		IsLisovoPro:          c.Bor != nil && c.Bor.IsLisovoPro(num),
+		IsChicago:            c.Bor != nil && c.Bor.IsChicago(num),
+		IsReservedBlockspace: c.Bor != nil && c.Bor.IsReservedBlockspace(num),
 	}
 }
