@@ -344,13 +344,8 @@ func (st *stateTransition) buyGas() error {
 		}
 	}
 
-	if st.reserved {
-		// Reserved-blockspace tx pays zero in-protocol fee: don't require or debit
-		// the gas cost; only the call value must be funded. Block gas is still
-		// consumed (SubGas below), and gasRemaining is still set, so execution and
-		// gas accounting are unchanged.
-		mgval = new(big.Int)
-		balanceCheck = new(big.Int).Set(st.msg.Value)
+	if st.reserved { // zero in-protocol fee: don't require or debit gas, fund only the call value
+		mgval, balanceCheck = reservedZeroFeeGas(st.msg.Value)
 	}
 
 	balanceCheckU256, overflow := uint256.FromBig(balanceCheck)
@@ -374,6 +369,35 @@ func (st *stateTransition) buyGas() error {
 	mgvalU256, _ := uint256.FromBig(mgval)
 	st.state.SubBalance(st.msg.From, mgvalU256, tracing.BalanceDecreaseGasBuy)
 	return nil
+}
+
+// reservedZeroFeeGas returns the (mgval, balanceCheck) for a reserved-blockspace
+// tx: zero gas cost to debit, only the call value to fund. Block gas is still
+// consumed by the caller, so gas accounting is unchanged.
+func reservedZeroFeeGas(value *big.Int) (mgval, balanceCheck *big.Int) {
+	return new(big.Int), new(big.Int).Set(value)
+}
+
+// calcBaseFeeBurn returns the base-fee burn amount and the configured burnt-
+// contract address. Bor redirects the burned base fee to a "burnt contract"
+// (a dead address on mainnet/amoy); the credit happens here unless fees are
+// deferred (noFeeBurnAndTip). Reserved-blockspace txs burn nothing. On non-Bor
+// configs (Bor == nil) the base fee is implicitly burned the upstream way and no
+// credit happens, matching Ethereum mainnet semantics and Ethereum-spec fixtures.
+func (st *stateTransition) calcBaseFeeBurn(rules params.Rules) (*big.Int, common.Address) {
+	bor := st.evm.ChainConfig().Bor
+	if !rules.IsLondon || bor == nil {
+		return nil, common.Address{}
+	}
+	addr := common.HexToAddress(bor.CalculateBurntContract(st.evm.Context.BlockNumber.Uint64()))
+	if st.reserved {
+		return new(big.Int), addr
+	}
+	burn := new(big.Int).Mul(new(big.Int).SetUint64(st.gasUsed()), st.evm.Context.BaseFee)
+	if !st.noFeeBurnAndTip {
+		st.state.AddBalance(addr, cmath.BigIntToUint256Int(burn), tracing.BalanceChangeTransfer)
+	}
+	return burn, addr
 }
 
 func (st *stateTransition) preCheck() error {
@@ -653,29 +677,7 @@ func (st *stateTransition) execute() (*ExecutionResult, error) {
 
 	amount := new(big.Int).Mul(new(big.Int).SetUint64(st.gasUsed()), effectiveTip)
 
-	var burnAmount *big.Int
-	var burntContractAddress common.Address
-
-	if rules.IsLondon {
-		// Bor-specific behavior: redirect the burned base fee to a configured
-		// "burnt contract" (a dead address on bor mainnet/amoy). On non-Bor
-		// chain configs (Bor == nil), no credit happens — the base fee is
-		// implicitly burned the upstream go-ethereum way, matching Ethereum
-		// mainnet semantics. Without the nil-guard, Ethereum-spec test
-		// fixtures with Bor == nil panic here.
-		if bor := st.evm.ChainConfig().Bor; bor != nil {
-			burntContractAddress = common.HexToAddress(bor.CalculateBurntContract(st.evm.Context.BlockNumber.Uint64()))
-			if st.reserved {
-				// No base-fee burn for reserved-blockspace txs.
-				burnAmount = new(big.Int)
-			} else {
-				burnAmount = new(big.Int).Mul(new(big.Int).SetUint64(st.gasUsed()), st.evm.Context.BaseFee)
-				if !st.noFeeBurnAndTip {
-					st.state.AddBalance(burntContractAddress, cmath.BigIntToUint256Int(burnAmount), tracing.BalanceChangeTransfer)
-				}
-			}
-		}
-	}
+	burnAmount, burntContractAddress := st.calcBaseFeeBurn(rules)
 
 	if !st.noFeeBurnAndTip {
 		st.state.AddBalance(st.evm.Context.Coinbase, cmath.BigIntToUint256Int(amount), tracing.BalanceIncreaseRewardTransactionFee)

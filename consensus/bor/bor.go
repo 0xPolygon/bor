@@ -508,14 +508,8 @@ func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 		}
 	}
 
-	// Post-ReservedBlockspace: verify the reserved tx count and reserved gas used
-	// are present. Presence only — value correctness (count matches the reserved
-	// region, gas within per-client quota) is enforced during block validation.
-	if c.config.IsReservedBlockspace(header.Number) {
-		reservedTxCount, reservedGasUsed := header.GetReservedInfo(c.chainConfig)
-		if reservedTxCount == nil || reservedGasUsed == nil {
-			return errMissingReservedBlockspaceFields
-		}
+	if err := c.verifyReservedFields(header); err != nil {
+		return err
 	}
 
 	// Ensure that the mix digest is zero as we don't have fork protection currently
@@ -1045,6 +1039,21 @@ func (c *Bor) setReservedBlockspaceExtraFields(header *types.Header, blockExtraD
 		blockExtraData.ReservedTxCount = &zeroCount
 		blockExtraData.ReservedGasUsed = &zeroGas
 	}
+}
+
+// verifyReservedFields checks that post-ReservedBlockspace headers carry the
+// reserved-region fields. Presence only — value correctness (count matches the
+// reserved region, gas within per-client quota) is enforced during block
+// validation.
+func (c *Bor) verifyReservedFields(header *types.Header) error {
+	if !c.config.IsReservedBlockspace(header.Number) {
+		return nil
+	}
+	reservedTxCount, reservedGasUsed := header.GetReservedInfo(c.chainConfig)
+	if reservedTxCount == nil || reservedGasUsed == nil {
+		return errMissingReservedBlockspaceFields
+	}
+	return nil
 }
 
 // Prepare implements consensus.Engine, preparing all the consensus fields of the
