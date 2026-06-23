@@ -251,12 +251,6 @@ type environment struct {
 	sidecars []*types.BlobTxSidecar
 	blobs    int
 
-	// Reserved-blockspace bookkeeping populated by runReservedClients. The
-	// scaffolding PR reads these to stamp header.BlockExtraData; in this slice
-	// they're internal-only (read by tests).
-	reservedTxCount uint32
-	reservedGasUsed uint64
-
 	mvReadMapList []map[blockstm.Key]blockstm.ReadDescriptor
 	witness       *stateless.Witness
 
@@ -292,8 +286,6 @@ func (env *environment) copy() *environment {
 		makeEnvDuration:    env.makeEnvDuration,
 		makeHeaderDuration: env.makeHeaderDuration,
 		pendingDuration:    env.pendingDuration,
-		reservedTxCount:    env.reservedTxCount,
-		reservedGasUsed:    env.reservedGasUsed,
 	}
 
 	if env.gasPool != nil {
@@ -2080,7 +2072,11 @@ func scanOverflow(
 	return bonus, remaining
 }
 
-func (w *worker) fillTransactionsNew(interrupt *atomic.Int32, env *environment, genParams *generateParams) error {
+// fillTransactions retrieves the pending transactions from the txpool, sequences
+// them into ordered groups (priority, reserved per-client, then normal) via
+// sequenceTxs, and commits each group in turn. bor does not support blob
+// transactions, so only plain transactions are fetched.
+func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, genParams *generateParams) error {
 	var emptyBlobTxs = newTransactionsByPriceAndNonce(env.signer, nil, env.header.BaseFee, &w.interruptBlockBuilding)
 
 	pendingStart := time.Now()
@@ -2091,10 +2087,7 @@ func (w *worker) fillTransactionsNew(interrupt *atomic.Int32, env *environment, 
 	env.pendingDuration = time.Since(pendingStart)
 	pendingTimer.Update(env.pendingDuration)
 
-	sequence, err := w.sequenceTxs(env, pendingTxs)
-	if err != nil {
-		return err
-	}
+	sequence := w.sequenceTxs(env, pendingTxs)
 
 	// Shared channels used during builder mode. Both are nil when there is no prefetcher.
 	var builderPlanCh chan<- *types.Transaction
@@ -2126,13 +2119,12 @@ func (w *worker) fillTransactionsNew(interrupt *atomic.Int32, env *environment, 
 	return nil
 }
 
-// fillTransactions retrieves the pending transactions from the txpool and fills them
-// into the given sealing block. The transaction selection and ordering strategy can
-// be customized with the plugin in the future.
-
+// fillTransactionsOld is the previous prio/normal block-filling implementation,
+// kept for reference. It has no reserved-blockspace handling. The live path is
+// fillTransactions, which sequences transactions via sequenceTxs.
 //
-//nolint:gocognit
-func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, genParams *generateParams) error {
+//nolint:gocognit,unused
+func (w *worker) fillTransactionsOld(interrupt *atomic.Int32, env *environment, genParams *generateParams) error {
 	w.mu.RLock()
 	prio := w.prio
 	w.mu.RUnlock()

@@ -14,7 +14,7 @@ type newTransactionsByPriceAndNonceFn func(txs map[common.Address][]*txpool.Lazy
 
 // extractPriorityTxs filters the transactions from priority senders and
 // returns them grouped by price and nonce.
-func extractPriorityTxs(env *environment, prio []common.Address, pendingTxs map[common.Address][]*txpool.LazyTransaction, newTransactionsByPriceAndNonce newTransactionsByPriceAndNonceFn) *transactionsByPriceAndNonce {
+func extractPriorityTxs(prio []common.Address, pendingTxs map[common.Address][]*txpool.LazyTransaction, newTransactionsByPriceAndNonce newTransactionsByPriceAndNonceFn) *transactionsByPriceAndNonce {
 	prioPlainTxs := make(map[common.Address][]*txpool.LazyTransaction)
 	for _, account := range prio {
 		if txs := pendingTxs[account]; len(txs) > 0 {
@@ -79,6 +79,14 @@ func orderClients(parentHash common.Hash, ids []uint64) []uint64 {
 // The quota is measured by the transaction gas limit since actual gas used is only known
 // after execution. Transactions overflowing the quota are added back again to the original
 // pending list of transsactions.
+//
+// If block building is interrupted while the scan heap is being constructed, the
+// constructor yields an empty heap, so this client contributes nothing to the
+// build and its transactions stay in the pool for a later block. No overflow is
+// re-added in that case, and it doesn't need to be: pendingTxs here is a local
+// snapshot that's discarded once the (likewise-interrupted) commit pass returns,
+// and the real pool is untouched — matching how an interrupted commit defers the
+// remaining transactions.
 func selectReservedTxs(
 	clientTxs map[common.Address][]*txpool.LazyTransaction, quota uint64, newTransactionsByPriceAndNonce newTransactionsByPriceAndNonceFn,
 ) (selected *transactionsByPriceAndNonce, overflow map[common.Address][]*txpool.LazyTransaction) {
@@ -144,7 +152,16 @@ func (w *worker) extractReservedTxs(parentHash common.Hash, pendingTxs map[commo
 	return sequence
 }
 
-func (w *worker) sequenceTxs(env *environment, pendingTxs map[common.Address][]*txpool.LazyTransaction) ([]*transactionsByPriceAndNonce, error) {
+// sequenceTxs orders the pending transactions into the groups the block is
+// filled from, in commit order: priority senders first, then each reserved
+// client (deterministic, parent-hash-keyed order), then the remaining normal
+// transactions. Each group is an independently-ordered transactionsByPriceAndNonce
+// the caller commits in turn. Empty groups are omitted so the caller never spins
+// up a commit pass for nothing.
+//
+// There is no error path — sequencing only groups and orders an in-memory
+// snapshot; interruption is surfaced later, by commitTransactions.
+func (w *worker) sequenceTxs(env *environment, pendingTxs map[common.Address][]*txpool.LazyTransaction) []*transactionsByPriceAndNonce {
 	w.mu.RLock()
 	prio := w.prio
 	w.mu.RUnlock()
@@ -152,23 +169,24 @@ func (w *worker) sequenceTxs(env *environment, pendingTxs map[common.Address][]*
 	newTransactionsByPriceAndNonceFn := func(txs map[common.Address][]*txpool.LazyTransaction) *transactionsByPriceAndNonce {
 		return newTransactionsByPriceAndNonce(env.signer, txs, env.header.BaseFee, &w.interruptBlockBuilding)
 	}
+	newReservedTransactionsByNonceFn := func(txs map[common.Address][]*txpool.LazyTransaction) *transactionsByPriceAndNonce {
+		return newReservedTransactionsByNonce(env.signer, txs, env.header.BaseFee, &w.interruptBlockBuilding)
+	}
 
 	var sequence = make([]*transactionsByPriceAndNonce, 0)
 
-	// Extract the priority transactions
-	prioTxs := extractPriorityTxs(env, prio, pendingTxs, newTransactionsByPriceAndNonceFn)
-	if prioTxs != nil {
+	// Priority transactions (operator override) commit first.
+	if prioTxs := extractPriorityTxs(prio, pendingTxs, newTransactionsByPriceAndNonceFn); !prioTxs.Empty() {
 		sequence = append(sequence, prioTxs)
 	}
 
-	// Extract the reserved transactions
-	reservedTxs := w.extractReservedTxs(env.header.ParentHash, pendingTxs, newTransactionsByPriceAndNonceFn)
-	if len(reservedTxs) > 0 {
-		sequence = append(sequence, reservedTxs...)
+	// Reserved transactions, one ordered group per client.
+	sequence = append(sequence, w.extractReservedTxs(env.header.ParentHash, pendingTxs, newReservedTransactionsByNonceFn)...)
+
+	// Everything left (including reserved quota overflow added back above) is normal.
+	if normalTxs := newTransactionsByPriceAndNonceFn(pendingTxs); !normalTxs.Empty() {
+		sequence = append(sequence, normalTxs)
 	}
 
-	// Finally include the pending transactions
-	sequence = append(sequence, newTransactionsByPriceAndNonce(env.signer, pendingTxs, env.header.BaseFee, &w.interruptBlockBuilding))
-
-	return sequence, nil
+	return sequence
 }

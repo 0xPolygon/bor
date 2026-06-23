@@ -285,6 +285,15 @@ func (miner *Miner) SetPrioAddresses(prio []common.Address) {
 	miner.worker.setPrio(prio)
 }
 
+// SetReservedRegistry installs the reserved-blockspace registry the miner
+// consults during block building. Production callers leave it unset (nil) until
+// the registry module and its hardfork gating land — the reserved pass is a
+// no-op in that case and block building is byte-identical to before
+// reserved-blockspace existed. Tests inject a *Mock.
+func (miner *Miner) SetReservedRegistry(r ReservedRegistry) {
+	miner.worker.setReservedRegistry(r)
+}
+
 // SetGasCeil sets the gaslimit to strive for when mining blocks post 1559.
 // For pre-1559 blocks, it sets the ceiling.
 func (miner *Miner) SetGasCeil(ceil uint64) {
