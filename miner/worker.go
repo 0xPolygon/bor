@@ -1291,7 +1291,9 @@ func (w *worker) makeEnv(header *types.Header, coinbase common.Address, witness 
 		prefetchedTxHashes: genParams.prefetchedTxHashes,
 	}
 	env.evm.SetInterrupt(&w.interruptBlockBuilding)
-	env.evm.SetJumpDestCache(w.chain.JumpDestCache())
+	if jdc := w.chain.JumpDestCache(); jdc != nil {
+		env.evm.SetJumpDestCache(jdc)
+	}
 
 	// Keep track of transactions which return errors so they can be removed
 	env.tcount = 0
