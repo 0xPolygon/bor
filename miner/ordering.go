@@ -41,12 +41,19 @@ type txWithMinerFee struct {
 func newTxWithMinerFee(tx *txpool.LazyTransaction, from common.Address, baseFee *uint256.Int) (*txWithMinerFee, error) {
 	tip := new(uint256.Int).Set(tx.GasTipCap)
 	if baseFee != nil {
-		if tx.GasFeeCap.Cmp(baseFee) < 0 {
-			return nil, types.ErrGasFeeCapTooLow
-		}
-		tip = new(uint256.Int).Sub(tx.GasFeeCap, baseFee)
-		if tip.Gt(tx.GasTipCap) {
-			tip = tx.GasTipCap
+		// Reserved-blockspace senders pay zero in-protocol fee, so their txs are
+		// exempt from the base-fee floor and contribute no miner tip. Without this
+		// the producer would drop every reserved zero-fee tx before sealing.
+		if tx.Reserved {
+			tip = new(uint256.Int)
+		} else {
+			if tx.GasFeeCap.Cmp(baseFee) < 0 {
+				return nil, types.ErrGasFeeCapTooLow
+			}
+			tip = new(uint256.Int).Sub(tx.GasFeeCap, baseFee)
+			if tip.Gt(tx.GasTipCap) {
+				tip = tx.GasTipCap
+			}
 		}
 	}
 	return &txWithMinerFee{
