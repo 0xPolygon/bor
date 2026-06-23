@@ -1170,8 +1170,8 @@ type Bundle struct {
 
 // StateContext selects the base state for TraceCallMany. The state used is the
 // one after replaying transactions [0, TransactionIndex) of the referenced
-// block. If TransactionIndex is nil (or points past the last transaction),
-// the full post-block state is used.
+// block. If TransactionIndex is nil, -1, or points past the last transaction,
+// the full post-block state is used. Values below -1 are rejected.
 type StateContext struct {
 	BlockNumber      rpc.BlockNumberOrHash `json:"blockNumber"`
 	TransactionIndex *int                  `json:"transactionIndex"`
@@ -1191,6 +1191,10 @@ type StateContext struct {
 // rollback), so a transfer in one call is visible to a later call. After each
 // bundle the simulated block number and time advance by one. Per-bundle
 // BlockOverride is preferred over config.BlockOverrides.
+//
+// The result is positional: result[i] holds the traces for bundles[i]. A bundle
+// with no transactions is allowed (only a request with no transactions at all is
+// rejected) and yields an empty slice at its position.
 func (api *API) TraceCallMany(ctx context.Context, bundles []Bundle, simulateContext StateContext, config *TraceCallConfig) ([][]interface{}, error) {
 	if err := validateBundles(bundles); err != nil {
 		return nil, err
