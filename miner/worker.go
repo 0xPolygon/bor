@@ -933,6 +933,19 @@ func (w *worker) mainLoop() {
                                         continue
                                 }
 
+                                // Warm up cryptographic sender caches in parallel across cores
+                                var wg sync.WaitGroup
+                                for _, tx := range ev.Txs {
+                                        wg.Add(1)
+                                        go func(t *types.Transaction) {
+                                                defer wg.Done()
+                                                if w.current != nil {
+                                                        types.Sender(w.current.signer, t)
+                                                }
+                                        }(tx)
+                                }
+                                wg.Wait()
+
 				txs := make(map[common.Address][]*txpool.LazyTransaction, len(ev.Txs))
 				for _, tx := range ev.Txs {
 					acc, _ := types.Sender(w.current.signer, tx)
