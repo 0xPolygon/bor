@@ -124,6 +124,15 @@ func CalcBaseFee(config *params.ChainConfig, parent *types.Header) *big.Int {
 	// fee, so counting them would let a reserved client move the public base
 	// fee with its own usage. Anchoring the target on capacity (not used gas)
 	// keeps the public market stable and isolated from reserved behaviour.
+	//
+	// Note the two halves are not yet symmetric: the capacity-side reduction
+	// (reservedAwareGasTarget) is live, but the used-side netting (publicGasUsed)
+	// reads parent.ReservedGasUsed, which the producer stubs to 0 until its
+	// reserved pass lands (POS-3575). Until then the netting is inert, so under
+	// real reserved load the public base fee runs slightly hot. This is
+	// deterministic — every node reads the same header field — so it is a fee
+	// accuracy gap, not a consensus split. It resolves once POS-3575 populates
+	// ReservedGasUsed; no change is needed here.
 	if config.Bor != nil && config.Bor.IsReservedBlockspace(parent.Number) {
 		parentGasTarget = reservedAwareGasTarget(config, parent)
 		parentGasUsed = publicGasUsed(config, parent)

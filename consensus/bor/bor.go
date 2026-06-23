@@ -1034,6 +1034,12 @@ func (c *Bor) setGiuglianoExtraFields(header *types.Header, parent *types.Header
 // verifyHeader presence check, even when there are no reserved transactions.
 func (c *Bor) setReservedBlockspaceExtraFields(header *types.Header, blockExtraData *types.BlockExtraData) {
 	if c.config.IsReservedBlockspace(header.Number) {
+		// Placeholder zeros. The producer's reserved pass (POS-3575) will set the
+		// real ReservedTxCount / ReservedGasUsed during block building; this
+		// foundation only guarantees the fields are present (non-nil) so the
+		// header is structurally valid and passes the verifyReservedFields
+		// presence check. Until POS-3575 lands, every block reports zero reserved
+		// gas regardless of how many reserved txs it actually contains.
 		var zeroCount uint32
 		var zeroGas uint64
 		blockExtraData.ReservedTxCount = &zeroCount
@@ -1042,9 +1048,10 @@ func (c *Bor) setReservedBlockspaceExtraFields(header *types.Header, blockExtraD
 }
 
 // verifyReservedFields checks that post-ReservedBlockspace headers carry the
-// reserved-region fields. Presence only — value correctness (count matches the
-// reserved region, gas within per-client quota) is enforced during block
-// validation.
+// reserved-region fields. Presence only. Value correctness — that ReservedTxCount
+// matches the actual reserved region and ReservedGasUsed stays within each
+// client's quota — is NOT enforced yet; it lands with block validation in
+// POS-3576. Until then a producer can write any present values here.
 func (c *Bor) verifyReservedFields(header *types.Header) error {
 	if !c.config.IsReservedBlockspace(header.Number) {
 		return nil

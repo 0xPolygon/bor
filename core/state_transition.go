@@ -344,7 +344,12 @@ func (st *stateTransition) buyGas() error {
 		}
 	}
 
-	if st.reserved { // zero in-protocol fee: don't require or debit gas, fund only the call value
+	if st.reserved {
+		// Zero in-protocol fee: don't require or debit gas, fund only the call
+		// value. This overwrites mgval/balanceCheck after the blob branch above,
+		// so a reserved blob tx also skips its blob-fee debit and blob-fee balance
+		// requirement. Reserved clients are not a blob-tx use case today; if that
+		// changes, revisit whether the blob fee (a separate burn) should be waived.
 		mgval, balanceCheck = reservedZeroFeeGas(st.msg.Value)
 	}
 
