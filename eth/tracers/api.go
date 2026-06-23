@@ -1287,18 +1287,32 @@ func (api *API) TraceCallMany(ctx context.Context, bundles []Bundle, simulateCon
 			blockContext.GetHash = core.GetHashFn(hc, chainCtx)
 		}
 		if applyPrecompiles && config.StateOverrides != nil {
-			// State overrides can relocate precompiles (MovePrecompileTo) or free a
-			// precompile slot, which mutates the precompile set. Apply them once on
-			// the active set and reuse that mutated set for every bundle below. Note
-			// that the `precompiles` set below are set by request level overrides
-			// (`config.StateOverrides`). A bundle level override (`bundle.BlockOverride`)
-			// may change block number affecting the active precompile set, but it won't
-			// be honored given it requires re-applying the override which can affect
-			// the state mutations carried over from previous bundles. This is a known limitation.
 			rules := chainConfig.Rules(blockContext.BlockNumber, blockContext.Random != nil, blockContext.Time)
-			precompiles = vm.ActivePrecompiledContracts(rules)
-			if err := config.StateOverrides.Apply(statedb, precompiles); err != nil {
+			active := vm.ActivePrecompiledContracts(rules)
+			// State overrides change the precompile set only when an overridden address
+			// is itself an active precompile — that covers freeing a precompile slot and
+			// MovePrecompileTo (which requires the source to be a precompile). Detect this
+			// before Apply mutates the map.
+			touchesPrecompiles := false
+			for addr := range *config.StateOverrides {
+				if _, ok := active[addr]; ok {
+					touchesPrecompiles = true
+					break
+				}
+			}
+			if err := config.StateOverrides.Apply(statedb, active); err != nil {
 				return err
+			}
+			// Only pin the mutated set if the override actually changed it; then every
+			// bundle reuses it. Re-deriving it per bundle isn't possible without
+			// re-applying the override, which would clobber state mutations carried over
+			// from earlier bundles — so a bundle whose BlockOverride crosses a fork keeps
+			// the base-block precompile set. This is a known (now narrow) limitation.
+			//
+			// Otherwise leave precompiles nil so each bundle's traceTx derives the active
+			// set from its own (advanced) block context — correct across fork boundaries.
+			if touchesPrecompiles {
+				precompiles = active
 			}
 		}
 		return nil

@@ -871,6 +871,34 @@ func TestTraceCallMany(t *testing.T) {
 		}
 	})
 
+	t.Run("state override on a precompile slot is honored in execution", func(t *testing.T) {
+		// Overriding a precompile address with code frees the precompile slot, so the
+		// code runs instead of the precompile. This exercises the precompile-set detection
+		// for the slot-override case (not just MovePrecompileTo): the mutated set, where
+		// 0x04 is no longer a precompile, must reach traceTx — otherwise 0x04 keeps
+		// behaving as the identity precompile and echoes the input.
+		identity := common.BytesToAddress([]byte{0x04})
+		input := hexutil.Bytes{0xde, 0xad, 0xbe, 0xef}
+		code := hexutil.Bytes{0x00} // STOP -> returns no data (identity would echo the input)
+		bundles := []Bundle{{Transactions: []ethapi.TransactionArgs{{
+			From: &accounts[0].addr, To: &identity, Input: &input,
+		}}}}
+		cfg := &TraceCallConfig{StateOverrides: &override.StateOverride{
+			identity: {Code: &code},
+		}}
+		res, err := api.TraceCallMany(t.Context(), bundles, StateContext{BlockNumber: latest}, cfg)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		got := mustResult(t, res[0][0])
+		if got.Failed {
+			t.Fatalf("call to overridden precompile slot failed")
+		}
+		if got.ReturnValue.String() == input.String() {
+			t.Fatalf("0x04 still ran as the identity precompile; the slot override was not honored")
+		}
+	})
+
 	t.Run("honors context cancellation", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
