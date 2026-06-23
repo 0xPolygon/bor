@@ -18,6 +18,7 @@ package params
 
 import (
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -90,5 +91,25 @@ func TestReservedClientClassifier(t *testing.T) {
 	empty := &BorConfig{}
 	if empty.IsReservedSender(a) || empty.ReservedQuotaOf(a) != 0 || empty.ReservedCapacity() != 0 {
 		t.Error("empty reserved config should classify nothing")
+	}
+}
+
+func TestDescriptionReservedBlockspace(t *testing.T) {
+	t.Parallel()
+
+	// When scheduled, the startup banner must print the fork (hardfork-rollout
+	// review requires a visible activation height).
+	scheduled := &ChainConfig{
+		ChainID: big.NewInt(137),
+		Bor:     &BorConfig{ReservedBlockspaceBlock: big.NewInt(500)},
+	}
+	if got := scheduled.Description(); !strings.Contains(got, "ReservedBlockspace") || !strings.Contains(got, "500") {
+		t.Errorf("banner should advertise ReservedBlockspace #500, got:\n%s", got)
+	}
+
+	// Unscheduled (nil) must not print the line.
+	unscheduled := &ChainConfig{ChainID: big.NewInt(137), Bor: &BorConfig{}}
+	if strings.Contains(unscheduled.Description(), "ReservedBlockspace") {
+		t.Error("banner must omit ReservedBlockspace when unscheduled")
 	}
 }
