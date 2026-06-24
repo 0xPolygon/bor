@@ -26,6 +26,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/core/tracing"
+	"github.com/ethereum/go-ethereum/core/vm/nativectf"
 	"github.com/ethereum/go-ethereum/metrics"
 
 	"github.com/holiman/uint256"
@@ -213,6 +214,16 @@ func (evm *EVM) Run(contract *Contract, input []byte, readOnly bool) (ret []byte
 	// the execution of one of the operations or until the done flag is set by the
 	// parent context.
 	_ = jumpTable[0] // nil-check the jumpTable out of the loop
+
+	// Resolve the native BN254 ladder table once per frame (not per opcode). For
+	// the overwhelming majority of contracts this is an empty map, so the per-op
+	// check in the loop collapses to a single len()==0 test. Disabled-feature and
+	// traced frames skip it and pay nothing in the loop.
+	var ladderTable map[uint64]nativectf.LadderMeta
+	if evm.Config.NativeCTF != NativeCTFOff && !debug {
+		ladderTable = nativectf.LadderTableFor(contract.CodeHash, contract.Code)
+	}
+
 	for {
 		// Check for the flag to interrupt block building on timeout.
 		if interrupt.Load() {
@@ -240,13 +251,14 @@ func (evm *EVM) Run(contract *Contract, input []byte, readOnly bool) (ret []byte
 		// enough stack items available to perform the operation.
 		op = contract.GetOp(pc)
 
-		// Native BN254 ladder superinstruction (off by default; never with a tracer).
-		if evm.Config.NativeCTF != NativeCTFOff && !debug {
+		// Native BN254 ladder superinstruction. Gated on a non-empty per-frame table,
+		// so contracts without a ladder (virtually all) pay only this len()==0 test.
+		if len(ladderTable) > 0 {
 			if ladderShadow.pending && pc == ladderShadow.endPC {
 				evm.finalizeLadderShadow(contract, stack, &ladderShadow)
 			}
 			if op == JUMPDEST && !ladderShadow.pending {
-				if evm.tryNativeLadder(contract, stack, &pc, &ladderShadow) {
+				if evm.tryNativeLadder(contract, ladderTable, stack, &pc, &ladderShadow) {
 					continue // active substitution advanced pc past the block
 				}
 			}

@@ -37,11 +37,7 @@ type ladderShadowRec struct {
 // having advanced *pc past it). In shadow mode it records a pending comparison and
 // returns false so the interpreter runs the block normally. Any non-match or
 // insufficient gas returns false (the interpreter runs unchanged).
-func (evm *EVM) tryNativeLadder(contract *Contract, stack *Stack, pc *uint64, lsh *ladderShadowRec) bool {
-	table := nativectf.LadderTableFor(contract.CodeHash, contract.Code)
-	if len(table) == 0 {
-		return false
-	}
+func (evm *EVM) tryNativeLadder(contract *Contract, table map[uint64]nativectf.LadderMeta, stack *Stack, pc *uint64, lsh *ladderShadowRec) bool {
 	meta, ok := table[*pc]
 	if !ok || !meta.Pure { // Phase 1: pure (side-effect-free, static-gas) blocks only
 		return false
