@@ -31,6 +31,27 @@ type LadderMeta struct {
 	Out       []OutSlot // new top items, bottom-to-top (len = output top height)
 }
 
+// BuildLadderTable scans a contract's code and returns a map from each
+// recognized ladder block's start (JUMPDEST) PC to its substitution contract.
+// Most contracts contain no ladder, so the result is usually empty. Callers
+// should pre-filter with a cheap bytes.Contains before invoking this on every
+// contract (see table.go / the per-codehash cache in Task 4).
+func BuildLadderTable(code []byte) map[uint64]LadderMeta {
+	var table map[uint64]LadderMeta
+	for pc := 0; pc < len(code); pc++ {
+		if code[pc] != 0x5b { // JUMPDEST
+			continue
+		}
+		if m, ok := AnalyzeLadder(code, uint64(pc)); ok {
+			if table == nil {
+				table = make(map[uint64]LadderMeta)
+			}
+			table[uint64(pc)] = m
+		}
+	}
+	return table
+}
+
 // minLadderMULMODs is the structural gate: the BN254 getCollectionId ladder is a
 // single jump-free block with ~323 MULMODs. No ordinary contract has a jump-free
 // run with this many MULMODs, so this alone is a strong, cheap recognizer.
