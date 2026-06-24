@@ -929,38 +929,24 @@ func (w *worker) mainLoop() {
 					continue
 				}
                                 if len(ev.Txs) == 0 {
-                                        w.newTxs.Add(0)
-                                        continue
-                                }
+w.newTxs.Add(0)
+continue
+}
 
-                                // Warm up cryptographic sender caches in parallel across cores
-                                var wg sync.WaitGroup
-                                for _, tx := range ev.Txs {
-                                        wg.Add(1)
-                                        go func(t *types.Transaction) {
-                                                defer wg.Done()
-                                                if w.current != nil {
-                                                        types.Sender(w.current.signer, t)
-                                                }
-                                        }(tx)
-                                }
-                                wg.Wait()
-
-				txs := make(map[common.Address][]*txpool.LazyTransaction, len(ev.Txs))
-				for _, tx := range ev.Txs {
-					acc, _ := types.Sender(w.current.signer, tx)
-					txs[acc] = append(txs[acc], &txpool.LazyTransaction{
-						Pool:      w.eth.TxPool(), // We don't know where this came from, yolo resolve from everywhere
-						Hash:      tx.Hash(),
-						Tx:        nil, // Do *not* set this! We need to resolve it later to pull blobs in
-						Time:      tx.Time(),
-						GasFeeCap: uint256.MustFromBig(tx.GasFeeCap()),
-						GasTipCap: uint256.MustFromBig(tx.GasTipCap()),
-						Gas:       tx.Gas(),
-						BlobGas:   tx.BlobGas(),
-					})
-				}
-
+txs := make(map[common.Address][]*txpool.LazyTransaction)
+for _, tx := range ev.Txs {
+acc, _ := types.Sender(w.current.signer, tx)
+txs[acc] = append(txs[acc], &txpool.LazyTransaction{
+Pool:      w.eth.TxPool(),
+Hash:      tx.Hash(),
+Tx:        tx,
+Time:      tx.Time(),
+GasFeeCap: uint256.MustFromBig(tx.GasFeeCap()),
+GasTipCap: uint256.MustFromBig(tx.GasTipCap()),
+Gas:       tx.Gas(),
+BlobGas:   tx.BlobGas(),
+})
+}
 				stopFn := func() {}
 				if w.interruptCommitFlag {
 					stopFn = createInterruptTimer(
