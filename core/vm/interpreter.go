@@ -172,6 +172,8 @@ func (evm *EVM) Run(contract *Contract, input []byte, readOnly bool) (ret []byte
 		debug      = evm.Config.Tracer != nil
 		isEIP4762  = evm.chainRules.IsEIP4762
 		isShanghai = evm.chainRules.IsShanghai
+		// native BN254 ladder superinstruction state (per Run frame)
+		ladderShadow ladderShadowRec
 	)
 	// Don't move this deferred function, it's placed before the OnOpcode-deferred method,
 	// so that it gets executed _after_: the OnOpcode needs the stacks before
@@ -237,6 +239,19 @@ func (evm *EVM) Run(contract *Contract, input []byte, readOnly bool) (ret []byte
 		// Get the operation from the jump table and validate the stack to ensure there are
 		// enough stack items available to perform the operation.
 		op = contract.GetOp(pc)
+
+		// Native BN254 ladder superinstruction (off by default; never with a tracer).
+		if evm.Config.NativeCTF != NativeCTFOff && !debug {
+			if ladderShadow.pending && pc == ladderShadow.endPC {
+				evm.finalizeLadderShadow(contract, stack, &ladderShadow)
+			}
+			if op == JUMPDEST && !ladderShadow.pending {
+				if evm.tryNativeLadder(contract, stack, &pc, &ladderShadow) {
+					continue // active substitution advanced pc past the block
+				}
+			}
+		}
+
 		operation := jumpTable[op]
 		cost = operation.constantGas // For tracing
 		// Validate stack

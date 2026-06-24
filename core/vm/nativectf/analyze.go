@@ -43,6 +43,18 @@ type LadderMeta struct {
 	Out       []OutSlot // new top items, bottom-to-top (len = output top height)
 }
 
+// ResultDepthFromTop returns the depth-from-top (0 = top) at which the computed
+// result sits in the block's output stack, and ok=false if there is no result
+// slot (should not happen for a valid LadderMeta).
+func (m LadderMeta) ResultDepthFromTop() (int, bool) {
+	for ri := range m.Out {
+		if m.Out[ri].Kind == OutResult {
+			return len(m.Out) - 1 - ri, true
+		}
+	}
+	return 0, false
+}
+
 // BuildLadderTable scans a contract's code and returns a map from each
 // recognized ladder block's start (JUMPDEST) PC to its substitution contract.
 // Most contracts contain no ladder, so the result is usually empty. Callers
