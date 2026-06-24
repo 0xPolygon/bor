@@ -1,8 +1,20 @@
 package nativectf
 
 import (
+	"bytes"
+
 	"github.com/holiman/uint256"
 )
+
+// universalBodyMarker is a 16-byte opcode run from the heart of the Gnosis
+// CTHelpers square-and-multiply ladder, identical across every observed contract
+// and compiler variant: DUP1 DUP4 DUP1 MULMOD SWAP2 POP DUP1 DUP3 DUP4 MULMOD
+// DUP2 DUP2 DUP3 MULMOD SWAP1 POP. It is both the cheap whole-code pre-filter
+// (table.go) and the fingerprint gate inside AnalyzeLadder.
+var universalBodyMarker = []byte{
+	0x80, 0x83, 0x80, 0x09, 0x91, 0x50, 0x80, 0x82,
+	0x83, 0x09, 0x81, 0x81, 0x82, 0x09, 0x90, 0x50,
+}
 
 // OutKind classifies an output stack slot produced by a substituted ladder block.
 type OutKind uint8
@@ -297,6 +309,11 @@ func AnalyzeLadder(code []byte, jumpdestPC uint64) (LadderMeta, bool) {
 		return LadderMeta{}, false
 	}
 	endPC := i
+
+	// Fingerprint gate: the block must contain the universal CTHelpers ladder body.
+	if !bytes.Contains(code[jumpdestPC:endPC], universalBodyMarker) {
+		return LadderMeta{}, false
+	}
 
 	// Identify the untouched bottom: the longest prefix of the final stack that is
 	// still the original entry slots in order. Everything above it is the new top.
