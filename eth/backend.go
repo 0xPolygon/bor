@@ -24,7 +24,9 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"os"
 	"runtime"
+	"strconv"
 	"sync"
 	"time"
 
@@ -140,6 +142,19 @@ type Ethereum struct {
 	closeCh chan struct{} // Channel to signal the background processes to exit
 
 	shutdownTracker *shutdowncheck.ShutdownTracker // Tracks if and when the node has shutdown ungracefully
+}
+
+// nativeCTFMode resolves the native getCollectionId/ladder fast-path mode. The
+// BOR_NATIVE_CTF env var (0=off, 1=shadow, 2=active) overrides the config value,
+// so a build can be switched to shadow/active operationally without a CLI flag.
+func nativeCTFMode(cfgVal uint8) vm.NativeCTFMode {
+	v := cfgVal
+	if s := os.Getenv("BOR_NATIVE_CTF"); s != "" {
+		if n, err := strconv.ParseUint(s, 10, 8); err == nil && n <= 2 {
+			v = uint8(n)
+		}
+	}
+	return vm.NativeCTFMode(v)
 }
 
 // New creates a new Ethereum object (including the initialisation of the common Ethereum object),
@@ -289,8 +304,11 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 				EnablePreimageRecording: config.EnablePreimageRecording,
 				StatelessSelfValidation: config.StatelessSelfValidation,
 				EnableWitnessStats:      config.EnableWitnessStats,
-				EnableEVMSwitchDispatch: config.EnableEVMSwitchDispatch,
-				NativeCTF:               vm.NativeCTFMode(config.NativeCTF),
+				// BOR_NATIVE_CTF env (0=off,1=shadow,2=active) overrides config. The
+				// ladder hook only fires in the classic interpreter, so whenever the
+				// feature is on we force the switch-dispatch fast path off.
+				EnableEVMSwitchDispatch: config.EnableEVMSwitchDispatch && nativeCTFMode(config.NativeCTF) == vm.NativeCTFOff,
+				NativeCTF:               nativeCTFMode(config.NativeCTF),
 			},
 			Stateless: config.SyncMode == downloader.StatelessSync,
 			// Enables file journaling for the trie database. The journal files will be stored
