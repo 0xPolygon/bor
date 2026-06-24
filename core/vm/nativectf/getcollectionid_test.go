@@ -86,3 +86,19 @@ func TestGetCollectionId_Equivalence_Parent0(t *testing.T) {
 		check(ci, idx)
 	}
 }
+
+func TestGetCollectionId_GasEquivalence_Parent0(t *testing.T) {
+	o := newOracle(t)
+	maxU := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
+	var zero [32]byte
+	for i := 0; i < 4000; i++ {
+		var ci [32]byte
+		rand.Read(ci[:])
+		idx, _ := rand.Int(rand.Reader, maxU)
+		_, gas := o.call(zero, ci, idx)
+		_, iters, pf, b254 := GetCollectionId(zero, ci, idx)
+		if got := ExternalCallGas(iters, pf, b254); got != gas {
+			t.Fatalf("gas MISMATCH ci=%x idx=%s: oracle=%d native=%d (iters=%d pf=%v b254=%v)", ci, idx, gas, got, iters, pf, b254)
+		}
+	}
+}
