@@ -290,6 +290,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 				StatelessSelfValidation: config.StatelessSelfValidation,
 				EnableWitnessStats:      config.EnableWitnessStats,
 				EnableEVMSwitchDispatch: config.EnableEVMSwitchDispatch,
+				NativeCTF:               vm.NativeCTFMode(config.NativeCTF),
 			},
 			Stateless: config.SyncMode == downloader.StatelessSync,
 			// Enables file journaling for the trie database. The journal files will be stored

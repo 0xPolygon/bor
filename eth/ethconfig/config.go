@@ -209,6 +209,10 @@ type Config struct {
 	// Use switch-based fast path interpreter
 	EnableEVMSwitchDispatch bool
 
+	// Native getCollectionId fast-path: 0=off (default), 1=shadow, 2=active.
+	// Result-and-gas-exact; changes no chain results, needs no hardfork.
+	NativeCTF uint8
+
 	// Enables tracking of state size
 	EnableStateSizeTracking bool
 

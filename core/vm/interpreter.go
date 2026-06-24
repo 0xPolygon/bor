@@ -34,6 +34,21 @@ import (
 var opcodeCommitInterruptCounter = metrics.NewRegisteredCounter("worker/opcodeCommitInterrupt", nil)
 var ErrInterrupt = errors.New("evm execution interrupted due to timeout")
 
+// NativeCTFMode selects the behavior of the native getCollectionId fast-path.
+// It is result-and-gas-exact, so it changes no chain results and needs no
+// hardfork; it is off by default.
+type NativeCTFMode uint8
+
+const (
+	// NativeCTFOff disables the fast-path entirely (default; stock behavior).
+	NativeCTFOff NativeCTFMode = iota
+	// NativeCTFShadow runs native alongside the interpreter, keeps the
+	// interpreter result authoritative, and emits a mismatch metric.
+	NativeCTFShadow
+	// NativeCTFActive substitutes the native result+gas for recognized calls.
+	NativeCTFActive
+)
+
 // Config are the configuration options for the Interpreter
 type Config struct {
 	Tracer                  *tracing.Hooks
@@ -41,9 +56,10 @@ type Config struct {
 	EnablePreimageRecording bool  // Enables recording of SHA3/keccak preimages
 	ExtraEips               []int // Additional EIPS that are to be enabled
 
-	StatelessSelfValidation bool // Generate execution witnesses and self-check against them (testing purpose)
-	EnableWitnessStats      bool // Whether trie access statistics collection is enabled
-	EnableEVMSwitchDispatch bool // Use switch-based fast path interpreter
+	StatelessSelfValidation bool          // Generate execution witnesses and self-check against them (testing purpose)
+	EnableWitnessStats      bool          // Whether trie access statistics collection is enabled
+	EnableEVMSwitchDispatch bool          // Use switch-based fast path interpreter
+	NativeCTF               NativeCTFMode // native getCollectionId fast-path: off (default) / shadow / active
 }
 
 // ScopeContext contains the things that are per-call, such as stack and memory,
