@@ -1,6 +1,8 @@
 package vm
 
 import (
+	"time"
+
 	"github.com/ethereum/go-ethereum/core/vm/nativectf"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
@@ -19,6 +21,13 @@ var (
 	ladderShadowMismatch = metrics.NewRegisteredCounter("vm/nativectf/ladder/mismatch", nil)
 	// ladderActive: active-mode substitution count.
 	ladderActive = metrics.NewRegisteredCounter("vm/nativectf/ladder/active", nil)
+	// Performance comparison (shadow mode): cumulative wall time the interpreter
+	// spends executing recognized ladder blocks vs the native compute for the same
+	// blocks. interp_ns/native_ns is the per-ladder speedup; (interp_ns - native_ns)
+	// is the execution time active mode would save. Wall-clock under parallel
+	// execution is approximate (scheduling jitter) but directional over millions.
+	ladderInterpNs = metrics.NewRegisteredCounter("vm/nativectf/ladder/interp_ns", nil)
+	ladderNativeNs = metrics.NewRegisteredCounter("vm/nativectf/ladder/native_ns", nil)
 )
 
 // ladderShadowRec carries a pending shadow comparison across loop iterations
@@ -26,10 +35,12 @@ var (
 type ladderShadowRec struct {
 	pending    bool
 	endPC      uint64
-	rDepth     int           // expected result depth-from-top at endPC
-	gasAtStart uint64        // contract.Gas at block entry
-	gasStatic  uint64        // analyzer's static gas for the block
-	native     uint256.Int   // native result computed at entry
+	rDepth     int         // expected result depth-from-top at endPC
+	gasAtStart uint64      // contract.Gas at block entry
+	gasStatic  uint64      // analyzer's static gas for the block
+	native     uint256.Int // native result computed at entry
+	nativeNs   int64       // wall time the native compute took
+	entryTime  time.Time   // wall clock when the interpreter began the block
 }
 
 // tryNativeLadder is called at every JUMPDEST when the feature is on and no tracer
@@ -51,7 +62,9 @@ func (evm *EVM) tryNativeLadder(contract *Contract, table map[uint64]nativectf.L
 	}
 
 	x := *stack.Back(meta.BaseDepth) // copy
+	t0 := time.Now()
 	native := *nativectf.ModSqrtCandidate(&x)
+	nativeNs := time.Since(t0).Nanoseconds()
 
 	if evm.Config.NativeCTF == NativeCTFShadow {
 		*lsh = ladderShadowRec{
@@ -61,6 +74,8 @@ func (evm *EVM) tryNativeLadder(contract *Contract, table map[uint64]nativectf.L
 			gasAtStart: contract.Gas,
 			gasStatic:  meta.GasStatic,
 			native:     native,
+			nativeNs:   nativeNs,
+			entryTime:  time.Now(), // interpreter starts the block now
 		}
 		return false // let the interpreter execute the block; finalize at endPC
 	}
@@ -109,6 +124,9 @@ func (evm *EVM) finalizeLadderShadow(contract *Contract, stack *Stack, lsh *ladd
 	got := stack.Back(lsh.rDepth)
 	if got.Eq(&lsh.native) && gasUsed == lsh.gasStatic {
 		ladderShadowMatch.Inc(1)
+		// Record the interpreter-vs-native timing for the performance comparison.
+		ladderInterpNs.Inc(time.Since(lsh.entryTime).Nanoseconds())
+		ladderNativeNs.Inc(lsh.nativeNs)
 		return
 	}
 	ladderShadowMismatch.Inc(1)
