@@ -1,4 +1,8 @@
-package nativectf
+// This test runs the real mainnet CTF bytecode as an oracle via core/vm/runtime.
+// Because core/vm now imports this package (native_ctf_dispatch.go), an in-package
+// test importing runtime would form a cycle (runtime -> vm -> nativectf). It is
+// therefore an EXTERNAL test package; recognize_test.go stays internal.
+package nativectf_test
 
 import (
 	"crypto/rand"
@@ -11,6 +15,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/core/vm/nativectf"
 	"github.com/ethereum/go-ethereum/core/vm/runtime"
 	"github.com/ethereum/go-ethereum/crypto"
 )
@@ -64,7 +69,7 @@ func TestGetCollectionId_Equivalence_Parent0(t *testing.T) {
 		if len(ret) != 32 {
 			t.Fatalf("oracle returned %d bytes (revert?) ci=%x idx=%s", len(ret), ci, idx)
 		}
-		got, _, _, _ := GetCollectionId(zero, ci, idx)
+		got, _, _, _ := nativectf.GetCollectionId(zero, ci, idx)
 		if [32]byte(ret) != got {
 			t.Fatalf("MISMATCH ci=%x idx=%s: oracle=%x native=%x", ci, idx, ret, got)
 		}
@@ -96,8 +101,8 @@ func TestGetCollectionId_GasEquivalence_Parent0(t *testing.T) {
 		rand.Read(ci[:])
 		idx, _ := rand.Int(rand.Reader, maxU)
 		_, gas := o.call(zero, ci, idx)
-		_, iters, pf, b254 := GetCollectionId(zero, ci, idx)
-		if got := ExternalCallGas(iters, pf, b254); got != gas {
+		_, iters, pf, b254 := nativectf.GetCollectionId(zero, ci, idx)
+		if got := nativectf.ExternalCallGas(iters, pf, b254); got != gas {
 			t.Fatalf("gas MISMATCH ci=%x idx=%s: oracle=%d native=%d (iters=%d pf=%v b254=%v)", ci, idx, gas, got, iters, pf, b254)
 		}
 	}

@@ -310,6 +310,11 @@ func (evm *EVM) Call(caller common.Address, addr common.Address, input []byte, g
 		code := evm.resolveCode(addr)
 		if len(code) == 0 {
 			ret, err = nil, nil // gas is unchanged
+		} else if r, leftover, ok := evm.tryNativeCTF(addr, input, gas); ok {
+			// Result-and-gas-exact native fast-path (no state mutation): byte-identical
+			// to interpreter execution. Placed here so snapshot/touch/transfer above run
+			// exactly as stock; ok=false (any precondition unmet) falls through.
+			ret, gas = r, leftover
 		} else {
 			// The contract is a scoped environment for this execution context only.
 			contract := NewContract(caller, addr, value, gas, evm.jumpDests)
@@ -473,6 +478,10 @@ func (evm *EVM) StaticCall(caller common.Address, addr common.Address, input []b
 
 	if p, isPrecompile := evm.precompile(addr); isPrecompile {
 		ret, gas, err = RunPrecompiledContract(p, input, gas, evm.Config.Tracer)
+	} else if r, leftover, ok := evm.tryNativeCTF(addr, input, gas); ok {
+		// Result-and-gas-exact native fast-path (read-only, no state mutation):
+		// byte-identical to interpreter execution. ok=false falls through to stock.
+		ret, gas = r, leftover
 	} else {
 		// Initialise a new contract and set the code that is to be used by the EVM.
 		// The contract is a scoped environment for this execution context only.
