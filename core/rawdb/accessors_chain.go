@@ -34,6 +34,13 @@ import (
 
 // ReadCanonicalHash retrieves the hash assigned to a canonical block number.
 func ReadCanonicalHash(db ethdb.Reader, number uint64) common.Hash {
+	// Fast path: recent entries live in the key-value store and are removed only
+	// after being copied to the freezer (chainFreezer.freeze), so a KV hit is
+	// always valid. Reading KV first lets recent lookups skip the freezer
+	// read-lock and avoid serializing behind an in-progress freeze.
+	if data, _ := db.Get(headerHashKey(number)); len(data) > 0 {
+		return common.BytesToHash(data)
+	}
 	var data []byte
 	db.ReadAncients(func(reader ethdb.AncientReaderOp) error {
 		data, _ = reader.Ancient(ChainFreezerHashTable, number)
@@ -406,6 +413,14 @@ func ReadHeaderRange(db ethdb.Reader, number uint64, count uint64) []rlp.RawValu
 
 // ReadHeaderRLP retrieves a block header in its raw RLP database encoding.
 func ReadHeaderRLP(db ethdb.Reader, hash common.Hash, number uint64) rlp.RawValue {
+	// Fast path: recent entries live in the key-value store (keyed by number+hash)
+	// and are removed only after being copied to the freezer (chainFreezer.freeze),
+	// so a KV hit is always valid. Reading KV first lets recent lookups skip the
+	// freezer read-lock and avoid serializing behind an in-progress freeze.
+	if data, _ := db.Get(headerKey(number, hash)); len(data) > 0 {
+		return data
+	}
+
 	var data []byte
 
 	_ = db.ReadAncients(func(reader ethdb.AncientReaderOp) error {
@@ -607,6 +622,13 @@ func DeleteBody(db ethdb.KeyValueWriter, hash common.Hash, number uint64) {
 
 // ReadTdRLP retrieves a block's total difficulty corresponding to the hash in RLP encoding.
 func ReadTdRLP(db ethdb.Reader, hash common.Hash, number uint64) rlp.RawValue {
+	// Fast path: recent entries live in the key-value store (keyed by number+hash)
+	// and are removed only after being copied to the freezer (chainFreezer.freeze),
+	// so a KV hit is always valid. Reading KV first lets recent lookups skip the
+	// freezer read-lock and avoid serializing behind an in-progress freeze.
+	if data, _ := db.Get(headerTDKey(number, hash)); len(data) > 0 {
+		return data
+	}
 	var data []byte
 	db.ReadAncients(func(reader ethdb.AncientReaderOp) error {
 		// Check if the data is in ancients
