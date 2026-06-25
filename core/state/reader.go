@@ -416,30 +416,31 @@ func (r *trieReader) subTrieFor(addr common.Address) (Trie, error) {
 // cache and EnableConcurrentReads() on freshly opened tries so multiple
 // goroutines can read different addresses without cross-address contention.
 func (r *trieReader) subTrieConcurrent(addr common.Address) (Trie, error) {
-        if v, ok := r.subTries.Load(addr); ok {
-                return v.(Trie), nil
-        }
-        // Optimize: Use r.lock to synchronize creation and prevent speculative allocation storms
-        r.lock.Lock()
-        if v, ok := r.subTries.Load(addr); ok {
-                r.lock.Unlock()
-                return v.(Trie), nil
-        }
-        root, err := r.resolveSubRoot(addr)
-        if err != nil {
-                r.lock.Unlock()
-                return nil, err
-        }
-        newTr, err := trie.NewStateTrie(trie.StorageTrieID(r.root, crypto.Keccak256Hash(addr.Bytes()), root), r.db)
-        if err != nil {
-                r.lock.Unlock()
-                return nil, err
-        }
-        newTr.EnableConcurrentReads()
-        r.subTries.Store(addr, newTr)
-        r.lock.Unlock()
-        return newTr, nil
+	if v, ok := r.subTries.Load(addr); ok {
+		return v.(Trie), nil
+	}
+	// Optimize: serialize creation to avoid speculative allocation storms on cache misses.
+	r.lock.Lock()
+	defer r.lock.Unlock()
+
+	if v, ok := r.subTries.Load(addr); ok {
+		return v.(Trie), nil
+	}
+
+	root, err := r.resolveSubRoot(addr)
+	if err != nil {
+		return nil, err
+	}
+
+	newTr, err := trie.NewStateTrie(trie.StorageTrieID(r.root, crypto.Keccak256Hash(addr.Bytes()), root), r.db)
+	if err != nil {
+		return nil, err
+	}
+	newTr.EnableConcurrentReads()
+	r.subTries.Store(addr, newTr)
+	return newTr, nil
 }
+
 // subTrieLocked is the legacy mutex-protected path. Verkle uses the
 // merged main trie; MPT uses per-address sub tries cached in subTries.
 func (r *trieReader) subTrieLocked(addr common.Address) (Trie, error) {
@@ -592,8 +593,8 @@ type readerWithCache struct {
 }
 
 // newReaderWithCache constructs the reader with local cache.
-func newReaderWithCache(reader Reader) *readerWithCache {
-	return &readerWithCache{
+func newReaderWithCache(reader Reader) *readerWithcache {
+	return &readerWithcache{
 		Reader: reader,
 	}
 }
@@ -606,7 +607,7 @@ func newReaderWithCache(reader Reader) *readerWithCache {
 //
 // It also returns the cache entry (for provenance/unique-usage accounting)
 // and whether this call inserted a new entry (first-writer-wins).
-func (r *readerWithCache) account(addr common.Address, caller readerRole) (*types.StateAccount, bool, *accountCacheEntry, bool, error) {
+func (r *readerWithcache) account(addr common.Address, caller readerRole) (*types.StateAccount, bool, *accountCacheEntry, bool, error) {
 	// Try to resolve the requested account in the local cache (lock-free read).
 	if v, ok := r.accounts.Load(addr); ok {
 		ent := v.(*accountCacheEntry)
@@ -632,7 +633,7 @@ func (r *readerWithCache) account(addr common.Address, caller readerRole) (*type
 // The returned account might be nil if it's not existent.
 //
 // An error will be returned if the state is corrupted in the underlying reader.
-func (r *readerWithCache) Account(addr common.Address) (*types.StateAccount, error) {
+func (r *readerWithcache) Account(addr common.Address) (*types.StateAccount, error) {
 	account, _, _, _, err := r.account(addr, roleUnknown)
 	return account, err
 }
@@ -643,7 +644,7 @@ func (r *readerWithCache) Account(addr common.Address) (*types.StateAccount, err
 //
 // It also returns the cache entry (for provenance/unique-usage accounting)
 // and whether this call inserted a new entry (first-writer-wins).
-func (r *readerWithCache) storage(addr common.Address, slot common.Hash, caller readerRole) (common.Hash, bool, *storageCacheEntry, bool, error) {
+func (r *readerWithcache) storage(addr common.Address, slot common.Hash, caller readerRole) (common.Hash, bool, *storageCacheEntry, bool, error) {
 	key := storageKey{addr: addr, slot: slot}
 
 	// Try to resolve the requested storage slot in the local cache (lock-free read).
@@ -672,13 +673,13 @@ func (r *readerWithCache) storage(addr common.Address, slot common.Hash, caller 
 // existent.
 //
 // An error will be returned if the state is corrupted in the underlying reader.
-func (r *readerWithCache) Storage(addr common.Address, slot common.Hash) (common.Hash, error) {
+func (r *readerWithcache) Storage(addr common.Address, slot common.Hash) (common.Hash, error) {
 	value, _, _, _, err := r.storage(addr, slot, roleUnknown)
 	return value, err
 }
 
-type readerWithCacheStats struct {
-	*readerWithCache
+type readerWithcacheStats struct {
+	*readerWithcache
 	role readerRole
 
 	accountHit  atomic.Int64
@@ -699,9 +700,9 @@ type readerWithCacheStats struct {
 }
 
 // newReaderWithCacheStats constructs the reader with additional statistics tracked.
-func newReaderWithCacheStats(reader *readerWithCache, role readerRole) *readerWithCacheStats {
-	return &readerWithCacheStats{
-		readerWithCache: reader,
+func newReaderWithcacheStats(reader *readerWithcache, role readerRole) *readerWithcacheStats {
+	return &readerWithcacheStats{
+		readerWithcache: reader,
 		role:            role,
 	}
 }
@@ -710,8 +711,8 @@ func newReaderWithCacheStats(reader *readerWithCache, role readerRole) *readerWi
 // The returned account might be nil if it's not existent.
 //
 // An error will be returned if the state is corrupted in the underlying reader.
-func (r *readerWithCacheStats) Account(addr common.Address) (*types.StateAccount, error) {
-	account, incache, ent, inserted, err := r.readerWithCache.account(addr, r.role)
+func (r *readerWithcacheStats) Account(addr common.Address) (*types.StateAccount, error) {
+	account, incache, ent, inserted, err := r.readerWithcache.account(addr, r.role)
 	if err != nil {
 		return nil, err
 	}
@@ -740,8 +741,8 @@ func (r *readerWithCacheStats) Account(addr common.Address) (*types.StateAccount
 // existent.
 //
 // An error will be returned if the state is corrupted in the underlying reader.
-func (r *readerWithCacheStats) Storage(addr common.Address, slot common.Hash) (common.Hash, error) {
-	value, incache, entCopy, inserted, err := r.readerWithCache.storage(addr, slot, r.role)
+func (r *readerWithcacheStats) Storage(addr common.Address, slot common.Hash) (common.Hash, error) {
+	value, incache, entCopy, inserted, err := r.readerWithcache.storage(addr, slot, r.role)
 	if err != nil {
 		return common.Hash{}, err
 	}
@@ -764,7 +765,7 @@ func (r *readerWithCacheStats) Storage(addr common.Address, slot common.Hash) (c
 }
 
 // GetStats implements ReaderWithStats, returning the statistics of state reader.
-func (r *readerWithCacheStats) GetStats() ReaderStats {
+func (r *readerWithcacheStats) GetStats() ReaderStats {
 	return ReaderStats{
 		AccountHit:  r.accountHit.Load(),
 		AccountMiss: r.accountMiss.Load(),
@@ -774,7 +775,7 @@ func (r *readerWithCacheStats) GetStats() ReaderStats {
 }
 
 // GetPrefetchStats returns attribution statistics for evaluating prefetch effectiveness.
-func (r *readerWithCacheStats) GetPrefetchStats() PrefetchStats {
+func (r *readerWithcacheStats) GetPrefetchStats() PrefetchStats {
 	return PrefetchStats{
 		AccountHitFromPrefetch:       r.accountHitFromPrefetch.Load(),
 		StorageHitFromPrefetch:       r.storageHitFromPrefetch.Load(),
