@@ -18,6 +18,7 @@ package downloader
 
 import (
 	"errors"
+	"fmt"
 	"sort"
 	"time"
 
@@ -103,6 +104,103 @@ type typedQueue interface {
 	deliver(peer *peerConnection, packet *eth.Response) (int, error)
 }
 
+func (d *Downloader) collectIdlePeers(queue typedQueue, pending, stales map[string]*eth.Request) (idles []*peerConnection, caps []int, hasBackedOff bool, awaitingStale int, nextBackoff time.Time) {
+	for _, peer := range d.peers.AllPeers() {
+		idle, capacity, backedOff, awaiting, wake := d.classifyPeer(queue, peer, pending, stales)
+		if idle {
+			idles = append(idles, peer)
+			caps = append(caps, capacity)
+		}
+		if backedOff {
+			hasBackedOff = true
+		}
+		if awaiting {
+			awaitingStale++
+		}
+		nextBackoff = earlierBackoff(nextBackoff, wake)
+	}
+
+	return idles, caps, hasBackedOff, awaitingStale, nextBackoff
+}
+
+func (d *Downloader) classifyPeer(queue typedQueue, peer *peerConnection, pending, stales map[string]*eth.Request) (idle bool, capacity int, backedOff bool, awaitingStale bool, wake time.Time) {
+	req, stale := pending[peer.id], stales[peer.id]
+	switch {
+	case req == nil && stale == nil:
+		free, capacity, backoff := d.freePeerStatus(queue, peer)
+		return free, capacity, !backoff.IsZero(), false, backoff
+	case stale != nil:
+		if d.gradeStalePeer(queue, peer, stale) {
+			delete(stales, peer.id)
+			stale.Close()
+		}
+		if peer.backedOff() {
+			return false, 0, true, false, peer.backoffExpiry()
+		}
+		return false, 0, false, true, stale.Sent.Add(timeoutGracePeriod)
+	default:
+		return false, 0, false, false, time.Time{}
+	}
+}
+
+func (d *Downloader) freePeerStatus(queue typedQueue, peer *peerConnection) (idle bool, capacity int, backoff time.Time) {
+	if !queueAcceptsPeer(queue, peer) {
+		return false, 0, time.Time{}
+	}
+	if peer.backedOff() {
+		return false, 0, peer.backoffExpiry()
+	}
+
+	return true, queue.capacity(peer, time.Second), time.Time{}
+}
+
+func queueAcceptsPeer(queue typedQueue, peer *peerConnection) bool {
+	switch queue.kind() {
+	case witnessQueueKind:
+		if !peer.peer.SupportsWitness() {
+			peer.log.Trace("Skipping peer for witness fetch - no witness support", "peer", peer.id)
+			return false
+		}
+	case receiptQueueKind:
+		if peer.version < eth.ETH69 {
+			peer.log.Trace("Skipping peer for fetching receipts - version below eth/69", "peer", peer.id)
+			return false
+		}
+	}
+
+	return true
+}
+
+func (d *Downloader) gradeStalePeer(queue typedQueue, peer *peerConnection, stale *eth.Request) bool {
+	if stale.Sent.IsZero() {
+		stale.Sent = time.Now()
+	}
+	waited := time.Since(stale.Sent)
+	if waited <= timeoutGracePeriod {
+		return false
+	}
+	if peer.backedOff() {
+		return false
+	}
+	peer.log.Warn("Peer stalling, backing off", "waited", common.PrettyDuration(waited), "graceperiod", timeoutGracePeriod, "queueKind", queue.kind())
+	d.respondToPeer(peer, peerFailureStalling, fmt.Errorf("%w: stalled for %s", errStallingPeer, common.PrettyDuration(waited)))
+	return true
+}
+
+func fetchStallError(stalled bool, idles, capablePeers, awaitingStale int, hasBackedOff bool) error {
+	if !stalled {
+		return nil
+	}
+	if idles == capablePeers {
+		return ErrPeersUnavailable
+	}
+	if awaitingStale == 0 && idles < capablePeers && hasBackedOff {
+		return ErrPeerBackedOff
+	}
+
+	return nil
+}
+
 // concurrentFetch iteratively downloads scheduled block parts, taking available
 // peers, reserving a chunk of fetch requests for each and waiting for delivery
 // or timeouts.
@@ -154,6 +252,16 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 	peeringSub := d.peers.SubscribeEvents(peering)
 	defer peeringSub.Unsubscribe()
 
+	var (
+		backoffTimer *time.Timer
+		backoffCh    <-chan time.Time
+	)
+	defer func() {
+		if backoffTimer != nil {
+			backoffTimer.Stop()
+		}
+	}()
+
 	// Prepare the queue and fetch block parts until the block header fetcher's done
 	finished := false
 
@@ -162,6 +270,7 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 		if d.peers.Len() == 0 && !beaconMode {
 			return errNoPeers
 		}
+		var wakeBackoff time.Time
 		// If there's nothing more to fetch, wait or terminate
 		if queue.pending() == 0 {
 			if len(pending) == 0 && finished {
@@ -169,42 +278,11 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 			}
 		} else {
 			// Send a download request to all idle peers, until throttled
-			var (
-				idles []*peerConnection
-				caps  []int
-			)
-
 			isWitnessQueue := queue.kind() == witnessQueueKind
 			isReceiptQueue := queue.kind() == receiptQueueKind
 
-			for _, peer := range d.peers.AllPeers() {
-				pending, stale := pending[peer.id], stales[peer.id]
-				if pending == nil && stale == nil {
-					// For witness fetching, skip peers that don't support the witness protocol
-					if isWitnessQueue && !peer.peer.SupportsWitness() {
-						peer.log.Trace("Skipping peer for witness fetch - no witness support", "peer", peer.id)
-						continue
-					}
-
-					// eth/69 handlers also sends bor receipts via p2p. Skip peers
-					// below that to avoid missing bor receipts.
-					if isReceiptQueue && peer.version < eth.ETH69 {
-						peer.log.Trace("Skipping peer for fetching receipts - version below eth/69", "peer", peer.id)
-						continue
-					}
-
-					idles = append(idles, peer)
-					caps = append(caps, queue.capacity(peer, time.Second))
-				} else if stale != nil {
-					if waited := time.Since(stale.Sent); waited > timeoutGracePeriod {
-						// Request has been in flight longer than the grace period
-						// permitted it, consider the peer malicious attempting to
-						// stall the sync.
-						peer.log.Warn("Peer stalling, dropping", "waited", common.PrettyDuration(waited), "graceperiod", timeoutGracePeriod, "queueKind", queue.kind())
-						d.dropPeer(peer.id)
-					}
-				}
-			}
+			idles, caps, hasBackedOffPeer, awaitingStale, nextBackoff := d.collectIdlePeers(queue, pending, stales)
+			wakeBackoff = nextBackoff
 
 			sort.Sort(&peerCapacitySort{idles, caps})
 
@@ -286,10 +364,12 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 				capablePeers = d.peers.Len()
 			}
 
-			if !progressed && !throttled && len(pending) == 0 && len(idles) == capablePeers && queued > 0 && !beaconMode {
-				return errPeersUnavailable
+			stalledNoProgress := !progressed && !throttled && len(pending) == 0 && queued > 0 && !beaconMode
+			if err := fetchStallError(stalledNoProgress, len(idles), capablePeers, awaitingStale, hasBackedOffPeer); err != nil {
+				return err
 			}
 		}
+		backoffTimer, backoffCh = armBackoffTimer(backoffTimer, wakeBackoff)
 		// Wait for something to happen
 		select {
 		case <-d.cancelCh:
@@ -341,6 +421,7 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 			}
 
 			if req, ok := stales[peerid]; ok {
+				d.respondToPeer(event.peer, peerFailureStalling, fmt.Errorf("%w: peer left with a stale request", errStallingPeer))
 				delete(stales, peerid)
 				req.Close()
 			}
@@ -398,23 +479,21 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 				continue
 			}
 
+			d.cancelLock.RLock()
+			master := peer.id == d.cancelPeer
+			d.cancelLock.RUnlock()
+
+			if master {
+				peer.log.Debug("Downloader: master peer timed out, aborting sync", "queueKind", queue.kind(), "fails", fails)
+				d.cancel()
+				return errTimeout
+			}
+
 			if fails > 2 {
 				peer.log.Debug("Downloader: peer exceeded fail threshold, zeroing capacity", "queueKind", queue.kind(), "fails", fails)
 				queue.updateCapacity(peer, 0, 0)
 			} else {
-				d.dropPeer(peer.id)
-
-				// If this peer was the master peer, abort sync immediately
-				d.cancelLock.RLock()
-				master := peer.id == d.cancelPeer
-				d.cancelLock.RUnlock()
-
-				peer.log.Debug("Downloader: dropping peer on timeout", "queueKind", queue.kind(), "fails", fails, "master", master)
-
-				if master {
-					d.cancel()
-					return errTimeout
-				}
+				peer.log.Debug("Downloader: peer timed out, awaiting stale grace before grading", "queueKind", queue.kind(), "fails", fails)
 			}
 
 		case res := <-responses:
@@ -447,14 +526,6 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 			res.Done <- nil
 			res.Req.Close()
 
-			if queue.kind() == witnessQueueKind {
-				for _, peer := range d.peers.AllPeers() {
-					log.Debug("Peer", "peer", peer.id, "peer", peer.peer, "queue kind", "witness")
-				}
-
-				log.Debug("Peer", "peer1", res.Req.Peer, "peer2", d.peers.Peer(res.Req.Peer), "queue kind", "witness")
-			}
-
 			// If the peer was previously banned and failed to deliver its pack
 			// in a reasonable time frame, ignore its message.
 			if peer := d.peers.Peer(res.Req.Peer); peer != nil {
@@ -479,6 +550,8 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 			if !cont {
 				finished = true
 			}
+
+		case <-backoffCh:
 		}
 	}
 }

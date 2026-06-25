@@ -1,29 +1,29 @@
 package core
 
 import (
+	"bytes"
 	"context"
-	"crypto/ecdsa"
-	"crypto/sha256"
 	"math/big"
+	"slices"
 	"testing"
-
-	"github.com/holiman/uint256"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/blockstm"
-	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/triedb"
 )
 
 // This file builds the executor-level differential against serial: the
-// fuzzer drives both (a) the full V2 BlockSTM executor and (b) a
-// straight-line serial application of the same txs, then asserts the
-// resulting state roots are byte-identical.
+// fuzzer drives both (a) the full V2 BlockSTM executor and (b) the
+// production serial path (ApplyTransactionWithEVM) over the same txs,
+// then asserts every consensus output matches: state root, receipts
+// root, and per-tx status / cumulative gas / bloom / logs. Comparing
+// roots alone is not enough — the settlement log mispairing fixed on
+// this branch left state roots identical and corrupted only receipts.
 //
 // The motivation: TestV2Differential exercises only ParallelStateDB +
 // SettleTo, never going through ExecuteV2BlockSTM. v2_executor_diff
@@ -33,286 +33,64 @@ import (
 // real EVM, real signed txs, real executor, fast enough for CI.
 //
 // Inputs are decoded into a sequence of valid signed transactions
-// over a fixed set of pre-funded sender keys. Each tx is one of:
+// over a fixed set of pre-funded sender keys (see
+// v2_serial_parity_gen_test.go for the generator). Each tx is one of:
 //   transfer to a sender    — exercises balance delta read/write
 //   transfer to a fresh adr — exercises EIP-161 touch / new-account
 //   create contract         — exercises CodePath writes + EXTCODEHASH
 //   call last contract      — exercises EXTCODEHASH + storage rw +
 //                             cross-tx vfail/re-exec under conflict
+//   call selfdestruct pair  — exercises EIP-6780 payouts whose balance
+//                             ops shape-match recorded transfers
+//   7702 authorization      — exercises delegation set/clear, nonce-only
+//                             account existence, delegated code reads
 //
-// Between txs the V2 path runs through SettleTo on a finalDB; the
-// serial path runs ApplyMessage + Finalise(true). Both finish with
-// IntermediateRoot. Mismatch → fuzz failure (saved to testdata/fuzz/).
+// Between txs the V2 path settles through SettleTo on a finalDB; the
+// serial path runs ApplyTransactionWithEVM + Finalise(true). Mismatch
+// in any consensus output → fuzz failure (saved to testdata/fuzz/).
 
-// numFuzzSenders is fixed so the encoder can stably interpret "sender
-// index" as one byte. Five senders is enough to exercise per-sender
-// nonce chaining and cross-sender independence without exploding the
-// per-iteration cost of fuzzing.
-const numFuzzSenders = 5
+// fuzzChainConfig enables every supported fork (incl. Prague/EIP-7702)
+// so the vocabulary above is all live. Bor is nil here, so bor fee
+// transfer logs are skipped identically on both paths; the 0x1010
+// LogTransfer for value transfers is emitted unconditionally by
+// core.Transfer and is part of the compared receipts.
+var fuzzChainConfig = params.MergedTestChainConfig
 
-// fuzzGasLimit caps every tx so a malformed contract can't burn the
-// fuzzer's wall-clock. 200k is enough for any contract scenario the
-// generator produces; transfers consume 21k.
-const fuzzGasLimit = 200_000
-
-// fuzzMaxTxs caps txs per scenario so a long fuzz input doesn't blow
-// out the per-iteration runtime — keeps each fuzz step fast.
-const fuzzMaxTxs = 25
-
-// fuzzKeys are deterministic per-run keys derived from a constant seed
-// so failing fuzz inputs reproduce identically across runs.
-var fuzzKeys = mustGenFuzzKeys(numFuzzSenders)
-
-func mustGenFuzzKeys(n int) []*ecdsa.PrivateKey {
-	out := make([]*ecdsa.PrivateKey, n)
-	for i := 0; i < n; i++ {
-		// Stable, deterministic key derivation from index — never use
-		// these in production; they're test-only for byte-identical
-		// repro across machines.
-		seed := sha256.Sum256([]byte{0x42, byte(i)})
-		k, err := crypto.ToECDSA(seed[:])
-		if err != nil {
-			panic(err)
-		}
-		out[i] = k
-	}
-	return out
-}
-
-// fuzzCoinbase is the block coinbase. It's deliberately separate from
-// any sender so the fee-burn / fee-tip path involves balance changes
-// to a non-sender address, exercising V2's settle-time fee plumbing.
-var fuzzCoinbase = common.HexToAddress("0xCBCBCBCBCBCBCBCBCBCBCBCBCBCBCBCBCBCBCBCB")
-
-// initialBalance per sender — generous enough that a 25-tx scenario
-// can't bankrupt anyone via gas + value.
-var initialBalance = new(uint256.Int).Mul(uint256.NewInt(100), uint256.NewInt(1e18))
-
-// fuzzTxKind enumerates the tx shapes the generator produces.
-type fuzzTxKind uint8
-
-const (
-	kindTransferToSender fuzzTxKind = iota
-	kindTransferToFresh
-	kindContractCreate
-	kindContractCall
-)
-
-// fuzzTx is one tx in a decoded scenario.
-type fuzzTx struct {
-	kind         fuzzTxKind
-	senderIdx    int    // index into fuzzKeys
-	recipientIdx int    // for kindTransferToSender
-	freshNonce   byte   // for kindTransferToFresh — derived from input bytes for determinism
-	valueGwei    uint16 // small value so balances don't run out
-	createKind   uint8  // for kindContractCreate — selects which canned bytecode
-}
-
-// canned contract bytecodes used by kindContractCreate. Each one is
-// short and self-contained so the fuzzer can deploy any of them cheaply.
-var fuzzCreateSnippets = [][]byte{
-	// 0: empty constructor → returns nothing → contract has no code.
-	{0x60, 0x00, 0x60, 0x00, 0xf3}, // PUSH1 0 PUSH1 0 RETURN
-	// 1: SSTORE slot 0 = 1, then return empty code.
-	{0x60, 0x01, 0x60, 0x00, 0x55, 0x60, 0x00, 0x60, 0x00, 0xf3},
-	// 2: returns runtime code that does SSTORE slot 1 += 1 and STOP.
-	// Constructor: copy the runtime code to memory, return it.
-	// Runtime code: 60 01 60 01 54 01 60 01 55 00
-	//               PUSH1 1 PUSH1 1 SLOAD ADD PUSH1 1 SSTORE STOP  (10 bytes)
-	{
-		0x60, 0x0a, // PUSH1 10 (length)
-		0x60, 0x0c, // PUSH1 12 (offset = past constructor)
-		0x60, 0x00, // PUSH1 0  (dest in memory)
-		0x39,       // CODECOPY
-		0x60, 0x0a, // PUSH1 10 (length)
-		0x60, 0x00, // PUSH1 0
-		0xf3, // RETURN
-		// runtime code starts here:
-		0x60, 0x01, 0x60, 0x01, 0x54, 0x01, 0x60, 0x01, 0x55, 0x00,
-	},
-}
-
-// decodeScenario consumes the fuzzer's bytes and produces a sequence
-// of valid txs. Validity (nonce ordering, balance) is the decoder's
-// responsibility — failing txs are fine (both paths must reject the
-// same way) but txs that exhaust a sender's balance bias the test.
-func decodeScenario(data []byte) []fuzzTx {
-	if len(data) < 5 {
-		return nil
-	}
-	var out []fuzzTx
-	i := 0
-	for i+4 < len(data) && len(out) < fuzzMaxTxs {
-		// Layout: [kind(1) | sender(1) | aux(1) | valueLo(1) | valueHi(1)]
-		kind := fuzzTxKind(data[i] % 4)
-		senderIdx := int(data[i+1]) % numFuzzSenders
-		aux := data[i+2]
-		valueGwei := uint16(data[i+3]) | (uint16(data[i+4]) << 8)
-		// Cap value in gwei so cumulative spend per sender stays well
-		// under initialBalance.
-		valueGwei %= 4096
-
-		tx := fuzzTx{
-			kind:      kind,
-			senderIdx: senderIdx,
-			valueGwei: valueGwei,
-		}
-		switch kind {
-		case kindTransferToSender:
-			tx.recipientIdx = int(aux) % numFuzzSenders
-		case kindTransferToFresh:
-			tx.freshNonce = aux
-		case kindContractCreate:
-			tx.createKind = aux % uint8(len(fuzzCreateSnippets))
-		case kindContractCall:
-			// nothing extra; we'll resolve the target at apply time
-		}
-		out = append(out, tx)
-		i += 5
-	}
-	return out
-}
-
-// scenarioState tracks per-sender nonces and the most-recently-created
-// contract address so kindContractCall has a target.
-type scenarioState struct {
-	nonces      [numFuzzSenders]uint64
-	lastCreated common.Address
-	hasContract bool
-}
-
-// freshAddr derives a deterministic address from a single byte —
-// reused across both serial and V2 runs so they target the same
-// recipient.
-func freshAddr(seed byte) common.Address {
-	var a common.Address
-	a[19] = seed
-	a[18] = 0xa1
-	return a
-}
-
-// signedTxs builds the signed transactions from the decoded scenario,
-// using the per-sender nonce tracker. Returns parallel slices: the
-// signed txs and their pre-recovered Messages.
-func signedTxs(t testing.TB, decoded []fuzzTx, signer types.Signer, baseFee *big.Int) ([]*types.Transaction, []*Message) {
-	t.Helper()
-	state := scenarioState{}
-	txs := make([]*types.Transaction, 0, len(decoded))
-	msgs := make([]*Message, 0, len(decoded))
-
-	for _, d := range decoded {
-		nonce := state.nonces[d.senderIdx]
-		state.nonces[d.senderIdx]++
-
-		var to *common.Address
-		var data []byte
-		gas := uint64(21000)
-		switch d.kind {
-		case kindTransferToSender:
-			a := crypto.PubkeyToAddress(fuzzKeys[d.recipientIdx].PublicKey)
-			to = &a
-		case kindTransferToFresh:
-			a := freshAddr(d.freshNonce)
-			to = &a
-		case kindContractCreate:
-			data = fuzzCreateSnippets[d.createKind]
-			gas = fuzzGasLimit
-		case kindContractCall:
-			if !state.hasContract {
-				// No contract deployed yet — fall back to a fresh transfer.
-				a := freshAddr(d.freshNonce)
-				to = &a
-			} else {
-				a := state.lastCreated
-				to = &a
-				gas = fuzzGasLimit
-			}
-		}
-
-		// Compute value in wei from gwei; 0 is a legal value too.
-		value := new(big.Int).Mul(big.NewInt(int64(d.valueGwei)), big.NewInt(1e9))
-		tx, err := types.SignTx(types.NewTx(&types.DynamicFeeTx{
-			ChainID:   params.TestChainConfig.ChainID,
-			Nonce:     nonce,
-			GasTipCap: big.NewInt(1),
-			GasFeeCap: big.NewInt(1e9),
-			Gas:       gas,
-			To:        to,
-			Value:     value,
-			Data:      data,
-		}), signer, fuzzKeys[d.senderIdx])
-		if err != nil {
-			t.Fatal(err)
-		}
-		// Track the contract address that this tx WOULD create — both
-		// paths derive it the same way (CREATE = keccak(rlp(sender, nonce))).
-		if d.kind == kindContractCreate {
-			state.lastCreated = crypto.CreateAddress(crypto.PubkeyToAddress(fuzzKeys[d.senderIdx].PublicKey), nonce)
-			state.hasContract = true
-		}
-		msg, err := TransactionToMessage(tx, signer, baseFee)
-		if err != nil {
-			t.Fatal(err)
-		}
-		txs = append(txs, tx)
-		msgs = append(msgs, msg)
-	}
-	return txs, msgs
-}
-
-// buildBaseStateRoot creates an in-memory pre-state with every sender
-// pre-funded, commits, and returns (db, root) so both serial and V2
-// paths can re-open at the same root.
-func buildBaseStateRoot(t testing.TB) (*triedb.Database, common.Hash) {
-	t.Helper()
-	memdb := rawdb.NewMemoryDatabase()
-	tdb := triedb.NewDatabase(memdb, triedb.HashDefaults)
-	sdb, err := state.New(common.Hash{}, state.NewDatabase(tdb, nil))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, k := range fuzzKeys {
-		addr := crypto.PubkeyToAddress(k.PublicKey)
-		sdb.AddBalance(addr, initialBalance, 0)
-	}
-	root, err := sdb.Commit(0, false, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := tdb.Commit(root, false); err != nil {
-		t.Fatal(err)
-	}
-	return tdb, root
-}
-
-// runSerial applies txs sequentially via ApplyMessage on a fresh
-// StateDB at root. Between txs Finalise(true) so EIP-158 empty-account
-// deletion lines up with V2's settle path. Returns the post-IntermediateRoot.
-func runSerial(t testing.TB, tdb *triedb.Database, root common.Hash, txs []*types.Transaction, msgs []*Message, blockCtx vm.BlockContext) common.Hash {
+// runSerial applies txs sequentially via ApplyTransactionWithEVM (the
+// production serial path — it finalises per tx and emits receipts) on
+// a fresh StateDB at root. Returns the post-IntermediateRoot and the
+// per-tx receipts.
+func runSerial(t testing.TB, tdb *triedb.Database, root common.Hash, txs []*types.Transaction, msgs []*Message, blockCtx vm.BlockContext) (common.Hash, types.Receipts) {
 	t.Helper()
 	sdb, err := state.New(root, state.NewDatabase(tdb, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
+	gp := new(GasPool).AddGas(blockCtx.GasLimit)
+	var usedGas uint64
+	receipts := make(types.Receipts, 0, len(txs))
 	for i, tx := range txs {
 		sdb.SetTxContext(tx.Hash(), i)
-		evm := vm.NewEVM(blockCtx, sdb, params.TestChainConfig, vm.Config{})
-		evm.SetTxContext(NewEVMTxContext(msgs[i]))
-		// Failures are expected and accepted (e.g., out-of-gas) — V2
-		// must reject them the same way. Either way the state changes
-		// the message produced before failure must be reflected in
-		// the journal+Finalise so the trie matches V2's settle path.
-		_, _ = ApplyMessage(evm, msgs[i], new(GasPool).AddGas(blockCtx.GasLimit))
-		sdb.Finalise(true)
+		evm := vm.NewEVM(blockCtx, sdb, fuzzChainConfig, vm.Config{})
+		// The generator only emits consensus-valid txs (tracked nonces,
+		// bounded values against huge balances), so an apply error is a
+		// generator bug, not an accepted outcome. EVM-level failures
+		// (revert, OOG) still produce a status-failed receipt.
+		receipt, err := ApplyTransactionWithEVM(msgs[i], gp, sdb, blockCtx.BlockNumber, common.Hash{}, blockCtx.Time, tx, &usedGas, evm)
+		if err != nil {
+			t.Fatalf("serial apply tx %d: %v", i, err)
+		}
+		receipts = append(receipts, receipt)
 	}
-	return sdb.IntermediateRoot(true)
+	return sdb.IntermediateRoot(true), receipts
 }
 
 // runV2 runs txs through ExecuteV2BlockSTM with `workers` parallel
-// workers, then returns the IntermediateRoot of finalDB. base and
-// finalDB are independent StateDB instances at the same root (V2
-// requires this — workers read from base, settlement writes to finalDB).
-func runV2(t testing.TB, tdb *triedb.Database, root common.Hash, txs []*types.Transaction, msgs []*Message, blockCtx vm.BlockContext, workers int) common.Hash {
+// workers, then returns the IntermediateRoot of finalDB and the
+// settlement-built receipts. base and finalDB are independent StateDB
+// instances at the same root (V2 requires this — workers read from
+// base, settlement writes to finalDB).
+func runV2(t testing.TB, tdb *triedb.Database, root common.Hash, txs []*types.Transaction, msgs []*Message, blockCtx vm.BlockContext, workers int) (common.Hash, types.Receipts) {
 	t.Helper()
 	base, err := state.New(root, state.NewDatabase(tdb, nil))
 	if err != nil {
@@ -330,21 +108,74 @@ func runV2(t testing.TB, tdb *triedb.Database, root common.Hash, txs []*types.Tr
 
 	store := blockstm.NewMVStore()
 	bals := blockstm.NewMVBalanceStore()
-	_ = ExecuteV2BlockSTM(context.Background(), tasks, base, store, bals, blockCtx, common.Hash{}, vm.Config{},
-		params.TestChainConfig, blockCtx.GasLimit, workers, finalDB, nil)
+	res := ExecuteV2BlockSTM(context.Background(), tasks, base, store, bals, blockCtx, common.Hash{}, vm.Config{},
+		fuzzChainConfig, blockCtx.GasLimit, workers, finalDB, nil)
+	if res.PanickedIdx >= 0 {
+		t.Fatalf("V2 executor: tx %d panicked", res.PanickedIdx)
+	}
+	if res.ExecErrIdx >= 0 {
+		t.Fatalf("V2 executor: tx %d consensus error: %v", res.ExecErrIdx, res.ExecErr)
+	}
 
-	return finalDB.IntermediateRoot(true)
+	return finalDB.IntermediateRoot(true), res.Receipts
+}
+
+// assertReceiptParity compares every consensus field of the two receipt
+// sets, then the receipts trie root itself — exactly the header field a
+// validator recomputes. Per-field errors first so a divergence
+// pinpoints the tx and field instead of just two root hashes.
+func assertReceiptParity(t testing.TB, serial, v2 types.Receipts, workers int, decoded []fuzzTx) {
+	t.Helper()
+	if len(serial) != len(v2) {
+		t.Fatalf("receipt count mismatch: serial=%d v2=%d (workers=%d)", len(serial), len(v2), workers)
+	}
+	for i := range serial {
+		s, p := serial[i], v2[i]
+		if s.Status != p.Status {
+			t.Errorf("tx %d: status serial=%d v2=%d", i, s.Status, p.Status)
+		}
+		if s.CumulativeGasUsed != p.CumulativeGasUsed {
+			t.Errorf("tx %d: cumulative gas serial=%d v2=%d (tx gas serial=%d v2=%d)",
+				i, s.CumulativeGasUsed, p.CumulativeGasUsed, s.GasUsed, p.GasUsed)
+		}
+		if s.Bloom != p.Bloom {
+			t.Errorf("tx %d: bloom mismatch", i)
+		}
+		if len(s.Logs) != len(p.Logs) {
+			t.Errorf("tx %d: log count serial=%d v2=%d", i, len(s.Logs), len(p.Logs))
+			continue
+		}
+		for j := range s.Logs {
+			sl, pl := s.Logs[j], p.Logs[j]
+			if sl.Address != pl.Address || !slices.Equal(sl.Topics, pl.Topics) || !bytes.Equal(sl.Data, pl.Data) {
+				t.Errorf("tx %d log %d:\n  serial = addr=%s topics=%v data=%x\n  v2     = addr=%s topics=%v data=%x",
+					i, j, sl.Address, sl.Topics, sl.Data, pl.Address, pl.Topics, pl.Data)
+			}
+		}
+	}
+	sRoot := types.DeriveSha(serial, trie.NewStackTrie(nil))
+	pRoot := types.DeriveSha(v2, trie.NewStackTrie(nil))
+	if sRoot != pRoot {
+		t.Fatalf(`receipts-root divergence between serial and V2 executor:
+  serial = %s
+  v2     = %s
+  workers= %d
+First decoded txs:
+  %v`,
+			sRoot.Hex(), pRoot.Hex(), workers, decoded[:min(len(decoded), 4)])
+	}
 }
 
 // runScenarioAndAssertParity is the workhorse. It generates txs from
-// the decoded scenario, runs both paths, and t.Fatals on root mismatch.
+// the decoded scenario, runs both paths, and fails on any consensus
+// output mismatch.
 func runScenarioAndAssertParity(t testing.TB, decoded []fuzzTx, workers int) {
 	if len(decoded) == 0 {
 		return
 	}
 	tdb, root := buildBaseStateRoot(t)
 
-	signer := types.NewLondonSigner(params.TestChainConfig.ChainID)
+	signer := types.LatestSigner(fuzzChainConfig)
 	baseFee := big.NewInt(1)
 	blockCtx := vm.BlockContext{
 		CanTransfer: CanTransfer,
@@ -355,6 +186,7 @@ func runScenarioAndAssertParity(t testing.TB, decoded []fuzzTx, workers int) {
 		BlockNumber: big.NewInt(1),
 		Time:        1,
 		BaseFee:     baseFee,
+		Random:      &common.Hash{}, // post-merge rules (PREVRANDAO)
 	}
 
 	txs, msgs := signedTxs(t, decoded, signer, baseFee)
@@ -362,8 +194,8 @@ func runScenarioAndAssertParity(t testing.TB, decoded []fuzzTx, workers int) {
 		return
 	}
 
-	serialRoot := runSerial(t, tdb, root, txs, msgs, blockCtx)
-	v2Root := runV2(t, tdb, root, txs, msgs, blockCtx, workers)
+	serialRoot, serialReceipts := runSerial(t, tdb, root, txs, msgs, blockCtx)
+	v2Root, v2Receipts := runV2(t, tdb, root, txs, msgs, blockCtx, workers)
 
 	if serialRoot != v2Root {
 		t.Fatalf(`state-root divergence between serial and V2 executor:
@@ -376,11 +208,12 @@ First decoded txs:
 Re-run a single iteration with: go test -run FuzzV2ExecutorVsSerial/<corpus-id>`,
 			serialRoot.Hex(), v2Root.Hex(), workers, len(txs), decoded[:min(len(decoded), 4)])
 	}
+	assertReceiptParity(t, serialReceipts, v2Receipts, workers, decoded)
 }
 
 // FuzzV2ExecutorVsSerial drives the V2 BlockSTM executor and the serial
 // state path with random tx sequences and asserts byte-identical
-// state roots after each run. Failing inputs are persisted to
+// consensus outputs after each run. Failing inputs are persisted to
 // testdata/fuzz/FuzzV2ExecutorVsSerial/ for replay.
 //
 // Run with `go test -fuzz=FuzzV2ExecutorVsSerial ./core/`.
@@ -411,11 +244,37 @@ func FuzzV2ExecutorVsSerial(f *testing.F) {
 		},
 		// Transfer to fresh address (EIP-161 path).
 		{byte(kindTransferToFresh), 0, 0xab, 5, 0},
+		// Zero-value call into the predeployed selfdestruct pair: the
+		// EIP-6780 payout (X→Y, 10 wei) shape-matches the tx's later
+		// recorded transfer (X→Y, 10 wei) — the settlement mispairing
+		// shape from PR #2268. State roots match; only receipts diverge.
+		{byte(kindCallSelfDestructPair), 0, 0, 0, 0},
+		// Repeated delegation-clears for the same authority (Exist via
+		// CreatePath + nonce churn on the refund gate).
+		{
+			byte(kind7702Auth), 0, 0, 0, 0,
+			byte(kind7702Auth), 1, 0, 0, 0,
+		},
+		// Fund → self-drain-to-zero → authorize: the authority is a
+		// nonce-only account when its authorization is validated, so the
+		// 12500 refund hinges on Exist seeing the nonce — the EIP-7702
+		// over-charge shape from the mainnet bad blocks.
+		{byte(kindNonceOnlyAccount), 0, 0, 0, 0},
+		// Delegate two authorities to the selfdestruct-pair entry (their
+		// calls run X's bounce-and-payout code as the authority), then
+		// clear one — 7702 churn mixed with EIP-6780 payouts.
+		{
+			byte(kind7702Auth), 0, 0x80, 0, 0,
+			byte(kind7702Auth), 1, 0x81, 0, 0,
+			byte(kind7702Auth), 2, 1, 0, 0,
+		},
 		// Mixed: every kind in one scenario.
 		{
 			byte(kindContractCreate), 0, 2, 0, 0,
 			byte(kindTransferToSender), 1, 2, 7, 0,
 			byte(kindContractCall), 2, 0, 0, 0,
+			byte(kindCallSelfDestructPair), 3, 0, 0, 0,
+			byte(kind7702Auth), 4, 0x80, 0, 0,
 			byte(kindTransferToFresh), 3, 0xff, 1, 0,
 			byte(kindTransferToSender), 4, 0, 3, 0,
 		},
@@ -441,34 +300,64 @@ func FuzzV2ExecutorVsSerial(f *testing.F) {
 // `-fuzz`. Each subtest runs with a small worker count grid.
 func TestV2ExecutorVsSerial_SeedCorpus(t *testing.T) {
 	cases := map[string][]fuzzTx{
-		"OneTransfer": {{kindTransferToSender, 0, 1, 0, 100, 0}},
+		"OneTransfer": {{kind: kindTransferToSender, senderIdx: 0, recipientIdx: 1, valueGwei: 100}},
 		"SenderChain": {
-			{kindTransferToSender, 0, 1, 0, 50, 0},
-			{kindTransferToSender, 0, 2, 0, 50, 0},
-			{kindTransferToSender, 0, 3, 0, 50, 0},
+			{kind: kindTransferToSender, senderIdx: 0, recipientIdx: 1, valueGwei: 50},
+			{kind: kindTransferToSender, senderIdx: 0, recipientIdx: 2, valueGwei: 50},
+			{kind: kindTransferToSender, senderIdx: 0, recipientIdx: 3, valueGwei: 50},
 		},
 		"IndependentSenders": {
-			{kindTransferToSender, 0, 1, 0, 10, 0},
-			{kindTransferToSender, 1, 2, 0, 10, 0},
-			{kindTransferToSender, 2, 3, 0, 10, 0},
-			{kindTransferToSender, 3, 4, 0, 10, 0},
-			{kindTransferToSender, 4, 0, 0, 10, 0},
+			{kind: kindTransferToSender, senderIdx: 0, recipientIdx: 1, valueGwei: 10},
+			{kind: kindTransferToSender, senderIdx: 1, recipientIdx: 2, valueGwei: 10},
+			{kind: kindTransferToSender, senderIdx: 2, recipientIdx: 3, valueGwei: 10},
+			{kind: kindTransferToSender, senderIdx: 3, recipientIdx: 4, valueGwei: 10},
+			{kind: kindTransferToSender, senderIdx: 4, recipientIdx: 0, valueGwei: 10},
 		},
 		"CreateThenCall": {
-			{kindContractCreate, 0, 0, 0, 0, 1},
-			{kindContractCall, 1, 0, 0, 0, 0},
-			{kindContractCall, 2, 0, 0, 0, 0},
+			{kind: kindContractCreate, senderIdx: 0, createKind: 1},
+			{kind: kindContractCall, senderIdx: 1},
+			{kind: kindContractCall, senderIdx: 2},
 		},
 		"FreshAddrTransfer": {
-			{kindTransferToFresh, 0, 0, 0xab, 5, 0},
-			{kindTransferToFresh, 1, 0, 0xcd, 7, 0},
+			{kind: kindTransferToFresh, senderIdx: 0, freshNonce: 0xab, valueGwei: 5},
+			{kind: kindTransferToFresh, senderIdx: 1, freshNonce: 0xcd, valueGwei: 7},
+		},
+		// The PR #2268 settlement mispairing shape — state roots equal,
+		// receipts diverge without the BalanceOpsIdx pairing fix.
+		"SelfDestructTransferPair": {
+			{kind: kindCallSelfDestructPair, senderIdx: 0},
+		},
+		"SelfDestructPairWithValue": {
+			{kind: kindCallSelfDestructPair, senderIdx: 0, valueGwei: 3},
+			{kind: kindCallSelfDestructPair, senderIdx: 1},
+		},
+		"Auth7702RepeatedClears": {
+			{kind: kind7702Auth, senderIdx: 0, authSel: 0},
+			{kind: kind7702Auth, senderIdx: 1, authSel: 0},
+		},
+		// The Exist nonce fix's shape: fund the authority, let it drain
+		// itself to exactly zero (account = nonce-only), then validate an
+		// authorization for it — the 12500 refund hinges on Exist seeing
+		// the nonce.
+		"NonceOnlyAuthorityRefund": {
+			{kind: kindNonceOnlyAccount, senderIdx: 0, authSel: 0},
+		},
+		"NonceOnlyAuthorityDelegate": {
+			{kind: kindNonceOnlyAccount, senderIdx: 1, authSel: 0x81},
+		},
+		"Auth7702DelegateCallClear": {
+			{kind: kind7702Auth, senderIdx: 0, authSel: 0x80},
+			{kind: kind7702Auth, senderIdx: 1, authSel: 0x81},
+			{kind: kind7702Auth, senderIdx: 2, authSel: 1},
 		},
 		"MixedKinds": {
-			{kindContractCreate, 0, 0, 0, 0, 2},
-			{kindTransferToSender, 1, 2, 0, 7, 0},
-			{kindContractCall, 2, 0, 0, 0, 0},
-			{kindTransferToFresh, 3, 0, 0xff, 1, 0},
-			{kindTransferToSender, 4, 0, 0, 3, 0},
+			{kind: kindContractCreate, senderIdx: 0, createKind: 2},
+			{kind: kindTransferToSender, senderIdx: 1, recipientIdx: 2, valueGwei: 7},
+			{kind: kindContractCall, senderIdx: 2},
+			{kind: kindCallSelfDestructPair, senderIdx: 3},
+			{kind: kind7702Auth, senderIdx: 4, authSel: 0x80},
+			{kind: kindTransferToFresh, senderIdx: 3, freshNonce: 0xff, valueGwei: 1},
+			{kind: kindTransferToSender, senderIdx: 4, recipientIdx: 0, valueGwei: 3},
 		},
 	}
 	workerGrid := []int{1, 4, 8}

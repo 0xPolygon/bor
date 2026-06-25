@@ -84,17 +84,28 @@ func (s *ParallelStateDB) settleBalanceOpsAndLogs(final *StateDB) {
 	}
 }
 
-// tryEmitTransferAt detects whether the next pair of balance ops at opIdx
-// matches a recorded Transfer (Sub from sender + Add to recipient with the
-// matching amount). If so it applies the transfer, emits any preceding
-// execution logs + the transfer log, advances *transferIdx and *logIdx,
-// and returns true. Returns false otherwise.
+// tryEmitTransferAt detects whether the pair of balance ops at opIdx is the
+// next recorded Transfer's Sub/Add. If so it applies the transfer, emits any
+// preceding execution logs + the transfer log, advances *transferIdx and
+// *logIdx, and returns true. Returns false otherwise.
 func (s *ParallelStateDB) tryEmitTransferAt(final *StateDB, opIdx int, transferIdx, logIdx *int) bool {
 	if *transferIdx >= len(s.Transfers) {
 		return false
 	}
-	op := &s.BalanceOps[opIdx]
 	tr := &s.Transfers[*transferIdx]
+	// Match by recorded position, not by op shape: RecordTransfer runs
+	// immediately before the transfer's SubBalance/AddBalance, so the
+	// transfer's ops live at exactly [BalanceOpsIdx, BalanceOpsIdx+1]
+	// (RevertToSnapshot truncates BalanceOps and Transfers in lockstep, so
+	// surviving indices never shift). Shape matching alone mispairs with
+	// look-alike Sub/Add pairs — e.g. an EIP-6780 selfdestruct payout with
+	// the same sender, recipient and amount as a later recorded transfer —
+	// emitting the transfer log at the wrong replay point with wrong
+	// input/output balances.
+	if opIdx != tr.BalanceOpsIdx {
+		return false
+	}
+	op := &s.BalanceOps[opIdx]
 	if op.IsAdd || op.Addr != tr.Sender || !op.Amount.Eq(&tr.Amount) {
 		return false
 	}
