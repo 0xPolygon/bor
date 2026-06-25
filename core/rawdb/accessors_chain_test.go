@@ -577,16 +577,27 @@ func TestRecentReadsBypassFreezerLock(t *testing.T) {
 	// in-progress freeze. ModifyAncients holds the exclusive lock while fn runs.
 	held := make(chan struct{})
 	release := make(chan struct{})
+	modifyDone := make(chan error, 1)
 	defer close(release)
 
 	go func() {
-		_, _ = db.ModifyAncients(func(ethdb.AncientWriteOp) error {
+		_, err := db.ModifyAncients(func(ethdb.AncientWriteOp) error {
 			close(held)
 			<-release
 			return nil
 		})
+		modifyDone <- err
 	}()
-	<-held // ensure the write-lock is actually held before reading
+
+	// Wait until the write-lock is held, but fail fast rather than hang if
+	// ModifyAncients returns early or never acquires it.
+	select {
+	case <-held:
+	case err := <-modifyDone:
+		t.Fatalf("ModifyAncients returned before holding the write-lock: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the freezer write-lock to be held")
+	}
 
 	// Recent reads must complete while the freezer write-lock is held.
 	done := make(chan struct{})
