@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"sync/atomic"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/math"
@@ -222,6 +223,14 @@ func (evm *EVM) Run(contract *Contract, input []byte, readOnly bool) (ret []byte
 	var ladderTable map[uint64]nativectf.LadderMeta
 	if evm.Config.NativeCTF != NativeCTFOff && !debug {
 		ladderTable = nativectf.LadderTableFor(contract.CodeHash, contract.Code)
+		// Denominator for the overall-gain estimate: total interpreter wall time,
+		// same per-goroutine-wall basis as interp_ns. Only the outermost frame is
+		// timed (evm.depth was incremented to 1 for the tx's top-level call), so
+		// nested CALLs are counted exactly once via their parent's elapsed time.
+		if evm.depth == 1 {
+			frameStart := time.Now()
+			defer func() { ladderTotalInterpNs.Inc(time.Since(frameStart).Nanoseconds()) }()
+		}
 	}
 
 	for {

@@ -28,6 +28,14 @@ var (
 	// execution is approximate (scheduling jitter) but directional over millions.
 	ladderInterpNs = metrics.NewRegisteredCounter("vm/nativectf/ladder/interp_ns", nil)
 	ladderNativeNs = metrics.NewRegisteredCounter("vm/nativectf/ladder/native_ns", nil)
+	// ladderTotalInterpNs: cumulative interpreter wall time across all outermost
+	// (depth==1) EVM frames, measured on the SAME per-goroutine-wall basis as
+	// interp_ns. It is the denominator for the overall-gain estimate:
+	//   ladder share of EVM execution = interp_ns / total_interp_ns
+	//   EVM-exec time native eliminates = (interp_ns - native_ns) / total_interp_ns
+	// Only the depth==1 frame is timed, so nested CALLs are counted exactly once
+	// (a child frame's wall time is already inside its parent's, never re-added).
+	ladderTotalInterpNs = metrics.NewRegisteredCounter("vm/nativectf/ladder/total_interp_ns", nil)
 )
 
 // ladderShadowRec carries a pending shadow comparison across loop iterations
