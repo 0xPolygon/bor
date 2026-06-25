@@ -15,11 +15,11 @@ concurrency:
 env:
   ENCLAVE_NAME: nightly-load-tests
   POLYCLI_VERSION: v0.1.103
-  LOADTEST_REQUESTS: 6000
-  LOADTEST_RATE_LIMIT: 100
-  LOADTEST_CONCURRENCY: 4
+  LOADTEST_REQUESTS: "6000"
+  LOADTEST_RATE_LIMIT: "100"
+  LOADTEST_CONCURRENCY: "4"
   LOADTEST_MODE: transaction
-  LOADTEST_GAS_PRICE: 50000000000
+  LOADTEST_GAS_PRICE: "50000000000"
 
 jobs:
   build-bor:
@@ -80,9 +80,6 @@ jobs:
       contents: read
       actions: write
       id-token: write
-    env:
-      LOADTEST_PRIVATE_KEY: 0xd40311b5a5ca5eaeb48dfba5403bde4993ece8eccf4190e98e19fcd4754260ea
-      LOADTEST_ACCOUNT: 0x74Ed6F462Ef4638dc10FFb05af285e8976Fb8DC9
     steps:
       - name: Checkout kurtosis-pos
         uses: actions/checkout@v5
@@ -145,10 +142,26 @@ jobs:
       - name: Run polycli load test
         id: load-tests
         shell: bash
+        env:
+          LOADTEST_PRIVATE_KEY: ${{ secrets.NIGHTLY_LOADTEST_PRIVATE_KEY }}
         run: |
           set -euo pipefail
 
+          LOADTEST_PRIVATE_KEY="${LOADTEST_PRIVATE_KEY//$'\n'/}"
+          LOADTEST_PRIVATE_KEY="${LOADTEST_PRIVATE_KEY//$'\r'/}"
+          if [[ -z "$LOADTEST_PRIVATE_KEY" ]]; then
+            echo "::error::NIGHTLY_LOADTEST_PRIVATE_KEY secret is required to run the nightly load test"
+            exit 1
+          fi
+          if [[ ! "$LOADTEST_PRIVATE_KEY" =~ ^0x?[0-9a-fA-F]{64}$ ]]; then
+            echo "::error::NIGHTLY_LOADTEST_PRIVATE_KEY must be a hex-encoded private key"
+            exit 1
+          fi
           echo "::add-mask::$LOADTEST_PRIVATE_KEY"
+          private_key_no_prefix="${LOADTEST_PRIVATE_KEY#0x}"
+          echo "::add-mask::$private_key_no_prefix"
+          LOADTEST_PRIVATE_KEY="0x$private_key_no_prefix"
+
           mkdir -p load-test-results
 
           rpc_url=$(kurtosis port print "$ENCLAVE_NAME" l2-el-1-bor-heimdall-v2-validator rpc)
@@ -175,7 +188,6 @@ jobs:
           }
 
           initial_block=$(hex_to_dec "$(rpc_call eth_blockNumber '[]')")
-          initial_nonce=$(hex_to_dec "$(rpc_call eth_getTransactionCount "[\"$LOADTEST_ACCOUNT\",\"latest\"]")")
           chain_id=$(hex_to_dec "$(rpc_call eth_chainId '[]')")
 
           {
@@ -187,7 +199,6 @@ jobs:
             echo "Rate limit: $LOADTEST_RATE_LIMIT requests/sec"
             echo "Concurrency: $LOADTEST_CONCURRENCY"
             echo "Initial block: $initial_block"
-            echo "Initial nonce: $initial_nonce"
           } > load-test-results/metadata.txt
 
           set +e
@@ -206,7 +217,6 @@ jobs:
           loadtest_exit=${PIPESTATUS[0]}
           set -e
 
-          private_key_no_prefix="${LOADTEST_PRIVATE_KEY#0x}"
           sed -i "s/$LOADTEST_PRIVATE_KEY/***MASKED***/g" load-test-results/polycli-loadtest.log
           sed -i "s/$private_key_no_prefix/***MASKED***/g" load-test-results/polycli-loadtest.log
 
@@ -214,19 +224,28 @@ jobs:
           finished_epoch=$(date +%s)
           duration_seconds=$((finished_epoch - started_epoch))
           final_block=$(hex_to_dec "$(rpc_call eth_blockNumber '[]')")
-          final_nonce=$(hex_to_dec "$(rpc_call eth_getTransactionCount "[\"$LOADTEST_ACCOUNT\",\"latest\"]")")
           blocks_produced=$((final_block - initial_block))
-          transactions_observed=$((final_nonce - initial_nonce))
-          observed_tps=$(awk "BEGIN { if ($duration_seconds > 0) printf \"%.2f\", $transactions_observed / $duration_seconds; else printf \"0.00\" }")
-          tx_per_block=$(awk "BEGIN { if ($blocks_produced > 0) printf \"%.2f\", $transactions_observed / $blocks_produced; else printf \"0.00\" }")
+
+          successful_tx=$(sed -nE 's/.*Successful Tx: ([0-9,]+).*/\1/p' load-test-results/polycli-loadtest.log | head -n1 | tr -d ',')
+          total_tx=$(sed -nE 's/.*Total Tx: ([0-9,]+).*/\1/p' load-test-results/polycli-loadtest.log | head -n1 | tr -d ',')
+          total_transactions=$(sed -nE 's/^Total Transactions: ([0-9,]+).*/\1/p' load-test-results/polycli-loadtest.log | head -n1 | tr -d ',')
+          total_gas_used=$(sed -nE 's/^Total Gas Used: ([0-9,]+).*/\1/p' load-test-results/polycli-loadtest.log | head -n1 | tr -d ',')
+          polycli_tps=$(sed -nE 's/^Transactions per sec: ([0-9,.]+).*/\1/p' load-test-results/polycli-loadtest.log | head -n1 | tr -d ',')
+          gas_per_second=$(sed -nE 's/^Gas Per Second: ([0-9,.]+).*/\1/p' load-test-results/polycli-loadtest.log | head -n1 | tr -d ',')
+          latencies=$(sed -nE 's/^Latencies - (.*)/\1/p' load-test-results/polycli-loadtest.log | head -n1)
 
           jq -n \
             --arg started_at "$started_at" \
             --arg finished_at "$finished_at" \
             --arg rpc_url "$rpc_url" \
             --arg mode "$LOADTEST_MODE" \
-            --arg observed_tps "$observed_tps" \
-            --arg tx_per_block "$tx_per_block" \
+            --arg successful_tx "$successful_tx" \
+            --arg total_tx "$total_tx" \
+            --arg total_transactions "$total_transactions" \
+            --arg total_gas_used "$total_gas_used" \
+            --arg polycli_tps "$polycli_tps" \
+            --arg gas_per_second "$gas_per_second" \
+            --arg latencies "$latencies" \
             --argjson chain_id "$chain_id" \
             --argjson requests "$LOADTEST_REQUESTS" \
             --argjson rate_limit "$LOADTEST_RATE_LIMIT" \
@@ -236,11 +255,9 @@ jobs:
             --argjson initial_block "$initial_block" \
             --argjson final_block "$final_block" \
             --argjson blocks_produced "$blocks_produced" \
-            --argjson initial_nonce "$initial_nonce" \
-            --argjson final_nonce "$final_nonce" \
-            --argjson transactions_observed "$transactions_observed" \
             --argjson exit_code "$loadtest_exit" \
-            '{
+            'def maybe_num($v): if $v == "" then null else ($v | tonumber) end;
+            {
               started_at: $started_at,
               finished_at: $finished_at,
               rpc_url: $rpc_url,
@@ -254,11 +271,13 @@ jobs:
               initial_block: $initial_block,
               final_block: $final_block,
               blocks_produced: $blocks_produced,
-              initial_nonce: $initial_nonce,
-              final_nonce: $final_nonce,
-              transactions_observed: $transactions_observed,
-              observed_tps: ($observed_tps | tonumber),
-              transactions_per_block: ($tx_per_block | tonumber),
+              successful_tx: maybe_num($successful_tx),
+              total_tx: maybe_num($total_tx),
+              total_transactions: maybe_num($total_transactions),
+              total_gas_used: maybe_num($total_gas_used),
+              transactions_per_second: maybe_num($polycli_tps),
+              gas_per_second: maybe_num($gas_per_second),
+              latencies: $latencies,
               exit_code: $exit_code
             }' > load-test-results/summary.json
 
@@ -274,9 +293,13 @@ jobs:
             echo "| Concurrency | $LOADTEST_CONCURRENCY |"
             echo "| Duration | ${duration_seconds}s |"
             echo "| Blocks produced | $blocks_produced |"
-            echo "| Transactions observed | $transactions_observed |"
-            echo "| Observed TPS | $observed_tps |"
-            echo "| Transactions per block | $tx_per_block |"
+            echo "| Successful tx | ${successful_tx:-n/a} |"
+            echo "| Total tx | ${total_tx:-n/a} |"
+            echo "| Total transactions | ${total_transactions:-n/a} |"
+            echo "| Total gas used | ${total_gas_used:-n/a} |"
+            echo "| Transactions/sec | ${polycli_tps:-n/a} |"
+            echo "| Gas/sec | ${gas_per_second:-n/a} |"
+            echo "| Latencies | ${latencies:-n/a} |"
             echo "| Polycli exit code | $loadtest_exit |"
           } > load-test-results/summary.md
 
