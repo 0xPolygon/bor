@@ -1,0 +1,303 @@
+name: Nightly Load Tests
+
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-load-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ENCLAVE_NAME: nightly-load-tests
+  POLYCLI_VERSION: v0.1.103
+  LOADTEST_REQUESTS: 6000
+  LOADTEST_RATE_LIMIT: 100
+  LOADTEST_CONCURRENCY: 4
+  LOADTEST_MODE: transaction
+  LOADTEST_GAS_PRICE: 50000000000
+
+jobs:
+  build-bor:
+    name: Build Bor from develop
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout bor
+        uses: actions/checkout@v5
+        with:
+          ref: develop
+
+      - name: Build bor docker image
+        run: docker build -t bor:local --file Dockerfile .
+
+      - name: Save bor docker image
+        run: docker save bor:local | gzip > bor-image.tar.gz
+
+      - name: Upload bor docker image
+        uses: actions/upload-artifact@v4
+        with:
+          name: bor-image
+          path: bor-image.tar.gz
+          retention-days: 1
+
+  build-heimdall-v2:
+    name: Build Heimdall v2 from develop
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout heimdall-v2
+        uses: actions/checkout@v5
+        with:
+          repository: 0xPolygon/heimdall-v2
+          ref: develop
+
+      - name: Build heimdall-v2 docker image
+        run: docker build -t heimdall-v2:local --file Dockerfile .
+
+      - name: Save heimdall-v2 docker image
+        run: docker save heimdall-v2:local | gzip > heimdall-v2-image.tar.gz
+
+      - name: Upload heimdall-v2 docker image
+        uses: actions/upload-artifact@v4
+        with:
+          name: heimdall-v2-image
+          path: heimdall-v2-image.tar.gz
+          retention-days: 1
+
+  load-tests:
+    name: Run Kurtosis load tests
+    needs:
+      - build-bor
+      - build-heimdall-v2
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: write
+      id-token: write
+    env:
+      LOADTEST_PRIVATE_KEY: 0xd40311b5a5ca5eaeb48dfba5403bde4993ece8eccf4190e98e19fcd4754260ea
+      LOADTEST_ACCOUNT: 0x74Ed6F462Ef4638dc10FFb05af285e8976Fb8DC9
+    steps:
+      - name: Checkout kurtosis-pos
+        uses: actions/checkout@v5
+        with:
+          repository: 0xPolygon/kurtosis-pos
+          ref: v1.3.4
+
+      - name: Pre kurtosis run
+        uses: ./.github/actions/kurtosis/setup
+        with:
+          main_branch: develop
+          docker_username: ${{ secrets.DOCKERHUB }}
+          docker_token: ${{ secrets.DOCKERHUB_KEY }}
+
+      - name: Checkout pos-workflows
+        uses: actions/checkout@v5
+        with:
+          repository: 0xPolygon/pos-workflows
+          ref: main
+          path: pos-workflows
+
+      - name: Copy kurtosis config
+        run: cp ./pos-workflows/configs/kurtosis-e2e.yml ./kurtosis-e2e.yml
+
+      - name: Download bor docker image
+        uses: actions/download-artifact@v4
+        with:
+          name: bor-image
+
+      - name: Download heimdall-v2 docker image
+        uses: actions/download-artifact@v4
+        with:
+          name: heimdall-v2-image
+
+      - name: Load bor docker image
+        run: |
+          gunzip -c bor-image.tar.gz | docker load
+          docker images bor:local --format "{{.ID}} {{.CreatedAt}}"
+
+      - name: Load heimdall-v2 docker image
+        run: |
+          gunzip -c heimdall-v2-image.tar.gz | docker load
+          docker images heimdall-v2:local --format "{{.ID}} {{.CreatedAt}}"
+
+      - name: Kurtosis run
+        run: kurtosis run --args-file=kurtosis-e2e.yml --enclave=${{ env.ENCLAVE_NAME }} .
+
+      - name: Inspect enclave
+        run: kurtosis enclave inspect ${{ env.ENCLAVE_NAME }}
+
+      - name: Install polycli
+        run: |
+          tmp_dir=$(mktemp -d)
+          curl -L https://github.com/0xPolygon/polygon-cli/releases/download/${{ env.POLYCLI_VERSION }}/polycli_${{ env.POLYCLI_VERSION }}_linux_amd64.tar.gz | tar -xz -C "$tmp_dir"
+          mv "$tmp_dir"/* /usr/local/bin/polycli
+          rm -rf "$tmp_dir"
+          sudo chmod +x /usr/local/bin/polycli
+          polycli version
+
+      - name: Run polycli load test
+        id: load-tests
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "::add-mask::$LOADTEST_PRIVATE_KEY"
+          mkdir -p load-test-results
+
+          rpc_url=$(kurtosis port print "$ENCLAVE_NAME" l2-el-1-bor-heimdall-v2-validator rpc)
+          started_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          started_epoch=$(date +%s)
+
+          rpc_call() {
+            local method="$1"
+            local params="$2"
+            curl -fsS \
+              -H "Content-Type: application/json" \
+              --data "{\"jsonrpc\":\"2.0\",\"method\":\"${method}\",\"params\":${params},\"id\":1}" \
+              "$rpc_url" |
+              jq -r 'if .error then error(.error.message) else .result end'
+          }
+
+          hex_to_dec() {
+            local value="${1#0x}"
+            if [ -z "$value" ]; then
+              echo 0
+              return
+            fi
+            printf "%d" "$((16#$value))"
+          }
+
+          initial_block=$(hex_to_dec "$(rpc_call eth_blockNumber '[]')")
+          initial_nonce=$(hex_to_dec "$(rpc_call eth_getTransactionCount "[\"$LOADTEST_ACCOUNT\",\"latest\"]")")
+          chain_id=$(hex_to_dec "$(rpc_call eth_chainId '[]')")
+
+          {
+            echo "Started at: $started_at"
+            echo "RPC URL: $rpc_url"
+            echo "Chain ID: $chain_id"
+            echo "Mode: $LOADTEST_MODE"
+            echo "Requests: $LOADTEST_REQUESTS"
+            echo "Rate limit: $LOADTEST_RATE_LIMIT requests/sec"
+            echo "Concurrency: $LOADTEST_CONCURRENCY"
+            echo "Initial block: $initial_block"
+            echo "Initial nonce: $initial_nonce"
+          } > load-test-results/metadata.txt
+
+          set +e
+          polycli loadtest \
+            --rpc-url "$rpc_url" \
+            --private-key "$LOADTEST_PRIVATE_KEY" \
+            --verbosity 500 \
+            --requests "$LOADTEST_REQUESTS" \
+            --rate-limit "$LOADTEST_RATE_LIMIT" \
+            --concurrency "$LOADTEST_CONCURRENCY" \
+            --mode "$LOADTEST_MODE" \
+            --gas-price "$LOADTEST_GAS_PRICE" \
+            --summarize \
+            --output-mode text 2>&1 |
+            tee load-test-results/polycli-loadtest.log
+          loadtest_exit=${PIPESTATUS[0]}
+          set -e
+
+          private_key_no_prefix="${LOADTEST_PRIVATE_KEY#0x}"
+          sed -i "s/$LOADTEST_PRIVATE_KEY/***MASKED***/g" load-test-results/polycli-loadtest.log
+          sed -i "s/$private_key_no_prefix/***MASKED***/g" load-test-results/polycli-loadtest.log
+
+          finished_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          finished_epoch=$(date +%s)
+          duration_seconds=$((finished_epoch - started_epoch))
+          final_block=$(hex_to_dec "$(rpc_call eth_blockNumber '[]')")
+          final_nonce=$(hex_to_dec "$(rpc_call eth_getTransactionCount "[\"$LOADTEST_ACCOUNT\",\"latest\"]")")
+          blocks_produced=$((final_block - initial_block))
+          transactions_observed=$((final_nonce - initial_nonce))
+          observed_tps=$(awk "BEGIN { if ($duration_seconds > 0) printf \"%.2f\", $transactions_observed / $duration_seconds; else printf \"0.00\" }")
+          tx_per_block=$(awk "BEGIN { if ($blocks_produced > 0) printf \"%.2f\", $transactions_observed / $blocks_produced; else printf \"0.00\" }")
+
+          jq -n \
+            --arg started_at "$started_at" \
+            --arg finished_at "$finished_at" \
+            --arg rpc_url "$rpc_url" \
+            --arg mode "$LOADTEST_MODE" \
+            --arg observed_tps "$observed_tps" \
+            --arg tx_per_block "$tx_per_block" \
+            --argjson chain_id "$chain_id" \
+            --argjson requests "$LOADTEST_REQUESTS" \
+            --argjson rate_limit "$LOADTEST_RATE_LIMIT" \
+            --argjson concurrency "$LOADTEST_CONCURRENCY" \
+            --argjson gas_price "$LOADTEST_GAS_PRICE" \
+            --argjson duration_seconds "$duration_seconds" \
+            --argjson initial_block "$initial_block" \
+            --argjson final_block "$final_block" \
+            --argjson blocks_produced "$blocks_produced" \
+            --argjson initial_nonce "$initial_nonce" \
+            --argjson final_nonce "$final_nonce" \
+            --argjson transactions_observed "$transactions_observed" \
+            --argjson exit_code "$loadtest_exit" \
+            '{
+              started_at: $started_at,
+              finished_at: $finished_at,
+              rpc_url: $rpc_url,
+              chain_id: $chain_id,
+              mode: $mode,
+              requests: $requests,
+              rate_limit: $rate_limit,
+              concurrency: $concurrency,
+              gas_price: $gas_price,
+              duration_seconds: $duration_seconds,
+              initial_block: $initial_block,
+              final_block: $final_block,
+              blocks_produced: $blocks_produced,
+              initial_nonce: $initial_nonce,
+              final_nonce: $final_nonce,
+              transactions_observed: $transactions_observed,
+              observed_tps: ($observed_tps | tonumber),
+              transactions_per_block: ($tx_per_block | tonumber),
+              exit_code: $exit_code
+            }' > load-test-results/summary.json
+
+          {
+            echo "## Nightly Load Test"
+            echo ""
+            echo "| Metric | Value |"
+            echo "| --- | ---: |"
+            echo "| Chain ID | $chain_id |"
+            echo "| Mode | $LOADTEST_MODE |"
+            echo "| Requests | $LOADTEST_REQUESTS |"
+            echo "| Rate limit | $LOADTEST_RATE_LIMIT req/s |"
+            echo "| Concurrency | $LOADTEST_CONCURRENCY |"
+            echo "| Duration | ${duration_seconds}s |"
+            echo "| Blocks produced | $blocks_produced |"
+            echo "| Transactions observed | $transactions_observed |"
+            echo "| Observed TPS | $observed_tps |"
+            echo "| Transactions per block | $tx_per_block |"
+            echo "| Polycli exit code | $loadtest_exit |"
+          } > load-test-results/summary.md
+
+          cat load-test-results/summary.md >> "$GITHUB_STEP_SUMMARY"
+          exit "$loadtest_exit"
+
+      - name: Upload load test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-load-test-results
+          path: load-test-results
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Collect network diagnostics and state dump
+        if: always() && steps.load-tests.outcome == 'failure'
+        uses: ./pos-workflows/.github/actions/network-diagnostics-and-state-dump
+        with:
+          enclave_name: ${{ env.ENCLAVE_NAME }}
+
+      - name: Post kurtosis run
+        if: always()
+        uses: ./.github/actions/kurtosis/cleanup
+        with:
+          main_branch: develop
+          enclave_name: ${{ env.ENCLAVE_NAME }}
