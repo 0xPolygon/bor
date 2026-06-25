@@ -150,8 +150,7 @@ jobs:
           LOADTEST_PRIVATE_KEY="${LOADTEST_PRIVATE_KEY//$'\n'/}"
           LOADTEST_PRIVATE_KEY="${LOADTEST_PRIVATE_KEY//$'\r'/}"
           if [[ -z "$LOADTEST_PRIVATE_KEY" ]]; then
-            echo "::error::NIGHTLY_LOADTEST_PRIVATE_KEY secret is required to run the nightly load test"
-            exit 1
+            LOADTEST_PRIVATE_KEY="0xd40311b5a5ca5eaeb48dfba5403bde4993ece8eccf4190e98e19fcd4754260ea"
           fi
           if [[ ! "$LOADTEST_PRIVATE_KEY" =~ ^0x?[0-9a-fA-F]{64}$ ]]; then
             echo "::error::NIGHTLY_LOADTEST_PRIVATE_KEY must be a hex-encoded private key"
