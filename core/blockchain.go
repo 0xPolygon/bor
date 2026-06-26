@@ -4825,20 +4825,28 @@ func (bc *BlockChain) WriteBlockAndSetHeadPipelined(block *types.Block, receipts
 // This function does NOT acquire the chain mutex — the caller must ensure
 // proper synchronization (e.g., called from insertChainWithWitnesses).
 func (bc *BlockChain) writeBlockAndSetHeadPipelined(block *types.Block, receipts []*types.Receipt, logs []*types.Log, statedb *state.StateDB, emitHeadEvent bool, witnessBytes []byte) (WriteStatus, error) {
-	ptd := bc.GetTd(block.ParentHash(), block.NumberU64()-1)
-	if ptd == nil {
-		return NonStatTy, consensus.ErrUnknownAncestor
-	}
-	stateSyncLogs, err := bc.writePipelinedBlockBatch(block, receipts, logs, statedb, witnessBytes, new(big.Int).Add(block.Difficulty(), ptd))
-	if err != nil {
-		return NonStatTy, err
-	}
-	status, err := bc.resolvePostWriteStatus(block, false)
+	status, stateSyncLogs, err := bc.writePipelinedBlockAndResolveStatus(block, receipts, logs, statedb, witnessBytes)
 	if err != nil {
 		return NonStatTy, err
 	}
 	bc.emitPostWriteEvents(block, receipts, logs, stateSyncLogs, status, emitHeadEvent)
 	return status, nil
+}
+
+func (bc *BlockChain) writePipelinedBlockAndResolveStatus(block *types.Block, receipts []*types.Receipt, logs []*types.Log, statedb *state.StateDB, witnessBytes []byte) (WriteStatus, []*types.Log, error) {
+	ptd := bc.GetTd(block.ParentHash(), block.NumberU64()-1)
+	if ptd == nil {
+		return NonStatTy, nil, consensus.ErrUnknownAncestor
+	}
+	stateSyncLogs, err := bc.writePipelinedBlockBatch(block, receipts, logs, statedb, witnessBytes, new(big.Int).Add(block.Difficulty(), ptd))
+	if err != nil {
+		return NonStatTy, nil, err
+	}
+	status, err := bc.resolvePostWriteStatus(block, false)
+	if err != nil {
+		return NonStatTy, nil, err
+	}
+	return status, stateSyncLogs, nil
 }
 
 // writePipelinedBlockBatch assembles one atomic batch with the block, its
@@ -5018,13 +5026,19 @@ func (bc *BlockChain) PostExecState(header *types.Header) (*state.StateDB, error
 // from blocking on prefetch completion while still letting SRC benefit from
 // the execution-side warmup.
 func (bc *BlockChain) SpawnSRCGoroutine(block *types.Block, parentRoot common.Hash, flatDiff *state.FlatDiff, makeWitness bool, execWitness *stateless.Witness, allowOwnWitness bool, detachedPrefetcher *state.DetachedPrefetcher, useWarmSnapshot bool) *pendingSRCState {
+	return bc.spawnSRCGoroutine(block, parentRoot, flatDiff, makeWitness, execWitness, allowOwnWitness, detachedPrefetcher, useWarmSnapshot, true)
+}
+
+func (bc *BlockChain) spawnSRCGoroutine(block *types.Block, parentRoot common.Hash, flatDiff *state.FlatDiff, makeWitness bool, execWitness *stateless.Witness, allowOwnWitness bool, detachedPrefetcher *state.DetachedPrefetcher, useWarmSnapshot bool, publishGlobal bool) *pendingSRCState {
 	pending := &pendingSRCState{
 		blockHash:   block.Hash(),
 		blockNumber: block.NumberU64(),
 	}
-	bc.pendingSRCMu.Lock()
-	bc.pendingSRC = pending
-	bc.pendingSRCMu.Unlock()
+	if publishGlobal {
+		bc.pendingSRCMu.Lock()
+		bc.pendingSRC = pending
+		bc.pendingSRCMu.Unlock()
+	}
 
 	pending.wg.Add(1)
 	bc.wg.Add(1)
@@ -5069,9 +5083,12 @@ func finishDetachedPrefetcher(detachedPrefetcher *state.DetachedPrefetcher, useW
 	return warmSnapshot
 }
 
-// runSRCCompute is the SRC goroutine body. Opens a trie-only StateDB at the
+// runSRCCompute is the SRC goroutine body. It opens a StateDB at the
 // committed parent root, replays the FlatDiff, and commits to produce block
-// N's state root. When makeWitness is true, also preloads the FlatDiff read
+// N's state root. Witness-producing SRC uses a trie-only reader and the
+// journaled FlatDiff replay so proof-path nodes are captured. Witness-off SRC
+// uses state.New plus the direct FlatDiff replay to avoid unnecessary journal
+// overhead. When makeWitness is true, SRC also preloads the FlatDiff read
 // surface so the witness covers proof-path nodes the speculative execution
 // skipped, and encodes + caches the resulting witness. When false, preload
 // and witness encoding are skipped — only deferred root validation runs. All
@@ -5144,7 +5161,11 @@ func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block
 		return
 	}
 	applyStart := time.Now()
-	tmpDB.ApplyFlatDiffForCommit(flatDiff)
+	if makeWitness {
+		tmpDB.ApplyFlatDiffForCommit(flatDiff)
+	} else {
+		tmpDB.ApplyFlatDiffForCommitFast(flatDiff)
+	}
 	pipelineImportSRCApplyFlatDiffTimer.UpdateSince(applyStart)
 
 	// Preload + read-surface histograms only fire when the witness is being
@@ -5201,8 +5222,8 @@ func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block
 //     whose trie nodes weren't touched during speculative execution. Flat
 //     readers would short-circuit the trie and leave the witness incomplete.
 //   - makeWitness=false: state.New (multi-reader). Pre-state reads performed
-//     by ApplyFlatDiffForCommit (origin balance, origin storage, code lookup
-//     via getOrNewStateObject) and SelfDestruct can hit a flat reader (pathdb
+//     by ApplyFlatDiffForCommitFast (original account/storage lookups for
+//     existing objects and pure self-destructs) can hit a flat reader (pathdb
 //     StateReader in path mode, snapshot in hash mode) instead of the MPT.
 //     state.New falls back to the trie reader when no flat reader is
 //     installed or StateReader errors, so correctness does not depend on the
@@ -5341,6 +5362,10 @@ func (bc *BlockChain) WaitForSRC() (common.Hash, []byte, error) {
 	pending := bc.pendingSRC
 	bc.pendingSRCMu.Unlock()
 
+	return waitForSRCState(pending)
+}
+
+func waitForSRCState(pending *pendingSRCState) (common.Hash, []byte, error) {
 	if pending == nil {
 		return common.Hash{}, nil, errors.New("no pending SRC goroutine")
 	}
@@ -5665,18 +5690,19 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 	bc.SetLastFlatDiff(flatDiff, block.NumberU64(), committedRoot, block.Root())
 	timings.setFlatDiff = time.Since(phaseStart)
 	pipelineImportSetFlatDiffTimer.Update(timings.setFlatDiff)
-	// State commit is deferred to the SRC goroutine. emitHeadEvent=false
-	// because the deferred ChainHeadEvent at end of insertChain handles it.
-	phaseStart = time.Now()
+	// State commit is deferred to the SRC goroutine. Split the write path so
+	// the durable block batch and reorg/status checks complete before SRC
+	// starts, then let SRC overlap the synchronous head/event publication tail.
+	writeHeadStart := time.Now()
 	bc.markPendingImportHeadState(block)
-	if _, err := bc.writeBlockAndSetHeadPipelined(block, receipts, logs, statedb, false, nil); err != nil {
+	status, stateSyncLogs, err := bc.writePipelinedBlockAndResolveStatus(block, receipts, logs, statedb, nil)
+	writePrepareElapsed := time.Since(writeHeadStart)
+	if err != nil {
 		bc.clearPendingImportHeadState(block)
-		timings.writeHead = time.Since(phaseStart)
+		timings.writeHead = writePrepareElapsed
 		pipelineImportWriteHeadTimer.Update(timings.writeHead)
 		return false, err
 	}
-	timings.writeHead = time.Since(phaseStart)
-	pipelineImportWriteHeadTimer.Update(timings.writeHead)
 
 	phaseStart = time.Now()
 	tmpBlock := types.NewBlockWithHeader(block.Header()).WithBody(*block.Body())
@@ -5690,10 +5716,16 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 	// discards it.
 	phaseStart = time.Now()
 	useWarmSnapshot := makeWitness && bc.cfg.PipelinedSRCWarmSnapshot
-	src := bc.SpawnSRCGoroutine(tmpBlock, committedRoot, flatDiff, makeWitness, execWitness, false, detachedPrefetcher, useWarmSnapshot)
+	src := bc.spawnSRCGoroutine(tmpBlock, committedRoot, flatDiff, makeWitness, execWitness, false, detachedPrefetcher, useWarmSnapshot, false)
 	detachedPrefetcher = nil
 	timings.spawnSRC = time.Since(phaseStart)
 	pipelineImportSpawnSRCTimer.Update(timings.spawnSRC)
+
+	publishStart := time.Now()
+	bc.emitPostWriteEvents(block, receipts, logs, stateSyncLogs, status, false)
+	timings.writeHead = writePrepareElapsed + time.Since(publishStart)
+	pipelineImportWriteHeadTimer.Update(timings.writeHead)
+
 	phaseStart = time.Now()
 	newPending := &pendingImportSRCState{
 		block:         block,
@@ -5891,7 +5923,7 @@ func (bc *BlockChain) runImportAutoCollection(p *pendingImportSRCState) {
 		close(p.collectedCh)
 	}()
 	srcStart := time.Now()
-	root, witnessBytes, err := bc.WaitForSRC()
+	root, witnessBytes, err := waitForSRCState(p.src)
 	pipelineImportSRCTimer.UpdateSince(srcStart)
 	if err != nil {
 		log.Error("Pipelined import: SRC goroutine failed", "block", p.block.NumberU64(), "err", err)

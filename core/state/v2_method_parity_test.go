@@ -104,13 +104,14 @@ var pdbExemptMethods = map[string]pdbExemptCategory{
 	// and detached prefetcher handoff are block-level StateDB operations.
 	// ParallelStateDB instances are per-transaction workers; V2 settles
 	// into the underlying StateDB before these methods run.
-	"ApplyFlatDiff":          catPipelinedSRC,
-	"ApplyFlatDiffForCommit": catPipelinedSRC,
-	"CommitSnapshot":         catPipelinedSRC,
-	"DetachPrefetcher":       catPipelinedSRC,
-	"PropagateReadsTo":       catPipelinedSRC,
-	"SetFlatDiffRef":         catPipelinedSRC,
-	"WasStorageSlotRead":     catPipelinedSRC,
+	"ApplyFlatDiff":              catPipelinedSRC,
+	"ApplyFlatDiffForCommit":     catPipelinedSRC,
+	"ApplyFlatDiffForCommitFast": catPipelinedSRC,
+	"CommitSnapshot":             catPipelinedSRC,
+	"DetachPrefetcher":           catPipelinedSRC,
+	"PropagateReadsTo":           catPipelinedSRC,
+	"SetFlatDiffRef":             catPipelinedSRC,
+	"WasStorageSlotRead":         catPipelinedSRC,
 
 	// Low-level / utility — not part of the EVM-facing surface.
 	"Database":              catLowLevel,

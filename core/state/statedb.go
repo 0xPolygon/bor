@@ -2588,6 +2588,25 @@ func (s *StateDB) ApplyFlatDiffForCommit(diff *FlatDiff) {
 	}
 }
 
+// ApplyFlatDiffForCommitFast marks all mutations in diff as dirty without
+// constructing journal revert entries. It is intended for the witness-off SRC
+// goroutine only: the FlatDiff replay is irrevocable, so Snapshot/RevertToSnapshot
+// support would only add allocation and setter overhead before CommitWithUpdate.
+//
+// Witness-producing SRC still uses ApplyFlatDiffForCommit because the normal
+// setters/read path is the conservative path for collecting every proof node.
+func (s *StateDB) ApplyFlatDiffForCommitFast(diff *FlatDiff) {
+	for addr := range diff.Destructs {
+		if _, resurrected := diff.Accounts[addr]; resurrected {
+			continue
+		}
+		s.applyFlatPureDestructFast(addr)
+	}
+	for addr, acct := range diff.Accounts {
+		s.applyFlatMutationFast(diff, addr, acct)
+	}
+}
+
 // applyFlatMutation commits one FlatDiff account mutation onto the statedb
 // via the journalled Set* path so Finalise / commit pick it up. Handles
 // resurrection by seeding stateObjectsDestruct with the pre-block original
@@ -2616,6 +2635,59 @@ func (s *StateDB) applyFlatMutation(diff *FlatDiff, addr common.Address, acct ty
 	// a markUpdate, even when only storage or code changed.
 	s.SetNonce(addr, acct.Nonce, tracing.NonceChangeUnspecified)
 	s.SetBalance(addr, acct.Balance, tracing.BalanceChangeUnspecified)
+}
+
+func (s *StateDB) applyFlatPureDestructFast(addr common.Address) {
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return
+	}
+	if !obj.Balance().IsZero() {
+		obj.setBalance(new(uint256.Int))
+	}
+	obj.markSelfdestructed()
+	s.journal.dirty(addr)
+}
+
+func (s *StateDB) applyFlatMutationFast(diff *FlatDiff, addr common.Address, acct types.StateAccount) {
+	var obj *stateObject
+	if _, destructed := diff.Destructs[addr]; destructed {
+		if _, already := s.stateObjectsDestruct[addr]; !already {
+			if prev := s.getStateObject(addr); prev != nil {
+				s.stateObjectsDestruct[addr] = prev
+			}
+		}
+		delete(s.stateObjects, addr)
+		delete(s.nonExistentReads, addr)
+		obj = newObject(s, addr, nil)
+		s.setStateObject(obj)
+	} else {
+		obj = s.getStateObject(addr)
+		if obj == nil {
+			delete(s.nonExistentReads, addr)
+			obj = newObject(s, addr, nil)
+			s.setStateObject(obj)
+		}
+	}
+	if obj == nil {
+		return
+	}
+	obj.data.Nonce = acct.Nonce
+	if acct.Balance != nil {
+		obj.data.Balance = new(uint256.Int).Set(acct.Balance)
+	} else {
+		obj.data.Balance = new(uint256.Int)
+	}
+	codeHash := common.BytesToHash(acct.CodeHash)
+	if code, ok := diff.Code[codeHash]; ok {
+		obj.setCode(codeHash, code)
+	}
+	if slots, ok := diff.Storage[addr]; ok {
+		for key, value := range slots {
+			obj.dirtyStorage[key] = value
+		}
+	}
+	s.journal.dirty(addr)
 }
 
 // NewWithFlatBase creates a StateDB at parentCommittedRoot (the last root

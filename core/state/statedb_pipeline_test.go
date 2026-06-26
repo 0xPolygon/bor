@@ -751,12 +751,20 @@ func TestPipelinedSRC_RootParity_NewVsTrieOnly(t *testing.T) {
 	multiDB.ApplyFlatDiffForCommit(flatDiff)
 	rootMulti := multiDB.IntermediateRoot(false)
 
+	// --- Path C: state.New + fast witness-off replay path ---
+	fastDB, err := New(parentRoot, sdb)
+	require.NoError(t, err)
+	fastDB.ApplyFlatDiffForCommitFast(flatDiff)
+	rootFast := fastDB.IntermediateRoot(false)
+
 	// --- Parity assertion: byte-identical state roots ---
 	require.Equal(t, rootTrieOnly, rootMulti,
 		"state root must be byte-identical between NewTrieOnly and state.New paths — "+
 			"any divergence is a consensus-splitting bug between witness-producing and witness-off nodes")
+	require.Equal(t, rootTrieOnly, rootFast,
+		"fast FlatDiff replay must produce the same root as the journaled SRC replay")
 
-	// Cross-check against a third path: directly executing the same mutations
+	// Cross-check against direct execution of the same mutations
 	// on a fresh StateDB at parentRoot (no FlatDiff replay). This catches any
 	// hypothetical bug where ApplyFlatDiffForCommit produces a root that
 	// differs from the original execution.
@@ -785,4 +793,62 @@ func TestPipelinedSRC_RootParity_NewVsTrieOnly(t *testing.T) {
 	rootDirect := direct.IntermediateRoot(false)
 	require.Equal(t, rootDirect, rootTrieOnly,
 		"FlatDiff replay path must produce the same root as direct execution")
+}
+
+func TestApplyFlatDiffForCommitFast_PreservesParentStorageRootAfterOverlayExecution(t *testing.T) {
+	db := NewDatabaseForTesting()
+
+	addr := common.HexToAddress("0xoverlay-root")
+	slot := common.HexToHash("0x01")
+
+	initial, err := New(types.EmptyRootHash, db)
+	require.NoError(t, err)
+	initial.CreateAccount(addr)
+	initial.SetBalance(addr, uint256.NewInt(1), 0)
+	root0, _, err := initial.CommitWithUpdate(0, false, false)
+	require.NoError(t, err)
+
+	// Block N changes storage. The resulting FlatDiff is used as an overlay
+	// while block N+1 executes before root_N is available.
+	blockNExec, err := New(root0, db)
+	require.NoError(t, err)
+	blockNExec.SetState(addr, slot, common.HexToHash("0xdead"))
+	diffN := blockNExec.CommitSnapshot(false)
+
+	blockNSRC, err := New(root0, db)
+	require.NoError(t, err)
+	blockNSRC.ApplyFlatDiffForCommit(diffN)
+	rootN, _, err := blockNSRC.CommitWithUpdate(1, false, false)
+	require.NoError(t, err)
+
+	// Block N+1 sees block N's storage through the FlatDiff overlay, but its
+	// account data.Root is still rooted at root0 because CommitSnapshot does
+	// not hash storage. A fast replay at rootN must preserve rootN's account
+	// storage root instead of copying this stale metadata root.
+	blockN1Exec, err := NewWithFlatBase(root0, db, diffN)
+	require.NoError(t, err)
+	require.Equal(t, common.HexToHash("0xdead"), blockN1Exec.GetState(addr, slot))
+	blockN1Exec.SetBalance(addr, uint256.NewInt(2), 0)
+	diffN1 := blockN1Exec.CommitSnapshot(false)
+	require.Contains(t, diffN1.Accounts, addr)
+	require.NotContains(t, diffN1.Storage, addr)
+
+	direct, err := New(rootN, db)
+	require.NoError(t, err)
+	direct.SetBalance(addr, uint256.NewInt(2), 0)
+	rootDirect := direct.IntermediateRoot(false)
+
+	slow, err := New(rootN, db)
+	require.NoError(t, err)
+	slow.ApplyFlatDiffForCommit(diffN1)
+	rootSlow := slow.IntermediateRoot(false)
+
+	fast, err := New(rootN, db)
+	require.NoError(t, err)
+	fast.ApplyFlatDiffForCommitFast(diffN1)
+	rootFast := fast.IntermediateRoot(false)
+
+	require.Equal(t, rootDirect, rootSlow)
+	require.Equal(t, rootSlow, rootFast,
+		"fast replay must preserve the parent root's storage trie when FlatDiff account metadata came from an overlay execution")
 }
