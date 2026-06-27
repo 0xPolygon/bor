@@ -81,7 +81,7 @@ func (gc *GenesisContractsClient) ReservedClientForAddress(
 	if err != nil {
 		return ReservedClientLookup{}, err
 	}
-	if len(values) != 4 {
+	if len(values) != 6 {
 		return ReservedClientLookup{}, fmt.Errorf("reserved registry getClientForAddress returned %d values", len(values))
 	}
 
@@ -101,13 +101,50 @@ func (gc *GenesisContractsClient) ReservedClientForAddress(
 	if !ok {
 		return ReservedClientLookup{}, fmt.Errorf("reserved registry active flag has type %T", values[3])
 	}
+	feeMode, ok := values[4].(uint8)
+	if !ok {
+		return ReservedClientLookup{}, fmt.Errorf("reserved registry fee mode has type %T", values[4])
+	}
+	effectiveFrom, ok := values[5].(uint64)
+	if !ok {
+		return ReservedClientLookup{}, fmt.Errorf("reserved registry effective-from has type %T", values[5])
+	}
 
 	return ReservedClientLookup{
-		ClientID: new(big.Int).Set(clientID),
-		GasQuota: gasQuota,
-		Admin:    admin,
-		Active:   active,
+		ClientID:      new(big.Int).Set(clientID),
+		GasQuota:      gasQuota,
+		Admin:         admin,
+		Active:        active,
+		FeeMode:       feeMode,
+		EffectiveFrom: effectiveFrom,
 	}, nil
+}
+
+// Root reads the registry's configVersion-derived root. The cache (spec §4.5)
+// rebuilds its reserved-set snapshot only when this value changes.
+func (gc *GenesisContractsClient) Root(
+	state *state.StateDB,
+	number uint64,
+	hash common.Hash,
+) (common.Hash, error) {
+	if !gc.HasReservedRegistry() {
+		return common.Hash{}, nil
+	}
+
+	values, err := gc.callReservedRegistry(state, number, hash, "root")
+	if err != nil {
+		return common.Hash{}, err
+	}
+	if len(values) != 1 {
+		return common.Hash{}, fmt.Errorf("reserved registry root returned %d values", len(values))
+	}
+
+	root, ok := values[0].([32]byte)
+	if !ok {
+		return common.Hash{}, fmt.Errorf("reserved registry root has type %T", values[0])
+	}
+
+	return common.Hash(root), nil
 }
 
 func (gc *GenesisContractsClient) ReservedClientByID(

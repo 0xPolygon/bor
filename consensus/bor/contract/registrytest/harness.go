@@ -30,7 +30,7 @@ import (
 // mutate the registry via normal user transactions.
 const writeABI = `[
 	{"inputs":[{"name":"initialOwner","type":"address"},{"name":"maxTotalGas","type":"uint64"},{"name":"maxClientGas","type":"uint64"}],"name":"initialize","outputs":[],"stateMutability":"nonpayable","type":"function"},
-	{"inputs":[{"name":"admin","type":"address"},{"name":"gasQuota","type":"uint64"},{"name":"metadata","type":"string"},{"name":"addresses","type":"address[]"}],"name":"createClient","outputs":[{"name":"clientId","type":"uint256"}],"stateMutability":"nonpayable","type":"function"}
+	{"inputs":[{"name":"admin","type":"address"},{"name":"gasQuota","type":"uint64"},{"name":"feeMode","type":"uint8"},{"name":"effectiveFrom","type":"uint64"},{"name":"metadata","type":"string"},{"name":"addresses","type":"address[]"}],"name":"createClient","outputs":[{"name":"clientId","type":"uint256"}],"stateMutability":"nonpayable","type":"function"}
 ]`
 
 // Harness exposes a Reader bound to an in-memory state with the registry
@@ -67,7 +67,7 @@ func NewHarness(t *testing.T) *Harness {
 	require.NoError(t, err)
 	callContract(t, statedb, owner, contractAddr, initData)
 
-	createData, err := writeAbi.Pack("createClient", clientAdmin, uint64(10_000_000), "test", []common.Address{reserved})
+	createData, err := writeAbi.Pack("createClient", clientAdmin, uint64(10_000_000), uint8(0), uint64(0), "test", []common.Address{reserved})
 	require.NoError(t, err)
 	callContract(t, statedb, owner, contractAddr, createData)
 
@@ -170,22 +170,41 @@ func (r *evmReader) ReservedClientForAddress(_ *state.StateDB, _ uint64, _ commo
 	if err != nil {
 		return registryreader.ClientLookup{}, err
 	}
-	if len(values) != 4 {
+	if len(values) != 6 {
 		return registryreader.ClientLookup{}, fmt.Errorf("getClientForAddress returned %d values", len(values))
 	}
 	clientID, _ := values[0].(*big.Int)
 	gasQuota, _ := values[1].(uint64)
 	admin, _ := values[2].(common.Address)
 	active, _ := values[3].(bool)
+	feeMode, _ := values[4].(uint8)
+	effectiveFrom, _ := values[5].(uint64)
 	if clientID == nil {
 		return registryreader.ClientLookup{}, fmt.Errorf("getClientForAddress returned nil clientID")
 	}
 	return registryreader.ClientLookup{
-		ClientID: new(big.Int).Set(clientID),
-		GasQuota: gasQuota,
-		Admin:    admin,
-		Active:   active,
+		ClientID:      new(big.Int).Set(clientID),
+		GasQuota:      gasQuota,
+		Admin:         admin,
+		Active:        active,
+		FeeMode:       feeMode,
+		EffectiveFrom: effectiveFrom,
 	}, nil
+}
+
+func (r *evmReader) Root(_ *state.StateDB, _ uint64, _ common.Hash) (common.Hash, error) {
+	values, err := r.call("root")
+	if err != nil {
+		return common.Hash{}, err
+	}
+	if len(values) != 1 {
+		return common.Hash{}, fmt.Errorf("root returned %d values", len(values))
+	}
+	root, ok := values[0].([32]byte)
+	if !ok {
+		return common.Hash{}, fmt.Errorf("root returned %T", values[0])
+	}
+	return common.Hash(root), nil
 }
 
 func (r *evmReader) call(method string, args ...interface{}) ([]interface{}, error) {

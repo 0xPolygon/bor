@@ -14,6 +14,7 @@ contract ReservedBlockspaceRegistry {
     error AddressAlreadyRegistered();
     error AddressNotRegistered();
     error InvalidQuota();
+    error InvalidFeeMode();
     error MaxTotalReservedGasExceeded();
     error MaxClientReservedGasExceeded();
 
@@ -21,15 +22,31 @@ contract ReservedBlockspaceRegistry {
         address admin;
         uint64 gasQuota;
         bool active;
+        // feeMode: 0 = free (zero in-protocol fee), 1 = routed (fee paid but
+        // credited to the producer). See the reserved-blockspace spec §7.
+        uint8 feeMode;
+        // effectiveFrom: block number from which this client's reserved status
+        // applies. Lets governance schedule/announce a change at a future height
+        // (a kill-switch via setClientActive(false) is still immediate).
+        uint64 effectiveFrom;
         string metadata;
         address[] addresses;
     }
+
+    uint8 internal constant FEE_MODE_FREE = 0;
+    uint8 internal constant FEE_MODE_ROUTED = 1;
 
     address public owner;
     uint64 public maxTotalReservedGas;
     uint64 public maxClientReservedGas;
     uint256 public nextClientId;
     uint64 public totalReservedGas;
+
+    // configVersion increments on every change to the reserved set or its
+    // limits. Bor reads root() once per block and only rebuilds its cached
+    // snapshot when the value changes (reserved-blockspace spec §4.5), avoiding
+    // a per-transaction state read.
+    uint256 public configVersion;
 
     mapping(uint256 clientId => Client client) private clients;
     mapping(address account => uint256 clientId) private clientIdByAddress;
@@ -46,10 +63,24 @@ contract ReservedBlockspaceRegistry {
     event ClientMetadataUpdated(uint256 indexed clientId, string metadata);
     event ClientAddressAdded(uint256 indexed clientId, address indexed account);
     event ClientAddressRemoved(uint256 indexed clientId, address indexed account);
+    event ClientFeeModeUpdated(uint256 indexed clientId, uint8 feeMode);
+    event ClientEffectiveFromUpdated(uint256 indexed clientId, uint64 effectiveFrom);
+    event ConfigVersionUpdated(uint256 version);
 
     modifier onlyInitialized() {
         if (owner == address(0)) revert NotInitialized();
         _;
+    }
+
+    // bumpsVersion increments configVersion after a mutation so Bor's cached
+    // snapshot (keyed on root()) is invalidated. Applied to every function that
+    // changes the reserved set, quotas, fee modes, effective heights, or limits.
+    modifier bumpsVersion() {
+        _;
+        unchecked {
+            configVersion++;
+        }
+        emit ConfigVersionUpdated(configVersion);
     }
 
     modifier onlyOwner() {
@@ -82,7 +113,7 @@ contract ReservedBlockspaceRegistry {
         owner = newOwner;
     }
 
-    function setLimits(uint64 maxTotalGas, uint64 maxClientGas) external onlyInitialized onlyOwner {
+    function setLimits(uint64 maxTotalGas, uint64 maxClientGas) external onlyInitialized onlyOwner bumpsVersion {
         _validateLimits(maxTotalGas, maxClientGas);
         if (totalReservedGas > maxTotalGas) revert MaxTotalReservedGasExceeded();
         for (uint256 clientId = 1; clientId < nextClientId; clientId++) {
@@ -95,13 +126,16 @@ contract ReservedBlockspaceRegistry {
         emit LimitsUpdated(maxTotalGas, maxClientGas);
     }
 
-    function createClient(address admin, uint64 gasQuota, string calldata metadata, address[] calldata addresses)
-        external
-        onlyInitialized
-        onlyOwner
-        returns (uint256 clientId)
-    {
+    function createClient(
+        address admin,
+        uint64 gasQuota,
+        uint8 feeMode,
+        uint64 effectiveFrom,
+        string calldata metadata,
+        address[] calldata addresses
+    ) external onlyInitialized onlyOwner bumpsVersion returns (uint256 clientId) {
         if (admin == address(0)) revert ZeroAddress();
+        if (feeMode > FEE_MODE_ROUTED) revert InvalidFeeMode();
         _validateQuota(gasQuota, 0);
 
         clientId = nextClientId++;
@@ -109,6 +143,8 @@ contract ReservedBlockspaceRegistry {
         client.admin = admin;
         client.gasQuota = gasQuota;
         client.active = true;
+        client.feeMode = feeMode;
+        client.effectiveFrom = effectiveFrom;
         client.metadata = metadata;
         totalReservedGas += gasQuota;
 
@@ -117,6 +153,8 @@ contract ReservedBlockspaceRegistry {
         }
 
         emit ClientCreated(clientId, admin, gasQuota, metadata);
+        emit ClientFeeModeUpdated(clientId, feeMode);
+        emit ClientEffectiveFromUpdated(clientId, effectiveFrom);
     }
 
     function setClientAdmin(uint256 clientId, address newAdmin) external onlyInitialized onlyOwner {
@@ -128,7 +166,7 @@ contract ReservedBlockspaceRegistry {
         emit ClientAdminUpdated(clientId, previousAdmin, newAdmin);
     }
 
-    function setClientQuota(uint256 clientId, uint64 newQuota) external onlyInitialized onlyOwner {
+    function setClientQuota(uint256 clientId, uint64 newQuota) external onlyInitialized onlyOwner bumpsVersion {
         Client storage client = _client(clientId);
         uint64 previousQuota = client.gasQuota;
         _validateQuota(newQuota, client.active ? previousQuota : 0);
@@ -141,7 +179,7 @@ contract ReservedBlockspaceRegistry {
         emit ClientQuotaUpdated(clientId, previousQuota, newQuota);
     }
 
-    function setClientActive(uint256 clientId, bool active) external onlyInitialized onlyOwner {
+    function setClientActive(uint256 clientId, bool active) external onlyInitialized onlyOwner bumpsVersion {
         Client storage client = _client(clientId);
         if (client.active == active) return;
 
@@ -169,6 +207,7 @@ contract ReservedBlockspaceRegistry {
         external
         onlyInitialized
         onlyClientAdminOrOwner(clientId)
+        bumpsVersion
     {
         _addAddress(clientId, account);
     }
@@ -177,6 +216,7 @@ contract ReservedBlockspaceRegistry {
         external
         onlyInitialized
         onlyClientAdminOrOwner(clientId)
+        bumpsVersion
     {
         for (uint256 i = 0; i < accounts.length; i++) {
             _addAddress(clientId, accounts[i]);
@@ -187,6 +227,7 @@ contract ReservedBlockspaceRegistry {
         external
         onlyInitialized
         onlyClientAdminOrOwner(clientId)
+        bumpsVersion
     {
         Client storage client = _client(clientId);
         if (clientIdByAddress[account] != clientId) revert AddressNotRegistered();
@@ -223,18 +264,41 @@ contract ReservedBlockspaceRegistry {
     function getClientForAddress(address account)
         external
         view
-        returns (uint256 clientId, uint64 gasQuota, address admin, bool active)
+        returns (uint256 clientId, uint64 gasQuota, address admin, bool active, uint8 feeMode, uint64 effectiveFrom)
     {
         clientId = clientIdByAddress[account];
-        if (clientId == 0) return (0, 0, address(0), false);
+        if (clientId == 0) return (0, 0, address(0), false, 0, 0);
 
         Client storage client = clients[clientId];
-        return (clientId, client.gasQuota, client.admin, client.active);
+        return (clientId, client.gasQuota, client.admin, client.active, client.feeMode, client.effectiveFrom);
     }
 
     function isReservedAddress(address account) external view returns (bool) {
         uint256 clientId = clientIdByAddress[account];
         return clientId != 0 && clients[clientId].active;
+    }
+
+    // root returns a value that changes whenever the reserved set, quotas, fee
+    // modes, effective heights, or limits change. Bor caches its snapshot keyed
+    // on this and only rebuilds when it moves (reserved-blockspace spec §4.5).
+    function root() external view returns (bytes32) {
+        return bytes32(configVersion);
+    }
+
+    function setClientFeeMode(uint256 clientId, uint8 feeMode) external onlyInitialized onlyOwner bumpsVersion {
+        if (feeMode > FEE_MODE_ROUTED) revert InvalidFeeMode();
+        _client(clientId).feeMode = feeMode;
+        emit ClientFeeModeUpdated(clientId, feeMode);
+    }
+
+    function setClientEffectiveFrom(uint256 clientId, uint64 effectiveFrom)
+        external
+        onlyInitialized
+        onlyOwner
+        bumpsVersion
+    {
+        _client(clientId).effectiveFrom = effectiveFrom;
+        emit ClientEffectiveFromUpdated(clientId, effectiveFrom);
     }
 
     function getWhitelistedAddresses() external view returns (address[] memory) {
