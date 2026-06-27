@@ -40,4 +40,85 @@ type Reader interface {
 	// whenever the reserved set or its limits change, so a snapshot keyed on it
 	// can be reused until it moves (spec §4.5).
 	Root(state *state.StateDB, number uint64, hash common.Hash) (common.Hash, error)
+	// WhitelistedAddresses returns every currently-active reserved address.
+	WhitelistedAddresses(state *state.StateDB, number uint64, hash common.Hash) ([]common.Address, error)
+	// TotalReservedGas returns the sum of active client quotas (reserved capacity).
+	TotalReservedGas(state *state.StateDB, number uint64, hash common.Hash) (uint64, error)
+}
+
+// Snapshot is an immutable, pure-lookup view of the reserved set as of one
+// block's state. It is built once per head/parent (and reused while root() is
+// unchanged) so the hot classification paths — txpool admission, the EVM
+// fee-skip stand-in, base-fee capacity — never do a per-transaction state read
+// (spec §4.5). A nil *Snapshot classifies nothing (no registry / non-bor chain),
+// so all methods are nil-safe.
+type Snapshot struct {
+	root     common.Hash
+	capacity uint64
+	clients  map[common.Address]ClientLookup
+}
+
+// BuildSnapshot reads the full active reserved set from the registry at the
+// given block state and returns an immutable Snapshot. Returns nil (no error)
+// when no registry is configured. Callers cache it keyed on Root().
+func BuildSnapshot(r Reader, statedb *state.StateDB, number uint64, hash common.Hash) (*Snapshot, error) {
+	if r == nil || !r.HasReservedRegistry() {
+		return nil, nil
+	}
+	root, err := r.Root(statedb, number, hash)
+	if err != nil {
+		return nil, err
+	}
+	addrs, err := r.WhitelistedAddresses(statedb, number, hash)
+	if err != nil {
+		return nil, err
+	}
+	capacity, err := r.TotalReservedGas(statedb, number, hash)
+	if err != nil {
+		return nil, err
+	}
+	clients := make(map[common.Address]ClientLookup, len(addrs))
+	for _, a := range addrs {
+		c, err := r.ReservedClientForAddress(statedb, number, hash, a)
+		if err != nil {
+			return nil, err
+		}
+		clients[a] = c
+	}
+	return &Snapshot{root: root, capacity: capacity, clients: clients}, nil
+}
+
+// Root is the registry root this snapshot was built at; callers reuse the
+// snapshot while the live root is unchanged.
+func (s *Snapshot) Root() common.Hash {
+	if s == nil {
+		return common.Hash{}
+	}
+	return s.root
+}
+
+// IsReserved reports whether account is an active reserved sender effective at
+// the given block number (active && effectiveFrom <= number).
+func (s *Snapshot) IsReserved(account common.Address, number uint64) bool {
+	if s == nil {
+		return false
+	}
+	c, ok := s.clients[account]
+	return ok && c.Active && c.EffectiveFrom <= number
+}
+
+// FeeMode returns the fee mode of account's client (0 = free) or 0 if not reserved.
+func (s *Snapshot) FeeMode(account common.Address) uint8 {
+	if s == nil {
+		return 0
+	}
+	return s.clients[account].FeeMode
+}
+
+// Capacity returns the reserved capacity (sum of active client quotas).
+func (s *Snapshot) Capacity() uint64 {
+	if s == nil {
+		return 0
+	}
+	return s.capacity
 }

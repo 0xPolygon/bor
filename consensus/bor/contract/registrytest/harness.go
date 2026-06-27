@@ -207,6 +207,36 @@ func (r *evmReader) Root(_ *state.StateDB, _ uint64, _ common.Hash) (common.Hash
 	return common.Hash(root), nil
 }
 
+func (r *evmReader) WhitelistedAddresses(_ *state.StateDB, _ uint64, _ common.Hash) ([]common.Address, error) {
+	values, err := r.call("getWhitelistedAddresses")
+	if err != nil {
+		return nil, err
+	}
+	if len(values) != 1 {
+		return nil, fmt.Errorf("getWhitelistedAddresses returned %d values", len(values))
+	}
+	addrs, ok := values[0].([]common.Address)
+	if !ok {
+		return nil, fmt.Errorf("getWhitelistedAddresses returned %T", values[0])
+	}
+	return addrs, nil
+}
+
+func (r *evmReader) TotalReservedGas(_ *state.StateDB, _ uint64, _ common.Hash) (uint64, error) {
+	values, err := r.call("totalReservedGas")
+	if err != nil {
+		return 0, err
+	}
+	if len(values) != 1 {
+		return 0, fmt.Errorf("totalReservedGas returned %d values", len(values))
+	}
+	total, ok := values[0].(uint64)
+	if !ok {
+		return 0, fmt.Errorf("totalReservedGas returned %T", values[0])
+	}
+	return total, nil
+}
+
 func (r *evmReader) call(method string, args ...interface{}) ([]interface{}, error) {
 	data, err := r.readerAB.Pack(method, args...)
 	if err != nil {
