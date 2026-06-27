@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus/bor/registryreader"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -69,6 +70,11 @@ type TxPool struct {
 
 	stateLock sync.RWMutex   // The lock for protecting state instance
 	state     *state.StateDB // Current state at the blockchain head
+
+	// reservedRegistry is the read-only handle to the reserved blockspace
+	// registry. Nil when no registry is configured; subpools may pull it via
+	// ReservedRegistry() to classify reserved transactions.
+	reservedRegistry registryreader.Reader
 
 	subs event.SubscriptionScope // Subscription scope to unsubscribe all on shutdown
 	quit chan chan error         // Quit channel to tear down the head updater
@@ -260,6 +266,26 @@ func (p *TxPool) loop(head *types.Header) {
 	}
 	// Notify the closer of termination (no error possible for now)
 	errc <- nil
+}
+
+// ReservedRegistry returns the reserved blockspace registry reader wired into
+// the pool. Subpools that need to classify reserved txs should read it through
+// this accessor — it tolerates a nil pool by returning nil.
+func (p *TxPool) ReservedRegistry() registryreader.Reader {
+	if p == nil {
+		return nil
+	}
+	return p.reservedRegistry
+}
+
+// SetReservedRegistry installs the reserved blockspace registry reader.
+// Called once at startup from the backend, after the consensus engine is
+// available. Passing nil is valid.
+func (p *TxPool) SetReservedRegistry(r registryreader.Reader) {
+	if p == nil {
+		return
+	}
+	p.reservedRegistry = r
 }
 
 // SetGasTip updates the minimum gas tip required by the transaction pool for a

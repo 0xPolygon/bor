@@ -191,10 +191,19 @@ var (
 			BackupMultiplier: map[string]uint64{
 				"0": 2,
 			},
-			ValidatorContract:     "0x0000000000000000000000000000000000001000",
-			StateReceiverContract: "0x0000000000000000000000000000000000001001",
+			ValidatorContract:        "0x0000000000000000000000000000000000001000",
+			StateReceiverContract:    "0x0000000000000000000000000000000000001001",
+			ReservedRegistryContract: DefaultReservedRegistryContract,
 			BurntContract: map[string]string{
 				"0": "0x00000000000000000000000000000000000000000",
+			},
+			BlockAlloc: map[string]interface{}{
+				"0": map[string]interface{}{
+					DefaultReservedRegistryContract: map[string]interface{}{
+						"balance": "0x0",
+						"code":    ReservedBlockspaceRegistryCode,
+					},
+				},
 			},
 		},
 		ShanghaiBlock: big.NewInt(0),
@@ -231,10 +240,19 @@ var (
 			Coinbase: map[string]string{
 				"0": "0x000000000000000000000000000000000000ba5e",
 			},
-			ValidatorContract:     "0x0000000000000000000000000000000000001000",
-			StateReceiverContract: "0x0000000000000000000000000000000000001001",
+			ValidatorContract:        "0x0000000000000000000000000000000000001000",
+			StateReceiverContract:    "0x0000000000000000000000000000000000001001",
+			ReservedRegistryContract: DefaultReservedRegistryContract,
 			BurntContract: map[string]string{
 				"0": "0x00000000000000000000000000000000000000000",
+			},
+			BlockAlloc: map[string]interface{}{
+				"0": map[string]interface{}{
+					DefaultReservedRegistryContract: map[string]interface{}{
+						"balance": "0x0",
+						"code":    ReservedBlockspaceRegistryCode,
+					},
+				},
 			},
 		},
 	}
@@ -923,6 +941,7 @@ type BorConfig struct {
 	BackupMultiplier                map[string]uint64                `json:"backupMultiplier"`                // Backup multiplier to determine the wiggle time
 	ValidatorContract               string                           `json:"validatorContract"`               // Validator set contract
 	StateReceiverContract           string                           `json:"stateReceiverContract"`           // State receiver contract
+	ReservedRegistryContract        string                           `json:"reservedRegistryContract"`        // Reserved blockspace registry contract
 	OverrideStateSyncRecords        map[string]int                   `json:"overrideStateSyncRecords"`        // override state records count
 	OverrideStateSyncRecordsInRange []BlockRangeOverride             `json:"overrideStateSyncRecordsInRange"` // override state records count in a given block range
 	OverrideValidatorSetInRange     []BlockRangeOverrideValidatorSet `json:"overrideValidatorSetInRange"`     // override validator set in a given block range

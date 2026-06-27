@@ -33,6 +33,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/tracing"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/bor"
+	"github.com/ethereum/go-ethereum/consensus/bor/registryreader"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/core"
@@ -381,6 +382,10 @@ type worker struct {
 	engine      consensus.Engine
 	eth         Backend
 	chain       *core.BlockChain
+
+	// reservedRegistry mirrors the Miner field. Populated via
+	// Miner.SetReservedRegistry — see miner.go.
+	reservedRegistry registryreader.Reader
 
 	prio []common.Address // A list of senders to prioritize
 

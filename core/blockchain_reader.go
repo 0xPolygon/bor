@@ -23,6 +23,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
+	"github.com/ethereum/go-ethereum/consensus/bor/registryreader"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
@@ -553,6 +554,16 @@ func (bc *BlockChain) Config() *params.ChainConfig {
 
 // Engine retrieves the blockchain's consensus engine.
 func (bc *BlockChain) Engine() consensus.Engine { return bc.engine }
+
+// ReservedRegistry returns the reserved blockspace registry reader configured
+// for this chain, or nil when none has been wired (non-bor engines, tests, or
+// chains without the registry contract).
+func (bc *BlockChain) ReservedRegistry() registryreader.Reader { return bc.reservedRegistry }
+
+// SetReservedRegistry wires the reserved blockspace registry reader into the
+// chain. Called once at startup from the backend after the consensus engine is
+// ready. Passing nil is valid and disables reserved-tx awareness.
+func (bc *BlockChain) SetReservedRegistry(r registryreader.Reader) { bc.reservedRegistry = r }
 
 // Snapshots returns the blockchain snapshot tree.
 func (bc *BlockChain) Snapshots() *snapshot.Tree {

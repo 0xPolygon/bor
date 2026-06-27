@@ -38,6 +38,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/mclock"
 	"github.com/ethereum/go-ethereum/common/prque"
 	"github.com/ethereum/go-ethereum/consensus"
+	"github.com/ethereum/go-ethereum/consensus/bor/registryreader"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/core/history"
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -430,6 +431,11 @@ type BlockChain struct {
 	chain2HeadFeed      event.Feed                                // Reorg/NewHead/Fork data feed
 	chainSideFeed       event.Feed                                // Side chain data feed (removed from geth but needed in bor)
 	milestoneFetcher    func(ctx context.Context) (uint64, error) // Function to fetch the latest milestone end block from Heimdall.
+
+	// reservedRegistry is the read-only handle to the reserved blockspace
+	// registry used by block validation / filtering paths. Nil when the chain
+	// has no registry configured or runs under a non-bor consensus engine.
+	reservedRegistry registryreader.Reader
 }
 
 // NewBlockChain returns a fully initialised block chain using information
