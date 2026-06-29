@@ -128,6 +128,8 @@ jobs:
         run: kurtosis enclave inspect ${{ env.ENCLAVE_NAME }}
 
       - name: Install polycli
+        shell: bash
+        run: |
           set -euo pipefail
           tmp_dir=$(mktemp -d)
           trap 'rm -rf "$tmp_dir"' EXIT
@@ -143,7 +145,6 @@ jobs:
 
           sudo install -m 0755 "$polycli_path" /usr/local/bin/polycli
           polycli version
-
       - name: Run polycli load test
         id: load-tests
         shell: bash
