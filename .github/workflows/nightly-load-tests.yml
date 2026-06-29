@@ -1,9 +1,6 @@
 name: Nightly Load Tests
 
 on:
-  push:
-    branches:
-      - feat/nightly-load-tests
   schedule:
     - cron: '0 4 * * *'
   workflow_dispatch:
