@@ -128,12 +128,20 @@ jobs:
         run: kurtosis enclave inspect ${{ env.ENCLAVE_NAME }}
 
       - name: Install polycli
-        run: |
+          set -euo pipefail
           tmp_dir=$(mktemp -d)
-          curl -L https://github.com/0xPolygon/polygon-cli/releases/download/${{ env.POLYCLI_VERSION }}/polycli_${{ env.POLYCLI_VERSION }}_linux_amd64.tar.gz | tar -xz -C "$tmp_dir"
-          mv "$tmp_dir"/* /usr/local/bin/polycli
-          rm -rf "$tmp_dir"
-          sudo chmod +x /usr/local/bin/polycli
+          trap 'rm -rf "$tmp_dir"' EXIT
+
+          curl -fsSL "https://github.com/0xPolygon/polygon-cli/releases/download/${POLYCLI_VERSION}/polycli_${POLYCLI_VERSION}_linux_amd64.tar.gz" \
+            | tar -xz -C "$tmp_dir"
+
+          polycli_path=$(find "$tmp_dir" -maxdepth 2 -type f -name polycli -print -quit)
+          if [[ -z "${polycli_path:-}" ]]; then
+            echo "::error::polycli binary not found in downloaded archive"
+            exit 1
+          fi
+
+          sudo install -m 0755 "$polycli_path" /usr/local/bin/polycli
           polycli version
 
       - name: Run polycli load test
