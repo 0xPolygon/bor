@@ -697,6 +697,10 @@ func TestSkeletonSyncBacksOffOnTimeout(t *testing.T) {
 	for time.Now().Before(deadline) && !peer.backedOff() {
 		time.Sleep(20 * time.Millisecond)
 	}
+	if !peer.backedOff() {
+		skeleton.Terminate()
+		t.Fatal("timed-out skeleton peer never backed off")
+	}
 
 	select {
 	case <-requeued:

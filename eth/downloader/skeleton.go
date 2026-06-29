@@ -223,8 +223,9 @@ type skeleton struct {
 
 	// Callback hooks used during testing
 	syncStarting func() // callback triggered after a sync cycle is inited but before started
-	// requestFailed is invoked after a failed request has been reverted and the
-	// peer has been requeued into the idle set, if it remains backed off.
+	// requestFailed is invoked on the skeleton sync runloop after a failed
+	// request has been reverted and the peer has been requeued into the idle
+	// set, if it remains backed off. Callers must not block.
 	requestFailed func(peer string)
 }
 
