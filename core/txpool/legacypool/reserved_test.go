@@ -24,6 +24,7 @@ import (
 	"github.com/holiman/uint256"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus/bor/registryreader"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -32,20 +33,58 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 )
 
-func reservedChainConfig(reserved common.Address) *params.ChainConfig {
+// fakeRegistry is a state-independent registryreader.Reader: the reserved set is
+// fixed at construction. It lets the pool build a snapshot without deploying the
+// real contract into the test state, exercising the snapshot→isReserved path.
+type fakeRegistry struct {
+	reserved map[common.Address]registryreader.ClientLookup
+	capacity uint64
+}
+
+func newFakeRegistry(reserved ...common.Address) *fakeRegistry {
+	f := &fakeRegistry{reserved: make(map[common.Address]registryreader.ClientLookup)}
+	for i, a := range reserved {
+		f.reserved[a] = registryreader.ClientLookup{
+			ClientID: big.NewInt(int64(i + 1)), GasQuota: 30_000_000, Active: true,
+		}
+		f.capacity += 30_000_000
+	}
+	return f
+}
+
+func (f *fakeRegistry) HasReservedRegistry() bool { return true }
+func (f *fakeRegistry) IsReservedAddress(_ *state.StateDB, _ uint64, _ common.Hash, a common.Address) (bool, error) {
+	c, ok := f.reserved[a]
+	return ok && c.Active, nil
+}
+func (f *fakeRegistry) ReservedClientForAddress(_ *state.StateDB, _ uint64, _ common.Hash, a common.Address) (registryreader.ClientLookup, error) {
+	return f.reserved[a], nil
+}
+func (f *fakeRegistry) Root(_ *state.StateDB, _ uint64, _ common.Hash) (common.Hash, error) {
+	return common.HexToHash("0x1"), nil
+}
+func (f *fakeRegistry) WhitelistedAddresses(_ *state.StateDB, _ uint64, _ common.Hash) ([]common.Address, error) {
+	addrs := make([]common.Address, 0, len(f.reserved))
+	for a := range f.reserved {
+		addrs = append(addrs, a)
+	}
+	return addrs, nil
+}
+func (f *fakeRegistry) TotalReservedGas(_ *state.StateDB, _ uint64, _ common.Hash) (uint64, error) {
+	return f.capacity, nil
+}
+
+func reservedChainConfig() *params.ChainConfig {
 	cfg := *params.BorUnittestChainConfig // London active at 0
 	bor := *cfg.Bor
-	bor.ReservedBlockspaceBlock = big.NewInt(0)
-	bor.ReservedClients = []params.ReservedClient{
-		{Addresses: []common.Address{reserved}, QuotaGas: 30_000_000},
-	}
+	bor.ReservedBlockspaceBlock = big.NewInt(0) // fork gate; the reserved set comes from the registry
 	cfg.Bor = &bor
 	return &cfg
 }
 
 func setupReservedPool(reserved common.Address) *LegacyPool {
 	statedb, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
-	cfg := reservedChainConfig(reserved)
+	cfg := reservedChainConfig()
 	bc := newTestBlockChain(cfg, 10_000_000, statedb, new(event.Feed))
 	pool := New(testTxPoolConfig, bc)
 	if err := pool.Init(testTxPoolConfig.PriceLimit, bc.CurrentBlock(), newReserver()); err != nil {
@@ -55,6 +94,8 @@ func setupReservedPool(reserved common.Address) *LegacyPool {
 	// A realistic positive tip floor (PIP-35 ~25 gwei). Reserved senders must
 	// bypass it; everyone else is held to it.
 	pool.SetGasTip(big.NewInt(30_000_000_000))
+	// Wire the registry source (post-Init, as the backend does) and build the snapshot.
+	pool.SetReservedRegistry(newFakeRegistry(reserved))
 	return pool
 }
 

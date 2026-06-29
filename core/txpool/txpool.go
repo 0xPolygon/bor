@@ -286,6 +286,14 @@ func (p *TxPool) SetReservedRegistry(r registryreader.Reader) {
 		return
 	}
 	p.reservedRegistry = r
+	// Propagate to any subpool that classifies reserved transactions.
+	for _, sp := range p.subpools {
+		if setter, ok := sp.(interface {
+			SetReservedRegistry(registryreader.Reader)
+		}); ok {
+			setter.SetReservedRegistry(r)
+		}
+	}
 }
 
 // SetGasTip updates the minimum gas tip required by the transaction pool for a

@@ -31,6 +31,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/prque"
+	"github.com/ethereum/go-ethereum/consensus/bor/registryreader"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/state"
@@ -325,6 +326,12 @@ type LegacyPool struct {
 	promoteTxCh chan struct{} // should be used only for tests
 
 	filteredAddrs map[common.Address]struct{} // Map of addresses to filter
+
+	// Reserved-blockspace registry: reader is wired post-Init from the backend;
+	// the snapshot is rebuilt at each reset from the new head's state so the
+	// per-tx admission path never reads contract state (spec §4.5).
+	reservedRegistry registryreader.Reader
+	reservedSnapshot atomic.Pointer[registryreader.Snapshot]
 
 	// Rebroadcast tracking
 	rebroadcastTxFeed event.Feed                // Feed for stuck transaction events
@@ -784,8 +791,9 @@ func (pool *LegacyPool) ValidateTxBasics(tx *types.Transaction) error {
 			1<<types.AccessListTxType |
 			1<<types.DynamicFeeTxType |
 			1<<types.SetCodeTxType,
-		MaxSize: txMaxSize,
-		MinTip:  pool.gasTip.Load().ToBig(),
+		MaxSize:          txMaxSize,
+		MinTip:           pool.gasTip.Load().ToBig(),
+		ReservedSnapshot: pool.reservedSnapshot.Load(),
 	}
 	return txpool.ValidateTransaction(tx, pool.currentHead.Load(), pool.signer, opts)
 }
@@ -1795,6 +1803,10 @@ func (pool *LegacyPool) reset(oldHead, newHead *types.Header) {
 	pool.currentState = statedb
 	pool.pendingNonces = newNoncer(statedb)
 
+	// Refresh the reserved-set snapshot from the new head's state so per-tx
+	// admission classifies without a contract read (spec §4.5).
+	pool.rebuildReservedSnapshot(statedb, newHead)
+
 	// Inject any transactions discarded due to reorgs
 	log.Debug("Reinjecting stale transactions", "count", len(reinject))
 	core.SenderCacher().Recover(pool.signer, reinject)
@@ -2284,19 +2296,51 @@ func (pool *LegacyPool) isFiltered(addr common.Address) bool {
 	return exists
 }
 
-// isReserved reports whether addr is a reserved-blockspace client active at the
-// current head. Reserved senders' zero-fee transactions bypass the pool's fee
-// floors (PIP-35 min tip, base-fee tip floor) so they are admitted, kept, and
-// surfaced to the miner. Classification is sender-based and consensus-uniform
-// (the reserved set comes from the chain config), matching the EVM fee path.
+// isReserved reports whether addr is a reserved-blockspace client for the block
+// being built on top of the current head. Reserved senders' zero-fee
+// transactions bypass the pool's fee floors (PIP-35 min tip, base-fee tip floor)
+// so they are admitted, kept, and surfaced to the miner. The fork *height* gate
+// comes from chain config; the reserved *set* comes from the registry snapshot
+// (rebuilt per head), so the source of truth matches the EVM and base-fee paths.
 func (pool *LegacyPool) isReserved(addr common.Address) bool {
 	cfg := pool.chainconfig
 	if cfg.Bor == nil {
 		return false
 	}
 	head := pool.currentHead.Load()
-	if head == nil || !cfg.Bor.IsReservedBlockspace(head.Number) {
+	if head == nil {
 		return false
 	}
-	return cfg.Bor.IsReservedSender(addr)
+	// Classify for the next block (the one this tx targets).
+	number := new(big.Int).Add(head.Number, common.Big1)
+	if !cfg.Bor.IsReservedBlockspace(number) {
+		return false
+	}
+	return pool.reservedSnapshot.Load().IsReserved(addr, number.Uint64())
+}
+
+// SetReservedRegistry installs the reserved-blockspace registry reader and
+// rebuilds the snapshot from the current head. Called once post-Init from the
+// backend (the consensus engine isn't available at pool construction).
+func (pool *LegacyPool) SetReservedRegistry(r registryreader.Reader) {
+	pool.mu.Lock()
+	pool.reservedRegistry = r
+	statedb, head := pool.currentState, pool.currentHead.Load()
+	pool.mu.Unlock()
+	pool.rebuildReservedSnapshot(statedb, head)
+}
+
+// rebuildReservedSnapshot reads the reserved set from the registry at the given
+// block state and stores it. A read error leaves the previous snapshot in place
+// rather than dropping classification. No-op when no registry is configured.
+func (pool *LegacyPool) rebuildReservedSnapshot(statedb *state.StateDB, head *types.Header) {
+	if pool.reservedRegistry == nil || statedb == nil || head == nil {
+		return
+	}
+	snap, err := registryreader.BuildSnapshot(pool.reservedRegistry, statedb, head.Number.Uint64(), head.Hash())
+	if err != nil {
+		log.Warn("Failed to build reserved-blockspace snapshot", "number", head.Number, "err", err)
+		return
+	}
+	pool.reservedSnapshot.Store(snap)
 }
