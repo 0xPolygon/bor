@@ -227,6 +227,16 @@ func gasTargetForLimit(config *params.ChainConfig, parent *types.Header, gasLimi
 // the standard curve applied to capacity that excludes the reserved quotas
 // (Σ active client quotas). Header.GasLimit is left untouched — this is a
 // formula-only input.
+//
+// The capacity source stays on the config stub rather than the registry
+// snapshot on purpose: CalcBaseFee is a pure (config, parent) function called
+// from RPC, txpool, graphql, and feehistory paths that have no parent StateDB
+// (and some legitimately cannot — pruned, light, historical headers), so a
+// registry state read here would break that contract and risk a parity split.
+// The registry-derived capacity reaches base fee the same way reserved gas
+// used does: a producer-stamped header field read from the parent (Manav's
+// POS-3575/3576). Until that field lands, this half mirrors the inert
+// publicGasUsed half above — deterministic, every node reads the same config.
 func reservedAwareGasTarget(config *params.ChainConfig, parent *types.Header) uint64 {
 	reservedCapacity := config.Bor.ReservedCapacity()
 	if reservedCapacity >= parent.GasLimit {
