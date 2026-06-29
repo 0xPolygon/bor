@@ -142,18 +142,18 @@ jobs:
       - name: Run polycli load test
         id: load-tests
         shell: bash
-        env:
-          LOADTEST_PRIVATE_KEY: ${{ secrets.NIGHTLY_LOADTEST_PRIVATE_KEY }}
         run: |
           set -euo pipefail
 
+          LOADTEST_PRIVATE_KEY=$(sed -nE 's/^PRIVATE_KEY=\$\{PRIVATE_KEY:-"([^"]+)".*/\1/p' pos-workflows/tests/pos_test_utils.sh)
           LOADTEST_PRIVATE_KEY="${LOADTEST_PRIVATE_KEY//$'\n'/}"
           LOADTEST_PRIVATE_KEY="${LOADTEST_PRIVATE_KEY//$'\r'/}"
           if [[ -z "$LOADTEST_PRIVATE_KEY" ]]; then
-            LOADTEST_PRIVATE_KEY="0xd40311b5a5ca5eaeb48dfba5403bde4993ece8eccf4190e98e19fcd4754260ea"
+            echo "::error::Unable to resolve load test signer from pos-workflows"
+            exit 1
           fi
           if [[ ! "$LOADTEST_PRIVATE_KEY" =~ ^0x?[0-9a-fA-F]{64}$ ]]; then
-            echo "::error::NIGHTLY_LOADTEST_PRIVATE_KEY must be a hex-encoded private key"
+            echo "::error::Load test signer must be a hex-encoded private key"
             exit 1
           fi
           echo "::add-mask::$LOADTEST_PRIVATE_KEY"
@@ -164,6 +164,17 @@ jobs:
           mkdir -p load-test-results
 
           rpc_url=$(kurtosis port print "$ENCLAVE_NAME" l2-el-1-bor-heimdall-v2-validator rpc)
+          loadtest_address=$(cast wallet address --private-key "$LOADTEST_PRIVATE_KEY")
+          loadtest_balance=$(cast balance --rpc-url "$rpc_url" "$loadtest_address")
+          if [[ ! "$loadtest_balance" =~ ^[0-9]+$ ]]; then
+            echo "::error::Unable to read load test signer balance"
+            exit 1
+          fi
+          if [[ "$loadtest_balance" =~ ^0+$ ]]; then
+            echo "::error::Load test signer has no L2 balance"
+            exit 1
+          fi
+
           started_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           started_epoch=$(date +%s)
 
