@@ -45,13 +45,15 @@ func TestIsReservedBlockspace(t *testing.T) {
 	}
 }
 
-func TestReservedClientClassifier(t *testing.T) {
+// TestReservedCapacity covers the only live use of the ReservedClients config
+// stub: the EIP-1559 base-fee capacity carve-out (Σ per-client quotas).
+// Reserved-sender classification is sourced from the registry, not this config.
+func TestReservedCapacity(t *testing.T) {
 	t.Parallel()
 
 	a := common.HexToAddress("0x00000000000000000000000000000000000000Aa")
 	b := common.HexToAddress("0x00000000000000000000000000000000000000Bb")
 	c := common.HexToAddress("0x00000000000000000000000000000000000000Cc")
-	other := common.HexToAddress("0x00000000000000000000000000000000000000Ff")
 
 	cfg := &BorConfig{
 		ReservedClients: []ReservedClient{
@@ -59,38 +61,39 @@ func TestReservedClientClassifier(t *testing.T) {
 			{Addresses: []common.Address{c}, QuotaGas: 10_000_000},
 		},
 	}
-
-	for _, addr := range []common.Address{a, b, c} {
-		if !cfg.IsReservedSender(addr) {
-			t.Errorf("%s should be reserved", addr.Hex())
-		}
-	}
-	if cfg.IsReservedSender(other) {
-		t.Error("non-whitelisted address must not be reserved")
-	}
-
-	// QuotaOf returns the owning client's quota; addresses of the same client share it.
-	if got := cfg.ReservedQuotaOf(a); got != 20_000_000 {
-		t.Errorf("quota of a: got %d want 20000000", got)
-	}
-	if got := cfg.ReservedQuotaOf(b); got != 20_000_000 {
-		t.Errorf("quota of b (same client as a): got %d want 20000000", got)
-	}
-	if got := cfg.ReservedQuotaOf(c); got != 10_000_000 {
-		t.Errorf("quota of c: got %d want 10000000", got)
-	}
-	if got := cfg.ReservedQuotaOf(other); got != 0 {
-		t.Errorf("quota of non-reserved: got %d want 0", got)
-	}
-
 	if got := cfg.ReservedCapacity(); got != 30_000_000 {
 		t.Errorf("capacity: got %d want 30000000", got)
 	}
 
-	// Empty config classifies nothing and has zero capacity.
-	empty := &BorConfig{}
-	if empty.IsReservedSender(a) || empty.ReservedQuotaOf(a) != 0 || empty.ReservedCapacity() != 0 {
-		t.Error("empty reserved config should classify nothing")
+	// Empty config carves out nothing.
+	if got := (&BorConfig{}).ReservedCapacity(); got != 0 {
+		t.Errorf("empty config capacity: got %d want 0", got)
+	}
+}
+
+func TestReservedBlockspaceForkOrder(t *testing.T) {
+	t.Parallel()
+
+	const reg = "0x0000000000000000000000000000000000001002"
+	tests := []struct {
+		name    string
+		cfg     *ChainConfig
+		wantErr bool
+	}{
+		{"nil bor", &ChainConfig{}, false},
+		{"unscheduled", &ChainConfig{Bor: &BorConfig{}}, false},
+		{"reserved before cancun", &ChainConfig{CancunBlock: big.NewInt(100), Bor: &BorConfig{ReservedBlockspaceBlock: big.NewInt(50), ReservedRegistryContract: reg}}, true},
+		{"reserved without cancun", &ChainConfig{Bor: &BorConfig{ReservedBlockspaceBlock: big.NewInt(50), ReservedRegistryContract: reg}}, true},
+		{"reserved at cancun", &ChainConfig{CancunBlock: big.NewInt(50), Bor: &BorConfig{ReservedBlockspaceBlock: big.NewInt(50), ReservedRegistryContract: reg}}, false},
+		{"reserved after cancun", &ChainConfig{CancunBlock: big.NewInt(10), Bor: &BorConfig{ReservedBlockspaceBlock: big.NewInt(50), ReservedRegistryContract: reg}}, false},
+		{"scheduled without registry", &ChainConfig{CancunBlock: big.NewInt(10), Bor: &BorConfig{ReservedBlockspaceBlock: big.NewInt(50)}}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.cfg.checkReservedBlockspaceForkOrder(); (err != nil) != tt.wantErr {
+				t.Errorf("checkReservedBlockspaceForkOrder() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
 	}
 }
 

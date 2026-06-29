@@ -178,6 +178,32 @@ func TestReservedBaseFee_CapacityExceedsLimitFallsBack(t *testing.T) {
 	}
 }
 
+// TestReservedBaseFee_CapacityEqualsLimitFallsBack pins the >= boundary in
+// reservedAwareGasTarget: when reserved capacity equals the gas limit the public
+// target would be zero, so the guard must fall back to the full target (not
+// divide by a zero target). Distinguishes >= from > at the exact boundary.
+func TestReservedBaseFee_CapacityEqualsLimitFallsBack(t *testing.T) {
+	t.Parallel()
+
+	const gasLimit = 30_000_000
+	baseFee := big.NewInt(params.InitialBaseFee)
+	cfg := reservedFeeConfig(big.NewInt(0), gasLimit) // capacity == limit
+
+	parent := &types.Header{
+		Number:   big.NewInt(1),
+		GasLimit: gasLimit,
+		GasUsed:  gasLimit / 2, // == full target → unchanged
+		BaseFee:  baseFee,
+	}
+
+	var got *big.Int
+	require.NotPanics(t, func() { got = CalcBaseFee(cfg, parent) },
+		"CalcBaseFee must not panic when reserved capacity == gas limit")
+	if got.Cmp(baseFee) != 0 {
+		t.Errorf("fallback base fee = %s, want unchanged %s (full target)", got, baseFee)
+	}
+}
+
 // TestReservedBaseFee_VerifyAcceptsProducerValue checks that the reserved-aware
 // base fee a producer computes passes strict (pre-Lisovo) header verification,
 // since VerifyEIP1559Header recomputes via CalcBaseFee on that path.

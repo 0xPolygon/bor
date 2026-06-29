@@ -5770,6 +5770,31 @@ func TestVerifyHeader_ReservedBlockspaceFieldsPresent(t *testing.T) {
 	}
 }
 
+func TestVerifyReservedFields_GasUsedBound(t *testing.T) {
+	t.Parallel()
+	s := newGiuglianoVerifySetup(t, true)
+	s.b.config.ReservedBlockspaceBlock = big.NewInt(0)
+
+	gasTarget := uint64(15_000_000)
+	bfcd := uint64(64)
+	count := uint32(1)
+	reservedGasUsed := uint64(5_000)
+	extra := buildBlockExtraBytes(&types.BlockExtraData{
+		GasTarget:                &gasTarget,
+		BaseFeeChangeDenominator: &bfcd,
+		ReservedTxCount:          &count,
+		ReservedGasUsed:          &reservedGasUsed,
+	})
+
+	// Reserved gas used exceeds the block's gas used — impossible, must be rejected.
+	h := &types.Header{Number: big.NewInt(1), GasUsed: 4_000, Extra: extra}
+	require.ErrorIs(t, s.b.verifyReservedFields(h), errReservedGasUsedExceedsBlock)
+
+	// Equal-or-below the block's gas used passes the bound.
+	h.GasUsed = 5_000
+	require.NoError(t, s.b.verifyReservedFields(h))
+}
+
 // TestApplyMessage_StateSyncTxContext validates if TxContext is correctly
 // set for state-sync transactions.
 func TestApplyMessage_StateSyncTxContext(t *testing.T) {

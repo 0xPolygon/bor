@@ -559,19 +559,10 @@ func (h *Header) GetBaseFeeParams(chainConfig *params.ChainConfig) (gasTarget *u
 // blocks, on decode error, or for blocks that predate the ReservedBlockspace
 // fork (the optional fields are absent).
 func (h *Header) GetReservedInfo(chainConfig *params.ChainConfig) (reservedTxCount *uint32, reservedGasUsed *uint64) {
-	if !chainConfig.IsCancun(h.Number) {
+	blockExtraData := h.DecodeBlockExtraData(chainConfig)
+	if blockExtraData == nil {
 		return nil, nil
 	}
-
-	if len(h.Extra) < ExtraVanityLength+ExtraSealLength {
-		return nil, nil
-	}
-
-	var blockExtraData BlockExtraData
-	if err := rlp.DecodeBytes(h.Extra[ExtraVanityLength:len(h.Extra)-ExtraSealLength], &blockExtraData); err != nil {
-		return nil, nil
-	}
-
 	return blockExtraData.ReservedTxCount, blockExtraData.ReservedGasUsed
 }
 

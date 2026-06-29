@@ -980,9 +980,13 @@ type BorConfig struct {
 	ChicagoBlock               *big.Int          `json:"chicagoBlock"`               // Chicago switch block (nil = no fork, 0 = already on chicago)
 	ReservedBlockspaceBlock    *big.Int          `json:"reservedBlockspaceBlock"`    // ReservedBlockspace switch block (nil = no fork, 0 = already on reservedBlockspace)
 
-	// ReservedClients is the config-backed stub source for reserved-blockspace
-	// classification (allowlist + per-client quota). The registry contract
-	// (POS-3572) will replace this source without changing the query methods below.
+	// ReservedClients feeds ONLY the EIP-1559 base-fee capacity carve-out
+	// (ReservedCapacity, consumed by CalcBaseFee, which is pure (config, parent)
+	// and has no parent state to read the registry from). Reserved-sender
+	// classification — admission, EVM fee-skip — is sourced from the registry
+	// contract, not this field. The two must be kept consistent until the
+	// registry-derived capacity arrives via a producer-stamped header field
+	// (POS-3575/3576), at which point this stub is retired entirely.
 	ReservedClients []ReservedClient `json:"reservedClients,omitempty"`
 }
 
@@ -1072,33 +1076,6 @@ func (c *BorConfig) IsChicago(number *big.Int) bool {
 
 func (c *BorConfig) IsReservedBlockspace(number *big.Int) bool {
 	return isBlockForked(c.ReservedBlockspaceBlock, number)
-}
-
-// IsReservedSender reports whether addr is a whitelisted sender of any
-// reserved-blockspace client. Config-backed stub; the registry contract
-// (POS-3572) replaces the source without changing this signature.
-func (c *BorConfig) IsReservedSender(addr common.Address) bool {
-	for i := range c.ReservedClients {
-		for _, a := range c.ReservedClients[i].Addresses {
-			if a == addr {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// ReservedQuotaOf returns the per-block reserved gas quota of the client that
-// owns addr, or 0 if addr is not a reserved sender.
-func (c *BorConfig) ReservedQuotaOf(addr common.Address) uint64 {
-	for i := range c.ReservedClients {
-		for _, a := range c.ReservedClients[i].Addresses {
-			if a == addr {
-				return c.ReservedClients[i].QuotaGas
-			}
-		}
-	}
-	return 0
 }
 
 // ReservedCapacity returns the sum of all reserved clients' per-block gas
@@ -1669,6 +1646,30 @@ func (c *ChainConfig) CheckConfigForkOrder() error {
 				return fmt.Errorf("invalid chain configuration: missing entry for fork %q in blobSchedule", cur.name)
 			}
 		}
+	}
+
+	if err := c.checkReservedBlockspaceForkOrder(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// checkReservedBlockspaceForkOrder enforces the rollout preconditions for the
+// reserved-blockspace fork. The producer writes the reserved header fields only
+// in the post-Cancun BlockExtraData format, while verifyHeader requires them on
+// every post-fork block — so activating reserved blockspace at or before Cancun
+// would make block production unverifiable at the boundary. The reserved set
+// also has no source without the registry contract configured.
+func (c *ChainConfig) checkReservedBlockspaceForkOrder() error {
+	if c.Bor == nil || c.Bor.ReservedBlockspaceBlock == nil {
+		return nil
+	}
+	if c.CancunBlock == nil || c.CancunBlock.Cmp(c.Bor.ReservedBlockspaceBlock) > 0 {
+		return fmt.Errorf("unsupported fork ordering: reservedBlockspaceBlock %v must be at or after cancunBlock %v",
+			c.Bor.ReservedBlockspaceBlock, c.CancunBlock)
+	}
+	if c.Bor.ReservedRegistryContract == "" {
+		return errors.New("invalid chain configuration: reservedBlockspaceBlock is scheduled but reservedRegistryContract is unset")
 	}
 	return nil
 }

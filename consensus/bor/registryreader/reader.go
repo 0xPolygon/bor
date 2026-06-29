@@ -36,9 +36,11 @@ type Reader interface {
 	HasReservedRegistry() bool
 	IsReservedAddress(state *state.StateDB, number uint64, hash common.Hash, account common.Address) (bool, error)
 	ReservedClientForAddress(state *state.StateDB, number uint64, hash common.Hash, account common.Address) (ClientLookup, error)
-	// Root returns the registry's configVersion-derived root. It changes
-	// whenever the reserved set or its limits change, so a snapshot keyed on it
-	// can be reused until it moves (spec §4.5).
+	// Root returns the registry's configVersion-derived root. It changes whenever
+	// the reserved set or its limits change, so a snapshot keyed on it can be
+	// reused until it moves (spec §4.5). The root()-keyed cross-block cache is a
+	// tracked optimization (POS-3574) not yet wired on the execution path; see
+	// BuildSnapshot.
 	Root(state *state.StateDB, number uint64, hash common.Hash) (common.Hash, error)
 	// WhitelistedAddresses returns every currently-active reserved address.
 	WhitelistedAddresses(state *state.StateDB, number uint64, hash common.Hash) ([]common.Address, error)
@@ -47,11 +49,13 @@ type Reader interface {
 }
 
 // Snapshot is an immutable, pure-lookup view of the reserved set as of one
-// block's state. It is built once per head/parent (and reused while root() is
-// unchanged) so the hot classification paths — txpool admission, the EVM
+// block's state, so the hot classification paths — txpool admission, the EVM
 // fee-skip stand-in, base-fee capacity — never do a per-transaction state read
-// (spec §4.5). A nil *Snapshot classifies nothing (no registry / non-bor chain),
-// so all methods are nil-safe.
+// (spec §4.5). The txpool rebuilds it once per head (on reset); the execution
+// path rebuilds it once per block (gated on the fork height). Cross-block reuse
+// keyed on Root() is a tracked optimization (POS-3574), not yet implemented. A
+// nil *Snapshot classifies nothing (no registry / non-bor chain), so all methods
+// are nil-safe.
 type Snapshot struct {
 	root     common.Hash
 	capacity uint64
@@ -60,7 +64,9 @@ type Snapshot struct {
 
 // BuildSnapshot reads the full active reserved set from the registry at the
 // given block state and returns an immutable Snapshot. Returns nil (no error)
-// when no registry is configured. Callers cache it keyed on Root().
+// when no registry is configured. Each call does one Root() read plus a
+// whitelist scan and a per-address lookup; a Root()-keyed cache that skips the
+// rebuild while the root is unchanged is a tracked optimization (POS-3574).
 func BuildSnapshot(r Reader, statedb *state.StateDB, number uint64, hash common.Hash) (*Snapshot, error) {
 	if r == nil || !r.HasReservedRegistry() {
 		return nil, nil

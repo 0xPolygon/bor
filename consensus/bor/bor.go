@@ -31,8 +31,8 @@ import (
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/bor/api"
 	"github.com/ethereum/go-ethereum/consensus/bor/clerk"
-	"github.com/ethereum/go-ethereum/consensus/bor/registryreader"
 	borSpan "github.com/ethereum/go-ethereum/consensus/bor/heimdall/span"
+	"github.com/ethereum/go-ethereum/consensus/bor/registryreader"
 	"github.com/ethereum/go-ethereum/consensus/bor/statefull"
 	"github.com/ethereum/go-ethereum/consensus/bor/valset"
 	"github.com/ethereum/go-ethereum/consensus/misc"
@@ -110,6 +110,11 @@ var (
 	// errMissingReservedBlockspaceFields is returned if a post-ReservedBlockspace
 	// block is missing the reserved tx count or reserved gas used in its extra data.
 	errMissingReservedBlockspaceFields = errors.New("missing reserved tx count or reserved gas used in extra data")
+
+	// errReservedGasUsedExceedsBlock is returned if a header's reserved gas used
+	// is larger than the block's total gas used — an impossible value, since the
+	// reserved region is a subset of the block.
+	errReservedGasUsedExceedsBlock = errors.New("reserved gas used exceeds block gas used")
 
 	// errInvalidMixDigest is returned if a block's mix digest is non-zero.
 	errInvalidMixDigest = errors.New("non-zero mix digest")
@@ -1060,10 +1065,10 @@ func (c *Bor) setReservedBlockspaceExtraFields(header *types.Header, blockExtraD
 }
 
 // verifyReservedFields checks that post-ReservedBlockspace headers carry the
-// reserved-region fields. Presence only. Value correctness — that ReservedTxCount
-// matches the actual reserved region and ReservedGasUsed stays within each
-// client's quota — is NOT enforced yet; it lands with block validation in
-// POS-3576. Until then a producer can write any present values here.
+// reserved-region fields. Presence plus a header-only sanity bound on
+// ReservedGasUsed. Full value correctness — that ReservedTxCount matches the
+// actual reserved region and ReservedGasUsed stays within each client's quota —
+// is enforced by block validation in POS-3576.
 func (c *Bor) verifyReservedFields(header *types.Header) error {
 	if !c.config.IsReservedBlockspace(header.Number) {
 		return nil
@@ -1071,6 +1076,14 @@ func (c *Bor) verifyReservedFields(header *types.Header) error {
 	reservedTxCount, reservedGasUsed := header.GetReservedInfo(c.chainConfig)
 	if reservedTxCount == nil || reservedGasUsed == nil {
 		return errMissingReservedBlockspaceFields
+	}
+	// Interim header-only bound: the reserved region is a subset of the block, so
+	// its gas cannot exceed the block's gas used. This rejects an impossible value
+	// rather than letting CalcBaseFee silently clamp it (the base fee consumes
+	// parent.ReservedGasUsed). ReservedTxCount against the body and per-client
+	// quota are body-level checks enforced by block validation in POS-3576.
+	if *reservedGasUsed > header.GasUsed {
+		return errReservedGasUsedExceedsBlock
 	}
 	return nil
 }

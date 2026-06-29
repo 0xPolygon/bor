@@ -901,10 +901,18 @@ func doCall(ctx context.Context, b Backend, args TransactionArgs, state *state.S
 		return nil, err
 	}
 
+	// System-contract reads issued by internal consensus code (validator set,
+	// span, state receiver, reserved-blockspace registry) must be deterministic
+	// across nodes. The RPC gas cap and the wall-clock EVM timeout are both
+	// node-local and load-dependent, so neither may apply here: a read that
+	// timed out on one node but not another would diverge state (e.g. a nil
+	// reserved snapshot flips fee classification). Both are bypassed together.
+	internalSystemCall := isBorInternalCall(ctx) && isBorSystemTx(b.ChainConfig().Bor, args.To)
+
 	// Setup context so it may be cancelled the call has completed
 	// or, in case of unmetered gas, setup a context with a timeout.
 	var cancel context.CancelFunc
-	if timeout > 0 {
+	if timeout > 0 && !internalSystemCall {
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 	} else {
 		ctx, cancel = context.WithCancel(ctx)
@@ -913,9 +921,7 @@ func doCall(ctx context.Context, b Backend, args TransactionArgs, state *state.S
 	// this makes sure resources are cleaned up.
 	defer cancel()
 
-	// Only bypass the RPC gas cap for system contract calls that originate from
-	// internal consensus code (marked via WithBorInternalCall ctx).
-	if isBorInternalCall(ctx) && isBorSystemTx(b.ChainConfig().Bor, args.To) {
+	if internalSystemCall {
 		globalGasCap = 0
 	}
 	gp := new(core.GasPool)
