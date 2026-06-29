@@ -563,7 +563,12 @@ func (bc *BlockChain) ReservedRegistry() registryreader.Reader { return bc.reser
 // SetReservedRegistry wires the reserved blockspace registry reader into the
 // chain. Called once at startup from the backend after the consensus engine is
 // ready. Passing nil is valid and disables reserved-tx awareness.
-func (bc *BlockChain) SetReservedRegistry(r registryreader.Reader) { bc.reservedRegistry = r }
+func (bc *BlockChain) SetReservedRegistry(r registryreader.Reader) {
+	bc.reservedRegistry = r
+	// Mirror onto the header chain so the serial/V2 processors and the prefetcher
+	// (which only hold a *HeaderChain context) classify against the same reader.
+	bc.hc.SetReservedRegistry(r)
+}
 
 // Snapshots returns the blockchain snapshot tree.
 func (bc *BlockChain) Snapshots() *snapshot.Tree {

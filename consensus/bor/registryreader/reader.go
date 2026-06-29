@@ -65,6 +65,16 @@ func BuildSnapshot(r Reader, statedb *state.StateDB, number uint64, hash common.
 	if r == nil || !r.HasReservedRegistry() {
 		return nil, nil
 	}
+	// The registry reads run through the EVM (ApplyMessage), which mutates the
+	// statedb it executes against — gas accounting, sender nonce, touched/created
+	// accounts, revert-journal residue. On the block execution path the caller
+	// passes the live execution state, so reading against it would leak those
+	// mutations into the block and diverge the state root across producer and
+	// validator (a consensus split). Read against a throwaway copy so a snapshot
+	// build is always state-neutral.
+	if statedb != nil {
+		statedb = statedb.Copy()
+	}
 	root, err := r.Root(statedb, number, hash)
 	if err != nil {
 		return nil, err

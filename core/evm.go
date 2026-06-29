@@ -60,6 +60,12 @@ func ReservedSnapshotForBlock(chain ChainContext, statedb *state.StateDB, header
 	if reader == nil || !reader.HasReservedRegistry() {
 		return nil
 	}
+	// Classification is fork-gated, so there is nothing to classify before the
+	// reserved-blockspace fork. Skipping the build pre-fork avoids a per-block
+	// state copy and registry read on every node syncing from genesis.
+	if cfg := chain.Config(); cfg.Bor == nil || !cfg.Bor.IsReservedBlockspace(header.Number) {
+		return nil
+	}
 	parentNumber := uint64(0)
 	if header.Number.Uint64() > 0 {
 		parentNumber = header.Number.Uint64() - 1
