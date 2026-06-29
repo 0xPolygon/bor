@@ -95,7 +95,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: 0xPolygon/pos-workflows
-          ref: main
+          ref: a344ef7284997bb19911178b9857e321ed98bbab
           path: pos-workflows
 
       - name: Copy kurtosis config
@@ -158,7 +158,7 @@ jobs:
             echo "::error::Unable to resolve load test signer from pos-workflows"
             exit 1
           fi
-          if [[ ! "$LOADTEST_PRIVATE_KEY" =~ ^0x?[0-9a-fA-F]{64}$ ]]; then
+          if [[ ! "$LOADTEST_PRIVATE_KEY" =~ ^(0x)?[0-9a-fA-F]{64}$ ]]; then
             echo "::error::Load test signer must be a hex-encoded private key"
             exit 1
           fi
