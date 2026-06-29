@@ -222,7 +222,9 @@ type skeleton struct {
 	terminated chan struct{}    // Channel to signal that the syncer is dead
 
 	// Callback hooks used during testing
-	syncStarting  func() // callback triggered after a sync cycle is inited but before started
+	syncStarting func() // callback triggered after a sync cycle is inited but before started
+	// requestFailed is invoked after a failed request has been reverted and the
+	// peer has been requeued into the idle set, if it remains backed off.
 	requestFailed func(peer string)
 }
 
@@ -996,9 +998,9 @@ func (s *skeleton) handleRequestFail(req *headerRequest) {
 	s.revertRequest(req)
 	if peer := s.peers.Peer(req.peer); peer != nil && peer.backedOff() {
 		s.idles[req.peer] = peer
-	}
-	if s.requestFailed != nil {
-		s.requestFailed(req.peer)
+		if s.requestFailed != nil {
+			s.requestFailed(req.peer)
+		}
 	}
 }
 
