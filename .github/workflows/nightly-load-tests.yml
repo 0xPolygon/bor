@@ -169,6 +169,10 @@ jobs:
           mkdir -p load-test-results
 
           rpc_url=$(kurtosis port print "$ENCLAVE_NAME" l2-el-1-bor-heimdall-v2-validator rpc)
+          if ! command -v cast >/dev/null 2>&1; then
+            echo "::error::foundry 'cast' is required but was not found on PATH"
+            exit 1
+          fi
           loadtest_address=$(cast wallet address --private-key "$LOADTEST_PRIVATE_KEY")
           loadtest_balance=$(cast balance --rpc-url "$rpc_url" "$loadtest_address")
           if [[ ! "$loadtest_balance" =~ ^[0-9]+$ ]]; then
