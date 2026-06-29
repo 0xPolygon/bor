@@ -1282,6 +1282,11 @@ func (w *worker) makeEnv(header *types.Header, coinbase common.Address, witness 
 		state.StartPrefetcher("miner", nil, nil)
 	}
 
+	// Build the block context once and attach the parent-state reserved snapshot
+	// so the producer classifies reserved senders the same way verifiers do.
+	blockCtx := core.NewEVMBlockContext(header, w.chain, &coinbase)
+	blockCtx.ReservedSnapshot = core.ReservedSnapshotForBlock(w.chain, state, header)
+
 	// Note the passed coinbase may be different with header.Coinbase.
 	env := &environment{
 		signer:             types.MakeSigner(w.chainConfig, header.Number, header.Time),
@@ -1290,7 +1295,7 @@ func (w *worker) makeEnv(header *types.Header, coinbase common.Address, witness 
 		coinbase:           coinbase,
 		header:             header,
 		witness:            state.Witness(),
-		evm:                vm.NewEVM(core.NewEVMBlockContext(header, w.chain, &coinbase), state, w.chainConfig, w.vmConfig()),
+		evm:                vm.NewEVM(blockCtx, state, w.chainConfig, w.vmConfig()),
 		prefetchReader:     genParams.prefetchReader,
 		processReader:      genParams.processReader,
 		prefetchedTxHashes: genParams.prefetchedTxHashes,

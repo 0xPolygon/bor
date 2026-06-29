@@ -88,6 +88,12 @@ func BuildSnapshot(r Reader, statedb *state.StateDB, number uint64, hash common.
 	return &Snapshot{root: root, capacity: capacity, clients: clients}, nil
 }
 
+// NewSnapshot constructs a Snapshot from an explicit client set. Used by tests
+// and by callers that source the reserved set outside the registry contract.
+func NewSnapshot(root common.Hash, capacity uint64, clients map[common.Address]ClientLookup) *Snapshot {
+	return &Snapshot{root: root, capacity: capacity, clients: clients}
+}
+
 // Root is the registry root this snapshot was built at; callers reuse the
 // snapshot while the live root is unchanged.
 func (s *Snapshot) Root() common.Hash {

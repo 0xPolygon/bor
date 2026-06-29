@@ -24,6 +24,7 @@ import (
 	"github.com/holiman/uint256"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus/bor/registryreader"
 	"github.com/ethereum/go-ethereum/core/blockstm"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
@@ -53,8 +54,10 @@ func reservedTestConfig(forkBlock *big.Int, reservedSenders ...common.Address) *
 	return &cc
 }
 
-func reservedBlockCtx(coinbase common.Address, blockNumber *big.Int, baseFee *big.Int) vm.BlockContext {
-	return vm.BlockContext{
+// reservedBlockCtx builds a block context with a reserved-set snapshot covering
+// reservedSenders (the registry-backed source the EVM now classifies from).
+func reservedBlockCtx(coinbase common.Address, blockNumber *big.Int, baseFee *big.Int, reservedSenders ...common.Address) vm.BlockContext {
+	ctx := vm.BlockContext{
 		CanTransfer: CanTransfer,
 		Transfer:    Transfer,
 		GetHash:     func(n uint64) common.Hash { return common.Hash{} },
@@ -64,6 +67,14 @@ func reservedBlockCtx(coinbase common.Address, blockNumber *big.Int, baseFee *bi
 		Time:        1,
 		BaseFee:     baseFee,
 	}
+	if len(reservedSenders) > 0 {
+		clients := make(map[common.Address]registryreader.ClientLookup, len(reservedSenders))
+		for i, a := range reservedSenders {
+			clients[a] = registryreader.ClientLookup{ClientID: big.NewInt(int64(i + 1)), GasQuota: 30_000_000, Active: true}
+		}
+		ctx.ReservedSnapshot = registryreader.NewSnapshot(common.HexToHash("0x1"), uint64(len(reservedSenders))*30_000_000, clients)
+	}
+	return ctx
 }
 
 // fundedState returns an in-memory StateDB with `sender` funded and nonce 0.
@@ -91,7 +102,7 @@ func TestReservedTxSkipsFees(t *testing.T) {
 
 	cc := reservedTestConfig(big.NewInt(0), sender)
 	baseFee := big.NewInt(1_000_000_000)
-	blockCtx := reservedBlockCtx(coinbase, big.NewInt(1), baseFee)
+	blockCtx := reservedBlockCtx(coinbase, big.NewInt(1), baseFee, sender)
 
 	initial := uint256.NewInt(1e18)
 	sdb := fundedState(t, sender, initial)
@@ -162,7 +173,7 @@ func TestReservedTxGatedByFork(t *testing.T) {
 
 	cc := reservedTestConfig(big.NewInt(100), sender) // fork at 100
 	baseFee := big.NewInt(1_000_000_000)
-	blockCtx := reservedBlockCtx(common.HexToAddress("0xc0b0"), big.NewInt(1), baseFee) // pre-fork
+	blockCtx := reservedBlockCtx(common.HexToAddress("0xc0b0"), big.NewInt(1), baseFee, sender) // pre-fork
 
 	sdb := fundedState(t, sender, uint256.NewInt(1e18))
 	signer := types.NewLondonSigner(cc.ChainID)
@@ -198,7 +209,7 @@ func TestNonReservedSenderPaysNormally(t *testing.T) {
 	reserved := common.HexToAddress("0x00000000000000000000000000000000000000ee")
 	cc := reservedTestConfig(big.NewInt(0), reserved)
 	baseFee := big.NewInt(1_000_000_000)
-	blockCtx := reservedBlockCtx(coinbase, big.NewInt(1), baseFee)
+	blockCtx := reservedBlockCtx(coinbase, big.NewInt(1), baseFee, reserved)
 
 	sdb := fundedState(t, sender, uint256.NewInt(1e18))
 	signer := types.NewLondonSigner(cc.ChainID)
@@ -242,7 +253,7 @@ func TestReservedTxSerialParallelParity(t *testing.T) {
 
 	cc := reservedTestConfig(big.NewInt(0), sender)
 	baseFee := big.NewInt(1_000_000_000)
-	blockCtx := reservedBlockCtx(coinbase, big.NewInt(1), baseFee)
+	blockCtx := reservedBlockCtx(coinbase, big.NewInt(1), baseFee, sender)
 
 	// Committed base state shared by both paths.
 	memdb := rawdb.NewMemoryDatabase()

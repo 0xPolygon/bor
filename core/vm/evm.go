@@ -25,6 +25,7 @@ import (
 	"github.com/holiman/uint256"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus/bor/registryreader"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -120,6 +121,14 @@ type BlockContext struct {
 	BaseFee     *big.Int       // Provides information for BASEFEE (0 if vm runs with NoBaseFee flag and 0 gas price)
 	BlobBaseFee *big.Int       // Provides information for BLOBBASEFEE (0 if vm runs with NoBaseFee flag and 0 blob gas price)
 	Random      *common.Hash   // Provides information for PREVRANDAO
+
+	// ReservedSnapshot is the reserved-blockspace set as of the parent block,
+	// used to classify reserved senders for the in-protocol fee skip. Set once
+	// per block by the consensus execution paths (serial + parallel processors,
+	// miner) from the parent state, so produce and verify agree; nil elsewhere
+	// (eth_call, prefetch) and on non-reserved chains. A nil snapshot classifies
+	// nothing, so the fee skip is inert until a registry is configured.
+	ReservedSnapshot *registryreader.Snapshot
 }
 
 // TxContext provides the EVM with information about a transaction.
