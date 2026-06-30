@@ -3686,12 +3686,23 @@ func (bc *BlockChain) insertSideChain(block *types.Block, it *insertIterator, ma
 				//
 				// If left unchecked, we would now proceed importing the blocks, without actually
 				// having verified the state of the previous blocks.
-				log.Warn("Sidechain ghost-state attack detected", "number", block.NumberU64(), "sideroot", block.Root(), "canonroot", canonical.Root())
+				//
+				// Exception: a block that performed no state transition (e.g. an empty block)
+				// has the same state root as its parent. Two distinct empty blocks at the same
+				// height (different seal/timestamp/coinbase) therefore legitimately share a
+				// state root, and that is not a shadow-state attack — there is no forged state
+				// to skip-verify. Only treat a matching canonical root as an attack when the
+				// block actually changed state relative to its parent. If the parent header is
+				// unavailable, keep the conservative behavior and reject.
+				parent := bc.GetHeader(block.ParentHash(), block.NumberU64()-1)
+				if parent == nil || parent.Root != block.Root() {
+					log.Warn("Sidechain ghost-state attack detected", "number", block.NumberU64(), "sideroot", block.Root(), "canonroot", canonical.Root())
 
-				// If someone legitimately side-mines blocks, they would still be imported as usual. However,
-				// we cannot risk writing unverified blocks to disk when they obviously target the pruning
-				// mechanism.
-				return nil, it.index, errors.New("sidechain ghost-state attack")
+					// If someone legitimately side-mines blocks, they would still be imported as usual. However,
+					// we cannot risk writing unverified blocks to disk when they obviously target the pruning
+					// mechanism.
+					return nil, it.index, errors.New("sidechain ghost-state attack")
+				}
 			}
 		}
 		if externTd == nil {

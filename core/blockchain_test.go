@@ -3108,6 +3108,169 @@ func testSideImportPrunedBlocks(t *testing.T, scheme string) {
 	}
 }
 
+// TestSideImportEmptyBlockGhostState is a regression test for
+// https://github.com/0xPolygon/bor/issues/2224. Two distinct empty
+// (zero-transaction) blocks at the same height legitimately share a state root,
+// because neither performs a state transition: both inherit their parent's root.
+// insertSideChain used to reject any sidechain block whose root matched the
+// canonical block at the same height as a "ghost-state attack", which fired a
+// false positive on such empty blocks and wedged sync after a validator restart.
+func TestSideImportEmptyBlockGhostState(t *testing.T) {
+	testSideImportEmptyBlockGhostState(t, rawdb.HashScheme)
+	testSideImportEmptyBlockGhostState(t, rawdb.PathScheme)
+}
+
+// noRewardEngine wraps the faker but skips the block reward, so empty blocks
+// make no state transition and share their parent's state root — matching how
+// bor's reward-less empty blocks behave (the condition that triggers #2224).
+type noRewardEngine struct{ *ethash.Ethash }
+
+func (e *noRewardEngine) Finalize(chain consensus.ChainHeaderReader, header *types.Header, state vm.StateDB, body *types.Body, receipts []*types.Receipt) ([]*types.Receipt, error) {
+	return receipts, nil
+}
+
+func (e *noRewardEngine) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, body *types.Body, receipts []*types.Receipt) (*types.Block, []*types.Receipt, time.Duration, error) {
+	header.Root = state.IntermediateRoot(chain.Config().IsEIP158(header.Number))
+	return types.NewBlock(header, &types.Body{Transactions: body.Transactions, Uncles: body.Uncles, Withdrawals: body.Withdrawals}, receipts, trie.NewStackTrie(nil)), receipts, 0, nil
+}
+
+// ghostStateTestKey funds the sender used to drive state transitions in the
+// ghost-state sidechain tests.
+var ghostStateTestKey, _ = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+
+// setupPrunedGhostStateChain builds a canonical chain whose blocks all perform a
+// state transition (so old states get pruned), inserts it, and returns the chain
+// plus everything a sidechain test needs to fork at forkIdx. forkBlockEmpty
+// controls whether the canonical block at forkIdx is left empty (no state
+// transition) or carries the same value-transfer tx as every other block. It
+// asserts the fork parent's state is pruned, so re-importing a sibling routes
+// through insertSideChain via ErrPrunedAncestor.
+func setupPrunedGhostStateChain(t *testing.T, scheme string, forkBlockEmpty bool) (chain *BlockChain, genDb ethdb.Database, blocks []*types.Block, forkParent *types.Block, forkIdx int, forkTxNonce uint64) {
+	t.Helper()
+
+	engine := &noRewardEngine{ethash.NewFaker()}
+	addr := crypto.PubkeyToAddress(ghostStateTestKey.PublicKey)
+	signer := types.LatestSigner(params.TestChainConfig)
+	genesis := &Genesis{
+		Config:  params.TestChainConfig,
+		Alloc:   types.GenesisAlloc{addr: {Balance: big.NewInt(1e18)}},
+		BaseFee: big.NewInt(params.InitialBaseFee),
+	}
+
+	states := state.TriesInMemory
+	if scheme == rawdb.PathScheme {
+		states = state.TriesInMemory + 1
+	}
+	total := 2 * state.TriesInMemory
+	// forkIdx indexes into blocks (blocks[i] is height i+1) and sits comfortably
+	// below the pruning boundary.
+	forkIdx = total - states - 5
+
+	nonce := uint64(0)
+	genDb, blocks, _ = GenerateChainWithGenesis(genesis, engine, total, func(i int, b *BlockGen) {
+		b.SetCoinbase(common.Address{1})
+		if i == forkIdx {
+			forkTxNonce = nonce
+			if forkBlockEmpty {
+				return // no state transition: root stays equal to parent's
+			}
+		}
+		tx, _ := types.SignTx(types.NewTransaction(nonce, common.Address{0xaa}, big.NewInt(1), params.TxGas, b.BaseFee(), nil), signer, ghostStateTestKey)
+		b.AddTx(tx)
+		nonce++
+	})
+
+	datadir := t.TempDir()
+	pdb, err := pebble.New(datadir, 0, 0, "", false)
+	if err != nil {
+		t.Fatalf("Failed to create persistent key-value database: %v", err)
+	}
+	db, err := rawdb.Open(pdb, rawdb.OpenOptions{Ancient: path.Join(datadir, "ancient")})
+	if err != nil {
+		t.Fatalf("Failed to create persistent freezer database: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	chain, err = NewBlockChain(db, genesis, engine, DefaultConfig().WithStateScheme(scheme))
+	if err != nil {
+		t.Fatalf("failed to create tester chain: %v", err)
+	}
+	t.Cleanup(chain.Stop)
+
+	if n, err := chain.InsertChain(blocks, false); err != nil {
+		t.Fatalf("block %d: failed to insert into chain: %v", n, err)
+	}
+
+	forkParent = blocks[forkIdx-1]
+	if chain.HasState(forkParent.Root()) {
+		t.Fatalf("test setup: fork parent (block %d) state not pruned", forkParent.NumberU64())
+	}
+	return chain, genDb, blocks, forkParent, forkIdx, forkTxNonce
+}
+
+func testSideImportEmptyBlockGhostState(t *testing.T, scheme string) {
+	chain, genDb, blocks, forkParent, forkIdx, _ := setupPrunedGhostStateChain(t, scheme, true)
+
+	// Empty sibling at the fork height: different coinbase → different hash, but
+	// same (parent's) state root as both its parent and the canonical block.
+	sideBlocks, _ := GenerateChain(params.TestChainConfig, forkParent, chain.engine, genDb, 1, func(i int, b *BlockGen) {
+		b.SetCoinbase(common.Address{2})
+	})
+	side := sideBlocks[0]
+	canonical := blocks[forkIdx]
+	if side.Hash() == canonical.Hash() {
+		t.Fatalf("side block hash must differ from canonical")
+	}
+	if side.Root() != canonical.Root() {
+		t.Fatalf("test setup: side root %x must equal canonical root %x", side.Root(), canonical.Root())
+	}
+	if side.Root() != forkParent.Root() {
+		t.Fatalf("test setup: empty side block must inherit parent root")
+	}
+
+	if _, err := chain.InsertChain(sideBlocks, false); err != nil {
+		t.Fatalf("empty side block falsely rejected: %v", err)
+	}
+}
+
+// TestSideImportGhostStateStillRejected is the security counterpart to
+// TestSideImportEmptyBlockGhostState: it proves the #2224 fix only narrowed the
+// false positive and did not open the real hole. A side block that DID perform a
+// state transition (its root differs from its parent's) but claims a state root
+// equal to the canonical block at that height is the genuine shadow-state attack
+// and must still be rejected.
+func TestSideImportGhostStateStillRejected(t *testing.T) {
+	testSideImportGhostStateStillRejected(t, rawdb.HashScheme)
+	testSideImportGhostStateStillRejected(t, rawdb.PathScheme)
+}
+
+func testSideImportGhostStateStillRejected(t *testing.T, scheme string) {
+	chain, genDb, blocks, forkParent, forkIdx, forkTxNonce := setupPrunedGhostStateChain(t, scheme, false)
+	signer := types.LatestSigner(params.TestChainConfig)
+
+	// Side block on the canonical fork parent, carrying the SAME tx as the
+	// canonical fork block (with a different coinbase). It reaches the canonical
+	// root via a real state transition, so its root differs from its parent's:
+	// side.Root() == canonical.Root() but side.Root() != forkParent.Root().
+	sideBlocks, _ := GenerateChain(params.TestChainConfig, forkParent, chain.engine, genDb, 1, func(i int, b *BlockGen) {
+		b.SetCoinbase(common.Address{2})
+		tx, _ := types.SignTx(types.NewTransaction(forkTxNonce, common.Address{0xaa}, big.NewInt(1), params.TxGas, b.BaseFee(), nil), signer, ghostStateTestKey)
+		b.AddTx(tx)
+	})
+	side := sideBlocks[0]
+	canonical := blocks[forkIdx]
+	if side.Root() != canonical.Root() {
+		t.Fatalf("test setup: side root %x must equal canonical root %x", side.Root(), canonical.Root())
+	}
+	if side.Root() == forkParent.Root() {
+		t.Fatalf("test setup: side block must change state (root must differ from parent)")
+	}
+
+	if _, err := chain.InsertChain(sideBlocks, false); err == nil || err.Error() != "sidechain ghost-state attack" {
+		t.Fatalf("expected ghost-state attack rejection, got: %v", err)
+	}
+}
+
 // TestDeleteCreateRevert tests a weird state transition corner case that we hit
 // while changing the internals of statedb. The workflow is that a contract is
 // self destructed, then in a followup transaction (but same block) it's created
