@@ -112,6 +112,21 @@ const deferredAnnounceCapacity = 256
 // is never approached in practice.
 const deferredAnnouncePerPeerDivisor = 8
 
+// deferredAnnounceMaxCandidatesPerBlock bounds how many distinct candidate
+// announcements we keep for a single block hash while its header is unknown.
+// At deferral time the header is absent by definition, so the honest producer's
+// signer cannot be distinguished from a forger: an attacker that knows the
+// (gossiped) block hash can submit a structurally-valid signature over a forged
+// WitnessHash. Keeping only one candidate lets that forgery evict the honest
+// commitment (whether by last- or first-write-wins) — on import the forged
+// entry fails producer-binding and is dropped, leaving no signed hash on file
+// and silently downgrading the block to WIT1 byte-handling. Holding several
+// candidates and letting the post-import drain promote the one whose signer is
+// the real producer closes that vector; an attacker now has to crowd out every
+// honest candidate from distinct peer connections to win. One candidate per
+// (blockHash, peerID) keeps a single peer to a single slot per block.
+const deferredAnnounceMaxCandidatesPerBlock = 8
+
 // deferredAnnounceEntry holds a signed announcement whose producer-binding
 // could not be checked yet because the corresponding block header wasn't
 // local. The drain path re-runs verification once the chain catches up.
@@ -127,12 +142,20 @@ type deferredAnnounceEntry struct {
 // expected outcome of independent block + announce gossip streams — is lost
 // for good and subsequent witness fetches silently fall back to unsigned
 // (WIT1) verification, leaking the WIT2 trust property for that block.
+//
+// Each block hash maps to a bounded set of candidate announcements (at most one
+// per peer, at most deferredAnnounceMaxCandidatesPerBlock total) so a forged
+// header-racing announce cannot evict the honest commitment before the producer
+// binding can be checked at import. The drain promotes the candidate whose
+// signer is the actual block producer.
 type deferredAnnounceCache struct {
-	mu         sync.RWMutex
-	entries    map[common.Hash]*deferredAnnounceEntry
-	perPeer    map[string]int // live entry count per originating peer
-	capacity   int
-	perPeerCap int
+	mu          sync.RWMutex
+	entries     map[common.Hash][]*deferredAnnounceEntry
+	perPeer     map[string]int // live entry count per originating peer
+	total       int            // total live candidate entries across all hashes
+	capacity    int
+	perPeerCap  int
+	maxPerBlock int
 }
 
 func newDeferredAnnounceCache(capacity int) *deferredAnnounceCache {
@@ -141,10 +164,11 @@ func newDeferredAnnounceCache(capacity int) *deferredAnnounceCache {
 		perPeerCap = 1
 	}
 	return &deferredAnnounceCache{
-		entries:    make(map[common.Hash]*deferredAnnounceEntry),
-		perPeer:    make(map[string]int),
-		capacity:   capacity,
-		perPeerCap: perPeerCap,
+		entries:     make(map[common.Hash][]*deferredAnnounceEntry),
+		perPeer:     make(map[string]int),
+		capacity:    capacity,
+		perPeerCap:  perPeerCap,
+		maxPerBlock: deferredAnnounceMaxCandidatesPerBlock,
 	}
 }
 
@@ -157,124 +181,207 @@ func (c *deferredAnnounceCache) decPeerLocked(peerID string) {
 	}
 }
 
-// put stores the announcement keyed by block hash. A second put for the same
-// hash refreshes receivedAt and overwrites the announcement — the more recent
-// gossip wins, which is desirable when the original sender disconnected and a
-// different peer now carries the announce forward; per-peer credit moves with
-// it. For a new hash, the per-peer cap is enforced first (a peer at its share
-// is dropped, recording a metric, so it cannot evict honest entries), then the
-// global cap (evict the oldest entry across all peers; linear scan is cheap at
-// the configured size).
+// removeAtLocked removes the candidate at index idx for blockHash, refunding the
+// per-peer credit and the total counter. Caller must hold the write lock.
+func (c *deferredAnnounceCache) removeAtLocked(blockHash common.Hash, idx int) {
+	cands := c.entries[blockHash]
+	c.decPeerLocked(cands[idx].peerID)
+	cands = append(cands[:idx], cands[idx+1:]...)
+	if len(cands) == 0 {
+		delete(c.entries, blockHash)
+	} else {
+		c.entries[blockHash] = cands
+	}
+	c.total--
+}
+
+// put stores the announcement as a candidate for its block hash. A re-put from
+// the same peer for the same block refreshes that peer's single candidate in
+// place (net-zero slot change). A new peer adds a distinct candidate, subject to
+// (in order) the per-block candidate cap, the per-peer cap, and the global cap
+// (which evicts the oldest entry across all blocks). Each cap drop records a
+// metric. Holding multiple candidates is deliberate — see
+// deferredAnnounceMaxCandidatesPerBlock.
 func (c *deferredAnnounceCache) put(ann wit.SignedWitnessAnnouncement, peerID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.gcLocked()
 
-	if existing, exists := c.entries[ann.BlockHash]; exists {
-		// Overwrite for the same hash: net-zero slot change. Move per-peer
-		// credit if a different peer now carries this announce forward.
-		if existing.peerID != peerID {
-			c.decPeerLocked(existing.peerID)
-			c.perPeer[peerID]++
+	cands := c.entries[ann.BlockHash]
+	// One candidate per (blockHash, peerID): refresh this peer's slot in place.
+	for i, e := range cands {
+		if e.peerID == peerID {
+			cands[i] = &deferredAnnounceEntry{announcement: ann, peerID: peerID, receivedAt: time.Now()}
+			c.entries[ann.BlockHash] = cands
+			return
 		}
-		c.entries[ann.BlockHash] = &deferredAnnounceEntry{
-			announcement: ann,
-			peerID:       peerID,
-			receivedAt:   time.Now(),
-		}
-		return
 	}
 
-	// New hash for this peer: enforce its share of the queue so no single peer
-	// can monopolise the cache and evict honest header-racing announces.
+	// New distinct peer for this block. Keep early candidates rather than
+	// evicting them: the per-block cap is the structural defense that stops a
+	// burst of sybil peers from crowding out the honest producer's announce.
+	if len(cands) >= c.maxPerBlock {
+		wit2DeferredPerBlockDropMeter.Mark(1)
+		return
+	}
 	if c.perPeer[peerID] >= c.perPeerCap {
 		wit2DeferredPerPeerDropMeter.Mark(1)
 		return
 	}
-
-	if len(c.entries) >= c.capacity {
+	if c.total >= c.capacity {
 		c.evictOldestLocked()
+		cands = c.entries[ann.BlockHash] // re-read: eviction may have touched this block
 	}
 
-	c.entries[ann.BlockHash] = &deferredAnnounceEntry{
+	c.entries[ann.BlockHash] = append(cands, &deferredAnnounceEntry{
 		announcement: ann,
 		peerID:       peerID,
 		receivedAt:   time.Now(),
-	}
+	})
 	c.perPeer[peerID]++
+	c.total++
 }
 
-// evictOldestLocked drops the oldest entry across all peers to make room for
-// a new one (linear scan is cheap at the configured size). Caller must hold
-// the write lock.
+// evictOldestLocked drops the single oldest candidate across all blocks and
+// peers to make room for a new one (linear scan is cheap at the configured
+// size). Caller must hold the write lock.
 func (c *deferredAnnounceCache) evictOldestLocked() {
 	var oldestHash common.Hash
+	oldestIdx := -1
 	var oldest time.Time
-	for h, e := range c.entries {
-		if oldest.IsZero() || e.receivedAt.Before(oldest) {
-			oldest = e.receivedAt
-			oldestHash = h
+	for h, cands := range c.entries {
+		for i, e := range cands {
+			if oldestIdx == -1 || e.receivedAt.Before(oldest) {
+				oldest = e.receivedAt
+				oldestHash = h
+				oldestIdx = i
+			}
 		}
 	}
-	if victim, ok := c.entries[oldestHash]; ok {
-		c.decPeerLocked(victim.peerID)
-		delete(c.entries, oldestHash)
+	if oldestIdx >= 0 {
+		c.removeAtLocked(oldestHash, oldestIdx)
 	}
 }
 
-// take removes and returns the entry for blockHash if present and fresh.
-// Returns ok=false on miss or expiry; expired entries are deleted in place.
-func (c *deferredAnnounceCache) take(blockHash common.Hash) (*deferredAnnounceEntry, bool) {
+// take removes and returns all fresh candidates for blockHash. Returns
+// ok=false when none are present or all have expired; expired entries are
+// dropped (with their credits refunded) regardless.
+func (c *deferredAnnounceCache) take(blockHash common.Hash) ([]*deferredAnnounceEntry, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	e, ok := c.entries[blockHash]
+	cands, ok := c.entries[blockHash]
 	if !ok {
 		return nil, false
 	}
 	delete(c.entries, blockHash)
-	c.decPeerLocked(e.peerID)
-	if time.Since(e.receivedAt) > wit2AnnounceTTL {
+	cutoff := time.Now().Add(-wit2AnnounceTTL)
+	out := make([]*deferredAnnounceEntry, 0, len(cands))
+	for _, e := range cands {
+		c.decPeerLocked(e.peerID)
+		c.total--
+		if e.receivedAt.Before(cutoff) {
+			continue
+		}
+		out = append(out, e)
+	}
+	if len(out) == 0 {
 		return nil, false
 	}
-	return e, true
+	return out, true
 }
 
-// peek returns the announcement for blockHash and the peer that relayed it,
-// without consuming the entry, if a fresh one exists. Used by the broadcast
-// path to bind a pushed body to a pending (deferred, not yet
-// producer-verified) announcement, and by the fetch path to find a pull
-// target when no marked peer exists. The entry must stay in place so the
-// post-import drain still runs the real producer verification, promotion,
-// and relay.
-func (c *deferredAnnounceCache) peek(blockHash common.Hash) (wit.SignedWitnessAnnouncement, string, bool) {
+// peekPeer returns the freshest candidate's relaying peer for blockHash without
+// consuming any entry, used by the fetch path to find a pull target when no
+// marked body-holder exists. The entries stay in place so the post-import drain
+// still runs the real producer verification, promotion, and relay.
+func (c *deferredAnnounceCache) peekPeer(blockHash common.Hash) (string, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	e, ok := c.entries[blockHash]
-	if !ok || time.Since(e.receivedAt) > wit2AnnounceTTL {
-		return wit.SignedWitnessAnnouncement{}, "", false
+	cutoff := time.Now().Add(-wit2AnnounceTTL)
+	var best *deferredAnnounceEntry
+	for _, e := range c.entries[blockHash] {
+		if e.receivedAt.Before(cutoff) {
+			continue
+		}
+		if best == nil || e.receivedAt.After(best.receivedAt) {
+			best = e
+		}
 	}
-	return e.announcement, e.peerID, true
+	if best == nil {
+		return "", false
+	}
+	return best.peerID, true
 }
 
-// has reports whether a fresh entry exists for blockHash. Test-facing only;
-// production code uses take to ensure the entry is consumed.
+// hasWitnessHash reports whether a fresh candidate for blockHash commits to
+// witnessHash. Used by the broadcast path to bind pushed bytes to a pending
+// (deferred, not yet producer-verified) commitment without consuming it.
+func (c *deferredAnnounceCache) hasWitnessHash(blockHash common.Hash, witnessHash common.Hash) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	cutoff := time.Now().Add(-wit2AnnounceTTL)
+	for _, e := range c.entries[blockHash] {
+		if e.receivedAt.Before(cutoff) {
+			continue
+		}
+		if e.announcement.WitnessHash == witnessHash {
+			return true
+		}
+	}
+	return false
+}
+
+// has reports whether any fresh candidate exists for blockHash.
 func (c *deferredAnnounceCache) has(blockHash common.Hash) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	e, ok := c.entries[blockHash]
-	if !ok {
-		return false
+	cutoff := time.Now().Add(-wit2AnnounceTTL)
+	for _, e := range c.entries[blockHash] {
+		if !e.receivedAt.Before(cutoff) {
+			return true
+		}
 	}
-	return time.Since(e.receivedAt) <= wit2AnnounceTTL
+	return false
 }
 
-// gcLocked drops entries past the TTL. Caller must hold the write lock.
+// hashes returns a snapshot of the block hashes with at least one fresh
+// candidate. Used by the chain-head loop to find deferred announces whose
+// header has since become local (batched insertChain fires one accumulated
+// ChainHeadEvent, so head-hash-only draining would miss intermediate blocks).
+func (c *deferredAnnounceCache) hashes() []common.Hash {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	cutoff := time.Now().Add(-wit2AnnounceTTL)
+	out := make([]common.Hash, 0, len(c.entries))
+	for h, cands := range c.entries {
+		for _, e := range cands {
+			if !e.receivedAt.Before(cutoff) {
+				out = append(out, h)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// gcLocked drops candidates past the TTL, refunding credits. Caller must hold
+// the write lock.
 func (c *deferredAnnounceCache) gcLocked() {
 	cutoff := time.Now().Add(-wit2AnnounceTTL)
-	for h, e := range c.entries {
-		if e.receivedAt.Before(cutoff) {
-			c.decPeerLocked(e.peerID)
+	for h, cands := range c.entries {
+		kept := cands[:0]
+		for _, e := range cands {
+			if e.receivedAt.Before(cutoff) {
+				c.decPeerLocked(e.peerID)
+				c.total--
+				continue
+			}
+			kept = append(kept, e)
+		}
+		if len(kept) == 0 {
 			delete(c.entries, h)
+		} else {
+			c.entries[h] = kept
 		}
 	}
 }

@@ -714,12 +714,37 @@ func (h *handler) deferredAnnouncesLoop() {
 			if ev.Header != nil {
 				h.drainDeferredAnnouncesFor(ev.Header.Hash())
 				h.flushWitnessWaitersForImported(ev.Header.Hash())
+				// A batched insertChain (downloader catch-up) fires a single
+				// accumulated ChainHeadEvent for the batch's last block, so
+				// draining only the head hash would strand deferred announces for
+				// the batch's intermediate blocks until their TTL — silently
+				// downgrading those blocks to WIT1 byte-handling. Sweep any
+				// deferred hash whose header is now local.
+				h.drainResolvedDeferredAnnounces()
 			}
 		case <-h.wit2HeadSub.Err():
 			return
 		case <-h.quitSync:
 			return
 		}
+	}
+}
+
+// drainResolvedDeferredAnnounces drains every deferred announce whose block
+// header has become local. ChainHeadEvent fires once per insertChain batch (for
+// the batch's last block), so draining only the head hash would leave announces
+// for the batch's intermediate blocks deferred until their TTL. The deferred
+// set is bounded (deferredAnnounceCapacity), so this per-event scan is cheap.
+func (h *handler) drainResolvedDeferredAnnounces() {
+	if h.deferredAnnounces == nil {
+		return
+	}
+	for _, hash := range h.deferredAnnounces.hashes() {
+		if h.chain.GetHeaderByHash(hash) == nil {
+			continue
+		}
+		h.drainDeferredAnnouncesFor(hash)
+		h.flushWitnessWaitersForImported(hash)
 	}
 }
 

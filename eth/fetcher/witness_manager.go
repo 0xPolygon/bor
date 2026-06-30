@@ -93,6 +93,18 @@ type witnessManager struct {
 	witnessUnavailable map[common.Hash]time.Time                    // Tracks hashes whose witnesses are known to be unavailable, with expiry times.
 	witnessCache       *ttlcache.Cache[common.Hash, *cachedWitness] // TTL cache of witnesses that arrived before their blocks
 
+	// WIT2 signed-hash mismatch tracking. A bad or stale BP-signed witness hash
+	// makes every honest server's canonical bytes mismatch, which would stall
+	// the block until the signed announcement's TTL expires. We track the
+	// distinct servers that mismatch a given block's signed hash and, past
+	// signedHashMismatchQuarantineThreshold, quarantine that hash so subsequent
+	// fetches skip the signed-hash gate and fall back to WIT1 (import-time
+	// execution arbitrates the bytes) immediately instead of waiting out the TTL.
+	// Guarded by its own mutex (inner to m.mu in the rare paths that hold both).
+	wit2QuarantineMu  sync.Mutex
+	wit2MismatchPeers map[common.Hash]map[string]struct{}
+	wit2Quarantined   map[common.Hash]struct{}
+
 	// Witness verification state
 	gasCeil uint64 // Gas ceiling for calculating dynamic page threshold
 
@@ -150,6 +162,8 @@ func newWitnessManager(
 		pending:                      make(map[common.Hash]*witnessRequestState),
 		witnessUnavailable:           make(map[common.Hash]time.Time),
 		witnessCache:                 witnessCache,
+		wit2MismatchPeers:            make(map[common.Hash]map[string]struct{}),
+		wit2Quarantined:              make(map[common.Hash]struct{}),
 		gasCeil:                      gasCeil,
 		injectNeedWitnessCh:          make(chan *injectBlockNeedWitnessMsg, 10),
 		injectWitnessCh:              make(chan *injectedWitnessMsg, 10),
@@ -771,6 +785,7 @@ func (m *witnessManager) handleWitnessFetchFailureExt(hash common.Hash, peer str
 	m.mu.Lock()
 	if removePending {
 		delete(m.pending, hash)
+		m.clearSignedHashMismatch(hash)
 	} else {
 		if state := m.pending[hash]; state != nil {
 			// back-off before next retry
@@ -804,6 +819,7 @@ func (m *witnessManager) safeEnqueue(op *blockOrHeaderInject) {
 	// Remove the pending state while holding the lock, ensuring any concurrent
 	// isPending checks will see the updated state.
 	delete(m.pending, hash)
+	m.clearSignedHashMismatch(hash)
 	m.mu.Unlock()
 
 	// Now with lock released, attempt to send the request to parent fetcher
@@ -828,6 +844,7 @@ func (m *witnessManager) forget(hash common.Hash) {
 		log.Debug("[wm] Forgetting pending witness state", "hash", hash)
 		delete(m.pending, hash)
 	}
+	m.clearSignedHashMismatch(hash)
 	m.mu.Unlock()
 	// Ensure timer reflects potential state change
 	m.rescheduleWitness()

@@ -97,8 +97,8 @@ func (h *witHandler) handleWitnessBroadcast(peer *wit.Peer, witness *stateless.W
 	var accepted bool
 	if signed, hasSigned := (*handler)(h).signedWitnesses.get(hash); hasSigned {
 		accepted = h.acceptSignedBroadcast(peer, witness, hash, signed.WitnessHash)
-	} else if deferred, _, hasDeferred := (*handler)(h).deferredAnnounces.peek(hash); hasDeferred {
-		accepted = h.acceptDeferredBroadcast(peer, witness, hash, deferred.WitnessHash)
+	} else if (*handler)(h).deferredAnnounces.has(hash) {
+		accepted = h.acceptDeferredBroadcast(peer, witness, hash)
 	} else {
 		accepted = h.acceptUnsignedBroadcast(peer, hash)
 	}
@@ -179,15 +179,19 @@ func (h *witHandler) acceptSignedBroadcast(peer *wit.Peer, witness *stateless.Wi
 // post-import drain checks it against the chain-validated header. Verifying
 // against the header embedded in the pushed witness instead would let a peer
 // self-seal a fabricated header and pass its own announce as the producer's.
-func (h *witHandler) acceptDeferredBroadcast(peer *wit.Peer, witness *stateless.Witness, hash common.Hash, deferredHash common.Hash) bool {
+func (h *witHandler) acceptDeferredBroadcast(peer *wit.Peer, witness *stateless.Witness, hash common.Hash) bool {
 	bodyBytes, ok := encodedBroadcastBytes(peer, witness, hash)
 	if !ok {
 		return false
 	}
-	if stateless.WitnessCommitHash(bodyBytes) != deferredHash {
+	// Bind against any deferred candidate's commitment: with multiple candidates
+	// on file we accept the body if its hash matches one of them. The drain still
+	// arbitrates which signer is the real producer at import time.
+	bodyHash := stateless.WitnessCommitHash(bodyBytes)
+	if !(*handler)(h).deferredAnnounces.hasWitnessHash(hash, bodyHash) {
 		wit2BroadcastByteMismatchMeter.Mark(1)
-		peer.Log().Warn("wit2: broadcast bytes do not match deferred announce witnessHash; dropping",
-			"blockHash", hash, "expected", deferredHash)
+		peer.Log().Warn("wit2: broadcast bytes do not match any deferred announce witnessHash; dropping",
+			"blockHash", hash, "actual", bodyHash)
 		return false
 	}
 	peer.AddKnownWitness(hash)
@@ -228,11 +232,13 @@ func (h *witHandler) handleWitnessHashesAnnounce(peer *wit.Peer, hashes []common
 // kicks them off when an announcement materialises). Each announcement is
 // processed independently so a single bad entry does not poison a batch.
 //
-// On verification failure (bad signature, unknown signer) the sender is
-// **not** dropped at this layer — they may simply be relaying a bad upstream
-// announcement. Drops are reserved for byte-correctness failures at fetch
-// time. We do, however, count invalid announcements via metrics to surface
-// misbehaving relayers.
+// Failure policy (enforced in acceptSignedAnnouncement): a header-unknown
+// announce is deferred silently — no strike, no relay — because it may simply
+// be racing ahead of its block. Confirmed misbehavior against a known header
+// (bad signature, or signer ≠ scheduled producer) is struck, and a peer that
+// reaches wit2MisbehaviorStrikeLimit strikes within the decay window is
+// disconnected. Byte-correctness failures at fetch time are handled separately
+// in the witness manager. All invalid announcements are also metered.
 func (h *witHandler) handleSignedWitnessAnnouncements(peer *wit.Peer, anns []wit.SignedWitnessAnnouncement) error {
 	wit2RelayInMeter.Mark(int64(len(anns)))
 
@@ -381,8 +387,18 @@ func (h *witHandler) handleGetWitness(peer *wit.Peer, req *wit.GetWitnessPacket)
 		// what keeps WIT2 stateless consumers in lockstep at hop>=2 (see
 		// witnessWaiterRegistry).
 		if totalPages == 0 {
-			if _, hasSigned := (*handler)(h).signedWitnesses.get(witnessPage.Hash); hasSigned {
-				(*handler)(h).witnessWaiters.record(witnessPage.Hash, peer)
+			hh := (*handler)(h)
+			if _, hasSigned := hh.signedWitnesses.get(witnessPage.Hash); hasSigned {
+				hh.witnessWaiters.record(witnessPage.Hash, peer)
+			} else if hh.deferredAnnounces.has(witnessPage.Hash) {
+				// Header-racing announce: a structurally valid signed announce is
+				// deferred pending its block, so the witness provably exists even
+				// though it is not yet producer-verified. Record the waiter so we
+				// still push the body the instant we obtain it, rather than leaving
+				// the requester to re-poll under backoff. Recording only schedules a
+				// future push of bytes we actually hold — it does not promote,
+				// cache, or relay the unverified announce.
+				hh.witnessWaiters.record(witnessPage.Hash, peer)
 			}
 		}
 

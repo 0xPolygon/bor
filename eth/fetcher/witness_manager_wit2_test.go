@@ -311,3 +311,81 @@ func TestProcessWitnessResponseEmptyDoesNotDropAnnounceOnlyPeer(t *testing.T) {
 
 	requireNoDroppedPeers(t, tw, "empty response must NOT drop the responder")
 }
+
+// TestSignedHashQuarantineAfterDistinctMismatches is the regression for
+// Vikram's finding that a bad/stale BP-signed witness hash blocks stateless
+// import until the announcement TTL expires: every honest server's canonical
+// bytes mismatch the bogus hash, so the fetch keeps getting rejected. After
+// distinct servers mismatch the same signed hash, the manager must quarantine
+// it and fall back to WIT1 (import-time execution arbitrates the bytes) so the
+// block can import promptly. A single bad server must NOT trigger the quarantine
+// — that would let one liar force a WIT1 downgrade.
+func TestSignedHashQuarantineAfterDistinctMismatches(t *testing.T) {
+	tw := newTestWitnessManager()
+	defer tw.Close()
+
+	block := createTestBlock(303)
+	hash := block.Hash()
+	witness := createTestWitnessForBlock(block)
+
+	// Signed hash on file does NOT match the canonical witness — the bad/stale
+	// producer-hash case. Every server serving the real witness will mismatch.
+	tw.manager.parentSignedWitnessHash = func(h common.Hash) (common.Hash, bool) {
+		if h == hash {
+			return common.HexToHash("0xbadbadbad"), true
+		}
+		return common.Hash{}, false
+	}
+	primePendingWitness(tw, "peerA", block)
+
+	// First distinct server mismatches: rejected, but not yet quarantined.
+	if _, _, ok := tw.manager.verifyAgainstSignedHash("peerA", hash, witness); ok {
+		t.Fatal("mismatch must return ok=false")
+	}
+	if tw.manager.isSignedHashQuarantined(hash) {
+		t.Fatal("a single distinct mismatch must not quarantine the signed hash")
+	}
+
+	// Second DISTINCT server mismatches: the signed hash is now the suspect.
+	if _, _, ok := tw.manager.verifyAgainstSignedHash("peerB", hash, witness); ok {
+		t.Fatal("mismatch must return ok=false")
+	}
+	if !tw.manager.isSignedHashQuarantined(hash) {
+		t.Fatal("distinct-source mismatches must quarantine the signed hash")
+	}
+
+	// A subsequent fetch falls back to WIT1: body=nil, ok=true, so the witness
+	// is accepted for import (execution validates) instead of stalling for 30s.
+	body, _, ok := tw.manager.verifyAgainstSignedHash("peerC", hash, witness)
+	if !ok {
+		t.Fatal("quarantined signed hash must fall back to WIT1 (accept, execution validates)")
+	}
+	if body != nil {
+		t.Fatal("WIT1 fallback must not return bytes for the pre-import serving cache")
+	}
+}
+
+// TestSignedHashSingleServerDoesNotQuarantine guards the asymmetry: many
+// mismatches from the SAME single server must never quarantine a signed hash —
+// otherwise one malicious byte-server could force every block it touches down
+// to WIT1, defeating the byte-authenticated fast path.
+func TestSignedHashSingleServerDoesNotQuarantine(t *testing.T) {
+	tw := newTestWitnessManager()
+	defer tw.Close()
+
+	block := createTestBlock(304)
+	hash := block.Hash()
+	witness := createTestWitnessForBlock(block)
+
+	tw.manager.parentSignedWitnessHash = func(common.Hash) (common.Hash, bool) {
+		return common.HexToHash("0xdeadbeef"), true
+	}
+	primePendingWitness(tw, "lonely", block)
+
+	for range 4 {
+		tw.manager.verifyAgainstSignedHash("lonely", hash, witness)
+	}
+	if tw.manager.isSignedHashQuarantined(hash) {
+		t.Fatal("repeated mismatches from a single server must not quarantine the signed hash")
+	}
+}

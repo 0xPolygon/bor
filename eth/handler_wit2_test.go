@@ -3,6 +3,7 @@ package eth
 import (
 	"bytes"
 	"crypto/rand"
+	"fmt"
 	"math/big"
 	"testing"
 	"time"
@@ -108,6 +109,49 @@ func TestVerifySignedAnnouncementRoundTrip(t *testing.T) {
 	}
 	if got != expectedSigner {
 		t.Fatalf("recovered signer = %s, want %s", got.Hex(), expectedSigner.Hex())
+	}
+}
+
+// TestVerifySignedAnnouncementNormalizesLegacyV guards the WIT2 path against
+// external signers (Clef) that return the recovery id in 27/28 form for the
+// bor-witness-announce mimetype. crypto.Ecrecover rejects any V >= 4, so
+// without normalization a Clef-signing producer's announces would be treated
+// as invalid by every receiver and the honest relayer would be struck.
+func TestVerifySignedAnnouncementNormalizesLegacyV(t *testing.T) {
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("key gen: %v", err)
+	}
+	expectedSigner := crypto.PubkeyToAddress(key.PublicKey)
+
+	ann := wit.SignedWitnessAnnouncement{
+		BlockHash:   common.HexToHash("0xfeedface"),
+		BlockNumber: 42,
+		WitnessHash: common.HexToHash("0xc0ffee00"),
+	}
+	digest := wit.WitnessAnnouncementSigningHash(ann.BlockHash, ann.BlockNumber, ann.WitnessHash)
+	sig, err := crypto.Sign(digest.Bytes(), key)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	// Emulate an external signer that returns legacy 27/28 V.
+	if sig[crypto.RecoveryIDOffset] > 1 {
+		t.Fatalf("crypto.Sign returned non-canonical V=%d", sig[crypto.RecoveryIDOffset])
+	}
+	sig[crypto.RecoveryIDOffset] += 27
+	ann.Signature = sig
+
+	got, err := verifySignedAnnouncement(ann)
+	if err != nil {
+		t.Fatalf("verify with legacy V failed: %v", err)
+	}
+	if got != expectedSigner {
+		t.Fatalf("recovered signer = %s, want %s", got.Hex(), expectedSigner.Hex())
+	}
+	// The input signature must be left untouched so relayers forward the
+	// producer's bytes verbatim.
+	if sig[crypto.RecoveryIDOffset] != 27 && sig[crypto.RecoveryIDOffset] != 28 {
+		t.Fatalf("verifySignedAnnouncement mutated the caller's signature V to %d", sig[crypto.RecoveryIDOffset])
 	}
 }
 
@@ -454,6 +498,41 @@ func requestFirstWitnessPage(t *testing.T, witH *witHandler, peer *wit.Peer, has
 	})
 	require.NoError(t, err)
 	return resp
+}
+
+// TestEmptyGetWitnessForDeferredAnnounceRecordsWaiter is the regression for the
+// Copilot finding that a body request was only recorded as a waiter when a
+// producer-verified signed hash was on file. During the header-race window the
+// announce sits in deferredAnnounces (not yet promoted), so an empty GetWitness
+// in that window left the requester to poll under backoff instead of getting a
+// push the moment we obtain the body. A fresh deferred announce is sufficient
+// evidence to record the waiter.
+func TestEmptyGetWitnessForDeferredAnnounceRecordsWaiter(t *testing.T) {
+	h := newTestHandler()
+	defer h.close()
+
+	witH := (*witHandler)(h.handler)
+	peer, cleanup := newTestWit2PeerWithReader()
+	defer cleanup()
+
+	header := &types.Header{Number: big.NewInt(8888)} // NOT in chain
+	hash := header.Hash()
+
+	// Only a deferred announce on file: no signedWitnesses entry, no header, no
+	// body. This is the header-race state on a stateless consumer at the tip.
+	h.handler.deferredAnnounces.put(wit.SignedWitnessAnnouncement{
+		BlockHash:   hash,
+		BlockNumber: header.Number.Uint64(),
+		WitnessHash: common.HexToHash("0xc0ffee"),
+		Signature:   make([]byte, wit.SignatureLength),
+	}, "relayer")
+
+	require.False(t, h.handler.witnessWaiters.has(hash), "precondition: no waiter yet")
+	resp := requestFirstWitnessPage(t, witH, peer, hash)
+	require.Equal(t, 1, len(resp))
+	require.Equal(t, uint64(0), resp[0].TotalPages, "precondition: body absent, must serve empty")
+	require.True(t, h.handler.witnessWaiters.has(hash),
+		"a deferred announce must be enough to record a body waiter so the push fires on arrival")
 }
 
 func TestEmptyGetWitnessForSignedHashPushesBodyOnArrival(t *testing.T) {
@@ -831,6 +910,120 @@ func TestDeferredSignedAnnounceDrainedAfterHeaderArrives(t *testing.T) {
 	}
 	if h.handler.deferredAnnounces.has(blockHash) {
 		t.Fatal("deferred entry should be cleared after successful drain")
+	}
+}
+
+// TestDeferredDrainPromotesHonestAmongForged is the regression for the
+// multi-candidate deferred cache (Vikram / claude-bot finding). A forged
+// header-racing announce for a victim block hash must NOT evict the honest
+// producer's deferred announce: holding only one candidate let the forgery win
+// the put race, and on import the forged entry fails producer-binding and is
+// dropped, leaving no signed hash on file (silent WIT1 downgrade). With
+// multiple candidates retained, the drain promotes the one that binds to the
+// producer. The non-bor test chain does not check the signer, so this test uses
+// a block-number mismatch as the producer-binding proxy: isScheduledProducer
+// rejects a candidate whose announced number disagrees with the local header.
+func TestDeferredDrainPromotesHonestAmongForged(t *testing.T) {
+	h := newTestHandler()
+	defer h.close()
+	witH := (*witHandler)(h.handler)
+	honestPeer, c1 := newTestWit2PeerWithReader()
+	defer c1()
+	attackerPeer, c2 := newTestWit2PeerWithReader()
+	defer c2()
+
+	header := &types.Header{Number: big.NewInt(99_123)} // NOT yet in chain
+	blockHash := header.Hash()
+
+	sign := func(num uint64, wh common.Hash) wit.SignedWitnessAnnouncement {
+		key, err := crypto.GenerateKey()
+		require.NoError(t, err)
+		a := wit.SignedWitnessAnnouncement{BlockHash: blockHash, BlockNumber: num, WitnessHash: wh}
+		d := wit.WitnessAnnouncementSigningHash(a.BlockHash, a.BlockNumber, a.WitnessHash)
+		s, err := crypto.Sign(d.Bytes(), key)
+		require.NoError(t, err)
+		a.Signature = s
+		return a
+	}
+	honestWH := common.HexToHash("0xc0ffee")
+	honest := sign(header.Number.Uint64(), honestWH)
+	// Forged: structurally valid signature over a different witnessHash, but a
+	// mismatched block number → rejected as not-the-producer on drain.
+	forged := sign(header.Number.Uint64()+1, common.HexToHash("0xbadbad"))
+
+	// Forged arrives FIRST, honest second — the old single-slot cache would have
+	// let the forgery block the honest commitment regardless of order.
+	require.NoError(t, witH.handleSignedWitnessAnnouncements(attackerPeer, []wit.SignedWitnessAnnouncement{forged}))
+	require.NoError(t, witH.handleSignedWitnessAnnouncements(honestPeer, []wit.SignedWitnessAnnouncement{honest}))
+
+	if _, ok := h.handler.signedWitnesses.get(blockHash); ok {
+		t.Fatal("nothing should be cached while the header is unknown")
+	}
+	h.handler.deferredAnnounces.mu.RLock()
+	candidateCount := len(h.handler.deferredAnnounces.entries[blockHash])
+	h.handler.deferredAnnounces.mu.RUnlock()
+	require.Equal(t, 2, candidateCount, "forged announce must coexist with the honest one, not evict it")
+
+	// Header arrives; drain re-evaluates every candidate.
+	rawdb.WriteHeader(h.chain.DB(), header)
+	h.handler.drainDeferredAnnouncesFor(blockHash)
+
+	got, ok := h.handler.signedWitnesses.get(blockHash)
+	require.True(t, ok, "the honest producer-bound commitment must be promoted after the drain")
+	require.Equal(t, honestWH, got.WitnessHash, "the producer-matching candidate must win, not the forgery")
+	require.False(t, h.handler.deferredAnnounces.has(blockHash), "all candidates must be cleared after the drain")
+}
+
+// TestDrainResolvedDeferredAnnouncesCoversBatchedImport is the regression for
+// the claude-bot finding that a batched insertChain (downloader catch-up) fires
+// a single accumulated ChainHeadEvent for the batch's last block, so draining
+// only the head hash strands deferred announces for the batch's intermediate
+// blocks until their TTL. The resolvable sweep must drain every deferred
+// announce whose header has become local, not just the head's.
+func TestDrainResolvedDeferredAnnouncesCoversBatchedImport(t *testing.T) {
+	h := newTestHandler()
+	defer h.close()
+
+	const n = 3
+	type blk struct {
+		hash common.Hash
+		ann  wit.SignedWitnessAnnouncement
+	}
+	blks := make([]blk, 0, n)
+	for i := range n {
+		header := &types.Header{Number: big.NewInt(int64(70_000 + i))}
+		key, err := crypto.GenerateKey()
+		require.NoError(t, err)
+		ann := wit.SignedWitnessAnnouncement{
+			BlockHash:   header.Hash(),
+			BlockNumber: header.Number.Uint64(),
+			WitnessHash: common.BytesToHash([]byte{0xc0, byte(i)}),
+		}
+		d := wit.WitnessAnnouncementSigningHash(ann.BlockHash, ann.BlockNumber, ann.WitnessHash)
+		s, err := crypto.Sign(d.Bytes(), key)
+		require.NoError(t, err)
+		ann.Signature = s
+		// Defer the announce (header unknown at receive time), then write the
+		// header to simulate the batch import — WITHOUT firing a per-block head
+		// event, as intermediate blocks of an insertChain batch never do.
+		h.handler.deferredAnnounces.put(ann, fmt.Sprintf("relayer-%d", i))
+		rawdb.WriteHeader(h.chain.DB(), header)
+		blks = append(blks, blk{header.Hash(), ann})
+	}
+
+	for i, b := range blks {
+		if _, ok := h.handler.signedWitnesses.get(b.hash); ok {
+			t.Fatalf("block %d drained before the sweep", i)
+		}
+	}
+
+	h.handler.drainResolvedDeferredAnnounces()
+
+	for i, b := range blks {
+		got, ok := h.handler.signedWitnesses.get(b.hash)
+		require.True(t, ok, "intermediate block %d must be drained by the resolvable sweep", i)
+		require.Equal(t, b.ann.WitnessHash, got.WitnessHash)
+		require.False(t, h.handler.deferredAnnounces.has(b.hash), "drained entry must be cleared")
 	}
 }
 

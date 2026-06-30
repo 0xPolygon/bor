@@ -63,7 +63,12 @@ func (c *pendingWitnessBodyCache) put(blockHash common.Hash, bytes []byte, witne
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.gcLocked()
-	if len(c.entries) >= c.capacity {
+	// Only evict for a genuinely new key. An overwrite for a hash already in the
+	// cache is net-zero on slot count (cacheVerifiedWitnessForServing on fetch
+	// success and acceptSignedBroadcast on a near-simultaneous push can both put
+	// the same block); evicting on overwrite would drop an unrelated live entry
+	// and silently shrink the cache below capacity. Mirrors deferredAnnounceCache.
+	if _, exists := c.entries[blockHash]; !exists && len(c.entries) >= c.capacity {
 		// Evict the oldest entry. Linear scan is fine at the configured cap.
 		var oldestHash common.Hash
 		var oldest time.Time

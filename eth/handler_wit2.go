@@ -27,6 +27,7 @@ var (
 	wit2BroadcastByteMismatchMeter      = metrics.NewRegisteredMeter("eth/wit2/serve/broadcast_byte_mismatch", nil)
 	wit2BroadcastUnverifiedSkippedMeter = metrics.NewRegisteredMeter("eth/wit2/serve/broadcast_unverified_skipped", nil)
 	wit2DeferredPerPeerDropMeter        = metrics.NewRegisteredMeter("eth/wit2/announce/deferred_per_peer_drop", nil)
+	wit2DeferredPerBlockDropMeter       = metrics.NewRegisteredMeter("eth/wit2/announce/deferred_per_block_drop", nil)
 	wit2HeaderUnknownMeter              = metrics.NewRegisteredMeter("eth/wit2/announce/header_unknown", nil)
 	wit2ConflictingWitnessHashMeter     = metrics.NewRegisteredMeter("eth/wit2/announce/conflicting_witness_hash", nil)
 	wit2RateLimitDropMeter              = metrics.NewRegisteredMeter("eth/wit2/announce/rate_limit_drop", nil)
@@ -125,7 +126,18 @@ func verifySignedAnnouncement(ann wit.SignedWitnessAnnouncement) (common.Address
 		return common.Address{}, errInvalidSignatureLength
 	}
 	digest := wit.WitnessAnnouncementSigningHash(ann.BlockHash, ann.BlockNumber, ann.WitnessHash)
-	pubkey, err := crypto.Ecrecover(digest.Bytes(), ann.Signature)
+	// Normalize the recovery id to 0/1 before recovery. External signers (Clef)
+	// return V in 27/28 form for any mimetype other than Clique — see
+	// accounts/external.SignData, which only de-offsets MimetypeClique — and
+	// crypto.Ecrecover rejects any V >= 4. Work on a copy so the cached and
+	// relayed signature bytes stay byte-for-byte as the producer emitted them;
+	// every receiver normalizes independently.
+	sig := ann.Signature
+	if v := sig[crypto.RecoveryIDOffset]; v == 27 || v == 28 {
+		sig = append([]byte(nil), ann.Signature...)
+		sig[crypto.RecoveryIDOffset] -= 27
+	}
+	pubkey, err := crypto.Ecrecover(digest.Bytes(), sig)
 	if err != nil {
 		return common.Address{}, err
 	}
@@ -211,9 +223,10 @@ func (h *handler) cacheVerifiedWitnessForServing(blockHash common.Hash, witnessB
 // - witness bytes not yet stored in chain
 // - signing failed
 //
-// Cost: ~150ms keccak over a 50MB witness, plus ~100μs ECDSA. Off the
-// block-production critical path; runs once per produced block on the
-// announce path.
+// Cost: one chunked-parallel WitnessCommitHash over the stored witness
+// (~14ms for a 50MB witness on 8 cores; see core/stateless.WitnessCommitHash)
+// plus ~100μs ECDSA. Off the block-production critical path; runs once per
+// produced block on the announce path, and the result is cached.
 func (h *handler) signLocalWitnessAnnouncement(blockHash common.Hash, blockNumber uint64) (wit.SignedWitnessAnnouncement, bool) {
 	if cached, ok := h.signedWitnesses.get(blockHash); ok {
 		return cached, true
@@ -249,6 +262,13 @@ func (h *handler) signLocalWitnessAnnouncement(blockHash common.Hash, blockNumbe
 		log.Warn("wit2: failed to sign witness announcement", "blockHash", blockHash, "err", err)
 		return wit.SignedWitnessAnnouncement{}, false
 	}
+	// Canonicalize the recovery id to 0/1 at the source: external signers (Clef)
+	// return V in 27/28 form for this mimetype, which crypto.Ecrecover rejects.
+	// Emitting a canonical signature keeps the wire clean; receivers also
+	// normalize defensively in verifySignedAnnouncement.
+	if len(sig) == wit.SignatureLength && (sig[crypto.RecoveryIDOffset] == 27 || sig[crypto.RecoveryIDOffset] == 28) {
+		sig[crypto.RecoveryIDOffset] -= 27
+	}
 
 	ann := wit.SignedWitnessAnnouncement{
 		BlockHash:   blockHash,
@@ -256,7 +276,19 @@ func (h *handler) signLocalWitnessAnnouncement(blockHash common.Hash, blockNumbe
 		WitnessHash: witnessHash,
 		Signature:   sig,
 	}
-	h.signedWitnesses.putIfNewer(ann)
+	// Honor the cache's conflict decision. We reach here only when the early
+	// get() above missed, so under honest operation putIfNewer inserts into an
+	// empty slot and returns true. A false return means a different WitnessHash
+	// for this block raced into the cache between the get() and here — for our
+	// own sealed block the witness bytes are deterministic, so this should be
+	// unreachable, but if it happens the cached entry is the one already being
+	// relayed/served: return it rather than announcing a hash we won't serve.
+	if !h.signedWitnesses.putIfNewer(ann) {
+		if cached, ok := h.signedWitnesses.get(blockHash); ok {
+			return cached, true
+		}
+		return wit.SignedWitnessAnnouncement{}, false
+	}
 	return ann, true
 }
 
@@ -327,13 +359,15 @@ func (h *handler) isScheduledProducer(signer common.Address, blockNumber uint64,
 	return verifyScheduledProducer(borEngine, header, signer, blockNumber, blockHash)
 }
 
-// drainDeferredAnnouncesFor re-evaluates any deferred announcement whose
-// blockHash now matches a header that has just been imported. On verification
-// success the announce is cached in signedWitnesses, the original sender is
-// credited as announce-known, and the announce is relayed to peers that have
-// not seen it. On confirmed mis-binding (signer ≠ producer) the deferred
-// entry is dropped — relayers cannot be re-struck post-hoc since we lost the
-// peer reference between deferral and drain.
+// drainDeferredAnnouncesFor re-evaluates every deferred candidate announcement
+// for blockHash once its header is local. Multiple candidates may be on file
+// (an honest producer's announce plus any forged header-racing ones); the one
+// whose signer is the actual block producer is promoted into signedWitnesses,
+// its sender credited as announce-known, and the announce relayed. Candidates
+// that re-check as a confirmed mis-binding (signer ≠ producer) are dropped —
+// relayers cannot be re-struck post-hoc since we lost the peer reference between
+// deferral and drain. If the header is still not local for all candidates they
+// are re-stashed for the next chain-head event.
 //
 // Called from the chain-head subscription on each new block. Also exposed for
 // direct invocation in tests.
@@ -341,41 +375,50 @@ func (h *handler) drainDeferredAnnouncesFor(blockHash common.Hash) {
 	if h.deferredAnnounces == nil {
 		return
 	}
-	entry, ok := h.deferredAnnounces.take(blockHash)
+	candidates, ok := h.deferredAnnounces.take(blockHash)
 	if !ok {
 		return
 	}
-	signer, err := verifySignedAnnouncement(entry.announcement)
-	if err != nil {
-		// Should be unreachable: we re-verified the same bytes that already
-		// passed the signature check at acceptSignedAnnouncement time.
-		// Surfaced via metric in case a future refactor reorders this.
-		wit2InvalidSigMeter.Mark(1)
-		log.Debug("wit2: deferred announce failed signature re-check", "blockHash", blockHash, "err", err)
-		return
-	}
-	prodOk, headerAvailable := h.isScheduledProducer(signer, entry.announcement.BlockNumber, blockHash)
-	if !prodOk {
-		if !headerAvailable {
-			// Header still not local — re-stash with fresh receivedAt so the
-			// next chain-head event can try again before the TTL expires.
-			h.deferredAnnounces.put(entry.announcement, entry.peerID)
-			return
+	promoted := false
+	for _, entry := range candidates {
+		signer, err := verifySignedAnnouncement(entry.announcement)
+		if err != nil {
+			// Should be unreachable: we re-verified the same bytes that already
+			// passed the signature check at acceptSignedAnnouncement time.
+			// Surfaced via metric in case a future refactor reorders this.
+			wit2InvalidSigMeter.Mark(1)
+			log.Debug("wit2: deferred announce failed signature re-check", "blockHash", blockHash, "err", err)
+			continue
 		}
-		wit2NotValidatorMeter.Mark(1)
-		log.Debug("wit2: deferred announce signer is not the scheduled producer",
-			"blockHash", blockHash, "signer", signer)
-		return
+		prodOk, headerAvailable := h.isScheduledProducer(signer, entry.announcement.BlockNumber, blockHash)
+		if !prodOk {
+			if !headerAvailable {
+				// Header still not local — re-stash with fresh receivedAt so the
+				// next chain-head event can try again before the TTL expires.
+				h.deferredAnnounces.put(entry.announcement, entry.peerID)
+				continue
+			}
+			wit2NotValidatorMeter.Mark(1)
+			log.Debug("wit2: deferred announce signer is not the scheduled producer",
+				"blockHash", blockHash, "signer", signer)
+			continue
+		}
+		// Producer match. Promote the first one; any further producer-signed
+		// candidate is a duplicate of the same authorized signer.
+		if promoted {
+			continue
+		}
+		if !h.signedWitnesses.putIfNewer(entry.announcement) {
+			wit2DuplicateMeter.Mark(1)
+			continue
+		}
+		promoted = true
+		// Credit the original sender as announce-known so we don't re-relay back.
+		if peer := h.peers.peer(entry.peerID); peer != nil && peer.witPeer != nil {
+			peer.witPeer.Peer.AddKnownAnnounce(blockHash)
+		}
+		h.relaySignedAnnouncement(entry.peerID, entry.announcement)
 	}
-	if !h.signedWitnesses.putIfNewer(entry.announcement) {
-		wit2DuplicateMeter.Mark(1)
-		return
-	}
-	// Credit the original sender as announce-known so we don't re-relay back.
-	if peer := h.peers.peer(entry.peerID); peer != nil && peer.witPeer != nil {
-		peer.witPeer.Peer.AddKnownAnnounce(blockHash)
-	}
-	h.relaySignedAnnouncement(entry.peerID, entry.announcement)
 }
 
 // verifyScheduledProducer is the pure decision logic for binding a wit2

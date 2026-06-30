@@ -59,7 +59,10 @@ func (m *witnessManager) verifyAgainstSignedHash(peer string, hash common.Hash, 
 		return nil, common.Hash{}, true
 	}
 	expected, has := m.parentSignedWitnessHash(hash)
-	if !has {
+	if !has || m.isSignedHashQuarantined(hash) {
+		// No signed hash on file, or it has been quarantined after distinct
+		// servers repeatedly mismatched it (bad/stale producer hash): fall back
+		// to the WIT1 path so import-time execution arbitrates the bytes.
 		return nil, common.Hash{}, true
 	}
 	var buf bytes.Buffer
@@ -79,14 +82,77 @@ func (m *witnessManager) verifyAgainstSignedHash(peer string, hash common.Hash, 
 		// serving the canonical witness. Reject the bytes (don't cache for
 		// serving), back off the pending request so another peer/announcement
 		// gets tried, and let import-time execution validation pin blame.
-		// TODO(wit2): wire signer-quarantine once the manager has access to
-		// (signer, announcement-relayer) provenance from the handler.
-		log.Warn("[wm] Witness bytes do not match BP-signed hash; not caching, retrying with another peer",
-			"peer", peer, "block", hash, "expected", expected, "actual", actual)
+		//
+		// A single bad server is not enough to distrust the signed hash. But if
+		// distinct servers all mismatch the same signed hash, the hash itself is
+		// the likely culprit (bad/stale producer signature): quarantine it so
+		// the next fetch falls back to WIT1 immediately instead of stalling the
+		// block until the signed announcement's TTL expires.
+		if m.recordSignedHashMismatch(hash, peer) {
+			log.Warn("[wm] BP-signed witness hash repeatedly unmatched by distinct servers; quarantining to WIT1 fallback so the block can import",
+				"block", hash, "expected", expected)
+		} else {
+			log.Warn("[wm] Witness bytes do not match BP-signed hash; not caching, retrying with another peer",
+				"peer", peer, "block", hash, "expected", expected, "actual", actual)
+		}
 		m.handleWitnessFetchFailureExt(hash, "", errors.New("witness hash mismatch"), false)
 		return nil, common.Hash{}, false
 	}
+	// Bytes matched: forget any earlier mismatch noise for this block.
+	m.clearSignedHashMismatch(hash)
 	return encoded, expected, true
+}
+
+// signedHashMismatchQuarantineThreshold is how many DISTINCT servers must serve
+// bytes that fail the BP-signed-hash check for a block before we stop trusting
+// that signed hash and fall back to WIT1. One bad server cannot trigger it; a
+// hash that distinct honest servers all disagree with is itself the suspect.
+const signedHashMismatchQuarantineThreshold = 2
+
+// isSignedHashQuarantined reports whether the signed hash for a block has been
+// quarantined (distinct servers repeatedly mismatched it).
+func (m *witnessManager) isSignedHashQuarantined(hash common.Hash) bool {
+	m.wit2QuarantineMu.Lock()
+	defer m.wit2QuarantineMu.Unlock()
+	_, ok := m.wit2Quarantined[hash]
+	return ok
+}
+
+// recordSignedHashMismatch records that peer served bytes mismatching the
+// signed hash for block hash. It returns true the moment the distinct-server
+// threshold is reached and the hash is newly quarantined (so the caller logs
+// the downgrade exactly once). An empty peer string is ignored.
+func (m *witnessManager) recordSignedHashMismatch(hash common.Hash, peer string) bool {
+	if peer == "" {
+		return false
+	}
+	m.wit2QuarantineMu.Lock()
+	defer m.wit2QuarantineMu.Unlock()
+	if _, done := m.wit2Quarantined[hash]; done {
+		return false
+	}
+	peers := m.wit2MismatchPeers[hash]
+	if peers == nil {
+		peers = make(map[string]struct{})
+		m.wit2MismatchPeers[hash] = peers
+	}
+	peers[peer] = struct{}{}
+	if len(peers) >= signedHashMismatchQuarantineThreshold {
+		m.wit2Quarantined[hash] = struct{}{}
+		delete(m.wit2MismatchPeers, hash)
+		return true
+	}
+	return false
+}
+
+// clearSignedHashMismatch drops all mismatch/quarantine state for a block. Call
+// it once the block's witness is resolved or the request is abandoned so the
+// maps stay bounded by in-flight fetches.
+func (m *witnessManager) clearSignedHashMismatch(hash common.Hash) {
+	m.wit2QuarantineMu.Lock()
+	defer m.wit2QuarantineMu.Unlock()
+	delete(m.wit2MismatchPeers, hash)
+	delete(m.wit2Quarantined, hash)
 }
 
 // handleWitnessBodyNotReady backs off a pending witness request after an empty

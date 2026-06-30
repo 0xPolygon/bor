@@ -225,37 +225,55 @@ func TestWaiterPushGuards(t *testing.T) {
 	h.handler.pendingWitnessBodies = saved
 }
 
-// TestDeferredAnnounceCacheLifecycle covers the deferred-announce cache edge
-// behavior: same-hash overwrites move per-peer credit to the latest relayer,
-// the global cap evicts the oldest entry (not the newest), and take/peek/has
-// all treat TTL-expired entries as absent.
+// TestDeferredAnnounceCacheLifecycle covers the multi-candidate deferred-announce
+// cache: one candidate per (blockHash, peerID) refreshed in place, multiple
+// peers' candidates coexisting for the same block, the per-block / per-peer /
+// global caps, and take/peekPeer/has treating TTL-expired entries as absent.
 func TestDeferredAnnounceCacheLifecycle(t *testing.T) {
-	ann := func(b byte) wit.SignedWitnessAnnouncement {
+	annHash := func(block, witness byte) wit.SignedWitnessAnnouncement {
 		return wit.SignedWitnessAnnouncement{
-			BlockHash:   common.BytesToHash([]byte{b}),
-			BlockNumber: uint64(b),
+			BlockHash:   common.BytesToHash([]byte{block}),
+			BlockNumber: uint64(block),
+			WitnessHash: common.BytesToHash([]byte{0xc0, witness}),
 			Signature:   make([]byte, wit.SignatureLength),
 		}
 	}
+	ann := func(b byte) wit.SignedWitnessAnnouncement { return annHash(b, b) }
 
 	// Tiny capacity still yields a usable per-peer share of 1.
 	tiny := newDeferredAnnounceCache(1)
 	require.Equal(t, 1, tiny.perPeerCap)
 
-	c := newDeferredAnnounceCache(4) // perPeerCap = 4/divisor (>=1)
+	c := newDeferredAnnounceCache(64)
 
-	// Same-hash overwrite from a different peer moves the credit.
+	// Re-put from the same peer for the same block refreshes in place (no new
+	// slot); a second peer's announce for the same block coexists as a distinct
+	// candidate rather than evicting the first.
 	c.put(ann(1), "peer-a")
-	c.put(ann(1), "peer-b")
-	_, peerID, ok := c.peek(ann(1).BlockHash)
-	require.True(t, ok)
-	require.Equal(t, "peer-b", peerID, "latest relayer must carry the deferred entry")
+	c.put(annHash(1, 0xaa), "peer-a") // same peer, revised hash: in place
+	c.put(ann(1), "peer-b")           // different peer: second candidate
 	c.mu.Lock()
-	require.NotContains(t, c.perPeer, "peer-a", "overwritten relayer must get its credit back")
+	require.Len(t, c.entries[ann(1).BlockHash], 2, "two distinct peers must yield two candidates")
+	require.Equal(t, 1, c.perPeer["peer-a"], "same-peer re-put must not consume a second slot")
+	require.Equal(t, 1, c.perPeer["peer-b"])
 	c.mu.Unlock()
+	peerID, ok := c.peekPeer(ann(1).BlockHash)
+	require.True(t, ok)
+	require.Equal(t, "peer-b", peerID, "peekPeer returns the freshest candidate's relayer")
 
-	// Per-peer cap: one peer cannot occupy more than its share.
-	for i := byte(10); i < 20; i++ {
+	// Per-block cap: distinct peers beyond the cap are dropped, not evicting
+	// the candidates already present.
+	pb := newDeferredAnnounceCache(256)
+	for i := range deferredAnnounceMaxCandidatesPerBlock + 5 {
+		pb.put(ann(1), fmt.Sprintf("pb-peer-%d", i))
+	}
+	pb.mu.Lock()
+	require.Len(t, pb.entries[ann(1).BlockHash], deferredAnnounceMaxCandidatesPerBlock,
+		"per-block candidate count must be capped")
+	pb.mu.Unlock()
+
+	// Per-peer cap: one peer cannot occupy more than its share across blocks.
+	for i := byte(10); i < 40; i++ {
 		c.put(ann(i), "hog")
 	}
 	c.mu.Lock()
@@ -267,7 +285,7 @@ func TestDeferredAnnounceCacheLifecycle(t *testing.T) {
 	full := newDeferredAnnounceCache(2)
 	full.put(ann(1), "p1")
 	full.mu.Lock()
-	full.entries[ann(1).BlockHash].receivedAt = time.Now().Add(-10 * time.Second)
+	full.entries[ann(1).BlockHash][0].receivedAt = time.Now().Add(-10 * time.Second)
 	full.mu.Unlock()
 	full.put(ann(2), "p2")
 	full.put(ann(3), "p3")
@@ -275,14 +293,14 @@ func TestDeferredAnnounceCacheLifecycle(t *testing.T) {
 	require.True(t, full.has(ann(2).BlockHash))
 	require.True(t, full.has(ann(3).BlockHash))
 
-	// Expiry: take/peek/has all treat a TTL-expired entry as gone.
+	// Expiry: take/peekPeer/has all treat a TTL-expired entry as gone.
 	exp := newDeferredAnnounceCache(4)
 	exp.put(ann(7), "p7")
 	exp.mu.Lock()
-	exp.entries[ann(7).BlockHash].receivedAt = time.Now().Add(-2 * wit2AnnounceTTL)
+	exp.entries[ann(7).BlockHash][0].receivedAt = time.Now().Add(-2 * wit2AnnounceTTL)
 	exp.mu.Unlock()
 	require.False(t, exp.has(ann(7).BlockHash))
-	_, _, ok = exp.peek(ann(7).BlockHash)
+	_, ok = exp.peekPeer(ann(7).BlockHash)
 	require.False(t, ok)
 	_, ok = exp.take(ann(7).BlockHash)
 	require.False(t, ok, "expired entry must not be returned by take")
@@ -290,7 +308,7 @@ func TestDeferredAnnounceCacheLifecycle(t *testing.T) {
 	// Miss paths.
 	_, ok = exp.take(common.HexToHash("0xabsent"))
 	require.False(t, ok)
-	_, _, ok = exp.peek(common.HexToHash("0xabsent"))
+	_, ok = exp.peekPeer(common.HexToHash("0xabsent"))
 	require.False(t, ok)
 }
 
@@ -663,6 +681,29 @@ func TestDrainDeferredAnnouncesLifecycle(t *testing.T) {
 	h.handler.drainDeferredAnnouncesFor(annS.BlockHash)
 }
 
+// TestPendingWitnessBodyCachePutOverwriteKeepsCapacity guards against the
+// eviction-on-overwrite bug: at capacity, a second put for a hash already in
+// the cache must overwrite in place without evicting an unrelated live entry.
+func TestPendingWitnessBodyCachePutOverwriteKeepsCapacity(t *testing.T) {
+	const capacity = 4
+	bodies := newPendingWitnessBodyCache(capacity)
+	hashes := make([]common.Hash, capacity)
+	for i := range capacity {
+		hashes[i] = common.BytesToHash([]byte{byte(i + 1)})
+		bodies.put(hashes[i], []byte{byte(i + 1)}, common.BytesToHash([]byte{byte(0xa0 + i)}))
+	}
+	require.Len(t, bodies.entries, capacity, "cache should be full")
+
+	// Overwrite an existing key while at capacity (the fetch + broadcast race).
+	bodies.put(hashes[0], []byte{0xff}, common.BytesToHash([]byte{0xff}))
+
+	require.Len(t, bodies.entries, capacity, "overwrite at capacity must not shrink the cache")
+	for _, h := range hashes {
+		_, _, ok := bodies.get(h)
+		require.True(t, ok, "no unrelated entry should have been evicted by an overwrite: %s", h.Hex())
+	}
+}
+
 // TestCacheGCSweepsExpiredEntries drives the TTL gc branch of each wit2
 // cache: an entry older than the TTL must be dropped by the next write,
 // including the relayer-credit refund in the deferred cache and the
@@ -704,7 +745,7 @@ func TestCacheGCSweepsExpiredEntries(t *testing.T) {
 	deferred := newDeferredAnnounceCache(8)
 	deferred.put(wit.SignedWitnessAnnouncement{BlockHash: hashA, Signature: make([]byte, wit.SignatureLength)}, "relayer")
 	deferred.mu.Lock()
-	deferred.entries[hashA].receivedAt = stale
+	deferred.entries[hashA][0].receivedAt = stale
 	deferred.mu.Unlock()
 	deferred.put(wit.SignedWitnessAnnouncement{BlockHash: hashB, Signature: make([]byte, wit.SignatureLength)}, "other")
 	deferred.mu.Lock()
