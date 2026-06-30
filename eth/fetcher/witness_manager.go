@@ -73,6 +73,14 @@ type signedWitnessHashFn func(blockHash common.Hash) (witnessHash common.Hash, o
 // keccak256 of the canonical encoding, identical to what the BP signed.
 type cacheWitnessForServingFn func(blockHash common.Hash, witnessBytes []byte, witnessHash common.Hash)
 
+// peerStrikeFn records a WIT2 misbehavior strike against a peer (by id) that
+// served a non-empty witness whose bytes mismatch the on-file BP-signed hash.
+// Unlike peerDropFn it does not immediately disconnect: a single mismatch is
+// tolerated (a faulty/malicious BP that signed a bogus hash makes honest servers
+// mismatch too), but sustained byte-serving misbehavior accrues toward the same
+// disconnect threshold as bad announces. Optional; nil disables the penalty.
+type peerStrikeFn func(id string)
+
 // witnessManager handles the logic specific to fetching and managing witnesses
 // for blocks, isolating it from the main BlockFetcher loop.
 type witnessManager struct {
@@ -87,6 +95,7 @@ type witnessManager struct {
 	parentCurrentHeader          currentHeaderFn          // Retrieve current block header for gas limit
 	parentSignedWitnessHash      signedWitnessHashFn      // WIT2: lookup a BP-signed witness hash for byte-correctness verification
 	parentCacheWitnessForServing cacheWitnessForServingFn // WIT2: hand bytes to the handler for pre-import serving by peers
+	parentStrikeWitnessServer    peerStrikeFn             // WIT2: strike a peer that served non-empty bytes mismatching the signed hash (optional)
 
 	// Witness-specific state
 	pending            map[common.Hash]*witnessRequestState         // Blocks waiting for witness or actively fetching.
@@ -882,6 +891,12 @@ func (m *witnessManager) markWitnessUnavailable(hash common.Hash) {
 	m.witnessUnavailable[hash] = expiry
 	// Remove from pending state if it exists, as we won't fetch it now
 	delete(m.pending, hash)
+	// Clear any signed-hash mismatch/quarantine state for this block too. This is
+	// the fourth pending-removal exit (alongside the soft-fail removePending,
+	// safeEnqueue, and forget paths); without it a quarantined hash that then
+	// exhausts its fetch retries leaks its quarantine entry for the process
+	// lifetime (the quarantine maps have no TTL or periodic GC).
+	m.clearSignedHashMismatch(hash)
 	m.mu.Unlock()
 
 	m.rescheduleWitness() // Recalculate timer based on remaining pending items

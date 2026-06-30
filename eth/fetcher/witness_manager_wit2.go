@@ -95,6 +95,18 @@ func (m *witnessManager) verifyAgainstSignedHash(peer string, hash common.Hash, 
 			log.Warn("[wm] Witness bytes do not match BP-signed hash; not caching, retrying with another peer",
 				"peer", peer, "block", hash, "expected", expected, "actual", actual)
 		}
+		// Penalize the server. It returned a NON-EMPTY witness whose bytes
+		// contradict the on-file signed commitment — provably misbehaving relative
+		// to an honest empty "not ready" response. This is a STRIKE, not a drop:
+		// a faulty/malicious BP that signed a bogus hash makes honest servers
+		// mismatch too, so a single mismatch stays tolerated, but a sybil that
+		// repeatedly serves garbage (to weaponise the distinct-server quarantine as
+		// a targeted WIT1 downgrade, or to feed bytes that fail import) accrues
+		// toward disconnect instead of mismatching for free. Import-time execution
+		// remains the final arbiter of byte content.
+		if peer != "" && m.parentStrikeWitnessServer != nil {
+			m.parentStrikeWitnessServer(peer)
+		}
 		m.handleWitnessFetchFailureExt(hash, "", errors.New("witness hash mismatch"), false)
 		return nil, common.Hash{}, false
 	}

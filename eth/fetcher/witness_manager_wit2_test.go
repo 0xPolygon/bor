@@ -365,6 +365,100 @@ func TestSignedHashQuarantineAfterDistinctMismatches(t *testing.T) {
 	}
 }
 
+// TestMarkWitnessUnavailableClearsQuarantine is the regression for the F8
+// quarantine-map leak (review finding C-2): clearSignedHashMismatch is wired to
+// the three pending-removal exits (soft-fail removePending, safeEnqueue, forget)
+// but NOT to the retry-exhaustion exit (markWitnessUnavailable). A block that
+// gets quarantined and then exhausts its fetch retries must not leak its
+// quarantine entry for the process lifetime.
+func TestMarkWitnessUnavailableClearsQuarantine(t *testing.T) {
+	tw := newTestWitnessManager()
+	defer tw.Close()
+
+	hash := common.HexToHash("0xfeed")
+
+	// Quarantine the signed hash via two distinct-server mismatches.
+	tw.manager.recordSignedHashMismatch(hash, "s1")
+	if !tw.manager.recordSignedHashMismatch(hash, "s2") {
+		t.Fatal("two distinct mismatches must quarantine the hash")
+	}
+	if !tw.manager.isSignedHashQuarantined(hash) {
+		t.Fatal("precondition: hash must be quarantined")
+	}
+
+	// The retry-exhaustion exit must clear the quarantine state (else it leaks
+	// permanently — there is no TTL or periodic GC on the quarantine maps).
+	tw.manager.markWitnessUnavailable(hash)
+
+	if tw.manager.isSignedHashQuarantined(hash) {
+		t.Fatal("markWitnessUnavailable must clear quarantine state; otherwise it leaks for the process lifetime")
+	}
+}
+
+// TestVerifyAgainstSignedHashStrikesNonEmptyMismatchServer is the regression for
+// the quarantine-weaponization / unpenalized-bad-bytes finding (E-1/E-2): a peer
+// that serves a NON-EMPTY witness whose bytes mismatch the on-file signed hash is
+// misbehaving relative to an honest empty "not ready" response, and must be struck
+// so a sybil cannot drive the distinct-server quarantine (or feed bad bytes that
+// fail import) for free. The penalty is a STRIKE, not a drop — a faulty/malicious
+// BP that signed a bogus hash makes honest servers mismatch too, so a single
+// mismatch stays tolerated (see TestProcessWitnessResponseDoesNotDropOnByteMismatch).
+func TestVerifyAgainstSignedHashStrikesNonEmptyMismatchServer(t *testing.T) {
+	tw := newTestWitnessManager()
+	defer tw.Close()
+
+	block := createTestBlock(305)
+	hash := block.Hash()
+	witness := createTestWitnessForBlock(block)
+
+	// Signed hash on file does not match the served (canonical) bytes.
+	tw.manager.parentSignedWitnessHash = func(h common.Hash) (common.Hash, bool) {
+		if h == hash {
+			return common.HexToHash("0xdeadbeef"), true
+		}
+		return common.Hash{}, false
+	}
+
+	var struck []string
+	tw.manager.parentStrikeWitnessServer = func(peer string) {
+		struck = append(struck, peer)
+	}
+
+	if _, _, ok := tw.manager.verifyAgainstSignedHash("sybil-server", hash, witness); ok {
+		t.Fatal("non-empty byte mismatch must return ok=false")
+	}
+	if len(struck) != 1 || struck[0] != "sybil-server" {
+		t.Fatalf("a server that served non-empty mismatching bytes must be struck; got strikes=%v", struck)
+	}
+
+	// Must NOT also drop the peer (drop would let a bad BP hash disconnect honest
+	// servers — the whole reason mismatch does not drop).
+	requireNoDroppedPeers(t, tw, "byte-mismatch must strike, not drop")
+}
+
+// TestVerifyAgainstSignedHashDoesNotStrikeOnWit1Path guards the converse: with no
+// signed hash on file (WIT1 fallback) there is nothing to verify against, so the
+// server is never struck.
+func TestVerifyAgainstSignedHashDoesNotStrikeOnWit1Path(t *testing.T) {
+	tw := newTestWitnessManager()
+	defer tw.Close()
+
+	block := createTestBlock(306)
+	hash := block.Hash()
+	witness := createTestWitnessForBlock(block)
+
+	tw.manager.parentSignedWitnessHash = func(common.Hash) (common.Hash, bool) {
+		return common.Hash{}, false
+	}
+	struck := 0
+	tw.manager.parentStrikeWitnessServer = func(string) { struck++ }
+
+	tw.manager.verifyAgainstSignedHash("wit1-peer", hash, witness)
+	if struck != 0 {
+		t.Fatalf("WIT1 path (no signed hash on file) must not strike; got %d", struck)
+	}
+}
+
 // TestSignedHashSingleServerDoesNotQuarantine guards the asymmetry: many
 // mismatches from the SAME single server must never quarantine a signed hash —
 // otherwise one malicious byte-server could force every block it touches down

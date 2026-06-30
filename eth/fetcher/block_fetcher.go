@@ -323,6 +323,17 @@ func (f *BlockFetcher) Stop() {
 	close(f.quit)
 }
 
+// SetWitnessServerStriker wires the callback used to penalize a peer that serves
+// a non-empty witness whose bytes mismatch the BP-signed commitment (WIT2). It
+// is set post-construction (rather than threaded through NewBlockFetcher) to keep
+// the constructor signature stable. Must be called before Start; optional —
+// when unset, byte-mismatch servers are not struck.
+func (f *BlockFetcher) SetWitnessServerStriker(fn func(id string)) {
+	if f.wm != nil {
+		f.wm.parentStrikeWitnessServer = fn
+	}
+}
+
 // Notify announces the fetcher of the potential availability of a new block in
 // the network.
 func (f *BlockFetcher) Notify(peer string, hash common.Hash, number uint64, time time.Time,

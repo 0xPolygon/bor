@@ -344,6 +344,9 @@ func newHandler(config *handlerConfig) (*handler, error) {
 	}
 
 	h.blockFetcher = fetcher.NewBlockFetcher(false, nil, h.chain.GetBlockByHash, validator, h.BroadcastBlock, heighter, h.chain.CurrentHeader, nil, inserter, h.removePeer, h.jailPeer, h.enableBlockTracking, h.statelessSync.Load() || h.syncWithWitnesses, config.gasCeil, h.lookupSignedWitnessHash, h.cacheVerifiedWitnessForServing)
+	// WIT2: penalize a peer that serves a non-empty witness whose bytes mismatch
+	// the BP-signed commitment (strike, not drop — see strikeWit2PeerByID).
+	h.blockFetcher.SetWitnessServerStriker(h.strikeWit2PeerByID)
 
 	fetchTx := func(peer string, hashes []common.Hash) error {
 		p := h.peers.peer(peer)
@@ -610,8 +613,31 @@ func (h *handler) strikeWit2Peer(peer *wit.Peer) {
 		return
 	}
 	wit2StrikeDisconnectMeter.Mark(1)
-	peer.Log().Warn("wit2: disconnecting peer for repeated invalid signed announcements")
+	peer.Log().Warn("wit2: disconnecting and jailing peer for repeated invalid signed announcements")
+	// Jail before disconnecting: removePeer's forget() wipes the strike ledger,
+	// so without a jail the peer could re-dial immediately with a clean slate and
+	// resume. Jail (enode-keyed, like the byte-verification violation path) holds
+	// it off for the jail period. Key rotation still bypasses, but this closes the
+	// trivial same-identity reconnect loop.
+	h.jailPeer(peer.ID())
 	h.removePeer(peer.ID())
+}
+
+// strikeWit2PeerByID records a WIT2 byte-serving strike against the peer with the
+// given id and disconnects+jails it once the threshold is crossed. The witness
+// manager detects byte-mismatches by peer id (not *wit.Peer), so this is its
+// entry point into the same strike budget strikeWit2Peer uses for bad announces:
+// sustained misbehavior across either surface disconnects the peer.
+func (h *handler) strikeWit2PeerByID(id string) {
+	if h.wit2PeerTracker == nil {
+		return
+	}
+	if !h.wit2PeerTracker.strike(id) {
+		return
+	}
+	wit2StrikeDisconnectMeter.Mark(1)
+	h.jailPeer(id)
+	h.removePeer(id)
 }
 
 // unregisterPeer removes a peer from the downloader, fetchers and main peer set.
@@ -623,6 +649,15 @@ func (h *handler) unregisterPeer(id string) {
 		logger = log.New("peer", id)
 	} else {
 		logger = log.New("peer", id[:8])
+	}
+	// Forget any WIT2 per-peer tracker state on the guaranteed teardown path.
+	// This runs for every disconnect (clean/remote-initiated or our own drop),
+	// unlike removePeer which only fires on proactive drops — so the per-peer
+	// announce-budget/strike map cannot leak one entry per disconnecting peer.
+	// Done before the registration check below: tracker state is independent of
+	// peer-set membership and must be cleared even for a half-registered peer.
+	if h.wit2PeerTracker != nil {
+		h.wit2PeerTracker.forget(id)
 	}
 	// Abort if the peer does not exist
 	peer := h.peers.peer(id)

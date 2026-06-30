@@ -590,6 +590,77 @@ func TestStrikeWit2PeerDisconnectsAtLimit(t *testing.T) {
 	require.False(t, tracked, "disconnect must forget the peer's tracker state")
 }
 
+// TestUnregisterPeerForgetsWit2TrackerState is the regression for the
+// peerWit2Tracker leak (review finding C-1): forget() was wired only to
+// removePeer (proactive drops), not to unregisterPeer — the universal teardown
+// that runs on every clean/remote-initiated disconnect. A peer that connects,
+// sends one announce (seeding tracker state), then disconnects on its own thus
+// leaked a per-peer entry forever, with no GC. The fix forgets in unregisterPeer.
+func TestUnregisterPeerForgetsWit2TrackerState(t *testing.T) {
+	h := newTestHandler()
+	defer h.close()
+
+	const peerID = "wit2-leaker"
+	// Seed tracker state exactly as an inbound announce does (allow() on first
+	// contact creates the per-peer entry).
+	require.True(t, h.handler.wit2PeerTracker.allow(peerID, 1))
+	h.handler.wit2PeerTracker.mu.Lock()
+	_, seeded := h.handler.wit2PeerTracker.state[peerID]
+	h.handler.wit2PeerTracker.mu.Unlock()
+	require.True(t, seeded, "precondition: announce must seed tracker state")
+
+	// The universal teardown path for a clean / remote-initiated disconnect.
+	h.handler.unregisterPeer(peerID)
+
+	h.handler.wit2PeerTracker.mu.Lock()
+	_, tracked := h.handler.wit2PeerTracker.state[peerID]
+	h.handler.wit2PeerTracker.mu.Unlock()
+	require.False(t, tracked, "clean disconnect (unregisterPeer) must forget wit2 tracker state; otherwise it leaks one entry per peer with no GC")
+}
+
+// TestStrikeWit2PeerJailsAtLimit is the regression for the strike-discipline gap
+// (review finding D-1): crossing the wit2 strike limit only disconnected the peer
+// (removePeer) and wiped its strike state (forget), so it could re-dial with a
+// clean ledger immediately. The byte-verification violation path already jails;
+// the announce-strike path must too, so a forger is held off for the jail period.
+func TestStrikeWit2PeerJailsAtLimit(t *testing.T) {
+	setup := setupJailPeerTest(t, true)
+	h := setup.handler
+
+	peer, cleanup := newTestWit2PeerWithReader()
+	defer cleanup()
+	nodeID, err := enode.ParseID(peer.ID())
+	require.NoError(t, err)
+
+	for range wit2MisbehaviorStrikeLimit - 1 {
+		h.strikeWit2Peer(peer)
+	}
+	require.False(t, wit2PeerIsJailed(t, setup.p2pServer, nodeID), "must not jail before crossing the strike limit")
+
+	h.strikeWit2Peer(peer) // crosses the threshold
+	require.True(t, wit2PeerIsJailed(t, setup.p2pServer, nodeID), "crossing the wit2 strike limit must jail the peer, not just disconnect it")
+}
+
+// TestStrikeWit2PeerByIDJailsAtLimit confirms the handler-side target of the
+// witness-manager byte-mismatch striker (E-1/E-2 wiring): repeated byte-serving
+// strikes share the announce strike budget and disconnect+jail at the threshold.
+func TestStrikeWit2PeerByIDJailsAtLimit(t *testing.T) {
+	setup := setupJailPeerTest(t, true)
+	h := setup.handler
+
+	var nodeID enode.ID
+	rand.Read(nodeID[:])
+	peerID := nodeID.String()
+
+	for range wit2MisbehaviorStrikeLimit - 1 {
+		h.strikeWit2PeerByID(peerID)
+	}
+	require.False(t, wit2PeerIsJailed(t, setup.p2pServer, nodeID), "must not jail before crossing the strike limit")
+
+	h.strikeWit2PeerByID(peerID) // crosses the threshold
+	require.True(t, wit2PeerIsJailed(t, setup.p2pServer, nodeID), "byte-serving strikes must disconnect+jail at the limit")
+}
+
 // TestHandleWitnessBroadcastSignedMatchCachesAndServes covers the WIT2 accept
 // path of the unsolicited-body broadcast: bytes matching the BP-signed
 // commitment are cached for pre-import serving and the sender is marked as a
