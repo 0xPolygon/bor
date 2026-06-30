@@ -15,7 +15,6 @@ import (
 	"container/heap"
 	"fmt"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -121,13 +120,37 @@ func (t *importSlowTxTopTracker) flushLocked(now time.Time) {
 		return entries[i].duration > entries[j].duration
 	})
 
-	log.Warn("Slowest import transactions in window",
-		"windowStart", common.PrettyTime(windowStart),
-		"windowEnd", common.PrettyTime(now),
+	// One short line per entry: geth's log handler truncates a single very long
+	// record, so we emit the window header plus one line per slow tx. Grep
+	// "slow import tx" to collect entries; the windowEnd field groups them.
+	log.Warn("Slowest import txs window",
+		"windowStart", windowStart.Format("15:04:05"),
+		"windowEnd", now.Format("15:04:05"),
 		"window", common.PrettyDuration(now.Sub(windowStart)),
 		"count", len(entries),
-		"slowTxs", formatImportSlowTxs(entries),
 	)
+	windowTag := now.Format("15:04:05")
+	for i := range entries {
+		to := "contract-creation"
+		if entries[i].to != nil {
+			to = entries[i].to.Hex()
+		}
+		sel := entries[i].selector
+		if sel == "" {
+			sel = "-"
+		}
+		log.Warn("slow import tx",
+			"win", windowTag,
+			"rank", i+1,
+			"dur", common.PrettyDuration(entries[i].duration),
+			"blk", entries[i].blockNumber,
+			"idx", entries[i].txIndex,
+			"to", to,
+			"sel", sel,
+			"gas", entries[i].gasUsed,
+			"hash", entries[i].hash.Hex(),
+		)
+	}
 }
 
 // selectorOf returns the 4-byte function selector as "0x........", or "" when
@@ -140,27 +163,3 @@ func selectorOf(tx *types.Transaction) string {
 	return fmt.Sprintf("0x%x", d[:4])
 }
 
-func formatImportSlowTxs(entries []importTxTimingEntry) string {
-	parts := make([]string, 0, len(entries))
-	for i := range entries {
-		to := "contract-creation"
-		if entries[i].to != nil {
-			to = entries[i].to.Hex()
-		}
-		sel := entries[i].selector
-		if sel == "" {
-			sel = "-"
-		}
-		parts = append(parts, fmt.Sprintf("#%d[blk=%d idx=%d dur=%s to=%s sel=%s gas=%d %s]",
-			i+1,
-			entries[i].blockNumber,
-			entries[i].txIndex,
-			common.PrettyDuration(entries[i].duration),
-			to,
-			sel,
-			entries[i].gasUsed,
-			entries[i].hash.Hex(),
-		))
-	}
-	return strings.Join(parts, " ")
-}
