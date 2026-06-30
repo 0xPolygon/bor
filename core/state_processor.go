@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	cmath "github.com/ethereum/go-ethereum/common/math"
@@ -124,10 +125,15 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 
 		statedb.SetTxContext(tx.Hash(), i)
 
+		txStart := time.Now()
 		receipt, err := ApplyTransactionWithEVM(msg, gp, statedb, blockNumber, blockHash, context.Time, tx, usedGas, evm)
 		if err != nil {
 			return nil, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
 		}
+		// Import-path per-tx timing: track the slowest txs over a rolling window
+		// so we can see which patterns dominate execution cost as the native
+		// getCollectionId ladder accelerates the CTF crypto. Serial path only.
+		importSlowTxTracker.record(blockNumber.Uint64(), i, tx, receipt.GasUsed, time.Since(txStart), time.Now())
 
 		receipts = append(receipts, receipt)
 		allLogs = append(allLogs, receipt.Logs...)
