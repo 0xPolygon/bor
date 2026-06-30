@@ -618,6 +618,65 @@ func TestUnregisterPeerForgetsWit2TrackerState(t *testing.T) {
 	require.False(t, tracked, "clean disconnect (unregisterPeer) must forget wit2 tracker state; otherwise it leaks one entry per peer with no GC")
 }
 
+// TestUnregisterPeerForgetsWitnessWaiters is the regression for the witness-waiter
+// registry leak (review finding H2.1): witnessWaiters retained a *wit.Peer keyed
+// by hash->peerID with no cleanup on disconnect, unlike wit2PeerTracker which is
+// forgotten in unregisterPeer. A peer that asked for a not-yet-available witness
+// then disconnected left its peer pointer (and the per-peer caches it pins)
+// recorded until the 30s TTL. The fix forgets the peer from every waiter bucket
+// on the universal teardown path, symmetric with the C-1 tracker fix.
+func TestUnregisterPeerForgetsWitnessWaiters(t *testing.T) {
+	h := newTestHandler()
+	defer h.close()
+
+	peer, cleanup := newTestWit2PeerWithReader()
+	defer cleanup()
+
+	header := &types.Header{Number: big.NewInt(701)}
+	hash := header.Hash()
+
+	// A peer asks for a witness we don't yet hold: record() is the same call
+	// handleGetWitness makes when a signed announce is on file but the body has
+	// not arrived.
+	h.handler.witnessWaiters.record(hash, peer)
+	require.True(t, h.handler.witnessWaiters.has(hash), "precondition: peer must be recorded as a waiter")
+
+	// The universal teardown path for a clean / remote-initiated disconnect.
+	h.handler.unregisterPeer(peer.ID())
+
+	require.False(t, h.handler.witnessWaiters.has(hash),
+		"clean disconnect (unregisterPeer) must forget witness-waiter state; otherwise a departed peer's *wit.Peer is retained until the 30s TTL")
+}
+
+// TestOnBlockImportedDropsPendingWitnessBody is the regression for the pre-import
+// body cache leak (review finding H3.1): pendingWitnessBodyCache.drop() had no
+// production caller, so bytes cached for pre-import serving were never released on
+// import — they lingered until capacity eviction or the 30s TTL, holding up to
+// ~500MB longer than the "dropped after the body is written to chain storage"
+// contract the cache documents. The fix drops the entry from the per-import
+// chain-head hook the moment the body is in chain storage (servable from rawdb).
+func TestOnBlockImportedDropsPendingWitnessBody(t *testing.T) {
+	h := newTestHandler()
+	defer h.close()
+
+	header := &types.Header{Number: big.NewInt(702)}
+	hash := header.Hash()
+	body := []byte{0x01, 0x02, 0x03, 0x04}
+
+	h.handler.pendingWitnessBodies.put(hash, body, crypto.Keccak256Hash(body))
+	if _, _, ok := h.handler.pendingWitnessBodies.get(hash); !ok {
+		t.Fatal("precondition: body must be cached pre-import")
+	}
+
+	// Simulate the block's header becoming local — the chain-head loop runs this
+	// per imported block.
+	h.handler.onBlockImported(hash)
+
+	if _, _, ok := h.handler.pendingWitnessBodies.get(hash); ok {
+		t.Fatal("import must drop the redundant pre-import body (now servable from chain storage); leaving it pins up to ~500MB past the TTL")
+	}
+}
+
 // TestStrikeWit2PeerJailsAtLimit is the regression for the strike-discipline gap
 // (review finding D-1): crossing the wit2 strike limit only disconnected the peer
 // (removePeer) and wiped its strike state (forget), so it could re-dial with a

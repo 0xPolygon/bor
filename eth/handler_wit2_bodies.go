@@ -235,6 +235,25 @@ func (r *witnessWaiterRegistry) take(hash common.Hash) []*wit.Peer {
 	return out
 }
 
+// forget removes peerID from every hash bucket it waits on, dropping any bucket
+// left empty. Called on peer disconnect so a departed peer's *wit.Peer (and the
+// per-peer caches it transitively pins) is released immediately rather than
+// lingering until the TTL — symmetric with wit2PeerTracker.forget on the same
+// teardown path.
+func (r *witnessWaiterRegistry) forget(peerID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for h, per := range r.waiters {
+		if _, ok := per[peerID]; !ok {
+			continue
+		}
+		delete(per, peerID)
+		if len(per) == 0 {
+			delete(r.waiters, h)
+		}
+	}
+}
+
 // gcLocked drops expired waiter entries and empty buckets. Caller holds r.mu.
 func (r *witnessWaiterRegistry) gcLocked() {
 	cutoff := time.Now().Add(-witnessWaiterTTL)

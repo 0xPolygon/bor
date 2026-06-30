@@ -659,6 +659,12 @@ func (h *handler) unregisterPeer(id string) {
 	if h.wit2PeerTracker != nil {
 		h.wit2PeerTracker.forget(id)
 	}
+	// Likewise drop any witness-waiter entries this peer holds, on the same
+	// guaranteed teardown path. Otherwise a peer that asked for a not-yet-held
+	// witness and then disconnected leaves its *wit.Peer recorded until the TTL.
+	if h.witnessWaiters != nil {
+		h.witnessWaiters.forget(id)
+	}
 	// Abort if the peer does not exist
 	peer := h.peers.peer(id)
 	if peer == nil {
@@ -747,8 +753,7 @@ func (h *handler) deferredAnnouncesLoop() {
 				return
 			}
 			if ev.Header != nil {
-				h.drainDeferredAnnouncesFor(ev.Header.Hash())
-				h.flushWitnessWaitersForImported(ev.Header.Hash())
+				h.onBlockImported(ev.Header.Hash())
 				// A batched insertChain (downloader catch-up) fires a single
 				// accumulated ChainHeadEvent for the batch's last block, so
 				// draining only the head hash would strand deferred announces for
@@ -778,8 +783,22 @@ func (h *handler) drainResolvedDeferredAnnounces() {
 		if h.chain.GetHeaderByHash(hash) == nil {
 			continue
 		}
-		h.drainDeferredAnnouncesFor(hash)
-		h.flushWitnessWaitersForImported(hash)
+		h.onBlockImported(hash)
+	}
+}
+
+// onBlockImported runs the WIT2 per-imported-block housekeeping for a block whose
+// header is now local: promote its deferred signed announce, push the witness to
+// any peer that asked for it before we held it, and release the now-redundant
+// pre-import body cache entry (the bytes are in chain storage, so GetWitness
+// serves them from rawdb). Invoked from the chain-head loop, once per imported
+// block. Dropping here rather than on TTL/capacity eviction keeps the body cache
+// bounded to genuinely in-flight bodies, as its doc comment promises.
+func (h *handler) onBlockImported(blockHash common.Hash) {
+	h.drainDeferredAnnouncesFor(blockHash)
+	h.flushWitnessWaitersForImported(blockHash)
+	if h.pendingWitnessBodies != nil {
+		h.pendingWitnessBodies.drop(blockHash)
 	}
 }
 
