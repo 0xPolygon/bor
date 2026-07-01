@@ -164,7 +164,9 @@ func (h *ethHandler) resolveWitnessFetchPeer(hash common.Hash) *ethPeer {
 	if p := h.peers.getOnePeerWithWitness(hash); p != nil {
 		return p
 	}
-	if peerID, ok := (*handler)(h).deferredAnnounces.peekPeer(hash); ok {
+	if peerID, ok := (*handler)(h).deferredAnnounces.peekPeer(hash, func(id string) bool {
+		return h.peers.peer(id) != nil
+	}); ok {
 		return h.peers.peer(peerID)
 	}
 	return nil

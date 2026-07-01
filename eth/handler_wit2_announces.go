@@ -294,13 +294,26 @@ func (c *deferredAnnounceCache) take(blockHash common.Hash) ([]*deferredAnnounce
 // consuming any entry, used by the fetch path to find a pull target when no
 // marked body-holder exists. The entries stay in place so the post-import drain
 // still runs the real producer verification, promotion, and relay.
-func (c *deferredAnnounceCache) peekPeer(blockHash common.Hash) (string, bool) {
+//
+// Candidates are scanned in freshness order against isLive: the freshest
+// candidate whose peer is still connected wins. This matters because deferred
+// candidates are deliberately retained across the relayer's disconnect (a
+// producer-signed commitment must outlive the peer that relayed it, so the
+// post-import drain can still promote it). Without the liveness filter, a
+// disconnected relayer whose entry happens to be freshest would keep being
+// returned as the pull target — stranding the consumer for up to the TTL even
+// though up to deferredAnnounceMaxCandidatesPerBlock-1 other live candidates
+// hold the same commitment. A nil isLive treats every candidate as eligible.
+func (c *deferredAnnounceCache) peekPeer(blockHash common.Hash, isLive func(peerID string) bool) (string, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	cutoff := time.Now().Add(-wit2AnnounceTTL)
 	var best *deferredAnnounceEntry
 	for _, e := range c.entries[blockHash] {
 		if e.receivedAt.Before(cutoff) {
+			continue
+		}
+		if isLive != nil && !isLive(e.peerID) {
 			continue
 		}
 		if best == nil || e.receivedAt.After(best.receivedAt) {

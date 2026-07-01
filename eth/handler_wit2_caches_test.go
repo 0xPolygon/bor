@@ -257,7 +257,7 @@ func TestDeferredAnnounceCacheLifecycle(t *testing.T) {
 	require.Equal(t, 1, c.perPeer["peer-a"], "same-peer re-put must not consume a second slot")
 	require.Equal(t, 1, c.perPeer["peer-b"])
 	c.mu.Unlock()
-	peerID, ok := c.peekPeer(ann(1).BlockHash)
+	peerID, ok := c.peekPeer(ann(1).BlockHash, nil)
 	require.True(t, ok)
 	require.Equal(t, "peer-b", peerID, "peekPeer returns the freshest candidate's relayer")
 
@@ -300,7 +300,7 @@ func TestDeferredAnnounceCacheLifecycle(t *testing.T) {
 	exp.entries[ann(7).BlockHash][0].receivedAt = time.Now().Add(-2 * wit2AnnounceTTL)
 	exp.mu.Unlock()
 	require.False(t, exp.has(ann(7).BlockHash))
-	_, ok = exp.peekPeer(ann(7).BlockHash)
+	_, ok = exp.peekPeer(ann(7).BlockHash, nil)
 	require.False(t, ok)
 	_, ok = exp.take(ann(7).BlockHash)
 	require.False(t, ok, "expired entry must not be returned by take")
@@ -308,8 +308,55 @@ func TestDeferredAnnounceCacheLifecycle(t *testing.T) {
 	// Miss paths.
 	_, ok = exp.take(common.HexToHash("0xabsent"))
 	require.False(t, ok)
-	_, ok = exp.peekPeer(common.HexToHash("0xabsent"))
+	_, ok = exp.peekPeer(common.HexToHash("0xabsent"), nil)
 	require.False(t, ok)
+}
+
+// TestPeekPeerSkipsDeadCandidates covers the multi-candidate fetch fallback:
+// when the freshest deferred candidate's relayer has disconnected, peekPeer
+// must skip it and return an older candidate whose peer is still live, rather
+// than surfacing the dead peer and stranding the consumer. Deferred candidates
+// are deliberately retained across disconnect, so without the liveness filter
+// the dead-peer entry would keep winning by freshness until the TTL.
+func TestPeekPeerSkipsDeadCandidates(t *testing.T) {
+	ann := func(b byte) wit.SignedWitnessAnnouncement {
+		return wit.SignedWitnessAnnouncement{
+			BlockHash:   common.BytesToHash([]byte{b}),
+			BlockNumber: uint64(b),
+			WitnessHash: common.BytesToHash([]byte{0xc0, b}),
+			Signature:   make([]byte, wit.SignatureLength),
+		}
+	}
+
+	c := newDeferredAnnounceCache(64)
+	hash := ann(1).BlockHash
+	c.put(ann(1), "live-old")
+	c.put(ann(1), "dead-fresh")
+
+	// Make "dead-fresh" strictly the freshest candidate so it would win a
+	// freshness-only scan.
+	c.mu.Lock()
+	for _, e := range c.entries[hash] {
+		if e.peerID == "live-old" {
+			e.receivedAt = time.Now().Add(-5 * time.Second)
+		}
+	}
+	c.mu.Unlock()
+
+	live := func(id string) bool { return id != "dead-fresh" }
+
+	peerID, ok := c.peekPeer(hash, live)
+	require.True(t, ok, "an older live candidate must still be reachable")
+	require.Equal(t, "live-old", peerID, "peekPeer must skip the freshest dead peer for a live candidate")
+
+	// With every candidate dead, there is no target.
+	_, ok = c.peekPeer(hash, func(string) bool { return false })
+	require.False(t, ok, "no live candidate means no pull target")
+
+	// A nil predicate keeps the original freshest-wins behavior.
+	peerID, ok = c.peekPeer(hash, nil)
+	require.True(t, ok)
+	require.Equal(t, "dead-fresh", peerID, "nil predicate treats every candidate as eligible")
 }
 
 // TestVerifySignedAnnouncementRejectsBadRecoveryID covers the ecrecover
