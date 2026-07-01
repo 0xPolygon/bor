@@ -4511,7 +4511,7 @@ func (bc *BlockChain) verifyPendingHeaders() {
 func (bc *BlockChain) StateSizer() *state.SizeTracker {
 	return bc.stateSizer
 }
-
+// JumpDestCache returns the chain-global shared JUMPDEST analysis cache.
 func (bc *BlockChain) JumpDestCache() vm.JumpDestCache {
 	return bc.jumpDestCache
 }
