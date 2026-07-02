@@ -974,6 +974,59 @@ func TestDeferredDrainPromotesHonestAmongForged(t *testing.T) {
 	require.False(t, h.handler.deferredAnnounces.has(blockHash), "all candidates must be cleared after the drain")
 }
 
+// TestDrainDeferredCandidateBranches locks the two per-candidate branches that
+// the drainDeferredCandidate extraction is responsible for, beyond the
+// promote-honest / drop-forged path covered above: (A) once one producer-valid
+// candidate is promoted, any further producer-valid candidate in the same drain
+// is skipped rather than overwriting the winner; (B) a candidate whose header is
+// still not local is re-stashed (not dropped) so the next chain-head event can
+// retry it before the TTL.
+func TestDrainDeferredCandidateBranches(t *testing.T) {
+	h := newTestHandler()
+	defer h.close()
+
+	sign := func(blockHash common.Hash, number uint64, wh common.Hash) wit.SignedWitnessAnnouncement {
+		key, err := crypto.GenerateKey()
+		require.NoError(t, err)
+		a := wit.SignedWitnessAnnouncement{BlockHash: blockHash, BlockNumber: number, WitnessHash: wh}
+		d := wit.WitnessAnnouncementSigningHash(a.BlockHash, a.BlockNumber, a.WitnessHash)
+		s, err := crypto.Sign(d.Bytes(), key)
+		require.NoError(t, err)
+		a.Signature = s
+		return a
+	}
+
+	// (A) Two producer-valid candidates (header present, matching number) for the
+	// same block. The first inserted must win; the second must be skipped, not
+	// promoted over the winner.
+	headerA := &types.Header{Number: big.NewInt(88_001)}
+	blockA := headerA.Hash()
+	rawdb.WriteHeader(h.chain.DB(), headerA)
+	whFirst := common.HexToHash("0xaaa1")
+	h.handler.deferredAnnounces.put(sign(blockA, headerA.Number.Uint64(), whFirst), "peer-first")
+	h.handler.deferredAnnounces.put(sign(blockA, headerA.Number.Uint64(), common.HexToHash("0xbbb2")), "peer-second")
+
+	h.handler.drainDeferredAnnouncesFor(blockA)
+
+	got, ok := h.handler.signedWitnesses.get(blockA)
+	require.True(t, ok, "a producer-valid candidate must be promoted")
+	require.Equal(t, whFirst, got.WitnessHash, "only the first producer-valid candidate is promoted; later ones are skipped")
+	require.False(t, h.handler.deferredAnnounces.has(blockA), "all candidates cleared after the drain")
+
+	// (B) Header still unavailable at drain time: the candidate must be re-stashed
+	// for a later retry, and nothing promoted.
+	headerB := &types.Header{Number: big.NewInt(88_002)} // deliberately NOT written to the DB
+	blockB := headerB.Hash()
+	h.handler.deferredAnnounces.put(sign(blockB, headerB.Number.Uint64(), common.HexToHash("0xccc3")), "relayer-b")
+	require.True(t, h.handler.deferredAnnounces.has(blockB))
+
+	h.handler.drainDeferredAnnouncesFor(blockB)
+
+	_, ok = h.handler.signedWitnesses.get(blockB)
+	require.False(t, ok, "no local header → nothing promoted")
+	require.True(t, h.handler.deferredAnnounces.has(blockB), "candidate must be re-stashed while the header is still unavailable")
+}
+
 // TestDrainResolvedDeferredAnnouncesCoversBatchedImport is the regression for
 // the claude-bot finding that a batched insertChain (downloader catch-up) fires
 // a single accumulated ChainHeadEvent for the batch's last block, so draining

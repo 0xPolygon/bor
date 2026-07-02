@@ -381,44 +381,57 @@ func (h *handler) drainDeferredAnnouncesFor(blockHash common.Hash) {
 	}
 	promoted := false
 	for _, entry := range candidates {
-		signer, err := verifySignedAnnouncement(entry.announcement)
-		if err != nil {
-			// Should be unreachable: we re-verified the same bytes that already
-			// passed the signature check at acceptSignedAnnouncement time.
-			// Surfaced via metric in case a future refactor reorders this.
-			wit2InvalidSigMeter.Mark(1)
-			log.Debug("wit2: deferred announce failed signature re-check", "blockHash", blockHash, "err", err)
-			continue
+		if h.drainDeferredCandidate(blockHash, entry, promoted) {
+			promoted = true
 		}
-		prodOk, headerAvailable := h.isScheduledProducer(signer, entry.announcement.BlockNumber, blockHash)
-		if !prodOk {
-			if !headerAvailable {
-				// Header still not local — re-stash with fresh receivedAt so the
-				// next chain-head event can try again before the TTL expires.
-				h.deferredAnnounces.put(entry.announcement, entry.peerID)
-				continue
-			}
-			wit2NotValidatorMeter.Mark(1)
-			log.Debug("wit2: deferred announce signer is not the scheduled producer",
-				"blockHash", blockHash, "signer", signer)
-			continue
-		}
-		// Producer match. Promote the first one; any further producer-signed
-		// candidate is a duplicate of the same authorized signer.
-		if promoted {
-			continue
-		}
-		if !h.signedWitnesses.putIfNewer(entry.announcement) {
-			wit2DuplicateMeter.Mark(1)
-			continue
-		}
-		promoted = true
-		// Credit the original sender as announce-known so we don't re-relay back.
-		if peer := h.peers.peer(entry.peerID); peer != nil && peer.witPeer != nil {
-			peer.witPeer.Peer.AddKnownAnnounce(blockHash)
-		}
-		h.relaySignedAnnouncement(entry.peerID, entry.announcement)
 	}
+}
+
+// drainDeferredCandidate re-evaluates a single deferred candidate for blockHash
+// once its header is local, returning true only when it promoted the candidate
+// into signedWitnesses (so the caller can suppress promotion of any further
+// producer-signed duplicate). alreadyPromoted reports whether an earlier
+// candidate in the same drain already won promotion. Extracted from
+// drainDeferredAnnouncesFor purely to keep each function's control flow shallow;
+// the branch order and side effects are identical to the inline loop body.
+func (h *handler) drainDeferredCandidate(blockHash common.Hash, entry *deferredAnnounceEntry, alreadyPromoted bool) bool {
+	signer, err := verifySignedAnnouncement(entry.announcement)
+	if err != nil {
+		// Should be unreachable: we re-verified the same bytes that already
+		// passed the signature check at acceptSignedAnnouncement time.
+		// Surfaced via metric in case a future refactor reorders this.
+		wit2InvalidSigMeter.Mark(1)
+		log.Debug("wit2: deferred announce failed signature re-check", "blockHash", blockHash, "err", err)
+		return false
+	}
+	prodOk, headerAvailable := h.isScheduledProducer(signer, entry.announcement.BlockNumber, blockHash)
+	if !prodOk {
+		if !headerAvailable {
+			// Header still not local — re-stash with fresh receivedAt so the
+			// next chain-head event can try again before the TTL expires.
+			h.deferredAnnounces.put(entry.announcement, entry.peerID)
+			return false
+		}
+		wit2NotValidatorMeter.Mark(1)
+		log.Debug("wit2: deferred announce signer is not the scheduled producer",
+			"blockHash", blockHash, "signer", signer)
+		return false
+	}
+	// Producer match. Promote the first one; any further producer-signed
+	// candidate is a duplicate of the same authorized signer.
+	if alreadyPromoted {
+		return false
+	}
+	if !h.signedWitnesses.putIfNewer(entry.announcement) {
+		wit2DuplicateMeter.Mark(1)
+		return false
+	}
+	// Credit the original sender as announce-known so we don't re-relay back.
+	if peer := h.peers.peer(entry.peerID); peer != nil && peer.witPeer != nil {
+		peer.witPeer.Peer.AddKnownAnnounce(blockHash)
+	}
+	h.relaySignedAnnouncement(entry.peerID, entry.announcement)
+	return true
 }
 
 // verifyScheduledProducer is the pure decision logic for binding a wit2
