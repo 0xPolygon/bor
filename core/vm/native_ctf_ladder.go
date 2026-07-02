@@ -36,7 +36,18 @@ var (
 	// Only the depth==1 frame is timed, so nested CALLs are counted exactly once
 	// (a child frame's wall time is already inside its parent's, never re-added).
 	ladderTotalInterpNs = metrics.NewRegisteredCounter("vm/nativectf/ladder/total_interp_ns", nil)
+	// ladderMulmodModP: authoritative, contract-agnostic ladder counter. Counts
+	// EVERY MULMOD whose modulus operand is the BN254 field prime, at all call
+	// depths, regardless of pure/impure recognition or whether the contract has a
+	// ladder table. Divide by 323 (MULMODs per square-and-multiply ladder) for the
+	// ladder count. This is the complete count for volume/cost — unlike the shadow
+	// match counter, which tallies only the recognized *pure* variants (~68%).
+	ladderMulmodModP = metrics.NewRegisteredCounter("vm/nativectf/ladder/mulmod_modp", nil)
 )
+
+// bn254LadderP is the BN254 base-field prime P; a MULMOD reducing modulo P is the
+// signature of the getCollectionId modular-sqrt ladder.
+var bn254LadderP = uint256.MustFromHex("0x30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd47")
 
 // LadderMetrics is a snapshot of the shadow-mode ladder instrumentation counters,
 // exported so an offline re-exec harness can read them without touching the metrics
@@ -46,17 +57,19 @@ var (
 type LadderMetrics struct {
 	Match, Mismatch, Active     int64
 	InterpNs, NativeNs, TotalNs int64
+	MulmodModP                  int64 // authoritative MULMOD-mod-P count (÷323 = ladders)
 }
 
 // LadderMetricsSnapshot returns the current cumulative ladder instrumentation counters.
 func LadderMetricsSnapshot() LadderMetrics {
 	return LadderMetrics{
-		Match:    ladderShadowMatch.Snapshot().Count(),
-		Mismatch: ladderShadowMismatch.Snapshot().Count(),
-		Active:   ladderActive.Snapshot().Count(),
-		InterpNs: ladderInterpNs.Snapshot().Count(),
-		NativeNs: ladderNativeNs.Snapshot().Count(),
-		TotalNs:  ladderTotalInterpNs.Snapshot().Count(),
+		Match:      ladderShadowMatch.Snapshot().Count(),
+		Mismatch:   ladderShadowMismatch.Snapshot().Count(),
+		Active:     ladderActive.Snapshot().Count(),
+		InterpNs:   ladderInterpNs.Snapshot().Count(),
+		NativeNs:   ladderNativeNs.Snapshot().Count(),
+		TotalNs:    ladderTotalInterpNs.Snapshot().Count(),
+		MulmodModP: ladderMulmodModP.Snapshot().Count(),
 	}
 }
 

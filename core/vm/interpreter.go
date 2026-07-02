@@ -221,7 +221,8 @@ func (evm *EVM) Run(contract *Contract, input []byte, readOnly bool) (ret []byte
 	// check in the loop collapses to a single len()==0 test. Disabled-feature and
 	// traced frames skip it and pay nothing in the loop.
 	var ladderTable map[uint64]nativectf.LadderMeta
-	if evm.Config.NativeCTF != NativeCTFOff && !debug {
+	countLadderMulmod := evm.Config.NativeCTF != NativeCTFOff && !debug
+	if countLadderMulmod {
 		ladderTable = nativectf.LadderTableFor(contract.CodeHash, contract.Code)
 		// Denominator for the overall-gain estimate: total interpreter wall time,
 		// same per-goroutine-wall basis as interp_ns. Only the outermost frame is
@@ -259,6 +260,13 @@ func (evm *EVM) Run(contract *Contract, input []byte, readOnly bool) (ret []byte
 		// Get the operation from the jump table and validate the stack to ensure there are
 		// enough stack items available to perform the operation.
 		op = contract.GetOp(pc)
+
+		// Authoritative ladder counter: every MULMOD reducing modulo the BN254 prime,
+		// at all depths and in any contract (pure or not). ÷323 = ladder count. This
+		// is the complete volume figure; the shadow match counter sees only pure variants.
+		if countLadderMulmod && op == MULMOD && stack.len() >= 3 && stack.Back(2).Eq(bn254LadderP) {
+			ladderMulmodModP.Inc(1)
+		}
 
 		// Native BN254 ladder superinstruction. Gated on a non-empty per-frame table,
 		// so contracts without a ladder (virtually all) pay only this len()==0 test.
