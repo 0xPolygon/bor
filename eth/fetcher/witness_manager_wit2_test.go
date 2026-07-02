@@ -379,7 +379,7 @@ func TestMarkWitnessUnavailableClearsQuarantine(t *testing.T) {
 
 	// Quarantine the signed hash via two distinct-server mismatches.
 	tw.manager.recordSignedHashMismatch(hash, "s1")
-	if !tw.manager.recordSignedHashMismatch(hash, "s2") {
+	if quarantined, _ := tw.manager.recordSignedHashMismatch(hash, "s2"); !quarantined {
 		t.Fatal("two distinct mismatches must quarantine the hash")
 	}
 	if !tw.manager.isSignedHashQuarantined(hash) {
@@ -481,5 +481,39 @@ func TestSignedHashSingleServerDoesNotQuarantine(t *testing.T) {
 	}
 	if tw.manager.isSignedHashQuarantined(hash) {
 		t.Fatal("repeated mismatches from a single server must not quarantine the signed hash")
+	}
+}
+
+// TestVerifyAgainstSignedHashStrikesSolePeerOncePerBlock is the regression for
+// the honest-sole-peer self-DoS: when only one peer is announce-known for a
+// block whose BP-signed hash is bad/stale, the retry loop re-hits that same
+// peer every ~gatherSlack. Striking on every mismatch would jail an honest
+// sole witness source in ~1s, inverting the documented "single mismatch stays
+// tolerated" guarantee. A peer must be struck at most once per (peer, block);
+// cross-block garbage and a second distinct peer are penalized/quarantined
+// elsewhere.
+func TestVerifyAgainstSignedHashStrikesSolePeerOncePerBlock(t *testing.T) {
+	tw := newTestWitnessManager()
+	defer tw.Close()
+
+	block := createTestBlock(307)
+	hash := block.Hash()
+	witness := createTestWitnessForBlock(block)
+
+	tw.manager.parentSignedWitnessHash = func(common.Hash) (common.Hash, bool) {
+		return common.HexToHash("0xdeadbeef"), true
+	}
+	struck := 0
+	tw.manager.parentStrikeWitnessServer = func(string) { struck++ }
+	primePendingWitness(tw, "lonely", block)
+
+	for range 6 {
+		tw.manager.verifyAgainstSignedHash("lonely", hash, witness)
+	}
+	if struck != 1 {
+		t.Fatalf("an honest sole peer must be struck at most once per block, not once per retry; got %d strikes", struck)
+	}
+	if tw.manager.isSignedHashQuarantined(hash) {
+		t.Fatal("a single server must never quarantine the signed hash")
 	}
 }

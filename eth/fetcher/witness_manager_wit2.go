@@ -88,7 +88,8 @@ func (m *witnessManager) verifyAgainstSignedHash(peer string, hash common.Hash, 
 		// the likely culprit (bad/stale producer signature): quarantine it so
 		// the next fetch falls back to WIT1 immediately instead of stalling the
 		// block until the signed announcement's TTL expires.
-		if m.recordSignedHashMismatch(hash, peer) {
+		quarantined, firstMismatchForPeer := m.recordSignedHashMismatch(hash, peer)
+		if quarantined {
 			log.Warn("[wm] BP-signed witness hash repeatedly unmatched by distinct servers; quarantining to WIT1 fallback so the block can import",
 				"block", hash, "expected", expected)
 		} else {
@@ -104,7 +105,16 @@ func (m *witnessManager) verifyAgainstSignedHash(peer string, hash common.Hash, 
 		// a targeted WIT1 downgrade, or to feed bytes that fail import) accrues
 		// toward disconnect instead of mismatching for free. Import-time execution
 		// remains the final arbiter of byte content.
-		if peer != "" && m.parentStrikeWitnessServer != nil {
+		//
+		// Strike only a peer's FIRST mismatch per block. The mismatch path keeps
+		// the pending request alive and reschedules ~gatherSlack later; when a
+		// block has a single announce-known peer, resolveWitnessFetchPeer returns
+		// that same peer on every retry, so striking each time would jail an honest
+		// sole witness source in ~1s — inverting the "single mismatch tolerated"
+		// guarantee. Per-(peer, block) dedup keeps the cross-block sybil penalty
+		// (distinct blocks each strike once) and the distinct-server quarantine
+		// intact while removing the self-DoS on sparse topologies.
+		if firstMismatchForPeer && peer != "" && m.parentStrikeWitnessServer != nil {
 			m.parentStrikeWitnessServer(peer)
 		}
 		m.handleWitnessFetchFailureExt(hash, "", errors.New("witness hash mismatch"), false)
@@ -131,30 +141,37 @@ func (m *witnessManager) isSignedHashQuarantined(hash common.Hash) bool {
 }
 
 // recordSignedHashMismatch records that peer served bytes mismatching the
-// signed hash for block hash. It returns true the moment the distinct-server
-// threshold is reached and the hash is newly quarantined (so the caller logs
-// the downgrade exactly once). An empty peer string is ignored.
-func (m *witnessManager) recordSignedHashMismatch(hash common.Hash, peer string) bool {
+// signed hash for block hash. quarantined is true the moment the distinct-server
+// threshold is reached and the hash is newly quarantined (so the caller logs the
+// downgrade exactly once). firstForPeer is true only when this is peer's first
+// recorded mismatch for this block, so the caller can strike a peer at most once
+// per (peer, block) rather than once per retry — the retry loop re-hits the same
+// sole announce-known peer every ~gatherSlack, and an honest server serving
+// canonical bytes against a bad/stale BP hash would otherwise be jailed in ~1s.
+// An empty peer string is ignored.
+func (m *witnessManager) recordSignedHashMismatch(hash common.Hash, peer string) (quarantined bool, firstForPeer bool) {
 	if peer == "" {
-		return false
+		return false, false
 	}
 	m.wit2QuarantineMu.Lock()
 	defer m.wit2QuarantineMu.Unlock()
 	if _, done := m.wit2Quarantined[hash]; done {
-		return false
+		return false, false
 	}
 	peers := m.wit2MismatchPeers[hash]
 	if peers == nil {
 		peers = make(map[string]struct{})
 		m.wit2MismatchPeers[hash] = peers
 	}
+	_, seen := peers[peer]
+	firstForPeer = !seen
 	peers[peer] = struct{}{}
 	if len(peers) >= signedHashMismatchQuarantineThreshold {
 		m.wit2Quarantined[hash] = struct{}{}
 		delete(m.wit2MismatchPeers, hash)
-		return true
+		return true, firstForPeer
 	}
-	return false
+	return false, firstForPeer
 }
 
 // clearSignedHashMismatch drops all mismatch/quarantine state for a block. Call
