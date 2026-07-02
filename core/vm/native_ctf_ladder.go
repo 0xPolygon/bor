@@ -38,6 +38,28 @@ var (
 	ladderTotalInterpNs = metrics.NewRegisteredCounter("vm/nativectf/ladder/total_interp_ns", nil)
 )
 
+// LadderMetrics is a snapshot of the shadow-mode ladder instrumentation counters,
+// exported so an offline re-exec harness can read them without touching the metrics
+// registry by string name. interp_ns/total_interp_ns is the ladder's share of EVM
+// interpreter execution time; under strictly serial re-execution wall-clock ~= CPU
+// time, so the ratio is meaningful (unlike the original parallel-exec measurement).
+type LadderMetrics struct {
+	Match, Mismatch, Active     int64
+	InterpNs, NativeNs, TotalNs int64
+}
+
+// LadderMetricsSnapshot returns the current cumulative ladder instrumentation counters.
+func LadderMetricsSnapshot() LadderMetrics {
+	return LadderMetrics{
+		Match:    ladderShadowMatch.Snapshot().Count(),
+		Mismatch: ladderShadowMismatch.Snapshot().Count(),
+		Active:   ladderActive.Snapshot().Count(),
+		InterpNs: ladderInterpNs.Snapshot().Count(),
+		NativeNs: ladderNativeNs.Snapshot().Count(),
+		TotalNs:  ladderTotalInterpNs.Snapshot().Count(),
+	}
+}
+
 // ladderShadowRec carries a pending shadow comparison across loop iterations
 // within a single Run frame (the block runs as straight-line code after entry).
 type ladderShadowRec struct {
