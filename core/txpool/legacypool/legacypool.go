@@ -329,7 +329,7 @@ type LegacyPool struct {
 
 	// Reserved-blockspace registry: reader is wired post-Init from the backend;
 	// the snapshot is rebuilt at each reset from the new head's state so the
-	// per-tx admission path never reads contract state (spec §4.5).
+	// per-tx admission path never reads contract state.
 	reservedRegistry registryreader.Reader
 	reservedSnapshot atomic.Pointer[registryreader.Snapshot]
 
@@ -1804,7 +1804,7 @@ func (pool *LegacyPool) reset(oldHead, newHead *types.Header) {
 	pool.pendingNonces = newNoncer(statedb)
 
 	// Refresh the reserved-set snapshot from the new head's state so per-tx
-	// admission classifies without a contract read (spec §4.5).
+	// admission classifies without a contract read.
 	pool.rebuildReservedSnapshot(statedb, newHead)
 
 	// Inject any transactions discarded due to reorgs

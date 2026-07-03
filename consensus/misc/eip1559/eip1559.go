@@ -118,21 +118,14 @@ func CalcBaseFee(config *params.ChainConfig, parent *types.Header) *big.Int {
 	parentGasTarget := calcParentGasTarget(config, parent)
 	parentGasUsed := parent.GasUsed
 
-	// Reserved blockspace prices the public fee market on the normal region
-	// only: hold the reserved capacity out of the target and net the parent's
-	// reserved gas out of the used figure. Reserved txs pay zero in-protocol
-	// fee, so counting them would let a reserved client move the public base
-	// fee with its own usage. Anchoring the target on capacity (not used gas)
-	// keeps the public market stable and isolated from reserved behaviour.
-	//
-	// Note the two halves are not yet symmetric: the capacity-side reduction
-	// (reservedAwareGasTarget) is live, but the used-side netting (publicGasUsed)
-	// reads parent.ReservedGasUsed, which the producer stubs to 0 until its
-	// reserved pass lands (POS-3575). Until then the netting is inert, so under
-	// real reserved load the public base fee runs slightly hot. This is
-	// deterministic — every node reads the same header field — so it is a fee
-	// accuracy gap, not a consensus split. It resolves once POS-3575 populates
-	// ReservedGasUsed; no change is needed here.
+	// Reserved blockspace prices the public fee market on the normal region only:
+	// hold reserved capacity out of the target and net the parent's reserved gas
+	// out of the used figure, so a reserved client paying zero fee can't move the
+	// public base fee with its own usage. Anchoring the target on capacity keeps
+	// the public market stable and isolated from reserved behaviour. The used-side
+	// netting stays inert until the producer populates parent.ReservedGasUsed;
+	// until then the public base fee runs slightly hot — deterministic (a fee
+	// accuracy gap, not a consensus split), so no change is needed here.
 	if config.Bor != nil && config.Bor.IsReservedBlockspace(parent.Number) {
 		parentGasTarget = reservedAwareGasTarget(config, parent)
 		parentGasUsed = publicGasUsed(config, parent)
@@ -223,20 +216,15 @@ func gasTargetForLimit(config *params.ChainConfig, parent *types.Header, gasLimi
 	return gasLimit / config.ElasticityMultiplier()
 }
 
-// reservedAwareGasTarget returns the EIP-1559 target for the public region:
-// the standard curve applied to capacity that excludes the reserved quotas
-// (Σ active client quotas). Header.GasLimit is left untouched — this is a
-// formula-only input.
+// reservedAwareGasTarget returns the EIP-1559 target for the public region: the
+// standard curve applied to capacity that excludes the reserved quotas (Σ active
+// client quotas). Header.GasLimit is left untouched — a formula-only input.
 //
-// The capacity source stays on the config stub rather than the registry
-// snapshot on purpose: CalcBaseFee is a pure (config, parent) function called
-// from RPC, txpool, graphql, and feehistory paths that have no parent StateDB
-// (and some legitimately cannot — pruned, light, historical headers), so a
-// registry state read here would break that contract and risk a parity split.
-// The registry-derived capacity reaches base fee the same way reserved gas
-// used does: a producer-stamped header field read from the parent (Manav's
-// POS-3575/3576). Until that field lands, this half mirrors the inert
-// publicGasUsed half above — deterministic, every node reads the same config.
+// The capacity source is the config rather than the registry on purpose:
+// CalcBaseFee is a pure (config, parent) function called from paths that have no
+// parent state to read the registry from (RPC, txpool, historical headers), so a
+// state read here would break that contract. The registry-derived capacity
+// reaches base fee via a producer-stamped header field instead.
 func reservedAwareGasTarget(config *params.ChainConfig, parent *types.Header) uint64 {
 	reservedCapacity := config.Bor.ReservedCapacity()
 	if reservedCapacity >= parent.GasLimit {

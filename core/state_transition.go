@@ -293,16 +293,13 @@ type stateTransition struct {
 // newStateTransition initialises and returns a new state transition object.
 func newStateTransition(evm *vm.EVM, msg *Message, gp *GasPool) *stateTransition {
 	// Classify the message as reserved-blockspace here — the single point every
-	// execution path (serial, parallel, and the ApplyMessage* variants) funnels
-	// through — so the zero-fee decision is identical across executors. The fork
-	// height gate comes from chain config; the reserved set comes from the parent
-	// registry snapshot on the block context (set per block by the consensus
-	// paths, nil elsewhere), matching the txpool and base-fee sources.
-	//
-	// This sender-based classification is the foundation stand-in. The spec's
-	// end state is position-based (reserved region 0..ReservedTxCount), set by
-	// the producer two-pass and checked by block validation (POS-3575/3576);
-	// that work supersedes this.
+	// execution path (serial, parallel, ApplyMessage*) funnels through — so the
+	// zero-fee decision is identical across executors. The fork gate comes from
+	// chain config; the reserved set from the parent registry snapshot on the
+	// block context (set per block by the consensus paths, nil elsewhere),
+	// matching the txpool and base-fee sources. Classification is sender-based;
+	// position-based enforcement (reserved region 0..ReservedTxCount) is layered
+	// on by the producer two-pass and block validation.
 	var reserved bool
 	if cfg := evm.ChainConfig(); cfg.Bor != nil &&
 		cfg.Bor.IsReservedBlockspace(evm.Context.BlockNumber) &&

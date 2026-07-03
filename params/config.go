@@ -980,13 +980,11 @@ type BorConfig struct {
 	ChicagoBlock               *big.Int          `json:"chicagoBlock"`               // Chicago switch block (nil = no fork, 0 = already on chicago)
 	ReservedBlockspaceBlock    *big.Int          `json:"reservedBlockspaceBlock"`    // ReservedBlockspace switch block (nil = no fork, 0 = already on reservedBlockspace)
 
-	// ReservedClients feeds ONLY the EIP-1559 base-fee capacity carve-out
-	// (ReservedCapacity, consumed by CalcBaseFee, which is pure (config, parent)
-	// and has no parent state to read the registry from). Reserved-sender
-	// classification — admission, EVM fee-skip — is sourced from the registry
-	// contract, not this field. The two must be kept consistent until the
-	// registry-derived capacity arrives via a producer-stamped header field
-	// (POS-3575/3576), at which point this stub is retired entirely.
+	// ReservedClients feeds only the EIP-1559 base-fee capacity carve-out
+	// (ReservedCapacity), since CalcBaseFee is pure (config, parent) and has no
+	// parent state to read the registry from. Reserved-sender classification is
+	// sourced from the registry contract, not this field; the two are kept
+	// consistent until the capacity arrives via a producer-stamped header field.
 	ReservedClients []ReservedClient `json:"reservedClients,omitempty"`
 }
 

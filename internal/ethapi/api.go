@@ -901,12 +901,10 @@ func doCall(ctx context.Context, b Backend, args TransactionArgs, state *state.S
 		return nil, err
 	}
 
-	// System-contract reads issued by internal consensus code (validator set,
-	// span, state receiver, reserved-blockspace registry) must be deterministic
-	// across nodes. The RPC gas cap and the wall-clock EVM timeout are both
-	// node-local and load-dependent, so neither may apply here: a read that
-	// timed out on one node but not another would diverge state (e.g. a nil
-	// reserved snapshot flips fee classification). Both are bypassed together.
+	// Internal consensus reads of system contracts must be deterministic across
+	// nodes. The RPC gas cap and the wall-clock EVM timeout are both node-local
+	// and load-dependent, so a read that timed out on one node but not another
+	// would diverge state — bypass both for these calls.
 	internalSystemCall := isBorInternalCall(ctx) && isBorSystemTx(b.ChainConfig().Bor, args.To)
 
 	// Setup context so it may be cancelled the call has completed

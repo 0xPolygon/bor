@@ -1051,12 +1051,9 @@ func (c *Bor) setGiuglianoExtraFields(header *types.Header, parent *types.Header
 // verifyHeader presence check, even when there are no reserved transactions.
 func (c *Bor) setReservedBlockspaceExtraFields(header *types.Header, blockExtraData *types.BlockExtraData) {
 	if c.config.IsReservedBlockspace(header.Number) {
-		// Placeholder zeros. The producer's reserved pass (POS-3575) will set the
-		// real ReservedTxCount / ReservedGasUsed during block building; this
-		// foundation only guarantees the fields are present (non-nil) so the
-		// header is structurally valid and passes the verifyReservedFields
-		// presence check. Until POS-3575 lands, every block reports zero reserved
-		// gas regardless of how many reserved txs it actually contains.
+		// Placeholder zeros so the fields are present (non-nil) and the header
+		// passes the verifyReservedFields presence check. The producer's reserved
+		// pass sets the real ReservedTxCount / ReservedGasUsed during block building.
 		var zeroCount uint32
 		var zeroGas uint64
 		blockExtraData.ReservedTxCount = &zeroCount
@@ -1065,10 +1062,9 @@ func (c *Bor) setReservedBlockspaceExtraFields(header *types.Header, blockExtraD
 }
 
 // verifyReservedFields checks that post-ReservedBlockspace headers carry the
-// reserved-region fields. Presence plus a header-only sanity bound on
-// ReservedGasUsed. Full value correctness — that ReservedTxCount matches the
-// actual reserved region and ReservedGasUsed stays within each client's quota —
-// is enforced by block validation in POS-3576.
+// reserved-region fields, plus a header-only bound on ReservedGasUsed. Full
+// value correctness (ReservedTxCount against the body, per-client quota) is a
+// body-level check enforced by block validation.
 func (c *Bor) verifyReservedFields(header *types.Header) error {
 	if !c.config.IsReservedBlockspace(header.Number) {
 		return nil
@@ -1077,11 +1073,9 @@ func (c *Bor) verifyReservedFields(header *types.Header) error {
 	if reservedTxCount == nil || reservedGasUsed == nil {
 		return errMissingReservedBlockspaceFields
 	}
-	// Interim header-only bound: the reserved region is a subset of the block, so
-	// its gas cannot exceed the block's gas used. This rejects an impossible value
-	// rather than letting CalcBaseFee silently clamp it (the base fee consumes
-	// parent.ReservedGasUsed). ReservedTxCount against the body and per-client
-	// quota are body-level checks enforced by block validation in POS-3576.
+	// The reserved region is a subset of the block, so its gas cannot exceed the
+	// block's gas used. Reject the impossible value rather than letting CalcBaseFee
+	// silently clamp it (the base fee consumes parent.ReservedGasUsed).
 	if *reservedGasUsed > header.GasUsed {
 		return errReservedGasUsedExceedsBlock
 	}

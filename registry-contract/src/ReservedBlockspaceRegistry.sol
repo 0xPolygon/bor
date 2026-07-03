@@ -23,7 +23,7 @@ contract ReservedBlockspaceRegistry {
         uint64 gasQuota;
         bool active;
         // feeMode: 0 = free (zero in-protocol fee), 1 = routed (fee paid but
-        // credited to the producer). See the reserved-blockspace spec §7.
+        // credited to the producer).
         uint8 feeMode;
         // effectiveFrom: block number from which this client's reserved status
         // applies. Lets governance schedule/announce a change at a future height
@@ -44,8 +44,7 @@ contract ReservedBlockspaceRegistry {
 
     // configVersion increments on every change to the reserved set or its
     // limits. Bor reads root() once per block and only rebuilds its cached
-    // snapshot when the value changes (reserved-blockspace spec §4.5), avoiding
-    // a per-transaction state read.
+    // snapshot when the value changes, avoiding a per-transaction state read.
     uint256 public configVersion;
 
     mapping(uint256 clientId => Client client) private clients;
@@ -280,7 +279,7 @@ contract ReservedBlockspaceRegistry {
 
     // root returns a value that changes whenever the reserved set, quotas, fee
     // modes, effective heights, or limits change. Bor caches its snapshot keyed
-    // on this and only rebuilds when it moves (reserved-blockspace spec §4.5).
+    // on this and only rebuilds when it moves.
     function root() external view returns (bytes32) {
         return bytes32(configVersion);
     }

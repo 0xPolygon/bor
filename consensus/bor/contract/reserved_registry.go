@@ -120,8 +120,8 @@ func (gc *GenesisContractsClient) ReservedClientForAddress(
 	}, nil
 }
 
-// Root reads the registry's configVersion-derived root. The cache (spec §4.5)
-// rebuilds its reserved-set snapshot only when this value changes.
+// Root reads the registry's configVersion-derived root. Callers rebuild their
+// reserved-set snapshot only when this value changes.
 func (gc *GenesisContractsClient) Root(
 	state *state.StateDB,
 	number uint64,

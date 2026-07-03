@@ -33,11 +33,11 @@ const reservedRegistrySetupABI = `[
 // is deployed in genesis and seeded at runtime via initialize()+createClient() so a
 // client's address becomes reserved through actual contract state — the same source
 // (registry → Go reader → per-block snapshot) the txpool and EVM classify from in
-// production. A zero-fee tx from that registered address is admitted to the pool
-// (POS-3570/3574), mined past the ReservedBlockspace fork with the reserved header
-// fields set by the real Prepare path (POS-3637), and executes fee-free so the
-// sender pays only its call value with no gas debit (POS-3573). An identical
-// zero-fee tx from an address absent from the registry is rejected at admission.
+// production. A zero-fee tx from that registered address is admitted to the pool,
+// mined past the ReservedBlockspace fork with the reserved header fields set by
+// the real Prepare path, and executes fee-free so the sender pays only its call
+// value with no gas debit. An identical zero-fee tx from an address absent from
+// the registry is rejected at admission.
 //
 // Run with: go test -tags=integration -run TestReservedBlockspaceZeroFeeProduction ./tests/bor/
 func TestReservedBlockspaceZeroFeeProduction(t *testing.T) {
@@ -243,7 +243,7 @@ func TestReservedBlockspaceZeroFeeProduction(t *testing.T) {
 	// confirmations so fork choice converges, then read the tx's settled canonical
 	// block. A real classification split would never converge — the validator would
 	// reject the producer's block as a bad block — so convergence here is itself the
-	// consensus-parity assertion (POS-3573/3637).
+	// consensus-parity assertion.
 	canonicalTxBlock := func(n *eth.Ethereum) *types.Block {
 		head := n.BlockChain().CurrentBlock().Number.Uint64()
 		for h := firstSeen.NumberU64(); h <= head; h++ {
