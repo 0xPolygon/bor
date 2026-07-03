@@ -381,68 +381,18 @@ func (h *witHandler) handleGetWitness(peer *wit.Peer, req *wit.GetWitnessPacket)
 		witnessPageResponse.TotalPages = totalPages
 
 		// Body absent (neither in-flight cache nor chain storage) but a BP
-		// signed its hash, so the witness exists and is in flight: remember
-		// this peer as waiting so we push the body the moment we obtain it,
-		// instead of leaving it to re-poll us with empty GetWitness. This is
-		// what keeps WIT2 stateless consumers in lockstep at hop>=2 (see
-		// witnessWaiterRegistry).
+		// provably signed (or deferred-announced) this hash: record the peer so
+		// we push the body the moment we obtain it, keeping WIT2 stateless
+		// consumers in lockstep at hop>=2 (see witnessWaiterRegistry).
 		if totalPages == 0 {
-			hh := (*handler)(h)
-			if _, hasSigned := hh.signedWitnesses.get(witnessPage.Hash); hasSigned {
-				hh.witnessWaiters.record(witnessPage.Hash, peer)
-			} else if hh.deferredAnnounces.has(witnessPage.Hash) {
-				// Header-racing announce: a structurally valid signed announce is
-				// deferred pending its block, so the witness provably exists even
-				// though it is not yet producer-verified. Record the waiter so we
-				// still push the body the instant we obtain it, rather than leaving
-				// the requester to re-poll under backoff. Recording only schedules a
-				// future push of bytes we actually hold — it does not promote,
-				// cache, or relay the unverified announce.
-				hh.witnessWaiters.record(witnessPage.Hash, peer)
-			}
+			h.recordWitnessWaiter(witnessPage.Hash, peer)
 		}
 
-		needToQuery := witnessPage.Page < totalPages
-		if needToQuery {
-			// witnessCache is pre-populated by resolveWitnessBytes with WIT2
-			// in-flight bodies (pre-import serving), so a hit here serves the
-			// in-flight bytes and skips the chain read below.
-			witnessBytes, exists := witnessCache[witnessPage.Hash]
-			if !exists {
-				// Reject before reading if loading this witness would cross the
-				// per-request memory budget, so a rejected request never allocates
-				// a full witness past the bound.
-				if totalLoaded+int(size) >= MaximumCachedWitnessOnARequest {
-					return nil, errors.New("request demands too much memory")
-				}
-				// Post-import fallback: read from chain storage on demand without
-				// populating the chain witness cache, so peer-serving traffic does
-				// not evict witnesses the import path relies on. If both this and
-				// the in-flight cache missed during resolveWitnessBytes,
-				// witnessSize[hash] would be 0 and we wouldn't reach this branch.
-				witnessBytes = h.Chain().GetWitnessUncached(witnessPage.Hash)
-				witnessCache[witnessPage.Hash] = witnessBytes
-				totalLoaded += len(witnessBytes)
-			}
-
-			// Clamp both bounds: the size index and the stored witness can disagree
-			// under a concurrent delete, so never slice past the bytes actually read.
-			witnessLen := uint64(len(witnessBytes))
-			start := PageSize * witnessPage.Page
-			end := start + PageSize
-			if start > witnessLen {
-				start = witnessLen
-			}
-			if end > witnessLen {
-				end = witnessLen
-			}
-			if start == end {
-				// Metadata advertised this page but the stored witness is missing or
-				// truncated; fail rather than serving a misleading empty page.
-				return nil, errors.New("witness page unavailable")
-			}
-			witnessPageResponse.Data = witnessBytes[start:end]
+		data, err := h.loadWitnessPageData(witnessPage, totalPages, size, witnessCache, &totalLoaded)
+		if err != nil {
+			return nil, err
 		}
+		witnessPageResponse.Data = data
 
 		// backstop: bound total witness bytes loaded in case the stored witness is
 		// larger than its size index advertised.
@@ -460,6 +410,65 @@ func (h *witHandler) handleGetWitness(peer *wit.Peer, req *wit.GetWitnessPacket)
 
 	log.Debug("handleGetWitness returning witnesses pages", "peer", peer.ID(), "reqID", req.RequestId, "count", len(response))
 	return response, nil
+}
+
+// recordWitnessWaiter registers peer as waiting for a witness this node does not
+// have stored yet but that provably exists — either a BP signed its hash, or a
+// structurally valid signed announce is deferred pending its block — so the body
+// is pushed the instant it is obtained instead of leaving the peer to re-poll us
+// with empty GetWitness under backoff. Recording only schedules a future push of
+// bytes we actually hold; it does not promote, cache, or relay the unverified
+// announce.
+func (h *witHandler) recordWitnessWaiter(blockHash common.Hash, peer *wit.Peer) {
+	hh := (*handler)(h)
+	if _, hasSigned := hh.signedWitnesses.get(blockHash); hasSigned {
+		hh.witnessWaiters.record(blockHash, peer)
+	} else if hh.deferredAnnounces.has(blockHash) {
+		hh.witnessWaiters.record(blockHash, peer)
+	}
+}
+
+// loadWitnessPageData returns the bytes for one requested witness page, or nil
+// when the page is out of range. witnessCache is pre-populated by
+// resolveWitnessBytes with WIT2 in-flight bodies (pre-import serving), so a hit
+// serves those bytes and skips the chain read; a miss falls back to uncached
+// chain storage (so peer-serving traffic does not evict witnesses the import path
+// relies on) after enforcing the per-request memory budget. totalLoaded is
+// updated in place with the bytes actually read.
+func (h *witHandler) loadWitnessPageData(witnessPage wit.WitnessPageRequest, totalPages, size uint64, witnessCache map[common.Hash][]byte, totalLoaded *int) ([]byte, error) {
+	if witnessPage.Page >= totalPages {
+		return nil, nil
+	}
+	witnessBytes, exists := witnessCache[witnessPage.Hash]
+	if !exists {
+		// Reject before reading if loading this witness would cross the
+		// per-request memory budget, so a rejected request never allocates a full
+		// witness past the bound.
+		if *totalLoaded+int(size) >= MaximumCachedWitnessOnARequest {
+			return nil, errors.New("request demands too much memory")
+		}
+		witnessBytes = h.Chain().GetWitnessUncached(witnessPage.Hash)
+		witnessCache[witnessPage.Hash] = witnessBytes
+		*totalLoaded += len(witnessBytes)
+	}
+
+	// Clamp both bounds: the size index and the stored witness can disagree under
+	// a concurrent delete, so never slice past the bytes actually read.
+	witnessLen := uint64(len(witnessBytes))
+	start := PageSize * witnessPage.Page
+	end := start + PageSize
+	if start > witnessLen {
+		start = witnessLen
+	}
+	if end > witnessLen {
+		end = witnessLen
+	}
+	if start == end {
+		// Metadata advertised this page but the stored witness is missing or
+		// truncated; fail rather than serving a misleading empty page.
+		return nil, errors.New("witness page unavailable")
+	}
+	return witnessBytes[start:end], nil
 }
 
 // resolveWitnessBytes resolves witness bytes and sizes for each unique block
