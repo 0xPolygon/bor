@@ -403,6 +403,36 @@ func TestHandleGetWitness_ResponseEncodedSizeBound(t *testing.T) {
 	require.Contains(t, err.Error(), "response exceeds maximum p2p payload size")
 }
 
+// TestLoadWitnessPageData_TruncatedWitness covers loadWitnessPageData's defensive
+// clamp paths: when the size index advertises a page whose byte offset lies past
+// the witness bytes actually stored (a size/stored-bytes disagreement, e.g. under
+// a concurrent delete), start is clamped to the witness length and the request
+// fails with "witness page unavailable" rather than serving a misleading empty
+// page. The pre-populated cache mirrors WIT2 in-flight serving and keeps the test
+// allocation-free.
+func TestLoadWitnessPageData_TruncatedWitness(t *testing.T) {
+	handler := newTestHandler()
+	defer handler.close()
+	witHandler := (*witHandler)(handler.handler)
+
+	hash := common.Hash{0xab}
+	const size = PageSize + 1                                     // size index claims 2 pages...
+	totalPages := uint64((size + PageSize - 1) / PageSize)        // == 2
+	witnessCache := map[common.Hash][]byte{hash: []byte("short")} // ...but only 5 bytes stored
+	totalLoaded := 0
+
+	// Page 1 is in range per the size index (page < totalPages), but its start
+	// offset (PageSize) is past the 5 stored bytes, so start clamps to the witness
+	// length and start == end trips the unavailable path.
+	data, err := witHandler.loadWitnessPageData(
+		wit.WitnessPageRequest{Hash: hash, Page: 1},
+		totalPages, size, witnessCache, &totalLoaded,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "witness page unavailable")
+	require.Nil(t, data)
+}
+
 // TestHandleGetWitnessMetadata_PageCalculation tests page calculation edge cases
 func TestHandleGetWitnessMetadata_PageCalculation(t *testing.T) {
 	handler := newTestHandler()
