@@ -32,13 +32,20 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
+// readRecentFromKV returns the value stored under key in the key-value store,
+// or nil if absent. Recent canonical-hash, header and total-difficulty entries
+// live in the key-value store and are removed only after being copied to the
+// freezer (chainFreezer.freeze), so a key-value hit is always valid. Reading the
+// key-value store first lets recent lookups skip the freezer read-lock instead
+// of serializing behind an in-progress freeze.
+func readRecentFromKV(db ethdb.KeyValueReader, key []byte) []byte {
+	data, _ := db.Get(key)
+	return data
+}
+
 // ReadCanonicalHash retrieves the hash assigned to a canonical block number.
 func ReadCanonicalHash(db ethdb.Reader, number uint64) common.Hash {
-	// Fast path: recent entries live in the key-value store and are removed only
-	// after being copied to the freezer (chainFreezer.freeze), so a KV hit is
-	// always valid. Reading KV first lets recent lookups skip the freezer
-	// read-lock and avoid serializing behind an in-progress freeze.
-	if data, _ := db.Get(headerHashKey(number)); len(data) > 0 {
+	if data := readRecentFromKV(db, headerHashKey(number)); len(data) > 0 {
 		return common.BytesToHash(data)
 	}
 	var data []byte
@@ -413,11 +420,7 @@ func ReadHeaderRange(db ethdb.Reader, number uint64, count uint64) []rlp.RawValu
 
 // ReadHeaderRLP retrieves a block header in its raw RLP database encoding.
 func ReadHeaderRLP(db ethdb.Reader, hash common.Hash, number uint64) rlp.RawValue {
-	// Fast path: recent entries live in the key-value store (keyed by number+hash)
-	// and are removed only after being copied to the freezer (chainFreezer.freeze),
-	// so a KV hit is always valid. Reading KV first lets recent lookups skip the
-	// freezer read-lock and avoid serializing behind an in-progress freeze.
-	if data, _ := db.Get(headerKey(number, hash)); len(data) > 0 {
+	if data := readRecentFromKV(db, headerKey(number, hash)); len(data) > 0 {
 		return data
 	}
 
@@ -622,11 +625,7 @@ func DeleteBody(db ethdb.KeyValueWriter, hash common.Hash, number uint64) {
 
 // ReadTdRLP retrieves a block's total difficulty corresponding to the hash in RLP encoding.
 func ReadTdRLP(db ethdb.Reader, hash common.Hash, number uint64) rlp.RawValue {
-	// Fast path: recent entries live in the key-value store (keyed by number+hash)
-	// and are removed only after being copied to the freezer (chainFreezer.freeze),
-	// so a KV hit is always valid. Reading KV first lets recent lookups skip the
-	// freezer read-lock and avoid serializing behind an in-progress freeze.
-	if data, _ := db.Get(headerTDKey(number, hash)); len(data) > 0 {
+	if data := readRecentFromKV(db, headerTDKey(number, hash)); len(data) > 0 {
 		return data
 	}
 	var data []byte
