@@ -33,11 +33,11 @@ import (
 )
 
 // readRecentFromKV returns the value stored under key in the key-value store,
-// or nil if absent. Recent canonical-hash, header and total-difficulty entries
-// live in the key-value store and are removed only after being copied to the
-// freezer (chainFreezer.freeze), so a key-value hit is always valid. Reading the
-// key-value store first lets recent lookups skip the freezer read-lock instead
-// of serializing behind an in-progress freeze.
+// or nil if absent. Canonical entries are moved to the freezer before being
+// deleted from the key-value store (chainFreezer.freeze).
+// Non-canonical entries are KV-only. Reading the key-value store first lets
+// recent lookups skip the freezer read-lock
+// instead of serializing behind an in-progress freeze.
 func readRecentFromKV(db ethdb.KeyValueReader, key []byte) []byte {
 	data, _ := db.Get(key)
 	return data
