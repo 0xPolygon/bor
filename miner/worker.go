@@ -237,13 +237,14 @@ func newRegisteredCustomTimer(name string, reservoirSize int) *metrics.Timer {
 // environment is the worker's current environment and holds all
 // information of the sealing block generation.
 type environment struct {
-	signer   types.Signer
-	state    *state.StateDB // apply state changes here
-	tcount   int            // tx count in cycle
-	size     uint64         // size of the block we are building
-	gasPool  *core.GasPool  // available gas used to pack transactions
-	coinbase common.Address
-	evm      *vm.EVM
+	signer           types.Signer
+	state            *state.StateDB // apply state changes here
+	tcount           int            // tx count in cycle
+	size             uint64         // size of the block we are building
+	stateSyncReserve uint64         // block-size budget reserved for the state-sync system tx appended in Finalize (Valencia+)
+	gasPool          *core.GasPool  // available gas used to pack transactions
+	coinbase         common.Address
+	evm              *vm.EVM
 
 	header   *types.Header
 	txs      []*types.Transaction
@@ -276,6 +277,7 @@ func (env *environment) copy() *environment {
 		signer:             env.signer,
 		state:              env.state.Copy(),
 		tcount:             env.tcount,
+		stateSyncReserve:   env.stateSyncReserve,
 		coinbase:           env.coinbase,
 		header:             types.CopyHeader(env.header),
 		receipts:           copyReceipts(env.receipts),
@@ -322,9 +324,31 @@ type task struct {
 	intermediateRootTime time.Duration // time spent in IntermediateRoot inside FinalizeAndAssemble; subtracted when computing workerBlockExecutionTimer
 }
 
+// stateSyncReserveFor returns the block-size budget to hold back for the state-sync
+// system tx that CommitStates appends at sprint start (Valencia+). Only sprint-start
+// blocks carry that tx, so only they reserve; pre-Valencia and non-Bor configs
+// reserve nothing.
+func stateSyncReserveFor(config *params.ChainConfig, number *big.Int) uint64 {
+	if config.Bor == nil || !config.Bor.IsValencia(number) {
+		return 0
+	}
+
+	// Reserve only at sprint start. Fall back to reserving when the sprint length
+	// is unknown, which avoids a divide-by-zero and never under-reserves.
+	sprint := uint64(0)
+	if len(config.Bor.Sprint) > 0 {
+		sprint = config.Bor.CalculateSprint(number.Uint64())
+	}
+	if sprint > 0 && !bor.IsSprintStart(number.Uint64(), sprint) {
+		return 0
+	}
+
+	return params.MaxStateSyncBytesPerBlock
+}
+
 // txFits reports whether the transaction fits into the block size limit.
 func (env *environment) txFitsSize(tx *types.Transaction) bool {
-	return env.size+tx.Size() < params.MaxBlockSize-maxBlockSizeBufferZone
+	return env.size+tx.Size() < params.MaxBlockSize-maxBlockSizeBufferZone-env.stateSyncReserve
 }
 
 const (
@@ -1291,6 +1315,7 @@ func (w *worker) makeEnv(header *types.Header, coinbase common.Address, witness 
 		prefetchedTxHashes: genParams.prefetchedTxHashes,
 	}
 	env.evm.SetInterrupt(&w.interruptBlockBuilding)
+	env.stateSyncReserve = stateSyncReserveFor(w.chainConfig, header.Number)
 
 	// Keep track of transactions which return errors so they can be removed
 	env.tcount = 0

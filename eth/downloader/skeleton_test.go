@@ -682,13 +682,31 @@ func TestSkeletonSyncBacksOffOnTimeout(t *testing.T) {
 	}
 
 	var dropped atomic.Bool
+	requeued := make(chan struct{}, 1)
 	skeleton := newSkeleton(db, peerset, func(string) { dropped.Store(true) }, newHookedBackfiller())
+	skeleton.requestFailed = func(string) {
+		select {
+		case requeued <- struct{}{}:
+		default:
+		}
+	}
 	if err := skeleton.Sync(chain[len(chain)-1], nil, true); err != nil {
 		t.Fatalf("failed to announce sync head: %v", err)
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) && !peer.backedOff() {
 		time.Sleep(20 * time.Millisecond)
+	}
+	if !peer.backedOff() {
+		skeleton.Terminate()
+		t.Fatal("timed-out skeleton peer never backed off")
+	}
+
+	select {
+	case <-requeued:
+	case <-time.After(5 * time.Second):
+		skeleton.Terminate()
+		t.Fatal("timed-out skeleton peer was never requeued")
 	}
 
 	skeleton.Terminate()

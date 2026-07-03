@@ -6,27 +6,30 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/JekaMas/workerpool"
-
 	"github.com/ethereum/go-ethereum/metrics"
 )
 
+// SafePool caps concurrent execution of submitted functions: a non-zero size uses
+// a counting semaphore, size 0 is an unbounded fast path. It's a semaphore rather
+// than a worker pool on purpose — a dispatcher that exits (e.g. on Stop) would
+// wedge every later Submit; a semaphore can't.
 type SafePool struct {
-	executionPool atomic.Pointer[workerpool.WorkerPool]
+	// concurrency limiter; cap == size, nil on the fast path. Swapped by ChangeSize.
+	sem atomic.Pointer[chan struct{}]
+
+	inFlight  atomic.Int64 // running tasks, for metrics
+	processed atomic.Int64 // tasks completed since the last metrics report
 
 	sync.RWMutex
-
 	size    int
 	timeout time.Duration
-
-	service   string       // the service using ep
-	processed atomic.Int64 // keeps count of total processed requests
+	service string
 
 	close     chan struct{}
 	closeOnce sync.Once
 
-	// Skip sending task to execution pool
-	fastPath bool
+	// per-task goroutine instead of a slot; atomic because Submit reads it lock-free.
+	fastPath atomic.Bool
 }
 
 func NewExecutionPool(initialSize int, timeout time.Duration, service string, report bool) *SafePool {
@@ -37,13 +40,14 @@ func NewExecutionPool(initialSize int, timeout time.Duration, service string, re
 		close:   make(chan struct{}),
 	}
 
-	if initialSize == 0 {
-		sp.fastPath = true
+	if initialSize <= 0 {
+		sp.fastPath.Store(true)
 
 		return sp
 	}
 
-	sp.executionPool.Store(workerpool.New(initialSize))
+	sem := make(chan struct{}, initialSize)
+	sp.sem.Store(&sem)
 
 	if metrics.Enabled() && report {
 		go sp.reportMetrics(3 * time.Second)
@@ -52,8 +56,13 @@ func NewExecutionPool(initialSize int, timeout time.Duration, service string, re
 	return sp
 }
 
+// Submit runs fn, bounded to the pool size (fast path: unbounded). fn always
+// runs — the caller's WaitGroup counts on it — so at capacity it waits for a
+// slot, falling back to an unbounded run if ctx is cancelled or the configured
+// timeout elapses, so a saturated pool can't block the caller indefinitely.
 func (s *SafePool) Submit(ctx context.Context, fn func() error) (<-chan error, bool) {
-	if s.fastPath {
+	semPtr := s.sem.Load()
+	if s.fastPath.Load() || semPtr == nil {
 		go func() {
 			_ = fn()
 		}()
@@ -61,22 +70,57 @@ func (s *SafePool) Submit(ctx context.Context, fn func() error) (<-chan error, b
 		return nil, true
 	}
 
-	pool := s.executionPool.Load()
-	if pool == nil {
-		return nil, false
+	sem := *semPtr
+
+	var timeout <-chan time.Time
+	if d := s.Timeout(); d > 0 {
+		timer := time.NewTimer(d)
+		defer timer.Stop()
+		timeout = timer.C
 	}
 
-	return pool.Submit(ctx, fn, s.Timeout()), true
+	select {
+	case sem <- struct{}{}: // acquired a slot
+		s.inFlight.Add(1)
+
+		go func() {
+			defer func() {
+				<-sem
+				s.inFlight.Add(-1)
+			}()
+
+			_ = fn()
+		}()
+	case <-ctx.Done():
+		go func() {
+			_ = fn()
+		}()
+	case <-timeout:
+		go func() {
+			_ = fn()
+		}()
+	}
+
+	return nil, true
 }
 
 func (s *SafePool) ChangeSize(n int) {
-	oldPool := s.executionPool.Swap(workerpool.New(n))
+	if n <= 0 {
+		// no semaphore at size 0 — use the fast path
+		s.fastPath.Store(true)
 
-	if oldPool != nil {
-		go func() {
-			oldPool.StopWait()
-		}()
+		s.Lock()
+		s.size = 0
+		s.Unlock()
+
+		return
 	}
+
+	sem := make(chan struct{}, n)
+	// store the semaphore before clearing fastPath, so Submit never sees
+	// fastPath=false with no semaphore; in-flight tasks release into the old one
+	s.sem.Store(&sem)
+	s.fastPath.Store(false)
 
 	s.Lock()
 	s.size = n
@@ -108,33 +152,20 @@ func (s *SafePool) Stop() {
 	s.closeOnce.Do(func() {
 		close(s.close)
 	})
-
-	if s.executionPool.Load() != nil {
-		s.executionPool.Load().Stop()
-	}
 }
 
-// reportMetrics reports the metrics after every `refresh` time interval
-// regarding the execution pool.
+// reportMetrics reports execution-pool metrics every refresh interval.
 func (s *SafePool) reportMetrics(refresh time.Duration) {
-	var (
-		epWorkerCountGuage           *metrics.Gauge
-		epWaitingQueueGuage          *metrics.Gauge
-		epProcessedRequestsHistogram metrics.Histogram
-	)
-
 	ticker := time.NewTicker(refresh)
 
 	for {
 		select {
 		case <-ticker.C:
-			ep := s.executionPool.Load()
+			workerCount, waitingQueue, processed := newEpMetrics(s.service)
 
-			epWorkerCountGuage, epWaitingQueueGuage, epProcessedRequestsHistogram = newEpMetrics(s.service)
-
-			epWorkerCountGuage.Update(ep.GetWorkerCount())
-			epWaitingQueueGuage.Update(int64(ep.WaitingQueueSize()))
-			epProcessedRequestsHistogram.Update(s.processed.Load())
+			workerCount.Update(s.inFlight.Load())
+			waitingQueue.Update(0)
+			processed.Update(s.processed.Load())
 
 			s.processed.Store(0)
 		case <-s.close:

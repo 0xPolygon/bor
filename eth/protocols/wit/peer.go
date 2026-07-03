@@ -1,6 +1,7 @@
 package wit
 
 import (
+	"fmt"
 	"math/rand"
 	"sync"
 
@@ -151,6 +152,9 @@ func (p *Peer) AsyncSendSignedWitnessAnnouncement(ann SignedWitnessAnnouncement)
 // RequestWitness sends a request to the peer for witnesses by witness pages.
 func (p *Peer) RequestWitness(witnessPages []WitnessPageRequest, sink chan *Response) (*Request, error) {
 	log.Debug("Requesting witnesses", "peer", p.id, "count", len(witnessPages))
+	if len(witnessPages) > MaxWitnessServe {
+		return nil, fmt.Errorf("witness request exceeds %d page limit: got %d", MaxWitnessServe, len(witnessPages))
+	}
 	id := rand.Uint64()
 
 	req := &Request{
@@ -174,6 +178,9 @@ func (p *Peer) RequestWitness(witnessPages []WitnessPageRequest, sink chan *Resp
 // RequestWitnessMetadata sends a request to the peer for witness metadata (page count only).
 func (p *Peer) RequestWitnessMetadata(hashes []common.Hash, sink chan *Response) (*Request, error) {
 	log.Debug("Requesting witness metadata", "peer", p.id, "count", len(hashes))
+	if len(hashes) > MaxWitnessMetadataServe {
+		return nil, fmt.Errorf("witness metadata request exceeds %d hash limit: got %d", MaxWitnessMetadataServe, len(hashes))
+	}
 	id := rand.Uint64()
 
 	req := &Request{

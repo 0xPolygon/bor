@@ -284,7 +284,7 @@ func TestHandleGetWitnessMetadata_HashCountBound(t *testing.T) {
 // bytes on the needToQuery branch, so a request packed with unknown hashes or
 // out-of-range pages accumulates zero bytes and never trips them — yet each
 // distinct hash still costs a DB size lookup and each page a response entry.
-// MaxWitnessPagesServe bounds that amplification up front. This mirrors
+// MaxWitnessServe bounds that amplification up front. This mirrors
 // TestHandleGetWitnessMetadata_HashCountBound for the metadata handler.
 func TestHandleGetWitness_PageCountBound(t *testing.T) {
 	handler := newTestHandler()
@@ -299,9 +299,9 @@ func TestHandleGetWitness_PageCountBound(t *testing.T) {
 		count   int
 		wantErr bool
 	}{
-		{"at limit", MaxWitnessPagesServe, false},
-		{"one over limit", MaxWitnessPagesServe + 1, true},
-		{"far over limit", MaxWitnessPagesServe * 100, true},
+		{"at limit", MaxWitnessServe, false},
+		{"one over limit", MaxWitnessServe + 1, true},
+		{"far over limit", MaxWitnessServe * 50, true},
 	}
 
 	for _, tc := range tests {
@@ -330,6 +330,77 @@ func TestHandleGetWitness_PageCountBound(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestHandleGetWitness_MemoryBudget verifies that a request which would force
+// the node to load more than MaximumCachedWitnessOnARequest of witness data is
+// rejected before the loaded total grows unbounded. Each witness is one byte
+// over a page, so requesting its last page returns ~1 byte while the full
+// ~15 MB witness is loaded and counted toward the per-request memory budget.
+func TestHandleGetWitness_MemoryBudget(t *testing.T) {
+	if testing.Short() {
+		t.Skip("allocates ~225 MB; skipped under -short")
+	}
+
+	handler := newTestHandler()
+	defer handler.close()
+
+	witHandler := (*witHandler)(handler.handler)
+	peer := newTestWitPeer()
+	defer peer.Close()
+	db := handler.chain.DB()
+
+	const witnessSize = PageSize + 1                        // 2 pages; request the last one
+	n := (MaximumCachedWitnessOnARequest / witnessSize) + 2 // enough to cross the 200 MB guard
+	filler := make([]byte, witnessSize)
+
+	pages := make([]wit.WitnessPageRequest, 0, n)
+	for i := 0; i < n; i++ {
+		hdr := &types.Header{Number: big.NewInt(int64(1_000_000 + i))}
+		hash := hdr.Hash()
+		rawdb.WriteHeader(db, hdr)
+		rawdb.WriteWitness(db, hash, filler)
+		pages = append(pages, wit.WitnessPageRequest{Hash: hash, Page: 1}) // last page => tiny response, full load
+	}
+
+	_, err := witHandler.handleGetWitness(peer, &wit.GetWitnessPacket{
+		RequestId:         7,
+		GetWitnessRequest: &wit.GetWitnessRequest{WitnessPages: pages},
+	})
+	require.Error(t, err, "request demanding more than the per-request memory budget must be rejected")
+	require.Contains(t, err.Error(), "request demands too much memory")
+}
+
+func TestHandleGetWitness_ResponseEncodedSizeBound(t *testing.T) {
+	handler := newTestHandler()
+	defer handler.close()
+
+	witHandler := (*witHandler)(handler.handler)
+	peer := newTestWitPeer()
+	defer peer.Close()
+	db := handler.chain.DB()
+
+	firstHeader := &types.Header{Number: big.NewInt(2_000_000)}
+	firstHash := firstHeader.Hash()
+	rawdb.WriteHeader(db, firstHeader)
+	rawdb.WriteWitness(db, firstHash, make([]byte, PageSize))
+
+	secondHeader := &types.Header{Number: big.NewInt(2_000_001)}
+	secondHash := secondHeader.Hash()
+	rawdb.WriteHeader(db, secondHeader)
+	rawdb.WriteWitness(db, secondHash, make([]byte, MaximumResponseSize-PageSize-1))
+
+	_, err := witHandler.handleGetWitness(peer, &wit.GetWitnessPacket{
+		RequestId: 42,
+		GetWitnessRequest: &wit.GetWitnessRequest{
+			WitnessPages: []wit.WitnessPageRequest{
+				{Hash: firstHash, Page: 0},
+				{Hash: secondHash, Page: 0},
+			},
+		},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "response exceeds maximum p2p payload size")
 }
 
 // TestHandleGetWitnessMetadata_PageCalculation tests page calculation edge cases

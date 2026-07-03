@@ -28,6 +28,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/consensus"
+	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/filtermaps"
@@ -527,9 +528,18 @@ func (b *EthAPIBackend) FeeHistory(ctx context.Context, blockCount uint64, lastB
 	return b.gpo.FeeHistory(ctx, blockCount, lastBlock, rewardPercentiles)
 }
 
+func (b *EthAPIBackend) BaseFee(ctx context.Context) *big.Int {
+	header := b.CurrentHeader()
+	if b.ChainConfig().IsLondon(new(big.Int).Add(header.Number, common.Big1)) {
+		return eip1559.CalcBaseFee(b.ChainConfig(), header)
+	}
+	return nil
+}
+
 func (b *EthAPIBackend) BlobBaseFee(ctx context.Context) *big.Int {
-	if excess := b.CurrentHeader().ExcessBlobGas; excess != nil && b.ChainConfig().BlobScheduleConfig != nil {
-		return eip4844.CalcBlobFee(b.ChainConfig(), b.CurrentHeader())
+	header := b.CurrentHeader()
+	if header.ExcessBlobGas != nil && b.ChainConfig().BlobScheduleConfig != nil {
+		return eip4844.CalcBlobFee(b.ChainConfig(), header)
 	}
 	return nil
 }
