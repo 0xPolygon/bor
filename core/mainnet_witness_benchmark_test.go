@@ -1612,6 +1612,90 @@ func BenchmarkV2Embedded(b *testing.B) {
 	}
 }
 
+// BenchmarkJumpDestCache isolates the cross-block JUMPDEST analysis cache's
+// effect on serial EVM execution over the witness block set. Both arms run the
+// SAME blocks through the SAME serial processor; the only variable is cache
+// lifetime:
+//
+//	PerBlock : nil cache — StateProcessor uses a fresh per-block analysis map,
+//	           so a contract is re-analyzed on the first touch of every block
+//	           (matches develop: within-block dedup only).
+//	Shared   : one cache reused across all blocks (this PR): a hot contract is
+//	           analyzed once and reused on every later block.
+//
+// A warmup pass primes the shared trie clean-cache before either arm is timed.
+// This is essential: a memprofile shows trie.decodeRef/decodeFull are ~60% of
+// allocations in these witness replays, so whichever arm ran second would read
+// a trie cache the first arm populated and look ~40% leaner — an artifact that
+// dwarfs the analysis signal. With the warmup, both arms measure against an
+// equally-warm trie, and the Shared arm rebuilds its JUMPDEST cache from empty
+// each iteration so the result is stable across -count / -benchtime.
+//
+// Read allocs/op with -benchmem (deterministic; each cache hit skips one
+// codeBitmap allocation). Expect a SMALL delta — analysis is a minor fraction of
+// whole-block execution — so this mostly confirms the cache doesn't regress and
+// quantifies its modest upside on this workload. For the least-ambiguous read,
+// run each arm in its own process and compare:
+//
+//	BOR_BLOCKSTM_TEST=1 go test -run='^$' -bench='JumpDestCache/PerBlock' -benchmem -count=8 ./core/ > a.txt
+//	BOR_BLOCKSTM_TEST=1 go test -run='^$' -bench='JumpDestCache/Shared'   -benchmem -count=8 ./core/ > b.txt
+//	benchstat a.txt b.txt
+//
+// Findings (2026-07, Polygon mainnet): the two arms are statistically
+// indistinguishable here, and a CPU profile of a real pebble-backed bor node
+// shows codeBitmap/isCode below the noise floor (<0.01% of CPU; block work is
+// dominated by state access — pathdb diff-layer lookups). The cross-block cache
+// is correct and cheap but yields no measurable whole-block speedup on bor's
+// cost profile; upstream go-ethereum's ~8% (engine_newPayload, ETH mainnet) does
+// not translate. Keep this as a regression guard, not as evidence of a win.
+func BenchmarkJumpDestCache(b *testing.B) {
+	if os.Getenv("BOR_BLOCKSTM_TEST") == "" {
+		b.Skip("skipping slow benchmark: set BOR_BLOCKSTM_TEST=1 to run")
+	}
+	alchemyURL := getAlchemyURL(b)
+	allBlocks, diskdb := loadBlocksFromDir(b, witnessDir, alchemyURL)
+	b.Logf("loaded %d blocks total", len(allBlocks))
+
+	config := params.BorMainnetChainConfig
+	engine := &benchConsensus{}
+	prepared := prepareBlocks(allBlocks, diskdb, config)
+
+	totalGas := uint64(0)
+	for _, pb := range prepared {
+		totalGas += pb.block.GasUsed()
+	}
+
+	// Warm the shared trie clean-cache so both arms are timed against an equally
+	// warm trie (removes the cold/warm ordering bias described above).
+	for j := range prepared {
+		if _, err := processSerial(&prepared[j], config, engine, nil); err != nil {
+			b.Fatalf("warmup block %d: %v", prepared[j].block.NumberU64(), err)
+		}
+	}
+
+	// shared=false => nil cache (fresh per-block map, develop-equivalent).
+	// shared=true  => one cache per iteration, reused across all blocks (this PR).
+	run := func(b *testing.B, shared bool) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			var jdc vm.JumpDestCache
+			if shared {
+				jdc = NewJumpDestCache()
+			}
+			for j := range prepared {
+				if _, err := processSerial(&prepared[j], config, engine, jdc); err != nil {
+					b.Fatalf("block %d: %v", prepared[j].block.NumberU64(), err)
+				}
+			}
+		}
+		b.StopTimer()
+		b.ReportMetric(float64(totalGas)*float64(b.N)/b.Elapsed().Seconds()/1e6, "mgas/s")
+	}
+
+	b.Run("PerBlock", func(b *testing.B) { run(b, false) })
+	b.Run("Shared", func(b *testing.B) { run(b, true) })
+}
+
 // BenchmarkV2AllBlocks benchmarks all 241 witness blocks.
 // Run with: BOR_BLOCKSTM_TEST=1 go test -run='^$' -bench=BenchmarkV2AllBlocks ./core/
 func BenchmarkV2AllBlocks(b *testing.B) {
