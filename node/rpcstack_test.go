@@ -655,6 +655,35 @@ func apis() []rpc.API {
 	}
 }
 
+// TestExecutionPoolWiredFromConfig: enableRPC/enableWS must size the pool from
+// config (regression for the dropped size that left an unbounded fast path).
+func TestExecutionPoolWiredFromConfig(t *testing.T) {
+	srv := newHTTPServer(testlog.Logger(t, log.LvlInfo), rpc.DefaultHTTPTimeouts)
+
+	assert.NoError(t, srv.enableRPC(apis(), httpConfig{
+		executionPoolSize: 40,
+		Modules:           []string{"test"},
+	}))
+	assert.NoError(t, srv.enableWS(apis(), wsConfig{
+		executionPoolSize: 25,
+		Modules:           []string{"test"},
+	}))
+
+	assert.NoError(t, srv.setListenAddr("localhost", 0))
+	assert.NoError(t, srv.start())
+	defer srv.stop()
+
+	if httpHandler := srv.httpHandler.Load(); assert.NotNil(t, httpHandler) {
+		assert.Equal(t, 40, httpHandler.server.GetExecutionPoolSize(),
+			"HTTP execution pool size must come from config, not a hardcoded 0")
+	}
+
+	if wsHandler := srv.wsHandler.Load(); assert.NotNil(t, wsHandler) {
+		assert.Equal(t, 25, wsHandler.server.GetExecutionPoolSize(),
+			"WS execution pool size must come from config, not a hardcoded 0")
+	}
+}
+
 type testService struct{}
 
 func (s *testService) Greet() string {

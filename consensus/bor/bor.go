@@ -477,11 +477,14 @@ func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 		return err
 	}
 
-	// check extr adata
+	// Check extra data.
 	isSprintEnd := IsSprintStart(number+1, c.config.CalculateSprint(number))
 
-	// Ensure that the extra-data contains a signer list on checkpoint, but none otherwise
-	signersBytes := len(header.GetValidatorBytes(c.chainConfig))
+	// Decode validator bytes and base-fee params.
+	validatorBytes, gasTarget, bfcd := header.GetValidatorBytesAndBaseFeeParams(c.chainConfig)
+
+	// Ensure that the extra-data contains a signer list on checkpoint, but none otherwise.
+	signersBytes := len(validatorBytes)
 
 	if !isSprintEnd && signersBytes != 0 {
 		return errExtraValidators
@@ -498,7 +501,6 @@ func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 	// different configurations to reject each other's blocks. The actual base fee
 	// calculation in CalcBaseFee uses its own computation and does not read these fields.
 	if c.config.IsGiugliano(header.Number) {
-		gasTarget, bfcd := header.GetBaseFeeParams(c.chainConfig)
 		if gasTarget == nil || bfcd == nil {
 			return errMissingGiuglianoFields
 		}
@@ -1848,6 +1850,9 @@ func (c *Bor) CommitStates(
 	chainID := c.chainConfig.ChainID.String()
 	stateSyncs := make([]*types.StateSyncData, 0, len(eventRecords))
 
+	enforceStateSyncBudget := c.config.IsValencia(header.Number)
+	var stateSyncBytes uint64
+
 	var gasUsed uint64
 
 	for _, eventRecord := range eventRecords {
@@ -1859,6 +1864,23 @@ func (c *Bor) CommitStates(
 			log.Error("while validating event record", "block", number, "to", to, "stateID", lastStateID+1, "error", err.Error())
 			break
 		}
+
+		// From Valencia on, cap the state-sync bytes committed per block; records over
+		// the budget wait for a later sprint (lastStateID only advances for the ones we
+		// include). The first record always goes in, so a single over-budget record
+		// can't stall state sync forever.
+		recordSize := uint64(len(eventRecord.Data))
+		if len(stateSyncs) > 0 && stateSyncBudgetExceeded(enforceStateSyncBudget, stateSyncBytes, recordSize) {
+			log.Info("state-sync byte budget reached, deferring remaining records", "number", number, "includedBytes", stateSyncBytes, "deferredFromID", eventRecord.ID)
+			break
+		}
+
+		// A record over Heimdall's per-record cap shouldn't happen; log it if one does.
+		if enforceStateSyncBudget && recordSize > params.MaxStateSyncRecordBytes {
+			log.Error("state-sync record exceeds expected per-record cap", "number", number, "id", eventRecord.ID, "size", recordSize, "cap", params.MaxStateSyncRecordBytes)
+		}
+
+		stateSyncBytes += recordSize
 
 		stateData := types.StateSyncData{
 			ID:       eventRecord.ID,
@@ -1896,6 +1918,18 @@ func validateEventRecord(eventRecord *clerk.EventRecordWithTime, number uint64, 
 	}
 
 	return nil
+}
+
+// stateSyncBudgetExceeded reports whether committing a record of recordSize bytes
+// on top of includedBytes already committed would push the block's state-sync data
+// past params.MaxStateSyncBytesPerBlock. When enforce is false (pre-Valencia) the
+// batch stays unbounded, preserving the historical state transition.
+func stateSyncBudgetExceeded(enforce bool, includedBytes, recordSize uint64) bool {
+	if !enforce {
+		return false
+	}
+
+	return includedBytes+recordSize > params.MaxStateSyncBytesPerBlock
 }
 
 func (c *Bor) SetHeimdallClient(h IHeimdallClient) {

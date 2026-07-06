@@ -119,7 +119,11 @@ func storeReadMatches(rd *StoreReadDesc, curVal any, writer, inc int, found, isE
 	if writer == rd.WriterIdx && inc == rd.WriterInc {
 		return true
 	}
-	if found && rd.StoreVal != nil && valuesEqual(curVal, rd.StoreVal) {
+	// Value equality is unsound when the winning writer's position is
+	// load-bearing (rd.ExactWriter): a different writer with an equal value can
+	// still change the result, e.g. a reordered metamorphic CREATE2/SELFDESTRUCT
+	// that moves the code/storage/marker writer across the destruction boundary.
+	if !rd.ExactWriter && found && rd.StoreVal != nil && valuesEqual(curVal, rd.StoreVal) {
 		return true
 	}
 	if !found && rd.StoreVal == nil {

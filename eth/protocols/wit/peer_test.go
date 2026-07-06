@@ -178,6 +178,18 @@ func TestRequestWitnessMetadata(t *testing.T) {
 		req.Close()
 	})
 
+	t.Run("TooManyHashes", func(t *testing.T) {
+		peer := setupPeer()
+		defer peer.Close()
+
+		hashes := make([]common.Hash, MaxWitnessMetadataServe+1)
+		sink := make(chan *Response, 1)
+
+		req, err := peer.RequestWitnessMetadata(hashes, sink)
+		assert.Error(t, err, "RequestWitnessMetadata should reject over-limit hashes")
+		assert.Nil(t, req, "Request should be nil on over-limit hashes")
+	})
+
 	t.Run("RequestIDUniqueness", func(t *testing.T) {
 		peer := setupPeer()
 		defer peer.Close()
@@ -199,6 +211,20 @@ func TestRequestWitnessMetadata(t *testing.T) {
 		// Clean up
 		req1.Close()
 		req2.Close()
+	})
+}
+
+func TestRequestWitness(t *testing.T) {
+	t.Run("TooManyPages", func(t *testing.T) {
+		peer := setupPeer()
+		defer peer.Close()
+
+		pages := make([]WitnessPageRequest, MaxWitnessServe+1)
+		sink := make(chan *Response, 1)
+
+		req, err := peer.RequestWitness(pages, sink)
+		assert.Error(t, err, "RequestWitness should reject over-limit pages")
+		assert.Nil(t, req, "Request should be nil on over-limit pages")
 	})
 }
 

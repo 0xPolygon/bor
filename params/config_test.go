@@ -197,6 +197,47 @@ func TestBorKeyValueConfigHelper(t *testing.T) {
 	assert.Equal(t, borKeyValueConfigHelper(burntContract, 41824608+1), "0x617b94CCCC2511808A3C9478ebb96f455CF167aA")
 }
 
+func TestDescriptionValenciaBanner(t *testing.T) {
+	t.Parallel()
+
+	scheduled := &ChainConfig{ChainID: big.NewInt(1), Bor: &BorConfig{ValenciaBlock: big.NewInt(100)}}
+	if got := scheduled.Description(); !strings.Contains(got, "Valencia:") {
+		t.Errorf("expected Valencia banner when ValenciaBlock is set, got:\n%s", got)
+	}
+
+	unset := &ChainConfig{ChainID: big.NewInt(1), Bor: &BorConfig{}}
+	if got := unset.Description(); strings.Contains(got, "Valencia:") {
+		t.Errorf("did not expect Valencia banner when ValenciaBlock is nil, got:\n%s", got)
+	}
+}
+
+func TestIsValencia(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		fork   *big.Int
+		number int64
+		want   bool
+	}{
+		{"unset fork never active", nil, 0, false},
+		{"unset fork never active at height", nil, 1_000_000, false},
+		{"genesis activation at 0", big.NewInt(0), 0, true},
+		{"genesis activation above 0", big.NewInt(0), 1, true},
+		{"scheduled fork before activation", big.NewInt(100), 99, false},
+		{"scheduled fork at activation", big.NewInt(100), 100, true},
+		{"scheduled fork after activation", big.NewInt(100), 101, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c := &BorConfig{ValenciaBlock: tt.fork}
+			assert.Equal(t, c.IsValencia(big.NewInt(tt.number)), tt.want)
+		})
+	}
+}
+
 func TestOverrideStateSyncRecordsInRange(t *testing.T) {
 	t.Parallel()
 

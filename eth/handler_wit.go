@@ -20,7 +20,8 @@ const (
 	PageSize                       = 15 * 1024 * 1024  // 15 MB
 	MaximumCachedWitnessOnARequest = 200 * 1024 * 1024 // 200 MB, the maximum amount of memory a request can demand while getting witness
 	MaximumResponseSize            = 16 * 1024 * 1024  // 16 MB, helps to fast fail check
-	MaxWitnessMetadataServe        = 1024              // maximum hashes a single GetWitnessMetadata request may carry
+	MaxWitnessMetadataServe        = wit.MaxWitnessMetadataServe
+	MaxWitnessServe                = wit.MaxWitnessServe
 )
 
 // witHandler implements the eth.Backend interface to handle the various network
@@ -115,6 +116,11 @@ func (h *witHandler) handleWitnessHashesAnnounce(peer *wit.Peer, hashes []common
 // The returned data is [][]byte, as rlp.RawValue is essentially []byte.
 func (h *witHandler) handleGetWitness(peer *wit.Peer, req *wit.GetWitnessPacket) (wit.WitnessPacketResponse, error) {
 	log.Debug("handleGetWitness processing request", "peer", peer.ID(), "reqID", req.RequestId, "witnessPages", len(req.WitnessPages))
+
+	if len(req.WitnessPages) > MaxWitnessServe {
+		return nil, fmt.Errorf("witness request exceeds %d page limit: got %d", MaxWitnessServe, len(req.WitnessPages))
+	}
+
 	// list different witnesses to query
 	seen := make(map[common.Hash]struct{}, len(req.WitnessPages))
 	for _, witnessPage := range req.WitnessPages {
@@ -134,13 +140,14 @@ func (h *witHandler) handleGetWitness(peer *wit.Peer, req *wit.GetWitnessPacket)
 
 	// query witnesses by demand
 	var response wit.WitnessPacketResponse
-	witnessCache := make(map[common.Hash][]byte, len(seen))
+	witnessCache := make(map[common.Hash][]byte, len(seen)) // dedupe full reads within a request
 
-	totalResponsePayloadDataAmount := 0 // fast fail check
-	totalCached := 0                    // protection against heavy memory requests
+	responseElementsSize := uint64(0) // framing-aware response-size guard
+	totalLoaded := 0                  // protection against heavy memory requests
 
 	for _, witnessPage := range req.WitnessPages {
-		totalPages := (witnessSize[witnessPage.Hash] + PageSize - 1) / PageSize // integer trick for: ceil(witnessSize/PageSize)
+		size := witnessSize[witnessPage.Hash]
+		totalPages := (size + PageSize - 1) / PageSize // integer trick for: ceil(witnessSize/PageSize)
 		var witnessPageResponse wit.WitnessPageResponse
 		witnessPageResponse.Page = witnessPage.Page
 		witnessPageResponse.Hash = witnessPage.Hash
@@ -148,40 +155,101 @@ func (h *witHandler) handleGetWitness(peer *wit.Peer, req *wit.GetWitnessPacket)
 
 		needToQuery := witnessPage.Page < totalPages
 		if needToQuery {
-			var witnessBytes []byte
-			if cachedRLPBytes, exists := witnessCache[witnessPage.Hash]; exists {
-				witnessBytes = cachedRLPBytes
-			} else {
-				// Use GetWitness to benefit from the blockchain's witness cache
-				queriedBytes := h.Chain().GetWitness(witnessPage.Hash)
-				witnessCache[witnessPage.Hash] = queriedBytes
-				witnessBytes = queriedBytes
-				totalCached += len(queriedBytes)
+			witnessBytes, exists := witnessCache[witnessPage.Hash]
+			if !exists {
+				// Reject before reading if loading this witness would cross the
+				// per-request memory budget, so a rejected request never allocates
+				// a full witness past the bound.
+				if totalLoaded+int(size) >= MaximumCachedWitnessOnARequest {
+					return nil, errors.New("request demands too much memory")
+				}
+				// Read without populating the chain witness cache so peer-serving
+				// traffic does not evict witnesses the import path relies on.
+				witnessBytes = h.Chain().GetWitnessUncached(witnessPage.Hash)
+				witnessCache[witnessPage.Hash] = witnessBytes
+				totalLoaded += len(witnessBytes)
 			}
 
+			// Clamp both bounds: the size index and the stored witness can disagree
+			// under a concurrent delete, so never slice past the bytes actually read.
+			witnessLen := uint64(len(witnessBytes))
 			start := PageSize * witnessPage.Page
 			end := start + PageSize
-			if end > uint64(len(witnessBytes)) {
-				end = uint64(len(witnessBytes))
+			if start > witnessLen {
+				start = witnessLen
+			}
+			if end > witnessLen {
+				end = witnessLen
+			}
+			if start == end {
+				// Metadata advertised this page but the stored witness is missing or
+				// truncated; fail rather than serving a misleading empty page.
+				return nil, errors.New("witness page unavailable")
 			}
 			witnessPageResponse.Data = witnessBytes[start:end]
-			totalResponsePayloadDataAmount += len(witnessPageResponse.Data)
 		}
-		response = append(response, witnessPageResponse)
 
-		// fast fail check
-		if totalCached >= MaximumCachedWitnessOnARequest {
-			return nil, errors.New("requests demans huge amount of memory")
+		// backstop: bound total witness bytes loaded in case the stored witness is
+		// larger than its size index advertised.
+		if totalLoaded >= MaximumCachedWitnessOnARequest {
+			return nil, errors.New("request demands too much memory")
 		}
-		// memory protection check
-		if totalResponsePayloadDataAmount >= MaximumResponseSize {
+		// response protection: bound the encoded packet size (RLP framing included)
+		responseElementsSize += witnessPageResponseEncodedSize(uint64(len(witnessPageResponse.Data)), witnessPage.Page, totalPages)
+		if witnessPacketResponseEncodedSize(req.RequestId, responseElementsSize) > MaximumResponseSize {
 			return nil, errors.New("response exceeds maximum p2p payload size")
 		}
+
+		response = append(response, witnessPageResponse)
 	}
 
 	// Return the collected RLP data
 	log.Debug("handleGetWitness returning witnesses pages", "peer", peer.ID(), "reqID", req.RequestId, "count", len(response))
 	return response, nil
+}
+
+func witnessPacketResponseEncodedSize(requestID uint64, responseElementsSize uint64) uint64 {
+	responseListSize := rlpListEncodedSize(responseElementsSize)
+	return rlpListEncodedSize(rlpUintEncodedSize(requestID) + responseListSize)
+}
+
+func witnessPageResponseEncodedSize(dataSize uint64, page uint64, totalPages uint64) uint64 {
+	const hashEncodedSize = 1 + common.HashLength
+	payloadSize := rlpBytesEncodedSizeUpperBound(dataSize) + hashEncodedSize + rlpUintEncodedSize(page) + rlpUintEncodedSize(totalPages)
+	return rlpListEncodedSize(payloadSize)
+}
+
+func rlpBytesEncodedSizeUpperBound(size uint64) uint64 {
+	if size == 1 {
+		return 2
+	}
+	if size < 56 {
+		return 1 + size
+	}
+	return 1 + uint64ByteLen(size) + size
+}
+
+func rlpListEncodedSize(payloadSize uint64) uint64 {
+	if payloadSize < 56 {
+		return 1 + payloadSize
+	}
+	return 1 + uint64ByteLen(payloadSize) + payloadSize
+}
+
+func rlpUintEncodedSize(n uint64) uint64 {
+	if n < 128 {
+		return 1
+	}
+	return 1 + uint64ByteLen(n)
+}
+
+func uint64ByteLen(n uint64) uint64 {
+	var size uint64
+	for n > 0 {
+		size++
+		n >>= 8
+	}
+	return size
 }
 
 // handleGetWitnessMetadata retrieves only the metadata (page count, size, block number) for the requested witness hashes.

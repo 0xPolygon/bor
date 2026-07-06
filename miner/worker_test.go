@@ -3945,21 +3945,54 @@ func TestTxFitsSize(t *testing.T) {
 	threshold := uint64(params.MaxBlockSize - maxBlockSizeBufferZone)
 	require.Greater(t, threshold, txSize, "buffer-zone leaves no room for a single tx in this test")
 
+	// Valencia reserves a slice of the block for the state-sync system tx, lowering
+	// the effective threshold by params.MaxStateSyncBytesPerBlock.
+	reservedThreshold := threshold - uint64(params.MaxStateSyncBytesPerBlock)
+	require.Greater(t, reservedThreshold, txSize, "reservation leaves no room for a single tx in this test")
+
 	cases := []struct {
-		name string
-		size uint64
-		want bool
+		name    string
+		size    uint64
+		reserve uint64
+		want    bool
 	}{
-		{"empty env accepts tx", 0, true},
-		{"plenty of room accepts tx", threshold / 2, true},
-		{"one byte under threshold accepts tx", threshold - txSize - 1, true},
-		{"exactly at threshold rejects tx", threshold - txSize, false},
-		{"over threshold rejects tx", threshold, false},
+		{"empty env accepts tx", 0, 0, true},
+		{"plenty of room accepts tx", threshold / 2, 0, true},
+		{"one byte under threshold accepts tx", threshold - txSize - 1, 0, true},
+		{"exactly at threshold rejects tx", threshold - txSize, 0, false},
+		{"over threshold rejects tx", threshold, 0, false},
+		{"reservation accepts tx under reduced threshold", reservedThreshold - txSize - 1, params.MaxStateSyncBytesPerBlock, true},
+		{"reservation rejects tx that would fit without it", reservedThreshold, params.MaxStateSyncBytesPerBlock, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			env := &environment{size: tc.size}
+			env := &environment{size: tc.size, stateSyncReserve: tc.reserve}
 			require.Equal(t, tc.want, env.txFitsSize(tx))
+		})
+	}
+}
+
+func TestStateSyncReserveFor(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		config *params.ChainConfig
+		number int64
+		want   uint64
+	}{
+		{"nil bor reserves nothing", &params.ChainConfig{}, 100, 0},
+		{"valencia unset reserves nothing", &params.ChainConfig{Bor: &params.BorConfig{}}, 100, 0},
+		{"before valencia reserves nothing", &params.ChainConfig{Bor: &params.BorConfig{ValenciaBlock: big.NewInt(100)}}, 99, 0},
+		{"at valencia reserves budget", &params.ChainConfig{Bor: &params.BorConfig{ValenciaBlock: big.NewInt(100)}}, 100, params.MaxStateSyncBytesPerBlock},
+		{"after valencia reserves budget", &params.ChainConfig{Bor: &params.BorConfig{ValenciaBlock: big.NewInt(0)}}, 1, params.MaxStateSyncBytesPerBlock},
+		{"sprint start reserves budget", &params.ChainConfig{Bor: &params.BorConfig{ValenciaBlock: big.NewInt(0), Sprint: map[string]uint64{"0": 16}}}, 160, params.MaxStateSyncBytesPerBlock},
+		{"non sprint start reserves nothing", &params.ChainConfig{Bor: &params.BorConfig{ValenciaBlock: big.NewInt(0), Sprint: map[string]uint64{"0": 16}}}, 161, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tc.want, stateSyncReserveFor(tc.config, big.NewInt(tc.number)))
 		})
 	}
 }

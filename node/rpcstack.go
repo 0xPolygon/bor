@@ -327,8 +327,9 @@ func (h *httpServer) enableRPC(apis []rpc.API, config httpConfig) error {
 		return errors.New("JSON-RPC over HTTP is already enabled")
 	}
 
-	// Create RPC server and handler.
-	srv := rpc.NewServer("", 0, 0)
+	// Pool size from config bounds request concurrency (0 = unbounded fast path).
+	// The pool has no per-task timeout; request wall-time is bounded by WriteTimeout.
+	srv := rpc.NewServer("http", config.executionPoolSize, 0)
 	srv.SetBatchLimits(config.batchItemLimit, config.batchResponseSizeLimit)
 	if config.httpBodyLimit > 0 {
 		srv.SetHTTPBodyLimit(config.httpBodyLimit)
@@ -366,8 +367,8 @@ func (h *httpServer) enableWS(apis []rpc.API, config wsConfig) error {
 	if h.wsAllowed() {
 		return errors.New("JSON-RPC over WebSocket is already enabled")
 	}
-	// Create RPC server and handler.
-	srv := rpc.NewServer("", 0, 0)
+	// See enableRPC for the size/timeout semantics.
+	srv := rpc.NewServer("ws", config.executionPoolSize, 0)
 	srv.SetBatchLimits(config.batchItemLimit, config.batchResponseSizeLimit)
 	if config.httpBodyLimit > 0 {
 		srv.SetHTTPBodyLimit(config.httpBodyLimit)
