@@ -442,14 +442,19 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 
 	context := NewEVMBlockContext(header, p.bc.hc, author)
 
+	// Resolve the JUMPDEST cache: an explicit param wins; otherwise honor a
+	// shared cache already wired via cfg.SharedJumpDestCache (e.g. the global,
+	// prefetcher-warmed cache) instead of discarding it; only when neither is
+	// set fall back to a fresh per-block cache shared across workers.
+	if jumpDestCache == nil {
+		jumpDestCache = cfg.SharedJumpDestCache
+	}
 	if jumpDestCache == nil {
 		jumpDestCache = vm.NewSyncJumpDestCache()
 	}
 
 	vmenv := vm.NewEVM(context, statedb, config, cfg)
-	if jumpDestCache != nil {
-		vmenv.SetJumpDestCache(jumpDestCache)
-	}
+	vmenv.SetJumpDestCache(jumpDestCache)
 
 	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
 		ProcessBeaconBlockRoot(*beaconRoot, vmenv)
