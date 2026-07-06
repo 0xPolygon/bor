@@ -278,6 +278,65 @@ func FuzzV2ExecutorVsSerial(f *testing.F) {
 			byte(kindTransferToFresh), 3, 0xff, 1, 0,
 			byte(kindTransferToSender), 4, 0, 3, 0,
 		},
+		// CREATE2 deploy then EXTCODEHASH/SIZE/BALANCE read of the live target.
+		{
+			byte(kindCreate2Deploy), 0, 0, 0, 0,
+			byte(kindReadTarget), 1, 0, 0, 0,
+		},
+		// Metamorphic: deploy+destroy in one tx (EIP-6780 deletion), re-create at
+		// the same address, then read — the destruction-resolved code-read lineage.
+		{
+			byte(kindCreate2AndDestroy), 0, 0, 0, 0,
+			byte(kindCreate2Deploy), 1, 0, 0, 0,
+			byte(kindReadTarget), 2, 0, 0, 0,
+		},
+		// Metamorphic interleaved across senders: destroy/read/re-create/read —
+		// maximizes reorder pressure on the target's create/suicide/code writers.
+		{
+			byte(kindCreate2AndDestroy), 0, 0, 0, 0,
+			byte(kindReadTarget), 1, 0, 0, 0,
+			byte(kindCreate2Deploy), 2, 0, 0, 0,
+			byte(kindReadTarget), 3, 0, 0, 0,
+		},
+		// Fund a dead target (balance-only account), then CREATE2 over it, read.
+		{
+			byte(kindFundTarget), 0, 0, 5, 0,
+			byte(kindCreate2Deploy), 1, 0, 0, 0,
+			byte(kindReadTarget), 2, 0, 0, 0,
+		},
+		// Deploy, separate-tx destroy (EIP-6780 keeps code since not same tx),
+		// then read — exercises SuicidePath writes without true deletion.
+		{
+			byte(kindCreate2Deploy), 0, 0, 0, 0,
+			byte(kindDestroyTarget), 1, 0, 0, 0,
+			byte(kindReadTarget), 2, 0, 0, 0,
+		},
+		// Flag-driven metamorphic reorder — the reported bug shape: deploy+destroy
+		// T (true deletion), fund the flag (steers a later deploy off the target),
+		// speculatively re-deploy T, then read its EXTCODEHASH. A V2 that accepts
+		// the stale code read by value equality diverges from serial.
+		{
+			byte(kindCreate2AndDestroy), 0, 0, 0, 0,
+			byte(kindSetFlag), 1, 0, 1, 0,
+			byte(kindCreate2Deploy), 2, 0, 0, 0,
+			byte(kindReadTarget), 3, 0, 0, 0,
+		},
+		// Reverting tx must not leak: destroy T, then REV speculatively re-deploys
+		// T + writes storage but REVERTs, then read — R must see T absent.
+		{
+			byte(kindCreate2AndDestroy), 0, 0, 0, 0,
+			byte(kindCallRevert), 1, 0, 0, 0,
+			byte(kindReadTarget), 2, 0, 0, 0,
+		},
+		// EIP-7702 delegated to the metamorphic target (authSel 0x40), interleaved
+		// with a destroy: resolving the authority's delegated code reads T's
+		// CodePath across the destruction lineage.
+		{
+			byte(kindCreate2Deploy), 0, 0, 0, 0,
+			byte(kind7702Auth), 1, 0x40, 0, 0,
+			byte(kindCreate2AndDestroy), 2, 0, 0, 0,
+			byte(kindReadTarget), 3, 0, 0, 0,
+		},
 	}
 	for _, s := range seeds {
 		f.Add(s, uint8(4)) // 4 workers
@@ -359,8 +418,50 @@ func TestV2ExecutorVsSerial_SeedCorpus(t *testing.T) {
 			{kind: kindTransferToFresh, senderIdx: 3, freshNonce: 0xff, valueGwei: 1},
 			{kind: kindTransferToSender, senderIdx: 4, recipientIdx: 0, valueGwei: 3},
 		},
+		"Create2DeployThenRead": {
+			{kind: kindCreate2Deploy, senderIdx: 0},
+			{kind: kindReadTarget, senderIdx: 1},
+		},
+		"MetamorphicRedeploy": {
+			{kind: kindCreate2AndDestroy, senderIdx: 0},
+			{kind: kindCreate2Deploy, senderIdx: 1},
+			{kind: kindReadTarget, senderIdx: 2},
+		},
+		"MetamorphicInterleaved": {
+			{kind: kindCreate2AndDestroy, senderIdx: 0},
+			{kind: kindReadTarget, senderIdx: 1},
+			{kind: kindCreate2Deploy, senderIdx: 2},
+			{kind: kindReadTarget, senderIdx: 3},
+		},
+		"FundThenCreate2Read": {
+			{kind: kindFundTarget, senderIdx: 0, valueGwei: 5},
+			{kind: kindCreate2Deploy, senderIdx: 1},
+			{kind: kindReadTarget, senderIdx: 2},
+		},
+		"DeployDestroySeparateRead": {
+			{kind: kindCreate2Deploy, senderIdx: 0},
+			{kind: kindDestroyTarget, senderIdx: 1},
+			{kind: kindReadTarget, senderIdx: 2},
+		},
+		"FlagDrivenMetamorphic": {
+			{kind: kindCreate2AndDestroy, senderIdx: 0},
+			{kind: kindSetFlag, senderIdx: 1, valueGwei: 1},
+			{kind: kindCreate2Deploy, senderIdx: 2},
+			{kind: kindReadTarget, senderIdx: 3},
+		},
+		"RevertNoLeak": {
+			{kind: kindCreate2AndDestroy, senderIdx: 0},
+			{kind: kindCallRevert, senderIdx: 1},
+			{kind: kindReadTarget, senderIdx: 2},
+		},
+		"Auth7702ToMetamorphic": {
+			{kind: kindCreate2Deploy, senderIdx: 0},
+			{kind: kind7702Auth, senderIdx: 1, authSel: 0x40},
+			{kind: kindCreate2AndDestroy, senderIdx: 2},
+			{kind: kindReadTarget, senderIdx: 3},
+		},
 	}
-	workerGrid := []int{1, 4, 8}
+	workerGrid := []int{1, 2, 3, 4, 6, 8}
 	for name, decoded := range cases {
 		for _, w := range workerGrid {
 			t.Run(name+"/w"+string(rune('0'+w)), func(t *testing.T) {
@@ -368,4 +469,108 @@ func TestV2ExecutorVsSerial_SeedCorpus(t *testing.T) {
 			})
 		}
 	}
+}
+
+// TestMetamorphicHarnessSemantics validates the metamorphic harness on the
+// serial path so the differential fuzzer's results are trustworthy: the
+// hand-laid-out target dispatch, the flag-conditional deploy, and the revert
+// rollback must all behave as the comments claim. A harness bug here would
+// otherwise hide (serial and V2 agreeing on a wrong value) or produce spurious
+// divergences.
+func TestMetamorphicHarnessSemantics(t *testing.T) {
+	h := metaHarness
+	slot := func(n int64) common.Hash { return common.BigToHash(big.NewInt(n)) }
+
+	runSerialState := func(decoded []fuzzTx) *state.StateDB {
+		t.Helper()
+		tdb, root := buildBaseStateRoot(t)
+		signer := types.LatestSigner(fuzzChainConfig)
+		baseFee := big.NewInt(1)
+		blockCtx := vm.BlockContext{
+			CanTransfer: CanTransfer,
+			Transfer:    Transfer,
+			GetHash:     func(uint64) common.Hash { return common.Hash{} },
+			Coinbase:    fuzzCoinbase,
+			GasLimit:    30_000_000,
+			BlockNumber: big.NewInt(1),
+			Time:        1,
+			BaseFee:     baseFee,
+			Random:      &common.Hash{},
+		}
+		txs, msgs := signedTxs(t, decoded, signer, baseFee)
+		sdb, err := state.New(root, state.NewDatabase(tdb, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		gp := new(GasPool).AddGas(blockCtx.GasLimit)
+		var usedGas uint64
+		for i, tx := range txs {
+			sdb.SetTxContext(tx.Hash(), i)
+			evm := vm.NewEVM(blockCtx, sdb, fuzzChainConfig, vm.Config{})
+			if _, err := ApplyTransactionWithEVM(msgs[i], gp, sdb, blockCtx.BlockNumber, common.Hash{}, blockCtx.Time, tx, &usedGas, evm); err != nil {
+				t.Fatalf("tx %d: %v", i, err)
+			}
+		}
+		return sdb
+	}
+
+	// Deploy T, then read it: T is live; reader records a nonzero codehash and
+	// T's storage slot 0 (== 1, set by T's initcode) via the STATICCALL path.
+	sdb := runSerialState([]fuzzTx{{kind: kindCreate2Deploy, senderIdx: 0}, {kind: kindReadTarget, senderIdx: 1}})
+	if len(sdb.GetCode(h.target)) == 0 {
+		t.Fatal("deploy: target has no code")
+	}
+	if sdb.GetState(h.reader, common.Hash{}) == (common.Hash{}) {
+		t.Fatal("deploy+read: reader codehash slot is zero, want nonzero")
+	}
+	if got := sdb.GetState(h.reader, slot(3)).Big().Int64(); got != 1 {
+		t.Fatalf("deploy+read: reader storage-read slot = %d, want 1 (T dispatch broken)", got)
+	}
+
+	// Deploy + destroy in one tx, then read: T is gone, codehash reads zero.
+	sdb = runSerialState([]fuzzTx{{kind: kindCreate2AndDestroy, senderIdx: 0}, {kind: kindReadTarget, senderIdx: 1}})
+	if len(sdb.GetCode(h.target)) != 0 {
+		t.Fatal("deploy+destroy: target still has code")
+	}
+	if sdb.GetState(h.reader, common.Hash{}) != (common.Hash{}) {
+		t.Fatal("deploy+destroy+read: reader codehash slot nonzero, want zero")
+	}
+
+	// Reverting tx rolls back both its nested CREATE2 of T and its SSTORE.
+	sdb = runSerialState([]fuzzTx{{kind: kindCallRevert, senderIdx: 0}})
+	if len(sdb.GetCode(h.target)) != 0 {
+		t.Fatal("revert: target deployed despite REVERT (CREATE2 not rolled back)")
+	}
+	if sdb.GetState(h.reverter, common.Hash{}) != (common.Hash{}) {
+		t.Fatal("revert: reverter SSTORE survived REVERT")
+	}
+
+	// Funding the flag steers D's CREATE2 salt off zero, so T does NOT land at
+	// the canonical target address.
+	sdb = runSerialState([]fuzzTx{{kind: kindSetFlag, senderIdx: 0, valueGwei: 1}, {kind: kindCreate2Deploy, senderIdx: 1}})
+	if len(sdb.GetCode(h.target)) != 0 {
+		t.Fatal("flag funded: target deployed at salt-0 address despite nonzero flag")
+	}
+
+	// Transient storage is per-tx: two txs each calling TR must both see a zero
+	// transient value before their own TSTORE (slot1 stays 0); a leak across txs
+	// would make the second tx record 0xbeef. slot2 confirms the intra-tx
+	// TSTORE→TLOAD round-trip.
+	sdb = runSerialState([]fuzzTx{{kind: kindTransient, senderIdx: 0}, {kind: kindTransient, senderIdx: 1}})
+	if got := sdb.GetState(h.transient, slot(1)).Big().Int64(); got != 0 {
+		t.Fatalf("transient: slot1 = %d, want 0 (transient leaked across txs)", got)
+	}
+	if got := sdb.GetState(h.transient, slot(2)).Big().Uint64(); got != 0xbeef {
+		t.Fatalf("transient: slot2 = %d, want 0xbeef (TSTORE/TLOAD round-trip broken)", got)
+	}
+
+	// Smoke: the remaining new harness kinds execute without a consensus error
+	// (runSerialState fails the test on any apply error). Differential parity is
+	// checked by the fuzzer.
+	_ = runSerialState([]fuzzTx{
+		{kind: kindCreate2Deploy, senderIdx: 0},
+		{kind: kindDelegateRead, senderIdx: 1},
+		{kind: kindClearRefund, senderIdx: 2},
+		{kind: kindEmitLog, senderIdx: 3},
+	})
 }

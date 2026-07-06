@@ -100,6 +100,20 @@ func (mr *MockBackendMockRecorder) AccountManager() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AccountManager", reflect.TypeOf((*MockBackend)(nil).AccountManager))
 }
 
+// BaseFee mocks base method.
+func (m *MockBackend) BaseFee(ctx context.Context) *big.Int {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "BaseFee", ctx)
+	ret0, _ := ret[0].(*big.Int)
+	return ret0
+}
+
+// BaseFee indicates an expected call of BaseFee.
+func (mr *MockBackendMockRecorder) BaseFee(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BaseFee", reflect.TypeOf((*MockBackend)(nil).BaseFee), ctx)
+}
+
 // BlobBaseFee mocks base method.
 func (m *MockBackend) BlobBaseFee(ctx context.Context) *big.Int {
 	m.ctrl.T.Helper()
@@ -436,17 +450,17 @@ func (mr *MockBackendMockRecorder) GetCanonicalTransaction(txHash any) *gomock.C
 }
 
 // GetEVM mocks base method.
-func (m *MockBackend) GetEVM(ctx context.Context, arg1 *state.StateDB, header *types.Header, vmConfig *vm.Config, blockCtx *vm.BlockContext) *vm.EVM {
+func (m *MockBackend) GetEVM(ctx context.Context, state *state.StateDB, header *types.Header, vmConfig *vm.Config, blockCtx *vm.BlockContext) *vm.EVM {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetEVM", ctx, arg1, header, vmConfig, blockCtx)
+	ret := m.ctrl.Call(m, "GetEVM", ctx, state, header, vmConfig, blockCtx)
 	ret0, _ := ret[0].(*vm.EVM)
 	return ret0
 }
 
 // GetEVM indicates an expected call of GetEVM.
-func (mr *MockBackendMockRecorder) GetEVM(ctx, arg1, header, vmConfig, blockCtx any) *gomock.Call {
+func (mr *MockBackendMockRecorder) GetEVM(ctx, state, header, vmConfig, blockCtx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetEVM", reflect.TypeOf((*MockBackend)(nil).GetEVM), ctx, arg1, header, vmConfig, blockCtx)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetEVM", reflect.TypeOf((*MockBackend)(nil).GetEVM), ctx, state, header, vmConfig, blockCtx)
 }
 
 // GetFinalizedBlockNumber mocks base method.

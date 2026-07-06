@@ -43,6 +43,7 @@ var amoyTestnet = &Chain{
 				LisovoProBlock:    big.NewInt(34062000),
 				GiuglianoBlock:    big.NewInt(35573500),
 				ChicagoBlock:      big.NewInt(38358000),
+				ValenciaBlock:     big.NewInt(40776000),
 				StateSyncConfirmationDelay: map[string]uint64{
 					"0": 128,
 				},

@@ -29,6 +29,11 @@ var protocolLengths = map[uint]uint64{WIT1: 6, WIT0: 4}
 const maxMessageSize = 16 * 1024 * 1024
 
 const (
+	MaxWitnessServe         = 16 // maximum pages a single GetWitness request may carry
+	MaxWitnessMetadataServe = 64 // maximum hashes a single GetWitnessMetadata request may carry
+)
+
+const (
 	NewWitnessMsg         = 0x00
 	NewWitnessHashesMsg   = 0x01
 	GetMsgWitness         = 0x02

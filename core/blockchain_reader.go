@@ -174,6 +174,16 @@ func (bc *BlockChain) GetWitness(hash common.Hash) []byte {
 	return witness
 }
 
+// GetWitnessUncached retrieves a witness by hash without inserting it into the
+// witness cache. Serving peer requests must not evict witnesses that the import
+// path depends on, so this path reads through the cache but never populates it.
+func (bc *BlockChain) GetWitnessUncached(hash common.Hash) []byte {
+	if cached, ok := bc.witnessCache.Get(hash); ok {
+		return cached
+	}
+	return bc.witnessStore.ReadWitness(hash)
+}
+
 // HasWitness checks if a witness is present in the cache or database.
 func (bc *BlockChain) HasWitness(hash common.Hash) bool {
 	if bc.witnessCache.Contains(hash) {

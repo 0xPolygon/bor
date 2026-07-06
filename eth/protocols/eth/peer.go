@@ -106,6 +106,7 @@ func NewPeer(version uint, p *p2p.Peer, rw p2p.MsgReadWriter, txpool TxPool) *Pe
 		Peer:            p,
 		rw:              rw,
 		version:         version,
+		td:              new(big.Int),
 		knownTxs:        newKnownCache(maxKnownTxs),
 		knownBlocks:     newKnownCache(maxKnownBlocks),
 		queuedBlocks:    make(chan *blockPropagation, maxQueuedBlocks),
