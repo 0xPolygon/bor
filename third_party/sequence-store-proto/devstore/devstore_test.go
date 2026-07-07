@@ -158,6 +158,43 @@ func TestAppendRejections(t *testing.T) {
 				Header: []byte("h"), PrefixCommitment: prefix(s),
 			}}}
 		}, pb.AckStatus_ACK_STATUS_MALFORMED},
+		{"base_fee_oversized", func(s *Store, hash2 [32]byte) *pb.Entry {
+			fee := make([]byte, 33)
+			fee[0] = 0x01
+
+			return &pb.Entry{Kind: &pb.Entry_BlockOpen{BlockOpen: &pb.BlockOpen{
+				BlockNumber: 103, ParentHash: hash2[:], GasLimit: 1,
+				BaseFee: fee, PrefixCommitment: prefix(s),
+			}}}
+		}, pb.AckStatus_ACK_STATUS_MALFORMED},
+		{"open_short_prefix", func(_ *Store, hash2 [32]byte) *pb.Entry {
+			return &pb.Entry{Kind: &pb.Entry_BlockOpen{BlockOpen: &pb.BlockOpen{
+				BlockNumber: 103, ParentHash: hash2[:], GasLimit: 1,
+				PrefixCommitment: []byte{0x01},
+			}}}
+		}, pb.AckStatus_ACK_STATUS_MALFORMED},
+		{"open_short_parent", func(s *Store, _ [32]byte) *pb.Entry {
+			return &pb.Entry{Kind: &pb.Entry_BlockOpen{BlockOpen: &pb.BlockOpen{
+				BlockNumber: 103, ParentHash: []byte{0xaa}, GasLimit: 1,
+				PrefixCommitment: prefix(s),
+			}}}
+		}, pb.AckStatus_ACK_STATUS_MALFORMED},
+		{"seal_short_prefix", func(s *Store, _ [32]byte) *pb.Entry {
+			return &pb.Entry{Kind: &pb.Entry_BlockSeal{BlockSeal: &pb.BlockSeal{
+				Header: []byte("h"), PrefixCommitment: []byte{0x01},
+			}}}
+		}, pb.AckStatus_ACK_STATUS_MALFORMED},
+		{"base_fee_max_width_ok_shape", func(s *Store, hash2 [32]byte) *pb.Entry {
+			// 32-byte fee with a leading zero is non-minimal — rejected —
+			// which pins the boundary between width and minimality checks.
+			fee := make([]byte, 32)
+			fee[1] = 0x01
+
+			return &pb.Entry{Kind: &pb.Entry_BlockOpen{BlockOpen: &pb.BlockOpen{
+				BlockNumber: 103, ParentHash: hash2[:], GasLimit: 1,
+				BaseFee: fee, PrefixCommitment: prefix(s),
+			}}}
+		}, pb.AckStatus_ACK_STATUS_MALFORMED},
 		{"base_fee_leading_zero", func(s *Store, hash2 [32]byte) *pb.Entry {
 			return &pb.Entry{Kind: &pb.Entry_BlockOpen{BlockOpen: &pb.BlockOpen{
 				BlockNumber: 103, ParentHash: hash2[:], GasLimit: 1,

@@ -257,6 +257,19 @@ func TestFoldTxsEmptyInputs(t *testing.T) {
 	}
 }
 
+func TestFoldOpenBaseFeeBoundaries(t *testing.T) {
+	max256 := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
+
+	for _, fee := range []*big.Int{big.NewInt(0), max256} {
+		open := testOpen
+		open.BaseFee = fee
+
+		if _, err := FoldOpen(Seed(137), open); err != nil {
+			t.Errorf("base fee %s rejected: %v", fee, err)
+		}
+	}
+}
+
 func TestFoldOpenInvalidBaseFee(t *testing.T) {
 	tests := []struct {
 		name string

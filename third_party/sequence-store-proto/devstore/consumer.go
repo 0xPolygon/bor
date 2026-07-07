@@ -98,30 +98,40 @@ func (s *Store) Stream(req *pb.StreamRequest, srv pb.ConsumerService_StreamServe
 	for {
 		batch, notify := s.tail(pos)
 
-		for _, entry := range batch {
-			if err := srv.Send(&pb.StreamResponse{Frame: &pb.StreamResponse_Entry{Entry: entry}}); err != nil {
-				return err
-			}
+		if err := sendEntries(srv, batch); err != nil {
+			return err
 		}
 
 		pos += len(batch)
 
-		if len(batch) == 0 {
-			if !live {
-				live = true
+		if len(batch) > 0 {
+			continue
+		}
 
-				if err := srv.Send(&pb.StreamResponse{Frame: &pb.StreamResponse_Live{Live: &pb.Live{}}}); err != nil {
-					return err
-				}
-			}
+		if !live {
+			live = true
 
-			select {
-			case <-srv.Context().Done():
-				return srv.Context().Err()
-			case <-notify:
+			if err := srv.Send(&pb.StreamResponse{Frame: &pb.StreamResponse_Live{Live: &pb.Live{}}}); err != nil {
+				return err
 			}
 		}
+
+		select {
+		case <-srv.Context().Done():
+			return srv.Context().Err()
+		case <-notify:
+		}
 	}
+}
+
+func sendEntries(srv pb.ConsumerService_StreamServer, batch []*pb.Entry) error {
+	for _, entry := range batch {
+		if err := srv.Send(&pb.StreamResponse{Frame: &pb.StreamResponse_Entry{Entry: entry}}); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // Range returns up to limit entries after the resume position, long-polling
