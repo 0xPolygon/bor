@@ -104,6 +104,10 @@ The ```bor server``` command runs the Bor client.
 
 - ```rpc.returndatalimit```: Maximum size (in bytes) a result of an rpc request could have (use 0 for no limits) (default: 100000)
 
+- ```sequencer.endpoint```: Sequence store gRPC endpoint (default: 127.0.0.1:7788)
+
+- ```sequencer.role```: Sequence store role: "producer" publishes the block lifecycle while mining, "consumer" serves preconfirmation receipts (empty = disabled)
+
 - ```snapshot```: Enables the snapshot-database mode (default: true)
 
 - ```state.scheme```: Scheme to use for storing ethereum state ('hash' or 'path') (default: path)

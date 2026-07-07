@@ -54,6 +54,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/eth/protocols/snap"
 	"github.com/ethereum/go-ethereum/eth/protocols/wit"
+	"github.com/ethereum/go-ethereum/eth/sequencer"
 	"github.com/ethereum/go-ethereum/eth/relay"
 	"github.com/ethereum/go-ethereum/eth/tracers"
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -129,6 +130,10 @@ type Ethereum struct {
 	miner     *miner.Miner
 	gasPrice  *big.Int
 	etherbase common.Address
+
+	// Sequence store integration: at most one is set, by role.
+	seqPublisher *sequencer.Publisher // block producer: publishes the block lifecycle
+	seqConsumer  *sequencer.Consumer  // RPC node: re-executes the stream for preconf receipts
 
 	networkID     uint64
 	netRPCService *ethapi.NetAPI
@@ -472,6 +477,32 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		eth.miner = miner.New(eth, &config.Miner, eth.blockchain.Config(), eth.eventMux, eth.engine, eth.isLocalBlock, eth.config.WitnessProtocol)
 		eth.miner.SetExtra(makeExtraData(config.Miner.ExtraData))
 		eth.miner.SetPrioAddresses(config.TxPool.Locals)
+	}
+
+	switch config.SequencerRole {
+	case "producer":
+		if eth.miner != nil {
+			publisher, err := sequencer.NewPublisher(config.SequencerEndpoint, eth.blockchain.Config().ChainID.Uint64(), config.SequencerRefresh)
+			if err != nil {
+				return nil, fmt.Errorf("sequencer publisher: %w", err)
+			}
+
+			eth.seqPublisher = publisher
+			eth.miner.SetSequencer(publisher)
+		}
+	case "consumer":
+		// A consumer that cannot start (pre-Rio head, missing coinbase map)
+		// must not block the node: preconfs stay off, everything else runs.
+		consumer, err := sequencer.NewConsumer(config.SequencerEndpoint, eth.blockchain)
+		if err != nil {
+			log.Error("Sequencer consumer disabled", "err", err)
+		} else {
+			eth.seqConsumer = consumer
+			consumer.Start()
+		}
+	case "":
+	default:
+		return nil, fmt.Errorf("unknown sequencer role %q", config.SequencerRole)
 	}
 
 	// 1.14.8: NewOracle function definition was changed to accept (startPrice *big.Int) param.
@@ -1083,6 +1114,14 @@ func (s *Ethereum) Stop() error {
 	<-ch
 	s.filterMaps.Stop()
 	s.txPool.Close()
+	if s.seqPublisher != nil {
+		s.seqPublisher.Close()
+	}
+
+	if s.seqConsumer != nil {
+		s.seqConsumer.Close()
+	}
+
 	if s.miner != nil {
 		s.miner.Close()
 	}

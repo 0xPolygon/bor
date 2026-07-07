@@ -519,6 +519,10 @@ func (b testBackend) CheckPreconfStatus(hash common.Hash) (bool, error) {
 	}
 	return false, nil
 }
+
+func (b testBackend) GetPreconfReceipt(hash common.Hash) (*types.Receipt, *types.Transaction, bool) {
+	return nil, nil, false
+}
 func (b testBackend) SubmitPrivateTx(tx *types.Transaction) error {
 	if b.submitPrivateTxFn != nil {
 		return b.submitPrivateTxFn(tx)

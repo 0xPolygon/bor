@@ -9,6 +9,8 @@ RUN apk add --no-cache build-base git linux-headers
 WORKDIR ${BOR_DIR}
 
 COPY go.mod go.sum ./
+# Local module referenced by a replace directive; must exist before go mod download.
+COPY third_party ./third_party
 
 RUN --mount=type=ssh \
     --mount=type=cache,target=/go/pkg/mod \

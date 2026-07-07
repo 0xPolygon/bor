@@ -1445,5 +1445,25 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Group:   "P2P",
 	})
 
+	// sequencer
+	f.StringFlag(&flagset.StringFlag{
+		Name:    "sequencer.role",
+		Usage:   "Sequence store role: \"producer\" publishes the block lifecycle while mining, \"consumer\" serves preconfirmation receipts (empty = disabled)",
+		Value:   &c.cliConfig.Sequencer.Role,
+		Default: c.cliConfig.Sequencer.Role,
+	})
+	f.StringFlag(&flagset.StringFlag{
+		Name:    "sequencer.endpoint",
+		Usage:   "Sequence store gRPC endpoint",
+		Value:   &c.cliConfig.Sequencer.Endpoint,
+		Default: c.cliConfig.Sequencer.Endpoint,
+	})
+	f.DurationFlag(&flagset.DurationFlag{
+		Name:    "sequencer.refresh",
+		Usage:   "Producer mempool re-snapshot cadence while a block is open (continuous building); 0 keeps the one-shot fill",
+		Value:   &c.cliConfig.Sequencer.Refresh,
+		Default: c.cliConfig.Sequencer.Refresh,
+	})
+
 	return f
 }

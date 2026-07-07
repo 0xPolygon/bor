@@ -406,6 +406,11 @@ type worker struct {
 	eth         Backend
 	chain       *core.BlockChain
 
+	// sequencer, when set, receives block-production progress (open, per-tx,
+	// seal) for the sequence store. Set before the worker starts; nil when
+	// sequencing is disabled. All its methods are non-blocking.
+	sequencer BlockSequencer
+
 	prio []common.Address // A list of senders to prioritize
 
 	// Feeds
@@ -1151,6 +1156,15 @@ func (w *worker) resultLoop() {
 				log.Error("Block found but no relative pending task", "number", block.Number(), "sealhash", sealhash, "hash", hash)
 				continue
 			}
+
+			// Publish the seal record the moment the sealed block exists —
+			// ahead of the chain write and announcement below — so stream
+			// consumers can close the block. Stale/duplicate seals never
+			// reach this point.
+			if w.sequencer != nil {
+				w.sequencer.SealBlock(block.Header())
+			}
+
 			// Different block could share same sealhash, deep copy here to prevent write-write conflict.
 			var (
 				receipts = make([]*types.Receipt, len(task.receipts))
@@ -1359,6 +1373,13 @@ func (w *worker) commitTransaction(env *environment, tx *types.Transaction) ([]*
 	env.receipts = append(env.receipts, receipt)
 	env.tcount++
 	env.size += tx.Size()
+
+	// Only actual block production is sequenced: the pending-block snapshot
+	// and payload-building paths also commit transactions, but those never
+	// seal, and publishing them would poison the store chain.
+	if w.sequencer != nil && w.IsRunning() {
+		w.sequencer.PublishTx(tx)
+	}
 
 	return receipt.Logs, nil
 }
@@ -2327,6 +2348,16 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 	prepareWorkDuration := time.Since(prepareWorkStart)
 	prepareWorkTimer.Update(prepareWorkDuration)
 
+	// The header context is final here (engine.Prepare included): publish the
+	// block-open record before any transaction commits. A rebuild of the same
+	// height or a build on a new parent republishes — downstream re-anchoring
+	// handles both. Gated on IsRunning: pending-block maintenance also builds
+	// work cycles, but those never seal.
+	if w.sequencer != nil && w.IsRunning() {
+		w.sequencer.OpenBlock(work.header.Number.Uint64(), work.header.Time,
+			work.header.ParentHash, work.header.GasLimit, work.header.BaseFee)
+	}
+
 	// Starts accounting time after prepareWork, since it includes the wait we have on Prepare phase of Bor
 	start := time.Now()
 
@@ -2392,6 +2423,18 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 	genParams.productionStart = time.Now()
 	// Fill pending transactions from the txpool into the block.
 	err = w.fillTransactions(interrupt, work, genParams)
+
+	// Continuous building (sequencing): keep the block open until just
+	// before its announce time, re-snapshotting the txpool on the sequencing
+	// cadence so transactions are executed — and streamed to the sequence
+	// store — as they arrive instead of waiting for the next slot. Off (the
+	// one-shot fill above) unless a sequencer with a refresh interval is
+	// attached.
+	if err == nil && w.sequencer != nil && w.IsRunning() {
+		if refresh := w.sequencer.RefreshInterval(); refresh > 0 {
+			err = w.refillUntilAnnounce(interrupt, work, genParams, refresh)
+		}
+	}
 	// Wait for any sendPlan goroutines to finish before closing the channel.
 	// These goroutines do only non-blocking sends so they complete in microseconds.
 	// Waiting here ensures no goroutine sends to a closed channel.
@@ -2446,6 +2489,37 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 	}
 	w.current = work
 	w.currentMu.Unlock()
+}
+
+// refillUntilAnnounce keeps re-snapshotting the txpool into the open block
+// until sealMargin before the block's announce time. Already-committed
+// transactions are skipped by the nonce checks inside commitTransactions; an
+// interrupt aborts exactly as it does during the initial fill.
+func (w *worker) refillUntilAnnounce(interrupt *atomic.Int32, work *environment, genParams *generateParams, refresh time.Duration) error {
+	const sealMargin = 150 * time.Millisecond
+
+	for {
+		remaining := time.Until(work.header.GetActualTime()) - sealMargin
+		if remaining <= 0 {
+			return nil
+		}
+
+		if remaining < refresh {
+			time.Sleep(remaining)
+		} else {
+			time.Sleep(refresh)
+		}
+
+		if interrupt != nil {
+			if signal := interrupt.Load(); signal != commitInterruptNone {
+				return signalToErr(signal)
+			}
+		}
+
+		if err := w.fillTransactions(interrupt, work, genParams); err != nil {
+			return err
+		}
+	}
 }
 
 // runPrefetcher owns the lifecycle of the unified prefetcher stream for one block.

@@ -1980,6 +1980,20 @@ func (api *TransactionAPI) GetTransactionReceipt(ctx context.Context, hash commo
 	}
 
 	if tx == nil {
+		// Not in the chain yet: serve a preconfirmation receipt when the
+		// node follows the sequence store and has re-executed the tx.
+		if receipt, preconfTx, ok := api.b.GetPreconfReceipt(hash); ok {
+			fields := marshalReceipt(receipt, receipt.BlockHash, receipt.BlockNumber.Uint64(),
+				api.signer, preconfTx, int(receipt.TransactionIndex), false)
+			if receipt.BlockHash == (common.Hash{}) {
+				// The block is not sealed yet; a zero hash would read as a
+				// real block to clients, null reads as pending.
+				fields["blockHash"] = nil
+			}
+
+			return fields, nil
+		}
+
 		return nil, nil
 	}
 

@@ -44,6 +44,23 @@ type Backend interface {
 	PeerCount() int
 }
 
+// BlockSequencer receives block-production progress for the sequence store:
+// the block context when a build starts, each transaction as it commits, and
+// the sealed header the moment sealing completes. Implementations must never
+// block — they are called on the worker's hot paths.
+type BlockSequencer interface {
+	OpenBlock(number uint64, timestamp uint64, parent common.Hash, gasLimit uint64, baseFee *big.Int)
+	PublishTx(tx *types.Transaction)
+	SealBlock(header *types.Header)
+
+	// RefreshInterval is the mempool re-snapshot cadence while a block is
+	// open: when non-zero the worker keeps the block open until just before
+	// its announce time, refilling from the pool on this cadence so
+	// transactions are executed (and preconfirmed) as they arrive. Zero
+	// keeps the default one-shot fill.
+	RefreshInterval() time.Duration
+}
+
 // Config is the configuration parameters of mining.
 type Config struct {
 	AllowGasTipOverride bool           // Won't enforce the default min gas tip (25 gwei) if true and will use user provided value
@@ -131,6 +148,12 @@ func New(eth Backend, config *Config, chainConfig *params.ChainConfig, mux *even
 
 func (miner *Miner) GetWorker() *worker {
 	return miner.worker
+}
+
+// SetSequencer attaches a sequence-store publisher to the worker. Call before
+// the miner starts; the worker reads the field without synchronization.
+func (miner *Miner) SetSequencer(s BlockSequencer) {
+	miner.worker.sequencer = s
 }
 
 // update keeps track of the downloader events. Please be aware that this is a one shot type of update loop.

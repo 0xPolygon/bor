@@ -330,6 +330,13 @@ type Config struct {
 	TxSyncMaxTimeout     time.Duration `toml:",omitempty"`
 
 	// Preconf / Private transaction relay related settings
+	// Sequence store integration: role "producer" (publish the block
+	// lifecycle while mining) or "consumer" (re-execute the stream for
+	// preconfirmation receipts); empty disables.
+	SequencerRole     string
+	SequencerEndpoint string
+	SequencerRefresh  time.Duration
+
 	EnablePreconfs            bool
 	EnablePrivateTx           bool
 	BlockProducerRpcEndpoints []string

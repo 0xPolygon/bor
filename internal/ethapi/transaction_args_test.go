@@ -332,6 +332,10 @@ func (b *backendMock) PurgePrivateTx(hash common.Hash)                   {}
 func (b *backendMock) SuggestGasTipCap(ctx context.Context) (*big.Int, error) {
 	return big.NewInt(42), nil
 }
+
+func (b *backendMock) GetPreconfReceipt(hash common.Hash) (*types.Receipt, *types.Transaction, bool) {
+	return nil, nil, false
+}
 func (b *backendMock) BlobBaseFee(ctx context.Context) *big.Int { return big.NewInt(42) }
 func (b *backendMock) BaseFee(ctx context.Context) *big.Int     { return big.NewInt(0) }
 

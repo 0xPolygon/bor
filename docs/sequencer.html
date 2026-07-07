@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Low-Latency Transaction Sequencing (Preconfirmations) — Polygon PoS / Bor</title>
+<style>
+  :root {
+    --fg: #1b1f24;
+    --muted: #5b6570;
+    --line: #e3e8ee;
+    --accent: #5a3ec8;
+    --bg-code: #f5f6f8;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --decision: #2f7d4f;
+    --decision-bg: #eef7f1;
+    --tradeoff: #b06b00;
+    --tradeoff-bg: #fbf3e4;
+    --invariant: #5a3ec8;
+    --invariant-bg: #f1edfb;
+    --note: #36506b;
+    --note-bg: #eef3f8;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--fg);
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 48px 24px 96px;
+    background: #fff;
+  }
+  h1 { font-size: 1.95rem; line-height: 1.2; margin: 0 0 .4rem; }
+  h2 { font-size: 1.4rem; margin: 2.6rem 0 .8rem; padding-bottom: .3rem; border-bottom: 2px solid var(--line); }
+  h3 { font-size: 1.12rem; margin: 1.8rem 0 .5rem; }
+  h2 .num { color: var(--accent); font-variant-numeric: tabular-nums; margin-right: .5rem; }
+  p, li { color: var(--fg); }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .88em; background: var(--bg-code); padding: .1em .35em; border-radius: 4px; }
+  pre { background: var(--bg-code); padding: 16px 18px; border-radius: 8px; overflow-x: auto; line-height: 1.4; font-size: .82rem; border: 1px solid var(--line); }
+  /* ── architecture diagram (HTML/CSS components) ── */
+  .arch { background: linear-gradient(180deg,#fbfcfd,#f6f8fa); border: 1px solid var(--line); border-radius: 12px; padding: 26px 22px; margin: 1.4rem 0 .4rem; overflow-x: auto; }
+  .arch-node { width: min(560px, 100%); border: 1px solid var(--line); border-radius: 10px; background: #fff; box-shadow: 0 1px 2px rgba(20,30,45,.05); }
+  .arch-node .nhead { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: .78rem; letter-spacing: .04em; text-transform: uppercase; padding: 9px 14px; border-bottom: 1px solid var(--line); }
+  .arch-node .nhead .htag { margin-left: auto; font-weight: 500; font-size: .68rem; text-transform: none; letter-spacing: 0; color: var(--muted); }
+  .arch-node .nbody { padding: 12px 14px; font-size: .9rem; }
+  .arch-node .nbody ul { margin: 0; padding-left: 1.15em; }
+  .arch-node .nbody li { margin: .18rem 0; }
+
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; display: inline-block; }
+  .d-gray { background: #8a94a6; } .d-accent { background: var(--accent); }
+  .d-green { background: #2f7d4f; } .d-teal { background: #0e7c86; } .d-blue { background: #2563eb; }
+
+  .arch-mini { display: inline-flex; align-items: center; gap: 9px; border: 1px solid var(--line); border-radius: 999px; background: #fff; padding: 8px 18px; font-weight: 600; font-size: .85rem; box-shadow: 0 1px 2px rgba(20,30,45,.05); }
+
+  .arch-subgrid { display: grid; gap: 10px; }
+  .arch-sub { border: 1px solid var(--line); border-radius: 8px; background: var(--bg-code); padding: 10px 13px; }
+  .arch-sub .shead { font-weight: 700; font-size: .92rem; display: flex; align-items: center; gap: 8px; }
+  .arch-sub ul { margin: .3rem 0 0; padding-left: 1.15em; font-size: .86rem; }
+  .arch-sub li { margin: .14rem 0; }
+  .arch-sub .pill { font-size: .64rem; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; padding: .18em .55em; border-radius: 999px; background: var(--invariant-bg); color: var(--invariant); }
+
+  .arch-bprow { display: flex; align-items: flex-end; }
+  .arch-bp { flex: none; }
+  .arch-right { display: flex; align-items: center; flex: none; }
+  .arch-right .hline { position: relative; width: 72px; height: 2px; background: #9aa5b1; margin-left: 2px; }
+  .arch-right .hline::after { content: ""; position: absolute; right: -1px; top: -4px; width: 0; height: 0; border-top: 5px solid transparent; border-bottom: 5px solid transparent; border-left: 9px solid #9aa5b1; }
+  .arch-right .hlabel { position: absolute; left: 4px; top: -18px; white-space: nowrap; font-size: .73rem; color: var(--muted); }
+
+  .arch-down { position: relative; height: 50px; }
+  .arch-down::before { content: ""; position: absolute; left: 38px; top: 1px; bottom: 11px; width: 2px; background: #9aa5b1; }
+  .arch-down::after { content: ""; position: absolute; left: 34px; bottom: 1px; width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 9px solid #9aa5b1; }
+  .arch-down .elabel { position: absolute; left: 58px; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: .82rem; }
+  @media (max-width: 700px) { .arch-down .elabel { font-size: .76rem; } }
+  .meta { color: var(--muted); font-size: .92rem; margin: 0 0 1.4rem; }
+  .meta strong { color: var(--fg); }
+  .badge { display: inline-block; font-size: .72rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; padding: .2em .6em; border-radius: 999px; background: var(--tradeoff-bg); color: var(--tradeoff); vertical-align: middle; }
+  .tldr { background: var(--note-bg); border: 1px solid var(--line); border-left: 4px solid var(--note); border-radius: 8px; padding: 14px 18px; margin: 1.4rem 0 0; }
+  .tldr p { margin: .4rem 0; }
+  .callout { border-radius: 8px; padding: 12px 16px; margin: 1rem 0; border: 1px solid var(--line); }
+  .callout .label { font-weight: 700; font-size: .76rem; letter-spacing: .04em; text-transform: uppercase; display: block; margin-bottom: .3rem; }
+  .callout p { margin: .3rem 0; }
+  .callout.decision  { background: var(--decision-bg);  border-left: 4px solid var(--decision); }
+  .callout.decision  .label { color: var(--decision); }
+  .callout.tradeoff  { background: var(--tradeoff-bg);  border-left: 4px solid var(--tradeoff); }
+  .callout.tradeoff  .label { color: var(--tradeoff); }
+  .callout.invariant { background: var(--invariant-bg); border-left: 4px solid var(--invariant); }
+  .callout.invariant .label { color: var(--invariant); }
+  table { border-collapse: collapse; width: 100%; margin: 1.1rem 0; font-size: .92rem; }
+  th, td { border: 1px solid var(--line); padding: 9px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--bg-code); font-weight: 600; }
+  td code { white-space: nowrap; }
+  ul.toc { list-style: none; padding: 0; columns: 2; column-gap: 32px; font-size: .92rem; }
+  ul.toc li { margin: .25rem 0; break-inside: avoid; }
+  .toc .num { color: var(--accent); font-variant-numeric: tabular-nums; display: inline-block; width: 1.6em; }
+  /* ── schema field tables & API endpoint rows ── */
+  .schema { width: min(560px,100%); margin: 1.1rem 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .schema .sname { font-family: var(--mono); font-weight: 700; font-size: .82rem; background: var(--bg-code); padding: 8px 14px; border-bottom: 1px solid var(--line); }
+  .schema table { margin: 0; width: 100%; border: none; font-size: .9rem; }
+  .schema td { border: none; border-top: 1px solid var(--line); padding: 7px 14px; vertical-align: top; }
+  .schema tbody tr:first-child td { border-top: none; }
+  .schema .fn { font-family: var(--mono); font-weight: 600; white-space: nowrap; }
+  .schema .ft { font-family: var(--mono); font-size: .82rem; color: var(--accent); white-space: nowrap; }
+  .schema .fd { color: var(--muted); }
+  .schema .fd code, .ep .ret code { white-space: normal; }
+  .opt { display: inline-block; font-size: .58rem; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; padding: .1em .4em; border-radius: 4px; background: var(--tradeoff-bg); color: var(--tradeoff); margin-left: 4px; vertical-align: middle; }
+  .api { width: min(680px,100%); margin: 1.1rem 0; border: 1px solid var(--line); border-radius: 8px; padding: 2px 14px; }
+  .ep { padding: 10px 0; border-top: 1px solid var(--line); }
+  .ep:first-child { border-top: none; }
+  .method { display: inline-block; font-family: var(--mono); font-size: .64rem; font-weight: 700; letter-spacing: .05em; padding: .18em .5em; border-radius: 4px; background: var(--invariant-bg); color: var(--invariant); margin-right: 8px; vertical-align: middle; }
+  .ep .path { font-family: var(--mono); font-size: .83rem; font-weight: 600; overflow-wrap: break-word; }
+  .ep .ret { display: block; color: var(--muted); font-size: .83rem; margin-top: 5px; }
+  hr { border: none; border-top: 1px solid var(--line); margin: 2.4rem 0; }
+  footer { color: var(--muted); font-size: .85rem; margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+  .small { font-size: .9rem; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<h1>Low-Latency Transaction Sequencing &mdash; Preconfirmations for Polygon PoS</h1>
+<p class="meta">
+  <span class="badge">Draft</span><br>
+  <strong>Component:</strong> Bor (execution client) &nbsp;&middot;&nbsp;
+  <strong>Author:</strong> Jerry (fchen@polygon.technology) &nbsp;&middot;&nbsp;
+  <strong>Date:</strong> 2026-06-24<br>
+  <span class="small">Store wire-format and APIs are specified in <a href="#store">&sect;10</a> below.</span>
+</p>
+
+<div class="tldr">
+  <p><strong>TL;DR.</strong> Today a transaction waits ~1.5&ndash;3&nbsp;s to be included, and an RPC node waits a further ~500&ndash;1000&nbsp;ms for the block to build and propagate before it can return a receipt. This proposal has the block producer publish each transaction to a centralized <em>sequence store</em> the moment it commits that transaction to the block it is building. RPC nodes stream that sequence, re-execute it, and return a <em>preconfirmation receipt</em> <em>before</em> the block is sealed &mdash; <em>deterministic</em> (the receipt is exactly what the block seals, <a href="#determinism">&sect;7</a>) and requiring no consensus fork, only a producer-side scheduling change (<a href="#sequencing">&sect;6</a>).</p>
+</div>
+
+<p class="small"><strong>Polygon/Bor vocabulary used throughout</strong> (skip if you already know it):</p>
+<ul class="small">
+  <li><strong>Heimdall</strong> &mdash; Polygon PoS&rsquo;s consensus client; it selects validators and tells Bor who produces each block.</li>
+  <li><strong>Span / sprint</strong> &mdash; validator-rotation windows. A span fixes the validator set; within it, block-production turns rotate each sprint (a fixed run of blocks).</li>
+  <li><strong>VEBLOP</strong> &mdash; the producer-election model in which one validator is the active block producer at a time, with defined failover.</li>
+  <li><strong>State-sync</strong> &mdash; L1&rarr;L2 messages the protocol injects into Bor at sprint starts; not user transactions.</li>
+  <li><strong>Milestone</strong> &mdash; Heimdall&rsquo;s periodic finality checkpoint for Bor blocks; once milestoned, blocks are final.</li>
+  <li><strong>Rio, Indore</strong> &mdash; named Bor hardforks; the one fact that matters is given at each mention.</li>
+</ul>
+
+<h2><span class="num">&sect;0</span>Contents</h2>
+<ul class="toc">
+  <li><span class="num">1</span><a href="#problem">Problem</a></li>
+  <li><span class="num">2</span><a href="#goals">Goals &amp; non-goals</a></li>
+  <li><span class="num">3</span><a href="#decisions">Key design decisions</a></li>
+  <li><span class="num">4</span><a href="#definitions">Definitions</a></li>
+  <li><span class="num">5</span><a href="#architecture">Architecture</a></li>
+  <li><span class="num">6</span><a href="#sequencing">Sequencing &amp; block production</a></li>
+  <li><span class="num">7</span><a href="#determinism">Determinism</a></li>
+  <li><span class="num">8</span><a href="#failure">Failure scenarios</a></li>
+  <li><span class="num">9</span><a href="#latency">Latency budget</a></li>
+  <li><span class="num">10</span><a href="#store">Sequence store &amp; APIs</a></li>
+  <li><span class="num">11</span><a href="#open">Open questions</a></li>
+</ul>
+
+<h2 id="problem"><span class="num">&sect;1</span>Problem</h2>
+<p>On Polygon PoS, a user typically waits ~1.5&ndash;3&nbsp;seconds for a transaction to be included in a block. The block producer snapshots the executable set from its mempool once per block-production cycle, so a transaction arriving just after a snapshot waits almost a full cycle before it is even considered. On top of that, an RPC node today cannot return a receipt until the producer has <em>built and propagated</em> the block (~500&ndash;1000&nbsp;ms) and the node has imported it. Both waits sit on the critical path of perceived confirmation latency and block sub-second user experiences.</p>
+<p class="small">Note: block time is configurable per network and has moved below 1.5&nbsp;s on some deployments (Rio <code>--miner.blocktime</code>); the latency problem and this design are independent of the exact cadence.</p>
+
+<h2 id="goals"><span class="num">&sect;2</span>Goals &amp; non-goals</h2>
+<h3>Goals</h3>
+<ul>
+  <li>Return a transaction <em>preconfirmation</em> (an execution receipt) <em>before</em> the block is sealed, taking the ~500&ndash;1000&nbsp;ms build/propagate/import step off the confirmation critical path.</li>
+  <li>Make every preconfirmation <em>deterministic</em> &mdash; the receipt an RPC node returns is exactly what the sealed block produces (&sect;7).</li>
+  <li>Add this with <em>no consensus fork</em> &mdash; publishing and the store are an additive sidecar on the block producer&rsquo;s build loop, and the one production-side change (the producer executes ahead of the announcement cadence to preconfirm on commit, &sect;6) reuses Bor&rsquo;s existing early-announcement rules, so peers validate blocks exactly as today.</li>
+</ul>
+<h3>Non-goals (v1)</h3>
+<ul>
+  <li><strong>Decentralized sequencing.</strong> A decentralized sequencer needs an additional consensus mechanism and adds latency; out of scope for now. The current block producer sequences &mdash; it already orders and executes as it builds.</li>
+  <li><strong>Sequencing state-sync transactions.</strong> State-sync (L1&rarr;L2) is consensus-injected at sprint boundaries; it is <em>not</em> published. RPC nodes apply it from their own Heimdall like any Bor node, deterministically (&sect;7).</li>
+  <li><strong>Light-traffic inclusion latency.</strong> The mempool snapshot cadence (&sect;1) is unchanged: in light traffic a transaction still waits for the next refresh before it is committed at all. Execute-ahead improves the inclusion side only under bursts (&sect;6); the win this design ships everywhere is the <em>confirmation</em> leg &mdash; the receipt arrives before build/propagate/import instead of after.</li>
+</ul>
+
+<h2 id="decisions"><span class="num">&sect;3</span>Key design decisions</h2>
+<p>Each decision below carries an explicit, accepted tradeoff. This table is a forward-looking summary &mdash; each row links to the section that explains it. Skim it now; the definitions (<a href="#definitions">&sect;4</a>) and full rationale follow.</p>
+<table>
+  <thead>
+    <tr><th>Decision</th><th>Choice</th><th>Rationale</th><th>Accepted tradeoff</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Sequencer identity</td>
+      <td>The <strong>block producer&rsquo;s own build loop</strong> &mdash; no separate component</td>
+      <td>The BP already orders and executes transactions as it builds; the only new work is publishing each one as it commits. Reuses span rotation / VEBLOP election as failover</td>
+      <td>Publishing rides the bor deploy cycle &mdash; but it is a thin, off-chain add-on</td>
+    </tr>
+    <tr>
+      <td>Sequencing model</td>
+      <td><strong>Post-execution</strong> &mdash; a transaction is published only after the BP commits it to the pending block</td>
+      <td>Executing first means the parent hash, state, gas, and affordability are all known, so receipts are fully deterministic and fees stay normal</td>
+      <td>A preconf cannot precede the BP&rsquo;s execution &mdash; it trails by a small publish + re-execute lag (&sect;9)</td>
+    </tr>
+    <tr>
+      <td>Block boundaries</td>
+      <td>Set by the BP&rsquo;s <strong>normal sealing</strong> &mdash; same contents and limits as today, though sealing may run ahead of the announcement cadence under a burst (&sect;6); block N+1 is sequenced only after N is sealed</td>
+      <td>The parent block is always sealed when its child is sequenced, so the parent hash is known and block-hash-dependent receipts are deterministic (&sect;7)</td>
+      <td>No look-ahead into unsealed blocks &mdash; which a full-speed BP could not exploit anyway (&sect;9)</td>
+    </tr>
+    <tr>
+      <td>Block production</td>
+      <td><strong>Execute ahead, announce on cadence</strong> &mdash; under a burst the producer keeps executing instead of idling; it seals a full block ahead of its announcement time and holds it, broadcasting on the normal schedule</td>
+      <td>Lets the producer drain a burst ahead of the announcement cadence, so transactions are preconfirmed as they execute rather than at block deadlines (&sect;9); reuses PIP-66 early announcement, so no new consensus rule (&sect;6)</td>
+      <td>The producer buffers sealed-but-unannounced blocks, bounded by an explicit seal-ahead cap (&sect;6)</td>
+    </tr>
+    <tr>
+      <td>Determinism</td>
+      <td><strong>Full</strong> &mdash; RPC nodes re-execute the exact committed transactions on the sealed parent and the block&rsquo;s fixed header</td>
+      <td>Identical inputs &rarr; identical receipts; nothing is guessed</td>
+      <td>Only an ordinary pre-finality reorg can change results, reconciled against canonical (&sect;8)</td>
+    </tr>
+    <tr>
+      <td>Fees / gas</td>
+      <td><strong>Standard</strong> &mdash; actual gas used, normal EIP-1559</td>
+      <td>The BP executes before publishing, so actual gas is known &mdash; no need to charge gas limits or pre-plan block space</td>
+      <td>None beyond today&rsquo;s fee model</td>
+    </tr>
+    <tr>
+      <td>Consensus impact</td>
+      <td><strong>None</strong> &mdash; no fork; peers validate blocks exactly as today</td>
+      <td>Publishing, the store, and RPC pre-execution are off-chain; the one producer-side change (execute-ahead / hold-until-announceable, &sect;6) reuses Bor&rsquo;s existing early-announcement rules</td>
+      <td>To be verified at implementation (&sect;11)</td>
+    </tr>
+    <tr>
+      <td>Durability / ACK</td>
+      <td>A preconf is issued only after the <strong>replicated store durably acks</strong> the (already-executed) record</td>
+      <td>Durability lets a newly-elected producer replay the sequence across a BP failure or reorg, keeping preconfs deterministic (&sect;8)</td>
+      <td>A thin best-effort loss window remains (&sect;8); a stronger <strong>all-producer order-ack</strong> &mdash; every producer-set candidate acks each entry before the preconf is issued, so any successor already holds the tail (&ldquo;4/4&rdquo; on today&rsquo;s four-BP mainnet) &mdash; is a documented future upgrade</td>
+    </tr>
+    <tr>
+      <td>Sequence store</td>
+      <td>A single centralized service operated by Polygon (interface in <a href="#store">&sect;10</a>; backend deferred)</td>
+      <td>Simple; a scalable read endpoint that shields the BP from read load and DoS</td>
+      <td>Single point of failure <em>for the preconf feature</em> (never for the chain); consumers trust the operator &mdash; including for pre-seal authorship, since entries are channel-authenticated rather than producer-signed; each seal re-authenticates its block (&sect;5)</td>
+    </tr>
+    <tr>
+      <td>Preconfirmation finality</td>
+      <td><strong>Final once published</strong> &mdash; no reordering, no fee-based replacement</td>
+      <td>A preconfirmation is only useful if the producer can never take it back; the only residual revocations are chain-level &mdash; pre-finality reorg or supersession, priced by the &sect;8 SLA</td>
+      <td>Cancellation is possible only until the BP includes the transaction &mdash; standard mempool replacement</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="definitions"><span class="num">&sect;4</span>Definitions</h2>
+<ul>
+  <li><strong>Transaction sequencing</strong> &mdash; the order in which the block producer commits transactions to a block, and the block boundaries between them, published as the BP builds.</li>
+  <li><strong>Anchor</strong> &mdash; an RPC node&rsquo;s latest imported block; the state all pre-execution starts from.</li>
+  <li><strong>Confirmation (preconfirmation, or &ldquo;preconf&rdquo;)</strong> &mdash; the execution receipt an RPC node returns for a sequenced-but-not-yet-sealed transaction, by re-executing the published sequence.</li>
+  <li><strong>Deterministic confirmation</strong> &mdash; a preconfirmation whose receipt is exactly what the block seals. In this design every preconf is deterministic; the only caveat is an ordinary chain reorg (&sect;8).</li>
+  <li><strong>Commit interrupt</strong> &mdash; the normal block-time cutoff: a transaction the BP has not committed when the block closes simply rolls to the next block (and is sequenced there when it executes).</li>
+</ul>
+
+<h2 id="architecture"><span class="num">&sect;5</span>Architecture</h2>
+<p>The block producer reads pending transactions from its mempool and builds blocks as usual. As it commits each transaction to the block it is building, it publishes that transaction &mdash; as a record &mdash; to a store that RPC nodes consume.</p>
+
+<div class="arch">
+
+  <div class="arch-mini"><span class="dot d-gray"></span>mempool</div>
+
+  <div class="arch-down"><span class="elabel">pending transactions</span></div>
+
+  <div class="arch-bprow">
+    <div class="arch-node arch-bp">
+      <div class="nhead"><span class="dot d-accent"></span>Block Producer<span class="htag">current span proposer</span></div>
+      <div class="nbody">
+        <ul>
+          <li>executes pending txns into the block it&rsquo;s building</li>
+          <li>publishes each tx to the store as it commits</li>
+          <li>seals blocks at the consensus block time</li>
+        </ul>
+      </div>
+    </div>
+    <div class="arch-right">
+      <div class="hline"><span class="hlabel">sealed blocks</span></div>
+      <div class="arch-mini"><span class="dot d-green"></span>canonical chain</div>
+    </div>
+  </div>
+
+  <div class="arch-down"><span class="elabel">append: records (authenticated)</span></div>
+
+  <div class="arch-node">
+    <div class="nhead"><span class="dot d-teal"></span>Sequence Store<span class="htag">centralized &middot; Polygon-operated</span></div>
+    <div class="nbody">Append-only, replicated log of producer records; durably acks each one. Scales reads, shields the BP, and serves as the hand-off channel on producer rotation. Full spec: <a href="#store">&sect;10</a>.</div>
+  </div>
+
+  <div class="arch-down"><span class="elabel">stream / pull</span></div>
+
+  <div class="arch-node">
+    <div class="nhead"><span class="dot d-blue"></span>RPC Nodes</div>
+    <div class="nbody">
+      <ul>
+        <li>pre-execute the published sequence</li>
+        <li>return preconfirmation receipts</li>
+        <li>serve <code>pending</code>-tag state queries</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="arch-down"><span class="elabel">receipts + pending-tag reads</span></div>
+
+  <div class="arch-mini"><span class="dot d-gray"></span>users</div>
+
+</div>
+
+<h3>Why the producer is the sequencer</h3>
+<p>The ordering decision <em>is</em> the BP&rsquo;s execution order: it pulls the mempool, executes transactions in priority order, and commits them to the block. A separate sequencer would have to execute too &mdash; to know gas, state, and validity &mdash; so it would duplicate the miner rather than replace it. The producer is the sequencer by construction. Keep the <strong>store and any order-flow ingress as separate, independently-scalable services</strong> (so roadmap items like reserved block space, private order flow, and external preconf providers don&rsquo;t require re-architecting), but the ordering itself stays in the producer.</p>
+
+<div class="callout invariant">
+  <span class="label">Safety invariant</span>
+  <p>The BP publishes a transaction only after it has committed that transaction to the block it is building, and the published prefix is <strong>binding on the producer itself</strong>: Bor&rsquo;s miner can internally restart the open block (resubmit and timeout interrupts, <code>miner/worker.go</code>), and a rebuild on the <em>same parent</em> must re-commit the already-published transactions in their published order before adding anything new; a rebuild on a <em>changed parent</em> (a reorg arrived mid-block) instead re-opens the block with a supersession open record (&sect;8, &sect;10). So the published sequence is always a prefix of what the BP will seal &mdash; publish and seal cannot silently diverge. The store is a best-effort publication channel; the sealed chain is the source of truth. Every failure mode below is analyzed against this invariant.</p>
+</div>
+
+<h3>Sequence store</h3>
+<p>An append-only, replicated log of producer-published <strong>entries</strong>, mirroring each block&rsquo;s lifecycle: a <em>block-open record</em> fixing the block&rsquo;s header context, <em>transaction records</em> (ordered raw transactions), and a <em>block-seal record</em> carrying the sealed header &mdash; each chained to the prefix it extends over an authenticated write path (&sect;10). It durably acks each entry before the preconf is considered valid (&sect;3). Besides shielding the BP from read load and DoS, it is the <strong>hand-off channel</strong> on producer rotation: a newly-elected producer reads the tail to continue rather than starting fresh. It is <em>not</em> on the chain&rsquo;s critical path &mdash; but it still needs its own HA, failover, and upgrade process, since preconfirmations stop (degrading to baseline latency) whenever it is down. The wire format, navigation (by block + tx hash), and APIs are specified in <a href="#store">&sect;10</a>.</p>
+<p><strong>Authentication &amp; trust.</strong> Entries carry <strong>no producer signature</strong> &mdash; the write path is protected by channel authentication instead: the BP publishes over an authenticated connection (mutual TLS with a per-validator credential &mdash; an operational secret, rotatable, and distinct from the validator&rsquo;s consensus key). The store checks nothing against Heimdall: <strong>write access is the credential</strong> &mdash; which credentials exist and are active is operational (issuance and revocation) &mdash; and among authenticated writers the head check arbitrates (&sect;10): exactly one chain, first-to-extend wins. A stale-but-credentialed producer can contend for the head &mdash; a nuisance resolved by revoking its credential, not a fork &mdash; and anything it lands is voided by canonical within about a block (&sect;8). Keeping the consensus key out of the sidecar removes the cross-protocol signature surface entirely (nothing the sidecar emits can be confused with a header) and takes per-entry signing and per-entry <code>ecrecover</code> off the hot path. The flip side is a trust-model statement consumers must know: <strong>pre-seal content is store-attested</strong> &mdash; RPC nodes rely on the store&rsquo;s authentication for who published the open block&rsquo;s entries. The exposure is one block and self-healing: every <strong>seal record is self-authenticating</strong> (its header embeds the consensus seal, which normal canonical import verifies independently), and the sealed header&rsquo;s roots commit to exactly the transactions and context published &mdash; so canonical voids anything mis-attributed within about a block (&sect;8). Consumers add no attribution check of their own: they <strong>trust the authenticated store</strong> for pre-seal content, full stop. Producers are not declared in requests &mdash; identity is the channel, nothing more. The head check is the first line of defense for the partition / double-writing cases in <a href="#failure">&sect;8</a>.</p>
+<p><strong>Transport.</strong> RPC nodes consume as a stream (for latency) with a pull/replay fallback. Streaming&rsquo;s reliability concerns &mdash; delivery, reconnection, gap detection, backpressure &mdash; are specified in <a href="#store">&sect;10</a> and tracked in <a href="#open">&sect;11</a>.</p>
+<p><strong>Access (tiered).</strong> v1 exposes the store to <em>our own</em> RPC nodes, so preconf reaches clients of our RPC. Early/premium access can be granted to large, latency-sensitive customers; external RPC providers can later point their nodes at the store endpoint. A <em>premium</em> tier that pushes order flow to, and returns receipts directly from, the BP (collapsing both gossip legs) is a future PoC &mdash; gated on measuring the actual latency win and a product decision on pricing.</p>
+
+<h3>RPC nodes</h3>
+<p>Given the sequence endpoint, an RPC node re-executes the published transactions and produces preconfirmation receipts. It anchors at its latest sealed block and applies the committed records as they arrive. Confirmations are served through:</p>
+<ul>
+  <li><code>eth_getTransactionReceipt</code> / <code>eth_getTransactionByHash</code> &mdash; the preconfirmation receipt (served with a preconf marker and a null <code>blockHash</code> until the block&rsquo;s seal record supplies the hash; exact client-facing shape is an open item, &sect;11).</li>
+  <li>the <code>pending</code> block tag on <code>eth_call</code>, <code>eth_estimateGas</code>, <code>eth_getBlockByNumber</code>, <code>eth_getBalance</code>, <code>eth_getTransactionCount</code>, <code>eth_getCode</code>, <code>eth_getStorageAt</code> &mdash; reflecting the preconfirmed (sequence-head) state.</li>
+</ul>
+<p><strong>Consistency check.</strong> A preconfirmation is only correct if the RPC node executed the right transactions, in order, on a contiguous chain head. Before issuing a receipt it verifies that the entry&rsquo;s <code>prefix_commitment</code> matches the running head it has computed over the entries <em>verified</em> so far (every well-formed entry folds into the head whether or not it ends up applied &mdash; the chain-vs-apply rule, &sect;10). Because the store is append-only, a mismatch means a <em>gap</em> &mdash; stop and catch up; the commitment chain never points backward. (A canonical-chain reorg of already-sealed blocks is handled separately by normal import: the node re-anchors its local pre-execution to the new sealed head, &sect;8.) A stale or out-of-sync node returning confident-but-wrong receipts is exactly the risk this closes.</p>
+<p class="small">The RPC node executes against the block&rsquo;s actual header (fixed at block-open) and its sealed parent, so it never guesses the context &mdash; which is what makes the receipt match the sealed block (&sect;7).</p>
+
+<h2 id="sequencing"><span class="num">&sect;6</span>Sequencing &amp; block production</h2>
+<p>The block producer selects and orders transactions exactly as it does today &mdash; it pulls executable transactions from the mempool and executes them, in priority order, into the block it is currently building. Two things are new. First, <strong>as each transaction commits to the block, the BP publishes it to the sequence store</strong> as a record (&sect;10); publishing is asynchronous and off the build critical path, so the BP never waits on the store to keep mining. Second, when the mempool is backlogged the producer executes ahead of the announcement cadence rather than pacing to it &mdash; described at the end of this section.</p>
+<ul>
+  <li><strong>Ordering</strong> is the BP&rsquo;s normal build order (priority fee, etc.) &mdash; there is no separate sequencing cadence; a transaction is published the moment it is committed.</li>
+  <li><strong>Block boundaries</strong> are the BP&rsquo;s normal block boundaries, and each boundary is published: sealing block N emits a <strong>block-seal record</strong> (N&rsquo;s sealed header &mdash; fixing N&rsquo;s hash), and opening block N+1 emits a <strong>block-open record</strong> (N+1&rsquo;s header context: number, timestamp, parent hash, gas limit, base fee) before its first transaction (&sect;10). Since N+1 opens only after N is locally sealed (sealing can run ahead of announcement &mdash; below), consumers always know N+1&rsquo;s parent and exact header, even before N is announced (&sect;7).</li>
+  <li><strong>Commit interrupt</strong> is just the block-time cutoff: a transaction the BP hasn&rsquo;t committed when the block closes rolls to the next block and is published there when it executes. Because a transaction is published only after it commits, a published transaction is always exactly in the block it executed into &mdash; nothing slides.</li>
+  <li><strong>Fees</strong> are standard: the BP has executed the transaction, so it charges actual gas under normal EIP-1559 &mdash; no special gas accounting.</li>
+</ul>
+<p>A preconfirmation is issued once the store durably acks the published record (&sect;3). Cancellation is therefore possible until the BP includes the transaction &mdash; ordinary mempool replacement, with no artificial cadence window.</p>
+
+<h3>Execution runs ahead of announcement</h3>
+<p>One producer-side change lets a burst of demand be preconfirmed early. In normal traffic the producer pulls the executable set from its mempool when it builds and on Bor&rsquo;s existing recommit/refresh cycle (the &sect;1 snapshot behavior &mdash; unchanged here), and executes what is there; when the mempool is light it idles between refreshes until the block&rsquo;s scheduled time &mdash; fine. The change matters under a <strong>burst</strong>: when a spike floods the mempool there is always more to execute, so the producer does not idle &mdash; it keeps executing and can fill a block to its gas limit and <strong>seal it before that block&rsquo;s announcement time</strong>. Rather than idling (nothing to gain) or broadcasting immediately (peers reject a block announced before its parent&rsquo;s timestamp has passed), it <strong>holds</strong> the sealed block, releases it on cadence, and immediately opens the next one &mdash; so its execution pipeline runs ahead of the announcement schedule and drains the burst faster.</p>
+<p>This is a scheduling change, not a consensus one: it reuses Bor&rsquo;s existing <strong>early block announcement</strong> rules (PIP-66; the relaxed <code>verifyHeader</code> timing already live on mainnet and Amoy, <code>consensus/bor/bor.go</code>). Post-Giugliano a peer accepts an announced block once <code>now &ge; parent.Time</code>, with <code>header.Time</code> at most 30&nbsp;s ahead of its clock (<code>maxAllowedFutureBlockTimeSeconds</code>). Two consequences. First, <strong>the announcement schedule is unchanged</strong>: the producer releases each held block at the same wall-clock point it would have announced it had it been sealed just-in-time, so the network sees today&rsquo;s cadence and backup-producer succession is unaffected &mdash; the Giugliano rule&rsquo;s role is to guarantee a long-held block is exactly as valid at that point (and it would even permit releasing up to one slot early, once <code>now &ge; parent.Time</code>, if the import head-start is ever wanted). Second, those peer rules bound <em>announcement</em> timing, not how far execution may run ahead &mdash; a held block passes validation whenever its slot arrives, regardless of when it was sealed. The buffer is therefore bounded by an explicit <strong>producer-side seal-ahead cap</strong> (a config limit on sealed-but-unannounced blocks; value to be chosen, &sect;11) that caps preconf exposure to producer failure and keeps header timestamps meaningful.</p>
+<p><strong>Buffering model.</strong> A held block is sealed and buffered <em>without being imported</em> into the producer&rsquo;s own chain: importing it would advertise it (head / total difficulty in the eth handshake) and serve it to peers ahead of schedule &mdash; and a peer pulling a block two-plus slots ahead would reject it as a future block. Instead the miner keeps building on the <em>buffered block&rsquo;s post-state</em> (not the imported chain head &mdash; a worker change, &sect;11), and import + broadcast happen together when the slot arrives. Held blocks are never advertised or served to peers before release.</p>
+<p>The effect is to decouple <em>execution</em> from <em>announcement</em>: transactions are committed, sequenced, and preconfirmed continuously, ahead of the announcement slot, so preconfirmation latency tracks execution rather than the block cadence (&sect;9). RPC nodes keep pace by replaying the published sequence &mdash; each block&rsquo;s open record hands them its exact header context and its seal record the resulting hash (&sect;10) &mdash; so they pre-execute past the last announced block and, when a held block is finally announced, import it and match by construction (&sect;7). A held block is also <strong>never hostage to its producer</strong>: its seal record plus its transaction records <em>are</em> the complete block (sealed header + body), so if the producer dies anyone can reconstruct it. Whether a successor may announce it <em>as-is</em> depends on VEBLOP failover semantics &mdash; if the failover election re-cuts producer assignments from the canonical tip, the dead producer&rsquo;s signature is no longer authorized for those heights (&sect;11); even then the successor replays the held transactions under the pinned open context, so the preconfirmed <em>receipts</em> survive producer failure either way (&sect;8).</p>
+
+<h2 id="determinism"><span class="num">&sect;7</span>Determinism</h2>
+<p>An RPC node re-executes the committed transactions against the sealed parent and the block&rsquo;s fixed header, so it reproduces the block&rsquo;s receipts <em>exactly</em>. Every input is known by construction:</p>
+<table>
+  <thead><tr><th>Input</th><th>Why it&rsquo;s known to the RPC node</th></tr></thead>
+  <tbody>
+    <tr><td><strong>parent block hash &amp; state</strong></td><td>block N+1 is sequenced only after N is sealed; the producer publishes N&rsquo;s sealed header to the store as a block-seal record (&sect;10), so a consumer has N&rsquo;s hash even before N is announced &mdash; <code>BLOCKHASH</code> and the historical-hash contracts (EIP-2935 / 7709) return the sealed value, and <code>BLOCKHASH(current)</code> is 0 by EVM rule. The hash embeds the producer&rsquo;s seal, so it cannot be recomputed from state; delivering it is exactly what the seal record is for.</td></tr>
+    <tr><td><strong>timestamp</strong></td><td>fixed in the header when the BP opens the block (before the first tx executes), published in the block-open record (&sect;10), and unchanged at seal</td></tr>
+    <tr><td><strong>base fee</strong></td><td><strong>producer-local policy post-Lisovo</strong>: the target-gas percentage and change denominator are per-node CLI config, and peers verify only presence and bounds &mdash; never the value (<code>consensus/bor/bor.go</code>, <code>consensus/misc/eip1559</code>) &mdash; so consumers cannot derive it; published in the block-open record (&sect;10)</td></tr>
+    <tr><td><strong>gas limit</strong></td><td>producer-chosen &mdash; stepped from the parent toward the producer&rsquo;s configured target (<code>CalcGasLimit</code>, <code>miner/worker.go</code>), so <em>not</em> derivable by consumers; published in the block-open record (&sect;10). Read by <code>GASLIMIT (0x45)</code> and bounds the block&rsquo;s gas pool</td></tr>
+    <tr><td><strong>coinbase</strong></td><td>the header coinbase is always the zero address; the fee beneficiary is the recovered signer pre-Rio and the chain-config address post-Rio (<code>CalculateCoinbase</code>) &mdash; reproducible, with one precondition: the post-Rio config coinbase must be set (it is, on mainnet and Amoy), else the beneficiary falls back to the producer-dependent recovered signer</td></tr>
+    <tr><td><strong>difficulty (0x44)</strong></td><td>Bor does not enable PREVRANDAO &mdash; opcode <code>0x44</code> returns <code>header.Difficulty</code>, and under VEBLOP it is <strong>always 1</strong>: the producer set has a single member, so <code>Difficulty(validatorSet, signer)</code> is constant for every producer (<code>consensus/bor/snapshot.go</code>). Not carried in the open record &mdash; consumers use the constant directly; a fork that ever makes <code>0x44</code> variable again adds the field back (&sect;10)</td></tr>
+    <tr><td><code>gasUsed</code>, logs, status, state root</td><td>execution outputs every node recomputes identically from the same transactions, parent, and header</td></tr>
+  </tbody>
+</table>
+<p>Because the BP executes each transaction before publishing it, there is no pre-execution guess to get wrong: the RPC node runs the same transactions the producer already ran, on the same state, with the same header. Reverts are deterministic too &mdash; a reverting transaction is published with its <code>status = 0</code> receipt.</p>
+
+<h3>State-sync</h3>
+<p>State-sync transactions are consensus-injected at sprint starts and are not published &mdash; an RPC node is itself a Bor node and applies them from its own Heimdall during execution, exactly as in normal import. A block&rsquo;s set is the Heimdall events up to <code>header.Time &minus; StateSyncConfirmationDelay</code> (<code>CommitStates</code>, <code>consensus/bor/bor.go</code>) &mdash; <strong>128&nbsp;s on mainnet since Indore</strong>. Because a block is sequenced only as it is built, that cutoff sits comfortably in the past, so every node applies the same set and the result is deterministic. One interaction with execute-ahead (&sect;6): a block sealed <code>D</code> slots ahead has <code>header.Time</code> up to <code>D &times;</code> blocktime past the wall clock, shrinking the cutoff margin to <code>128&nbsp;s &minus; D &times;</code> blocktime &mdash; an explicit input to the seal-ahead cap choice (&sect;11). And because a replayed block pins the superseded timestamp (&sect;8), its state-sync cutoff &mdash; hence its event set &mdash; is unchanged too. (As for any Bor node, this assumes a healthy local Heimdall.)</p>
+
+<div class="callout invariant">
+  <span class="label">The only residual: reorgs</span>
+  <p>The RPC node never guesses, so the only thing that can make a preconf wrong is the sealed chain itself changing &mdash; an ordinary pre-finality reorg, bounded by Bor&rsquo;s milestone finality. The common case is a <strong>producer change on the same parent</strong>, and here the preconfirmation holds where it matters: the replacement producer follows the same sequence store &mdash; it replays the identical transactions in the identical order <em>under the superseded block&rsquo;s pinned context</em> (same timestamp, gas limit, and base fee; &sect;8) &mdash; so each one keeps its position and receipt. Under VEBLOP even the difficulty is identical (<strong>always 1</strong> &mdash; a single-producer set makes <code>Difficulty()</code> constant, &sect;7 table), so <em>no header field a transaction can read changes</em>. What changes is the <strong>block hash</strong> alone &mdash; a different validator signs the block, so the seal in <code>extraData</code> hashes the header to a different value even though everything a transaction can observe is unchanged. (In a multi-block replay there is one carve-out: reads of a replayed <em>ancestor&rsquo;s</em> hash &mdash; <code>BLOCKHASH</code> / the EIP-2935 history contract &mdash; see the replacement hashes, &sect;8.) The rarer case &mdash; a reorg that actually changes a block&rsquo;s parent state &mdash; does change results, and those preconfs are voided and re-issued against canonical (&sect;8).</p>
+</div>
+
+<h2 id="failure"><span class="num">&sect;8</span>Failure scenarios</h2>
+
+<p>Preconfirmations need an explicit <strong>consistency model</strong>, because the store is centralized while the canonical chain is not. The model: <em>the sealed canonical chain is always the source of truth; the store is an append-only, best-effort publication channel, and consumers reconcile their own view against the sealed chain.</em> The BP honors the safety invariant (it seals what it committed), so in the normal case store and chain agree. When they can&rsquo;t &mdash; the rare cases below &mdash; the chain wins and affected preconfirmations are voided. The right framing for users is an <strong>SLA on deterministic preconfirmation</strong> (a quantified probability), not a hard guarantee.</p>
+
+<h3>Reconciliation (canonical wins)</h3>
+<p>When the published sequence and the sealed chain diverge, the store is <strong>not</strong> rewound &mdash; it is append-only. Reconciliation happens at the consumer: an RPC node pre-executing the published sequence sees that the sealed chain doesn&rsquo;t match the suffix it executed, so it <strong>voids the preconfirmations from that suffix and re-anchors its local pre-execution to the sealed head</strong> &mdash; canonical is always the source of truth. The orphaned published records are superseded in place, never deleted, and the commitment chain only ever grows; re-anchoring the node&rsquo;s own speculative state is not a sequence rewind. This consumer-side path is what makes every scenario below recoverable.</p>
+
+<h3>Reorg (replay vs. reconcile)</h3>
+<p>A pre-finality reorg replaces a sealed block. Two sub-cases. (1) A <strong>producer change on the same parent</strong> &mdash; the common case: the newly-elected producer reads the store tail and replays the same transactions, in the same order, on the same parent state, because it follows the store rather than re-selecting from its own mempool. Its replay <strong>pins the superseded block&rsquo;s open context</strong> &mdash; same timestamp, gas limit, and base fee &mdash; and under VEBLOP the difficulty carries over by itself: a single-producer set makes <code>Difficulty()</code> equal 1 for <em>every</em> producer (&sect;7), so nothing in the header context is producer-dependent. Pinning is consensus-legal: both timestamp rules are lower bounds &mdash; <code>parent.Time + period &le; header.Time</code> in header verification, and <code>header.Time &ge; parent.Time + CalcProducerDelay(number, succession)</code> in seal verification (<code>IsBlockEarly</code>, <code>consensus/bor/bor.go</code>) &mdash; and both bind identically for the replayer (same number, and the same succession&nbsp;0 in VEBLOP&rsquo;s single-producer set), so the superseded value satisfies them on the same parent; the gas-limit and base-fee bounds are likewise checked against that same parent, which the superseded values already passed. (Bor&rsquo;s own miner would recompute the timestamp on a rebuild &mdash; the replay path overrides that producer-side policy.) So every transaction keeps its position and its exact receipt &mdash; same timestamp, gas limit, base fee, and state-sync set. What differs is the <strong>block hash</strong> alone, because a different validator signs the replacement block (a new seal in <code>extraData</code>). In the store, the replacement is a <strong>supersession</strong> (&sect;10): the new producer appends a block-open record for the same height naming the same parent, republishes the transactions, and seals &mdash; the chain never rewinds, and consumers void and re-issue only what actually changed. (2) A reorg that <strong>changes a block&rsquo;s parent state</strong> genuinely changes transaction results; no replay can match the old receipts, so consumers void the affected preconfs and re-issue them against canonical (as in <em>Reconciliation</em> above). Either way the store stays append-only; milestone finality bounds how far a reorg can reach.</p>
+
+<h3>Store failure modes</h3>
+<ul>
+  <li><strong>Hard down / unreachable.</strong> The BP keeps mining (invariant holds); preconfirmations pause and latency degrades to baseline. Already-issued preconfirmations stay valid because the BP still seals what it committed (and when publishing resumes, the forward-jump reconcile confirms rather than voids them, &sect;10).</li>
+  <li><strong>Slow / unresponsive but up.</strong> RPC nodes treat a slow store like an unavailable one &mdash; fall back to baseline past a freshness bound rather than serve stale data.</li>
+  <li><strong>Stale reads.</strong> Caught by the &sect;5 consistency check (the commitment chain vs. the node&rsquo;s head); a behind node catches up before emitting receipts.</li>
+  <li><strong>Internal inconsistency / partial writes.</strong> Entries are atomic, with the commitment chain making gaps and corruption detectable; durability/replication is specified in <a href="#store">&sect;10</a>.</li>
+  <li><strong>Compromised / malicious store.</strong> Pre-seal content is store-attested (&sect;5), so a compromised store or egress could fabricate an open block&rsquo;s stream; consumers speculatively execute it until the block&rsquo;s seal record &mdash; which cannot be forged (self-authenticating consensus seal) &mdash; or the canonical announcement contradicts it, voiding the affected preconfs. Exposure is bounded to roughly one open block per attempt and burns the operator&rsquo;s accountability; egress TLS + auth and the &sect;10 audit trail are the mitigations.</li>
+</ul>
+
+<h3>Producer hand-off (span rotation / VEBLOP election)</h3>
+<p>The producer changes at span rotation and per the VEBLOP producer-election rules &mdash; one producer per block, so this is a clean hand-off, not an in-span backup takeover. The newly-elected producer reads the store tail and continues from the committed sequence before sequencing anything new. Sealed-but-unannounced blocks in the tail are complete blocks (&sect;6): if VEBLOP failover leaves their heights assigned to the dead producer, the successor announces them <em>as-is</em>; if the election re-cuts from the canonical tip (making the old signature unauthorized at those heights), the successor instead <strong>replays their transactions under the pinned context</strong> and supersedes (&sect;10) &mdash; receipts hold, only the hashes change (one carve-out: <code>BLOCKHASH</code> / history-contract reads of a block inside the replayed window see the replacement hashes, &sect;7). Which of the two VEBLOP prescribes is pinned in &sect;11, along with whether superseded per-height assignments stay queryable. Outcome: a brief latency bump during the transition, no inconsistency.</p>
+<p><strong>Deployment assumption (stated, not assumed silently):</strong> this hand-off behavior &mdash; replay the tail rather than rebuild from your own mempool &mdash; is publisher-sidecar logic, so it holds only when the successor runs the sidecar. Preconfirmations are offered <em>only while the elected producer publishes</em>: a successor without the sidecar produces valid blocks but publishes nothing &mdash; preconfs pause to baseline for its tenure, and any sealed-but-unannounced predecessors it ignores are orphaned (their preconfs void via reconciliation). The rollout therefore targets every producer-set candidate (today&rsquo;s BPs are Polygon-operated; the VEBLOP producer set is small), and the &sect;11 SLA prices the non-publishing-successor case. When publishing resumes after a dark tenure, the next producer&rsquo;s open record simply names its actual canonical parent &mdash; the supersession rule (&sect;10) re-anchors the store past the unpublished stretch.</p>
+
+<h3>BP sequenced, then died</h3>
+<ul>
+  <li>The producer fails after publishing some sequence; the span rotates / a new producer is elected.</li>
+  <li><strong>Sealed blocks in the tail survive as receipts.</strong> A seal record plus its block&rsquo;s transaction records are the complete block: announced as-is where failover semantics allow, otherwise replayed under pinned context and superseded (see <em>Producer hand-off</em> above) &mdash; either way the preconfirmed receipts hold (one carve-out: ancestor-hash reads within a replayed window, &sect;7).</li>
+  <li><strong>The open (unsealed) block is the loss window.</strong> Its published transactions have no seal; the successor replays them into its own block on the same parent under the pinned open context, so they keep position and receipt (the &sect;7 ancestor-hash carve-out aside) under a supersession open record (&sect;10).</li>
+  <li>If the successor <em>can&rsquo;t</em> read the store (store also down) or doesn&rsquo;t run the sidecar, it builds fresh; the orphaned published suffix is superseded by canonical and its preconfirmations are voided at consumers &mdash; lost. This is the core best-effort window the SLA must price, and the case the future <strong>all-producer order-ack</strong> (&sect;3) would close (the acked ordering would already be held by every producer).</li>
+</ul>
+
+<h3>Equivocation &amp; partition (two producers writing at once)</h3>
+<p>Two cases can produce conflicting sequences for the same height: a stale producer still writing after a rotation/partition, and the same validator credential running on two nodes (which authentication alone can&rsquo;t disambiguate). Both are <em>prevented</em> at the store &mdash; rather than detected after the fact &mdash; by a simple <strong>head check</strong>: a record is accepted only if it extends the current head of the chain.</p>
+<p>Each record carries a <code>prefix_commitment</code> &mdash; the chain head just before it; appending a block-open record advances that head by folding in the block&rsquo;s header context, a transaction record by folding in its transactions, and a block-seal record by folding in the sealed hash to close the block (the per-block construction is in <a href="#store">&sect;10</a>). The store appends a record only if its <code>prefix_commitment</code> equals the store&rsquo;s current head; otherwise it rejects the record, and the producer must catch up (re-read the published tail) before publishing again. So two writers contend for the same head: the first wins and advances it, the second is rejected and catches up. <strong>The store therefore holds exactly one chain</strong> &mdash; neither a stale producer nor a duplicate-key node can fork it. And because a preconf is issued only after the store durably acknowledges a record (&sect;3), a rejected record (never acknowledged) can&rsquo;t break an issued preconf.</p>
+<p>This requires the head check to run on a single write path (the store ingress); if that write path can&rsquo;t reach a majority of the store&rsquo;s replicas it can&rsquo;t acknowledge a record, so the store can&rsquo;t split into two disagreeing copies either. The store&rsquo;s single chain remains subordinate to the sealed canonical chain: if the producer whose record was accepted somehow loses canonical consensus, consumers reconcile against canonical (voiding the affected preconfs) while the store stays append-only. Reconcile producer-election edge cases with the VEBLOP spec.</p>
+
+<h2 id="latency"><span class="num">&sect;9</span>Latency budget</h2>
+<p>A preconfirmation is available as soon as the block producer commits the transaction, plus a small constant: publish + the store&rsquo;s durable (replicated) ack + stream + RPC re-execute &mdash; tens of milliseconds end-to-end, dominated by the durable ack. The headline win is what it removes &mdash; the ~500&ndash;1000&nbsp;ms to build, propagate, and import the sealed block &mdash; so the RPC node returns a receipt <em>before</em> the block is sealed rather than after.</p>
+<p>Because a transaction is published only after the BP executes it, the preconf trails the BP&rsquo;s execution by that small constant and can never precede it &mdash; the RPC node is continuously a publish-round-trip behind the producer, not a block behind. There is no cadence wait: the BP publishes each transaction the moment it commits &mdash; and because the producer can run its execution ahead of the announcement schedule when demand is bursty (&sect;6), commit (and therefore preconfirmation) is not paced by the block time; under a burst a transaction can be preconfirmed well before the block that will contain it is announced.</p>
+<p>One stated assumption behind that figure: the consumer keeps pace. An RPC node must re-execute the stream at least as fast as the producer builds it (with headroom &mdash; it is serving reads at the same time), or the lag compounds for the burst&rsquo;s duration: preconf lag is <code>max(publish round-trip, execution deficit)</code>. A sustained deficit degrades to the &sect;8 freshness-bound fallback (baseline latency) rather than ever serving stale receipts.</p>
+
+<div class="arch"><svg viewBox="0 0 980 432" width="100%" style="max-width:980px;height:auto;display:block;margin:0 auto;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Timeline under heavy traffic: the producer executes transactions at full speed with no idle and publishes each to the sequence store; RPC nodes stream and re-execute to return preconfirmation receipts tens of milliseconds behind execution, while block announcements stay on the one-second cadence.">
+  <defs>
+    <marker id="ar" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#5b6570"/></marker>
+    <marker id="arA" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#b06b00"/></marker>
+    <marker id="arAs" markerWidth="9" markerHeight="9" refX="0" refY="3" orient="auto"><path d="M6,0 L0,3 L6,6 Z" fill="#b06b00"/></marker>
+    <marker id="arP" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#b06b00"/></marker>
+    <marker id="arT" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#0e7c86"/></marker>
+  </defs>
+
+  <text x="30" y="30" font-size="17" font-weight="700" fill="#1b1f24">Heavy traffic: the preconfirmation rides the producer, not the block cadence</text>
+
+  <!-- block-time bracket + time axis -->
+  <path d="M175,52 L175,58 M175,55 L410,55 M410,52 L410,58" stroke="#9aa5b1" stroke-width="1" fill="none"/>
+  <text x="292" y="49" font-size="10.5" fill="#5b6570" text-anchor="middle">block time 1 s</text>
+  <line x1="175" y1="72" x2="908" y2="72" stroke="#5b6570" stroke-width="1.2" marker-end="url(#ar)"/>
+  <text x="908" y="66" font-size="10.5" fill="#5b6570" text-anchor="end">time</text>
+  <g font-size="10.5" fill="#5b6570" text-anchor="middle">
+    <text x="175" y="88">0</text><text x="410" y="88">1 s</text><text x="645" y="88">2 s</text><text x="880" y="88">3 s</text>
+  </g>
+
+  <!-- cadence grid (behind lanes) -->
+  <g stroke="#cdd5df" stroke-width="1" stroke-dasharray="3 4">
+    <line x1="410" y1="74" x2="410" y2="340"/><line x1="645" y1="74" x2="645" y2="340"/><line x1="880" y1="74" x2="880" y2="340"/>
+  </g>
+
+  <!-- burst indicator -->
+  <rect x="175" y="100" width="247" height="16" rx="4" fill="#fbf3e4" stroke="#e6d3a8" stroke-width="1"/>
+  <text x="182" y="111.5" font-size="10" fill="#b06b00">burst — producer has a backlog to work through</text>
+
+  <!-- lane labels -->
+  <g fill="#5b6570" text-anchor="end">
+    <text x="162" y="154" font-size="11.5">Producer</text><text x="162" y="167" font-size="9.5" fill="#8a94a6">execute</text>
+    <text x="162" y="204" font-size="11.5">Sequence</text><text x="162" y="217" font-size="9.5" fill="#8a94a6">store</text>
+    <text x="162" y="254" font-size="11.5">Pre-conf</text><text x="162" y="267" font-size="9.5" fill="#8a94a6">RPC receipt</text>
+    <text x="162" y="326" font-size="11.5">Announce</text><text x="162" y="339" font-size="9.5" fill="#8a94a6">on cadence</text>
+  </g>
+
+  <!-- Producer execute: three segments, no idle -->
+  <g>
+    <rect x="175" y="140" width="82" height="32" rx="5" fill="#efeafc" stroke="#5a3ec8" stroke-width="1.5"/>
+    <rect x="257" y="140" width="83" height="32" rx="5" fill="#efeafc" stroke="#5a3ec8" stroke-width="1.5"/>
+    <rect x="340" y="140" width="82" height="32" rx="5" fill="#efeafc" stroke="#5a3ec8" stroke-width="1.5"/>
+    <g text-anchor="middle" fill="#3f2b95"><text x="216" y="155" font-size="12" font-weight="700">B1</text><text x="298" y="155" font-size="12" font-weight="700">B2</text><text x="381" y="155" font-size="12" font-weight="700">B3</text></g>
+    <g text-anchor="middle" fill="#6a5bb0" font-size="9"><text x="216" y="166">Tx 1–5</text><text x="298" y="166">Tx 6–10</text><text x="381" y="166">Tx 11–16</text></g>
+  </g>
+  <text x="462" y="151" font-size="10.5" fill="#5a3ec8">full speed — no idle</text>
+  <text x="462" y="164" font-size="10" fill="#8a94a6">each block sealed as it fills, ahead of its slot</text>
+
+  <!-- hop 1: publish on commit -->
+  <line x1="210" y1="172" x2="224" y2="190" stroke="#b06b00" stroke-width="1.3" marker-end="url(#arP)"/>
+  <text x="246" y="185" font-size="9.5" fill="#b06b00">publish on commit (async)</text>
+
+  <!-- Sequence store: append-only log of published records -->
+  <g>
+    <rect x="189" y="190" width="82" height="32" rx="5" fill="#e4f1f2" stroke="#0e7c86" stroke-width="1.5"/>
+    <rect x="271" y="190" width="83" height="32" rx="5" fill="#e4f1f2" stroke="#0e7c86" stroke-width="1.5"/>
+    <rect x="354" y="190" width="82" height="32" rx="5" fill="#e4f1f2" stroke="#0e7c86" stroke-width="1.5"/>
+    <g text-anchor="middle" fill="#0a5c64"><text x="230" y="205" font-size="12" font-weight="700">B1</text><text x="312" y="205" font-size="12" font-weight="700">B2</text><text x="395" y="205" font-size="12" font-weight="700">B3</text></g>
+    <g text-anchor="middle" fill="#3f8f97" font-size="9" font-style="italic"><text x="230" y="216">records</text><text x="312" y="216">records</text><text x="395" y="216">records</text></g>
+  </g>
+  <text x="476" y="201" font-size="10.5" fill="#0e7c86">append-only authenticated log — the sequence</text>
+  <text x="476" y="214" font-size="10" fill="#8a94a6">one commitment chain, ordered</text>
+
+  <!-- hop 2: stream + re-execute -->
+  <line x1="224" y1="222" x2="238" y2="240" stroke="#0e7c86" stroke-width="1.3" marker-end="url(#arT)"/>
+  <text x="260" y="235" font-size="9.5" fill="#0e7c86">stream + re-execute</text>
+
+  <!-- Pre-conf: RPC receipts, one more hop behind -->
+  <g>
+    <rect x="203" y="240" width="82" height="32" rx="5" fill="#eaf5ee" stroke="#2f7d4f" stroke-width="1.5"/>
+    <rect x="285" y="240" width="83" height="32" rx="5" fill="#eaf5ee" stroke="#2f7d4f" stroke-width="1.5"/>
+    <rect x="368" y="240" width="82" height="32" rx="5" fill="#eaf5ee" stroke="#2f7d4f" stroke-width="1.5"/>
+    <g text-anchor="middle" fill="#1f6b3f"><text x="244" y="255" font-size="12" font-weight="700">B1</text><text x="326" y="255" font-size="12" font-weight="700">B2</text><text x="409" y="255" font-size="12" font-weight="700">B3</text></g>
+    <g text-anchor="middle" fill="#4a8a63" font-size="9" font-style="italic"><text x="244" y="266">receipt</text><text x="326" y="266">receipt</text><text x="409" y="266">receipt</text></g>
+  </g>
+  <text x="490" y="260" font-size="10.5" fill="#2f7d4f">receipt ready — tens of ms behind execution</text>
+
+  <!-- gap callout for B3: preconf ready vs announced -->
+  <line x1="450" y1="272" x2="450" y2="294" stroke="#b06b00" stroke-width="1" stroke-dasharray="2 3"/>
+  <line x1="450" y1="294" x2="879" y2="294" stroke="#b06b00" stroke-width="1.3" stroke-dasharray="5 4" marker-start="url(#arAs)" marker-end="url(#arA)"/>
+  <line x1="880" y1="294" x2="880" y2="312" stroke="#b06b00" stroke-width="1" stroke-dasharray="2 3"/>
+  <text x="665" y="288" font-size="10.5" fill="#b06b00" text-anchor="middle">B3 preconfirmed here — the block is announced later, on the cadence</text>
+
+  <!-- Announce flags on cadence -->
+  <g>
+    <line x1="410" y1="312" x2="410" y2="334" stroke="#2563eb" stroke-width="1.6"/><path d="M410,312 L431,317 L410,322 Z" fill="#2563eb"/>
+    <line x1="645" y1="312" x2="645" y2="334" stroke="#2563eb" stroke-width="1.6"/><path d="M645,312 L666,317 L645,322 Z" fill="#2563eb"/>
+    <line x1="880" y1="312" x2="880" y2="334" stroke="#2563eb" stroke-width="1.6"/><path d="M880,312 L901,317 L880,322 Z" fill="#2563eb"/>
+    <g text-anchor="middle" fill="#1e50c8" font-size="11" font-weight="700"><text x="410" y="348">B1</text><text x="645" y="348">B2</text><text x="880" y="348">B3</text></g>
+  </g>
+  <text x="475" y="330" font-size="10" fill="#8a94a6">one block per block-time</text>
+
+  <!-- takeaway -->
+  <rect x="30" y="372" width="905" height="46" rx="6" fill="#f1edfb" stroke="#d9cef5" stroke-width="1"/>
+  <text x="46" y="391" font-size="12.5" font-weight="600" fill="#3f2b95">▶ Producer → store → RPC all run at execution speed; only announcement waits for the block cadence.</text>
+  <text x="46" y="408" font-size="11.5" fill="#5b6570">So the receipt arrives long before the block does. Under a burst the full-speed producer is the floor — nothing preconfirms sooner.</text>
+</svg></div>
+<p class="small">Under a burst the producer never idles &mdash; it executes at full speed, publishing each transaction to the sequence store as it commits, and seals blocks ahead of their announcement slot. RPC nodes stream the sequence and re-execute, so the receipt is ready tens of milliseconds behind execution, while the block is announced later on the consensus cadence (&sect;6).</p>
+
+<h2 id="store"><span class="num">&sect;10</span>Sequence store &mdash; data model &amp; APIs</h2>
+<p>This section specifies the store&rsquo;s <strong>interface</strong> &mdash; its wire format, its two APIs, and the guarantees it must provide. The backend that realizes it (a durable, replicated, ordered log) is an internal choice deferred to implementation. Its failure and consistency behavior is in <a href="#failure">&sect;8</a>, and the rationale for it being centralized and trusted is in <a href="#decisions">&sect;3</a> / <a href="#architecture">&sect;5</a>.</p>
+
+<div class="arch">
+  <div class="arch-mini"><span class="dot d-accent"></span>Block Producer (sequencer)</div>
+  <div class="arch-down"><span class="elabel">entries (gRPC)</span></div>
+  <div class="arch-node">
+    <div class="nhead"><span class="dot d-teal"></span>Ingress<span class="htag">single write path</span></div>
+    <div class="nbody">authenticate the writer &middot; accept only if it extends the head &mdash; then append</div>
+  </div>
+  <div class="arch-down"><span class="elabel">append</span></div>
+  <div class="arch-node">
+    <div class="nhead"><span class="dot d-teal"></span>Ordered log<span class="htag">backend &mdash; deferred</span></div>
+    <div class="nbody">durable, replicated, totally-ordered; its internal positions are never exposed</div>
+  </div>
+  <div class="arch-down"><span class="elabel">per-gateway consumer</span></div>
+  <div class="arch-node">
+    <div class="nhead"><span class="dot d-blue"></span>Egress gateway<span class="htag">in-memory fan-out</span></div>
+    <div class="nbody">one log read fanned out to all clients; ring buffer for recent reads + reconnect backfill</div>
+  </div>
+  <div class="arch-down"><span class="elabel">WS stream / HTTP pull</span></div>
+  <div class="arch-mini"><span class="dot d-blue"></span>RPC nodes / external providers</div>
+</div>
+
+<h3>Event sequence</h3>
+<p>The end-to-end event sequence for one record &mdash; from sequencing to a preconfirmation receipt:</p>
+<div class="arch"><svg viewBox="-16 0 676 432" width="100%" style="max-width:676px;height:auto;display:block;margin:0 auto;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Sequence diagram: sequencer to sequence store to RPC node"><defs><marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#7a8696"/></marker></defs><line x1="105" y1="46" x2="105" y2="386" stroke="#cdd5df" stroke-width="1.5" stroke-dasharray="2 5"/><rect x="30.0" y="12" width="150" height="34" rx="8" fill="#fff" stroke="#e3e8ee"/><circle cx="48.0" cy="29" r="4.5" fill="#5a3ec8"/><text x="62.0" y="33" font-size="12.5" font-weight="700" fill="#1b1f24">Sequencer</text><line x1="335" y1="46" x2="335" y2="386" stroke="#cdd5df" stroke-width="1.5" stroke-dasharray="2 5"/><rect x="260.0" y="12" width="150" height="34" rx="8" fill="#fff" stroke="#e3e8ee"/><circle cx="278.0" cy="29" r="4.5" fill="#0e7c86"/><text x="292.0" y="33" font-size="12.5" font-weight="700" fill="#1b1f24">Sequence store</text><line x1="535" y1="46" x2="535" y2="386" stroke="#cdd5df" stroke-width="1.5" stroke-dasharray="2 5"/><rect x="460.0" y="12" width="150" height="34" rx="8" fill="#fff" stroke="#e3e8ee"/><circle cx="478.0" cy="29" r="4.5" fill="#2563eb"/><text x="492.0" y="33" font-size="12.5" font-weight="700" fill="#1b1f24">RPC node</text><rect x="0" y="64" width="210" height="50" rx="7" fill="#f5f6f8" stroke="#e3e8ee"/><text x="105" y="81" text-anchor="middle" font-size="11" font-weight="700" fill="#1b1f24">execute tx into the pending block</text><text x="105" y="96" text-anchor="middle" font-size="10" fill="#5b6570">publish on commit (prefix = head)</text><text x="220.0" y="130" text-anchor="middle" font-size="10.5" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" fill="#1b1f24">Publish(Entry) · gRPC</text><line x1="105" y1="142" x2="335" y2="142" stroke="#7a8696" stroke-width="1.5" marker-end="url(#ah)"/><rect x="230" y="158" width="210" height="50" rx="7" fill="#f5f6f8" stroke="#e3e8ee"/><text x="335" y="175" text-anchor="middle" font-size="11" font-weight="700" fill="#1b1f24">head check: prefix == head?</text><text x="335" y="190" text-anchor="middle" font-size="10" fill="#5b6570">append · advance head · replicate</text><text x="220.0" y="224" text-anchor="middle" font-size="10.5" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" fill="#1b1f24">Ack(OK) · durable → preconf valid</text><line x1="335" y1="236" x2="105" y2="236" stroke="#7a8696" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ah)"/><text x="220.0" y="252" text-anchor="middle" font-size="9.5" font-style="italic" fill="#5b6570">else: STALE_COMMITMENT → resync from tail</text><text x="435.0" y="268" text-anchor="middle" font-size="10.5" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" fill="#1b1f24">stream record · /v1/stream (or pull)</text><line x1="335" y1="280" x2="535" y2="280" stroke="#7a8696" stroke-width="1.5" marker-end="url(#ah)"/><rect x="415" y="296" width="240" height="50" rx="7" fill="#f5f6f8" stroke="#e3e8ee"/><text x="535" y="313" text-anchor="middle" font-size="11" font-weight="700" fill="#1b1f24">verify prefix_commitment + context</text><text x="535" y="328" text-anchor="middle" font-size="10" fill="#5b6570">pre-execute on its sealed anchor</text><text x="579.5" y="362" text-anchor="middle" font-size="10.5" fill="#1b1f24">preconf receipt · tens of ms</text><line x1="535" y1="374" x2="624" y2="374" stroke="#7a8696" stroke-width="1.5" marker-end="url(#ah)"/><text x="624" y="387" text-anchor="end" font-size="9.5" fill="#5b6570">user / wallet</text><line x1="20" y1="398" x2="640" y2="398" stroke="#e3e8ee"/><text x="330.0" y="416" text-anchor="middle" font-size="9.5" fill="#5b6570">Sealed blocks reach the canonical chain separately; RPC nodes reconcile their pre-execution against it (§8).</text></svg></div>
+
+<h3>Data model</h3>
+<p>The sequence carries three kinds of <strong>entry</strong>, mirroring a block&rsquo;s lifecycle. A <strong>block-open record</strong> fixes the block&rsquo;s header context (number, timestamp, parent hash, gas limit, base fee) the moment the producer opens it &mdash; every header field execution depends on (&sect;7). <strong>Transaction records</strong> carry one or more sequenced transactions for that block (never spanning two blocks). A <strong>block-seal record</strong>, appended the moment the block is sealed, carries its full sealed header &mdash; closing the block and handing consumers the one thing they cannot recompute: the sealed hash (&sect;7). Together a block&rsquo;s seal record and its transaction records are the <em>complete block</em> (header + body), reconstructible and announceable by anyone (&sect;8).</p>
+<div class="schema">
+  <div class="sname">BlockOpen</div>
+  <table><tbody>
+    <tr><td class="fn">block_number</td><td class="ft">uint64</td><td class="fd">The block being opened (N). Carried because a forward-jump re-anchor names a parent the store never saw, so the height is not derivable (below).</td></tr>
+    <tr><td class="fn">block_timestamp</td><td class="ft">uint64</td><td class="fd">N&rsquo;s header timestamp, fixed at open (&sect;7).</td></tr>
+    <tr><td class="fn">parent_hash</td><td class="ft">bytes32</td><td class="fd">Sealed hash of the block N builds on &mdash; must match a published seal record (or, at cold start / resumption, a canonical block the consumer already has).</td></tr>
+    <tr><td class="fn">gas_limit</td><td class="ft">uint64</td><td class="fd">N&rsquo;s block gas limit &mdash; producer-chosen, not derivable from the parent (&sect;7).</td></tr>
+    <tr><td class="fn">base_fee</td><td class="ft">uint256</td><td class="fd">N&rsquo;s base fee &mdash; producer-local policy post-Lisovo, not derivable by consumers (&sect;7).</td></tr>
+    <tr><td class="fn">prefix_commitment</td><td class="ft">bytes32</td><td class="fd">The store head this entry extends &mdash; <code>C_seal</code> of the last sealed block on the normal path.</td></tr>
+  </tbody></table>
+</div>
+<div class="schema">
+  <div class="sname">Record</div>
+  <table><tbody>
+    <tr><td class="fn">transactions</td><td class="ft">[]bytes</td><td class="fd">Ordered raw signed transactions (tx hash derivable); 1..N &mdash; a single tx for lowest latency, or a batch under load.</td></tr>
+    <tr><td class="fn">prefix_commitment</td><td class="ft">bytes32</td><td class="fd">Running head just before this record&rsquo;s transactions; a block&rsquo;s first transaction record carries <code>C_open(N)</code> &mdash; the head after the block&rsquo;s open record (see the commitment chain below).</td></tr>
+  </tbody></table>
+</div>
+<div class="schema">
+  <div class="sname">BlockSeal</div>
+  <table><tbody>
+    <tr><td class="fn">header</td><td class="ft">bytes</td><td class="fd">N&rsquo;s full sealed header (RLP), appended after N&rsquo;s last transaction record and before N+1&rsquo;s open record; the height is inside the header. <code>keccak256(header)</code> is <code>BLOCKHASH(N)</code> and N+1&rsquo;s <code>parentHash</code>; consumers cross-check their re-execution of N against its state root, receipts root, and gas used. The header embeds the producer&rsquo;s seal, so it cannot be recomputed from state &mdash; it must be delivered.</td></tr>
+    <tr><td class="fn">prefix_commitment</td><td class="ft">bytes32</td><td class="fd">The running head after N&rsquo;s last transaction, <code>C_block(N)</code> &mdash; the seal extends it (see the commitment chain below).</td></tr>
+  </tbody></table>
+</div>
+<p>Publishers send bare entries; consumers receive each entry <strong>exactly as published</strong> &mdash; there is no store-added wrapper or metadata. Pre-seal attribution rests entirely on trusting the store&rsquo;s authenticated ingress (&sect;5).</p>
+<p class="small">The <code>tx_i</code> folded into the commitment are the raw signed transactions; the fold&rsquo;s field serialization is a fixed <code>canonical(&hellip;)</code> encoding &mdash; deferred, but it must be byte-identical across clients for commitment parity. The per-item fold&rsquo;s <strong>domain-separation tags</strong> (one per entry class) are normative. Entries themselves carry no producer signature (&sect;5): the write path is channel-authenticated, and the only producer-signed artifact in the system is the one the protocol already has &mdash; the consensus seal inside each seal record&rsquo;s header.</p>
+<p>The <strong>commitment chain</strong> is a running hash over the sequence, advanced by a <strong>per-item fold</strong>: <code>head&prime; = keccak256(head &#8214; tag &#8214; item)</code>, where an item is an open record&rsquo;s context fields, <em>one transaction</em>, or a sealed hash, and <code>tag</code> is the item&rsquo;s entry-class domain tag (one per entry class, so no folded item can collide across types). Folding per transaction &mdash; not per record &mdash; is normative: it makes the chain independent of how transactions are batched into records, and the two natural readings (iterated fold vs. one flat hash over a block) produce different bytes, so only the fold is correct. Named points: <code>C_open(N)</code> is the head after folding N&rsquo;s open context into the previous head; after the block&rsquo;s first <code>k</code> transactions the head has folded <code>tx_1 &hellip; tx_k</code> one at a time, reaching <code>C_block(N)</code> once all are in; the seal record folds the sealed hash, giving <code>C_seal(N) = keccak256(C_block(N) &#8214; tag_seal &#8214; sealed_hash(N))</code> &mdash; the per-class tag participates at every named point. On the normal path the next open record chains from <code>C_seal(N)</code> with <code>parent_hash = sealed_hash(N)</code>. Because an open record must name its parent&rsquo;s <em>sealed</em> hash &mdash; which exists only once that parent&rsquo;s seal record does &mdash; &ldquo;a block is sequenced only after its parent is sealed&rdquo; is a structural property of the chain, not a timing convention. The chain&rsquo;s genesis seed is pinned too: <code>head_0 = keccak256(domain &#8214; chain_id &#8214; format_version)</code>, so a stream can never be replayed across networks or format revisions &mdash; it fails structurally, not by convention. (That protection covers consumers that computed the chain from the seed; a cold-start consumer adopts the stream&rsquo;s prefix as its seed instead, so its network/format binding comes from <code>parent_hash</code>-against-canonical and seal verification.) And since every head folds the one before it, any change anywhere in history changes every head after it. The chain serves two jobs: store&harr;sequencer agreement (the head check below) and consumer gap/order detection.</p>
+<p><strong>Supersession (chain repair).</strong> The happy path opens each block with <code>parent_hash</code> equal to the previous seal record&rsquo;s hash. <strong>Any open record whose <code>parent_hash</code> is not the current tip is a re-anchor</strong> &mdash; the trigger is the parent, not the height. Three shapes, covering the repair cases of &sect;5/&sect;8: a replacement block at a height the store already sealed (backward), a <em>mid-block parent change</em> &mdash; re-opening the still-open height on a new parent when a reorg arrives mid-build (the &sect;5 rebuild case) &mdash; and a producer resuming after a tenure that never published (a forward jump whose parent is a canonical block the store never saw). Every re-anchor still chains from the <em>current</em> head &mdash; the store remains one append-only chain and the head check is unchanged &mdash; while <code>parent_hash</code> names the sealed block it actually builds on. The store validates what it can &mdash; writer authentication, the head check, and &mdash; whenever the named parent is store-known &mdash; that the open&rsquo;s <code>block_number</code> is that parent&rsquo;s height + 1 &mdash; but it is not a chain validator: consumers verify <code>parent_hash</code> against seal records or their canonical chain. A re-anchor that <em>replays</em> a superseded block pins that block&rsquo;s open context (&sect;8). Consumers treat every entry above the named parent as <strong>superseded</strong>: void those preconfs and re-apply from the new open &mdash; the consumer-side reconciliation of &sect;8, made concrete. Superseded entries are never deleted and the chain only grows.</p>
+<p><strong>Self-supersession is auditable.</strong> Nothing above stops the <em>currently elected</em> producer from re-anchoring to rewrite what it already published &mdash; every check would pass. To keep &sect;3&rsquo;s &ldquo;final once published&rdquo; honest and measurable, the audit is <strong>chain-wide and justification-aware</strong>. On any same-producer re-anchor the store compares the whole superseded suffix against the replacement generations and records every published transaction dropped or reordered anywhere in it &mdash; so the two-step dodge (re-anchor the parent intact, rebuild the child without the victim transaction) is caught exactly like a direct drop. What a record means depends on the re-anchor&rsquo;s justification: onto the <strong>same parent</strong> there is no reorg to explain it, so a same-producer re-anchor of an already-sealed height &mdash; or any drop or reorder &mdash; is flagged as a producer revocation; onto a <strong>new canonical parent</strong> it is a chain-level reorg revocation, priced as such in &sect;8, and transactions that became genuinely un-replayable on the changed parent are expected drops, not misbehavior (a reorg below held blocks legitimately forces the still-elected producer to re-anchor its own sealed heights, &sect;6). A successor&rsquo;s re-anchor onto the same (height, parent) carries the same preserve-the-prefix obligation (&sect;8 requires a replaying successor to keep it; pinned context leaves no legitimate reason to drop it). Flagged supersessions are the revocation evidence &mdash; store-attested superseded records, plus the consensus-signed headers of any sealed generation &mdash; and the rate is an SLA metric (&sect;8).</p>
+<p>Binding the full open context and, through the seal record, the sealed hash means the chain commits to the complete <em>determined</em> block and its identity &mdash; every header field execution depends on, not just the transaction list. Coinbase is the one header input without a field: it follows the producer/fork rules (<a href="#determinism">&sect;7</a>).</p>
+<p>Because a transaction is published only after the BP commits it to a block, its block assignment is canonical &mdash; the store&rsquo;s block boundaries (open &rarr; transactions &rarr; seal) match the sealed chain&rsquo;s. The structural invariant the store enforces is the commitment chain (the head check below); the sealed chain remains authoritative under a reorg (&sect;8).</p>
+<p>Deliberately absent:</p>
+<ul>
+  <li><strong>No cursor / offset / sequence number</strong> &mdash; the backend&rsquo;s internal positions are never exposed; the resume token is the consumer&rsquo;s own commitment head, protocol state both sides already compute.</li>
+  <li><strong>No positional duplicates.</strong> Transaction records carry no block number or timestamp, transactions no index, and the seal no height: the head check makes stream position authoritative &mdash; a record&rsquo;s block is whatever the last open record opened, a transaction&rsquo;s index is its count from that open (the per-transaction fold makes batching irrelevant), and the seal&rsquo;s height is inside its header. A duplicated field could only agree (dead weight) or disagree (a bug with two answers); the open record states each block&rsquo;s context exactly once.</li>
+  <li><strong>No per-tx attestation.</strong> A producer-signed, wallet-portable placement proof was considered and dropped with producer signing (&sect;5): it would be the sidecar&rsquo;s only validator-key use. Accountability rests on the self-authenticating seals and the &sect;10 audit trail; if a portable proof is ever needed it returns as an opt-in extension with its own domain tag.</li>
+  <li><strong>No void / rewind record</strong> &mdash; the chain only grows; a divergence from canonical is reconciled at the consumer against the sealed chain, never by rewinding the store (&sect;8).</li>
+</ul>
+
+<h3>Addressing &amp; navigation</h3>
+<table>
+  <thead><tr><th>Layer</th><th>Key</th><th>Used by</th></tr></thead>
+  <tbody>
+    <tr><td>Application lookup</td><td><strong>transaction hash</strong></td><td>end users &rarr; RPC node (<code>eth_getTransactionReceipt</code>)</td></tr>
+    <tr><td>Semantic grouping</td><td><strong>block number</strong></td><td>cold-start anchor; <code>/v1/block/{n}</code></td></tr>
+    <tr><td>Transport / resume</td><td><strong>commitment head (warm) <em>or</em> block number (cold)</strong></td><td>stream <code>after=…</code>; integrity via the commitment chain</td></tr>
+  </tbody>
+</table>
+<p>A consumer is itself a Bor node, so its cold-start anchor is its own chain head (a block number), and its precise warm-resume point is its <strong>running commitment head</strong> &mdash; the store indexes each entry&rsquo;s post-fold head, so <code>after=head:&hellip;</code> resumes at exactly the occurrence the consumer verified. This is why the head, not a transaction hash, is the resume token: supersession can leave several <em>generations</em> of entries at one height, making a tx hash ambiguous as a position (and resolving it &ldquo;latest&rdquo; would skip the re-anchor records a behind consumer still needs) &mdash; while every head value is unique to its position by construction. Gap and order come from the commitment chain, not an integer. The block-number anchor never expires: if a presented head has aged out of retention, the consumer re-anchors at a block number and adopts the seed as at cold start (see the per-entry check). The block-addressed forms resolve to the <strong>latest generation</strong> at that height (<code>/v1/block/{n}</code>, <code>after=block:n</code>); a transaction hash that appears in more than one generation likewise resolves to its latest position for application-level lookup.</p>
+
+<h3>Publisher API (producer &rarr; ingress, gRPC)</h3>
+<p>Internal, trusted, latency-sensitive. The producer never deals in positions: it chains each entry to the prefix with a commitment and resolves its right to write purely by holding a writer credential on an authenticated channel (&sect;5). It needs no tail-fetch call of its own: on takeover or after a rejection it learns the current head exactly as any consumer does &mdash; by reading the stream to the tip via the consumer API (below) and re-applying the records it missed; its running head after the last record is what its next record must extend. Those records have to be re-applied anyway (to rebuild running nonces, balances, and block boundaries), so the head falls out for free.</p>
+<div class="api">
+  <div class="ep"><span class="method">gRPC</span><span class="path">Publish(Entry) &rarr; Ack { status }</span>
+    <span class="ret">One entry &mdash; a <code>BlockOpen</code>, transaction <code>Record</code>, or <code>BlockSeal</code> (a <code>oneof</code>); accepted only if its <code>prefix_commitment</code> equals the store&rsquo;s current head. Carried as a bidirectional stream: entries are pipelined, one ack per entry in the order received &mdash; a rejection doesn&rsquo;t close the stream, but everything pipelined behind it fails the head check too, so the producer stops, resyncs, and resumes.</span></div>
+</div>
+<table>
+  <thead><tr><th><code>Ack.status</code></th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><code>OK</code></td><td>Appended; head advanced.</td></tr>
+    <tr><td><code>STALE_COMMITMENT</code></td><td><code>prefix_commitment</code> &ne; current head &mdash; re-read the tail and rebuild.</td></tr>
+    <tr><td><code>MALFORMED</code></td><td>Entry fails structural validation &mdash; a producer-side bug; do not retry unchanged.</td></tr>
+    <tr><td><code>RATE_LIMITED</code></td><td>Throttled; retry later.</td></tr>
+  </tbody>
+</table>
+<p><strong>The head check.</strong> The ingress holds the chain&rsquo;s current head and accepts a record only if its <code>prefix_commitment</code> equals it. On a match it appends and advances the head &mdash; folding in an open record&rsquo;s header context, a transaction record&rsquo;s transactions, or a seal record&rsquo;s sealed hash (per the commitment-chain construction above) &mdash; then acknowledges it; on a mismatch it returns <code>STALE_COMMITMENT</code> and the producer reads the tail via the consumer API, adopts the store&rsquo;s head, and rebuilds before publishing again. Forcing concurrent writers onto one chain is what prevents the equivocation / partition forks; the threat model, and why a rejected record can&rsquo;t break an issued preconf, are in <a href="#failure">&sect;8</a>.</p>
+<p><strong>Producer identity.</strong> Producers aren&rsquo;t declared in requests &mdash; the ingress takes the writer&rsquo;s identity from the <strong>authenticated channel</strong> (the per-validator credential, &sect;5) and validates nothing else about it: the store is chain-blind, and contention between credentialed writers is settled by the head check alone. Which producers hold credentials tracks the VEBLOP election operationally, not in-protocol.</p>
+
+<h3>Consumer API (RPC node / external &rarr; egress gateway)</h3>
+<p>Untrusted-facing; every connection/request is authenticated (API key / JWT). Clients reach only the gateway, never the backend. The native surface is gRPC (a server-streaming <code>Stream</code>, a pull <code>Range</code>, and <code>GetBlock</code> &mdash; same message shapes as the publisher side); the gateway may additionally re-encode it as the HTTP + WebSocket forms below for external clients &mdash; identical fields and semantics, so the endpoints are documented once in HTTP notation.</p>
+<div class="api">
+  <div class="ep"><span class="method">WS</span><span class="path">/v1/stream<wbr>?after={ head:&lt;bytes32&gt; | block:&lt;n&gt; }</span>
+    <span class="ret">&rarr; entry frames (block opens + transaction records + block seals, exactly as published) + <code>{"t":"live"}</code> when caught up to tip + ping/pong</span></div>
+  <div class="ep"><span class="method">GET</span><span class="path">/v1/records<wbr>?after={ head:&lt;bytes32&gt; | block:&lt;n&gt; }<wbr>&amp;limit=&lt;n&gt;<wbr>&amp;wait=&lt;ms&gt;</span>
+    <span class="ret">&rarr; <code>{ entries: [Entry], next: "head:&lt;bytes32&gt;", live: bool }</code></span></div>
+  <div class="ep"><span class="method">GET</span><span class="path">/v1/block/{n}</span>
+    <span class="ret">&rarr; block n&rsquo;s entries &mdash; its <code>BlockOpen</code>, its transaction records, and its <code>BlockSeal</code> (with the sealed hash) once sealed; inclusive fetch</span></div>
+</div>
+<p><strong><code>after</code></strong> (exclusive; same in both modes): <code>head:&lt;bytes32&gt;</code> resumes right after the entry whose post-fold head equals the value &mdash; the consumer presents its own running head, so the stream continues with exactly what it has not applied, including any re-anchor records; <code>block:&lt;n&gt;</code> resumes after block <em>n</em>&rsquo;s latest generation (cold start: a fresh node passes its sealed chain head, then adopts the seed per the per-entry check); omitted = from the earliest retained entry; <code>next</code> is returned as <code>head:&lt;bytes32&gt;</code>, so paging is <code>after = next</code>. An aged-out or unknown head returns an error and the consumer falls back to the block anchor. There is intentionally <strong>no <code>latest</code>/live-only</strong> value &mdash; it would skip the entries between a consumer&rsquo;s head and the tip.</p>
+<p><strong><code>limit</code></strong> caps records per response (a server default/max applies). <strong><code>wait</code></strong> is a long-poll budget: if fewer than <code>limit</code> records are ready, the request is held up to <code>wait</code>&nbsp;ms for more before returning &mdash; <code>live:true</code> means the response reached the tip.</p>
+<p><strong>Per-entry consumer check.</strong> (1) <strong>Attribution.</strong> Entries carry no producer signature and no attribution metadata: authorship pre-seal rests entirely on the store&rsquo;s authenticated ingress, and the consumer <strong>trusts the store</strong> for it &mdash; &sect;5&rsquo;s trust model prices exactly this. Seal records remain independently checkable (the header embeds the consensus seal, verified by normal canonical import), and canonical voids anything mis-attributed within about a block (&sect;8). (2) <strong>Chain everything, apply selectively.</strong> Fold every well-formed entry into the running head &mdash; the chain is transport integrity, and superseded or stale entries keep their place in it; whether an entry is <em>applied</em> is decided by rules (3)&ndash;(5). Each entry&rsquo;s <code>prefix_commitment</code> must equal the running head &mdash; a mismatch means a gap (stop and refetch), since the append-only chain never points backward; at a cold start &mdash; or any block-anchored resume after its head aged out of retention &mdash; the consumer adopts the first entry&rsquo;s <code>prefix_commitment</code> as its seed (it cannot recompute it from sealed state) and verifies forward &mdash; integrity from there comes from the chain and the self-authenticating seals. (3) For a <strong>block-open record</strong>: if <code>parent_hash</code> is the consumer&rsquo;s current speculative tip (the sealed or open block it would extend), apply it &mdash; adopt the open context (timestamp, gas limit, base fee &mdash; difficulty is the constant 1, &sect;7) as the new block&rsquo;s header. Any other well-formed open is a <strong>re-anchor</strong>: verify <code>parent_hash</code> names a sealed block it holds (a seal record, or a canonical block), that the parent is not below the consumer&rsquo;s own last milestone-finalized height (the mechanical counterpart of &ldquo;canonical wins&rdquo;, and the <em>only</em> finality guard in the system &mdash; the store knows nothing of Heimdall finality, so a re-anchor under finality is held and alerted by the consumer, never applied), and that <code>block_number</code> equals that parent&rsquo;s height + 1; then void every applied entry above that parent &mdash; including a partially-applied open block &mdash; and re-apply from this open (&sect;8). On a <em>forward jump</em>, reconcile before voiding: blocks in the superseded stretch that sealed canonically exactly as published are confirmed by import, not voided &mdash; only genuine divergence is (&sect;8). If the named parent is not yet held (a forward jump can name a canonical block a lagging consumer hasn&rsquo;t imported), fold the entry but <em>defer application</em> until the parent arrives via normal import &mdash; past the freshness bound, fall back to baseline (&sect;8). (4) For a transaction record, apply <code>transactions</code> in order (fold but don&rsquo;t apply if its block was superseded). (5) For a <strong>block-seal record</strong>, take <code>sealed_hash = keccak256(header)</code> as the just-closed block&rsquo;s hash and cross-check the sealed <code>header</code> twice: its number, timestamp, <code>parentHash</code>, gas limit, and base fee must equal the applied open context (publish and seal may not silently diverge, &sect;5), and its state root, receipts root, and gas used must match the consumer&rsquo;s own re-execution. On a mismatch: void (or mark suspect) the block&rsquo;s already-served preconfs, fall back to baseline latency, resume pre-execution only from the next canonical import, and raise an operator alert &mdash; this class is a determinism bug or bad Heimdall data, not a transient. (6) For state-sync, see <a href="#determinism">&sect;7</a>. Receipts and <code>pending</code>-tag state are served by the RPC node, not the gateway.</p>
+
+<h3>Verification</h3>
+<p>Order and content integrity come from the commitment chain; authorship pre-seal comes from the authenticated write path (store-attested, &sect;5) and is <em>proven</em> at each seal record, whose header embeds the consensus seal &mdash; verified independently by normal canonical import. No producer signing, no per-entry <code>ecrecover</code>. A standalone, wallet-verifiable placement proof is deliberately absent (see the data-model list): the seal record already gives every consumer a consensus-signed commitment to the block&rsquo;s exact content one block later, and anything stronger would put the validator key back in the sidecar (&sect;5).</p>
+
+<h3>Store requirements (backend deferred)</h3>
+<p>The backend is an internal choice for later; whatever realizes the store must provide:</p>
+<ul>
+  <li><strong>A durable, replicated, totally-ordered, append-only log</strong> &mdash; records are retained (never rewritten) for a window comfortably past milestone finality and the slowest consumer&rsquo;s recovery (minutes-scale), so every position stays reachable. Superseded and flagged generations are additionally <strong>archived durably beyond the streaming window</strong> (or exported as audit events) &mdash; they are the evidence behind the supersession audit and the &sect;8 revocation-rate SLA.</li>
+  <li><strong>Enforcement of the commitment chain (the head check)</strong> &mdash; order and integrity. block assignment is canonical (a transaction is published only after the producer commits it to a block); the sealed chain remains authoritative under a reorg (&sect;8).</li>
+  <li><strong>A single write path</strong> (the ingress): channel authentication + the head check, then append &mdash; and the head check must be <strong>atomic with the replicated append at the log layer</strong> (a conditional append: commit only if the head still equals the expected value, or equivalently fenced/leased leadership). An in-memory check in the ingress is not enough: during an ingress failover overlap, two instances could each read the same head and each durably append a different successor. If the write path can&rsquo;t reach a majority of replicas it can&rsquo;t acknowledge a record, so the store can&rsquo;t split into two disagreeing copies (<a href="#failure">&sect;8</a>).</li>
+  <li><strong>Read fan-out decoupled from consumer count</strong> (the egress gateway): the log is read once per gateway instance and fanned out in memory, so read load is O(gateway instances), not O(consumers); a recent-window buffer serves live reads and reconnect backfill, with read-through to the log for older positions within retention.</li>
+  <li><strong>Internal positions never exposed.</strong> The backend&rsquo;s positions are used only to seek/index (<code>head &rarr; position</code>, <code>block &rarr; position range</code>, <code>tx_hash &rarr; latest position</code>); the API navigates by commitment head + block number only.</li>
+</ul>
+
+<h2 id="open"><span class="num">&sect;11</span>Open questions</h2>
+<ol>
+  <li><strong>Consensus impact.</strong> Confirm no fork is needed &mdash; publishing, the store, and RPC pre-execution are off-chain, and the producer-side execute-ahead / hold-until-announceable scheduling (&sect;6) rides Bor&rsquo;s existing early-announcement rules so peers validate blocks exactly as today. Verify the held-block scheduling stays within the <code>verifyHeader</code> future-block bound and does not perturb backup-producer succession (&sect;6).</li>
+  <li><strong>Timestamp at block-open.</strong> Confirm the header timestamp is fixed when the BP opens the block (before the first tx executes) and is the value sealed, so preconf and sealed receipts agree (&sect;7).</li>
+  <li><strong>Reorg handling.</strong> Specify the replay-vs-reconcile boundary: when a newly-elected producer replays the published sequence vs. when consumers void and re-issue against canonical (&sect;8). In particular, pin the VEBLOP failover semantics for <strong>held blocks</strong>: does the failover election resume above the store tail (successor announces a dead producer&rsquo;s sealed-but-unannounced blocks as-is) or re-cut from the canonical tip (successor must replay them under pinned context and supersede)? (&sect;6, &sect;8)</li>
+  <li><strong>Store consistency SLA.</strong> Quantify the best-effort loss window: the open (unsealed) block when a producer dies, sealed-but-unannounced blocks if no publishing successor announces them, a successor that doesn&rsquo;t run the sidecar (&sect;8), plus pre-finality reorgs &mdash; and decide whether the <strong>all-producer order-ack</strong> upgrade (&sect;3) is worth building.</li>
+  <li><strong>Partition / equivocation.</strong> The head check (&sect;8) forces concurrent writers into a single chain; the remaining work is confirming it runs on a single write path and reconciling producer-election edge cases with the VEBLOP spec.</li>
+  <li><strong>Streaming transport semantics.</strong> Delivery guarantees, reconnection, gap detection, backpressure for the store stream (spec&rsquo;d in <a href="#store">&sect;10</a>).</li>
+  <li><strong>Ordering policy.</strong> The order is the BP&rsquo;s normal build order (priority fee); document the MEV implications.</li>
+  <li><strong>Access &amp; premium tier.</strong> Pricing/packaging of preconf access (our RPC nodes &rarr; premium customers &rarr; external providers), and a PoC of the direct BP&rarr;RPC receipt path to measure its latency win (&sect;5).</li>
+  <li><strong>Reserved block space.</strong> Needs its own spec: who reserves, how it&rsquo;s configured/enforced, and what happens to unused reservation.</li>
+  <li><strong>Ingress authentication.</strong> Pick the writer-auth mechanism (mutual TLS with per-validator credentials, or a private-mesh equivalent), how the credential binds to the validator identity, and its issuance / rotation / revocation lifecycle. It replaces producer signatures on entries (&sect;5), so a leaked credential means a fabricated pre-seal stream until the seals expose it (&sect;8) &mdash; revocation speed matters.</li>
+  <li><strong>Client-facing RPC semantics.</strong> Pin the preconf receipt shape (null <code>blockHash</code> plus a preconf marker until the seal record supplies the hash &mdash; then populated pre-announcement?) and the <code>pending</code>-tag behavior when the node&rsquo;s pre-execution runs several sealed-but-unannounced blocks ahead (&sect;5).</li>
+  <li><strong>Producer integration.</strong> Verify the published-prefix binding across every miner restart path (<code>commitInterruptNewHead / Resubmit / Timeout</code>, <code>miner/worker.go</code>): same-parent rebuilds must replay the published prefix exactly; parent-change rebuilds supersede (&sect;5, &sect;10). Verify pinned-context replay overrides the miner&rsquo;s own timestamp recomputation (the <code>minBlockBuildTime</code> bump is producer policy, not consensus) and passes both consensus lower bounds (the header timestamp rule and <code>IsBlockEarly</code> in seal verification) on every replay path (&sect;8). Implement and verify the &sect;6 buffering model: the worker builds on the buffered block&rsquo;s post-state rather than the imported head, held blocks are never advertised (handshake head/TD) or served to peers before release, and the txpool tracks the buffered head during seal-ahead &mdash; pruning included transactions and evaluating executability against the buffered post-state, not the announced head &mdash; or selection re-offers already-included transactions and stalls the burst drain (&sect;9). Bypass Prepare&rsquo;s pacing sleep (the wait-until-parent-timestamp delay in <code>consensus/bor/bor.go</code> &mdash; producer policy, not consensus): opening on a held, future-timestamped parent otherwise blocks until that parent&rsquo;s slot and stops execute-ahead outright. Choose the seal-ahead cap value &mdash; inputs: preconf exposure to producer failure, header-timestamp meaningfulness, and the state-sync cutoff margin <code>128&nbsp;s &minus; depth &times; blocktime</code> (&sect;6, &sect;7).</li>
+</ol>
+
+<footer>
+  Draft for team review. Code references reflect Bor as of writing (<code>consensus/bor/bor.go</code>, <code>miner/worker.go</code>, <code>consensus/misc/eip1559</code>). Producer-election and partition questions reconcile with the VEBLOP spec. Decisions in &sect;3 are settled; &sect;11 items are not.
+</footer>
+
+</body>
+</html>
