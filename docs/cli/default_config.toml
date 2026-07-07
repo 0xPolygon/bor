@@ -267,3 +267,7 @@ devfakeauthor = false
   enable-preconfs = false
   enable-private-tx = false
   bp-rpc-endpoints = []
+
+[sequencer]
+  role = ""
+  endpoint = "127.0.0.1:7788"

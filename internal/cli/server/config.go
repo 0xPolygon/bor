@@ -175,6 +175,8 @@ type Config struct {
 
 	// Relay has transaction relay related settings
 	Relay *RelayConfig `hcl:"relay,block" toml:"relay,block"`
+
+	Sequencer *SequencerConfig `hcl:"sequencer,block" toml:"sequencer,block"`
 }
 
 type HistoryConfig struct {
@@ -822,6 +824,22 @@ type RelayConfig struct {
 	BlockProducerRpcEndpoints []string `hcl:"bp-rpc-endpoints,optional" toml:"bp-rpc-endpoints,optional"`
 }
 
+// SequencerConfig configures the sequence store integration.
+type SequencerConfig struct {
+	// Role selects the node's side of the sequence store: "producer"
+	// publishes the block lifecycle while mining, "consumer" re-executes the
+	// stream to serve preconfirmation receipts. Empty disables both.
+	Role string `hcl:"role,optional" toml:"role,optional"`
+
+	// Endpoint is the sequence store gRPC address.
+	Endpoint string `hcl:"endpoint,optional" toml:"endpoint,optional"`
+
+	// Refresh is the producer's mempool re-snapshot cadence while a block is
+	// open (continuous building); zero keeps the one-shot fill at slot start.
+	Refresh    time.Duration `hcl:"-,optional" toml:"-"`
+	RefreshRaw string        `hcl:"refresh,optional" toml:"refresh,optional"`
+}
+
 func DefaultConfig() *Config {
 	return &Config{
 		Chain:                       "mainnet",
@@ -1086,6 +1104,11 @@ func DefaultConfig() *Config {
 			EnablePrivateTx:           false,
 			BlockProducerRpcEndpoints: []string{},
 		},
+		Sequencer: &SequencerConfig{
+			Role:     "",
+			Endpoint: "127.0.0.1:7788",
+			Refresh:  0,
+		},
 	}
 }
 
@@ -1147,6 +1170,14 @@ func (c *Config) fillTimeDurations() error {
 		{"p2p.txarrivalwait", &c.P2P.TxArrivalWait, &c.P2P.TxArrivalWaitRaw},
 		{"rpc.txsync.defaulttimeout", &c.JsonRPC.TxSyncDefaultTimeout, &c.JsonRPC.TxSyncDefaultTimeoutRaw},
 		{"rpc.txsync.maxtimeout", &c.JsonRPC.TxSyncMaxTimeout, &c.JsonRPC.TxSyncMaxTimeoutRaw},
+	}
+
+	if c.Sequencer != nil {
+		tds = append(tds, struct {
+			path string
+			td   *time.Duration
+			str  *string
+		}{"sequencer.refresh", &c.Sequencer.Refresh, &c.Sequencer.RefreshRaw})
 	}
 
 	for _, x := range tds {
@@ -1717,6 +1748,12 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	n.MaxBlindForkValidationLimit = c.MaxBlindForkValidationLimit
 
 	// Set preconf / private transaction flags for relay
+	if c.Sequencer != nil {
+		n.SequencerRole = c.Sequencer.Role
+		n.SequencerEndpoint = c.Sequencer.Endpoint
+		n.SequencerRefresh = c.Sequencer.Refresh
+	}
+
 	n.EnablePreconfs = c.Relay.EnablePreconfs
 	n.EnablePrivateTx = c.Relay.EnablePrivateTx
 	n.BlockProducerRpcEndpoints = c.Relay.BlockProducerRpcEndpoints

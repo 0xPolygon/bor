@@ -71,6 +71,12 @@ type Backend interface {
 	PrivateTxEnabled() bool
 	SubmitPrivateTx(tx *types.Transaction) error
 
+	// GetPreconfReceipt returns the preconfirmation receipt a sequence-store
+	// consumer built by re-executing the stream, for a tx not yet in the
+	// chain. The receipt carries its own block number, index, and — once the
+	// block is sealed — block hash.
+	GetPreconfReceipt(hash common.Hash) (*types.Receipt, *types.Transaction, bool)
+
 	// Preconf / Private tx related API for block producers
 	AcceptPreconfTxs() bool
 	AcceptPrivateTxs() bool

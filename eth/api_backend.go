@@ -806,6 +806,14 @@ func (b *EthAPIBackend) CheckPreconfStatus(hash common.Hash) (bool, error) {
 	return b.relay.CheckPreconfStatus(hash)
 }
 
+func (b *EthAPIBackend) GetPreconfReceipt(hash common.Hash) (*types.Receipt, *types.Transaction, bool) {
+	if b.eth.seqConsumer == nil {
+		return nil, nil, false
+	}
+
+	return b.eth.seqConsumer.Index().Lookup(hash)
+}
+
 func (b *EthAPIBackend) PrivateTxEnabled() bool {
 	return b.relay.PrivateTxEnabled()
 }

@@ -1,0 +1,233 @@
+syntax = "proto3";
+
+package sequencestore.v1;
+
+option go_package = "github.com/0xPolygon/sequence-store-proto/sequencestore/v1;sequencestorev1";
+
+// The sequence store holds one append-only chain of entries mirroring a
+// block's lifecycle: a BlockOpen fixes the header context the moment the
+// producer opens the block, Records carry its sequenced transactions, and a
+// BlockSeal closes it with the full sealed header. Every entry carries a
+// prefix_commitment — the commitment-chain head it extends — and the store
+// appends an entry only if that prefix equals its current head (the head
+// check). The commitment fold itself is defined by the commitment Go package
+// in this module; the fold operates over canonical byte encodings, never over
+// serialized protobuf.
+//
+// This gRPC surface is the native contract on both sides: producers write
+// through PublisherService, and ConsumerService is the read path — the egress
+// gateway may additionally re-encode ConsumerService as HTTP/WebSocket for
+// external clients, without changing message shapes or semantics.
+
+// BlockOpen fixes block N's header context at the moment the producer opens
+// it — every header field execution depends on.
+message BlockOpen {
+  // The block being opened (N) — the height the ingress runs the election
+  // check at. Carried because a forward-jump
+  // re-anchor names a parent the store never saw, so the height is not
+  // derivable from store state.
+  uint64 block_number = 1;
+
+  // N's header timestamp, fixed at open.
+  uint64 block_timestamp = 2;
+
+  // Sealed hash (32 bytes) of the block N builds on — must match a published
+  // seal record, or, at cold start / resumption, a canonical block the
+  // consumer already has. An open whose parent_hash is not the current tip is
+  // a re-anchor.
+  bytes parent_hash = 3;
+
+  // N's block gas limit — producer-chosen, not derivable from the parent.
+  uint64 gas_limit = 4;
+
+  // N's base fee as a big-endian unsigned integer, minimally encoded (no
+  // leading zero bytes; empty means zero), at most 32 bytes — producer-local
+  // policy post-Lisovo, not derivable by consumers.
+  bytes base_fee = 5;
+
+  // The store head this entry extends (32 bytes) — C_seal of the last sealed
+  // block on the normal path.
+  bytes prefix_commitment = 6;
+}
+
+// Record carries one or more sequenced transactions for the open block,
+// never spanning two blocks.
+message Record {
+  // Ordered raw signed transactions (tx hash derivable); one per message for
+  // lowest latency, or a batch under load. The commitment chain folds per
+  // transaction, so batching does not change the chain. Never empty: every
+  // appended entry must advance the head — an empty record would leave two
+  // entries at one head, breaking head-as-position — so the ingress rejects
+  // it as MALFORMED.
+  repeated bytes transactions = 1;
+
+  // Running head (32 bytes) just before this record's transactions; a block's
+  // first record carries C_open(N).
+  bytes prefix_commitment = 2;
+}
+
+// BlockSeal closes block N, appended the moment the block is sealed — after
+// N's last record and before N+1's open.
+message BlockSeal {
+  // N's full sealed header (RLP); the height is inside the header.
+  // keccak256(header) is BLOCKHASH(N) and N+1's parentHash. The header embeds
+  // the producer's consensus seal, so it cannot be recomputed from state — it
+  // must be delivered. Consumers cross-check their re-execution against its
+  // state root, receipts root, and gas used.
+  bytes header = 1;
+
+  // The running head (32 bytes) after N's last transaction, C_block(N) — the
+  // seal extends it.
+  bytes prefix_commitment = 2;
+}
+
+// Entry is the unit of the stream, published by producers and delivered to
+// consumers exactly as published.
+message Entry {
+  oneof kind {
+    BlockOpen block_open = 1;
+    Record record = 2;
+    BlockSeal block_seal = 3;
+  }
+}
+
+// AckStatus reports the outcome of one published entry.
+enum AckStatus {
+  ACK_STATUS_UNSPECIFIED = 0;
+
+  // Appended; head advanced.
+  ACK_STATUS_OK = 1;
+
+  // prefix_commitment != current head — re-read the tail via the consumer
+  // API, rebuild, then publish again.
+  ACK_STATUS_STALE_COMMITMENT = 2;
+
+  // Entry fails structural validation — a producer-side bug; do not retry
+  // unchanged. Structurally invalid: a Record with zero transactions, a
+  // commitment or parent-hash field that is not 32 bytes, a base fee that is
+  // not minimally encoded or exceeds 32 bytes, a missing entry kind.
+  ACK_STATUS_MALFORMED = 3;
+
+  // Throttled; retry later.
+  ACK_STATUS_RATE_LIMITED = 4;
+}
+
+message PublishRequest {
+  Entry entry = 1;
+}
+
+message PublishResponse {
+  AckStatus status = 1;
+}
+
+// PublisherService is the producer → ingress write path: internal, trusted,
+// latency-sensitive. The channel is authenticated (per-validator credential);
+// producers are never declared in requests — write access is the credential,
+// and the head check arbitrates concurrent writers onto one chain. There is
+// no tail-fetch call here: on takeover or after a rejection the producer
+// reads the stream to the tip via ConsumerService and re-applies what it
+// missed.
+service PublisherService {
+  // Publish pipelines entries and returns one ack per entry, in the order the
+  // entries were received. A non-OK ack does not close the stream, but every
+  // entry pipelined behind a rejected one fails the head check too
+  // (STALE_COMMITMENT) — on any rejection the producer stops, resyncs, and
+  // resumes.
+  rpc Publish(stream PublishRequest) returns (stream PublishResponse);
+}
+
+// ConsumerService is the store → consumer read path, served through the
+// egress gateway: untrusted-facing, per-connection authenticated. Entries are
+// delivered exactly as published; pre-seal content is attributed by trusting
+// the store's authenticated ingress. Consumers verify chain integrity
+// themselves (prefix continuity, seal cross-checks); the store is not a
+// chain validator.
+service ConsumerService {
+  // Stream delivers entries from the requested position to the tip, then
+  // stays open for live entries. A Live frame marks the caught-up-to-tip
+  // transition. An aged-out or unknown resume head fails with NOT_FOUND — the
+  // consumer falls back to its block anchor.
+  rpc Stream(StreamRequest) returns (stream StreamResponse);
+
+  // Range is the pull counterpart of Stream: up to limit entries after the
+  // requested position, with an optional long-poll budget. Same resume
+  // semantics as Stream, including NOT_FOUND for an aged-out or unknown
+  // position.
+  rpc Range(RangeRequest) returns (RangeResponse);
+
+  // GetBlock fetches block n's entries — its BlockOpen, its Records, and its
+  // BlockSeal once sealed (inclusive fetch). Block-addressed reads resolve to
+  // the latest generation at that height. An unknown or unretained height
+  // fails with NOT_FOUND.
+  rpc GetBlock(GetBlockRequest) returns (GetBlockResponse);
+}
+
+// The resume position is exclusive and shared by Stream and Range:
+//   head  — resumes right after the entry whose post-fold head equals the
+//           value; the consumer presents its own running head, so the stream
+//           continues with exactly what it has not applied, including any
+//           re-anchor entries. Every head value is unique to its position by
+//           construction (this is why the head, not a tx hash, is the resume
+//           token).
+//   block — resumes after block n's latest generation (cold start: a fresh
+//           node passes its sealed chain head, then adopts the first entry's
+//           prefix_commitment as its seed). If the latest generation at n is
+//           still open, the position resolves before its open record — the
+//           in-progress generation is served from its start, never from the
+//           middle.
+//   unset — from the earliest retained entry.
+// There is intentionally no latest/live-only value — it would skip the
+// entries between a consumer's head and the tip.
+message StreamRequest {
+  oneof after {
+    bytes head = 1;
+    uint64 block = 2;
+  }
+}
+
+message StreamResponse {
+  oneof frame {
+    Entry entry = 1;
+    Live live = 2;
+  }
+}
+
+// Live marks that the stream has caught up to the tip; frames after it are
+// live entries as they are appended.
+message Live {}
+
+message RangeRequest {
+  oneof after {
+    bytes head = 1;
+    uint64 block = 2;
+  }
+
+  // Maximum entries in the response; a server default and maximum apply.
+  uint32 limit = 3;
+
+  // Long-poll budget in milliseconds: if fewer than limit entries are
+  // ready, the request is held up to this long for more before returning.
+  uint32 wait_ms = 4;
+}
+
+message RangeResponse {
+  repeated Entry entries = 1;
+
+  // The position this response ends at, always valid to pass back as
+  // after.head: the post-fold head of the last returned entry, or — when
+  // entries is empty — the resolved request position (the presented head, or
+  // the post-fold head of block n's latest generation for a block-addressed
+  // request).
+  bytes next = 2;
+
+  // True when the response reached the tip.
+  bool live = 3;
+}
+
+message GetBlockRequest {
+  uint64 block_number = 1;
+}
+
+message GetBlockResponse {
+  repeated Entry entries = 1;
+}
