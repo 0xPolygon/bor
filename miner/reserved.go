@@ -14,14 +14,24 @@ import (
 // setter site.
 type reservedRegistry interface {
 	// Lookup returns the client ID that owns addr, or (_, false) if addr is
-	// not registered.
+	// not registered. Only active clients are visible, and a sender belongs
+	// to at most one client — uniqueness is the implementation's invariant
+	// (Mock panics on construction; the registry contract enforces it).
 	Lookup(addr common.Address) (clientID uint64, ok bool)
-	// Quota returns the per-block reserved-region gas allowance for clientID.
+	// Quota returns the per-block reserved-region gas allowance for clientID,
+	// measured against declared transaction gas limits (tx.Gas), not actual
+	// gas used.
 	Quota(clientID uint64) uint64
+	// CeilingGas returns the global reserved-region gas cap across all
+	// clients (the registry contract's ceilingGas). Zero means uncapped.
+	CeilingGas() uint64
 	// Clients returns every registered client ID.
 	Clients() []uint64
-	// Snapshot returns a copy of the current registry state.
-	Snapshot() reservedRegistry
+	// Snapshot returns an immutable copy of the registry state effective for
+	// the child block of parent. The contract-backed implementation resolves
+	// parent state and the effectiveFrom activation delay internally; callers
+	// pin one snapshot per build so every pass sees a consistent view.
+	Snapshot(parent common.Hash) reservedRegistry
 }
 
 // ReservedRegistry is the exported alias callers use with
@@ -42,6 +52,7 @@ type Mock struct {
 	addrToClient  map[common.Address]uint64
 	clientToQuota map[uint64]uint64
 	clientIDs     []uint64
+	ceiling       uint64
 }
 
 // NewMock builds a Mock. Panics on a duplicate client ID or a sender claimed by
@@ -69,6 +80,14 @@ func NewMock(clients []Client) *Mock {
 	return m
 }
 
+// WithCeiling sets the global reserved-region gas cap (zero = uncapped) and
+// returns m for construction chaining. Set before handing the Mock to a
+// worker; Mock is treated as immutable once in use.
+func (m *Mock) WithCeiling(gas uint64) *Mock {
+	m.ceiling = gas
+	return m
+}
+
 func (m *Mock) Lookup(addr common.Address) (uint64, bool) {
 	cid, ok := m.addrToClient[addr]
 	return cid, ok
@@ -76,14 +95,17 @@ func (m *Mock) Lookup(addr common.Address) (uint64, bool) {
 
 func (m *Mock) Quota(clientID uint64) uint64 { return m.clientToQuota[clientID] }
 
+func (m *Mock) CeilingGas() uint64 { return m.ceiling }
+
 func (m *Mock) Clients() []uint64 {
 	out := make([]uint64, len(m.clientIDs))
 	copy(out, m.clientIDs)
 	return out
 }
 
-func (m *Mock) Snapshot() reservedRegistry {
-	// Copy `m` and return
+func (m *Mock) Snapshot(common.Hash) reservedRegistry {
+	// The Mock has no chain state to resolve, so the parent hash is unused;
+	// the copy below just guarantees snapshot isolation.
 	snapshot := *m
 	snapshot.addrToClient = make(map[common.Address]uint64, len(m.addrToClient))
 	for k, v := range m.addrToClient {

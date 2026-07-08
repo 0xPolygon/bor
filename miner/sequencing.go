@@ -3,11 +3,29 @@ package miner
 import (
 	"bytes"
 	"encoding/binary"
+	"math"
 	"sort"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/metrics"
+)
+
+// Producer-side reserved-region signals that leave no trace in the block
+// (they reflect the local pool view and build timing), so they can't be
+// reconstructed later from chain data.
+var (
+	// reservedGasUsedGauge records each build's reserved-region gas total
+	// (the value written into BlockExtraData.ReservedGasUsed).
+	reservedGasUsedGauge = metrics.NewRegisteredGauge("worker/reserved/gasused", nil)
+	// reservedOverflowMeter counts reserved-eligible transactions diverted to
+	// the normal pass because of per-client quota or the global ceiling.
+	reservedOverflowMeter = metrics.NewRegisteredMeter("worker/reserved/overflow", nil)
+	// reservedInterruptCounter counts commit interrupts that fired while a
+	// reserved group was being committed — a sign the time budget is tight
+	// for reserved demand.
+	reservedInterruptCounter = metrics.NewRegisteredCounter("worker/reserved/interrupt", nil)
 )
 
 type newTransactionsByPriceAndNonceFn func(txs map[common.Address][]*txpool.LazyTransaction) *transactionsByPriceAndNonce
@@ -27,10 +45,10 @@ func extractPriorityTxs(prio []common.Address, pendingTxs map[common.Address][]*
 
 // filterReservedTxs removes the transactions from reserved-eligible senders from
 // pending transactions and returns them grouped by client ID.
-func filterReservedTxs(pendingTxs map[common.Address][]*txpool.LazyTransaction, reservedRegistry ReservedRegistry) map[uint64]map[common.Address][]*txpool.LazyTransaction {
+func filterReservedTxs(pendingTxs map[common.Address][]*txpool.LazyTransaction, registry reservedRegistry) map[uint64]map[common.Address][]*txpool.LazyTransaction {
 	var reserved = make(map[uint64]map[common.Address][]*txpool.LazyTransaction)
 	for addr, txs := range pendingTxs {
-		cid, ok := reservedRegistry.Lookup(addr)
+		cid, ok := registry.Lookup(addr)
 		if !ok {
 			continue
 		}
@@ -72,13 +90,18 @@ func orderClients(parentHash common.Hash, ids []uint64) []uint64 {
 }
 
 // selectReservedTxs picks the best transactions of a reserved client capped by their
-// quota. Transactions are ordered in asending order of price (opposite from usual logic)
+// quota. Transactions are ordered in ascending order of price (opposite from usual logic)
 // to ensure that zero or below base fee transactions win over transactions carrying
 // fallback fees (who can anyways compete in EIP-1559 fee market).
 //
 // The quota is measured by the transaction gas limit since actual gas used is only known
-// after execution. Transactions overflowing the quota are added back again to the original
-// pending list of transsactions.
+// after execution; used reports the declared gas the selection consumed so the caller
+// can charge it against the global reserved ceiling. Transactions overflowing the quota
+// are handed back to the caller for the normal pass.
+//
+// A sender's first quota breach diverts that transaction and every later nonce of
+// the same sender to overflow: reserved groups commit before the normal pass, so
+// selecting nonce n+1 after diverting nonce n would break the sender's nonce order.
 //
 // If block building is interrupted while the scan heap is being constructed, the
 // constructor yields an empty heap, so this client contributes nothing to the
@@ -89,13 +112,12 @@ func orderClients(parentHash common.Hash, ids []uint64) []uint64 {
 // remaining transactions.
 func selectReservedTxs(
 	clientTxs map[common.Address][]*txpool.LazyTransaction, quota uint64, newTransactionsByPriceAndNonce newTransactionsByPriceAndNonceFn,
-) (selected *transactionsByPriceAndNonce, overflow map[common.Address][]*txpool.LazyTransaction) {
+) (selected *transactionsByPriceAndNonce, used uint64, overflow map[common.Address][]*txpool.LazyTransaction) {
 	scan := newTransactionsByPriceAndNonce(clientTxs)
 	selectedTxs := make(map[common.Address][]*txpool.LazyTransaction)
 	overflow = make(map[common.Address][]*txpool.LazyTransaction)
 	blocked := make(map[common.Address]bool)
 
-	var used uint64
 	for {
 		ltx, _ := scan.Peek()
 		if ltx == nil {
@@ -113,16 +135,26 @@ func selectReservedTxs(
 	}
 
 	selected = newTransactionsByPriceAndNonce(selectedTxs)
-	return selected, overflow
+	return selected, used, overflow
 }
 
-func (w *worker) extractReservedTxs(parentHash common.Hash, pendingTxs map[common.Address][]*txpool.LazyTransaction, newTransactionsByPriceAndNonce newTransactionsByPriceAndNonceFn) []*transactionsByPriceAndNonce {
-	if w.reservedRegistry == nil {
-		return nil
+// ceilingGas returns the registry's global reserved-region cap, normalizing
+// zero (uncapped) to MaxUint64 so the selection loop needs no special case.
+func ceilingGas(registry reservedRegistry) uint64 {
+	if c := registry.CeilingGas(); c != 0 {
+		return c
 	}
+	return math.MaxUint64
+}
 
-	registry := w.reservedRegistry.Snapshot()
-	if len(registry.Clients()) == 0 {
+// extractReservedTxs pulls reserved-eligible transactions out of pendingTxs and
+// returns one quota-trimmed, ordered group per client, in the deterministic
+// parent-hash-keyed client order. registry is a per-build snapshot taken by the
+// caller; a nil registry (production default until the registry module lands)
+// or one with no clients is a no-op. Quota overflow — per-client and global
+// ceiling alike — is re-added to pendingTxs for the normal pass.
+func extractReservedTxs(registry reservedRegistry, parentHash common.Hash, pendingTxs map[common.Address][]*txpool.LazyTransaction, newTransactionsByPriceAndNonce newTransactionsByPriceAndNonceFn) []*transactionsByPriceAndNonce {
+	if registry == nil || len(registry.Clients()) == 0 {
 		return nil
 	}
 	reservedTxs := filterReservedTxs(pendingTxs, registry)
@@ -130,7 +162,11 @@ func (w *worker) extractReservedTxs(parentHash common.Hash, pendingTxs map[commo
 		return nil
 	}
 
-	// TODO: pin this order if there are multiple iterations of building a single block
+	// The global ceiling bounds the summed declared gas selected across all
+	// clients. Like per-client quota, it is charged against declared gas
+	// limits, not actual gas used.
+	ceilingLeft := ceilingGas(registry)
+
 	clientOrder := orderClients(parentHash, registry.Clients())
 	var sequence = make([]*transactionsByPriceAndNonce, 0, len(clientOrder))
 	for _, cid := range clientOrder {
@@ -139,9 +175,11 @@ func (w *worker) extractReservedTxs(parentHash common.Hash, pendingTxs map[commo
 			continue
 		}
 
-		selected, overflow := selectReservedTxs(clientTxs, registry.Quota(cid), newTransactionsByPriceAndNonce)
+		selected, used, overflow := selectReservedTxs(clientTxs, min(registry.Quota(cid), ceilingLeft), newTransactionsByPriceAndNonce)
+		ceilingLeft -= used
 		for addr, txs := range overflow {
 			pendingTxs[addr] = append(pendingTxs[addr], txs...)
+			reservedOverflowMeter.Mark(int64(len(txs)))
 		}
 		if selected.Empty() {
 			continue
@@ -157,11 +195,12 @@ func (w *worker) extractReservedTxs(parentHash common.Hash, pendingTxs map[commo
 // client (deterministic, parent-hash-keyed order), then the remaining normal
 // transactions. Each group is an independently-ordered transactionsByPriceAndNonce
 // the caller commits in turn. Empty groups are omitted so the caller never spins
-// up a commit pass for nothing.
+// up a commit pass for nothing. registry is the caller's per-build snapshot
+// (see worker.reservedRegistrySnapshot); nil disables the reserved pass.
 //
 // There is no error path — sequencing only groups and orders an in-memory
 // snapshot; interruption is surfaced later, by commitTransactions.
-func (w *worker) sequenceTxs(env *environment, pendingTxs map[common.Address][]*txpool.LazyTransaction) []*transactionsByPriceAndNonce {
+func (w *worker) sequenceTxs(env *environment, registry reservedRegistry, pendingTxs map[common.Address][]*txpool.LazyTransaction) []*transactionsByPriceAndNonce {
 	w.mu.RLock()
 	prio := w.prio
 	w.mu.RUnlock()
@@ -175,13 +214,16 @@ func (w *worker) sequenceTxs(env *environment, pendingTxs map[common.Address][]*
 
 	var sequence = make([]*transactionsByPriceAndNonce, 0)
 
-	// Priority transactions (operator override) commit first.
+	// Priority transactions (operator override) commit first. A sender that is
+	// both prioritized and registry-listed is consumed here: its transactions
+	// bypass reserved quota accounting and pay normal fees. Operators should
+	// not prioritize registered senders.
 	if prioTxs := extractPriorityTxs(prio, pendingTxs, newTransactionsByPriceAndNonceFn); !prioTxs.Empty() {
 		sequence = append(sequence, prioTxs)
 	}
 
 	// Reserved transactions, one ordered group per client.
-	sequence = append(sequence, w.extractReservedTxs(env.header.ParentHash, pendingTxs, newReservedTransactionsByNonceFn)...)
+	sequence = append(sequence, extractReservedTxs(registry, env.header.ParentHash, pendingTxs, newReservedTransactionsByNonceFn)...)
 
 	// Everything left (including reserved quota overflow added back above) is normal.
 	if normalTxs := newTransactionsByPriceAndNonceFn(pendingTxs); !normalTxs.Empty() {

@@ -252,6 +252,11 @@ type environment struct {
 	sidecars []*types.BlobTxSidecar
 	blobs    int
 
+	// reservedGasUsed accumulates the actual gas used by reserved-region
+	// transactions, written into BlockExtraData.ReservedGasUsed at the end of
+	// the build. Quota accounting (declared gas limits) lives in sequencing.
+	reservedGasUsed uint64
+
 	mvReadMapList []map[blockstm.Key]blockstm.ReadDescriptor
 	witness       *stateless.Witness
 
@@ -281,6 +286,7 @@ func (env *environment) copy() *environment {
 		coinbase:           env.coinbase,
 		header:             types.CopyHeader(env.header),
 		receipts:           copyReceipts(env.receipts),
+		reservedGasUsed:    env.reservedGasUsed,
 		mvReadMapList:      env.mvReadMapList,
 		prefetchReader:     env.prefetchReader,
 		processReader:      env.processReader,
@@ -1612,6 +1618,14 @@ mainloop:
 		case errors.Is(err, nil):
 			// Everything ok, collect the logs and shift in the next transaction from the same account
 			coalescedLogs = append(coalescedLogs, logs...)
+			// Reserved-group transactions count toward the header's
+			// ReservedGasUsed by actual gas used (quota was already charged by
+			// declared gas limit during sequencing).
+			if txs.reserved {
+				if n := len(env.receipts); n > 0 {
+					env.reservedGasUsed += env.receipts[n-1].GasUsed
+				}
+			}
 			prefetched := false
 			if env.prefetchedTxHashes != nil {
 				_, prefetched = env.prefetchedTxHashes.Load(tx.Hash())
@@ -2023,9 +2037,6 @@ func sendPlan(builderPlanCh chan<- *types.Transaction, genParams *generateParams
 	if builderPlanCh == nil || genParams == nil || plainTxs == nil {
 		return
 	}
-	if plainTxs.Empty() {
-		return
-	}
 	// Clone is O(N) pointer copies — done synchronously before the heap is consumed.
 	clone := plainTxs.clone()
 	prefetchedHashes := genParams.prefetchedTxHashes
@@ -2104,6 +2115,12 @@ func scanOverflow(
 // them into ordered groups (priority, reserved per-client, then normal) via
 // sequenceTxs, and commits each group in turn. bor does not support blob
 // transactions, so only plain transactions are fetched.
+//
+// Note that zero-fee reserved transactions cannot yet flow through this path
+// end-to-end: pool admission enforces a minimum tip and execution enforces the
+// base-fee floor (ErrFeeCapTooLow). Both waivers land with the txpool and EVM
+// slices of reserved blockspace; until then the reserved pass operates on
+// fee-carrying transactions from registered senders.
 func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, genParams *generateParams) error {
 	var emptyBlobTxs = newTransactionsByPriceAndNonce(env.signer, nil, env.header.BaseFee, &w.interruptBlockBuilding)
 
@@ -2115,34 +2132,104 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, gen
 	env.pendingDuration = time.Since(pendingStart)
 	pendingTimer.Update(env.pendingDuration)
 
-	sequence := w.sequenceTxs(env, pendingTxs)
+	// Pin one registry snapshot for the whole build so client order, quotas
+	// and membership stay consistent across groups. A future multi-pass
+	// (mini-block) builder must take the snapshot once per block, outside its
+	// pass loop.
+	registry := w.reservedRegistrySnapshot(env.header.ParentHash)
+
+	sequence := w.sequenceTxs(env, registry, pendingTxs)
 
 	// Shared channels used during builder mode. Both are nil when there is no prefetcher.
 	var builderPlanCh chan<- *types.Transaction
 	var builderGasFreedCh chan<- uint64
-	if genParams != nil && genParams.builderPlanCh != nil {
+	if genParams != nil {
 		builderPlanCh = genParams.builderPlanCh
-		if genParams.builderGasFreedCh != nil {
-			builderGasFreedCh = genParams.builderGasFreedCh
-		}
+		builderGasFreedCh = genParams.builderGasFreedCh
 	}
 
-	// remainingGas returns the block gas still available for the next
-	// commitTransactions pass. Before the first pass env.gasPool is nil, so we
-	// fall back to the full header limit.
-	remainingGas := func() uint64 {
-		if env.gasPool == nil {
-			return env.header.GasLimit
-		}
-		return env.gasPool.Gas()
-	}
-
+	var fillErr error
 	for _, txs := range sequence {
-		sendPlan(builderPlanCh, genParams, txs, remainingGas())
-		if err := w.commitTransactions(env, txs, emptyBlobTxs, interrupt, builderGasFreedCh); err != nil {
-			return err
+		sendPlan(builderPlanCh, genParams, txs, remainingGas(env))
+		if fillErr = w.commitTransactions(env, txs, emptyBlobTxs, interrupt, builderGasFreedCh); fillErr != nil {
+			if txs.reserved {
+				reservedInterruptCounter.Inc(1)
+			}
+			break
 		}
 	}
+
+	// Record reserved gas even when a commit pass was interrupted: callers
+	// seal the partial block, and its header must account for the reserved
+	// transactions that did commit.
+	if err := w.writeReservedGasUsed(env, registry); err != nil {
+		return err
+	}
+
+	return fillErr
+}
+
+// remainingGas returns the block gas still available for the next
+// commitTransactions pass. Before the first pass env.gasPool is nil, so it
+// falls back to the full header limit.
+func remainingGas(env *environment) uint64 {
+	if env.gasPool == nil {
+		return env.header.GasLimit
+	}
+	return env.gasPool.Gas()
+}
+
+// reservedRegistrySnapshot pins one registry snapshot for a build, keyed by
+// the parent block. Returns nil when no registry is wired — the production
+// default until the registry module lands — which disables the reserved pass
+// and the header write.
+func (w *worker) reservedRegistrySnapshot(parent common.Hash) reservedRegistry {
+	w.mu.RLock()
+	registry := w.reservedRegistry
+	w.mu.RUnlock()
+
+	if registry == nil {
+		return nil
+	}
+
+	return registry.Snapshot(parent)
+}
+
+// writeReservedGasUsed records the build's reserved-region gas total in the
+// header's BlockExtraData. The field is consensus-visible, so it is written
+// only while the reserved pass is active (registry wired); an explicit zero is
+// still written then, marking "reserved active, none used" on the wire.
+//
+// TODO(reserved-blockspace): gate on the reserved hardfork instead of the
+// registry handle once the fork is defined (follow setGiuglianoExtraFields).
+func (w *worker) writeReservedGasUsed(env *environment, registry reservedRegistry) error {
+	// BlockExtraData is only RLP-encoded into Header.Extra post-Cancun.
+	if registry == nil || !w.chainConfig.IsCancun(env.header.Number) {
+		return nil
+	}
+
+	var blockExtraData types.BlockExtraData
+
+	tempVanity := env.header.Extra[:types.ExtraVanityLength]
+	tempSeal := env.header.Extra[len(env.header.Extra)-types.ExtraSealLength:]
+
+	if err := rlp.DecodeBytes(env.header.Extra[types.ExtraVanityLength:len(env.header.Extra)-types.ExtraSealLength], &blockExtraData); err != nil {
+		log.Error("error while decoding block extra data", "err", err)
+		return err
+	}
+
+	blockExtraData.ReservedGasUsed = &env.reservedGasUsed
+	reservedGasUsedGauge.Update(int64(env.reservedGasUsed))
+
+	blockExtraDataBytes, err := rlp.EncodeToBytes(blockExtraData)
+	if err != nil {
+		log.Error("error while encoding block extra data", "err", err)
+		return err
+	}
+
+	env.header.Extra = []byte{}
+	env.header.Extra = append(tempVanity, blockExtraDataBytes...)
+	env.header.Extra = append(env.header.Extra, tempSeal...)
 
 	return nil
 }
@@ -2199,21 +2286,11 @@ func (w *worker) fillTransactionsOld(interrupt *atomic.Int32, env *environment, 
 		}
 	}
 
-	// remainingGas returns the block gas still available for the next
-	// commitTransactions pass. Before the first pass env.gasPool is nil, so we
-	// fall back to the full header limit.
-	remainingGas := func() uint64 {
-		if env.gasPool == nil {
-			return env.header.GasLimit
-		}
-		return env.gasPool.Gas()
-	}
-
 	// Fill the block with all available pending transactions.
 	if len(prioPlainTxs) > 0 || len(prioBlobTxs) > 0 {
 		plainTxs := newTransactionsByPriceAndNonce(env.signer, prioPlainTxs, env.header.BaseFee, &w.interruptBlockBuilding)
 		blobTxs := newTransactionsByPriceAndNonce(env.signer, prioBlobTxs, env.header.BaseFee, &w.interruptBlockBuilding)
-		sendPlan(builderPlanCh, genParams, plainTxs, remainingGas())
+		sendPlan(builderPlanCh, genParams, plainTxs, remainingGas(env))
 		if err := w.commitTransactions(env, plainTxs, blobTxs, interrupt, builderGasFreedCh); err != nil {
 			return err
 		}
@@ -2223,7 +2300,7 @@ func (w *worker) fillTransactionsOld(interrupt *atomic.Int32, env *environment, 
 		plainTxs := newTransactionsByPriceAndNonce(env.signer, normalPlainTxs, env.header.BaseFee, &w.interruptBlockBuilding)
 		blobTxs := newTransactionsByPriceAndNonce(env.signer, normalBlobTxs, env.header.BaseFee, &w.interruptBlockBuilding)
 		txHeapInitTimer.Update(time.Since(heapInitTime))
-		sendPlan(builderPlanCh, genParams, plainTxs, remainingGas())
+		sendPlan(builderPlanCh, genParams, plainTxs, remainingGas(env))
 		if err := w.commitTransactions(env, plainTxs, blobTxs, interrupt, builderGasFreedCh); err != nil {
 			return err
 		}

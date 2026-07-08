@@ -2,6 +2,7 @@ package miner
 
 import (
 	"math/big"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -104,19 +105,21 @@ func TestMockSnapshot(t *testing.T) {
 	t.Parallel()
 
 	a := common.HexToAddress("0x0a")
-	m := NewMock([]Client{{ID: 1, Senders: []common.Address{a}, QuotaGas: 100}})
-	snap := m.Snapshot()
+	m := NewMock([]Client{{ID: 1, Senders: []common.Address{a}, QuotaGas: 100}}).WithCeiling(500)
+	snap := m.Snapshot(common.Hash{})
 
 	// Mutate the original's internal maps; the snapshot must be unaffected.
 	m.addrToClient[a] = 999
 	m.clientToQuota[1] = 0
 	m.clientIDs[0] = 999
+	m.ceiling = 0
 
 	cid, ok := snap.Lookup(a)
 	require.True(t, ok)
 	require.Equal(t, uint64(1), cid)
 	require.Equal(t, uint64(100), snap.Quota(1))
 	require.Equal(t, []uint64{1}, snap.Clients())
+	require.Equal(t, uint64(500), snap.CeilingGas())
 }
 
 func TestFilterReservedTxs(t *testing.T) {
@@ -232,6 +235,7 @@ func TestSelectReservedTxs(t *testing.T) {
 		pending      map[common.Address][]*txpool.LazyTransaction
 		quota        uint64
 		wantSelected map[common.Address]int
+		wantUsed     uint64
 		wantOverflow map[common.Address]int
 	}{
 		{
@@ -240,6 +244,7 @@ func TestSelectReservedTxs(t *testing.T) {
 			pending:      map[common.Address][]*txpool.LazyTransaction{a: {gasTx(100), gasTx(100)}},
 			quota:        1000,
 			wantSelected: map[common.Address]int{a: 2},
+			wantUsed:     200,
 			wantOverflow: map[common.Address]int{},
 		},
 		{
@@ -248,6 +253,7 @@ func TestSelectReservedTxs(t *testing.T) {
 			pending:      map[common.Address][]*txpool.LazyTransaction{a: {gasTx(600), gasTx(600), gasTx(600)}},
 			quota:        1000,
 			wantSelected: map[common.Address]int{a: 1},
+			wantUsed:     600,
 			wantOverflow: map[common.Address]int{a: 2},
 		},
 		{
@@ -259,6 +265,7 @@ func TestSelectReservedTxs(t *testing.T) {
 			},
 			quota:        100, // room for exactly one
 			wantSelected: map[common.Address]int{b: 1},
+			wantUsed:     100,
 			wantOverflow: map[common.Address]int{a: 1},
 		},
 		{
@@ -267,6 +274,7 @@ func TestSelectReservedTxs(t *testing.T) {
 			pending:      map[common.Address][]*txpool.LazyTransaction{a: {gasTx(1)}},
 			quota:        0,
 			wantSelected: map[common.Address]int{},
+			wantUsed:     0,
 			wantOverflow: map[common.Address]int{a: 1},
 		},
 	}
@@ -277,7 +285,8 @@ func TestSelectReservedTxs(t *testing.T) {
 			t.Parallel()
 			fn := reservedCtor(tc.baseFee)
 
-			selected, overflow := selectReservedTxs(tc.pending, tc.quota, fn)
+			selected, used, overflow := selectReservedTxs(tc.pending, tc.quota, fn)
+			require.Equal(t, tc.wantUsed, used, "selected declared gas")
 
 			gotSelected := drainBySender(selected)
 			require.Len(t, gotSelected, len(tc.wantSelected))
@@ -395,26 +404,24 @@ func TestExtractReservedTxs(t *testing.T) {
 
 	t.Run("nil registry is a no-op", func(t *testing.T) {
 		t.Parallel()
-		w := &worker{}
 		pending := map[common.Address][]*txpool.LazyTransaction{a: {gasTx(100)}}
-		require.Nil(t, w.extractReservedTxs(common.Hash{}, pending, fn))
+		require.Nil(t, extractReservedTxs(nil, common.Hash{}, pending, fn))
 		require.Contains(t, pending, a, "pending untouched")
 	})
 
 	t.Run("empty registry is a no-op", func(t *testing.T) {
 		t.Parallel()
-		w := &worker{reservedRegistry: NewMock(nil)}
 		pending := map[common.Address][]*txpool.LazyTransaction{a: {gasTx(100)}}
-		require.Nil(t, w.extractReservedTxs(common.Hash{}, pending, fn))
+		require.Nil(t, extractReservedTxs(NewMock(nil), common.Hash{}, pending, fn))
 		require.Contains(t, pending, a, "pending untouched")
 	})
 
 	t.Run("client within quota; normal sender untouched", func(t *testing.T) {
 		t.Parallel()
-		w := &worker{reservedRegistry: NewMock([]Client{{ID: 1, Senders: []common.Address{a}, QuotaGas: 1_000_000}})}
+		registry := NewMock([]Client{{ID: 1, Senders: []common.Address{a}, QuotaGas: 1_000_000}})
 		pending := map[common.Address][]*txpool.LazyTransaction{a: {gasTx(100), gasTx(100)}, n: {gasTx(100)}}
 
-		groups := w.extractReservedTxs(common.Hash{}, pending, fn)
+		groups := extractReservedTxs(registry, common.Hash{}, pending, fn)
 		require.Len(t, groups, 1)
 		require.Equal(t, map[common.Address]int{a: 2}, drainBySender(groups[0]))
 
@@ -424,14 +431,111 @@ func TestExtractReservedTxs(t *testing.T) {
 
 	t.Run("quota overflow re-added to pending", func(t *testing.T) {
 		t.Parallel()
-		w := &worker{reservedRegistry: NewMock([]Client{{ID: 1, Senders: []common.Address{a}, QuotaGas: 100}})}
+		registry := NewMock([]Client{{ID: 1, Senders: []common.Address{a}, QuotaGas: 100}})
 		pending := map[common.Address][]*txpool.LazyTransaction{a: {gasTx(100), gasTx(100)}}
 
-		groups := w.extractReservedTxs(common.Hash{}, pending, fn)
+		groups := extractReservedTxs(registry, common.Hash{}, pending, fn)
 		require.Len(t, groups, 1)
 		require.Equal(t, map[common.Address]int{a: 1}, drainBySender(groups[0]))
 		require.Len(t, pending[a], 1, "overflow tx re-added to pending for the normal pass")
 	})
+}
+
+// TestExtractReservedTxs_Ceiling exercises the global reserved cap: the summed
+// declared gas selected across clients must not exceed the registry's
+// ceilingGas, with the excess diverted to the normal pass; zero means uncapped.
+func TestExtractReservedTxs_Ceiling(t *testing.T) {
+	t.Parallel()
+
+	a := common.HexToAddress("0x0a") // client 1's sender
+	b := common.HexToAddress("0x0b") // client 2's sender
+	senderOf := map[uint64]common.Address{1: a, 2: b}
+	fn := reservedCtor(nil)
+
+	newPending := func() map[common.Address][]*txpool.LazyTransaction {
+		return map[common.Address][]*txpool.LazyTransaction{
+			a: {gasTx(300), gasTx(300)},
+			b: {gasTx(300), gasTx(300)},
+		}
+	}
+
+	t.Run("ceiling caps the second client in visit order", func(t *testing.T) {
+		t.Parallel()
+		registry := NewMock([]Client{
+			{ID: 1, Senders: []common.Address{a}, QuotaGas: 600},
+			{ID: 2, Senders: []common.Address{b}, QuotaGas: 600},
+		}).WithCeiling(800)
+		pending := newPending()
+
+		// The first-visited client fits its full 600; the second is left
+		// min(600, 200) = 200, so neither of its 300-gas txs fits.
+		order := orderClients(common.Hash{}, []uint64{1, 2})
+		first, second := senderOf[order[0]], senderOf[order[1]]
+
+		groups := extractReservedTxs(registry, common.Hash{}, pending, fn)
+		require.Len(t, groups, 1, "second client fully diverted by the ceiling")
+		require.Equal(t, map[common.Address]int{first: 2}, drainBySender(groups[0]))
+		require.Len(t, pending[second], 2, "ceiling overflow re-added to pending")
+	})
+
+	t.Run("zero ceiling means uncapped", func(t *testing.T) {
+		t.Parallel()
+		registry := NewMock([]Client{
+			{ID: 1, Senders: []common.Address{a}, QuotaGas: 600},
+			{ID: 2, Senders: []common.Address{b}, QuotaGas: 600},
+		})
+		pending := newPending()
+
+		groups := extractReservedTxs(registry, common.Hash{}, pending, fn)
+		require.Len(t, groups, 2, "both clients fully served")
+		require.Empty(t, pending, "nothing diverted")
+	})
+}
+
+// TestSelectReservedTxs_Interrupt pins the interrupt behavior: when block
+// building is already interrupted, the scan heap constructor yields an empty
+// heap, so the client contributes nothing and nothing lands in overflow — the
+// transactions simply stay in the pool for a later block.
+func TestSelectReservedTxs_Interrupt(t *testing.T) {
+	t.Parallel()
+
+	interrupted := new(atomic.Bool)
+	interrupted.Store(true)
+	fn := func(txs map[common.Address][]*txpool.LazyTransaction) *transactionsByPriceAndNonce {
+		return newReservedTransactionsByNonce(nil, txs, nil, interrupted)
+	}
+
+	a := common.HexToAddress("0x0a")
+	pending := map[common.Address][]*txpool.LazyTransaction{a: {gasTx(100), gasTx(100)}}
+
+	selected, used, overflow := selectReservedTxs(pending, 1_000, fn)
+	require.True(t, selected.Empty(), "interrupted scan selects nothing")
+	require.Zero(t, used)
+	require.Empty(t, overflow, "nothing diverted to the normal pass")
+}
+
+// TestClonePreservesReservedOrdering guards the sendPlan/prefetch path: cloning
+// a reserved heap must keep the ascending, never-drop ordering so the plan the
+// prefetcher sees matches what commitTransactions will execute.
+func TestClonePreservesReservedOrdering(t *testing.T) {
+	t.Parallel()
+
+	baseFee := big.NewInt(100)
+	a := common.HexToAddress("0x0a")
+	b := common.HexToAddress("0x0b")
+	txs := map[common.Address][]*txpool.LazyTransaction{
+		a: {feeTx(0, 150, 50)}, // fallback-fee
+		b: {feeTx(1, 0, 0)},    // zero-fee
+	}
+
+	clone := newReservedTransactionsByNonce(nil, txs, baseFee, nil).clone()
+	require.True(t, clone.reserved, "clone keeps the reserved flag")
+	require.True(t, clone.heads.ascending, "clone keeps ascending ordering")
+
+	// Zero-fee still pops before fallback-fee on the clone.
+	from, ok := clone.PeekFrom()
+	require.True(t, ok)
+	require.Equal(t, b, from)
 }
 
 // TestSequenceTxs validates the full grouping: priority first, then reserved
@@ -453,7 +557,7 @@ func TestSequenceTxs(t *testing.T) {
 		w := &worker{prio: []common.Address{p}, reservedRegistry: NewMock([]Client{{ID: 1, Senders: []common.Address{r}, QuotaGas: 1_000_000}})}
 		pending := map[common.Address][]*txpool.LazyTransaction{p: {gasTx(100)}, r: {gasTx(100)}, n: {gasTx(100)}}
 
-		seq := w.sequenceTxs(newEnv(), pending)
+		seq := w.sequenceTxs(newEnv(), w.reservedRegistrySnapshot(common.Hash{}), pending)
 		require.Len(t, seq, 3)
 		require.Equal(t, map[common.Address]int{p: 1}, drainBySender(seq[0]), "priority group first")
 		require.Equal(t, map[common.Address]int{r: 1}, drainBySender(seq[1]), "reserved group next")
@@ -465,7 +569,7 @@ func TestSequenceTxs(t *testing.T) {
 		w := &worker{}
 		pending := map[common.Address][]*txpool.LazyTransaction{n: {gasTx(100)}}
 
-		seq := w.sequenceTxs(newEnv(), pending)
+		seq := w.sequenceTxs(newEnv(), w.reservedRegistrySnapshot(common.Hash{}), pending)
 		require.Len(t, seq, 1)
 		require.Equal(t, map[common.Address]int{n: 1}, drainBySender(seq[0]))
 	})
@@ -473,7 +577,7 @@ func TestSequenceTxs(t *testing.T) {
 	t.Run("empty pending yields empty sequence", func(t *testing.T) {
 		t.Parallel()
 		w := &worker{prio: []common.Address{p}, reservedRegistry: NewMock([]Client{{ID: 1, Senders: []common.Address{r}, QuotaGas: 100}})}
-		seq := w.sequenceTxs(newEnv(), map[common.Address][]*txpool.LazyTransaction{})
+		seq := w.sequenceTxs(newEnv(), w.reservedRegistrySnapshot(common.Hash{}), map[common.Address][]*txpool.LazyTransaction{})
 		require.Empty(t, seq)
 	})
 
@@ -482,10 +586,66 @@ func TestSequenceTxs(t *testing.T) {
 		w := &worker{reservedRegistry: NewMock([]Client{{ID: 1, Senders: []common.Address{r}, QuotaGas: 100}})}
 		pending := map[common.Address][]*txpool.LazyTransaction{r: {gasTx(100), gasTx(100)}, n: {gasTx(100)}}
 
-		seq := w.sequenceTxs(newEnv(), pending)
+		seq := w.sequenceTxs(newEnv(), w.reservedRegistrySnapshot(common.Hash{}), pending)
 		require.Len(t, seq, 2)
 		require.Equal(t, map[common.Address]int{r: 1}, drainBySender(seq[0]), "reserved group: one tx fits quota")
 		require.Equal(t, map[common.Address]int{n: 1, r: 1}, drainBySender(seq[1]), "normal group: normal sender + reserved overflow")
+	})
+
+	t.Run("multiple clients yield one group each in deterministic order", func(t *testing.T) {
+		t.Parallel()
+		r2 := common.HexToAddress("0x0d")
+		senderOf := map[uint64]common.Address{1: r, 2: r2}
+		w := &worker{reservedRegistry: NewMock([]Client{
+			{ID: 1, Senders: []common.Address{r}, QuotaGas: 1_000_000},
+			{ID: 2, Senders: []common.Address{r2}, QuotaGas: 1_000_000},
+		})}
+		pending := map[common.Address][]*txpool.LazyTransaction{r: {gasTx(100)}, r2: {gasTx(100)}, n: {gasTx(100)}}
+
+		env := newEnv()
+		order := orderClients(env.header.ParentHash, []uint64{1, 2})
+
+		seq := w.sequenceTxs(env, w.reservedRegistrySnapshot(env.header.ParentHash), pending)
+		require.Len(t, seq, 3)
+		require.Equal(t, map[common.Address]int{senderOf[order[0]]: 1}, drainBySender(seq[0]), "first client in visit order")
+		require.Equal(t, map[common.Address]int{senderOf[order[1]]: 1}, drainBySender(seq[1]), "second client in visit order")
+		require.Equal(t, map[common.Address]int{n: 1}, drainBySender(seq[2]), "normal group last")
+	})
+
+	t.Run("below-base-fee overflow is dropped from the normal group", func(t *testing.T) {
+		t.Parallel()
+		// Quota fits one of the two zero-fee txs. The overflow tx re-enters
+		// the normal pass, where standard EIP-1559 admission drops it
+		// (GasFeeCap < BaseFee) — per spec it stays in the pool for a later
+		// block instead of entering this one.
+		w := &worker{reservedRegistry: NewMock([]Client{{ID: 1, Senders: []common.Address{r}, QuotaGas: 100}})}
+		pending := map[common.Address][]*txpool.LazyTransaction{
+			r: {feeGasTx(0, 0, 100), feeGasTx(0, 0, 100)},
+			n: {feeGasTx(200, 100, 100)},
+		}
+
+		env := newEnv()
+		env.header.BaseFee = big.NewInt(100)
+
+		seq := w.sequenceTxs(env, w.reservedRegistrySnapshot(env.header.ParentHash), pending)
+		require.Len(t, seq, 2)
+		require.Equal(t, map[common.Address]int{r: 1}, drainBySender(seq[0]), "reserved group: one zero-fee tx within quota")
+		require.Equal(t, map[common.Address]int{n: 1}, drainBySender(seq[1]), "normal group: zero-fee overflow not admitted")
+	})
+
+	t.Run("sender in both prio and registry is consumed by the priority pass", func(t *testing.T) {
+		t.Parallel()
+		// Pins the documented builder preference: the priority pass runs
+		// first, so a prioritized registered sender bypasses reserved quota
+		// accounting and pays normal fees. Operators should not prioritize
+		// registered senders.
+		w := &worker{prio: []common.Address{r}, reservedRegistry: NewMock([]Client{{ID: 1, Senders: []common.Address{r}, QuotaGas: 100}})}
+		pending := map[common.Address][]*txpool.LazyTransaction{r: {gasTx(100), gasTx(100)}}
+
+		seq := w.sequenceTxs(newEnv(), w.reservedRegistrySnapshot(common.Hash{}), pending)
+		require.Len(t, seq, 1, "single priority group; no reserved group")
+		require.False(t, seq[0].reserved, "priority group uses normal ordering")
+		require.Equal(t, map[common.Address]int{r: 2}, drainBySender(seq[0]), "both txs taken despite quota of 100")
 	})
 }
 
@@ -508,12 +668,9 @@ func TestReservedBuild_NilRegistry(t *testing.T) {
 
 	require.NoError(t, b.txPool.Add([]*types.Transaction{b.newRandomTxWithNonce(false, 0)}, false)[0])
 
-	select {
-	case ev := <-sub.Chan():
-		require.NotEmpty(t, ev.Data.(core.NewMinedBlockEvent).Block.Transactions())
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for block")
-	}
+	// The worker may seal an empty pre-commit block first; wait for the one
+	// carrying the transaction.
+	waitForBlockWithTxs(t, sub, 1, 5*time.Second)
 }
 
 // TestReservedBuild_HappyPath registers the test bank as a reserved client and
@@ -553,6 +710,145 @@ func TestReservedBuild_HappyPath(t *testing.T) {
 		require.NoError(t, err)
 		require.Equalf(t, testBankAddress, from, "tx %d should be from the reserved sender", i)
 	}
+}
+
+// borUnittestCancunConfig returns a copy of BorUnittestChainConfig with Shanghai
+// and Cancun active from genesis. BlockExtraData (and therefore the
+// ReservedGasUsed header field) is only RLP-encoded into Header.Extra
+// post-Cancun, which BorUnittestChainConfig doesn't reach.
+func borUnittestCancunConfig() params.ChainConfig {
+	chainConfig := *params.BorUnittestChainConfig
+	chainConfig.ShanghaiBlock = big.NewInt(0)
+	chainConfig.CancunBlock = big.NewInt(0)
+	return chainConfig
+}
+
+// TestReservedBuild_HeaderGasUsed confirms the producer records the reserved
+// pass's actual gas total in BlockExtraData.ReservedGasUsed. With every block
+// transaction committed through the reserved group, the total must equal the
+// header's GasUsed.
+func TestReservedBuild_HeaderGasUsed(t *testing.T) {
+	chainConfig := borUnittestCancunConfig()
+	engine, ctrl := getFakeBorFromConfig(t, &chainConfig)
+	defer engine.Close()
+	defer ctrl.Finish()
+
+	w, b, _ := newTestWorker(t, DefaultTestConfig(), &chainConfig, engine, rawdb.NewMemoryDatabase(), false, 0)
+	defer w.close()
+
+	w.setReservedRegistry(NewMock([]Client{
+		{ID: 1, Senders: []common.Address{testBankAddress}, QuotaGas: 10_000_000},
+	}))
+
+	sub := w.mux.Subscribe(core.NewMinedBlockEvent{})
+	defer sub.Unsubscribe()
+
+	errs := b.txPool.Add([]*types.Transaction{
+		b.newRandomTxWithNonce(false, 0),
+		b.newRandomTxWithNonce(false, 1),
+	}, false)
+	for _, err := range errs {
+		require.NoError(t, err)
+	}
+	w.start()
+
+	got := waitForBlockWithTxs(t, sub, 2, 15*time.Second)
+
+	reserved := got.Header().GetReservedGasUsed(&chainConfig)
+	require.NotNil(t, reserved, "reserved pass active: header must carry ReservedGasUsed")
+	require.Equal(t, got.GasUsed(), *reserved, "all txs are reserved, so reserved gas equals block gas used")
+}
+
+// TestReservedBuild_HeaderAbsentWithoutRegistry pins wire compatibility: with no
+// registry wired (production default), post-Cancun blocks must not carry the
+// ReservedGasUsed field at all — their Extra encoding stays byte-identical to
+// pre-reserved-blockspace blocks.
+func TestReservedBuild_HeaderAbsentWithoutRegistry(t *testing.T) {
+	chainConfig := borUnittestCancunConfig()
+	engine, ctrl := getFakeBorFromConfig(t, &chainConfig)
+	defer engine.Close()
+	defer ctrl.Finish()
+
+	w, b, _ := newTestWorker(t, DefaultTestConfig(), &chainConfig, engine, rawdb.NewMemoryDatabase(), false, 0)
+	defer w.close()
+
+	require.Nil(t, w.reservedRegistry, "registry defaults to nil")
+
+	sub := w.mux.Subscribe(core.NewMinedBlockEvent{})
+	defer sub.Unsubscribe()
+	w.start()
+
+	require.NoError(t, b.txPool.Add([]*types.Transaction{b.newRandomTxWithNonce(false, 0)}, false)[0])
+
+	got := waitForBlockWithTxs(t, sub, 1, 15*time.Second)
+	require.Nil(t, got.Header().GetReservedGasUsed(&chainConfig), "no registry: field must be absent from the wire")
+}
+
+// TestReservedBuild_Positional proves the reserved-first builder preference
+// end-to-end with two funded senders: the registered sender's lower-priced
+// transaction must precede an unregistered sender's higher-priced one, which is
+// the opposite of pure price ordering.
+func TestReservedBuild_Positional(t *testing.T) {
+	chainConfig := *params.BorUnittestChainConfig
+	engine, ctrl := getFakeBorFromConfig(t, &chainConfig)
+	defer engine.Close()
+	defer ctrl.Finish()
+
+	w, b, _ := newTestWorker(t, DefaultTestConfig(), &chainConfig, engine, rawdb.NewMemoryDatabase(), false, 0)
+	defer w.close()
+
+	w.setReservedRegistry(NewMock([]Client{
+		{ID: 1, Senders: []common.Address{testUserAddress}, QuotaGas: 10_000_000},
+	}))
+
+	sub := w.mux.Subscribe(core.NewMinedBlockEvent{})
+	defer sub.Unsubscribe()
+	w.start()
+
+	// The shared genesis funds only the bank, so give the reserved sender a
+	// balance first and wait for that transfer to mine.
+	fund, err := types.SignTx(
+		types.NewTransaction(0, testUserAddress, big.NewInt(100_000_000_000_000_000), params.TxGas, big.NewInt(30*params.InitialBaseFee), nil),
+		types.HomesteadSigner{}, testBankKey)
+	require.NoError(t, err)
+	require.NoError(t, b.txPool.Add([]*types.Transaction{fund}, false)[0])
+	waitForBlockWithTxs(t, sub, 1, 15*time.Second)
+
+	// Pause sealing while both contenders are admitted — with one-second
+	// blocks, sequential adds can otherwise split them across two blocks and
+	// void the positional comparison.
+	w.stop()
+
+	// Reserved sender pays 26 gwei, normal sender 100 gwei: price ordering
+	// would put the bank first, reserved sequencing must not.
+	userTx, err := types.SignTx(
+		types.NewTransaction(0, testBankAddress, big.NewInt(1000), params.TxGas, big.NewInt(26*params.InitialBaseFee), nil),
+		types.HomesteadSigner{}, testUserKey)
+	require.NoError(t, err)
+	bankTx, err := types.SignTx(
+		types.NewTransaction(1, testUserAddress, big.NewInt(1000), params.TxGas, big.NewInt(100*params.InitialBaseFee), nil),
+		types.HomesteadSigner{}, testBankKey)
+	require.NoError(t, err)
+
+	// The pool resets asynchronously from chain-head events, so the user's
+	// funding may not be visible to it yet — retry admission until it is.
+	require.Eventually(t, func() bool {
+		return b.txPool.Add([]*types.Transaction{userTx}, false)[0] == nil
+	}, 10*time.Second, 100*time.Millisecond, "user tx not admitted after funding")
+	require.NoError(t, b.txPool.Add([]*types.Transaction{bankTx}, false)[0])
+	w.start()
+
+	got := waitForBlockWithTxs(t, sub, 2, 15*time.Second)
+
+	pos := make(map[common.Hash]int, len(got.Transactions()))
+	for i, tx := range got.Transactions() {
+		pos[tx.Hash()] = i
+	}
+	userPos, ok := pos[userTx.Hash()]
+	require.True(t, ok, "reserved tx missing from block")
+	bankPos, ok := pos[bankTx.Hash()]
+	require.True(t, ok, "normal tx missing from block")
+	require.Less(t, userPos, bankPos, "reserved sender's cheaper tx must precede the normal sender's pricier tx")
 }
 
 // TestReservedBuild_Overflow sets a quota that fits only one tx and confirms the
