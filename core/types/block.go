@@ -135,6 +135,12 @@ type BlockExtraData struct {
 
 	// BaseFeeChangeDenominator is the EIP-1559 base fee change denominator used by the block producer (post-Giugliano)
 	BaseFeeChangeDenominator *uint64 `rlp:"optional"`
+
+	// ReservedGasUsed is the sum of actual gas used by the block's
+	// reserved-region transactions. A pointer so that an explicit zero
+	// (reserved blockspace active, no reserved gas used) stays distinct from
+	// the field being absent on the wire (pre-activation blocks).
+	ReservedGasUsed *uint64 `rlp:"optional"`
 }
 
 // blockExtraDataRawTxDeps mirrors BlockExtraData but keeps TxDependency as an
@@ -146,6 +152,7 @@ type blockExtraDataRawTxDeps struct {
 	TxDependency             rlp.RawValue
 	GasTarget                *uint64 `rlp:"optional"`
 	BaseFeeChangeDenominator *uint64 `rlp:"optional"`
+	ReservedGasUsed          *uint64 `rlp:"optional"`
 }
 
 // field type overrides for gencodec
@@ -587,6 +594,32 @@ func (h *Header) GetValidatorBytesAndBaseFeeParams(chainConfig *params.ChainConf
 	}
 
 	return blockExtraData.ValidatorBytes, blockExtraData.GasTarget, blockExtraData.BaseFeeChangeDenominator
+}
+
+// GetReservedGasUsed extracts the reserved-region gas used from the header's
+// Extra field. Returns nil for pre-Cancun blocks, on decode error, or when the
+// field is absent (blocks produced before reserved blockspace activated). If
+// you need multiple fields from BlockExtraData, prefer DecodeBlockExtraData to
+// avoid redundant RLP decodes.
+func (h *Header) GetReservedGasUsed(chainConfig *params.ChainConfig) *uint64 {
+	if !chainConfig.IsCancun(h.Number) {
+		return nil
+	}
+
+	if len(h.Extra) < ExtraVanityLength+ExtraSealLength {
+		return nil
+	}
+
+	var blockExtraData blockExtraDataRawTxDeps
+	if err := rlp.DecodeBytes(h.Extra[ExtraVanityLength:len(h.Extra)-ExtraSealLength], &blockExtraData); err != nil {
+		return nil
+	}
+
+	if !txDependencyValidPreValencia(chainConfig, h.Number, blockExtraData.TxDependency) {
+		return nil
+	}
+
+	return blockExtraData.ReservedGasUsed
 }
 
 func txDependencyValidPreValencia(chainConfig *params.ChainConfig, number *big.Int, raw rlp.RawValue) bool {
