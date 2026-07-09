@@ -1684,6 +1684,11 @@ mainloop:
 		lastTxSender = from
 		env.state.SetTxContext(tx.Hash(), env.tcount)
 
+		var preReads state.ReadDetailStats
+		if bt != nil && bt.procDetail != nil {
+			preReads = bt.procDetail.Snapshot()
+		}
+
 		// Capture gas pool before execution so we can compute freed gas afterwards.
 		gasPoolBefore := env.gasPool.Gas()
 		logs, err := w.commitTransaction(env, tx)
@@ -1694,12 +1699,29 @@ mainloop:
 
 		var btEv *buildTraceTxEvent
 
+		// fillReads attaches the per-tx process-reader deltas (I4) to an event.
+		fillReads := func(ev *buildTraceTxEvent) {
+			if ev == nil || bt == nil || bt.procDetail == nil {
+				return
+			}
+			post := bt.procDetail.Snapshot()
+			ev.RdAcctHitN = post.AccountHitN - preReads.AccountHitN
+			ev.RdAcctHitUs = post.AccountHitUs - preReads.AccountHitUs
+			ev.RdAcctMissN = post.AccountMissN - preReads.AccountMissN
+			ev.RdAcctMissUs = post.AccountMissUs - preReads.AccountMissUs
+			ev.RdStorHitN = post.StorageHitN - preReads.StorageHitN
+			ev.RdStorHitUs = post.StorageHitUs - preReads.StorageHitUs
+			ev.RdStorMissN = post.StorageMissN - preReads.StorageMissN
+			ev.RdStorMissUs = post.StorageMissUs - preReads.StorageMissUs
+		}
+
 		switch {
 		case errors.Is(err, core.ErrNonceTooLow):
 			// New head notification data race between the transaction pool and miner, shift
 			log.Trace("Skipping transaction with low nonce", "hash", ltx.Hash, "sender", from, "nonce", tx.Nonce())
 			if ev := txEvent(ltx.Hash, ltx.Gas, isBlob, resolveUs, "nonce_low"); ev != nil {
 				ev.ApplyUs = txDuration.Microseconds()
+				fillReads(ev)
 			}
 			txs.Shift()
 
@@ -1737,6 +1759,7 @@ mainloop:
 				if n := len(env.receipts); n > 0 {
 					ev.GasUsed = env.receipts[n-1].GasUsed
 				}
+				fillReads(ev)
 				btEv = ev
 			}
 
@@ -1800,6 +1823,7 @@ mainloop:
 			log.Debug("Transaction interrupted due to timeout", "hash", ltx.Hash, "err", err)
 			if ev := txEvent(ltx.Hash, ltx.Gas, isBlob, resolveUs, "evm_interrupt"); ev != nil {
 				ev.ApplyUs = txDuration.Microseconds()
+				fillReads(ev)
 			}
 			txs.Pop()
 
@@ -1809,6 +1833,7 @@ mainloop:
 			log.Debug("Transaction failed, account skipped", "hash", ltx.Hash, "err", err)
 			if ev := txEvent(ltx.Hash, ltx.Gas, isBlob, resolveUs, "failed"); ev != nil {
 				ev.ApplyUs = txDuration.Microseconds()
+				fillReads(ev)
 			}
 			txs.Pop()
 		}
@@ -2458,6 +2483,7 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 	}
 	if bt != nil {
 		bt.rec.StateAtUs = time.Since(stateAtStart).Microseconds()
+		bt.attachReaders(processReader, prefetchReader)
 	}
 
 	genParams := generateParams{

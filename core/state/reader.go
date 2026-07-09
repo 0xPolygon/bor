@@ -20,6 +20,7 @@ import (
 	"errors"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/lru"
@@ -615,6 +616,9 @@ type readerWithCacheStats struct {
 
 	// count unique prefetched keys that PROCESS actually used (precision) for accounts only.
 	accountHitFromPrefetchUnique atomic.Int64
+
+	// Optional lab instrumentation: when set, reads are timed and misses logged.
+	detail atomic.Pointer[ReadDetail]
 }
 
 // newReaderWithCacheStats constructs the reader with additional statistics tracked.
@@ -630,9 +634,17 @@ func newReaderWithCacheStats(reader *readerWithCache, role readerRole) *readerWi
 //
 // An error will be returned if the state is corrupted in the underlying reader.
 func (r *readerWithCacheStats) Account(addr common.Address) (*types.StateAccount, error) {
+	var start time.Time
+	detail := r.detail.Load()
+	if detail != nil {
+		start = time.Now()
+	}
 	account, incache, ent, inserted, err := r.readerWithCache.account(addr, r.role)
 	if err != nil {
 		return nil, err
+	}
+	if detail != nil {
+		detail.recordAccount(addr, incache, time.Since(start))
 	}
 	if incache {
 		r.accountHit.Add(1)
@@ -660,9 +672,17 @@ func (r *readerWithCacheStats) Account(addr common.Address) (*types.StateAccount
 //
 // An error will be returned if the state is corrupted in the underlying reader.
 func (r *readerWithCacheStats) Storage(addr common.Address, slot common.Hash) (common.Hash, error) {
+	var start time.Time
+	detail := r.detail.Load()
+	if detail != nil {
+		start = time.Now()
+	}
 	value, incache, entCopy, inserted, err := r.readerWithCache.storage(addr, slot, r.role)
 	if err != nil {
 		return common.Hash{}, err
+	}
+	if detail != nil {
+		detail.recordStorage(addr, slot, incache, time.Since(start))
 	}
 	if incache {
 		r.storageHit.Add(1)
