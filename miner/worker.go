@@ -537,6 +537,9 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 			log.Error("Failed to enable build-trace instrumentation", "dir", config.BuildTrace, "err", err)
 		} else {
 			worker.tracer = tracer
+			// Import-path lab: per-imported-block read-detail records feed the
+			// same JSONL stream and the re-reference ring.
+			core.SetImportTraceHook(tracer.handleImport)
 		}
 	}
 	// Subscribe for transaction insertion events (whether from network or resurrects)

@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
@@ -66,12 +67,29 @@ func newBuildTracer(dir string) (*buildTracer, error) {
 		flushTicker := time.NewTicker(2 * time.Second)
 		defer flushTicker.Stop()
 
+		// Re-reference ring + pressure baseline: owned by this goroutine, no locks.
+		var (
+			ring         rerefRing
+			lastPressure map[string]int64
+		)
+
 		for {
 			select {
 			case rec, ok := <-t.ch:
 				if !ok {
 					_ = w.Flush()
 					return
+				}
+				switch v := rec.(type) {
+				case core.ImportTraceData:
+					rec = t.buildImportRecord(v, &ring, &lastPressure)
+				case buildTraceRecord:
+					// Annotate build misses with re-reference distance against
+					// canonical history (the ring is fed by imports).
+					for i := range v.Misses {
+						v.Misses[i].D = ring.distance(v.Number, v.Misses[i].K)
+					}
+					rec = v
 				}
 				if err := enc.Encode(rec); err != nil {
 					log.Warn("buildtrace: encode failed", "err", err)
@@ -105,6 +123,7 @@ func (t *buildTracer) stop() {
 	if t == nil || !t.closed.CompareAndSwap(false, true) {
 		return
 	}
+	core.SetImportTraceHook(nil)
 	close(t.ch)
 	t.wg.Wait()
 	if d := t.dropped.Load(); d > 0 {
@@ -146,6 +165,100 @@ type buildTraceMissEvent struct {
 	K  uint64 `json:"k"`           // fnv64 of addr / addr||slot
 	S  bool   `json:"s,omitempty"` // true = storage slot
 	Us int64  `json:"us"`          // backing-resolution latency
+	D  int64  `json:"d,omitempty"` // re-reference distance in blocks (0 = not seen in window)
+}
+
+// importTraceRecord is one per-imported-block measurement (import-path lab).
+type importTraceRecord struct {
+	Type   string `json:"type"` // "import"
+	Schema int    `json:"schema"`
+
+	Number      uint64 `json:"number"`
+	Txs         int    `json:"txs"`
+	GasUsed     uint64 `json:"gas_used"`
+	ExecUs      int64  `json:"exec_us"`
+	ValUs       int64  `json:"val_us"`
+	ParallelWon bool   `json:"parallel_won,omitempty"`
+
+	ProcReads     *state.ReadDetailStats `json:"proc_reads,omitempty"`
+	PrefReads     *state.ReadDetailStats `json:"pref_reads,omitempty"`
+	Misses        []buildTraceMissEvent  `json:"misses,omitempty"`
+	MissesDropped int64                  `json:"misses_dropped,omitempty"`
+	TouchedKeys   int                    `json:"touched_keys"`
+
+	// Re-reference distance histogram for misses: bucket label → count.
+	MissDistHist map[string]int `json:"miss_dist_hist,omitempty"`
+
+	// Node-global lower-layer meter deltas since the previous import record.
+	SnapDeltas map[string]int64 `json:"snap_deltas,omitempty"`
+
+	// Every keyDumpEvery-th block: the full touched-key set (95%-locality study).
+	TouchedDump []uint64 `json:"touched_dump,omitempty"`
+
+	EmittedAtNs int64 `json:"emitted_at_ns"`
+}
+
+const (
+	rerefWindowBlocks = 256 // re-reference ring depth (blocks)
+	keyDumpEvery      = 500 // full touched-set dump cadence
+)
+
+// rerefRing holds per-block touched-key sets; owned by the writer goroutine.
+type rerefRing struct {
+	entries []rerefEntry
+}
+
+type rerefEntry struct {
+	number uint64
+	keys   map[uint64]struct{}
+}
+
+func (r *rerefRing) push(number uint64, keys []uint64) {
+	set := make(map[uint64]struct{}, len(keys))
+	for _, k := range keys {
+		set[k] = struct{}{}
+	}
+	r.entries = append(r.entries, rerefEntry{number: number, keys: set})
+	if len(r.entries) > rerefWindowBlocks {
+		r.entries = r.entries[1:]
+	}
+}
+
+// distance returns how many blocks back the key was last touched (1 = previous
+// pushed block), or 0 if not seen inside the window.
+func (r *rerefRing) distance(current uint64, key uint64) int64 {
+	for i := len(r.entries) - 1; i >= 0; i-- {
+		if _, ok := r.entries[i].keys[key]; ok {
+			return int64(current - r.entries[i].number)
+		}
+	}
+	return 0
+}
+
+// distBucket maps a distance to a histogram label.
+func distBucket(d int64) string {
+	switch {
+	case d == 0:
+		return "gt_window"
+	case d == 1:
+		return "1"
+	case d <= 2:
+		return "2"
+	case d <= 4:
+		return "4"
+	case d <= 8:
+		return "8"
+	case d <= 16:
+		return "16"
+	case d <= 32:
+		return "32"
+	case d <= 64:
+		return "64"
+	case d <= 128:
+		return "128"
+	default:
+		return "256"
+	}
 }
 
 // buildTraceRecord is the per-build-attempt record, emitted on every exit path.
@@ -268,6 +381,64 @@ func snapshotPressureMeters() map[string]int64 {
 		}
 	}
 	return out
+}
+
+// buildImportRecord converts hook data into the emitted record, updating the
+// re-reference ring and the pressure baseline. Writer-goroutine only.
+func (t *buildTracer) buildImportRecord(d core.ImportTraceData, ring *rerefRing, lastPressure *map[string]int64) importTraceRecord {
+	rec := importTraceRecord{
+		Type:          "import",
+		Schema:        buildTraceSchemaVersion,
+		Number:        d.Number,
+		Txs:           d.Txs,
+		GasUsed:       d.GasUsed,
+		ExecUs:        d.ExecUs,
+		ValUs:         d.ValUs,
+		ParallelWon:   d.ParallelWon,
+		MissesDropped: d.MissesDropped,
+		TouchedKeys:   len(d.Touched),
+		EmittedAtNs:   time.Now().UnixNano(),
+	}
+	pr, pf := d.ProcReads, d.PrefReads
+	rec.ProcReads, rec.PrefReads = &pr, &pf
+
+	// Distances are computed BEFORE pushing this block's touched set, so a key
+	// touched in block N-1 gets distance 1.
+	if len(d.Misses) > 0 {
+		rec.Misses = make([]buildTraceMissEvent, len(d.Misses))
+		rec.MissDistHist = make(map[string]int, 12)
+		for i, m := range d.Misses {
+			dist := ring.distance(d.Number, m.Key)
+			rec.Misses[i] = buildTraceMissEvent{K: m.Key, S: m.Storage, Us: m.LatencyUs, D: dist}
+			rec.MissDistHist[distBucket(dist)]++
+		}
+	}
+	ring.push(d.Number, d.Touched)
+
+	if d.Number%keyDumpEvery == 0 {
+		rec.TouchedDump = d.Touched
+	}
+
+	cur := snapshotPressureMeters()
+	if *lastPressure != nil {
+		deltas := make(map[string]int64, len(cur))
+		for name, v := range cur {
+			if dd := v - (*lastPressure)[name]; dd != 0 {
+				deltas[name] = dd
+			}
+		}
+		if len(deltas) > 0 {
+			rec.SnapDeltas = deltas
+		}
+	}
+	*lastPressure = cur
+
+	return rec
+}
+
+// handleImport is the core.ImportTraceHook target: hand off to the writer.
+func (t *buildTracer) handleImport(d core.ImportTraceData) {
+	t.send(d)
 }
 
 // buildTriggerRecord captures build triggers and their disposition, including

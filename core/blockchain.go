@@ -738,6 +738,26 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	if err != nil {
 		return nil, nil, 0, nil, 0, err
 	}
+
+	// Lab instrumentation: attach read-detail collectors when a trace hook is
+	// registered (miner.buildtrace). Zero cost when unregistered.
+	var (
+		importHook       = getImportTraceHook()
+		importDetailProc *state.ReadDetail
+		importDetailPref *state.ReadDetail
+		importStart      time.Time
+	)
+	if importHook != nil {
+		importStart = time.Now()
+		if r, ok := process.(state.ReaderWithDetail); ok {
+			importDetailProc = &state.ReadDetail{CollectTouched: true}
+			r.SetReadDetail(importDetailProc)
+		}
+		if r, ok := prefetch.(state.ReaderWithDetail); ok {
+			importDetailPref = &state.ReadDetail{}
+			r.SetReadDetail(importDetailPref)
+		}
+	}
 	throwaway, err := state.NewWithReader(parentRoot, bc.statedb, prefetch)
 	if err != nil {
 		return nil, nil, 0, nil, 0, err
@@ -874,6 +894,26 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 			second_result := <-resultChan
 			second_result.statedb.StopPrefetcher()
 		}()
+	}
+
+	if importHook != nil && result.err == nil {
+		data := ImportTraceData{
+			Number:      block.NumberU64(),
+			Txs:         len(block.Transactions()),
+			GasUsed:     result.usedGas,
+			ExecUs:      time.Since(importStart).Microseconds(),
+			ValUs:       vtime.Microseconds(),
+			ParallelWon: result.parallel,
+		}
+		if importDetailProc != nil {
+			data.ProcReads = importDetailProc.Snapshot()
+			data.Misses, data.MissesDropped = importDetailProc.TakeMisses()
+			data.Touched = importDetailProc.TakeTouched()
+		}
+		if importDetailPref != nil {
+			data.PrefReads = importDetailPref.Snapshot()
+		}
+		importHook(data)
 	}
 
 	return result.receipts, result.logs, result.usedGas, result.statedb, vtime, result.err
