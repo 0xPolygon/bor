@@ -355,29 +355,46 @@ type buildTraceRecord struct {
 }
 
 // pressureMeterNames are the lower-layer meters snapshotted per build (I5).
+// PBSS nodes serve state via pathdb; the legacy snapshot.Tree meters stay for
+// hash-scheme portability (dead meters read 0 and never emit a delta).
 var pressureMeterNames = []string{
+	"pathdb/clean/state/hit",
+	"pathdb/clean/state/miss",
+	"pathdb/clean/node/hit",
+	"pathdb/clean/node/miss",
+	"pathdb/dirty/state/hit",
+	"pathdb/dirty/state/miss",
+	"pathdb/dirty/node/hit",
+	"pathdb/dirty/node/miss",
+	"pathdb/biased/address/hit",
+	"pathdb/biased/address/miss",
 	"state/snapshot/clean/account/hit",
 	"state/snapshot/clean/account/miss",
-	"state/snapshot/clean/account/inex",
 	"state/snapshot/clean/storage/hit",
 	"state/snapshot/clean/storage/miss",
-	"state/snapshot/clean/storage/inex",
-	"state/snapshot/dirty/account/hit",
-	"state/snapshot/dirty/account/miss",
-	"state/snapshot/dirty/storage/hit",
-	"state/snapshot/dirty/storage/miss",
-	"state/snapshot/bloom/account/truehit",
-	"state/snapshot/bloom/account/falsehit",
-	"state/snapshot/bloom/storage/truehit",
-	"state/snapshot/bloom/storage/falsehit",
+}
+
+// pressureGaugeNames are cumulative pebble cache counters exposed as gauges.
+var pressureGaugeNames = []string{
+	"eth/db/chaindata/cache/block/hit",
+	"eth/db/chaindata/cache/block/miss",
+	"eth/db/chaindata/cache/table/hit",
+	"eth/db/chaindata/cache/table/miss",
+	"eth/db/chaindata/filter/hit",
+	"eth/db/chaindata/filter/miss",
 }
 
 // snapshotPressureMeters captures current counts of the lower-layer meters.
 func snapshotPressureMeters() map[string]int64 {
-	out := make(map[string]int64, len(pressureMeterNames))
+	out := make(map[string]int64, len(pressureMeterNames)+len(pressureGaugeNames))
 	for _, name := range pressureMeterNames {
 		if m, ok := metrics.DefaultRegistry.Get(name).(*metrics.Meter); ok {
 			out[name] = m.Snapshot().Count()
+		}
+	}
+	for _, name := range pressureGaugeNames {
+		if g, ok := metrics.DefaultRegistry.Get(name).(*metrics.Gauge); ok {
+			out[name] = g.Snapshot().Value()
 		}
 	}
 	return out
