@@ -137,16 +137,23 @@ func newCachingCodeReader(db ethdb.KeyValueReader, codeCache *lru.SizeConstraine
 // Code implements ContractCodeReader, retrieving a particular contract's code.
 // If the contract code doesn't exist, no error will be returned.
 func (r *cachingCodeReader) Code(addr common.Address, codeHash common.Hash) ([]byte, error) {
+	code, _, err := r.codeWithHit(codeHash)
+	return code, err
+}
+
+// codeWithHit is Code plus a flag reporting whether the shared code LRU
+// served the read (lab instrumentation support).
+func (r *cachingCodeReader) codeWithHit(codeHash common.Hash) ([]byte, bool, error) {
 	code, _ := r.codeCache.Get(codeHash)
 	if len(code) > 0 {
-		return code, nil
+		return code, true, nil
 	}
 	code = rawdb.ReadCode(r.db, codeHash)
 	if len(code) > 0 {
 		r.codeCache.Add(codeHash, code)
 		r.codeSizeCache.Add(codeHash, len(code))
 	}
-	return code, nil
+	return code, false, nil
 }
 
 // CodeSize implements ContractCodeReader, retrieving a particular contracts code's size.

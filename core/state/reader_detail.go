@@ -18,8 +18,9 @@ const readDetailMaxMisses = 4096
 
 // ReadMissEvent is one cache miss with its backing-read resolution latency.
 type ReadMissEvent struct {
-	Key       uint64 // FNV-1a of addr (accounts) or addr||slot (storage)
-	Storage   bool   // false = account, true = storage slot
+	Key       uint64 // FNV-1a of addr (accounts), addr||slot (storage) or codeHash (code)
+	Storage   bool   // true = storage slot
+	Code      bool   // true = contract code (miss vs the shared code LRU)
 	LatencyUs int64
 }
 
@@ -29,6 +30,9 @@ type ReadDetailStats struct {
 	AccountHitUs, AccountMissUs int64
 	StorageHitN, StorageMissN   int64
 	StorageHitUs, StorageMissUs int64
+	CodeHitN, CodeMissN         int64
+	CodeHitUs, CodeMissUs       int64
+	CodeMissBytes               int64 // bytes fetched from disk on code misses
 }
 
 // ReadDetail collects timing sums and per-miss events for one reader.
@@ -41,6 +45,9 @@ type ReadDetail struct {
 	accountHitNs, accountMissNs atomic.Int64
 	storageHitN, storageMissN   atomic.Int64
 	storageHitNs, storageMissNs atomic.Int64
+	codeHitN, codeMissN         atomic.Int64
+	codeHitNs, codeMissNs       atomic.Int64
+	codeMissBytes               atomic.Int64
 
 	mu            sync.Mutex
 	misses        []ReadMissEvent
@@ -58,6 +65,9 @@ func (d *ReadDetail) Snapshot() ReadDetailStats {
 		AccountHitUs: d.accountHitNs.Load() / 1e3, AccountMissUs: d.accountMissNs.Load() / 1e3,
 		StorageHitN: d.storageHitN.Load(), StorageMissN: d.storageMissN.Load(),
 		StorageHitUs: d.storageHitNs.Load() / 1e3, StorageMissUs: d.storageMissNs.Load() / 1e3,
+		CodeHitN: d.codeHitN.Load(), CodeMissN: d.codeMissN.Load(),
+		CodeHitUs: d.codeHitNs.Load() / 1e3, CodeMissUs: d.codeMissNs.Load() / 1e3,
+		CodeMissBytes: d.codeMissBytes.Load(),
 	}
 }
 
@@ -109,6 +119,22 @@ func (d *ReadDetail) recordStorage(addr common.Address, slot common.Hash, hit bo
 	d.appendMiss(ReadMissEvent{Key: key, Storage: true, LatencyUs: dur.Microseconds()})
 }
 
+func (d *ReadDetail) recordCode(codeHash common.Hash, hit bool, size int, dur time.Duration) {
+	key := fnvHash(codeHash)
+	if d.CollectTouched {
+		d.touch(key)
+	}
+	if hit {
+		d.codeHitN.Add(1)
+		d.codeHitNs.Add(dur.Nanoseconds())
+		return
+	}
+	d.codeMissN.Add(1)
+	d.codeMissNs.Add(dur.Nanoseconds())
+	d.codeMissBytes.Add(int64(size))
+	d.appendMiss(ReadMissEvent{Key: key, Code: true, LatencyUs: dur.Microseconds()})
+}
+
 func (d *ReadDetail) touch(key uint64) {
 	d.mu.Lock()
 	if d.touched == nil {
@@ -157,6 +183,14 @@ func fnvAddr(addr common.Address) uint64 {
 	return h
 }
 
+func fnvHash(h common.Hash) uint64 {
+	v := uint64(14695981039346656037)
+	for _, b := range h {
+		v = (v ^ uint64(b)) * 1099511628211
+	}
+	return v
+}
+
 func fnvSlot(addr common.Address, slot common.Hash) uint64 {
 	h := uint64(14695981039346656037)
 	for _, b := range addr {
@@ -178,6 +212,38 @@ type ReaderWithDetail interface {
 // SetReadDetail attaches (or detaches, with nil) the detail collector.
 func (r *readerWithCacheStats) SetReadDetail(d *ReadDetail) {
 	r.detail.Store(d)
+}
+
+// codeReader digs the concrete code reader out of the wrapper chain
+// (readerWithCache → reader → cachingCodeReader), or nil if the chain
+// has a different shape.
+func (r *readerWithCacheStats) codeReader() *cachingCodeReader {
+	rd, ok := r.readerWithCache.Reader.(*reader)
+	if !ok {
+		return nil
+	}
+	cc, _ := rd.ContractCodeReader.(*cachingCodeReader)
+	return cc
+}
+
+// Code overrides the promoted ContractCodeReader method: when a detail
+// collector is attached, the read is timed and classified hit/miss against
+// the shared code LRU.
+func (r *readerWithCacheStats) Code(addr common.Address, codeHash common.Hash) ([]byte, error) {
+	detail := r.detail.Load()
+	if detail == nil {
+		return r.readerWithCache.Code(addr, codeHash)
+	}
+	cc := r.codeReader()
+	if cc == nil {
+		return r.readerWithCache.Code(addr, codeHash)
+	}
+	start := time.Now()
+	code, hit, err := cc.codeWithHit(codeHash)
+	if err == nil {
+		detail.recordCode(codeHash, hit, len(code), time.Since(start))
+	}
+	return code, err
 }
 
 // GetReadDetail returns the attached detail collector, or nil.

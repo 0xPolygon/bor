@@ -1367,6 +1367,15 @@ func (w *worker) makeEnv(header *types.Header, coinbase common.Address, witness 
 	env.evm.SetInterrupt(&w.interruptBlockBuilding)
 	env.stateSyncReserve = stateSyncReserveFor(w.chainConfig, header.Number)
 
+	// Lab instrumentation: per-segment exec timers + sampled opcode-family
+	// tracer on the build EVM (nil bt = off; zero overhead).
+	if bt := genParams.bt; bt != nil {
+		env.evm.Config.Segments = bt.segments
+		if bt.opFam != nil {
+			env.evm.Config.Tracer = bt.opFam.Hooks()
+		}
+	}
+
 	// Keep track of transactions which return errors so they can be removed
 	env.tcount = 0
 	env.mvReadMapList = []map[blockstm.Key]blockstm.ReadDescriptor{}

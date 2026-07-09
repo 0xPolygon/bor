@@ -12,6 +12,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 )
@@ -162,8 +163,9 @@ type buildTraceTxEvent struct {
 
 // buildTraceMissEvent is one process-cache miss (I1).
 type buildTraceMissEvent struct {
-	K  uint64 `json:"k"`           // fnv64 of addr / addr||slot
+	K  uint64 `json:"k"`           // fnv64 of addr / addr||slot / codeHash
 	S  bool   `json:"s,omitempty"` // true = storage slot
+	C  bool   `json:"c,omitempty"` // true = contract code (miss vs shared code LRU)
 	Us int64  `json:"us"`          // backing-resolution latency
 	D  int64  `json:"d,omitempty"` // re-reference distance in blocks (0 = not seen in window)
 }
@@ -185,6 +187,12 @@ type importTraceRecord struct {
 	Misses        []buildTraceMissEvent  `json:"misses,omitempty"`
 	MissesDropped int64                  `json:"misses_dropped,omitempty"`
 	TouchedKeys   int                    `json:"touched_keys"`
+
+	// Per-segment exec wall time (tracing.ExecSegments.SnapshotUs keys).
+	ExecSegments map[string]int64 `json:"exec_segments,omitempty"`
+	// Opcode-family timing (sampled blocks only; wall time inflated).
+	OpFams       map[string]core.OpFamStat `json:"opcode_families,omitempty"`
+	OpFamSampled bool                      `json:"opfam_sampled,omitempty"`
 
 	// Re-reference distance histogram for misses: bucket label → count.
 	MissDistHist map[string]int `json:"miss_dist_hist,omitempty"`
@@ -341,6 +349,12 @@ type buildTraceRecord struct {
 	Misses        []buildTraceMissEvent  `json:"misses,omitempty"`
 	MissesDropped int64                  `json:"misses_dropped,omitempty"`
 
+	// Per-segment exec wall time over the whole build (tracing.ExecSegments).
+	ExecSegments map[string]int64 `json:"exec_segments,omitempty"`
+	// Opcode-family timing (sampled builds only; wall time inflated).
+	OpFams       map[string]core.OpFamStat `json:"opcode_families,omitempty"`
+	OpFamSampled bool                      `json:"opfam_sampled,omitempty"`
+
 	// Prefetch attribution counters from the shared per-block cache (v2.6.0 meters, per build).
 	PfAcctHitFromPrefetch int64 `json:"pf_acct_hit_from_pf,omitempty"`
 	PfStorHitFromPrefetch int64 `json:"pf_stor_hit_from_pf,omitempty"`
@@ -426,10 +440,13 @@ func (t *buildTracer) buildImportRecord(d core.ImportTraceData, ring *rerefRing,
 		rec.MissDistHist = make(map[string]int, 12)
 		for i, m := range d.Misses {
 			dist := ring.distance(d.Number, m.Key)
-			rec.Misses[i] = buildTraceMissEvent{K: m.Key, S: m.Storage, Us: m.LatencyUs, D: dist}
+			rec.Misses[i] = buildTraceMissEvent{K: m.Key, S: m.Storage, C: m.Code, Us: m.LatencyUs, D: dist}
 			rec.MissDistHist[distBucket(dist)]++
 		}
 	}
+	rec.ExecSegments = d.Segments
+	rec.OpFams = d.OpFams
+	rec.OpFamSampled = d.OpFamSampled
 	ring.push(d.Number, d.Touched)
 
 	if d.Number%keyDumpEvery == 0 {
@@ -498,24 +515,38 @@ type buildTrace struct {
 	prefDetail *state.ReadDetail
 	// I5 baseline of lower-layer meters at build start.
 	pressureStart map[string]int64
+
+	// Per-segment exec timers, attached to the build EVM (makeEnv).
+	segments *tracing.ExecSegments
+	// Sampled opcode-family tracer (every buildOpFamSampleEvery-th build).
+	opFam *core.OpFamTracer
 }
+
+// buildOpFamSampleEvery selects which builds get the opcode-family tracer.
+const buildOpFamSampleEvery = 8
 
 func (t *buildTracer) begin() *buildTrace {
 	if t == nil {
 		return nil
 	}
-	return &buildTrace{
+	seq := buildTraceSeq.Add(1)
+	bt := &buildTrace{
 		tracer:        t,
 		pressureStart: snapshotPressureMeters(),
+		segments:      &tracing.ExecSegments{},
 		rec: buildTraceRecord{
 			Type:        "build",
 			Schema:      buildTraceSchemaVersion,
-			Seq:         buildTraceSeq.Add(1),
+			Seq:         seq,
 			BuildMode:   "baseline",
 			Outcome:     "unknown",
 			TriggerAtNs: time.Now().UnixNano(),
 		},
 	}
+	if seq%buildOpFamSampleEvery == 0 {
+		bt.opFam = core.NewOpFamTracer()
+	}
+	return bt
 }
 
 // attachReaders installs read-detail collectors on the per-block stats readers.
@@ -603,7 +634,7 @@ func (bt *buildTrace) finishBuild(env *environment, genParams *generateParams) {
 		if len(misses) > 0 {
 			evs := make([]buildTraceMissEvent, len(misses))
 			for i, m := range misses {
-				evs[i] = buildTraceMissEvent{K: m.Key, S: m.Storage, Us: m.LatencyUs}
+				evs[i] = buildTraceMissEvent{K: m.Key, S: m.Storage, C: m.Code, Us: m.LatencyUs}
 			}
 			bt.rec.Misses = evs
 		}
@@ -611,6 +642,15 @@ func (bt *buildTrace) finishBuild(env *environment, genParams *generateParams) {
 	if bt.prefDetail != nil {
 		s := bt.prefDetail.Snapshot()
 		bt.rec.PrefReads = &s
+	}
+
+	// Exec segments + sampled opcode families (attached to the build EVM).
+	if bt.segments != nil && bt.segments.TxN.Load() > 0 {
+		bt.rec.ExecSegments = bt.segments.SnapshotUs()
+	}
+	if bt.opFam != nil {
+		bt.rec.OpFams = bt.opFam.Result()
+		bt.rec.OpFamSampled = true
 	}
 
 	// Prefetch attribution counters (shared per-block cache provenance).

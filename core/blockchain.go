@@ -747,6 +747,11 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		importDetailPref *state.ReadDetail
 		importStart      time.Time
 	)
+	var (
+		importSegments *tracing.ExecSegments
+		importOpFam    *OpFamTracer
+	)
+	serialVMCfg := bc.cfg.VmConfig
 	if importHook != nil {
 		importStart = time.Now()
 		if r, ok := process.(state.ReaderWithDetail); ok {
@@ -756,6 +761,16 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		if r, ok := prefetch.(state.ReaderWithDetail); ok {
 			importDetailPref = &state.ReadDetail{}
 			r.SetReadDetail(importDetailPref)
+		}
+		// Segment timers and the sampled opcode-family tracer are only safe to
+		// read back when the serial processor is the sole executor.
+		if bc.parallelProcessor == nil {
+			importSegments = &tracing.ExecSegments{}
+			serialVMCfg.Segments = importSegments
+			if block.NumberU64()%opFamSampleEvery == 0 {
+				importOpFam = NewOpFamTracer()
+				serialVMCfg.Tracer = importOpFam.Hooks()
+			}
 		}
 	}
 	throwaway, err := state.NewWithReader(parentRoot, bc.statedb, prefetch)
@@ -859,7 +874,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		go func() {
 			pstart := time.Now()
 			statedb.StartPrefetcher("chain", witness, nil)
-			res, err := bc.processor.Process(block, statedb, bc.cfg.VmConfig, nil, ctx)
+			res, err := bc.processor.Process(block, statedb, serialVMCfg, nil, ctx)
 			blockExecutionSerialTimer.UpdateSince(pstart)
 			if err == nil {
 				vstart := time.Now()
@@ -912,6 +927,13 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		}
 		if importDetailPref != nil {
 			data.PrefReads = importDetailPref.Snapshot()
+		}
+		if importSegments != nil && !result.parallel {
+			data.Segments = importSegments.SnapshotUs()
+		}
+		if importOpFam != nil && !result.parallel {
+			data.OpFams = importOpFam.Result()
+			data.OpFamSampled = true
 		}
 		importHook(data)
 	}
