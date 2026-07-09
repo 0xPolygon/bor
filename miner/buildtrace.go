@@ -10,7 +10,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
 )
 
 // Build-trace instrumentation (lab-only, flag-gated via miner.buildtrace).
@@ -116,7 +118,7 @@ func (t *buildTracer) stop() {
 
 // buildTraceTxEvent is one attempted transaction inside commitTransactions.
 type buildTraceTxEvent struct {
-	I          int    `json:"i"`                // attempt index (not tx index; failed attempts count)
+	I          int    `json:"i"` // attempt index (not tx index; failed attempts count)
 	Hash       string `json:"hash"`
 	GasLimit   uint64 `json:"gas_limit"`
 	GasUsed    uint64 `json:"gas_used,omitempty"` // only on ok
@@ -127,6 +129,23 @@ type buildTraceTxEvent struct {
 	ApplyUs    int64  `json:"apply_us,omitempty"`
 	DepsSendUs int64  `json:"deps_send_us,omitempty"` // time blocked sending read/write set to chDeps
 	Outcome    string `json:"outcome"`                // ok|nonce_low|evm_interrupt|failed|gas_account_skip|evicted|pip15_dropped|replay_protected|size_break|proof_recompute_ok
+
+	// I4 — per-tx state-read time split by cache hit/miss (process reader deltas).
+	RdAcctHitN   int64 `json:"rd_ah_n,omitempty"`
+	RdAcctHitUs  int64 `json:"rd_ah_us,omitempty"`
+	RdAcctMissN  int64 `json:"rd_am_n,omitempty"`
+	RdAcctMissUs int64 `json:"rd_am_us,omitempty"`
+	RdStorHitN   int64 `json:"rd_sh_n,omitempty"`
+	RdStorHitUs  int64 `json:"rd_sh_us,omitempty"`
+	RdStorMissN  int64 `json:"rd_sm_n,omitempty"`
+	RdStorMissUs int64 `json:"rd_sm_us,omitempty"`
+}
+
+// buildTraceMissEvent is one process-cache miss (I1).
+type buildTraceMissEvent struct {
+	K  uint64 `json:"k"`           // fnv64 of addr / addr||slot
+	S  bool   `json:"s,omitempty"` // true = storage slot
+	Us int64  `json:"us"`          // backing-resolution latency
 }
 
 // buildTraceRecord is the per-build-attempt record, emitted on every exit path.
@@ -165,11 +184,11 @@ type buildTraceRecord struct {
 	FillUs                  int64 `json:"fill_us"` // fillTransactions total
 
 	// commitTransactions loop.
-	CommitLoopUs       int64  `json:"commit_loop_us"`
-	LoopBreak          string `json:"loop_break,omitempty"` // timeout_flag|gas_exhausted|pool_drained|size_limit|interrupt_signal
-	InterruptSignal    string `json:"interrupt_signal,omitempty"`
-	TimeoutFlagFired   bool   `json:"timeout_flag_fired,omitempty"`
-	TimeoutFlagSetAtNs int64  `json:"timeout_flag_set_at_ns,omitempty"`
+	CommitLoopUs       int64               `json:"commit_loop_us"`
+	LoopBreak          string              `json:"loop_break,omitempty"` // timeout_flag|gas_exhausted|pool_drained|size_limit|interrupt_signal
+	InterruptSignal    string              `json:"interrupt_signal,omitempty"`
+	TimeoutFlagFired   bool                `json:"timeout_flag_fired,omitempty"`
+	TimeoutFlagSetAtNs int64               `json:"timeout_flag_set_at_ns,omitempty"`
 	TxEvents           []buildTraceTxEvent `json:"txs,omitempty"`
 
 	// Result.
@@ -203,13 +222,58 @@ type buildTraceRecord struct {
 	CommitUs     int64 `json:"commit_us,omitempty"`
 	TaskQueuedNs int64 `json:"task_queued_ns,omitempty"`
 
+	// I1/I4 — process-reader detail: read time split hit/miss + per-miss events.
+	ProcReads     *state.ReadDetailStats `json:"proc_reads,omitempty"`
+	PrefReads     *state.ReadDetailStats `json:"pref_reads,omitempty"` // prefetch reader's own resolution costs
+	Misses        []buildTraceMissEvent  `json:"misses,omitempty"`
+	MissesDropped int64                  `json:"misses_dropped,omitempty"`
+
+	// Prefetch attribution counters from the shared per-block cache (v2.6.0 meters, per build).
+	PfAcctHitFromPrefetch int64 `json:"pf_acct_hit_from_pf,omitempty"`
+	PfStorHitFromPrefetch int64 `json:"pf_stor_hit_from_pf,omitempty"`
+	PfAcctInsert          int64 `json:"pf_acct_insert,omitempty"`
+	PfStorInsert          int64 `json:"pf_stor_insert,omitempty"`
+
+	// I5 — node-global lower-layer meter deltas over the build window (includes
+	// concurrent import activity on the clone — interference caveat, ranking #14).
+	SnapDeltas map[string]int64 `json:"snap_deltas,omitempty"`
+
 	EmittedAtNs int64 `json:"emitted_at_ns"`
+}
+
+// pressureMeterNames are the lower-layer meters snapshotted per build (I5).
+var pressureMeterNames = []string{
+	"state/snapshot/clean/account/hit",
+	"state/snapshot/clean/account/miss",
+	"state/snapshot/clean/account/inex",
+	"state/snapshot/clean/storage/hit",
+	"state/snapshot/clean/storage/miss",
+	"state/snapshot/clean/storage/inex",
+	"state/snapshot/dirty/account/hit",
+	"state/snapshot/dirty/account/miss",
+	"state/snapshot/dirty/storage/hit",
+	"state/snapshot/dirty/storage/miss",
+	"state/snapshot/bloom/account/truehit",
+	"state/snapshot/bloom/account/falsehit",
+	"state/snapshot/bloom/storage/truehit",
+	"state/snapshot/bloom/storage/falsehit",
+}
+
+// snapshotPressureMeters captures current counts of the lower-layer meters.
+func snapshotPressureMeters() map[string]int64 {
+	out := make(map[string]int64, len(pressureMeterNames))
+	for _, name := range pressureMeterNames {
+		if m, ok := metrics.DefaultRegistry.Get(name).(*metrics.Meter); ok {
+			out[name] = m.Snapshot().Count()
+		}
+	}
+	return out
 }
 
 // buildTriggerRecord captures build triggers and their disposition, including
 // the ones that never reach commitWork (suppressed-trigger log, ranking #5).
 type buildTriggerRecord struct {
-	Type        string `json:"type"` // "trigger"
+	Type        string `json:"type"`        // "trigger"
 	Source      string `json:"source"`      // start|chainhead|veblop_timer|mainloop
 	Disposition string `json:"disposition"` // committed|dedup_skip|veblop_pending_skip|veblop_stall_hold|disable_pending_block_skip|syncing|not_running_no_etherbase
 	HeadNumber  uint64 `json:"head_number"`
@@ -240,6 +304,12 @@ type buildTrace struct {
 	rec     buildTraceRecord
 	tracer  *buildTracer
 	emitted bool
+
+	// I1/I4 collectors attached to the per-block stats readers.
+	procDetail *state.ReadDetail
+	prefDetail *state.ReadDetail
+	// I5 baseline of lower-layer meters at build start.
+	pressureStart map[string]int64
 }
 
 func (t *buildTracer) begin() *buildTrace {
@@ -247,7 +317,8 @@ func (t *buildTracer) begin() *buildTrace {
 		return nil
 	}
 	return &buildTrace{
-		tracer: t,
+		tracer:        t,
+		pressureStart: snapshotPressureMeters(),
 		rec: buildTraceRecord{
 			Type:        "build",
 			Schema:      buildTraceSchemaVersion,
@@ -256,6 +327,21 @@ func (t *buildTracer) begin() *buildTrace {
 			Outcome:     "unknown",
 			TriggerAtNs: time.Now().UnixNano(),
 		},
+	}
+}
+
+// attachReaders installs read-detail collectors on the per-block stats readers.
+func (bt *buildTrace) attachReaders(process, prefetch state.ReaderWithStats) {
+	if bt == nil {
+		return
+	}
+	if r, ok := process.(state.ReaderWithDetail); ok {
+		bt.procDetail = &state.ReadDetail{}
+		r.SetReadDetail(bt.procDetail)
+	}
+	if r, ok := prefetch.(state.ReaderWithDetail); ok {
+		bt.prefDetail = &state.ReadDetail{}
+		r.SetReadDetail(bt.prefDetail)
 	}
 }
 
@@ -318,5 +404,50 @@ func (bt *buildTrace) finishBuild(env *environment, genParams *generateParams) {
 			}
 		}
 		bt.rec.PrefetchedOfIncluded = warm
+	}
+
+	// I1/I4 — reader detail totals + per-miss events.
+	if bt.procDetail != nil {
+		s := bt.procDetail.Snapshot()
+		bt.rec.ProcReads = &s
+		misses, dropped := bt.procDetail.TakeMisses()
+		bt.rec.MissesDropped = dropped
+		if len(misses) > 0 {
+			evs := make([]buildTraceMissEvent, len(misses))
+			for i, m := range misses {
+				evs[i] = buildTraceMissEvent{K: m.Key, S: m.Storage, Us: m.LatencyUs}
+			}
+			bt.rec.Misses = evs
+		}
+	}
+	if bt.prefDetail != nil {
+		s := bt.prefDetail.Snapshot()
+		bt.rec.PrefReads = &s
+	}
+
+	// Prefetch attribution counters (shared per-block cache provenance).
+	if env.processReader != nil {
+		ps := env.processReader.GetPrefetchStats()
+		bt.rec.PfAcctHitFromPrefetch = ps.AccountHitFromPrefetch
+		bt.rec.PfStorHitFromPrefetch = ps.StorageHitFromPrefetch
+	}
+	if env.prefetchReader != nil {
+		ps := env.prefetchReader.GetPrefetchStats()
+		bt.rec.PfAcctInsert = ps.AccountInsert
+		bt.rec.PfStorInsert = ps.StorageInsert
+	}
+
+	// I5 — lower-layer meter deltas over the build window.
+	if bt.pressureStart != nil {
+		end := snapshotPressureMeters()
+		deltas := make(map[string]int64, len(end))
+		for name, v := range end {
+			if d := v - bt.pressureStart[name]; d != 0 {
+				deltas[name] = d
+			}
+		}
+		if len(deltas) > 0 {
+			bt.rec.SnapDeltas = deltas
+		}
 	}
 }
