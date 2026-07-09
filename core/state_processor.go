@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	cmath "github.com/ethereum/go-ethereum/common/math"
@@ -118,9 +119,16 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 			continue
 		}
 
+		var msgConvStart time.Time
+		if seg := evm.Config.Segments; seg != nil {
+			msgConvStart = time.Now()
+		}
 		msg, err := TransactionToMessage(tx, signer, header.BaseFee)
 		if err != nil {
 			return nil, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
+		}
+		if seg := evm.Config.Segments; seg != nil {
+			seg.MsgConvNs.Add(time.Since(msgConvStart).Nanoseconds())
 		}
 
 		statedb.SetTxContext(tx.Hash(), i)
@@ -232,7 +240,16 @@ func ApplyTransactionWithEVM(msg *Message, gp *GasPool, statedb *state.StateDB, 
 	// resume recording read and write
 	statedb.SetMVHashmap(backupMVHashMap)
 
+	seg := evm.Config.Segments
+	var applyStart time.Time
+	if seg != nil {
+		applyStart = time.Now()
+	}
 	result, err = ApplyMessageNoFeeBurnOrTip(evm, *msg, gp)
+	if seg != nil {
+		seg.ApplyNs.Add(time.Since(applyStart).Nanoseconds())
+		seg.TxN.Add(1)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -273,10 +290,17 @@ func ApplyTransactionWithEVM(msg *Message, gp *GasPool, statedb *state.StateDB, 
 	// Update the state with pending changes.
 	var root []byte
 
+	var finaliseStart time.Time
+	if seg != nil {
+		finaliseStart = time.Now()
+	}
 	if evm.ChainConfig().IsByzantium(blockNumber) {
 		evm.StateDB.Finalise(true)
 	} else {
 		root = statedb.IntermediateRoot(evm.ChainConfig().IsEIP158(blockNumber)).Bytes()
+	}
+	if seg != nil {
+		seg.FinaliseNs.Add(time.Since(finaliseStart).Nanoseconds())
 	}
 
 	*usedGas += result.UsedGas
@@ -286,7 +310,15 @@ func ApplyTransactionWithEVM(msg *Message, gp *GasPool, statedb *state.StateDB, 
 	if statedb.Database().TrieDB().IsVerkle() {
 		statedb.AccessEvents().Merge(evm.AccessEvents)
 	}
-	return MakeReceipt(evm, result, statedb, blockNumber, blockHash, blockTime, tx, *usedGas, root), nil
+	var receiptStart time.Time
+	if seg != nil {
+		receiptStart = time.Now()
+	}
+	receipt = MakeReceipt(evm, result, statedb, blockNumber, blockHash, blockTime, tx, *usedGas, root)
+	if seg != nil {
+		seg.ReceiptNs.Add(time.Since(receiptStart).Nanoseconds())
+	}
+	return receipt, nil
 }
 
 // MakeReceipt generates the receipt object for a transaction given its execution result.
@@ -327,9 +359,16 @@ func MakeReceipt(evm *vm.EVM, result *ExecutionResult, statedb *state.StateDB, b
 // for the transaction, gas used and an error if the transaction failed,
 // indicating the block was invalid.
 func ApplyTransaction(evm *vm.EVM, gp *GasPool, statedb *state.StateDB, header *types.Header, tx *types.Transaction, usedGas *uint64) (*types.Receipt, error) {
+	var msgConvStart time.Time
+	if seg := evm.Config.Segments; seg != nil {
+		msgConvStart = time.Now()
+	}
 	msg, err := TransactionToMessage(tx, types.MakeSigner(evm.ChainConfig(), header.Number, header.Time), header.BaseFee)
 	if err != nil {
 		return nil, err
+	}
+	if seg := evm.Config.Segments; seg != nil {
+		seg.MsgConvNs.Add(time.Since(msgConvStart).Nanoseconds())
 	}
 	// Create a new context to be used in the EVM environment
 	return ApplyTransactionWithEVM(msg, gp, statedb, header.Number, header.Hash(), header.Time, tx, usedGas, evm)

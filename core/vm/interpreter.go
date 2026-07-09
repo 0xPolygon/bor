@@ -44,6 +44,10 @@ type Config struct {
 	StatelessSelfValidation bool // Generate execution witnesses and self-check against them (testing purpose)
 	EnableWitnessStats      bool // Whether trie access statistics collection is enabled
 	EnableEVMSwitchDispatch bool // Use switch-based fast path interpreter
+
+	// Segments, when non-nil, accumulates coarse per-segment execution wall
+	// time (lab instrumentation; see tracing.ExecSegments).
+	Segments *tracing.ExecSegments
 }
 
 // ScopeContext contains the things that are per-call, such as stack and memory,

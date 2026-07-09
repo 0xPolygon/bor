@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"time"
 
 	"github.com/holiman/uint256"
 
@@ -455,6 +456,12 @@ func (st *stateTransition) preCheck() error {
 // However if any consensus issue encountered, return the error directly with
 // nil evm execution result.
 func (st *stateTransition) execute() (*ExecutionResult, error) {
+	var segStart time.Time
+	seg := st.evm.Config.Segments
+	if seg != nil {
+		segStart = time.Now()
+	}
+
 	input1 := st.state.GetBalance(st.msg.From)
 
 	var input2 *uint256.Int
@@ -540,6 +547,12 @@ func (st *stateTransition) execute() (*ExecutionResult, error) {
 		vmerr error // vm errors do not effect consensus and are therefore not assigned to err
 	)
 
+	var evmStart time.Time
+	if seg != nil {
+		evmStart = time.Now()
+		seg.PrecheckNs.Add(evmStart.Sub(segStart).Nanoseconds())
+	}
+
 	if contractCreation {
 		ret, _, st.gasRemaining, vmerr = st.evm.Create(msg.From, msg.Data, st.gasRemaining, value)
 	} else {
@@ -565,6 +578,10 @@ func (st *stateTransition) execute() (*ExecutionResult, error) {
 
 		// Execute the transaction's call.
 		ret, st.gasRemaining, vmerr = st.evm.Call(msg.From, st.to(), msg.Data, st.gasRemaining, value)
+	}
+
+	if seg != nil {
+		seg.EVMNs.Add(time.Since(evmStart).Nanoseconds())
 	}
 
 	// Record the gas used excluding gas refunds. This value represents the actual

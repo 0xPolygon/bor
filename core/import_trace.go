@@ -25,6 +25,14 @@ type ImportTraceData struct {
 	Misses        []state.ReadMissEvent
 	MissesDropped int64
 	Touched       []uint64 // touched-key hashes (hits+misses) — re-reference ring feed
+
+	// Per-segment exec wall time (tracing.ExecSegments.SnapshotUs keys).
+	// Only populated in serial-only mode (parallel processor disabled).
+	Segments map[string]int64
+	// Opcode-family timing for sampled blocks; wall time is inflated by the
+	// tracer on these blocks (OpFamSampled marks them).
+	OpFams       map[string]OpFamStat
+	OpFamSampled bool
 }
 
 var importTraceHook atomic.Pointer[func(ImportTraceData)]
