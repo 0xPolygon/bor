@@ -33,6 +33,10 @@ type ReadDetailStats struct {
 
 // ReadDetail collects timing sums and per-miss events for one reader.
 type ReadDetail struct {
+	// CollectTouched additionally records the set of touched key hashes (hits
+	// AND misses) — feeds the re-reference distance ring. Set before attaching.
+	CollectTouched bool
+
 	accountHitN, accountMissN   atomic.Int64
 	accountHitNs, accountMissNs atomic.Int64
 	storageHitN, storageMissN   atomic.Int64
@@ -40,6 +44,7 @@ type ReadDetail struct {
 
 	mu            sync.Mutex
 	misses        []ReadMissEvent
+	touched       map[uint64]struct{}
 	missesDropped atomic.Int64
 }
 
@@ -72,22 +77,63 @@ func (d *ReadDetail) recordAccount(addr common.Address, hit bool, dur time.Durat
 	if hit {
 		d.accountHitN.Add(1)
 		d.accountHitNs.Add(dur.Nanoseconds())
+		if d.CollectTouched {
+			d.touch(fnvAddr(addr))
+		}
 		return
 	}
 	d.accountMissN.Add(1)
 	d.accountMissNs.Add(dur.Nanoseconds())
-	d.appendMiss(ReadMissEvent{Key: fnvAddr(addr), Storage: false, LatencyUs: dur.Microseconds()})
+	key := fnvAddr(addr)
+	if d.CollectTouched {
+		d.touch(key)
+	}
+	d.appendMiss(ReadMissEvent{Key: key, Storage: false, LatencyUs: dur.Microseconds()})
 }
 
 func (d *ReadDetail) recordStorage(addr common.Address, slot common.Hash, hit bool, dur time.Duration) {
 	if hit {
 		d.storageHitN.Add(1)
 		d.storageHitNs.Add(dur.Nanoseconds())
+		if d.CollectTouched {
+			d.touch(fnvSlot(addr, slot))
+		}
 		return
 	}
 	d.storageMissN.Add(1)
 	d.storageMissNs.Add(dur.Nanoseconds())
-	d.appendMiss(ReadMissEvent{Key: fnvSlot(addr, slot), Storage: true, LatencyUs: dur.Microseconds()})
+	key := fnvSlot(addr, slot)
+	if d.CollectTouched {
+		d.touch(key)
+	}
+	d.appendMiss(ReadMissEvent{Key: key, Storage: true, LatencyUs: dur.Microseconds()})
+}
+
+func (d *ReadDetail) touch(key uint64) {
+	d.mu.Lock()
+	if d.touched == nil {
+		d.touched = make(map[uint64]struct{}, 4096)
+	}
+	d.touched[key] = struct{}{}
+	d.mu.Unlock()
+}
+
+// TakeTouched drains and returns the touched-key set (nil unless CollectTouched).
+func (d *ReadDetail) TakeTouched() []uint64 {
+	if d == nil {
+		return nil
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.touched) == 0 {
+		return nil
+	}
+	out := make([]uint64, 0, len(d.touched))
+	for k := range d.touched {
+		out = append(out, k)
+	}
+	d.touched = nil
+	return out
 }
 
 func (d *ReadDetail) appendMiss(ev ReadMissEvent) {
