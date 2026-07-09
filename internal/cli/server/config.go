@@ -457,6 +457,10 @@ type SealerConfig struct {
 	// set, 'pending' block will be unavailable for RPC queries. This won't apply for block producer
 	// nodes.
 	DisablePendingBlock bool `hcl:"disable-pending-block,optional" toml:"disable-pending-block,optional"`
+
+	// BuildTrace enables per-build JSONL trace records into the given directory (lab
+	// instrumentation for the block-production flow; empty = disabled).
+	BuildTrace string `hcl:"buildtrace,optional" toml:"buildtrace,optional"`
 }
 
 type JsonRPCConfig struct {
@@ -1291,6 +1295,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.Miner.EnablePrefetch = c.Sealer.EnablePrefetch
 		n.Miner.PrefetchGasLimitPercent = c.Sealer.PrefetchGasLimitPercent
 		n.Miner.DisablePendingBlock = c.Sealer.DisablePendingBlock
+		n.Miner.BuildTrace = c.Sealer.BuildTrace
 
 		// Validate prefetch gas limit percentage
 		if c.Sealer.EnablePrefetch && c.Sealer.PrefetchGasLimitPercent > 150 {

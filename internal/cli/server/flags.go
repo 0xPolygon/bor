@@ -438,6 +438,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.Sealer.PrefetchGasLimitPercent,
 		Group:   "Sealer",
 	})
+	f.StringFlag(&flagset.StringFlag{
+		Name:    "miner.buildtrace",
+		Usage:   "Directory for per-build JSONL trace records (lab instrumentation; empty = disabled)",
+		Value:   &c.cliConfig.Sealer.BuildTrace,
+		Default: c.cliConfig.Sealer.BuildTrace,
+		Group:   "Sealer",
+	})
 	f.BoolFlag(&flagset.BoolFlag{
 		Name:    "miner.enableDynamicGasLimit",
 		Usage:   "Enable dynamic gas limit adjustment based on base fee",
