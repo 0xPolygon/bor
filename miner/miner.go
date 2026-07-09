@@ -69,6 +69,8 @@ type Config struct {
 	PrefetchGasLimitPercent uint64         // Gas limit percentage for prefetching (e.g., 100 = 100%, 110 = 110%)
 
 	DisablePendingBlock bool // Disable the pending block creation loop on non block producer nodes
+
+	BuildTrace string `toml:",omitempty"` // Directory for per-build JSONL trace records (lab instrumentation; empty = disabled)
 }
 
 // DefaultConfig contains default settings for miner.
