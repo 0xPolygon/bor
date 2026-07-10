@@ -168,6 +168,7 @@ type buildTraceMissEvent struct {
 	C  bool   `json:"c,omitempty"` // true = contract code (miss vs shared code LRU)
 	Us int64  `json:"us"`          // backing-resolution latency
 	D  int64  `json:"d,omitempty"` // re-reference distance in blocks (0 = not seen in window)
+	T  int32  `json:"t,omitempty"` // tx index executing when the miss occurred
 }
 
 // importTraceRecord is one per-imported-block measurement (import-path lab).
@@ -196,8 +197,12 @@ type importTraceRecord struct {
 	// Per-opcode and per-executing-contract splits (sampled blocks only).
 	Opcodes   map[string]core.OpFamStat `json:"opcodes,omitempty"`
 	Contracts map[string]core.OpFamStat `json:"contracts,omitempty"`
+	// Per-contract opcode-family split (sampled blocks, top contracts).
+	ContractFams map[string]map[string]core.OpFamStat `json:"contract_fams,omitempty"`
 	// Validation decomposition (statedb duration counters, us).
 	ValDetail map[string]int64 `json:"val_detail,omitempty"`
+	// Read-miss attribution vs the block prefetcher (import path).
+	MissAttrib map[string]int64 `json:"miss_attrib,omitempty"`
 
 	// Re-reference distance histogram for misses: bucket label → count.
 	MissDistHist map[string]int `json:"miss_dist_hist,omitempty"`
@@ -362,6 +367,8 @@ type buildTraceRecord struct {
 	// Per-opcode and per-executing-contract splits (sampled builds only).
 	Opcodes   map[string]core.OpFamStat `json:"opcodes,omitempty"`
 	Contracts map[string]core.OpFamStat `json:"contracts,omitempty"`
+	// Per-contract opcode-family split (sampled builds, top contracts).
+	ContractFams map[string]map[string]core.OpFamStat `json:"contract_fams,omitempty"`
 	// Validation/commit decomposition (statedb duration counters, us).
 	ValDetail map[string]int64 `json:"val_detail,omitempty"`
 
@@ -450,7 +457,7 @@ func (t *buildTracer) buildImportRecord(d core.ImportTraceData, ring *rerefRing,
 		rec.MissDistHist = make(map[string]int, 12)
 		for i, m := range d.Misses {
 			dist := ring.distance(d.Number, m.Key)
-			rec.Misses[i] = buildTraceMissEvent{K: m.Key, S: m.Storage, C: m.Code, Us: m.LatencyUs, D: dist}
+			rec.Misses[i] = buildTraceMissEvent{K: m.Key, S: m.Storage, C: m.Code, Us: m.LatencyUs, D: dist, T: m.TxIndex}
 			rec.MissDistHist[distBucket(dist)]++
 		}
 	}
@@ -459,7 +466,9 @@ func (t *buildTracer) buildImportRecord(d core.ImportTraceData, ring *rerefRing,
 	rec.OpFamSampled = d.OpFamSampled
 	rec.Opcodes = d.Opcodes
 	rec.Contracts = d.Contracts
+	rec.ContractFams = d.ContractFams
 	rec.ValDetail = d.ValDetail
+	rec.MissAttrib = d.MissAttrib
 	ring.push(d.Number, d.Touched)
 
 	if d.Number%keyDumpEvery == 0 {
@@ -665,6 +674,7 @@ func (bt *buildTrace) finishBuild(env *environment, genParams *generateParams) {
 		bt.rec.OpFams = bt.opFam.Result()
 		bt.rec.Opcodes = bt.opFam.ResultOpcodes(24)
 		bt.rec.Contracts = bt.opFam.ResultContracts(12)
+		bt.rec.ContractFams = bt.opFam.ResultContractFams(8)
 		bt.rec.OpFamSampled = true
 	}
 	if env.state != nil {
