@@ -1,6 +1,7 @@
 package core
 
 import (
+	"sort"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -81,22 +82,52 @@ func init() {
 		vm.BLOBHASH, vm.BLOBBASEFEE)
 }
 
+type opStat struct{ n, ns int64 }
+
 type OpFamTracer struct {
 	last    time.Time
 	lastFam uint8
-	fams    [opFamCount]struct{ n, ns int64 }
+	lastOp  byte
+	fams    [opFamCount]opStat
+	ops     [256]opStat
+
+	// Per-contract attribution. The executing address only changes at call
+	// boundaries, so cache the current bucket and re-resolve on change.
+	contracts map[common.Address]*opStat
+	curAddr   common.Address
+	curCon    *opStat
+	lastCon   *opStat // bucket of the contract that executed lastOp
 }
 
-func NewOpFamTracer() *OpFamTracer { return &OpFamTracer{} }
+func NewOpFamTracer() *OpFamTracer {
+	return &OpFamTracer{contracts: make(map[common.Address]*opStat)}
+}
 
 func (t *OpFamTracer) onOpcode(pc uint64, op byte, gas, cost uint64, scope tracing.OpContext, rData []byte, depth int, err error) {
 	now := time.Now()
 	if !t.last.IsZero() {
-		t.fams[t.lastFam].ns += now.Sub(t.last).Nanoseconds()
+		d := now.Sub(t.last).Nanoseconds()
+		t.fams[t.lastFam].ns += d
+		t.ops[t.lastOp].ns += d
+		if t.lastCon != nil {
+			t.lastCon.ns += d
+		}
 	}
+	if addr := scope.Address(); addr != t.curAddr || t.curCon == nil {
+		con := t.contracts[addr]
+		if con == nil {
+			con = &opStat{}
+			t.contracts[addr] = con
+		}
+		t.curAddr, t.curCon = addr, con
+	}
+	t.curCon.n++
 	fam := opFamTable[op]
 	t.fams[fam].n++
+	t.ops[op].n++
 	t.lastFam = fam
+	t.lastOp = op
+	t.lastCon = t.curCon
 	t.last = now
 }
 
@@ -108,7 +139,12 @@ func (t *OpFamTracer) onTxStart(vmctx *tracing.VMContext, tx *types.Transaction,
 func (t *OpFamTracer) onTxEnd(receipt *types.Receipt, err error) {
 	// Close out the final opcode of the tx.
 	if !t.last.IsZero() {
-		t.fams[t.lastFam].ns += time.Since(t.last).Nanoseconds()
+		d := time.Since(t.last).Nanoseconds()
+		t.fams[t.lastFam].ns += d
+		t.ops[t.lastOp].ns += d
+		if t.lastCon != nil {
+			t.lastCon.ns += d
+		}
 		t.last = time.Time{}
 	}
 }
@@ -131,5 +167,71 @@ func (t *OpFamTracer) Result() map[string]OpFamStat {
 		}
 		out[opFamNames[i]] = OpFamStat{N: f.n, Us: f.ns / 1e3}
 	}
+	return out
+}
+
+// ResultOpcodes returns the topN opcodes by attributed time, with the
+// remainder folded into an "other" bucket.
+func (t *OpFamTracer) ResultOpcodes(topN int) map[string]OpFamStat {
+	type kv struct {
+		op byte
+		s  opStat
+	}
+	var all []kv
+	for op, s := range t.ops {
+		if s.n > 0 {
+			all = append(all, kv{byte(op), s})
+		}
+	}
+	if len(all) == 0 {
+		return nil
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].s.ns > all[j].s.ns })
+	out := make(map[string]OpFamStat, topN+1)
+	var other opStat
+	for i, e := range all {
+		if i < topN {
+			out[vm.OpCode(e.op).String()] = OpFamStat{N: e.s.n, Us: e.s.ns / 1e3}
+		} else {
+			other.n += e.s.n
+			other.ns += e.s.ns
+		}
+	}
+	if other.n > 0 {
+		out["OTHER"] = OpFamStat{N: other.n, Us: other.ns / 1e3}
+	}
+	return out
+}
+
+// ResultContracts returns the topN executing contract addresses by attributed
+// time, with the remainder folded into "other" and the distinct-address count
+// under "n_contracts" (in the N field).
+func (t *OpFamTracer) ResultContracts(topN int) map[string]OpFamStat {
+	type kv struct {
+		addr common.Address
+		s    opStat
+	}
+	all := make([]kv, 0, len(t.contracts))
+	for addr, s := range t.contracts {
+		all = append(all, kv{addr, *s})
+	}
+	if len(all) == 0 {
+		return nil
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].s.ns > all[j].s.ns })
+	out := make(map[string]OpFamStat, topN+2)
+	var other opStat
+	for i, e := range all {
+		if i < topN {
+			out[e.addr.Hex()] = OpFamStat{N: e.s.n, Us: e.s.ns / 1e3}
+		} else {
+			other.n += e.s.n
+			other.ns += e.s.ns
+		}
+	}
+	if other.n > 0 {
+		out["other"] = OpFamStat{N: other.n, Us: other.ns / 1e3}
+	}
+	out["n_contracts"] = OpFamStat{N: int64(len(all))}
 	return out
 }

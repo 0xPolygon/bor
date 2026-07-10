@@ -33,6 +33,15 @@ type ImportTraceData struct {
 	// tracer on these blocks (OpFamSampled marks them).
 	OpFams       map[string]OpFamStat
 	OpFamSampled bool
+	// Per-opcode (top-N + OTHER) and per-executing-contract (top-N + other)
+	// splits of the same sampled-block attribution.
+	Opcodes   map[string]OpFamStat
+	Contracts map[string]OpFamStat
+
+	// Validation decomposition from statedb's built-in duration counters (us):
+	// account/storage hashes (root computation), updates, and bor consensus
+	// time (spans + state-sync inside engine.Finalize).
+	ValDetail map[string]int64
 }
 
 var importTraceHook atomic.Pointer[func(ImportTraceData)]

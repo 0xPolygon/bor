@@ -933,7 +933,20 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		}
 		if importOpFam != nil && !result.parallel {
 			data.OpFams = importOpFam.Result()
+			data.Opcodes = importOpFam.ResultOpcodes(24)
+			data.Contracts = importOpFam.ResultContracts(12)
 			data.OpFamSampled = true
+		}
+		if sdb := result.statedb; sdb != nil {
+			data.ValDetail = map[string]int64{
+				"account_hashes_us":  sdb.AccountHashes.Microseconds(),
+				"storage_hashes_us":  sdb.StorageHashes.Microseconds(),
+				"account_updates_us": sdb.AccountUpdates.Microseconds(),
+				"storage_updates_us": sdb.StorageUpdates.Microseconds(),
+				"account_reads_us":   sdb.AccountReads.Microseconds(),
+				"storage_reads_us":   sdb.StorageReads.Microseconds(),
+				"bor_consensus_us":   sdb.BorConsensusTime.Microseconds(),
+			}
 		}
 		importHook(data)
 	}

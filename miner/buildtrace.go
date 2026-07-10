@@ -193,6 +193,11 @@ type importTraceRecord struct {
 	// Opcode-family timing (sampled blocks only; wall time inflated).
 	OpFams       map[string]core.OpFamStat `json:"opcode_families,omitempty"`
 	OpFamSampled bool                      `json:"opfam_sampled,omitempty"`
+	// Per-opcode and per-executing-contract splits (sampled blocks only).
+	Opcodes   map[string]core.OpFamStat `json:"opcodes,omitempty"`
+	Contracts map[string]core.OpFamStat `json:"contracts,omitempty"`
+	// Validation decomposition (statedb duration counters, us).
+	ValDetail map[string]int64 `json:"val_detail,omitempty"`
 
 	// Re-reference distance histogram for misses: bucket label → count.
 	MissDistHist map[string]int `json:"miss_dist_hist,omitempty"`
@@ -354,6 +359,11 @@ type buildTraceRecord struct {
 	// Opcode-family timing (sampled builds only; wall time inflated).
 	OpFams       map[string]core.OpFamStat `json:"opcode_families,omitempty"`
 	OpFamSampled bool                      `json:"opfam_sampled,omitempty"`
+	// Per-opcode and per-executing-contract splits (sampled builds only).
+	Opcodes   map[string]core.OpFamStat `json:"opcodes,omitempty"`
+	Contracts map[string]core.OpFamStat `json:"contracts,omitempty"`
+	// Validation/commit decomposition (statedb duration counters, us).
+	ValDetail map[string]int64 `json:"val_detail,omitempty"`
 
 	// Prefetch attribution counters from the shared per-block cache (v2.6.0 meters, per build).
 	PfAcctHitFromPrefetch int64 `json:"pf_acct_hit_from_pf,omitempty"`
@@ -447,6 +457,9 @@ func (t *buildTracer) buildImportRecord(d core.ImportTraceData, ring *rerefRing,
 	rec.ExecSegments = d.Segments
 	rec.OpFams = d.OpFams
 	rec.OpFamSampled = d.OpFamSampled
+	rec.Opcodes = d.Opcodes
+	rec.Contracts = d.Contracts
+	rec.ValDetail = d.ValDetail
 	ring.push(d.Number, d.Touched)
 
 	if d.Number%keyDumpEvery == 0 {
@@ -650,7 +663,20 @@ func (bt *buildTrace) finishBuild(env *environment, genParams *generateParams) {
 	}
 	if bt.opFam != nil {
 		bt.rec.OpFams = bt.opFam.Result()
+		bt.rec.Opcodes = bt.opFam.ResultOpcodes(24)
+		bt.rec.Contracts = bt.opFam.ResultContracts(12)
 		bt.rec.OpFamSampled = true
+	}
+	if env.state != nil {
+		bt.rec.ValDetail = map[string]int64{
+			"account_hashes_us":  env.state.AccountHashes.Microseconds(),
+			"storage_hashes_us":  env.state.StorageHashes.Microseconds(),
+			"account_updates_us": env.state.AccountUpdates.Microseconds(),
+			"storage_updates_us": env.state.StorageUpdates.Microseconds(),
+			"account_reads_us":   env.state.AccountReads.Microseconds(),
+			"storage_reads_us":   env.state.StorageReads.Microseconds(),
+			"bor_consensus_us":   env.state.BorConsensusTime.Microseconds(),
+		}
 	}
 
 	// Prefetch attribution counters (shared per-block cache provenance).

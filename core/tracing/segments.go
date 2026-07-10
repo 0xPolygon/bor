@@ -14,6 +14,11 @@ type ExecSegments struct {
 	EVMNs      atomic.Int64 // evm.Call / evm.Create only
 	FinaliseNs atomic.Int64 // per-tx statedb.Finalise / IntermediateRoot
 	ReceiptNs  atomic.Int64 // MakeReceipt: GetLogs + bloom
+
+	// Block-level segments of StateProcessor.Process (import path):
+	ProcPrologNs atomic.Int64 // Process entry -> tx loop (EVM setup, system calls)
+	ProcLoopNs   atomic.Int64 // whole tx loop wall (per-tx sums + loop overhead)
+	ProcFinalNs  atomic.Int64 // engine.Finalize: bor spans + state-sync events
 }
 
 // SnapshotUs returns the segment sums in microseconds, keyed for the trace
@@ -30,5 +35,9 @@ func (s *ExecSegments) SnapshotUs() map[string]int64 {
 		"evm_us":      s.EVMNs.Load() / 1e3,
 		"finalise_us": s.FinaliseNs.Load() / 1e3,
 		"receipt_us":  s.ReceiptNs.Load() / 1e3,
+
+		"proc_prolog_us": s.ProcPrologNs.Load() / 1e3,
+		"proc_loop_us":   s.ProcLoopNs.Load() / 1e3,
+		"proc_final_us":  s.ProcFinalNs.Load() / 1e3,
 	}
 }
