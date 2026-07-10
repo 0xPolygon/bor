@@ -321,6 +321,24 @@ func (tree *layerTree) lookupAccount(accountHash common.Hash, state common.Hash)
 	return l, nil
 }
 
+// lookupNode returns the layer that is guaranteed to contain the trie node
+// data corresponding to the specified state root being queried.
+func (tree *layerTree) lookupNode(owner common.Hash, path []byte, state common.Hash) (layer, error) {
+	// Hold the read lock to prevent the unexpected layer changes
+	tree.lock.RLock()
+	defer tree.lock.RUnlock()
+
+	tip := tree.lookup.nodeTip(owner, path, state, tree.base.root)
+	if tip == (common.Hash{}) {
+		return nil, fmt.Errorf("[%#x] %w", state, errSnapshotStale)
+	}
+	l := tree.layers[tip]
+	if l == nil {
+		return nil, fmt.Errorf("triedb layer [%#x] missing", tip)
+	}
+	return l, nil
+}
+
 // lookupStorage returns the layer that is guaranteed to contain the storage slot
 // data corresponding to the specified state root being queried.
 func (tree *layerTree) lookupStorage(accountHash common.Hash, slotHash common.Hash, state common.Hash) (layer, error) {
