@@ -6642,11 +6642,19 @@ func pipelinedConfigWithWarmSnapshot(scheme string) *BlockChainConfig {
 // inserts them into two chains — one with pipelined SRC enabled and one without.
 // The state roots of every canonical block must match between both chains.
 func TestPipelinedImportSRC_MultipleBlocks(t *testing.T) {
-	testPipelinedImportSRC_MultipleBlocks(t, rawdb.HashScheme)
-	testPipelinedImportSRC_MultipleBlocks(t, rawdb.PathScheme)
+	testPipelinedImportSRC_MultipleBlocks(t, rawdb.HashScheme, pipelinedConfig(rawdb.HashScheme), false)
+	testPipelinedImportSRC_MultipleBlocks(t, rawdb.PathScheme, pipelinedConfig(rawdb.PathScheme), false)
 }
 
-func testPipelinedImportSRC_MultipleBlocks(t *testing.T, scheme string) {
+// TestPipelinedImportSRC_MultipleBlocksWarmCarry re-runs the multi-block
+// parity check with the warm handoff enabled, exercising the commit-nodeset
+// carry between consecutive witness-off SRC goroutines.
+func TestPipelinedImportSRC_MultipleBlocksWarmCarry(t *testing.T) {
+	testPipelinedImportSRC_MultipleBlocks(t, rawdb.HashScheme, pipelinedConfigWithWarmSnapshot(rawdb.HashScheme), true)
+	testPipelinedImportSRC_MultipleBlocks(t, rawdb.PathScheme, pipelinedConfigWithWarmSnapshot(rawdb.PathScheme), true)
+}
+
+func testPipelinedImportSRC_MultipleBlocks(t *testing.T, scheme string, pipeCfg *BlockChainConfig, wantCarry bool) {
 	var (
 		key, _    = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
 		addr      = crypto.PubkeyToAddress(key.PublicKey)
@@ -6671,7 +6679,7 @@ func testPipelinedImportSRC_MultipleBlocks(t *testing.T, scheme string) {
 	})
 
 	// Chain with pipeline enabled.
-	pipeChain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, pipelinedConfig(scheme))
+	pipeChain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, pipeCfg)
 	if err != nil {
 		t.Fatalf("failed to create pipeline chain: %v", err)
 	}
@@ -6711,6 +6719,19 @@ func testPipelinedImportSRC_MultipleBlocks(t *testing.T, scheme string) {
 		}
 		if pipeBlock.Hash() != refBlock.Hash() {
 			t.Errorf("block %d: block hash mismatch pipeline=%s reference=%s", i, pipeBlock.Hash(), refBlock.Hash())
+		}
+	}
+
+	if wantCarry {
+		pipeChain.pendingImportSRCMu.Lock()
+		pending := pipeChain.pendingImportSRC
+		pipeChain.pendingImportSRCMu.Unlock()
+		if pending == nil {
+			t.Fatal("expected a pending import SRC after insertChain")
+		}
+		<-pending.collectedCh
+		if pending.src.carry == nil || pending.src.carry.Len() == 0 {
+			t.Error("expected the final SRC to produce a non-empty warm carry")
 		}
 	}
 }

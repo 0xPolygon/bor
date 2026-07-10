@@ -234,6 +234,22 @@ func NewTrieOnlyWithSnapshot(root common.Hash, db *CachingDB, snapshot *WarmSnap
 	return NewWithReader(root, snapshotDB, reader)
 }
 
+// NewWithCommitSnapshot is the warm-cache variant of New for the witness-off
+// pipelined SRC. Value reads keep the regular multi-reader (flat readers where
+// available), while commit-time trie openings (OpenTrie / OpenStorageTrie)
+// consult the WarmSnapshot before falling through to pathdb. Hits with a
+// matching hash skip diff-layer/disk-layer/pebble work; misses are served by
+// the underlying NodeReader unchanged, so correctness never depends on the
+// snapshot's contents.
+//
+// A nil or empty snapshot is equivalent to New.
+func NewWithCommitSnapshot(root common.Hash, db *CachingDB, snapshot *WarmSnapshot) (*StateDB, error) {
+	if snapshot == nil || snapshot.Len() == 0 {
+		return New(root, db)
+	}
+	return New(root, newSnapshotCommitStateDatabase(db, snapshot))
+}
+
 // NewWithReader creates a new state for the specified state root. Unlike New,
 // this function accepts an additional Reader which is bound to the given root.
 func NewWithReader(root common.Hash, db Database, reader Reader) (*StateDB, error) {

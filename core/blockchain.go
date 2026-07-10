@@ -401,19 +401,21 @@ type BlockChainConfig struct {
 	// PipelinedImportSRCLogs enables verbose logging for the import pipeline.
 	PipelinedImportSRCLogs bool
 
-	// PipelinedSRCWarmSnapshot enables a warm-cache handoff from the
-	// execution-side trie prefetcher to the pipelined SRC goroutine. When
-	// true, persistPipelinedImport captures the trie nodes the prefetcher had
-	// loaded into a quiesced WarmSnapshot and passes it to SRC; SRC's
-	// NewTrieOnly reader then consults the snapshot before falling through to
-	// pathdb. Targets the cold-cache restart/catch-up cost where the SRC
-	// goroutine repeats trie reads the prefetcher already performed.
+	// PipelinedSRCWarmSnapshot enables a warm-node handoff to the pipelined
+	// SRC goroutine. The source depends on the witness mode:
 	//
-	// Default false. NewTrieOnly semantics, witness completeness, and root
-	// determinism are unaffected — the snapshot only short-circuits the
-	// underlying NodeReader fetch; trie walks and prevalueTracer recording
-	// fire identically whether the served node came from the snapshot or
-	// pathdb.
+	//   - Witness-on: persistPipelinedImport captures the trie nodes the
+	//     execution-side prefetcher had loaded into a quiesced WarmSnapshot;
+	//     SRC's NewTrieOnly reader consults it before falling through to
+	//     pathdb.
+	//   - Witness-off: each SRC indexes the trie nodes it just committed
+	//     (shared blobs, no rehash) and hands them to the next block's SRC,
+	//     whose commit-time trie openings consult them first. Consecutive
+	//     blocks rewrite largely overlapping trie paths, so this removes most
+	//     of the cold re-expansion CommitWithUpdate would otherwise repeat.
+	//
+	// Both sources are hash-verified on lookup and fall through to pathdb on
+	// miss, so root determinism and witness completeness are unaffected.
 	PipelinedSRCWarmSnapshot bool
 }
 
@@ -536,6 +538,11 @@ type pendingSRCState struct {
 	root               common.Hash
 	witness            []byte // RLP-encoded witness built by the SRC goroutine
 	err                error
+	// carry indexes the trie nodes this SRC committed (hash-verified, shared
+	// blobs) so the next block's SRC can resolve consecutive-block hot paths
+	// from memory instead of pathdb. Written before wg.Done; readers must
+	// synchronise through the auto-collection channel or wg.Wait.
+	carry *state.WarmSnapshot
 }
 
 // pendingImportSRCState stores the state of a block whose SRC goroutine has
@@ -5026,10 +5033,10 @@ func (bc *BlockChain) PostExecState(header *types.Header) (*state.StateDB, error
 // from blocking on prefetch completion while still letting SRC benefit from
 // the execution-side warmup.
 func (bc *BlockChain) SpawnSRCGoroutine(block *types.Block, parentRoot common.Hash, flatDiff *state.FlatDiff, makeWitness bool, execWitness *stateless.Witness, allowOwnWitness bool, detachedPrefetcher *state.DetachedPrefetcher, useWarmSnapshot bool) *pendingSRCState {
-	return bc.spawnSRCGoroutine(block, parentRoot, flatDiff, makeWitness, execWitness, allowOwnWitness, detachedPrefetcher, useWarmSnapshot, true)
+	return bc.spawnSRCGoroutine(block, parentRoot, flatDiff, makeWitness, execWitness, allowOwnWitness, detachedPrefetcher, useWarmSnapshot, true, nil)
 }
 
-func (bc *BlockChain) spawnSRCGoroutine(block *types.Block, parentRoot common.Hash, flatDiff *state.FlatDiff, makeWitness bool, execWitness *stateless.Witness, allowOwnWitness bool, detachedPrefetcher *state.DetachedPrefetcher, useWarmSnapshot bool, publishGlobal bool) *pendingSRCState {
+func (bc *BlockChain) spawnSRCGoroutine(block *types.Block, parentRoot common.Hash, flatDiff *state.FlatDiff, makeWitness bool, execWitness *stateless.Witness, allowOwnWitness bool, detachedPrefetcher *state.DetachedPrefetcher, useWarmSnapshot bool, publishGlobal bool, carry *state.WarmSnapshot) *pendingSRCState {
 	pending := &pendingSRCState{
 		blockHash:   block.Hash(),
 		blockNumber: block.NumberU64(),
@@ -5042,7 +5049,7 @@ func (bc *BlockChain) spawnSRCGoroutine(block *types.Block, parentRoot common.Ha
 
 	pending.wg.Add(1)
 	bc.wg.Add(1)
-	go bc.runSRCCompute(pending, block, parentRoot, flatDiff, makeWitness, execWitness, allowOwnWitness, detachedPrefetcher, useWarmSnapshot)
+	go bc.runSRCCompute(pending, block, parentRoot, flatDiff, makeWitness, execWitness, allowOwnWitness, detachedPrefetcher, useWarmSnapshot, carry)
 	return pending
 }
 
@@ -5121,7 +5128,7 @@ func finishDetachedPrefetcher(detachedPrefetcher *state.DetachedPrefetcher, useW
 //     prefetcher-spawned goroutine.
 //   - No terminate(true) (async) call on the SRC handoff path.
 //   - No reuse of W on the main thread after SpawnSRCGoroutine.
-func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block, parentRoot common.Hash, flatDiff *state.FlatDiff, makeWitness bool, execWitness *stateless.Witness, allowOwnWitness bool, detachedPrefetcher *state.DetachedPrefetcher, useWarmSnapshot bool) {
+func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block, parentRoot common.Hash, flatDiff *state.FlatDiff, makeWitness bool, execWitness *stateless.Witness, allowOwnWitness bool, detachedPrefetcher *state.DetachedPrefetcher, useWarmSnapshot bool, carry *state.WarmSnapshot) {
 	defer bc.wg.Done()
 	defer pending.wg.Done()
 	pending.markStarted(time.Now())
@@ -5154,7 +5161,7 @@ func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block
 
 	warmSnapshot := finishDetachedPrefetcher(detachedPrefetcher, useWarmSnapshot)
 	openStart := time.Now()
-	tmpDB, witness, err := bc.openSRCStateDB(parentRoot, block, makeWitness, execWitness, warmSnapshot)
+	tmpDB, witness, err := bc.openSRCStateDB(parentRoot, block, makeWitness, execWitness, warmSnapshot, carry)
 	pipelineImportSRCOpenStateDBTimer.UpdateSince(openStart)
 	if err != nil {
 		pending.err = err
@@ -5211,6 +5218,15 @@ func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block
 	if makeWitness {
 		bc.encodeAndCachePendingWitness(pending, witness, block)
 	}
+	// Index the committed nodes as the next SRC's warm carry. Shared blobs,
+	// no rehashing — see NewWarmSnapshotFromNodeSets. Gated on the same flag
+	// that controls the witness-on warm handoff so a single knob A/Bs both.
+	if bc.cfg.PipelinedSRCWarmSnapshot && stateUpdate != nil {
+		buildStart := time.Now()
+		pending.carry = state.NewWarmSnapshotFromNodeSets(stateUpdate.TrieNodes())
+		pipelineImportWarmSnapshotBuild.UpdateSince(buildStart)
+		pipelineImportWarmSnapshotNodes.Update(int64(pending.carry.Len()))
+	}
 	pending.root = root
 }
 
@@ -5229,6 +5245,10 @@ func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block
 //     installed or StateReader errors, so correctness does not depend on the
 //     flat reader being present. Root-consistency between readers at an
 //     in-memory committed root is validated by the parity tests.
+//     When a carry snapshot is supplied (the previous SRC's committed nodes),
+//     commit-time trie openings consult it before pathdb: flat readers cover
+//     value reads, but CommitWithUpdate's MPT walk otherwise re-resolves from
+//     a cold trie every node the previous block just rewrote.
 //
 // Witness ownership when makeWitness=true:
 //
@@ -5248,13 +5268,13 @@ func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block
 // CommitWithUpdate walks the MPT for hashing regardless of reader choice, so
 // the state-root computation cost is unaffected; only the pre-state reads
 // avoid cold trie traversals.
-func (bc *BlockChain) openSRCStateDB(parentRoot common.Hash, block *types.Block, makeWitness bool, execWitness *stateless.Witness, warmSnapshot *state.WarmSnapshot) (*state.StateDB, *stateless.Witness, error) {
+func (bc *BlockChain) openSRCStateDB(parentRoot common.Hash, block *types.Block, makeWitness bool, execWitness *stateless.Witness, warmSnapshot *state.WarmSnapshot, carry *state.WarmSnapshot) (*state.StateDB, *stateless.Witness, error) {
 	if !makeWitness {
-		// Witness-off path uses the multi-reader (flat reader where
-		// available) and does not need the warm-snapshot handoff: flat
+		// Witness-off path keeps the multi-reader for value reads (flat
 		// readers already short-circuit pathdb diff-layer walks for hot
-		// state.
-		tmpDB, err := state.New(parentRoot, bc.statedb)
+		// state) and installs the previous SRC's carry for commit-time trie
+		// openings. A nil carry degrades to plain state.New.
+		tmpDB, err := state.NewWithCommitSnapshot(parentRoot, bc.statedb, carry)
 		if err != nil {
 			log.Error("Pipelined SRC: failed to open tmpDB", "parentRoot", parentRoot, "err", err)
 			return nil, nil, err
@@ -5655,7 +5675,7 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 	}()
 
 	phaseStart = time.Now()
-	committedRoot, collectElapsed, err := bc.collectPrevImportSRCIfAny(block, parent)
+	committedRoot, srcCarry, collectElapsed, err := bc.collectPrevImportSRCIfAny(block, parent)
 	timings.collectTotal = time.Since(phaseStart)
 	pipelineImportCollectTotalTimer.Update(timings.collectTotal)
 	timings.collect = collectElapsed
@@ -5716,7 +5736,7 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 	// discards it.
 	phaseStart = time.Now()
 	useWarmSnapshot := makeWitness && bc.cfg.PipelinedSRCWarmSnapshot
-	src := bc.spawnSRCGoroutine(tmpBlock, committedRoot, flatDiff, makeWitness, execWitness, false, detachedPrefetcher, useWarmSnapshot, false)
+	src := bc.spawnSRCGoroutine(tmpBlock, committedRoot, flatDiff, makeWitness, execWitness, false, detachedPrefetcher, useWarmSnapshot, false, srcCarry)
 	detachedPrefetcher = nil
 	timings.spawnSRC = time.Since(phaseStart)
 	pipelineImportSpawnSRCTimer.Update(timings.spawnSRC)
@@ -5822,16 +5842,17 @@ func (bc *BlockChain) logSlowNormalImport(block *types.Block, process, validatio
 }
 
 // collectPrevImportSRCIfAny blocks on the auto-collection channel of the
-// previous pending SRC (if any) and returns its committed root. If no SRC
-// is pending (first block of the insertChain call), parent.Root is the
+// previous pending SRC (if any) and returns its committed root plus the
+// warm-node carry that SRC produced (nil when disabled or unavailable). If no
+// SRC is pending (first block of the insertChain call), parent.Root is the
 // committed root. Errors propagate as "this block belongs to the previous
 // pending one" — caller returns it.index - 1.
-func (bc *BlockChain) collectPrevImportSRCIfAny(block *types.Block, parent *types.Header) (common.Hash, time.Duration, error) {
+func (bc *BlockChain) collectPrevImportSRCIfAny(block *types.Block, parent *types.Header) (common.Hash, *state.WarmSnapshot, time.Duration, error) {
 	bc.pendingImportSRCMu.Lock()
 	pending := bc.pendingImportSRC
 	bc.pendingImportSRCMu.Unlock()
 	if pending == nil {
-		return parent.Root, 0, nil
+		return parent.Root, nil, 0, nil
 	}
 	if bc.cfg.PipelinedImportSRCLogs {
 		log.Info("Pipelined import: collecting previous SRC",
@@ -5844,7 +5865,11 @@ func (bc *BlockChain) collectPrevImportSRCIfAny(block *types.Block, parent *type
 	// SRC wall-clock is final now (collection joined the goroutine); emit the
 	// next-exec-overlap split using the classification this block's execution set.
 	recordPipelinedImportSRCOverlapSplit(pending.src)
-	return committedRoot, elapsed, err
+	if err != nil {
+		return committedRoot, nil, elapsed, err
+	}
+	// Collection joined the SRC goroutine, so pending.src.carry is final.
+	return committedRoot, pending.src.carry, elapsed, nil
 }
 
 // emitStateSyncFeed publishes any queued state-sync events under the

@@ -21,6 +21,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/trie"
+	"github.com/ethereum/go-ethereum/trie/trienode"
 	"github.com/ethereum/go-ethereum/triedb/database"
 )
 
@@ -92,6 +93,45 @@ func NewWarmSnapshot(tries []TrieWarmNodes) *WarmSnapshot {
 			copy(cp, blob)
 			s.nodes[warmKey{owner: owner, path: path, hash: crypto.Keccak256Hash(cp)}] = cp
 		}
+	}
+	return s
+}
+
+// NewWarmSnapshotFromNodeSets indexes the dirty trie nodes of committed state
+// updates as a WarmSnapshot. This is the carry handoff between consecutive
+// pipelined SRC goroutines: the nodes SRC(N-1) just committed are exactly the
+// trie paths at the root SRC(N) opens against, so the hottest paths (accounts
+// and slots rewritten block after block) resolve from memory instead of
+// walking pathdb.
+//
+// Unlike NewWarmSnapshot, blobs are referenced rather than copied and node
+// hashes come from the node set instead of being recomputed — committer output
+// is immutable once the update has been applied to the trie database, so
+// sharing is safe. Deleted nodes (empty blobs) are skipped: a lookup for a
+// path deleted by the previous block misses and falls through to pathdb.
+// Returns nil when no live nodes are present.
+func NewWarmSnapshotFromNodeSets(merged *trienode.MergedNodeSet) *WarmSnapshot {
+	if merged == nil || len(merged.Sets) == 0 {
+		return nil
+	}
+	total := 0
+	for _, set := range merged.Sets {
+		total += len(set.Nodes)
+	}
+	if total == 0 {
+		return nil
+	}
+	s := &WarmSnapshot{nodes: make(map[warmKey][]byte, total)}
+	for owner, set := range merged.Sets {
+		for path, n := range set.Nodes {
+			if n == nil || len(n.Blob) == 0 {
+				continue
+			}
+			s.nodes[warmKey{owner: owner, path: path, hash: n.Hash}] = n.Blob
+		}
+	}
+	if len(s.nodes) == 0 {
+		return nil
 	}
 	return s
 }
@@ -232,6 +272,47 @@ func (db *snapshotStateDatabase) OpenTrie(root common.Hash) (Trie, error) {
 }
 
 func (db *snapshotStateDatabase) OpenStorageTrie(stateRoot common.Hash, address common.Address, root common.Hash, self Trie) (Trie, error) {
+	if db.triedb.IsVerkle() {
+		return self, nil
+	}
+	tr, err := trie.NewStateTrie(trie.StorageTrieID(stateRoot, crypto.Keccak256Hash(address.Bytes()), root), db.nodeDB)
+	if err != nil {
+		return nil, err
+	}
+	return tr, nil
+}
+
+// snapshotCommitStateDatabase wraps CachingDB so only the commit-time trie
+// openings (OpenTrie / OpenStorageTrie) consult a WarmSnapshot; value reads
+// keep CachingDB's multi-reader semantics (flat readers where available).
+// This is the witness-off SRC counterpart of snapshotStateDatabase: with no
+// witness to populate there is no reason to force trie-only value reads, but
+// the MPT walk performed by CommitWithUpdate still benefits from warm nodes.
+type snapshotCommitStateDatabase struct {
+	*CachingDB
+
+	nodeDB database.NodeDatabase
+}
+
+func newSnapshotCommitStateDatabase(inner *CachingDB, snapshot *WarmSnapshot) *snapshotCommitStateDatabase {
+	return &snapshotCommitStateDatabase{
+		CachingDB: inner,
+		nodeDB:    newSnapshotNodeDatabase(inner.triedb, snapshot),
+	}
+}
+
+func (db *snapshotCommitStateDatabase) OpenTrie(root common.Hash) (Trie, error) {
+	if db.triedb.IsVerkle() {
+		return db.CachingDB.OpenTrie(root)
+	}
+	tr, err := trie.NewStateTrie(trie.StateTrieID(root), db.nodeDB)
+	if err != nil {
+		return nil, err
+	}
+	return tr, nil
+}
+
+func (db *snapshotCommitStateDatabase) OpenStorageTrie(stateRoot common.Hash, address common.Address, root common.Hash, self Trie) (Trie, error) {
 	if db.triedb.IsVerkle() {
 		return self, nil
 	}

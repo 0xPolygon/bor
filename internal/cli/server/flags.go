@@ -663,7 +663,7 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	})
 	f.BoolFlag(&flagset.BoolFlag{
 		Name:    "pipeline.warm-snapshot",
-		Usage:   "Enable warm-cache handoff from execution prefetcher to pipelined SRC; no effect when import SRC is disabled",
+		Usage:   "Enable warm-node handoff to the pipelined SRC (witness-on: execution prefetcher snapshot; witness-off: previous SRC's committed nodes); no effect when import SRC is disabled",
 		Value:   &c.cliConfig.Pipeline.WarmSnapshot,
 		Default: c.cliConfig.Pipeline.WarmSnapshot,
 		Group:   "Pipeline",
