@@ -129,6 +129,11 @@ type EVM struct {
 	hasher    crypto.KeccakState // Keccak256 hasher instance shared across opcodes
 	hasherBuf common.Hash        // Keccak256 hasher result array shared across opcodes
 
+	// mulmodMemo caches the reciprocal of the last full-width MULMOD modulus.
+	// MULMOD-heavy workloads reuse a single modulus, and uint256.MulMod
+	// otherwise recomputes Reciprocal (~60% of the call cost) every time.
+	mulmodMemo modReciprocal
+
 	readOnly   bool   // Whether to throw on stateful modifications
 	returnData []byte // Last CALL's return data for subsequent reuse
 
