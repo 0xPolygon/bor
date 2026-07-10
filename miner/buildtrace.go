@@ -371,6 +371,10 @@ type buildTraceRecord struct {
 	ContractFams map[string]map[string]core.OpFamStat `json:"contract_fams,omitempty"`
 	// Validation/commit decomposition (statedb duration counters, us).
 	ValDetail map[string]int64 `json:"val_detail,omitempty"`
+	// Read-miss attribution vs the pool prefetcher (build path): same
+	// covered/unpref/diverged classes as the import record. "unpref" here
+	// means the tx was never pre-executed by the idle/builder pool prefetch.
+	MissAttrib map[string]int64 `json:"miss_attrib,omitempty"`
 
 	// Prefetch attribution counters from the shared per-block cache (v2.6.0 meters, per build).
 	PfAcctHitFromPrefetch int64 `json:"pf_acct_hit_from_pf,omitempty"`
@@ -581,7 +585,9 @@ func (bt *buildTrace) attachReaders(process, prefetch state.ReaderWithStats) {
 		r.SetReadDetail(bt.procDetail)
 	}
 	if r, ok := prefetch.(state.ReaderWithDetail); ok {
-		bt.prefDetail = &state.ReadDetail{}
+		// CollectTouched: the prefetch reader's touched-key set feeds the
+		// build-path miss-attribution join in finishBuild.
+		bt.prefDetail = &state.ReadDetail{CollectTouched: true}
 		r.SetReadDetail(bt.prefDetail)
 	}
 }
@@ -656,7 +662,7 @@ func (bt *buildTrace) finishBuild(env *environment, genParams *generateParams) {
 		if len(misses) > 0 {
 			evs := make([]buildTraceMissEvent, len(misses))
 			for i, m := range misses {
-				evs[i] = buildTraceMissEvent{K: m.Key, S: m.Storage, C: m.Code, Us: m.LatencyUs}
+				evs[i] = buildTraceMissEvent{K: m.Key, S: m.Storage, C: m.Code, Us: m.LatencyUs, T: m.TxIndex}
 			}
 			bt.rec.Misses = evs
 		}
@@ -664,6 +670,42 @@ func (bt *buildTrace) finishBuild(env *environment, genParams *generateParams) {
 	if bt.prefDetail != nil {
 		s := bt.prefDetail.Snapshot()
 		bt.rec.PrefReads = &s
+	}
+	// Miss attribution (build path): join builder-side miss events against the
+	// pool prefetcher's read set and the prefetched-tx set (idle + builder
+	// phases). Same classes as the import join in blockchain.go: covered =
+	// prefetch read the key yet the build exec still missed; unpref = the
+	// executing tx was never pre-executed by the pool prefetch; diverged =
+	// tx was prefetched but its pre-execution never touched this key.
+	if bt.prefDetail != nil && len(bt.rec.Misses) > 0 {
+		prefTouched := make(map[uint64]struct{})
+		for _, k := range bt.prefDetail.TakeTouched() {
+			prefTouched[k] = struct{}{}
+		}
+		prefDone := make(map[int32]bool, len(env.txs))
+		if genParams.prefetchedTxHashes != nil {
+			for i, tx := range env.txs {
+				if _, ok := genParams.prefetchedTxHashes.Load(tx.Hash()); ok {
+					prefDone[int32(i)] = true
+				}
+			}
+		}
+		attrib := make(map[string]int64, 8)
+		for _, ev := range bt.rec.Misses {
+			var class string
+			if _, touched := prefTouched[ev.K]; touched {
+				class = "covered"
+			} else if !prefDone[ev.T] {
+				class = "unpref"
+			} else {
+				class = "diverged"
+			}
+			attrib[class+"_n"]++
+			attrib[class+"_us"] += ev.Us
+		}
+		attrib["pref_done_n"] = int64(len(prefDone))
+		attrib["pref_touched_n"] = int64(len(prefTouched))
+		bt.rec.MissAttrib = attrib
 	}
 
 	// Exec segments + sampled opcode families (attached to the build EVM).
