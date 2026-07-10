@@ -540,6 +540,7 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 			// Import-path lab: per-imported-block read-detail records feed the
 			// same JSONL stream and the re-reference ring.
 			core.SetImportTraceHook(tracer.handleImport)
+			core.SetRaceTraceHook(tracer.handleRace)
 		}
 	}
 	// Subscribe for transaction insertion events (whether from network or resurrects)

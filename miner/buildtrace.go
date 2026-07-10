@@ -125,6 +125,7 @@ func (t *buildTracer) stop() {
 		return
 	}
 	core.SetImportTraceHook(nil)
+	core.SetRaceTraceHook(nil)
 	close(t.ch)
 	t.wg.Wait()
 	if d := t.dropped.Load(); d > 0 {
@@ -499,6 +500,29 @@ func (t *buildTracer) buildImportRecord(d core.ImportTraceData, ring *rerefRing,
 // handleImport is the core.ImportTraceHook target: hand off to the writer.
 func (t *buildTracer) handleImport(d core.ImportTraceData) {
 	t.send(d)
+}
+
+// raceTraceRecord pairs serial/parallel wall time for one block (dual-executor
+// race mode: parallelevm enabled, enforce off). Joined to imports by number.
+type raceTraceRecord struct {
+	Type        string `json:"type"` // "race"
+	Number      uint64 `json:"number"`
+	GasUsed     uint64 `json:"gas_used"`
+	SerialUs    int64  `json:"serial_us"`
+	ParallelUs  int64  `json:"parallel_us"`
+	ParallelWon bool   `json:"parallel_won"`
+	SerialErr   string `json:"serial_err,omitempty"`
+	ParallelErr string `json:"parallel_err,omitempty"`
+	AtNs        int64  `json:"at_ns"`
+}
+
+func (t *buildTracer) handleRace(d core.RaceTraceData) {
+	t.send(raceTraceRecord{
+		Type: "race", Number: d.Number, GasUsed: d.GasUsed,
+		SerialUs: d.SerialUs, ParallelUs: d.ParallelUs, ParallelWon: d.ParallelWon,
+		SerialErr: d.SerialErr, ParallelErr: d.ParallelErr,
+		AtNs: time.Now().UnixNano(),
+	})
 }
 
 // buildTriggerRecord captures build triggers and their disposition, including

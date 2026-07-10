@@ -848,6 +848,8 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		statedb  *state.StateDB
 		counter  *metrics.Counter
 		parallel bool
+		elapsed  time.Duration
+		vtime    time.Duration
 	}
 
 	// Only disable Parallel Processor for witness producers
@@ -874,15 +876,16 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 			parallelStatedb.StartPrefetcher("chain", witness, nil)
 			res, err := bc.parallelProcessor.Process(block, parallelStatedb, bc.cfg.VmConfig, nil, ctx)
 			blockExecutionParallelTimer.UpdateSince(pstart)
+			var vt time.Duration
 			if err == nil {
 				vstart := time.Now()
 				err = bc.validator.ValidateState(block, parallelStatedb, res, false)
-				vtime = time.Since(vstart)
+				vt = time.Since(vstart)
 			}
 			if res == nil {
 				res = &ProcessResult{}
 			}
-			resultChan <- Result{res.Receipts, res.Logs, res.GasUsed, err, parallelStatedb, blockExecutionParallelCounter, true}
+			resultChan <- Result{res.Receipts, res.Logs, res.GasUsed, err, parallelStatedb, blockExecutionParallelCounter, true, time.Since(pstart), vt}
 		}()
 	}
 
@@ -894,15 +897,16 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 			statedb.StartPrefetcher("chain", witness, nil)
 			res, err := bc.processor.Process(block, statedb, serialVMCfg, nil, ctx)
 			blockExecutionSerialTimer.UpdateSince(pstart)
+			var vt time.Duration
 			if err == nil {
 				vstart := time.Now()
 				err = bc.validator.ValidateState(block, statedb, res, false)
-				vtime = time.Since(vstart)
+				vt = time.Since(vstart)
 			}
 			if res == nil {
 				res = &ProcessResult{}
 			}
-			resultChan <- Result{res.Receipts, res.Logs, res.GasUsed, err, statedb, blockExecutionSerialCounter, false}
+			resultChan <- Result{res.Receipts, res.Logs, res.GasUsed, err, statedb, blockExecutionSerialCounter, false, time.Since(pstart), vt}
 		}()
 	}
 
@@ -920,12 +924,30 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	}
 
 	result.counter.Inc(1)
+	vtime = result.vtime
 
 	// Make sure we are not leaking any prefetchers
 	if processorCount == 2 {
+		winner := result
 		go func() {
 			second_result := <-resultChan
 			second_result.statedb.StopPrefetcher()
+			// Race lab: both executors ran to completion — report the pair.
+			if hook := getRaceTraceHook(); hook != nil {
+				d := RaceTraceData{Number: block.NumberU64(), GasUsed: winner.usedGas, ParallelWon: winner.parallel}
+				for _, r := range []Result{winner, second_result} {
+					errStr := ""
+					if r.err != nil {
+						errStr = r.err.Error()
+					}
+					if r.parallel {
+						d.ParallelUs, d.ParallelErr = r.elapsed.Microseconds(), errStr
+					} else {
+						d.SerialUs, d.SerialErr = r.elapsed.Microseconds(), errStr
+					}
+				}
+				hook(d)
+			}
 		}()
 	}
 

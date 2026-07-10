@@ -57,7 +57,39 @@ type ImportTraceData struct {
 	ValDetail map[string]int64
 }
 
+// RaceTraceData reports one dual-executor race outcome: when the parallel
+// processor is enabled without enforce, both executors run every block to
+// completion and this pairs their wall times on identical input.
+type RaceTraceData struct {
+	Number      uint64
+	GasUsed     uint64
+	SerialUs    int64
+	ParallelUs  int64
+	ParallelWon bool // which result the chain actually used
+	SerialErr   string
+	ParallelErr string
+}
+
 var importTraceHook atomic.Pointer[func(ImportTraceData)]
+
+var raceTraceHook atomic.Pointer[func(RaceTraceData)]
+
+// SetRaceTraceHook registers (or clears, with nil) the race trace consumer.
+func SetRaceTraceHook(h func(RaceTraceData)) {
+	if h == nil {
+		raceTraceHook.Store(nil)
+		return
+	}
+	raceTraceHook.Store(&h)
+}
+
+func getRaceTraceHook() func(RaceTraceData) {
+	p := raceTraceHook.Load()
+	if p == nil {
+		return nil
+	}
+	return *p
+}
 
 // SetImportTraceHook registers (or clears, with nil) the import trace consumer.
 func SetImportTraceHook(h func(ImportTraceData)) {
