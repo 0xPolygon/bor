@@ -44,6 +44,7 @@ type Config struct {
 	StatelessSelfValidation bool // Generate execution witnesses and self-check against them (testing purpose)
 	EnableWitnessStats      bool // Whether trie access statistics collection is enabled
 	EnableEVMSwitchDispatch bool // Use switch-based fast path interpreter
+	EnableAOT               bool // Dispatch registered transpiled contract bodies by code hash
 
 	// Segments, when non-nil, accumulates coarse per-segment execution wall
 	// time (lab instrumentation; see tracing.ExecSegments).
@@ -182,6 +183,19 @@ func (evm *EVM) Run(contract *Contract, input []byte, readOnly bool) (ret []byte
 				evm.Config.Tracer.OnFault(pcCopy, byte(op), gasCopy, cost, callContext, evm.depth, VMErrorFromErr(err))
 			}
 		}()
+	}
+
+	// AOT path: dispatch a transpiled contract body by code hash. Same
+	// gating rationale as the switch dispatch below (no tracer hooks, no
+	// verkle per-chunk gas).
+	if evm.Config.EnableAOT && !isEIP4762 && !debug {
+		if fn := aotLookup(contract.CodeHash); fn != nil {
+			ret, err = fn(evm, contract, callContext, jumpTable, interrupt)
+			if err == errStopToken {
+				err = nil
+			}
+			return ret, err
+		}
 	}
 
 	// Fast path: switch dispatch with inlined hot opcodes and gas accumulation.
