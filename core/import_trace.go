@@ -37,6 +37,19 @@ type ImportTraceData struct {
 	// splits of the same sampled-block attribution.
 	Opcodes   map[string]OpFamStat
 	Contracts map[string]OpFamStat
+	// Per-contract opcode-family split (top-N contracts) — compute-vs-state
+	// profile for native-execution candidate sizing.
+	ContractFams map[string]map[string]OpFamStat
+
+	// Read-miss attribution against the block prefetcher (counts and µs):
+	//   unpref_*   — miss in a tx the prefetcher never completed
+	//   diverged_* — tx was prefetched, but it never touched this key
+	//                (state drift sent the prefetch down a different path)
+	//   covered_*  — prefetcher touched the key, yet the exec read still
+	//                missed (evicted, or warmed too late — the commit race)
+	// plus pref_done_n (txs fully prefetched) and pref_touched_n (distinct
+	// keys the prefetcher read).
+	MissAttrib map[string]int64
 
 	// Validation decomposition from statedb's built-in duration counters (us):
 	// account/storage hashes (root computation), updates, and bor consensus

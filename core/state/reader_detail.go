@@ -22,6 +22,7 @@ type ReadMissEvent struct {
 	Storage   bool   // true = storage slot
 	Code      bool   // true = contract code (miss vs the shared code LRU)
 	LatencyUs int64
+	TxIndex   int32 // index of the tx executing when the miss occurred (-1 = outside txs)
 }
 
 // ReadDetailStats are cumulative time/count sums split by hit/miss and kind.
@@ -53,6 +54,16 @@ type ReadDetail struct {
 	misses        []ReadMissEvent
 	touched       map[uint64]struct{}
 	missesDropped atomic.Int64
+	curTx         atomic.Int32
+}
+
+// SetTxIndex records which transaction is currently executing; subsequent
+// miss events are stamped with it. Propagated from StateDB.SetTxContext.
+func (d *ReadDetail) SetTxIndex(i int32) {
+	if d == nil {
+		return
+	}
+	d.curTx.Store(i)
 }
 
 // Snapshot returns the current cumulative sums (µs).
@@ -163,6 +174,7 @@ func (d *ReadDetail) TakeTouched() []uint64 {
 }
 
 func (d *ReadDetail) appendMiss(ev ReadMissEvent) {
+	ev.TxIndex = d.curTx.Load()
 	d.mu.Lock()
 	if len(d.misses) < readDetailMaxMisses {
 		d.misses = append(d.misses, ev)

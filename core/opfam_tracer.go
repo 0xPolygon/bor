@@ -84,6 +84,13 @@ func init() {
 
 type opStat struct{ n, ns int64 }
 
+// conStat is one executing contract's attribution: total plus a per-family
+// split (the compute-vs-state profile that sizes native-execution candidates).
+type conStat struct {
+	all  opStat
+	fams [opFamCount]opStat
+}
+
 type OpFamTracer struct {
 	last    time.Time
 	lastFam uint8
@@ -93,14 +100,14 @@ type OpFamTracer struct {
 
 	// Per-contract attribution. The executing address only changes at call
 	// boundaries, so cache the current bucket and re-resolve on change.
-	contracts map[common.Address]*opStat
+	contracts map[common.Address]*conStat
 	curAddr   common.Address
-	curCon    *opStat
-	lastCon   *opStat // bucket of the contract that executed lastOp
+	curCon    *conStat
+	lastCon   *conStat // bucket of the contract that executed lastOp
 }
 
 func NewOpFamTracer() *OpFamTracer {
-	return &OpFamTracer{contracts: make(map[common.Address]*opStat)}
+	return &OpFamTracer{contracts: make(map[common.Address]*conStat)}
 }
 
 func (t *OpFamTracer) onOpcode(pc uint64, op byte, gas, cost uint64, scope tracing.OpContext, rData []byte, depth int, err error) {
@@ -110,19 +117,21 @@ func (t *OpFamTracer) onOpcode(pc uint64, op byte, gas, cost uint64, scope traci
 		t.fams[t.lastFam].ns += d
 		t.ops[t.lastOp].ns += d
 		if t.lastCon != nil {
-			t.lastCon.ns += d
+			t.lastCon.all.ns += d
+			t.lastCon.fams[t.lastFam].ns += d
 		}
 	}
 	if addr := scope.Address(); addr != t.curAddr || t.curCon == nil {
 		con := t.contracts[addr]
 		if con == nil {
-			con = &opStat{}
+			con = &conStat{}
 			t.contracts[addr] = con
 		}
 		t.curAddr, t.curCon = addr, con
 	}
-	t.curCon.n++
 	fam := opFamTable[op]
+	t.curCon.all.n++
+	t.curCon.fams[fam].n++
 	t.fams[fam].n++
 	t.ops[op].n++
 	t.lastFam = fam
@@ -143,7 +152,8 @@ func (t *OpFamTracer) onTxEnd(receipt *types.Receipt, err error) {
 		t.fams[t.lastFam].ns += d
 		t.ops[t.lastOp].ns += d
 		if t.lastCon != nil {
-			t.lastCon.ns += d
+			t.lastCon.all.ns += d
+			t.lastCon.fams[t.lastFam].ns += d
 		}
 		t.last = time.Time{}
 	}
@@ -213,7 +223,7 @@ func (t *OpFamTracer) ResultContracts(topN int) map[string]OpFamStat {
 	}
 	all := make([]kv, 0, len(t.contracts))
 	for addr, s := range t.contracts {
-		all = append(all, kv{addr, *s})
+		all = append(all, kv{addr, s.all})
 	}
 	if len(all) == 0 {
 		return nil
@@ -233,5 +243,38 @@ func (t *OpFamTracer) ResultContracts(topN int) map[string]OpFamStat {
 		out["other"] = OpFamStat{N: other.n, Us: other.ns / 1e3}
 	}
 	out["n_contracts"] = OpFamStat{N: int64(len(all))}
+	return out
+}
+
+// ResultContractFams returns, for the topN contracts by attributed time, the
+// per-family split of that contract's opcodes — the compute-vs-state profile
+// that sizes native-execution (AOT) candidates.
+func (t *OpFamTracer) ResultContractFams(topN int) map[string]map[string]OpFamStat {
+	type kv struct {
+		addr common.Address
+		s    *conStat
+	}
+	all := make([]kv, 0, len(t.contracts))
+	for addr, s := range t.contracts {
+		all = append(all, kv{addr, s})
+	}
+	if len(all) == 0 {
+		return nil
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].s.all.ns > all[j].s.all.ns })
+	if len(all) > topN {
+		all = all[:topN]
+	}
+	out := make(map[string]map[string]OpFamStat, len(all))
+	for _, e := range all {
+		fams := make(map[string]OpFamStat, opFamCount)
+		for i, f := range e.s.fams {
+			if f.n == 0 {
+				continue
+			}
+			fams[opFamNames[i]] = OpFamStat{N: f.n, Us: f.ns / 1e3}
+		}
+		out[e.addr.Hex()] = fams
+	}
 	return out
 }

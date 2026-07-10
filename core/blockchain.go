@@ -759,7 +759,9 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 			r.SetReadDetail(importDetailProc)
 		}
 		if r, ok := prefetch.(state.ReaderWithDetail); ok {
-			importDetailPref = &state.ReadDetail{}
+			// CollectTouched records the prefetcher's read set — joined against
+			// the exec-side miss events at emit for miss attribution.
+			importDetailPref = &state.ReadDetail{CollectTouched: true}
 			r.SetReadDetail(importDetailPref)
 		}
 		// Segment timers and the sampled opcode-family tracer are only safe to
@@ -810,11 +812,27 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		accountHitFromPrefetchUniqueMeter.Mark(processStats.AccountHitFromPrefetchUnique)
 	}()
 
+	// Lab instrumentation: when tracing, record which txs the prefetcher fully
+	// completed (concurrent-safe; snapshotted at emit for miss attribution).
+	var prefDoneTxs sync.Map // common.Hash -> struct{}
 	go func(start time.Time, throwaway *state.StateDB, block *types.Block) {
 		// Disable tracing for prefetcher executions.
 		vmCfg := bc.cfg.VmConfig
 		vmCfg.Tracer = nil
-		bc.prefetcher.Prefetch(block, throwaway, vmCfg, false, followupInterrupt)
+		if sp, ok := bc.prefetcher.(*StatePrefetcher); ok && importHook != nil {
+			txs := block.Transactions()
+			ch := make(chan *types.Transaction, len(txs))
+			for _, tx := range txs {
+				ch <- tx
+			}
+			close(ch)
+			sp.PrefetchStream(block.Header(), throwaway, vmCfg, false, followupInterrupt, nil, ch,
+				func(hash common.Hash, gasUsed uint64) {
+					prefDoneTxs.Store(hash, struct{}{})
+				})
+		} else {
+			bc.prefetcher.Prefetch(block, throwaway, vmCfg, false, followupInterrupt)
+		}
 
 		blockPrefetchExecuteTimer.Update(time.Since(start))
 		if followupInterrupt.Load() {
@@ -935,7 +953,39 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 			data.OpFams = importOpFam.Result()
 			data.Opcodes = importOpFam.ResultOpcodes(24)
 			data.Contracts = importOpFam.ResultContracts(12)
+			data.ContractFams = importOpFam.ResultContractFams(8)
 			data.OpFamSampled = true
+		}
+		// Miss attribution: join exec-side miss events against the prefetcher's
+		// read set and completed-tx set (both snapshotted now; the prefetcher
+		// has had the whole block duration, late touches count as covered).
+		if importDetailPref != nil && len(data.Misses) > 0 {
+			prefTouched := make(map[uint64]struct{})
+			for _, k := range importDetailPref.TakeTouched() {
+				prefTouched[k] = struct{}{}
+			}
+			prefDone := make(map[int32]bool, len(block.Transactions()))
+			for i, tx := range block.Transactions() {
+				if _, ok := prefDoneTxs.Load(tx.Hash()); ok {
+					prefDone[int32(i)] = true
+				}
+			}
+			attrib := make(map[string]int64, 8)
+			for _, ev := range data.Misses {
+				var class string
+				if _, touched := prefTouched[ev.Key]; touched {
+					class = "covered" // prefetcher read it, exec missed anyway
+				} else if !prefDone[ev.TxIndex] {
+					class = "unpref"
+				} else {
+					class = "diverged"
+				}
+				attrib[class+"_n"]++
+				attrib[class+"_us"] += ev.LatencyUs
+			}
+			attrib["pref_done_n"] = int64(len(prefDone))
+			attrib["pref_touched_n"] = int64(len(prefTouched))
+			data.MissAttrib = attrib
 		}
 		if sdb := result.statedb; sdb != nil {
 			data.ValDetail = map[string]int64{

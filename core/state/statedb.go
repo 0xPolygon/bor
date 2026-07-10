@@ -1465,6 +1465,10 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 func (s *StateDB) SetTxContext(thash common.Hash, ti int) {
 	s.thash = thash
 	s.txIndex = ti
+	// Lab instrumentation: stamp subsequent read-miss events with the tx index.
+	if rd, ok := s.reader.(ReaderWithDetail); ok {
+		rd.GetReadDetail().SetTxIndex(int32(ti))
+	}
 }
 
 func (s *StateDB) clearJournalAndRefund() {
