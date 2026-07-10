@@ -64,6 +64,10 @@ func (p *StateProcessor) chainConfig() *params.ChainConfig {
 // returns the amount of gas that was used in the process. If any of the
 // transactions failed to execute due to insufficient gas it will return an error.
 func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg vm.Config, author *common.Address, interruptCtx context.Context) (*ProcessResult, error) {
+	var procStart time.Time
+	if cfg.Segments != nil {
+		procStart = time.Now()
+	}
 	var (
 		config      = p.chainConfig()
 		receipts    types.Receipts
@@ -108,6 +112,11 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 
 	// Iterate over and process the individual transactions
 	txs := block.Transactions()
+	var loopStart time.Time
+	if seg := cfg.Segments; seg != nil {
+		loopStart = time.Now()
+		seg.ProcPrologNs.Add(loopStart.Sub(procStart).Nanoseconds())
+	}
 	for i, tx := range txs {
 		// Check if execution should be cancelled or not
 		select {
@@ -140,6 +149,9 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 
 		receipts = append(receipts, receipt)
 		allLogs = append(allLogs, receipt.Logs...)
+	}
+	if seg := cfg.Segments; seg != nil {
+		seg.ProcLoopNs.Add(time.Since(loopStart).Nanoseconds())
 	}
 
 	// Polygon/bor: EIP-6110, EIP-7002, and EIP-7251 are not supported
@@ -181,7 +193,14 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards), apply
 	// state sync event (if any), and append the receipt.
 	receiptsCountBeforeFinalize := len(receipts)
+	var finalStart time.Time
+	if cfg.Segments != nil {
+		finalStart = time.Now()
+	}
 	receipts, err = p.chain.Engine().Finalize(p.chain, header, tracingStateDB, block.Body(), receipts)
+	if seg := cfg.Segments; seg != nil {
+		seg.ProcFinalNs.Add(time.Since(finalStart).Nanoseconds())
+	}
 	if err != nil {
 		stateSyncEndErr = err
 		return nil, err
