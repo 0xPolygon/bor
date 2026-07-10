@@ -4,6 +4,7 @@ import (
 	stdcontext "context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/VictoriaMetrics/fastcache"
@@ -38,9 +39,15 @@ type AddressBiasedCache struct {
 	// Set of preloaded addresses for fast lookup
 	preloadedAddrs sync.Map // map[common.Hash]struct{}
 
-	// RW mutex to protect cache operations and prevent race conditions
-	// between async preloading and concurrent reads/writes
+	// Mutex guarding the preloader's Has+Set check against concurrent
+	// exec-path writes. Only taken by Set/Del while preloads > 0; the
+	// fastcache instances are internally thread-safe, so Get/Has never
+	// lock and Set/Del go lock-free once all preloads have finished.
 	mu sync.RWMutex
+
+	// Number of preload goroutines still running. Incremented before each
+	// goroutine is spawned, decremented when it exits.
+	preloads atomic.Int32
 
 	// Context for canceling preload operations
 	ctx    stdcontext.Context
@@ -73,6 +80,7 @@ func NewAddressBiasedCache(db ethdb.Database, addressCacheSizes map[common.Addre
 
 		// Start async preloading
 		cache.wg.Add(1)
+		cache.preloads.Add(1)
 		go cache.preloadAddressAsync(db, addr, cacheSize)
 	}
 
@@ -101,6 +109,7 @@ func (c *AddressBiasedCache) initAddressCache(addr common.Address, cacheSize int
 // structurally impossible.
 func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.Address, cacheSize int) {
 	defer c.wg.Done()
+	defer c.preloads.Add(-1)
 	startTime := time.Now()
 
 	accountHash := crypto.Keccak256Hash(addr.Bytes())
@@ -376,11 +385,10 @@ func (c *AddressBiasedCache) routeCache(key []byte) (*fastcache.Cache, bool) {
 	return c.commonCache, false
 }
 
-// Get retrieves the value for the given key from the appropriate cache
+// Get retrieves the value for the given key from the appropriate cache.
+// Lock-free: fastcache is internally thread-safe, and reads need no
+// ordering guarantee against the preloader's check-and-set.
 func (c *AddressBiasedCache) Get(key []byte) []byte {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	cache, isAddressCache := c.routeCache(key)
 	value := cache.Get(nil, key)
 
@@ -396,10 +404,15 @@ func (c *AddressBiasedCache) Get(key []byte) []byte {
 	return value
 }
 
-// Set stores the key-value pair in the appropriate cache
+// Set stores the key-value pair in the appropriate cache. The mutex is
+// only taken while a preload is still running, to keep the preloader's
+// Has+Set check atomic against exec-path writes; afterwards writes are
+// lock-free (fastcache is internally thread-safe).
 func (c *AddressBiasedCache) Set(key, value []byte) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	if c.preloads.Load() != 0 {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+	}
 
 	cache, isAddressCache := c.routeCache(key)
 	cache.Set(key, value)
@@ -409,19 +422,21 @@ func (c *AddressBiasedCache) Set(key, value []byte) {
 	}
 }
 
-// Has checks if the key exists in the appropriate cache
+// Has checks if the key exists in the appropriate cache. Lock-free for
+// the same reason as Get.
 func (c *AddressBiasedCache) Has(key []byte) bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	cache, _ := c.routeCache(key)
 	return cache.Has(key)
 }
 
-// Del removes the key from the appropriate cache
+// Del removes the key from the appropriate cache. Locked only while a
+// preload is running, like Set, so a deletion cannot interleave with the
+// preloader's check-and-set and be resurrected by stale disk data.
 func (c *AddressBiasedCache) Del(key []byte) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	if c.preloads.Load() != 0 {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+	}
 
 	cache, _ := c.routeCache(key)
 	cache.Del(key)
