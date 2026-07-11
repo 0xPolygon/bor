@@ -19,6 +19,7 @@ package legacypool
 
 import (
 	"errors"
+	"fmt"
 	"maps"
 	"math"
 	"math/big"
@@ -140,6 +141,9 @@ var (
 	// result (filter missed the publish prediction but matched an earlier
 	// call's scan within the same snapshot lifetime).
 	pendingPrefilterLateHitMeter = metrics.NewRegisteredMeter("txpool/pendingprefilter/latehit", nil)
+
+	// pendingMissLogCounter rate-limits the prefilter-miss debug log.
+	pendingMissLogCounter atomic.Int64
 	reheapTimer           = metrics.NewRegisteredTimer("txpool/reheap", nil)
 	urgentHeapInitTimer   = metrics.NewRegisteredTimer("txpool/heapinit/urgent", nil)
 	floatingHeapInitTimer = metrics.NewRegisteredTimer("txpool/heapinit/floating", nil)
@@ -391,6 +395,18 @@ type filteredCut struct {
 
 func (c *filteredCut) equal(o *filteredCut) bool {
 	return c.gasCap == o.gasCap && uint256PtrEq(c.minTip, o.minTip) && uint256PtrEq(c.baseFee, o.baseFee)
+}
+
+// String implements fmt.Stringer for the prefilter-miss debug log.
+func (c *filteredCut) String() string {
+	tip, fee := "nil", "nil"
+	if c.minTip != nil {
+		tip = c.minTip.Dec()
+	}
+	if c.baseFee != nil {
+		fee = c.baseFee.Dec()
+	}
+	return fmt.Sprintf("tip=%s fee=%s cap=%d", tip, fee, c.gasCap)
 }
 
 // filteredView is a pending view truncated for one concrete filter.
@@ -861,6 +877,19 @@ func (pool *LegacyPool) Pending(filter txpool.PendingFilter, interrupt *atomic.B
 		}
 	}
 	pendingPrefilterMissMeter.Mark(1)
+	if n := pendingMissLogCounter.Add(1); n%25 == 1 {
+		s0, s1, sl := "nil", "nil", "nil"
+		if snap.filtered[0] != nil {
+			s0 = snap.filtered[0].filteredCut.String()
+		}
+		if snap.filtered[1] != nil {
+			s1 = snap.filtered[1].filteredCut.String()
+		}
+		if late := snap.lateFiltered.Load(); late != nil {
+			sl = late.filteredCut.String()
+		}
+		log.Info("Pending prefilter miss", "req", req.String(), "slot0", s0, "slot1", s1, "late", sl)
+	}
 
 	pending := make(map[common.Address][]*txpool.LazyTransaction, len(snap.view))
 	for addr, lazies := range snap.view {
