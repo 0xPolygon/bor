@@ -5749,6 +5749,16 @@ func TestPendingPrefilterDifferential(t *testing.T) {
 	check("mismatch-gascap", txpool.PendingFilter{MinTip: uint256.NewInt(2), GasLimitCap: 50000})
 	check("empty", txpool.PendingFilter{})
 
+	// A miner-shaped filter (tip + base fee) that misses the prediction parks
+	// its scan result; the repeat call must serve it (late hit) unchanged.
+	minerShaped := txpool.PendingFilter{MinTip: uint256.NewInt(2), BaseFee: uint256.NewInt(1)}
+	check("miner-shaped first", minerShaped)
+	lateHits := pendingPrefilterLateHitMeter.Snapshot().Count()
+	check("miner-shaped repeat", minerShaped)
+	if pendingPrefilterLateHitMeter.Snapshot().Count() <= lateHits {
+		t.Fatalf("repeated miner-shaped filter did not serve the parked late result")
+	}
+
 	// A gas tip bump republishes with a new prediction; the new predicted
 	// filter must hit again and reflect the drop.
 	pool.SetGasTip(big.NewInt(3))
