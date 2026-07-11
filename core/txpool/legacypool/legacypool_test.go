@@ -5655,3 +5655,108 @@ func TestPendingSnapshotDifferential(t *testing.T) {
 	pool.addRemotesSync([]*types.Transaction{pricedTransaction(0, 100000, big.NewInt(5), keys[5])})
 	compare("post-reset add")
 }
+
+// TestPendingPrefilterDifferential verifies that the publish-time pre-filtered
+// fast path and the read-time filtering fallback produce identical results,
+// for both the predicted filter and arbitrary mismatched ones.
+func TestPendingPrefilterDifferential(t *testing.T) {
+	t.Parallel()
+
+	pool, _ := setupPool()
+	defer pool.Close()
+
+	keys := make([]*ecdsa.PrivateKey, 5)
+	for i := range keys {
+		keys[i], _ = crypto.GenerateKey()
+		testAddBalance(pool, crypto.PubkeyToAddress(keys[i].PublicKey), big.NewInt(10000000))
+	}
+
+	// Accounts 0-3 pay uniform tips 1-4; account 4 drops its tip mid-stream so
+	// filtered prefixes truncate in the middle of a list.
+	var batch []*types.Transaction
+	for i := 0; i < 4; i++ {
+		for n := uint64(0); n < 4; n++ {
+			batch = append(batch, pricedTransaction(n, 100000, big.NewInt(int64(i+1)), keys[i]))
+		}
+	}
+	batch = append(batch,
+		pricedTransaction(0, 100000, big.NewInt(5), keys[4]),
+		pricedTransaction(1, 100000, big.NewInt(5), keys[4]),
+		pricedTransaction(2, 100000, big.NewInt(1), keys[4]),
+		pricedTransaction(3, 100000, big.NewInt(5), keys[4]),
+	)
+	pool.addRemotesSync(batch)
+
+	// reference reproduces Pending's truncation rules directly on the pool
+	// content, independent of the snapshot machinery.
+	reference := func(filter txpool.PendingFilter) map[common.Address][]common.Hash {
+		pool.mu.RLock()
+		defer pool.mu.RUnlock()
+
+		want := make(map[common.Address][]common.Hash)
+		for addr, list := range pool.pending {
+			flat := list.txs.Flatten()
+			var hashes []common.Hash
+			for _, tx := range flat {
+				if filter.MinTip != nil && tx.EffectiveGasTipIntCmp(filter.MinTip, filter.BaseFee) < 0 {
+					break
+				}
+				if filter.GasLimitCap != 0 && tx.Gas() > filter.GasLimitCap {
+					break
+				}
+				hashes = append(hashes, tx.Hash())
+			}
+			if len(hashes) > 0 {
+				want[addr] = hashes
+			}
+		}
+		return want
+	}
+
+	check := func(step string, filter txpool.PendingFilter) {
+		t.Helper()
+
+		got := pool.Pending(filter, nil)
+		want := reference(filter)
+		if len(got) != len(want) {
+			t.Fatalf("%s: got %d accounts, want %d", step, len(got), len(want))
+		}
+		for addr, hashes := range want {
+			g := got[addr]
+			if len(g) != len(hashes) {
+				t.Fatalf("%s: account %x: got %d txs, want %d", step, addr, len(g), len(hashes))
+			}
+			for i, h := range hashes {
+				if g[i].Hash != h {
+					t.Fatalf("%s: account %x tx %d: got %x, want %x", step, addr, i, g[i].Hash, h)
+				}
+			}
+		}
+	}
+
+	// The filter the snapshot was pre-built for must take the fast path and
+	// still match the reference semantics.
+	snap := pool.pendingView.Load()
+	predicted := txpool.PendingFilter{MinTip: snap.minTip, BaseFee: snap.baseFee, GasLimitCap: snap.gasCap}
+	hits := pendingPrefilterHitMeter.Snapshot().Count()
+	check("predicted", predicted)
+	if pendingPrefilterHitMeter.Snapshot().Count() <= hits {
+		t.Fatalf("predicted filter did not take the pre-filtered fast path")
+	}
+
+	// Mismatched filters must fall back to read-time filtering, still correct.
+	check("mismatch-tip", txpool.PendingFilter{MinTip: uint256.NewInt(3)})
+	check("mismatch-gascap", txpool.PendingFilter{MinTip: uint256.NewInt(2), GasLimitCap: 50000})
+	check("empty", txpool.PendingFilter{})
+
+	// A gas tip bump republishes with a new prediction; the new predicted
+	// filter must hit again and reflect the drop.
+	pool.SetGasTip(big.NewInt(3))
+	snap = pool.pendingView.Load()
+	predicted = txpool.PendingFilter{MinTip: snap.minTip, BaseFee: snap.baseFee, GasLimitCap: snap.gasCap}
+	hits = pendingPrefilterHitMeter.Snapshot().Count()
+	check("post-setgastip predicted", predicted)
+	if pendingPrefilterHitMeter.Snapshot().Count() <= hits {
+		t.Fatalf("post-SetGasTip predicted filter did not take the fast path")
+	}
+}

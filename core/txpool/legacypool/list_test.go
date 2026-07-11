@@ -396,7 +396,7 @@ func TestLazyFlattenDifferential(t *testing.T) {
 		t.Helper()
 
 		want := l.txs.Flatten()
-		got := l.LazyFlatten(nil)
+		got, _ := l.LazyFlatten(nil, nil, nil, 0)
 		require.Equal(t, len(want), len(got), "length mismatch after %s", step)
 
 		for i := range want {
@@ -405,7 +405,7 @@ func TestLazyFlattenDifferential(t *testing.T) {
 			require.Equal(t, want[i].Gas(), got[i].Gas, "gas mismatch at %d after %s", i, step)
 		}
 		// A second call with no mutation must return the identical shared slice.
-		again := l.LazyFlatten(nil)
+		again, _ := l.LazyFlatten(nil, nil, nil, 0)
 		if len(got) > 0 {
 			require.Same(t, got[0], again[0], "unchanged view was rebuilt after %s", step)
 		}

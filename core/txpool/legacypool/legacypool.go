@@ -130,6 +130,12 @@ var (
 	// conversion untouched, a miss rebuilds it because the account changed.
 	lazyViewHitMeter  = metrics.NewRegisteredMeter("txpool/lazyview/hit", nil)
 	lazyViewMissMeter = metrics.NewRegisteredMeter("txpool/lazyview/miss", nil)
+
+	// pendingPrefilterHitMeter/MissMeter track whether Pending could serve the
+	// snapshot pre-filtered at publish time (hit) or had to fall back to
+	// filtering at read time because the requested filter differed (miss).
+	pendingPrefilterHitMeter  = metrics.NewRegisteredMeter("txpool/pendingprefilter/hit", nil)
+	pendingPrefilterMissMeter = metrics.NewRegisteredMeter("txpool/pendingprefilter/miss", nil)
 	reheapTimer           = metrics.NewRegisteredTimer("txpool/reheap", nil)
 	urgentHeapInitTimer   = metrics.NewRegisteredTimer("txpool/heapinit/urgent", nil)
 	floatingHeapInitTimer = metrics.NewRegisteredTimer("txpool/heapinit/floating", nil)
@@ -350,21 +356,54 @@ type txpoolResetRequest struct {
 // pendingSnapshot is an immutable view of the executable transactions,
 // grouped by origin account and sorted by nonce. Readers iterate it without
 // holding pool.mu; staleness is bounded by the next runReorg publication.
+//
+// Alongside the raw view it carries a pre-filtered variant for the filter the
+// miner is predicted to request next (minTip/baseFee/gasCap below). When a
+// Pending call's filter matches exactly, serving it is a map copy with no
+// per-transaction fee comparisons.
 type pendingSnapshot struct {
-	view map[common.Address][]*txpool.LazyTransaction
+	view     map[common.Address][]*txpool.LazyTransaction
+	filtered map[common.Address][]*txpool.LazyTransaction
+	minTip   *uint256.Int
+	baseFee  *uint256.Int
+	gasCap   uint64
 }
 
 // publishPendingView rebuilds the copy-on-write pending snapshot served by
 // Pending. Callers must hold pool.mu. Per-account slices are reused from the
 // generation-tagged lazy cache, so unchanged accounts cost one map insert.
+//
+// The predicted miner filter mirrors miner/worker.buildDefaultFilter: the
+// pool's gas tip, the next block's base fee and the fork-gated per-transaction
+// gas cap. A wrong prediction is harmless — Pending falls back to filtering
+// at read time.
 func (pool *LegacyPool) publishPendingView() {
-	view := make(map[common.Address][]*txpool.LazyTransaction, len(pool.pending))
-	for addr, list := range pool.pending {
-		if lazies := list.LazyFlatten(pool); len(lazies) > 0 {
-			view[addr] = lazies
+	var (
+		minTip  = pool.gasTip.Load()
+		baseFee *uint256.Int
+		gasCap  uint64
+	)
+	if head := pool.currentHead.Load(); head != nil {
+		next := new(big.Int).Add(head.Number, big.NewInt(1))
+		if pool.chainconfig.IsLondon(next) {
+			baseFee = uint256.MustFromBig(eip1559.CalcBaseFee(pool.chainconfig, head))
+		}
+		if pool.chainconfig.IsOsaka(next) || (pool.chainconfig.Bor != nil && pool.chainconfig.Bor.IsMadhugiri(next)) {
+			gasCap = params.MaxTxGas
 		}
 	}
-	pool.pendingView.Store(&pendingSnapshot{view: view})
+	view := make(map[common.Address][]*txpool.LazyTransaction, len(pool.pending))
+	filtered := make(map[common.Address][]*txpool.LazyTransaction, len(pool.pending))
+	for addr, list := range pool.pending {
+		lazies, flen := list.LazyFlatten(pool, minTip, baseFee, gasCap)
+		if len(lazies) > 0 {
+			view[addr] = lazies
+		}
+		if flen > 0 {
+			filtered[addr] = lazies[:flen]
+		}
+	}
+	pool.pendingView.Store(&pendingSnapshot{view: view, filtered: filtered, minTip: minTip, baseFee: baseFee, gasCap: gasCap})
 }
 
 // New creates a new transaction pool to gather, sort and filter inbound
@@ -759,6 +798,23 @@ func (pool *LegacyPool) Pending(filter txpool.PendingFilter, interrupt *atomic.B
 	if interrupt == nil {
 		interrupt = new(atomic.Bool)
 	}
+
+	// Fast path: the snapshot was pre-filtered at publish time for exactly
+	// this filter, so serving it needs no per-transaction fee comparisons.
+	if filter.BlobFee == nil && filter.GasLimitCap == snap.gasCap &&
+		uint256PtrEq(filter.MinTip, snap.minTip) && uint256PtrEq(filter.BaseFee, snap.baseFee) {
+		pendingPrefilterHitMeter.Mark(1)
+
+		pending := make(map[common.Address][]*txpool.LazyTransaction, len(snap.filtered))
+		for addr, lazies := range snap.filtered {
+			if interrupt.Load() {
+				return map[common.Address][]*txpool.LazyTransaction{}
+			}
+			pending[addr] = lazies
+		}
+		return pending
+	}
+	pendingPrefilterMissMeter.Mark(1)
 
 	pending := make(map[common.Address][]*txpool.LazyTransaction, len(snap.view))
 	for addr, lazies := range snap.view {

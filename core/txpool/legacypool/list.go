@@ -335,6 +335,16 @@ type list struct {
 	lazyMu   sync.Mutex
 	lazyGen  uint64
 	lazyView []*txpool.LazyTransaction
+
+	// Cached filtered-prefix length of lazyView for the last (minTip, baseFee,
+	// gasCap) it was computed against. Invalidated whenever lazyView is rebuilt
+	// or the filter values change, so republishing an unchanged account under
+	// an unchanged filter skips the per-transaction fee comparisons.
+	filterValid   bool
+	filterMinTip  *uint256.Int
+	filterBaseFee *uint256.Int
+	filterGasCap  uint64
+	filterLen     int
 }
 
 // newList creates a new transaction list for maintaining nonce-indexable fast,
@@ -356,9 +366,11 @@ func (l *list) Contains(nonce uint64) bool {
 
 // LazyFlatten returns the account's transactions as a nonce-sorted, shared
 // []*LazyTransaction, rebuilding the conversion only when the underlying
-// SortedMap content changed since the last call. Callers must treat the
+// SortedMap content changed since the last call, together with the length of
+// the leading prefix passing the (minTip, baseFee, gasCap) filter — the same
+// truncation rules Pending applies at read time. Callers must treat the
 // returned slice as read-only; prefix subslicing (tip/gas filtering) is fine.
-func (l *list) LazyFlatten(pool *LegacyPool) []*txpool.LazyTransaction {
+func (l *list) LazyFlatten(pool *LegacyPool, minTip, baseFee *uint256.Int, gasCap uint64) ([]*txpool.LazyTransaction, int) {
 	txs, gen := l.txs.flattenWithGen()
 
 	l.lazyMu.Lock()
@@ -366,26 +378,53 @@ func (l *list) LazyFlatten(pool *LegacyPool) []*txpool.LazyTransaction {
 
 	if l.lazyView != nil && l.lazyGen == gen {
 		lazyViewHitMeter.Mark(1)
-		return l.lazyView
-	}
-	lazyViewMissMeter.Mark(1)
+	} else {
+		lazyViewMissMeter.Mark(1)
 
-	lazies := make([]*txpool.LazyTransaction, len(txs))
-	for i, tx := range txs {
-		lazies[i] = &txpool.LazyTransaction{
-			Pool:      pool,
-			Hash:      tx.Hash(),
-			Tx:        tx,
-			Time:      tx.Time(),
-			GasFeeCap: uint256.MustFromBig(tx.GasFeeCap()),
-			GasTipCap: uint256.MustFromBig(tx.GasTipCap()),
-			Gas:       tx.Gas(),
-			BlobGas:   tx.BlobGas(),
+		lazies := make([]*txpool.LazyTransaction, len(txs))
+		for i, tx := range txs {
+			lazies[i] = &txpool.LazyTransaction{
+				Pool:      pool,
+				Hash:      tx.Hash(),
+				Tx:        tx,
+				Time:      tx.Time(),
+				GasFeeCap: uint256.MustFromBig(tx.GasFeeCap()),
+				GasTipCap: uint256.MustFromBig(tx.GasTipCap()),
+				Gas:       tx.Gas(),
+				BlobGas:   tx.BlobGas(),
+			}
+		}
+		l.lazyGen, l.lazyView = gen, lazies
+		l.filterValid = false
+	}
+
+	if l.filterValid && uint256PtrEq(l.filterMinTip, minTip) && uint256PtrEq(l.filterBaseFee, baseFee) && l.filterGasCap == gasCap {
+		return l.lazyView, l.filterLen
+	}
+
+	n := len(l.lazyView)
+	for i, ltx := range l.lazyView {
+		if minTip != nil && ltx.Tx.EffectiveGasTipIntCmp(minTip, baseFee) < 0 {
+			n = i
+			break
+		}
+		if gasCap != 0 && ltx.Gas > gasCap {
+			n = i
+			break
 		}
 	}
-	l.lazyGen, l.lazyView = gen, lazies
+	l.filterValid, l.filterMinTip, l.filterBaseFee, l.filterGasCap, l.filterLen = true, minTip, baseFee, gasCap, n
 
-	return lazies
+	return l.lazyView, n
+}
+
+// uint256PtrEq reports whether two optional uint256 values are equal, treating
+// nil as equal only to nil.
+func uint256PtrEq(a, b *uint256.Int) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Eq(b)
 }
 
 // Add tries to insert a new transaction into the list, returning whether the
