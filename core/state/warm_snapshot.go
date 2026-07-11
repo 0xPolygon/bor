@@ -65,6 +65,17 @@ type warmKey struct {
 	hash  common.Hash
 }
 
+// WarmNodeSource abstracts a warm trie-node lookup consulted before pathdb.
+// Implementations must be safe for concurrent lookups and must only return a
+// blob whose keccak equals the expected hash — the hash is part of the lookup
+// key, so a stale or foreign entry is a structural miss, never wrong data.
+// Both WarmSnapshot (single-block, immutable) and WarmNodeRing (multi-block,
+// bounded) implement it.
+type WarmNodeSource interface {
+	Lookup(owner common.Hash, path []byte, expectedHash common.Hash) ([]byte, bool)
+	Len() int
+}
+
 // NewWarmSnapshot constructs a snapshot from per-trie node maps already
 // extracted from a quiesced prefetcher. Each entry in tries supplies a trie
 // owner and a (path -> blob) map (typically the result of trie.Witness()).
@@ -236,10 +247,10 @@ type snapshotStateDatabase struct {
 	*CachingDB
 
 	nodeDB   database.NodeDatabase
-	snapshot *WarmSnapshot
+	snapshot WarmNodeSource
 }
 
-func newSnapshotStateDatabase(inner *CachingDB, snapshot *WarmSnapshot) *snapshotStateDatabase {
+func newSnapshotStateDatabase(inner *CachingDB, snapshot WarmNodeSource) *snapshotStateDatabase {
 	return &snapshotStateDatabase{
 		CachingDB: inner,
 		nodeDB:    newSnapshotNodeDatabase(inner.triedb, snapshot),
@@ -294,7 +305,7 @@ type snapshotCommitStateDatabase struct {
 	nodeDB database.NodeDatabase
 }
 
-func newSnapshotCommitStateDatabase(inner *CachingDB, snapshot *WarmSnapshot) *snapshotCommitStateDatabase {
+func newSnapshotCommitStateDatabase(inner *CachingDB, snapshot WarmNodeSource) *snapshotCommitStateDatabase {
 	return &snapshotCommitStateDatabase{
 		CachingDB: inner,
 		nodeDB:    newSnapshotNodeDatabase(inner.triedb, snapshot),
@@ -360,7 +371,7 @@ type preimageForwarder interface {
 // preimage recording even though the underlying *triedb.Database supports it.
 type snapshotNodeDatabase struct {
 	inner    database.NodeDatabase
-	snapshot *WarmSnapshot
+	snapshot WarmNodeSource
 
 	// preimages is the inner database's preimage interface, captured at
 	// construction iff the inner database implements it. Nil when the
@@ -372,7 +383,7 @@ type snapshotNodeDatabase struct {
 // newSnapshotNodeDatabase wraps inner with the given snapshot. If snapshot is
 // nil or empty, returns inner unchanged so callers can pass through without
 // allocating a wrapper.
-func newSnapshotNodeDatabase(inner database.NodeDatabase, snapshot *WarmSnapshot) database.NodeDatabase {
+func newSnapshotNodeDatabase(inner database.NodeDatabase, snapshot WarmNodeSource) database.NodeDatabase {
 	if snapshot == nil || snapshot.Len() == 0 {
 		return inner
 	}
@@ -429,7 +440,7 @@ func (db *snapshotNodeDatabase) PreimageEnabled() bool {
 // misses fall through to the underlying reader without modification.
 type snapshotNodeReader struct {
 	inner    database.NodeReader
-	snapshot *WarmSnapshot
+	snapshot WarmNodeSource
 }
 
 func (r *snapshotNodeReader) Node(owner common.Hash, path []byte, hash common.Hash) ([]byte, error) {

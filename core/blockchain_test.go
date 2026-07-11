@@ -6730,8 +6730,8 @@ func testPipelinedImportSRC_MultipleBlocks(t *testing.T, scheme string, pipeCfg 
 			t.Fatal("expected a pending import SRC after insertChain")
 		}
 		<-pending.collectedCh
-		if pending.src.carry == nil || pending.src.carry.Len() == 0 {
-			t.Error("expected the final SRC to produce a non-empty warm carry")
+		if pipeChain.importSRCWarmNodes.Len() == 0 {
+			t.Error("expected the warm ring to hold committed nodes after insertChain")
 		}
 	}
 }
