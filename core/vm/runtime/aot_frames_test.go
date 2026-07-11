@@ -23,13 +23,16 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"sort"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/holiman/uint256"
 )
 
@@ -154,6 +157,134 @@ func TestAOTRealFrames(t *testing.T) {
 		len(frames), mismatches, onchainMatch, len(frames))
 }
 
+// TestAOTCalleeInventory replays the recorded frames (interpreter path, with
+// a call tracer) and aggregates every nested call by the EXECUTING code hash
+// (for DELEGATECALL/CALLCODE that is the code at the `to` address, run in the
+// caller's context — exactly the key the AOT registry dispatches on).
+// It reports, per code hash: addresses seen, call-type counts, call count,
+// gross gas (per-call gasUsed incl. sub-calls) and self gas (gross minus
+// children), so the hot transpilation targets are ranked by self gas.
+// Informational only; run with -v. Set AOT_DUMP_CALLEES=<dir> to also dump
+// each callee's runtime bytecode (from the recorded prestate) as <hash>.hex.
+func TestAOTCalleeInventory(t *testing.T) {
+	frames := loadFrames(t)
+
+	type calleeStat struct {
+		addrs    map[common.Address]int
+		typs     map[byte]int
+		calls    int
+		grossGas uint64
+		selfGas  uint64
+	}
+	stats := make(map[common.Hash]*calleeStat)
+	codeByHash := make(map[common.Hash][]byte)
+	codeHashByAddr := make(map[common.Address]common.Hash)
+	var totalFrameGas uint64
+
+	// Per-frame call stack for self-gas attribution.
+	type openCall struct {
+		hash     common.Hash
+		addr     common.Address
+		typ      byte
+		childGas uint64
+	}
+	var callStack []*openCall
+
+	tracer := &tracing.Hooks{
+		OnEnter: func(depth int, typ byte, from, to common.Address, input []byte, gas uint64, value *big.Int) {
+			if depth == 0 {
+				callStack = callStack[:0]
+				return
+			}
+			h, ok := codeHashByAddr[to]
+			if !ok {
+				h = common.Hash{} // precompile or codeless target
+			}
+			callStack = append(callStack, &openCall{hash: h, addr: to, typ: typ})
+		},
+		OnExit: func(depth int, output []byte, gasUsed uint64, err error, reverted bool) {
+			if depth == 0 {
+				return
+			}
+			c := callStack[len(callStack)-1]
+			callStack = callStack[:len(callStack)-1]
+			st := stats[c.hash]
+			if st == nil {
+				st = &calleeStat{addrs: map[common.Address]int{}, typs: map[byte]int{}}
+				stats[c.hash] = st
+			}
+			st.addrs[c.addr]++
+			st.typs[c.typ]++
+			st.calls++
+			st.grossGas += gasUsed
+			st.selfGas += gasUsed - c.childGas
+			if len(callStack) > 0 {
+				callStack[len(callStack)-1].childGas += gasUsed
+			}
+		},
+	}
+
+	for i := range frames {
+		f := &frames[i]
+		// Index prestate code so DELEGATECALL targets resolve to executing code.
+		for addr, acc := range f.Prestate {
+			if len(acc.Code) > 0 {
+				h := crypto.Keccak256Hash(acc.Code)
+				codeHashByAddr[addr] = h
+				if _, ok := codeByHash[h]; !ok {
+					codeByHash[h] = acc.Code
+				}
+			}
+		}
+		statedb := frameStateDB(t, f)
+		cfg := &Config{
+			State:       statedb,
+			GasLimit:    uint64(f.Frame.Gas),
+			Origin:      f.Frame.From,
+			BlockNumber: new(big.Int).SetUint64(f.Block),
+			Time:        1_752_000_000,
+		}
+		if f.Frame.Value != nil {
+			cfg.Value = f.Frame.Value.ToInt()
+		}
+		cfg.EVMConfig = vm.Config{Tracer: tracer}
+		_, gasLeft, _ := Call(f.Frame.To, f.Frame.Input, cfg)
+		totalFrameGas += uint64(f.Frame.Gas) - gasLeft
+	}
+
+	typName := map[byte]string{0xF1: "CALL", 0xF2: "CALLCODE", 0xF4: "DELEGATECALL", 0xFA: "STATICCALL", 0xF0: "CREATE", 0xF5: "CREATE2"}
+	var hashes []common.Hash
+	for h := range stats {
+		hashes = append(hashes, h)
+	}
+	sort.Slice(hashes, func(i, j int) bool { return stats[hashes[i]].selfGas > stats[hashes[j]].selfGas })
+
+	t.Logf("total gas across %d frames: %d", len(frames), totalFrameGas)
+	dumpDir := os.Getenv("AOT_DUMP_CALLEES")
+	for _, h := range hashes {
+		st := stats[h]
+		var addrs []string
+		for a, n := range st.addrs {
+			addrs = append(addrs, fmt.Sprintf("%s×%d", a.Hex(), n))
+		}
+		sort.Strings(addrs)
+		var typs []string
+		for ty, n := range st.typs {
+			typs = append(typs, fmt.Sprintf("%s×%d", typName[ty], n))
+		}
+		sort.Strings(typs)
+		t.Logf("codehash %s: calls=%d grossGas=%d (%.1f%%) selfGas=%d (%.1f%%) codeLen=%d types=%v addrs=%v",
+			h.Hex(), st.calls, st.grossGas, 100*float64(st.grossGas)/float64(totalFrameGas),
+			st.selfGas, 100*float64(st.selfGas)/float64(totalFrameGas), len(codeByHash[h]), typs, addrs)
+		if dumpDir != "" && len(codeByHash[h]) > 0 {
+			path := fmt.Sprintf("%s/%s.hex", dumpDir, h.Hex())
+			if err := os.WriteFile(path, []byte(hexutil.Encode(codeByHash[h])), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
 // BenchmarkAOTFrameSetup measures the harness-only cost of rebuilding the
 // prestate StateDB per iteration (no execution). Used to compute the
 // net-of-harness speedup: (interp - setup) / (aot - setup).
@@ -163,6 +294,47 @@ func BenchmarkAOTFrameSetup(b *testing.B) {
 		f := &frames[i%len(frames)]
 		statedb := frameStateDB(b, f)
 		_ = statedb
+	}
+}
+
+// BenchmarkAOTExecOnly times ONLY the frame execution (runtime.Call), with
+// the prestate StateDB rebuild outside the measured window, via monotonic
+// clock bracketing inside a single benchmark loop (b.StopTimer/StartTimer is
+// too expensive at this granularity). This avoids the instability of
+// subtracting a separately-measured setup benchmark: the allocator/GC
+// conditions for setup and exec are identical here by construction.
+// Reported metric: exec-ns/op (the ns/op column includes setup; ignore it).
+func BenchmarkAOTExecOnly(b *testing.B) {
+	frames := loadFrames(b)
+	for _, mode := range []struct {
+		name string
+		aot  bool
+	}{{"interp", false}, {"aot", true}} {
+		b.Run(mode.name, func(b *testing.B) {
+			var execNs int64
+			var gasTot uint64
+			for i := 0; i < b.N; i++ {
+				f := &frames[i%len(frames)]
+				statedb := frameStateDB(b, f)
+				cfg := &Config{
+					State:       statedb,
+					GasLimit:    uint64(f.Frame.Gas),
+					Origin:      f.Frame.From,
+					BlockNumber: new(big.Int).SetUint64(f.Block),
+					Time:        1_752_000_000,
+				}
+				if f.Frame.Value != nil {
+					cfg.Value = f.Frame.Value.ToInt()
+				}
+				cfg.EVMConfig = vm.Config{EnableAOT: mode.aot}
+				t0 := time.Now()
+				_, gasLeft, _ := Call(f.Frame.To, f.Frame.Input, cfg)
+				execNs += time.Since(t0).Nanoseconds()
+				gasTot += uint64(f.Frame.Gas) - gasLeft
+			}
+			b.ReportMetric(float64(execNs)/float64(b.N), "exec-ns/op")
+			b.ReportMetric(float64(gasTot)/float64(b.N), "gas/op")
+		})
 	}
 }
 
