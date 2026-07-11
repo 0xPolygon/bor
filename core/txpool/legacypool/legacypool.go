@@ -124,6 +124,12 @@ var (
 	slotsGauge   = metrics.NewRegisteredGauge("txpool/slots", nil)
 
 	resetCacheGauge       = metrics.NewRegisteredGauge("txpool/resetcache", nil)
+
+	// lazyViewHitMeter/lazyViewMissMeter track per-account reuse of the cached
+	// lazy-transaction view inside Pending(): a hit returns the previous
+	// conversion untouched, a miss rebuilds it because the account changed.
+	lazyViewHitMeter  = metrics.NewRegisteredMeter("txpool/lazyview/hit", nil)
+	lazyViewMissMeter = metrics.NewRegisteredMeter("txpool/lazyview/miss", nil)
 	reheapTimer           = metrics.NewRegisteredTimer("txpool/reheap", nil)
 	urgentHeapInitTimer   = metrics.NewRegisteredTimer("txpool/heapinit/urgent", nil)
 	floatingHeapInitTimer = metrics.NewRegisteredTimer("txpool/heapinit/floating", nil)
@@ -727,39 +733,30 @@ func (pool *LegacyPool) Pending(filter txpool.PendingFilter, interrupt *atomic.B
 			return map[common.Address][]*txpool.LazyTransaction{}
 		}
 
-		txs := list.Flatten()
+		// Reuse the cached lazy view; the conversion is rebuilt only for
+		// accounts whose transactions changed since the previous call.
+		lazies := list.LazyFlatten(pool)
 
-		// If the miner requests tip enforcement, cap the lists now
+		// If the miner requests tip enforcement, cap the lists now. The view
+		// is shared across calls, so cap by prefix-subslicing only — never
+		// mutate the slice contents.
 		if filter.MinTip != nil || filter.GasLimitCap != 0 {
-			for i, tx := range txs {
+			for i, ltx := range lazies {
 				if filter.MinTip != nil {
-					if tx.EffectiveGasTipIntCmp(filter.MinTip, filter.BaseFee) < 0 {
-						txs = txs[:i]
+					if ltx.Tx.EffectiveGasTipIntCmp(filter.MinTip, filter.BaseFee) < 0 {
+						lazies = lazies[:i]
 						break
 					}
 				}
 				if filter.GasLimitCap != 0 {
-					if tx.Gas() > filter.GasLimitCap {
-						txs = txs[:i]
+					if ltx.Gas > filter.GasLimitCap {
+						lazies = lazies[:i]
 						break
 					}
 				}
 			}
 		}
-		if len(txs) > 0 {
-			lazies := make([]*txpool.LazyTransaction, len(txs))
-			for i := 0; i < len(txs); i++ {
-				lazies[i] = &txpool.LazyTransaction{
-					Pool:      pool,
-					Hash:      txs[i].Hash(),
-					Tx:        txs[i],
-					Time:      txs[i].Time(),
-					GasFeeCap: uint256.MustFromBig(txs[i].GasFeeCap()),
-					GasTipCap: uint256.MustFromBig(txs[i].GasTipCap()),
-					Gas:       txs[i].Gas(),
-					BlobGas:   txs[i].BlobGas(),
-				}
-			}
+		if len(lazies) > 0 {
 			pending[addr] = lazies
 		}
 	}
