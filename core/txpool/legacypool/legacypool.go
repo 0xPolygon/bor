@@ -136,6 +136,10 @@ var (
 	// filtering at read time because the requested filter differed (miss).
 	pendingPrefilterHitMeter  = metrics.NewRegisteredMeter("txpool/pendingprefilter/hit", nil)
 	pendingPrefilterMissMeter = metrics.NewRegisteredMeter("txpool/pendingprefilter/miss", nil)
+	// pendingPrefilterLateHitMeter counts serves from the read-side parked
+	// result (filter missed the publish prediction but matched an earlier
+	// call's scan within the same snapshot lifetime).
+	pendingPrefilterLateHitMeter = metrics.NewRegisteredMeter("txpool/pendingprefilter/latehit", nil)
 	reheapTimer           = metrics.NewRegisteredTimer("txpool/reheap", nil)
 	urgentHeapInitTimer   = metrics.NewRegisteredTimer("txpool/heapinit/urgent", nil)
 	floatingHeapInitTimer = metrics.NewRegisteredTimer("txpool/heapinit/floating", nil)
@@ -367,6 +371,22 @@ type pendingSnapshot struct {
 	minTip   *uint256.Int
 	baseFee  *uint256.Int
 	gasCap   uint64
+
+	// lateFiltered caches the first read-time filtering result computed for a
+	// miner-shaped filter that missed the publish-time prediction. The
+	// prediction lags one block whenever the builder races the pool's head
+	// reset (its base fee derives from the previous head), so the first
+	// Pending call of a block pays the full scan and parks the result here;
+	// the follow-up calls (prefetch workers, rebuilds) serve it as a map copy.
+	lateFiltered atomic.Pointer[filteredView]
+}
+
+// filteredView is a pending view truncated for one concrete filter.
+type filteredView struct {
+	minTip  *uint256.Int
+	baseFee *uint256.Int
+	gasCap  uint64
+	view    map[common.Address][]*txpool.LazyTransaction
 }
 
 // publishPendingView rebuilds the copy-on-write pending snapshot served by
@@ -814,6 +834,22 @@ func (pool *LegacyPool) Pending(filter txpool.PendingFilter, interrupt *atomic.B
 		}
 		return pending
 	}
+	// Second chance: an earlier call already scanned for this exact filter
+	// and parked the result on the snapshot.
+	if late := snap.lateFiltered.Load(); late != nil &&
+		filter.BlobFee == nil && filter.GasLimitCap == late.gasCap &&
+		uint256PtrEq(filter.MinTip, late.minTip) && uint256PtrEq(filter.BaseFee, late.baseFee) {
+		pendingPrefilterLateHitMeter.Mark(1)
+
+		pending := make(map[common.Address][]*txpool.LazyTransaction, len(late.view))
+		for addr, lazies := range late.view {
+			if interrupt.Load() {
+				return map[common.Address][]*txpool.LazyTransaction{}
+			}
+			pending[addr] = lazies
+		}
+		return pending
+	}
 	pendingPrefilterMissMeter.Mark(1)
 
 	pending := make(map[common.Address][]*txpool.LazyTransaction, len(snap.view))
@@ -847,6 +883,22 @@ func (pool *LegacyPool) Pending(filter txpool.PendingFilter, interrupt *atomic.B
 		if len(lazies) > 0 {
 			pending[addr] = lazies
 		}
+	}
+
+	// Park the scan result for follow-up calls with the same miner-shaped
+	// filter (a separate copy: the caller mutates the returned map). Uncapped
+	// filters are already cheap and skipped to keep the slot for the builder.
+	if filter.MinTip != nil && filter.BaseFee != nil && filter.BlobFee == nil {
+		cached := make(map[common.Address][]*txpool.LazyTransaction, len(pending))
+		for addr, lazies := range pending {
+			cached[addr] = lazies
+		}
+		snap.lateFiltered.Store(&filteredView{
+			minTip:  filter.MinTip,
+			baseFee: filter.BaseFee,
+			gasCap:  filter.GasLimitCap,
+			view:    cached,
+		})
 	}
 	return pending
 }
