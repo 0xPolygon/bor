@@ -30,6 +30,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 )
@@ -63,6 +64,7 @@ type SortedMap struct {
 	index   *nonceHeap                    // Heap of nonces of all the stored transactions (non-strict mode)
 	cache   types.Transactions            // Cache of the transactions already sorted
 	cacheMu sync.RWMutex
+	gen     uint64 // Content generation, bumped under cacheMu on every mutation; guards flatten-derived caches (the sorted cache can survive a mutation via reslicing, so its nil-ness cannot serve as a change signal)
 }
 
 // NewSortedMap creates a new nonce-sorted transaction map.
@@ -95,6 +97,7 @@ func (m *SortedMap) Put(tx *types.Transaction) {
 	}
 	m.cacheMu.Lock()
 	m.items[nonce], m.cache = tx, nil
+	m.gen++
 	m.cacheMu.Unlock()
 }
 
@@ -115,6 +118,9 @@ func (m *SortedMap) Forward(threshold uint64) types.Transactions {
 	m.cacheMu.Lock()
 	if m.cache != nil {
 		m.cache = m.cache[len(removed):]
+	}
+	if len(removed) > 0 {
+		m.gen++
 	}
 	m.cacheMu.Unlock()
 	return removed
@@ -143,6 +149,7 @@ func (m *SortedMap) reheap() {
 	heap.Init(m.index)
 	m.cacheMu.Lock()
 	m.cache = nil
+	m.gen++
 	m.cacheMu.Unlock()
 }
 
@@ -163,6 +170,7 @@ func (m *SortedMap) filter(filter func(*types.Transaction) bool) types.Transacti
 	if len(removed) > 0 {
 		m.cacheMu.Lock()
 		m.cache = nil
+		m.gen++
 		m.cacheMu.Unlock()
 	}
 
@@ -196,6 +204,7 @@ func (m *SortedMap) Cap(threshold int) types.Transactions {
 	if m.cache != nil {
 		m.cache = m.cache[:len(m.cache)-len(drops)]
 	}
+	m.gen++
 	m.cacheMu.Unlock()
 	return drops
 }
@@ -219,6 +228,7 @@ func (m *SortedMap) Remove(nonce uint64) bool {
 	delete(m.items, nonce)
 	m.cacheMu.Lock()
 	m.cache = nil
+	m.gen++
 	m.cacheMu.Unlock()
 
 	return true
@@ -248,6 +258,7 @@ func (m *SortedMap) Ready(start uint64) types.Transactions {
 
 	m.cacheMu.Lock()
 	m.cache = nil
+	m.gen++
 	m.cacheMu.Unlock()
 
 	resetCacheGauge.Inc(1)
@@ -261,6 +272,16 @@ func (m *SortedMap) Len() int {
 }
 
 func (m *SortedMap) flatten() types.Transactions {
+	txs, _ := m.flattenWithGen()
+	return txs
+}
+
+// flattenWithGen returns the shared sorted cache slice together with the
+// content generation it reflects. The returned slice must be treated as
+// read-only: mutations to the SortedMap either reslice the cache or rebuild
+// it from scratch, never write the backing array in place, so a slice header
+// captured here stays coherent after the lock is released.
+func (m *SortedMap) flattenWithGen() (types.Transactions, uint64) {
 	m.cacheMu.Lock()
 	defer m.cacheMu.Unlock()
 	// If the sorting was not cached yet, create and cache it
@@ -271,7 +292,7 @@ func (m *SortedMap) flatten() types.Transactions {
 		}
 		sort.Sort(types.TxByNonce(m.cache))
 	}
-	return m.cache
+	return m.cache, m.gen
 }
 
 func (m *SortedMap) lastElement() *types.Transaction {
@@ -307,6 +328,13 @@ type list struct {
 	costcap   *uint256.Int // Price of the highest costing transaction (reset only if exceeds balance)
 	gascap    uint64       // Gas limit of the highest spending transaction (reset only if exceeds block limit)
 	totalcost *uint256.Int // Total cost of all transactions in the list
+
+	// Cached lazy-transaction view of txs, keyed to the SortedMap content
+	// generation. Pending() rebuilds it only for accounts whose transactions
+	// changed since the previous call, making repeated pool snapshots cheap.
+	lazyMu   sync.Mutex
+	lazyGen  uint64
+	lazyView []*txpool.LazyTransaction
 }
 
 // newList creates a new transaction list for maintaining nonce-indexable fast,
@@ -324,6 +352,40 @@ func newList(strict bool) *list {
 // with the provided nonce.
 func (l *list) Contains(nonce uint64) bool {
 	return l.txs.Get(nonce) != nil
+}
+
+// LazyFlatten returns the account's transactions as a nonce-sorted, shared
+// []*LazyTransaction, rebuilding the conversion only when the underlying
+// SortedMap content changed since the last call. Callers must treat the
+// returned slice as read-only; prefix subslicing (tip/gas filtering) is fine.
+func (l *list) LazyFlatten(pool *LegacyPool) []*txpool.LazyTransaction {
+	txs, gen := l.txs.flattenWithGen()
+
+	l.lazyMu.Lock()
+	defer l.lazyMu.Unlock()
+
+	if l.lazyView != nil && l.lazyGen == gen {
+		lazyViewHitMeter.Mark(1)
+		return l.lazyView
+	}
+	lazyViewMissMeter.Mark(1)
+
+	lazies := make([]*txpool.LazyTransaction, len(txs))
+	for i, tx := range txs {
+		lazies[i] = &txpool.LazyTransaction{
+			Pool:      pool,
+			Hash:      tx.Hash(),
+			Tx:        tx,
+			Time:      tx.Time(),
+			GasFeeCap: uint256.MustFromBig(tx.GasFeeCap()),
+			GasTipCap: uint256.MustFromBig(tx.GasTipCap()),
+			Gas:       tx.Gas(),
+			BlobGas:   tx.BlobGas(),
+		}
+	}
+	l.lazyGen, l.lazyView = gen, lazies
+
+	return lazies
 }
 
 // Add tries to insert a new transaction into the list, returning whether the

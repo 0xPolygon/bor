@@ -382,3 +382,63 @@ func BenchmarkListCapOneTx(b *testing.B) {
 		b.StopTimer()
 	}
 }
+
+// TestLazyFlattenDifferential drives a list through a random sequence of every
+// mutation path and verifies after each step that the cached lazy view matches
+// a fresh conversion of Flatten() — i.e. the generation counter invalidates the
+// view on every content change and never spuriously retains a stale one.
+func TestLazyFlattenDifferential(t *testing.T) {
+	t.Parallel()
+
+	key, _ := crypto.GenerateKey()
+
+	check := func(l *list, step string) {
+		t.Helper()
+
+		want := l.txs.Flatten()
+		got := l.LazyFlatten(nil)
+		require.Equal(t, len(want), len(got), "length mismatch after %s", step)
+
+		for i := range want {
+			require.Equal(t, want[i].Hash(), got[i].Hash, "hash mismatch at %d after %s", i, step)
+			require.Equal(t, want[i].Nonce(), got[i].Tx.Nonce(), "nonce mismatch at %d after %s", i, step)
+			require.Equal(t, want[i].Gas(), got[i].Gas, "gas mismatch at %d after %s", i, step)
+		}
+		// A second call with no mutation must return the identical shared slice.
+		again := l.LazyFlatten(nil)
+		if len(got) > 0 {
+			require.Same(t, got[0], again[0], "unchanged view was rebuilt after %s", step)
+		}
+	}
+
+	rng := rand.New(rand.NewSource(42))
+	l := newList(false) // non-strict: mirrors SortedMap-level behavior for all ops
+
+	nonce := uint64(0)
+	for step := 0; step < 500; step++ {
+		switch op := rng.Intn(6); op {
+		case 0: // Add
+			l.Add(transaction(nonce, 100000, key), DefaultConfig.PriceBump)
+			nonce++
+		case 1: // Forward
+			if l.Len() > 0 {
+				l.Forward(l.txs.Flatten()[0].Nonce() + uint64(rng.Intn(3)))
+			}
+		case 2: // Filter (drop random txs)
+			l.txs.Filter(func(tx *types.Transaction) bool { return rng.Intn(4) == 0 })
+		case 3: // Cap
+			if l.Len() > 1 {
+				l.Cap(l.Len() - 1)
+			}
+		case 4: // Remove
+			if l.Len() > 0 {
+				l.txs.Remove(l.txs.LastElement().Nonce())
+			}
+		case 5: // Ready
+			if l.Len() > 0 {
+				l.txs.Ready(l.txs.Flatten()[0].Nonce())
+			}
+		}
+		check(l, "step")
+	}
+}
