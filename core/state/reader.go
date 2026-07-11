@@ -471,9 +471,13 @@ type storageCacheEntry struct {
 type readerWithCache struct {
 	Reader // safe for concurrent read
 
-	// Previously resolved state entries.
-	accounts    map[common.Address]*accountCacheEntry
-	accountLock sync.RWMutex
+	// List of account buckets, each of which is thread-safe. Sharded like
+	// storageBuckets: a single map+RWMutex serializes the prefetch workers
+	// and the exec goroutine on one cache line under tip-cadence load.
+	accountBuckets [16]struct {
+		lock     sync.RWMutex
+		accounts map[common.Address]*accountCacheEntry
+	}
 
 	// List of storage buckets, each of which is thread-safe.
 	// This reader is typically used in scenarios requiring concurrent
@@ -488,8 +492,10 @@ type readerWithCache struct {
 // newReaderWithCache constructs the reader with local cache.
 func newReaderWithCache(reader Reader) *readerWithCache {
 	r := &readerWithCache{
-		Reader:   reader,
-		accounts: make(map[common.Address]*accountCacheEntry),
+		Reader: reader,
+	}
+	for i := range r.accountBuckets {
+		r.accountBuckets[i].accounts = make(map[common.Address]*accountCacheEntry)
 	}
 	for i := range r.storageBuckets {
 		r.storageBuckets[i].storages = make(map[common.Address]map[common.Hash]storageCacheEntry)
@@ -506,10 +512,12 @@ func newReaderWithCache(reader Reader) *readerWithCache {
 // It also returns the cache entry (for provenance/unique-usage accounting)
 // and whether this call inserted a new entry (first-writer-wins).
 func (r *readerWithCache) account(addr common.Address, caller readerRole) (*types.StateAccount, bool, *accountCacheEntry, bool, error) {
+	bucket := &r.accountBuckets[addr[0]&0x0f]
+
 	// Try to resolve the requested account in the local cache
-	r.accountLock.RLock()
-	ent, ok := r.accounts[addr]
-	r.accountLock.RUnlock()
+	bucket.lock.RLock()
+	ent, ok := bucket.accounts[addr]
+	bucket.lock.RUnlock()
 	if ok {
 		return ent.acct, true, ent, false, nil
 	}
@@ -518,18 +526,18 @@ func (r *readerWithCache) account(addr common.Address, caller readerRole) (*type
 	if err != nil {
 		return nil, false, nil, false, err
 	}
-	r.accountLock.Lock()
+	bucket.lock.Lock()
 	// First-writer-wins: avoid clobbering if another goroutine inserted meanwhile.
-	if existing, ok := r.accounts[addr]; ok {
-		r.accountLock.Unlock()
+	if existing, ok := bucket.accounts[addr]; ok {
+		bucket.lock.Unlock()
 		// This was a MISS originally (we didn't find it under RLock),
 		// but another goroutine inserted it while we fetched from the backing reader.
 		// Report incache=false so miss counters reflect backing-read cost.
 		return existing.acct, false, existing, false, nil
 	}
 	newEnt := &accountCacheEntry{acct: acct, origin: caller}
-	r.accounts[addr] = newEnt
-	r.accountLock.Unlock()
+	bucket.accounts[addr] = newEnt
+	bucket.lock.Unlock()
 	return acct, false, newEnt, true, nil
 }
 
