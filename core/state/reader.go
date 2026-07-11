@@ -29,11 +29,19 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/trie/utils"
 	"github.com/ethereum/go-ethereum/triedb"
 	"github.com/ethereum/go-ethereum/triedb/database"
+)
+
+// Reader-cache retention metrics (BOR_READER_RETENTION=1).
+var (
+	retentionServeMeter       = metrics.NewRegisteredMeter("state/retention/serve", nil)
+	retentionInvalidatedMeter = metrics.NewRegisteredMeter("state/retention/invalidated", nil)
+	retentionResetMeter       = metrics.NewRegisteredMeter("state/retention/reset", nil)
 )
 
 // ContractCodeReader defines the interface for accessing contract code.
@@ -469,7 +477,26 @@ type storageCacheEntry struct {
 // readerWithCache is a wrapper around Reader that maintains additional state caches
 // to support concurrent state access.
 type readerWithCache struct {
-	Reader // safe for concurrent read
+	Reader // safe for concurrent read; also the initial backing
+
+	// backing, when set, overrides the embedded Reader for account/storage
+	// miss resolution. Retention advances it to a reader at the newly
+	// committed root while the cached entries are carried across blocks
+	// (entries for keys the block wrote are invalidated first, so every
+	// surviving entry still holds the correct value at the new root).
+	// Contract-code reads stay on the embedded Reader: code is keyed by
+	// hash and root-independent.
+	backing atomic.Pointer[Reader]
+
+	// gen guards in-flight inserts across an advance: a fetch that started
+	// against the previous backing must not populate the cache after the
+	// invalidation pass ran, or a key written by the just-committed block
+	// could resurface with its stale pre-block value.
+	gen atomic.Uint64
+
+	// Approximate entry counts, used to bound retained memory.
+	accountCount atomic.Int64
+	storageCount atomic.Int64
 
 	// List of account buckets, each of which is thread-safe. Sharded like
 	// storageBuckets: a single map+RWMutex serializes the prefetch workers
@@ -522,7 +549,8 @@ func (r *readerWithCache) account(addr common.Address, caller readerRole) (*type
 		return ent.acct, true, ent, false, nil
 	}
 	// Try to resolve the requested account from the underlying reader
-	acct, err := r.Reader.Account(addr)
+	gen := r.gen.Load()
+	acct, err := r.currentBacking().Account(addr)
 	if err != nil {
 		return nil, false, nil, false, err
 	}
@@ -535,9 +563,16 @@ func (r *readerWithCache) account(addr common.Address, caller readerRole) (*type
 		// Report incache=false so miss counters reflect backing-read cost.
 		return existing.acct, false, existing, false, nil
 	}
+	if r.gen.Load() != gen {
+		// The cache advanced to a new root while we fetched; the value may be
+		// stale for the new generation, so serve it without caching.
+		bucket.lock.Unlock()
+		return acct, false, &accountCacheEntry{acct: acct, origin: caller}, false, nil
+	}
 	newEnt := &accountCacheEntry{acct: acct, origin: caller}
 	bucket.accounts[addr] = newEnt
 	bucket.lock.Unlock()
+	r.accountCount.Add(1)
 	return acct, false, newEnt, true, nil
 }
 
@@ -548,6 +583,112 @@ func (r *readerWithCache) account(addr common.Address, caller readerRole) (*type
 func (r *readerWithCache) Account(addr common.Address) (*types.StateAccount, error) {
 	account, _, _, _, err := r.account(addr, roleUnknown)
 	return account, err
+}
+
+// currentBacking returns the reader misses resolve against: the retention
+// backing when the cache has been advanced past a commit, the construction
+// reader otherwise.
+func (r *readerWithCache) currentBacking() Reader {
+	if p := r.backing.Load(); p != nil {
+		return *p
+	}
+	return r.Reader
+}
+
+// sharedReaderCache exposes the cache to the commit-time retention hook; the
+// method is promoted through the stats wrappers handed to StateDB.
+func (r *readerWithCache) sharedReaderCache() *readerWithCache {
+	return r
+}
+
+// Retention caps: past these the retained cache is dropped wholesale rather
+// than trimmed, keeping the worst case simple and the memory bounded.
+const (
+	retentionMaxAccounts = 512 * 1024
+	retentionMaxSlots    = 4 * 1024 * 1024
+)
+
+// advance carries the cache across a block commit: it swaps miss resolution
+// to a reader at the newly committed root and evicts every key the block
+// wrote. Any surviving entry holds the same value at the new root as at the
+// root it was read from, so serving it stays correct. Safe to run while
+// straggling prefetch workers still use the cache: the generation bump makes
+// their in-flight inserts no-ops, and completed stale inserts are covered by
+// the eviction pass below.
+func (r *readerWithCache) advance(backing Reader, upd *stateUpdate) {
+	r.gen.Add(1)
+	r.backing.Store(&backing)
+
+	invalidated := int64(0)
+	for addr := range upd.accountsOrigin {
+		bucket := &r.accountBuckets[addr[0]&0x0f]
+		bucket.lock.Lock()
+		if _, ok := bucket.accounts[addr]; ok {
+			delete(bucket.accounts, addr)
+			r.accountCount.Add(-1)
+			invalidated++
+		}
+		bucket.lock.Unlock()
+
+		// A deleted account implicitly wipes its storage; deletion shows as a
+		// nil slim-RLP payload under the account hash.
+		if data, ok := upd.accounts[crypto.Keccak256Hash(addr.Bytes())]; ok && len(data) == 0 {
+			invalidated += r.dropStorage(addr)
+		}
+	}
+	for addr, slots := range upd.storagesOrigin {
+		if !upd.rawStorageKey {
+			// Slot keys are hashed and cannot be matched against the
+			// plain-keyed cache; drop the whole per-account map.
+			invalidated += r.dropStorage(addr)
+			continue
+		}
+		bucket := &r.storageBuckets[addr[0]&0x0f]
+		bucket.lock.Lock()
+		if cached, ok := bucket.storages[addr]; ok {
+			for key := range slots {
+				if _, ok := cached[key]; ok {
+					delete(cached, key)
+					r.storageCount.Add(-1)
+					invalidated++
+				}
+			}
+		}
+		bucket.lock.Unlock()
+	}
+	retentionInvalidatedMeter.Mark(invalidated)
+
+	// Bound retained memory: reset wholesale when over cap. The counters are
+	// approximate (straggler inserts may race the reset); drift is harmless
+	// because the caps are soft limits.
+	if r.accountCount.Load() > retentionMaxAccounts || r.storageCount.Load() > retentionMaxSlots {
+		for i := range r.accountBuckets {
+			bucket := &r.accountBuckets[i]
+			bucket.lock.Lock()
+			bucket.accounts = make(map[common.Address]*accountCacheEntry)
+			bucket.lock.Unlock()
+		}
+		for i := range r.storageBuckets {
+			bucket := &r.storageBuckets[i]
+			bucket.lock.Lock()
+			bucket.storages = make(map[common.Address]map[common.Hash]storageCacheEntry)
+			bucket.lock.Unlock()
+		}
+		r.accountCount.Store(0)
+		r.storageCount.Store(0)
+		retentionResetMeter.Mark(1)
+	}
+}
+
+// dropStorage removes every cached slot of one account, returning the count.
+func (r *readerWithCache) dropStorage(addr common.Address) int64 {
+	bucket := &r.storageBuckets[addr[0]&0x0f]
+	bucket.lock.Lock()
+	dropped := int64(len(bucket.storages[addr]))
+	delete(bucket.storages, addr)
+	bucket.lock.Unlock()
+	r.storageCount.Add(-dropped)
+	return dropped
 }
 
 // storage retrieves the storage slot specified by the address and slot key, along
@@ -576,7 +717,8 @@ func (r *readerWithCache) storage(addr common.Address, slot common.Hash, caller 
 	bucket.lock.RUnlock()
 
 	// Try to resolve the requested storage slot from the underlying reader
-	value, err := r.Reader.Storage(addr, slot)
+	gen := r.gen.Load()
+	value, err := r.currentBacking().Storage(addr, slot)
 	if err != nil {
 		return common.Hash{}, false, nil, false, err
 	}
@@ -596,8 +738,15 @@ func (r *readerWithCache) storage(addr common.Address, slot common.Hash, caller 
 		return existing.value, false, &existing, false, nil
 	}
 	newEnt := storageCacheEntry{value: value, origin: caller}
+	if r.gen.Load() != gen {
+		// The cache advanced to a new root while we fetched; the value may be
+		// stale for the new generation, so serve it without caching.
+		bucket.lock.Unlock()
+		return value, false, &newEnt, false, nil
+	}
 	slots[slot] = newEnt
 	bucket.lock.Unlock()
+	r.storageCount.Add(1)
 
 	return value, false, &newEnt, true, nil
 }

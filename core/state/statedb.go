@@ -1846,6 +1846,14 @@ func (s *StateDB) commitAndFlush(block uint64, deleteEmptyObjects bool, noStorag
 			s.TrieDBCommits += time.Since(start)
 		}
 	}
+	// Carry the shared read cache across the commit so the next block (and
+	// the builder on the new head) start warm; no-op unless retention is
+	// enabled and this StateDB reads through a shared cache.
+	if cdb, ok := s.db.(*CachingDB); ok {
+		if carrier, ok := s.reader.(interface{ sharedReaderCache() *readerWithCache }); ok {
+			cdb.retainReaderCache(carrier.sharedReaderCache(), ret)
+		}
+	}
 	s.reader, _ = s.db.Reader(s.originalRoot)
 	return ret, err
 }

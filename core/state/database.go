@@ -18,6 +18,7 @@ package state
 
 import (
 	"fmt"
+	"os"
 	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -164,8 +165,38 @@ type CachingDB struct {
 	snapMu          sync.RWMutex // Protects useSnapInReader
 	useSnapInReader bool
 
+	// Reader-cache retention across commits (BOR_READER_RETENTION=1): the
+	// shared read cache of the last committed block, advanced to its result
+	// root, served to the next requester whose parent root matches.
+	retainMu      sync.Mutex
+	retainedCache *readerWithCache
+	retainedRoot  common.Hash
+
 	// Transition-specific fields
 	TransitionStatePerRoot *lru.Cache[common.Hash, *overlay.TransitionState]
+}
+
+// readerRetentionEnabled gates carrying the shared reader cache across block
+// commits; opt-in for A/B measurement.
+var readerRetentionEnabled = os.Getenv("BOR_READER_RETENTION") == "1"
+
+// retainReaderCache advances the block's shared read cache past the commit
+// described by upd and retains it for the next block whose parent root is
+// upd.root. Correctness: advance evicts everything the block wrote, so every
+// surviving entry has the same value at upd.root as at the root it was read
+// from; misses resolve against a fresh reader at upd.root.
+func (db *CachingDB) retainReaderCache(cache *readerWithCache, upd *stateUpdate) {
+	if !readerRetentionEnabled || cache == nil || upd == nil {
+		return
+	}
+	backing, err := db.Reader(upd.root)
+	if err != nil {
+		return
+	}
+	cache.advance(backing, upd)
+	db.retainMu.Lock()
+	db.retainedCache, db.retainedRoot = cache, upd.root
+	db.retainMu.Unlock()
 }
 
 // NewDatabase creates a state database with the provided data sources.
@@ -244,6 +275,19 @@ func (db *CachingDB) Reader(stateRoot common.Hash) (Reader, error) {
 // ReadersWithCacheStats creates a pair of state readers sharing the same internal cache and
 // same backing Reader, but exposing separate statistics.
 func (db *CachingDB) ReadersWithCacheStats(stateRoot common.Hash) (ReaderWithStats, ReaderWithStats, error) {
+	if readerRetentionEnabled {
+		db.retainMu.Lock()
+		retained, root := db.retainedCache, db.retainedRoot
+		db.retainMu.Unlock()
+		// Serve the retained cache only at the exact root it was advanced to;
+		// reorgs and sidechain imports miss the match and get a fresh cache.
+		// The cache is shared (not consumed): the builder and the next import
+		// both read through it, which its bucket locking already supports.
+		if retained != nil && root == stateRoot {
+			retentionServeMeter.Mark(1)
+			return newReaderWithCacheStats(retained, rolePrefetch), newReaderWithCacheStats(retained, roleProcess), nil
+		}
+	}
 	reader, err := db.Reader(stateRoot)
 	if err != nil {
 		return nil, nil, err
