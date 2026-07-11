@@ -891,6 +891,11 @@ func (pool *LegacyPool) Pending(filter txpool.PendingFilter, interrupt *atomic.B
 		log.Info("Pending prefilter miss", "req", req.String(), "slot0", s0, "slot1", s1, "late", sl)
 	}
 
+	// The scan compares each transaction's cached uint256 fee fields against
+	// thresholds computed once for the whole call, so a miss costs two word
+	// compares per transaction instead of the big-int effective-tip math that
+	// used to dominate the builder-critical first call after a head reset.
+	scanner := newCutScanner(filter.MinTip, filter.BaseFee, filter.GasLimitCap)
 	pending := make(map[common.Address][]*txpool.LazyTransaction, len(snap.view))
 	for addr, lazies := range snap.view {
 		// Check for the flag to interrupt block building on timeout.
@@ -905,17 +910,9 @@ func (pool *LegacyPool) Pending(filter txpool.PendingFilter, interrupt *atomic.B
 		// mutate the slice contents.
 		if filter.MinTip != nil || filter.GasLimitCap != 0 {
 			for i, ltx := range lazies {
-				if filter.MinTip != nil {
-					if ltx.Tx.EffectiveGasTipIntCmp(filter.MinTip, filter.BaseFee) < 0 {
-						lazies = lazies[:i]
-						break
-					}
-				}
-				if filter.GasLimitCap != 0 {
-					if ltx.Gas > filter.GasLimitCap {
-						lazies = lazies[:i]
-						break
-					}
+				if !scanner.pass(ltx) {
+					lazies = lazies[:i]
+					break
 				}
 			}
 		}

@@ -418,13 +418,10 @@ func (l *list) LazyFlatten(pool *LegacyPool, filters [2]*filteredCut) ([]*txpool
 			prefixes[s] = slot.prefix
 			continue
 		}
+		scanner := newCutScanner(f.minTip, f.baseFee, f.gasCap)
 		n := len(l.lazyView)
 		for i, ltx := range l.lazyView {
-			if f.minTip != nil && ltx.Tx.EffectiveGasTipIntCmp(f.minTip, f.baseFee) < 0 {
-				n = i
-				break
-			}
-			if f.gasCap != 0 && ltx.Gas > f.gasCap {
+			if !scanner.pass(ltx) {
 				n = i
 				break
 			}
@@ -434,6 +431,48 @@ func (l *list) LazyFlatten(pool *LegacyPool, filters [2]*filteredCut) ([]*txpool
 	}
 
 	return l.lazyView, prefixes
+}
+
+// cutScanner filters lazy transactions with allocation-free uint256
+// comparisons against thresholds precomputed once per scan. It replicates
+// types.Transaction.EffectiveGasTipIntCmp exactly, including the wrap-through
+// where a feeCap below the basefee makes the effective tip degrade to the tip
+// cap (calcEffectiveGasTip subtracts modularly and its error is ignored), so a
+// cutScanner prefix is bit-identical to the per-transaction big-int scan.
+type cutScanner struct {
+	minTip           *uint256.Int
+	baseFee          *uint256.Int
+	feeFloor         uint256.Int // baseFee+minTip; valid unless feeFloorOverflow
+	feeFloorOverflow bool
+	gasCap           uint64
+}
+
+func newCutScanner(minTip, baseFee *uint256.Int, gasCap uint64) cutScanner {
+	s := cutScanner{minTip: minTip, baseFee: baseFee, gasCap: gasCap}
+	if minTip != nil && baseFee != nil {
+		_, s.feeFloorOverflow = s.feeFloor.AddOverflow(baseFee, minTip)
+	}
+	return s
+}
+
+// pass reports whether the transaction survives the cut; equivalent to
+// ltx.Tx.EffectiveGasTipIntCmp(minTip, baseFee) >= 0 plus the gas cap check.
+func (s *cutScanner) pass(ltx *txpool.LazyTransaction) bool {
+	if s.minTip != nil {
+		if ltx.GasTipCap.Lt(s.minTip) {
+			return false
+		}
+		if s.baseFee != nil && !ltx.GasFeeCap.Lt(s.baseFee) {
+			// feeCap >= baseFee: effective tip = min(tipCap, feeCap-baseFee),
+			// and with tipCap >= minTip already checked the cut reduces to
+			// feeCap >= baseFee+minTip. (feeCap < baseFee wraps through to the
+			// tip cap upstream, which the check above already admitted.)
+			if s.feeFloorOverflow || ltx.GasFeeCap.Lt(&s.feeFloor) {
+				return false
+			}
+		}
+	}
+	return s.gasCap == 0 || ltx.Gas <= s.gasCap
 }
 
 // uint256PtrEq reports whether two optional uint256 values are equal, treating

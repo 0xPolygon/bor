@@ -30,6 +30,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/tracing"
+	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/triedb"
@@ -387,6 +388,102 @@ func BenchmarkListCapOneTx(b *testing.B) {
 // mutation path and verifies after each step that the cached lazy view matches
 // a fresh conversion of Flatten() — i.e. the generation counter invalidates the
 // view on every content change and never spuriously retains a stale one.
+// TestCutScannerDifferential pins cutScanner.pass to the reference
+// per-transaction predicate (Transaction.EffectiveGasTipIntCmp plus the gas
+// cap check) across the fee-boundary cases, including the feeCap<baseFee
+// wrap-through that makes the effective tip degrade to the tip cap.
+func TestCutScannerDifferential(t *testing.T) {
+	t.Parallel()
+
+	lazy := func(tx *types.Transaction) *txpool.LazyTransaction {
+		return &txpool.LazyTransaction{
+			Hash:      tx.Hash(),
+			Tx:        tx,
+			GasFeeCap: uint256.MustFromBig(tx.GasFeeCap()),
+			GasTipCap: uint256.MustFromBig(tx.GasTipCap()),
+			Gas:       tx.Gas(),
+		}
+	}
+	reference := func(ltx *txpool.LazyTransaction, minTip, baseFee *uint256.Int, gasCap uint64) bool {
+		if minTip != nil && ltx.Tx.EffectiveGasTipIntCmp(minTip, baseFee) < 0 {
+			return false
+		}
+		return gasCap == 0 || ltx.Gas <= gasCap
+	}
+
+	u := func(v uint64) *uint256.Int { return uint256.NewInt(v) }
+	huge := new(uint256.Int).Sub(new(uint256.Int).Lsh(u(1), 255), u(1))
+
+	var lazies []*txpool.LazyTransaction
+	// Dynamic-fee grid around the boundaries plus extreme values.
+	values := []*uint256.Int{u(0), u(1), u(29), u(30), u(31), u(59), u(60), u(61), u(100), huge}
+	for _, tip := range values {
+		for _, cap_ := range values {
+			if cap_.Lt(tip) {
+				continue // pool validation enforces feeCap >= tipCap
+			}
+			lazies = append(lazies, lazy(types.NewTx(&types.DynamicFeeTx{
+				GasTipCap: tip.ToBig(), GasFeeCap: cap_.ToBig(), Gas: 21000,
+			})))
+		}
+	}
+	// Legacy txs (gasPrice = tipCap = feeCap) and gas-cap boundary rows.
+	for _, price := range values {
+		lazies = append(lazies, lazy(types.NewTx(&types.LegacyTx{GasPrice: price.ToBig(), Gas: 21000})))
+	}
+	for _, gas := range []uint64{20999, 21000, 21001, 30_000_000} {
+		lazies = append(lazies, lazy(types.NewTx(&types.DynamicFeeTx{
+			GasTipCap: u(30).ToBig(), GasFeeCap: u(100).ToBig(), Gas: gas,
+		})))
+	}
+
+	cuts := []struct {
+		minTip, baseFee *uint256.Int
+		gasCap          uint64
+	}{
+		{nil, nil, 0},
+		{nil, u(30), 0},
+		{u(0), u(30), 0},
+		{u(30), nil, 0},
+		{u(30), u(30), 0},
+		{u(30), u(31), 0},
+		{u(1), u(60), 0},
+		{u(30), u(60), 21000},
+		{u(30), u(60), 20999},
+		{huge, u(30), 0},
+		{u(30), huge, 0},    // most feeCaps < baseFee: wrap-through path
+		{huge, huge, 21000}, // feeFloor overflows uint256
+	}
+	for _, c := range cuts {
+		scanner := newCutScanner(c.minTip, c.baseFee, c.gasCap)
+		for _, ltx := range lazies {
+			want := reference(ltx, c.minTip, c.baseFee, c.gasCap)
+			got := scanner.pass(ltx)
+			require.Equal(t, want, got,
+				"cut{tip=%v fee=%v cap=%d} tx{tip=%v cap=%v gas=%d}",
+				c.minTip, c.baseFee, c.gasCap, ltx.GasTipCap, ltx.GasFeeCap, ltx.Gas)
+		}
+	}
+
+	// Randomized sweep for anything the grid missed.
+	rng := rand.New(rand.NewSource(1))
+	for i := 0; i < 20000; i++ {
+		tip, cap_ := rng.Uint64()%200, rng.Uint64()%200
+		if cap_ < tip {
+			tip, cap_ = cap_, tip
+		}
+		ltx := lazy(types.NewTx(&types.DynamicFeeTx{
+			GasTipCap: u(tip).ToBig(), GasFeeCap: u(cap_).ToBig(), Gas: 21000 + rng.Uint64()%100,
+		}))
+		minTip, baseFee := u(rng.Uint64()%200), u(rng.Uint64()%200)
+		gasCap := rng.Uint64() % 21200
+		scanner := newCutScanner(minTip, baseFee, gasCap)
+		require.Equal(t, reference(ltx, minTip, baseFee, gasCap), scanner.pass(ltx),
+			"fuzz tx{tip=%d cap=%d gas=%d} cut{tip=%v fee=%v cap=%d}",
+			tip, cap_, ltx.Gas, minTip, baseFee, gasCap)
+	}
+}
+
 func TestLazyFlattenDifferential(t *testing.T) {
 	t.Parallel()
 
