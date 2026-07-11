@@ -154,6 +154,18 @@ func TestAOTRealFrames(t *testing.T) {
 		len(frames), mismatches, onchainMatch, len(frames))
 }
 
+// BenchmarkAOTFrameSetup measures the harness-only cost of rebuilding the
+// prestate StateDB per iteration (no execution). Used to compute the
+// net-of-harness speedup: (interp - setup) / (aot - setup).
+func BenchmarkAOTFrameSetup(b *testing.B) {
+	frames := loadFrames(b)
+	for i := 0; i < b.N; i++ {
+		f := &frames[i%len(frames)]
+		statedb := frameStateDB(b, f)
+		_ = statedb
+	}
+}
+
 // BenchmarkAOTRealFrames times both paths over the recorded frames.
 // The prestate StateDB is rebuilt per iteration for both modes identically,
 // so the delta between the two sub-benchmarks is pure execution.

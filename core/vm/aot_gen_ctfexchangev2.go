@@ -18,18 +18,19 @@ var aotCodeHashCTFExchangeV2 = common.HexToHash("0xa08da89bbac2063dfa6a705e70314
 
 var (
 	aotCCTFExchangeV2_27 = *uint256.MustFromHex("0x1419d4111b5c8636aecff843bf618525f4f8e1aa6898a14357021d68dde8af12")
+	aotCCTFExchangeV2_82 = *uint256.MustFromHex("0x1626ba7e00000000000000000000000000000000000000000000000000000000")
 	aotCCTFExchangeV2_65 = *uint256.MustFromHex("0x174b3811690657c217184f89418266767c87e4805d09680c39fc9c031c0cab7c")
 	aotCCTFExchangeV2_14 = *uint256.MustFromHex("0x1ffc9a700000000000000000000000000000000000000000000000000000000")
 	aotCCTFExchangeV2_42 = *uint256.MustFromHex("0x203c4bd3e526634f661575359ff30de3b0edaba6c2cb1eac60f730b6d2d9d536")
-	aotCCTFExchangeV2_85 = *uint256.MustFromHex("0x23b872dd000000000000000000000000")
+	aotCCTFExchangeV2_86 = *uint256.MustFromHex("0x23b872dd000000000000000000000000")
 	aotCCTFExchangeV2_0 = *uint256.MustFromHex("0x2791bca1f2de4661ed88a30c99a7a9449aa84174")
 	aotCCTFExchangeV2_58 = *uint256.MustFromHex("0x27aae5db36d94179909d019ae0b1ac7c16d96d953148f63c0f6a0a9c8ead79ee")
 	aotCCTFExchangeV2_36 = *uint256.MustFromHex("0x2b754c5700000000000000000000000000000000000000000000000000000000")
 	aotCCTFExchangeV2_30 = *uint256.MustFromHex("0x2bce2127ff07fb632d16c8347c4ebf501f4841168bed00d9e6ef715ddb6fcecf")
 	aotCCTFExchangeV2_72 = *uint256.MustFromHex("0x30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd47")
 	aotCCTFExchangeV2_72R = uint256.Reciprocal(&aotCCTFExchangeV2_72)
-	aotCCTFExchangeV2_33 = *uint256.MustFromHex("0x3200000000000000000000000000000000000000000000000000000000000000")
-	aotCCTFExchangeV2_44 = *uint256.MustFromHex("0x3264e159346253e26a64e00b69032db0e7d32f94628de3e6eecb50304d7af3d2")
+	aotCCTFExchangeV2_32 = *uint256.MustFromHex("0x3200000000000000000000000000000000000000000000000000000000000000")
+	aotCCTFExchangeV2_45 = *uint256.MustFromHex("0x3264e159346253e26a64e00b69032db0e7d32f94628de3e6eecb50304d7af3d2")
 	aotCCTFExchangeV2_28 = *uint256.MustFromHex("0x386d034a00000000000000000000000000000000000000000000000000000000")
 	aotCCTFExchangeV2_41 = *uint256.MustFromHex("0x3c97aa5900000000000000000000000000000000000000000000000000000000")
 	aotCCTFExchangeV2_66 = *uint256.MustFromHex("0x3d00000000000000000000000000000000000000000000000000000000000000")
@@ -40,8 +41,8 @@ var (
 	aotCCTFExchangeV2_7 = *uint256.MustFromHex("0x44e999d5c2f66ef0861317f9a4805ac2e90aeb4f")
 	aotCCTFExchangeV2_4 = *uint256.MustFromHex("0x4d97dcd97ec945f40cf65f87097ace5ea0476045")
 	aotCCTFExchangeV2_13 = *uint256.MustFromHex("0x4e2312e000000000000000000000000000000000000000000000000000000000")
-	aotCCTFExchangeV2_86 = *uint256.MustFromHex("0x4e487b7100000000000000000000000000000000000000000000000000000000")
-	aotCCTFExchangeV2_32 = *uint256.MustFromHex("0x506f6c796d61726b6574204354462045786368616e6765000000000000000000")
+	aotCCTFExchangeV2_87 = *uint256.MustFromHex("0x4e487b7100000000000000000000000000000000000000000000000000000000")
+	aotCCTFExchangeV2_31 = *uint256.MustFromHex("0x506f6c796d61726b6574204354462045786368616e6765000000000000000000")
 	aotCCTFExchangeV2_71 = *uint256.MustFromHex("0x52e831dd00000000000000000000000000000000000000000000000000000000")
 	aotCCTFExchangeV2_79 = *uint256.MustFromHex("0x55bb3cade9d43b798a4fe5ffdd05024b2d7870df53920673bfc7e68047cd0ab1")
 	aotCCTFExchangeV2_23 = *uint256.MustFromHex("0x568efce200000000000000000000000000000000000000000000000000000000")
@@ -54,7 +55,7 @@ var (
 	aotCCTFExchangeV2_19 = *uint256.MustFromHex("0x787a2e12f4a55b658b8f573c32432ee11a5e8b51677d1e1e937aaf6a0bb5776e")
 	aotCCTFExchangeV2_16 = *uint256.MustFromHex("0x7bfa4b9f00000000000000000000000000000000000000000000000000000000")
 	aotCCTFExchangeV2_20 = *uint256.MustFromHex("0x7c214f0400000000000000000000000000000000000000000000000000000000")
-	aotCCTFExchangeV2_82 = *uint256.MustFromHex("0x7f9a6f4600000000000000000000000000000000000000000000000000000000")
+	aotCCTFExchangeV2_83 = *uint256.MustFromHex("0x7f9a6f4600000000000000000000000000000000000000000000000000000000")
 	aotCCTFExchangeV2_81 = *uint256.MustFromHex("0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
 	aotCCTFExchangeV2_46 = *uint256.MustFromHex("0x8b73c3c69bb8fe3d512ecc4cf759cc79239f7b179b0ffacaa9a75d522b39400f")
 	aotCCTFExchangeV2_38 = *uint256.MustFromHex("0x8baa579f00000000000000000000000000000000000000000000000000000000")
@@ -64,7 +65,7 @@ var (
 	aotCCTFExchangeV2_60 = *uint256.MustFromHex("0xa0b9446500000000000000000000000000000000000000000000000000000000")
 	aotCCTFExchangeV2_50 = *uint256.MustFromHex("0xa1e8a54850dbd7f520bcc09f47bff152294b77b2081da545a7adf531b7ea283b")
 	aotCCTFExchangeV2_37 = *uint256.MustFromHex("0xa3e76126f19eb25001b29726d2a9502b6377938633d2d6a955107dd442e7a14a")
-	aotCCTFExchangeV2_84 = *uint256.MustFromHex("0xa9059cbb000000000000000000000000")
+	aotCCTFExchangeV2_85 = *uint256.MustFromHex("0xa9059cbb000000000000000000000000")
 	aotCCTFExchangeV2_6 = *uint256.MustFromHex("0xaacfeea03eb1561c4e67d661e40682bd20e3541b")
 	aotCCTFExchangeV2_8 = *uint256.MustFromHex("0xab45c5a4b0c941a2f231c04c3f49182e1a254052")
 	aotCCTFExchangeV2_34 = *uint256.MustFromHex("0xad45d80700000000000000000000000000000000000000000000000000000000")
@@ -81,17 +82,17 @@ var (
 	aotCCTFExchangeV2_17 = *uint256.MustFromHex("0xdf0e465e00000000000000000000000000000000000000000000000000000000")
 	aotCCTFExchangeV2_43 = *uint256.MustFromHex("0xdf4d808000000000000000000000000000000000000000000000000000000000")
 	aotCCTFExchangeV2_22 = *uint256.MustFromHex("0xdfa61d2b00000000000000000000000000000000000000000000000000000000")
-	aotCCTFExchangeV2_45 = *uint256.MustFromHex("0xe111180000d2663c0091e4f400237545b87b996b")
+	aotCCTFExchangeV2_44 = *uint256.MustFromHex("0xe111180000d2663c0091e4f400237545b87b996b")
 	aotCCTFExchangeV2_78 = *uint256.MustFromHex("0xe2cc6ad600000000000000000000000000000000000000000000000000000000")
 	aotCCTFExchangeV2_53 = *uint256.MustFromHex("0xe380d7c3967dd06cc7c01db8b17332a1d806fd18f63206dcbd12aaef455c7ff2")
 	aotCCTFExchangeV2_11 = *uint256.MustFromHex("0xe51abdf814f8854941b9fe8e3a4f65cab4e7a4a8")
 	aotCCTFExchangeV2_40 = *uint256.MustFromHex("0xe72f724500000000000000000000000000000000000000000000000000000000")
 	aotCCTFExchangeV2_56 = *uint256.MustFromHex("0xe92c22722d9c284034b6c9f5aaec018edb3e593c0e084900b6b9d390a1182a0b")
 	aotCCTFExchangeV2_15 = *uint256.MustFromHex("0xee3b3d4b00000000000000000000000000000000000000000000000000000000")
-	aotCCTFExchangeV2_31 = *uint256.MustFromHex("0xf00000000000000000000000000000000000000000000000000000000000000")
+	aotCCTFExchangeV2_33 = *uint256.MustFromHex("0xf00000000000000000000000000000000000000000000000000000000000000")
 	aotCCTFExchangeV2_35 = *uint256.MustFromHex("0xf1e04d73c4304b5ff164f9d10c7473e2a1593b740674a6107975e2a7001c1e5c")
 	aotCCTFExchangeV2_12 = *uint256.MustFromHex("0xf23a6e6100000000000000000000000000000000000000000000000000000000")
-	aotCCTFExchangeV2_83 = *uint256.MustFromHex("0xf242432a00000000000000000000000000000000000000000000000000000000")
+	aotCCTFExchangeV2_84 = *uint256.MustFromHex("0xf242432a00000000000000000000000000000000000000000000000000000000")
 	aotCCTFExchangeV2_47 = *uint256.MustFromHex("0xf30041e9aac4c4d3a1481d2941dfb0a844a72040e9bbc79a810d1ec5b5d6c7af")
 	aotCCTFExchangeV2_69 = *uint256.MustFromHex("0xf3363d3d373d3d3d363d730000000000000000000000000000000000000000")
 	aotCCTFExchangeV2_24 = *uint256.MustFromHex("0xf7262ed0443cc211121ceb1a80d69004f319245615a7488f951f1437fd91642c")
@@ -105,7 +106,7 @@ var (
 	aotCCTFExchangeV2_3 = *uint256.MustFromHex("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
 	aotCCTFExchangeV2_18 = *uint256.MustFromHex("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00")
 	aotCCTFExchangeV2_25 = *uint256.MustFromHex("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe0")
-	aotCCTFExchangeV2_87 = *uint256.MustFromHex("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+	aotCCTFExchangeV2_88 = *uint256.MustFromHex("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
 )
 
 func init() { aotRegister(aotCodeHashCTFExchangeV2, aotExecCTFExchangeV2) }
@@ -127,6 +128,9 @@ func aotExecCTFExchangeV2(evm *EVM, contract *Contract, scope *ScopeContext, jt 
 	goto L0
 
 dispatch:
+	// Interrupt is polled here and on backward static edges: any loop
+	// must take one of the two.
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp = stack.top
 	switch pc {
 	case 15:
@@ -1314,1257 +1318,978 @@ dispatch:
 	}
 
 L0: // block @0 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
 	s[sp+0].SetUint64(128)
-	s[sp+1].SetUint64(64)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 4
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotMstoreC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
 	s[sp+0].Set(contract.Value())
 	s[sp+1] = s[sp+0]
 	if s[sp+1].IsZero() { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(15)
 	if contract.Gas < 21 { return nil, ErrOutOfGas }
 	contract.Gas -= 21
 	if !s[sp+1].IsZero() {
 		sp += 1
-		stack.top = sp
 		goto L15
 	}
 	sp += 1
 
 	// block @12 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 14
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L15: // block @15 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp-1].SetUint64(4)
 	s[sp+0].SetUint64(uint64(len(contract.Input)))
+	s[sp-1].SetUint64(4)
 	if s[sp+0].Lt(&s[sp-1]) { s[sp-1].SetOne() } else { s[sp-1].Clear() }
-	s[sp+0].SetUint64(739)
 	if contract.Gas < 24 { return nil, ErrOutOfGas }
 	contract.Gas -= 24
 	if !s[sp-1].IsZero() {
 		sp += -1
-		stack.top = sp
 		goto L739
 	}
 	sp += -1
 
 	// block @25 (9 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
+	s[sp+0].SetUint64(0)
 	if off, over := s[sp+0].Uint64WithOverflow(); !over {
 		s[sp+0].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(224)
-	if s[sp+1].LtUint64(256) { s[sp+0].Rsh(&s[sp+0], uint(s[sp+1].Uint64())) } else { s[sp+0].Clear() }
+	s[sp+0].Rsh(&s[sp+0], 224)
 	s[sp+1] = s[sp+0]
 	s[sp+2].SetUint64(1553423035)
 	if s[sp+2].Gt(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(391)
 	if contract.Gas < 33 { return nil, ErrOutOfGas }
 	contract.Gas -= 33
 	if !s[sp+1].IsZero() {
 		sp += 1
-		stack.top = sp
 		goto L391
 	}
 	sp += 1
 
 	// block @41 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(2995540416)
 	if s[sp+1].Gt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(221)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L221
 	}
 
 	// block @52 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(3820326912)
 	if s[sp+1].Gt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(147)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L147
 	}
 
 	// block @63 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(4024228212)
 	if s[sp+1].Gt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(110)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L110
 	}
 
 	// block @74 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(4024228212)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(2115)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L2115
 	}
 
 	// block @85 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(4063915617)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(2134)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L2134
 	}
 
 	// block @96 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(4124786251)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(2191)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L2191
 	}
 
 	// block @107 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 109
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L110: // block @110 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(3820326912)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(2033)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L2033
 	}
 
 	// block @122 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(3820982650)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(2071)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L2071
 	}
 
 	// block @133 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(3903017874)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(2080)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L2080
 	}
 
 	// block @144 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 146
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L147: // block @147 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(3234009900)
 	if s[sp+1].Gt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(195)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L195
 	}
 
 	// block @159 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(3234009900)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(1987)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L1987
 	}
 
 	// block @170 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(3444411572)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(1995)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L1995
 	}
 
 	// block @181 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(3819294421)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(2014)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L2014
 	}
 
 	// block @192 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 194
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L195: // block @195 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(2995540416)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(1841)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L1841
 	}
 
 	// block @207 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(3155786881)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(1879)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L1879
 	}
 
 	// block @218 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 220
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L221: // block @221 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(2063444152)
 	if s[sp+1].Gt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(317)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L317
 	}
 
 	// block @233 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(2430908192)
 	if s[sp+1].Gt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(280)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L280
 	}
 
 	// block @244 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(2430908192)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(1765)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L1765
 	}
 
 	// block @255 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(2557532158)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(1803)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L1803
 	}
 
 	// block @266 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(2894747722)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(1822)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L1822
 	}
 
 	// block @277 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 279
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L280: // block @280 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(2063444152)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(1712)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L1712
 	}
 
 	// block @292 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(2226133358)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(1719)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L1719
 	}
 
 	// block @303 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(2363135710)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(1746)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L1746
 	}
 
 	// block @314 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 316
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L317: // block @317 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(1883767413)
 	if s[sp+1].Gt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(365)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L365
 	}
 
 	// block @329 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(1883767413)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(1636)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L1636
 	}
 
 	// block @340 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(1891584229)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(1655)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L1655
 	}
 
 	// block @351 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(1977038602)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(1674)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L1674
 	}
 
 	// block @362 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 364
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L365: // block @365 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(1553423035)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(1567)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L1567
 	}
 
 	// block @377 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(1836119982)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(1580)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L1580
 	}
 
 	// block @388 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 390
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L391: // block @391 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(995237240)
 	if s[sp+1].Gt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(572)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L572
 	}
 
 	// block @403 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(1163946194)
 	if s[sp+1].Gt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(498)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L498
 	}
 
 	// block @414 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(1288581321)
 	if s[sp+1].Gt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(461)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L461
 	}
 
 	// block @425 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(1288581321)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(1502)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L1502
 	}
 
 	// block @436 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(1490597563)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(1510)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L1510
 	}
 
 	// block @447 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(1544898811)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(1529)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L1529
 	}
 
 	// block @458 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 460
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L461: // block @461 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(1163946194)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(1311)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L1311
 	}
 
 	// block @473 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(1178745511)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(1319)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L1319
 	}
 
 	// block @484 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(1244271093)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(1494)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L1494
 	}
 
 	// block @495 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 497
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L498: // block @498 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(1030567320)
 	if s[sp+1].Gt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(546)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L546
 	}
 
 	// block @510 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(1030567320)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(1265)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L1265
 	}
 
 	// block @521 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(1032198733)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(1273)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L1273
 	}
 
 	// block @532 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(1132403092)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(1292)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L1292
 	}
 
 	// block @543 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 545
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L546: // block @546 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(995237240)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(1208)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L1208
 	}
 
 	// block @558 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(1009468313)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(1246)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L1246
 	}
 
 	// block @569 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 571
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L572: // block @572 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(394655036)
 	if s[sp+1].Gt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(668)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L668
 	}
 
 	// block @584 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(679944449)
 	if s[sp+1].Gt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(631)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L631
 	}
 
 	// block @595 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(679944449)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(1022)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L1022
 	}
 
 	// block @606 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(701458418)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(1041)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L1041
 	}
 
 	// block @617 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(771713325)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(1079)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L1079
 	}
 
 	// block @628 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 630
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L631: // block @631 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(394655036)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(902)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L902
 	}
 
 	// block @643 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(592282041)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(921)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L921
 	}
 
 	// block @654 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(618102892)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(966)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L966
 	}
 
 	// block @665 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 667
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L668: // block @668 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(142700747)
 	if s[sp+1].Gt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(716)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L716
 	}
 
 	// block @680 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(142700747)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(854)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L854
 	}
 
 	// block @691 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(268346973)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(875)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L875
 	}
 
 	// block @702 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(271704942)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(894)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L894
 	}
 
 	// block @713 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 715
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L716: // block @716 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(33540519)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(743)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L743
 	}
 
 	// block @728 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(63890399)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(783)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L783
 	}
 
 L739: // block @739 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 5 { return nil, ErrOutOfGas }
 	contract.Gas -= 5
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 742
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L743: // block @743 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(762)
-	s[sp+1].SetUint64(757)
 	s[sp+2].SetUint64(uint64(len(contract.Input)))
-	s[sp+3].SetUint64(4)
-	s[sp+4].SetUint64(18392)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
+	s[sp+0].SetUint64(762)
+	s[sp+1].SetUint64(757)
+	s[sp+3].SetUint64(4)
 	sp += 4
-	stack.top = sp
 	goto L18392
 
 L757: // block @757 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(2210)
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
-	sp += 0
-	stack.top = sp
 	goto L2210
 
 L762: // block @762 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 765
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
 	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
 	s[sp+1] = s[sp-1]
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 2
-	pc = 770
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMstore(contract, mem, &s[sp+1], &s[sp+0]); err != nil { return nil, err }
 	s[sp+0].SetUint64(32)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
 
 L774: // block @774 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 777
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp+0]
 	s[sp+1], s[sp-1] = s[sp-1], s[sp+1]
 	s[sp+0].Sub(&s[sp+1], &s[sp+0])
@@ -2577,175 +2302,124 @@ L774: // block @774 (8 instrs)
 	return res, nil
 
 L783: // block @783 (2 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Set(&aotCCTFExchangeV2_0)
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].Set(&aotCCTFExchangeV2_0)
 	sp += 1
 
 L817: // block @817 (13 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 820
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_1)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+1] = s[sp+0]
 	s[sp+1], s[sp-1] = s[sp-1], s[sp+1]
+	s[sp+0].Set(&aotCCTFExchangeV2_1)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
 	s[sp+1] = s[sp-1]
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 2
-	pc = 846
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMstore(contract, mem, &s[sp+1], &s[sp+0]); err != nil { return nil, err }
 	s[sp+0].SetUint64(32)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	s[sp+0].SetUint64(774)
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
-	sp += 0
-	stack.top = sp
+	if interrupt.Load() { return nil, ErrInterrupt }
 	goto L774
 
 L854: // block @854 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(873)
-	s[sp+1].SetUint64(868)
 	s[sp+2].SetUint64(uint64(len(contract.Input)))
-	s[sp+3].SetUint64(4)
-	s[sp+4].SetUint64(19040)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
+	s[sp+0].SetUint64(873)
+	s[sp+1].SetUint64(868)
+	s[sp+3].SetUint64(4)
 	sp += 4
-	stack.top = sp
 	goto L19040
 
 L868: // block @868 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(2362)
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
-	sp += 0
-	stack.top = sp
 	goto L2362
 
 L873: // block @873 (2 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if contract.Gas < 1 { return nil, ErrOutOfGas }
 	contract.Gas -= 1
-	stack.top = sp + 0
 	return nil, errStopToken
 
 L875: // block @875 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(873)
-	s[sp+1].SetUint64(889)
 	s[sp+2].SetUint64(uint64(len(contract.Input)))
-	s[sp+3].SetUint64(4)
-	s[sp+4].SetUint64(19090)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
+	s[sp+0].SetUint64(873)
+	s[sp+1].SetUint64(889)
+	s[sp+3].SetUint64(4)
 	sp += 4
-	stack.top = sp
 	goto L19090
 
 L889: // block @889 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(2461)
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
-	sp += 0
-	stack.top = sp
 	goto L2461
 
 L894: // block @894 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(873)
-	s[sp+1].SetUint64(2474)
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
+	s[sp+0].SetUint64(873)
 	sp += 1
-	stack.top = sp
 	goto L2474
 
 L902: // block @902 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(873)
-	s[sp+1].SetUint64(916)
 	s[sp+2].SetUint64(uint64(len(contract.Input)))
-	s[sp+3].SetUint64(4)
-	s[sp+4].SetUint64(19122)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
+	s[sp+0].SetUint64(873)
+	s[sp+1].SetUint64(916)
+	s[sp+3].SetUint64(4)
 	sp += 4
-	stack.top = sp
 	goto L19122
 
 L916: // block @916 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(2556)
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
-	sp += 0
-	stack.top = sp
 	goto L2556
 
 L921: // block @921 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(952)
-	s[sp+1].SetUint64(935)
 	s[sp+2].SetUint64(uint64(len(contract.Input)))
-	s[sp+3].SetUint64(4)
-	s[sp+4].SetUint64(19122)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
+	s[sp+0].SetUint64(952)
+	s[sp+1].SetUint64(935)
+	s[sp+3].SetUint64(4)
 	sp += 4
-	stack.top = sp
 	goto L19122
 
 L935: // block @935 (14 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
+	if contract.Gas < 10 { return nil, ErrOutOfGas }
+	contract.Gas -= 10
 	s[sp+0].SetUint64(6)
-	s[sp+1].SetUint64(32)
-	if contract.Gas < 7 { return nil, ErrOutOfGas }
-	contract.Gas -= 7
-	stack.top = sp + 2
-	pc = 940
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].Clear()
-	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
-	s[sp+1] = s[sp-1]
-	if contract.Gas < 8 { return nil, ErrOutOfGas }
-	contract.Gas -= 8
-	stack.top = sp + 2
-	pc = 944
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].SetUint64(64)
-	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 1
-	pc = 948
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotMstoreC(contract, mem, 32, &s[sp+0]); err != nil { return nil, err }
+	s[sp+0] = s[sp-1]
+	if contract.Gas < 11 { return nil, ErrOutOfGas }
+	contract.Gas -= 11
+	if err = aotMstoreC(contract, mem, 0, &s[sp+0]); err != nil { return nil, err }
+	if contract.Gas < 36 { return nil, ErrOutOfGas }
+	contract.Gas -= 36
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp-1]); err != nil { return nil, err }
 	stack.top = sp + 0
-	pc = 949
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+0] = s[sp-2]
 	if contract.Gas < 11 { return nil, ErrOutOfGas }
 	contract.Gas -= 11
@@ -2756,77 +2430,52 @@ L935: // block @935 (14 instrs)
 	goto dispatch
 
 L952: // block @952 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 955
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
 	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
 	s[sp+1] = s[sp-1]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 958
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	if err = aotMstore(contract, mem, &s[sp+1], &s[sp+0]); err != nil { return nil, err }
 	s[sp+0].SetUint64(32)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	s[sp+0].SetUint64(774)
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
-	sp += 0
-	stack.top = sp
+	if interrupt.Load() { return nil, ErrInterrupt }
 	goto L774
 
 L966: // block @966 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(762)
-	s[sp+1].SetUint64(980)
 	s[sp+2].SetUint64(uint64(len(contract.Input)))
-	s[sp+3].SetUint64(4)
-	s[sp+4].SetUint64(19122)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
+	s[sp+0].SetUint64(762)
+	s[sp+1].SetUint64(980)
+	s[sp+3].SetUint64(4)
 	sp += 4
-	stack.top = sp
 	goto L19122
 
 L980: // block @980 (19 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].Set(&aotCCTFExchangeV2_1)
 	s[sp-1].And(&s[sp+0], &s[sp-1])
-	s[sp+0].Clear()
-	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
-	s[sp+1] = s[sp-1]
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 2
-	pc = 1006
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].SetUint64(32)
-	s[sp+1] = s[sp-1]
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 1011
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].SetUint64(64)
-	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 1
-	pc = 1015
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+0] = s[sp-1]
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMstoreC(contract, mem, 0, &s[sp+0]); err != nil { return nil, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	s[sp+0].SetUint64(0)
+	if err = aotMstoreC(contract, mem, 32, &s[sp+0]); err != nil { return nil, err }
+	if contract.Gas < 36 { return nil, ErrOutOfGas }
+	contract.Gas -= 36
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp-1]); err != nil { return nil, err }
 	stack.top = sp + 0
-	pc = 1016
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+0].SetUint64(255)
 	s[sp-1].And(&s[sp+0], &s[sp-1])
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
@@ -2839,89 +2488,64 @@ L980: // block @980 (19 instrs)
 	goto dispatch
 
 L1022: // block @1022 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(762)
-	s[sp+1].SetUint64(1036)
 	s[sp+2].SetUint64(uint64(len(contract.Input)))
-	s[sp+3].SetUint64(4)
-	s[sp+4].SetUint64(19122)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
+	s[sp+0].SetUint64(762)
+	s[sp+1].SetUint64(1036)
+	s[sp+3].SetUint64(4)
 	sp += 4
-	stack.top = sp
 	goto L19122
 
 L1036: // block @1036 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(2916)
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
-	sp += 0
-	stack.top = sp
 	goto L2916
 
 L1041: // block @1041 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Set(&aotCCTFExchangeV2_2)
-	s[sp+1].SetUint64(817)
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
+	s[sp+0].Set(&aotCCTFExchangeV2_2)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 1
-	stack.top = sp
 	goto L817
 
 L1079: // block @1079 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(1153)
-	s[sp+1].SetUint64(1093)
 	s[sp+2].SetUint64(uint64(len(contract.Input)))
-	s[sp+3].SetUint64(4)
-	s[sp+4].SetUint64(19147)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
+	s[sp+0].SetUint64(1153)
+	s[sp+1].SetUint64(1093)
+	s[sp+3].SetUint64(4)
 	sp += 4
-	stack.top = sp
 	goto L19147
 
 L1093: // block @1093 (23 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
+	if contract.Gas < 10 { return nil, ErrOutOfGas }
+	contract.Gas -= 10
 	s[sp+0].SetUint64(8)
-	s[sp+1].SetUint64(32)
-	if contract.Gas < 7 { return nil, ErrOutOfGas }
-	contract.Gas -= 7
-	stack.top = sp + 2
-	pc = 1098
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].Clear()
-	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
-	s[sp+1] = s[sp-1]
-	if contract.Gas < 8 { return nil, ErrOutOfGas }
-	contract.Gas -= 8
-	stack.top = sp + 2
-	pc = 1102
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].SetUint64(64)
-	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 1
-	pc = 1106
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotMstoreC(contract, mem, 32, &s[sp+0]); err != nil { return nil, err }
+	s[sp+0] = s[sp-1]
+	if contract.Gas < 11 { return nil, ErrOutOfGas }
+	contract.Gas -= 11
+	if err = aotMstoreC(contract, mem, 0, &s[sp+0]); err != nil { return nil, err }
+	if contract.Gas < 36 { return nil, ErrOutOfGas }
+	contract.Gas -= 36
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp-1]); err != nil { return nil, err }
 	stack.top = sp + 0
-	pc = 1107
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].SetUint64(255)
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+1] = s[sp-1]
+	s[sp+0].SetUint64(255)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
 	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
-	s[sp+1].SetUint64(256)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
+	s[sp+1] = s[sp+0]
+	s[sp+0].SetUint64(256)
 	s[sp+0].Div(&s[sp+1], &s[sp+0])
 	s[sp+1].Set(&aotCCTFExchangeV2_3)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
@@ -2935,270 +2559,193 @@ L1093: // block @1093 (23 instrs)
 	goto dispatch
 
 L1153: // block @1153 (20 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	s[sp+1] = s[sp+0]
-	if contract.Gas < 7 { return nil, ErrOutOfGas }
-	contract.Gas -= 7
-	stack.top = sp + 2
-	pc = 1157
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 10 { return nil, ErrOutOfGas }
+	contract.Gas -= 10
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+1], s[sp-2] = s[sp-2], s[sp+1]
 	if s[sp+1].IsZero() { s[sp+1].SetOne() } else { s[sp+1].Clear() }
 	if s[sp+1].IsZero() { s[sp+1].SetOne() } else { s[sp+1].Clear() }
 	s[sp+2] = s[sp-2]
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 3
-	pc = 1162
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_3)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+1], s[sp-1] = s[sp-1], s[sp+1]
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1] = s[sp-1]
+	s[sp+0].Set(&aotCCTFExchangeV2_3)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(32)
 	s[sp+2] = s[sp-2]
+	s[sp+1].SetUint64(32)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	if contract.Gas < 21 { return nil, ErrOutOfGas }
-	contract.Gas -= 21
-	stack.top = sp + 2
-	pc = 1202
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 24 { return nil, ErrOutOfGas }
+	contract.Gas -= 24
+	if err = aotMstore(contract, mem, &s[sp+1], &s[sp+0]); err != nil { return nil, err }
+	s[sp-1].SetUint64(64)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
-	s[sp-1].SetUint64(774)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += -1
-	stack.top = sp
 	goto L774
 
 L1208: // block @1208 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Set(&aotCCTFExchangeV2_4)
-	s[sp+1].SetUint64(817)
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
+	s[sp+0].Set(&aotCCTFExchangeV2_4)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 1
-	stack.top = sp
 	goto L817
 
 L1246: // block @1246 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(873)
-	s[sp+1].SetUint64(1260)
 	s[sp+2].SetUint64(uint64(len(contract.Input)))
-	s[sp+3].SetUint64(4)
-	s[sp+4].SetUint64(19438)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
+	s[sp+0].SetUint64(873)
+	s[sp+1].SetUint64(1260)
+	s[sp+3].SetUint64(4)
 	sp += 4
-	stack.top = sp
 	goto L19438
 
 L1260: // block @1260 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(2975)
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
-	sp += 0
-	stack.top = sp
 	goto L2975
 
 L1265: // block @1265 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(873)
-	s[sp+1].SetUint64(3260)
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
+	s[sp+0].SetUint64(873)
 	sp += 1
-	stack.top = sp
 	goto L3260
 
 L1273: // block @1273 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(952)
-	s[sp+1].SetUint64(1287)
 	s[sp+2].SetUint64(uint64(len(contract.Input)))
-	s[sp+3].SetUint64(4)
-	s[sp+4].SetUint64(19040)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
+	s[sp+0].SetUint64(952)
+	s[sp+1].SetUint64(1287)
+	s[sp+3].SetUint64(4)
 	sp += 4
-	stack.top = sp
 	goto L19040
 
 L1287: // block @1287 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(3425)
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
-	sp += 0
-	stack.top = sp
 	goto L3425
 
 L1292: // block @1292 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(873)
-	s[sp+1].SetUint64(1306)
 	s[sp+2].SetUint64(uint64(len(contract.Input)))
-	s[sp+3].SetUint64(4)
-	s[sp+4].SetUint64(19147)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
+	s[sp+0].SetUint64(873)
+	s[sp+1].SetUint64(1306)
+	s[sp+3].SetUint64(4)
 	sp += 4
-	stack.top = sp
 	goto L19147
 
 L1306: // block @1306 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(3519)
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
-	sp += 0
-	stack.top = sp
 	goto L3519
 
 L1311: // block @1311 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(873)
-	s[sp+1].SetUint64(3603)
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
+	s[sp+0].SetUint64(873)
 	sp += 1
-	stack.top = sp
 	goto L3603
 
 L1319: // block @1319 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(1432)
-	s[sp+1].SetUint64(1333)
 	s[sp+2].SetUint64(uint64(len(contract.Input)))
-	s[sp+3].SetUint64(4)
-	s[sp+4].SetUint64(19147)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
+	s[sp+0].SetUint64(1432)
+	s[sp+1].SetUint64(1333)
+	s[sp+3].SetUint64(4)
 	sp += 4
-	stack.top = sp
 	goto L19147
 
 L1333: // block @1333 (60 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	s[sp+1] = s[sp+0]
-	if contract.Gas < 7 { return nil, ErrOutOfGas }
-	contract.Gas -= 7
-	stack.top = sp + 2
-	pc = 1337
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2] = s[sp+1]
-	s[sp+3] = s[sp+0]
-	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 3
-	pc = 1343
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Clear()
-	s[sp+2] = s[sp+1]
-	s[sp+3] = s[sp+0]
-	if contract.Gas < 8 { return nil, ErrOutOfGas }
-	contract.Gas -= 8
-	stack.top = sp + 4
-	pc = 1347
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(32)
-	s[sp+3] = s[sp+0]
-	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 1352
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].Clear()
-	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
-	s[sp+1] = s[sp-1]
 	if contract.Gas < 10 { return nil, ErrOutOfGas }
 	contract.Gas -= 10
-	stack.top = sp + 2
-	pc = 1357
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].SetUint64(8)
-	s[sp+1].SetUint64(32)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2] = s[sp+0]
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 3
-	pc = 1364
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(64)
-	s[sp+1], s[sp-1] = s[sp-1], s[sp+1]
-	s[sp+2] = s[sp-1]
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
+	s[sp+2] = s[sp+1]
+	s[sp+3].SetUint64(64)
+	s[sp+2].Add(&s[sp+3], &s[sp+2])
 	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
+	s[sp+0] = s[sp+2]
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMstoreC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
+	s[sp+3] = s[sp+0]
+	if contract.Gas < 11 { return nil, ErrOutOfGas }
+	contract.Gas -= 11
+	s[sp+2].SetUint64(0)
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
+	s[sp+3] = s[sp+0]
+	s[sp+2].SetUint64(32)
+	s[sp+2].Add(&s[sp+3], &s[sp+2])
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
-	stack.top = sp + 3
-	pc = 1370
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2] = s[sp-1]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 3
-	pc = 1372
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+3] = s[sp+2]
-	s[sp+4] = s[sp-1]
-	s[sp+3].Add(&s[sp+4], &s[sp+3])
-	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
-	s[sp+3], s[sp-1] = s[sp-1], s[sp+3]
+	s[sp+1].SetUint64(0)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+0] = s[sp-1]
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMstoreC(contract, mem, 0, &s[sp+0]); err != nil { return nil, err }
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
-	stack.top = sp + 4
-	pc = 1378
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].SetUint64(8)
+	if err = aotMstoreC(contract, mem, 32, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 42 { return nil, ErrOutOfGas }
+	contract.Gas -= 42
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMloadC(contract, mem, 64, &s[sp+2]); err != nil { return nil, err }
+	s[sp+3] = s[sp+2]
+	s[sp+4].SetUint64(64)
+	s[sp+3].Add(&s[sp+4], &s[sp+3])
+	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
+	s[sp-1] = s[sp+3]
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMstoreC(contract, mem, 64, &s[sp+2]); err != nil { return nil, err }
 	stack.top = sp + 2
-	pc = 1379
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(255)
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+3] = s[sp+1]
+	s[sp+2].SetUint64(255)
 	s[sp+2].And(&s[sp+3], &s[sp+2])
 	if s[sp+2].IsZero() { s[sp+2].SetOne() } else { s[sp+2].Clear() }
 	if s[sp+2].IsZero() { s[sp+2].SetOne() } else { s[sp+2].Clear() }
 	s[sp+3] = s[sp-1]
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + 4
-	pc = 1387
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(256)
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
+	if contract.Gas < 21 { return nil, ErrOutOfGas }
+	contract.Gas -= 21
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
+	s[sp+2] = s[sp+1]
+	s[sp+1].SetUint64(256)
 	s[sp+1].Div(&s[sp+2], &s[sp+1])
 	s[sp+2].Set(&aotCCTFExchangeV2_3)
 	s[sp+1].And(&s[sp+2], &s[sp+1])
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
+	s[sp+0] = s[sp+1]
 	s[sp+2] = s[sp-1]
+	s[sp+1].SetUint64(32)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	if contract.Gas < 26 { return nil, ErrOutOfGas }
-	contract.Gas -= 26
-	stack.top = sp + 2
-	pc = 1429
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 29 { return nil, ErrOutOfGas }
+	contract.Gas -= 29
+	if err = aotMstore(contract, mem, &s[sp+1], &s[sp+0]); err != nil { return nil, err }
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
 	if contract.Gas < 11 { return nil, ErrOutOfGas }
 	contract.Gas -= 11
@@ -3209,187 +2756,139 @@ L1333: // block @1333 (60 instrs)
 	goto dispatch
 
 L1432: // block @1432 (27 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	s[sp+1] = s[sp+0]
-	if contract.Gas < 7 { return nil, ErrOutOfGas }
-	contract.Gas -= 7
-	stack.top = sp + 2
-	pc = 1436
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 10 { return nil, ErrOutOfGas }
+	contract.Gas -= 10
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp-1]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 3
-	pc = 1438
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
 	if s[sp+2].IsZero() { s[sp+2].SetOne() } else { s[sp+2].Clear() }
 	if s[sp+2].IsZero() { s[sp+2].SetOne() } else { s[sp+2].Clear() }
 	s[sp+3] = s[sp+1]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 4
-	pc = 1442
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(32)
-	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+3] = s[sp-1]
-	s[sp+2].Add(&s[sp+3], &s[sp+2])
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
-	stack.top = sp + 3
-	pc = 1448
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
+	s[sp+2] = s[sp-1]
+	s[sp+3].SetUint64(32)
+	s[sp+2].Add(&s[sp+3], &s[sp+2])
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
 	s[sp+3].Set(&aotCCTFExchangeV2_3)
 	s[sp+2].And(&s[sp+3], &s[sp+2])
-	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
+	s[sp-1] = s[sp+2]
 	s[sp+3] = s[sp+1]
+	s[sp+2].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
 	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	if contract.Gas < 24 { return nil, ErrOutOfGas }
-	contract.Gas -= 24
-	stack.top = sp + 3
-	pc = 1488
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 27 { return nil, ErrOutOfGas }
+	contract.Gas -= 27
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+0].SetUint64(64)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	s[sp+0].SetUint64(774)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
-	sp += 0
-	stack.top = sp
+	if interrupt.Load() { return nil, ErrInterrupt }
 	goto L774
 
 L1494: // block @1494 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(4)
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(4)
 	stack.top = sp + 1
-	pc = 1497
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(952)
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	if contract.Gas < 11 { return nil, ErrOutOfGas }
 	contract.Gas -= 11
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 1
-	stack.top = sp
 	goto L952
 
 L1502: // block @1502 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(873)
-	s[sp+1].SetUint64(3683)
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
+	s[sp+0].SetUint64(873)
 	sp += 1
-	stack.top = sp
 	goto L3683
 
 L1510: // block @1510 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(817)
-	s[sp+1].SetUint64(1524)
 	s[sp+2].SetUint64(uint64(len(contract.Input)))
-	s[sp+3].SetUint64(4)
-	s[sp+4].SetUint64(19122)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
+	s[sp+0].SetUint64(817)
+	s[sp+1].SetUint64(1524)
+	s[sp+3].SetUint64(4)
 	sp += 4
-	stack.top = sp
 	goto L19122
 
 L1524: // block @1524 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(3740)
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
-	sp += 0
-	stack.top = sp
 	goto L3740
 
 L1529: // block @1529 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Set(&aotCCTFExchangeV2_5)
-	s[sp+1].SetUint64(817)
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
+	s[sp+0].Set(&aotCCTFExchangeV2_5)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 1
-	stack.top = sp
 	goto L817
 
 L1567: // block @1567 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(3)
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(3)
 	stack.top = sp + 1
-	pc = 1570
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(762)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
+	s[sp+1] = s[sp+0]
 	s[sp+2].SetUint64(255)
 	s[sp+1].And(&s[sp+2], &s[sp+1])
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
+	s[sp+0].SetUint64(762)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 2
-	stack.top = sp
 	goto L762
 
 L1580: // block @1580 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(762)
-	s[sp+1].SetUint64(1594)
 	s[sp+2].SetUint64(uint64(len(contract.Input)))
-	s[sp+3].SetUint64(4)
-	s[sp+4].SetUint64(19122)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
+	s[sp+0].SetUint64(762)
+	s[sp+1].SetUint64(1594)
+	s[sp+3].SetUint64(4)
 	sp += 4
-	stack.top = sp
 	goto L19122
 
 L1594: // block @1594 (18 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].Set(&aotCCTFExchangeV2_1)
 	s[sp-1].And(&s[sp+0], &s[sp-1])
-	s[sp+0].Clear()
-	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
-	s[sp+1] = s[sp-1]
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 2
-	pc = 1620
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+0] = s[sp-1]
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMstoreC(contract, mem, 0, &s[sp+0]); err != nil { return nil, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
 	s[sp+0].SetUint64(2)
-	s[sp+1].SetUint64(32)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 1625
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].SetUint64(64)
-	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 1
-	pc = 1629
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotMstoreC(contract, mem, 32, &s[sp+0]); err != nil { return nil, err }
+	if contract.Gas < 36 { return nil, ErrOutOfGas }
+	contract.Gas -= 36
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp-1]); err != nil { return nil, err }
 	stack.top = sp + 0
-	pc = 1630
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+0].SetUint64(255)
 	s[sp-1].And(&s[sp+0], &s[sp-1])
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
@@ -3402,99 +2901,73 @@ L1594: // block @1594 (18 instrs)
 	goto dispatch
 
 L1636: // block @1636 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(873)
-	s[sp+1].SetUint64(1650)
 	s[sp+2].SetUint64(uint64(len(contract.Input)))
-	s[sp+3].SetUint64(4)
-	s[sp+4].SetUint64(19122)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
+	s[sp+0].SetUint64(873)
+	s[sp+1].SetUint64(1650)
+	s[sp+3].SetUint64(4)
 	sp += 4
-	stack.top = sp
 	goto L19122
 
 L1650: // block @1650 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(3816)
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
-	sp += 0
-	stack.top = sp
 	goto L3816
 
 L1655: // block @1655 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(817)
-	s[sp+1].SetUint64(1669)
 	s[sp+2].SetUint64(uint64(len(contract.Input)))
-	s[sp+3].SetUint64(4)
-	s[sp+4].SetUint64(19122)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
+	s[sp+0].SetUint64(817)
+	s[sp+1].SetUint64(1669)
+	s[sp+3].SetUint64(4)
 	sp += 4
-	stack.top = sp
 	goto L19122
 
 L1669: // block @1669 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(4121)
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
-	sp += 0
-	stack.top = sp
 	goto L4121
 
 L1674: // block @1674 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Set(&aotCCTFExchangeV2_6)
-	s[sp+1].SetUint64(817)
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
+	s[sp+0].Set(&aotCCTFExchangeV2_6)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 1
-	stack.top = sp
 	goto L817
 
 L1712: // block @1712 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(952)
-	s[sp+1].Clear()
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
+	s[sp+0].SetUint64(952)
+	s[sp+1].SetUint64(0)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 2
-	stack.top = sp
 	goto L952
 
 L1719: // block @1719 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(1727)
-	s[sp+1].SetUint64(4197)
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
+	s[sp+0].SetUint64(1727)
 	sp += 1
-	stack.top = sp
 	goto L4197
 
 L1727: // block @1727 (14 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 7 { return nil, &ErrStackUnderflow{stackLen: sp, required: 7} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 1730
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(774)
-	s[sp+1], s[sp-7] = s[sp-7], s[sp+1]
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+1] = s[sp-7]
 	s[sp+1], s[sp-6] = s[sp-6], s[sp+1]
 	s[sp+1], s[sp-5] = s[sp-5], s[sp+1]
 	s[sp+1], s[sp-4] = s[sp-4], s[sp+1]
@@ -3502,130 +2975,100 @@ L1727: // block @1727 (14 instrs)
 	s[sp+1], s[sp-2] = s[sp-2], s[sp+1]
 	s[sp+1], s[sp-1] = s[sp-1], s[sp+1]
 	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2].SetUint64(19784)
 	if contract.Gas < 38 { return nil, ErrOutOfGas }
 	contract.Gas -= 38
+	s[sp-7].SetUint64(774)
 	sp += 2
-	stack.top = sp
 	goto L19784
 
 L1746: // block @1746 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(873)
-	s[sp+1].SetUint64(1760)
 	s[sp+2].SetUint64(uint64(len(contract.Input)))
-	s[sp+3].SetUint64(4)
-	s[sp+4].SetUint64(19147)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
+	s[sp+0].SetUint64(873)
+	s[sp+1].SetUint64(1760)
+	s[sp+3].SetUint64(4)
 	sp += 4
-	stack.top = sp
 	goto L19147
 
 L1760: // block @1760 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(4365)
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
-	sp += 0
-	stack.top = sp
 	goto L4365
 
 L1765: // block @1765 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Set(&aotCCTFExchangeV2_7)
-	s[sp+1].SetUint64(817)
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
+	s[sp+0].Set(&aotCCTFExchangeV2_7)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 1
-	stack.top = sp
 	goto L817
 
 L1803: // block @1803 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(873)
-	s[sp+1].SetUint64(1817)
 	s[sp+2].SetUint64(uint64(len(contract.Input)))
-	s[sp+3].SetUint64(4)
-	s[sp+4].SetUint64(19122)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
+	s[sp+0].SetUint64(873)
+	s[sp+1].SetUint64(1817)
+	s[sp+3].SetUint64(4)
 	sp += 4
-	stack.top = sp
 	goto L19122
 
 L1817: // block @1817 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(4446)
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
-	sp += 0
-	stack.top = sp
 	goto L4446
 
 L1822: // block @1822 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(873)
-	s[sp+1].SetUint64(1836)
 	s[sp+2].SetUint64(uint64(len(contract.Input)))
-	s[sp+3].SetUint64(4)
-	s[sp+4].SetUint64(19122)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
+	s[sp+0].SetUint64(873)
+	s[sp+1].SetUint64(1836)
+	s[sp+3].SetUint64(4)
 	sp += 4
-	stack.top = sp
 	goto L19122
 
 L1836: // block @1836 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(4733)
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
-	sp += 0
-	stack.top = sp
 	goto L4733
 
 L1841: // block @1841 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Set(&aotCCTFExchangeV2_8)
-	s[sp+1].SetUint64(817)
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
+	s[sp+0].Set(&aotCCTFExchangeV2_8)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 1
-	stack.top = sp
 	goto L817
 
 L1879: // block @1879 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(1938)
-	s[sp+1].SetUint64(1893)
 	s[sp+2].SetUint64(uint64(len(contract.Input)))
-	s[sp+3].SetUint64(4)
-	s[sp+4].SetUint64(20068)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
+	s[sp+0].SetUint64(1938)
+	s[sp+1].SetUint64(1893)
+	s[sp+3].SetUint64(4)
 	sp += 4
-	stack.top = sp
 	goto L20068
 
 L1893: // block @1893 (13 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 9 { return nil, &ErrStackUnderflow{stackLen: sp, required: 9} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Set(&aotCCTFExchangeV2_9)
-	s[sp+0], s[sp-9] = s[sp-9], s[sp+0]
+	s[sp+0] = s[sp-9]
 	s[sp+0], s[sp-8] = s[sp-8], s[sp+0]
 	if contract.Gas < 34 { return nil, ErrOutOfGas }
 	contract.Gas -= 34
+	s[sp-9].Set(&aotCCTFExchangeV2_9)
 	if !s[sp-8].IsUint64() { return nil, ErrInvalidJump }
 	pc = s[sp-8].Uint64()
 	sp += -8
@@ -3633,189 +3076,145 @@ L1893: // block @1893 (13 instrs)
 	goto dispatch
 
 L1938: // block @1938 (13 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 1941
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_10)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+1] = s[sp+0]
 	s[sp+1], s[sp-1] = s[sp-1], s[sp+1]
+	s[sp+0].Set(&aotCCTFExchangeV2_10)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
 	s[sp+1] = s[sp-1]
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 2
-	pc = 1979
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMstore(contract, mem, &s[sp+1], &s[sp+0]); err != nil { return nil, err }
 	s[sp+0].SetUint64(32)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	s[sp+0].SetUint64(774)
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
-	sp += 0
-	stack.top = sp
+	if interrupt.Load() { return nil, ErrInterrupt }
 	goto L774
 
 L1987: // block @1987 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(873)
-	s[sp+1].SetUint64(5016)
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
+	s[sp+0].SetUint64(873)
 	sp += 1
-	stack.top = sp
 	goto L5016
 
 L1995: // block @1995 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(873)
-	s[sp+1].SetUint64(2009)
 	s[sp+2].SetUint64(uint64(len(contract.Input)))
-	s[sp+3].SetUint64(4)
-	s[sp+4].SetUint64(19147)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
+	s[sp+0].SetUint64(873)
+	s[sp+1].SetUint64(2009)
+	s[sp+3].SetUint64(4)
 	sp += 4
-	stack.top = sp
 	goto L19147
 
 L2009: // block @2009 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(5183)
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
-	sp += 0
-	stack.top = sp
 	goto L5183
 
 L2014: // block @2014 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(873)
-	s[sp+1].SetUint64(2028)
 	s[sp+2].SetUint64(uint64(len(contract.Input)))
-	s[sp+3].SetUint64(4)
-	s[sp+4].SetUint64(19040)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
+	s[sp+0].SetUint64(873)
+	s[sp+1].SetUint64(2028)
+	s[sp+3].SetUint64(4)
 	sp += 4
-	stack.top = sp
 	goto L19040
 
 L2028: // block @2028 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(5264)
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
-	sp += 0
-	stack.top = sp
 	goto L5264
 
 L2033: // block @2033 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Set(&aotCCTFExchangeV2_11)
-	s[sp+1].SetUint64(817)
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
+	s[sp+0].Set(&aotCCTFExchangeV2_11)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 1
-	stack.top = sp
 	goto L817
 
 L2071: // block @2071 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(952)
-	s[sp+1].SetUint64(5)
 	if contract.Gas < 7 { return nil, ErrOutOfGas }
 	contract.Gas -= 7
+	s[sp+1].SetUint64(5)
 	stack.top = sp + 2
-	pc = 2077
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2] = s[sp+0]
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	if contract.Gas < 11 { return nil, ErrOutOfGas }
 	contract.Gas -= 11
+	s[sp+0].SetUint64(952)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 2
-	stack.top = sp
 	goto L952
 
 L2080: // block @2080 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(3)
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(3)
 	stack.top = sp + 1
-	pc = 2083
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(256)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
+	s[sp+1] = s[sp+0]
+	s[sp+0].SetUint64(256)
 	s[sp+0].Div(&s[sp+1], &s[sp+0])
 	s[sp+1].Set(&aotCCTFExchangeV2_1)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(817)
 	if contract.Gas < 28 { return nil, ErrOutOfGas }
 	contract.Gas -= 28
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 1
-	stack.top = sp
 	goto L817
 
 L2115: // block @2115 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(873)
-	s[sp+1].SetUint64(2129)
 	s[sp+2].SetUint64(uint64(len(contract.Input)))
-	s[sp+3].SetUint64(4)
-	s[sp+4].SetUint64(19122)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
+	s[sp+0].SetUint64(873)
+	s[sp+1].SetUint64(2129)
+	s[sp+3].SetUint64(4)
 	sp += 4
-	stack.top = sp
 	goto L19122
 
 L2129: // block @2129 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(5358)
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
-	sp += 0
-	stack.top = sp
 	goto L5358
 
 L2134: // block @2134 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(1938)
-	s[sp+1].SetUint64(2148)
 	s[sp+2].SetUint64(uint64(len(contract.Input)))
-	s[sp+3].SetUint64(4)
-	s[sp+4].SetUint64(20259)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
+	s[sp+0].SetUint64(1938)
+	s[sp+1].SetUint64(2148)
+	s[sp+3].SetUint64(4)
 	sp += 4
-	stack.top = sp
 	goto L20259
 
 L2148: // block @2148 (11 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 7 { return nil, &ErrStackUnderflow{stackLen: sp, required: 7} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Set(&aotCCTFExchangeV2_12)
-	s[sp+0], s[sp-7] = s[sp-7], s[sp+0]
+	s[sp+0] = s[sp-7]
 	s[sp+0], s[sp-6] = s[sp-6], s[sp+0]
 	if contract.Gas < 30 { return nil, ErrOutOfGas }
 	contract.Gas -= 30
+	s[sp-7].Set(&aotCCTFExchangeV2_12)
 	if !s[sp-6].IsUint64() { return nil, ErrInvalidJump }
 	pc = s[sp-6].Uint64()
 	sp += -6
@@ -3823,64 +3222,53 @@ L2148: // block @2148 (11 instrs)
 	goto dispatch
 
 L2191: // block @2191 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(873)
-	s[sp+1].SetUint64(2205)
 	s[sp+2].SetUint64(uint64(len(contract.Input)))
-	s[sp+3].SetUint64(4)
-	s[sp+4].SetUint64(20374)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
+	s[sp+0].SetUint64(873)
+	s[sp+1].SetUint64(2205)
+	s[sp+3].SetUint64(4)
 	sp += 4
-	stack.top = sp
 	goto L20374
 
 L2205: // block @2205 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(5439)
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
-	sp += 0
-	stack.top = sp
 	goto L5439
 
 L2210: // block @2210 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Set(&aotCCTFExchangeV2_13)
-	s[sp+2].Set(&aotCCTFExchangeV2_10)
 	s[sp+3] = s[sp-1]
+	s[sp+2].Set(&aotCCTFExchangeV2_10)
 	s[sp+2].And(&s[sp+3], &s[sp+2])
+	s[sp+1].Set(&aotCCTFExchangeV2_13)
 	if s[sp+2].Eq(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
 	s[sp+2] = s[sp+1]
-	s[sp+3].SetUint64(2356)
 	if contract.Gas < 34 { return nil, ErrOutOfGas }
 	contract.Gas -= 34
 	if !s[sp+2].IsZero() {
+		s[sp+0].SetUint64(0)
 		sp += 2
-		stack.top = sp
 		goto L2356
 	}
+	s[sp+0].SetUint64(0)
 	sp += 2
 
 	// block @2286 (6 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp-1].Set(&aotCCTFExchangeV2_14)
-	s[sp+0].Set(&aotCCTFExchangeV2_10)
 	s[sp+1] = s[sp-3]
+	s[sp+0].Set(&aotCCTFExchangeV2_10)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
+	s[sp-1].Set(&aotCCTFExchangeV2_14)
 	if s[sp+0].Eq(&s[sp-1]) { s[sp-1].SetOne() } else { s[sp-1].Clear() }
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
 
 L2356: // block @2356 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	s[sp-1], s[sp-4] = s[sp-4], s[sp-1]
 	s[sp-1], s[sp-3] = s[sp-3], s[sp-1]
@@ -3893,87 +3281,60 @@ L2356: // block @2356 (6 instrs)
 	goto dispatch
 
 L2362: // block @2362 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(2372)
 	s[sp+2] = s[sp-1]
-	s[sp+3].SetUint64(3425)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(2372)
 	sp += 3
-	stack.top = sp
 	goto L3425
 
 L2372: // block @2372 (20 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
 	s[sp+1] = s[sp-1]
-	s[sp+2] = s[sp+0]
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMstoreC(contract, mem, 0, &s[sp+1]); err != nil { return nil, err }
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 2376
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	s[sp+1].SetUint64(8)
-	s[sp+2].SetUint64(32)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 2381
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(64)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 2385
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotMstoreC(contract, mem, 32, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 36 { return nil, ErrOutOfGas }
+	contract.Gas -= 36
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp+0]); err != nil { return nil, err }
 	stack.top = sp + 1
-	pc = 2386
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
 	s[sp+0], s[sp-2] = s[sp-2], s[sp+0]
 	s[sp+0].SetUint64(255)
 	s[sp-1].And(&s[sp+0], &s[sp-1])
 	if s[sp-1].IsZero() { s[sp-1].SetOne() } else { s[sp-1].Clear() }
-	s[sp+0].SetUint64(2447)
 	if contract.Gas < 30 { return nil, ErrOutOfGas }
 	contract.Gas -= 30
 	if !s[sp-1].IsZero() {
 		sp += -1
-		stack.top = sp
 		goto L2447
 	}
 	sp += -1
 
 	// block @2398 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 2400
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_15)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 2435
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 2441
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_15)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -3986,21 +3347,17 @@ L2372: // block @2372 (20 instrs)
 	return res, nil
 
 L2447: // block @2447 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(2457)
 	s[sp+1] = s[sp-1]
 	s[sp+2] = s[sp-2]
-	s[sp+3].SetUint64(5554)
 	if contract.Gas < 21 { return nil, ErrOutOfGas }
 	contract.Gas -= 21
+	s[sp+0].SetUint64(2457)
 	sp += 3
-	stack.top = sp
 	goto L5554
 
 L2457: // block @2457 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if contract.Gas < 13 { return nil, ErrOutOfGas }
 	contract.Gas -= 13
@@ -4011,90 +3368,60 @@ L2457: // block @2457 (4 instrs)
 	goto dispatch
 
 L2461: // block @2461 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(2457)
 	s[sp+1] = s[sp-2]
 	s[sp+2] = s[sp-1]
-	s[sp+3].SetUint64(4)
 	if contract.Gas < 13 { return nil, ErrOutOfGas }
 	contract.Gas -= 13
+	s[sp+3].SetUint64(4)
 	stack.top = sp + 4
-	pc = 2469
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+4].SetUint64(5693)
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	if contract.Gas < 11 { return nil, ErrOutOfGas }
 	contract.Gas -= 11
+	s[sp+0].SetUint64(2457)
 	sp += 4
-	stack.top = sp
 	goto L5693
 
 L2474: // block @2474 (18 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetBytes(contract.Caller().Bytes())
-	s[sp+1].Clear()
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2] = s[sp+0]
-	if contract.Gas < 11 { return nil, ErrOutOfGas }
-	contract.Gas -= 11
-	stack.top = sp + 3
-	pc = 2479
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(32)
-	s[sp+2] = s[sp+0]
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 2484
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(64)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 2488
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1] = s[sp+0]
+	if contract.Gas < 14 { return nil, ErrOutOfGas }
+	contract.Gas -= 14
+	if err = aotMstoreC(contract, mem, 0, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	s[sp+1].SetUint64(0)
+	if err = aotMstoreC(contract, mem, 32, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 36 { return nil, ErrOutOfGas }
+	contract.Gas -= 36
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp+0]); err != nil { return nil, err }
 	stack.top = sp + 1
-	pc = 2489
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+1].SetUint64(255)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(2546)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L2546
 	}
 
 	// block @2497 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 2499
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_16)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 2534
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 2540
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_16)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -4107,18 +3434,14 @@ L2474: // block @2474 (18 instrs)
 	return res, nil
 
 L2546: // block @2546 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(2554)
-	s[sp+1].SetUint64(5807)
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
+	s[sp+0].SetUint64(2554)
 	sp += 1
-	stack.top = sp
 	goto L5807
 
 L2554: // block @2554 (2 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
@@ -4129,70 +3452,44 @@ L2554: // block @2554 (2 instrs)
 	goto dispatch
 
 L2556: // block @2556 (18 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetBytes(contract.Caller().Bytes())
-	s[sp+1].Clear()
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2] = s[sp+0]
-	if contract.Gas < 11 { return nil, ErrOutOfGas }
-	contract.Gas -= 11
-	stack.top = sp + 3
-	pc = 2561
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(32)
-	s[sp+2] = s[sp+0]
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 2566
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(64)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 2570
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1] = s[sp+0]
+	if contract.Gas < 14 { return nil, ErrOutOfGas }
+	contract.Gas -= 14
+	if err = aotMstoreC(contract, mem, 0, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	s[sp+1].SetUint64(0)
+	if err = aotMstoreC(contract, mem, 32, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 36 { return nil, ErrOutOfGas }
+	contract.Gas -= 36
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp+0]); err != nil { return nil, err }
 	stack.top = sp + 1
-	pc = 2571
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+1].SetUint64(255)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(2628)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L2628
 	}
 
 	// block @2579 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 2581
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_16)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 2616
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 2622
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_16)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -4205,73 +3502,47 @@ L2556: // block @2556 (18 instrs)
 	return res, nil
 
 L2628: // block @2628 (20 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Set(&aotCCTFExchangeV2_1)
 	s[sp+1] = s[sp-1]
+	s[sp+0].Set(&aotCCTFExchangeV2_1)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
-	s[sp+1].Clear()
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2] = s[sp+0]
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + 3
-	pc = 2655
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(32)
-	s[sp+2] = s[sp+0]
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 2660
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(64)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 2664
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1] = s[sp+0]
+	if contract.Gas < 21 { return nil, ErrOutOfGas }
+	contract.Gas -= 21
+	if err = aotMstoreC(contract, mem, 0, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	s[sp+1].SetUint64(0)
+	if err = aotMstoreC(contract, mem, 32, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 36 { return nil, ErrOutOfGas }
+	contract.Gas -= 36
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp+0]); err != nil { return nil, err }
 	stack.top = sp + 1
-	pc = 2665
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+1].SetUint64(255)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(2722)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L2722
 	}
 
 	// block @2673 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 2675
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_16)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 2710
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 2716
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_16)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -4284,49 +3555,35 @@ L2628: // block @2628 (20 instrs)
 	return res, nil
 
 L2722: // block @2722 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(1)
-	s[sp+1] = s[sp+0]
 	if contract.Gas < 7 { return nil, ErrOutOfGas }
 	contract.Gas -= 7
+	s[sp+1].SetUint64(1)
 	stack.top = sp + 2
-	pc = 2726
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
+	s[sp+0].SetUint64(1)
 	if s[sp+1].Gt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(2781)
 	if contract.Gas < 16 { return nil, ErrOutOfGas }
 	contract.Gas -= 16
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L2781
 	}
 
 	// block @2732 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 2734
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_17)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 2769
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 2775
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_17)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -4339,27 +3596,22 @@ L2722: // block @2722 (7 instrs)
 	return res, nil
 
 L2781: // block @2781 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(1)
-	s[sp+1].Clear()
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
+	s[sp+2].SetUint64(1)
 	stack.top = sp + 3
-	pc = 2786
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+3].SetUint64(2795)
-	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
-	s[sp+4].SetUint64(20487)
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
+	s[sp+3] = s[sp+2]
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
+	s[sp+0].SetUint64(1)
+	s[sp+1].SetUint64(0)
+	s[sp+2].SetUint64(2795)
 	sp += 4
-	stack.top = sp
 	goto L20487
 
 L2795: // block @2795 (35 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
@@ -4369,57 +3621,45 @@ L2795: // block @2795 (35 instrs)
 	stack.top = sp + 0
 	pc = 2798
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp-3].Set(&aotCCTFExchangeV2_1)
 	s[sp-2] = s[sp-4]
+	s[sp-3].Set(&aotCCTFExchangeV2_1)
 	s[sp-3].And(&s[sp-2], &s[sp-3])
-	s[sp-2].Clear()
 	s[sp-1] = s[sp-3]
-	s[sp+0] = s[sp-2]
-	if contract.Gas < 19 { return nil, ErrOutOfGas }
-	contract.Gas -= 19
-	stack.top = sp + 1
-	pc = 2826
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp-1].SetUint64(32)
-	s[sp+0] = s[sp-2]
-	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 1
-	pc = 2831
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp-1].SetUint64(64)
-	s[sp+0] = s[sp-1]
-	s[sp+1] = s[sp-2]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 2836
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 22 { return nil, ErrOutOfGas }
+	contract.Gas -= 22
+	if err = aotMstoreC(contract, mem, 0, &s[sp-1]); err != nil { return nil, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	s[sp-1].SetUint64(0)
+	if err = aotMstoreC(contract, mem, 32, &s[sp-1]); err != nil { return nil, err }
+	if contract.Gas < 39 { return nil, ErrOutOfGas }
+	contract.Gas -= 39
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp+0]
 	if contract.Gas < 3 { return nil, ErrOutOfGas }
 	contract.Gas -= 3
 	stack.top = sp + 2
-	pc = 2838
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+2].Set(&aotCCTFExchangeV2_18)
 	s[sp+1].And(&s[sp+2], &s[sp+1])
 	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
+	s[sp-2].SetUint64(0)
+	s[sp-1].SetUint64(64)
 	stack.top = sp + 2
 	pc = 2874
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	stack.top = sp + 0
-	pc = 2875
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 3 { return nil, ErrOutOfGas }
+	contract.Gas -= 3
+	if err = aotMloadC(contract, mem, 64, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0].SetBytes(contract.Caller().Bytes())
 	s[sp+0], s[sp-3] = s[sp-3], s[sp+0]
 	s[sp+0], s[sp-2] = s[sp-2], s[sp+0]
-	s[sp+1].Set(&aotCCTFExchangeV2_19)
-	s[sp+1], s[sp-1] = s[sp-1], s[sp+1]
+	s[sp+1] = s[sp-1]
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp-1].Set(&aotCCTFExchangeV2_19)
 	stack.top = sp + 2
 	pc = 2913
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
@@ -4432,54 +3672,40 @@ L2795: // block @2795 (35 instrs)
 	goto dispatch
 
 L2916: // block @2916 (22 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Set(&aotCCTFExchangeV2_1)
 	s[sp+1] = s[sp-1]
+	s[sp+0].Set(&aotCCTFExchangeV2_1)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
-	s[sp+1].Clear()
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2] = s[sp+0]
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + 3
-	pc = 2943
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1] = s[sp+0]
+	if contract.Gas < 21 { return nil, ErrOutOfGas }
+	contract.Gas -= 21
+	if err = aotMstoreC(contract, mem, 0, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
 	s[sp+1].SetUint64(6)
-	s[sp+2].SetUint64(32)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 2948
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(64)
-	s[sp+2] = s[sp+0]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 2952
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotMstoreC(contract, mem, 32, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 36 { return nil, ErrOutOfGas }
+	contract.Gas -= 36
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp+1]); err != nil { return nil, err }
 	stack.top = sp + 2
-	pc = 2953
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	if s[sp+2].IsZero() { s[sp+2].SetOne() } else { s[sp+2].Clear() }
 	s[sp+3] = s[sp+2]
 	if s[sp+3].IsZero() { s[sp+3].SetOne() } else { s[sp+3].Clear() }
 	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
-	s[sp+4].SetUint64(2968)
 	if contract.Gas < 28 { return nil, ErrOutOfGas }
 	contract.Gas -= 28
 	if !s[sp+3].IsZero() {
+		s[sp+0].SetUint64(0)
 		sp += 3
-		stack.top = sp
 		goto L2968
 	}
+	s[sp+0].SetUint64(0)
 	sp += 3
 
 	// block @2963 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1] = s[sp-2]
@@ -4494,7 +3720,6 @@ L2916: // block @2916 (22 instrs)
 	contract.Gas -= 6
 
 L2968: // block @2968 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	s[sp-1], s[sp-5] = s[sp-5], s[sp-1]
 	s[sp-1], s[sp-4] = s[sp-4], s[sp-1]
@@ -4507,69 +3732,44 @@ L2968: // block @2968 (7 instrs)
 	goto dispatch
 
 L2975: // block @2975 (17 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetBytes(contract.Caller().Bytes())
-	s[sp+1].Clear()
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2] = s[sp+0]
-	if contract.Gas < 11 { return nil, ErrOutOfGas }
-	contract.Gas -= 11
-	stack.top = sp + 3
-	pc = 2980
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1] = s[sp+0]
+	if contract.Gas < 14 { return nil, ErrOutOfGas }
+	contract.Gas -= 14
+	if err = aotMstoreC(contract, mem, 0, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
 	s[sp+1].SetUint64(2)
-	s[sp+2].SetUint64(32)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 2985
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(64)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 2989
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotMstoreC(contract, mem, 32, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 36 { return nil, ErrOutOfGas }
+	contract.Gas -= 36
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp+0]); err != nil { return nil, err }
 	stack.top = sp + 1
-	pc = 2990
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+1].SetUint64(255)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(3047)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L3047
 	}
 
 	// block @2998 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 3000
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_20)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 3035
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 3041
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_20)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -4582,50 +3782,36 @@ L2975: // block @2975 (17 instrs)
 	return res, nil
 
 L3047: // block @3047 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(3)
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(3)
 	stack.top = sp + 1
-	pc = 3050
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+1].SetUint64(255)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(3108)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L3108
 	}
 
 	// block @3059 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 3061
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_21)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 3096
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 3102
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_21)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -4638,50 +3824,36 @@ L3047: // block @3047 (8 instrs)
 	return res, nil
 
 L3108: // block @3108 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-5]
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 3110
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp+0]
-	s[sp+2].SetUint64(3165)
 	if contract.Gas < 16 { return nil, ErrOutOfGas }
 	contract.Gas -= 16
 	if !s[sp+1].IsZero() {
 		sp += 1
-		stack.top = sp
 		goto L3165
 	}
 	sp += 1
 
 	// block @3116 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 3118
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_22)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 3153
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 3159
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_22)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -4694,82 +3866,62 @@ L3108: // block @3108 (6 instrs)
 	return res, nil
 
 L3165: // block @3165 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-4]
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 3167
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp-1]
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
 	s[sp+1] = s[sp+0]
 	if s[sp+1].IsZero() { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(3181)
 	if contract.Gas < 25 { return nil, ErrOutOfGas }
 	contract.Gas -= 25
 	if !s[sp+1].IsZero() {
 		sp += 1
-		stack.top = sp
 		goto L3181
 	}
 	sp += 1
 
 	// block @3176 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1] = s[sp-3]
-	if contract.Gas < 5 { return nil, ErrOutOfGas }
-	contract.Gas -= 5
-	stack.top = sp + 0
-	pc = 3178
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 8 { return nil, ErrOutOfGas }
+	contract.Gas -= 8
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-2]
 	if s[sp+0].Eq(&s[sp-1]) { s[sp-1].SetOne() } else { s[sp-1].Clear() }
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
 
 L3181: // block @3181 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(3235)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
 	if !s[sp-1].IsZero() {
 		sp += -1
-		stack.top = sp
 		goto L3235
 	}
 	sp += -1
 
 	// block @3186 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 3188
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_23)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 3223
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 3229
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_23)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -4782,10 +3934,8 @@ L3181: // block @3181 (3 instrs)
 	return res, nil
 
 L3235: // block @3235 (11 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 8 { return nil, &ErrStackUnderflow{stackLen: sp, required: 8} }
 	if sp+9 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(3250)
 	s[sp+1] = s[sp-8]
 	s[sp+2] = s[sp-7]
 	s[sp+3] = s[sp-6]
@@ -4793,15 +3943,13 @@ L3235: // block @3235 (11 instrs)
 	s[sp+5] = s[sp-4]
 	s[sp+6] = s[sp-3]
 	s[sp+7] = s[sp-2]
-	s[sp+8].SetUint64(5894)
 	if contract.Gas < 36 { return nil, ErrOutOfGas }
 	contract.Gas -= 36
+	s[sp+0].SetUint64(3250)
 	sp += 8
-	stack.top = sp
 	goto L5894
 
 L3250: // block @3250 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 9 { return nil, &ErrStackUnderflow{stackLen: sp, required: 9} }
 	if contract.Gas < 25 { return nil, ErrOutOfGas }
 	contract.Gas -= 25
@@ -4812,69 +3960,44 @@ L3250: // block @3250 (10 instrs)
 	goto dispatch
 
 L3260: // block @3260 (17 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetBytes(contract.Caller().Bytes())
-	s[sp+1].Clear()
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2] = s[sp+0]
-	if contract.Gas < 11 { return nil, ErrOutOfGas }
-	contract.Gas -= 11
-	stack.top = sp + 3
-	pc = 3265
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1] = s[sp+0]
+	if contract.Gas < 14 { return nil, ErrOutOfGas }
+	contract.Gas -= 14
+	if err = aotMstoreC(contract, mem, 0, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
 	s[sp+1].SetUint64(2)
-	s[sp+2].SetUint64(32)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 3270
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(64)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 3274
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotMstoreC(contract, mem, 32, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 36 { return nil, ErrOutOfGas }
+	contract.Gas -= 36
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp+0]); err != nil { return nil, err }
 	stack.top = sp + 1
-	pc = 3275
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+1].SetUint64(255)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(3332)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L3332
 	}
 
 	// block @3283 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 3285
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_20)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 3320
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 3326
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_20)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -4887,56 +4010,44 @@ L3260: // block @3260 (17 instrs)
 	return res, nil
 
 L3332: // block @3332 (26 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetBytes(contract.Caller().Bytes())
-	s[sp+1].Clear()
 	s[sp+2] = s[sp+0]
-	s[sp+3] = s[sp+1]
-	if contract.Gas < 11 { return nil, ErrOutOfGas }
-	contract.Gas -= 11
-	stack.top = sp + 4
-	pc = 3337
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(2)
-	s[sp+3].SetUint64(32)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 4
-	pc = 3342
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(64)
-	s[sp+3] = s[sp+2]
-	s[sp+4] = s[sp+1]
+	if contract.Gas < 14 { return nil, ErrOutOfGas }
+	contract.Gas -= 14
+	if err = aotMstoreC(contract, mem, 0, &s[sp+2]); err != nil { return nil, err }
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 5
-	pc = 3347
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+2].SetUint64(2)
+	if err = aotMstoreC(contract, mem, 32, &s[sp+2]); err != nil { return nil, err }
+	if contract.Gas < 39 { return nil, ErrOutOfGas }
+	contract.Gas -= 39
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp+3]); err != nil { return nil, err }
 	s[sp+4] = s[sp+3]
 	if contract.Gas < 3 { return nil, ErrOutOfGas }
 	contract.Gas -= 3
 	stack.top = sp + 5
-	pc = 3349
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+5].Set(&aotCCTFExchangeV2_18)
 	s[sp+4].And(&s[sp+5], &s[sp+4])
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
+	s[sp+1].SetUint64(0)
+	s[sp+2].SetUint64(64)
 	stack.top = sp + 5
 	pc = 3385
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	stack.top = sp + 3
-	pc = 3386
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 3 { return nil, ErrOutOfGas }
+	contract.Gas -= 3
+	if err = aotMloadC(contract, mem, 64, &s[sp+2]); err != nil { return nil, err }
 	s[sp+3] = s[sp+0]
 	s[sp+3], s[sp+1] = s[sp+1], s[sp+3]
-	s[sp+4].Set(&aotCCTFExchangeV2_24)
-	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
+	s[sp+4] = s[sp+2]
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
+	s[sp+2].Set(&aotCCTFExchangeV2_24)
 	stack.top = sp + 5
 	pc = 3423
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
@@ -4949,122 +4060,82 @@ L3332: // block @3332 (26 instrs)
 	goto dispatch
 
 L3425: // block @3425 (19 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+7 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(2356)
-	s[sp+2].SetUint64(3514)
 	s[sp+3] = s[sp-1]
 	s[sp+4].Set(&aotCCTFExchangeV2_25)
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
 	s[sp+4] = s[sp+3]
-	if contract.Gas < 21 { return nil, ErrOutOfGas }
-	contract.Gas -= 21
-	stack.top = sp + 5
-	pc = 3469
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 24 { return nil, ErrOutOfGas }
+	contract.Gas -= 24
+	if err = aotMload(contract, mem, &s[sp+4]); err != nil { return nil, err }
+	s[sp+6] = s[sp+3]
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
 	s[sp+5].Set(&aotCCTFExchangeV2_26)
+	if err = aotMstore(contract, mem, &s[sp+6], &s[sp+5]); err != nil { return nil, err }
 	s[sp+6] = s[sp+3]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 7
-	pc = 3504
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 36 { return nil, ErrOutOfGas }
+	contract.Gas -= 36
 	s[sp+5].SetUint64(384)
-	s[sp+6] = s[sp+3]
+	if err = aotKeccak256(evm, contract, mem, &s[sp+6], &s[sp+5]); err != nil { return nil, err }
+	s[sp+5], s[sp+3] = s[sp+3], s[sp+5]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 7
-	pc = 3509
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+5], s[sp+3] = s[sp+3], s[sp+5]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 6
-	pc = 3511
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
+	if err = aotMstore(contract, mem, &s[sp+5], &s[sp+4]); err != nil { return nil, err }
+	s[sp+2] = s[sp+3]
 	if contract.Gas < 11 { return nil, ErrOutOfGas }
 	contract.Gas -= 11
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(2356)
 	sp += 3
-	stack.top = sp
 	goto L3514
 
 L3514: // block @3514 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(6522)
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
-	sp += 0
-	stack.top = sp
 	goto L6522
 
 L3519: // block @3519 (17 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetBytes(contract.Caller().Bytes())
-	s[sp+1].Clear()
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2] = s[sp+0]
-	if contract.Gas < 11 { return nil, ErrOutOfGas }
-	contract.Gas -= 11
-	stack.top = sp + 3
-	pc = 3524
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1] = s[sp+0]
+	if contract.Gas < 14 { return nil, ErrOutOfGas }
+	contract.Gas -= 14
+	if err = aotMstoreC(contract, mem, 0, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
 	s[sp+1].SetUint64(2)
-	s[sp+2].SetUint64(32)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 3529
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(64)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 3533
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotMstoreC(contract, mem, 32, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 36 { return nil, ErrOutOfGas }
+	contract.Gas -= 36
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp+0]); err != nil { return nil, err }
 	stack.top = sp + 1
-	pc = 3534
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+1].SetUint64(255)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(3591)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L3591
 	}
 
 	// block @3542 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 3544
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_20)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 3579
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 3585
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_20)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -5077,20 +4148,16 @@ L3519: // block @3519 (17 instrs)
 	return res, nil
 
 L3591: // block @3591 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(3600)
 	s[sp+1] = s[sp-1]
-	s[sp+2].SetUint64(6800)
 	if contract.Gas < 18 { return nil, ErrOutOfGas }
 	contract.Gas -= 18
+	s[sp+0].SetUint64(3600)
 	sp += 2
-	stack.top = sp
 	goto L6800
 
 L3600: // block @3600 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if contract.Gas < 11 { return nil, ErrOutOfGas }
 	contract.Gas -= 11
@@ -5101,70 +4168,44 @@ L3600: // block @3600 (3 instrs)
 	goto dispatch
 
 L3603: // block @3603 (18 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetBytes(contract.Caller().Bytes())
-	s[sp+1].Clear()
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2] = s[sp+0]
-	if contract.Gas < 11 { return nil, ErrOutOfGas }
-	contract.Gas -= 11
-	stack.top = sp + 3
-	pc = 3608
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(32)
-	s[sp+2] = s[sp+0]
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 3613
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(64)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 3617
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1] = s[sp+0]
+	if contract.Gas < 14 { return nil, ErrOutOfGas }
+	contract.Gas -= 14
+	if err = aotMstoreC(contract, mem, 0, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	s[sp+1].SetUint64(0)
+	if err = aotMstoreC(contract, mem, 32, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 36 { return nil, ErrOutOfGas }
+	contract.Gas -= 36
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp+0]); err != nil { return nil, err }
 	stack.top = sp + 1
-	pc = 3618
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+1].SetUint64(255)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(3675)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L3675
 	}
 
 	// block @3626 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 3628
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_16)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 3663
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 3669
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_16)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -5177,59 +4218,45 @@ L3603: // block @3603 (18 instrs)
 	return res, nil
 
 L3675: // block @3675 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(2554)
-	s[sp+1].SetUint64(6893)
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
+	s[sp+0].SetUint64(2554)
 	sp += 1
-	stack.top = sp
 	goto L6893
 
 L3683: // block @3683 (22 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetBytes(contract.Caller().Bytes())
-	s[sp+1].Clear()
 	s[sp+2] = s[sp+0]
-	s[sp+3] = s[sp+1]
-	if contract.Gas < 11 { return nil, ErrOutOfGas }
-	contract.Gas -= 11
-	stack.top = sp + 4
-	pc = 3688
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(6)
-	s[sp+3].SetUint64(32)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 4
-	pc = 3693
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(64)
-	s[sp+3] = s[sp+2]
-	s[sp+4] = s[sp+1]
+	if contract.Gas < 14 { return nil, ErrOutOfGas }
+	contract.Gas -= 14
+	if err = aotMstoreC(contract, mem, 0, &s[sp+2]); err != nil { return nil, err }
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 5
-	pc = 3698
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+4] = s[sp+1]
-	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
+	s[sp+2].SetUint64(6)
+	if err = aotMstoreC(contract, mem, 32, &s[sp+2]); err != nil { return nil, err }
+	if contract.Gas < 39 { return nil, ErrOutOfGas }
+	contract.Gas -= 39
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp+3]); err != nil { return nil, err }
+	s[sp+4] = s[sp+3]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
+	s[sp+1].SetUint64(0)
+	s[sp+2].SetUint64(64)
+	s[sp+3].SetUint64(0)
 	stack.top = sp + 5
 	pc = 3701
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	stack.top = sp + 3
-	pc = 3702
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+3].Set(&aotCCTFExchangeV2_27)
-	s[sp+3], s[sp+1] = s[sp+1], s[sp+3]
+	if contract.Gas < 3 { return nil, ErrOutOfGas }
+	contract.Gas -= 3
+	if err = aotMloadC(contract, mem, 64, &s[sp+2]); err != nil { return nil, err }
+	s[sp+3] = s[sp+1]
 	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
+	s[sp+1].Set(&aotCCTFExchangeV2_27)
 	stack.top = sp + 4
 	pc = 3738
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
@@ -5242,86 +4269,57 @@ L3683: // block @3683 (22 instrs)
 	goto dispatch
 
 L3740: // block @3740 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(2356)
 	s[sp+2] = s[sp-1]
-	s[sp+3].Set(&aotCCTFExchangeV2_7)
-	s[sp+4].Set(&aotCCTFExchangeV2_8)
-	s[sp+5].SetUint64(6977)
 	if contract.Gas < 26 { return nil, ErrOutOfGas }
 	contract.Gas -= 26
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(2356)
+	s[sp+3].Set(&aotCCTFExchangeV2_7)
+	s[sp+4].Set(&aotCCTFExchangeV2_8)
 	sp += 5
-	stack.top = sp
 	goto L6977
 
 L3816: // block @3816 (18 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetBytes(contract.Caller().Bytes())
-	s[sp+1].Clear()
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2] = s[sp+0]
-	if contract.Gas < 11 { return nil, ErrOutOfGas }
-	contract.Gas -= 11
-	stack.top = sp + 3
-	pc = 3821
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(32)
-	s[sp+2] = s[sp+0]
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 3826
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(64)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 3830
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1] = s[sp+0]
+	if contract.Gas < 14 { return nil, ErrOutOfGas }
+	contract.Gas -= 14
+	if err = aotMstoreC(contract, mem, 0, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	s[sp+1].SetUint64(0)
+	if err = aotMstoreC(contract, mem, 32, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 36 { return nil, ErrOutOfGas }
+	contract.Gas -= 36
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp+0]); err != nil { return nil, err }
 	stack.top = sp + 1
-	pc = 3831
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+1].SetUint64(255)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(3888)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L3888
 	}
 
 	// block @3839 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 3841
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_16)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 3876
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 3882
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_16)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -5334,74 +4332,48 @@ L3816: // block @3816 (18 instrs)
 	return res, nil
 
 L3888: // block @3888 (21 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Set(&aotCCTFExchangeV2_1)
 	s[sp+1] = s[sp-1]
+	s[sp+0].Set(&aotCCTFExchangeV2_1)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
-	s[sp+1].Clear()
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2] = s[sp+0]
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + 3
-	pc = 3915
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(32)
-	s[sp+2] = s[sp+0]
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 3920
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(64)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 3924
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1] = s[sp+0]
+	if contract.Gas < 21 { return nil, ErrOutOfGas }
+	contract.Gas -= 21
+	if err = aotMstoreC(contract, mem, 0, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	s[sp+1].SetUint64(0)
+	if err = aotMstoreC(contract, mem, 32, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 36 { return nil, ErrOutOfGas }
+	contract.Gas -= 36
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp+0]); err != nil { return nil, err }
 	stack.top = sp + 1
-	pc = 3925
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+1].SetUint64(255)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(3983)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L3983
 	}
 
 	// block @3934 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 3936
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_28)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 3971
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 3977
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_28)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -5414,27 +4386,22 @@ L3888: // block @3888 (21 instrs)
 	return res, nil
 
 L3983: // block @3983 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(1)
-	s[sp+1].Clear()
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
+	s[sp+2].SetUint64(1)
 	stack.top = sp + 3
-	pc = 3988
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+3].SetUint64(3997)
-	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
-	s[sp+4].SetUint64(20539)
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
+	s[sp+3] = s[sp+2]
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
+	s[sp+0].SetUint64(1)
+	s[sp+1].SetUint64(0)
+	s[sp+2].SetUint64(3997)
 	sp += 4
-	stack.top = sp
 	goto L20539
 
 L3997: // block @3997 (37 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
@@ -5444,39 +4411,25 @@ L3997: // block @3997 (37 instrs)
 	stack.top = sp + 0
 	pc = 4000
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp-3].Set(&aotCCTFExchangeV2_1)
 	s[sp-2] = s[sp-4]
+	s[sp-3].Set(&aotCCTFExchangeV2_1)
 	s[sp-3].And(&s[sp-2], &s[sp-3])
-	s[sp-2].Clear()
 	s[sp-1] = s[sp-3]
-	s[sp+0] = s[sp-2]
-	if contract.Gas < 19 { return nil, ErrOutOfGas }
-	contract.Gas -= 19
-	stack.top = sp + 1
-	pc = 4028
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp-1].SetUint64(32)
-	s[sp+0] = s[sp-2]
-	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 1
-	pc = 4033
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp-1].SetUint64(64)
-	s[sp+0] = s[sp-1]
-	s[sp+1] = s[sp-2]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 4038
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 22 { return nil, ErrOutOfGas }
+	contract.Gas -= 22
+	if err = aotMstoreC(contract, mem, 0, &s[sp-1]); err != nil { return nil, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	s[sp-1].SetUint64(0)
+	if err = aotMstoreC(contract, mem, 32, &s[sp-1]); err != nil { return nil, err }
+	if contract.Gas < 39 { return nil, ErrOutOfGas }
+	contract.Gas -= 39
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp+0]
 	if contract.Gas < 3 { return nil, ErrOutOfGas }
 	contract.Gas -= 3
 	stack.top = sp + 2
-	pc = 4040
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+2].Set(&aotCCTFExchangeV2_18)
 	s[sp+1].And(&s[sp+2], &s[sp+1])
 	s[sp+2].SetUint64(1)
@@ -5484,19 +4437,21 @@ L3997: // block @3997 (37 instrs)
 	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
+	s[sp-2].SetUint64(0)
+	s[sp-1].SetUint64(64)
 	stack.top = sp + 2
 	pc = 4079
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	stack.top = sp + 0
-	pc = 4080
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 3 { return nil, ErrOutOfGas }
+	contract.Gas -= 3
+	if err = aotMloadC(contract, mem, 64, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0].SetBytes(contract.Caller().Bytes())
 	s[sp+0], s[sp-3] = s[sp-3], s[sp+0]
 	s[sp+0], s[sp-2] = s[sp-2], s[sp+0]
-	s[sp+1].Set(&aotCCTFExchangeV2_29)
-	s[sp+1], s[sp-1] = s[sp-1], s[sp+1]
+	s[sp+1] = s[sp-1]
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp-1].Set(&aotCCTFExchangeV2_29)
 	stack.top = sp + 2
 	pc = 4118
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
@@ -5509,109 +4464,80 @@ L3997: // block @3997 (37 instrs)
 	goto dispatch
 
 L4121: // block @4121 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(2356)
 	s[sp+2] = s[sp-1]
-	s[sp+3].Set(&aotCCTFExchangeV2_30)
-	s[sp+4].Set(&aotCCTFExchangeV2_6)
-	s[sp+5].SetUint64(7011)
 	if contract.Gas < 26 { return nil, ErrOutOfGas }
 	contract.Gas -= 26
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(2356)
+	s[sp+3].Set(&aotCCTFExchangeV2_30)
+	s[sp+4].Set(&aotCCTFExchangeV2_6)
 	sp += 5
-	stack.top = sp
 	goto L7011
 
 L4197: // block @4197 (47 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+14 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Set(&aotCCTFExchangeV2_31)
-	s[sp+1].SetUint64(96)
-	s[sp+2] = s[sp+1]
-	s[sp+3].Clear()
-	s[sp+4] = s[sp+3]
-	s[sp+5] = s[sp+4]
-	s[sp+6] = s[sp+2]
-	s[sp+7].SetUint64(4347)
-	s[sp+8].SetUint64(64)
-	s[sp+9] = s[sp+8]
-	if contract.Gas < 30 { return nil, ErrOutOfGas }
-	contract.Gas -= 30
-	stack.top = sp + 10
-	pc = 4244
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 33 { return nil, ErrOutOfGas }
+	contract.Gas -= 33
+	if err = aotMloadC(contract, mem, 64, &s[sp+9]); err != nil { return nil, err }
 	s[sp+10] = s[sp+9]
-	s[sp+11] = s[sp+8]
+	s[sp+11].SetUint64(64)
 	s[sp+10].Add(&s[sp+11], &s[sp+10])
-	s[sp+11] = s[sp+8]
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 12
-	pc = 4249
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+10].SetUint64(23)
-	s[sp+11] = s[sp+9]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 12
-	pc = 4253
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+10].Set(&aotCCTFExchangeV2_32)
-	s[sp+11].SetUint64(32)
-	s[sp+12] = s[sp+11]
-	s[sp+13] = s[sp+9]
-	s[sp+12].Add(&s[sp+13], &s[sp+12])
-	s[sp+12], s[sp+10] = s[sp+10], s[sp+12]
-	s[sp+12], s[sp+11] = s[sp+11], s[sp+12]
-	s[sp+12], s[sp+10] = s[sp+10], s[sp+12]
-	if contract.Gas < 24 { return nil, ErrOutOfGas }
-	contract.Gas -= 24
-	stack.top = sp + 13
-	pc = 4295
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+11] = s[sp+8]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 12
-	pc = 4297
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+12] = s[sp+11]
-	s[sp+13] = s[sp+8]
-	s[sp+12].Add(&s[sp+13], &s[sp+12])
-	s[sp+12], s[sp+11] = s[sp+11], s[sp+12]
-	s[sp+12], s[sp+8] = s[sp+8], s[sp+12]
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
-	stack.top = sp + 13
-	pc = 4303
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+11].SetUint64(1)
-	s[sp+12] = s[sp+8]
+	if err = aotMstoreC(contract, mem, 64, &s[sp+10]); err != nil { return nil, err }
+	s[sp+11] = s[sp+9]
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	s[sp+10].SetUint64(23)
+	if err = aotMstore(contract, mem, &s[sp+11], &s[sp+10]); err != nil { return nil, err }
+	s[sp+13] = s[sp+9]
+	s[sp+12].SetUint64(32)
+	s[sp+12].Add(&s[sp+13], &s[sp+12])
+	s[sp+10] = s[sp+12]
+	s[sp+12] = s[sp+10]
+	if contract.Gas < 27 { return nil, ErrOutOfGas }
+	contract.Gas -= 27
+	s[sp+11].Set(&aotCCTFExchangeV2_31)
+	if err = aotMstore(contract, mem, &s[sp+12], &s[sp+11]); err != nil { return nil, err }
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 13
-	pc = 4307
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+11].Set(&aotCCTFExchangeV2_33)
-	s[sp+11], s[sp+10] = s[sp+10], s[sp+11]
+	if err = aotMloadC(contract, mem, 64, &s[sp+11]); err != nil { return nil, err }
+	s[sp+12] = s[sp+11]
+	s[sp+13].SetUint64(64)
+	s[sp+12].Add(&s[sp+13], &s[sp+12])
+	s[sp+12], s[sp+11] = s[sp+11], s[sp+12]
+	s[sp+8] = s[sp+12]
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMstoreC(contract, mem, 64, &s[sp+11]); err != nil { return nil, err }
 	s[sp+12] = s[sp+8]
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	s[sp+11].SetUint64(1)
+	if err = aotMstore(contract, mem, &s[sp+12], &s[sp+11]); err != nil { return nil, err }
+	s[sp+12] = s[sp+8]
+	s[sp+11].SetUint64(32)
 	s[sp+11].Add(&s[sp+12], &s[sp+11])
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 12
-	pc = 4344
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+9], s[sp+7] = s[sp+7], s[sp+9]
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	s[sp+10].Set(&aotCCTFExchangeV2_32)
+	if err = aotMstore(contract, mem, &s[sp+11], &s[sp+10]); err != nil { return nil, err }
+	s[sp+7] = s[sp+9]
 	if contract.Gas < 11 { return nil, ErrOutOfGas }
 	contract.Gas -= 11
+	s[sp+0].Set(&aotCCTFExchangeV2_33)
+	s[sp+1].SetUint64(96)
+	s[sp+2].SetUint64(96)
+	s[sp+3].SetUint64(0)
+	s[sp+4].SetUint64(0)
+	s[sp+5].SetUint64(0)
+	s[sp+6].SetUint64(96)
 	sp += 9
-	stack.top = sp
 	goto L4347
 
 L4347: // block @4347 (18 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 10 { return nil, &ErrStackUnderflow{stackLen: sp, required: 10} }
 	s[sp-1], s[sp-9] = s[sp-9], s[sp-1]
 	s[sp-1], s[sp-10] = s[sp-10], s[sp-1]
@@ -5638,70 +4564,44 @@ L4347: // block @4347 (18 instrs)
 	goto dispatch
 
 L4365: // block @4365 (18 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetBytes(contract.Caller().Bytes())
-	s[sp+1].Clear()
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2] = s[sp+0]
-	if contract.Gas < 11 { return nil, ErrOutOfGas }
-	contract.Gas -= 11
-	stack.top = sp + 3
-	pc = 4370
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(32)
-	s[sp+2] = s[sp+0]
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 4375
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(64)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 4379
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1] = s[sp+0]
+	if contract.Gas < 14 { return nil, ErrOutOfGas }
+	contract.Gas -= 14
+	if err = aotMstoreC(contract, mem, 0, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	s[sp+1].SetUint64(0)
+	if err = aotMstoreC(contract, mem, 32, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 36 { return nil, ErrOutOfGas }
+	contract.Gas -= 36
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp+0]); err != nil { return nil, err }
 	stack.top = sp + 1
-	pc = 4380
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+1].SetUint64(255)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(4437)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L4437
 	}
 
 	// block @4388 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 4390
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_16)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 4425
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 4431
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_16)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -5714,83 +4614,54 @@ L4365: // block @4365 (18 instrs)
 	return res, nil
 
 L4437: // block @4437 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(3600)
 	s[sp+1] = s[sp-1]
-	s[sp+2].SetUint64(7113)
 	if contract.Gas < 18 { return nil, ErrOutOfGas }
 	contract.Gas -= 18
+	s[sp+0].SetUint64(3600)
 	sp += 2
-	stack.top = sp
 	goto L7113
 
 L4446: // block @4446 (18 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetBytes(contract.Caller().Bytes())
-	s[sp+1].Clear()
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2] = s[sp+0]
-	if contract.Gas < 11 { return nil, ErrOutOfGas }
-	contract.Gas -= 11
-	stack.top = sp + 3
-	pc = 4451
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(32)
-	s[sp+2] = s[sp+0]
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 4456
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(64)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 4460
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1] = s[sp+0]
+	if contract.Gas < 14 { return nil, ErrOutOfGas }
+	contract.Gas -= 14
+	if err = aotMstoreC(contract, mem, 0, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	s[sp+1].SetUint64(0)
+	if err = aotMstoreC(contract, mem, 32, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 36 { return nil, ErrOutOfGas }
+	contract.Gas -= 36
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp+0]); err != nil { return nil, err }
 	stack.top = sp + 1
-	pc = 4461
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+1].SetUint64(255)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(4518)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L4518
 	}
 
 	// block @4469 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 4471
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_16)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 4506
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 4512
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_16)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -5803,73 +4674,48 @@ L4446: // block @4446 (18 instrs)
 	return res, nil
 
 L4518: // block @4518 (20 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Set(&aotCCTFExchangeV2_1)
 	s[sp+1] = s[sp-1]
+	s[sp+0].Set(&aotCCTFExchangeV2_1)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
-	s[sp+1].Clear()
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2] = s[sp+0]
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + 3
-	pc = 4545
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1] = s[sp+0]
+	if contract.Gas < 21 { return nil, ErrOutOfGas }
+	contract.Gas -= 21
+	if err = aotMstoreC(contract, mem, 0, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
 	s[sp+1].SetUint64(2)
-	s[sp+2].SetUint64(32)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 4550
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(64)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 4554
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotMstoreC(contract, mem, 32, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 36 { return nil, ErrOutOfGas }
+	contract.Gas -= 36
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp+0]); err != nil { return nil, err }
 	stack.top = sp + 1
-	pc = 4555
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+1].SetUint64(255)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(4613)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L4613
 	}
 
 	// block @4564 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 4566
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_34)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 4601
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 4607
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_34)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -5882,41 +4728,27 @@ L4518: // block @4518 (20 instrs)
 	return res, nil
 
 L4613: // block @4613 (32 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Set(&aotCCTFExchangeV2_1)
 	s[sp+1] = s[sp-1]
+	s[sp+0].Set(&aotCCTFExchangeV2_1)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
-	s[sp+1].Clear()
 	s[sp+2] = s[sp+0]
-	s[sp+3] = s[sp+1]
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + 4
-	pc = 4640
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(2)
-	s[sp+3].SetUint64(32)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 4
-	pc = 4645
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(64)
-	s[sp+3] = s[sp+2]
-	s[sp+4] = s[sp+1]
+	if contract.Gas < 21 { return nil, ErrOutOfGas }
+	contract.Gas -= 21
+	if err = aotMstoreC(contract, mem, 0, &s[sp+2]); err != nil { return nil, err }
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 5
-	pc = 4650
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+2].SetUint64(2)
+	if err = aotMstoreC(contract, mem, 32, &s[sp+2]); err != nil { return nil, err }
+	if contract.Gas < 39 { return nil, ErrOutOfGas }
+	contract.Gas -= 39
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp+3]); err != nil { return nil, err }
 	s[sp+4] = s[sp+3]
 	if contract.Gas < 3 { return nil, ErrOutOfGas }
 	contract.Gas -= 3
 	stack.top = sp + 5
-	pc = 4652
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+5].Set(&aotCCTFExchangeV2_18)
 	s[sp+4].And(&s[sp+5], &s[sp+4])
 	s[sp+5].SetUint64(1)
@@ -5924,19 +4756,21 @@ L4613: // block @4613 (32 instrs)
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
+	s[sp+1].SetUint64(0)
+	s[sp+2].SetUint64(64)
 	stack.top = sp + 5
 	pc = 4691
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	stack.top = sp + 3
-	pc = 4692
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 3 { return nil, ErrOutOfGas }
+	contract.Gas -= 3
+	if err = aotMloadC(contract, mem, 64, &s[sp+2]); err != nil { return nil, err }
 	s[sp+3].SetBytes(contract.Caller().Bytes())
 	s[sp+3], s[sp+0] = s[sp+0], s[sp+3]
 	s[sp+3], s[sp+1] = s[sp+1], s[sp+3]
-	s[sp+4].Set(&aotCCTFExchangeV2_35)
-	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
+	s[sp+4] = s[sp+2]
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+2].Set(&aotCCTFExchangeV2_35)
 	stack.top = sp + 5
 	pc = 4730
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
@@ -5949,70 +4783,44 @@ L4613: // block @4613 (32 instrs)
 	goto dispatch
 
 L4733: // block @4733 (18 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetBytes(contract.Caller().Bytes())
-	s[sp+1].Clear()
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2] = s[sp+0]
-	if contract.Gas < 11 { return nil, ErrOutOfGas }
-	contract.Gas -= 11
-	stack.top = sp + 3
-	pc = 4738
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(32)
-	s[sp+2] = s[sp+0]
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 4743
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(64)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 4747
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1] = s[sp+0]
+	if contract.Gas < 14 { return nil, ErrOutOfGas }
+	contract.Gas -= 14
+	if err = aotMstoreC(contract, mem, 0, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	s[sp+1].SetUint64(0)
+	if err = aotMstoreC(contract, mem, 32, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 36 { return nil, ErrOutOfGas }
+	contract.Gas -= 36
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp+0]); err != nil { return nil, err }
 	stack.top = sp + 1
-	pc = 4748
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+1].SetUint64(255)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(4805)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L4805
 	}
 
 	// block @4756 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 4758
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_16)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 4793
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 4799
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_16)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -6025,72 +4833,47 @@ L4733: // block @4733 (18 instrs)
 	return res, nil
 
 L4805: // block @4805 (19 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Set(&aotCCTFExchangeV2_1)
 	s[sp+1] = s[sp-1]
+	s[sp+0].Set(&aotCCTFExchangeV2_1)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
-	s[sp+1].Clear()
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2] = s[sp+0]
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + 3
-	pc = 4832
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1] = s[sp+0]
+	if contract.Gas < 21 { return nil, ErrOutOfGas }
+	contract.Gas -= 21
+	if err = aotMstoreC(contract, mem, 0, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
 	s[sp+1].SetUint64(2)
-	s[sp+2].SetUint64(32)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 4837
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(64)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 4841
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotMstoreC(contract, mem, 32, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 36 { return nil, ErrOutOfGas }
+	contract.Gas -= 36
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp+0]); err != nil { return nil, err }
 	stack.top = sp + 1
-	pc = 4842
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+1].SetUint64(255)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(4899)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L4899
 	}
 
 	// block @4850 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 4852
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_20)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 4887
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 4893
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_20)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -6103,59 +4886,47 @@ L4805: // block @4805 (19 instrs)
 	return res, nil
 
 L4899: // block @4899 (30 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Set(&aotCCTFExchangeV2_1)
 	s[sp+1] = s[sp-1]
+	s[sp+0].Set(&aotCCTFExchangeV2_1)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
-	s[sp+1].Clear()
 	s[sp+2] = s[sp+0]
-	s[sp+3] = s[sp+1]
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + 4
-	pc = 4926
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(2)
-	s[sp+3].SetUint64(32)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 4
-	pc = 4931
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(64)
-	s[sp+3] = s[sp+2]
-	s[sp+4] = s[sp+1]
+	if contract.Gas < 21 { return nil, ErrOutOfGas }
+	contract.Gas -= 21
+	if err = aotMstoreC(contract, mem, 0, &s[sp+2]); err != nil { return nil, err }
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 5
-	pc = 4936
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+2].SetUint64(2)
+	if err = aotMstoreC(contract, mem, 32, &s[sp+2]); err != nil { return nil, err }
+	if contract.Gas < 39 { return nil, ErrOutOfGas }
+	contract.Gas -= 39
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp+3]); err != nil { return nil, err }
 	s[sp+4] = s[sp+3]
 	if contract.Gas < 3 { return nil, ErrOutOfGas }
 	contract.Gas -= 3
 	stack.top = sp + 5
-	pc = 4938
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+5].Set(&aotCCTFExchangeV2_18)
 	s[sp+4].And(&s[sp+5], &s[sp+4])
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
+	s[sp+1].SetUint64(0)
+	s[sp+2].SetUint64(64)
 	stack.top = sp + 5
 	pc = 4974
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	stack.top = sp + 3
-	pc = 4975
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 3 { return nil, ErrOutOfGas }
+	contract.Gas -= 3
+	if err = aotMloadC(contract, mem, 64, &s[sp+2]); err != nil { return nil, err }
 	s[sp+3].SetBytes(contract.Caller().Bytes())
 	s[sp+3], s[sp+0] = s[sp+0], s[sp+3]
 	s[sp+3], s[sp+1] = s[sp+1], s[sp+3]
-	s[sp+4].Set(&aotCCTFExchangeV2_24)
-	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
+	s[sp+4] = s[sp+2]
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+2].Set(&aotCCTFExchangeV2_24)
 	stack.top = sp + 5
 	pc = 5013
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
@@ -6168,68 +4939,43 @@ L4899: // block @4899 (30 instrs)
 	goto dispatch
 
 L5016: // block @5016 (16 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetBytes(contract.Caller().Bytes())
-	s[sp+1].Clear()
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2] = s[sp+0]
-	if contract.Gas < 11 { return nil, ErrOutOfGas }
-	contract.Gas -= 11
-	stack.top = sp + 3
-	pc = 5021
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1] = s[sp+0]
+	if contract.Gas < 14 { return nil, ErrOutOfGas }
+	contract.Gas -= 14
+	if err = aotMstoreC(contract, mem, 0, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
 	s[sp+1].SetUint64(6)
-	s[sp+2].SetUint64(32)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 5026
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(64)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 5030
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotMstoreC(contract, mem, 32, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 36 { return nil, ErrOutOfGas }
+	contract.Gas -= 36
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp+0]); err != nil { return nil, err }
 	stack.top = sp + 1
-	pc = 5031
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(5086)
 	if contract.Gas < 16 { return nil, ErrOutOfGas }
 	contract.Gas -= 16
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L5086
 	}
 
 	// block @5037 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 5039
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_36)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 5074
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 5080
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_36)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -6242,100 +4988,75 @@ L5016: // block @5016 (16 instrs)
 	return res, nil
 
 L5086: // block @5086 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(5)
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
+	s[sp+1].SetUint64(5)
 	stack.top = sp + 2
-	pc = 5090
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
+	s[sp+0].SetUint64(0)
 	stack.top = sp + 2
 	pc = 5091
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+3].SetUint64(5101)
-	s[sp+3], s[sp+1] = s[sp+1], s[sp+3]
+	s[sp+3] = s[sp+1]
 	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
-	s[sp+4].SetUint64(20594)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
+	s[sp+1].SetUint64(5101)
 	sp += 4
-	stack.top = sp
 	goto L20594
 
 L5101: // block @5101 (33 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetBytes(contract.Caller().Bytes())
-	s[sp+1].Clear()
 	s[sp+2] = s[sp+0]
-	s[sp+3] = s[sp+1]
-	if contract.Gas < 11 { return nil, ErrOutOfGas }
-	contract.Gas -= 11
-	stack.top = sp + 4
-	pc = 5106
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 14 { return nil, ErrOutOfGas }
+	contract.Gas -= 14
+	if err = aotMstoreC(contract, mem, 0, &s[sp+2]); err != nil { return nil, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
 	s[sp+2].SetUint64(6)
-	s[sp+3].SetUint64(32)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 4
-	pc = 5111
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(64)
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	s[sp+3] = s[sp+1]
-	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 4
-	pc = 5117
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotMstoreC(contract, mem, 32, &s[sp+2]); err != nil { return nil, err }
+	if contract.Gas < 42 { return nil, ErrOutOfGas }
+	contract.Gas -= 42
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp+2]); err != nil { return nil, err }
 	s[sp+3] = s[sp-1]
 	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
+	s[sp+1].SetUint64(64)
 	stack.top = sp + 4
 	pc = 5120
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	stack.top = sp + 2
-	pc = 5121
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 3 { return nil, ErrOutOfGas }
+	contract.Gas -= 3
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+1], s[sp-1] = s[sp-1], s[sp+1]
 	s[sp+1], s[sp-2] = s[sp-2], s[sp+1]
 	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
-	s[sp+1].Set(&aotCCTFExchangeV2_37)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2].SetUint64(5172)
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
+	s[sp+1] = s[sp+0]
+	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-2]
 	s[sp+4] = s[sp+2]
-	if contract.Gas < 29 { return nil, ErrOutOfGas }
-	contract.Gas -= 29
-	stack.top = sp + 5
-	pc = 5166
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 32 { return nil, ErrOutOfGas }
+	contract.Gas -= 32
+	if err = aotMstore(contract, mem, &s[sp+4], &s[sp+3]); err != nil { return nil, err }
 	s[sp+3].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
+	s[sp+1] = s[sp+2]
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
+	s[sp+0].Set(&aotCCTFExchangeV2_37)
 	sp += 2
-	stack.top = sp
 	goto L5172
 
 L5172: // block @5172 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 5175
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp+0]
 	s[sp+1], s[sp-1] = s[sp-1], s[sp+1]
 	s[sp+0].Sub(&s[sp+1], &s[sp+0])
@@ -6354,70 +5075,44 @@ L5172: // block @5172 (10 instrs)
 	goto dispatch
 
 L5183: // block @5183 (18 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetBytes(contract.Caller().Bytes())
-	s[sp+1].Clear()
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2] = s[sp+0]
-	if contract.Gas < 11 { return nil, ErrOutOfGas }
-	contract.Gas -= 11
-	stack.top = sp + 3
-	pc = 5188
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(32)
-	s[sp+2] = s[sp+0]
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 5193
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(64)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 5197
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1] = s[sp+0]
+	if contract.Gas < 14 { return nil, ErrOutOfGas }
+	contract.Gas -= 14
+	if err = aotMstoreC(contract, mem, 0, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	s[sp+1].SetUint64(0)
+	if err = aotMstoreC(contract, mem, 32, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 36 { return nil, ErrOutOfGas }
+	contract.Gas -= 36
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp+0]); err != nil { return nil, err }
 	stack.top = sp + 1
-	pc = 5198
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+1].SetUint64(255)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(5255)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L5255
 	}
 
 	// block @5206 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 5208
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_16)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 5243
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 5249
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_16)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -6430,82 +5125,54 @@ L5183: // block @5183 (18 instrs)
 	return res, nil
 
 L5255: // block @5255 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(3600)
 	s[sp+1] = s[sp-1]
-	s[sp+2].SetUint64(7231)
 	if contract.Gas < 18 { return nil, ErrOutOfGas }
 	contract.Gas -= 18
+	s[sp+0].SetUint64(3600)
 	sp += 2
-	stack.top = sp
 	goto L7231
 
 L5264: // block @5264 (17 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetBytes(contract.Caller().Bytes())
-	s[sp+1].Clear()
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2] = s[sp+0]
-	if contract.Gas < 11 { return nil, ErrOutOfGas }
-	contract.Gas -= 11
-	stack.top = sp + 3
-	pc = 5269
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1] = s[sp+0]
+	if contract.Gas < 14 { return nil, ErrOutOfGas }
+	contract.Gas -= 14
+	if err = aotMstoreC(contract, mem, 0, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
 	s[sp+1].SetUint64(2)
-	s[sp+2].SetUint64(32)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 5274
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(64)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 5278
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotMstoreC(contract, mem, 32, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 36 { return nil, ErrOutOfGas }
+	contract.Gas -= 36
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp+0]); err != nil { return nil, err }
 	stack.top = sp + 1
-	pc = 5279
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+1].SetUint64(255)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(5336)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L5336
 	}
 
 	// block @5287 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 5289
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_20)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 5324
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 5330
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_20)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -6518,99 +5185,68 @@ L5264: // block @5264 (17 instrs)
 	return res, nil
 
 L5336: // block @5336 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(5346)
 	s[sp+2] = s[sp-1]
-	s[sp+3].SetUint64(3425)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(5346)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 3
-	stack.top = sp
 	goto L3425
 
 L5346: // block @5346 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
-	s[sp-1].SetUint64(2457)
 	s[sp+0] = s[sp-2]
 	s[sp+1] = s[sp-3]
-	s[sp+2].SetUint64(7361)
 	if contract.Gas < 26 { return nil, ErrOutOfGas }
 	contract.Gas -= 26
+	s[sp-1].SetUint64(2457)
 	sp += 2
-	stack.top = sp
 	goto L7361
 
 L5358: // block @5358 (18 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetBytes(contract.Caller().Bytes())
-	s[sp+1].Clear()
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2] = s[sp+0]
-	if contract.Gas < 11 { return nil, ErrOutOfGas }
-	contract.Gas -= 11
-	stack.top = sp + 3
-	pc = 5363
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(32)
-	s[sp+2] = s[sp+0]
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 5368
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(64)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 5372
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1] = s[sp+0]
+	if contract.Gas < 14 { return nil, ErrOutOfGas }
+	contract.Gas -= 14
+	if err = aotMstoreC(contract, mem, 0, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	s[sp+1].SetUint64(0)
+	if err = aotMstoreC(contract, mem, 32, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 36 { return nil, ErrOutOfGas }
+	contract.Gas -= 36
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp+0]); err != nil { return nil, err }
 	stack.top = sp + 1
-	pc = 5373
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+1].SetUint64(255)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(5430)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L5430
 	}
 
 	// block @5381 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 5383
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_16)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 5418
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 5424
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_16)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -6623,73 +5259,51 @@ L5358: // block @5358 (18 instrs)
 	return res, nil
 
 L5430: // block @5430 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(3600)
 	s[sp+1] = s[sp-1]
-	s[sp+2].SetUint64(7542)
 	if contract.Gas < 18 { return nil, ErrOutOfGas }
 	contract.Gas -= 18
+	s[sp+0].SetUint64(3600)
 	sp += 2
-	stack.top = sp
 	goto L7542
 
 L5439: // block @5439 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1].SetUint64(352)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 1
-	pc = 5445
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	stack.top = sp + 1
-	pc = 5446
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Clear()
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
+	if contract.Gas < 3 { return nil, ErrOutOfGas }
+	contract.Gas -= 3
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
+	s[sp+1].SetUint64(0)
 	s[sp+0].Sub(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(5524)
 	if contract.Gas < 18 { return nil, ErrOutOfGas }
 	contract.Gas -= 18
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L5524
 	}
 
 	// block @5453 (13 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
 	s[sp+1] = s[sp-2]
-	s[sp+2] = s[sp+0]
-	if contract.Gas < 8 { return nil, ErrOutOfGas }
-	contract.Gas -= 8
-	stack.top = sp + 3
-	pc = 5456
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 11 { return nil, ErrOutOfGas }
+	contract.Gas -= 11
+	if err = aotMstoreC(contract, mem, 0, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
 	s[sp+1].SetUint64(7)
-	s[sp+2].SetUint64(32)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 5461
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(64)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 5465
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotMstoreC(contract, mem, 32, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 36 { return nil, ErrOutOfGas }
+	contract.Gas -= 36
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp+0]); err != nil { return nil, err }
 	stack.top = sp + 1
-	pc = 5466
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+1].SetUint64(255)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
@@ -6697,43 +5311,32 @@ L5439: // block @5439 (10 instrs)
 	sp += 1
 
 L5470: // block @5470 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(2457)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
 	if !s[sp-1].IsZero() {
+		if interrupt.Load() { return nil, ErrInterrupt }
 		sp += -1
-		stack.top = sp
 		goto L2457
 	}
 	sp += -1
 
 	// block @5475 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 5477
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_38)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 5512
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 5518
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_38)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -6746,97 +5349,71 @@ L5470: // block @5470 (3 instrs)
 	return res, nil
 
 L5524: // block @5524 (21 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+7 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(5470)
 	s[sp+1] = s[sp-1]
 	s[sp+2].SetUint64(64)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	if contract.Gas < 13 { return nil, ErrOutOfGas }
-	contract.Gas -= 13
-	stack.top = sp + 2
-	pc = 5532
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 16 { return nil, ErrOutOfGas }
+	contract.Gas -= 16
+	if err = aotMload(contract, mem, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp-1]
 	s[sp+3].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 5537
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
 	s[sp+3] = s[sp-2]
 	s[sp+4] = s[sp-1]
 	s[sp+5].SetUint64(352)
 	s[sp+4].Add(&s[sp+5], &s[sp+4])
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 5
-	pc = 5544
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMload(contract, mem, &s[sp+4]); err != nil { return nil, err }
 	s[sp+5] = s[sp-1]
 	s[sp+6].SetUint64(224)
 	s[sp+5].Add(&s[sp+6], &s[sp+5])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 6
-	pc = 5549
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+6].SetUint64(7659)
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+5]); err != nil { return nil, err }
 	if contract.Gas < 11 { return nil, ErrOutOfGas }
 	contract.Gas -= 11
+	s[sp+0].SetUint64(5470)
 	sp += 6
-	stack.top = sp
 	goto L7659
 
 L5554: // block @5554 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
 	s[sp+1] = s[sp-1]
 	s[sp+2].SetUint64(128)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 2
-	pc = 5560
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMload(contract, mem, &s[sp+1]); err != nil { return nil, err }
+	s[sp+0].SetUint64(0)
 	if s[sp+1].Gt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(5615)
 	if contract.Gas < 16 { return nil, ErrOutOfGas }
 	contract.Gas -= 16
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L5615
 	}
 
 	// block @5566 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 5568
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_39)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 5603
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 5609
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_39)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -6849,78 +5426,61 @@ L5554: // block @5554 (9 instrs)
 	return res, nil
 
 L5615: // block @5615 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(5625)
 	s[sp+1] = s[sp-2]
 	s[sp+2] = s[sp-1]
-	s[sp+3].SetUint64(5439)
 	if contract.Gas < 21 { return nil, ErrOutOfGas }
 	contract.Gas -= 21
+	s[sp+0].SetUint64(5625)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 3
-	stack.top = sp
 	goto L5439
 
 L5625: // block @5625 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(5638)
 	s[sp+1] = s[sp-1]
 	s[sp+2].SetUint64(32)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	if contract.Gas < 13 { return nil, ErrOutOfGas }
-	contract.Gas -= 13
-	stack.top = sp + 2
-	pc = 5633
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(2916)
+	if contract.Gas < 16 { return nil, ErrOutOfGas }
+	contract.Gas -= 16
+	if err = aotMload(contract, mem, &s[sp+1]); err != nil { return nil, err }
 	if contract.Gas < 11 { return nil, ErrOutOfGas }
 	contract.Gas -= 11
+	s[sp+0].SetUint64(5638)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 2
-	stack.top = sp
 	goto L2916
 
 L5638: // block @5638 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	if s[sp-1].IsZero() { s[sp-1].SetOne() } else { s[sp-1].Clear() }
-	s[sp+0].SetUint64(2457)
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
 	if !s[sp-1].IsZero() {
+		if interrupt.Load() { return nil, ErrInterrupt }
 		sp += -1
-		stack.top = sp
 		goto L2457
 	}
 	sp += -1
 
 	// block @5644 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 5646
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_40)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 5681
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 5687
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_40)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -6933,23 +5493,18 @@ L5638: // block @5638 (4 instrs)
 	return res, nil
 
 L5693: // block @5693 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-3]
-	s[sp+1].Clear()
+	s[sp+1].SetUint64(0)
 	s[sp+0].Sub(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(5705)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L5705
 	}
 
 	// block @5701 (4 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
@@ -6960,23 +5515,18 @@ L5693: // block @5693 (6 instrs)
 	goto dispatch
 
 L5705: // block @5705 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
-	s[sp+1].Clear()
+	s[sp+1].SetUint64(0)
 	s[sp+0].Sub(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(5717)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L5717
 	}
 
 	// block @5713 (4 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
@@ -6987,37 +5537,30 @@ L5705: // block @5705 (6 instrs)
 	goto dispatch
 
 L5717: // block @5717 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(10000)
-	s[sp+2].SetUint64(5731)
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-2]
-	s[sp+5].SetUint64(20613)
 	if contract.Gas < 26 { return nil, ErrOutOfGas }
 	contract.Gas -= 26
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(10000)
+	s[sp+2].SetUint64(5731)
 	sp += 5
-	stack.top = sp
 	goto L20613
 
 L5731: // block @5731 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(5741)
-	s[sp+0], s[sp-2] = s[sp-2], s[sp+0]
+	s[sp+0] = s[sp-2]
 	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
-	s[sp+1].SetUint64(20681)
 	if contract.Gas < 21 { return nil, ErrOutOfGas }
 	contract.Gas -= 21
+	s[sp-2].SetUint64(5741)
 	sp += 1
-	stack.top = sp
 	goto L20681
 
 L5741: // block @5741 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
@@ -7025,40 +5568,29 @@ L5741: // block @5741 (9 instrs)
 	s[sp+0] = s[sp-5]
 	if s[sp+0].Gt(&s[sp-1]) { s[sp-1].SetOne() } else { s[sp-1].Clear() }
 	if s[sp-1].IsZero() { s[sp-1].SetOne() } else { s[sp-1].Clear() }
-	s[sp+0].SetUint64(5801)
 	if contract.Gas < 31 { return nil, ErrOutOfGas }
 	contract.Gas -= 31
 	if !s[sp-1].IsZero() {
 		sp += -1
-		stack.top = sp
 		goto L5801
 	}
 	sp += -1
 
 	// block @5752 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 5754
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_41)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 5789
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 5795
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_41)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -7071,7 +5603,6 @@ L5741: // block @5741 (9 instrs)
 	return res, nil
 
 L5801: // block @5801 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
@@ -7082,40 +5613,35 @@ L5801: // block @5801 (6 instrs)
 	goto dispatch
 
 L5807: // block @5807 (20 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(3)
-	s[sp+1] = s[sp+0]
 	if contract.Gas < 7 { return nil, ErrOutOfGas }
 	contract.Gas -= 7
+	s[sp+1].SetUint64(3)
 	stack.top = sp + 2
-	pc = 5811
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+2].Set(&aotCCTFExchangeV2_18)
 	s[sp+1].And(&s[sp+2], &s[sp+1])
 	s[sp+2].SetUint64(1)
 	s[sp+1].Or(&s[sp+2], &s[sp+1])
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
+	s[sp+0] = s[sp+1]
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
+	s[sp+1].SetUint64(3)
 	stack.top = sp + 2
 	pc = 5850
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 5853
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1].SetBytes(contract.Caller().Bytes())
 	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2].Set(&aotCCTFExchangeV2_42)
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	s[sp+3].Clear()
-	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
+	s[sp+2] = s[sp+1]
+	s[sp+3] = s[sp+2]
 	if contract.Gas < 16 { return nil, ErrOutOfGas }
 	contract.Gas -= 16
+	s[sp+1].Set(&aotCCTFExchangeV2_42)
+	s[sp+2].SetUint64(0)
 	stack.top = sp + 4
 	pc = 5892
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
@@ -7128,50 +5654,35 @@ L5807: // block @5807 (20 instrs)
 	goto dispatch
 
 L5894: // block @5894 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
 	s[sp+1] = s[sp-5]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 5897
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	if err = aotMload(contract, mem, &s[sp+1]); err != nil { return nil, err }
+	s[sp+0].SetUint64(0)
 	if s[sp+1].Gt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(5952)
 	if contract.Gas < 16 { return nil, ErrOutOfGas }
 	contract.Gas -= 16
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L5952
 	}
 
 	// block @5903 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 5905
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_22)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 5940
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 5946
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_22)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -7184,141 +5695,111 @@ L5894: // block @5894 (7 instrs)
 	return res, nil
 
 L5952: // block @5952 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 7 { return nil, &ErrStackUnderflow{stackLen: sp, required: 7} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(5963)
 	s[sp+1] = s[sp-7]
 	s[sp+2] = s[sp-6]
 	s[sp+3] = s[sp-5]
-	s[sp+4].SetUint64(7789)
 	if contract.Gas < 24 { return nil, ErrOutOfGas }
 	contract.Gas -= 24
+	s[sp+0].SetUint64(5963)
 	sp += 4
-	stack.top = sp
 	goto L7789
 
 L5963: // block @5963 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(5977)
 	s[sp+1] = s[sp-6]
 	s[sp+2].SetUint64(192)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	if contract.Gas < 13 { return nil, ErrOutOfGas }
-	contract.Gas -= 13
-	stack.top = sp + 2
-	pc = 5971
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 16 { return nil, ErrOutOfGas }
+	contract.Gas -= 16
+	if err = aotMload(contract, mem, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp-5]
-	s[sp+3].SetUint64(8173)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(5977)
 	sp += 3
-	stack.top = sp
 	goto L8173
 
 L5977: // block @5977 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	if s[sp-1].IsZero() { s[sp-1].SetOne() } else { s[sp-1].Clear() }
-	s[sp+0].SetUint64(6001)
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
 	if !s[sp-1].IsZero() {
 		sp += -1
-		stack.top = sp
 		goto L6001
 	}
 	sp += -1
 
 	// block @5983 (9 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+8 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(5996)
 	s[sp+1] = s[sp-6]
 	s[sp+2] = s[sp-5]
 	s[sp+3] = s[sp-3]
 	s[sp+4] = s[sp-1]
 	s[sp+5] = s[sp-4]
 	s[sp+6] = s[sp-2]
-	s[sp+7].SetUint64(8238)
 	if contract.Gas < 32 { return nil, ErrOutOfGas }
 	contract.Gas -= 32
+	s[sp+0].SetUint64(5996)
 	sp += 7
-	stack.top = sp
 	goto L8238
 
 L5996: // block @5996 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(6513)
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
-	sp += 0
-	stack.top = sp
 	goto L6513
 
 L6001: // block @6001 (12 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
 	s[sp+1] = s[sp-6]
 	s[sp+2].SetUint64(192)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 2
-	pc = 6007
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(1)
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMload(contract, mem, &s[sp+1]); err != nil { return nil, err }
 	s[sp+3] = s[sp+1]
+	s[sp+2].SetUint64(1)
 	if s[sp+3].Gt(&s[sp+2]) { s[sp+2].SetOne() } else { s[sp+2].Clear() }
 	if s[sp+2].IsZero() { s[sp+2].SetOne() } else { s[sp+2].Clear() }
-	s[sp+3].SetUint64(6024)
 	if contract.Gas < 25 { return nil, ErrOutOfGas }
 	contract.Gas -= 25
 	if !s[sp+2].IsZero() {
+		s[sp+0].SetUint64(0)
 		sp += 2
-		stack.top = sp
 		goto L6024
 	}
+	s[sp+0].SetUint64(0)
 	sp += 2
 
 	// block @6017 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(6024)
-	s[sp+1].SetUint64(20700)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(6024)
 	sp += 1
-	stack.top = sp
 	goto L20700
 
 L6024: // block @6024 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	s[sp-2].Sub(&s[sp-1], &s[sp-2])
-	s[sp-1].SetUint64(6044)
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
 	if !s[sp-2].IsZero() {
 		sp += -2
-		stack.top = sp
 		goto L6044
 	}
 	sp += -2
 
 	// block @6030 (10 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 7 { return nil, &ErrStackUnderflow{stackLen: sp, required: 7} }
 	if sp+9 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(5996)
 	s[sp+1] = s[sp-7]
 	s[sp+2] = s[sp-6]
 	s[sp+3] = s[sp-5]
@@ -7326,58 +5807,47 @@ L6024: // block @6024 (4 instrs)
 	s[sp+5] = s[sp-3]
 	s[sp+6] = s[sp-2]
 	s[sp+7] = s[sp-1]
-	s[sp+8].SetUint64(8698)
 	if contract.Gas < 35 { return nil, ErrOutOfGas }
 	contract.Gas -= 35
+	s[sp+0].SetUint64(5996)
 	sp += 8
-	stack.top = sp
 	goto L8698
 
 L6044: // block @6044 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+7 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
-	s[sp+2].SetUint64(6057)
 	s[sp+3] = s[sp-6]
 	s[sp+4] = s[sp-4]
 	s[sp+5] = s[sp-2]
-	s[sp+6].SetUint64(9191)
 	if contract.Gas < 28 { return nil, ErrOutOfGas }
 	contract.Gas -= 28
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
+	s[sp+2].SetUint64(6057)
 	sp += 6
-	stack.top = sp
 	goto L9191
 
 L6057: // block @6057 (34 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 10 { return nil, &ErrStackUnderflow{stackLen: sp, required: 10} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(192)
 	s[sp+1] = s[sp-10]
+	s[sp+0].SetUint64(192)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 1
-	pc = 6062
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(96)
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	s[sp+2] = s[sp-10]
+	s[sp+1].SetUint64(96)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 6067
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(32)
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+1]); err != nil { return nil, err }
 	s[sp+3] = s[sp-10]
+	s[sp+2].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 6072
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
 	s[sp+2], s[sp-2] = s[sp-2], s[sp+2]
 	s[sp+2], s[sp-4] = s[sp-4], s[sp+2]
 	s[sp+1], s[sp-1] = s[sp-1], s[sp+1]
@@ -7390,176 +5860,139 @@ L6057: // block @6057 (34 instrs)
 	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
 	s[sp+0].Sub(&s[sp+1], &s[sp+0])
 	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
-	s[sp+1].SetUint64(6098)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
+	s[sp+1] = s[sp+0]
 	s[sp+2].SetBytes(contract.Address().Bytes())
 	s[sp+3] = s[sp-2]
 	s[sp+4] = s[sp-8]
-	s[sp+5].SetUint64(9247)
 	if contract.Gas < 67 { return nil, ErrOutOfGas }
 	contract.Gas -= 67
+	s[sp+0].SetUint64(6098)
 	sp += 5
-	stack.top = sp
 	goto L9247
 
 L6098: // block @6098 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(6108)
 	s[sp+2] = s[sp-1]
-	s[sp+3].SetUint64(9282)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(6108)
 	sp += 3
-	stack.top = sp
 	goto L9282
 
 L6108: // block @6108 (12 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 13 { return nil, &ErrStackUnderflow{stackLen: sp, required: 13} }
 	if sp+7 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
-	s[sp-1].Clear()
-	s[sp+0].SetUint64(6124)
 	s[sp+1] = s[sp-13]
 	s[sp+2] = s[sp-12]
 	s[sp+3] = s[sp-11]
 	s[sp+4] = s[sp-9]
 	s[sp+5] = s[sp-7]
-	s[sp+6].SetUint64(9582)
 	if contract.Gas < 37 { return nil, ErrOutOfGas }
 	contract.Gas -= 37
+	s[sp-1].SetUint64(0)
+	s[sp+0].SetUint64(6124)
 	sp += 6
-	stack.top = sp
 	goto L9582
 
 L6124: // block @6124 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
 	s[sp-1] = s[sp-2]
 	if s[sp-1].IsZero() { s[sp-1].SetOne() } else { s[sp-1].Clear() }
-	s[sp+0].SetUint64(6180)
 	if contract.Gas < 25 { return nil, ErrOutOfGas }
 	contract.Gas -= 25
 	if !s[sp-1].IsZero() {
 		sp += -1
-		stack.top = sp
 		goto L6180
 	}
 	sp += -1
 
 	// block @6133 (13 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(6180)
 	s[sp+1].SetBytes(contract.Address().Bytes())
-	s[sp+2].SetUint64(6173)
-	s[sp+3].SetUint64(3)
 	if contract.Gas < 11 { return nil, ErrOutOfGas }
 	contract.Gas -= 11
+	s[sp+3].SetUint64(3)
 	stack.top = sp + 4
-	pc = 6142
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+4].Set(&aotCCTFExchangeV2_1)
-	s[sp+5].SetUint64(256)
-	s[sp+5], s[sp+4] = s[sp+4], s[sp+5]
-	s[sp+5], s[sp+3] = s[sp+3], s[sp+5]
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
+	s[sp+5] = s[sp+3]
+	s[sp+4].SetUint64(256)
 	s[sp+4].Div(&s[sp+5], &s[sp+4])
+	s[sp+3].Set(&aotCCTFExchangeV2_1)
 	s[sp+3].And(&s[sp+4], &s[sp+3])
-	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
+	s[sp+2] = s[sp+3]
 	if contract.Gas < 31 { return nil, ErrOutOfGas }
 	contract.Gas -= 31
+	s[sp+0].SetUint64(6180)
 	sp += 3
-	stack.top = sp
 	goto L6173
 
 L6173: // block @6173 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
 	s[sp+1] = s[sp-4]
-	s[sp+2].SetUint64(9247)
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
+	s[sp+0].SetUint64(0)
 	sp += 2
-	stack.top = sp
 	goto L9247
 
 L6180: // block @6180 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(6190)
 	s[sp+2] = s[sp-3]
-	s[sp+3].SetUint64(9282)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(6190)
 	sp += 3
-	stack.top = sp
 	goto L9282
 
 L6190: // block @6190 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 8 { return nil, &ErrStackUnderflow{stackLen: sp, required: 8} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
-	s[sp-1].SetUint64(6202)
 	s[sp+0] = s[sp-4]
 	s[sp+1] = s[sp-8]
-	s[sp+2].SetUint64(20594)
 	if contract.Gas < 26 { return nil, ErrOutOfGas }
 	contract.Gas -= 26
+	s[sp-1].SetUint64(6202)
 	sp += 2
-	stack.top = sp
 	goto L20594
 
 L6202: // block @6202 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-2]
 	if s[sp+0].Lt(&s[sp-1]) { s[sp-1].SetOne() } else { s[sp-1].Clear() }
 	if s[sp-1].IsZero() { s[sp-1].SetOne() } else { s[sp-1].Clear() }
-	s[sp+0].SetUint64(6259)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
 	if !s[sp-1].IsZero() {
 		sp += -1
-		stack.top = sp
 		goto L6259
 	}
 	sp += -1
 
 	// block @6210 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 6212
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_43)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 6247
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 6253
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_43)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -7572,287 +6005,223 @@ L6202: // block @6202 (6 instrs)
 	return res, nil
 
 L6259: // block @6259 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(6269)
 	s[sp+1] = s[sp-3]
 	s[sp+2] = s[sp-1]
-	s[sp+3].SetUint64(20745)
 	if contract.Gas < 21 { return nil, ErrOutOfGas }
 	contract.Gas -= 21
+	s[sp+0].SetUint64(6269)
 	sp += 3
-	stack.top = sp
 	goto L20745
 
 L6269: // block @6269 (22 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 14 { return nil, &ErrStackUnderflow{stackLen: sp, required: 14} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-8] = s[sp-8], s[sp-1]
-	s[sp-4].Clear()
-	s[sp-3].SetUint64(6297)
 	s[sp-2] = s[sp-14]
 	s[sp-1].SetUint64(192)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
-	if contract.Gas < 26 { return nil, ErrOutOfGas }
-	contract.Gas -= 26
-	stack.top = sp + -1
-	pc = 6283
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 29 { return nil, ErrOutOfGas }
+	contract.Gas -= 29
+	if err = aotMload(contract, mem, &s[sp-2]); err != nil { return nil, err }
 	s[sp-1] = s[sp-8]
 	s[sp+0] = s[sp-14]
 	s[sp+1].SetUint64(32)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 1
-	pc = 6289
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp-6]
 	s[sp+2] = s[sp-5]
 	s[sp+3] = s[sp-10]
-	s[sp+4].SetUint64(10169)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
+	s[sp-4].SetUint64(0)
+	s[sp-3].SetUint64(6297)
 	sp += 4
-	stack.top = sp
 	goto L10169
 
 L6297: // block @6297 (44 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 12 { return nil, &ErrStackUnderflow{stackLen: sp, required: 12} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
-	s[sp-1].SetUint64(6460)
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 1
-	pc = 6305
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp+0]
 	s[sp+2].SetUint64(320)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	s[sp+2].SetUint64(64)
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 3
-	pc = 6313
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMstoreC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+1] = s[sp+0]
 	s[sp+2] = s[sp-5]
 	s[sp+3] = s[sp+1]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 4
-	pc = 6317
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
 	s[sp+2].SetUint64(32)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
 	s[sp+2] = s[sp-12]
 	s[sp+3].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 3
-	pc = 6325
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
 	s[sp+3].Set(&aotCCTFExchangeV2_1)
 	s[sp+2].And(&s[sp+3], &s[sp+2])
 	s[sp+3] = s[sp+1]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 4
-	pc = 6349
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
 	s[sp+2].SetUint64(32)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
 	s[sp+2].SetBytes(contract.Address().Bytes())
 	s[sp+3].Set(&aotCCTFExchangeV2_1)
 	s[sp+2].And(&s[sp+3], &s[sp+2])
 	s[sp+3] = s[sp+1]
-	if contract.Gas < 17 { return nil, ErrOutOfGas }
-	contract.Gas -= 17
-	stack.top = sp + 4
-	pc = 6377
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 20 { return nil, ErrOutOfGas }
+	contract.Gas -= 20
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
 	s[sp+2].SetUint64(32)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
 	s[sp+2] = s[sp-12]
 	s[sp+3].SetUint64(192)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 3
-	pc = 6385
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+3].SetUint64(1)
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
 	s[sp+4] = s[sp+2]
+	s[sp+3].SetUint64(1)
 	if s[sp+4].Gt(&s[sp+3]) { s[sp+3].SetOne() } else { s[sp+3].Clear() }
 	if s[sp+3].IsZero() { s[sp+3].SetOne() } else { s[sp+3].Clear() }
-	s[sp+4].SetUint64(6402)
 	if contract.Gas < 25 { return nil, ErrOutOfGas }
 	contract.Gas -= 25
 	if !s[sp+3].IsZero() {
+		s[sp-1].SetUint64(6460)
 		sp += 3
-		stack.top = sp
 		goto L6402
 	}
+	s[sp-1].SetUint64(6460)
 	sp += 3
 
 	// block @6395 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(6402)
-	s[sp+1].SetUint64(20700)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(6402)
 	sp += 1
-	stack.top = sp
 	goto L20700
 
 L6402: // block @6402 (45 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 15 { return nil, &ErrStackUnderflow{stackLen: sp, required: 15} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 6404
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-15]
 	s[sp+0].SetUint64(96)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 0
-	pc = 6412
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 6414
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-13]
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 1
-	pc = 6420
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-9]
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 1
-	pc = 6426
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-11]
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 1
-	pc = 6432
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-15]
 	s[sp+0].SetUint64(320)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 0
-	pc = 6441
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 6443
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-15]
 	s[sp+0].SetUint64(288)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 0
-	pc = 6452
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 6454
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp-2].SetUint64(10403)
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	if contract.Gas < 13 { return nil, ErrOutOfGas }
 	contract.Gas -= 13
 	sp += -2
-	stack.top = sp
 	goto L10403
 
 L6460: // block @6460 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(6507)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L6507
 	}
 
 	// block @6467 (13 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(6507)
 	s[sp+1].SetBytes(contract.Address().Bytes())
-	s[sp+2].SetUint64(6173)
-	s[sp+3].SetUint64(3)
 	if contract.Gas < 11 { return nil, ErrOutOfGas }
 	contract.Gas -= 11
+	s[sp+3].SetUint64(3)
 	stack.top = sp + 4
-	pc = 6476
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+4].Set(&aotCCTFExchangeV2_1)
-	s[sp+5].SetUint64(256)
-	s[sp+5], s[sp+4] = s[sp+4], s[sp+5]
-	s[sp+5], s[sp+3] = s[sp+3], s[sp+5]
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
+	s[sp+5] = s[sp+3]
+	s[sp+4].SetUint64(256)
 	s[sp+4].Div(&s[sp+5], &s[sp+4])
+	s[sp+3].Set(&aotCCTFExchangeV2_1)
 	s[sp+3].And(&s[sp+4], &s[sp+3])
-	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
+	s[sp+2] = s[sp+3]
 	if contract.Gas < 31 { return nil, ErrOutOfGas }
 	contract.Gas -= 31
+	s[sp+0].SetUint64(6507)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 3
-	stack.top = sp
 	goto L6173
 
 L6507: // block @6507 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if contract.Gas < 11 { return nil, ErrOutOfGas }
 	contract.Gas -= 11
 	sp += -5
 
 L6513: // block @6513 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 8 { return nil, &ErrStackUnderflow{stackLen: sp, required: 8} }
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
@@ -7863,137 +6232,100 @@ L6513: // block @6513 (9 instrs)
 	goto dispatch
 
 L6522: // block @6522 (11 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Set(&aotCCTFExchangeV2_44)
-	s[sp+1].Set(&aotCCTFExchangeV2_45)
 	s[sp+2].SetBytes(contract.Address().Bytes())
+	s[sp+1].Set(&aotCCTFExchangeV2_44)
 	if s[sp+2].Eq(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(137)
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
+	s[sp+0].Set(&aotCCTFExchangeV2_45)
+	s[sp+2].SetUint64(137)
 	stack.top = sp + 3
 	pc = 6624
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	if s[sp+3].Eq(&s[sp+2]) { s[sp+2].SetOne() } else { s[sp+2].Clear() }
 	s[sp+1].And(&s[sp+2], &s[sp+1])
-	s[sp+2].SetUint64(6765)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+1].IsZero() {
 		sp += 1
-		stack.top = sp
 		goto L6765
 	}
 	sp += 1
 
 	// block @6631 (33 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp-1].SetUint64(64)
-	s[sp+0] = s[sp-1]
-	if contract.Gas < 8 { return nil, ErrOutOfGas }
-	contract.Gas -= 8
-	stack.top = sp + 1
-	pc = 6635
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 11 { return nil, ErrOutOfGas }
+	contract.Gas -= 11
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
 	s[sp+1].Set(&aotCCTFExchangeV2_46)
-	s[sp+2] = s[sp+0]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 6670
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_47)
-	s[sp+2].SetUint64(32)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
 	s[sp+3] = s[sp+0]
+	s[sp+2].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 3
-	pc = 6708
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_48)
-	s[sp+1], s[sp-1] = s[sp-1], s[sp+1]
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	s[sp+1].Set(&aotCCTFExchangeV2_47)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+0]
+	s[sp+1].SetUint64(64)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
+	s[sp-1] = s[sp+1]
+	s[sp+1] = s[sp+0]
 	s[sp+1], s[sp-1] = s[sp-1], s[sp+1]
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+1], s[sp-1] = s[sp-1], s[sp+1]
-	if contract.Gas < 21 { return nil, ErrOutOfGas }
-	contract.Gas -= 21
-	stack.top = sp + 2
-	pc = 6748
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 24 { return nil, ErrOutOfGas }
+	contract.Gas -= 24
+	s[sp+0].Set(&aotCCTFExchangeV2_48)
+	if err = aotMstore(contract, mem, &s[sp+1], &s[sp+0]); err != nil { return nil, err }
 	stack.top = sp + 0
 	pc = 6749
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+2] = s[sp-1]
 	s[sp+1].SetUint64(96)
-	s[sp+2] = s[sp-1]
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 6754
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMstore(contract, mem, &s[sp+1], &s[sp+0]); err != nil { return nil, err }
 	s[sp+0].SetBytes(contract.Address().Bytes())
-	s[sp+1].SetUint64(128)
 	s[sp+2] = s[sp-1]
+	s[sp+1].SetUint64(128)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	if contract.Gas < 11 { return nil, ErrOutOfGas }
-	contract.Gas -= 11
-	stack.top = sp + 2
-	pc = 6760
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].SetUint64(160)
-	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 1
-	pc = 6764
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 14 { return nil, ErrOutOfGas }
+	contract.Gas -= 14
+	if err = aotMstore(contract, mem, &s[sp+1], &s[sp+0]); err != nil { return nil, err }
+	s[sp+0] = s[sp-1]
+	if contract.Gas < 36 { return nil, ErrOutOfGas }
+	contract.Gas -= 36
+	s[sp-1].SetUint64(160)
+	if err = aotKeccak256(evm, contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 
 L6765: // block @6765 (22 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
 	s[sp+0].SetUint64(1801721325924909056)
-	s[sp+1].Clear()
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 6776
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotMstoreC(contract, mem, 0, &s[sp+0]); err != nil { return nil, err }
 	s[sp+0] = s[sp-1]
-	s[sp+1].SetUint64(26)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 6780
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	if err = aotMstoreC(contract, mem, 26, &s[sp+0]); err != nil { return nil, err }
 	s[sp+0] = s[sp-2]
-	s[sp+1].SetUint64(58)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 6784
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].SetUint64(66)
-	s[sp+1].SetUint64(24)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 6789
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	if err = aotMstoreC(contract, mem, 58, &s[sp+0]); err != nil { return nil, err }
+	if contract.Gas < 36 { return nil, ErrOutOfGas }
+	contract.Gas -= 36
+	if err = aotKeccak256C(evm, contract, mem, 24, 66, 18, &s[sp+0]); err != nil { return nil, err }
 	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(58)
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 2
-	pc = 6795
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	s[sp+0].SetUint64(0)
+	if err = aotMstoreC(contract, mem, 58, &s[sp+0]); err != nil { return nil, err }
 	s[sp-1], s[sp-3] = s[sp-3], s[sp-1]
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
 	if contract.Gas < 16 { return nil, ErrOutOfGas }
@@ -8005,55 +6337,43 @@ L6765: // block @6765 (22 instrs)
 	goto dispatch
 
 L6800: // block @6800 (26 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
 	s[sp+1] = s[sp-1]
-	s[sp+2] = s[sp+0]
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMstoreC(contract, mem, 0, &s[sp+1]); err != nil { return nil, err }
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 6804
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	s[sp+1].SetUint64(7)
-	s[sp+2].SetUint64(32)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 6809
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(64)
-	s[sp+2] = s[sp+1]
-	s[sp+3] = s[sp+0]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 4
-	pc = 6814
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotMstoreC(contract, mem, 32, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 39 { return nil, ErrOutOfGas }
+	contract.Gas -= 39
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp+2]); err != nil { return nil, err }
 	s[sp+3] = s[sp+2]
 	if contract.Gas < 3 { return nil, ErrOutOfGas }
 	contract.Gas -= 3
 	stack.top = sp + 4
-	pc = 6816
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+4].Set(&aotCCTFExchangeV2_18)
 	s[sp+3].And(&s[sp+4], &s[sp+3])
 	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(64)
 	stack.top = sp + 4
 	pc = 6852
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	stack.top = sp + 2
-	pc = 6853
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 3 { return nil, ErrOutOfGas }
+	contract.Gas -= 3
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp-1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
-	s[sp+3].Set(&aotCCTFExchangeV2_49)
-	s[sp+3], s[sp+1] = s[sp+1], s[sp+3]
+	s[sp+3] = s[sp+1]
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
+	s[sp+1].Set(&aotCCTFExchangeV2_49)
 	stack.top = sp + 4
 	pc = 6890
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
@@ -8066,38 +6386,33 @@ L6800: // block @6800 (26 instrs)
 	goto dispatch
 
 L6893: // block @6893 (18 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(3)
-	s[sp+1] = s[sp+0]
 	if contract.Gas < 7 { return nil, ErrOutOfGas }
 	contract.Gas -= 7
+	s[sp+1].SetUint64(3)
 	stack.top = sp + 2
-	pc = 6897
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+2].Set(&aotCCTFExchangeV2_18)
 	s[sp+1].And(&s[sp+2], &s[sp+1])
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
+	s[sp+0] = s[sp+1]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
+	s[sp+1].SetUint64(3)
 	stack.top = sp + 2
 	pc = 6933
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 6936
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1].SetBytes(contract.Caller().Bytes())
 	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2].Set(&aotCCTFExchangeV2_50)
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	s[sp+3].Clear()
-	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
+	s[sp+2] = s[sp+1]
+	s[sp+3] = s[sp+2]
 	if contract.Gas < 16 { return nil, ErrOutOfGas }
 	contract.Gas -= 16
+	s[sp+1].Set(&aotCCTFExchangeV2_50)
+	s[sp+2].SetUint64(0)
 	stack.top = sp + 4
 	pc = 6975
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
@@ -8110,47 +6425,32 @@ L6893: // block @6893 (18 instrs)
 	goto dispatch
 
 L6977: // block @6977 (14 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+7 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(7003)
 	s[sp+2] = s[sp-1]
 	s[sp+3] = s[sp-2]
-	s[sp+4].SetUint64(6998)
 	s[sp+5] = s[sp-3]
-	s[sp+6].SetUint64(32)
-	if contract.Gas < 21 { return nil, ErrOutOfGas }
-	contract.Gas -= 21
-	stack.top = sp + 7
-	pc = 6990
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+5].SetUint64(20)
-	s[sp+6].SetUint64(44)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 7
-	pc = 6995
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+5], s[sp+4] = s[sp+4], s[sp+5]
+	if contract.Gas < 24 { return nil, ErrOutOfGas }
+	contract.Gas -= 24
+	if err = aotMstoreC(contract, mem, 32, &s[sp+5]); err != nil { return nil, err }
+	if contract.Gas < 36 { return nil, ErrOutOfGas }
+	contract.Gas -= 36
+	if err = aotKeccak256C(evm, contract, mem, 44, 20, 6, &s[sp+5]); err != nil { return nil, err }
+	s[sp+4] = s[sp+5]
 	if contract.Gas < 11 { return nil, ErrOutOfGas }
 	contract.Gas -= 11
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(7003)
 	sp += 5
-	stack.top = sp
 	goto L6998
 
 L6998: // block @6998 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(10505)
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
-	sp += 0
-	stack.top = sp
 	goto L10505
 
 L7003: // block @7003 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	s[sp-1], s[sp-6] = s[sp-6], s[sp-1]
 	s[sp-1], s[sp-5] = s[sp-5], s[sp-1]
@@ -8163,77 +6463,56 @@ L7003: // block @7003 (8 instrs)
 	goto dispatch
 
 L7011: // block @7011 (35 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
 	s[sp+1] = s[sp-3]
-	s[sp+2] = s[sp+0]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 7015
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(32)
-	s[sp+2] = s[sp+0]
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMstoreC(contract, mem, 0, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 36 { return nil, ErrOutOfGas }
+	contract.Gas -= 36
+	if err = aotKeccak256C(evm, contract, mem, 0, 32, 6, &s[sp+1]); err != nil { return nil, err }
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 7019
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 3
-	pc = 7022
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+3].Set(&aotCCTFExchangeV2_51)
-	s[sp+4].SetUint64(88)
+	if err = aotMloadC(contract, mem, 64, &s[sp+2]); err != nil { return nil, err }
 	s[sp+5] = s[sp-1]
-	s[sp+5], s[sp+4] = s[sp+4], s[sp+5]
-	if s[sp+5].LtUint64(256) { s[sp+4].Lsh(&s[sp+4], uint(s[sp+5].Uint64())) } else { s[sp+4].Clear() }
+	s[sp+4] = s[sp+5]
+	s[sp+4].Lsh(&s[sp+4], 88)
+	s[sp+3].Set(&aotCCTFExchangeV2_51)
 	s[sp+3].Or(&s[sp+4], &s[sp+3])
 	s[sp+4] = s[sp+2]
-	if contract.Gas < 21 { return nil, ErrOutOfGas }
-	contract.Gas -= 21
-	stack.top = sp + 5
-	pc = 7063
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+3].SetUint64(21)
+	if contract.Gas < 24 { return nil, ErrOutOfGas }
+	contract.Gas -= 24
+	if err = aotMstore(contract, mem, &s[sp+4], &s[sp+3]); err != nil { return nil, err }
 	s[sp+4] = s[sp+2]
+	s[sp+3].SetUint64(21)
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
 	s[sp+4] = s[sp+1]
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 5
-	pc = 7070
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+3].SetUint64(53)
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMstore(contract, mem, &s[sp+4], &s[sp+3]); err != nil { return nil, err }
 	s[sp+4] = s[sp+2]
+	s[sp+3].SetUint64(53)
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
 	s[sp+4] = s[sp-2]
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 5
-	pc = 7077
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+3].SetUint64(85)
-	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 4
-	pc = 7081
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMstore(contract, mem, &s[sp+4], &s[sp+3]); err != nil { return nil, err }
+	s[sp+3] = s[sp+2]
+	if contract.Gas < 36 { return nil, ErrOutOfGas }
+	contract.Gas -= 36
+	s[sp+2].SetUint64(85)
+	if err = aotKeccak256(evm, contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
 	s[sp+3].Set(&aotCCTFExchangeV2_1)
 	s[sp+2].And(&s[sp+3], &s[sp+2])
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
+	s[sp+0].SetUint64(0)
 	sp += 3
 
 L7104: // block @7104 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 7 { return nil, &ErrStackUnderflow{stackLen: sp, required: 7} }
 	s[sp-1], s[sp-7] = s[sp-7], s[sp-1]
 	s[sp-1], s[sp-6] = s[sp-6], s[sp-1]
@@ -8246,45 +6525,32 @@ L7104: // block @7104 (9 instrs)
 	goto dispatch
 
 L7113: // block @7113 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(10000)
 	s[sp+1] = s[sp-1]
+	s[sp+0].SetUint64(10000)
 	if s[sp+1].Lt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(7172)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L7172
 	}
 
 	// block @7123 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 7125
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_52)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 7160
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 7166
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_52)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -8297,46 +6563,37 @@ L7113: // block @7113 (6 instrs)
 	return res, nil
 
 L7172: // block @7172 (23 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(4)
 	s[sp+1] = s[sp-1]
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
+	s[sp+0] = s[sp+1]
 	if contract.Gas < 10 { return nil, ErrOutOfGas }
 	contract.Gas -= 10
+	s[sp+1].SetUint64(4)
 	stack.top = sp + 2
 	pc = 7177
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 7180
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1] = s[sp-1]
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 7183
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_53)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+1] = s[sp-1]
+	s[sp+2] = s[sp+0]
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1] = s[sp+0]
 	s[sp+2].SetUint64(32)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	s[sp+2].SetUint64(64)
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 3
-	pc = 7223
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMloadC(contract, mem, 64, &s[sp+2]); err != nil { return nil, err }
 	s[sp+3] = s[sp+2]
 	s[sp+3], s[sp+1] = s[sp+1], s[sp+3]
 	s[sp+2].Sub(&s[sp+3], &s[sp+2])
 	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
+	s[sp+0].Set(&aotCCTFExchangeV2_53)
 	stack.top = sp + 3
 	pc = 7228
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
@@ -8349,46 +6606,33 @@ L7172: // block @7172 (23 instrs)
 	goto dispatch
 
 L7231: // block @7231 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(302400)
 	s[sp+1] = s[sp-1]
+	s[sp+0].SetUint64(302400)
 	if s[sp+1].Gt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(7292)
 	if contract.Gas < 26 { return nil, ErrOutOfGas }
 	contract.Gas -= 26
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L7292
 	}
 
 	// block @7243 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 7245
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_54)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 7280
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 7286
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_54)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -8401,63 +6645,50 @@ L7231: // block @7231 (7 instrs)
 	return res, nil
 
 L7292: // block @7292 (33 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(5)
-	s[sp+1] = s[sp+0]
 	if contract.Gas < 7 { return nil, ErrOutOfGas }
 	contract.Gas -= 7
+	s[sp+1].SetUint64(5)
 	stack.top = sp + 2
-	pc = 7296
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
+	s[sp+0] = s[sp+1]
 	s[sp+2] = s[sp-1]
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
+	s[sp+1] = s[sp+2]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
+	s[sp+2].SetUint64(5)
 	stack.top = sp + 3
 	pc = 7300
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(64)
-	s[sp+2] = s[sp+1]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 7304
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	if err = aotMloadC(contract, mem, 64, &s[sp+2]); err != nil { return nil, err }
 	s[sp+3] = s[sp+0]
 	s[sp+4] = s[sp+2]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 5
-	pc = 7307
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+3].SetUint64(32)
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	if err = aotMstore(contract, mem, &s[sp+4], &s[sp+3]); err != nil { return nil, err }
 	s[sp+4] = s[sp+2]
+	s[sp+3].SetUint64(32)
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
 	s[sp+4] = s[sp-1]
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMstore(contract, mem, &s[sp+4], &s[sp+3]); err != nil { return nil, err }
+	s[sp+3].SetUint64(64)
+	s[sp+2].Add(&s[sp+3], &s[sp+2])
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
-	stack.top = sp + 5
-	pc = 7314
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+3].Set(&aotCCTFExchangeV2_55)
-	s[sp+3], s[sp+1] = s[sp+1], s[sp+3]
-	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	s[sp+3].SetUint64(64)
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 4
-	pc = 7352
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotMloadC(contract, mem, 64, &s[sp+3]); err != nil { return nil, err }
 	s[sp+4] = s[sp+3]
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
 	s[sp+3].Sub(&s[sp+4], &s[sp+3])
 	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
+	s[sp+1].Set(&aotCCTFExchangeV2_55)
 	stack.top = sp + 4
 	pc = 7357
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
@@ -8470,88 +6701,65 @@ L7292: // block @7292 (33 instrs)
 	goto dispatch
 
 L7361: // block @7361 (21 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+7 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(7391)
 	s[sp+1] = s[sp-1]
 	s[sp+2].SetUint64(64)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	if contract.Gas < 13 { return nil, ErrOutOfGas }
-	contract.Gas -= 13
-	stack.top = sp + 2
-	pc = 7369
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 16 { return nil, ErrOutOfGas }
+	contract.Gas -= 16
+	if err = aotMload(contract, mem, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp-1]
 	s[sp+3].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 7374
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
 	s[sp+3] = s[sp-2]
 	s[sp+4] = s[sp-1]
 	s[sp+5].SetUint64(352)
 	s[sp+4].Add(&s[sp+5], &s[sp+4])
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 5
-	pc = 7381
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMload(contract, mem, &s[sp+4]); err != nil { return nil, err }
 	s[sp+5] = s[sp-1]
 	s[sp+6].SetUint64(224)
 	s[sp+5].Add(&s[sp+6], &s[sp+5])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 6
-	pc = 7386
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+6].SetUint64(7659)
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+5]); err != nil { return nil, err }
 	if contract.Gas < 11 { return nil, ErrOutOfGas }
 	contract.Gas -= 11
+	s[sp+0].SetUint64(7391)
 	sp += 6
-	stack.top = sp
 	goto L7659
 
 L7391: // block @7391 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(7445)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
 	if !s[sp-1].IsZero() {
 		sp += -1
-		stack.top = sp
 		goto L7445
 	}
 	sp += -1
 
 	// block @7396 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 7398
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_38)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 7433
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 7439
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_38)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -8564,38 +6772,24 @@ L7391: // block @7391 (3 instrs)
 	return res, nil
 
 L7445: // block @7445 (29 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
 	s[sp+1] = s[sp-2]
-	s[sp+2] = s[sp+0]
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMstoreC(contract, mem, 0, &s[sp+1]); err != nil { return nil, err }
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 7449
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	s[sp+1].SetUint64(7)
-	s[sp+2].SetUint64(32)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 7454
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(64)
-	s[sp+2] = s[sp+1]
-	s[sp+3] = s[sp+0]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 4
-	pc = 7459
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotMstoreC(contract, mem, 32, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 39 { return nil, ErrOutOfGas }
+	contract.Gas -= 39
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp+2]); err != nil { return nil, err }
 	s[sp+3] = s[sp+2]
 	if contract.Gas < 3 { return nil, ErrOutOfGas }
 	contract.Gas -= 3
 	stack.top = sp + 4
-	pc = 7461
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+4].Set(&aotCCTFExchangeV2_18)
 	s[sp+3].And(&s[sp+4], &s[sp+3])
 	s[sp+4].SetUint64(1)
@@ -8603,18 +6797,20 @@ L7445: // block @7445 (29 instrs)
 	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(64)
 	stack.top = sp + 4
 	pc = 7500
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	stack.top = sp + 2
-	pc = 7501
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 3 { return nil, ErrOutOfGas }
+	contract.Gas -= 3
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp-2]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
-	s[sp+3].Set(&aotCCTFExchangeV2_56)
-	s[sp+3], s[sp+1] = s[sp+1], s[sp+3]
+	s[sp+3] = s[sp+1]
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
+	s[sp+1].Set(&aotCCTFExchangeV2_56)
 	stack.top = sp + 4
 	pc = 7538
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
@@ -8627,48 +6823,43 @@ L7445: // block @7445 (29 instrs)
 	goto dispatch
 
 L7542: // block @7542 (29 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(3)
-	s[sp+1] = s[sp+0]
 	if contract.Gas < 7 { return nil, ErrOutOfGas }
 	contract.Gas -= 7
+	s[sp+1].SetUint64(3)
 	stack.top = sp + 2
-	pc = 7546
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+2].Set(&aotCCTFExchangeV2_57)
 	s[sp+1].And(&s[sp+2], &s[sp+1])
-	s[sp+2].SetUint64(256)
-	s[sp+3].Set(&aotCCTFExchangeV2_1)
 	s[sp+4] = s[sp-1]
+	s[sp+3].Set(&aotCCTFExchangeV2_1)
 	s[sp+3].And(&s[sp+4], &s[sp+3])
-	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
+	s[sp+2] = s[sp+3]
 	s[sp+4] = s[sp+2]
+	s[sp+3].SetUint64(256)
 	s[sp+3].Mul(&s[sp+4], &s[sp+3])
 	s[sp+3], s[sp+1] = s[sp+1], s[sp+3]
 	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
 	s[sp+3], s[sp+1] = s[sp+1], s[sp+3]
 	s[sp+2].Or(&s[sp+3], &s[sp+2])
 	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
+	s[sp+0] = s[sp+2]
 	if contract.Gas < 47 { return nil, ErrOutOfGas }
 	contract.Gas -= 47
+	s[sp+2].SetUint64(3)
 	stack.top = sp + 3
 	pc = 7616
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 2
-	pc = 7619
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].Set(&aotCCTFExchangeV2_58)
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	s[sp+3].Clear()
-	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
+	s[sp+2] = s[sp+1]
+	s[sp+3] = s[sp+2]
 	if contract.Gas < 11 { return nil, ErrOutOfGas }
 	contract.Gas -= 11
+	s[sp+1].Set(&aotCCTFExchangeV2_58)
+	s[sp+2].SetUint64(0)
 	stack.top = sp + 4
 	pc = 7656
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
@@ -8681,313 +6872,251 @@ L7542: // block @7542 (29 instrs)
 	goto dispatch
 
 L7659: // block @7659 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1] = s[sp+0]
 	s[sp+2] = s[sp-1]
-	s[sp+3].SetUint64(3)
 	s[sp+4] = s[sp+2]
+	s[sp+3].SetUint64(3)
 	if s[sp+4].Gt(&s[sp+3]) { s[sp+3].SetOne() } else { s[sp+3].Clear() }
 	if s[sp+3].IsZero() { s[sp+3].SetOne() } else { s[sp+3].Clear() }
-	s[sp+4].SetUint64(7679)
 	if contract.Gas < 34 { return nil, ErrOutOfGas }
 	contract.Gas -= 34
 	if !s[sp+3].IsZero() {
+		s[sp+0].SetUint64(0)
+		s[sp+1].SetUint64(0)
 		sp += 3
-		stack.top = sp
 		goto L7679
 	}
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	sp += 3
 
 	// block @7672 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(7679)
-	s[sp+1].SetUint64(20700)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(7679)
 	sp += 1
-	stack.top = sp
 	goto L20700
 
 L7679: // block @7679 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	s[sp-2].Sub(&s[sp-1], &s[sp-2])
-	s[sp-1].SetUint64(7703)
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
 	if !s[sp-2].IsZero() {
 		sp += -2
-		stack.top = sp
 		goto L7703
 	}
 	sp += -2
 
 	// block @7685 (7 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(7696)
 	s[sp+1] = s[sp-6]
 	s[sp+2] = s[sp-5]
 	s[sp+3] = s[sp-4]
 	s[sp+4] = s[sp-3]
-	s[sp+5].SetUint64(10855)
 	if contract.Gas < 26 { return nil, ErrOutOfGas }
 	contract.Gas -= 26
+	s[sp+0].SetUint64(7696)
 	sp += 5
-	stack.top = sp
 	goto L10855
 
 L7696: // block @7696 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
-	s[sp-1].SetUint64(7104)
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += -1
-	stack.top = sp
 	goto L7104
 
 L7703: // block @7703 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(2)
 	s[sp+1] = s[sp-2]
-	s[sp+2].SetUint64(3)
 	s[sp+3] = s[sp+1]
+	s[sp+2].SetUint64(3)
 	if s[sp+3].Gt(&s[sp+2]) { s[sp+2].SetOne() } else { s[sp+2].Clear() }
 	if s[sp+2].IsZero() { s[sp+2].SetOne() } else { s[sp+2].Clear() }
-	s[sp+3].SetUint64(7723)
 	if contract.Gas < 32 { return nil, ErrOutOfGas }
 	contract.Gas -= 32
 	if !s[sp+2].IsZero() {
+		s[sp+0].SetUint64(2)
 		sp += 2
-		stack.top = sp
 		goto L7723
 	}
+	s[sp+0].SetUint64(2)
 	sp += 2
 
 	// block @7716 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(7723)
-	s[sp+1].SetUint64(20700)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(7723)
 	sp += 1
-	stack.top = sp
 	goto L20700
 
 L7723: // block @7723 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	s[sp-2].Sub(&s[sp-1], &s[sp-2])
-	s[sp-1].SetUint64(7740)
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
 	if !s[sp-2].IsZero() {
 		sp += -2
-		stack.top = sp
 		goto L7740
 	}
 	sp += -2
 
 	// block @7729 (7 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(7696)
 	s[sp+1] = s[sp-6]
 	s[sp+2] = s[sp-5]
 	s[sp+3] = s[sp-4]
 	s[sp+4] = s[sp-3]
-	s[sp+5].SetUint64(10921)
 	if contract.Gas < 26 { return nil, ErrOutOfGas }
 	contract.Gas -= 26
+	s[sp+0].SetUint64(7696)
 	sp += 5
-	stack.top = sp
 	goto L10921
 
 L7740: // block @7740 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(3)
 	s[sp+1] = s[sp-2]
-	s[sp+2].SetUint64(3)
 	s[sp+3] = s[sp+1]
+	s[sp+2].SetUint64(3)
 	if s[sp+3].Gt(&s[sp+2]) { s[sp+2].SetOne() } else { s[sp+2].Clear() }
 	if s[sp+2].IsZero() { s[sp+2].SetOne() } else { s[sp+2].Clear() }
-	s[sp+3].SetUint64(7760)
 	if contract.Gas < 32 { return nil, ErrOutOfGas }
 	contract.Gas -= 32
 	if !s[sp+2].IsZero() {
+		s[sp+0].SetUint64(3)
 		sp += 2
-		stack.top = sp
 		goto L7760
 	}
+	s[sp+0].SetUint64(3)
 	sp += 2
 
 	// block @7753 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(7760)
-	s[sp+1].SetUint64(20700)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(7760)
 	sp += 1
-	stack.top = sp
 	goto L20700
 
 L7760: // block @7760 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	s[sp-2].Sub(&s[sp-1], &s[sp-2])
-	s[sp-1].SetUint64(7777)
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
 	if !s[sp-2].IsZero() {
 		sp += -2
-		stack.top = sp
 		goto L7777
 	}
 	sp += -2
 
 	// block @7766 (7 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(7696)
 	s[sp+1] = s[sp-6]
 	s[sp+2] = s[sp-5]
 	s[sp+3] = s[sp-4]
 	s[sp+4] = s[sp-3]
-	s[sp+5].SetUint64(11004)
 	if contract.Gas < 26 { return nil, ErrOutOfGas }
 	contract.Gas -= 26
+	s[sp+0].SetUint64(7696)
 	sp += 5
-	stack.top = sp
 	goto L11004
 
 L7777: // block @7777 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(7696)
 	s[sp+1] = s[sp-6]
 	s[sp+2] = s[sp-5]
 	s[sp+3] = s[sp-4]
 	s[sp+4] = s[sp-3]
-	s[sp+5].SetUint64(11104)
 	if contract.Gas < 27 { return nil, ErrOutOfGas }
 	contract.Gas -= 27
+	s[sp+0].SetUint64(7696)
 	sp += 5
-	stack.top = sp
 	goto L11104
 
 L7789: // block @7789 (11 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+9 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Set(&aotCCTFExchangeV2_0)
-	s[sp+1].Clear()
-	s[sp+2].SetUint64(7959)
-	s[sp+3] = s[sp+0]
-	s[sp+4].SetUint64(7839)
-	s[sp+5] = s[sp+1]
 	s[sp+6] = s[sp-3]
-	s[sp+7].SetUint64(1)
-	s[sp+8].SetUint64(11155)
 	if contract.Gas < 35 { return nil, ErrOutOfGas }
 	contract.Gas -= 35
+	s[sp+0].Set(&aotCCTFExchangeV2_0)
+	s[sp+1].SetUint64(0)
+	s[sp+2].SetUint64(7959)
+	s[sp+3].Set(&aotCCTFExchangeV2_0)
+	s[sp+4].SetUint64(7839)
+	s[sp+5].SetUint64(0)
+	s[sp+7].SetUint64(1)
 	sp += 8
-	stack.top = sp
 	goto L11155
 
 L7839: // block @7839 (49 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+7 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 7842
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_59)
-	s[sp+2].SetUint64(96)
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
 	s[sp+3] = s[sp-2]
-	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
-	if s[sp+3].LtUint64(256) { s[sp+2].Lsh(&s[sp+2], uint(s[sp+3].Uint64())) } else { s[sp+2].Clear() }
+	s[sp+2] = s[sp+3]
+	s[sp+2].Lsh(&s[sp+2], 96)
+	s[sp+1].Set(&aotCCTFExchangeV2_59)
 	s[sp+1].And(&s[sp+2], &s[sp+1])
-	s[sp+2].SetUint64(32)
 	s[sp+3] = s[sp+0]
+	s[sp+2].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 27 { return nil, ErrOutOfGas }
-	contract.Gas -= 27
-	stack.top = sp + 3
-	pc = 7886
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(52)
+	if contract.Gas < 30 { return nil, ErrOutOfGas }
+	contract.Gas -= 30
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+0]
+	s[sp+1].SetUint64(52)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
 	s[sp+2] = s[sp-1]
 	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 3
-	pc = 7893
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Clear()
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1] = s[sp+0]
 	s[sp+2].SetUint64(84)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	s[sp+2].SetUint64(64)
-	s[sp+3] = s[sp+2]
-	if contract.Gas < 17 { return nil, ErrOutOfGas }
-	contract.Gas -= 17
-	stack.top = sp + 4
-	pc = 7902
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+4].Set(&aotCCTFExchangeV2_25)
+	if contract.Gas < 20 { return nil, ErrOutOfGas }
+	contract.Gas -= 20
+	if err = aotMloadC(contract, mem, 64, &s[sp+3]); err != nil { return nil, err }
 	s[sp+5] = s[sp+3]
 	s[sp+6] = s[sp+1]
 	s[sp+5].Sub(&s[sp+6], &s[sp+5])
+	s[sp+4].Set(&aotCCTFExchangeV2_25)
 	s[sp+4].Add(&s[sp+5], &s[sp+4])
 	s[sp+5] = s[sp+3]
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + 6
-	pc = 7941
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 21 { return nil, ErrOutOfGas }
+	contract.Gas -= 21
+	if err = aotMstore(contract, mem, &s[sp+5], &s[sp+4]); err != nil { return nil, err }
 	s[sp+3], s[sp+1] = s[sp+1], s[sp+3]
-	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
+	s[sp+2] = s[sp+3]
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	if err = aotMstoreC(contract, mem, 64, &s[sp+2]); err != nil { return nil, err }
+	s[sp+2] = s[sp+1]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 4
-	pc = 7944
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2] = s[sp+1]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 3
-	pc = 7946
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+3].SetUint64(32)
-	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
+	s[sp+3] = s[sp+2]
 	s[sp+3], s[sp+1] = s[sp+1], s[sp+3]
+	s[sp+2].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 3
-	pc = 7952
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 42 { return nil, ErrOutOfGas }
+	contract.Gas -= 42
+	if err = aotKeccak256(evm, contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
 	s[sp+1], s[sp-3] = s[sp-3], s[sp+1]
 	s[sp+1], s[sp-2] = s[sp-2], s[sp+1]
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
@@ -8999,54 +7128,45 @@ L7839: // block @7839 (49 instrs)
 	goto dispatch
 
 L7959: // block @7959 (12 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+7 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
-	s[sp-1].Clear()
-	s[sp+0].SetUint64(7978)
 	s[sp+1] = s[sp-3]
-	s[sp+2].SetUint64(7839)
-	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-6]
-	s[sp+5].SetUint64(2)
-	s[sp+6].SetUint64(11155)
 	if contract.Gas < 37 { return nil, ErrOutOfGas }
 	contract.Gas -= 37
+	s[sp-1].SetUint64(0)
+	s[sp+0].SetUint64(7978)
+	s[sp+2].SetUint64(7839)
+	s[sp+3].SetUint64(0)
+	s[sp+5].SetUint64(2)
 	sp += 6
-	stack.top = sp
 	goto L11155
 
 L7978: // block @7978 (14 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(96)
 	s[sp+1] = s[sp-6]
+	s[sp+0].SetUint64(96)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 1
-	pc = 7983
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
 	s[sp+0], s[sp-2] = s[sp-2], s[sp+0]
 	s[sp+0] = s[sp-3]
 	s[sp+1] = s[sp-1]
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
 	s[sp+1] = s[sp+0]
-	s[sp+2].SetUint64(7999)
 	if contract.Gas < 33 { return nil, ErrOutOfGas }
 	contract.Gas -= 33
 	if !s[sp+1].IsZero() {
 		sp += 1
-		stack.top = sp
 		goto L7999
 	}
 	sp += 1
 
 	// block @7995 (4 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1] = s[sp-3]
@@ -9056,43 +7176,31 @@ L7978: // block @7978 (14 instrs)
 	contract.Gas -= 11
 
 L7999: // block @7999 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(8053)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
 	if !s[sp-1].IsZero() {
 		sp += -1
-		stack.top = sp
 		goto L8053
 	}
 	sp += -1
 
 	// block @8004 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 8006
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_60)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 8041
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 8047
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_60)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -9105,73 +7213,59 @@ L7999: // block @7999 (3 instrs)
 	return res, nil
 
 L8053: // block @8053 (2 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
 	if contract.Gas < 3 { return nil, ErrOutOfGas }
 	contract.Gas -= 3
+	s[sp+0].SetUint64(0)
 	sp += 1
 
 L8055: // block @8055 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-6]
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 8057
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp-1]
 	if s[sp+1].Lt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(3250)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
+		if interrupt.Load() { return nil, ErrInterrupt }
 		goto L3250
 	}
 
 	// block @8065 (9 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
 	s[sp+1] = s[sp-6]
 	s[sp+2] = s[sp-1]
 	s[sp+3] = s[sp+1]
-	if contract.Gas < 11 { return nil, ErrOutOfGas }
-	contract.Gas -= 11
-	stack.top = sp + 4
-	pc = 8069
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 14 { return nil, ErrOutOfGas }
+	contract.Gas -= 14
+	if err = aotMload(contract, mem, &s[sp+3]); err != nil { return nil, err }
 	s[sp+4] = s[sp+2]
 	if s[sp+4].Lt(&s[sp+3]) { s[sp+3].SetOne() } else { s[sp+3].Clear() }
-	s[sp+4].SetUint64(8083)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+3].IsZero() {
+		s[sp+0].SetUint64(0)
 		sp += 3
-		stack.top = sp
 		goto L8083
 	}
+	s[sp+0].SetUint64(0)
 	sp += 3
 
 	// block @8076 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(8083)
-	s[sp+1].SetUint64(20764)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(8083)
 	sp += 1
-	stack.top = sp
 	goto L20764
 
 L8083: // block @8083 (18 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 7 { return nil, &ErrStackUnderflow{stackLen: sp, required: 7} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetUint64(32)
@@ -9179,35 +7273,28 @@ L8083: // block @8083 (18 instrs)
 	s[sp+0].SetUint64(32)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + -1
-	pc = 8091
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 21 { return nil, ErrOutOfGas }
+	contract.Gas -= 21
+	if err = aotMload(contract, mem, &s[sp-2]); err != nil { return nil, err }
 	s[sp-1].SetUint64(96)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + -1
-	pc = 8095
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	if err = aotMload(contract, mem, &s[sp-2]); err != nil { return nil, err }
 	s[sp-2], s[sp-3] = s[sp-3], s[sp-2]
 	s[sp-2] = s[sp-7]
 	s[sp-1] = s[sp-3]
 	if s[sp-1].Eq(&s[sp-2]) { s[sp-2].SetOne() } else { s[sp-2].Clear() }
 	s[sp-1] = s[sp-2]
-	s[sp+0].SetUint64(8110)
 	if contract.Gas < 30 { return nil, ErrOutOfGas }
 	contract.Gas -= 30
 	if !s[sp-1].IsZero() {
 		sp += -1
-		stack.top = sp
 		goto L8110
 	}
 	sp += -1
 
 	// block @8106 (4 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1] = s[sp-5]
@@ -9217,43 +7304,31 @@ L8083: // block @8083 (18 instrs)
 	contract.Gas -= 11
 
 L8110: // block @8110 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(8164)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
 	if !s[sp-1].IsZero() {
 		sp += -1
-		stack.top = sp
 		goto L8164
 	}
 	sp += -1
 
 	// block @8115 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 8117
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_60)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 8152
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 8158
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_60)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -9266,116 +7341,93 @@ L8110: // block @8110 (3 instrs)
 	return res, nil
 
 L8164: // block @8164 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	s[sp-1].SetUint64(1)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
-	s[sp-1].SetUint64(8055)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += -1
-	stack.top = sp
 	goto L8055
 
 L8173: // block @8173 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 8175
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(1)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2].SetUint64(32)
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
+	s[sp+1] = s[sp+0]
 	s[sp+3] = s[sp-1]
+	s[sp+2].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	s[sp+3].Clear()
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
+	s[sp+0].SetUint64(1)
+	s[sp+3].SetUint64(0)
 	sp += 4
 
 L8184: // block @8184 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-3]
 	s[sp+1] = s[sp-1]
 	if s[sp+1].Lt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(8229)
 	if contract.Gas < 26 { return nil, ErrOutOfGas }
 	contract.Gas -= 26
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L8229
 	}
 
 	// block @8193 (15 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(5)
 	s[sp+1] = s[sp-1]
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	if s[sp+1].LtUint64(256) { s[sp+0].Lsh(&s[sp+0], uint(s[sp+1].Uint64())) } else { s[sp+0].Clear() }
+	s[sp+0] = s[sp+1]
+	s[sp+0].Lsh(&s[sp+0], 5)
 	s[sp+1] = s[sp-2]
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + 1
-	pc = 8200
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 21 { return nil, ErrOutOfGas }
+	contract.Gas -= 21
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1].SetUint64(192)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 1
-	pc = 8204
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp-6]
 	s[sp+2] = s[sp+0]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
-	s[sp+2].SetUint64(8220)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+1].IsZero() {
 		sp += 1
-		stack.top = sp
 		goto L8220
 	}
 	sp += 1
 
 	// block @8212 (6 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+0], s[sp-5] = s[sp-5], s[sp+0]
-	s[sp-1].SetUint64(8229)
+	s[sp+0] = s[sp-5]
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
+	s[sp-5].SetUint64(0)
 	sp += -1
-	stack.top = sp
 	goto L8229
 
 L8220: // block @8220 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	s[sp-1].SetUint64(1)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
-	s[sp-1].SetUint64(8184)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += -1
-	stack.top = sp
 	goto L8184
 
 L8229: // block @8229 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 7 { return nil, &ErrStackUnderflow{stackLen: sp, required: 7} }
 	s[sp-4], s[sp-7] = s[sp-7], s[sp-4]
 	s[sp-4], s[sp-6] = s[sp-6], s[sp-4]
@@ -9388,158 +7440,133 @@ L8229: // block @8229 (9 instrs)
 	goto dispatch
 
 L8238: // block @8238 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(8248)
 	s[sp+2] = s[sp-6]
-	s[sp+3].SetUint64(3425)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(8248)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 3
-	stack.top = sp
 	goto L3425
 
 L8248: // block @8248 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 8 { return nil, &ErrStackUnderflow{stackLen: sp, required: 8} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
-	s[sp-1].SetUint64(8260)
 	s[sp+0] = s[sp-2]
 	s[sp+1] = s[sp-8]
-	s[sp+2].SetUint64(5554)
 	if contract.Gas < 26 { return nil, ErrOutOfGas }
 	contract.Gas -= 26
+	s[sp-1].SetUint64(8260)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 2
-	stack.top = sp
 	goto L5554
 
 L8260: // block @8260 (17 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 7 { return nil, &ErrStackUnderflow{stackLen: sp, required: 7} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(32)
 	s[sp+1] = s[sp-7]
+	s[sp+0].SetUint64(32)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 1
-	pc = 8265
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Clear()
-	s[sp+2] = s[sp+1]
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	s[sp+3] = s[sp-7]
 	s[sp+4].SetUint64(192)
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
-	if contract.Gas < 14 { return nil, ErrOutOfGas }
-	contract.Gas -= 14
-	stack.top = sp + 4
-	pc = 8272
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+4].SetUint64(1)
+	if contract.Gas < 17 { return nil, ErrOutOfGas }
+	contract.Gas -= 17
+	if err = aotMload(contract, mem, &s[sp+3]); err != nil { return nil, err }
 	s[sp+5] = s[sp+3]
+	s[sp+4].SetUint64(1)
 	if s[sp+5].Gt(&s[sp+4]) { s[sp+4].SetOne() } else { s[sp+4].Clear() }
 	if s[sp+4].IsZero() { s[sp+4].SetOne() } else { s[sp+4].Clear() }
-	s[sp+5].SetUint64(8289)
 	if contract.Gas < 25 { return nil, ErrOutOfGas }
 	contract.Gas -= 25
 	if !s[sp+4].IsZero() {
+		s[sp+1].SetUint64(0)
+		s[sp+2].SetUint64(0)
 		sp += 4
-		stack.top = sp
 		goto L8289
 	}
+	s[sp+1].SetUint64(0)
+	s[sp+2].SetUint64(0)
 	sp += 4
 
 	// block @8282 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(8289)
-	s[sp+1].SetUint64(20700)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(8289)
 	sp += 1
-	stack.top = sp
 	goto L20700
 
 L8289: // block @8289 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	if s[sp-1].Eq(&s[sp-2]) { s[sp-2].SetOne() } else { s[sp-2].Clear() }
 	s[sp-2], s[sp-3] = s[sp-3], s[sp-2]
-	s[sp-2].Clear()
-	s[sp-1] = s[sp-2]
-	s[sp+0] = s[sp-1]
-	s[sp+1] = s[sp+0]
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
+	s[sp-2].SetUint64(0)
+	s[sp-1].SetUint64(0)
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	sp += 2
 
 L8297: // block @8297 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 12 { return nil, &ErrStackUnderflow{stackLen: sp, required: 12} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-12]
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 8299
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp-1]
 	if s[sp+1].Lt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(8454)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L8454
 	}
 
 	// block @8307 (12 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 13 { return nil, &ErrStackUnderflow{stackLen: sp, required: 13} }
 	if sp+8 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
-	s[sp+2].SetUint64(8397)
 	s[sp+3] = s[sp-13]
 	s[sp+4] = s[sp-12]
 	s[sp+5] = s[sp-1]
 	s[sp+6] = s[sp+4]
-	if contract.Gas < 19 { return nil, ErrOutOfGas }
-	contract.Gas -= 19
-	stack.top = sp + 7
-	pc = 8316
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 22 { return nil, ErrOutOfGas }
+	contract.Gas -= 22
+	if err = aotMload(contract, mem, &s[sp+6]); err != nil { return nil, err }
 	s[sp+7] = s[sp+5]
 	if s[sp+7].Lt(&s[sp+6]) { s[sp+6].SetOne() } else { s[sp+6].Clear() }
-	s[sp+7].SetUint64(8330)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+6].IsZero() {
+		s[sp+0].SetUint64(0)
+		s[sp+1].SetUint64(0)
+		s[sp+2].SetUint64(8397)
 		sp += 6
-		stack.top = sp
 		goto L8330
 	}
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
+	s[sp+2].SetUint64(8397)
 	sp += 6
 
 	// block @8323 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(8330)
-	s[sp+1].SetUint64(20764)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(8330)
 	sp += 1
-	stack.top = sp
 	goto L20764
 
 L8330: // block @8330 (15 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 17 { return nil, &ErrStackUnderflow{stackLen: sp, required: 17} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetUint64(32)
@@ -9547,44 +7574,34 @@ L8330: // block @8330 (15 instrs)
 	s[sp+0].SetUint64(32)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + -1
-	pc = 8338
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 21 { return nil, ErrOutOfGas }
+	contract.Gas -= 21
+	if err = aotMload(contract, mem, &s[sp-2]); err != nil { return nil, err }
 	s[sp-1] = s[sp-17]
 	s[sp+0] = s[sp-7]
 	s[sp+1] = s[sp-1]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 8342
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+0]
 	if s[sp+2].Lt(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(8356)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+1].IsZero() {
 		sp += 1
-		stack.top = sp
 		goto L8356
 	}
 	sp += 1
 
 	// block @8349 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(8356)
-	s[sp+1].SetUint64(20764)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(8356)
 	sp += 1
-	stack.top = sp
 	goto L20764
 
 L8356: // block @8356 (15 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 17 { return nil, &ErrStackUnderflow{stackLen: sp, required: 17} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetUint64(32)
@@ -9592,44 +7609,34 @@ L8356: // block @8356 (15 instrs)
 	s[sp+0].SetUint64(32)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + -1
-	pc = 8364
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 21 { return nil, ErrOutOfGas }
+	contract.Gas -= 21
+	if err = aotMload(contract, mem, &s[sp-2]); err != nil { return nil, err }
 	s[sp-1] = s[sp-17]
 	s[sp+0] = s[sp-8]
 	s[sp+1] = s[sp-1]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 8368
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+0]
 	if s[sp+2].Lt(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(8382)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+1].IsZero() {
 		sp += 1
-		stack.top = sp
 		goto L8382
 	}
 	sp += 1
 
 	// block @8375 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(8382)
-	s[sp+1].SetUint64(20764)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(8382)
 	sp += 1
-	stack.top = sp
 	goto L20764
 
 L8382: // block @8382 (11 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 14 { return nil, &ErrStackUnderflow{stackLen: sp, required: 14} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetUint64(32)
@@ -9637,22 +7644,17 @@ L8382: // block @8382 (11 instrs)
 	s[sp+0].SetUint64(32)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + -1
-	pc = 8390
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 21 { return nil, ErrOutOfGas }
+	contract.Gas -= 21
+	if err = aotMload(contract, mem, &s[sp-2]); err != nil { return nil, err }
 	s[sp-1] = s[sp-14]
 	s[sp+0] = s[sp-13]
-	s[sp+1].SetUint64(12270)
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
 	sp += 1
-	stack.top = sp
 	goto L12270
 
 L8397: // block @8397 (23 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 15 { return nil, &ErrStackUnderflow{stackLen: sp, required: 15} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-3] = s[sp-3], s[sp-1]
@@ -9668,35 +7670,26 @@ L8397: // block @8397 (23 instrs)
 	s[sp-2] = s[sp-15]
 	s[sp-1] = s[sp-5]
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 48 { return nil, ErrOutOfGas }
-	contract.Gas -= 48
-	stack.top = sp + 1
-	pc = 8415
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 51 { return nil, ErrOutOfGas }
+	contract.Gas -= 51
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp-1]
 	if s[sp+1].Lt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(8429)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L8429
 	}
 
 	// block @8422 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(8429)
-	s[sp+1].SetUint64(20764)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(8429)
 	sp += 1
-	stack.top = sp
 	goto L20764
 
 L8429: // block @8429 (20 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetUint64(32)
@@ -9704,11 +7697,9 @@ L8429: // block @8429 (20 instrs)
 	s[sp+0].SetUint64(32)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + -1
-	pc = 8437
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 21 { return nil, ErrOutOfGas }
+	contract.Gas -= 21
+	if err = aotMload(contract, mem, &s[sp-2]); err != nil { return nil, err }
 	s[sp-1] = s[sp-6]
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-2], s[sp-6] = s[sp-6], s[sp-2]
@@ -9716,55 +7707,42 @@ L8429: // block @8429 (20 instrs)
 	s[sp-1].SetUint64(1)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-2], s[sp-5] = s[sp-5], s[sp-2]
-	s[sp-4].SetUint64(8297)
 	if contract.Gas < 40 { return nil, ErrOutOfGas }
 	contract.Gas -= 40
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += -4
-	stack.top = sp
 	goto L8297
 
 L8454: // block @8454 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 9 { return nil, &ErrStackUnderflow{stackLen: sp, required: 9} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1] = s[sp-9]
 	s[sp+0] = s[sp-3]
 	if s[sp+0].Gt(&s[sp-1]) { s[sp-1].SetOne() } else { s[sp-1].Clear() }
 	if s[sp-1].IsZero() { s[sp-1].SetOne() } else { s[sp-1].Clear() }
-	s[sp+0].SetUint64(8513)
 	if contract.Gas < 28 { return nil, ErrOutOfGas }
 	contract.Gas -= 28
 	if !s[sp-1].IsZero() {
 		sp += -1
-		stack.top = sp
 		goto L8513
 	}
 	sp += -1
 
 	// block @8464 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 8466
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_61)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 8501
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 8507
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_61)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -9777,23 +7755,19 @@ L8454: // block @8454 (8 instrs)
 	return res, nil
 
 L8513: // block @8513 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 12 { return nil, &ErrStackUnderflow{stackLen: sp, required: 12} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(8525)
 	s[sp+2] = s[sp-12]
 	s[sp+3] = s[sp-2]
 	s[sp+4] = s[sp-7]
-	s[sp+5].SetUint64(12726)
 	if contract.Gas < 26 { return nil, ErrOutOfGas }
 	contract.Gas -= 26
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(8525)
 	sp += 5
-	stack.top = sp
 	goto L12726
 
 L8525: // block @8525 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
@@ -9801,40 +7775,29 @@ L8525: // block @8525 (9 instrs)
 	s[sp+0] = s[sp-3]
 	if s[sp+0].Lt(&s[sp-1]) { s[sp-1].SetOne() } else { s[sp-1].Clear() }
 	if s[sp-1].IsZero() { s[sp-1].SetOne() } else { s[sp-1].Clear() }
-	s[sp+0].SetUint64(8585)
 	if contract.Gas < 31 { return nil, ErrOutOfGas }
 	contract.Gas -= 31
 	if !s[sp-1].IsZero() {
 		sp += -1
-		stack.top = sp
 		goto L8585
 	}
 	sp += -1
 
 	// block @8536 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 8538
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_43)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 8573
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 8579
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_43)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -9847,25 +7810,20 @@ L8525: // block @8525 (9 instrs)
 	return res, nil
 
 L8585: // block @8585 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 13 { return nil, &ErrStackUnderflow{stackLen: sp, required: 13} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(8596)
 	s[sp+1] = s[sp-7]
 	s[sp+2] = s[sp-13]
 	s[sp+3] = s[sp-3]
-	s[sp+4].SetUint64(12814)
 	if contract.Gas < 24 { return nil, ErrOutOfGas }
 	contract.Gas -= 24
+	s[sp+0].SetUint64(8596)
 	sp += 4
-	stack.top = sp
 	goto L12814
 
 L8596: // block @8596 (12 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 14 { return nil, &ErrStackUnderflow{stackLen: sp, required: 14} }
 	if sp+8 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp-1].SetUint64(8612)
 	s[sp+0] = s[sp-14]
 	s[sp+1] = s[sp-7]
 	s[sp+2] = s[sp-6]
@@ -9873,73 +7831,60 @@ L8596: // block @8596 (12 instrs)
 	s[sp+4] = s[sp-4]
 	s[sp+5] = s[sp-3]
 	s[sp+6] = s[sp-9]
-	s[sp+7].SetUint64(12999)
 	if contract.Gas < 38 { return nil, ErrOutOfGas }
 	contract.Gas -= 38
+	s[sp-1].SetUint64(8612)
 	sp += 7
-	stack.top = sp
 	goto L12999
 
 L8612: // block @8612 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(8622)
-	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
+	s[sp+0] = s[sp-1]
 	s[sp+1] = s[sp-5]
-	s[sp+2].SetUint64(20594)
 	if contract.Gas < 21 { return nil, ErrOutOfGas }
 	contract.Gas -= 21
+	s[sp-1].SetUint64(8622)
 	sp += 2
-	stack.top = sp
 	goto L20594
 
 L8622: // block @8622 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-5] = s[sp-5], s[sp-1]
 	s[sp-1] = s[sp-5]
 	if s[sp-1].IsZero() { s[sp-1].SetOne() } else { s[sp-1].Clear() }
-	s[sp+0].SetUint64(8683)
 	if contract.Gas < 25 { return nil, ErrOutOfGas }
 	contract.Gas -= 25
 	if !s[sp-1].IsZero() {
 		sp += -1
-		stack.top = sp
 		goto L8683
 	}
 	sp += -1
 
 	// block @8631 (4 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(8683)
 	s[sp+1] = s[sp-5]
-	s[sp+2].SetUint64(8644)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+1].IsZero() {
+		s[sp+0].SetUint64(8683)
 		sp += 1
-		stack.top = sp
 		goto L8644
 	}
+	s[sp+0].SetUint64(8683)
 	sp += 1
 
 	// block @8639 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetBytes(contract.Address().Bytes())
-	s[sp+1].SetUint64(8646)
 	if contract.Gas < 13 { return nil, ErrOutOfGas }
 	contract.Gas -= 13
 	sp += 1
-	stack.top = sp
 	goto L8646
 
 L8644: // block @8644 (2 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 7 { return nil, &ErrStackUnderflow{stackLen: sp, required: 7} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-7]
@@ -9948,31 +7893,26 @@ L8644: // block @8644 (2 instrs)
 	sp += 1
 
 L8646: // block @8646 (12 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(3)
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(3)
 	stack.top = sp + 1
-	pc = 8649
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(256)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
+	s[sp+1] = s[sp+0]
+	s[sp+0].SetUint64(256)
 	s[sp+0].Div(&s[sp+1], &s[sp+0])
 	s[sp+1].Set(&aotCCTFExchangeV2_1)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
-	s[sp+1].Clear()
 	s[sp+2] = s[sp-6]
-	s[sp+3].SetUint64(9247)
 	if contract.Gas < 33 { return nil, ErrOutOfGas }
 	contract.Gas -= 33
+	s[sp+1].SetUint64(0)
 	sp += 3
-	stack.top = sp
 	goto L9247
 
 L8683: // block @8683 (15 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 14 { return nil, &ErrStackUnderflow{stackLen: sp, required: 14} }
 	if contract.Gas < 35 { return nil, ErrOutOfGas }
 	contract.Gas -= 35
@@ -9983,50 +7923,40 @@ L8683: // block @8683 (15 instrs)
 	goto dispatch
 
 L8698: // block @8698 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+7 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
-	s[sp+2].SetUint64(8711)
 	s[sp+3] = s[sp-6]
 	s[sp+4] = s[sp-4]
 	s[sp+5] = s[sp-2]
-	s[sp+6].SetUint64(9191)
 	if contract.Gas < 28 { return nil, ErrOutOfGas }
 	contract.Gas -= 28
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
+	s[sp+2].SetUint64(8711)
 	sp += 6
-	stack.top = sp
 	goto L9191
 
 L8711: // block @8711 (36 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 10 { return nil, &ErrStackUnderflow{stackLen: sp, required: 10} }
 	if sp+8 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(192)
 	s[sp+1] = s[sp-10]
+	s[sp+0].SetUint64(192)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 1
-	pc = 8716
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(96)
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	s[sp+2] = s[sp-10]
+	s[sp+1].SetUint64(96)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 8721
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(32)
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+1]); err != nil { return nil, err }
 	s[sp+3] = s[sp-10]
+	s[sp+2].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 8726
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
 	s[sp+2], s[sp-2] = s[sp-2], s[sp+2]
 	s[sp+2], s[sp-4] = s[sp-4], s[sp+2]
 	s[sp+1], s[sp-1] = s[sp-1], s[sp+1]
@@ -10039,242 +7969,190 @@ L8711: // block @8711 (36 instrs)
 	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
 	s[sp+0].Sub(&s[sp+1], &s[sp+0])
 	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
-	s[sp+1].SetUint64(8761)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
+	s[sp+1] = s[sp+0]
 	s[sp+2].SetBytes(contract.Address().Bytes())
 	s[sp+3] = s[sp-2]
-	s[sp+4].SetUint64(8756)
 	s[sp+5] = s[sp-6]
 	s[sp+6] = s[sp-8]
-	s[sp+7].SetUint64(20594)
 	if contract.Gas < 73 { return nil, ErrOutOfGas }
 	contract.Gas -= 73
+	s[sp+0].SetUint64(8761)
+	s[sp+4].SetUint64(8756)
 	sp += 7
-	stack.top = sp
 	goto L20594
 
 L8756: // block @8756 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(9247)
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
-	sp += 0
-	stack.top = sp
 	goto L9247
 
 L8761: // block @8761 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(8771)
 	s[sp+2] = s[sp-1]
-	s[sp+3].SetUint64(9282)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(8771)
 	sp += 3
-	stack.top = sp
 	goto L9282
 
 L8771: // block @8771 (12 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 13 { return nil, &ErrStackUnderflow{stackLen: sp, required: 13} }
 	if sp+7 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
-	s[sp-1].Clear()
-	s[sp+0].SetUint64(8787)
 	s[sp+1] = s[sp-13]
 	s[sp+2] = s[sp-12]
 	s[sp+3] = s[sp-11]
 	s[sp+4] = s[sp-9]
 	s[sp+5] = s[sp-7]
-	s[sp+6].SetUint64(9582)
 	if contract.Gas < 37 { return nil, ErrOutOfGas }
 	contract.Gas -= 37
+	s[sp-1].SetUint64(0)
+	s[sp+0].SetUint64(8787)
 	sp += 6
-	stack.top = sp
 	goto L9582
 
 L8787: // block @8787 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 9 { return nil, &ErrStackUnderflow{stackLen: sp, required: 9} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
 	s[sp-1] = s[sp-9]
 	if s[sp-1].IsZero() { s[sp-1].SetOne() } else { s[sp-1].Clear() }
-	s[sp+0].SetUint64(8853)
 	if contract.Gas < 25 { return nil, ErrOutOfGas }
 	contract.Gas -= 25
 	if !s[sp-1].IsZero() {
 		sp += -1
-		stack.top = sp
 		goto L8853
 	}
 	sp += -1
 
 	// block @8796 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 8 { return nil, &ErrStackUnderflow{stackLen: sp, required: 8} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(8805)
 	s[sp+1] = s[sp-8]
 	s[sp+2] = s[sp-1]
-	s[sp+3].SetUint64(20594)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
+	s[sp+0].SetUint64(8805)
 	sp += 3
-	stack.top = sp
 	goto L20594
 
 L8805: // block @8805 (15 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
-	s[sp-1].SetUint64(8853)
-	s[sp+0].SetUint64(8847)
-	s[sp+1].SetUint64(3)
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
+	s[sp+1].SetUint64(3)
 	stack.top = sp + 2
-	pc = 8816
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].Set(&aotCCTFExchangeV2_1)
-	s[sp+3].SetUint64(256)
-	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
-	s[sp+3], s[sp+1] = s[sp+1], s[sp+3]
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
+	s[sp+3] = s[sp+1]
+	s[sp+2].SetUint64(256)
 	s[sp+2].Div(&s[sp+3], &s[sp+2])
+	s[sp+1].Set(&aotCCTFExchangeV2_1)
 	s[sp+1].And(&s[sp+2], &s[sp+1])
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
+	s[sp+0] = s[sp+1]
 	if contract.Gas < 31 { return nil, ErrOutOfGas }
 	contract.Gas -= 31
+	s[sp-1].SetUint64(8853)
 	sp += 1
-	stack.top = sp
 	goto L8847
 
 L8847: // block @8847 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 10 { return nil, &ErrStackUnderflow{stackLen: sp, required: 10} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-10]
-	s[sp+1].SetUint64(13358)
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
 	sp += 1
-	stack.top = sp
 	goto L13358
 
 L8853: // block @8853 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(8900)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L8900
 	}
 
 	// block @8860 (13 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(8900)
 	s[sp+1].SetBytes(contract.Address().Bytes())
-	s[sp+2].SetUint64(6173)
-	s[sp+3].SetUint64(3)
 	if contract.Gas < 11 { return nil, ErrOutOfGas }
 	contract.Gas -= 11
+	s[sp+3].SetUint64(3)
 	stack.top = sp + 4
-	pc = 8869
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+4].Set(&aotCCTFExchangeV2_1)
-	s[sp+5].SetUint64(256)
-	s[sp+5], s[sp+4] = s[sp+4], s[sp+5]
-	s[sp+5], s[sp+3] = s[sp+3], s[sp+5]
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
+	s[sp+5] = s[sp+3]
+	s[sp+4].SetUint64(256)
 	s[sp+4].Div(&s[sp+5], &s[sp+4])
+	s[sp+3].Set(&aotCCTFExchangeV2_1)
 	s[sp+3].And(&s[sp+4], &s[sp+3])
-	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
+	s[sp+2] = s[sp+3]
 	if contract.Gas < 31 { return nil, ErrOutOfGas }
 	contract.Gas -= 31
+	s[sp+0].SetUint64(8900)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 3
-	stack.top = sp
 	goto L6173
 
 L8900: // block @8900 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(8910)
 	s[sp+2] = s[sp-3]
-	s[sp+3].SetUint64(9282)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(8910)
 	sp += 3
-	stack.top = sp
 	goto L9282
 
 L8910: // block @8910 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 8 { return nil, &ErrStackUnderflow{stackLen: sp, required: 8} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
-	s[sp-1].SetUint64(8922)
 	s[sp+0] = s[sp-4]
 	s[sp+1] = s[sp-8]
-	s[sp+2].SetUint64(20594)
 	if contract.Gas < 26 { return nil, ErrOutOfGas }
 	contract.Gas -= 26
+	s[sp-1].SetUint64(8922)
 	sp += 2
-	stack.top = sp
 	goto L20594
 
 L8922: // block @8922 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-2]
 	if s[sp+0].Lt(&s[sp-1]) { s[sp-1].SetOne() } else { s[sp-1].Clear() }
 	if s[sp-1].IsZero() { s[sp-1].SetOne() } else { s[sp-1].Clear() }
-	s[sp+0].SetUint64(8979)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
 	if !s[sp-1].IsZero() {
 		sp += -1
-		stack.top = sp
 		goto L8979
 	}
 	sp += -1
 
 	// block @8930 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 8932
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_43)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 8967
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 8973
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_43)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -10287,238 +8165,183 @@ L8922: // block @8922 (6 instrs)
 	return res, nil
 
 L8979: // block @8979 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(8989)
 	s[sp+1] = s[sp-3]
 	s[sp+2] = s[sp-1]
-	s[sp+3].SetUint64(20745)
 	if contract.Gas < 21 { return nil, ErrOutOfGas }
 	contract.Gas -= 21
+	s[sp+0].SetUint64(8989)
 	sp += 3
-	stack.top = sp
 	goto L20745
 
 L8989: // block @8989 (21 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 14 { return nil, &ErrStackUnderflow{stackLen: sp, required: 14} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-8] = s[sp-8], s[sp-1]
-	s[sp-4].SetUint64(9016)
 	s[sp-3] = s[sp-14]
 	s[sp-2].SetUint64(192)
 	s[sp-3].Add(&s[sp-2], &s[sp-3])
-	if contract.Gas < 24 { return nil, ErrOutOfGas }
-	contract.Gas -= 24
-	stack.top = sp + -2
-	pc = 9002
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 27 { return nil, ErrOutOfGas }
+	contract.Gas -= 27
+	if err = aotMload(contract, mem, &s[sp-3]); err != nil { return nil, err }
 	s[sp-2] = s[sp-8]
 	s[sp-1] = s[sp-14]
 	s[sp+0].SetUint64(32)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 0
-	pc = 9008
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-6]
 	s[sp+1] = s[sp-5]
-	s[sp+2].Clear()
-	s[sp+3].SetUint64(10169)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
+	s[sp-4].SetUint64(9016)
+	s[sp+2].SetUint64(0)
 	sp += 3
-	stack.top = sp
 	goto L10169
 
 L9016: // block @9016 (43 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 11 { return nil, &ErrStackUnderflow{stackLen: sp, required: 11} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp-1].SetUint64(9178)
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 1
-	pc = 9023
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp+0]
 	s[sp+2].SetUint64(320)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	s[sp+2].SetUint64(64)
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 3
-	pc = 9031
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMstoreC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+1] = s[sp+0]
 	s[sp+2] = s[sp-4]
 	s[sp+3] = s[sp+1]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 4
-	pc = 9035
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
 	s[sp+2].SetUint64(32)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
 	s[sp+2] = s[sp-11]
 	s[sp+3].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 3
-	pc = 9043
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
 	s[sp+3].Set(&aotCCTFExchangeV2_1)
 	s[sp+2].And(&s[sp+3], &s[sp+2])
 	s[sp+3] = s[sp+1]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 4
-	pc = 9067
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
 	s[sp+2].SetUint64(32)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
 	s[sp+2].SetBytes(contract.Address().Bytes())
 	s[sp+3].Set(&aotCCTFExchangeV2_1)
 	s[sp+2].And(&s[sp+3], &s[sp+2])
 	s[sp+3] = s[sp+1]
-	if contract.Gas < 17 { return nil, ErrOutOfGas }
-	contract.Gas -= 17
-	stack.top = sp + 4
-	pc = 9095
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 20 { return nil, ErrOutOfGas }
+	contract.Gas -= 20
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
 	s[sp+2].SetUint64(32)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
 	s[sp+2] = s[sp-11]
 	s[sp+3].SetUint64(192)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 3
-	pc = 9103
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+3].SetUint64(1)
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
 	s[sp+4] = s[sp+2]
+	s[sp+3].SetUint64(1)
 	if s[sp+4].Gt(&s[sp+3]) { s[sp+3].SetOne() } else { s[sp+3].Clear() }
 	if s[sp+3].IsZero() { s[sp+3].SetOne() } else { s[sp+3].Clear() }
-	s[sp+4].SetUint64(9120)
 	if contract.Gas < 25 { return nil, ErrOutOfGas }
 	contract.Gas -= 25
 	if !s[sp+3].IsZero() {
+		s[sp-1].SetUint64(9178)
 		sp += 3
-		stack.top = sp
 		goto L9120
 	}
+	s[sp-1].SetUint64(9178)
 	sp += 3
 
 	// block @9113 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(9120)
-	s[sp+1].SetUint64(20700)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(9120)
 	sp += 1
-	stack.top = sp
 	goto L20700
 
 L9120: // block @9120 (45 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 14 { return nil, &ErrStackUnderflow{stackLen: sp, required: 14} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 9122
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-14]
 	s[sp+0].SetUint64(96)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 0
-	pc = 9130
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 9132
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-12]
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 1
-	pc = 9138
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-8]
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 1
-	pc = 9144
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-10]
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 1
-	pc = 9150
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-14]
 	s[sp+0].SetUint64(320)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 0
-	pc = 9159
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 9161
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-14]
 	s[sp+0].SetUint64(288)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 0
-	pc = 9170
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 9172
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp-2].SetUint64(10403)
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	if contract.Gas < 13 { return nil, ErrOutOfGas }
 	contract.Gas -= 13
 	sp += -2
-	stack.top = sp
 	goto L10403
 
 L9178: // block @9178 (13 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 12 { return nil, &ErrStackUnderflow{stackLen: sp, required: 12} }
 	if contract.Gas < 31 { return nil, ErrOutOfGas }
 	contract.Gas -= 31
@@ -10529,67 +8352,56 @@ L9178: // block @9178 (13 instrs)
 	goto dispatch
 
 L9191: // block @9191 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
-	s[sp+2].SetUint64(9202)
 	s[sp+3] = s[sp-3]
-	s[sp+4].SetUint64(3425)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
+	s[sp+2].SetUint64(9202)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 4
-	stack.top = sp
 	goto L3425
 
 L9202: // block @9202 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
-	s[sp-1].SetUint64(9214)
 	s[sp+0] = s[sp-2]
 	s[sp+1] = s[sp-6]
-	s[sp+2].SetUint64(5554)
 	if contract.Gas < 26 { return nil, ErrOutOfGas }
 	contract.Gas -= 26
+	s[sp-1].SetUint64(9214)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 2
-	stack.top = sp
 	goto L5554
 
 L9214: // block @9214 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(9225)
 	s[sp+1] = s[sp-1]
 	s[sp+2] = s[sp-5]
 	s[sp+3] = s[sp-4]
-	s[sp+4].SetUint64(12814)
 	if contract.Gas < 24 { return nil, ErrOutOfGas }
 	contract.Gas -= 24
+	s[sp+0].SetUint64(9225)
 	sp += 4
-	stack.top = sp
 	goto L12814
 
 L9225: // block @9225 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp-1].SetUint64(9237)
 	s[sp+0] = s[sp-6]
 	s[sp+1] = s[sp-5]
 	s[sp+2] = s[sp-4]
-	s[sp+3].SetUint64(12726)
 	if contract.Gas < 26 { return nil, ErrOutOfGas }
 	contract.Gas -= 26
+	s[sp-1].SetUint64(9237)
 	sp += 3
-	stack.top = sp
 	goto L12726
 
 L9237: // block @9237 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 7 { return nil, &ErrStackUnderflow{stackLen: sp, required: 7} }
 	s[sp-1], s[sp-3] = s[sp-3], s[sp-1]
 	s[sp-2], s[sp-6] = s[sp-6], s[sp-2]
@@ -10604,128 +8416,98 @@ L9237: // block @9237 (10 instrs)
 	goto dispatch
 
 L9247: // block @9247 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-2]
-	s[sp+1].Clear()
+	s[sp+1].SetUint64(0)
 	s[sp+0].Sub(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(9270)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L9270
 	}
 
 	// block @9255 (6 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(9265)
 	s[sp+1] = s[sp-4]
 	s[sp+2] = s[sp-3]
 	s[sp+3] = s[sp-1]
-	s[sp+4].SetUint64(13408)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
+	s[sp+0].SetUint64(9265)
 	sp += 4
-	stack.top = sp
 	goto L13408
 
 L9265: // block @9265 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(5801)
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
-	sp += 0
-	stack.top = sp
+	if interrupt.Load() { return nil, ErrInterrupt }
 	goto L5801
 
 L9270: // block @9270 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(5801)
 	s[sp+1] = s[sp-4]
 	s[sp+2] = s[sp-3]
 	s[sp+3] = s[sp-2]
 	s[sp+4] = s[sp-1]
-	s[sp+5].SetUint64(13493)
 	if contract.Gas < 27 { return nil, ErrOutOfGas }
 	contract.Gas -= 27
+	s[sp+0].SetUint64(5801)
 	sp += 5
-	stack.top = sp
 	goto L13493
 
 L9282: // block @9282 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
 	s[sp+1] = s[sp-1]
-	s[sp+2].Clear()
+	s[sp+2].SetUint64(0)
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
-	s[sp+2].SetUint64(9463)
 	if contract.Gas < 24 { return nil, ErrOutOfGas }
 	contract.Gas -= 24
 	if !s[sp+1].IsZero() {
+		s[sp+0].SetUint64(0)
 		sp += 1
-		stack.top = sp
 		goto L9463
 	}
+	s[sp+0].SetUint64(0)
 	sp += 1
 
 	// block @9291 (18 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 9293
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_62)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 9328
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	s[sp+1].Set(&aotCCTFExchangeV2_62)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
 	s[sp+1].SetBytes(contract.Address().Bytes())
-	s[sp+2].SetUint64(4)
 	s[sp+3] = s[sp+0]
+	s[sp+2].SetUint64(4)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 11 { return nil, ErrOutOfGas }
-	contract.Gas -= 11
-	stack.top = sp + 3
-	pc = 9334
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_1)
-	s[sp+2].Set(&aotCCTFExchangeV2_5)
-	s[sp+1].And(&s[sp+2], &s[sp+1])
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2].SetUint64(1889567281)
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
+	if contract.Gas < 14 { return nil, ErrOutOfGas }
+	contract.Gas -= 14
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1] = s[sp+0]
+	s[sp+2] = s[sp+1]
 	s[sp+3].SetUint64(36)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
 	if contract.Gas < 24 { return nil, ErrOutOfGas }
 	contract.Gas -= 24
+	s[sp+0].Set(&aotCCTFExchangeV2_5)
+	s[sp+1].SetUint64(1889567281)
 	sp += 3
 
 L9400: // block @9400 (16 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(32)
-	s[sp+1].SetUint64(64)
-	if contract.Gas < 7 { return nil, ErrOutOfGas }
-	contract.Gas -= 7
-	stack.top = sp + 2
-	pc = 9405
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 10 { return nil, ErrOutOfGas }
+	contract.Gas -= 10
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+2].Sub(&s[sp+3], &s[sp+2])
@@ -10734,189 +8516,152 @@ L9400: // block @9400 (16 instrs)
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
 	s[sp+5].SetUint64(contract.Gas)
+	s[sp+0].SetUint64(32)
 	stack.top = sp + 6
 	pc = 9412
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
 	s[sp+1] = s[sp+0]
 	if s[sp+1].IsZero() { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(9427)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+1].IsZero() {
 		sp += 1
-		stack.top = sp
 		goto L9427
 	}
 	sp += 1
 
 	// block @9420 (7 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetUint64(uint64(len(evm.returnData)))
-	s[sp+1].Clear()
-	s[sp+2].Clear()
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
+	s[sp+1].SetUint64(0)
+	s[sp+2].SetUint64(0)
 	stack.top = sp + 3
 	pc = 9423
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	s[sp+0].SetUint64(uint64(len(evm.returnData)))
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 9426
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L9427: // block @9427 (28 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp-4].SetUint64(64)
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + -3
-	pc = 9434
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMloadC(contract, mem, 64, &s[sp-4]); err != nil { return nil, err }
 	s[sp-3].SetUint64(uint64(len(evm.returnData)))
-	s[sp-2].SetUint64(31)
-	s[sp-2].Not(&s[sp-2])
-	s[sp-1].SetUint64(31)
 	s[sp+0] = s[sp-3]
+	s[sp-1].SetUint64(31)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
+	s[sp-2].Set(&aotCCTFExchangeV2_25)
 	s[sp-2].And(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-4]
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-2]
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 32 { return nil, ErrOutOfGas }
-	contract.Gas -= 32
-	stack.top = sp + 1
-	pc = 9449
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 35 { return nil, ErrOutOfGas }
+	contract.Gas -= 35
+	if err = aotMstoreC(contract, mem, 64, &s[sp-1]); err != nil { return nil, err }
 	s[sp-2] = s[sp-4]
 	s[sp-3].Add(&s[sp-2], &s[sp-3])
 	s[sp-3], s[sp-4] = s[sp-4], s[sp-3]
-	s[sp-2].SetUint64(2356)
-	s[sp-2], s[sp-4] = s[sp-4], s[sp-2]
+	s[sp-2] = s[sp-4]
 	s[sp-2], s[sp-3] = s[sp-3], s[sp-2]
-	s[sp-1].SetUint64(20809)
 	if contract.Gas < 31 { return nil, ErrOutOfGas }
 	contract.Gas -= 31
+	s[sp-4].SetUint64(2356)
 	sp += -1
-	stack.top = sp
 	goto L20809
 
 L9463: // block @9463 (27 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 9466
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
 	s[sp+1].Set(&aotCCTFExchangeV2_63)
-	s[sp+2] = s[sp+0]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 9500
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
 	s[sp+1].SetBytes(contract.Address().Bytes())
-	s[sp+2].SetUint64(4)
 	s[sp+3] = s[sp+0]
+	s[sp+2].SetUint64(4)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 11 { return nil, ErrOutOfGas }
-	contract.Gas -= 11
-	stack.top = sp + 3
-	pc = 9506
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(36)
+	if contract.Gas < 14 { return nil, ErrOutOfGas }
+	contract.Gas -= 14
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+0]
+	s[sp+1].SetUint64(36)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
 	s[sp+2] = s[sp-2]
 	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 3
-	pc = 9513
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_1)
-	s[sp+2].Set(&aotCCTFExchangeV2_4)
-	s[sp+1].And(&s[sp+2], &s[sp+1])
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2].SetUint64(16635278)
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1] = s[sp+0]
+	s[sp+2] = s[sp+1]
 	s[sp+3].SetUint64(68)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	s[sp+3].SetUint64(9400)
 	if contract.Gas < 35 { return nil, ErrOutOfGas }
 	contract.Gas -= 35
+	s[sp+0].Set(&aotCCTFExchangeV2_4)
+	s[sp+1].SetUint64(16635278)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 3
-	stack.top = sp
 	goto L9400
 
 L9582: // block @9582 (13 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-3]
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 9584
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Clear()
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2] = s[sp+0]
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
+	s[sp+1] = s[sp+0]
 	s[sp+3] = s[sp+1]
-	s[sp+4].SetUint64(18446744073709551615)
 	s[sp+5] = s[sp+3]
+	s[sp+4].SetUint64(18446744073709551615)
 	if s[sp+5].Gt(&s[sp+4]) { s[sp+4].SetOne() } else { s[sp+4].Clear() }
 	if s[sp+4].IsZero() { s[sp+4].SetOne() } else { s[sp+4].Clear() }
-	s[sp+5].SetUint64(9612)
 	if contract.Gas < 36 { return nil, ErrOutOfGas }
 	contract.Gas -= 36
 	if !s[sp+4].IsZero() {
+		s[sp+0].SetUint64(0)
+		s[sp+2].SetUint64(0)
 		sp += 4
-		stack.top = sp
 		goto L9612
 	}
+	s[sp+0].SetUint64(0)
+	s[sp+2].SetUint64(0)
 	sp += 4
 
 	// block @9605 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(9612)
-	s[sp+1].SetUint64(18455)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(9612)
 	sp += 1
-	stack.top = sp
 	goto L18455
 
 L9612: // block @9612 (20 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 9615
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
 	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
 	s[sp+1] = s[sp+0]
 	s[sp+2] = s[sp-1]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 9619
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
 	s[sp+1] = s[sp+0]
 	s[sp+2].SetUint64(32)
 	s[sp+1].Mul(&s[sp+2], &s[sp+1])
@@ -10924,26 +8669,20 @@ L9612: // block @9612 (20 instrs)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
 	s[sp+2] = s[sp-1]
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	s[sp+2].SetUint64(64)
-	if contract.Gas < 26 { return nil, ErrOutOfGas }
-	contract.Gas -= 26
-	stack.top = sp + 3
-	pc = 9631
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 29 { return nil, ErrOutOfGas }
+	contract.Gas -= 29
+	if err = aotMstoreC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+1] = s[sp+0]
 	if s[sp+1].IsZero() { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(9669)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+1].IsZero() {
 		sp += 1
-		stack.top = sp
 		goto L9669
 	}
 	sp += 1
 
 	// block @9638 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-2]
@@ -10954,46 +8693,38 @@ L9612: // block @9612 (20 instrs)
 	sp += 1
 
 L9642: // block @9642 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(9650)
-	s[sp+1].SetUint64(18280)
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
+	s[sp+0].SetUint64(9650)
 	sp += 1
-	stack.top = sp
 	goto L18280
 
 L9650: // block @9650 (13 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 9652
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-2], s[sp-3] = s[sp-3], s[sp-2]
-	s[sp-1].SetUint64(1)
-	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
+	s[sp-1] = s[sp-2]
+	s[sp-2].SetUint64(1)
 	s[sp-2].Sub(&s[sp-1], &s[sp-2])
 	s[sp-2], s[sp-3] = s[sp-3], s[sp-2]
 	s[sp-1] = s[sp-3]
-	s[sp+0].SetUint64(9642)
 	if contract.Gas < 37 { return nil, ErrOutOfGas }
 	contract.Gas -= 37
 	if !s[sp-1].IsZero() {
+		if interrupt.Load() { return nil, ErrInterrupt }
 		sp += -1
-		stack.top = sp
 		goto L9642
 	}
 	sp += -1
 
 	// block @9667 (2 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
 	if contract.Gas < 5 { return nil, ErrOutOfGas }
@@ -11001,74 +8732,62 @@ L9650: // block @9650 (13 instrs)
 	sp += -1
 
 L9669: // block @9669 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-2], s[sp-3] = s[sp-3], s[sp-2]
-	s[sp-2].Clear()
-	s[sp-1] = s[sp-2]
-	s[sp+0] = s[sp-1]
 	if contract.Gas < 16 { return nil, ErrOutOfGas }
 	contract.Gas -= 16
+	s[sp-2].SetUint64(0)
+	s[sp-1].SetUint64(0)
+	s[sp+0].SetUint64(0)
 	sp += 1
 
 L9676: // block @9676 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-5]
 	s[sp+1] = s[sp-1]
 	if s[sp+1].Lt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(9987)
 	if contract.Gas < 26 { return nil, ErrOutOfGas }
 	contract.Gas -= 26
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L9987
 	}
 
 	// block @9685 (11 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 10 { return nil, &ErrStackUnderflow{stackLen: sp, required: 10} }
 	if sp+7 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(9735)
 	s[sp+2] = s[sp-10]
 	s[sp+3] = s[sp-9]
 	s[sp+4] = s[sp-1]
 	s[sp+5] = s[sp+3]
-	if contract.Gas < 17 { return nil, ErrOutOfGas }
-	contract.Gas -= 17
-	stack.top = sp + 6
-	pc = 9693
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 20 { return nil, ErrOutOfGas }
+	contract.Gas -= 20
+	if err = aotMload(contract, mem, &s[sp+5]); err != nil { return nil, err }
 	s[sp+6] = s[sp+4]
 	if s[sp+6].Lt(&s[sp+5]) { s[sp+5].SetOne() } else { s[sp+5].Clear() }
-	s[sp+6].SetUint64(9707)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+5].IsZero() {
+		s[sp+0].SetUint64(0)
+		s[sp+1].SetUint64(9735)
 		sp += 5
-		stack.top = sp
 		goto L9707
 	}
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(9735)
 	sp += 5
 
 	// block @9700 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(9707)
-	s[sp+1].SetUint64(20764)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(9707)
 	sp += 1
-	stack.top = sp
 	goto L20764
 
 L9707: // block @9707 (24 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetUint64(32)
@@ -11076,32 +8795,26 @@ L9707: // block @9707 (24 instrs)
 	s[sp+0].SetUint64(32)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + -1
-	pc = 9715
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp-1].SetUint64(192)
-	s[sp-1], s[sp-3] = s[sp-3], s[sp-1]
-	s[sp+0] = s[sp-3]
+	if contract.Gas < 21 { return nil, ErrOutOfGas }
+	contract.Gas -= 21
+	if err = aotMload(contract, mem, &s[sp-2]); err != nil { return nil, err }
+	s[sp-1] = s[sp-3]
+	s[sp+0].SetUint64(192)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 0
-	pc = 9721
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp-1], s[sp-3] = s[sp-3], s[sp-1]
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
+	s[sp-3] = s[sp-1]
+	s[sp-1].SetUint64(192)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + -1
-	pc = 9724
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	if err = aotMload(contract, mem, &s[sp-2]); err != nil { return nil, err }
 	s[sp-1] = s[sp-3]
 	if s[sp-1].Eq(&s[sp-2]) { s[sp-2].SetOne() } else { s[sp-2].Clear() }
-	s[sp-1].SetUint64(1)
-	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
+	s[sp-1] = s[sp-2]
 	s[sp-1], s[sp-3] = s[sp-3], s[sp-1]
+	s[sp-2].SetUint64(1)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-3].Mul(&s[sp-2], &s[sp-3])
 	s[sp-3], s[sp-4] = s[sp-4], s[sp-3]
@@ -11114,45 +8827,37 @@ L9707: // block @9707 (24 instrs)
 	goto dispatch
 
 L9735: // block @9735 (13 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 12 { return nil, &ErrStackUnderflow{stackLen: sp, required: 12} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
-	s[sp-1].SetUint64(9825)
 	s[sp+0] = s[sp-12]
 	s[sp+1] = s[sp-11]
 	s[sp+2] = s[sp-3]
 	s[sp+3] = s[sp+1]
-	if contract.Gas < 21 { return nil, ErrOutOfGas }
-	contract.Gas -= 21
-	stack.top = sp + 4
-	pc = 9745
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 24 { return nil, ErrOutOfGas }
+	contract.Gas -= 24
+	if err = aotMload(contract, mem, &s[sp+3]); err != nil { return nil, err }
 	s[sp+4] = s[sp+2]
 	if s[sp+4].Lt(&s[sp+3]) { s[sp+3].SetOne() } else { s[sp+3].Clear() }
-	s[sp+4].SetUint64(9759)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+3].IsZero() {
+		s[sp-1].SetUint64(9825)
 		sp += 3
-		stack.top = sp
 		goto L9759
 	}
+	s[sp-1].SetUint64(9825)
 	sp += 3
 
 	// block @9752 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(9759)
-	s[sp+1].SetUint64(20764)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(9759)
 	sp += 1
-	stack.top = sp
 	goto L20764
 
 L9759: // block @9759 (15 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 13 { return nil, &ErrStackUnderflow{stackLen: sp, required: 13} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetUint64(32)
@@ -11160,44 +8865,34 @@ L9759: // block @9759 (15 instrs)
 	s[sp+0].SetUint64(32)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + -1
-	pc = 9767
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 21 { return nil, ErrOutOfGas }
+	contract.Gas -= 21
+	if err = aotMload(contract, mem, &s[sp-2]); err != nil { return nil, err }
 	s[sp-1] = s[sp-13]
 	s[sp+0] = s[sp-6]
 	s[sp+1] = s[sp-1]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 9771
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+0]
 	if s[sp+2].Lt(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(9785)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+1].IsZero() {
 		sp += 1
-		stack.top = sp
 		goto L9785
 	}
 	sp += 1
 
 	// block @9778 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(9785)
-	s[sp+1].SetUint64(20764)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(9785)
 	sp += 1
-	stack.top = sp
 	goto L20764
 
 L9785: // block @9785 (15 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 13 { return nil, &ErrStackUnderflow{stackLen: sp, required: 13} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetUint64(32)
@@ -11205,44 +8900,34 @@ L9785: // block @9785 (15 instrs)
 	s[sp+0].SetUint64(32)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + -1
-	pc = 9793
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 21 { return nil, ErrOutOfGas }
+	contract.Gas -= 21
+	if err = aotMload(contract, mem, &s[sp-2]); err != nil { return nil, err }
 	s[sp-1] = s[sp-13]
 	s[sp+0] = s[sp-7]
 	s[sp+1] = s[sp-1]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 9797
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+0]
 	if s[sp+2].Lt(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(9811)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+1].IsZero() {
 		sp += 1
-		stack.top = sp
 		goto L9811
 	}
 	sp += 1
 
 	// block @9804 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(9811)
-	s[sp+1].SetUint64(20764)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(9811)
 	sp += 1
-	stack.top = sp
 	goto L20764
 
 L9811: // block @9811 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 7 { return nil, &ErrStackUnderflow{stackLen: sp, required: 7} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetUint64(32)
@@ -11250,150 +8935,118 @@ L9811: // block @9811 (10 instrs)
 	s[sp+0].SetUint64(32)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + -1
-	pc = 9819
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 21 { return nil, ErrOutOfGas }
+	contract.Gas -= 21
+	if err = aotMload(contract, mem, &s[sp-2]); err != nil { return nil, err }
 	s[sp-1] = s[sp-7]
-	s[sp+0].SetUint64(13538)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
-	sp += 0
-	stack.top = sp
 	goto L13538
 
 L9825: // block @9825 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-6]
 	s[sp+1] = s[sp-3]
 	s[sp+2] = s[sp+0]
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 3
-	pc = 9829
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
 	s[sp+3] = s[sp+1]
 	if s[sp+3].Lt(&s[sp+2]) { s[sp+2].SetOne() } else { s[sp+2].Clear() }
-	s[sp+3].SetUint64(9843)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+2].IsZero() {
 		sp += 2
-		stack.top = sp
 		goto L9843
 	}
 	sp += 2
 
 	// block @9836 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(9843)
-	s[sp+1].SetUint64(20764)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(9843)
 	sp += 1
-	stack.top = sp
 	goto L20764
 
 L9843: // block @9843 (19 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(32)
-	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
-	s[sp+1] = s[sp-1]
+	s[sp+0] = s[sp-1]
+	s[sp+1].SetUint64(32)
 	s[sp+0].Mul(&s[sp+1], &s[sp+0])
 	s[sp+0], s[sp-2] = s[sp-2], s[sp+0]
-	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
-	s[sp+0], s[sp-2] = s[sp-2], s[sp+0]
-	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	s[sp-2].Add(&s[sp-1], &s[sp-2])
-	if contract.Gas < 30 { return nil, ErrOutOfGas }
-	contract.Gas -= 30
-	stack.top = sp + -1
-	pc = 9854
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp-3].SetUint64(1)
-	s[sp-2] = s[sp-4]
-	s[sp-1].SetUint64(2)
+	s[sp-1] = s[sp+0]
 	s[sp+0] = s[sp-2]
+	s[sp-1].Add(&s[sp+0], &s[sp-1])
+	s[sp-2].SetUint64(32)
+	s[sp-2].Add(&s[sp-1], &s[sp-2])
+	if contract.Gas < 33 { return nil, ErrOutOfGas }
+	contract.Gas -= 33
+	if err = aotMstore(contract, mem, &s[sp-2], &s[sp-3]); err != nil { return nil, err }
+	s[sp-2] = s[sp-4]
+	s[sp+0] = s[sp-2]
+	s[sp-1].SetUint64(2)
 	if s[sp+0].Gt(&s[sp-1]) { s[sp-1].SetOne() } else { s[sp-1].Clear() }
 	if s[sp-1].IsZero() { s[sp-1].SetOne() } else { s[sp-1].Clear() }
-	s[sp+0].SetUint64(9874)
 	if contract.Gas < 31 { return nil, ErrOutOfGas }
 	contract.Gas -= 31
 	if !s[sp-1].IsZero() {
+		s[sp-3].SetUint64(1)
 		sp += -1
-		stack.top = sp
 		goto L9874
 	}
+	s[sp-3].SetUint64(1)
 	sp += -1
 
 	// block @9867 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(9874)
-	s[sp+1].SetUint64(20700)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(9874)
 	sp += 1
-	stack.top = sp
 	goto L20700
 
 L9874: // block @9874 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	s[sp-2].Sub(&s[sp-1], &s[sp-2])
-	s[sp-1].SetUint64(9918)
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
 	if !s[sp-2].IsZero() {
 		sp += -2
-		stack.top = sp
 		goto L9918
 	}
 	sp += -2
 
 	// block @9880 (8 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-5]
 	s[sp+1] = s[sp-2]
 	s[sp+2] = s[sp+0]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 9883
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
 	s[sp+3] = s[sp+1]
 	if s[sp+3].Lt(&s[sp+2]) { s[sp+2].SetOne() } else { s[sp+2].Clear() }
-	s[sp+3].SetUint64(9897)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+2].IsZero() {
 		sp += 2
-		stack.top = sp
 		goto L9897
 	}
 	sp += 2
 
 	// block @9890 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(9897)
-	s[sp+1].SetUint64(20764)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(9897)
 	sp += 1
-	stack.top = sp
 	goto L20764
 
 L9897: // block @9897 (16 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetUint64(32)
@@ -11401,110 +9054,87 @@ L9897: // block @9897 (16 instrs)
 	s[sp+0].SetUint64(32)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + -1
-	pc = 9905
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 21 { return nil, ErrOutOfGas }
+	contract.Gas -= 21
+	if err = aotMload(contract, mem, &s[sp-2]); err != nil { return nil, err }
 	s[sp-1].SetUint64(64)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + -1
-	pc = 9909
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	if err = aotMload(contract, mem, &s[sp-2]); err != nil { return nil, err }
 	s[sp-1] = s[sp-6]
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-2], s[sp-6] = s[sp-6], s[sp-2]
-	s[sp-2].SetUint64(9978)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	sp += -2
-	stack.top = sp
 	goto L9978
 
 L9918: // block @9918 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(2)
 	s[sp+1] = s[sp-1]
-	s[sp+2].SetUint64(2)
 	s[sp+3] = s[sp+1]
+	s[sp+2].SetUint64(2)
 	if s[sp+3].Gt(&s[sp+2]) { s[sp+2].SetOne() } else { s[sp+2].Clear() }
 	if s[sp+2].IsZero() { s[sp+2].SetOne() } else { s[sp+2].Clear() }
-	s[sp+3].SetUint64(9938)
 	if contract.Gas < 32 { return nil, ErrOutOfGas }
 	contract.Gas -= 32
 	if !s[sp+2].IsZero() {
+		s[sp+0].SetUint64(2)
 		sp += 2
-		stack.top = sp
 		goto L9938
 	}
+	s[sp+0].SetUint64(2)
 	sp += 2
 
 	// block @9931 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(9938)
-	s[sp+1].SetUint64(20700)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(9938)
 	sp += 1
-	stack.top = sp
 	goto L20700
 
 L9938: // block @9938 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	s[sp-2].Sub(&s[sp-1], &s[sp-2])
-	s[sp-1].SetUint64(9978)
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
 	if !s[sp-2].IsZero() {
 		sp += -2
-		stack.top = sp
 		goto L9978
 	}
 	sp += -2
 
 	// block @9944 (8 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-5]
 	s[sp+1] = s[sp-2]
 	s[sp+2] = s[sp+0]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 9947
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
 	s[sp+3] = s[sp+1]
 	if s[sp+3].Lt(&s[sp+2]) { s[sp+2].SetOne() } else { s[sp+2].Clear() }
-	s[sp+3].SetUint64(9961)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+2].IsZero() {
 		sp += 2
-		stack.top = sp
 		goto L9961
 	}
 	sp += 2
 
 	// block @9954 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(9961)
-	s[sp+1].SetUint64(20764)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(9961)
 	sp += 1
-	stack.top = sp
 	goto L20764
 
 L9961: // block @9961 (14 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetUint64(32)
@@ -11512,18 +9142,14 @@ L9961: // block @9961 (14 instrs)
 	s[sp+0].SetUint64(32)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + -1
-	pc = 9969
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 21 { return nil, ErrOutOfGas }
+	contract.Gas -= 21
+	if err = aotMload(contract, mem, &s[sp-2]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + -1
-	pc = 9973
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	if err = aotMload(contract, mem, &s[sp-2]); err != nil { return nil, err }
 	s[sp-1] = s[sp-5]
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-2], s[sp-5] = s[sp-5], s[sp-2]
@@ -11532,139 +9158,111 @@ L9961: // block @9961 (14 instrs)
 	sp += -2
 
 L9978: // block @9978 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	s[sp-1].SetUint64(1)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
-	s[sp-1].SetUint64(9676)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += -1
-	stack.top = sp
 	goto L9676
 
 L9987: // block @9987 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1] = s[sp-3]
 	if s[sp-1].IsZero() { s[sp-1].SetOne() } else { s[sp-1].Clear() }
-	s[sp+0].SetUint64(10004)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp-1].IsZero() {
 		sp += -1
-		stack.top = sp
 		goto L10004
 	}
 	sp += -1
 
 	// block @9995 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 10 { return nil, &ErrStackUnderflow{stackLen: sp, required: 10} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(10004)
 	s[sp+1] = s[sp-10]
 	s[sp+2] = s[sp-2]
-	s[sp+3].SetUint64(13796)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
+	s[sp+0].SetUint64(10004)
 	sp += 3
-	stack.top = sp
 	goto L13796
 
 L10004: // block @10004 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(10020)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L10020
 	}
 
 	// block @10011 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 10 { return nil, &ErrStackUnderflow{stackLen: sp, required: 10} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(10020)
 	s[sp+1] = s[sp-10]
 	s[sp+2] = s[sp-1]
-	s[sp+3].SetUint64(14032)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
+	s[sp+0].SetUint64(10020)
 	sp += 3
-	stack.top = sp
 	goto L14032
 
 L10020: // block @10020 (2 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
 	if contract.Gas < 3 { return nil, ErrOutOfGas }
 	contract.Gas -= 3
+	s[sp+0].SetUint64(0)
 	sp += 1
 
 L10022: // block @10022 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-5]
 	s[sp+1] = s[sp-1]
 	if s[sp+1].Lt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(10155)
 	if contract.Gas < 26 { return nil, ErrOutOfGas }
 	contract.Gas -= 26
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L10155
 	}
 
 	// block @10031 (9 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
 	s[sp+1] = s[sp-4]
 	s[sp+2] = s[sp-1]
 	s[sp+3] = s[sp+1]
-	if contract.Gas < 11 { return nil, ErrOutOfGas }
-	contract.Gas -= 11
-	stack.top = sp + 4
-	pc = 10035
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 14 { return nil, ErrOutOfGas }
+	contract.Gas -= 14
+	if err = aotMload(contract, mem, &s[sp+3]); err != nil { return nil, err }
 	s[sp+4] = s[sp+2]
 	if s[sp+4].Lt(&s[sp+3]) { s[sp+3].SetOne() } else { s[sp+3].Clear() }
-	s[sp+4].SetUint64(10049)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+3].IsZero() {
+		s[sp+0].SetUint64(0)
 		sp += 3
-		stack.top = sp
 		goto L10049
 	}
+	s[sp+0].SetUint64(0)
 	sp += 3
 
 	// block @10042 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(10049)
-	s[sp+1].SetUint64(20764)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(10049)
 	sp += 1
-	stack.top = sp
 	goto L20764
 
 L10049: // block @10049 (16 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetUint64(32)
@@ -11672,147 +9270,100 @@ L10049: // block @10049 (16 instrs)
 	s[sp+0].SetUint64(32)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + -1
-	pc = 10057
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 21 { return nil, ErrOutOfGas }
+	contract.Gas -= 21
+	if err = aotMload(contract, mem, &s[sp-2]); err != nil { return nil, err }
 	s[sp-2], s[sp-3] = s[sp-3], s[sp-2]
-	s[sp-2].SetUint64(1)
-	s[sp-1] = s[sp-2]
-	s[sp+0] = s[sp-2]
-	if s[sp+0].Gt(&s[sp-1]) { s[sp-1].SetOne() } else { s[sp-1].Clear() }
-	if s[sp-1].IsZero() { s[sp-1].SetOne() } else { s[sp-1].Clear() }
-	s[sp+0].SetUint64(10077)
 	if contract.Gas < 33 { return nil, ErrOutOfGas }
 	contract.Gas -= 33
-	if !s[sp-1].IsZero() {
-		sp += -1
-		stack.top = sp
-		goto L10077
-	}
+	s[sp-2].SetUint64(1)
 	sp += -1
-
-	// block @10070 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
-	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(10077)
-	s[sp+1].SetUint64(20700)
-	if contract.Gas < 14 { return nil, ErrOutOfGas }
-	contract.Gas -= 14
-	sp += 1
-	stack.top = sp
-	goto L20700
+	goto L10077
 
 L10077: // block @10077 (11 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-2]
 	s[sp+1].SetUint64(160)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 1
-	pc = 10082
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(1)
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	s[sp+2] = s[sp+0]
+	s[sp+1].SetUint64(1)
 	if s[sp+2].Gt(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
 	if s[sp+1].IsZero() { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(10099)
 	if contract.Gas < 25 { return nil, ErrOutOfGas }
 	contract.Gas -= 25
 	if !s[sp+1].IsZero() {
 		sp += 1
-		stack.top = sp
 		goto L10099
 	}
 	sp += 1
 
 	// block @10092 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(10099)
-	s[sp+1].SetUint64(20700)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(10099)
 	sp += 1
-	stack.top = sp
 	goto L20700
 
 L10099: // block @10099 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	s[sp-2].Sub(&s[sp-1], &s[sp-2])
-	s[sp-1].SetUint64(10127)
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
 	if !s[sp-2].IsZero() {
 		sp += -2
-		stack.top = sp
 		goto L10127
 	}
 	sp += -2
 
 	// block @10105 (8 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 11 { return nil, &ErrStackUnderflow{stackLen: sp, required: 11} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(10118)
 	s[sp+1] = s[sp-1]
 	s[sp+2] = s[sp-11]
 	s[sp+3].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 3
-	pc = 10113
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+3].SetUint64(14166)
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
 	if contract.Gas < 11 { return nil, ErrOutOfGas }
 	contract.Gas -= 11
+	s[sp+0].SetUint64(10118)
 	sp += 3
-	stack.top = sp
 	goto L14166
 
 L10118: // block @10118 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 8 { return nil, &ErrStackUnderflow{stackLen: sp, required: 8} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-8]
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
 	s[sp-1], s[sp-8] = s[sp-8], s[sp-1]
-	s[sp-1].SetUint64(10146)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
 	sp += -1
-	stack.top = sp
 	goto L10146
 
 L10127: // block @10127 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 11 { return nil, &ErrStackUnderflow{stackLen: sp, required: 11} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(10141)
 	s[sp+1] = s[sp-1]
 	s[sp+2] = s[sp-11]
 	s[sp+3].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 16 { return nil, ErrOutOfGas }
-	contract.Gas -= 16
-	stack.top = sp + 3
-	pc = 10136
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+3].SetUint64(14513)
+	if contract.Gas < 19 { return nil, ErrOutOfGas }
+	contract.Gas -= 19
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
 	if contract.Gas < 11 { return nil, ErrOutOfGas }
 	contract.Gas -= 11
+	s[sp+0].SetUint64(10141)
 	sp += 3
-	stack.top = sp
 	goto L14513
 
 L10141: // block @10141 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 8 { return nil, &ErrStackUnderflow{stackLen: sp, required: 8} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-8]
@@ -11823,19 +9374,16 @@ L10141: // block @10141 (5 instrs)
 	sp += -1
 
 L10146: // block @10146 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	s[sp-1].SetUint64(1)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
-	s[sp-1].SetUint64(10022)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += -1
-	stack.top = sp
 	goto L10022
 
 L10155: // block @10155 (14 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 12 { return nil, &ErrStackUnderflow{stackLen: sp, required: 12} }
 	s[sp-6], s[sp-12] = s[sp-12], s[sp-6]
 	s[sp-6], s[sp-11] = s[sp-11], s[sp-6]
@@ -11848,93 +9396,73 @@ L10155: // block @10155 (14 instrs)
 	goto dispatch
 
 L10169: // block @10169 (11 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
 	s[sp+1] = s[sp-5]
-	s[sp+2].SetUint64(1)
 	s[sp+3] = s[sp-6]
-	s[sp+4].SetUint64(1)
 	s[sp+5] = s[sp+3]
+	s[sp+4].SetUint64(1)
 	if s[sp+5].Gt(&s[sp+4]) { s[sp+4].SetOne() } else { s[sp+4].Clear() }
 	if s[sp+4].IsZero() { s[sp+4].SetOne() } else { s[sp+4].Clear() }
-	s[sp+5].SetUint64(10191)
 	if contract.Gas < 37 { return nil, ErrOutOfGas }
 	contract.Gas -= 37
 	if !s[sp+4].IsZero() {
+		s[sp+0].SetUint64(0)
+		s[sp+2].SetUint64(1)
 		sp += 4
-		stack.top = sp
 		goto L10191
 	}
+	s[sp+0].SetUint64(0)
+	s[sp+2].SetUint64(1)
 	sp += 4
 
 	// block @10184 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(10191)
-	s[sp+1].SetUint64(20700)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(10191)
 	sp += 1
-	stack.top = sp
 	goto L20700
 
 L10191: // block @10191 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	s[sp-2].Sub(&s[sp-1], &s[sp-2])
-	s[sp-1].SetUint64(10262)
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
 	if !s[sp-2].IsZero() {
 		sp += -2
-		stack.top = sp
 		goto L10262
 	}
 	sp += -2
 
 	// block @10197 (6 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 7 { return nil, &ErrStackUnderflow{stackLen: sp, required: 7} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-7]
 	s[sp+1] = s[sp-3]
 	if s[sp+1].Gt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(10254)
 	if contract.Gas < 25 { return nil, ErrOutOfGas }
 	contract.Gas -= 25
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L10254
 	}
 
 	// block @10205 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 10207
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_64)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 10242
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 10248
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_64)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -11947,7 +9475,6 @@ L10191: // block @10191 (4 instrs)
 	return res, nil
 
 L10254: // block @10254 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 7 { return nil, &ErrStackUnderflow{stackLen: sp, required: 7} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1] = s[sp-3]
@@ -11959,186 +9486,152 @@ L10254: // block @10254 (8 instrs)
 	contract.Gas -= 20
 
 L10262: // block @10262 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(10274)
 	s[sp+1].SetBytes(contract.Address().Bytes())
 	s[sp+2] = s[sp-6]
 	s[sp+3] = s[sp-4]
 	s[sp+4] = s[sp-1]
-	s[sp+5].SetUint64(9247)
 	if contract.Gas < 26 { return nil, ErrOutOfGas }
 	contract.Gas -= 26
+	s[sp+0].SetUint64(10274)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 5
-	stack.top = sp
 	goto L9247
 
 L10274: // block @10274 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 8 { return nil, &ErrStackUnderflow{stackLen: sp, required: 8} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(1)
 	s[sp+1] = s[sp-8]
-	s[sp+2].SetUint64(1)
 	s[sp+3] = s[sp+1]
+	s[sp+2].SetUint64(1)
 	if s[sp+3].Gt(&s[sp+2]) { s[sp+2].SetOne() } else { s[sp+2].Clear() }
 	if s[sp+2].IsZero() { s[sp+2].SetOne() } else { s[sp+2].Clear() }
-	s[sp+3].SetUint64(10294)
 	if contract.Gas < 32 { return nil, ErrOutOfGas }
 	contract.Gas -= 32
 	if !s[sp+2].IsZero() {
+		s[sp+0].SetUint64(1)
 		sp += 2
-		stack.top = sp
 		goto L10294
 	}
+	s[sp+0].SetUint64(1)
 	sp += 2
 
 	// block @10287 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(10294)
-	s[sp+1].SetUint64(20700)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(10294)
 	sp += 1
-	stack.top = sp
 	goto L20700
 
 L10294: // block @10294 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	s[sp-2].Sub(&s[sp-1], &s[sp-2])
-	s[sp-1].SetUint64(10351)
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
 	if !s[sp-2].IsZero() {
 		sp += -2
-		stack.top = sp
 		goto L10351
 	}
 	sp += -2
 
 	// block @10300 (4 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-3]
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(10346)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L10346
 	}
 
 	// block @10306 (9 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(3)
 	if contract.Gas < 3 { return nil, ErrOutOfGas }
 	contract.Gas -= 3
+	s[sp+0].SetUint64(3)
 	stack.top = sp + 1
-	pc = 10308
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(10346)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2].SetUint64(256)
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
+	s[sp+1] = s[sp+0]
+	s[sp+2] = s[sp+1]
+	s[sp+1].SetUint64(256)
 	s[sp+1].Div(&s[sp+2], &s[sp+1])
 	s[sp+2].Set(&aotCCTFExchangeV2_1)
 	s[sp+1].And(&s[sp+2], &s[sp+1])
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
+	s[sp+0].SetUint64(10346)
 	sp += 2
 
 L10340: // block @10340 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-5]
-	s[sp+1].SetUint64(13358)
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
 	sp += 1
-	stack.top = sp
 	goto L13358
 
 L10346: // block @10346 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(10361)
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
-	sp += 0
-	stack.top = sp
 	goto L10361
 
 L10351: // block @10351 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(10361)
 	s[sp+1] = s[sp-6]
 	s[sp+2] = s[sp-3]
-	s[sp+3].SetUint64(14770)
 	if contract.Gas < 21 { return nil, ErrOutOfGas }
 	contract.Gas -= 21
+	s[sp+0].SetUint64(10361)
 	sp += 3
-	stack.top = sp
 	goto L14770
 
 L10361: // block @10361 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(10371)
 	s[sp+2] = s[sp-5]
-	s[sp+3].SetUint64(9282)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(10371)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 3
-	stack.top = sp
 	goto L9282
 
 L10371: // block @10371 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
 	s[sp-1] = s[sp-2]
 	if s[sp-1].IsZero() { s[sp-1].SetOne() } else { s[sp-1].Clear() }
-	s[sp+0].SetUint64(10391)
 	if contract.Gas < 25 { return nil, ErrOutOfGas }
 	contract.Gas -= 25
 	if !s[sp-1].IsZero() {
 		sp += -1
-		stack.top = sp
 		goto L10391
 	}
 	sp += -1
 
 	// block @10380 (7 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 7 { return nil, &ErrStackUnderflow{stackLen: sp, required: 7} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(10391)
 	s[sp+1].SetBytes(contract.Address().Bytes())
 	s[sp+2] = s[sp-7]
 	s[sp+3] = s[sp-6]
 	s[sp+4] = s[sp-1]
-	s[sp+5].SetUint64(9247)
 	if contract.Gas < 25 { return nil, ErrOutOfGas }
 	contract.Gas -= 25
+	s[sp+0].SetUint64(10391)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 5
-	stack.top = sp
 	goto L9247
 
 L10391: // block @10391 (12 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 10 { return nil, &ErrStackUnderflow{stackLen: sp, required: 10} }
 	s[sp-3], s[sp-10] = s[sp-10], s[sp-3]
 	s[sp-3], s[sp-9] = s[sp-9], s[sp-3]
@@ -12151,112 +9644,83 @@ L10391: // block @10391 (12 instrs)
 	goto dispatch
 
 L10403: // block @10403 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(10412)
 	s[sp+1] = s[sp-1]
-	s[sp+2].SetUint64(14833)
 	if contract.Gas < 18 { return nil, ErrOutOfGas }
 	contract.Gas -= 18
+	s[sp+0].SetUint64(10412)
 	sp += 2
-	stack.top = sp
 	goto L14833
 
 L10412: // block @10412 (51 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+7 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Set(&aotCCTFExchangeV2_65)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+1].SetUint64(64)
-	if contract.Gas < 14 { return nil, ErrOutOfGas }
-	contract.Gas -= 14
-	stack.top = sp + 2
-	pc = 10451
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 17 { return nil, ErrOutOfGas }
+	contract.Gas -= 17
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
+	s[sp+3] = s[sp-1]
 	s[sp+2].SetUint64(96)
-	s[sp+3] = s[sp-1]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 10456
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
 	s[sp+3] = s[sp+1]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 4
-	pc = 10458
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
+	s[sp+3] = s[sp-1]
 	s[sp+2].SetUint64(128)
-	s[sp+3] = s[sp-1]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 10463
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
+	s[sp+4] = s[sp+1]
 	s[sp+3].SetUint64(32)
-	s[sp+4] = s[sp+1]
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 4
-	pc = 10468
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
+	s[sp+3] = s[sp-1]
 	s[sp+2].SetUint64(160)
-	s[sp+3] = s[sp-1]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 10473
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
+	s[sp+4] = s[sp+1]
 	s[sp+3].SetUint64(64)
-	s[sp+4] = s[sp+1]
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 4
-	pc = 10478
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
+	s[sp+3] = s[sp-1]
 	s[sp+2].SetUint64(192)
-	s[sp+3] = s[sp-1]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 10483
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+3].SetUint64(96)
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
 	s[sp+4] = s[sp+1]
+	s[sp+3].SetUint64(96)
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 4
-	pc = 10488
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
+	s[sp+3] = s[sp-1]
 	s[sp+2].SetUint64(32)
-	s[sp+3] = s[sp-1]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 10493
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
 	s[sp+3] = s[sp-1]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 4
-	pc = 10495
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+4] = s[sp+0]
-	s[sp+5].SetUint64(128)
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMload(contract, mem, &s[sp+3]); err != nil { return nil, err }
 	s[sp+6] = s[sp+1]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
+	s[sp+0].Set(&aotCCTFExchangeV2_65)
+	s[sp+4].Set(&aotCCTFExchangeV2_65)
+	s[sp+5].SetUint64(128)
 	stack.top = sp + 7
 	pc = 10500
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
@@ -12269,173 +9733,132 @@ L10412: // block @10412 (51 instrs)
 	goto dispatch
 
 L10505: // block @10505 (55 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+8 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
-	s[sp+2].SetUint64(10763)
 	s[sp+3] = s[sp-3]
 	s[sp+4] = s[sp-2]
-	s[sp+5].SetUint64(64)
-	if contract.Gas < 17 { return nil, ErrOutOfGas }
-	contract.Gas -= 17
-	stack.top = sp + 6
-	pc = 10515
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+6].Set(&aotCCTFExchangeV2_66)
+	if contract.Gas < 20 { return nil, ErrOutOfGas }
+	contract.Gas -= 20
+	if err = aotMloadC(contract, mem, 64, &s[sp+5]); err != nil { return nil, err }
 	s[sp+7] = s[sp+5]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 8
-	pc = 10550
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+6].Set(&aotCCTFExchangeV2_67)
-	s[sp+6], s[sp+5] = s[sp+5], s[sp+6]
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	s[sp+6].Set(&aotCCTFExchangeV2_66)
+	if err = aotMstore(contract, mem, &s[sp+7], &s[sp+6]); err != nil { return nil, err }
+	s[sp+6] = s[sp+5]
 	s[sp+6], s[sp+3] = s[sp+3], s[sp+6]
+	s[sp+5].Set(&aotCCTFExchangeV2_67)
 	s[sp+5].Or(&s[sp+6], &s[sp+5])
+	s[sp+7] = s[sp+3]
 	s[sp+6].SetUint64(1)
-	s[sp+7] = s[sp+3]
 	s[sp+6].Add(&s[sp+7], &s[sp+6])
-	if contract.Gas < 21 { return nil, ErrOutOfGas }
-	contract.Gas -= 21
-	stack.top = sp + 7
-	pc = 10591
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+5].Set(&aotCCTFExchangeV2_68)
+	if contract.Gas < 24 { return nil, ErrOutOfGas }
+	contract.Gas -= 24
+	if err = aotMstore(contract, mem, &s[sp+6], &s[sp+5]); err != nil { return nil, err }
+	s[sp+7] = s[sp+3]
 	s[sp+6].SetUint64(33)
-	s[sp+7] = s[sp+3]
 	s[sp+6].Add(&s[sp+7], &s[sp+6])
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 7
-	pc = 10629
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	s[sp+5].Set(&aotCCTFExchangeV2_68)
+	if err = aotMstore(contract, mem, &s[sp+6], &s[sp+5]); err != nil { return nil, err }
 	s[sp+5].Set(&aotCCTFExchangeV2_69)
 	s[sp+4].Or(&s[sp+5], &s[sp+4])
-	s[sp+5].SetUint64(52)
 	s[sp+6] = s[sp+3]
+	s[sp+5].SetUint64(52)
+	s[sp+5].Add(&s[sp+6], &s[sp+5])
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMstore(contract, mem, &s[sp+5], &s[sp+4]); err != nil { return nil, err }
+	s[sp+6] = s[sp+3]
+	s[sp+5].SetUint64(84)
 	s[sp+5].Add(&s[sp+6], &s[sp+5])
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
-	stack.top = sp + 6
-	pc = 10667
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	s[sp+4].Set(&aotCCTFExchangeV2_70)
-	s[sp+5].SetUint64(84)
+	if err = aotMstore(contract, mem, &s[sp+5], &s[sp+4]); err != nil { return nil, err }
 	s[sp+6] = s[sp+3]
-	s[sp+5].Add(&s[sp+6], &s[sp+5])
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 6
-	pc = 10705
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+4].Set(&aotCCTFExchangeV2_71)
 	s[sp+5].SetUint64(99)
-	s[sp+6] = s[sp+3]
 	s[sp+5].Add(&s[sp+6], &s[sp+5])
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 6
-	pc = 10743
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+4].SetUint64(32)
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	s[sp+4].Set(&aotCCTFExchangeV2_71)
+	if err = aotMstore(contract, mem, &s[sp+5], &s[sp+4]); err != nil { return nil, err }
+	s[sp+6] = s[sp+3]
 	s[sp+5].SetUint64(103)
-	s[sp+6] = s[sp+3]
 	s[sp+5].Add(&s[sp+6], &s[sp+5])
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 6
-	pc = 10750
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+4].Clear()
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	s[sp+4].SetUint64(32)
+	if err = aotMstore(contract, mem, &s[sp+5], &s[sp+4]); err != nil { return nil, err }
+	s[sp+6] = s[sp+3]
 	s[sp+5].SetUint64(135)
-	s[sp+6] = s[sp+3]
 	s[sp+5].Add(&s[sp+6], &s[sp+5])
+	if contract.Gas < 14 { return nil, ErrOutOfGas }
+	contract.Gas -= 14
+	s[sp+4].SetUint64(0)
+	if err = aotMstore(contract, mem, &s[sp+5], &s[sp+4]); err != nil { return nil, err }
+	s[sp+4] = s[sp+3]
+	if contract.Gas < 36 { return nil, ErrOutOfGas }
+	contract.Gas -= 36
+	s[sp+3].SetUint64(167)
+	if err = aotKeccak256(evm, contract, mem, &s[sp+4], &s[sp+3]); err != nil { return nil, err }
+	s[sp+2] = s[sp+3]
 	if contract.Gas < 11 { return nil, ErrOutOfGas }
 	contract.Gas -= 11
-	stack.top = sp + 6
-	pc = 10756
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+4].SetUint64(167)
-	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 5
-	pc = 10760
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
-	if contract.Gas < 11 { return nil, ErrOutOfGas }
-	contract.Gas -= 11
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	sp += 3
-	stack.top = sp
 	goto L10763
 
 L10763: // block @10763 (33 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 10766
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(88)
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
 	s[sp+2] = s[sp-6]
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	if s[sp+2].LtUint64(256) { s[sp+1].Lsh(&s[sp+1], uint(s[sp+2].Uint64())) } else { s[sp+1].Clear() }
+	s[sp+1] = s[sp+2]
+	s[sp+1].Lsh(&s[sp+1], 88)
 	s[sp+2].Set(&aotCCTFExchangeV2_51)
 	s[sp+1].Or(&s[sp+2], &s[sp+1])
 	s[sp+2] = s[sp+0]
-	if contract.Gas < 21 { return nil, ErrOutOfGas }
-	contract.Gas -= 21
-	stack.top = sp + 3
-	pc = 10807
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(21)
+	if contract.Gas < 24 { return nil, ErrOutOfGas }
+	contract.Gas -= 24
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+0]
+	s[sp+1].SetUint64(21)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
 	s[sp+2] = s[sp-4]
 	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 3
-	pc = 10814
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(53)
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+0]
+	s[sp+1].SetUint64(53)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
 	s[sp+2] = s[sp-1]
 	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 3
-	pc = 10821
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(85)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 10825
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1] = s[sp+0]
+	if contract.Gas < 36 { return nil, ErrOutOfGas }
+	contract.Gas -= 36
+	s[sp+0].SetUint64(85)
+	if err = aotKeccak256(evm, contract, mem, &s[sp+1], &s[sp+0]); err != nil { return nil, err }
 	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
 	s[sp+0], s[sp-2] = s[sp-2], s[sp+0]
 	s[sp+0].Set(&aotCCTFExchangeV2_1)
 	s[sp-1].And(&s[sp+0], &s[sp-1])
-	s[sp+0].SetUint64(7104)
 	if contract.Gas < 25 { return nil, ErrOutOfGas }
 	contract.Gas -= 25
-	sp += 0
-	stack.top = sp
+	if interrupt.Load() { return nil, ErrInterrupt }
 	goto L7104
 
 L10855: // block @10855 (13 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
 	s[sp+1] = s[sp-3]
 	s[sp+2].Set(&aotCCTFExchangeV2_1)
 	s[sp+1].And(&s[sp+2], &s[sp+1])
@@ -12445,80 +9868,69 @@ L10855: // block @10855 (13 instrs)
 	if s[sp+2].Eq(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
 	s[sp+2] = s[sp+1]
 	if s[sp+2].IsZero() { s[sp+2].SetOne() } else { s[sp+2].Clear() }
-	s[sp+3].SetUint64(7104)
 	if contract.Gas < 43 { return nil, ErrOutOfGas }
 	contract.Gas -= 43
 	if !s[sp+2].IsZero() {
+		s[sp+0].SetUint64(0)
+		if interrupt.Load() { return nil, ErrInterrupt }
 		sp += 2
-		stack.top = sp
 		goto L7104
 	}
+	s[sp+0].SetUint64(0)
 	sp += 2
 
 	// block @10910 (7 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp-1].SetUint64(7104)
 	s[sp+0] = s[sp-6]
 	s[sp+1] = s[sp-4]
 	s[sp+2] = s[sp-3]
-	s[sp+3].SetUint64(14963)
 	if contract.Gas < 25 { return nil, ErrOutOfGas }
 	contract.Gas -= 25
+	s[sp-1].SetUint64(7104)
 	sp += 3
-	stack.top = sp
 	goto L14963
 
 L10921: // block @10921 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(10933)
 	s[sp+2] = s[sp-4]
 	s[sp+3] = s[sp-2]
 	s[sp+4] = s[sp-1]
-	s[sp+5].SetUint64(14963)
 	if contract.Gas < 26 { return nil, ErrOutOfGas }
 	contract.Gas -= 26
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(10933)
 	sp += 5
-	stack.top = sp
 	goto L14963
 
 L10933: // block @10933 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(7104)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
+		if interrupt.Load() { return nil, ErrInterrupt }
 		goto L7104
 	}
 
 	// block @10940 (8 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1] = s[sp-5]
 	s[sp+0].Set(&aotCCTFExchangeV2_1)
 	s[sp-1].And(&s[sp+0], &s[sp-1])
-	s[sp+0].SetUint64(10972)
 	s[sp+1] = s[sp-6]
-	s[sp+2].SetUint64(4121)
 	if contract.Gas < 28 { return nil, ErrOutOfGas }
 	contract.Gas -= 28
+	s[sp+0].SetUint64(10972)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 2
-	stack.top = sp
 	goto L4121
 
 L10972: // block @10972 (12 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 8 { return nil, &ErrStackUnderflow{stackLen: sp, required: 8} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].Set(&aotCCTFExchangeV2_1)
@@ -12535,10 +9947,8 @@ L10972: // block @10972 (12 instrs)
 	goto dispatch
 
 L11004: // block @11004 (13 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
 	s[sp+1] = s[sp-3]
 	s[sp+2].Set(&aotCCTFExchangeV2_1)
 	s[sp+1].And(&s[sp+2], &s[sp+1])
@@ -12548,26 +9958,25 @@ L11004: // block @11004 (13 instrs)
 	if s[sp+2].Eq(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
 	s[sp+2] = s[sp+1]
 	if s[sp+2].IsZero() { s[sp+2].SetOne() } else { s[sp+2].Clear() }
-	s[sp+3].SetUint64(11086)
 	if contract.Gas < 43 { return nil, ErrOutOfGas }
 	contract.Gas -= 43
 	if !s[sp+2].IsZero() {
+		s[sp+0].SetUint64(0)
 		sp += 2
-		stack.top = sp
 		goto L11086
 	}
+	s[sp+0].SetUint64(0)
 	sp += 2
 
 	// block @11059 (7 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp-1].Clear()
 	s[sp+0] = s[sp-5]
 	s[sp+1].Set(&aotCCTFExchangeV2_1)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
 	if contract.Gas < 13 { return nil, ErrOutOfGas }
 	contract.Gas -= 13
+	s[sp-1].SetUint64(0)
 	stack.top = sp + 1
 	pc = 11084
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
@@ -12576,318 +9985,253 @@ L11004: // block @11004 (13 instrs)
 	contract.Gas -= 3
 
 L11086: // block @11086 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(7104)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
+		if interrupt.Load() { return nil, ErrInterrupt }
 		goto L7104
 	}
 
 	// block @11093 (7 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp-1].SetUint64(7104)
 	s[sp+0] = s[sp-5]
 	s[sp+1] = s[sp-4]
 	s[sp+2] = s[sp-3]
-	s[sp+3].SetUint64(15028)
 	if contract.Gas < 25 { return nil, ErrOutOfGas }
 	contract.Gas -= 25
+	s[sp-1].SetUint64(7104)
 	sp += 3
-	stack.top = sp
 	goto L15028
 
 L11104: // block @11104 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(11116)
 	s[sp+2] = s[sp-4]
 	s[sp+3] = s[sp-2]
 	s[sp+4] = s[sp-1]
-	s[sp+5].SetUint64(14963)
 	if contract.Gas < 26 { return nil, ErrOutOfGas }
 	contract.Gas -= 26
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(11116)
 	sp += 5
-	stack.top = sp
 	goto L14963
 
 L11116: // block @11116 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(7104)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
+		if interrupt.Load() { return nil, ErrInterrupt }
 		goto L7104
 	}
 
 	// block @11123 (8 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1] = s[sp-5]
 	s[sp+0].Set(&aotCCTFExchangeV2_1)
 	s[sp-1].And(&s[sp+0], &s[sp-1])
-	s[sp+0].SetUint64(10972)
 	s[sp+1] = s[sp-6]
-	s[sp+2].SetUint64(3740)
 	if contract.Gas < 28 { return nil, ErrOutOfGas }
 	contract.Gas -= 28
+	s[sp+0].SetUint64(10972)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 2
-	stack.top = sp
 	goto L3740
 
 L11155: // block @11155 (24 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+7 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	s[sp+2] = s[sp-2]
 	s[sp+3] = s[sp-1]
-	s[sp+4].SetUint64(64)
-	if contract.Gas < 14 { return nil, ErrOutOfGas }
-	contract.Gas -= 14
-	stack.top = sp + 5
-	pc = 11162
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 17 { return nil, ErrOutOfGas }
+	contract.Gas -= 17
+	if err = aotMloadC(contract, mem, 64, &s[sp+4]); err != nil { return nil, err }
 	s[sp+5].SetUint64(32)
 	s[sp+4].Add(&s[sp+5], &s[sp+4])
-	s[sp+5].SetUint64(11185)
-	s[sp+5], s[sp+2] = s[sp+2], s[sp+5]
+	s[sp+5] = s[sp+2]
 	s[sp+5], s[sp+3] = s[sp+3], s[sp+5]
 	s[sp+5], s[sp+4] = s[sp+4], s[sp+5]
 	s[sp+5], s[sp+3] = s[sp+3], s[sp+5]
 	s[sp+6] = s[sp+3]
-	if contract.Gas < 24 { return nil, ErrOutOfGas }
-	contract.Gas -= 24
-	stack.top = sp + 7
-	pc = 11174
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+5].SetUint64(32)
+	if contract.Gas < 27 { return nil, ErrOutOfGas }
+	contract.Gas -= 27
+	if err = aotMstore(contract, mem, &s[sp+6], &s[sp+5]); err != nil { return nil, err }
 	s[sp+6] = s[sp+3]
+	s[sp+5].SetUint64(32)
 	s[sp+5].Add(&s[sp+6], &s[sp+5])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 6
-	pc = 11179
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMstore(contract, mem, &s[sp+5], &s[sp+4]); err != nil { return nil, err }
 	s[sp+4].SetUint64(64)
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
-	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
+	s[sp+2] = s[sp+3]
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	sp += 3
-	stack.top = sp
 	goto L11185
 
 L11185: // block @11185 (31 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	s[sp+1] = s[sp+0]
-	if contract.Gas < 7 { return nil, ErrOutOfGas }
-	contract.Gas -= 7
-	stack.top = sp + 2
-	pc = 11189
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].Set(&aotCCTFExchangeV2_25)
+	if contract.Gas < 10 { return nil, ErrOutOfGas }
+	contract.Gas -= 10
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+3] = s[sp+1]
 	s[sp+4] = s[sp-1]
 	s[sp+3].Sub(&s[sp+4], &s[sp+3])
+	s[sp+2].Set(&aotCCTFExchangeV2_25)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
 	s[sp+3] = s[sp+1]
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + 4
-	pc = 11228
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 21 { return nil, ErrOutOfGas }
+	contract.Gas -= 21
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
 	s[sp+1], s[sp-1] = s[sp-1], s[sp+1]
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
+	s[sp+0] = s[sp+1]
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	if err = aotMstoreC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+0] = s[sp-1]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 11231
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0] = s[sp-1]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 11233
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(32)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+1], s[sp-1] = s[sp-1], s[sp+1]
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 1
-	pc = 11239
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
-	s[sp-1].SetUint64(255)
-	s[sp+0] = s[sp-2]
-	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
-	if s[sp+0].LtUint64(256) { s[sp-1].Rsh(&s[sp-1], uint(s[sp+0].Uint64())) } else { s[sp-1].Clear() }
-	if s[sp-1].IsZero() { s[sp-1].SetOne() } else { s[sp-1].Clear() }
-	if s[sp-1].IsZero() { s[sp-1].SetOne() } else { s[sp-1].Clear() }
-	s[sp+0].Clear()
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp+0]
+	s[sp+1], s[sp-1] = s[sp-1], s[sp+1]
+	s[sp+0].SetUint64(32)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 42 { return nil, ErrOutOfGas }
+	contract.Gas -= 42
+	if err = aotKeccak256(evm, contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
+	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
+	s[sp+0] = s[sp-2]
+	s[sp-1] = s[sp+0]
+	s[sp-1].Rsh(&s[sp-1], 255)
+	if s[sp-1].IsZero() { s[sp-1].SetOne() } else { s[sp-1].Clear() }
+	if s[sp-1].IsZero() { s[sp-1].SetOne() } else { s[sp-1].Clear() }
 	if contract.Gas < 28 { return nil, ErrOutOfGas }
 	contract.Gas -= 28
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	sp += 2
 
 L11251: // block @11251 (23 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
+	s[sp+2] = s[sp-4]
 	s[sp+0].Set(&aotCCTFExchangeV2_72)
 	s[sp+1].SetUint64(1)
-	s[sp+2] = s[sp-4]
 	s[sp+0].AddMod(&s[sp+2], &s[sp+1], &s[sp+0])
 	s[sp+0], s[sp-4] = s[sp-4], s[sp+0]
-	s[sp+0].Set(&aotCCTFExchangeV2_72)
-	s[sp+1].SetUint64(3)
-	s[sp+2].Set(&aotCCTFExchangeV2_72)
-	s[sp+3] = s[sp+2]
 	s[sp+4] = s[sp-4]
 	s[sp+5] = s[sp-4]
 	s[sp+3].MulModWithReciprocal(&s[sp+5], &s[sp+4], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4] = s[sp-4]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
+	s[sp+0].Set(&aotCCTFExchangeV2_72)
+	s[sp+1].SetUint64(3)
 	s[sp+0].AddMod(&s[sp+2], &s[sp+1], &s[sp+0])
 	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
-	s[sp+0].SetUint64(11376)
 	s[sp+1] = s[sp-1]
-	s[sp+2].SetUint64(15285)
 	if contract.Gas < 90 { return nil, ErrOutOfGas }
 	contract.Gas -= 90
+	s[sp+0].SetUint64(11376)
 	sp += 2
-	stack.top = sp
 	goto L15285
 
 L11376: // block @11376 (11 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-3] = s[sp-3], s[sp-1]
 	s[sp-1] = s[sp-2]
-	s[sp+0].Set(&aotCCTFExchangeV2_72)
 	s[sp+1] = s[sp-3]
 	s[sp+2] = s[sp-3]
 	s[sp+0].MulModWithReciprocal(&s[sp+2], &s[sp+1], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp-1].Sub(&s[sp+0], &s[sp-1])
-	s[sp+0].SetUint64(11251)
 	if contract.Gas < 42 { return nil, ErrOutOfGas }
 	contract.Gas -= 42
 	if !s[sp-1].IsZero() {
+		if interrupt.Load() { return nil, ErrInterrupt }
 		sp += -1
-		stack.top = sp
 		goto L11251
 	}
 	sp += -1
 
 	// block @11421 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-3]
 	s[sp+1] = s[sp+0]
 	if s[sp+1].IsZero() { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(11441)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+1].IsZero() {
 		sp += 1
-		stack.top = sp
 		goto L11441
 	}
 	sp += 1
 
 	// block @11428 (6 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp-1].SetUint64(11439)
-	s[sp+0].SetUint64(2)
 	s[sp+1] = s[sp-3]
-	s[sp+2].SetUint64(20832)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
+	s[sp-1].SetUint64(11439)
+	s[sp+0].SetUint64(2)
 	sp += 2
-	stack.top = sp
 	goto L20832
 
 L11439: // block @11439 (2 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if s[sp-1].IsZero() { s[sp-1].SetOne() } else { s[sp-1].Clear() }
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
 
 L11441: // block @11441 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
-	s[sp+1].SetUint64(11471)
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L11471
 	}
 
 	// block @11447 (7 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1] = s[sp-4]
 	if s[sp-1].IsZero() { s[sp-1].SetOne() } else { s[sp-1].Clear() }
 	s[sp+0] = s[sp-1]
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(11471)
 	if contract.Gas < 27 { return nil, ErrOutOfGas }
 	contract.Gas -= 27
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L11471
 	}
 
 	// block @11456 (6 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp-1].SetUint64(11467)
-	s[sp+0].SetUint64(2)
 	s[sp+1] = s[sp-3]
-	s[sp+2].SetUint64(20832)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
+	s[sp-1].SetUint64(11467)
+	s[sp+0].SetUint64(2)
 	sp += 2
-	stack.top = sp
 	goto L20832
 
 L11467: // block @11467 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetUint64(1)
@@ -12896,36 +10240,29 @@ L11467: // block @11467 (3 instrs)
 	contract.Gas -= 7
 
 L11471: // block @11471 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	if s[sp-1].IsZero() { s[sp-1].SetOne() } else { s[sp-1].Clear() }
-	s[sp+0].SetUint64(11521)
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
 	if !s[sp-1].IsZero() {
 		sp += -1
-		stack.top = sp
 		goto L11521
 	}
 	sp += -1
 
 	// block @11477 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(11518)
 	s[sp+1] = s[sp-2]
-	s[sp+2].Set(&aotCCTFExchangeV2_72)
-	s[sp+3].SetUint64(20745)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
+	s[sp+0].SetUint64(11518)
+	s[sp+2].Set(&aotCCTFExchangeV2_72)
 	sp += 3
-	stack.top = sp
 	goto L20745
 
 L11518: // block @11518 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	s[sp-1], s[sp-3] = s[sp-3], s[sp-1]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
@@ -12933,141 +10270,112 @@ L11518: // block @11518 (3 instrs)
 	sp += -1
 
 L11521: // block @11521 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 8 { return nil, &ErrStackUnderflow{stackLen: sp, required: 8} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-8]
 	s[sp+1] = s[sp+0]
 	if s[sp+1].IsZero() { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(12201)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
 	if !s[sp+1].IsZero() {
 		sp += 1
-		stack.top = sp
 		goto L12201
 	}
 	sp += 1
 
 	// block @11529 (27 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(254)
 	s[sp+1] = s[sp-1]
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	if s[sp+1].LtUint64(256) { s[sp+0].Rsh(&s[sp+0], uint(s[sp+1].Uint64())) } else { s[sp+0].Clear() }
+	s[sp+0] = s[sp+1]
+	s[sp+0].Rsh(&s[sp+0], 254)
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
 	s[sp+0], s[sp-4] = s[sp-4], s[sp+0]
 	s[sp+0].Set(&aotCCTFExchangeV2_73)
 	s[sp-1].And(&s[sp+0], &s[sp-1])
-	s[sp+0].Set(&aotCCTFExchangeV2_72)
-	s[sp+1].SetUint64(3)
-	s[sp+2].Set(&aotCCTFExchangeV2_72)
-	s[sp+3] = s[sp+2]
 	s[sp+4] = s[sp-1]
 	s[sp+5] = s[sp-1]
 	s[sp+3].MulModWithReciprocal(&s[sp+5], &s[sp+4], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
+	s[sp+0].Set(&aotCCTFExchangeV2_72)
+	s[sp+1].SetUint64(3)
 	s[sp+0].AddMod(&s[sp+2], &s[sp+1], &s[sp+0])
 	s[sp+0], s[sp-2] = s[sp-2], s[sp+0]
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(11658)
 	s[sp+2] = s[sp-2]
-	s[sp+3].SetUint64(15285)
 	if contract.Gas < 98 { return nil, ErrOutOfGas }
 	contract.Gas -= 98
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(11658)
 	sp += 3
-	stack.top = sp
 	goto L15285
 
 L11658: // block @11658 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
 	s[sp-1] = s[sp-6]
 	s[sp+0] = s[sp-1]
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(11681)
 	if contract.Gas < 28 { return nil, ErrOutOfGas }
 	contract.Gas -= 28
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L11681
 	}
 
 	// block @11668 (6 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp-1].SetUint64(11679)
-	s[sp+0].SetUint64(2)
 	s[sp+1] = s[sp-2]
-	s[sp+2].SetUint64(20832)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
+	s[sp-1].SetUint64(11679)
+	s[sp+0].SetUint64(2)
 	sp += 2
-	stack.top = sp
 	goto L20832
 
 L11679: // block @11679 (2 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if s[sp-1].IsZero() { s[sp-1].SetOne() } else { s[sp-1].Clear() }
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
 
 L11681: // block @11681 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
-	s[sp+1].SetUint64(11711)
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L11711
 	}
 
 	// block @11687 (7 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1] = s[sp-6]
 	if s[sp-1].IsZero() { s[sp-1].SetOne() } else { s[sp-1].Clear() }
 	s[sp+0] = s[sp-1]
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(11711)
 	if contract.Gas < 27 { return nil, ErrOutOfGas }
 	contract.Gas -= 27
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L11711
 	}
 
 	// block @11696 (6 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp-1].SetUint64(11707)
-	s[sp+0].SetUint64(2)
 	s[sp+1] = s[sp-2]
-	s[sp+2].SetUint64(20832)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
+	s[sp-1].SetUint64(11707)
+	s[sp+0].SetUint64(2)
 	sp += 2
-	stack.top = sp
 	goto L20832
 
 L11707: // block @11707 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetUint64(1)
@@ -13076,36 +10384,29 @@ L11707: // block @11707 (3 instrs)
 	contract.Gas -= 7
 
 L11711: // block @11711 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	if s[sp-1].IsZero() { s[sp-1].SetOne() } else { s[sp-1].Clear() }
-	s[sp+0].SetUint64(11761)
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
 	if !s[sp-1].IsZero() {
 		sp += -1
-		stack.top = sp
 		goto L11761
 	}
 	sp += -1
 
 	// block @11717 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(11758)
 	s[sp+1] = s[sp-1]
-	s[sp+2].Set(&aotCCTFExchangeV2_72)
-	s[sp+3].SetUint64(20745)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
+	s[sp+0].SetUint64(11758)
+	s[sp+2].Set(&aotCCTFExchangeV2_72)
 	sp += 3
-	stack.top = sp
 	goto L20745
 
 L11758: // block @11758 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
@@ -13113,67 +10414,50 @@ L11758: // block @11758 (3 instrs)
 	sp += -1
 
 L11761: // block @11761 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-3]
-	s[sp+1].Set(&aotCCTFExchangeV2_72)
 	s[sp+2] = s[sp-1]
 	s[sp+3] = s[sp-1]
 	s[sp+1].MulModWithReciprocal(&s[sp+3], &s[sp+2], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(11906)
 	if contract.Gas < 37 { return nil, ErrOutOfGas }
 	contract.Gas -= 37
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L11906
 	}
 
 	// block @11804 (22 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 11806
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_74)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 11841
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(32)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	s[sp+1].Set(&aotCCTFExchangeV2_74)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+3] = s[sp+0]
 	s[sp+2].SetUint64(4)
-	s[sp+3] = s[sp+0]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 3
-	pc = 11848
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(28)
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	s[sp+1].SetUint64(32)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+3] = s[sp+0]
 	s[sp+2].SetUint64(36)
-	s[sp+3] = s[sp+0]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 3
-	pc = 11855
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_75)
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	s[sp+1].SetUint64(28)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+3] = s[sp+0]
 	s[sp+2].SetUint64(68)
-	s[sp+3] = s[sp+0]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 3
-	pc = 11893
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	s[sp+1].Set(&aotCCTFExchangeV2_75)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
 	s[sp+1].SetUint64(100)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
@@ -13181,15 +10465,11 @@ L11761: // block @11761 (9 instrs)
 	sp += 1
 
 L11897: // block @11897 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 11900
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp+0]
 	s[sp+1], s[sp-1] = s[sp-1], s[sp+1]
 	s[sp+0].Sub(&s[sp+1], &s[sp+0])
@@ -13202,110 +10482,83 @@ L11897: // block @11897 (8 instrs)
 	return res, nil
 
 L11906: // block @11906 (54 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+9 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	s[sp+1] = s[sp+0]
-	if contract.Gas < 7 { return nil, ErrOutOfGas }
-	contract.Gas -= 7
-	stack.top = sp + 2
-	pc = 11910
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(32)
+	if contract.Gas < 10 { return nil, ErrOutOfGas }
+	contract.Gas -= 10
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+3] = s[sp+1]
+	s[sp+2].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
 	s[sp+3] = s[sp-6]
 	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 4
-	pc = 11917
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
+	s[sp+0] = s[sp+1]
 	s[sp+2] = s[sp+0]
+	s[sp+1].SetUint64(64)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
 	s[sp+2] = s[sp-4]
 	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 3
-	pc = 11923
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(96)
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+0]
+	s[sp+1].SetUint64(96)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
 	s[sp+2] = s[sp-2]
 	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 3
-	pc = 11930
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(128)
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+0]
+	s[sp+1].SetUint64(128)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
 	s[sp+2] = s[sp-1]
 	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 3
-	pc = 11937
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Clear()
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2] = s[sp+0]
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	s[sp+3].SetUint64(6)
-	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1] = s[sp+0]
+	s[sp+2] = s[sp+1]
+	s[sp+3] = s[sp+2]
 	s[sp+4].SetUint64(160)
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
-	s[sp+4].SetUint64(64)
-	s[sp+5] = s[sp+4]
-	if contract.Gas < 29 { return nil, ErrOutOfGas }
-	contract.Gas -= 29
-	stack.top = sp + 6
-	pc = 11951
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+6].Set(&aotCCTFExchangeV2_25)
+	if contract.Gas < 32 { return nil, ErrOutOfGas }
+	contract.Gas -= 32
+	if err = aotMloadC(contract, mem, 64, &s[sp+5]); err != nil { return nil, err }
 	s[sp+7] = s[sp+5]
 	s[sp+8] = s[sp+3]
 	s[sp+7].Sub(&s[sp+8], &s[sp+7])
+	s[sp+6].Set(&aotCCTFExchangeV2_25)
 	s[sp+6].Add(&s[sp+7], &s[sp+6])
 	s[sp+7] = s[sp+5]
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + 8
-	pc = 11990
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+5], s[sp+4] = s[sp+4], s[sp+5]
+	if contract.Gas < 21 { return nil, ErrOutOfGas }
+	contract.Gas -= 21
+	if err = aotMstore(contract, mem, &s[sp+7], &s[sp+6]); err != nil { return nil, err }
+	s[sp+4] = s[sp+5]
 	s[sp+6] = s[sp+3]
-	s[sp+6], s[sp+5] = s[sp+5], s[sp+6]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 7
-	pc = 11994
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+5].SetUint64(12003)
-	s[sp+5], s[sp+3] = s[sp+3], s[sp+5]
-	s[sp+6].SetUint64(20851)
+	s[sp+5] = s[sp+6]
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMstoreC(contract, mem, 64, &s[sp+5]); err != nil { return nil, err }
+	s[sp+5] = s[sp+3]
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
+	s[sp+2].SetUint64(6)
+	s[sp+3].SetUint64(12003)
 	sp += 6
-	stack.top = sp
 	goto L20851
 
 L12003: // block @12003 (21 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(64)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 12007
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+2].Sub(&s[sp+3], &s[sp+2])
@@ -13314,153 +10567,121 @@ L12003: // block @12003 (21 instrs)
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
 	s[sp+5].SetUint64(contract.Gas)
+	s[sp+0].SetUint64(0)
 	stack.top = sp + 6
 	pc = 12014
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	s[sp+0], s[sp-2] = s[sp-2], s[sp+0]
 	s[sp-1].SetUint64(uint64(len(evm.returnData)))
 	s[sp+0] = s[sp-1]
-	s[sp+1].Clear()
 	s[sp+2] = s[sp+0]
+	s[sp+1].SetUint64(0)
 	if s[sp+2].Eq(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(12059)
 	if contract.Gas < 33 { return nil, ErrOutOfGas }
 	contract.Gas -= 33
 	if !s[sp+1].IsZero() {
 		sp += 1
-		stack.top = sp
 		goto L12059
 	}
 	sp += 1
 
 	// block @12027 (25 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 12029
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
 	s[sp+0], s[sp-2] = s[sp-2], s[sp+0]
-	s[sp+0].SetUint64(31)
-	s[sp+0].Not(&s[sp+0])
-	s[sp+1].SetUint64(63)
 	s[sp+2].SetUint64(uint64(len(evm.returnData)))
+	s[sp+1].SetUint64(63)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
+	s[sp+0].Set(&aotCCTFExchangeV2_25)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
 	s[sp+1] = s[sp-2]
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
-	if contract.Gas < 31 { return nil, ErrOutOfGas }
-	contract.Gas -= 31
-	stack.top = sp + 2
-	pc = 12044
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 34 { return nil, ErrOutOfGas }
+	contract.Gas -= 34
+	if err = aotMstoreC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
 	s[sp+0].SetUint64(uint64(len(evm.returnData)))
 	s[sp+1] = s[sp-2]
-	if contract.Gas < 5 { return nil, ErrOutOfGas }
-	contract.Gas -= 5
-	stack.top = sp + 2
-	pc = 12047
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 8 { return nil, ErrOutOfGas }
+	contract.Gas -= 8
+	if err = aotMstore(contract, mem, &s[sp+1], &s[sp+0]); err != nil { return nil, err }
 	s[sp+0].SetUint64(uint64(len(evm.returnData)))
-	s[sp+1].Clear()
-	s[sp+2].SetUint64(32)
 	s[sp+3] = s[sp-2]
+	s[sp+2].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
 	if contract.Gas < 13 { return nil, ErrOutOfGas }
 	contract.Gas -= 13
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 3
 	pc = 12054
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].SetUint64(12064)
 	if contract.Gas < 11 { return nil, ErrOutOfGas }
 	contract.Gas -= 11
-	sp += 0
-	stack.top = sp
 	goto L12064
 
 L12059: // block @12059 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(96)
-	s[sp+0], s[sp-2] = s[sp-2], s[sp+0]
+	s[sp+0] = s[sp-2]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
+	s[sp-2].SetUint64(96)
 
 L12064: // block @12064 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	s[sp-2], s[sp-4] = s[sp-4], s[sp-2]
 	s[sp-3], s[sp-5] = s[sp-5], s[sp-3]
 	s[sp-3] = s[sp-5]
-	s[sp-2].SetUint64(12172)
 	if contract.Gas < 29 { return nil, ErrOutOfGas }
 	contract.Gas -= 29
 	if !s[sp-3].IsZero() {
 		sp += -3
-		stack.top = sp
 		goto L12172
 	}
 	sp += -3
 
 	// block @12075 (24 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 12077
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_74)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 12112
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(32)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	s[sp+1].Set(&aotCCTFExchangeV2_74)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+3] = s[sp+0]
 	s[sp+2].SetUint64(4)
-	s[sp+3] = s[sp+0]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 3
-	pc = 12119
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(12)
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	s[sp+1].SetUint64(32)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+3] = s[sp+0]
 	s[sp+2].SetUint64(36)
-	s[sp+3] = s[sp+0]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 3
-	pc = 12126
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_76)
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	s[sp+1].SetUint64(12)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+3] = s[sp+0]
 	s[sp+2].SetUint64(68)
-	s[sp+3] = s[sp+0]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 3
-	pc = 12164
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	s[sp+1].Set(&aotCCTFExchangeV2_76)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
 	s[sp+1].SetUint64(100)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(11897)
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 1
-	stack.top = sp
 	goto L11897
 
 L12172: // block @12172 (15 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
@@ -13468,26 +10689,21 @@ L12172: // block @12172 (15 instrs)
 	s[sp+2].SetUint64(32)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
 	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	if contract.Gas < 16 { return nil, ErrOutOfGas }
-	contract.Gas -= 16
-	stack.top = sp + 2
-	pc = 12179
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 19 { return nil, ErrOutOfGas }
+	contract.Gas -= 19
+	if err = aotMload(contract, mem, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+0]
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
 	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2].SetUint64(12192)
-	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
+	s[sp+2] = s[sp+0]
 	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	s[sp+3].SetUint64(20873)
 	if contract.Gas < 29 { return nil, ErrOutOfGas }
 	contract.Gas -= 29
+	s[sp+0].SetUint64(12192)
 	sp += 3
-	stack.top = sp
 	goto L20873
 
 L12192: // block @12192 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 10 { return nil, &ErrStackUnderflow{stackLen: sp, required: 10} }
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
 	s[sp-1], s[sp-10] = s[sp-10], s[sp-1]
@@ -13497,48 +10713,40 @@ L12192: // block @12192 (9 instrs)
 	sp += -5
 
 L12201: // block @12201 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(12212)
-	s[sp+1].SetUint64(2)
 	s[sp+2] = s[sp-3]
-	s[sp+3].SetUint64(20832)
 	if contract.Gas < 21 { return nil, ErrOutOfGas }
 	contract.Gas -= 21
+	s[sp+0].SetUint64(12212)
+	s[sp+1].SetUint64(2)
 	sp += 3
-	stack.top = sp
 	goto L20832
 
 L12212: // block @12212 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetUint64(1)
 	s[sp-1].Sub(&s[sp+0], &s[sp-1])
-	s[sp+0].SetUint64(12257)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
 	if !s[sp-1].IsZero() {
 		sp += -1
-		stack.top = sp
 		goto L12257
 	}
 	sp += -1
 
 	// block @12220 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Set(&aotCCTFExchangeV2_77)
 	s[sp+1] = s[sp-5]
+	s[sp+0].Set(&aotCCTFExchangeV2_77)
 	s[sp+0].Xor(&s[sp+1], &s[sp+0])
 	s[sp+0], s[sp-5] = s[sp-5], s[sp+0]
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
 
 L12257: // block @12257 (13 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 10 { return nil, &ErrStackUnderflow{stackLen: sp, required: 10} }
 	s[sp-2], s[sp-5] = s[sp-5], s[sp-2]
 	s[sp-2], s[sp-10] = s[sp-10], s[sp-2]
@@ -13552,41 +10760,35 @@ L12257: // block @12257 (13 instrs)
 	goto dispatch
 
 L12270: // block @12270 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+7 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
-	s[sp+2].SetUint64(12283)
 	s[sp+3] = s[sp-6]
 	s[sp+4] = s[sp-5]
-	s[sp+5].Clear()
-	s[sp+6].SetUint64(17259)
 	if contract.Gas < 27 { return nil, ErrOutOfGas }
 	contract.Gas -= 27
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
+	s[sp+2].SetUint64(12283)
+	s[sp+5].SetUint64(0)
 	sp += 6
-	stack.top = sp
 	goto L17259
 
 L12283: // block @12283 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 7 { return nil, &ErrStackUnderflow{stackLen: sp, required: 7} }
 	if sp+7 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
-	s[sp+2].SetUint64(12296)
 	s[sp+3] = s[sp-7]
 	s[sp+4] = s[sp-6]
 	s[sp+5] = s[sp-5]
-	s[sp+6].SetUint64(9191)
 	if contract.Gas < 28 { return nil, ErrOutOfGas }
 	contract.Gas -= 28
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
+	s[sp+2].SetUint64(12296)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 6
-	stack.top = sp
 	goto L9191
 
 L12296: // block @12296 (12 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 7 { return nil, &ErrStackUnderflow{stackLen: sp, required: 7} }
 	s[sp-1], s[sp-3] = s[sp-3], s[sp-1]
 	s[sp-2], s[sp-4] = s[sp-4], s[sp-2]
@@ -13594,104 +10796,80 @@ L12296: // block @12296 (12 instrs)
 	s[sp-2], s[sp-5] = s[sp-5], s[sp-2]
 	s[sp-2] = s[sp-7]
 	if s[sp-2].IsZero() { s[sp-2].SetOne() } else { s[sp-2].Clear() }
-	s[sp-1].SetUint64(12462)
 	if contract.Gas < 38 { return nil, ErrOutOfGas }
 	contract.Gas -= 38
 	if !s[sp-2].IsZero() {
 		sp += -2
-		stack.top = sp
 		goto L12462
 	}
 	sp += -2
 
 	// block @12310 (13 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 9 { return nil, &ErrStackUnderflow{stackLen: sp, required: 9} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(12329)
 	s[sp+1] = s[sp-9]
 	s[sp+2].SetUint64(32)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 2
-	pc = 12317
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMload(contract, mem, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp-6]
 	s[sp+3] = s[sp-9]
 	s[sp+4].SetUint64(96)
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 4
-	pc = 12323
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMload(contract, mem, &s[sp+3]); err != nil { return nil, err }
 	s[sp+4] = s[sp-8]
-	s[sp+5].SetUint64(9247)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(12329)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 5
-	stack.top = sp
 	goto L9247
 
 L12329: // block @12329 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 7 { return nil, &ErrStackUnderflow{stackLen: sp, required: 7} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-2]
 	s[sp+1] = s[sp-7]
 	if s[sp+1].IsZero() { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(12440)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
 	if !s[sp+1].IsZero() {
 		sp += 1
-		stack.top = sp
 		goto L12440
 	}
 	sp += 1
 
 	// block @12337 (6 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 8 { return nil, &ErrStackUnderflow{stackLen: sp, required: 8} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-3]
 	s[sp+1] = s[sp-8]
 	if s[sp+1].Gt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(12394)
 	if contract.Gas < 25 { return nil, ErrOutOfGas }
 	contract.Gas -= 25
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L12394
 	}
 
 	// block @12345 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 12347
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_64)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 12382
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 12388
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_64)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -13704,7 +10882,6 @@ L12329: // block @12329 (6 instrs)
 	return res, nil
 
 L12394: // block @12394 (19 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 8 { return nil, &ErrStackUnderflow{stackLen: sp, required: 8} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-8]
@@ -13712,344 +10889,270 @@ L12394: // block @12394 (19 instrs)
 	s[sp+0] = s[sp-5]
 	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
 	s[sp-1].Sub(&s[sp+0], &s[sp-1])
-	s[sp+0].SetUint64(12440)
-	s[sp+1].SetUint64(8847)
-	s[sp+2].SetUint64(3)
 	if contract.Gas < 27 { return nil, ErrOutOfGas }
 	contract.Gas -= 27
+	s[sp+2].SetUint64(3)
 	stack.top = sp + 3
-	pc = 12409
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+3].Set(&aotCCTFExchangeV2_1)
-	s[sp+4].SetUint64(256)
-	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
+	s[sp+4] = s[sp+2]
+	s[sp+3].SetUint64(256)
 	s[sp+3].Div(&s[sp+4], &s[sp+3])
+	s[sp+2].Set(&aotCCTFExchangeV2_1)
 	s[sp+2].And(&s[sp+3], &s[sp+2])
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
+	s[sp+1] = s[sp+2]
 	if contract.Gas < 31 { return nil, ErrOutOfGas }
 	contract.Gas -= 31
+	s[sp+0].SetUint64(12440)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 2
-	stack.top = sp
 	goto L8847
 
 L12440: // block @12440 (11 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 10 { return nil, &ErrStackUnderflow{stackLen: sp, required: 10} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(12456)
 	s[sp+1] = s[sp-7]
 	s[sp+2] = s[sp-10]
 	s[sp+3].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 16 { return nil, ErrOutOfGas }
-	contract.Gas -= 16
-	stack.top = sp + 3
-	pc = 12449
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+3].Clear()
+	if contract.Gas < 19 { return nil, ErrOutOfGas }
+	contract.Gas -= 19
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
 	s[sp+4] = s[sp-1]
-	s[sp+5].SetUint64(9247)
 	if contract.Gas < 16 { return nil, ErrOutOfGas }
 	contract.Gas -= 16
+	s[sp+0].SetUint64(12456)
+	s[sp+3].SetUint64(0)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 5
-	stack.top = sp
 	goto L9247
 
 L12456: // block @12456 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
-	s[sp-1].SetUint64(12552)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
 	sp += -1
-	stack.top = sp
 	goto L12552
 
 L12462: // block @12462 (14 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 10 { return nil, &ErrStackUnderflow{stackLen: sp, required: 10} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(12482)
 	s[sp+1] = s[sp-6]
 	s[sp+2] = s[sp-9]
 	s[sp+3].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 16 { return nil, ErrOutOfGas }
-	contract.Gas -= 16
-	stack.top = sp + 3
-	pc = 12471
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 19 { return nil, ErrOutOfGas }
+	contract.Gas -= 19
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
 	s[sp+3] = s[sp-10]
 	s[sp+4].SetUint64(96)
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 4
-	pc = 12476
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+3]); err != nil { return nil, err }
 	s[sp+4] = s[sp-2]
-	s[sp+5].SetUint64(9247)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(12482)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 5
-	stack.top = sp
 	goto L9247
 
 L12482: // block @12482 (14 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 9 { return nil, &ErrStackUnderflow{stackLen: sp, required: 9} }
 	if sp+8 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(32)
 	s[sp+1] = s[sp-9]
+	s[sp+0].SetUint64(32)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 1
-	pc = 12487
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(12503)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
+	s[sp+1] = s[sp+0]
 	s[sp+2].SetBytes(contract.Address().Bytes())
-	s[sp+3].Clear()
-	s[sp+4].SetUint64(8756)
 	s[sp+5] = s[sp-7]
 	s[sp+6] = s[sp-8]
-	s[sp+7].SetUint64(20594)
 	if contract.Gas < 30 { return nil, ErrOutOfGas }
 	contract.Gas -= 30
+	s[sp+0].SetUint64(12503)
+	s[sp+3].SetUint64(0)
+	s[sp+4].SetUint64(8756)
 	sp += 7
-	stack.top = sp
 	goto L20594
 
 L12503: // block @12503 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 7 { return nil, &ErrStackUnderflow{stackLen: sp, required: 7} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-7]
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(12552)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L12552
 	}
 
 	// block @12510 (15 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 7 { return nil, &ErrStackUnderflow{stackLen: sp, required: 7} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(3)
 	if contract.Gas < 3 { return nil, ErrOutOfGas }
 	contract.Gas -= 3
+	s[sp+0].SetUint64(3)
 	stack.top = sp + 1
-	pc = 12512
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	s[sp+1] = s[sp-7]
 	s[sp+1], s[sp-4] = s[sp-4], s[sp+1]
-	s[sp+1].SetUint64(12552)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2].SetUint64(256)
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
+	s[sp+1] = s[sp+0]
+	s[sp+2] = s[sp+1]
+	s[sp+1].SetUint64(256)
 	s[sp+1].Div(&s[sp+2], &s[sp+1])
 	s[sp+2].Set(&aotCCTFExchangeV2_1)
 	s[sp+1].And(&s[sp+2], &s[sp+1])
 	s[sp+2] = s[sp-7]
-	s[sp+3].SetUint64(13358)
 	if contract.Gas < 45 { return nil, ErrOutOfGas }
 	contract.Gas -= 45
+	s[sp+0].SetUint64(12552)
 	sp += 3
-	stack.top = sp
 	goto L13358
 
 L12552: // block @12552 (42 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 9 { return nil, &ErrStackUnderflow{stackLen: sp, required: 9} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(12713)
-	s[sp+1].SetUint64(64)
-	if contract.Gas < 7 { return nil, ErrOutOfGas }
-	contract.Gas -= 7
-	stack.top = sp + 2
-	pc = 12558
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 10 { return nil, ErrOutOfGas }
+	contract.Gas -= 10
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+3].SetUint64(320)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	s[sp+3].SetUint64(64)
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 4
-	pc = 12566
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMstoreC(contract, mem, 64, &s[sp+2]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp+2]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 5
-	pc = 12570
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMstore(contract, mem, &s[sp+4], &s[sp+3]); err != nil { return nil, err }
 	s[sp+3].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
 	s[sp+3] = s[sp-9]
 	s[sp+4].SetUint64(32)
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 4
-	pc = 12578
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp+3]); err != nil { return nil, err }
 	s[sp+4].Set(&aotCCTFExchangeV2_1)
 	s[sp+3].And(&s[sp+4], &s[sp+3])
 	s[sp+4] = s[sp+2]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 5
-	pc = 12602
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMstore(contract, mem, &s[sp+4], &s[sp+3]); err != nil { return nil, err }
 	s[sp+3].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
 	s[sp+3] = s[sp-6]
 	s[sp+4].Set(&aotCCTFExchangeV2_1)
 	s[sp+3].And(&s[sp+4], &s[sp+3])
 	s[sp+4] = s[sp+2]
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + 5
-	pc = 12630
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 21 { return nil, ErrOutOfGas }
+	contract.Gas -= 21
+	if err = aotMstore(contract, mem, &s[sp+4], &s[sp+3]); err != nil { return nil, err }
 	s[sp+3].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
 	s[sp+3] = s[sp-9]
 	s[sp+4].SetUint64(192)
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 4
-	pc = 12638
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+4].SetUint64(1)
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp+3]); err != nil { return nil, err }
 	s[sp+5] = s[sp+3]
+	s[sp+4].SetUint64(1)
 	if s[sp+5].Gt(&s[sp+4]) { s[sp+4].SetOne() } else { s[sp+4].Clear() }
 	if s[sp+4].IsZero() { s[sp+4].SetOne() } else { s[sp+4].Clear() }
-	s[sp+5].SetUint64(12655)
 	if contract.Gas < 25 { return nil, ErrOutOfGas }
 	contract.Gas -= 25
 	if !s[sp+4].IsZero() {
+		s[sp+0].SetUint64(12713)
 		sp += 4
-		stack.top = sp
 		goto L12655
 	}
+	s[sp+0].SetUint64(12713)
 	sp += 4
 
 	// block @12648 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(12655)
-	s[sp+1].SetUint64(20700)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(12655)
 	sp += 1
-	stack.top = sp
 	goto L20700
 
 L12655: // block @12655 (45 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 13 { return nil, &ErrStackUnderflow{stackLen: sp, required: 13} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 12657
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-13]
 	s[sp+0].SetUint64(96)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 0
-	pc = 12665
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 12667
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-12]
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 1
-	pc = 12673
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-6]
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 1
-	pc = 12679
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-11]
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 1
-	pc = 12685
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-13]
 	s[sp+0].SetUint64(320)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 0
-	pc = 12694
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 12696
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-13]
 	s[sp+0].SetUint64(288)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 0
-	pc = 12705
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 12707
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp-2].SetUint64(14833)
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	if contract.Gas < 13 { return nil, ErrOutOfGas }
 	contract.Gas -= 13
 	sp += -2
-	stack.top = sp
 	goto L14833
 
 L12713: // block @12713 (13 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 11 { return nil, &ErrStackUnderflow{stackLen: sp, required: 11} }
 	s[sp-3], s[sp-10] = s[sp-10], s[sp-3]
 	s[sp-4], s[sp-11] = s[sp-11], s[sp-4]
@@ -14063,119 +11166,97 @@ L12713: // block @12713 (13 instrs)
 	goto dispatch
 
 L12726: // block @12726 (14 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(12746)
 	s[sp+2] = s[sp-2]
 	s[sp+3] = s[sp-3]
 	s[sp+4].SetUint64(128)
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + 4
-	pc = 12736
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 21 { return nil, ErrOutOfGas }
+	contract.Gas -= 21
+	if err = aotMload(contract, mem, &s[sp+3]); err != nil { return nil, err }
 	s[sp+4] = s[sp-3]
 	s[sp+5].SetUint64(160)
 	s[sp+4].Add(&s[sp+5], &s[sp+4])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 5
-	pc = 12741
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+5].SetUint64(17730)
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+4]); err != nil { return nil, err }
 	if contract.Gas < 11 { return nil, ErrOutOfGas }
 	contract.Gas -= 11
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(12746)
 	sp += 5
-	stack.top = sp
 	goto L17730
 
 L12746: // block @12746 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
 	s[sp-1] = s[sp-3]
 	if s[sp-1].IsZero() { s[sp-1].SetOne() } else { s[sp-1].Clear() }
-	s[sp+0].SetUint64(2968)
 	if contract.Gas < 25 { return nil, ErrOutOfGas }
 	contract.Gas -= 25
 	if !s[sp-1].IsZero() {
+		if interrupt.Load() { return nil, ErrInterrupt }
 		sp += -1
-		stack.top = sp
 		goto L2968
 	}
 	sp += -1
 
 	// block @12755 (12 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1] = s[sp+0]
 	s[sp+2] = s[sp-4]
 	s[sp+3].SetUint64(192)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 14 { return nil, ErrOutOfGas }
-	contract.Gas -= 14
-	stack.top = sp + 3
-	pc = 12761
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+3].SetUint64(1)
+	if contract.Gas < 17 { return nil, ErrOutOfGas }
+	contract.Gas -= 17
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
 	s[sp+4] = s[sp+2]
+	s[sp+3].SetUint64(1)
 	if s[sp+4].Gt(&s[sp+3]) { s[sp+3].SetOne() } else { s[sp+3].Clear() }
 	if s[sp+3].IsZero() { s[sp+3].SetOne() } else { s[sp+3].Clear() }
-	s[sp+4].SetUint64(12778)
 	if contract.Gas < 25 { return nil, ErrOutOfGas }
 	contract.Gas -= 25
 	if !s[sp+3].IsZero() {
+		s[sp+0].SetUint64(0)
+		s[sp+1].SetUint64(0)
 		sp += 3
-		stack.top = sp
 		goto L12778
 	}
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	sp += 3
 
 	// block @12771 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(12778)
-	s[sp+1].SetUint64(20700)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(12778)
 	sp += 1
-	stack.top = sp
 	goto L20700
 
 L12778: // block @12778 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if s[sp-1].Eq(&s[sp-2]) { s[sp-2].SetOne() } else { s[sp-2].Clear() }
-	s[sp-1].SetUint64(12789)
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
 	if !s[sp-2].IsZero() {
 		sp += -2
-		stack.top = sp
 		goto L12789
 	}
 	sp += -2
 
 	// block @12784 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-2]
-	s[sp+1].SetUint64(12791)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
 	sp += 1
-	stack.top = sp
 	goto L12791
 
 L12789: // block @12789 (2 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-4]
@@ -14184,28 +11265,24 @@ L12789: // block @12789 (2 instrs)
 	sp += 1
 
 L12791: // block @12791 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
-	s[sp-1].SetUint64(12806)
 	s[sp+0] = s[sp-4]
 	s[sp+1] = s[sp-2]
-	s[sp+2].SetUint64(4)
 	if contract.Gas < 18 { return nil, ErrOutOfGas }
 	contract.Gas -= 18
+	s[sp+2].SetUint64(4)
 	stack.top = sp + 3
-	pc = 12801
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+3].SetUint64(5693)
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
 	if contract.Gas < 11 { return nil, ErrOutOfGas }
 	contract.Gas -= 11
+	s[sp-1].SetUint64(12806)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 3
-	stack.top = sp
 	goto L5693
 
 L12806: // block @12806 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	s[sp-2], s[sp-6] = s[sp-6], s[sp-2]
 	s[sp-2], s[sp-5] = s[sp-5], s[sp-2]
@@ -14218,83 +11295,56 @@ L12806: // block @12806 (8 instrs)
 	goto dispatch
 
 L12814: // block @12814 (27 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
 	s[sp+1] = s[sp-3]
-	s[sp+2] = s[sp+0]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 12818
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(8)
-	s[sp+2].SetUint64(32)
-	s[sp+3] = s[sp+1]
-	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
-	stack.top = sp + 4
-	pc = 12825
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(64)
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 12830
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotMstoreC(contract, mem, 0, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	s[sp+2].SetUint64(8)
+	if err = aotMstoreC(contract, mem, 32, &s[sp+2]); err != nil { return nil, err }
+	if contract.Gas < 39 { return nil, ErrOutOfGas }
+	contract.Gas -= 39
+	if err = aotKeccak256C(evm, contract, mem, 0, 64, 12, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	if contract.Gas < 3 { return nil, ErrOutOfGas }
 	contract.Gas -= 3
 	stack.top = sp + 3
-	pc = 12832
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
+	s[sp+0] = s[sp+2]
 	s[sp+3] = s[sp+0]
-	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
-	if s[sp+3].LtUint64(256) { s[sp+2].Rsh(&s[sp+2], uint(s[sp+3].Uint64())) } else { s[sp+2].Clear() }
+	s[sp+2] = s[sp+3]
+	s[sp+2].Rsh(&s[sp+2], 8)
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+3].SetUint64(255)
 	s[sp+2].And(&s[sp+3], &s[sp+2])
 	s[sp+3] = s[sp+2]
 	if s[sp+3].IsZero() { s[sp+3].SetOne() } else { s[sp+3].Clear() }
-	s[sp+4].SetUint64(12896)
 	if contract.Gas < 40 { return nil, ErrOutOfGas }
 	contract.Gas -= 40
 	if !s[sp+3].IsZero() {
 		sp += 3
-		stack.top = sp
 		goto L12896
 	}
 	sp += 3
 
 	// block @12847 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 12849
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_15)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 12884
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 12890
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_15)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -14307,48 +11357,37 @@ L12814: // block @12814 (27 instrs)
 	return res, nil
 
 L12896: // block @12896 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-3]
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(12908)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L12908
 	}
 
 	// block @12903 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-3]
-	s[sp+1].SetUint64(12914)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
 	sp += 1
-	stack.top = sp
 	goto L12914
 
 L12908: // block @12908 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-5]
 	s[sp+1].SetUint64(128)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 1
-	pc = 12913
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	sp += 1
 
 L12914: // block @12914 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-4] = s[sp-4], s[sp-1]
@@ -14356,40 +11395,29 @@ L12914: // block @12914 (9 instrs)
 	s[sp+0] = s[sp-5]
 	if s[sp+0].Gt(&s[sp-1]) { s[sp-1].SetOne() } else { s[sp-1].Clear() }
 	if s[sp-1].IsZero() { s[sp-1].SetOne() } else { s[sp-1].Clear() }
-	s[sp+0].SetUint64(12974)
 	if contract.Gas < 31 { return nil, ErrOutOfGas }
 	contract.Gas -= 31
 	if !s[sp-1].IsZero() {
 		sp += -1
-		stack.top = sp
 		goto L12974
 	}
 	sp += -1
 
 	// block @12925 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 12927
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_78)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 12962
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 12968
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_78)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -14402,7 +11430,6 @@ L12914: // block @12914 (9 instrs)
 	return res, nil
 
 L12974: // block @12974 (24 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 7 { return nil, &ErrStackUnderflow{stackLen: sp, required: 7} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-4]
@@ -14412,8 +11439,7 @@ L12974: // block @12974 (24 instrs)
 	s[sp+0] = s[sp-3]
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
 	s[sp+1] = s[sp-3]
-	s[sp+2].SetUint64(8)
-	if s[sp+2].LtUint64(256) { s[sp+1].Lsh(&s[sp+1], uint(s[sp+2].Uint64())) } else { s[sp+1].Clear() }
+	s[sp+1].Lsh(&s[sp+1], 8)
 	s[sp+0].Or(&s[sp+1], &s[sp+0])
 	s[sp+1] = s[sp+0]
 	s[sp+2] = s[sp-2]
@@ -14433,143 +11459,109 @@ L12974: // block @12974 (24 instrs)
 	goto dispatch
 
 L12999: // block @12999 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
 	s[sp+1] = s[sp-5]
 	if s[sp+1].IsZero() { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(13065)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+1].IsZero() {
+		s[sp+0].SetUint64(0)
 		sp += 1
-		stack.top = sp
 		goto L13065
 	}
+	s[sp+0].SetUint64(0)
 	sp += 1
 
 	// block @13007 (4 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-2]
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(13060)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L13060
 	}
 
 	// block @13013 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1] = s[sp-2]
-	s[sp+0].SetUint64(13060)
-	s[sp+1].SetUint64(13054)
-	s[sp+2].SetUint64(3)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+2].SetUint64(3)
 	stack.top = sp + 3
-	pc = 13023
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+3].Set(&aotCCTFExchangeV2_1)
-	s[sp+4].SetUint64(256)
-	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
+	s[sp+4] = s[sp+2]
+	s[sp+3].SetUint64(256)
 	s[sp+3].Div(&s[sp+4], &s[sp+3])
+	s[sp+2].Set(&aotCCTFExchangeV2_1)
 	s[sp+2].And(&s[sp+3], &s[sp+2])
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
+	s[sp+1] = s[sp+2]
 	if contract.Gas < 31 { return nil, ErrOutOfGas }
 	contract.Gas -= 31
+	s[sp+0].SetUint64(13060)
 	sp += 2
-	stack.top = sp
 	goto L13054
 
 L13054: // block @13054 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-4]
-	s[sp+1].SetUint64(13358)
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
 	sp += 1
-	stack.top = sp
 	goto L13358
 
 L13060: // block @13060 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(13190)
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
-	sp += 0
-	stack.top = sp
 	goto L13190
 
 L13065: // block @13065 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-3]
 	s[sp+1] = s[sp-2]
 	if s[sp+1].IsZero() { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(13176)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
 	if !s[sp+1].IsZero() {
 		sp += 1
-		stack.top = sp
 		goto L13176
 	}
 	sp += 1
 
 	// block @13073 (6 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-4]
 	s[sp+1] = s[sp-3]
 	if s[sp+1].Gt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(13130)
 	if contract.Gas < 25 { return nil, ErrOutOfGas }
 	contract.Gas -= 25
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L13130
 	}
 
 	// block @13081 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 13083
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_64)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 13118
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 13124
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_64)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -14582,7 +11574,6 @@ L13065: // block @13065 (6 instrs)
 	return res, nil
 
 L13130: // block @13130 (19 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-3]
@@ -14590,229 +11581,181 @@ L13130: // block @13130 (19 instrs)
 	s[sp+0] = s[sp-2]
 	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
 	s[sp-1].Sub(&s[sp+0], &s[sp-1])
-	s[sp+0].SetUint64(13176)
-	s[sp+1].SetUint64(10340)
-	s[sp+2].SetUint64(3)
 	if contract.Gas < 27 { return nil, ErrOutOfGas }
 	contract.Gas -= 27
+	s[sp+2].SetUint64(3)
 	stack.top = sp + 3
-	pc = 13145
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+3].Set(&aotCCTFExchangeV2_1)
-	s[sp+4].SetUint64(256)
-	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
+	s[sp+4] = s[sp+2]
+	s[sp+3].SetUint64(256)
 	s[sp+3].Div(&s[sp+4], &s[sp+3])
+	s[sp+2].Set(&aotCCTFExchangeV2_1)
 	s[sp+2].And(&s[sp+3], &s[sp+2])
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
+	s[sp+1] = s[sp+2]
 	if contract.Gas < 31 { return nil, ErrOutOfGas }
 	contract.Gas -= 31
+	s[sp+0].SetUint64(13176)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 2
-	stack.top = sp
 	goto L10340
 
 L13176: // block @13176 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 8 { return nil, &ErrStackUnderflow{stackLen: sp, required: 8} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(13188)
 	s[sp+1].SetBytes(contract.Address().Bytes())
 	s[sp+2] = s[sp-8]
-	s[sp+3].Clear()
 	s[sp+4] = s[sp-1]
-	s[sp+5].SetUint64(9247)
 	if contract.Gas < 25 { return nil, ErrOutOfGas }
 	contract.Gas -= 25
+	s[sp+0].SetUint64(13188)
+	s[sp+3].SetUint64(0)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 5
-	stack.top = sp
 	goto L9247
 
 L13188: // block @13188 (2 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if contract.Gas < 3 { return nil, ErrOutOfGas }
 	contract.Gas -= 3
 	sp += -1
 
 L13190: // block @13190 (39 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 8 { return nil, &ErrStackUnderflow{stackLen: sp, required: 8} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(13347)
-	s[sp+1].SetUint64(64)
-	if contract.Gas < 7 { return nil, ErrOutOfGas }
-	contract.Gas -= 7
-	stack.top = sp + 2
-	pc = 13196
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 10 { return nil, ErrOutOfGas }
+	contract.Gas -= 10
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+3].SetUint64(320)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	s[sp+3].SetUint64(64)
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 4
-	pc = 13204
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMstoreC(contract, mem, 64, &s[sp+2]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-5]
 	s[sp+4] = s[sp+2]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 5
-	pc = 13208
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMstore(contract, mem, &s[sp+4], &s[sp+3]); err != nil { return nil, err }
 	s[sp+3].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
 	s[sp+3] = s[sp-7]
 	s[sp+4].Set(&aotCCTFExchangeV2_1)
 	s[sp+3].And(&s[sp+4], &s[sp+3])
 	s[sp+4] = s[sp+2]
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + 5
-	pc = 13236
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 21 { return nil, ErrOutOfGas }
+	contract.Gas -= 21
+	if err = aotMstore(contract, mem, &s[sp+4], &s[sp+3]); err != nil { return nil, err }
 	s[sp+3].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
 	s[sp+3].SetBytes(contract.Address().Bytes())
 	s[sp+4].Set(&aotCCTFExchangeV2_1)
 	s[sp+3].And(&s[sp+4], &s[sp+3])
 	s[sp+4] = s[sp+2]
-	if contract.Gas < 17 { return nil, ErrOutOfGas }
-	contract.Gas -= 17
-	stack.top = sp + 5
-	pc = 13264
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 20 { return nil, ErrOutOfGas }
+	contract.Gas -= 20
+	if err = aotMstore(contract, mem, &s[sp+4], &s[sp+3]); err != nil { return nil, err }
 	s[sp+3].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
 	s[sp+3] = s[sp-8]
 	s[sp+4].SetUint64(192)
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 4
-	pc = 13272
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+4].SetUint64(1)
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp+3]); err != nil { return nil, err }
 	s[sp+5] = s[sp+3]
+	s[sp+4].SetUint64(1)
 	if s[sp+5].Gt(&s[sp+4]) { s[sp+4].SetOne() } else { s[sp+4].Clear() }
 	if s[sp+4].IsZero() { s[sp+4].SetOne() } else { s[sp+4].Clear() }
-	s[sp+5].SetUint64(13289)
 	if contract.Gas < 25 { return nil, ErrOutOfGas }
 	contract.Gas -= 25
 	if !s[sp+4].IsZero() {
+		s[sp+0].SetUint64(13347)
 		sp += 4
-		stack.top = sp
 		goto L13289
 	}
+	s[sp+0].SetUint64(13347)
 	sp += 4
 
 	// block @13282 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(13289)
-	s[sp+1].SetUint64(20700)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(13289)
 	sp += 1
-	stack.top = sp
 	goto L20700
 
 L13289: // block @13289 (45 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 12 { return nil, &ErrStackUnderflow{stackLen: sp, required: 12} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 13291
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-12]
 	s[sp+0].SetUint64(96)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 0
-	pc = 13299
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 13301
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-8]
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 1
-	pc = 13307
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-7]
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 1
-	pc = 13313
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-6]
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 1
-	pc = 13319
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-12]
 	s[sp+0].SetUint64(320)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 0
-	pc = 13328
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 13330
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-12]
 	s[sp+0].SetUint64(288)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 0
-	pc = 13339
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 13341
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp-2].SetUint64(10403)
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	if contract.Gas < 13 { return nil, ErrOutOfGas }
 	contract.Gas -= 13
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += -2
-	stack.top = sp
 	goto L10403
 
 L13347: // block @13347 (11 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 9 { return nil, &ErrStackUnderflow{stackLen: sp, required: 9} }
 	s[sp-1], s[sp-9] = s[sp-9], s[sp-1]
 	s[sp-1], s[sp-8] = s[sp-8], s[sp-1]
@@ -14825,25 +11768,19 @@ L13347: // block @13347 (11 instrs)
 	goto dispatch
 
 L13358: // block @13358 (17 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Set(&aotCCTFExchangeV2_79)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
 	s[sp+1] = s[sp-1]
-	s[sp+2].Clear()
-	if contract.Gas < 16 { return nil, ErrOutOfGas }
-	contract.Gas -= 16
-	stack.top = sp + 3
-	pc = 13397
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 19 { return nil, ErrOutOfGas }
+	contract.Gas -= 19
+	if err = aotMstoreC(contract, mem, 0, &s[sp+1]); err != nil { return nil, err }
 	s[sp+1] = s[sp-2]
-	s[sp+2] = s[sp+0]
-	s[sp+3].SetUint64(32)
-	s[sp+4].Clear()
 	if contract.Gas < 11 { return nil, ErrOutOfGas }
 	contract.Gas -= 11
+	s[sp+0].Set(&aotCCTFExchangeV2_79)
+	s[sp+2].Set(&aotCCTFExchangeV2_79)
+	s[sp+3].SetUint64(32)
+	s[sp+4].SetUint64(0)
 	stack.top = sp + 5
 	pc = 13403
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
@@ -14856,144 +11793,118 @@ L13358: // block @13358 (17 instrs)
 	goto dispatch
 
 L13408: // block @13408 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Set(&aotCCTFExchangeV2_5)
 	s[sp+1].SetBytes(contract.Address().Bytes())
-	s[sp+2].Set(&aotCCTFExchangeV2_1)
 	s[sp+3] = s[sp-3]
+	s[sp+2].Set(&aotCCTFExchangeV2_1)
 	s[sp+2].And(&s[sp+3], &s[sp+2])
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
-	s[sp+2].SetUint64(13481)
 	if contract.Gas < 31 { return nil, ErrOutOfGas }
 	contract.Gas -= 31
 	if !s[sp+1].IsZero() {
+		s[sp+0].Set(&aotCCTFExchangeV2_5)
 		sp += 1
-		stack.top = sp
 		goto L13481
 	}
+	s[sp+0].Set(&aotCCTFExchangeV2_5)
 	sp += 1
 
 	// block @13471 (6 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(9265)
 	s[sp+1] = s[sp-1]
 	s[sp+2] = s[sp-3]
 	s[sp+3] = s[sp-2]
-	s[sp+4].SetUint64(17752)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
+	s[sp+0].SetUint64(9265)
 	sp += 4
-	stack.top = sp
 	goto L17752
 
 L13481: // block @13481 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(5801)
 	s[sp+1] = s[sp-1]
 	s[sp+2] = s[sp-4]
 	s[sp+3] = s[sp-3]
 	s[sp+4] = s[sp-2]
-	s[sp+5].SetUint64(17763)
 	if contract.Gas < 27 { return nil, ErrOutOfGas }
 	contract.Gas -= 27
+	s[sp+0].SetUint64(5801)
 	sp += 5
-	stack.top = sp
 	goto L17763
 
 L13493: // block @13493 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+7 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(5801)
-	s[sp+1].Set(&aotCCTFExchangeV2_4)
 	s[sp+2] = s[sp-4]
 	s[sp+3] = s[sp-3]
 	s[sp+4] = s[sp-2]
 	s[sp+5] = s[sp-1]
-	s[sp+6].SetUint64(17775)
 	if contract.Gas < 30 { return nil, ErrOutOfGas }
 	contract.Gas -= 30
+	s[sp+0].SetUint64(5801)
+	s[sp+1].Set(&aotCCTFExchangeV2_4)
 	sp += 6
-	stack.top = sp
 	goto L17775
 
 L13538: // block @13538 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(13546)
-	s[sp+1].SetUint64(18280)
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
+	s[sp+0].SetUint64(13546)
 	sp += 1
-	stack.top = sp
 	goto L18280
 
 L13546: // block @13546 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(13557)
 	s[sp+1] = s[sp-6]
 	s[sp+2] = s[sp-5]
 	s[sp+3] = s[sp-2]
-	s[sp+4].SetUint64(17259)
 	if contract.Gas < 24 { return nil, ErrOutOfGas }
 	contract.Gas -= 24
+	s[sp+0].SetUint64(13557)
 	sp += 4
-	stack.top = sp
 	goto L17259
 
 L13557: // block @13557 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+7 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
-	s[sp+2].SetUint64(13570)
 	s[sp+3] = s[sp-5]
 	s[sp+4] = s[sp-4]
 	s[sp+5] = s[sp-3]
-	s[sp+6].SetUint64(9191)
 	if contract.Gas < 28 { return nil, ErrOutOfGas }
 	contract.Gas -= 28
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
+	s[sp+2].SetUint64(13570)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 6
-	stack.top = sp
 	goto L9191
 
 L13570: // block @13570 (42 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 9 { return nil, &ErrStackUnderflow{stackLen: sp, required: 9} }
 	if sp+8 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(192)
 	s[sp+1] = s[sp-9]
+	s[sp+0].SetUint64(192)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 1
-	pc = 13575
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(96)
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	s[sp+2] = s[sp-9]
+	s[sp+1].SetUint64(96)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 13580
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(32)
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+1]); err != nil { return nil, err }
 	s[sp+3] = s[sp-9]
+	s[sp+2].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 13585
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
 	s[sp+2], s[sp-2] = s[sp-2], s[sp+2]
 	s[sp+2], s[sp-4] = s[sp-4], s[sp+2]
 	s[sp+1], s[sp-1] = s[sp-1], s[sp+1]
@@ -15007,66 +11918,56 @@ L13570: // block @13570 (42 instrs)
 	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
 	s[sp+1], s[sp-1] = s[sp-1], s[sp+1]
-	s[sp+2].SetUint64(13650)
-	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
+	s[sp+2] = s[sp+0]
 	s[sp+3].SetBytes(contract.Address().Bytes())
 	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
 	s[sp+4] = s[sp-2]
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+5].Clear()
-	s[sp+5], s[sp+4] = s[sp+4], s[sp+5]
-	s[sp+6].SetUint64(1)
+	s[sp+5] = s[sp+4]
 	s[sp+7] = s[sp+5]
+	s[sp+6].SetUint64(1)
 	if s[sp+7].Gt(&s[sp+6]) { s[sp+6].SetOne() } else { s[sp+6].Clear() }
 	if s[sp+6].IsZero() { s[sp+6].SetOne() } else { s[sp+6].Clear() }
-	s[sp+7].SetUint64(13627)
 	if contract.Gas < 92 { return nil, ErrOutOfGas }
 	contract.Gas -= 92
 	if !s[sp+6].IsZero() {
+		s[sp+0].SetUint64(13650)
+		s[sp+4].SetUint64(0)
 		sp += 6
-		stack.top = sp
 		goto L13627
 	}
+	s[sp+0].SetUint64(13650)
+	s[sp+4].SetUint64(0)
 	sp += 6
 
 	// block @13620 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(13627)
-	s[sp+1].SetUint64(20700)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(13627)
 	sp += 1
-	stack.top = sp
 	goto L20700
 
 L13627: // block @13627 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if s[sp-1].Eq(&s[sp-2]) { s[sp-2].SetOne() } else { s[sp-2].Clear() }
-	s[sp-1].SetUint64(13638)
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
 	if !s[sp-2].IsZero() {
 		sp += -2
-		stack.top = sp
 		goto L13638
 	}
 	sp += -2
 
 	// block @13633 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(13640)
 	if contract.Gas < 13 { return nil, ErrOutOfGas }
 	contract.Gas -= 13
+	s[sp+0].SetUint64(0)
 	sp += 1
-	stack.top = sp
 	goto L13640
 
 L13638: // block @13638 (2 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 11 { return nil, &ErrStackUnderflow{stackLen: sp, required: 11} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-11]
@@ -15075,193 +11976,147 @@ L13638: // block @13638 (2 instrs)
 	sp += 1
 
 L13640: // block @13640 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 13 { return nil, &ErrStackUnderflow{stackLen: sp, required: 13} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(8756)
-	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
+	s[sp+0] = s[sp-1]
 	s[sp+1] = s[sp-13]
-	s[sp+2].SetUint64(20594)
 	if contract.Gas < 21 { return nil, ErrOutOfGas }
 	contract.Gas -= 21
+	s[sp-1].SetUint64(8756)
 	sp += 2
-	stack.top = sp
 	goto L20594
 
 L13650: // block @13650 (49 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 9 { return nil, &ErrStackUnderflow{stackLen: sp, required: 9} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 13653
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp+0]
 	s[sp+2].SetUint64(320)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	s[sp+2].SetUint64(64)
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 3
-	pc = 13661
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMstoreC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+1] = s[sp+0]
 	s[sp+2] = s[sp-3]
 	s[sp+3] = s[sp+1]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 4
-	pc = 13665
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
 	s[sp+2].SetUint64(32)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
 	s[sp+2] = s[sp-8]
 	s[sp+3] = s[sp+1]
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 4
-	pc = 13671
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
 	s[sp+2].SetUint64(32)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
 	s[sp+2] = s[sp-4]
 	s[sp+3] = s[sp+1]
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 4
-	pc = 13677
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
 	s[sp+2].SetUint64(32)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
 	s[sp+2] = s[sp-9]
 	s[sp+3].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 3
-	pc = 13685
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
 	s[sp+3].Set(&aotCCTFExchangeV2_1)
 	s[sp+2].And(&s[sp+3], &s[sp+2])
 	s[sp+3] = s[sp+1]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 4
-	pc = 13709
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
 	s[sp+2].SetUint64(32)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
 	s[sp+2] = s[sp-1]
 	s[sp+3] = s[sp+1]
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 4
-	pc = 13715
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
 	s[sp+2].SetUint64(32)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
 	s[sp+2] = s[sp-9]
 	s[sp+3].SetUint64(192)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 3
-	pc = 13723
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+3].SetUint64(1)
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
 	s[sp+4] = s[sp+2]
+	s[sp+3].SetUint64(1)
 	if s[sp+4].Gt(&s[sp+3]) { s[sp+3].SetOne() } else { s[sp+3].Clear() }
 	if s[sp+3].IsZero() { s[sp+3].SetOne() } else { s[sp+3].Clear() }
-	s[sp+4].SetUint64(13740)
 	if contract.Gas < 25 { return nil, ErrOutOfGas }
 	contract.Gas -= 25
 	if !s[sp+3].IsZero() {
 		sp += 3
-		stack.top = sp
 		goto L13740
 	}
 	sp += 3
 
 	// block @13733 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(13740)
-	s[sp+1].SetUint64(20700)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(13740)
 	sp += 1
-	stack.top = sp
 	goto L20700
 
 L13740: // block @13740 (47 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 14 { return nil, &ErrStackUnderflow{stackLen: sp, required: 14} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 13742
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-10]
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 1
-	pc = 13748
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-12]
 	s[sp+0].SetUint64(320)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 0
-	pc = 13757
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 13759
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-12]
 	s[sp+0].SetUint64(288)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 0
-	pc = 13768
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 13770
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-12]
 	s[sp+0].SetUint64(96)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 0
-	pc = 13778
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 13780
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-3], s[sp-8] = s[sp-8], s[sp-3]
 	s[sp-8], s[sp-14] = s[sp-14], s[sp-8]
 	s[sp-8], s[sp-13] = s[sp-13], s[sp-8]
@@ -15274,100 +12129,73 @@ L13740: // block @13740 (47 instrs)
 	goto dispatch
 
 L13796: // block @13796 (27 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+8 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(13830)
-	s[sp+2].SetUint64(64)
-	s[sp+3] = s[sp+2]
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 4
-	pc = 13804
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+4].SetUint64(2)
-	s[sp+5] = s[sp+4]
-	s[sp+6] = s[sp+3]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 7
-	pc = 13809
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+5].SetUint64(1)
-	s[sp+6].SetUint64(32)
-	s[sp+7] = s[sp+3]
-	s[sp+6].Add(&s[sp+7], &s[sp+6])
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 7
-	pc = 13816
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+5] = s[sp+3]
-	s[sp+6] = s[sp+2]
-	s[sp+5].Add(&s[sp+6], &s[sp+5])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 6
-	pc = 13820
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+4].SetUint64(96)
-	s[sp+5] = s[sp+3]
-	s[sp+4].Add(&s[sp+5], &s[sp+4])
-	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
-	stack.top = sp + 5
-	pc = 13827
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
+	if err = aotMloadC(contract, mem, 64, &s[sp+3]); err != nil { return nil, err }
+	s[sp+6] = s[sp+3]
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	s[sp+5].SetUint64(2)
+	if err = aotMstore(contract, mem, &s[sp+6], &s[sp+5]); err != nil { return nil, err }
+	s[sp+7] = s[sp+3]
+	s[sp+6].SetUint64(32)
+	s[sp+6].Add(&s[sp+7], &s[sp+6])
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	s[sp+5].SetUint64(1)
+	if err = aotMstore(contract, mem, &s[sp+6], &s[sp+5]); err != nil { return nil, err }
+	s[sp+5] = s[sp+3]
+	s[sp+6].SetUint64(64)
+	s[sp+5].Add(&s[sp+6], &s[sp+5])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	s[sp+4].SetUint64(2)
+	if err = aotMstore(contract, mem, &s[sp+5], &s[sp+4]); err != nil { return nil, err }
+	s[sp+5] = s[sp+3]
+	s[sp+4].SetUint64(96)
+	s[sp+4].Add(&s[sp+5], &s[sp+4])
+	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
+	s[sp+2] = s[sp+4]
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMstoreC(contract, mem, 64, &s[sp+3]); err != nil { return nil, err }
+	s[sp+1] = s[sp+2]
 	if contract.Gas < 11 { return nil, ErrOutOfGas }
 	contract.Gas -= 11
+	s[sp+0].SetUint64(0)
 	sp += 2
-	stack.top = sp
 	goto L13830
 
 L13830: // block @13830 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
-	s[sp-1].Set(&aotCCTFExchangeV2_2)
-	s[sp+0].Set(&aotCCTFExchangeV2_1)
-	s[sp-1].And(&s[sp+0], &s[sp-1])
-	s[sp+0].SetUint64(1926120053)
-	s[sp+1].Set(&aotCCTFExchangeV2_5)
 	if contract.Gas < 21 { return nil, ErrOutOfGas }
 	contract.Gas -= 21
+	s[sp-1].Set(&aotCCTFExchangeV2_2)
+	s[sp+0].SetUint64(1926120053)
+	s[sp+1].Set(&aotCCTFExchangeV2_5)
 	sp += 2
 
 L13926: // block @13926 (26 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+7 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 13929
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_10)
-	s[sp+2].SetUint64(224)
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
 	s[sp+3] = s[sp-2]
-	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
-	if s[sp+3].LtUint64(256) { s[sp+2].Lsh(&s[sp+2], uint(s[sp+3].Uint64())) } else { s[sp+2].Clear() }
+	s[sp+2] = s[sp+3]
+	s[sp+2].Lsh(&s[sp+2], 224)
+	s[sp+1].Set(&aotCCTFExchangeV2_10)
 	s[sp+1].And(&s[sp+2], &s[sp+1])
 	s[sp+2] = s[sp+0]
-	if contract.Gas < 21 { return nil, ErrOutOfGas }
-	contract.Gas -= 21
-	stack.top = sp + 3
-	pc = 13970
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(13991)
-	s[sp+1], s[sp-1] = s[sp-1], s[sp+1]
+	if contract.Gas < 24 { return nil, ErrOutOfGas }
+	contract.Gas -= 24
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1] = s[sp-1]
 	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2].Clear()
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
+	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-6]
 	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
 	s[sp+4] = s[sp-4]
@@ -15376,63 +12204,55 @@ L13926: // block @13926 (26 instrs)
 	s[sp+5], s[sp+4] = s[sp+4], s[sp+5]
 	s[sp+6].SetUint64(4)
 	s[sp+5].Add(&s[sp+6], &s[sp+5])
-	s[sp+6].SetUint64(20907)
 	if contract.Gas < 49 { return nil, ErrOutOfGas }
 	contract.Gas -= 49
+	s[sp-1].SetUint64(13991)
+	s[sp+1].SetUint64(0)
 	sp += 6
-	stack.top = sp
 	goto L20907
 
 L13991: // block @13991 (17 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+9 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(64)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 13995
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+2].Sub(&s[sp+3], &s[sp+2])
 	s[sp+3] = s[sp+1]
-	s[sp+4].Clear()
 	s[sp+5] = s[sp-3]
 	s[sp+6] = s[sp+5]
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
+	s[sp+0].SetUint64(0)
+	s[sp+4].SetUint64(0)
 	stack.top = sp + 7
 	pc = 14003
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	if s[sp+6].IsZero() { s[sp+6].SetOne() } else { s[sp+6].Clear() }
 	s[sp+7] = s[sp+6]
 	if s[sp+7].IsZero() { s[sp+7].SetOne() } else { s[sp+7].Clear() }
-	s[sp+8].SetUint64(14014)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+7].IsZero() {
 		sp += 7
-		stack.top = sp
 		goto L14014
 	}
 	sp += 7
 
 	// block @14011 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 14013
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L14014: // block @14014 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 7 { return nil, &ErrStackUnderflow{stackLen: sp, required: 7} }
 	if contract.Gas < 5 { return nil, ErrOutOfGas }
 	contract.Gas -= 5
@@ -15443,167 +12263,131 @@ L14014: // block @14014 (9 instrs)
 	if s[sp-7].IsZero() { s[sp-7].SetOne() } else { s[sp-7].Clear() }
 	s[sp-6] = s[sp-7]
 	if s[sp-6].IsZero() { s[sp-6].SetOne() } else { s[sp-6].Clear() }
-	s[sp-5].SetUint64(6513)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp-6].IsZero() {
+		if interrupt.Load() { return nil, ErrInterrupt }
 		sp += -6
-		stack.top = sp
 		goto L6513
 	}
 	sp += -6
 
 	// block @14025 (7 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetUint64(uint64(len(evm.returnData)))
-	s[sp+1].Clear()
-	s[sp+2].Clear()
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
+	s[sp+1].SetUint64(0)
+	s[sp+2].SetUint64(0)
 	stack.top = sp + 3
 	pc = 14028
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	s[sp+0].SetUint64(uint64(len(evm.returnData)))
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 14031
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L14032: // block @14032 (27 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+8 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(14066)
-	s[sp+2].SetUint64(64)
-	s[sp+3] = s[sp+2]
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 4
-	pc = 14040
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+4].SetUint64(2)
-	s[sp+5] = s[sp+4]
-	s[sp+6] = s[sp+3]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 7
-	pc = 14045
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+5].SetUint64(1)
-	s[sp+6].SetUint64(32)
-	s[sp+7] = s[sp+3]
-	s[sp+6].Add(&s[sp+7], &s[sp+6])
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 7
-	pc = 14052
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+5] = s[sp+3]
-	s[sp+6] = s[sp+2]
-	s[sp+5].Add(&s[sp+6], &s[sp+5])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 6
-	pc = 14056
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+4].SetUint64(96)
-	s[sp+5] = s[sp+3]
-	s[sp+4].Add(&s[sp+5], &s[sp+4])
-	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
-	stack.top = sp + 5
-	pc = 14063
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
+	if err = aotMloadC(contract, mem, 64, &s[sp+3]); err != nil { return nil, err }
+	s[sp+6] = s[sp+3]
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	s[sp+5].SetUint64(2)
+	if err = aotMstore(contract, mem, &s[sp+6], &s[sp+5]); err != nil { return nil, err }
+	s[sp+7] = s[sp+3]
+	s[sp+6].SetUint64(32)
+	s[sp+6].Add(&s[sp+7], &s[sp+6])
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	s[sp+5].SetUint64(1)
+	if err = aotMstore(contract, mem, &s[sp+6], &s[sp+5]); err != nil { return nil, err }
+	s[sp+5] = s[sp+3]
+	s[sp+6].SetUint64(64)
+	s[sp+5].Add(&s[sp+6], &s[sp+5])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	s[sp+4].SetUint64(2)
+	if err = aotMstore(contract, mem, &s[sp+5], &s[sp+4]); err != nil { return nil, err }
+	s[sp+5] = s[sp+3]
+	s[sp+4].SetUint64(96)
+	s[sp+4].Add(&s[sp+5], &s[sp+4])
+	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
+	s[sp+2] = s[sp+4]
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMstoreC(contract, mem, 64, &s[sp+3]); err != nil { return nil, err }
+	s[sp+1] = s[sp+2]
 	if contract.Gas < 11 { return nil, ErrOutOfGas }
 	contract.Gas -= 11
+	s[sp+0].SetUint64(0)
 	sp += 2
-	stack.top = sp
 	goto L14066
 
 L14066: // block @14066 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
-	s[sp-1].Set(&aotCCTFExchangeV2_2)
-	s[sp+0].Set(&aotCCTFExchangeV2_1)
-	s[sp-1].And(&s[sp+0], &s[sp-1])
-	s[sp+0].SetUint64(2658276013)
-	s[sp+1].Set(&aotCCTFExchangeV2_5)
-	s[sp+2].SetUint64(13926)
 	if contract.Gas < 32 { return nil, ErrOutOfGas }
 	contract.Gas -= 32
+	s[sp-1].Set(&aotCCTFExchangeV2_2)
+	s[sp+0].SetUint64(2658276013)
+	s[sp+1].Set(&aotCCTFExchangeV2_5)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 2
-	stack.top = sp
 	goto L13926
 
 L14166: // block @14166 (17 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
 	s[sp+1] = s[sp-2]
+	s[sp+0].SetUint64(64)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 1
-	pc = 14171
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(192)
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	s[sp+2] = s[sp-2]
+	s[sp+1].SetUint64(192)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 14176
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].Clear()
-	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+1]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
 	s[sp+3] = s[sp+1]
 	if s[sp+3].Lt(&s[sp+2]) { s[sp+2].SetOne() } else { s[sp+2].Clear() }
 	if s[sp+2].IsZero() { s[sp+2].SetOne() } else { s[sp+2].Clear() }
-	s[sp+3].SetUint64(14236)
 	if contract.Gas < 30 { return nil, ErrOutOfGas }
 	contract.Gas -= 30
 	if !s[sp+2].IsZero() {
+		s[sp+0].SetUint64(0)
 		sp += 2
-		stack.top = sp
 		goto L14236
 	}
+	s[sp+0].SetUint64(0)
 	sp += 2
 
 	// block @14187 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 14189
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_64)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 14224
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 14230
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_64)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -15616,330 +12400,254 @@ L14166: // block @14166 (17 instrs)
 	return res, nil
 
 L14236: // block @14236 (31 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-4]
 	s[sp+1].SetUint64(192)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 1
-	pc = 14241
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp-4]
 	s[sp+2].SetUint64(64)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 14246
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+1]); err != nil { return nil, err }
 	s[sp+0].Sub(&s[sp+1], &s[sp+0])
 	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
 	s[sp+0] = s[sp-4]
 	s[sp+1].SetUint64(192)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 17 { return nil, ErrOutOfGas }
-	contract.Gas -= 17
-	stack.top = sp + 1
-	pc = 14254
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 20 { return nil, ErrOutOfGas }
+	contract.Gas -= 20
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	s[sp+0], s[sp-2] = s[sp-2], s[sp+0]
-	s[sp+0].SetUint64(14276)
 	s[sp+1].SetBytes(contract.Address().Bytes())
 	s[sp+2] = s[sp-4]
 	s[sp+3].SetUint64(96)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 19 { return nil, ErrOutOfGas }
-	contract.Gas -= 19
-	stack.top = sp + 3
-	pc = 14265
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 22 { return nil, ErrOutOfGas }
+	contract.Gas -= 22
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
 	s[sp+3] = s[sp-4]
 	s[sp+4].SetUint64(128)
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 4
-	pc = 14270
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+3]); err != nil { return nil, err }
 	s[sp+4] = s[sp-1]
-	s[sp+5].SetUint64(9247)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(14276)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 5
-	stack.top = sp
 	goto L9247
 
 L14276: // block @14276 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(192)
 	s[sp+1] = s[sp-4]
+	s[sp+0].SetUint64(192)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 1
-	pc = 14281
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(14330)
 	if contract.Gas < 16 { return nil, ErrOutOfGas }
 	contract.Gas -= 16
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L14330
 	}
 
 	// block @14287 (15 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(3)
 	if contract.Gas < 3 { return nil, ErrOutOfGas }
 	contract.Gas -= 3
+	s[sp+0].SetUint64(3)
 	stack.top = sp + 1
-	pc = 14289
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(14330)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2].SetUint64(256)
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
+	s[sp+1] = s[sp+0]
+	s[sp+2] = s[sp+1]
+	s[sp+1].SetUint64(256)
 	s[sp+1].Div(&s[sp+2], &s[sp+1])
 	s[sp+2].Set(&aotCCTFExchangeV2_1)
 	s[sp+1].And(&s[sp+2], &s[sp+1])
 	s[sp+2] = s[sp-4]
 	s[sp+3].SetUint64(192)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 32 { return nil, ErrOutOfGas }
-	contract.Gas -= 32
-	stack.top = sp + 3
-	pc = 14325
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+3].SetUint64(13358)
+	if contract.Gas < 35 { return nil, ErrOutOfGas }
+	contract.Gas -= 35
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
 	if contract.Gas < 11 { return nil, ErrOutOfGas }
 	contract.Gas -= 11
+	s[sp+0].SetUint64(14330)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 3
-	stack.top = sp
 	goto L13358
 
 L14330: // block @14330 (45 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(14506)
-	s[sp+1].SetUint64(64)
-	if contract.Gas < 7 { return nil, ErrOutOfGas }
-	contract.Gas -= 7
-	stack.top = sp + 2
-	pc = 14336
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 10 { return nil, ErrOutOfGas }
+	contract.Gas -= 10
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+3].SetUint64(320)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	s[sp+3].SetUint64(64)
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 4
-	pc = 14344
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMstoreC(contract, mem, 64, &s[sp+2]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-4]
-	s[sp+4].Clear()
+	s[sp+4].SetUint64(0)
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
-	if contract.Gas < 11 { return nil, ErrOutOfGas }
-	contract.Gas -= 11
-	stack.top = sp + 4
-	pc = 14349
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 14 { return nil, ErrOutOfGas }
+	contract.Gas -= 14
+	if err = aotMload(contract, mem, &s[sp+3]); err != nil { return nil, err }
 	s[sp+4] = s[sp+2]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 5
-	pc = 14351
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstore(contract, mem, &s[sp+4], &s[sp+3]); err != nil { return nil, err }
 	s[sp+3].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
 	s[sp+3] = s[sp-4]
 	s[sp+4].SetUint64(96)
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 4
-	pc = 14359
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp+3]); err != nil { return nil, err }
 	s[sp+4].Set(&aotCCTFExchangeV2_1)
 	s[sp+3].And(&s[sp+4], &s[sp+3])
 	s[sp+4] = s[sp+2]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 5
-	pc = 14383
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMstore(contract, mem, &s[sp+4], &s[sp+3]); err != nil { return nil, err }
 	s[sp+3].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
 	s[sp+3] = s[sp-3]
 	s[sp+4].Set(&aotCCTFExchangeV2_1)
 	s[sp+3].And(&s[sp+4], &s[sp+3])
 	s[sp+4] = s[sp+2]
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + 5
-	pc = 14411
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 21 { return nil, ErrOutOfGas }
+	contract.Gas -= 21
+	if err = aotMstore(contract, mem, &s[sp+4], &s[sp+3]); err != nil { return nil, err }
 	s[sp+3].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
 	s[sp+3] = s[sp-4]
 	s[sp+4].SetUint64(160)
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 4
-	pc = 14419
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+4].SetUint64(1)
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp+3]); err != nil { return nil, err }
 	s[sp+5] = s[sp+3]
+	s[sp+4].SetUint64(1)
 	if s[sp+5].Gt(&s[sp+4]) { s[sp+4].SetOne() } else { s[sp+4].Clear() }
 	if s[sp+4].IsZero() { s[sp+4].SetOne() } else { s[sp+4].Clear() }
-	s[sp+5].SetUint64(14436)
 	if contract.Gas < 25 { return nil, ErrOutOfGas }
 	contract.Gas -= 25
 	if !s[sp+4].IsZero() {
+		s[sp+0].SetUint64(14506)
 		sp += 4
-		stack.top = sp
 		goto L14436
 	}
+	s[sp+0].SetUint64(14506)
 	sp += 4
 
 	// block @14429 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(14436)
-	s[sp+1].SetUint64(20700)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(14436)
 	sp += 1
-	stack.top = sp
 	goto L20700
 
 L14436: // block @14436 (54 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 8 { return nil, &ErrStackUnderflow{stackLen: sp, required: 8} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 14438
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-8]
 	s[sp+0].SetUint64(288)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 0
-	pc = 14447
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 14449
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-8]
 	s[sp+0].SetUint64(32)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 0
-	pc = 14457
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 14459
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-8]
 	s[sp+0].SetUint64(64)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 0
-	pc = 14467
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 14469
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-8]
 	s[sp+0].SetUint64(192)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 0
-	pc = 14477
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 14479
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-8]
 	s[sp+0].SetUint64(224)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 0
-	pc = 14487
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 14489
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-8]
 	s[sp+0].SetUint64(256)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 0
-	pc = 14498
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 14500
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp-2].SetUint64(14833)
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	if contract.Gas < 13 { return nil, ErrOutOfGas }
 	contract.Gas -= 13
 	sp += -2
-	stack.top = sp
 	goto L14833
 
 L14506: // block @14506 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	s[sp-2], s[sp-5] = s[sp-5], s[sp-2]
 	s[sp-2], s[sp-4] = s[sp-4], s[sp-2]
@@ -15952,368 +12660,288 @@ L14506: // block @14506 (7 instrs)
 	goto dispatch
 
 L14513: // block @14513 (18 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+7 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(14538)
 	s[sp+2].SetBytes(contract.Address().Bytes())
 	s[sp+3] = s[sp-2]
 	s[sp+4].SetUint64(96)
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
-	if contract.Gas < 17 { return nil, ErrOutOfGas }
-	contract.Gas -= 17
-	stack.top = sp + 4
-	pc = 14523
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 20 { return nil, ErrOutOfGas }
+	contract.Gas -= 20
+	if err = aotMload(contract, mem, &s[sp+3]); err != nil { return nil, err }
 	s[sp+4] = s[sp-2]
 	s[sp+5].SetUint64(128)
 	s[sp+4].Add(&s[sp+5], &s[sp+4])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 5
-	pc = 14528
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+4]); err != nil { return nil, err }
 	s[sp+5] = s[sp-2]
 	s[sp+6].SetUint64(64)
 	s[sp+5].Add(&s[sp+6], &s[sp+5])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 6
-	pc = 14533
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+6].SetUint64(9247)
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+5]); err != nil { return nil, err }
 	if contract.Gas < 11 { return nil, ErrOutOfGas }
 	contract.Gas -= 11
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(14538)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 6
-	stack.top = sp
 	goto L9247
 
 L14538: // block @14538 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(192)
 	s[sp+1] = s[sp-3]
+	s[sp+0].SetUint64(192)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 1
-	pc = 14543
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(14594)
 	if contract.Gas < 16 { return nil, ErrOutOfGas }
 	contract.Gas -= 16
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L14594
 	}
 
 	// block @14549 (17 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp-1].SetUint64(192)
 	s[sp+0] = s[sp-3]
+	s[sp-1].SetUint64(192)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	if contract.Gas < 11 { return nil, ErrOutOfGas }
-	contract.Gas -= 11
-	stack.top = sp + 0
-	pc = 14554
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].SetUint64(3)
+	if contract.Gas < 14 { return nil, ErrOutOfGas }
+	contract.Gas -= 14
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
 	if contract.Gas < 3 { return nil, ErrOutOfGas }
 	contract.Gas -= 3
+	s[sp+0].SetUint64(3)
 	stack.top = sp + 1
-	pc = 14557
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(14594)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2].SetUint64(256)
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
+	s[sp+1] = s[sp+0]
+	s[sp+2] = s[sp+1]
+	s[sp+1].SetUint64(256)
 	s[sp+1].Div(&s[sp+2], &s[sp+1])
 	s[sp+2].Set(&aotCCTFExchangeV2_1)
 	s[sp+1].And(&s[sp+2], &s[sp+1])
 	s[sp+2] = s[sp-1]
-	s[sp+3].SetUint64(13358)
 	if contract.Gas < 37 { return nil, ErrOutOfGas }
 	contract.Gas -= 37
+	s[sp+0].SetUint64(14594)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 3
-	stack.top = sp
 	goto L13358
 
 L14594: // block @14594 (45 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(2356)
-	s[sp+1].SetUint64(64)
-	if contract.Gas < 7 { return nil, ErrOutOfGas }
-	contract.Gas -= 7
-	stack.top = sp + 2
-	pc = 14600
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 10 { return nil, ErrOutOfGas }
+	contract.Gas -= 10
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+3].SetUint64(320)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	s[sp+3].SetUint64(64)
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 4
-	pc = 14608
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMstoreC(contract, mem, 64, &s[sp+2]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-3]
-	s[sp+4].Clear()
+	s[sp+4].SetUint64(0)
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
-	if contract.Gas < 11 { return nil, ErrOutOfGas }
-	contract.Gas -= 11
-	stack.top = sp + 4
-	pc = 14613
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 14 { return nil, ErrOutOfGas }
+	contract.Gas -= 14
+	if err = aotMload(contract, mem, &s[sp+3]); err != nil { return nil, err }
 	s[sp+4] = s[sp+2]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 5
-	pc = 14615
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstore(contract, mem, &s[sp+4], &s[sp+3]); err != nil { return nil, err }
 	s[sp+3].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
 	s[sp+3] = s[sp-3]
 	s[sp+4].SetUint64(96)
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 4
-	pc = 14623
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp+3]); err != nil { return nil, err }
 	s[sp+4].Set(&aotCCTFExchangeV2_1)
 	s[sp+3].And(&s[sp+4], &s[sp+3])
 	s[sp+4] = s[sp+2]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 5
-	pc = 14647
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMstore(contract, mem, &s[sp+4], &s[sp+3]); err != nil { return nil, err }
 	s[sp+3].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
 	s[sp+3] = s[sp-2]
 	s[sp+4].Set(&aotCCTFExchangeV2_1)
 	s[sp+3].And(&s[sp+4], &s[sp+3])
 	s[sp+4] = s[sp+2]
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + 5
-	pc = 14675
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 21 { return nil, ErrOutOfGas }
+	contract.Gas -= 21
+	if err = aotMstore(contract, mem, &s[sp+4], &s[sp+3]); err != nil { return nil, err }
 	s[sp+3].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
 	s[sp+3] = s[sp-3]
 	s[sp+4].SetUint64(160)
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 4
-	pc = 14683
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+4].SetUint64(1)
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp+3]); err != nil { return nil, err }
 	s[sp+5] = s[sp+3]
+	s[sp+4].SetUint64(1)
 	if s[sp+5].Gt(&s[sp+4]) { s[sp+4].SetOne() } else { s[sp+4].Clear() }
 	if s[sp+4].IsZero() { s[sp+4].SetOne() } else { s[sp+4].Clear() }
-	s[sp+5].SetUint64(14700)
 	if contract.Gas < 25 { return nil, ErrOutOfGas }
 	contract.Gas -= 25
 	if !s[sp+4].IsZero() {
+		s[sp+0].SetUint64(2356)
 		sp += 4
-		stack.top = sp
 		goto L14700
 	}
+	s[sp+0].SetUint64(2356)
 	sp += 4
 
 	// block @14693 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(14700)
-	s[sp+1].SetUint64(20700)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(14700)
 	sp += 1
-	stack.top = sp
 	goto L20700
 
 L14700: // block @14700 (54 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 7 { return nil, &ErrStackUnderflow{stackLen: sp, required: 7} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 14702
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-7]
 	s[sp+0].SetUint64(288)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 0
-	pc = 14711
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 14713
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-7]
 	s[sp+0].SetUint64(32)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 0
-	pc = 14721
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 14723
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-7]
 	s[sp+0].SetUint64(64)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 0
-	pc = 14731
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 14733
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-7]
 	s[sp+0].SetUint64(192)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 0
-	pc = 14741
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 14743
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-7]
 	s[sp+0].SetUint64(224)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 0
-	pc = 14751
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 14753
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-1] = s[sp-7]
 	s[sp+0].SetUint64(256)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 0
-	pc = 14762
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 14764
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp-2].SetUint64(14833)
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	if contract.Gas < 13 { return nil, ErrOutOfGas }
 	contract.Gas -= 13
 	sp += -2
-	stack.top = sp
 	goto L14833
 
 L14770: // block @14770 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(2457)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
+		if interrupt.Load() { return nil, ErrInterrupt }
 		goto L2457
 	}
 
 	// block @14777 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+7 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(3)
 	if contract.Gas < 3 { return nil, ErrOutOfGas }
 	contract.Gas -= 3
+	s[sp+0].SetUint64(3)
 	stack.top = sp + 1
-	pc = 14779
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(256)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
+	if err = aotSload(evm, contract, scope, jt); err != nil { return nil, err }
+	s[sp+1] = s[sp+0]
+	s[sp+0].SetUint64(256)
 	s[sp+0].Div(&s[sp+1], &s[sp+0])
 	s[sp+1].Set(&aotCCTFExchangeV2_1)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(14818)
 	s[sp+2] = s[sp-2]
 	s[sp+3] = s[sp+0]
-	s[sp+4].Clear()
 	s[sp+5] = s[sp-1]
-	s[sp+6].SetUint64(9247)
 	if contract.Gas < 42 { return nil, ErrOutOfGas }
 	contract.Gas -= 42
+	s[sp+1].SetUint64(14818)
+	s[sp+4].SetUint64(0)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 6
-	stack.top = sp
 	goto L9247
 
 L14818: // block @14818 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(14828)
 	s[sp+1] = s[sp-1]
 	s[sp+2] = s[sp-2]
-	s[sp+3].SetUint64(13358)
 	if contract.Gas < 21 { return nil, ErrOutOfGas }
 	contract.Gas -= 21
+	s[sp+0].SetUint64(14828)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 3
-	stack.top = sp
 	goto L13358
 
 L14828: // block @14828 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
@@ -16324,155 +12952,115 @@ L14828: // block @14828 (5 instrs)
 	goto dispatch
 
 L14833: // block @14833 (79 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+8 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Set(&aotCCTFExchangeV2_80)
-	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+1].SetUint64(64)
-	if contract.Gas < 14 { return nil, ErrOutOfGas }
-	contract.Gas -= 14
-	stack.top = sp + 2
-	pc = 14872
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 17 { return nil, ErrOutOfGas }
+	contract.Gas -= 17
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
+	s[sp+3] = s[sp-1]
 	s[sp+2].SetUint64(96)
-	s[sp+3] = s[sp-1]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 14877
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
 	s[sp+3] = s[sp+1]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 4
-	pc = 14879
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
+	s[sp+3] = s[sp-1]
 	s[sp+2].SetUint64(128)
-	s[sp+3] = s[sp-1]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 14884
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+3].SetUint64(32)
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
 	s[sp+4] = s[sp+1]
+	s[sp+3].SetUint64(32)
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 4
-	pc = 14889
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
+	s[sp+3] = s[sp-1]
 	s[sp+2].SetUint64(160)
-	s[sp+3] = s[sp-1]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 14894
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
+	s[sp+4] = s[sp+1]
 	s[sp+3].SetUint64(64)
-	s[sp+4] = s[sp+1]
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 4
-	pc = 14899
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
+	s[sp+3] = s[sp-1]
 	s[sp+2].SetUint64(192)
-	s[sp+3] = s[sp-1]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 14904
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
+	s[sp+4] = s[sp+1]
 	s[sp+3].SetUint64(96)
-	s[sp+4] = s[sp+1]
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 4
-	pc = 14909
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
+	s[sp+3] = s[sp-1]
 	s[sp+2].SetUint64(224)
-	s[sp+3] = s[sp-1]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 14914
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
+	s[sp+4] = s[sp+1]
 	s[sp+3].SetUint64(128)
-	s[sp+4] = s[sp+1]
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 4
-	pc = 14919
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
+	s[sp+3] = s[sp-1]
 	s[sp+2].SetUint64(256)
-	s[sp+3] = s[sp-1]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 14925
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
+	s[sp+4] = s[sp+1]
 	s[sp+3].SetUint64(160)
-	s[sp+4] = s[sp+1]
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 4
-	pc = 14930
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
+	s[sp+3] = s[sp-1]
 	s[sp+2].SetUint64(288)
-	s[sp+3] = s[sp-1]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 14936
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+3].SetUint64(192)
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
 	s[sp+4] = s[sp+1]
+	s[sp+3].SetUint64(192)
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 4
-	pc = 14941
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(64)
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
 	s[sp+3] = s[sp-1]
+	s[sp+2].SetUint64(64)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 3
-	pc = 14946
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
+	s[sp+4] = s[sp-1]
 	s[sp+3].SetUint64(32)
-	s[sp+4] = s[sp-1]
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 4
-	pc = 14951
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+3]); err != nil { return nil, err }
 	s[sp+4] = s[sp-1]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 5
-	pc = 14953
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+5] = s[sp+0]
-	s[sp+6].SetUint64(224)
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMload(contract, mem, &s[sp+4]); err != nil { return nil, err }
 	s[sp+7] = s[sp+1]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
+	s[sp+0].Set(&aotCCTFExchangeV2_80)
+	s[sp+5].Set(&aotCCTFExchangeV2_80)
+	s[sp+6].SetUint64(224)
 	stack.top = sp + 8
 	pc = 14958
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
@@ -16485,25 +13073,21 @@ L14833: // block @14833 (79 instrs)
 	goto dispatch
 
 L14963: // block @14963 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
 	s[sp+1] = s[sp-3]
 	s[sp+2].Set(&aotCCTFExchangeV2_1)
 	s[sp+1].And(&s[sp+2], &s[sp+1])
-	s[sp+2].SetUint64(14997)
 	s[sp+3] = s[sp-2]
 	s[sp+4] = s[sp-1]
-	s[sp+5].SetUint64(17941)
 	if contract.Gas < 32 { return nil, ErrOutOfGas }
 	contract.Gas -= 32
+	s[sp+0].SetUint64(0)
+	s[sp+2].SetUint64(14997)
 	sp += 5
-	stack.top = sp
 	goto L17941
 
 L14997: // block @14997 (11 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 7 { return nil, &ErrStackUnderflow{stackLen: sp, required: 7} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].Set(&aotCCTFExchangeV2_1)
@@ -16520,315 +13104,243 @@ L14997: // block @14997 (11 instrs)
 	goto dispatch
 
 L15028: // block @15028 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Set(&aotCCTFExchangeV2_1)
 	s[sp+2] = s[sp-3]
+	s[sp+1].Set(&aotCCTFExchangeV2_1)
 	s[sp+1].And(&s[sp+2], &s[sp+1])
 	if s[sp+1].IsZero() { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(2968)
 	if contract.Gas < 28 { return nil, ErrOutOfGas }
 	contract.Gas -= 28
 	if !s[sp+1].IsZero() {
+		s[sp+0].SetUint64(0)
+		if interrupt.Load() { return nil, ErrInterrupt }
 		sp += 1
-		stack.top = sp
 		goto L2968
 	}
+	s[sp+0].SetUint64(0)
 	sp += 1
 
 	// block @15058 (6 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 15060
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp-4]
 	if contract.Gas < 3 { return nil, ErrOutOfGas }
 	contract.Gas -= 3
 	stack.top = sp + 2
 	pc = 15062
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(15215)
 	if contract.Gas < 13 { return nil, ErrOutOfGas }
 	contract.Gas -= 13
 	if !s[sp+1].IsZero() {
 		sp += 1
-		stack.top = sp
 		goto L15215
 	}
 	sp += 1
 
 	// block @15067 (7 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-3]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 15068
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(64)
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	s[sp+2] = s[sp+0]
+	s[sp+1].SetUint64(64)
 	if s[sp+2].Eq(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(15090)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+1].IsZero() {
 		sp += 1
-		stack.top = sp
 		goto L15090
 	}
 	sp += 1
 
 	// block @15077 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(65)
 	s[sp+1] = s[sp-1]
+	s[sp+0].SetUint64(65)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(15148)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L15148
 	}
 
 	// block @15085 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
-	s[sp-1].SetUint64(12806)
 	if contract.Gas < 13 { return nil, ErrOutOfGas }
 	contract.Gas -= 13
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += -1
-	stack.top = sp
 	goto L12806
 
 L15090: // block @15090 (19 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
 	s[sp+1] = s[sp-4]
+	s[sp+0].SetUint64(64)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 1
-	pc = 15095
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(255)
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	s[sp+2] = s[sp+0]
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	if s[sp+2].LtUint64(256) { s[sp+1].Rsh(&s[sp+1], uint(s[sp+2].Uint64())) } else { s[sp+1].Clear() }
+	s[sp+1] = s[sp+2]
+	s[sp+1].Rsh(&s[sp+1], 255)
 	s[sp+2].SetUint64(27)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	s[sp+2].SetUint64(32)
-	if contract.Gas < 21 { return nil, ErrOutOfGas }
-	contract.Gas -= 21
-	stack.top = sp + 3
-	pc = 15106
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 24 { return nil, ErrOutOfGas }
+	contract.Gas -= 24
+	if err = aotMstoreC(contract, mem, 32, &s[sp+1]); err != nil { return nil, err }
 	s[sp+1].Set(&aotCCTFExchangeV2_81)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(96)
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 15143
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].SetUint64(15167)
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMstoreC(contract, mem, 96, &s[sp+0]); err != nil { return nil, err }
 	if contract.Gas < 11 { return nil, ErrOutOfGas }
 	contract.Gas -= 11
-	sp += 0
-	stack.top = sp
 	goto L15167
 
 L15148: // block @15148 (15 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
+	s[sp+1] = s[sp-4]
 	s[sp+0].SetUint64(96)
-	s[sp+1] = s[sp-4]
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 1
-	pc = 15153
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Clear()
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
+	s[sp+1].SetUint64(0)
 	s[sp+0].Byte(&s[sp+1])
-	s[sp+1].SetUint64(32)
-	if contract.Gas < 8 { return nil, ErrOutOfGas }
-	contract.Gas -= 8
-	stack.top = sp + 2
-	pc = 15158
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].SetUint64(64)
+	if contract.Gas < 11 { return nil, ErrOutOfGas }
+	contract.Gas -= 11
+	if err = aotMstoreC(contract, mem, 32, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp-4]
+	s[sp+0].SetUint64(64)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 1
-	pc = 15163
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(96)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 2
-	pc = 15166
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstoreC(contract, mem, 96, &s[sp+0]); err != nil { return nil, err }
 
 L15167: // block @15167 (37 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1] = s[sp-5]
-	s[sp+0].Clear()
-	if contract.Gas < 8 { return nil, ErrOutOfGas }
-	contract.Gas -= 8
-	stack.top = sp + 1
-	pc = 15171
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp-1].SetUint64(32)
+	if contract.Gas < 11 { return nil, ErrOutOfGas }
+	contract.Gas -= 11
+	if err = aotMstoreC(contract, mem, 0, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-4]
-	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 0
-	pc = 15176
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 15179
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	s[sp-1].SetUint64(32)
-	s[sp+0].SetUint64(1)
-	s[sp+1].SetUint64(128)
-	s[sp+2].Clear()
-	s[sp+3].SetUint64(1)
+	s[sp-1].Add(&s[sp+0], &s[sp-1])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstoreC(contract, mem, 64, &s[sp-1]); err != nil { return nil, err }
 	if contract.Gas < 16 { return nil, ErrOutOfGas }
 	contract.Gas -= 16
 	s[sp+4].SetUint64(contract.Gas)
+	s[sp-1].SetUint64(32)
+	s[sp+0].SetUint64(1)
+	s[sp+1].SetUint64(128)
+	s[sp+2].SetUint64(0)
+	s[sp+3].SetUint64(1)
 	stack.top = sp + 5
 	pc = 15190
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	stack.top = sp + 0
-	pc = 15191
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 3 { return nil, ErrOutOfGas }
+	contract.Gas -= 3
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-1]
 	s[sp+1] = s[sp-6]
 	s[sp+0].Xor(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(96)
-	if s[sp+1].LtUint64(256) { s[sp+0].Lsh(&s[sp+0], uint(s[sp+1].Uint64())) } else { s[sp+0].Clear() }
+	s[sp+0].Lsh(&s[sp+0], 96)
 	s[sp+1].SetUint64(uint64(len(evm.returnData)))
 	if s[sp+1].Gt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
 	s[sp+0], s[sp-3] = s[sp-3], s[sp+0]
-	s[sp-1].Clear()
-	s[sp+0].SetUint64(96)
-	if contract.Gas < 32 { return nil, ErrOutOfGas }
-	contract.Gas -= 32
-	stack.top = sp + 1
-	pc = 15206
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 35 { return nil, ErrOutOfGas }
+	contract.Gas -= 35
+	s[sp-1].SetUint64(0)
+	if err = aotMstoreC(contract, mem, 96, &s[sp-1]); err != nil { return nil, err }
 	s[sp-1] = s[sp-2]
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 1
-	pc = 15210
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp-1].SetUint64(12806)
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	if err = aotMstoreC(contract, mem, 64, &s[sp-1]); err != nil { return nil, err }
 	if contract.Gas < 11 { return nil, ErrOutOfGas }
 	contract.Gas -= 11
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += -1
-	stack.top = sp
 	goto L12806
 
 L15215: // block @15215 (57 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+9 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(371636862)
-	s[sp+1].SetUint64(224)
-	if s[sp+1].LtUint64(256) { s[sp+0].Lsh(&s[sp+0], uint(s[sp+1].Uint64())) } else { s[sp+0].Clear() }
-	s[sp+1] = s[sp+0]
 	s[sp+2] = s[sp-1]
-	if contract.Gas < 16 { return nil, ErrOutOfGas }
-	contract.Gas -= 16
-	stack.top = sp + 3
-	pc = 15226
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 19 { return nil, ErrOutOfGas }
+	contract.Gas -= 19
+	s[sp+1].Set(&aotCCTFExchangeV2_82)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
 	s[sp+1] = s[sp-4]
-	s[sp+2].SetUint64(4)
 	s[sp+3] = s[sp-1]
+	s[sp+2].SetUint64(4)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 3
-	pc = 15232
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(36)
-	s[sp+2] = s[sp-1]
-	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	s[sp+2].SetUint64(64)
-	s[sp+3] = s[sp+1]
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
-	stack.top = sp + 4
-	pc = 15240
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+2] = s[sp-1]
+	s[sp+1].SetUint64(36)
+	s[sp+1].Add(&s[sp+2], &s[sp+1])
+	s[sp+3] = s[sp+1]
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	s[sp+2].SetUint64(64)
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
 	s[sp+2] = s[sp-3]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 3
-	pc = 15242
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
 	s[sp+3].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
 	s[sp+3] = s[sp+2]
-	s[sp+4].SetUint64(68)
 	s[sp+5] = s[sp-1]
+	s[sp+4].SetUint64(68)
 	s[sp+4].Add(&s[sp+5], &s[sp+4])
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp-3]
-	s[sp+7].SetUint64(4)
 	if contract.Gas < 29 { return nil, ErrOutOfGas }
 	contract.Gas -= 29
 	s[sp+8].SetUint64(contract.Gas)
+	s[sp+0].Set(&aotCCTFExchangeV2_82)
+	s[sp+7].SetUint64(4)
 	stack.top = sp + 9
 	pc = 15256
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
-	s[sp+3].SetUint64(32)
 	s[sp+4] = s[sp+1]
-	s[sp+5].SetUint64(68)
 	s[sp+6].SetUint64(uint64(len(evm.returnData)))
+	s[sp+5].SetUint64(68)
 	s[sp+5].Add(&s[sp+6], &s[sp+5])
 	s[sp+6] = s[sp-1]
 	s[sp+7] = s[sp-5]
 	if contract.Gas < 27 { return nil, ErrOutOfGas }
 	contract.Gas -= 27
 	s[sp+8].SetUint64(contract.Gas)
+	s[sp+3].SetUint64(32)
 	stack.top = sp + 9
 	pc = 15269
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	s[sp+3], s[sp+1] = s[sp+1], s[sp+3]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 4
-	pc = 15271
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMload(contract, mem, &s[sp+3]); err != nil { return nil, err }
 	s[sp+3], s[sp+1] = s[sp+1], s[sp+3]
 	s[sp+2].And(&s[sp+3], &s[sp+2])
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
@@ -16845,1619 +13357,1293 @@ L15215: // block @15215 (57 instrs)
 	goto dispatch
 
 L15285: // block @15285 (1942 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+8 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Set(&aotCCTFExchangeV2_72)
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp+3]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
-	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
-	s[sp+2] = s[sp+1]
+	s[sp+0] = s[sp+2]
 	s[sp+3] = s[sp+0]
 	s[sp+4] = s[sp+0]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
-	s[sp+3] = s[sp+1]
 	s[sp+4] = s[sp+2]
 	s[sp+5] = s[sp+2]
 	s[sp+3].MulModWithReciprocal(&s[sp+5], &s[sp+4], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
-	s[sp+3] = s[sp+1]
 	s[sp+4] = s[sp+2]
 	s[sp+5] = s[sp+0]
 	s[sp+3].MulModWithReciprocal(&s[sp+5], &s[sp+4], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+3], s[sp+0] = s[sp+0], s[sp+3]
-	s[sp+3] = s[sp+1]
 	s[sp+4] = s[sp+0]
 	s[sp+5] = s[sp-1]
 	s[sp+3].MulModWithReciprocal(&s[sp+5], &s[sp+4], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+3], s[sp-1] = s[sp-1], s[sp+3]
-	s[sp+3] = s[sp+1]
 	s[sp+4] = s[sp-1]
 	s[sp+5] = s[sp+0]
 	s[sp+3].MulModWithReciprocal(&s[sp+5], &s[sp+4], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+3], s[sp+0] = s[sp+0], s[sp+3]
-	s[sp+3] = s[sp+1]
 	s[sp+4] = s[sp+0]
 	s[sp+5] = s[sp+0]
 	s[sp+3].MulModWithReciprocal(&s[sp+5], &s[sp+4], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
-	s[sp+3] = s[sp+1]
 	s[sp+4] = s[sp+2]
 	s[sp+5] = s[sp+2]
 	s[sp+3].MulModWithReciprocal(&s[sp+5], &s[sp+4], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+3]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+3]
 	s[sp+6] = s[sp+3]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+3]
 	s[sp+6] = s[sp+3]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+3]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp-1] = s[sp-1], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp-1]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+0] = s[sp+0], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+0]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp-1] = s[sp-1], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp-1]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+0] = s[sp+0], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+0]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp-1] = s[sp-1], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp-1]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+0] = s[sp+0], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+0]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+3]
 	s[sp+6] = s[sp+3]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+3]
 	s[sp+6] = s[sp+3]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+3]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp-1] = s[sp-1], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp-1]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+0] = s[sp+0], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+0]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp-1] = s[sp-1], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp-1]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+0] = s[sp+0], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+0]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+3]
 	s[sp+6] = s[sp+3]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+3]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+3]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+3]
 	s[sp+6] = s[sp+3]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+3]
 	s[sp+6] = s[sp+3]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+3]
 	s[sp+6] = s[sp+3]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+3]
 	s[sp+6] = s[sp+3]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+3]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp-1] = s[sp-1], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp-1]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+0] = s[sp+0], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+0]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+3]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+3]
 	s[sp+6] = s[sp+3]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
-	s[sp+5] = s[sp+1]
 	s[sp+6] = s[sp+4]
 	s[sp+7] = s[sp+4]
 	s[sp+5].MulModWithReciprocal(&s[sp+7], &s[sp+6], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+5], s[sp+4] = s[sp+4], s[sp+5]
-	s[sp+5] = s[sp+1]
 	s[sp+6] = s[sp+4]
 	s[sp+7] = s[sp+4]
 	s[sp+5].MulModWithReciprocal(&s[sp+7], &s[sp+6], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+5], s[sp+4] = s[sp+4], s[sp+5]
-	s[sp+5] = s[sp+1]
 	s[sp+6] = s[sp+4]
 	s[sp+7] = s[sp+4]
 	s[sp+5].MulModWithReciprocal(&s[sp+7], &s[sp+6], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+5], s[sp+4] = s[sp+4], s[sp+5]
-	s[sp+5] = s[sp+1]
 	s[sp+6] = s[sp+4]
 	s[sp+7] = s[sp+4]
 	s[sp+5].MulModWithReciprocal(&s[sp+7], &s[sp+6], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+5], s[sp+4] = s[sp+4], s[sp+5]
-	s[sp+5] = s[sp+1]
 	s[sp+6] = s[sp+4]
 	s[sp+7] = s[sp+3]
 	s[sp+5].MulModWithReciprocal(&s[sp+7], &s[sp+6], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+5], s[sp+3] = s[sp+3], s[sp+5]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+3]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp-1] = s[sp-1], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp-1]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+0] = s[sp+0], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+0]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp-1] = s[sp-1], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp-1]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+0] = s[sp+0], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+0]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp-1] = s[sp-1], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp-1]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+0] = s[sp+0], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+0]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp-1] = s[sp-1], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp-1]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+0] = s[sp+0], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+0]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp-1] = s[sp-1], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp-1]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+0] = s[sp+0], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+0]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp-1] = s[sp-1], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp-1]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+0] = s[sp+0], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+0]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp-1] = s[sp-1], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp-1]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+0] = s[sp+0], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+0]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp-1] = s[sp-1], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp-1]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+0] = s[sp+0], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+0]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp-1] = s[sp-1], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp-1]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+0] = s[sp+0], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+0]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp-1] = s[sp-1], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp-1]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+0] = s[sp+0], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+0]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp-1] = s[sp-1], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp-1]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+0] = s[sp+0], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+0]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp-1] = s[sp-1], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp-1]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+3]
 	s[sp+6] = s[sp+3]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+3]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+3]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+3]
 	s[sp+6] = s[sp+3]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+3]
 	s[sp+6] = s[sp+3]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+3]
 	s[sp+6] = s[sp+3]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+3]
 	s[sp+6] = s[sp+3]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+3]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+0] = s[sp+0], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+0]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp-1] = s[sp-1], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp-1]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+0] = s[sp+0], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+0]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp-1] = s[sp-1], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp-1]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+0] = s[sp+0], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+0]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp-1] = s[sp-1], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp-1]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+0] = s[sp+0], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+0]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp-1] = s[sp-1], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp-1]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+0] = s[sp+0], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+0]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp-1] = s[sp-1], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp-1]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+0] = s[sp+0], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+0]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp-1] = s[sp-1], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp-1]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+0] = s[sp+0], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+0]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp-1] = s[sp-1], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp-1]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+0] = s[sp+0], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+0]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp-1] = s[sp-1], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp-1]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+0] = s[sp+0], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+0]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp-1] = s[sp-1], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp-1]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+3]
 	s[sp+6] = s[sp+3]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+3]
 	s[sp+6] = s[sp+3]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+3]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+0] = s[sp+0], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+0]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp-1] = s[sp-1], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp-1]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+0] = s[sp+0], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+0]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp-1] = s[sp-1], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp-1]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+0] = s[sp+0], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+0]
 	s[sp+6] = s[sp-1]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp-1] = s[sp-1], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp-1]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+0] = s[sp+0], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+0]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+3] = s[sp+3], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+3]
 	s[sp+6] = s[sp+0]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+2]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp+2]
 	s[sp+6] = s[sp+3]
 	s[sp+4].MulModWithReciprocal(&s[sp+6], &s[sp+5], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+4], s[sp+2] = s[sp+2], s[sp+4]
-	s[sp+3] = s[sp+1]
 	s[sp+4] = s[sp+2]
 	s[sp+5] = s[sp-1]
 	s[sp+3].MulModWithReciprocal(&s[sp+5], &s[sp+4], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+3], s[sp-1] = s[sp-1], s[sp+3]
-	s[sp+3] = s[sp+1]
 	s[sp+4] = s[sp-1]
 	s[sp+5] = s[sp+0]
 	s[sp+3].MulModWithReciprocal(&s[sp+5], &s[sp+4], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+3], s[sp+0] = s[sp+0], s[sp+3]
-	s[sp+3] = s[sp+1]
 	s[sp+4] = s[sp+0]
 	s[sp+5] = s[sp-1]
 	s[sp+3].MulModWithReciprocal(&s[sp+5], &s[sp+4], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+3], s[sp-1] = s[sp-1], s[sp+3]
-	s[sp+3] = s[sp+1]
 	s[sp+4] = s[sp-1]
 	s[sp+5] = s[sp+0]
 	s[sp+3].MulModWithReciprocal(&s[sp+5], &s[sp+4], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+3], s[sp+0] = s[sp+0], s[sp+3]
-	s[sp+3] = s[sp+1]
 	s[sp+4] = s[sp+0]
 	s[sp+5] = s[sp-1]
 	s[sp+3].MulModWithReciprocal(&s[sp+5], &s[sp+4], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+3], s[sp-1] = s[sp-1], s[sp+3]
-	s[sp+3] = s[sp+1]
 	s[sp+4] = s[sp-1]
 	s[sp+5] = s[sp-1]
 	s[sp+3].MulModWithReciprocal(&s[sp+5], &s[sp+4], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
-	s[sp+3] = s[sp+1]
 	s[sp+4] = s[sp+2]
 	s[sp+5] = s[sp-1]
 	s[sp+3].MulModWithReciprocal(&s[sp+5], &s[sp+4], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
-	s[sp+3] = s[sp+1]
 	s[sp+4] = s[sp+2]
 	s[sp+5] = s[sp+0]
 	s[sp+3].MulModWithReciprocal(&s[sp+5], &s[sp+4], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+3], s[sp+0] = s[sp+0], s[sp+3]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp+0]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-1]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
 	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp+0]
 	s[sp+2].MulModWithReciprocal(&s[sp+4], &s[sp+3], &aotCCTFExchangeV2_72, &aotCCTFExchangeV2_72R)
@@ -18472,104 +14658,79 @@ L15285: // block @15285 (1942 instrs)
 	goto dispatch
 
 L17259: // block @17259 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
 	s[sp+1] = s[sp-1]
-	s[sp+2].SetUint64(2)
 	s[sp+3] = s[sp+1]
+	s[sp+2].SetUint64(2)
 	if s[sp+3].Gt(&s[sp+2]) { s[sp+2].SetOne() } else { s[sp+2].Clear() }
 	if s[sp+2].IsZero() { s[sp+2].SetOne() } else { s[sp+2].Clear() }
-	s[sp+3].SetUint64(17278)
 	if contract.Gas < 31 { return nil, ErrOutOfGas }
 	contract.Gas -= 31
 	if !s[sp+2].IsZero() {
+		s[sp+0].SetUint64(0)
 		sp += 2
-		stack.top = sp
 		goto L17278
 	}
+	s[sp+0].SetUint64(0)
 	sp += 2
 
 	// block @17271 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(17278)
-	s[sp+1].SetUint64(20700)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(17278)
 	sp += 1
-	stack.top = sp
 	goto L20700
 
 L17278: // block @17278 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	s[sp-2].Sub(&s[sp-1], &s[sp-2])
-	s[sp-1].SetUint64(17444)
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
 	if !s[sp-2].IsZero() {
 		sp += -2
-		stack.top = sp
 		goto L17444
 	}
 	sp += -2
 
 	// block @17284 (11 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-2]
 	s[sp+1].SetUint64(96)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 1
-	pc = 17288
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp-3]
 	s[sp+2].SetUint64(96)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 17293
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+1]); err != nil { return nil, err }
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(17348)
 	if contract.Gas < 16 { return nil, ErrOutOfGas }
 	contract.Gas -= 16
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L17348
 	}
 
 	// block @17299 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 17301
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_60)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 17336
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 17342
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_60)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -18582,104 +14743,79 @@ L17278: // block @17278 (4 instrs)
 	return res, nil
 
 L17348: // block @17348 (14 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-2]
 	s[sp+1].SetUint64(160)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 1
-	pc = 17353
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp-3]
 	s[sp+2].SetUint64(160)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 17358
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(17368)
-	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+1]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	s[sp+3].SetUint64(20613)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
+	s[sp+0].SetUint64(17368)
 	sp += 3
-	stack.top = sp
 	goto L20613
 
 L17368: // block @17368 (14 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-3]
 	s[sp+1].SetUint64(128)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 1
-	pc = 17373
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp-4]
 	s[sp+2].SetUint64(128)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 17378
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(17388)
-	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+1]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	s[sp+3].SetUint64(20613)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
+	s[sp+0].SetUint64(17388)
 	sp += 3
-	stack.top = sp
 	goto L20613
 
 L17388: // block @17388 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if s[sp-1].Lt(&s[sp-2]) { s[sp-2].SetOne() } else { s[sp-2].Clear() }
 	if s[sp-2].IsZero() { s[sp-2].SetOne() } else { s[sp-2].Clear() }
-	s[sp-1].SetUint64(14828)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
 	if !s[sp-2].IsZero() {
+		if interrupt.Load() { return nil, ErrInterrupt }
 		sp += -2
-		stack.top = sp
 		goto L14828
 	}
 	sp += -2
 
 	// block @17395 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 17397
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_82)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 17432
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 17438
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_83)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -18692,59 +14828,42 @@ L17388: // block @17388 (5 instrs)
 	return res, nil
 
 L17444: // block @17444 (12 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-2]
 	s[sp+1].SetUint64(96)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 1
-	pc = 17449
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp-3]
 	s[sp+2].SetUint64(96)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 17454
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+1]); err != nil { return nil, err }
 	s[sp+0].Sub(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(17509)
 	if contract.Gas < 16 { return nil, ErrOutOfGas }
 	contract.Gas -= 16
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L17509
 	}
 
 	// block @17460 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 17462
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_60)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 17497
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 17503
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_60)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -18757,297 +14876,230 @@ L17444: // block @17444 (12 instrs)
 	return res, nil
 
 L17509: // block @17509 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(1)
 	s[sp+1] = s[sp-1]
-	s[sp+2].SetUint64(2)
 	s[sp+3] = s[sp+1]
+	s[sp+2].SetUint64(2)
 	if s[sp+3].Gt(&s[sp+2]) { s[sp+2].SetOne() } else { s[sp+2].Clear() }
 	if s[sp+2].IsZero() { s[sp+2].SetOne() } else { s[sp+2].Clear() }
-	s[sp+3].SetUint64(17529)
 	if contract.Gas < 32 { return nil, ErrOutOfGas }
 	contract.Gas -= 32
 	if !s[sp+2].IsZero() {
+		s[sp+0].SetUint64(1)
 		sp += 2
-		stack.top = sp
 		goto L17529
 	}
+	s[sp+0].SetUint64(1)
 	sp += 2
 
 	// block @17522 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(17529)
-	s[sp+1].SetUint64(20700)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(17529)
 	sp += 1
-	stack.top = sp
 	goto L20700
 
 L17529: // block @17529 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	s[sp-2].Sub(&s[sp-1], &s[sp-2])
-	s[sp-1].SetUint64(17604)
 	if contract.Gas < 17 { return nil, ErrOutOfGas }
 	contract.Gas -= 17
 	if !s[sp-2].IsZero() {
 		sp += -2
-		stack.top = sp
 		goto L17604
 	}
 	sp += -2
 
 	// block @17535 (13 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-2]
 	s[sp+1].SetUint64(160)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 1
-	pc = 17539
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp-3]
 	s[sp+2].SetUint64(160)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 17544
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(17554)
-	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+1]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	s[sp+3].SetUint64(20613)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
+	s[sp+0].SetUint64(17554)
 	sp += 3
-	stack.top = sp
 	goto L20613
 
 L17554: // block @17554 (14 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-4]
 	s[sp+1].SetUint64(128)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 1
-	pc = 17559
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp-3]
 	s[sp+2].SetUint64(160)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 17564
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(17574)
-	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+1]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	s[sp+3].SetUint64(20613)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
+	s[sp+0].SetUint64(17574)
 	sp += 3
-	stack.top = sp
 	goto L20613
 
 L17574: // block @17574 (14 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-4]
 	s[sp+1].SetUint64(128)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 1
-	pc = 17579
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp-5]
 	s[sp+2].SetUint64(160)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 17584
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(17594)
-	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+1]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	s[sp+3].SetUint64(20613)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
+	s[sp+0].SetUint64(17594)
 	sp += 3
-	stack.top = sp
 	goto L20613
 
 L17594: // block @17594 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(17388)
-	s[sp+0], s[sp-2] = s[sp-2], s[sp+0]
+	s[sp+0] = s[sp-2]
 	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
-	s[sp+1].SetUint64(20594)
 	if contract.Gas < 21 { return nil, ErrOutOfGas }
 	contract.Gas -= 21
+	s[sp-2].SetUint64(17388)
 	sp += 1
-	stack.top = sp
 	goto L20594
 
 L17604: // block @17604 (14 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-2]
 	s[sp+1].SetUint64(128)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 1
-	pc = 17609
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp-3]
 	s[sp+2].SetUint64(128)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 17614
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(17624)
-	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+1]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	s[sp+3].SetUint64(20613)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
+	s[sp+0].SetUint64(17624)
 	sp += 3
-	stack.top = sp
 	goto L20613
 
 L17624: // block @17624 (14 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-4]
 	s[sp+1].SetUint64(128)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 1
-	pc = 17629
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp-3]
 	s[sp+2].SetUint64(160)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 17634
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(17644)
-	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+1]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	s[sp+3].SetUint64(20613)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
+	s[sp+0].SetUint64(17644)
 	sp += 3
-	stack.top = sp
 	goto L20613
 
 L17644: // block @17644 (14 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-4]
 	s[sp+1].SetUint64(128)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 1
-	pc = 17649
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp-5]
 	s[sp+2].SetUint64(160)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 17654
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(17664)
-	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+1]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	s[sp+3].SetUint64(20613)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
+	s[sp+0].SetUint64(17664)
 	sp += 3
-	stack.top = sp
 	goto L20613
 
 L17664: // block @17664 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(17674)
-	s[sp+0], s[sp-2] = s[sp-2], s[sp+0]
+	s[sp+0] = s[sp-2]
 	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
-	s[sp+1].SetUint64(20594)
 	if contract.Gas < 21 { return nil, ErrOutOfGas }
 	contract.Gas -= 21
+	s[sp-2].SetUint64(17674)
 	sp += 1
-	stack.top = sp
 	goto L20594
 
 L17674: // block @17674 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if s[sp-1].Gt(&s[sp-2]) { s[sp-2].SetOne() } else { s[sp-2].Clear() }
 	if s[sp-2].IsZero() { s[sp-2].SetOne() } else { s[sp-2].Clear() }
-	s[sp-1].SetUint64(14828)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
 	if !s[sp-2].IsZero() {
+		if interrupt.Load() { return nil, ErrInterrupt }
 		sp += -2
-		stack.top = sp
 		goto L14828
 	}
 	sp += -2
 
 	// block @17681 (14 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 17683
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_82)
-	s[sp+2] = s[sp+0]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 17718
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(4)
-	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp+0]
 	if contract.Gas < 9 { return nil, ErrOutOfGas }
 	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 17724
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Set(&aotCCTFExchangeV2_83)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
+	s[sp+1].SetUint64(4)
+	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
@@ -19060,197 +15112,160 @@ L17674: // block @17674 (5 instrs)
 	return res, nil
 
 L17730: // block @17730 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
 	s[sp+1] = s[sp-2]
-	s[sp+2].SetUint64(17742)
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-3]
-	s[sp+5].SetUint64(20613)
 	if contract.Gas < 26 { return nil, ErrOutOfGas }
 	contract.Gas -= 26
+	s[sp+0].SetUint64(0)
+	s[sp+2].SetUint64(17742)
 	sp += 5
-	stack.top = sp
 	goto L20613
 
 L17742: // block @17742 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(7003)
-	s[sp+0], s[sp-2] = s[sp-2], s[sp+0]
+	s[sp+0] = s[sp-2]
 	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
-	s[sp+1].SetUint64(20681)
 	if contract.Gas < 21 { return nil, ErrOutOfGas }
 	contract.Gas -= 21
+	s[sp-2].SetUint64(7003)
 	sp += 1
-	stack.top = sp
 	goto L20681
 
 L17752: // block @17752 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(14828)
 	s[sp+1] = s[sp-3]
 	s[sp+2] = s[sp-2]
 	s[sp+3] = s[sp-1]
-	s[sp+4].SetUint64(18099)
 	if contract.Gas < 24 { return nil, ErrOutOfGas }
 	contract.Gas -= 24
+	s[sp+0].SetUint64(14828)
 	sp += 4
-	stack.top = sp
 	goto L18099
 
 L17763: // block @17763 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(5801)
 	s[sp+1] = s[sp-4]
 	s[sp+2] = s[sp-3]
 	s[sp+3] = s[sp-2]
 	s[sp+4] = s[sp-1]
-	s[sp+5].SetUint64(18182)
 	if contract.Gas < 27 { return nil, ErrOutOfGas }
 	contract.Gas -= 27
+	s[sp+0].SetUint64(5801)
 	sp += 5
-	stack.top = sp
 	goto L18182
 
 L17775: // block @17775 (66 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+12 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 17778
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_83)
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
 	s[sp+2] = s[sp+0]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 17813
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_1)
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	s[sp+1].Set(&aotCCTFExchangeV2_84)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp-4]
-	s[sp+3] = s[sp+1]
+	s[sp+3].Set(&aotCCTFExchangeV2_1)
 	s[sp+2].And(&s[sp+3], &s[sp+2])
-	s[sp+3].SetUint64(4)
 	s[sp+4] = s[sp+0]
+	s[sp+3].SetUint64(4)
+	s[sp+3].Add(&s[sp+4], &s[sp+3])
+	if contract.Gas < 24 { return nil, ErrOutOfGas }
+	contract.Gas -= 24
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
+	s[sp+2] = s[sp-3]
+	s[sp+3].Set(&aotCCTFExchangeV2_1)
+	s[sp+2].And(&s[sp+3], &s[sp+2])
+	s[sp+4] = s[sp+0]
+	s[sp+3].SetUint64(36)
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
 	if contract.Gas < 21 { return nil, ErrOutOfGas }
 	contract.Gas -= 21
-	stack.top = sp + 4
-	pc = 17842
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2] = s[sp-3]
-	s[sp+3] = s[sp+1]
-	s[sp+2].And(&s[sp+3], &s[sp+2])
-	s[sp+3].SetUint64(36)
-	s[sp+4] = s[sp+0]
-	s[sp+3].Add(&s[sp+4], &s[sp+3])
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + 4
-	pc = 17850
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(68)
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
 	s[sp+3] = s[sp+0]
+	s[sp+2].SetUint64(68)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
 	s[sp+3] = s[sp-2]
 	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
-	if contract.Gas < 15 { return nil, ErrOutOfGas }
-	contract.Gas -= 15
-	stack.top = sp + 4
-	pc = 17857
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(100)
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
 	s[sp+3] = s[sp+0]
+	s[sp+2].SetUint64(100)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
 	s[sp+3] = s[sp-1]
 	s[sp+3], s[sp+2] = s[sp+2], s[sp+3]
+	if contract.Gas < 18 { return nil, ErrOutOfGas }
+	contract.Gas -= 18
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
+	s[sp+4] = s[sp+0]
+	s[sp+3].SetUint64(132)
+	s[sp+3].Add(&s[sp+4], &s[sp+3])
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
-	stack.top = sp + 4
-	pc = 17864
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	s[sp+2].SetUint64(160)
-	s[sp+3].SetUint64(132)
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
 	s[sp+4] = s[sp+0]
-	s[sp+3].Add(&s[sp+4], &s[sp+3])
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 4
-	pc = 17871
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].Clear()
 	s[sp+3].SetUint64(164)
-	s[sp+4] = s[sp+0]
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
-	if contract.Gas < 11 { return nil, ErrOutOfGas }
-	contract.Gas -= 11
-	stack.top = sp + 4
-	pc = 17877
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 14 { return nil, ErrOutOfGas }
+	contract.Gas -= 14
+	s[sp+2].SetUint64(0)
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
 	s[sp+2] = s[sp-5]
+	s[sp+1].Set(&aotCCTFExchangeV2_1)
 	s[sp+1].And(&s[sp+2], &s[sp+1])
 	s[sp+1], s[sp+0] = s[sp+0], s[sp+1]
-	s[sp+2].SetUint64(4064428842)
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
+	s[sp+2] = s[sp+1]
 	s[sp+3].SetUint64(196)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	s[sp+3].Clear()
-	s[sp+4].SetUint64(64)
-	if contract.Gas < 26 { return nil, ErrOutOfGas }
-	contract.Gas -= 26
-	stack.top = sp + 5
-	pc = 17893
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 29 { return nil, ErrOutOfGas }
+	contract.Gas -= 29
+	if err = aotMloadC(contract, mem, 64, &s[sp+4]); err != nil { return nil, err }
 	s[sp+5] = s[sp+4]
 	s[sp+6] = s[sp+2]
 	s[sp+5].Sub(&s[sp+6], &s[sp+5])
 	s[sp+6] = s[sp+4]
-	s[sp+7].Clear()
 	s[sp+8] = s[sp+0]
 	s[sp+9] = s[sp+8]
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
+	s[sp+1].SetUint64(4064428842)
+	s[sp+3].SetUint64(0)
+	s[sp+7].SetUint64(0)
 	stack.top = sp + 10
 	pc = 17901
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	if s[sp+9].IsZero() { s[sp+9].SetOne() } else { s[sp+9].Clear() }
 	s[sp+10] = s[sp+9]
 	if s[sp+10].IsZero() { s[sp+10].SetOne() } else { s[sp+10].Clear() }
-	s[sp+11].SetUint64(17912)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+10].IsZero() {
 		sp += 10
-		stack.top = sp
 		goto L17912
 	}
 	sp += 10
 
 	// block @17909 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 17911
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L17912: // block @17912 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 7 { return nil, &ErrStackUnderflow{stackLen: sp, required: 7} }
 	if contract.Gas < 5 { return nil, ErrOutOfGas }
 	contract.Gas -= 5
@@ -19261,38 +15276,34 @@ L17912: // block @17912 (9 instrs)
 	if s[sp-7].IsZero() { s[sp-7].SetOne() } else { s[sp-7].Clear() }
 	s[sp-6] = s[sp-7]
 	if s[sp-6].IsZero() { s[sp-6].SetOne() } else { s[sp-6].Clear() }
-	s[sp-5].SetUint64(17930)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp-6].IsZero() {
 		sp += -6
-		stack.top = sp
 		goto L17930
 	}
 	sp += -6
 
 	// block @17923 (7 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0].SetUint64(uint64(len(evm.returnData)))
-	s[sp+1].Clear()
-	s[sp+2].Clear()
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
+	s[sp+1].SetUint64(0)
+	s[sp+2].SetUint64(0)
 	stack.top = sp + 3
 	pc = 17926
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	s[sp+0].SetUint64(uint64(len(evm.returnData)))
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 17929
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L17930: // block @17930 (11 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 10 { return nil, &ErrStackUnderflow{stackLen: sp, required: 10} }
 	if contract.Gas < 27 { return nil, ErrOutOfGas }
 	contract.Gas -= 27
@@ -19303,278 +15314,204 @@ L17930: // block @17930 (11 instrs)
 	goto dispatch
 
 L17941: // block @17941 (11 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(64)
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	if err = aotMloadC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
+	s[sp+2] = s[sp-1]
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 17945
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2] = s[sp-1]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 3
-	pc = 17947
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+3].SetUint64(64)
+	if err = aotMload(contract, mem, &s[sp+2]); err != nil { return nil, err }
 	s[sp+4] = s[sp+2]
+	s[sp+3].SetUint64(64)
 	if s[sp+4].Eq(&s[sp+3]) { s[sp+3].SetOne() } else { s[sp+3].Clear() }
-	s[sp+4].SetUint64(17969)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+3].IsZero() {
+		s[sp+0].SetUint64(0)
 		sp += 3
-		stack.top = sp
 		goto L17969
 	}
+	s[sp+0].SetUint64(0)
 	sp += 3
 
 	// block @17956 (5 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(65)
 	s[sp+1] = s[sp-1]
+	s[sp+0].SetUint64(65)
 	if s[sp+1].Eq(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(18027)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L18027
 	}
 
 	// block @17964 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
-	s[sp-1].SetUint64(18086)
 	if contract.Gas < 13 { return nil, ErrOutOfGas }
 	contract.Gas -= 13
 	sp += -1
-	stack.top = sp
 	goto L18086
 
 L17969: // block @17969 (19 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
 	s[sp+1] = s[sp-4]
+	s[sp+0].SetUint64(64)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 1
-	pc = 17974
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(255)
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	s[sp+2] = s[sp+0]
-	s[sp+2], s[sp+1] = s[sp+1], s[sp+2]
-	if s[sp+2].LtUint64(256) { s[sp+1].Rsh(&s[sp+1], uint(s[sp+2].Uint64())) } else { s[sp+1].Clear() }
+	s[sp+1] = s[sp+2]
+	s[sp+1].Rsh(&s[sp+1], 255)
 	s[sp+2].SetUint64(27)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	s[sp+2].SetUint64(32)
-	if contract.Gas < 21 { return nil, ErrOutOfGas }
-	contract.Gas -= 21
-	stack.top = sp + 3
-	pc = 17985
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 24 { return nil, ErrOutOfGas }
+	contract.Gas -= 24
+	if err = aotMstoreC(contract, mem, 32, &s[sp+1]); err != nil { return nil, err }
 	s[sp+1].Set(&aotCCTFExchangeV2_81)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(96)
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 18022
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].SetUint64(18046)
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMstoreC(contract, mem, 96, &s[sp+0]); err != nil { return nil, err }
 	if contract.Gas < 11 { return nil, ErrOutOfGas }
 	contract.Gas -= 11
-	sp += 0
-	stack.top = sp
 	goto L18046
 
 L18027: // block @18027 (15 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
+	s[sp+1] = s[sp-4]
 	s[sp+0].SetUint64(96)
-	s[sp+1] = s[sp-4]
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 1
-	pc = 18032
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Clear()
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
+	s[sp+1].SetUint64(0)
 	s[sp+0].Byte(&s[sp+1])
-	s[sp+1].SetUint64(32)
-	if contract.Gas < 8 { return nil, ErrOutOfGas }
-	contract.Gas -= 8
-	stack.top = sp + 2
-	pc = 18037
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].SetUint64(64)
+	if contract.Gas < 11 { return nil, ErrOutOfGas }
+	contract.Gas -= 11
+	if err = aotMstoreC(contract, mem, 32, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp-4]
+	s[sp+0].SetUint64(64)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 1
-	pc = 18042
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(96)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 2
-	pc = 18045
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstoreC(contract, mem, 96, &s[sp+0]); err != nil { return nil, err }
 
 L18046: // block @18046 (30 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1] = s[sp-5]
-	s[sp+0].Clear()
-	if contract.Gas < 8 { return nil, ErrOutOfGas }
-	contract.Gas -= 8
-	stack.top = sp + 1
-	pc = 18050
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp-1].SetUint64(32)
+	if contract.Gas < 11 { return nil, ErrOutOfGas }
+	contract.Gas -= 11
+	if err = aotMstoreC(contract, mem, 0, &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-4]
-	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 0
-	pc = 18055
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 18058
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	s[sp-1].SetUint64(32)
-	s[sp+0].SetUint64(1)
-	s[sp+1].SetUint64(128)
-	s[sp+2].Clear()
-	s[sp+3].SetUint64(1)
+	s[sp-1].Add(&s[sp+0], &s[sp-1])
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstoreC(contract, mem, 64, &s[sp-1]); err != nil { return nil, err }
 	if contract.Gas < 16 { return nil, ErrOutOfGas }
 	contract.Gas -= 16
 	s[sp+4].SetUint64(contract.Gas)
+	s[sp-1].SetUint64(32)
+	s[sp+0].SetUint64(1)
+	s[sp+1].SetUint64(128)
+	s[sp+2].SetUint64(0)
+	s[sp+3].SetUint64(1)
 	stack.top = sp + 5
 	pc = 18069
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	stack.top = sp + 0
-	pc = 18070
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 3 { return nil, ErrOutOfGas }
+	contract.Gas -= 3
+	if err = aotMload(contract, mem, &s[sp-1]); err != nil { return nil, err }
 	s[sp-1], s[sp-3] = s[sp-3], s[sp-1]
-	s[sp-1].Clear()
-	s[sp+0].SetUint64(96)
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 1
-	pc = 18076
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	s[sp-1].SetUint64(0)
+	if err = aotMstoreC(contract, mem, 96, &s[sp-1]); err != nil { return nil, err }
 	s[sp-1] = s[sp-2]
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 1
-	pc = 18080
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	if err = aotMstoreC(contract, mem, 64, &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(uint64(len(evm.returnData)))
-	s[sp+0].SetUint64(14506)
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
 	if !s[sp-1].IsZero() {
+		if interrupt.Load() { return nil, ErrInterrupt }
 		sp += -1
-		stack.top = sp
 		goto L14506
 	}
 	sp += -1
 
 L18086: // block @18086 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
 	s[sp+0].SetUint64(2343196575)
-	s[sp+1].Clear()
+	if err = aotMstoreC(contract, mem, 0, &s[sp+0]); err != nil { return nil, err }
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 18093
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	s[sp+0].SetUint64(4)
 	s[sp+1].SetUint64(28)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
 	stack.top = sp + 2
 	pc = 18098
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L18099: // block @18099 (26 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+7 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-2]
-	s[sp+1].SetUint64(20)
-	if contract.Gas < 7 { return nil, ErrOutOfGas }
-	contract.Gas -= 7
-	stack.top = sp + 2
-	pc = 18103
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 10 { return nil, ErrOutOfGas }
+	contract.Gas -= 10
+	if err = aotMstoreC(contract, mem, 20, &s[sp+0]); err != nil { return nil, err }
 	s[sp+0] = s[sp-1]
-	s[sp+1].SetUint64(52)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 18107
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].Set(&aotCCTFExchangeV2_84)
-	s[sp+1].Clear()
-	if contract.Gas < 5 { return nil, ErrOutOfGas }
-	contract.Gas -= 5
-	stack.top = sp + 2
-	pc = 18126
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].SetUint64(32)
-	s[sp+1].Clear()
-	s[sp+2].SetUint64(68)
-	s[sp+3].SetUint64(16)
-	s[sp+4].Clear()
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	if err = aotMstoreC(contract, mem, 52, &s[sp+0]); err != nil { return nil, err }
+	if contract.Gas < 8 { return nil, ErrOutOfGas }
+	contract.Gas -= 8
+	s[sp+0].Set(&aotCCTFExchangeV2_85)
+	if err = aotMstoreC(contract, mem, 0, &s[sp+0]); err != nil { return nil, err }
 	s[sp+5] = s[sp-3]
 	if contract.Gas < 18 { return nil, ErrOutOfGas }
 	contract.Gas -= 18
 	s[sp+6].SetUint64(contract.Gas)
+	s[sp+0].SetUint64(32)
+	s[sp+1].SetUint64(0)
+	s[sp+2].SetUint64(68)
+	s[sp+3].SetUint64(16)
+	s[sp+4].SetUint64(0)
 	stack.top = sp + 7
 	pc = 18137
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	s[sp+1] = s[sp+0]
+	if contract.Gas < 11 { return nil, ErrOutOfGas }
+	contract.Gas -= 11
+	if err = aotMloadC(contract, mem, 0, &s[sp+3]); err != nil { return nil, err }
 	s[sp+2].SetUint64(1)
-	s[sp+3].Clear()
-	if contract.Gas < 8 { return nil, ErrOutOfGas }
-	contract.Gas -= 8
-	stack.top = sp + 4
-	pc = 18142
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	if s[sp+3].Eq(&s[sp+2]) { s[sp+2].SetOne() } else { s[sp+2].Clear() }
 	s[sp+1].And(&s[sp+2], &s[sp+1])
-	s[sp+2].SetUint64(18172)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+1].IsZero() {
 		sp += 1
-		stack.top = sp
 		goto L18172
 	}
 	sp += 1
 
 	// block @18149 (9 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
@@ -19588,45 +15525,34 @@ L18099: // block @18099 (26 instrs)
 	if s[sp+2].IsZero() { s[sp+2].SetOne() } else { s[sp+2].Clear() }
 	s[sp+1].Or(&s[sp+2], &s[sp+1])
 	if s[sp+1].Lt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(18172)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L18172
 	}
 
 	// block @18160 (6 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
+	if contract.Gas < 8 { return nil, ErrOutOfGas }
+	contract.Gas -= 8
 	s[sp+0].SetUint64(2428038168)
-	s[sp+1].Clear()
-	if contract.Gas < 5 { return nil, ErrOutOfGas }
-	contract.Gas -= 5
-	stack.top = sp + 2
-	pc = 18166
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].SetUint64(4)
-	s[sp+1].SetUint64(28)
+	if err = aotMstoreC(contract, mem, 0, &s[sp+0]); err != nil { return nil, err }
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
+	s[sp+0].SetUint64(4)
+	s[sp+1].SetUint64(28)
 	stack.top = sp + 2
 	pc = 18171
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L18172: // block @18172 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp-1].Clear()
-	s[sp+0].SetUint64(52)
-	if contract.Gas < 8 { return nil, ErrOutOfGas }
-	contract.Gas -= 8
-	stack.top = sp + 1
-	pc = 18177
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 11 { return nil, ErrOutOfGas }
+	contract.Gas -= 11
+	s[sp-1].SetUint64(0)
+	if err = aotMstoreC(contract, mem, 52, &s[sp-1]); err != nil { return nil, err }
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
 	if !s[sp-5].IsUint64() { return nil, ErrInvalidJump }
@@ -19636,79 +15562,56 @@ L18172: // block @18172 (9 instrs)
 	goto dispatch
 
 L18182: // block @18182 (33 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+8 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 18185
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp-1]
-	s[sp+2].SetUint64(96)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 18189
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	if err = aotMstoreC(contract, mem, 96, &s[sp+1]); err != nil { return nil, err }
 	s[sp+1] = s[sp-2]
-	s[sp+2].SetUint64(64)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 18193
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	if err = aotMstoreC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+1] = s[sp-3]
-	s[sp+2].SetUint64(96)
-	if s[sp+2].LtUint64(256) { s[sp+1].Lsh(&s[sp+1], uint(s[sp+2].Uint64())) } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(44)
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 3
-	pc = 18200
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].Set(&aotCCTFExchangeV2_85)
-	s[sp+2].SetUint64(12)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 3
-	pc = 18220
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(32)
-	s[sp+2].Clear()
-	s[sp+3].SetUint64(100)
-	s[sp+4].SetUint64(28)
-	s[sp+5].Clear()
+	s[sp+1].Lsh(&s[sp+1], 96)
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMstoreC(contract, mem, 44, &s[sp+1]); err != nil { return nil, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	s[sp+1].Set(&aotCCTFExchangeV2_86)
+	if err = aotMstoreC(contract, mem, 12, &s[sp+1]); err != nil { return nil, err }
 	s[sp+6] = s[sp-4]
 	if contract.Gas < 18 { return nil, ErrOutOfGas }
 	contract.Gas -= 18
 	s[sp+7].SetUint64(contract.Gas)
+	s[sp+1].SetUint64(32)
+	s[sp+2].SetUint64(0)
+	s[sp+3].SetUint64(100)
+	s[sp+4].SetUint64(28)
+	s[sp+5].SetUint64(0)
 	stack.top = sp + 8
 	pc = 18231
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	s[sp+2] = s[sp+1]
+	if contract.Gas < 11 { return nil, ErrOutOfGas }
+	contract.Gas -= 11
+	if err = aotMloadC(contract, mem, 0, &s[sp+4]); err != nil { return nil, err }
 	s[sp+3].SetUint64(1)
-	s[sp+4].Clear()
-	if contract.Gas < 8 { return nil, ErrOutOfGas }
-	contract.Gas -= 8
-	stack.top = sp + 5
-	pc = 18236
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	if s[sp+4].Eq(&s[sp+3]) { s[sp+3].SetOne() } else { s[sp+3].Clear() }
 	s[sp+2].And(&s[sp+3], &s[sp+2])
-	s[sp+3].SetUint64(18266)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+2].IsZero() {
 		sp += 2
-		stack.top = sp
 		goto L18266
 	}
 	sp += 2
 
 	// block @18243 (9 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
@@ -19722,51 +15625,37 @@ L18182: // block @18182 (33 instrs)
 	if s[sp+2].IsZero() { s[sp+2].SetOne() } else { s[sp+2].Clear() }
 	s[sp+1].Or(&s[sp+2], &s[sp+1])
 	if s[sp+1].Lt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(18266)
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L18266
 	}
 
 	// block @18254 (6 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
+	if contract.Gas < 8 { return nil, ErrOutOfGas }
+	contract.Gas -= 8
 	s[sp+0].SetUint64(2033841188)
-	s[sp+1].Clear()
-	if contract.Gas < 5 { return nil, ErrOutOfGas }
-	contract.Gas -= 5
-	stack.top = sp + 2
-	pc = 18260
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].SetUint64(4)
-	s[sp+1].SetUint64(28)
+	if err = aotMstoreC(contract, mem, 0, &s[sp+0]); err != nil { return nil, err }
 	if contract.Gas < 6 { return nil, ErrOutOfGas }
 	contract.Gas -= 6
+	s[sp+0].SetUint64(4)
+	s[sp+1].SetUint64(28)
 	stack.top = sp + 2
 	pc = 18265
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L18266: // block @18266 (12 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 7 { return nil, &ErrStackUnderflow{stackLen: sp, required: 7} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp-1].Clear()
-	s[sp+0].SetUint64(96)
-	if contract.Gas < 8 { return nil, ErrOutOfGas }
-	contract.Gas -= 8
-	stack.top = sp + 1
-	pc = 18271
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp-1].SetUint64(64)
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 0
-	pc = 18274
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 11 { return nil, ErrOutOfGas }
+	contract.Gas -= 11
+	s[sp-1].SetUint64(0)
+	if err = aotMstoreC(contract, mem, 96, &s[sp-1]); err != nil { return nil, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstoreC(contract, mem, 64, &s[sp-2]); err != nil { return nil, err }
 	if contract.Gas < 16 { return nil, ErrOutOfGas }
 	contract.Gas -= 16
 	if !s[sp-7].IsUint64() { return nil, ErrInvalidJump }
@@ -19776,143 +15665,93 @@ L18266: // block @18266 (12 instrs)
 	goto dispatch
 
 L18280: // block @18280 (43 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 18283
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp+0]
 	s[sp+2].SetUint64(320)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	s[sp+2].SetUint64(64)
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 3
-	pc = 18291
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMstoreC(contract, mem, 64, &s[sp+1]); err != nil { return nil, err }
 	s[sp+1] = s[sp+0]
-	s[sp+2].Clear()
-	s[sp+3] = s[sp+1]
-	if contract.Gas < 8 { return nil, ErrOutOfGas }
-	contract.Gas -= 8
-	stack.top = sp + 4
-	pc = 18295
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(32)
-	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	s[sp+2].Clear()
 	s[sp+3] = s[sp+1]
 	if contract.Gas < 11 { return nil, ErrOutOfGas }
 	contract.Gas -= 11
-	stack.top = sp + 4
-	pc = 18301
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+2].SetUint64(0)
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
 	s[sp+2].SetUint64(32)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	s[sp+2].Clear()
 	s[sp+3] = s[sp+1]
-	if contract.Gas < 11 { return nil, ErrOutOfGas }
-	contract.Gas -= 11
-	stack.top = sp + 4
-	pc = 18307
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(32)
-	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	s[sp+2].Clear()
-	s[sp+3].Set(&aotCCTFExchangeV2_1)
-	s[sp+2].And(&s[sp+3], &s[sp+2])
-	s[sp+3] = s[sp+1]
-	if contract.Gas < 17 { return nil, ErrOutOfGas }
-	contract.Gas -= 17
-	stack.top = sp + 4
-	pc = 18335
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(32)
-	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	s[sp+2].Clear()
-	s[sp+3] = s[sp+1]
-	if contract.Gas < 11 { return nil, ErrOutOfGas }
-	contract.Gas -= 11
-	stack.top = sp + 4
-	pc = 18341
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(32)
-	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	s[sp+2].Clear()
-	s[sp+3].SetUint64(1)
-	s[sp+4] = s[sp+2]
-	if s[sp+4].Gt(&s[sp+3]) { s[sp+3].SetOne() } else { s[sp+3].Clear() }
-	if s[sp+3].IsZero() { s[sp+3].SetOne() } else { s[sp+3].Clear() }
-	s[sp+4].SetUint64(18362)
-	if contract.Gas < 33 { return nil, ErrOutOfGas }
-	contract.Gas -= 33
-	if !s[sp+3].IsZero() {
-		sp += 3
-		stack.top = sp
-		goto L18362
-	}
-	sp += 3
-
-	// block @18355 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
-	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(18362)
-	s[sp+1].SetUint64(20700)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
-	sp += 1
-	stack.top = sp
-	goto L20700
+	s[sp+2].SetUint64(0)
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
+	s[sp+2].SetUint64(32)
+	s[sp+1].Add(&s[sp+2], &s[sp+1])
+	s[sp+3] = s[sp+1]
+	if contract.Gas < 14 { return nil, ErrOutOfGas }
+	contract.Gas -= 14
+	s[sp+2].SetUint64(0)
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
+	s[sp+2].SetUint64(32)
+	s[sp+1].Add(&s[sp+2], &s[sp+1])
+	s[sp+3] = s[sp+1]
+	if contract.Gas < 20 { return nil, ErrOutOfGas }
+	contract.Gas -= 20
+	s[sp+2].SetUint64(0)
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
+	s[sp+2].SetUint64(32)
+	s[sp+1].Add(&s[sp+2], &s[sp+1])
+	s[sp+3] = s[sp+1]
+	if contract.Gas < 14 { return nil, ErrOutOfGas }
+	contract.Gas -= 14
+	s[sp+2].SetUint64(0)
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
+	s[sp+2].SetUint64(32)
+	s[sp+1].Add(&s[sp+2], &s[sp+1])
+	if contract.Gas < 33 { return nil, ErrOutOfGas }
+	contract.Gas -= 33
+	s[sp+2].SetUint64(0)
+	sp += 3
+	goto L18362
 
 L18362: // block @18362 (26 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 18364
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
-	s[sp-1].Clear()
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 11 { return nil, ErrOutOfGas }
-	contract.Gas -= 11
-	stack.top = sp + 1
-	pc = 18370
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 14 { return nil, ErrOutOfGas }
+	contract.Gas -= 14
+	s[sp-1].SetUint64(0)
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
-	s[sp-1].Clear()
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 11 { return nil, ErrOutOfGas }
-	contract.Gas -= 11
-	stack.top = sp + 1
-	pc = 18376
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 14 { return nil, ErrOutOfGas }
+	contract.Gas -= 14
+	s[sp-1].SetUint64(0)
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
-	s[sp-1].Clear()
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 11 { return nil, ErrOutOfGas }
-	contract.Gas -= 11
-	stack.top = sp + 1
-	pc = 18382
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 14 { return nil, ErrOutOfGas }
+	contract.Gas -= 14
+	s[sp-1].SetUint64(0)
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
-	s[sp-1].Clear()
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 11 { return nil, ErrOutOfGas }
-	contract.Gas -= 11
-	stack.top = sp + 1
-	pc = 18388
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 14 { return nil, ErrOutOfGas }
+	contract.Gas -= 14
+	s[sp-1].SetUint64(0)
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-3], s[sp-4] = s[sp-4], s[sp-3]
 	if contract.Gas < 13 { return nil, ErrOutOfGas }
 	contract.Gas -= 13
@@ -19923,150 +15762,125 @@ L18362: // block @18362 (26 instrs)
 	goto dispatch
 
 L18392: // block @18392 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(32)
 	s[sp+2] = s[sp-1]
 	s[sp+3] = s[sp-2]
 	s[sp+2].Sub(&s[sp+3], &s[sp+2])
+	s[sp+1].SetUint64(32)
 	if s[sp+2].Slt(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
 	if s[sp+1].IsZero() { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(18408)
 	if contract.Gas < 34 { return nil, ErrOutOfGas }
 	contract.Gas -= 34
 	if !s[sp+1].IsZero() {
+		s[sp+0].SetUint64(0)
 		sp += 1
-		stack.top = sp
 		goto L18408
 	}
+	s[sp+0].SetUint64(0)
 	sp += 1
 
 	// block @18405 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 18407
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L18408: // block @18408 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-2]
 	if off, over := s[sp+0].Uint64WithOverflow(); !over {
 		s[sp+0].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp+0].Clear() }
-	s[sp+1].Set(&aotCCTFExchangeV2_10)
 	s[sp+2] = s[sp+0]
+	s[sp+1].Set(&aotCCTFExchangeV2_10)
 	s[sp+1].And(&s[sp+2], &s[sp+1])
 	s[sp+2] = s[sp+0]
 	if s[sp+2].Eq(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(2968)
 	if contract.Gas < 35 { return nil, ErrOutOfGas }
 	contract.Gas -= 35
 	if !s[sp+1].IsZero() {
+		if interrupt.Load() { return nil, ErrInterrupt }
 		sp += 1
-		stack.top = sp
 		goto L2968
 	}
 	sp += 1
 
 	// block @18452 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 18454
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L18455: // block @18455 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Set(&aotCCTFExchangeV2_86)
-	s[sp+1].Clear()
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 18490
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	s[sp+0].Set(&aotCCTFExchangeV2_87)
+	if err = aotMstoreC(contract, mem, 0, &s[sp+0]); err != nil { return nil, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
 	s[sp+0].SetUint64(65)
-	s[sp+1].SetUint64(4)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 18495
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].SetUint64(36)
-	s[sp+1].Clear()
+	if err = aotMstoreC(contract, mem, 4, &s[sp+0]); err != nil { return nil, err }
 	if contract.Gas < 5 { return nil, ErrOutOfGas }
 	contract.Gas -= 5
+	s[sp+0].SetUint64(36)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 18499
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L18500: // block @18500 (16 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 18503
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(384)
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
 	s[sp+2] = s[sp+0]
+	s[sp+1].SetUint64(384)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	s[sp+2].SetUint64(18446744073709551615)
 	s[sp+3] = s[sp+1]
+	s[sp+2].SetUint64(18446744073709551615)
 	if s[sp+3].Gt(&s[sp+2]) { s[sp+2].SetOne() } else { s[sp+2].Clear() }
 	s[sp+3] = s[sp+0]
 	s[sp+4] = s[sp+1]
 	if s[sp+4].Lt(&s[sp+3]) { s[sp+3].SetOne() } else { s[sp+3].Clear() }
 	s[sp+2].Or(&s[sp+3], &s[sp+2])
 	if s[sp+2].IsZero() { s[sp+2].SetOne() } else { s[sp+2].Clear() }
-	s[sp+3].SetUint64(18536)
 	if contract.Gas < 46 { return nil, ErrOutOfGas }
 	contract.Gas -= 46
 	if !s[sp+2].IsZero() {
 		sp += 2
-		stack.top = sp
 		goto L18536
 	}
 	sp += 2
 
 	// block @18529 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(18536)
-	s[sp+1].SetUint64(18455)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(18536)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 1
-	stack.top = sp
 	goto L18455
 
 L18536: // block @18536 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 18539
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMstoreC(contract, mem, 64, &s[sp-1]); err != nil { return nil, err }
 	s[sp-2], s[sp-3] = s[sp-3], s[sp-2]
 	if contract.Gas < 11 { return nil, ErrOutOfGas }
 	contract.Gas -= 11
@@ -20077,61 +15891,49 @@ L18536: // block @18536 (5 instrs)
 	goto dispatch
 
 L18542: // block @18542 (20 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 18545
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(31)
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMloadC(contract, mem, 64, &s[sp+0]); err != nil { return nil, err }
 	s[sp+2] = s[sp-1]
+	s[sp+1].SetUint64(31)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
 	s[sp+2].Set(&aotCCTFExchangeV2_25)
 	s[sp+1].And(&s[sp+2], &s[sp+1])
 	s[sp+2] = s[sp+0]
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	s[sp+2].SetUint64(18446744073709551615)
 	s[sp+3] = s[sp+1]
+	s[sp+2].SetUint64(18446744073709551615)
 	if s[sp+3].Gt(&s[sp+2]) { s[sp+2].SetOne() } else { s[sp+2].Clear() }
 	s[sp+3] = s[sp+0]
 	s[sp+4] = s[sp+1]
 	if s[sp+4].Lt(&s[sp+3]) { s[sp+3].SetOne() } else { s[sp+3].Clear() }
 	s[sp+2].Or(&s[sp+3], &s[sp+2])
 	if s[sp+2].IsZero() { s[sp+2].SetOne() } else { s[sp+2].Clear() }
-	s[sp+3].SetUint64(18613)
 	if contract.Gas < 58 { return nil, ErrOutOfGas }
 	contract.Gas -= 58
 	if !s[sp+2].IsZero() {
 		sp += 2
-		stack.top = sp
 		goto L18613
 	}
 	sp += 2
 
 	// block @18606 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(18613)
-	s[sp+1].SetUint64(18455)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(18613)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 1
-	stack.top = sp
 	goto L18455
 
 L18613: // block @18613 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(64)
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 18616
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMstoreC(contract, mem, 64, &s[sp-1]); err != nil { return nil, err }
 	s[sp-2], s[sp-4] = s[sp-4], s[sp-2]
 	s[sp-2], s[sp-3] = s[sp-3], s[sp-2]
 	if contract.Gas < 16 { return nil, ErrOutOfGas }
@@ -20143,42 +15945,37 @@ L18613: // block @18613 (7 instrs)
 	goto dispatch
 
 L18621: // block @18621 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	if off, over := s[sp+0].Uint64WithOverflow(); !over {
 		s[sp+0].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp+0].Clear() }
-	s[sp+1].Set(&aotCCTFExchangeV2_1)
 	s[sp+2] = s[sp+0]
+	s[sp+1].Set(&aotCCTFExchangeV2_1)
 	s[sp+1].And(&s[sp+2], &s[sp+1])
 	s[sp+2] = s[sp+0]
 	if s[sp+2].Eq(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(18656)
 	if contract.Gas < 35 { return nil, ErrOutOfGas }
 	contract.Gas -= 35
 	if !s[sp+1].IsZero() {
 		sp += 1
-		stack.top = sp
 		goto L18656
 	}
 	sp += 1
 
 	// block @18653 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 18655
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L18656: // block @18656 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	s[sp-1], s[sp-3] = s[sp-3], s[sp-1]
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
@@ -20191,225 +15988,199 @@ L18656: // block @18656 (5 instrs)
 	goto dispatch
 
 L18661: // block @18661 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	if off, over := s[sp+0].Uint64WithOverflow(); !over {
 		s[sp+0].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(2)
 	s[sp+2] = s[sp+0]
+	s[sp+1].SetUint64(2)
 	if s[sp+2].Lt(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(18656)
 	if contract.Gas < 29 { return nil, ErrOutOfGas }
 	contract.Gas -= 29
 	if !s[sp+1].IsZero() {
+		if interrupt.Load() { return nil, ErrInterrupt }
 		sp += 1
-		stack.top = sp
 		goto L18656
 	}
 	sp += 1
 
 	// block @18672 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 18674
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L18675: // block @18675 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	if off, over := s[sp+0].Uint64WithOverflow(); !over {
 		s[sp+0].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(4)
 	s[sp+2] = s[sp+0]
+	s[sp+1].SetUint64(4)
 	if s[sp+2].Lt(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(18656)
 	if contract.Gas < 29 { return nil, ErrOutOfGas }
 	contract.Gas -= 29
 	if !s[sp+1].IsZero() {
+		if interrupt.Load() { return nil, ErrInterrupt }
 		sp += 1
-		stack.top = sp
 		goto L18656
 	}
 	sp += 1
 
 	// block @18686 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 18688
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L18689: // block @18689 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
 	s[sp+1] = s[sp-2]
-	s[sp+2].SetUint64(31)
 	s[sp+3] = s[sp-1]
+	s[sp+2].SetUint64(31)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
 	if s[sp+2].Slt(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(18704)
 	if contract.Gas < 31 { return nil, ErrOutOfGas }
 	contract.Gas -= 31
 	if !s[sp+1].IsZero() {
+		s[sp+0].SetUint64(0)
 		sp += 1
-		stack.top = sp
 		goto L18704
 	}
+	s[sp+0].SetUint64(0)
 	sp += 1
 
 	// block @18701 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 18703
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L18704: // block @18704 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-2]
 	if off, over := s[sp+0].Uint64WithOverflow(); !over {
 		s[sp+0].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(18446744073709551615)
 	s[sp+2] = s[sp+0]
+	s[sp+1].SetUint64(18446744073709551615)
 	if s[sp+2].Gt(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
 	if s[sp+1].IsZero() { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(18730)
 	if contract.Gas < 32 { return nil, ErrOutOfGas }
 	contract.Gas -= 32
 	if !s[sp+1].IsZero() {
 		sp += 1
-		stack.top = sp
 		goto L18730
 	}
 	sp += 1
 
 	// block @18723 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(18730)
-	s[sp+1].SetUint64(18455)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(18730)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 1
-	stack.top = sp
 	goto L18455
 
 L18730: // block @18730 (11 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(18779)
-	s[sp+1].SetUint64(32)
-	s[sp+2].Set(&aotCCTFExchangeV2_25)
-	s[sp+3].SetUint64(31)
 	s[sp+4] = s[sp-1]
+	s[sp+3].SetUint64(31)
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
+	s[sp+2].Set(&aotCCTFExchangeV2_25)
 	s[sp+2].And(&s[sp+3], &s[sp+2])
+	s[sp+1].SetUint64(32)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	s[sp+2].SetUint64(18542)
 	if contract.Gas < 36 { return nil, ErrOutOfGas }
 	contract.Gas -= 36
+	s[sp+0].SetUint64(18779)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 2
-	stack.top = sp
 	goto L18542
 
 L18779: // block @18779 (14 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-2]
 	s[sp+1] = s[sp-1]
-	if contract.Gas < 7 { return nil, ErrOutOfGas }
-	contract.Gas -= 7
-	stack.top = sp + 2
-	pc = 18782
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 10 { return nil, ErrOutOfGas }
+	contract.Gas -= 10
+	if err = aotMstore(contract, mem, &s[sp+1], &s[sp+0]); err != nil { return nil, err }
 	s[sp+0] = s[sp-5]
-	s[sp+1].SetUint64(32)
 	s[sp+2] = s[sp-2]
 	s[sp+3] = s[sp-4]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
+	s[sp+1].SetUint64(32)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
 	if s[sp+1].Gt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(18799)
 	if contract.Gas < 37 { return nil, ErrOutOfGas }
 	contract.Gas -= 37
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L18799
 	}
 
 	// block @18796 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 18798
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L18799: // block @18799 (25 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-2]
-	s[sp+1].SetUint64(32)
 	s[sp+2] = s[sp-4]
+	s[sp+1].SetUint64(32)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	s[sp+2].SetUint64(32)
 	s[sp+3] = s[sp-1]
+	s[sp+2].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
 	if contract.Gas < 22 { return nil, ErrOutOfGas }
 	contract.Gas -= 22
 	stack.top = sp + 3
 	pc = 18809
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].Clear()
-	s[sp+0], s[sp-2] = s[sp-2], s[sp+0]
+	s[sp+0] = s[sp-2]
 	s[sp+1] = s[sp-1]
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
 	s[sp+1].SetUint64(32)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
+	s[sp-2] = s[sp+0]
+	s[sp+0] = s[sp-1]
 	s[sp+0], s[sp-2] = s[sp-2], s[sp+0]
-	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
-	s[sp+0], s[sp-2] = s[sp-2], s[sp+0]
-	if contract.Gas < 26 { return nil, ErrOutOfGas }
-	contract.Gas -= 26
-	stack.top = sp + 1
-	pc = 18820
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 29 { return nil, ErrOutOfGas }
+	contract.Gas -= 29
+	s[sp-1].SetUint64(0)
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-2], s[sp-6] = s[sp-6], s[sp-2]
 	s[sp-2], s[sp-5] = s[sp-5], s[sp-2]
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
@@ -20421,51 +16192,45 @@ L18799: // block @18799 (25 instrs)
 	goto dispatch
 
 L18827: // block @18827 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(384)
 	s[sp+2] = s[sp-1]
 	s[sp+3] = s[sp-2]
 	s[sp+2].Sub(&s[sp+3], &s[sp+2])
+	s[sp+1].SetUint64(384)
 	if s[sp+2].Slt(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
 	if s[sp+1].IsZero() { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(18844)
 	if contract.Gas < 34 { return nil, ErrOutOfGas }
 	contract.Gas -= 34
 	if !s[sp+1].IsZero() {
+		s[sp+0].SetUint64(0)
 		sp += 1
-		stack.top = sp
 		goto L18844
 	}
+	s[sp+0].SetUint64(0)
 	sp += 1
 
 	// block @18841 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 18843
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L18844: // block @18844 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(18852)
-	s[sp+1].SetUint64(18500)
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
+	s[sp+0].SetUint64(18852)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 1
-	stack.top = sp
 	goto L18500
 
 L18852: // block @18852 (13 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-3]
@@ -20473,253 +16238,214 @@ L18852: // block @18852 (13 instrs)
 		s[sp+0].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp+0].Clear() }
 	s[sp+1] = s[sp-1]
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 2
-	pc = 18856
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMstore(contract, mem, &s[sp+1], &s[sp+0]); err != nil { return nil, err }
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
-	s[sp-1].SetUint64(18870)
-	s[sp+0].SetUint64(32)
 	s[sp+1] = s[sp-3]
+	s[sp+0].SetUint64(32)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(18621)
 	if contract.Gas < 28 { return nil, ErrOutOfGas }
 	contract.Gas -= 28
+	s[sp-1].SetUint64(18870)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 1
-	stack.top = sp
 	goto L18621
 
 L18870: // block @18870 (11 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(32)
 	s[sp+1] = s[sp-2]
+	s[sp+0].SetUint64(32)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 1
-	pc = 18875
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp-1].SetUint64(18887)
-	s[sp+0].SetUint64(64)
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp+1] = s[sp-3]
+	s[sp+0].SetUint64(64)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(18621)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
+	s[sp-1].SetUint64(18887)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 1
-	stack.top = sp
 	goto L18621
 
 L18887: // block @18887 (38 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
+	s[sp+1] = s[sp-2]
 	s[sp+0].SetUint64(64)
-	s[sp+1] = s[sp-2]
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 1
-	pc = 18892
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp-1].SetUint64(96)
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-3]
-	s[sp+1] = s[sp-1]
+	s[sp+1].SetUint64(96)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
 	if off, over := s[sp+0].Uint64WithOverflow(); !over {
 		s[sp+0].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp+0].Clear() }
-	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
+	s[sp-1] = s[sp+0]
 	s[sp+1] = s[sp-2]
+	s[sp+0].SetUint64(96)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 24 { return nil, ErrOutOfGas }
-	contract.Gas -= 24
-	stack.top = sp + 1
-	pc = 18902
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp-1].SetUint64(128)
-	s[sp+0] = s[sp-1]
+	if contract.Gas < 27 { return nil, ErrOutOfGas }
+	contract.Gas -= 27
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp+1] = s[sp-3]
+	s[sp+0].SetUint64(128)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
 	if off, over := s[sp+0].Uint64WithOverflow(); !over {
 		s[sp+0].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp+0].Clear() }
-	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
+	s[sp-1] = s[sp+0]
 	s[sp+1] = s[sp-2]
+	s[sp+0].SetUint64(128)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 24 { return nil, ErrOutOfGas }
-	contract.Gas -= 24
-	stack.top = sp + 1
-	pc = 18912
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp-1].SetUint64(160)
-	s[sp+0] = s[sp-1]
+	if contract.Gas < 27 { return nil, ErrOutOfGas }
+	contract.Gas -= 27
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp+1] = s[sp-3]
+	s[sp+0].SetUint64(160)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
 	if off, over := s[sp+0].Uint64WithOverflow(); !over {
 		s[sp+0].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp+0].Clear() }
-	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
+	s[sp-1] = s[sp+0]
 	s[sp+1] = s[sp-2]
+	s[sp+0].SetUint64(160)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 24 { return nil, ErrOutOfGas }
-	contract.Gas -= 24
-	stack.top = sp + 1
-	pc = 18922
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp-1].SetUint64(18934)
+	if contract.Gas < 27 { return nil, ErrOutOfGas }
+	contract.Gas -= 27
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
+	s[sp+1] = s[sp-3]
 	s[sp+0].SetUint64(192)
-	s[sp+1] = s[sp-3]
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(18661)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
+	s[sp-1].SetUint64(18934)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 1
-	stack.top = sp
 	goto L18661
 
 L18934: // block @18934 (11 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(192)
 	s[sp+1] = s[sp-2]
+	s[sp+0].SetUint64(192)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 1
-	pc = 18939
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp-1].SetUint64(18951)
-	s[sp+0].SetUint64(224)
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp+1] = s[sp-3]
+	s[sp+0].SetUint64(224)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(18675)
 	if contract.Gas < 23 { return nil, ErrOutOfGas }
 	contract.Gas -= 23
+	s[sp-1].SetUint64(18951)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 1
-	stack.top = sp
 	goto L18675
 
 L18951: // block @18951 (42 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
+	s[sp+1] = s[sp-2]
 	s[sp+0].SetUint64(224)
-	s[sp+1] = s[sp-2]
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 1
-	pc = 18956
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp-1].SetUint64(256)
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-3]
-	s[sp+1] = s[sp-1]
+	s[sp+1].SetUint64(256)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
 	if off, over := s[sp+0].Uint64WithOverflow(); !over {
 		s[sp+0].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp+0].Clear() }
-	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
+	s[sp-1] = s[sp+0]
 	s[sp+1] = s[sp-2]
+	s[sp+0].SetUint64(256)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 24 { return nil, ErrOutOfGas }
-	contract.Gas -= 24
-	stack.top = sp + 1
-	pc = 18967
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp-1].SetUint64(288)
-	s[sp+0] = s[sp-1]
+	if contract.Gas < 27 { return nil, ErrOutOfGas }
+	contract.Gas -= 27
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp+1] = s[sp-3]
+	s[sp+0].SetUint64(288)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
 	if off, over := s[sp+0].Uint64WithOverflow(); !over {
 		s[sp+0].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp+0].Clear() }
-	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
+	s[sp-1] = s[sp+0]
 	s[sp+1] = s[sp-2]
+	s[sp+0].SetUint64(288)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 24 { return nil, ErrOutOfGas }
-	contract.Gas -= 24
-	stack.top = sp + 1
-	pc = 18978
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp-1].SetUint64(320)
-	s[sp+0] = s[sp-1]
+	if contract.Gas < 27 { return nil, ErrOutOfGas }
+	contract.Gas -= 27
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp+1] = s[sp-3]
+	s[sp+0].SetUint64(320)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
 	if off, over := s[sp+0].Uint64WithOverflow(); !over {
 		s[sp+0].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp+0].Clear() }
-	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
+	s[sp-1] = s[sp+0]
 	s[sp+1] = s[sp-2]
+	s[sp+0].SetUint64(320)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 24 { return nil, ErrOutOfGas }
-	contract.Gas -= 24
-	stack.top = sp + 1
-	pc = 18989
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 27 { return nil, ErrOutOfGas }
+	contract.Gas -= 27
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
+	s[sp+0] = s[sp-3]
 	s[sp-1].SetUint64(352)
-	s[sp+0] = s[sp-3]
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
 	if off, over := s[sp-1].Uint64WithOverflow(); !over {
 		s[sp-1].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp-1].Clear() }
-	s[sp+0].SetUint64(18446744073709551615)
 	s[sp+1] = s[sp-1]
+	s[sp+0].SetUint64(18446744073709551615)
 	if s[sp+1].Gt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(19015)
 	if contract.Gas < 37 { return nil, ErrOutOfGas }
 	contract.Gas -= 37
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L19015
 	}
 
 	// block @19012 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 19014
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L19015: // block @19015 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(19027)
 	s[sp+1] = s[sp-4]
 	s[sp+2] = s[sp-1]
 	s[sp+3] = s[sp-3]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	s[sp+3].SetUint64(18689)
 	if contract.Gas < 27 { return nil, ErrOutOfGas }
 	contract.Gas -= 27
+	s[sp+0].SetUint64(19027)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 3
-	stack.top = sp
 	goto L18689
 
 L19027: // block @19027 (11 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(352)
 	s[sp+1] = s[sp-3]
+	s[sp+0].SetUint64(352)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 1
-	pc = 19033
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-3], s[sp-6] = s[sp-6], s[sp-3]
 	s[sp-3], s[sp-5] = s[sp-5], s[sp-3]
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
@@ -20731,133 +16457,121 @@ L19027: // block @19027 (11 instrs)
 	goto dispatch
 
 L19040: // block @19040 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(32)
 	s[sp+2] = s[sp-1]
 	s[sp+3] = s[sp-2]
 	s[sp+2].Sub(&s[sp+3], &s[sp+2])
+	s[sp+1].SetUint64(32)
 	if s[sp+2].Slt(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
 	if s[sp+1].IsZero() { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(19056)
 	if contract.Gas < 34 { return nil, ErrOutOfGas }
 	contract.Gas -= 34
 	if !s[sp+1].IsZero() {
+		s[sp+0].SetUint64(0)
 		sp += 1
-		stack.top = sp
 		goto L19056
 	}
+	s[sp+0].SetUint64(0)
 	sp += 1
 
 	// block @19053 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 19055
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L19056: // block @19056 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-2]
 	if off, over := s[sp+0].Uint64WithOverflow(); !over {
 		s[sp+0].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(18446744073709551615)
 	s[sp+2] = s[sp+0]
+	s[sp+1].SetUint64(18446744073709551615)
 	if s[sp+2].Gt(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
 	if s[sp+1].IsZero() { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(19078)
 	if contract.Gas < 32 { return nil, ErrOutOfGas }
 	contract.Gas -= 32
 	if !s[sp+1].IsZero() {
 		sp += 1
-		stack.top = sp
 		goto L19078
 	}
 	sp += 1
 
 	// block @19075 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 19077
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L19078: // block @19078 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(7003)
 	s[sp+1] = s[sp-4]
 	s[sp+2] = s[sp-1]
 	s[sp+3] = s[sp-3]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	s[sp+3].SetUint64(18827)
 	if contract.Gas < 27 { return nil, ErrOutOfGas }
 	contract.Gas -= 27
+	s[sp+0].SetUint64(7003)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 3
-	stack.top = sp
 	goto L18827
 
 L19090: // block @19090 (11 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
-	s[sp+2].SetUint64(64)
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-2]
 	s[sp+3].Sub(&s[sp+4], &s[sp+3])
+	s[sp+2].SetUint64(64)
 	if s[sp+3].Slt(&s[sp+2]) { s[sp+2].SetOne() } else { s[sp+2].Clear() }
 	if s[sp+2].IsZero() { s[sp+2].SetOne() } else { s[sp+2].Clear() }
-	s[sp+3].SetUint64(19107)
 	if contract.Gas < 36 { return nil, ErrOutOfGas }
 	contract.Gas -= 36
 	if !s[sp+2].IsZero() {
+		s[sp+0].SetUint64(0)
+		s[sp+1].SetUint64(0)
 		sp += 2
-		stack.top = sp
 		goto L19107
 	}
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	sp += 2
 
 	// block @19104 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 19106
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L19107: // block @19107 (14 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	s[sp-2] = s[sp-3]
 	if off, over := s[sp-2].Uint64WithOverflow(); !over {
 		s[sp-2].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp-2].Clear() }
 	s[sp-2], s[sp-5] = s[sp-5], s[sp-2]
-	s[sp-1].SetUint64(32)
-	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
+	s[sp-1] = s[sp-2]
 	s[sp-1], s[sp-3] = s[sp-3], s[sp-1]
+	s[sp-2].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	if off, over := s[sp-2].Uint64WithOverflow(); !over {
 		s[sp-2].SetBytes(getData(contract.Input, off, 32))
@@ -20872,86 +16586,77 @@ L19107: // block @19107 (14 instrs)
 	goto dispatch
 
 L19122: // block @19122 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(32)
 	s[sp+2] = s[sp-1]
 	s[sp+3] = s[sp-2]
 	s[sp+2].Sub(&s[sp+3], &s[sp+2])
+	s[sp+1].SetUint64(32)
 	if s[sp+2].Slt(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
 	if s[sp+1].IsZero() { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(19138)
 	if contract.Gas < 34 { return nil, ErrOutOfGas }
 	contract.Gas -= 34
 	if !s[sp+1].IsZero() {
+		s[sp+0].SetUint64(0)
 		sp += 1
-		stack.top = sp
 		goto L19138
 	}
+	s[sp+0].SetUint64(0)
 	sp += 1
 
 	// block @19135 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 19137
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L19138: // block @19138 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(2968)
 	s[sp+1] = s[sp-2]
-	s[sp+2].SetUint64(18621)
 	if contract.Gas < 18 { return nil, ErrOutOfGas }
 	contract.Gas -= 18
+	s[sp+0].SetUint64(2968)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 2
-	stack.top = sp
 	goto L18621
 
 L19147: // block @19147 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(32)
 	s[sp+2] = s[sp-1]
 	s[sp+3] = s[sp-2]
 	s[sp+2].Sub(&s[sp+3], &s[sp+2])
+	s[sp+1].SetUint64(32)
 	if s[sp+2].Slt(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
 	if s[sp+1].IsZero() { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(19163)
 	if contract.Gas < 34 { return nil, ErrOutOfGas }
 	contract.Gas -= 34
 	if !s[sp+1].IsZero() {
+		s[sp+0].SetUint64(0)
 		sp += 1
-		stack.top = sp
 		goto L19163
 	}
+	s[sp+0].SetUint64(0)
 	sp += 1
 
 	// block @19160 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 19162
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L19163: // block @19163 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if off, over := s[sp-2].Uint64WithOverflow(); !over {
 		s[sp-2].SetBytes(getData(contract.Input, off, 32))
@@ -20967,40 +16672,34 @@ L19163: // block @19163 (7 instrs)
 	goto dispatch
 
 L19170: // block @19170 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(18446744073709551615)
 	s[sp+2] = s[sp-1]
+	s[sp+1].SetUint64(18446744073709551615)
 	if s[sp+2].Gt(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
 	if s[sp+1].IsZero() { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(19195)
 	if contract.Gas < 28 { return nil, ErrOutOfGas }
 	contract.Gas -= 28
 	if !s[sp+1].IsZero() {
+		s[sp+0].SetUint64(0)
 		sp += 1
-		stack.top = sp
 		goto L19195
 	}
+	s[sp+0].SetUint64(0)
 	sp += 1
 
 	// block @19188 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(19195)
-	s[sp+1].SetUint64(18455)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(19195)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 1
-	stack.top = sp
 	goto L18455
 
 L19195: // block @19195 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
-	s[sp-1].SetUint64(5)
-	if s[sp-1].LtUint64(256) { s[sp-2].Lsh(&s[sp-2], uint(s[sp-1].Uint64())) } else { s[sp-2].Clear() }
+	s[sp-2].Lsh(&s[sp-2], 5)
 	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-2], s[sp-3] = s[sp-3], s[sp-2]
@@ -21013,220 +16712,189 @@ L19195: // block @19195 (8 instrs)
 	goto dispatch
 
 L19205: // block @19205 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
 	s[sp+1] = s[sp-2]
-	s[sp+2].SetUint64(31)
 	s[sp+3] = s[sp-1]
+	s[sp+2].SetUint64(31)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
 	if s[sp+2].Slt(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(19220)
 	if contract.Gas < 31 { return nil, ErrOutOfGas }
 	contract.Gas -= 31
 	if !s[sp+1].IsZero() {
+		s[sp+0].SetUint64(0)
 		sp += 1
-		stack.top = sp
 		goto L19220
 	}
+	s[sp+0].SetUint64(0)
 	sp += 1
 
 	// block @19217 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 19219
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L19220: // block @19220 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-2]
 	if off, over := s[sp+0].Uint64WithOverflow(); !over {
 		s[sp+0].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(19239)
-	s[sp+2].SetUint64(19234)
 	s[sp+3] = s[sp+0]
-	s[sp+4].SetUint64(19170)
 	if contract.Gas < 27 { return nil, ErrOutOfGas }
 	contract.Gas -= 27
+	s[sp+1].SetUint64(19239)
+	s[sp+2].SetUint64(19234)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 4
-	stack.top = sp
 	goto L19170
 
 L19234: // block @19234 (3 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(18542)
 	if contract.Gas < 12 { return nil, ErrOutOfGas }
 	contract.Gas -= 12
-	sp += 0
-	stack.top = sp
+	if interrupt.Load() { return nil, ErrInterrupt }
 	goto L18542
 
 L19239: // block @19239 (25 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1] = s[sp-2]
 	s[sp+2] = s[sp-1]
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 3
-	pc = 19243
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(32)
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp-1]
+	s[sp+1].SetUint64(32)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
 	s[sp+1], s[sp-1] = s[sp-1], s[sp+1]
-	s[sp+1].SetUint64(32)
 	s[sp+2] = s[sp-2]
-	s[sp+3].SetUint64(5)
-	if s[sp+3].LtUint64(256) { s[sp+2].Lsh(&s[sp+2], uint(s[sp+3].Uint64())) } else { s[sp+2].Clear() }
+	s[sp+2].Lsh(&s[sp+2], 5)
 	s[sp+3] = s[sp-4]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
+	s[sp+1].SetUint64(32)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
 	s[sp+1], s[sp-2] = s[sp-2], s[sp+1]
 	s[sp+1] = s[sp-5]
 	s[sp+2] = s[sp-2]
 	if s[sp+2].Gt(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
 	if s[sp+1].IsZero() { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(19272)
 	if contract.Gas < 65 { return nil, ErrOutOfGas }
 	contract.Gas -= 65
 	if !s[sp+1].IsZero() {
 		sp += 1
-		stack.top = sp
 		goto L19272
 	}
 	sp += 1
 
 	// block @19269 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 19271
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L19272: // block @19272 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(32)
 	s[sp+1] = s[sp-5]
+	s[sp+0].SetUint64(32)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
 	if contract.Gas < 10 { return nil, ErrOutOfGas }
 	contract.Gas -= 10
 	sp += 1
 
 L19277: // block @19277 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-4]
 	s[sp+1] = s[sp-1]
 	if s[sp+1].Lt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(19337)
 	if contract.Gas < 26 { return nil, ErrOutOfGas }
 	contract.Gas -= 26
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L19337
 	}
 
 	// block @19286 (8 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	if off, over := s[sp+0].Uint64WithOverflow(); !over {
 		s[sp+0].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(18446744073709551615)
 	s[sp+2] = s[sp+0]
+	s[sp+1].SetUint64(18446744073709551615)
 	if s[sp+2].Gt(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
 	if s[sp+1].IsZero() { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(19307)
 	if contract.Gas < 31 { return nil, ErrOutOfGas }
 	contract.Gas -= 31
 	if !s[sp+1].IsZero() {
 		sp += 1
-		stack.top = sp
 		goto L19307
 	}
 	sp += 1
 
 	// block @19304 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 19306
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L19307: // block @19307 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 8 { return nil, &ErrStackUnderflow{stackLen: sp, required: 8} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(19322)
 	s[sp+1] = s[sp-8]
-	s[sp+2].SetUint64(32)
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-7]
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
+	s[sp+2].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	s[sp+3].SetUint64(18827)
 	if contract.Gas < 33 { return nil, ErrOutOfGas }
 	contract.Gas -= 33
+	s[sp+0].SetUint64(19322)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 3
-	stack.top = sp
 	goto L18827
 
 L19322: // block @19322 (12 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-5]
-	if contract.Gas < 4 { return nil, ErrOutOfGas }
-	contract.Gas -= 4
-	stack.top = sp + 1
-	pc = 19324
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp-2].SetUint64(32)
-	s[sp-2], s[sp-5] = s[sp-5], s[sp-2]
-	s[sp-1] = s[sp-5]
+	if contract.Gas < 7 { return nil, ErrOutOfGas }
+	contract.Gas -= 7
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
+	s[sp-2] = s[sp-5]
+	s[sp-1].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
-	s[sp-2], s[sp-5] = s[sp-5], s[sp-2]
+	s[sp-5] = s[sp-2]
+	s[sp-2].SetUint64(32)
 	s[sp-3].Add(&s[sp-2], &s[sp-3])
-	s[sp-2].SetUint64(19277)
 	if contract.Gas < 31 { return nil, ErrOutOfGas }
 	contract.Gas -= 31
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += -2
-	stack.top = sp
 	goto L19277
 
 L19337: // block @19337 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 8 { return nil, &ErrStackUnderflow{stackLen: sp, required: 8} }
 	s[sp-2], s[sp-8] = s[sp-8], s[sp-2]
 	s[sp-2], s[sp-7] = s[sp-7], s[sp-2]
@@ -21239,135 +16907,118 @@ L19337: // block @19337 (10 instrs)
 	goto dispatch
 
 L19347: // block @19347 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
 	s[sp+1] = s[sp-2]
-	s[sp+2].SetUint64(31)
 	s[sp+3] = s[sp-1]
+	s[sp+2].SetUint64(31)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
 	if s[sp+2].Slt(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(19362)
 	if contract.Gas < 31 { return nil, ErrOutOfGas }
 	contract.Gas -= 31
 	if !s[sp+1].IsZero() {
+		s[sp+0].SetUint64(0)
 		sp += 1
-		stack.top = sp
 		goto L19362
 	}
+	s[sp+0].SetUint64(0)
 	sp += 1
 
 	// block @19359 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 19361
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L19362: // block @19362 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-2]
 	if off, over := s[sp+0].Uint64WithOverflow(); !over {
 		s[sp+0].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(19376)
-	s[sp+2].SetUint64(19234)
 	s[sp+3] = s[sp+0]
-	s[sp+4].SetUint64(19170)
 	if contract.Gas < 27 { return nil, ErrOutOfGas }
 	contract.Gas -= 27
+	s[sp+1].SetUint64(19376)
+	s[sp+2].SetUint64(19234)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 4
-	stack.top = sp
 	goto L19170
 
 L19376: // block @19376 (25 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
 	s[sp+1] = s[sp-2]
 	s[sp+2] = s[sp-1]
-	if contract.Gas < 10 { return nil, ErrOutOfGas }
-	contract.Gas -= 10
-	stack.top = sp + 3
-	pc = 19380
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+1].SetUint64(32)
+	if contract.Gas < 13 { return nil, ErrOutOfGas }
+	contract.Gas -= 13
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp-1]
+	s[sp+1].SetUint64(32)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
 	s[sp+1], s[sp-1] = s[sp-1], s[sp+1]
-	s[sp+1].SetUint64(32)
 	s[sp+2] = s[sp-2]
-	s[sp+3].SetUint64(5)
-	if s[sp+3].LtUint64(256) { s[sp+2].Lsh(&s[sp+2], uint(s[sp+3].Uint64())) } else { s[sp+2].Clear() }
+	s[sp+2].Lsh(&s[sp+2], 5)
 	s[sp+3] = s[sp-4]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
+	s[sp+1].SetUint64(32)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
 	s[sp+1], s[sp-2] = s[sp-2], s[sp+1]
 	s[sp+1] = s[sp-5]
 	s[sp+2] = s[sp-2]
 	if s[sp+2].Gt(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
 	if s[sp+1].IsZero() { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(19409)
 	if contract.Gas < 65 { return nil, ErrOutOfGas }
 	contract.Gas -= 65
 	if !s[sp+1].IsZero() {
 		sp += 1
-		stack.top = sp
 		goto L19409
 	}
 	sp += 1
 
 	// block @19406 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 19408
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L19409: // block @19409 (4 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(32)
 	s[sp+1] = s[sp-5]
+	s[sp+0].SetUint64(32)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
 	if contract.Gas < 10 { return nil, ErrOutOfGas }
 	contract.Gas -= 10
 	sp += 1
 
 L19414: // block @19414 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-4]
 	s[sp+1] = s[sp-1]
 	if s[sp+1].Lt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(19337)
 	if contract.Gas < 26 { return nil, ErrOutOfGas }
 	contract.Gas -= 26
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
+		if interrupt.Load() { return nil, ErrInterrupt }
 		goto L19337
 	}
 
 	// block @19423 (12 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
@@ -21375,65 +17026,63 @@ L19414: // block @19414 (7 instrs)
 		s[sp+0].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp+0].Clear() }
 	s[sp+1] = s[sp-3]
-	if contract.Gas < 9 { return nil, ErrOutOfGas }
-	contract.Gas -= 9
-	stack.top = sp + 2
-	pc = 19426
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].SetUint64(32)
-	s[sp+0], s[sp-3] = s[sp-3], s[sp+0]
-	s[sp+1] = s[sp-3]
+	if contract.Gas < 12 { return nil, ErrOutOfGas }
+	contract.Gas -= 12
+	if err = aotMstore(contract, mem, &s[sp+1], &s[sp+0]); err != nil { return nil, err }
+	s[sp+0] = s[sp-3]
+	s[sp+1].SetUint64(32)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+0], s[sp-3] = s[sp-3], s[sp+0]
+	s[sp-3] = s[sp+0]
+	s[sp+0].SetUint64(32)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	s[sp+0].SetUint64(19414)
 	if contract.Gas < 29 { return nil, ErrOutOfGas }
 	contract.Gas -= 29
-	sp += 0
-	stack.top = sp
+	if interrupt.Load() { return nil, ErrInterrupt }
 	goto L19414
 
 L19438: // block @19438 (16 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+10 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
-	s[sp+2].Clear()
-	s[sp+3].Clear()
-	s[sp+4].Clear()
-	s[sp+5].Clear()
-	s[sp+6].Clear()
-	s[sp+7].SetUint64(224)
 	s[sp+8] = s[sp-1]
 	s[sp+9] = s[sp-2]
 	s[sp+8].Sub(&s[sp+9], &s[sp+8])
+	s[sp+7].SetUint64(224)
 	if s[sp+8].Slt(&s[sp+7]) { s[sp+7].SetOne() } else { s[sp+7].Clear() }
 	if s[sp+7].IsZero() { s[sp+7].SetOne() } else { s[sp+7].Clear() }
-	s[sp+8].SetUint64(19460)
 	if contract.Gas < 46 { return nil, ErrOutOfGas }
 	contract.Gas -= 46
 	if !s[sp+7].IsZero() {
+		s[sp+0].SetUint64(0)
+		s[sp+1].SetUint64(0)
+		s[sp+2].SetUint64(0)
+		s[sp+3].SetUint64(0)
+		s[sp+4].SetUint64(0)
+		s[sp+5].SetUint64(0)
+		s[sp+6].SetUint64(0)
 		sp += 7
-		stack.top = sp
 		goto L19460
 	}
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
+	s[sp+2].SetUint64(0)
+	s[sp+3].SetUint64(0)
+	s[sp+4].SetUint64(0)
+	s[sp+5].SetUint64(0)
+	s[sp+6].SetUint64(0)
 	sp += 7
 
 	// block @19457 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 19459
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L19460: // block @19460 (15 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 8 { return nil, &ErrStackUnderflow{stackLen: sp, required: 8} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-8]
@@ -21441,229 +17090,205 @@ L19460: // block @19460 (15 instrs)
 		s[sp+0].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp+0].Clear() }
 	s[sp+0], s[sp-7] = s[sp-7], s[sp+0]
-	s[sp+0].SetUint64(32)
 	s[sp+1] = s[sp-8]
+	s[sp+0].SetUint64(32)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
 	if off, over := s[sp+0].Uint64WithOverflow(); !over {
 		s[sp+0].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(18446744073709551615)
 	s[sp+2] = s[sp+0]
+	s[sp+1].SetUint64(18446744073709551615)
 	if s[sp+2].Gt(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
 	if s[sp+1].IsZero() { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(19489)
 	if contract.Gas < 49 { return nil, ErrOutOfGas }
 	contract.Gas -= 49
 	if !s[sp+1].IsZero() {
 		sp += 1
-		stack.top = sp
 		goto L19489
 	}
 	sp += 1
 
 	// block @19486 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 19488
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L19489: // block @19489 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 10 { return nil, &ErrStackUnderflow{stackLen: sp, required: 10} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(19501)
 	s[sp+1] = s[sp-10]
 	s[sp+2] = s[sp-1]
 	s[sp+3] = s[sp-9]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	s[sp+3].SetUint64(18827)
 	if contract.Gas < 27 { return nil, ErrOutOfGas }
 	contract.Gas -= 27
+	s[sp+0].SetUint64(19501)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 3
-	stack.top = sp
 	goto L18827
 
 L19501: // block @19501 (14 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 10 { return nil, &ErrStackUnderflow{stackLen: sp, required: 10} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-8] = s[sp-8], s[sp-1]
-	s[sp-2].SetUint64(64)
 	s[sp-1] = s[sp-10]
+	s[sp-2].SetUint64(64)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	if off, over := s[sp-2].Uint64WithOverflow(); !over {
 		s[sp-2].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp-2].Clear() }
-	s[sp-1].SetUint64(18446744073709551615)
 	s[sp+0] = s[sp-2]
+	s[sp-1].SetUint64(18446744073709551615)
 	if s[sp+0].Gt(&s[sp-1]) { s[sp-1].SetOne() } else { s[sp-1].Clear() }
 	if s[sp-1].IsZero() { s[sp-1].SetOne() } else { s[sp-1].Clear() }
-	s[sp+0].SetUint64(19529)
 	if contract.Gas < 45 { return nil, ErrOutOfGas }
 	contract.Gas -= 45
 	if !s[sp-1].IsZero() {
 		sp += -1
-		stack.top = sp
 		goto L19529
 	}
 	sp += -1
 
 	// block @19526 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 19528
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L19529: // block @19529 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 10 { return nil, &ErrStackUnderflow{stackLen: sp, required: 10} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(19541)
 	s[sp+1] = s[sp-10]
 	s[sp+2] = s[sp-1]
 	s[sp+3] = s[sp-9]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	s[sp+3].SetUint64(19205)
 	if contract.Gas < 27 { return nil, ErrOutOfGas }
 	contract.Gas -= 27
+	s[sp+0].SetUint64(19541)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 3
-	stack.top = sp
 	goto L19205
 
 L19541: // block @19541 (20 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 10 { return nil, &ErrStackUnderflow{stackLen: sp, required: 10} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-7] = s[sp-7], s[sp-1]
-	s[sp-2].SetUint64(96)
 	s[sp-1] = s[sp-10]
+	s[sp-2].SetUint64(96)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	if off, over := s[sp-2].Uint64WithOverflow(); !over {
 		s[sp-2].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp-2].Clear() }
 	s[sp-2], s[sp-6] = s[sp-6], s[sp-2]
-	s[sp-2].SetUint64(128)
 	s[sp-1] = s[sp-10]
+	s[sp-2].SetUint64(128)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	if off, over := s[sp-2].Uint64WithOverflow(); !over {
 		s[sp-2].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp-2].Clear() }
-	s[sp-1].SetUint64(18446744073709551615)
 	s[sp+0] = s[sp-2]
+	s[sp-1].SetUint64(18446744073709551615)
 	if s[sp+0].Gt(&s[sp-1]) { s[sp-1].SetOne() } else { s[sp-1].Clear() }
 	if s[sp-1].IsZero() { s[sp-1].SetOne() } else { s[sp-1].Clear() }
-	s[sp+0].SetUint64(19576)
 	if contract.Gas < 62 { return nil, ErrOutOfGas }
 	contract.Gas -= 62
 	if !s[sp-1].IsZero() {
 		sp += -1
-		stack.top = sp
 		goto L19576
 	}
 	sp += -1
 
 	// block @19573 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 19575
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L19576: // block @19576 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 10 { return nil, &ErrStackUnderflow{stackLen: sp, required: 10} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(19588)
 	s[sp+1] = s[sp-10]
 	s[sp+2] = s[sp-1]
 	s[sp+3] = s[sp-9]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	s[sp+3].SetUint64(19347)
 	if contract.Gas < 27 { return nil, ErrOutOfGas }
 	contract.Gas -= 27
+	s[sp+0].SetUint64(19588)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 3
-	stack.top = sp
 	goto L19347
 
 L19588: // block @19588 (20 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 10 { return nil, &ErrStackUnderflow{stackLen: sp, required: 10} }
 	if sp+1 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-5] = s[sp-5], s[sp-1]
-	s[sp-2].SetUint64(160)
 	s[sp-1] = s[sp-10]
+	s[sp-2].SetUint64(160)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	if off, over := s[sp-2].Uint64WithOverflow(); !over {
 		s[sp-2].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp-2].Clear() }
 	s[sp-2], s[sp-4] = s[sp-4], s[sp-2]
-	s[sp-2].SetUint64(192)
 	s[sp-1] = s[sp-10]
+	s[sp-2].SetUint64(192)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	if off, over := s[sp-2].Uint64WithOverflow(); !over {
 		s[sp-2].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp-2].Clear() }
-	s[sp-1].SetUint64(18446744073709551615)
 	s[sp+0] = s[sp-2]
+	s[sp-1].SetUint64(18446744073709551615)
 	if s[sp+0].Gt(&s[sp-1]) { s[sp-1].SetOne() } else { s[sp-1].Clear() }
 	if s[sp-1].IsZero() { s[sp-1].SetOne() } else { s[sp-1].Clear() }
-	s[sp+0].SetUint64(19623)
 	if contract.Gas < 62 { return nil, ErrOutOfGas }
 	contract.Gas -= 62
 	if !s[sp-1].IsZero() {
 		sp += -1
-		stack.top = sp
 		goto L19623
 	}
 	sp += -1
 
 	// block @19620 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 19622
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L19623: // block @19623 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 10 { return nil, &ErrStackUnderflow{stackLen: sp, required: 10} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(19635)
 	s[sp+1] = s[sp-10]
 	s[sp+2] = s[sp-1]
 	s[sp+3] = s[sp-9]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	s[sp+3].SetUint64(19347)
 	if contract.Gas < 27 { return nil, ErrOutOfGas }
 	contract.Gas -= 27
+	s[sp+0].SetUint64(19635)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 3
-	stack.top = sp
 	goto L19347
 
 L19635: // block @19635 (15 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 12 { return nil, &ErrStackUnderflow{stackLen: sp, required: 12} }
 	s[sp-1], s[sp-3] = s[sp-3], s[sp-1]
 	s[sp-3], s[sp-6] = s[sp-6], s[sp-3]
@@ -21683,54 +17308,47 @@ L19635: // block @19635 (15 instrs)
 	goto dispatch
 
 L19650: // block @19650 (39 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+6 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
 	s[sp+1] = s[sp-1]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 19653
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	if err = aotMload(contract, mem, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-2]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 4
-	pc = 19656
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
-	s[sp+3].SetUint64(32)
 	s[sp+4] = s[sp-1]
+	s[sp+3].SetUint64(32)
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
-	s[sp+4].SetUint64(32)
 	s[sp+5] = s[sp-2]
+	s[sp+4].SetUint64(32)
 	s[sp+4].Add(&s[sp+5], &s[sp+4])
 	if contract.Gas < 21 { return nil, ErrOutOfGas }
 	contract.Gas -= 21
+	s[sp+0].SetUint64(0)
 	stack.top = sp + 5
 	pc = 19666
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].Clear()
-	s[sp+3].SetUint64(32)
 	s[sp+4] = s[sp+1]
 	s[sp+5] = s[sp-2]
 	s[sp+4].Add(&s[sp+5], &s[sp+4])
+	s[sp+3].SetUint64(32)
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
-	if contract.Gas < 17 { return nil, ErrOutOfGas }
-	contract.Gas -= 17
-	stack.top = sp + 4
-	pc = 19674
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(32)
-	s[sp+3].Set(&aotCCTFExchangeV2_25)
-	s[sp+4].SetUint64(31)
+	if contract.Gas < 20 { return nil, ErrOutOfGas }
+	contract.Gas -= 20
+	s[sp+2].SetUint64(0)
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
 	s[sp+5] = s[sp+1]
+	s[sp+4].SetUint64(31)
 	s[sp+4].Add(&s[sp+5], &s[sp+4])
+	s[sp+3].Set(&aotCCTFExchangeV2_25)
 	s[sp+3].And(&s[sp+4], &s[sp+3])
 	s[sp+4] = s[sp-2]
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
+	s[sp+2].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
 	s[sp+2], s[sp+0] = s[sp+0], s[sp+2]
 	s[sp+0], s[sp-3] = s[sp-3], s[sp+0]
@@ -21744,88 +17362,71 @@ L19650: // block @19650 (39 instrs)
 	goto dispatch
 
 L19726: // block @19726 (16 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
 	s[sp+1] = s[sp-1]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 19729
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	if err = aotMload(contract, mem, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
 	s[sp+3] = s[sp-2]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 4
-	pc = 19732
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].SetUint64(32)
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	if err = aotMstore(contract, mem, &s[sp+3], &s[sp+2]); err != nil { return nil, err }
 	s[sp+3] = s[sp-2]
+	s[sp+2].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
 	s[sp+2], s[sp-2] = s[sp-2], s[sp+2]
-	s[sp+2].SetUint64(32)
 	s[sp+3] = s[sp-1]
+	s[sp+2].SetUint64(32)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	s[sp+3].Clear()
 	if contract.Gas < 25 { return nil, ErrOutOfGas }
 	contract.Gas -= 25
+	s[sp+0].SetUint64(0)
+	s[sp+3].SetUint64(0)
 	sp += 4
 
 L19744: // block @19744 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-3]
 	s[sp+1] = s[sp-1]
 	if s[sp+1].Lt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(19774)
 	if contract.Gas < 26 { return nil, ErrOutOfGas }
 	contract.Gas -= 26
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L19774
 	}
 
 	// block @19753 (17 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-2]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 1
-	pc = 19754
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMload(contract, mem, &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp-6]
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + 2
-	pc = 19756
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].SetUint64(32)
-	s[sp+0], s[sp-6] = s[sp-6], s[sp+0]
-	s[sp+1] = s[sp-6]
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMstore(contract, mem, &s[sp+1], &s[sp+0]); err != nil { return nil, err }
+	s[sp+0] = s[sp-6]
+	s[sp+1].SetUint64(32)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+0], s[sp-6] = s[sp-6], s[sp+0]
-	s[sp+0], s[sp-1] = s[sp-1], s[sp+0]
+	s[sp-6] = s[sp+0]
+	s[sp+0] = s[sp-1]
 	s[sp+0], s[sp-2] = s[sp-2], s[sp+0]
+	s[sp-1].SetUint64(32)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
 	s[sp+0].SetUint64(1)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
-	s[sp+0].SetUint64(19744)
 	if contract.Gas < 44 { return nil, ErrOutOfGas }
 	contract.Gas -= 44
-	sp += 0
-	stack.top = sp
+	if interrupt.Load() { return nil, ErrInterrupt }
 	goto L19744
 
 L19774: // block @19774 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 7 { return nil, &ErrStackUnderflow{stackLen: sp, required: 7} }
 	s[sp-2], s[sp-6] = s[sp-6], s[sp-2]
 	s[sp-2], s[sp-7] = s[sp-7], s[sp-2]
@@ -21839,122 +17440,101 @@ L19774: // block @19774 (10 instrs)
 	goto dispatch
 
 L19784: // block @19784 (19 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 8 { return nil, &ErrStackUnderflow{stackLen: sp, required: 8} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Set(&aotCCTFExchangeV2_51)
 	s[sp+1] = s[sp-8]
+	s[sp+0].Set(&aotCCTFExchangeV2_51)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
 	s[sp+1] = s[sp-1]
-	if contract.Gas < 13 { return nil, ErrOutOfGas }
-	contract.Gas -= 13
-	stack.top = sp + 2
-	pc = 19821
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].SetUint64(224)
-	s[sp+1].SetUint64(32)
+	if contract.Gas < 16 { return nil, ErrOutOfGas }
+	contract.Gas -= 16
+	if err = aotMstore(contract, mem, &s[sp+1], &s[sp+0]); err != nil { return nil, err }
 	s[sp+2] = s[sp-1]
+	s[sp+1].SetUint64(32)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 2
-	pc = 19828
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(19842)
-	s[sp+2].SetUint64(224)
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	s[sp+0].SetUint64(224)
+	if err = aotMstore(contract, mem, &s[sp+1], &s[sp+0]); err != nil { return nil, err }
 	s[sp+3] = s[sp-1]
+	s[sp+2].SetUint64(224)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
 	s[sp+3] = s[sp-7]
-	s[sp+4].SetUint64(19650)
 	if contract.Gas < 28 { return nil, ErrOutOfGas }
 	contract.Gas -= 28
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(19842)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 4
-	stack.top = sp
 	goto L19650
 
 L19842: // block @19842 (13 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 8 { return nil, &ErrStackUnderflow{stackLen: sp, required: 8} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-3]
 	s[sp+1] = s[sp-1]
 	s[sp+0].Sub(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(64)
 	s[sp+2] = s[sp-3]
+	s[sp+1].SetUint64(64)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	if contract.Gas < 19 { return nil, ErrOutOfGas }
-	contract.Gas -= 19
-	stack.top = sp + 2
-	pc = 19850
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].SetUint64(19860)
+	if contract.Gas < 22 { return nil, ErrOutOfGas }
+	contract.Gas -= 22
+	if err = aotMstore(contract, mem, &s[sp+1], &s[sp+0]); err != nil { return nil, err }
 	s[sp+1] = s[sp-1]
 	s[sp+2] = s[sp-8]
-	s[sp+3].SetUint64(19650)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
+	s[sp+0].SetUint64(19860)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 3
-	stack.top = sp
 	goto L19650
 
 L19860: // block @19860 (32 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 8 { return nil, &ErrStackUnderflow{stackLen: sp, required: 8} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
 	s[sp-1] = s[sp-8]
+	s[sp+1] = s[sp-4]
 	s[sp+0].SetUint64(96)
-	s[sp+1] = s[sp-4]
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + 1
-	pc = 19868
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp-1].Set(&aotCCTFExchangeV2_1)
+	if contract.Gas < 21 { return nil, ErrOutOfGas }
+	contract.Gas -= 21
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-7]
+	s[sp-1].Set(&aotCCTFExchangeV2_1)
 	s[sp-1].And(&s[sp+0], &s[sp-1])
+	s[sp+1] = s[sp-4]
 	s[sp+0].SetUint64(128)
-	s[sp+1] = s[sp-4]
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + 1
-	pc = 19896
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 21 { return nil, ErrOutOfGas }
+	contract.Gas -= 21
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1] = s[sp-6]
-	s[sp+0].SetUint64(160)
 	s[sp+1] = s[sp-4]
+	s[sp+0].SetUint64(160)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 1
-	pc = 19902
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-1] = s[sp-4]
 	s[sp+0] = s[sp-2]
 	s[sp-1].Sub(&s[sp+0], &s[sp-1])
-	s[sp+0].SetUint64(192)
 	s[sp+1] = s[sp-4]
+	s[sp+0].SetUint64(192)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + 1
-	pc = 19910
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp-1].SetUint64(19920)
+	if contract.Gas < 21 { return nil, ErrOutOfGas }
+	contract.Gas -= 21
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp+0] = s[sp-2]
 	s[sp+1] = s[sp-5]
-	s[sp+2].SetUint64(19726)
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
 	contract.Gas -= 20
+	s[sp-1].SetUint64(19920)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 2
-	stack.top = sp
 	goto L19726
 
 L19920: // block @19920 (14 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 12 { return nil, &ErrStackUnderflow{stackLen: sp, required: 12} }
 	s[sp-1], s[sp-12] = s[sp-12], s[sp-1]
 	s[sp-1], s[sp-11] = s[sp-11], s[sp-1]
@@ -21967,112 +17547,98 @@ L19920: // block @19920 (14 instrs)
 	goto dispatch
 
 L19934: // block @19934 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	s[sp+2] = s[sp-2]
-	s[sp+3].SetUint64(31)
 	s[sp+4] = s[sp-1]
+	s[sp+3].SetUint64(31)
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
 	if s[sp+3].Slt(&s[sp+2]) { s[sp+2].SetOne() } else { s[sp+2].Clear() }
-	s[sp+3].SetUint64(19950)
 	if contract.Gas < 33 { return nil, ErrOutOfGas }
 	contract.Gas -= 33
 	if !s[sp+2].IsZero() {
+		s[sp+0].SetUint64(0)
+		s[sp+1].SetUint64(0)
 		sp += 2
-		stack.top = sp
 		goto L19950
 	}
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	sp += 2
 
 	// block @19947 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 19949
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L19950: // block @19950 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1] = s[sp-3]
 	if off, over := s[sp-1].Uint64WithOverflow(); !over {
 		s[sp-1].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp-1].Clear() }
-	s[sp+0].SetUint64(18446744073709551615)
 	s[sp+1] = s[sp-1]
+	s[sp+0].SetUint64(18446744073709551615)
 	if s[sp+1].Gt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(19973)
 	if contract.Gas < 34 { return nil, ErrOutOfGas }
 	contract.Gas -= 34
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L19973
 	}
 
 	// block @19970 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 19972
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L19973: // block @19973 (18 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(32)
 	s[sp+1] = s[sp-3]
+	s[sp+0].SetUint64(32)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
 	s[sp+0], s[sp-2] = s[sp-2], s[sp+0]
 	s[sp+0] = s[sp-4]
-	s[sp+1].SetUint64(32)
 	s[sp+2] = s[sp-1]
-	s[sp+3].SetUint64(5)
-	if s[sp+3].LtUint64(256) { s[sp+2].Lsh(&s[sp+2], uint(s[sp+3].Uint64())) } else { s[sp+2].Clear() }
+	s[sp+2].Lsh(&s[sp+2], 5)
 	s[sp+3] = s[sp-3]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
+	s[sp+1].SetUint64(32)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
 	if s[sp+1].Gt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(19999)
 	if contract.Gas < 58 { return nil, ErrOutOfGas }
 	contract.Gas -= 58
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L19999
 	}
 
 	// block @19996 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 19998
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L19999: // block @19999 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	s[sp-1], s[sp-4] = s[sp-4], s[sp-1]
 	s[sp-2], s[sp-5] = s[sp-5], s[sp-2]
@@ -22086,339 +17652,308 @@ L19999: // block @19999 (7 instrs)
 	goto dispatch
 
 L20006: // block @20006 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	s[sp+2] = s[sp-2]
-	s[sp+3].SetUint64(31)
 	s[sp+4] = s[sp-1]
+	s[sp+3].SetUint64(31)
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
 	if s[sp+3].Slt(&s[sp+2]) { s[sp+2].SetOne() } else { s[sp+2].Clear() }
-	s[sp+3].SetUint64(20022)
 	if contract.Gas < 33 { return nil, ErrOutOfGas }
 	contract.Gas -= 33
 	if !s[sp+2].IsZero() {
+		s[sp+0].SetUint64(0)
+		s[sp+1].SetUint64(0)
 		sp += 2
-		stack.top = sp
 		goto L20022
 	}
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	sp += 2
 
 	// block @20019 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 20021
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L20022: // block @20022 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1] = s[sp-3]
 	if off, over := s[sp-1].Uint64WithOverflow(); !over {
 		s[sp-1].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp-1].Clear() }
-	s[sp+0].SetUint64(18446744073709551615)
 	s[sp+1] = s[sp-1]
+	s[sp+0].SetUint64(18446744073709551615)
 	if s[sp+1].Gt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(20045)
 	if contract.Gas < 34 { return nil, ErrOutOfGas }
 	contract.Gas -= 34
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L20045
 	}
 
 	// block @20042 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 20044
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L20045: // block @20045 (16 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(32)
 	s[sp+1] = s[sp-3]
+	s[sp+0].SetUint64(32)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
 	s[sp+0], s[sp-2] = s[sp-2], s[sp+0]
 	s[sp+0] = s[sp-4]
-	s[sp+1].SetUint64(32)
 	s[sp+2] = s[sp-1]
 	s[sp+3] = s[sp-3]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
+	s[sp+1].SetUint64(32)
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
 	if s[sp+1].Gt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(19999)
 	if contract.Gas < 52 { return nil, ErrOutOfGas }
 	contract.Gas -= 52
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
+		if interrupt.Load() { return nil, ErrInterrupt }
 		goto L19999
 	}
 
 	// block @20065 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 20067
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L20068: // block @20068 (17 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+11 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
-	s[sp+2].Clear()
-	s[sp+3].Clear()
-	s[sp+4].Clear()
-	s[sp+5].Clear()
-	s[sp+6].Clear()
-	s[sp+7].Clear()
-	s[sp+8].SetUint64(160)
 	s[sp+9] = s[sp-1]
 	s[sp+10] = s[sp-2]
 	s[sp+9].Sub(&s[sp+10], &s[sp+9])
+	s[sp+8].SetUint64(160)
 	if s[sp+9].Slt(&s[sp+8]) { s[sp+8].SetOne() } else { s[sp+8].Clear() }
 	if s[sp+8].IsZero() { s[sp+8].SetOne() } else { s[sp+8].Clear() }
-	s[sp+9].SetUint64(20091)
 	if contract.Gas < 48 { return nil, ErrOutOfGas }
 	contract.Gas -= 48
 	if !s[sp+8].IsZero() {
+		s[sp+0].SetUint64(0)
+		s[sp+1].SetUint64(0)
+		s[sp+2].SetUint64(0)
+		s[sp+3].SetUint64(0)
+		s[sp+4].SetUint64(0)
+		s[sp+5].SetUint64(0)
+		s[sp+6].SetUint64(0)
+		s[sp+7].SetUint64(0)
 		sp += 8
-		stack.top = sp
 		goto L20091
 	}
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
+	s[sp+2].SetUint64(0)
+	s[sp+3].SetUint64(0)
+	s[sp+4].SetUint64(0)
+	s[sp+5].SetUint64(0)
+	s[sp+6].SetUint64(0)
+	s[sp+7].SetUint64(0)
 	sp += 8
 
 	// block @20088 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 20090
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L20091: // block @20091 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 9 { return nil, &ErrStackUnderflow{stackLen: sp, required: 9} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(20100)
 	s[sp+1] = s[sp-9]
-	s[sp+2].SetUint64(18621)
 	if contract.Gas < 18 { return nil, ErrOutOfGas }
 	contract.Gas -= 18
+	s[sp+0].SetUint64(20100)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 2
-	stack.top = sp
 	goto L18621
 
 L20100: // block @20100 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 10 { return nil, &ErrStackUnderflow{stackLen: sp, required: 10} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-9] = s[sp-9], s[sp-1]
-	s[sp-1].SetUint64(20114)
-	s[sp+0].SetUint64(32)
 	s[sp+1] = s[sp-10]
+	s[sp+0].SetUint64(32)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(18621)
 	if contract.Gas < 29 { return nil, ErrOutOfGas }
 	contract.Gas -= 29
+	s[sp-1].SetUint64(20114)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 1
-	stack.top = sp
 	goto L18621
 
 L20114: // block @20114 (13 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 10 { return nil, &ErrStackUnderflow{stackLen: sp, required: 10} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-8] = s[sp-8], s[sp-1]
-	s[sp-1].SetUint64(64)
 	s[sp+0] = s[sp-10]
+	s[sp-1].SetUint64(64)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
 	if off, over := s[sp-1].Uint64WithOverflow(); !over {
 		s[sp-1].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp-1].Clear() }
-	s[sp+0].SetUint64(18446744073709551615)
 	s[sp+1] = s[sp-1]
+	s[sp+0].SetUint64(18446744073709551615)
 	if s[sp+1].Gt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(20141)
 	if contract.Gas < 43 { return nil, ErrOutOfGas }
 	contract.Gas -= 43
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L20141
 	}
 
 	// block @20138 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 20140
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L20141: // block @20141 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 11 { return nil, &ErrStackUnderflow{stackLen: sp, required: 11} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(20153)
 	s[sp+1] = s[sp-11]
 	s[sp+2] = s[sp-1]
 	s[sp+3] = s[sp-10]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	s[sp+3].SetUint64(19934)
 	if contract.Gas < 27 { return nil, ErrOutOfGas }
 	contract.Gas -= 27
+	s[sp+0].SetUint64(20153)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 3
-	stack.top = sp
 	goto L19934
 
 L20153: // block @20153 (17 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 12 { return nil, &ErrStackUnderflow{stackLen: sp, required: 12} }
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
 	s[sp-1], s[sp-9] = s[sp-9], s[sp-1]
 	s[sp-2], s[sp-8] = s[sp-8], s[sp-2]
-	s[sp-3].SetUint64(96)
 	s[sp-2] = s[sp-12]
+	s[sp-3].SetUint64(96)
 	s[sp-3].Add(&s[sp-2], &s[sp-3])
 	if off, over := s[sp-3].Uint64WithOverflow(); !over {
 		s[sp-3].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp-3].Clear() }
-	s[sp-2].SetUint64(18446744073709551615)
 	s[sp-1] = s[sp-3]
+	s[sp-2].SetUint64(18446744073709551615)
 	if s[sp-1].Gt(&s[sp-2]) { s[sp-2].SetOne() } else { s[sp-2].Clear() }
 	if s[sp-2].IsZero() { s[sp-2].SetOne() } else { s[sp-2].Clear() }
-	s[sp-1].SetUint64(20184)
 	if contract.Gas < 53 { return nil, ErrOutOfGas }
 	contract.Gas -= 53
 	if !s[sp-2].IsZero() {
 		sp += -2
-		stack.top = sp
 		goto L20184
 	}
 	sp += -2
 
 	// block @20181 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 20183
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L20184: // block @20184 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 11 { return nil, &ErrStackUnderflow{stackLen: sp, required: 11} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(20196)
 	s[sp+1] = s[sp-11]
 	s[sp+2] = s[sp-1]
 	s[sp+3] = s[sp-10]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	s[sp+3].SetUint64(19934)
 	if contract.Gas < 27 { return nil, ErrOutOfGas }
 	contract.Gas -= 27
+	s[sp+0].SetUint64(20196)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 3
-	stack.top = sp
 	goto L19934
 
 L20196: // block @20196 (17 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 12 { return nil, &ErrStackUnderflow{stackLen: sp, required: 12} }
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
 	s[sp-1], s[sp-7] = s[sp-7], s[sp-1]
 	s[sp-2], s[sp-6] = s[sp-6], s[sp-2]
-	s[sp-3].SetUint64(128)
 	s[sp-2] = s[sp-12]
+	s[sp-3].SetUint64(128)
 	s[sp-3].Add(&s[sp-2], &s[sp-3])
 	if off, over := s[sp-3].Uint64WithOverflow(); !over {
 		s[sp-3].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp-3].Clear() }
-	s[sp-2].SetUint64(18446744073709551615)
 	s[sp-1] = s[sp-3]
+	s[sp-2].SetUint64(18446744073709551615)
 	if s[sp-1].Gt(&s[sp-2]) { s[sp-2].SetOne() } else { s[sp-2].Clear() }
 	if s[sp-2].IsZero() { s[sp-2].SetOne() } else { s[sp-2].Clear() }
-	s[sp-1].SetUint64(20227)
 	if contract.Gas < 53 { return nil, ErrOutOfGas }
 	contract.Gas -= 53
 	if !s[sp-2].IsZero() {
 		sp += -2
-		stack.top = sp
 		goto L20227
 	}
 	sp += -2
 
 	// block @20224 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 20226
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L20227: // block @20227 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 11 { return nil, &ErrStackUnderflow{stackLen: sp, required: 11} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(20239)
 	s[sp+1] = s[sp-11]
 	s[sp+2] = s[sp-1]
 	s[sp+3] = s[sp-10]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	s[sp+3].SetUint64(20006)
 	if contract.Gas < 27 { return nil, ErrOutOfGas }
 	contract.Gas -= 27
+	s[sp+0].SetUint64(20239)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 3
-	stack.top = sp
 	goto L20006
 
 L20239: // block @20239 (20 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 14 { return nil, &ErrStackUnderflow{stackLen: sp, required: 14} }
 	s[sp-1], s[sp-11] = s[sp-11], s[sp-1]
 	s[sp-1], s[sp-14] = s[sp-14], s[sp-1]
@@ -22442,140 +17977,130 @@ L20239: // block @20239 (20 instrs)
 	goto dispatch
 
 L20259: // block @20259 (15 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+9 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
-	s[sp+2].Clear()
-	s[sp+3].Clear()
-	s[sp+4].Clear()
-	s[sp+5].Clear()
-	s[sp+6].SetUint64(160)
 	s[sp+7] = s[sp-1]
 	s[sp+8] = s[sp-2]
 	s[sp+7].Sub(&s[sp+8], &s[sp+7])
+	s[sp+6].SetUint64(160)
 	if s[sp+7].Slt(&s[sp+6]) { s[sp+6].SetOne() } else { s[sp+6].Clear() }
 	if s[sp+6].IsZero() { s[sp+6].SetOne() } else { s[sp+6].Clear() }
-	s[sp+7].SetUint64(20280)
 	if contract.Gas < 44 { return nil, ErrOutOfGas }
 	contract.Gas -= 44
 	if !s[sp+6].IsZero() {
+		s[sp+0].SetUint64(0)
+		s[sp+1].SetUint64(0)
+		s[sp+2].SetUint64(0)
+		s[sp+3].SetUint64(0)
+		s[sp+4].SetUint64(0)
+		s[sp+5].SetUint64(0)
 		sp += 6
-		stack.top = sp
 		goto L20280
 	}
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
+	s[sp+2].SetUint64(0)
+	s[sp+3].SetUint64(0)
+	s[sp+4].SetUint64(0)
+	s[sp+5].SetUint64(0)
 	sp += 6
 
 	// block @20277 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 20279
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L20280: // block @20280 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 7 { return nil, &ErrStackUnderflow{stackLen: sp, required: 7} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(20289)
 	s[sp+1] = s[sp-7]
-	s[sp+2].SetUint64(18621)
 	if contract.Gas < 18 { return nil, ErrOutOfGas }
 	contract.Gas -= 18
+	s[sp+0].SetUint64(20289)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 2
-	stack.top = sp
 	goto L18621
 
 L20289: // block @20289 (9 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 8 { return nil, &ErrStackUnderflow{stackLen: sp, required: 8} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-7] = s[sp-7], s[sp-1]
-	s[sp-1].SetUint64(20303)
-	s[sp+0].SetUint64(32)
 	s[sp+1] = s[sp-8]
+	s[sp+0].SetUint64(32)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	s[sp+1].SetUint64(18621)
 	if contract.Gas < 29 { return nil, ErrOutOfGas }
 	contract.Gas -= 29
+	s[sp-1].SetUint64(20303)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 1
-	stack.top = sp
 	goto L18621
 
 L20303: // block @20303 (25 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 8 { return nil, &ErrStackUnderflow{stackLen: sp, required: 8} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-6] = s[sp-6], s[sp-1]
-	s[sp-1].SetUint64(64)
 	s[sp+0] = s[sp-8]
+	s[sp-1].SetUint64(64)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
 	if off, over := s[sp-1].Uint64WithOverflow(); !over {
 		s[sp-1].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp-1].Clear() }
 	s[sp-1], s[sp-5] = s[sp-5], s[sp-1]
-	s[sp-1].SetUint64(96)
 	s[sp+0] = s[sp-8]
+	s[sp-1].SetUint64(96)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
 	if off, over := s[sp-1].Uint64WithOverflow(); !over {
 		s[sp-1].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp-1].Clear() }
 	s[sp-1], s[sp-4] = s[sp-4], s[sp-1]
-	s[sp-1].SetUint64(128)
 	s[sp+0] = s[sp-8]
+	s[sp-1].SetUint64(128)
 	s[sp-1].Add(&s[sp+0], &s[sp-1])
 	if off, over := s[sp-1].Uint64WithOverflow(); !over {
 		s[sp-1].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp-1].Clear() }
-	s[sp+0].SetUint64(18446744073709551615)
 	s[sp+1] = s[sp-1]
+	s[sp+0].SetUint64(18446744073709551615)
 	if s[sp+1].Gt(&s[sp+0]) { s[sp+0].SetOne() } else { s[sp+0].Clear() }
 	if s[sp+0].IsZero() { s[sp+0].SetOne() } else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(20344)
 	if contract.Gas < 77 { return nil, ErrOutOfGas }
 	contract.Gas -= 77
 	if !s[sp+0].IsZero() {
-		sp += 0
-		stack.top = sp
 		goto L20344
 	}
 
 	// block @20341 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 20343
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L20344: // block @20344 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 9 { return nil, &ErrStackUnderflow{stackLen: sp, required: 9} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(20356)
 	s[sp+1] = s[sp-9]
 	s[sp+2] = s[sp-1]
 	s[sp+3] = s[sp-8]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	s[sp+3].SetUint64(20006)
 	if contract.Gas < 27 { return nil, ErrOutOfGas }
 	contract.Gas -= 27
+	s[sp+0].SetUint64(20356)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 3
-	stack.top = sp
 	goto L20006
 
 L20356: // block @20356 (18 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 12 { return nil, &ErrStackUnderflow{stackLen: sp, required: 12} }
 	s[sp-1], s[sp-9] = s[sp-9], s[sp-1]
 	s[sp-1], s[sp-12] = s[sp-12], s[sp-1]
@@ -22597,41 +18122,38 @@ L20356: // block @20356 (18 instrs)
 	goto dispatch
 
 L20374: // block @20374 (11 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
-	s[sp+2].SetUint64(64)
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-2]
 	s[sp+3].Sub(&s[sp+4], &s[sp+3])
+	s[sp+2].SetUint64(64)
 	if s[sp+3].Slt(&s[sp+2]) { s[sp+2].SetOne() } else { s[sp+2].Clear() }
 	if s[sp+2].IsZero() { s[sp+2].SetOne() } else { s[sp+2].Clear() }
-	s[sp+3].SetUint64(20391)
 	if contract.Gas < 36 { return nil, ErrOutOfGas }
 	contract.Gas -= 36
 	if !s[sp+2].IsZero() {
+		s[sp+0].SetUint64(0)
+		s[sp+1].SetUint64(0)
 		sp += 2
-		stack.top = sp
 		goto L20391
 	}
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	sp += 2
 
 	// block @20388 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 20390
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L20391: // block @20391 (15 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-3]
@@ -22639,56 +18161,50 @@ L20391: // block @20391 (15 instrs)
 		s[sp+0].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp+0].Clear() }
 	s[sp+0], s[sp-2] = s[sp-2], s[sp+0]
-	s[sp+0].SetUint64(32)
 	s[sp+1] = s[sp-3]
+	s[sp+0].SetUint64(32)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
 	if off, over := s[sp+0].Uint64WithOverflow(); !over {
 		s[sp+0].SetBytes(getData(contract.Input, off, 32))
 	} else { s[sp+0].Clear() }
-	s[sp+1].SetUint64(18446744073709551615)
 	s[sp+2] = s[sp+0]
+	s[sp+1].SetUint64(18446744073709551615)
 	if s[sp+2].Gt(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
 	if s[sp+1].IsZero() { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(20420)
 	if contract.Gas < 49 { return nil, ErrOutOfGas }
 	contract.Gas -= 49
 	if !s[sp+1].IsZero() {
 		sp += 1
-		stack.top = sp
 		goto L20420
 	}
 	sp += 1
 
 	// block @20417 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 20419
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L20420: // block @20420 (8 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(20432)
 	s[sp+1] = s[sp-5]
 	s[sp+2] = s[sp-1]
 	s[sp+3] = s[sp-4]
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
-	s[sp+3].SetUint64(18827)
 	if contract.Gas < 27 { return nil, ErrOutOfGas }
 	contract.Gas -= 27
+	s[sp+0].SetUint64(20432)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 3
-	stack.top = sp
 	goto L18827
 
 L20432: // block @20432 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 7 { return nil, &ErrStackUnderflow{stackLen: sp, required: 7} }
 	s[sp-1], s[sp-3] = s[sp-3], s[sp-1]
 	s[sp-3], s[sp-6] = s[sp-6], s[sp-3]
@@ -22703,62 +18219,50 @@ L20432: // block @20432 (10 instrs)
 	goto dispatch
 
 L20442: // block @20442 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Set(&aotCCTFExchangeV2_86)
-	s[sp+1].Clear()
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 20477
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	s[sp+0].Set(&aotCCTFExchangeV2_87)
+	if err = aotMstoreC(contract, mem, 0, &s[sp+0]); err != nil { return nil, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
 	s[sp+0].SetUint64(17)
-	s[sp+1].SetUint64(4)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 20482
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].SetUint64(36)
-	s[sp+1].Clear()
+	if err = aotMstoreC(contract, mem, 4, &s[sp+0]); err != nil { return nil, err }
 	if contract.Gas < 5 { return nil, ErrOutOfGas }
 	contract.Gas -= 5
+	s[sp+0].SetUint64(36)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 20486
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L20487: // block @20487 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
 	s[sp+1] = s[sp-1]
-	s[sp+2].SetUint64(20501)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+1].IsZero() {
+		s[sp+0].SetUint64(0)
 		sp += 1
-		stack.top = sp
 		goto L20501
 	}
+	s[sp+0].SetUint64(0)
 	sp += 1
 
 	// block @20494 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(20501)
-	s[sp+1].SetUint64(20442)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(20501)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 1
-	stack.top = sp
 	goto L20442
 
 L20501: // block @20501 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
-	s[sp-1].Set(&aotCCTFExchangeV2_87)
+	s[sp-1].Set(&aotCCTFExchangeV2_88)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
 	s[sp-2], s[sp-3] = s[sp-3], s[sp-2]
 	if contract.Gas < 20 { return nil, ErrOutOfGas }
@@ -22770,36 +18274,31 @@ L20501: // block @20501 (6 instrs)
 	goto dispatch
 
 L20539: // block @20539 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 1 { return nil, &ErrStackUnderflow{stackLen: sp, required: 1} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Set(&aotCCTFExchangeV2_87)
 	s[sp+2] = s[sp-1]
+	s[sp+1].Set(&aotCCTFExchangeV2_88)
 	s[sp+1].Sub(&s[sp+2], &s[sp+1])
-	s[sp+2].SetUint64(20587)
 	if contract.Gas < 25 { return nil, ErrOutOfGas }
 	contract.Gas -= 25
 	if !s[sp+1].IsZero() {
+		s[sp+0].SetUint64(0)
 		sp += 1
-		stack.top = sp
 		goto L20587
 	}
+	s[sp+0].SetUint64(0)
 	sp += 1
 
 	// block @20580 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(20587)
-	s[sp+1].SetUint64(20442)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(20587)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 1
-	stack.top = sp
 	goto L20442
 
 L20587: // block @20587 (6 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	s[sp-1].SetUint64(1)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
@@ -22813,7 +18312,6 @@ L20587: // block @20587 (6 instrs)
 	goto dispatch
 
 L20594: // block @20594 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
@@ -22823,29 +18321,25 @@ L20594: // block @20594 (10 instrs)
 	s[sp+2] = s[sp-1]
 	if s[sp+2].Gt(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
 	if s[sp+1].IsZero() { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(2356)
 	if contract.Gas < 35 { return nil, ErrOutOfGas }
 	contract.Gas -= 35
 	if !s[sp+1].IsZero() {
+		if interrupt.Load() { return nil, ErrInterrupt }
 		sp += 1
-		stack.top = sp
 		goto L2356
 	}
 	sp += 1
 
 	// block @20606 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(2356)
-	s[sp+1].SetUint64(20442)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(2356)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 1
-	stack.top = sp
 	goto L20442
 
 L20613: // block @20613 (14 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-1]
@@ -22859,82 +18353,67 @@ L20613: // block @20613 (14 instrs)
 	s[sp+3] = s[sp-2]
 	if s[sp+3].Eq(&s[sp+2]) { s[sp+2].SetOne() } else { s[sp+2].Clear() }
 	s[sp+1].Or(&s[sp+2], &s[sp+1])
-	s[sp+2].SetUint64(2356)
 	if contract.Gas < 51 { return nil, ErrOutOfGas }
 	contract.Gas -= 51
 	if !s[sp+1].IsZero() {
+		if interrupt.Load() { return nil, ErrInterrupt }
 		sp += 1
-		stack.top = sp
 		goto L2356
 	}
 	sp += 1
 
 	// block @20629 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(2356)
-	s[sp+1].SetUint64(20442)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(2356)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 1
-	stack.top = sp
 	goto L20442
 
 L20636: // block @20636 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Set(&aotCCTFExchangeV2_86)
-	s[sp+1].Clear()
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 20671
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	s[sp+0].Set(&aotCCTFExchangeV2_87)
+	if err = aotMstoreC(contract, mem, 0, &s[sp+0]); err != nil { return nil, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
 	s[sp+0].SetUint64(18)
-	s[sp+1].SetUint64(4)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 20676
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].SetUint64(36)
-	s[sp+1].Clear()
+	if err = aotMstoreC(contract, mem, 4, &s[sp+0]); err != nil { return nil, err }
 	if contract.Gas < 5 { return nil, ErrOutOfGas }
 	contract.Gas -= 5
+	s[sp+0].SetUint64(36)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 20680
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L20681: // block @20681 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
 	s[sp+1] = s[sp-2]
-	s[sp+2].SetUint64(20695)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+1].IsZero() {
+		s[sp+0].SetUint64(0)
 		sp += 1
-		stack.top = sp
 		goto L20695
 	}
+	s[sp+0].SetUint64(0)
 	sp += 1
 
 	// block @20688 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(20695)
-	s[sp+1].SetUint64(20636)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(20695)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 1
-	stack.top = sp
 	goto L20636
 
 L20695: // block @20695 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	s[sp-3].Div(&s[sp-2], &s[sp-3])
 	s[sp-3], s[sp-4] = s[sp-4], s[sp-3]
@@ -22947,33 +18426,25 @@ L20695: // block @20695 (5 instrs)
 	goto dispatch
 
 L20700: // block @20700 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Set(&aotCCTFExchangeV2_86)
-	s[sp+1].Clear()
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 20735
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	s[sp+0].Set(&aotCCTFExchangeV2_87)
+	if err = aotMstoreC(contract, mem, 0, &s[sp+0]); err != nil { return nil, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
 	s[sp+0].SetUint64(33)
-	s[sp+1].SetUint64(4)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 20740
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].SetUint64(36)
-	s[sp+1].Clear()
+	if err = aotMstoreC(contract, mem, 4, &s[sp+0]); err != nil { return nil, err }
 	if contract.Gas < 5 { return nil, ErrOutOfGas }
 	contract.Gas -= 5
+	s[sp+0].SetUint64(36)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 20744
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L20745: // block @20745 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp+0] = s[sp-2]
@@ -22983,94 +18454,78 @@ L20745: // block @20745 (10 instrs)
 	s[sp+2] = s[sp+0]
 	if s[sp+2].Gt(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
 	if s[sp+1].IsZero() { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(2356)
 	if contract.Gas < 35 { return nil, ErrOutOfGas }
 	contract.Gas -= 35
 	if !s[sp+1].IsZero() {
+		if interrupt.Load() { return nil, ErrInterrupt }
 		sp += 1
-		stack.top = sp
 		goto L2356
 	}
 	sp += 1
 
 	// block @20757 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(2356)
-	s[sp+1].SetUint64(20442)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(2356)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 1
-	stack.top = sp
 	goto L20442
 
 L20764: // block @20764 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Set(&aotCCTFExchangeV2_86)
-	s[sp+1].Clear()
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 20799
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	s[sp+0].Set(&aotCCTFExchangeV2_87)
+	if err = aotMstoreC(contract, mem, 0, &s[sp+0]); err != nil { return nil, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
 	s[sp+0].SetUint64(50)
-	s[sp+1].SetUint64(4)
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 20804
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].SetUint64(36)
-	s[sp+1].Clear()
+	if err = aotMstoreC(contract, mem, 4, &s[sp+0]); err != nil { return nil, err }
 	if contract.Gas < 5 { return nil, ErrOutOfGas }
 	contract.Gas -= 5
+	s[sp+0].SetUint64(36)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 20808
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L20809: // block @20809 (10 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+4 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(32)
 	s[sp+2] = s[sp-1]
 	s[sp+3] = s[sp-2]
 	s[sp+2].Sub(&s[sp+3], &s[sp+2])
+	s[sp+1].SetUint64(32)
 	if s[sp+2].Slt(&s[sp+1]) { s[sp+1].SetOne() } else { s[sp+1].Clear() }
 	if s[sp+1].IsZero() { s[sp+1].SetOne() } else { s[sp+1].Clear() }
-	s[sp+2].SetUint64(20825)
 	if contract.Gas < 34 { return nil, ErrOutOfGas }
 	contract.Gas -= 34
 	if !s[sp+1].IsZero() {
+		s[sp+0].SetUint64(0)
 		sp += 1
-		stack.top = sp
 		goto L20825
 	}
+	s[sp+0].SetUint64(0)
 	sp += 1
 
 	// block @20822 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 20824
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L20825: // block @20825 (7 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
-	if contract.Gas < 3 { return nil, ErrOutOfGas }
-	contract.Gas -= 3
-	stack.top = sp + -1
-	pc = 20827
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 6 { return nil, ErrOutOfGas }
+	contract.Gas -= 6
+	if err = aotMload(contract, mem, &s[sp-2]); err != nil { return nil, err }
 	s[sp-2], s[sp-4] = s[sp-4], s[sp-2]
 	s[sp-2], s[sp-3] = s[sp-3], s[sp-2]
 	if contract.Gas < 16 { return nil, ErrOutOfGas }
@@ -23082,34 +18537,29 @@ L20825: // block @20825 (7 instrs)
 	goto dispatch
 
 L20832: // block @20832 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+3 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
 	s[sp+1] = s[sp-2]
-	s[sp+2].SetUint64(20846)
 	if contract.Gas < 19 { return nil, ErrOutOfGas }
 	contract.Gas -= 19
 	if !s[sp+1].IsZero() {
+		s[sp+0].SetUint64(0)
 		sp += 1
-		stack.top = sp
 		goto L20846
 	}
+	s[sp+0].SetUint64(0)
 	sp += 1
 
 	// block @20839 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].SetUint64(20846)
-	s[sp+1].SetUint64(20636)
 	if contract.Gas < 14 { return nil, ErrOutOfGas }
 	contract.Gas -= 14
+	s[sp+0].SetUint64(20846)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 1
-	stack.top = sp
 	goto L20636
 
 L20846: // block @20846 (5 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 4 { return nil, &ErrStackUnderflow{stackLen: sp, required: 4} }
 	s[sp-3].Mod(&s[sp-2], &s[sp-3])
 	s[sp-3], s[sp-4] = s[sp-4], s[sp-3]
@@ -23122,36 +18572,31 @@ L20846: // block @20846 (5 instrs)
 	goto dispatch
 
 L20851: // block @20851 (21 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 3 { return nil, &ErrStackUnderflow{stackLen: sp, required: 3} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
 	s[sp+1] = s[sp-2]
-	if contract.Gas < 6 { return nil, ErrOutOfGas }
-	contract.Gas -= 6
-	stack.top = sp + 2
-	pc = 20854
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 9 { return nil, ErrOutOfGas }
+	contract.Gas -= 9
+	if err = aotMload(contract, mem, &s[sp+1]); err != nil { return nil, err }
 	s[sp+2] = s[sp+1]
-	s[sp+3].SetUint64(32)
 	s[sp+4] = s[sp-2]
+	s[sp+3].SetUint64(32)
 	s[sp+3].Add(&s[sp+4], &s[sp+3])
 	s[sp+4] = s[sp-1]
 	if contract.Gas < 15 { return nil, ErrOutOfGas }
 	contract.Gas -= 15
+	s[sp+0].SetUint64(0)
 	stack.top = sp + 5
 	pc = 20861
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+2].Clear()
-	s[sp+2], s[sp-1] = s[sp-1], s[sp+2]
-	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	s[sp+1], s[sp-1] = s[sp-1], s[sp+1]
 	s[sp+2] = s[sp-1]
-	if contract.Gas < 14 { return nil, ErrOutOfGas }
-	contract.Gas -= 14
-	stack.top = sp + 3
-	pc = 20867
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	s[sp+1].Add(&s[sp+2], &s[sp+1])
+	s[sp-1] = s[sp+1]
+	s[sp+2] = s[sp-1]
+	if contract.Gas < 17 { return nil, ErrOutOfGas }
+	contract.Gas -= 17
+	s[sp+1].SetUint64(0)
+	if err = aotMstore(contract, mem, &s[sp+2], &s[sp+1]); err != nil { return nil, err }
 	s[sp-1], s[sp-3] = s[sp-3], s[sp-1]
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
 	if contract.Gas < 18 { return nil, ErrOutOfGas }
@@ -23163,57 +18608,50 @@ L20851: // block @20851 (21 instrs)
 	goto dispatch
 
 L20873: // block @20873 (11 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 2 { return nil, &ErrStackUnderflow{stackLen: sp, required: 2} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
-	s[sp+2].SetUint64(64)
 	s[sp+3] = s[sp-1]
 	s[sp+4] = s[sp-2]
 	s[sp+3].Sub(&s[sp+4], &s[sp+3])
+	s[sp+2].SetUint64(64)
 	if s[sp+3].Slt(&s[sp+2]) { s[sp+2].SetOne() } else { s[sp+2].Clear() }
 	if s[sp+2].IsZero() { s[sp+2].SetOne() } else { s[sp+2].Clear() }
-	s[sp+3].SetUint64(20890)
 	if contract.Gas < 36 { return nil, ErrOutOfGas }
 	contract.Gas -= 36
 	if !s[sp+2].IsZero() {
+		s[sp+0].SetUint64(0)
+		s[sp+1].SetUint64(0)
 		sp += 2
-		stack.top = sp
 		goto L20890
 	}
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	sp += 2
 
 	// block @20887 (3 instrs, fallthrough-only)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Clear()
-	s[sp+1].Clear()
 	if contract.Gas < 4 { return nil, ErrOutOfGas }
 	contract.Gas -= 4
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(0)
 	stack.top = sp + 2
 	pc = 20889
 	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
 	return res, nil
 
 L20890: // block @20890 (16 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 5 { return nil, &ErrStackUnderflow{stackLen: sp, required: 5} }
 	s[sp-2] = s[sp-3]
-	if contract.Gas < 8 { return nil, ErrOutOfGas }
-	contract.Gas -= 8
-	stack.top = sp + -1
-	pc = 20894
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp-1].SetUint64(32)
-	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
+	if contract.Gas < 11 { return nil, ErrOutOfGas }
+	contract.Gas -= 11
+	if err = aotMload(contract, mem, &s[sp-2]); err != nil { return nil, err }
+	s[sp-1] = s[sp-2]
 	s[sp-1], s[sp-3] = s[sp-3], s[sp-1]
+	s[sp-2].SetUint64(32)
 	s[sp-2].Add(&s[sp-1], &s[sp-2])
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + -1
-	pc = 20900
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMload(contract, mem, &s[sp-2]); err != nil { return nil, err }
 	s[sp-2], s[sp-3] = s[sp-3], s[sp-2]
 	s[sp-2], s[sp-5] = s[sp-5], s[sp-2]
 	s[sp-2], s[sp-3] = s[sp-3], s[sp-2]
@@ -23227,72 +18665,59 @@ L20890: // block @20890 (16 instrs)
 	goto dispatch
 
 L20907: // block @20907 (29 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 6 { return nil, &ErrStackUnderflow{stackLen: sp, required: 6} }
 	if sp+5 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
-	s[sp+0].Set(&aotCCTFExchangeV2_1)
 	s[sp+1] = s[sp-6]
+	s[sp+0].Set(&aotCCTFExchangeV2_1)
 	s[sp+0].And(&s[sp+1], &s[sp+0])
 	s[sp+1] = s[sp-1]
-	if contract.Gas < 13 { return nil, ErrOutOfGas }
-	contract.Gas -= 13
-	stack.top = sp + 2
-	pc = 20932
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 16 { return nil, ErrOutOfGas }
+	contract.Gas -= 16
+	if err = aotMstore(contract, mem, &s[sp+1], &s[sp+0]); err != nil { return nil, err }
 	s[sp+0] = s[sp-5]
+	s[sp+2] = s[sp-1]
 	s[sp+1].SetUint64(32)
-	s[sp+2] = s[sp-1]
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 2
-	pc = 20938
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMstore(contract, mem, &s[sp+1], &s[sp+0]); err != nil { return nil, err }
 	s[sp+0] = s[sp-4]
+	s[sp+2] = s[sp-1]
 	s[sp+1].SetUint64(64)
-	s[sp+2] = s[sp-1]
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 2
-	pc = 20944
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].SetUint64(160)
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	if err = aotMstore(contract, mem, &s[sp+1], &s[sp+0]); err != nil { return nil, err }
+	s[sp+2] = s[sp-1]
 	s[sp+1].SetUint64(96)
-	s[sp+2] = s[sp-1]
 	s[sp+1].Add(&s[sp+2], &s[sp+1])
-	if contract.Gas < 12 { return nil, ErrOutOfGas }
-	contract.Gas -= 12
-	stack.top = sp + 2
-	pc = 20951
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
-	s[sp+0].Clear()
-	s[sp+1].SetUint64(20965)
-	s[sp+2].SetUint64(160)
+	if contract.Gas < 15 { return nil, ErrOutOfGas }
+	contract.Gas -= 15
+	s[sp+0].SetUint64(160)
+	if err = aotMstore(contract, mem, &s[sp+1], &s[sp+0]); err != nil { return nil, err }
 	s[sp+3] = s[sp-1]
+	s[sp+2].SetUint64(160)
 	s[sp+2].Add(&s[sp+3], &s[sp+2])
 	s[sp+3] = s[sp-3]
-	s[sp+4].SetUint64(19726)
 	if contract.Gas < 28 { return nil, ErrOutOfGas }
 	contract.Gas -= 28
+	s[sp+0].SetUint64(0)
+	s[sp+1].SetUint64(20965)
+	if interrupt.Load() { return nil, ErrInterrupt }
 	sp += 4
-	stack.top = sp
 	goto L19726
 
 L20965: // block @20965 (17 instrs)
-	if interrupt.Load() { return nil, ErrInterrupt }
 	if sp < 9 { return nil, &ErrStackUnderflow{stackLen: sp, required: 9} }
 	if sp+2 > 1024 { return nil, &ErrStackOverflow{stackLen: sp, limit: 1024} }
 	s[sp-1], s[sp-2] = s[sp-2], s[sp-1]
 	s[sp-1] = s[sp-4]
-	s[sp+0].SetUint64(128)
 	s[sp+1] = s[sp-3]
+	s[sp+0].SetUint64(128)
 	s[sp+0].Add(&s[sp+1], &s[sp+0])
-	if contract.Gas < 18 { return nil, ErrOutOfGas }
-	contract.Gas -= 18
-	stack.top = sp + 1
-	pc = 20973
-	if res, err = aotStep(evm, contract, scope, jt, &pc); err != nil { return res, err }
+	if contract.Gas < 21 { return nil, ErrOutOfGas }
+	contract.Gas -= 21
+	if err = aotMstore(contract, mem, &s[sp+0], &s[sp-1]); err != nil { return nil, err }
 	s[sp-2], s[sp-9] = s[sp-9], s[sp-2]
 	s[sp-2], s[sp-8] = s[sp-8], s[sp-2]
 	if contract.Gas < 26 { return nil, ErrOutOfGas }
