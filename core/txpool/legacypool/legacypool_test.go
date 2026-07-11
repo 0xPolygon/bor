@@ -5573,3 +5573,85 @@ func TestRebroadcastLoopIntegration(t *testing.T) {
 		t.Error("transaction should be tracked in lastRebroadcast after rebroadcast")
 	}
 }
+
+// TestPendingSnapshotDifferential verifies that the lock-free published
+// snapshot served by Pending matches the pool's locked pending content
+// after every synchronous mutation batch, and that Pending stays coherent
+// through resets, drops and gas-tip changes.
+func TestPendingSnapshotDifferential(t *testing.T) {
+	t.Parallel()
+
+	pool, _ := setupPool()
+	defer pool.Close()
+
+	keys := make([]*ecdsa.PrivateKey, 6)
+	for i := range keys {
+		keys[i], _ = crypto.GenerateKey()
+		testAddBalance(pool, crypto.PubkeyToAddress(keys[i].PublicKey), big.NewInt(10000000))
+	}
+
+	compare := func(step string) {
+		t.Helper()
+
+		got := pool.Pending(txpool.PendingFilter{}, nil)
+
+		pool.mu.RLock()
+		defer pool.mu.RUnlock()
+
+		want := 0
+		for addr, list := range pool.pending {
+			flat := list.txs.Flatten()
+			if len(flat) == 0 {
+				continue
+			}
+			want++
+			g := got[addr]
+			if len(g) != len(flat) {
+				t.Fatalf("%s: account %x: snapshot has %d txs, pool has %d", step, addr, len(g), len(flat))
+			}
+			for i, tx := range flat {
+				if g[i].Hash != tx.Hash() {
+					t.Fatalf("%s: account %x tx %d: snapshot hash %x != pool hash %x", step, addr, i, g[i].Hash, tx.Hash())
+				}
+			}
+		}
+		if len(got) != want {
+			t.Fatalf("%s: snapshot has %d accounts, pool has %d", step, len(got), want)
+		}
+	}
+
+	// Batch 1: contiguous nonces for three accounts.
+	var batch1 []*types.Transaction
+	for i := 0; i < 3; i++ {
+		for n := uint64(0); n < 4; n++ {
+			batch1 = append(batch1, pricedTransaction(n, 100000, big.NewInt(2), keys[i]))
+		}
+	}
+	pool.addRemotesSync(batch1)
+	compare("batch1")
+
+	// Batch 2: more accounts, one gapped (stays queued).
+	var batch2 []*types.Transaction
+	for n := uint64(0); n < 2; n++ {
+		batch2 = append(batch2, pricedTransaction(n, 100000, big.NewInt(3), keys[3]))
+	}
+	batch2 = append(batch2, pricedTransaction(5, 100000, big.NewInt(3), keys[4])) // gapped
+	pool.addRemotesSync(batch2)
+	compare("batch2")
+
+	// Replacement: bump the price of a pending tx.
+	pool.addRemotesSync([]*types.Transaction{pricedTransaction(1, 100000, big.NewInt(20), keys[0])})
+	compare("replacement")
+
+	// Gas tip bump drops the cheap txs and republishes directly.
+	pool.SetGasTip(big.NewInt(3))
+	compare("setgastip")
+
+	// Chain head reset re-runs the reorg and republishes.
+	<-pool.requestReset(nil, nil)
+	compare("reset")
+
+	// Fresh additions after the reset.
+	pool.addRemotesSync([]*types.Transaction{pricedTransaction(0, 100000, big.NewInt(5), keys[5])})
+	compare("post-reset add")
+}

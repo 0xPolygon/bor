@@ -318,6 +318,12 @@ type LegacyPool struct {
 	all     *lookup     // All transactions to allow lookups
 	priced  *pricedList // All transactions sorted by price
 
+	// pendingView is a copy-on-write snapshot of the pending lazy views,
+	// published by the write side (runReorg and the rare direct mutators)
+	// and served lock-free by Pending. Neither the map nor its value
+	// slices are ever mutated after publication.
+	pendingView atomic.Pointer[pendingSnapshot]
+
 	reqResetCh      chan *txpoolResetRequest
 	reqPromoteCh    chan *accountSet
 	queueTxEventCh  chan *types.Transaction
@@ -339,6 +345,26 @@ type LegacyPool struct {
 
 type txpoolResetRequest struct {
 	oldHead, newHead *types.Header
+}
+
+// pendingSnapshot is an immutable view of the executable transactions,
+// grouped by origin account and sorted by nonce. Readers iterate it without
+// holding pool.mu; staleness is bounded by the next runReorg publication.
+type pendingSnapshot struct {
+	view map[common.Address][]*txpool.LazyTransaction
+}
+
+// publishPendingView rebuilds the copy-on-write pending snapshot served by
+// Pending. Callers must hold pool.mu. Per-account slices are reused from the
+// generation-tagged lazy cache, so unchanged accounts cost one map insert.
+func (pool *LegacyPool) publishPendingView() {
+	view := make(map[common.Address][]*txpool.LazyTransaction, len(pool.pending))
+	for addr, list := range pool.pending {
+		if lazies := list.LazyFlatten(pool); len(lazies) > 0 {
+			view[addr] = lazies
+		}
+	}
+	pool.pendingView.Store(&pendingSnapshot{view: view})
 }
 
 // New creates a new transaction pool to gather, sort and filter inbound
@@ -623,6 +649,7 @@ func (pool *LegacyPool) identifyStuckTransactions() []*types.Transaction {
 func (pool *LegacyPool) SetGasTip(tip *big.Int) {
 	pool.mu.Lock()
 	defer pool.mu.Unlock()
+	defer pool.publishPendingView() // runs before the unlock
 
 	var (
 		newTip = uint256.MustFromBig(tip)
@@ -714,28 +741,33 @@ func (pool *LegacyPool) Pending(filter txpool.PendingFilter, interrupt *atomic.B
 		return nil
 	}
 
-	// Capture the time taken to acquire the lock
+	// Serve from the published copy-on-write snapshot; the builder and the
+	// prefetcher never wait on pool.mu. Staleness is bounded by the next
+	// runReorg publication and stale entries fail Resolve() harmlessly.
 	lockWait := time.Now()
-	pool.mu.Lock()
+	snap := pool.pendingView.Load()
+	if snap == nil {
+		// No snapshot published yet (pool still initializing); build one
+		// under the lock as a fallback.
+		pool.mu.Lock()
+		pool.publishPendingView()
+		snap = pool.pendingView.Load()
+		pool.mu.Unlock()
+	}
 	pendingLockWaitTimer.Update(time.Since(lockWait))
-	defer pool.mu.Unlock()
 
 	if interrupt == nil {
 		interrupt = new(atomic.Bool)
 	}
 
-	pending := make(map[common.Address][]*txpool.LazyTransaction, len(pool.pending))
-	for addr, list := range pool.pending {
+	pending := make(map[common.Address][]*txpool.LazyTransaction, len(snap.view))
+	for addr, lazies := range snap.view {
 		// Check for the flag to interrupt block building on timeout.
 		if interrupt.Load() {
 			// We could send partial set of pending transactions but they'll anyways
 			// be rejected during commit transactions. Instead avoid sending anything.
 			return map[common.Address][]*txpool.LazyTransaction{}
 		}
-
-		// Reuse the cached lazy view; the conversion is rebuilt only for
-		// accounts whose transactions changed since the previous call.
-		lazies := list.LazyFlatten(pool)
 
 		// If the miner requests tip enforcement, cap the lists now. The view
 		// is shared across calls, so cap by prefix-subslicing only — never
@@ -1661,6 +1693,12 @@ func (pool *LegacyPool) runReorg(done chan struct{}, reset *txpoolResetRequest, 
 	dropBetweenReorgHistogram.Update(int64(pool.changesSinceReorg))
 	pool.changesSinceReorg = 0 // Reset change counter
 
+	// Publish the refreshed pending snapshot for lock-free readers. Pending
+	// mutations either happen in this critical section, schedule a reorg
+	// that re-enters it (add paths), or publish themselves (SetGasTip,
+	// Clear); in-between staleness resolves through LazyTransaction.Resolve.
+	pool.publishPendingView()
+
 	pool.mu.Unlock()
 	reorgLockDurationTimer.Update(time.Since(lockTime))
 
@@ -2233,6 +2271,7 @@ func numSlots(tx *types.Transaction) int {
 func (pool *LegacyPool) Clear() {
 	pool.mu.Lock()
 	defer pool.mu.Unlock()
+	defer pool.publishPendingView() // runs before the unlock
 
 	// unreserve each tracked account. Ideally, we could just clear the
 	// reservation map in the parent txpool context. However, if we clear in
