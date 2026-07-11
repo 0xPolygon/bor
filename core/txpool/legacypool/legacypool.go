@@ -334,6 +334,11 @@ type LegacyPool struct {
 	// slices are ever mutated after publication.
 	pendingView atomic.Pointer[pendingSnapshot]
 
+	// lastRequestedFilter records the most recent miner-shaped filter that
+	// missed the pre-truncated snapshot variants; the next publication builds
+	// a variant for it so follow-up reads become map copies.
+	lastRequestedFilter atomic.Pointer[filteredCut]
+
 	reqResetCh      chan *txpoolResetRequest
 	reqPromoteCh    chan *accountSet
 	queueTxEventCh  chan *types.Transaction
@@ -361,32 +366,37 @@ type txpoolResetRequest struct {
 // grouped by origin account and sorted by nonce. Readers iterate it without
 // holding pool.mu; staleness is bounded by the next runReorg publication.
 //
-// Alongside the raw view it carries a pre-filtered variant for the filter the
-// miner is predicted to request next (minTip/baseFee/gasCap below). When a
-// Pending call's filter matches exactly, serving it is a map copy with no
-// per-transaction fee comparisons.
+// Alongside the raw view it carries up to two pre-truncated variants: one for
+// the filter the miner is predicted to request next, one for the last filter
+// a reader actually requested (the prediction lags one block whenever the
+// builder races the pool's head reset, so the observed filter covers the rest
+// of the block). When a Pending call matches either, serving it is a map copy
+// with no per-transaction fee comparisons.
 type pendingSnapshot struct {
 	view     map[common.Address][]*txpool.LazyTransaction
-	filtered map[common.Address][]*txpool.LazyTransaction
-	minTip   *uint256.Int
-	baseFee  *uint256.Int
-	gasCap   uint64
+	filtered [2]*filteredView
 
-	// lateFiltered caches the first read-time filtering result computed for a
-	// miner-shaped filter that missed the publish-time prediction. The
-	// prediction lags one block whenever the builder races the pool's head
-	// reset (its base fee derives from the previous head), so the first
-	// Pending call of a block pays the full scan and parks the result here;
-	// the follow-up calls (prefetch workers, rebuilds) serve it as a map copy.
+	// lateFiltered caches a read-time filtering result computed for a
+	// miner-shaped filter that missed both pre-truncated variants, bridging
+	// repeat calls until the next publication picks the filter up.
 	lateFiltered atomic.Pointer[filteredView]
+}
+
+// filteredCut identifies one concrete pending filter.
+type filteredCut struct {
+	minTip  *uint256.Int
+	baseFee *uint256.Int
+	gasCap  uint64
+}
+
+func (c *filteredCut) equal(o *filteredCut) bool {
+	return c.gasCap == o.gasCap && uint256PtrEq(c.minTip, o.minTip) && uint256PtrEq(c.baseFee, o.baseFee)
 }
 
 // filteredView is a pending view truncated for one concrete filter.
 type filteredView struct {
-	minTip  *uint256.Int
-	baseFee *uint256.Int
-	gasCap  uint64
-	view    map[common.Address][]*txpool.LazyTransaction
+	filteredCut
+	view map[common.Address][]*txpool.LazyTransaction
 }
 
 // publishPendingView rebuilds the copy-on-write pending snapshot served by
@@ -395,35 +405,50 @@ type filteredView struct {
 //
 // The predicted miner filter mirrors miner/worker.buildDefaultFilter: the
 // pool's gas tip, the next block's base fee and the fork-gated per-transaction
-// gas cap. A wrong prediction is harmless — Pending falls back to filtering
-// at read time.
+// gas cap. The last-requested filter is republished alongside it so readers
+// keep hitting across content republications within a block. A wrong
+// prediction is harmless — Pending falls back to filtering at read time.
 func (pool *LegacyPool) publishPendingView() {
-	var (
-		minTip  = pool.gasTip.Load()
-		baseFee *uint256.Int
-		gasCap  uint64
-	)
+	predicted := &filteredCut{minTip: pool.gasTip.Load()}
 	if head := pool.currentHead.Load(); head != nil {
 		next := new(big.Int).Add(head.Number, big.NewInt(1))
 		if pool.chainconfig.IsLondon(next) {
-			baseFee = uint256.MustFromBig(eip1559.CalcBaseFee(pool.chainconfig, head))
+			predicted.baseFee = uint256.MustFromBig(eip1559.CalcBaseFee(pool.chainconfig, head))
 		}
 		if pool.chainconfig.IsOsaka(next) || (pool.chainconfig.Bor != nil && pool.chainconfig.Bor.IsMadhugiri(next)) {
-			gasCap = params.MaxTxGas
+			predicted.gasCap = params.MaxTxGas
 		}
 	}
+	cuts := [2]*filteredCut{predicted, nil}
+	if last := pool.lastRequestedFilter.Load(); last != nil && !last.equal(predicted) {
+		cuts[1] = last
+	}
 	view := make(map[common.Address][]*txpool.LazyTransaction, len(pool.pending))
-	filtered := make(map[common.Address][]*txpool.LazyTransaction, len(pool.pending))
+	filtered := [2]map[common.Address][]*txpool.LazyTransaction{
+		make(map[common.Address][]*txpool.LazyTransaction, len(pool.pending)),
+		nil,
+	}
+	if cuts[1] != nil {
+		filtered[1] = make(map[common.Address][]*txpool.LazyTransaction, len(pool.pending))
+	}
 	for addr, list := range pool.pending {
-		lazies, flen := list.LazyFlatten(pool, minTip, baseFee, gasCap)
+		lazies, prefixes := list.LazyFlatten(pool, cuts)
 		if len(lazies) > 0 {
 			view[addr] = lazies
 		}
-		if flen > 0 {
-			filtered[addr] = lazies[:flen]
+		for s := range cuts {
+			if cuts[s] != nil && prefixes[s] > 0 {
+				filtered[s][addr] = lazies[:prefixes[s]]
+			}
 		}
 	}
-	pool.pendingView.Store(&pendingSnapshot{view: view, filtered: filtered, minTip: minTip, baseFee: baseFee, gasCap: gasCap})
+	snap := &pendingSnapshot{view: view}
+	for s := range cuts {
+		if cuts[s] != nil {
+			snap.filtered[s] = &filteredView{filteredCut: *cuts[s], view: filtered[s]}
+		}
+	}
+	pool.pendingView.Store(snap)
 }
 
 // New creates a new transaction pool to gather, sort and filter inbound
@@ -819,36 +844,21 @@ func (pool *LegacyPool) Pending(filter txpool.PendingFilter, interrupt *atomic.B
 		interrupt = new(atomic.Bool)
 	}
 
-	// Fast path: the snapshot was pre-filtered at publish time for exactly
-	// this filter, so serving it needs no per-transaction fee comparisons.
-	if filter.BlobFee == nil && filter.GasLimitCap == snap.gasCap &&
-		uint256PtrEq(filter.MinTip, snap.minTip) && uint256PtrEq(filter.BaseFee, snap.baseFee) {
-		pendingPrefilterHitMeter.Mark(1)
-
-		pending := make(map[common.Address][]*txpool.LazyTransaction, len(snap.filtered))
-		for addr, lazies := range snap.filtered {
-			if interrupt.Load() {
-				return map[common.Address][]*txpool.LazyTransaction{}
+	// Fast paths: a pre-truncated variant for exactly this filter exists on
+	// the snapshot (built at publish time or parked by an earlier scan), so
+	// serving it needs no per-transaction fee comparisons.
+	req := &filteredCut{minTip: filter.MinTip, baseFee: filter.BaseFee, gasCap: filter.GasLimitCap}
+	if filter.BlobFee == nil {
+		for _, fv := range snap.filtered {
+			if fv != nil && fv.filteredCut.equal(req) {
+				pendingPrefilterHitMeter.Mark(1)
+				return servePendingView(fv.view, interrupt)
 			}
-			pending[addr] = lazies
 		}
-		return pending
-	}
-	// Second chance: an earlier call already scanned for this exact filter
-	// and parked the result on the snapshot.
-	if late := snap.lateFiltered.Load(); late != nil &&
-		filter.BlobFee == nil && filter.GasLimitCap == late.gasCap &&
-		uint256PtrEq(filter.MinTip, late.minTip) && uint256PtrEq(filter.BaseFee, late.baseFee) {
-		pendingPrefilterLateHitMeter.Mark(1)
-
-		pending := make(map[common.Address][]*txpool.LazyTransaction, len(late.view))
-		for addr, lazies := range late.view {
-			if interrupt.Load() {
-				return map[common.Address][]*txpool.LazyTransaction{}
-			}
-			pending[addr] = lazies
+		if late := snap.lateFiltered.Load(); late != nil && late.filteredCut.equal(req) {
+			pendingPrefilterLateHitMeter.Mark(1)
+			return servePendingView(late.view, interrupt)
 		}
-		return pending
 	}
 	pendingPrefilterMissMeter.Mark(1)
 
@@ -886,19 +896,30 @@ func (pool *LegacyPool) Pending(filter txpool.PendingFilter, interrupt *atomic.B
 	}
 
 	// Park the scan result for follow-up calls with the same miner-shaped
-	// filter (a separate copy: the caller mutates the returned map). Uncapped
-	// filters are already cheap and skipped to keep the slot for the builder.
+	// filter (a separate copy: the caller mutates the returned map), and
+	// record the filter so the next publication pre-truncates for it too.
+	// Uncapped filters are already cheap and skipped to keep the slots for
+	// the builder.
 	if filter.MinTip != nil && filter.BaseFee != nil && filter.BlobFee == nil {
 		cached := make(map[common.Address][]*txpool.LazyTransaction, len(pending))
 		for addr, lazies := range pending {
 			cached[addr] = lazies
 		}
-		snap.lateFiltered.Store(&filteredView{
-			minTip:  filter.MinTip,
-			baseFee: filter.BaseFee,
-			gasCap:  filter.GasLimitCap,
-			view:    cached,
-		})
+		snap.lateFiltered.Store(&filteredView{filteredCut: *req, view: cached})
+		pool.lastRequestedFilter.Store(req)
+	}
+	return pending
+}
+
+// servePendingView hands out a pre-truncated pending view as a fresh map
+// (callers mutate the returned map; the shared value slices stay intact).
+func servePendingView(src map[common.Address][]*txpool.LazyTransaction, interrupt *atomic.Bool) map[common.Address][]*txpool.LazyTransaction {
+	pending := make(map[common.Address][]*txpool.LazyTransaction, len(src))
+	for addr, lazies := range src {
+		if interrupt.Load() {
+			return map[common.Address][]*txpool.LazyTransaction{}
+		}
+		pending[addr] = lazies
 	}
 	return pending
 }

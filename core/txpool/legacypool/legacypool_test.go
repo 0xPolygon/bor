@@ -5737,7 +5737,7 @@ func TestPendingPrefilterDifferential(t *testing.T) {
 	// The filter the snapshot was pre-built for must take the fast path and
 	// still match the reference semantics.
 	snap := pool.pendingView.Load()
-	predicted := txpool.PendingFilter{MinTip: snap.minTip, BaseFee: snap.baseFee, GasLimitCap: snap.gasCap}
+	predicted := txpool.PendingFilter{MinTip: snap.filtered[0].minTip, BaseFee: snap.filtered[0].baseFee, GasLimitCap: snap.filtered[0].gasCap}
 	hits := pendingPrefilterHitMeter.Snapshot().Count()
 	check("predicted", predicted)
 	if pendingPrefilterHitMeter.Snapshot().Count() <= hits {
@@ -5759,11 +5759,21 @@ func TestPendingPrefilterDifferential(t *testing.T) {
 		t.Fatalf("repeated miner-shaped filter did not serve the parked late result")
 	}
 
+	// The miss recorded the filter as last-requested; the next publication
+	// must pre-truncate for it, turning the same call into a direct hit even
+	// though the snapshot content changed.
+	pool.addRemotesSync([]*types.Transaction{pricedTransaction(4, 100000, big.NewInt(5), keys[4])})
+	directHits := pendingPrefilterHitMeter.Snapshot().Count()
+	check("miner-shaped after republish", minerShaped)
+	if pendingPrefilterHitMeter.Snapshot().Count() <= directHits {
+		t.Fatalf("republication did not pre-truncate for the last-requested filter")
+	}
+
 	// A gas tip bump republishes with a new prediction; the new predicted
 	// filter must hit again and reflect the drop.
 	pool.SetGasTip(big.NewInt(3))
 	snap = pool.pendingView.Load()
-	predicted = txpool.PendingFilter{MinTip: snap.minTip, BaseFee: snap.baseFee, GasLimitCap: snap.gasCap}
+	predicted = txpool.PendingFilter{MinTip: snap.filtered[0].minTip, BaseFee: snap.filtered[0].baseFee, GasLimitCap: snap.filtered[0].gasCap}
 	hits = pendingPrefilterHitMeter.Snapshot().Count()
 	check("post-setgastip predicted", predicted)
 	if pendingPrefilterHitMeter.Snapshot().Count() <= hits {

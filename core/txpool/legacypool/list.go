@@ -336,15 +336,22 @@ type list struct {
 	lazyGen  uint64
 	lazyView []*txpool.LazyTransaction
 
-	// Cached filtered-prefix length of lazyView for the last (minTip, baseFee,
-	// gasCap) it was computed against. Invalidated whenever lazyView is rebuilt
-	// or the filter values change, so republishing an unchanged account under
-	// an unchanged filter skips the per-transaction fee comparisons.
-	filterValid   bool
-	filterMinTip  *uint256.Int
-	filterBaseFee *uint256.Int
-	filterGasCap  uint64
-	filterLen     int
+	// Two cached filtered-prefix lengths of lazyView, one per filter the
+	// publisher tracks (the predicted next-block filter and the last filter a
+	// reader actually requested). Invalidated whenever lazyView is rebuilt;
+	// keyed by filter values, so republishing an unchanged account under
+	// unchanged filters skips the per-transaction fee comparisons.
+	filterCache [2]prefixCacheSlot
+}
+
+// prefixCacheSlot caches the filtered-prefix length of a list's lazy view for
+// one concrete (minTip, baseFee, gasCap) filter.
+type prefixCacheSlot struct {
+	valid   bool
+	minTip  *uint256.Int
+	baseFee *uint256.Int
+	gasCap  uint64
+	prefix  int
 }
 
 // newList creates a new transaction list for maintaining nonce-indexable fast,
@@ -366,11 +373,12 @@ func (l *list) Contains(nonce uint64) bool {
 
 // LazyFlatten returns the account's transactions as a nonce-sorted, shared
 // []*LazyTransaction, rebuilding the conversion only when the underlying
-// SortedMap content changed since the last call, together with the length of
-// the leading prefix passing the (minTip, baseFee, gasCap) filter — the same
-// truncation rules Pending applies at read time. Callers must treat the
-// returned slice as read-only; prefix subslicing (tip/gas filtering) is fine.
-func (l *list) LazyFlatten(pool *LegacyPool, minTip, baseFee *uint256.Int, gasCap uint64) ([]*txpool.LazyTransaction, int) {
+// SortedMap content changed since the last call, together with the lengths of
+// the leading prefixes passing each of the given (minTip, baseFee, gasCap)
+// filters — the same truncation rules Pending applies at read time. A nil
+// filter entry yields the full length. Callers must treat the returned slice
+// as read-only; prefix subslicing (tip/gas filtering) is fine.
+func (l *list) LazyFlatten(pool *LegacyPool, filters [2]*filteredCut) ([]*txpool.LazyTransaction, [2]int) {
 	txs, gen := l.txs.flattenWithGen()
 
 	l.lazyMu.Lock()
@@ -395,27 +403,37 @@ func (l *list) LazyFlatten(pool *LegacyPool, minTip, baseFee *uint256.Int, gasCa
 			}
 		}
 		l.lazyGen, l.lazyView = gen, lazies
-		l.filterValid = false
+		l.filterCache[0].valid = false
+		l.filterCache[1].valid = false
 	}
 
-	if l.filterValid && uint256PtrEq(l.filterMinTip, minTip) && uint256PtrEq(l.filterBaseFee, baseFee) && l.filterGasCap == gasCap {
-		return l.lazyView, l.filterLen
-	}
-
-	n := len(l.lazyView)
-	for i, ltx := range l.lazyView {
-		if minTip != nil && ltx.Tx.EffectiveGasTipIntCmp(minTip, baseFee) < 0 {
-			n = i
-			break
+	var prefixes [2]int
+	for s, f := range filters {
+		if f == nil {
+			prefixes[s] = len(l.lazyView)
+			continue
 		}
-		if gasCap != 0 && ltx.Gas > gasCap {
-			n = i
-			break
+		slot := &l.filterCache[s]
+		if slot.valid && uint256PtrEq(slot.minTip, f.minTip) && uint256PtrEq(slot.baseFee, f.baseFee) && slot.gasCap == f.gasCap {
+			prefixes[s] = slot.prefix
+			continue
 		}
+		n := len(l.lazyView)
+		for i, ltx := range l.lazyView {
+			if f.minTip != nil && ltx.Tx.EffectiveGasTipIntCmp(f.minTip, f.baseFee) < 0 {
+				n = i
+				break
+			}
+			if f.gasCap != 0 && ltx.Gas > f.gasCap {
+				n = i
+				break
+			}
+		}
+		*slot = prefixCacheSlot{valid: true, minTip: f.minTip, baseFee: f.baseFee, gasCap: f.gasCap, prefix: n}
+		prefixes[s] = n
 	}
-	l.filterValid, l.filterMinTip, l.filterBaseFee, l.filterGasCap, l.filterLen = true, minTip, baseFee, gasCap, n
 
-	return l.lazyView, n
+	return l.lazyView, prefixes
 }
 
 // uint256PtrEq reports whether two optional uint256 values are equal, treating
