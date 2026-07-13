@@ -178,6 +178,15 @@ var (
 	prefetchMissTooLateMeter       = metrics.NewRegisteredMeter("worker/prefetch/missreason/too_late", nil)
 	prefetchMissNeverEnqueuedMeter = metrics.NewRegisteredMeter("worker/prefetch/missreason/never_enqueued", nil)
 
+	// Split of never_enqueued by tx first-seen time vs build start:
+	// late_arrival = the tx reached the pool after the build environment was
+	// created (no pool snapshot taken by the providers could have included
+	// it); in_pool = the tx was already known and the providers still failed
+	// to stream it (plan/actual gas divergence past the overflow budget, or a
+	// full-channel drop).
+	prefetchMissLateArrivalMeter = metrics.NewRegisteredMeter("worker/prefetch/missreason/late_arrival", nil)
+	prefetchMissInPoolMeter      = metrics.NewRegisteredMeter("worker/prefetch/missreason/in_pool", nil)
+
 	// Debounce for the non-mining pending-snapshot rebuild
 	// (BOR_PENDING_SNAPSHOT_DEBOUNCE_MS, 0 = off). The rebuild recomputes
 	// tx/receipt trie roots over every accumulated tx plus full receipt and
@@ -292,6 +301,12 @@ type environment struct {
 	// stream. May be nil.
 	enqueuedTxHashes *sync.Map
 
+	// createdAt marks when this build environment was constructed. Used to
+	// split never-enqueued prefetch misses into late arrivals (tx first seen
+	// after the build started — no snapshot could have contained it) vs
+	// in-pool coverage gaps (tx was available and we still failed to stream it).
+	createdAt time.Time
+
 	// Observability for pre block building phase
 	makeEnvDuration    time.Duration
 	makeHeaderDuration time.Duration // primarily includes call to bor.Prepare
@@ -318,6 +333,7 @@ func (env *environment) copy() *environment {
 		processReader:      env.processReader,
 		prefetchedTxHashes: env.prefetchedTxHashes,
 		enqueuedTxHashes:   env.enqueuedTxHashes,
+		createdAt:          env.createdAt,
 		makeEnvDuration:    env.makeEnvDuration,
 		makeHeaderDuration: env.makeHeaderDuration,
 		pendingDuration:    env.pendingDuration,
@@ -1409,6 +1425,7 @@ func (w *worker) makeEnv(header *types.Header, coinbase common.Address, witness 
 		processReader:      genParams.processReader,
 		prefetchedTxHashes: genParams.prefetchedTxHashes,
 		enqueuedTxHashes:   genParams.enqueuedTxHashes,
+		createdAt:          time.Now(),
 	}
 	env.evm.SetInterrupt(&w.interruptBlockBuilding)
 	env.stateSyncReserve = stateSyncReserveFor(w.chainConfig, header.Number)
@@ -1801,6 +1818,11 @@ mainloop:
 							prefetchMissTooLateMeter.Mark(1)
 						} else {
 							prefetchMissNeverEnqueuedMeter.Mark(1)
+							if tx.Time().After(env.createdAt) {
+								prefetchMissLateArrivalMeter.Mark(1)
+							} else {
+								prefetchMissInPoolMeter.Mark(1)
+							}
 						}
 					}
 				}
