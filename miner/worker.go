@@ -108,6 +108,9 @@ const (
 	// prefetchMaxGasLimitPercent caps the idle-phase prefetch gas budget to
 	// guard against misconfiguration DoS.
 	prefetchMaxGasLimitPercent = 150
+
+	// prefetchWidenMaxPercent caps the BOR_PREFETCH_GAS_PCT experiment knob.
+	prefetchWidenMaxPercent = 400
 )
 
 var (
@@ -186,6 +189,32 @@ var (
 	// full-channel drop).
 	prefetchMissLateArrivalMeter = metrics.NewRegisteredMeter("worker/prefetch/missreason/late_arrival", nil)
 	prefetchMissInPoolMeter      = metrics.NewRegisteredMeter("worker/prefetch/missreason/in_pool", nil)
+
+	// Prefetch gas-budget widening (BOR_PREFETCH_GAS_PCT, percent of block gas
+	// limit; 0/unset = off, current defaults). Applied to both the idle-phase
+	// total budget and the builder plan budget. Rationale: both providers
+	// budget by DECLARED tx gas while the builder consumes ACTUAL gas, so the
+	// builder reaches deeper into the pool than the providers covered —
+	// measured 100% of never-enqueued producer misses were txs already in the
+	// pool (step13, missreason/in_pool). Widening only enlarges the hint set;
+	// the block itself is unaffected.
+	prefetchGasPct = func() uint64 {
+		pct, _ := strconv.Atoi(os.Getenv("BOR_PREFETCH_GAS_PCT"))
+		if pct <= 0 {
+			return 0
+		}
+		if pct > prefetchWidenMaxPercent {
+			return prefetchWidenMaxPercent
+		}
+		return uint64(pct)
+	}()
+
+	// Enqueue-volume meters observing the widening's inflation: how many txs
+	// each provider streams to the prefetcher. Watch alongside the
+	// cache/prefetch/insert meters and RSS to see whether a wider budget
+	// inflates the prefetch cache disproportionately.
+	prefetchIdleEnqueuedMeter = metrics.NewRegisteredMeter("worker/prefetch/enqueued/idle", nil)
+	prefetchPlanEnqueuedMeter = metrics.NewRegisteredMeter("worker/prefetch/enqueued/plan", nil)
 
 	// Debounce for the non-mining pending-snapshot rebuild
 	// (BOR_PENDING_SNAPSHOT_DEBOUNCE_MS, 0 = off). The rebuild recomputes
@@ -2267,6 +2296,11 @@ func sendPlan(builderPlanCh chan<- *types.Transaction, genParams *generateParams
 	// Clone is O(N) pointer copies — done synchronously before the heap is consumed.
 	clone := plainTxs.clone()
 	prefetchedHashes := genParams.prefetchedTxHashes
+	if prefetchGasPct != 0 {
+		// Widen the declared-gas budget so the plan covers the extra depth the
+		// builder reaches when actual gas comes in under declared gas.
+		gasLimit = gasLimit * prefetchGasPct / 100
+	}
 	genParams.planWg.Add(1)
 	go func() {
 		defer genParams.planWg.Done()
@@ -2276,7 +2310,9 @@ func sendPlan(builderPlanCh chan<- *types.Transaction, genParams *generateParams
 				prefetchPanicMeter.Mark(1)
 			}
 		}()
-		for _, tx := range buildTxPlan(clone, gasLimit, prefetchedHashes) {
+		plan := buildTxPlan(clone, gasLimit, prefetchedHashes)
+		prefetchPlanEnqueuedMeter.Mark(int64(len(plan)))
+		for _, tx := range plan {
 			select {
 			case builderPlanCh <- tx:
 			default:
@@ -2938,6 +2974,12 @@ func (w *worker) runIdleTxProvider(txsCh chan<- *types.Transaction, header *type
 // defensively at prefetchMaxGasLimitPercent and defaulted to
 // prefetchDefaultGasLimitPercent when unset.
 func idleGasLimitPercent(cfg *Config) uint64 {
+	// Experiment override: BOR_PREFETCH_GAS_PCT widens the idle budget past the
+	// config (and its 150% cap, up to prefetchWidenMaxPercent) so the provider
+	// keeps streaming instead of exiting once the declared-gas budget is spent.
+	if prefetchGasPct != 0 {
+		return prefetchGasPct
+	}
 	pct := cfg.PrefetchGasLimitPercent
 	if pct == 0 {
 		return prefetchDefaultGasLimitPercent
@@ -2981,6 +3023,7 @@ func (w *worker) streamIdleBatch(
 			if enqueued != nil {
 				enqueued.Store(ltx.Hash, struct{}{})
 			}
+			prefetchIdleEnqueuedMeter.Mark(1)
 			gaspool.SubGas(ltx.Gas)
 			totalGasPool.SubGas(ltx.Gas)
 		default:
