@@ -769,7 +769,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		if bc.parallelProcessor == nil {
 			importSegments = &tracing.ExecSegments{}
 			serialVMCfg.Segments = importSegments
-			if block.NumberU64()%opFamSampleEvery == 0 {
+			if opFamEnabled && block.NumberU64()%opFamSampleEvery == 0 {
 				importOpFam = NewOpFamTracer()
 				serialVMCfg.Tracer = importOpFam.Hooks()
 			}

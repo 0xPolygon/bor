@@ -1,6 +1,7 @@
 package core
 
 import (
+	"os"
 	"sort"
 	"time"
 
@@ -23,6 +24,15 @@ import (
 // opFamSampleEvery selects which import blocks get the opcode-family tracer
 // (block number modulo). Sampled blocks pay hook + HookedState overhead.
 const opFamSampleEvery = 64
+
+// opFamEnabled gates the sampled tracer entirely (BOR_OPFAM_TRACE=1). Default
+// off: the sampled blocks' ~4x exec inflation contaminates every mod-64 block
+// in latency aggregates, and the opcode-mix dataset it feeds is already frozen.
+var opFamEnabled = os.Getenv("BOR_OPFAM_TRACE") == "1"
+
+// OpFamEnabled reports whether the sampled opcode-family tracer is enabled
+// (shared gate for the import and build sampling sites).
+func OpFamEnabled() bool { return opFamEnabled }
 
 // OpFamStat is one family's opcode count and attributed wall time.
 type OpFamStat struct {
