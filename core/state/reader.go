@@ -18,6 +18,8 @@ package state
 
 import (
 	"errors"
+	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -53,9 +55,44 @@ var (
 	retentionAcctSizeGauge = metrics.NewRegisteredGauge("state/retention/size/accounts", nil)
 	retentionStorSizeGauge = metrics.NewRegisteredGauge("state/retention/size/slots", nil)
 
+	// CLOCK eviction observability: evicted = entries removed at cap (ref bit
+	// clear); secondchance = entries spared once because a hit set their ref
+	// bit since insertion/last sweep. A high secondchance/evicted ratio means
+	// the ref bit is doing its job protecting the read-hot, write-cold set.
+	retentionEvictedMeter      = metrics.NewRegisteredMeter("state/retention/clock/evicted", nil)
+	retentionSecondChanceMeter = metrics.NewRegisteredMeter("state/retention/clock/secondchance", nil)
+
+	// Total live ring slots (incl. stale keys awaiting sweep) across all
+	// buckets — the CLOCK bookkeeping's own memory footprint.
+	retentionRingLenGauge = metrics.NewRegisteredGauge("state/retention/clock/ringlen", nil)
+
 	acctHitAgeSampleCtr atomic.Uint64
 	storHitAgeSampleCtr atomic.Uint64
 )
+
+// CLOCK cap (BOR_RETENTION_CLOCK = total combined entry budget; 0/unset = off,
+// falling back to the wholesale-reset caps below). The budget splits 1/8 to
+// accounts and 7/8 to storage slots (the measured live ratio), then evenly
+// across the 16 buckets. Chosen over LRU by simulation on the measured bimodal
+// hit-age workload: identical hit rate at ~40% lower hit cost (a hit sets a
+// ref bit instead of splicing a list), and unlike insertion-order eviction it
+// never rotates out the permanently-hot write-cold set.
+var (
+	retentionClockCap = func() int {
+		n, _ := strconv.Atoi(os.Getenv("BOR_RETENTION_CLOCK"))
+		if n < 0 {
+			return 0
+		}
+		return n
+	}()
+	clockAcctBucketCap = retentionClockCap / 8 / 16
+	clockSlotBucketCap = retentionClockCap * 7 / 8 / 16
+)
+
+// clockMaxSweep bounds the second-chance scan per eviction so a fully-hot
+// bucket cannot stall an insert under the bucket write lock; past the bound
+// the next candidate is evicted regardless of its ref bit.
+const clockMaxSweep = 64
 
 // ContractCodeReader defines the interface for accessing contract code.
 type ContractCodeReader interface {
@@ -480,15 +517,28 @@ type accountCacheEntry struct {
 	usedByProcess uint32
 	// gen is the retention generation at insertion time; hit age = current gen - gen.
 	gen uint32
+	// ref is the CLOCK reference bit (atomic): set on every cache hit, cleared
+	// by the eviction sweep. An entry with ref=1 gets a second chance.
+	ref uint32
 }
 
 // storageCacheEntry is the cached storage slot plus attribution metadata.
-// Note: stored inline (no per-slot heap alloc).
+// Stored by pointer so cache hits can set the CLOCK ref bit without holding
+// the bucket write lock.
 type storageCacheEntry struct {
 	value  common.Hash
 	origin readerRole
 	// gen is the retention generation at insertion time; hit age = current gen - gen.
 	gen uint32
+	// ref is the CLOCK reference bit (atomic): set on every cache hit, cleared
+	// by the eviction sweep. An entry with ref=1 gets a second chance.
+	ref uint32
+}
+
+// storageRingKey addresses one cached slot in a storage bucket's CLOCK ring.
+type storageRingKey struct {
+	addr common.Address
+	slot common.Hash
 }
 
 // readerWithCache is a wrapper around Reader that maintains additional state caches
@@ -518,19 +568,37 @@ type readerWithCache struct {
 	// List of account buckets, each of which is thread-safe. Sharded like
 	// storageBuckets: a single map+RWMutex serializes the prefetch workers
 	// and the exec goroutine on one cache line under tip-cadence load.
-	accountBuckets [16]struct {
-		lock     sync.RWMutex
-		accounts map[common.Address]*accountCacheEntry
-	}
+	//
+	// ring/head implement CLOCK (second-chance FIFO) eviction when
+	// retentionClockCap is set: inserts append their key; when the bucket is
+	// over cap the sweep pops from head, sparing (and re-appending) entries
+	// whose ref bit was set by a hit since the last pass. Keys invalidated by
+	// advance() linger in the ring and are skipped (and freed) on sweep.
+	accountBuckets [16]accountBucket
 
 	// List of storage buckets, each of which is thread-safe.
 	// This reader is typically used in scenarios requiring concurrent
 	// access to storage. Using multiple buckets helps mitigate
 	// the overhead caused by locking.
-	storageBuckets [16]struct {
-		lock     sync.RWMutex
-		storages map[common.Address]map[common.Hash]storageCacheEntry
-	}
+	storageBuckets [16]storageBucket
+}
+
+// accountBucket is one shard of the account cache plus its CLOCK ring.
+type accountBucket struct {
+	lock     sync.RWMutex
+	accounts map[common.Address]*accountCacheEntry
+	ring     []common.Address
+	head     int
+}
+
+// storageBucket is one shard of the storage cache plus its CLOCK ring.
+// count tracks the bucket's total slots (nested maps make len() a walk).
+type storageBucket struct {
+	lock     sync.RWMutex
+	storages map[common.Address]map[common.Hash]*storageCacheEntry
+	count    int
+	ring     []storageRingKey
+	head     int
 }
 
 // newReaderWithCache constructs the reader with local cache.
@@ -542,7 +610,7 @@ func newReaderWithCache(reader Reader) *readerWithCache {
 		r.accountBuckets[i].accounts = make(map[common.Address]*accountCacheEntry)
 	}
 	for i := range r.storageBuckets {
-		r.storageBuckets[i].storages = make(map[common.Address]map[common.Hash]storageCacheEntry)
+		r.storageBuckets[i].storages = make(map[common.Address]map[common.Hash]*storageCacheEntry)
 	}
 	return r
 }
@@ -563,6 +631,7 @@ func (r *readerWithCache) account(addr common.Address, caller readerRole) (*type
 	ent, ok := bucket.accounts[addr]
 	bucket.lock.RUnlock()
 	if ok {
+		atomic.StoreUint32(&ent.ref, 1)
 		if acctHitAgeSampleCtr.Add(1)&63 == 0 {
 			retentionAcctHitAgeHist.Update(int64(uint32(r.gen.Load()) - ent.gen))
 		}
@@ -591,9 +660,43 @@ func (r *readerWithCache) account(addr common.Address, caller readerRole) (*type
 	}
 	newEnt := &accountCacheEntry{acct: acct, origin: caller, gen: uint32(gen)}
 	bucket.accounts[addr] = newEnt
+	if clockAcctBucketCap > 0 {
+		bucket.ring = append(bucket.ring, addr)
+		r.evictAccountsClock(bucket)
+	}
 	bucket.lock.Unlock()
 	r.accountCount.Add(1)
 	return acct, false, newEnt, true, nil
+}
+
+// evictAccountsClock brings the bucket back under its CLOCK cap. Caller holds
+// the bucket write lock. Entries whose ref bit was set since the last sweep
+// are spared once (bit cleared, key re-appended); after clockMaxSweep spares
+// the next candidate is evicted unconditionally so the sweep stays bounded.
+func (r *readerWithCache) evictAccountsClock(bucket *accountBucket) {
+	spared := 0
+	for len(bucket.accounts) > clockAcctBucketCap && bucket.head < len(bucket.ring) {
+		addr := bucket.ring[bucket.head]
+		bucket.head++
+		ent, ok := bucket.accounts[addr]
+		if !ok {
+			continue // stale ring slot: key invalidated by advance()
+		}
+		if spared < clockMaxSweep && atomic.SwapUint32(&ent.ref, 0) == 1 {
+			bucket.ring = append(bucket.ring, addr)
+			spared++
+			retentionSecondChanceMeter.Mark(1)
+			continue
+		}
+		delete(bucket.accounts, addr)
+		r.accountCount.Add(-1)
+		retentionEvictedMeter.Mark(1)
+	}
+	// Compact the consumed prefix once it dominates the ring.
+	if bucket.head > 4096 && bucket.head > len(bucket.ring)/2 {
+		bucket.ring = append(bucket.ring[:0:0], bucket.ring[bucket.head:]...)
+		bucket.head = 0
+	}
 }
 
 // Account implements StateReader, retrieving the account specified by the address.
@@ -669,6 +772,7 @@ func (r *readerWithCache) advance(backing Reader, upd *stateUpdate) {
 			for key := range slots {
 				if _, ok := cached[key]; ok {
 					delete(cached, key)
+					bucket.count--
 					r.storageCount.Add(-1)
 					invalidated++
 				}
@@ -686,12 +790,15 @@ func (r *readerWithCache) advance(backing Reader, upd *stateUpdate) {
 			bucket := &r.accountBuckets[i]
 			bucket.lock.Lock()
 			bucket.accounts = make(map[common.Address]*accountCacheEntry)
+			bucket.ring, bucket.head = nil, 0
 			bucket.lock.Unlock()
 		}
 		for i := range r.storageBuckets {
 			bucket := &r.storageBuckets[i]
 			bucket.lock.Lock()
-			bucket.storages = make(map[common.Address]map[common.Hash]storageCacheEntry)
+			bucket.storages = make(map[common.Address]map[common.Hash]*storageCacheEntry)
+			bucket.count = 0
+			bucket.ring, bucket.head = nil, 0
 			bucket.lock.Unlock()
 		}
 		r.accountCount.Store(0)
@@ -701,6 +808,22 @@ func (r *readerWithCache) advance(backing Reader, upd *stateUpdate) {
 
 	retentionAcctSizeGauge.Update(r.accountCount.Load())
 	retentionStorSizeGauge.Update(r.storageCount.Load())
+	if retentionClockCap > 0 {
+		ringLen := 0
+		for i := range r.accountBuckets {
+			bucket := &r.accountBuckets[i]
+			bucket.lock.RLock()
+			ringLen += len(bucket.ring) - bucket.head
+			bucket.lock.RUnlock()
+		}
+		for i := range r.storageBuckets {
+			bucket := &r.storageBuckets[i]
+			bucket.lock.RLock()
+			ringLen += len(bucket.ring) - bucket.head
+			bucket.lock.RUnlock()
+		}
+		retentionRingLenGauge.Update(int64(ringLen))
+	}
 }
 
 // dropStorage removes every cached slot of one account, returning the count.
@@ -709,6 +832,7 @@ func (r *readerWithCache) dropStorage(addr common.Address) int64 {
 	bucket.lock.Lock()
 	dropped := int64(len(bucket.storages[addr]))
 	delete(bucket.storages, addr)
+	bucket.count -= int(dropped)
 	bucket.lock.Unlock()
 	r.storageCount.Add(-dropped)
 	return dropped
@@ -731,13 +855,12 @@ func (r *readerWithCache) storage(addr common.Address, slot common.Hash, caller 
 	if ok {
 		ent, ok := slots[slot]
 		if ok {
-			// Map values are returned by value (copy). Returning a pointer to the local copy is
-			// OK for reading attribution fields (origin), but not for mutating fields.
 			bucket.lock.RUnlock()
+			atomic.StoreUint32(&ent.ref, 1)
 			if storHitAgeSampleCtr.Add(1)&63 == 0 {
 				retentionStorHitAgeHist.Update(int64(uint32(r.gen.Load()) - ent.gen))
 			}
-			return ent.value, true, &ent, false, nil
+			return ent.value, true, ent, false, nil
 		}
 	}
 	bucket.lock.RUnlock()
@@ -752,7 +875,7 @@ func (r *readerWithCache) storage(addr common.Address, slot common.Hash, caller 
 	bucket.lock.Lock()
 	slots, ok = bucket.storages[addr]
 	if !ok {
-		slots = make(map[common.Hash]storageCacheEntry)
+		slots = make(map[common.Hash]*storageCacheEntry)
 		bucket.storages[addr] = slots
 	}
 	// First-writer-wins: avoid clobbering if another goroutine inserted meanwhile.
@@ -761,20 +884,60 @@ func (r *readerWithCache) storage(addr common.Address, slot common.Hash, caller 
 		// This was a MISS originally (we didn't find it under RLock),
 		// but another goroutine inserted it while we fetched from the backing reader.
 		// Report incache=false so miss counters reflect backing-read cost.
-		return existing.value, false, &existing, false, nil
+		return existing.value, false, existing, false, nil
 	}
-	newEnt := storageCacheEntry{value: value, origin: caller, gen: uint32(gen)}
+	newEnt := &storageCacheEntry{value: value, origin: caller, gen: uint32(gen)}
 	if r.gen.Load() != gen {
 		// The cache advanced to a new root while we fetched; the value may be
 		// stale for the new generation, so serve it without caching.
 		bucket.lock.Unlock()
-		return value, false, &newEnt, false, nil
+		return value, false, newEnt, false, nil
 	}
 	slots[slot] = newEnt
+	bucket.count++
+	if clockSlotBucketCap > 0 {
+		bucket.ring = append(bucket.ring, storageRingKey{addr: addr, slot: slot})
+		r.evictStorageClock(bucket)
+	}
 	bucket.lock.Unlock()
 	r.storageCount.Add(1)
 
-	return value, false, &newEnt, true, nil
+	return value, false, newEnt, true, nil
+}
+
+// evictStorageClock brings the bucket back under its CLOCK cap. Caller holds
+// the bucket write lock. Same second-chance sweep as evictAccountsClock.
+func (r *readerWithCache) evictStorageClock(bucket *storageBucket) {
+	spared := 0
+	for bucket.count > clockSlotBucketCap && bucket.head < len(bucket.ring) {
+		key := bucket.ring[bucket.head]
+		bucket.head++
+		slots, ok := bucket.storages[key.addr]
+		if !ok {
+			continue // stale ring slot: account dropped by advance()
+		}
+		ent, ok := slots[key.slot]
+		if !ok {
+			continue // stale ring slot: slot invalidated by advance()
+		}
+		if spared < clockMaxSweep && atomic.SwapUint32(&ent.ref, 0) == 1 {
+			bucket.ring = append(bucket.ring, key)
+			spared++
+			retentionSecondChanceMeter.Mark(1)
+			continue
+		}
+		delete(slots, key.slot)
+		if len(slots) == 0 {
+			delete(bucket.storages, key.addr)
+		}
+		bucket.count--
+		r.storageCount.Add(-1)
+		retentionEvictedMeter.Mark(1)
+	}
+	if bucket.head > 4096 && bucket.head > len(bucket.ring)/2 {
+		bucket.ring = append(bucket.ring[:0:0], bucket.ring[bucket.head:]...)
+		bucket.head = 0
+	}
 }
 
 // Storage implements StateReader, retrieving the storage slot specified by the
