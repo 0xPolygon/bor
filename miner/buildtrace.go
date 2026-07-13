@@ -593,7 +593,7 @@ func (t *buildTracer) begin() *buildTrace {
 			TriggerAtNs: time.Now().UnixNano(),
 		},
 	}
-	if seq%buildOpFamSampleEvery == 0 {
+	if core.OpFamEnabled() && seq%buildOpFamSampleEvery == 0 {
 		bt.opFam = core.NewOpFamTracer()
 	}
 	return bt
