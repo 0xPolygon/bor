@@ -378,6 +378,7 @@ type BlockChain struct {
 	chainHeadFeed    event.Feed
 	logsFeed         event.Feed
 	blockProcFeed    event.Feed
+	blockPreExecFeed event.Feed
 	blockProcCounter int32
 	scope            event.SubscriptionScope
 	genesisBlock     *types.Block
@@ -3376,6 +3377,12 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 				log.Error("Error in witness generation", "err", err)
 			}
 		}
+
+		// Announce the header before execution starts: it has passed consensus
+		// header verification (incl. the producer signature), so subscribers —
+		// notably the txpool's early reheap — can begin next-head work that
+		// depends only on header fields, overlapped with block execution.
+		bc.blockPreExecFeed.Send(block.Header())
 
 		receipts, logs, usedGas, statedb, vtime, err := bc.ProcessBlock(block, parent, witness, &followupInterrupt)
 		bc.statedb.TrieDB().SetReadBackend(nil)

@@ -659,6 +659,14 @@ func (bc *BlockChain) SubscribeChainHeadEvent(ch chan<- ChainHeadEvent) event.Su
 	return bc.scope.Track(bc.chainHeadFeed.Subscribe(ch))
 }
 
+// SubscribeBlockPreExecEvent registers a subscription for headers of blocks
+// that passed consensus header verification and are about to be executed on
+// the canonical import path. Subscribers must drain quickly — the send is on
+// the import hot path.
+func (bc *BlockChain) SubscribeBlockPreExecEvent(ch chan<- *types.Header) event.Subscription {
+	return bc.scope.Track(bc.blockPreExecFeed.Subscribe(ch))
+}
+
 // SubscribeChainSideEvent registers a subscription of ChainSideEvent.
 func (bc *BlockChain) SubscribeChainSideEvent(ch chan<- ChainSideEvent) event.Subscription {
 	return bc.scope.Track(bc.chainSideFeed.Subscribe(ch))

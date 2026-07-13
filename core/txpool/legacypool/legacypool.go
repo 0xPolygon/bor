@@ -23,6 +23,7 @@ import (
 	"maps"
 	"math"
 	"math/big"
+	"os"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -151,6 +152,14 @@ var (
 
 	reheapDueToStaleCounter   = metrics.NewRegisteredCounter("txpool/reheap/stale", nil)
 	reheapDueToBasefeeCounter = metrics.NewRegisteredCounter("txpool/reheap/basefee", nil)
+
+	// Early-reheap (BOR_EARLY_REHEAP=1): reheaps started at block arrival,
+	// overlapped with block execution, and runReorg reheaps skipped because
+	// the early pass already ordered the heap for that basefee.
+	earlyReheapCounter        = metrics.NewRegisteredCounter("txpool/reheap/early", nil)
+	earlyReheapSkippedCounter = metrics.NewRegisteredCounter("txpool/reheap/early/skipped", nil)
+
+	earlyReheapEnabled = os.Getenv("BOR_EARLY_REHEAP") == "1"
 
 	// pendingLockWaitTimer measures how long it took to acquire the pending lock. This is useful
 	// to understand delay in block building and the impact of lock acquisition.
@@ -351,6 +360,13 @@ type LegacyPool struct {
 	wg              sync.WaitGroup // tracks loop, scheduleReorgLoop
 	initDoneCh      chan struct{}  // is closed once the pool is initialized (for tests)
 
+	// Early reheap (BOR_EARLY_REHEAP=1): heap ordering for the next head is
+	// computed at block arrival, overlapped with block execution. The pointer
+	// holds the basefee the priced heap was last ordered for, so runReorg can
+	// skip its own reheap when the early pass already did the work.
+	earlyReheapSub     event.Subscription
+	earlyReheapBaseFee atomic.Pointer[big.Int]
+
 	changesSinceReorg int // A counter for how many drops we've performed in-between reorg.
 
 	promoteTxCh chan struct{} // should be used only for tests
@@ -550,7 +566,59 @@ func (pool *LegacyPool) Init(gasTip uint64, head *types.Header, reserver txpool.
 
 	pool.wg.Add(1)
 	go pool.loop()
+
+	// Early reheap: order the priced heap for the next head as soon as a
+	// verified block header arrives, overlapped with its execution. Type
+	// assertion keeps the legacypool BlockChain interface (and its test
+	// mocks) untouched.
+	if earlyReheapEnabled {
+		if sub, ok := pool.chain.(interface {
+			SubscribeBlockPreExecEvent(chan<- *types.Header) event.Subscription
+		}); ok {
+			ch := make(chan *types.Header, 16)
+			pool.earlyReheapSub = sub.SubscribeBlockPreExecEvent(ch)
+			pool.wg.Add(1)
+			go pool.earlyReheapLoop(ch)
+		}
+	}
 	return nil
+}
+
+// earlyReheapLoop reorders the priced heap for the incoming head while the
+// block is still executing. The next block's basefee depends only on the
+// arriving header, so by the time runReorg fires the heap is already ordered
+// and its reheap can be skipped. A block that fails execution leaves the heap
+// ordered for a basefee that didn't materialize — harmless (ordering only
+// steers eviction priority) and corrected by the next head.
+func (pool *LegacyPool) earlyReheapLoop(ch <-chan *types.Header) {
+	defer pool.wg.Done()
+
+	for {
+		select {
+		case head := <-ch:
+			// Drain to the newest buffered header; only the latest matters.
+			for {
+				select {
+				case head = <-ch:
+					continue
+				default:
+				}
+				break
+			}
+			if !pool.chainconfig.IsLondon(new(big.Int).Add(head.Number, big.NewInt(1))) {
+				continue
+			}
+			pendingBaseFee := eip1559.CalcBaseFee(pool.chainconfig, head)
+			if last := pool.earlyReheapBaseFee.Load(); last != nil && last.Cmp(pendingBaseFee) == 0 {
+				continue
+			}
+			pool.priced.SetBaseFee(pendingBaseFee)
+			pool.earlyReheapBaseFee.Store(pendingBaseFee)
+			earlyReheapCounter.Inc(1)
+		case <-pool.reorgShutdownCh:
+			return
+		}
+	}
 }
 
 // loop is the transaction pool's main event loop, waiting for and reacting to
@@ -644,6 +712,12 @@ func (pool *LegacyPool) loop() {
 
 // Close terminates the transaction pool.
 func (pool *LegacyPool) Close() error {
+	// Unsubscribe before stopping the loops: a feed send into a channel no
+	// goroutine drains would block the block-import path.
+	if pool.earlyReheapSub != nil {
+		pool.earlyReheapSub.Unsubscribe()
+	}
+
 	// Terminate the pool reorger and return
 	close(pool.reorgShutdownCh)
 	pool.wg.Wait()
@@ -1862,8 +1936,18 @@ func (pool *LegacyPool) runReorg(done chan struct{}, reset *txpoolResetRequest, 
 		if reset.newHead != nil {
 			if pool.chainconfig.IsLondon(new(big.Int).Add(reset.newHead.Number, big.NewInt(1))) {
 				pendingBaseFee := eip1559.CalcBaseFee(pool.chainconfig, reset.newHead)
-				reheapDueToBasefeeCounter.Inc(1)
-				pool.priced.SetBaseFee(pendingBaseFee)
+				// Skip when the early-reheap loop already ordered the heap
+				// for this basefee at block arrival (BOR_EARLY_REHEAP=1).
+				// Gated so default behavior is bit-identical with the flag off.
+				if earlyReheapEnabled && pool.earlyReheapBaseFee.Load() != nil && pool.earlyReheapBaseFee.Load().Cmp(pendingBaseFee) == 0 {
+					earlyReheapSkippedCounter.Inc(1)
+				} else {
+					reheapDueToBasefeeCounter.Inc(1)
+					pool.priced.SetBaseFee(pendingBaseFee)
+					if earlyReheapEnabled {
+						pool.earlyReheapBaseFee.Store(pendingBaseFee)
+					}
+				}
 			} else {
 				pool.priced.Reheap()
 			}
