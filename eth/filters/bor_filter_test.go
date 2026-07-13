@@ -159,6 +159,38 @@ func TestBorFilters(t *testing.T) {
 	}
 }
 
+// newCancellationTestFilter builds a bor range filter wired to a mock backend
+// that counts per-block header reads inside the scan loop, returning the filter
+// and a pointer to that counter. A test can then assert the loop bailed out
+// early (counter == 0) instead of scanning the whole range. Only the per-block
+// reads are counted: the single pre-loop head lookup uses rpc.LatestBlockNumber
+// (negative), while loop reads use the concrete, non-negative block number.
+func newCancellationTestFilter(t *testing.T) (*BorBlockLogsFilter, *int32) {
+	t.Helper()
+
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+
+	db := NewMockDatabase(ctrl)
+	backend := NewMockBackend(ctrl)
+
+	loopBlockReads := new(int32)
+	backend.EXPECT().ChainDb().Return(db).AnyTimes()
+	backend.EXPECT().HeaderByNumber(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, number rpc.BlockNumber) (*types.Header, error) {
+			if number >= 0 {
+				atomic.AddInt32(loopBlockReads, 1)
+			}
+			return newTestHeader(1), nil
+		}).AnyTimes()
+	backend.EXPECT().GetBorBlockReceipt(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+
+	// Range large enough that an unguarded loop would iterate hundreds of times.
+	filter := NewBorBlockLogsRangeFilter(backend, params.TestChainConfig.Bor, 0, 4000, []common.Address{addr}, nil)
+
+	return filter, loopBlockReads
+}
+
 // TestBorFilterHonorsContextCancellation asserts that a range scan stops as soon
 // as the request context is cancelled (e.g. the RPC client disconnected, or a
 // deadline fired) instead of scanning the whole range and keeping an RPC worker
@@ -167,43 +199,20 @@ func TestBorFilters(t *testing.T) {
 func TestBorFilterHonorsContextCancellation(t *testing.T) {
 	t.Parallel()
 
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	db := NewMockDatabase(ctrl)
-	backend := NewMockBackend(ctrl)
-
-	testBorConfig := params.TestChainConfig.Bor
-
-	// Count only the per-block reads inside the scan loop. The single pre-loop
-	// head lookup uses rpc.LatestBlockNumber (negative); loop reads use the
-	// concrete, non-negative block number.
-	var loopBlockReads int32
-	backend.EXPECT().ChainDb().Return(db).AnyTimes()
-	backend.EXPECT().HeaderByNumber(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, number rpc.BlockNumber) (*types.Header, error) {
-			if number >= 0 {
-				atomic.AddInt32(&loopBlockReads, 1)
-			}
-			return newTestHeader(1), nil
-		}).AnyTimes()
-	backend.EXPECT().GetBorBlockReceipt(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	filter, loopBlockReads := newCancellationTestFilter(t)
 
 	// Cancel up-front: a scan that honors cancellation must bail out before
 	// doing any per-block work.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	// Range large enough that an unguarded loop would iterate hundreds of times.
-	filter := NewBorBlockLogsRangeFilter(backend, testBorConfig, 0, 4000, []common.Address{addr}, nil)
-
 	logs, err := filter.Logs(ctx)
 
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got err=%v (loop ran %d block reads, ignoring cancellation)",
-			err, atomic.LoadInt32(&loopBlockReads))
+			err, atomic.LoadInt32(loopBlockReads))
 	}
-	if got := atomic.LoadInt32(&loopBlockReads); got != 0 {
+	if got := atomic.LoadInt32(loopBlockReads); got != 0 {
 		t.Fatalf("expected 0 in-loop block reads after honoring cancellation, got %d", got)
 	}
 	if len(logs) != 0 {
@@ -219,38 +228,19 @@ func TestBorFilterHonorsContextCancellation(t *testing.T) {
 func TestBorFilterHonorsContextDeadline(t *testing.T) {
 	t.Parallel()
 
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	db := NewMockDatabase(ctrl)
-	backend := NewMockBackend(ctrl)
-
-	testBorConfig := params.TestChainConfig.Bor
-
-	var loopBlockReads int32
-	backend.EXPECT().ChainDb().Return(db).AnyTimes()
-	backend.EXPECT().HeaderByNumber(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, number rpc.BlockNumber) (*types.Header, error) {
-			if number >= 0 {
-				atomic.AddInt32(&loopBlockReads, 1)
-			}
-			return newTestHeader(1), nil
-		}).AnyTimes()
-	backend.EXPECT().GetBorBlockReceipt(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	filter, loopBlockReads := newCancellationTestFilter(t)
 
 	// Deadline already in the past: the scan must stop before any per-block work.
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Hour))
 	defer cancel()
 
-	filter := NewBorBlockLogsRangeFilter(backend, testBorConfig, 0, 4000, []common.Address{addr}, nil)
-
 	_, err := filter.Logs(ctx)
 
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected context.DeadlineExceeded, got err=%v (loop ran %d block reads, ignoring the deadline)",
-			err, atomic.LoadInt32(&loopBlockReads))
+			err, atomic.LoadInt32(loopBlockReads))
 	}
-	if got := atomic.LoadInt32(&loopBlockReads); got != 0 {
+	if got := atomic.LoadInt32(loopBlockReads); got != 0 {
 		t.Fatalf("expected 0 in-loop block reads after honoring the deadline, got %d", got)
 	}
 }
