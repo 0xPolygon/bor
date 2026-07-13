@@ -21,7 +21,9 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"os"
 	"runtime/debug"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -175,6 +177,16 @@ var (
 	// the stream reports per-hash success only.
 	prefetchMissTooLateMeter       = metrics.NewRegisteredMeter("worker/prefetch/missreason/too_late", nil)
 	prefetchMissNeverEnqueuedMeter = metrics.NewRegisteredMeter("worker/prefetch/missreason/never_enqueued", nil)
+
+	// Debounce for the non-mining pending-snapshot rebuild
+	// (BOR_PENDING_SNAPSHOT_DEBOUNCE_MS, 0 = off). The rebuild recomputes
+	// tx/receipt trie roots over every accumulated tx plus full receipt and
+	// state copies — O(n²) per block when run on every arriving batch.
+	pendingSnapshotDebounce = func() time.Duration {
+		ms, _ := strconv.Atoi(os.Getenv("BOR_PENDING_SNAPSHOT_DEBOUNCE_MS"))
+		return time.Duration(ms) * time.Millisecond
+	}()
+	pendingSnapshotSkippedMeter = metrics.NewRegisteredMeter("worker/pendingsnapshot/skipped", nil)
 
 	// prefetchMissRateHistogram tracks percentage of block transactions that were NOT prefetched.
 	// Values range 0-100. High percentiles indicate prefetch degradation.
@@ -429,6 +441,10 @@ type worker struct {
 	chain       *core.BlockChain
 
 	prio []common.Address // A list of senders to prioritize
+
+	// lastPendingSnapshot is when the non-mining pending snapshot was last
+	// materialized; only touched from mainLoop. Used by the debounce.
+	lastPendingSnapshot time.Time
 
 	// Feeds
 	pendingLogsFeed event.Feed
@@ -1045,9 +1061,20 @@ func (w *worker) mainLoop() {
 				stopFn()
 
 				// Only update the snapshot if any new transactons were added
-				// to the pending block
+				// to the pending block. With the debounce enabled
+				// (BOR_PENDING_SNAPSHOT_DEBOUNCE_MS), the O(all-txs) snapshot
+				// materialization (NewBlock/DeriveSha + receipt and state
+				// copies) runs at most once per interval instead of per tx
+				// batch; the txs themselves are still applied above, so cache
+				// warmup and pending nonces stay exact — only snapshot
+				// freshness is bounded by the interval.
 				if tcount != w.current.tcount {
-					w.updateSnapshot(w.current)
+					if pendingSnapshotDebounce > 0 && time.Since(w.lastPendingSnapshot) < pendingSnapshotDebounce {
+						pendingSnapshotSkippedMeter.Mark(1)
+					} else {
+						w.updateSnapshot(w.current)
+						w.lastPendingSnapshot = time.Now()
+					}
 				}
 			} else {
 				// Special case, if the consensus engine is 0 period clique(dev mode),
