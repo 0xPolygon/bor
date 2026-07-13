@@ -188,10 +188,15 @@ func TestForwardTxs_RecordsSentHashes(t *testing.T) {
 	)
 	ch := make(chan *types.Transaction, len(rawTxs))
 	sent := map[common.Hash]struct{}{}
+	enqueued := &sync.Map{}
 
-	forwardTxs(ch, rawTxs, sent)
+	forwardTxs(ch, rawTxs, sent, enqueued)
 
 	require.Len(t, sent, len(rawTxs), "all forwarded txs must be recorded")
+	for _, tx := range rawTxs {
+		_, ok := enqueued.Load(tx.Hash())
+		require.True(t, ok, "tx %s must be recorded in the enqueued set", tx.Hash())
+	}
 	for _, tx := range rawTxs {
 		_, ok := sent[tx.Hash()]
 		require.True(t, ok, "tx %s must be in sentThisPhase", tx.Hash())
@@ -212,9 +217,13 @@ func TestForwardTxs_DropsOnFullChannelDoesNotRecord(t *testing.T) {
 	// non-blocking select.
 	ch := make(chan *types.Transaction, 1)
 	sent := map[common.Hash]struct{}{}
+	enqueued := &sync.Map{}
 
-	forwardTxs(ch, rawTxs, sent)
+	forwardTxs(ch, rawTxs, sent, enqueued)
 
+	enqueuedCount := 0
+	enqueued.Range(func(_, _ any) bool { enqueuedCount++; return true })
+	require.Equal(t, 1, enqueuedCount, "dropped txs must not be recorded as enqueued")
 	require.Len(t, sent, 1, "only the single tx that actually landed should be recorded")
 	require.Len(t, ch, 1)
 
@@ -234,7 +243,7 @@ func TestForwardTxs_NilSentMapIsSafe(t *testing.T) {
 	)
 	ch := make(chan *types.Transaction, 1)
 	require.NotPanics(t, func() {
-		forwardTxs(ch, rawTxs, nil)
+		forwardTxs(ch, rawTxs, nil, nil)
 	})
 	require.Len(t, ch, 1)
 }
@@ -499,7 +508,7 @@ func TestStreamIdleBatch_LocalBudgetEnforced(t *testing.T) {
 	// Buffer wide enough that the "channel full" early-return never triggers.
 	txsCh := make(chan *types.Transaction, 16)
 
-	w.streamIdleBatch(txsCh, heap, totalGasPool, localPrefetched, headerGasLimit)
+	w.streamIdleBatch(txsCh, heap, totalGasPool, localPrefetched, headerGasLimit, &sync.Map{})
 	close(txsCh)
 
 	var forwarded []*types.Transaction

@@ -42,6 +42,19 @@ var (
 	retentionServeMeter       = metrics.NewRegisteredMeter("state/retention/serve", nil)
 	retentionInvalidatedMeter = metrics.NewRegisteredMeter("state/retention/invalidated", nil)
 	retentionResetMeter       = metrics.NewRegisteredMeter("state/retention/reset", nil)
+
+	// Hit-age histograms: generations (≈blocks) between an entry's insertion
+	// and a cache hit on it. Age 0 = warmed within the current block; age ≥ 1
+	// = served by retention across a commit. Sampled 1/64 to keep the hot
+	// path cheap; feeds the layered/generational cache sizing decision.
+	retentionAcctHitAgeHist = metrics.NewRegisteredHistogram("state/retention/hitage/account", nil, metrics.NewExpDecaySample(2048, 0.015))
+	retentionStorHitAgeHist = metrics.NewRegisteredHistogram("state/retention/hitage/storage", nil, metrics.NewExpDecaySample(2048, 0.015))
+
+	retentionAcctSizeGauge = metrics.NewRegisteredGauge("state/retention/size/accounts", nil)
+	retentionStorSizeGauge = metrics.NewRegisteredGauge("state/retention/size/slots", nil)
+
+	acctHitAgeSampleCtr atomic.Uint64
+	storHitAgeSampleCtr atomic.Uint64
 )
 
 // ContractCodeReader defines the interface for accessing contract code.
@@ -465,6 +478,8 @@ type accountCacheEntry struct {
 	// usedByProcess is flipped exactly once when the PROCESS reader consumes an entry
 	// that was prefetched. Used to compute unique-usage/precision.
 	usedByProcess uint32
+	// gen is the retention generation at insertion time; hit age = current gen - gen.
+	gen uint32
 }
 
 // storageCacheEntry is the cached storage slot plus attribution metadata.
@@ -472,6 +487,8 @@ type accountCacheEntry struct {
 type storageCacheEntry struct {
 	value  common.Hash
 	origin readerRole
+	// gen is the retention generation at insertion time; hit age = current gen - gen.
+	gen uint32
 }
 
 // readerWithCache is a wrapper around Reader that maintains additional state caches
@@ -546,6 +563,9 @@ func (r *readerWithCache) account(addr common.Address, caller readerRole) (*type
 	ent, ok := bucket.accounts[addr]
 	bucket.lock.RUnlock()
 	if ok {
+		if acctHitAgeSampleCtr.Add(1)&63 == 0 {
+			retentionAcctHitAgeHist.Update(int64(uint32(r.gen.Load()) - ent.gen))
+		}
 		return ent.acct, true, ent, false, nil
 	}
 	// Try to resolve the requested account from the underlying reader
@@ -569,7 +589,7 @@ func (r *readerWithCache) account(addr common.Address, caller readerRole) (*type
 		bucket.lock.Unlock()
 		return acct, false, &accountCacheEntry{acct: acct, origin: caller}, false, nil
 	}
-	newEnt := &accountCacheEntry{acct: acct, origin: caller}
+	newEnt := &accountCacheEntry{acct: acct, origin: caller, gen: uint32(gen)}
 	bucket.accounts[addr] = newEnt
 	bucket.lock.Unlock()
 	r.accountCount.Add(1)
@@ -678,6 +698,9 @@ func (r *readerWithCache) advance(backing Reader, upd *stateUpdate) {
 		r.storageCount.Store(0)
 		retentionResetMeter.Mark(1)
 	}
+
+	retentionAcctSizeGauge.Update(r.accountCount.Load())
+	retentionStorSizeGauge.Update(r.storageCount.Load())
 }
 
 // dropStorage removes every cached slot of one account, returning the count.
@@ -711,6 +734,9 @@ func (r *readerWithCache) storage(addr common.Address, slot common.Hash, caller 
 			// Map values are returned by value (copy). Returning a pointer to the local copy is
 			// OK for reading attribution fields (origin), but not for mutating fields.
 			bucket.lock.RUnlock()
+			if storHitAgeSampleCtr.Add(1)&63 == 0 {
+				retentionStorHitAgeHist.Update(int64(uint32(r.gen.Load()) - ent.gen))
+			}
 			return ent.value, true, &ent, false, nil
 		}
 	}
@@ -737,7 +763,7 @@ func (r *readerWithCache) storage(addr common.Address, slot common.Hash, caller 
 		// Report incache=false so miss counters reflect backing-read cost.
 		return existing.value, false, &existing, false, nil
 	}
-	newEnt := storageCacheEntry{value: value, origin: caller}
+	newEnt := storageCacheEntry{value: value, origin: caller, gen: uint32(gen)}
 	if r.gen.Load() != gen {
 		// The cache advanced to a new root while we fetched; the value may be
 		// stale for the new generation, so serve it without caching.

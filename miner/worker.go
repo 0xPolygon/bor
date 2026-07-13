@@ -166,6 +166,16 @@ var (
 	accountHitFromPrefetchUniqueMeter = metrics.NewRegisteredMeter("worker/chain/account/reads/cache/process/prefetch_used_unique", nil)
 	prefetchPanicMeter                = metrics.NewRegisteredMeter("worker/prefetch/panic", nil)
 
+	// Per-miss reason attribution for txs applied without prefetch warmth:
+	// too_late = the tx was enqueued on the prefetch stream but its execution
+	// hadn't completed (onSuccess not fired) when the builder applied it;
+	// never_enqueued = the tx never entered the stream at all (arrived after
+	// the snapshot, dropped on a full channel before the send site, or
+	// skipped by the providers). too_late also absorbs prefetch failures —
+	// the stream reports per-hash success only.
+	prefetchMissTooLateMeter       = metrics.NewRegisteredMeter("worker/prefetch/missreason/too_late", nil)
+	prefetchMissNeverEnqueuedMeter = metrics.NewRegisteredMeter("worker/prefetch/missreason/never_enqueued", nil)
+
 	// prefetchMissRateHistogram tracks percentage of block transactions that were NOT prefetched.
 	// Values range 0-100. High percentiles indicate prefetch degradation.
 	prefetchMissRateHistogram = metrics.NewRegisteredHistogram(
@@ -264,6 +274,12 @@ type environment struct {
 	// split the apply-duration histogram by prefetch status. May be nil.
 	prefetchedTxHashes *sync.Map
 
+	// enqueuedTxHashes records every tx forwarded onto the prefetch stream
+	// (idle or builder provider). Read at tx-commit time to attribute misses:
+	// enqueued-but-not-prefetched = too late; absent = never entered the
+	// stream. May be nil.
+	enqueuedTxHashes *sync.Map
+
 	// Observability for pre block building phase
 	makeEnvDuration    time.Duration
 	makeHeaderDuration time.Duration // primarily includes call to bor.Prepare
@@ -289,6 +305,7 @@ func (env *environment) copy() *environment {
 		prefetchReader:     env.prefetchReader,
 		processReader:      env.processReader,
 		prefetchedTxHashes: env.prefetchedTxHashes,
+		enqueuedTxHashes:   env.enqueuedTxHashes,
 		makeEnvDuration:    env.makeEnvDuration,
 		makeHeaderDuration: env.makeHeaderDuration,
 		pendingDuration:    env.pendingDuration,
@@ -1364,6 +1381,7 @@ func (w *worker) makeEnv(header *types.Header, coinbase common.Address, witness 
 		prefetchReader:     genParams.prefetchReader,
 		processReader:      genParams.processReader,
 		prefetchedTxHashes: genParams.prefetchedTxHashes,
+		enqueuedTxHashes:   genParams.enqueuedTxHashes,
 	}
 	env.evm.SetInterrupt(&w.interruptBlockBuilding)
 	env.stateSyncReserve = stateSyncReserveFor(w.chainConfig, header.Number)
@@ -1751,6 +1769,13 @@ mainloop:
 					txApplyDurationPrefetchedTimer.Update(txDuration)
 				} else {
 					txApplyDurationNotPrefetchedTimer.Update(txDuration)
+					if env.enqueuedTxHashes != nil {
+						if _, enqueued := env.enqueuedTxHashes.Load(tx.Hash()); enqueued {
+							prefetchMissTooLateMeter.Mark(1)
+						} else {
+							prefetchMissNeverEnqueuedMeter.Mark(1)
+						}
+					}
 				}
 			}
 			if w.IsRunning() {
@@ -1973,6 +1998,7 @@ type generateParams struct {
 	prefetchReader            state.ReaderWithStats   // The prefetch reader to use for statistics
 	processReader             state.ReaderWithStats   // The process reader to use for statistics
 	prefetchedTxHashes        *sync.Map               // Map of successfully prefetched transaction hashes
+	enqueuedTxHashes          *sync.Map               // Map of tx hashes forwarded onto the prefetch stream (idle or builder provider); used for miss-reason attribution
 	builderPrefetchedTxHashes *sync.Map               // Subset of prefetchedTxHashes populated only during the builder phase; used to measure builder-phase contribution
 	productionStart           time.Time               // Start of full-block building (after optional empty pre-seal); used for productionElapsed
 	preBuildDuration          time.Duration           // Duration of pre block build phase
@@ -2507,6 +2533,7 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 		prefetchReader:     prefetchReader,
 		processReader:      processReader,
 		prefetchedTxHashes: &sync.Map{},
+		enqueuedTxHashes:   &sync.Map{},
 		preBuildDuration:   time.Since(buildStart),
 		bt:                 bt,
 	}
@@ -2852,7 +2879,7 @@ func (w *worker) runIdleTxProvider(txsCh chan<- *types.Transaction, header *type
 
 		pendingTxs := w.eth.TxPool().Pending(filter, interrupt)
 		txs := newTransactionsByPriceAndNonce(signer, pendingTxs, header.BaseFee, interrupt)
-		w.streamIdleBatch(txsCh, txs, totalGasPool, localPrefetched, header.GasLimit)
+		w.streamIdleBatch(txsCh, txs, totalGasPool, localPrefetched, header.GasLimit, genParams.enqueuedTxHashes)
 
 		waitUntilNextLoop(loopStart, prefetchIdleLoopInterval, shouldExit)
 	}
@@ -2886,6 +2913,7 @@ func (w *worker) streamIdleBatch(
 	totalGasPool *core.GasPool,
 	localPrefetched map[common.Hash]struct{},
 	headerGasLimit uint64,
+	enqueued *sync.Map,
 ) {
 	loopGasLimit := totalGasPool.Gas()
 	if loopGasLimit > headerGasLimit {
@@ -2901,6 +2929,9 @@ func (w *worker) streamIdleBatch(
 		select {
 		case txsCh <- tx:
 			localPrefetched[ltx.Hash] = struct{}{}
+			if enqueued != nil {
+				enqueued.Store(ltx.Hash, struct{}{})
+			}
 			gaspool.SubGas(ltx.Gas)
 			totalGasPool.SubGas(ltx.Gas)
 		default:
@@ -3003,7 +3034,7 @@ func (w *worker) runBuilderTxProvider(txsCh chan<- *types.Transaction, header *t
 			batch = append(batch, bonus...)
 		}
 
-		forwardTxs(txsCh, batch, inFlightHashes)
+		forwardTxs(txsCh, batch, inFlightHashes, genParams.enqueuedTxHashes)
 
 		if builderDone || interrupt.Load() {
 			return
@@ -3014,12 +3045,15 @@ func (w *worker) runBuilderTxProvider(txsCh chan<- *types.Transaction, header *t
 // forwardTxs does a non-blocking send of each tx to ch. Drops silently if the
 // buffer is full — prefetch is best-effort. Tracks each forwarded hash in
 // inFlightHashes so follow-up overflow scans don't re-emit in-flight txs.
-func forwardTxs(ch chan<- *types.Transaction, txs []*types.Transaction, inFlightHashes map[common.Hash]struct{}) {
+func forwardTxs(ch chan<- *types.Transaction, txs []*types.Transaction, inFlightHashes map[common.Hash]struct{}, enqueued *sync.Map) {
 	for _, tx := range txs {
 		select {
 		case ch <- tx:
 			if inFlightHashes != nil {
 				inFlightHashes[tx.Hash()] = struct{}{}
+			}
+			if enqueued != nil {
+				enqueued.Store(tx.Hash(), struct{}{})
 			}
 		default:
 		}
