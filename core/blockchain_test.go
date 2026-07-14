@@ -3271,6 +3271,57 @@ func testSideImportGhostStateStillRejected(t *testing.T, scheme string) {
 	}
 }
 
+// TestSidechainGhostStateCanonicalGate covers the hardening requested in PR #2293
+// review: the no-op exemption must be gated on the *canonical* chain also being a
+// no-op at that height, not only on the side block's own (possibly attacker-forged)
+// parent. This defends against an attacker who forges both side parent and side
+// child roots to match a canonical root at a height where the canonical chain
+// actually changed state — the forge-both-roots bypass. Because the side block's
+// parent can be unverified here while the canonical parent header is trusted,
+// isSidechainGhostState decides on the canonical parent. This exercises the
+// decision directly, since forging a header past GenerateChain's honest state
+// transitions is not otherwise reachable.
+func TestSidechainGhostStateCanonicalGate(t *testing.T) {
+	chain, _, blocks, _, forkIdx, _ := setupPrunedGhostStateChain(t, rawdb.HashScheme, false)
+
+	// canonical is a real state-transition block: its root differs from its parent.
+	canonical := blocks[forkIdx]
+	canonParent := blocks[forkIdx-1]
+	if canonical.Root() == canonParent.Root() {
+		t.Fatalf("test setup: canonical block must change state relative to its parent")
+	}
+
+	// Forge a side parent that already sits at the canonical root, then a no-op
+	// side child inheriting it: sideNoOp is true. But the canonical chain changed
+	// state here (canonNoOp false), so the exemption must be denied. The forged
+	// side parent is written to the header chain so GetHeader resolves it, mirroring
+	// how insertSideChain writes sidechain headers without state verification.
+	forgedParent := types.NewBlockWithHeader(&types.Header{
+		Number:     canonParent.Number(),
+		ParentHash: canonParent.ParentHash(),
+		Root:       canonical.Root(),
+		Coinbase:   common.Address{9},
+	})
+	rawdb.WriteHeader(chain.db, forgedParent.Header())
+	forged := types.NewBlockWithHeader(&types.Header{
+		Number:     canonical.Number(),
+		ParentHash: forgedParent.Hash(),
+		Root:       canonical.Root(),
+		Coinbase:   common.Address{2},
+	})
+	if forged.Hash() == canonical.Hash() {
+		t.Fatalf("test setup: forged side block must differ from canonical")
+	}
+	// Sanity: the side block is a no-op vs its (forged) parent — the precise input
+	// the pre-hardening check would have wrongly exempted.
+	if chain.GetHeader(forged.ParentHash(), forged.NumberU64()-1).Root != forged.Root() {
+		t.Fatalf("test setup: forged side block must be a no-op vs its parent")
+	}
+	if !chain.isSidechainGhostState(forged, canonical) {
+		t.Fatalf("attack not detected: no-op side block at a state-changing canonical height must be rejected")
+	}
+}
+
 // TestDeleteCreateRevert tests a weird state transition corner case that we hit
 // while changing the internals of statedb. The workflow is that a contract is
 // self destructed, then in a followup transaction (but same block) it's created
