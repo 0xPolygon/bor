@@ -6654,6 +6654,18 @@ func TestPipelinedImportSRC_MultipleBlocksWarmCarry(t *testing.T) {
 	testPipelinedImportSRC_MultipleBlocks(t, rawdb.PathScheme, pipelinedConfigWithWarmSnapshot(rawdb.PathScheme), true)
 }
 
+// TestPipelinedImportSRC_MultipleBlocksNoExecPrefetch re-runs the multi-block
+// parity check with the execution-side prefetchers disabled — the pipelined
+// witness-off configuration that reclaims the speculative prefetcher and trie
+// prefetcher CPU.
+func TestPipelinedImportSRC_MultipleBlocksNoExecPrefetch(t *testing.T) {
+	for _, scheme := range []string{rawdb.HashScheme, rawdb.PathScheme} {
+		cfg := pipelinedConfigWithWarmSnapshot(scheme)
+		cfg.PipelinedImportExecPrefetch = false
+		testPipelinedImportSRC_MultipleBlocks(t, scheme, cfg, true)
+	}
+}
+
 func testPipelinedImportSRC_MultipleBlocks(t *testing.T, scheme string, pipeCfg *BlockChainConfig, wantCarry bool) {
 	var (
 		key, _    = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")

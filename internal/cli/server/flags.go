@@ -668,6 +668,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.Pipeline.WarmSnapshot,
 		Group:   "Pipeline",
 	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "pipeline.exec-prefetch",
+		Usage:   "Run the execution-side prefetchers (speculative block prefetcher + trie prefetcher) during pipelined witness-off import; disable to reclaim their CPU when their trie output is discarded",
+		Value:   &c.cliConfig.Pipeline.ExecPrefetch,
+		Default: c.cliConfig.Pipeline.ExecPrefetch,
+		Group:   "Pipeline",
+	})
 	f.IntFlag(&flagset.IntFlag{
 		Name:    "fdlimit",
 		Usage:   "Raise the open file descriptor resource limit (default = system fd limit)",

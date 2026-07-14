@@ -833,6 +833,13 @@ type PipelineConfig struct {
 	// prefetcher to the pipelined SRC goroutine. Targets cold-cache
 	// restart/catch-up CPU; no effect on correctness or witness completeness.
 	WarmSnapshot bool `hcl:"warm-snapshot,optional" toml:"warm-snapshot,optional"`
+
+	// ExecPrefetch controls the execution-side prefetchers (speculative block
+	// prefetcher + executing StateDB's trie prefetcher) during pipelined
+	// witness-off import, where their trie output is discarded. Disable to
+	// reclaim their CPU on catch-up. No effect outside pipelined witness-off
+	// import.
+	ExecPrefetch bool `hcl:"exec-prefetch,optional" toml:"exec-prefetch,optional"`
 }
 
 func DefaultConfig() *Config {
@@ -1102,6 +1109,7 @@ func DefaultConfig() *Config {
 			EnableImportSRC: false,
 			ImportSRCLogs:   false,
 			WarmSnapshot:    true,
+			ExecPrefetch:    true,
 		},
 	}
 }
@@ -1588,6 +1596,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.EnablePipelinedImportSRC = c.Pipeline.EnableImportSRC
 		n.PipelinedImportSRCLogs = c.Pipeline.ImportSRCLogs
 		n.PipelinedSRCWarmSnapshot = c.Pipeline.WarmSnapshot
+		n.PipelinedImportExecPrefetch = c.Pipeline.ExecPrefetch
 		// Note that even the values set by `history.transactions` will be written in the old flag until it's removed.
 		n.TransactionHistory = c.Cache.TxLookupLimit
 		n.TrieTimeout = c.Cache.TrieTimeout

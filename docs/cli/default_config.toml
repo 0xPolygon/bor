@@ -271,3 +271,4 @@ devfakeauthor = false
   enable-import-src = false
   import-src-logs = false
   warm-snapshot = true
+  exec-prefetch = true

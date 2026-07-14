@@ -332,6 +332,8 @@ The ```bor server``` command runs the Bor client.
 
 - ```pipeline.enable-import-src```: Enable pipelined state root computation during block import: overlap SRC(N) with block N+1 tx execution (default: false)
 
+- ```pipeline.exec-prefetch```: Run the execution-side prefetchers (speculative block prefetcher + trie prefetcher) during pipelined witness-off import; disable to reclaim their CPU when their trie output is discarded (default: true)
+
 - ```pipeline.import-src-logs```: Enable verbose logging for pipelined import SRC (default: false)
 
 - ```pipeline.warm-snapshot```: Enable warm-node handoff to the pipelined SRC (witness-on: execution prefetcher snapshot; witness-off: bounded ring of recent SRCs' committed nodes); no effect when import SRC is disabled (default: true)
