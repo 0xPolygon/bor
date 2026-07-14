@@ -64,6 +64,51 @@ type reader struct {
 // node info. Don't modify the returned byte slice since it's not deep-copied
 // and still be referenced by database.
 func (r *reader) Node(owner common.Hash, path []byte, hash common.Hash) ([]byte, error) {
+	// Fast path: consult the layer tree's node index. A hit is
+	// content-verified (the hash is part of the index key); a definitive
+	// miss guarantees no live diff layer holds the node, so it can only be
+	// in the disk layer — skip the layer-chain walk entirely.
+	if !r.noHashCheck && hash != (common.Hash{}) {
+		if blob, found, definitive := r.db.tree.node(owner, path, hash); found {
+			nodeIndexHitMeter.Mark(1)
+			return blob, nil
+		} else if definitive {
+			nodeIndexMissMeter.Mark(1)
+			if blob, ok := r.diskNode(owner, path, hash); ok {
+				return blob, nil
+			}
+			// Irregularity (stale disk layer mid-read, hash mismatch) —
+			// resolve through the legacy walk below, which owns fallback
+			// and error reporting.
+		}
+	}
+	return r.nodeWalk(owner, path, hash)
+}
+
+// diskNode serves a definitive node-index miss straight from the disk layer.
+// ok=false on any irregularity so the caller retries via the legacy walk.
+func (r *reader) diskNode(owner common.Hash, path []byte, hash common.Hash) ([]byte, bool) {
+	blob, got, loc, err := r.db.tree.bottom().node(owner, path, 0)
+	if err != nil {
+		return nil, false
+	}
+	if got == hash {
+		return blob, true
+	}
+	// Evict a potentially poisoned clean-cache entry before the legacy walk
+	// retries (see the mismatch commentary in nodeWalk).
+	if loc.loc == locCleanCache {
+		nodeCleanFalseMeter.Mark(1)
+		evictCachedNode(r.db.tree.bottom(), owner, path)
+	}
+	return nil, false
+}
+
+// nodeWalk resolves a trie node by walking the reader's layer chain. It is
+// the pre-index resolution path, kept as the authority for noHashCheck
+// readers, non-definitive index misses, and all irregular cases (stale
+// layers, hash mismatches), owning the fallback and error-reporting logic.
+func (r *reader) nodeWalk(owner common.Hash, path []byte, hash common.Hash) ([]byte, error) {
 	blob, got, loc, err := r.layer.node(owner, path, 0)
 	if err != nil {
 		// If the diff layer chain walks into a stale disk layer (marked stale
