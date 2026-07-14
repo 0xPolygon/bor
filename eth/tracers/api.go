@@ -69,6 +69,13 @@ const (
 	// for tracing. The creation of trace state will be paused if the unused
 	// trace states exceed this limit.
 	maximumPendingTraceStates = 128
+
+	// Per-request limits for TraceCallMany, to bound the work and memory a single
+	// request can demand. Each traced call is still individually bounded by the
+	// per-trace timeout.
+	maxTraceCallManyBundles        = 256
+	maxTraceCallManyCallsPerBundle = 1000
+	maxTraceCallManyTotalCalls     = 10000
 )
 
 var errTxNotFound = errors.New("transaction not found")
@@ -1152,6 +1159,276 @@ func (api *API) TraceCall(ctx context.Context, args ethapi.TransactionArgs, bloc
 	}
 	res, _, err := api.traceTx(ctx, tx, msg, new(Context), blockContext, statedb, traceConfig, precompiles)
 	return res, err
+}
+
+// Bundle is a group of calls traced against a shared, evolving state with a
+// common block-context override.
+type Bundle struct {
+	Transactions  []ethapi.TransactionArgs `json:"transactions"`
+	BlockOverride *override.BlockOverrides `json:"blockOverride"`
+}
+
+// StateContext selects the base state for TraceCallMany. The state used is the
+// one after replaying transactions [0, TransactionIndex) of the referenced
+// block. If TransactionIndex is nil, -1, or points past the last transaction,
+// the full post-block state is used. Values below -1 are rejected.
+type StateContext struct {
+	BlockNumber      rpc.BlockNumberOrHash `json:"blockNumber"`
+	TransactionIndex *int                  `json:"transactionIndex"`
+}
+
+// TraceCallMany traces a list of eth_call bundles over a shared, evolving state
+// and returns a per-bundle, per-call slice of tracer results. It mirrors
+// erigon's eth_callMany semantics:
+//
+//   - simulateContext selects the base state (state after the referenced block's
+//     transactions [0, transactionIndex)).
+//   - config.StateOverrides is applied once to that base state.
+//   - each bundle's BlockOverride customizes the block context for the calls
+//     within it.
+//
+// State mutations persist across calls within a bundle and across bundles (no
+// rollback), so a transfer in one call is visible to a later call. After each
+// bundle the simulated block number and time advance by one. Per-bundle
+// BlockOverride is preferred over config.BlockOverrides.
+//
+// The result is positional: result[i] holds the traces for bundles[i]. A bundle
+// with no transactions is allowed (only a request with no transactions at all is
+// rejected) and yields an empty slice at its position.
+func (api *API) TraceCallMany(ctx context.Context, bundles []Bundle, simulateContext StateContext, config *TraceCallConfig) ([][]interface{}, error) {
+	if err := validateBundles(bundles); err != nil {
+		return nil, err
+	}
+
+	// Try to retrieve the specified block
+	var (
+		err         error
+		block       *types.Block
+		statedb     *state.StateDB
+		release     StateReleaseFunc
+		precompiles vm.PrecompiledContracts
+	)
+
+	if hash, ok := simulateContext.BlockNumber.Hash(); ok {
+		block, err = api.blockByHash(ctx, hash)
+	} else if number, ok := simulateContext.BlockNumber.Number(); ok {
+		if number == rpc.PendingBlockNumber {
+			// We don't have access to the miner here. For tracing 'future' transactions,
+			// it can be done with block- and state-overrides instead, which offers
+			// more flexibility and stability than trying to trace on 'pending', since
+			// the contents of 'pending' is unstable and probably not a true representation
+			// of what the next actual block is likely to contain.
+			return nil, errors.New("tracing on top of pending is not supported")
+		}
+
+		block, err = api.blockByNumber(ctx, number)
+	} else {
+		return nil, errors.New("invalid arguments; neither block nor hash specified")
+	}
+
+	if err != nil {
+		return nil, err
+	}
+	// try to recompute the state
+	reexec := defaultTraceReexec
+	if config != nil && config.Reexec != nil {
+		reexec = *config.Reexec
+	}
+
+	// Default tx index is "-1" which means full block
+	var txIndex = -1
+	if simulateContext.TransactionIndex != nil {
+		txIndex = *simulateContext.TransactionIndex
+	}
+	if txIndex < -1 {
+		return nil, fmt.Errorf("transaction index %d out of range for block %#x", txIndex, block.Hash())
+	}
+	// Avoid calling `StateAtTransaction` if `txIndex` points past the last transaction as it will
+	// return an error. Instead use `StateAtBlock` directly to fetch the post-block state. Hence
+	// we set the txIndex to the default value in such cases to fetch post-block state directly.
+	if txIndex >= len(block.Transactions()) {
+		txIndex = -1
+	}
+
+	if txIndex == -1 {
+		statedb, release, err = api.backend.StateAtBlock(ctx, block, reexec, nil, true, false)
+	} else {
+		_, _, statedb, release, err = api.backend.StateAtTransaction(ctx, block, txIndex, reexec)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	defer release()
+
+	h := block.Header()
+	chainCtx := api.chainContext(ctx)
+	blockContext := core.NewEVMBlockContext(h, chainCtx, nil)
+	chainConfig := api.backend.ChainConfig()
+
+	// advancedGetHash resolves blockhash() once the effective block moves past the
+	// real head: the header copy is pinned at head+1 with the real head as its parent,
+	// so real blocks (<= head) resolve via the chain walk while simulated blocks above
+	// the head resolve to 0. Otherwise a contract could detect simulation by checking
+	// blockhash(head) == 0x0 (#32175). Built once and reused across bundles so its
+	// internal block-hash cache stays warm; h is never mutated.
+	hc := types.CopyHeader(h)
+	hc.ParentHash = hc.Hash()
+	hc.Number = new(big.Int).Add(hc.Number, big.NewInt(1))
+	advancedGetHash := core.GetHashFn(hc, chainCtx)
+
+	// applyBlockOverride applies o to blockContext.
+	applyBlockOverride := func(o *override.BlockOverrides, blockContext *vm.BlockContext, applyPrecompiles bool) error {
+		if err := o.Apply(blockContext); err != nil {
+			return err
+		}
+		// Once the effective block number moves past the real head — whether via an
+		// explicit Number override or the per-bundle advance — use the head+1 GetHash
+		// so blockhash(head) resolves to the real head hash instead of 0.
+		if blockContext.BlockNumber.Cmp(h.Number) > 0 {
+			blockContext.GetHash = advancedGetHash
+		}
+		if applyPrecompiles && config.StateOverrides != nil {
+			rules := chainConfig.Rules(blockContext.BlockNumber, blockContext.Random != nil, blockContext.Time)
+			active := vm.ActivePrecompiledContracts(rules)
+			// State overrides change the precompile set only when an overridden address
+			// is itself an active precompile — that covers freeing a precompile slot and
+			// MovePrecompileTo (which requires the source to be a precompile). Detect this
+			// before Apply mutates the map.
+			touchesPrecompiles := false
+			for addr := range *config.StateOverrides {
+				if _, ok := active[addr]; ok {
+					touchesPrecompiles = true
+					break
+				}
+			}
+			if err := config.StateOverrides.Apply(statedb, active); err != nil {
+				return err
+			}
+			// Only pin the mutated set if the override actually changed it; then every
+			// bundle reuses it. Re-deriving it per bundle isn't possible without
+			// re-applying the override, which would clobber state mutations carried over
+			// from earlier bundles — so a bundle whose BlockOverride crosses a fork keeps
+			// the base-block precompile set. This is a known (now narrow) limitation.
+			//
+			// Otherwise leave precompiles nil so each bundle's traceTx derives the active
+			// set from its own (advanced) block context — correct across fork boundaries.
+			if touchesPrecompiles {
+				precompiles = active
+			}
+		}
+		return nil
+	}
+
+	var traceConfig *TraceConfig
+	// Apply the customization rules if required.
+	if config != nil {
+		if err := applyBlockOverride(config.BlockOverrides, &blockContext, true); err != nil {
+			return nil, err
+		}
+		traceConfig = &config.TraceConfig
+	}
+
+	results := make([][]interface{}, 0, len(bundles))
+	var (
+		prevNumber *big.Int
+		prevTime   uint64
+	)
+	for _, bundle := range bundles {
+		if err := applyBlockOverride(bundle.BlockOverride, &blockContext, false); err != nil {
+			return nil, err
+		}
+		// The per-bundle advance models consecutive blocks, so an absolute per-bundle
+		// BlockOverride must not move the number or timestamp backwards (mirrors
+		// eth_simulateV1).
+		if prevNumber != nil {
+			if blockContext.BlockNumber.Cmp(prevNumber) <= 0 {
+				return nil, fmt.Errorf("block numbers must be in order: %d <= %d", blockContext.BlockNumber, prevNumber)
+			}
+			if blockContext.Time <= prevTime {
+				return nil, fmt.Errorf("block timestamps must be in order: %d <= %d", blockContext.Time, prevTime)
+			}
+		}
+		prevNumber, prevTime = new(big.Int).Set(blockContext.BlockNumber), blockContext.Time
+
+		res, err := api.traceBundle(ctx, bundle.Transactions, blockContext, block, statedb, traceConfig, precompiles)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, res)
+		blockContext.BlockNumber = new(big.Int).Add(blockContext.BlockNumber, big.NewInt(1))
+		blockContext.Time++
+	}
+	return results, nil
+}
+
+// validateBundles rejects requests with no transactions to trace and enforces
+// the per-request limits on bundle and call counts.
+func validateBundles(bundles []Bundle) error {
+	var errEmptyBundles = errors.New("empty bundles")
+	if len(bundles) == 0 {
+		return errEmptyBundles
+	}
+	if len(bundles) > maxTraceCallManyBundles {
+		return fmt.Errorf("too many bundles: %d, maximum allowed is %d", len(bundles), maxTraceCallManyBundles)
+	}
+	total := 0
+	hasTx := false
+	for _, b := range bundles {
+		if len(b.Transactions) > maxTraceCallManyCallsPerBundle {
+			return fmt.Errorf("too many calls in a single bundle: %d, maximum allowed is %d", len(b.Transactions), maxTraceCallManyCallsPerBundle)
+		}
+		if len(b.Transactions) > 0 {
+			hasTx = true
+			total += len(b.Transactions)
+		}
+	}
+	if !hasTx {
+		return errEmptyBundles
+	}
+	if total > maxTraceCallManyTotalCalls {
+		return fmt.Errorf("too many calls across all bundles: %d, maximum allowed is %d", total, maxTraceCallManyTotalCalls)
+	}
+	return nil
+}
+
+// traceBundle traces each call in a bundle sequentially against the shared
+// state, so each call observes the mutations of the calls before it.
+func (api *API) traceBundle(ctx context.Context, txs []ethapi.TransactionArgs, blockCtx vm.BlockContext, block *types.Block, statedb *state.StateDB, traceConfig *TraceConfig, precompiles vm.PrecompiledContracts) ([]interface{}, error) {
+	results := make([]interface{}, 0, len(txs))
+	for i, args := range txs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if err := args.CallDefaults(api.backend.RPCGasCap(), blockCtx.BaseFee, api.backend.ChainConfig().ChainID); err != nil {
+			return nil, err
+		}
+		var (
+			msg     = args.ToMessage(blockCtx.BaseFee, true)
+			tx      = args.ToTransaction(types.LegacyTxType)
+			callCtx = blockCtx
+		)
+		// Lower the basefee to 0 to avoid breaking EVM invariants (basefee < feecap).
+		// Mutate a per-call copy so it doesn't leak to the next call.
+		if msg.GasPrice.Sign() == 0 {
+			callCtx.BaseFee = new(big.Int)
+		}
+		if msg.BlobGasFeeCap != nil && msg.BlobGasFeeCap.BitLen() == 0 {
+			callCtx.BlobBaseFee = new(big.Int)
+		}
+		txctx := &Context{
+			BlockHash:   block.Hash(),
+			BlockNumber: callCtx.BlockNumber,
+			TxIndex:     i,
+			TxHash:      tx.Hash(),
+		}
+		res, _, err := api.traceTx(ctx, tx, msg, txctx, callCtx, statedb, traceConfig, precompiles)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, res)
+	}
+	return results, nil
 }
 
 // traceTx configures a new tracer according to the provided configuration, and
