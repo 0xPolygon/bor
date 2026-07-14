@@ -146,10 +146,11 @@ type Config struct {
 	// semantics, witness completeness, and root determinism are unaffected.
 	PipelinedSRCWarmSnapshot bool
 
-	// PipelinedImportExecPrefetch controls the execution-side prefetchers
-	// during pipelined witness-off import, where their trie output is
-	// discarded. Disable to reclaim their CPU on catch-up. No effect outside
-	// pipelined witness-off import.
+	// PipelinedImportExecPrefetch controls the executing StateDB's trie
+	// prefetcher during pipelined witness-off import, where its output is
+	// discarded (the speculative block prefetcher is unaffected). Disable to
+	// reclaim its CPU on catch-up. No effect outside pipelined witness-off
+	// import.
 	PipelinedImportExecPrefetch bool
 
 	// Deprecated: use 'TransactionHistory' instead.

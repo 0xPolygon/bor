@@ -670,7 +670,7 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	})
 	f.BoolFlag(&flagset.BoolFlag{
 		Name:    "pipeline.exec-prefetch",
-		Usage:   "Run the execution-side prefetchers (speculative block prefetcher + trie prefetcher) during pipelined witness-off import; disable to reclaim their CPU when their trie output is discarded",
+		Usage:   "Run the executing StateDB's trie prefetcher during pipelined witness-off import; disable to reclaim its CPU when its output is discarded (the speculative block prefetcher always runs)",
 		Value:   &c.cliConfig.Pipeline.ExecPrefetch,
 		Default: c.cliConfig.Pipeline.ExecPrefetch,
 		Group:   "Pipeline",

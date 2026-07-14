@@ -420,14 +420,14 @@ type BlockChainConfig struct {
 	// miss, so root determinism and witness completeness are unaffected.
 	PipelinedSRCWarmSnapshot bool
 
-	// PipelinedImportExecPrefetch controls the execution-side prefetchers
-	// during pipelined witness-off import: the speculative block prefetcher
-	// (a full second execution on a throwaway StateDB) and the executing
-	// StateDB's trie prefetcher. Their trie output has no consumer on that
-	// path — the SRC takes its warmth from the WarmNodeRing instead — so
-	// disabling them reclaims their CPU (mainnet catch-up profiling
-	// attributed ~22% of process CPU to these two lanes). Non-pipelined and
-	// witness-on imports are unaffected by this setting.
+	// PipelinedImportExecPrefetch controls the executing StateDB's trie
+	// prefetcher during pipelined witness-off import. Its output has no
+	// consumer on that path — the SRC takes its warmth from the WarmNodeRing
+	// instead — so disabling it reclaims its CPU (~6% of process CPU in
+	// mainnet catch-up profiling). The speculative block prefetcher is not
+	// covered: it warms pebble/flat-state and shared jumpdest caches ahead of
+	// the BlockSTM workers and disabling it slowed execution ~29% in
+	// benchmarks. Non-pipelined and witness-on imports are unaffected.
 	PipelinedImportExecPrefetch bool
 }
 
@@ -1293,13 +1293,16 @@ func (c *sharedBlockCaches) applyTo(cfg *vm.Config) {
 	cfg.EcrecoverCache = c.ecrecover
 }
 
-// execPrefetchEnabled reports whether the execution-side prefetchers (the
-// speculative block prefetcher and the executing StateDB's trie prefetcher)
-// should run for this block. They stay on everywhere except pipelined
-// witness-off import with PipelinedImportExecPrefetch disabled: on that path
-// the trie prefetcher's output is detached and discarded (the SRC warms from
-// the WarmNodeRing), so the two lanes only cost CPU.
-func (bc *BlockChain) execPrefetchEnabled(pipeOpts *PipelineImportOpts, witness *stateless.Witness) bool {
+// execTriePrefetchEnabled reports whether the executing StateDB's trie
+// prefetcher should run for this block. It stays on everywhere except
+// pipelined witness-off import with PipelinedImportExecPrefetch disabled: on
+// that path its output is detached and discarded (the SRC warms from the
+// WarmNodeRing), so it only costs CPU. The speculative block prefetcher is
+// NOT covered by this switch — benchmarking showed it is load-bearing for
+// the execution lane (it runs ahead of the BlockSTM workers warming
+// pebble/flat-state and shared jumpdest caches; disabling it slowed
+// execution ~29%), so it always runs.
+func (bc *BlockChain) execTriePrefetchEnabled(pipeOpts *PipelineImportOpts, witness *stateless.Witness) bool {
 	if bc.cfg.PipelinedImportExecPrefetch {
 		return true
 	}
@@ -1343,13 +1346,9 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	defer reportReaderStats(prefetch, process, parallel)
 
 	// Shared caches for this block — used by both prefetcher and V2 workers.
-	// (The V2 workers populate them regardless of whether the speculative
-	// prefetcher runs.)
 	sharedCaches := newSharedBlockCaches()
-	execPrefetch := bc.execPrefetchEnabled(pipeOpts, witness)
-	if execPrefetch {
-		bc.startPrefetchGoroutine(block, throwaway, sharedCaches, followupInterrupt)
-	}
+	bc.startPrefetchGoroutine(block, throwaway, sharedCaches, followupInterrupt)
+	execTriePrefetch := bc.execTriePrefetchEnabled(pipeOpts, witness)
 
 	type Result struct {
 		receipts types.Receipts
@@ -1379,7 +1378,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 
 		go func() {
 			pstart := time.Now()
-			if execPrefetch {
+			if execTriePrefetch {
 				parallelStatedb.StartPrefetcher("chain", witness, nil)
 			}
 			v2VmCfg := bc.cfg.VmConfig
@@ -1425,7 +1424,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 
 		go func() {
 			pstart := time.Now()
-			if execPrefetch {
+			if execTriePrefetch {
 				statedb.StartPrefetcher("chain", witness, nil)
 			}
 			res, err := bc.processor.Process(block, statedb, bc.cfg.VmConfig, nil, ctx)
