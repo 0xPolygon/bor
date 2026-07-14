@@ -455,6 +455,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		checker:                 checker,
 		enableBlockTracking:     eth.config.EnableBlockTracking,
 		txAnnouncementOnly:      eth.p2pServer.TxAnnouncementOnly,
+		txArrivalWait:           eth.p2pServer.TxArrivalWait,
 		disableTxPropagation:    eth.p2pServer.DisableTxPropagation,
 		witnessProtocol:         eth.config.WitnessProtocol,
 		syncWithWitnesses:       eth.config.SyncWithWitnesses,

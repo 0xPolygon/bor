@@ -37,6 +37,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/eth/downloader"
+	"github.com/ethereum/go-ethereum/eth/fetcher"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
@@ -214,12 +215,13 @@ func newTestHandlerWithBlocks(blocks int) *testHandler {
 	txpool := newTestTxPool()
 
 	handler, _ := newHandler(&handlerConfig{
-		Database:   db,
-		Chain:      chain,
-		TxPool:     txpool,
-		Network:    1,
-		Sync:       downloader.SnapSync,
-		BloomCache: 1,
+		Database:      db,
+		Chain:         chain,
+		TxPool:        txpool,
+		Network:       1,
+		Sync:          downloader.SnapSync,
+		BloomCache:    1,
+		txArrivalWait: fetcher.DefaultTxArrivalWait,
 	})
 	handler.Start(1000)
 

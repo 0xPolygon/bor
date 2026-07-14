@@ -64,9 +64,9 @@ const (
 	// maxTxUnderpricedTimeout is the max time a transaction should be stuck in the underpriced set.
 	maxTxUnderpricedTimeout = 5 * time.Minute
 
-	// txArriveTimeout is the time allowance before an announced transaction is
-	// explicitly requested.
-	txArriveTimeout = 500 * time.Millisecond
+	// DefaultTxArrivalWait is the default time allowance before an announced
+	// transaction is explicitly requested.
+	DefaultTxArrivalWait = 500 * time.Millisecond
 
 	// txGatherSlack is the interval used to collate almost-expired announces
 	// with network fetches.
@@ -169,6 +169,8 @@ type TxFetcher struct {
 	fetchTxs func(string, []common.Hash) error  // Retrieves a set of txs from a remote peer
 	dropPeer func(string)                       // Drops a peer in case of announcement violation
 
+	txArrivalWait time.Duration // Time allowance for an announced transaction to arrive before it is explicitly requested
+
 	step     chan struct{}    // Notification channel when the fetcher loop iterates
 	clock    mclock.Clock     // Monotonic clock or simulated clock for tests
 	realTime func() time.Time // Real system time or simulated time for tests
@@ -176,16 +178,22 @@ type TxFetcher struct {
 }
 
 // NewTxFetcher creates a transaction fetcher to retrieve transaction
-// based on hash announcements.
-func NewTxFetcher(hasTx func(common.Hash) bool, addTxs func([]*types.Transaction) []error, fetchTxs func(string, []common.Hash) error, dropPeer func(string)) *TxFetcher {
-	return NewTxFetcherForTests(hasTx, addTxs, fetchTxs, dropPeer, mclock.System{}, time.Now, nil)
+// based on hash announcements. txArrivalWait is how long an announced
+// transaction may be waited on to arrive via broadcast before it is
+// explicitly requested; zero requests it immediately.
+func NewTxFetcher(hasTx func(common.Hash) bool, addTxs func([]*types.Transaction) []error, fetchTxs func(string, []common.Hash) error, dropPeer func(string), txArrivalWait time.Duration) *TxFetcher {
+	return NewTxFetcherForTests(hasTx, addTxs, fetchTxs, dropPeer, txArrivalWait, mclock.System{}, time.Now, nil)
 }
 
 // NewTxFetcherForTests is a testing method to mock out the realtime clock with
 // a simulated version and the internal randomness with a deterministic one.
 func NewTxFetcherForTests(
 	hasTx func(common.Hash) bool, addTxs func([]*types.Transaction) []error, fetchTxs func(string, []common.Hash) error, dropPeer func(string),
-	clock mclock.Clock, realTime func() time.Time, rand *mrand.Rand) *TxFetcher {
+	txArrivalWait time.Duration, clock mclock.Clock, realTime func() time.Time, rand *mrand.Rand) *TxFetcher {
+	if txArrivalWait < 0 {
+		txArrivalWait = 0
+	}
+
 	return &TxFetcher{
 		notify:      make(chan *txAnnounce),
 		cleanup:     make(chan *txDelivery),
@@ -204,9 +212,12 @@ func NewTxFetcherForTests(
 		addTxs:      addTxs,
 		fetchTxs:    fetchTxs,
 		dropPeer:    dropPeer,
-		clock:       clock,
-		realTime:    realTime,
-		rand:        rand,
+
+		txArrivalWait: txArrivalWait,
+
+		clock:    clock,
+		realTime: realTime,
+		rand:     rand,
 	}
 }
 
@@ -510,7 +521,7 @@ func (f *TxFetcher) loop() {
 			actives := make(map[string]struct{})
 
 			for hash, instance := range f.waittime {
-				if time.Duration(f.clock.Now()-instance)+txGatherSlack > txArriveTimeout {
+				if time.Duration(f.clock.Now()-instance)+txGatherSlack > f.txArrivalWait {
 					// Transaction expired without propagation, schedule for retrieval
 					if f.announced[hash] != nil {
 						panic("announce tracker already contains waitlist item")
@@ -851,13 +862,13 @@ func (f *TxFetcher) rescheduleWait(timer *mclock.Timer, trigger chan struct{}) {
 	for _, instance := range f.waittime {
 		if earliest > instance {
 			earliest = instance
-			if txArriveTimeout-time.Duration(now-earliest) < txGatherSlack {
+			if f.txArrivalWait-time.Duration(now-earliest) < txGatherSlack {
 				break
 			}
 		}
 	}
 
-	*timer = f.clock.AfterFunc(txArriveTimeout-time.Duration(now-earliest), func() {
+	*timer = f.clock.AfterFunc(f.txArrivalWait-time.Duration(now-earliest), func() {
 		trigger <- struct{}{}
 	})
 }

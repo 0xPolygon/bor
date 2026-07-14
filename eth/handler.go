@@ -129,6 +129,7 @@ type handlerConfig struct {
 	EthAPI                  *ethapi.BlockChainAPI  // EthAPI to interact
 	enableBlockTracking     bool                   // Whether to log information collected while tracking block lifecycle
 	txAnnouncementOnly      bool                   // Whether to only announce txs to peers
+	txArrivalWait           time.Duration          // Time allowance for an announced tx to arrive before explicitly requesting it
 	disableTxPropagation    bool                   // Whether to disable broadcasting and announcement of txs to peers
 	witnessProtocol         bool                   // Whether to enable witness protocol
 	syncWithWitnesses       bool                   // Whether to sync blocks with witnesses
@@ -319,7 +320,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 	addTxs := func(txs []*types.Transaction) []error {
 		return h.txpool.Add(txs, false)
 	}
-	h.txFetcher = fetcher.NewTxFetcher(h.txpool.Has, addTxs, fetchTx, h.removePeer)
+	h.txFetcher = fetcher.NewTxFetcher(h.txpool.Has, addTxs, fetchTx, h.removePeer, config.txArrivalWait)
 	h.chainSync = newChainSyncer(h)
 
 	return h, nil

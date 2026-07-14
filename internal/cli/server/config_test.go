@@ -30,6 +30,25 @@ func assertBorDefaultGasPrice(t *testing.T, ethConfig *ethconfig.Config) {
 	assert.Equal(t, ethConfig.Miner.GasPrice, big.NewInt(params.BorDefaultMinerGasPrice))
 }
 
+func TestTxArrivalWaitConfig(t *testing.T) {
+	t.Parallel()
+
+	config := DefaultConfig()
+	assert.NoError(t, config.loadChain())
+
+	nodeCfg, err := config.buildNode()
+	assert.NoError(t, err)
+	assert.Equal(t, 500*time.Millisecond, nodeCfg.P2P.TxArrivalWait)
+
+	config.P2P.TxArrivalWaitRaw = "0s"
+	assert.NoError(t, config.fillTimeDurations())
+	assert.Equal(t, time.Duration(0), config.P2P.TxArrivalWait)
+
+	nodeCfg, err = config.buildNode()
+	assert.NoError(t, err)
+	assert.Equal(t, time.Duration(0), nodeCfg.P2P.TxArrivalWait)
+}
+
 func TestConfigMerge(t *testing.T) {
 	c0 := &Config{
 		Chain:    "0",

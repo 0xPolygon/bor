@@ -29,6 +29,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/eth/downloader/whitelist"
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
+	"github.com/ethereum/go-ethereum/eth/fetcher"
 	"github.com/ethereum/go-ethereum/eth/gasprice"
 	"github.com/ethereum/go-ethereum/internal/cli/server/chains"
 	"github.com/ethereum/go-ethereum/log"
@@ -859,7 +860,7 @@ func DefaultConfig() *Config {
 			NoDiscover:           false,
 			NAT:                  "any",
 			NetRestrict:          "",
-			TxArrivalWait:        500 * time.Millisecond,
+			TxArrivalWait:        fetcher.DefaultTxArrivalWait,
 			TxAnnouncementOnly:   false,
 			DisableTxPropagation: false,
 			NoSnapServing:        false,
