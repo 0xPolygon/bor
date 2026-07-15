@@ -4,9 +4,6 @@ on:
   schedule:
     - cron: '0 2 * * *'
   workflow_dispatch:
-  push:
-    branches:
-      - vbhattac/fix-govulncheck
 
 concurrency:
   group: nightly-govulncheck-${{ github.ref }}
