@@ -3804,7 +3804,7 @@ func (bc *BlockChain) insertSideChain(block *types.Block, it *insertIterator, ma
 //
 // A block that performs no state transition (e.g. an empty block) inherits its
 // parent's state root, so two distinct no-op blocks at the same height (differing
-// only in seal/timestamp/coinbase) legitimately share a state root — there is no
+// only in seal/timestamp/coinbase) legitimately share a state root: there is no
 // forged state to skip-verify. We exempt that case, but only when the *canonical*
 // chain was also a no-op at this height, measured against the canonical parent's
 // trusted (already-verified) header. Gating on the canonical side, not just the
@@ -3819,7 +3819,7 @@ func (bc *BlockChain) isSidechainGhostState(block *types.Block, canonical *types
 		return true
 	}
 	// Legitimate only if neither the canonical block nor the side block changed
-	// state relative to its own parent — i.e. both are genuine no-ops.
+	// state relative to its own parent, i.e. both are genuine no-ops.
 	canonNoOp := canonParent.Root == canonical.Root()
 	sideNoOp := sideParent.Root == block.Root()
 	return !(canonNoOp && sideNoOp)

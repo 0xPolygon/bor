@@ -3276,7 +3276,7 @@ func testSideImportGhostStateStillRejected(t *testing.T, scheme string) {
 // no-op at that height, not only on the side block's own (possibly attacker-forged)
 // parent. This defends against an attacker who forges both side parent and side
 // child roots to match a canonical root at a height where the canonical chain
-// actually changed state — the forge-both-roots bypass. Because the side block's
+// actually changed state (the forge-both-roots bypass). Because the side block's
 // parent can be unverified here while the canonical parent header is trusted,
 // isSidechainGhostState decides on the canonical parent. This exercises the
 // decision directly, since forging a header past GenerateChain's honest state
@@ -3312,13 +3312,33 @@ func TestSidechainGhostStateCanonicalGate(t *testing.T) {
 	if forged.Hash() == canonical.Hash() {
 		t.Fatalf("test setup: forged side block must differ from canonical")
 	}
-	// Sanity: the side block is a no-op vs its (forged) parent — the precise input
+	// Sanity: the side block is a no-op vs its (forged) parent, the precise input
 	// the pre-hardening check would have wrongly exempted.
 	if chain.GetHeader(forged.ParentHash(), forged.NumberU64()-1).Root != forged.Root() {
 		t.Fatalf("test setup: forged side block must be a no-op vs its parent")
 	}
 	if !chain.isSidechainGhostState(forged, canonical) {
 		t.Fatalf("attack not detected: no-op side block at a state-changing canonical height must be rejected")
+	}
+}
+
+// TestSidechainGhostStateMissingParentIsAttack covers the conservative fallback:
+// when either parent header is unavailable, isSidechainGhostState cannot prove the
+// blocks are genuine no-ops, so it must treat the match as an attack (return true).
+func TestSidechainGhostStateMissingParentIsAttack(t *testing.T) {
+	chain, _, blocks, _, forkIdx, _ := setupPrunedGhostStateChain(t, rawdb.HashScheme, false)
+
+	canonical := blocks[forkIdx]
+
+	// A side block whose parent header is not in the database at all: GetHeader
+	// returns nil, so the exemption is denied without inspecting roots.
+	orphan := types.NewBlockWithHeader(&types.Header{
+		Number:     canonical.Number(),
+		ParentHash: common.Hash{0xde, 0xad},
+		Root:       canonical.Root(),
+	})
+	if !chain.isSidechainGhostState(orphan, canonical) {
+		t.Fatalf("missing side parent must be treated as an attack")
 	}
 }
 
