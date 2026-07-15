@@ -182,44 +182,6 @@ func TestFilterReservedTxs(t *testing.T) {
 	}
 }
 
-// TestReservedOrdering pins the reserved heap's two departures from the normal
-// market ordering: it pops ascending effective tip (zero-/below-base-fee first)
-// and it never drops a below-base-fee transaction. Per-sender nonce order is
-// honoured.
-func TestReservedOrdering(t *testing.T) {
-	t.Parallel()
-
-	baseFee := big.NewInt(100)
-	a := common.HexToAddress("0x0a")
-	b := common.HexToAddress("0x0b")
-
-	// a: nonce0 fallback-fee (tip 50), nonce1 fallback-fee (tip 60).
-	// b: nonce0 zero-fee (below base fee), nonce1 fallback-fee (tip 10).
-	txs := map[common.Address][]*txpool.LazyTransaction{
-		a: {feeTx(0, 150, 50), feeTx(1, 160, 60)},
-		b: {feeTx(0, 0, 0), feeTx(1, 110, 10)},
-	}
-
-	h := newReservedTransactionsByNonce(nil, txs, baseFee, nil)
-
-	// Nothing dropped: 4 txs across 2 senders must all be present.
-	var order []common.Address
-	for {
-		ltx, _ := h.Peek()
-		if ltx == nil {
-			break
-		}
-		from, _ := h.PeekFrom()
-		order = append(order, from)
-		h.Shift()
-	}
-	require.Len(t, order, 4, "no below-base-fee tx should be dropped")
-
-	// b nonce0 (tip 0) pops first (ascending). b nonce1 (tip 10) next. Then a's
-	// nonce0 (tip 50), a nonce1 (tip 60). Per-sender nonce order holds.
-	require.Equal(t, []common.Address{b, b, a, a}, order)
-}
-
 // TestSelectReservedTxs exercises the per-client quota selection: ascending-fee
 // preference (zero-fee wins scarce quota over fallback-fee), per-sender nonce
 // contiguity on quota breach, and gas-limit-based accounting.
@@ -514,29 +476,8 @@ func TestSelectReservedTxs_Interrupt(t *testing.T) {
 	require.Empty(t, overflow, "nothing diverted to the normal pass")
 }
 
-// TestClonePreservesReservedOrdering guards the sendPlan/prefetch path: cloning
-// a reserved heap must keep the ascending, never-drop ordering so the plan the
-// prefetcher sees matches what commitTransactions will execute.
-func TestClonePreservesReservedOrdering(t *testing.T) {
-	t.Parallel()
-
-	baseFee := big.NewInt(100)
-	a := common.HexToAddress("0x0a")
-	b := common.HexToAddress("0x0b")
-	txs := map[common.Address][]*txpool.LazyTransaction{
-		a: {feeTx(0, 150, 50)}, // fallback-fee
-		b: {feeTx(1, 0, 0)},    // zero-fee
-	}
-
-	clone := newReservedTransactionsByNonce(nil, txs, baseFee, nil).clone()
-	require.True(t, clone.reserved, "clone keeps the reserved flag")
-	require.True(t, clone.heads.ascending, "clone keeps ascending ordering")
-
-	// Zero-fee still pops before fallback-fee on the clone.
-	from, ok := clone.PeekFrom()
-	require.True(t, ok)
-	require.Equal(t, b, from)
-}
+// Reserved-region ordering tests (ascending pop, never-drop, clone/Shift/interrupt
+// behavior) live in ordering_test.go alongside the normal-market ordering tests.
 
 // TestSequenceTxs validates the full grouping: priority first, then reserved
 // clients, then normal; empty groups are omitted; reserved overflow lands in
