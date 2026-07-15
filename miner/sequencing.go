@@ -23,10 +23,6 @@ var (
 	// reservedOverflowMeter counts reserved-eligible transactions diverted to
 	// the normal pass because of per-client quota or the global ceiling.
 	reservedOverflowMeter = metrics.NewRegisteredMeter("worker/reserved/overflow", nil)
-	// reservedInterruptCounter counts commit interrupts that fired while a
-	// reserved group was being committed — a sign the time budget is tight
-	// for reserved demand.
-	reservedInterruptCounter = metrics.NewRegisteredCounter("worker/reserved/interrupt", nil)
 )
 
 type transactionsByPriceAndNonceFn func(txs map[common.Address][]*txpool.LazyTransaction) *transactionsByPriceAndNonce
@@ -125,7 +121,11 @@ func selectReservedTxs(
 			break
 		}
 		from, _ := scan.PeekFrom()
-		if blocked[from] || used+ltx.Gas > quota {
+		// used <= quota is a loop invariant: it starts at 0 and only grows in the
+		// else branch, where the guard guarantees ltx.Gas <= quota-used, capping the
+		// new total at quota. Hence quota-used never underflows, and unlike
+		// used+ltx.Gas the comparison can't wrap for any registry-supplied quota.
+		if blocked[from] || ltx.Gas > quota-used {
 			blocked[from] = true
 			overflow[from] = append(overflow[from], ltx)
 		} else {

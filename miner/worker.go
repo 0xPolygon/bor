@@ -2154,9 +2154,12 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, gen
 	for _, txs := range txBatches {
 		sendPlan(builderPlanCh, genParams, txs, remainingGas(env))
 		if fillErr = w.commitTransactions(env, txs, emptyBlobTxs, interrupt, builderGasFreedCh); fillErr != nil {
-			if txs.reserved {
-				reservedInterruptCounter.Inc(1)
-			}
+			break
+		}
+		// The block-building time budget (w.interruptBlockBuilding) makes
+		// commitTransactions stop early with a nil error. Stop handing it
+		// further batches in that case — they would immediately no-op.
+		if w.interruptBlockBuilding.Load() {
 			break
 		}
 	}
@@ -2215,81 +2218,6 @@ func (w *worker) writeReservedGasUsed(env *environment, registry reservedRegistr
 	if err := env.header.SetReservedGasUsed(env.reservedGasUsed); err != nil {
 		log.Error("error while writing reserved gas used into block extra data", "err", err)
 		return err
-	}
-
-	return nil
-}
-
-// fillTransactionsOld is the previous prio/normal block-filling implementation,
-// kept for reference. It has no reserved-blockspace handling. The live path is
-// fillTransactions, which sequences transactions via sequenceTxs.
-//
-//nolint:gocognit,unused
-func (w *worker) fillTransactionsOld(interrupt *atomic.Int32, env *environment, genParams *generateParams) error {
-	w.mu.RLock()
-	prio := w.prio
-	w.mu.RUnlock()
-
-	pendingStart := time.Now()
-
-	filter := w.buildDefaultFilter(env.header.BaseFee, env.header.Number)
-	filter.BlobTxs = false
-	pendingPlainTxs := w.eth.TxPool().Pending(filter, &w.interruptBlockBuilding)
-
-	filter.BlobTxs = true
-	if w.chainConfig.IsOsaka(env.header.Number) {
-		filter.BlobVersion = types.BlobSidecarVersion1
-	} else {
-		filter.BlobVersion = types.BlobSidecarVersion0
-	}
-	pendingBlobTxs := w.eth.TxPool().Pending(filter, &w.interruptBlockBuilding)
-
-	env.pendingDuration = time.Since(pendingStart)
-	pendingTimer.Update(env.pendingDuration)
-
-	// Split the pending transactions into locals and remotes.
-	prioPlainTxs, normalPlainTxs := make(map[common.Address][]*txpool.LazyTransaction), pendingPlainTxs
-	prioBlobTxs, normalBlobTxs := make(map[common.Address][]*txpool.LazyTransaction), pendingBlobTxs
-
-	for _, account := range prio {
-		if txs := normalPlainTxs[account]; len(txs) > 0 {
-			delete(normalPlainTxs, account)
-			prioPlainTxs[account] = txs
-		}
-		if txs := normalBlobTxs[account]; len(txs) > 0 {
-			delete(normalBlobTxs, account)
-			prioBlobTxs[account] = txs
-		}
-	}
-
-	// Shared channels used during builder mode. Both are nil when there is no prefetcher.
-	var builderPlanCh chan<- *types.Transaction
-	var builderGasFreedCh chan<- uint64
-	if genParams != nil && genParams.builderPlanCh != nil {
-		builderPlanCh = genParams.builderPlanCh
-		if genParams.builderGasFreedCh != nil {
-			builderGasFreedCh = genParams.builderGasFreedCh
-		}
-	}
-
-	// Fill the block with all available pending transactions.
-	if len(prioPlainTxs) > 0 || len(prioBlobTxs) > 0 {
-		plainTxs := newTransactionsByPriceAndNonce(env.signer, prioPlainTxs, env.header.BaseFee, &w.interruptBlockBuilding)
-		blobTxs := newTransactionsByPriceAndNonce(env.signer, prioBlobTxs, env.header.BaseFee, &w.interruptBlockBuilding)
-		sendPlan(builderPlanCh, genParams, plainTxs, remainingGas(env))
-		if err := w.commitTransactions(env, plainTxs, blobTxs, interrupt, builderGasFreedCh); err != nil {
-			return err
-		}
-	}
-	if len(normalPlainTxs) > 0 || len(normalBlobTxs) > 0 {
-		heapInitTime := time.Now()
-		plainTxs := newTransactionsByPriceAndNonce(env.signer, normalPlainTxs, env.header.BaseFee, &w.interruptBlockBuilding)
-		blobTxs := newTransactionsByPriceAndNonce(env.signer, normalBlobTxs, env.header.BaseFee, &w.interruptBlockBuilding)
-		txHeapInitTimer.Update(time.Since(heapInitTime))
-		sendPlan(builderPlanCh, genParams, plainTxs, remainingGas(env))
-		if err := w.commitTransactions(env, plainTxs, blobTxs, interrupt, builderGasFreedCh); err != nil {
-			return err
-		}
 	}
 
 	return nil
