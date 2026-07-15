@@ -9,14 +9,14 @@ import (
 
 // reservedRegistry is the worker's local view of the reserved-blockspace
 // registry. Production wiring leaves the worker's registry nil; tests inject a
-// *Mock via SetReservedRegistry. The contract-backed implementation owned by
+// *MockRegistry via SetReservedRegistry. The contract-backed implementation owned by
 // the registry-module work lands behind the same shape later — a swap at the
 // setter site.
 type reservedRegistry interface {
 	// Lookup returns the client ID that owns addr, or (_, false) if addr is
 	// not registered. Only active clients are visible, and a sender belongs
 	// to at most one client — uniqueness is the implementation's invariant
-	// (Mock panics on construction; the registry contract enforces it).
+	// (MockRegistry panics on construction; the registry contract enforces it).
 	Lookup(addr common.Address) (clientID uint64, ok bool)
 	// Quota returns the per-block reserved-region gas allowance for clientID,
 	// measured against declared transaction gas limits (tx.Gas), not actual
@@ -38,40 +38,40 @@ type reservedRegistry interface {
 // Miner.SetReservedRegistry.
 type ReservedRegistry = reservedRegistry
 
-// Client describes one reserved-blockspace client for NewMock. Each whitelisted
+// ReservedClient describes one reserved-blockspace client for NewMockRegistry. Each whitelisted
 // sender belongs to exactly one client.
-type Client struct {
+type ReservedClient struct {
 	ID       uint64
 	Senders  []common.Address
 	QuotaGas uint64
 }
 
-// Mock is a throwaway in-memory reservedRegistry for tests and as a placeholder
+// MockRegistry is a throwaway in-memory reservedRegistry for tests and as a placeholder
 // until the registry module lands. Immutable after construction; lock-free.
-type Mock struct {
+type MockRegistry struct {
 	addrToClient  map[common.Address]uint64
 	clientToQuota map[uint64]uint64
 	clientIDs     []uint64
 	ceiling       uint64
 }
 
-// NewMock builds a Mock. Panics on a duplicate client ID or a sender claimed by
+// NewMockRegistry builds a MockRegistry. Panics on a duplicate client ID or a sender claimed by
 // two clients — both are test-setup bugs, not runtime conditions.
-func NewMock(clients []Client) *Mock {
-	m := &Mock{
+func NewMockRegistry(clients []ReservedClient) *MockRegistry {
+	m := &MockRegistry{
 		addrToClient:  make(map[common.Address]uint64),
 		clientToQuota: make(map[uint64]uint64),
 		clientIDs:     make([]uint64, 0, len(clients)),
 	}
 	for _, c := range clients {
 		if _, dup := m.clientToQuota[c.ID]; dup {
-			panic(fmt.Sprintf("miner.NewMock: duplicate client ID %d", c.ID))
+			panic(fmt.Sprintf("miner.NewMockRegistry: duplicate client ID %d", c.ID))
 		}
 		m.clientToQuota[c.ID] = c.QuotaGas
 		m.clientIDs = append(m.clientIDs, c.ID)
 		for _, addr := range c.Senders {
 			if existing, ok := m.addrToClient[addr]; ok {
-				panic(fmt.Sprintf("miner.NewMock: address %s belongs to clients %d and %d", addr.Hex(), existing, c.ID))
+				panic(fmt.Sprintf("miner.NewMockRegistry: address %s belongs to clients %d and %d", addr.Hex(), existing, c.ID))
 			}
 			m.addrToClient[addr] = c.ID
 		}
@@ -81,30 +81,30 @@ func NewMock(clients []Client) *Mock {
 }
 
 // WithCeiling sets the global reserved-region gas cap (zero = uncapped) and
-// returns m for construction chaining. Set before handing the Mock to a
-// worker; Mock is treated as immutable once in use.
-func (m *Mock) WithCeiling(gas uint64) *Mock {
+// returns m for construction chaining. Set before handing the MockRegistry to a
+// worker; MockRegistry is treated as immutable once in use.
+func (m *MockRegistry) WithCeiling(gas uint64) *MockRegistry {
 	m.ceiling = gas
 	return m
 }
 
-func (m *Mock) Lookup(addr common.Address) (uint64, bool) {
+func (m *MockRegistry) Lookup(addr common.Address) (uint64, bool) {
 	cid, ok := m.addrToClient[addr]
 	return cid, ok
 }
 
-func (m *Mock) Quota(clientID uint64) uint64 { return m.clientToQuota[clientID] }
+func (m *MockRegistry) Quota(clientID uint64) uint64 { return m.clientToQuota[clientID] }
 
-func (m *Mock) CeilingGas() uint64 { return m.ceiling }
+func (m *MockRegistry) CeilingGas() uint64 { return m.ceiling }
 
-func (m *Mock) Clients() []uint64 {
+func (m *MockRegistry) Clients() []uint64 {
 	out := make([]uint64, len(m.clientIDs))
 	copy(out, m.clientIDs)
 	return out
 }
 
-func (m *Mock) Snapshot(common.Hash) reservedRegistry {
-	// The Mock has no chain state to resolve, so the parent hash is unused;
+func (m *MockRegistry) Snapshot(common.Hash) reservedRegistry {
+	// The MockRegistry has no chain state to resolve, so the parent hash is unused;
 	// the copy below just guarantees snapshot isolation.
 	snapshot := *m
 	snapshot.addrToClient = make(map[common.Address]uint64, len(m.addrToClient))

@@ -28,11 +28,11 @@ var (
 	reservedInterruptCounter = metrics.NewRegisteredCounter("worker/reserved/interrupt", nil)
 )
 
-type newTransactionsByPriceAndNonceFn func(txs map[common.Address][]*txpool.LazyTransaction) *transactionsByPriceAndNonce
+type transactionsByPriceAndNonceFn func(txs map[common.Address][]*txpool.LazyTransaction) *transactionsByPriceAndNonce
 
 // extractPriorityTxs filters the transactions from priority senders and
 // returns them grouped by price and nonce.
-func extractPriorityTxs(prio []common.Address, pendingTxs map[common.Address][]*txpool.LazyTransaction, newTransactionsByPriceAndNonce newTransactionsByPriceAndNonceFn) *transactionsByPriceAndNonce {
+func extractPriorityTxs(prio []common.Address, pendingTxs map[common.Address][]*txpool.LazyTransaction, newNormalTxSet transactionsByPriceAndNonceFn) *transactionsByPriceAndNonce {
 	prioPlainTxs := make(map[common.Address][]*txpool.LazyTransaction)
 	for _, account := range prio {
 		if txs := pendingTxs[account]; len(txs) > 0 {
@@ -40,7 +40,7 @@ func extractPriorityTxs(prio []common.Address, pendingTxs map[common.Address][]*
 			prioPlainTxs[account] = txs
 		}
 	}
-	return newTransactionsByPriceAndNonce(prioPlainTxs)
+	return newNormalTxSet(prioPlainTxs)
 }
 
 // filterReservedTxs removes the transactions from reserved-eligible senders from
@@ -111,9 +111,9 @@ func orderClients(parentHash common.Hash, ids []uint64) []uint64 {
 // and the real pool is untouched — matching how an interrupted commit defers the
 // remaining transactions.
 func selectReservedTxs(
-	clientTxs map[common.Address][]*txpool.LazyTransaction, quota uint64, newTransactionsByPriceAndNonce newTransactionsByPriceAndNonceFn,
+	clientTxs map[common.Address][]*txpool.LazyTransaction, quota uint64, newReservedTxSet transactionsByPriceAndNonceFn,
 ) (selected *transactionsByPriceAndNonce, used uint64, overflow map[common.Address][]*txpool.LazyTransaction) {
-	scan := newTransactionsByPriceAndNonce(clientTxs)
+	scan := newReservedTxSet(clientTxs)
 	selectedTxs := make(map[common.Address][]*txpool.LazyTransaction)
 	overflow = make(map[common.Address][]*txpool.LazyTransaction)
 	blocked := make(map[common.Address]bool)
@@ -134,13 +134,13 @@ func selectReservedTxs(
 		scan.Shift()
 	}
 
-	selected = newTransactionsByPriceAndNonce(selectedTxs)
+	selected = newReservedTxSet(selectedTxs)
 	return selected, used, overflow
 }
 
-// ceilingGas returns the registry's global reserved-region cap, normalizing
+// effectiveCeilingGas returns the registry's global reserved-region cap, normalizing
 // zero (uncapped) to MaxUint64 so the selection loop needs no special case.
-func ceilingGas(registry reservedRegistry) uint64 {
+func effectiveCeilingGas(registry reservedRegistry) uint64 {
 	if c := registry.CeilingGas(); c != 0 {
 		return c
 	}
@@ -153,7 +153,7 @@ func ceilingGas(registry reservedRegistry) uint64 {
 // caller; a nil registry (production default until the registry module lands)
 // or one with no clients is a no-op. Quota overflow — per-client and global
 // ceiling alike — is re-added to pendingTxs for the normal pass.
-func extractReservedTxs(registry reservedRegistry, parentHash common.Hash, pendingTxs map[common.Address][]*txpool.LazyTransaction, newTransactionsByPriceAndNonce newTransactionsByPriceAndNonceFn) []*transactionsByPriceAndNonce {
+func extractReservedTxs(registry reservedRegistry, parentHash common.Hash, pendingTxs map[common.Address][]*txpool.LazyTransaction, newReservedTxSet transactionsByPriceAndNonceFn) []*transactionsByPriceAndNonce {
 	if registry == nil || len(registry.Clients()) == 0 {
 		return nil
 	}
@@ -165,17 +165,17 @@ func extractReservedTxs(registry reservedRegistry, parentHash common.Hash, pendi
 	// The global ceiling bounds the summed declared gas selected across all
 	// clients. Like per-client quota, it is charged against declared gas
 	// limits, not actual gas used.
-	ceilingLeft := ceilingGas(registry)
+	ceilingLeft := effectiveCeilingGas(registry)
 
 	clientOrder := orderClients(parentHash, registry.Clients())
-	var sequence = make([]*transactionsByPriceAndNonce, 0, len(clientOrder))
+	var clientGroups = make([]*transactionsByPriceAndNonce, 0, len(clientOrder))
 	for _, cid := range clientOrder {
 		clientTxs := reservedTxs[cid]
 		if len(clientTxs) == 0 {
 			continue
 		}
 
-		selected, used, overflow := selectReservedTxs(clientTxs, min(registry.Quota(cid), ceilingLeft), newTransactionsByPriceAndNonce)
+		selected, used, overflow := selectReservedTxs(clientTxs, min(registry.Quota(cid), ceilingLeft), newReservedTxSet)
 		ceilingLeft -= used
 		for addr, txs := range overflow {
 			pendingTxs[addr] = append(pendingTxs[addr], txs...)
@@ -184,10 +184,10 @@ func extractReservedTxs(registry reservedRegistry, parentHash common.Hash, pendi
 		if selected.Empty() {
 			continue
 		}
-		sequence = append(sequence, selected)
+		clientGroups = append(clientGroups, selected)
 	}
 
-	return sequence
+	return clientGroups
 }
 
 // sequenceTxs orders the pending transactions into the groups the block is
@@ -205,32 +205,32 @@ func (w *worker) sequenceTxs(env *environment, registry reservedRegistry, pendin
 	prio := w.prio
 	w.mu.RUnlock()
 
-	newTransactionsByPriceAndNonceFn := func(txs map[common.Address][]*txpool.LazyTransaction) *transactionsByPriceAndNonce {
+	newNormalTxSet := func(txs map[common.Address][]*txpool.LazyTransaction) *transactionsByPriceAndNonce {
 		return newTransactionsByPriceAndNonce(env.signer, txs, env.header.BaseFee, &w.interruptBlockBuilding)
 	}
-	newReservedTransactionsByNonceFn := func(txs map[common.Address][]*txpool.LazyTransaction) *transactionsByPriceAndNonce {
+	newReservedTxSet := func(txs map[common.Address][]*txpool.LazyTransaction) *transactionsByPriceAndNonce {
 		return newReservedTransactionsByNonce(env.signer, txs, env.header.BaseFee, &w.interruptBlockBuilding)
 	}
 
-	var sequence = make([]*transactionsByPriceAndNonce, 0)
+	var txBatches = make([]*transactionsByPriceAndNonce, 0)
 
 	// Priority transactions (operator override) commit first. A sender that is
 	// both prioritized and registry-listed is consumed here: its transactions
 	// bypass reserved quota accounting and pay normal fees. Operators should
 	// not prioritize registered senders.
-	if prioTxs := extractPriorityTxs(prio, pendingTxs, newTransactionsByPriceAndNonceFn); !prioTxs.Empty() {
-		sequence = append(sequence, prioTxs)
+	if prioTxs := extractPriorityTxs(prio, pendingTxs, newNormalTxSet); !prioTxs.Empty() {
+		txBatches = append(txBatches, prioTxs)
 	}
 
 	// Reserved transactions, one ordered group per client. No emptiness check
 	// here, unlike the neighbouring groups: extractReservedTxs already omits
 	// empty groups from the slice it returns, so every element is committable.
-	sequence = append(sequence, extractReservedTxs(registry, env.header.ParentHash, pendingTxs, newReservedTransactionsByNonceFn)...)
+	txBatches = append(txBatches, extractReservedTxs(registry, env.header.ParentHash, pendingTxs, newReservedTxSet)...)
 
 	// Everything left (including reserved quota overflow added back above) is normal.
-	if normalTxs := newTransactionsByPriceAndNonceFn(pendingTxs); !normalTxs.Empty() {
-		sequence = append(sequence, normalTxs)
+	if normalTxs := newNormalTxSet(pendingTxs); !normalTxs.Empty() {
+		txBatches = append(txBatches, normalTxs)
 	}
 
-	return sequence
+	return txBatches
 }

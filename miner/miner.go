@@ -289,7 +289,7 @@ func (miner *Miner) SetPrioAddresses(prio []common.Address) {
 // consults during block building. Production callers leave it unset (nil) until
 // the registry module and its hardfork gating land — the reserved pass is a
 // no-op in that case and block building is byte-identical to before
-// reserved-blockspace existed. Tests inject a *Mock.
+// reserved-blockspace existed. Tests inject a *MockRegistry.
 func (miner *Miner) SetReservedRegistry(r ReservedRegistry) {
 	miner.worker.setReservedRegistry(r)
 }

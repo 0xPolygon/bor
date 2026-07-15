@@ -2138,7 +2138,9 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, gen
 	// pass loop.
 	registry := w.reservedRegistrySnapshot(env.header.ParentHash)
 
-	sequence := w.sequenceTxs(env, registry, pendingTxs)
+	// Order transactions based on priority into 3 buckets - priority, reserved
+	// and normal transactions.
+	txBatches := w.sequenceTxs(env, registry, pendingTxs)
 
 	// Shared channels used during builder mode. Both are nil when there is no prefetcher.
 	var builderPlanCh chan<- *types.Transaction
@@ -2149,7 +2151,7 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, gen
 	}
 
 	var fillErr error
-	for _, txs := range sequence {
+	for _, txs := range txBatches {
 		sendPlan(builderPlanCh, genParams, txs, remainingGas(env))
 		if fillErr = w.commitTransactions(env, txs, emptyBlobTxs, interrupt, builderGasFreedCh); fillErr != nil {
 			if txs.reserved {
