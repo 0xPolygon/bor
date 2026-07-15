@@ -122,7 +122,7 @@ func TestMockRegistrySnapshot(t *testing.T) {
 	require.Equal(t, uint64(500), snap.CeilingGas())
 }
 
-func TestTakeReservedTxs(t *testing.T) {
+func TestFilterReservedTxs(t *testing.T) {
 	t.Parallel()
 
 	a := common.HexToAddress("0x01")
@@ -162,7 +162,7 @@ func TestTakeReservedTxs(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			perClient := takeReservedTxs(tc.input, tc.registry)
+			perClient := filterReservedTxs(tc.input, tc.registry)
 
 			require.Len(t, perClient, len(tc.wantClients))
 			for cid, senders := range tc.wantClients {
@@ -303,7 +303,7 @@ func waitForBlockWithTxs(t *testing.T, sub *event.TypeMuxSubscription, minTxs in
 	}
 }
 
-// stubTxs builds n minimal LazyTransaction handles. takeReservedTxs only
+// stubTxs builds n minimal LazyTransaction handles. filterReservedTxs only
 // inspects the map shape (keyed by sender), so the entries can be minimal.
 func stubTxs(n int) []*txpool.LazyTransaction {
 	out := make([]*txpool.LazyTransaction, n)
@@ -348,7 +348,7 @@ func feeGasTx(feeCap, tipCap, gas uint64) *txpool.LazyTransaction {
 
 // reservedCtor returns a reserved-ordering constructor bound to baseFee, for
 // unit tests that exercise sequencing/selection without a full worker/env.
-func reservedCtor(baseFee *big.Int) newTransactionsByPriceAndNonceFn {
+func reservedCtor(baseFee *big.Int) transactionsByPriceAndNonceFn {
 	return func(txs map[common.Address][]*txpool.LazyTransaction) *transactionsByPriceAndNonce {
 		return newReservedTransactionsByNonce(nil, txs, baseFee, nil)
 	}

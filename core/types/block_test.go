@@ -860,6 +860,46 @@ func TestBlockExtraDataReservedGasUsedRLPCompat(t *testing.T) {
 	if full.GasTarget == nil || *full.GasTarget != 0 || full.BaseFeeChangeDenominator == nil || *full.BaseFeeChangeDenominator != 0 {
 		t.Errorf("unset middle optionals should decode as zero when a later optional is set: gt=%v bfcd=%v", full.GasTarget, full.BaseFeeChangeDenominator)
 	}
+
+	// Wire-neutrality: while ReservedGasUsed is nil (every producer until the
+	// reserved-blockspace fork activates), the encoding must be the same
+	// 4-element list as before the field existed — adding the struct field
+	// alone must not change any header bytes.
+	countElems := func(bed *BlockExtraData) int {
+		t.Helper()
+		encoded, err := rlp.EncodeToBytes(bed)
+		if err != nil {
+			t.Fatalf("encode: %v", err)
+		}
+		content, _, err := rlp.SplitList(encoded)
+		if err != nil {
+			t.Fatalf("split list: %v", err)
+		}
+		n, err := rlp.CountValues(content)
+		if err != nil {
+			t.Fatalf("count values: %v", err)
+		}
+		return n
+	}
+	unwritten := &BlockExtraData{
+		ValidatorBytes:           []byte{0x01},
+		TxDependency:             [][]uint64{{1}},
+		GasTarget:                &gasTarget,
+		BaseFeeChangeDenominator: &bfcd,
+	}
+	if n := countElems(unwritten); n != 4 {
+		t.Errorf("nil ReservedGasUsed must encode as the pre-change 4-element list, got %d elements", n)
+	}
+	written := &BlockExtraData{
+		ValidatorBytes:           []byte{0x01},
+		TxDependency:             [][]uint64{{1}},
+		GasTarget:                &gasTarget,
+		BaseFeeChangeDenominator: &bfcd,
+		ReservedGasUsed:          &reserved,
+	}
+	if n := countElems(written); n != 5 {
+		t.Errorf("set ReservedGasUsed must encode as a 5-element list, got %d elements", n)
+	}
 }
 
 func TestGetReservedGasUsed(t *testing.T) {
@@ -943,6 +983,71 @@ func TestGetReservedGasUsed(t *testing.T) {
 	malformed := &Header{Number: big.NewInt(200), Extra: wrap(badDeps)}
 	if got := malformed.GetReservedGasUsed(chainConfig); got != nil {
 		t.Errorf("expected nil for malformed TxDependency, got %v", got)
+	}
+}
+
+func TestSetReservedGasUsed(t *testing.T) {
+	t.Parallel()
+
+	chainConfig := &params.ChainConfig{
+		ChainID:     big.NewInt(137),
+		CancunBlock: big.NewInt(0),
+	}
+
+	gasTarget := uint64(30_000_000)
+	bfcd := uint64(64)
+	body, err := rlp.EncodeToBytes(&BlockExtraData{
+		ValidatorBytes:           []byte("validator-bytes"),
+		TxDependency:             [][]uint64{{0}, {0, 1}},
+		GasTarget:                &gasTarget,
+		BaseFeeChangeDenominator: &bfcd,
+	})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	extra := make([]byte, ExtraVanityLength, ExtraVanityLength+len(body)+ExtraSealLength)
+	extra = append(extra, body...)
+	extra = append(extra, make([]byte, ExtraSealLength)...)
+	header := &Header{Number: big.NewInt(1), Extra: extra}
+
+	if err := header.SetReservedGasUsed(7_500_000); err != nil {
+		t.Fatalf("SetReservedGasUsed: %v", err)
+	}
+
+	if got := header.GetReservedGasUsed(chainConfig); got == nil || *got != 7_500_000 {
+		t.Errorf("round-trip mismatch: got %v, want 7500000", got)
+	}
+
+	// Every sibling field must survive the rewrite untouched.
+	decoded := header.DecodeBlockExtraData(chainConfig)
+	if decoded == nil {
+		t.Fatal("extra no longer decodes")
+	}
+	if !bytes.Equal(decoded.ValidatorBytes, []byte("validator-bytes")) {
+		t.Errorf("ValidatorBytes changed: %q", decoded.ValidatorBytes)
+	}
+	if !reflect.DeepEqual(decoded.TxDependency, [][]uint64{{0}, {0, 1}}) {
+		t.Errorf("TxDependency changed: %v", decoded.TxDependency)
+	}
+	if decoded.GasTarget == nil || *decoded.GasTarget != gasTarget || decoded.BaseFeeChangeDenominator == nil || *decoded.BaseFeeChangeDenominator != bfcd {
+		t.Errorf("Giugliano fields changed: gt=%v bfcd=%v", decoded.GasTarget, decoded.BaseFeeChangeDenominator)
+	}
+
+	// The write is idempotent-by-overwrite: setting again replaces the value.
+	if err := header.SetReservedGasUsed(0); err != nil {
+		t.Fatalf("second SetReservedGasUsed: %v", err)
+	}
+	if got := header.GetReservedGasUsed(chainConfig); got == nil || *got != 0 {
+		t.Errorf("overwrite mismatch: got %v, want explicit 0", got)
+	}
+
+	// Too-short extra is rejected without touching the header.
+	short := &Header{Number: big.NewInt(1), Extra: []byte{0x01}}
+	if err := short.SetReservedGasUsed(1); err == nil {
+		t.Error("expected error for short extra data")
+	}
+	if !bytes.Equal(short.Extra, []byte{0x01}) {
+		t.Error("short extra must be left untouched on error")
 	}
 }
 

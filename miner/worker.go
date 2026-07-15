@@ -2210,28 +2210,12 @@ func (w *worker) writeReservedGasUsed(env *environment, registry reservedRegistr
 		return nil
 	}
 
-	var blockExtraData types.BlockExtraData
-
-	tempVanity := env.header.Extra[:types.ExtraVanityLength]
-	tempSeal := env.header.Extra[len(env.header.Extra)-types.ExtraSealLength:]
-
-	if err := rlp.DecodeBytes(env.header.Extra[types.ExtraVanityLength:len(env.header.Extra)-types.ExtraSealLength], &blockExtraData); err != nil {
-		log.Error("error while decoding block extra data", "err", err)
-		return err
-	}
-
-	blockExtraData.ReservedGasUsed = &env.reservedGasUsed
 	reservedGasUsedGauge.Update(int64(env.reservedGasUsed))
 
-	blockExtraDataBytes, err := rlp.EncodeToBytes(blockExtraData)
-	if err != nil {
-		log.Error("error while encoding block extra data", "err", err)
+	if err := env.header.SetReservedGasUsed(env.reservedGasUsed); err != nil {
+		log.Error("error while writing reserved gas used into block extra data", "err", err)
 		return err
 	}
-
-	env.header.Extra = []byte{}
-	env.header.Extra = append(tempVanity, blockExtraDataBytes...)
-	env.header.Extra = append(env.header.Extra, tempSeal...)
 
 	return nil
 }

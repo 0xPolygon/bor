@@ -622,6 +622,40 @@ func (h *Header) GetReservedGasUsed(chainConfig *params.ChainConfig) *uint64 {
 	return blockExtraData.ReservedGasUsed
 }
 
+// SetReservedGasUsed records the reserved-region gas total in the header's
+// BlockExtraData, re-encoding Header.Extra in place. TxDependency is carried
+// through as a raw value, so the rewrite doesn't expand it. The field is
+// consensus-visible: callers gate the write on reserved blockspace being
+// active, this only performs the encoding.
+func (h *Header) SetReservedGasUsed(reservedGasUsed uint64) error {
+	if len(h.Extra) < ExtraVanityLength+ExtraSealLength {
+		return fmt.Errorf("header extra data too short to carry BlockExtraData: %d bytes", len(h.Extra))
+	}
+
+	vanity := h.Extra[:ExtraVanityLength]
+	seal := h.Extra[len(h.Extra)-ExtraSealLength:]
+
+	var blockExtraData blockExtraDataRawTxDeps
+	if err := rlp.DecodeBytes(h.Extra[ExtraVanityLength:len(h.Extra)-ExtraSealLength], &blockExtraData); err != nil {
+		return fmt.Errorf("decode block extra data: %w", err)
+	}
+
+	blockExtraData.ReservedGasUsed = &reservedGasUsed
+
+	encoded, err := rlp.EncodeToBytes(&blockExtraData)
+	if err != nil {
+		return fmt.Errorf("encode block extra data: %w", err)
+	}
+
+	extra := make([]byte, 0, len(vanity)+len(encoded)+len(seal))
+	extra = append(extra, vanity...)
+	extra = append(extra, encoded...)
+	extra = append(extra, seal...)
+	h.Extra = extra
+
+	return nil
+}
+
 func txDependencyValidPreValencia(chainConfig *params.ChainConfig, number *big.Int, raw rlp.RawValue) bool {
 	if chainConfig.Bor != nil && chainConfig.Bor.IsValencia(number) {
 		return true
