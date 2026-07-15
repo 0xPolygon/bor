@@ -222,7 +222,9 @@ func (w *worker) sequenceTxs(env *environment, registry reservedRegistry, pendin
 		sequence = append(sequence, prioTxs)
 	}
 
-	// Reserved transactions, one ordered group per client.
+	// Reserved transactions, one ordered group per client. No emptiness check
+	// here, unlike the neighbouring groups: extractReservedTxs already omits
+	// empty groups from the slice it returns, so every element is committable.
 	sequence = append(sequence, extractReservedTxs(registry, env.header.ParentHash, pendingTxs, newReservedTransactionsByNonceFn)...)
 
 	// Everything left (including reserved quota overflow added back above) is normal.
