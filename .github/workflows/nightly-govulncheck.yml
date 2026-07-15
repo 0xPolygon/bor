@@ -4,6 +4,9 @@ on:
   schedule:
     - cron: '0 2 * * *'
   workflow_dispatch:
+  push:
+    branches:
+      - vbhattac/fix-govulncheck
 
 concurrency:
   group: nightly-govulncheck-${{ github.ref }}
@@ -11,15 +14,13 @@ concurrency:
 
 jobs:
   govulncheck:
-    name: Run govulncheck on develop
+    name: Run govulncheck
     runs-on: ubuntu24.04-16core-64GB-600SSD-bor
     permissions:
       contents: read
 
     steps:
       - uses: actions/checkout@v5
-        with:
-          ref: develop
 
       - uses: actions/setup-go@v6
         with:
