@@ -354,7 +354,7 @@ replace (
 	github.com/Masterminds/goutils => github.com/Masterminds/goutils v1.1.1
 	github.com/cometbft/cometbft => github.com/0xPolygon/cometbft v0.3.8-polygon
 	github.com/cometbft/cometbft-db => github.com/0xPolygon/cometbft-db v0.14.1-polygon
-	github.com/cosmos/cosmos-sdk => github.com/0xPolygon/cosmos-sdk v0.50.13-0.20260715053728-c70ef2ad19ac
+	github.com/cosmos/cosmos-sdk => github.com/0xPolygon/cosmos-sdk v0.50.13-0.20260715060632-d5213f0685ae
 	github.com/ethereum/go-ethereum => github.com/0xPolygon/bor v1.14.14-0.20260219070410-6b0405c0a5ca
 	github.com/ethereum/go-ethereum/common/math => github.com/0xPolygon/bor/common/math v1.5.5
 	go.mongodb.org/mongo-driver => go.mongodb.org/mongo-driver v1.14.0
