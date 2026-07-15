@@ -40,7 +40,6 @@ func TestOrderClients(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got := orderClients(tc.parent, tc.ids)
@@ -158,7 +157,6 @@ func TestFilterReservedTxs(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -242,7 +240,6 @@ func TestSelectReservedTxs(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			fn := reservedCtor(tc.baseFee)

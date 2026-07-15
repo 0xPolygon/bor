@@ -246,7 +246,6 @@ func TestNewReservedTxWithMinerFee(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			ltx := &txpool.LazyTransaction{GasFeeCap: uint256.NewInt(tc.feeCap), GasTipCap: uint256.NewInt(tc.tipCap), Gas: 21000}

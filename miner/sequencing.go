@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"math"
 	"sort"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/txpool"
@@ -227,9 +228,17 @@ func (w *worker) sequenceTxs(env *environment, registry reservedRegistry, pendin
 	// empty groups from the slice it returns, so every element is committable.
 	txBatches = append(txBatches, extractReservedTxs(registry, env.header.ParentHash, pendingTxs, newReservedTxSet)...)
 
-	// Everything left (including reserved quota overflow added back above) is normal.
-	if normalTxs := newNormalTxSet(pendingTxs); !normalTxs.Empty() {
-		txBatches = append(txBatches, normalTxs)
+	// Everything left (including reserved quota overflow added back above) is
+	// normal. Heap-init time is recorded for the normal batch only, keeping
+	// the metric's historical meaning.
+	if len(pendingTxs) > 0 {
+		heapInitTime := time.Now()
+		normalTxs := newNormalTxSet(pendingTxs)
+		txHeapInitTimer.UpdateSince(heapInitTime)
+
+		if !normalTxs.Empty() {
+			txBatches = append(txBatches, normalTxs)
+		}
 	}
 
 	return txBatches
