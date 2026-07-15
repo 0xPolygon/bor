@@ -92,7 +92,7 @@ require (
 	go.opentelemetry.io/otel/sdk v1.43.0
 	go.uber.org/automaxprocs v1.6.0
 	go.uber.org/goleak v1.3.0
-	go.uber.org/mock v0.5.0
+	go.uber.org/mock v0.5.2
 	golang.org/x/crypto v0.51.0
 	golang.org/x/exp v0.0.0-20251125195548-87e1e737ad39
 	golang.org/x/sync v0.20.0
@@ -291,6 +291,7 @@ require (
 	github.com/pion/dtls/v3 v3.0.11 // indirect
 	github.com/pion/transport/v4 v4.0.1 // indirect
 	github.com/posener/complete v1.2.3 // indirect
+	github.com/quic-go/quic-go v0.56.0 // indirect
 	github.com/rabbitmq/amqp091-go v1.10.0 // indirect
 	github.com/rcrowley/go-metrics v0.0.0-20250401214520-65e299d6c5c9 // indirect
 	github.com/redis/go-redis/v9 v9.7.3 // indirect
