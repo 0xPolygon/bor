@@ -728,11 +728,11 @@ func (bc *BlockChain) fireBlockStart(block *types.Block) {
 // and parallelStatedb (for V2). The V2 statedb has concurrent reads
 // enabled before the prefetcher runs so the underlying trieReader uses
 // muSubTries throughout — switching mid-flight would race.
-func (bc *BlockChain) setupBlockReaders(parentRoot common.Hash) (
+func (bc *BlockChain) setupBlockReaders(parentRoot common.Hash, allowRetention bool) (
 	throwaway, statedb, parallelStatedb *state.StateDB,
 	prefetch, process, parallel state.ReaderWithStats, err error,
 ) {
-	prefetch, process, parallel, err = bc.statedb.ReadersWithCacheStatsTriple(parentRoot)
+	prefetch, process, parallel, err = bc.statedb.ReadersWithCacheStatsTriple(parentRoot, allowRetention)
 	if err != nil {
 		return nil, nil, nil, nil, nil, nil, err
 	}
@@ -825,7 +825,12 @@ func (bc *BlockChain) startPrefetchGoroutine(block *types.Block, throwaway *stat
 	}(time.Now())
 }
 
-func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, witness *stateless.Witness, followupInterrupt *atomic.Bool) (_ types.Receipts, _ []*types.Log, _ uint64, _ *state.StateDB, _ time.Duration, blockEndErr error) {
+// allowRetention gates whether this block may be served the cross-block reader
+// cache (BOR_READER_RETENTION). It must be true only on the live canonical import
+// path, which is serialized under chainmu and is the sole consumer that also
+// advances the shared cache. Off-path callers (debug/trace re-execution) pass
+// false so they never share the mutable retained object with a concurrent import.
+func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, witness *stateless.Witness, followupInterrupt *atomic.Bool, allowRetention bool) (_ types.Receipts, _ []*types.Log, _ uint64, _ *state.StateDB, _ time.Duration, blockEndErr error) {
 	// Process the block using processor and parallelProcessor at the same time, take the one which finishes first, cancel the other, and return the result
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -838,7 +843,11 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		defer func() { bc.logger.OnBlockEnd(blockEndErr) }()
 	}
 
-	throwaway, statedb, parallelStatedb, prefetch, process, parallel, err := bc.setupBlockReaders(parent.Root)
+	// Retention may serve a warm cross-block cache only on the live import path
+	// (allowRetention) and only when no witness is being produced for this block
+	// (witnessed reads must hit the backing so the proof nodes are collected).
+	// See the W5 design doc.
+	throwaway, statedb, parallelStatedb, prefetch, process, parallel, err := bc.setupBlockReaders(parent.Root, allowRetention && witness == nil)
 	if err != nil {
 		return nil, nil, 0, nil, 0, err
 	}
@@ -3343,7 +3352,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 			}
 		}
 
-		receipts, logs, usedGas, statedb, vtime, err := bc.ProcessBlock(block, parent, witness, &followupInterrupt)
+		receipts, logs, usedGas, statedb, vtime, err := bc.ProcessBlock(block, parent, witness, &followupInterrupt, true)
 		bc.statedb.TrieDB().SetReadBackend(nil)
 		bc.statedb.EnableSnapInReader()
 		activeState = statedb

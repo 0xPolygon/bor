@@ -324,7 +324,12 @@ func collectStateWitnessFromReader(r any, addState func(map[string][]byte)) {
 	case *reader:
 		collectStateWitnessFromReader(v.StateReader, addState)
 	case *readerWithCache:
-		collectStateWitnessFromReader(v.Reader, addState)
+		// Follow the live backing so witness collection walks the trie that
+		// actually resolved this block's reads. Witness blocks never serve a
+		// retained cache (see ReadersWithCacheStatsTriple), and CollectStateWitness
+		// runs before commit/advance, so in practice currentBacking() == v.Reader
+		// here; using it is defensive and correct either way.
+		collectStateWitnessFromReader(v.currentBacking(), addState)
 	case *readerWithCacheStats:
 		collectStateWitnessFromReader(v.readerWithCache, addState)
 	case *trieReader:
@@ -382,7 +387,10 @@ func findStorageCache(r any) *sync.Map {
 	case *readerWithCacheStats:
 		return findStorageCache(v.readerWithCache)
 	case *readerWithCache:
-		return findStorageCache(v.Reader)
+		// Follow the live miss-resolution backing: after a retention advance it
+		// is the reader at the committed root, not the (now stale) construction
+		// reader. Without retention currentBacking() == v.Reader.
+		return findStorageCache(v.currentBacking())
 	case *trieReader:
 		return &v.storageCache
 	case *multiStateReader:
@@ -402,7 +410,10 @@ func enableConcurrentOnReader(r any) {
 	case *reader:
 		enableConcurrentOnReader(v.StateReader)
 	case *readerWithCache:
-		enableConcurrentOnReader(v.Reader)
+		// Follow the live backing (see findStorageCache); the retained backing is
+		// already concurrent-enabled at retain time, this keeps the walk correct
+		// and idempotent. Without retention currentBacking() == v.Reader.
+		enableConcurrentOnReader(v.currentBacking())
 	case *readerWithCacheStats:
 		enableConcurrentOnReader(v.readerWithCache)
 	case *trieReader:
@@ -1982,6 +1993,14 @@ func (s *StateDB) commitAndFlush(block uint64, deleteEmptyObjects bool, noStorag
 				return nil, err
 			}
 			s.TrieDBCommits += time.Since(start)
+		}
+	}
+	// Carry the shared read cache across the commit so the next block (and the
+	// builder on the new head) start warm; no-op unless retention is enabled and
+	// this StateDB reads through a shared cache (import / build path).
+	if cdb, ok := s.db.(*CachingDB); ok {
+		if carrier, ok := s.reader.(interface{ sharedReaderCache() *readerWithCache }); ok {
+			cdb.retainReaderCache(carrier.sharedReaderCache(), ret)
 		}
 	}
 	s.reader, _ = s.db.Reader(s.originalRoot)

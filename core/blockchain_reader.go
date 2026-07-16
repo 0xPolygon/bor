@@ -529,7 +529,14 @@ func (bc *BlockChain) StateAt(root common.Hash) (*state.StateDB, error) {
 // is for actual transaction processing. This enables independent cache hit/miss tracking
 // for both phases of block production.
 func (bc *BlockChain) StateAtWithReaders(root common.Hash) (*state.StateDB, *state.StateDB, state.ReaderWithStats, state.ReaderWithStats, error) {
-	prefetchReader, processReader, err := bc.statedb.ReadersWithCacheStats(root)
+	// The miner build must NOT be served the retained cache. It is a long-lived,
+	// concurrent consumer of the shared cache object: a canonical block importing
+	// on the same parent would advance that object in place underneath the
+	// builder (reading the new root's state into the block being built), and a
+	// witnessed build (w.makeWitness) would omit the proof nodes a retention
+	// cache-hit skips. Retention is served only on the serial live-import path
+	// (setupBlockReaders), which is the sole consumer that also advances the cache.
+	prefetchReader, processReader, err := bc.statedb.ReadersWithCacheStats(root, false)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}

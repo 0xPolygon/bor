@@ -67,7 +67,7 @@ func TestCacheAttribution_PrefetchToProcess(t *testing.T) {
 	}
 
 	// Create dual readers with shared cache (simulating StateAtWithReaders)
-	prefetchReader, processReader, err := statedb.ReadersWithCacheStats(root)
+	prefetchReader, processReader, err := statedb.ReadersWithCacheStats(root, false)
 	if err != nil {
 		t.Fatalf("Failed to create readers: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestCacheAttribution_UniqueUsageTracking(t *testing.T) {
 	}
 
 	// Create dual readers
-	prefetchReader, processReader, err := statedb.ReadersWithCacheStats(root)
+	prefetchReader, processReader, err := statedb.ReadersWithCacheStats(root, false)
 	if err != nil {
 		t.Fatalf("Failed to create readers: %v", err)
 	}
@@ -313,7 +313,7 @@ func TestReaderWithCache_ConcurrentAccess(t *testing.T) {
 	}
 
 	// Create two readers sharing the same cache
-	prefetchReader, processReader, err := statedb.ReadersWithCacheStats(root)
+	prefetchReader, processReader, err := statedb.ReadersWithCacheStats(root, false)
 	if err != nil {
 		t.Fatalf("Failed to create readers: %v", err)
 	}

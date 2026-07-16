@@ -28,6 +28,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/trie/utils"
@@ -573,23 +574,270 @@ type storageCacheEntry struct {
 // Uses the same layout as stateKey so SafeBase can share the map.
 type storageKey = stateKey
 
+// Reader-cache retention metrics (BOR_READER_RETENTION=1).
+var (
+	retentionServeMeter       = metrics.NewRegisteredMeter("state/retention/serve", nil)
+	retentionInvalidatedMeter = metrics.NewRegisteredMeter("state/retention/invalidated", nil)
+	retentionResetMeter       = metrics.NewRegisteredMeter("state/retention/reset", nil)
+)
+
+// Retention caps: past these the retained cache is dropped wholesale rather than
+// trimmed, keeping the worst case simple and the memory bounded. These are the
+// primary memory-vs-hit-rate tuning knob for the on-node A/B (see the W5 design
+// doc); start at the campaign's 512k/4M and cut toward ~1M slots as measured.
+const (
+	retentionMaxAccounts = 512 * 1024
+	retentionMaxSlots    = 4 * 1024 * 1024
+)
+
 // readerWithCache is a wrapper around Reader that maintains additional state caches
 // to support concurrent state access. Both caches use sync.Map for lock-free reads —
 // the dominant access pattern is many concurrent readers with infrequent first-writes.
 type readerWithCache struct {
-	Reader // safe for concurrent read
+	Reader // safe for concurrent read; also the initial miss-resolution backing
 
 	// Previously resolved account entries. Key: common.Address, Value: *accountCacheEntry.
 	accounts sync.Map
 
 	// Previously resolved storage entries. Key: storageKey, Value: *storageCacheEntry.
 	storageCache sync.Map
+
+	// --- Reader-cache retention (BOR_READER_RETENTION=1) ---
+	// Retention advances this cache past a block commit and serves it to the next
+	// block at the committed root. The fields below are inert unless retention is
+	// enabled (the miss path takes the original develop branch when it is off).
+
+	// backing, when set, overrides the embedded Reader for account/storage miss
+	// resolution. advance() swaps it to a reader at the newly committed root while
+	// the entries for keys the block wrote are evicted, so every surviving entry
+	// still holds the correct value at the new root. Contract-code reads stay on
+	// the embedded Reader (code is keyed by hash and root-independent).
+	backing atomic.Pointer[Reader]
+
+	// gen guards in-flight inserts across an advance: a fetch that started against
+	// the previous backing must not populate the cache after the invalidation pass
+	// ran, or a key written by the just-committed block could resurface with its
+	// stale pre-block value. See storeAccountGuarded / advance and the W5 design.
+	gen atomic.Uint64
+
+	// advanceMu makes a miss-insert's [gen-recheck + LoadOrStore] atomic with
+	// respect to advance()'s eviction pass. Inserts take RLock (concurrent among
+	// themselves, never held across the slow backing fetch); advance takes Lock.
+	// Hits never touch it — the lock-free hit path is preserved.
+	advanceMu sync.RWMutex
+
+	// Approximate entry counts, used to bound retained memory. Incremented on a
+	// successful insert, decremented on eviction; drift under stragglers is
+	// harmless because the caps are soft limits.
+	accountCount atomic.Int64
+	storageCount atomic.Int64
 }
 
 // newReaderWithCache constructs the reader with local cache.
 func newReaderWithCache(reader Reader) *readerWithCache {
 	return &readerWithCache{
 		Reader: reader,
+	}
+}
+
+// currentBacking returns the reader misses resolve against: the retention
+// backing when the cache has been advanced past a commit, the construction
+// reader otherwise.
+func (r *readerWithCache) currentBacking() Reader {
+	if p := r.backing.Load(); p != nil {
+		return *p
+	}
+	return r.Reader
+}
+
+// sharedReaderCache exposes the cache to the commit-time retention hook; the
+// method is promoted through the readerWithCacheStats wrapper handed to StateDB.
+func (r *readerWithCache) sharedReaderCache() *readerWithCache {
+	return r
+}
+
+// storeAccountGuarded stores newEnt for addr iff the cache has not advanced since
+// gen0 was sampled (the caller sampled it before the backing fetch). It returns
+// the entry now in the cache and whether this call inserted it. The advanceMu
+// RLock makes the gen-recheck and the map write atomic with respect to advance()'s
+// eviction, so a stale in-flight insert of a written key can never survive an
+// advance (advance either has not run — recheck passes, entry later evicted — or
+// has run — recheck fails, store skipped).
+func (r *readerWithCache) storeAccountGuarded(addr common.Address, newEnt *accountCacheEntry, gen0 uint64) (*accountCacheEntry, bool) {
+	r.advanceMu.RLock()
+	defer r.advanceMu.RUnlock()
+	if r.gen.Load() != gen0 {
+		return newEnt, false
+	}
+	if existing, loaded := r.accounts.LoadOrStore(addr, newEnt); loaded {
+		return existing.(*accountCacheEntry), false
+	}
+	r.accountCount.Add(1)
+	return newEnt, true
+}
+
+// storeStorageGuarded is the storage counterpart of storeAccountGuarded.
+func (r *readerWithCache) storeStorageGuarded(key storageKey, newEnt *storageCacheEntry, gen0 uint64) (*storageCacheEntry, bool) {
+	r.advanceMu.RLock()
+	defer r.advanceMu.RUnlock()
+	if r.gen.Load() != gen0 {
+		return newEnt, false
+	}
+	if existing, loaded := r.storageCache.LoadOrStore(key, newEnt); loaded {
+		return existing.(*storageCacheEntry), false
+	}
+	r.storageCount.Add(1)
+	return newEnt, true
+}
+
+// advance carries the cache across a block commit: it swaps miss resolution to a
+// reader at the newly committed root and evicts every key the block wrote. Any
+// surviving entry holds the same value at the new root as at the root it was read
+// from, so serving it stays correct. Safe to run while straggling prefetch
+// workers still use the cache: advanceMu excludes their guarded stores while the
+// eviction pass runs, and the generation bump neutralises any store whose fetch
+// straddled the advance.
+//
+// The new backing is stored BEFORE the generation is bumped: sync/atomic is
+// sequentially consistent, so any straggler that observes the new generation is
+// guaranteed to also observe the new backing and therefore fetches a new-root
+// value (this closes a window the reference implementation left open by bumping
+// the generation first).
+func (r *readerWithCache) advance(backing Reader, upd *stateUpdate) {
+	r.advanceMu.Lock()
+	defer r.advanceMu.Unlock()
+
+	r.backing.Store(&backing)
+	r.gen.Add(1)
+
+	dropAddrs := storageDropSet(upd)
+	invalidated := r.evictWrittenAccounts(upd)
+	invalidated += r.evictWrittenSlots(upd)
+	invalidated += r.dropAccountsStorage(dropAddrs)
+	retentionInvalidatedMeter.Mark(invalidated)
+
+	r.enforceRetentionCap()
+}
+
+// storageDropSet returns the accounts whose entire cached storage must be
+// dropped on this advance: deletions (their storage is implicitly wiped) and,
+// in hashed-key mode, every account with slot writes (hashed keys cannot be
+// matched against the raw-keyed cache). Empty on the live post-Cancun raw-key,
+// no-deletion path. Pure computation — no cache mutation.
+func storageDropSet(upd *stateUpdate) map[common.Address]struct{} {
+	var drops map[common.Address]struct{}
+	add := func(addr common.Address) {
+		if drops == nil {
+			drops = make(map[common.Address]struct{})
+		}
+		drops[addr] = struct{}{}
+	}
+	// Hashed-key mode (pre-Cancun / noStorageWiping=false): drop wholesale.
+	if !upd.rawStorageKey {
+		for addr := range upd.storagesOrigin {
+			add(addr)
+		}
+	}
+	// Deletions implicitly wipe storage (rare post-Cancun; see deletedAddrs).
+	for addr := range deletedAddrs(upd) {
+		add(addr)
+	}
+	return drops
+}
+
+// deletedAddrs returns the accounts the block deleted (nil slim-RLP payload
+// under their hash), or nil if none. It first scans for any deletion so the
+// per-account keccak (address -> hash, to match the hash-keyed upd.accounts) is
+// paid only when a deletion actually exists — essentially never on the live
+// post-Cancun path.
+func deletedAddrs(upd *stateUpdate) map[common.Address]struct{} {
+	if !hasAccountDeletion(upd) {
+		return nil
+	}
+	var deleted map[common.Address]struct{}
+	for addr := range upd.accountsOrigin {
+		if data, ok := upd.accounts[crypto.Keccak256Hash(addr.Bytes())]; ok && len(data) == 0 {
+			if deleted == nil {
+				deleted = make(map[common.Address]struct{})
+			}
+			deleted[addr] = struct{}{}
+		}
+	}
+	return deleted
+}
+
+// hasAccountDeletion reports whether the block deleted any account (a nil
+// slim-RLP payload under its hash). Cheap scan, no keccak.
+func hasAccountDeletion(upd *stateUpdate) bool {
+	for _, data := range upd.accounts {
+		if len(data) == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// evictWrittenAccounts deletes every account the block mutated (all of
+// accountsOrigin) from the cache, returning the number removed.
+func (r *readerWithCache) evictWrittenAccounts(upd *stateUpdate) int64 {
+	invalidated := int64(0)
+	for addr := range upd.accountsOrigin {
+		if _, ok := r.accounts.LoadAndDelete(addr); ok {
+			r.accountCount.Add(-1)
+			invalidated++
+		}
+	}
+	return invalidated
+}
+
+// evictWrittenSlots deletes the exact slots the block wrote, on the raw-key
+// (live post-Cancun) path. Hashed-key accounts are handled by dropAccountsStorage.
+func (r *readerWithCache) evictWrittenSlots(upd *stateUpdate) int64 {
+	if !upd.rawStorageKey {
+		return 0
+	}
+	invalidated := int64(0)
+	for addr, slots := range upd.storagesOrigin {
+		for slot := range slots {
+			if _, ok := r.storageCache.LoadAndDelete(storageKey{addr: addr, slot: slot}); ok {
+				r.storageCount.Add(-1)
+				invalidated++
+			}
+		}
+	}
+	return invalidated
+}
+
+// dropAccountsStorage removes every cached slot of each account in drops via a
+// single Range over the flat storage cache. Runs only when drops is non-empty —
+// essentially never on the live path (see storageDropSet).
+func (r *readerWithCache) dropAccountsStorage(drops map[common.Address]struct{}) int64 {
+	if len(drops) == 0 {
+		return 0
+	}
+	invalidated := int64(0)
+	r.storageCache.Range(func(k, _ any) bool {
+		if _, drop := drops[k.(storageKey).addr]; drop {
+			if _, ok := r.storageCache.LoadAndDelete(k); ok {
+				r.storageCount.Add(-1)
+				invalidated++
+			}
+		}
+		return true
+	})
+	return invalidated
+}
+
+// enforceRetentionCap resets the cache wholesale once it exceeds the soft size
+// caps, bounding retained memory. Counters are approximate (straggler inserts
+// may race), which is harmless because the caps are soft.
+func (r *readerWithCache) enforceRetentionCap() {
+	if r.accountCount.Load() > retentionMaxAccounts || r.storageCount.Load() > retentionMaxSlots {
+		r.accounts.Clear()
+		r.storageCache.Clear()
+		r.accountCount.Store(0)
+		r.storageCount.Store(0)
+		retentionResetMeter.Mark(1)
 	}
 }
 
@@ -607,20 +855,35 @@ func (r *readerWithCache) account(addr common.Address, caller readerRole) (*type
 		ent := v.(*accountCacheEntry)
 		return ent.acct, true, ent, false, nil
 	}
-	// Cache miss — resolve from the underlying reader (may involve pebble I/O).
-	acct, err := r.Reader.Account(addr)
+	if !readerRetentionEnabled {
+		// Original develop path, untouched: retention adds zero overhead when off.
+		acct, err := r.Reader.Account(addr)
+		if err != nil {
+			return nil, false, nil, false, err
+		}
+		// First-writer-wins: LoadOrStore inserts only if key is absent.
+		newEnt := &accountCacheEntry{acct: acct, origin: caller}
+		if existing, loaded := r.accounts.LoadOrStore(addr, newEnt); loaded {
+			ent := existing.(*accountCacheEntry)
+			// Another goroutine inserted while we fetched from the backing reader.
+			// Report incache=false so miss counters reflect backing-read cost.
+			return ent.acct, false, ent, false, nil
+		}
+		return acct, false, newEnt, true, nil
+	}
+	// Retention path: sample the generation before the fetch, resolve against the
+	// current backing (construction reader, or the advanced reader post-commit),
+	// then store under the generation guard so a fetch that straddles an advance
+	// cannot cache a stale value for a written key.
+	gen0 := r.gen.Load()
+	acct, err := r.currentBacking().Account(addr)
 	if err != nil {
 		return nil, false, nil, false, err
 	}
-	// First-writer-wins: LoadOrStore inserts only if key is absent.
 	newEnt := &accountCacheEntry{acct: acct, origin: caller}
-	if existing, loaded := r.accounts.LoadOrStore(addr, newEnt); loaded {
-		ent := existing.(*accountCacheEntry)
-		// Another goroutine inserted while we fetched from the backing reader.
-		// Report incache=false so miss counters reflect backing-read cost.
-		return ent.acct, false, ent, false, nil
-	}
-	return acct, false, newEnt, true, nil
+	ent, inserted := r.storeAccountGuarded(addr, newEnt, gen0)
+	// Report incache=false either way so miss counters reflect backing-read cost.
+	return ent.acct, false, ent, inserted, nil
 }
 
 // Account implements StateReader, retrieving the account specified by the address.
@@ -646,20 +909,31 @@ func (r *readerWithCache) storage(addr common.Address, slot common.Hash, caller 
 		ent := v.(*storageCacheEntry)
 		return ent.value, true, ent, false, nil
 	}
-	// Cache miss — resolve from the underlying reader (may involve pebble I/O).
-	value, err := r.Reader.Storage(addr, slot)
+	if !readerRetentionEnabled {
+		// Original develop path, untouched: retention adds zero overhead when off.
+		value, err := r.Reader.Storage(addr, slot)
+		if err != nil {
+			return common.Hash{}, false, nil, false, err
+		}
+		// First-writer-wins: LoadOrStore inserts only if key is absent.
+		newEnt := &storageCacheEntry{value: value, origin: caller}
+		if existing, loaded := r.storageCache.LoadOrStore(key, newEnt); loaded {
+			ent := existing.(*storageCacheEntry)
+			// Another goroutine inserted while we fetched from the backing reader.
+			// Report incache=false so miss counters reflect backing-read cost.
+			return ent.value, false, ent, false, nil
+		}
+		return value, false, newEnt, true, nil
+	}
+	// Retention path: generation-guarded resolve + store (see account()).
+	gen0 := r.gen.Load()
+	value, err := r.currentBacking().Storage(addr, slot)
 	if err != nil {
 		return common.Hash{}, false, nil, false, err
 	}
-	// First-writer-wins: LoadOrStore inserts only if key is absent.
 	newEnt := &storageCacheEntry{value: value, origin: caller}
-	if existing, loaded := r.storageCache.LoadOrStore(key, newEnt); loaded {
-		ent := existing.(*storageCacheEntry)
-		// Another goroutine inserted while we fetched from the backing reader.
-		// Report incache=false so miss counters reflect backing-read cost.
-		return ent.value, false, ent, false, nil
-	}
-	return value, false, newEnt, true, nil
+	ent, inserted := r.storeStorageGuarded(key, newEnt, gen0)
+	return ent.value, false, ent, inserted, nil
 }
 
 // Storage implements StateReader, retrieving the storage slot specified by the

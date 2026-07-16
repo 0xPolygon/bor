@@ -18,6 +18,7 @@ package state
 
 import (
 	"fmt"
+	"os"
 	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -164,8 +165,63 @@ type CachingDB struct {
 	snapMu          sync.RWMutex // Protects useSnapInReader
 	useSnapInReader bool
 
+	// Reader-cache retention across commits (BOR_READER_RETENTION=1): the shared
+	// read cache of the last committed block, advanced to its result root, served
+	// to the next requester whose parent root matches. Inert unless enabled.
+	retainMu      sync.Mutex
+	retainedCache *readerWithCache
+	retainedRoot  common.Hash
+
 	// Transition-specific fields
 	TransitionStatePerRoot *lru.Cache[common.Hash, *overlay.TransitionState]
+}
+
+// readerRetentionEnabled gates carrying the shared reader cache across block
+// commits; opt-in (default OFF) for A/B measurement.
+var readerRetentionEnabled = os.Getenv("BOR_READER_RETENTION") == "1"
+
+// retainReaderCache advances the block's shared read cache past the commit
+// described by upd and retains it for the next block whose parent root is
+// upd.root. Correctness: advance evicts everything the block wrote, so every
+// surviving entry has the same value at upd.root as at the root it was read
+// from; misses resolve against a fresh reader at upd.root. See the W5 design doc.
+func (db *CachingDB) retainReaderCache(cache *readerWithCache, upd *stateUpdate) {
+	if !readerRetentionEnabled || cache == nil || upd == nil {
+		return
+	}
+	backing, err := db.Reader(upd.root)
+	if err != nil {
+		return
+	}
+	// The retained cache is served to the importer's V2 workers (concurrent trie
+	// reads), so its backing must be safe for concurrent reads from birth.
+	enableConcurrentOnReader(backing)
+	// Hold retainMu across advance+publish so a concurrent serveRetainedCache can
+	// never observe the cache mid-advance (partially evicted, backing swapped).
+	// On the live path the sole consumer is the serial importer, so this is
+	// uncontended defence-in-depth; it also keeps retainedRoot and the cache
+	// object's advanced state published atomically.
+	db.retainMu.Lock()
+	cache.advance(backing, upd)
+	db.retainedCache, db.retainedRoot = cache, upd.root
+	db.retainMu.Unlock()
+}
+
+// serveRetainedCache returns the retained shared cache if it was advanced to
+// exactly stateRoot (the parent root of the next block), or nil otherwise.
+// Reorgs and sidechain imports miss the exact-root match and get a fresh cache.
+func (db *CachingDB) serveRetainedCache(stateRoot common.Hash) *readerWithCache {
+	if !readerRetentionEnabled {
+		return nil
+	}
+	db.retainMu.Lock()
+	retained, root := db.retainedCache, db.retainedRoot
+	db.retainMu.Unlock()
+	if retained != nil && root == stateRoot {
+		retentionServeMeter.Mark(1)
+		return retained
+	}
+	return nil
 }
 
 // NewDatabase creates a state database with the provided data sources.
@@ -258,24 +314,45 @@ func (db *CachingDB) ReaderTrieOnly(stateRoot common.Hash) (Reader, error) {
 
 // ReadersWithCacheStats creates a pair of state readers sharing the same internal cache and
 // same backing Reader, but exposing separate statistics.
-func (db *CachingDB) ReadersWithCacheStats(stateRoot common.Hash) (ReaderWithStats, ReaderWithStats, error) {
-	reader, err := db.Reader(stateRoot)
-	if err != nil {
-		return nil, nil, err
+func (db *CachingDB) ReadersWithCacheStats(stateRoot common.Hash, allowRetention bool) (ReaderWithStats, ReaderWithStats, error) {
+	// Serve the retained cache when it was advanced to exactly this root (the
+	// builder on the new head starts warm); otherwise build a fresh cache.
+	// allowRetention must be false whenever a witness will be produced for this
+	// block: witnessed reads must hit the backing so the proof nodes are
+	// collected, which retention's cache-hits would bypass (see the W5 design).
+	var shared *readerWithCache
+	if allowRetention {
+		shared = db.serveRetainedCache(stateRoot)
 	}
-	shared := newReaderWithCache(reader)
+	if shared == nil {
+		reader, err := db.Reader(stateRoot)
+		if err != nil {
+			return nil, nil, err
+		}
+		shared = newReaderWithCache(reader)
+	}
 	return newReaderWithCacheStats(shared, rolePrefetch), newReaderWithCacheStats(shared, roleProcess), nil
 }
 
 // ReadersWithCacheStatsTriple creates three state readers sharing the same
 // internal cache: prefetch, process (serial), and parallel (V2).
 // The shared cache means prefetcher warms data that V2 reads for free.
-func (db *CachingDB) ReadersWithCacheStatsTriple(stateRoot common.Hash) (ReaderWithStats, ReaderWithStats, ReaderWithStats, error) {
-	reader, err := db.Reader(stateRoot)
-	if err != nil {
-		return nil, nil, nil, err
+func (db *CachingDB) ReadersWithCacheStatsTriple(stateRoot common.Hash, allowRetention bool) (ReaderWithStats, ReaderWithStats, ReaderWithStats, error) {
+	// Serve the retained cache when it was advanced to exactly this root (the
+	// importer and prefetcher on the new head start warm); otherwise build fresh.
+	// allowRetention must be false for witness-producing blocks (see
+	// ReadersWithCacheStats).
+	var shared *readerWithCache
+	if allowRetention {
+		shared = db.serveRetainedCache(stateRoot)
 	}
-	shared := newReaderWithCache(reader)
+	if shared == nil {
+		reader, err := db.Reader(stateRoot)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		shared = newReaderWithCache(reader)
+	}
 	return newReaderWithCacheStats(shared, rolePrefetch),
 		newReaderWithCacheStats(shared, roleProcess),
 		newReaderWithCacheStats(shared, roleProcess), // V2 shares same cache
