@@ -22,6 +22,7 @@ import (
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus/bor/registryreader"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -47,6 +48,11 @@ type ValidationOptions struct {
 	MaxSize      uint64   // Maximum size of a transaction that the caller can meaningfully handle
 	MaxBlobCount int      // Maximum number of blobs allowed per transaction
 	MinTip       *big.Int // Minimum gas tip needed to allow a transaction into the caller pool
+
+	// ReservedSnapshot is the caller pool's per-head reserved-set snapshot, used
+	// to waive fee floors for reserved senders. Nil for pools without a registry
+	// (blobpool, or no registry configured) — classification then returns false.
+	ReservedSnapshot *registryreader.Snapshot
 }
 
 // ValidationFunction is an method type which the pools use to perform the tx-validations which do not
@@ -143,8 +149,11 @@ func ValidateTransaction(tx *types.Transaction, head *types.Header, signer types
 			return fmt.Errorf("%w: gas %v, minimum needed %v", core.ErrFloorDataGas, tx.Gas(), floorDataGas)
 		}
 	}
-	// Ensure the gasprice is high enough to cover the requirement of the calling pool
-	if tx.GasTipCapIntCmp(opts.MinTip) < 0 {
+	// Ensure the gasprice is high enough to cover the requirement of the calling
+	// pool. Reserved-blockspace senders are exempt: they pay zero in-protocol fee,
+	// so enforcing the tip floor would reject their transactions at admission and
+	// they would never reach the miner.
+	if tx.GasTipCapIntCmp(opts.MinTip) < 0 && !isReservedSender(opts, head, signer, tx) {
 		return fmt.Errorf("%w: gas tip cap %v, minimum needed %v", ErrTxGasPriceTooLow, tx.GasTipCap(), opts.MinTip)
 	}
 	if tx.Type() == types.BlobTxType {
@@ -156,6 +165,28 @@ func ValidateTransaction(tx *types.Transaction, head *types.Header, signer types
 		}
 	}
 	return nil
+}
+
+// isReservedSender reports whether tx's recovered sender is a reserved-blockspace
+// client active at head. Reserved senders bypass the pool's fee floors so their
+// zero-fee transactions are admitted and kept. Classification is sender-based and
+// consensus-uniform (the reserved set comes from the chain config), matching the
+// EVM fee path in core/state_transition.go.
+func isReservedSender(opts *ValidationOptions, head *types.Header, signer types.Signer, tx *types.Transaction) bool {
+	cfg := opts.Config
+	if cfg == nil || cfg.Bor == nil || head == nil {
+		return false
+	}
+	// Classify for the block this tx targets (the one after head).
+	number := new(big.Int).Add(head.Number, big.NewInt(1))
+	if !cfg.Bor.IsReservedBlockspace(number) {
+		return false
+	}
+	from, err := types.Sender(signer, tx)
+	if err != nil {
+		return false
+	}
+	return opts.ReservedSnapshot.IsReserved(from, number.Uint64())
 }
 
 // validateBlobTx implements the blob-transaction specific validations.

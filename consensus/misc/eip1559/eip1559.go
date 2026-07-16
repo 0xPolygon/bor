@@ -116,8 +116,23 @@ func CalcBaseFee(config *params.ChainConfig, parent *types.Header) *big.Int {
 
 	// Modified for bor to derive gas target by percentage instead of using elasticity multiplier post dandeli HF
 	parentGasTarget := calcParentGasTarget(config, parent)
+	parentGasUsed := parent.GasUsed
+
+	// Reserved blockspace prices the public fee market on the normal region only:
+	// hold reserved capacity out of the target and net the parent's reserved gas
+	// out of the used figure, so a reserved client paying zero fee can't move the
+	// public base fee with its own usage. Anchoring the target on capacity keeps
+	// the public market stable and isolated from reserved behaviour. The used-side
+	// netting stays inert until the producer populates parent.ReservedGasUsed;
+	// until then the public base fee runs slightly hot — deterministic (a fee
+	// accuracy gap, not a consensus split), so no change is needed here.
+	if config.Bor != nil && config.Bor.IsReservedBlockspace(parent.Number) {
+		parentGasTarget = reservedAwareGasTarget(config, parent)
+		parentGasUsed = publicGasUsed(config, parent)
+	}
+
 	// If the parent gasUsed is the same as the target, the baseFee remains unchanged.
-	if parent.GasUsed == parentGasTarget {
+	if parentGasUsed == parentGasTarget {
 		return new(big.Int).Set(parent.BaseFee)
 	}
 
@@ -142,10 +157,10 @@ func CalcBaseFee(config *params.ChainConfig, parent *types.Header) *big.Int {
 		}
 	}
 
-	if parent.GasUsed > parentGasTarget {
+	if parentGasUsed > parentGasTarget {
 		// If the parent block used more gas than its target, the baseFee should increase.
 		// max(1, parentBaseFee * gasUsedDelta / parentGasTarget / baseFeeChangeDenominator)
-		num.SetUint64(parent.GasUsed - parentGasTarget)
+		num.SetUint64(parentGasUsed - parentGasTarget)
 		num.Mul(num, parent.BaseFee)
 		num.Div(num, denom.SetUint64(parentGasTarget))
 		num.Div(num, denom.SetUint64(baseFeeChangeDenominatorUint64))
@@ -162,7 +177,7 @@ func CalcBaseFee(config *params.ChainConfig, parent *types.Header) *big.Int {
 	} else {
 		// Otherwise if the parent block used less gas than its target, the baseFee should decrease.
 		// max(0, parentBaseFee * gasUsedDelta / parentGasTarget / baseFeeChangeDenominator)
-		num.SetUint64(parentGasTarget - parent.GasUsed)
+		num.SetUint64(parentGasTarget - parentGasUsed)
 		num.Mul(num, parent.BaseFee)
 		num.Div(num, denom.SetUint64(parentGasTarget))
 		num.Div(num, denom.SetUint64(baseFeeChangeDenominatorUint64))
@@ -185,12 +200,50 @@ func CalcBaseFee(config *params.ChainConfig, parent *types.Header) *big.Int {
 // Dandeli HF, a percentage value is used to calculate the gas target (validated with fallback to default).
 // Post-Lisovo, if EnableDynamicTargetGas is configured, the percentage adjusts dynamically based on parent base fee.
 func calcParentGasTarget(config *params.ChainConfig, parent *types.Header) uint64 {
+	return gasTargetForLimit(config, parent, parent.GasLimit)
+}
+
+// gasTargetForLimit applies the EIP-1559 gas-target curve to an arbitrary gas
+// limit. calcParentGasTarget passes the full parent.GasLimit; the reserved
+// path passes the public capacity (limit minus reserved quotas). The target
+// percentage is independent of the limit, so the same curve composes cleanly.
+func gasTargetForLimit(config *params.ChainConfig, parent *types.Header, gasLimit uint64) uint64 {
 	if config.Bor != nil && config.Bor.IsDandeli(parent.Number) {
 		// Use dynamic helper which falls back to static GetTargetGasPercentage when feature is disabled
 		targetPercentage := config.Bor.GetDynamicTargetGasPercentage(parent.BaseFee, parent.Number)
-		return parent.GasLimit * targetPercentage / 100
+		return gasLimit * targetPercentage / 100
 	}
-	return parent.GasLimit / config.ElasticityMultiplier()
+	return gasLimit / config.ElasticityMultiplier()
+}
+
+// reservedAwareGasTarget returns the EIP-1559 target for the public region: the
+// standard curve applied to capacity that excludes the reserved quotas (Σ active
+// client quotas). Header.GasLimit is left untouched — a formula-only input.
+//
+// The capacity source is the config rather than the registry on purpose:
+// CalcBaseFee is a pure (config, parent) function called from paths that have no
+// parent state to read the registry from (RPC, txpool, historical headers), so a
+// state read here would break that contract. The registry-derived capacity
+// reaches base fee via a producer-stamped header field instead.
+func reservedAwareGasTarget(config *params.ChainConfig, parent *types.Header) uint64 {
+	reservedCapacity := config.Bor.ReservedCapacity()
+	if reservedCapacity >= parent.GasLimit {
+		// Misconfiguration guard: reserved capacity is capped well below the
+		// block limit by design. Fall back to the full target rather than
+		// producing a zero or negative public target.
+		return calcParentGasTarget(config, parent)
+	}
+	return gasTargetForLimit(config, parent, parent.GasLimit-reservedCapacity)
+}
+
+// publicGasUsed nets the parent's reserved gas out of its total gas used, so
+// the base-fee controller tracks only normal-region demand.
+func publicGasUsed(config *params.ChainConfig, parent *types.Header) uint64 {
+	_, reservedGasUsed := parent.GetReservedInfo(config)
+	if reservedGasUsed == nil || *reservedGasUsed > parent.GasUsed {
+		return parent.GasUsed
+	}
+	return parent.GasUsed - *reservedGasUsed
 }
 
 // CalcGasTarget exports calcParentGasTarget for use by consensus code (e.g. Prepare).

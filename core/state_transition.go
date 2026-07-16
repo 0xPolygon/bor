@@ -282,15 +282,36 @@ type stateTransition struct {
 	// This is useful during parallel state transition, where the common account read/write should be minimized.
 	noFeeBurnAndTip bool
 	noFeeLog        bool // If true, skip fee transfer log and coinbase balance read (for parallel execution)
+
+	// reserved is true for a reserved-blockspace transaction (post-fork, from a
+	// whitelisted client). Such a tx pays zero in-protocol fee: no gas debit, no
+	// gas refund, no producer tip, no base-fee burn. Computed once in
+	// newStateTransition so serial and parallel execution agree.
+	reserved bool
 }
 
 // newStateTransition initialises and returns a new state transition object.
 func newStateTransition(evm *vm.EVM, msg *Message, gp *GasPool) *stateTransition {
+	// Classify the message as reserved-blockspace here — the single point every
+	// execution path (serial, parallel, ApplyMessage*) funnels through — so the
+	// zero-fee decision is identical across executors. The fork gate comes from
+	// chain config; the reserved set from the parent registry snapshot on the
+	// block context (set per block by the consensus paths, nil elsewhere),
+	// matching the txpool and base-fee sources. Classification is sender-based;
+	// position-based enforcement (reserved region 0..ReservedTxCount) is layered
+	// on by the producer two-pass and block validation.
+	var reserved bool
+	if cfg := evm.ChainConfig(); cfg.Bor != nil &&
+		cfg.Bor.IsReservedBlockspace(evm.Context.BlockNumber) &&
+		evm.Context.ReservedSnapshot.IsReserved(msg.From, evm.Context.BlockNumber.Uint64()) {
+		reserved = true
+	}
 	return &stateTransition{
-		gp:    gp,
-		evm:   evm,
-		msg:   msg,
-		state: evm.StateDB,
+		gp:       gp,
+		evm:      evm,
+		msg:      msg,
+		state:    evm.StateDB,
+		reserved: reserved,
 	}
 }
 
@@ -325,6 +346,16 @@ func (st *stateTransition) buyGas() error {
 			mgval.Add(mgval, blobFee)
 		}
 	}
+
+	if st.reserved {
+		// Zero in-protocol fee: don't require or debit gas, fund only the call
+		// value. This overwrites mgval/balanceCheck after the blob branch above,
+		// so a reserved blob tx also skips its blob-fee debit and blob-fee balance
+		// requirement. Reserved clients are not a blob-tx use case today; if that
+		// changes, revisit whether the blob fee (a separate burn) should be waived.
+		mgval, balanceCheck = reservedZeroFeeGas(st.msg.Value)
+	}
+
 	balanceCheckU256, overflow := uint256.FromBig(balanceCheck)
 	if overflow {
 		return fmt.Errorf("%w: address %v required balance exceeds 256 bits", ErrInsufficientFunds, st.msg.From.Hex())
@@ -346,6 +377,35 @@ func (st *stateTransition) buyGas() error {
 	mgvalU256, _ := uint256.FromBig(mgval)
 	st.state.SubBalance(st.msg.From, mgvalU256, tracing.BalanceDecreaseGasBuy)
 	return nil
+}
+
+// reservedZeroFeeGas returns the (mgval, balanceCheck) for a reserved-blockspace
+// tx: zero gas cost to debit, only the call value to fund. Block gas is still
+// consumed by the caller, so gas accounting is unchanged.
+func reservedZeroFeeGas(value *big.Int) (mgval, balanceCheck *big.Int) {
+	return new(big.Int), new(big.Int).Set(value)
+}
+
+// calcBaseFeeBurn returns the base-fee burn amount and the configured burnt-
+// contract address. Bor redirects the burned base fee to a "burnt contract"
+// (a dead address on mainnet/amoy); the credit happens here unless fees are
+// deferred (noFeeBurnAndTip). Reserved-blockspace txs burn nothing. On non-Bor
+// configs (Bor == nil) the base fee is implicitly burned the upstream way and no
+// credit happens, matching Ethereum mainnet semantics and Ethereum-spec fixtures.
+func (st *stateTransition) calcBaseFeeBurn(rules params.Rules) (*big.Int, common.Address) {
+	bor := st.evm.ChainConfig().Bor
+	if !rules.IsLondon || bor == nil {
+		return nil, common.Address{}
+	}
+	addr := common.HexToAddress(bor.CalculateBurntContract(st.evm.Context.BlockNumber.Uint64()))
+	if st.reserved {
+		return new(big.Int), addr
+	}
+	burn := new(big.Int).Mul(new(big.Int).SetUint64(st.gasUsed()), st.evm.Context.BaseFee)
+	if !st.noFeeBurnAndTip {
+		st.state.AddBalance(addr, cmath.BigIntToUint256Int(burn), tracing.BalanceChangeTransfer)
+	}
+	return burn, addr
 }
 
 func (st *stateTransition) preCheck() error {
@@ -401,7 +461,9 @@ func (st *stateTransition) preCheck() error {
 			}
 			// This will panic if baseFee is nil, but basefee presence is verified
 			// as part of header validation.
-			if msg.GasFeeCap.Cmp(st.evm.Context.BaseFee) < 0 {
+			// Reserved-blockspace txs are exempt from the base-fee floor: they may
+			// carry maxFeePerGas below baseFee (or zero) and still execute fee-free.
+			if msg.GasFeeCap.Cmp(st.evm.Context.BaseFee) < 0 && !st.reserved {
 				return fmt.Errorf("%w: address %v, maxFeePerGas: %s, baseFee: %s", ErrFeeCapTooLow,
 					msg.From.Hex(), msg.GasFeeCap, st.evm.Context.BaseFee)
 			}
@@ -603,6 +665,13 @@ func (st *stateTransition) execute() (*ExecutionResult, error) {
 		effectiveTip = new(big.Int).Sub(msg.GasPrice, st.evm.Context.BaseFee)
 	}
 
+	if st.reserved {
+		// Reserved-blockspace tx pays zero in-protocol fee: no producer tip and no
+		// base-fee burn (the burn is skipped below). The tx's fee fields stay
+		// readable for off-chain settlement but are not applied in-protocol.
+		effectiveTip = new(big.Int)
+	}
+
 	// TODO(raneet10): Double check. We might want to inculcate this fix in a separate condition
 	// if st.evm.Config.NoBaseFee && msg.GasFeeCap.Sign() == 0 && msg.GasTipCap.Sign() == 0 {
 	// 	// Skip fee payment when NoBaseFee is set and the fee fields
@@ -616,24 +685,7 @@ func (st *stateTransition) execute() (*ExecutionResult, error) {
 
 	amount := new(big.Int).Mul(new(big.Int).SetUint64(st.gasUsed()), effectiveTip)
 
-	var burnAmount *big.Int
-	var burntContractAddress common.Address
-
-	if rules.IsLondon {
-		// Bor-specific behavior: redirect the burned base fee to a configured
-		// "burnt contract" (a dead address on bor mainnet/amoy). On non-Bor
-		// chain configs (Bor == nil), no credit happens — the base fee is
-		// implicitly burned the upstream go-ethereum way, matching Ethereum
-		// mainnet semantics. Without the nil-guard, Ethereum-spec test
-		// fixtures with Bor == nil panic here.
-		if bor := st.evm.ChainConfig().Bor; bor != nil {
-			burntContractAddress = common.HexToAddress(bor.CalculateBurntContract(st.evm.Context.BlockNumber.Uint64()))
-			burnAmount = new(big.Int).Mul(new(big.Int).SetUint64(st.gasUsed()), st.evm.Context.BaseFee)
-			if !st.noFeeBurnAndTip {
-				st.state.AddBalance(burntContractAddress, cmath.BigIntToUint256Int(burnAmount), tracing.BalanceChangeTransfer)
-			}
-		}
-	}
+	burnAmount, burntContractAddress := st.calcBaseFeeBurn(rules)
 
 	if !st.noFeeBurnAndTip {
 		st.state.AddBalance(st.evm.Context.Coinbase, cmath.BigIntToUint256Int(amount), tracing.BalanceIncreaseRewardTransactionFee)
@@ -758,9 +810,13 @@ func (st *stateTransition) calcRefund() uint64 {
 // returnGas returns ETH for remaining gas,
 // exchanged at the original rate.
 func (st *stateTransition) returnGas() {
-	remaining := uint256.NewInt(st.gasRemaining)
-	remaining.Mul(remaining, uint256.MustFromBig(st.msg.GasPrice))
-	st.state.AddBalance(st.msg.From, remaining, tracing.BalanceIncreaseGasReturn)
+	// Reserved-blockspace txs were never charged for gas (see buyGas), so there is
+	// nothing to refund. Unused gas is still returned to the block gas pool below.
+	if !st.reserved {
+		remaining := uint256.NewInt(st.gasRemaining)
+		remaining.Mul(remaining, uint256.MustFromBig(st.msg.GasPrice))
+		st.state.AddBalance(st.msg.From, remaining, tracing.BalanceIncreaseGasReturn)
+	}
 
 	if st.evm.Config.Tracer != nil && st.evm.Config.Tracer.OnGasChange != nil && st.gasRemaining > 0 {
 		st.evm.Config.Tracer.OnGasChange(st.gasRemaining, 0, tracing.GasChangeTxLeftOverReturned)

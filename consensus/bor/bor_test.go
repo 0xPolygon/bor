@@ -5911,6 +5911,96 @@ func TestVerifyHeader_PreGiugliano_NoCheck(t *testing.T) {
 	}
 }
 
+func TestSetReservedBlockspaceExtraFields(t *testing.T) {
+	t.Parallel()
+
+	// Pre-fork: the reserved fields are left nil.
+	bPre := &Bor{config: &params.BorConfig{ReservedBlockspaceBlock: big.NewInt(100)}}
+	bedPre := &types.BlockExtraData{}
+	bPre.setReservedBlockspaceExtraFields(&types.Header{Number: big.NewInt(99)}, bedPre)
+	require.Nil(t, bedPre.ReservedTxCount)
+	require.Nil(t, bedPre.ReservedGasUsed)
+
+	// Post-fork: the fields are initialized to non-nil zero so the block is valid
+	// even before the reserved pass fills the real values.
+	bPost := &Bor{config: &params.BorConfig{ReservedBlockspaceBlock: big.NewInt(100)}}
+	bedPost := &types.BlockExtraData{}
+	bPost.setReservedBlockspaceExtraFields(&types.Header{Number: big.NewInt(100)}, bedPost)
+	require.NotNil(t, bedPost.ReservedTxCount)
+	require.Equal(t, uint32(0), *bedPost.ReservedTxCount)
+	require.NotNil(t, bedPost.ReservedGasUsed)
+	require.Equal(t, uint64(0), *bedPost.ReservedGasUsed)
+}
+
+func TestVerifyHeader_ReservedBlockspaceMissingFields(t *testing.T) {
+	t.Parallel()
+	s := newGiuglianoVerifySetup(t, true)
+	s.b.config.ReservedBlockspaceBlock = big.NewInt(0) // reserved-blockspace active from genesis
+
+	// Giugliano fields present (passes that check) but reserved fields absent.
+	gasTarget := uint64(15_000_000)
+	bfcd := uint64(64)
+	extra := buildBlockExtraBytes(&types.BlockExtraData{
+		GasTarget:                &gasTarget,
+		BaseFeeChangeDenominator: &bfcd,
+	})
+	h := s.makeSignedChild(t, extra, big.NewInt(params.InitialBaseFee))
+
+	chain := newRawDBChain(s.db, s.cfg, h, nil, nil)
+	err := s.b.verifyHeader(chain, h, nil)
+	require.ErrorIs(t, err, errMissingReservedBlockspaceFields)
+}
+
+func TestVerifyHeader_ReservedBlockspaceFieldsPresent(t *testing.T) {
+	t.Parallel()
+	s := newGiuglianoVerifySetup(t, true)
+	s.b.config.ReservedBlockspaceBlock = big.NewInt(0)
+
+	gasTarget := uint64(15_000_000)
+	bfcd := uint64(64)
+	count := uint32(0)
+	gasUsed := uint64(0)
+	extra := buildBlockExtraBytes(&types.BlockExtraData{
+		GasTarget:                &gasTarget,
+		BaseFeeChangeDenominator: &bfcd,
+		ReservedTxCount:          &count,
+		ReservedGasUsed:          &gasUsed,
+	})
+	h := s.makeSignedChild(t, extra, big.NewInt(params.InitialBaseFee))
+
+	chain := newRawDBChain(s.db, s.cfg, h, nil, nil)
+	err := s.b.verifyHeader(chain, h, nil)
+	if err != nil {
+		require.NotErrorIs(t, err, errMissingReservedBlockspaceFields)
+		require.NotErrorIs(t, err, errMissingGiuglianoFields)
+	}
+}
+
+func TestVerifyReservedFields_GasUsedBound(t *testing.T) {
+	t.Parallel()
+	s := newGiuglianoVerifySetup(t, true)
+	s.b.config.ReservedBlockspaceBlock = big.NewInt(0)
+
+	gasTarget := uint64(15_000_000)
+	bfcd := uint64(64)
+	count := uint32(1)
+	reservedGasUsed := uint64(5_000)
+	extra := buildBlockExtraBytes(&types.BlockExtraData{
+		GasTarget:                &gasTarget,
+		BaseFeeChangeDenominator: &bfcd,
+		ReservedTxCount:          &count,
+		ReservedGasUsed:          &reservedGasUsed,
+	})
+
+	// Reserved gas used exceeds the block's gas used — impossible, must be rejected.
+	h := &types.Header{Number: big.NewInt(1), GasUsed: 4_000, Extra: extra}
+	require.ErrorIs(t, s.b.verifyReservedFields(h), errReservedGasUsedExceedsBlock)
+
+	// Equal-or-below the block's gas used passes the bound.
+	h.GasUsed = 5_000
+	require.NoError(t, s.b.verifyReservedFields(h))
+}
+
 // TestApplyMessage_StateSyncTxContext validates if TxContext is correctly
 // set for state-sync transactions.
 func TestApplyMessage_StateSyncTxContext(t *testing.T) {

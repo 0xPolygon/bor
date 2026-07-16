@@ -439,6 +439,9 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 	}
 
 	blockContext := NewEVMBlockContext(header, p.bc, author)
+	// Same parent-state reserved snapshot the serial processor uses, so parallel
+	// and serial classify identically (consensus parity).
+	blockContext.ReservedSnapshot = ReservedSnapshotForBlock(p.bc, statedb, header)
 	coinbase := blockContext.Coinbase
 
 	context := NewEVMBlockContext(header, p.bc.hc, author)
@@ -1116,6 +1119,9 @@ func (p *V2StateProcessor) Process(block *types.Block, statedb *state.StateDB, c
 		misc.ApplyDAOHardFork(statedb)
 	}
 	blockCtx := NewEVMBlockContext(header, p.chain, author)
+	// Reserved snapshot from the parent state, matching the serial path so V2
+	// BlockSTM classification is identical (consensus parity).
+	blockCtx.ReservedSnapshot = ReservedSnapshotForBlock(p.chain, statedb, header)
 	applyV2PreExecSystemCalls(block, statedb, config, cfg, blockCtx)
 
 	tasks, err := buildV2Tasks(block, config, header, interruptCtx)

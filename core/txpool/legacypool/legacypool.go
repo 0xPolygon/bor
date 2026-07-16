@@ -31,6 +31,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/prque"
+	"github.com/ethereum/go-ethereum/consensus/bor/registryreader"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/state"
@@ -325,6 +326,12 @@ type LegacyPool struct {
 	promoteTxCh chan struct{} // should be used only for tests
 
 	filteredAddrs map[common.Address]struct{} // Map of addresses to filter
+
+	// Reserved-blockspace registry: reader is wired post-Init from the backend;
+	// the snapshot is rebuilt at each reset from the new head's state so the
+	// per-tx admission path never reads contract state.
+	reservedRegistry registryreader.Reader
+	reservedSnapshot atomic.Pointer[registryreader.Snapshot]
 
 	// Rebroadcast tracking
 	rebroadcastTxFeed event.Feed                // Feed for stuck transaction events
@@ -729,10 +736,14 @@ func (pool *LegacyPool) Pending(filter txpool.PendingFilter, interrupt *atomic.B
 
 		txs := list.Flatten()
 
+		// Reserved-blockspace senders pay zero in-protocol fee; their txs must not
+		// be capped by the tip floor or they would never reach the miner.
+		reserved := pool.isReserved(addr)
+
 		// If the miner requests tip enforcement, cap the lists now
 		if filter.MinTip != nil || filter.GasLimitCap != 0 {
 			for i, tx := range txs {
-				if filter.MinTip != nil {
+				if filter.MinTip != nil && !reserved {
 					if tx.EffectiveGasTipIntCmp(filter.MinTip, filter.BaseFee) < 0 {
 						txs = txs[:i]
 						break
@@ -758,6 +769,7 @@ func (pool *LegacyPool) Pending(filter txpool.PendingFilter, interrupt *atomic.B
 					GasTipCap: uint256.MustFromBig(txs[i].GasTipCap()),
 					Gas:       txs[i].Gas(),
 					BlobGas:   txs[i].BlobGas(),
+					Reserved:  reserved,
 				}
 			}
 			pending[addr] = lazies
@@ -779,8 +791,9 @@ func (pool *LegacyPool) ValidateTxBasics(tx *types.Transaction) error {
 			1<<types.AccessListTxType |
 			1<<types.DynamicFeeTxType |
 			1<<types.SetCodeTxType,
-		MaxSize: txMaxSize,
-		MinTip:  pool.gasTip.Load().ToBig(),
+		MaxSize:          txMaxSize,
+		MinTip:           pool.gasTip.Load().ToBig(),
+		ReservedSnapshot: pool.reservedSnapshot.Load(),
 	}
 	return txpool.ValidateTransaction(tx, pool.currentHead.Load(), pool.signer, opts)
 }
@@ -1125,7 +1138,7 @@ func (pool *LegacyPool) add(tx *types.Transaction, async bool) (replaced bool, e
 	// Try to replace an existing transaction in the pending pool
 	if list := pool.pending[from]; list != nil && list.Contains(tx.Nonce()) {
 		// Nonce already pending, check if required price bump is met
-		inserted, old := list.Add(tx, pool.config.PriceBump)
+		inserted, old := list.Add(tx, pool.config.PriceBump, pool.isReserved(from))
 		if !inserted {
 			pendingDiscardMeter.Mark(1)
 			stage2Duration = time.Since(stage2Time)
@@ -1229,7 +1242,7 @@ func (pool *LegacyPool) promoteTx(addr common.Address, hash common.Hash, tx *typ
 	}
 	list := pool.pending[addr]
 
-	inserted, old := list.Add(tx, pool.config.PriceBump)
+	inserted, old := list.Add(tx, pool.config.PriceBump, pool.isReserved(addr))
 	if !inserted {
 		// An older transaction was better, discard this
 		pool.all.Remove(hash)
@@ -1790,6 +1803,10 @@ func (pool *LegacyPool) reset(oldHead, newHead *types.Header) {
 	pool.currentState = statedb
 	pool.pendingNonces = newNoncer(statedb)
 
+	// Refresh the reserved-set snapshot from the new head's state so per-tx
+	// admission classifies without a contract read.
+	pool.rebuildReservedSnapshot(statedb, newHead)
+
 	// Inject any transactions discarded due to reorgs
 	log.Debug("Reinjecting stale transactions", "count", len(reinject))
 	core.SenderCacher().Recover(pool.signer, reinject)
@@ -2277,4 +2294,53 @@ func (pool *LegacyPool) HasPendingAuth(addr common.Address) bool {
 func (pool *LegacyPool) isFiltered(addr common.Address) bool {
 	_, exists := pool.filteredAddrs[addr]
 	return exists
+}
+
+// isReserved reports whether addr is a reserved-blockspace client for the block
+// being built on top of the current head. Reserved senders' zero-fee
+// transactions bypass the pool's fee floors (PIP-35 min tip, base-fee tip floor)
+// so they are admitted, kept, and surfaced to the miner. The fork *height* gate
+// comes from chain config; the reserved *set* comes from the registry snapshot
+// (rebuilt per head), so the source of truth matches the EVM and base-fee paths.
+func (pool *LegacyPool) isReserved(addr common.Address) bool {
+	cfg := pool.chainconfig
+	if cfg.Bor == nil {
+		return false
+	}
+	head := pool.currentHead.Load()
+	if head == nil {
+		return false
+	}
+	// Classify for the next block (the one this tx targets).
+	number := new(big.Int).Add(head.Number, common.Big1)
+	if !cfg.Bor.IsReservedBlockspace(number) {
+		return false
+	}
+	return pool.reservedSnapshot.Load().IsReserved(addr, number.Uint64())
+}
+
+// SetReservedRegistry installs the reserved-blockspace registry reader and
+// rebuilds the snapshot from the current head. Called once post-Init from the
+// backend (the consensus engine isn't available at pool construction).
+func (pool *LegacyPool) SetReservedRegistry(r registryreader.Reader) {
+	pool.mu.Lock()
+	pool.reservedRegistry = r
+	statedb, head := pool.currentState, pool.currentHead.Load()
+	pool.mu.Unlock()
+	pool.rebuildReservedSnapshot(statedb, head)
+}
+
+// rebuildReservedSnapshot reads the reserved set from the registry at the given
+// block state and stores it. A read error leaves the previous snapshot in place
+// rather than dropping classification. No-op when no registry is configured.
+func (pool *LegacyPool) rebuildReservedSnapshot(statedb *state.StateDB, head *types.Header) {
+	if pool.reservedRegistry == nil || statedb == nil || head == nil {
+		return
+	}
+	snap, err := registryreader.BuildSnapshot(pool.reservedRegistry, statedb, head.Number.Uint64(), head.Hash())
+	if err != nil {
+		log.Warn("Failed to build reserved-blockspace snapshot", "number", head.Number, "err", err)
+		return
+	}
+	pool.reservedSnapshot.Store(snap)
 }

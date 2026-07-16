@@ -32,6 +32,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/bor/api"
 	"github.com/ethereum/go-ethereum/consensus/bor/clerk"
 	borSpan "github.com/ethereum/go-ethereum/consensus/bor/heimdall/span"
+	"github.com/ethereum/go-ethereum/consensus/bor/registryreader"
 	"github.com/ethereum/go-ethereum/consensus/bor/statefull"
 	"github.com/ethereum/go-ethereum/consensus/bor/valset"
 	"github.com/ethereum/go-ethereum/consensus/misc"
@@ -105,6 +106,15 @@ var (
 	// errMissingGiuglianoFields is returned if a post-Giugliano block is missing
 	// the gas target or base fee change denominator in its extra data.
 	errMissingGiuglianoFields = errors.New("missing gas target or base fee change denominator in extra data")
+
+	// errMissingReservedBlockspaceFields is returned if a post-ReservedBlockspace
+	// block is missing the reserved tx count or reserved gas used in its extra data.
+	errMissingReservedBlockspaceFields = errors.New("missing reserved tx count or reserved gas used in extra data")
+
+	// errReservedGasUsedExceedsBlock is returned if a header's reserved gas used
+	// is larger than the block's total gas used — an impossible value, since the
+	// reserved region is a subset of the block.
+	errReservedGasUsedExceedsBlock = errors.New("reserved gas used exceeds block gas used")
 
 	// errInvalidMixDigest is returned if a block's mix digest is non-zero.
 	errInvalidMixDigest = errors.New("non-zero mix digest")
@@ -393,6 +403,17 @@ func (c *Bor) GetSpanner() Spanner {
 	return c.spanner
 }
 
+// ReservedRegistry returns the read-only handle to the reserved blockspace
+// registry, or nil when the GenesisContractsClient does not implement the
+// reader (e.g. test mocks). Callers must tolerate a nil return.
+func (c *Bor) ReservedRegistry() registryreader.Reader {
+	if c == nil {
+		return nil
+	}
+	reader, _ := c.GenesisContractsClient.(registryreader.Reader)
+	return reader
+}
+
 func (c *Bor) SetSpanner(spanner Spanner) {
 	c.spanner = spanner
 }
@@ -504,6 +525,10 @@ func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 		if gasTarget == nil || bfcd == nil {
 			return errMissingGiuglianoFields
 		}
+	}
+
+	if err := c.verifyReservedFields(header); err != nil {
+		return err
 	}
 
 	// Ensure that the mix digest is zero as we don't have fork protection currently
@@ -1021,6 +1046,44 @@ func (c *Bor) setGiuglianoExtraFields(header *types.Header, parent *types.Header
 	}
 }
 
+// setReservedBlockspaceExtraFields initializes the reserved-region header fields
+// for post-ReservedBlockspace blocks. The producer fills the real values during
+// block building (the reserved pass); here we ensure the fields are present
+// (non-nil) so every post-fork block is structurally valid and passes the
+// verifyHeader presence check, even when there are no reserved transactions.
+func (c *Bor) setReservedBlockspaceExtraFields(header *types.Header, blockExtraData *types.BlockExtraData) {
+	if c.config.IsReservedBlockspace(header.Number) {
+		// Placeholder zeros so the fields are present (non-nil) and the header
+		// passes the verifyReservedFields presence check. The producer's reserved
+		// pass sets the real ReservedTxCount / ReservedGasUsed during block building.
+		var zeroCount uint32
+		var zeroGas uint64
+		blockExtraData.ReservedTxCount = &zeroCount
+		blockExtraData.ReservedGasUsed = &zeroGas
+	}
+}
+
+// verifyReservedFields checks that post-ReservedBlockspace headers carry the
+// reserved-region fields, plus a header-only bound on ReservedGasUsed. Full
+// value correctness (ReservedTxCount against the body, per-client quota) is a
+// body-level check enforced by block validation.
+func (c *Bor) verifyReservedFields(header *types.Header) error {
+	if !c.config.IsReservedBlockspace(header.Number) {
+		return nil
+	}
+	reservedTxCount, reservedGasUsed := header.GetReservedInfo(c.chainConfig)
+	if reservedTxCount == nil || reservedGasUsed == nil {
+		return errMissingReservedBlockspaceFields
+	}
+	// The reserved region is a subset of the block, so its gas cannot exceed the
+	// block's gas used. Reject the impossible value rather than letting CalcBaseFee
+	// silently clamp it (the base fee consumes parent.ReservedGasUsed).
+	if *reservedGasUsed > header.GasUsed {
+		return errReservedGasUsedExceedsBlock
+	}
+	return nil
+}
+
 // Prepare implements consensus.Engine, preparing all the consensus fields of the
 // header for running the transactions on top.
 func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, waitOnPrepare bool) error {
@@ -1076,6 +1139,7 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 			}
 
 			c.setGiuglianoExtraFields(header, parent, blockExtraData)
+			c.setReservedBlockspaceExtraFields(header, blockExtraData)
 
 			blockExtraDataBytes, err := rlp.EncodeToBytes(blockExtraData)
 			if err != nil {
@@ -1096,6 +1160,7 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 		}
 
 		c.setGiuglianoExtraFields(header, parent, blockExtraData)
+		c.setReservedBlockspaceExtraFields(header, blockExtraData)
 
 		blockExtraDataBytes, err := rlp.EncodeToBytes(blockExtraData)
 		if err != nil {

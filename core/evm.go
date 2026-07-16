@@ -24,10 +24,13 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
+	"github.com/ethereum/go-ethereum/consensus/bor/registryreader"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/log"
 )
 
 // ChainContext supports retrieving headers and consensus parameters from the
@@ -37,6 +40,42 @@ type ChainContext interface {
 
 	// Engine retrieves the chain's consensus engine.
 	Engine() consensus.Engine
+}
+
+// ReservedSnapshotForBlock builds the reserved-blockspace snapshot used to
+// classify reserved senders while executing `header`, read from the PARENT
+// registry state (statedb is the parent post-state). Reading at the parent makes
+// classification deterministic across produce and verify and immune to a
+// governance tx landing in the same block. Returns nil when the chain exposes no
+// registry reader / none is configured, or on a read error (deterministic across
+// nodes since the parent state is fixed) — a nil snapshot classifies nothing.
+func ReservedSnapshotForBlock(chain ChainContext, statedb *state.StateDB, header *types.Header) *registryreader.Snapshot {
+	rr, ok := chain.(interface {
+		ReservedRegistry() registryreader.Reader
+	})
+	if !ok {
+		return nil
+	}
+	reader := rr.ReservedRegistry()
+	if reader == nil || !reader.HasReservedRegistry() {
+		return nil
+	}
+	// Classification is fork-gated, so there is nothing to classify before the
+	// reserved-blockspace fork. Skipping the build pre-fork avoids a per-block
+	// state copy and registry read on every node syncing from genesis.
+	if cfg := chain.Config(); cfg.Bor == nil || !cfg.Bor.IsReservedBlockspace(header.Number) {
+		return nil
+	}
+	parentNumber := uint64(0)
+	if header.Number.Uint64() > 0 {
+		parentNumber = header.Number.Uint64() - 1
+	}
+	snap, err := registryreader.BuildSnapshot(reader, statedb, parentNumber, header.ParentHash)
+	if err != nil {
+		log.Warn("Failed to build reserved-blockspace snapshot", "number", header.Number, "err", err)
+		return nil
+	}
+	return snap
 }
 
 // NewEVMBlockContext creates a new context for use in the EVM.

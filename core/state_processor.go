@@ -95,6 +95,9 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		tracingStateDB = state.NewHookedState(statedb, hooks)
 	}
 	context = NewEVMBlockContext(header, p.chain, author)
+	// Reserved-blockspace classification reads the registry at the parent state
+	// (statedb is the parent post-state here, before block execution).
+	context.ReservedSnapshot = ReservedSnapshotForBlock(p.chain, statedb, header)
 	evm := vm.NewEVM(context, tracingStateDB, p.chainConfig(), cfg)
 
 	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {

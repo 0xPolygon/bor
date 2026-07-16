@@ -124,7 +124,9 @@ func (q *queue) add(tx *types.Transaction) (*common.Hash, error) {
 	if q.queued[from] == nil {
 		q.queued[from] = newList(false)
 	}
-	inserted, old := q.queued[from].Add(tx, q.config.PriceBump)
+	// Reserved replacement-by-arrival applies to the pending pool; the future
+	// queue keeps the standard fee-bump rule.
+	inserted, old := q.queued[from].Add(tx, q.config.PriceBump, false)
 	if !inserted {
 		// An older transaction was better, discard this
 		queuedDiscardMeter.Mark(1)
