@@ -69,14 +69,14 @@ func TestBuildSnapshot(t *testing.T) {
 	}
 
 	t.Run("nil reader yields nil snapshot", func(t *testing.T) {
-		snap, err := BuildSnapshot(nil, nil, 1, common.Hash{})
+		snap, err := BuildSnapshot(nil, nil, 1, common.Hash{}, 2)
 		if err != nil || snap != nil {
 			t.Fatalf("snap=%v err=%v, want nil,nil", snap, err)
 		}
 	})
 
 	t.Run("registry not configured yields nil snapshot", func(t *testing.T) {
-		snap, err := BuildSnapshot(&mockReader{has: false}, nil, 1, common.Hash{})
+		snap, err := BuildSnapshot(&mockReader{has: false}, nil, 1, common.Hash{}, 2)
 		if err != nil || snap != nil {
 			t.Fatalf("snap=%v err=%v, want nil,nil", snap, err)
 		}
@@ -84,7 +84,7 @@ func TestBuildSnapshot(t *testing.T) {
 
 	t.Run("happy path populates root, capacity and clients", func(t *testing.T) {
 		r := base()
-		snap, err := BuildSnapshot(r, nil, 7, common.Hash{})
+		snap, err := BuildSnapshot(r, nil, 7, common.Hash{}, 8)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -97,8 +97,17 @@ func TestBuildSnapshot(t *testing.T) {
 		if r.clientCalls != len(r.whitelist) {
 			t.Errorf("client lookups=%d, want %d", r.clientCalls, len(r.whitelist))
 		}
-		if !snap.IsReserved(a1, 7) || !snap.IsReserved(a2, 7) {
+		if !snap.IsReserved(a1) || !snap.IsReserved(a2) {
 			t.Error("both whitelisted addresses should be reserved")
+		}
+		if id, ok := snap.Lookup(a1); !ok || id != 1 {
+			t.Errorf("Lookup(a1)=(%d,%v), want (1,true)", id, ok)
+		}
+		if got := snap.Quota(2); got != 30_000_000 {
+			t.Errorf("Quota(2)=%d, want 30000000", got)
+		}
+		if ids := snap.Clients(); len(ids) != 2 || ids[0] != 1 || ids[1] != 2 {
+			t.Errorf("Clients()=%v, want [1 2] sorted", ids)
 		}
 	})
 
@@ -114,7 +123,7 @@ func TestBuildSnapshot(t *testing.T) {
 		t.Run(tc.name+" propagates", func(t *testing.T) {
 			r := base()
 			tc.mutta(r)
-			snap, err := BuildSnapshot(r, nil, 7, common.Hash{})
+			snap, err := BuildSnapshot(r, nil, 7, common.Hash{}, 8)
 			if !errors.Is(err, errBoom) {
 				t.Fatalf("err=%v, want boom", err)
 			}
@@ -125,38 +134,80 @@ func TestBuildSnapshot(t *testing.T) {
 	}
 }
 
-func TestSnapshotIsReserved(t *testing.T) {
-	a := addr(1)
-	snap := NewSnapshot(common.HexToHash("0x1"), 30_000_000, map[common.Address]ClientLookup{
-		a:       {ClientID: big.NewInt(1), GasQuota: 30_000_000, Active: true, EffectiveFrom: 100},
-		addr(2): {ClientID: big.NewInt(2), GasQuota: 30_000_000, Active: false, EffectiveFrom: 0},
-	})
+// TestBuildSnapshotEffectiveFiltering pins the build-time activation
+// resolution: inactive clients and clients whose effectiveFrom is beyond the
+// snapshot's effectiveAt block never enter the stored set, so lookups need no
+// block number.
+func TestBuildSnapshotEffectiveFiltering(t *testing.T) {
+	a1, a2 := addr(1), addr(2)
+	reader := func() *mockReader {
+		return &mockReader{
+			has:       true,
+			root:      common.HexToHash("0xabc"),
+			whitelist: []common.Address{a1, a2},
+			totalGas:  60_000_000,
+			clients: map[common.Address]ClientLookup{
+				a1: {ClientID: big.NewInt(1), GasQuota: 30_000_000, Active: true, EffectiveFrom: 100},
+				a2: {ClientID: big.NewInt(2), GasQuota: 30_000_000, Active: false},
+			},
+		}
+	}
 
 	tests := []struct {
-		name    string
-		account common.Address
-		number  uint64
-		want    bool
+		name        string
+		effectiveAt uint64
+		wantA1      bool
 	}{
-		{"before effectiveFrom", a, 99, false},
-		{"exactly at effectiveFrom", a, 100, true},
-		{"after effectiveFrom", a, 101, true},
-		{"inactive client", addr(2), 1, false},
-		{"unknown account", addr(9), 100, false},
+		{"before effectiveFrom", 99, false},
+		{"exactly at effectiveFrom", 100, true},
+		{"after effectiveFrom", 101, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := snap.IsReserved(tt.account, tt.number); got != tt.want {
-				t.Errorf("IsReserved(%s, %d)=%v, want %v", tt.account, tt.number, got, tt.want)
+			snap, err := BuildSnapshot(reader(), nil, tt.effectiveAt-1, common.Hash{}, tt.effectiveAt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := snap.IsReserved(a1); got != tt.wantA1 {
+				t.Errorf("IsReserved(a1) at %d = %v, want %v", tt.effectiveAt, got, tt.wantA1)
+			}
+			if snap.IsReserved(a2) {
+				t.Error("inactive client must never be reserved")
+			}
+			if snap.IsReserved(addr(9)) {
+				t.Error("unknown account must never be reserved")
 			}
 		})
 	}
 }
 
+func TestBuildSnapshotRejectsInvalidClientID(t *testing.T) {
+	a1 := addr(1)
+	r := &mockReader{
+		has:       true,
+		whitelist: []common.Address{a1},
+		clients: map[common.Address]ClientLookup{
+			a1: {ClientID: nil, GasQuota: 1, Active: true},
+		},
+	}
+	if _, err := BuildSnapshot(r, nil, 1, common.Hash{}, 2); err == nil {
+		t.Fatal("expected error for nil client id")
+	}
+}
+
 func TestSnapshotNilSafe(t *testing.T) {
 	var snap *Snapshot
-	if snap.IsReserved(addr(1), 1) {
+	if snap.IsReserved(addr(1)) {
 		t.Error("nil snapshot must not classify anything as reserved")
+	}
+	if _, ok := snap.Lookup(addr(1)); ok {
+		t.Error("nil snapshot Lookup must miss")
+	}
+	if snap.Quota(1) != 0 {
+		t.Error("nil snapshot Quota must be 0")
+	}
+	if snap.Clients() != nil {
+		t.Error("nil snapshot Clients must be nil")
 	}
 	if snap.FeeMode(addr(1)) != 0 {
 		t.Error("nil snapshot FeeMode must be 0")
@@ -171,8 +222,8 @@ func TestSnapshotNilSafe(t *testing.T) {
 
 func TestSnapshotFeeModeAndCapacity(t *testing.T) {
 	a := addr(1)
-	snap := NewSnapshot(common.HexToHash("0x2"), 12_345, map[common.Address]ClientLookup{
-		a: {ClientID: big.NewInt(1), GasQuota: 12_345, Active: true, FeeMode: 1},
+	snap := NewSnapshot(common.HexToHash("0x2"), 12_345, map[common.Address]Client{
+		a: {ID: 1, GasQuota: 12_345, FeeMode: 1},
 	})
 	if snap.FeeMode(a) != 1 {
 		t.Errorf("FeeMode=%d, want 1", snap.FeeMode(a))

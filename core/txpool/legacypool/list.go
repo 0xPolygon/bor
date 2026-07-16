@@ -331,14 +331,14 @@ func (l *list) Contains(nonce uint64) bool {
 //
 // If the new transaction is accepted into the list, the lists' cost and gas
 // thresholds are also potentially updated.
-func (l *list) Add(tx *types.Transaction, priceBump uint64, reserved bool) (bool, *types.Transaction) {
-	// If there's an older better transaction, abort
+func (l *list) Add(tx *types.Transaction, priceBump uint64) (bool, *types.Transaction) {
+	// If there's an older better transaction, abort. Reserved-blockspace
+	// senders get no special case: replacement is priced entirely through the
+	// fallback-fee fields (spec §8.2) — a zero-fee tx can never replace a
+	// zero-fee tx (the strict-increase check below rejects equal fees), while
+	// strictly positive fallback fees clear a zero-fee incumbent's threshold.
 	old := l.txs.Get(tx.Nonce())
-	// Reserved-blockspace senders replace by arrival order: two zero-fee txs at
-	// the same nonce can't out-bid each other, so the fee-bump rule is skipped.
-	// A reserved client must be able to cancel or replace a stuck tx without
-	// attaching a fee we told them they don't need.
-	if old != nil && !reserved {
+	if old != nil {
 		if old.GasFeeCapCmp(tx) >= 0 || old.GasTipCapCmp(tx) >= 0 {
 			return false, nil
 		}

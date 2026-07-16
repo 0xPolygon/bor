@@ -26,7 +26,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/consensus"
-	"github.com/ethereum/go-ethereum/consensus/bor/registryreader"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/txpool"
@@ -110,11 +109,6 @@ type Miner struct {
 	worker  *worker
 	prio    []common.Address // A list of senders to prioritize
 
-	// reservedRegistry is the read-only handle to the reserved blockspace
-	// registry. Nil when no registry is configured. Block builders that need
-	// to filter reserved txs should pull it via ReservedRegistry().
-	reservedRegistry registryreader.Reader
-
 	wg sync.WaitGroup
 }
 
@@ -137,28 +131,6 @@ func New(eth Backend, config *Config, chainConfig *params.ChainConfig, mux *even
 
 func (miner *Miner) GetWorker() *worker {
 	return miner.worker
-}
-
-// ReservedRegistry returns the reserved blockspace registry reader wired into
-// the miner, or nil when none is configured.
-func (miner *Miner) ReservedRegistry() registryreader.Reader {
-	if miner == nil {
-		return nil
-	}
-	return miner.reservedRegistry
-}
-
-// SetReservedRegistry installs the reserved blockspace registry reader.
-// Called once at startup from the backend, after the consensus engine is
-// available. Propagates the handle to the worker. Passing nil is valid.
-func (miner *Miner) SetReservedRegistry(r registryreader.Reader) {
-	if miner == nil {
-		return
-	}
-	miner.reservedRegistry = r
-	if miner.worker != nil {
-		miner.worker.reservedRegistry = r
-	}
 }
 
 // update keeps track of the downloader events. Please be aware that this is a one shot type of update loop.
@@ -311,15 +283,6 @@ func (miner *Miner) SetPrioAddresses(prio []common.Address) {
 	miner.prio = prio
 	miner.confMu.Unlock()
 	miner.worker.setPrio(prio)
-}
-
-// SetReservedRegistry installs the reserved-blockspace registry the miner
-// consults during block building. Production callers leave it unset (nil) until
-// the registry module and its hardfork gating land — the reserved pass is a
-// no-op in that case and block building is byte-identical to before
-// reserved-blockspace existed. Tests inject a *MockRegistry.
-func (miner *Miner) SetReservedRegistry(r ReservedRegistry) {
-	miner.worker.setReservedRegistry(r)
 }
 
 // SetGasCeil sets the gaslimit to strive for when mining blocks post 1559.

@@ -70,7 +70,7 @@ func ReservedSnapshotForBlock(chain ChainContext, statedb *state.StateDB, header
 	if header.Number.Uint64() > 0 {
 		parentNumber = header.Number.Uint64() - 1
 	}
-	snap, err := registryreader.BuildSnapshot(reader, statedb, parentNumber, header.ParentHash)
+	snap, err := registryreader.BuildSnapshot(reader, statedb, parentNumber, header.ParentHash, header.Number.Uint64())
 	if err != nil {
 		log.Warn("Failed to build reserved-blockspace snapshot", "number", header.Number, "err", err)
 		return nil

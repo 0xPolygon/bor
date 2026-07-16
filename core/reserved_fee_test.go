@@ -68,9 +68,9 @@ func reservedBlockCtx(coinbase common.Address, blockNumber *big.Int, baseFee *bi
 		BaseFee:     baseFee,
 	}
 	if len(reservedSenders) > 0 {
-		clients := make(map[common.Address]registryreader.ClientLookup, len(reservedSenders))
+		clients := make(map[common.Address]registryreader.Client, len(reservedSenders))
 		for i, a := range reservedSenders {
-			clients[a] = registryreader.ClientLookup{ClientID: big.NewInt(int64(i + 1)), GasQuota: 30_000_000, Active: true}
+			clients[a] = registryreader.Client{ID: uint64(i + 1), GasQuota: 30_000_000}
 		}
 		ctx.ReservedSnapshot = registryreader.NewSnapshot(common.HexToHash("0x1"), uint64(len(reservedSenders))*30_000_000, clients)
 	}

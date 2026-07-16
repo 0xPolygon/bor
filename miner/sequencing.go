@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus/bor/registryreader"
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/metrics"
@@ -42,10 +43,10 @@ func extractPriorityTxs(prio []common.Address, pendingTxs map[common.Address][]*
 
 // filterReservedTxs removes the transactions from reserved-eligible senders from
 // pending transactions and returns them grouped by client ID.
-func filterReservedTxs(pendingTxs map[common.Address][]*txpool.LazyTransaction, registry reservedRegistry) map[uint64]map[common.Address][]*txpool.LazyTransaction {
+func filterReservedTxs(pendingTxs map[common.Address][]*txpool.LazyTransaction, snap *registryreader.Snapshot) map[uint64]map[common.Address][]*txpool.LazyTransaction {
 	var reserved = make(map[uint64]map[common.Address][]*txpool.LazyTransaction)
 	for addr, txs := range pendingTxs {
-		cid, ok := registry.Lookup(addr)
+		cid, ok := snap.Lookup(addr)
 		if !ok {
 			continue
 		}
@@ -139,10 +140,13 @@ func selectReservedTxs(
 	return selected, used, overflow
 }
 
-// effectiveCeilingGas returns the registry's global reserved-region cap, normalizing
-// zero (uncapped) to MaxUint64 so the selection loop needs no special case.
-func effectiveCeilingGas(registry reservedRegistry) uint64 {
-	if c := registry.CeilingGas(); c != 0 {
+// effectiveCeilingGas returns the snapshot's reserved capacity (Σ effective
+// client quotas) as a global cap on the reserved pass, normalizing zero
+// (no clients) to MaxUint64 so the selection loop needs no special case.
+// Defense-in-depth: per-client quotas already bound the total, and the
+// registry contract enforces Σ quotas ≤ its ceiling at write time.
+func effectiveCeilingGas(snap *registryreader.Snapshot) uint64 {
+	if c := snap.Capacity(); c != 0 {
 		return c
 	}
 	return math.MaxUint64
@@ -150,15 +154,15 @@ func effectiveCeilingGas(registry reservedRegistry) uint64 {
 
 // extractReservedTxs pulls reserved-eligible transactions out of pendingTxs and
 // returns one quota-trimmed, ordered group per client, in the deterministic
-// parent-hash-keyed client order. registry is a per-build snapshot taken by the
-// caller; a nil registry (production default until the registry module lands)
-// or one with no clients is a no-op. Quota overflow — per-client and global
-// ceiling alike — is re-added to pendingTxs for the normal pass.
-func extractReservedTxs(registry reservedRegistry, parentHash common.Hash, pendingTxs map[common.Address][]*txpool.LazyTransaction, newReservedTxSet transactionsByPriceAndNonceFn) []*transactionsByPriceAndNonce {
-	if registry == nil || len(registry.Clients()) == 0 {
+// parent-hash-keyed client order. snap is the caller's per-build registry
+// snapshot; nil (pre-fork, or no registry configured) or one with no clients
+// is a no-op. Quota overflow — per-client and capacity alike — is re-added to
+// pendingTxs for the normal pass.
+func extractReservedTxs(snap *registryreader.Snapshot, parentHash common.Hash, pendingTxs map[common.Address][]*txpool.LazyTransaction, newReservedTxSet transactionsByPriceAndNonceFn) []*transactionsByPriceAndNonce {
+	if snap == nil || len(snap.Clients()) == 0 {
 		return nil
 	}
-	reservedTxs := filterReservedTxs(pendingTxs, registry)
+	reservedTxs := filterReservedTxs(pendingTxs, snap)
 	if len(reservedTxs) == 0 {
 		return nil
 	}
@@ -166,9 +170,9 @@ func extractReservedTxs(registry reservedRegistry, parentHash common.Hash, pendi
 	// The global ceiling bounds the summed declared gas selected across all
 	// clients. Like per-client quota, it is charged against declared gas
 	// limits, not actual gas used.
-	ceilingLeft := effectiveCeilingGas(registry)
+	ceilingLeft := effectiveCeilingGas(snap)
 
-	clientOrder := orderClients(parentHash, registry.Clients())
+	clientOrder := orderClients(parentHash, snap.Clients())
 	var clientGroups = make([]*transactionsByPriceAndNonce, 0, len(clientOrder))
 	for _, cid := range clientOrder {
 		clientTxs := reservedTxs[cid]
@@ -176,7 +180,7 @@ func extractReservedTxs(registry reservedRegistry, parentHash common.Hash, pendi
 			continue
 		}
 
-		selected, used, overflow := selectReservedTxs(clientTxs, min(registry.Quota(cid), ceilingLeft), newReservedTxSet)
+		selected, used, overflow := selectReservedTxs(clientTxs, min(snap.Quota(cid), ceilingLeft), newReservedTxSet)
 		ceilingLeft -= used
 		for addr, txs := range overflow {
 			pendingTxs[addr] = append(pendingTxs[addr], txs...)
@@ -196,12 +200,12 @@ func extractReservedTxs(registry reservedRegistry, parentHash common.Hash, pendi
 // client (deterministic, parent-hash-keyed order), then the remaining normal
 // transactions. Each group is an independently-ordered transactionsByPriceAndNonce
 // the caller commits in turn. Empty groups are omitted so the caller never spins
-// up a commit pass for nothing. registry is the caller's per-build snapshot
-// (see worker.reservedRegistrySnapshot); nil disables the reserved pass.
+// up a commit pass for nothing. snap is the caller's per-build registry
+// snapshot (see worker.sequencingSnapshot); nil disables the reserved pass.
 //
 // There is no error path — sequencing only groups and orders an in-memory
 // snapshot; interruption is surfaced later, by commitTransactions.
-func (w *worker) sequenceTxs(env *environment, registry reservedRegistry, pendingTxs map[common.Address][]*txpool.LazyTransaction) []*transactionsByPriceAndNonce {
+func (w *worker) sequenceTxs(env *environment, snap *registryreader.Snapshot, pendingTxs map[common.Address][]*txpool.LazyTransaction) []*transactionsByPriceAndNonce {
 	w.mu.RLock()
 	prio := w.prio
 	w.mu.RUnlock()
@@ -226,7 +230,7 @@ func (w *worker) sequenceTxs(env *environment, registry reservedRegistry, pendin
 	// Reserved transactions, one ordered group per client. No emptiness check
 	// here, unlike the neighbouring groups: extractReservedTxs already omits
 	// empty groups from the slice it returns, so every element is committable.
-	txBatches = append(txBatches, extractReservedTxs(registry, env.header.ParentHash, pendingTxs, newReservedTxSet)...)
+	txBatches = append(txBatches, extractReservedTxs(snap, env.header.ParentHash, pendingTxs, newReservedTxSet)...)
 
 	// Everything left (including reserved quota overflow added back above) is
 	// normal. Heap-init time is recorded for the normal batch only, keeping

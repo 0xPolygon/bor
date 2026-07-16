@@ -62,16 +62,15 @@ func reservedFeeConfig(reservedBlock *big.Int, capacity uint64) *params.ChainCon
 	return cc
 }
 
-// extraWithReserved encodes a header Extra carrying the reserved-region fields.
+// extraWithReserved encodes a header Extra carrying the reserved-region field.
 // The two preceding optional fields (GasTarget, BaseFeeChangeDenominator) must
-// be non-nil for RLP to emit the trailing reserved optionals.
-func extraWithReserved(t *testing.T, reservedTxCount uint32, reservedGasUsed uint64) []byte {
+// be non-nil for RLP to emit the trailing reserved optional.
+func extraWithReserved(t *testing.T, reservedGasUsed uint64) []byte {
 	t.Helper()
 	zero := uint64(0)
 	enc, err := rlp.EncodeToBytes(&types.BlockExtraData{
 		GasTarget:                &zero,
 		BaseFeeChangeDenominator: &zero,
-		ReservedTxCount:          &reservedTxCount,
 		ReservedGasUsed:          &reservedGasUsed,
 	})
 	require.NoError(t, err)
@@ -132,7 +131,7 @@ func TestReservedBaseFee_NetsReservedGasUsed(t *testing.T) {
 		GasLimit: gasLimit,
 		GasUsed:  35_000_000,
 		BaseFee:  baseFee,
-		Extra:    extraWithReserved(t, 3, 15_000_000),
+		Extra:    extraWithReserved(t, 15_000_000),
 	}
 	if got := CalcBaseFee(cfg, parent); got.Cmp(baseFee) != 0 {
 		t.Errorf("base fee = %s, want unchanged %s (public used == target after netting)", got, baseFee)
@@ -145,7 +144,7 @@ func TestReservedBaseFee_NetsReservedGasUsed(t *testing.T) {
 		GasLimit: gasLimit,
 		GasUsed:  35_000_000,
 		BaseFee:  baseFee,
-		Extra:    extraWithReserved(t, 0, 0),
+		Extra:    extraWithReserved(t, 0),
 	}
 	if got := CalcBaseFee(cfg, parentNoReserved); got.Cmp(baseFee) <= 0 {
 		t.Errorf("base fee = %s, want > %s (full usage above target without netting)", got, baseFee)

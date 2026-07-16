@@ -413,16 +413,12 @@ type worker struct {
 	eth         Backend
 	chain       *core.BlockChain
 
-	// reservedRegistry mirrors the Miner field. Populated via
-	// Miner.SetReservedRegistry — see miner.go.
-	reservedRegistry registryreader.Reader
-
 	prio []common.Address // A list of senders to prioritize
 
-	// reservedRegistry is the source of truth for reserved-blockspace clients
-	// and their per-block gas quotas. nil disables the reserved pass — block
-	// building is byte-identical to before reserved-blockspace existed.
-	reservedRegistry reservedRegistry
+	// reservedSnapshotOverride replaces the env's registry snapshot during
+	// block building. Test seam only — production sequencing reads the
+	// snapshot makeEnv pins on the EVM block context.
+	reservedSnapshotOverride *registryreader.Snapshot
 
 	// Feeds
 	pendingLogsFeed event.Feed
@@ -688,12 +684,13 @@ func (w *worker) getCurrent() *environment {
 	return w.current
 }
 
-// setReservedRegistry installs the reserved-blockspace registry the worker
-// consults during block building. A nil registry disables the reserved pass.
-func (w *worker) setReservedRegistry(r reservedRegistry) {
+// setReservedSnapshot installs a fixed reserved-registry snapshot the
+// sequencing pass classifies against, bypassing the env's snapshot. Test seam
+// only.
+func (w *worker) setReservedSnapshot(snap *registryreader.Snapshot) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.reservedRegistry = r
+	w.reservedSnapshotOverride = snap
 }
 
 // setRecommitInterval updates the interval for miner sealing work recommitting.
@@ -2142,15 +2139,16 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, gen
 	env.pendingDuration = time.Since(pendingStart)
 	pendingTimer.Update(env.pendingDuration)
 
-	// Pin one registry snapshot for the whole build so client order, quotas
-	// and membership stay consistent across groups. A future multi-pass
-	// (mini-block) builder must take the snapshot once per block, outside its
-	// pass loop.
-	registry := w.reservedRegistrySnapshot(env.header.ParentHash)
+	// One registry snapshot serves the whole build — the same parent-state
+	// snapshot makeEnv pinned for execution — so client order, quotas and
+	// membership stay consistent across batches and match what the executor
+	// classifies. A future multi-pass (mini-block) builder inherits this for
+	// free: the snapshot lives on the env, outside any pass loop.
+	snap := w.sequencingSnapshot(env)
 
 	// Order transactions based on priority into 3 buckets - priority, reserved
 	// and normal transactions.
-	txBatches := w.sequenceTxs(env, registry, pendingTxs)
+	txBatches := w.sequenceTxs(env, snap, pendingTxs)
 
 	// Shared channels used during builder mode. Both are nil when there is no prefetcher.
 	var builderPlanCh chan<- *types.Transaction
@@ -2177,7 +2175,7 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, gen
 	// Record reserved gas even when a commit pass was interrupted: callers
 	// seal the partial block, and its header must account for the reserved
 	// transactions that did commit.
-	if err := w.writeReservedGasUsed(env, registry); err != nil {
+	if err := w.writeReservedGasUsed(env); err != nil {
 		return err
 	}
 
@@ -2194,32 +2192,33 @@ func remainingGas(env *environment) uint64 {
 	return env.gasPool.Gas()
 }
 
-// reservedRegistrySnapshot pins one registry snapshot for a build, keyed by
-// the parent block. Returns nil when no registry is wired — the production
-// default until the registry module lands — which disables the reserved pass
-// and the header write.
-func (w *worker) reservedRegistrySnapshot(parent common.Hash) reservedRegistry {
+// sequencingSnapshot returns the reserved-registry snapshot the sequencing
+// pass classifies against: the one makeEnv pinned on the EVM block context,
+// i.e. the same snapshot execution classifies with, so the sequencer and the
+// executor can never disagree within one build. Nil (pre-fork, or no registry
+// configured) disables the reserved pass.
+func (w *worker) sequencingSnapshot(env *environment) *registryreader.Snapshot {
 	w.mu.RLock()
-	registry := w.reservedRegistry
+	override := w.reservedSnapshotOverride
 	w.mu.RUnlock()
 
-	if registry == nil {
+	if override != nil {
+		return override
+	}
+	if env.evm == nil {
 		return nil
 	}
 
-	return registry.Snapshot(parent)
+	return env.evm.Context.ReservedSnapshot
 }
 
 // writeReservedGasUsed records the build's reserved-region gas total in the
-// header's BlockExtraData. The field is consensus-visible, so it is written
-// only while the reserved pass is active (registry wired); an explicit zero is
-// still written then, marking "reserved active, none used" on the wire.
-//
-// TODO(reserved-blockspace): gate on the reserved hardfork instead of the
-// registry handle once the fork is defined (follow setGiuglianoExtraFields).
-func (w *worker) writeReservedGasUsed(env *environment, registry reservedRegistry) error {
-	// BlockExtraData is only RLP-encoded into Header.Extra post-Cancun.
-	if registry == nil || !w.chainConfig.IsCancun(env.header.Number) {
+// header's BlockExtraData, overwriting the placeholder zero that Prepare
+// stamped. Post-fork headers must carry the field (verifyReservedFields), so
+// it is written on every post-fork build — including interrupted ones, whose
+// partial blocks still seal.
+func (w *worker) writeReservedGasUsed(env *environment) error {
+	if w.chainConfig.Bor == nil || !w.chainConfig.Bor.IsReservedBlockspace(env.header.Number) {
 		return nil
 	}
 

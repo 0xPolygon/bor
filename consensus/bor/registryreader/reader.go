@@ -6,7 +6,9 @@
 package registryreader
 
 import (
+	"fmt"
 	"math/big"
+	"slices"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/state"
@@ -44,21 +46,40 @@ type Reader interface {
 	TotalReservedGas(state *state.StateDB, number uint64, hash common.Hash) (uint64, error)
 }
 
-// Snapshot is an immutable, pure-lookup view of the reserved set as of one
-// block's state, so the hot classification paths never do a per-transaction
-// state read. The txpool rebuilds it once per head; the execution path once per
-// block (gated on the fork height). A nil *Snapshot classifies nothing (no
-// registry / non-bor chain), so all methods are nil-safe.
+// Client is the slim per-sender record a Snapshot stores: just what the hot
+// classification and sequencing paths need. Activation state (active,
+// effectiveFrom) is resolved at snapshot build time, so it never appears here.
+type Client struct {
+	// ID is the registry contract's incremental clientId.
+	ID uint64
+	// GasQuota is the client's per-block reserved gas allowance, charged
+	// against declared transaction gas limits.
+	GasQuota uint64
+	// FeeMode: 0 = free (zero in-protocol fee), 1 = routed (fee credited to
+	// the producer; reserved for a future mode, unused today).
+	FeeMode uint8
+}
+
+// Snapshot is an immutable, pure-lookup view of the reserved set effective for
+// one block, so the hot classification paths never do a per-transaction state
+// read. Activation (active flag, effectiveFrom delay) is resolved once at
+// build time: every stored entry is effective, which is why lookups take no
+// block number. The txpool rebuilds it once per head; the execution path once
+// per block (gated on the fork height). A nil *Snapshot classifies nothing
+// (no registry / non-bor chain), so all methods are nil-safe.
 type Snapshot struct {
-	root     common.Hash
-	capacity uint64
-	clients  map[common.Address]ClientLookup
+	root      common.Hash
+	capacity  uint64
+	byAddress map[common.Address]Client
+	clientIDs []uint64
+	quotas    map[uint64]uint64
 }
 
 // BuildSnapshot reads the full active reserved set from the registry at the
-// given block state and returns an immutable Snapshot. Returns nil (no error)
-// when no registry is configured.
-func BuildSnapshot(r Reader, statedb *state.StateDB, number uint64, hash common.Hash) (*Snapshot, error) {
+// given block state and returns an immutable Snapshot classifying senders for
+// block effectiveAt (clients with effectiveFrom > effectiveAt are excluded).
+// Returns nil (no error) when no registry is configured.
+func BuildSnapshot(r Reader, statedb *state.StateDB, number uint64, hash common.Hash, effectiveAt uint64) (*Snapshot, error) {
 	if r == nil || !r.HasReservedRegistry() {
 		return nil, nil
 	}
@@ -81,21 +102,37 @@ func BuildSnapshot(r Reader, statedb *state.StateDB, number uint64, hash common.
 	if err != nil {
 		return nil, err
 	}
-	clients := make(map[common.Address]ClientLookup, len(addrs))
+	clients := make(map[common.Address]Client, len(addrs))
 	for _, a := range addrs {
 		c, err := r.ReservedClientForAddress(statedb, number, hash, a)
 		if err != nil {
 			return nil, err
 		}
-		clients[a] = c
+		if !c.Active || c.EffectiveFrom > effectiveAt {
+			continue
+		}
+		if c.ClientID == nil || !c.ClientID.IsUint64() {
+			return nil, fmt.Errorf("reserved registry returned invalid client id %v for %s", c.ClientID, a)
+		}
+		clients[a] = Client{ID: c.ClientID.Uint64(), GasQuota: c.GasQuota, FeeMode: c.FeeMode}
 	}
-	return &Snapshot{root: root, capacity: capacity, clients: clients}, nil
+	return NewSnapshot(root, capacity, clients), nil
 }
 
-// NewSnapshot constructs a Snapshot from an explicit client set. Used by tests
-// and by callers that source the reserved set outside the registry contract.
-func NewSnapshot(root common.Hash, capacity uint64, clients map[common.Address]ClientLookup) *Snapshot {
-	return &Snapshot{root: root, capacity: capacity, clients: clients}
+// NewSnapshot constructs a Snapshot from an explicit, already-effective client
+// set. Used by tests and by callers that source the reserved set outside the
+// registry contract.
+func NewSnapshot(root common.Hash, capacity uint64, clients map[common.Address]Client) *Snapshot {
+	quotas := make(map[uint64]uint64, len(clients))
+	for _, c := range clients {
+		quotas[c.ID] = c.GasQuota
+	}
+	ids := make([]uint64, 0, len(quotas))
+	for id := range quotas {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	return &Snapshot{root: root, capacity: capacity, byAddress: clients, clientIDs: ids, quotas: quotas}
 }
 
 // Root is the registry root this snapshot was built at; callers reuse the
@@ -107,14 +144,41 @@ func (s *Snapshot) Root() common.Hash {
 	return s.root
 }
 
-// IsReserved reports whether account is an active reserved sender effective at
-// the given block number (active && effectiveFrom <= number).
-func (s *Snapshot) IsReserved(account common.Address, number uint64) bool {
+// IsReserved reports whether account is a reserved sender in this snapshot's
+// effective set.
+func (s *Snapshot) IsReserved(account common.Address) bool {
 	if s == nil {
 		return false
 	}
-	c, ok := s.clients[account]
-	return ok && c.Active && c.EffectiveFrom <= number
+	_, ok := s.byAddress[account]
+	return ok
+}
+
+// Lookup returns the client ID that owns account, or (_, false) if account is
+// not in the effective reserved set.
+func (s *Snapshot) Lookup(account common.Address) (uint64, bool) {
+	if s == nil {
+		return 0, false
+	}
+	c, ok := s.byAddress[account]
+	return c.ID, ok
+}
+
+// Quota returns the per-block reserved gas allowance of clientID, or 0 for an
+// unknown client.
+func (s *Snapshot) Quota(clientID uint64) uint64 {
+	if s == nil {
+		return 0
+	}
+	return s.quotas[clientID]
+}
+
+// Clients returns the effective client IDs, sorted ascending.
+func (s *Snapshot) Clients() []uint64 {
+	if s == nil {
+		return nil
+	}
+	return slices.Clone(s.clientIDs)
 }
 
 // FeeMode returns the fee mode of account's client (0 = free) or 0 if not reserved.
@@ -122,7 +186,7 @@ func (s *Snapshot) FeeMode(account common.Address) uint8 {
 	if s == nil {
 		return 0
 	}
-	return s.clients[account].FeeMode
+	return s.byAddress[account].FeeMode
 }
 
 // Capacity returns the reserved capacity (sum of active client quotas).

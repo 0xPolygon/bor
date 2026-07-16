@@ -5914,20 +5914,17 @@ func TestVerifyHeader_PreGiugliano_NoCheck(t *testing.T) {
 func TestSetReservedBlockspaceExtraFields(t *testing.T) {
 	t.Parallel()
 
-	// Pre-fork: the reserved fields are left nil.
+	// Pre-fork: the reserved field is left nil.
 	bPre := &Bor{config: &params.BorConfig{ReservedBlockspaceBlock: big.NewInt(100)}}
 	bedPre := &types.BlockExtraData{}
 	bPre.setReservedBlockspaceExtraFields(&types.Header{Number: big.NewInt(99)}, bedPre)
-	require.Nil(t, bedPre.ReservedTxCount)
 	require.Nil(t, bedPre.ReservedGasUsed)
 
-	// Post-fork: the fields are initialized to non-nil zero so the block is valid
-	// even before the reserved pass fills the real values.
+	// Post-fork: the field is initialized to non-nil zero so the block is valid
+	// even before the miner writes the real value.
 	bPost := &Bor{config: &params.BorConfig{ReservedBlockspaceBlock: big.NewInt(100)}}
 	bedPost := &types.BlockExtraData{}
 	bPost.setReservedBlockspaceExtraFields(&types.Header{Number: big.NewInt(100)}, bedPost)
-	require.NotNil(t, bedPost.ReservedTxCount)
-	require.Equal(t, uint32(0), *bedPost.ReservedTxCount)
 	require.NotNil(t, bedPost.ReservedGasUsed)
 	require.Equal(t, uint64(0), *bedPost.ReservedGasUsed)
 }
@@ -5958,12 +5955,10 @@ func TestVerifyHeader_ReservedBlockspaceFieldsPresent(t *testing.T) {
 
 	gasTarget := uint64(15_000_000)
 	bfcd := uint64(64)
-	count := uint32(0)
 	gasUsed := uint64(0)
 	extra := buildBlockExtraBytes(&types.BlockExtraData{
 		GasTarget:                &gasTarget,
 		BaseFeeChangeDenominator: &bfcd,
-		ReservedTxCount:          &count,
 		ReservedGasUsed:          &gasUsed,
 	})
 	h := s.makeSignedChild(t, extra, big.NewInt(params.InitialBaseFee))
@@ -5983,12 +5978,10 @@ func TestVerifyReservedFields_GasUsedBound(t *testing.T) {
 
 	gasTarget := uint64(15_000_000)
 	bfcd := uint64(64)
-	count := uint32(1)
 	reservedGasUsed := uint64(5_000)
 	extra := buildBlockExtraBytes(&types.BlockExtraData{
 		GasTarget:                &gasTarget,
 		BaseFeeChangeDenominator: &bfcd,
-		ReservedTxCount:          &count,
 		ReservedGasUsed:          &reservedGasUsed,
 	})
 

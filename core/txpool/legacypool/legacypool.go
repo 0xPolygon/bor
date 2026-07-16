@@ -769,7 +769,6 @@ func (pool *LegacyPool) Pending(filter txpool.PendingFilter, interrupt *atomic.B
 					GasTipCap: uint256.MustFromBig(txs[i].GasTipCap()),
 					Gas:       txs[i].Gas(),
 					BlobGas:   txs[i].BlobGas(),
-					Reserved:  reserved,
 				}
 			}
 			pending[addr] = lazies
@@ -1138,7 +1137,7 @@ func (pool *LegacyPool) add(tx *types.Transaction, async bool) (replaced bool, e
 	// Try to replace an existing transaction in the pending pool
 	if list := pool.pending[from]; list != nil && list.Contains(tx.Nonce()) {
 		// Nonce already pending, check if required price bump is met
-		inserted, old := list.Add(tx, pool.config.PriceBump, pool.isReserved(from))
+		inserted, old := list.Add(tx, pool.config.PriceBump)
 		if !inserted {
 			pendingDiscardMeter.Mark(1)
 			stage2Duration = time.Since(stage2Time)
@@ -1242,7 +1241,7 @@ func (pool *LegacyPool) promoteTx(addr common.Address, hash common.Hash, tx *typ
 	}
 	list := pool.pending[addr]
 
-	inserted, old := list.Add(tx, pool.config.PriceBump, pool.isReserved(addr))
+	inserted, old := list.Add(tx, pool.config.PriceBump)
 	if !inserted {
 		// An older transaction was better, discard this
 		pool.all.Remove(hash)
@@ -2316,7 +2315,7 @@ func (pool *LegacyPool) isReserved(addr common.Address) bool {
 	if !cfg.Bor.IsReservedBlockspace(number) {
 		return false
 	}
-	return pool.reservedSnapshot.Load().IsReserved(addr, number.Uint64())
+	return pool.reservedSnapshot.Load().IsReserved(addr)
 }
 
 // SetReservedRegistry installs the reserved-blockspace registry reader and
@@ -2337,7 +2336,8 @@ func (pool *LegacyPool) rebuildReservedSnapshot(statedb *state.StateDB, head *ty
 	if pool.reservedRegistry == nil || statedb == nil || head == nil {
 		return
 	}
-	snap, err := registryreader.BuildSnapshot(pool.reservedRegistry, statedb, head.Number.Uint64(), head.Hash())
+	// The pool classifies for the next block (head+1) — see isReserved.
+	snap, err := registryreader.BuildSnapshot(pool.reservedRegistry, statedb, head.Number.Uint64(), head.Hash(), head.Number.Uint64()+1)
 	if err != nil {
 		log.Warn("Failed to build reserved-blockspace snapshot", "number", head.Number, "err", err)
 		return

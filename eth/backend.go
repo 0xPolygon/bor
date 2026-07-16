@@ -474,15 +474,14 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		eth.miner.SetPrioAddresses(config.TxPool.Locals)
 	}
 
-	// Wire the reserved blockspace registry into chain/txpool/miner. Only Bor
+	// Wire the reserved blockspace registry into the chain and txpool. Only Bor
 	// exposes a registry; non-Bor engines silently leave nil handles in place.
+	// The miner needs no handle of its own: block building classifies against
+	// the per-block snapshot the chain builds for execution (makeEnv).
 	if borEngine, ok := eth.engine.(*bor.Bor); ok {
 		reg := borEngine.ReservedRegistry()
 		eth.blockchain.SetReservedRegistry(reg)
 		eth.txPool.SetReservedRegistry(reg)
-		if eth.miner != nil {
-			eth.miner.SetReservedRegistry(reg)
-		}
 	}
 
 	// 1.14.8: NewOracle function definition was changed to accept (startPrice *big.Int) param.

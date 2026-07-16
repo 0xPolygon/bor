@@ -239,7 +239,7 @@ func reservedAwareGasTarget(config *params.ChainConfig, parent *types.Header) ui
 // publicGasUsed nets the parent's reserved gas out of its total gas used, so
 // the base-fee controller tracks only normal-region demand.
 func publicGasUsed(config *params.ChainConfig, parent *types.Header) uint64 {
-	_, reservedGasUsed := parent.GetReservedInfo(config)
+	reservedGasUsed := parent.GetReservedGasUsed(config)
 	if reservedGasUsed == nil || *reservedGasUsed > parent.GasUsed {
 		return parent.GasUsed
 	}

@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus/bor/registryreader"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/txpool"
@@ -18,9 +19,24 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 )
 
-// Compile-time guard: MockRegistry must satisfy the exported registry interface so the
-// Miner.SetReservedRegistry wiring can't silently break.
-var _ ReservedRegistry = (*MockRegistry)(nil)
+// testClient describes one reserved client for newTestSnapshot.
+type testClient struct {
+	ID       uint64
+	Senders  []common.Address
+	QuotaGas uint64
+}
+
+// newTestSnapshot builds a registry snapshot for sequencing tests. capacity 0
+// means uncapped (effectiveCeilingGas normalizes it to MaxUint64).
+func newTestSnapshot(capacity uint64, clients []testClient) *registryreader.Snapshot {
+	m := make(map[common.Address]registryreader.Client)
+	for _, c := range clients {
+		for _, a := range c.Senders {
+			m[a] = registryreader.Client{ID: c.ID, GasQuota: c.QuotaGas}
+		}
+	}
+	return registryreader.NewSnapshot(common.Hash{}, capacity, m)
+}
 
 func TestOrderClients(t *testing.T) {
 	t.Parallel()
@@ -63,64 +79,6 @@ func TestOrderClients(t *testing.T) {
 		"different parent hashes should reorder >2 clients")
 }
 
-func TestNewMockRegistry(t *testing.T) {
-	t.Parallel()
-
-	a := common.HexToAddress("0xAa")
-	b := common.HexToAddress("0xBb")
-	c := common.HexToAddress("0xCc")
-
-	m := NewMockRegistry([]ReservedClient{
-		{ID: 7, Senders: []common.Address{a, b}, QuotaGas: 10_000_000},
-		{ID: 3, Senders: []common.Address{c}, QuotaGas: 5_000_000},
-	})
-
-	cid, ok := m.Lookup(a)
-	require.True(t, ok)
-	require.Equal(t, uint64(7), cid)
-
-	_, ok = m.Lookup(common.HexToAddress("0xDd"))
-	require.False(t, ok)
-
-	require.Equal(t, uint64(10_000_000), m.Quota(7))
-	require.Equal(t, uint64(0), m.Quota(99))
-	require.Equal(t, []uint64{3, 7}, m.Clients(), "Clients sorted")
-}
-
-func TestNewMockRegistry_PanicsOnDuplicateSender(t *testing.T) {
-	t.Parallel()
-	defer func() { require.NotNil(t, recover(), "expected panic on duplicate sender") }()
-
-	addr := common.HexToAddress("0x01")
-	_ = NewMockRegistry([]ReservedClient{
-		{ID: 1, Senders: []common.Address{addr}, QuotaGas: 1},
-		{ID: 2, Senders: []common.Address{addr}, QuotaGas: 1},
-	})
-}
-
-// TestMockRegistrySnapshot verifies Snapshot returns an independent deep copy: mutating
-// the original after snapshotting must not be observable through the snapshot.
-func TestMockRegistrySnapshot(t *testing.T) {
-	t.Parallel()
-
-	a := common.HexToAddress("0x0a")
-	m := NewMockRegistry([]ReservedClient{{ID: 1, Senders: []common.Address{a}, QuotaGas: 100}}).WithCeiling(500)
-	snap := m.Snapshot(common.Hash{})
-
-	// Mutate the original's internal maps; the snapshot must be unaffected.
-	m.addrToClient[a] = 999
-	m.clientToQuota[1] = 0
-	m.clientIDs[0] = 999
-	m.ceiling = 0
-
-	cid, ok := snap.Lookup(a)
-	require.True(t, ok)
-	require.Equal(t, uint64(1), cid)
-	require.Equal(t, uint64(100), snap.Quota(1))
-	require.Equal(t, []uint64{1}, snap.Clients())
-	require.Equal(t, uint64(500), snap.CeilingGas())
-}
-
 func TestFilterReservedTxs(t *testing.T) {
 	t.Parallel()
 
@@ -131,20 +89,20 @@ func TestFilterReservedTxs(t *testing.T) {
 
 	cases := []struct {
 		name          string
-		registry      *MockRegistry
+		registry      *registryreader.Snapshot
 		input         map[common.Address][]*txpool.LazyTransaction
 		wantClients   map[uint64][]common.Address
 		wantRemaining []common.Address
 	}{
 		{
 			name:          "no reserved senders present",
-			registry:      NewMockRegistry([]ReservedClient{{ID: 1, Senders: []common.Address{common.HexToAddress("0x99")}, QuotaGas: 1}}),
+			registry:      newTestSnapshot(0, []testClient{{ID: 1, Senders: []common.Address{common.HexToAddress("0x99")}, QuotaGas: 1}}),
 			input:         map[common.Address][]*txpool.LazyTransaction{a: stubTxs(1)},
 			wantRemaining: []common.Address{a},
 		},
 		{
 			name: "filters reserved senders out",
-			registry: NewMockRegistry([]ReservedClient{
+			registry: newTestSnapshot(0, []testClient{
 				{ID: 7, Senders: []common.Address{a, b}, QuotaGas: 1_000_000},
 				{ID: 3, Senders: []common.Address{c}, QuotaGas: 500_000},
 			}),
@@ -371,13 +329,13 @@ func TestExtractReservedTxs(t *testing.T) {
 	t.Run("empty registry is a no-op", func(t *testing.T) {
 		t.Parallel()
 		pending := map[common.Address][]*txpool.LazyTransaction{a: {gasTx(100)}}
-		require.Nil(t, extractReservedTxs(NewMockRegistry(nil), common.Hash{}, pending, fn))
+		require.Nil(t, extractReservedTxs(newTestSnapshot(0, nil), common.Hash{}, pending, fn))
 		require.Contains(t, pending, a, "pending untouched")
 	})
 
 	t.Run("client within quota; normal sender untouched", func(t *testing.T) {
 		t.Parallel()
-		registry := NewMockRegistry([]ReservedClient{{ID: 1, Senders: []common.Address{a}, QuotaGas: 1_000_000}})
+		registry := newTestSnapshot(0, []testClient{{ID: 1, Senders: []common.Address{a}, QuotaGas: 1_000_000}})
 		pending := map[common.Address][]*txpool.LazyTransaction{a: {gasTx(100), gasTx(100)}, n: {gasTx(100)}}
 
 		groups := extractReservedTxs(registry, common.Hash{}, pending, fn)
@@ -390,7 +348,7 @@ func TestExtractReservedTxs(t *testing.T) {
 
 	t.Run("quota overflow re-added to pending", func(t *testing.T) {
 		t.Parallel()
-		registry := NewMockRegistry([]ReservedClient{{ID: 1, Senders: []common.Address{a}, QuotaGas: 100}})
+		registry := newTestSnapshot(0, []testClient{{ID: 1, Senders: []common.Address{a}, QuotaGas: 100}})
 		pending := map[common.Address][]*txpool.LazyTransaction{a: {gasTx(100), gasTx(100)}}
 
 		groups := extractReservedTxs(registry, common.Hash{}, pending, fn)
@@ -420,10 +378,10 @@ func TestExtractReservedTxs_Ceiling(t *testing.T) {
 
 	t.Run("ceiling caps the second client in visit order", func(t *testing.T) {
 		t.Parallel()
-		registry := NewMockRegistry([]ReservedClient{
+		registry := newTestSnapshot(800, []testClient{
 			{ID: 1, Senders: []common.Address{a}, QuotaGas: 600},
 			{ID: 2, Senders: []common.Address{b}, QuotaGas: 600},
-		}).WithCeiling(800)
+		})
 		pending := newPending()
 
 		// The first-visited client fits its full 600; the second is left
@@ -439,7 +397,7 @@ func TestExtractReservedTxs_Ceiling(t *testing.T) {
 
 	t.Run("zero ceiling means uncapped", func(t *testing.T) {
 		t.Parallel()
-		registry := NewMockRegistry([]ReservedClient{
+		registry := newTestSnapshot(0, []testClient{
 			{ID: 1, Senders: []common.Address{a}, QuotaGas: 600},
 			{ID: 2, Senders: []common.Address{b}, QuotaGas: 600},
 		})
@@ -492,10 +450,10 @@ func TestSequenceTxs(t *testing.T) {
 
 	t.Run("priority, reserved and normal groups in order", func(t *testing.T) {
 		t.Parallel()
-		w := &worker{prio: []common.Address{p}, reservedRegistry: NewMockRegistry([]ReservedClient{{ID: 1, Senders: []common.Address{r}, QuotaGas: 1_000_000}})}
+		w := &worker{prio: []common.Address{p}, reservedSnapshotOverride: newTestSnapshot(0, []testClient{{ID: 1, Senders: []common.Address{r}, QuotaGas: 1_000_000}})}
 		pending := map[common.Address][]*txpool.LazyTransaction{p: {gasTx(100)}, r: {gasTx(100)}, n: {gasTx(100)}}
 
-		seq := w.sequenceTxs(newEnv(), w.reservedRegistrySnapshot(common.Hash{}), pending)
+		seq := w.sequenceTxs(newEnv(), w.reservedSnapshotOverride, pending)
 		require.Len(t, seq, 3)
 		require.Equal(t, map[common.Address]int{p: 1}, drainBySender(seq[0]), "priority group first")
 		require.Equal(t, map[common.Address]int{r: 1}, drainBySender(seq[1]), "reserved group next")
@@ -507,24 +465,24 @@ func TestSequenceTxs(t *testing.T) {
 		w := &worker{}
 		pending := map[common.Address][]*txpool.LazyTransaction{n: {gasTx(100)}}
 
-		seq := w.sequenceTxs(newEnv(), w.reservedRegistrySnapshot(common.Hash{}), pending)
+		seq := w.sequenceTxs(newEnv(), w.reservedSnapshotOverride, pending)
 		require.Len(t, seq, 1)
 		require.Equal(t, map[common.Address]int{n: 1}, drainBySender(seq[0]))
 	})
 
 	t.Run("empty pending yields no groups", func(t *testing.T) {
 		t.Parallel()
-		w := &worker{prio: []common.Address{p}, reservedRegistry: NewMockRegistry([]ReservedClient{{ID: 1, Senders: []common.Address{r}, QuotaGas: 100}})}
-		seq := w.sequenceTxs(newEnv(), w.reservedRegistrySnapshot(common.Hash{}), map[common.Address][]*txpool.LazyTransaction{})
+		w := &worker{prio: []common.Address{p}, reservedSnapshotOverride: newTestSnapshot(0, []testClient{{ID: 1, Senders: []common.Address{r}, QuotaGas: 100}})}
+		seq := w.sequenceTxs(newEnv(), w.reservedSnapshotOverride, map[common.Address][]*txpool.LazyTransaction{})
 		require.Empty(t, seq)
 	})
 
 	t.Run("reserved overflow joins the normal group", func(t *testing.T) {
 		t.Parallel()
-		w := &worker{reservedRegistry: NewMockRegistry([]ReservedClient{{ID: 1, Senders: []common.Address{r}, QuotaGas: 100}})}
+		w := &worker{reservedSnapshotOverride: newTestSnapshot(0, []testClient{{ID: 1, Senders: []common.Address{r}, QuotaGas: 100}})}
 		pending := map[common.Address][]*txpool.LazyTransaction{r: {gasTx(100), gasTx(100)}, n: {gasTx(100)}}
 
-		seq := w.sequenceTxs(newEnv(), w.reservedRegistrySnapshot(common.Hash{}), pending)
+		seq := w.sequenceTxs(newEnv(), w.reservedSnapshotOverride, pending)
 		require.Len(t, seq, 2)
 		require.Equal(t, map[common.Address]int{r: 1}, drainBySender(seq[0]), "reserved group: one tx fits quota")
 		require.Equal(t, map[common.Address]int{n: 1, r: 1}, drainBySender(seq[1]), "normal group: normal sender + reserved overflow")
@@ -534,7 +492,7 @@ func TestSequenceTxs(t *testing.T) {
 		t.Parallel()
 		r2 := common.HexToAddress("0x0d")
 		senderOf := map[uint64]common.Address{1: r, 2: r2}
-		w := &worker{reservedRegistry: NewMockRegistry([]ReservedClient{
+		w := &worker{reservedSnapshotOverride: newTestSnapshot(0, []testClient{
 			{ID: 1, Senders: []common.Address{r}, QuotaGas: 1_000_000},
 			{ID: 2, Senders: []common.Address{r2}, QuotaGas: 1_000_000},
 		})}
@@ -543,7 +501,7 @@ func TestSequenceTxs(t *testing.T) {
 		env := newEnv()
 		order := orderClients(env.header.ParentHash, []uint64{1, 2})
 
-		seq := w.sequenceTxs(env, w.reservedRegistrySnapshot(env.header.ParentHash), pending)
+		seq := w.sequenceTxs(env, w.reservedSnapshotOverride, pending)
 		require.Len(t, seq, 3)
 		require.Equal(t, map[common.Address]int{senderOf[order[0]]: 1}, drainBySender(seq[0]), "first client in visit order")
 		require.Equal(t, map[common.Address]int{senderOf[order[1]]: 1}, drainBySender(seq[1]), "second client in visit order")
@@ -556,7 +514,7 @@ func TestSequenceTxs(t *testing.T) {
 		// the normal pass, where standard EIP-1559 admission drops it
 		// (GasFeeCap < BaseFee) — per spec it stays in the pool for a later
 		// block instead of entering this one.
-		w := &worker{reservedRegistry: NewMockRegistry([]ReservedClient{{ID: 1, Senders: []common.Address{r}, QuotaGas: 100}})}
+		w := &worker{reservedSnapshotOverride: newTestSnapshot(0, []testClient{{ID: 1, Senders: []common.Address{r}, QuotaGas: 100}})}
 		pending := map[common.Address][]*txpool.LazyTransaction{
 			r: {feeGasTx(0, 0, 100), feeGasTx(0, 0, 100)},
 			n: {feeGasTx(200, 100, 100)},
@@ -565,7 +523,7 @@ func TestSequenceTxs(t *testing.T) {
 		env := newEnv()
 		env.header.BaseFee = big.NewInt(100)
 
-		seq := w.sequenceTxs(env, w.reservedRegistrySnapshot(env.header.ParentHash), pending)
+		seq := w.sequenceTxs(env, w.reservedSnapshotOverride, pending)
 		require.Len(t, seq, 2)
 		require.Equal(t, map[common.Address]int{r: 1}, drainBySender(seq[0]), "reserved group: one zero-fee tx within quota")
 		require.Equal(t, map[common.Address]int{n: 1}, drainBySender(seq[1]), "normal group: zero-fee overflow not admitted")
@@ -577,10 +535,10 @@ func TestSequenceTxs(t *testing.T) {
 		// first, so a prioritized registered sender bypasses reserved quota
 		// accounting and pays normal fees. Operators should not prioritize
 		// registered senders.
-		w := &worker{prio: []common.Address{r}, reservedRegistry: NewMockRegistry([]ReservedClient{{ID: 1, Senders: []common.Address{r}, QuotaGas: 100}})}
+		w := &worker{prio: []common.Address{r}, reservedSnapshotOverride: newTestSnapshot(0, []testClient{{ID: 1, Senders: []common.Address{r}, QuotaGas: 100}})}
 		pending := map[common.Address][]*txpool.LazyTransaction{r: {gasTx(100), gasTx(100)}}
 
-		seq := w.sequenceTxs(newEnv(), w.reservedRegistrySnapshot(common.Hash{}), pending)
+		seq := w.sequenceTxs(newEnv(), w.reservedSnapshotOverride, pending)
 		require.Len(t, seq, 1, "single priority group; no reserved group")
 		require.False(t, seq[0].reserved, "priority group uses normal ordering")
 		require.Equal(t, map[common.Address]int{r: 2}, drainBySender(seq[0]), "both txs taken despite quota of 100")
@@ -598,7 +556,7 @@ func TestReservedBuild_NilRegistry(t *testing.T) {
 	w, b, _ := newTestWorker(t, DefaultTestConfig(), &chainConfig, engine, rawdb.NewMemoryDatabase(), false, 0)
 	defer w.close()
 
-	require.Nil(t, w.reservedRegistry, "registry defaults to nil")
+	require.Nil(t, w.reservedSnapshotOverride, "snapshot override defaults to nil")
 
 	sub := w.mux.Subscribe(core.NewMinedBlockEvent{})
 	defer sub.Unsubscribe()
@@ -624,7 +582,7 @@ func TestReservedBuild_HappyPath(t *testing.T) {
 	w, b, _ := newTestWorker(t, DefaultTestConfig(), &chainConfig, engine, rawdb.NewMemoryDatabase(), false, 0)
 	defer w.close()
 
-	w.setReservedRegistry(NewMockRegistry([]ReservedClient{
+	w.setReservedSnapshot(newTestSnapshot(0, []testClient{
 		{ID: 1, Senders: []common.Address{testBankAddress}, QuotaGas: 10_000_000},
 	}))
 
@@ -661,12 +619,23 @@ func borUnittestCancunConfig() params.ChainConfig {
 	return chainConfig
 }
 
+// borUnittestReservedConfig returns a Cancun-enabled unittest config with the
+// ReservedBlockspace fork active from genesis. The BorConfig is deep-copied so
+// scheduling the fork can't leak into the shared BorUnittestChainConfig.
+func borUnittestReservedConfig() params.ChainConfig {
+	chainConfig := borUnittestCancunConfig()
+	borCopy := *chainConfig.Bor
+	borCopy.ReservedBlockspaceBlock = big.NewInt(0)
+	chainConfig.Bor = &borCopy
+	return chainConfig
+}
+
 // TestReservedBuild_HeaderGasUsed confirms the producer records the reserved
 // pass's actual gas total in BlockExtraData.ReservedGasUsed. With every block
 // transaction committed through the reserved group, the total must equal the
 // header's GasUsed.
 func TestReservedBuild_HeaderGasUsed(t *testing.T) {
-	chainConfig := borUnittestCancunConfig()
+	chainConfig := borUnittestReservedConfig()
 	engine, ctrl := getFakeBorFromConfig(t, &chainConfig)
 	defer engine.Close()
 	defer ctrl.Finish()
@@ -674,7 +643,7 @@ func TestReservedBuild_HeaderGasUsed(t *testing.T) {
 	w, b, _ := newTestWorker(t, DefaultTestConfig(), &chainConfig, engine, rawdb.NewMemoryDatabase(), false, 0)
 	defer w.close()
 
-	w.setReservedRegistry(NewMockRegistry([]ReservedClient{
+	w.setReservedSnapshot(newTestSnapshot(0, []testClient{
 		{ID: 1, Senders: []common.Address{testBankAddress}, QuotaGas: 10_000_000},
 	}))
 
@@ -697,11 +666,11 @@ func TestReservedBuild_HeaderGasUsed(t *testing.T) {
 	require.Equal(t, got.GasUsed(), *reserved, "all txs are reserved, so reserved gas equals block gas used")
 }
 
-// TestReservedBuild_HeaderAbsentWithoutRegistry pins wire compatibility: with no
-// registry wired (production default), post-Cancun blocks must not carry the
+// TestReservedBuild_HeaderAbsentPreFork pins wire compatibility: before the
+// ReservedBlockspace fork, post-Cancun blocks must not carry the
 // ReservedGasUsed field at all — their Extra encoding stays byte-identical to
 // pre-reserved-blockspace blocks.
-func TestReservedBuild_HeaderAbsentWithoutRegistry(t *testing.T) {
+func TestReservedBuild_HeaderAbsentPreFork(t *testing.T) {
 	chainConfig := borUnittestCancunConfig()
 	engine, ctrl := getFakeBorFromConfig(t, &chainConfig)
 	defer engine.Close()
@@ -710,7 +679,7 @@ func TestReservedBuild_HeaderAbsentWithoutRegistry(t *testing.T) {
 	w, b, _ := newTestWorker(t, DefaultTestConfig(), &chainConfig, engine, rawdb.NewMemoryDatabase(), false, 0)
 	defer w.close()
 
-	require.Nil(t, w.reservedRegistry, "registry defaults to nil")
+	require.Nil(t, w.reservedSnapshotOverride, "snapshot override defaults to nil")
 
 	sub := w.mux.Subscribe(core.NewMinedBlockEvent{})
 	defer sub.Unsubscribe()
@@ -719,7 +688,7 @@ func TestReservedBuild_HeaderAbsentWithoutRegistry(t *testing.T) {
 	require.NoError(t, b.txPool.Add([]*types.Transaction{b.newRandomTxWithNonce(false, 0)}, false)[0])
 
 	got := waitForBlockWithTxs(t, sub, 1, 15*time.Second)
-	require.Nil(t, got.Header().GetReservedGasUsed(&chainConfig), "no registry: field must be absent from the wire")
+	require.Nil(t, got.Header().GetReservedGasUsed(&chainConfig), "pre-fork: field must be absent from the wire")
 }
 
 // TestReservedBuild_Positional proves the reserved-first builder preference
@@ -735,7 +704,7 @@ func TestReservedBuild_Positional(t *testing.T) {
 	w, b, _ := newTestWorker(t, DefaultTestConfig(), &chainConfig, engine, rawdb.NewMemoryDatabase(), false, 0)
 	defer w.close()
 
-	w.setReservedRegistry(NewMockRegistry([]ReservedClient{
+	w.setReservedSnapshot(newTestSnapshot(0, []testClient{
 		{ID: 1, Senders: []common.Address{testUserAddress}, QuotaGas: 10_000_000},
 	}))
 
@@ -801,7 +770,7 @@ func TestReservedBuild_Overflow(t *testing.T) {
 	defer w.close()
 
 	// Quota fits exactly one value-transfer (gas limit params.TxGas = 21000).
-	w.setReservedRegistry(NewMockRegistry([]ReservedClient{
+	w.setReservedSnapshot(newTestSnapshot(0, []testClient{
 		{ID: 1, Senders: []common.Address{testBankAddress}, QuotaGas: params.TxGas},
 	}))
 

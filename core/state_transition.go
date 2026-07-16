@@ -298,12 +298,12 @@ func newStateTransition(evm *vm.EVM, msg *Message, gp *GasPool) *stateTransition
 	// chain config; the reserved set from the parent registry snapshot on the
 	// block context (set per block by the consensus paths, nil elsewhere),
 	// matching the txpool and base-fee sources. Classification is sender-based;
-	// position-based enforcement (reserved region 0..ReservedTxCount) is layered
-	// on by the producer two-pass and block validation.
+	// per-client quota enforcement is layered on by the producer's reserved
+	// pass and the block-validation slice.
 	var reserved bool
 	if cfg := evm.ChainConfig(); cfg.Bor != nil &&
 		cfg.Bor.IsReservedBlockspace(evm.Context.BlockNumber) &&
-		evm.Context.ReservedSnapshot.IsReserved(msg.From, evm.Context.BlockNumber.Uint64()) {
+		evm.Context.ReservedSnapshot.IsReserved(msg.From) {
 		reserved = true
 	}
 	return &stateTransition{

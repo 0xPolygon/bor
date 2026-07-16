@@ -43,8 +43,6 @@ type LazyTransaction struct {
 
 	Gas     uint64 // Amount of gas required by the transaction
 	BlobGas uint64 // Amount of blob gas required by the transaction
-
-	Reserved bool // Sender is a reserved-blockspace client (zero in-protocol fee, exempt from the miner's base-fee floor)
 }
 
 // Resolve retrieves the full transaction belonging to a lazy handle if it is still

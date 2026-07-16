@@ -1046,33 +1046,29 @@ func (c *Bor) setGiuglianoExtraFields(header *types.Header, parent *types.Header
 	}
 }
 
-// setReservedBlockspaceExtraFields initializes the reserved-region header fields
-// for post-ReservedBlockspace blocks. The producer fills the real values during
-// block building (the reserved pass); here we ensure the fields are present
-// (non-nil) so every post-fork block is structurally valid and passes the
-// verifyHeader presence check, even when there are no reserved transactions.
+// setReservedBlockspaceExtraFields initializes the reserved-region header field
+// for post-ReservedBlockspace blocks: a placeholder zero so the field is
+// present (non-nil) and the header passes the verifyReservedFields presence
+// check even when there are no reserved transactions. The miner overwrites it
+// with the block's real reserved gas total at the end of block building
+// (worker.writeReservedGasUsed).
 func (c *Bor) setReservedBlockspaceExtraFields(header *types.Header, blockExtraData *types.BlockExtraData) {
 	if c.config.IsReservedBlockspace(header.Number) {
-		// Placeholder zeros so the fields are present (non-nil) and the header
-		// passes the verifyReservedFields presence check. The producer's reserved
-		// pass sets the real ReservedTxCount / ReservedGasUsed during block building.
-		var zeroCount uint32
 		var zeroGas uint64
-		blockExtraData.ReservedTxCount = &zeroCount
 		blockExtraData.ReservedGasUsed = &zeroGas
 	}
 }
 
 // verifyReservedFields checks that post-ReservedBlockspace headers carry the
-// reserved-region fields, plus a header-only bound on ReservedGasUsed. Full
-// value correctness (ReservedTxCount against the body, per-client quota) is a
-// body-level check enforced by block validation.
+// reserved-region gas field, plus a header-only bound on its value. Value
+// correctness (the sum over the block's reserved transactions, per-client
+// quota) is a body-level check that lands with the block-validation slice.
 func (c *Bor) verifyReservedFields(header *types.Header) error {
 	if !c.config.IsReservedBlockspace(header.Number) {
 		return nil
 	}
-	reservedTxCount, reservedGasUsed := header.GetReservedInfo(c.chainConfig)
-	if reservedTxCount == nil || reservedGasUsed == nil {
+	reservedGasUsed := header.GetReservedGasUsed(c.chainConfig)
+	if reservedGasUsed == nil {
 		return errMissingReservedBlockspaceFields
 	}
 	// The reserved region is a subset of the block, so its gas cannot exceed the

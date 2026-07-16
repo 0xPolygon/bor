@@ -32,13 +32,13 @@ func TestHarness_DeploysAndAnswersQueries(t *testing.T) {
 func TestSnapshot_BuildsFromRegistry(t *testing.T) {
 	h := NewHarness(t)
 
-	snap, err := registryreader.BuildSnapshot(h.Reader, nil, 1, common.Hash{})
+	snap, err := registryreader.BuildSnapshot(h.Reader, nil, 1, common.Hash{}, 1)
 	require.NoError(t, err)
 	require.NotNil(t, snap)
 
 	// The whitelisted address classifies reserved; the other does not.
-	require.True(t, snap.IsReserved(h.ReservedAddr, 1))
-	require.False(t, snap.IsReserved(h.UnreservedAddr, 1))
+	require.True(t, snap.IsReserved(h.ReservedAddr))
+	require.False(t, snap.IsReserved(h.UnreservedAddr))
 
 	// Snapshot mirrors the registry: feeMode free (0), capacity = the one
 	// client's quota, and a non-zero root it can be cached against.
@@ -48,6 +48,6 @@ func TestSnapshot_BuildsFromRegistry(t *testing.T) {
 
 	// nil snapshot (no registry) classifies nothing and is safe.
 	var none *registryreader.Snapshot
-	require.False(t, none.IsReserved(h.ReservedAddr, 1))
+	require.False(t, none.IsReserved(h.ReservedAddr))
 	require.Equal(t, uint64(0), none.Capacity())
 }

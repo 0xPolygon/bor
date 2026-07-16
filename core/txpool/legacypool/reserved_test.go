@@ -161,9 +161,12 @@ func TestReservedZeroFeeTxAdmittedAndPending(t *testing.T) {
 	}
 }
 
-// TestReservedZeroFeeReplacement verifies replacement-by-arrival: a reserved
-// sender can replace a stuck zero-fee tx with another zero-fee tx at the same
-// nonce, which the standard price-bump rule would reject.
+// TestReservedZeroFeeReplacement pins the spec's replacement rule (§8.2):
+// same-nonce replacement is priced entirely through the fallback-fee fields
+// under the standard bump rule. A zero-fee tx can never replace a zero-fee tx
+// ("10% over zero is still zero" — the strict-increase check rejects it),
+// while strictly positive fallback fees win the slot. This keeps same-nonce
+// pool content convergent across nodes regardless of arrival order.
 func TestReservedZeroFeeReplacement(t *testing.T) {
 	t.Parallel()
 
@@ -180,16 +183,44 @@ func TestReservedZeroFeeReplacement(t *testing.T) {
 		t.Fatalf("first reserved tx rejected: %v", err)
 	}
 
-	// Same nonce, different recipient, still zero fee — must replace by arrival.
+	// Same nonce, still zero fee: rejected — zero cannot out-bid zero.
 	second := zeroFeeTx(t, cfg, reservedKey, 0, common.Address{0xbb})
-	if err := pool.Add([]*types.Transaction{second}, true)[0]; err != nil {
-		t.Fatalf("reserved zero-fee replacement rejected: %v", err)
+	if err := pool.Add([]*types.Transaction{second}, true)[0]; err == nil {
+		t.Fatal("zero-fee replacement of a zero-fee tx must be rejected")
+	}
+	if pool.Get(first.Hash()) == nil {
+		t.Fatal("incumbent zero-fee tx must remain in the pool")
 	}
 
-	if pool.Get(second.Hash()) == nil {
-		t.Fatal("replacement tx not in pool")
+	// Same nonce with positive fallback fees: wins the slot under the standard
+	// bump rule (strictly above zero clears both the strict-increase check and
+	// the zero threshold). The fallback fees stay below the 30 gwei tip floor,
+	// which reserved senders bypass at admission.
+	third, err := types.SignNewTx(reservedKey, types.LatestSigner(cfg), &types.DynamicFeeTx{
+		ChainID:   cfg.ChainID,
+		Nonce:     0,
+		GasTipCap: big.NewInt(1),
+		GasFeeCap: big.NewInt(1),
+		Gas:       100_000,
+		To:        &common.Address{0xcc},
+		Value:     big.NewInt(0),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.Add([]*types.Transaction{third}, true)[0]; err != nil {
+		t.Fatalf("fallback-fee replacement rejected: %v", err)
+	}
+	if pool.Get(third.Hash()) == nil {
+		t.Fatal("fallback-fee replacement not in pool")
 	}
 	if pool.Get(first.Hash()) != nil {
-		t.Fatal("replaced tx should have been evicted")
+		t.Fatal("replaced zero-fee tx should have been evicted")
+	}
+
+	// And a zero-fee tx cannot displace the fallback-fee incumbent either.
+	fourth := zeroFeeTx(t, cfg, reservedKey, 0, common.Address{0xdd})
+	if err := pool.Add([]*types.Transaction{fourth}, true)[0]; err == nil {
+		t.Fatal("zero-fee tx must not replace a fallback-fee incumbent")
 	}
 }

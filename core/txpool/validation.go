@@ -186,7 +186,7 @@ func isReservedSender(opts *ValidationOptions, head *types.Header, signer types.
 	if err != nil {
 		return false
 	}
-	return opts.ReservedSnapshot.IsReserved(from, number.Uint64())
+	return opts.ReservedSnapshot.IsReserved(from)
 }
 
 // validateBlobTx implements the blob-transaction specific validations.

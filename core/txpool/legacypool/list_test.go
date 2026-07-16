@@ -49,7 +49,7 @@ func TestStrictListAdd(t *testing.T) {
 	// Insert the transactions in a random order
 	list := newList(true)
 	for _, v := range rand.Perm(len(txs)) {
-		list.Add(txs[v], DefaultConfig.PriceBump, false)
+		list.Add(txs[v], DefaultConfig.PriceBump)
 	}
 	// Verify internal state
 	if len(list.txs.items) != len(txs) {
@@ -74,7 +74,7 @@ func TestListAddVeryExpensive(t *testing.T) {
 		gaslimit := uint64(i)
 		tx, _ := types.SignTx(types.NewTransaction(uint64(i), common.Address{}, value, gaslimit, gasprice, nil), types.HomesteadSigner{}, key)
 		t.Logf("cost: %x bitlen: %d\n", tx.Cost(), tx.Cost().BitLen())
-		list.Add(tx, DefaultConfig.PriceBump, false)
+		list.Add(tx, DefaultConfig.PriceBump)
 	}
 }
 
@@ -92,7 +92,7 @@ func BenchmarkListAdd(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		list := newList(true)
 		for _, v := range rand.Perm(len(txs)) {
-			list.Add(txs[v], DefaultConfig.PriceBump, false)
+			list.Add(txs[v], DefaultConfig.PriceBump)
 			list.Filter(priceLimit, DefaultConfig.PriceBump)
 		}
 	}
@@ -120,7 +120,7 @@ func TestFilterTxConditionalKnownAccounts(t *testing.T) {
 	// Create a transaction with no defined tx options
 	// and add to the list.
 	tx := transaction(0, 1000, key)
-	list.Add(tx, DefaultConfig.PriceBump, false)
+	list.Add(tx, DefaultConfig.PriceBump)
 
 	// There should be no drops at this point.
 	// No state has been modified.
@@ -154,7 +154,7 @@ func TestFilterTxConditionalKnownAccounts(t *testing.T) {
 	_ = trie
 
 	tx2.PutOptions(&options)
-	list.Add(tx2, DefaultConfig.PriceBump, false)
+	list.Add(tx2, DefaultConfig.PriceBump)
 
 	// There should still be no drops as no state has been modified.
 	drops = list.FilterTxConditional(state, header)
@@ -201,7 +201,7 @@ func TestFilterTxConditionalBlockNumber(t *testing.T) {
 	// Create a transaction with no defined tx options
 	// and add to the list.
 	tx := transaction(0, 1000, key)
-	list.Add(tx, DefaultConfig.PriceBump, false)
+	list.Add(tx, DefaultConfig.PriceBump)
 
 	// There should be no drops at this point.
 	// No state has been modified.
@@ -219,7 +219,7 @@ func TestFilterTxConditionalBlockNumber(t *testing.T) {
 	options.BlockNumberMax = big.NewInt(110)
 
 	tx2.PutOptions(&options)
-	list.Add(tx2, DefaultConfig.PriceBump, false)
+	list.Add(tx2, DefaultConfig.PriceBump)
 
 	// There should still be no drops as no state has been modified.
 	drops = list.FilterTxConditional(state, header)
@@ -262,7 +262,7 @@ func TestFilterTxConditionalTimestamp(t *testing.T) {
 	// Create a transaction with no defined tx options
 	// and add to the list.
 	tx := transaction(0, 1000, key)
-	list.Add(tx, DefaultConfig.PriceBump, false)
+	list.Add(tx, DefaultConfig.PriceBump)
 
 	// There should be no drops at this point.
 	// No state has been modified.
@@ -283,7 +283,7 @@ func TestFilterTxConditionalTimestamp(t *testing.T) {
 	options.TimestampMax = &maxTimestamp
 
 	tx2.PutOptions(&options)
-	list.Add(tx2, DefaultConfig.PriceBump, false)
+	list.Add(tx2, DefaultConfig.PriceBump)
 
 	// There should still be no drops as no state has been modified.
 	drops = list.FilterTxConditional(state, header)
@@ -374,7 +374,7 @@ func BenchmarkListCapOneTx(b *testing.B) {
 		list := newList(true)
 		// Insert the transactions in a random order
 		for _, v := range rand.Perm(len(txs)) {
-			list.Add(txs[v], DefaultConfig.PriceBump, false)
+			list.Add(txs[v], DefaultConfig.PriceBump)
 		}
 		b.StartTimer()
 		list.Cap(list.Len() - 1)

@@ -305,10 +305,9 @@ func TestReservedBlockspaceZeroFeeProduction(t *testing.T) {
 	}
 	t.Logf("reserved zero-fee tx settled in canonical block %d on both nodes", includedBlock.NumberU64())
 
-	// The producing block must carry the reserved header fields (set by Prepare).
-	rc, rg := includedBlock.Header().GetReservedInfo(genesis.Config)
-	if rc == nil || rg == nil {
-		t.Fatalf("block %d missing reserved header fields: count=%v gas=%v", includedBlock.NumberU64(), rc, rg)
+	// The producing block must carry the reserved header field (set by Prepare).
+	if rg := includedBlock.Header().GetReservedGasUsed(genesis.Config); rg == nil {
+		t.Fatalf("block %d missing reserved gas used header field", includedBlock.NumberU64())
 	}
 
 	// The reserved sender paid only its call value — no gas was debited — and both
