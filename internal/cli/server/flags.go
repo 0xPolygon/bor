@@ -756,6 +756,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.JsonRPC.EnablePersonal,
 		Group:   "JsonRPC",
 	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "rpc.enabletrace",
+		Usage:   "Enables the Parity-compatible trace namespace (trace_block, trace_transaction, trace_call, trace_callMany, trace_replayTransaction, trace_replayBlockTransactions)",
+		Value:   &c.cliConfig.JsonRPC.EnableTrace,
+		Default: c.cliConfig.JsonRPC.EnableTrace,
+		Group:   "JsonRPC",
+	})
 	f.DurationFlag(&flagset.DurationFlag{
 		Name:    "rpc.txsync.defaulttimeout",
 		Usage:   "Default timeout for eth_sendRawTransactionSync (e.g. 2s, 500ms)",

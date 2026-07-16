@@ -172,6 +172,9 @@ type TraceConfig struct {
 	Tracer  *string
 	Timeout *string
 	Reexec  *uint64
+	// gasBailout suppresses the synthetic upfront gas debit/refund used by
+	// trace_call while retaining the normal balance validation.
+	gasBailout bool
 	// Config specific to given tracer. Note struct logger
 	// config are historically embedded in main object.
 	TracerConfig json.RawMessage
@@ -1011,49 +1014,13 @@ func containsTx(block *types.Block, hash common.Hash) bool {
 // TraceTransaction returns the structured logs created during the execution of EVM
 // and returns them as a JSON object.
 func (api *API) TraceTransaction(ctx context.Context, hash common.Hash, config *TraceConfig) (interface{}, error) {
-	found, _, blockHash, blockNumber, index := api.backend.GetCanonicalTransaction(hash)
-	if !found {
-		// Warn in case tx indexer is not done.
-		if !api.backend.TxIndexDone() {
-			return nil, ethapi.NewTxIndexingError()
-		}
-		// Only mined txes are supported
-		return nil, errTxNotFound
-	}
-	// It shouldn't happen in practice.
-	if blockNumber == 0 {
-		return nil, errors.New("genesis is not traceable")
-	}
-	reexec := defaultTraceReexec
-	if config != nil && config.Reexec != nil {
-		reexec = *config.Reexec
-	}
-	block, err := api.blockByNumberAndHash(ctx, rpc.BlockNumber(blockNumber), blockHash)
-	if err != nil {
-		return nil, err
-	}
-	tx, vmctx, statedb, release, err := api.backend.StateAtTransaction(ctx, block, int(index), reexec)
+	in, release, err := api.canonicalTxTraceEnv(ctx, hash, config)
 	if err != nil {
 		return nil, err
 	}
 	defer release()
 
-	txctx := &Context{
-		BlockHash:   blockHash,
-		BlockNumber: block.Number(),
-		TxIndex:     int(index),
-		TxHash:      hash,
-		// This field is only used for bor transactions. Use block gas used as state-sync is
-		// always the last tx.
-		CumulativeGasUsed: block.GasUsed(),
-		LogIndex:          len(statedb.Logs()),
-	}
-
-	msg, err := core.TransactionToMessage(tx, types.MakeSigner(api.backend.ChainConfig(), block.Number(), block.Time()), block.BaseFee())
-	if err != nil {
-		return nil, err
-	}
-	res, _, err := api.traceTx(ctx, tx, msg, txctx, vmctx, statedb, config, nil)
+	res, _, err := api.traceTx(ctx, in.tx, in.msg, in.txctx, in.vmctx, in.statedb, config, nil)
 	return res, err
 }
 
@@ -1475,7 +1442,11 @@ func (api *API) traceTx(ctx context.Context, tx *types.Transaction, message *cor
 
 	hooks := tracer.Hooks
 	tracingStateDB := state.NewHookedState(statedb, hooks)
-	evm := vm.NewEVM(vmctx, tracingStateDB, api.backend.ChainConfig(), vm.Config{Tracer: hooks, NoBaseFee: true})
+	var executionStateDB vm.StateDB = tracingStateDB
+	if config.gasBailout {
+		executionStateDB = &gasBailoutStateDB{StateDB: tracingStateDB}
+	}
+	evm := vm.NewEVM(vmctx, executionStateDB, api.backend.ChainConfig(), vm.Config{Tracer: hooks, NoBaseFee: true})
 	if precompiles != nil {
 		evm.SetPrecompiles(precompiles)
 	}

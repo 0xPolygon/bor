@@ -224,6 +224,20 @@ func (b *testBackend) GetBorBlockTransactionWithBlockHash(ctx context.Context, t
 	return tx, blockHash, blockNumber, index, nil
 }
 
+// prunedTestBackend wraps testBackend and simulates a non-archive (pruned) node
+// by making all historical state unavailable.
+type prunedTestBackend struct {
+	*testBackend
+}
+
+func (b *prunedTestBackend) StateAtBlock(_ context.Context, _ *types.Block, _ uint64, _ *state.StateDB, _ bool, _ bool) (*state.StateDB, StateReleaseFunc, error) {
+	return nil, nil, errStateNotFound
+}
+
+func (b *prunedTestBackend) StateAtTransaction(_ context.Context, _ *types.Block, _ int, _ uint64) (*types.Transaction, vm.BlockContext, *state.StateDB, StateReleaseFunc, error) {
+	return nil, vm.BlockContext{}, nil, nil, errStateNotFound
+}
+
 type stateTracer struct {
 	Balance map[common.Address]*hexutil.Big
 	Nonce   map[common.Address]hexutil.Uint64
@@ -258,7 +272,11 @@ func newStateTracer(ctx *Context, cfg json.RawMessage, chainCfg *params.ChainCon
 }
 
 func TestStateHooks(t *testing.T) {
-	t.Parallel()
+	// NOTE: intentionally NOT parallel. This test mutates the global
+	// DefaultDirectory via Register("stateTracer", ...). Running it in the
+	// parallel phase races with other tracing tests that read the directory
+	// (directory.IsJS/New) from worker goroutines. Keeping it sequential makes
+	// the global write happen-before any parallel reader resumes.
 
 	// Initialize test accounts
 	var (
@@ -1906,5 +1924,385 @@ func TestStandardTraceBlockToFile(t *testing.T) {
 				t.Fatalf("unexpected trace result.  expected\n'%s'\n\nreceived\n'%s'\n", tc.want[j], string(traceReceived))
 			}
 		}
+	}
+}
+
+func TestTraceBlockParity(t *testing.T) {
+	t.Parallel()
+
+	const genBlocks = 5
+	traceAPI, _, _ := newTransferChainAPI(t, genBlocks)
+
+	var testSuite = []struct {
+		name        string
+		blockNumber rpc.BlockNumber
+		expectErr   bool
+	}{
+		{
+			name:        "genesis block should error",
+			blockNumber: rpc.BlockNumber(0),
+			expectErr:   true,
+		},
+		{
+			name:        "non-existent block should error",
+			blockNumber: rpc.BlockNumber(genBlocks + 1),
+			expectErr:   true,
+		},
+		{
+			name:        "latest block returns transaction traces",
+			blockNumber: rpc.LatestBlockNumber,
+		},
+	}
+
+	for _, tc := range testSuite {
+		t.Run(tc.name, func(t *testing.T) {
+			traces, err := traceAPI.Block(context.Background(), tc.blockNumber)
+			if tc.expectErr {
+				if err == nil {
+					t.Errorf("expected error but got none")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				if len(traces) == 0 {
+					t.Error("expected at least one transaction trace")
+				}
+			}
+		})
+	}
+}
+
+// TestConvertCallFrameToParityTraces tests the conversion logic.
+var (
+	parityTestTxHash    = common.HexToHash("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
+	parityTestBlockHash = common.HexToHash("0xabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd")
+)
+
+func parityTestCtx(intrinsicGas, rootGasUsed uint64, precompiles map[common.Address]struct{}) parityFrameCtx {
+	return parityFrameCtx{
+		txHash:       parityTestTxHash,
+		blockHash:    parityTestBlockHash,
+		blockNumber:  100,
+		intrinsicGas: intrinsicGas,
+		rootGasUsed:  rootGasUsed,
+		precompiles:  precompiles,
+	}
+}
+
+func mustConvertFrame(t *testing.T, frame map[string]interface{}, ctx parityFrameCtx) []*ParityTrace {
+	t.Helper()
+	traces, err := convertCallFrameToParityTraces(frame, []uint64{}, ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	return traces
+}
+
+func TestConvertParityTrace_SimpleCall(t *testing.T) {
+	t.Parallel()
+	frame := map[string]interface{}{
+		"type": "CALL", "from": "0x0000000000000000000000000000000000000001",
+		"to":  "0x0000000000000000000000000000000000000002",
+		"gas": "0x5208", "gasUsed": "0x5208", "input": "0x", "output": "0x", "value": "0x3e8",
+	}
+	traces := mustConvertFrame(t, frame, parityTestCtx(0, 0, nil))
+	if len(traces) != 1 {
+		t.Fatalf("expected 1 trace, got %d", len(traces))
+	}
+	tr := traces[0]
+	if tr.Type != "call" {
+		t.Errorf("expected type 'call', got %s", tr.Type)
+	}
+	if tr.Action == nil || tr.Action.CallType == nil || *tr.Action.CallType != "call" {
+		t.Error("callType mismatch")
+	}
+	if tr.Subtraces != 0 {
+		t.Errorf("expected 0 subtraces, got %d", tr.Subtraces)
+	}
+}
+
+func TestConvertParityTrace_CreateOperation(t *testing.T) {
+	t.Parallel()
+	frame := map[string]interface{}{
+		"type": "CREATE", "from": "0x0000000000000000000000000000000000000001",
+		"to":  "0x0000000000000000000000000000000000000003",
+		"gas": "0x30000", "gasUsed": "0x20000",
+		"input": "0x6060604052", "output": "0x6080604052", "value": "0x0",
+	}
+	traces := mustConvertFrame(t, frame, parityTestCtx(0, 0, nil))
+	if len(traces) != 1 {
+		t.Fatalf("expected 1 trace, got %d", len(traces))
+	}
+	tr := traces[0]
+	if tr.Type != "create" {
+		t.Errorf("expected type 'create', got %s", tr.Type)
+	}
+	if tr.Action == nil || tr.Action.Init == nil {
+		t.Error("init field should be set for create")
+	}
+	if tr.Result == nil || tr.Result.Code == nil {
+		t.Error("code field should be set for create result")
+	}
+	if tr.Action.To != nil {
+		t.Errorf("create action must not have 'to', got %s", tr.Action.To)
+	}
+	if tr.Action.CreationMethod == nil || *tr.Action.CreationMethod != "create" {
+		t.Errorf("create action creationMethod should be 'create', got %v", tr.Action.CreationMethod)
+	}
+}
+
+func TestConvertParityTrace_PlainTransferZeroGrossGas(t *testing.T) {
+	t.Parallel()
+	frame := map[string]interface{}{
+		"type": "CALL", "from": "0xaa00000000000000000000000000000000000001",
+		"to":  "0xbb00000000000000000000000000000000000002",
+		"gas": "0x5208", "gasUsed": "0x5208", "input": "0x", "output": "0x", "value": "0x1",
+	}
+	traces := mustConvertFrame(t, frame, parityTestCtx(0x5208, 0, nil))
+	if traces[0].Result == nil || traces[0].Result.GasUsed == nil || uint64(*traces[0].Result.GasUsed) != 0 {
+		t.Errorf("plain transfer gross gasUsed should be 0, got %v", traces[0].Result.GasUsed)
+	}
+}
+
+func TestConvertParityTrace_FailedCallNonRevert(t *testing.T) {
+	t.Parallel()
+	frame := map[string]interface{}{
+		"type": "CALL", "from": "0x0000000000000000000000000000000000000001",
+		"to":  "0x0000000000000000000000000000000000000002",
+		"gas": "0x5208", "gasUsed": "0x5208", "input": "0x", "output": "0x", "value": "0x3e8",
+		"error": "out of gas",
+	}
+	traces := mustConvertFrame(t, frame, parityTestCtx(0, 0, nil))
+	if len(traces) != 1 {
+		t.Fatalf("expected 1 trace, got %d", len(traces))
+	}
+	tr := traces[0]
+	if tr.Error == nil || *tr.Error != "out of gas" {
+		t.Errorf("error should be raw 'out of gas', got %v", tr.Error)
+	}
+	if tr.Result != nil {
+		t.Errorf("result must be nil for non-revert errors, got %+v", tr.Result)
+	}
+}
+
+func TestConvertParityTrace_NestedCalls(t *testing.T) {
+	t.Parallel()
+	frame := map[string]interface{}{
+		"type": "CALL", "from": "0x0000000000000000000000000000000000000001",
+		"to":  "0x0000000000000000000000000000000000000002",
+		"gas": "0x10000", "gasUsed": "0x8000", "input": "0x", "output": "0x", "value": "0x0",
+		"calls": []interface{}{
+			map[string]interface{}{
+				"type": "CALL", "from": "0x0000000000000000000000000000000000000002",
+				"to":  "0x00000000000000000000000000000000000000ff",
+				"gas": "0x5000", "gasUsed": "0x3000", "input": "0x", "output": "0x", "value": "0x0",
+			},
+		},
+	}
+	traces := mustConvertFrame(t, frame, parityTestCtx(0, 0, nil))
+	if len(traces) != 2 {
+		t.Fatalf("expected 2 traces (parent + child), got %d", len(traces))
+	}
+	if traces[0].Subtraces != 1 {
+		t.Errorf("expected 1 subtrace for parent, got %d", traces[0].Subtraces)
+	}
+	if len(traces[0].TraceAddress) != 0 {
+		t.Error("parent should have empty traceAddress")
+	}
+	if len(traces[1].TraceAddress) != 1 || traces[1].TraceAddress[0] != 0 {
+		t.Errorf("child should have traceAddress [0], got %v", traces[1].TraceAddress)
+	}
+}
+
+func TestConvertParityTrace_PrecompileChildOmitted(t *testing.T) {
+	t.Parallel()
+	precompiles := map[common.Address]struct{}{
+		common.HexToAddress("0x0000000000000000000000000000000000000001"): {},
+	}
+	frame := map[string]interface{}{
+		"type": "CALL", "from": "0xaa00000000000000000000000000000000000001",
+		"to":  "0xbb00000000000000000000000000000000000002",
+		"gas": "0x10000", "gasUsed": "0x8000", "input": "0x", "output": "0x", "value": "0x0",
+		"calls": []interface{}{
+			map[string]interface{}{
+				"type": "STATICCALL", "from": "0xbb00000000000000000000000000000000000002",
+				"to":  "0x0000000000000000000000000000000000000001",
+				"gas": "0x1000", "gasUsed": "0xbb8", "input": "0x", "output": "0x",
+			},
+			map[string]interface{}{
+				"type": "CALL", "from": "0xbb00000000000000000000000000000000000002",
+				"to":  "0xcc00000000000000000000000000000000000003",
+				"gas": "0x2000", "gasUsed": "0x1000", "input": "0x", "output": "0x", "value": "0x0",
+			},
+		},
+	}
+	traces := mustConvertFrame(t, frame, parityTestCtx(0, 0, precompiles))
+	if len(traces) != 2 {
+		t.Fatalf("expected 2 traces (precompile filtered), got %d", len(traces))
+	}
+	if traces[0].Subtraces != 1 {
+		t.Errorf("expected 1 subtrace after filtering precompile, got %d", traces[0].Subtraces)
+	}
+	if traces[1].Action == nil || traces[1].Action.To == nil ||
+		*traces[1].Action.To != common.HexToAddress("0xcc00000000000000000000000000000000000003") {
+		t.Errorf("kept child should be the non-precompile call, got %+v", traces[1].Action)
+	}
+	if len(traces[1].TraceAddress) != 1 || traces[1].TraceAddress[0] != 0 {
+		t.Errorf("kept child should reindex to [0], got %v", traces[1].TraceAddress)
+	}
+}
+
+func TestConvertParityTrace_RevertedCall(t *testing.T) {
+	t.Parallel()
+	frame := map[string]interface{}{
+		"type": "CALL", "from": "0xaa00000000000000000000000000000000000001",
+		"to":  "0xbb00000000000000000000000000000000000002",
+		"gas": "0x5208", "gasUsed": "0x2e", "input": "0x", "output": "0x", "value": "0x0",
+		"error": "execution reverted",
+	}
+	traces := mustConvertFrame(t, frame, parityTestCtx(0, 0x2e, nil))
+	tr := traces[0]
+	if tr.Error == nil || *tr.Error != "Reverted" {
+		t.Errorf("expected error 'Reverted', got %v", tr.Error)
+	}
+	if tr.Result == nil || tr.Result.GasUsed == nil || uint64(*tr.Result.GasUsed) != 0x2e {
+		t.Errorf("expected result.gasUsed 0x2e on revert, got %+v", tr.Result)
+	}
+	if tr.Result.Output == nil || len(*tr.Result.Output) != 0 {
+		t.Errorf("expected empty output (0x) on revert, got %v", tr.Result.Output)
+	}
+}
+
+func TestConvertParityTrace_StaticcallValue(t *testing.T) {
+	t.Parallel()
+	frame := map[string]interface{}{
+		"type": "STATICCALL", "from": "0xaa00000000000000000000000000000000000001",
+		"to":  "0xbb00000000000000000000000000000000000002",
+		"gas": "0x5208", "gasUsed": "0x100", "input": "0x", "output": "0x",
+	}
+	traces := mustConvertFrame(t, frame, parityTestCtx(0, 0, nil))
+	tr := traces[0]
+	if tr.Action == nil || tr.Action.Value == nil || tr.Action.Value.ToInt().Sign() != 0 {
+		t.Errorf("staticcall action.value should be 0x0, got %v", tr.Action.Value)
+	}
+	if tr.Result == nil || tr.Result.Output == nil {
+		t.Errorf("empty output should serialize as 0x (non-nil), got %+v", tr.Result)
+	}
+}
+
+func TestConvertParityTrace_SuicideActionShape(t *testing.T) {
+	t.Parallel()
+	frame := map[string]interface{}{
+		"type": "SELFDESTRUCT", "from": "0xaa00000000000000000000000000000000000001",
+		"to":    "0xbb00000000000000000000000000000000000002",
+		"value": "0x7e9", "gas": "0x0", "gasUsed": "0x0",
+	}
+	traces := mustConvertFrame(t, frame, parityTestCtx(0, 0, nil))
+	tr := traces[0]
+	if tr.Type != "suicide" {
+		t.Errorf("expected type 'suicide', got %q", tr.Type)
+	}
+	a := tr.Action
+	if a.Address == nil || *a.Address != common.HexToAddress("0xaa00000000000000000000000000000000000001") {
+		t.Errorf("suicide address mismatch: %v", a.Address)
+	}
+	if a.RefundAddress == nil || *a.RefundAddress != common.HexToAddress("0xbb00000000000000000000000000000000000002") {
+		t.Errorf("suicide refundAddress mismatch: %v", a.RefundAddress)
+	}
+	if a.Balance == nil || a.Balance.ToInt().Int64() != 0x7e9 {
+		t.Errorf("suicide balance mismatch: %v", a.Balance)
+	}
+	if a.From != nil || a.To != nil || a.Gas != nil || a.CallType != nil || a.Input != nil {
+		t.Errorf("suicide action must not carry call fields: %+v", a)
+	}
+	if tr.Result != nil {
+		t.Errorf("suicide must have no result, got %+v", tr.Result)
+	}
+}
+
+// assertRPCMethodRegistered calls method on a client backed by the given API
+// set and fails if the method is not registered. Execution errors (e.g.
+// "genesis is not traceable") are acceptable — they prove the method exists.
+func assertRPCMethodRegistered(t *testing.T, apisFor func(Backend) []rpc.API, method string) {
+	t.Helper()
+
+	server := newRegisteredRPCServer(t, apisFor)
+	client := rpc.DialInProc(server)
+	defer client.Close()
+
+	var result interface{}
+	if err := client.Call(&result, method, "0x1"); err != nil {
+		if strings.Contains(err.Error(), "does not exist") ||
+			strings.Contains(err.Error(), "not available") {
+			t.Fatalf("%s method not registered: %v", method, err)
+		}
+		t.Logf("%s returned expected error: %v", method, err)
+	}
+}
+
+// withTraceAPIs returns the default debug APIs plus the opt-in trace namespace.
+func withTraceAPIs(b Backend) []rpc.API {
+	return append(APIs(b), TraceAPIs(b)...)
+}
+
+// TestTraceBlockRPCRegistration tests that the trace_block RPC method is properly
+// registered. The trace namespace lives behind TraceAPIs (opt-in via
+// rpc.enabletrace); register it explicitly here.
+func TestTraceBlockRPCRegistration(t *testing.T) {
+	t.Parallel()
+	assertRPCMethodRegistered(t, withTraceAPIs, "trace_block")
+}
+
+// TestDebugTraceBlockParityNotRegistered pins the gating contract: Parity block
+// tracing is NOT reachable through the always-on debug namespace; it lives only
+// behind the opt-in trace namespace (trace_block).
+func TestDebugTraceBlockParityNotRegistered(t *testing.T) {
+	t.Parallel()
+
+	server := newRegisteredRPCServer(t, APIs)
+	client := rpc.DialInProc(server)
+	defer client.Close()
+
+	var result interface{}
+	err := client.Call(&result, "debug_traceBlockParity", "0x1")
+	if err == nil || !(strings.Contains(err.Error(), "does not exist") || strings.Contains(err.Error(), "not available")) {
+		t.Fatalf("debug_traceBlockParity must not be registered, got err=%v result=%v", err, result)
+	}
+}
+
+// TestTraceNamespaceOptIn asserts the opt-in contract: without TraceAPIs the
+// trace namespace is absent (method-not-found); with TraceAPIs it is present.
+func TestTraceNamespaceOptIn(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name      string
+		withTrace bool
+	}{
+		{"disabled: trace_block not found", false},
+		{"enabled: trace_block present", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			apisFor := APIs
+			if tc.withTrace {
+				apisFor = withTraceAPIs
+			}
+			server := newRegisteredRPCServer(t, apisFor)
+			client := rpc.DialInProc(server)
+			defer client.Close()
+
+			var result interface{}
+			err := client.Call(&result, "trace_block", "0x1")
+			notFound := err != nil && (strings.Contains(err.Error(), "does not exist") || strings.Contains(err.Error(), "not available"))
+
+			if !tc.withTrace && !notFound {
+				t.Errorf("trace disabled: expected method-not-found error, got err=%v result=%v", err, result)
+			}
+			if tc.withTrace && notFound {
+				t.Errorf("trace enabled: expected method to be registered, got: %v", err)
+			}
+		})
 	}
 }
