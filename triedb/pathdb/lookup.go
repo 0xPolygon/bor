@@ -49,6 +49,17 @@ type lookup struct {
 	// where the slot was modified, with the order from oldest to newest.
 	storages map[[64]byte][]common.Hash
 
+	// accountNodes represents the mutation history for account trie
+	// nodes, keyed by node path. The value is a slice of **diff layer**
+	// IDs where the node was rewritten, ordered from oldest to newest.
+	accountNodes map[string][]common.Hash
+
+	// storageNodes represents the mutation history for storage trie
+	// nodes, keyed by trie owner then node path. The value is a slice
+	// of **diff layer** IDs where the node was rewritten, ordered from
+	// oldest to newest.
+	storageNodes map[common.Hash]map[string][]common.Hash
+
 	// descendant is the callback indicating whether the layer with
 	// given root is a descendant of the one specified by `ancestor`.
 	descendant func(state common.Hash, ancestor common.Hash) bool
@@ -65,9 +76,11 @@ func newLookup(head layer, descendant func(state common.Hash, ancestor common.Ha
 		current = current.parentLayer()
 	}
 	l := &lookup{
-		accounts:   make(map[common.Hash][]common.Hash),
-		storages:   make(map[[64]byte][]common.Hash),
-		descendant: descendant,
+		accounts:     make(map[common.Hash][]common.Hash),
+		storages:     make(map[[64]byte][]common.Hash),
+		accountNodes: make(map[string][]common.Hash),
+		storageNodes: make(map[common.Hash]map[string][]common.Hash),
+		descendant:   descendant,
 	}
 	// Apply the diff layers from bottom to top
 	for i := len(layers) - 1; i >= 0; i-- {
@@ -162,6 +175,42 @@ func (l *lookup) storageTip(accountHash common.Hash, slotHash common.Hash, state
 	return common.Hash{}
 }
 
+// nodeTip traverses the layer list associated with the given trie node in
+// reverse order to locate the first entry that either matches the specified
+// stateID or is a descendant of it.
+//
+// If found, the trie node corresponding to the supplied stateID resides in
+// that layer. Otherwise, two scenarios are possible:
+//
+// (a) the node remains unmodified from the current disk layer up to the state
+// layer specified by the stateID: fallback to the disk layer for retrieval,
+// (b) or the layer specified by the stateID is stale: reject the retrieval.
+func (l *lookup) nodeTip(owner common.Hash, path []byte, stateID common.Hash, base common.Hash) common.Hash {
+	var list []common.Hash
+	if owner == (common.Hash{}) {
+		list = l.accountNodes[string(path)]
+	} else if subset, ok := l.storageNodes[owner]; ok {
+		list = subset[string(path)]
+	}
+	for i := len(list) - 1; i >= 0; i-- {
+		// If the current state matches the stateID, or the requested state is a
+		// descendant of it, return the current state as the most recent one
+		// containing the modified data. Otherwise, the current state may be ahead
+		// of the requested one or belong to a different branch.
+		if list[i] == stateID || l.descendant(stateID, list[i]) {
+			return list[i]
+		}
+	}
+	// No layer matching the stateID or its descendants was found. Use the
+	// current disk layer as a fallback.
+	if base == stateID || l.descendant(stateID, base) {
+		return base
+	}
+	// The layer associated with 'stateID' is not the descendant of the current
+	// disk layer, it's already stale, return nothing.
+	return common.Hash{}
+}
+
 // addLayer traverses the state data retained in the specified diff layer and
 // integrates it into the lookup set.
 //
@@ -205,7 +254,41 @@ func (l *lookup) addLayer(diff *diffLayer) {
 			}
 		}
 	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		l.addNodes(diff, state)
+	}()
 	wg.Wait()
+}
+
+// addNodes integrates the trie-node mutations of the specified diff layer into
+// the node lookup index, appending the layer's state to the mutation history of
+// every account/storage trie node it rewrote. It runs concurrently with the
+// account/storage index updates; each writes a disjoint set of maps.
+func (l *lookup) addNodes(diff *diffLayer, state common.Hash) {
+	for path := range diff.nodes.accountNodes {
+		list, exists := l.accountNodes[path]
+		if !exists {
+			list = make([]common.Hash, 0, 16)
+		}
+		l.accountNodes[path] = append(list, state)
+	}
+	for owner, subset := range diff.nodes.storageNodes {
+		paths, exists := l.storageNodes[owner]
+		if !exists {
+			paths = make(map[string][]common.Hash, len(subset))
+			l.storageNodes[owner] = paths
+		}
+		for path := range subset {
+			list, exists := paths[path]
+			if !exists {
+				list = make([]common.Hash, 0, 16)
+			}
+			paths[path] = append(list, state)
+		}
+	}
 }
 
 // removeFromList removes the specified element from the provided list.
@@ -275,5 +358,45 @@ func (l *lookup) removeLayer(diff *diffLayer) error {
 		}
 		return nil
 	})
+
+	eg.Go(func() error {
+		return l.removeNodes(diff, state)
+	})
 	return eg.Wait()
+}
+
+// removeNodes unlinks the trie-node mutations of the specified diff layer from
+// the node lookup index. A missing history entry indicates index corruption and
+// is surfaced as an error, mirroring the account/storage removal paths. It runs
+// concurrently with those; each mutates a disjoint set of maps.
+func (l *lookup) removeNodes(diff *diffLayer, state common.Hash) error {
+	for path := range diff.nodes.accountNodes {
+		found, list := removeFromList(l.accountNodes[path], state)
+		if !found {
+			return fmt.Errorf("account node lookup is not found, %x, state: %x", path, state)
+		}
+		if len(list) != 0 {
+			l.accountNodes[path] = list
+		} else {
+			delete(l.accountNodes, path)
+		}
+	}
+	for owner, subset := range diff.nodes.storageNodes {
+		paths := l.storageNodes[owner]
+		for path := range subset {
+			found, list := removeFromList(paths[path], state)
+			if !found {
+				return fmt.Errorf("storage node lookup is not found, %x %x, state: %x", owner, path, state)
+			}
+			if len(list) != 0 {
+				paths[path] = list
+			} else {
+				delete(paths, path)
+			}
+		}
+		if len(paths) == 0 {
+			delete(l.storageNodes, owner)
+		}
+	}
+	return nil
 }

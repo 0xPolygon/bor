@@ -64,7 +64,21 @@ type reader struct {
 // node info. Don't modify the returned byte slice since it's not deep-copied
 // and still be referenced by database.
 func (r *reader) Node(owner common.Hash, path []byte, hash common.Hash) ([]byte, error) {
-	blob, got, loc, err := r.layer.node(owner, path, 0)
+	// Locate the layer holding the most recent version of the node via the
+	// lookup index, instead of walking the diff-layer chain newest→oldest.
+	// The located layer resolves the node at depth 0 from its own set (or
+	// the disk layer's clean cache / database).
+	l, err := r.db.tree.lookupNode(owner, path, r.state)
+	if err != nil {
+		return nil, err
+	}
+	blob, got, loc, err := l.node(owner, path, 0)
+	// If the located layer turned stale within this narrow window (only
+	// possible for the disk layer), fall back to the traversal-based slow
+	// path, mirroring AccountRLP/Storage.
+	if errors.Is(err, errSnapshotStale) {
+		blob, got, loc, err = r.layer.node(owner, path, 0)
+	}
 	if err != nil {
 		return nil, err
 	}
