@@ -224,6 +224,54 @@ func TestMulmodMemoModulusSwitch(t *testing.T) {
 	}
 }
 
+// TestMulmodMemoCacheState pins the caching contract directly (white-box),
+// which differential output tests cannot: because every path computes the
+// correct result, only the memo's internal state distinguishes "cached",
+// "recomputed", and "bypassed". It asserts a full-width modulus primes the
+// memo with the exact reciprocal, a modulus switch refreshes it, and a narrow
+// modulus never primes it (so the full-width-only reciprocal path is taken
+// exactly when intended).
+func TestMulmodMemoCacheState(t *testing.T) {
+	t.Parallel()
+
+	x := uint256.NewInt(0xdeadbeef)
+	y := uint256.NewInt(0xfeedface)
+
+	// A full-width modulus primes the memo with Reciprocal(m).
+	var mm modReciprocal
+	z := *testPrime
+	mm.mulmod(x, y, &z)
+	if !mm.ok {
+		t.Fatal("full-width modulus did not prime the memo")
+	}
+	if mm.mod != *testPrime {
+		t.Fatalf("cached modulus = %s, want %s", mm.mod.Hex(), testPrime.Hex())
+	}
+	if mm.mu != uint256.Reciprocal(testPrime) {
+		t.Fatal("cached reciprocal != Reciprocal(modulus)")
+	}
+
+	// Switching to a different full-width modulus refreshes both fields.
+	m2 := uint256.MustFromHex("0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141")
+	z2 := *m2
+	mm.mulmod(x, y, &z2)
+	if mm.mod != *m2 {
+		t.Fatalf("cache not refreshed on switch: cached %s, want %s", mm.mod.Hex(), m2.Hex())
+	}
+	if mm.mu != uint256.Reciprocal(m2) {
+		t.Fatal("reciprocal not refreshed on modulus switch")
+	}
+
+	// A narrow modulus must never prime the memo: the reciprocal path is
+	// reserved for full-width moduli.
+	var narrow modReciprocal
+	zs := *uint256.NewInt(1_000_003)
+	narrow.mulmod(x, y, &zs)
+	if narrow.ok {
+		t.Fatal("narrow modulus primed the memo; reciprocal path must be full-width only")
+	}
+}
+
 // FuzzMulmodMemo differentially fuzzes the memo against stock uint256.MulMod
 // over arbitrary operands, exercising both a miss (first call) and a hit
 // (second call with the same modulus) per input.
