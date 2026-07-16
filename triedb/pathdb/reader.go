@@ -64,21 +64,7 @@ type reader struct {
 // node info. Don't modify the returned byte slice since it's not deep-copied
 // and still be referenced by database.
 func (r *reader) Node(owner common.Hash, path []byte, hash common.Hash) ([]byte, error) {
-	// Locate the layer holding the most recent version of the node via the
-	// lookup index, instead of walking the diff-layer chain newest→oldest.
-	// The located layer resolves the node at depth 0 from its own set (or
-	// the disk layer's clean cache / database).
-	l, err := r.db.tree.lookupNode(owner, path, r.state)
-	if err != nil {
-		return nil, err
-	}
-	blob, got, loc, err := l.node(owner, path, 0)
-	// If the located layer turned stale within this narrow window (only
-	// possible for the disk layer), fall back to the traversal-based slow
-	// path, mirroring AccountRLP/Storage.
-	if errors.Is(err, errSnapshotStale) {
-		blob, got, loc, err = r.layer.node(owner, path, 0)
-	}
+	blob, got, loc, err := r.resolveNode(owner, path)
 	if err != nil {
 		return nil, err
 	}
@@ -120,6 +106,23 @@ func (r *reader) Node(owner common.Hash, path []byte, hash common.Hash) ([]byte,
 	}
 	log.Error("Unexpected trie node", "location", loc.loc, "owner", owner.Hex(), "path", path, "expect", hash.Hex(), "got", got.Hex(), "blob", blobHex)
 	return nil, fmt.Errorf("unexpected node: (%x %v), %x!=%x, %s, blob: %s", owner, path, hash, got, loc.string(), blobHex)
+}
+
+// resolveNode locates the node's owning layer through the lookup index and
+// reads it at depth 0, instead of walking the diff-layer chain newest→oldest.
+// In the narrow window where the located layer (only ever the disk layer) went
+// stale, it falls back to the traversal-based slow path, mirroring the
+// errSnapshotStale handling in AccountRLP/Storage.
+func (r *reader) resolveNode(owner common.Hash, path []byte) ([]byte, common.Hash, *nodeLoc, error) {
+	l, err := r.db.tree.lookupNode(owner, path, r.state)
+	if err != nil {
+		return nil, common.Hash{}, nil, err
+	}
+	blob, got, loc, err := l.node(owner, path, 0)
+	if errors.Is(err, errSnapshotStale) {
+		blob, got, loc, err = r.layer.node(owner, path, 0)
+	}
+	return blob, got, loc, err
 }
 
 // evictCachedNode walks the parentLayer chain to find the disk layer and
