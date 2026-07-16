@@ -6,7 +6,7 @@
 | SYNC_BASE       | `v1.16.8` (`abeb78c647e354ed922726a1d719ac7bc64a07e2`) — highest upstream release tag that is an ancestor of `develop`. Persisted; never recompute on resume. |
 | Batch size      | 20 first-parent commits                                       |
 | Upstream remote | `upstream` (https://github.com/ethereum/go-ethereum.git)      |
-| Base branch     | `upstream-merge/v1.17.4` (cut from `origin/develop`; **not yet created** — plan-only run) |
+| Base branch     | `upstream-merge-v1.17.4` (cut from `origin/develop`). Slash-free on purpose: bor ruleset 626146 excludes `refs/heads/**upstream**` from the signed-commit requirement, and `**` does not cross `/` — slashed names stay rule-covered and reject unsigned upstream commits. Working branches follow the same constraint (`<username>-upstream-<milestone>`). |
 | Planned         | 2026-07-06 (plan-only; no merges performed)                   |
 | Totals          | 607 first-parent commits, 6 milestones, 33 batches            |
 
@@ -83,7 +83,7 @@ Status legend: `pending` / `in-progress` / `merged` / `skipped`.
 ## Resume anchors
 
 - `PROGRESS_TIP`: none yet (no batch merged).
-- Working branch for milestone 1 (`v1.16.9`): `ppatil/upstream-v1.16.9` — to be
-  cut from `upstream-merge/v1.17.4` on the milestone's first batch.
+- Working branch for milestone 1 (`v1.16.9`): `ppatil-upstream-v1.16.9` — cut
+  from `upstream-merge-v1.17.4` on the milestone's first batch.
 - Full first-parent logs per milestone captured in the planning run directory:
   `runs/pos-merge-upstream/2026-07-06T09-56-56Z-claude-v1.17.4-plan/log-<tag>.txt`.
