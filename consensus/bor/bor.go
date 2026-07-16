@@ -94,6 +94,10 @@ var (
 	// to contain a 65 byte secp256k1 signature.
 	errMissingSignature = errors.New("extra-data 65 byte signature suffix missing")
 
+	// errNonCanonicalSeal is returned if a block's seal signature is invalid or
+	// not in the canonical low-S encoding.
+	errNonCanonicalSeal = errors.New("invalid or non-canonical seal signature")
+
 	// errExtraValidators is returned if non-sprint-end block contain validator data in
 	// their extra-data fields.
 	errExtraValidators = errors.New("non-sprint-end block contains extra validator list")
@@ -155,6 +159,15 @@ func ecrecover(header *types.Header, sigcache *lru.ARCCache, c *params.BorConfig
 	}
 
 	signature := header.Extra[len(header.Extra)-types.ExtraSealLength:]
+
+	// Enforce the canonical low-S signature encoding before recovery. crypto.Sign
+	// always produces low-S seals, so this never rejects a seal a validator
+	// legitimately produced.
+	r := new(big.Int).SetBytes(signature[:32])
+	s := new(big.Int).SetBytes(signature[32:64])
+	if !crypto.ValidateSignatureValues(signature[64], r, s, true) {
+		return common.Address{}, errNonCanonicalSeal
+	}
 
 	// Recover the public key and the Ethereum address
 	pubkey, err := crypto.Ecrecover(SealHash(header, c).Bytes(), signature)
