@@ -140,7 +140,7 @@ func (evm *EVM) runSwitch(
 			x := stack.data[stack.top+1]
 			y := stack.data[stack.top]
 			z := &stack.data[stack.top-1]
-			z.MulMod(&x, &y, z)
+			evm.mulmodMemo.mulmod(&x, &y, z)
 		case SIGNEXTEND:
 			gasAccum += GasFastStep
 			if stack.top < 2 {
