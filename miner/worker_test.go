@@ -3463,9 +3463,8 @@ func TestBuildTxPlan(t *testing.T) {
 // what was already prefetched.
 //
 // Setup: 50 txs in pool, first 80% already marked as prefetched. Freed-gas channel
-// delivers 5 × 21000 gas BEFORE plan channel closes so the collect loop timer fires
-// and the overflow scan runs with a non-zero budget. Expected: the downstream
-// stream channel receives bonus txs from the unprefetched tail.
+// delivers 5 × 21000 gas while the plan channel remains open. Expected: the
+// downstream stream channel receives bonus txs from the unprefetched tail.
 func TestBuilderTxProvider_FreedGasFeedback(t *testing.T) {
 	t.Parallel()
 
@@ -3544,8 +3543,14 @@ func TestBuilderTxProvider_FreedGasFeedback(t *testing.T) {
 	}
 	close(gasFreedCh)
 
-	// Allow the 2ms timer to fire and the overflow scan to run. Then close planCh.
-	time.Sleep(20 * time.Millisecond)
+	// Keep the plan open until the overflow scan has produced an observable result.
+	// A fixed sleep can close the plan before the provider goroutine is scheduled.
+	var firstBonus *types.Transaction
+	select {
+	case firstBonus = <-streamCh:
+	case <-time.After(5 * time.Second):
+		interrupt.Store(true)
+	}
 	close(planCh)
 
 	select {
@@ -3555,7 +3560,8 @@ func TestBuilderTxProvider_FreedGasFeedback(t *testing.T) {
 	}
 
 	close(streamCh)
-	seen := make(map[common.Hash]struct{})
+	require.NotNil(t, firstBonus, "overflow scan did not forward a bonus transaction within timeout")
+	seen := map[common.Hash]struct{}{firstBonus.Hash(): {}}
 	for tx := range streamCh {
 		seen[tx.Hash()] = struct{}{}
 	}
@@ -3564,10 +3570,6 @@ func TestBuilderTxProvider_FreedGasFeedback(t *testing.T) {
 	t.Logf("streamCh received %d bonus txs (freed budget=%d gas, expected up to %d)",
 		forwarded, freedSignals*freedPerSignal, freedSignals)
 
-	// At least one bonus tx should reach the stream — the overflow scan found
-	// non-prefetched txs that fit within the freed-gas budget.
-	require.Greater(t, forwarded, 0,
-		"overflow scan should have forwarded bonus txs beyond the plan")
 	// None of the forwarded txs should be pre-prefetched.
 	for _, tx := range allTxs[:prePrefetchedCount] {
 		_, found := seen[tx.Hash()]
@@ -3945,21 +3947,54 @@ func TestTxFitsSize(t *testing.T) {
 	threshold := uint64(params.MaxBlockSize - maxBlockSizeBufferZone)
 	require.Greater(t, threshold, txSize, "buffer-zone leaves no room for a single tx in this test")
 
+	// Valencia reserves a slice of the block for the state-sync system tx, lowering
+	// the effective threshold by params.MaxStateSyncBytesPerBlock.
+	reservedThreshold := threshold - uint64(params.MaxStateSyncBytesPerBlock)
+	require.Greater(t, reservedThreshold, txSize, "reservation leaves no room for a single tx in this test")
+
 	cases := []struct {
-		name string
-		size uint64
-		want bool
+		name    string
+		size    uint64
+		reserve uint64
+		want    bool
 	}{
-		{"empty env accepts tx", 0, true},
-		{"plenty of room accepts tx", threshold / 2, true},
-		{"one byte under threshold accepts tx", threshold - txSize - 1, true},
-		{"exactly at threshold rejects tx", threshold - txSize, false},
-		{"over threshold rejects tx", threshold, false},
+		{"empty env accepts tx", 0, 0, true},
+		{"plenty of room accepts tx", threshold / 2, 0, true},
+		{"one byte under threshold accepts tx", threshold - txSize - 1, 0, true},
+		{"exactly at threshold rejects tx", threshold - txSize, 0, false},
+		{"over threshold rejects tx", threshold, 0, false},
+		{"reservation accepts tx under reduced threshold", reservedThreshold - txSize - 1, params.MaxStateSyncBytesPerBlock, true},
+		{"reservation rejects tx that would fit without it", reservedThreshold, params.MaxStateSyncBytesPerBlock, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			env := &environment{size: tc.size}
+			env := &environment{size: tc.size, stateSyncReserve: tc.reserve}
 			require.Equal(t, tc.want, env.txFitsSize(tx))
+		})
+	}
+}
+
+func TestStateSyncReserveFor(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		config *params.ChainConfig
+		number int64
+		want   uint64
+	}{
+		{"nil bor reserves nothing", &params.ChainConfig{}, 100, 0},
+		{"valencia unset reserves nothing", &params.ChainConfig{Bor: &params.BorConfig{}}, 100, 0},
+		{"before valencia reserves nothing", &params.ChainConfig{Bor: &params.BorConfig{ValenciaBlock: big.NewInt(100)}}, 99, 0},
+		{"at valencia reserves budget", &params.ChainConfig{Bor: &params.BorConfig{ValenciaBlock: big.NewInt(100)}}, 100, params.MaxStateSyncBytesPerBlock},
+		{"after valencia reserves budget", &params.ChainConfig{Bor: &params.BorConfig{ValenciaBlock: big.NewInt(0)}}, 1, params.MaxStateSyncBytesPerBlock},
+		{"sprint start reserves budget", &params.ChainConfig{Bor: &params.BorConfig{ValenciaBlock: big.NewInt(0), Sprint: map[string]uint64{"0": 16}}}, 160, params.MaxStateSyncBytesPerBlock},
+		{"non sprint start reserves nothing", &params.ChainConfig{Bor: &params.BorConfig{ValenciaBlock: big.NewInt(0), Sprint: map[string]uint64{"0": 16}}}, 161, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tc.want, stateSyncReserveFor(tc.config, big.NewInt(tc.number)))
 		})
 	}
 }

@@ -365,6 +365,7 @@ var (
 			LisovoProBlock:    big.NewInt(34062000),
 			GiuglianoBlock:    big.NewInt(35573500),
 			ChicagoBlock:      big.NewInt(38358000),
+			ValenciaBlock:     big.NewInt(40776000),
 			StateSyncConfirmationDelay: map[string]uint64{
 				"0": 128,
 			},
@@ -453,6 +454,7 @@ var (
 			LisovoProBlock:    big.NewInt(83756500),
 			GiuglianoBlock:    big.NewInt(85268500),
 			ChicagoBlock:      big.NewInt(87218600),
+			ValenciaBlock:     big.NewInt(89531000),
 			StateSyncConfirmationDelay: map[string]uint64{
 				"44934656": 128,
 			},
@@ -759,6 +761,7 @@ var (
 			LisovoBlock:             big.NewInt(0),
 			LisovoProBlock:          big.NewInt(0),
 			ChicagoBlock:            big.NewInt(0),
+			ValenciaBlock:           big.NewInt(0),
 			ReservedBlockspaceBlock: big.NewInt(0),
 		},
 	}
@@ -978,6 +981,7 @@ type BorConfig struct {
 	LisovoProBlock             *big.Int          `json:"lisovoProBlock"`             // LisovoPro switch block (nil = no fork, 0 = already on lisovoPro)
 	GiuglianoBlock             *big.Int          `json:"giuglianoBlock"`             // Giugliano switch block (nil = no fork, 0 = already on giugliano)
 	ChicagoBlock               *big.Int          `json:"chicagoBlock"`               // Chicago switch block (nil = no fork, 0 = already on chicago)
+	ValenciaBlock              *big.Int          `json:"valenciaBlock"`              // Valencia switch block (nil = no fork, 0 = already on valencia)
 	ReservedBlockspaceBlock    *big.Int          `json:"reservedBlockspaceBlock"`    // ReservedBlockspace switch block (nil = no fork, 0 = already on reservedBlockspace)
 
 	// ReservedClients feeds only the EIP-1559 base-fee capacity carve-out
@@ -1070,6 +1074,10 @@ func (c *BorConfig) IsGiugliano(number *big.Int) bool {
 
 func (c *BorConfig) IsChicago(number *big.Int) bool {
 	return isBlockForked(c.ChicagoBlock, number)
+}
+
+func (c *BorConfig) IsValencia(number *big.Int) bool {
+	return isBlockForked(c.ValenciaBlock, number)
 }
 
 func (c *BorConfig) IsReservedBlockspace(number *big.Int) bool {
@@ -1296,6 +1304,9 @@ func (c *ChainConfig) Description() string {
 		}
 		if c.Bor.ChicagoBlock != nil {
 			banner += fmt.Sprintf(" - Chicago:                   #%-8v\n", c.Bor.ChicagoBlock)
+		}
+		if c.Bor.ValenciaBlock != nil {
+			banner += fmt.Sprintf(" - Valencia:                  #%-8v\n", c.Bor.ValenciaBlock)
 		}
 		if c.Bor.ReservedBlockspaceBlock != nil {
 			banner += fmt.Sprintf(" - ReservedBlockspace:          #%-8v\n", c.Bor.ReservedBlockspaceBlock)

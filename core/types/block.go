@@ -132,6 +132,7 @@ type BlockExtraData struct {
 
 	// GasTarget is the EIP-1559 gas target used by the block producer (post-Giugliano)
 	GasTarget *uint64 `rlp:"optional"`
+
 	// BaseFeeChangeDenominator is the EIP-1559 base fee change denominator used by the block producer (post-Giugliano)
 	BaseFeeChangeDenominator *uint64 `rlp:"optional"`
 
@@ -144,6 +145,17 @@ type BlockExtraData struct {
 	// ReservedGasUsed is the cumulative gas used by the reserved-region
 	// transactions (post-ReservedBlockspace fork). nil before the fork.
 	ReservedGasUsed *uint64 `rlp:"optional"`
+}
+
+// blockExtraDataRawTxDeps mirrors BlockExtraData but keeps TxDependency as an
+// rlp.RawValue, delaying its decode. Header verification only needs
+// ValidatorBytes and the base-fee params, so this avoids expanding a
+// potentially large TxDependency into [][]uint64. The wire format is identical to BlockExtraData.
+type blockExtraDataRawTxDeps struct {
+	ValidatorBytes           []byte
+	TxDependency             rlp.RawValue
+	GasTarget                *uint64 `rlp:"optional"`
+	BaseFeeChangeDenominator *uint64 `rlp:"optional"`
 }
 
 // field type overrides for gencodec
@@ -523,9 +535,13 @@ func (h *Header) GetValidatorBytes(chainConfig *params.ChainConfig) []byte {
 		return h.Extra[ExtraVanityLength : len(h.Extra)-ExtraSealLength]
 	}
 
-	var blockExtraData BlockExtraData
+	var blockExtraData blockExtraDataRawTxDeps
 	if err := rlp.DecodeBytes(h.Extra[ExtraVanityLength:len(h.Extra)-ExtraSealLength], &blockExtraData); err != nil {
 		log.Debug("error while decoding block extra data", "err", err)
+		return nil
+	}
+
+	if !txDependencyValidPreValencia(chainConfig, h.Number, blockExtraData.TxDependency) {
 		return nil
 	}
 
@@ -535,8 +551,7 @@ func (h *Header) GetValidatorBytes(chainConfig *params.ChainConfig) []byte {
 // GetBaseFeeParams extracts the EIP-1559 gas target and base fee change denominator
 // from the block header's extra field. If you need multiple fields from BlockExtraData,
 // prefer DecodeBlockExtraData to avoid redundant RLP decodes.
-// Only available for post-Cancun blocks that use
-// RLP-encoded BlockExtraData (post-Giugliano).
+// Only available for post-Cancun blocks that use RLP-encoded BlockExtraData (post-Giugliano).
 func (h *Header) GetBaseFeeParams(chainConfig *params.ChainConfig) (gasTarget *uint64, baseFeeChangeDenom *uint64) {
 	if !chainConfig.IsCancun(h.Number) {
 		return nil, nil
@@ -546,8 +561,12 @@ func (h *Header) GetBaseFeeParams(chainConfig *params.ChainConfig) (gasTarget *u
 		return nil, nil
 	}
 
-	var blockExtraData BlockExtraData
+	var blockExtraData blockExtraDataRawTxDeps
 	if err := rlp.DecodeBytes(h.Extra[ExtraVanityLength:len(h.Extra)-ExtraSealLength], &blockExtraData); err != nil {
+		return nil, nil
+	}
+
+	if !txDependencyValidPreValencia(chainConfig, h.Number, blockExtraData.TxDependency) {
 		return nil, nil
 	}
 
@@ -564,6 +583,41 @@ func (h *Header) GetReservedInfo(chainConfig *params.ChainConfig) (reservedTxCou
 		return nil, nil
 	}
 	return blockExtraData.ReservedTxCount, blockExtraData.ReservedGasUsed
+}
+
+// GetValidatorBytesAndBaseFeeParams decodes the consensus-relevant Extra fields
+// (validator bytes and post-Giugliano base-fee params) in a single RLP pass,
+// without expanding TxDependency. Pre-Cancun headers returns
+// raw validator envelope and nil base-fee params.
+func (h *Header) GetValidatorBytesAndBaseFeeParams(chainConfig *params.ChainConfig) (validatorBytes []byte, gasTarget *uint64, baseFeeChangeDenom *uint64) {
+	if len(h.Extra) < ExtraVanityLength+ExtraSealLength {
+		return nil, nil, nil
+	}
+
+	if !chainConfig.IsCancun(h.Number) {
+		return h.Extra[ExtraVanityLength : len(h.Extra)-ExtraSealLength], nil, nil
+	}
+
+	var blockExtraData blockExtraDataRawTxDeps
+	if err := rlp.DecodeBytes(h.Extra[ExtraVanityLength:len(h.Extra)-ExtraSealLength], &blockExtraData); err != nil {
+		log.Debug("error while decoding block extra data", "err", err)
+		return nil, nil, nil
+	}
+
+	if !txDependencyValidPreValencia(chainConfig, h.Number, blockExtraData.TxDependency) {
+		return nil, nil, nil
+	}
+
+	return blockExtraData.ValidatorBytes, blockExtraData.GasTarget, blockExtraData.BaseFeeChangeDenominator
+}
+
+func txDependencyValidPreValencia(chainConfig *params.ChainConfig, number *big.Int, raw rlp.RawValue) bool {
+	if chainConfig.Bor != nil && chainConfig.Bor.IsValencia(number) {
+		return true
+	}
+
+	var txDep [][]uint64
+	return rlp.DecodeBytes(raw, &txDep) == nil
 }
 
 // DecodeBlockExtraData decodes the full BlockExtraData struct from the header's

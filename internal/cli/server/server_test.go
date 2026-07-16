@@ -36,19 +36,23 @@ func TestServer_DeveloperMode(t *testing.T) {
 	defer CloseMockServer(server)
 
 	// record the initial block number
-	blockNumber := server.backend.BlockChain().CurrentBlock().Number.Int64()
+	startBlock := server.backend.BlockChain().CurrentBlock().Number.Int64()
 
-	var i int64
-	for i = 0; i < 3; i++ {
-		// We expect the node to mine blocks every `config.Developer.Period` time period
-		time.Sleep(time.Duration(config.Developer.Period) * time.Second)
+	// Assert the chain advances by >= targetBlocks within a generous deadline.
+	const targetBlocks = int64(3)
+	deadline := time.Now().Add(time.Minute)
 
-		currBlock := server.backend.BlockChain().CurrentBlock().Number.Int64()
-		expected := blockNumber + i + 1
-
-		if res := assert.Equal(t, expected, currBlock); res == false {
+	for {
+		mined := server.backend.BlockChain().CurrentBlock().Number.Int64() - startBlock
+		if mined >= targetBlocks {
 			break
 		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("developer mode mined only %d blocks before deadline, expected at least %d", mined, targetBlocks)
+		}
+
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 

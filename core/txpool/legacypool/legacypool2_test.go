@@ -66,8 +66,15 @@ func fillPool(t testing.TB, pool *LegacyPool) {
 	}
 	// Import the batch and verify the pool is full and executable.
 	pool.addRemotesSync(executableTxs)
-	pending, queued := pool.Stats()
+
+	// Read pending, queued, and all.Slots() under pool.mu.RLock so the three
+	// values are consistent: no concurrent mutation can interleave between the
+	// two calls because all paths that modify pool.all require pool.mu.Lock.
+	pool.mu.RLock()
+	pending, queued := pool.stats()
 	slots := pool.all.Slots()
+	pool.mu.RUnlock()
+
 	// sanity-check that the test prerequisites are ok (pending full)
 	if have, want := slots, target; have != want {
 		t.Fatalf("have %d, want %d", have, want)

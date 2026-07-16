@@ -18,6 +18,7 @@ import (
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/xsleonard/go-merkle"
 	"golang.org/x/crypto/sha3"
+	"golang.org/x/sync/singleflight"
 )
 
 var (
@@ -37,6 +38,9 @@ type API struct {
 	chain         consensus.ChainHeaderReader
 	bor           *Bor
 	rootHashCache *lru.ARCCache
+
+	// collapses concurrent cache misses for the same range onto one computation
+	rootHashGroup singleflight.Group
 }
 
 // GetSnapshot retrieves the state snapshot at a given block.
@@ -326,6 +330,20 @@ func (api *API) GetRootHash(start uint64, end uint64) (string, error) {
 		return "", &MaxCheckpointLengthExceededError{start, end}
 	}
 
+	// endHash is in the key: a reorg changes the root for the same [start, end].
+	root, err, _ := api.rootHashGroup.Do(key+"-"+endHash.Hex(), func() (any, error) {
+		return api.computeRootHash(start, end, length, key, endHash)
+	})
+	if err != nil {
+		return "", err
+	}
+
+	return root.(string), nil
+}
+
+// computeRootHash builds the root for a validated, cache-missed range, and
+// aborts if the end block reorgs mid-read.
+func (api *API) computeRootHash(start, end, length uint64, key string, endHash common.Hash) (string, error) {
 	blockHeaders := make([]*types.Header, length)
 	wg := new(sync.WaitGroup)
 	concurrent := make(chan bool, 20)

@@ -607,11 +607,11 @@ func (f *TxFetcher) loop() {
 					for peer, txset := range f.waitslots {
 						if meta := txset[hash]; meta != nil {
 							if delivery.metas[i].kind != meta.kind {
-								log.Warn("Announced transaction type mismatch", "peer", peer, "tx", hash, "type", delivery.metas[i].kind, "ann", meta.kind)
+								log.Warn("Announced transaction type mismatch", "peer", peer, "tx", hash, "type", delivery.metas[i].kind, "ann", meta.kind, "origin", delivery.origin, "direct", delivery.direct)
 								f.dropPeer(peer)
 							} else if delivery.metas[i].size != meta.size {
 								if math.Abs(float64(delivery.metas[i].size)-float64(meta.size)) > 8 {
-									log.Warn("Announced transaction size mismatch", "peer", peer, "tx", hash, "size", delivery.metas[i].size, "ann", meta.size)
+									log.Warn("Announced transaction size mismatch", "peer", peer, "tx", hash, "size", delivery.metas[i].size, "ann", meta.size, "origin", delivery.origin, "direct", delivery.direct)
 
 									// Normally we should drop a peer considering this is a protocol violation.
 									// However, due to the RLP vs consensus format messyness, allow a few bytes
@@ -635,11 +635,11 @@ func (f *TxFetcher) loop() {
 					for peer, txset := range f.announces {
 						if meta := txset[hash]; meta != nil {
 							if delivery.metas[i].kind != meta.kind {
-								log.Warn("Announced transaction type mismatch", "peer", peer, "tx", hash, "type", delivery.metas[i].kind, "ann", meta.kind)
+								log.Warn("Announced transaction type mismatch", "peer", peer, "tx", hash, "type", delivery.metas[i].kind, "ann", meta.kind, "origin", delivery.origin, "direct", delivery.direct)
 								f.dropPeer(peer)
 							} else if delivery.metas[i].size != meta.size {
 								if math.Abs(float64(delivery.metas[i].size)-float64(meta.size)) > 8 {
-									log.Warn("Announced transaction size mismatch", "peer", peer, "tx", hash, "size", delivery.metas[i].size, "ann", meta.size)
+									log.Warn("Announced transaction size mismatch", "peer", peer, "tx", hash, "size", delivery.metas[i].size, "ann", meta.size, "origin", delivery.origin, "direct", delivery.direct)
 
 									// Normally we should drop a peer considering this is a protocol violation.
 									// However, due to the RLP vs consensus format messyness, allow a few bytes
@@ -744,7 +744,7 @@ func (f *TxFetcher) loop() {
 			}
 			// If we encountered a protocol violation, disconnect the peer
 			if delivery.violation != nil {
-				log.Warn("Disconnect peer for protocol violation", "peer", delivery.origin, "error", delivery.violation)
+				log.Warn("Disconnect peer for protocol violation", "peer", delivery.origin, "direct", delivery.direct, "hashes", len(delivery.hashes), "error", delivery.violation)
 				f.dropPeer(delivery.origin)
 			}
 
