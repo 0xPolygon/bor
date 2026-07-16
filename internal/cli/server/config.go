@@ -830,8 +830,9 @@ type PipelineConfig struct {
 	ImportSRCLogs bool `hcl:"import-src-logs,optional" toml:"import-src-logs,optional"`
 
 	// WarmSnapshot enables warm-cache handoff from the execution-side trie
-	// prefetcher to the pipelined SRC goroutine. Targets cold-cache
-	// restart/catch-up CPU; no effect on correctness or witness completeness.
+	// prefetcher to the pipelined SRC goroutine when witnesses are produced.
+	// Targets cold-cache restart/catch-up CPU; no effect on correctness or
+	// witness completeness. Witness-off import ignores it.
 	WarmSnapshot bool `hcl:"warm-snapshot,optional" toml:"warm-snapshot,optional"`
 
 	// ExecPrefetch controls the executing StateDB's trie prefetcher during

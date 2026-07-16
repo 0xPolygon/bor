@@ -91,15 +91,6 @@ func (sc *stateUpdate) empty() bool {
 	return sc.originRoot == sc.root
 }
 
-// TrieNodes exposes the aggregated dirty trie nodes produced by this state
-// transition. The pipelined SRC import indexes them as the next block's warm
-// node source (see NewWarmSnapshotFromNodeSets) — they are exactly the nodes
-// rewritten at the newly committed root. The returned set is shared, not
-// copied; callers must treat it as read-only.
-func (sc *stateUpdate) TrieNodes() *trienode.MergedNodeSet {
-	return sc.nodes
-}
-
 // newStateUpdate constructs a state update object by identifying the differences
 // between two states through state execution. It combines the specified account
 // deletions and account updates to create a complete state update.

@@ -402,28 +402,21 @@ type BlockChainConfig struct {
 	PipelinedImportSRCLogs bool
 
 	// PipelinedSRCWarmSnapshot enables a warm-node handoff to the pipelined
-	// SRC goroutine. The source depends on the witness mode:
-	//
-	//   - Witness-on: persistPipelinedImport captures the trie nodes the
-	//     execution-side prefetcher had loaded into a quiesced WarmSnapshot;
-	//     SRC's NewTrieOnly reader consults it before falling through to
-	//     pathdb.
-	//   - Witness-off: each SRC indexes the trie nodes it just committed
-	//     (shared blobs, no rehash) into a bounded multi-block ring
-	//     (WarmNodeRing); every SRC's commit-time trie openings consult the
-	//     ring first. A block's write set overlaps far more with the recent
-	//     few dozen blocks than with its immediate predecessor alone, so the
-	//     ring removes most of the cold re-expansion CommitWithUpdate would
-	//     otherwise repeat.
-	//
-	// Both sources are hash-verified on lookup and fall through to pathdb on
-	// miss, so root determinism and witness completeness are unaffected.
+	// SRC goroutine when witnesses are produced: persistPipelinedImport
+	// captures the trie nodes the execution-side prefetcher had loaded into a
+	// quiesced WarmSnapshot; SRC's NewTrieOnly reader consults it before
+	// falling through to pathdb. Lookups are hash-verified and fall through
+	// to pathdb on miss, so root determinism and witness completeness are
+	// unaffected. Witness-off import ignores this flag — the pathdb node
+	// index already serves diff-layer nodes in one probe, and A/B
+	// benchmarking showed a commit-fed warm ring on top of it cost SRC-lane
+	// time instead of saving it.
 	PipelinedSRCWarmSnapshot bool
 
 	// PipelinedImportExecPrefetch controls the executing StateDB's trie
 	// prefetcher during pipelined witness-off import. Its output has no
-	// consumer on that path — the SRC takes its warmth from the WarmNodeRing
-	// instead — so disabling it reclaims its CPU (~6% of process CPU in
+	// consumer on that path — the SRC resolves warm nodes through the pathdb
+	// node index — so disabling it reclaims its CPU (~6% of process CPU in
 	// mainnet catch-up profiling). The speculative block prefetcher is not
 	// covered: it warms pebble/flat-state and shared jumpdest caches ahead of
 	// the BlockSTM workers and disabling it slowed execution ~29% in
@@ -682,12 +675,6 @@ type BlockChain struct {
 	pendingImportHeadStart time.Time
 	pendingImportSRCMu     sync.Mutex
 
-	// importSRCWarmNodes retains the recent import SRCs' committed trie nodes
-	// (bounded, hash-verified) so each SRC's commit walk resolves recently
-	// rewritten paths from memory instead of pathdb. Nil unless pipelined
-	// import and the warm handoff are both enabled.
-	importSRCWarmNodes *state.WarmNodeRing
-
 	// lastFlatDiff holds the FlatDiff from the most recently committed block.
 	// The miner uses it together with the grandparent's committed root to open
 	// a StateDB via NewWithFlatBase, allowing block N+1 execution to start
@@ -758,9 +745,6 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 		borReceiptsRLPCache: lru.NewCache[common.Hash, rlp.RawValue](receiptsCacheLimit),
 		logger:              cfg.VmConfig.Tracer,
 		milestoneFetcher:    cfg.MilestoneFetcher,
-	}
-	if cfg.EnablePipelinedImportSRC && cfg.PipelinedSRCWarmSnapshot {
-		bc.importSRCWarmNodes = state.NewWarmNodeRing()
 	}
 
 	bc.hc, err = NewHeaderChain(db, chainConfig, engine, bc.insertStopped)
@@ -1296,8 +1280,9 @@ func (c *sharedBlockCaches) applyTo(cfg *vm.Config) {
 // execTriePrefetchEnabled reports whether the executing StateDB's trie
 // prefetcher should run for this block. It stays on everywhere except
 // pipelined witness-off import with PipelinedImportExecPrefetch disabled: on
-// that path its output is detached and discarded (the SRC warms from the
-// WarmNodeRing), so it only costs CPU. The speculative block prefetcher is
+// that path its output is detached and discarded (the SRC resolves warm
+// nodes through the pathdb node index), so it only costs CPU. The
+// speculative block prefetcher is
 // NOT covered by this switch — benchmarking showed it is load-bearing for
 // the execution lane (it runs ahead of the BlockSTM workers warming
 // pebble/flat-state and shared jumpdest caches; disabling it slowed
@@ -5256,15 +5241,6 @@ func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block
 	if makeWitness {
 		bc.encodeAndCachePendingWitness(pending, witness, block)
 	}
-	// Index the committed nodes into the warm ring for the following SRCs.
-	// Shared blobs, no rehashing — see WarmNodeRing. The ring is only
-	// constructed when the warm handoff is enabled, so a nil ring is the
-	// flag-off no-op.
-	if bc.importSRCWarmNodes != nil && stateUpdate != nil {
-		buildStart := time.Now()
-		bc.importSRCWarmNodes.Add(stateUpdate.TrieNodes())
-		pipelineImportWarmSnapshotBuild.UpdateSince(buildStart)
-	}
 	pending.root = root
 }
 
@@ -5283,10 +5259,9 @@ func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block
 //     installed or StateReader errors, so correctness does not depend on the
 //     flat reader being present. Root-consistency between readers at an
 //     in-memory committed root is validated by the parity tests.
-//     When the warm ring is enabled (the recent SRCs' committed nodes),
-//     commit-time trie openings consult it before pathdb: flat readers cover
-//     value reads, but CommitWithUpdate's MPT walk otherwise re-resolves from
-//     a cold trie every node the recent blocks just rewrote.
+//     CommitWithUpdate's MPT walk resolves recently rewritten paths through
+//     the pathdb node index (one probe per diff-layer node) rather than any
+//     SRC-local warm cache.
 //
 // Witness ownership when makeWitness=true:
 //
@@ -5308,12 +5283,10 @@ func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block
 // avoid cold trie traversals.
 func (bc *BlockChain) openSRCStateDB(parentRoot common.Hash, block *types.Block, makeWitness bool, execWitness *stateless.Witness, warmSnapshot *state.WarmSnapshot) (*state.StateDB, *stateless.Witness, error) {
 	if !makeWitness {
-		// Witness-off path keeps the multi-reader for value reads (flat
-		// readers already short-circuit pathdb diff-layer walks for hot
-		// state) and installs the warm ring — the recent SRCs' committed
-		// nodes — for commit-time trie openings. A nil or empty ring
-		// degrades to plain state.New.
-		tmpDB, err := state.NewWithCommitSnapshot(parentRoot, bc.statedb, bc.importSRCWarmNodes)
+		// Witness-off path keeps the multi-reader: flat readers short-circuit
+		// value reads, and commit-time trie node reads are served by the
+		// pathdb node index.
+		tmpDB, err := state.New(parentRoot, bc.statedb)
 		if err != nil {
 			log.Error("Pipelined SRC: failed to open tmpDB", "parentRoot", parentRoot, "err", err)
 			return nil, nil, err

@@ -20,15 +20,11 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/holiman/uint256"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/rawdb"
-	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/triedb"
 	"github.com/ethereum/go-ethereum/triedb/database"
 )
 
@@ -283,93 +279,3 @@ func TestWarmSnapshot_OwnerScoped(t *testing.T) {
 	require.False(t, ok, "must not serve account blob to storage owner even when that blob's hash matches expectedHash")
 }
 
-func TestWarmSnapshotFromNodeSets_IndexesCommittedNodes(t *testing.T) {
-	require.Nil(t, NewWarmSnapshotFromNodeSets(nil))
-
-	db := NewDatabase(triedb.NewDatabase(rawdb.NewMemoryDatabase(), nil), nil)
-	sdb, err := New(types.EmptyRootHash, db)
-	require.NoError(t, err)
-
-	addr := common.HexToAddress("0xaa01")
-	sdb.SetBalance(addr, uint256.NewInt(1), tracing.BalanceChangeUnspecified)
-	sdb.SetState(addr, common.HexToHash("0x01"), common.HexToHash("0x02"))
-
-	_, update, err := sdb.CommitWithUpdate(0, true, false)
-	require.NoError(t, err)
-
-	snap := NewWarmSnapshotFromNodeSets(update.TrieNodes())
-	require.NotNil(t, snap)
-	require.Positive(t, snap.Len())
-
-	// Every live node in the update must be servable with its recorded hash.
-	for owner, set := range update.TrieNodes().Sets {
-		for path, n := range set.Nodes {
-			if len(n.Blob) == 0 {
-				continue
-			}
-			blob, ok := snap.Lookup(owner, []byte(path), n.Hash)
-			require.True(t, ok, "committed node (owner=%x path=%x) missing from carry", owner, path)
-			require.Equal(t, n.Blob, blob)
-		}
-	}
-}
-
-func TestNewWithCommitSnapshot_CarryChainRootParity(t *testing.T) {
-	db := NewDatabase(triedb.NewDatabase(rawdb.NewMemoryDatabase(), nil), nil)
-
-	// Block 1: seed overlapping hot state.
-	sdb, err := New(types.EmptyRootHash, db)
-	require.NoError(t, err)
-	hot := common.HexToAddress("0xbb01")
-	cold := common.HexToAddress("0xbb02")
-	for i, addr := range []common.Address{hot, cold} {
-		sdb.SetBalance(addr, uint256.NewInt(uint64(i+1)), tracing.BalanceChangeUnspecified)
-		sdb.SetState(addr, common.HexToHash("0x01"), common.HexToHash("0x11"))
-	}
-	root1, update1, err := sdb.CommitWithUpdate(1, true, false)
-	require.NoError(t, err)
-
-	// Block 2 execution: rewrite the hot account (carry hit surface) and
-	// create a fresh one, captured as a FlatDiff like the pipelined import.
-	exec, err := New(root1, db)
-	require.NoError(t, err)
-	exec.SetBalance(hot, uint256.NewInt(42), tracing.BalanceChangeUnspecified)
-	exec.SetState(hot, common.HexToHash("0x01"), common.HexToHash("0x22"))
-	exec.SetState(hot, common.HexToHash("0x02"), common.HexToHash("0x33"))
-	fresh := common.HexToAddress("0xbb03")
-	exec.SetBalance(fresh, uint256.NewInt(7), tracing.BalanceChangeUnspecified)
-	diff := exec.CommitSnapshot(true)
-
-	// Baseline: witness-off SRC without carry.
-	base, err := New(root1, db)
-	require.NoError(t, err)
-	base.ApplyFlatDiffForCommitFast(diff)
-	rootBase, _, err := base.CommitWithUpdate(2, true, false)
-	require.NoError(t, err)
-
-	// Carry: witness-off SRC fed the previous commit's nodes.
-	carry := NewWarmSnapshotFromNodeSets(update1.TrieNodes())
-	require.NotNil(t, carry)
-	hitsBefore := warmSnapshotAccountHitMeter.Snapshot().Count() + warmSnapshotStorageHitMeter.Snapshot().Count()
-	warmed, err := NewWithCommitSnapshot(root1, db, carry)
-	require.NoError(t, err)
-	warmed.ApplyFlatDiffForCommitFast(diff)
-	rootCarry, _, err := warmed.CommitWithUpdate(2, true, false)
-	require.NoError(t, err)
-
-	require.Equal(t, rootBase, rootCarry, "carry-warmed commit must produce the baseline root")
-	hitsAfter := warmSnapshotAccountHitMeter.Snapshot().Count() + warmSnapshotStorageHitMeter.Snapshot().Count()
-	require.Greater(t, hitsAfter, hitsBefore, "carry snapshot must serve at least one commit-time node read")
-}
-
-func TestNewWithCommitSnapshot_NilSnapshotEqualsNew(t *testing.T) {
-	db := NewDatabase(triedb.NewDatabase(rawdb.NewMemoryDatabase(), nil), nil)
-	sdb, err := NewWithCommitSnapshot(types.EmptyRootHash, db, nil)
-	require.NoError(t, err)
-
-	addr := common.HexToAddress("0xcc01")
-	sdb.SetBalance(addr, uint256.NewInt(5), tracing.BalanceChangeUnspecified)
-	root, _, err := sdb.CommitWithUpdate(0, true, false)
-	require.NoError(t, err)
-	require.NotEqual(t, types.EmptyRootHash, root)
-}

@@ -6642,31 +6642,22 @@ func pipelinedConfigWithWarmSnapshot(scheme string) *BlockChainConfig {
 // inserts them into two chains — one with pipelined SRC enabled and one without.
 // The state roots of every canonical block must match between both chains.
 func TestPipelinedImportSRC_MultipleBlocks(t *testing.T) {
-	testPipelinedImportSRC_MultipleBlocks(t, rawdb.HashScheme, pipelinedConfig(rawdb.HashScheme), false)
-	testPipelinedImportSRC_MultipleBlocks(t, rawdb.PathScheme, pipelinedConfig(rawdb.PathScheme), false)
-}
-
-// TestPipelinedImportSRC_MultipleBlocksWarmCarry re-runs the multi-block
-// parity check with the warm handoff enabled, exercising the commit-nodeset
-// carry between consecutive witness-off SRC goroutines.
-func TestPipelinedImportSRC_MultipleBlocksWarmCarry(t *testing.T) {
-	testPipelinedImportSRC_MultipleBlocks(t, rawdb.HashScheme, pipelinedConfigWithWarmSnapshot(rawdb.HashScheme), true)
-	testPipelinedImportSRC_MultipleBlocks(t, rawdb.PathScheme, pipelinedConfigWithWarmSnapshot(rawdb.PathScheme), true)
+	testPipelinedImportSRC_MultipleBlocks(t, rawdb.HashScheme, pipelinedConfig(rawdb.HashScheme))
+	testPipelinedImportSRC_MultipleBlocks(t, rawdb.PathScheme, pipelinedConfig(rawdb.PathScheme))
 }
 
 // TestPipelinedImportSRC_MultipleBlocksNoExecPrefetch re-runs the multi-block
-// parity check with the execution-side prefetchers disabled — the pipelined
-// witness-off configuration that reclaims the speculative prefetcher and trie
-// prefetcher CPU.
+// parity check with the exec-side trie prefetcher disabled — the pipelined
+// witness-off configuration that reclaims the trie prefetcher CPU.
 func TestPipelinedImportSRC_MultipleBlocksNoExecPrefetch(t *testing.T) {
 	for _, scheme := range []string{rawdb.HashScheme, rawdb.PathScheme} {
-		cfg := pipelinedConfigWithWarmSnapshot(scheme)
+		cfg := pipelinedConfig(scheme)
 		cfg.PipelinedImportExecPrefetch = false
-		testPipelinedImportSRC_MultipleBlocks(t, scheme, cfg, true)
+		testPipelinedImportSRC_MultipleBlocks(t, scheme, cfg)
 	}
 }
 
-func testPipelinedImportSRC_MultipleBlocks(t *testing.T, scheme string, pipeCfg *BlockChainConfig, wantCarry bool) {
+func testPipelinedImportSRC_MultipleBlocks(t *testing.T, scheme string, pipeCfg *BlockChainConfig) {
 	var (
 		key, _    = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
 		addr      = crypto.PubkeyToAddress(key.PublicKey)
@@ -6734,18 +6725,6 @@ func testPipelinedImportSRC_MultipleBlocks(t *testing.T, scheme string, pipeCfg 
 		}
 	}
 
-	if wantCarry {
-		pipeChain.pendingImportSRCMu.Lock()
-		pending := pipeChain.pendingImportSRC
-		pipeChain.pendingImportSRCMu.Unlock()
-		if pending == nil {
-			t.Fatal("expected a pending import SRC after insertChain")
-		}
-		<-pending.collectedCh
-		if pipeChain.importSRCWarmNodes.Len() == 0 {
-			t.Error("expected the warm ring to hold committed nodes after insertChain")
-		}
-	}
 }
 
 // TestPipelinedImportSRC_SingleBlock inserts a single block with pipeline enabled
