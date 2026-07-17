@@ -1358,6 +1358,21 @@ func (c *Bor) changeContractCodeIfNeeded(headerNumber uint64, state vm.StateDB) 
 // FinalizeAndAssemble implements consensus.Engine, ensuring no uncles are set,
 // nor block rewards given, and returns the final block.
 func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, body *types.Body, receipts []*types.Receipt) (*types.Block, []*types.Receipt, time.Duration, error) {
+	return c.finalizeAndAssemble(chain, header, state, body, receipts, false)
+}
+
+// FinalizeAndAssembleForSimulation is FinalizeAndAssemble for simulated blocks
+// (eth_simulateV1). It skips the sprint-start span and state-sync commits:
+// their internal genesis contract calls resolve the parent header by hash from
+// the database, but a simulated block's parent may be a phantom header that is
+// never persisted (the pending block, or an earlier simulated block). The
+// skipped data is external Heimdall input that cannot be known for a future
+// block anyway.
+func (c *Bor) FinalizeAndAssembleForSimulation(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, body *types.Body, receipts []*types.Receipt) (*types.Block, []*types.Receipt, time.Duration, error) {
+	return c.finalizeAndAssemble(chain, header, state, body, receipts, true)
+}
+
+func (c *Bor) finalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, body *types.Body, receipts []*types.Receipt, simulated bool) (*types.Block, []*types.Receipt, time.Duration, error) {
 	headerNumber := header.Number.Uint64()
 	if body.Withdrawals != nil || header.WithdrawalsHash != nil {
 		return nil, nil, 0, consensus.ErrUnexpectedWithdrawals
@@ -1371,7 +1386,7 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 		err           error
 	)
 
-	if IsSprintStart(headerNumber, c.config.CalculateSprint(headerNumber)) {
+	if !simulated && IsSprintStart(headerNumber, c.config.CalculateSprint(headerNumber)) {
 		borStart := time.Now()
 		cx := statefull.ChainContext{Chain: chain, Bor: c}
 

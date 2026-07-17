@@ -5540,3 +5540,27 @@ func TestAccountAt(t *testing.T) {
 		require.ErrorIs(t, err, context.Canceled)
 	})
 }
+
+func TestCallWithStateMissingHeader(t *testing.T) {
+	t.Parallel()
+
+	accounts := newAccounts(1)
+	genesis := &core.Genesis{
+		Config: params.MergedTestChainConfig,
+		Alloc:  types.GenesisAlloc{accounts[0].addr: {Balance: big.NewInt(params.Ether)}},
+	}
+	backend := newTestBackend(t, 1, genesis, beacon.New(ethash.NewFaker()), func(i int, b *core.BlockGen) { b.SetPoS() })
+	api := NewBlockChainAPI(backend)
+
+	statedb, _, err := backend.StateAndHeaderByNumberOrHash(context.Background(), rpc.BlockNumberOrHashWithNumber(rpc.LatestBlockNumber))
+	require.NoError(t, err)
+
+	// A block ref carrying both number and hash resolves by hash on the
+	// consensus-internal path; an unknown hash must be a clear error, not a
+	// nil result.
+	blockNr := rpc.BlockNumber(1)
+	phantom := common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111")
+	_, err = api.CallWithState(context.Background(), TransactionArgs{From: &accounts[0].addr, To: &accounts[0].addr}, &rpc.BlockNumberOrHash{BlockNumber: &blockNr, BlockHash: &phantom}, statedb, nil, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "header not found for hash")
+}
