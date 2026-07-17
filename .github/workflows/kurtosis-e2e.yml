@@ -23,6 +23,8 @@ jobs:
   build-bor:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      bor_image_artifact_id: ${{ steps.upload_bor_image.outputs.artifact-id }}
     steps:
       - name: Checkout bor
         uses: actions/checkout@v5
@@ -33,16 +35,23 @@ jobs:
       - name: Save bor docker image
         run: docker save bor:local | gzip > bor-image.tar.gz
 
+      - name: Verify bor image archive
+        run: test -s bor-image.tar.gz
+
       - name: Upload bor docker image
-        uses: actions/upload-artifact@v4
+        id: upload_bor_image
+        uses: actions/upload-artifact@v6
         with:
           name: bor-image
           path: bor-image.tar.gz
-          retention-days: 1
+          retention-days: 7
+          overwrite: true
 
   build-heimdall-v2:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      heimdall_image_artifact_id: ${{ steps.upload_heimdall_image.outputs.artifact-id }}
     steps:
       - name: Checkout heimdall-v2
         uses: actions/checkout@v5
@@ -56,12 +65,17 @@ jobs:
       - name: Save heimdall-v2 docker image
         run: docker save heimdall-v2:local | gzip > heimdall-v2-image.tar.gz
 
+      - name: Verify heimdall-v2 image archive
+        run: test -s heimdall-v2-image.tar.gz
+
       - name: Upload heimdall-v2 docker image
-        uses: actions/upload-artifact@v4
+        id: upload_heimdall_image
+        uses: actions/upload-artifact@v6
         with:
           name: heimdall-v2-image
           path: heimdall-v2-image.tar.gz
-          retention-days: 1
+          retention-days: 7
+          overwrite: true
 
   e2e-tests:
     needs:
@@ -102,14 +116,14 @@ jobs:
 
       # Load images
       - name: Download bor docker image
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
-          name: bor-image
+          artifact-ids: ${{ needs.build-bor.outputs.bor_image_artifact_id }}
 
       - name: Download heimdall-v2 docker image
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
-          name: heimdall-v2-image
+          artifact-ids: ${{ needs.build-heimdall-v2.outputs.heimdall_image_artifact_id }}
 
       - name: Load bor docker image
         run: |
