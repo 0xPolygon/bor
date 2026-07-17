@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/eth/downloader/whitelist"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/eth/protocols/snap"
@@ -52,19 +53,20 @@ const (
 type peerFailureReason string
 
 const (
-	peerFailureInvalidChain      peerFailureReason = "invalid-chain"
-	peerFailurePrunedSidechain   peerFailureReason = "pruned-sidechain"
-	peerFailureBadPeer           peerFailureReason = "bad-peer"
-	peerFailureTimeout           peerFailureReason = "timeout"
-	peerFailureStalling          peerFailureReason = "stalling"
-	peerFailureUnsynced          peerFailureReason = "unsynced"
-	peerFailureEmptyHeaderSet    peerFailureReason = "empty-header-set"
-	peerFailurePeersUnavailable  peerFailureReason = "peers-unavailable"
-	peerFailureTooOld            peerFailureReason = "too-old"
-	peerFailureInvalidAncestor   peerFailureReason = "invalid-ancestor"
-	peerFailureWhitelistMismatch peerFailureReason = "whitelist-mismatch"
-	peerFailureDisconnected      peerFailureReason = "disconnected"
-	peerFailureNoRemote          peerFailureReason = "whitelist-no-remote"
+	peerFailureInvalidChain         peerFailureReason = "invalid-chain"
+	peerFailurePrunedSidechain      peerFailureReason = "pruned-sidechain"
+	peerFailureBadPeer              peerFailureReason = "bad-peer"
+	peerFailureTimeout              peerFailureReason = "timeout"
+	peerFailureStalling             peerFailureReason = "stalling"
+	peerFailureUnsynced             peerFailureReason = "unsynced"
+	peerFailureEmptyHeaderSet       peerFailureReason = "empty-header-set"
+	peerFailurePeersUnavailable     peerFailureReason = "peers-unavailable"
+	peerFailureTooOld               peerFailureReason = "too-old"
+	peerFailureInvalidAncestor      peerFailureReason = "invalid-ancestor"
+	peerFailureWhitelistMismatch    peerFailureReason = "whitelist-mismatch"
+	peerFailureDisconnected         peerFailureReason = "disconnected"
+	peerFailureNoRemote             peerFailureReason = "whitelist-no-remote"
+	peerFailureConsensusUnavailable peerFailureReason = "consensus-data-unavailable"
 )
 
 type peerResponseAction uint8
@@ -75,6 +77,7 @@ const (
 	peerResponseBackoff
 	peerResponseMismatch
 	peerResponseGhostState
+	peerResponseConsensusBackoff
 )
 
 type peerResponseDecision struct {
@@ -106,6 +109,8 @@ func (d *Downloader) handleSyncFailure(peer *peerConnection, id string, err erro
 
 func classifySyncFailure(err error) (peerFailureReason, bool) {
 	switch {
+	case isConsensusDataUnavailable(err):
+		return peerFailureConsensusUnavailable, true
 	case isPrunedSidechainMismatch(err):
 		return peerFailurePrunedSidechain, true
 	case isTransientFailure(err):
@@ -141,6 +146,10 @@ func isWhitelistMismatch(err error) bool {
 	return errors.Is(err, whitelist.ErrMismatch)
 }
 
+func isConsensusDataUnavailable(err error) bool {
+	return errors.Is(err, core.ErrConsensusDataUnavailable) || errors.Is(err, core.ErrStateSyncProcessing)
+}
+
 func isSyncCancellation(err error) bool {
 	return errors.Is(err, errCanceled) || errors.Is(err, errCancelContentProcessing) || errors.Is(err, errTerminated) || errors.Is(err, errCancelStateFetch) || errors.Is(err, snap.ErrCancelled)
 }
@@ -162,6 +171,8 @@ func (d *Downloader) respondToPeer(peer *peerConnection, reason peerFailureReaso
 	decision := peer.responseDecision(reason)
 
 	switch decision.action {
+	case peerResponseConsensusBackoff:
+		d.backoffConsensusUnavailable(peer, decision, err)
 	case peerResponseBackoff:
 		d.backoffPeer(peer, decision, err)
 	case peerResponseMismatch:
@@ -184,6 +195,13 @@ func (d *Downloader) jailPeer(peer *peerConnection, backoff time.Duration, reaso
 	d.benchPeer(peer, backoff)
 	peerJailMeter.Mark(1)
 	peer.log.Warn("Downloader: locally jailing peer", "reason", reason, "err", err, "requested", common.PrettyDuration(backoff), "effective", common.PrettyDuration(peer.backoffRemaining()))
+}
+
+func (d *Downloader) backoffConsensusUnavailable(peer *peerConnection, decision peerResponseDecision, err error) {
+	peer.backoffFor(decision.backoff)
+	peerConsensusUnavailableMeter.Mark(1)
+	peer.log.Warn("Downloader: local consensus data unavailable (heimdall), backing off peer without penalty",
+		"reason", decision.reason, "err", err, "backoff", common.PrettyDuration(decision.backoff))
 }
 
 func (d *Downloader) backoffPeer(peer *peerConnection, decision peerResponseDecision, err error) {
@@ -236,6 +254,9 @@ func (p *peerConnection) responseDecision(reason peerFailureReason) peerResponse
 	}
 
 	switch reason {
+	case peerFailureConsensusUnavailable:
+		decision.action = peerResponseConsensusBackoff
+		decision.backoff = peerSoftBackoff
 	case peerFailurePrunedSidechain:
 		decision.action = peerResponseGhostState
 		decision.backoff = peerJailBackoff

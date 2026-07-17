@@ -836,13 +836,13 @@ func (c *Bor) getVeBlopSnapshot(chain consensus.ChainHeaderReader, targetHeader 
 	if checkNewSpan {
 		err := c.performSpanCheck(chain, targetHeader, parents)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: %w", core.ErrConsensusDataUnavailable, err)
 		}
 	}
 
 	span, err := c.spanStore.spanByBlockNumber(c.ctx, number)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", core.ErrConsensusDataUnavailable, err)
 	}
 
 	producers := make([]*valset.Validator, len(span.SelectedProducers))

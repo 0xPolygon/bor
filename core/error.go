@@ -188,4 +188,8 @@ var (
 	// producer and the local node's view of Heimdall state — the block was produced
 	// with different state-sync data than what this node computed.
 	ErrStateSyncMismatch = errors.New("state-sync mismatch")
+
+	// ErrConsensusDataUnavailable indicates required Heimdall consensus data (a span
+	// or state-sync events) was unavailable or timed out — a local dependency failure.
+	ErrConsensusDataUnavailable = errors.New("consensus data unavailable")
 )

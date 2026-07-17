@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/downloader/whitelist"
@@ -66,6 +67,10 @@ func TestClassifySyncFailureReasons(t *testing.T) {
 		{name: "wrapped disconnect backs off instead of dropping", err: fmt.Errorf("%w: header request failed: %w", errBadPeer, eth.ErrDisconnected), reason: peerFailureDisconnected, ok: true},
 		{name: "bare disconnect backs off instead of dropping", err: eth.ErrDisconnected, reason: peerFailureDisconnected, ok: true},
 		{name: "invalid chain wins over wrapped stalling", err: fmt.Errorf("%w: %w", errInvalidChain, errStallingPeer), reason: peerFailureInvalidChain, ok: true},
+		{name: "heimdall span unavailable in invalid chain (production shape) wins", err: fmt.Errorf("%w: %w", errInvalidChain, fmt.Errorf("unable to fetch span: %w: %w", core.ErrConsensusDataUnavailable, context.DeadlineExceeded)), reason: peerFailureConsensusUnavailable, ok: true},
+		{name: "bare consensus data unavailable", err: core.ErrConsensusDataUnavailable, reason: peerFailureConsensusUnavailable, ok: true},
+		{name: "state-sync processing is consensus unavailable", err: fmt.Errorf("%w: %w", errInvalidChain, core.ErrStateSyncProcessing), reason: peerFailureConsensusUnavailable, ok: true},
+		{name: "state-sync mismatch is a genuine chain fault, not downgraded", err: fmt.Errorf("%w: %w", errInvalidChain, core.ErrStateSyncMismatch), reason: peerFailureInvalidChain, ok: true},
 		{name: "invalid chain with deadline text is not downgraded", err: fmt.Errorf("%w: %v", errInvalidChain, errors.New("invalid merkle root: "+context.DeadlineExceeded.Error())), reason: peerFailureInvalidChain, ok: true},
 		{name: "bad peer with deadline text is not downgraded", err: fmt.Errorf("%w: %v", errBadPeer, errors.New("served garbage: "+context.DeadlineExceeded.Error())), reason: peerFailureBadPeer, ok: true},
 		{name: "invalid ancestor with deadline text is not downgraded", err: fmt.Errorf("%w: %v", errInvalidAncestor, errors.New(context.DeadlineExceeded.Error())), reason: peerFailureInvalidAncestor, ok: true},
@@ -104,6 +109,7 @@ func TestPeerResponseDecisionActions(t *testing.T) {
 		{name: "drop invalid ancestor", reason: peerFailureInvalidAncestor, action: peerResponseDrop},
 		{name: "mismatch escalation", reason: peerFailureWhitelistMismatch, action: peerResponseMismatch, backoff: peerSoftBackoff},
 		{name: "backoff old peer", reason: peerFailureTooOld, action: peerResponseBackoff, backoff: peerSoftBackoff},
+		{name: "consensus unavailable soft-backs off without escalation", reason: peerFailureConsensusUnavailable, action: peerResponseConsensusBackoff, backoff: peerSoftBackoff},
 		{name: "backoff timeout", reason: peerFailureTimeout, action: peerResponseBackoff, backoff: peerSoftBackoff},
 		{name: "backoff stalling", reason: peerFailureStalling, action: peerResponseBackoff, backoff: peerSoftBackoff},
 		{name: "backoff unsynced", reason: peerFailureUnsynced, action: peerResponseBackoff, backoff: peerSoftBackoff},
@@ -492,6 +498,41 @@ func TestHandleSyncFailureTimeoutBacksOff(t *testing.T) {
 	}
 	if _, ok := d.peers.jailed[peer.id]; !ok {
 		t.Fatal("a soft backoff should persist across reconnect")
+	}
+}
+
+func TestHandleSyncFailureConsensusUnavailableNeverPenalizes(t *testing.T) {
+	t.Parallel()
+
+	dropped := make(chan string, 1)
+	d := &Downloader{peers: newPeerSet(), dropPeer: func(id string) { dropped <- id }}
+	peer := newPeerConnection("peer", eth.ETH69, nil, log.New())
+	if err := d.peers.Register(peer); err != nil {
+		t.Fatalf("failed to register peer: %v", err)
+	}
+
+	syncErr := fmt.Errorf("%w: %w", errInvalidChain,
+		fmt.Errorf("unable to fetch span: %w: %w", core.ErrConsensusDataUnavailable, context.DeadlineExceeded))
+
+	for i := 0; i < softFailureJailThreshold*4; i++ {
+		if !d.handleSyncFailure(peer, peer.id, syncErr) {
+			t.Fatal("a consensus-data failure should be handled")
+		}
+	}
+
+	select {
+	case id := <-dropped:
+		t.Fatalf("a local consensus-data failure must never drop the peer: %q", id)
+	default:
+	}
+	if !peer.backedOff() {
+		t.Fatal("a consensus-data failure should back the peer off briefly")
+	}
+	if _, ok := d.peers.jailed[peer.id]; ok {
+		t.Fatal("a consensus-data backoff must NOT record a persistent jail (peer is innocent)")
+	}
+	if remaining := peer.backoffRemaining(); remaining > peerSoftBackoff {
+		t.Fatalf("consensus-data backoff must not escalate: remaining %v > soft %v", remaining, peerSoftBackoff)
 	}
 }
 
