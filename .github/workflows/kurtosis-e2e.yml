@@ -5,11 +5,13 @@ on:
     branches:
       - 'master'
       - 'develop'
+      - 'ci/kurtosis-peer-failure-e2e'
   pull_request:
     branches:
       - 'master'
       - 'develop'
     types: [opened, synchronize]
+  workflow_dispatch:
 
 concurrency:
   group: kurtosis-e2e-${{ github.event.pull_request.number || github.ref }}
@@ -157,12 +159,47 @@ jobs:
           export PRIV_KEY="0xd40311b5a5ca5eaeb48dfba5403bde4993ece8eccf4190e98e19fcd4754260ea"
           go run . --priv-key "$PRIV_KEY" --rpc-url "$RPC_URL" --log-req-res true
 
+      # --- Peer-failure e2e (Bor devp2p peer-response / "peer jailing") ---
+      # The suite lives on a kurtosis-pos branch; check it out into a subdir so the
+      # deploy above (pinned to v1.3.4) and the smoke/RPC tests are unaffected.
+      - name: Checkout peer-failure tests
+        uses: actions/checkout@v5
+        with:
+          repository: 0xPolygon/kurtosis-pos
+          ref: e2e/peer-failure-tests
+          path: peer-failure-src
+
+      # Peer-side misbehaviour (bad / invalid / flood). Gates the job: bor must survive
+      # every misbehaviour and keep producing blocks (validated against a live devnet).
+      - name: Fake-peer misbehaviour scenarios
+        id: fake-peer
+        working-directory: peer-failure-src/e2e/peer-failure
+        env:
+          ENCLAVE: ${{ env.ENCLAVE_NAME }}
+        run: bash run-fake-peer.sh
+
+      # Heimdall-outage differential. INFORMATIONAL (does not gate): it only reproduces
+      # the invalid-chain bug when a verifying node actually fails to fetch a span from a
+      # down Heimdall — a specific degraded state a healthy short-lived devnet rarely
+      # reaches (during normal sync bor gets spans from on-chain data). On such a devnet
+      # it exits INCONCLUSIVE, not a false PASS. The reliable regression gate for the fix
+      # is the bor unit tests (eth/downloader/peer_response_test.go). Runs last (stops a
+      # node + its Heimdall) and restores on exit.
+      - name: Heimdall-outage invalid-chain differential (informational)
+        id: heimdall-diff
+        continue-on-error: true
+        working-directory: peer-failure-src/e2e/peer-failure
+        env:
+          ENCLAVE: ${{ env.ENCLAVE_NAME }}
+        run: bash heimdall-invalid-chain.sh
+
       # Collect diagnostics on failure
       - name: Collect network diagnostics and state dump
         if: >-
           always() && (
           steps.smoke-tests.outcome == 'failure' ||
-          steps.rpc-tests.outcome == 'failure')
+          steps.rpc-tests.outcome == 'failure' ||
+          steps.heimdall-diff.outcome == 'failure')
         uses: ./pos-workflows/.github/actions/network-diagnostics-and-state-dump
         with:
           enclave_name: ${{ env.ENCLAVE_NAME }}
