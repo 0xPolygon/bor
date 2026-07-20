@@ -178,16 +178,17 @@ jobs:
           ENCLAVE: ${{ env.ENCLAVE_NAME }}
         run: bash run-fake-peer.sh
 
-      # Heimdall-outage differential. INFORMATIONAL (does not gate): it only reproduces
-      # the invalid-chain bug when a verifying node actually fails to fetch a span from a
-      # down Heimdall — a specific degraded state a healthy short-lived devnet rarely
-      # reaches (during normal sync bor gets spans from on-chain data). On such a devnet
-      # it exits INCONCLUSIVE, not a false PASS. The reliable regression gate for the fix
-      # is the bor unit tests (eth/downloader/peer_response_test.go). Runs last (stops a
-      # node + its Heimdall) and restores on exit.
-      - name: Heimdall-outage invalid-chain differential (informational)
+      # Heimdall span-fault differential — the regression GATE for the peer-jailing fix.
+      # It stands up a reverse-proxy that forwards /status (so bor's Heimdall sync-gate
+      # opens) but 503s /bor/spans/*, then wipes one full node's chaindata and repoints it
+      # at the proxy so it re-syncs from genesis and must fetch span 0. On stock/develop bor
+      # the span-fetch 503 is misclassified as "retrieved hash chain is invalid" and the
+      # honest peer feeding blocks is dropped (the self-eclipse bug) -> script exits 1 ->
+      # this job FAILS. With the fix the same 503 is classified as consensus-data-unavailable
+      # and the peer is backed off, not dropped -> script exits 0 -> job PASSES. Runs last
+      # (it is destructive to the target node) and restores it on exit.
+      - name: Heimdall span-fault invalid-chain differential
         id: heimdall-diff
-        continue-on-error: true
         working-directory: peer-failure-src/e2e/peer-failure
         env:
           ENCLAVE: ${{ env.ENCLAVE_NAME }}
