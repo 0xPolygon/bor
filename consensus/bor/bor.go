@@ -653,7 +653,7 @@ func (c *Bor) verifyCascadingFields(chain consensus.ChainHeaderReader, header *t
 		if number > zerothSpanEnd && IsSprintStart(number+1, c.config.CalculateSprint(number)) {
 			span, err := c.spanStore.spanByBlockNumber(c.ctx, number+1)
 			if err != nil {
-				return err
+				return fmt.Errorf("%w: %w", core.ErrConsensusDataUnavailable, err)
 			}
 
 			// Use producer set from span as it's equivalent to the data we get from genesis contract
@@ -763,7 +763,7 @@ func (c *Bor) snapshot(chain consensus.ChainHeaderReader, targetHeader *types.He
 				// get validators from span
 				span, err := c.spanStore.spanByBlockNumber(c.ctx, number+1)
 				if err != nil {
-					return nil, err
+					return nil, fmt.Errorf("%w: %w", core.ErrConsensusDataUnavailable, err)
 				}
 
 				// new snap shot
@@ -1735,7 +1735,7 @@ func (c *Bor) FetchAndCommitSpan(
 	} else {
 		response, err := c.spanStore.spanById(ctx, newSpanID)
 		if err != nil {
-			return fmt.Errorf("failed to get span by id %d: %w", newSpanID, err)
+			return fmt.Errorf("%w: failed to get span by id %d: %w", core.ErrConsensusDataUnavailable, newSpanID, err)
 		}
 		if response == nil {
 			return fmt.Errorf("span with id %d not found", newSpanID)

@@ -3,6 +3,7 @@ package bor
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/ethereum/go-ethereum/consensus/bor/valset"
 
@@ -10,6 +11,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	borSpan "github.com/ethereum/go-ethereum/consensus/bor/heimdall/span"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/params"
@@ -165,7 +167,7 @@ func (s *Snapshot) apply(headers []*types.Header, c *Bor) (*Snapshot, error) {
 				// Fetch the validator set from span
 				span, err := c.spanStore.spanByBlockNumber(context.Background(), number+1)
 				if err != nil {
-					return nil, err
+					return nil, fmt.Errorf("%w: %w", core.ErrConsensusDataUnavailable, err)
 				}
 				v.IncludeIds(borSpan.ConvertHeimdallValSetToBorValSet(span.ValidatorSet).Validators)
 			}
