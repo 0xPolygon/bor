@@ -945,6 +945,37 @@ func TestCacheGCSweepsExpiredEntries(t *testing.T) {
 	require.False(t, sweptSigned, "expired signed announce must be swept on the next putIfNewer")
 }
 
+// TestSignedWitnessCachePutIfNewer covers putIfNewer's admission rules: a fresh
+// hash is stored (relay), a conflicting WitnessHash for a live entry is rejected
+// outright (anti cache-poisoning — the first valid signed commitment wins), and
+// a duplicate of the same commitment within the relay window is suppressed.
+func TestSignedWitnessCachePutIfNewer(t *testing.T) {
+	var (
+		blockHash = common.HexToHash("0xb10c")
+		hashOne   = common.HexToHash("0xc0mm1")
+		hashTwo   = common.HexToHash("0xc0mm2")
+		sig       = make([]byte, wit.SignatureLength)
+	)
+	c := newSignedWitnessCache()
+
+	if !c.putIfNewer(wit.SignedWitnessAnnouncement{BlockHash: blockHash, WitnessHash: hashOne, Signature: sig}) {
+		t.Fatal("first announce for a block must be admitted (relay)")
+	}
+	// Conflicting WitnessHash for the same block: rejected, and the original entry
+	// must survive unchanged — an attacker with a second valid signature must not
+	// be able to displace the honest commitment mid-fetch.
+	if c.putIfNewer(wit.SignedWitnessAnnouncement{BlockHash: blockHash, WitnessHash: hashTwo, Signature: sig}) {
+		t.Fatal("a conflicting WitnessHash for a live entry must be rejected")
+	}
+	if got, ok := c.get(blockHash); !ok || got.WitnessHash != hashOne {
+		t.Fatalf("conflicting announce must not overwrite the first commitment, got %x (ok=%v)", got.WitnessHash, ok)
+	}
+	// Same commitment again within the relay window: duplicate, suppress relay.
+	if c.putIfNewer(wit.SignedWitnessAnnouncement{BlockHash: blockHash, WitnessHash: hashOne, Signature: sig}) {
+		t.Fatal("a duplicate announce within the relay window must be suppressed")
+	}
+}
+
 // TestDrainDeferredAnnouncesGuards covers the drain entry guards: a handler
 // wired without wit2 state must no-op rather than panic, and a stashed
 // announcement that fails the signature re-check (in principle unreachable —

@@ -517,3 +517,61 @@ func TestVerifyAgainstSignedHashStrikesSolePeerOncePerBlock(t *testing.T) {
 		t.Fatal("a single server must never quarantine the signed hash")
 	}
 }
+
+// TestRecordSignedHashMismatchReturns pins the (quarantined, firstForPeer) return
+// contract, which drives the caller's "log the downgrade once" and "strike a peer
+// at most once per block" decisions. The side-effect (isSignedHashQuarantined) is
+// covered elsewhere; here we assert the return values themselves.
+func TestRecordSignedHashMismatchReturns(t *testing.T) {
+	tw := newTestWitnessManager()
+	defer tw.Close()
+
+	hash := common.HexToHash("0xbeef")
+
+	// An empty peer is ignored entirely and never counts toward the threshold.
+	if q, f := tw.manager.recordSignedHashMismatch(hash, ""); q || f {
+		t.Fatalf("empty peer must return (false,false), got (%v,%v)", q, f)
+	}
+	// First mismatch from s1: below threshold, and first for that peer.
+	if q, f := tw.manager.recordSignedHashMismatch(hash, "s1"); q || !f {
+		t.Fatalf("first mismatch for s1 must return (false,true), got (%v,%v)", q, f)
+	}
+	// Same peer again: still below threshold and no longer first — the caller must
+	// not double-strike the same peer across retries.
+	if q, f := tw.manager.recordSignedHashMismatch(hash, "s1"); q || f {
+		t.Fatalf("repeat mismatch for s1 must return (false,false), got (%v,%v)", q, f)
+	}
+	if tw.manager.isSignedHashQuarantined(hash) {
+		t.Fatal("one distinct server must not quarantine")
+	}
+	// Second DISTINCT server reaches the threshold: newly quarantined, first for s2.
+	if q, f := tw.manager.recordSignedHashMismatch(hash, "s2"); !q || !f {
+		t.Fatalf("second distinct mismatch must return (true,true), got (%v,%v)", q, f)
+	}
+	if !tw.manager.isSignedHashQuarantined(hash) {
+		t.Fatal("distinct-server threshold must quarantine the signed hash")
+	}
+	// Already quarantined: further mismatches are no-ops returning (false,false).
+	if q, f := tw.manager.recordSignedHashMismatch(hash, "s3"); q || f {
+		t.Fatalf("post-quarantine mismatch must return (false,false), got (%v,%v)", q, f)
+	}
+}
+
+// TestEmptyResponseBackoff pins the empty-response re-poll schedule: an immediate
+// fast-retry window, then exponential doubling from the base, clamped at the max.
+func TestEmptyResponseBackoff(t *testing.T) {
+	for n := 0; n <= emptyResponseFastRetries; n++ {
+		if d := emptyResponseBackoff(n); d != 0 {
+			t.Fatalf("n=%d: fast-retry window must return 0, got %v", n, d)
+		}
+	}
+	if d := emptyResponseBackoff(emptyResponseFastRetries + 1); d != emptyResponseBaseBackoff {
+		t.Fatalf("first backoff must equal base %v, got %v", emptyResponseBaseBackoff, d)
+	}
+	if d := emptyResponseBackoff(emptyResponseFastRetries + 2); d != 2*emptyResponseBaseBackoff {
+		t.Fatalf("second backoff must double the base to %v, got %v", 2*emptyResponseBaseBackoff, d)
+	}
+	if d := emptyResponseBackoff(1000); d != emptyResponseMaxBackoff {
+		t.Fatalf("large n must clamp to max %v, got %v", emptyResponseMaxBackoff, d)
+	}
+}

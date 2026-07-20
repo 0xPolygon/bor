@@ -113,3 +113,48 @@ func TestWitnessCommitHashMultiChunkShape(t *testing.T) {
 		t.Fatalf("multi-chunk shape mismatch: got %s want %s", got.Hex(), want.Hex())
 	}
 }
+
+// TestSplitWitnessChunks covers the chunk boundary math: exact multiples, a
+// remainder tail (the off-by-one-prone case), an input smaller than one chunk,
+// and the empty input. Chunk bytes must always sum back to the input length.
+func TestSplitWitnessChunks(t *testing.T) {
+	cases := []struct {
+		n, size, wantChunks, wantLast int
+	}{
+		{0, 4, 0, 0}, // empty input -> no chunks
+		{3, 4, 1, 3}, // smaller than one chunk -> single short chunk
+		{4, 4, 1, 4}, // exact single chunk
+		{5, 4, 2, 1}, // remainder tail: full chunk + 1-byte chunk
+		{8, 4, 2, 4}, // exact multiple
+	}
+	for _, c := range cases {
+		out := splitWitnessChunks(make([]byte, c.n), c.size)
+		if len(out) != c.wantChunks {
+			t.Fatalf("n=%d size=%d: want %d chunks, got %d", c.n, c.size, c.wantChunks, len(out))
+		}
+		total := 0
+		for _, ch := range out {
+			total += len(ch)
+		}
+		if total != c.n {
+			t.Fatalf("n=%d size=%d: chunk bytes must sum to input %d, got %d", c.n, c.size, c.n, total)
+		}
+		if c.wantChunks > 0 && len(out[len(out)-1]) != c.wantLast {
+			t.Fatalf("n=%d size=%d: last chunk want %d bytes, got %d", c.n, c.size, c.wantLast, len(out[len(out)-1]))
+		}
+	}
+}
+
+// TestWitnessCommitWorkerCount covers the fan-out clamps: at least one worker even
+// with no work, never more workers than chunks, and never above the cap.
+func TestWitnessCommitWorkerCount(t *testing.T) {
+	if got := witnessCommitWorkerCount(0); got != 1 {
+		t.Fatalf("zero chunks must clamp to 1 worker, got %d", got)
+	}
+	if got := witnessCommitWorkerCount(1); got != 1 {
+		t.Fatalf("one chunk must use exactly 1 worker, got %d", got)
+	}
+	if got := witnessCommitWorkerCount(1 << 20); got > witnessCommitMaxWorkers || got < 1 {
+		t.Fatalf("large fan-out must clamp to [1,%d], got %d", witnessCommitMaxWorkers, got)
+	}
+}
