@@ -414,10 +414,14 @@ type BlockChainConfig struct {
 	PipelinedSRCWarmSnapshot bool
 
 	// PipelinedImportExecPrefetch controls the executing StateDB's trie
-	// prefetcher during pipelined witness-off import. Its output has no
-	// consumer on that path — the SRC resolves warm nodes through the pathdb
-	// node index — so disabling it reclaims its CPU (~6% of process CPU in
-	// mainnet catch-up profiling). The speculative block prefetcher is not
+	// prefetcher during pipelined import. When disabled, the prefetcher runs
+	// only if its output has a consumer — the witness-on WarmSnapshot
+	// capture. On the other pipelined paths (witness off, or witness on with
+	// PipelinedSRCWarmSnapshot disabled) the SRC resolves warm nodes through
+	// the pathdb node index and the prefetcher only costs CPU (~6% witness
+	// off, ~15% witness on, in mainnet catch-up profiling). The witness is
+	// captured by SRC's trie-only walk, never by this prefetcher, so witness
+	// completeness is unaffected. The speculative block prefetcher is not
 	// covered: it warms pebble/flat-state and shared jumpdest caches ahead of
 	// the BlockSTM workers and disabling it slowed execution ~29% in
 	// benchmarks. Non-pipelined and witness-on imports are unaffected.
@@ -1278,20 +1282,23 @@ func (c *sharedBlockCaches) applyTo(cfg *vm.Config) {
 }
 
 // execTriePrefetchEnabled reports whether the executing StateDB's trie
-// prefetcher should run for this block. It stays on everywhere except
-// pipelined witness-off import with PipelinedImportExecPrefetch disabled: on
-// that path its output is detached and discarded (the SRC resolves warm
-// nodes through the pathdb node index), so it only costs CPU. The
-// speculative block prefetcher is
-// NOT covered by this switch — benchmarking showed it is load-bearing for
-// the execution lane (it runs ahead of the BlockSTM workers warming
-// pebble/flat-state and shared jumpdest caches; disabling it slowed
-// execution ~29%), so it always runs.
+// prefetcher should run for this block. With PipelinedImportExecPrefetch
+// disabled it runs during pipelined import only when something consumes its
+// output: the witness-on WarmSnapshot capture. On every other pipelined path
+// (witness off, or witness on with the warm-snapshot handoff disabled) the
+// output is detached and discarded — the SRC resolves warm nodes through the
+// pathdb node index — so running it only costs CPU. Witness completeness is
+// unaffected either way: the witness is captured by SRC's trie-only walk,
+// not by this prefetcher. The speculative block prefetcher is not covered by
+// this switch — benchmarking showed it is load-bearing for the execution
+// lane (it runs ahead of the BlockSTM workers warming pebble/flat-state and
+// shared jumpdest caches; disabling it slowed execution ~29%), so it always
+// runs.
 func (bc *BlockChain) execTriePrefetchEnabled(pipeOpts *PipelineImportOpts, witness *stateless.Witness) bool {
 	if bc.cfg.PipelinedImportExecPrefetch {
 		return true
 	}
-	return pipeOpts == nil || witness != nil
+	return pipeOpts == nil || (witness != nil && bc.cfg.PipelinedSRCWarmSnapshot)
 }
 
 // startPrefetchGoroutine launches the throwaway-statedb prefetcher in
@@ -1365,6 +1372,12 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 			pstart := time.Now()
 			if execTriePrefetch {
 				parallelStatedb.StartPrefetcher("chain", witness, nil)
+			} else if witness != nil {
+				// The witness normally rides into the StateDB through
+				// StartPrefetcher; with the trie prefetcher disabled it must
+				// still be attached so execution-time entries (codes, block
+				// hashes) land on it and SRC receives a non-nil exec witness.
+				parallelStatedb.SetWitness(witness)
 			}
 			v2VmCfg := bc.cfg.VmConfig
 			sharedCaches.applyTo(&v2VmCfg)
@@ -1411,6 +1424,10 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 			pstart := time.Now()
 			if execTriePrefetch {
 				statedb.StartPrefetcher("chain", witness, nil)
+			} else if witness != nil {
+				// See the parallel-processor branch: attach the witness even
+				// without a prefetcher.
+				statedb.SetWitness(witness)
 			}
 			res, err := bc.processor.Process(block, statedb, bc.cfg.VmConfig, nil, ctx)
 			pend := time.Now()

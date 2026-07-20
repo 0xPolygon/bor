@@ -836,10 +836,12 @@ type PipelineConfig struct {
 	WarmSnapshot bool `hcl:"warm-snapshot,optional" toml:"warm-snapshot,optional"`
 
 	// ExecPrefetch controls the executing StateDB's trie prefetcher during
-	// pipelined witness-off import, where its output is discarded (the
-	// speculative block prefetcher always runs — it warms caches ahead of the
-	// BlockSTM workers). Disable to reclaim the trie prefetcher's CPU on
-	// catch-up. No effect outside pipelined witness-off import.
+	// pipelined import. When disabled, the prefetcher still runs if the
+	// witness-on warm-snapshot handoff consumes its output; on every other
+	// pipelined path its output is discarded, so disabling reclaims its CPU
+	// on catch-up (the speculative block prefetcher always runs — it warms
+	// caches ahead of the BlockSTM workers). No effect outside pipelined
+	// import.
 	ExecPrefetch bool `hcl:"exec-prefetch,optional" toml:"exec-prefetch,optional"`
 }
 

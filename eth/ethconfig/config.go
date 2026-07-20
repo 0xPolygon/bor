@@ -147,10 +147,11 @@ type Config struct {
 	PipelinedSRCWarmSnapshot bool
 
 	// PipelinedImportExecPrefetch controls the executing StateDB's trie
-	// prefetcher during pipelined witness-off import, where its output is
-	// discarded (the speculative block prefetcher is unaffected). Disable to
-	// reclaim its CPU on catch-up. No effect outside pipelined witness-off
-	// import.
+	// prefetcher during pipelined import. When disabled, the prefetcher
+	// still runs if the witness-on warm-snapshot handoff consumes its
+	// output; on every other pipelined path its output is discarded and it
+	// is skipped (the speculative block prefetcher is unaffected). No effect
+	// outside pipelined import.
 	PipelinedImportExecPrefetch bool
 
 	// Deprecated: use 'TransactionHistory' instead.
