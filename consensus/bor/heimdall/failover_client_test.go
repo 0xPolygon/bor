@@ -33,12 +33,10 @@ type mockHeimdallClient struct {
 	fetchMilestoneCntFn  func(ctx context.Context) (int64, error)
 	fetchStatusFn        func(ctx context.Context) (*ctypes.SyncInfo, error)
 	closeFn              func()
-	hits                 atomic.Int32
+	getSpanHits          atomic.Int32
 }
 
 func (m *mockHeimdallClient) StateSyncEvents(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
-	m.hits.Add(1)
-
 	if m.stateSyncEventsFn != nil {
 		return m.stateSyncEventsFn(ctx, fromID, to)
 	}
@@ -47,7 +45,7 @@ func (m *mockHeimdallClient) StateSyncEvents(ctx context.Context, fromID uint64,
 }
 
 func (m *mockHeimdallClient) GetSpan(ctx context.Context, spanID uint64) (*types.Span, error) {
-	m.hits.Add(1)
+	m.getSpanHits.Add(1)
 
 	if m.getSpanFn != nil {
 		return m.getSpanFn(ctx, spanID)
@@ -57,8 +55,6 @@ func (m *mockHeimdallClient) GetSpan(ctx context.Context, spanID uint64) (*types
 }
 
 func (m *mockHeimdallClient) GetLatestSpan(ctx context.Context) (*types.Span, error) {
-	m.hits.Add(1)
-
 	if m.getLatestSpanFn != nil {
 		return m.getLatestSpanFn(ctx)
 	}
@@ -67,8 +63,6 @@ func (m *mockHeimdallClient) GetLatestSpan(ctx context.Context) (*types.Span, er
 }
 
 func (m *mockHeimdallClient) FetchCheckpoint(ctx context.Context, number int64) (*checkpoint.Checkpoint, error) {
-	m.hits.Add(1)
-
 	if m.fetchCheckpointFn != nil {
 		return m.fetchCheckpointFn(ctx, number)
 	}
@@ -77,8 +71,6 @@ func (m *mockHeimdallClient) FetchCheckpoint(ctx context.Context, number int64) 
 }
 
 func (m *mockHeimdallClient) FetchCheckpointCount(ctx context.Context) (int64, error) {
-	m.hits.Add(1)
-
 	if m.fetchCheckpointCntFn != nil {
 		return m.fetchCheckpointCntFn(ctx)
 	}
@@ -87,8 +79,6 @@ func (m *mockHeimdallClient) FetchCheckpointCount(ctx context.Context) (int64, e
 }
 
 func (m *mockHeimdallClient) FetchMilestone(ctx context.Context) (*milestone.Milestone, error) {
-	m.hits.Add(1)
-
 	if m.fetchMilestoneFn != nil {
 		return m.fetchMilestoneFn(ctx)
 	}
@@ -97,8 +87,6 @@ func (m *mockHeimdallClient) FetchMilestone(ctx context.Context) (*milestone.Mil
 }
 
 func (m *mockHeimdallClient) FetchMilestoneCount(ctx context.Context) (int64, error) {
-	m.hits.Add(1)
-
 	if m.fetchMilestoneCntFn != nil {
 		return m.fetchMilestoneCntFn(ctx)
 	}
@@ -107,8 +95,6 @@ func (m *mockHeimdallClient) FetchMilestoneCount(ctx context.Context) (int64, er
 }
 
 func (m *mockHeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
-	m.hits.Add(1)
-
 	if m.fetchStatusFn != nil {
 		return m.fetchStatusFn(ctx)
 	}
@@ -214,8 +200,8 @@ func TestFailover_SwitchOnPrimaryDown(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, span)
 
-	assert.GreaterOrEqual(t, primary.hits.Load(), int32(1), "primary should have been tried")
-	assert.GreaterOrEqual(t, secondary.hits.Load(), int32(1), "secondary should have been called")
+	assert.GreaterOrEqual(t, primary.getSpanHits.Load(), int32(1), "primary should have been tried")
+	assert.GreaterOrEqual(t, secondary.getSpanHits.Load(), int32(1), "secondary should have been called")
 
 	assert.Greater(t, failoverSwitchCounter.Snapshot().Count(), switchesBefore, "failover switch counter should increment")
 	_ = activeBefore // gauge is set, not incremented
@@ -241,19 +227,14 @@ func TestFailover_NoSwitchOnContextCanceled(t *testing.T) {
 	fc.registry.PromotionCooldown = 0
 	defer fc.Close()
 
-	// Start registry and let the immediate probe cycle complete so its
-	// FetchStatus hits don't race with the assertion below.
-	fc.ensureHealthRegistry()
-	time.Sleep(50 * time.Millisecond)
-
-	secondaryBefore := secondary.hits.Load()
+	secondaryBefore := secondary.getSpanHits.Load()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
 	_, err = fc.GetSpan(ctx, 1)
 	require.Error(t, err)
-	assert.Equal(t, secondaryBefore, secondary.hits.Load(), "should not failover on caller context cancellation")
+	assert.Equal(t, secondaryBefore, secondary.getSpanHits.Load(), "should not failover on caller context cancellation")
 }
 
 func TestFailover_NoSwitchOnServiceUnavailable(t *testing.T) {
@@ -276,7 +257,7 @@ func TestFailover_NoSwitchOnServiceUnavailable(t *testing.T) {
 	_, err = fc.GetSpan(context.Background(), 1)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrServiceUnavailable))
-	assert.Equal(t, int32(0), secondary.hits.Load(), "should not failover on 503")
+	assert.Equal(t, int32(0), secondary.getSpanHits.Load(), "should not failover on 503")
 }
 
 func TestFailover_NoSwitchOnShutdownDetected(t *testing.T) {
@@ -299,7 +280,7 @@ func TestFailover_NoSwitchOnShutdownDetected(t *testing.T) {
 	_, err = fc.GetSpan(context.Background(), 1)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrShutdownDetected))
-	assert.Equal(t, int32(0), secondary.hits.Load(), "should not failover on shutdown")
+	assert.Equal(t, int32(0), secondary.getSpanHits.Load(), "should not failover on shutdown")
 }
 
 func TestFailover_StickyBehavior(t *testing.T) {
@@ -327,12 +308,8 @@ func TestFailover_StickyBehavior(t *testing.T) {
 	_, err = fc.GetSpan(context.Background(), 1)
 	require.NoError(t, err)
 
-	// Wait for the immediate probe cycle (launched by ensureHealthRegistry
-	// inside the first GetSpan call) to complete before snapshotting hits.
-	time.Sleep(50 * time.Millisecond)
-
-	primaryBefore := primary.hits.Load()
-	secondaryBefore := secondary.hits.Load()
+	primaryBefore := primary.getSpanHits.Load()
+	secondaryBefore := secondary.getSpanHits.Load()
 
 	// Subsequent calls should go directly to secondary without trying primary
 	for i := 0; i < 3; i++ {
@@ -340,8 +317,8 @@ func TestFailover_StickyBehavior(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	assert.Equal(t, primaryBefore, primary.hits.Load(), "primary should not be contacted while sticky")
-	assert.Equal(t, secondaryBefore+3, secondary.hits.Load(), "all calls should go to secondary")
+	assert.Equal(t, primaryBefore, primary.getSpanHits.Load(), "primary should not be contacted while sticky")
+	assert.Equal(t, secondaryBefore+3, secondary.getSpanHits.Load(), "all calls should go to secondary")
 }
 
 func TestFailover_ProbeBackToPrimary(t *testing.T) {
@@ -367,10 +344,10 @@ func TestFailover_ProbeBackToPrimary(t *testing.T) {
 	}, 2*time.Second, 20*time.Millisecond, "health registry should promote back to primary")
 
 	// Verify subsequent calls go to primary
-	secondaryBefore := secondary.hits.Load()
+	secondaryBefore := secondary.getSpanHits.Load()
 	_, err = fc.GetSpan(context.Background(), 1)
 	require.NoError(t, err)
-	assert.Equal(t, secondaryBefore, secondary.hits.Load(), "should be back on primary now")
+	assert.Equal(t, secondaryBefore, secondary.getSpanHits.Load(), "should be back on primary now")
 }
 
 func TestFailover_ProbeBackFails(t *testing.T) {
@@ -391,10 +368,10 @@ func TestFailover_ProbeBackFails(t *testing.T) {
 	assert.Equal(t, 1, fc.registry.Active(), "should stay on secondary when primary still down")
 
 	// Calls should still succeed via secondary
-	secondaryBefore := secondary.hits.Load()
+	secondaryBefore := secondary.getSpanHits.Load()
 	_, err = fc.GetSpan(context.Background(), 1)
 	require.NoError(t, err)
-	assert.Greater(t, secondary.hits.Load(), secondaryBefore, "should still use secondary")
+	assert.Greater(t, secondary.getSpanHits.Load(), secondaryBefore, "should still use secondary")
 }
 
 func TestFailover_ClosesBothClients(t *testing.T) {
@@ -426,21 +403,16 @@ func TestFailover_PassthroughWhenPrimaryHealthy(t *testing.T) {
 	fc.registry.PromotionCooldown = 0
 	defer fc.Close()
 
-	// Start registry and let the immediate probe cycle complete so its
-	// FetchStatus hits don't interfere with assertions below.
-	fc.ensureHealthRegistry()
-	time.Sleep(50 * time.Millisecond)
-
-	primaryBefore := primary.hits.Load()
-	secondaryBefore := secondary.hits.Load()
+	primaryBefore := primary.getSpanHits.Load()
+	secondaryBefore := secondary.getSpanHits.Load()
 
 	for i := 0; i < 5; i++ {
 		_, err := fc.GetSpan(context.Background(), 1)
 		require.NoError(t, err)
 	}
 
-	assert.Equal(t, primaryBefore+5, primary.hits.Load(), "all calls should go to primary")
-	assert.Equal(t, secondaryBefore, secondary.hits.Load(), "secondary should not be contacted for API calls")
+	assert.Equal(t, primaryBefore+5, primary.getSpanHits.Load(), "all calls should go to primary")
+	assert.Equal(t, secondaryBefore, secondary.getSpanHits.Load(), "secondary should not be contacted for API calls")
 }
 
 // Integration test using real HTTP servers to verify end-to-end behavior
@@ -624,8 +596,8 @@ func TestFailover_SwitchOnPrimarySubContextError(t *testing.T) {
 			span, err := fc.GetSpan(context.Background(), 1)
 			require.NoError(t, err)
 			require.NotNil(t, span)
-			assert.GreaterOrEqual(t, primary.hits.Load(), int32(1), "primary should have been tried")
-			assert.GreaterOrEqual(t, secondary.hits.Load(), int32(1), "should failover on sub-context error")
+			assert.GreaterOrEqual(t, primary.getSpanHits.Load(), int32(1), "primary should have been tried")
+			assert.GreaterOrEqual(t, secondary.getSpanHits.Load(), int32(1), "should failover on sub-context error")
 		})
 	}
 }
@@ -689,9 +661,9 @@ func TestFailover_ThreeClients_CascadeToTertiary(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, span)
 
-	assert.GreaterOrEqual(t, primary.hits.Load(), int32(1), "primary should have been tried")
-	assert.GreaterOrEqual(t, secondary.hits.Load(), int32(1), "secondary should have been tried")
-	assert.GreaterOrEqual(t, tertiary.hits.Load(), int32(1), "tertiary should have been called")
+	assert.GreaterOrEqual(t, primary.getSpanHits.Load(), int32(1), "primary should have been tried")
+	assert.GreaterOrEqual(t, secondary.getSpanHits.Load(), int32(1), "secondary should have been tried")
+	assert.GreaterOrEqual(t, tertiary.getSpanHits.Load(), int32(1), "tertiary should have been called")
 }
 
 func TestFailover_AllClientsFail(t *testing.T) {
@@ -742,10 +714,10 @@ func TestFailover_ThreeClients_ProbeBackToPrimary(t *testing.T) {
 	}, 2*time.Second, 20*time.Millisecond, "health registry should promote back to primary")
 
 	// Verify we're back on primary
-	tertiaryBefore := tertiary.hits.Load()
+	tertiaryBefore := tertiary.getSpanHits.Load()
 	_, err = fc.GetSpan(context.Background(), 1)
 	require.NoError(t, err)
-	assert.Equal(t, tertiaryBefore, tertiary.hits.Load(), "should be back on primary now")
+	assert.Equal(t, tertiaryBefore, tertiary.getSpanHits.Load(), "should be back on primary now")
 }
 
 // Active client returns non-failover error: should return directly, no cascade.
@@ -773,7 +745,7 @@ func TestFailover_ActiveNonFailoverError(t *testing.T) {
 	_, err = fc.GetSpan(context.Background(), 1)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrShutdownDetected))
-	assert.Equal(t, int32(0), tertiary.hits.Load(), "should not cascade to tertiary on non-failover error")
+	assert.Equal(t, int32(0), tertiary.getSpanHits.Load(), "should not cascade to tertiary on non-failover error")
 }
 
 // Active client returns failover error: cascade should try by priority.
@@ -799,7 +771,7 @@ func TestFailover_ActiveFailoverError_CascadesToNext(t *testing.T) {
 	span, getErr := fc.GetSpan(context.Background(), 1)
 	require.NoError(t, getErr)
 	require.NotNil(t, span)
-	assert.GreaterOrEqual(t, tertiary.hits.Load(), int32(1), "should cascade to tertiary")
+	assert.GreaterOrEqual(t, tertiary.getSpanHits.Load(), int32(1), "should cascade to tertiary")
 
 	assert.Equal(t, 2, fc.registry.Active(), "active should switch to tertiary")
 }
@@ -1016,15 +988,12 @@ func TestRegistry_InformedCascade_SkipsUnhealthy(t *testing.T) {
 	fc.registry.SetHealth(1, EndpointHealth{Healthy: false})
 
 	// Trigger failover from primary
-	secondaryHitsBefore := secondary.hits.Load()
 	_, err = fc.GetSpan(context.Background(), 1)
 	require.NoError(t, err)
 
 	// Secondary should not have been tried for the GetSpan call since it's unhealthy,
 	// but it may be tried in the last-resort pass. The key thing is that tertiary succeeds.
 	assert.Equal(t, 2, fc.registry.Active(), "should end up on tertiary")
-
-	_ = secondaryHitsBefore
 }
 
 func TestRegistry_InformedCascade_TriesByPriority(t *testing.T) {

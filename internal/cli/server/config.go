@@ -501,6 +501,11 @@ type JsonRPCConfig struct {
 	// EnablePersonal enables the deprecated personal namespace.
 	EnablePersonal bool `hcl:"enabledeprecatedpersonal,optional" toml:"enabledeprecatedpersonal,optional"`
 
+	// EnableTrace enables the Parity-compatible trace namespace (trace_block,
+	// trace_transaction, trace_call, trace_callMany, trace_replayTransaction,
+	// trace_replayBlockTransactions). Disabled by default.
+	EnableTrace bool `hcl:"enabletrace,optional" toml:"enabletrace,optional"`
+
 	// Default timeout for eth_sendRawTransactionSync (e.g. 2s, 500ms)
 	TxSyncDefaultTimeout    time.Duration `hcl:"-,optional" toml:"-"`
 	TxSyncDefaultTimeoutRaw string        `hcl:"txsync.defaulttimeout,optional" toml:"txsync.defaulttimeout,optional"`
@@ -939,6 +944,7 @@ func DefaultConfig() *Config {
 			RPCEVMTimeout:        ethconfig.Defaults.RPCEVMTimeout,
 			AllowUnprotectedTxs:  false,
 			EnablePersonal:       false,
+			EnableTrace:          false,
 			TxSyncDefaultTimeout: ethconfig.Defaults.TxSyncDefaultTimeout,
 			TxSyncMaxTimeout:     ethconfig.Defaults.TxSyncMaxTimeout,
 			AcceptPreconfTx:      false,
