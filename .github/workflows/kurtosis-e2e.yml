@@ -6,6 +6,7 @@ on:
       - 'master'
       - 'develop'
       - 'ci/kurtosis-peer-failure-e2e'
+      - 'fix/downloader-heimdall-consensus-unavailable'
   pull_request:
     branches:
       - 'master'
