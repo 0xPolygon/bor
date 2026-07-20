@@ -366,6 +366,82 @@ func TestNodeLookupConcurrent(t *testing.T) {
 	wg.Wait()
 }
 
+// TestNodeLookupMissingLayer covers the defensive path in lookupNode where the
+// index resolves a tip that is absent from the layer set — an index-corruption
+// signal that must surface as an error rather than a nil-layer dereference. It
+// is reached by injecting a bogus tip directly into the index (white-box), since
+// a consistent index never produces one.
+func TestNodeLookupMissingLayer(t *testing.T) {
+	tr := newTestLayerTree() // base = 0x1
+	tr.add(common.Hash{0x2}, common.Hash{0x1}, 1, makeNodeSet(acct("a", []byte{0xff})), emptyStateSet())
+
+	// Point the "a" account-node history at a state that has no layer. nodeTip
+	// returns it (list entry == queried state), then tree.layers[tip] is nil.
+	ghost := common.Hash{0xde, 0xad}
+	tr.lookup.accountNodes["a"] = append(tr.lookup.accountNodes["a"], ghost)
+
+	if _, err := tr.lookupNode(common.Hash{}, []byte("a"), ghost); err == nil {
+		t.Fatalf("expected error for tip missing from the layer set")
+	}
+}
+
+// TestRemoveNodesErrors covers removeNodes' two corruption guards: a diff-layer
+// node whose account (resp. storage) history carries no entry for the removed
+// state must return an error instead of silently corrupting the index.
+func TestRemoveNodesErrors(t *testing.T) {
+	owner := common.Hash{0xaa}
+	blob := []byte{0xff}
+	stale := common.Hash{0xff} // never indexed
+
+	// Account guard: diff writes an account node, but we remove a state that was
+	// never appended to that node's history.
+	trAcct := newTestLayerTree()
+	trAcct.add(common.Hash{0x2}, common.Hash{0x1}, 1, makeNodeSet(acct("a", blob)), emptyStateSet())
+	diffAcct := trAcct.layers[common.Hash{0x2}].(*diffLayer)
+	if err := trAcct.lookup.removeNodes(diffAcct, stale); err == nil {
+		t.Fatalf("expected account-node not-found error")
+	}
+
+	// Storage guard: diff writes only a storage node so the account loop is a
+	// no-op, then removal of an unindexed state trips the storage guard.
+	trStor := newTestLayerTree()
+	trStor.add(common.Hash{0x2}, common.Hash{0x1}, 1, makeNodeSet(slot(owner, "s", blob)), emptyStateSet())
+	diffStor := trStor.layers[common.Hash{0x2}].(*diffLayer)
+	if err := trStor.lookup.removeNodes(diffStor, stale); err == nil {
+		t.Fatalf("expected storage-node not-found error")
+	}
+}
+
+// TestReaderResolveNode covers reader.resolveNode: the happy path (index resolves
+// the owning layer and the node is served) and the error path (a stale query
+// state fails resolution through the index).
+func TestReaderResolveNode(t *testing.T) {
+	blob := []byte{0xab}
+	tr := newTestLayerTree() // base = 0x1
+	tr.add(common.Hash{0x2}, common.Hash{0x1}, 1, makeNodeSet(acct("a", blob)), emptyStateSet())
+
+	// The test tree is detached from the db's own tree; point the db at it so the
+	// reader resolves through the layers under test.
+	db := tr.base.db
+	db.tree = tr
+
+	// Happy path: node "a" is served at its live state.
+	r := &reader{db: db, state: common.Hash{0x2}, layer: tr.get(common.Hash{0x2})}
+	got, err := r.Node(common.Hash{}, []byte("a"), crypto.Keccak256Hash(blob))
+	if err != nil {
+		t.Fatalf("unexpected error resolving live node: %v", err)
+	}
+	if !bytes.Equal(got, blob) {
+		t.Fatalf("unexpected blob, want %x got %x", blob, got)
+	}
+
+	// Error path: a state absent from the tree cannot be resolved via the index.
+	stale := &reader{db: db, state: common.Hash{0x9}, layer: tr.base}
+	if _, err := stale.Node(common.Hash{}, []byte("a"), common.Hash{}); err == nil {
+		t.Fatalf("expected resolution error for a stale state")
+	}
+}
+
 // emptyStateSet returns a state set with no flat-state mutations, isolating the
 // trie-node index under test from the account/storage index.
 func emptyStateSet() *StateSetWithOrigin {

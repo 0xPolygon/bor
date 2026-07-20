@@ -371,27 +371,15 @@ func (l *lookup) removeLayer(diff *diffLayer) error {
 // concurrently with those; each mutates a disjoint set of maps.
 func (l *lookup) removeNodes(diff *diffLayer, state common.Hash) error {
 	for path := range diff.nodes.accountNodes {
-		found, list := removeFromList(l.accountNodes[path], state)
-		if !found {
+		if !removeNodeEntry(l.accountNodes, path, state) {
 			return fmt.Errorf("account node lookup is not found, %x, state: %x", path, state)
-		}
-		if len(list) != 0 {
-			l.accountNodes[path] = list
-		} else {
-			delete(l.accountNodes, path)
 		}
 	}
 	for owner, subset := range diff.nodes.storageNodes {
 		paths := l.storageNodes[owner]
 		for path := range subset {
-			found, list := removeFromList(paths[path], state)
-			if !found {
+			if !removeNodeEntry(paths, path, state) {
 				return fmt.Errorf("storage node lookup is not found, %x %x, state: %x", owner, path, state)
-			}
-			if len(list) != 0 {
-				paths[path] = list
-			} else {
-				delete(paths, path)
 			}
 		}
 		if len(paths) == 0 {
@@ -399,4 +387,21 @@ func (l *lookup) removeNodes(diff *diffLayer, state common.Hash) error {
 		}
 	}
 	return nil
+}
+
+// removeNodeEntry unlinks state from the mutation history of path within m,
+// deleting the path entry entirely once its history becomes empty. It reports
+// whether path carried an entry for state; a false result signals index
+// corruption to the caller. A nil map is treated as an empty one (not found).
+func removeNodeEntry(m map[string][]common.Hash, path string, state common.Hash) bool {
+	found, list := removeFromList(m[path], state)
+	if !found {
+		return false
+	}
+	if len(list) != 0 {
+		m[path] = list
+	} else {
+		delete(m, path)
+	}
+	return true
 }
