@@ -654,6 +654,13 @@ func (s *StateDB) SetWitness(witness *stateless.Witness) {
 	s.witness = witness
 }
 
+// HasPrefetcher reports whether a trie prefetcher is currently installed.
+// Lets downstream processors distinguish "the caller chose not to prefetch"
+// from "the caller's prefetcher should be replaced with a phase-specific one".
+func (s *StateDB) HasPrefetcher() bool {
+	return s.prefetcher != nil
+}
+
 // StartPrefetcher initializes a new trie prefetcher to pull in nodes from the
 // state trie concurrently while the state is mutated so that when we reach the
 // commit phase, most of the needed data is already hot.

@@ -95,6 +95,7 @@ var pdbExemptMethods = map[string]pdbExemptCategory{
 	"Commit":           catLifecycle,
 	"CommitWithUpdate": catLifecycle,
 	"IntermediateRoot": catLifecycle,
+	"HasPrefetcher":    catLifecycle,
 	"StartPrefetcher":  catLifecycle,
 	"StopPrefetcher":   catLifecycle,
 	"ResetPrefetcher":  catLifecycle,
