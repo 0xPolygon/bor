@@ -292,7 +292,7 @@ func opKeccak256(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 			}
 			size.SetBytes32(h[:])
 			if obs != nil {
-				obs.Observe("KECCAK256", ObserveKey(data), time.Since(obsStart), len(data), 32)
+				obs.Observe("KECCAK256_64B", ObserveKey(data), time.Since(obsStart), len(data), 32)
 			}
 			return nil, nil
 		}
@@ -310,12 +310,17 @@ func opKeccak256(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 		evm.StateDB.AddPreimage(evm.hasherBuf, data)
 	}
 	size.SetBytes(evm.hasherBuf[:])
-	// Covers both a 64-byte cache miss (just computed+stored above) and any
-	// non-64-byte call. The hit case already returned above. Instrumenting
-	// both tells us the true miss cost alongside whether widening
-	// Keccak256Cache beyond 64 bytes would be worth it.
+	// Split by label so the two questions stay separable: "KECCAK256_64B"
+	// is a miss against the EXISTING 64-byte cache (already in production);
+	// "KECCAK256_other" is every non-64-byte call, which no cache covers
+	// today — its would-hit rate is the one that tells us whether widening
+	// Keccak256Cache beyond 64 bytes is worth it.
 	if obs != nil && len(data) <= maxObservedCallInput {
-		obs.Observe("KECCAK256", ObserveKey(data), time.Since(obsStart), len(data), 32)
+		label := "KECCAK256_64B"
+		if len(data) != 64 {
+			label = "KECCAK256_other"
+		}
+		obs.Observe(label, ObserveKey(data), time.Since(obsStart), len(data), 32)
 	}
 	return nil, nil
 }
