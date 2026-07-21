@@ -21,6 +21,7 @@ import (
 	"math/big"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/holiman/uint256"
 
@@ -57,10 +58,30 @@ var ecrecoverAddr = common.BytesToAddress([]byte{0x01})
 // warm-up so V2 workers typically hit it, saving ~1µs CGo overhead per call.
 func (evm *EVM) runPrecompile(p PrecompiledContract, addr common.Address, input []byte, gas uint64) ([]byte, uint64, error) {
 	cache := evm.Config.EcrecoverCache
-	if cache == nil || addr != ecrecoverAddr || len(input) > 128 {
-		return RunPrecompiledContract(p, input, gas, evm.Config.Tracer)
+	obs := evm.Config.CallObserver
+	if obs == nil {
+		if cache == nil || addr != ecrecoverAddr || len(input) > 128 {
+			return RunPrecompiledContract(p, input, gas, evm.Config.Tracer)
+		}
+		return evm.runEcrecoverWithCache(p, input, gas, cache)
 	}
-	return evm.runEcrecoverWithCache(p, input, gas, cache)
+
+	start := time.Now()
+	var (
+		ret          []byte
+		remainingGas uint64
+		err          error
+	)
+	if cache == nil || addr != ecrecoverAddr || len(input) > 128 {
+		ret, remainingGas, err = RunPrecompiledContract(p, input, gas, evm.Config.Tracer)
+	} else {
+		ret, remainingGas, err = evm.runEcrecoverWithCache(p, input, gas, cache)
+	}
+	if err == nil && len(input) <= maxObservedCallInput {
+		key := ObserveKey(addr.Bytes(), input)
+		obs.Observe(addr.Hex(), key, time.Since(start), len(input), len(ret))
+	}
+	return ret, remainingGas, err
 }
 
 // runEcrecoverWithCache handles the cached fast path for the ecrecover

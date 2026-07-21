@@ -791,6 +791,17 @@ type sharedBlockCaches struct {
 	jumpDests vm.JumpDestCache
 	keccak    *sync.Map
 	ecrecover *sync.Map
+
+	// observer is throwaway copy-node instrumentation (core/vm/instrument.go)
+	// for the precompile/opcode result-caching experiment. Unlike the caches
+	// above, it is applied to ALL THREE of the throwaway prefetch pass, the
+	// serial processor, and the parallel processor for a block — including
+	// the serial processor, which today does NOT receive
+	// keccak/ecrecover/jumpDests sharing (see the serial processor branch in
+	// ProcessBlock below). That gives a would-be hit rate for a cache shared
+	// across all three paths, i.e. the real design question, not today's
+	// partial wiring.
+	observer *vm.CallObserver
 }
 
 func newSharedBlockCaches() *sharedBlockCaches {
@@ -798,6 +809,7 @@ func newSharedBlockCaches() *sharedBlockCaches {
 		jumpDests: vm.NewSyncJumpDestCache(),
 		keccak:    &sync.Map{},
 		ecrecover: &sync.Map{},
+		observer:  vm.NewCallObserver(),
 	}
 }
 
@@ -806,6 +818,7 @@ func (c *sharedBlockCaches) applyTo(cfg *vm.Config) {
 	cfg.SharedJumpDestCache = c.jumpDests
 	cfg.Keccak256Cache = c.keccak
 	cfg.EcrecoverCache = c.ecrecover
+	cfg.CallObserver = c.observer
 }
 
 // startPrefetchGoroutine launches the throwaway-statedb prefetcher in
@@ -907,7 +920,13 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		go func() {
 			pstart := time.Now()
 			statedb.StartPrefetcher("chain", witness, nil)
-			res, err := bc.processor.Process(block, statedb, bc.cfg.VmConfig, nil, ctx)
+			// Wire only the instrumentation observer here — NOT jumpDests/
+			// keccak/ecrecover — so today's production cache-sharing
+			// behavior (prefetch+parallel only) is unchanged. The observer
+			// merges into the same per-block stats as the other two paths.
+			serialVmCfg := bc.cfg.VmConfig
+			serialVmCfg.CallObserver = sharedCaches.observer
+			res, err := bc.processor.Process(block, statedb, serialVmCfg, nil, ctx)
 			blockExecutionSerialTimer.UpdateSince(pstart)
 			var localVtime time.Duration
 			if err == nil {
@@ -988,6 +1007,12 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		second_result := <-resultChan
 		second_result.statedb.StopPrefetcher()
 	}
+
+	// Both the winner and the loser (if any) have finished by this point,
+	// so it's safe to read the shared observer's per-block stats without
+	// racing a still-running goroutine. Throwaway copy-node instrumentation
+	// only — see core/vm/instrument.go.
+	sharedCaches.observer.LogSummary(block.NumberU64())
 
 	return result.receipts, result.logs, result.usedGas, result.statedb, result.vtime, result.err
 }

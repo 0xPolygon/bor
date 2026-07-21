@@ -18,6 +18,7 @@ package vm
 
 import (
 	"math"
+	"time"
 
 	"github.com/holiman/uint256"
 
@@ -78,7 +79,20 @@ func opSmod(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 
 func opExp(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 	base, exponent := scope.Stack.pop(), scope.Stack.peek()
+
+	obs := evm.Config.CallObserver
+	if obs == nil {
+		exponent.Exp(&base, exponent)
+		return nil, nil
+	}
+
+	// Capture operand bytes before Exp overwrites exponent in place.
+	baseBytes, expBytes := base.Bytes(), exponent.Bytes()
+	start := time.Now()
 	exponent.Exp(&base, exponent)
+	if len(baseBytes)+len(expBytes) <= maxObservedCallInput {
+		obs.Observe("EXP", ObserveKey(baseBytes, expBytes), time.Since(start), len(baseBytes)+len(expBytes), 32)
+	}
 
 	return nil, nil
 }
@@ -260,6 +274,12 @@ func opKeccak256(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 	offset, size := scope.Stack.pop(), scope.Stack.peek()
 	data := scope.Memory.GetPtr(offset.Uint64(), size.Uint64())
 
+	obs := evm.Config.CallObserver
+	var obsStart time.Time
+	if obs != nil {
+		obsStart = time.Now()
+	}
+
 	// Fast path: cache 64-byte keccak256 (Solidity mapping slot lookups).
 	// These are the most common SHA3 calls — keccak256(key ++ slot_number).
 	if len(data) == 64 && evm.Config.Keccak256Cache != nil {
@@ -271,6 +291,9 @@ func opKeccak256(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 				evm.StateDB.AddPreimage(h, data)
 			}
 			size.SetBytes32(h[:])
+			if obs != nil {
+				obs.Observe("KECCAK256", ObserveKey(data), time.Since(obsStart), len(data), 32)
+			}
 			return nil, nil
 		}
 		evm.hasher.Reset()
@@ -287,6 +310,13 @@ func opKeccak256(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 		evm.StateDB.AddPreimage(evm.hasherBuf, data)
 	}
 	size.SetBytes(evm.hasherBuf[:])
+	// Covers both a 64-byte cache miss (just computed+stored above) and any
+	// non-64-byte call. The hit case already returned above. Instrumenting
+	// both tells us the true miss cost alongside whether widening
+	// Keccak256Cache beyond 64 bytes would be worth it.
+	if obs != nil && len(data) <= maxObservedCallInput {
+		obs.Observe("KECCAK256", ObserveKey(data), time.Since(obsStart), len(data), 32)
+	}
 	return nil, nil
 }
 

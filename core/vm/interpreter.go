@@ -58,6 +58,12 @@ type Config struct {
 	// The prefetcher populates it during warm-up; V2 workers hit it to
 	// avoid redundant CGo secp256k1 calls (~1µs overhead each).
 	EcrecoverCache *sync.Map // [128]byte → []byte (result or nil for invalid)
+
+	// CallObserver is throwaway copy-node instrumentation (see
+	// core/vm/instrument.go) measuring would-be cache hit rates and timing
+	// for precompiles/opcodes not yet covered by EcrecoverCache/
+	// Keccak256Cache. Never affects execution output. nil in production.
+	CallObserver *CallObserver
 }
 
 // ScopeContext contains the things that are per-call, such as stack and memory,
