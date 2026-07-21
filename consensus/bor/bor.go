@@ -1387,26 +1387,10 @@ func (c *Bor) finalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 	)
 
 	if !simulated && IsSprintStart(headerNumber, c.config.CalculateSprint(headerNumber)) {
-		borStart := time.Now()
-		cx := statefull.ChainContext{Chain: chain, Bor: c}
-
-		// check and commit span
-		if !c.config.IsRio(header.Number) {
-			if err = c.checkAndCommitSpan(state, header, cx); err != nil {
-				log.Error("Error while committing span", "error", err)
-				return nil, nil, 0, err
-			}
+		stateSyncData, err = c.commitSprintWork(chain, header, state)
+		if err != nil {
+			return nil, nil, 0, err
 		}
-
-		if c.HeimdallClient != nil {
-			// commit states
-			stateSyncData, err = c.CommitStates(state, header, cx)
-			if err != nil {
-				log.Error("Error while committing states", "error", err)
-				return nil, nil, 0, err
-			}
-		}
-		state.BorConsensusTime = time.Since(borStart)
 	}
 
 	if err = c.changeContractCodeIfNeeded(headerNumber, state); err != nil {
@@ -1439,6 +1423,37 @@ func (c *Bor) finalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 
 	// return the final block for sealing
 	return block, receipts, commitTime, nil
+}
+
+// commitSprintWork commits the span (pre-Rio) and state-sync data at a
+// sprint-start block during block assembly.
+func (c *Bor) commitSprintWork(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB) ([]*types.StateSyncData, error) {
+	borStart := time.Now()
+	cx := statefull.ChainContext{Chain: chain, Bor: c}
+
+	// check and commit span
+	if !c.config.IsRio(header.Number) {
+		if err := c.checkAndCommitSpan(state, header, cx); err != nil {
+			log.Error("Error while committing span", "error", err)
+			return nil, err
+		}
+	}
+
+	var stateSyncData []*types.StateSyncData
+
+	if c.HeimdallClient != nil {
+		// commit states
+		var err error
+		stateSyncData, err = c.CommitStates(state, header, cx)
+		if err != nil {
+			log.Error("Error while committing states", "error", err)
+			return nil, err
+		}
+	}
+
+	state.BorConsensusTime = time.Since(borStart)
+
+	return stateSyncData, nil
 }
 
 // Authorize injects a private key into the consensus engine to mint new blocks

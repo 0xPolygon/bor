@@ -5564,3 +5564,38 @@ func TestCallWithStateMissingHeader(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "header not found for hash")
 }
+
+// simFinalizingEngine wraps an engine with the simulation finalization hook so
+// tests can exercise the simulationFinalizer dispatch in eth_simulateV1.
+type simFinalizingEngine struct {
+	consensus.Engine
+	simFinalized bool
+}
+
+func (e *simFinalizingEngine) FinalizeAndAssembleForSimulation(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, body *types.Body, receipts []*types.Receipt) (*types.Block, []*types.Receipt, time.Duration, error) {
+	e.simFinalized = true
+	return e.Engine.FinalizeAndAssemble(chain, header, state, body, receipts)
+}
+
+func TestSimulateV1DispatchesSimulationFinalize(t *testing.T) {
+	t.Parallel()
+
+	accounts := newAccounts(2)
+	genesis := &core.Genesis{
+		Config: params.TestChainConfig,
+		Alloc:  types.GenesisAlloc{accounts[0].addr: {Balance: big.NewInt(params.Ether)}},
+	}
+	engine := &simFinalizingEngine{Engine: ethash.NewFaker()}
+	api := NewBlockChainAPI(newTestBackend(t, 1, genesis, engine, func(i int, b *core.BlockGen) {}))
+
+	latest := rpc.BlockNumberOrHashWithNumber(rpc.LatestBlockNumber)
+	opts := simOpts{BlockStateCalls: []simBlock{{Calls: []TransactionArgs{{
+		From:  &accounts[0].addr,
+		To:    &accounts[1].addr,
+		Value: (*hexutil.Big)(big.NewInt(1)),
+	}}}}}
+	res, err := api.SimulateV1(context.Background(), opts, &latest)
+	require.NoError(t, err)
+	require.Len(t, res, 1)
+	require.True(t, engine.simFinalized, "simulation finalization hook was not used")
+}
