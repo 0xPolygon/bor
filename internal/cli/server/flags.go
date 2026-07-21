@@ -668,13 +668,6 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.Pipeline.WarmSnapshot,
 		Group:   "Pipeline",
 	})
-	f.BoolFlag(&flagset.BoolFlag{
-		Name:    "pipeline.exec-prefetch",
-		Usage:   "Run the executing StateDB's trie prefetcher during pipelined import; when disabled it still runs if the witness-on warm-snapshot handoff consumes its output, and is skipped on every other pipelined path where its output is discarded (the speculative block prefetcher always runs)",
-		Value:   &c.cliConfig.Pipeline.ExecPrefetch,
-		Default: c.cliConfig.Pipeline.ExecPrefetch,
-		Group:   "Pipeline",
-	})
 	f.IntFlag(&flagset.IntFlag{
 		Name:    "fdlimit",
 		Usage:   "Raise the open file descriptor resource limit (default = system fd limit)",

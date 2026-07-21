@@ -336,7 +336,6 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			EnablePipelinedImportSRC:    config.EnablePipelinedImportSRC,
 			PipelinedImportSRCLogs:      config.PipelinedImportSRCLogs,
 			PipelinedSRCWarmSnapshot:    config.PipelinedSRCWarmSnapshot,
-			PipelinedImportExecPrefetch: config.PipelinedImportExecPrefetch,
 			Stateless:                   config.SyncMode == downloader.StatelessSync,
 			// Enables file journaling for the trie database. The journal files will be stored
 			// within the data directory. The corresponding paths will be either:

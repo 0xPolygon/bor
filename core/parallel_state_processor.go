@@ -1120,24 +1120,15 @@ func (p *V2StateProcessor) Process(block *types.Block, statedb *state.StateDB, c
 	tSetup := time.Now()
 
 	finalDB := statedb
-	// Preserve the witness pointer wired by ProcessBlock across the
-	// prefetcher swap. StateDB.StartPrefetcher unconditionally overwrites
-	// s.witness, so passing nil here would silently turn off every
-	// s.witness != nil-gated collection point (CollectStateWitness,
+	// Preserve the witness pointer wired by ProcessBlock.StartPrefetcher
+	// across the prefetcher swap. StateDB.StartPrefetcher unconditionally
+	// overwrites s.witness, so passing nil here would silently turn off
+	// every s.witness != nil-gated collection point (CollectStateWitness,
 	// CollectCodeWitness, settle-phase trie walks) for the rest of V2's
 	// execution — the produced witness would land empty.
-	//
-	// The swap only happens when the caller installed a prefetcher in the
-	// first place: ProcessBlock's execTriePrefetchEnabled decides whether
-	// prefetch output has a consumer (non-pipelined root calc, or the
-	// witness-on warm-snapshot capture), and V2 must not resurrect a
-	// prefetcher the caller deliberately skipped. Witness collection does
-	// not depend on it — the witness rides on the StateDB itself.
 	prevWitness := finalDB.Witness()
-	if finalDB.HasPrefetcher() {
-		finalDB.StopPrefetcher()
-		finalDB.StartPrefetcher("v2-settle", prevWitness, nil)
-	}
+	finalDB.StopPrefetcher()
+	finalDB.StartPrefetcher("v2-settle", prevWitness, nil)
 	finalDB.SkipTimers()
 	// Copy() deep-copies the witness; re-share so BLOCKHASH writes reach finalDB.
 	readBase := statedb.Copy()

@@ -80,9 +80,8 @@ var FullNodeGPO = gasprice.Config{
 
 // Defaults contains default settings for use on the Ethereum main net.
 var Defaults = Config{
-	SyncMode:                    downloader.SnapSync,
-	PipelinedImportExecPrefetch: true,
-	HistoryMode:                 history.KeepAll,
+	SyncMode:    downloader.SnapSync,
+	HistoryMode: history.KeepAll,
 	NetworkId:                   0, // enable auto configuration of networkID == chainID
 	TxLookupLimit:               2350000,
 	TransactionHistory:          2350000, // Note: used in bor cli
@@ -146,13 +145,6 @@ type Config struct {
 	// semantics, witness completeness, and root determinism are unaffected.
 	PipelinedSRCWarmSnapshot bool
 
-	// PipelinedImportExecPrefetch controls the executing StateDB's trie
-	// prefetcher during pipelined import. When disabled, the prefetcher
-	// still runs if the witness-on warm-snapshot handoff consumes its
-	// output; on every other pipelined path its output is discarded and it
-	// is skipped (the speculative block prefetcher is unaffected). No effect
-	// outside pipelined import.
-	PipelinedImportExecPrefetch bool
 
 	// Deprecated: use 'TransactionHistory' instead.
 	TxLookupLimit uint64 `toml:",omitempty"` // The maximum number of blocks from head whose tx indices are reserved.

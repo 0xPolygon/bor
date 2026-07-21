@@ -834,15 +834,6 @@ type PipelineConfig struct {
 	// Targets cold-cache restart/catch-up CPU; no effect on correctness or
 	// witness completeness. Witness-off import ignores it.
 	WarmSnapshot bool `hcl:"warm-snapshot,optional" toml:"warm-snapshot,optional"`
-
-	// ExecPrefetch controls the executing StateDB's trie prefetcher during
-	// pipelined import. When disabled, the prefetcher still runs if the
-	// witness-on warm-snapshot handoff consumes its output; on every other
-	// pipelined path its output is discarded, so disabling reclaims its CPU
-	// on catch-up (the speculative block prefetcher always runs — it warms
-	// caches ahead of the BlockSTM workers). No effect outside pipelined
-	// import.
-	ExecPrefetch bool `hcl:"exec-prefetch,optional" toml:"exec-prefetch,optional"`
 }
 
 func DefaultConfig() *Config {
@@ -1112,7 +1103,6 @@ func DefaultConfig() *Config {
 			EnableImportSRC: false,
 			ImportSRCLogs:   false,
 			WarmSnapshot:    true,
-			ExecPrefetch:    true,
 		},
 	}
 }
@@ -1599,7 +1589,6 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.EnablePipelinedImportSRC = c.Pipeline.EnableImportSRC
 		n.PipelinedImportSRCLogs = c.Pipeline.ImportSRCLogs
 		n.PipelinedSRCWarmSnapshot = c.Pipeline.WarmSnapshot
-		n.PipelinedImportExecPrefetch = c.Pipeline.ExecPrefetch
 		// Note that even the values set by `history.transactions` will be written in the old flag until it's removed.
 		n.TransactionHistory = c.Cache.TxLookupLimit
 		n.TrieTimeout = c.Cache.TrieTimeout

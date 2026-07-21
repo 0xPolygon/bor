@@ -6646,17 +6646,6 @@ func TestPipelinedImportSRC_MultipleBlocks(t *testing.T) {
 	testPipelinedImportSRC_MultipleBlocks(t, rawdb.PathScheme, pipelinedConfig(rawdb.PathScheme))
 }
 
-// TestPipelinedImportSRC_MultipleBlocksNoExecPrefetch re-runs the multi-block
-// parity check with the exec-side trie prefetcher disabled — the pipelined
-// witness-off configuration that reclaims the trie prefetcher CPU.
-func TestPipelinedImportSRC_MultipleBlocksNoExecPrefetch(t *testing.T) {
-	for _, scheme := range []string{rawdb.HashScheme, rawdb.PathScheme} {
-		cfg := pipelinedConfig(scheme)
-		cfg.PipelinedImportExecPrefetch = false
-		testPipelinedImportSRC_MultipleBlocks(t, scheme, cfg)
-	}
-}
-
 func testPipelinedImportSRC_MultipleBlocks(t *testing.T, scheme string, pipeCfg *BlockChainConfig) {
 	var (
 		key, _    = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
@@ -7955,13 +7944,6 @@ func testPipelinedImportSRC_WarmSnapshotWitnessParity(t *testing.T, scheme strin
 		chainOff := importInto(t, "snapshot-off", pipelinedConfig(scheme))
 		chainOn := importInto(t, "snapshot-on", pipelinedConfigWithWarmSnapshot(scheme))
 
-		// Third variant: snapshot off with the exec-side trie prefetcher
-		// disabled too. Witness capture must not depend on the prefetcher —
-		// SRC's trie-only walk is the capture authority.
-		noPrefetchCfg := pipelinedConfig(scheme)
-		noPrefetchCfg.PipelinedImportExecPrefetch = false
-		chainNoPf := importInto(t, "snapshot-off-no-prefetch", noPrefetchCfg)
-
 		for i := uint64(1); i <= numBlocks; i++ {
 			blkOff := chainOff.GetBlockByNumber(i)
 			blkOn := chainOn.GetBlockByNumber(i)
@@ -8039,37 +8021,6 @@ func testPipelinedImportSRC_WarmSnapshotWitnessParity(t *testing.T, scheme strin
 			}
 			if _, _, err := chainOn.ProcessBlockWithWitnesses(blkOn, &wOn); err != nil {
 				t.Errorf("block %d: stateless replay (on chain witness) failed: %v", i, err)
-			}
-
-			// No-prefetcher variant: identical roots, identical proof-node
-			// set, and the published witness must still replay statelessly.
-			blkNoPf := chainNoPf.GetBlockByNumber(i)
-			if blkNoPf == nil {
-				t.Fatalf("block %d: missing on no-prefetch chain", i)
-			}
-			if blkNoPf.Root() != blkOff.Root() {
-				t.Errorf("block %d: state root mismatch no-prefetch=%s baseline=%s", i, blkNoPf.Root(), blkOff.Root())
-			}
-			encNoPf := chainNoPf.GetWitness(blkNoPf.Hash())
-			if encNoPf == nil {
-				t.Fatalf("block %d: witness missing on no-prefetch chain", i)
-			}
-			var wNoPf stateless.Witness
-			if err := rlp.DecodeBytes(encNoPf, &wNoPf); err != nil {
-				t.Fatalf("block %d: decode no-prefetch witness: %v", i, err)
-			}
-			if len(wNoPf.State) != len(wOff.State) {
-				t.Errorf("block %d: State size no-prefetch=%d baseline=%d", i, len(wNoPf.State), len(wOff.State))
-			}
-			for k := range wOff.State {
-				if _, ok := wNoPf.State[k]; !ok {
-					t.Errorf("block %d: no-prefetch witness missing proof node present in baseline (len=%d)", i, len(k))
-					break
-				}
-			}
-			wNoPf.SetHeader(blkNoPf.Header())
-			if _, _, err := chainNoPf.ProcessBlockWithWitnesses(blkNoPf, &wNoPf); err != nil {
-				t.Errorf("block %d: stateless replay (no-prefetch witness) failed: %v", i, err)
 			}
 		}
 	})
@@ -8289,13 +8240,6 @@ func testPipelinedImportSRC_WarmSnapshotStorageTrieParity(t *testing.T, scheme s
 		chainOff := importInto(t, "snapshot-off", pipelinedConfig(scheme))
 		chainOn := importInto(t, "snapshot-on", pipelinedConfigWithWarmSnapshot(scheme))
 
-		// Third variant: snapshot off with the exec-side trie prefetcher
-		// disabled too. Witness capture must not depend on the prefetcher —
-		// SRC's trie-only walk is the capture authority.
-		noPrefetchCfg := pipelinedConfig(scheme)
-		noPrefetchCfg.PipelinedImportExecPrefetch = false
-		chainNoPf := importInto(t, "snapshot-off-no-prefetch", noPrefetchCfg)
-
 		for i := uint64(1); i <= numBlocks; i++ {
 			blkOff := chainOff.GetBlockByNumber(i)
 			blkOn := chainOn.GetBlockByNumber(i)
@@ -8358,37 +8302,6 @@ func testPipelinedImportSRC_WarmSnapshotStorageTrieParity(t *testing.T, scheme s
 			}
 			if _, _, err := chainOn.ProcessBlockWithWitnesses(blkOn, &wOn); err != nil {
 				t.Errorf("block %d: stateless replay (on chain witness) failed: %v", i, err)
-			}
-
-			// No-prefetcher variant: identical roots, identical proof-node
-			// set, and the published witness must still replay statelessly.
-			blkNoPf := chainNoPf.GetBlockByNumber(i)
-			if blkNoPf == nil {
-				t.Fatalf("block %d: missing on no-prefetch chain", i)
-			}
-			if blkNoPf.Root() != blkOff.Root() {
-				t.Errorf("block %d: state root mismatch no-prefetch=%s baseline=%s", i, blkNoPf.Root(), blkOff.Root())
-			}
-			encNoPf := chainNoPf.GetWitness(blkNoPf.Hash())
-			if encNoPf == nil {
-				t.Fatalf("block %d: witness missing on no-prefetch chain", i)
-			}
-			var wNoPf stateless.Witness
-			if err := rlp.DecodeBytes(encNoPf, &wNoPf); err != nil {
-				t.Fatalf("block %d: decode no-prefetch witness: %v", i, err)
-			}
-			if len(wNoPf.State) != len(wOff.State) {
-				t.Errorf("block %d: State size no-prefetch=%d baseline=%d", i, len(wNoPf.State), len(wOff.State))
-			}
-			for k := range wOff.State {
-				if _, ok := wNoPf.State[k]; !ok {
-					t.Errorf("block %d: no-prefetch witness missing proof node present in baseline (len=%d)", i, len(k))
-					break
-				}
-			}
-			wNoPf.SetHeader(blkNoPf.Header())
-			if _, _, err := chainNoPf.ProcessBlockWithWitnesses(blkNoPf, &wNoPf); err != nil {
-				t.Errorf("block %d: stateless replay (no-prefetch witness) failed: %v", i, err)
 			}
 		}
 	})
