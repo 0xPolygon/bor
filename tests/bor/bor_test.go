@@ -3398,8 +3398,7 @@ func TestPipelinedImportSRC_BasicImport(t *testing.T) {
 	}
 
 	// Connect the two peers
-	importerStack.Server().AddPeer(bpStack.Server().Self())
-	bpStack.Server().AddPeer(importerStack.Server().Self())
+	connectAndWaitForPeers(t, importerStack, bpStack)
 
 	// Start mining on the BP
 	err = bpBackend.StartMining()
@@ -3519,8 +3518,7 @@ func TestPipelinedImportSRC_WithTransactions(t *testing.T) {
 	}
 
 	// Connect peers
-	importerStack.Server().AddPeer(bpStack.Server().Self())
-	bpStack.Server().AddPeer(importerStack.Server().Self())
+	connectAndWaitForPeers(t, importerStack, bpStack)
 
 	// Start mining
 	err = bpBackend.StartMining()
@@ -3710,8 +3708,7 @@ func TestPipelinedImportSRC_SelfDestruct(t *testing.T) {
 	}
 
 	// Connect peers
-	importerStack.Server().AddPeer(bpStack.Server().Self())
-	bpStack.Server().AddPeer(importerStack.Server().Self())
+	connectAndWaitForPeers(t, importerStack, bpStack)
 
 	// Start mining
 	err = bpBackend.StartMining()

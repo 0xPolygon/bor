@@ -1198,6 +1198,10 @@ func readConfigFile(path string) (*Config, error) {
 		TxPool: &TxPoolConfig{},
 		Cache:  &CacheConfig{},
 		Sealer: &SealerConfig{},
+		// WarmSnapshot defaults on: witness-producing nodes measure faster
+		// with it, and it is inert otherwise. The zero value would silently
+		// put HCL-configured witness nodes on the slower path.
+		Pipeline: &PipelineConfig{WarmSnapshot: true},
 	}
 
 	if err := hclsimple.DecodeFile(path, nil, config); err != nil {

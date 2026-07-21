@@ -58,10 +58,26 @@ type WarmSnapshot struct {
 // the account trie, account hash for storage tries), its path within the
 // trie, and the node hash itself. The hash field disambiguates entries that
 // share owner+path across different blocks/states.
+// warmKey identifies a trie node by owner, path and content hash. It is a
+// comparable value type built on the stack — a string-keyed variant would
+// allocate on every Lookup, since Go's string(bytes) map-index optimization
+// does not apply to struct-literal keys. MPT paths are at most 64 nibbles;
+// longer paths cannot be produced by the trie and are simply not indexed
+// (Lookup misses fall through to the underlying reader).
 type warmKey struct {
-	owner common.Hash
-	path  string // string-keyed for direct map use; the bytes are MPT path nibbles
-	hash  common.Hash
+	owner   common.Hash
+	hash    common.Hash
+	pathLen uint8
+	path    [64]byte // MPT path nibbles
+}
+
+func makeWarmKey(owner common.Hash, path []byte, hash common.Hash) (warmKey, bool) {
+	if len(path) > len(warmKey{}.path) {
+		return warmKey{}, false
+	}
+	key := warmKey{owner: owner, hash: hash, pathLen: uint8(len(path))}
+	copy(key.path[:], path)
+	return key, true
 }
 
 // NewWarmSnapshot constructs a snapshot from per-trie node maps already
@@ -90,7 +106,11 @@ func NewWarmSnapshot(tries []TrieWarmNodes) *WarmSnapshot {
 			}
 			cp := make([]byte, len(blob))
 			copy(cp, blob)
-			s.nodes[warmKey{owner: owner, path: path, hash: crypto.Keccak256Hash(cp)}] = cp
+			key, ok := makeWarmKey(owner, []byte(path), crypto.Keccak256Hash(cp))
+			if !ok {
+				continue
+			}
+			s.nodes[key] = cp
 		}
 	}
 	return s
@@ -173,7 +193,11 @@ func (s *WarmSnapshot) Lookup(owner common.Hash, path []byte, expectedHash commo
 	if s == nil || len(s.nodes) == 0 {
 		return nil, false
 	}
-	blob, ok := s.nodes[warmKey{owner: owner, path: string(path), hash: expectedHash}]
+	key, ok := makeWarmKey(owner, path, expectedHash)
+	if !ok {
+		return nil, false
+	}
+	blob, ok := s.nodes[key]
 	if !ok {
 		return nil, false
 	}
