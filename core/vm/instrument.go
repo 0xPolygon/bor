@@ -53,15 +53,38 @@ import (
 // itself become the CPU cost we're trying to measure around.
 const maxObservedCallInput = 8192
 
-// callStats accumulates noisy per-label call data for one block. All
-// fields are atomics so concurrent goroutines (throwaway prefetch, serial
-// processor, parallel/BlockSTM processor) can update them without a lock.
+// callStats accumulates noisy per-(label, path) call data for one block.
+// The atomic fields let concurrent goroutines (throwaway prefetch, serial
+// processor, parallel/BlockSTM processor, and within BlockSTM every worker/
+// incarnation) update them without a lock. nanosHist/inputHist are safe for
+// concurrent Update from multiple goroutines too — the underlying Sample
+// implementation holds its own mutex.
 type callStats struct {
+	label string // original label, e.g. a precompile address hex or opcode name
+	path  string // "prefetch" / "serial" / "parallel" / "" if untagged
+
 	calls     atomic.Int64
 	wouldHit  atomic.Int64
 	nanos     atomic.Int64
 	inputSum  atomic.Int64
 	outputSum atomic.Int64
+
+	// retries counts calls made by a BlockSTM incarnation > 0, i.e. a
+	// transaction re-executed after a conflict-driven abort. Always 0
+	// outside the parallel path (incarnation is meaningless there).
+	retries atomic.Int64
+
+	nanosHist metrics.Histogram // real per-call duration, for percentiles
+	inputHist metrics.Histogram // real per-call input size, for percentiles
+}
+
+func newCallStats(label, path string) *callStats {
+	return &callStats{
+		label:     label,
+		path:      path,
+		nanosHist: metrics.NewHistogram(metrics.NewUniformSample(1028)),
+		inputHist: metrics.NewHistogram(metrics.NewUniformSample(1028)),
+	}
 }
 
 // CallObserver tracks, for a single block, whether a repeated
@@ -74,6 +97,12 @@ type callStats struct {
 // prefetcher and the parallel processor share EcrecoverCache/
 // Keccak256Cache; the serial processor does not).
 //
+// Stats are bucketed per (label, path) — see Observe's path parameter —
+// so a block's log makes it possible to tell how much of a label's would-
+// hit rate is already realized by today's prefetch↔parallel sharing versus
+// what would only materialize if the serial processor got the real caches
+// too.
+//
 // Caveat: because the serial and parallel processors race each other and
 // only one result is kept, the raw call counts/nanos summed here include
 // whichever processor lost the race. That inflates the "total time spent"
@@ -85,7 +114,7 @@ type CallObserver struct {
 	seen sync.Map // key: common.Hash, value: struct{}
 
 	mu    sync.Mutex
-	stats map[string]*callStats // key: label (precompile address hex, or opcode name)
+	stats map[string]*callStats // key: label + "|" + path
 }
 
 // NewCallObserver constructs an observer for a single block.
@@ -93,13 +122,14 @@ func NewCallObserver() *CallObserver {
 	return &CallObserver{stats: make(map[string]*callStats)}
 }
 
-func (o *CallObserver) statsFor(label string) *callStats {
+func (o *CallObserver) statsFor(label, path string) *callStats {
+	key := label + "|" + path
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	s, ok := o.stats[label]
+	s, ok := o.stats[key]
 	if !ok {
-		s = &callStats{}
-		o.stats[label] = s
+		s = newCallStats(label, path)
+		o.stats[key] = s
 	}
 	return s
 }
@@ -107,16 +137,33 @@ func (o *CallObserver) statsFor(label string) *callStats {
 // Observe records one call under label (e.g. a precompile address or an
 // opcode name), keyed by a content hash of its inputs. dur is the actual
 // wall-clock time the call took; inputLen/outputLen are recorded to help
-// size a real cache's entry bounds later. Safe to call on a nil receiver.
-func (o *CallObserver) Observe(label string, key common.Hash, dur time.Duration, inputLen, outputLen int) {
+// size a real cache's entry bounds later.
+//
+// path identifies which of the three racing execution paths made this
+// call ("prefetch" / "serial" / "parallel") — set from vm.Config.
+// ObservePath at each call site, so a block's log can tell how much of
+// the reported hit rate is already realized by today's prefetch↔parallel
+// sharing versus what serial is currently missing out on.
+//
+// incarnation is the BlockSTM incarnation number for this call (0 for the
+// first attempt at a transaction; >0 means it's a conflict-driven
+// re-execution). Meaningless outside the parallel path — pass 0 there.
+//
+// Safe to call on a nil receiver.
+func (o *CallObserver) Observe(label, path string, incarnation int, key common.Hash, dur time.Duration, inputLen, outputLen int) {
 	if o == nil {
 		return
 	}
-	s := o.statsFor(label)
+	s := o.statsFor(label, path)
 	s.calls.Add(1)
 	s.nanos.Add(dur.Nanoseconds())
 	s.inputSum.Add(int64(inputLen))
 	s.outputSum.Add(int64(outputLen))
+	s.nanosHist.Update(dur.Nanoseconds())
+	s.inputHist.Update(int64(inputLen))
+	if incarnation > 0 {
+		s.retries.Add(1)
+	}
 
 	if _, hit := o.seen.LoadOrStore(key, struct{}{}); hit {
 		s.wouldHit.Add(1)
@@ -147,35 +194,48 @@ func (o *CallObserver) LogSummary(blockNumber uint64) {
 		return
 	}
 	o.mu.Lock()
-	labels := make([]string, 0, len(o.stats))
-	for l := range o.stats {
-		labels = append(labels, l)
+	keys := make([]string, 0, len(o.stats))
+	for k := range o.stats {
+		keys = append(keys, k)
 	}
 	o.mu.Unlock()
-	sort.Strings(labels)
+	sort.Strings(keys)
 
-	for _, label := range labels {
-		s := o.stats[label]
+	for _, key := range keys {
+		s := o.stats[key]
 		calls := s.calls.Load()
 		if calls == 0 {
 			continue
 		}
 		hits := s.wouldHit.Load()
 		nanos := s.nanos.Load()
+		retries := s.retries.Load()
+
+		nanosP := s.nanosHist.Snapshot().Percentiles([]float64{0.5, 0.9, 0.99})
+		inputP := s.inputHist.Snapshot().Percentiles([]float64{0.5, 0.9, 0.99})
 
 		log.Info("instrument: call stats",
 			"block", blockNumber,
-			"label", label,
+			"label", s.label,
+			"path", s.path,
 			"calls", calls,
 			"wouldHitRate", fmt.Sprintf("%.4f", float64(hits)/float64(calls)),
+			"retryRate", fmt.Sprintf("%.4f", float64(retries)/float64(calls)),
 			"avgNanos", nanos/calls,
+			"p50Nanos", int64(nanosP[0]),
+			"p90Nanos", int64(nanosP[1]),
+			"p99Nanos", int64(nanosP[2]),
 			"totalMicros", nanos/1000,
 			"avgInputBytes", s.inputSum.Load()/calls,
+			"p50InputBytes", int64(inputP[0]),
+			"p90InputBytes", int64(inputP[1]),
+			"p99InputBytes", int64(inputP[2]),
 			"avgOutputBytes", s.outputSum.Load()/calls,
 		)
 
-		prefix := "chain/instrument/" + label
+		prefix := "chain/instrument/" + key
 		metrics.GetOrRegisterGaugeFloat64(prefix+"/hitrate", nil).Update(float64(hits) / float64(calls))
+		metrics.GetOrRegisterGaugeFloat64(prefix+"/retryrate", nil).Update(float64(retries) / float64(calls))
 		metrics.GetOrRegisterMeter(prefix+"/calls", nil).Mark(calls)
 		metrics.GetOrRegisterTimer(prefix+"/duration", nil).Update(time.Duration(nanos / calls))
 	}

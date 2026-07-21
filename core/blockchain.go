@@ -830,6 +830,7 @@ func (bc *BlockChain) startPrefetchGoroutine(block *types.Block, throwaway *stat
 		vmCfg := bc.cfg.VmConfig
 		vmCfg.Tracer = nil
 		caches.applyTo(&vmCfg)
+		vmCfg.ObservePath = "prefetch"
 		bc.prefetcher.Prefetch(block, throwaway, vmCfg, false, followupInterrupt)
 		blockPrefetchExecuteTimer.Update(time.Since(start))
 		if followupInterrupt.Load() {
@@ -890,6 +891,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 			parallelStatedb.StartPrefetcher("chain", witness, nil)
 			v2VmCfg := bc.cfg.VmConfig
 			sharedCaches.applyTo(&v2VmCfg)
+			v2VmCfg.ObservePath = "parallel"
 			res, err := bc.parallelProcessor.Process(block, parallelStatedb, v2VmCfg, nil, ctx)
 			blockExecutionParallelTimer.UpdateSince(pstart)
 			var localVtime time.Duration
@@ -926,6 +928,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 			// merges into the same per-block stats as the other two paths.
 			serialVmCfg := bc.cfg.VmConfig
 			serialVmCfg.CallObserver = sharedCaches.observer
+			serialVmCfg.ObservePath = "serial"
 			res, err := bc.processor.Process(block, statedb, serialVmCfg, nil, ctx)
 			blockExecutionSerialTimer.UpdateSince(pstart)
 			var localVtime time.Duration

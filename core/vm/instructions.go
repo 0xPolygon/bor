@@ -91,7 +91,7 @@ func opExp(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 	start := time.Now()
 	exponent.Exp(&base, exponent)
 	if len(baseBytes)+len(expBytes) <= maxObservedCallInput {
-		obs.Observe("EXP", ObserveKey(baseBytes, expBytes), time.Since(start), len(baseBytes)+len(expBytes), 32)
+		obs.Observe("EXP", evm.Config.ObservePath, evm.Config.ObserveIncarnation, ObserveKey(baseBytes, expBytes), time.Since(start), len(baseBytes)+len(expBytes), 32)
 	}
 
 	return nil, nil
@@ -292,7 +292,7 @@ func opKeccak256(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 			}
 			size.SetBytes32(h[:])
 			if obs != nil {
-				obs.Observe("KECCAK256_64B", ObserveKey(data), time.Since(obsStart), len(data), 32)
+				obs.Observe("KECCAK256_64B", evm.Config.ObservePath, evm.Config.ObserveIncarnation, ObserveKey(data), time.Since(obsStart), len(data), 32)
 			}
 			return nil, nil
 		}
@@ -320,7 +320,7 @@ func opKeccak256(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 		if len(data) != 64 {
 			label = "KECCAK256_other"
 		}
-		obs.Observe(label, ObserveKey(data), time.Since(obsStart), len(data), 32)
+		obs.Observe(label, evm.Config.ObservePath, evm.Config.ObserveIncarnation, ObserveKey(data), time.Since(obsStart), len(data), 32)
 	}
 	return nil, nil
 }

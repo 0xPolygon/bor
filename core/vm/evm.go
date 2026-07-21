@@ -79,7 +79,7 @@ func (evm *EVM) runPrecompile(p PrecompiledContract, addr common.Address, input 
 	}
 	if err == nil && len(input) <= maxObservedCallInput {
 		key := ObserveKey(addr.Bytes(), input)
-		obs.Observe(addr.Hex(), key, time.Since(start), len(input), len(ret))
+		obs.Observe(addr.Hex(), evm.Config.ObservePath, evm.Config.ObserveIncarnation, key, time.Since(start), len(input), len(ret))
 	}
 	return ret, remainingGas, err
 }

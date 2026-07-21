@@ -64,6 +64,17 @@ type Config struct {
 	// for precompiles/opcodes not yet covered by EcrecoverCache/
 	// Keccak256Cache. Never affects execution output. nil in production.
 	CallObserver *CallObserver
+	// ObservePath tags which racing execution path is making Observe calls
+	// ("prefetch" / "serial" / "parallel"), so a block's instrumentation log
+	// can tell how much of the reported hit rate is already realized versus
+	// what a path currently excluded from the real caches would gain.
+	// Instrumentation-only, ignored when CallObserver is nil.
+	ObservePath string
+	// ObserveIncarnation is the BlockSTM incarnation number for the calls
+	// this Config produces (0 = first attempt, >0 = conflict-driven
+	// re-execution). Meaningless outside the parallel path — leave 0
+	// elsewhere. Instrumentation-only, ignored when CallObserver is nil.
+	ObserveIncarnation int
 }
 
 // ScopeContext contains the things that are per-call, such as stack and memory,

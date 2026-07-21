@@ -671,7 +671,13 @@ func (e *v2Env) Execute(task blockstm.V2Task, workerID int, incarnation int,
 	t := task.(*v2Task)
 	pdb := e.preparePDB(t, incarnation, senderNonces, coinbase, waitForTx, waitForFinal, deferWrites)
 
-	evm := vm.NewEVM(e.blockCtx, pdb, e.chainConfig, e.vmConfig)
+	// Copy (not mutate) e.vmConfig per call so we can stamp this attempt's
+	// incarnation number for the instrumentation observer — see
+	// core/vm/instrument.go's retryRate — without racing other concurrent
+	// workers/incarnations that share e.vmConfig's cache pointers.
+	callVmConfig := e.vmConfig
+	callVmConfig.ObserveIncarnation = incarnation
+	evm := vm.NewEVM(e.blockCtx, pdb, e.chainConfig, callVmConfig)
 	// Only override with the per-v2Env fallback cache when no shared cache
 	// is configured. vm.NewEVM has already wired vmConfig.SharedJumpDestCache
 	// onto evm.jumpDests — overriding it would discard the prefetcher's work.
