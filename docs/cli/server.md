@@ -244,6 +244,8 @@ The ```bor server``` command runs the Bor client.
 
 - ```rpc.enabledeprecatedpersonal```: Enables the (deprecated) personal namespace (default: false)
 
+- ```rpc.enabletrace```: Enables the Parity-compatible trace namespace (trace_block, trace_transaction, trace_call, trace_callMany, trace_replayTransaction, trace_replayBlockTransactions) (default: false)
+
 - ```rpc.evmtimeout```: Sets a timeout used for eth_call (0=infinite) (default: 5s)
 
 - ```rpc.gascap```: Sets a cap on gas that can be used in eth_call/estimateGas (0=infinite) (default: 50000000)

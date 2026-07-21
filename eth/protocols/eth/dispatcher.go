@@ -25,9 +25,9 @@ import (
 )
 
 var (
-	// errDisconnected is returned if a request is attempted to be made to a peer
+	// ErrDisconnected is returned if a request is attempted to be made to a peer
 	// that was already closed.
-	errDisconnected = errors.New("disconnected")
+	ErrDisconnected = errors.New("disconnected")
 
 	// errDanglingResponse is returned if a response arrives with a request id
 	// which does not match to any existing pending requests.
@@ -70,7 +70,7 @@ func (r *Request) Close() error {
 				return err
 			}
 		case <-r.peer.term:
-			return errDisconnected
+			return ErrDisconnected
 		}
 	}
 
@@ -148,7 +148,7 @@ func (p *Peer) dispatchRequest(req *Request) error {
 	case p.reqDispatch <- reqOp:
 		return <-reqOp.fail
 	case <-p.term:
-		return errDisconnected
+		return ErrDisconnected
 	}
 }
 
@@ -191,12 +191,12 @@ func (p *Peer) dispatchResponse(res *Response, metadata func() interface{}) erro
 			case <-res.Req.Cancel:
 				return nil // Request cancelled, silently discard response
 			case <-p.term:
-				return errDisconnected
+				return ErrDisconnected
 			}
 		}
 
 	case <-p.term:
-		return errDisconnected
+		return ErrDisconnected
 	}
 }
 

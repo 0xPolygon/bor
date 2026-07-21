@@ -910,13 +910,21 @@ func testCommitInterruptExperimentBor(t *testing.T, delay uint, txCount int) {
 	// Start mining!
 	w.start()
 
-	// Wait for at least one block to be mined with a proper timeout
+	// Wait for the first non-empty block. Bor can pre-seal an empty block
+	// before the full block, and the test is about the interrupted full-block
+	// path rather than the empty pre-seal event.
 	var minedBlock *types.Block
-	select {
-	case ev := <-sub.Chan():
-		minedBlock = ev.Data.(core.NewMinedBlockEvent).Block
-	case <-time.After(8 * time.Second):
-		t.Fatal("timeout waiting for block to be mined")
+	timeout := time.After(8 * time.Second)
+	for minedBlock == nil {
+		select {
+		case ev := <-sub.Chan():
+			block := ev.Data.(core.NewMinedBlockEvent).Block
+			if block != nil && block.NumberU64() > 0 && block.Transactions().Len() > 0 {
+				minedBlock = block
+			}
+		case <-timeout:
+			t.Fatal("timeout waiting for non-empty block to be mined")
+		}
 	}
 
 	w.stop()
@@ -1027,14 +1035,10 @@ func TestCommitInterruptExperimentBor_NewTxFlow(t *testing.T) {
 
 	// Ensure that the last block was 3 and only 2/3 transactions are mined because
 	// of the 500ms timeout and 1s block time.
-	// Access w.current safely using getCurrent()
-	current := w.getCurrent()
-	if current == nil || current.header == nil {
-		t.Fatal("worker current state is not initialized")
-	}
-	assert.Equal(t, current.header.Number.Uint64(), uint64(3))
-	assert.Equal(t, current.tcount, 2)
-	assert.Equal(t, len(current.txs), 2)
+	require.Eventually(t, func() bool {
+		block := w.pendingBlock()
+		return block != nil && block.NumberU64() == 3 && block.Transactions().Len() == 2
+	}, 2*time.Second, 10*time.Millisecond, "expected pending block 3 with 2 transactions")
 }
 
 // nolint:paralleltest
@@ -2429,7 +2433,12 @@ func TestPrefetchGoroutineLifecycle(t *testing.T) {
 	config.Recommit = 500 * time.Millisecond
 
 	w, b, cleanup := newTestWorker(t, config, chainConfig, engine, db, false, 0)
-	defer cleanup()
+	closed := false
+	defer func() {
+		if !closed {
+			cleanup()
+		}
+	}()
 
 	// Add transactions to keep prefetch busy
 	addTransactionBatch(b, 50, false)
@@ -2456,10 +2465,10 @@ func TestPrefetchGoroutineLifecycle(t *testing.T) {
 		time.Sleep(150 * time.Millisecond)
 	}
 
-	// Stop the worker and wait for cleanup
-	// Increased wait time to allow prefetch goroutines to complete IntermediateRoot
-	w.stop()
-	time.Sleep(3 * time.Second)
+	// Close the worker so its loops cannot enqueue more prefetchers while
+	// prefetch cleanup is being measured.
+	cleanup()
+	closed = true
 
 	// Force garbage collection to surface any use-after-free issues
 	// Extra wait to ensure all goroutines complete after GC
@@ -2672,18 +2681,18 @@ func TestRapidBlockProduction_WithoutWait(t *testing.T) {
 	w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, 100, 200*time.Millisecond)
 	defer engine.Close()
 	defer ctrl.Finish()
+	closed := false
+	defer func() {
+		if !closed {
+			w.close()
+		}
+	}()
 
 	// Add many transactions
 	addTransactionBatch(b, 500, false)
 	time.Sleep(200 * time.Millisecond)
 
 	w.start()
-	workerClosed := false
-	defer func() {
-		if !workerClosed {
-			w.close()
-		}
-	}()
 
 	goroutinesBefore := runtime.NumGoroutine()
 	t.Logf("Goroutines before test: %d", goroutinesBefore)
@@ -2710,9 +2719,8 @@ func TestRapidBlockProduction_WithoutWait(t *testing.T) {
 
 	wg.Wait()
 	t.Log("All block production requests sent, waiting for prefetch to complete...")
-	time.Sleep(5 * time.Second) // Let all prefetch complete
 	w.close()
-	workerClosed = true
+	closed = true
 
 	// Check for panics
 	panicCount := prefetchPanicMeter.Snapshot().Count()
@@ -3559,9 +3567,8 @@ func TestBuildTxPlan(t *testing.T) {
 // what was already prefetched.
 //
 // Setup: 50 txs in pool, first 80% already marked as prefetched. Freed-gas channel
-// delivers 5 × 21000 gas BEFORE plan channel closes so the collect loop timer fires
-// and the overflow scan runs with a non-zero budget. Expected: the downstream
-// stream channel receives bonus txs from the unprefetched tail.
+// delivers 5 × 21000 gas while the plan channel remains open. Expected: the
+// downstream stream channel receives bonus txs from the unprefetched tail.
 func TestBuilderTxProvider_FreedGasFeedback(t *testing.T) {
 	t.Parallel()
 
@@ -3640,8 +3647,14 @@ func TestBuilderTxProvider_FreedGasFeedback(t *testing.T) {
 	}
 	close(gasFreedCh)
 
-	// Allow the 2ms timer to fire and the overflow scan to run. Then close planCh.
-	time.Sleep(20 * time.Millisecond)
+	// Keep the plan open until the overflow scan has produced an observable result.
+	// A fixed sleep can close the plan before the provider goroutine is scheduled.
+	var firstBonus *types.Transaction
+	select {
+	case firstBonus = <-streamCh:
+	case <-time.After(5 * time.Second):
+		interrupt.Store(true)
+	}
 	close(planCh)
 
 	select {
@@ -3651,7 +3664,8 @@ func TestBuilderTxProvider_FreedGasFeedback(t *testing.T) {
 	}
 
 	close(streamCh)
-	seen := make(map[common.Hash]struct{})
+	require.NotNil(t, firstBonus, "overflow scan did not forward a bonus transaction within timeout")
+	seen := map[common.Hash]struct{}{firstBonus.Hash(): {}}
 	for tx := range streamCh {
 		seen[tx.Hash()] = struct{}{}
 	}
@@ -3660,10 +3674,6 @@ func TestBuilderTxProvider_FreedGasFeedback(t *testing.T) {
 	t.Logf("streamCh received %d bonus txs (freed budget=%d gas, expected up to %d)",
 		forwarded, freedSignals*freedPerSignal, freedSignals)
 
-	// At least one bonus tx should reach the stream — the overflow scan found
-	// non-prefetched txs that fit within the freed-gas budget.
-	require.Greater(t, forwarded, 0,
-		"overflow scan should have forwarded bonus txs beyond the plan")
 	// None of the forwarded txs should be pre-prefetched.
 	for _, tx := range allTxs[:prePrefetchedCount] {
 		_, found := seen[tx.Hash()]
@@ -4041,21 +4051,54 @@ func TestTxFitsSize(t *testing.T) {
 	threshold := uint64(params.MaxBlockSize - maxBlockSizeBufferZone)
 	require.Greater(t, threshold, txSize, "buffer-zone leaves no room for a single tx in this test")
 
+	// Valencia reserves a slice of the block for the state-sync system tx, lowering
+	// the effective threshold by params.MaxStateSyncBytesPerBlock.
+	reservedThreshold := threshold - uint64(params.MaxStateSyncBytesPerBlock)
+	require.Greater(t, reservedThreshold, txSize, "reservation leaves no room for a single tx in this test")
+
 	cases := []struct {
-		name string
-		size uint64
-		want bool
+		name    string
+		size    uint64
+		reserve uint64
+		want    bool
 	}{
-		{"empty env accepts tx", 0, true},
-		{"plenty of room accepts tx", threshold / 2, true},
-		{"one byte under threshold accepts tx", threshold - txSize - 1, true},
-		{"exactly at threshold rejects tx", threshold - txSize, false},
-		{"over threshold rejects tx", threshold, false},
+		{"empty env accepts tx", 0, 0, true},
+		{"plenty of room accepts tx", threshold / 2, 0, true},
+		{"one byte under threshold accepts tx", threshold - txSize - 1, 0, true},
+		{"exactly at threshold rejects tx", threshold - txSize, 0, false},
+		{"over threshold rejects tx", threshold, 0, false},
+		{"reservation accepts tx under reduced threshold", reservedThreshold - txSize - 1, params.MaxStateSyncBytesPerBlock, true},
+		{"reservation rejects tx that would fit without it", reservedThreshold, params.MaxStateSyncBytesPerBlock, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			env := &environment{size: tc.size}
+			env := &environment{size: tc.size, stateSyncReserve: tc.reserve}
 			require.Equal(t, tc.want, env.txFitsSize(tx))
+		})
+	}
+}
+
+func TestStateSyncReserveFor(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		config *params.ChainConfig
+		number int64
+		want   uint64
+	}{
+		{"nil bor reserves nothing", &params.ChainConfig{}, 100, 0},
+		{"valencia unset reserves nothing", &params.ChainConfig{Bor: &params.BorConfig{}}, 100, 0},
+		{"before valencia reserves nothing", &params.ChainConfig{Bor: &params.BorConfig{ValenciaBlock: big.NewInt(100)}}, 99, 0},
+		{"at valencia reserves budget", &params.ChainConfig{Bor: &params.BorConfig{ValenciaBlock: big.NewInt(100)}}, 100, params.MaxStateSyncBytesPerBlock},
+		{"after valencia reserves budget", &params.ChainConfig{Bor: &params.BorConfig{ValenciaBlock: big.NewInt(0)}}, 1, params.MaxStateSyncBytesPerBlock},
+		{"sprint start reserves budget", &params.ChainConfig{Bor: &params.BorConfig{ValenciaBlock: big.NewInt(0), Sprint: map[string]uint64{"0": 16}}}, 160, params.MaxStateSyncBytesPerBlock},
+		{"non sprint start reserves nothing", &params.ChainConfig{Bor: &params.BorConfig{ValenciaBlock: big.NewInt(0), Sprint: map[string]uint64{"0": 16}}}, 161, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tc.want, stateSyncReserveFor(tc.config, big.NewInt(tc.number)))
 		})
 	}
 }

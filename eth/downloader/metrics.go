@@ -45,4 +45,10 @@ var (
 	bodyItemDownloadTimer    = metrics.NewRegisteredTimer("eth/downloader/bodies/item_download_duration", nil)
 	receiptItemDownloadTimer = metrics.NewRegisteredTimer("eth/downloader/receipts/item_download_duration", nil)
 	witnessItemDownloadTimer = metrics.NewRegisteredTimer("eth/downloader/witnesses/item_download_duration", nil)
+
+	peerJailMeter         = metrics.NewRegisteredMeter("eth/downloader/peer/response/jail", nil)
+	peerDropResponseMeter = metrics.NewRegisteredMeter("eth/downloader/peer/response/drop", nil)
+	peerSoftBackoffMeter  = metrics.NewRegisteredMeter("eth/downloader/peer/response/backoff", nil)
+	peerMismatchMeter     = metrics.NewRegisteredMeter("eth/downloader/peer/response/mismatch", nil)
+	peerGhostStateMeter   = metrics.NewRegisteredMeter("eth/downloader/peer/response/ghoststate", nil)
 )

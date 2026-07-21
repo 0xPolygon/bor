@@ -247,6 +247,123 @@ func TestHandleGetWitnessMetadata_HashCountBound(t *testing.T) {
 	}
 }
 
+// TestHandleGetWitness_PageCountBound exercises the per-request page cap that
+// mirrors handleGetWitnessMetadata's hash cap.
+func TestHandleGetWitness_PageCountBound(t *testing.T) {
+	handler := newTestHandler()
+	defer handler.close()
+
+	witHandler := (*witHandler)(handler.handler)
+	peer := newTestWitPeer()
+	defer peer.Close()
+
+	tests := []struct {
+		name    string
+		count   int
+		wantErr bool
+	}{
+		{"at limit", MaxWitnessServe, false},
+		{"one over limit", MaxWitnessServe + 1, true},
+		{"far over limit", MaxWitnessServe * 50, true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			pages := make([]wit.WitnessPageRequest, tc.count)
+			for i := range pages {
+				pages[i] = wit.WitnessPageRequest{
+					Hash: common.Hash{byte(i), byte(i >> 8), byte(i >> 16)},
+					Page: 0,
+				}
+			}
+			packet := &wit.GetWitnessPacket{
+				RequestId:         55555,
+				GetWitnessRequest: &wit.GetWitnessRequest{WitnessPages: pages},
+			}
+
+			response, err := witHandler.handleGetWitness(peer, packet)
+			if tc.wantErr {
+				require.Error(t, err)
+				assert.Nil(t, response)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tc.count, len(response))
+			}
+		})
+	}
+}
+
+// TestHandleGetWitness_MemoryBudget verifies that a request which would force
+// the node to load more than MaximumCachedWitnessOnARequest of witness data is
+// rejected before the loaded total grows unbounded. Each witness is one byte
+// over a page, so requesting its last page returns ~1 byte while the full
+// ~15 MB witness is loaded and counted toward the per-request memory budget.
+func TestHandleGetWitness_MemoryBudget(t *testing.T) {
+	if testing.Short() {
+		t.Skip("allocates ~225 MB; skipped under -short")
+	}
+
+	handler := newTestHandler()
+	defer handler.close()
+
+	witHandler := (*witHandler)(handler.handler)
+	peer := newTestWitPeer()
+	defer peer.Close()
+	db := handler.chain.DB()
+
+	const witnessSize = PageSize + 1                        // 2 pages; request the last one
+	n := (MaximumCachedWitnessOnARequest / witnessSize) + 2 // enough to cross the 200 MB guard
+	filler := make([]byte, witnessSize)
+
+	pages := make([]wit.WitnessPageRequest, 0, n)
+	for i := 0; i < n; i++ {
+		hdr := &types.Header{Number: big.NewInt(int64(1_000_000 + i))}
+		hash := hdr.Hash()
+		rawdb.WriteHeader(db, hdr)
+		rawdb.WriteWitness(db, hash, filler)
+		pages = append(pages, wit.WitnessPageRequest{Hash: hash, Page: 1}) // last page => tiny response, full load
+	}
+
+	_, err := witHandler.handleGetWitness(peer, &wit.GetWitnessPacket{
+		RequestId:         7,
+		GetWitnessRequest: &wit.GetWitnessRequest{WitnessPages: pages},
+	})
+	require.Error(t, err, "request demanding more than the per-request memory budget must be rejected")
+	require.Contains(t, err.Error(), "request demands too much memory")
+}
+
+func TestHandleGetWitness_ResponseEncodedSizeBound(t *testing.T) {
+	handler := newTestHandler()
+	defer handler.close()
+
+	witHandler := (*witHandler)(handler.handler)
+	peer := newTestWitPeer()
+	defer peer.Close()
+	db := handler.chain.DB()
+
+	firstHeader := &types.Header{Number: big.NewInt(2_000_000)}
+	firstHash := firstHeader.Hash()
+	rawdb.WriteHeader(db, firstHeader)
+	rawdb.WriteWitness(db, firstHash, make([]byte, PageSize))
+
+	secondHeader := &types.Header{Number: big.NewInt(2_000_001)}
+	secondHash := secondHeader.Hash()
+	rawdb.WriteHeader(db, secondHeader)
+	rawdb.WriteWitness(db, secondHash, make([]byte, MaximumResponseSize-PageSize-1))
+
+	_, err := witHandler.handleGetWitness(peer, &wit.GetWitnessPacket{
+		RequestId: 42,
+		GetWitnessRequest: &wit.GetWitnessRequest{
+			WitnessPages: []wit.WitnessPageRequest{
+				{Hash: firstHash, Page: 0},
+				{Hash: secondHash, Page: 0},
+			},
+		},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "response exceeds maximum p2p payload size")
+}
+
 // TestHandleGetWitnessMetadata_PageCalculation tests page calculation edge cases
 func TestHandleGetWitnessMetadata_PageCalculation(t *testing.T) {
 	handler := newTestHandler()

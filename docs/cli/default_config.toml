@@ -118,6 +118,7 @@ devfakeauthor = false
   rangelimit = 0
   allow-unprotected-txs = false
   enabledeprecatedpersonal = false
+  enabletrace = false
   "txsync.defaulttimeout" = "20s"
   "txsync.maxtimeout" = "1m0s"
   accept-preconf-tx = false

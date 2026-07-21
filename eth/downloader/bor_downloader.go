@@ -76,7 +76,7 @@ var (
 	errNoPeers                 = errors.New("no peers to keep download active")
 	errTimeout                 = errors.New("timeout")
 	errEmptyHeaderSet          = errors.New("empty header set by peer")
-	errPeersUnavailable        = errors.New("no peers available or all tried for download")
+	ErrPeersUnavailable        = errors.New("no peers available or all tried for download")
 	errInvalidAncestor         = errors.New("retrieved ancestor is invalid")
 	errInvalidChain            = errors.New("retrieved hash chain is invalid")
 	errInvalidBody             = errors.New("retrieved block body is invalid")
@@ -87,7 +87,9 @@ var (
 	errTooOld                  = errors.New("peer's protocol version too old")
 	errNoAncestorFound         = errors.New("no common ancestor found")
 	errNoPivotHeader           = errors.New("pivot header is not found")
-	ErrMergeTransition         = errors.New("legacy sync reached the merge")
+	// ErrPeerBackedOff is returned when a sync is attempted against a peer that is currently benched.
+	ErrPeerBackedOff   = errors.New("peer is temporarily backed off")
+	ErrMergeTransition = errors.New("legacy sync reached the merge")
 )
 
 // peerDropFn is a callback type for dropping a peer detected as malicious.
@@ -375,29 +377,57 @@ func (d *Downloader) UnregisterPeer(id string) error {
 	return nil
 }
 
+func (d *Downloader) PeerBackoff(id string) time.Duration {
+	persistent := d.peers.persistentBackoff(id)
+	var live time.Duration
+	if peer := d.peers.Peer(id); peer != nil {
+		live = peer.backoffRemaining()
+	}
+	if persistent > live {
+		return persistent
+	}
+	return live
+}
+
+func (d *Downloader) SetPeerBackoffForTesting(id string, duration time.Duration) bool {
+	peer := d.peers.Peer(id)
+	if peer == nil {
+		return false
+	}
+	if duration <= 0 {
+		peer.setBackoffForTesting(time.Time{})
+		d.peers.clearJailForTesting(id)
+		return true
+	}
+	until := time.Now().Add(duration)
+	peer.setBackoffForTesting(until)
+	d.peers.recordJail(peer, until)
+	return true
+}
+
 // LegacySync tries to sync up our local block chain with a remote peer, both
 // adding various sanity checks as well as wrapping it with various log entries.
 func (d *Downloader) LegacySync(id string, head common.Hash, td, ttd *big.Int, mode SyncMode) error {
+	masterPeer := d.peers.Peer(id)
+
 	err := d.synchronise(id, head, td, ttd, mode, false, nil)
 
 	switch err {
-	case nil, errBusy, errCanceled:
+	case nil, errBusy, errCanceled, errCancelContentProcessing, errTerminated:
 		return err
 	}
 
-	if errors.Is(err, errInvalidChain) || errors.Is(err, errBadPeer) || errors.Is(err, errTimeout) ||
-		errors.Is(err, errStallingPeer) || errors.Is(err, errUnsyncedPeer) || errors.Is(err, errEmptyHeaderSet) ||
-		errors.Is(err, errPeersUnavailable) || errors.Is(err, errTooOld) || errors.Is(err, errInvalidAncestor) {
-		log.Warn("Synchronisation failed, dropping peer", "peer", id, "err", err, "mode", d.getMode())
+	if errors.Is(err, ErrPeerBackedOff) || isSyncCancellation(err) {
+		return err
+	}
 
-		if d.dropPeer == nil {
-			// The dropPeer method is nil when `--copydb` is used for a local copy.
-			// Timeouts can occur if e.g. compaction hits at the wrong time, and can be ignored
-			log.Warn("Downloader wants to drop peer, but peerdrop-function is not set", "peer", id)
-		} else {
-			d.dropPeer(id)
-		}
+	d.syncStatsLock.RLock()
+	origin, height := d.syncStatsChainOrigin, d.syncStatsChainHeight
+	d.syncStatsLock.RUnlock()
 
+	log.Debug("Synchronisation failed, evaluating peer response", "peer", id, "target", head, "td", td, "ttd", ttd, "mode", mode, "origin", origin, "height", height, "err", err)
+
+	if d.handleSyncFailure(masterPeer, id, err) {
 		return err
 	}
 
@@ -405,8 +435,7 @@ func (d *Downloader) LegacySync(id string, head common.Hash, td, ttd *big.Int, m
 		return err // This is an expected fault, don't keep printing it in a spin-loop
 	}
 
-	// Warn in case of any error thrown by whitelisting module
-	if errors.Is(err, whitelist.ErrNoRemote) || errors.Is(err, whitelist.ErrMismatch) {
+	if errors.Is(err, whitelist.ErrLongFutureChain) {
 		log.Warn("Synchronisation failed due to whitelist validation", "peer", id, "err", err)
 		return err
 	}
@@ -501,6 +530,9 @@ func (d *Downloader) synchronise(id string, hash common.Hash, td, ttd *big.Int, 
 		p = d.peers.Peer(id)
 		if p == nil {
 			return errUnknownPeer
+		}
+		if p.backedOff() {
+			return ErrPeerBackedOff
 		}
 	}
 
@@ -1382,10 +1414,7 @@ func (d *Downloader) fetchHeaders(p *peerConnection, from uint64, head uint64) e
 			return err
 
 		default:
-			// Header retrieval either timed out, or the peer failed in some strange way
-			// (e.g. disconnect). Consider the master peer bad and drop
-			p.log.Debug("Downloader: header fetch failed, dropping master peer", "peer", p.id, "err", err)
-			d.dropPeer(p.id)
+			p.log.Debug("Downloader: master header fetch failed", "peer", p.id, "from", from, "head", head, "ancestor", ancestor, "skeleton", skeleton, "pivoting", pivoting, "err", err)
 
 			// Finish the sync gracefully instead of dumping the gathered data though
 			for _, ch := range []chan bool{d.queue.blockWakeCh, d.queue.receiptWakeCh} {
@@ -1405,7 +1434,7 @@ func (d *Downloader) fetchHeaders(p *peerConnection, from uint64, head uint64) e
 			case <-d.cancelCh:
 			}
 
-			return fmt.Errorf("%w: header request failed: %v", errBadPeer, err)
+			return fmt.Errorf("%w: header request failed: %w", errBadPeer, err)
 		}
 		// If the pivot is being checked, move if it became stale and run the real retrieval
 		var pivot uint64
@@ -1486,8 +1515,11 @@ func (d *Downloader) fetchHeaders(p *peerConnection, from uint64, head uint64) e
 		if skeleton {
 			filled, hashset, proced, err := d.fillHeaderSkeleton(from, headers)
 			if err != nil {
-				p.log.Debug("Skeleton chain invalid", "err", err)
-				return fmt.Errorf("%w: %v", errInvalidChain, err)
+				p.log.Debug("Skeleton header fill failed", "from", from, "head", head, "processed", proced, "headers", len(headers), "err", err)
+				if isSyncCancellation(err) || errors.Is(err, ErrPeersUnavailable) || errors.Is(err, errNoPeers) || errors.Is(err, ErrPeerBackedOff) || errors.Is(err, errTimeout) {
+					return err
+				}
+				return fmt.Errorf("%w: %w", errInvalidChain, err)
 			}
 
 			headers = filled[proced:]
@@ -1844,6 +1876,18 @@ func (d *Downloader) processFullSyncContent(ttd *big.Int, beaconMode bool) error
 	}
 }
 
+func (d *Downloader) reportBadBlock(block *types.Block) {
+	if d.badBlock == nil {
+		return
+	}
+	head, _, _, err := d.skeleton.Bounds()
+	if err != nil {
+		log.Error("Failed to retrieve beacon bounds for bad block reporting", "err", err)
+		return
+	}
+	d.badBlock(block.Header(), head)
+}
+
 func (d *Downloader) importBlockResults(results []*fetchResult) error {
 	// Check for any early termination requests
 	if len(results) == 0 {
@@ -1874,23 +1918,16 @@ func (d *Downloader) importBlockResults(results []*fetchResult) error {
 	// consensus-layer.
 	if index, err := d.blockchain.InsertChain(blocks, d.syncAndProduceWitnesses); err != nil {
 		if index < len(results) {
-			log.Debug("Downloaded item processing failed", "number", results[index].Header.Number, "hash", results[index].Header.Hash(), "err", err)
+			log.Debug("Downloaded item processing failed", "number", results[index].Header.Number, "hash", results[index].Header.Hash(), "firstnum", first.Number, "firsthash", first.Hash(), "lastnum", last.Number, "lasthash", last.Hash(), "err", err)
 
 			// In post-merge, notify the engine API of encountered bad chains
-			if d.badBlock != nil {
-				head, _, _, err := d.skeleton.Bounds()
-				if err != nil {
-					log.Error("Failed to retrieve beacon bounds for bad block reporting", "err", err)
-				} else {
-					d.badBlock(blocks[index].Header(), head)
-				}
-			}
+			d.reportBadBlock(blocks[index])
 		} else {
 			// The InsertChain method in blockchain.go will sometimes return an out-of-bounds index,
 			// when it needs to preprocess blocks to import a sidechain.
 			// The importer will put together a new list of blocks to import, which is a superset
 			// of the blocks delivered from the downloader, and the indexing will be off.
-			log.Debug("Downloaded item processing failed on sidechain import", "index", index, "err", err)
+			log.Debug("Downloaded item processing failed on sidechain import", "index", index, "firstnum", first.Number, "firsthash", first.Hash(), "lastnum", last.Number, "lasthash", last.Hash(), "err", err)
 		}
 
 		// If we've received too long future chain error (from whitelisting service),
@@ -1899,7 +1936,7 @@ func (d *Downloader) importBlockResults(results []*fetchResult) error {
 			return fmt.Errorf("%v: %w", errInvalidChain, err)
 		}
 
-		return fmt.Errorf("%w: %v", errInvalidChain, err)
+		return fmt.Errorf("%w: %w", errInvalidChain, err)
 	}
 
 	return nil
@@ -2352,8 +2389,8 @@ func (d *Downloader) importBlockResultsStateless(results []*fetchResult) error {
 	}
 	// Import the batch of blocks
 	if index, err := d.blockchain.InsertChainStateless(blocks, witnesses); err != nil {
-		log.Warn("Invalid block body", "index", index, "hash", blocks[index].Hash(), "err", err)
-		return errInvalidBody // Or a more specific error if possible
+		log.Warn("Stateless block import failed", "index", index, "hash", blocks[index].Hash(), "err", err)
+		return errInvalidBody
 	}
 
 	return nil

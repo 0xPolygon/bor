@@ -17,6 +17,8 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/eth/tracers/logger"
+	"github.com/ethereum/go-ethereum/internal/ethapi"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -863,6 +865,56 @@ func TestTraceTransaction_StateSync_PrestateTracer(t *testing.T) {
 			// stateReceiverAddr is rendered with the EIP-55 mixed-case checksum in JSON.
 			require.Contains(t, stateMap, stateReceiverAddr.Hex(),
 				"prestate must contain the state receiver contract address")
+		})
+	}
+}
+
+// TestTraceCallMany_StateSyncBlock_BaseState verifies that TraceCallMany builds its
+// base state from a block whose trailing transaction is a state-sync tx without ever
+// applying that synthetic tx as a normal message. Because the state-sync tx is always
+// last, an in-range transactionIndex replays only the normal txs, and the full-block
+// case uses the committed post-block state — neither path executes the state-sync tx.
+func TestTraceCallMany_StateSyncBlock_BaseState(t *testing.T) {
+	t.Parallel()
+
+	backend, api, stateSyncBlock := newStateSyncTestSetup(t, 3, 2)
+	defer backend.chain.Stop()
+
+	block, _ := backend.BlockByNumber(context.Background(), rpc.BlockNumber(stateSyncBlock))
+	require.NotNil(t, block)
+	txs := block.Transactions()
+	require.Equal(t, 2, len(txs), "expected 1 normal tx + 1 trailing state-sync tx")
+	stateSyncIdx := len(txs) - 1 // index of the trailing state-sync tx
+	pastEnd := len(txs)
+
+	to := targetAddr
+	bundles := []Bundle{{Transactions: []ethapi.TransactionArgs{{
+		From:  &address,
+		To:    &to,
+		Value: (*hexutil.Big)(big.NewInt(1)),
+	}}}}
+
+	byNumber := rpc.BlockNumberOrHashWithNumber(rpc.BlockNumber(stateSyncBlock))
+	cases := []struct {
+		name string
+		sc   StateContext
+	}{
+		{"full post-block state by hash", StateContext{BlockNumber: rpc.BlockNumberOrHashWithHash(block.Hash(), false)}},
+		{"index at state-sync tx replays normal txs only", StateContext{BlockNumber: byNumber, TransactionIndex: &stateSyncIdx}},
+		{"index past all txs falls back to post-block state", StateContext{BlockNumber: byNumber, TransactionIndex: &pastEnd}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := api.TraceCallMany(context.Background(), bundles, tc.sc, nil)
+			require.NoError(t, err, "base-state setup must not apply the state-sync tx as a normal message")
+			require.Len(t, res, 1)
+			require.Len(t, res[0], 1)
+
+			raw, ok := res[0][0].(json.RawMessage)
+			require.True(t, ok, "expected json.RawMessage, got %T", res[0][0])
+			var out logger.ExecutionResult
+			require.NoError(t, json.Unmarshal(raw, &out))
+			require.False(t, out.Failed, "traced call should succeed")
 		})
 	}
 }

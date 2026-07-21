@@ -10,6 +10,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -119,6 +120,49 @@ func TestGetWitnessPacket(t *testing.T) {
 	assert.Equal(t, 2, len(packet.GetWitnessRequest.WitnessPages))
 	assert.Equal(t, uint64(0), packet.GetWitnessRequest.WitnessPages[0].Page)
 	assert.Equal(t, uint64(1), packet.GetWitnessRequest.WitnessPages[1].Page)
+}
+
+func TestGetWitnessRequestDecodeRLPPageCountBound(t *testing.T) {
+	pages := make([]WitnessPageRequest, MaxWitnessServe+1)
+	for i := range pages {
+		pages[i] = WitnessPageRequest{
+			Hash: common.Hash{byte(i), byte(i >> 8)},
+			Page: uint64(i),
+		}
+	}
+
+	enc, err := rlp.EncodeToBytes(&GetWitnessRequest{WitnessPages: pages[:MaxWitnessServe]})
+	require.NoError(t, err)
+	var allowed GetWitnessRequest
+	require.NoError(t, rlp.DecodeBytes(enc, &allowed))
+	require.Len(t, allowed.WitnessPages, MaxWitnessServe)
+
+	enc, err = rlp.EncodeToBytes(&GetWitnessRequest{WitnessPages: pages})
+	require.NoError(t, err)
+	var rejected GetWitnessRequest
+	err = rlp.DecodeBytes(enc, &rejected)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "witness request exceeds")
+}
+
+func TestGetWitnessMetadataRequestDecodeRLPHashCountBound(t *testing.T) {
+	hashes := make([]common.Hash, MaxWitnessMetadataServe+1)
+	for i := range hashes {
+		hashes[i] = common.Hash{byte(i), byte(i >> 8)}
+	}
+
+	enc, err := rlp.EncodeToBytes(&GetWitnessMetadataRequest{Hashes: hashes[:MaxWitnessMetadataServe]})
+	require.NoError(t, err)
+	var allowed GetWitnessMetadataRequest
+	require.NoError(t, rlp.DecodeBytes(enc, &allowed))
+	require.Len(t, allowed.Hashes, MaxWitnessMetadataServe)
+
+	enc, err = rlp.EncodeToBytes(&GetWitnessMetadataRequest{Hashes: hashes})
+	require.NoError(t, err)
+	var rejected GetWitnessMetadataRequest
+	err = rlp.DecodeBytes(enc, &rejected)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "witness metadata request exceeds")
 }
 
 // TestProtocolVersionConstants tests that protocol version constants are defined correctly

@@ -259,13 +259,14 @@ func newRegisteredCustomTimer(name string, reservoirSize int) *metrics.Timer {
 // environment is the worker's current environment and holds all
 // information of the sealing block generation.
 type environment struct {
-	signer   types.Signer
-	state    *state.StateDB // apply state changes here
-	tcount   int            // tx count in cycle
-	size     uint64         // size of the block we are building
-	gasPool  *core.GasPool  // available gas used to pack transactions
-	coinbase common.Address
-	evm      *vm.EVM
+	signer           types.Signer
+	state            *state.StateDB // apply state changes here
+	tcount           int            // tx count in cycle
+	size             uint64         // size of the block we are building
+	stateSyncReserve uint64         // block-size budget reserved for the state-sync system tx appended in Finalize (Valencia+)
+	gasPool          *core.GasPool  // available gas used to pack transactions
+	coinbase         common.Address
+	evm              *vm.EVM
 	// buildInterrupt owns the timeout signal for this specific block-building
 	// attempt. It must not be shared across overlapping sequential/speculative
 	// builds, otherwise one timer can abort another build.
@@ -334,6 +335,7 @@ func (env *environment) copy() *environment {
 		signer:             env.signer,
 		state:              env.state.Copy(),
 		tcount:             env.tcount,
+		stateSyncReserve:   env.stateSyncReserve,
 		coinbase:           env.coinbase,
 		buildInterrupt:     newBuildInterruptState(),
 		header:             types.CopyHeader(env.header),
@@ -384,9 +386,31 @@ type task struct {
 	witnessBytes         []byte        // RLP-encoded witness from SRC goroutine (for pipelined blocks)
 }
 
+// stateSyncReserveFor returns the block-size budget to hold back for the state-sync
+// system tx that CommitStates appends at sprint start (Valencia+). Only sprint-start
+// blocks carry that tx, so only they reserve; pre-Valencia and non-Bor configs
+// reserve nothing.
+func stateSyncReserveFor(config *params.ChainConfig, number *big.Int) uint64 {
+	if config.Bor == nil || !config.Bor.IsValencia(number) {
+		return 0
+	}
+
+	// Reserve only at sprint start. Fall back to reserving when the sprint length
+	// is unknown, which avoids a divide-by-zero and never under-reserves.
+	sprint := uint64(0)
+	if len(config.Bor.Sprint) > 0 {
+		sprint = config.Bor.CalculateSprint(number.Uint64())
+	}
+	if sprint > 0 && !bor.IsSprintStart(number.Uint64(), sprint) {
+		return 0
+	}
+
+	return params.MaxStateSyncBytesPerBlock
+}
+
 // txFits reports whether the transaction fits into the block size limit.
 func (env *environment) txFitsSize(tx *types.Transaction) bool {
-	return env.size+tx.Size() < params.MaxBlockSize-maxBlockSizeBufferZone
+	return env.size+tx.Size() < params.MaxBlockSize-maxBlockSizeBufferZone-env.stateSyncReserve
 }
 
 const (
@@ -466,7 +490,8 @@ type worker struct {
 	resubmitIntervalCh chan time.Duration
 	resubmitAdjustCh   chan *intervalAdjust
 
-	wg sync.WaitGroup
+	wg         sync.WaitGroup
+	prefetchWg sync.WaitGroup
 
 	currentMu sync.RWMutex // The lock used to protect the current environment
 	current   *environment // An environment for current running cycle.
@@ -775,6 +800,7 @@ func (w *worker) close() {
 	w.running.Store(false)
 	close(w.exitCh)
 	w.wg.Wait()
+	w.prefetchWg.Wait()
 }
 
 // recalcRecommit recalculates the resubmitting interval upon feedback.
@@ -1463,6 +1489,7 @@ func (w *worker) makeEnv(header *types.Header, coinbase common.Address, witness 
 	}
 	timeoutInterrupt, _ := w.interruptStateForEnv(env)
 	env.evm.SetInterrupt(timeoutInterrupt)
+	env.stateSyncReserve = stateSyncReserveFor(w.chainConfig, header.Number)
 
 	// Keep track of transactions which return errors so they can be removed
 	env.tcount = 0
@@ -2417,7 +2444,9 @@ func (w *worker) maybeStartPrefetch(parent *types.Header, throwaway *state.State
 	// it nil means zero overhead when prefetch is disabled.
 	genParams.builderStarted = new(atomic.Bool)
 	genParams.builderPrefetchedTxHashes = &sync.Map{}
+	w.prefetchWg.Add(1)
 	go func() {
+		defer w.prefetchWg.Done()
 		defer func() {
 			if r := recover(); r != nil {
 				log.Error("Prefetch goroutine panicked", "err", r, "stack", string(debug.Stack()))
