@@ -266,13 +266,6 @@ func (t *blockingPrefetchTrie) accountStats() (int, int) {
 	return t.accountCalls, t.accountItems
 }
 
-func (t *blockingPrefetchTrie) storageStats() (int, int) {
-	t.lock.Lock()
-	defer t.lock.Unlock()
-
-	return t.storageCalls, t.storageItems
-}
-
 func TestVerklePrefetcher(t *testing.T) {
 	disk := rawdb.NewMemoryDatabase()
 	db := triedb.NewDatabase(disk, triedb.VerkleDefaults)

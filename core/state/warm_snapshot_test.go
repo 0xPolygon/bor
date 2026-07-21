@@ -60,10 +60,6 @@ func (s *stubNodeReader) set(owner common.Hash, path []byte, blob []byte) {
 	s.nodes[stubKey{owner: owner, path: string(path)}] = stubNode{blob: blob}
 }
 
-func (s *stubNodeReader) setError(owner common.Hash, path []byte, err error) {
-	s.nodes[stubKey{owner: owner, path: string(path)}] = stubNode{err: err}
-}
-
 func (s *stubNodeReader) Node(owner common.Hash, path []byte, hash common.Hash) ([]byte, error) {
 	s.calls = append(s.calls, stubCall{owner: owner, path: append([]byte(nil), path...), hash: hash})
 	n, ok := s.nodes[stubKey{owner: owner, path: string(path)}]
@@ -278,4 +274,3 @@ func TestWarmSnapshot_OwnerScoped(t *testing.T) {
 	_, ok = snap.Lookup(storageOwner, path, crypto.Keccak256Hash(accountBlob))
 	require.False(t, ok, "must not serve account blob to storage owner even when that blob's hash matches expectedHash")
 }
-

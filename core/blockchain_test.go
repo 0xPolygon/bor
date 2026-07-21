@@ -6713,7 +6713,6 @@ func testPipelinedImportSRC_MultipleBlocks(t *testing.T, scheme string, pipeCfg 
 			t.Errorf("block %d: block hash mismatch pipeline=%s reference=%s", i, pipeBlock.Hash(), refBlock.Hash())
 		}
 	}
-
 }
 
 // TestPipelinedImportSRC_SingleBlock inserts a single block with pipeline enabled
