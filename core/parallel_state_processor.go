@@ -29,6 +29,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	cmath "github.com/ethereum/go-ethereum/common/math"
+	"github.com/ethereum/go-ethereum/consensus/bor/registryreader"
 	"github.com/ethereum/go-ethereum/consensus/misc"
 	"github.com/ethereum/go-ethereum/core/blockstm"
 	"github.com/ethereum/go-ethereum/core/state"
@@ -441,7 +442,11 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 	blockContext := NewEVMBlockContext(header, p.bc, author)
 	// Same parent-state reserved snapshot the serial processor uses, so parallel
 	// and serial classify identically (consensus parity).
-	blockContext.ReservedSnapshot = ReservedSnapshotForBlock(p.bc, statedb, header)
+	reservedSnapshot, err := ReservedSnapshotForBlock(p.bc, statedb, header)
+	if err != nil {
+		return nil, err
+	}
+	blockContext.ReservedSnapshot = reservedSnapshot
 	coinbase := blockContext.Coinbase
 
 	context := NewEVMBlockContext(header, p.bc.hc, author)
@@ -460,6 +465,10 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 
 	// Iterate over and process the individual transactions
 	txs := block.Transactions()
+	// Quota-aware reserved set, derived once from the ordered body and shared by
+	// every task's block context (map reference), so parallel classification
+	// matches serial and produce (consensus parity).
+	blockContext.ReservedTxs = registryreader.ClassifyReserved(txs, signer, blockContext.ReservedSnapshot)
 	for i, tx := range txs {
 		if tx.Type() == types.StateSyncTxType {
 			continue
@@ -559,10 +568,11 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 	}
 
 	return &ProcessResult{
-		Receipts: receipts,
-		Requests: requests,
-		Logs:     allLogs,
-		GasUsed:  *usedGas,
+		Receipts:        receipts,
+		Requests:        requests,
+		Logs:            allLogs,
+		GasUsed:         *usedGas,
+		ReservedGasUsed: sumReservedGasUsed(block.Transactions(), receipts, signer, blockContext.ReservedTxs),
 	}, nil
 }
 
@@ -1120,8 +1130,15 @@ func (p *V2StateProcessor) Process(block *types.Block, statedb *state.StateDB, c
 	}
 	blockCtx := NewEVMBlockContext(header, p.chain, author)
 	// Reserved snapshot from the parent state, matching the serial path so V2
-	// BlockSTM classification is identical (consensus parity).
-	blockCtx.ReservedSnapshot = ReservedSnapshotForBlock(p.chain, statedb, header)
+	// BlockSTM classification is identical (consensus parity). The quota-aware
+	// reserved set is derived once from the ordered body and shared by every
+	// task's block context (map reference).
+	reservedSnapshot, err := ReservedSnapshotForBlock(p.chain, statedb, header)
+	if err != nil {
+		return nil, err
+	}
+	blockCtx.ReservedSnapshot = reservedSnapshot
+	blockCtx.ReservedTxs = registryreader.ClassifyReserved(block.Transactions(), types.MakeSigner(config, header.Number, header.Time), blockCtx.ReservedSnapshot)
 	applyV2PreExecSystemCalls(block, statedb, config, cfg, blockCtx)
 
 	tasks, err := buildV2Tasks(block, config, header, interruptCtx)
@@ -1183,7 +1200,7 @@ func (p *V2StateProcessor) Process(block *types.Block, statedb *state.StateDB, c
 	statedb.CollectStateWitness()
 
 	return p.finalizeV2Block(block, statedb, header, config, tasks, result,
-		tProcess, tSetup, tCopy, tExec)
+		blockCtx.ReservedTxs, tProcess, tSetup, tCopy, tExec)
 }
 
 // finalizeV2Block runs consensus-engine finalization, merges state-sync logs,
@@ -1192,6 +1209,7 @@ func (p *V2StateProcessor) Process(block *types.Block, statedb *state.StateDB, c
 func (p *V2StateProcessor) finalizeV2Block(block *types.Block, statedb *state.StateDB,
 	header *types.Header, config *params.ChainConfig,
 	tasks []V2Task, result *V2ExecutionResult,
+	reservedTxs map[registryreader.ReservedKey]struct{},
 	tProcess, tSetup, tCopy, tExec time.Time,
 ) (*ProcessResult, error) {
 	receiptsCountBeforeFinalize := len(result.Receipts)
@@ -1241,10 +1259,11 @@ func (p *V2StateProcessor) finalizeV2Block(block *types.Block, statedb *state.St
 	}
 
 	return &ProcessResult{
-		Receipts: receipts,
-		Requests: requests,
-		Logs:     allLogs,
-		GasUsed:  result.GasUsed,
+		Receipts:        receipts,
+		Requests:        requests,
+		Logs:            allLogs,
+		GasUsed:         result.GasUsed,
+		ReservedGasUsed: sumReservedGasUsed(block.Transactions(), receipts, types.MakeSigner(config, header.Number, header.Time), reservedTxs),
 	}, nil
 }
 

@@ -154,6 +154,13 @@ func (v *BlockValidator) ValidateState(block *types.Block, statedb *state.StateD
 	if rbloom != header.Bloom {
 		return fmt.Errorf("%w (remote: %x  local: %x)", ErrBloomMismatch, header.Bloom, rbloom)
 	}
+	// Reserved-blockspace V1 (before the stateless early-return, so stateless
+	// verifiers enforce it too): the header's ReservedGasUsed must equal the gas
+	// actually used by reserved (fee-free) transactions. res.ReservedGasUsed is
+	// populated on every Process path, including stateless execution.
+	if err := v.validateReservedGasUsed(header, res); err != nil {
+		return err
+	}
 	// In stateless mode, return early because the receipt and state root are not
 	// provided through the witness, rather the cross validator needs to return it.
 	if stateless {
@@ -182,6 +189,25 @@ func (v *BlockValidator) ValidateState(block *types.Block, statedb *state.StateD
 		return fmt.Errorf("invalid merkle root (remote: %x local: %x) dberr: %w", header.Root, root, statedb.Error())
 	}
 
+	return nil
+}
+
+// validateReservedGasUsed enforces reserved-blockspace invariant V1: post-fork,
+// the header's ReservedGasUsed must equal the gas actually used by reserved
+// (fee-free) transactions, recomputed during execution. This stops a producer
+// from stamping a value that disagrees with execution to skew the next block's
+// (reserved-aware) base fee.
+func (v *BlockValidator) validateReservedGasUsed(header *types.Header, res *ProcessResult) error {
+	if v.config.Bor == nil || !v.config.Bor.IsReservedBlockspace(header.Number) {
+		return nil
+	}
+	var got uint64
+	if rg := header.GetReservedGasUsed(v.config); rg != nil {
+		got = *rg
+	}
+	if got != res.ReservedGasUsed {
+		return fmt.Errorf("%w (remote: %d local: %d)", ErrReservedGasUsedMismatch, got, res.ReservedGasUsed)
+	}
 	return nil
 }
 

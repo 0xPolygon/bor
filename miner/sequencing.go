@@ -1,16 +1,11 @@
 package miner
 
 import (
-	"bytes"
-	"encoding/binary"
-	"math"
-	"sort"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/bor/registryreader"
 	"github.com/ethereum/go-ethereum/core/txpool"
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/metrics"
 )
 
@@ -22,11 +17,27 @@ var (
 	// (the value written into BlockExtraData.ReservedGasUsed).
 	reservedGasUsedGauge = metrics.NewRegisteredGauge("worker/reserved/gasused", nil)
 	// reservedOverflowMeter counts reserved-eligible transactions diverted to
-	// the normal pass because of per-client quota or the global ceiling.
+	// the normal pass because they exceeded their client's per-client quota.
 	reservedOverflowMeter = metrics.NewRegisteredMeter("worker/reserved/overflow", nil)
 )
 
 type transactionsByPriceAndNonceFn func(txs map[common.Address][]*txpool.LazyTransaction) *transactionsByPriceAndNonce
+
+// excludeReserved drops registry-registered senders from the priority list so
+// they flow through the reserved pass instead. Returns prio unchanged when no
+// registry snapshot is effective.
+func excludeReserved(prio []common.Address, snap *registryreader.Snapshot) []common.Address {
+	if snap == nil || len(prio) == 0 {
+		return prio
+	}
+	out := prio[:0:0]
+	for _, addr := range prio {
+		if !snap.IsReserved(addr) {
+			out = append(out, addr)
+		}
+	}
+	return out
+}
 
 // extractPriorityTxs filters the transactions from priority senders and
 // returns them grouped by price and nonce.
@@ -57,34 +68,6 @@ func filterReservedTxs(pendingTxs map[common.Address][]*txpool.LazyTransaction, 
 		delete(pendingTxs, addr)
 	}
 	return reserved
-}
-
-// orderClients returns ids sorted ascending by
-// keccak256(8-byte-bigendian(id) || parentHash). Rotates per block so the
-// reserved-pass quota race doesn't systematically favour low-id clients.
-func orderClients(parentHash common.Hash, ids []uint64) []uint64 {
-	if len(ids) == 0 {
-		return nil
-	}
-	type ranked struct {
-		id     uint64
-		digest []byte
-	}
-	var buf [40]byte
-	copy(buf[8:], parentHash[:])
-	ranks := make([]ranked, len(ids))
-	for i, id := range ids {
-		binary.BigEndian.PutUint64(buf[:8], id)
-		ranks[i] = ranked{id: id, digest: crypto.Keccak256(buf[:])}
-	}
-	sort.Slice(ranks, func(i, j int) bool {
-		return bytes.Compare(ranks[i].digest, ranks[j].digest) < 0
-	})
-	out := make([]uint64, len(ranks))
-	for i, r := range ranks {
-		out[i] = r.id
-	}
-	return out
 }
 
 // selectReservedTxs picks the best transactions of a reserved client capped by their
@@ -140,24 +123,20 @@ func selectReservedTxs(
 	return selected, used, overflow
 }
 
-// effectiveCeilingGas returns the snapshot's reserved capacity (Σ effective
-// client quotas) as a global cap on the reserved pass, normalizing zero
-// (no clients) to MaxUint64 so the selection loop needs no special case.
-// Defense-in-depth: per-client quotas already bound the total, and the
-// registry contract enforces Σ quotas ≤ its ceiling at write time.
-func effectiveCeilingGas(snap *registryreader.Snapshot) uint64 {
-	if c := snap.Capacity(); c != 0 {
-		return c
-	}
-	return math.MaxUint64
-}
-
 // extractReservedTxs pulls reserved-eligible transactions out of pendingTxs and
 // returns one quota-trimmed, ordered group per client, in the deterministic
 // parent-hash-keyed client order. snap is the caller's per-build registry
 // snapshot; nil (pre-fork, or no registry configured) or one with no clients
-// is a no-op. Quota overflow — per-client and capacity alike — is re-added to
-// pendingTxs for the normal pass.
+// is a no-op. Per-client quota overflow is re-added to pendingTxs for the
+// normal pass.
+//
+// Placement is bounded by per-client quota only — the single classification
+// rule the verifier's registryreader.ClassifyReserved also applies. There is
+// deliberately no global capacity ceiling here: the registry guarantees
+// Σ(active client quotas) == Capacity() (asserted at snapshot build, see
+// registryreader.BuildSnapshot), so a cross-client cap could never bind, and
+// applying one on the producer while the verifier does not would reintroduce a
+// produce/verify classification asymmetry.
 func extractReservedTxs(snap *registryreader.Snapshot, parentHash common.Hash, pendingTxs map[common.Address][]*txpool.LazyTransaction, newReservedTxSet transactionsByPriceAndNonceFn) []*transactionsByPriceAndNonce {
 	if snap == nil || len(snap.Clients()) == 0 {
 		return nil
@@ -167,12 +146,7 @@ func extractReservedTxs(snap *registryreader.Snapshot, parentHash common.Hash, p
 		return nil
 	}
 
-	// The global ceiling bounds the summed declared gas selected across all
-	// clients. Like per-client quota, it is charged against declared gas
-	// limits, not actual gas used.
-	ceilingLeft := effectiveCeilingGas(snap)
-
-	clientOrder := orderClients(parentHash, snap.Clients())
+	clientOrder := registryreader.OrderClients(parentHash, snap.Clients())
 	var clientGroups = make([]*transactionsByPriceAndNonce, 0, len(clientOrder))
 	for _, cid := range clientOrder {
 		clientTxs := reservedTxs[cid]
@@ -180,8 +154,7 @@ func extractReservedTxs(snap *registryreader.Snapshot, parentHash common.Hash, p
 			continue
 		}
 
-		selected, used, overflow := selectReservedTxs(clientTxs, min(snap.Quota(cid), ceilingLeft), newReservedTxSet)
-		ceilingLeft -= used
+		selected, _, overflow := selectReservedTxs(clientTxs, snap.Quota(cid), newReservedTxSet)
 		for addr, txs := range overflow {
 			pendingTxs[addr] = append(pendingTxs[addr], txs...)
 			reservedOverflowMeter.Mark(int64(len(txs)))
@@ -219,10 +192,15 @@ func (w *worker) sequenceTxs(env *environment, snap *registryreader.Snapshot, pe
 
 	var txBatches = make([]*transactionsByPriceAndNonce, 0)
 
-	// Priority transactions (operator override) commit first. A sender that is
-	// both prioritized and registry-listed is consumed here: its transactions
-	// bypass reserved quota accounting and pay normal fees. Operators should
-	// not prioritize registered senders.
+	// Registered senders are never taken by the priority pass: they must be
+	// classified by the quota walk so the producer and a verifier agree. A
+	// verifier rederives classification from the ordered body and cannot see the
+	// operator-local priority list, so priority-placing a registered sender would
+	// split produce vs verify. Dropping them from prio keeps them in pendingTxs
+	// for the reserved pass instead.
+	prio = excludeReserved(prio, snap)
+
+	// Priority transactions (operator override) commit first, paying normal fees.
 	if prioTxs := extractPriorityTxs(prio, pendingTxs, newNormalTxSet); !prioTxs.Empty() {
 		txBatches = append(txBatches, prioTxs)
 	}

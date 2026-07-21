@@ -26,6 +26,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	cmath "github.com/ethereum/go-ethereum/common/math"
+	"github.com/ethereum/go-ethereum/consensus/bor/registryreader"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
@@ -295,16 +296,16 @@ func newStateTransition(evm *vm.EVM, msg *Message, gp *GasPool) *stateTransition
 	// Classify the message as reserved-blockspace here — the single point every
 	// execution path (serial, parallel, ApplyMessage*) funnels through — so the
 	// zero-fee decision is identical across executors. The fork gate comes from
-	// chain config; the reserved set from the parent registry snapshot on the
-	// block context (set per block by the consensus paths, nil elsewhere),
-	// matching the txpool and base-fee sources. Classification is sender-based;
-	// per-client quota enforcement is layered on by the producer's reserved
-	// pass and the block-validation slice.
+	// chain config; membership comes from the per-block ReservedTxs set on the
+	// block context, which is quota-aware (a registered sender is reserved only
+	// up to its per-client quota in block order), so overflow beyond quota falls
+	// through to normal fees. The set is built once per block by the consensus
+	// paths and is nil elsewhere (eth_call, prefetch), classifying nothing.
 	var reserved bool
 	if cfg := evm.ChainConfig(); cfg.Bor != nil &&
 		cfg.Bor.IsReservedBlockspace(evm.Context.BlockNumber) &&
-		evm.Context.ReservedSnapshot.IsReserved(msg.From) {
-		reserved = true
+		evm.Context.ReservedTxs != nil {
+		_, reserved = evm.Context.ReservedTxs[registryreader.ReservedKey{From: msg.From, Nonce: msg.Nonce}]
 	}
 	return &stateTransition{
 		gp:       gp,

@@ -693,6 +693,23 @@ func (w *worker) setReservedSnapshot(snap *registryreader.Snapshot) {
 	w.reservedSnapshotOverride = snap
 }
 
+// resolveReservedSnapshot returns the reserved-registry snapshot for building
+// header: a test/injection override (setReservedSnapshot) if set, else the
+// chain's registry read at the parent state. A post-fork read failure is fatal
+// — the producer must not build a block it can't classify (mirrors the
+// verifier's hard error).
+//
+// Called only from makeEnv, which runs under prepareWork's w.mu.RLock, so the
+// override is read directly: taking the read lock again would deadlock against a
+// concurrent writer (e.g. setExtra's w.mu.Lock) arriving between the two RLocks,
+// since Go's RWMutex blocks the second RLock to avoid writer starvation.
+func (w *worker) resolveReservedSnapshot(state *state.StateDB, header *types.Header) (*registryreader.Snapshot, error) {
+	if override := w.reservedSnapshotOverride; override != nil {
+		return override, nil
+	}
+	return core.ReservedSnapshotForBlock(w.chain, state, header)
+}
+
 // setRecommitInterval updates the interval for miner sealing work recommitting.
 func (w *worker) setRecommitInterval(interval time.Duration) {
 	select {
@@ -1003,7 +1020,13 @@ func (w *worker) mainLoop() {
 
 				tcount := w.current.tcount
 
-				w.commitTransactions(w.current, plainTxs, blobTxs, nil, nil)
+				// This branch only refreshes the RPC pending-block preview (guarded
+				// by !w.IsRunning() above); it never seals a consensus block —
+				// production goes through fillTransactions, which builds a fresh env
+				// and a single walk. A fresh walk here (quota reset) is therefore
+				// fine: at worst the pending preview over-classifies reserved gas,
+				// with no consensus effect.
+				w.commitTransactions(w.current, plainTxs, blobTxs, nil, nil, registryreader.NewReservedWalk(w.current.evm.Context.ReservedSnapshot))
 				stopFn()
 
 				// Only update the snapshot if any new transactons were added
@@ -1323,9 +1346,18 @@ func (w *worker) makeEnv(header *types.Header, coinbase common.Address, witness 
 	}
 
 	// Build the block context once and attach the parent-state reserved snapshot
-	// so the producer classifies reserved senders the same way verifiers do.
+	// so the producer classifies reserved senders the same way verifiers do. The
+	// reserved set is filled incrementally as reserved batches commit (see
+	// commitTransactions), so overflow diverted to the normal pass pays normal
+	// fees. A verifier rederives the identical set from the ordered body via
+	// registryreader.ClassifyReserved.
 	blockCtx := core.NewEVMBlockContext(header, w.chain, &coinbase)
-	blockCtx.ReservedSnapshot = core.ReservedSnapshotForBlock(w.chain, state, header)
+	reservedSnapshot, err := w.resolveReservedSnapshot(state, header)
+	if err != nil {
+		return nil, err
+	}
+	blockCtx.ReservedSnapshot = reservedSnapshot
+	blockCtx.ReservedTxs = make(map[registryreader.ReservedKey]struct{})
 
 	// Note the passed coinbase may be different with header.Coinbase.
 	env := &environment{
@@ -1389,7 +1421,7 @@ func (w *worker) commitTransaction(env *environment, tx *types.Transaction) ([]*
 	return receipt.Logs, nil
 }
 
-func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transactionsByPriceAndNonce, interrupt *atomic.Int32, builderGasFreedCh chan<- uint64) error {
+func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transactionsByPriceAndNonce, interrupt *atomic.Int32, builderGasFreedCh chan<- uint64, reservedWalk *registryreader.ReservedWalk) error {
 	defer func(t0 time.Time) {
 		commitTransactionsTimer.Update(time.Since(t0))
 	}(time.Now())
@@ -1601,6 +1633,18 @@ mainloop:
 			txs.Pop()
 			continue
 		}
+		// Classify the tx against the reserved per-client quota walk before
+		// execution, so state_transition sees the fee-free decision via the block
+		// context set. The walk is advanced only on a successful commit (below),
+		// so a skipped tx never consumes quota; a verifier rederives the identical
+		// set by running the same walk over the final block (registryreader.
+		// ClassifyReserved), independent of which batch placed the tx.
+		reserved := reservedWalk.Peek(from, tx.Gas())
+		reservedKey := registryreader.ReservedKey{From: from, Nonce: tx.Nonce()}
+		if reserved && env.evm.Context.ReservedTxs != nil {
+			env.evm.Context.ReservedTxs[reservedKey] = struct{}{}
+		}
+
 		// Start executing the transaction
 		lastCommitStart = time.Now()
 		lastTxHash = tx.Hash()
@@ -1625,10 +1669,11 @@ mainloop:
 		case errors.Is(err, nil):
 			// Everything ok, collect the logs and shift in the next transaction from the same account
 			coalescedLogs = append(coalescedLogs, logs...)
-			// Reserved-group transactions count toward the header's
-			// ReservedGasUsed by actual gas used (quota was already charged by
-			// declared gas limit during sequencing).
-			if txs.reserved {
+			// Advance the reserved walk now the tx is committed. Reserved txs
+			// count toward the header's ReservedGasUsed by actual gas used; the
+			// verifier recomputes the same sum from the block (validateReservedGasUsed).
+			reservedWalk.Commit(from, tx.Gas(), reserved)
+			if reserved {
 				if n := len(env.receipts); n > 0 {
 					env.reservedGasUsed += env.receipts[n-1].GasUsed
 				}
@@ -1719,6 +1764,13 @@ mainloop:
 			// the same sender because of `nonce-too-high` clause.
 			log.Debug("Transaction failed, account skipped", "hash", ltx.Hash, "err", err)
 			txs.Pop()
+		}
+
+		// A skipped tx is not in the block, so its tentative reserved mark must be
+		// undone and the walk must not have advanced (Commit runs only in the nil
+		// case above). Keeps the producer's set equal to ClassifyReserved(block).
+		if err != nil && reserved && env.evm.Context.ReservedTxs != nil {
+			delete(env.evm.Context.ReservedTxs, reservedKey)
 		}
 
 		if EnableMVHashMap && w.IsRunning() {
@@ -2150,6 +2202,11 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, gen
 	// and normal transactions.
 	txBatches := w.sequenceTxs(env, snap, pendingTxs)
 
+	// One reserved-classification walk for the whole build, advanced tx-by-tx as
+	// each batch commits, so per-client quota accounting is continuous across
+	// batches and matches ClassifyReserved(final block) on the verify side.
+	reservedWalk := registryreader.NewReservedWalk(snap)
+
 	// Shared channels used during builder mode. Both are nil when there is no prefetcher.
 	var builderPlanCh chan<- *types.Transaction
 	var builderGasFreedCh chan<- uint64
@@ -2161,7 +2218,7 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, gen
 	var fillErr error
 	for _, txs := range txBatches {
 		sendPlan(builderPlanCh, genParams, txs, remainingGas(env))
-		if fillErr = w.commitTransactions(env, txs, emptyBlobTxs, interrupt, builderGasFreedCh); fillErr != nil {
+		if fillErr = w.commitTransactions(env, txs, emptyBlobTxs, interrupt, builderGasFreedCh, reservedWalk); fillErr != nil {
 			break
 		}
 		// The block-building time budget (w.interruptBlockBuilding) makes

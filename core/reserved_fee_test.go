@@ -69,10 +69,16 @@ func reservedBlockCtx(coinbase common.Address, blockNumber *big.Int, baseFee *bi
 	}
 	if len(reservedSenders) > 0 {
 		clients := make(map[common.Address]registryreader.Client, len(reservedSenders))
+		reserved := make(map[registryreader.ReservedKey]struct{}, len(reservedSenders))
 		for i, a := range reservedSenders {
 			clients[a] = registryreader.Client{ID: uint64(i + 1), GasQuota: 30_000_000}
+			// These direct-ApplyMessage tests all use nonce-0 reserved txs; the
+			// processor builds this set from the ordered body via ClassifyReserved,
+			// but here we populate it directly since there is no processor.
+			reserved[registryreader.ReservedKey{From: a, Nonce: 0}] = struct{}{}
 		}
 		ctx.ReservedSnapshot = registryreader.NewSnapshot(common.HexToHash("0x1"), uint64(len(reservedSenders))*30_000_000, clients)
+		ctx.ReservedTxs = reserved
 	}
 	return ctx
 }

@@ -17,6 +17,7 @@
 package core
 
 import (
+	"fmt"
 	"math/big"
 	"sync"
 
@@ -30,7 +31,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
-	"github.com/ethereum/go-ethereum/log"
 )
 
 // ChainContext supports retrieving headers and consensus parameters from the
@@ -46,25 +46,40 @@ type ChainContext interface {
 // classify reserved senders while executing `header`, read from the PARENT
 // registry state (statedb is the parent post-state). Reading at the parent makes
 // classification deterministic across produce and verify and immune to a
-// governance tx landing in the same block. Returns nil when the chain exposes no
-// registry reader / none is configured, or on a read error (deterministic across
-// nodes since the parent state is fixed) — a nil snapshot classifies nothing.
-func ReservedSnapshotForBlock(chain ChainContext, statedb *state.StateDB, header *types.Header) *registryreader.Snapshot {
+// governance tx landing in the same block.
+//
+// It returns (nil, nil) — classify nothing — only when reserved blockspace is
+// genuinely inactive: pre-fork, or post-fork with no registry configured in the
+// chain config. Once the fork is active AND a registry is configured, the
+// reserved set is consensus-relevant, so any inability to build it is a hard
+// error rather than a silent empty set: a chain context that doesn't expose the
+// registry reader (e.g. a stateless HeaderChain that wasn't wired for it) or a
+// registry read failure must stop this node from producing/accepting the block,
+// not let it classify every sender as fee-paying while nodes that read the
+// registry classify reserved senders fee-free — that would split the state root.
+func ReservedSnapshotForBlock(chain ChainContext, statedb *state.StateDB, header *types.Header) (*registryreader.Snapshot, error) {
+	cfg := chain.Config()
+	// Fork-gated: nothing to classify before the reserved-blockspace fork.
+	// Skipping the build pre-fork also avoids a per-block state copy and registry
+	// read on every node syncing from genesis.
+	if cfg.Bor == nil || !cfg.Bor.IsReservedBlockspace(header.Number) {
+		return nil, nil
+	}
+	// Post-fork but no registry configured: the feature is dark on this chain.
+	if cfg.Bor.ReservedRegistryContract == "" {
+		return nil, nil
+	}
+	// Post-fork WITH a registry configured: the reserved set drives consensus, so
+	// a missing reader or a read failure is fatal, not a silent empty set.
 	rr, ok := chain.(interface {
 		ReservedRegistry() registryreader.Reader
 	})
 	if !ok {
-		return nil
+		return nil, fmt.Errorf("reserved-blockspace active at #%v but chain context exposes no registry reader", header.Number)
 	}
 	reader := rr.ReservedRegistry()
 	if reader == nil || !reader.HasReservedRegistry() {
-		return nil
-	}
-	// Classification is fork-gated, so there is nothing to classify before the
-	// reserved-blockspace fork. Skipping the build pre-fork avoids a per-block
-	// state copy and registry read on every node syncing from genesis.
-	if cfg := chain.Config(); cfg.Bor == nil || !cfg.Bor.IsReservedBlockspace(header.Number) {
-		return nil
+		return nil, fmt.Errorf("reserved-blockspace active at #%v but no registry reader is available", header.Number)
 	}
 	parentNumber := uint64(0)
 	if header.Number.Uint64() > 0 {
@@ -72,10 +87,9 @@ func ReservedSnapshotForBlock(chain ChainContext, statedb *state.StateDB, header
 	}
 	snap, err := registryreader.BuildSnapshot(reader, statedb, parentNumber, header.ParentHash, header.Number.Uint64())
 	if err != nil {
-		log.Warn("Failed to build reserved-blockspace snapshot", "number", header.Number, "err", err)
-		return nil
+		return nil, fmt.Errorf("build reserved-blockspace snapshot at #%v: %w", header.Number, err)
 	}
-	return snap
+	return snap, nil
 }
 
 // NewEVMBlockContext creates a new context for use in the EVM.

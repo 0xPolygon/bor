@@ -59,4 +59,9 @@ type ProcessResult struct {
 	Requests [][]byte
 	Logs     []*types.Log
 	GasUsed  uint64
+	// ReservedGasUsed is the actual gas used by transactions classified reserved
+	// (fee-free) during this block's execution. ValidateState checks it against
+	// the header's ReservedGasUsed post-fork, so a producer cannot stamp a value
+	// that disagrees with execution (which would skew the next block's base fee).
+	ReservedGasUsed uint64
 }

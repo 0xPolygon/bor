@@ -116,7 +116,32 @@ func BuildSnapshot(r Reader, statedb *state.StateDB, number uint64, hash common.
 		}
 		clients[a] = Client{ID: c.ClientID.Uint64(), GasQuota: c.GasQuota, FeeMode: c.FeeMode}
 	}
+	if err := assertCapacityInvariant(clients, capacity); err != nil {
+		return nil, err
+	}
 	return NewSnapshot(root, capacity, clients), nil
+}
+
+// assertCapacityInvariant fails hard when the sum of the effective clients'
+// quotas exceeds capacity. capacity is the contract's totalReservedGas (Σ active
+// quotas) and the effective set is a subset of active, so this holds for any
+// well-formed registry. Classification depends on it: it enforces per-client
+// quota only, with no cross-client ceiling — a violation would let the
+// per-client-only rule over-admit reserved gas beyond what the base fee is
+// priced against, and signals a broken/incompatible registry.
+func assertCapacityInvariant(clients map[common.Address]Client, capacity uint64) error {
+	quotaByClient := make(map[uint64]uint64, len(clients))
+	for _, c := range clients {
+		quotaByClient[c.ID] = c.GasQuota
+	}
+	var sumQuotas uint64
+	for _, q := range quotaByClient {
+		sumQuotas += q
+	}
+	if sumQuotas > capacity {
+		return fmt.Errorf("reserved registry invariant violated: Σ effective client quotas %d > capacity %d", sumQuotas, capacity)
+	}
+	return nil
 }
 
 // NewSnapshot constructs a Snapshot from an explicit, already-effective client

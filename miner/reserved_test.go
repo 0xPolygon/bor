@@ -58,9 +58,9 @@ func TestOrderClients(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := orderClients(tc.parent, tc.ids)
+			got := registryreader.OrderClients(tc.parent, tc.ids)
 			require.Len(t, got, tc.wantLen)
-			require.Equal(t, got, orderClients(tc.parent, tc.ids), "deterministic for fixed inputs")
+			require.Equal(t, got, registryreader.OrderClients(tc.parent, tc.ids), "deterministic for fixed inputs")
 
 			seen := make(map[uint64]struct{}, len(got))
 			for _, id := range got {
@@ -74,8 +74,8 @@ func TestOrderClients(t *testing.T) {
 	}
 
 	require.NotEqual(t,
-		orderClients(h1, []uint64{1, 2, 3}),
-		orderClients(h2, []uint64{1, 2, 3}),
+		registryreader.OrderClients(h1, []uint64{1, 2, 3}),
+		registryreader.OrderClients(h2, []uint64{1, 2, 3}),
 		"different parent hashes should reorder >2 clients")
 }
 
@@ -361,51 +361,54 @@ func TestExtractReservedTxs(t *testing.T) {
 // TestExtractReservedTxs_Ceiling exercises the global reserved cap: the summed
 // declared gas selected across clients must not exceed the registry's
 // ceilingGas, with the excess diverted to the normal pass; zero means uncapped.
-func TestExtractReservedTxs_Ceiling(t *testing.T) {
+// TestExtractReservedTxs_PerClientQuota pins that placement is bounded by
+// per-client quota only — there is no global capacity ceiling (removed with
+// G17, since the registry guarantees Σ quotas == capacity, so a cross-client cap
+// could never bind and would only desync the producer from the verifier's
+// ceiling-free classification).
+func TestExtractReservedTxs_PerClientQuota(t *testing.T) {
 	t.Parallel()
 
 	a := common.HexToAddress("0x0a") // client 1's sender
 	b := common.HexToAddress("0x0b") // client 2's sender
-	senderOf := map[uint64]common.Address{1: a, 2: b}
 	fn := reservedCtor(nil)
 
-	newPending := func() map[common.Address][]*txpool.LazyTransaction {
-		return map[common.Address][]*txpool.LazyTransaction{
+	t.Run("per-client quotas are independent (no global ceiling)", func(t *testing.T) {
+		t.Parallel()
+		// capacity == Σ quotas (the registry invariant); each client's two
+		// 300-gas txs fit its own 600 quota. Client order cannot starve either
+		// one — both are fully served.
+		registry := newTestSnapshot(1200, []testClient{
+			{ID: 1, Senders: []common.Address{a}, QuotaGas: 600},
+			{ID: 2, Senders: []common.Address{b}, QuotaGas: 600},
+		})
+		pending := map[common.Address][]*txpool.LazyTransaction{
 			a: {gasTx(300), gasTx(300)},
 			b: {gasTx(300), gasTx(300)},
 		}
-	}
-
-	t.Run("ceiling caps the second client in visit order", func(t *testing.T) {
-		t.Parallel()
-		registry := newTestSnapshot(800, []testClient{
-			{ID: 1, Senders: []common.Address{a}, QuotaGas: 600},
-			{ID: 2, Senders: []common.Address{b}, QuotaGas: 600},
-		})
-		pending := newPending()
-
-		// The first-visited client fits its full 600; the second is left
-		// min(600, 200) = 200, so neither of its 300-gas txs fits.
-		order := orderClients(common.Hash{}, []uint64{1, 2})
-		first, second := senderOf[order[0]], senderOf[order[1]]
 
 		groups := extractReservedTxs(registry, common.Hash{}, pending, fn)
-		require.Len(t, groups, 1, "second client fully diverted by the ceiling")
-		require.Equal(t, map[common.Address]int{first: 2}, drainBySender(groups[0]))
-		require.Len(t, pending[second], 2, "ceiling overflow re-added to pending")
+		require.Len(t, groups, 2, "both clients fully served, independent of order")
+		require.Empty(t, pending, "nothing diverted")
 	})
 
-	t.Run("zero ceiling means uncapped", func(t *testing.T) {
+	t.Run("a client overflowing its own quota diverts only its excess", func(t *testing.T) {
 		t.Parallel()
-		registry := newTestSnapshot(0, []testClient{
+		// Client 1 quota 600 with three 300-gas txs: first two fit, the third
+		// overflows to the normal pass. Client 2 is unaffected.
+		registry := newTestSnapshot(1200, []testClient{
 			{ID: 1, Senders: []common.Address{a}, QuotaGas: 600},
 			{ID: 2, Senders: []common.Address{b}, QuotaGas: 600},
 		})
-		pending := newPending()
+		pending := map[common.Address][]*txpool.LazyTransaction{
+			a: {gasTx(300), gasTx(300), gasTx(300)},
+			b: {gasTx(300)},
+		}
 
 		groups := extractReservedTxs(registry, common.Hash{}, pending, fn)
-		require.Len(t, groups, 2, "both clients fully served")
-		require.Empty(t, pending, "nothing diverted")
+		require.Len(t, groups, 2, "both clients contribute a group")
+		require.Len(t, pending[a], 1, "client 1's third tx diverted to normal")
+		require.Empty(t, pending[b], "client 2 fully within quota")
 	})
 }
 
@@ -499,7 +502,7 @@ func TestSequenceTxs(t *testing.T) {
 		pending := map[common.Address][]*txpool.LazyTransaction{r: {gasTx(100)}, r2: {gasTx(100)}, n: {gasTx(100)}}
 
 		env := newEnv()
-		order := orderClients(env.header.ParentHash, []uint64{1, 2})
+		order := registryreader.OrderClients(env.header.ParentHash, []uint64{1, 2})
 
 		seq := w.sequenceTxs(env, w.reservedSnapshotOverride, pending)
 		require.Len(t, seq, 3)
@@ -529,19 +532,21 @@ func TestSequenceTxs(t *testing.T) {
 		require.Equal(t, map[common.Address]int{n: 1}, drainBySender(seq[1]), "normal group: zero-fee overflow not admitted")
 	})
 
-	t.Run("sender in both prio and registry is consumed by the priority pass", func(t *testing.T) {
+	t.Run("registered sender is excluded from the priority pass", func(t *testing.T) {
 		t.Parallel()
-		// Pins the documented builder preference: the priority pass runs
-		// first, so a prioritized registered sender bypasses reserved quota
-		// accounting and pays normal fees. Operators should not prioritize
-		// registered senders.
-		w := &worker{prio: []common.Address{r}, reservedSnapshotOverride: newTestSnapshot(0, []testClient{{ID: 1, Senders: []common.Address{r}, QuotaGas: 100}})}
+		// Consensus parity: a verifier rederives classification from the ordered
+		// body and cannot see the operator-local priority list, so a registered
+		// sender must always be classified by the quota walk, never consumed by
+		// the priority pass. Here the sender is both prioritized and registered;
+		// it flows through the reserved pass (quota fits both txs), producing a
+		// single reserved group and no priority group.
+		w := &worker{prio: []common.Address{r}, reservedSnapshotOverride: newTestSnapshot(0, []testClient{{ID: 1, Senders: []common.Address{r}, QuotaGas: 1_000_000}})}
 		pending := map[common.Address][]*txpool.LazyTransaction{r: {gasTx(100), gasTx(100)}}
 
 		seq := w.sequenceTxs(newEnv(), w.reservedSnapshotOverride, pending)
-		require.Len(t, seq, 1, "single priority group; no reserved group")
-		require.False(t, seq[0].reserved, "priority group uses normal ordering")
-		require.Equal(t, map[common.Address]int{r: 2}, drainBySender(seq[0]), "both txs taken despite quota of 100")
+		require.Len(t, seq, 1, "single reserved group; no priority group")
+		require.True(t, seq[0].reserved, "registered sender classified by the reserved pass")
+		require.Equal(t, map[common.Address]int{r: 2}, drainBySender(seq[0]), "both txs within quota")
 	})
 }
 
