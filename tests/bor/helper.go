@@ -40,6 +40,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth"
 	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
+	"github.com/ethereum/go-ethereum/eth/tracers"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/miner"
 	"github.com/ethereum/go-ethereum/node"
@@ -794,6 +795,10 @@ func InitImporterWithPipelinedSRC(genesis *core.Genesis, privKey *ecdsa.PrivateK
 	if err := importValidatorKey(stack, ethBackend, privKey); err != nil {
 		return nil, nil, err
 	}
+	// The debug/tracing namespace is registered by the CLI server layer in
+	// production, not by eth.New — register it here so RPC tests can exercise
+	// debug_* methods against the pipelined importer.
+	stack.RegisterAPIs(tracers.APIs(ethBackend.APIBackend))
 	return stack, ethBackend, stack.Start()
 }
 

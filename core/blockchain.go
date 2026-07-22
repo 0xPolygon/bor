@@ -657,6 +657,10 @@ type BlockChain struct {
 	// pendingImportSRC tracks a block whose SRC goroutine is in-flight during
 	// pipelined import. Persists across insertChain calls.
 	pendingImportSRC *pendingImportSRCState
+	// srcHoldForTesting, when non-nil, is invoked at the start of each SRC
+	// goroutine. Tests use it to hold the pipelined window (head advanced,
+	// state root not yet committed) open deterministically.
+	srcHoldForTesting func(blockNumber uint64)
 	// pendingImportHead* covers the short gap after block metadata/head are
 	// written and before pendingImportSRC is published for the same block.
 	pendingImportHeadHash  common.Hash
@@ -5131,6 +5135,9 @@ func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block
 			pending.err = fmt.Errorf("SRC goroutine panicked: %v", r)
 		}
 	}()
+	if bc.srcHoldForTesting != nil {
+		bc.srcHoldForTesting(block.NumberU64())
+	}
 
 	// Hard-fail when a caller asked for a witness but did not hand one in.
 	// allowOwnWitness=true is the explicit opt-in for call sites that want
@@ -6040,6 +6047,39 @@ func (bc *BlockChain) SetLastFlatDiff(diff *state.FlatDiff, blockNum uint64, par
 	bc.lastFlatDiffParentRoot = parentRoot
 	bc.lastFlatDiffBlockRoot = blockRoot
 	bc.lastFlatDiffMu.Unlock()
+}
+
+// pipelinedStateCommitWaitCap bounds WaitForPipelinedStateCommit. SRC settles
+// in single-digit milliseconds; the cap only guards a pathological stall, in
+// which case the caller proceeds and fails on the trie open as it would have
+// without the wait.
+const pipelinedStateCommitWaitCap = 5 * time.Second
+
+// WaitForPipelinedStateCommit blocks until the in-flight pipelined import SRC
+// for the block with the given state root (if any) has committed. It is a
+// no-op for any other root. RPC handlers that open tries directly by root
+// (eth_getProof, debug_storageRangeAt) call this so a query at the chain head
+// waits out the brief window between head advancement and state root commit
+// instead of failing transiently. The FlatDiff overlay cannot serve those
+// handlers: a proof is made of trie nodes, which do not exist until SRC
+// builds them.
+func (bc *BlockChain) WaitForPipelinedStateCommit(ctx context.Context, root common.Hash) error {
+	bc.pendingImportSRCMu.Lock()
+	p := bc.pendingImportSRC
+	bc.pendingImportSRCMu.Unlock()
+	if p == nil || p.block.Root() != root {
+		return nil
+	}
+	timer := time.NewTimer(pipelinedStateCommitWaitCap)
+	defer timer.Stop()
+	select {
+	case <-p.collectedCh:
+		return nil
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // StateAtWithFlatDiff opens a StateDB at baseRoot with flatDiff as an in-memory
