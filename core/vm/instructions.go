@@ -256,6 +256,11 @@ func opSAR(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 	return nil, nil
 }
 
+// cacheableKeccakLen reports whether a keccak input of length n is eligible for
+// the widened cache. Bounds retained memory (excludes adversarial large inputs)
+// and excludes the 0-length input, which is trivial to hash.
+func cacheableKeccakLen(n int) bool { return n > 0 && n <= 8192 }
+
 func opKeccak256(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 	offset, size := scope.Stack.pop(), scope.Stack.peek()
 	data := scope.Memory.GetPtr(offset.Uint64(), size.Uint64())
@@ -277,6 +282,24 @@ func opKeccak256(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 		evm.hasher.Write(data)
 		evm.hasher.Read(evm.hasherBuf[:])
 		evm.Config.Keccak256Cache.Store(key, evm.hasherBuf)
+	} else if evm.Config.EnablePrecompileCache && evm.Config.KeccakStore != nil && cacheableKeccakLen(len(data)) {
+		// Widened fast path: cache keccak256 for variable-length inputs
+		// (all cacheable sizes except the legacy 64B slot above). The store
+		// is length-aware, so no two differently-sized inputs alias.
+		if h, ok := evm.Config.KeccakStore.Load(data); ok {
+			if evm.Config.EnablePreimageRecording {
+				evm.StateDB.AddPreimage(h, data)
+			}
+			size.SetBytes32(h[:])
+			return nil, nil
+		}
+		evm.hasher.Reset()
+		evm.hasher.Write(data)
+		evm.hasher.Read(evm.hasherBuf[:])
+		// Store by value as common.Hash — never a []byte aliasing hasherBuf.
+		evm.Config.KeccakStore.Store(data, common.Hash(evm.hasherBuf))
+		// Fall through to the shared preimage-record + size.SetBytes below,
+		// mirroring the 64B miss path.
 	} else {
 		evm.hasher.Reset()
 		evm.hasher.Write(data)

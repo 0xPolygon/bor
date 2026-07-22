@@ -662,6 +662,73 @@ func TestOpKeccak256_CacheHitRecordsPreimage(t *testing.T) {
 	}
 }
 
+// TestKeccakWidenedOpcode drives opKeccak256 twice over the same non-64B
+// region under one EVM with the widened store wired (EnablePrecompileCache on).
+// The first call is a miss (computes + stores), the second is a cache hit. It
+// asserts: (a) identical stack result across both calls and against a direct
+// keccak, and (b) with EnablePreimageRecording on, the preimage is recorded on
+// the second (cache-hit) call — mirroring the 64B fast path's on-hit recording.
+func TestKeccakWidenedOpcode(t *testing.T) {
+	const n = 88 // non-64B, cacheable
+	input := make([]byte, n)
+	for i := range input {
+		input[i] = byte(i)
+	}
+	want := crypto.Keccak256Hash(input)
+
+	run := func(evm *EVM) common.Hash {
+		stack := newstack()
+		mem := NewMemory()
+		mem.Resize(n)
+		mem.Set(0, n, input)
+		stack.push(uint256.NewInt(n)) // size (peeked → holds result)
+		stack.push(uint256.NewInt(0)) // offset (popped)
+		pc := uint64(0)
+		if _, err := opKeccak256(&pc, evm, &ScopeContext{mem, stack, nil}); err != nil {
+			t.Fatalf("opKeccak256: %v", err)
+		}
+		if stack.len() != 1 {
+			t.Fatalf("stack len = %d, want 1 (result written in place, no extra push)", stack.len())
+		}
+		return common.BytesToHash(stack.peek().Bytes())
+	}
+
+	statedb, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+	store := newKeccakStore(defaultKeccakCap)
+	evm := NewEVM(BlockContext{}, statedb, params.TestChainConfig, Config{
+		EnablePreimageRecording: true,
+		EnablePrecompileCache:   true,
+		KeccakStore:             store,
+	})
+
+	// First call: widened miss (computes + stores).
+	if got := run(evm); got != want {
+		t.Fatalf("miss result = %x, want %x", got, want)
+	}
+	// Verify the store now holds it (i.e. the second call is a genuine hit).
+	if _, ok := store.Load(input); !ok {
+		t.Fatal("widened store did not retain the entry after miss")
+	}
+	// Drop preimages recorded by the miss so we can prove the HIT records too.
+	statedb, _ = state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+	evm = NewEVM(BlockContext{}, statedb, params.TestChainConfig, Config{
+		EnablePreimageRecording: true,
+		EnablePrecompileCache:   true,
+		KeccakStore:             store, // same warm store → forces a hit
+	})
+	// Second call: widened hit.
+	if got := run(evm); got != want {
+		t.Fatalf("hit result = %x, want %x", got, want)
+	}
+	pre, ok := statedb.Preimages()[want]
+	if !ok {
+		t.Fatalf("cache-hit branch did not record preimage; preimages = %v", statedb.Preimages())
+	}
+	if !bytes.Equal(pre, input) {
+		t.Fatalf("recorded preimage = %x, want %x", pre, input)
+	}
+}
+
 func BenchmarkOpKeccak256(bench *testing.B) {
 	var (
 		evm   = NewEVM(BlockContext{}, nil, params.TestChainConfig, Config{})

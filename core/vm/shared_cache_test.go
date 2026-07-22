@@ -97,6 +97,31 @@ func TestKeccakStore_MemoryCapBounded_Concurrent(t *testing.T) {
 	}
 }
 
+// FuzzKeccakWidened exercises the widened-cache miss→store→hit cycle against a
+// direct keccak, for arbitrary input lengths. It also pins the cacheability
+// predicate: only cacheable-length inputs go through the store.
+func FuzzKeccakWidened(f *testing.F) {
+	for _, n := range []int{0, 1, 31, 63, 64, 65, 88, 128, 349, 8192, 8193} {
+		f.Add(bytes.Repeat([]byte{0x5A}, n))
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		want := crypto.Keccak256Hash(data)
+		// Simulate opKeccak256's widened miss→store→hit for cacheable sizes.
+		// A fresh store per execution mirrors a single opcode's cycle and keeps
+		// each input independent of the per-block cap (defaultKeccakCap), which
+		// a shared store would exhaust across fuzz executions.
+		if cacheableKeccakLen(len(data)) {
+			store := newKeccakStore(defaultKeccakCap)
+			if _, ok := store.Load(data); !ok {
+				store.Store(data, want)
+			}
+			if got, _ := store.Load(data); got != want {
+				t.Fatalf("widened cache mismatch len=%d", len(data))
+			}
+		}
+	})
+}
+
 func TestKeccakStore_AllSizesHitEqualsMiss(t *testing.T) {
 	s := newKeccakStoreForTest()
 	for _, n := range []int{0, 31, 63, 64, 65, 88, 128, 349} {
