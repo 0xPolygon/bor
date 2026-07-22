@@ -82,6 +82,7 @@ func (evm *EVM) runEcrecoverWithCache(p PrecompiledContract, input []byte, gas u
 	var key [128]byte
 	copy(key[:], input)
 	if cached, ok := cache.Load(key); ok {
+		ecrecoverCacheHit.Mark(1)
 		gasCost := p.RequiredGas(input)
 		if gas < gasCost {
 			return nil, 0, ErrOutOfGas
@@ -100,6 +101,7 @@ func (evm *EVM) runEcrecoverWithCache(p PrecompiledContract, input []byte, gas u
 		out := append([]byte(nil), cached.([]byte)...)
 		return out, gas, nil
 	}
+	ecrecoverCacheMiss.Mark(1)
 	ret, remainingGas, err := RunPrecompiledContract(p, input, gas, evm.Config.Tracer)
 	if err == nil {
 		// Clone before storing: ret is also handed back to this (miss) caller
