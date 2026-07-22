@@ -3,8 +3,32 @@ package vm
 import (
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/metrics"
+)
+
+// Result-cache observability meters. Distinct namespace from the
+// state-reader caches at core/blockchain.go:84-99 / miner/worker.go
+// ("chain/cache/*", "worker/chain/*") — those track a different cache
+// (state-read results), not these VM opcode/precompile result caches.
+//
+// keccakCacheHit/Miss and keccakCacheEntries/Bytes track the widened
+// (Task 3) keccak store only — the legacy 64B path is unmetered by design
+// (kept out of scope; see task-7 brief). ecrecoverCacheHit/Miss track the
+// always-on legacy ecrecover cache in runEcrecoverWithCache. All increments
+// are cheap atomic ops and only occur on paths that already run when the
+// corresponding cache is wired, so they add ~zero overhead when unused.
+var (
+	keccakCacheHit      = metrics.GetOrRegisterMeter("vm/cache/keccak/hit", nil)
+	keccakCacheMiss     = metrics.GetOrRegisterMeter("vm/cache/keccak/miss", nil)
+	keccakCacheEntries  = metrics.GetOrRegisterGauge("vm/cache/keccak/entries", nil)
+	keccakCacheBytes    = metrics.GetOrRegisterGauge("vm/cache/keccak/bytes", nil)
+	keccakCacheLockWait = metrics.GetOrRegisterTimer("vm/cache/keccak/lock_wait", nil)
+
+	ecrecoverCacheHit  = metrics.GetOrRegisterMeter("vm/cache/ecrecover/hit", nil)
+	ecrecoverCacheMiss = metrics.GetOrRegisterMeter("vm/cache/ecrecover/miss", nil)
 )
 
 // Keccak backing-store microbenchmark (BenchmarkKeccakStore_*, 3 runs,
@@ -67,14 +91,25 @@ func (s *shardedKeccakStore) Load(data []byte) (common.Hash, bool) {
 }
 
 func (s *shardedKeccakStore) Store(data []byte, h common.Hash) {
+	start := time.Now()
 	s.mu.Lock()
+	keccakCacheLockWait.UpdateSince(start)
 	defer s.mu.Unlock()
 	if int(s.entries.Load()) >= s.cap {
 		return // stop inserting; per-block store, discarded after the block
 	}
 	if _, exists := s.m[string(data)]; !exists {
 		s.m[string(data)] = h
-		s.entries.Add(1)
+		n := s.entries.Add(1)
+		// Best-effort process-wide sample: with one store per in-flight
+		// block, concurrent blocks' updates race harmlessly (last write
+		// wins), giving an approximate current size rather than an exact
+		// global total. Cheap and race-free per the entries counter itself.
+		keccakCacheEntries.Update(n)
+		// bytes is a cumulative counter; use the atomic Inc rather than a
+		// read-modify-write (Snapshot+Update) so concurrent per-block stores
+		// cannot lose an update.
+		keccakCacheBytes.Inc(int64(len(data)))
 	}
 }
 

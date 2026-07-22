@@ -287,12 +287,14 @@ func opKeccak256(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 		// (all cacheable sizes except the legacy 64B slot above). The store
 		// is length-aware, so no two differently-sized inputs alias.
 		if h, ok := evm.Config.KeccakStore.Load(data); ok {
+			keccakCacheHit.Mark(1)
 			if evm.Config.EnablePreimageRecording {
 				evm.StateDB.AddPreimage(h, data)
 			}
 			size.SetBytes32(h[:])
 			return nil, nil
 		}
+		keccakCacheMiss.Mark(1)
 		evm.hasher.Reset()
 		evm.hasher.Write(data)
 		evm.hasher.Read(evm.hasherBuf[:])

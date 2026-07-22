@@ -6751,3 +6751,239 @@ func TestProcessBlock_FlagDifferential(t *testing.T) {
 		}
 	}
 }
+
+// TestProcessBlock_FlagOff_LegacyEcrecoverCacheMetered is the Task 5 deferred
+// belt-and-suspenders check, now that Task 7 adds vm/cache/ecrecover/{hit,miss}
+// meters. SharedResultCaches always wires the legacy ecrecover cache
+// regardless of EnablePrecompileCache (see shared_cache.go's ApplyTo), and
+// bc.startPrefetchGoroutine wires it into the throwaway prefetch EVM
+// unconditionally too (core/blockchain.go's startPrefetchGoroutine, not
+// gated on the flag) — unlike the serial processor's real result path, which
+// only wires the caches when the flag is on (see the `if
+// serialVmCfg.EnablePrecompileCache` gate in ProcessBlock). So with the flag
+// OFF, importing a block containing an ECRECOVER call must still produce at
+// least one ecrecover/miss (the always-on prefetch goroutine populating the
+// cache), pinning that today's flag-off prefetch↔legacy-cache behavior is
+// unaffected by Task 7's changes.
+//
+// This intentionally asserts population (>=1 miss), not a guaranteed hit:
+// PrefetchStream runs a block's transactions across a worker pool in
+// parallel, so two identical ECRECOVER calls in one block can race each
+// other into a double-miss depending on scheduling — a hit is possible but
+// not deterministic, and forcing determinism there is out of scope for this
+// task (no cache-algorithm changes). The widened keccak store and its
+// meters are NOT exercised here since they are gated by the flag (nil when
+// off) and therefore correctly out of scope for a flag-off regression check.
+func TestProcessBlock_FlagOff_LegacyEcrecoverCacheMetered(t *testing.T) {
+	key, err := crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+	if err != nil {
+		t.Fatalf("HexToECDSA: %v", err)
+	}
+	address := crypto.PubkeyToAddress(key.PublicKey)
+	initCode, _ := buildPrecompileCacheExerciserInitCode(key)
+
+	gspec := &Genesis{
+		Config:   params.TestChainConfig,
+		Alloc:    types.GenesisAlloc{address: {Balance: big.NewInt(1_000_000_000_000_000_000)}},
+		BaseFee:  big.NewInt(params.InitialBaseFee),
+		GasLimit: 8_000_000,
+	}
+	signer := types.LatestSigner(gspec.Config)
+
+	callData := make([]byte, 72)
+	for i := range callData {
+		callData[i] = byte(i * 7)
+	}
+	contractAddr := crypto.CreateAddress(address, 0)
+
+	_, blocks, _ := GenerateChainWithGenesis(gspec, ethash.NewFaker(), 2, func(i int, b *BlockGen) {
+		b.SetCoinbase(common.Address{0x01})
+		switch i {
+		case 0:
+			tx, err := types.SignTx(types.NewContractCreation(b.TxNonce(address), big.NewInt(0), 3_000_000, b.header.BaseFee, initCode), signer, key)
+			if err != nil {
+				t.Fatalf("sign create tx: %v", err)
+			}
+			b.AddTx(tx)
+		case 1:
+			tx, err := types.SignTx(types.NewTransaction(b.TxNonce(address), contractAddr, big.NewInt(0), 3_000_000, b.header.BaseFee, callData), signer, key)
+			if err != nil {
+				t.Fatalf("sign call tx: %v", err)
+			}
+			b.AddTx(tx)
+		}
+	})
+
+	cfg := DefaultConfig()
+	cfg.VmConfig = vm.Config{EnablePrecompileCache: false}
+	bc, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, ethash.NewFaker(), cfg)
+	if err != nil {
+		t.Fatalf("NewBlockChain: %v", err)
+	}
+	defer bc.Stop()
+
+	missBefore := metrics.GetOrRegisterMeter("vm/cache/ecrecover/miss", nil).Snapshot().Count()
+
+	if n, err := bc.InsertChain(blocks, false); err != nil {
+		t.Fatalf("InsertChain block %d: %v", n, err)
+	}
+
+	last := blocks[len(blocks)-1]
+	receipts := bc.GetReceiptsByHash(last.Hash())
+	if len(receipts) != 1 || receipts[0].Status != types.ReceiptStatusSuccessful {
+		t.Fatalf("call tx did not succeed: %+v", receipts)
+	}
+
+	missDelta := metrics.GetOrRegisterMeter("vm/cache/ecrecover/miss", nil).Snapshot().Count() - missBefore
+	if missDelta < 1 {
+		t.Fatalf("ecrecover miss delta = %d, want >=1 (the always-on prefetch goroutine must still populate the legacy cache with the flag off)", missDelta)
+	}
+}
+
+// ahmedabadForkBlock is the block number at which the synthetic chain config
+// used by processPrecompileCacheChainAcrossFork activates the Ahmedabad bor
+// hardfork (see params.BorConfig.IsAhmedabad, consumed in core/vm/evm.go's
+// initNewContract to widen the max deployable code size from
+// params.MaxCodeSize to params.MaxCodeSizePostAhmedabad). It is a real,
+// consensus-relevant EVM-level fork gate keyed purely off block number, so it
+// exercises a genuine fork boundary without needing the actual Bor consensus
+// engine (ethash.NewFaker() suffices, exactly as the other precompile-cache
+// chain tests in this file already do).
+const ahmedabadForkBlock = 2
+
+// borChainConfigWithAhmedabad returns a shallow copy of BorUnittestChainConfig
+// with AhmedabadBlock activated at ahmedabadForkBlock.
+func borChainConfigWithAhmedabad() *params.ChainConfig {
+	cfg := *params.BorUnittestChainConfig
+	borCfg := *cfg.Bor
+	borCfg.AhmedabadBlock = big.NewInt(ahmedabadForkBlock)
+	cfg.Bor = &borCfg
+	return &cfg
+}
+
+// processPrecompileCacheChainAcrossFork mirrors processPrecompileCacheChain
+// but imports a chain that spans the Ahmedabad fork boundary: block 1 (pre-
+// fork) deploys the exerciser, block 2 (the fork-activation block itself)
+// and block 3 (post-fork) each call it once, exercising both the widened
+// KeccakStore and the legacy EcrecoverCache in blocks on both sides of — and
+// exactly at — the transition. The per-block SharedResultCaches lifetime
+// (constructed fresh in bc.newSharedBlockCaches for every ProcessBlock call,
+// see core/blockchain.go) means no cache state ever survives from one block
+// to the next, so nothing here could carry a stale entry across the fork
+// boundary even in principle; this test pins that no such carry-over happens
+// by asserting byte-identical results whether the flag is on or off.
+func processPrecompileCacheChainAcrossFork(t *testing.T, enablePrecompileCache bool) (roots []common.Hash, allReceipts []types.Receipts, gasUsed []uint64) {
+	t.Helper()
+
+	key, err := crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+	if err != nil {
+		t.Fatalf("HexToECDSA: %v", err)
+	}
+	address := crypto.PubkeyToAddress(key.PublicKey)
+	initCode, _ := buildPrecompileCacheExerciserInitCode(key)
+	contractAddr := crypto.CreateAddress(address, 0)
+
+	chainConfig := borChainConfigWithAhmedabad()
+	gspec := &Genesis{
+		Config:   chainConfig,
+		Alloc:    types.GenesisAlloc{address: {Balance: big.NewInt(1_000_000_000_000_000_000)}},
+		BaseFee:  big.NewInt(params.InitialBaseFee),
+		GasLimit: 8_000_000,
+	}
+	signer := types.LatestSigner(gspec.Config)
+
+	callData := make([]byte, 72)
+	for i := range callData {
+		callData[i] = byte(i * 7)
+	}
+
+	const numBlocks = 3 // block 1 = deploy (pre-fork); blocks 2,3 = calls (at/after fork)
+	_, blocks, _ := GenerateChainWithGenesis(gspec, ethash.NewFaker(), numBlocks, func(i int, b *BlockGen) {
+		b.SetCoinbase(common.Address{0x01})
+		if i == 0 {
+			tx, err := types.SignTx(types.NewContractCreation(b.TxNonce(address), big.NewInt(0), 3_000_000, b.header.BaseFee, initCode), signer, key)
+			if err != nil {
+				t.Fatalf("sign create tx: %v", err)
+			}
+			b.AddTx(tx)
+			return
+		}
+		tx, err := types.SignTx(types.NewTransaction(b.TxNonce(address), contractAddr, big.NewInt(0), 3_000_000, b.header.BaseFee, callData), signer, key)
+		if err != nil {
+			t.Fatalf("sign call tx (block %d): %v", i+1, err)
+		}
+		b.AddTx(tx)
+	})
+
+	// Sanity: the generated chain must actually straddle the fork — block 1
+	// pre-activation, the last block at/after — otherwise this isn't a fork
+	// boundary test at all.
+	firstPostFork := chainConfig.Bor.IsAhmedabad(blocks[0].Number())
+	lastPostFork := chainConfig.Bor.IsAhmedabad(blocks[len(blocks)-1].Number())
+	if firstPostFork || !lastPostFork {
+		t.Fatalf("test invariant broken: chain does not straddle AhmedabadBlock=%d (block1 post-fork=%v, lastBlock post-fork=%v)",
+			ahmedabadForkBlock, firstPostFork, lastPostFork)
+	}
+
+	cfg := DefaultConfig()
+	cfg.VmConfig = vm.Config{EnablePrecompileCache: enablePrecompileCache}
+	bc, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, ethash.NewFaker(), cfg)
+	if err != nil {
+		t.Fatalf("NewBlockChain(cache=%v): %v", enablePrecompileCache, err)
+	}
+	defer bc.Stop()
+
+	if n, err := bc.InsertChain(blocks, false); err != nil {
+		t.Fatalf("InsertChain(cache=%v) block %d: %v", enablePrecompileCache, n, err)
+	}
+
+	for _, blk := range blocks {
+		head := bc.GetBlockByHash(blk.Hash())
+		if head == nil {
+			t.Fatalf("cache=%v: block %d not found after import", enablePrecompileCache, blk.NumberU64())
+		}
+		roots = append(roots, head.Root())
+		receipts := bc.GetReceiptsByHash(blk.Hash())
+		if len(receipts) != 1 || receipts[0].Status != types.ReceiptStatusSuccessful {
+			t.Fatalf("cache=%v: block %d tx did not succeed: %+v", enablePrecompileCache, blk.NumberU64(), receipts)
+		}
+		allReceipts = append(allReceipts, receipts)
+		gasUsed = append(gasUsed, blk.GasUsed())
+	}
+	return roots, allReceipts, gasUsed
+}
+
+// TestProcessBlock_ForkBoundary_FlagDifferential proves that the shared VM
+// result caches' per-block lifetime makes them fork-consistent by
+// construction: importing a chain that crosses the Ahmedabad bor hardfork
+// boundary (pre-fork deploy block, then a call block exactly at the fork
+// activation, then a call block after it) produces byte-identical per-block
+// state roots, receipts, and gas-used whether EnablePrecompileCache is on or
+// off — including at the block where the fork actually activates.
+//
+// This is a genuine fork-crossing test (see the straddle assertion in
+// processPrecompileCacheChainAcrossFork), not merely two same-side blocks:
+// AhmedabadBlock gates a real EVM-level rule (max deployable code size,
+// core/vm/evm.go's initNewContract), so the transition block exercises a
+// chain-config-driven code path change concurrently with the cache flag.
+func TestProcessBlock_ForkBoundary_FlagDifferential(t *testing.T) {
+	offRoots, offReceipts, offGas := processPrecompileCacheChainAcrossFork(t, false)
+	onRoots, onReceipts, onGas := processPrecompileCacheChainAcrossFork(t, true)
+
+	if !reflect.DeepEqual(offGas, onGas) {
+		t.Fatalf("per-block gas used diverged across the fork boundary: flag-off %v, flag-on %v", offGas, onGas)
+	}
+	if len(offRoots) != len(onRoots) {
+		t.Fatalf("block count diverged: flag-off %d, flag-on %d", len(offRoots), len(onRoots))
+	}
+	for i := range offRoots {
+		if offRoots[i] != onRoots[i] {
+			t.Fatalf("block %d state root diverged across the fork boundary: flag-off %x, flag-on %x", i+1, offRoots[i], onRoots[i])
+		}
+		offHash := types.DeriveSha(offReceipts[i], trie.NewStackTrie(nil))
+		onHash := types.DeriveSha(onReceipts[i], trie.NewStackTrie(nil))
+		if offHash != onHash {
+			t.Fatalf("block %d receipts hash diverged across the fork boundary: flag-off %x, flag-on %x", i+1, offHash, onHash)
+		}
+	}
+}
