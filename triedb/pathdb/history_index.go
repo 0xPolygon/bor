@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sort"
 	"sync"
 
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -123,35 +122,39 @@ func (r *indexReader) refresh() error {
 	return nil
 }
 
+// newIterator creates an iterator for traversing the index entries.
+func (r *indexReader) newIterator() *indexIterator {
+	return newIndexIterator(r.descList, func(id uint32) (*blockReader, error) {
+		r.mu.RLock()
+		br, ok := r.readers[id]
+		r.mu.RUnlock()
+
+		if !ok {
+			var err error
+			br, err = newBlockReader(readStateIndexBlock(r.state, r.db, id))
+			if err != nil {
+				return nil, err
+			}
+			r.mu.Lock()
+			r.readers[id] = br
+			r.mu.Unlock()
+		}
+		return br, nil
+	})
+}
+
 // readGreaterThan locates the first element that is greater than the specified
 // id. If no such element is found, MaxUint64 is returned.
 func (r *indexReader) readGreaterThan(id uint64) (uint64, error) {
-	index := sort.Search(len(r.descList), func(i int) bool {
-		return id < r.descList[i].max
-	})
-	if index == len(r.descList) {
+	it := r.newIterator()
+	found := it.SeekGT(id)
+	if err := it.Error(); err != nil {
+		return 0, err
+	}
+	if !found {
 		return math.MaxUint64, nil
 	}
-	desc := r.descList[index]
-
-	r.mu.RLock()
-	br, ok := r.readers[desc.id]
-	r.mu.RUnlock()
-
-	if !ok {
-		var err error
-		blob := readStateIndexBlock(r.state, r.db, desc.id)
-		br, err = newBlockReader(blob)
-		if err != nil {
-			return 0, err
-		}
-		r.mu.Lock()
-		r.readers[desc.id] = br
-		r.mu.Unlock()
-	}
-	// The supplied ID is not greater than block.max, ensuring that an element
-	// satisfying the condition can be found.
-	return br.readGreaterThan(id)
+	return it.ID(), nil
 }
 
 // indexWriter is responsible for writing index data for a specific state (either
