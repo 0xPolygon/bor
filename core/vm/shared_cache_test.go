@@ -11,6 +11,26 @@ import (
 
 func newKeccakStoreForTest() keccakResultStore { return newKeccakStore(defaultKeccakCap) }
 
+func TestSharedResultCaches_ApplyTo(t *testing.T) {
+	// Extended off: legacy caches wired, no widened store.
+	base := NewSharedResultCaches(false)
+	var cfg Config
+	base.ApplyTo(&cfg)
+	if cfg.Keccak256Cache == nil || cfg.EcrecoverCache == nil || cfg.SharedJumpDestCache == nil {
+		t.Fatal("legacy caches must always be wired by ApplyTo")
+	}
+	if cfg.KeccakStore != nil {
+		t.Fatal("widened store must be nil when extended is off")
+	}
+	// Extended on: widened store present too.
+	ext := NewSharedResultCaches(true)
+	var cfg2 Config
+	ext.ApplyTo(&cfg2)
+	if cfg2.KeccakStore == nil {
+		t.Fatal("widened store must be wired when extended is on")
+	}
+}
+
 func TestKeccakStore_LengthAwareNoCollision(t *testing.T) {
 	s := newKeccakStoreForTest()
 	short := bytes.Repeat([]byte{0xAB}, 60)                  // 60 bytes

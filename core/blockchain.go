@@ -785,28 +785,21 @@ func reportReaderStats(prefetch, process, parallel state.ReaderWithStats) {
 	accountHitFromPrefetchUniqueMeter.Mark(procPF.AccountHitFromPrefetchUnique + parPF.AccountHitFromPrefetchUnique)
 }
 
-// sharedBlockCaches holds VM-level caches that are shared between the
-// prefetcher goroutine and the V2 BlockSTM workers for a single block.
-type sharedBlockCaches struct {
-	jumpDests vm.JumpDestCache
-	keccak    *sync.Map
-	ecrecover *sync.Map
-}
+// sharedBlockCaches wraps the exported vm.SharedResultCaches owner so
+// existing call sites (startPrefetchGoroutine, ProcessBlock) keep working
+// unchanged. The legacy caches it wires are always on; the widened keccak
+// store and EnablePrecompileCache flag are gated by bc.cfg.VmConfig.
+type sharedBlockCaches struct{ *vm.SharedResultCaches }
 
-func newSharedBlockCaches() *sharedBlockCaches {
-	return &sharedBlockCaches{
-		jumpDests: vm.NewSyncJumpDestCache(),
-		keccak:    &sync.Map{},
-		ecrecover: &sync.Map{},
-	}
+// newSharedBlockCaches constructs the owner, reading the extended-cache flag
+// from the chain's VM config so the flag can be toggled without touching
+// call sites.
+func (bc *BlockChain) newSharedBlockCaches() *sharedBlockCaches {
+	return &sharedBlockCaches{vm.NewSharedResultCaches(bc.cfg.VmConfig.EnablePrecompileCache)}
 }
 
 // applyTo populates a vm.Config with the shared caches.
-func (c *sharedBlockCaches) applyTo(cfg *vm.Config) {
-	cfg.SharedJumpDestCache = c.jumpDests
-	cfg.Keccak256Cache = c.keccak
-	cfg.EcrecoverCache = c.ecrecover
-}
+func (c *sharedBlockCaches) applyTo(cfg *vm.Config) { c.SharedResultCaches.ApplyTo(cfg) }
 
 // startPrefetchGoroutine launches the throwaway-statedb prefetcher in
 // the background. It runs the block with tracing disabled to warm caches
@@ -845,7 +838,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	defer reportReaderStats(prefetch, process, parallel)
 
 	// Shared caches for this block — used by both prefetcher and V2 workers.
-	sharedCaches := newSharedBlockCaches()
+	sharedCaches := bc.newSharedBlockCaches()
 	bc.startPrefetchGoroutine(block, throwaway, sharedCaches, followupInterrupt)
 
 	type Result struct {
