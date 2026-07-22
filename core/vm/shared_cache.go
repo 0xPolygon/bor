@@ -24,8 +24,12 @@ var (
 	keccakCacheHit      = metrics.GetOrRegisterMeter("vm/cache/keccak/hit", nil)
 	keccakCacheMiss     = metrics.GetOrRegisterMeter("vm/cache/keccak/miss", nil)
 	keccakCacheEntries  = metrics.GetOrRegisterGauge("vm/cache/keccak/entries", nil)
-	keccakCacheBytes    = metrics.GetOrRegisterGauge("vm/cache/keccak/bytes", nil)
-	keccakCacheLockWait = metrics.GetOrRegisterTimer("vm/cache/keccak/lock_wait", nil)
+	// keccakCacheBytesTotal is a cumulative counter: cumulative bytes
+	// inserted (lifetime), not current retained. It is never decremented
+	// when a per-block store is discarded, so it must not be read as
+	// "current retained bytes" on a dashboard.
+	keccakCacheBytesTotal = metrics.GetOrRegisterCounter("vm/cache/keccak/bytes_total", nil)
+	keccakCacheLockWait   = metrics.GetOrRegisterTimer("vm/cache/keccak/lock_wait", nil)
 
 	ecrecoverCacheHit  = metrics.GetOrRegisterMeter("vm/cache/ecrecover/hit", nil)
 	ecrecoverCacheMiss = metrics.GetOrRegisterMeter("vm/cache/ecrecover/miss", nil)
@@ -93,23 +97,36 @@ func (s *shardedKeccakStore) Load(data []byte) (common.Hash, bool) {
 func (s *shardedKeccakStore) Store(data []byte, h common.Hash) {
 	start := time.Now()
 	s.mu.Lock()
-	keccakCacheLockWait.UpdateSince(start)
-	defer s.mu.Unlock()
+	// waited measures lock acquisition wait; captured under the lock (right
+	// after acquiring it) so it reflects only the wait, not the work below.
+	waited := time.Since(start)
 	if int(s.entries.Load()) >= s.cap {
+		s.mu.Unlock()
+		keccakCacheLockWait.Update(waited)
 		return // stop inserting; per-block store, discarded after the block
 	}
+	var inserted bool
+	var n int64
 	if _, exists := s.m[string(data)]; !exists {
 		s.m[string(data)] = h
-		n := s.entries.Add(1)
+		n = s.entries.Add(1)
+		inserted = true
+	}
+	s.mu.Unlock()
+
+	// Meter updates run after unlocking: they are not part of the mutual
+	// exclusion this lock protects (the map/entries state), and keeping them
+	// out of the critical section avoids widening what lock_wait measures
+	// and keeps this hot path (~60k calls/block) from paying meter overhead
+	// while holding the lock.
+	keccakCacheLockWait.Update(waited)
+	if inserted {
 		// Best-effort process-wide sample: with one store per in-flight
 		// block, concurrent blocks' updates race harmlessly (last write
 		// wins), giving an approximate current size rather than an exact
 		// global total. Cheap and race-free per the entries counter itself.
 		keccakCacheEntries.Update(n)
-		// bytes is a cumulative counter; use the atomic Inc rather than a
-		// read-modify-write (Snapshot+Update) so concurrent per-block stores
-		// cannot lose an update.
-		keccakCacheBytes.Inc(int64(len(data)))
+		keccakCacheBytesTotal.Inc(int64(len(data)))
 	}
 }
 
