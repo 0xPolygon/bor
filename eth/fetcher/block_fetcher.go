@@ -26,6 +26,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/prque"
 	"github.com/ethereum/go-ethereum/consensus"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
@@ -1149,8 +1150,18 @@ func (f *BlockFetcher) importHeaders(peer string, header *types.Header) {
 		}
 		// Validate the header and if something went wrong, drop the peer
 		if err := f.verifyHeader(header); err != nil && err != consensus.ErrFutureBlock {
-			log.Debug("Propagated header verification failed", "peer", peer, "number", header.Number, "hash", hash, "err", err)
+			// A locally-transient consensus-data failure (Heimdall span/snapshot
+			// unavailable) does not mean the peer is bad: the header may be valid and the
+			// peer honest. Skip without penalty so we do not self-eclipse.
+			if errors.Is(err, core.ErrConsensusDataUnavailable) {
+				log.Debug("Propagated header verification deferred; local consensus data unavailable", "peer", peer, "number", header.Number, "hash", hash, "err", err)
+				return
+			}
+			log.Warn("Propagated header failed verification; dropping and jailing peer", "peer", peer, "number", header.Number, "hash", hash, "err", err)
 			f.dropPeer(peer)
+			if f.jailPeer != nil {
+				f.jailPeer(peer)
+			}
 
 			return
 		}
@@ -1196,9 +1207,21 @@ func (f *BlockFetcher) importBlocks(peer string, block *types.Block, witness *st
 			// Weird future block, don't fail, but neither propagate
 
 		default:
-			// Something went very wrong, drop the peer
-			log.Debug("Propagated block verification failed", "peer", peer, "number", block.Number(), "hash", hash, "err", err)
+			// A propagated block that fails header verification is a misbehaving peer:
+			// disconnect and jail it so it cannot immediately reconnect and re-announce.
+			// Exception: if verification failed only because local consensus data (a
+			// Heimdall span/snapshot) was unavailable, the block may be valid and the peer
+			// honest — do not penalize it, or we risk self-eclipsing over our own transient
+			// local condition.
+			if errors.Is(err, core.ErrConsensusDataUnavailable) {
+				log.Debug("Propagated block verification deferred; local consensus data unavailable", "peer", peer, "number", block.Number(), "hash", hash, "err", err)
+				return
+			}
+			log.Warn("Propagated block failed verification; dropping and jailing peer", "peer", peer, "number", block.Number(), "hash", hash, "err", err)
 			f.dropPeer(peer)
+			if f.jailPeer != nil {
+				f.jailPeer(peer)
+			}
 
 			return
 		}
