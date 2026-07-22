@@ -77,3 +77,46 @@ func (s *shardedKeccakStore) Store(data []byte, h common.Hash) {
 		s.entries.Add(1)
 	}
 }
+
+// SharedResultCaches owns the VM-level result caches shared across the
+// prefetcher goroutine and the V2 BlockSTM workers for a single block. The
+// legacy caches (jumpDests, keccak, ecrecover) are always populated — this
+// preserves today's import prefetch↔parallel sharing regardless of the
+// EnablePrecompileCache flag. The widened keccak store is populated only
+// when constructed with enableExtended == true.
+type SharedResultCaches struct {
+	jumpDests JumpDestCache
+	keccak    *sync.Map // legacy [64]byte→common.Hash, always present
+	ecrecover *sync.Map // [128]byte→[]byte, always present
+	keccakEx  keccakResultStore // widened store; nil unless extended
+	extended  bool
+}
+
+// NewSharedResultCaches constructs the owner. enableExtended gates the
+// widened keccak store and cfg.EnablePrecompileCache in ApplyTo; the legacy
+// caches are always constructed and wired regardless.
+func NewSharedResultCaches(enableExtended bool) *SharedResultCaches {
+	c := &SharedResultCaches{
+		jumpDests: NewSyncJumpDestCache(),
+		keccak:    &sync.Map{},
+		ecrecover: &sync.Map{},
+		extended:  enableExtended,
+	}
+	if enableExtended {
+		c.keccakEx = newKeccakStore(defaultKeccakCap)
+	}
+	return c
+}
+
+// ApplyTo wires the caches into cfg. The legacy caches are always wired (this
+// preserves today's import prefetch↔parallel behavior regardless of the
+// flag). The widened keccak store and the flag are wired only when extended.
+func (c *SharedResultCaches) ApplyTo(cfg *Config) {
+	cfg.SharedJumpDestCache = c.jumpDests
+	cfg.Keccak256Cache = c.keccak
+	cfg.EcrecoverCache = c.ecrecover
+	if c.extended {
+		cfg.KeccakStore = c.keccakEx
+		cfg.EnablePrecompileCache = true
+	}
+}

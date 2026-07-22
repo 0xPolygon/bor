@@ -58,6 +58,14 @@ type Config struct {
 	// The prefetcher populates it during warm-up; V2 workers hit it to
 	// avoid redundant CGo secp256k1 calls (~1µs overhead each).
 	EcrecoverCache *sync.Map // [128]byte → []byte (result or nil for invalid)
+	// KeccakStore is the widened, length-aware keccak result cache used when
+	// EnablePrecompileCache is set. When nil, opKeccak256 uses the legacy 64B
+	// Keccak256Cache path only. Populated by SharedResultCaches.ApplyTo.
+	KeccakStore keccakResultStore
+	// EnablePrecompileCache gates the extended result-cache behavior: serial-
+	// import and build-path cache sharing, and keccak widening. Default false.
+	// It NEVER disables the always-on import prefetch↔parallel sharing.
+	EnablePrecompileCache bool
 }
 
 // ScopeContext contains the things that are per-call, such as stack and memory,
