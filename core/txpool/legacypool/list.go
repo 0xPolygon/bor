@@ -334,7 +334,7 @@ func (l *list) Contains(nonce uint64) bool {
 func (l *list) Add(tx *types.Transaction, priceBump uint64) (bool, *types.Transaction) {
 	// If there's an older better transaction, abort. Reserved-blockspace
 	// senders get no special case: replacement is priced entirely through the
-	// fallback-fee fields (spec §8.2) — a zero-fee tx can never replace a
+	// fallback-fee fields — a zero-fee tx can never replace a
 	// zero-fee tx (the strict-increase check below rejects equal fees), while
 	// strictly positive fallback fees clear a zero-fee incumbent's threshold.
 	old := l.txs.Get(tx.Nonce())

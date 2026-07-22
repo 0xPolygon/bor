@@ -1,19 +1,3 @@
-// Copyright 2024 The go-ethereum Authors
-// This file is part of the go-ethereum library.
-//
-// The go-ethereum library is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Lesser General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// The go-ethereum library is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU Lesser General Public License for more details.
-//
-// You should have received a copy of the GNU Lesser General Public License
-// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
-
 package core
 
 import (
@@ -97,7 +81,7 @@ func fundedState(t *testing.T, sender common.Address, balance *uint256.Int) *sta
 	return sdb
 }
 
-// TestReservedTxSkipsFees pins the core ticket-B behaviour: a reserved-sender
+// TestReservedTxSkipsFees pins the core behaviour: a reserved-sender
 // tx executes fee-free past the fork — no gas debit, no base-fee floor, no
 // producer tip, no burn. Only msg.Value moves.
 func TestReservedTxSkipsFees(t *testing.T) {
@@ -250,7 +234,7 @@ func TestNonReservedSenderPaysNormally(t *testing.T) {
 // TestReservedTxSerialParallelParity is the consensus-critical check: the
 // reserved fee path must produce a byte-identical post-state whether the tx
 // runs through the serial executor (ApplyMessage) or BlockSTM
-// (ExecuteV2BlockSTM). Any divergence is a chain split.
+// (ExecuteV2BlockSTM). The two paths must produce identical results.
 func TestReservedTxSerialParallelParity(t *testing.T) {
 	key, _ := crypto.GenerateKey()
 	sender := crypto.PubkeyToAddress(key.PublicKey)

@@ -76,7 +76,7 @@ type HeaderChain struct {
 
 	// reservedRegistry mirrors the BlockChain's reserved-blockspace registry
 	// reader so block-execution paths that only hold a *HeaderChain context
-	// (the serial and V2 processors, the prefetcher) can resolve the same
+	// (the serial and V2 BlockSTM processors, the prefetcher) can resolve the same
 	// reserved set as the miner. Wired by BlockChain.SetReservedRegistry.
 	reservedRegistry registryreader.Reader
 }

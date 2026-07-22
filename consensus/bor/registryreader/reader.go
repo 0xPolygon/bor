@@ -86,7 +86,7 @@ func BuildSnapshot(r Reader, statedb *state.StateDB, number uint64, hash common.
 	// Registry reads run through the EVM, which mutates the statedb it executes
 	// against. On the execution path the caller passes the live block state, so
 	// read against a throwaway copy to keep the build state-neutral — reading
-	// against the live state would leak into the block and split the state root.
+	// against the live state would leak into the block and change the post-state.
 	if statedb != nil {
 		statedb = statedb.Copy()
 	}

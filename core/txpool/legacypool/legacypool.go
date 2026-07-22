@@ -2298,8 +2298,8 @@ func (pool *LegacyPool) isFiltered(addr common.Address) bool {
 // isReserved reports whether addr is a reserved-blockspace client for the block
 // being built on top of the current head. Reserved senders' zero-fee
 // transactions bypass the pool's fee floors (PIP-35 min tip, base-fee tip floor)
-// so they are admitted, kept, and surfaced to the miner. The fork *height* gate
-// comes from chain config; the reserved *set* comes from the registry snapshot
+// so they are admitted, kept, and surfaced to the miner. The fork height gate
+// comes from chain config; the reserved set comes from the registry snapshot
 // (rebuilt per head), so the source of truth matches the EVM and base-fee paths.
 func (pool *LegacyPool) isReserved(addr common.Address) bool {
 	cfg := pool.chainconfig

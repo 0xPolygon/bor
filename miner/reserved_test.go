@@ -358,14 +358,11 @@ func TestExtractReservedTxs(t *testing.T) {
 	})
 }
 
-// TestExtractReservedTxs_Ceiling exercises the global reserved cap: the summed
-// declared gas selected across clients must not exceed the registry's
-// ceilingGas, with the excess diverted to the normal pass; zero means uncapped.
 // TestExtractReservedTxs_PerClientQuota pins that placement is bounded by
-// per-client quota only — there is no global capacity ceiling (removed with
-// G17, since the registry guarantees Σ quotas == capacity, so a cross-client cap
-// could never bind and would only desync the producer from the verifier's
-// ceiling-free classification).
+// per-client quota only — there is no global capacity ceiling. The registry
+// guarantees Σ quotas == capacity, so a cross-client cap could never bind and
+// would only desync the producer from the verifier's ceiling-free
+// classification.
 func TestExtractReservedTxs_PerClientQuota(t *testing.T) {
 	t.Parallel()
 

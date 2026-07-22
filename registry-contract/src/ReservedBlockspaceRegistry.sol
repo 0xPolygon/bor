@@ -4,6 +4,9 @@ pragma solidity ^0.8.20;
 /// @title ReservedBlockspaceRegistry
 /// @notice Registry for reserved blockspace clients and their whitelisted sender addresses.
 /// @dev This contract has no constructor so its deployed runtime bytecode can be embedded directly in genesis.
+/// @dev TODO: this source lives in-tree only so bor can regenerate and embed the runtime bytecode. Its canonical
+///      home is the Polygon genesis-contracts repo (contracts-team owned); once it moves there, bor should consume
+///      the embedded bytecode from that repo rather than carrying the foundry project here.
 contract ReservedBlockspaceRegistry {
     error AlreadyInitialized();
     error NotInitialized();

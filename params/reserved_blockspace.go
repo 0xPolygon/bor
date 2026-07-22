@@ -7,6 +7,9 @@ const (
 	// registry-contract/src/ReservedBlockspaceRegistry.sol (solc 0.8.33, optimizer 200).
 	// Regenerate with: forge build (in registry-contract/) then re-extract
 	// .deployedBytecode.object. Do not hand-edit.
+	// TODO: registry-contract/ lives in-tree only to regenerate this bytecode; its
+	// canonical home is the genesis-contracts repo (contracts team). Once it moves,
+	// source this constant from there.
 	ReservedBlockspaceRegistryCode = "0x" +
 		"608060405234801561000f575f5ffd5b50600436106101bb575f3560e01c806393dc10" +
 		"52116100f3578063e3ab7a2911610093578063ebf0c7171161006e578063ebf0c71714" +

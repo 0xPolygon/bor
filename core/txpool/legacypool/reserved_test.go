@@ -1,19 +1,3 @@
-// Copyright 2024 The go-ethereum Authors
-// This file is part of the go-ethereum library.
-//
-// The go-ethereum library is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Lesser General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// The go-ethereum library is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU Lesser General Public License for more details.
-//
-// You should have received a copy of the GNU Lesser General Public License
-// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
-
 package legacypool
 
 import (
@@ -116,7 +100,7 @@ func zeroFeeTx(t *testing.T, cfg *params.ChainConfig, key *ecdsa.PrivateKey, non
 	return tx
 }
 
-// TestReservedZeroFeeTxAdmittedAndPending verifies the core ticket-D behaviour:
+// TestReservedZeroFeeTxAdmittedAndPending verifies the core behaviour:
 // a zero-fee tx from a reserved sender is admitted past the tip floor, kept in
 // the pool, and surfaced by Pending even under a high miner MinTip — whereas the
 // same tx from a non-reserved sender is rejected at admission.
@@ -161,7 +145,7 @@ func TestReservedZeroFeeTxAdmittedAndPending(t *testing.T) {
 	}
 }
 
-// TestReservedZeroFeeReplacement pins the spec's replacement rule (§8.2):
+// TestReservedZeroFeeReplacement pins the replacement rule:
 // same-nonce replacement is priced entirely through the fallback-fee fields
 // under the standard bump rule. A zero-fee tx can never replace a zero-fee tx
 // ("10% over zero is still zero" — the strict-increase check rejects it),

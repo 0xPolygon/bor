@@ -154,7 +154,7 @@ func (v *BlockValidator) ValidateState(block *types.Block, statedb *state.StateD
 	if rbloom != header.Bloom {
 		return fmt.Errorf("%w (remote: %x  local: %x)", ErrBloomMismatch, header.Bloom, rbloom)
 	}
-	// Reserved-blockspace V1 (before the stateless early-return, so stateless
+	// Reserved-blockspace check (before the stateless early-return, so stateless
 	// verifiers enforce it too): the header's ReservedGasUsed must equal the gas
 	// actually used by reserved (fee-free) transactions. res.ReservedGasUsed is
 	// populated on every Process path, including stateless execution.
@@ -192,7 +192,7 @@ func (v *BlockValidator) ValidateState(block *types.Block, statedb *state.StateD
 	return nil
 }
 
-// validateReservedGasUsed enforces reserved-blockspace invariant V1: post-fork,
+// validateReservedGasUsed enforces a reserved-blockspace invariant: post-fork,
 // the header's ReservedGasUsed must equal the gas actually used by reserved
 // (fee-free) transactions, recomputed during execution. This stops a producer
 // from stamping a value that disagrees with execution to skew the next block's

@@ -124,8 +124,8 @@ func CalcBaseFee(config *params.ChainConfig, parent *types.Header) *big.Int {
 	// public base fee with its own usage. Anchoring the target on capacity keeps
 	// the public market stable and isolated from reserved behaviour. The used-side
 	// netting stays inert until the producer populates parent.ReservedGasUsed;
-	// until then the public base fee runs slightly hot — deterministic (a fee
-	// accuracy gap, not a consensus split), so no change is needed here.
+	// until then the public base fee is priced against reserved capacity alone,
+	// deterministically across nodes, so no change is needed here.
 	if config.Bor != nil && config.Bor.IsReservedBlockspace(parent.Number) {
 		parentGasTarget = reservedAwareGasTarget(config, parent)
 		parentGasUsed = publicGasUsed(config, parent)

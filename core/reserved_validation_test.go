@@ -41,7 +41,7 @@ func headerWithReservedGasUsed(t *testing.T, number int64, reserved *uint64) *ty
 	return h
 }
 
-// TestValidateReservedGasUsed covers the V1 anti-cheat guard: the header's
+// TestValidateReservedGasUsed covers the anti-cheat guard: the header's
 // stamped ReservedGasUsed must equal the gas the reserved (fee-free) txs
 // actually used (res.ReservedGasUsed), post-fork; pre-fork the check is skipped.
 func TestValidateReservedGasUsed(t *testing.T) {

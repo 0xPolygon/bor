@@ -148,7 +148,7 @@ func TestClassifyReserved(t *testing.T) {
 
 	t.Run("dropping a reserved tx frees quota for a later same-client tx (skip parity)", func(t *testing.T) {
 		t.Parallel()
-		// The G17 invariant: classification is a pure function of the block's
+		// Classification is a pure function of the block's
 		// contents. With quota 100 (one 100-gas tx), if a1's first tx is present
 		// it wins the quota and a2 (same client) overflows; if a1's tx is absent
 		// (producer skip), a2 wins the freed quota. The producer advances the

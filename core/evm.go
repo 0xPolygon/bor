@@ -56,7 +56,7 @@ type ChainContext interface {
 // registry reader (e.g. a stateless HeaderChain that wasn't wired for it) or a
 // registry read failure must stop this node from producing/accepting the block,
 // not let it classify every sender as fee-paying while nodes that read the
-// registry classify reserved senders fee-free — that would split the state root.
+// registry classify reserved senders fee-free — the two would then disagree on the post-state.
 func ReservedSnapshotForBlock(chain ChainContext, statedb *state.StateDB, header *types.Header) (*registryreader.Snapshot, error) {
 	cfg := chain.Config()
 	// Fork-gated: nothing to classify before the reserved-blockspace fork.
