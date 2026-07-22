@@ -57,7 +57,16 @@ var ecrecoverAddr = common.BytesToAddress([]byte{0x01})
 // warm-up so V2 workers typically hit it, saving ~1µs CGo overhead per call.
 func (evm *EVM) runPrecompile(p PrecompiledContract, addr common.Address, input []byte, gas uint64) ([]byte, uint64, error) {
 	cache := evm.Config.EcrecoverCache
-	if cache == nil || addr != ecrecoverAddr || len(input) > 128 {
+	// The cache is keyed only by address (0x01) + input, not by the concrete
+	// PrecompiledContract implementation. RPC/simulation/tracing paths can
+	// override the precompile set (SetPrecompiles), installing an arbitrary
+	// contract at 0x01. On such an EVM the cache must never be consulted or
+	// populated: a hit would silently return the *real* ecrecover result for
+	// a call that should have run the overridden contract, and a miss would
+	// poison the cache with the overridden contract's output for any other
+	// (non-overridden) EVM sharing it. opKeccak256 needs no equivalent guard:
+	// it is an opcode, not an overridable precompile.
+	if cache == nil || evm.precompilesOverridden || addr != ecrecoverAddr || len(input) > 128 {
 		return RunPrecompiledContract(p, input, gas, evm.Config.Tracer)
 	}
 	return evm.runEcrecoverWithCache(p, input, gas, cache)
@@ -73,6 +82,7 @@ func (evm *EVM) runEcrecoverWithCache(p PrecompiledContract, input []byte, gas u
 	var key [128]byte
 	copy(key[:], input)
 	if cached, ok := cache.Load(key); ok {
+		ecrecoverCacheHit.Mark(1)
 		gasCost := p.RequiredGas(input)
 		if gas < gasCost {
 			return nil, 0, ErrOutOfGas
@@ -82,11 +92,23 @@ func (evm *EVM) runEcrecoverWithCache(p PrecompiledContract, input []byte, gas u
 		if cached == nil {
 			return nil, gas, nil
 		}
-		return cached.([]byte), gas, nil
+		// Defensive clone: the cache stores/returns []byte by reference, and
+		// this same stored slice will be handed out to every future hit. If
+		// we returned it directly, a caller mutating its copy in place would
+		// corrupt the cached entry (and thus every other caller's result)
+		// without going through cache.Store again. Cloning here isolates
+		// this caller's copy from the cache and from every other hit.
+		out := append([]byte(nil), cached.([]byte)...)
+		return out, gas, nil
 	}
+	ecrecoverCacheMiss.Mark(1)
 	ret, remainingGas, err := RunPrecompiledContract(p, input, gas, evm.Config.Tracer)
 	if err == nil {
-		cache.Store(key, ret)
+		// Clone before storing: ret is also handed back to this (miss) caller
+		// below, so storing it as-is would let that caller's mutation reach
+		// straight into the cache, corrupting subsequent hits. Store an
+		// independent copy; the hit path above clones again on the way out.
+		cache.Store(key, append([]byte(nil), ret...))
 	}
 	return ret, remainingGas, err
 }
@@ -175,6 +197,13 @@ type EVM struct {
 
 	// precompiles holds the precompiled contracts for the current epoch
 	precompiles map[common.Address]PrecompiledContract
+
+	// precompilesOverridden is set once SetPrecompiles installs a custom
+	// precompile set (RPC eth_call/eth_simulateV1 state overrides, debug
+	// tracing "overrides" — see internal/ethapi/{simulate,api}.go and
+	// eth/tracers/api.go). Canonical block processing never calls
+	// SetPrecompiles; it only ever trips on these override paths.
+	precompilesOverridden bool
 
 	// jumpDests stores results of JUMPDEST analysis.
 	jumpDests JumpDestCache
@@ -278,6 +307,7 @@ func NewEVM(blockCtx BlockContext, statedb StateDB, chainConfig *params.ChainCon
 // It is not thread-safe.
 func (evm *EVM) SetPrecompiles(precompiles PrecompiledContracts) {
 	evm.precompiles = precompiles
+	evm.precompilesOverridden = true
 }
 
 // SetJumpDestCache configures the analysis cache.

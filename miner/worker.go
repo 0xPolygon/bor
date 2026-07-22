@@ -1369,6 +1369,13 @@ func (w *worker) makeEnv(header *types.Header, coinbase common.Address, witness 
 		state.StartPrefetcher("miner", nil, nil)
 	}
 
+	// Apply the per-building-cycle shared VM result caches to the sealing EVM's
+	// config so it shares one goroutine-safe cache set with the build prefetcher.
+	vmCfg := w.vmConfig()
+	if genParams.vmCaches != nil {
+		genParams.vmCaches.ApplyTo(&vmCfg)
+	}
+
 	// Note the passed coinbase may be different with header.Coinbase.
 	env := &environment{
 		signer:             types.MakeSigner(w.chainConfig, header.Number, header.Time),
@@ -1377,7 +1384,7 @@ func (w *worker) makeEnv(header *types.Header, coinbase common.Address, witness 
 		coinbase:           coinbase,
 		header:             header,
 		witness:            state.Witness(),
-		evm:                vm.NewEVM(core.NewEVMBlockContext(header, w.chain, &coinbase), state, w.chainConfig, w.vmConfig()),
+		evm:                vm.NewEVM(core.NewEVMBlockContext(header, w.chain, &coinbase), state, w.chainConfig, vmCfg),
 		prefetchReader:     genParams.prefetchReader,
 		processReader:      genParams.processReader,
 		prefetchedTxHashes: genParams.prefetchedTxHashes,
@@ -1881,6 +1888,7 @@ type generateParams struct {
 	builderPlanCh             chan *types.Transaction // Builder sends each validated tx here before execution; prefetcher reads and warms state concurrently
 	builderGasFreedCh         chan uint64             // Builder sends (declared−actual) gas after each successful tx; prefetcher uses it to predict overflow txs
 	planWg                    sync.WaitGroup          // Tracks sendPlan goroutines; must reach zero before builderPlanCh is closed
+	vmCaches                  *vm.SharedResultCaches  // per-building-cycle shared VM result caches; nil unless EnablePrecompileCache
 }
 
 // makeHeader creates a new block header for sealing.
@@ -2367,6 +2375,22 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 		preBuildDuration:   time.Since(buildStart),
 	}
 
+	// Create the per-building-cycle shared VM result caches BEFORE the prefetch
+	// goroutine launches below. The prefetcher (runPrefetcher, launched at the
+	// `go func` below) and the sealing EVM (makeEnv) both read &genParams by
+	// pointer, so the cache set must exist on genParams before the goroutine
+	// starts — creating it later (e.g. inside buildAndCommitBlock) would launch
+	// the prefetcher with no cache and break sharing (create-after-launch race).
+	//
+	// MVP scope: only the sealing EVM (makeEnv) and the build prefetcher
+	// (runPrefetcher → PrefetchStream) are wired. The pre-tx / system EVMs,
+	// FinalizeAndAssemble, and Bor state-sync / system processing are
+	// intentionally NOT wired — they are not the hot path and may run under
+	// different rules; wiring them is out of MVP scope.
+	if w.chain.GetVMConfig().EnablePrecompileCache {
+		genParams.vmCaches = vm.NewSharedResultCaches(true)
+	}
+
 	var interruptPrefetch atomic.Bool
 	newBlockNumber := new(big.Int).Add(parent.Number, common.Big1)
 	if w.config.EnablePrefetch && w.chainConfig.Bor != nil && w.chainConfig.Bor.IsGiugliano(newBlockNumber) {
@@ -2587,7 +2611,13 @@ func (w *worker) runPrefetcher(parent *types.Header, throwaway *state.StateDB, g
 		// pebble's block cache, which under realistic clean-cache sizes is already
 		// resident. Upstream go-ethereum's prefetcher does not compute intermediate
 		// roots either.
-		prefetcher.PrefetchStream(header, throwaway, w.vmConfig(), false,
+		// Apply the per-building-cycle shared VM result caches so the prefetcher
+		// shares one goroutine-safe cache set with the sealing EVM (makeEnv).
+		vmCfg := w.vmConfig()
+		if genParams.vmCaches != nil {
+			genParams.vmCaches.ApplyTo(&vmCfg)
+		}
+		prefetcher.PrefetchStream(header, throwaway, vmCfg, false,
 			hardKill, evmAbort, txsCh, onSuccess)
 	}()
 

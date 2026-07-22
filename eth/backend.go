@@ -251,6 +251,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		StatelessSelfValidation: config.StatelessSelfValidation,
 		EnableWitnessStats:      config.EnableWitnessStats,
 		EnableEVMSwitchDispatch: config.EnableEVMSwitchDispatch,
+		EnablePrecompileCache:   config.EnablePrecompileCache,
 	}
 
 	// Setup live tracer if requested
