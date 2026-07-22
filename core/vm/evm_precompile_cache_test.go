@@ -1,10 +1,12 @@
 package vm
 
 import (
+	"bytes"
 	"sync"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
 // stubPrecompile returns a fixed output and charges gasCost.
@@ -150,5 +152,82 @@ func TestEcrecoverCache_HitNotAliased(t *testing.T) {
 	}
 	if len(ret2) != 1 || ret2[0] != 0xab {
 		t.Fatalf("second (cached) result was corrupted by mutating the first return value, got %x", ret2)
+	}
+}
+
+// TestEcrecoverCache_HitPathCloneNotAliased guards the MANDATORY hit-path
+// clone in runEcrecoverWithCache (`out := append([]byte(nil),
+// cached.([]byte)...)`). Unlike TestEcrecoverCache_HitNotAliased above, which
+// only mutates a MISS-path return value (exercising the store-side clone
+// made by the caller of runEcrecoverWithCache on the miss branch), this test
+// mutates a return value obtained from an actual cache HIT, then reads the
+// cache again to prove the stored entry survived. Without the hit-path
+// clone, this second read would observe the mutation and return the wrong
+// recovered address — a consensus-critical bug (wrong ecrecover result ->
+// wrong recovered address -> chain split).
+//
+// Confirmation: if the `append([]byte(nil), cached.([]byte)...)` clone in
+// evm.go were deleted and replaced with a direct `return cached.([]byte),
+// gas, nil`, this test would fail, because mutating ret2 in place would
+// corrupt the exact slice stored in and returned by the cache on the third
+// call.
+func TestEcrecoverCache_HitPathCloneNotAliased(t *testing.T) {
+	// Build a valid ecrecover input (hash, v, r, s) via a real signature so
+	// the real ecrecover precompile (not the stub) returns a non-nil result
+	// and actually populates the cache.
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	hash := crypto.Keccak256([]byte("hit-path clone guard"))
+	sig, err := crypto.Sign(hash, key)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	// sig is (r, s, v) 65 bytes with v in {0,1}; ecrecover wants v in {27,28}
+	// at input[63], then (r, s) at input[64:128].
+	input := make([]byte, 128)
+	copy(input[0:32], hash)
+	input[63] = sig[64] + 27
+	copy(input[64:96], sig[0:32])
+	copy(input[96:128], sig[32:64])
+
+	cache := &sync.Map{}
+	evm := &EVM{}
+	evm.Config.EcrecoverCache = cache
+	p := &ecrecover{}
+
+	// Call 1: MISS — populates the cache with the real recovered address.
+	ret1, _, err := evm.runPrecompile(p, ecrecoverAddr, input, 100000)
+	if err != nil {
+		t.Fatalf("unexpected err on miss: %v", err)
+	}
+	if len(ret1) != 32 {
+		t.Fatalf("expected a 32-byte recovered address, got %x", ret1)
+	}
+	want := append([]byte(nil), ret1...)
+
+	// Call 2: HIT — mutate the returned slice in place. If runEcrecoverWithCache
+	// did not clone on the hit path, this corrupts the cache's backing array.
+	ret2, _, err := evm.runPrecompile(p, ecrecoverAddr, input, 100000)
+	if err != nil {
+		t.Fatalf("unexpected err on hit: %v", err)
+	}
+	if !bytes.Equal(ret2, want) {
+		t.Fatalf("second (hit) result already wrong before mutation: got %x want %x", ret2, want)
+	}
+	for i := range ret2 {
+		ret2[i] ^= 0xff
+	}
+
+	// Call 3: HIT again — must return the correct, unmutated ecrecover
+	// result. If the hit-path clone were removed, this would observe the
+	// mutation from call 2 and fail.
+	ret3, _, err := evm.runPrecompile(p, ecrecoverAddr, input, 100000)
+	if err != nil {
+		t.Fatalf("unexpected err on final hit: %v", err)
+	}
+	if !bytes.Equal(ret3, want) {
+		t.Fatalf("hit-path clone missing: cached ecrecover result was corrupted by an earlier caller's mutation, got %x want %x", ret3, want)
 	}
 }

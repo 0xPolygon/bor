@@ -22,12 +22,18 @@ func TestSharedResultCaches_ApplyTo(t *testing.T) {
 	if cfg.KeccakStore != nil {
 		t.Fatal("widened store must be nil when extended is off")
 	}
+	if cfg.EnablePrecompileCache {
+		t.Fatal("EnablePrecompileCache must be false when extended is off")
+	}
 	// Extended on: widened store present too.
 	ext := NewSharedResultCaches(true)
 	var cfg2 Config
 	ext.ApplyTo(&cfg2)
 	if cfg2.KeccakStore == nil {
 		t.Fatal("widened store must be wired when extended is on")
+	}
+	if !cfg2.EnablePrecompileCache {
+		t.Fatal("EnablePrecompileCache must be true when extended is on")
 	}
 }
 
