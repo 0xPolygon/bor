@@ -80,6 +80,15 @@ func HexToRefHash(s string) *Hash {
 	return &v
 }
 
+// IsHexHash verifies whether a string can represent a valid hex-encoded
+// Ethereum hash or not.
+func IsHexHash(s string) bool {
+	if has0xPrefix(s) {
+		s = s[2:]
+	}
+	return len(s) == 2*HashLength && isHex(s)
+}
+
 // Cmp compares two hashes.
 func (h Hash) Cmp(other Hash) int {
 	return bytes.Compare(h[:], other[:])
