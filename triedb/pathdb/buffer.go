@@ -186,6 +186,10 @@ func (b *buffer) flush(root common.Hash, db ethdb.KeyValueStore, freezer ethdb.A
 			start = time.Now()
 			batch = db.NewBatchWithSize((flushNodes.dbsize() + flushStates.dbsize()) * 11 / 10) // an extra 10% for potential pebble internal stuff
 		)
+		// Begin log promoted to Info (from none) with an explicit start timestamp so
+		// this flush window can be joined offline against concurrent slow block-write
+		// timestamps (copy-node-use-cases.md UC-1 E5).
+		log.Info("Flushing buffer content", "id", id, "start", start.Format(time.RFC3339Nano))
 		// Explicitly sync the state freezer to ensure all written data is persisted to disk
 		// before updating the key-value store.
 		//
@@ -220,7 +224,10 @@ func (b *buffer) flush(root common.Hash, db ethdb.KeyValueStore, freezer ethdb.A
 		// TODO (rjl493456442) buffer itself is not thread-safe, add the lock
 		// protection if try to reset the buffer here.
 		// b.reset()
-		log.Debug("Persisted buffer content", "nodes", nodes, "accounts", accounts, "slots", slots, "bytes", common.StorageSize(size), "elapsed", common.PrettyDuration(time.Since(start)))
+		// End log promoted to Info (from Debug) with an explicit start timestamp so
+		// this flush window can be joined offline against concurrent slow block-write
+		// timestamps (copy-node-use-cases.md UC-1 E5).
+		log.Info("Persisted buffer content", "id", id, "nodes", nodes, "accounts", accounts, "slots", slots, "bytes", common.StorageSize(size), "elapsed", common.PrettyDuration(time.Since(start)), "start", start.Format(time.RFC3339Nano))
 	}()
 }
 

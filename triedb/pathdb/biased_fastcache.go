@@ -38,6 +38,14 @@ type AddressBiasedCache struct {
 	// Set of preloaded addresses for fast lookup
 	preloadedAddrs sync.Map // map[common.Hash]struct{}
 
+	// Per-address miss meters, keyed by accountHash. Tagged under
+	// state/reads/miss/critical so a specific reserved address's miss rate can be
+	// attributed rather than only the aggregate biasedAddressCacheMissMeter — needed
+	// to explain WHY enabling the bias cache changed throughput (eviction churn vs.
+	// genuinely low hit rate on a given address), not just that it did
+	// (copy-node-use-cases.md UC-2 / this session's bias-ON A/B finding).
+	addressMissMeters sync.Map // map[common.Hash]metrics.Meter
+
 	// Context for canceling preload operations
 	ctx    stdcontext.Context
 	cancel stdcontext.CancelFunc
@@ -83,6 +91,9 @@ func (c *AddressBiasedCache) initAddressCache(addr common.Address, cacheSize int
 	// Mark this address as preloaded
 	c.preloadedAddrs.Store(accountHash, struct{}{})
 	c.addressCaches.Store(accountHash, addrCache)
+	c.addressMissMeters.Store(accountHash, metrics.NewRegisteredMeter(
+		fmt.Sprintf("state/reads/miss/critical/%s", addr.Hex()), nil,
+	))
 }
 
 // preloadAddressAsync loads storage trie nodes for the given account hash using
@@ -359,26 +370,27 @@ func compactKeyToNibbles(compact []byte) []byte {
 }
 
 // routeCache determines which cache should be used for the given key.
-// Returns the appropriate cache and true if it's an address-specific cache,
-// or the common cache and false otherwise.
+// Returns the appropriate cache, true if it's an address-specific cache (false
+// for the common cache), and the matched accountHash (zero when not an
+// address-specific cache) for per-address miss attribution.
 //
 // Note: The key format used by nodeCacheKey is:
 //   - For account trie: path only
 //   - For storage trie: owner (32 bytes) + path
-func (c *AddressBiasedCache) routeCache(key []byte) (*fastcache.Cache, bool) {
+func (c *AddressBiasedCache) routeCache(key []byte) (*fastcache.Cache, bool, common.Hash) {
 	if len(key) >= common.HashLength {
 		accountHash := common.BytesToHash(key[:common.HashLength])
 		if cache, ok := c.addressCaches.Load(accountHash); ok {
-			return cache.(*fastcache.Cache), true
+			return cache.(*fastcache.Cache), true, accountHash
 		}
 	}
 
-	return c.commonCache, false
+	return c.commonCache, false, common.Hash{}
 }
 
 // Get retrieves the value for the given key from the appropriate cache
 func (c *AddressBiasedCache) Get(key []byte) []byte {
-	cache, isAddressCache := c.routeCache(key)
+	cache, isAddressCache, accountHash := c.routeCache(key)
 	value := cache.Get(nil, key)
 
 	if isAddressCache {
@@ -387,6 +399,9 @@ func (c *AddressBiasedCache) Get(key []byte) []byte {
 			biasedAddressCacheReadMeter.Mark(int64(len(value)))
 		} else {
 			biasedAddressCacheMissMeter.Mark(1)
+			if m, ok := c.addressMissMeters.Load(accountHash); ok {
+				m.(*metrics.Meter).Mark(1)
+			}
 		}
 	}
 
@@ -395,7 +410,7 @@ func (c *AddressBiasedCache) Get(key []byte) []byte {
 
 // Set stores the key-value pair in the appropriate cache
 func (c *AddressBiasedCache) Set(key, value []byte) {
-	cache, isAddressCache := c.routeCache(key)
+	cache, isAddressCache, _ := c.routeCache(key)
 	cache.Set(key, value)
 
 	if isAddressCache {
@@ -405,13 +420,13 @@ func (c *AddressBiasedCache) Set(key, value []byte) {
 
 // Has checks if the key exists in the appropriate cache
 func (c *AddressBiasedCache) Has(key []byte) bool {
-	cache, _ := c.routeCache(key)
+	cache, _, _ := c.routeCache(key)
 	return cache.Has(key)
 }
 
 // Del removes the key from the appropriate cache
 func (c *AddressBiasedCache) Del(key []byte) {
-	cache, _ := c.routeCache(key)
+	cache, _, _ := c.routeCache(key)
 	cache.Del(key)
 }
 

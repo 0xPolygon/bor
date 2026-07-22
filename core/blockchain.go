@@ -147,6 +147,12 @@ var (
 	blockBatchWriteTimer   = metrics.NewRegisteredTimer("chain/batch/write", nil)        // time to flush the block batch to disk (blockBatch.Write) — spikes indicate DB compaction stalls
 	stateCommitTimer       = metrics.NewRegisteredTimer("chain/state/commit", nil)       // time for statedb.CommitWithUpdate — in pathdb mode, spikes indicate diff layer flushes
 
+	// eventFanoutTimer measures the combined cost of chainFeed/logsFeed/chainHeadFeed/
+	// stateSyncFeed sends on the writeBlockAndSetHead canonical path — subscriber count
+	// and stateSyncFeed's per-entry loop can make this fan-out non-trivial on the
+	// block-write critical path (copy-node-use-cases.md B2 bundle).
+	eventFanoutTimer = metrics.NewRegisteredTimer("chain/event/fanout", nil)
+
 	errInsertionInterrupted = errors.New("insertion is interrupted")
 	errChainStopped         = errors.New("blockchain is stopped")
 	errInvalidOldChain      = errors.New("invalid old chain")
@@ -2573,6 +2579,8 @@ func (bc *BlockChain) writeBlockAndSetHead(block *types.Block, receipts []*types
 	if status == CanonStatTy {
 		bc.writeHeadBlock(block)
 
+		fanoutStart := time.Now()
+
 		bc.chainFeed.Send(ChainEvent{
 			Header:       block.Header(),
 			Receipts:     receipts,
@@ -2601,6 +2609,7 @@ func (bc *BlockChain) writeBlockAndSetHead(block *types.Block, receipts []*types
 			bc.stateSyncMu.RUnlock()
 			// BOR
 		}
+		eventFanoutTimer.Update(time.Since(fanoutStart))
 	} else {
 		bc.chainSideFeed.Send(ChainSideEvent{Header: block.Header()})
 

@@ -26,7 +26,23 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb/eradb"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
+)
+
+var (
+	// freezerCycleTimer measures one full freeze() iteration: freezeRange +
+	// SyncAncient + all key-value delete batches. Correlates against slow-write
+	// timestamps to attribute a slow block-write second to an overlapping freezer
+	// cycle (copy-node-use-cases.md UC-1).
+	freezerCycleTimer = metrics.NewRegisteredTimer("chain/freezer/cycle", nil)
+	// freezerRangeTimer measures freezeRange alone (the ancient-store append work).
+	freezerRangeTimer = metrics.NewRegisteredTimer("chain/freezer/range", nil)
+	// freezerSyncAncientTimer measures SyncAncient alone (fsync of the freezer tables).
+	freezerSyncAncientTimer = metrics.NewRegisteredTimer("chain/freezer/syncAncient", nil)
+	// freezerDeleteBatchTimer measures the combined key-value delete work after a
+	// freeze batch (canonical blocks, side chains, dangling side chains).
+	freezerDeleteBatchTimer = metrics.NewRegisteredTimer("chain/freezer/deleteBatch", nil)
 )
 
 const (
@@ -221,7 +237,9 @@ func (f *chainFreezer) freeze(db ethdb.KeyValueStore) {
 		if last-first+1 > freezerBatchLimit {
 			last = freezerBatchLimit + first - 1
 		}
+		rangeStart := time.Now()
 		ancients, err := f.freezeRange(nfdb, first, last)
+		freezerRangeTimer.Update(time.Since(rangeStart))
 		if err != nil {
 			log.Error("Error in block freeze operation", "err", err)
 
@@ -230,9 +248,12 @@ func (f *chainFreezer) freeze(db ethdb.KeyValueStore) {
 			continue
 		}
 		// Batch of blocks have been frozen, flush them before wiping from key-value store
+		syncStart := time.Now()
 		if err := f.SyncAncient(); err != nil {
 			log.Crit("Failed to flush frozen tables", "err", err)
 		}
+		freezerSyncAncientTimer.Update(time.Since(syncStart))
+		deleteStart := time.Now()
 		// Wipe out all data from the active database
 		batch := db.NewBatch()
 
@@ -311,16 +332,21 @@ func (f *chainFreezer) freeze(db ethdb.KeyValueStore) {
 				log.Crit("Failed to delete dangling side blocks", "err", err)
 			}
 		}
+		freezerDeleteBatchTimer.Update(time.Since(deleteStart))
+		freezerCycleTimer.Update(time.Since(start))
 
-		// Log something friendly for the user
+		// Log something friendly for the user. Promoted to Info (from Debug) with an
+		// explicit start timestamp so this cycle can be joined offline against
+		// concurrent slow block-write timestamps (copy-node-use-cases.md UC-1).
 		context := []interface{}{
 			"blocks", frozen - first, "elapsed", common.PrettyDuration(time.Since(start)), "number", frozen - 1,
+			"start", start.Format(time.RFC3339Nano),
 		}
 		if n := len(ancients); n > 0 {
 			context = append(context, []interface{}{"hash", ancients[n-1]}...)
 		}
 
-		log.Debug("Deep froze chain segment", context...)
+		log.Info("Deep froze chain segment", context...)
 
 		// Avoid database thrashing with tiny writes
 		if frozen-first < freezerBatchLimit {

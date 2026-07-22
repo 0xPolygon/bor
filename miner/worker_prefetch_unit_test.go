@@ -22,6 +22,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/holiman/uint256"
 	"github.com/stretchr/testify/require"
@@ -189,7 +190,7 @@ func TestForwardTxs_RecordsSentHashes(t *testing.T) {
 	ch := make(chan *types.Transaction, len(rawTxs))
 	sent := map[common.Hash]struct{}{}
 
-	forwardTxs(ch, rawTxs, sent)
+	forwardTxs(ch, rawTxs, sent, nil)
 
 	require.Len(t, sent, len(rawTxs), "all forwarded txs must be recorded")
 	for _, tx := range rawTxs {
@@ -213,7 +214,7 @@ func TestForwardTxs_DropsOnFullChannelDoesNotRecord(t *testing.T) {
 	ch := make(chan *types.Transaction, 1)
 	sent := map[common.Hash]struct{}{}
 
-	forwardTxs(ch, rawTxs, sent)
+	forwardTxs(ch, rawTxs, sent, nil)
 
 	require.Len(t, sent, 1, "only the single tx that actually landed should be recorded")
 	require.Len(t, ch, 1)
@@ -234,9 +235,27 @@ func TestForwardTxs_NilSentMapIsSafe(t *testing.T) {
 	)
 	ch := make(chan *types.Transaction, 1)
 	require.NotPanics(t, func() {
-		forwardTxs(ch, rawTxs, nil)
+		forwardTxs(ch, rawTxs, nil, nil)
 	})
 	require.Len(t, ch, 1)
+}
+
+// TestForwardTxs_DroppedCounterTracksFailedSends verifies the dropped counter
+// increments exactly once per tx that fails the non-blocking send, and not at
+// all for a tx that lands — the per-phase attribution architecture.md §11
+// item 3 depends on.
+func TestForwardTxs_DroppedCounterTracksFailedSends(t *testing.T) {
+	t.Parallel()
+	_, _, _, rawTxs := scanOverflowFixture(t,
+		[]uint64{21_000, 21_000, 21_000},
+		[]int64{1, 2, 3},
+	)
+	ch := make(chan *types.Transaction, 1) // room for exactly 1; 2 will drop
+	dropped := metrics.NewCounter()
+
+	forwardTxs(ch, rawTxs, nil, dropped)
+
+	require.EqualValues(t, len(rawTxs)-1, dropped.Snapshot().Count(), "one send lands, the rest must be counted as dropped")
 }
 
 // TestCollectPlanBatch_ClosedPlanCh: closing planCh returns builderDone=true

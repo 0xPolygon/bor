@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
@@ -109,9 +110,12 @@ func TestAddressBiasedCache_RouteCache(t *testing.T) {
 	accountHash1 := crypto.Keccak256Hash(addr1.Bytes())
 	key1 := accountHash1.Bytes()
 
-	targetCache, isAddressCache := cache.routeCache(key1)
+	targetCache, isAddressCache, matchedHash := cache.routeCache(key1)
 	if !isAddressCache {
 		t.Error("Expected address-specific cache for preloaded address")
+	}
+	if matchedHash != accountHash1 {
+		t.Error("Expected matched accountHash to equal the preloaded address's hash")
 	}
 	expectedCache, _ := cache.addressCaches.Load(accountHash1)
 	if targetCache != expectedCache.(*fastcache.Cache) {
@@ -122,9 +126,12 @@ func TestAddressBiasedCache_RouteCache(t *testing.T) {
 	accountHash2 := crypto.Keccak256Hash(addr2.Bytes())
 	key2 := accountHash2.Bytes()
 
-	targetCache, isAddressCache = cache.routeCache(key2)
+	targetCache, isAddressCache, matchedHash = cache.routeCache(key2)
 	if isAddressCache {
 		t.Error("Expected common cache for non-preloaded address")
+	}
+	if matchedHash != (common.Hash{}) {
+		t.Error("Expected zero-value accountHash for a non-address-specific route")
 	}
 	if targetCache != cache.commonCache {
 		t.Error("Incorrect cache returned for non-preloaded address")
@@ -132,9 +139,12 @@ func TestAddressBiasedCache_RouteCache(t *testing.T) {
 
 	// Test routing for short key (account trie)
 	shortKey := []byte{0x01, 0x02}
-	targetCache, isAddressCache = cache.routeCache(shortKey)
+	targetCache, isAddressCache, matchedHash = cache.routeCache(shortKey)
 	if isAddressCache {
 		t.Error("Expected common cache for short key")
+	}
+	if matchedHash != (common.Hash{}) {
+		t.Error("Expected zero-value accountHash for a short key")
 	}
 	if targetCache != cache.commonCache {
 		t.Error("Incorrect cache returned for short key")
@@ -178,6 +188,56 @@ func TestAddressBiasedCache_GetSet(t *testing.T) {
 	retrieved = cache.Get(nonExistentKey)
 	if len(retrieved) != 0 {
 		t.Errorf("Expected empty slice, got %v", retrieved)
+	}
+}
+
+// TestAddressBiasedCache_PerAddressMissMeter verifies a miss on a preloaded
+// address's cache increments that address's own meter (not just the aggregate
+// biasedAddressCacheMissMeter) and leaves a different address's meter untouched
+// — the per-address attribution architecture.md §11 / UC-2 needs to explain a
+// throughput regression by which specific address is missing, not just that
+// misses occurred somewhere.
+func TestAddressBiasedCache_PerAddressMissMeter(t *testing.T) {
+	addr1 := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	addr2 := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	addressCacheSizes := map[common.Address]int{
+		addr1: 1024 * 1024,
+		addr2: 1024 * 1024,
+	}
+
+	db := rawdb.NewMemoryDatabase()
+	cache, err := NewAddressBiasedCache(db, addressCacheSizes, 512*1024, 0)
+	if err != nil {
+		t.Fatalf("Failed to create cache: %v", err)
+	}
+
+	accountHash1 := crypto.Keccak256Hash(addr1.Bytes())
+	accountHash2 := crypto.Keccak256Hash(addr2.Bytes())
+
+	meter1, ok := cache.addressMissMeters.Load(accountHash1)
+	if !ok {
+		t.Fatal("Expected a registered miss meter for addr1")
+	}
+	meter2, ok := cache.addressMissMeters.Load(accountHash2)
+	if !ok {
+		t.Fatal("Expected a registered miss meter for addr2")
+	}
+
+	before1 := meter1.(*metrics.Meter).Snapshot().Count()
+	before2 := meter2.(*metrics.Meter).Snapshot().Count()
+
+	// Miss on addr1's cache only.
+	missKey := append(accountHash1.Bytes(), []byte{0x01}...)
+	cache.Get(missKey)
+
+	after1 := meter1.(*metrics.Meter).Snapshot().Count()
+	after2 := meter2.(*metrics.Meter).Snapshot().Count()
+
+	if after1 != before1+1 {
+		t.Errorf("Expected addr1's miss meter to increment by 1, got %d -> %d", before1, after1)
+	}
+	if after2 != before2 {
+		t.Errorf("Expected addr2's miss meter to stay unchanged, got %d -> %d", before2, after2)
 	}
 }
 

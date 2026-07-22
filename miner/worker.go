@@ -118,6 +118,15 @@ var (
 	sealedEmptyBlocksCounter = metrics.NewRegisteredCounter("worker/sealedEmptyBlocks", nil)
 	txCommitInterruptCounter = metrics.NewRegisteredCounter("worker/txCommitInterrupt", nil)
 
+	// prefetchDroppedIdleCounter/PlanCounter/OverflowCounter count non-blocking sends that
+	// failed to enqueue a candidate tx onto the prefetch stream (txsCh full), split by the
+	// phase that produced the candidate. Validates whether journal-fed prefetch (roadmap
+	// phase 6/9) would reduce drops relative to today's one-shot idle/plan/overflow feeds
+	// (architecture.md §11 item 3).
+	prefetchDroppedIdleCounter     = metrics.NewRegisteredCounter("worker/prefetch/dropped/idle", nil)
+	prefetchDroppedPlanCounter     = metrics.NewRegisteredCounter("worker/prefetch/dropped/plan", nil)
+	prefetchDroppedOverflowCounter = metrics.NewRegisteredCounter("worker/prefetch/dropped/overflow", nil)
+
 	// txHeapInitTimer measures time taken to initialise a heap of pending transactions from pool
 	txHeapInitTimer = metrics.NewRegisteredTimer("worker/txheapinit", nil)
 	// prepareWorkTimer measures time taken to prepare environment for block building which
@@ -126,6 +135,20 @@ var (
 	// pendingTimer measures time taken to fetch transactions from pool in the actual block
 	// building cycle (excluding the calls made by prefetcher).
 	pendingTimer = metrics.NewRegisteredTimer("worker/pending", nil)
+	// pendingPlainTimer and pendingBlobTimer split pendingTimer's combined cost into its
+	// two constituent Pending() calls (plain-tx filter vs blob-tx filter), so refill-cadence
+	// sizing can attribute cost to the call that actually repeats under a mini-batch design
+	// (only the plain-tx snapshot is proposed to run more than once per block).
+	pendingPlainTimer = metrics.NewRegisteredTimer("worker/pending/plain", nil)
+	pendingBlobTimer  = metrics.NewRegisteredTimer("worker/pending/blob", nil)
+	// pendingIdleLoopTimer measures the Pending() call already made by the idle prefetch
+	// loop (runIdleTxProvider), which re-snapshots on its own interval independent of block
+	// building — this is the "already re-snapshots" cost a refill/journal design adds to,
+	// not from zero.
+	pendingIdleLoopTimer = metrics.NewRegisteredTimer("worker/pending/idle_loop", nil)
+	// pendingOverflowTimer measures the Pending() call made by buildOverflowHeap, the
+	// builder-phase overflow re-scan that warms bonus txs from freed gas.
+	pendingOverflowTimer = metrics.NewRegisteredTimer("worker/pending/overflow", nil)
 	// commitTransactionsTimer measures time taken to execute transactions
 	commitTransactionsTimer = metrics.NewRegisteredTimer("worker/commitTransactions", nil)
 	// txApplyDurationTimer captures per-transaction apply latency during block building.
@@ -183,6 +206,26 @@ var (
 		nil,
 		metrics.NewExpDecaySample(1028, 0.015),
 	)
+
+	// declaredVsUsedRatioHistogram tracks, per committed tx, actualGasUsed*100/declaredGas
+	// (LazyTransaction.Gas). 100 = perfect estimate; below 100 = over-declared (the freed-gas
+	// case that feeds the overflow prefetch heap); above 100 would mean under-declared (not
+	// expected from the pool's own gas cap, tracked defensively). Sets the packing-loss
+	// assumption for reserved-quota sizing (architecture.md §11 item 2): a quota sized off
+	// declared gas reserves more blockspace than it will actually use whenever this ratio
+	// runs below 100.
+	declaredVsUsedRatioHistogram = metrics.NewRegisteredHistogram(
+		"worker/declared_vs_used_ratio",
+		nil,
+		metrics.NewExpDecaySample(1028, 0.015),
+	)
+
+	// lateArrivalIncludedTimer measures, for each committed tx whose pool-admission time
+	// is after the block's plain-tx Pending() snapshot, how long after that snapshot the
+	// tx arrived. Only txs that arrived late AND still got included are sampled — this is
+	// the distribution a refill/journal cadence choice must cover (target: capture >=80%
+	// of includable late arrivals, architecture.md §11 item 1).
+	lateArrivalIncludedTimer = metrics.NewRegisteredTimer("worker/late_arrival_included", nil)
 
 	// prefetchWarmAtApplyHistogram tracks the percentage of block transactions that were
 	// already prefetched at the moment the builder applied them. miss_rate_percent above is
@@ -285,6 +328,13 @@ type environment struct {
 	makeHeaderDuration time.Duration // primarily includes call to bor.Prepare
 	// Track time taken to fetch pending transactions during block building
 	pendingDuration time.Duration
+
+	// pendingSnapshotAt is the moment fillTransactions took its plain-tx Pending()
+	// snapshot for this build attempt. A tx whose pool-admission time (tx.Time()) is
+	// after this moment could not have been in that snapshot; if it still lands in the
+	// block, it was captured by a later mechanism (idle-loop feed, overflow re-scan).
+	// Zero if fillTransactions has not run yet for this env (e.g. idle-only build).
+	pendingSnapshotAt time.Time
 }
 
 // copy creates a deep copy of environment.
@@ -305,6 +355,7 @@ func (env *environment) copy() *environment {
 		makeEnvDuration:    env.makeEnvDuration,
 		makeHeaderDuration: env.makeHeaderDuration,
 		pendingDuration:    env.pendingDuration,
+		pendingSnapshotAt:  env.pendingSnapshotAt,
 	}
 
 	if env.gasPool != nil {
@@ -1377,6 +1428,12 @@ func (w *worker) commitTransaction(env *environment, tx *types.Transaction) ([]*
 	env.tcount++
 	env.size += tx.Size()
 
+	if !env.pendingSnapshotAt.IsZero() {
+		if arrivalDelta := tx.Time().Sub(env.pendingSnapshotAt); arrivalDelta > 0 {
+			lateArrivalIncludedTimer.Update(arrivalDelta)
+		}
+	}
+
 	return receipt.Logs, nil
 }
 
@@ -1677,12 +1734,16 @@ mainloop:
 			// Report freed gas to the prefetcher so it can predict overflow txs.
 			// freed = declared gas limit − actual gas used; non-zero means the block
 			// has more capacity than the plan assumed, enabling extra txs to fit.
-			if builderGasFreedCh != nil && ltx.Gas > 0 {
+			if ltx.Gas > 0 {
 				actualUsed := gasPoolBefore - env.gasPool.Gas()
-				if freed := ltx.Gas - actualUsed; freed > 0 {
-					select {
-					case builderGasFreedCh <- freed:
-					default:
+				declaredVsUsedRatioHistogram.Update(int64(actualUsed * 100 / ltx.Gas))
+
+				if builderGasFreedCh != nil {
+					if freed := ltx.Gas - actualUsed; freed > 0 {
+						select {
+						case builderGasFreedCh <- freed:
+						default:
+						}
 					}
 				}
 			}
@@ -2118,7 +2179,10 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, gen
 	filter := w.buildDefaultFilter(env.header.BaseFee, env.header.Number)
 
 	filter.BlobTxs = false
+	plainStart := time.Now()
 	pendingPlainTxs := w.eth.TxPool().Pending(filter, &w.interruptBlockBuilding)
+	pendingPlainTimer.Update(time.Since(plainStart))
+	env.pendingSnapshotAt = plainStart
 
 	filter.BlobTxs = true
 	if w.chainConfig.IsOsaka(env.header.Number) {
@@ -2126,7 +2190,9 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, gen
 	} else {
 		filter.BlobVersion = types.BlobSidecarVersion0
 	}
+	blobStart := time.Now()
 	pendingBlobTxs := w.eth.TxPool().Pending(filter, &w.interruptBlockBuilding)
+	pendingBlobTimer.Update(time.Since(blobStart))
 
 	env.pendingDuration = time.Since(pendingStart)
 	pendingTimer.Update(env.pendingDuration)
@@ -2609,7 +2675,9 @@ func (w *worker) runIdleTxProvider(txsCh chan<- *types.Transaction, header *type
 	for !shouldExit() {
 		loopStart := time.Now()
 
+		pendingSnapStart := time.Now()
 		pendingTxs := w.eth.TxPool().Pending(filter, interrupt)
+		pendingIdleLoopTimer.Update(time.Since(pendingSnapStart))
 		txs := newTransactionsByPriceAndNonce(signer, pendingTxs, header.BaseFee, interrupt)
 		w.streamIdleBatch(txsCh, txs, totalGasPool, localPrefetched, header.GasLimit)
 
@@ -2665,6 +2733,7 @@ func (w *worker) streamIdleBatch(
 		default:
 			// Channel full — stop this batch. The tx we failed to send will
 			// reappear in the next iteration's pool snapshot.
+			prefetchDroppedIdleCounter.Inc(1)
 			return
 		}
 		txs.Shift()
@@ -2750,6 +2819,7 @@ func (w *worker) runBuilderTxProvider(txsCh chan<- *types.Transaction, header *t
 		gasFreedCh = newGasFreedCh
 		extendedBudget += delta
 
+		var bonus []*types.Transaction
 		if extendedBudget > 0 {
 			// Mark the plan batch as in-flight before the overflow scan so
 			// scanOverflow won't re-emit the same tx within this iteration
@@ -2757,12 +2827,13 @@ func (w *worker) runBuilderTxProvider(txsCh chan<- *types.Transaction, header *t
 			for _, tx := range batch {
 				inFlightHashes[tx.Hash()] = struct{}{}
 			}
-			var bonus []*types.Transaction
 			bonus, extendedBudget = scanOverflow(overflowHeap, extendedBudget, genParams.prefetchedTxHashes, inFlightHashes)
-			batch = append(batch, bonus...)
 		}
 
-		forwardTxs(txsCh, batch, inFlightHashes)
+		// Forwarded separately (not merged into one batch) so drops attribute to the
+		// phase that produced the candidate (architecture.md §11 item 3).
+		forwardTxs(txsCh, batch, inFlightHashes, prefetchDroppedPlanCounter)
+		forwardTxs(txsCh, bonus, inFlightHashes, prefetchDroppedOverflowCounter)
 
 		if builderDone || interrupt.Load() {
 			return
@@ -2770,10 +2841,11 @@ func (w *worker) runBuilderTxProvider(txsCh chan<- *types.Transaction, header *t
 	}
 }
 
-// forwardTxs does a non-blocking send of each tx to ch. Drops silently if the
-// buffer is full — prefetch is best-effort. Tracks each forwarded hash in
-// inFlightHashes so follow-up overflow scans don't re-emit in-flight txs.
-func forwardTxs(ch chan<- *types.Transaction, txs []*types.Transaction, inFlightHashes map[common.Hash]struct{}) {
+// forwardTxs does a non-blocking send of each tx to ch. Drops count against dropped
+// (best-effort prefetch; nil disables counting) if the buffer is full. Tracks each
+// forwarded hash in inFlightHashes so follow-up overflow scans don't re-emit in-flight
+// txs.
+func forwardTxs(ch chan<- *types.Transaction, txs []*types.Transaction, inFlightHashes map[common.Hash]struct{}, dropped *metrics.Counter) {
 	for _, tx := range txs {
 		select {
 		case ch <- tx:
@@ -2781,6 +2853,9 @@ func forwardTxs(ch chan<- *types.Transaction, txs []*types.Transaction, inFlight
 				inFlightHashes[tx.Hash()] = struct{}{}
 			}
 		default:
+			if dropped != nil {
+				dropped.Inc(1)
+			}
 		}
 	}
 }
@@ -2793,7 +2868,9 @@ func (w *worker) buildOverflowHeap(header *types.Header, interrupt *atomic.Bool)
 	filter := w.buildDefaultFilter(header.BaseFee, header.Number)
 	filter.BlobTxs = false
 	signer := types.MakeSigner(w.chainConfig, header.Number, header.Time)
+	overflowStart := time.Now()
 	pending := w.eth.TxPool().Pending(filter, interrupt)
+	pendingOverflowTimer.Update(time.Since(overflowStart))
 	return newTransactionsByPriceAndNonce(signer, pending, header.BaseFee, interrupt)
 }
 
