@@ -900,7 +900,11 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		go func() {
 			pstart := time.Now()
 			statedb.StartPrefetcher("chain", witness, nil)
-			res, err := bc.processor.Process(block, statedb, bc.cfg.VmConfig, nil, ctx)
+			serialVmCfg := bc.cfg.VmConfig
+			if serialVmCfg.EnablePrecompileCache {
+				sharedCaches.applyTo(&serialVmCfg)
+			}
+			res, err := bc.processor.Process(block, statedb, serialVmCfg, nil, ctx)
 			blockExecutionSerialTimer.UpdateSince(pstart)
 			var localVtime time.Duration
 			if err == nil {
