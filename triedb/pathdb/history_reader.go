@@ -41,8 +41,8 @@ type indexReaderWithLimitTag struct {
 }
 
 // newIndexReaderWithLimitTag constructs a index reader with indexing position.
-func newIndexReaderWithLimitTag(db ethdb.KeyValueReader, state stateIdent, limit uint64) (*indexReaderWithLimitTag, error) {
-	r, err := newIndexReader(db, state)
+func newIndexReaderWithLimitTag(db ethdb.KeyValueReader, state stateIdent, limit uint64, bitmapSize int) (*indexReaderWithLimitTag, error) {
+	r, err := newIndexReader(db, state, bitmapSize)
 	if err != nil {
 		return nil, err
 	}
@@ -257,7 +257,7 @@ func (r *historyReader) read(state stateIdentQuery, stateID uint64, lastID uint6
 	r.mu.RUnlock()
 
 	if !ok {
-		ir, err = newIndexReaderWithLimitTag(r.disk, state.stateIdent, metadata.Last)
+		ir, err = newIndexReaderWithLimitTag(r.disk, state.stateIdent, metadata.Last, 0)
 		if err != nil {
 			return nil, err
 		}
