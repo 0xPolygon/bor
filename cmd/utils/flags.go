@@ -1533,7 +1533,7 @@ func SetNodeConfig(ctx *cli.Context, cfg *node.Config) {
 	}
 
 	if ctx.IsSet(DeveloperFlag.Name) {
-		cfg.UseLightweightKDF = true
+		cfg.UseLightweightKDF = ctx.Bool(DeveloperFlag.Name)
 	}
 
 	if ctx.IsSet(LightKDFFlag.Name) {

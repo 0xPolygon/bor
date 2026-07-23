@@ -192,12 +192,12 @@ func testBlockChainImport(chain types.Blocks, blockchain *BlockChain) error {
 			GasUsed:  usedGas,
 		}
 		if err != nil {
-			blockchain.reportBadBlock(block, res, err)
+			blockchain.reportBlock(block, res, err)
 			return err
 		}
 		err = blockchain.validator.ValidateState(block, statedb, res, false)
 		if err != nil {
-			blockchain.reportBadBlock(block, res, err)
+			blockchain.reportBlock(block, res, err)
 			return err
 		}
 
