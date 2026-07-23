@@ -275,6 +275,27 @@ func TestBuild_FlagDifferential(t *testing.T) {
 	}
 }
 
+// TestNewBuildVMCaches pins commitWork's cache-construction gate: with
+// --precompile-cache OFF the build path gets no shared caches, and with it ON
+// the build path gets the EXTENDED cache set — i.e. the widened keccak store,
+// not just the legacy 64B/ecrecover caches. The extended-ness is load-bearing:
+// constructing a non-extended set with the flag on would leave the widened
+// keccak path a silent no-op, so this asserts ApplyTo wires KeccakStore (and
+// flips EnablePrecompileCache) rather than merely returning a non-nil set.
+func TestNewBuildVMCaches(t *testing.T) {
+	wOff, _ := newExerciserWorker(t, false)
+	require.Nil(t, wOff.newBuildVMCaches(), "flag off: build path must get no shared caches")
+
+	wOn, _ := newExerciserWorker(t, true)
+	caches := wOn.newBuildVMCaches()
+	require.NotNil(t, caches, "flag on: build path must get shared caches")
+
+	var cfg vm.Config
+	caches.ApplyTo(&cfg)
+	require.NotNil(t, cfg.KeccakStore, "flag on: caches must be extended (widened keccak store wired)")
+	require.True(t, cfg.EnablePrecompileCache, "flag on: extended caches must set EnablePrecompileCache")
+}
+
 // TestBuild_SharedCacheRaceFree drives the real block-builder path
 // (commitWork → concurrent runPrefetcher + sealing EVM) with
 // EnablePrecompileCache ON, so the build prefetcher goroutine and the sealer

@@ -30,6 +30,23 @@ func assertBorDefaultGasPrice(t *testing.T, ethConfig *ethconfig.Config) {
 	assert.Equal(t, ethConfig.Miner.GasPrice, big.NewInt(params.BorDefaultMinerGasPrice))
 }
 
+// TestPrecompileCacheFlagPlumbing pins the --precompile-cache flag's default and
+// its propagation into the VM config. The default must be OFF (the flag-gated
+// rollout depends on it), and opting in must flow through buildEth into the eth
+// config so the widened caches are actually wired — plumbing that is otherwise
+// only exercised end-to-end at runtime.
+func TestPrecompileCacheFlagPlumbing(t *testing.T) {
+	assert.False(t, DefaultConfig().EnablePrecompileCache, "--precompile-cache must default to off")
+
+	config := DefaultConfig()
+	config.EnablePrecompileCache = true
+	assert.NoError(t, config.loadChain())
+
+	ethConfig, err := config.buildEth(nil, nil)
+	assert.NoError(t, err)
+	assert.True(t, ethConfig.EnablePrecompileCache, "buildEth must propagate EnablePrecompileCache into the eth config")
+}
+
 func TestConfigMerge(t *testing.T) {
 	c0 := &Config{
 		Chain:    "0",

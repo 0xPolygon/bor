@@ -2407,6 +2407,26 @@ func (w *worker) generateWork(params *generateParams, witness bool) *newPayloadR
 	}
 }
 
+// newBuildVMCaches returns the per-building-cycle shared VM result caches when
+// --precompile-cache is enabled, else nil. The caller must attach the result to
+// genParams BEFORE launching the prefetch goroutine: the prefetcher
+// (runPrefetcher) and the sealing EVM (makeEnv) both read &genParams by pointer,
+// so the cache set must exist on genParams before the goroutine starts —
+// creating it later would launch the prefetcher with no cache and break sharing
+// (create-after-launch race).
+//
+// MVP scope: only the sealing EVM (makeEnv) and the build prefetcher
+// (runPrefetcher → PrefetchStream) are wired. The pre-tx / system EVMs,
+// FinalizeAndAssemble, and Bor state-sync / system processing are intentionally
+// NOT wired — they are not the hot path and may run under different rules;
+// wiring them is out of MVP scope.
+func (w *worker) newBuildVMCaches() *vm.SharedResultCaches {
+	if !w.chain.GetVMConfig().EnablePrecompileCache {
+		return nil
+	}
+	return vm.NewSharedResultCaches(true)
+}
+
 // commitWork generates several new sealing tasks based on the parent block
 // and submit them to the sealer.
 func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int64, abortRecovery bool) {
@@ -2468,21 +2488,9 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 		preBuildDuration:   time.Since(buildStart),
 	}
 
-	// Create the per-building-cycle shared VM result caches BEFORE the prefetch
-	// goroutine launches below. The prefetcher (runPrefetcher, launched at the
-	// `go func` below) and the sealing EVM (makeEnv) both read &genParams by
-	// pointer, so the cache set must exist on genParams before the goroutine
-	// starts — creating it later (e.g. inside buildAndCommitBlock) would launch
-	// the prefetcher with no cache and break sharing (create-after-launch race).
-	//
-	// MVP scope: only the sealing EVM (makeEnv) and the build prefetcher
-	// (runPrefetcher → PrefetchStream) are wired. The pre-tx / system EVMs,
-	// FinalizeAndAssemble, and Bor state-sync / system processing are
-	// intentionally NOT wired — they are not the hot path and may run under
-	// different rules; wiring them is out of MVP scope.
-	if w.chain.GetVMConfig().EnablePrecompileCache {
-		genParams.vmCaches = vm.NewSharedResultCaches(true)
-	}
+	// Attach the per-building-cycle shared VM result caches BEFORE the prefetch
+	// goroutine launches below (see newBuildVMCaches for why the ordering matters).
+	genParams.vmCaches = w.newBuildVMCaches()
 
 	var interruptPrefetch atomic.Bool
 	w.maybeStartPrefetch(parent, throwaway, &genParams, &interruptPrefetch)
