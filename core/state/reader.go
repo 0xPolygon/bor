@@ -32,7 +32,6 @@ import (
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/trie/bintrie"
 	"github.com/ethereum/go-ethereum/trie/transitiontrie"
-	"github.com/ethereum/go-ethereum/trie/utils"
 	"github.com/ethereum/go-ethereum/triedb"
 	"github.com/ethereum/go-ethereum/triedb/database"
 )
@@ -266,7 +265,7 @@ type trieReader struct {
 
 // newTrieReader constructs a trie reader of the specific state. An error will be
 // returned if the associated trie specified by root is not existent.
-func newTrieReader(root common.Hash, db *triedb.Database, cache *utils.PointCache) (*trieReader, error) {
+func newTrieReader(root common.Hash, db *triedb.Database) (*trieReader, error) {
 	var (
 		tr  Trie
 		err error

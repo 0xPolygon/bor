@@ -14,7 +14,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
-	"github.com/ethereum/go-ethereum/trie/utils"
 )
 
 // ---------------------------------------------------------------------------
@@ -1232,8 +1231,6 @@ func (s *ParallelStateDB) Finalise(deleteEmptyObjects bool) {}
 
 // Inner returns the underlying StateDB. Required by Bor consensus.
 func (s *ParallelStateDB) Inner() *StateDB { return s.rawBase }
-
-func (s *ParallelStateDB) PointCache() *utils.PointCache { return s.rawBase.PointCache() }
 
 // Witness returns the shared *Witness so BLOCKHASH writes from V2 workers
 // land where finalDB sees them. The share is established by the caller

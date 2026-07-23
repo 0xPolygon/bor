@@ -22,14 +22,13 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/holiman/uint256"
-
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/trie/trienode"
 	"github.com/ethereum/go-ethereum/triedb/database"
+	"github.com/holiman/uint256"
 )
 
 var errInvalidRootType = errors.New("invalid root type")
@@ -80,10 +79,7 @@ func ChunkifyCode(code []byte) ChunkedCode {
 	chunks := make([]byte, chunkCount*HashSize)
 	for i := 0; i < chunkCount; i++ {
 		// number of bytes to copy, StemSize unless the end of the code has been reached.
-		end := StemSize * (i + 1)
-		if len(code) < end {
-			end = len(code)
-		}
+		end := min(len(code), StemSize*(i+1))
 		copy(chunks[i*HashSize+1:], code[StemSize*i:end]) // copy the code itself
 
 		// chunk offset = taken from the last chunk.

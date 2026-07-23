@@ -24,7 +24,6 @@ require (
 	github.com/cosmos/cosmos-sdk v0.50.15
 	github.com/cosmos/gogoproto v1.7.2
 	github.com/crate-crypto/go-eth-kzg v1.4.0
-	github.com/crate-crypto/go-ipa v0.0.0-20240724233137-53bbb0ceb27a
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc
 	github.com/dchest/siphash v1.2.3
 	github.com/deckarep/golang-set/v2 v2.6.0
@@ -33,7 +32,6 @@ require (
 	github.com/dop251/goja v0.0.0-20230605162241-28ee0ee714f3
 	github.com/ethereum/c-kzg-4844/v2 v2.1.5
 	github.com/ethereum/go-bigmodexpfix v0.0.0-20250911101455-f9e208c548ab
-	github.com/ethereum/go-verkle v0.2.2
 	github.com/fatih/color v1.17.0
 	github.com/ferranbt/fastssz v0.1.2
 	github.com/fsnotify/fsnotify v1.9.0

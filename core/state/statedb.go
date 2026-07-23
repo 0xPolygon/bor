@@ -42,7 +42,6 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/trie/trienode"
-	"github.com/ethereum/go-ethereum/trie/utils"
 )
 
 // TriesInMemory represents the number of layers that are kept in RAM.
@@ -205,7 +204,7 @@ func NewWithReader(root common.Hash, db Database, reader Reader) (*StateDB, erro
 		transientStorage:     newTransientStorage(),
 	}
 	if db.TrieDB().IsVerkle() {
-		sdb.accessEvents = NewAccessEvents(db.PointCache())
+		sdb.accessEvents = NewAccessEvents()
 	}
 
 	return sdb, nil
@@ -2332,11 +2331,6 @@ func (s *StateDB) finalisePromote(addr common.Address, obj *stateObject) {
 // Used by V2 parallel execution where per-operation timing is not needed.
 func (s *StateDB) SkipTimers() {
 	s.skipTimers = true
-}
-
-// PointCache returns the point cache used by verkle tree.
-func (s *StateDB) PointCache() *utils.PointCache {
-	return s.db.PointCache()
 }
 
 // Witness retrieves the current state witness being collected.
