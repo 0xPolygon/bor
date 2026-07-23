@@ -38,7 +38,6 @@ import (
 	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/internal/version"
 	"github.com/ethereum/go-ethereum/log"
-	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/miner"
 	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/params"
@@ -83,20 +82,6 @@ const (
 	beaconUpdateWarnFrequency = 5 * time.Minute
 )
 
-var (
-	// Number of blobs requested via getBlobsV2
-	getBlobsRequestedCounter = metrics.NewRegisteredCounter("engine/getblobs/requested", nil)
-
-	// Number of blobs requested via getBlobsV2 that are present in the blobpool
-	getBlobsAvailableCounter = metrics.NewRegisteredCounter("engine/getblobs/available", nil)
-
-	// Number of times getBlobsV2 responded with “hit”
-	getBlobsV2RequestHit = metrics.NewRegisteredCounter("engine/getblobs/hit", nil)
-
-	// Number of times getBlobsV2 responded with “miss”
-	getBlobsV2RequestMiss = metrics.NewRegisteredCounter("engine/getblobs/miss", nil)
-)
-
 type ConsensusAPI struct {
 	eth *eth.Ethereum
 
@@ -139,6 +124,9 @@ type ConsensusAPI struct {
 
 // NewConsensusAPI creates a new consensus api for the given backend.
 // The underlying blockchain needs to have a valid terminal total difficulty set.
+//
+// This function creates a long-lived object with an attached background thread.
+// For testing or other short-term use cases, please use newConsensusAPIWithoutHeartbeat.
 func NewConsensusAPI(eth *eth.Ethereum) *ConsensusAPI {
 	api := newConsensusAPIWithoutHeartbeat(eth)
 	go api.heartbeat()
@@ -634,8 +622,25 @@ func (api *ConsensusAPI) GetBlobsV1(hashes []common.Hash) ([]*engine.BlobAndProo
 func (api *ConsensusAPI) GetBlobsV2(hashes []common.Hash) ([]*engine.BlobAndProofV2, error) {
 	head := api.eth.BlockChain().CurrentHeader()
 	if api.config().LatestFork(head.Time) < forks.Osaka {
-		return nil, unsupportedForkErr("engine_getBlobsV2 is not available before Osaka fork")
+		return nil, nil
 	}
+	return api.getBlobs(hashes, true)
+}
+
+// GetBlobsV3 returns a set of blobs from the transaction pool. Same as
+// GetBlobsV2, except will return partial responses in case there is a missing
+// blob.
+func (api *ConsensusAPI) GetBlobsV3(hashes []common.Hash) ([]*engine.BlobAndProofV2, error) {
+	head := api.eth.BlockChain().CurrentHeader()
+	if api.config().LatestFork(head.Time) < forks.Osaka {
+		return nil, nil
+	}
+	return api.getBlobs(hashes, false)
+}
+
+// getBlobs returns all available blobs. In v2, partial responses are not allowed,
+// while v3 supports partial responses.
+func (api *ConsensusAPI) getBlobs(hashes []common.Hash, v2 bool) ([]*engine.BlobAndProofV2, error) {
 	if len(hashes) > 128 {
 		return nil, engine.TooLargeRequest.With(fmt.Errorf("requested blob count too large: %v", len(hashes)))
 	}
@@ -643,28 +648,30 @@ func (api *ConsensusAPI) GetBlobsV2(hashes []common.Hash) ([]*engine.BlobAndProo
 	getBlobsRequestedCounter.Inc(int64(len(hashes)))
 	getBlobsAvailableCounter.Inc(int64(available))
 
-	// Optimization: check first if all blobs are available, if not, return empty response
-	if available != len(hashes) {
-		getBlobsV2RequestMiss.Inc(1)
+	// Short circuit if partial response is not allowed
+	if v2 && available != len(hashes) {
+		getBlobsRequestMiss.Inc(1)
 		return nil, nil
 	}
-
+	// Retrieve blobs from the pool. This operation is expensive and may involve
+	// heavy disk I/O.
 	blobs, _, proofs, err := api.eth.BlobTxPool().GetBlobs(hashes, types.BlobSidecarVersion1)
 	if err != nil {
 		return nil, engine.InvalidParams.With(err)
 	}
-
-	// To comply with API spec, check again that we really got all data needed
-	for _, blob := range blobs {
-		if blob == nil {
-			getBlobsV2RequestMiss.Inc(1)
-			return nil, nil
-		}
-	}
-	getBlobsV2RequestHit.Inc(1)
-
+	// Validate the blobs from the pool and assemble the response
 	res := make([]*engine.BlobAndProofV2, len(hashes))
-	for i := 0; i < len(blobs); i++ {
+	for i := range blobs {
+		// The blob has been evicted since the last AvailableBlobs call.
+		// Return null if partial response is not allowed.
+		if blobs[i] == nil {
+			if !v2 {
+				continue
+			} else {
+				getBlobsRequestMiss.Inc(1)
+				return nil, nil
+			}
+		}
 		var cellProofs []hexutil.Bytes
 		for _, proof := range proofs[i] {
 			cellProofs = append(cellProofs, proof[:])
@@ -673,6 +680,13 @@ func (api *ConsensusAPI) GetBlobsV2(hashes []common.Hash) ([]*engine.BlobAndProo
 			Blob:       blobs[i][:],
 			CellProofs: cellProofs,
 		}
+	}
+	if len(res) == len(hashes) {
+		getBlobsRequestCompleteHit.Inc(1)
+	} else if len(res) > 0 {
+		getBlobsRequestPartialHit.Inc(1)
+	} else {
+		getBlobsRequestMiss.Inc(1)
 	}
 	return res, nil
 }
@@ -1139,7 +1153,7 @@ func (api *ConsensusAPI) delayPayloadImport(block *types.Block) engine.PayloadSt
 		return engine.PayloadStatusV1{Status: engine.SYNCING}
 	}
 	// Either no beacon sync was started yet, or it rejected the delivered
-	// payload as non-integratable on top of the existing sync. We'll just
+	// payload as non-integrate on top of the existing sync. We'll just
 	// have to rely on the beacon client to forcefully update the head with
 	// a forkchoice update request.
 	if api.eth.SyncMode() == downloader.FullSync {
@@ -1237,8 +1251,6 @@ func (api *ConsensusAPI) invalid(err error, latestValid *types.Header) engine.Pa
 // heartbeat loops indefinitely, and checks if there have been beacon client updates
 // received in the last while. If not - or if they but strange ones - it warns the
 // user that something might be off with their consensus node.
-//
-// TODO(karalabe): Spin this goroutine down somehow
 func (api *ConsensusAPI) heartbeat() {
 	// Sleep a bit on startup since there's obviously no beacon client yet
 	// attached, so no need to print scary warnings to the user.
