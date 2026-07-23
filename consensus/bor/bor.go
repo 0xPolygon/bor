@@ -1487,21 +1487,9 @@ func (c *Bor) FinalizeForPipeline(chain consensus.ChainHeaderReader, header *typ
 	)
 
 	if IsSprintStart(headerNumber, c.config.CalculateSprint(headerNumber)) {
-		cx := statefull.ChainContext{Chain: chain, Bor: c}
-
-		if !c.config.IsRio(header.Number) {
-			if err = c.checkAndCommitSpan(statedb, header, cx); err != nil {
-				log.Error("Error while committing span", "error", err)
-				return nil, err
-			}
-		}
-
-		if c.HeimdallClient != nil {
-			stateSyncData, err = c.CommitStates(statedb, header, cx)
-			if err != nil {
-				log.Error("Error while committing states", "error", err)
-				return nil, err
-			}
+		stateSyncData, err = c.commitSprintWork(chain, header, statedb)
+		if err != nil {
+			return nil, err
 		}
 	}
 

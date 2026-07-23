@@ -1626,6 +1626,36 @@ func (s *StateDB) Finalise(deleteEmptyObjects bool) {
 	s.clearJournalAndRefund()
 }
 
+// addWitnessNodes adds storage-trie nodes to the block witness and, when
+// per-account stats are being tracked, attributes them to the account.
+func (s *StateDB) addWitnessNodes(nodes map[string][]byte, addrHash common.Hash) {
+	s.witness.AddState(nodes)
+	if s.witnessStats != nil {
+		s.witnessStats.Add(nodes, addrHash)
+	}
+}
+
+// addObjectWitness pulls the object's storage-trie witness into the block
+// witness, preferring the prefetched trie, then the object's own trie. With
+// neither available and no prefetcher running, storage reads went through the
+// reader (separate trie / prevalueTracer), so the intermediate proof-path
+// nodes are missing — open the storage trie and re-read the accessed slots to
+// capture them.
+func (s *StateDB) addObjectWitness(obj *stateObject) {
+	if trie := obj.getPrefetchedTrie(); trie != nil {
+		s.addWitnessNodes(trie.Witness(), obj.addrHash)
+	} else if obj.trie != nil {
+		s.addWitnessNodes(obj.trie.Witness(), obj.addrHash)
+	} else if s.prefetcher == nil {
+		if tr, err := obj.getTrie(); err == nil {
+			for key := range obj.originStorage {
+				tr.GetStorage(obj.address, key[:])
+			}
+			s.addWitnessNodes(tr.Witness(), obj.addrHash)
+		}
+	}
+}
+
 // IntermediateRoot computes the current root hash of the state trie.
 // It is called in between transactions to get the root hash that
 // goes into transaction receipts.
@@ -1705,30 +1735,7 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 			if len(obj.originStorage) == 0 {
 				continue
 			}
-			if trie := obj.getPrefetchedTrie(); trie != nil {
-				witness := trie.Witness()
-				s.witness.AddState(witness)
-				if s.witnessStats != nil {
-					s.witnessStats.Add(witness, obj.addrHash)
-				}
-			} else if obj.trie != nil {
-				witness := obj.trie.Witness()
-				s.witness.AddState(witness)
-				if s.witnessStats != nil {
-					s.witnessStats.Add(witness, obj.addrHash)
-				}
-			} else if s.prefetcher == nil {
-				if tr, err := obj.getTrie(); err == nil {
-					for key := range obj.originStorage {
-						tr.GetStorage(obj.address, key[:])
-					}
-					witness := tr.Witness()
-					s.witness.AddState(witness)
-					if s.witnessStats != nil {
-						s.witnessStats.Add(witness, obj.addrHash)
-					}
-				}
-			}
+			s.addObjectWitness(obj)
 		}
 		// Pull in only-read and non-destructed trie witnesses
 		for _, obj := range s.stateObjects {
@@ -1740,34 +1747,7 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 			if len(obj.originStorage) == 0 {
 				continue
 			}
-			if trie := obj.getPrefetchedTrie(); trie != nil {
-				witness := trie.Witness()
-				s.witness.AddState(witness)
-				if s.witnessStats != nil {
-					s.witnessStats.Add(witness, obj.addrHash)
-				}
-			} else if obj.trie != nil {
-				witness := obj.trie.Witness()
-				s.witness.AddState(witness)
-				if s.witnessStats != nil {
-					s.witnessStats.Add(witness, obj.addrHash)
-				}
-			} else if s.prefetcher == nil {
-				// No prefetcher and no pre-existing trie. Storage reads went
-				// through the reader (separate trie/prevalueTracer), so the
-				// intermediate proof-path nodes are missing. Open the storage
-				// trie and re-read the slots to capture them for the witness.
-				if tr, err := obj.getTrie(); err == nil {
-					for key := range obj.originStorage {
-						tr.GetStorage(obj.address, key[:])
-					}
-					witness := tr.Witness()
-					s.witness.AddState(witness)
-					if s.witnessStats != nil {
-						s.witnessStats.Add(witness, obj.addrHash)
-					}
-				}
-			}
+			s.addObjectWitness(obj)
 		}
 		s.WitnessCollection += time.Since(witStart)
 	}
@@ -2649,8 +2629,10 @@ func (s *StateDB) applyFlatPureDestructFast(addr common.Address) {
 	s.journal.dirty(addr)
 }
 
-func (s *StateDB) applyFlatMutationFast(diff *FlatDiff, addr common.Address, acct types.StateAccount) {
-	var obj *stateObject
+// resolveFlatMutationObject returns the state object a flat mutation for addr
+// applies to, recreating the object from scratch when the diff destructed the
+// account (preserving the pre-destruct object for witness collection).
+func (s *StateDB) resolveFlatMutationObject(diff *FlatDiff, addr common.Address) *stateObject {
 	if _, destructed := diff.Destructs[addr]; destructed {
 		if _, already := s.stateObjectsDestruct[addr]; !already {
 			if prev := s.getStateObject(addr); prev != nil {
@@ -2659,16 +2641,21 @@ func (s *StateDB) applyFlatMutationFast(diff *FlatDiff, addr common.Address, acc
 		}
 		delete(s.stateObjects, addr)
 		delete(s.nonExistentReads, addr)
+		obj := newObject(s, addr, nil)
+		s.setStateObject(obj)
+		return obj
+	}
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		delete(s.nonExistentReads, addr)
 		obj = newObject(s, addr, nil)
 		s.setStateObject(obj)
-	} else {
-		obj = s.getStateObject(addr)
-		if obj == nil {
-			delete(s.nonExistentReads, addr)
-			obj = newObject(s, addr, nil)
-			s.setStateObject(obj)
-		}
 	}
+	return obj
+}
+
+func (s *StateDB) applyFlatMutationFast(diff *FlatDiff, addr common.Address, acct types.StateAccount) {
+	obj := s.resolveFlatMutationObject(diff, addr)
 	if obj == nil {
 		return
 	}

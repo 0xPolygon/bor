@@ -5176,25 +5176,7 @@ func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block
 	// produced — preloadFlatDiffReads exists solely to populate the witness
 	// with proof-path trie nodes, and the histograms describe its work.
 	if makeWitness {
-		// measure the preload step's wall-time and the size of its read surface. ReadStorage
-		// is iterated directly (not via ReadSet) because it also contains
-		// read-only slots on mutated accounts — answers "how is storage-read
-		// load distributed", which is what shapes any future parallelisation.
-		// Fires for both import and miner SRC since runSRCCompute is shared.
-		readAccounts := len(flatDiff.ReadSet)
-		preloadSlots := 0
-		for _, slots := range flatDiff.ReadStorage {
-			preloadSlots += len(slots)
-			pipelineSRCPreloadSlotsPerAccountHistogram.Update(int64(len(slots)))
-		}
-		pipelineSRCPreloadReadAccountsHistogram.Update(int64(readAccounts))
-		pipelineSRCPreloadSlotsHistogram.Update(int64(preloadSlots))
-		pipelineSRCPreloadDestructsHistogram.Update(int64(len(flatDiff.Destructs)))
-		pipelineSRCPreloadNonexistentHistogram.Update(int64(len(flatDiff.NonExistentReads)))
-
-		preloadStart := time.Now()
-		preloadFlatDiffReads(tmpDB, flatDiff)
-		pipelineSRCPreloadTimer.UpdateSince(preloadStart)
+		recordAndPreloadSRCWitnessReads(tmpDB, flatDiff)
 	}
 
 	deleteEmptyObjects := bc.chainConfig.IsEIP158(block.Number())
@@ -5216,6 +5198,30 @@ func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block
 		bc.encodeAndCachePendingWitness(pending, witness, block)
 	}
 	pending.root = root
+}
+
+// recordAndPreloadSRCWitnessReads measures the preload step's wall-time and
+// the size of the FlatDiff read surface, then re-reads that surface through
+// tmpDB so the witness captures proof-path trie nodes the speculative
+// execution skipped. ReadStorage is iterated directly (not via ReadSet)
+// because it also contains read-only slots on mutated accounts — answers
+// "how is storage-read load distributed", which is what shapes any future
+// parallelisation. Fires for both import and miner SRC since runSRCCompute
+// is shared.
+func recordAndPreloadSRCWitnessReads(tmpDB *state.StateDB, flatDiff *state.FlatDiff) {
+	preloadSlots := 0
+	for _, slots := range flatDiff.ReadStorage {
+		preloadSlots += len(slots)
+		pipelineSRCPreloadSlotsPerAccountHistogram.Update(int64(len(slots)))
+	}
+	pipelineSRCPreloadReadAccountsHistogram.Update(int64(len(flatDiff.ReadSet)))
+	pipelineSRCPreloadSlotsHistogram.Update(int64(preloadSlots))
+	pipelineSRCPreloadDestructsHistogram.Update(int64(len(flatDiff.Destructs)))
+	pipelineSRCPreloadNonexistentHistogram.Update(int64(len(flatDiff.NonExistentReads)))
+
+	preloadStart := time.Now()
+	preloadFlatDiffReads(tmpDB, flatDiff)
+	pipelineSRCPreloadTimer.UpdateSince(preloadStart)
 }
 
 // openSRCStateDB opens a StateDB at parentRoot for the pipelined SRC goroutine.
