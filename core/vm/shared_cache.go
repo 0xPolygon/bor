@@ -21,9 +21,9 @@ import (
 // are cheap atomic ops and only occur on paths that already run when the
 // corresponding cache is wired, so they add ~zero overhead when unused.
 var (
-	keccakCacheHit      = metrics.GetOrRegisterMeter("vm/cache/keccak/hit", nil)
-	keccakCacheMiss     = metrics.GetOrRegisterMeter("vm/cache/keccak/miss", nil)
-	keccakCacheEntries  = metrics.GetOrRegisterGauge("vm/cache/keccak/entries", nil)
+	keccakCacheHit     = metrics.GetOrRegisterMeter("vm/cache/keccak/hit", nil)
+	keccakCacheMiss    = metrics.GetOrRegisterMeter("vm/cache/keccak/miss", nil)
+	keccakCacheEntries = metrics.GetOrRegisterGauge("vm/cache/keccak/entries", nil)
 	// keccakCacheBytesTotal is a cumulative counter: cumulative bytes
 	// inserted (lifetime), not current retained. It is never decremented
 	// when a per-block store is discarded, so it must not be read as
@@ -138,8 +138,8 @@ func (s *shardedKeccakStore) Store(data []byte, h common.Hash) {
 // when constructed with enableExtended == true.
 type SharedResultCaches struct {
 	jumpDests JumpDestCache
-	keccak    *sync.Map // legacy [64]byte→common.Hash, always present
-	ecrecover *sync.Map // [128]byte→[]byte, always present
+	keccak    *sync.Map         // legacy [64]byte→common.Hash, always present
+	ecrecover *sync.Map         // [128]byte→[]byte, always present
 	keccakEx  keccakResultStore // widened store; nil unless extended
 	extended  bool
 }

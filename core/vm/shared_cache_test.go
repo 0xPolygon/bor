@@ -128,6 +128,31 @@ func FuzzKeccakWidened(f *testing.F) {
 	})
 }
 
+// TestCacheableKeccakLen pins the eligibility boundaries of the widened keccak
+// cache. Both bounds are load-bearing: n > 0 excludes the trivial empty hash
+// (and must not become n >= 0), and n <= 8192 caps retained memory against
+// adversarial inputs (and must not become n < 8192). A drift in either boundary
+// silently changes what the cache admits.
+func TestCacheableKeccakLen(t *testing.T) {
+	cases := []struct {
+		n    int
+		want bool
+	}{
+		{0, false},       // excluded: trivial to hash; pins the n > 0 lower bound
+		{1, true},        // smallest eligible input
+		{64, true},       // 64B is length-eligible (served by the legacy fast path)
+		{88, true},       // typical variable-length input
+		{8192, true},     // upper bound is inclusive; pins the n <= 8192 boundary
+		{8193, false},    // one past the cap
+		{1 << 20, false}, // far past the cap
+	}
+	for _, c := range cases {
+		if got := cacheableKeccakLen(c.n); got != c.want {
+			t.Errorf("cacheableKeccakLen(%d) = %v, want %v", c.n, got, c.want)
+		}
+	}
+}
+
 func TestKeccakStore_AllSizesHitEqualsMiss(t *testing.T) {
 	s := newKeccakStoreForTest()
 	for _, n := range []int{0, 31, 63, 64, 65, 88, 128, 349} {

@@ -283,25 +283,13 @@ func opKeccak256(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 		evm.hasher.Read(evm.hasherBuf[:])
 		evm.Config.Keccak256Cache.Store(key, evm.hasherBuf)
 	} else if evm.Config.EnablePrecompileCache && evm.Config.KeccakStore != nil && cacheableKeccakLen(len(data)) {
-		// Widened fast path: cache keccak256 for variable-length inputs
-		// (all cacheable sizes except the legacy 64B slot above). The store
-		// is length-aware, so no two differently-sized inputs alias.
-		if h, ok := evm.Config.KeccakStore.Load(data); ok {
-			keccakCacheHit.Mark(1)
-			if evm.Config.EnablePreimageRecording {
-				evm.StateDB.AddPreimage(h, data)
-			}
-			size.SetBytes32(h[:])
+		// Widened fast path: variable-length inputs (all cacheable sizes
+		// except the legacy 64B slot above). On a hit the helper writes the
+		// result into size and returns true; on a miss it computes into
+		// hasherBuf and stores, returning false so we fall through below.
+		if evm.keccakWidenedHit(data, size) {
 			return nil, nil
 		}
-		keccakCacheMiss.Mark(1)
-		evm.hasher.Reset()
-		evm.hasher.Write(data)
-		evm.hasher.Read(evm.hasherBuf[:])
-		// Store by value as common.Hash — never a []byte aliasing hasherBuf.
-		evm.Config.KeccakStore.Store(data, common.Hash(evm.hasherBuf))
-		// Fall through to the shared preimage-record + size.SetBytes below,
-		// mirroring the 64B miss path.
 	} else {
 		evm.hasher.Reset()
 		evm.hasher.Write(data)
@@ -313,6 +301,30 @@ func opKeccak256(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 	}
 	size.SetBytes(evm.hasherBuf[:])
 	return nil, nil
+}
+
+// keccakWidenedHit serves opKeccak256's variable-length cache path. On a cache
+// hit it records the preimage (when enabled), writes the cached hash into size,
+// and returns true so the caller returns immediately. On a miss it computes the
+// hash into evm.hasherBuf and stores it (length-aware, stored by value as
+// common.Hash so it never aliases hasherBuf), returning false so the caller
+// falls through to the shared preimage-record + size write — mirroring the 64B
+// miss path exactly.
+func (evm *EVM) keccakWidenedHit(data []byte, size *uint256.Int) bool {
+	if h, ok := evm.Config.KeccakStore.Load(data); ok {
+		keccakCacheHit.Mark(1)
+		if evm.Config.EnablePreimageRecording {
+			evm.StateDB.AddPreimage(h, data)
+		}
+		size.SetBytes32(h[:])
+		return true
+	}
+	keccakCacheMiss.Mark(1)
+	evm.hasher.Reset()
+	evm.hasher.Write(data)
+	evm.hasher.Read(evm.hasherBuf[:])
+	evm.Config.KeccakStore.Store(data, evm.hasherBuf)
+	return false
 }
 
 func opAddress(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
