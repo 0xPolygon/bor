@@ -180,23 +180,21 @@ func evictCachedNode(l layer, owner common.Hash, path []byte) {
 }
 
 // nodeFallback retrieves a trie node when the normal diff layer walk fails
-// due to concurrent layer flattening (cap). This mirrors the fallback strategy
-// used by accountFallback and storageFallback.
+// due to concurrent layer flattening (cap).
 //
 // During pipelined SRC, the background SRC goroutine's CommitWithUpdate can
 // trigger cap() which flattens bottom diff layers into a new disk layer,
 // marking the old disk layer as stale. Concurrently, the prefetcher's trie
 // walk may reach this stale disk layer and get errSnapshotStale.
 //
-// The fallback tries the entry-point layer first (which is still valid in
-// memory), then falls back to tree.bottom() — the current base disk layer,
-// which is guaranteed non-stale.
+// Unlike accountFallback/storageFallback — whose primary attempt is the
+// lookup-index path, making an entry-layer retry a genuinely different
+// second strategy — nodeWalk's primary attempt already IS the entry-layer
+// walk, so retrying r.layer.node would deterministically hit the same stale
+// disk layer. Go straight to tree.bottom(), the current base disk layer,
+// which holds the flattened data and is guaranteed non-stale.
 func (r *reader) nodeFallback(owner common.Hash, path []byte) ([]byte, common.Hash, *nodeLoc, error) {
-	blob, got, loc, err := r.layer.node(owner, path, 0)
-	if errors.Is(err, errSnapshotStale) {
-		return r.db.tree.bottom().node(owner, path, 0)
-	}
-	return blob, got, loc, err
+	return r.db.tree.bottom().node(owner, path, 0)
 }
 
 // AccountRLP directly retrieves the account associated with a particular hash.

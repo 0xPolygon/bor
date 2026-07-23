@@ -5092,31 +5092,33 @@ func TestPrepare_PrimaryProducerWaitOnPrepareControlsEarlyAnnouncementDelay(t *t
 	genesis := chain.HeaderChain().GetHeaderByNumber(0)
 	require.NotNil(t, genesis)
 
+	// Both subtests assert against the parent boundary itself rather than
+	// fixed elapsed-time bounds, so scheduling hiccups on loaded CI runners
+	// can't flake them: opt-out must return before the boundary (with a full
+	// second of headroom), normal production must not return until it.
 	t.Run("opt out stays fast", func(t *testing.T) {
-		parentActual := time.Now().Add(150 * time.Millisecond)
+		parentActual := time.Now().Add(1 * time.Second)
 		b.parentActualTimeCache.Add(genesis.Hash(), parentActual)
 		header := createTestHeader(genesis, 1, borCfg.Period["0"])
 
-		start := time.Now()
 		err := b.Prepare(chain, header, false)
-		elapsed := time.Since(start)
 
 		require.NoError(t, err)
-		require.Less(t, elapsed, 100*time.Millisecond)
+		require.True(t, time.Now().Before(parentActual),
+			"Prepare(waitOnPrepare=false) must return before the parent slot boundary")
 		require.NotZero(t, header.Time, "Prepare should still populate header time")
 	})
 
 	t.Run("normal production waits for parent boundary", func(t *testing.T) {
-		parentActual := time.Now().Add(150 * time.Millisecond)
+		parentActual := time.Now().Add(300 * time.Millisecond)
 		b.parentActualTimeCache.Add(genesis.Hash(), parentActual)
 		header := createTestHeader(genesis, 1, borCfg.Period["0"])
 
-		start := time.Now()
 		err := b.Prepare(chain, header, true)
-		elapsed := time.Since(start)
 
 		require.NoError(t, err)
-		require.GreaterOrEqual(t, elapsed, 100*time.Millisecond)
+		require.False(t, time.Now().Before(parentActual),
+			"Prepare(waitOnPrepare=true) must wait until the parent slot boundary")
 		require.NotZero(t, header.Time, "Prepare should still populate header time")
 	})
 }

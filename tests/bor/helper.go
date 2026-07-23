@@ -839,22 +839,40 @@ func importValidatorKey(stack *node.Node, ethBackend *eth.Ethereum, privKey *ecd
 }
 
 // connectAndWaitForPeers statically peers the two nodes and blocks until the
-// connection is live on both servers. A node's Self() enode publishes its TCP
-// port asynchronously after the listener starts, so a single AddPeer call can
-// capture a port-0 enode and dial a dead address forever — the observed CI
-// failure mode where two healthy nodes never peer. Re-adding with a fresh
-// Self() until PeerCount is non-zero makes peering self-healing on slow hosts.
+// connection is live on both servers. Two failure modes make a naive AddPeer
+// unreliable on slow hosts:
+//
+//   - Self() publishes its TCP port asynchronously after the listener starts,
+//     so an early AddPeer can capture a port-0 enode. The dial scheduler
+//     dedupes static nodes by ID (p2p/dial.go addStaticCh handling), so later
+//     re-adds never update the bad record — the dialer keeps dialing a dead
+//     address forever. Wait for both enodes to carry a real port before the
+//     first AddPeer.
+//
+//   - A transiently failed dial (e.g. a loaded CI runner) parks the target in
+//     the scheduler's history for dialHistoryExpiration (35s), so a 60s
+//     deadline covers barely one retry. Use a deadline long enough for
+//     several history windows.
 func connectAndWaitForPeers(t *testing.T, a, b *node.Node) {
 	t.Helper()
-	deadline := time.After(60 * time.Second)
+	deadline := time.After(120 * time.Second)
+	for a.Server().Self().TCP() == 0 || b.Server().Self().TCP() == 0 {
+		select {
+		case <-deadline:
+			t.Fatalf("nodes failed to publish listener ports: a=%d b=%d",
+				a.Server().Self().TCP(), b.Server().Self().TCP())
+		default:
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	a.Server().AddPeer(b.Server().Self())
+	b.Server().AddPeer(a.Server().Self())
 	for a.Server().PeerCount() == 0 || b.Server().PeerCount() == 0 {
 		select {
 		case <-deadline:
-			t.Fatalf("nodes failed to peer within 60s: peers a=%d b=%d",
+			t.Fatalf("nodes failed to peer within deadline: peers a=%d b=%d",
 				a.Server().PeerCount(), b.Server().PeerCount())
 		default:
-			a.Server().AddPeer(b.Server().Self())
-			b.Server().AddPeer(a.Server().Self())
 			time.Sleep(250 * time.Millisecond)
 		}
 	}
