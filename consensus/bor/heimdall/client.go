@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"path"
 	"reflect"
 	"sort"
@@ -152,15 +151,6 @@ func (h *HeimdallClient) StateSyncEvents(ctx context.Context, fromID uint64, to 
 }
 
 func (h *HeimdallClient) GetSpan(ctx context.Context, spanID uint64) (*types.Span, error) {
-	// TEST-ONLY fault injection (throwaway — MUST NOT be committed or shipped): when the
-	// file /tmp/bor-fault-span exists, simulate Heimdall being unable to serve spans. This
-	// lets you toggle a "blip" at runtime (touch to enable, rm to recover) and drive the
-	// downloader's consensus-data-unavailable / invalid-chain classification path on demand,
-	// with no reverse proxy and no chaindata wipe. Inert unless the file is present.
-	if _, statErr := os.Stat("/tmp/bor-fault-span"); statErr == nil {
-		return nil, fmt.Errorf("injected span fault (bor-fault-span blip): heimdall span %d unavailable", spanID)
-	}
-
 	url, err := spanURL(h.urlString, spanID)
 	if err != nil {
 		return nil, err
