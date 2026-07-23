@@ -81,11 +81,18 @@ func (s *speculativeChainReader) GetHeaderByHash(hash common.Hash) *types.Header
 
 func (s *speculativeChainReader) GetTd(hash common.Hash, number uint64) *big.Int {
 	if hash == s.placeholderHash && number == s.pendingParentHeader.Number.Uint64() {
+		// The pending parent being genesis can't happen in practice (the
+		// speculative path only builds on a produced block), but guard the
+		// subtraction against underflow regardless.
+		parentNumber := s.pendingParentHeader.Number.Uint64()
+		if parentNumber == 0 {
+			return s.inner.GetTd(s.pendingParentHeader.ParentHash, 0)
+		}
 		// Return the parent's TD. This is an approximation — the real TD
 		// would include block N's difficulty, but Bor's Prepare() does not
 		// use TD from GetTd. Seal() uses it for broadcast, but that happens
 		// after the real header is assembled.
-		return s.inner.GetTd(s.pendingParentHeader.ParentHash, s.pendingParentHeader.Number.Uint64()-1)
+		return s.inner.GetTd(s.pendingParentHeader.ParentHash, parentNumber-1)
 	}
 	return s.inner.GetTd(hash, number)
 }

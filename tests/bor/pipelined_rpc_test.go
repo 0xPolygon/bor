@@ -61,7 +61,8 @@ func TestPipelinedImportSRC_RPCDuringImport(t *testing.T) {
 
 	faucets := make([]*ecdsa.PrivateKey, 128)
 	for i := 0; i < len(faucets); i++ {
-		faucets[i], _ = crypto.GenerateKey()
+		faucets[i], err = crypto.GenerateKey()
+		require.NoError(t, err, "generating faucet key %d", i)
 	}
 
 	genesis := InitGenesis(t, faucets, "./testdata/genesis_2val.json", 16)
@@ -73,18 +74,12 @@ func TestPipelinedImportSRC_RPCDuringImport(t *testing.T) {
 	require.NoError(t, err)
 	defer bpStack.Close()
 
-	for bpStack.Server().NodeInfo().Ports.Listener == 0 {
-		time.Sleep(250 * time.Millisecond)
-	}
-
 	importerStack, importerBackend, err := InitImporterWithPipelinedSRC(genesis, keys[1], true)
 	require.NoError(t, err)
 	defer importerStack.Close()
 
-	for importerStack.Server().NodeInfo().Ports.Listener == 0 {
-		time.Sleep(250 * time.Millisecond)
-	}
-
+	// No listener-wait loops needed: connectAndWaitForPeers waits (with a
+	// deadline) for both nodes to publish real listener ports before peering.
 	connectAndWaitForPeers(t, importerStack, bpStack)
 	require.NoError(t, bpBackend.StartMining())
 
