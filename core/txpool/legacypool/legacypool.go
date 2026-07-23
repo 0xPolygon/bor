@@ -1817,7 +1817,6 @@ func (pool *LegacyPool) reset(oldHead, newHead *types.Header) {
 //  4. Promotes newly executable transactions
 func (pool *LegacyPool) SetSpeculativeState(newHead *types.Header, statedb *state.StateDB) {
 	pool.mu.Lock()
-	defer pool.mu.Unlock()
 
 	pool.currentHead.Store(newHead)
 	pool.currentState = statedb
@@ -1828,14 +1827,13 @@ func (pool *LegacyPool) SetSpeculativeState(newHead *types.Header, statedb *stat
 
 	// Promote transactions that are now executable
 	promoted := pool.promoteExecutables(nil)
+	pool.mu.Unlock()
 
-	// Fire events for promoted transactions
+	// Fire events for promoted transactions after releasing the pool lock,
+	// matching the regular promotion flow — a subscriber calling back into
+	// the pool must not deadlock, and Send on a hot lock is contention.
 	if len(promoted) > 0 {
-		var txs []*types.Transaction
-		for _, tx := range promoted {
-			txs = append(txs, tx)
-		}
-		pool.txFeed.Send(core.NewTxsEvent{Txs: txs})
+		pool.txFeed.Send(core.NewTxsEvent{Txs: promoted})
 	}
 }
 

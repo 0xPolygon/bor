@@ -4986,15 +4986,22 @@ func (bc *BlockChain) emitPostWriteEvents(block *types.Block, receipts []*types.
 // behind the actual post-execution state).
 func (bc *BlockChain) PostExecState(header *types.Header) (*state.StateDB, error) {
 	// Fast path: if we have the FlatDiff for this block, use it as an overlay.
-	// Matching by block number (not hash) because the hash may not be final
-	// at the time SetLastFlatDiff is called (Root and seal signature are added later).
+	// Matching by block number plus state root rather than hash because the
+	// hash may not be final at the time SetLastFlatDiff is called (the seal
+	// signature is added later). The miner's speculative path records a zero
+	// root (the root isn't computed yet when its FlatDiff is captured), so a
+	// zero stored root falls back to the number-only match; the import path
+	// always records the real root, which guards against serving a stale
+	// overlay for a different same-height block after a reorg.
 	bc.lastFlatDiffMu.RLock()
 	flatDiff := bc.lastFlatDiff
 	flatDiffBlockNum := bc.lastFlatDiffBlockNum
 	flatDiffParentRoot := bc.lastFlatDiffParentRoot
+	flatDiffBlockRoot := bc.lastFlatDiffBlockRoot
 	bc.lastFlatDiffMu.RUnlock()
 
-	if flatDiff != nil && flatDiffBlockNum == header.Number.Uint64() {
+	if flatDiff != nil && flatDiffBlockNum == header.Number.Uint64() &&
+		(flatDiffBlockRoot == (common.Hash{}) || flatDiffBlockRoot == header.Root) {
 		// Open at the parent's committed root (which IS in the trie DB) and
 		// overlay the FlatDiff. We cannot use header.Root because it may not
 		// be committed yet (pipelined import SRC still running).

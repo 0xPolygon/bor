@@ -56,7 +56,8 @@ type pipelinedRPCTarget struct {
 func TestPipelinedImportSRC_RPCDuringImport(t *testing.T) {
 	t.Parallel()
 	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
-	fdlimit.Raise(2048)
+	_, err := fdlimit.Raise(2048)
+	require.NoError(t, err, "raising fd limit")
 
 	faucets := make([]*ecdsa.PrivateKey, 128)
 	for i := 0; i < len(faucets); i++ {

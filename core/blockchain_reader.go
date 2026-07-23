@@ -230,7 +230,9 @@ func (bc *BlockChain) waitForPipelinedWitness(hash common.Hash) []byte {
 // (caller should fall back to polling the cache). When the pending block was
 // imported with makeWitness=false, returns (nil, true) immediately — the
 // witness will never be produced, so neither blocking on collectedCh nor
-// falling through to the 2s cache poll would help.
+// falling through to the 2s cache poll would help. The collectedCh wait is
+// capped so a pathologically stalled SRC goroutine can't pin peer/RPC
+// handlers indefinitely; on timeout the witness is simply reported absent.
 func (bc *BlockChain) waitForPendingSRCWitness(hash common.Hash) ([]byte, bool) {
 	bc.pendingImportSRCMu.Lock()
 	pending := bc.pendingImportSRC
@@ -241,7 +243,13 @@ func (bc *BlockChain) waitForPendingSRCWitness(hash common.Hash) ([]byte, bool) 
 	if !pending.makeWitness {
 		return nil, true
 	}
-	<-pending.collectedCh
+	timer := time.NewTimer(pipelinedStateCommitWaitCap)
+	defer timer.Stop()
+	select {
+	case <-pending.collectedCh:
+	case <-timer.C:
+		return nil, true
+	}
 	if w, ok := bc.witnessCache.Get(hash); ok {
 		return w, true
 	}
@@ -277,6 +285,18 @@ func (bc *BlockChain) GetWitnessUncached(hash common.Hash) []byte {
 		return cached
 	}
 	return bc.witnessStore.ReadWitness(hash)
+}
+
+// GetWitnessUncachedWait is GetWitnessUncached plus the bounded wait for an
+// in-flight pipelined SRC witness. Peer-serving paths use it to pick up the
+// tip witness the pipeline is still producing without inserting peer-driven
+// reads into the witness cache (which would let remote requests evict
+// import-critical entries).
+func (bc *BlockChain) GetWitnessUncachedWait(hash common.Hash) []byte {
+	if w := bc.GetWitnessUncached(hash); len(w) > 0 {
+		return w
+	}
+	return bc.waitForPipelinedWitness(hash)
 }
 
 // HasWitness checks if a witness is present in the cache or database.

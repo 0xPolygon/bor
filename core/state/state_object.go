@@ -446,11 +446,16 @@ func (s *stateObject) updateTrie() (Trie, error) {
 	// and their intermediate nodes are NOT in obj.trie. Re-read read-only
 	// slots (in originStorage but not in uncommittedStorage) through the
 	// storage trie so that resolveAndTrack captures the intermediate nodes
-	// and obj.trie.Witness() includes them.
+	// and obj.trie.Witness() includes them. A failed re-read means the
+	// witness would be incomplete — surface it like the other trie ops so
+	// the commit aborts instead of shipping a broken witness.
 	if s.db.witness != nil && s.db.prefetcher == nil {
 		for key := range s.originStorage {
 			if _, dirty := s.uncommittedStorage[key]; !dirty {
-				tr.GetStorage(s.address, key[:])
+				if _, err := tr.GetStorage(s.address, key[:]); err != nil {
+					s.db.setError(err)
+					return nil, err
+				}
 			}
 		}
 	}

@@ -844,7 +844,13 @@ func (h *handler) minedBroadcastLoop() {
 			}
 			loopStart := time.Now()
 			h.BroadcastBlock(ev.Block, ev.Witness, true) // First propagate block to peers
-			go h.announceMinedBlock(ev.Block, ev.Witness)
+			// Tracked on h.wg so Stop waits it out (bounded by the 500ms
+			// visibility poll) instead of racing peer shutdown.
+			h.wg.Add(1)
+			go func(block *types.Block, witness *stateless.Witness) {
+				defer h.wg.Done()
+				h.announceMinedBlock(block, witness)
+			}(ev.Block, ev.Witness)
 			broadcastLoopTimer.Update(time.Since(loopStart))
 		}
 	}
