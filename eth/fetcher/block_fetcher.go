@@ -1149,7 +1149,7 @@ func (f *BlockFetcher) importHeaders(peer string, header *types.Header) {
 		}
 		// Validate the header and if something went wrong, drop the peer
 		if err := f.verifyHeader(header); err != nil && err != consensus.ErrFutureBlock {
-			log.Debug("Propagated header verification failed", "peer", peer, "number", header.Number, "hash", hash, "err", err)
+			log.Warn("Propagated header verification failed", "peer", peer, "number", header.Number, "hash", hash, "err", err)
 			f.dropPeer(peer)
 
 			return
@@ -1197,7 +1197,7 @@ func (f *BlockFetcher) importBlocks(peer string, block *types.Block, witness *st
 
 		default:
 			// Something went very wrong, drop the peer
-			log.Debug("Propagated block verification failed", "peer", peer, "number", block.Number(), "hash", hash, "err", err)
+			log.Warn("Propagated block verification failed", "peer", peer, "number", block.Number(), "hash", hash, "err", err)
 			f.dropPeer(peer)
 
 			return
