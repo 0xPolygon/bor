@@ -29,6 +29,10 @@ concurrency:
 
 jobs:
   review:
+    # issue_comment fires on every issue and PR comment (PRs are issues).
+    # Gate to PR comments only — codegenie still does the authoritative
+    # phrase-match and write-permission check internally.
+    if: github.event.issue.pull_request
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
