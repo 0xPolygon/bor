@@ -706,7 +706,7 @@ func testTransactionSender(t *testing.T, client *rpc.Client) {
 }
 
 func TestBlockReceiptsPreservesCanonicalFlag(t *testing.T) {
-	srv := rpc.NewServer()
+	srv := rpc.NewServer("", 0, 0)
 	service := &blockReceiptsTestService{calls: make(chan rpc.BlockNumberOrHash, 1)}
 	if err := srv.RegisterName("eth", service); err != nil {
 		t.Fatalf("failed to register service: %v", err)
