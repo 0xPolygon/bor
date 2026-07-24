@@ -29,9 +29,8 @@ import (
 	"strconv"
 	"strings"
 
-	"golang.org/x/crypto/sha3"
-
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/crypto/keccak"
 )
 
 // Lengths of hashes and addresses in bytes.
@@ -293,7 +292,7 @@ func (a *Address) checksumHex() []byte {
 	buf := a.hex()
 
 	// compute checksum
-	sha := sha3.NewLegacyKeccak256()
+	sha := keccak.NewLegacyKeccak256()
 	sha.Write(buf[2:])
 
 	hash := sha.Sum(nil)

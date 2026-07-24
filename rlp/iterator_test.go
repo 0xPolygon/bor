@@ -39,9 +39,16 @@ func TestIterator(t *testing.T) {
 	}
 
 	txs := it.Value()
+	if offset := it.Offset(); offset != 3 {
+		t.Fatal("wrong offset", offset, "want 3")
+	}
+
 	// Check that uncles exist
 	if !it.Next() {
 		t.Fatal("expected two elems, got one")
+	}
+	if offset := it.Offset(); offset != 219 {
+		t.Fatal("wrong offset", offset, "want 219")
 	}
 
 	txit, err := NewListIterator(txs)
