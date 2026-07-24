@@ -56,12 +56,14 @@ var ecrecoverAddr = common.BytesToAddress([]byte{0x01})
 // is checked before the CGo call. The prefetcher populates the cache during
 // warm-up so V2 workers typically hit it, saving ~1µs CGo overhead per call.
 func (evm *EVM) runPrecompile(p PrecompiledContract, addr common.Address, input []byte, gas uint64) ([]byte, uint64, error) {
-	// Upstream touches the precompile for block-level accessList recording once
-	// the Amsterdam fork is active (passing a non-nil stateDB). Bor's Rules do
-	// not wire Amsterdam yet (block-based fork gating; Amsterdam wiring is
-	// tracked in the upstream-merge fork-register), so stateDB stays nil and no
-	// touch occurs. Re-gate on IsAmsterdam when Amsterdam lands on Bor.
+	// Touch the precompile for block-level accessList recording once Amsterdam
+	// is active (EIP-7928). Amsterdam is dormant on Bor networks (AmsterdamBlock
+	// nil on every preset), so IsAmsterdam is false and stateDB stays nil — no
+	// touch occurs until Amsterdam is scheduled.
 	var stateDB StateDB
+	if evm.chainRules.IsAmsterdam {
+		stateDB = evm.StateDB
+	}
 	cache := evm.Config.EcrecoverCache
 	if cache == nil || addr != ecrecoverAddr || len(input) > 128 {
 		return RunPrecompiledContract(stateDB, p, addr, input, gas, evm.Config.Tracer)
@@ -131,6 +133,7 @@ type BlockContext struct {
 	BaseFee     *big.Int       // Provides information for BASEFEE (0 if vm runs with NoBaseFee flag and 0 gas price)
 	BlobBaseFee *big.Int       // Provides information for BLOBBASEFEE (0 if vm runs with NoBaseFee flag and 0 blob gas price)
 	Random      *common.Hash   // Provides information for PREVRANDAO
+	SlotNum     uint64         // Provides information for SLOTNUM
 }
 
 // TxContext provides the EVM with information about a transaction.
@@ -231,6 +234,8 @@ func NewEVM(blockCtx BlockContext, statedb StateDB, chainConfig *params.ChainCon
 		evm.table = &lisovoProInstructionSet
 	case evm.chainRules.IsLisovo:
 		evm.table = &lisovoInstructionSet
+	case evm.chainRules.IsAmsterdam:
+		evm.table = &amsterdamInstructionSet
 	case evm.chainRules.IsOsaka:
 		evm.table = &osakaInstructionSet
 	case evm.chainRules.IsVerkle:
