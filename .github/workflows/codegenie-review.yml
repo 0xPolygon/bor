@@ -1,0 +1,59 @@
+# codegenie AI code review.
+#
+# Two trigger lanes in one workflow:
+#   - pull_request: automatic review on open/update.
+#   - issue_comment: on-demand, comment "codegenie review" on a PR. This lane
+#     also serves fork PRs (the pull_request lane runs without secrets there
+#     and skips cleanly).
+#
+# Checkout pins the trusted revision — the PR base SHA on pull_request events,
+# the default branch on comment events — so a PR cannot modify the reviewer
+# that reviews it. The PR head is fetched by codegenie as untrusted data.
+#
+# All trigger authorization (exact phrase match, live write-permission check)
+# happens inside codegenie; there is no gating logic here to drift.
+#
+# Cancellation is per lane. A push supersedes its own in-flight review, so the
+# pull_request lane cancels. Comments must not cancel: an unrelated comment
+# would kill a running review before codegenie ever decides it is a skip, and
+# App-token bots (@claude) create those events too. Comment runs queue behind
+# the group instead.
+name: codegenie review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: codegenie-review-pr-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  review:
+    # Skip bot-authored PRs (e.g. dependabot, automated proto/client commits);
+    # comment triggers always run.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # base SHA on pull_request events; default branch on comment events
+          ref: ${{ github.event.pull_request.base.sha || '' }}
+          fetch-depth: 0
+
+      - uses: 0xPolygon/codegenie@v0.4.2
+        with:
+          model: "anthropic/claude-opus-4-8:high"
+          llm-api-key: ${{ secrets.ANTHROPIC_API_KEY_GITHUB_ACTIONS }}
+          trigger-phrase: "codegenie review"
+          post-inline-comments: "true"
