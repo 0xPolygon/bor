@@ -285,7 +285,7 @@ Adopted (converged to upstream, Bor divergences preserved):
 
 Kept Bor divergence (declined upstream change):
 
-- **`params.Rules.ChainID` retained** — upstream removed the `ChainID` field from `Rules` (struct-def deletion auto-merged; nothing in Bor reads `rules.ChainID`, build-confirmed). Restored it because Bor's `TestReinforceMultiClientPreCompilesTest` guard (`core/vm/contracts_test.go`) reflects over `Rules` fields and lists `ChainID` as expected — the guard exists specifically to force review of Bor↔Erigon precompile/Rules parity, so silently editing its expected list during a merge is exactly what it forbids. Restored the field + `chainID` local + `ChainID: new(big.Int).Set(chainID)` initializer; kept Bor's block-based `Rules()` (`_ uint64` param, single-arg `Is<Fork>(num)`, Bor fork bools, no `IsAmsterdam`).
+- **`params.Rules.ChainID` retained** — upstream removed the `ChainID` field from `Rules` (struct-def deletion auto-merged; nothing in Bor reads `rules.ChainID`, build-confirmed). Restored it because Bor's `TestReinforceMultiClientPreCompilesTest` guard (`core/vm/contracts_test.go`) reflects over `Rules` fields and lists `ChainID` as expected — the guard exists specifically to force review of Bor↔Erigon precompile/Rules parity, so silently editing its expected list during a merge is exactly what it forbids. Restored the field + `chainID` local + `ChainID: new(big.Int).Set(chainID)` initializer; kept Bor's block-based `Rules()` (`_ uint64` param, single-arg `Is<Fork>(num)`, Bor fork bools, no `IsAmsterdam`). **Correction (v1.17.1 milestone 3): dropping `IsAmsterdam` here was a mistake** — every other upstream fork (Prague/Osaka/Verkle) is kept wired block-based-nil so it can be enabled by just setting the block. Amsterdam should have been converted the same way, not dropped. It was harmless in v1.17.0 (no code gated on it) but forced a strip-and-neutralize in v1.17.1 batches 14–15. Fixed by wiring `AmsterdamBlock`/`IsAmsterdam(num)`/`Rules.IsAmsterdam` block-based-nil (see the v1.17.1 batch 2/2 entry).
 - **`opKeccak256` `Keccak256Cache` (`core/vm/instructions.go`)** — upstream retired the reused-`evm.hasher` pattern for `hash := crypto.Keccak256Hash(data)` and deleted the `hasher`/`hasherBuf` EVM struct fields (deletion auto-merged). Kept Bor's actual optimization (the 64-byte Solidity-slot result cache) and adapted it to upstream's shape: cache stores/loads `common.Hash`, miss path uses `crypto.Keccak256Hash`, preimage recording preserved via the shared tail. `evm.go` kept Bor's `jumpDests: jd` and dropped the now-removed `hasher:` init.
 
 Deferred/declined — entangled with Bor divergence (`needs-wiring.md`):
@@ -421,3 +421,123 @@ no deps). `go vet` clean except pre-existing `//nolint:govet` copylocks
 HEAD `2c0608fc6` (only net code change is `internal/download`): `core/state
 TestPDBMethodParity`, `core/vm TestAbortDuringJump`/`TestInterruptDuringExecution`
 (5ms flake). No leftover conflict markers; docs + `misc/` not staged.
+
+## v1.17.1 batch 1/2 (`9ecb6c4ae`, plan row 14) — merged `189030866` — first Amsterdam/EIP batch
+
+Milestone v1.17.1 opened; branch `ppatil-upstream-v1.17.1` cut off `ppatil-upstream-v1.17.0`
+(HEAD `451b3b445`). 20 first-parent commits `0cf3d3ba4..9ecb6c4ae`. 14 conflicted files
+(10 content + go.yml DU + version.go); the rest auto-merged.
+
+Fork/EIP surfaces (invariant 6 — all merged DORMANT, no activation moved on any Bor network):
+
+- **Amsterdam precompile touch (#33742, `cbf3d8fed`, `core/vm`)** — upstream added a
+  `stateDB.Exist(address)` "touch" in `RunPrecompiledContract` for EIP-7928 BAL recording,
+  gated on a non-nil `stateDB` that upstream passes only when `rules.IsAmsterdam`. Adapted Bor's
+  `runPrecompile`/`runEcrecoverWithCache` wrappers to the new
+  `RunPrecompiledContract(stateDB, p, address, input, gas, logger)` signature. **Gated on
+  `evm.chainRules.IsAmsterdam`** (see the batch-15 Amsterdam-wiring correction) — dormant on Bor
+  (`AmsterdamBlock` nil → `IsAmsterdam` false → `stateDB` nil → no touch). Threaded the touch onto
+  Bor's ecrecover-cache fast path too (dormant, faithful). Guard tests pass:
+  `TestReinforceMultiClientPreCompilesTest`, `TestBorHardforkPrecompileContinuityProfiles`,
+  `TestBorHardforkPrecompileContinuityAtNetworkBoundaries` — active precompile set unchanged.
+- **Syscall value-transfer disable (#33741, `01fe1d716`, `core/vm/evm.go`)** — the
+  `if !syscall { Transfer(...) }` guard auto-merged cleanly; Bor's `syscall := isSystemCall(caller)`
+  already gates the balance check, so this is behavior-preserving for Bor's system-call
+  (state-sync) path.
+- **BAL code-change type → list (#33774, `199ac16e0`, `core/types/bal/*`)** — auto-merged
+  type/encoding refactor only. BAL is not wired into Bor's `state_processor`/`blockchain`
+  (dormant). `core/types/bal` tests pass.
+- **core/state slot-read tracking for empty storage (#33743, `e636e4e3c`)** — auto-merged;
+  adds a reader call on destructed-account committed-state reads for BAL readlist, but the
+  value is discarded and `originStorage`/return stay empty → state root unchanged
+  (behavior-preserving; committed-state reads are pre-block-immutable, no BlockSTM impact).
+  `core/state` tests pass.
+
+Notable resolutions:
+
+- **version/version.go** — declined upstream's `Patch = 1` bump (`105427690` begin v1.17.1
+  cycle); kept Bor's `Patch = 0` / `Meta = "unstable"` (Bor doesn't track upstream version
+  numbers). Net-zero vs HEAD.
+- **.github/workflows/go.yml (DU)** — deleted-by-us; Bor removed this workflow (`#1723`).
+  `git rm` to keep the deletion (upstream's #33866 tweak declined).
+- **v5wire (#31547, `p2p/discover/v5wire/encoding.go`, `cmd/devp2p/internal/v5test/discv5tests.go`)**
+  — Bor had no real divergence (stray blank lines only); converged to upstream (`createMask(iv)`
+  + `applyMasking`; `var challenge1`). v5wire tests pass.
+- **metrics influxdb interval (#33767, `cmd/geth/config.go`)** — adopted; supporting
+  `MetricsInfluxDBIntervalFlag`/`InfluxDBInterval` auto-merged.
+- **eth_getStorageValues test (#32591, `internal/ethapi/api_test.go`)** — additive-both-sides
+  (Bor `TestCoinbase`/AccountAt vs upstream `TestGetStorageValues`); combined both, closing
+  Bor's last func and keeping the shared trailing brace for upstream's. Both tests pass.
+
+Deferred (recorded in needs-wiring.md):
+
+- **On-chain tx check in fetcher (#33607, `59ad40e56`)** — builds on the declined #33378
+  (`validateMeta`/`txMetadataWithSeq`); Bor keeps `hasTx func(common.Hash) bool`. Sole
+  batch-14 commit in its 5 files → restored `eth/fetcher/{tx_fetcher,tx_fetcher_test,metrics}.go`,
+  `eth/handler.go`, `tests/fuzzers/txfetcher/txfetcher_fuzzer.go` to HEAD. No dangling refs.
+- **testing_buildBlockV1 (#33656, `e40aa46e8`)** — test-only catalyst Engine API entangled
+  with Bor's VEBLOP `getWork` worker restructure. Sole batch-14 commit in its files →
+  reverted 8 modified files to HEAD, `git rm` 2 new files. No dangling refs.
+
+Verification (per-batch tier): `go build ./...` pass (rc=0); `go vet` clean on touched
+packages (`core/vm`, `core/state`, `core/types/bal`, `p2p/discover/v5wire`, `cmd/geth`,
+`internal/ethapi`, `miner`, `eth/fetcher`) except the pre-existing `//nolint:govet` copylocks.
+`go test` pass: `core/vm` (guard tests green; only `TestInterruptDuringExecution` 5ms flake,
+passes on isolated re-run), `core/state`, `core/types/bal`, `p2p/discover/v5wire`, `eth/fetcher`
+(137s), `internal/ethapi` (`TestCoinbase` + `TestGetStorageValues` both pass). No leftover
+conflict markers. 46 files net-changed vs HEAD.
+
+## v1.17.1 batch 2/2 (`16783c167`, plan row 15) — merged `b6175113d` — MILESTONE-CLOSING — first Amsterdam/EIP batch (2)
+
+20 first-parent commits `9ecb6c4ae..16783c167` (ends at the v1.17.1 release tag). 30 conflicted files.
+55 files net-changed vs HEAD.
+
+Fork/EIP surfaces (invariant 6 — all merged DORMANT):
+
+- **Amsterdam fork gate WIRED block-based-nil (correction — see note below)** — `params/config.go` gains
+  `AmsterdamBlock *big.Int` (nil on every preset), `IsAmsterdam(num) = IsLondon(num) && isBlockForked(AmsterdamBlock, num)`,
+  `Rules.IsAmsterdam` + `Rules()` population, mirroring Osaka/Prague/Verkle. `IsAmsterdam` added to
+  `TestReinforceMultiClientPreCompilesTest`'s expected Rules-field list. This corrects the v1.17.0 drop of
+  upstream's `AmsterdamTime`/`IsAmsterdam` — enabling Amsterdam later is now "set `AmsterdamBlock`", like the
+  other dormant forks.
+- **EIP-7843 SLOTNUM (#33589, `f811bfe4f`)** — opcode `SLOTNUM (0x4b)` + `opSlotNum` + `enable7843` wired into
+  `newAmsterdamInstructionSet`, instantiated (`amsterdamInstructionSet` var in `jump_table.go`) and dispatched
+  (`case evm.chainRules.IsAmsterdam` in `core/vm/evm.go`, above `IsOsaka`). Header field `SlotNumber *uint64
+  \`rlp:"optional"\`` populated under the `IsAmsterdam(num)` gate in `core/genesis.go` + miner `makeHeader`
+  (`miner/worker.go`, with a `slotNum *uint64` field on Bor's `generateParams`), validated under the gate in
+  `consensus/beacon/consensus.go`, and read into `BlockContext.SlotNum` in `core/evm.go`. All dormant
+  (`IsAmsterdam` false → `amsterdamInstructionSet` never selected, `SlotNumber` never set → nil → RLP unchanged,
+  core/types tests pass). **Enabling SLOTNUM additionally needs Bor's producer to supply `genParams.slotNum`
+  (Bor has no beacon slot) — the miner errors otherwise.**
+- **EIP-8024 in Amsterdam (#33928, `2726c9ef9`)** — `enable8024` in `newAmsterdamInstructionSet`, reachable only
+  via the (dormant) Amsterdam instruction set.
+- **bintrie endianness (#33900, `95c6b0580`)** — 2-line fix; binary-tree is verkle-gated, dormant on Bor.
+- Guards pass: `TestReinforceMultiClientPreCompilesTest`, both `TestBorHardforkPrecompileContinuity*`.
+- Restore-when-Amsterdam-lands tracked in `fork-register.md`.
+
+Adopted:
+
+- **c-kzg `v2.1.5→v2.1.6` (#33901)** — auto-merged; `go mod tidy` reconciled go.sum. Keeps blob-KZG parity
+  with upstream. keeper module kept at Bor HEAD.
+- **olekukonko/tablewriter → internal/tablewriter (#28892)** — adopted upstream's migration; removed the
+  duplicate import merge artifact in `core/rawdb/database.go`, fixed `MakeChainDatabase` 3→4 args (Bor's
+  `disableFreeze`) in `cmd/geth/dbcmd.go`. olekukonko dropped from go.mod.
+- **p2p/tracker crash fix (#33940, `9962e2c9f`)** — adopted (`if t.expire == nil { return }` + schedule
+  refactor); applies to Bor's tracker (pre-#33835 API kept). `git rm` DU tracker_test.go.
+- **trie/proof error propagation (#33898, `be92f5487`)** — adopted (`if err := tr.Update(...); err != nil`).
+- **blobpool low-fee-delay test (#33893)** — combined Bor's `testChainConfig` + upstream's low-fee (1/1) values.
+- **miner payload-rebuild timer (#b25080cac)** — adopted with Bor's `w.config` naming
+  (`timer.Reset(max(0, w.config.Recommit-time.Since(start)))`).
+- **metrics influxdb interval (#33767)** — adopted (already staged in batch prep).
+
+Declined / kept-Bor:
+
+- version.go (declined `Patch=1` bump), AGENTS.md (kept Bor's), Dockerfiles (Bor already Go 1.26.4).
+- **eth/68 drop (#33511, `723aae2b4`)** — deferred; full 16-file footprint reverted to HEAD (+`git rm` DU
+  `eth/downloader/downloader_test.go`). Piggybacked #2a4527240 (handshake metrics) + #cee751a1e (sync test)
+  reverted with it. See needs-wiring.md.
+
+Verification (per-batch tier): `go build ./...` rc=0; `go vet` clean on touched packages (bar pre-existing
+copylocks); `go mod tidy` clean (go.mod diff = c-kzg bump + olekukonko removal). `go test` pass: `core/types`,
+`core/vm` (guards), `core/` (182s), `miner` (196s), `eth/protocols/eth`, `trie`, `core/txpool/blobpool`,
+`consensus/beacon`. No leftover conflict markers.
