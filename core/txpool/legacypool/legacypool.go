@@ -191,7 +191,7 @@ type Config struct {
 	AccountQueue uint64 // Maximum number of non-executable transaction slots permitted per account
 	GlobalQueue  uint64 // Maximum number of non-executable transaction slots for all accounts
 
-	Lifetime            time.Duration // Maximum amount of time non-executable transaction are queued
+	Lifetime            time.Duration // Maximum amount of time an account can remain stale in the non-executable pool
 	AllowUnprotectedTxs bool          // Allow non-EIP-155 transactions
 
 	// Transaction filtering configuration
@@ -1162,7 +1162,7 @@ func (pool *LegacyPool) add(tx *types.Transaction, async bool) (replaced bool, e
 		pool.queueTxEvent(tx)
 		log.Trace("Pooled new executable transaction", "hash", hash, "from", from, "to", tx.To())
 
-		// Successful promotion, bump the heartbeat
+		// Successful replacement. If needed, bump the heartbeat giving more time to queued txs.
 		pool.queue.bump(from)
 		stage2Duration = time.Since(stage2Time)
 		return old != nil, nil
@@ -1260,7 +1260,7 @@ func (pool *LegacyPool) promoteTx(addr common.Address, hash common.Hash, tx *typ
 	// Set the potentially new pending nonce and notify any subsystems of the new tx
 	pool.pendingNonces.set(addr, tx.Nonce()+1)
 
-	// Successful promotion, bump the heartbeat
+	// Successful promotion, bump the heartbeat, giving more time to queued txs.
 	pool.queue.bump(addr)
 	return true
 }
@@ -1985,6 +1985,8 @@ func (pool *LegacyPool) demoteUnexecutables() {
 			// Internal shuffle shouldn't touch the lookup set.
 			pool.enqueueTx(hash, tx, false)
 		}
+		pool.priced.Removed(len(olds) + len(drops))
+
 		// bor: Drop all transactions that no longer have valid TxOptions
 		txConditionalsRemoved := list.FilterTxConditional(pool.currentState, currentHeader)
 
@@ -2277,6 +2279,10 @@ func (pool *LegacyPool) Clear() {
 	pool.queue = newQueue(pool.config, pool.signer)
 	pool.pendingNonces = newNoncer(pool.currentState)
 
+	// Reset gauges
+	pendingGauge.Update(0)
+	queuedGauge.Update(0)
+	slotsGauge.Update(0)
 	pendingAddrsGauge.Update(0)
 	queuedAddrsGauge.Update(0)
 }

@@ -24,7 +24,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"golang.org/x/exp/maps"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -248,8 +247,8 @@ func (b *batchIndexer) finish(force bool) error {
 	log.Debug("Committed batch indexer", "type", b.typ, "entries", len(b.index), "records", b.pending, "size", common.StorageSize(batchSize), "elapsed", common.PrettyDuration(time.Since(start)))
 
 	b.pending = 0
-	maps.Clear(b.index)
-	maps.Clear(b.ext)
+	clear(b.index)
+	clear(b.ext)
 	return nil
 }
 
