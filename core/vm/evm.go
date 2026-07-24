@@ -56,17 +56,23 @@ var ecrecoverAddr = common.BytesToAddress([]byte{0x01})
 // is checked before the CGo call. The prefetcher populates the cache during
 // warm-up so V2 workers typically hit it, saving ~1µs CGo overhead per call.
 func (evm *EVM) runPrecompile(p PrecompiledContract, addr common.Address, input []byte, gas uint64) ([]byte, uint64, error) {
+	// Upstream touches the precompile for block-level accessList recording once
+	// the Amsterdam fork is active (passing a non-nil stateDB). Bor's Rules do
+	// not wire Amsterdam yet (block-based fork gating; Amsterdam wiring is
+	// tracked in the upstream-merge fork-register), so stateDB stays nil and no
+	// touch occurs. Re-gate on IsAmsterdam when Amsterdam lands on Bor.
+	var stateDB StateDB
 	cache := evm.Config.EcrecoverCache
 	if cache == nil || addr != ecrecoverAddr || len(input) > 128 {
-		return RunPrecompiledContract(p, input, gas, evm.Config.Tracer)
+		return RunPrecompiledContract(stateDB, p, addr, input, gas, evm.Config.Tracer)
 	}
-	return evm.runEcrecoverWithCache(p, input, gas, cache)
+	return evm.runEcrecoverWithCache(stateDB, p, addr, input, gas, cache)
 }
 
 // runEcrecoverWithCache handles the cached fast path for the ecrecover
 // precompile: input ≤ 128 bytes, cache present. Falls back to running the
 // precompile when the cache misses, then stores a successful result.
-func (evm *EVM) runEcrecoverWithCache(p PrecompiledContract, input []byte, gas uint64, cache *sync.Map) ([]byte, uint64, error) {
+func (evm *EVM) runEcrecoverWithCache(stateDB StateDB, p PrecompiledContract, addr common.Address, input []byte, gas uint64, cache *sync.Map) ([]byte, uint64, error) {
 	// key is zero-initialised; copy fills the prefix and leaves the rest
 	// as zeros, which matches RightPadBytes(input, 128) without the
 	// extra heap allocation. Caller already enforced len(input) <= 128.
@@ -79,12 +85,17 @@ func (evm *EVM) runEcrecoverWithCache(p PrecompiledContract, input []byte, gas u
 		}
 		evm.traceGasChange(gas, gas-gasCost)
 		gas -= gasCost
+		// Touch the precompile even on the cache hit, matching the touch
+		// RunPrecompiledContract performs on the non-cached path.
+		if stateDB != nil {
+			stateDB.Exist(addr)
+		}
 		if cached == nil {
 			return nil, gas, nil
 		}
 		return cached.([]byte), gas, nil
 	}
-	ret, remainingGas, err := RunPrecompiledContract(p, input, gas, evm.Config.Tracer)
+	ret, remainingGas, err := RunPrecompiledContract(stateDB, p, addr, input, gas, evm.Config.Tracer)
 	if err == nil {
 		cache.Store(key, ret)
 	}
@@ -321,14 +332,15 @@ func (evm *EVM) Call(caller common.Address, addr common.Address, input []byte, g
 	if evm.depth > int(params.CallCreateDepth) {
 		return nil, gas, ErrDepth
 	}
-	// Fail if we're trying to transfer more than the available balance
-	if !value.IsZero() && !evm.Context.CanTransfer(evm.StateDB, caller, value) {
+	syscall := isSystemCall(caller)
+
+	// Fail if we're trying to transfer more than the available balance.
+	if !syscall && !value.IsZero() && !evm.Context.CanTransfer(evm.StateDB, caller, value) {
 		return nil, gas, ErrInsufficientBalance
 	}
 
 	snapshot := evm.StateDB.Snapshot()
 	p, isPrecompile := evm.precompile(addr)
-
 	if !evm.StateDB.Exist(addr) {
 		if !isPrecompile && evm.chainRules.IsEIP4762 && !isSystemCall(caller) {
 			// Add proof of absence to witness
@@ -353,8 +365,12 @@ func (evm *EVM) Call(caller common.Address, addr common.Address, input []byte, g
 
 		evm.StateDB.CreateAccount(addr)
 	}
-	evm.Context.Transfer(evm.StateDB, caller, addr, value)
-
+	// Perform the value transfer only in non-syscall mode.
+	// Calling this is required even for zero-value transfers,
+	// to ensure the state clearing mechanism is applied.
+	if !syscall {
+		evm.Context.Transfer(evm.StateDB, caller, addr, value)
+	}
 	if isPrecompile {
 		ret, gas, err = evm.runPrecompile(p, addr, input, gas)
 	} else {
@@ -381,7 +397,6 @@ func (evm *EVM) Call(caller common.Address, addr common.Address, input []byte, g
 			if evm.Config.Tracer != nil && evm.Config.Tracer.OnGasChange != nil {
 				evm.Config.Tracer.OnGasChange(gas, 0, tracing.GasChangeCallFailedExecution)
 			}
-
 			gas = 0
 		}
 		// TODO: consider clearing up unused snapshots:
