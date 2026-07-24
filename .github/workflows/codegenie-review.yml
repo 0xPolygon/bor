@@ -4,7 +4,7 @@
 # from THIS branch's copy. issue_comment always resolves the workflow from the
 # default branch, so a comment can't exercise branch-local changes — the
 # pull_request lane can. Pushing here auto-reviews this PR and validates
-# ANTHROPIC_API_KEY end to end. The independent develop PR stays comment-only;
+# CLAUDE_API_KEY end to end. The independent develop PR stays comment-only;
 # do not carry the pull_request lane into develop.
 name: codegenie review
 
@@ -36,10 +36,10 @@ jobs:
       # config_error.
       - name: Verify API key secret
         env:
-          KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          KEY: ${{ secrets.CLAUDE_API_KEY }}
         run: |
           if [ -z "$KEY" ]; then
-            echo "::error::ANTHROPIC_API_KEY is missing or empty for this repo"
+            echo "::error::CLAUDE_API_KEY is missing or empty for this repo"
             exit 1
           fi
 
@@ -52,6 +52,6 @@ jobs:
       - uses: 0xPolygon/codegenie@v0.4.2
         with:
           model: "anthropic/claude-opus-4-8:high"
-          llm-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          llm-api-key: ${{ secrets.CLAUDE_API_KEY }}
           trigger-phrase: "codegenie review"
           post-inline-comments: "true"
