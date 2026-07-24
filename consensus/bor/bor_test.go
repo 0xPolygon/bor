@@ -5956,3 +5956,47 @@ func TestApplyMessage_StateSyncTxContext(t *testing.T) {
 	gotGasprice := statedb.GetState(addr, common.BigToHash(big.NewInt(1)))
 	require.Equal(t, common.Hash{}, gotGasprice, "GASPRICE must be 0")
 }
+
+func TestFinalizeAndAssembleForSimulationSkipsSprintCommits(t *testing.T) {
+	t.Parallel()
+
+	cfg := &params.BorConfig{
+		Sprint:   map[string]uint64{"0": 16},
+		Period:   map[string]uint64{"0": 1},
+		RioBlock: big.NewInt(math.MaxInt64),
+	}
+
+	validatorAddr := common.HexToAddress("0x9")
+	sp := &fakeSpanner{vals: []*valset.Validator{{Address: validatorAddr, VotingPower: 100}}}
+
+	ch, borEngine := newChainAndBorForTest(t, sp, cfg, true, validatorAddr, uint64(time.Now().Unix()))
+	borEngine.HeimdallClient = &failingHeimdallClient{}
+	borEngine.GenesisContractsClient = &failingGenesisContract{}
+
+	genesisHeader := ch.HeaderChain().GetHeaderByNumber(0)
+	require.NotNil(t, genesisHeader)
+
+	newState := func() *state.StateDB {
+		db := rawdb.NewMemoryDatabase()
+		st, err := state.New(genesisHeader.Root, state.NewDatabase(triedb.NewDatabase(db, triedb.HashDefaults), nil))
+		require.NoError(t, err)
+		return st
+	}
+
+	// Block 16 is a sprint start. Its parent is a phantom header that is not
+	// in the database, as happens when eth_simulateV1 builds on the pending
+	// block or on an earlier simulated block.
+	hdr := createTestHeader(genesisHeader, 16, cfg.Period["0"])
+	hdr.ParentHash = common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111")
+
+	// The regular path attempts the sprint-start state-sync commit.
+	_, _, _, err := borEngine.FinalizeAndAssemble(ch, types.CopyHeader(hdr), newState(), &types.Body{}, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "last state id failed")
+
+	// The simulation path skips span and state-sync commits and assembles the block.
+	block, _, _, err := borEngine.FinalizeAndAssembleForSimulation(ch, types.CopyHeader(hdr), newState(), &types.Body{}, nil)
+	require.NoError(t, err)
+	require.NotNil(t, block)
+	require.Equal(t, uint64(16), block.NumberU64())
+}
