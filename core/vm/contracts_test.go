@@ -540,6 +540,7 @@ func TestReinforceMultiClientPreCompilesTest(t *testing.T) {
 		"IsLisovo",
 		"IsLisovoPro",
 		"IsChicago",
+		"IsReservedBlockspace",
 	}
 
 	if len(actual) != len(expected) {

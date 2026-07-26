@@ -138,7 +138,8 @@ func selectReservedTxs(
 // applying one on the producer while the verifier does not would reintroduce a
 // produce/verify classification asymmetry.
 func extractReservedTxs(snap *registryreader.Snapshot, parentHash common.Hash, pendingTxs map[common.Address][]*txpool.LazyTransaction, newReservedTxSet transactionsByPriceAndNonceFn) []*transactionsByPriceAndNonce {
-	if snap == nil || len(snap.Clients()) == 0 {
+	clients := snap.Clients() // nil-safe; returns nil for a nil snapshot
+	if len(clients) == 0 {
 		return nil
 	}
 	reservedTxs := filterReservedTxs(pendingTxs, snap)
@@ -146,7 +147,7 @@ func extractReservedTxs(snap *registryreader.Snapshot, parentHash common.Hash, p
 		return nil
 	}
 
-	clientOrder := registryreader.OrderClients(parentHash, snap.Clients())
+	clientOrder := registryreader.OrderClients(parentHash, clients)
 	var clientGroups = make([]*transactionsByPriceAndNonce, 0, len(clientOrder))
 	for _, cid := range clientOrder {
 		clientTxs := reservedTxs[cid]

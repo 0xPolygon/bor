@@ -1,4 +1,4 @@
-package core
+package core_test
 
 import (
 	"math/big"
@@ -9,6 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/bor/contract/registrytest"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/params"
 )
@@ -46,15 +47,15 @@ func TestBlockChain_ReservedRegistry_SeesContractState(t *testing.T) {
 	require.False(t, reserved)
 }
 
-func newBareBlockChain(t *testing.T) *BlockChain {
+func newBareBlockChain(t *testing.T) *core.BlockChain {
 	t.Helper()
 	db := rawdb.NewMemoryDatabase()
-	gspec := &Genesis{
+	gspec := &core.Genesis{
 		BaseFee: big.NewInt(params.InitialBaseFee),
 		Config:  params.AllEthashProtocolChanges,
 	}
 	engine := ethash.NewFullFaker()
-	chain, err := NewBlockChain(db, gspec, engine, DefaultConfig().WithStateScheme(rawdb.HashScheme))
+	chain, err := core.NewBlockChain(db, gspec, engine, core.DefaultConfig().WithStateScheme(rawdb.HashScheme))
 	require.NoError(t, err)
 	return chain
 }

@@ -102,6 +102,19 @@ func BuildSnapshot(r Reader, statedb *state.StateDB, number uint64, hash common.
 	if err != nil {
 		return nil, err
 	}
+	clients, err := resolveClients(r, statedb, number, hash, addrs, effectiveAt)
+	if err != nil {
+		return nil, err
+	}
+	if err := assertCapacityInvariant(clients, capacity); err != nil {
+		return nil, err
+	}
+	return NewSnapshot(root, capacity, clients), nil
+}
+
+// resolveClients reads each whitelisted address's client record and keeps only
+// those effective for effectiveAt (active and past their effectiveFrom delay).
+func resolveClients(r Reader, statedb *state.StateDB, number uint64, hash common.Hash, addrs []common.Address, effectiveAt uint64) (map[common.Address]Client, error) {
 	clients := make(map[common.Address]Client, len(addrs))
 	for _, a := range addrs {
 		c, err := r.ReservedClientForAddress(statedb, number, hash, a)
@@ -116,10 +129,7 @@ func BuildSnapshot(r Reader, statedb *state.StateDB, number uint64, hash common.
 		}
 		clients[a] = Client{ID: c.ClientID.Uint64(), GasQuota: c.GasQuota, FeeMode: c.FeeMode}
 	}
-	if err := assertCapacityInvariant(clients, capacity); err != nil {
-		return nil, err
-	}
-	return NewSnapshot(root, capacity, clients), nil
+	return clients, nil
 }
 
 // assertCapacityInvariant fails hard when the sum of the effective clients'

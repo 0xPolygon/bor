@@ -1,4 +1,4 @@
-package txpool
+package txpool_test
 
 import (
 	"testing"
@@ -7,15 +7,16 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/bor/contract/registrytest"
+	"github.com/ethereum/go-ethereum/core/txpool"
 )
 
 // TestTxPool_ReservedRegistry_NilByDefault asserts the accessor on a freshly
 // zeroed TxPool returns nil so nil-handle consumers don't panic.
 func TestTxPool_ReservedRegistry_NilByDefault(t *testing.T) {
-	var pool *TxPool
+	var pool *txpool.TxPool
 	require.Nil(t, pool.ReservedRegistry())
 
-	pool = &TxPool{}
+	pool = &txpool.TxPool{}
 	require.Nil(t, pool.ReservedRegistry())
 }
 
@@ -25,7 +26,7 @@ func TestTxPool_ReservedRegistry_NilByDefault(t *testing.T) {
 func TestTxPool_ReservedRegistry_SeesContractState(t *testing.T) {
 	h := registrytest.NewHarness(t)
 
-	pool := &TxPool{}
+	pool := &txpool.TxPool{}
 	pool.SetReservedRegistry(h.Reader)
 
 	reader := pool.ReservedRegistry()

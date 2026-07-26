@@ -368,6 +368,7 @@ func New(config Config, chain BlockChain, options ...func(pool *LegacyPool)) *Le
 		lastRebroadcast: make(map[common.Hash]time.Time),
 	}
 	pool.priced = newPricedList(pool.all)
+	pool.priced.isReserved = pool.reservedTx
 
 	// Copy pre-loaded filtered addresses
 	if config.FilteredAddresses != nil {
@@ -1046,8 +1047,10 @@ func (pool *LegacyPool) add(tx *types.Transaction, async bool) (replaced bool, e
 		// stage1 starts
 		stage1Time = time.Now()
 
-		// If the new transaction is underpriced, don't accept it
-		if pool.priced.Underpriced(tx) {
+		// If the new transaction is underpriced, don't accept it. Reserved-blockspace
+		// senders pay zero fee, so they always look underpriced; exempt them (they
+		// are also protected from eviction in the priced list's Discard).
+		if !pool.isReserved(from) && pool.priced.Underpriced(tx) {
 			log.Trace("Discarding underpriced transaction", "hash", hash, "gasTipCap", tx.GasTipCap(), "gasFeeCap", tx.GasFeeCap())
 			underpricedTxMeter.Mark(1)
 			stage1Duration = time.Since(stage1Time)
@@ -2316,6 +2319,18 @@ func (pool *LegacyPool) isReserved(addr common.Address) bool {
 		return false
 	}
 	return pool.reservedSnapshot.Load().IsReserved(addr)
+}
+
+// reservedTx is the tx-level reserved predicate handed to the priced list so it
+// can protect reserved-blockspace transactions from price-based eviction. The
+// sender is read from the tx's cached recovery (set during admission), so it
+// stays safe to call without the pool lock held.
+func (pool *LegacyPool) reservedTx(tx *types.Transaction) bool {
+	from, err := types.Sender(pool.signer, tx)
+	if err != nil {
+		return false
+	}
+	return pool.isReserved(from)
 }
 
 // SetReservedRegistry installs the reserved-blockspace registry reader and

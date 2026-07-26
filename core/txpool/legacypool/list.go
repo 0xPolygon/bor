@@ -637,6 +637,11 @@ type pricedList struct {
 	all              *lookup    // Pointer to the map of all transactions
 	urgent, floating priceHeap  // Heaps of prices of all the stored **remote** transactions
 	reheapMu         sync.Mutex // Mutex asserts that only one routine is reheaping the list
+
+	// isReserved reports whether tx is from a reserved-blockspace sender. Such
+	// txs pay zero fee and would otherwise sit at the bottom of the price heap,
+	// so they are protected from eviction here. nil when no registry is wired.
+	isReserved func(tx *types.Transaction) bool
 }
 
 const (
@@ -753,6 +758,7 @@ func (l *pricedList) Discard(slots int) (types.Transactions, bool, uint64) {
 		slots = 0
 	}
 	drop := make(types.Transactions, 0, slots) // Remote underpriced transactions to drop
+	var protected types.Transactions           // reserved txs pulled off the heaps but never evicted
 
 	for slots > 0 {
 		if len(l.urgent.list)*floatingRatio > len(l.floating.list)*urgentRatio {
@@ -775,10 +781,20 @@ func (l *pricedList) Discard(slots int) (types.Transactions, bool, uint64) {
 				l.stales.Add(-1)
 				continue
 			}
+			// Reserved-blockspace senders are never evicted for being cheap: set
+			// the tx aside and restore it after the scan.
+			if l.isReserved != nil && l.isReserved(tx) {
+				protected = append(protected, tx)
+				continue
+			}
 			// Non stale transaction found, discard it
 			drop = append(drop, tx)
 			slots -= numSlots(tx)
 		}
+	}
+	// Restore any reserved transactions pulled off the heaps during the scan.
+	for _, tx := range protected {
+		heap.Push(&l.urgent, tx)
 	}
 	// If we still can't make enough room for the new transaction
 	if slots > 0 {

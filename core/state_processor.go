@@ -98,16 +98,9 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		tracingStateDB = state.NewHookedState(statedb, hooks)
 	}
 	context = NewEVMBlockContext(header, p.chain, author)
-	// Reserved-blockspace classification reads the registry at the parent state
-	// (statedb is the parent post-state here, before block execution). The
-	// quota-aware reserved set is derived once from the ordered body so every
-	// transaction's fee-free decision is fixed before (parallel) execution.
-	reservedSnapshot, err := ReservedSnapshotForBlock(p.chain, statedb, header)
-	if err != nil {
+	if err := p.applyReservedClassification(&context, statedb, header, block, signer); err != nil {
 		return nil, err
 	}
-	context.ReservedSnapshot = reservedSnapshot
-	context.ReservedTxs = registryreader.ClassifyReserved(block.Transactions(), signer, context.ReservedSnapshot)
 	evm := vm.NewEVM(context, tracingStateDB, p.chainConfig(), cfg)
 
 	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
@@ -218,6 +211,21 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		GasUsed:         *usedGas,
 		ReservedGasUsed: reservedGasUsed,
 	}, nil
+}
+
+// applyReservedClassification reads the registry at the parent state (statedb is
+// the parent post-state, before block execution) and stores the resulting
+// snapshot plus the per-block reserved transaction set on blockCtx. The
+// quota-aware reserved set is derived once from the ordered body so every
+// transaction's fee-free decision is fixed before (parallel) execution.
+func (p *StateProcessor) applyReservedClassification(blockCtx *vm.BlockContext, statedb *state.StateDB, header *types.Header, block *types.Block, signer types.Signer) error {
+	reservedSnapshot, err := ReservedSnapshotForBlock(p.chain, statedb, header)
+	if err != nil {
+		return err
+	}
+	blockCtx.ReservedSnapshot = reservedSnapshot
+	blockCtx.ReservedTxs = registryreader.ClassifyReserved(block.Transactions(), signer, blockCtx.ReservedSnapshot)
+	return nil
 }
 
 // sumReservedGasUsed totals the actual gas used by transactions classified

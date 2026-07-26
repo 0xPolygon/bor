@@ -66,11 +66,13 @@ func TestReservedBlockspaceForkOrder(t *testing.T) {
 	}{
 		{"nil bor", &ChainConfig{}, false},
 		{"unscheduled", &ChainConfig{Bor: &BorConfig{}}, false},
-		{"reserved before cancun", &ChainConfig{CancunBlock: big.NewInt(100), Bor: &BorConfig{ReservedBlockspaceBlock: big.NewInt(50), ReservedRegistryContract: reg}}, true},
-		{"reserved without cancun", &ChainConfig{Bor: &BorConfig{ReservedBlockspaceBlock: big.NewInt(50), ReservedRegistryContract: reg}}, true},
-		{"reserved at cancun", &ChainConfig{CancunBlock: big.NewInt(50), Bor: &BorConfig{ReservedBlockspaceBlock: big.NewInt(50), ReservedRegistryContract: reg}}, false},
-		{"reserved after cancun", &ChainConfig{CancunBlock: big.NewInt(10), Bor: &BorConfig{ReservedBlockspaceBlock: big.NewInt(50), ReservedRegistryContract: reg}}, false},
-		{"scheduled without registry", &ChainConfig{CancunBlock: big.NewInt(10), Bor: &BorConfig{ReservedBlockspaceBlock: big.NewInt(50)}}, true},
+		{"reserved before cancun", &ChainConfig{CancunBlock: big.NewInt(100), Bor: &BorConfig{GiuglianoBlock: big.NewInt(10), ReservedBlockspaceBlock: big.NewInt(50), ReservedRegistryContract: reg}}, true},
+		{"reserved without cancun", &ChainConfig{Bor: &BorConfig{GiuglianoBlock: big.NewInt(10), ReservedBlockspaceBlock: big.NewInt(50), ReservedRegistryContract: reg}}, true},
+		{"reserved before giugliano", &ChainConfig{CancunBlock: big.NewInt(10), Bor: &BorConfig{GiuglianoBlock: big.NewInt(100), ReservedBlockspaceBlock: big.NewInt(50), ReservedRegistryContract: reg}}, true},
+		{"reserved without giugliano", &ChainConfig{CancunBlock: big.NewInt(10), Bor: &BorConfig{ReservedBlockspaceBlock: big.NewInt(50), ReservedRegistryContract: reg}}, true},
+		{"reserved at cancun and giugliano", &ChainConfig{CancunBlock: big.NewInt(50), Bor: &BorConfig{GiuglianoBlock: big.NewInt(50), ReservedBlockspaceBlock: big.NewInt(50), ReservedRegistryContract: reg}}, false},
+		{"reserved after cancun and giugliano", &ChainConfig{CancunBlock: big.NewInt(10), Bor: &BorConfig{GiuglianoBlock: big.NewInt(10), ReservedBlockspaceBlock: big.NewInt(50), ReservedRegistryContract: reg}}, false},
+		{"scheduled without registry", &ChainConfig{CancunBlock: big.NewInt(10), Bor: &BorConfig{GiuglianoBlock: big.NewInt(10), ReservedBlockspaceBlock: big.NewInt(50)}}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

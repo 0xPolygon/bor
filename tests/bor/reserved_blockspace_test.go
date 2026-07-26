@@ -62,6 +62,10 @@ func TestReservedBlockspaceZeroFeeProduction(t *testing.T) {
 	// header fields encode in the post-Cancun BlockExtraData format).
 	reservedFork := uint64(5)
 	genesis.Config.Bor.ReservedBlockspaceBlock = new(big.Int).SetUint64(reservedFork)
+	// Giugliano must not activate after reserved blockspace (its base-fee params
+	// are earlier optional BlockExtraData fields than ReservedGasUsed); co-activate
+	// them so post-fork blocks stamp all the optional fields together.
+	genesis.Config.Bor.GiuglianoBlock = new(big.Int).SetUint64(reservedFork)
 	// The registry runtime bytecode (solc 0.8.33) uses PUSH0, a Shanghai opcode.
 	// This genesis activates Cancun at 3 but omits Shanghai; activate it at 2 so
 	// the contract is callable before the reserved fork.
@@ -364,6 +368,10 @@ func TestReservedBlockspaceQuotaOverflowPaysNormalFees(t *testing.T) {
 	genesis := InitGenesis(t, faucets, "./testdata/genesis_2val.json", 8)
 	reservedFork := uint64(5)
 	genesis.Config.Bor.ReservedBlockspaceBlock = new(big.Int).SetUint64(reservedFork)
+	// Giugliano must not activate after reserved blockspace (its base-fee params
+	// are earlier optional BlockExtraData fields than ReservedGasUsed); co-activate
+	// them so post-fork blocks stamp all the optional fields together.
+	genesis.Config.Bor.GiuglianoBlock = new(big.Int).SetUint64(reservedFork)
 	genesis.Config.ShanghaiBlock = big.NewInt(2)
 	genesis.Config.Bor.ReservedRegistryContract = params.DefaultReservedRegistryContract
 	genesis.Alloc[registryAddr] = types.Account{
@@ -645,6 +653,10 @@ func TestReservedBlockspaceMultiClient(t *testing.T) {
 	genesis := InitGenesis(t, faucets, "./testdata/genesis_2val.json", 8)
 	reservedFork := uint64(5)
 	genesis.Config.Bor.ReservedBlockspaceBlock = new(big.Int).SetUint64(reservedFork)
+	// Giugliano must not activate after reserved blockspace (its base-fee params
+	// are earlier optional BlockExtraData fields than ReservedGasUsed); co-activate
+	// them so post-fork blocks stamp all the optional fields together.
+	genesis.Config.Bor.GiuglianoBlock = new(big.Int).SetUint64(reservedFork)
 	genesis.Config.ShanghaiBlock = big.NewInt(2)
 	genesis.Config.Bor.ReservedRegistryContract = params.DefaultReservedRegistryContract
 	genesis.Alloc[registryAddr] = types.Account{Balance: new(big.Int), Code: common.FromHex(params.ReservedBlockspaceRegistryCode)}
@@ -773,11 +785,11 @@ func TestReservedBlockspaceMultiClient(t *testing.T) {
 		return tx
 	}
 
-	aTx := zeroFee(aKey, 0)          // client A: reserved
-	b0 := zeroFee(bKey, 0)           // client B: reserved
-	b1 := zeroFee(bKey, 1)           // client B: reserved (fills 42000 quota)
-	b2 := fallbackFee(bKey, 2)       // client B: overflow → normal fees
-	nrTx := zeroFee(nrKey, 0)        // non-registered → rejected
+	aTx := zeroFee(aKey, 0)    // client A: reserved
+	b0 := zeroFee(bKey, 0)     // client B: reserved
+	b1 := zeroFee(bKey, 1)     // client B: reserved (fills 42000 quota)
+	b2 := fallbackFee(bKey, 2) // client B: overflow → normal fees
+	nrTx := zeroFee(nrKey, 0)  // non-registered → rejected
 
 	for _, node := range nodes {
 		for _, tx := range []*types.Transaction{aTx, b0, b1, b2} {

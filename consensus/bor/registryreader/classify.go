@@ -30,17 +30,17 @@ func OrderClients(parentHash common.Hash, ids []uint64) []uint64 {
 	}
 	type ranked struct {
 		id     uint64
-		digest []byte
+		digest common.Hash
 	}
 	var buf [40]byte
 	copy(buf[8:], parentHash[:])
 	ranks := make([]ranked, len(ids))
 	for i, id := range ids {
 		binary.BigEndian.PutUint64(buf[:8], id)
-		ranks[i] = ranked{id: id, digest: crypto.Keccak256(buf[:])}
+		ranks[i] = ranked{id: id, digest: crypto.Keccak256Hash(buf[:])}
 	}
 	sort.Slice(ranks, func(i, j int) bool {
-		return bytes.Compare(ranks[i].digest, ranks[j].digest) < 0
+		return bytes.Compare(ranks[i].digest[:], ranks[j].digest[:]) < 0
 	})
 	out := make([]uint64, len(ranks))
 	for i, r := range ranks {

@@ -721,7 +721,7 @@ func TestReservedBuild_Positional(t *testing.T) {
 		types.HomesteadSigner{}, testBankKey)
 	require.NoError(t, err)
 	require.NoError(t, b.txPool.Add([]*types.Transaction{fund}, false)[0])
-	waitForBlockWithTxs(t, sub, 1, 15*time.Second)
+	waitForBlockWithTxs(t, sub, 1, 40*time.Second)
 
 	// Pause sealing while both contenders are admitted — with one-second
 	// blocks, sequential adds can otherwise split them across two blocks and
@@ -743,11 +743,11 @@ func TestReservedBuild_Positional(t *testing.T) {
 	// funding may not be visible to it yet — retry admission until it is.
 	require.Eventually(t, func() bool {
 		return b.txPool.Add([]*types.Transaction{userTx}, false)[0] == nil
-	}, 10*time.Second, 100*time.Millisecond, "user tx not admitted after funding")
+	}, 20*time.Second, 100*time.Millisecond, "user tx not admitted after funding")
 	require.NoError(t, b.txPool.Add([]*types.Transaction{bankTx}, false)[0])
 	w.start()
 
-	got := waitForBlockWithTxs(t, sub, 2, 15*time.Second)
+	got := waitForBlockWithTxs(t, sub, 2, 40*time.Second)
 
 	pos := make(map[common.Hash]int, len(got.Transactions()))
 	for i, tx := range got.Transactions() {

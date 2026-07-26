@@ -1668,6 +1668,12 @@ func (c *ChainConfig) CheckConfigForkOrder() error {
 // every post-fork block — so activating reserved blockspace at or before Cancun
 // would make block production unverifiable at the boundary. The reserved set
 // also has no source without the registry contract configured.
+//
+// Reserved blockspace must also not activate before Giugliano: ReservedGasUsed
+// is a later rlp:"optional" field of BlockExtraData than Giugliano's GasTarget
+// and BaseFeeChangeDenominator, so stamping ReservedGasUsed while those are
+// still nil forces them onto the wire as non-nil zero, corrupting the base-fee
+// params a peer decodes.
 func (c *ChainConfig) checkReservedBlockspaceForkOrder() error {
 	if c.Bor == nil || c.Bor.ReservedBlockspaceBlock == nil {
 		return nil
@@ -1675,6 +1681,10 @@ func (c *ChainConfig) checkReservedBlockspaceForkOrder() error {
 	if c.CancunBlock == nil || c.CancunBlock.Cmp(c.Bor.ReservedBlockspaceBlock) > 0 {
 		return fmt.Errorf("unsupported fork ordering: reservedBlockspaceBlock %v must be at or after cancunBlock %v",
 			c.Bor.ReservedBlockspaceBlock, c.CancunBlock)
+	}
+	if c.Bor.GiuglianoBlock == nil || c.Bor.GiuglianoBlock.Cmp(c.Bor.ReservedBlockspaceBlock) > 0 {
+		return fmt.Errorf("unsupported fork ordering: reservedBlockspaceBlock %v must be at or after giuglianoBlock %v",
+			c.Bor.ReservedBlockspaceBlock, c.Bor.GiuglianoBlock)
 	}
 	if c.Bor.ReservedRegistryContract == "" {
 		return errors.New("invalid chain configuration: reservedBlockspaceBlock is scheduled but reservedRegistryContract is unset")

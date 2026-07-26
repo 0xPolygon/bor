@@ -1421,6 +1421,43 @@ func (w *worker) commitTransaction(env *environment, tx *types.Transaction) ([]*
 	return receipt.Logs, nil
 }
 
+// markReservedTentative classifies tx against the reserved per-client quota walk
+// before execution, so state_transition sees the fee-free decision via the block
+// context set. It only Peeks — the walk advances on a successful commit — so a
+// skipped tx never consumes quota; a verifier rederives the identical set by
+// running the same walk over the final block (registryreader.ClassifyReserved),
+// independent of which batch placed the tx.
+func markReservedTentative(env *environment, walk *registryreader.ReservedWalk, from common.Address, tx *types.Transaction) (bool, registryreader.ReservedKey) {
+	reserved := walk.Peek(from, tx.Gas())
+	key := registryreader.ReservedKey{From: from, Nonce: tx.Nonce()}
+	if reserved && env.evm.Context.ReservedTxs != nil {
+		env.evm.Context.ReservedTxs[key] = struct{}{}
+	}
+	return reserved, key
+}
+
+// commitReserved advances the reserved walk for a just-committed tx. Reserved
+// txs count toward the header's ReservedGasUsed by actual gas used; the verifier
+// recomputes the same sum from the block (validateReservedGasUsed).
+func commitReserved(env *environment, walk *registryreader.ReservedWalk, from common.Address, tx *types.Transaction, reserved bool) {
+	walk.Commit(from, tx.Gas(), reserved)
+	if !reserved {
+		return
+	}
+	if n := len(env.receipts); n > 0 {
+		env.reservedGasUsed += env.receipts[n-1].GasUsed
+	}
+}
+
+// rollbackReservedIfSkipped undoes a tx's tentative reserved mark when it was
+// skipped (err != nil): a skipped tx is not in the block and its walk was never
+// advanced, so the producer's set stays equal to ClassifyReserved(block).
+func rollbackReservedIfSkipped(env *environment, err error, reserved bool, key registryreader.ReservedKey) {
+	if err != nil && reserved && env.evm.Context.ReservedTxs != nil {
+		delete(env.evm.Context.ReservedTxs, key)
+	}
+}
+
 func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transactionsByPriceAndNonce, interrupt *atomic.Int32, builderGasFreedCh chan<- uint64, reservedWalk *registryreader.ReservedWalk) error {
 	defer func(t0 time.Time) {
 		commitTransactionsTimer.Update(time.Since(t0))
@@ -1633,17 +1670,7 @@ mainloop:
 			txs.Pop()
 			continue
 		}
-		// Classify the tx against the reserved per-client quota walk before
-		// execution, so state_transition sees the fee-free decision via the block
-		// context set. The walk is advanced only on a successful commit (below),
-		// so a skipped tx never consumes quota; a verifier rederives the identical
-		// set by running the same walk over the final block (registryreader.
-		// ClassifyReserved), independent of which batch placed the tx.
-		reserved := reservedWalk.Peek(from, tx.Gas())
-		reservedKey := registryreader.ReservedKey{From: from, Nonce: tx.Nonce()}
-		if reserved && env.evm.Context.ReservedTxs != nil {
-			env.evm.Context.ReservedTxs[reservedKey] = struct{}{}
-		}
+		reserved, reservedKey := markReservedTentative(env, reservedWalk, from, tx)
 
 		// Start executing the transaction
 		lastCommitStart = time.Now()
@@ -1669,15 +1696,7 @@ mainloop:
 		case errors.Is(err, nil):
 			// Everything ok, collect the logs and shift in the next transaction from the same account
 			coalescedLogs = append(coalescedLogs, logs...)
-			// Advance the reserved walk now the tx is committed. Reserved txs
-			// count toward the header's ReservedGasUsed by actual gas used; the
-			// verifier recomputes the same sum from the block (validateReservedGasUsed).
-			reservedWalk.Commit(from, tx.Gas(), reserved)
-			if reserved {
-				if n := len(env.receipts); n > 0 {
-					env.reservedGasUsed += env.receipts[n-1].GasUsed
-				}
-			}
+			commitReserved(env, reservedWalk, from, tx, reserved)
 			prefetched := false
 			if env.prefetchedTxHashes != nil {
 				_, prefetched = env.prefetchedTxHashes.Load(tx.Hash())
@@ -1766,12 +1785,7 @@ mainloop:
 			txs.Pop()
 		}
 
-		// A skipped tx is not in the block, so its tentative reserved mark must be
-		// undone and the walk must not have advanced (Commit runs only in the nil
-		// case above). Keeps the producer's set equal to ClassifyReserved(block).
-		if err != nil && reserved && env.evm.Context.ReservedTxs != nil {
-			delete(env.evm.Context.ReservedTxs, reservedKey)
-		}
+		rollbackReservedIfSkipped(env, err, reserved, reservedKey)
 
 		if EnableMVHashMap && w.IsRunning() {
 			env.state.ClearReadMap()
