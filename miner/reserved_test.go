@@ -628,6 +628,9 @@ func borUnittestReservedConfig() params.ChainConfig {
 	chainConfig := borUnittestCancunConfig()
 	borCopy := *chainConfig.Bor
 	borCopy.ReservedBlockspaceBlock = big.NewInt(0)
+	// Giugliano must not activate after reserved blockspace (fork-order check), so
+	// co-activate it from genesis.
+	borCopy.GiuglianoBlock = big.NewInt(0)
 	chainConfig.Bor = &borCopy
 	return chainConfig
 }
@@ -642,7 +645,11 @@ func TestReservedBuild_HeaderGasUsed(t *testing.T) {
 	defer engine.Close()
 	defer ctrl.Finish()
 
-	w, b, _ := newTestWorker(t, DefaultTestConfig(), &chainConfig, engine, rawdb.NewMemoryDatabase(), false, 0)
+	// noempty=true: skip the empty pre-seal block. Giugliano (active here to satisfy
+	// the reserved fork-order rule) enables the builder/prefetch path, and under the
+	// fake engine's instant seal the empty pre-seal would win the write race for the
+	// block number, hiding the full block that carries the reserved txs.
+	w, b, _ := newTestWorker(t, DefaultTestConfig(), &chainConfig, engine, rawdb.NewMemoryDatabase(), true, 0)
 	defer w.close()
 
 	w.setReservedSnapshot(newTestSnapshot(0, []testClient{
