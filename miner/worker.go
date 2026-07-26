@@ -2189,11 +2189,9 @@ func scanOverflow(
 // sequenceTxs, and commits each group in turn. bor does not support blob
 // transactions, so only plain transactions are fetched.
 //
-// Note that zero-fee reserved transactions cannot yet flow through this path
-// end-to-end: pool admission enforces a minimum tip and execution enforces the
-// base-fee floor (ErrFeeCapTooLow). Both waivers land with the txpool and EVM
-// slices of reserved blockspace; until then the reserved pass operates on
-// fee-carrying transactions from registered senders.
+// Zero-fee reserved transactions flow through this path end-to-end: the txpool
+// waives the minimum-tip floor for reserved senders and execution waives the
+// base-fee floor, so the reserved pass commits them fee-free.
 func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, genParams *generateParams) error {
 	var emptyBlobTxs = newTransactionsByPriceAndNonce(env.signer, nil, env.header.BaseFee, &w.interruptBlockBuilding)
 
