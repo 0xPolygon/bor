@@ -1440,22 +1440,55 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 		start = time.Now()
 	}
 	if s.db.TrieDB().IsVerkle() {
-		// Whilst MPT storage tries are independent, Verkle has one single trie
-		// for all the accounts and all the storage slots merged together. The
-		// former can thus be simply parallelized, but updating the latter will
-		// need concurrency support within the trie itself. That's a TODO for a
-		// later time.
-		workers.SetLimit(1)
-	}
-	for addr, op := range s.mutations {
-		if op.applied || op.isDelete() {
-			continue
+		// Bypass per-account updateTrie() for binary trie. In binary trie mode
+		// there is only one unified trie (OpenStorageTrie returns self), so the
+		// per-account trie setup in updateTrie() (getPrefetchedTrie, getTrie,
+		// prefetcher.used) is redundant overhead. Apply all storage updates
+		// directly in a single pass.
+		for addr, op := range s.mutations {
+			if op.applied || op.isDelete() {
+				continue
+			}
+			obj := s.stateObjects[addr]
+			if len(obj.uncommittedStorage) == 0 {
+				continue
+			}
+			for key, origin := range obj.uncommittedStorage {
+				value, exist := obj.pendingStorage[key]
+				if value == origin || !exist {
+					continue
+				}
+				if (value != common.Hash{}) {
+					if err := s.trie.UpdateStorage(addr, key[:], common.TrimLeftZeroes(value[:])); err != nil {
+						s.setError(err)
+					}
+				} else {
+					if err := s.trie.DeleteStorage(addr, key[:]); err != nil {
+						s.setError(err)
+					}
+				}
+			}
 		}
-		obj := s.stateObjects[addr] // closure for the task runner below
-		workers.Go(func() error {
-			if s.db.TrieDB().IsVerkle() {
-				obj.updateTrie()
-			} else {
+		// Clear uncommittedStorage and assign trie on each touched object.
+		// obj.trie must be set because this path bypasses updateTrie(), which
+		// is where obj.trie normally gets lazily loaded via getTrie().
+		for addr, op := range s.mutations {
+			if op.applied || op.isDelete() {
+				continue
+			}
+			obj := s.stateObjects[addr]
+			if len(obj.uncommittedStorage) > 0 {
+				obj.uncommittedStorage = make(Storage)
+			}
+			obj.trie = s.trie
+		}
+	} else {
+		for addr, op := range s.mutations {
+			if op.applied || op.isDelete() {
+				continue
+			}
+			obj := s.stateObjects[addr] // closure for the task runner below
+			workers.Go(func() error {
 				obj.updateRoot()
 
 				// If witness building is enabled and the state object has a trie,
@@ -1463,9 +1496,9 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 				if s.witness != nil && obj.trie != nil {
 					s.witness.AddState(obj.trie.Witness())
 				}
-			}
-			return nil
-		})
+				return nil
+			})
+		}
 	}
 	// If witness building is enabled, gather all the read-only accesses.
 	// Skip witness collection in Verkle mode, they will be gathered
@@ -1533,7 +1566,7 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 	if !s.skipTimers {
 		start = time.Now()
 	}
-	if s.prefetcher != nil {
+	if s.prefetcher != nil && !s.db.TrieDB().IsVerkle() {
 		if trie := s.prefetcher.trie(common.Hash{}, s.originalRoot); trie == nil {
 			log.Error("Failed to retrieve account pre-fetcher trie")
 		} else {

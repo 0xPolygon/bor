@@ -639,3 +639,100 @@ pass: `core/` (183s), `miner/...` (197s), `core/vm/...`, `core/types/...`, `core
 `TestV2ForkParity`). `cmd/evm` 4 failures (`TestT8n`, `TestEVMTracing`, `TestEvmRun`,
 `TestEvmRunRegEx`) proven pre-existing — the identical set fails on a clean worktree at pre-merge
 `dbae0f4a1`. No leftover conflict markers.
+
+## v1.17.2 batch 2/4 (`77e7e5ad1`, plan row 17) — merged `0a83ed542`
+
+20 first-parent commits, 23 conflicted files (21 content + 2 delete/modify), 45 files in the merge
+(+920 / −177).
+
+Adopted:
+
+- **EIP-7954 increase maximum contract size (#33832, `95b9a2ed7`)** — adds
+  `params.MaxCodeSizeAmsterdam` (32768) / `MaxInitCodeSizeAmsterdam` (65536) and two helpers in
+  `core/vm/common.go`: `CheckMaxCodeSize(rules, size)` (`IsAmsterdam` → 32768, else `IsEIP158` →
+  24576) and `CheckMaxInitCodeSize(rules, size)` (`IsAmsterdam` → 65536, else `IsShanghai` →
+  49152). Helpers taken byte-identical. The initcode call sites (`core/state_transition.go`,
+  `core/txpool/validation.go`, `core/vm/gas_table.go` ×2) auto-merged and are behavior-preserving
+  pre-Amsterdam; `gasCreate*Eip3860` only runs in Shanghai+ jump tables.
+  **The code-size call site needed hand-resolution: Bor already raises the same cap under its own
+  fork.** `MaxCodeSizePostAhmedabad = 32768` is gated on `Bor.IsAhmedabad(blockNumber)` (mainnet
+  `62278656`, Amoy `11865856` — live today), which is a `BorConfig` block gate rather than a
+  `params.Rules` field, so upstream's rules-only helper cannot express it; and Bor's
+  `initNewContract` **assigns `err` and continues** (still charging deployment gas and calling
+  `SetCode`) where upstream returns immediately. Resolved as: Ahmedabad branch first (Bor's inline
+  check, unchanged), otherwise upstream's helper with its dormant Amsterdam branch. Both caps are
+  32768 so they agree on code size; the initcode limits would differ (49152 → 65536) if Amsterdam
+  were ever enabled — recorded in fork-register.
+- **trienode history alongside existing data (#33934, `7d13acd03`)** — freezer/pathdb changes
+  adopted, including the `Freezer.frozen` → `Freezer.head` rename, the early-return `doSync`
+  (Bor's `trackError` variant differed only in wsl blank-line style and error ordering), and the
+  tail-over-head truncation reset + its new test case.
+- **history pruning cutoff in GetFilterLogs (#33823, `189f9d0b1`)** — added the
+  `HistoryPruningCutoff` / `PrunedHistoryError` check to `GetFilterLogs`, ordered before Bor's
+  `checkBlockRangeLimit`, matching how `GetLogs` already sequences the two.
+- **accessList StorageKeys never null (#33976, `f6068e3fb`)** — adopted upstream's
+  `slices.SortedFunc` + nil-guard. Bor's unsorted variant dates from the original #22550/#23225
+  geth commits plus a Bor wsl-lint pass, not a deliberate divergence, so this is convergence.
+  `eth_createAccessList` output is now deterministically ordered.
+- **fetchpayload utility (#33919, `59512b184`)** — adopted the `fromExtWitness` →
+  `FromExtWitness` export (keeping Bor's `w.context = ext.Context` line) plus the new
+  `cmd/fetchpayload`. It is a plain `ethclient`/`rpc` client with no Engine-API dependency and
+  feeds Bor's existing `cmd/keeper`.
+- **Prague pruning points (#33657, `3c20e08cb`)** — adopted in `core/blockchain.go`
+  (`initializeHistoryPruning` now consults `history.MergePrunePoints` and `PraguePrunePoints`).
+- **karalabe/hid bump (#34008)** — FreeBSD ports build fix. Plus #34006's `-signify` flag-name fix
+  in `build/ci.go`.
+
+Declined / kept-Bor:
+
+- **codedb + simplify cachingDB (#33816, `91cec92bf`)** — **whole feature deferred.** A 20-file,
+  526-insertion rewrite of the state database layer: new `core/state/database_code.go` (`CodeDB`)
+  and `core/state/reader_stater.go` (`ReaderStater`), `BlockChain.statedb *state.CachingDB`
+  replaced by `codedb *state.CodeDB` with the `state.Database` constructed per call
+  (`state.NewDatabase(bc.triedb, bc.codedb).WithSnapshot(bc.snaps)`), and — the blocker — the
+  `ContractCodeReader` interface changes shape (`Code`/`CodeSize` drop their `error` return, `Has`
+  added). That interface is where Bor's pipelined-SRC instrumentation lives
+  (`ContractCodeReaderStats`, `ContractCodeReaderWithStats`, `ReaderStats`, `GetStats()`,
+  `ReadersWithCacheStats()`), consumed by `blockProcessingResult.stats`; upstream replaces the
+  concrete-typed `GetStats()` with a `state.ReaderStater` type assertion. Adapting means rewriting
+  Bor's cache-stats reader layer and its parallel/BlockSTM `StateDB` interactions — authoring new
+  Bor code on a state-root-determinism-critical path. Direct successor to the batch-6 state
+  code-read-metrics deferral. Reverted `core/blockchain_reader.go`,
+  `core/blockchain_sethead_test.go`, `core/blockchain_test.go`,
+  `core/state/{database,database_history,iterator,reader,state_object,statedb,statedb_fuzz_test,statedb_test,stateupdate,sync_test}.go`,
+  `miner/miner_test.go`, `tests/state_test_util.go`, `triedb/hashdb/database.go` to HEAD; `git rm`
+  of the two new files and of `core/blockchain_stats.go` (DU, already deleted at HEAD). In
+  `core/blockchain.go` (shared with #33657) only the #33816 hunks were reverted — **including two
+  that auto-merged silently**: the `statedb *state.CachingDB` field replaced by
+  `codedb *state.CodeDB`, and the removal of the snapshot re-init
+  `bc.statedb = state.NewDatabase(bc.triedb, bc.snaps)` in `setupSnapshot`. See needs-wiring.md.
+- **telemetry span for ApplyTransactionWithEVM errors (#33955, `32f05d68a`)** — Bor's tx loop has
+  no telemetry (OTel deferred since v1.17.0). Both hunks dropped; the error-path `spanEnd(&err)`
+  had auto-merged into the de-telemetried loop and was removed.
+- **remove stale-pivot detection in processSnapSyncContent (#33150, `27c4ca9df`)** — upstream
+  deletes the block as redundant for its beacon-header-driven path. Bor's forked downloader carries
+  its own variant (`eth/downloader/bor_downloader.go:2048`, with Bor's `newPivotNum`) and Bor's
+  snap sync is not beacon-driven, so the rationale doesn't transfer. Kept Bor's deletion of
+  `eth/downloader/downloader.go` (DU); `bor_downloader.go` untouched. The companion
+  `eth/catalyst/api.go` hunk auto-merged (catalyst unused in Bor).
+
+Adaptations to Bor divergences (all found by build/vet):
+
+- `core/rawdb/{freezer,freezer_resettable}.go` — Bor's offset-aware helpers
+  (`ItemAmountInAncient`, the `freezer.frozen.Add(offset)` in `NewFreezer`, the open-log) still
+  used the pre-#33934 field name; renamed to `head`, semantics unchanged.
+- `core/rawdb/freezer_table_test.go` — #33934's two new call sites use upstream's `newBatch()`;
+  Bor's signature is `newBatch(offset uint64)`, so they take `0` like every other Bor call site.
+- `core/vm/gas_table_test.go` — restored the `chainConfig := params.AllEthashProtocolChanges`
+  declaration dropped during conflict resolution while the rest of #33832's hunk auto-merged.
+- `eth/tracers/logger/access_list_tracer.go` — added the `slices` import for the adopted sort.
+
+Verification (per-batch tier): `go build ./...` rc=0; `go vet ./...` clean bar the two pre-existing
+`//nolint` copylocks; `go mod tidy` clean (go.mod diff vs batch 16 = karalabe/hid bump only);
+`gofmt -l` clean on every changed file except `build/ci.go`, whose misalignment is pre-existing
+(HEAD's copy fails the same check; the merge only renamed the `-signify` flag). `go test` pass:
+`core/` (184s), `miner/...` (196s), `eth/` (48s), `core/rawdb/...` (62s), `core/vm/...`,
+`core/state/...`, `core/stateless/...`, `core/txpool/...`, `eth/filters/...`, `eth/tracers/...`,
+`triedb/...` (incl. `pathdb` 57s). Fork guards green (`TestReinforceMultiClientPreCompilesTest`,
+`TestBorHardforkPrecompileContinuity*`, `TestV2ForkParity`, `TestCreateGas`). No leftover conflict
+markers.

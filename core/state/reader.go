@@ -184,7 +184,7 @@ func (r *flatReader) Account(addr common.Address) (*types.StateAccount, error) {
 	if v, ok := r.addrCache.Load(addr); ok {
 		addrHash = v.(common.Hash)
 	} else {
-		addrHash = crypto.Keccak256Hash(addr.Bytes())
+		addrHash = crypto.Keccak256Hash(addr[:])
 		r.addrCache.Store(addr, addrHash)
 	}
 	account, err := r.reader.Account(addrHash)
@@ -221,10 +221,10 @@ func (r *flatReader) Storage(addr common.Address, key common.Hash) (common.Hash,
 	if v, ok := r.addrCache.Load(addr); ok {
 		addrHash = v.(common.Hash)
 	} else {
-		addrHash = crypto.Keccak256Hash(addr.Bytes())
+		addrHash = crypto.Keccak256Hash(addr[:])
 		r.addrCache.Store(addr, addrHash)
 	}
-	slotHash := crypto.Keccak256Hash(key.Bytes())
+	slotHash := crypto.Keccak256Hash(key[:])
 	ret, err := r.reader.Storage(addrHash, slotHash)
 	if err != nil {
 		return common.Hash{}, err
