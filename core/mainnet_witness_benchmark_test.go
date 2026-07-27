@@ -1285,7 +1285,7 @@ func processV2Parallel(pb *preparedBlock, config *params.ChainConfig, engine con
 							results[taskIdx] = v2TxResult{txIdx: t.idx, pdb: pdb, tx: t.tx, err: fmt.Errorf("panic: %v", r)}
 						}
 					}()
-					_, err := ApplyMessage(evm, t.msg, new(GasPool).AddGas(pb.block.GasLimit()))
+					_, err := ApplyMessage(evm, t.msg, NewGasPool(pb.block.GasLimit()))
 					results[taskIdx] = v2TxResult{txIdx: t.idx, pdb: pdb, tx: t.tx, err: err}
 				}()
 			}

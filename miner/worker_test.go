@@ -3861,7 +3861,7 @@ func newSizeTestEnv(t *testing.T, w *worker) *environment {
 	}, false)
 	require.NoError(t, err)
 
-	env.gasPool = new(core.GasPool).AddGas(env.header.GasLimit)
+	env.gasPool = core.NewGasPool(env.header.GasLimit)
 	return env
 }
 

@@ -1956,6 +1956,7 @@ func (s *StateDB) commitAndFlush(block uint64, deleteEmptyObjects bool, noStorag
 		if err := batch.Write(); err != nil {
 			return nil, err
 		}
+		batch.Close()
 	}
 	if !ret.empty() {
 		// If snapshotting is enabled, update the snapshot tree with this new version

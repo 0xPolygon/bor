@@ -1345,16 +1345,18 @@ func (w *worker) updateSnapshot(env *environment) {
 func (w *worker) commitTransaction(env *environment, tx *types.Transaction) ([]*types.Log, error) {
 	var (
 		snap = env.state.Snapshot()
-		gp   = env.gasPool.Gas()
+		gp   = env.gasPool.Snapshot()
 	)
 
-	receipt, err := core.ApplyTransaction(env.evm, env.gasPool, env.state, env.header, tx, &env.header.GasUsed)
+	receipt, err := core.ApplyTransaction(env.evm, env.gasPool, env.state, env.header, tx)
 	if err != nil {
 		env.state.RevertToSnapshot(snap)
-		env.gasPool.SetGas(gp)
+		env.gasPool.Set(gp)
 
 		return nil, err
 	}
+
+	env.header.GasUsed = env.gasPool.Used()
 	env.txs = append(env.txs, tx)
 	env.receipts = append(env.receipts, receipt)
 	env.tcount++
@@ -1370,7 +1372,7 @@ func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transac
 
 	gasLimit := env.header.GasLimit
 	if env.gasPool == nil {
-		env.gasPool = new(core.GasPool).AddGas(gasLimit)
+		env.gasPool = core.NewGasPool(gasLimit)
 	}
 
 	var coalescedLogs []*types.Log
@@ -2585,7 +2587,7 @@ func (w *worker) runIdleTxProvider(txsCh chan<- *types.Transaction, header *type
 	filter := w.buildDefaultFilter(header.BaseFee, header.Number)
 	filter.BlobTxs = false
 
-	totalGasPool := new(core.GasPool).AddGas(header.GasLimit * idleGasLimitPercent(w.config) / 100)
+	totalGasPool := core.NewGasPool(header.GasLimit * idleGasLimitPercent(w.config) / 100)
 	localPrefetched := make(map[common.Hash]struct{})
 
 	shouldExit := func() bool {
@@ -2638,7 +2640,7 @@ func (w *worker) streamIdleBatch(
 	if loopGasLimit > headerGasLimit {
 		loopGasLimit = headerGasLimit
 	}
-	gaspool := new(core.GasPool).AddGas(loopGasLimit)
+	gaspool := core.NewGasPool(loopGasLimit)
 
 	for {
 		ltx, tx := nextViableIdleTx(txs, gaspool, localPrefetched)
