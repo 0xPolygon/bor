@@ -7424,6 +7424,18 @@ func TestPipelinedImportSRC_MakeWitnessFalse(t *testing.T) {
 	if delta := stateCommitTimer.Snapshot().Count() - stateCommitBefore; delta != numBlocks {
 		t.Errorf("stateCommitTimer delta = %d, want %d when makeWitness=false (CommitWithUpdate must still run)", delta, numBlocks)
 	}
+
+	// GetWitness for a recent existing block must miss fast on a witness-off
+	// node: no witness will ever appear, so the peer-serving path must not
+	// fall through to the 2s cache poll (a peer could otherwise stall the
+	// WIT handler for the full timeout per recent hash).
+	start := time.Now()
+	if w := pipeChain.GetWitness(pipeChain.GetBlockByNumber(numBlocks - 1).Hash()); w != nil {
+		t.Errorf("GetWitness returned a witness on a makeWitness=false chain")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("GetWitness took %v on a witness-off node, want a fast miss (poll must be skipped)", elapsed)
+	}
 }
 
 // TestPipelinedImportSRC_MakeWitnessTrue verifies that when InsertChain is

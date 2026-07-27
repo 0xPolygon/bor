@@ -206,13 +206,22 @@ const witnessWaitRecencyWindow = 64
 // at or just behind the current head. Anything older either exists in the
 // store already or never will, so falling through to the poll would let a
 // peer tie the handler up for the full timeout per absent hash simply by
-// requesting old block hashes.
+// requesting old block hashes. The same reasoning gates the poll on
+// pipelinedMakeWitness: on a node importing with makeWitness=false no
+// witness will ever appear, recent or not.
 func (bc *BlockChain) waitForPipelinedWitness(hash common.Hash) []byte {
 	if !bc.cfg.EnablePipelinedImportSRC {
 		return nil
 	}
 	if w, ok := bc.waitForPendingSRCWitness(hash); ok {
 		return w
+	}
+	// The poll below only pays off on nodes that actually produce witnesses.
+	// On a witness-off pipelined node no witness will ever land in the
+	// cache, so recent existing hashes would each eat the full poll timeout
+	// — a peer-triggerable handler stall for nothing.
+	if !bc.pipelinedMakeWitness.Load() {
+		return nil
 	}
 	header := bc.GetHeaderByHash(hash)
 	if header == nil {

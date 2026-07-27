@@ -56,14 +56,13 @@ type WarmSnapshot struct {
 
 // warmKey identifies a trie node by its containing trie's owner (zero for
 // the account trie, account hash for storage tries), its path within the
-// trie, and the node hash itself. The hash field disambiguates entries that
-// share owner+path across different blocks/states.
-// warmKey identifies a trie node by owner, path and content hash. It is a
-// comparable value type built on the stack — a string-keyed variant would
-// allocate on every Lookup, since Go's string(bytes) map-index optimization
-// does not apply to struct-literal keys. MPT paths are at most 64 nibbles;
-// longer paths cannot be produced by the trie and are simply not indexed
-// (Lookup misses fall through to the underlying reader).
+// trie, and the node's content hash — the hash disambiguates entries that
+// share owner+path across different blocks/states. It is a comparable value
+// type built on the stack: a string-keyed variant would allocate on every
+// Lookup, since Go's string(bytes) map-index optimization does not apply to
+// struct-literal keys. MPT paths are at most 64 nibbles; longer paths cannot
+// be produced by the trie and are simply not indexed (Lookup misses fall
+// through to the underlying reader).
 type warmKey struct {
 	owner   common.Hash
 	hash    common.Hash

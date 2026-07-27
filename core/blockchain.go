@@ -661,6 +661,12 @@ type BlockChain struct {
 	// goroutine. Tests use it to hold the pipelined window (head advanced,
 	// state root not yet committed) open deterministically.
 	srcHoldForTesting func(blockNumber uint64)
+	// pipelinedMakeWitness latches whether the most recent pipelined import
+	// produced a witness. waitForPipelinedWitness uses it to skip the cache
+	// poll on witness-off nodes, where no witness will ever appear and a
+	// peer could otherwise tie the WIT handler up for the full poll timeout
+	// per recent block hash.
+	pipelinedMakeWitness atomic.Bool
 	// pendingImportHead* covers the short gap after block metadata/head are
 	// written and before pendingImportSRC is published for the same block.
 	pendingImportHeadHash  common.Hash
@@ -5641,6 +5647,7 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 	// INVARIANT at runSRCCompute.
 	var execWitness *stateless.Witness
 	phaseStart := time.Now()
+	bc.pipelinedMakeWitness.Store(makeWitness)
 	if makeWitness {
 		execWitness = statedb.Witness()
 	}
