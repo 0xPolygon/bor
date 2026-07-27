@@ -736,3 +736,339 @@ Verification (per-batch tier): `go build ./...` rc=0; `go vet ./...` clean bar t
 `triedb/...` (incl. `pathdb` 57s). Fork guards green (`TestReinforceMultiClientPreCompilesTest`,
 `TestBorHardforkPrecompileContinuity*`, `TestV2ForkParity`, `TestCreateGas`). No leftover conflict
 markers.
+
+## v1.17.2 batch 3/4 (`e23b0cbc2`, plan row 18) — merged `1abb57b8f`
+
+20 first-parent commits, 32 conflicted files (30 content + 2 delete/modify), 30 files in the merge
+(+1177 / −259). Decline-heavy: three whole-feature declines cover 27 of the 32 conflicts, and
+nothing consensus-affecting was adopted.
+
+Adopted:
+
+- **txLookupLock leak fix (#34039, `b6115e9a3`)** — `defer bc.txLookupLock.Unlock()` in `reorg()`
+  so the early error returns can't leave the mutex held.
+- **single storage-trie traversal (#34051, `a3083ff5d`)** — took upstream's `cmd/geth/snapshot.go`
+  rewrite (`traverseStorage` helper + `--account` flag) wholesale; Bor's only divergences there
+  were the 4-arg `MakeChainDatabase(ctx, stack, X, false)` (`disableFreeze`, 8 call sites) and
+  `_, _ =` lint discards on the hasher, both re-applied.
+- **binary-trie IntermediateRoot bypass (#34022, `77779d109`)** — adopted the
+  `&& !s.db.TrieDB().IsVerkle()` prefetcher condition, kept Bor's `skipTimers` guard. Verkle is
+  dormant on Bor so the branch is never taken.
+- **alloc-free flatReader hashing (#34025, `4b915af2c`)** — `addr[:]` / `key[:]` instead of
+  `.Bytes()`, applied inside Bor's `addrCache` (pipelined-SRC) rather than replacing it.
+- **history index initer (#33640, `9b2ce121d`)** — `triedb/pathdb` `NoHistoryIndexDelay` combined
+  with Bor's `MaxDiffLayers`.
+- **rangeLogs invalid-range error (#33763, `3341d8ace`)** — `filter.go` fix auto-merged
+  (`firstBlock > lastBlock` now returns `errInvalidBlockRange` instead of `nil, nil`); adopted the
+  matching test expectation while keeping Bor's 4-arg `NewRangeFilter` (Bor carries the range limit
+  on `api.sys.cfg`, not per-filter).
+
+Declined / kept-Bor:
+
+- **miner OpenTelemetry spans (#33773, `98b13f342`)** — **whole feature deferred**, the batch's
+  largest cluster (23 files, 17 conflicting). Threads `ctx context.Context` through
+  `consensus.Engine`, the txpool `SubPool` interface, `miner.{BuildPayload,generateWork}`,
+  `eth/handler`, `eth/sync`, `eth/api_backend` and the whole catalyst surface, purely to attach OTel
+  spans to block building. Identical class to the batch-12 #33521 decline: Bor's OTel stack was
+  deferred in v1.17.0 (#33452/#33484) so there is nothing for the spans to attach to, and the
+  interface changes collide with Bor's VEBLOP miner restructure (`getWorkCh`/async work path) and
+  its 4-return `FinalizeAndAssemble`. Reverted all 23 files to HEAD; `git rm` for
+  `eth/catalyst/witness.go` and `miner/payload_building_test.go` (DU, already deleted at HEAD).
+- **call-variant gas measurement rework (#33648, `fd859638b`)** — **whole feature deferred.** Splits
+  each call variant's inner gas calculation into stateless (memory expansion + value transfer +
+  EIP-2929) and stateful (`Empty`/`Exist` probe, EIP-7702 delegation resolution) halves, with an
+  early `if contract.Gas < intrinsic { return ErrOutOfGas }` between them so a call that cannot pay
+  never touches state — preparation for EIP-7928 block access lists. The change is gas-equivalent
+  (same components, same totals; both orderings end in error-plus-all-gas-consumed when the caller
+  is short) but it **reorders state reads** and is **not fork-gated**, so on Bor it would shift
+  witness contents and the BlockSTM MVHashMap read set in out-of-gas cases. Deterministic, hence not
+  a split risk, but it is an unconditional change to the consensus-critical EVM gas path whose only
+  beneficiary is dormant. Decisive factor: it lands in `core/vm/{gas_table,operations_acl}.go`, the
+  exact pair where Bor has already deferred #33281 (write-protection relocated into the gas
+  handlers), #33637 (per-opcode read-only checks) and #33450 (selfdestruct cold-access early-return),
+  all blocked behind the #32919 selfdestruct rework — Bor's `gasCall` accordingly has no `readOnly`
+  check and its `gasCallEIP7702` is a plain alias where upstream now has a BAL-motivated wrapper.
+  Reverted `core/vm/{gas,gas_table,operations_acl}.go` to HEAD. See needs-wiring.md.
+- **history pruning configuration refactor (#34036, `6ae3f9fa5`)** — **whole feature deferred.**
+  Introduces `history.HistoryPolicy` (user intent) beside the persisted prune point, replaces
+  `BlockChainConfig.ChainHistoryMode` with `HistoryPolicy`, and rewrites `initializeHistoryPruning`;
+  `eth/backend.go` builds it via `history.NewPolicy(config.HistoryMode, genesisHash)`. Bor's
+  `eth/backend.go` **never calls `core.LoadChainConfig`** — it uses `config.Genesis.Config` and a
+  Bor-specific `CreateConsensusEngine(config.Genesis.Config, config, chainDb, blockChainAPI, vmCfg)`
+  — so no `genesisHash` is in scope. Adopting means new Bor plumbing for an operational feature Bor
+  doesn't use: no Polygon genesis hash appears in `MergePrunePoints`/`PraguePrunePoints`, so Bor
+  nodes are always `KeepAll`. Reverted `cmd/geth/chaincmd.go`, `cmd/workload/testsuite.go`,
+  `core/blockchain_test.go`, `core/history/historymode.go`, `eth/backend.go`; `git rm` of the new
+  `core/history/historymode_test.go`.
+- **stateless code-database initialization fix (#34011, `a7d09cc14`)** — one-line fix binding
+  `state.NewCodeDB(memdb)` in `core/stateless.go`; `CodeDB` arrives with #33816, deferred in batch
+  17. Kept Bor's form (which also passes `diskdb` to `MakeHashDB`, its own divergence).
+- **#33150 / #33955 companions** — no action needed this batch.
+
+Merge artifact fixed:
+
+- `core/blockchain.go` — upstream's #34036 rewrite of `initializeHistoryPruning` had auto-merged in
+  fragments, so resolving only the marked conflict hunks left the function syntactically broken
+  (orphaned `case` arms after the `switch` was replaced). Restored the file wholesale to HEAD and
+  re-applied only #34039's two-line `txLookupLock` fix on top.
+
+Verification (per-batch tier): `go build ./...` rc=0 first try; `go vet ./...` clean bar the two
+pre-existing `//nolint` copylocks; `go mod tidy` clean (no dependency change); `gofmt -l` clean on
+all changed files. **No fork surface touched** — `git diff HEAD -- params/ core/forkid/
+internal/cli/server/chains/ builder/files/` is empty, no new `params.Rules` field and no new
+`forkExpectations` entry. `go test` pass: `core/` (197s), `miner/...` (198s), `eth/` (51s),
+`consensus/...` (incl. `consensus/bor` 43s), `core/state/...`, `core/stateless/...`,
+`core/rawdb/...` (62s), `core/txpool/...`, `internal/ethapi/...`, `eth/filters/...`, `triedb/...`
+(incl. `pathdb` 76s). Two failing packages, both **proven pre-existing** by re-running the same
+tests on a clean worktree at batch-17 tip `0a83ed542`: `cmd/geth` (`TestConsoleWelcome`,
+`TestCustomBackend`, `TestCustomGenesis`, `TestExport`, `TestAttachWelcome` — the documented
+VEBLOP/non-Bor-genesis nil-deref class; `TestAttachWelcome` fails identically at 360s with all
+three subtests timing out) and `core/vm` (`TestAbortDuringJump`, `TestInterruptDuringExecution` —
+the documented interrupt-timing flake). Fork guards green
+(`TestReinforceMultiClientPreCompilesTest`, `TestBorHardforkPrecompileContinuity*`,
+`TestV2ForkParity`). No leftover conflict markers.
+
+## v1.17.2 batch 4/4 (`be4dc0c4b`, plan row 19) — merged `682b4c380` — MILESTONE-CLOSING
+
+17 first-parent commits, 12 conflicted files, 50 files in the merge (+689 / −135). The batch's
+weight is EIP-7708, the first Amsterdam EIP whose content had to be reshaped rather than copied:
+three separate adaptations were needed because Bor's transfer, selfdestruct, and parallel-state
+paths all diverge from upstream's.
+
+Adopted:
+
+- **EIP-7708, ETH transfers as logs (#33645, `b87340a85`)** — **wired dormant** behind Bor's
+  block-based Amsterdam gate. Two new topic constants in `params/protocol_params.go`
+  (`EthTransferLogEvent`, `EthBurnLogEvent`), `types.EthTransferLog` / `types.EthBurnLog`,
+  `StateDB.EmitLogsForBurnAccounts` (+ the `vm.StateDB` interface entry and the hooked
+  forwarder), the `rules.IsAmsterdam` call in `stateTransition.execute`, and the
+  `Transfer`/`TransferFunc` signature change to carry `*params.Rules`. Three adaptations below.
+- **witness stats relocation (#34106, `c3467dd8b`)** — stats move from `StateDB`/`BlockChain`
+  locals into `Witness` itself: `NewWitness` gains `enableStats bool`, `AddState` gains
+  `owner common.Hash`, `StartPrefetcher` drops its stats parameter, `Witness.ReportMetrics`
+  replaces the caller-side reporting. No consensus effect; swept across ~25 Bor call sites.
+- **eth_getProof key cap (#34617, `95705e8b7`)**, **eth_simulateV1 block/call caps (#34616,
+  `ceabc3930`)**, **`vm.ErrMaxInitCodeSizeExceeded` RPC error remap (#34067, `a61e5ccb1`)**,
+  **freezer `dir.Sync()` Windows split (#34115, `e585ad3b4`)**, **`types.Sender` in legacypool
+  (#34059, `d1369b69f`)**, **womir keeper target (#34079, `bd3c8431d`)**, **discv5 bootstrap DNS
+  resolution (#34101, `a2496852e`)** — all auto-merged, verified present.
+- **discv5 PingMultiIP session key (#34031, `e951bcbff`)** — decode against `tc.remoteAddr`
+  rather than the packet source address; Bor's only divergence in the hunk was wsl blank lines.
+
+### EIP-7708 adaptation 1 — log ordering across Bor's two transfer paths
+
+Upstream appends the transfer log directly after the balance change in `Transfer`. Bor has two
+transfer functions, and the Bor one has an early-return fast path:
+
+- `Transfer` — additionally emits the 0x1010 `LogTransfer`, and returns early when
+  `db.RecordTransfer` reports that V2 BlockSTM captured the transfer for settlement.
+- `EthereumTransfer` — the no-log variant used when the chain carries no `Bor` config
+  (execution-spec-tests). It now carries the EIP-7708 emission too, making it byte-equivalent to
+  upstream's `Transfer`.
+
+The emission was factored into `emitEthTransferLog` and called at the same point relative to the
+balance change on all three paths. This is load-bearing, not cosmetic: on the V2 path Bor's 0x1010
+log is generated later, at settlement, so placing the EIP-7708 log after `AddTransferLog` on the
+serial path would order the pair one way under V1 and the other way under V2 — a receipt-root
+divergence that would only surface once Amsterdam is enabled.
+
+Recorded for the enablement decision: with Amsterdam active, a plain value transfer on Bor emits
+**both** the EIP-7708 system log and the existing 0x1010 `LogTransfer`. Bloom and receipt-size
+change, not a correctness problem, but a deliberate product call. See fork-register.md.
+
+### EIP-7708 adaptation 2 — selfdestruct without #32919
+
+Upstream's `opSelfdestruct6780` hunk reads `newContract` from `StateDB.IsNewContract`, which
+arrives with the #32919 selfdestruct rework Bor declined. Instead of declining the branch, the
+signal was recovered from Bor's own API: `SelfDestruct6780` already returns
+`(balance, wasNewContract)` and the opcode handler was discarding both. Capturing the second
+return reproduces upstream's semantics exactly, verified across all four cases against Bor's
+shape (which always does `SubBalance(this)` + `AddBalance(beneficiary)` before the call):
+`this != beneficiary` → transfer log regardless of newness; `this == beneficiary` → burn log only
+when the contract was created in the same tx.
+
+Declining would **not** have been covered by the adopted `EmitLogsForBurnAccounts` safety net:
+Bor's `SelfDestruct6780` → `SelfDestruct` zeroes the balance in place, so the tx-boundary sweep
+(which requires `!obj.Balance().IsZero()`) skips the account and the burn log is lost silently.
+
+### EIP-7708 adaptation 3 — `ParallelStateDB.EmitLogsForBurnAccounts`
+
+The new `vm.StateDB` method broke Bor's `ParallelStateDB`. Implemented against the parallel
+executor's `destructed` map, address-sorted to match the serial executor's ordering (V1 sorts its
+journal dirties for the same reason). Dead while Amsterdam is dormant; exists for V1/V2 parity.
+
+### EIP-7708 test adaptation
+
+Upstream's new `core/eth_transfer_logs_test.go` activates the fork with
+`config.AmsterdamTime = new(uint64)` and pokes `BlobScheduleConfig.Amsterdam`; Bor is block-based
+and carries no Amsterdam blob schedule, so the setup is `config.AmsterdamBlock = new(big.Int)`.
+`MergedTestChainConfig` carries a `Bor` stanza, so the scenario runs the Bor transfer path and the
+receipt interleaves 0x1010 logs. Rather than hardcode Bor's gas-dependent balance-snapshot
+payloads, the assertion filters fee-address logs out and pins the interleaving through each
+expected log's `Index`. Index 6 (the SELFDESTRUCT transfer) having no 0x1010 sibling is the direct
+observable consequence of adaptation 2.
+
+### #34106 Bor-specific fallout
+
+- `core/state/statedb.go` kept its `witStart` / `s.WitnessCollection` timer around account-trie
+  witness collection.
+- Bor's V2-only `CollectStateWitness` / `trieReader.CollectStateWitness` callback grew the owner
+  hash: main trie passes the zero hash, each sub-trie passes `crypto.Keccak256Hash(addr[:])`.
+  Passing the zero hash for sub-tries would have misfiled every V2 worker-read storage node as an
+  account-trie access in the stats.
+- `core/stateless/witness.go` kept Bor's `sync.RWMutex` while taking upstream's new `stats` field.
+- The now-redundant `witnessStats` local in Bor's `nolint:unused` `processBlock` was removed;
+  `insertChain`'s two `NewWitness` sites pass `bc.cfg.VmConfig.EnableWitnessStats`, preserving
+  Bor's existing opt-in.
+
+Declined:
+
+- **history import batching (#33894, `8f9061f93`)** — **whole commit deferred.** Rewrites
+  `ImportHistory`'s per-block insert into a batched flush; six hunks conflicted. Bor's copy of the
+  function is independently diverged — `era.NewIterator(e)` rather than `e.Iterator()`, a `forker`,
+  and header insertion via `chain.HeaderChain().InsertHeaderChain` before the receipt chain, none
+  of which upstream does. Throughput-only change on an offline CLI path with no consensus surface;
+  hand-merging batched flush semantics into Bor's header-inserting loop risks silently producing a
+  corrupt imported history db. Reverted to HEAD, filed against the era cluster (#32157).
+- **OTel SampleRatio IsSet guard (#34062, `745b0a8c0`)** — dependent decline; the whole
+  `setOpenTelemetry` function is absent from Bor's `cmd/utils/flags.go` (OTel line declined in
+  v1.17.0, #33452 / #33484).
+- **slot number in test payload (#34094, `acdd13971`)** — dependent decline; the only changed line
+  is inside `BuildTestingPayload`, which Bor deleted with `testing_buildBlockV1` (#33656).
+- **v1.17.2 release commit (`be4dc0c4b`)** — `version/version.go` auto-took the bump to
+  `1.17.2-stable`; reverted to Bor's `Major=1 / Minor=17 / Patch=0 / Meta="unstable"`.
+
+Verification (per-batch tier): `go build ./...` clean; `go vet ./...` clean bar the two pre-existing
+`//nolint` copylocks; `gofmt -l` clean on all changed files; `go mod tidy` no-op. **Fork surface is
+`params/protocol_params.go` only** (+7, two event-topic constants) — no new fork gate, no new
+`params.Rules` field, no new `forkExpectations` entry, and the diff against `core/forkid/`,
+`internal/cli/server/chains/` and `builder/files/` is empty. Both topic constants were verified
+against `crypto.Keccak256Hash` rather than trusted from the diff. Fork guards green
+(`TestReinforceMultiClientPreCompilesTest`, `TestBorHardforkPrecompileContinuity*`,
+`TestV2ForkParity`). `go test` pass: `core/` (181s), `core/state/...`, `core/stateless/...`,
+`core/vm/runtime`, `core/vm/program`, `miner/...` (199s), `params/...`, `consensus/bor/...`,
+`core/rawdb/...` (56s), `core/txpool/...`, `core/types/...`, `core/tracing`, `eth/` (51s),
+`eth/fetcher/...` (140s), `eth/protocols/...`, `internal/ethapi/...`, `p2p/discover/...` (31s),
+`trie/...`, `cmd/devp2p`. Two failing packages, both **proven pre-existing** on a detached worktree
+at batch-18 tip `1abb57b8f`: `core/vm` (`TestAbortDuringJump`, `TestInterruptDuringExecution` — the
+documented interrupt-timing flake; baseline fails 5 of 6 runs with byte-identical assertions, the
+branch 2 of 3, no rate change) and `cmd/devp2p/internal/ethtest` (`BorConfig.CalculatePeriod`
+nil-deref panic from `miner.newWorkLoop` — identical panic and stack at baseline, the documented
+VEBLOP/non-Bor-genesis class). No leftover conflict markers.
+
+## v1.17.2 milestone triage (upstream PRs `16783c167..be4dc0c4b`, 77 first-parent commits)
+
+The wiring pass over the whole milestone, independent of which commits conflicted: an upstream PR
+can merge completely clean and still leave Bor un-wired. Classification per §6.1.
+
+**One finding needing a decision, one confirmation, the rest inert.**
+
+| Class | Count | PRs |
+| --- | --- | --- |
+| **needs wiring** | 1 | #33836 / #33975 default cache bump |
+| **consensus-relevant** | 5 | #33593 (EIP-7778), #33869 (EIP-8024 update), #33947 (Amsterdam jump table), #33832 (EIP-7954), #33645 (EIP-7708) |
+| **operator-visible, no wiring** | 7 | #34617, #34616, #32789/#33952, #33763, #33976, #34005, #34101 |
+| **deferred** (rows in needs-wiring.md) | 12 | #33931, #33816, #33773, #33648, #34036, #34011, #33894, #34062, #34094, #33950, #33955, #33150 |
+| **inert** | 52 | refactors, bugfixes, tests, build, dependency bumps, dormant-feature work |
+
+### needs wiring — default cache bump (#33836, #33975)
+
+The one case in this milestone where a clean merge left Bor's behavior unchanged when it looks
+like it changed. Upstream raised the default total cache 1024 MB → 4096 MB, which shows up in this
+milestone's diff as `ethconfig.Defaults` moving to `DatabaseCache 2048 / TrieCleanCache 614 /
+TrieDirtyCache 1024 / SnapshotCache 409`. Bor's `bor server` path never reads those: `internal/cli/
+server/config.go` carries its own `Cache: 1024` and a 50/15/25/10 percentage split whose `calcPerc`
+output overwrites all four fields, and that split against 1024 MB reproduces geth's **old** defaults
+(512 / 153 / 256 / 102) exactly. So the bump reaches `cmd/geth` and tests but not Bor's production
+startup. Deliberately not taken — quadrupling the default memory footprint is a PoS/devops call.
+Row filed in `needs-wiring.md` with the one-line change if the team wants parity.
+
+### consensus-relevant — register review
+
+Reviewed `fork-register.md` for completeness across the milestone. All five entries are
+**enable-by-block, dormant**, gated on `IsAmsterdam`, which is `nil` on every shipped Bor preset:
+EIP-7778 (batch 16), the EIP-8024 branchless/EXCHANGE update and the Amsterdam jump-table dispatch
+(batch 16), EIP-7954 (batch 17), EIP-7708 (batch 19). No fork block, `params.Rules` field, forkid
+input, chain preset, or genesis file changed anywhere in the milestone. Two entries carry
+enable-time consequences beyond "set the block" and are recorded as such in the register: EIP-7954
+overlaps Bor's live Ahmedabad code-size cap (and would move initcode 49152 → 65536), and EIP-7708
+duplicates Bor's 0x1010 `LogTransfer` while depending on a workaround for the declined #32919.
+
+### operator-visible, no wiring
+
+Behavior changes an operator could notice but which need no Bor-side plumbing: hardcoded RPC caps
+on `eth_getProof` keys (#34617) and `eth_simulateV1` blocks/calls (#34616); the new `MaxUsedGas`
+field in the `eth_simulateV1` response (#32789, gas-cap fix #33952); `eth_getLogs` now erroring on
+an inverted block range instead of returning `nil, nil` (#33763); `eth_createAccessList` returning
+`[]` rather than `null` for empty `StorageKeys` (#33976); hex-encoded `slotNumber` in
+`RPCMarshalHeader` (#34005, dormant — Bor's header field is nil pre-Amsterdam); and DNS hostname
+resolution for bootstrap nodes (#34101).
+
+### inert
+
+The remaining 52 are internal refactors, bugfixes, test fixes, build changes and dependency bumps
+with no Bor-facing surface. Two sub-groups worth naming rather than listing: the binary-trie work
+(#34056, #34032, #33989, #33961, #33951, #34021, #34022) is real but sits behind Verkle/bintrie,
+dormant on Bor; and the new upstream tooling that merged in unused (`cmd/fetchpayload` #33919, the
+`womir` keeper target #34079) builds clean and needs no Bor wiring — Bor ships its CLI from
+`internal/cli`, not `cmd/geth`.
+
+## v1.17.2 milestone full-gate (invariant 8)
+
+Run at milestone tip `682b4c380`.
+
+| Gate | Result |
+| --- | --- |
+| `go build ./...` | clean |
+| `go vet ./...` | clean bar the two pre-existing `//nolint` copylocks |
+| `make lint` (golangci-lint v2.11.4, repo `.golangci.yml`) | **0 issues** |
+| `gofmt -l` / `go mod tidy` | clean / no-op |
+| `go test ./...` | **148 packages pass**, 4 fail — all pre-existing (below) |
+| `make test-integration` | **`tests/bor` ok, 628 s, 77.6% coverage**; `tests` ok but see caveat |
+| govulncheck | 3 called vulns, unchanged from before the milestone |
+| kurtosis devnet | **8/8 checks pass** + EIP-7708 dormancy proof (below) |
+
+### Pre-existing test failures (no new names)
+
+`cmd/geth` (`TestAttachWelcome` 360 s, `TestConsoleWelcome`, `TestCustomBackend`,
+`TestCustomGenesis`, `TestExport`) and `cmd/devp2p/internal/ethtest` — the VEBLOP/non-Bor-genesis
+nil-deref class; `cmd/evm` (`TestT8n`, `TestEVMTracing`, `TestEvmRun`, `TestEvmRunRegEx`) — t8n
+golden drift; `core/vm` (`TestAbortDuringJump`) — the interrupt-timing flake. `ethtest` and
+`core/vm` were re-baselined on a detached worktree at `1abb57b8f` during batch 19 and fail
+identically there.
+
+### Caveat — `make test-integration`'s `./tests` package is a no-op here
+
+It reports `ok` in 1.2 s at 0% coverage because `tests/testdata` (the ethereum consensus fixtures)
+is absent, and `.gitmodules` defines only `tests/evm-benchmarks`, so CI's
+`git submodule update --init --recursive` doesn't fetch them either — `TestState`, `TestBlockchain`,
+`TestTransaction`, `TestRLP` and `TestDifficulty` all skip rather than fail. Pre-existing repo
+property, not caused by this milestone, but worth knowing: the integration signal comes from
+`tests/bor`, not from the upstream consensus suite.
+
+### govulncheck — unchanged
+
+Three called vulnerabilities, identical to before the milestone, all existing team follow-ups:
+`GO-2026-5970` (`golang.org/x/text@v0.37.0`, fixed in 0.39.0), `GO-2026-5932`
+(`golang.org/x/crypto@v0.51.0`, no fix available), `GO-2026-5856` (`crypto/tls@go1.26.4`, fixed in
+Go 1.26.5). No new entries from this milestone's dependency bumps.
+
+### Kurtosis devnet — EIP-7708 dormancy proven on a live chain
+
+`small` preset (1 validator + 1 RPC + bridge/tx spammers + observability) on `bor:v1172-sync`,
+built from this tip. Block production ~1 s with validator and RPC in lockstep (168 → 236 over
+80 s), 45–100 txs/block, 29 `StateSynced` logs, span 3 active, checkpoint 6 submitted, zero
+`ERROR`/`panic`/`FATAL` in either client's logs.
+
+The check that matters for this milestone: over the last 50 blocks,
+
+| Log source | Count |
+| --- | --- |
+| `0xfffffffffffffffffffffffffffffffffffffffe` (EIP-7708 `SystemAddress`) | **0** |
+| `0x0000000000000000000000000000000000001010` (Bor `LogTransfer`) | **2598** |
+
+The 2598 is what makes the 0 meaningful — thousands of value transfers went through
+`core.Transfer` in that window and none emitted a system log. A leaked gate, or an emission placed
+outside the `rules.IsAmsterdam` check on any of the three transfer paths (serial, V2 BlockSTM fast
+path, `EthereumTransfer`), would have produced a non-zero count. Report:
+`runs/pos-spawn-devnet/2026-07-27T08-07-02Z-claude-pos-v1172-sync/summary.md`.
