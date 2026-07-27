@@ -55,14 +55,16 @@ type pipelinedRPCTarget struct {
 //     cryptographically against the block state root.
 func TestPipelinedImportSRC_RPCDuringImport(t *testing.T) {
 	t.Parallel()
+	prevLogger := log.Root()
 	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
+	t.Cleanup(func() { log.SetDefault(prevLogger) })
 	_, err := fdlimit.Raise(2048)
 	require.NoError(t, err, "raising fd limit")
 
 	faucets := make([]*ecdsa.PrivateKey, 128)
 	for i := 0; i < len(faucets); i++ {
 		faucets[i], err = crypto.GenerateKey()
-		require.NoError(t, err, "generating faucet key %d", i)
+		require.NoErrorf(t, err, "generating faucet key %d", i)
 	}
 
 	genesis := InitGenesis(t, faucets, "./testdata/genesis_2val.json", 16)
