@@ -1,10 +1,6 @@
 name: Nightly Govulncheck
 
 on:
-  push:
-    branches-ignore:
-      - develop
-      - master
   schedule:
     - cron: '0 2 * * *'
   workflow_dispatch:
@@ -15,13 +11,15 @@ concurrency:
 
 jobs:
   govulncheck:
-    name: Run govulncheck
+    name: Run govulncheck on develop
     runs-on: ubuntu24.04-16core-64GB-600SSD-bor
     permissions:
       contents: read
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: develop
 
       - uses: actions/setup-go@v6
         with:
