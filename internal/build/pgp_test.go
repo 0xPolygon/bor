@@ -73,6 +73,9 @@ func newArmoredPrivateKey(t *testing.T) (*openpgp.Entity, string) {
 		t.Fatalf("failed to create armored key: %v", err)
 	}
 	if err := entity.SerializePrivate(armorWriter, nil); err != nil {
+		if closeErr := armorWriter.Close(); closeErr != nil {
+			t.Fatalf("failed to serialize private key: %v; failed to close armored key: %v", err, closeErr)
+		}
 		t.Fatalf("failed to serialize private key: %v", err)
 	}
 	if err := armorWriter.Close(); err != nil {
