@@ -346,7 +346,7 @@ func stateSyncReserveFor(config *params.ChainConfig, number *big.Int) uint64 {
 	return params.MaxStateSyncBytesPerBlock
 }
 
-// txFits reports whether the transaction fits into the block size limit.
+// txFitsSize reports whether the transaction fits into the block size limit.
 func (env *environment) txFitsSize(tx *types.Transaction) bool {
 	return env.size+tx.Size() < params.MaxBlockSize-maxBlockSizeBufferZone-env.stateSyncReserve
 }
@@ -1291,14 +1291,14 @@ func (w *worker) makeEnv(header *types.Header, coinbase common.Address, witness 
 	}
 
 	if witness {
-		bundle, err := stateless.NewWitness(header, w.chain)
+		bundle, err := stateless.NewWitness(header, w.chain, false)
 		if err != nil {
 			return nil, err
 		}
-		state.StartPrefetcher("miner", bundle, nil)
+		state.StartPrefetcher("miner", bundle)
 	} else {
 		// todo: @anshalshukla - check if witness is required
-		state.StartPrefetcher("miner", nil, nil)
+		state.StartPrefetcher("miner", nil)
 	}
 
 	// Note the passed coinbase may be different with header.Coinbase.

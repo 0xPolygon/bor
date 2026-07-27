@@ -988,7 +988,20 @@ func opSelfdestruct6780(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, erro
 	balance := evm.StateDB.GetBalance(scope.Contract.Address())
 	evm.StateDB.SubBalance(scope.Contract.Address(), balance, tracing.BalanceDecreaseSelfdestruct)
 	evm.StateDB.AddBalance(beneficiary.Bytes20(), balance, tracing.BalanceIncreaseSelfdestruct)
-	evm.StateDB.SelfDestruct6780(scope.Contract.Address())
+	// Bor keeps the pre-#32919 selfdestruct shape, so the EIP-7708 "contract is new
+	// and will actually be deleted" signal comes from SelfDestruct6780's second
+	// return value rather than upstream's StateDB.IsNewContract.
+	_, deleted := evm.StateDB.SelfDestruct6780(scope.Contract.Address())
+
+	if evm.chainRules.IsAmsterdam && !balance.IsZero() {
+		this := scope.Contract.Address()
+		if this != beneficiary.Bytes20() {
+			evm.StateDB.AddLog(types.EthTransferLog(this, beneficiary.Bytes20(), balance))
+		} else if deleted {
+			evm.StateDB.AddLog(types.EthBurnLog(this, balance))
+		}
+	}
+
 	if tracer := evm.Config.Tracer; tracer != nil {
 		if tracer.OnEnter != nil {
 			tracer.OnEnter(evm.depth, byte(SELFDESTRUCT), scope.Contract.Address(), beneficiary.Bytes20(), []byte{}, 0, balance.ToBig())
@@ -1143,9 +1156,6 @@ func makeLog(size int) executionFunc {
 			Address: scope.Contract.Address(),
 			Topics:  topics,
 			Data:    d,
-			// This is a non-consensus field, but assigned here because
-			// core/state doesn't know the current block number.
-			BlockNumber: evm.Context.BlockNumber.Uint64(),
 		})
 
 		return nil, nil

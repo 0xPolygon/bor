@@ -1,4 +1,4 @@
-// Copyright 2026 The go-ethereum Authors
+// Copyright 2022 The go-ethereum Authors
 // This file is part of the go-ethereum library.
 //
 // The go-ethereum library is free software: you can redistribute it and/or modify
@@ -14,23 +14,36 @@
 // You should have received a copy of the GNU Lesser General Public License
 // along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
-//go:build wasm && !womir
-// +build wasm,!womir
+//go:build !windows
+// +build !windows
 
-package main
+package rawdb
 
 import (
-	"unsafe"
+	"errors"
+	"os"
+	"syscall"
 )
 
-//go:wasmimport geth_io len
-func hintLen() uint32
+// syncDir ensures that the directory metadata (e.g. newly renamed files)
+// is flushed to durable storage.
+func syncDir(name string) error {
+	f, err := os.Open(name)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
 
-//go:wasmimport geth_io read
-func hintRead(data unsafe.Pointer)
-
-func getInput() []byte {
-	data := make([]byte, hintLen())
-	hintRead(unsafe.Pointer(&data[0]))
-	return data
+	// Some file systems do not support fsyncing directories (e.g. some FUSE
+	// mounts). Ignore EINVAL in those cases.
+	if err := f.Sync(); err != nil {
+		if errors.Is(err, os.ErrInvalid) {
+			return nil
+		}
+		if patherr, ok := err.(*os.PathError); ok && patherr.Err == syscall.EINVAL {
+			return nil
+		}
+		return err
+	}
+	return nil
 }

@@ -887,7 +887,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 
 		go func() {
 			pstart := time.Now()
-			parallelStatedb.StartPrefetcher("chain", witness, nil)
+			parallelStatedb.StartPrefetcher("chain", witness)
 			v2VmCfg := bc.cfg.VmConfig
 			sharedCaches.applyTo(&v2VmCfg)
 			res, err := bc.parallelProcessor.Process(block, parallelStatedb, v2VmCfg, nil, ctx)
@@ -919,7 +919,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 
 		go func() {
 			pstart := time.Now()
-			statedb.StartPrefetcher("chain", witness, nil)
+			statedb.StartPrefetcher("chain", witness)
 			res, err := bc.processor.Process(block, statedb, bc.cfg.VmConfig, nil, ctx)
 			blockExecutionSerialTimer.UpdateSince(pstart)
 			var localVtime time.Duration
@@ -3350,7 +3350,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 			// only block being inserted. A bit crude, but witnesses are huge,
 			// so we refuse to make an entire chain of them.
 			if bc.cfg.VmConfig.StatelessSelfValidation || (makeWitness && len(chain) == 1) {
-				witness, err = stateless.NewWitness(block.Header(), bc)
+				witness, err = stateless.NewWitness(block.Header(), bc, bc.cfg.VmConfig.EnableWitnessStats)
 				if err != nil {
 					return nil, it.index, err
 				}
@@ -3390,7 +3390,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		}
 
 		if computeWitness {
-			witness, err = stateless.NewWitness(block.Header(), bc)
+			witness, err = stateless.NewWitness(block.Header(), bc, bc.cfg.VmConfig.EnableWitnessStats)
 			if err != nil {
 				log.Error("Error in witness generation", "err", err)
 			}
@@ -3597,7 +3597,6 @@ func (bc *BlockChain) processBlock(block *types.Block, statedb *state.StateDB, s
 	vtime := time.Since(vstart)
 
 	var witness *stateless.Witness
-	var witnessStats *stateless.WitnessStats
 
 	// If witnesses was generated and stateless self-validation requested, do
 	// that now. Self validation should *never* run in production, it's more of
@@ -3607,10 +3606,6 @@ func (bc *BlockChain) processBlock(block *types.Block, statedb *state.StateDB, s
 	xvstart := time.Now()
 	if witness = statedb.Witness(); witness != nil && bc.cfg.VmConfig.StatelessSelfValidation {
 		log.Warn("Running stateless self-validation", "block", block.Number(), "hash", block.Hash())
-
-		if bc.cfg.VmConfig.EnableWitnessStats {
-			witnessStats = stateless.NewWitnessStats()
-		}
 
 		// Remove critical computed fields from the block to force true recalculation
 		context := block.Header()
@@ -3669,8 +3664,8 @@ func (bc *BlockChain) processBlock(block *types.Block, statedb *state.StateDB, s
 		return nil, err
 	}
 	// Report the collected witness statistics
-	if witnessStats != nil {
-		witnessStats.ReportMetrics(block.NumberU64())
+	if witness != nil {
+		witness.ReportMetrics(block.NumberU64())
 	}
 
 	// Update the metrics touched during block commit

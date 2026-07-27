@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -148,8 +149,7 @@ type StateDB struct {
 	journal *journal
 
 	// State witness if cross validation is needed
-	witness      *stateless.Witness
-	witnessStats *stateless.WitnessStats
+	witness *stateless.Witness
 
 	// Measurements gathered during execution for debugging purposes
 
@@ -318,7 +318,7 @@ func (s *StateDB) CollectStateWitness() {
 	collectStateWitnessFromReader(s.reader, s.witness.AddState)
 }
 
-func collectStateWitnessFromReader(r any, addState func(map[string][]byte)) {
+func collectStateWitnessFromReader(r any, addState func(map[string][]byte, common.Hash)) {
 	switch v := r.(type) {
 	case *reader:
 		collectStateWitnessFromReader(v.StateReader, addState)
@@ -612,13 +612,12 @@ func (s *StateDB) SetWitness(witness *stateless.Witness) {
 // StartPrefetcher initializes a new trie prefetcher to pull in nodes from the
 // state trie concurrently while the state is mutated so that when we reach the
 // commit phase, most of the needed data is already hot.
-func (s *StateDB) StartPrefetcher(namespace string, witness *stateless.Witness, witnessStats *stateless.WitnessStats) {
+func (s *StateDB) StartPrefetcher(namespace string, witness *stateless.Witness) {
 	// Terminate any previously running prefetcher
 	s.StopPrefetcher()
 
 	// Enable witness collection if requested
 	s.witness = witness
-	s.witnessStats = witnessStats
 
 	// With the switch to the Proof-of-Stake consensus algorithm, block production
 	// rewards are now handled at the consensus layer. Consequently, a block may
@@ -1352,6 +1351,41 @@ func (s *StateDB) GetRefund() uint64 {
 	return s.refund
 }
 
+type removedAccountWithBalance struct {
+	address common.Address
+	balance *uint256.Int
+}
+
+// EmitLogsForBurnAccounts emits the eth burn logs for accounts scheduled for
+// removal which still have positive balance. The purpose of this function is
+// to handle a corner case of EIP-7708 where a self-destructed account might
+// still receive funds between sending/burning its previous balance and actual
+// removal. In this case the burning of these remaining balances still need to
+// be logged.
+// Specification EIP-7708: https://eips.ethereum.org/EIPS/eip-7708
+//
+// This function should only be invoked at the transaction boundary, specifically
+// before the Finalise.
+func (s *StateDB) EmitLogsForBurnAccounts() {
+	var list []removedAccountWithBalance
+	for addr := range s.journal.dirties {
+		if obj, exist := s.stateObjects[addr]; exist && obj.selfDestructed && !obj.Balance().IsZero() {
+			list = append(list, removedAccountWithBalance{
+				address: obj.address,
+				balance: obj.Balance(),
+			})
+		}
+	}
+	if list != nil {
+		sort.Slice(list, func(i, j int) bool {
+			return list[i].address.Cmp(list[j].address) < 0
+		})
+	}
+	for _, acct := range list {
+		s.AddLog(types.EthBurnLog(acct.address, acct.balance))
+	}
+}
+
 // Finalise finalises the state by removing the destructed objects and clears
 // the journal as well as the refunds. Finalise, however, will not push any updates
 // into the tries just yet. Only IntermediateRoot or Commit will do that.
@@ -1494,7 +1528,7 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 				// If witness building is enabled and the state object has a trie,
 				// gather the witnesses for its specific storage trie
 				if s.witness != nil && obj.trie != nil {
-					s.witness.AddState(obj.trie.Witness())
+					s.witness.AddState(obj.trie.Witness(), obj.addrHash())
 				}
 				return nil
 			})
@@ -1512,17 +1546,9 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 				continue
 			}
 			if trie := obj.getPrefetchedTrie(); trie != nil {
-				witness := trie.Witness()
-				s.witness.AddState(witness)
-				if s.witnessStats != nil {
-					s.witnessStats.Add(witness, obj.addrHash())
-				}
+				s.witness.AddState(trie.Witness(), obj.addrHash())
 			} else if obj.trie != nil {
-				witness := obj.trie.Witness()
-				s.witness.AddState(witness)
-				if s.witnessStats != nil {
-					s.witnessStats.Add(witness, obj.addrHash())
-				}
+				s.witness.AddState(obj.trie.Witness(), obj.addrHash())
 			}
 		}
 		// Pull in only-read and non-destructed trie witnesses
@@ -1536,17 +1562,9 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 				continue
 			}
 			if trie := obj.getPrefetchedTrie(); trie != nil {
-				witness := trie.Witness()
-				s.witness.AddState(witness)
-				if s.witnessStats != nil {
-					s.witnessStats.Add(witness, obj.addrHash())
-				}
+				s.witness.AddState(trie.Witness(), obj.addrHash())
 			} else if obj.trie != nil {
-				witness := obj.trie.Witness()
-				s.witness.AddState(witness)
-				if s.witnessStats != nil {
-					s.witnessStats.Add(witness, obj.addrHash())
-				}
+				s.witness.AddState(obj.trie.Witness(), obj.addrHash())
 			}
 		}
 		s.WitnessCollection += time.Since(witStart)
@@ -1622,11 +1640,7 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 	// If witness building is enabled, gather the account trie witness
 	if s.witness != nil {
 		witStart := time.Now()
-		witness := s.trie.Witness()
-		s.witness.AddState(witness)
-		if s.witnessStats != nil {
-			s.witnessStats.Add(witness, common.Hash{})
-		}
+		s.witness.AddState(s.trie.Witness(), common.Hash{})
 		s.WitnessCollection += time.Since(witStart)
 	}
 	return hash
