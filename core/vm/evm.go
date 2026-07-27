@@ -685,14 +685,16 @@ func (evm *EVM) initNewContract(contract *Contract, address common.Address) ([]b
 	}
 
 	// Check whether the max code size has been exceeded, assign err if the case.
-	if evm.chainRules.IsEIP158 {
-		if evm.chainConfig.Bor != nil && evm.chainConfig.Bor.IsAhmedabad(evm.Context.BlockNumber) {
-			if len(ret) > params.MaxCodeSizePostAhmedabad {
-				err = ErrMaxCodeSizeExceeded
-			}
-		} else if len(ret) > params.MaxCodeSize {
+	// Ahmedabad raises the cap to 32KB on Bor networks and takes precedence; off Bor
+	// (or pre-Ahmedabad) the upstream helper applies, whose Amsterdam branch is dormant
+	// while AmsterdamBlock is nil. Bor assigns err and keeps going instead of returning
+	// early, so the deployment gas is still charged.
+	if evm.chainConfig.Bor != nil && evm.chainConfig.Bor.IsAhmedabad(evm.Context.BlockNumber) {
+		if evm.chainRules.IsEIP158 && len(ret) > params.MaxCodeSizePostAhmedabad {
 			err = ErrMaxCodeSizeExceeded
 		}
+	} else if sizeErr := CheckMaxCodeSize(&evm.chainRules, uint64(len(ret))); sizeErr != nil {
+		err = sizeErr
 	}
 
 	// Reject code starting with 0xEF if EIP-3541 is enabled.

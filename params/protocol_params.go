@@ -153,9 +153,11 @@ const (
 	DefaultTargetGasPercentage     = 50 // Specifies target block gas as percentage of block gas limit for EIP-1559
 	TargetGasPercentagePostDandeli = 65 // Specifies target block gas as percentage of block gas limit for EIP-1559 after Dandeli hard fork
 
-	MaxCodeSize              = 24576           // Maximum bytecode to permit for a contract
-	MaxCodeSizePostAhmedabad = 32768           // Maximum bytecode to permit for a contract post Ahmedabad hard fork (bor / polygon pos) (32KB)
-	MaxInitCodeSize          = 2 * MaxCodeSize // Maximum initcode to permit in a creation transaction and create instructions
+	MaxCodeSize              = 24576                    // Maximum bytecode to permit for a contract
+	MaxCodeSizePostAhmedabad = 32768                    // Maximum bytecode to permit for a contract post Ahmedabad hard fork (bor / polygon pos) (32KB)
+	MaxInitCodeSize          = 2 * MaxCodeSize          // Maximum initcode to permit in a creation transaction and create instructions
+	MaxCodeSizeAmsterdam     = 32768                    // Maximum bytecode to permit for a contract post Amsterdam (EIP-7954)
+	MaxInitCodeSizeAmsterdam = 2 * MaxCodeSizeAmsterdam // Maximum initcode to permit in a creation transaction and create instructions post Amsterdam
 
 	// Precompiled contract gas prices
 

@@ -541,3 +541,101 @@ Verification (per-batch tier): `go build ./...` rc=0; `go vet` clean on touched 
 copylocks); `go mod tidy` clean (go.mod diff = c-kzg bump + olekukonko removal). `go test` pass: `core/types`,
 `core/vm` (guards), `core/` (182s), `miner` (196s), `eth/protocols/eth`, `trie`, `core/txpool/blobpool`,
 `consensus/beacon`. No leftover conflict markers.
+
+## v1.17.2 batch 1/4 (`00540f946`, plan row 16) — merged `09c784851` — MILESTONE-OPENING
+
+Branch `ppatil-upstream-v1.17.2` cut from `ppatil-upstream-v1.17.1` @ `dbae0f4a1` (stacked).
+20 first-parent commits, 26 conflicted files (24 content + 2 delete/modify), 65 files in the merge
+(+441 / −297).
+
+Adopted:
+
+- **EIP-7778 block gas accounting without refunds (#33593, `6d0dd0886`)** — the batch's substantive
+  change. `core.GasPool` goes from `type GasPool uint64` (+`AddGas`/`SetGas`) to a struct
+  (`remaining`/`initial`/`cumulativeUsed`) with
+  `NewGasPool`/`ReturnGas`/`Used`/`CumulativeUsed`/`Snapshot`/`Set`; the `usedGas *uint64`
+  out-parameter is dropped from `ApplyTransaction`, `ApplyTransactionWithEVM` and `MakeReceipt`
+  (receipts read `gp.CumulativeUsed()`, headers read `gp.Used()`). Took `core/gaspool.go` from
+  upstream verbatim and ported every Bor call site: `core/state_processor.go` (kept Bor's
+  `interruptCtx` guard and state-sync/Finalize block), `core/parallel_state_processor.go` (3
+  BlockSTM per-task pools — V1/V2 keep their own `totalUsedGas`, so parallel accounting is
+  untouched), `miner/worker.go` (`gasPool.Set(gp)` snapshot-restore;
+  `env.header.GasUsed = env.gasPool.Used()` replaces the out-parameter),
+  `cmd/evm/internal/t8ntool`, `core/state_prefetcher.go`, `eth/{state_accessor,tracers}`,
+  `internal/ethapi`, `accounts/abi/bind/backends`, `tests/bor/helper.go` + 8 test files.
+  **Pre-Amsterdam equivalence:** old `SubGas(limit)` + `AddGas(remaining)` and new
+  `SubGas(limit)` + `ReturnGas(remaining, gasUsed())` have identical net pool delta
+  (`limit − remaining == gasUsed()`), so `gp.Used()` == the old `*usedGas` and
+  `gp.CumulativeUsed()` == the old receipt `CumulativeGasUsed`. The refund-excluding branch is
+  gated on the dormant `rules.IsAmsterdam`.
+- **Amsterdam jump table in lookup (#33947, `fe3a74e61`)** — `LookupInstructionSet` dispatches
+  `case rules.IsAmsterdam → newAmsterdamInstructionSet()`, placed below Bor's
+  Chicago/LisovoPro/Lisovo/MadhugiriPro/Madhugiri cases and above Osaka to match the
+  `core/vm/evm.go` order wired in batch 15. Dormant (gate nil).
+- **EIP-8024 branchless normalization + extended EXCHANGE (#33869, `814edc530`)** — auto-merged;
+  reachable only via `enable8024` in `newAmsterdamInstructionSet` → dormant.
+- **batch close (#33708, `dd202d428`)** — `defer blockBatch.Close()` added to Bor's diverged
+  `writeBlockWithState` (which carries the state-sync-log and witness-write blocks); the
+  `writeHeadBlock` / `reorg` call sites auto-merged.
+- **TestProcessVerkle flaky fix (#33971, `ecee64ecd`)** — adopted upstream's `genesisTriedb`
+  explicit-close plus reuse of the committed block in `GenerateChainWithGenesis`; kept Bor's 2-arg
+  `genesis.Commit(db, triedb)`.
+- **default cache 4096 (#33836, `28dad943f`)** — adopted: `utils.CacheFlag` default 1024→4096 and
+  the mainnet-only bump block deleted from `cmd/geth/main.go`. Affects only the geth-style binary;
+  the production `bor server` path keeps its own `CacheConfig.Cache = 1024`.
+- **eth_simulateV1 gas cap / MaxUsedGas (#33952, #32789)** — combined Bor's `gasBudget`, `gasCapped`
+  return and bor-internal-call gas-cap bypass with upstream's `gp`-based accounting
+  (`header.GasUsed = gp.Used()`, `gp.CumulativeUsed()` into `MakeReceipt`).
+- **go-eth-kzg `v1.4.0→v1.5.0` (#33963)** — adopted in the root module; `go mod tidy` reconciled
+  go.sum. keeper module kept at Bor HEAD.
+
+Declined / kept-Bor:
+
+- **prevent state flushing in RPC (#33931, `6d99759f0`)** — **whole feature deferred.** Introduces
+  `core.ExecuteConfig` threaded through `BlockChain.ProcessBlock`, moves
+  `StatelessSelfValidation` / `EnableWitnessStats` from `vm.Config` to `BlockChainConfig`, and
+  rewrites `debug_executionWitness` to run with `WriteState: false`. Bor has forked every target:
+  the live `ProcessBlock` is the tuple-returning `(block, parent, witness, followupInterrupt)` form
+  at `core/blockchain.go:857` (upstream's survives only as dead `processBlock`,
+  `// nolint : unused`), `insertChain` is restructured, and `eth/api_debug.go` has its own
+  `ExecutionWitness` / `ExecutionWitnessByHash` built on the Bor signature — which returns a statedb
+  without persisting, so Bor does not have the bug being fixed. Reverted `core/vm/interpreter.go`,
+  `eth/api_debug.go`, `eth/backend.go`, `internal/web3ext/web3ext.go`, `tests/block_test_util.go`
+  wholesale, and the #33931 hunks only in `cmd/utils/flags.go` and `core/blockchain.go` (shared with
+  #33836 / #33708). See needs-wiring.md.
+- **miner/stress/main.go (new file, 210 lines, added by #33593)** — Engine-API-driven block-builder
+  stress harness; needs `AmsterdamTime` (Bor's gate is block-based), `BlobScheduleConfig.Amsterdam`
+  and `ethconfig.SlowBlockThreshold` (slow-block deferred in v1.17.0). Removed; see needs-wiring.md.
+- **eth/fetcher chain-event nil-guard (#33950, `344ce84a4`)** — the subscription it guards doesn't
+  exist in Bor (it came with the declined #33378). Kept Bor's.
+- **otel `1.39→1.40` (#33946) and `golang.org/x/sys 0.39→0.40`** — declined; Bor is already ahead
+  (otel 1.43.0 / sdk 1.43.0, x/sys 0.45.0), so adopting would be a downgrade.
+- version.go — declined the `Patch=2` bump; kept Bor `Patch=0` / `unstable`.
+- DU (deleted-at-HEAD / modified-upstream), removed to keep the deletions:
+  `eth/tracers/internal/tracetest/selfdestruct_state_test.go` (deferred selfdestruct cluster) and
+  `internal/telemetry/tracesetup/setup.go` (deferred OTel).
+
+Merge artifacts fixed — upstream hunks that auto-merged into the wrong place in Bor's restructured
+files, all caught by build/vet:
+
+- `miner/worker.go` — #33945's `func (env *environment) discard()` landed as a duplicate of Bor's
+  own nil-guarded `discard` (redeclared), and its `defer work.discard()` landed inside `newWorker`
+  where `work` is undefined. Bor's `generateWork` already has `defer work.discard()` and already
+  starts the prefetcher unconditionally, so **#33945 is converged in Bor**; both artifacts removed.
+- `internal/ethapi/simulate.go` — `var withdrawalsHash *common.Hash` was dropped (upstream moved the
+  declaration a few lines down); restored at Bor's position inside the loop.
+- `eth/tracers/api.go` — `traceTx` returned the removed `usedGas`; now holds the pool
+  (`gp := core.NewGasPool(message.GasLimit)`) and returns `gp.Used()` (same value).
+- `core/state_processor.go` — dangling `spanEnd(&err)` left by upstream's telemetry move landing in
+  Bor's de-telemetried loop.
+
+Verification (per-batch tier): `go build ./...` rc=0; `go vet ./...` clean bar the two pre-existing
+`//nolint` copylocks (`trie/secure_trie.go:88`, `core/parallel_state_processor.go:341`); `gofmt -l`
+clean on all 65 changed files; `go mod tidy` clean (go.mod diff = go-eth-kzg bump only). `go test`
+pass: `core/` (183s), `miner/...` (197s), `core/vm/...`, `core/types/...`, `core/state/...`,
+`internal/ethapi/...`, `eth/tracers/...`, `eth/fetcher` (139s), `eth/`, `consensus/...`, `trie/...`,
+`triedb/...`, `ethdb/...`, `core/rawdb/...`. Fork guards green
+(`TestReinforceMultiClientPreCompilesTest`, `TestBorHardforkPrecompileContinuity*`,
+`TestV2ForkParity`). `cmd/evm` 4 failures (`TestT8n`, `TestEVMTracing`, `TestEvmRun`,
+`TestEvmRunRegEx`) proven pre-existing — the identical set fails on a clean worktree at pre-merge
+`dbae0f4a1`. No leftover conflict markers.

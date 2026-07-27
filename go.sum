@@ -799,8 +799,8 @@ github.com/jtolds/gls v4.20.0+incompatible/go.mod h1:QJZ7F/aHp+rZTRtaJ1ow/lLfFfV
 github.com/juju/gnuflag v0.0.0-20171113085948-2ce1bb71843d/go.mod h1:2PavIy+JPciBPrBUjwbNvtwB6RQlve+hkpll6QSNmOE=
 github.com/julienschmidt/httprouter v1.2.0/go.mod h1:SYymIcj16QtmaHHD7aYtjjsJG7VTCxuUUipMqKk8s4w=
 github.com/julienschmidt/httprouter v1.3.0/go.mod h1:JR6WtHb+2LUe8TCKY3cZOxFyyO8IZAc4RVcycCCAKdM=
-github.com/karalabe/hid v1.0.1-0.20240306101548-573246063e52 h1:msKODTL1m0wigztaqILOtla9HeW1ciscYG4xjLtvk5I=
-github.com/karalabe/hid v1.0.1-0.20240306101548-573246063e52/go.mod h1:qk1sX/IBgppQNcGCRoj90u6EGC056EBoIc1oEjCWla8=
+github.com/karalabe/hid v1.0.1-0.20260315100226-f5d04adeffeb h1:Ag83At00qa4FLkcdMgrwHVSakqky/eZczOlxd4q336E=
+github.com/karalabe/hid v1.0.1-0.20260315100226-f5d04adeffeb/go.mod h1:qk1sX/IBgppQNcGCRoj90u6EGC056EBoIc1oEjCWla8=
 github.com/kelseyhightower/envconfig v1.4.0 h1:Im6hONhd3pLkfDFsbRgu68RDNkGF1r3dvMUtDTo2cv8=
 github.com/kelseyhightower/envconfig v1.4.0/go.mod h1:cccZRl6mQpaq41TPp5QxidR+Sa3axMbJDNb//FQX6Gg=
 github.com/kilic/bls12-381 v0.1.0 h1:encrdjqKMEvabVQ7qYOKu1OvhqpK4s47wDYtNiPtlp4=
