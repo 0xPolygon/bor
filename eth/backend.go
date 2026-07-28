@@ -359,7 +359,12 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 
 	// check if Parallel EVM is enabled
 	// if enabled, use parallel state processor
-	if config.ParallelEVM.Enable {
+	parallelEVM := config.ParallelEVM.Enable
+	if parallelEVM && (config.WitnessProtocol || config.SyncAndProduceWitnesses) {
+		log.Warn("Disabling parallel EVM: witness generation requires the serial state processor")
+		parallelEVM = false
+	}
+	if parallelEVM {
 		eth.blockchain, err = core.NewParallelBlockChain(chainDb, config.Genesis, eth.engine, options, config.ParallelEVM.SpeculativeProcesses, config.ParallelEVM.Enforce)
 	} else {
 		eth.blockchain, err = core.NewBlockChain(chainDb, config.Genesis, eth.engine, options)

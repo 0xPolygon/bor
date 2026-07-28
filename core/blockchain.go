@@ -859,17 +859,27 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		vtime    time.Duration
 	}
 
-	var resultChanLen int = 2
-	if bc.enforceParallelProcessor {
+	// Witness recording is only supported by the serial processor, so blocks
+	// that record a witness skip the parallel processor.
+	runParallel := bc.parallelProcessor != nil && witness == nil
+	runSerial := bc.processor != nil && (!bc.enforceParallelProcessor || !runParallel)
+
+	resultChanLen := 0
+	if runParallel {
+		resultChanLen++
+	}
+	if runSerial {
+		resultChanLen++
+	}
+	if runParallel && !runSerial {
 		log.Debug("Processing block using Block STM only", "number", block.NumberU64())
-		resultChanLen = 1
 	}
 	resultChan := make(chan Result, resultChanLen)
 
 	processorCount := 0
 	execStart := time.Now()
 
-	if bc.parallelProcessor != nil {
+	if runParallel {
 		processorCount++
 
 		go func() {
@@ -901,7 +911,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		}()
 	}
 
-	if bc.processor != nil && !bc.enforceParallelProcessor {
+	if runSerial {
 		processorCount++
 
 		go func() {
