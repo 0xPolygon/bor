@@ -1,6 +1,6 @@
 module github.com/ethereum/go-ethereum/cmd/keeper
 
-go 1.26.3
+go 1.26.4
 
 require (
 	github.com/ProjectZKM/Ziren/crates/go-runtime/zkvm_runtime v0.0.0-20260104020744-7268a54d0358

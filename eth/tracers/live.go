@@ -19,6 +19,7 @@ package tracers
 import (
 	"encoding/json"
 	"errors"
+	"sync"
 
 	"github.com/ethereum/go-ethereum/core/tracing"
 )
@@ -30,11 +31,15 @@ type ctorFunc func(config json.RawMessage) (*tracing.Hooks, error)
 var LiveDirectory = liveDirectory{elems: make(map[string]ctorFunc)}
 
 type liveDirectory struct {
+	mu    sync.RWMutex
 	elems map[string]ctorFunc
 }
 
 // Register registers a tracer constructor by name.
 func (d *liveDirectory) Register(name string, f ctorFunc) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
 	d.elems[name] = f
 }
 
@@ -43,7 +48,11 @@ func (d *liveDirectory) New(name string, config json.RawMessage) (*tracing.Hooks
 	if len(config) == 0 {
 		config = json.RawMessage("{}")
 	}
-	if f, ok := d.elems[name]; ok {
+	d.mu.RLock()
+	f, ok := d.elems[name]
+	d.mu.RUnlock()
+
+	if ok {
 		return f(config)
 	}
 	return nil, errors.New("not found")

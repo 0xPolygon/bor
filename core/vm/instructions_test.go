@@ -23,6 +23,7 @@ import (
 	"math/big"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/holiman/uint256"
@@ -616,6 +617,48 @@ func TestOpTstore(t *testing.T) {
 
 	if !bytes.Equal(val.Bytes(), value) {
 		t.Fatal("incorrect element read from transient storage")
+	}
+}
+
+// TestOpKeccak256_CacheHitRecordsPreimage pins that opKeccak256's
+// 64-byte Keccak256Cache fast path still records the preimage on
+// StateDB when EnablePreimageRecording is set. The cache fast path
+// previously returned before the AddPreimage call, so any 64-byte
+// SHA3 whose hash was warmed (e.g. by the prefetcher or a sibling V2
+// worker) was silently dropped from preimage recording.
+func TestOpKeccak256_CacheHitRecordsPreimage(t *testing.T) {
+	statedb, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+	cache := &sync.Map{}
+
+	input := make([]byte, 64)
+	for i := range input {
+		input[i] = byte(i)
+	}
+	var key [64]byte
+	copy(key[:], input)
+	hash := crypto.Keccak256Hash(input)
+	cache.Store(key, hash)
+
+	evm := NewEVM(BlockContext{}, statedb, params.TestChainConfig, Config{
+		EnablePreimageRecording: true,
+		Keccak256Cache:          cache,
+	})
+	stack := newstack()
+	mem := NewMemory()
+	mem.Resize(64)
+	mem.Set(0, 64, input)
+	stack.push(uint256.NewInt(64)) // size
+	stack.push(uint256.NewInt(0))  // offset
+	pc := uint64(0)
+	if _, err := opKeccak256(&pc, evm, &ScopeContext{mem, stack, nil}); err != nil {
+		t.Fatalf("opKeccak256: %v", err)
+	}
+	got, ok := statedb.Preimages()[hash]
+	if !ok {
+		t.Fatalf("cache-hit branch did not record preimage; preimages = %v", statedb.Preimages())
+	}
+	if !bytes.Equal(got, input) {
+		t.Fatalf("recorded preimage = %x; want %x", got, input)
 	}
 }
 

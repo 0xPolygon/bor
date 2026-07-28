@@ -113,6 +113,14 @@ func testCallTracer(tracerName string, dirPath string, t *testing.T) {
 			if err := tx.UnmarshalBinary(common.FromHex(test.Input)); err != nil {
 				t.Fatalf("failed to parse testcase input: %v", err)
 			}
+			// call_tracer_withLog fixtures record Bor's synthetic fee transfer
+			// log at 0x...001010 in the "want" output. After AddFeeTransferLog
+			// was gated on Bor != nil (core/state_transition.go), Ethereum-only
+			// chain configs stop emitting it. Inject Bor for _withLog fixtures
+			// so the production code emits the log the fixtures expect.
+			if strings.HasSuffix(dirPath, "_withLog") && test.Genesis.Config.Bor == nil {
+				test.Genesis.Config.Bor = &params.BorConfig{}
+			}
 			// Configure a blockchain with the given prestate
 			var (
 				signer       = types.MakeSigner(test.Genesis.Config, new(big.Int).SetUint64(uint64(test.Context.Number)), uint64(test.Context.Time))
@@ -254,8 +262,14 @@ func benchTracer(tracerName string, test *callTracerTest, b *testing.B) {
 func TestInternals(t *testing.T) {
 	t.Parallel()
 
+	// Bor-enabled clone of MainnetChainConfig so AddFeeTransferLog fires
+	// for the "Mem expansion in LOG0" subtest — its "want" includes the
+	// synthetic fee transfer log at 0x...001010.
+	cfg := *params.MainnetChainConfig
+	cfg.Bor = &params.BorConfig{}
+
 	var (
-		config       = params.MainnetChainConfig
+		config       = &cfg
 		to           = common.HexToAddress("0x00000000000000000000000000000000deadbeef")
 		originHex    = "0x71562b71999873db5b286df957af199ec94617f7"
 		origin       = common.HexToAddress(originHex)
