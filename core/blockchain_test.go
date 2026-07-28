@@ -4304,6 +4304,68 @@ func TestHasStateTreatsRecentPipelinedRootAsAvailable(t *testing.T) {
 	require.False(t, chain.HasRecentPipelinedHeadState(block.Hash(), block.Root()))
 }
 
+func TestPipelinedWitnessWaitPaths(t *testing.T) {
+	_, _, chain, err := newCanonical(ethash.NewFaker(), 0, true, rawdb.HashScheme)
+	require.NoError(t, err)
+	t.Cleanup(chain.Stop)
+	chain.cfg.EnablePipelinedImportSRC = true
+
+	block := types.NewBlockWithHeader(&types.Header{Number: big.NewInt(1)})
+	hash := block.Hash()
+
+	chain.pendingImportSRC = &pendingImportSRCState{
+		block:       block,
+		makeWitness: false,
+		collectedCh: make(chan struct{}),
+	}
+	witness, matched := chain.waitForPendingSRCWitness(hash)
+	require.True(t, matched)
+	require.Nil(t, witness)
+	require.Nil(t, chain.waitForPipelinedWitness(hash))
+
+	chain.pendingImportSRC = &pendingImportSRCState{
+		block:       block,
+		makeWitness: true,
+		collectedCh: make(chan struct{}),
+	}
+	chain.CacheWitness(hash, []byte("witness"))
+	close(chain.pendingImportSRC.collectedCh)
+	witness, matched = chain.waitForPendingSRCWitness(hash)
+	require.True(t, matched)
+	require.Equal(t, []byte("witness"), witness)
+
+	chain.pendingImportSRC = nil
+	chain.pipelinedMakeWitness.Store(false)
+	require.Nil(t, chain.waitForPipelinedWitness(common.HexToHash("0x1234")))
+
+	polledHash := common.HexToHash("0x5678")
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		chain.CacheWitness(polledHash, []byte("polled"))
+	}()
+	require.Equal(t, []byte("polled"), chain.pollWitnessCache(polledHash, time.Second, time.Millisecond))
+}
+
+func TestWithinPipelinedImportStateGrace(t *testing.T) {
+	now := time.Now()
+	tests := []struct {
+		name  string
+		start time.Time
+		want  bool
+	}{
+		{name: "zero", start: time.Time{}, want: false},
+		{name: "future", start: now.Add(time.Nanosecond), want: false},
+		{name: "current", start: now, want: true},
+		{name: "boundary", start: now.Add(-pipelinedImportStateAvailabilityGrace), want: true},
+		{name: "expired", start: now.Add(-pipelinedImportStateAvailabilityGrace - time.Nanosecond), want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, withinPipelinedImportStateGrace(test.start, now))
+		})
+	}
+}
+
 func TestCreateThenDeletePostByzantium(t *testing.T) {
 	t.Parallel()
 	testCreateThenDelete(t, params.TestChainConfig)

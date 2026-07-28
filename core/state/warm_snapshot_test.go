@@ -23,8 +23,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/triedb"
 	"github.com/ethereum/go-ethereum/triedb/database"
 )
 
@@ -81,6 +83,34 @@ type stubNodeDB struct {
 
 func (s *stubNodeDB) NodeReader(stateRoot common.Hash) (database.NodeReader, error) {
 	return s.reader, nil
+}
+
+type errorNodeDB struct {
+	err error
+}
+
+func (s *errorNodeDB) NodeReader(common.Hash) (database.NodeReader, error) {
+	return nil, s.err
+}
+
+type preimageNodeDB struct {
+	*stubNodeDB
+	preimages map[common.Hash][]byte
+	enabled   bool
+}
+
+func (db *preimageNodeDB) Preimage(hash common.Hash) []byte {
+	return db.preimages[hash]
+}
+
+func (db *preimageNodeDB) InsertPreimage(preimages map[common.Hash][]byte) {
+	for hash, preimage := range preimages {
+		db.preimages[hash] = preimage
+	}
+}
+
+func (db *preimageNodeDB) PreimageEnabled() bool {
+	return db.enabled
 }
 
 // TestWarmSnapshot_HashMismatchFallsThrough is the consensus-critical safety
@@ -273,4 +303,137 @@ func TestWarmSnapshot_OwnerScoped(t *testing.T) {
 	// Cross-owner lookup with the wrong-owner-but-matching-path is a miss.
 	_, ok = snap.Lookup(storageOwner, path, crypto.Keccak256Hash(accountBlob))
 	require.False(t, ok, "must not serve account blob to storage owner even when that blob's hash matches expectedHash")
+}
+
+func TestWarmSnapshotInputAndBounds(t *testing.T) {
+	t.Parallel()
+
+	owner := common.HexToHash("0x44")
+	path := []byte{0x01, 0x02}
+	blob := []byte("warm-node")
+	tooLong := make([]byte, 65)
+
+	key, ok := makeWarmKey(owner, path, crypto.Keccak256Hash(blob))
+	require.True(t, ok)
+	require.Equal(t, uint8(len(path)), key.pathLen)
+	_, ok = makeWarmKey(owner, tooLong, common.Hash{})
+	require.False(t, ok)
+
+	require.Nil(t, NewWarmSnapshotInput(nil))
+	var nilInput *WarmSnapshotInput
+	require.Nil(t, nilInput.Build())
+
+	input := NewWarmSnapshotInput([]TrieWarmNodes{{
+		Owner: owner,
+		Nodes: map[string][]byte{
+			string(path):    blob,
+			"empty":         nil,
+			string(tooLong): []byte("ignored"),
+		},
+	}})
+	snapshot := input.Build()
+	require.NotNil(t, snapshot)
+	require.Equal(t, 1, snapshot.Len())
+	require.Equal(t, len(blob), snapshot.SizeBytes())
+
+	got, ok := snapshot.Lookup(owner, path, crypto.Keccak256Hash(blob))
+	require.True(t, ok)
+	require.Equal(t, blob, got)
+	blob[0] = 'X'
+	require.Equal(t, []byte("warm-node"), got)
+	_, ok = snapshot.Lookup(owner, tooLong, common.Hash{})
+	require.False(t, ok)
+
+	var nilSnapshot *WarmSnapshot
+	require.Zero(t, nilSnapshot.Len())
+	require.Zero(t, nilSnapshot.SizeBytes())
+}
+
+func TestSnapshotStateDatabaseTrieOperations(t *testing.T) {
+	cdb := NewDatabaseForTesting()
+	snapshot := NewWarmSnapshot([]TrieWarmNodes{{
+		Owner: common.Hash{},
+		Nodes: map[string][]byte{"warm": []byte("node")},
+	}})
+	db := newSnapshotStateDatabase(cdb, snapshot)
+
+	_, err := db.Reader(common.HexToHash("0xdead"))
+	require.Error(t, err)
+
+	accountTrie, err := db.OpenTrie(types.EmptyRootHash)
+	require.NoError(t, err)
+	require.NotNil(t, accountTrie)
+	accountTrie, err = db.OpenTrie(common.HexToHash("0xdead"))
+	require.Error(t, err)
+	require.Nil(t, accountTrie)
+
+	storageTrie, err := db.OpenStorageTrie(types.EmptyRootHash, common.HexToAddress("0x1"), types.EmptyRootHash, nil)
+	require.NoError(t, err)
+	require.NotNil(t, storageTrie)
+	storageTrie, err = db.OpenStorageTrie(types.EmptyRootHash, common.HexToAddress("0x1"), common.HexToHash("0xdead"), nil)
+	require.Error(t, err)
+	require.Nil(t, storageTrie)
+}
+
+func TestSnapshotStateDatabaseVerkleTrieOperations(t *testing.T) {
+	cdb := NewDatabase(triedb.NewDatabase(rawdb.NewMemoryDatabase(), triedb.VerkleDefaults), nil)
+	db := newSnapshotStateDatabase(cdb, NewWarmSnapshot(nil))
+
+	accountTrie, err := db.OpenTrie(types.EmptyRootHash)
+	require.NoError(t, err)
+	require.NotNil(t, accountTrie)
+
+	self := accountTrie
+	storageTrie, err := db.OpenStorageTrie(types.EmptyRootHash, common.HexToAddress("0x1"), types.EmptyRootHash, self)
+	require.NoError(t, err)
+	require.Same(t, self, storageTrie)
+}
+
+func TestSnapshotNodeDatabaseForwardingAndErrors(t *testing.T) {
+	snapshot := NewWarmSnapshot([]TrieWarmNodes{{
+		Owner: common.Hash{},
+		Nodes: map[string][]byte{"warm": []byte("node")},
+	}})
+	expected := errors.New("reader failed")
+	wrapped := newSnapshotNodeDatabase(&errorNodeDB{err: expected}, snapshot)
+	_, err := wrapped.NodeReader(common.Hash{})
+	require.ErrorIs(t, err, expected)
+
+	withoutPreimages := wrapped.(*snapshotNodeDatabase)
+	require.Nil(t, withoutPreimages.Preimage(common.Hash{}))
+	withoutPreimages.InsertPreimage(map[common.Hash][]byte{common.HexToHash("0x1"): []byte("ignored")})
+	require.False(t, withoutPreimages.PreimageEnabled())
+
+	inner := &preimageNodeDB{
+		stubNodeDB: &stubNodeDB{reader: newStubNodeReader()},
+		preimages:  make(map[common.Hash][]byte),
+		enabled:    true,
+	}
+	withPreimages := newSnapshotNodeDatabase(inner, snapshot).(*snapshotNodeDatabase)
+	hash := common.HexToHash("0x2")
+	withPreimages.InsertPreimage(map[common.Hash][]byte{hash: []byte("preimage")})
+	require.Equal(t, []byte("preimage"), withPreimages.Preimage(hash))
+	require.True(t, withPreimages.PreimageEnabled())
+}
+
+func TestSnapshotNodeReaderAccountMetricsPaths(t *testing.T) {
+	path := []byte{0x1}
+	blob := []byte("account-node")
+	hash := crypto.Keccak256Hash(blob)
+	snapshot := NewWarmSnapshot([]TrieWarmNodes{{
+		Owner: common.Hash{},
+		Nodes: map[string][]byte{string(path): blob},
+	}})
+	underlying := newStubNodeReader()
+	fallback := []byte("fallback")
+	underlying.set(common.Hash{}, path, fallback)
+	reader := &snapshotNodeReader{inner: underlying, snapshot: snapshot}
+
+	got, err := reader.Node(common.Hash{}, path, hash)
+	require.NoError(t, err)
+	require.Equal(t, blob, got)
+
+	got, err = reader.Node(common.Hash{}, path, common.HexToHash("0xdead"))
+	require.NoError(t, err)
+	require.Equal(t, fallback, got)
 }

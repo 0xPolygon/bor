@@ -5123,6 +5123,106 @@ func TestPrepare_PrimaryProducerWaitOnPrepareControlsEarlyAnnouncementDelay(t *t
 	})
 }
 
+func TestEarliestAnnounceTime(t *testing.T) {
+	t.Parallel()
+
+	addr := common.HexToAddress("0x1")
+	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr, VotingPower: 1}}}
+	borCfg := &params.BorConfig{
+		Sprint:         map[string]uint64{"0": 64},
+		Period:         map[string]uint64{"0": 2},
+		GiuglianoBlock: big.NewInt(0),
+	}
+	chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr, uint64(time.Now().Unix()))
+	defer chain.Stop()
+
+	require.WithinDuration(t, time.Now(), b.EarliestAnnounceTime(chain.HeaderChain(), nil), time.Second)
+	require.WithinDuration(t, time.Now(), b.EarliestAnnounceTime(chain.HeaderChain(), &types.Header{Number: new(big.Int)}), time.Second)
+
+	genesis := chain.HeaderChain().GetHeaderByNumber(0)
+	require.NotNil(t, genesis)
+	childTime := time.Now().Add(time.Hour)
+	child := &types.Header{
+		ParentHash: genesis.Hash(),
+		Number:     big.NewInt(1),
+		ActualTime: childTime,
+	}
+	require.Equal(t, genesis.GetActualTime(), b.EarliestAnnounceTime(chain.HeaderChain(), child))
+
+	cachedParentTime := genesis.GetActualTime().Add(750 * time.Millisecond)
+	b.parentActualTimeCache.Add(genesis.Hash(), cachedParentTime)
+	require.Equal(t, cachedParentTime, b.EarliestAnnounceTime(chain.HeaderChain(), child))
+
+	child.ParentHash = common.HexToHash("0xdead")
+	require.Equal(t, childTime, b.EarliestAnnounceTime(chain.HeaderChain(), child))
+
+	preGiugliano := *borCfg
+	preGiugliano.GiuglianoBlock = big.NewInt(10)
+	b.config = &preGiugliano
+	require.Equal(t, childTime, b.EarliestAnnounceTime(chain.HeaderChain(), child))
+}
+
+func TestPipelineFinalizeAndAssembleInputPaths(t *testing.T) {
+	t.Parallel()
+
+	addr := common.HexToAddress("0x1")
+	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr, VotingPower: 1}}}
+	borCfg := &params.BorConfig{
+		Sprint:         map[string]uint64{"0": 64},
+		Period:         map[string]uint64{"0": 2},
+		MadhugiriBlock: big.NewInt(0),
+	}
+	chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr, uint64(time.Now().Unix()))
+	defer chain.Stop()
+
+	genesis := chain.HeaderChain().GetHeaderByNumber(0)
+	require.NotNil(t, genesis)
+	header := &types.Header{
+		Number:     big.NewInt(1),
+		ParentHash: genesis.Hash(),
+		GasLimit:   10_000_000,
+		Time:       genesis.Time + 2,
+	}
+	statedb := newStateDBForTest(t, genesis.Root)
+
+	withdrawals := &types.Body{Withdrawals: []*types.Withdrawal{}}
+	data, err := b.FinalizeForPipeline(chain.HeaderChain(), header, statedb, withdrawals, nil)
+	require.ErrorIs(t, err, consensus.ErrUnexpectedWithdrawals)
+	require.Nil(t, data)
+
+	requestsHash := common.HexToHash("0x1234")
+	requestHeader := types.CopyHeader(header)
+	requestHeader.RequestsHash = &requestsHash
+	data, err = b.FinalizeForPipeline(chain.HeaderChain(), requestHeader, statedb, &types.Body{}, nil)
+	require.ErrorIs(t, err, consensus.ErrUnexpectedRequests)
+	require.Nil(t, data)
+
+	data, err = b.FinalizeForPipeline(chain.HeaderChain(), header, statedb, &types.Body{}, nil)
+	require.NoError(t, err)
+	require.Nil(t, data)
+
+	root := common.HexToHash("0xbeef")
+	body := &types.Body{}
+	block, receipts, err := b.AssembleBlock(chain, types.CopyHeader(header), statedb, body, nil, root, nil)
+	require.NoError(t, err)
+	require.Equal(t, root, block.Root())
+	require.Equal(t, types.EmptyUncleHash, block.UncleHash())
+	require.Empty(t, receipts)
+
+	stateSyncData := []*types.StateSyncData{{
+		ID:       1,
+		Contract: common.HexToAddress("0xabc"),
+		Data:     []byte{0x1},
+	}}
+	body = &types.Body{}
+	block, receipts, err = b.AssembleBlock(chain, types.CopyHeader(header), statedb, body, nil, root, stateSyncData)
+	require.NoError(t, err)
+	require.Len(t, block.Transactions(), 1)
+	require.Equal(t, uint8(types.StateSyncTxType), block.Transactions()[0].Type())
+	require.Len(t, receipts, 1)
+	require.Equal(t, uint8(types.StateSyncTxType), receipts[0].Type)
+}
+
 // TestSeal_PrimaryProducerDelay_GiuglianoBoundary verifies that primary
 // producers wait in Seal before Giugliano, but return immediately after
 // Giugliano because the parent-boundary wait has moved to Prepare. This is the

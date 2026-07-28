@@ -122,3 +122,31 @@ func TestNodeLookup_OverflowDisablesDefinitiveMiss(t *testing.T) {
 		t.Fatal("miss reported definitive after an unindexable path was seen")
 	}
 }
+
+func TestNodeLookup_UnindexableAndMissingRemovalBranches(t *testing.T) {
+	owner := common.HexToHash("0x1")
+	node := testNode([]byte("node"))
+	longPath := make([]byte, nodeLookupMaxPath+1)
+	l := &nodeLookup{nodes: make(map[nodeLookupKey]nodeLookupEntry)}
+
+	if _, found, definitive := l.get(owner, longPath, node.Hash); found || definitive {
+		t.Fatalf("long-path lookup = found %v definitive %v", found, definitive)
+	}
+
+	l.remove(owner, string(longPath), node)
+	l.remove(owner, "\x01", node)
+	if len(l.nodes) != 0 {
+		t.Fatalf("unexpected entries after no-op removals: %d", len(l.nodes))
+	}
+
+	key, ok := makeNodeLookupKey(owner, []byte{1}, node.Hash)
+	if !ok {
+		t.Fatal("short node key rejected")
+	}
+	l.nodes[key] = nodeLookupEntry{blob: node.Blob, refs: 2}
+	l.bytes = int64(len(node.Blob))
+	l.remove(owner, "\x01", node)
+	if got := l.nodes[key].refs; got != 1 {
+		t.Fatalf("refcount after shared removal = %d, want 1", got)
+	}
+}

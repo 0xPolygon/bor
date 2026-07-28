@@ -75,10 +75,18 @@ func TestPipelinedImportSRC_RPCDuringImport(t *testing.T) {
 	bpStack, bpBackend, err := InitMiner(genesis, keys[0], true)
 	require.NoError(t, err)
 	defer bpStack.Close()
+	bpDataDir := bpStack.DataDir()
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(bpDataDir), "removing block-producer datadir")
+	})
 
 	importerStack, importerBackend, err := InitImporterWithPipelinedSRC(genesis, keys[1], true)
 	require.NoError(t, err)
 	defer importerStack.Close()
+	importerDataDir := importerStack.DataDir()
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(importerDataDir), "removing importer datadir")
+	})
 
 	// No listener-wait loops needed: connectAndWaitForPeers waits (with a
 	// deadline) for both nodes to publish real listener ports before peering.
