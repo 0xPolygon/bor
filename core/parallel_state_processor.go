@@ -1174,7 +1174,7 @@ func (p *V2StateProcessor) Process(block *types.Block, statedb *state.StateDB, c
 	}
 
 	return p.finalizeV2Block(block, statedb, header, config, tasks, result,
-		stopPrewalk, tProcess, tSetup, tCopy, tExec)
+		tProcess, tSetup, tCopy, tExec)
 }
 
 // finalizeV2Block runs consensus-engine finalization, merges state-sync logs,
@@ -1183,7 +1183,7 @@ func (p *V2StateProcessor) Process(block *types.Block, statedb *state.StateDB, c
 func (p *V2StateProcessor) finalizeV2Block(block *types.Block, statedb *state.StateDB,
 	header *types.Header, config *params.ChainConfig,
 	tasks []V2Task, result *V2ExecutionResult,
-	stopPrewalk func(), tProcess, tSetup, tCopy, tExec time.Time,
+	tProcess, tSetup, tCopy, tExec time.Time,
 ) (*ProcessResult, error) {
 	receiptsCountBeforeFinalize := len(result.Receipts)
 	receipts, err := p.chain.Engine().Finalize(p.chain, header, statedb, block.Body(), result.Receipts)
@@ -1204,9 +1204,6 @@ func (p *V2StateProcessor) finalizeV2Block(block *types.Block, statedb *state.St
 	// This must run after engine.Finalize: its state reads (state sync at
 	// sprint boundaries) are part of the witness contract too, and on nodes
 	// with a flat reader they are served without ever reaching a trie tracer.
-	// The prewalker must be fully stopped first: an in-flight resolution
-	// landing after collection would be lost.
-	stopPrewalk()
 	statedb.CollectStateWitness()
 	tFinalize := time.Now()
 

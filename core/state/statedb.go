@@ -151,6 +151,10 @@ type StateDB struct {
 	// State witness if cross validation is needed
 	witness      *stateless.Witness
 	witnessStats *stateless.WitnessStats
+	// witnessPrewalkStop stops the read-set prewalker started by
+	// StartWitnessReadSetPrewalk; CollectStateWitness invokes it before
+	// collecting. Idempotent. Deliberately not carried across Copy.
+	witnessPrewalkStop func()
 
 	// Measurements gathered during execution for debugging purposes
 
@@ -327,6 +331,12 @@ func (s *StateDB) CollectStateWitness() {
 	if s.witness == nil {
 		return
 	}
+	// Stop the prewalker before collecting: an in-flight resolution landing
+	// after collection would be lost. Stopping here (rather than trusting
+	// every caller to do it) makes the collect safe to call on its own.
+	if s.witnessPrewalkStop != nil {
+		s.witnessPrewalkStop()
+	}
 	start := time.Now()
 	collectStateWitnessFromReader(s.reader, s.witness.AddState)
 	witnessReadSetSettleTimer.UpdateSince(start)
@@ -335,10 +345,10 @@ func (s *StateDB) CollectStateWitness() {
 // StartWitnessReadSetPrewalk keeps resolving newly-cached read keys into the
 // trie reader's tracers while block execution is still running, so the
 // settle-time drain in CollectStateWitness only covers a small tail instead
-// of the whole block's read-set. The returned stop function is idempotent and
-// blocks until the walker has fully exited — call it before collecting the
-// witness, or in-flight resolutions could land after collection. No-op when
-// no witness is being recorded or the reader chain has no trie reader.
+// of the whole block's read-set. The returned stop function is idempotent
+// and blocks until the walker has fully exited; CollectStateWitness also
+// invokes it before collecting. No-op when no witness is being recorded or
+// the reader chain has no trie reader.
 func (s *StateDB) StartWitnessReadSetPrewalk() (stop func()) {
 	noop := func() {}
 	if s.witness == nil {
@@ -371,12 +381,14 @@ func (s *StateDB) StartWitnessReadSetPrewalk() (stop func()) {
 	}()
 
 	var once sync.Once
-	return func() {
+	stop = func() {
 		once.Do(func() {
 			close(done)
 			wg.Wait()
 		})
 	}
+	s.witnessPrewalkStop = stop
+	return stop
 }
 
 func collectStateWitnessFromReader(r any, addState func(map[string][]byte)) {
