@@ -561,12 +561,18 @@ type accountCacheEntry struct {
 	// usedByProcess is flipped exactly once when the PROCESS reader consumes an entry
 	// that was prefetched. Used to compute unique-usage/precision.
 	usedByProcess uint32
+	// walked is set once the key's trie path has been resolved into the trie
+	// reader's tracers for witness recording.
+	walked atomic.Bool
 }
 
 // storageCacheEntry is the cached storage slot plus attribution metadata.
 type storageCacheEntry struct {
 	value  common.Hash
 	origin readerRole
+	// walked is set once the key's trie path has been resolved into the trie
+	// reader's tracers for witness recording.
+	walked atomic.Bool
 }
 
 // storageKey is the composite key for the readerWithCache storage sync.Map.
@@ -670,6 +676,83 @@ func (r *readerWithCache) storage(addr common.Address, slot common.Hash, caller 
 func (r *readerWithCache) Storage(addr common.Address, slot common.Hash) (common.Hash, error) {
 	value, _, _, _, err := r.storage(addr, slot, roleUnknown)
 	return value, err
+}
+
+// resolveCachedKeysIntoTrie re-resolves cached accounts and storage slots
+// through the trie reader so its tracers hold their trie paths. Keys whose
+// first resolution came from a flat reader (snapshot / pathdb) — or that were
+// warmed by the prefetcher and then served to execution from this cache —
+// never touch the trie during execution, so witness collection has to walk
+// them explicitly or the produced witness misses their paths.
+//
+// Each entry is walked at most once per block (atomic walked flag), so the
+// method is incremental: a prewalker can call it repeatedly while execution
+// is still running to keep the walk off the block's critical path, and the
+// settle-time call only drains whatever accumulated since the last sweep.
+// Resolution errors are ignored: the trie reader is the gatekeeper for
+// committed state, and a stateless consumer validates the resulting witness
+// anyway. Returns the number of keys walked in this sweep.
+func (r *readerWithCache) resolveCachedKeysIntoTrie(tr *trieReader, workers int) int {
+	type walkItem struct {
+		addr    common.Address
+		slot    common.Hash
+		account bool
+	}
+	// Claim first, walk after: a sweep that finds nothing costs one Range
+	// pass and spawns no goroutines, keeping high-frequency prewalk sweeps
+	// cheap.
+	var pending []walkItem
+	r.accounts.Range(func(k, v any) bool {
+		if v.(*accountCacheEntry).walked.CompareAndSwap(false, true) {
+			pending = append(pending, walkItem{addr: k.(common.Address), account: true})
+		}
+		return true
+	})
+	r.storageCache.Range(func(k, v any) bool {
+		if v.(*storageCacheEntry).walked.CompareAndSwap(false, true) {
+			key := k.(storageKey)
+			pending = append(pending, walkItem{addr: key.addr, slot: key.slot})
+		}
+		return true
+	})
+	if len(pending) == 0 {
+		return 0
+	}
+
+	walk := func(it walkItem) {
+		if it.account {
+			_, _ = tr.Account(it.addr)
+		} else {
+			_, _ = tr.Storage(it.addr, it.slot)
+		}
+	}
+	if workers > len(pending) {
+		workers = len(pending)
+	}
+	if workers <= 1 {
+		for _, it := range pending {
+			walk(it)
+		}
+		return len(pending)
+	}
+
+	items := make(chan walkItem)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for it := range items {
+				walk(it)
+			}
+		}()
+	}
+	for _, it := range pending {
+		items <- it
+	}
+	close(items)
+	wg.Wait()
+	return len(pending)
 }
 
 type readerWithCacheStats struct {

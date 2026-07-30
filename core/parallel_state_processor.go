@@ -1141,6 +1141,11 @@ func (p *V2StateProcessor) Process(block *types.Block, statedb *state.StateDB, c
 	store := blockstm.NewMVStore()
 	bals := blockstm.NewMVBalanceStore()
 
+	// Walk read keys into the witness while workers execute, so the settle
+	// drain in CollectStateWitness stays off the block's critical path.
+	stopPrewalk := finalDB.StartWitnessReadSetPrewalk()
+	defer stopPrewalk()
+
 	tCopy := time.Now()
 
 	result := ExecuteV2BlockSTM(interruptCtx, tasks, readBase, store, bals, blockCtx, block.Hash(), cfg, config,
@@ -1168,16 +1173,8 @@ func (p *V2StateProcessor) Process(block *types.Block, statedb *state.StateDB, c
 		return nil, fmt.Errorf("v2: tx %d apply message: %w", result.ExecErrIdx, result.ExecErr)
 	}
 
-	// V2 worker reads went through pool copies that share `statedb`'s reader
-	// by reference, so the trie tracers on that reader hold every node V2
-	// touched. finalDB.IntermediateRoot only iterates finalDB.stateObjects
-	// for witness collection, missing addresses that were ONLY read (never
-	// settled). Pull the read-side witness directly from the shared reader
-	// here so the produced witness is complete.
-	statedb.CollectStateWitness()
-
 	return p.finalizeV2Block(block, statedb, header, config, tasks, result,
-		tProcess, tSetup, tCopy, tExec)
+		stopPrewalk, tProcess, tSetup, tCopy, tExec)
 }
 
 // finalizeV2Block runs consensus-engine finalization, merges state-sync logs,
@@ -1186,7 +1183,7 @@ func (p *V2StateProcessor) Process(block *types.Block, statedb *state.StateDB, c
 func (p *V2StateProcessor) finalizeV2Block(block *types.Block, statedb *state.StateDB,
 	header *types.Header, config *params.ChainConfig,
 	tasks []V2Task, result *V2ExecutionResult,
-	tProcess, tSetup, tCopy, tExec time.Time,
+	stopPrewalk func(), tProcess, tSetup, tCopy, tExec time.Time,
 ) (*ProcessResult, error) {
 	receiptsCountBeforeFinalize := len(result.Receipts)
 	receipts, err := p.chain.Engine().Finalize(p.chain, header, statedb, block.Body(), result.Receipts)
@@ -1198,6 +1195,19 @@ func (p *V2StateProcessor) finalizeV2Block(block *types.Block, statedb *state.St
 	// (state sync contract, validator rewards) so IntermediateRoot
 	// doesn't need to load them from pebble synchronously.
 	statedb.FinaliseFastWithPrefetch(true)
+
+	// V2 worker reads went through pool copies that share `statedb`'s reader
+	// by reference, so the trie tracers on that reader hold every node V2
+	// touched. finalDB.IntermediateRoot only iterates finalDB.stateObjects
+	// for witness collection, missing addresses that were ONLY read (never
+	// settled). Pull the read-side witness directly from the shared reader.
+	// This must run after engine.Finalize: its state reads (state sync at
+	// sprint boundaries) are part of the witness contract too, and on nodes
+	// with a flat reader they are served without ever reaching a trie tracer.
+	// The prewalker must be fully stopped first: an in-flight resolution
+	// landing after collection would be lost.
+	stopPrewalk()
+	statedb.CollectStateWitness()
 	tFinalize := time.Now()
 
 	logV2BlockStats(block, tasks, result, tProcess, tSetup, tCopy, tExec, tFinalize)
