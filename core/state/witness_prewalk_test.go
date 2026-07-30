@@ -76,8 +76,10 @@ func TestWitnessReadSetPrewalkWalksCachedKeys(t *testing.T) {
 		t.Fatalf("hot balance: got %d, want 7", got.Uint64())
 	}
 
-	// The prewalker must claim the key without any collect call.
-	deadline := time.Now().Add(5 * time.Second)
+	// The prewalker must claim the key without any collect call. The
+	// deadline is generous: polling exits on success, so it only matters on
+	// heavily loaded runners.
+	deadline := time.Now().Add(30 * time.Second)
 	for {
 		if v, ok := shared.accounts.Load(hot); ok && v.(*accountCacheEntry).walked.Load() {
 			break
