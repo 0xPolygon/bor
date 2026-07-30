@@ -819,6 +819,17 @@ func ExecuteV2BlockSTM(
 	// missing this setup, so make the wrapper defensive and idempotent.
 	base.EnableConcurrentReads()
 
+	// Start the witness read-set prewalker only after concurrent reads are
+	// enabled: it shares the trie reader with the workers, and starting it
+	// before the enable write above would be an unsynchronized read/write
+	// on the same reader. It walks cached keys into the witness while the
+	// workers execute, keeping the settle drain in CollectStateWitness off
+	// the block's critical path. No-op when no witness is being recorded.
+	if finalDB != nil {
+		stopPrewalk := finalDB.StartWitnessReadSetPrewalk()
+		defer stopPrewalk()
+	}
+
 	itasks := make([]blockstm.V2Task, len(tasks))
 	for i := range tasks {
 		itasks[i] = &v2Task{index: tasks[i].Index, tx: tasks[i].Tx, msg: tasks[i].Msg}
@@ -1140,11 +1151,6 @@ func (p *V2StateProcessor) Process(block *types.Block, statedb *state.StateDB, c
 	readBase.SetWitness(prevWitness)
 	store := blockstm.NewMVStore()
 	bals := blockstm.NewMVBalanceStore()
-
-	// Walk read keys into the witness while workers execute, so the settle
-	// drain in CollectStateWitness stays off the block's critical path.
-	stopPrewalk := finalDB.StartWitnessReadSetPrewalk()
-	defer stopPrewalk()
 
 	tCopy := time.Now()
 
