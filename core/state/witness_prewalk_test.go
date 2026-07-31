@@ -2,6 +2,7 @@ package state
 
 import (
 	"math/big"
+	"runtime"
 	"testing"
 	"time"
 
@@ -189,7 +190,47 @@ func TestResolveCachedKeysIntoTrieIdempotent(t *testing.T) {
 	if walked := shared.resolveCachedKeysIntoTrie(tr, 4); walked == 0 {
 		t.Fatal("first sweep walked nothing")
 	}
-	if walked := shared.resolveCachedKeysIntoTrie(tr, 4); walked != 0 {
-		t.Fatalf("second sweep re-walked %d keys, want 0", walked)
+	// Cache one more key: the next sweep must claim only it, not re-walk
+	// keys claimed by the first sweep.
+	sdb.GetBalance(common.BytesToAddress([]byte("second-account")))
+	if walked := shared.resolveCachedKeysIntoTrie(tr, 4); walked != 1 {
+		t.Fatalf("second sweep walked %d keys, want 1", walked)
 	}
+	// Nothing new cached: the generation fast path skips the Range entirely.
+	if walked := shared.resolveCachedKeysIntoTrie(tr, 4); walked != 0 {
+		t.Fatalf("third sweep re-walked %d keys, want 0", walked)
+	}
+}
+
+func TestWitnessReadSetPrewalkRestart(t *testing.T) {
+	sdb, shared, hot, _ := prewalkFixture(t)
+	base := runtime.NumGoroutine()
+
+	stop1 := sdb.StartWitnessReadSetPrewalk()
+	// A second start must stop the first walker rather than leak it.
+	stop2 := sdb.StartWitnessReadSetPrewalk()
+
+	deadline := time.Now().Add(30 * time.Second)
+	for runtime.NumGoroutine() > base+1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("first prewalker leaked: %d goroutines, base %d", runtime.NumGoroutine(), base)
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	// The replacement walker is live.
+	if got := sdb.GetBalance(hot); got.Uint64() != 7 {
+		t.Fatalf("hot balance: got %d, want 7", got.Uint64())
+	}
+	for {
+		if v, ok := shared.accounts.Load(hot); ok && v.(*accountCacheEntry).walked.Load() {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("replacement prewalker did not walk the cached key")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	stop2()
+	stop1()
 }

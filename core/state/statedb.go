@@ -350,6 +350,12 @@ func (s *StateDB) CollectStateWitness() {
 // invokes it before collecting. No-op when no witness is being recorded or
 // the reader chain has no trie reader.
 func (s *StateDB) StartWitnessReadSetPrewalk() (stop func()) {
+	// Stop any previously started prewalker first so repeated calls can't
+	// leak its goroutine.
+	if s.witnessPrewalkStop != nil {
+		s.witnessPrewalkStop()
+		s.witnessPrewalkStop = nil
+	}
 	noop := func() {}
 	if s.witness == nil {
 		return noop

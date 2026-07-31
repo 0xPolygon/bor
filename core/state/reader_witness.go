@@ -44,7 +44,16 @@ type witnessWalkItem struct {
 // committed state, and a stateless consumer validates the resulting witness
 // anyway. Returns the number of keys walked in this sweep.
 func (r *readerWithCache) resolveCachedKeysIntoTrie(tr *trieReader, workers int) int {
+	// Generation fast path: skip Ranging the maps when nothing new was
+	// cached since the last sweep — the prewalker ticks far more often than
+	// keys arrive. gen is captured before claiming, so an insert racing the
+	// sweep leaves insertGen ahead of sweptGen and re-arms the next sweep.
+	gen := r.insertGen.Load()
+	if gen == r.sweptGen.Load() {
+		return 0
+	}
 	pending := r.claimUnwalkedItems()
+	r.sweptGen.Store(gen)
 	if len(pending) == 0 {
 		return 0
 	}

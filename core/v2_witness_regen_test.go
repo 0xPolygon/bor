@@ -188,7 +188,9 @@ func loadAllWitnessRegenBlocks(t *testing.T) ([]testBlockData, ethdb.Database) {
 		t.Skipf("witness directory %s not readable: %v", witnessDir, err)
 	}
 	diskdb := newCodeCachingDB(filepath.Join(witnessDir, "codes"))
-	diskdb.loadCodesFromDisk() //nolint:errcheck
+	if err := diskdb.loadCodesFromDisk(); err != nil {
+		t.Fatalf("loading codes archive: %v", err)
+	}
 
 	var blocks []testBlockData
 	for _, entry := range entries {
