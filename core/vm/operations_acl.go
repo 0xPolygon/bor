@@ -339,6 +339,12 @@ func makeSelfdestructGasFn(refundsEnabled bool) gasFunc {
 			evm.StateDB.AddAddressToAccessList(address)
 
 			gas = params.ColdAccountAccessCostEIP2929
+
+			// Terminate the gas measurement if the leftover gas is not sufficient,
+			// it can effectively prevent accessing the states in the following steps
+			if contract.Gas < gas {
+				return 0, ErrOutOfGas
+			}
 		}
 		// if empty and transfers value
 		if evm.StateDB.Empty(address) && evm.StateDB.GetBalance(contract.Address()).Sign() != 0 {
