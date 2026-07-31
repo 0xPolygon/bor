@@ -45,6 +45,45 @@ The releases supports both the networks i.e. Polygon Mainnet, and Amoy (Testnet)
 
 Post `v0.3.0` release, bor uses a new command line interface (cli). The new-cli (located at `internal/cli`) has been built while keeping the flag usage similar to old-cli (located at `cmd/geth`) with a few notable changes. Please refer to [docs](./docs) section for the flag usage guide and example.
 
+### Parity / OpenEthereum Trace API (`trace_*`)
+
+Bor includes a Parity-compatible trace namespace (`trace_block`, `trace_transaction`,
+`trace_replayTransaction`, `trace_replayBlockTransactions`, `trace_call`,
+`trace_callMany`). These methods are **disabled by default** because they are
+expensive and require an archive node.
+
+Enable with the `--rpc.enabletrace` flag (or `enabletrace = true` under `[jsonrpc]` in TOML):
+
+```shell
+bor server --config ./config.toml --rpc.enabletrace
+```
+
+Or in `config.toml`:
+
+```toml
+[jsonrpc]
+  enabletrace = true
+```
+
+**Requirements:**
+- Archive node (`--gcmode archive`)
+- Sufficient HTTP write timeout for deep blocks if needed — the trace methods
+  themselves already use a 60s per-phase budget, while the HTTP response write
+  timeout defaults to 30s. It is configurable via TOML only:
+
+  ```toml
+  [jsonrpc.timeouts]
+    write = "60s"
+  ```
+
+**Known limitations vs Polygon Erigon:**
+- `trace_call`/`trace_callMany` still require the simulated sender to pass
+  Bor's upfront gas balance check; once funded, gas debit/refund is suppressed.
+- `trace_block` omits the state-sync pseudo-transaction for pre-Madhugiri blocks
+  (< 80,084,800 on mainnet); post-Madhugiri blocks are fully supported.
+- `vmTrace` for a post-Madhugiri state-sync transaction reports an empty ops list
+  (state-sync events execute outside the regular EVM opcode flow).
+
 ### Latest Config Reference
 
 For the latest canonical TOML config options, refer to:

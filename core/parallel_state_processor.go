@@ -1133,7 +1133,7 @@ func (p *V2StateProcessor) Process(block *types.Block, statedb *state.StateDB, c
 	// execution — the produced witness would land empty.
 	prevWitness := finalDB.Witness()
 	finalDB.StopPrefetcher()
-	finalDB.StartPrefetcher("v2-settle", prevWitness, nil)
+	finalDB.StartPrefetcher("v2_settle", prevWitness, nil)
 	finalDB.SkipTimers()
 	// Copy() deep-copies the witness; re-share so BLOCKHASH writes reach finalDB.
 	readBase := statedb.Copy()

@@ -119,6 +119,15 @@ type simOpts struct {
 	ReturnFullTransactions bool
 }
 
+// simulationFinalizer is implemented by consensus engines that need a
+// side-effect-free finalization path for simulated blocks. Bor's regular
+// FinalizeAndAssemble commits span and state-sync data at sprint starts,
+// which requires the parent header to exist in the database — not true for
+// blocks simulated on top of the pending block or another simulated block.
+type simulationFinalizer interface {
+	FinalizeAndAssembleForSimulation(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, body *types.Body, receipts []*types.Receipt) (*types.Block, []*types.Receipt, time.Duration, error)
+}
+
 // simChainHeadReader implements ChainHeaderReader which is needed as input for FinalizeAndAssemble.
 type simChainHeadReader struct {
 	context.Context
@@ -430,13 +439,24 @@ func (sim *simulator) processBlock(ctx context.Context, block *simBlock, header,
 	}
 	blockBody := &types.Body{Transactions: txes, Withdrawals: withdrawals}
 	chainHeadReader := &simChainHeadReader{ctx, sim.b}
-	b, receipts, _, err := sim.b.Engine().FinalizeAndAssemble(chainHeadReader, header, sim.state, blockBody, receipts)
-	_ = receipts // mark unused
+	b, err := sim.finalizeAndAssemble(chainHeadReader, header, blockBody, receipts)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	repairLogs(callResults, b.Hash())
 	return b, callResults, senders, nil
+}
+
+// finalizeAndAssemble runs the engine finalization for a simulated block,
+// preferring the side-effect-free simulation path when the engine provides
+// one (see simulationFinalizer).
+func (sim *simulator) finalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, body *types.Body, receipts []*types.Receipt) (*types.Block, error) {
+	if engine, ok := sim.b.Engine().(simulationFinalizer); ok {
+		b, _, _, err := engine.FinalizeAndAssembleForSimulation(chain, header, sim.state, body, receipts)
+		return b, err
+	}
+	b, _, _, err := sim.b.Engine().FinalizeAndAssemble(chain, header, sim.state, body, receipts)
+	return b, err
 }
 
 // repairLogs updates the block hash in the logs present in the result of
