@@ -296,6 +296,12 @@ func NewServer(config *Config, opts ...serverOption) (*Server, error) {
 	stack.RegisterAPIs(tracers.APIs(srv.backend.APIBackend))
 	srv.tracerAPI = tracers.NewAPI(srv.backend.APIBackend)
 
+	// The Parity-compatible trace namespace is opt-in (rpc.enabletrace) because
+	// the methods are expensive; do not expose them unless explicitly enabled.
+	if config.JsonRPC.EnableTrace {
+		stack.RegisterAPIs(tracers.TraceAPIs(srv.backend.APIBackend))
+	}
+
 	// graphql is started from another place
 	if config.JsonRPC.Graphql.Enabled {
 		if err := graphql.New(stack, srv.backend.APIBackend, filterSystem, config.JsonRPC.Graphql.Cors, config.JsonRPC.Graphql.VHost); err != nil {
