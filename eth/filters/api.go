@@ -209,6 +209,45 @@ func (api *FilterAPI) NewPendingTransactionFilter(fullTx *bool) rpc.ID {
 // NewPendingTransactions creates a subscription that is triggered each time a
 // transaction enters the transaction pool. If fullTx is true the full tx is
 // sent to the client, otherwise the hash is sent.
+// clientNotificationBuffer bounds how many notifications may sit queued for a
+// single subscription client. The filter EventSystem fans events out to every
+// subscription from one shared goroutine with blocking sends, so client
+// delivery must never back-pressure into it: a WebSocket client that stops
+// reading (or reads very slowly) would otherwise stall the shared fan-out
+// loop and starve every other subscription on the node. Once a client falls
+// this far behind, further notifications are dropped for that client only.
+const clientNotificationBuffer = 512
+
+// notifyAsync returns a queue drained into notifier.Notify by a background
+// goroutine until stop is closed. Use queueNotification to enqueue: it never
+// blocks, isolating the caller (and transitively the shared event fan-out
+// loop) from slow clients.
+func notifyAsync(notifier *rpc.Notifier, id rpc.ID, stop <-chan struct{}) chan<- any {
+	queue := make(chan any, clientNotificationBuffer)
+
+	go func() {
+		for {
+			select {
+			case v := <-queue:
+				_ = notifier.Notify(id, v)
+			case <-stop:
+				return
+			}
+		}
+	}()
+
+	return queue
+}
+
+// queueNotification enqueues v for asynchronous delivery to the client,
+// dropping it if the client has fallen clientNotificationBuffer behind.
+func queueNotification(queue chan<- any, v any) {
+	select {
+	case queue <- v:
+	default:
+	}
+}
+
 func (api *FilterAPI) NewPendingTransactions(ctx context.Context, fullTx *bool) (*rpc.Subscription, error) {
 	notifier, supported := rpc.NotifierFromContext(ctx)
 	if !supported {
@@ -222,6 +261,10 @@ func (api *FilterAPI) NewPendingTransactions(ctx context.Context, fullTx *bool) 
 		pendingTxSub := api.events.SubscribePendingTxs(txs)
 		defer pendingTxSub.Unsubscribe()
 
+		stop := make(chan struct{})
+		defer close(stop)
+		queue := notifyAsync(notifier, rpcSub.ID, stop)
+
 		chainConfig := api.sys.backend.ChainConfig()
 
 		for {
@@ -234,9 +277,9 @@ func (api *FilterAPI) NewPendingTransactions(ctx context.Context, fullTx *bool) 
 				for _, tx := range txs {
 					if fullTx != nil && *fullTx {
 						rpcTx := ethapi.NewRPCPendingTransaction(tx, latest, chainConfig)
-						_ = notifier.Notify(rpcSub.ID, rpcTx)
+						queueNotification(queue, rpcTx)
 					} else {
-						_ = notifier.Notify(rpcSub.ID, tx.Hash())
+						queueNotification(queue, tx.Hash())
 					}
 				}
 			case <-rpcSub.Err():
@@ -297,10 +340,14 @@ func (api *FilterAPI) NewHeads(ctx context.Context) (*rpc.Subscription, error) {
 		headersSub := api.events.SubscribeNewHeads(headers)
 		defer headersSub.Unsubscribe()
 
+		stop := make(chan struct{})
+		defer close(stop)
+		queue := notifyAsync(notifier, rpcSub.ID, stop)
+
 		for {
 			select {
 			case h := <-headers:
-				notifier.Notify(rpcSub.ID, h)
+				queueNotification(queue, h)
 			case <-rpcSub.Err():
 				return
 			}
@@ -329,11 +376,16 @@ func (api *FilterAPI) Logs(ctx context.Context, crit FilterCriteria) (*rpc.Subsc
 
 	go func() {
 		defer logsSub.Unsubscribe()
+
+		stop := make(chan struct{})
+		defer close(stop)
+		queue := notifyAsync(notifier, rpcSub.ID, stop)
+
 		for {
 			select {
 			case logs := <-matchedLogs:
 				for _, log := range logs {
-					notifier.Notify(rpcSub.ID, &log)
+					queueNotification(queue, &log)
 				}
 			case <-rpcSub.Err(): // client send an unsubscribe request
 				return
@@ -390,6 +442,10 @@ func (api *FilterAPI) TransactionReceipts(ctx context.Context, filter *Transacti
 	go func() {
 		defer receiptsSub.Unsubscribe()
 
+		stop := make(chan struct{})
+		defer close(stop)
+		queue := notifyAsync(notifier, rpcSub.ID, stop)
+
 		signer := types.LatestSigner(api.sys.backend.ChainConfig())
 
 		for {
@@ -410,7 +466,7 @@ func (api *FilterAPI) TransactionReceipts(ctx context.Context, filter *Transacti
 					}
 
 					// Send a batch of tx receipts in one notification
-					notifier.Notify(rpcSub.ID, marshaledReceipts)
+					queueNotification(queue, marshaledReceipts)
 				}
 			case <-rpcSub.Err():
 				return

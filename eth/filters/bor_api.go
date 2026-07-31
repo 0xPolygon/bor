@@ -72,13 +72,17 @@ func (api *FilterAPI) NewDeposits(ctx context.Context, crit ethereum.StateSyncFi
 		stateSyncData := make(chan *types.StateSyncData, 10)
 		stateSyncSub := api.events.SubscribeNewDeposits(stateSyncData)
 
+		stop := make(chan struct{})
+		defer close(stop)
+		queue := notifyAsync(notifier, rpcSub.ID, stop)
+
 		//nolint:staticcheck
 		for {
 			select {
 			case h := <-stateSyncData:
 				if h != nil && (crit.ID == h.ID || crit.Contract == h.Contract ||
 					(crit.ID == 0 && crit.Contract == common.Address{})) {
-					notifier.Notify(rpcSub.ID, h)
+					queueNotification(queue, h)
 				}
 			case <-rpcSub.Err():
 				stateSyncSub.Unsubscribe()
