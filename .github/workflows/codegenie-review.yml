@@ -1,0 +1,60 @@
+# codegenie AI code review.
+#
+# On-demand only: comment "codegenie review" on a PR (draft or ready) to
+# trigger a review. No automatic run on open or on every push — reviews are
+# requested explicitly so they don't fire on every commit.
+#
+# Checkout pins the trusted revision — the default branch, not the PR head —
+# so a PR cannot modify the reviewer that reviews it. The PR head is fetched
+# by codegenie as untrusted data.
+#
+# All trigger authorization (exact phrase match, live write-permission check)
+# happens inside codegenie; there is no gating logic here to drift.
+#
+# Comment runs queue behind the concurrency group rather than cancelling —
+# an unrelated comment must not kill a review already in progress.
+name: codegenie review
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: codegenie-review-pr-${{ github.event.issue.number }}
+
+jobs:
+  review:
+    # issue_comment fires on every issue and PR comment (PRs are issues).
+    # Gate to PR comments only — codegenie still does the authoritative
+    # phrase-match and write-permission check internally.
+    if: github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      # Fail fast with a legible error if the LLM key isn't provisioned for
+      # this repo — otherwise codegenie fails deep in its run with a generic
+      # config_error.
+      - name: Verify API key secret
+        env:
+          KEY: ${{ secrets.CLAUDE_API_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::CLAUDE_API_KEY is missing or empty for this repo"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: 0xPolygon/codegenie@v0.5.1
+        with:
+          model: "anthropic/claude-opus-5:high"
+          llm-api-key: ${{ secrets.CLAUDE_API_KEY }}
+          trigger-phrase: "codegenie review"
+          post-inline-comments: "true"
