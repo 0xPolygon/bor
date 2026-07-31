@@ -128,6 +128,16 @@ func (f *BorBlockLogsFilter) unindexedLogs(ctx context.Context, end uint64) ([]*
 	sprintLength := f.borConfig.CalculateSprint(uint64(f.begin))
 
 	for ; f.begin <= int64(end); f.begin = f.begin + int64(sprintLength) {
+		// Honor context cancellation (client disconnect or deadline) so a large
+		// range scan stops promptly instead of holding an RPC worker busy with
+		// work whose result the caller will never read. Mirrors the check in
+		// upstream go-ethereum eth/filters/filter.go's unindexedLogs.
+		select {
+		case <-ctx.Done():
+			return logs, ctx.Err()
+		default:
+		}
+
 		header, err := f.backend.HeaderByNumber(ctx, rpc.BlockNumber(f.begin))
 		if header == nil || err != nil {
 			return logs, err

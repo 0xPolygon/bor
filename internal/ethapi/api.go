@@ -1014,6 +1014,9 @@ func DoCall(ctx context.Context, b Backend, args TransactionArgs, blockNrOrHash 
 			} else {
 				log.Warn("Error fetching header on CallWithState", "err", err)
 			}
+			if err == nil {
+				err = fmt.Errorf("header not found for hash %v", *blockNrOrHash.BlockHash)
+			}
 			return nil, err
 		}
 	}

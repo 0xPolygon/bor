@@ -3463,9 +3463,8 @@ func TestBuildTxPlan(t *testing.T) {
 // what was already prefetched.
 //
 // Setup: 50 txs in pool, first 80% already marked as prefetched. Freed-gas channel
-// delivers 5 × 21000 gas BEFORE plan channel closes so the collect loop timer fires
-// and the overflow scan runs with a non-zero budget. Expected: the downstream
-// stream channel receives bonus txs from the unprefetched tail.
+// delivers 5 × 21000 gas while the plan channel remains open. Expected: the
+// downstream stream channel receives bonus txs from the unprefetched tail.
 func TestBuilderTxProvider_FreedGasFeedback(t *testing.T) {
 	t.Parallel()
 
@@ -3544,8 +3543,14 @@ func TestBuilderTxProvider_FreedGasFeedback(t *testing.T) {
 	}
 	close(gasFreedCh)
 
-	// Allow the 2ms timer to fire and the overflow scan to run. Then close planCh.
-	time.Sleep(20 * time.Millisecond)
+	// Keep the plan open until the overflow scan has produced an observable result.
+	// A fixed sleep can close the plan before the provider goroutine is scheduled.
+	var firstBonus *types.Transaction
+	select {
+	case firstBonus = <-streamCh:
+	case <-time.After(5 * time.Second):
+		interrupt.Store(true)
+	}
 	close(planCh)
 
 	select {
@@ -3555,7 +3560,8 @@ func TestBuilderTxProvider_FreedGasFeedback(t *testing.T) {
 	}
 
 	close(streamCh)
-	seen := make(map[common.Hash]struct{})
+	require.NotNil(t, firstBonus, "overflow scan did not forward a bonus transaction within timeout")
+	seen := map[common.Hash]struct{}{firstBonus.Hash(): {}}
 	for tx := range streamCh {
 		seen[tx.Hash()] = struct{}{}
 	}
@@ -3564,10 +3570,6 @@ func TestBuilderTxProvider_FreedGasFeedback(t *testing.T) {
 	t.Logf("streamCh received %d bonus txs (freed budget=%d gas, expected up to %d)",
 		forwarded, freedSignals*freedPerSignal, freedSignals)
 
-	// At least one bonus tx should reach the stream — the overflow scan found
-	// non-prefetched txs that fit within the freed-gas budget.
-	require.Greater(t, forwarded, 0,
-		"overflow scan should have forwarded bonus txs beyond the plan")
 	// None of the forwarded txs should be pre-prefetched.
 	for _, tx := range allTxs[:prePrefetchedCount] {
 		_, found := seen[tx.Hash()]

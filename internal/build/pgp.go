@@ -24,7 +24,7 @@ import (
 	"fmt"
 	"os"
 
-	"golang.org/x/crypto/openpgp"
+	"github.com/ProtonMail/go-crypto/openpgp"
 )
 
 // PGPSignFile parses a PGP private key from the specified string and creates a
