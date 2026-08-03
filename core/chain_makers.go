@@ -128,7 +128,7 @@ func (b *BlockGen) addTx(bc *BlockChain, vmConfig vm.Config, tx *types.Transacti
 
 	// Merge the tx-local access event into the "block-local" one, in order to collect
 	// all values, so that the witness can be built.
-	if b.statedb.Database().TrieDB().IsVerkle() {
+	if b.statedb.Database().Type().Is(state.TypeUBT) {
 		b.statedb.AccessEvents().Merge(evm.AccessEvents)
 	}
 	b.txs = append(b.txs, tx)
@@ -445,7 +445,7 @@ func GenerateChain(config *params.ChainConfig, parent *types.Block, engine conse
 	// Forcibly use hash-based state scheme for retaining all nodes in disk.
 	var triedbConfig *triedb.Config = triedb.HashDefaults
 	if config.IsVerkle(config.ChainID) {
-		triedbConfig = triedb.VerkleDefaults
+		triedbConfig = triedb.UBTDefaults
 	}
 	triedb := triedb.NewDatabase(db, triedbConfig)
 	defer triedb.Close()
@@ -494,7 +494,7 @@ func GenerateChainWithGenesis(genesis *Genesis, engine consensus.Engine, n int, 
 	db := rawdb.NewMemoryDatabase()
 	var triedbConfig *triedb.Config = triedb.HashDefaults
 	if genesis.Config != nil && genesis.Config.IsVerkle(genesis.Config.ChainID) {
-		triedbConfig = triedb.VerkleDefaults
+		triedbConfig = triedb.UBTDefaults
 	}
 	genesisTriedb := triedb.NewDatabase(db, triedbConfig)
 	block, err := genesis.Commit(db, genesisTriedb)
