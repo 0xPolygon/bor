@@ -274,7 +274,7 @@ func makeCallVariantGasCallEIP2929(oldCalculator gasFunc, addressPosition int) g
 			evm.StateDB.AddAddressToAccessList(addr)
 			// Charge the remaining difference here already, to correctly calculate available
 			// gas for call
-			if !contract.UseGas(coldCost, evm.Config.Tracer, tracing.GasChangeCallStorageColdAccess) {
+			if !contract.UseGas(GasCosts{RegularGas: coldCost}, evm.Config.Tracer, tracing.GasChangeCallStorageColdAccess) {
 				return GasCosts{}, ErrOutOfGas
 			}
 		}
@@ -408,7 +408,7 @@ func makeCallVariantGasCallEIP7702(intrinsicFunc gasFunc) gasFunc {
 
 			// Charge the remaining difference here already, to correctly calculate
 			// available gas for call
-			if !contract.UseGas(eip2929Cost, evm.Config.Tracer, tracing.GasChangeCallStorageColdAccess) {
+			if !contract.UseGas(GasCosts{RegularGas: eip2929Cost}, evm.Config.Tracer, tracing.GasChangeCallStorageColdAccess) {
 				return GasCosts{}, ErrOutOfGas
 			}
 		}
@@ -437,7 +437,7 @@ func makeCallVariantGasCallEIP7702(intrinsicFunc gasFunc) gasFunc {
 				evm.StateDB.AddAddressToAccessList(target)
 				eip7702Cost = params.ColdAccountAccessCostEIP2929
 			}
-			if !contract.UseGas(eip7702Cost, evm.Config.Tracer, tracing.GasChangeCallStorageColdAccess) {
+			if !contract.UseGas(GasCosts{RegularGas: eip7702Cost}, evm.Config.Tracer, tracing.GasChangeCallStorageColdAccess) {
 				return GasCosts{}, ErrOutOfGas
 			}
 		}

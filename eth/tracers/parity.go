@@ -293,7 +293,7 @@ func (api *API) parityIntrinsicGas(in parityExecInput) uint64 {
 	if err != nil {
 		return 0
 	}
-	return ig
+	return ig.RegularGas
 }
 
 // parityRootGasUsed computes the root trace's gross EVM execution gas =

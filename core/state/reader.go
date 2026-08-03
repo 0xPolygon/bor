@@ -243,12 +243,12 @@ func (r *flatReader) Storage(addr common.Address, key common.Hash) (common.Hash,
 	return value, nil
 }
 
-// trieReader implements the StateReader interface, providing functions to access
-// state from the referenced trie.
+// mptTrieReader implements the StateReader interface, providing functions to
+// access state from the referenced Merkle-Patricia-tree.
 //
-// trieReader is safe for concurrent read.
-type trieReader struct {
-	root common.Hash      // State root which uniquely represent a state
+// mptTrieReader is safe for concurrent read.
+type mptTrieReader struct {
+	root common.Hash      // State root which uniquely represents a state
 	db   *triedb.Database // Database for loading trie
 
 	// Main trie, resolved in constructor. Note either the Merkle-Patricia-tree
@@ -263,53 +263,14 @@ type trieReader struct {
 	concurrentEnabled bool       // if true, skip r.lock (trie uses sync.Map resolve cache)
 }
 
-// newTrieReader constructs a trie reader of the specific state. An error will be
-// returned if the associated trie specified by root is not existent.
-func newTrieReader(root common.Hash, db *triedb.Database) (*trieReader, error) {
-	var (
-		tr  Trie
-		err error
-	)
-	if !db.IsUBT() {
-		tr, err = trie.NewStateTrie(trie.StateTrieID(root), db)
-	} else {
-		// When IsUBT() is true, create a BinaryTrie wrapped in TransitionTrie
-		binTrie, binErr := bintrie.NewBinaryTrie(root, db)
-		if binErr != nil {
-			return nil, binErr
-		}
-
-		// Based on the transition status, determine if the overlay
-		// tree needs to be created, or if a single, target tree is
-		// to be picked.
-		ts := overlay.LoadTransitionState(db.Disk(), root, true)
-		if ts.InTransition() {
-			mpt, err := trie.NewStateTrie(trie.StateTrieID(ts.BaseRoot), db)
-			if err != nil {
-				return nil, err
-			}
-			tr = transitiontrie.NewTransitionTrie(mpt, binTrie, false)
-		} else {
-			// HACK: Use TransitionTrie with nil base as a wrapper to make BinaryTrie
-			// satisfy the Trie interface. This works around the import cycle between
-			// trie and trie/bintrie packages.
-			//
-			// TODO: In future PRs, refactor the package structure to avoid this hack:
-			// - Option 1: Move common interfaces (Trie, NodeIterator) to a separate
-			//   package that both trie and trie/bintrie can import
-			// - Option 2: Create a factory function in the trie package that returns
-			//   BinaryTrie as a Trie interface without direct import
-			// - Option 3: Move BinaryTrie to the main trie package
-			//
-			// The current approach works but adds unnecessary overhead and complexity
-			// by using TransitionTrie when there's no actual transition happening.
-			tr = transitiontrie.NewTransitionTrie(nil, binTrie, false)
-		}
-	}
+// newMPTTrieReader constructs a Merkle-Patricia-tree reader of the specific state.
+// An error will be returned if the associated trie specified by root is not existent.
+func newMPTTrieReader(root common.Hash, db *triedb.Database) (*mptTrieReader, error) {
+	tr, err := trie.NewStateTrie(trie.StateTrieID(root), db)
 	if err != nil {
 		return nil, err
 	}
-	return &trieReader{
+	return &mptTrieReader{
 		root:     root,
 		db:       db,
 		mainTrie: tr,
@@ -317,7 +278,7 @@ func newTrieReader(root common.Hash, db *triedb.Database) (*trieReader, error) {
 }
 
 // account is the inner version of Account and assumes the r.lock is already held.
-func (r *trieReader) account(addr common.Address) (*types.StateAccount, error) {
+func (r *mptTrieReader) account(addr common.Address) (*types.StateAccount, error) {
 	account, err := r.mainTrie.GetAccount(addr)
 	if err != nil {
 		return nil, err
@@ -332,9 +293,9 @@ func (r *trieReader) account(addr common.Address) (*types.StateAccount, error) {
 
 // Account implements StateReader, retrieving the account specified by the address.
 //
-// An error will be returned if the trie state is corrupted. An nil account
+// An error will be returned if the trie state is corrupted. A nil account
 // will be returned if it's not existent in the trie.
-func (r *trieReader) Account(addr common.Address) (*types.StateAccount, error) {
+func (r *mptTrieReader) Account(addr common.Address) (*types.StateAccount, error) {
 	// Fast path: check concurrent-safe cache before acquiring lock.
 	if cached, ok := r.accountCache.Load(addr); ok {
 		return cached.(*types.StateAccount), nil
@@ -363,7 +324,7 @@ func (r *trieReader) Account(addr common.Address) (*types.StateAccount, error) {
 // trie to use a sync.Map resolve cache instead of in-place mutation.
 // After calling this, Account() and Storage() can be called concurrently
 // without the r.lock (using only the sync.Map caches).
-func (r *trieReader) EnableConcurrentReads() {
+func (r *mptTrieReader) EnableConcurrentReads() {
 	if st, ok := r.mainTrie.(*trie.StateTrie); ok {
 		st.EnableConcurrentReads()
 	}
@@ -381,7 +342,7 @@ func (r *trieReader) EnableConcurrentReads() {
 // every worker read accumulates in the same set of trie tracers. Walking
 // reader.subTries here picks up exactly the worker-only-read tries that
 // finalDB doesn't know about.
-func (r *trieReader) CollectStateWitness(addState func(map[string][]byte, common.Hash)) {
+func (r *mptTrieReader) CollectStateWitness(addState func(map[string][]byte, common.Hash)) {
 	if r.mainTrie != nil {
 		addState(r.mainTrie.Witness(), common.Hash{})
 	}
@@ -399,11 +360,11 @@ func (r *trieReader) CollectStateWitness(addState func(map[string][]byte, common
 //
 // An error will be returned if the trie state is corrupted. An empty storage
 // slot will be returned if it's not existent in the trie.
-// storageCacheKey is a composite key for the trieReader storage cache.
+// storageCacheKey is a composite key for the mptTrieReader storage cache.
 // Uses the same layout as stateKey so the maps are compatible.
 type storageCacheKey = stateKey
 
-func (r *trieReader) Storage(addr common.Address, key common.Hash) (common.Hash, error) {
+func (r *mptTrieReader) Storage(addr common.Address, key common.Hash) (common.Hash, error) {
 	cacheKey := storageCacheKey{addr, key}
 	if cached, ok := r.storageCache.Load(cacheKey); ok {
 		return cached.(common.Hash), nil
@@ -424,7 +385,7 @@ func (r *trieReader) Storage(addr common.Address, key common.Hash) (common.Hash,
 
 // subTrieFor returns a Trie suitable for reading storage of addr. It
 // dispatches to the concurrent or locked path based on configuration.
-func (r *trieReader) subTrieFor(addr common.Address) (Trie, error) {
+func (r *mptTrieReader) subTrieFor(addr common.Address) (Trie, error) {
 	if r.concurrentEnabled {
 		return r.subTrieConcurrent(addr)
 	}
@@ -436,7 +397,7 @@ func (r *trieReader) subTrieFor(addr common.Address) (Trie, error) {
 // subTrieConcurrent is the V2 lock-free path: uses sync.Map for the trie
 // cache and EnableConcurrentReads() on freshly opened tries so multiple
 // goroutines can read different addresses without cross-address contention.
-func (r *trieReader) subTrieConcurrent(addr common.Address) (Trie, error) {
+func (r *mptTrieReader) subTrieConcurrent(addr common.Address) (Trie, error) {
 	if v, ok := r.subTries.Load(addr); ok {
 		return v.(Trie), nil
 	}
@@ -458,7 +419,7 @@ func (r *trieReader) subTrieConcurrent(addr common.Address) (Trie, error) {
 
 // subTrieLocked is the legacy mutex-protected path. Verkle uses the
 // merged main trie; MPT uses per-address sub tries cached in subTries.
-func (r *trieReader) subTrieLocked(addr common.Address) (Trie, error) {
+func (r *mptTrieReader) subTrieLocked(addr common.Address) (Trie, error) {
 	if r.db.IsUBT() {
 		return r.mainTrie, nil
 	}
@@ -479,7 +440,7 @@ func (r *trieReader) subTrieLocked(addr common.Address) (Trie, error) {
 
 // resolveSubRoot returns the storage root for addr, resolving the account
 // first if necessary so the cache is populated.
-func (r *trieReader) resolveSubRoot(addr common.Address) (common.Hash, error) {
+func (r *mptTrieReader) resolveSubRoot(addr common.Address) (common.Hash, error) {
 	if v, ok := r.subRoots.Load(addr); ok {
 		return v.(common.Hash), nil
 	}
@@ -490,6 +451,89 @@ func (r *trieReader) resolveSubRoot(addr common.Address) (common.Hash, error) {
 		return v.(common.Hash), nil
 	}
 	return common.Hash{}, nil
+}
+
+// ubtTrieReader implements the StateReader interface, providing functions to access
+// state from the referenced Unified-binary-trie.
+//
+// ubtTrieReader is safe for concurrent read.
+type ubtTrieReader struct {
+	root common.Hash      // State root which uniquely represents a state
+	db   *triedb.Database // Database for loading trie
+	tr   Trie             // Referenced unified binary trie
+	lock sync.Mutex       // Lock for protecting concurrent read
+}
+
+// newUBTTrieReader constructs a Unified-binary-trie reader of the specific state.
+// An error will be returned if the associated trie specified by root is not existent.
+func newUBTTrieReader(root common.Hash, db *triedb.Database) (*ubtTrieReader, error) {
+	binTrie, binErr := bintrie.NewBinaryTrie(root, db)
+	if binErr != nil {
+		return nil, binErr
+	}
+	// Based on the transition status, determine if the overlay
+	// tree needs to be created, or if a single, target tree is
+	// to be picked.
+	var (
+		tr Trie
+		ts = overlay.LoadTransitionState(db.Disk(), root, true)
+	)
+	if ts.InTransition() {
+		mpt, err := trie.NewStateTrie(trie.StateTrieID(ts.BaseRoot), db)
+		if err != nil {
+			return nil, err
+		}
+		tr = transitiontrie.NewTransitionTrie(mpt, binTrie, false)
+	} else {
+		// HACK: Use TransitionTrie with nil base as a wrapper to make BinaryTrie
+		// satisfy the Trie interface. This works around the import cycle between
+		// trie and trie/bintrie packages.
+		//
+		// TODO: In future PRs, refactor the package structure to avoid this hack:
+		// - Option 1: Move common interfaces (Trie, NodeIterator) to a separate
+		//   package that both trie and trie/bintrie can import
+		// - Option 2: Create a factory function in the trie package that returns
+		//   BinaryTrie as a Trie interface without direct import
+		// - Option 3: Move BinaryTrie to the main trie package
+		//
+		// The current approach works but adds unnecessary overhead and complexity
+		// by using TransitionTrie when there's no actual transition happening.
+		tr = transitiontrie.NewTransitionTrie(nil, binTrie, false)
+	}
+	return &ubtTrieReader{
+		root: root,
+		db:   db,
+		tr:   tr,
+	}, nil
+}
+
+// Account implements StateReader, retrieving the account specified by the address.
+//
+// An error will be returned if the trie state is corrupted. A nil account
+// will be returned if it's not existent in the trie.
+func (r *ubtTrieReader) Account(addr common.Address) (*types.StateAccount, error) {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+
+	return r.tr.GetAccount(addr)
+}
+
+// Storage implements StateReader, retrieving the storage slot specified by the
+// address and slot key.
+//
+// An error will be returned if the trie state is corrupted. An empty storage
+// slot will be returned if it's not existent in the trie.
+func (r *ubtTrieReader) Storage(addr common.Address, key common.Hash) (common.Hash, error) {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+
+	ret, err := r.tr.GetStorage(addr, key.Bytes())
+	if err != nil {
+		return common.Hash{}, err
+	}
+	var value common.Hash
+	value.SetBytes(ret)
+	return value, nil
 }
 
 // multiStateReader is the aggregation of a list of StateReader interface,

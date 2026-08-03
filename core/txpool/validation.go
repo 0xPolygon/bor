@@ -132,13 +132,13 @@ func ValidateTransaction(tx *types.Transaction, head *types.Header, signer types
 	if err != nil {
 		return err
 	}
-	if tx.Gas() < intrGas {
-		return fmt.Errorf("%w: gas %v, minimum needed %v", core.ErrIntrinsicGas, tx.Gas(), intrGas)
+	if tx.Gas() < intrGas.RegularGas {
+		return fmt.Errorf("%w: gas %v, minimum needed %v", core.ErrIntrinsicGas, tx.Gas(), intrGas.RegularGas)
 	}
 	// Ensure the transaction can cover floor data gas.
 	// EIP-7623
 	if opts.Config.IsPrague(head.Number) && opts.Config.Bor != nil {
-		floorDataGas, err := core.FloorDataGas(tx.Data())
+		floorDataGas, err := core.FloorDataGas(rules, tx.Data())
 		if err != nil {
 			return err
 		}

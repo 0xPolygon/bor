@@ -24,6 +24,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/core/types/bal"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -65,6 +66,9 @@ type StateDB interface {
 	// Notably this also returns true for self-destructed accounts within the current transaction.
 	Exist(common.Address) bool
 
+	// Touch accesses the state without returning anything.
+	Touch(common.Address)
+
 	// IsNewContract reports whether the contract at the given address was deployed
 	// during the current transaction.
 	IsNewContract(addr common.Address) bool
@@ -102,7 +106,7 @@ type StateDB interface {
 	Logs() []*types.Log
 
 	// Finalise must be invoked at the end of a transaction
-	Finalise(bool)
+	Finalise(bool) *bal.StateAccessList
 
 	// Inner returns the underlying state instance. Needed for bor consensus.
 	Inner() *state.StateDB
