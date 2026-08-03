@@ -116,7 +116,7 @@ var (
 		Name:     "trace.noreturndata",
 		Aliases:  []string{"noreturndata"},
 		Value:    true,
-		Usage:    "enable return data output",
+		Usage:    "disable return data output",
 		Category: traceCategory,
 	}
 

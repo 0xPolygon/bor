@@ -262,16 +262,16 @@ func TestCopyWithDirtyJournal(t *testing.T) {
 
 	orig.Finalise(true)
 	for i := byte(0); i < 255; i++ {
-		root := orig.GetStorageRoot(common.BytesToAddress([]byte{i}))
-		if root != (common.Hash{}) {
-			t.Errorf("Unexpected storage root %x", root)
+		balance := orig.GetBalance(common.BytesToAddress([]byte{i}))
+		if !balance.IsZero() {
+			t.Errorf("Unexpected balance %v", balance)
 		}
 	}
 	cpy.Finalise(true)
 	for i := byte(0); i < 255; i++ {
-		root := cpy.GetStorageRoot(common.BytesToAddress([]byte{i}))
-		if root != (common.Hash{}) {
-			t.Errorf("Unexpected storage root %x", root)
+		balance := cpy.GetBalance(common.BytesToAddress([]byte{i}))
+		if !balance.IsZero() {
+			t.Errorf("Unexpected balance %v", balance)
 		}
 	}
 	if cpy.IntermediateRoot(true) != orig.IntermediateRoot(true) {
@@ -410,9 +410,7 @@ func newTestAction(addr common.Address, r *rand.Rand) testAction {
 				}
 				contractHash := s.GetCodeHash(addr)
 				emptyCode := contractHash == (common.Hash{}) || contractHash == types.EmptyCodeHash
-				storageRoot := s.GetStorageRoot(addr)
-				emptyStorage := storageRoot == (common.Hash{}) || storageRoot == types.EmptyRootHash
-				if s.GetNonce(addr) == 0 && emptyCode && emptyStorage {
+				if s.GetNonce(addr) == 0 && emptyCode {
 					s.CreateContract(addr)
 					// We also set some code here, to prevent the
 					// CreateContract action from being performed twice in a row,
@@ -675,7 +673,7 @@ func (test *snapshotTest) checkEqual(state, checkstate *StateDB) error {
 		{
 			have := state.transientStorage
 			want := checkstate.transientStorage
-			if !have.EqualTS(want) {
+			if !maps.Equal(have, want) {
 				return fmt.Errorf("transient storage differs ,have\n%v\nwant\n%v",
 					have.PrettyPrint(),
 					want.PrettyPrint())
@@ -2063,21 +2061,6 @@ func TestShouldDeleteSmartContractIfItExistsInState(t *testing.T) {
 	assert.Equal(t, []byte(nil), codeAfterDeletion, "smart contract should be deleted")
 }
 
-// EqualTS is a transientStorage's helper method for comparing transient storage maps.
-func (t transientStorage) EqualTS(other transientStorage) bool {
-	// Compare the maps
-	if len(t) != len(other) {
-		return false
-	}
-	for k, v := range t {
-		ov, ok := other[k]
-		if !ok || !maps.Equal(v, ov) {
-			return false
-		}
-	}
-	return true
-}
-
 // containsKey returns true if the provided write descriptor list contains the given key.
 func containsKey(writes []blockstm.WriteDescriptor, key blockstm.Key) bool {
 	for _, w := range writes {
@@ -2397,4 +2380,32 @@ func BenchmarkMVReadOverhead(b *testing.B) {
 			_ = cleanDB.Copy()
 		}
 	})
+}
+
+// TestStateDBCopyBinaryTrie exercises StateDB.Copy on a binary-trie-backed state
+// database. Before the mustCopyTrie fix (#34758) this panicked with "unknown trie
+// type *bintrie.BinaryTrie", because the type switch only covered *trie.StateTrie
+// and *transitiontrie.TransitionTrie.
+//
+// Upstream names this TestStateDBCopyUBT and reaches the binary tree via
+// triedb.UBTDefaults; Bor kept the pre-rename triedb.VerkleDefaults, which sets
+// IsVerkle and so yields the same binary trie now that go-verkle is gone.
+func TestStateDBCopyBinaryTrie(t *testing.T) {
+	disk := rawdb.NewMemoryDatabase()
+	tdb := triedb.NewDatabase(disk, triedb.VerkleDefaults)
+	sdb := NewDatabase(tdb, nil)
+
+	orig, err := New(types.EmptyRootHash, sdb)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Touch the trie so StateDB.Copy actually has to copy it.
+	addr := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	orig.SetBalance(addr, uint256.NewInt(1_000), tracing.BalanceChangeUnspecified)
+
+	// Must not panic.
+	if cpy := orig.Copy(); cpy == nil {
+		t.Fatal("Copy returned nil")
+	}
 }

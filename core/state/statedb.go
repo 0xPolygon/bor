@@ -790,6 +790,9 @@ func (s *StateDB) GetNonce(addr common.Address) uint64 {
 
 // GetStorageRoot retrieves the storage root from the given address or empty
 // if object not found.
+//
+// Note: the storage root returned corresponds to the trie since last Intermediate
+// operation, some recent in-memory changes are excluded.
 func (s *StateDB) GetStorageRoot(addr common.Address) common.Hash {
 	stateObject := s.getStateObject(addr)
 	if stateObject != nil {
@@ -1785,7 +1788,7 @@ func (s *StateDB) commit(deleteEmptyObjects bool, noStorageWiping bool, blockNum
 		return nil, fmt.Errorf("commit aborted due to earlier error: %v", s.dbErr)
 	}
 	// Finalize any pending changes and merge everything into the tries
-	s.IntermediateRoot(deleteEmptyObjects)
+	root := s.IntermediateRoot(deleteEmptyObjects)
 
 	// Short circuit if any error occurs within the IntermediateRoot.
 	if s.dbErr != nil {
@@ -1847,7 +1850,6 @@ func (s *StateDB) commit(deleteEmptyObjects bool, noStorageWiping bool, blockNum
 	// writes to run in parallel with the computations.
 	var (
 		start   = time.Now()
-		root    common.Hash
 		workers errgroup.Group
 	)
 	// Schedule the account trie first since that will be the biggest, so give
@@ -1861,9 +1863,7 @@ func (s *StateDB) commit(deleteEmptyObjects bool, noStorageWiping bool, blockNum
 	// code didn't anticipate for.
 	workers.Go(func() error {
 		// Write the account trie changes, measuring the amount of wasted time
-		newroot, set := s.trie.Commit(true)
-		root = newroot
-
+		_, set := s.trie.Commit(true)
 		if err := merge(set); err != nil {
 			return err
 		}
