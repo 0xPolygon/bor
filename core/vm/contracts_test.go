@@ -796,8 +796,8 @@ func TestPIP88SStoreGas(t *testing.T) {
 			}
 			refundDelta := int64(statedb.GetRefund()) - int64(refundBefore)
 
-			if gas != tc.wantGas {
-				t.Errorf("gas: got %d, want %d", gas, tc.wantGas)
+			if gas.RegularGas != tc.wantGas {
+				t.Errorf("gas: got %d, want %d", gas.RegularGas, tc.wantGas)
 			}
 			if refundDelta != tc.wantRefundDelta {
 				t.Errorf("refund delta: got %d, want %d", refundDelta, tc.wantRefundDelta)
@@ -878,8 +878,8 @@ func TestPIP88ForkBoundary(t *testing.T) {
 			if err != nil {
 				t.Fatalf("SLOAD dynamicGas: %v", err)
 			}
-			if gas != tc.wantColdSloadGas {
-				t.Errorf("cold SLOAD gas via LookupInstructionSet: got %d, want %d", gas, tc.wantColdSloadGas)
+			if gas.RegularGas != tc.wantColdSloadGas {
+				t.Errorf("cold SLOAD gas via LookupInstructionSet: got %d, want %d", gas.RegularGas, tc.wantColdSloadGas)
 			}
 		})
 	}

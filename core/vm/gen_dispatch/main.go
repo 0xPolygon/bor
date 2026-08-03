@@ -253,10 +253,10 @@ func (e *emitter) emitGas(gasExpr string) {
 
 // emitFlush emits the gasAccum flush check + deduction.
 func (e *emitter) emitFlush() {
-	e.p("if contract.Gas < gasAccum {\n")
+	e.p("if contract.Gas.RegularGas < gasAccum {\n")
 	e.p("return nil, ErrOutOfGas\n")
 	e.p("}\n")
-	e.p("contract.Gas -= gasAccum\n")
+	e.p("contract.Gas.RegularGas -= gasAccum\n")
 	e.p("gasAccum = 0\n")
 }
 
@@ -414,10 +414,10 @@ return nil, &ErrStackOverflow{stackLen: sLen, limit: operation.maxStack}
 }
 
 cost := operation.constantGas
-if contract.Gas < cost {
+if contract.Gas.RegularGas < cost {
 return nil, ErrOutOfGas
 }
-contract.Gas -= cost
+contract.Gas.RegularGas -= cost
 
 if operation.dynamicGas != nil {
 var memorySize uint64
@@ -431,7 +431,7 @@ if memorySize, ovf = math.SafeMul(toWordSize(memSize), 32); ovf {
 return nil, ErrGasUintOverflow
 }
 }
-var dynamicCost uint64
+var dynamicCost GasCosts
 dynamicCost, err = operation.dynamicGas(evm, contract, stack, mem, memorySize)
 if err != nil {
 `)
@@ -439,10 +439,10 @@ if err != nil {
 	e.buf.WriteString(`%w: %v`)
 	e.p("\", ErrOutOfGas, err)\n")
 	e.p(`}
-if contract.Gas < dynamicCost {
+if contract.Gas.RegularGas < dynamicCost.RegularGas {
 return nil, ErrOutOfGas
 }
-contract.Gas -= dynamicCost
+contract.Gas.RegularGas -= dynamicCost.RegularGas
 if memorySize > 0 {
 mem.Resize(memorySize)
 }

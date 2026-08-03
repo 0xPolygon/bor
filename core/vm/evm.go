@@ -390,7 +390,7 @@ func (evm *EVM) Call(caller common.Address, addr common.Address, input []byte, g
 			contract.IsSystemCall = isSystemCall(caller)
 			contract.SetCallCode(evm.resolveCodeHash(addr), code)
 			ret, err = evm.Run(contract, input, false)
-			gas = contract.Gas
+			gas = contract.Gas.RegularGas
 		}
 	}
 	// When an error was returned by the EVM or when setting the creation code
@@ -451,7 +451,7 @@ func (evm *EVM) CallCode(caller common.Address, addr common.Address, input []byt
 		contract := NewContract(caller, caller, value, gas, evm.jumpDests)
 		contract.SetCallCode(evm.resolveCodeHash(addr), evm.resolveCode(addr))
 		ret, err = evm.Run(contract, input, false)
-		gas = contract.Gas
+		gas = contract.Gas.RegularGas
 	}
 
 	if err != nil {
@@ -498,7 +498,7 @@ func (evm *EVM) DelegateCall(originCaller common.Address, caller common.Address,
 		contract := NewContract(originCaller, caller, value, gas, evm.jumpDests)
 		contract.SetCallCode(evm.resolveCodeHash(addr), evm.resolveCode(addr))
 		ret, err = evm.Run(contract, input, false)
-		gas = contract.Gas
+		gas = contract.Gas.RegularGas
 	}
 
 	if err != nil {
@@ -556,7 +556,7 @@ func (evm *EVM) StaticCall(caller common.Address, addr common.Address, input []b
 		// above we revert to the snapshot and consume any gas remaining. Additionally
 		// when we're in Homestead this also counts for code storage gas errors.
 		ret, err = evm.Run(contract, input, true)
-		gas = contract.Gas
+		gas = contract.Gas.RegularGas
 	}
 
 	if err != nil {
@@ -671,10 +671,10 @@ func (evm *EVM) create(caller common.Address, code []byte, gas uint64, value *ui
 		evm.StateDB.RevertToSnapshot(snapshot)
 
 		if err != ErrExecutionReverted {
-			contract.UseGas(contract.Gas, evm.Config.Tracer, tracing.GasChangeCallFailedExecution)
+			contract.UseGas(contract.Gas.RegularGas, evm.Config.Tracer, tracing.GasChangeCallFailedExecution)
 		}
 	}
-	return ret, address, contract.Gas, err
+	return ret, address, contract.Gas.RegularGas, err
 }
 
 // initNewContract runs a new contract's creation code, performs checks on the
@@ -709,7 +709,7 @@ func (evm *EVM) initNewContract(contract *Contract, address common.Address) ([]b
 			return ret, ErrCodeStoreOutOfGas
 		}
 	} else {
-		consumed, wanted := evm.AccessEvents.CodeChunksRangeGas(address, 0, uint64(len(ret)), uint64(len(ret)), true, contract.Gas)
+		consumed, wanted := evm.AccessEvents.CodeChunksRangeGas(address, 0, uint64(len(ret)), uint64(len(ret)), true, contract.Gas.RegularGas)
 		contract.UseGas(consumed, evm.Config.Tracer, tracing.GasChangeWitnessCodeChunk)
 		if len(ret) > 0 && (consumed < wanted) {
 			return ret, ErrCodeStoreOutOfGas

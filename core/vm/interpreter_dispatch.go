@@ -59,10 +59,10 @@ func (evm *EVM) runSwitch(
 
 		switch OpCode(op) {
 		case STOP:
-			if contract.Gas < gasAccum {
+			if contract.Gas.RegularGas < gasAccum {
 				return nil, ErrOutOfGas
 			}
-			contract.Gas -= gasAccum
+			contract.Gas.RegularGas -= gasAccum
 			gasAccum = 0
 			return nil, errStopToken
 		case ADD:
@@ -317,10 +317,10 @@ func (evm *EVM) runSwitch(
 			stack.top--
 		case JUMP:
 			gasAccum += GasMidStep
-			if contract.Gas < gasAccum {
+			if contract.Gas.RegularGas < gasAccum {
 				return nil, ErrOutOfGas
 			}
-			contract.Gas -= gasAccum
+			contract.Gas.RegularGas -= gasAccum
 			gasAccum = 0
 			if stack.top < 1 {
 				return nil, &ErrStackUnderflow{stackLen: stack.top, required: 1}
@@ -337,10 +337,10 @@ func (evm *EVM) runSwitch(
 			continue
 		case JUMPI:
 			gasAccum += GasSlowStep
-			if contract.Gas < gasAccum {
+			if contract.Gas.RegularGas < gasAccum {
 				return nil, ErrOutOfGas
 			}
-			contract.Gas -= gasAccum
+			contract.Gas.RegularGas -= gasAccum
 			gasAccum = 0
 			if stack.top < 2 {
 				return nil, &ErrStackUnderflow{stackLen: stack.top, required: 2}
@@ -374,16 +374,16 @@ func (evm *EVM) runSwitch(
 			stack.top++
 		case JUMPDEST:
 			gasAccum += params.JumpdestGas
-			if contract.Gas < gasAccum {
+			if contract.Gas.RegularGas < gasAccum {
 				return nil, ErrOutOfGas
 			}
-			contract.Gas -= gasAccum
+			contract.Gas.RegularGas -= gasAccum
 			gasAccum = 0
 		case INVALID:
-			if contract.Gas < gasAccum {
+			if contract.Gas.RegularGas < gasAccum {
 				return nil, ErrOutOfGas
 			}
-			contract.Gas -= gasAccum
+			contract.Gas.RegularGas -= gasAccum
 			gasAccum = 0
 			return nil, &ErrInvalidOpCode{opcode: INVALID}
 		case PUSH0:
@@ -732,10 +732,10 @@ func (evm *EVM) runSwitch(
 			}
 			stack.data[t], stack.data[t-16] = stack.data[t-16], stack.data[t]
 		default:
-			if contract.Gas < gasAccum {
+			if contract.Gas.RegularGas < gasAccum {
 				return nil, ErrOutOfGas
 			}
-			contract.Gas -= gasAccum
+			contract.Gas.RegularGas -= gasAccum
 			gasAccum = 0
 
 			operation := jumpTable[OpCode(op)]
@@ -750,10 +750,10 @@ func (evm *EVM) runSwitch(
 			}
 
 			cost := operation.constantGas
-			if contract.Gas < cost {
+			if contract.Gas.RegularGas < cost {
 				return nil, ErrOutOfGas
 			}
-			contract.Gas -= cost
+			contract.Gas.RegularGas -= cost
 
 			if operation.dynamicGas != nil {
 				var memorySize uint64
@@ -767,15 +767,15 @@ func (evm *EVM) runSwitch(
 						return nil, ErrGasUintOverflow
 					}
 				}
-				var dynamicCost uint64
+				var dynamicCost GasCosts
 				dynamicCost, err = operation.dynamicGas(evm, contract, stack, mem, memorySize)
 				if err != nil {
 					return nil, fmt.Errorf("%w: %v", ErrOutOfGas, err)
 				}
-				if contract.Gas < dynamicCost {
+				if contract.Gas.RegularGas < dynamicCost.RegularGas {
 					return nil, ErrOutOfGas
 				}
-				contract.Gas -= dynamicCost
+				contract.Gas.RegularGas -= dynamicCost.RegularGas
 				if memorySize > 0 {
 					mem.Resize(memorySize)
 				}
