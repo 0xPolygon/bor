@@ -654,7 +654,7 @@ func (p *Peer) validateLastBlockReceipt(receiptLists []*ReceiptList69, id uint64
 	}
 
 	// Verify that the number of receipts delivered is one the block's gas could pay for.
-	minTxGas := uint64(params.TxGas)
+	minTxGas := params.TxGas
 	if p.chainConfig != nil && p.chainConfig.IsAmsterdam(new(big.Int).SetUint64(number)) {
 		minTxGas = minTxGasAmsterdam
 	}
