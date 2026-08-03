@@ -33,6 +33,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/blockstm"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+
 	// Upstream dropped this import in #33102; Bor still needs it for the
 	// BlockSTM-only NewWithMVHashmap constructor.
 	"github.com/ethereum/go-ethereum/core/state/snapshot"
