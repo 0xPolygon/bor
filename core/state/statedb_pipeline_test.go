@@ -852,3 +852,57 @@ func TestApplyFlatDiffForCommitFast_PreservesParentStorageRootAfterOverlayExecut
 	require.Equal(t, rootSlow, rootFast,
 		"fast replay must preserve the parent root's storage trie when FlatDiff account metadata came from an overlay execution")
 }
+
+// TestFlatDiffOverlay_DestructByExecutingBlock covers the case
+// TestFlatDiffOverlay_DestructAndResurrect does not: the destruct is performed
+// by the block currently executing over the overlay, not encoded inside the
+// FlatDiff. The overlay holds the parent block's post-state, so it is exactly
+// the "previous database" a same-block destruct must not consult — reading it
+// would return the pre-destruct value where a non-pipelined node returns zero.
+func TestFlatDiffOverlay_DestructByExecutingBlock(t *testing.T) {
+	db := NewDatabaseForTesting()
+	sdb, err := New(types.EmptyRootHash, db)
+	require.NoError(t, err)
+
+	addr := common.HexToAddress("0xdead03")
+	slot := common.HexToHash("0x01")
+	stale := common.HexToHash("0xbeef")
+
+	sdb.CreateAccount(addr)
+	sdb.SetNonce(addr, 5, 0)
+	sdb.SetState(addr, slot, common.HexToHash("0x1111"))
+	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	require.NoError(t, err)
+
+	// Parent block rewrote the slot; the overlay carries that post-state.
+	diff := &FlatDiff{
+		Accounts: map[common.Address]types.StateAccount{
+			addr: {
+				Nonce:    6,
+				Balance:  uint256.NewInt(0),
+				Root:     types.EmptyRootHash,
+				CodeHash: types.EmptyCodeHash.Bytes(),
+			},
+		},
+		Storage:   map[common.Address]map[common.Hash]common.Hash{addr: {slot: stale}},
+		Destructs: make(map[common.Address]struct{}),
+		Code:      make(map[common.Hash][]byte),
+	}
+
+	overlayDB, err := NewWithFlatBase(root, db, diff)
+	require.NoError(t, err)
+
+	// Sanity: without a destruct the overlay is authoritative for the slot.
+	require.Equal(t, stale, overlayDB.GetState(addr, slot))
+
+	// Now the executing block destructs the account and recreates it at the
+	// same address, then reads the slot it never rewrote.
+	overlayDB.SelfDestruct(addr)
+	overlayDB.Finalise(true)
+	overlayDB.CreateAccount(addr)
+
+	require.Equal(t, common.Hash{}, overlayDB.GetState(addr, slot),
+		"slot must read as zero after an in-block destruct; the overlay is the previous database")
+	require.Equal(t, common.Hash{}, overlayDB.GetCommittedState(addr, slot),
+		"committed read must also be zero after an in-block destruct")
+}

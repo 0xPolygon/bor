@@ -128,16 +128,16 @@ func TestReaderStaleFallbackHelpers(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, blob)
 
+	// The reader's state is not the base disk layer and not a descendant of
+	// it, so the base cannot stand in for it: its flat data belongs to another
+	// state and there is no hash to catch the substitution. Both fallbacks must
+	// report staleness rather than serve it.
 	blob, err = r.accountFallback(common.HexToHash("0x1"))
-	if err != nil {
-		require.ErrorIs(t, err, errNotCoveredYet)
-	}
+	require.ErrorIs(t, err, errSnapshotStale)
 	require.Nil(t, blob)
 
 	blob, err = r.storageFallback(common.HexToHash("0x1"), common.HexToHash("0x2"))
-	if err != nil {
-		require.ErrorIs(t, err, errNotCoveredYet)
-	}
+	require.ErrorIs(t, err, errSnapshotStale)
 	require.Nil(t, blob)
 
 	blob, got, loc, err := r.nodeFallback(common.Hash{}, []byte{1})
@@ -237,7 +237,7 @@ func TestReaderPublicFallbackBranches(t *testing.T) {
 		require.Equal(t, blob, got)
 	})
 
-	t.Run("stale lookup falls back for accounts and storage", func(t *testing.T) {
+	t.Run("stale lookup surfaces staleness for accounts and storage", func(t *testing.T) {
 		db := New(rawdb.NewMemoryDatabase(), nil, false)
 		stale := &readerTestLayer{
 			accountFn: func(common.Hash, int) ([]byte, error) {
@@ -249,14 +249,13 @@ func TestReaderPublicFallbackBranches(t *testing.T) {
 		}
 		r := &reader{db: db, layer: stale, state: common.HexToHash("0xdead")}
 
+		// A lookup-index rejection means the reader's state is neither the disk
+		// layer nor a descendant of it, so the disk layer's flat data belongs to
+		// a different state. Propagate the staleness instead of substituting it.
 		_, err := r.AccountRLP(common.HexToHash("0x1"))
-		if err != nil {
-			require.ErrorIs(t, err, errNotCoveredYet)
-		}
+		require.ErrorIs(t, err, errSnapshotStale)
 		_, err = r.Storage(common.HexToHash("0x1"), common.HexToHash("0x2"))
-		if err != nil {
-			require.ErrorIs(t, err, errNotCoveredYet)
-		}
+		require.ErrorIs(t, err, errSnapshotStale)
 	})
 
 	t.Run("located stale disk layer retries through fallback", func(t *testing.T) {

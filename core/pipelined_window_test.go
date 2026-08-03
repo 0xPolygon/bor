@@ -16,6 +16,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb/memorydb"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/trie"
 )
@@ -194,4 +195,150 @@ func requireRootCommitted(t *testing.T, chain *BlockChain, root common.Hash) {
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
+}
+
+// TestPipelinedImportSRC_RootMismatchRollback covers the failure path the
+// pipeline's happy path defers all verification to: a block whose header root
+// disagrees with the root SRC computes. Because the pipeline publishes the head
+// before verifying, the rollback has to undo the durable markers and the
+// overlay, not just the head pointer — and the collector must not try to take
+// chainmu, which the thread waiting on it already holds.
+//
+// The batch is inserted from a goroutine with a deadline so a regression to the
+// deadlocking shape fails the test instead of hanging the suite.
+func TestPipelinedImportSRC_RootMismatchRollback(t *testing.T) {
+	testPipelinedImportSRCRootMismatchRollback(t, rawdb.HashScheme)
+	testPipelinedImportSRCRootMismatchRollback(t, rawdb.PathScheme)
+}
+
+func testPipelinedImportSRCRootMismatchRollback(t *testing.T, scheme string) {
+	var (
+		key, _    = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+		addr      = crypto.PubkeyToAddress(key.PublicKey)
+		recipient = common.HexToAddress("0x00000000000000000000000000000000deadbeef")
+		funds     = new(big.Int).Mul(big.NewInt(1000), big.NewInt(params.Ether))
+		gspec     = &Genesis{
+			Config:  params.AllEthashProtocolChanges,
+			Alloc:   types.GenesisAlloc{addr: {Balance: funds}},
+			BaseFee: big.NewInt(params.InitialBaseFee),
+		}
+		signer = types.LatestSigner(gspec.Config)
+		engine = ethash.NewFaker()
+	)
+
+	_, blocks, _ := GenerateChainWithGenesis(gspec, engine, 2, func(i int, gen *BlockGen) {
+		tx, _ := types.SignTx(
+			types.NewTransaction(gen.TxNonce(addr), recipient, big.NewInt(10000), params.TxGas, gen.header.BaseFee, nil),
+			signer, key,
+		)
+		gen.AddTx(tx)
+	})
+
+	// Corrupt the first block's state root only. Receipt root, bloom and gas
+	// stay valid, so ValidateStateCheap admits it and the divergence is caught
+	// by SRC — the exact path the recovery code exists for. The second block is
+	// re-parented onto the corrupted hash so the batch stays contiguous and the
+	// collect of block 1's SRC happens while chainmu is held for block 2.
+	badHeader := types.CopyHeader(blocks[0].Header())
+	badHeader.Root = common.HexToHash("0xdeadbeef")
+	bad := types.NewBlockWithHeader(badHeader).WithBody(*blocks[0].Body())
+
+	nextHeader := types.CopyHeader(blocks[1].Header())
+	nextHeader.ParentHash = bad.Hash()
+	next := types.NewBlockWithHeader(nextHeader).WithBody(*blocks[1].Body())
+
+	chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, pipelinedConfig(scheme))
+	require.NoError(t, err)
+	defer chain.Stop()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := chain.InsertChain(types.Blocks{bad, next}, false)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		require.Error(t, err, "inserting a block whose root SRC disproves must fail")
+	case <-time.After(60 * time.Second):
+		t.Fatal("InsertChain deadlocked on the root-mismatch recovery path")
+	}
+
+	// Head must be back at genesis, with the rejected block's durable markers
+	// removed — a stale canonical hash would keep serving it over RPC.
+	require.Equal(t, uint64(0), chain.CurrentBlock().Number.Uint64(),
+		"head must roll back to the parent of the rejected block")
+	require.NotEqual(t, bad.Hash(), chain.GetCanonicalHash(bad.NumberU64()),
+		"canonical hash of the rejected block must be removed")
+	for _, tx := range bad.Transactions() {
+		require.Nil(t, rawdb.ReadTxLookupEntry(chain.db, tx.Hash()),
+			"tx lookup entry of the rejected block must be removed")
+	}
+
+	// The overlay must stop advertising the rejected post-state, and the
+	// pending entry must be cleared — leaving it set is what wedges every
+	// later import behind the same failure.
+	chain.pendingImportSRCMu.Lock()
+	pending := chain.pendingImportSRC
+	chain.pendingImportSRCMu.Unlock()
+	require.Nil(t, pending, "pending import SRC must be cleared after a failed collect")
+	require.Nil(t, chain.GetLastFlatDiff(), "FlatDiff overlay must be dropped after rollback")
+
+	// The node must keep following the chain: the honest blocks now import.
+	inserted, err := chain.InsertChain(blocks, false)
+	require.NoError(t, err, "import must recover after a rejected block (inserted %d)", inserted)
+	require.Equal(t, blocks[len(blocks)-1].NumberU64(), chain.CurrentBlock().Number.Uint64())
+}
+
+// TestPipelinedImportSRC_PipelineActuallyRuns is the positive control for the
+// rest of the pipelined suite: every other test asserts an outcome the serial
+// path produces identically, so all of them would still pass if the pipeline
+// were silently disabled. This one fails in that case — it requires the
+// pipelined block counter to advance under the pipelined config, and to stay
+// put under the default config on the same chain.
+func TestPipelinedImportSRC_PipelineActuallyRuns(t *testing.T) {
+	metrics.Enable()
+
+	var (
+		key, _    = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+		addr      = crypto.PubkeyToAddress(key.PublicKey)
+		recipient = common.HexToAddress("0x00000000000000000000000000000000deadbeef")
+		funds     = new(big.Int).Mul(big.NewInt(1000), big.NewInt(params.Ether))
+		gspec     = &Genesis{
+			Config:  params.AllEthashProtocolChanges,
+			Alloc:   types.GenesisAlloc{addr: {Balance: funds}},
+			BaseFee: big.NewInt(params.InitialBaseFee),
+		}
+		signer = types.LatestSigner(gspec.Config)
+		engine = ethash.NewFaker()
+	)
+
+	const numBlocks = 4
+	_, blocks, _ := GenerateChainWithGenesis(gspec, engine, numBlocks, func(i int, gen *BlockGen) {
+		tx, _ := types.SignTx(
+			types.NewTransaction(gen.TxNonce(addr), recipient, big.NewInt(10000), params.TxGas, gen.header.BaseFee, nil),
+			signer, key,
+		)
+		gen.AddTx(tx)
+	})
+
+	insert := func(cfg *BlockChainConfig) int64 {
+		t.Helper()
+		before := pipelineImportBlocksCounter.Snapshot().Count()
+		chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, cfg)
+		require.NoError(t, err)
+		defer chain.Stop()
+		_, err = chain.InsertChain(blocks, false)
+		require.NoError(t, err)
+		// The last block's SRC is left in flight by design; flushing settles it
+		// so the counter reflects the whole batch.
+		require.NoError(t, chain.flushPendingImportSRC())
+		return pipelineImportBlocksCounter.Snapshot().Count() - before
+	}
+
+	pipelined := insert(pipelinedConfig(rawdb.PathScheme))
+	require.Equal(t, int64(numBlocks), pipelined,
+		"pipelined config must route every block through the SRC pipeline")
+
+	serial := insert(DefaultConfig().WithStateScheme(rawdb.PathScheme))
+	require.Zero(t, serial, "default config must not run the pipeline")
 }

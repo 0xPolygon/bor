@@ -321,6 +321,24 @@ func (tree *layerTree) bottom() *diskLayer {
 	return tree.base
 }
 
+// bottomIfAncestorOf returns the current base disk layer only when reading the
+// given state from it is sound: either the state is the disk layer itself, or
+// the disk layer is an ancestor of it, so nothing newer than the requested
+// state can have been flattened in. It returns nil when the disk layer has
+// advanced past the requested state, or sits on a different branch after a
+// reorg — in both cases its flat contents belong to a state the caller did not
+// ask for, and unlike trie nodes there is no hash to catch the mismatch.
+func (tree *layerTree) bottomIfAncestorOf(state common.Hash) *diskLayer {
+	tree.lock.RLock()
+	defer tree.lock.RUnlock()
+
+	base := tree.base
+	if base.rootHash() == state || tree.isDescendant(state, base.rootHash()) {
+		return base
+	}
+	return nil
+}
+
 // lookupAccount returns the layer that is guaranteed to contain the account data
 // corresponding to the specified state root being queried.
 func (tree *layerTree) lookupAccount(accountHash common.Hash, state common.Hash) (layer, error) {

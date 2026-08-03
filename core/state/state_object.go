@@ -233,6 +233,18 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 		return value
 	}
 
+	// If this block's own execution destructed the account, its storage is
+	// wiped and no previous database may be consulted — including the FlatDiff
+	// overlay, which holds the parent block's post-state. Anything set after a
+	// resurrection is in pendingStorage above. This check has to precede the
+	// overlay probe; the equivalent stateObjectsDestruct check further down
+	// cannot, because the FlatDiff replay paths seed that map with the parent
+	// block's destructs, whose overlay entries are legitimate.
+	if _, destructed := s.db.currentBlockDestructs[s.address]; destructed {
+		s.originStorage[key] = common.Hash{}
+		return common.Hash{}
+	}
+
 	// Check the FlatDiff reference for storage slots from the parent block.
 	// It must beat originStorage because this object may have been cached from
 	// committedParentRoot before the FlatDiff reference was attached.

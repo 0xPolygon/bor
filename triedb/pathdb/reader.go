@@ -207,9 +207,11 @@ func (r *reader) nodeFallback(owner common.Hash, path []byte) ([]byte, common.Ha
 func (r *reader) AccountRLP(hash common.Hash) ([]byte, error) {
 	l, err := r.db.tree.lookupAccount(hash, r.state)
 	if err != nil {
-		if errors.Is(err, errSnapshotStale) {
-			return r.accountFallback(hash)
-		}
+		// A lookup rejection is authoritative: accountTip only fails when the
+		// reader's state is neither the disk layer nor a descendant of it, so
+		// the disk layer's flat data does not correspond to the requested
+		// state. Surface the staleness rather than serving another state's
+		// values — flat reads carry no hash to catch the substitution.
 		return nil, err
 	}
 	// If the located layer is stale, fall back to the slow path to retrieve
@@ -227,16 +229,28 @@ func (r *reader) AccountRLP(hash common.Hash) ([]byte, error) {
 	return blob, err
 }
 
-// accountFallback retrieves account data when the normal lookup path fails
-// due to concurrent layer flattening (cap). It tries the reader's entry-point
-// layer first (which is still in memory), then falls back to the current base
-// disk layer. The base fallback is needed because persist() creates intermediate
-// disk layers that are marked stale during recursive flattening — only the
-// final base layer is guaranteed non-stale.
+// accountFallback retrieves account data when the located layer goes stale
+// between the lookup and the read — the disk layer was the lookup tip and
+// concurrent flattening (cap/persist) replaced it. It tries the reader's
+// entry-point layer first (still in memory), then the current base disk layer.
+// The base fallback is needed because persist() creates intermediate disk
+// layers that are marked stale during recursive flattening — only the final
+// base layer is guaranteed non-stale.
+//
+// The base is used only when it is an ancestor of (or equal to) the reader's
+// state. The lookup already proved no diff layer between the disk layer and
+// the reader's state touched this account, so an ancestor base holds the same
+// value the reader's state would; a base that has advanced past the reader's
+// state may have absorbed a newer write, and returning that would be silently
+// wrong — flat reads have no hash check to catch it.
 func (r *reader) accountFallback(hash common.Hash) ([]byte, error) {
 	blob, err := r.layer.account(hash, 0)
 	if errors.Is(err, errSnapshotStale) {
-		return r.db.tree.bottom().account(hash, 0)
+		base := r.db.tree.bottomIfAncestorOf(r.state)
+		if base == nil {
+			return nil, fmt.Errorf("[%#x] %w", r.state, errSnapshotStale)
+		}
+		return base.account(hash, 0)
 	}
 	return blob, err
 }
@@ -273,9 +287,7 @@ func (r *reader) Account(hash common.Hash) (*types.SlimAccount, error) {
 func (r *reader) Storage(accountHash, storageHash common.Hash) ([]byte, error) {
 	l, err := r.db.tree.lookupStorage(accountHash, storageHash, r.state)
 	if err != nil {
-		if errors.Is(err, errSnapshotStale) {
-			return r.storageFallback(accountHash, storageHash)
-		}
+		// Authoritative rejection — see the equivalent comment in AccountRLP.
 		return nil, err
 	}
 	// If the located layer is stale, fall back to the slow path to retrieve
@@ -293,11 +305,16 @@ func (r *reader) Storage(accountHash, storageHash common.Hash) ([]byte, error) {
 	return blob, err
 }
 
-// storageFallback is the storage counterpart of accountFallback.
+// storageFallback is the storage counterpart of accountFallback, including the
+// ancestor check on the base disk layer.
 func (r *reader) storageFallback(accountHash, storageHash common.Hash) ([]byte, error) {
 	blob, err := r.layer.storage(accountHash, storageHash, 0)
 	if errors.Is(err, errSnapshotStale) {
-		return r.db.tree.bottom().storage(accountHash, storageHash, 0)
+		base := r.db.tree.bottomIfAncestorOf(r.state)
+		if base == nil {
+			return nil, fmt.Errorf("[%#x] %w", r.state, errSnapshotStale)
+		}
+		return base.storage(accountHash, storageHash, 0)
 	}
 	return blob, err
 }

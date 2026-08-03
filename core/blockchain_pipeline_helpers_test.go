@@ -142,9 +142,22 @@ func TestPendingImportCollectionHelpers(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, blocks[0].Root(), root)
 
+	// A failed collect surfaces the error and drops the pending entry as part
+	// of the rollback: leaving it in place made every later insert re-collect
+	// the same failure, so the node stopped following the chain. A follow-up
+	// flush therefore finds nothing pending.
 	pending.collectedErr = errors.New("collect failed")
 	_, err = chain.collectPendingImportSRC()
 	require.EqualError(t, err, "collect failed")
+	require.Nil(t, chain.pendingImportSRC)
+	require.NoError(t, chain.flushPendingImportSRC())
+
+	// flush still surfaces the error when it is the one collecting.
+	chain.pendingImportSRC = &pendingImportSRCState{
+		block:        blocks[0],
+		collectedCh:  collected,
+		collectedErr: errors.New("collect failed"),
+	}
 	require.EqualError(t, chain.flushPendingImportSRC(), "collect failed")
 	require.Nil(t, chain.pendingImportSRC)
 }

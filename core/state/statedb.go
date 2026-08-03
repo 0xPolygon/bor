@@ -100,6 +100,15 @@ type StateDB struct {
 	// boundaries.
 	stateObjectsDestruct map[common.Address]*stateObject
 
+	// currentBlockDestructs holds the subset of stateObjectsDestruct that this
+	// block's own execution destructed. The FlatDiff replay paths also seed
+	// stateObjectsDestruct — with the *parent* block's destructs, whose
+	// post-parent storage the overlay legitimately serves — so the combined map
+	// can't distinguish "storage was wiped by the block being executed" from
+	// "the parent wiped it and the overlay holds what replaced it". Only the
+	// former may suppress an overlay read.
+	currentBlockDestructs map[common.Address]struct{}
+
 	// This map tracks the account mutations that occurred during the
 	// transition. Uncommitted mutations belonging to the same account
 	// can be merged into a single one which is equivalent from database's
@@ -238,18 +247,19 @@ func NewTrieOnlyWithSnapshot(root common.Hash, db *CachingDB, snapshot *WarmSnap
 // this function accepts an additional Reader which is bound to the given root.
 func NewWithReader(root common.Hash, db Database, reader Reader) (*StateDB, error) {
 	sdb := &StateDB{
-		db:                   db,
-		originalRoot:         root,
-		reader:               reader,
-		stateObjects:         make(map[common.Address]*stateObject),
-		revertedKeys:         make(map[blockstm.Key]struct{}),
-		stateObjectsDestruct: make(map[common.Address]*stateObject),
-		mutations:            make(map[common.Address]*mutation),
-		logs:                 make(map[common.Hash][]*types.Log),
-		preimages:            make(map[common.Hash][]byte),
-		journal:              newJournal(),
-		accessList:           newAccessList(),
-		transientStorage:     newTransientStorage(),
+		db:                    db,
+		originalRoot:          root,
+		reader:                reader,
+		stateObjects:          make(map[common.Address]*stateObject),
+		revertedKeys:          make(map[blockstm.Key]struct{}),
+		stateObjectsDestruct:  make(map[common.Address]*stateObject),
+		currentBlockDestructs: make(map[common.Address]struct{}),
+		mutations:             make(map[common.Address]*mutation),
+		logs:                  make(map[common.Hash][]*types.Log),
+		preimages:             make(map[common.Hash][]byte),
+		journal:               newJournal(),
+		accessList:            newAccessList(),
+		transientStorage:      newTransientStorage(),
 	}
 	if db.TrieDB().IsVerkle() {
 		sdb.accessEvents = NewAccessEvents(db.PointCache())
@@ -802,6 +812,7 @@ func (s *StateDB) ResetPrefetcher() {
 	s.mutations = make(map[common.Address]*mutation)
 	s.stateObjects = make(map[common.Address]*stateObject)
 	s.stateObjectsDestruct = make(map[common.Address]*stateObject)
+	s.currentBlockDestructs = make(map[common.Address]struct{})
 }
 
 // setError remembers the first non-nil error it is called with.
@@ -1175,6 +1186,7 @@ func (s *StateDB) SetStorage(addr common.Address, storage map[common.Hash]common
 			s.stateObjectsDestruct[addr] = obj
 		}
 	}
+	s.currentBlockDestructs[addr] = struct{}{}
 	newObj := s.createObject(addr)
 	for k, v := range storage {
 		newObj.SetState(k, v)
@@ -1475,20 +1487,21 @@ func (s *StateDB) CreateContract(addr common.Address) {
 func (s *StateDB) Copy() *StateDB {
 	// Copy all the basic fields, initialize the memory ones
 	state := &StateDB{
-		db:                   s.db,
-		reader:               s.reader,
-		originalRoot:         s.originalRoot,
-		stateObjects:         make(map[common.Address]*stateObject, len(s.stateObjects)),
-		stateObjectsDestruct: make(map[common.Address]*stateObject, len(s.stateObjectsDestruct)),
-		revertedKeys:         make(map[blockstm.Key]struct{}),
-		mutations:            make(map[common.Address]*mutation, len(s.mutations)),
-		dbErr:                s.dbErr,
-		refund:               s.refund,
-		thash:                s.thash,
-		txIndex:              s.txIndex,
-		logs:                 make(map[common.Hash][]*types.Log, len(s.logs)),
-		logSize:              s.logSize,
-		preimages:            maps.Clone(s.preimages),
+		db:                    s.db,
+		reader:                s.reader,
+		originalRoot:          s.originalRoot,
+		stateObjects:          make(map[common.Address]*stateObject, len(s.stateObjects)),
+		stateObjectsDestruct:  make(map[common.Address]*stateObject, len(s.stateObjectsDestruct)),
+		currentBlockDestructs: make(map[common.Address]struct{}, len(s.currentBlockDestructs)),
+		revertedKeys:          make(map[blockstm.Key]struct{}),
+		mutations:             make(map[common.Address]*mutation, len(s.mutations)),
+		dbErr:                 s.dbErr,
+		refund:                s.refund,
+		thash:                 s.thash,
+		txIndex:               s.txIndex,
+		logs:                  make(map[common.Hash][]*types.Log, len(s.logs)),
+		logSize:               s.logSize,
+		preimages:             maps.Clone(s.preimages),
 
 		// Timing fields — must be carried over so metrics in resultLoop see
 		// the values accumulated during fillTransactions, not zero.
@@ -1523,6 +1536,9 @@ func (s *StateDB) Copy() *StateDB {
 		state.stateObjects[addr] = obj.deepCopy(state)
 	}
 	// Deep copy destructed state objects.
+	for addr := range s.currentBlockDestructs {
+		state.currentBlockDestructs[addr] = struct{}{}
+	}
 	for addr, obj := range s.stateObjectsDestruct {
 		state.stateObjectsDestruct[addr] = obj.deepCopy(state)
 	}
@@ -1605,6 +1621,7 @@ func (s *StateDB) Finalise(deleteEmptyObjects bool) {
 			if _, ok := s.stateObjectsDestruct[obj.address]; !ok {
 				s.stateObjectsDestruct[obj.address] = obj
 			}
+			s.currentBlockDestructs[obj.address] = struct{}{}
 		} else {
 			obj.finalise()
 			s.markUpdate(addr)
@@ -2186,6 +2203,7 @@ func (s *StateDB) commit(deleteEmptyObjects bool, noStorageWiping bool, blockNum
 	// Clear all internal flags and update state root at the end.
 	s.mutations = make(map[common.Address]*mutation)
 	s.stateObjectsDestruct = make(map[common.Address]*stateObject)
+	s.currentBlockDestructs = make(map[common.Address]struct{})
 
 	origin := s.originalRoot
 	s.originalRoot = root
@@ -3006,6 +3024,7 @@ func (s *StateDB) finaliseDelete(addr common.Address, obj *stateObject) {
 	if _, ok := s.stateObjectsDestruct[obj.address]; !ok {
 		s.stateObjectsDestruct[obj.address] = obj
 	}
+	s.currentBlockDestructs[obj.address] = struct{}{}
 }
 
 // finalisePromote moves dirty storage to pending, capturing origin values

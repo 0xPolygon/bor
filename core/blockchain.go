@@ -56,6 +56,7 @@ import (
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/triedb"
 	"github.com/ethereum/go-ethereum/triedb/hashdb"
 	"github.com/ethereum/go-ethereum/triedb/pathdb"
@@ -554,6 +555,10 @@ type pendingImportSRCState struct {
 	collectedCh   chan struct{}
 	collectedRoot common.Hash // verified root (set before closing collectedCh)
 	collectedErr  error       // non-nil if SRC failed or root mismatch
+	// divergentRoot is the root SRC computed and committed when it disagreed
+	// with the block header. Zero when SRC failed before committing. Set
+	// before collectedCh closes, read only after.
+	divergentRoot common.Hash
 }
 
 // pipelinedImportStateAvailabilityGrace bounds how long sync-mode checks may
@@ -3696,10 +3701,25 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		}
 
 		// --- Pipelined import: check for pending SRC from previous block ---
-		pipelineActive := bc.cfg.EnablePipelinedImportSRC && setHead && !bc.cfg.Stateless
+		//
+		// A supplied witness is incompatible with pipelining: serving this
+		// block from a witness swaps the process-wide trie read backend for a
+		// memdb holding only this block's nodes, which both starves an SRC
+		// goroutine still resolving the previous block's trie and denies this
+		// block's own execution the parent-root nodes the FlatDiff mode reads
+		// from. Fall back to the serial path for such blocks, and collect any
+		// in-flight SRC before the backend is swapped.
+		witnessFed := witnesses != nil && len(witnesses) > it.processed()-1 && witnesses[it.processed()-1] != nil
+		pipelineActive := bc.cfg.EnablePipelinedImportSRC && setHead && !bc.cfg.Stateless && !witnessFed
 		var pipeOpts *PipelineImportOpts
 		if pipelineActive {
 			pipeOpts = bc.buildPipelineImportOpts(block, parent)
+		} else if witnessFed {
+			// Nothing is in flight for this block yet, so no prefetch to
+			// interrupt — a failed flush just aborts the insert.
+			if err := bc.flushPendingImportSRC(); err != nil {
+				return nil, it.index, err
+			}
 		}
 
 		// Note: ProcessBlock opens its own statedbs internally. The statedb
@@ -3728,7 +3748,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 
 		computeWitness := makeWitness
 
-		if witnesses != nil && len(witnesses) > it.processed()-1 && witnesses[it.processed()-1] != nil {
+		if witnessFed {
 			// 1. Validate the witness.
 			var headerReader stateless.HeaderReader = bc
 			if witnesses[it.processed()-1].HeaderReader() != nil {
@@ -3770,7 +3790,19 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		activeState = statedb
 
 		if err != nil {
-			bc.reportBlock(block, &ProcessResult{Receipts: receipts}, err)
+			// A block is only "bad" if it is invalid. Missing local state —
+			// the parent's trie pruned or capped away between validation and
+			// the reader open — says nothing about the block, and recording it
+			// as bad both poisons the bad-block DB and misreports the peer that
+			// delivered a perfectly valid block. The pre-pipeline code had a
+			// state.New pre-check that returned this class early; ProcessBlock
+			// now opens its own readers, so filter it here instead.
+			if isLocalStateUnavailable(err) {
+				log.Warn("Skipping block, parent state unavailable locally",
+					"number", block.NumberU64(), "hash", block.Hash(), "err", err)
+			} else {
+				bc.reportBlock(block, &ProcessResult{Receipts: receipts}, err)
+			}
 			followupInterrupt.Store(true)
 			// Flush any pending import SRC before returning on error. Log any
 			// flush error (e.g., previous block's root mismatch) — the outer
@@ -3791,8 +3823,16 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 			adjustBack, err := bc.persistPipelinedImport(block, parent, statedb, receipts, logs, start, cheapExecElapsed, vtime, computeWitness)
 			if err != nil {
 				followupInterrupt.Store(true)
+				// adjustBack attributes the failure to the previous block,
+				// whose SRC this insert collected. When the collecting block
+				// is the first of the batch there is no previous index to
+				// point at — the pipeline deliberately leaves an SRC in
+				// flight across insertChain calls, so that is the normal
+				// cross-batch shape, not an edge case. Clamp at 0: a negative
+				// index reaches callers that only bound-check the top end
+				// (eth/downloader) and would index out of range.
 				idx := it.index
-				if adjustBack {
+				if adjustBack && idx > 0 {
 					idx--
 				}
 				return nil, idx, err
@@ -4685,6 +4725,21 @@ func (bc *BlockChain) skipBlock(err error, it *insertIterator) bool {
 }
 
 // reportBlock logs a bad block error.
+// isLocalStateUnavailable reports whether err means the node cannot reach the
+// state it needs, as opposed to the block being invalid. Both shapes occur:
+// pathdb/hashdb report an unavailable state root, the trie reports a missing
+// node once a walk descends into pruned data.
+func isLocalStateUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	var missing *trie.MissingNodeError
+	if errors.As(err, &missing) {
+		return true
+	}
+	return strings.Contains(err.Error(), "is not available")
+}
+
 func (bc *BlockChain) reportBlock(block *types.Block, res *ProcessResult, err error) {
 	var receipts types.Receipts
 	if res != nil {
@@ -5445,6 +5500,10 @@ func (bc *BlockChain) collectPendingImportSRC() (common.Hash, error) {
 	<-pending.collectedCh
 
 	if pending.collectedErr != nil {
+		// The collector deliberately leaves the rollback to us: this thread
+		// holds chainmu for the whole batch, so the head rewrite has to happen
+		// here rather than in the goroutine we just waited on.
+		bc.recoverFailedPipelinedImport(pending)
 		return common.Hash{}, pending.collectedErr
 	}
 	return pending.collectedRoot, nil
@@ -5982,31 +6041,85 @@ func (bc *BlockChain) runImportAutoCollection(p *pendingImportSRCState) {
 // block's root. On mismatch (should never happen — a mismatch means SRC
 // diverged from the block the peer sent), reverts the chain head to the
 // parent and surfaces the error on p. Returns false on mismatch.
+// verifyImportSRCRoot compares the SRC-computed root with the imported block's
+// root. On mismatch it records the failure on p; the rollback itself is left to
+// whoever collects p. This goroutine must not touch chainmu: the collecting
+// thread holds it for the whole insertChain batch while blocked on
+// p.collectedCh, and syncx.ClosableMutex.TryLock is a blocking receive that
+// only reports failure once the mutex is closed — acquiring it here would
+// deadlock both sides permanently.
 func (bc *BlockChain) verifyImportSRCRoot(p *pendingImportSRCState, root common.Hash) bool {
 	if root == p.block.Root() {
 		return true
 	}
 	pipelineImportRootMismatchCounter.Inc(1)
+	p.divergentRoot = root
 	p.collectedErr = fmt.Errorf("pipelined import: root mismatch (expected: %x got: %x) block: %d",
 		p.block.Root(), root, p.block.NumberU64())
-	log.Error("Pipelined import: root mismatch, reverting chain head",
+	log.Error("Pipelined import: root mismatch, chain head will be rolled back",
 		"block", p.block.NumberU64(), "expected", p.block.Root(), "got", root)
 	bc.reportBlock(p.block, nil, p.collectedErr)
-	if parentBlock := bc.GetBlock(p.block.ParentHash(), p.block.NumberU64()-1); parentBlock != nil {
-		// writeHeadBlock requires chainmu. This goroutine runs async of
-		// insertChainWithWitnesses, so we must acquire it explicitly to avoid
-		// racing with a concurrent InsertChain mutating chain head state.
-		// TryLock blocks while the mutex is held but returns false if the
-		// chain is shutting down — skip recovery in that case.
-		if bc.chainmu.TryLock() {
-			bc.writeHeadBlock(parentBlock)
-			bc.chainmu.Unlock()
-		} else {
-			log.Warn("Pipelined import: skipped head revert (chain closing)",
-				"block", p.block.NumberU64())
-		}
-	}
 	return false
+}
+
+// recoverFailedPipelinedImport rolls the chain back to the parent of a
+// pipelined block whose SRC failed or produced a divergent root. Because the
+// pipeline publishes the head before the root is verified, the rollback has to
+// undo more than the head pointer: the durable canonical/tx-lookup markers, the
+// FlatDiff overlay that keeps serving the rejected block's post-state, the
+// pending entry (otherwise every later insert re-collects the same failure and
+// the node stops following the chain), and the subscriber view.
+//
+// Must be called with chainmu held, from the thread collecting p.
+func (bc *BlockChain) recoverFailedPipelinedImport(p *pendingImportSRCState) {
+	// Drop the pending entry first: leaving it in place is what turns a
+	// single failed block into a permanent import wedge.
+	bc.pendingImportSRCMu.Lock()
+	if bc.pendingImportSRC == p {
+		bc.pendingImportSRC = nil
+	}
+	bc.pendingImportSRCMu.Unlock()
+
+	// Stop serving the rejected block's post-state via StateAt/PostExecState.
+	bc.SetLastFlatDiff(nil, 0, common.Hash{}, common.Hash{})
+
+	bad := p.block
+	parent := bc.GetBlock(bad.ParentHash(), bad.NumberU64()-1)
+	if parent == nil {
+		log.Error("Pipelined import: cannot roll back rejected block, parent missing",
+			"block", bad.NumberU64(), "parent", bad.ParentHash())
+		return
+	}
+
+	// writeHeadBlock only rewrites the markers of the block handed to it, and
+	// SetCurrentHeader deletes nothing, so the rejected block's canonical hash
+	// and transaction lookups would keep resolving through RPC after the head
+	// moved back. Remove them explicitly.
+	batch := bc.db.NewBatch()
+	rawdb.DeleteCanonicalHash(batch, bad.NumberU64())
+	for _, tx := range bad.Transactions() {
+		rawdb.DeleteTxLookupEntry(batch, tx.Hash())
+	}
+	if err := batch.Write(); err != nil {
+		log.Crit("Failed to remove rejected pipelined block indexes", "err", err)
+	}
+	bc.writeHeadBlock(parent)
+
+	// SRC committed its own (divergent) root before the mismatch was noticed.
+	// Nothing references it, but in hash mode it holds trie nodes alive until
+	// dereferenced. Path mode has no per-root release here; the layer is not
+	// reachable from any canonical head and is dropped on restart.
+	if p.divergentRoot != (common.Hash{}) && bc.triedb.Scheme() == rawdb.HashScheme {
+		bc.triedb.Dereference(p.divergentRoot)
+	}
+
+	// Subscribers were told the rejected block was head (ChainEvent, logs and
+	// ChainHeadEvent all fired before verification). Announce the parent so the
+	// txpool re-resets against committed state instead of the rejected root.
+	bc.chainHeadFeed.Send(ChainHeadEvent{Header: parent.Header()})
+
+	log.Warn("Pipelined import: rolled back rejected block",
+		"block", bad.NumberU64(), "hash", bad.Hash(), "head", parent.NumberU64())
 }
 
 // publishImportWitness persists the SRC-computed witness bytes to the

@@ -261,13 +261,16 @@ func TestV2GasDeterminism(t *testing.T) {
 	// determinism assertions.
 	var bd testBlockData
 	var expectedGas uint64
+	candidates, incomplete := 0, 0
 	for _, b := range blocks {
 		if len(b.block.Transactions()) <= 50 {
 			continue
 		}
+		candidates++
 		gas, err := runBlock(b)
 		if err != nil {
 			if strings.Contains(err.Error(), "v2: base read: missing trie node") {
+				incomplete++
 				continue
 			}
 			t.Fatal(err)
@@ -276,8 +279,14 @@ func TestV2GasDeterminism(t *testing.T) {
 		expectedGas = gas
 		break
 	}
+	if candidates == 0 {
+		t.Skip("no block with >50 txs")
+	}
 	if bd.block == nil {
-		t.Skip("no block with >50 txs and complete embedded witness")
+		// Every candidate hit a base read miss. Skipping here would let a
+		// regression that makes V2 report missing nodes on complete fixtures
+		// pass as a green CI run, so fail instead.
+		t.Fatalf("all %d candidate fixtures failed V2 base reads; expected at least one complete embedded witness", incomplete)
 	}
 
 	for run := 1; run < 5; run++ {
