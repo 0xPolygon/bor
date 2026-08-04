@@ -94,8 +94,8 @@ func ValidateTransaction(tx *types.Transaction, head *types.Header, signer types
 			return err
 		}
 	}
-	// Bor: EIP-7825 at Madhugiri HF block
-	if (rules.IsOsaka || rules.IsMadhugiri) && tx.Gas() > params.MaxTxGas {
+	// Bor: EIP-7825 at Madhugiri HF block, lifted again at Amsterdam
+	if (rules.IsOsaka || rules.IsMadhugiri) && !rules.IsAmsterdam && tx.Gas() > params.MaxTxGas {
 		return fmt.Errorf("%w (cap: %d, tx: %d)", core.ErrGasLimitTooHigh, params.MaxTxGas, tx.Gas())
 	}
 	// Transactions can't be negative. This may never happen using RLP decoded

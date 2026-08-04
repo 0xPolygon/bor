@@ -46,6 +46,12 @@ func newstack() *Stack {
 	return stackPool.Get().(*Stack)
 }
 
+// newStackForTesting is meant to be used solely for testing. It creates a stack
+// outside the pool, so callers need not return it.
+func newStackForTesting() *Stack {
+	return new(Stack)
+}
+
 func returnStack(s *Stack) {
 	s.top = 0
 	stackPool.Put(s)
@@ -60,6 +66,14 @@ func (st *Stack) push(d *uint256.Int) {
 	// NOTE: push limit (1024) is checked in baseCheck
 	st.data[st.top] = *d
 	st.top++
+}
+
+// get returns a pointer to a newly created element on top of the stack, for
+// callers that fill the value in place rather than copying one in.
+func (st *Stack) get() *uint256.Int {
+	elem := &st.data[st.top]
+	st.top++
+	return elem
 }
 
 func (st *Stack) pop() (ret uint256.Int) {
@@ -130,7 +144,7 @@ func (st *Stack) peek() *uint256.Int {
 	return &st.data[st.top-1]
 }
 
-// Back returns the n'th item in stack
-func (st *Stack) Back(n int) *uint256.Int {
+// back returns the n'th item in stack
+func (st *Stack) back(n int) *uint256.Int {
 	return &st.data[st.top-n-1]
 }

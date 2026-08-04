@@ -68,7 +68,8 @@ func Estimate(ctx context.Context, call *core.Message, opts *Options, gasCap uin
 		// header is already the effective block context here.
 		isOsaka := opts.Config.IsOsaka(opts.Header.Number)
 		isMadhugiri := opts.Config.Bor != nil && opts.Config.Bor.IsMadhugiri(opts.Header.Number)
-		if isOsaka || isMadhugiri {
+		isAmsterdam := opts.Config.IsAmsterdam(opts.Header.Number)
+		if (isOsaka || isMadhugiri) && !isAmsterdam {
 			hi = params.MaxTxGas
 		}
 	}

@@ -84,7 +84,7 @@ func (db *UBTDatabase) Reader(stateRoot common.Hash) (Reader, error) {
 
 // OpenTrie opens the main account trie at a specific root hash.
 func (db *UBTDatabase) OpenTrie(root common.Hash) (Trie, error) {
-	return bintrie.NewBinaryTrie(root, db.triedb)
+	return bintrie.NewBinaryTrie(root, db.triedb, db.triedb.BinTrieGroupDepth())
 }
 
 // OpenStorageTrie opens the storage trie of an account. In binary trie mode,

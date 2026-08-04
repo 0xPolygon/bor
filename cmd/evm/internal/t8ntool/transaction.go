@@ -202,12 +202,13 @@ func Transaction(ctx *cli.Context) error {
 			}
 		}
 
-		// Bor: EIP-7825 at Madhugiri HF block
+		// Bor: EIP-7825 at Madhugiri HF block, lifted again at Amsterdam
 		isOsaka := chainConfig.IsOsaka(new(big.Int))
 		isMadhugiri := chainConfig.Bor != nil && chainConfig.Bor.IsMadhugiri(new(big.Int))
+		isAmsterdam := chainConfig.IsAmsterdam(new(big.Int))
 
 		// Verify tx gas limit does not exceed EIP-7825 cap.
-		if (isOsaka || isMadhugiri) && tx.Gas() > params.MaxTxGas {
+		if (isOsaka || isMadhugiri) && !isAmsterdam && tx.Gas() > params.MaxTxGas {
 			r.Error = errors.New("gas limit exceeds maximum")
 		}
 

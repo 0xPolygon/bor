@@ -283,10 +283,10 @@ func newDbConfig(scheme string) *triedb.Config {
 	return &triedb.Config{PathDB: &config}
 }
 
-func TestVerkleGenesisCommit(t *testing.T) {
-	t.Skip("verkle trie is not yet supported in bor")
-	var verkleTime uint64 = 0
-	verkleConfig := &params.ChainConfig{
+func TestBinaryGenesisCommit(t *testing.T) {
+	t.Skip("binary trie is not yet supported in bor")
+	var ubtTime uint64 = 0
+	ubtConfig := &params.ChainConfig{
 		ChainID:                 big.NewInt(1),
 		HomesteadBlock:          big.NewInt(0),
 		DAOForkBlock:            nil,
@@ -323,8 +323,8 @@ func TestVerkleGenesisCommit(t *testing.T) {
 
 	genesis := &Genesis{
 		BaseFee:    big.NewInt(params.InitialBaseFee),
-		Config:     verkleConfig,
-		Timestamp:  verkleTime,
+		Config:     ubtConfig,
+		Timestamp:  ubtTime,
 		Difficulty: big.NewInt(0),
 		Alloc: types.GenesisAlloc{
 			{1}: {Balance: big.NewInt(1), Storage: map[common.Hash]common.Hash{{1}: {1}}},
@@ -343,17 +343,18 @@ func TestVerkleGenesisCommit(t *testing.T) {
 	config.NoAsyncFlush = true
 
 	triedb := triedb.NewDatabase(db, &triedb.Config{
-		IsUBT:  true,
-		PathDB: &config,
+		IsUBT:             true,
+		PathDB:            &config,
+		BinTrieGroupDepth: triedb.DefaultBinTrieGroupDepth,
 	})
 	block := genesis.MustCommit(db, triedb)
 	if !bytes.Equal(block.Root().Bytes(), expected) {
 		t.Fatalf("invalid genesis state root, expected %x, got %x", expected, block.Root())
 	}
 
-	// Test that the trie is verkle
+	// Test that the trie is a unified binary trie
 	if !triedb.IsUBT() {
-		t.Fatalf("expected trie to be verkle")
+		t.Fatalf("expected trie to be a unified binary trie")
 	}
 	vdb := rawdb.NewTable(db, string(rawdb.VerklePrefix))
 	if !rawdb.HasAccountTrieNode(vdb, nil) {

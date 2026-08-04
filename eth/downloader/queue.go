@@ -1138,10 +1138,10 @@ func (q *queue) deliver(id string, taskPool map[common.Hash]*types.Header,
 	}
 	// Assemble each of the results with their headers and retrieved data parts
 	var (
-		accepted int
-		failure  error
-		i        int
-		hashes   []common.Hash
+		accepted   int
+		failure    error
+		i          int
+		foundStale bool
 	)
 
 	// Iterate based on the number of *headers* in the original request
@@ -1160,7 +1160,6 @@ func (q *queue) deliver(id string, taskPool map[common.Hash]*types.Header,
 			break
 		}
 
-		hashes = append(hashes, header.Hash())
 		// i is incremented implicitly by the loop
 	}
 	log.Trace("deliver: Validation loop finished", "peer", id, "validatedCount", i, "failure", failure)
@@ -1173,23 +1172,25 @@ func (q *queue) deliver(id string, taskPool map[common.Hash]*types.Header,
 			log.Trace("deliver: Got delivery slot, calling reconstruct", "peer", id, "headerHash", header.Hash(), "acceptedIndex", accepted)
 			reconstruct(accepted, res)
 			log.Trace("deliver: reconstruct finished", "peer", id, "headerHash", header.Hash(), "acceptedIndex", accepted)
+			accepted++
 		} else {
+			// Between here and above, some other peer filled this result,
+			// or it was indeed a no-op. This should not happen, but if it does it's
+			// not something to panic about
 			log.Error("deliver: Delivery stale or error getting slot", "peer", id, "stale", stale, "number", header.Number.Uint64(), "err", err)
-			failure = errStaleDelivery // Consider it stale even if err != nil
+			foundStale = true
 		}
-		// Clean up a successful fetch (regardless of reconstruction success/failure)
-		log.Trace("deliver: Deleting from task pool", "peer", id, "headerHash", hashes[accepted])
-		delete(taskPool, hashes[accepted])
-
-		accepted++
+		// Clean up a successful fetch
+		log.Trace("deliver: Deleting from task pool", "peer", id, "headerHash", header.Hash())
+		delete(taskPool, header.Hash())
 	}
 	log.Trace("deliver: Reconstruction loop finished", "peer", id, "acceptedCount", accepted)
 
 	resDropMeter.Mark(int64(results - accepted))
 
 	// Return all failed (validation or beyond validated count) or missing fetches to the queue
-	log.Trace("deliver: Returning failed/missing fetches to queue", "peer", id, "count", len(request.Headers[accepted:]))
-	for _, header := range request.Headers[accepted:] {
+	log.Trace("deliver: Returning failed/missing fetches to queue", "peer", id, "count", len(request.Headers[i:]))
+	for _, header := range request.Headers[i:] {
 		taskQueue.Push(header, -int64(header.Number.Uint64()))
 	}
 	// Wake up Results if any items were accepted
@@ -1199,16 +1200,14 @@ func (q *queue) deliver(id string, taskPool map[common.Hash]*types.Header,
 	}
 
 	log.Trace("deliver: Exiting", "peer", id, "acceptedCount", accepted, "failure", failure)
-	if failure == nil {
-		return accepted, nil
+	if failure != nil {
+		return accepted, failure
 	}
-	// If none of the data was good, it's a stale delivery (or validation failure)
-	if accepted > 0 {
-		return accepted, fmt.Errorf("partial failure: %w", failure)
+	// If none of the data was good, it's a stale delivery
+	if foundStale {
+		return accepted, errStaleDelivery
 	}
-
-	// Use %w to wrap the original error if possible
-	return accepted, fmt.Errorf("delivery failed: %w", failure)
+	return accepted, nil
 }
 
 // Prepare configures the result cache to allow accepting and caching inbound

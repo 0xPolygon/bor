@@ -386,10 +386,11 @@ func (st *stateTransition) preCheck() error {
 	}
 	isOsaka := st.evm.ChainConfig().IsOsaka(st.evm.Context.BlockNumber)
 	isMadhugiri := st.evm.ChainConfig().Bor != nil && st.evm.ChainConfig().Bor.IsMadhugiri(st.evm.Context.BlockNumber)
+	isAmsterdam := st.evm.ChainConfig().IsAmsterdam(st.evm.Context.BlockNumber)
 
 	if !msg.SkipTransactionChecks {
 		// Verify tx gas limit does not exceed EIP-7825 cap.
-		if (isOsaka || isMadhugiri) && msg.GasLimit > params.MaxTxGas {
+		if (isOsaka || isMadhugiri) && !isAmsterdam && msg.GasLimit > params.MaxTxGas {
 			return fmt.Errorf("%w (cap: %d, tx: %d)", ErrGasLimitTooHigh, params.MaxTxGas, msg.GasLimit)
 		}
 		// Make sure the sender is an EOA

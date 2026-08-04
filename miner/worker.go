@@ -2083,8 +2083,9 @@ func (w *worker) buildDefaultFilter(BaseFee *big.Int, Number *big.Int) txpool.Pe
 
 	isOsaka := w.chainConfig.IsOsaka(Number)
 	isMadhugiri := w.chainConfig.Bor != nil && w.chainConfig.Bor.IsMadhugiri(Number)
-	// Verify tx gas limit does not exceed EIP-7825 cap.
-	if isOsaka || isMadhugiri {
+	isAmsterdam := w.chainConfig.IsAmsterdam(Number)
+	// Verify tx gas limit does not exceed EIP-7825 cap, which Amsterdam lifts.
+	if (isOsaka || isMadhugiri) && !isAmsterdam {
 		filter.GasLimitCap = params.MaxTxGas
 	}
 
