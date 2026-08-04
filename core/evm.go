@@ -128,7 +128,7 @@ func EthereumTransfer(db vm.StateDB, sender, recipient common.Address, amount *u
 func NewEVMTxContext(msg *Message) vm.TxContext {
 	ctx := vm.TxContext{
 		Origin:     msg.From,
-		GasPrice:   uint256.MustFromBig(msg.GasPrice),
+		GasPrice:   msg.GasPrice,
 		BlobHashes: msg.BlobHashes,
 	}
 	return ctx
