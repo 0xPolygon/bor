@@ -221,7 +221,7 @@ func (api *EthereumAPI) BlobBaseFee(ctx context.Context) *hexutil.Big {
 	return (*hexutil.Big)(api.b.BlobBaseFee(ctx))
 }
 
-// BaseFee returns the base fee of the next block.
+// BaseFee returns the base fee for the next block.
 func (api *EthereumAPI) BaseFee(ctx context.Context) *hexutil.Big {
 	return (*hexutil.Big)(api.b.BaseFee(ctx))
 }
@@ -1318,6 +1318,9 @@ func RPCMarshalHeader(head *types.Header) map[string]interface{} {
 	}
 	if head.RequestsHash != nil {
 		result["requestsHash"] = head.RequestsHash
+	}
+	if head.BlockAccessListHash != nil {
+		result["balHash"] = head.BlockAccessListHash
 	}
 	if head.SlotNumber != nil {
 		result["slotNumber"] = hexutil.Uint64(*head.SlotNumber)
@@ -2872,7 +2875,7 @@ func (api *DebugAPI) AccountAt(ctx context.Context, blockHash common.Hash, txInd
 			return nil, fmt.Errorf("transaction %#x failed to convert to message: %v", tx.Hash(), err)
 		}
 
-		stateDb.SetTxContext(tx.Hash(), int(idx))
+		stateDb.SetTxContext(tx.Hash(), int(idx), uint32(idx+1))
 		if _, err := core.ApplyMessage(evm, msg, nil); err != nil {
 			return nil, fmt.Errorf("transaction %#x failed: %v", tx.Hash(), err)
 		}

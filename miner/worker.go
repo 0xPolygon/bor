@@ -1708,7 +1708,7 @@ mainloop:
 		lastTxHash = tx.Hash()
 		lastTxIndex = env.tcount
 		lastTxSender = from
-		env.state.SetTxContext(tx.Hash(), env.tcount)
+		env.state.SetTxContext(tx.Hash(), env.tcount, uint32(env.tcount+1))
 
 		// Capture gas pool before execution so we can compute freed gas afterwards.
 		gasPoolBefore := env.gasPool.Gas()
@@ -2350,10 +2350,11 @@ func (w *worker) generateWork(params *generateParams, witness bool) *newPayloadR
 		// create EVM for system calls
 		blockContext := core.NewEVMBlockContext(work.header, w.chain, &work.header.Coinbase)
 		vmenv := vm.NewEVM(blockContext, work.state, w.chainConfig, w.vmConfig())
+		blockAccessIndex := uint32(work.tcount + 1)
 		// EIP-7002 withdrawals
-		core.ProcessWithdrawalQueue(&requests, vmenv)
+		core.ProcessWithdrawalQueue(&requests, vmenv, blockAccessIndex)
 		// EIP-7251 consolidations
-		core.ProcessConsolidationQueue(&requests, vmenv)
+		core.ProcessConsolidationQueue(&requests, vmenv, blockAccessIndex)
 	}
 	if requests != nil {
 		reqHash := types.CalcRequestsHash(requests)
@@ -3225,11 +3226,14 @@ func copyReceipts(receipts []*types.Receipt) []*types.Receipt {
 
 // totalFees computes total consumed miner fees in Wei. Block transactions and receipts have to have the same order.
 func totalFees(block *types.Block, receipts []*types.Receipt) *big.Int {
+	baseFee := block.BaseFee()
 	feesWei := new(big.Int)
-
+	var gasUsed, product big.Int
 	for i, tx := range block.Transactions() {
-		minerFee, _ := tx.EffectiveGasTip(block.BaseFee())
-		feesWei.Add(feesWei, new(big.Int).Mul(new(big.Int).SetUint64(receipts[i].GasUsed), minerFee))
+		minerFee, _ := tx.EffectiveGasTip(baseFee)
+		gasUsed.SetUint64(receipts[i].GasUsed)
+		product.Mul(&gasUsed, minerFee)
+		feesWei.Add(feesWei, &product)
 	}
 
 	return feesWei

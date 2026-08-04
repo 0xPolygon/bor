@@ -1298,7 +1298,7 @@ func processV2Parallel(pb *preparedBlock, config *params.ChainConfig, engine con
 		if r.err != nil {
 			continue
 		}
-		finalDB.SetTxContext(r.tx.Hash(), r.txIdx)
+		finalDB.SetTxContext(r.tx.Hash(), r.txIdx, uint32(r.txIdx+1))
 		r.pdb.SettleTo(finalDB)
 	}
 

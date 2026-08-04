@@ -186,7 +186,7 @@ func testExecutorBalanceValidation(t *testing.T) {
 	// Settle and verify final state
 	finalDB := base.Copy()
 	for _, pdb := range result.Pdbs {
-		finalDB.SetTxContext(common.Hash{}, pdb.TxIndex)
+		finalDB.SetTxContext(common.Hash{}, pdb.TxIndex, uint32(pdb.TxIndex+1))
 		pdb.SettleTo(finalDB)
 	}
 
@@ -345,7 +345,7 @@ func TestV2_SelfDestructTransferLog_MispairsWithSerial(t *testing.T) {
 
 	// Serial Execution
 	serialDB, _ := state.New(root, state.NewDatabase(tdb, nil))
-	serialDB.SetTxContext(tx.Hash(), 0)
+	serialDB.SetTxContext(tx.Hash(), 0, 1)
 	serialEVM := vm.NewEVM(blockCtx, serialDB, &cfg, vm.Config{})
 	serialReceipt, err := ApplyTransactionWithEVM(msg, NewGasPool(blockCtx.GasLimit),
 		serialDB, blockCtx.BlockNumber, common.Hash{}, blockCtx.Time, tx, serialEVM)
@@ -355,7 +355,7 @@ func TestV2_SelfDestructTransferLog_MispairsWithSerial(t *testing.T) {
 
 	// BlockSTM V2 Execution
 	v2DB, _ := state.New(root, state.NewDatabase(tdb, nil))
-	v2DB.SetTxContext(tx.Hash(), 0)
+	v2DB.SetTxContext(tx.Hash(), 0, 1)
 	readBase := v2DB.Copy()
 	readBase.EnableConcurrentReads()
 	res := ExecuteV2BlockSTM(context.Background(), []V2Task{{Index: 0, Tx: tx, Msg: msg}},

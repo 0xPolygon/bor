@@ -87,7 +87,7 @@ func (evm *EVM) runEcrecoverWithCache(stateDB StateDB, p PrecompiledContract, ad
 			gas.Exhaust()
 			return nil, gas, ErrOutOfGas
 		}
-		evm.traceGasChange(prior, gas.RegularGas)
+		evm.traceGasChange(prior, gas)
 		// Touch the precompile even on the cache hit, matching the touch
 		// RunPrecompiledContract performs on the non-cached path.
 		if stateDB != nil {
@@ -105,13 +105,14 @@ func (evm *EVM) runEcrecoverWithCache(stateDB StateDB, p PrecompiledContract, ad
 	return ret, remainingGas, err
 }
 
-// traceGasChange emits a precompile gas-charge tracing event when a tracer
-// with OnGasChange is configured.
-func (evm *EVM) traceGasChange(before, after uint64) {
-	if evm.Config.Tracer == nil || evm.Config.Tracer.OnGasChange == nil {
+// traceGasChange emits a precompile gas-charge tracing event when a gas hook is
+// configured. It dispatches through EmitGasChange so the single- and
+// multi-dimensional hooks stay consistent across the Amsterdam boundary.
+func (evm *EVM) traceGasChange(before, after GasBudget) {
+	if !evm.Config.Tracer.HasGasHook() {
 		return
 	}
-	evm.Config.Tracer.OnGasChange(before, after, tracing.GasChangeCallPrecompiledContract)
+	evm.Config.Tracer.EmitGasChange(before.AsTracing(), after.AsTracing(), tracing.GasChangeCallPrecompiledContract)
 }
 
 // BlockContext provides the EVM with auxiliary information. Once provided
@@ -401,8 +402,8 @@ func (evm *EVM) Call(caller common.Address, addr common.Address, input []byte, g
 		evm.StateDB.RevertToSnapshot(snapshot)
 
 		if err != ErrExecutionReverted {
-			if evm.Config.Tracer != nil && evm.Config.Tracer.OnGasChange != nil {
-				evm.Config.Tracer.OnGasChange(gas.RegularGas, 0, tracing.GasChangeCallFailedExecution)
+			if evm.Config.Tracer.HasGasHook() {
+				evm.Config.Tracer.EmitGasChange(gas.AsTracing(), tracing.Gas{}, tracing.GasChangeCallFailedExecution)
 			}
 			gas.Exhaust()
 		}
@@ -459,8 +460,8 @@ func (evm *EVM) CallCode(caller common.Address, addr common.Address, input []byt
 		evm.StateDB.RevertToSnapshot(snapshot)
 
 		if err != ErrExecutionReverted {
-			if evm.Config.Tracer != nil && evm.Config.Tracer.OnGasChange != nil {
-				evm.Config.Tracer.OnGasChange(gas.RegularGas, 0, tracing.GasChangeCallFailedExecution)
+			if evm.Config.Tracer.HasGasHook() {
+				evm.Config.Tracer.EmitGasChange(gas.AsTracing(), tracing.Gas{}, tracing.GasChangeCallFailedExecution)
 			}
 			gas.Exhaust()
 		}
@@ -506,8 +507,8 @@ func (evm *EVM) DelegateCall(originCaller common.Address, caller common.Address,
 		evm.StateDB.RevertToSnapshot(snapshot)
 
 		if err != ErrExecutionReverted {
-			if evm.Config.Tracer != nil && evm.Config.Tracer.OnGasChange != nil {
-				evm.Config.Tracer.OnGasChange(gas.RegularGas, 0, tracing.GasChangeCallFailedExecution)
+			if evm.Config.Tracer.HasGasHook() {
+				evm.Config.Tracer.EmitGasChange(gas.AsTracing(), tracing.Gas{}, tracing.GasChangeCallFailedExecution)
 			}
 			gas.Exhaust()
 		}
@@ -564,8 +565,8 @@ func (evm *EVM) StaticCall(caller common.Address, addr common.Address, input []b
 		evm.StateDB.RevertToSnapshot(snapshot)
 
 		if err != ErrExecutionReverted {
-			if evm.Config.Tracer != nil && evm.Config.Tracer.OnGasChange != nil {
-				evm.Config.Tracer.OnGasChange(gas.RegularGas, 0, tracing.GasChangeCallFailedExecution)
+			if evm.Config.Tracer.HasGasHook() {
+				evm.Config.Tracer.EmitGasChange(gas.AsTracing(), tracing.Gas{}, tracing.GasChangeCallFailedExecution)
 			}
 			gas.Exhaust()
 		}
@@ -604,8 +605,8 @@ func (evm *EVM) create(caller common.Address, code []byte, gas GasBudget, value 
 			gas.Exhaust()
 			return nil, common.Address{}, gas, ErrOutOfGas
 		}
-		if evm.Config.Tracer != nil && evm.Config.Tracer.OnGasChange != nil {
-			evm.Config.Tracer.OnGasChange(prior, gas.RegularGas, tracing.GasChangeWitnessContractCollisionCheck)
+		if evm.Config.Tracer.HasGasHook() {
+			evm.Config.Tracer.EmitGasChange(prior.AsTracing(), gas.AsTracing(), tracing.GasChangeWitnessContractCollisionCheck)
 		}
 	}
 
@@ -623,8 +624,8 @@ func (evm *EVM) create(caller common.Address, code []byte, gas GasBudget, value 
 	if evm.StateDB.GetNonce(address) != 0 ||
 		(contractHash != (common.Hash{}) && contractHash != types.EmptyCodeHash) || // non-empty code
 		isEIP7610RejectedAccount(evm.ChainConfig().ChainID, address, evm.chainRules.IsEIP158) {
-		if evm.Config.Tracer != nil && evm.Config.Tracer.OnGasChange != nil {
-			evm.Config.Tracer.OnGasChange(gas.RegularGas, 0, tracing.GasChangeCallFailedExecution)
+		if evm.Config.Tracer.HasGasHook() {
+			evm.Config.Tracer.EmitGasChange(gas.AsTracing(), tracing.Gas{}, tracing.GasChangeCallFailedExecution)
 		}
 		gas.Exhaust()
 		return nil, common.Address{}, gas, ErrContractAddressCollision
@@ -653,8 +654,8 @@ func (evm *EVM) create(caller common.Address, code []byte, gas GasBudget, value 
 			return nil, common.Address{}, gas, ErrOutOfGas
 		}
 		prior, _ := gas.Charge(GasCosts{RegularGas: consumed})
-		if evm.Config.Tracer != nil && evm.Config.Tracer.OnGasChange != nil {
-			evm.Config.Tracer.OnGasChange(prior, gas.RegularGas, tracing.GasChangeWitnessContractInit)
+		if evm.Config.Tracer.HasGasHook() {
+			evm.Config.Tracer.EmitGasChange(prior.AsTracing(), gas.AsTracing(), tracing.GasChangeWitnessContractInit)
 		}
 	}
 	evm.Context.Transfer(evm.StateDB, caller, address, value, &evm.chainRules)
@@ -779,15 +780,17 @@ func (evm *EVM) captureBegin(depth int, typ OpCode, from common.Address, to comm
 	if tracer.OnEnter != nil {
 		tracer.OnEnter(depth, byte(typ), from, to, input, startGas, value)
 	}
-	if tracer.OnGasChange != nil {
-		tracer.OnGasChange(0, startGas, tracing.GasChangeCallInitialBalance)
+	if tracer.HasGasHook() {
+		initial := NewGasBudget(startGas)
+		tracer.EmitGasChange(tracing.Gas{}, initial.AsTracing(), tracing.GasChangeCallInitialBalance)
 	}
 }
 
 func (evm *EVM) captureEnd(depth int, startGas uint64, leftOverGas uint64, ret []byte, err error) {
 	tracer := evm.Config.Tracer
-	if leftOverGas != 0 && tracer.OnGasChange != nil {
-		tracer.OnGasChange(leftOverGas, 0, tracing.GasChangeCallLeftOverReturned)
+	if leftOverGas != 0 && tracer.HasGasHook() {
+		leftover := NewGasBudget(leftOverGas)
+		tracer.EmitGasChange(leftover.AsTracing(), tracing.Gas{}, tracing.GasChangeCallLeftOverReturned)
 	}
 	var reverted bool
 	if err != nil {

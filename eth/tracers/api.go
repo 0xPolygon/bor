@@ -406,14 +406,8 @@ func (api *API) traceChain(start, end *types.Block, config *TraceConfig, closed 
 			// as per EIP-4788.
 			context := core.NewEVMBlockContext(next.Header(), api.chainContext(ctx), nil)
 			evm := vm.NewEVM(context, statedb, api.backend.ChainConfig(), vm.Config{})
-			if beaconRoot := next.BeaconRoot(); beaconRoot != nil {
-				core.ProcessBeaconBlockRoot(*beaconRoot, evm)
-			}
-			// Insert parent hash in history contract.
-			// EIP-2935
-			if api.backend.ChainConfig().IsPrague(next.Number()) {
-				core.ProcessParentBlockHash(next.ParentHash(), evm)
-			}
+
+			core.PreExecution(ctx, next.BeaconRoot(), next.ParentHash(), api.backend.ChainConfig(), evm, next.Number(), next.Time())
 			// Clean out any pending release functions of trace state. Note this
 			// step must be done after constructing tracing state, because the
 			// tracing state of block next depends on the parent state and construction
@@ -540,8 +534,8 @@ func (api *API) StandardTraceBlockToFile(ctx context.Context, hash common.Hash, 
 	return api.standardTraceBlockToFile(ctx, block, config)
 }
 
-// IntermediateRoots executes a block (bad- or canon- or side-), and returns a list
-// of intermediate roots: the stateroot after each transaction.
+// IntermediateRoots executes a block, and returns a list of intermediate roots:
+// the stateroot after each transaction.
 func (api *API) IntermediateRoots(ctx context.Context, hash common.Hash, config *TraceConfig) ([]common.Hash, error) {
 	block, _ := api.blockByHash(ctx, hash)
 	if block == nil {
@@ -567,27 +561,24 @@ func (api *API) IntermediateRoots(ctx context.Context, hash common.Hash, config 
 	}
 
 	defer release()
+
 	var (
 		roots              []common.Hash
 		signer             = types.MakeSigner(api.backend.ChainConfig(), block.Number(), block.Time())
 		chainConfig        = api.backend.ChainConfig()
 		vmctx              = core.NewEVMBlockContext(block.Header(), api.chainContext(ctx), nil)
 		deleteEmptyObjects = chainConfig.IsEIP158(block.Number())
+		evm                = vm.NewEVM(vmctx, statedb, chainConfig, vm.Config{})
 	)
-	evm := vm.NewEVM(vmctx, statedb, chainConfig, vm.Config{})
-	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
-		core.ProcessBeaconBlockRoot(*beaconRoot, evm)
-	}
-	if chainConfig.IsPrague(block.Number()) {
-		core.ProcessParentBlockHash(block.ParentHash(), evm)
-	}
+	// Run pre-execution system calls
+	core.PreExecution(ctx, block.BeaconRoot(), block.ParentHash(), chainConfig, evm, block.Number(), block.Time())
 
 	for i, tx := range block.Transactions() {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		msg, _ := core.TransactionToMessage(tx, signer, block.BaseFee())
-		statedb.SetTxContext(tx.Hash(), i)
+		statedb.SetTxContext(tx.Hash(), i, uint32(i+1))
 		var err error
 		if tx.Type() == types.StateSyncTxType && api.backend.ChainConfig().Bor != nil && api.backend.ChainConfig().Bor.IsMadhugiri(block.Number()) {
 			// State sync transactions are processed differently than normal transactions
@@ -607,7 +598,7 @@ func (api *API) IntermediateRoots(ctx context.Context, hash common.Hash, config 
 			// N.B: This should never happen while tracing canon blocks, only when tracing bad blocks.
 			return roots, nil
 		}
-		// calling IntermediateRoot will internally call Finalize on the state
+		// Calling IntermediateRoot will internally call Finalize on the state
 		// so any modifications are written to the trie
 		roots = append(roots, statedb.IntermediateRoot(deleteEmptyObjects))
 	}
@@ -646,12 +637,9 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 
 	blockCtx := core.NewEVMBlockContext(block.Header(), api.chainContext(ctx), nil)
 	evm := vm.NewEVM(blockCtx, statedb, api.backend.ChainConfig(), vm.Config{})
-	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
-		core.ProcessBeaconBlockRoot(*beaconRoot, evm)
-	}
-	if api.backend.ChainConfig().IsPrague(block.Number()) {
-		core.ProcessParentBlockHash(block.ParentHash(), evm)
-	}
+
+	// Run pre-execution system calls
+	core.PreExecution(ctx, block.BeaconRoot(), block.ParentHash(), api.backend.ChainConfig(), evm, block.Number(), block.Time())
 
 	// JS tracers have high overhead. In this case run a parallel
 	// process that generates states in one thread and traces txes
@@ -770,7 +758,7 @@ txloop:
 
 		// Generate the next state snapshot fast without tracing
 		msg, _ := core.TransactionToMessage(tx, signer, block.BaseFee())
-		statedb.SetTxContext(tx.Hash(), i)
+		statedb.SetTxContext(tx.Hash(), i, uint32(i+1))
 		res, err := core.ApplyMessage(evm, msg, nil)
 		if err != nil {
 			failed = err
@@ -865,14 +853,11 @@ func (api *API) standardTraceBlockToFile(ctx context.Context, block *types.Block
 		// Note: This copies the config, to not screw up the main config
 		chainConfig, canon = overrideConfig(chainConfig, config.Overrides)
 	}
-
 	evm := vm.NewEVM(vmctx, statedb, chainConfig, vm.Config{})
-	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
-		core.ProcessBeaconBlockRoot(*beaconRoot, evm)
-	}
-	if chainConfig.IsPrague(block.Number()) {
-		core.ProcessParentBlockHash(block.ParentHash(), evm)
-	}
+
+	// Run pre-execution system calls
+	core.PreExecution(ctx, block.BeaconRoot(), block.ParentHash(), chainConfig, evm, block.Number(), block.Time())
+
 	for i, tx := range block.Transactions() {
 		// Prepare the transaction for un-traced execution
 		msg, _ := core.TransactionToMessage(tx, signer, block.BaseFee())
@@ -905,6 +890,7 @@ func (api *API) standardTraceBlockToFile(ctx context.Context, block *types.Block
 			return nil, err
 		}
 		dumps = append(dumps, dump.Name())
+
 		// Set up the tracer and EVM for the transaction.
 		var (
 			writer = bufio.NewWriter(dump)
@@ -926,7 +912,7 @@ func (api *API) standardTraceBlockToFile(ctx context.Context, block *types.Block
 			NoBaseFee: true,
 		})
 		// Execute the transaction and flush any traces to disk
-		statedb.SetTxContext(tx.Hash(), i)
+		statedb.SetTxContext(tx.Hash(), i, uint32(i+1))
 		from := msg.From
 		if isStateSync {
 			from = params.BorSystemAddress
@@ -1428,7 +1414,7 @@ func (api *API) traceTx(ctx context.Context, tx *types.Transaction, message *cor
 	defer cancel()
 
 	// Call Prepare to clear out the statedb access list
-	statedb.SetTxContext(txctx.TxHash, txctx.TxIndex)
+	statedb.SetTxContext(txctx.TxHash, txctx.TxIndex, uint32(txctx.TxIndex+1))
 
 	// Handle state-sync transactions separately. They're part of block body post Madhugiri
 	// so we can replay them and gather traces.

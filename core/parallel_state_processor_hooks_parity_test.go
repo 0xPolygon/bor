@@ -48,6 +48,7 @@ var hookV2Statuses = map[string]hookV2Status{
 	"OnOpcode":        {firedInV2: true},
 	"OnFault":         {firedInV2: true},
 	"OnGasChange":     {firedInV2: true},
+	"OnGasChangeV2":   {firedInV2: true},
 	"OnBalanceChange": {firedInV2: true},
 	"OnNonceChange":   {firedInV2: true},
 	"OnNonceChangeV2": {firedInV2: true},
