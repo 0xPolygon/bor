@@ -2212,3 +2212,150 @@ meta-guards pass; `params/config.go`, the chain presets, the packaged genesis
 files and `forkid` are untouched. Broad sweep after the `effectiveTip` fix:
 **92 packages, 0 failures** — including `core/vm`, whose racy interrupt/abort
 tests happened to pass this round. `tests/bor`: **620.5 s, exit 0**.
+
+## v1.17.3 milestone verification — full suite
+
+The per-batch tier (build, vet, lint, unit, `tests/bor`) is recorded per batch
+above. This is the per-milestone tier required by the skill's invariant 8:
+kurtosis devnet, govulncheck, diffguard.
+
+| Gate | Result |
+| ---- | ------ |
+| kurtosis devnet (health) | **8/8 probes PASS** + two exact Amsterdam-dormancy proofs + fee-log validation |
+| kurtosis devnet (witness) | **stateless node agrees on state root** with two full-sync nodes; 189 witnesses transferred |
+| govulncheck | 1 called vulnerability, **not introduced by this milestone** |
+| diffguard (structural) | 1 FAIL, **proven pre-existing**; 1 dead-code hit, **identical to upstream** |
+| diffguard (mutation) | CI/operator gate — not reproduced in-session, same as the v1.17.0 milestone |
+
+### Devnet — `bor:v1173-sync`, GitCommit-verified
+
+Built from the milestone tip `df1e813aa` and verified from inside the container
+(`bor version` → GitCommit `df1e813aa15123104bc8d40e18db0bb4a8c7f4a8`). Small
+preset, 13 services, zero Bor-side log errors. Both nodes 205→233 with
+**leader-lag 0** and an **identical finalized hash**; Heimdall 488 on both;
+milestones 232→**621**; checkpoints ack_count 4→**17**; state-sync clerk records
+ids 1..**113** accumulating from L1. Full table:
+`runs/pos-spawn-devnet/2026-08-04T04-39-49Z-claude-pos-v1173-sync/summary.md`.
+
+**Two of the three Amsterdam-gated pricing EIPs are now proven inert exactly**, not
+merely by reading the gates — measured at head 392, i.e. after Madhugiri and
+MadhugiriPro activated, so PIP-88 was live during the measurements. The instrument
+is the exact figure Bor reports in its own error messages, which needs no funded
+account:
+
+- **EIP-7981** — intrinsic gas for a tx with one access-list address and one
+  storage key: `want 25300`. Pre-7981 is 25300; post-7981 would be 28628.
+- **EIP-7976** — floor data gas for 1000 zero bytes: `want 31000`. Pre-7976
+  (10/40) is 31000; post-7976 (64/64) would be 85000.
+
+The running chain config carries `pragueBlock 0`, `bor.madhugiriBlock 256`,
+`bor.madhugiriProBlock 256`, and **no `amsterdamBlock` / `osakaBlock` /
+`verkleBlock` at all**.
+
+**The EIP-7825 cap lift is not devnet-provable**, and the first probe was an
+instrument artifact worth recording so it is not repeated: the cap check sits
+inside `if !msg.SkipTransactionChecks`, and `eth_call` sets that flag, so a call
+with `gas = 20,000,000` was *accepted* — which says nothing about the cap. It is
+provable by inspection instead: with `isAmsterdam` false, the merged condition
+`(isOsaka || isMadhugiri) && !isAmsterdam && msg.GasLimit > params.MaxTxGas`
+reduces identically to Bor's pre-merge form.
+
+**Batch 26's `effectiveTip` pin validated end to end.** 5907 `LogFeeTransfer`
+events on `0x1010` scanned from block 100 to head: **zero** words above 2^200, and
+the arithmetic exactly coherent on the sample (`input1 − amount = output1`,
+`input2 + amount = output2`, to the wei). The corrupted-log failure mode is
+precisely what the uint256 wrap would have shipped, so this is the live signal the
+unit tier could not give.
+
+### Witness path — proven on a live chain with a stateless node
+
+The first devnet covered chain health and the Amsterdam proofs but gave **no
+coverage of the witness path**, which is the divergence this sync guards most
+carefully and the one three changes in this milestone touch. A second devnet
+(`pos-v1173-witness`) closed that gap with three L2 nodes:
+
+| Node | `syncmode` | `[witness] enable` | `syncwithwitnesses` | Role |
+| ---- | ---------- | ------------------ | ------------------- | ---- |
+| validator | `full` | true | false | generates + serves witnesses |
+| rpc | `full` | false | false | control — wit off |
+| rpc | **`stateless`** | true | **true** | imports blocks from witnesses |
+
+Rendered config was verified inside each container rather than assumed. Both
+witness-participating nodes needed kurtosis-pos's `el_bor_produce_witness`, because
+that key drives `[witness] enable` and Bor registers `wit.MakeProtocols` only under
+`WitnessProtocol` — without it the stateless node would have had no wire protocol
+to fetch over.
+
+**Result: all three nodes agree on block hash *and* state root**, at the finalized
+block (`0xcf`, stateRoot `0x9c56c6…9c3fae`) and at a fixed height (block 202), with
+the stateless node at **lag 0**. Since a stateless node reconstructs state *from
+witnesses*, that agreement is end-to-end evidence for all three of this milestone's
+witness-adjacent changes, each of which was previously supported only by reading
+the code:
+
+- batch 23's rename of the type carrying `CollectStateWitness` — occurrence counting
+  showed the body unchanged, but only this shows the runtime dispatch still resolves;
+- batch 24's rewrite of `queue.deliver` / `concurrentFetch`, which Bor's witness
+  fetcher flows through;
+- batch 24/25's switch of `reconstruct` to a batch index, in the same queue that
+  carries `witnessTaskPool` / `SetWitnessDone`.
+
+The witness-store counts confirm the path was loaded rather than merely enabled:
+the stateless node held 169 → 178 → **189** witness files as the head advanced,
+**equal to the producer's 189**, so every witness generated was transferred and
+retained.
+
+Log errors were checked rather than waved past: the validator had **0**; both RPC
+nodes had 22, all of them the same `error handling milestone ws event
+err="chain out of sync"` line inside a 4-second startup window, with none in the
+following 4 minutes. The count is identical on the control node with the witness
+protocol disabled, so it is startup noise on any freshly-joining RPC.
+
+**Not covered, and stated so the record is honest:** the `ubtTrieReader` gap remains
+open — it only manifests under UBT, which cannot be enabled on a devnet without
+scheduling the fork, so this validates the **MPT** dispatch only. Parallel stateless
+import was deliberately left off to keep a failure isolable, and long-range
+stateless sync / witness fast-forward was not exercised, since the node joined near
+genesis and followed live.
+
+Full table:
+`runs/pos-spawn-devnet/2026-08-04T04-39-49Z-claude-pos-v1173-witness/summary.md`.
+
+### govulncheck — one called vulnerability, and it predates this milestone
+
+`GO-2026-6061` (`google.golang.org/grpc@v1.79.3`, fixed in `1.82.1`). The v1.17.2
+baseline recorded three *different* ones, so this was verified rather than reported
+as an improvement: **grpc, `golang.org/x/text` and `golang.org/x/crypto` are
+byte-identical at `ppatil-upstream-v1.17.3-part2` and at the milestone tip** — this
+milestone moved no dependency. The earlier three cleared because the local
+toolchain is now go1.26.5 (the stated fix for the `crypto/tls` entry) and x/text /
+x/crypto were already past their affected ranges before part-2. So this is a newly
+**published** advisory against an unmoved dependency.
+
+Bumping grpc mid-sync would diverge from upstream's `go.mod`; it belongs as a team
+follow-up, not a merge decision.
+
+### diffguard — one FAIL, proven pre-existing
+
+Run structurally (`-skip-mutation`), then re-run **at the PR base in a worktree**
+to baseline every finding rather than assuming:
+
+- **`core -> core` circular dependency (FAIL)** — present identically at the base
+  (`ppatil-upstream-mptubt`). Pre-existing.
+- 21 SDP warnings and the churn-weighted complexity list (`SetEthConfig`,
+  `BlockChain.reorg`, `EVM.Run`, …) — pre-existing architecture, untouched by this
+  milestone.
+- **Unused func `newPrefetchStateReader`** in `core/state/reader_eip_7928.go` —
+  flagged as dead code *in changed code*, because the file arrived in batch 24 with
+  #33737. Both that file and its test are **byte-identical to upstream**, and
+  upstream has no production caller either: #33737 ships only the reader plus a
+  test that calls `newPrefetchStateReaderInternal`. It is groundwork for BAL-driven
+  prefetching, so it needs Amsterdam — folded into the existing "BALs are not built
+  under BlockSTM V2" row rather than given its own.
+
+Worth recording as a method point: an unused private function compiles and passes
+`go vet`, so neither the build nor the test tier could have surfaced this. diffguard
+was the only gate that would.
+
+Mutation testing was not reproduced in-session, matching the v1.17.0 milestone's
+recorded decision that diffguard-mutation and the soak ladder are CI/operator gates.
