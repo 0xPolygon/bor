@@ -1162,7 +1162,7 @@ func (bc *BlockChain) loadLastState() error {
 // initializeHistoryPruning sets bc.historyPrunePoint.
 func (bc *BlockChain) initializeHistoryPruning(latest uint64) error {
 	var (
-		freezerTail, _ = bc.db.Tail()
+		freezerTail, _ = bc.db.Tail(rawdb.ChainFreezerBlockDataGroup)
 		genesisHash    = bc.genesisBlock.Hash()
 		mergePoint     = history.MergePrunePoints[genesisHash]
 		praguePoint    = history.PraguePrunePoints[genesisHash]

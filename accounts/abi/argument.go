@@ -184,7 +184,7 @@ func (arguments Arguments) copyTuple(v any, marshalledValues []any) error {
 		}
 	case reflect.Slice, reflect.Array:
 		if value.Len() < len(marshalledValues) {
-			return fmt.Errorf("abi: insufficient number of arguments for unpack, want %d, got %d", len(arguments), value.Len())
+			return fmt.Errorf("abi: insufficient number of arguments for unpack, want %d, got %d", len(marshalledValues), value.Len())
 		}
 
 		for i := range nonIndexedArgs {
