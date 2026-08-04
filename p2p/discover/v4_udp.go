@@ -470,6 +470,7 @@ func (t *UDPv4) loop() {
 		now := time.Now()
 
 		for p, el := range iterList[*replyMatcher](plist) {
+			nextTimeout = p
 			if dist := p.deadline.Sub(now); dist < 2*respTimeout {
 				timeout.Reset(dist)
 				return
@@ -477,7 +478,7 @@ func (t *UDPv4) loop() {
 			// Remove pending replies whose deadline is too far in the
 			// future. These can occur if the system clock jumped
 			// backwards after the deadline was assigned.
-			nextTimeout.errc <- errClockWarp
+			p.errc <- errClockWarp
 
 			plist.Remove(el)
 		}
@@ -592,8 +593,9 @@ func (t *UDPv4) readLoop(unhandled chan<- ReadPacket) {
 		if err := t.handlePacket(from, buf[:nbytes]); err != nil && unhandled == nil {
 			t.log.Debug("Bad discv4 packet", "addr", from, "err", err)
 		} else if err != nil && unhandled != nil {
+			p := ReadPacket{bytes.Clone(buf[:nbytes]), from}
 			select {
-			case unhandled <- ReadPacket{buf[:nbytes], from}:
+			case unhandled <- p:
 			default:
 			}
 		}

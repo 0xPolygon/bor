@@ -1166,12 +1166,12 @@ func (q *queue) deliver(id string, taskPool map[common.Hash]*types.Header,
 
 	// Iterate based on the number of *successfully validated* items (up to index i)
 	log.Trace("deliver: Starting reconstruction loop", "peer", id, "validatedCount", i)
-	for _, header := range request.Headers[:i] {
+	for k, header := range request.Headers[:i] {
 		log.Trace("deliver: Getting delivery slot", "peer", id, "headerNum", header.Number.Uint64(), "headerHash", header.Hash())
 		if res, stale, err := q.resultCache.GetDeliverySlot(header.Number.Uint64()); err == nil && !stale {
-			log.Trace("deliver: Got delivery slot, calling reconstruct", "peer", id, "headerHash", header.Hash(), "acceptedIndex", accepted)
-			reconstruct(accepted, res)
-			log.Trace("deliver: reconstruct finished", "peer", id, "headerHash", header.Hash(), "acceptedIndex", accepted)
+			log.Trace("deliver: Got delivery slot, calling reconstruct", "peer", id, "headerHash", header.Hash(), "batchIndex", k)
+			reconstruct(k, res)
+			log.Trace("deliver: reconstruct finished", "peer", id, "headerHash", header.Hash(), "batchIndex", k)
 			accepted++
 		} else {
 			// Between here and above, some other peer filled this result,

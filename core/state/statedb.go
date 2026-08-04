@@ -2016,7 +2016,9 @@ func (s *StateDB) commitAndFlush(block uint64, deleteEmptyObjects bool, noStorag
 			s.TrieDBCommits += time.Since(start)
 		}
 	}
-	s.reader, _ = s.db.Reader(s.originalRoot)
+	// The reader update must be performed as the final step, otherwise,
+	// the new state would not be visible before db.commit.
+	s.reader, err = s.db.Reader(s.originalRoot)
 	return ret, err
 }
 

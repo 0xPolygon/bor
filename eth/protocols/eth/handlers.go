@@ -274,10 +274,12 @@ func ServiceGetBlockBodiesQuery(chain *core.BlockChain, query GetBlockBodiesRequ
 			break
 		}
 
-		if data := chain.GetBodyRLP(hash); len(data) != 0 {
-			bodies = append(bodies, data)
-			bytes += len(data)
+		data := chain.GetBodyRLP(hash)
+		if len(data) == 0 {
+			break // If we don't have this block's body, stop serving.
 		}
+		bodies = append(bodies, data)
+		bytes += len(data)
 	}
 
 	return bodies
@@ -334,19 +336,19 @@ func ServiceGetReceiptsQuery68(chain *core.BlockChain, query GetReceiptsRequest)
 		results := chain.GetReceiptsRLP(hash)
 		if len(results) == 0 {
 			if header := chain.GetHeaderByHash(hash); header == nil || header.ReceiptHash != types.EmptyRootHash {
-				continue
+				break // Don't have this block's receipts, stop serving.
 			}
 			results = rlp.EmptyList
 		} else {
 			body := chain.GetBodyRLP(hash)
 			if body == nil {
-				continue
+				break // The block body is missing, stop serving.
 			}
 			var err error
 			results, err = blockReceiptsToNetwork68(results, body)
 			if err != nil {
 				log.Error("Error in block receipts conversion", "hash", hash, "err", err)
-				continue
+				break
 			}
 		}
 		receipts = append(receipts, results)
@@ -456,19 +458,20 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 			break
 		}
 
+		// If we don't have this block's receipts or body, stop serving.
 		blockReceipts, isStateSyncReceipt, ok := gatherBlockReceipts(chain, hash, borCfg)
 		if !ok {
-			continue
+			break
 		}
 		body := chain.GetBodyRLP(hash)
 		if body == nil {
-			continue
+			break
 		}
 
 		results, _, err := blockReceiptsToNetwork69(blockReceipts, body, isStateSyncReceipt, receiptQueryParams{})
 		if err != nil {
 			log.Error("Error in block receipts conversion", "hash", hash, "err", err)
-			continue
+			break
 		}
 
 		receipts = append(receipts, results)
@@ -509,7 +512,7 @@ func ServiceGetReceiptsQuery70(chain *core.BlockChain, query GetReceiptsRequest,
 		results, incomplete, err := blockReceiptsToNetwork69(blockReceipts, body, isStateSyncReceipt, q)
 		if err != nil {
 			log.Error("Error in block receipts conversion", "hash", hash, "err", err)
-			continue
+			break
 		}
 		if results == nil {
 			// Not even the first receipt of this block fits in the remaining space. There
