@@ -482,6 +482,7 @@ func (n *Node) startRPC() error {
 			Vhosts:             n.config.AuthVirtualHosts,
 			Modules:            DefaultAuthModules,
 			prefix:             DefaultAuthPrefix,
+			disableGzip:        true,
 			rpcEndpointConfig:  sharedConfig,
 		})
 		if err != nil {
