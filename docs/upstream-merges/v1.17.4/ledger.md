@@ -3725,8 +3725,44 @@ bump "is not taken at all", not deferred. The chores commit has nothing to do he
 What *does* now become actionable is the open question that entry parked: what this file
 should read for a bor tree whose geth base really is v1.17.4. Until this batch that was
 hypothetical; from here the branch genuinely sits on v1.17.4, so it wants an explicit
-answer. It remains a **bor release decision, not a merge one**, and is deliberately left
-untouched here.
+answer. It remains a **bor release decision, not a merge one**.
+
+#### Reversed after the fact — the file now reads v1.17.4
+
+**Operator decision, 2026-08-05, taken after the batch and chores commits were already
+made.** The question above was put to the operator and answered directly: the file should
+say v1.17.4. It now carries `Patch = 4` and `Meta = "stable"`, which makes the constants
+**identical to upstream's own v1.17.4 release commit** — the only remaining difference from
+`36a7dc72e:version/version.go` is a bor-added comment line. The reasoning for the earlier
+"keep bor's" resolution was sound *as a merge decision*, and it is retained above rather
+than rewritten, because the sequence itself is the useful record: the merge declined the
+bump, the release question was then raised explicitly, and the release answer was to take
+it. This is that answer, not a correction of an error.
+
+Two things follow that a reader needs to know.
+
+First, **the commit messages of `f397229ee` (batch 33) and `2888b2d59` (the chores commit)
+both state that the version file is deliberately not bumped, and they are now out of date.**
+They cannot be amended — rewriting either SHA would break every pull request stacked above
+this branch, which is a far worse outcome than a stale sentence. This ledger entry is the
+authoritative record where they disagree.
+
+Second, the change is safe but not entirely invisible, and the one place it surfaces is
+worth naming. `eth/backend.go`'s `makeExtraData` packs
+`Major<<16 | Minor<<8 | Patch` into the miner's default extra-data when no
+`--miner.extradata` is configured, so the packed word moves from `0x011100` to `0x011104`.
+That lands in the **block header's extra field** — but only as content of the 32-byte
+vanity prefix, because `consensus/bor/bor.go` truncates `header.Extra` to exactly
+`types.ExtraVanityLength` and then appends the validator bytes and seal itself. Vanity
+content is producer-chosen and constrained only by length, no validity rule reads it, and
+in practice every deployment sets its own extra-data anyway (pos-ops per host, and the
+kurtosis package uses `bor-<id>`). So the effect is cosmetic, and on a default-configured
+node it is an improvement: the advertised geth base becomes the true one.
+
+Verified after the change: `go build ./...` clean, and `consensus/bor`, `eth/catalyst` and
+`core/txpool/legacypool` — the packages whose tests touch version or extra-data — all pass.
+Nothing in the tree embeds the old string; `cmd/geth`'s console tests template
+`version.WithCommit(...)` from the same constants, so they follow automatically.
 
 ### The other two conflicts
 
