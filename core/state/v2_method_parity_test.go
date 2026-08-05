@@ -83,6 +83,10 @@ var pdbExemptMethods = map[string]pdbExemptCategory{
 	// statedb.CollectStateWitness on the underlying *StateDB after settle
 	// to pull in worker-side trie reads. PDB doesn't need a counterpart.
 	"CollectStateWitness": catV2SettleHelper,
+	// Started once per block on finalDB before workers run; walks the shared
+	// read cache into the witness concurrently with execution. Per-tx PDBs
+	// never orchestrate block-level witness recording.
+	"StartWitnessReadSetPrewalk": catV2SettleHelper,
 	// V2 calls this on the underlying *StateDB at SafeBase construction
 	// to flush pre-block dirty/pending storage (system calls, DAO fork)
 	// into the shared trieReader storage cache. PDB never needs to do
