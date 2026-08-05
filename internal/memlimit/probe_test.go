@@ -1,4 +1,4 @@
-// Copyright 2023 The go-ethereum Authors
+// Copyright 2026 The go-ethereum Authors
 // This file is part of the go-ethereum library.
 //
 // The go-ethereum library is free software: you can redistribute it and/or modify
@@ -14,32 +14,15 @@
 // You should have received a copy of the GNU Lesser General Public License
 // along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
-package vm
+package memlimit
 
-import (
-	"testing"
+import "testing"
 
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/params"
-)
-
-func FuzzPrecompiledContracts(f *testing.F) {
-	// Create list of addresses
-	var addrs []common.Address
-	for k := range allPrecompiles {
-		addrs = append(addrs, k)
+// TestLimitSmoke asserts that Limit() returns a non-zero value,
+// exercising the real probe and the gopsutil fallback.
+func TestLimitSmoke(t *testing.T) {
+	bytes, src := Limit()
+	if bytes == 0 {
+		t.Errorf("Limit() returned 0 bytes (source=%s); expected non-zero on any sane host", src)
 	}
-	f.Fuzz(func(t *testing.T, addr uint8, input []byte) {
-		a := addrs[int(addr)%len(addrs)]
-		p := allPrecompiles[a]
-		gas := p.RequiredGas(input)
-		if gas > 10_000_000 {
-			return
-		}
-		inWant := string(input)
-		RunPrecompiledContract(nil, p, a, input, NewGasBudget(gas, 0), nil, params.Rules{})
-		if inHave := string(input); inWant != inHave {
-			t.Errorf("Precompiled %v modified input data", a)
-		}
-	})
 }

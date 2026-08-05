@@ -2778,8 +2778,8 @@ func (w *worker) streamIdleBatch(
 		select {
 		case txsCh <- tx:
 			localPrefetched[ltx.Hash] = struct{}{}
-			gaspool.SubGas(ltx.Gas)
-			totalGasPool.SubGas(ltx.Gas)
+			gaspool.CheckGasLegacy(ltx.Gas)
+			totalGasPool.CheckGasLegacy(ltx.Gas)
 		default:
 			// Channel full — stop this batch. The tx we failed to send will
 			// reappear in the next iteration's pool snapshot.

@@ -204,7 +204,7 @@ func execPathResultWithConfig(
 		GasPrice:   uint256.NewInt(66),
 		BlobHashes: blobHashes,
 	})
-	ret, gasLeft, err := evm.Call(caller, addr, input, NewGasBudget(gas), uint256.NewInt(77))
+	ret, gasLeft, err := evm.Call(caller, addr, input, NewGasBudget(gas, 0), uint256.NewInt(77))
 	return execResult{
 		ret:  ret,
 		gas:  gasLeft.RegularGas,
@@ -1570,7 +1570,7 @@ func runWithInterrupt(code []byte, gas uint64, switchDispatch bool) error {
 	}()
 
 	caller := common.BytesToAddress([]byte("caller"))
-	_, _, err := evm.Call(caller, addr, nil, NewGasBudget(gas), uint256.NewInt(0))
+	_, _, err := evm.Call(caller, addr, nil, NewGasBudget(gas, 0), uint256.NewInt(0))
 	return err
 }
 
@@ -1585,7 +1585,7 @@ func runWithAbort(code []byte, gas uint64, switchDispatch bool) error {
 	}()
 
 	caller := common.BytesToAddress([]byte("caller"))
-	_, _, err := evm.Call(caller, addr, nil, NewGasBudget(gas), uint256.NewInt(0))
+	_, _, err := evm.Call(caller, addr, nil, NewGasBudget(gas, 0), uint256.NewInt(0))
 	return err
 }
 
@@ -1593,7 +1593,12 @@ func runWithAbort(code []byte, gas uint64, switchDispatch bool) error {
 // mid-execution stops both paths and both return the same error.
 func TestInterruptDuringExecution(t *testing.T) {
 	t.Parallel()
-	const gas = uint64(10_000_000)
+	// The budget has to outlast the 5ms timer in runWithInterrupt by a wide
+	// margin: time.Sleep is a lower bound, so the flag can land well after 5ms,
+	// and if the loop exhausts its gas first the paths disagree for no reason
+	// other than interpreter speed. 10M was enough until the in-place stack
+	// operations cut the switch-dispatch path to ~6ms for that budget.
+	const gas = uint64(200_000_000)
 
 	// Infinite loop — only the interrupt can stop it.
 	loop := []byte{
@@ -1617,7 +1622,9 @@ func TestInterruptDuringExecution(t *testing.T) {
 // JUMP/JUMPI to stop, and both paths produce the same result.
 func TestAbortDuringJump(t *testing.T) {
 	t.Parallel()
-	const gas = uint64(10_000_000)
+	// See TestInterruptDuringExecution: the budget must outlast runWithAbort's
+	// 5ms timer regardless of how fast the interpreter gets.
+	const gas = uint64(200_000_000)
 
 	jumpLoop := []byte{
 		byte(JUMPDEST), // pc=0
