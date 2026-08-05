@@ -819,6 +819,17 @@ func ExecuteV2BlockSTM(
 	// missing this setup, so make the wrapper defensive and idempotent.
 	base.EnableConcurrentReads()
 
+	// Start the witness read-set prewalker only after concurrent reads are
+	// enabled: it shares the trie reader with the workers, and starting it
+	// before the enable write above would be an unsynchronized read/write
+	// on the same reader. It walks cached keys into the witness while the
+	// workers execute, keeping the settle drain in CollectStateWitness off
+	// the block's critical path. No-op when no witness is being recorded.
+	if finalDB != nil {
+		stopPrewalk := finalDB.StartWitnessReadSetPrewalk()
+		defer stopPrewalk()
+	}
+
 	itasks := make([]blockstm.V2Task, len(tasks))
 	for i := range tasks {
 		itasks[i] = &v2Task{index: tasks[i].Index, tx: tasks[i].Tx, msg: tasks[i].Msg}
@@ -1168,14 +1179,6 @@ func (p *V2StateProcessor) Process(block *types.Block, statedb *state.StateDB, c
 		return nil, fmt.Errorf("v2: tx %d apply message: %w", result.ExecErrIdx, result.ExecErr)
 	}
 
-	// V2 worker reads went through pool copies that share `statedb`'s reader
-	// by reference, so the trie tracers on that reader hold every node V2
-	// touched. finalDB.IntermediateRoot only iterates finalDB.stateObjects
-	// for witness collection, missing addresses that were ONLY read (never
-	// settled). Pull the read-side witness directly from the shared reader
-	// here so the produced witness is complete.
-	statedb.CollectStateWitness()
-
 	return p.finalizeV2Block(block, statedb, header, config, tasks, result,
 		tProcess, tSetup, tCopy, tExec)
 }
@@ -1198,6 +1201,16 @@ func (p *V2StateProcessor) finalizeV2Block(block *types.Block, statedb *state.St
 	// (state sync contract, validator rewards) so IntermediateRoot
 	// doesn't need to load them from pebble synchronously.
 	statedb.FinaliseFastWithPrefetch(true)
+
+	// V2 worker reads went through pool copies that share `statedb`'s reader
+	// by reference, so the trie tracers on that reader hold every node V2
+	// touched. finalDB.IntermediateRoot only iterates finalDB.stateObjects
+	// for witness collection, missing addresses that were ONLY read (never
+	// settled). Pull the read-side witness directly from the shared reader.
+	// This must run after engine.Finalize: its state reads (state sync at
+	// sprint boundaries) are part of the witness contract too, and on nodes
+	// with a flat reader they are served without ever reaching a trie tracer.
+	statedb.CollectStateWitness()
 	tFinalize := time.Now()
 
 	logV2BlockStats(block, tasks, result, tProcess, tSetup, tCopy, tExec, tFinalize)
