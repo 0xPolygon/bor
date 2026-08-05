@@ -3772,3 +3772,165 @@ plus `p2p/discover` and `version` for the two no-op commits. `tests/bor` passes 
 **No regressions and no new failures** — the only vet output is the two pre-existing
 lock-copy findings in `trie/secure_trie.go` and `core/parallel_state_processor.go`, which
 this batch does not touch and which have been re-baselined in earlier batches.
+
+## v1.17.4 milestone verification suite
+
+Run at the milestone tip after batch 33 and the chores commit. Every result below
+is from a command actually executed at that tip; where a check is scoped or
+sampled, the scope is stated rather than implied.
+
+### Code-level gates
+
+`go test ./...` over the whole tree — **149 packages pass, 3 fail, 85 carry no
+tests**. All three failures, and all twelve failing test names, are in the
+documented pre-existing set, and the *signatures* were checked rather than just
+the names: `cmd/evm`'s four (`TestT8n`, `TestEvmRun`, `TestEVMTracing`,
+`TestEvmRunRegEx`) all report `invalid eip number 1346`, the long-standing t8n
+eip-validation drift; `cmd/geth`'s five (`TestAttachWelcome` with its three
+subtests, `TestConsoleWelcome`, `TestCustomBackend`, `TestCustomGenesis`,
+`TestExport`) and `cmd/devp2p/internal/ethtest` all show
+`params.(*BorConfig).CalculatePeriod` reached from `miner.(*worker).newWorkLoop`
+via `miner.newWorker` — the unfiled nil-config panic. A scripted check for any
+failing test outside that set returned nothing.
+
+Worth recording the direction of travel: the pre-existing failure set has **shrunk**
+across this sync rather than grown. `core/state TestPDBMethodParity` was fixed in
+the v1.17.0 chores, and the two `core/vm` interrupt/abort timer flakes were fixed
+in batch 32.
+
+`make lint` — **0 issues**, which also confirms that the milestone's several
+declines left no unused symbols behind. `gofmt` clean. `go mod tidy` is a no-op in
+both the main module and `cmd/keeper`.
+
+`govulncheck` — **one called vulnerability, `GO-2026-6061`**
+(`google.golang.org/grpc@v1.79.3`, fixed in `v1.82.1`). It is develop-inherited,
+not sync-introduced, and that was verified rather than asserted: grpc is pinned to
+the identical `v1.79.3` on `origin/develop` and at the milestone tip. The sync's
+whole dependency delta against develop is seven lines, all of it traceable to
+recorded decisions — `go-verkle` and `go-ipa` dropped with the batch-6 scaffolding
+removal, `olekukonko/tablewriter` replaced by `internal/tablewriter` (#28892),
+`karalabe/hid` renamed to `ethereum/hid` upstream, `grafana/pyroscope-go` added
+(#33623), plus `go-eth-kzg`, `c-kzg-4844` and `klauspost/compress` bumps. No new
+dependency carries an advisory.
+
+Both invariant-9 meta-guards pass at the tip: `TestReinforceMultiClientPreCompilesTest`
+(the order-sensitive `params.Rules` field list) and `TestV2ForkParity` (the
+`forkExpectations` map, now carrying the documented `IsAmsterdam` asymmetry that
+batch 32 introduced). The precompile continuity matrix passes too — expected,
+since EIP-8037 added no `Rules` field and changed no precompile registration.
+
+### EIP-8037 gas invariance — the check this milestone specifically needed
+
+The largest adoption of the sync rewrote gas accounting around a reservoir, and
+the safety argument for taking it was analytic: with `StateGas == 0`, which is
+bor's situation everywhere while Amsterdam is dormant, upstream's exit forms
+reduce exactly to bor's previous behaviour. An analytic argument on a consensus
+path deserves an empirical counterpart, and one already exists in-tree.
+
+`BOR_BLOCKSTM_TEST=1 go test ./core/ -run TestV2BlockSTMAllBlocks` replays **241
+real mainnet blocks** from `core/blockstm/testdata` through the merged EVM and
+asserts state-root consistency between serial execution and BlockSTM V2. It
+passes, in 90.45s, with no mismatch of any kind. Validation-failure counts came
+out at min 3 / median 35 / max 127 per block, the same order as production.
+
+That result *is* the gas-invariance check. `gasUsed` is committed into each
+receipt, receipts hash into the receipt root, and the receipt root is covered by
+the header — so 241 historical blocks reproducing byte-identical roots means the
+merged tree charges byte-identical gas. Building a second image from the pre-merge
+base and diffing block-by-block was considered and is unnecessary: this instrument
+is stronger and already parameterised by real chain data.
+
+### EIP-7928 dormancy, and a correction to how it had been recorded
+
+Nothing on any bor path writes `header.BlockAccessListHash`. All nineteen
+non-test references are the field declaration, nil-conditional RLP/JSON codec,
+`CopyHeader`, the rawdb accessor and the RPC output, plus the verifier — so the
+field stays nil, as the register has said since batch 20.
+
+The claim that "the verifier keeps asserting exactly that" needed narrowing. The
+assertion is real, correctly block-based, and rejects a non-nil field pre-Amsterdam
+with `invalid block access list hash: have %x, expected nil`, paired with the same
+treatment of EIP-7843's `SlotNumber`. But it lives in `consensus/beacon`, and
+`eth/ethconfig` only ever constructs that engine around clique or an ethash faker —
+non-bor chain configs. Bor mainnet and Amoy headers are verified by `consensus/bor`,
+which checks neither field.
+
+This is harmless today and pre-existing rather than an M6 regression: the assertion
+arrived with `dc3794e3d` in an earlier milestone, this milestone does not touch
+`consensus/beacon/consensus.go`, nothing writes the field, and the field feeds no
+state — it is covered by the header hash, so all nodes agree on the block either
+way. It does become a requirement at enable time, and is recorded as one: whoever
+schedules Amsterdam must add the presence/absence assertions to `consensus/bor`,
+because the engine that carries them never runs on a bor network.
+
+### Milestone PR triage
+
+The triage exists to catch upstream changes that merge cleanly yet still need
+bor-side wiring — a new CLI flag, a config field, a precompile or fork gate. For
+this milestone's 105 upstream first-parent commits it comes back **empty**, and
+each class was checked directly rather than by reading commit subjects.
+
+The only new geth CLI flag upstream added is `SnapV2Flag`, and the only new
+`ethconfig.Config` field is `SnapV2`; both belong to the declined snap/2 feature
+and are absent from bor's tree entirely, which is also why the net `ethconfig`
+diff across the milestone is empty. No precompile registration changed in
+`core/vm/contracts.go`. `make docs` regenerates `docs/cli/*` and
+`default_config.toml` byte-identically, so no flag surface moved on bor's own CLI.
+`gen_config.go` needs no regeneration because its input did not change. The
+milestone's genuine follow-ups are the ones already filed in the backlog rather
+than anything this sweep newly discovered.
+
+### Live-network validation — two devnets
+
+Both ran on an image built from the milestone tip. The build context deserves a note:
+the repo's `.dockerignore` excludes only `*_test.go`, `build/_*` and `tests/testdata`,
+so a naive `docker build .` ships `misc/`, `.git` and the 1.5 GB block-replay fixtures —
+about 7.7 GB of context. Extracting the `HEAD` tree with `git`'s archive command and
+building from that instead cuts it to 93 MB. The cost is an empty `GitCommit`, so
+provenance was established two other ways: the context is by construction the `HEAD` tree
+(its `version/version.go` was checked), and the resulting binary contains this milestone's
+own strings — `negative topmost frame regular gas usage` and `Negative reservoir at revert`
+from batch 32's EIP-8037 work, plus `legacy blob sidecar unsupported post-osaka` from
+batch 31.
+
+**Standard devnet.** Both bor nodes advanced 239 → 360 with identical heads and identical
+finalized hashes at both samples, so lag zero and hash agreement; heimdall consensus
+502 → 1030; milestones 404 → 502; checkpoint acknowledgements 5 → 16; and zero
+ERROR-level lines in either bor log.
+
+**Witness devnet.** This one took two attempts, and the first failure is worth recording
+because it is a trap rather than a typo. `el_bor_sync_with_witness` reads like a witness
+toggle; kurtosis-pos renders it as `syncmode = "stateless"`, which
+`internal/cli/server/config.go` turns into `downloader.StatelessSync` — "syncing from
+latest checkpoint without history". Stateless sync therefore *requires a checkpoint to
+already exist*, and a genesis-fresh devnet has none. Setting it on the validator meant the
+block producer waited for a checkpoint only it could produce: both nodes sat at head 0
+indefinitely. That this was configuration and not code was established rather than assumed —
+heimdall was perfectly healthy throughout (height 612 → 956, finalizing every ~0.5s, no
+errors), resources were idle (bor at 0.8% CPU and 90 MB of 7.75 GB), all four witness
+settings had rendered correctly, and the same image had just driven a healthy standard
+devnet.
+
+The corrected topology puts production and consumption on different nodes — validator
+`syncmode = "full"` with `producewitnesses = true`, rpc `syncmode = "stateless"` with
+`syncwithwitnesses = true`, witness protocol enabled on both, each verified by reading the
+rendered `config.toml` rather than trusting the input. It passes: heads 91 → 204 in
+lockstep with identical finalized hashes, heimdall 199 → 434, milestones 90 → 204,
+checkpoint acknowledgements 0 → 3, zero errors.
+
+The witness path itself is evidenced directly rather than by log grep. The producer wrote
+169 witnesses (2.8 MB) and the stateless consumer holds the identical 169 files at the same
+size; `wit/1` and `wit/2` capabilities are negotiated between the two peers; and the
+consumer, running in stateless mode, tracks the producer's head exactly. That last point is
+the end-to-end argument: a stateless node cannot import a block without its witness, so
+head parity is proof the produce → propagate → import path ran.
+
+Two instrument notes, both of which nearly produced false findings. Heimdall-v2 answers
+`/milestone/count` and `/checkpoints/ack-count` with `{"code":12}` and `{"code":3}`
+Not-Implemented payloads; a first-integer grep reads those codes as data and reports a
+frozen counter. The live endpoints are `/milestones/count` and `/checkpoints/count`.
+Separately, `grep -ci witness` over container logs is worthless here — it returned 7 on
+the *broken* run (startup pruner lines) and 0 on the *healthy* one, because the pruner
+logs on a two-minute interval. And since bor is driven entirely by `config.toml` in this
+setup, grepping for `--witness*` command-line flags finds nothing regardless of how the
+node is configured.
