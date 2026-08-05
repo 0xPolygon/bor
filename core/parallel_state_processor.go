@@ -778,9 +778,12 @@ type V2ExecutionResult struct {
 	// behaviour at core/state_processor.go:222.
 	ExecErrIdx int
 	ExecErr    error
-	// ReadErr is the first database read failure observed by the read-only
-	// base used for V2 execution. The caller must discard the result because
-	// StateDB getters return zero-ish values after recording read errors.
+	// ReadErr is the first database read failure observed either by the
+	// settle-path statedb or by a SETTLED incarnation of some tx (speculative
+	// incarnations that read outside the canonical state and were invalidated
+	// don't count — see ParallelStateDB.BaseReadErr). The caller must discard
+	// the result because StateDB getters return zero-ish values after
+	// recording read errors.
 	ReadErr error
 	*blockstm.V2ExecutionResult
 }
@@ -847,16 +850,20 @@ func ExecuteV2BlockSTM(
 	panickedIdx := -1
 	execErrIdx := -1
 	var execErr error
+	var settleReadErr error
 	var settleFn blockstm.V2SettleFn
 	if finalDB != nil {
-		settleFn = newV2SettleFn(tasks, env, finalDB, blockCtx, blockHash, chainConfig, &receipts, &allLogs, &totalUsedGas, &panickedIdx, &execErrIdx, &execErr)
+		settleFn = newV2SettleFn(tasks, env, finalDB, blockCtx, blockHash, chainConfig, &receipts, &allLogs, &totalUsedGas, &panickedIdx, &execErrIdx, &execErr, &settleReadErr)
 	}
 
 	raw := blockstm.ExecuteV2BlockSTM(ctx, itasks, env, blockCtx.Coinbase, numWorkers, conflictAddrs, settleFn)
-	readErr := env.safeBase.Error()
-	if err := base.Error(); readErr == nil && err != nil {
-		readErr = err
-	}
+	// Reads by the settle/finalize path go directly through base; its error
+	// is unconditionally fatal. Per-worker base read failures are judged per
+	// settled incarnation below — a speculative incarnation chasing stale
+	// values may legitimately read outside the canonical state (on
+	// witness-backed replay such nodes simply don't exist) and is then
+	// invalidated, so env.safeBase.Error() would over-trigger here.
+	readErr := base.Error()
 
 	// V2 worker code reads land in env.safeBase.codeCache (each blob loaded
 	// once, deduplicated by sync.Map). When witness collection is on, dump
@@ -875,9 +882,19 @@ func ExecuteV2BlockSTM(
 			pdbs[i] = s.(*state.ParallelStateDB)
 		}
 	}
-	// If settle never ran (finalDB nil), still surface a panic / exec error
-	// from the PDBs so the caller can fail the block rather than commit
-	// partial state.
+	// Worker base-read failures are checked inside the settle callback, the
+	// only point where a pdb is provably the settled incarnation. Scanning
+	// raw.States here instead would read recycled pool objects: settlement
+	// returns each pdb to the pool, a later tx's execution Resets and reuses
+	// it, and the old raw.States slot keeps pointing at the mutated object —
+	// so a speculative error from a LATER tx shows up under an earlier index.
+	if readErr == nil {
+		readErr = settleReadErr
+	}
+	// If settle never ran (finalDB nil), surface panics / exec errors / base
+	// read failures from the PDBs so the caller can fail the block rather
+	// than commit partial state. Safe in this mode only: without settlement
+	// nothing recycles a pdb that raw.States still references.
 	if finalDB == nil {
 		for i, p := range pdbs {
 			if p == nil {
@@ -889,6 +906,9 @@ func ExecuteV2BlockSTM(
 			if p.ExecErr != nil && execErrIdx < 0 {
 				execErrIdx = i
 				execErr = p.ExecErr
+			}
+			if p.BaseReadErr != nil && readErr == nil {
+				readErr = p.BaseReadErr
 			}
 		}
 	}
@@ -996,7 +1016,7 @@ func newV2Env(base *state.StateDB, store *blockstm.MVStore, bals *blockstm.MVBal
 func newV2SettleFn(tasks []V2Task, env *v2Env, finalDB *state.StateDB,
 	blockCtx vm.BlockContext, blockHash common.Hash, chainConfig *params.ChainConfig,
 	receipts *types.Receipts, allLogs *[]*types.Log, totalUsedGas *uint64,
-	panickedIdx *int, execErrIdx *int, execErr *error) blockstm.V2SettleFn {
+	panickedIdx *int, execErrIdx *int, execErr *error, readErr *error) blockstm.V2SettleFn {
 	isByzantium := chainConfig.IsByzantium(blockCtx.BlockNumber)
 	isEIP158 := chainConfig.IsEIP158(blockCtx.BlockNumber)
 	return func(txIdx int, st blockstm.V2TxState) {
@@ -1015,6 +1035,19 @@ func newV2SettleFn(tasks []V2Task, env *v2Env, finalDB *state.StateDB,
 			if *execErrIdx < 0 {
 				*execErrIdx = txIdx
 				*execErr = pdb.ExecErr
+			}
+			env.Recycle(st)
+			return
+		}
+		// This is the settled incarnation — a base read failure here means a
+		// zero-ish read reached consensus state, which must abort the block.
+		// Checked at settle time (not post-hoc over raw.States) because
+		// Recycle below hands the pdb to later txs for reuse; see the readErr
+		// note in ExecuteV2BlockSTM's caller. Speculative incarnations that
+		// failed a base read and were invalidated never reach this callback.
+		if pdb.BaseReadErr != nil {
+			if *readErr == nil {
+				*readErr = pdb.BaseReadErr
 			}
 			env.Recycle(st)
 			return

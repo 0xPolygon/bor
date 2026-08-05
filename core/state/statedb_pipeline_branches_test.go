@@ -191,14 +191,17 @@ func TestDetachedPrefetcherReturnsWarmSnapshotInput(t *testing.T) {
 	close(stop)
 	term := make(chan struct{})
 	close(term)
-	prefetcher := &triePrefetcher{
-		term: make(chan struct{}),
-		fetchers: map[string]*subfetcher{
-			"loaded": {
-				trie: &blockingPrefetchTrie{witness: map[string][]byte{"node": {0xc0}}},
-				stop: stop,
-				term: term,
-			},
+	// Built through the real constructor so the metric meters are non-nil:
+	// StopAndCollectWarmSnapshot ends in report(), and another test in the
+	// package flips the global metrics.Enable() — with a hand-rolled
+	// &triePrefetcher{} literal that ordering turns report() into a nil
+	// Meter.Mark panic.
+	prefetcher := newTriePrefetcher(filledStateDB().db, common.Hash{}, "test", false)
+	prefetcher.fetchers = map[string]*subfetcher{
+		"loaded": {
+			trie: &blockingPrefetchTrie{witness: map[string][]byte{"node": {0xc0}}},
+			stop: stop,
+			term: term,
 		},
 	}
 	input, stats := (&DetachedPrefetcher{prefetcher: prefetcher}).StopAndCollectWarmSnapshot()

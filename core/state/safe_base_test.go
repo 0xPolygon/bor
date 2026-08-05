@@ -39,8 +39,10 @@ func TestSafeBase_GetBalance_CacheHit(t *testing.T) {
 	addr := common.HexToAddress("0xabcd")
 	sb := newTestSafeBase(t, addr)
 
-	first := sb.GetBalance(addr).Uint64()
-	second := sb.GetBalance(addr).Uint64()
+	firstBal, _ := sb.GetBalance(addr)
+	first := firstBal.Uint64()
+	secondBal, _ := sb.GetBalance(addr)
+	second := secondBal.Uint64()
 	if first != 1000 || second != 1000 {
 		t.Fatalf("GetBalance: first=%d second=%d, want both 1000", first, second)
 	}
@@ -51,10 +53,12 @@ func TestSafeBase_GetNonce(t *testing.T) {
 	addr := common.HexToAddress("0xabcd")
 	sb := newTestSafeBase(t, addr)
 
-	if got := sb.GetNonce(addr); got != 7 {
+	got, _ := sb.GetNonce(addr)
+	if got != 7 {
 		t.Fatalf("GetNonce first call: got %d, want 7", got)
 	}
-	if got := sb.GetNonce(addr); got != 7 {
+	got, _ = sb.GetNonce(addr)
+	if got != 7 {
 		t.Fatalf("GetNonce cached call: got %d, want 7", got)
 	}
 }
@@ -66,11 +70,13 @@ func TestSafeBase_GetState_Cached(t *testing.T) {
 	sb := newTestSafeBase(t, addr)
 	slot := common.HexToHash("0x1")
 
-	if got := sb.GetState(addr, slot); got != common.HexToHash("0xdead") {
+	got, _ := sb.GetState(addr, slot)
+	if got != common.HexToHash("0xdead") {
 		t.Fatalf("GetState: got %s, want 0xdead", got.Hex())
 	}
 	// Cached read.
-	if got := sb.GetState(addr, slot); got != common.HexToHash("0xdead") {
+	got, _ = sb.GetState(addr, slot)
+	if got != common.HexToHash("0xdead") {
 		t.Fatalf("GetState cached: got %s, want 0xdead", got.Hex())
 	}
 }
@@ -80,7 +86,8 @@ func TestSafeBase_GetCommittedState(t *testing.T) {
 	addr := common.HexToAddress("0xabcd")
 	sb := newTestSafeBase(t, addr)
 	slot := common.HexToHash("0x1")
-	if got := sb.GetCommittedState(addr, slot); got != common.HexToHash("0xdead") {
+	got, _ := sb.GetCommittedState(addr, slot)
+	if got != common.HexToHash("0xdead") {
 		t.Fatalf("GetCommittedState: got %s, want 0xdead", got.Hex())
 	}
 }
@@ -90,12 +97,13 @@ func TestSafeBase_GetCode(t *testing.T) {
 	addr := common.HexToAddress("0xabcd")
 	sb := newTestSafeBase(t, addr)
 
-	code := sb.GetCode(addr)
+	code, _ := sb.GetCode(addr)
 	if len(code) != 2 || code[0] != 0x60 {
 		t.Fatalf("GetCode: got %x, want 6000", code)
 	}
 	// Cached read.
-	if got := sb.GetCode(addr); len(got) != 2 {
+	got, _ := sb.GetCode(addr)
+	if len(got) != 2 {
 		t.Fatalf("GetCode cached: got %x", got)
 	}
 }
@@ -105,12 +113,12 @@ func TestSafeBase_GetCodeHash(t *testing.T) {
 	addr := common.HexToAddress("0xabcd")
 	sb := newTestSafeBase(t, addr)
 
-	h := sb.GetCodeHash(addr)
+	h, _ := sb.GetCodeHash(addr)
 	if h == (common.Hash{}) {
 		t.Fatal("GetCodeHash returned zero")
 	}
 	// Cache hit.
-	h2 := sb.GetCodeHash(addr)
+	h2, _ := sb.GetCodeHash(addr)
 	if h != h2 {
 		t.Fatalf("GetCodeHash not stable: %s vs %s", h.Hex(), h2.Hex())
 	}
@@ -120,7 +128,8 @@ func TestSafeBase_GetCodeHash(t *testing.T) {
 func TestSafeBase_GetCodeSize(t *testing.T) {
 	addr := common.HexToAddress("0xabcd")
 	sb := newTestSafeBase(t, addr)
-	if got := sb.GetCodeSize(addr); got != 2 {
+	got, _ := sb.GetCodeSize(addr)
+	if got != 2 {
 		t.Fatalf("GetCodeSize: got %d, want 2", got)
 	}
 }
@@ -129,11 +138,13 @@ func TestSafeBase_GetCodeSize(t *testing.T) {
 func TestSafeBase_Exist(t *testing.T) {
 	addr := common.HexToAddress("0xabcd")
 	sb := newTestSafeBase(t, addr)
-	if !sb.Exist(addr) {
+	existsV, _ := sb.Exist(addr)
+	if !existsV {
 		t.Fatal("Exist: populated addr returned false")
 	}
 	// Cache hit.
-	if !sb.Exist(addr) {
+	existsV, _ = sb.Exist(addr)
+	if !existsV {
 		t.Fatal("Exist cached: false")
 	}
 }
@@ -143,8 +154,8 @@ func TestSafeBase_GetStorageRoot(t *testing.T) {
 	addr := common.HexToAddress("0xabcd")
 	sb := newTestSafeBase(t, addr)
 	// First call populates cache; second call must match.
-	r1 := sb.GetStorageRoot(addr)
-	r2 := sb.GetStorageRoot(addr)
+	r1, _ := sb.GetStorageRoot(addr)
+	r2, _ := sb.GetStorageRoot(addr)
 	if r1 != r2 {
 		t.Fatalf("GetStorageRoot not stable: %s vs %s", r1.Hex(), r2.Hex())
 	}
@@ -165,10 +176,12 @@ func TestSafeBase_UsesStateDBPendingStorage(t *testing.T) {
 
 	sb := NewSafeBase(sdb, 2)
 
-	if got := sb.GetState(addr, slot); got != want {
+	got, _ := sb.GetState(addr, slot)
+	if got != want {
 		t.Fatalf("GetState first call: got %s, want %s", got.Hex(), want.Hex())
 	}
-	if got := sb.GetState(addr, slot); got != want {
+	got, _ = sb.GetState(addr, slot)
+	if got != want {
 		t.Fatalf("GetState cached call: got %s, want %s", got.Hex(), want.Hex())
 	}
 }
@@ -445,13 +458,15 @@ func TestSafeBase_DoesNotCacheStateAfterReadError(t *testing.T) {
 	reader.storageErrs = 1
 	sb := newSafeBaseWithReader(t, reader)
 
-	if got := sb.GetState(addr, slot); got != (common.Hash{}) {
+	got, _ := sb.GetState(addr, slot)
+	if got != (common.Hash{}) {
 		t.Fatalf("first GetState: got %s, want zero from failing reader", got.Hex())
 	}
 	if sb.Error() == nil {
 		t.Fatal("SafeBase did not record read error")
 	}
-	if got := sb.GetState(addr, slot); got != want {
+	got, _ = sb.GetState(addr, slot)
+	if got != want {
 		t.Fatalf("second GetState: got %s, want %s; failed read must not poison cache",
 			got.Hex(), want.Hex())
 	}
@@ -466,27 +481,27 @@ func TestSafeBase_DoesNotCacheAccountScalarsAfterReadError(t *testing.T) {
 	}{
 		{
 			name: "balance",
-			read: func(sb *SafeBase) any { return sb.GetBalance(addr).Uint64() },
+			read: func(sb *SafeBase) any { bal, _ := sb.GetBalance(addr); return bal.Uint64() },
 			want: uint64(1000),
 		},
 		{
 			name: "nonce",
-			read: func(sb *SafeBase) any { return sb.GetNonce(addr) },
+			read: func(sb *SafeBase) any { v, _ := sb.GetNonce(addr); return v },
 			want: uint64(7),
 		},
 		{
 			name: "code hash",
-			read: func(sb *SafeBase) any { return sb.GetCodeHash(addr) },
+			read: func(sb *SafeBase) any { v, _ := sb.GetCodeHash(addr); return v },
 			want: common.BytesToHash(crypto.Keccak256([]byte{0x60, 0x00})),
 		},
 		{
 			name: "exist",
-			read: func(sb *SafeBase) any { return sb.Exist(addr) },
+			read: func(sb *SafeBase) any { v, _ := sb.Exist(addr); return v },
 			want: true,
 		},
 		{
 			name: "storage root",
-			read: func(sb *SafeBase) any { return sb.GetStorageRoot(addr) },
+			read: func(sb *SafeBase) any { v, _ := sb.GetStorageRoot(addr); return v },
 			want: common.HexToHash("0x1234"),
 		},
 	} {
@@ -513,13 +528,15 @@ func TestSafeBase_DoesNotCacheCodeAfterReadError(t *testing.T) {
 	reader.codeErrs = 1
 	sb := newSafeBaseWithReader(t, reader)
 
-	if got := sb.GetCode(addr); got != nil {
+	got, _ := sb.GetCode(addr)
+	if got != nil {
 		t.Fatalf("first GetCode: got %x, want nil from failing reader", got)
 	}
 	if sb.Error() == nil {
 		t.Fatal("SafeBase did not record read error")
 	}
-	if got := sb.GetCode(addr); string(got) != string(reader.code) {
+	got, _ = sb.GetCode(addr)
+	if string(got) != string(reader.code) {
 		t.Fatalf("second GetCode: got %x, want %x; failed read must not poison cache",
 			got, reader.code)
 	}
