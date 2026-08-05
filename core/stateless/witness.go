@@ -54,10 +54,20 @@ func ValidateWitnessPreState(witness *Witness, headerReader HeaderReader, expect
 	if contextHeader == nil {
 		return fmt.Errorf("witness context header is nil")
 	}
+	// The witness header is peer-supplied: don't rely on the transport
+	// decoder to have rejected a nil or genesis block number — a genesis
+	// block has no parent to validate against, and Uint64()-1 on zero
+	// would probe an unrelated height.
+	if contextHeader.Number == nil || contextHeader.Number.Sign() <= 0 {
+		return fmt.Errorf("witness context header has invalid block number: %v", contextHeader.Number)
+	}
 
 	// Verify the witness is for the expected block — a malicious peer could
 	// craft a witness with a different ParentHash to bypass the pre-state check.
 	if expectedBlock != nil {
+		if expectedBlock.Number == nil {
+			return fmt.Errorf("expected block header has nil number")
+		}
 		if contextHeader.ParentHash != expectedBlock.ParentHash {
 			return fmt.Errorf("witness ParentHash mismatch: witness=%x, expected=%x, blockNumber=%d",
 				contextHeader.ParentHash, expectedBlock.ParentHash, expectedBlock.Number.Uint64())
@@ -69,10 +79,11 @@ func ValidateWitnessPreState(witness *Witness, headerReader HeaderReader, expect
 	}
 
 	// Get the parent block header from the chain.
-	parentHeader := headerReader.GetHeader(contextHeader.ParentHash, contextHeader.Number.Uint64()-1)
+	parentNumber := contextHeader.Number.Uint64() - 1
+	parentHeader := headerReader.GetHeader(contextHeader.ParentHash, parentNumber)
 	if parentHeader == nil {
 		return fmt.Errorf("parent block header not found: parentHash=%x, parentNumber=%d",
-			contextHeader.ParentHash, contextHeader.Number.Uint64()-1)
+			contextHeader.ParentHash, parentNumber)
 	}
 
 	// Get witness pre-state root (from first header which should be parent).

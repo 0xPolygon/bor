@@ -189,6 +189,52 @@ func TestValidateWitnessPreState_EdgeCases(t *testing.T) {
 			}
 		}
 	})
+
+	// Test case 5: peer-supplied context header with nil or genesis number
+	// must be rejected, not panic (nil) or probe height MaxUint64 (zero).
+	makeWitness := func(number *big.Int) *Witness {
+		return &Witness{
+			context: &types.Header{
+				Number:     number,
+				ParentHash: common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111"),
+			},
+			Headers: []*types.Header{
+				{
+					Number: big.NewInt(99),
+					Root:   common.HexToHash("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"),
+				},
+			},
+			Codes: make(map[string]struct{}),
+			State: make(map[string]struct{}),
+		}
+	}
+	for name, number := range map[string]*big.Int{
+		"NilContextNumber":  nil,
+		"ZeroContextNumber": big.NewInt(0),
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := ValidateWitnessPreState(makeWitness(number), mockReader, nil)
+			if err == nil {
+				t.Fatal("Expected validation to fail for invalid context number")
+			}
+			expectedError := "witness context header has invalid block number"
+			if err.Error()[:len(expectedError)] != expectedError {
+				t.Errorf("Expected error message to start with '%s', but got: %v", expectedError, err)
+			}
+		})
+	}
+
+	// Test case 6: expected block with nil number must be rejected before
+	// the number comparison dereferences it.
+	t.Run("NilExpectedBlockNumber", func(t *testing.T) {
+		err := ValidateWitnessPreState(makeWitness(big.NewInt(100)), mockReader, &types.Header{})
+		if err == nil {
+			t.Fatal("Expected validation to fail for nil expected block number")
+		}
+		if err.Error() != "expected block header has nil number" {
+			t.Errorf("Expected nil-number error, got: %v", err)
+		}
+	})
 }
 
 func TestValidateWitnessPreState_MultipleHeaders(t *testing.T) {
