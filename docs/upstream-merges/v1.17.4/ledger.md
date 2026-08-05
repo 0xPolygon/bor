@@ -3970,3 +3970,95 @@ the *broken* run (startup pruner lines) and 0 on the *healthy* one, because the 
 logs on a two-minute interval. And since bor is driven entirely by `config.toml` in this
 setup, grepping for `--witness*` command-line flags finds nothing regardless of how the
 node is configured.
+
+## Develop-drift cascade — `develop` `7d28777aa` carried up the stack (post-M6)
+
+Run after the sync's merge work was complete and all eleven pull requests were open.
+`develop` had moved two commits ahead of the base branch: #2333, which produces complete
+witnesses under BlockSTM v2, and #2347, which drops the `pull_request` `branches:` filter
+from `kurtosis-e2e.yml` and `kurtosis-stateless-e2e.yml` so both run for every PR base.
+The second is the reason the cascade could not wait: a `pull_request` workflow is resolved
+from the head ref, so the filter removal has to be present on each of the eleven branches
+before their PRs run e2e — and the stateless-e2e job is the witness coverage this sync had
+no other instrument for, the M6 devnet attempt having been lost to a misconfiguration.
+
+Shape: `develop` merged into `upstream-merge-v1.17.4` as a fast-forward, then hop by hop up
+the chain, twelve merges in all. Merging `develop` independently into each branch was
+rejected — it pays every resolution eleven times and puts `develop` content into the upper
+diffs that is absent from their bases. All eleven merge commits are signed; every branch has
+`7d28777aa` as an ancestor, each contains its predecessor, and all six upstream release tags
+remain ancestors of the top.
+
+### The one conflict, at `ppatil-upstream-v1.17.2`
+
+`StateDB`'s witness field block. The zdiff3 base view is what settled it: the merge base
+carried both `witness` and `witnessStats`; this sync had already dropped `witnessStats`
+because upstream #34106 relocated witness statistics into `stateless.Witness` (gated by
+`VmConfig.EnableWitnessStats`, reported through `Witness.ReportMetrics`), sweeping ~25 call
+sites; `develop` kept the field and added `witnessPrewalkStop` beside it. Resolved as the
+plain three-way answer — this side's removal plus develop's addition.
+
+Keeping `witnessStats` was considered at the operator's instruction to preserve whatever
+`develop` carries, and rejected on the evidence. Post-#34106 `StartPrefetcher` takes no
+stats argument, so the field would have had no writer and no reader anywhere in the merged
+tree: dead weight, not preserved behaviour. Genuinely honouring the instruction meant
+checking that the metric survives, and it does — `AddState(nodes, owner)` receives exactly
+the owner `develop` passed to `witnessStats.Add`, so attribution is unchanged, and because
+the relocated collector counts inside `AddState` it also covers the prewalk path that
+develop's design left uninstrumented. The alternative that would have honoured the
+instruction literally — reverting #34106's Bor-side sweep — puts Bor back on an upstream API
+that no longer exists and guarantees the next sync refights it.
+
+Consequence worth knowing rather than discovering: the witness-stats counters read higher on
+these branches than on `develop`, because prewalk-collected nodes are now counted. Not a
+correctness change, but anyone comparing dashboards across the two should expect the step.
+
+### Three breaks git reported as clean
+
+The textual conflict count was one. The compiler found three more, every one of them inside
+#2333's code or its tests, which is the argument for building and testing at each hop rather
+than only at the top.
+
+At `ppatil-upstream-v1.17.2`, where #34106 lands: `stateless.NewWitness` had gained the
+`enableStats` parameter (passed `false` — the regeneration test compares witness content,
+which stats do not affect) and `newTrieReader` had lost its point-cache parameter.
+
+At `ppatil-upstream-mptubt`, where `CachingDB` splits: `ReadersWithCacheStatsTriple` moved
+off the `Database` interface onto `*MPTDatabase`, so the regeneration test's
+`state.NewDatabase` no longer reached it. Switched to `state.NewMPTDatabase` — an exact
+substitution rather than a narrowing, since `CachingDB` *was* the MPT database and the method
+moved across with an identical body.
+
+At `ppatil-upstream-v1.17.3-part3`, where the trie reader splits into `mptTrieReader` and
+`ubtTrieReader`: develop's witness code is written entirely against the old name, breaking
+the production build in four places — the two `reader_witness.go` helpers, and
+`findTrieReader`'s signature and type-switch case — plus two test constructors. This is the
+one that justified running the tests rather than trusting the rename: `findTrieReader` is a
+type switch, so its failure mode is not a compile error but a switch that still builds while
+no longer matching what the reader chain bottoms out at, which would make witness collection
+no-op under green CI.
+
+### Verification
+
+Build and vet at every hop; vet never reported anything beyond the pre-existing
+`core/parallel_state_processor.go:341` lock-copy finding. At each of the three adaptation
+hops and again at the top, #2333's full test set: all seven prewalk and read-set tests
+including `TestCollectStateWitnessIncludesFlatServedReads`, plus both witness regeneration
+tests, which round-tripped 241/241 real mainnet blocks with no skips — the same corpus used
+for the EIP-8037 gas-invariance argument. `core/state`, `core/stateless` and
+`eth/protocols/wit` pass in full at the top.
+
+One independent cross-check, worth repeating on any future cascade: before starting,
+`develop` was merged directly into the top branch in a throwaway worktree and verified there.
+Every witness-relevant file in the finished cascade is byte-identical to that tree —
+`statedb.go`, `reader.go`, `reader_witness.go`, `parallel_state_processor.go`,
+`v2_method_parity_test.go` and the three witness test files. Eleven hops and one merge
+converge on the same content, which is the evidence that no hop's resolution drifted.
+
+### Recorded for the UBT enablement decision
+
+`ubtTrieReader` has `Account` and `Storage` but no `CollectStateWitness`, and it appears in
+neither `findTrieReader`'s type switch nor `collectStateWitnessFromReader`'s. A UBT-backed
+reader chain therefore collects no witness. Pre-existing on both sides and not introduced by
+the cascade — dormant while UBT is off — but it belongs in the backlog rather than in a
+future debugging session. See `needs-wiring.md`.
