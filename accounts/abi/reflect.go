@@ -54,7 +54,7 @@ func ConvertType(in interface{}, proto interface{}) interface{} {
 // indirect recursively dereferences the value until it either gets the value
 // or finds a big.Int
 func indirect(v reflect.Value) reflect.Value {
-	if v.Kind() == reflect.Ptr && v.Elem().Type() != reflect.TypeFor[big.Int]() {
+	if v.Kind() == reflect.Pointer && v.Elem().Type() != reflect.TypeFor[big.Int]() {
 		return indirect(v.Elem())
 	}
 
@@ -108,9 +108,9 @@ func set(dst, src reflect.Value) error {
 	dstType, srcType := dst.Type(), src.Type()
 
 	switch {
-	case dstType.Kind() == reflect.Interface && dst.Elem().IsValid() && (dst.Elem().Type().Kind() == reflect.Ptr || dst.Elem().CanSet()):
+	case dstType.Kind() == reflect.Interface && dst.Elem().IsValid() && (dst.Elem().Type().Kind() == reflect.Pointer || dst.Elem().CanSet()):
 		return set(dst.Elem(), src)
-	case dstType.Kind() == reflect.Ptr && dstType.Elem() != reflect.TypeFor[big.Int]():
+	case dstType.Kind() == reflect.Pointer && dstType.Elem() != reflect.TypeFor[big.Int]():
 		return set(dst.Elem(), src)
 	case srcType.AssignableTo(dstType) && dst.CanSet():
 		dst.Set(src)
@@ -146,7 +146,7 @@ func setSlice(dst, src reflect.Value) error {
 }
 
 func setArray(dst, src reflect.Value) error {
-	if src.Kind() == reflect.Ptr {
+	if src.Kind() == reflect.Pointer {
 		return set(dst, indirect(src))
 	}
 

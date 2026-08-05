@@ -212,7 +212,7 @@ func rtypeToStructType(typ reflect.Type, rec map[reflect.Type]*rlpstruct.Type) *
 	}
 	rec[typ] = t
 
-	if k == reflect.Array || k == reflect.Slice || k == reflect.Ptr {
+	if k == reflect.Array || k == reflect.Slice || k == reflect.Pointer {
 		t.Elem = rtypeToStructType(typ.Elem(), rec)
 	}
 
