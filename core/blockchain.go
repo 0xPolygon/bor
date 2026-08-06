@@ -6115,11 +6115,22 @@ func (bc *BlockChain) recoverFailedPipelinedImport(p *pendingImportSRCState) {
 	// writeHeadBlock only rewrites the markers of the block handed to it, and
 	// SetCurrentHeader deletes nothing, so the rejected block's canonical hash
 	// and transaction lookups would keep resolving through RPC after the head
-	// moved back. Remove them explicitly.
+	// moved back. Remove them explicitly — and not just for the rejected block:
+	// SRC verification trails the insert, so a batch can publish descendants of
+	// the rejected block before its failure surfaces. Their markers must go
+	// too, or number-based lookups keep resolving blocks above the head.
 	batch := bc.db.NewBatch()
-	rawdb.DeleteCanonicalHash(batch, bad.NumberU64())
-	for _, tx := range bad.Transactions() {
-		rawdb.DeleteTxLookupEntry(batch, tx.Hash())
+	for n := bad.NumberU64(); ; n++ {
+		hash := rawdb.ReadCanonicalHash(bc.db, n)
+		if hash == (common.Hash{}) {
+			break
+		}
+		rawdb.DeleteCanonicalHash(batch, n)
+		if blk := bc.GetBlock(hash, n); blk != nil {
+			for _, tx := range blk.Transactions() {
+				rawdb.DeleteTxLookupEntry(batch, tx.Hash())
+			}
+		}
 	}
 	if err := batch.Write(); err != nil {
 		log.Crit("Failed to remove rejected pipelined block indexes", "err", err)

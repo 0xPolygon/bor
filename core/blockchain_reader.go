@@ -17,10 +17,10 @@
 package core
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math/big"
-
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -726,6 +726,44 @@ func (bc *BlockChain) StateAt(root common.Hash) (*state.StateDB, error) {
 	}
 
 	return state.New(root, bc.statedb)
+}
+
+// SealingStateAt is StateAt for block production. It never serves the
+// FlatDiff overlay: sealing computes the next block's state root, and an
+// overlay statedb is rooted at the grandparent with the parent's writes
+// installed as unjournaled read-only objects — IntermediateRoot would omit
+// them, sealing a header whose root is missing the parent block's state
+// changes, which every importer then rejects. Instead this waits (bounded)
+// for the parent's pending SRC to commit and opens the committed trie. If
+// the root never becomes available (the SRC failed and the head was rolled
+// back), the open fails and the caller skips the round; the corrective
+// head event retriggers work on the rolled-back parent.
+func (bc *BlockChain) SealingStateAt(root common.Hash) (*state.StateDB, error) {
+	if err := bc.WaitForPipelinedStateCommit(context.Background(), root); err != nil {
+		return nil, err
+	}
+	return state.New(root, bc.statedb)
+}
+
+// SealingStateAtWithReaders is StateAtWithReaders for block production —
+// same overlay-free contract as SealingStateAt.
+func (bc *BlockChain) SealingStateAtWithReaders(root common.Hash) (*state.StateDB, *state.StateDB, state.ReaderWithStats, state.ReaderWithStats, error) {
+	if err := bc.WaitForPipelinedStateCommit(context.Background(), root); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	prefetchReader, processReader, err := bc.statedb.ReadersWithCacheStats(root)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	statedb, err := state.NewWithReader(root, bc.statedb, processReader)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	throwaway, err := state.NewWithReader(root, bc.statedb, prefetchReader)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	return statedb, throwaway, prefetchReader, processReader, nil
 }
 
 // StateAtWithReaders returns a new mutable state based on a particular point in time,

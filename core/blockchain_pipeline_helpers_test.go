@@ -163,6 +163,50 @@ func TestPendingImportCollectionHelpers(t *testing.T) {
 	require.Nil(t, chain.pendingImportSRC)
 }
 
+// TestSealingStateNeverServesOverlay pins the block-production state
+// contract: StateAt serves the FlatDiff overlay during the pipelined window
+// (RPC readers need the head's post-state), but the sealing accessors must
+// refuse it — an overlay statedb is rooted at the grandparent with the
+// parent's writes unjournaled, so a header root computed over it omits the
+// parent block's state changes and every importer rejects the sealed block.
+func TestSealingStateNeverServesOverlay(t *testing.T) {
+	chain, _, blocks := newPipelineHelperChain(t)
+	genesis := chain.CurrentBlock()
+	addr := common.HexToAddress("0x5ea1")
+	diff := &state.FlatDiff{
+		Accounts: map[common.Address]types.StateAccount{
+			addr: {
+				Nonce:    7,
+				Balance:  uint256.NewInt(0),
+				Root:     types.EmptyRootHash,
+				CodeHash: types.EmptyCodeHash.Bytes(),
+			},
+		},
+	}
+	// Pretend blocks[0] was pipeline-imported: its root is head but not
+	// committed; the overlay carries its post-state.
+	chain.SetLastFlatDiff(diff, blocks[0].NumberU64(), genesis.Root, blocks[0].Root())
+
+	sdb, err := chain.StateAt(blocks[0].Root())
+	require.NoError(t, err)
+	require.Equal(t, uint64(7), sdb.GetNonce(addr), "RPC-style reads serve the overlay")
+
+	_, err = chain.SealingStateAt(blocks[0].Root())
+	require.Error(t, err, "sealing must not fall back to the overlay for an uncommitted root")
+	_, _, _, _, err = chain.SealingStateAtWithReaders(blocks[0].Root())
+	require.Error(t, err, "sealing readers must not fall back to the overlay for an uncommitted root")
+
+	sdb, err = chain.SealingStateAt(genesis.Root)
+	require.NoError(t, err)
+	require.Zero(t, sdb.GetNonce(addr))
+	st, throwaway, prefetchReader, processReader, err := chain.SealingStateAtWithReaders(genesis.Root)
+	require.NoError(t, err)
+	require.NotNil(t, throwaway)
+	require.NotNil(t, prefetchReader)
+	require.NotNil(t, processReader)
+	require.Zero(t, st.GetNonce(addr))
+}
+
 // TestFlushPendingImportSRCRollsBack pins that the flush path performs the
 // same rollback as the collect path when asked to: reorg/gap and
 // ProcessBlock-error flushes hold chainmu and continue (or abort) around a

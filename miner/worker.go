@@ -1578,7 +1578,9 @@ func (w *worker) resolveStateFor(header *types.Header, genParams *generateParams
 	if parent == nil {
 		return nil, fmt.Errorf("parent block not found")
 	}
-	return w.chain.StateAt(parent.Root)
+	// Overlay-free for the same reason as commitWork: this state seeds a
+	// block whose root will be sealed into a header.
+	return w.chain.SealingStateAt(parent.Root)
 }
 
 // makeEnv creates a new environment for the sealing block.
@@ -2534,8 +2536,22 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 	}
 
 	parent := w.chain.CurrentBlock()
-	state, throwaway, prefetchReader, processReader, err := w.chain.StateAtWithReaders(parent.Root)
+	// Sealing must build on committed state: the FlatDiff overlay that
+	// StateAtWithReaders serves during the pipelined window is rooted at the
+	// grandparent, and a root computed over it omits the parent's writes —
+	// producing a header every importer rejects. SealingStateAt* waits for
+	// the pending SRC (bounded) and never serves the overlay.
+	state, throwaway, prefetchReader, processReader, err := w.chain.SealingStateAtWithReaders(parent.Root)
 	if err != nil {
+		log.Warn("Sealing state unavailable, skipping work round", "parent", parent.Number, "root", parent.Root, "err", err)
+		return
+	}
+	// The head may have been rolled back while waiting (failed SRC): the
+	// state we hold belongs to the old parent. Skip; the corrective
+	// ChainHeadEvent retriggers commitWork on the rolled-back head.
+	if cur := w.chain.CurrentBlock(); cur.Hash() != parent.Hash() {
+		log.Warn("Chain head moved while acquiring sealing state, skipping work round",
+			"was", parent.Number, "now", cur.Number)
 		return
 	}
 
