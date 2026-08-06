@@ -331,7 +331,7 @@ func TestPipelinedImportSRC_PipelineActuallyRuns(t *testing.T) {
 		require.NoError(t, err)
 		// The last block's SRC is left in flight by design; flushing settles it
 		// so the counter reflects the whole batch.
-		require.NoError(t, chain.flushPendingImportSRC())
+		require.NoError(t, chain.flushPendingImportSRC(true))
 		return pipelineImportBlocksCounter.Snapshot().Count() - before
 	}
 

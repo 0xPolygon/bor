@@ -2270,8 +2270,10 @@ func (bc *BlockChain) stopWithoutSaving() {
 	if bc.stateSizer != nil {
 		bc.stateSizer.Stop()
 	}
-	// Flush any pending import SRC before waiting for goroutines.
-	if err := bc.flushPendingImportSRC(); err != nil {
+	// Flush any pending import SRC before waiting for goroutines. No rollback
+	// here — this path doesn't hold chainmu, and the startup rewind moves the
+	// head off an unverified block.
+	if err := bc.flushPendingImportSRC(false); err != nil {
 		log.Error("Failed to flush pending import SRC during shutdown", "err", err)
 	}
 
@@ -3716,8 +3718,9 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 			pipeOpts = bc.buildPipelineImportOpts(block, parent)
 		} else if witnessFed {
 			// Nothing is in flight for this block yet, so no prefetch to
-			// interrupt — a failed flush just aborts the insert.
-			if err := bc.flushPendingImportSRC(); err != nil {
+			// interrupt — a failed flush rolls back the rejected pipelined
+			// block and aborts the insert.
+			if err := bc.flushPendingImportSRC(true); err != nil {
 				return nil, it.index, err
 			}
 		}
@@ -3809,7 +3812,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 			// err takes precedence for the caller, but a silent flush failure
 			// would mask real corruption from the prior pipelined block.
 			if pipelineActive {
-				if flushErr := bc.flushPendingImportSRC(); flushErr != nil {
+				if flushErr := bc.flushPendingImportSRC(true); flushErr != nil {
 					attrs := []interface{}{"block", block.NumberU64(), "flushErr", flushErr, "processErr", err}
 					attrs = append(attrs, pipelineImportLogAttrs(parent, pipeOpts)...)
 					log.Error("Pipelined import: flush failed after ProcessBlock error", attrs...)
@@ -3828,11 +3831,13 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 				// is the first of the batch there is no previous index to
 				// point at — the pipeline deliberately leaves an SRC in
 				// flight across insertChain calls, so that is the normal
-				// cross-batch shape, not an edge case. Clamp at 0: a negative
-				// index reaches callers that only bound-check the top end
-				// (eth/downloader) and would index out of range.
+				// cross-batch shape, not an edge case. Return -1 then: both
+				// consumers treat out-of-band indices as "failure outside
+				// this batch" and only log, whereas clamping to 0 would
+				// blame (and bad-block report) this batch's first block for
+				// a previous batch's failure.
 				idx := it.index
-				if adjustBack && idx > 0 {
+				if adjustBack {
 					idx--
 				}
 				return nil, idx, err
@@ -5457,14 +5462,18 @@ func waitForSRCState(pending *pendingSRCState) (common.Hash, []byte, error) {
 	return pending.root, pending.witness, nil
 }
 
-// flushPendingImportSRC collects the pending import SRC goroutine (if any),
-// verifies the root, writes the block to DB, handles trie GC, and clears
-// the pending state. Called on shutdown, reorg, and when an incoming block
-// doesn't continue from the pending block.
 // flushPendingImportSRC waits for the auto-collection goroutine to finish
 // and clears the pending state. Called on shutdown and when an incoming block
 // doesn't follow the pending one (reorg/gap).
-func (bc *BlockChain) flushPendingImportSRC() error {
+//
+// rollback controls what happens when the collection failed (SRC error or
+// root mismatch): the pending block is already exposed as head with durable
+// canonical markers, so every caller that holds chainmu must pass true and
+// have the failed block rolled back — otherwise the rejected block keeps its
+// canonical hash, tx lookups and subscriber view. Only the shutdown path
+// passes false: it cannot take chainmu, and the startup rewind moves the head
+// off the unverified block anyway.
+func (bc *BlockChain) flushPendingImportSRC(rollback bool) error {
 	bc.pendingImportSRCMu.Lock()
 	pending := bc.pendingImportSRC
 	bc.pendingImportSRC = nil
@@ -5478,6 +5487,9 @@ func (bc *BlockChain) flushPendingImportSRC() error {
 
 	// Wait for auto-collection to finish (it handles verify, witness, trie GC)
 	<-pending.collectedCh
+	if pending.collectedErr != nil && rollback {
+		bc.recoverFailedPipelinedImport(pending)
+	}
 	return pending.collectedErr
 }
 
@@ -5974,7 +5986,11 @@ func (bc *BlockChain) buildPipelineImportOpts(block *types.Block, parent *types.
 			return opts
 		}
 		pipelineImportMissCounter.Inc(1)
-		if err := bc.flushPendingImportSRC(); err != nil {
+		// The import continues on the incoming (reorg/gap) block after this,
+		// so a failed collection must roll the rejected pending block back
+		// here — otherwise it keeps its canonical markers while the chain
+		// moves on around it.
+		if err := bc.flushPendingImportSRC(true); err != nil {
 			log.Error("Pipelined import: flush failed on mismatch", "err", err)
 		}
 	}
@@ -6091,6 +6107,11 @@ func (bc *BlockChain) recoverFailedPipelinedImport(p *pendingImportSRCState) {
 		return
 	}
 
+	// The rejected block's logs were announced with Removed=false when the
+	// pipeline exposed it as head. Collect them before its indexes go away so
+	// filter/subscription clients get the same retraction a reorg would send.
+	deletedLogs := bc.collectLogs(bad, true)
+
 	// writeHeadBlock only rewrites the markers of the block handed to it, and
 	// SetCurrentHeader deletes nothing, so the rejected block's canonical hash
 	// and transaction lookups would keep resolving through RPC after the head
@@ -6104,6 +6125,10 @@ func (bc *BlockChain) recoverFailedPipelinedImport(p *pendingImportSRCState) {
 		log.Crit("Failed to remove rejected pipelined block indexes", "err", err)
 	}
 	bc.writeHeadBlock(parent)
+
+	if len(deletedLogs) > 0 {
+		bc.rmLogsFeed.Send(RemovedLogsEvent{deletedLogs})
+	}
 
 	// SRC committed its own (divergent) root before the mismatch was noticed.
 	// Nothing references it, but in hash mode it holds trie nodes alive until

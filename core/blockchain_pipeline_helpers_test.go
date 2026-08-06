@@ -128,7 +128,7 @@ func TestPendingImportCollectionHelpers(t *testing.T) {
 	root, err := chain.collectPendingImportSRC()
 	require.EqualError(t, err, "no pending import SRC")
 	require.Equal(t, common.Hash{}, root)
-	require.NoError(t, chain.flushPendingImportSRC())
+	require.NoError(t, chain.flushPendingImportSRC(false))
 
 	collected := make(chan struct{})
 	close(collected)
@@ -150,16 +150,47 @@ func TestPendingImportCollectionHelpers(t *testing.T) {
 	_, err = chain.collectPendingImportSRC()
 	require.EqualError(t, err, "collect failed")
 	require.Nil(t, chain.pendingImportSRC)
-	require.NoError(t, chain.flushPendingImportSRC())
+	require.NoError(t, chain.flushPendingImportSRC(false))
 
-	// flush still surfaces the error when it is the one collecting.
+	// flush still surfaces the error when it is the one collecting; without
+	// rollback (the shutdown shape) it only clears the pending entry.
 	chain.pendingImportSRC = &pendingImportSRCState{
 		block:        blocks[0],
 		collectedCh:  collected,
 		collectedErr: errors.New("collect failed"),
 	}
-	require.EqualError(t, chain.flushPendingImportSRC(), "collect failed")
+	require.EqualError(t, chain.flushPendingImportSRC(false), "collect failed")
 	require.Nil(t, chain.pendingImportSRC)
+}
+
+// TestFlushPendingImportSRCRollsBack pins that the flush path performs the
+// same rollback as the collect path when asked to: reorg/gap and
+// ProcessBlock-error flushes hold chainmu and continue (or abort) around a
+// head that was published before verification, so a failed collection must
+// not leave the rejected block canonical there.
+func TestFlushPendingImportSRCRollsBack(t *testing.T) {
+	chain, _, blocks := newPipelineHelperChain(t)
+	_, err := chain.InsertChain(blocks, false)
+	require.NoError(t, err)
+	require.Equal(t, blocks[1].Hash(), chain.CurrentBlock().Hash())
+
+	collected := make(chan struct{})
+	close(collected)
+	chain.SetLastFlatDiff(&state.FlatDiff{}, blocks[1].NumberU64(), blocks[0].Root(), blocks[1].Root())
+	chain.pendingImportSRC = &pendingImportSRCState{
+		block:        blocks[1],
+		collectedCh:  collected,
+		collectedErr: errors.New("collect failed"),
+	}
+
+	require.EqualError(t, chain.flushPendingImportSRC(true), "collect failed")
+	require.Nil(t, chain.pendingImportSRC)
+	require.Equal(t, blocks[0].Hash(), chain.CurrentBlock().Hash(),
+		"head must move back to the rejected block's parent")
+	require.Equal(t, common.Hash{}, rawdb.ReadCanonicalHash(chain.db, blocks[1].NumberU64()),
+		"rejected block must lose its canonical hash")
+	require.Nil(t, chain.GetLastFlatDiff(),
+		"rejected block's post-state overlay must stop being served")
 }
 
 func TestPipelinedHeadMarkerAndWait(t *testing.T) {

@@ -906,3 +906,52 @@ func TestFlatDiffOverlay_DestructByExecutingBlock(t *testing.T) {
 	require.Equal(t, common.Hash{}, overlayDB.GetCommittedState(addr, slot),
 		"committed read must also be zero after an in-block destruct")
 }
+
+// TestFlatDiffOverlay_ParentDestructKeepsOverlayStorage is the mirror image of
+// TestFlatDiffOverlay_DestructByExecutingBlock, pinning why same-block and
+// parent-block destructs are tracked in separate sets: ApplyFlatDiff seeds
+// stateObjectsDestruct with the PARENT block's destructs, and a resurrected
+// account's overlay storage — written after that destruct — must still be
+// served. Folding the two sets into one (or hoisting the stateObjectsDestruct
+// check above the overlay probe) would silently zero these reads.
+func TestFlatDiffOverlay_ParentDestructKeepsOverlayStorage(t *testing.T) {
+	db := NewDatabaseForTesting()
+	sdb, err := New(types.EmptyRootHash, db)
+	require.NoError(t, err)
+
+	addr := common.HexToAddress("0xdead04")
+	oldSlot := common.HexToHash("0x01")
+	newSlot := common.HexToHash("0x02")
+
+	sdb.CreateAccount(addr)
+	sdb.SetNonce(addr, 5, 0)
+	sdb.SetState(addr, oldSlot, common.HexToHash("0x1111"))
+	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	require.NoError(t, err)
+
+	// Parent block destructed addr, resurrected it, and wrote newSlot.
+	diff := &FlatDiff{
+		Accounts: map[common.Address]types.StateAccount{
+			addr: {
+				Nonce:    10,
+				Balance:  uint256.NewInt(0),
+				Root:     types.EmptyRootHash,
+				CodeHash: types.EmptyCodeHash.Bytes(),
+			},
+		},
+		Storage:   map[common.Address]map[common.Hash]common.Hash{addr: {newSlot: common.HexToHash("0x2222")}},
+		Destructs: map[common.Address]struct{}{addr: {}},
+		Code:      make(map[common.Hash][]byte),
+	}
+
+	overlayDB, err := NewWithFlatBase(root, db, diff)
+	require.NoError(t, err)
+
+	require.Equal(t, uint64(10), overlayDB.GetNonce(addr))
+	require.Equal(t, common.HexToHash("0x2222"), overlayDB.GetState(addr, newSlot),
+		"parent-block destruct must not shadow overlay storage written after the resurrection")
+	require.Equal(t, common.HexToHash("0x2222"), overlayDB.GetCommittedState(addr, newSlot),
+		"committed read must also serve the overlay for a parent-destructed, resurrected account")
+	require.Equal(t, common.Hash{}, overlayDB.GetState(addr, oldSlot),
+		"pre-destruct storage stays hidden")
+}

@@ -7216,7 +7216,7 @@ func TestPipelinedImportMetrics(t *testing.T) {
 	}
 
 	// Drain the trailing pending SRC so per-block counters reflect every block.
-	if err := pipeChain.flushPendingImportSRC(); err != nil {
+	if err := pipeChain.flushPendingImportSRC(true); err != nil {
 		t.Fatalf("flushPendingImportSRC failed: %v", err)
 	}
 
@@ -7378,7 +7378,7 @@ func TestPipelineFlatDiffHitMeters(t *testing.T) {
 	if _, err := pipeChain.InsertChain(blocks, false); err != nil {
 		t.Fatalf("pipeline InsertChain failed: %v", err)
 	}
-	_ = pipeChain.flushPendingImportSRC()
+	_ = pipeChain.flushPendingImportSRC(true)
 
 	if flatAcctMeter.Snapshot().Count()-accountHitsBefore == 0 {
 		t.Error("state/flatdiff/account_hits should have non-zero delta after consecutive-block transfers")
@@ -7437,7 +7437,7 @@ func TestPipelinedImportSRC_MakeWitnessFalse(t *testing.T) {
 	if _, err := pipeChain.InsertChain(blocks, false); err != nil {
 		t.Fatalf("pipeline InsertChain failed: %v", err)
 	}
-	if err := pipeChain.flushPendingImportSRC(); err != nil {
+	if err := pipeChain.flushPendingImportSRC(true); err != nil {
 		t.Fatalf("flushPendingImportSRC failed: %v", err)
 	}
 
@@ -7543,7 +7543,7 @@ func TestPipelinedImportSRC_MakeWitnessTrue(t *testing.T) {
 	if _, err := pipeChain.InsertChain(blocks, true); err != nil {
 		t.Fatalf("pipeline InsertChain (makeWitness=true) failed: %v", err)
 	}
-	if err := pipeChain.flushPendingImportSRC(); err != nil {
+	if err := pipeChain.flushPendingImportSRC(true); err != nil {
 		t.Fatalf("flushPendingImportSRC failed: %v", err)
 	}
 
@@ -7618,7 +7618,7 @@ func TestPipelinedImportSRC_RootParityWitnessOnVsOff(t *testing.T) {
 	if _, err := witnessOnChain.InsertChain(blocks, true); err != nil {
 		t.Fatalf("witness-on InsertChain: %v", err)
 	}
-	if err := witnessOnChain.flushPendingImportSRC(); err != nil {
+	if err := witnessOnChain.flushPendingImportSRC(true); err != nil {
 		t.Fatalf("witness-on flush: %v", err)
 	}
 
@@ -7631,7 +7631,7 @@ func TestPipelinedImportSRC_RootParityWitnessOnVsOff(t *testing.T) {
 	if _, err := witnessOffBatch.InsertChain(blocks, false); err != nil {
 		t.Fatalf("witness-off batch InsertChain: %v", err)
 	}
-	if err := witnessOffBatch.flushPendingImportSRC(); err != nil {
+	if err := witnessOffBatch.flushPendingImportSRC(true); err != nil {
 		t.Fatalf("witness-off batch flush: %v", err)
 	}
 
@@ -7650,7 +7650,7 @@ func TestPipelinedImportSRC_RootParityWitnessOnVsOff(t *testing.T) {
 	if _, err := witnessOffSplit.InsertChain(blocks[splitAt:], false); err != nil {
 		t.Fatalf("witness-off split second batch: %v", err)
 	}
-	if err := witnessOffSplit.flushPendingImportSRC(); err != nil {
+	if err := witnessOffSplit.flushPendingImportSRC(true); err != nil {
 		t.Fatalf("witness-off split flush: %v", err)
 	}
 
@@ -7727,7 +7727,7 @@ func TestPipelinedImportSRC_WitnessHardFailsWithoutExecWitness(t *testing.T) {
 	if _, err := chain.InsertChain(blocks, false); err != nil {
 		t.Fatalf("InsertChain failed: %v", err)
 	}
-	if err := chain.flushPendingImportSRC(); err != nil {
+	if err := chain.flushPendingImportSRC(true); err != nil {
 		t.Fatalf("flushPendingImportSRC failed: %v", err)
 	}
 
@@ -7845,7 +7845,7 @@ func TestPipelinedImportSRC_WitnessIncludesBlockHashAncestors(t *testing.T) {
 	if _, err := pipeChain.InsertChain(allBlocks, true); err != nil {
 		t.Fatalf("InsertChain (makeWitness=true): %v", err)
 	}
-	if err := pipeChain.flushPendingImportSRC(); err != nil {
+	if err := pipeChain.flushPendingImportSRC(true); err != nil {
 		t.Fatalf("flushPendingImportSRC: %v", err)
 	}
 
@@ -7927,7 +7927,7 @@ func TestPipelinedImportSRC_WitnessEncodeDecodeRoundtrip(t *testing.T) {
 	if _, err := pipeChain.InsertChain(blocks, true); err != nil {
 		t.Fatalf("InsertChain (makeWitness=true) failed: %v", err)
 	}
-	if err := pipeChain.flushPendingImportSRC(); err != nil {
+	if err := pipeChain.flushPendingImportSRC(true); err != nil {
 		t.Fatalf("flushPendingImportSRC failed: %v", err)
 	}
 
@@ -8008,7 +8008,7 @@ func testPipelinedImportSRC_WarmSnapshotWitnessParity(t *testing.T, scheme strin
 			if _, err := chain.InsertChain(blocks, true); err != nil {
 				t.Fatalf("%s: InsertChain: %v", label, err)
 			}
-			if err := chain.flushPendingImportSRC(); err != nil {
+			if err := chain.flushPendingImportSRC(true); err != nil {
 				t.Fatalf("%s: flushPendingImportSRC: %v", label, err)
 			}
 			return chain
@@ -8172,7 +8172,7 @@ func runWarmSnapshotBlockHashTest(t *testing.T, scheme string) {
 	if _, err := pipeChain.InsertChain(allBlocks, true); err != nil {
 		t.Fatalf("InsertChain (snapshot=true, witness=true): %v", err)
 	}
-	if err := pipeChain.flushPendingImportSRC(); err != nil {
+	if err := pipeChain.flushPendingImportSRC(true); err != nil {
 		t.Fatalf("flushPendingImportSRC: %v", err)
 	}
 
@@ -8304,7 +8304,7 @@ func testPipelinedImportSRC_WarmSnapshotStorageTrieParity(t *testing.T, scheme s
 			if _, err := chain.InsertChain(blocks, true); err != nil {
 				t.Fatalf("%s: InsertChain: %v", label, err)
 			}
-			if err := chain.flushPendingImportSRC(); err != nil {
+			if err := chain.flushPendingImportSRC(true); err != nil {
 				t.Fatalf("%s: flushPendingImportSRC: %v", label, err)
 			}
 			return chain
