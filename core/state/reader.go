@@ -681,6 +681,25 @@ func (r *readerWithCache) Account(addr common.Address) (*types.StateAccount, err
 	return account, err
 }
 
+// CollectReadSet enumerates every account and storage key resolved through
+// this cache during the block, regardless of which statedb issued the read
+// or which backing layer served it. The cache is shared across the reader
+// triple, finalDB, and every BlockSTM pool copy, so this is a complete
+// record of reader-reaching reads — the counterpart, for the FlatDiff
+// read-set, of what resolveCachedKeysIntoTrie is for witness trie nodes.
+func (r *readerWithCache) CollectReadSet(onAccount func(common.Address, bool), onStorage func(common.Address, common.Hash)) {
+	r.accounts.Range(func(k, v any) bool {
+		ent := v.(*accountCacheEntry)
+		onAccount(k.(common.Address), ent.acct != nil)
+		return true
+	})
+	r.storageCache.Range(func(k, _ any) bool {
+		key := k.(storageKey)
+		onStorage(key.addr, key.slot)
+		return true
+	})
+}
+
 // storage retrieves the storage slot specified by the address and slot key, along
 // with a flag indicating whether it's found in the cache or not. The returned
 // storage slot might be empty if it's not existent.

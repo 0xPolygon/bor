@@ -9,15 +9,19 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/lru"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/trie"
+	"github.com/ethereum/go-ethereum/triedb"
 )
 
 // witnessRegenRoundTrip replays a block through the production V2 processor
@@ -377,6 +381,7 @@ func witnessRegenPipelinedRoundTrip(pb *preparedBlock, diskdb ethdb.Database, co
 	tmpDB.SetWitness(w2)
 	tmpDB.ApplyFlatDiffForCommit(flatDiff)
 	preloadFlatDiffReads(tmpDB, flatDiff)
+	tmpDB.CollectStateWitness()
 	srcRoot, _, err := tmpDB.CommitWithUpdate(pb.block.NumberU64(), deleteEmptyObjects, config.IsCancun(pb.block.Number()))
 	if err != nil {
 		return fmt.Errorf("SRC commit: %w", err)
@@ -452,6 +457,311 @@ func TestV2WitnessRegenerationPipelinedSRCAllBlocks(t *testing.T) {
 	if failed > 0 {
 		t.Fatalf("%d/%d blocks failed the pipelined witness round trip", failed, len(blocks))
 	}
+}
+
+// injectWitnessIntoHashDB adds a witness's headers and state nodes into an
+// existing hash-keyed database. Witness.MakeHashDB always creates a fresh
+// database, but the chained round trip needs the union of two consecutive
+// witnesses in one database so both root generations are resolvable.
+func injectWitnessIntoHashDB(db ethdb.Database, w *stateless.Witness) {
+	for _, header := range w.Headers {
+		rawdb.WriteHeader(db, header)
+	}
+	for node := range w.State {
+		blob := []byte(node)
+		rawdb.WriteLegacyTrieNode(db, crypto.Keccak256Hash(blob), blob)
+	}
+}
+
+// witnessRegenChainedPipelinedRoundTrip reproduces the steady-state pipelined
+// import shape across two consecutive blocks, which the single-block round
+// trip structurally cannot: block N executes while SRC(N-1) has not committed,
+// so its readers sit at root_{N-2} and every trie node captured during
+// execution is of the root_{N-2} generation — while the witness for block N
+// must carry root_{N-1}-generation nodes. The only source of correct-
+// generation nodes is SRC(N)'s re-read at root_{N-1}, which is driven
+// entirely by the FlatDiff read-set. The round trip therefore fails whenever
+// that read-set is not a complete record of what execution read.
+func witnessRegenChainedPipelinedRoundTrip(prev, cur *testBlockData, diskdb ethdb.Database, config *params.ChainConfig, engine consensus.Engine) error {
+	// Union hash-db: root_{N-2}-generation nodes come from prev's witness,
+	// root_{N-1}-generation nodes from cur's witness plus SRC(N-1)'s commit.
+	memdb := prev.witness.MakeHashDB(diskdb)
+	injectWitnessIntoHashDB(memdb, cur.witness)
+	tdb := triedb.NewDatabase(memdb, triedb.HashDefaults)
+	db := state.NewDatabase(tdb, nil)
+
+	rootN2 := prev.witness.Root()
+	rootN1 := cur.witness.Root()
+	if rootN1 != prev.stateRoot {
+		return fmt.Errorf("fixture pair not chained: block %d pre-state root %x, block %d post-state root %x",
+			cur.block.NumberU64(), rootN1, prev.block.NumberU64(), prev.stateRoot)
+	}
+
+	headerCache := lru.NewCache[common.Hash, *types.Header](256)
+	for _, h := range prev.witness.Headers {
+		headerCache.Add(h.Hash(), h)
+	}
+	for _, h := range cur.witness.Headers {
+		headerCache.Add(h.Hash(), h)
+	}
+	authorPrev := getAuthor(config, prev.witness.Header())
+	authorCur := getAuthor(config, cur.witness.Header())
+	hc := &benchHeaderChain{config: config, chainDb: memdb, headerCache: headerCache, engine: engine}
+	bc := &BlockChain{
+		chainConfig: config,
+		hc:          &HeaderChain{config: config, chainDb: memdb, headerCache: headerCache, engine: engine},
+	}
+
+	// Anchored reference for block N — see the note in witnessRegenRoundTrip.
+	refState, refReceipt, refRes, err := executeStatelessSerial(config, cur.block, cur.witness, &authorCur, engine, diskdb)
+	if err != nil {
+		return fmt.Errorf("replay from original witness: %w", err)
+	}
+	if refState != cur.stateRoot {
+		return fmt.Errorf("original witness replay diverges from real block: state root %x, want %x", refState, cur.stateRoot)
+	}
+	if refReceipt != cur.receiptRoot {
+		return fmt.Errorf("original witness replay diverges from real block: receipt root %x, want %x", refReceipt, cur.receiptRoot)
+	}
+
+	// Block N-1 enters the pipeline in direct mode: readers at the committed
+	// root_{N-2}, no overlay (buildPipelineImportOpts' first-block branch).
+	prefetchPrev, _, parallelPrev, err := db.ReadersWithCacheStatsTriple(rootN2)
+	if err != nil {
+		return fmt.Errorf("readers for block N-1: %w", err)
+	}
+	if _, err := prefetchPrev.Account(authorPrev); err != nil {
+		return fmt.Errorf("warm author N-1: %w", err)
+	}
+	execPrev, err := state.NewWithReader(rootN2, db, parallelPrev)
+	if err != nil {
+		return fmt.Errorf("open state for block N-1: %w", err)
+	}
+	// A witness-producing node records a witness on every block; attaching
+	// one to block N-1 keeps its CommitSnapshot on the production path (the
+	// read-surface handling differs between witness-on and witness-off).
+	w1, err := stateless.NewWitness(prev.block.Header(), hc)
+	if err != nil {
+		return fmt.Errorf("new witness for block N-1: %w", err)
+	}
+	w1.Headers = append([]*types.Header{}, prev.witness.Headers...)
+	execPrev.SetWitness(w1)
+	resPrev, err := NewV2StateProcessor(hc, bc, 4).Process(prev.block, execPrev, benchVMConfig, &authorPrev, context.Background())
+	if err != nil {
+		return fmt.Errorf("v2 process block N-1: %w", err)
+	}
+	if got := types.DeriveSha(resPrev.Receipts, trie.NewStackTrie(nil)); got != prev.receiptRoot {
+		return fmt.Errorf("block N-1 execution diverged from real block: receipt root %x, want %x", got, prev.receiptRoot)
+	}
+	deleteEmptyPrev := config.IsEIP158(prev.block.Number())
+	flatDiffPrev := execPrev.CommitSnapshot(deleteEmptyPrev)
+	execPrev.StopPrefetcher()
+
+	// SRC(N-1), witness-off shape (runSRCCompute's makeWitness=false branch):
+	// only its side effect matters here — committing root_{N-1} into the
+	// shared triedb so SRC(N) can open at it. Production runs this
+	// concurrently with block N's execution; sequencing it first changes
+	// nothing block N observes, since its readers are pinned to root_{N-2}.
+	srcPrev, err := state.NewTrieOnly(rootN2, db)
+	if err != nil {
+		return fmt.Errorf("open SRC state for block N-1: %w", err)
+	}
+	srcPrev.ApplyFlatDiffForCommitFast(flatDiffPrev)
+	committedRoot, _, err := srcPrev.CommitWithUpdate(prev.block.NumberU64(), deleteEmptyPrev, config.IsCancun(prev.block.Number()))
+	if err != nil {
+		return fmt.Errorf("SRC commit block N-1: %w", err)
+	}
+	if committedRoot != rootN1 {
+		return fmt.Errorf("SRC(N-1) root diverged: %x, want %x", committedRoot, rootN1)
+	}
+
+	// Block N in steady-state pipelined shape: readers still at root_{N-2},
+	// block N-1's post-state served by the FlatDiff overlay reference
+	// (setupBlockReaders + applyFlatDiffOverlayToAll).
+	prefetchCur, _, parallelCur, err := db.ReadersWithCacheStatsTriple(rootN2)
+	if err != nil {
+		return fmt.Errorf("readers for block N: %w", err)
+	}
+	if _, err := prefetchCur.Account(authorCur); err != nil {
+		return fmt.Errorf("warm author N: %w", err)
+	}
+	execCur, err := state.NewWithReader(rootN2, db, parallelCur)
+	if err != nil {
+		return fmt.Errorf("open state for block N: %w", err)
+	}
+	execCur.SetFlatDiffRef(flatDiffPrev)
+
+	w2, err := stateless.NewWitness(cur.block.Header(), hc)
+	if err != nil {
+		return fmt.Errorf("new witness: %w", err)
+	}
+	w2.Headers = append([]*types.Header{}, cur.witness.Headers...)
+	execCur.SetWitness(w2)
+
+	res, err := NewV2StateProcessor(hc, bc, 4).Process(cur.block, execCur, benchVMConfig, &authorCur, context.Background())
+	if err != nil {
+		return fmt.Errorf("v2 process block N: %w", err)
+	}
+	if got := types.DeriveSha(res.Receipts, trie.NewStackTrie(nil)); got != refReceipt {
+		return fmt.Errorf("v2 execution diverged from serial: receipt root %x, want %x", got, refReceipt)
+	}
+
+	// SRC(N): the witness-completing side of the split, opening at the
+	// freshly committed root_{N-1} — the only stage that can put correct-
+	// generation proof nodes into w2.
+	deleteEmptyCur := config.IsEIP158(cur.block.Number())
+	flatDiffCur := execCur.CommitSnapshot(deleteEmptyCur)
+	execCur.StopPrefetcher()
+
+	srcCur, err := state.NewTrieOnly(rootN1, db)
+	if err != nil {
+		return fmt.Errorf("open SRC state for block N: %w", err)
+	}
+	srcCur.SetWitness(w2)
+	srcCur.ApplyFlatDiffForCommit(flatDiffCur)
+	preloadFlatDiffReads(srcCur, flatDiffCur)
+	srcCur.CollectStateWitness()
+	srcRoot, _, err := srcCur.CommitWithUpdate(cur.block.NumberU64(), deleteEmptyCur, config.IsCancun(cur.block.Number()))
+	if err != nil {
+		return fmt.Errorf("SRC commit block N: %w", err)
+	}
+	if srcRoot != refState {
+		return fmt.Errorf("SRC root diverged: %x, want %x", srcRoot, refState)
+	}
+
+	// The SRC-completed witness must replay statelessly to identical results.
+	gotState, gotReceipt, gotRes, err := executeStatelessSerial(config, cur.block, w2, &authorCur, engine, diskdb)
+	if err != nil {
+		return fmt.Errorf("replay from SRC-completed witness: %w", err)
+	}
+	if gotRes.GasUsed != refRes.GasUsed {
+		dbErr := debugStatelessReplayDBError(config, cur.block, w2, &authorCur, engine, diskdb)
+		return fmt.Errorf("SRC-completed witness incomplete: gas %d, want %d (dbErr: %v; owner: %s)",
+			gotRes.GasUsed, refRes.GasUsed, dbErr, debugClassifyMissingNodeOwner(dbErr, flatDiffCur))
+	}
+	if gotReceipt != refReceipt {
+		return fmt.Errorf("SRC-completed witness incomplete: receipt root %x, want %x", gotReceipt, refReceipt)
+	}
+	if gotState != refState {
+		missing := 0
+		for node := range cur.witness.State {
+			if _, ok := w2.State[node]; !ok {
+				missing++
+			}
+		}
+		return fmt.Errorf("SRC-completed witness incomplete: state root %x, want %x (original nodes=%d completed nodes=%d missing=%d, dbErr: %v)",
+			gotState, refState, len(cur.witness.State), len(w2.State), missing,
+			debugStatelessReplayDBError(config, cur.block, w2, &authorCur, engine, diskdb))
+	}
+	return nil
+}
+
+// debugStatelessReplayDBError reruns a stateless replay and returns the
+// statedb's internally accumulated read error, which executeStatelessSerial
+// deliberately swallows (a serial statedb records read failures and keeps
+// returning zero values). Diagnostic only — names the first missing node.
+func debugStatelessReplayDBError(config *params.ChainConfig, block *types.Block, witness *stateless.Witness, author *common.Address, engine consensus.Engine, diskdb ethdb.Database) error {
+	memdb := witness.MakeHashDB(diskdb)
+	db, err := state.New(witness.Root(), state.NewDatabase(triedb.NewDatabase(memdb, triedb.HashDefaults), nil))
+	if err != nil {
+		return err
+	}
+	headerChain := &HeaderChain{
+		config:      config,
+		chainDb:     memdb,
+		headerCache: lru.NewCache[common.Hash, *types.Header](256),
+		engine:      engine,
+	}
+	if _, err := NewStateProcessor(headerChain).Process(block, db, benchVMConfig, author, context.Background()); err != nil {
+		return err
+	}
+	db.IntermediateRoot(config.IsEIP158(block.Number()))
+	return db.Error()
+}
+
+// debugClassifyMissingNodeOwner maps a missing storage-trie node's owner hash
+// back to an address in the FlatDiff and reports which read/write bucket the
+// owning account sits in. Diagnostic only: distinguishes "read escaped every
+// record" from "recorded but preload captured the wrong generation".
+func debugClassifyMissingNodeOwner(dbErr error, diff *state.FlatDiff) string {
+	var missing *trie.MissingNodeError
+	if !errors.As(dbErr, &missing) || missing.Owner == (common.Hash{}) {
+		return "n/a"
+	}
+	buckets := map[string][]common.Address{}
+	for addr := range diff.Accounts {
+		buckets["Accounts"] = append(buckets["Accounts"], addr)
+	}
+	for addr := range diff.Storage {
+		buckets["Storage"] = append(buckets["Storage"], addr)
+	}
+	for _, addr := range diff.ReadSet {
+		buckets["ReadSet"] = append(buckets["ReadSet"], addr)
+	}
+	for addr := range diff.ReadStorage {
+		buckets["ReadStorage"] = append(buckets["ReadStorage"], addr)
+	}
+	for addr := range diff.Destructs {
+		buckets["Destructs"] = append(buckets["Destructs"], addr)
+	}
+	for _, addr := range diff.NonExistentReads {
+		buckets["NonExistentReads"] = append(buckets["NonExistentReads"], addr)
+	}
+	found := ""
+	for bucket, addrs := range buckets {
+		for _, addr := range addrs {
+			if crypto.Keccak256Hash(addr.Bytes()) == missing.Owner {
+				found += fmt.Sprintf("%x in %s (%d ReadStorage slots); ", addr, bucket, len(diff.ReadStorage[addr]))
+			}
+		}
+	}
+	if found == "" {
+		return "owner not in any FlatDiff bucket"
+	}
+	return found
+}
+
+// TestV2WitnessRegenerationPipelinedSRCChained runs the chained round trip on
+// every consecutive fixture pair. Pairs touching a known-incomplete 7702
+// fixture are skipped so the two gaps stay untangled.
+func TestV2WitnessRegenerationPipelinedSRCChained(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping chained witness sweep in short mode")
+	}
+	blocks, diskdb := loadAllWitnessRegenBlocks(t)
+	config := params.BorMainnetChainConfig
+	engine := &benchConsensus{}
+
+	byNumber := make(map[uint64]int, len(blocks))
+	for i := range blocks {
+		byNumber[blocks[i].block.NumberU64()] = i
+	}
+	pairs := 0
+	for i := range blocks {
+		cur := &blocks[i]
+		num := cur.block.NumberU64()
+		prevIdx, ok := byNumber[num-1]
+		if !ok {
+			continue
+		}
+		if _, listed := knownIncompleteWitnessFixtures[num]; listed {
+			continue
+		}
+		if _, listed := knownIncompleteWitnessFixtures[num-1]; listed {
+			continue
+		}
+		prev := &blocks[prevIdx]
+		pairs++
+		t.Run(fmt.Sprintf("%d", num), func(t *testing.T) {
+			if err := witnessRegenChainedPipelinedRoundTrip(prev, cur, diskdb, config, engine); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	if pairs == 0 {
+		t.Skip("no consecutive fixture pairs available")
+	}
+	t.Logf("chained pipelined round trip over %d consecutive pairs", pairs)
 }
 
 // TestV2WitnessRegenerationPipelinedPrewalkFires guards the pipelined round

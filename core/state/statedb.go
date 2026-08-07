@@ -2430,6 +2430,60 @@ type FlatDiff struct {
 	// to capture proof-of-absence trie nodes for the witness, enabling
 	// stateless execution to verify these accounts don't exist.
 	NonExistentReads []common.Address
+
+	// trackOverlayReads enables recording of overlay-served reads while this
+	// FlatDiff acts as the next block's read overlay. Overlay hits never
+	// reach the shared reader, and under BlockSTM v2 they may materialize
+	// only on discarded pool copies — this tracker is the only place they
+	// are reliably observed. Set by CommitSnapshot when a witness is being
+	// produced; left off otherwise so witness-off imports pay nothing.
+	trackOverlayReads bool
+
+	// overlayAccountReads / overlayStorageReads accumulate the keys the NEXT
+	// block read from this overlay (concurrent: workers and finalDB record
+	// into the shared FlatDiff). Keys: common.Address / stateKey.
+	overlayAccountReads sync.Map
+	overlayStorageReads sync.Map
+}
+
+// recordOverlayAccountRead notes an overlay-served account read. Load-first
+// keeps the hit path to one lock-free map probe after the first record.
+func (diff *FlatDiff) recordOverlayAccountRead(addr common.Address) {
+	if !diff.trackOverlayReads {
+		return
+	}
+	if _, ok := diff.overlayAccountReads.Load(addr); !ok {
+		diff.overlayAccountReads.Store(addr, struct{}{})
+	}
+}
+
+// recordOverlayStorageRead notes an overlay-served storage read.
+func (diff *FlatDiff) recordOverlayStorageRead(addr common.Address, slot common.Hash) {
+	if !diff.trackOverlayReads {
+		return
+	}
+	key := stateKey{addr: addr, slot: slot}
+	if _, ok := diff.overlayStorageReads.Load(key); !ok {
+		diff.overlayStorageReads.Store(key, struct{}{})
+	}
+}
+
+// collectOverlayReads hands every recorded overlay-served read to the
+// callbacks. Account existence is resolved against this FlatDiff itself:
+// an overlay-covered account either exists in Accounts (written or
+// resurrected by the overlay's block) or was destructed by it.
+func (diff *FlatDiff) collectOverlayReads(onAccount func(common.Address, bool), onStorage func(common.Address, common.Hash)) {
+	diff.overlayAccountReads.Range(func(k, _ any) bool {
+		addr := k.(common.Address)
+		_, exists := diff.Accounts[addr]
+		onAccount(addr, exists)
+		return true
+	})
+	diff.overlayStorageReads.Range(func(k, _ any) bool {
+		key := k.(stateKey)
+		onStorage(key.addr, key.slot)
+		return true
+	})
 }
 
 // storageOverlay returns a FlatDiff-covered storage value. A destructed
@@ -2442,10 +2496,12 @@ func (diff *FlatDiff) storageOverlay(addr common.Address, key common.Hash) (comm
 	}
 	if slots, ok := diff.Storage[addr]; ok {
 		if value, ok := slots[key]; ok {
+			diff.recordOverlayStorageRead(addr, key)
 			return value, true, true
 		}
 	}
 	if _, destructed := diff.Destructs[addr]; destructed {
+		diff.recordOverlayStorageRead(addr, key)
 		return common.Hash{}, true, false
 	}
 	return common.Hash{}, false, false
@@ -2458,9 +2514,11 @@ func (diff *FlatDiff) accountOverlay(addr common.Address) (types.StateAccount, b
 		return types.StateAccount{}, false, false
 	}
 	if acct, ok := diff.Accounts[addr]; ok {
+		diff.recordOverlayAccountRead(addr)
 		return acct, true, true
 	}
 	if _, destructed := diff.Destructs[addr]; destructed {
+		diff.recordOverlayAccountRead(addr)
 		return types.StateAccount{}, false, true
 	}
 	return types.StateAccount{}, false, false
@@ -2545,7 +2603,80 @@ func (s *StateDB) CommitSnapshot(deleteEmptyObjects bool) *FlatDiff {
 	for addr := range s.nonExistentReads {
 		s.captureNonExistentRead(diff, addr)
 	}
+	// The stateObjects walk above only sees reads that materialized on THIS
+	// statedb. Under BlockSTM v2 worker reads live on discarded pool copies,
+	// and reads served by the parent FlatDiff overlay never reach the shared
+	// reader at all — both leave the read-set short, the SRC preload re-reads
+	// too little at the parent root, and the completed witness lacks
+	// current-generation proof nodes for the missing keys. Drain the two
+	// shared, attribution-free read records instead. Only witness production
+	// consumes the read surface, so witness-off imports skip the cost.
+	if s.witness != nil {
+		s.drainExternalReadsIntoDiff(diff)
+		diff.trackOverlayReads = true
+	}
 	return diff
+}
+
+// drainExternalReadsIntoDiff merges read keys observed outside this StateDB's
+// stateObjects into the diff's read surface: the shared reader cache (every
+// read that reached the reader, from any worker or statedb) and the parent
+// FlatDiff's overlay-read tracker (reads the overlay served without touching
+// the reader). Keys already covered by the diff's mutations or existing read
+// lists are skipped. This may include speculative prefetcher reads — a
+// superset only ever costs witness size, never correctness.
+func (s *StateDB) drainExternalReadsIntoDiff(diff *FlatDiff) {
+	seenAccounts := make(map[common.Address]struct{}, len(diff.ReadSet)+len(diff.NonExistentReads))
+	for _, addr := range diff.ReadSet {
+		seenAccounts[addr] = struct{}{}
+	}
+	for _, addr := range diff.NonExistentReads {
+		seenAccounts[addr] = struct{}{}
+	}
+	seenSlots := make(map[stateKey]struct{})
+	for addr, slots := range diff.ReadStorage {
+		for _, slot := range slots {
+			seenSlots[stateKey{addr: addr, slot: slot}] = struct{}{}
+		}
+	}
+	onAccount := func(addr common.Address, exists bool) {
+		if _, ok := seenAccounts[addr]; ok {
+			return
+		}
+		// Mutated and destructed accounts get their trie paths walked by
+		// ApplyFlatDiffForCommit/CommitWithUpdate and the destruct preload.
+		if _, ok := diff.Accounts[addr]; ok {
+			return
+		}
+		if _, ok := diff.Destructs[addr]; ok {
+			return
+		}
+		seenAccounts[addr] = struct{}{}
+		if exists {
+			diff.ReadSet = append(diff.ReadSet, addr)
+		} else {
+			diff.NonExistentReads = append(diff.NonExistentReads, addr)
+		}
+	}
+	onStorage := func(addr common.Address, slot common.Hash) {
+		key := stateKey{addr: addr, slot: slot}
+		if _, ok := seenSlots[key]; ok {
+			return
+		}
+		if slots, ok := diff.Storage[addr]; ok {
+			if _, written := slots[slot]; written {
+				return
+			}
+		}
+		seenSlots[key] = struct{}{}
+		diff.ReadStorage[addr] = append(diff.ReadStorage[addr], slot)
+	}
+	if rwc := findReaderWithCache(s.reader); rwc != nil {
+		rwc.CollectReadSet(onAccount, onStorage)
+	}
+	if s.flatDiffRef != nil {
+		s.flatDiffRef.collectOverlayReads(onAccount, onStorage)
+	}
 }
 
 // captureMutation records a single mutated/destructed account into the

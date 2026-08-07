@@ -5250,6 +5250,13 @@ func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block
 	// with proof-path trie nodes, and the histograms describe its work.
 	if makeWitness {
 		recordAndPreloadSRCWitnessReads(tmpDB, flatDiff)
+		// Preload (and ApplyFlatDiffForCommit's origin lookups) walk tries
+		// through tmpDB's READER, whose tracers no IntermediateRoot loop
+		// harvests: the mutated-account loop only collects obj.trie (write
+		// paths) and the read-only loop skips mutated objects entirely. Drain
+		// the reader tracers here or read-only slots of accounts this block
+		// also wrote lose their current-generation proof nodes.
+		tmpDB.CollectStateWitness()
 	}
 
 	deleteEmptyObjects := bc.chainConfig.IsEIP158(block.Number())
@@ -5383,12 +5390,13 @@ func (bc *BlockChain) openSRCStateDB(parentRoot common.Hash, block *types.Block,
 func preloadFlatDiffReads(tmpDB *state.StateDB, flatDiff *state.FlatDiff) {
 	for _, addr := range flatDiff.ReadSet {
 		tmpDB.GetBalance(addr)
-		for _, slot := range flatDiff.ReadStorage[addr] {
-			tmpDB.GetState(addr, slot)
-		}
 	}
-	for addr := range flatDiff.Accounts {
-		for _, slot := range flatDiff.ReadStorage[addr] {
+	// Iterate ReadStorage directly rather than via ReadSet/Accounts: it can
+	// carry slots for addresses in neither list (e.g. drained reader-cache
+	// reads), and repeated account touches are cached no-ops anyway.
+	for addr, slots := range flatDiff.ReadStorage {
+		tmpDB.GetBalance(addr)
+		for _, slot := range slots {
 			tmpDB.GetState(addr, slot)
 		}
 	}
