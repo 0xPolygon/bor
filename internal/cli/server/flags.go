@@ -1473,5 +1473,34 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Group:   "P2P",
 	})
 
+	c.registerSequencerFlags(f)
+
 	return f
+}
+
+func (c *Command) registerSequencerFlags(f *flagset.Flagset) {
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "sequencer.enabled",
+		Usage:   "Enable the sequence store integration (a mining node publishes the block lifecycle)",
+		Value:   &c.cliConfig.Sequencer.Enabled,
+		Default: c.cliConfig.Sequencer.Enabled,
+	})
+	f.StringFlag(&flagset.StringFlag{
+		Name:    "sequencer.publisher-endpoint",
+		Usage:   "Sequence store publisher service gRPC endpoint (publish stream)",
+		Value:   &c.cliConfig.Sequencer.PublisherEndpoint,
+		Default: c.cliConfig.Sequencer.PublisherEndpoint,
+	})
+	f.StringFlag(&flagset.StringFlag{
+		Name:    "sequencer.consumer-endpoint",
+		Usage:   "Sequence store consumer service gRPC endpoint (tail reads during reconciliation)",
+		Value:   &c.cliConfig.Sequencer.ConsumerEndpoint,
+		Default: c.cliConfig.Sequencer.ConsumerEndpoint,
+	})
+	f.DurationFlag(&flagset.DurationFlag{
+		Name:    "sequencer.poll",
+		Usage:   "Producer txpool poll cadence while a block is open (continuous building); 0 keeps the one-shot fill",
+		Value:   &c.cliConfig.Sequencer.Poll,
+		Default: c.cliConfig.Sequencer.Poll,
+	})
 }

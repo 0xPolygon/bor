@@ -55,6 +55,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/protocols/snap"
 	"github.com/ethereum/go-ethereum/eth/protocols/wit"
 	"github.com/ethereum/go-ethereum/eth/relay"
+	"github.com/ethereum/go-ethereum/eth/sequencer"
 	"github.com/ethereum/go-ethereum/eth/tracers"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
@@ -141,6 +142,11 @@ type Ethereum struct {
 	gasPrice  *big.Int
 	etherbase common.Address
 
+	// Sequence store integration (design docs/sequencer-bor.md): at most
+	// one is set, by role.
+	seqPublisher *sequencer.Publisher // mining node: publishes the block lifecycle
+	seqConsumer  *sequencer.Consumer  // RPC node: re-executes the stream for preconf receipts
+
 	networkID     uint64
 	netRPCService *ethapi.NetAPI
 
@@ -151,6 +157,45 @@ type Ethereum struct {
 	closeCh chan struct{} // Channel to signal the background processes to exit
 
 	shutdownTracker *shutdowncheck.ShutdownTracker // Tracks if and when the node has shutdown ungracefully
+}
+
+// attachSequencer wires the sequence store integration by role (design
+// docs/sequencer-bor.md): a mining node publishes the block lifecycle, a
+// non-mining node follows the stream for preconf receipts.
+func (s *Ethereum) attachSequencer(config *ethconfig.Config) error {
+	switch config.SequencerRole {
+	case "producer":
+		if s.miner == nil {
+			return nil
+		}
+
+		publisher, err := sequencer.NewPublisher(config.SequencerPublisherEndpoint,
+			config.SequencerConsumerEndpoint, s.blockchain.Config().ChainID.Uint64(),
+			config.SequencerPoll, s.blockchain)
+		if err != nil {
+			return fmt.Errorf("sequencer publisher: %w", err)
+		}
+
+		s.seqPublisher = publisher
+		s.miner.SetSequencer(publisher)
+	case "consumer":
+		// A consumer that cannot start (not a bor chain) must not block the
+		// node: preconfs stay off, everything else runs.
+		consumer, err := sequencer.NewConsumer(config.SequencerConsumerEndpoint, s.blockchain)
+		if err != nil {
+			log.Error("Sequencer consumer disabled", "err", err)
+
+			return nil
+		}
+
+		s.seqConsumer = consumer
+		consumer.Start()
+	case "":
+	default:
+		return fmt.Errorf("unknown sequencer role %q", config.SequencerRole)
+	}
+
+	return nil
 }
 
 // New creates a new Ethereum object (including the initialisation of the common Ethereum object),
@@ -488,6 +533,10 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		eth.miner.SetPrioAddresses(config.TxPool.Locals)
 	}
 
+	if err := eth.attachSequencer(config); err != nil {
+		return nil, err
+	}
+
 	// 1.14.8: NewOracle function definition was changed to accept (startPrice *big.Int) param.
 	eth.APIBackend.gpo = gasprice.NewOracle(eth.APIBackend, config.GPO, config.Miner.GasPrice)
 	eth.APIBackend.gpo.ProcessCache()
@@ -710,13 +759,21 @@ func (s *Ethereum) StopMining() {
 func (s *Ethereum) IsMining() bool      { return s.miner.Mining() }
 func (s *Ethereum) Miner() *miner.Miner { return s.miner }
 
-func (s *Ethereum) AccountManager() *accounts.Manager  { return s.accountManager }
-func (s *Ethereum) BlockChain() *core.BlockChain       { return s.blockchain }
-func (s *Ethereum) TxPool() *txpool.TxPool             { return s.txPool }
-func (s *Ethereum) BlobTxPool() *blobpool.BlobPool     { return s.blobTxPool }
-func (s *Ethereum) Engine() consensus.Engine           { return s.engine }
-func (s *Ethereum) ChainDb() ethdb.Database            { return s.chainDb }
-func (s *Ethereum) IsListening() bool                  { return true } // Always listening
+func (s *Ethereum) AccountManager() *accounts.Manager { return s.accountManager }
+func (s *Ethereum) BlockChain() *core.BlockChain      { return s.blockchain }
+func (s *Ethereum) TxPool() *txpool.TxPool            { return s.txPool }
+func (s *Ethereum) BlobTxPool() *blobpool.BlobPool    { return s.blobTxPool }
+func (s *Ethereum) Engine() consensus.Engine          { return s.engine }
+func (s *Ethereum) ChainDb() ethdb.Database           { return s.chainDb }
+func (s *Ethereum) IsListening() bool                 { return true } // Always listening
+// WhitelistedMilestone implements miner.Backend: the newest Heimdall
+// milestone the downloader has whitelisted, or false when none has arrived.
+// The miner's finality gate compares it against the local chain before a
+// producer builds.
+func (s *Ethereum) WhitelistedMilestone() (bool, uint64, common.Hash) {
+	return s.Downloader().ChainValidator.GetWhitelistedMilestone()
+}
+
 func (s *Ethereum) Downloader() *downloader.Downloader { return s.handler.downloader }
 func (s *Ethereum) Synced() bool                       { return s.handler.synced.Load() }
 func (s *Ethereum) SetSynced()                         { s.handler.enableSyncedFeatures() }
@@ -1097,6 +1154,14 @@ func (s *Ethereum) Stop() error {
 	<-ch
 	s.filterMaps.Stop()
 	s.txPool.Close()
+	if s.seqPublisher != nil {
+		s.seqPublisher.Close()
+	}
+
+	if s.seqConsumer != nil {
+		s.seqConsumer.Close()
+	}
+
 	if s.miner != nil {
 		s.miner.Close()
 	}

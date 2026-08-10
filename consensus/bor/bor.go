@@ -1160,12 +1160,14 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 	var succession int
 	// if signer is not empty
 	if currentSigner.signer != (common.Address{}) {
+		// A signer outside the active set (post-Rio: outside the span's
+		// producer set) does not build at all — its candidate could never
+		// seal, and its sequence must never reach the store. Nodes without
+		// a signer (RPC) skip this check and keep their pending snapshot
+		// fresh.
 		succession, err = snap.GetSignerSuccessionNumber(currentSigner.signer)
 		if err != nil {
-			// If the signer is not in the active validator set, use succession 0
-			// so that the pending block header is still valid for RPC queries.
-			// Seal() will independently reject the block if unauthorized.
-			succession = 0
+			return err
 		}
 	}
 

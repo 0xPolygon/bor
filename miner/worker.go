@@ -33,6 +33,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/tracing"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/bor"
+	"github.com/ethereum/go-ethereum/consensus/misc"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/core"
@@ -109,6 +110,7 @@ const (
 var (
 	errBlockInterruptedByNewHead  = errors.New("new head arrived while building block")
 	errBlockInterruptedByRecommit = errors.New("recommit interrupt while building block")
+	errRebuildForSequence         = errors.New("competing producer holds this height; rebuild on the store's sequence")
 	errBlockInterruptedByTimeout  = errors.New("timeout while building block")
 
 	// metrics gauge to track total and empty blocks sealed by a miner
@@ -407,6 +409,11 @@ func (env *environment) txFitsSize(tx *types.Transaction) bool {
 	return env.size+tx.Size() < params.MaxBlockSize-maxBlockSizeBufferZone-env.stateSyncReserve
 }
 
+// sequenceBarrierTimeout bounds the pre-seal wait for store confirmation.
+// Past it the block seals regardless: a slow or unreachable store must not
+// stall block production.
+const sequenceBarrierTimeout = 120 * time.Millisecond
+
 const (
 	commitInterruptNone int32 = iota
 	commitInterruptNewHead
@@ -436,7 +443,6 @@ type newPayloadResult struct {
 	receipts []*types.Receipt       // Receipts collected during construction
 	requests [][]byte               // Consensus layer requests collected during block construction
 	witness  *stateless.Witness     // Witness is an optional stateless proof
-
 }
 
 // getWorkReq represents a request for getting a new sealing work with provided parameters.
@@ -461,6 +467,11 @@ type worker struct {
 	engine      consensus.Engine
 	eth         Backend
 	chain       *core.BlockChain
+
+	// sequencer, when set, receives block-production progress (open, per-tx,
+	// seal) for the sequence store. Set before the worker starts; nil when
+	// sequencing is disabled. All its methods are non-blocking.
+	sequencer BlockSequencer
 
 	prio []common.Address // A list of senders to prioritize
 
@@ -516,6 +527,11 @@ type worker struct {
 	newTxs  atomic.Int32 // New arrival transaction count since last sealing work submitting.
 	syncing atomic.Bool  // The indicator whether the node is still syncing.
 
+	// finalityLatched is set once a whitelisted milestone confirms this
+	// node's chain; startedAt anchors the startup grace before that.
+	finalityLatched atomic.Bool
+	startedAt       time.Time
+
 	// newpayloadTimeout is the maximum timeout allowance for creating payload.
 	// The default value is 2 seconds but node operator can set it to arbitrary
 	// large value. A large timeout allowance may cause Geth to fail creating
@@ -565,6 +581,7 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 	worker := &worker{
 		config:              config,
 		chainConfig:         chainConfig,
+		startedAt:           time.Now(),
 		engine:              engine,
 		eth:                 eth,
 		chain:               eth.BlockChain(),
@@ -1412,6 +1429,11 @@ func (w *worker) resultLoop() {
 				log.Error("Block found but no relative pending task", "number", block.Number(), "sealhash", sealhash, "hash", hash)
 				continue
 			}
+
+			if !w.sealAndGate(block) {
+				continue
+			}
+
 			// Different block could share same sealhash, deep copy here to prevent write-write conflict.
 			var (
 				receipts = make([]*types.Receipt, len(task.receipts))
@@ -1658,6 +1680,13 @@ func (w *worker) commitTransaction(env *environment, tx *types.Transaction) ([]*
 	env.receipts = append(env.receipts, receipt)
 	env.tcount++
 	env.size += tx.Size()
+
+	// Only actual block production is sequenced: the pending-block snapshot
+	// and payload-building paths also commit transactions, but those never
+	// seal, and publishing them would poison the store chain.
+	if w.sequencingActive(env.header.Number) {
+		w.sequencer.PublishTx(tx)
+	}
 
 	return receipt.Logs, nil
 }
@@ -1967,6 +1996,8 @@ type generateParams struct {
 	builderPlanCh             chan *types.Transaction // Builder sends each validated tx here before execution; prefetcher reads and warms state concurrently
 	builderGasFreedCh         chan uint64             // Builder sends (declared−actual) gas after each successful tx; prefetcher uses it to predict overflow txs
 	planWg                    sync.WaitGroup          // Tracks sendPlan goroutines; must reach zero before builderPlanCh is closed
+	adoption                  *AdoptedWindow          // Dangling store window this build inherits and seeds
+	production                bool                    // Set only by commitWork: payload-building (generateWork) must never touch the sequencer
 }
 
 // makeHeader creates a new block header for sealing. The caller must hold w.mu
@@ -2057,6 +2088,13 @@ func (w *worker) prepareWork(genParams *generateParams, witness bool) (*environm
 	if err != nil {
 		return nil, err
 	}
+	// Only an authorized build reads the store (Prepare rejected everyone
+	// else): a dangling window for this exact header is adopted rather
+	// than superseded — fetched at real build time so the snapshot cannot
+	// go stale against a still-streaming incumbent.
+	w.fetchAdoption(genParams, header)
+	// Before makeEnv: executed transactions must see the adopted context.
+	w.applyAdoption(genParams, header)
 	makeHeaderDuration := time.Since(makeHeaderStart)
 
 	// Could potentially happen if starting to mine in an odd state.
@@ -2385,7 +2423,6 @@ func (w *worker) generateWork(params *generateParams, witness bool) *newPayloadR
 
 	var block *types.Block
 	block, work.receipts, _, err = w.engine.FinalizeAndAssemble(w.chain, work.header, work.state, &body, work.receipts)
-
 	if err != nil {
 		return &newPayloadResult{err: err}
 	}
@@ -2429,6 +2466,32 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 	}
 
 	parent := w.chain.CurrentBlock()
+
+	// A producer whose chain finality has not confirmed must not build: a
+	// restarting node that mines before its milestone view catches up
+	// produces a private fork every peer will refuse — four doomed blocks
+	// on a devnet, reorged away with all their preconfirmations.
+	next := new(big.Int).Add(parent.Number, common.Big1)
+	if w.sequencer != nil && sequencerActive(w.chainConfig.Bor, next) && !w.finalityConfirmed() {
+		log.Warn("Not building: finality has not confirmed this chain",
+			"number", next)
+
+		return
+	}
+
+	// Contention discovered mid-build — a competing producer's window
+	// landing after the build-start read — ends the work cycle rather than
+	// retrying inside it. The outer cycle machinery is the retry: the
+	// winner's imported block triggers a fresh cycle immediately (the
+	// recommit tick covers the rest), its build-start read adopts the
+	// standing window, and the seal gate referees anything that persists.
+	w.buildAttempt(interrupt, noempty, timestamp, abortRecovery, coinbase, parent, buildStart)
+}
+
+// buildAttempt runs one full build cycle on a fresh parent state.
+func (w *worker) buildAttempt(interrupt *atomic.Int32, noempty bool, timestamp int64,
+	abortRecovery bool, coinbase common.Address, parent *types.Header, buildStart time.Time,
+) {
 	// Sealing must build on committed state: the FlatDiff overlay that
 	// StateAtWithReaders serves during the pipelined window is rooted at the
 	// grandparent, and a root computed over it omits the parent's writes —
@@ -2458,6 +2521,7 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 		processReader:      processReader,
 		prefetchedTxHashes: &sync.Map{},
 		preBuildDuration:   time.Since(buildStart),
+		production:         true,
 	}
 
 	var interruptPrefetch atomic.Bool
@@ -2494,7 +2558,6 @@ func (w *worker) maybeStartPrefetch(parent *types.Header, throwaway *state.State
 	}()
 }
 
-// buildAndCommitBlock prepares work, fills transactions, and commits the block for sealing.
 // submitForSealing dispatches the built block to either the pipelined path
 // (overlap SRC for N with N+1's execution) or the sequential path. The
 // pendingWorkBlock bump is what de-duplicates ChainHeadEvent-triggered
@@ -2508,6 +2571,10 @@ func (w *worker) submitForSealing(work *environment, start time.Time, genParams 
 	_ = w.commit(work.copy(), w.fullTaskHook, true, start, genParams)
 }
 
+// buildAndCommitBlock prepares work, fills transactions, and commits the block
+// for sealing. A build abandoned because another producer holds this height
+// simply ends the work cycle: the next one's build-start read adopts their
+// window.
 func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genParams *generateParams, interruptPrefetch *atomic.Bool) {
 	// Must be the first defer so the prefetcher goroutine is signaled to exit
 	// on every return path — including the early return below when prepareWork
@@ -2522,6 +2589,10 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 	}
 	prepareWorkDuration := time.Since(prepareWorkStart)
 	prepareWorkTimer.Update(prepareWorkDuration)
+
+	// The header context is final here (engine.Prepare included): publish
+	// the block-open record before any transaction commits.
+	w.sequencerOpen(work)
 
 	// Starts accounting time after prepareWork. Slot timing is handled in Seal
 	// for sequential paths and explicitly in the pipeline path.
@@ -2592,8 +2663,9 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 	// Mark the start of full-block building. Set after the optional empty pre-seal commit so that
 	// productionElapsed for the full block does not include empty-block overhead.
 	genParams.productionStart = time.Now()
-	// Fill pending transactions from the txpool into the block.
-	err = w.fillTransactions(interrupt, work, genParams)
+	// Fill pending transactions from the txpool into the block: a single
+	// snapshot, or repeated ones until announce time when sequencing.
+	err = w.fillBlock(interrupt, work, genParams)
 	// Wait for any sendPlan goroutines to finish before closing the channel.
 	// These goroutines do only non-blocking sends so they complete in microseconds.
 	// Waiting here ensures no goroutine sends to a closed channel.
@@ -2636,7 +2708,23 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 		// which could result in higher uncle rate.
 		work.discard()
 		return
+
+	case errors.Is(err, errRebuildForSequence):
+		// A competing producer owns this height in the store. Committing
+		// this block would seal content that diverges from the sequence
+		// consumers already saw. Discard; the next work cycle's build-start
+		// read adopts their window.
+		log.Warn("Discarding build to follow the store's sequence", "number", work.header.Number)
+		work.discard()
+
+		return
 	}
+	if !w.sealBarrier(work) {
+		work.discard()
+
+		return
+	}
+
 	w.submitForSealing(work, start, genParams)
 
 	// Swap out the old work with the new one, terminating any leftover
@@ -2647,6 +2735,352 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 	}
 	w.current = work
 	w.currentMu.Unlock()
+}
+
+// sequencerOpen publishes the block-open record when a production build
+// starts. A rebuild of the same height or a build on a new parent
+// republishes — downstream re-anchoring handles both. Gated on IsRunning:
+// pending-block maintenance also builds work cycles, but those never seal.
+func (w *worker) sequencerOpen(work *environment) {
+	if !w.sequencingActive(work.header.Number) {
+		return
+	}
+
+	w.sequencer.OpenBlock(work.header.Number.Uint64(), work.header.Time,
+		work.header.ParentHash, work.header.GasLimit, work.header.BaseFee)
+}
+
+// fillBlock fills the pending block from the txpool: one snapshot on the
+// stock path, or — with a sequencer attached and producing — repeated
+// snapshots until announce time, so transactions are executed and streamed
+// to the sequence store as they arrive instead of waiting for the next
+// slot (continuous building). An adopted window seeds the block first.
+func (w *worker) fillBlock(interrupt *atomic.Int32, work *environment, genParams *generateParams) error {
+	if genParams.adoption != nil {
+		w.seedAdopted(work, genParams.adoption)
+
+		// Past the announce time already — a rebuild that inherited a
+		// window late. The sequenced transactions are committed, which is
+		// everything consumers were promised, so close here. Filling from
+		// the pool would push the seal further past its deadline to add
+		// content nobody is waiting on, and each added transaction is one
+		// more preconfirmation riding a block that is already late.
+		if time.Until(work.header.GetActualTime()) <= sealMargin {
+			return nil
+		}
+	}
+
+	poll := w.sequencerPoll(work.header.Number)
+	if poll <= 0 {
+		return w.fillTransactions(interrupt, work, genParams)
+	}
+
+	return w.fillUntilAnnounce(interrupt, work, genParams, poll)
+}
+
+// adoptionSeedBudget is the minimum build time an adopted block gets: its
+// inherited announce time is typically already past (the stall fallback
+// fires at least a block time after the stalled open), so without a floor
+// there is no room left to fill beyond the seeded window.
+const adoptionSeedBudget = 500 * time.Millisecond
+
+// sealMargin is the tail of the block interval reserved for sealing, kept
+// clear of transaction execution.
+const sealMargin = 150 * time.Millisecond
+
+// finalityGrace is how long a starting producer waits for finality to say
+// anything at all before building anyway. The grace is for ambiguity — no
+// milestone yet, Heimdall still connecting — not for contradiction: a
+// milestone that conflicts with the local chain refuses production for as
+// long as the conflict holds. Var for tests.
+var finalityGrace = 10 * time.Second
+
+// sealGateTimeout bounds the wait for an uncontested seal verdict before
+// the block is broadcast regardless. Measured ack latency on a loaded
+// devnet: p50 4.6ms, p99 50ms, p99.9 341ms — so this covers the tail with
+// margin while costing a block period only when the store is genuinely
+// gone. A contested seal is different: there a verdict is provably in
+// progress, and the publisher extends the wait itself rather than
+// broadcasting a block whose refusal is seconds away.
+const sealGateTimeout = 500 * time.Millisecond
+
+// fetchAdoption asks the sequencer for a dangling store window matching the
+// prepared header. It runs after engine.Prepare, so only a build the
+// engine authorized ever reads or adopts from the store — a doomed backup
+// build taking a snapshot of a still-streaming window would leave a stale
+// armed offer behind for the rotation taker to seal short.
+func (w *worker) fetchAdoption(genParams *generateParams, header *types.Header) {
+	genParams.adoption = nil
+
+	if !genParams.production || !w.sequencingActive(header.Number) {
+		return
+	}
+
+	genParams.adoption = w.sequencer.AdoptWindow(header.Number.Uint64(), header.ParentHash)
+}
+
+// finalityConfirmed reports whether finality has ratified the chain this
+// node holds. It latches on the first confirmation: steady-state milestones
+// always trail the head, so re-checking would stall every producer forever.
+//
+//	no milestone yet     -> wait out the startup grace, then proceed
+//	                        (a Heimdall outage costs a pause, not the chain)
+//	milestone on chain   -> confirmed, latch open
+//	milestone conflicts  -> refuse while the conflict holds: the local
+//	                        chain is provably a fork finality rejected
+func (w *worker) finalityConfirmed() bool {
+	if w.finalityLatched.Load() {
+		return true
+	}
+
+	exists, number, hash := w.eth.WhitelistedMilestone()
+	if !exists {
+		return time.Since(w.startedAt) > finalityGrace
+	}
+
+	if w.chain.GetCanonicalHash(number) == hash {
+		w.finalityLatched.Store(true)
+
+		return true
+	}
+
+	return false
+}
+
+// sequencerActive gates the whole sequence-store integration on Rio for
+// bor chains (post-Rio everywhere). Pre-Rio, every validator
+// builds every height with per-succession timing rules; publishing,
+// continuous filling, and adoption all interact with that regime — adopted
+// timestamps are invalid for other signers, and the extra build churn
+// starves out-of-turn seal delays. Below Rio the worker behaves stock.
+func sequencerActive(bor *params.BorConfig, number *big.Int) bool {
+	return bor == nil || bor.IsRio(number)
+}
+
+// sealBarrier reports whether the built block may be sealed, and when it may
+// not, whether the worker should rebuild rather than drop the slot.
+//
+// The store is the arbiter of who owns a height: seal only once our window is
+// confirmed there. Two blocks at one height is precisely what leaves
+// consumers holding revoked preconfirmations.
+func (w *worker) sealBarrier(work *environment) bool {
+	if !w.sequencingActive(work.header.Number) ||
+		w.sequencer.AwaitSequenced(sequenceBarrierTimeout,
+			work.header.Number.Uint64(), work.txs) {
+		return true
+	}
+
+	// Consuming the resync signal here keeps it from leaking into the next
+	// cycle and tells the two refusal shapes apart in the log. Either way
+	// the cycle ends; the next one's build-start read follows the store.
+	if w.sequencer.ResyncNeeded() {
+		log.Warn("Not sealing: the store holds records this block does not cover",
+			"number", work.header.Number)
+	} else {
+		log.Warn("Not sealing: another producer holds this height in the store",
+			"number", work.header.Number)
+	}
+
+	return false
+}
+
+// sequencingActive reports whether a mining build at this height feeds the
+// sequence store: a sequencer is attached, this node is actually producing
+// (IsRunning gates out the pending-block/payload snapshot builds, which
+// never seal), and the height is post-Rio. The result-loop SealBlock hook
+// gates without IsRunning — it only ever sees blocks this node sealed.
+func (w *worker) sequencingActive(number *big.Int) bool {
+	return w.sequencer != nil && w.IsRunning() && sequencerActive(w.chainConfig.Bor, number)
+}
+
+// applyAdoption rewrites the prepared header with the adopted window's open
+// context — consumers pinned those fields at open and cross-check them
+// against the sealed header, so a block sealed under a different context
+// voids the window. Runs after engine.Prepare (which owns the
+// timestamp otherwise) and before makeEnv builds the EVM context. The
+// announce deadline is synthesized onto the header's local actual-time
+// hint; the adopted announce time is typically already past.
+// adoptionReject names the bound an offered window failed, or "" when the
+// window is adoptable. The reason is worth naming: a rejected window is what
+// turns one producer's height into two competing generations.
+func (w *worker) adoptionReject(a *AdoptedWindow, header *types.Header) string {
+	parent := w.chain.GetHeaderByHash(header.ParentHash)
+
+	switch {
+	case parent == nil:
+		return "parent unknown"
+	case a.ParentHash != header.ParentHash:
+		return "parent mismatch"
+	case a.Number != header.Number.Uint64():
+		return "height mismatch"
+	}
+
+	minTime := parent.Time + 1
+	if w.chainConfig.Bor != nil {
+		minTime = parent.Time + w.chainConfig.Bor.CalculatePeriod(a.Number)
+	}
+
+	switch {
+	case a.Timestamp < minTime:
+		return "timestamp below parent period"
+	case misc.VerifyGaslimit(parent.GasLimit, a.GasLimit) != nil:
+		return "gas limit out of bounds"
+	// Both producers derive the base fee from the same parent with the same
+	// rules; a differing value marks a window this node cannot legally seal.
+	case header.BaseFee == nil || a.BaseFee == nil || header.BaseFee.Cmp(a.BaseFee) != 0:
+		return "base fee mismatch"
+	}
+
+	return ""
+}
+
+func (w *worker) applyAdoption(genParams *generateParams, header *types.Header) {
+	a := genParams.adoption
+	if a == nil {
+		return
+	}
+
+	genParams.adoption = nil // reinstated only when every bound holds
+
+	if reason := w.adoptionReject(a, header); reason != "" {
+		// Declining is not a no-op: the build goes on to publish its own
+		// open at a height the store already holds a window for, which
+		// starts a second generation there. Both producers then preconfirm
+		// and only one block can seal, so every line here is a mismatch or
+		// a displacement waiting to happen.
+		log.Warn("Declined the store's window, opening our own",
+			"number", a.Number, "txs", len(a.Txs), "reason", reason)
+
+		return
+	}
+
+	header.Time = a.Timestamp
+	header.GasLimit = a.GasLimit
+
+	deadline := time.Now().Add(adoptionSeedBudget)
+	if adopted := time.Unix(int64(a.Timestamp), 0); adopted.After(deadline) {
+		deadline = adopted
+	}
+
+	header.ActualTime = deadline
+	genParams.adoption = a
+
+	log.Info("Adopting sequenced window", "number", a.Number,
+		"txs", len(a.Txs), "deadline", deadline.Format(time.RFC3339Nano))
+}
+
+// seedAdopted commits the adopted window's transactions in order before any
+// pool fill. The seed ignores the interrupt and runs to completion: these
+// transactions are already published and preconfirmed, so cutting it short
+// seals a block missing content consumers were promised, and the remainder
+// resurfaces at the next height as a displaced preconfirmation. An
+// inapplicable transaction (nonce consumed, balance moved) is skipped — the
+// publisher's expectation matching turns that divergence into a
+// partial-adoption supersede.
+func (w *worker) seedAdopted(work *environment, adoption *AdoptedWindow) {
+	if work.gasPool == nil {
+		work.gasPool = new(core.GasPool).AddGas(work.header.GasLimit)
+	}
+
+	applied := 0
+
+	for _, tx := range adoption.Txs {
+		work.state.SetTxContext(tx.Hash(), work.tcount)
+
+		if _, err := w.commitTransaction(work, tx); err != nil {
+			log.Debug("Adopted transaction dropped", "hash", tx.Hash(), "err", err)
+
+			continue
+		}
+
+		applied++
+	}
+
+	log.Info("Seeded adopted window", "number", adoption.Number,
+		"applied", applied, "of", len(adoption.Txs))
+}
+
+// sequencerPoll returns the sequencing poll cadence, or zero when the block
+// being built is not sequenced (no sequencer, not producing, or one-shot
+// fill configured).
+func (w *worker) sequencerPoll(number *big.Int) time.Duration {
+	if !w.sequencingActive(number) {
+		return 0
+	}
+
+	return w.sequencer.RefreshInterval()
+}
+
+// fillUntilAnnounce fills the block immediately, then keeps re-snapshotting
+// the txpool until sealMargin before the block's announce time.
+// Already-committed transactions are skipped by the nonce checks inside
+// commitTransactions; an interrupt aborts exactly as it does on the stock
+// path.
+func (w *worker) fillUntilAnnounce(interrupt *atomic.Int32, work *environment, genParams *generateParams, poll time.Duration) error {
+	if err := w.fillTransactions(interrupt, work, genParams); err != nil {
+		return err
+	}
+
+	for {
+		remaining := time.Until(work.header.GetActualTime()) - sealMargin
+		if remaining <= 0 {
+			return nil
+		}
+
+		time.Sleep(min(remaining, poll))
+
+		if err := w.haltFill(interrupt, work.header.Number); err != nil {
+			return err
+		}
+
+		if err := w.fillTransactions(interrupt, work, genParams); err != nil {
+			return err
+		}
+	}
+}
+
+// haltFill reports why the fill loop should stop short of the announce
+// deadline, or nil to keep filling.
+func (w *worker) haltFill(interrupt *atomic.Int32, number *big.Int) error {
+	if interrupt != nil {
+		if signal := interrupt.Load(); signal != commitInterruptNone {
+			return signalToErr(signal)
+		}
+	}
+
+	// Another producer reached the store first for this height: abandon this
+	// build so the next one adopts their window and follows their ordering,
+	// instead of sealing a block that diverges from it.
+	if w.sequencingActive(number) && w.sequencer.ResyncNeeded() {
+		return errRebuildForSequence
+	}
+
+	return nil
+}
+
+// sealAndGate publishes the seal record the moment the sealed block exists —
+// ahead of the chain write and the announcement — so stream consumers can
+// close the block, and reports whether the block may be broadcast.
+//
+// The store's head CAS elects one seal per height; the gate is where the
+// loser learns it lost and withholds its block, so a height gets one
+// broadcast instead of a fork. No verdict inside the budget broadcasts
+// anyway — production never waits on the store.
+func (w *worker) sealAndGate(block *types.Block) bool {
+	if w.sequencer == nil || !sequencerActive(w.chainConfig.Bor, block.Number()) {
+		return true
+	}
+
+	w.sequencer.SealBlock(block)
+
+	if w.sequencer.ConfirmSeal(sealGateTimeout) == SealRefused {
+		log.Warn("Discarding sealed block: another producer's block owns this height",
+			"number", block.Number(), "hash", block.Hash())
+
+		return false
+	}
+
+	return true
 }
 
 // runPrefetcher owns the lifecycle of the unified prefetcher stream for one block.
