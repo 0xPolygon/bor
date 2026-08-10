@@ -548,6 +548,7 @@ var (
 		CancunBlock:             nil,
 		PragueBlock:             nil,
 		OsakaBlock:              nil,
+		BogotaBlock:             nil,
 		VerkleBlock:             nil,
 		Ethash:                  new(EthashConfig),
 		Clique:                  nil,
@@ -636,6 +637,7 @@ var (
 		CancunBlock:             nil,
 		PragueBlock:             nil,
 		OsakaBlock:              nil,
+		BogotaBlock:             nil,
 		VerkleBlock:             nil,
 		TerminalTotalDifficulty: big.NewInt(math.MaxInt64),
 		Ethash:                  nil,
@@ -670,6 +672,7 @@ var (
 		CancunBlock:             nil,
 		PragueBlock:             nil,
 		OsakaBlock:              nil,
+		BogotaBlock:             nil,
 		VerkleBlock:             nil,
 		TerminalTotalDifficulty: big.NewInt(math.MaxInt64),
 		Ethash:                  new(EthashConfig),
@@ -711,6 +714,7 @@ var (
 		CancunBlock:             big.NewInt(0),
 		PragueBlock:             big.NewInt(0),
 		OsakaBlock:              big.NewInt(0),
+		BogotaBlock:             nil,
 		VerkleBlock:             nil,
 		TerminalTotalDifficulty: big.NewInt(0),
 		Ethash:                  new(EthashConfig),
@@ -770,6 +774,7 @@ var (
 		PragueBlock:             nil,
 		VerkleBlock:             nil,
 		OsakaBlock:              nil,
+		BogotaBlock:             nil,
 		TerminalTotalDifficulty: big.NewInt(math.MaxInt64),
 		Ethash:                  new(EthashConfig),
 		Clique:                  nil,
@@ -846,6 +851,7 @@ type ChainConfig struct {
 	VerkleBlock    *big.Int `json:"verkleBlock,omitempty"`    // Verkle switch Block (nil = no fork, 0 = already on verkle)
 	OsakaBlock     *big.Int `json:"osakaBlock,omitempty"`     // Osaka switch Block (nil = no fork, 0 = already on osaka)
 	AmsterdamBlock *big.Int `json:"amsterdamBlock,omitempty"` // Amsterdam switch Block (nil = no fork, 0 = already on amsterdam)
+	BogotaBlock    *big.Int `json:"bogotaBlock,omitempty"`    // Bogota switch Block (nil = no fork, 0 = already on bogota)
 
 	// TerminalTotalDifficulty is the amount of total difficulty reached by
 	// the network that triggers the consensus upgrade.
@@ -1311,6 +1317,9 @@ func (c *ChainConfig) Description() string {
 	if c.OsakaBlock != nil {
 		banner += fmt.Sprintf(" - Osaka:                      #%-8v\n", *c.OsakaBlock)
 	}
+	if c.BogotaBlock != nil {
+		banner += fmt.Sprintf(" - Bogota:                     #%-8v\n", *c.BogotaBlock)
+	}
 	banner += fmt.Sprintf("\nAll fork specifications can be found at https://ethereum.github.io/execution-specs/src/ethereum/forks/\n")
 	return banner
 }
@@ -1462,6 +1471,11 @@ func (c *ChainConfig) IsAmsterdam(num *big.Int) bool {
 	return c.IsLondon(num) && isBlockForked(c.AmsterdamBlock, num)
 }
 
+// IsBogota returns whether num is either equal to the Bogota fork block or greater.
+func (c *ChainConfig) IsBogota(num *big.Int) bool {
+	return c.IsLondon(num) && isBlockForked(c.BogotaBlock, num)
+}
+
 // IsVerkleGenesis checks whether the verkle fork is activated at the genesis block.
 //
 // Verkle mode is considered enabled if the verkle fork time is configured,
@@ -1540,6 +1554,7 @@ func (c *ChainConfig) CheckConfigForkOrder() error {
 		{name: "cancunBlock", block: c.CancunBlock, optional: true},
 		{name: "pragueBlock", block: c.PragueBlock, optional: true},
 		{name: "osakaBlock", block: c.OsakaBlock, optional: true},
+		{name: "bogotaBlock", block: c.BogotaBlock, optional: true},
 		{name: "verkleBlock", block: c.VerkleBlock, optional: true},
 	} {
 		if lastFork.name != "" {
@@ -1708,6 +1723,9 @@ func (c *ChainConfig) checkCompatible(newcfg *ChainConfig, headNumber *big.Int, 
 	if isForkBlockIncompatible(c.OsakaBlock, newcfg.OsakaBlock, headNumber) {
 		return newBlockCompatError("Osaka fork block", c.OsakaBlock, newcfg.OsakaBlock)
 	}
+	if isForkBlockIncompatible(c.BogotaBlock, newcfg.BogotaBlock, headNumber) {
+		return newBlockCompatError("Bogota fork block", c.BogotaBlock, newcfg.BogotaBlock)
+	}
 	return nil
 }
 
@@ -1803,6 +1821,8 @@ func (c *ChainConfig) Block(fork forks.Fork) *big.Int {
 		return c.ShanghaiBlock
 	case fork == forks.Amsterdam:
 		return c.AmsterdamBlock
+	case fork == forks.Bogota:
+		return c.BogotaBlock
 	default:
 		return nil
 	}
@@ -1907,6 +1927,7 @@ type Rules struct {
 	IsBerlin, IsLondon                                      bool
 	IsMerge, IsShanghai, IsCancun, IsPrague, IsOsaka        bool
 	IsAmsterdam                                             bool
+	IsBogota                                                bool
 	IsVerkle                                                bool
 	IsMadhugiri                                             bool
 	IsMadhugiriPro                                          bool
@@ -1944,6 +1965,7 @@ func (c *ChainConfig) Rules(num *big.Int, isMerge bool, _ uint64) Rules {
 		IsVerkle:         c.IsVerkle(num),
 		IsOsaka:          c.IsOsaka(num),
 		IsAmsterdam:      c.IsAmsterdam(num),
+		IsBogota:         c.IsBogota(num),
 		IsEIP4762:        c.IsVerkle(num),
 		IsMadhugiri:      c.Bor != nil && c.Bor.IsMadhugiri(num),
 		IsMadhugiriPro:   c.Bor != nil && c.Bor.IsMadhugiriPro(num),

@@ -73,6 +73,7 @@ var forkExpectations = map[string]forkExpect{
 	"IsVerkleGenesis":    {inV1: false, inV2: false},
 	"IsEIP4762":          {inV1: false, inV2: false},
 	"IsOsaka":            {inV1: false, inV2: false},
+	"IsBogota":           {inV1: false, inV2: false}, // Stub fork: selects bogotaInstructionSet in vm/ only; no state-processor branch.
 	"IsAmsterdam": {inV1: true, inV2: false, rationale: "" +
 		"EIP-7843 SLOTNUM / EIP-8024 / BAL precompile-touch are EVM/consensus-gated. " +
 		"The one state-processor branch is EIP-8037's systemCallGasBudget, which gives " +
