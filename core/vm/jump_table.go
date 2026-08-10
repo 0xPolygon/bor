@@ -97,7 +97,7 @@ func validate(jt JumpTable) JumpTable {
 }
 
 func newBogotaInstructionSet() JumpTable {
-	instructionSet := newOsakaInstructionSet()
+	instructionSet := newAmsterdamInstructionSet()
 	return validate(instructionSet)
 }
 
