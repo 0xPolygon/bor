@@ -88,10 +88,9 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	if config.DAOForkSupport && config.DAOForkBlock != nil && config.DAOForkBlock.Cmp(block.Number()) == 0 {
 		misc.ApplyDAOHardFork(tracingStateDB)
 	}
-	// EIP-7997: insert the deterministic deployment factory at the Amsterdam
-	// activation block via an irregular state transition.
-	if isEIP7997Transition(config, p.chain, header) {
-		misc.ApplyEIP7997(tracingStateDB)
+	parent := p.chain.GetHeader(block.ParentHash(), block.NumberU64()-1)
+	if parent == nil {
+		return nil, fmt.Errorf("missing parent %#x", block.ParentHash())
 	}
 	var (
 		context = NewEVMBlockContext(header, p.chain, author)
@@ -100,7 +99,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	)
 
 	// Apply pre-execution system calls.
-	PreExecution(interruptCtx, block.BeaconRoot(), block.ParentHash(), config, evm, block.Number(), block.Time())
+	PreExecution(interruptCtx, block.BeaconRoot(), parent, config, evm, block.Number(), block.Time())
 
 	// Iterate over and process the individual transactions
 	txs := block.Transactions()
@@ -201,31 +200,23 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	}, nil
 }
 
-// isEIP7997Transition reports whether the given header belongs to the first block
-// on which the Amsterdam fork is active.
-func isEIP7997Transition(config *params.ChainConfig, chain ChainContext, header *types.Header) bool {
-	if header.Number.Sign() == 0 || !config.IsAmsterdam(header.Number) {
-		return false
-	}
-	parent := chain.GetHeader(header.ParentHash, header.Number.Uint64()-1)
-	if parent == nil {
-		return false
-	}
-	return !config.IsAmsterdam(parent.Number)
-}
-
-// PreExecution processes pre-execution system calls.
+// PreExecution processes pre-execution state changes and system calls.
 //
 // ctx is carried to keep the signature aligned with upstream, where it feeds
 // tracing spans that bor does not wire up.
-func PreExecution(ctx context.Context, beaconRoot *common.Hash, parent common.Hash, config *params.ChainConfig, evm *vm.EVM, number *big.Int, time uint64) {
+func PreExecution(ctx context.Context, beaconRoot *common.Hash, parent *types.Header, config *params.ChainConfig, evm *vm.EVM, number *big.Int, time uint64) {
+	// EIP-7997: insert the deterministic deployment factory at the Amsterdam
+	// activation block via an irregular state transition.
+	if config.IsAmsterdam(number) && !config.IsAmsterdam(parent.Number) {
+		misc.ApplyEIP7997(evm.StateDB)
+	}
 	// EIP-4788
 	if beaconRoot != nil {
 		ProcessBeaconBlockRoot(*beaconRoot, evm)
 	}
 	// EIP-2935
 	if config.IsPrague(number) || config.IsVerkle(number) {
-		ProcessParentBlockHash(parent, evm)
+		ProcessParentBlockHash(parent.Hash(), evm)
 	}
 }
 

@@ -1801,6 +1801,8 @@ func (c *ChainConfig) Block(fork forks.Fork) *big.Int {
 		return c.CancunBlock
 	case fork == forks.Shanghai:
 		return c.ShanghaiBlock
+	case fork == forks.Amsterdam:
+		return c.AmsterdamBlock
 	default:
 		return nil
 	}
