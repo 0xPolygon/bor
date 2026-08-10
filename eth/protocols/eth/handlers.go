@@ -284,6 +284,26 @@ func serviceGetBlockBodiesQuery(chain *core.BlockChain, query GetBlockBodiesRequ
 				served(hash, len(data))
 			}
 			bytes += len(data)
+			continue
+		}
+		// Empty-body blocks such as genesis may not have a persisted body RLP entry,
+		// but they should still produce a network response body.
+		if header := chain.GetHeaderByHash(hash); header != nil && header.EmptyBody() {
+			body := &BlockBody{
+				Transactions: []*types.Transaction{},
+				Uncles:       []*types.Header{},
+				Withdrawals:  []*types.Withdrawal{},
+			}
+			data, err := rlp.EncodeToBytes(body)
+			if err != nil {
+				log.Error("Failed to encode empty block body", "hash", hash, "err", err)
+				continue
+			}
+			bodies = append(bodies, data)
+			if served != nil {
+				served(hash, len(data))
+			}
+			bytes += len(data)
 		}
 	}
 
@@ -568,6 +588,7 @@ func handleBlockBodies(backend Backend, msg Decoder, peer *Peer) error {
 	if err := msg.Decode(res); err != nil {
 		return err
 	}
+	peer.Log().Debug("Received block body response", "request_id", res.RequestId, "returned", len(res.BlockBodiesResponse))
 
 	metadata := func() interface{} {
 		var (
@@ -714,6 +735,7 @@ func handleGetPooledTransactions(backend Backend, msg Decoder, peer *Peer) error
 		return err
 	}
 	hashes, txs := answerGetPooledTransactions(backend, query.GetPooledTransactionsRequest)
+	peer.Log().Debug("Serving pooled transaction request", "request_id", query.RequestId, "requested", len(query.GetPooledTransactionsRequest), "returned", len(txs))
 	return peer.replyPooledTransactionsRLP(query.RequestId, hashes, txs, reservation)
 }
 
@@ -807,6 +829,7 @@ func handlePooledTransactions(backend Backend, msg Decoder, peer *Peer) error {
 		peer.markTransaction(hash)
 	}
 
+	peer.Log().Debug("Received pooled transaction response", "request_id", txs.RequestId, "returned", len(txs.PooledTransactionsResponse))
 	requestTracker.Fulfil(peer.id, peer.version, PooledTransactionsMsg, txs.RequestId)
 
 	if err := backend.Handle(peer, &txs); err != nil {

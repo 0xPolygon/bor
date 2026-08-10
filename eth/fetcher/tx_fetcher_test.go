@@ -1343,11 +1343,11 @@ func TestTransactionFetcherRequestsTransactionsOverBulkLane(t *testing.T) {
 	fetcher := NewTxFetcherForTests(
 		func(common.Hash) bool { return false },
 		func([]*types.Transaction) []error { return nil },
-		func(origin string, hashes []common.Hash) error {
+		func(origin string, requestID uint64, hashes []common.Hash) error {
 			if origin != "peerA" {
 				t.Fatalf("unexpected fetch origin: got %s want peerA", origin)
 			}
-			return peer.RequestTxs(hashes)
+			return peer.RequestTxs(requestID, hashes)
 		},
 		nil,
 		clock,
