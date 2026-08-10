@@ -69,6 +69,7 @@ var (
 		utils.USBFlag,
 		utils.SmartCardDaemonPathFlag,
 		utils.OverrideOsaka,
+		utils.OverrideAmsterdam,
 		utils.OverrideBPO1,
 		utils.OverrideBPO2,
 		utils.OverrideVerkle,

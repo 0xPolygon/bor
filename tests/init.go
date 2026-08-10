@@ -457,7 +457,6 @@ var Forks = map[string]*params.ChainConfig{
 		BlobScheduleConfig: &params.BlobScheduleConfig{
 			Cancun: params.DefaultCancunBlobConfig,
 			Prague: params.DefaultPragueBlobConfig,
-			Osaka:  params.DefaultOsakaBlobConfig,
 		},
 	},
 	"PragueToOsakaAtTime15k": {
@@ -484,7 +483,6 @@ var Forks = map[string]*params.ChainConfig{
 		BlobScheduleConfig: &params.BlobScheduleConfig{
 			Cancun: params.DefaultCancunBlobConfig,
 			Prague: params.DefaultPragueBlobConfig,
-			Osaka:  params.DefaultOsakaBlobConfig,
 		},
 	},
 }

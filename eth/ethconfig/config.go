@@ -307,6 +307,9 @@ type Config struct {
 	// OverrideOsaka (TODO: remove after the fork)
 	OverrideOsaka *big.Int `toml:",omitempty"`
 
+	// OverrideAmsterdam (TODO: remove after the fork)
+	OverrideAmsterdam *big.Int `toml:",omitempty"`
+
 	// OverrideVerkle (TODO: remove after the fork)
 	OverrideVerkle *big.Int `toml:",omitempty"`
 

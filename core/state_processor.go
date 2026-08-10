@@ -88,6 +88,11 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	if config.DAOForkSupport && config.DAOForkBlock != nil && config.DAOForkBlock.Cmp(block.Number()) == 0 {
 		misc.ApplyDAOHardFork(tracingStateDB)
 	}
+	// EIP-7997: insert the deterministic deployment factory at the Amsterdam
+	// activation block via an irregular state transition.
+	if isEIP7997Transition(config, p.chain, header) {
+		misc.ApplyEIP7997(tracingStateDB)
+	}
 	var (
 		context = NewEVMBlockContext(header, p.chain, author)
 		signer  = types.MakeSigner(config, header.Number, header.Time)
@@ -194,6 +199,19 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		Logs:     allLogs,
 		GasUsed:  gp.Used(),
 	}, nil
+}
+
+// isEIP7997Transition reports whether the given header belongs to the first block
+// on which the Amsterdam fork is active.
+func isEIP7997Transition(config *params.ChainConfig, chain ChainContext, header *types.Header) bool {
+	if header.Number.Sign() == 0 || !config.IsAmsterdam(header.Number) {
+		return false
+	}
+	parent := chain.GetHeader(header.ParentHash, header.Number.Uint64()-1)
+	if parent == nil {
+		return false
+	}
+	return !config.IsAmsterdam(parent.Number)
 }
 
 // PreExecution processes pre-execution system calls.

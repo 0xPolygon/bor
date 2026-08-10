@@ -579,7 +579,6 @@ var (
 		BlobScheduleConfig: &BlobScheduleConfig{
 			Cancun: DefaultCancunBlobConfig,
 			Prague: DefaultPragueBlobConfig,
-			Osaka:  DefaultOsakaBlobConfig,
 		},
 		Bor: &BorConfig{
 			BurntContract: map[string]string{"0": "0x000000000000000000000000000000000000dead"},
@@ -719,7 +718,6 @@ var (
 		BlobScheduleConfig: &BlobScheduleConfig{
 			Cancun: DefaultCancunBlobConfig,
 			Prague: DefaultPragueBlobConfig,
-			Osaka:  DefaultOsakaBlobConfig,
 		},
 		Bor: &BorConfig{
 			Sprint:                map[string]uint64{"0": 4},
@@ -792,17 +790,10 @@ var (
 		Max:            9,
 		UpdateFraction: 5007716,
 	}
-	// DefaultOsakaBlobConfig is the default blob configuration for the Osaka fork.
-	DefaultOsakaBlobConfig = &BlobConfig{
-		Target:         6,
-		Max:            9,
-		UpdateFraction: 5007716,
-	}
 	// DefaultBlobSchedule is the latest configured blob schedule for Ethereum mainnet.
 	DefaultBlobSchedule = &BlobScheduleConfig{
 		Cancun: DefaultCancunBlobConfig,
 		Prague: DefaultPragueBlobConfig,
-		Osaka:  DefaultOsakaBlobConfig,
 	}
 )
 
@@ -1340,10 +1331,12 @@ func (bc *BlobConfig) String() string {
 }
 
 // BlobScheduleConfig determines target and max number of blobs allow per fork.
+//
+// Named forks such as Osaka inherit the most recently configured entry and must
+// not declare their own BlobConfig.
 type BlobScheduleConfig struct {
 	Cancun *BlobConfig `json:"cancun,omitempty"`
 	Prague *BlobConfig `json:"prague,omitempty"`
-	Osaka  *BlobConfig `json:"osaka,omitempty"`
 	Verkle *BlobConfig `json:"verkle,omitempty"`
 }
 
@@ -1595,9 +1588,7 @@ func (c *ChainConfig) CheckConfigForkOrder() error {
 		config    *BlobConfig
 	}{
 		{name: "cancun", timestamp: nil, config: bsc.Cancun},
-		{name: "prague", timestamp: nil, config: bsc.Prague},
-		{name: "osaka", timestamp: nil, config: bsc.Osaka},
-	} {
+		{name: "prague", timestamp: nil, config: bsc.Prague}} {
 		if cur.config != nil {
 			if err := cur.config.validate(); err != nil {
 				return fmt.Errorf("invalid chain configuration in blobSchedule for fork %q: %v", cur.name, err)
@@ -1749,18 +1740,28 @@ func (c *ChainConfig) LatestFork(_ uint64) forks.Fork {
 	}
 }
 
-// BlobConfig returns the blob config associated with the provided fork.
+// BlobConfig returns the blob config active at the provided fork. Since named
+// forks (Osaka, Amsterdam, ...) no longer carry their own blob schedule, the
+// lookup walks down from fork to Prague/Cancun and returns the first non-nil
+// entry.
 func (c *ChainConfig) BlobConfig(fork forks.Fork) *BlobConfig {
-	switch fork {
-	case forks.Osaka:
-		return c.BlobScheduleConfig.Osaka
-	case forks.Prague:
-		return c.BlobScheduleConfig.Prague
-	case forks.Cancun:
-		return c.BlobScheduleConfig.Cancun
-	default:
+	if c.BlobScheduleConfig == nil {
 		return nil
 	}
+	bsc := c.BlobScheduleConfig
+	chain := []struct {
+		at  forks.Fork
+		cfg *BlobConfig
+	}{
+		{forks.Prague, bsc.Prague},
+		{forks.Cancun, bsc.Cancun},
+	}
+	for _, e := range chain {
+		if e.at <= fork && e.cfg != nil {
+			return e.cfg
+		}
+	}
+	return nil
 }
 
 // ActiveSystemContracts returns the currently active system contracts at the

@@ -65,8 +65,6 @@ func latestBlobConfig(cfg *params.ChainConfig, _ uint64) (BlobConfig, error) {
 		bc     *params.BlobConfig
 	)
 	switch {
-	case cfg.IsOsaka(london) && s.Osaka != nil:
-		bc = s.Osaka
 	case cfg.IsPrague(london) && s.Prague != nil:
 		bc = s.Prague
 	case cfg.IsCancun(london) && s.Cancun != nil:
