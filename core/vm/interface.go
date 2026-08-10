@@ -92,7 +92,6 @@ type StateDB interface {
 	Snapshot() int
 
 	AddLog(*types.Log)
-	LogsForBurnAccounts() []*types.Log
 	AddPreimage(common.Hash, []byte)
 
 	// RecordTransfer records a transfer for deferred log creation in parallel mode.

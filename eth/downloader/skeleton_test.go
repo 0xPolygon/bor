@@ -1196,6 +1196,7 @@ func TestSkeletonSyncRetrievals(t *testing.T) {
 
 		rawdb.WriteBlock(db, types.NewBlockWithHeader(chain[0]))
 		rawdb.WriteReceipts(db, chain[0].Hash(), chain[0].Number.Uint64(), types.Receipts{})
+		rawdb.WriteCanonicalHash(db, chain[0].Hash(), chain[0].Number.Uint64())
 
 		// Create a peer set to feed headers through
 		peerset := newPeerSet()
@@ -1229,6 +1230,7 @@ func TestSkeletonSyncRetrievals(t *testing.T) {
 
 						rawdb.WriteBlock(db, types.NewBlockWithHeader(header))
 						rawdb.WriteReceipts(db, header.Hash(), header.Number.Uint64(), types.Receipts{})
+						rawdb.WriteCanonicalHash(db, header.Hash(), header.Number.Uint64())
 
 						rawdb.DeleteSkeletonHeader(db, header.Number.Uint64())
 
@@ -1239,6 +1241,7 @@ func TestSkeletonSyncRetrievals(t *testing.T) {
 
 					rawdb.WriteBlock(db, types.NewBlockWithHeader(filled))
 					rawdb.WriteReceipts(db, filled.Hash(), filled.Number.Uint64(), types.Receipts{})
+					rawdb.WriteCanonicalHash(db, filled.Hash(), filled.Number.Uint64())
 				},
 
 				suspendHook: func() *types.Header {

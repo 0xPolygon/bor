@@ -29,6 +29,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/holiman/uint256"
 )
 
 var (
@@ -119,16 +120,22 @@ func ValidateTransaction(tx *types.Transaction, head *types.Header, signer types
 		return core.ErrTipAboveFeeCap
 	}
 	// Make sure the transaction is signed properly
-	if _, err := types.Sender(signer, tx); err != nil && !opts.AllowUnprotectedTxs {
+	from, err := types.Sender(signer, tx)
+	if err != nil && !opts.AllowUnprotectedTxs {
 		return fmt.Errorf("%w: %v", ErrInvalidSender, err)
 	}
 	// Limit nonce to 2^64-1 per EIP-2681
 	if tx.Nonce()+1 < tx.Nonce() {
 		return core.ErrNonceMax
 	}
+	// Sanity check for extremely large numbers (supported by RLP or RPC)
+	value, overflow := uint256.FromBig(tx.Value())
+	if overflow {
+		return core.ErrInsufficientFunds
+	}
 	// Ensure the transaction has more gas than the bare minimum needed to cover
 	// the transaction metadata
-	intrGas, err := core.IntrinsicGas(tx.Data(), tx.AccessList(), tx.SetCodeAuthorizations(), tx.To() == nil, rules, params.CostPerStateByte)
+	intrGas, err := core.IntrinsicGas(tx.Data(), tx.AccessList(), tx.SetCodeAuthorizations(), from, tx.To(), value, rules, params.CostPerStateByte)
 	if err != nil {
 		return err
 	}
@@ -138,7 +145,7 @@ func ValidateTransaction(tx *types.Transaction, head *types.Header, signer types
 	// Ensure the transaction can cover floor data gas.
 	// EIP-7623
 	if opts.Config.IsPrague(head.Number) && opts.Config.Bor != nil {
-		floorDataGas, err := core.FloorDataGas(rules, tx.Data(), tx.AccessList())
+		floorDataGas, err := core.FloorDataGas(rules, from, tx.To(), value, tx.Data(), tx.AccessList())
 		if err != nil {
 			return err
 		}
@@ -158,7 +165,7 @@ func ValidateTransaction(tx *types.Transaction, head *types.Header, signer types
 		return fmt.Errorf("%w: gas tip cap %v, minimum needed %v", ErrTxGasPriceTooLow, tx.GasTipCap(), opts.MinTip)
 	}
 	if tx.Type() == types.BlobTxType {
-		return validateBlobTx(tx, head, opts)
+		return validateBlobTx(tx)
 	}
 	if tx.Type() == types.SetCodeTxType {
 		if len(tx.SetCodeAuthorizations()) == 0 {
@@ -169,19 +176,16 @@ func ValidateTransaction(tx *types.Transaction, head *types.Header, signer types
 }
 
 // validateBlobTx implements the blob-transaction specific validations.
-func validateBlobTx(tx *types.Transaction, head *types.Header, opts *ValidationOptions) error {
+func validateBlobTx(tx *types.Transaction) error {
 	sidecar := tx.BlobTxSidecar()
 	if sidecar == nil {
 		return errors.New("missing sidecar in blob transaction")
 	}
-	// Ensure the sidecar is constructed with the correct version, consistent
-	// with the current fork.
-	version := types.BlobSidecarVersion0
-	if opts.Config.IsOsaka(head.Number) {
-		version = types.BlobSidecarVersion1
-	}
-	if sidecar.Version != version {
-		return fmt.Errorf("unexpected sidecar version, want: %d, got: %d", version, sidecar.Version)
+	// Ensure the sidecar is constructed with the correct version. Support for the
+	// v0 sidecar was dropped upstream (#35191) and the blobpool now stores and
+	// serves cell proofs only, so v1 is the only accepted encoding.
+	if sidecar.Version != types.BlobSidecarVersion1 {
+		return fmt.Errorf("unexpected sidecar version, want: %d, got: %d", types.BlobSidecarVersion1, sidecar.Version)
 	}
 	// Ensure the blob fee cap satisfies the minimum blob gas price
 	if tx.BlobGasFeeCapIntCmp(blobTxMinBlobGasPrice) < 0 {
@@ -202,26 +206,8 @@ func validateBlobTx(tx *types.Transaction, head *types.Header, opts *ValidationO
 	if err := sidecar.ValidateBlobCommitmentHashes(hashes); err != nil {
 		return err
 	}
-	// Fork-specific sidecar checks, including proof verification.
-	if sidecar.Version == types.BlobSidecarVersion1 {
-		return validateBlobSidecarOsaka(sidecar, hashes)
-	} else {
-		return validateBlobSidecarLegacy(sidecar, hashes)
-	}
+	return validateBlobSidecarOsaka(sidecar, hashes)
 }
-
-func validateBlobSidecarLegacy(sidecar *types.BlobTxSidecar, hashes []common.Hash) error {
-	if len(sidecar.Proofs) != len(hashes) {
-		return fmt.Errorf("invalid number of %d blob proofs expected %d", len(sidecar.Proofs), len(hashes))
-	}
-	for i := range sidecar.Blobs {
-		if err := kzg4844.VerifyBlobProof(&sidecar.Blobs[i], sidecar.Commitments[i], sidecar.Proofs[i]); err != nil {
-			return fmt.Errorf("%w: invalid blob proof: %v", ErrKZGVerificationError, err)
-		}
-	}
-	return nil
-}
-
 func validateBlobSidecarOsaka(sidecar *types.BlobTxSidecar, hashes []common.Hash) error {
 	if len(sidecar.Proofs) != len(hashes)*kzg4844.CellProofsPerBlob {
 		return fmt.Errorf("invalid number of %d blob proofs expected %d", len(sidecar.Proofs), len(hashes)*kzg4844.CellProofsPerBlob)

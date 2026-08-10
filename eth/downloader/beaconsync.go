@@ -219,12 +219,17 @@ func (d *Downloader) findBeaconAncestor() (uint64, error) {
 		return 0, err
 	}
 
-	var linked bool
+	// Require the canonical mapping, not just presence by hash, so orphans and
+	// side chains are re-delivered instead of left in place.
+	var (
+		linked bool
+		num    = beaconTail.Number.Uint64() - 1
+	)
 	switch d.getMode() {
 	case FullSync:
-		linked = d.blockchain.HasBlock(beaconTail.ParentHash, beaconTail.Number.Uint64()-1)
+		linked = d.blockchain.GetCanonicalHash(num) == beaconTail.ParentHash && d.blockchain.HasBlock(beaconTail.ParentHash, num)
 	case SnapSync:
-		linked = d.blockchain.HasFastBlock(beaconTail.ParentHash, beaconTail.Number.Uint64()-1)
+		linked = d.blockchain.GetCanonicalHash(num) == beaconTail.ParentHash && d.blockchain.HasFastBlock(beaconTail.ParentHash, num)
 	default:
 		linked = d.blockchain.HasHeader(beaconTail.ParentHash, beaconTail.Number.Uint64()-1)
 	}
@@ -259,13 +264,15 @@ func (d *Downloader) findBeaconAncestor() (uint64, error) {
 		}
 		n := h.Number.Uint64()
 
+		// Require the canonical mapping, not just presence by hash, so orphans
+		// and side chains are re-synced instead of treated as already owned.
 		var known bool
 
 		switch d.getMode() {
 		case FullSync:
-			known = d.blockchain.HasBlock(h.Hash(), n)
+			known = d.blockchain.GetCanonicalHash(n) == h.Hash() && d.blockchain.HasBlock(h.Hash(), n)
 		case SnapSync:
-			known = d.blockchain.HasFastBlock(h.Hash(), n)
+			known = d.blockchain.GetCanonicalHash(n) == h.Hash() && d.blockchain.HasFastBlock(h.Hash(), n)
 		default:
 			known = d.lightchain.HasHeader(h.Hash(), n)
 		}

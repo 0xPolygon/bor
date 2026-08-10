@@ -231,6 +231,16 @@ func PostExecution(ctx context.Context, config *params.ChainConfig, number *big.
 			return nil, fmt.Errorf("failed to process consolidation queue: %w", err)
 		}
 	}
+
+	if config.IsAmsterdam(number) {
+		// EIP-8282
+		if err := ProcessBuilderDepositQueue(&requests, evm, blockAccessIndex); err != nil {
+			return nil, fmt.Errorf("failed to process builder deposit queue: %w", err)
+		}
+		if err := ProcessBuilderExitQueue(&requests, evm, blockAccessIndex); err != nil {
+			return nil, fmt.Errorf("failed to process builder exit queue: %w", err)
+		}
+	}
 	return requests, nil
 }
 
@@ -461,6 +471,18 @@ func ProcessWithdrawalQueue(requests *[][]byte, evm *vm.EVM, blockAccessIndex ui
 // It returns the opaque request data returned by the contract.
 func ProcessConsolidationQueue(requests *[][]byte, evm *vm.EVM, blockAccessIndex uint32) error {
 	return processRequestsSystemCall(requests, evm, 0x02, params.ConsolidationQueueAddress, blockAccessIndex)
+}
+
+// ProcessBuilderDepositQueue calls the EIP-8282 builder deposit contract.
+// It returns the opaque request data returned by the contract.
+func ProcessBuilderDepositQueue(requests *[][]byte, evm *vm.EVM, blockAccessIndex uint32) error {
+	return processRequestsSystemCall(requests, evm, 0x03, params.BuilderDepositAddress, blockAccessIndex)
+}
+
+// ProcessBuilderExitQueue calls the EIP-8282 builder exit contract.
+// It returns the opaque request data returned by the contract.
+func ProcessBuilderExitQueue(requests *[][]byte, evm *vm.EVM, blockAccessIndex uint32) error {
+	return processRequestsSystemCall(requests, evm, 0x04, params.BuilderExitAddress, blockAccessIndex)
 }
 
 func processRequestsSystemCall(requests *[][]byte, evm *vm.EVM, requestType byte, addr common.Address, blockAccessIndex uint32) error {

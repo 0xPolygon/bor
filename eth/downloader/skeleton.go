@@ -410,7 +410,12 @@ func (s *skeleton) sync(head *types.Header) (*types.Header, error) {
 
 	// If the sync is already done, resume the backfiller. When the loop stops,
 	// terminate the backfiller too.
+	// The canonical mapping is required, not just presence by hash. A block present
+	// only by hash (a side chain, or an orphan left by an unclean shutdown) must not
+	// be used as the link-up point: its canonical mapping would never be rewritten
+	// and the sync would keep re-requesting it (upstream #35190).
 	linked := len(s.progress.Subchains) == 1 &&
+		rawdb.ReadCanonicalHash(s.db, s.scratchHead) == s.progress.Subchains[0].Next &&
 		rawdb.HasHeader(s.db, s.progress.Subchains[0].Next, s.scratchHead) &&
 		rawdb.HasBody(s.db, s.progress.Subchains[0].Next, s.scratchHead) &&
 		rawdb.HasReceipts(s.db, s.progress.Subchains[0].Next, s.scratchHead)
@@ -1117,7 +1122,12 @@ func (s *skeleton) processResponse(res *headerResponse) (linked bool, merged boo
 				// processing is done, so it's just one more "needless" check.
 				//
 				// The weird cascading checks are done to minimize the database reads.
-				linked = rawdb.HasHeader(s.db, header.ParentHash, header.Number.Uint64()-1) &&
+				//
+				// The canonical mapping is required too, not just presence by hash,
+				// so an orphan or side-chain block is not treated as the link-up
+				// point and left with its mapping unrepaired (upstream #35190).
+				linked = rawdb.ReadCanonicalHash(s.db, header.Number.Uint64()-1) == header.ParentHash &&
+					rawdb.HasHeader(s.db, header.ParentHash, header.Number.Uint64()-1) &&
 					rawdb.HasBody(s.db, header.ParentHash, header.Number.Uint64()-1) &&
 					rawdb.HasReceipts(s.db, header.ParentHash, header.Number.Uint64()-1)
 				if linked {

@@ -2247,12 +2247,19 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 	}
 
 	// writeLive writes blockchain and corresponding receipt chain into active store.
+	//
+	// Notably, in different snap sync cycles, the supplied chain may partially reorganize
+	// existing local chain segments (reorg around the chain tip). The reorganized part
+	// will be included in the provided chain segment, and stale canonical markers will be
+	// silently rewritten. Therefore, no explicit reorg logic is needed.
+	//
+	// Blocks and their data are written unconditionally rather than skipped when already
+	// present: a block whose header and body exist but whose canonical hash mapping is
+	// missing would otherwise never have that mapping repaired, and the downloader would
+	// keep re-requesting it (upstream #35190).
 	writeLive := func(blockChain types.Blocks, receiptChain []rlp.RawValue) (int, error) {
 		headers := make([]*types.Header, 0, len(blockChain))
-		var (
-			skipPresenceCheck = false
-			batch             = bc.db.NewBatch()
-		)
+		batch := bc.db.NewBatch()
 		for i, block := range blockChain {
 			// Update the headers for bor specific reorg check
 			headers = append(headers, block.Header())
@@ -2264,19 +2271,6 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 			// Short circuit if the owner header is unknown
 			if !bc.HasHeader(block.Hash(), block.NumberU64()) {
 				return i, fmt.Errorf("containing header #%d [%x..] unknown", block.Number(), block.Hash().Bytes()[:4])
-			}
-
-			if !skipPresenceCheck {
-				// Ignore if the entire data is already known
-				if bc.HasBlock(block.Hash(), block.NumberU64()) {
-					stats.ignored++
-					continue
-				} else {
-					// If block N is not present, neither are the later blocks.
-					// This should be true, but if we are mistaken, the shortcut
-					// here will only cause overwriting of some existing data
-					skipPresenceCheck = true
-				}
 			}
 
 			// Separate out bor receipts (i.e. receipts of state-sync transactions)
