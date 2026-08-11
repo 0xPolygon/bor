@@ -2207,7 +2207,9 @@ func (d *Downloader) commitPivotBlock(result *fetchResult) error {
 		return err
 	}
 
+	d.pivotLock.Lock()
 	d.committed.Store(true)
+	d.pivotLock.Unlock()
 
 	return nil
 }
