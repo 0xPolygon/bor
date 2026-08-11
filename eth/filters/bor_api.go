@@ -74,7 +74,7 @@ func (api *FilterAPI) NewDeposits(ctx context.Context, crit ethereum.StateSyncFi
 
 		stop := make(chan struct{})
 		defer close(stop)
-		queue := notifyAsync(notifier, rpcSub.ID, stop)
+		client := notifyAsync(notifier, rpcSub.ID, stop)
 
 		//nolint:staticcheck
 		for {
@@ -82,8 +82,11 @@ func (api *FilterAPI) NewDeposits(ctx context.Context, crit ethereum.StateSyncFi
 			case h := <-stateSyncData:
 				if h != nil && (crit.ID == h.ID || crit.Contract == h.Contract ||
 					(crit.ID == 0 && crit.Contract == common.Address{})) {
-					queueNotification(queue, h)
+					client.send(h)
 				}
+			case <-client.failed:
+				stateSyncSub.Unsubscribe()
+				return
 			case <-rpcSub.Err():
 				stateSyncSub.Unsubscribe()
 				return

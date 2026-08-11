@@ -31,6 +31,8 @@ import (
 	"github.com/ethereum/go-ethereum/core/history"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
+	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
 )
@@ -206,48 +208,84 @@ func (api *FilterAPI) NewPendingTransactionFilter(fullTx *bool) rpc.ID {
 	return pendingTxSub.ID
 }
 
-// NewPendingTransactions creates a subscription that is triggered each time a
-// transaction enters the transaction pool. If fullTx is true the full tx is
-// sent to the client, otherwise the hash is sent.
 // clientNotificationBuffer bounds how many notifications may sit queued for a
 // single subscription client. The filter EventSystem fans events out to every
 // subscription from one shared goroutine with blocking sends, so client
 // delivery must never back-pressure into it: a WebSocket client that stops
 // reading (or reads very slowly) would otherwise stall the shared fan-out
-// loop and starve every other subscription on the node. Once a client falls
-// this far behind, further notifications are dropped for that client only.
+// loop and starve every other subscription on the node.
 const clientNotificationBuffer = 512
 
-// notifyAsync returns a queue drained into notifier.Notify by a background
-// goroutine until stop is closed. Use queueNotification to enqueue: it never
-// blocks, isolating the caller (and transitively the shared event fan-out
-// loop) from slow clients.
-func notifyAsync(notifier *rpc.Notifier, id rpc.ID, stop <-chan struct{}) chan<- any {
-	queue := make(chan any, clientNotificationBuffer)
+// subscriptionsDroppedCounter counts subscriptions dropped because the client
+// could not keep up, so operators can tell a slow consumer apart from a node
+// that stopped producing events.
+var subscriptionsDroppedCounter = metrics.GetOrRegisterCounter("rpc/subscription/dropped", nil)
+
+// clientNotifier delivers notifications to a single subscription client without
+// ever blocking the caller. Delivery is bounded rather than lossy: a client that
+// falls clientNotificationBuffer behind, or whose connection write fails, has
+// its subscription dropped instead of being served a stream with a silent gap it
+// cannot detect. Callers must select on failed and return, which unsubscribes
+// from the EventSystem and lets the client observe the closed subscription.
+type clientNotifier struct {
+	id       rpc.ID
+	queue    chan any
+	failed   chan struct{}
+	failOnce sync.Once
+}
+
+// notifyAsync returns a clientNotifier whose queue is drained into
+// notifier.Notify by a background goroutine. That goroutine exits when stop is
+// closed or when delivery fails, so it never outlives the subscription.
+func notifyAsync(notifier *rpc.Notifier, id rpc.ID, stop <-chan struct{}) *clientNotifier {
+	c := &clientNotifier{
+		id:     id,
+		queue:  make(chan any, clientNotificationBuffer),
+		failed: make(chan struct{}),
+	}
 
 	go func() {
 		for {
 			select {
-			case v := <-queue:
-				_ = notifier.Notify(id, v)
+			case v := <-c.queue:
+				if err := notifier.Notify(id, v); err != nil {
+					c.fail("notification write failed", err)
+					return
+				}
 			case <-stop:
 				return
 			}
 		}
 	}()
 
-	return queue
+	return c
 }
 
-// queueNotification enqueues v for asynchronous delivery to the client,
-// dropping it if the client has fallen clientNotificationBuffer behind.
-func queueNotification(queue chan<- any, v any) {
+// send enqueues v for asynchronous delivery to the client. It never blocks,
+// isolating the caller (and transitively the shared event fan-out loop) from
+// slow clients. A full queue drops the subscription rather than the payload.
+func (c *clientNotifier) send(v any) {
 	select {
-	case queue <- v:
+	case c.queue <- v:
 	default:
+		c.fail("client fell behind", nil)
 	}
 }
 
+// fail closes c.failed exactly once, recording why the subscription is going
+// away. Both callers may race: send runs on the subscription goroutine while
+// the drain goroutine reports write errors.
+func (c *clientNotifier) fail(reason string, err error) {
+	c.failOnce.Do(func() {
+		subscriptionsDroppedCounter.Inc(1)
+		log.Warn("Dropping RPC subscription", "id", c.id, "reason", reason, "buffer", clientNotificationBuffer, "err", err)
+		close(c.failed)
+	})
+}
+
+// NewPendingTransactions creates a subscription that is triggered each time a
+// transaction enters the transaction pool. If fullTx is true the full tx is
+// sent to the client, otherwise the hash is sent.
 func (api *FilterAPI) NewPendingTransactions(ctx context.Context, fullTx *bool) (*rpc.Subscription, error) {
 	notifier, supported := rpc.NotifierFromContext(ctx)
 	if !supported {
@@ -263,7 +301,7 @@ func (api *FilterAPI) NewPendingTransactions(ctx context.Context, fullTx *bool) 
 
 		stop := make(chan struct{})
 		defer close(stop)
-		queue := notifyAsync(notifier, rpcSub.ID, stop)
+		client := notifyAsync(notifier, rpcSub.ID, stop)
 
 		chainConfig := api.sys.backend.ChainConfig()
 
@@ -277,11 +315,13 @@ func (api *FilterAPI) NewPendingTransactions(ctx context.Context, fullTx *bool) 
 				for _, tx := range txs {
 					if fullTx != nil && *fullTx {
 						rpcTx := ethapi.NewRPCPendingTransaction(tx, latest, chainConfig)
-						queueNotification(queue, rpcTx)
+						client.send(rpcTx)
 					} else {
-						queueNotification(queue, tx.Hash())
+						client.send(tx.Hash())
 					}
 				}
+			case <-client.failed:
+				return
 			case <-rpcSub.Err():
 				return
 			}
@@ -342,12 +382,14 @@ func (api *FilterAPI) NewHeads(ctx context.Context) (*rpc.Subscription, error) {
 
 		stop := make(chan struct{})
 		defer close(stop)
-		queue := notifyAsync(notifier, rpcSub.ID, stop)
+		client := notifyAsync(notifier, rpcSub.ID, stop)
 
 		for {
 			select {
 			case h := <-headers:
-				queueNotification(queue, h)
+				client.send(h)
+			case <-client.failed:
+				return
 			case <-rpcSub.Err():
 				return
 			}
@@ -379,14 +421,16 @@ func (api *FilterAPI) Logs(ctx context.Context, crit FilterCriteria) (*rpc.Subsc
 
 		stop := make(chan struct{})
 		defer close(stop)
-		queue := notifyAsync(notifier, rpcSub.ID, stop)
+		client := notifyAsync(notifier, rpcSub.ID, stop)
 
 		for {
 			select {
 			case logs := <-matchedLogs:
 				for _, log := range logs {
-					queueNotification(queue, &log)
+					client.send(&log)
 				}
+			case <-client.failed:
+				return
 			case <-rpcSub.Err(): // client send an unsubscribe request
 				return
 			}
@@ -444,7 +488,7 @@ func (api *FilterAPI) TransactionReceipts(ctx context.Context, filter *Transacti
 
 		stop := make(chan struct{})
 		defer close(stop)
-		queue := notifyAsync(notifier, rpcSub.ID, stop)
+		client := notifyAsync(notifier, rpcSub.ID, stop)
 
 		signer := types.LatestSigner(api.sys.backend.ChainConfig())
 
@@ -466,8 +510,10 @@ func (api *FilterAPI) TransactionReceipts(ctx context.Context, filter *Transacti
 					}
 
 					// Send a batch of tx receipts in one notification
-					queueNotification(queue, marshaledReceipts)
+					client.send(marshaledReceipts)
 				}
+			case <-client.failed:
+				return
 			case <-rpcSub.Err():
 				return
 			}

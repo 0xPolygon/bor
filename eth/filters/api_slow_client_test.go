@@ -89,6 +89,13 @@ func TestSlowClientDoesNotStarveOtherSubscribers(t *testing.T) {
 	}
 	defer sub.Unsubscribe()
 
+	// EthSubscribe returns once the server has assigned a subscription ID, which
+	// happens before the handler goroutine installs the subscription in the
+	// EventSystem. Events sent in that window are dropped by the feed and would
+	// make the exact-count assertion below fail for the wrong reason, so send
+	// warm-up events until one is delivered, then discard what they produced.
+	awaitInstalled(t, backend, healthy)
+
 	for i := 0; i < events; i++ {
 		tx := types.NewTransaction(uint64(i), common.HexToAddress("0xb794f5ea0ba39494ce83a213fffba74279579268"), new(big.Int), 0, new(big.Int), nil)
 		backend.txFeed.Send(core.NewTxsEvent{Txs: []*types.Transaction{tx}})
@@ -108,6 +115,35 @@ func TestSlowClientDoesNotStarveOtherSubscribers(t *testing.T) {
 			t.Fatalf("healthy subscription failed after %d events: %v", received, err)
 		case <-timeout:
 			t.Fatalf("healthy subscriber starved by stalled client: got %d of %d events", received, events)
+		}
+	}
+}
+
+// awaitInstalled blocks until the subscription feeding delivered is installed in
+// the EventSystem, then drains the events the probing produced.
+func awaitInstalled(t *testing.T, backend *testBackend, delivered <-chan common.Hash) {
+	t.Helper()
+
+	tx := types.NewTransaction(0, common.HexToAddress("0xb794f5ea0ba39494ce83a213fffba74279579268"), new(big.Int), 0, new(big.Int), nil)
+	deadline := time.After(5 * time.Second)
+
+	for {
+		backend.txFeed.Send(core.NewTxsEvent{Txs: []*types.Transaction{tx}})
+
+		select {
+		case <-delivered:
+			// Drain anything the earlier probes delivered so the caller starts
+			// from an empty channel.
+			for {
+				select {
+				case <-delivered:
+				default:
+					return
+				}
+			}
+		case <-deadline:
+			t.Fatal("subscription was never installed in the EventSystem")
+		case <-time.After(10 * time.Millisecond):
 		}
 	}
 }
