@@ -310,6 +310,9 @@ func (bc *BlockChain) GetCanonicalReceipt(tx *types.Transaction, blockHash commo
 		return nil, err
 	}
 	signer := types.MakeSigner(bc.chainConfig, new(big.Int).SetUint64(blockNumber), header.Time)
+	// Fork-gate before touching the DB: this is a single-tx hot read path.
+	reserved := bc.chainConfig.Bor != nil && bc.chainConfig.Bor.IsReservedBlockspace(header.Number) &&
+		rawdb.IsReservedTxIndex(bc.db, blockHash, blockNumber, txIndex)
 	receipt.DeriveFields(signer, types.DeriveReceiptContext{
 		BlockHash:    blockHash,
 		BlockNumber:  blockNumber,
@@ -320,6 +323,7 @@ func (bc *BlockChain) GetCanonicalReceipt(tx *types.Transaction, blockHash commo
 		LogIndex:     ctx.LogIndex,
 		Tx:           tx,
 		TxIndex:      uint(txIndex),
+		Reserved:     reserved,
 	})
 	return receipt, nil
 }

@@ -831,7 +831,7 @@ func (bc *BlockChain) startPrefetchGoroutine(block *types.Block, throwaway *stat
 	}(time.Now())
 }
 
-func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, witness *stateless.Witness, followupInterrupt *atomic.Bool) (_ types.Receipts, _ []*types.Log, _ uint64, _ *state.StateDB, _ time.Duration, blockEndErr error) {
+func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, witness *stateless.Witness, followupInterrupt *atomic.Bool) (_ types.Receipts, _ []*types.Log, _ uint64, _ *state.StateDB, _ time.Duration, _ []uint64, blockEndErr error) {
 	// Process the block using processor and parallelProcessor at the same time, take the one which finishes first, cancel the other, and return the result
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -846,7 +846,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 
 	throwaway, statedb, parallelStatedb, prefetch, process, parallel, err := bc.setupBlockReaders(parent.Root)
 	if err != nil {
-		return nil, nil, 0, nil, 0, err
+		return nil, nil, 0, nil, 0, nil, err
 	}
 	defer reportReaderStats(prefetch, process, parallel)
 
@@ -855,14 +855,15 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	bc.startPrefetchGoroutine(block, throwaway, sharedCaches, followupInterrupt)
 
 	type Result struct {
-		receipts types.Receipts
-		logs     []*types.Log
-		usedGas  uint64
-		err      error
-		statedb  *state.StateDB
-		counter  *metrics.Counter
-		parallel bool
-		vtime    time.Duration
+		receipts          types.Receipts
+		logs              []*types.Log
+		usedGas           uint64
+		err               error
+		statedb           *state.StateDB
+		counter           *metrics.Counter
+		parallel          bool
+		vtime             time.Duration
+		reservedTxIndexes []uint64
 	}
 
 	var resultChanLen int = 2
@@ -903,7 +904,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 			if res == nil {
 				res = &ProcessResult{}
 			}
-			resultChan <- Result{res.Receipts, res.Logs, res.GasUsed, err, parallelStatedb, blockExecutionParallelCounter, true, localVtime}
+			resultChan <- Result{res.Receipts, res.Logs, res.GasUsed, err, parallelStatedb, blockExecutionParallelCounter, true, localVtime, res.ReservedTxIndexes}
 		}()
 	}
 
@@ -927,7 +928,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 			if res == nil {
 				res = &ProcessResult{}
 			}
-			resultChan <- Result{res.Receipts, res.Logs, res.GasUsed, err, statedb, blockExecutionSerialCounter, false, localVtime}
+			resultChan <- Result{res.Receipts, res.Logs, res.GasUsed, err, statedb, blockExecutionSerialCounter, false, localVtime, res.ReservedTxIndexes}
 		}()
 	}
 
@@ -995,7 +996,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		second_result.statedb.StopPrefetcher()
 	}
 
-	return result.receipts, result.logs, result.usedGas, result.statedb, result.vtime, result.err
+	return result.receipts, result.logs, result.usedGas, result.statedb, result.vtime, result.reservedTxIndexes, result.err
 }
 
 func (bc *BlockChain) setupSnapshot() {
@@ -2078,7 +2079,7 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 		if first.NumberU64() == 1 {
 			if frozen, _ := bc.db.Ancients(); frozen == 0 {
 				td := bc.genesisBlock.Difficulty()
-				writeSize, err := rawdb.WriteAncientBlocks(bc.db, []*types.Block{bc.genesisBlock}, []rlp.RawValue{rlp.EmptyList}, []rlp.RawValue{rlp.EmptyList}, td)
+				writeSize, err := rawdb.WriteAncientBlocks(bc.db, []*types.Block{bc.genesisBlock}, []rlp.RawValue{rlp.EmptyList}, []rlp.RawValue{rlp.EmptyList}, []rlp.RawValue{rlp.EmptyList}, td)
 				if err != nil {
 					log.Error("Error writing genesis to ancients", "err", err)
 					return 0, err
@@ -2101,9 +2102,12 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 			headers = append(headers, block.Header())
 		}
 
-		// Write all chain data to ancients.
+		// Write all chain data to ancients. These blocks arrive via receipt
+		// sync rather than local execution, so there is no reserved-tx
+		// classification to carry; the nil entries make writeAncientBlock
+		// record that explicitly.
 		td := bc.GetTd(first.Hash(), first.NumberU64())
-		writeSize, err := rawdb.WriteAncientBlocks(bc.db, blockChain, receiptChain, borReceipts, td)
+		writeSize, err := rawdb.WriteAncientBlocks(bc.db, blockChain, receiptChain, borReceipts, make([]rlp.RawValue, len(blockChain)), td)
 		if err != nil {
 			log.Error("Error importing chain data to ancients", "err", err)
 			return 0, err
@@ -2350,7 +2354,7 @@ func (bc *BlockChain) writeKnownBlock(block *types.Block) error {
 
 // writeBlockWithState writes block, metadata and corresponding state data to the
 // database.
-func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.Receipt, logs []*types.Log, statedb *state.StateDB) ([]*types.Log, error) {
+func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.Receipt, logs []*types.Log, statedb *state.StateDB, reservedTxIndexes []uint64) ([]*types.Log, error) {
 	// Calculate the total difficulty of the block
 	ptd := bc.GetTd(block.ParentHash(), block.NumberU64()-1)
 	var externTd *big.Int
@@ -2369,6 +2373,16 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 	rawdb.WriteTd(blockBatch, block.Hash(), block.NumberU64(), externTd)
 	rawdb.WriteBlock(blockBatch, block)
 	rawdb.WriteReceipts(blockBatch, block.Hash(), block.NumberU64(), receipts)
+	// Reserved-tx indexes are non-consensus, derived data annotating the
+	// receipts written above; write them in the same batch, and only where
+	// receipts are actually being persisted, so the two can never be
+	// observed out of sync (see rawdb.WriteReservedTxIndexes). This guard is
+	// what lets the stateless writers, which pass nil receipts, also pass
+	// their real classification through mechanically: it is a no-op here
+	// regardless, rather than relying on every such caller to remember nil.
+	if len(receipts) > 0 {
+		rawdb.WriteReservedTxIndexes(blockBatch, block.Hash(), block.NumberU64(), reservedTxIndexes)
+	}
 
 	// System call appends state-sync logs into state. So, `state.Logs()` contains
 	// all logs including system-call logs (state sync logs) while `logs` contains
@@ -2537,19 +2551,19 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 
 // WriteBlockAndSetHead writes the given block and all associated state to the database,
 // and applies the block as the new chain head.
-func (bc *BlockChain) WriteBlockAndSetHead(block *types.Block, receipts []*types.Receipt, logs []*types.Log, state *state.StateDB, emitHeadEvent bool) (status WriteStatus, err error) {
+func (bc *BlockChain) WriteBlockAndSetHead(block *types.Block, receipts []*types.Receipt, logs []*types.Log, state *state.StateDB, reservedTxIndexes []uint64, emitHeadEvent bool) (status WriteStatus, err error) {
 	if !bc.chainmu.TryLock() {
 		return NonStatTy, errChainStopped
 	}
 	defer bc.chainmu.Unlock()
 
-	return bc.writeBlockAndSetHead(block, receipts, logs, state, emitHeadEvent, false)
+	return bc.writeBlockAndSetHead(block, receipts, logs, state, reservedTxIndexes, emitHeadEvent, false)
 }
 
 // writeBlockAndSetHead is the internal implementation of WriteBlockAndSetHead.
 // This function expects the chain mutex to be held.
-func (bc *BlockChain) writeBlockAndSetHead(block *types.Block, receipts []*types.Receipt, logs []*types.Log, state *state.StateDB, emitHeadEvent bool, stateless bool) (status WriteStatus, err error) {
-	stateSyncLogs, err := bc.writeBlockWithState(block, receipts, logs, state)
+func (bc *BlockChain) writeBlockAndSetHead(block *types.Block, receipts []*types.Receipt, logs []*types.Log, state *state.StateDB, reservedTxIndexes []uint64, emitHeadEvent bool, stateless bool) (status WriteStatus, err error) {
+	stateSyncLogs, err := bc.writeBlockWithState(block, receipts, logs, state, reservedTxIndexes)
 	if err != nil {
 		return NonStatTy, err
 	}
@@ -2748,6 +2762,12 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 		err        error
 		needsRetry bool
 		gasUsed    uint64
+		// reservedTxIndexes carries the block's classification through to the
+		// writeBlockAndSetHead calls below. Those calls pass nil receipts on
+		// this path, so writeBlockWithState's own guard suppresses the write
+		// regardless of what is passed here - kept mechanical rather than a
+		// special case at each call site.
+		reservedTxIndexes []uint64
 	}
 	results := make([]execResult, len(chain))
 	defer func() {
@@ -2806,6 +2826,7 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 				}
 				results[idx].sdb = sdb
 				results[idx].gasUsed = res.GasUsed
+				results[idx].reservedTxIndexes = res.ReservedTxIndexes
 			}
 		}()
 	}
@@ -2869,7 +2890,7 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 
 		// Only commit blocks that don't need retry
 		if !results[i].needsRetry {
-			if _, werr := bc.writeBlockAndSetHead(block, nil, nil, results[i].sdb, true, true); werr != nil {
+			if _, werr := bc.writeBlockAndSetHead(block, nil, nil, results[i].sdb, results[i].reservedTxIndexes, true, true); werr != nil {
 				stopHeaders()
 				return int(processed.Load()), werr
 			}
@@ -2897,9 +2918,10 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 				sdb.SetWitness(witness)
 			}
 			results[i].gasUsed = res.GasUsed
+			results[i].reservedTxIndexes = res.ReservedTxIndexes
 
 			// Commit the block after successful retry
-			if _, werr := bc.writeBlockAndSetHead(block, nil, nil, sdb, true, true); werr != nil {
+			if _, werr := bc.writeBlockAndSetHead(block, nil, nil, sdb, results[i].reservedTxIndexes, true, true); werr != nil {
 				stopHeaders()
 				return int(processed.Load()), werr
 			}
@@ -3005,7 +3027,10 @@ func (bc *BlockChain) insertChainStatelessSequential(chain types.Blocks, witness
 			}
 		}
 
-		if _, werr := bc.writeBlockAndSetHead(block, nil, nil, statedb, true, true); werr != nil {
+		// receipts stay nil on this path; writeBlockWithState's own guard
+		// suppresses the reserved-tx write to match, so passing the real
+		// classification through here is a no-op rather than a special case.
+		if _, werr := bc.writeBlockAndSetHead(block, nil, nil, statedb, res.ReservedTxIndexes, true, true); werr != nil {
 			return int(processed.Load()), werr
 		}
 		processed.Add(1)
@@ -3349,7 +3374,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 			}
 		}
 
-		receipts, logs, usedGas, statedb, vtime, err := bc.ProcessBlock(block, parent, witness, &followupInterrupt)
+		receipts, logs, usedGas, statedb, vtime, reservedTxIndexes, err := bc.ProcessBlock(block, parent, witness, &followupInterrupt)
 		bc.statedb.TrieDB().SetReadBackend(nil)
 		bc.statedb.EnableSnapInReader()
 		activeState = statedb
@@ -3410,9 +3435,9 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 
 		if !setHead {
 			// Don't set the head, only insert the block
-			_, err = bc.writeBlockWithState(block, receipts, logs, statedb)
+			_, err = bc.writeBlockWithState(block, receipts, logs, statedb, reservedTxIndexes)
 		} else {
-			status, err = bc.writeBlockAndSetHead(block, receipts, logs, statedb, false, false)
+			status, err = bc.writeBlockAndSetHead(block, receipts, logs, statedb, reservedTxIndexes, false, false)
 		}
 
 		followupInterrupt.Store(true)
@@ -3614,9 +3639,9 @@ func (bc *BlockChain) processBlock(block *types.Block, statedb *state.StateDB, s
 	)
 	if !setHead {
 		// Don't set the head, only insert the block
-		_, err = bc.writeBlockWithState(block, res.Receipts, res.Logs, statedb)
+		_, err = bc.writeBlockWithState(block, res.Receipts, res.Logs, statedb, res.ReservedTxIndexes)
 	} else {
-		status, err = bc.writeBlockAndSetHead(block, res.Receipts, res.Logs, statedb, false, false)
+		status, err = bc.writeBlockAndSetHead(block, res.Receipts, res.Logs, statedb, res.ReservedTxIndexes, false, false)
 	}
 	if err != nil {
 		return nil, err
@@ -3880,7 +3905,10 @@ func (bc *BlockChain) collectReceiptsAndLogs(b *types.Block, removed bool) ([]*t
 		receipts = append(receipts, borReceipt)
 	}
 
-	if err := receipts.DeriveFields(bc.chainConfig, b.Hash(), b.NumberU64(), b.Time(), b.BaseFee(), blobGasPrice, b.Transactions()); err != nil {
+	// Reorg log-removal events surface only logs, not the reserved-aware
+	// effective price, so no side-table read here; see rawdb.ReadReceipts for
+	// the path that does.
+	if err := receipts.DeriveFields(bc.chainConfig, b.Hash(), b.NumberU64(), b.Time(), b.BaseFee(), blobGasPrice, b.Transactions(), nil); err != nil {
 		log.Error("Failed to derive block receipts fields", "hash", b.Hash(), "number", b.NumberU64(), "err", err)
 	}
 	var logs []*types.Log

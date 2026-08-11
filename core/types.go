@@ -69,4 +69,9 @@ type ProcessResult struct {
 	// classify this block's reserved region. ValidateState checks it against
 	// the header's ReservedCapacity post-fork, mirroring ReservedGasUsed.
 	ReservedCapacity uint64
+	// ReservedTxIndexes lists the positions within the block's transactions
+	// classified reserved (fee-free), strictly ascending. Persisted alongside
+	// receipts so reads can report the correct effective gas price for
+	// reserved transactions without re-deriving the classification.
+	ReservedTxIndexes []uint64
 }

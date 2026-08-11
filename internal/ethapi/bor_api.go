@@ -117,7 +117,8 @@ func (api *BlockChainAPI) appendRPCMarshalBorTransaction(ctx context.Context, bl
 			formattedTxs := fields["transactions"].([]interface{})
 
 			if fullTx {
-				marshalledTx := newRPCTransaction(borTx, blockHash, blockNumber, block.Time(), txIndex, block.BaseFee(), api.b.ChainConfig())
+				// The bor state-sync (pseudo) transaction is never reserved.
+				marshalledTx := newRPCTransaction(borTx, blockHash, blockNumber, block.Time(), txIndex, block.BaseFee(), api.b.ChainConfig(), false)
 				// newRPCTransaction calculates hash based on RLP of the transaction data.
 				// In the case of bor block tx, we need simple derived tx hash (same as function argument) instead of RLP hash
 				marshalledTx.Hash = txHash

@@ -130,19 +130,30 @@ func TestSumReservedGasUsed(t *testing.T) {
 		{TxHash: txB0.Hash(), GasUsed: 40_000},
 	}
 
-	// a0 and b0 reserved; a1 not in the set. Matched by hash regardless of order.
+	// a0 and b0 reserved; a1 not in the set. Matched by hash regardless of
+	// order, but indexes are positions within txs (txA0=0, txA1=1, txB0=2).
 	reserved := map[registryreader.ReservedKey]struct{}{
 		{From: a, Nonce: 0}: {},
 		{From: b, Nonce: 0}: {},
 	}
-	require.Equal(t, uint64(21_000+40_000), sumReservedGasUsed(txs, receipts, signer, reserved))
+	gas, idx := sumReservedGasUsed(txs, receipts, signer, reserved)
+	require.Equal(t, uint64(21_000+40_000), gas)
+	require.Equal(t, []uint64{0, 2}, idx)
 
-	// Empty set short-circuits to 0.
-	require.Zero(t, sumReservedGasUsed(txs, receipts, signer, nil))
-	require.Zero(t, sumReservedGasUsed(txs, receipts, signer, map[registryreader.ReservedKey]struct{}{}))
+	// Empty set short-circuits to (0, nil).
+	gas, idx = sumReservedGasUsed(txs, receipts, signer, nil)
+	require.Zero(t, gas)
+	require.Nil(t, idx)
+	gas, idx = sumReservedGasUsed(txs, receipts, signer, map[registryreader.ReservedKey]struct{}{})
+	require.Zero(t, gas)
+	require.Nil(t, idx)
 
-	// A reserved key whose tx has no receipt contributes 0 (cannot happen in a
-	// valid block; guards against a silent nonzero on a malformed input).
+	// A reserved key whose tx has no receipt contributes 0 gas (cannot happen
+	// in a valid block; guards against a silent nonzero on a malformed input)
+	// but is still reported as reserved by index - classification does not
+	// depend on receipt presence.
 	onlyA1 := map[registryreader.ReservedKey]struct{}{{From: a, Nonce: 1}: {}}
-	require.Zero(t, sumReservedGasUsed(txs, types.Receipts{{TxHash: txA0.Hash(), GasUsed: 21_000}}, signer, onlyA1))
+	gas, idx = sumReservedGasUsed(txs, types.Receipts{{TxHash: txA0.Hash(), GasUsed: 21_000}}, signer, onlyA1)
+	require.Zero(t, gas)
+	require.Equal(t, []uint64{1}, idx)
 }
