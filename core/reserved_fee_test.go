@@ -22,18 +22,16 @@ import (
 var reservedBurntAddr = common.HexToAddress("0x00000000000000000000000000000000000000dd")
 
 // reservedTestConfig clones BorUnittestChainConfig (London active at 0) and
-// layers the reserved-blockspace fork + an optional reserved client on top,
-// without mutating the shared global config.
+// layers the reserved-blockspace fork on top, without mutating the shared
+// global config. reservedSenders is accepted for call-site symmetry with
+// reservedBlockCtx (which builds the actual classification snapshot from
+// them); the config itself carries no reserved-client data — classification
+// is sourced from the registry snapshot on the block context, not config.
 func reservedTestConfig(forkBlock *big.Int, reservedSenders ...common.Address) *params.ChainConfig {
 	cc := *params.BorUnittestChainConfig
 	bor := *cc.Bor
 	bor.BurntContract = map[string]string{"0": reservedBurntAddr.Hex()}
 	bor.ReservedBlockspaceBlock = forkBlock
-	if len(reservedSenders) > 0 {
-		bor.ReservedClients = []params.ReservedClient{
-			{Addresses: reservedSenders, QuotaGas: 30_000_000},
-		}
-	}
 	cc.Bor = &bor
 	return &cc
 }

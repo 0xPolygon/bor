@@ -64,4 +64,9 @@ type ProcessResult struct {
 	// the header's ReservedGasUsed post-fork, so a producer cannot stamp a value
 	// that disagrees with execution (which would skew the next block's base fee).
 	ReservedGasUsed uint64
+	// ReservedCapacity is the reserved-blockspace registry snapshot's effective
+	// capacity (Σ quotas of the client set effective for this block) used to
+	// classify this block's reserved region. ValidateState checks it against
+	// the header's ReservedCapacity post-fork, mirroring ReservedGasUsed.
+	ReservedCapacity uint64
 }

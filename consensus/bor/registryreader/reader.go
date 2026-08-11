@@ -68,11 +68,19 @@ type Client struct {
 // per block (gated on the fork height). A nil *Snapshot classifies nothing
 // (no registry / non-bor chain), so all methods are nil-safe.
 type Snapshot struct {
-	root      common.Hash
-	capacity  uint64
-	byAddress map[common.Address]Client
-	clientIDs []uint64
-	quotas    map[uint64]uint64
+	root     common.Hash
+	capacity uint64
+	// effectiveCapacity is Σ over quotas (the effective client set for this
+	// block), distinct from capacity (the contract's raw totalReservedGas,
+	// which createClient bumps immediately even for a client whose
+	// effectiveFrom is still in the future). The base fee's reserved carve-out
+	// is priced against effectiveCapacity: it equals exactly what this
+	// snapshot's classification walk can admit, so the per-client-only quota
+	// rule can never admit more reserved gas than the carve-out accounts for.
+	effectiveCapacity uint64
+	byAddress         map[common.Address]Client
+	clientIDs         []uint64
+	quotas            map[uint64]uint64
 }
 
 // BuildSnapshot reads the full active reserved set from the registry at the
@@ -163,11 +171,20 @@ func NewSnapshot(root common.Hash, capacity uint64, clients map[common.Address]C
 		quotas[c.ID] = c.GasQuota
 	}
 	ids := make([]uint64, 0, len(quotas))
-	for id := range quotas {
+	var effectiveCapacity uint64
+	for id, q := range quotas {
 		ids = append(ids, id)
+		effectiveCapacity += q
 	}
 	slices.Sort(ids)
-	return &Snapshot{root: root, capacity: capacity, byAddress: clients, clientIDs: ids, quotas: quotas}
+	return &Snapshot{
+		root:              root,
+		capacity:          capacity,
+		effectiveCapacity: effectiveCapacity,
+		byAddress:         clients,
+		clientIDs:         ids,
+		quotas:            quotas,
+	}
 }
 
 // Root is the registry root this snapshot was built at; callers reuse the
@@ -224,10 +241,26 @@ func (s *Snapshot) FeeMode(account common.Address) uint8 {
 	return s.byAddress[account].FeeMode
 }
 
-// Capacity returns the reserved capacity (sum of active client quotas).
+// Capacity returns the registry's raw totalReservedGas: the sum of active
+// client quotas, including clients whose effectiveFrom hasn't been reached
+// yet for this snapshot. Used solely for the build-time invariant check
+// against effective quotas; base-fee pricing and header stamping use
+// EffectiveCapacity instead.
 func (s *Snapshot) Capacity() uint64 {
 	if s == nil {
 		return 0
 	}
 	return s.capacity
+}
+
+// EffectiveCapacity returns Σ over this snapshot's effective client quotas —
+// exactly what the block's classification walk (ReservedWalk/ClassifyReserved)
+// can admit. This is the value stamped into the header and priced against by
+// the base fee; it excludes clients not yet effective for this block, unlike
+// Capacity.
+func (s *Snapshot) EffectiveCapacity() uint64 {
+	if s == nil {
+		return 0
+	}
+	return s.effectiveCapacity
 }

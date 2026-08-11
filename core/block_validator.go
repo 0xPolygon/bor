@@ -155,10 +155,11 @@ func (v *BlockValidator) ValidateState(block *types.Block, statedb *state.StateD
 		return fmt.Errorf("%w (remote: %x  local: %x)", ErrBloomMismatch, header.Bloom, rbloom)
 	}
 	// Reserved-blockspace check (before the stateless early-return, so stateless
-	// verifiers enforce it too): the header's ReservedGasUsed must equal the gas
-	// actually used by reserved (fee-free) transactions. res.ReservedGasUsed is
+	// verifiers enforce it too): the header's ReservedGasUsed and ReservedCapacity
+	// must equal, respectively, the gas actually used by reserved (fee-free)
+	// transactions and the registry snapshot's effective capacity. Both are
 	// populated on every Process path, including stateless execution.
-	if err := v.validateReservedGasUsed(header, res); err != nil {
+	if err := v.validateReservedFields(header, res); err != nil {
 		return err
 	}
 	// In stateless mode, return early because the receipt and state root are not
@@ -192,21 +193,34 @@ func (v *BlockValidator) ValidateState(block *types.Block, statedb *state.StateD
 	return nil
 }
 
-// validateReservedGasUsed enforces a reserved-blockspace invariant: post-fork,
-// the header's ReservedGasUsed must equal the gas actually used by reserved
-// (fee-free) transactions, recomputed during execution. This stops a producer
-// from stamping a value that disagrees with execution to skew the next block's
+// validateReservedFields enforces the two reserved-blockspace header/execution
+// invariants: post-fork, the header's ReservedGasUsed must equal the gas
+// actually used by reserved (fee-free) transactions, and its ReservedCapacity
+// must equal the registry snapshot's effective capacity, both recomputed
+// during execution. This stops a producer from stamping a value that
+// disagrees with execution — either would skew the next block's
 // (reserved-aware) base fee.
-func (v *BlockValidator) validateReservedGasUsed(header *types.Header, res *ProcessResult) error {
+func (v *BlockValidator) validateReservedFields(header *types.Header, res *ProcessResult) error {
 	if v.config.Bor == nil || !v.config.Bor.IsReservedBlockspace(header.Number) {
 		return nil
 	}
-	var got uint64
-	if rg := header.GetReservedGasUsed(v.config); rg != nil {
-		got = *rg
+	gotGasUsed, gotCapacity := header.GetReservedFields(v.config)
+	if err := compareReservedField(gotGasUsed, res.ReservedGasUsed, ErrReservedGasUsedMismatch); err != nil {
+		return err
 	}
-	if got != res.ReservedGasUsed {
-		return fmt.Errorf("%w (remote: %d local: %d)", ErrReservedGasUsedMismatch, got, res.ReservedGasUsed)
+	return compareReservedField(gotCapacity, res.ReservedCapacity, ErrReservedCapacityMismatch)
+}
+
+// compareReservedField compares a header-optional reserved field (nil, i.e.
+// absent from the wire, treated as 0) against the value execution
+// recomputed, wrapping sentinel with both sides on mismatch.
+func compareReservedField(got *uint64, want uint64, sentinel error) error {
+	var gotVal uint64
+	if got != nil {
+		gotVal = *got
+	}
+	if gotVal != want {
+		return fmt.Errorf("%w (remote: %d local: %d)", sentinel, gotVal, want)
 	}
 	return nil
 }

@@ -127,8 +127,11 @@ func CalcBaseFee(config *params.ChainConfig, parent *types.Header) *big.Int {
 	// until then the public base fee is priced against reserved capacity alone,
 	// deterministically across nodes, so no change is needed here.
 	if config.Bor != nil && config.Bor.IsReservedBlockspace(parent.Number) {
-		parentGasTarget = reservedAwareGasTarget(config, parent)
-		parentGasUsed = publicGasUsed(config, parent)
+		// One decode of both reserved fields, shared by target and used-side
+		// netting, instead of each calling its own GetReservedX getter.
+		reservedGasUsed, reservedCapacity := parent.GetReservedFields(config)
+		parentGasTarget = reservedAwareGasTarget(config, parent, reservedCapacity)
+		parentGasUsed = publicGasUsed(parent, reservedGasUsed)
 	}
 
 	// If the parent gasUsed is the same as the target, the baseFee remains unchanged.
@@ -216,30 +219,36 @@ func gasTargetForLimit(config *params.ChainConfig, parent *types.Header, gasLimi
 	return gasLimit / config.ElasticityMultiplier()
 }
 
-// reservedAwareGasTarget returns the EIP-1559 target for the public region: the
-// standard curve applied to capacity that excludes the reserved quotas (Σ active
-// client quotas). Header.GasLimit is left untouched — a formula-only input.
+// reservedAwareGasTarget returns the EIP-1559 target for the public region:
+// the standard curve applied to capacity that excludes the reserved quotas
+// (the parent header's stamped ReservedCapacity — Σ over the registry
+// snapshot's effective client set at the parent block). Header.GasLimit is
+// left untouched — a formula-only input. capacity is the caller's single
+// decode of parent's reserved fields (see GetReservedFields), shared with
+// publicGasUsed so CalcBaseFee decodes the header's Extra once per call.
 //
-// The capacity source is the config rather than the registry on purpose:
-// CalcBaseFee is a pure (config, parent) function called from paths that have no
-// parent state to read the registry from (RPC, txpool, historical headers), so a
-// state read here would break that contract. The registry-derived capacity
-// reaches base fee via a producer-stamped header field instead.
-func reservedAwareGasTarget(config *params.ChainConfig, parent *types.Header) uint64 {
-	reservedCapacity := config.Bor.ReservedCapacity()
-	if reservedCapacity >= parent.GasLimit {
-		// Misconfiguration guard: reserved capacity is capped well below the
-		// block limit by design. Fall back to the full target rather than
-		// producing a zero or negative public target.
+// The capacity is a header field, not a state read: CalcBaseFee stays a pure
+// (config, parent header) function callable from paths with no parent state
+// (RPC, txpool, historical headers), while the registry-derived value still
+// reaches it via the producer-stamped field, validated exactly against the
+// registry by core.validateReservedFields.
+func reservedAwareGasTarget(config *params.ChainConfig, parent *types.Header, capacity *uint64) uint64 {
+	if capacity == nil || *capacity >= parent.GasLimit {
+		// nil is defensive (validated post-fork headers always carry the
+		// field). capacity >= limit is a reachable registry state: governance
+		// (setLimits, quota updates) has no tie to the block gas limit, which
+		// is itself operator-tunable per block, so price against the full
+		// target rather than a zero or negative one.
 		return calcParentGasTarget(config, parent)
 	}
-	return gasTargetForLimit(config, parent, parent.GasLimit-reservedCapacity)
+	return gasTargetForLimit(config, parent, parent.GasLimit-*capacity)
 }
 
 // publicGasUsed nets the parent's reserved gas out of its total gas used, so
-// the base-fee controller tracks only normal-region demand.
-func publicGasUsed(config *params.ChainConfig, parent *types.Header) uint64 {
-	reservedGasUsed := parent.GetReservedGasUsed(config)
+// the base-fee controller tracks only normal-region demand. reservedGasUsed
+// is the caller's single decode of parent's reserved fields (see
+// reservedAwareGasTarget).
+func publicGasUsed(parent *types.Header, reservedGasUsed *uint64) uint64 {
 	if reservedGasUsed == nil || *reservedGasUsed > parent.GasUsed {
 		return parent.GasUsed
 	}

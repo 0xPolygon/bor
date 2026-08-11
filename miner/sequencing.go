@@ -16,6 +16,9 @@ var (
 	// reservedGasUsedGauge records each build's reserved-region gas total
 	// (the value written into BlockExtraData.ReservedGasUsed).
 	reservedGasUsedGauge = metrics.NewRegisteredGauge("worker/reserved/gasused", nil)
+	// reservedCapacityGauge records each build's effective reserved capacity
+	// (the value written into BlockExtraData.ReservedCapacity).
+	reservedCapacityGauge = metrics.NewRegisteredGauge("worker/reserved/capacity", nil)
 	// reservedOverflowMeter counts reserved-eligible transactions diverted to
 	// the normal pass because they exceeded their client's per-client quota.
 	reservedOverflowMeter = metrics.NewRegisteredMeter("worker/reserved/overflow", nil)
