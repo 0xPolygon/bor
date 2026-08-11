@@ -205,11 +205,12 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	}
 
 	return &ProcessResult{
-		Receipts:        receipts,
-		Requests:        requests,
-		Logs:            allLogs,
-		GasUsed:         *usedGas,
-		ReservedGasUsed: reservedGasUsed,
+		Receipts:          receipts,
+		Requests:          requests,
+		Logs:              allLogs,
+		GasUsed:           *usedGas,
+		ReservedGasUsed:   reservedGasUsed,
+		ReservedTxIndexes: ReservedTxIndexes(txs, signer, context.ReservedTxs),
 	}, nil
 }
 
@@ -228,30 +229,49 @@ func (p *StateProcessor) applyReservedClassification(blockCtx *vm.BlockContext, 
 	return nil
 }
 
-// sumReservedGasUsed totals the actual gas used by transactions classified
-// reserved (fee-free) in set. It matches receipts to transactions by hash, so
-// it is independent of receipt/transaction ordering and ignores the trailing
-// state-sync receipt (whose sender is never registered). Returns 0 for an empty
-// set (pre-fork, no registry, or nothing reserved).
-func sumReservedGasUsed(txs types.Transactions, receipts types.Receipts, signer types.Signer, set map[registryreader.ReservedKey]struct{}) uint64 {
+// ReservedTxIndexes returns the ascending positions within txs whose
+// (sender, nonce) is in set (txs is the final block order, so a plain index
+// loop already yields ascending positions). This is the single derivation
+// shared by every processor path (serial, both parallel implementations) and
+// the miner - see miner/worker.go's use at task-creation time - so a
+// divergence between independent copies of this matching loop can't recur.
+// Returns nil for an empty set (pre-fork, no registry, or nothing reserved).
+func ReservedTxIndexes(txs types.Transactions, signer types.Signer, set map[registryreader.ReservedKey]struct{}) []uint64 {
 	if len(set) == 0 {
-		return 0
+		return nil
+	}
+	var indexes []uint64
+	for i, tx := range txs {
+		from, err := types.Sender(signer, tx)
+		if err != nil {
+			continue
+		}
+		if _, ok := set[registryreader.ReservedKey{From: from, Nonce: tx.Nonce()}]; ok {
+			indexes = append(indexes, uint64(i))
+		}
+	}
+	return indexes
+}
+
+// sumReservedGasUsed totals the actual gas used by transactions classified
+// reserved (fee-free) in set. Gas is matched to transactions by hash, so it
+// is independent of receipt/transaction ordering and ignores the trailing
+// state-sync receipt (whose sender is never registered). Returns (0, nil)
+// for an empty set (pre-fork, no registry, or nothing reserved).
+func sumReservedGasUsed(txs types.Transactions, receipts types.Receipts, signer types.Signer, set map[registryreader.ReservedKey]struct{}) (uint64, []uint64) {
+	indexes := ReservedTxIndexes(txs, signer, set)
+	if len(indexes) == 0 {
+		return 0, nil
 	}
 	gasByHash := make(map[common.Hash]uint64, len(receipts))
 	for _, r := range receipts {
 		gasByHash[r.TxHash] = r.GasUsed
 	}
 	var total uint64
-	for _, tx := range txs {
-		from, err := types.Sender(signer, tx)
-		if err != nil {
-			continue
-		}
-		if _, ok := set[registryreader.ReservedKey{From: from, Nonce: tx.Nonce()}]; ok {
-			total += gasByHash[tx.Hash()]
-		}
+	for _, idx := range indexes {
+		total += gasByHash[txs[idx].Hash()]
 	}
-	return total
+	return total, indexes
 }
 
 // ApplyTransactionWithEVM attempts to apply a transaction to the given state database

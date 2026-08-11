@@ -64,4 +64,9 @@ type ProcessResult struct {
 	// the header's ReservedGasUsed post-fork, so a producer cannot stamp a value
 	// that disagrees with execution (which would skew the next block's base fee).
 	ReservedGasUsed uint64
+	// ReservedTxIndexes lists the positions within the block's transactions
+	// classified reserved (fee-free), strictly ascending. Persisted alongside
+	// receipts so reads can report the correct effective gas price for
+	// reserved transactions without re-deriving the classification.
+	ReservedTxIndexes []uint64
 }

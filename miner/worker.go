@@ -329,6 +329,11 @@ type task struct {
 	createdAt            time.Time
 	productionElapsed    time.Duration // elapsed from after prepareWork to task submission (excludes sealing wait); used for workerMgaspsTimer and workerBlockExecutionTimer
 	intermediateRootTime time.Duration // time spent in IntermediateRoot inside FinalizeAndAssemble; subtracted when computing workerBlockExecutionTimer
+	// reservedTxIndexes lists positions within block.Transactions() classified
+	// reserved (fee-free), strictly ascending. Persisted alongside receipts by
+	// the result loop so reads report the correct effective gas price for
+	// reserved transactions.
+	reservedTxIndexes []uint64
 }
 
 // stateSyncReserveFor returns the block-size budget to hold back for the state-sync
@@ -1260,7 +1265,7 @@ func (w *worker) resultLoop() {
 
 			// Commit block and state to database.
 			writeStart := time.Now()
-			_, err = w.chain.WriteBlockAndSetHead(block, receipts, logs, task.state, true)
+			_, err = w.chain.WriteBlockAndSetHead(block, receipts, logs, task.state, task.reservedTxIndexes, true)
 			writeElapsed := time.Since(writeStart)
 			writeBlockAndSetHeadTimer.Update(writeElapsed)
 
@@ -2515,7 +2520,7 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 	if !noempty && !w.noempty.Load() && !isRio {
 		emptyWork := work.copy()
 		emptyWork.state.ResetPrefetcher()
-		_ = w.commit(emptyWork, nil, false, start, genParams)
+		_ = w.commit(emptyWork, nil, false, start, genParams, reservedTxsOf(work))
 	}
 	// Mark the start of full-block building. Set after the optional empty pre-seal commit so that
 	// productionElapsed for the full block does not include empty-block overhead.
@@ -2566,7 +2571,7 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 		return
 	}
 	// Submit the generated block for consensus sealing.
-	_ = w.commit(work.copy(), w.fullTaskHook, true, start, genParams)
+	_ = w.commit(work.copy(), w.fullTaskHook, true, start, genParams, reservedTxsOf(work))
 
 	// Swap out the old work with the new one, terminating any leftover
 	// prefetcher processes in the mean time and starting a new one.
@@ -2990,11 +2995,26 @@ func createInterruptTimer(number uint64, actualTimestamp time.Time, interruptBlo
 	return cancel
 }
 
+// reservedTxsOf reads the reserved-region tx set off env's evm block context,
+// nil-safe for an environment that never had one attached (e.g. pre-fork, or
+// a shape that was never wired one up).
+func reservedTxsOf(env *environment) map[registryreader.ReservedKey]struct{} {
+	if env.evm == nil {
+		return nil
+	}
+	return env.evm.Context.ReservedTxs
+}
+
 // commit runs any post-transaction state modifications, assembles the final block
 // and commits new work if consensus engine is running.
 // Note the assumption is held that the mutation is allowed to the passed env, do
 // the deep copy first.
-func (w *worker) commit(env *environment, interval func(), update bool, start time.Time, genParams *generateParams) error {
+//
+// reservedTxs is the build's reserved-region tx set (keyed by sender+nonce),
+// read by the caller off the pre-copy environment's evm.Context: env.copy()
+// (below, and at both call sites before this function even sees env) does not
+// carry the evm field over, so it is not recoverable from env itself here.
+func (w *worker) commit(env *environment, interval func(), update bool, start time.Time, genParams *generateParams, reservedTxs map[registryreader.ReservedKey]struct{}) error {
 	// Track total block building time and report metrics at the end of the commit cycle.
 	defer func() {
 		// Update total commit timer (matches the "elapsed" time in log)
@@ -3081,8 +3101,10 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 			return err
 		}
 
+		reservedTxIndexes := core.ReservedTxIndexes(block.Transactions(), env.signer, reservedTxs)
+
 		select {
-		case w.taskCh <- &task{receipts: env.receipts, state: env.state, block: block, createdAt: time.Now(), productionElapsed: time.Since(firstNonZeroTime(productionStartFrom(genParams), start)), intermediateRootTime: commitTime}:
+		case w.taskCh <- &task{receipts: env.receipts, state: env.state, block: block, createdAt: time.Now(), productionElapsed: time.Since(firstNonZeroTime(productionStartFrom(genParams), start)), intermediateRootTime: commitTime, reservedTxIndexes: reservedTxIndexes}:
 			fees := totalFees(block, env.receipts)
 			feesInEther := new(big.Float).Quo(new(big.Float).SetInt(fees), big.NewFloat(params.Ether))
 			log.Info("Commit new sealing work",

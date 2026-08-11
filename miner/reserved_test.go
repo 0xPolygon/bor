@@ -675,6 +675,44 @@ func TestReservedBuild_HeaderGasUsed(t *testing.T) {
 	require.Equal(t, got.GasUsed(), *reserved, "all txs are reserved, so reserved gas equals block gas used")
 }
 
+// TestReservedBuild_PersistsReservedTxIndexes locks in the miner-sealed write
+// path for the reserved-tx side table: commit() reads the reserved set off
+// the pre-copy environment (environment.copy() does not carry the evm field
+// over), never off the copy it and both of its callers pass around, or every
+// miner-sealed block would silently lose its reserved classification for the
+// on-disk side table regardless of what state_transition executed.
+func TestReservedBuild_PersistsReservedTxIndexes(t *testing.T) {
+	chainConfig := borUnittestReservedConfig()
+	engine, ctrl := getFakeBorFromConfig(t, &chainConfig)
+	defer engine.Close()
+	defer ctrl.Finish()
+
+	db := rawdb.NewMemoryDatabase()
+	w, b, _ := newTestWorker(t, DefaultTestConfig(), &chainConfig, engine, db, true, 0)
+	defer w.close()
+
+	w.setReservedSnapshot(newTestSnapshot(0, []testClient{
+		{ID: 1, Senders: []common.Address{testBankAddress}, QuotaGas: 10_000_000},
+	}))
+
+	sub := w.mux.Subscribe(core.NewMinedBlockEvent{})
+	defer sub.Unsubscribe()
+
+	errs := b.txPool.Add([]*types.Transaction{
+		b.newRandomTxWithNonce(false, 0),
+		b.newRandomTxWithNonce(false, 1),
+	}, false)
+	for _, err := range errs {
+		require.NoError(t, err)
+	}
+	w.start()
+
+	got := waitForBlockWithTxs(t, sub, 2, 15*time.Second)
+
+	indexes := rawdb.ReadReservedTxIndexes(db, got.Hash(), got.NumberU64())
+	require.Equal(t, []uint64{0, 1}, indexes, "both txs are from the sole reserved sender and must be recorded")
+}
+
 // TestReservedBuild_HeaderAbsentPreFork pins wire compatibility: before the
 // ReservedBlockspace fork, post-Cancun blocks must not carry the
 // ReservedGasUsed field at all — their Extra encoding stays byte-identical to

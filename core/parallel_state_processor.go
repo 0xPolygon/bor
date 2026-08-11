@@ -567,12 +567,15 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 		}
 	}
 
+	reservedGasUsed, reservedTxIndexes := sumReservedGasUsed(block.Transactions(), receipts, signer, blockContext.ReservedTxs)
+
 	return &ProcessResult{
-		Receipts:        receipts,
-		Requests:        requests,
-		Logs:            allLogs,
-		GasUsed:         *usedGas,
-		ReservedGasUsed: sumReservedGasUsed(block.Transactions(), receipts, signer, blockContext.ReservedTxs),
+		Receipts:          receipts,
+		Requests:          requests,
+		Logs:              allLogs,
+		GasUsed:           *usedGas,
+		ReservedGasUsed:   reservedGasUsed,
+		ReservedTxIndexes: reservedTxIndexes,
 	}, nil
 }
 
@@ -1258,12 +1261,15 @@ func (p *V2StateProcessor) finalizeV2Block(block *types.Block, statedb *state.St
 		}
 	}
 
+	reservedGasUsed, reservedTxIndexes := sumReservedGasUsed(block.Transactions(), receipts, types.MakeSigner(config, header.Number, header.Time), reservedTxs)
+
 	return &ProcessResult{
-		Receipts:        receipts,
-		Requests:        requests,
-		Logs:            allLogs,
-		GasUsed:         result.GasUsed,
-		ReservedGasUsed: sumReservedGasUsed(block.Transactions(), receipts, types.MakeSigner(config, header.Number, header.Time), reservedTxs),
+		Receipts:          receipts,
+		Requests:          requests,
+		Logs:              allLogs,
+		GasUsed:           result.GasUsed,
+		ReservedGasUsed:   reservedGasUsed,
+		ReservedTxIndexes: reservedTxIndexes,
 	}, nil
 }
 
