@@ -588,7 +588,6 @@ func handleBlockBodies(backend Backend, msg Decoder, peer *Peer) error {
 	if err := msg.Decode(res); err != nil {
 		return err
 	}
-	peer.Log().Debug("Received block body response", "request_id", res.RequestId, "returned", len(res.BlockBodiesResponse))
 
 	metadata := func() interface{} {
 		var (
@@ -735,7 +734,6 @@ func handleGetPooledTransactions(backend Backend, msg Decoder, peer *Peer) error
 		return err
 	}
 	hashes, txs := answerGetPooledTransactions(backend, query.GetPooledTransactionsRequest)
-	peer.Log().Debug("Serving pooled transaction request", "request_id", query.RequestId, "requested", len(query.GetPooledTransactionsRequest), "returned", len(txs))
 	return peer.replyPooledTransactionsRLP(query.RequestId, hashes, txs, reservation)
 }
 
@@ -829,7 +827,6 @@ func handlePooledTransactions(backend Backend, msg Decoder, peer *Peer) error {
 		peer.markTransaction(hash)
 	}
 
-	peer.Log().Debug("Received pooled transaction response", "request_id", txs.RequestId, "returned", len(txs.PooledTransactionsResponse))
 	requestTracker.Fulfil(peer.id, peer.version, PooledTransactionsMsg, txs.RequestId)
 
 	if err := backend.Handle(peer, &txs); err != nil {

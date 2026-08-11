@@ -176,7 +176,6 @@ func (p *Peer) observeRateLimit(msg p2p.Msg) {
 func observedBodyReply(backend Backend, peer *Peer, query GetBlockBodiesPacket) error {
 	if peer.observer == nil {
 		response := ServiceGetBlockBodiesQuery(backend.Chain(), query.GetBlockBodiesRequest)
-		peer.Log().Debug("Serving block body request", "request_id", query.RequestId, "requested", len(query.GetBlockBodiesRequest), "returned", len(response))
 		return peer.ReplyBlockBodiesRLP(query.RequestId, response)
 	}
 	event := peerpolicy.Evidence{Family: peerpolicy.BodyReplies}
@@ -186,7 +185,6 @@ func observedBodyReply(backend Backend, peer *Peer, query GetBlockBodiesPacket) 
 		event.Hashes = append(event.Hashes, hash)
 		event.ObjectBytes = append(event.ObjectBytes, uint64(size))
 	})
-	peer.Log().Debug("Serving block body request", "request_id", query.RequestId, "requested", len(query.GetBlockBodiesRequest), "returned", len(response))
 	return peer.writeObservedBodies(query.RequestId, response, event)
 }
 
