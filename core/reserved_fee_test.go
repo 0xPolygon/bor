@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"math/big"
 	"testing"
 
@@ -307,5 +308,106 @@ func TestReservedTxSerialParallelParity(t *testing.T) {
 		if got := db.GetBalance(recipient); got.Uint64() != 7 {
 			t.Errorf("recipient=%s, want 7", got)
 		}
+	}
+}
+
+// TestReservedFallbackFeeWithinQuotaExecutesFeeFree pins POS-3671's execution
+// half end to end. Only nonce 0 is classified reserved below (modelling a
+// quota that's exhausted by it, as ClassifyReserved would decide for a real
+// block); nonce 1 is deliberately absent from ReservedTxs to model the
+// overflow case. The sender's balance covers the tx value many times over
+// but is nowhere near gas*feeCap, so:
+//   - the within-quota tx (nonce 0) executes fee-free (buyGas waives the gas
+//     debit entirely, same as TestReservedTxSkipsFees);
+//   - the overflow tx (nonce 1), priced on the normal fee path since it isn't
+//     in ReservedTxs, fails buyGas with ErrInsufficientFunds before touching
+//     any balance — the same clean, pre-execution error any other underfunded
+//     sender gets, which is exactly what lets a block builder exclude it
+//     without invalidating the block being assembled (mirrors the pool's
+//     admission-time waiver in core/txpool/legacypool being quota-unaware:
+//     execution is the arbiter for overflow).
+func TestReservedFallbackFeeWithinQuotaExecutesFeeFree(t *testing.T) {
+	key, _ := crypto.GenerateKey()
+	sender := crypto.PubkeyToAddress(key.PublicKey)
+	coinbase := common.HexToAddress("0x000000000000000000000000000000000000c0b0")
+	recipient := common.HexToAddress("0x1111111111111111111111111111111111111111")
+
+	cc := reservedTestConfig(big.NewInt(0), sender)
+	baseFee := big.NewInt(1_000_000_000)
+
+	clients := map[common.Address]registryreader.Client{sender: {ID: 1, GasQuota: 100_000}}
+	snap := registryreader.NewSnapshot(common.HexToHash("0x1"), 100_000, clients)
+	blockCtx := vm.BlockContext{
+		CanTransfer:      CanTransfer,
+		Transfer:         Transfer,
+		GetHash:          func(n uint64) common.Hash { return common.Hash{} },
+		Coinbase:         coinbase,
+		GasLimit:         30_000_000,
+		BlockNumber:      big.NewInt(1),
+		Time:             1,
+		BaseFee:          baseFee,
+		ReservedSnapshot: snap,
+		ReservedTxs:      map[registryreader.ReservedKey]struct{}{{From: sender, Nonce: 0}: {}},
+	}
+
+	// gas*feeCap = 21000 * 30 gwei = 6.3e14, far above the funded balance;
+	// only the value (1000 wei) is affordable.
+	feeCap := big.NewInt(30_000_000_000)
+	value := big.NewInt(1_000)
+	balance := uint256.NewInt(1_000_000)
+	sdb := fundedState(t, sender, balance)
+	signer := types.NewLondonSigner(cc.ChainID)
+
+	buildTx := func(nonce uint64) *Message {
+		tx, err := types.SignTx(types.NewTx(&types.DynamicFeeTx{
+			ChainID:   cc.ChainID,
+			Nonce:     nonce,
+			GasTipCap: feeCap,
+			GasFeeCap: feeCap,
+			Gas:       21000,
+			To:        &recipient,
+			Value:     value,
+		}), signer, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		msg, err := TransactionToMessage(tx, signer, baseFee)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return msg
+	}
+
+	// nonce 0: within quota, executes fee-free despite the gas-starved balance.
+	msg0 := buildTx(0)
+	evm := vm.NewEVM(blockCtx, sdb, cc, vm.Config{})
+	evm.SetTxContext(NewEVMTxContext(msg0))
+	result, err := ApplyMessage(evm, msg0, new(GasPool).AddGas(blockCtx.GasLimit))
+	if err != nil {
+		t.Fatalf("within-quota fallback-fee tx failed: %v", err)
+	}
+	if result.Failed() {
+		t.Fatalf("within-quota fallback-fee tx reverted: %v", result.Err)
+	}
+	wantBalance := new(uint256.Int).Sub(balance, uint256.MustFromBig(value))
+	if got := sdb.GetBalance(sender); got.Cmp(wantBalance) != 0 {
+		t.Fatalf("sender balance=%s, want %s (value only, no gas)", got, wantBalance)
+	}
+
+	// nonce 1: overflow (absent from ReservedTxs), priced on the normal fee
+	// path where the balance can't cover gas*feeCap. buyGas must reject it
+	// cleanly rather than partially applying it.
+	balanceBeforeOverflow := sdb.GetBalance(sender)
+	msg1 := buildTx(1)
+	evm2 := vm.NewEVM(blockCtx, sdb, cc, vm.Config{})
+	evm2.SetTxContext(NewEVMTxContext(msg1))
+	if _, err := ApplyMessage(evm2, msg1, new(GasPool).AddGas(blockCtx.GasLimit)); !errors.Is(err, ErrInsufficientFunds) {
+		t.Fatalf("overflow tx error = %v, want %v", err, ErrInsufficientFunds)
+	}
+	if got := sdb.GetBalance(sender); got.Cmp(balanceBeforeOverflow) != 0 {
+		t.Fatalf("sender balance changed by a failed, excluded tx: got %s, want unchanged %s", got, balanceBeforeOverflow)
+	}
+	if got := sdb.GetBalance(recipient); got.Cmp(uint256.MustFromBig(value)) != 0 {
+		t.Fatalf("recipient balance=%s, want %s (only the within-quota tx's value landed)", got, value)
 	}
 }

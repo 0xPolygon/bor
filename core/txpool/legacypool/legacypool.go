@@ -818,16 +818,24 @@ func (pool *LegacyPool) validateTx(tx *types.Transaction) error {
 
 		FirstNonceGap:    nil, // Pool allows arbitrary arrival order, don't invalidate nonce gaps
 		UsedAndLeftSlots: nil, // Pool has own mechanism to limit the number of transactions
+		EffectiveCost:    pool.effectiveCost,
 		ExistingExpenditure: func(addr common.Address) *big.Int {
-			if list := pool.pending[addr]; list != nil {
-				return list.totalcost.ToBig()
+			list := pool.pending[addr]
+			if list == nil {
+				return new(big.Int)
 			}
-			return new(big.Int)
+			// Basis-consistent with EffectiveCost: a reserved sender's queued
+			// expenditure is tracked and read on the value basis, same as its
+			// incoming tx is priced above.
+			if pool.isReserved(addr) {
+				return list.totalvalue.ToBig()
+			}
+			return list.totalcost.ToBig()
 		},
 		ExistingCost: func(addr common.Address, nonce uint64) *big.Int {
 			if list := pool.pending[addr]; list != nil {
 				if tx := list.txs.Get(nonce); tx != nil {
-					return tx.Cost()
+					return pool.effectiveCost(addr, tx)
 				}
 			}
 			return nil
@@ -1338,7 +1346,7 @@ func (pool *LegacyPool) Add(txs []*types.Transaction, sync bool) []error {
 	// locking here as we'll use the global lock optimally.
 	newErrs, dirtyAddrs := pool.addTxs(news, true)
 
-	var nilSlot = 0
+	nilSlot := 0
 	for _, err := range newErrs {
 		for errs[nilSlot] != nil {
 			nilSlot++
@@ -1822,7 +1830,7 @@ func (pool *LegacyPool) reset(oldHead, newHead *types.Header) {
 // invalidated transactions (low nonce, low balance) are deleted.
 func (pool *LegacyPool) promoteExecutables(accounts []common.Address) []*types.Transaction {
 	gasLimit := pool.currentHead.Load().GasLimit
-	promotable, dropped, removedAddresses := pool.queue.promoteExecutables(accounts, gasLimit, pool.currentState, pool.pendingNonces)
+	promotable, dropped, removedAddresses := pool.queue.promoteExecutables(accounts, gasLimit, pool.currentState, pool.pendingNonces, pool.isReserved)
 
 	// promote all promotable transactions
 	promoted := make([]*types.Transaction, 0, len(promotable))
@@ -1978,7 +1986,7 @@ func (pool *LegacyPool) demoteUnexecutables() {
 			log.Trace("Removed old pending transaction", "hash", hash)
 		}
 		// Drop all transactions that are too costly (low balance or out of gas), and queue any invalids back for later
-		drops, invalids := list.Filter(pool.currentState.GetBalance(addr), gasLimit)
+		drops, invalids := list.Filter(pool.currentState.GetBalance(addr), gasLimit, pool.isReserved(addr))
 		for _, tx := range drops {
 			hash := tx.Hash()
 			pool.all.Remove(hash)
@@ -2319,6 +2327,21 @@ func (pool *LegacyPool) isReserved(addr common.Address) bool {
 		return false
 	}
 	return pool.reservedSnapshot.Load().IsReserved(addr)
+}
+
+// effectiveCost prices tx for the pool's balance checks: value alone for a
+// reserved-blockspace sender (execution waives the gas debit up to quota, see
+// reservedZeroFeeGas in core/state_transition.go), full cost otherwise. The
+// pool is quota-unaware, so this is a superset of what will actually execute
+// fee-free; an overflowing tx that doesn't fit is caught at execution instead
+// (see the design note on isReserved). addr is the caller's already-recovered
+// sender; unlike reservedTx (the priced heap's bare-tx predicate), this is
+// never called without one, so it has no signer-recovery fallback.
+func (pool *LegacyPool) effectiveCost(addr common.Address, tx *types.Transaction) *big.Int {
+	if pool.isReserved(addr) {
+		return tx.Value()
+	}
+	return tx.Cost()
 }
 
 // reservedTx is the tx-level reserved predicate handed to the priced list so it
