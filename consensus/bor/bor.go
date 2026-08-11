@@ -1046,23 +1046,26 @@ func (c *Bor) setGiuglianoExtraFields(header *types.Header, parent *types.Header
 	}
 }
 
-// setReservedBlockspaceExtraFields initializes the reserved-region header field
-// for post-ReservedBlockspace blocks: a placeholder zero so the field is
-// present (non-nil) and the header passes the verifyReservedFields presence
-// check even when there are no reserved transactions. The miner overwrites it
-// with the block's real reserved gas total at the end of block building
-// (worker.writeReservedGasUsed).
+// setReservedBlockspaceExtraFields initializes the reserved-region header
+// fields for post-ReservedBlockspace blocks: placeholder zeros so both fields
+// are present (non-nil) and the header passes the verifyReservedFields
+// presence check even when there are no reserved transactions or the registry
+// carves out no capacity yet. The miner overwrites both with the block's real
+// values at the end of block building (worker.writeReservedFields).
 func (c *Bor) setReservedBlockspaceExtraFields(header *types.Header, blockExtraData *types.BlockExtraData) {
 	if c.config.IsReservedBlockspace(header.Number) {
-		var zeroGas uint64
+		var zeroGas, zeroCapacity uint64
 		blockExtraData.ReservedGasUsed = &zeroGas
+		blockExtraData.ReservedCapacity = &zeroCapacity
 	}
 }
 
 // verifyReservedFields checks that post-ReservedBlockspace headers carry the
-// reserved-region gas field, plus a header-only bound on its value. Value
-// correctness (the sum over the block's reserved transactions, per-client
-// quota) is a body-level check that lands with the block-validation slice.
+// reserved-region fields, plus a header-only bound on ReservedGasUsed. Value
+// correctness for both fields (the sum over the block's reserved transactions
+// for gas used, the registry snapshot's effective capacity for capacity) is a
+// body-level check that lands with the block-validation slice
+// (validateReservedFields).
 func (c *Bor) verifyReservedFields(header *types.Header) error {
 	if !c.config.IsReservedBlockspace(header.Number) {
 		return nil
@@ -1071,12 +1074,23 @@ func (c *Bor) verifyReservedFields(header *types.Header) error {
 	if reservedGasUsed == nil {
 		return errMissingReservedBlockspaceFields
 	}
+	if header.GetReservedCapacity(c.chainConfig) == nil {
+		return errMissingReservedBlockspaceFields
+	}
 	// The reserved region is a subset of the block, so its gas cannot exceed the
 	// block's gas used. Reject the impossible value rather than letting CalcBaseFee
 	// silently clamp it (the base fee consumes parent.ReservedGasUsed).
 	if *reservedGasUsed > header.GasUsed {
 		return errReservedGasUsedExceedsBlock
 	}
+	// No bound here ties ReservedCapacity to GasLimit: governance (setLimits,
+	// quota updates) has no tie to the block gas limit, which is itself
+	// operator-tunable per block, so a registry state whose effective
+	// capacity meets or exceeds GasLimit is a reachable, valid state.
+	// Rejecting it at the header would leave no valid next block and halt the
+	// chain; the exact value is enforced against the registry by
+	// validateReservedFields instead, and CalcBaseFee's reserved-aware target
+	// falls back deterministically when capacity >= GasLimit.
 	return nil
 }
 

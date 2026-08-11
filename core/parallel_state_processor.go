@@ -568,11 +568,12 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 	}
 
 	return &ProcessResult{
-		Receipts:        receipts,
-		Requests:        requests,
-		Logs:            allLogs,
-		GasUsed:         *usedGas,
-		ReservedGasUsed: sumReservedGasUsed(block.Transactions(), receipts, signer, blockContext.ReservedTxs),
+		Receipts:         receipts,
+		Requests:         requests,
+		Logs:             allLogs,
+		GasUsed:          *usedGas,
+		ReservedGasUsed:  sumReservedGasUsed(block.Transactions(), receipts, signer, blockContext.ReservedTxs),
+		ReservedCapacity: blockContext.ReservedSnapshot.EffectiveCapacity(),
 	}, nil
 }
 
@@ -1200,7 +1201,7 @@ func (p *V2StateProcessor) Process(block *types.Block, statedb *state.StateDB, c
 	statedb.CollectStateWitness()
 
 	return p.finalizeV2Block(block, statedb, header, config, tasks, result,
-		blockCtx.ReservedTxs, tProcess, tSetup, tCopy, tExec)
+		blockCtx.ReservedTxs, blockCtx.ReservedSnapshot.EffectiveCapacity(), tProcess, tSetup, tCopy, tExec)
 }
 
 // finalizeV2Block runs consensus-engine finalization, merges state-sync logs,
@@ -1209,7 +1210,7 @@ func (p *V2StateProcessor) Process(block *types.Block, statedb *state.StateDB, c
 func (p *V2StateProcessor) finalizeV2Block(block *types.Block, statedb *state.StateDB,
 	header *types.Header, config *params.ChainConfig,
 	tasks []V2Task, result *V2ExecutionResult,
-	reservedTxs map[registryreader.ReservedKey]struct{},
+	reservedTxs map[registryreader.ReservedKey]struct{}, reservedCapacity uint64,
 	tProcess, tSetup, tCopy, tExec time.Time,
 ) (*ProcessResult, error) {
 	receiptsCountBeforeFinalize := len(result.Receipts)
@@ -1259,11 +1260,12 @@ func (p *V2StateProcessor) finalizeV2Block(block *types.Block, statedb *state.St
 	}
 
 	return &ProcessResult{
-		Receipts:        receipts,
-		Requests:        requests,
-		Logs:            allLogs,
-		GasUsed:         result.GasUsed,
-		ReservedGasUsed: sumReservedGasUsed(block.Transactions(), receipts, types.MakeSigner(config, header.Number, header.Time), reservedTxs),
+		Receipts:         receipts,
+		Requests:         requests,
+		Logs:             allLogs,
+		GasUsed:          result.GasUsed,
+		ReservedGasUsed:  sumReservedGasUsed(block.Transactions(), receipts, types.MakeSigner(config, header.Number, header.Time), reservedTxs),
+		ReservedCapacity: reservedCapacity,
 	}, nil
 }
 

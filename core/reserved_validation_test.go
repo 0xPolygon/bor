@@ -25,9 +25,11 @@ func reservedValidationConfig(forkBlock *big.Int) *params.ChainConfig {
 	return &cc
 }
 
-// headerWithReservedGasUsed builds a post-Cancun header whose Extra encodes a
-// BlockExtraData carrying the given ReservedGasUsed (nil = field absent).
-func headerWithReservedGasUsed(t *testing.T, number int64, reserved *uint64) *types.Header {
+// headerWithReservedFields builds a post-Cancun header whose Extra encodes a
+// BlockExtraData carrying the given ReservedGasUsed/ReservedCapacity (nil =
+// field absent; SetReservedFields only writes when gasUsed is non-nil, since
+// the two fields are always stamped together).
+func headerWithReservedFields(t *testing.T, number int64, gasUsed, capacity *uint64) *types.Header {
 	t.Helper()
 	enc, err := rlp.EncodeToBytes(&types.BlockExtraData{TxDependency: [][]uint64{}})
 	require.NoError(t, err)
@@ -35,47 +37,64 @@ func headerWithReservedGasUsed(t *testing.T, number int64, reserved *uint64) *ty
 	extra = append(extra, enc...)
 	extra = append(extra, make([]byte, types.ExtraSealLength)...)
 	h := &types.Header{Number: big.NewInt(number), Extra: extra}
-	if reserved != nil {
-		require.NoError(t, h.SetReservedGasUsed(*reserved))
+	if gasUsed != nil {
+		var c uint64
+		if capacity != nil {
+			c = *capacity
+		}
+		require.NoError(t, h.SetReservedFields(*gasUsed, c))
 	}
 	return h
 }
 
-// TestValidateReservedGasUsed covers the anti-cheat guard: the header's
-// stamped ReservedGasUsed must equal the gas the reserved (fee-free) txs
-// actually used (res.ReservedGasUsed), post-fork; pre-fork the check is skipped.
-func TestValidateReservedGasUsed(t *testing.T) {
+// TestValidateReservedFields covers the anti-cheat guard: the header's
+// stamped ReservedGasUsed and ReservedCapacity must equal, respectively, the
+// gas the reserved (fee-free) txs actually used and the registry snapshot's
+// effective capacity (res.ReservedGasUsed / res.ReservedCapacity), post-fork;
+// pre-fork the check is skipped.
+func TestValidateReservedFields(t *testing.T) {
 	t.Parallel()
 	fork := reservedValidationConfig(big.NewInt(0))
 	n := uint64(50_000)
+	cap10m := uint64(10_000_000)
+	cap20m := uint64(20_000_000)
 
 	cases := []struct {
-		name           string
-		cfg            *params.ChainConfig
-		number         int64
-		headerReserved *uint64 // nil = field absent
-		resReserved    uint64
-		wantMismatch   bool
+		name            string
+		cfg             *params.ChainConfig
+		number          int64
+		headerGasUsed   *uint64 // nil = field absent
+		headerCapacity  *uint64
+		resReservedGas  uint64
+		resReservedCap  uint64
+		wantGasMismatch bool
+		wantCapMismatch bool
 	}{
-		{"match", fork, 100, &n, 50_000, false},
-		{"mismatch is rejected", fork, 100, &n, 40_000, true},
-		{"absent header field compares as 0 — matches res 0", fork, 100, nil, 0, false},
-		{"absent header field, res nonzero — mismatch", fork, 100, nil, 30_000, true},
+		{"match", fork, 100, &n, &cap10m, 50_000, 10_000_000, false, false},
+		{"gas mismatch is rejected", fork, 100, &n, &cap10m, 40_000, 10_000_000, true, false},
+		{"capacity mismatch is rejected", fork, 100, &n, &cap10m, 50_000, 20_000_000, false, true},
+		{"both mismatch: gas checked first", fork, 100, &n, &cap10m, 40_000, 20_000_000, true, false},
+		{"absent header fields compare as 0 — matches res 0", fork, 100, nil, nil, 0, 0, false, false},
+		{"absent header fields, res nonzero gas — mismatch", fork, 100, nil, nil, 30_000, 0, true, false},
+		{"absent header fields, res nonzero capacity — mismatch", fork, 100, nil, nil, 0, 5_000, false, true},
 		// Boundary: fork at block 100.
-		{"pre-fork (N-1) skips the check regardless", reservedValidationConfig(big.NewInt(100)), 99, nil, 99_999, false},
-		{"at fork (N) enforces", reservedValidationConfig(big.NewInt(100)), 100, &n, 40_000, true},
-		{"post-fork (N+1) enforces", reservedValidationConfig(big.NewInt(100)), 101, &n, 40_000, true},
+		{"pre-fork (N-1) skips the check regardless", reservedValidationConfig(big.NewInt(100)), 99, nil, nil, 99_999, 99_999, false, false},
+		{"at fork (N) enforces", reservedValidationConfig(big.NewInt(100)), 100, &n, &cap10m, 40_000, 10_000_000, true, false},
+		{"post-fork (N+1) enforces", reservedValidationConfig(big.NewInt(100)), 101, &n, &cap20m, 50_000, 10_000_000, false, true},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			v := &BlockValidator{config: tc.cfg}
-			h := headerWithReservedGasUsed(t, tc.number, tc.headerReserved)
-			err := v.validateReservedGasUsed(h, &ProcessResult{ReservedGasUsed: tc.resReserved})
-			if tc.wantMismatch {
+			h := headerWithReservedFields(t, tc.number, tc.headerGasUsed, tc.headerCapacity)
+			err := v.validateReservedFields(h, &ProcessResult{ReservedGasUsed: tc.resReservedGas, ReservedCapacity: tc.resReservedCap})
+			switch {
+			case tc.wantGasMismatch:
 				require.ErrorIs(t, err, ErrReservedGasUsedMismatch)
-			} else {
+			case tc.wantCapMismatch:
+				require.ErrorIs(t, err, ErrReservedCapacityMismatch)
+			default:
 				require.NoError(t, err)
 			}
 		})

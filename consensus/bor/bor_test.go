@@ -63,12 +63,15 @@ func (s *fakeSpanner) GetCurrentSpan(ctx context.Context, headerHash common.Hash
 	spanID := s.spanID
 	return &borTypes.Span{Id: spanID, StartBlock: 0, EndBlock: endBlock}, nil
 }
+
 func (s *fakeSpanner) GetCurrentValidatorsByHash(ctx context.Context, headerHash common.Hash, blockNumber uint64) ([]*valset.Validator, error) {
 	return s.vals, nil
 }
+
 func (s *fakeSpanner) GetCurrentValidatorsByBlockNrOrHash(ctx context.Context, _ rpc.BlockNumberOrHash, _ uint64) ([]*valset.Validator, error) {
 	return s.vals, nil
 }
+
 func (s *fakeSpanner) CommitSpan(ctx context.Context, _ borTypes.Span, _ []stakeTypes.MinimalVal, _ []stakeTypes.MinimalVal, _ vm.StateDB, _ *types.Header, _ core.ChainContext, _ vm.Config) error {
 	if s.shouldFailCommit {
 		return errors.New("span commit failed")
@@ -94,30 +97,39 @@ func (f *failingHeimdallClient) Close() {}
 func (f *failingHeimdallClient) FetchStateSyncEvents(ctx context.Context, fromID uint64, to int64, limit int) ([]*types.StateSyncData, error) {
 	return nil, errors.New("state sync failed")
 }
+
 func (f *failingHeimdallClient) FetchStateSyncEvent(ctx context.Context, id uint64) (*types.StateSyncData, error) {
 	return nil, errors.New("state sync failed")
 }
+
 func (f *failingHeimdallClient) StateSyncEvents(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
 	return nil, errors.New("state sync failed")
 }
+
 func (f *failingHeimdallClient) GetSpan(ctx context.Context, spanID uint64) (*borTypes.Span, error) {
 	return nil, errors.New("get span failed")
 }
+
 func (f *failingHeimdallClient) GetLatestSpan(ctx context.Context) (*borTypes.Span, error) {
 	return nil, errors.New("get latest span failed")
 }
+
 func (f *failingHeimdallClient) FetchCheckpoint(ctx context.Context, number int64) (*checkpoint.Checkpoint, error) {
 	return nil, errors.New("fetch checkpoint failed")
 }
+
 func (f *failingHeimdallClient) FetchCheckpointCount(ctx context.Context) (int64, error) {
 	return 0, errors.New("fetch checkpoint count failed")
 }
+
 func (f *failingHeimdallClient) FetchMilestone(ctx context.Context) (*milestone.Milestone, error) {
 	return nil, errors.New("fetch milestone failed")
 }
+
 func (f *failingHeimdallClient) FetchMilestoneCount(ctx context.Context) (int64, error) {
 	return 0, errors.New("fetch milestone count failed")
 }
+
 func (f *failingHeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
 	return nil, errors.New("fetch status failed")
 }
@@ -1484,6 +1496,7 @@ func TestBor_PurgeCache(t *testing.T) {
 	borObj.recents.Set(hash1, snapshot1, ttlcache.DefaultTTL)
 	require.Equal(t, 1, borObj.recents.Len(), "should be able to add to recents cache after purge")
 }
+
 func TestValidatorContains_Found(t *testing.T) {
 	t.Parallel()
 	vals := []*valset.Validator{
@@ -1644,6 +1657,7 @@ func TestBorRLP(t *testing.T) {
 	result := BorRLP(h, borCfg)
 	require.NotEmpty(t, result)
 }
+
 func TestValidateHeaderExtraField(t *testing.T) {
 	t.Parallel()
 
@@ -1972,6 +1986,7 @@ func TestVerifyUncles_WithUncles(t *testing.T) {
 	err := b.VerifyUncles(nil, block)
 	require.Equal(t, errUncleDetected, err)
 }
+
 func TestAuthorize(t *testing.T) {
 	t.Parallel()
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
@@ -2061,6 +2076,7 @@ func TestSeal_ZeroPeriodEmptyBlock(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 }
+
 func TestAPIs_ReturnsBorNamespace(t *testing.T) {
 	t.Parallel()
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
@@ -2146,6 +2162,7 @@ func TestGetCurrentValidators_DelegatesToSpanner(t *testing.T) {
 	require.Len(t, vals, 1)
 	require.Equal(t, addr1, vals[0].Address)
 }
+
 func TestNeedToCommitSpan(t *testing.T) {
 	t.Parallel()
 
@@ -2178,6 +2195,7 @@ func TestNeedToCommitSpan(t *testing.T) {
 		require.False(t, b.needToCommitSpan(span, 1000))
 	})
 }
+
 func TestVerifySeal_GenesisBlock(t *testing.T) {
 	t.Parallel()
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
@@ -2188,6 +2206,7 @@ func TestVerifySeal_GenesisBlock(t *testing.T) {
 	err := b.VerifySeal(chain.HeaderChain(), h)
 	require.Equal(t, errUnknownBlock, err)
 }
+
 func TestCalcDifficulty(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
@@ -2202,6 +2221,7 @@ func TestCalcDifficulty(t *testing.T) {
 	require.NotNil(t, diff)
 	require.True(t, diff.Uint64() > 0)
 }
+
 func TestInsertStateSyncTransactionAndCalculateReceipt(t *testing.T) {
 	t.Parallel()
 
@@ -2257,6 +2277,7 @@ func (m *mockStateDB) Logs() []*types.Log {
 func (m *mockStateDB) Inner() *state.StateDB {
 	return nil
 }
+
 func TestIsBlockEarly(t *testing.T) {
 	t.Parallel()
 	borCfg := borConfigWithDelays(64)
@@ -2278,6 +2299,7 @@ func TestIsBlockEarly(t *testing.T) {
 		require.False(t, IsBlockEarly(parent, h, 1, 0, borCfg))
 	})
 }
+
 func TestIsSprintStart(t *testing.T) {
 	t.Parallel()
 	require.True(t, IsSprintStart(0, 64))
@@ -2286,6 +2308,7 @@ func TestIsSprintStart(t *testing.T) {
 	require.False(t, IsSprintStart(1, 64))
 	require.False(t, IsSprintStart(63, 64))
 }
+
 func TestDifficulty(t *testing.T) {
 	t.Parallel()
 
@@ -2306,6 +2329,7 @@ func TestDifficulty(t *testing.T) {
 		require.Equal(t, uint64(len(vals)), diff)
 	})
 }
+
 func TestEcrecover(t *testing.T) {
 	t.Parallel()
 	privKey, err := crypto.GenerateKey()
@@ -2349,6 +2373,7 @@ func TestEcrecover_MissingSignature(t *testing.T) {
 	_, err := ecrecover(h, sigcache, borCfg)
 	require.Equal(t, errMissingSignature, err)
 }
+
 func TestFinalize_WithdrawalsRejection(t *testing.T) {
 	t.Parallel()
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
@@ -2383,6 +2408,7 @@ func TestFinalize_RequestsHashRejection(t *testing.T) {
 	require.Nil(t, result)
 	require.ErrorIs(t, err, consensus.ErrUnexpectedRequests)
 }
+
 func TestNew(t *testing.T) {
 	t.Parallel()
 	borCfg := &params.BorConfig{
@@ -2951,6 +2977,7 @@ func TestSeal_UnauthorizedSigner(t *testing.T) {
 	var authErr *UnauthorizedSignerError
 	require.ErrorAs(t, err, &authErr)
 }
+
 func TestFinalize_NonSprintBlock(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
@@ -2991,6 +3018,7 @@ func TestFinalize_SprintBlockWithoutHeimdall(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, result) // nil receipts expected
 }
+
 func TestFetchAndCommitSpan_WithHeimdallClient(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
@@ -3215,30 +3243,37 @@ func (m *mockHeimdallClient) StateSyncEvents(ctx context.Context, fromID uint64,
 	}
 	return m.events, nil
 }
+
 func (m *mockHeimdallClient) GetSpan(ctx context.Context, spanID uint64) (*borTypes.Span, error) {
 	if m.span == nil {
 		return nil, errors.New("span not found")
 	}
 	return m.span, nil
 }
+
 func (m *mockHeimdallClient) GetLatestSpan(ctx context.Context) (*borTypes.Span, error) {
 	if m.span == nil {
 		return nil, errors.New("no span")
 	}
 	return m.span, nil
 }
+
 func (m *mockHeimdallClient) FetchCheckpoint(ctx context.Context, number int64) (*checkpoint.Checkpoint, error) {
 	return nil, nil
 }
+
 func (m *mockHeimdallClient) FetchCheckpointCount(ctx context.Context) (int64, error) {
 	return 0, nil
 }
+
 func (m *mockHeimdallClient) FetchMilestone(ctx context.Context) (*milestone.Milestone, error) {
 	return nil, nil
 }
+
 func (m *mockHeimdallClient) FetchMilestoneCount(ctx context.Context) (int64, error) {
 	return 0, nil
 }
+
 func (m *mockHeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
 	return &ctypes.SyncInfo{CatchingUp: false}, nil
 }
@@ -3261,6 +3296,7 @@ func TestEncodeSigHeader_WithBaseFee(t *testing.T) {
 	require.NotEqual(t, common.Hash{}, hash2)
 	require.NotEqual(t, hash, hash2) // different because BaseFee is included in one
 }
+
 func TestClose_WithHeimdallClient(t *testing.T) {
 	t.Parallel()
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
@@ -3273,6 +3309,7 @@ func TestClose_WithHeimdallClient(t *testing.T) {
 
 	require.NoError(t, b.Close())
 }
+
 func TestPrepare_NonSprintBlock(t *testing.T) {
 	t.Parallel()
 	setup := newSignedChainSetup(t)
@@ -3318,6 +3355,7 @@ func TestPrepare_SprintStartBlock(t *testing.T) {
 	// Extra should contain vanity + validator bytes + seal
 	require.True(t, len(h.Extra) > types.ExtraVanityLength+types.ExtraSealLength)
 }
+
 func TestSnapshot_NonDevFakeAuthor_GenesisCheckpoint(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
@@ -3364,6 +3402,7 @@ func TestSnapshot_NonDevFakeAuthor_GenesisCheckpoint(t *testing.T) {
 	require.Equal(t, uint64(0), snap.Number)
 	require.True(t, snap.ValidatorSet.HasAddress(addr1))
 }
+
 func TestVerifyCascadingFields_PreLondonGasLimit(t *testing.T) {
 	t.Parallel()
 	setup := newSignedChainSetup(t)
@@ -3414,6 +3453,7 @@ func TestVerifyCascadingFields_BaseFeeBeforeLondon(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid baseFee")
 }
+
 func TestVerifyHeader_BhilaiEarlyBlock(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
@@ -3436,6 +3476,7 @@ func TestVerifyHeader_BhilaiEarlyBlock(t *testing.T) {
 	err := b.verifyHeader(nil, h, nil)
 	require.ErrorIs(t, err, consensus.ErrFutureBlock)
 }
+
 func TestFinalize_SprintBlockWithCommitSpan(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
@@ -3459,6 +3500,7 @@ func TestFinalize_SprintBlockWithCommitSpan(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, receipts)
 }
+
 func TestCalcDifficulty_WithSnapshot(t *testing.T) {
 	t.Parallel()
 	setup := newSignedChainSetup(t)
@@ -3470,6 +3512,7 @@ func TestCalcDifficulty_WithSnapshot(t *testing.T) {
 	diff := b.CalcDifficulty(setup.chain.HeaderChain(), 0, setup.genesis)
 	require.NotNil(t, diff)
 }
+
 func TestSign_ErrorPath(t *testing.T) {
 	t.Parallel()
 	borCfg := defaultBorConfig()
@@ -3488,6 +3531,7 @@ func TestSign_ErrorPath(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "sign failed")
 }
+
 func TestSnapshotApply_SprintEndValidatorChange(t *testing.T) {
 	t.Parallel()
 
@@ -3636,6 +3680,7 @@ func TestCommitStates_WithIndore_EventProcessing(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, result, 2) // both events should be processed
 }
+
 func TestCommitStates_NonIndore(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
@@ -3890,6 +3935,7 @@ func TestEncodeSigHeader_WithLondonBaseFee(t *testing.T) {
 	// Different BaseFee should produce different seal hashes
 	require.NotEqual(t, hash1, hash2)
 }
+
 func TestFinalize_NonSprintBlockNoStateSync(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
@@ -3913,6 +3959,7 @@ func TestFinalize_NonSprintBlockNoStateSync(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, receipts)
 }
+
 func TestVerifySeal_BhilaiNonPrimaryFutureBlock(t *testing.T) {
 	t.Parallel()
 	privKey, _ := crypto.GenerateKey()
@@ -3966,6 +4013,7 @@ func TestVerifySeal_BhilaiNonPrimaryFutureBlock(t *testing.T) {
 	err = b.verifySeal(chain.HeaderChain(), h, []*types.Header{genesis})
 	require.ErrorIs(t, err, consensus.ErrFutureBlock)
 }
+
 func TestFinalizeAndAssemble_WithdrawalsRejected(t *testing.T) {
 	t.Parallel()
 	b := &Bor{config: &params.BorConfig{Sprint: map[string]uint64{"0": 64}}}
@@ -3988,6 +4036,7 @@ func TestFinalizeAndAssemble_RequestsHashRejected(t *testing.T) {
 	_, _, _, err := b.FinalizeAndAssemble(nil, h, nil, body, nil)
 	require.ErrorIs(t, err, consensus.ErrUnexpectedRequests)
 }
+
 func TestVerifySeal_BlockTooSoon(t *testing.T) {
 	t.Parallel()
 	setup := newSignedChainSetup(t)
@@ -4014,6 +4063,7 @@ func TestVerifySeal_BlockTooSoon(t *testing.T) {
 	var tooSoonErr *BlockTooSoonError
 	require.ErrorAs(t, err, &tooSoonErr)
 }
+
 func TestPrepare_CancunEncoding(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
@@ -4050,6 +4100,7 @@ func TestPrepare_CancunEncoding(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, len(h2.Extra) > types.ExtraVanityLength+types.ExtraSealLength)
 }
+
 func TestFinalize_SprintWithHeimdallCommitStates(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
@@ -4363,6 +4414,7 @@ func TestSnapshot_HeaderTraversal(t *testing.T) {
 	require.NotNil(t, snap2)
 	require.Equal(t, uint64(1), snap2.Number)
 }
+
 func TestVerifyCascadingFields_EIP1559(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
@@ -4406,6 +4458,7 @@ func TestVerifyCascadingFields_EIP1559(t *testing.T) {
 		require.Contains(t, err.Error(), "base fee")
 	}
 }
+
 func TestNew_WithHeimdallClient(t *testing.T) {
 	t.Parallel()
 	cfg := &params.ChainConfig{ChainID: big.NewInt(1), Bor: borConfigWithDelays(64)}
@@ -4420,6 +4473,7 @@ func TestNew_WithHeimdallClient(t *testing.T) {
 	require.NotNil(t, bor.HeimdallClient)
 	require.NoError(t, bor.Close())
 }
+
 func TestVerifyCascadingFields_SprintStartValidatorCheck(t *testing.T) {
 	t.Parallel()
 	// This test exercises the sprint-start validator byte verification path (lines 590-604).
@@ -4505,6 +4559,7 @@ func TestVerifyCascadingFields_SprintStartValidatorCheck(t *testing.T) {
 	// Either passes or fails on validator check - exercises the code path
 	_ = err
 }
+
 func TestAPI_GetRootHash_Valid(t *testing.T) {
 	t.Parallel()
 	api, _, _ := newAPIForTest(t)
@@ -4551,6 +4606,7 @@ func TestAPI_GetRootHash_MaxCheckpointExceeded(t *testing.T) {
 	_, err := api.GetRootHash(0, MaxCheckpointLength+1)
 	require.Error(t, err)
 }
+
 func TestCommitStates_WithOverrideStateSyncRecords(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
@@ -4595,6 +4651,7 @@ func TestCommitStates_WithOverrideStateSyncRecords(t *testing.T) {
 	// With OverrideStateSyncRecords truncating to 0, should get empty data
 	require.Empty(t, data)
 }
+
 func TestPrepare_UnknownParent(t *testing.T) {
 	t.Parallel()
 	setup := newSignedChainSetup(t)
@@ -4610,6 +4667,7 @@ func TestPrepare_UnknownParent(t *testing.T) {
 	err := b.Prepare(setup.chain.HeaderChain(), h, false)
 	require.Error(t, err)
 }
+
 func TestSeal_SignError(t *testing.T) {
 	t.Parallel()
 	setup := newSignedChainSetup(t)
@@ -4632,6 +4690,7 @@ func TestSeal_SignError(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "signing failed")
 }
+
 func TestVerifyHeader_InvalidSprintEndValidatorBytes(t *testing.T) {
 	t.Parallel()
 
@@ -4666,6 +4725,7 @@ func TestVerifyHeader_InvalidSprintEndValidatorBytes(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, errInvalidSpanValidators, err)
 }
+
 func TestCalcDifficulty_NonSigner(t *testing.T) {
 	t.Parallel()
 	setup := newSignedChainSetup(t)
@@ -4675,6 +4735,7 @@ func TestCalcDifficulty_NonSigner(t *testing.T) {
 	diff := b.CalcDifficulty(setup.chain.HeaderChain(), 0, setup.genesis)
 	require.NotNil(t, diff)
 }
+
 func TestSnapshotApply_BadSignature(t *testing.T) {
 	t.Parallel()
 
@@ -4697,6 +4758,7 @@ func TestSnapshotApply_BadSignature(t *testing.T) {
 	_, err := snap.apply([]*types.Header{h}, nil)
 	require.Error(t, err)
 }
+
 func TestPrepare_ValidatorsByHashError(t *testing.T) {
 	t.Parallel()
 
@@ -4740,6 +4802,7 @@ func TestPrepare_ValidatorsByHashError(t *testing.T) {
 	// Should get errUnknownValidators since GetCurrentValidatorsByHash returns empty/nil
 	require.Error(t, err)
 }
+
 func TestSnapshot_Difficulty_NotFound(t *testing.T) {
 	t.Parallel()
 
@@ -4758,6 +4821,7 @@ func TestSnapshot_Difficulty_NotFound(t *testing.T) {
 	diff := Difficulty(snap.ValidatorSet, common.HexToAddress("0x99"))
 	require.Greater(t, diff, uint64(0))
 }
+
 func TestVerifySeal_BhilaiErrorPaths(t *testing.T) {
 	t.Parallel()
 	setup := newSignedChainSetup(t)
@@ -4776,6 +4840,7 @@ func TestVerifySeal_BhilaiErrorPaths(t *testing.T) {
 	err := b.verifySeal(setup.chain.HeaderChain(), h, nil)
 	require.Error(t, err)
 }
+
 func TestFinalize_WithBlockAlloc(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
@@ -4810,6 +4875,7 @@ func TestFinalize_WithBlockAlloc(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 }
+
 func TestCommitStates_WithOverrideStateSyncRecordsInRange(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
@@ -4894,6 +4960,7 @@ func TestCommitStates_StateSyncEventsError(t *testing.T) {
 	require.NoError(t, err) // error is logged but returns empty data
 	require.Empty(t, data)
 }
+
 func TestCommitStates_EventIdLessThanLastStateId(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
@@ -4946,6 +5013,7 @@ func TestCommitStates_EventIdLessThanLastStateId(t *testing.T) {
 	require.Len(t, data, 1)
 	require.Equal(t, uint64(6), data[0].ID)
 }
+
 func TestCommitStates_EventValidationError(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
@@ -4993,6 +5061,7 @@ func TestCommitStates_EventValidationError(t *testing.T) {
 	require.NoError(t, err) // validation error is logged but returned data should be empty
 	require.Empty(t, data)
 }
+
 func TestFinalize_CheckAndCommitSpanError(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
@@ -5914,19 +5983,22 @@ func TestVerifyHeader_PreGiugliano_NoCheck(t *testing.T) {
 func TestSetReservedBlockspaceExtraFields(t *testing.T) {
 	t.Parallel()
 
-	// Pre-fork: the reserved field is left nil.
+	// Pre-fork: both reserved fields are left nil.
 	bPre := &Bor{config: &params.BorConfig{ReservedBlockspaceBlock: big.NewInt(100)}}
 	bedPre := &types.BlockExtraData{}
 	bPre.setReservedBlockspaceExtraFields(&types.Header{Number: big.NewInt(99)}, bedPre)
 	require.Nil(t, bedPre.ReservedGasUsed)
+	require.Nil(t, bedPre.ReservedCapacity)
 
-	// Post-fork: the field is initialized to non-nil zero so the block is valid
-	// even before the miner writes the real value.
+	// Post-fork: both fields are initialized to non-nil zero so the block is
+	// valid even before the miner writes the real values.
 	bPost := &Bor{config: &params.BorConfig{ReservedBlockspaceBlock: big.NewInt(100)}}
 	bedPost := &types.BlockExtraData{}
 	bPost.setReservedBlockspaceExtraFields(&types.Header{Number: big.NewInt(100)}, bedPost)
 	require.NotNil(t, bedPost.ReservedGasUsed)
 	require.Equal(t, uint64(0), *bedPost.ReservedGasUsed)
+	require.NotNil(t, bedPost.ReservedCapacity)
+	require.Equal(t, uint64(0), *bedPost.ReservedCapacity)
 }
 
 func TestVerifyHeader_ReservedBlockspaceMissingFields(t *testing.T) {
@@ -5948,7 +6020,9 @@ func TestVerifyHeader_ReservedBlockspaceMissingFields(t *testing.T) {
 	require.ErrorIs(t, err, errMissingReservedBlockspaceFields)
 }
 
-func TestVerifyHeader_ReservedBlockspaceFieldsPresent(t *testing.T) {
+// TestVerifyHeader_ReservedBlockspaceCapacityMissing pins that presence is
+// required for BOTH reserved fields: ReservedGasUsed alone is not enough.
+func TestVerifyHeader_ReservedBlockspaceCapacityMissing(t *testing.T) {
 	t.Parallel()
 	s := newGiuglianoVerifySetup(t, true)
 	s.b.config.ReservedBlockspaceBlock = big.NewInt(0)
@@ -5960,6 +6034,29 @@ func TestVerifyHeader_ReservedBlockspaceFieldsPresent(t *testing.T) {
 		GasTarget:                &gasTarget,
 		BaseFeeChangeDenominator: &bfcd,
 		ReservedGasUsed:          &gasUsed,
+		// ReservedCapacity deliberately absent.
+	})
+	h := s.makeSignedChild(t, extra, big.NewInt(params.InitialBaseFee))
+
+	chain := newRawDBChain(s.db, s.cfg, h, nil, nil)
+	err := s.b.verifyHeader(chain, h, nil)
+	require.ErrorIs(t, err, errMissingReservedBlockspaceFields)
+}
+
+func TestVerifyHeader_ReservedBlockspaceFieldsPresent(t *testing.T) {
+	t.Parallel()
+	s := newGiuglianoVerifySetup(t, true)
+	s.b.config.ReservedBlockspaceBlock = big.NewInt(0)
+
+	gasTarget := uint64(15_000_000)
+	bfcd := uint64(64)
+	gasUsed := uint64(0)
+	capacity := uint64(10_000_000)
+	extra := buildBlockExtraBytes(&types.BlockExtraData{
+		GasTarget:                &gasTarget,
+		BaseFeeChangeDenominator: &bfcd,
+		ReservedGasUsed:          &gasUsed,
+		ReservedCapacity:         &capacity,
 	})
 	h := s.makeSignedChild(t, extra, big.NewInt(params.InitialBaseFee))
 
@@ -5979,10 +6076,12 @@ func TestVerifyReservedFields_GasUsedBound(t *testing.T) {
 	gasTarget := uint64(15_000_000)
 	bfcd := uint64(64)
 	reservedGasUsed := uint64(5_000)
+	capacity := uint64(10_000_000)
 	extra := buildBlockExtraBytes(&types.BlockExtraData{
 		GasTarget:                &gasTarget,
 		BaseFeeChangeDenominator: &bfcd,
 		ReservedGasUsed:          &reservedGasUsed,
+		ReservedCapacity:         &capacity,
 	})
 
 	// Reserved gas used exceeds the block's gas used — impossible, must be rejected.
@@ -5991,6 +6090,30 @@ func TestVerifyReservedFields_GasUsedBound(t *testing.T) {
 
 	// Equal-or-below the block's gas used passes the bound.
 	h.GasUsed = 5_000
+	require.NoError(t, s.b.verifyReservedFields(h))
+}
+
+// TestVerifyReservedFields_CapacityAboveGasLimitAccepted pins the liveness
+// rule from §2.2: governance can validly push effective capacity to or past
+// the block gas limit (the two have no protocol tie), so verifyReservedFields
+// must accept it — rejecting it at the header would leave no valid next block.
+func TestVerifyReservedFields_CapacityAboveGasLimitAccepted(t *testing.T) {
+	t.Parallel()
+	s := newGiuglianoVerifySetup(t, true)
+	s.b.config.ReservedBlockspaceBlock = big.NewInt(0)
+
+	gasTarget := uint64(15_000_000)
+	bfcd := uint64(64)
+	reservedGasUsed := uint64(0)
+	capacity := uint64(60_000_000) // above the block's gas limit
+	extra := buildBlockExtraBytes(&types.BlockExtraData{
+		GasTarget:                &gasTarget,
+		BaseFeeChangeDenominator: &bfcd,
+		ReservedGasUsed:          &reservedGasUsed,
+		ReservedCapacity:         &capacity,
+	})
+
+	h := &types.Header{Number: big.NewInt(1), GasLimit: 30_000_000, GasUsed: 0, Extra: extra}
 	require.NoError(t, s.b.verifyReservedFields(h))
 }
 

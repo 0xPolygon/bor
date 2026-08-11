@@ -1438,7 +1438,7 @@ func markReservedTentative(env *environment, walk *registryreader.ReservedWalk, 
 
 // commitReserved advances the reserved walk for a just-committed tx. Reserved
 // txs count toward the header's ReservedGasUsed by actual gas used; the verifier
-// recomputes the same sum from the block (validateReservedGasUsed).
+// recomputes the same sum from the block (validateReservedFields).
 func commitReserved(env *environment, walk *registryreader.ReservedWalk, from common.Address, tx *types.Transaction, reserved bool) {
 	walk.Commit(from, tx.Gas(), reserved)
 	if !reserved {
@@ -2244,7 +2244,7 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, gen
 	// Record reserved gas even when a commit pass was interrupted: callers
 	// seal the partial block, and its header must account for the reserved
 	// transactions that did commit.
-	if err := w.writeReservedGasUsed(env); err != nil {
+	if err := w.writeReservedFields(env); err != nil {
 		return err
 	}
 
@@ -2281,20 +2281,25 @@ func (w *worker) sequencingSnapshot(env *environment) *registryreader.Snapshot {
 	return env.evm.Context.ReservedSnapshot
 }
 
-// writeReservedGasUsed records the build's reserved-region gas total in the
-// header's BlockExtraData, overwriting the placeholder zero that Prepare
-// stamped. Post-fork headers must carry the field (verifyReservedFields), so
-// it is written on every post-fork build — including interrupted ones, whose
-// partial blocks still seal.
-func (w *worker) writeReservedGasUsed(env *environment) error {
+// writeReservedFields records the build's reserved-region gas total and the
+// sequencing snapshot's effective capacity in the header's BlockExtraData,
+// overwriting the placeholder zeros that Prepare stamped. Post-fork headers
+// must carry both fields (verifyReservedFields), so this runs on every
+// post-fork build — including interrupted ones, whose partial blocks still
+// seal. The capacity comes from the same snapshot sequencing and execution
+// classified with, so a producer can never stamp a value execution disagrees
+// with.
+func (w *worker) writeReservedFields(env *environment) error {
 	if w.chainConfig.Bor == nil || !w.chainConfig.Bor.IsReservedBlockspace(env.header.Number) {
 		return nil
 	}
 
+	capacity := w.sequencingSnapshot(env).EffectiveCapacity()
 	reservedGasUsedGauge.Update(int64(env.reservedGasUsed))
+	reservedCapacityGauge.Update(int64(capacity))
 
-	if err := env.header.SetReservedGasUsed(env.reservedGasUsed); err != nil {
-		log.Error("error while writing reserved gas used into block extra data", "err", err)
+	if err := env.header.SetReservedFields(env.reservedGasUsed, capacity); err != nil {
+		log.Error("error while writing reserved fields into block extra data", "err", err)
 		return err
 	}
 
@@ -2321,6 +2326,13 @@ func (w *worker) generateWork(params *generateParams, witness bool) *newPayloadR
 		if errors.Is(err, errBlockInterruptedByTimeout) {
 			log.Warn("Block building is interrupted", "allowance", common.PrettyDuration(w.newpayloadTimeout))
 		}
+	} else {
+		// fillTransactions (which stamps the reserved header fields at the
+		// end of a normal build) is skipped for a no-tx payload build, so
+		// without this the header would keep Prepare's placeholder
+		// ReservedCapacity — wrong as soon as the registry carves out any
+		// capacity, even for a genuinely empty block.
+		_ = w.writeReservedFields(work)
 	}
 
 	body := types.Body{Transactions: work.txs, Withdrawals: params.withdrawals}
@@ -2515,6 +2527,11 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 	if !noempty && !w.noempty.Load() && !isRio {
 		emptyWork := work.copy()
 		emptyWork.state.ResetPrefetcher()
+		// This copy is taken before fillTransactions runs, so it never gets
+		// fillTransactions's end-of-build reserved-field write; stamp them
+		// here too. The placeholder ReservedCapacity Prepare set is only
+		// correct while the registry carves out zero capacity.
+		_ = w.writeReservedFields(emptyWork)
 		_ = w.commit(emptyWork, nil, false, start, genParams)
 	}
 	// Mark the start of full-block building. Set after the optional empty pre-seal commit so that

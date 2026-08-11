@@ -94,6 +94,9 @@ func TestBuildSnapshot(t *testing.T) {
 		if snap.Capacity() != 60_000_000 {
 			t.Errorf("capacity=%d, want 60000000", snap.Capacity())
 		}
+		if snap.EffectiveCapacity() != 60_000_000 {
+			t.Errorf("effectiveCapacity=%d, want 60000000 (no future-effective client in this fixture)", snap.EffectiveCapacity())
+		}
 		if r.clientCalls != len(r.whitelist) {
 			t.Errorf("client lookups=%d, want %d", r.clientCalls, len(r.whitelist))
 		}
@@ -181,6 +184,57 @@ func TestBuildSnapshotEffectiveFiltering(t *testing.T) {
 	}
 }
 
+// TestBuildSnapshotEffectiveCapacityExcludesFutureClient pins the capacity
+// split from §2.2: the registry's totalReservedGas (Capacity) is bumped by
+// createClient immediately, including for a client whose effectiveFrom is
+// still ahead, while EffectiveCapacity — the value the header stamps — only
+// sums quotas of clients this snapshot actually classifies.
+func TestBuildSnapshotEffectiveCapacityExcludesFutureClient(t *testing.T) {
+	a1, a2 := addr(1), addr(2)
+	r := &mockReader{
+		has:       true,
+		root:      common.HexToHash("0xabc"),
+		whitelist: []common.Address{a1, a2},
+		totalGas:  50_000_000, // raw total already counts both clients.
+		clients: map[common.Address]ClientLookup{
+			a1: {ClientID: big.NewInt(1), GasQuota: 30_000_000, Active: true},
+			a2: {ClientID: big.NewInt(2), GasQuota: 20_000_000, Active: true, EffectiveFrom: 100},
+		},
+	}
+
+	// Before a2's effectiveFrom: raw capacity still counts it, effective
+	// capacity does not.
+	snap, err := BuildSnapshot(r, nil, 49, common.Hash{}, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := snap.Capacity(); got != 50_000_000 {
+		t.Errorf("Capacity()=%d, want 50000000 (raw total includes the future client)", got)
+	}
+	if got := snap.EffectiveCapacity(); got != 30_000_000 {
+		t.Errorf("EffectiveCapacity()=%d, want 30000000 (future client excluded)", got)
+	}
+	if snap.IsReserved(a2) {
+		t.Error("a2 must not classify as reserved before its effectiveFrom")
+	}
+
+	// At and after the boundary: a2 joins the effective set without any new
+	// registry transaction landing in the block.
+	snap, err = BuildSnapshot(r, nil, 99, common.Hash{}, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := snap.Capacity(); got != 50_000_000 {
+		t.Errorf("Capacity()=%d, want 50000000", got)
+	}
+	if got := snap.EffectiveCapacity(); got != 50_000_000 {
+		t.Errorf("EffectiveCapacity()=%d, want 50000000 (future client now effective)", got)
+	}
+	if !snap.IsReserved(a2) {
+		t.Error("a2 must classify as reserved at its effectiveFrom boundary")
+	}
+}
+
 func TestBuildSnapshotRejectsInvalidClientID(t *testing.T) {
 	a1 := addr(1)
 	r := &mockReader{
@@ -215,6 +269,9 @@ func TestSnapshotNilSafe(t *testing.T) {
 	if snap.Capacity() != 0 {
 		t.Error("nil snapshot Capacity must be 0")
 	}
+	if snap.EffectiveCapacity() != 0 {
+		t.Error("nil snapshot EffectiveCapacity must be 0")
+	}
 	if snap.Root() != (common.Hash{}) {
 		t.Error("nil snapshot Root must be zero hash")
 	}
@@ -233,5 +290,8 @@ func TestSnapshotFeeModeAndCapacity(t *testing.T) {
 	}
 	if snap.Capacity() != 12_345 {
 		t.Errorf("Capacity=%d, want 12345", snap.Capacity())
+	}
+	if snap.EffectiveCapacity() != 12_345 {
+		t.Errorf("EffectiveCapacity=%d, want 12345", snap.EffectiveCapacity())
 	}
 }

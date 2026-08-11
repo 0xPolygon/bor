@@ -4,8 +4,6 @@ import (
 	"math/big"
 	"strings"
 	"testing"
-
-	"github.com/ethereum/go-ethereum/common"
 )
 
 func TestIsReservedBlockspace(t *testing.T) {
@@ -26,32 +24,6 @@ func TestIsReservedBlockspace(t *testing.T) {
 	none := &BorConfig{}
 	if none.IsReservedBlockspace(big.NewInt(1_000_000)) {
 		t.Error("nil ReservedBlockspaceBlock should never be active")
-	}
-}
-
-// TestReservedCapacity covers the only live use of the ReservedClients config
-// stub: the EIP-1559 base-fee capacity carve-out (Σ per-client quotas).
-// Reserved-sender classification is sourced from the registry, not this config.
-func TestReservedCapacity(t *testing.T) {
-	t.Parallel()
-
-	a := common.HexToAddress("0x00000000000000000000000000000000000000Aa")
-	b := common.HexToAddress("0x00000000000000000000000000000000000000Bb")
-	c := common.HexToAddress("0x00000000000000000000000000000000000000Cc")
-
-	cfg := &BorConfig{
-		ReservedClients: []ReservedClient{
-			{Addresses: []common.Address{a, b}, QuotaGas: 20_000_000},
-			{Addresses: []common.Address{c}, QuotaGas: 10_000_000},
-		},
-	}
-	if got := cfg.ReservedCapacity(); got != 30_000_000 {
-		t.Errorf("capacity: got %d want 30000000", got)
-	}
-
-	// Empty config carves out nothing.
-	if got := (&BorConfig{}).ReservedCapacity(); got != 0 {
-		t.Errorf("empty config capacity: got %d want 0", got)
 	}
 }
 

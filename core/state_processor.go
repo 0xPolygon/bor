@@ -205,11 +205,12 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	}
 
 	return &ProcessResult{
-		Receipts:        receipts,
-		Requests:        requests,
-		Logs:            allLogs,
-		GasUsed:         *usedGas,
-		ReservedGasUsed: reservedGasUsed,
+		Receipts:         receipts,
+		Requests:         requests,
+		Logs:             allLogs,
+		GasUsed:          *usedGas,
+		ReservedGasUsed:  reservedGasUsed,
+		ReservedCapacity: context.ReservedSnapshot.EffectiveCapacity(),
 	}, nil
 }
 

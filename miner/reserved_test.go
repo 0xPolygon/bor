@@ -675,6 +675,87 @@ func TestReservedBuild_HeaderGasUsed(t *testing.T) {
 	require.Equal(t, got.GasUsed(), *reserved, "all txs are reserved, so reserved gas equals block gas used")
 }
 
+// TestReservedBuild_HeaderCapacity confirms the producer stamps the sequencing
+// snapshot's EFFECTIVE capacity (Σ quotas of the classified client set) into
+// the header, not the registry's raw total. newTestSnapshot's raw-capacity
+// argument is set to a value far from the client's quota specifically so a
+// producer bug that stamped the raw total instead would be caught here.
+func TestReservedBuild_HeaderCapacity(t *testing.T) {
+	chainConfig := borUnittestReservedConfig()
+	engine, ctrl := getFakeBorFromConfig(t, &chainConfig)
+	defer engine.Close()
+	defer ctrl.Finish()
+
+	w, b, _ := newTestWorker(t, DefaultTestConfig(), &chainConfig, engine, rawdb.NewMemoryDatabase(), true, 0)
+	defer w.close()
+
+	const rawCapacity = 999_000_000
+	const clientQuota = 10_000_000
+	w.setReservedSnapshot(newTestSnapshot(rawCapacity, []testClient{
+		{ID: 1, Senders: []common.Address{testBankAddress}, QuotaGas: clientQuota},
+	}))
+
+	sub := w.mux.Subscribe(core.NewMinedBlockEvent{})
+	defer sub.Unsubscribe()
+
+	errs := b.txPool.Add([]*types.Transaction{
+		b.newRandomTxWithNonce(false, 0),
+	}, false)
+	for _, err := range errs {
+		require.NoError(t, err)
+	}
+	w.start()
+
+	got := waitForBlockWithTxs(t, sub, 1, 15*time.Second)
+
+	capacity := got.Header().GetReservedCapacity(&chainConfig)
+	require.NotNil(t, capacity, "reserved pass active: header must carry ReservedCapacity")
+	require.Equal(t, uint64(clientQuota), *capacity,
+		"capacity must be the snapshot's effective capacity (Σ quotas), not the raw registry total")
+}
+
+// TestReservedBuild_NoTxsHeaderCapacity pins the noTxs (eth/catalyst
+// Engine-API payload) build path: generateWork's noTxs branch skips
+// fillTransactions entirely, so writeReservedFields must still run there —
+// otherwise the header would keep Prepare's placeholder ReservedCapacity=0,
+// which fails validateReservedFields as soon as the registry carves out any
+// capacity, even for a genuinely empty payload with nothing to disagree about.
+func TestReservedBuild_NoTxsHeaderCapacity(t *testing.T) {
+	chainConfig := borUnittestReservedConfig()
+	engine, ctrl := getFakeBorFromConfig(t, &chainConfig)
+	defer engine.Close()
+	defer ctrl.Finish()
+
+	w, b, _ := newTestWorker(t, DefaultTestConfig(), &chainConfig, engine, rawdb.NewMemoryDatabase(), false, 0)
+	defer w.close()
+
+	const clientQuota = uint64(10_000_000)
+	w.setReservedSnapshot(newTestSnapshot(0, []testClient{
+		{ID: 1, Senders: []common.Address{testBankAddress}, QuotaGas: clientQuota},
+	}))
+
+	parent := b.chain.CurrentBlock()
+	r := w.getSealingBlock(&generateParams{
+		parentHash: parent.Hash(),
+		timestamp:  parent.Time + 1,
+		coinbase:   testBankAddress,
+		forceTime:  true,
+		noTxs:      true,
+	})
+	require.NoError(t, r.err)
+	require.NotNil(t, r.block)
+	require.Empty(t, r.block.Transactions(), "this is the no-tx payload build path")
+
+	capacity := r.block.Header().GetReservedCapacity(&chainConfig)
+	require.NotNil(t, capacity, "noTxs build must still carry ReservedCapacity")
+	require.Equal(t, clientQuota, *capacity,
+		"capacity must be the snapshot's effective capacity even when fillTransactions never ran")
+
+	gasUsed := r.block.Header().GetReservedGasUsed(&chainConfig)
+	require.NotNil(t, gasUsed, "noTxs build must still carry ReservedGasUsed")
+	require.Equal(t, uint64(0), *gasUsed, "no transactions were included")
+}
+
 // TestReservedBuild_HeaderAbsentPreFork pins wire compatibility: before the
 // ReservedBlockspace fork, post-Cancun blocks must not carry the
 // ReservedGasUsed field at all — their Extra encoding stays byte-identical to
@@ -698,6 +779,7 @@ func TestReservedBuild_HeaderAbsentPreFork(t *testing.T) {
 
 	got := waitForBlockWithTxs(t, sub, 1, 15*time.Second)
 	require.Nil(t, got.Header().GetReservedGasUsed(&chainConfig), "pre-fork: field must be absent from the wire")
+	require.Nil(t, got.Header().GetReservedCapacity(&chainConfig), "pre-fork: field must be absent from the wire")
 }
 
 // TestReservedBuild_Positional proves the reserved-first builder preference
