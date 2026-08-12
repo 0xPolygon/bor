@@ -431,7 +431,7 @@ func (h *handler) runEthPeer(peer *eth.Peer, handler eth.Handler) error {
 			return err
 		}
 	}
-	h.attachBulkSidecar(peer, snap)
+	h.attachBulkSidecar(peer, snap, wit)
 	h.chainSync.handlePeerEvent()
 
 	// Bor: skip propagating transactions if flag is set
@@ -536,7 +536,7 @@ func (h *handler) runWitExtension(peer *wit.Peer, handler wit.Handler) error {
 	return handler(peer)
 }
 
-func (h *handler) attachBulkSidecar(peer *eth.Peer, snapPeer *snap.Peer) {
+func (h *handler) attachBulkSidecar(peer *eth.Peer, snapPeer *snap.Peer, witPeer *wit.Peer) {
 	if h.p2pServer == nil || h.p2pServer.BulkSidecar() == nil {
 		return
 	}
@@ -552,6 +552,13 @@ func (h *handler) attachBulkSidecar(peer *eth.Peer, snapPeer *snap.Peer) {
 				snapPeer.Log().Debug("Bulk snap sidecar unavailable", "err", err)
 			} else {
 				snapPeer.AttachBulkRW(rw)
+			}
+		}
+		if witPeer != nil {
+			if rw, err := sidecar.OpenChannel(witPeer.Peer, "wit-bulk"); err != nil {
+				witPeer.Log().Debug("Bulk wit sidecar unavailable", "err", err)
+			} else {
+				witPeer.AttachBulkRW(rw)
 			}
 		}
 	}()
