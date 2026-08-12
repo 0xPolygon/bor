@@ -1052,7 +1052,7 @@ func (d *Database) updateCalculatedAmplifications(stats *pebble.Metrics) {
 	// level.TablesSize is the CURRENT live size, which already accounts for deleted files
 	var actualDataSize int64
 	for _, level := range stats.Levels {
-		actualDataSize += int64(level.TablesSize)
+		actualDataSize += level.TablesSize
 	}
 
 	d.actualDataSizeGauge.Update(actualDataSize)
