@@ -95,6 +95,10 @@ var (
 	// to contain a 65 byte secp256k1 signature.
 	errMissingSignature = errors.New("extra-data 65 byte signature suffix missing")
 
+	// errNonCanonicalSeal is returned if a block's seal signature is invalid or
+	// not in the canonical low-S encoding.
+	errNonCanonicalSeal = errors.New("invalid or non-canonical seal signature")
+
 	// errExtraValidators is returned if non-sprint-end block contain validator data in
 	// their extra-data fields.
 	errExtraValidators = errors.New("non-sprint-end block contains extra validator list")
@@ -165,6 +169,15 @@ func ecrecover(header *types.Header, sigcache *lru.ARCCache, c *params.BorConfig
 	}
 
 	signature := header.Extra[len(header.Extra)-types.ExtraSealLength:]
+
+	// Enforce the canonical low-S signature encoding before recovery. crypto.Sign
+	// always produces low-S seals, so this never rejects a seal a validator
+	// legitimately produced.
+	r := new(big.Int).SetBytes(signature[:32])
+	s := new(big.Int).SetBytes(signature[32:64])
+	if !crypto.ValidateSignatureValues(signature[64], r, s, true) {
+		return common.Address{}, errNonCanonicalSeal
+	}
 
 	// Recover the public key and the Ethereum address
 	pubkey, err := crypto.Ecrecover(SealHash(header, c).Bytes(), signature)
@@ -1406,6 +1419,21 @@ func (c *Bor) changeContractCodeIfNeeded(headerNumber uint64, state vm.StateDB) 
 // FinalizeAndAssemble implements consensus.Engine, ensuring no uncles are set,
 // nor block rewards given, and returns the final block.
 func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, body *types.Body, receipts []*types.Receipt) (*types.Block, []*types.Receipt, time.Duration, error) {
+	return c.finalizeAndAssemble(chain, header, state, body, receipts, false)
+}
+
+// FinalizeAndAssembleForSimulation is FinalizeAndAssemble for simulated blocks
+// (eth_simulateV1). It skips the sprint-start span and state-sync commits:
+// their internal genesis contract calls resolve the parent header by hash from
+// the database, but a simulated block's parent may be a phantom header that is
+// never persisted (the pending block, or an earlier simulated block). The
+// skipped data is external Heimdall input that cannot be known for a future
+// block anyway.
+func (c *Bor) FinalizeAndAssembleForSimulation(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, body *types.Body, receipts []*types.Receipt) (*types.Block, []*types.Receipt, time.Duration, error) {
+	return c.finalizeAndAssemble(chain, header, state, body, receipts, true)
+}
+
+func (c *Bor) finalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, body *types.Body, receipts []*types.Receipt, simulated bool) (*types.Block, []*types.Receipt, time.Duration, error) {
 	headerNumber := header.Number.Uint64()
 	if body.Withdrawals != nil || header.WithdrawalsHash != nil {
 		return nil, nil, 0, consensus.ErrUnexpectedWithdrawals
@@ -1419,27 +1447,11 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 		err           error
 	)
 
-	if IsSprintStart(headerNumber, c.config.CalculateSprint(headerNumber)) {
-		borStart := time.Now()
-		cx := statefull.ChainContext{Chain: chain, Bor: c}
-
-		// check and commit span
-		if !c.config.IsRio(header.Number) {
-			if err = c.checkAndCommitSpan(state, header, cx); err != nil {
-				log.Error("Error while committing span", "error", err)
-				return nil, nil, 0, err
-			}
+	if !simulated && IsSprintStart(headerNumber, c.config.CalculateSprint(headerNumber)) {
+		stateSyncData, err = c.commitSprintWork(chain, header, state)
+		if err != nil {
+			return nil, nil, 0, err
 		}
-
-		if c.HeimdallClient != nil {
-			// commit states
-			stateSyncData, err = c.CommitStates(state, header, cx)
-			if err != nil {
-				log.Error("Error while committing states", "error", err)
-				return nil, nil, 0, err
-			}
-		}
-		state.BorConsensusTime = time.Since(borStart)
 	}
 
 	if err = c.changeContractCodeIfNeeded(headerNumber, state); err != nil {
@@ -1472,6 +1484,37 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 
 	// return the final block for sealing
 	return block, receipts, commitTime, nil
+}
+
+// commitSprintWork commits the span (pre-Rio) and state-sync data at a
+// sprint-start block during block assembly.
+func (c *Bor) commitSprintWork(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB) ([]*types.StateSyncData, error) {
+	borStart := time.Now()
+	cx := statefull.ChainContext{Chain: chain, Bor: c}
+
+	// check and commit span
+	if !c.config.IsRio(header.Number) {
+		if err := c.checkAndCommitSpan(state, header, cx); err != nil {
+			log.Error("Error while committing span", "error", err)
+			return nil, err
+		}
+	}
+
+	var stateSyncData []*types.StateSyncData
+
+	if c.HeimdallClient != nil {
+		// commit states
+		var err error
+		stateSyncData, err = c.CommitStates(state, header, cx)
+		if err != nil {
+			log.Error("Error while committing states", "error", err)
+			return nil, err
+		}
+	}
+
+	state.BorConsensusTime = time.Since(borStart)
+
+	return stateSyncData, nil
 }
 
 // Authorize injects a private key into the consensus engine to mint new blocks

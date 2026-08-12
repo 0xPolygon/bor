@@ -619,7 +619,11 @@ func (w *worker) setGasCeil(ceil uint64) {
 func (w *worker) calculateDesiredGasLimit(parent *types.Header) uint64 {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
+	return w.calculateDesiredGasLimitLocked(parent)
+}
 
+// calculateDesiredGasLimitLocked requires w.mu to be held for reading.
+func (w *worker) calculateDesiredGasLimitLocked(parent *types.Header) uint64 {
 	// If dynamic gas limit is not enabled, use the static GasCeil
 	if !w.config.EnableDynamicGasLimit {
 		return w.config.GasCeil
@@ -787,6 +791,66 @@ func recalcRecommit(minRecommit, prev time.Duration, target float64, inc bool) t
 	return prev
 }
 
+// veblopFallbackDecision is the action the veblop stall-fallback takes when its
+// timer fires. See decideVeblopFallback.
+type veblopFallbackDecision int
+
+const (
+	// veblopWait: the next block is being built normally (chain not yet stale)
+	// or work is otherwise progressing — just rearm the timer.
+	veblopWait veblopFallbackDecision = iota
+	// veblopSkip: a sealing task is genuinely in flight for the next block —
+	// nothing to do.
+	veblopSkip
+	// veblopRecommit: the chain is stale and there is no sealing task in flight,
+	// so the producer must (re)submit work to make progress.
+	veblopRecommit
+)
+
+// decideVeblopFallback decides what the veblop stall-fallback should do when its
+// timer fires. It is a pure function so the decision can be unit-tested without
+// driving the whole newWorkLoop.
+//
+// The critical case is `pendingWorkBlock == nextBlock && !hasPendingTasks`: a
+// previous build pinned pendingWorkBlock (commitWork only clears it via a
+// deferred Store(0) that runs on return) but produced no sealing task. This can
+// mean either (a) a build is legitimately in progress and just hasn't registered
+// its task yet, or (b) the build wedged inside commitWork and never will — the
+// mainnet stall. The old logic skipped recovery on `pendingWorkBlock == nextBlock`
+// alone, so case (b) never recovered without a process restart.
+//
+// These two cases are distinguished ONLY by how long the build has been
+// outstanding (pendingWorkAge = time since the build was submitted), NOT by
+// block-timestamp age (chainAge is meaningless when the head carries an old
+// timestamp, e.g. at genesis). We recover only once the outstanding build clearly
+// exceeds a normal build duration (stallThreshold), so a slow-but-live build is
+// never interrupted.
+//
+// All durations are compared at their native resolution: pendingWorkAge is real
+// elapsed wall-clock (sub-second precise), so the threshold stays accurate at the
+// sub-second block times mainnet runs (miner block time is 1.5s). chainAge is the
+// exception — it derives from integer block timestamps, so it is inherently
+// second-granular regardless of representation.
+func decideVeblopFallback(pendingWorkBlock, nextBlock uint64, hasPendingTasks bool, chainAge, veblopTimeout, pendingWorkAge, stallThreshold time.Duration) veblopFallbackDecision {
+	// A sealing task is in flight; never interrupt it.
+	if hasPendingTasks {
+		return veblopSkip
+	}
+	if pendingWorkBlock == nextBlock {
+		// Build outstanding for the next block. Recover only if it has been
+		// outstanding long enough to be considered wedged rather than in-progress.
+		if pendingWorkAge >= stallThreshold {
+			return veblopRecommit
+		}
+		return veblopWait
+	}
+	// Nothing is claimed for the next block — resubmit once the chain is stale.
+	if chainAge >= veblopTimeout {
+		return veblopRecommit
+	}
+	return veblopWait
+}
+
 // newWorkLoop is a standalone goroutine to submit new sealing work upon received events.
 //
 //nolint:gocognit
@@ -803,6 +867,11 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 		// emitted a stall warning so the log isn't flooded while the
 		// producer is stuck.
 		lastStallWarnAt time.Time
+		// pendingWorkSubmittedAt records when we last submitted a sealing build
+		// for the next block. The veblop fallback uses time-since-submit (not
+		// block-timestamp age) to tell a wedged build apart from one that is
+		// simply still in progress.
+		pendingWorkSubmittedAt time.Time
 	)
 
 	timer := time.NewTimer(0)
@@ -817,17 +886,38 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 	defer veblopTimer.Stop()
 
 	// commit aborts in-flight transaction execution with given signal and resubmits a new one.
-	commit := func(noempty bool, s int32) {
+	// It returns true if the new work request was submitted to mainLoop.
+	//
+	// When nonblocking is true the request is sent with a non-blocking send: if
+	// mainLoop is not currently ready to receive (e.g. it is wedged inside
+	// commitWork — exactly the state that pins pendingWorkBlock with no pending
+	// task), the request is dropped and commit returns false instead of blocking
+	// newWorkLoop on the unbuffered newWorkCh. This keeps newWorkLoop alive so it
+	// keeps emitting the stall warning and retrying every tick.
+	commit := func(noempty bool, s int32, nonblocking bool) bool {
 		if interrupt != nil {
 			interrupt.Store(s)
 		}
 
-		interrupt = new(atomic.Int32)
-		select {
-		case w.newWorkCh <- &newWorkReq{interrupt: interrupt, timestamp: timestamp, noempty: noempty}:
-		case <-w.exitCh:
-			return
+		newInterrupt := new(atomic.Int32)
+		req := &newWorkReq{interrupt: newInterrupt, timestamp: timestamp, noempty: noempty}
+		if nonblocking {
+			select {
+			case w.newWorkCh <- req:
+			case <-w.exitCh:
+				return false
+			default:
+				// mainLoop not ready (busy or wedged); don't block.
+				return false
+			}
+		} else {
+			select {
+			case w.newWorkCh <- req:
+			case <-w.exitCh:
+				return false
+			}
 		}
+		interrupt = newInterrupt
 		timer.Reset(recommit)
 		veblopTimeout = time.Duration(w.chainConfig.Bor.CalculatePeriod(w.chain.CurrentBlock().Number.Uint64())) * time.Second
 		if veblopTimeout < w.blockTime {
@@ -835,6 +925,7 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 		}
 		veblopTimer.Reset(veblopTimeout)
 		w.newTxs.Store(0)
+		return true
 	}
 
 	for {
@@ -844,7 +935,8 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 
 			timestamp = time.Now().Unix()
 			w.pendingWorkBlock.Store(w.chain.CurrentBlock().Number.Uint64() + 1)
-			commit(false, commitInterruptNewHead)
+			pendingWorkSubmittedAt = time.Now()
+			commit(false, commitInterruptNewHead, false)
 
 		case head := <-w.chainHeadCh:
 			w.clearPending(head.Header.Number.Uint64())
@@ -857,7 +949,8 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 
 			timestamp = time.Now().Unix()
 			w.pendingWorkBlock.Store(head.Header.Number.Uint64() + 1)
-			commit(false, commitInterruptNewHead)
+			pendingWorkSubmittedAt = time.Now()
+			commit(false, commitInterruptNewHead, false)
 
 		case <-veblopTimer.C:
 			currentBlock := w.chain.CurrentBlock()
@@ -881,19 +974,56 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 			hasPendingTasks := pendingTasksCount > 0
 
 			pendingWorkBlock := w.pendingWorkBlock.Load()
-			lastStallWarnAt = w.warnIfStalled(currentBlock, time.Now().Unix()-int64(currentBlock.Time), veblopTimeout, pendingWorkBlock, pendingTasksCount, lastStallWarnAt)
-			if pendingWorkBlock == currentBlock.Number.Uint64()+1 {
-				// Next block is already being worked on, reset the timer.
-				veblopTimer.Reset(veblopTimeout)
-				continue
+			chainAgeSec := time.Now().Unix() - int64(currentBlock.Time)
+			lastStallWarnAt = w.warnIfStalled(currentBlock, chainAgeSec, veblopTimeout, pendingWorkBlock, pendingTasksCount, lastStallWarnAt)
+
+			// veblopTimeout is already floored to the miner block time by commit();
+			// guard only the degenerate non-positive case so the threshold can't
+			// collapse to zero and interrupt builds instantly. Do NOT round up to a
+			// whole second — that would break sub-second block times.
+			effTimeout := veblopTimeout
+			if effTimeout <= 0 {
+				effTimeout = time.Second
+			}
+			// A build is treated as wedged only after it has been outstanding for
+			// noticeably longer than a normal build (~3x the block period, the same
+			// staleness multiple warnIfStalled uses), so a slow-but-live build is
+			// never interrupted. Measured from submit time, not block-timestamp age,
+			// at full sub-second resolution.
+			stallThreshold := 3 * effTimeout
+			var pendingWorkAge time.Duration
+			if !pendingWorkSubmittedAt.IsZero() {
+				pendingWorkAge = time.Since(pendingWorkSubmittedAt)
 			}
 
-			if !hasPendingTasks && time.Now().Unix()-int64(currentBlock.Time) >= int64(veblopTimeout.Seconds()) {
+			switch decideVeblopFallback(
+				pendingWorkBlock,
+				currentBlock.Number.Uint64()+1,
+				hasPendingTasks,
+				time.Duration(chainAgeSec)*time.Second,
+				effTimeout,
+				pendingWorkAge,
+				stallThreshold,
+			) {
+			case veblopRecommit:
+				// No sealing task is in flight and the producer is not making
+				// progress — either nothing is claimed for the next block, or a
+				// build wedged inside commitWork and left pendingWorkBlock pinned.
+				// Resubmit with a non-blocking send so newWorkLoop never wedges on
+				// the unbuffered newWorkCh if mainLoop is itself blocked; only claim
+				// pendingWorkBlock once the request is actually accepted.
 				timestamp = time.Now().Unix()
-				w.pendingWorkBlock.Store(currentBlock.Number.Uint64() + 1)
-				commit(false, commitInterruptNewHead)
-				// veblopTimer is already reset by commit() so we don't need to reset it here.
-			} else {
+				if commit(false, commitInterruptNewHead, true) {
+					w.pendingWorkBlock.Store(currentBlock.Number.Uint64() + 1)
+					pendingWorkSubmittedAt = time.Now()
+				} else {
+					// mainLoop not ready; retry on the next tick.
+					veblopTimer.Reset(veblopTimeout)
+				}
+				// On success commit() already reset veblopTimer.
+			default:
+				// veblopSkip (task genuinely in flight) or veblopWait (chain not
+				// yet stale) — nothing to submit, just rearm the timer.
 				veblopTimer.Reset(veblopTimeout)
 			}
 
@@ -1904,7 +2034,8 @@ type generateParams struct {
 	planWg                    sync.WaitGroup          // Tracks sendPlan goroutines; must reach zero before builderPlanCh is closed
 }
 
-// makeHeader creates a new block header for sealing.
+// makeHeader creates a new block header for sealing. The caller must hold w.mu
+// for reading because the header includes mutable worker configuration.
 func (w *worker) makeHeader(genParams *generateParams, waitOnPrepare bool) (*types.Header, common.Address, error) {
 	// Find the parent block for sealing task
 	parent := w.chain.CurrentBlock()
@@ -1942,7 +2073,7 @@ func (w *worker) makeHeader(genParams *generateParams, waitOnPrepare bool) (*typ
 	}
 
 	// Calculate desired gas limit (may be dynamically adjusted based on base fee)
-	desiredGasLimit := w.calculateDesiredGasLimit(parent)
+	desiredGasLimit := w.calculateDesiredGasLimitLocked(parent)
 
 	// Construct the sealing block header.
 	header := &types.Header{
@@ -3151,7 +3282,11 @@ func (w *worker) clearPending(number uint64) {
 // be captured under pendingMu by the caller — reading it here unguarded
 // would race with taskLoop / resultLoop.
 func (w *worker) warnIfStalled(currentBlock *types.Header, chainAgeSec int64, veblopTimeout time.Duration, pendingWorkBlock uint64, pendingTasksCount int, lastWarnAt time.Time) time.Time {
-	if chainAgeSec <= 3*int64(veblopTimeout.Seconds()) {
+	// Compare in time.Duration so the 3x staleness threshold honors sub-second
+	// block times (mainnet runs a 1.5s block time) — the same 3x multiple the
+	// recovery path in decideVeblopFallback uses. chainAge itself is inherently
+	// second-granular (it derives from integer block timestamps).
+	if time.Duration(chainAgeSec)*time.Second <= 3*veblopTimeout {
 		return lastWarnAt
 	}
 	if pendingWorkBlock != currentBlock.Number.Uint64()+1 && pendingTasksCount == 0 {
@@ -3163,7 +3298,7 @@ func (w *worker) warnIfStalled(currentBlock *types.Header, chainAgeSec int64, ve
 	log.Warn("Possible producer stall: veblop fallback skipping while chain is stale",
 		"currentBlock", currentBlock.Number.Uint64(),
 		"chainAgeSec", chainAgeSec,
-		"veblopTimeoutSec", int64(veblopTimeout.Seconds()),
+		"veblopTimeout", veblopTimeout,
 		"pendingWorkBlock", pendingWorkBlock,
 		"pendingTasksCount", pendingTasksCount,
 		"peerCount", w.eth.PeerCount())

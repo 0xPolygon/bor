@@ -151,6 +151,10 @@ type StateDB struct {
 	// State witness if cross validation is needed
 	witness      *stateless.Witness
 	witnessStats *stateless.WitnessStats
+	// witnessPrewalkStop stops the read-set prewalker started by
+	// StartWitnessReadSetPrewalk; CollectStateWitness invokes it before
+	// collecting. Idempotent. Deliberately not carried across Copy.
+	witnessPrewalkStop func()
 
 	// Measurements gathered during execution for debugging purposes
 
@@ -306,6 +310,17 @@ func (s *StateDB) SetIncarnation(inc int) {
 	s.incarnation = inc
 }
 
+var (
+	witnessReadSetSettleTimer = metrics.NewRegisteredTimer("chain/witness/readset/settle", nil)
+	witnessReadSetSettleKeys  = metrics.NewRegisteredCounter("chain/witness/readset/settle/keys", nil)
+	witnessReadSetPrewalkKeys = metrics.NewRegisteredCounter("chain/witness/readset/prewalk/keys", nil)
+)
+
+const (
+	witnessReadSetWalkWorkers  = 4
+	witnessReadSetPrewalkEvery = time.Millisecond
+)
+
 // CollectStateWitness adds every trie node read through this StateDB's
 // reader into the supplied witness's state set. Used by V2 BlockSTM to
 // pull in worker reads that finalDB.IntermediateRoot would otherwise miss
@@ -316,7 +331,70 @@ func (s *StateDB) CollectStateWitness() {
 	if s.witness == nil {
 		return
 	}
+	// Stop the prewalker before collecting: an in-flight resolution landing
+	// after collection would be lost. Stopping here (rather than trusting
+	// every caller to do it) makes the collect safe to call on its own.
+	if s.witnessPrewalkStop != nil {
+		s.witnessPrewalkStop()
+	}
+	start := time.Now()
 	collectStateWitnessFromReader(s.reader, s.witness.AddState)
+	witnessReadSetSettleTimer.UpdateSince(start)
+}
+
+// StartWitnessReadSetPrewalk keeps resolving newly-cached read keys into the
+// trie reader's tracers while block execution is still running, so the
+// settle-time drain in CollectStateWitness only covers a small tail instead
+// of the whole block's read-set. The returned stop function is idempotent
+// and blocks until the walker has fully exited; CollectStateWitness also
+// invokes it before collecting. No-op when no witness is being recorded or
+// the reader chain has no trie reader.
+func (s *StateDB) StartWitnessReadSetPrewalk() (stop func()) {
+	// Stop any previously started prewalker first so repeated calls can't
+	// leak its goroutine.
+	if s.witnessPrewalkStop != nil {
+		s.witnessPrewalkStop()
+		s.witnessPrewalkStop = nil
+	}
+	noop := func() {}
+	if s.witness == nil {
+		return noop
+	}
+	rwc := findReaderWithCache(s.reader)
+	if rwc == nil {
+		return noop
+	}
+	tr := findTrieReader(rwc.Reader)
+	if tr == nil {
+		return noop
+	}
+
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ticker := time.NewTicker(witnessReadSetPrewalkEvery)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				witnessReadSetPrewalkKeys.Inc(int64(rwc.resolveCachedKeysIntoTrie(tr, witnessReadSetWalkWorkers)))
+			}
+		}
+	}()
+
+	var once sync.Once
+	stop = func() {
+		once.Do(func() {
+			close(done)
+			wg.Wait()
+		})
+	}
+	s.witnessPrewalkStop = stop
+	return stop
 }
 
 func collectStateWitnessFromReader(r any, addState func(map[string][]byte)) {
@@ -324,6 +402,13 @@ func collectStateWitnessFromReader(r any, addState func(map[string][]byte)) {
 	case *reader:
 		collectStateWitnessFromReader(v.StateReader, addState)
 	case *readerWithCache:
+		// Cached keys whose first resolution came from a flat reader never
+		// reached the trie tracers; walk them through the trie before
+		// collecting so the witness covers every read, not just trie misses.
+		// With a prewalker running this is only the un-walked tail.
+		if tr := findTrieReader(v.Reader); tr != nil {
+			witnessReadSetSettleKeys.Inc(int64(v.resolveCachedKeysIntoTrie(tr, witnessReadSetWalkWorkers)))
+		}
 		collectStateWitnessFromReader(v.Reader, addState)
 	case *readerWithCacheStats:
 		collectStateWitnessFromReader(v.readerWithCache, addState)
@@ -334,6 +419,40 @@ func collectStateWitnessFromReader(r any, addState func(map[string][]byte)) {
 			collectStateWitnessFromReader(inner, addState)
 		}
 	}
+}
+
+// findReaderWithCache unwraps a reader chain to its shared *readerWithCache,
+// or nil if the chain doesn't carry one.
+func findReaderWithCache(r any) *readerWithCache {
+	switch v := r.(type) {
+	case *readerWithCacheStats:
+		return v.readerWithCache
+	case *readerWithCache:
+		return v
+	}
+	return nil
+}
+
+// findTrieReader walks a reader chain down to its backing *trieReader, or nil
+// if the chain doesn't bottom out at one (e.g. snapshot-only readers).
+func findTrieReader(r any) *trieReader {
+	switch v := r.(type) {
+	case *reader:
+		return findTrieReader(v.StateReader)
+	case *readerWithCache:
+		return findTrieReader(v.Reader)
+	case *readerWithCacheStats:
+		return findTrieReader(v.readerWithCache)
+	case *trieReader:
+		return v
+	case *multiStateReader:
+		for _, inner := range v.readers {
+			if tr := findTrieReader(inner); tr != nil {
+				return tr
+			}
+		}
+	}
+	return nil
 }
 
 // EnableConcurrentReads makes the trie reader safe for concurrent access
