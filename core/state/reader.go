@@ -561,12 +561,18 @@ type accountCacheEntry struct {
 	// usedByProcess is flipped exactly once when the PROCESS reader consumes an entry
 	// that was prefetched. Used to compute unique-usage/precision.
 	usedByProcess uint32
+	// walked is set once the key's trie path has been resolved into the trie
+	// reader's tracers for witness recording.
+	walked atomic.Bool
 }
 
 // storageCacheEntry is the cached storage slot plus attribution metadata.
 type storageCacheEntry struct {
 	value  common.Hash
 	origin readerRole
+	// walked is set once the key's trie path has been resolved into the trie
+	// reader's tracers for witness recording.
+	walked atomic.Bool
 }
 
 // storageKey is the composite key for the readerWithCache storage sync.Map.
@@ -584,6 +590,13 @@ type readerWithCache struct {
 
 	// Previously resolved storage entries. Key: storageKey, Value: *storageCacheEntry.
 	storageCache sync.Map
+
+	// insertGen counts first-inserts into either cache. The witness walker
+	// compares it against sweptGen (its last-swept generation) to skip
+	// Ranging the maps when nothing new was cached; only the (I/O-bound)
+	// miss path pays it.
+	insertGen atomic.Uint64
+	sweptGen  atomic.Uint64
 }
 
 // newReaderWithCache constructs the reader with local cache.
@@ -620,6 +633,7 @@ func (r *readerWithCache) account(addr common.Address, caller readerRole) (*type
 		// Report incache=false so miss counters reflect backing-read cost.
 		return ent.acct, false, ent, false, nil
 	}
+	r.insertGen.Add(1)
 	return acct, false, newEnt, true, nil
 }
 
@@ -659,6 +673,7 @@ func (r *readerWithCache) storage(addr common.Address, slot common.Hash, caller 
 		// Report incache=false so miss counters reflect backing-read cost.
 		return ent.value, false, ent, false, nil
 	}
+	r.insertGen.Add(1)
 	return value, false, newEnt, true, nil
 }
 
