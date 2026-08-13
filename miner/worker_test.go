@@ -1913,6 +1913,57 @@ func TestCalculateDesiredGasLimit_BufferUnderflow(t *testing.T) {
 	}
 }
 
+func TestMakeHeaderWithQueuedWriter(t *testing.T) {
+	chainConfig := borUnittestChainConfigWithGiugliano()
+	engine, ctrl := getFakeBorFromConfig(t, chainConfig)
+	defer engine.Close()
+	defer ctrl.Finish()
+
+	w, _, cleanup := newTestWorker(t, DefaultTestConfig(), chainConfig, engine, rawdb.NewMemoryDatabase(), false, 0)
+	defer cleanup()
+
+	w.mu.RLock()
+	lockHeld := true
+	defer func() {
+		if lockHeld {
+			w.mu.RUnlock()
+		}
+	}()
+
+	writerDone := make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		w.setExtra([]byte("queued writer"))
+	}()
+	require.Eventually(t, func() bool {
+		if w.mu.TryRLock() {
+			w.mu.RUnlock()
+			return false
+		}
+		return true
+	}, 5*time.Second, time.Millisecond, "writer did not wait for worker lock")
+
+	headerDone := make(chan error, 1)
+	params := &generateParams{timestamp: uint64(time.Now().Unix()), coinbase: testBankAddress}
+	go func() {
+		_, _, err := w.makeHeader(params, false)
+		headerDone <- err
+	}()
+	select {
+	case err := <-headerDone:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		w.mu.RUnlock()
+		lockHeld = false
+		<-writerDone
+		require.NoError(t, <-headerDone)
+		t.Fatal("makeHeader blocked behind a writer while the caller held the read lock")
+	}
+	w.mu.RUnlock()
+	lockHeld = false
+	<-writerDone
+}
+
 // TestCommitMetrics tests that the commit function properly tracks metrics
 // by verifying the code executes without errors through the full commit path
 func TestCommitMetrics(t *testing.T) {
