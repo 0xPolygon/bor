@@ -74,7 +74,7 @@ func TestConsumerFollowsTheStore(t *testing.T) {
 	}
 
 	sealed1 := precomputedSeal(t, env1)
-	cur = appendOK(t, h, sealEntry(encodeHeader(t, sealed1), cur))
+	appendOK(t, h, sealEntry(encodeHeader(t, sealed1), cur))
 
 	consumer, err := NewConsumer(h.addr, ex.chain)
 	if err != nil {
