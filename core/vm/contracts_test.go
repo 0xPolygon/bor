@@ -540,6 +540,7 @@ func TestReinforceMultiClientPreCompilesTest(t *testing.T) {
 		"IsLisovo",
 		"IsLisovoPro",
 		"IsChicago",
+		"IsHampi",
 	}
 
 	if len(actual) != len(expected) {
@@ -619,6 +620,9 @@ func TestKZGPointEvaluationPrecompileRemoval(t *testing.T) {
 		{name: "Lisovo", rules: params.Rules{IsLisovo: true}, shouldHaveKzg: true},
 		{name: "LisovoPro", rules: params.Rules{IsLisovoPro: true}, shouldHaveKzg: false},
 		{name: "Chicago", rules: params.Rules{IsChicago: true}, shouldHaveKzg: false},
+		// Hampi introduces no precompile delta over Chicago; it only gates the SSTORE
+		// committed-state read ordering.
+		{name: "Hampi", rules: params.Rules{IsHampi: true}, shouldHaveKzg: false},
 	}
 	for _, tc := range cases {
 		precompiles := ActivePrecompiledContracts(tc.rules)

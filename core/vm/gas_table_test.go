@@ -206,29 +206,52 @@ func (c *readCountingStateDB) GetStateAndCommittedState(addr common.Address, has
 	return c.StateDB.GetStateAndCommittedState(addr, hash)
 }
 
+// hampiTestChainConfig copies the shared test chain config with Hampi scheduled at
+// forkBlock, so a test can exercise both sides of the gate without mutating globals.
+func hampiTestChainConfig(forkBlock *big.Int) *params.ChainConfig {
+	cfg := *params.AllEthashProtocolChanges
+	bor := *params.AllEthashProtocolChanges.Bor
+	bor.HampiBlock = forkBlock
+	cfg.Bor = &bor
+
+	return &cfg
+}
+
 // TestPIP88SStoreAccessCheck pins the ordering invariant of the PIP-88 SSTORE gas
 // function: the cold access cost exceeds the reentrancy sentry, so clearing the
-// sentry does not imply the caller can afford a cold slot access. The committed
-// state read must not happen until affordability is confirmed. The wantReads
+// sentry does not imply the caller can afford a cold slot access. From Hampi the
+// committed state read must not happen until affordability is confirmed, and
+// before Hampi the pre-existing ordering must be preserved exactly. The wantReads
 // column is the load-bearing assertion — an error-string check alone would not
 // catch a read performed before the guard.
 func TestPIP88SStoreAccessCheck(t *testing.T) {
 	addr := common.BytesToAddress([]byte("victim"))
 	sentry := params.SstoreSentryGasEIP2200 // 2300
 	cold := params.ColdSstoreCostPIP88      // 2940
+	const forkBlock = 100
 
 	tests := []struct {
 		name      string
 		warm      bool
 		gas       uint64
+		block     int64
 		wantErr   string
 		wantReads int
 	}{
-		{"cold, at sentry, rejected before read", false, sentry, "not enough gas for reentrancy sentry", 0},
-		{"cold, above sentry below access, rejected before read", false, sentry + 1, "not enough gas for slot access", 0},
-		{"cold, one below access, rejected before read", false, cold - 1, "not enough gas for slot access", 0},
-		{"cold, at access, reads", false, cold, "", 1},
-		{"warm, above sentry, reads", true, sentry + 1, "", 1},
+		// At and after activation the read is deferred behind the affordability check.
+		{"at fork, cold, at sentry, rejected before read", false, sentry, forkBlock, "not enough gas for reentrancy sentry", 0},
+		{"at fork, cold, above sentry below access, rejected before read", false, sentry + 1, forkBlock, "not enough gas for slot access", 0},
+		{"at fork, cold, one below access, rejected before read", false, cold - 1, forkBlock, "not enough gas for slot access", 0},
+		{"at fork, cold, at access, reads", false, cold, forkBlock, "", 1},
+		{"at fork, warm, above sentry, reads", true, sentry + 1, forkBlock, "", 1},
+		{"after fork, cold, in window, rejected before read", false, cold - 1, forkBlock + 1, "not enough gas for slot access", 0},
+
+		// Before activation the gate is inert: the read still happens inside the
+		// window and the new error is never surfaced.
+		{"before fork, cold, in window, still reads", false, cold - 1, forkBlock - 1, "", 1},
+		{"before fork, cold, just above sentry, still reads", false, sentry + 1, forkBlock - 1, "", 1},
+		{"before fork, cold, at sentry, rejected by sentry", false, sentry, forkBlock - 1, "not enough gas for reentrancy sentry", 0},
+		{"before fork, cold, at access, reads", false, cold, forkBlock - 1, "", 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -238,7 +261,8 @@ func TestPIP88SStoreAccessCheck(t *testing.T) {
 				inner.AddSlotToAccessList(addr, common.Hash{})
 			}
 			sdb := &readCountingStateDB{StateDB: inner}
-			evm := NewEVM(BlockContext{}, sdb, params.AllEthashProtocolChanges, Config{})
+			blockCtx := BlockContext{BlockNumber: big.NewInt(tt.block)}
+			evm := NewEVM(blockCtx, sdb, hampiTestChainConfig(big.NewInt(forkBlock)), Config{})
 
 			contract := NewContract(common.Address{}, addr, uint256.NewInt(0), tt.gas, nil)
 			stack := newstack()
