@@ -102,20 +102,29 @@ func makeGasSStoreFuncPIP88(clearingRefund uint64) gasFunc {
 		}
 		// Gas sentry honoured, do the actual gas calculation based on the stored value
 		var (
-			y, x              = stack.Back(1), stack.peek()
-			slot              = common.Hash(x.Bytes32())
-			current, original = evm.StateDB.GetStateAndCommittedState(contract.Address(), slot)
-			cost              = uint64(0)
+			y, x = stack.Back(1), stack.peek()
+			slot = common.Hash(x.Bytes32())
+			cost = uint64(0)
 		)
-		// Check slot presence in the access list
+		// Resolve the slot's access cost and warm it before reading. The reentrancy
+		// sentry only guarantees SstoreSentryGasEIP2200, which no longer covers a
+		// cold access once ColdSstoreCostPIP88 exceeds it, so affordability is
+		// checked here rather than implied by the sentry.
+		access := params.WarmStorageReadCostEIP2929
 		if _, slotPresent := evm.StateDB.SlotInAccessList(contract.Address(), slot); !slotPresent {
 			// PIP-88: charge ColdSstoreCostPIP88. Must match the constant
 			// subtracted in the SSTORE_RESET formula below so the EIP-2929
 			// invariant `cold + (RESET - cold) == RESET` (5000) still holds.
 			cost = params.ColdSstoreCostPIP88
+			access = params.ColdSstoreCostPIP88
 			// If the caller cannot afford the cost, this change will be rolled back
 			evm.StateDB.AddSlotToAccessList(contract.Address(), slot)
 		}
+		// Only read the slot once the caller can pay for the access.
+		if contract.Gas < access {
+			return 0, errors.New("not enough gas for slot access")
+		}
+		current, original := evm.StateDB.GetStateAndCommittedState(contract.Address(), slot)
 
 		value := common.Hash(y.Bytes32())
 

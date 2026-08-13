@@ -607,7 +607,11 @@ func (w *worker) setGasCeil(ceil uint64) {
 func (w *worker) calculateDesiredGasLimit(parent *types.Header) uint64 {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
+	return w.calculateDesiredGasLimitLocked(parent)
+}
 
+// calculateDesiredGasLimitLocked requires w.mu to be held for reading.
+func (w *worker) calculateDesiredGasLimitLocked(parent *types.Header) uint64 {
 	// If dynamic gas limit is not enabled, use the static GasCeil
 	if !w.config.EnableDynamicGasLimit {
 		return w.config.GasCeil
@@ -1930,7 +1934,8 @@ type generateParams struct {
 	planWg                    sync.WaitGroup          // Tracks sendPlan goroutines; must reach zero before builderPlanCh is closed
 }
 
-// makeHeader creates a new block header for sealing.
+// makeHeader creates a new block header for sealing. The caller must hold w.mu
+// for reading because the header includes mutable worker configuration.
 func (w *worker) makeHeader(genParams *generateParams, waitOnPrepare bool) (*types.Header, common.Address, error) {
 	// Find the parent block for sealing task
 	parent := w.chain.CurrentBlock()
@@ -1968,7 +1973,7 @@ func (w *worker) makeHeader(genParams *generateParams, waitOnPrepare bool) (*typ
 	}
 
 	// Calculate desired gas limit (may be dynamically adjusted based on base fee)
-	desiredGasLimit := w.calculateDesiredGasLimit(parent)
+	desiredGasLimit := w.calculateDesiredGasLimitLocked(parent)
 
 	// Construct the sealing block header.
 	header := &types.Header{
