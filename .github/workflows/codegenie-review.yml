@@ -34,7 +34,9 @@ jobs:
     # phrase-match and write-permission check internally.
     if: github.event.issue.pull_request
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Keep a cleanup margin beyond review.maxTime so codegenie can publish
+    # its final status comment and upload the report artifact.
+    timeout-minutes: 135
     steps:
       # Fail fast with a legible error if the LLM key isn't provisioned for
       # this repo — otherwise codegenie fails deep in its run with a generic
