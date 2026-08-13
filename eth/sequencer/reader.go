@@ -171,14 +171,8 @@ func (r *reader) floorRead(ctx context.Context) (tailInfo, reconcileOutcome) {
 	// An empty page that is not live is coherent (a trailing gateway not
 	// yet at its tip): nothing to anchor a probe on — fall through to the
 	// full floor walk, which loops pages to live.
-	if len(resp.GetEntries()) > 0 {
-		if h, ok := entryHeight(resp.GetEntries()[0]); ok {
-			if edge, err := r.probeUp(ctx, h); err == nil {
-				if info, out, done := r.tryWalk(ctx, blockReq(edge), nil); done {
-					return info, out
-				}
-			}
-		}
+	if info, out, done := r.probeAnchoredWalk(ctx, resp); done {
+		return info, out
 	}
 
 	// Records carry no height (or the probe raced retention): full floor walk.
@@ -188,6 +182,26 @@ func (r *reader) floorRead(ctx context.Context) (tailInfo, reconcileOutcome) {
 	}
 
 	return info, recOK
+}
+
+// probeAnchoredWalk anchors a walk at the tip edge probed up from the floor
+// entry's height; done reports whether that resolved the tail.
+func (r *reader) probeAnchoredWalk(ctx context.Context, resp *pb.RangeResponse) (tailInfo, reconcileOutcome, bool) {
+	if len(resp.GetEntries()) == 0 {
+		return tailInfo{}, recRetry, false
+	}
+
+	h, ok := entryHeight(resp.GetEntries()[0])
+	if !ok {
+		return tailInfo{}, recRetry, false
+	}
+
+	edge, err := r.probeUp(ctx, h)
+	if err != nil {
+		return tailInfo{}, recRetry, false
+	}
+
+	return r.tryWalk(ctx, blockReq(edge), nil)
 }
 
 // walk reads Range pages from first until live, tracking the tip. An absorb
@@ -211,15 +225,8 @@ func (r *reader) walk(ctx context.Context, first *pb.RangeRequest, absorb func(*
 			return info, err
 		}
 
-		for _, entry := range resp.GetEntries() {
-			if absorb != nil {
-				if err := absorb(entry); err != nil {
-					return info, err
-				}
-			}
-
-			f.fold(entry)
-			trackTip(&info, entry)
+		if err := foldPage(resp, f, &info, absorb); err != nil {
+			return info, err
 		}
 
 		if s, ok := headFrom(resp.GetNext()); ok {
@@ -238,6 +245,23 @@ func (r *reader) walk(ctx context.Context, first *pb.RangeRequest, absorb func(*
 			Limit: walkLimit,
 		}
 	}
+}
+
+// foldPage runs one page's entries through the absorb hook and the folder,
+// tracking the tip; an absorb error ends the walk with it.
+func foldPage(resp *pb.RangeResponse, f *folder, info *tailInfo, absorb func(*pb.Entry) error) error {
+	for _, entry := range resp.GetEntries() {
+		if absorb != nil {
+			if err := absorb(entry); err != nil {
+				return err
+			}
+		}
+
+		f.fold(entry)
+		trackTip(info, entry)
+	}
+
+	return nil
 }
 
 // folder derives the head the walk lands on instead of accepting the one the

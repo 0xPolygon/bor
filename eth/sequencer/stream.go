@@ -144,6 +144,14 @@ func (p *Publisher) runStream(ctx context.Context) streamResult {
 		return streamResult{reason: endStale}
 	}
 
+	return p.streamLoop(ctx, sctx, stream, acks, tracker, cursor, &inflight)
+}
+
+// streamLoop is the session's steady state: wake on appends, acks, and
+// ticks, send whatever became sendable, and report why the session ended.
+func (p *Publisher) streamLoop(ctx, sctx context.Context, stream pb.PublisherService_PublishClient,
+	acks chan ackResult, tracker *stallTracker, cursor uint64, inflight *[]sent,
+) streamResult {
 	progressed := false
 
 	idle := time.NewTicker(idleReconcileInterval)
@@ -156,6 +164,8 @@ func (p *Publisher) runStream(ctx context.Context) streamResult {
 	// competitor is what lets the build follow their sequence.
 	watch := time.NewTicker(heldWatchInterval)
 	defer watch.Stop()
+
+	ok := false
 
 	for {
 		select {
@@ -175,7 +185,7 @@ func (p *Publisher) runStream(ctx context.Context) streamResult {
 			}
 		case <-p.wake:
 		case ack := <-acks:
-			res, done := p.handleAck(ack, &inflight)
+			res, done := p.handleAck(ack, inflight)
 			if done {
 				res.progressed = progressed
 
@@ -189,7 +199,7 @@ func (p *Publisher) runStream(ctx context.Context) streamResult {
 
 		// One send site serves every wake source: a worker append, an ack
 		// freeing a cap slot, or a tick that found nothing to end on.
-		if cursor, ok = p.sendAfter(stream, cursor, &inflight, tracker); !ok {
+		if cursor, ok = p.sendAfter(stream, cursor, inflight, tracker); !ok {
 			return streamResult{reason: endStale, progressed: progressed}
 		}
 	}

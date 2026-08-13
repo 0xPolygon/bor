@@ -1,0 +1,169 @@
+package sequencer
+
+import (
+	"math/big"
+	"testing"
+	"time"
+
+	"github.com/0xPolygon/sequence-store-proto/commitment"
+	pb "github.com/0xPolygon/sequence-store-proto/sequencestore/v1"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/trie"
+)
+
+// appendOK appends one entry to the harness store, failing on a rejected
+// prefix, and returns the advanced head for the next entry.
+func appendOK(t *testing.T, h *harness, entry *pb.Entry) commitment.Head {
+	t.Helper()
+
+	if status := h.store.Append(entry); status != pb.AckStatus_ACK_STATUS_OK {
+		t.Fatalf("append rejected: %v", status)
+	}
+
+	return h.store.Head()
+}
+
+// precomputedSeal re-executes the block the way the consumer will and
+// returns the sealed header a correct producer would announce.
+func precomputedSeal(t *testing.T, env *blockEnv) *types.Header {
+	t.Helper()
+
+	return &types.Header{
+		ParentHash:  env.header.ParentHash,
+		Number:      new(big.Int).Set(env.header.Number),
+		Time:        env.header.Time,
+		GasLimit:    env.header.GasLimit,
+		BaseFee:     new(big.Int).Set(env.header.BaseFee),
+		GasUsed:     env.header.GasUsed,
+		ReceiptHash: types.DeriveSha(types.Receipts(env.receipts), trie.NewStackTrie(nil)),
+		Root:        env.statedb.Copy().IntermediateRoot(true),
+		Difficulty:  big.NewInt(1),
+	}
+}
+
+// The full follow loop against a live store: stream, re-execute, serve the
+// receipt, evict on canonical import, survive a store bounce with a warm
+// resume, and keep consuming.
+func TestConsumerFollowsTheStore(t *testing.T) {
+	ex := startExecHarness(t)
+	h := startHarness(t)
+	head := ex.chain.CurrentBlock()
+
+	// Height N+1, staged in the store before the consumer starts (the
+	// replay path). The seal is precomputed by re-executing locally —
+	// identical inputs, identical results.
+	cur := h.store.Head()
+	open1 := openOn(head, ex.config, cur)
+	cur = appendOK(t, h, open1)
+
+	tx1 := ex.transfer(t, 0)
+	raw1, _ := tx1.MarshalBinary()
+	cur = appendOK(t, h, recordEntry(raw1, cur))
+
+	statedb, err := ex.chain.StateAt(head.Root)
+	if err != nil {
+		t.Fatalf("state: %v", err)
+	}
+
+	env1 := newBlockEnv(ex.chain, statedb, open1.GetBlockOpen(), nil)
+	if _, _, err := env1.applyRaw(raw1); err != nil {
+		t.Fatalf("local re-execution: %v", err)
+	}
+
+	sealed1 := precomputedSeal(t, env1)
+	cur = appendOK(t, h, sealEntry(encodeHeader(t, sealed1), cur))
+
+	consumer, err := NewConsumer(h.addr, ex.chain)
+	if err != nil {
+		t.Fatalf("NewConsumer: %v", err)
+	}
+
+	consumer.Start()
+	defer consumer.Close()
+
+	waitFor(t, 5*time.Second, func() bool {
+		receipt, _, ok := consumer.Index().Lookup(tx1.Hash())
+
+		return ok && receipt.BlockHash == sealed1.Hash()
+	})
+
+	// Canonical import of the same height evicts the preconf receipt: the
+	// chain serves it from here on.
+	if _, err := ex.chain.InsertChain(types.Blocks{ex.next}, false); err != nil {
+		t.Fatalf("insert next: %v", err)
+	}
+
+	waitFor(t, 5*time.Second, func() bool {
+		_, _, ok := consumer.Index().Lookup(tx1.Hash())
+
+		return !ok
+	})
+
+	// Store bounce: the session survives on a warm resume and keeps
+	// consuming entries appended after the restart.
+	h.stop()
+	h.resume()
+
+	cur = h.store.Head()
+	open2 := openOn(sealed1, ex.config, cur)
+	cur = appendOK(t, h, open2)
+
+	tx2 := ex.transfer(t, 1)
+	raw2, _ := tx2.MarshalBinary()
+	cur = appendOK(t, h, recordEntry(raw2, cur))
+
+	env2 := newBlockEnv(ex.chain, env1.statedb, open2.GetBlockOpen(),
+		map[uint64]common.Hash{sealed1.Number.Uint64(): sealed1.Hash()})
+	if _, _, err := env2.applyRaw(raw2); err != nil {
+		t.Fatalf("local re-execution 2: %v", err)
+	}
+
+	appendOK(t, h, sealEntry(encodeHeader(t, precomputedSeal(t, env2)), cur))
+
+	waitFor(t, 10*time.Second, func() bool {
+		_, _, ok := consumer.Index().Lookup(tx2.Hash())
+
+		return ok
+	})
+}
+
+func TestNewConsumerRequiresABorChain(t *testing.T) {
+	ex := startExecHarnessBor(t, nil)
+
+	if _, err := NewConsumer("127.0.0.1:0", ex.chain); err == nil {
+		t.Fatal("a non-bor chain must be rejected")
+	}
+}
+
+// deterministic gates the session on a reproducible execution context.
+func TestConsumerDeterminismGate(t *testing.T) {
+	preRio := startExecHarnessBor(t, &params.BorConfig{
+		RioBlock:      big.NewInt(1_000_000),
+		BurntContract: map[string]string{"0": "0x000000000000000000000000000000000000dead"},
+	})
+
+	c := &Consumer{chain: preRio.chain}
+	if err := c.deterministic(); err == nil {
+		t.Fatal("pre-rio head must not be deterministic")
+	}
+
+	noCoinbase := startExecHarnessBor(t, &params.BorConfig{
+		RioBlock:      big.NewInt(0),
+		BurntContract: map[string]string{"0": "0x000000000000000000000000000000000000dead"},
+	})
+
+	c = &Consumer{chain: noCoinbase.chain}
+	if err := c.deterministic(); err == nil {
+		t.Fatal("a zero coinbase map must not be deterministic")
+	}
+
+	rio := startExecHarness(t)
+
+	c = &Consumer{chain: rio.chain}
+	if err := c.deterministic(); err != nil {
+		t.Fatalf("rio with a coinbase map must be deterministic: %v", err)
+	}
+}

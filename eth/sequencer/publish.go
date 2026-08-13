@@ -119,27 +119,7 @@ func (p *Publisher) SealBlock(block *types.Block) {
 
 	recovered := mode.kind == modeRecover && mode.height == n
 	if recovered || mode.kind == modeSealedWait {
-		// This block is a rebuild of a generation the store already holds,
-		// seal included. Republishing it would open a second generation over
-		// a sealed height — the displacement this whole design exists to
-		// prevent. Nothing to publish and nothing to gate: the block only
-		// needs to reach the chain.
-		p.curHeight = 0
-		p.awaitOpen = false
-		p.hold = clearedHold()
-
-		if recovered {
-			p.gate = sealGate{}
-
-			return
-		}
-
-		// Not a recovery: the store closed this height with content this
-		// block does not carry, and the winner's block has not arrived yet.
-		// Broadcasting divergent content here is the displacement the gate
-		// exists to stop, so an undecided height refuses. The next build
-		// recovers the height properly once the grace has elapsed.
-		p.gate = sealGate{height: n, hash: block.Hash(), refuseOnTimeout: true}
+		p.sealWithoutPublishLocked(recovered, n, block.Hash())
 
 		return
 	}
@@ -169,6 +149,30 @@ func (p *Publisher) SealBlock(block *types.Block) {
 	p.awaitOpen = false
 	p.hold = clearedHold()
 	p.collapseColdLocked()
+}
+
+// sealWithoutPublishLocked closes the build state for a block that is a
+// rebuild of a generation the store already holds, seal included.
+// Republishing it would open a second generation over a sealed height —
+// the displacement this whole design exists to prevent. Nothing publishes;
+// the block only needs to reach the chain.
+func (p *Publisher) sealWithoutPublishLocked(recovered bool, n uint64, hash common.Hash) {
+	p.curHeight = 0
+	p.awaitOpen = false
+	p.hold = clearedHold()
+
+	if recovered {
+		p.gate = sealGate{}
+
+		return
+	}
+
+	// Not a recovery: the store closed this height with content this
+	// block does not carry, and the winner's block has not arrived yet.
+	// Broadcasting divergent content here is the displacement the gate
+	// exists to stop, so an undecided height refuses. The next build
+	// recovers the height properly once the grace has elapsed.
+	p.gate = sealGate{height: n, hash: hash, refuseOnTimeout: true}
 }
 
 // collapseColdLocked bounds the undelivered flushes held in memory: past

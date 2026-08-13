@@ -91,16 +91,8 @@ func (p *Publisher) ConfirmSeal(timeout time.Duration) miner.SealVerdict {
 		g := p.gate
 		p.mu.Unlock()
 
-		if g.height == 0 {
-			return miner.SealUnknown // nothing gated (muted or failed build)
-		}
-
-		if g.verdict == gateLost {
-			return p.refuseGated()
-		}
-
-		if g.verdict == gateConfirmed {
-			return p.settle(miner.SealConfirmed)
+		if v, done := p.storedVerdict(g); done {
+			return v
 		}
 
 		// The canonical lookup is an uncached database read, and this wait
@@ -109,13 +101,8 @@ func (p *Publisher) ConfirmSeal(timeout time.Duration) miner.SealVerdict {
 		if now := time.Now(); p.chain != nil && now.After(chainCheck) {
 			chainCheck = now.Add(50 * time.Millisecond)
 
-			switch canonical := p.chain.GetCanonicalHash(g.height); {
-			case canonical == g.hash:
-				// A same-key twin broadcast our exact block: it is already
-				// the chain. Broadcasting again is a harmless duplicate.
-				return p.settle(miner.SealConfirmed)
-			case canonical != (common.Hash{}):
-				return p.refuseGated()
+			if v, done := p.chainVerdict(g); done {
+				return v
 			}
 		}
 
@@ -135,21 +122,57 @@ func (p *Publisher) ConfirmSeal(timeout time.Duration) miner.SealVerdict {
 			continue
 		}
 
-		if g.refuseOnTimeout {
-			return p.refuseGated()
-		}
-
-		if !failed {
-			switch p.gateRecheck(g) {
-			case miner.SealRefused:
-				return p.refuseGated()
-			case miner.SealConfirmed:
-				return p.settle(miner.SealConfirmed)
-			}
-		}
-
-		return p.settle(miner.SealUnknown)
+		return p.expiredVerdict(g, failed)
 	}
+}
+
+// storedVerdict resolves the gate from what the store already decided: an
+// ack confirmed it, a foreign seal lost it, or nothing is gated at all.
+func (p *Publisher) storedVerdict(g sealGate) (miner.SealVerdict, bool) {
+	switch {
+	case g.height == 0:
+		return miner.SealUnknown, true // nothing gated (muted or failed build)
+	case g.verdict == gateLost:
+		return p.refuseGated(), true
+	case g.verdict == gateConfirmed:
+		return p.settle(miner.SealConfirmed), true
+	}
+
+	return miner.SealUnknown, false
+}
+
+// chainVerdict resolves the gate from our own chain: the winner's block
+// importing at our height is the rejection notice, our own hash there is
+// a twin's harmless duplicate broadcast.
+func (p *Publisher) chainVerdict(g sealGate) (miner.SealVerdict, bool) {
+	switch canonical := p.chain.GetCanonicalHash(g.height); {
+	case canonical == g.hash:
+		return p.settle(miner.SealConfirmed), true
+	case canonical != (common.Hash{}):
+		return p.refuseGated(), true
+	}
+
+	return miner.SealUnknown, false
+}
+
+// expiredVerdict resolves a gate whose budget ran out: refuse when the
+// seal was withheld pending a decision, otherwise recheck the store once
+// and let liveness broadcast on anything short of an affirmative refusal.
+func (p *Publisher) expiredVerdict(g sealGate, failed bool) miner.SealVerdict {
+	if g.refuseOnTimeout {
+		return p.refuseGated()
+	}
+
+	if !failed {
+		switch p.gateRecheck(g) {
+		case miner.SealRefused:
+			return p.refuseGated()
+		case miner.SealConfirmed:
+			return p.settle(miner.SealConfirmed)
+		}
+	}
+
+	return p.settle(miner.SealUnknown)
 }
 
 // settle resolves the gate with a non-refusal verdict: clear, count, return.
