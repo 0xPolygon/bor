@@ -101,6 +101,12 @@ labels = ["consensus"]
 reason = "validator auth, sprint/span block production, Heimdall trust, fork choice"
 
 [[classification.pathRules]]
+pattern = "consensus/misc/**"
+reviewPriority = "critical"
+labels = ["consensus"]
+reason = "shared base-fee, blob-gas, and gas-limit validation used by Bor production"
+
+[[classification.pathRules]]
 pattern = "miner/**"
 reviewPriority = "critical"
 labels = ["consensus"]
