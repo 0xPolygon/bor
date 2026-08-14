@@ -78,6 +78,13 @@ var (
 
 	// ErrTxFiltered is returned if a transaction is from a filtered address.
 	ErrTxFiltered = errors.New("transaction from filtered address")
+
+	// ErrReservedOccupancyExceeded is returned when admitting a reserved-blockspace
+	// sender's transaction would push aggregate reserved occupancy over its cap,
+	// independent of overall pool fullness. Distinct from ErrTxPoolOverflow (which
+	// fires only once the entire pool is full): the operational fix differs, since
+	// this fires purely on the reserved-specific ceiling.
+	ErrReservedOccupancyExceeded = errors.New("reserved-sender pool occupancy exceeded")
 )
 
 var (
@@ -123,6 +130,10 @@ var (
 	pendingGauge = metrics.NewRegisteredGauge("txpool/pending", nil)
 	queuedGauge  = metrics.NewRegisteredGauge("txpool/queued", nil)
 	slotsGauge   = metrics.NewRegisteredGauge("txpool/slots", nil)
+
+	// reservedOccupancyGauge mirrors pendingGauge/queuedGauge for the combined
+	// (pending+queued) occupancy of reserved-blockspace senders.
+	reservedOccupancyGauge = metrics.NewRegisteredGauge("txpool/reserved/occupancy", nil)
 
 	resetCacheGauge       = metrics.NewRegisteredGauge("txpool/resetcache", nil)
 	reheapTimer           = metrics.NewRegisteredTimer("txpool/reheap", nil)
@@ -189,6 +200,12 @@ type Config struct {
 	AccountQueue uint64 // Maximum number of non-executable transaction slots permitted per account
 	GlobalQueue  uint64 // Maximum number of non-executable transaction slots for all accounts
 
+	// ReservedMaxOccupancyPercent bounds the percentage of GlobalSlots+GlobalQueue
+	// that reserved-blockspace senders may occupy in aggregate, combined across
+	// pending and queued. Guarantees normal senders at least (100-this)% of the
+	// pool regardless of how many addresses a reserved client whitelists.
+	ReservedMaxOccupancyPercent uint64
+
 	Lifetime            time.Duration // Maximum amount of time non-executable transaction are queued
 	AllowUnprotectedTxs bool          // Allow non-EIP-155 transactions
 
@@ -214,6 +231,8 @@ var DefaultConfig = Config{
 	GlobalSlots:  4096 + 1024, // urgent + floating queue capacity with 4:1 ratio
 	AccountQueue: 64,
 	GlobalQueue:  1024,
+
+	ReservedMaxOccupancyPercent: 50, // normal senders always keep at least half the pool
 
 	Lifetime:            3 * time.Hour,
 	AllowUnprotectedTxs: false,
@@ -252,6 +271,10 @@ func (config *Config) sanitize() Config {
 	if conf.GlobalQueue < 1 {
 		log.Warn("Sanitizing invalid txpool global queue", "provided", conf.GlobalQueue, "updated", DefaultConfig.GlobalQueue)
 		conf.GlobalQueue = DefaultConfig.GlobalQueue
+	}
+	if conf.ReservedMaxOccupancyPercent < 1 || conf.ReservedMaxOccupancyPercent > 100 {
+		log.Warn("Sanitizing invalid reserved occupancy percent", "provided", conf.ReservedMaxOccupancyPercent, "updated", DefaultConfig.ReservedMaxOccupancyPercent)
+		conf.ReservedMaxOccupancyPercent = DefaultConfig.ReservedMaxOccupancyPercent
 	}
 	if conf.Lifetime < 1 {
 		log.Warn("Sanitizing invalid txpool lifetime", "provided", conf.Lifetime, "updated", DefaultConfig.Lifetime)
@@ -332,6 +355,14 @@ type LegacyPool struct {
 	// per-tx admission path never reads contract state.
 	reservedRegistry registryreader.Reader
 	reservedSnapshot atomic.Pointer[registryreader.Snapshot]
+
+	// reservedOccupancy is the combined (pending+queued) transaction count
+	// currently held by reserved-blockspace senders, guarded by pool.mu like
+	// every other pool field. Maintained incrementally at each mutation site
+	// (Layer 1) and recomputed from scratch once per reorg cycle in reset()
+	// (Layer 2) so a missed touchpoint can't drift the figure indefinitely —
+	// see reservedOccupancyCap and recomputeReservedOccupancy.
+	reservedOccupancy int
 
 	// Rebroadcast tracking
 	rebroadcastTxFeed event.Feed                // Feed for stuck transaction events
@@ -1011,12 +1042,33 @@ func (pool *LegacyPool) add(tx *types.Transaction, async bool) (replaced bool, e
 	}
 	// already validated by this point
 	from, _ := types.Sender(pool.signer, tx)
+	// Resolved once and reused below (the pending-replace branch, the
+	// Underpriced exemption, and the post-enqueue occupancy bump): isReserved
+	// and a pending map lookup are each cheap individually, but this tx is
+	// looked at from several angles below and every one of them would
+	// otherwise re-derive the same answer.
+	reserved := pool.isReserved(from)
+	pendingList := pool.pending[from]
+
+	// Reserved-blockspace occupancy cap: reject outright, before any
+	// Discard/eviction attempt, if this sender is reserved and admitting the
+	// transaction would occupy a genuinely new slot (as opposed to a same-
+	// nonce replacement, which leaves combined occupancy unchanged) that
+	// pushes aggregate reserved occupancy over its cap. Runs unconditionally,
+	// independent of overall pool fullness — unlike the Underpriced exemption
+	// below, which only applies once the pool is already globally full.
+	if reserved && pool.isNewReservedSlot(pendingList, from, tx) {
+		if pool.reservedOccupancy+1 > pool.reservedOccupancyCap() {
+			stage0Duration = time.Since(stage0Time)
+			return false, ErrReservedOccupancyExceeded
+		}
+	}
 
 	// If the address is not yet known, request exclusivity to track the account
 	// only by this subpool until all transactions are evicted
 	var (
-		_, hasPending = pool.pending[from]
-		_, hasQueued  = pool.queue.get(from)
+		hasPending   = pendingList != nil
+		_, hasQueued = pool.queue.get(from)
 	)
 	if !hasPending && !hasQueued {
 		if err := pool.reserver.Hold(from); err != nil {
@@ -1058,7 +1110,7 @@ func (pool *LegacyPool) add(tx *types.Transaction, async bool) (replaced bool, e
 		// If the new transaction is underpriced, don't accept it. Reserved-blockspace
 		// senders pay zero fee, so they always look underpriced; exempt them (they
 		// are also protected from eviction in the priced list's Discard).
-		if !pool.isReserved(from) && pool.priced.Underpriced(tx) {
+		if !reserved && pool.priced.Underpriced(tx) {
 			log.Trace("Discarding underpriced transaction", "hash", hash, "gasTipCap", tx.GasTipCap(), "gasFeeCap", tx.GasFeeCap())
 			underpricedTxMeter.Mark(1)
 			stage1Duration = time.Since(stage1Time)
@@ -1145,8 +1197,12 @@ func (pool *LegacyPool) add(tx *types.Transaction, async bool) (replaced bool, e
 	// increment stage, stage2 time already captured above
 	currentStage = 2
 
-	// Try to replace an existing transaction in the pending pool
-	if list := pool.pending[from]; list != nil && list.Contains(tx.Nonce()) {
+	// Try to replace an existing transaction in the pending pool. pendingList
+	// (resolved once, above) is the same object pool.pending[from] would
+	// still resolve to here: nothing in the full-pool branch above replaces
+	// it wholesale, only mutates it in place or deletes the map entry once
+	// it's empty, both visible through the reference already held.
+	if list := pendingList; list != nil && list.Contains(tx.Nonce()) {
 		// Nonce already pending, check if required price bump is met
 		inserted, old := list.Add(tx, pool.config.PriceBump)
 		if !inserted {
@@ -1188,6 +1244,13 @@ func (pool *LegacyPool) add(tx *types.Transaction, async bool) (replaced bool, e
 		stage2Duration = time.Since(stage2Time)
 		return false, err
 	}
+	// A genuinely new queue slot (not a same-nonce queue replacement): the
+	// only addAll=true caller of enqueueTx, so the increment belongs here
+	// rather than inside enqueueTx, reusing the reserved-ness already
+	// resolved above instead of re-deriving the sender and re-checking it.
+	if !replaced {
+		pool.bumpReservedOccupancy(reserved, 1)
+	}
 
 	stage2Duration = time.Since(stage2Time)
 	log.Trace("Pooled new future transaction", "hash", hash, "from", from, "to", tx.To())
@@ -1218,6 +1281,61 @@ func (pool *LegacyPool) isGapped(from common.Address, tx *types.Transaction) boo
 	return false
 }
 
+// isNewReservedSlot reports whether tx would occupy a genuinely new pending
+// or queued slot for its sender, as opposed to replacing an existing
+// transaction at the same nonce. Reserved-ness is a property of the sender,
+// invariant across a same-sender replacement, so only a genuinely new slot
+// changes combined reserved occupancy. pending is the caller's own
+// pool.pending[from] lookup (add's pending-replace branch needs the identical
+// check moments later, so callers share one lookup rather than each doing
+// their own).
+func (pool *LegacyPool) isNewReservedSlot(pending *list, from common.Address, tx *types.Transaction) bool {
+	if pending != nil && pending.Contains(tx.Nonce()) {
+		return false
+	}
+	if queued, ok := pool.queue.get(from); ok && queued.Contains(tx.Nonce()) {
+		return false
+	}
+	return true
+}
+
+// reservedOccupancyCap returns the current combined pending+queued occupancy
+// ceiling for reserved-blockspace senders: ReservedMaxOccupancyPercent of the
+// pool's own combined slot ceiling, so normal senders always keep at least
+// the complementary share of the pool.
+func (pool *LegacyPool) reservedOccupancyCap() int {
+	total := pool.config.GlobalSlots + pool.config.GlobalQueue
+	return int(total * pool.config.ReservedMaxOccupancyPercent / 100)
+}
+
+// addReservedOccupancy adjusts the combined reserved-occupancy counter by
+// delta and keeps its gauge in sync, so every mutation site updates both
+// through a single call rather than risking the two drifting apart.
+func (pool *LegacyPool) addReservedOccupancy(delta int) {
+	pool.reservedOccupancy += delta
+	reservedOccupancyGauge.Update(int64(pool.reservedOccupancy))
+}
+
+// bumpReservedOccupancy applies delta to the combined reserved-occupancy
+// counter if reserved is true, a no-op otherwise. Centralizes the
+// isReserved-then-addReservedOccupancy guard repeated at every mutation site;
+// callers that already know an address's reserved-ness (typically because
+// they needed it for something else moments earlier) pass it directly rather
+// than paying for isReserved's atomic load and big.Int allocation again.
+func (pool *LegacyPool) bumpReservedOccupancy(reserved bool, delta int) {
+	if reserved {
+		pool.addReservedOccupancy(delta)
+	}
+}
+
+// bumpReservedOccupancyForTx is bumpReservedOccupancy for a tx whose sender
+// and reserved-ness the caller hasn't already resolved, doing both once.
+func (pool *LegacyPool) bumpReservedOccupancyForTx(tx *types.Transaction, delta int) {
+	if from, err := types.Sender(pool.signer, tx); err == nil {
+		pool.bumpReservedOccupancy(pool.isReserved(from), delta)
+	}
+}
+
 // enqueueTx inserts a new transaction into the non-executable transaction queue.
 //
 // Note, this method assumes the pool lock is held!
@@ -1229,6 +1347,12 @@ func (pool *LegacyPool) enqueueTx(hash common.Hash, tx *types.Transaction, addAl
 	if replaced != nil {
 		pool.removeTx(*replaced, true, true)
 	}
+	// A genuinely new (non-replacing) queue slot's reserved-occupancy
+	// increment is applied by add(), the only addAll=true caller: it already
+	// has the sender's reserved-ness in hand, so there's no need to re-derive
+	// it here. Internal reshuffles (demoteUnexecutables/removeTx postponing a
+	// tx back into the queue) call this with addAll=false and are net-zero
+	// for combined occupancy regardless: the tx already counted while pending.
 	// If the transaction isn't in lookup set but it's expected to be there,
 	// show the error log.
 	if pool.all.Get(hash) == nil && !addAll {
@@ -1254,11 +1378,16 @@ func (pool *LegacyPool) promoteTx(addr common.Address, hash common.Hash, tx *typ
 
 	inserted, old := list.Add(tx, pool.config.PriceBump)
 	if !inserted {
-		// An older transaction was better, discard this
+		// An older transaction was better, discard this. Every promotion
+		// candidate came from the queue's readies (see promoteExecutables),
+		// so this is a genuine loss for combined occupancy rather than a
+		// queue->pending move: the tx already left the queue bucket but never
+		// entered the pending one.
 		pool.all.Remove(hash)
 		pool.priced.Removed(1)
 		pendingDiscardMeter.Mark(1)
 		delete(pool.lastRebroadcast, hash)
+		pool.bumpReservedOccupancy(pool.isReserved(addr), -1)
 		return false
 	}
 	// Otherwise discard any previous transaction and mark this
@@ -1467,6 +1596,9 @@ func (pool *LegacyPool) removeTx(hash common.Hash, outofbound bool, unreserve bo
 		return 0
 	}
 	addr, _ := types.Sender(pool.signer, tx) // already validated during insertion
+	// Resolved once and reused below for whichever of the pending/queue
+	// branches turns out to be the genuine removal.
+	reserved := pool.isReserved(addr)
 
 	// If after deletion there are no more transactions belonging to this account,
 	// relinquish the address reservation. It's a bit convoluted do this, via a
@@ -1505,10 +1637,21 @@ func (pool *LegacyPool) removeTx(hash common.Hash, outofbound bool, unreserve bo
 			pool.pendingNonces.setIfLower(addr, tx.Nonce())
 			// Reduce the pending counter
 			pendingGauge.Dec(int64(1 + len(invalids)))
+			// Only the target tx is a genuine loss for combined occupancy;
+			// each invalid was just re-enqueued above (pending->queue, net
+			// zero), matching enqueueTx's addAll=false handling.
+			pool.bumpReservedOccupancy(reserved, -1)
 			return 1 + len(invalids)
 		}
 	}
-	// Transaction is in the future queue
+	// Transaction is in the future queue. Mirror queue.remove's own
+	// stale-hash guard: only a tx that's actually still at this nonce (not
+	// already superseded by a replacement) is a genuine removal.
+	if list, ok := pool.queue.get(addr); ok {
+		if existing := list.txs.Get(tx.Nonce()); existing != nil && existing.Hash() == tx.Hash() {
+			pool.bumpReservedOccupancy(reserved, -1)
+		}
+	}
 	pool.queue.remove(addr, tx)
 	return 0
 }
@@ -1682,6 +1825,11 @@ func (pool *LegacyPool) runReorg(done chan struct{}, reset *txpoolResetRequest, 
 	// Ensure pool.queue and pool.pending sizes stay within the configured limits.
 	pool.truncatePending()
 	pool.truncateQueue()
+	// Defense-in-depth backstop for the reserved-occupancy cap; see
+	// truncateReservedOccupancy. Ordered after both truncations above since it
+	// spans both buckets and is a no-op unless something upstream let the
+	// combined figure drift over the (possibly newly-lowered) cap.
+	pool.truncateReservedOccupancy()
 
 	// Update metrics
 	dropBetweenReorgHistogram.Update(int64(pool.changesSinceReorg))
@@ -1823,6 +1971,12 @@ func (pool *LegacyPool) reset(oldHead, newHead *types.Header) {
 
 	// Add transactions synchronously as we're already holding the lock
 	pool.addTxs(reinject, false)
+
+	// Layer 2 of the reserved-occupancy counter: recompute it from scratch
+	// once per reorg cycle. This is the self-correcting anchor for the
+	// incremental Layer-1 updates applied at each mutation site above — any
+	// drift from a missed touchpoint cannot accumulate past one reorg cycle.
+	pool.reconcileReservedOccupancy()
 }
 
 // promoteExecutables moves transactions that have become processable from the
@@ -1841,8 +1995,15 @@ func (pool *LegacyPool) promoteExecutables(accounts []common.Address) []*types.T
 		}
 	}
 
-	// remove all removable transactions
+	// remove all removable transactions. dropped merges the queue's forwards
+	// (stale nonce), drops (unpayable/over gas limit) and caps (over
+	// AccountQueue) — every one of these is an outright removal from the
+	// queue bucket, never a move, so each reserved-sender hash here is a
+	// genuine -1. Resolve sender before removing from pool.all.
 	for _, hash := range dropped {
+		if tx := pool.all.Get(hash); tx != nil {
+			pool.bumpReservedOccupancyForTx(tx, -1)
+		}
 		pool.all.Remove(hash)
 		delete(pool.lastRebroadcast, hash)
 	}
@@ -1909,6 +2070,7 @@ func (pool *LegacyPool) truncatePending() {
 					}
 					pool.priced.Removed(len(caps))
 					pendingGauge.Dec(int64(len(caps)))
+					pool.bumpReservedOccupancy(pool.isReserved(offenders[i]), -len(caps))
 
 					pending--
 				}
@@ -1935,6 +2097,7 @@ func (pool *LegacyPool) truncatePending() {
 				}
 				pool.priced.Removed(len(caps))
 				pendingGauge.Dec(int64(len(caps)))
+				pool.bumpReservedOccupancy(pool.isReserved(addr), -len(caps))
 				pending--
 			}
 		}
@@ -1946,8 +2109,14 @@ func (pool *LegacyPool) truncatePending() {
 func (pool *LegacyPool) truncateQueue() {
 	removed, removedAddresses := pool.queue.truncate()
 
-	// Remove all removable transactions from the lookup and global price list
+	// Remove all removable transactions from the lookup and global price list.
+	// Resolve each hash's sender before removing it from pool.all, so reserved
+	// drops can be attributed even for accounts that were only partially
+	// truncated (and so don't appear in removedAddresses).
 	for _, hash := range removed {
+		if tx := pool.all.Get(hash); tx != nil {
+			pool.bumpReservedOccupancyForTx(tx, -1)
+		}
 		pool.all.Remove(hash)
 		delete(pool.lastRebroadcast, hash)
 	}
@@ -1976,6 +2145,7 @@ func (pool *LegacyPool) demoteUnexecutables() {
 	gasLimit := currentHeader.GasLimit
 	for addr, list := range pool.pending {
 		nonce := pool.currentState.GetNonce(addr)
+		reserved := pool.isReserved(addr)
 
 		// Drop all transactions that are deemed too old (low nonce)
 		olds := list.Forward(nonce)
@@ -1986,7 +2156,7 @@ func (pool *LegacyPool) demoteUnexecutables() {
 			log.Trace("Removed old pending transaction", "hash", hash)
 		}
 		// Drop all transactions that are too costly (low balance or out of gas), and queue any invalids back for later
-		drops, invalids := list.Filter(pool.currentState.GetBalance(addr), gasLimit, pool.isReserved(addr))
+		drops, invalids := list.Filter(pool.currentState.GetBalance(addr), gasLimit, reserved)
 		for _, tx := range drops {
 			hash := tx.Hash()
 			pool.all.Remove(hash)
@@ -2013,6 +2183,9 @@ func (pool *LegacyPool) demoteUnexecutables() {
 		}
 
 		pendingGauge.Dec(int64(len(olds) + len(drops) + len(invalids) + len(txConditionalsRemoved)))
+		// invalids move to the queue (enqueueTx above, addAll=false) and net
+		// zero for combined occupancy; only outright removals are a loss.
+		pool.bumpReservedOccupancy(reserved, -(len(olds) + len(drops) + len(txConditionalsRemoved)))
 		// If there's a gap in front, alert (should never happen) and postpone all transactions
 		if list.Len() > 0 && list.txs.Get(nonce) == nil {
 			gapped := list.Cap(0)
@@ -2292,6 +2465,7 @@ func (pool *LegacyPool) Clear() {
 	pool.pending = make(map[common.Address]*list)
 	pool.queue = newQueue(pool.config, pool.signer)
 	pool.pendingNonces = newNoncer(pool.currentState)
+	pool.addReservedOccupancy(-pool.reservedOccupancy)
 }
 
 // HasPendingAuth returns a flag indicating whether there are pending
@@ -2381,4 +2555,139 @@ func (pool *LegacyPool) rebuildReservedSnapshot(statedb *state.StateDB, head *ty
 		return
 	}
 	pool.reservedSnapshot.Store(snap)
+}
+
+// reconcileReservedOccupancy recomputes reservedOccupancy from scratch and
+// overwrites the incrementally-tracked value with it, logging any disagreement
+// first so a Layer-1 touchpoint bug is observable rather than silently
+// self-correcting into invisibility. Called once per reorg cycle from reset.
+func (pool *LegacyPool) reconcileReservedOccupancy() {
+	recomputed := pool.recomputeReservedOccupancy()
+	if delta := recomputed - pool.reservedOccupancy; delta != 0 {
+		log.Warn("Reserved pool occupancy drifted from its incremental tally, correcting",
+			"incremental", pool.reservedOccupancy, "recomputed", recomputed, "delta", delta)
+	}
+	pool.reservedOccupancy = recomputed
+	reservedOccupancyGauge.Update(int64(recomputed))
+}
+
+// reservedCount returns addr's combined pending+queued transaction count,
+// regardless of whether addr is currently reserved — callers gate on
+// isReserved themselves, since the two places this is used (a from-scratch
+// recompute and the reorg-time backstop's spam ordering) each need to combine
+// that gate with the count differently.
+func (pool *LegacyPool) reservedCount(addr common.Address) int {
+	count := 0
+	if list := pool.pending[addr]; list != nil {
+		count += list.Len()
+	}
+	if list, ok := pool.queue.get(addr); ok {
+		count += list.Len()
+	}
+	return count
+}
+
+// recomputeReservedOccupancy walks the addresses currently tracked by the
+// pool (pending and queued) and re-sums combined occupancy for whichever of
+// them are reserved. An address that is reserved but holds nothing in the
+// pool contributes zero either way, so this is equivalent to walking the full
+// registry-reserved address set, but costs only O(distinct addresses
+// currently in the pool) — the same bound truncatePending/demoteUnexecutables
+// already pay once per reorg cycle — with no extra registry state read.
+//
+// pending and queue are disjoint maps, so summing reservedCount once per
+// address across the two loops below can never double-count; the only care
+// needed is not visiting an address (and so its already-combined count)
+// twice, which the pool.pending membership check in the second loop handles
+// without a separate address set.
+func (pool *LegacyPool) recomputeReservedOccupancy() int {
+	var occupancy int
+	for addr := range pool.pending {
+		if pool.isReserved(addr) {
+			occupancy += pool.reservedCount(addr)
+		}
+	}
+	for _, addr := range pool.queue.addresses() {
+		if _, ok := pool.pending[addr]; ok {
+			continue // already counted above
+		}
+		if pool.isReserved(addr) {
+			occupancy += pool.reservedCount(addr)
+		}
+	}
+	return occupancy
+}
+
+// truncateReservedOccupancy is the reorg-time backstop for the reserved
+// occupancy cap, mirroring truncatePending's own "assemble a spam order,
+// penalize large transactors first" shape (down to reusing the same prque):
+// build a priority queue of reserved addresses keyed by combined
+// pending+queue count once, then repeatedly pop the largest, evict its
+// newest transaction, and re-push it with its updated count. This is
+// O(D log D + N log D) — D distinct reserved addresses, N evicted — rather
+// than rescanning every reserved address per eviction.
+//
+// The synchronous admission gate in add() is the primary defense; this
+// defense-in-depth pass only acts if occupancy is ever found over cap here
+// regardless — e.g. because ReservedMaxOccupancyPercent was just lowered, or
+// a registry change shrank the cap.
+func (pool *LegacyPool) truncateReservedOccupancy() {
+	limit := pool.reservedOccupancyCap()
+	if pool.reservedOccupancy <= limit {
+		return
+	}
+
+	spammers := prque.New[int, common.Address](nil)
+	push := func(addr common.Address) {
+		if !pool.isReserved(addr) {
+			return
+		}
+		if count := pool.reservedCount(addr); count > 0 {
+			spammers.Push(addr, count)
+		}
+	}
+	for addr := range pool.pending {
+		push(addr)
+	}
+	for _, addr := range pool.queue.addresses() {
+		if _, ok := pool.pending[addr]; ok {
+			continue // already pushed above with its full combined count
+		}
+		push(addr)
+	}
+
+	before := pool.reservedOccupancy
+	for pool.reservedOccupancy > limit && !spammers.Empty() {
+		addr, _ := spammers.Pop()
+		hash, ok := pool.newestReservedTx(addr)
+		if !ok {
+			continue // this account's transactions were already accounted for elsewhere
+		}
+		pool.removeTx(hash, true, true)
+		if count := pool.reservedCount(addr); count > 0 {
+			spammers.Push(addr, count)
+		}
+	}
+	if dropped := before - pool.reservedOccupancy; dropped > 0 {
+		log.Warn("Trimmed reserved-sender transactions to enforce the occupancy cap", "dropped", dropped, "cap", limit)
+	}
+}
+
+// newestReservedTx returns the hash of addr's highest-nonce transaction across
+// both pending and queued, or ok=false if addr holds none. Trimming the
+// highest nonce first never opens a gap in either list.
+func (pool *LegacyPool) newestReservedTx(addr common.Address) (hash common.Hash, ok bool) {
+	var newest *types.Transaction
+	if list := pool.pending[addr]; list != nil && !list.Empty() {
+		newest = list.LastElement()
+	}
+	if list, has := pool.queue.get(addr); has && !list.Empty() {
+		if candidate := list.LastElement(); newest == nil || candidate.Nonce() > newest.Nonce() {
+			newest = candidate
+		}
+	}
+	if newest == nil {
+		return common.Hash{}, false
+	}
+	return newest.Hash(), true
 }

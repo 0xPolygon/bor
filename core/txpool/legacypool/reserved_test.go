@@ -132,11 +132,20 @@ func setupReservedPool(reserved common.Address) *LegacyPool {
 
 // setupReservedPoolAt is setupReservedPool with an explicit fork block.
 func setupReservedPoolAt(reserved common.Address, forkBlock *big.Int) *LegacyPool {
+	return setupReservedPoolWithConfig(testTxPoolConfig, forkBlock, reserved)
+}
+
+// setupReservedPoolWithConfig is setupReservedPoolAt generalized to a
+// caller-supplied pool config and an arbitrary number of reserved addresses,
+// so occupancy-cap tests can shrink GlobalSlots/GlobalQueue/
+// ReservedMaxOccupancyPercent to make the cap cheap to reach without waiting
+// on the package-level testTxPoolConfig defaults.
+func setupReservedPoolWithConfig(cfg Config, forkBlock *big.Int, reserved ...common.Address) *LegacyPool {
 	statedb, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
-	cfg := reservedChainConfigAt(forkBlock)
-	bc := newTestBlockChain(cfg, 10_000_000, statedb, new(event.Feed))
-	pool := New(testTxPoolConfig, bc)
-	if err := pool.Init(testTxPoolConfig.PriceLimit, bc.CurrentBlock(), newReserver()); err != nil {
+	chainCfg := reservedChainConfigAt(forkBlock)
+	bc := newTestBlockChain(chainCfg, 10_000_000, statedb, new(event.Feed))
+	pool := New(cfg, bc)
+	if err := pool.Init(cfg.PriceLimit, bc.CurrentBlock(), newReserver()); err != nil {
 		panic(err)
 	}
 	<-pool.initDoneCh
@@ -144,7 +153,7 @@ func setupReservedPoolAt(reserved common.Address, forkBlock *big.Int) *LegacyPoo
 	// bypass it; everyone else is held to it.
 	pool.SetGasTip(big.NewInt(30_000_000_000))
 	// Wire the registry source (post-Init, as the backend does) and build the snapshot.
-	pool.SetReservedRegistry(newFakeRegistry(reserved))
+	pool.SetReservedRegistry(newFakeRegistry(reserved...))
 	return pool
 }
 
