@@ -3,6 +3,7 @@ package miner
 import (
 	"errors"
 	"math/big"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -114,5 +115,45 @@ func TestHaltFillInactiveSequencer(t *testing.T) {
 
 	if err := w.haltFill(nil, big.NewInt(1)); err != nil {
 		t.Fatalf("inactive sequencing must not halt the fill: %v", err)
+	}
+}
+
+// A height the store elected another producer for is discarded mid-fill:
+// the whole build cycle ends without sealing, and the consumed signal
+// leaves the next cycle free to follow the store's sequence.
+func TestStoreOwnedHeightDiscardsTheBuild(t *testing.T) {
+	w, _, rec := newSequencerTestWorker(t)
+	rec.refresh = 20 * time.Millisecond
+	rec.resyncN = 3
+	w.start()
+	defer w.stop()
+
+	// Read the cycle's prepared context once so the adopted window passes
+	// every bound; adoption is what arms the announce deadline the
+	// continuous fill loop runs against.
+	probe := &generateParams{coinbase: testBankAddress}
+
+	work, err := w.prepareWork(probe, false)
+	if err != nil {
+		t.Fatalf("prepareWork: %v", err)
+	}
+
+	adopt := &AdoptedWindow{
+		Number:     work.header.Number.Uint64(),
+		Timestamp:  work.header.Time,
+		ParentHash: work.header.ParentHash,
+		GasLimit:   work.header.GasLimit,
+		BaseFee:    new(big.Int).Set(work.header.BaseFee),
+	}
+	work.discard()
+
+	genParams := &generateParams{coinbase: testBankAddress, adoption: adopt}
+
+	var prefetch atomic.Bool
+
+	w.buildAndCommitBlock(nil, true, genParams, &prefetch)
+
+	if _, seals, _, _ := rec.snapshot(); len(seals) != 0 {
+		t.Fatal("a store-owned height must never reach the seal hook")
 	}
 }

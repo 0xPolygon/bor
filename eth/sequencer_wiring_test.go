@@ -8,6 +8,7 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
+	"github.com/ethereum/go-ethereum/miner"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -47,6 +48,19 @@ func TestAttachSequencerRoles(t *testing.T) {
 
 		if err := s.attachSequencer(cfg); err != nil || s.seqPublisher != nil {
 			t.Fatalf("non-mining producer must wire nothing: %v", err)
+		}
+	})
+
+	t.Run("producer with an undialable store fails the wiring", func(t *testing.T) {
+		s := &Ethereum{blockchain: wiringChain(t, borConfig), miner: &miner.Miner{}}
+		cfg := &ethconfig.Config{
+			SequencerRole:              "producer",
+			SequencerPublisherEndpoint: "bad scheme://\x00",
+			SequencerConsumerEndpoint:  "bad scheme://\x00",
+		}
+
+		if err := s.attachSequencer(cfg); err == nil {
+			t.Fatal("an undialable store must fail producer wiring")
 		}
 	})
 
