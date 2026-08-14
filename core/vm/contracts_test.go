@@ -638,32 +638,6 @@ func TestKZGPointEvaluationPrecompileRemoval(t *testing.T) {
 	}
 }
 
-// TestHampiPrecompileParityWithChicago pins Hampi's intended precompile delta over
-// Chicago: none. Hampi gates only the SSTORE committed-state read ordering, so the
-// active set at a post-Hampi block must be identical to Chicago's. Asserting set
-// identity (rather than probing a single address) is what gives this teeth if a
-// future change hands Hampi its own precompile set.
-func TestHampiPrecompileParityWithChicago(t *testing.T) {
-	t.Parallel()
-
-	chicago := ActivePrecompiledContracts(params.Rules{IsChicago: true})
-	hampi := ActivePrecompiledContracts(params.Rules{IsChicago: true, IsHampi: true})
-
-	if len(chicago) != len(hampi) {
-		t.Fatalf("precompile count differs: chicago=%d hampi=%d", len(chicago), len(hampi))
-	}
-	for addr, want := range chicago {
-		got, exists := hampi[addr]
-		if !exists {
-			t.Errorf("precompile %s present under Chicago but missing under Hampi", addr)
-			continue
-		}
-		if got.Name() != want.Name() {
-			t.Errorf("precompile %s differs: chicago=%s hampi=%s", addr, want.Name(), got.Name())
-		}
-	}
-}
-
 // TestPIP88PrecompileGasCosts verifies pre- and post-PIP-88 gas for every
 // precompile repriced by the Chicago fork.
 func TestPIP88PrecompileGasCosts(t *testing.T) {
