@@ -620,9 +620,8 @@ func TestKZGPointEvaluationPrecompileRemoval(t *testing.T) {
 		{name: "Lisovo", rules: params.Rules{IsLisovo: true}, shouldHaveKzg: true},
 		{name: "LisovoPro", rules: params.Rules{IsLisovoPro: true}, shouldHaveKzg: false},
 		{name: "Chicago", rules: params.Rules{IsChicago: true}, shouldHaveKzg: false},
-		// Hampi introduces no precompile delta over Chicago; it only gates the SSTORE
-		// committed-state read ordering.
-		{name: "Hampi", rules: params.Rules{IsHampi: true}, shouldHaveKzg: false},
+		// At a post-Hampi block IsChicago is also set, so the fixture carries both.
+		{name: "Hampi", rules: params.Rules{IsChicago: true, IsHampi: true}, shouldHaveKzg: false},
 	}
 	for _, tc := range cases {
 		precompiles := ActivePrecompiledContracts(tc.rules)
@@ -635,6 +634,32 @@ func TestKZGPointEvaluationPrecompileRemoval(t *testing.T) {
 		}
 		if exists && pc.Name() != kzgPointEvaluationPrecompile.Name() {
 			t.Errorf("invalid precompile loaded instead of kzgPointEvaluation (0x0a). expected name: %s, got name: %s, test case: %s", kzgPointEvaluationPrecompile.Name(), pc.Name(), tc.name)
+		}
+	}
+}
+
+// TestHampiPrecompileParityWithChicago pins Hampi's intended precompile delta over
+// Chicago: none. Hampi gates only the SSTORE committed-state read ordering, so the
+// active set at a post-Hampi block must be identical to Chicago's. Asserting set
+// identity (rather than probing a single address) is what gives this teeth if a
+// future change hands Hampi its own precompile set.
+func TestHampiPrecompileParityWithChicago(t *testing.T) {
+	t.Parallel()
+
+	chicago := ActivePrecompiledContracts(params.Rules{IsChicago: true})
+	hampi := ActivePrecompiledContracts(params.Rules{IsChicago: true, IsHampi: true})
+
+	if len(chicago) != len(hampi) {
+		t.Fatalf("precompile count differs: chicago=%d hampi=%d", len(chicago), len(hampi))
+	}
+	for addr, want := range chicago {
+		got, exists := hampi[addr]
+		if !exists {
+			t.Errorf("precompile %s present under Chicago but missing under Hampi", addr)
+			continue
+		}
+		if got.Name() != want.Name() {
+			t.Errorf("precompile %s differs: chicago=%s hampi=%s", addr, want.Name(), got.Name())
 		}
 	}
 }
