@@ -193,3 +193,92 @@ func TestCreateGas(t *testing.T) {
 		}
 	}
 }
+
+// readCountingStateDB counts committed-state reads so a test can assert whether
+// the SSTORE gas path performed the slot read.
+type readCountingStateDB struct {
+	StateDB
+	reads int
+}
+
+func (c *readCountingStateDB) GetStateAndCommittedState(addr common.Address, hash common.Hash) (common.Hash, common.Hash) {
+	c.reads++
+	return c.StateDB.GetStateAndCommittedState(addr, hash)
+}
+
+// hampiTestChainConfig copies the shared test chain config with Hampi scheduled at
+// forkBlock, so a test can exercise both sides of the gate without mutating globals.
+func hampiTestChainConfig(forkBlock *big.Int) *params.ChainConfig {
+	cfg := *params.AllEthashProtocolChanges
+	bor := *params.AllEthashProtocolChanges.Bor
+	bor.HampiBlock = forkBlock
+	cfg.Bor = &bor
+
+	return &cfg
+}
+
+// TestPIP88SStoreAccessCheck pins the ordering invariant of the PIP-88 SSTORE gas
+// function: the cold access cost exceeds the reentrancy sentry, so clearing the
+// sentry does not imply the caller can afford a cold slot access. From Hampi the
+// committed state read must not happen until affordability is confirmed, and
+// before Hampi the pre-existing ordering must be preserved exactly. The wantReads
+// column is the load-bearing assertion — an error-string check alone would not
+// catch a read performed before the guard.
+func TestPIP88SStoreAccessCheck(t *testing.T) {
+	addr := common.BytesToAddress([]byte("victim"))
+	sentry := params.SstoreSentryGasEIP2200 // 2300
+	cold := params.ColdSstoreCostPIP88      // 2940
+	const forkBlock = 100
+
+	tests := []struct {
+		name      string
+		warm      bool
+		gas       uint64
+		block     int64
+		wantErr   string
+		wantReads int
+	}{
+		// At and after activation the read is deferred behind the affordability check.
+		{"at fork, cold, at sentry, rejected before read", false, sentry, forkBlock, "not enough gas for reentrancy sentry", 0},
+		{"at fork, cold, above sentry below access, rejected before read", false, sentry + 1, forkBlock, "not enough gas for slot access", 0},
+		{"at fork, cold, one below access, rejected before read", false, cold - 1, forkBlock, "not enough gas for slot access", 0},
+		{"at fork, cold, at access, reads", false, cold, forkBlock, "", 1},
+		{"at fork, warm, above sentry, reads", true, sentry + 1, forkBlock, "", 1},
+		{"after fork, cold, in window, rejected before read", false, cold - 1, forkBlock + 1, "not enough gas for slot access", 0},
+
+		// Before activation the gate is inert: the read still happens inside the
+		// window and the new error is never surfaced.
+		{"before fork, cold, in window, still reads", false, cold - 1, forkBlock - 1, "", 1},
+		{"before fork, cold, just above sentry, still reads", false, sentry + 1, forkBlock - 1, "", 1},
+		{"before fork, cold, at sentry, rejected by sentry", false, sentry, forkBlock - 1, "not enough gas for reentrancy sentry", 0},
+		{"before fork, cold, at access, reads", false, cold, forkBlock - 1, "", 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inner, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+			inner.CreateAccount(addr)
+			if tt.warm {
+				inner.AddSlotToAccessList(addr, common.Hash{})
+			}
+			sdb := &readCountingStateDB{StateDB: inner}
+			blockCtx := BlockContext{BlockNumber: big.NewInt(tt.block)}
+			evm := NewEVM(blockCtx, sdb, hampiTestChainConfig(big.NewInt(forkBlock)), Config{})
+
+			contract := NewContract(common.Address{}, addr, uint256.NewInt(0), tt.gas, nil)
+			stack := newstack()
+			stack.push(uint256.NewInt(1)) // value  (Back(1))
+			stack.push(new(uint256.Int))  // key    (peek) -> slot 0
+			_, err := gasSStorePIP88(evm, contract, stack, nil, 0)
+
+			switch {
+			case tt.wantErr == "" && err != nil:
+				t.Fatalf("unexpected error: %v", err)
+			case tt.wantErr != "" && (err == nil || err.Error() != tt.wantErr):
+				t.Fatalf("error = %v, want %q", err, tt.wantErr)
+			}
+			if sdb.reads != tt.wantReads {
+				t.Fatalf("committed-state reads = %d, want %d", sdb.reads, tt.wantReads)
+			}
+		})
+	}
+}
