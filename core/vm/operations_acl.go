@@ -106,10 +106,9 @@ func makeGasSStoreFuncPIP88(clearingRefund uint64) gasFunc {
 			slot = common.Hash(x.Bytes32())
 			cost = uint64(0)
 		)
-		// Resolve the slot's access cost and warm it before reading. The reentrancy
-		// sentry only guarantees SstoreSentryGasEIP2200, which no longer covers a
-		// cold access once ColdSstoreCostPIP88 exceeds it, so affordability is
-		// checked here rather than implied by the sentry.
+		// Resolve the slot's access cost and warm it before reading. Warming ahead of
+		// the read is unobservable — the read does not consult the access list — so
+		// this ordering is shared by both sides of the Hampi gate below.
 		access := params.WarmStorageReadCostEIP2929
 		if _, slotPresent := evm.StateDB.SlotInAccessList(contract.Address(), slot); !slotPresent {
 			// PIP-88: charge ColdSstoreCostPIP88. Must match the constant
@@ -120,8 +119,14 @@ func makeGasSStoreFuncPIP88(clearingRefund uint64) gasFunc {
 			// If the caller cannot afford the cost, this change will be rolled back
 			evm.StateDB.AddSlotToAccessList(contract.Address(), slot)
 		}
-		// Only read the slot once the caller can pay for the access.
-		if contract.Gas < access {
+		// From Hampi, only read the slot once the caller can pay for the access. The
+		// reentrancy sentry only guarantees SstoreSentryGasEIP2200, which no longer
+		// covers a cold access once ColdSstoreCostPIP88 exceeds it. Every caller
+		// rejected here fails the charge below anyway (the cheapest cold total,
+		// ColdSstoreCostPIP88+WarmStorageReadCostEIP2929, exceeds access), so gas and
+		// the ErrOutOfGas outcome are unchanged across the fork; only the committed
+		// state read — and therefore witness composition — differs.
+		if evm.chainRules.IsHampi && contract.Gas < access {
 			return 0, errors.New("not enough gas for slot access")
 		}
 		current, original := evm.StateDB.GetStateAndCommittedState(contract.Address(), slot)
