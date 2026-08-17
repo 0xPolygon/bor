@@ -189,6 +189,10 @@ func TestPeerAttachBulkRWRoutesEthTraffic(t *testing.T) {
 	defer txApp.Close()
 	defer txNet.Close()
 
+	txFetchApp, txFetchNet := p2p.MsgPipe()
+	defer txFetchApp.Close()
+	defer txFetchNet.Close()
+
 	bulkApp, bulkNet := p2p.MsgPipe()
 	defer bulkApp.Close()
 	defer bulkNet.Close()
@@ -201,6 +205,7 @@ func TestPeerAttachBulkRWRoutesEthTraffic(t *testing.T) {
 	peer.AttachBulkChannelRW(ethControlChannel, controlNet)
 	peer.AttachBulkChannelRW(ethBlocksChannel, blocksNet)
 	peer.AttachBulkChannelRW(ethTxChannel, txNet)
+	peer.AttachBulkChannelRW(ethTxFetchChannel, txFetchNet)
 	peer.AttachBulkChannelRW(ethBulkChannel, bulkNet)
 
 	resCh := make(chan *Response, 1)
@@ -316,7 +321,7 @@ func TestPeerAttachBulkRWRoutesEthTraffic(t *testing.T) {
 
 	const requestID = uint64(17)
 	go func() { errc <- peer.RequestTxs(requestID, hashes) }()
-	msg, err = bulkApp.ReadMsg()
+	msg, err = txFetchApp.ReadMsg()
 	if err != nil {
 		t.Fatalf("failed to read pooled transaction request: %v", err)
 	}
@@ -340,6 +345,17 @@ func TestPeerAttachBulkRWRoutesEthTraffic(t *testing.T) {
 	}
 	if err := <-errc; err != nil {
 		t.Fatalf("failed to request transactions: %v", err)
+	}
+
+	go func() { errc <- peer.ReplyPooledTransactionsRLP(9, hashes[:1], nil) }()
+	if err := p2p.ExpectMsg(txFetchApp, PooledTransactionsMsg, &PooledTransactionsRLPPacket{
+		RequestId:                     9,
+		PooledTransactionsRLPResponse: nil,
+	}); err != nil {
+		t.Fatalf("pooled transaction reply did not use tx-fetch lane: %v", err)
+	}
+	if err := <-errc; err != nil {
+		t.Fatalf("failed to reply with pooled transactions: %v", err)
 	}
 
 	go func() {
@@ -415,8 +431,8 @@ func TestEthSidecarChannelForMsg(t *testing.T) {
 		{BlockBodiesMsg, ethBulkChannel},
 		{NewBlockMsg, ethBlocksChannel},
 		{NewPooledTransactionHashesMsg, ethTxChannel},
-		{GetPooledTransactionsMsg, ethBulkChannel},
-		{PooledTransactionsMsg, ethBulkChannel},
+		{GetPooledTransactionsMsg, ethTxFetchChannel},
+		{PooledTransactionsMsg, ethTxFetchChannel},
 		{GetReceiptsMsg, ethBulkChannel},
 		{ReceiptsMsg, ethBulkChannel},
 		{BlockRangeUpdateMsg, ethControlChannel},
