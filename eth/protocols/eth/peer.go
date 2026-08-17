@@ -63,6 +63,7 @@ const (
 	ethControlChannel = "eth-control"
 	ethBlocksChannel  = "eth-blocks"
 	ethTxChannel      = "eth-tx"
+	ethTxFetchChannel = "eth-tx-fetch"
 	ethBulkChannel    = "eth-bulk"
 )
 
@@ -149,7 +150,7 @@ func (p *Peer) ID() string {
 // protocol. Status stays on the primary devp2p lane because the sidecar is
 // attached after the initial protocol handshake completes.
 func (p *Peer) AttachBulkRW(rw p2p.MsgReadWriter) {
-	for _, channel := range []string{ethControlChannel, ethBlocksChannel, ethTxChannel, ethBulkChannel} {
+	for _, channel := range []string{ethControlChannel, ethBlocksChannel, ethTxChannel, ethTxFetchChannel, ethBulkChannel} {
 		p.AttachBulkChannelRW(channel, rw)
 	}
 }
@@ -190,14 +191,15 @@ func ethSidecarChannelForMsg(code uint64) string {
 	case TransactionsMsg,
 		NewPooledTransactionHashesMsg:
 		return ethTxChannel
+	case GetPooledTransactionsMsg,
+		PooledTransactionsMsg:
+		return ethTxFetchChannel
 	case GetBlockHeadersMsg,
 		BlockHeadersMsg,
 		BlockRangeUpdateMsg:
 		return ethControlChannel
 	case GetBlockBodiesMsg,
 		BlockBodiesMsg,
-		GetPooledTransactionsMsg,
-		PooledTransactionsMsg,
 		GetReceiptsMsg,
 		ReceiptsMsg:
 		return ethBulkChannel
