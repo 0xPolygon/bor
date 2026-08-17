@@ -46,7 +46,6 @@ import (
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/params"
-	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/tests/bor/mocks"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/triedb"
@@ -181,6 +180,12 @@ func insertNewBlock(t *testing.T, chain *core.BlockChain, block *types.Block) {
 type modifyHeaderFunc func(header *types.Header)
 type modifyBlockFunc func(block *types.Block, receipts []*types.Receipt) *types.Block
 
+// encodeBlockExtraDataForTest wraps types.EncodeBlockExtraData for callers in
+// this file that never populate the Giugliano gas-target fields.
+func encodeBlockExtraDataForTest(chainConfig *params.ChainConfig, number *big.Int, validatorBytes []byte) ([]byte, error) {
+	return types.EncodeBlockExtraData(chainConfig, number, validatorBytes, nil, nil)
+}
+
 func buildHeader(t *testing.T, chain *core.BlockChain, parentBlock *types.Block, signer []byte, borConfig *params.BorConfig, currentValidators []*valset.Validator, modifyHeader []modifyHeaderFunc) *types.Header {
 	t.Helper()
 
@@ -230,11 +235,7 @@ func buildHeader(t *testing.T, chain *core.BlockChain, parentBlock *types.Block,
 				tempValidatorBytes = append(tempValidatorBytes, validator.HeaderBytes()...)
 			}
 
-			blockExtraData := &types.BlockExtraData{
-				ValidatorBytes: tempValidatorBytes,
-				TxDependency:   nil,
-			}
-			blockExtraDataBytes, err := rlp.EncodeToBytes(blockExtraData)
+			blockExtraDataBytes, err := encodeBlockExtraDataForTest(chain.Config(), header.Number, tempValidatorBytes)
 			if err != nil {
 				t.Fatalf("error while encoding block extra data: %v", err)
 			}
@@ -250,12 +251,7 @@ func buildHeader(t *testing.T, chain *core.BlockChain, parentBlock *types.Block,
 			copy(header.Extra[32:], validatorBytes)
 		}
 	} else if chain.Config().IsCancun(header.Number) {
-		blockExtraData := &types.BlockExtraData{
-			ValidatorBytes: nil,
-			TxDependency:   nil,
-		}
-
-		blockExtraDataBytes, err := rlp.EncodeToBytes(blockExtraData)
+		blockExtraDataBytes, err := encodeBlockExtraDataForTest(chain.Config(), header.Number, nil)
 		if err != nil {
 			t.Fatalf("error while encoding block extra data: %v", err)
 		}

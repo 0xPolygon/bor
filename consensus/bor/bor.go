@@ -1022,16 +1022,17 @@ func IsBlockEarly(parent *types.Header, header *types.Header, number uint64, suc
 	return parent != nil && header.Time < parent.Time+CalcProducerDelay(number, succession, cfg)
 }
 
-// setGiuglianoExtraFields populates the GasTarget and BaseFeeChangeDenominator
-// fields in BlockExtraData for post-Giugliano blocks. CalcGasTarget and
-// BaseFeeChangeDenominator both operate on the parent header's values.
-func (c *Bor) setGiuglianoExtraFields(header *types.Header, parent *types.Header, blockExtraData *types.BlockExtraData) {
-	if c.config.IsGiugliano(header.Number) {
-		gasTarget := eip1559.CalcGasTarget(c.chainConfig, parent)
-		bfcd := params.BaseFeeChangeDenominator(c.config, parent.Number)
-		blockExtraData.GasTarget = &gasTarget
-		blockExtraData.BaseFeeChangeDenominator = &bfcd
+// giuglianoExtraFields returns the post-Giugliano EIP-1559 gas target and
+// base fee change denominator computed from parent, or (nil, nil) pre-Giugliano.
+func (c *Bor) giuglianoExtraFields(header *types.Header, parent *types.Header) (gasTarget *uint64, baseFeeChangeDenom *uint64) {
+	if !c.config.IsGiugliano(header.Number) {
+		return nil, nil
 	}
+
+	gt := eip1559.CalcGasTarget(c.chainConfig, parent)
+	bfcd := params.BaseFeeChangeDenominator(c.config, parent.Number)
+
+	return &gt, &bfcd
 }
 
 // Prepare implements consensus.Engine, preparing all the consensus fields of the
@@ -1083,14 +1084,9 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 				tempValidatorBytes = append(tempValidatorBytes, validator.HeaderBytes()...)
 			}
 
-			blockExtraData := &types.BlockExtraData{
-				ValidatorBytes: tempValidatorBytes,
-				TxDependency:   nil,
-			}
+			gasTarget, baseFeeChangeDenom := c.giuglianoExtraFields(header, parent)
 
-			c.setGiuglianoExtraFields(header, parent, blockExtraData)
-
-			blockExtraDataBytes, err := rlp.EncodeToBytes(blockExtraData)
+			blockExtraDataBytes, err := types.EncodeBlockExtraData(c.chainConfig, header.Number, tempValidatorBytes, gasTarget, baseFeeChangeDenom)
 			if err != nil {
 				log.Error("error while encoding block extra data", "err", err)
 				return fmt.Errorf("error while encoding block extra data: %v", err)
@@ -1103,14 +1099,9 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 			}
 		}
 	} else if c.chainConfig.IsCancun(header.Number) {
-		blockExtraData := &types.BlockExtraData{
-			ValidatorBytes: nil,
-			TxDependency:   nil,
-		}
+		gasTarget, baseFeeChangeDenom := c.giuglianoExtraFields(header, parent)
 
-		c.setGiuglianoExtraFields(header, parent, blockExtraData)
-
-		blockExtraDataBytes, err := rlp.EncodeToBytes(blockExtraData)
+		blockExtraDataBytes, err := types.EncodeBlockExtraData(c.chainConfig, header.Number, nil, gasTarget, baseFeeChangeDenom)
 		if err != nil {
 			log.Error("error while encoding block extra data", "err", err)
 			return fmt.Errorf("error while encoding block extra data: %v", err)
@@ -1889,11 +1880,14 @@ func (c *Bor) CommitStates(
 
 	fetchTime := time.Since(fetchStart)
 	processStart := time.Now()
-	totalGas := 0 /// limit on gas for state sync per block
+
+	var totalGas uint64
 	chainID := c.chainConfig.ChainID.String()
 	stateSyncs := make([]*types.StateSyncData, 0, len(eventRecords))
 
 	enforceStateSyncBudget := c.config.IsValencia(header.Number)
+	enforceStateSyncGasBudget := c.config.IsAustin(header.Number)
+	stateReceiver := common.HexToAddress(c.config.StateReceiverContract)
 	var stateSyncBytes uint64
 
 	var gasUsed uint64
@@ -1918,6 +1912,12 @@ func (c *Bor) CommitStates(
 			break
 		}
 
+		// totalGas starts at zero, so the first pending record is always admitted.
+		if enforceStateSyncGasBudget && totalGas >= params.MaxStateSyncGasPerBlock {
+			log.Info("state-sync gas budget reached, deferring remaining records", "number", number, "includedGas", totalGas, "deferredFromID", eventRecord.ID)
+			break
+		}
+
 		// A record over Heimdall's per-record cap shouldn't happen; log it if one does.
 		if enforceStateSyncBudget && recordSize > params.MaxStateSyncRecordBytes {
 			log.Error("state-sync record exceeds expected per-record cap", "number", number, "id", eventRecord.ID, "size", recordSize, "cap", params.MaxStateSyncRecordBytes)
@@ -1933,16 +1933,16 @@ func (c *Bor) CommitStates(
 		}
 
 		stateSyncs = append(stateSyncs, &stateData)
+		statefull.PrepareStateSyncContext(state, c.chainConfig, header.Number, header.Time, header.Coinbase, stateReceiver)
 
-		// we expect that this call MUST emit an event, otherwise we wouldn't make a receipt
-		// if the receiver address is not a contract then we'll skip the most of the execution and emitting an event as well
-		// https://github.com/0xPolygon/genesis-contracts/blob/master/contracts/StateReceiver.sol#L27
+		// Receipt construction expects the receiver call to emit at least one log.
+		// A receiver without code can complete without producing one.
 		gasUsed, err = c.GenesisContractsClient.CommitState(eventRecord, state, header, chain, c.vmConfig)
 		if err != nil {
 			return nil, err
 		}
 
-		totalGas += int(gasUsed)
+		totalGas += gasUsed
 
 		lastStateID++
 	}

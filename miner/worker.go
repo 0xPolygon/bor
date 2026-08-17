@@ -36,7 +36,6 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/core"
-	"github.com/ethereum/go-ethereum/core/blockstm"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/txpool"
@@ -47,7 +46,6 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
-	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
 )
 
@@ -252,8 +250,7 @@ type environment struct {
 	sidecars []*types.BlobTxSidecar
 	blobs    int
 
-	mvReadMapList []map[blockstm.Key]blockstm.ReadDescriptor
-	witness       *stateless.Witness
+	witness *stateless.Witness
 
 	// Readers with stats tracking for metrics reporting
 	prefetchReader state.ReaderWithStats
@@ -281,7 +278,6 @@ func (env *environment) copy() *environment {
 		coinbase:           env.coinbase,
 		header:             types.CopyHeader(env.header),
 		receipts:           copyReceipts(env.receipts),
-		mvReadMapList:      env.mvReadMapList,
 		prefetchReader:     env.prefetchReader,
 		processReader:      env.processReader,
 		prefetchedTxHashes: env.prefetchedTxHashes,
@@ -1449,7 +1445,6 @@ func (w *worker) makeEnv(header *types.Header, coinbase common.Address, witness 
 
 	// Keep track of transactions which return errors so they can be removed
 	env.tcount = 0
-	env.mvReadMapList = []map[blockstm.Key]blockstm.ReadDescriptor{}
 
 	return env, nil
 }
@@ -1505,43 +1500,6 @@ func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transac
 
 	var coalescedLogs []*types.Log
 
-	var deps map[int]map[int]bool
-
-	var depsBuilder *blockstm.DepsBuilder
-	var chDeps chan blockstm.TxReadWriteSet
-
-	var depsWg sync.WaitGroup
-	var once sync.Once
-
-	EnableMVHashMap := w.chainConfig.IsCancun(env.header.Number)
-
-	// create and add empty mvHashMap in statedb
-	if EnableMVHashMap && w.IsRunning() {
-		depsBuilder = blockstm.NewDepsBuilder()
-		chDeps = make(chan blockstm.TxReadWriteSet)
-
-		// Make sure we safely close the channel in case of interrupt
-		defer once.Do(func() {
-			close(chDeps)
-		})
-
-		depsWg.Add(1)
-
-		go func(chDeps chan blockstm.TxReadWriteSet) {
-			for t := range chDeps {
-				if err := depsBuilder.AddTransaction(t.Index, t.ReadList, t.WriteList); err != nil {
-					// Non-sequential index indicates a systematic bug, not a transient error.
-					// Drain the channel so the sender never blocks, then stop processing.
-					log.Error("Failed to build tx dependency metadata, dropping DAG hint", "tx", t.Index, "err", err)
-					for range chDeps {
-					}
-					break
-				}
-			}
-			depsWg.Done()
-		}(chDeps)
-	}
-
 	var lastTxHash common.Hash
 
 	var (
@@ -1560,10 +1518,6 @@ mainloop:
 			if signal := interrupt.Load(); signal != commitInterruptNone {
 				return signalToErr(signal)
 			}
-		}
-
-		if EnableMVHashMap && w.IsRunning() {
-			env.state.AddEmptyMVHashMap()
 		}
 
 		// Check for the flag to interrupt block building on timeout.
@@ -1754,36 +1708,6 @@ mainloop:
 				})
 			}
 
-			if EnableMVHashMap && w.IsRunning() {
-				env.mvReadMapList = append(env.mvReadMapList, env.state.MVReadMap())
-
-				if env.tcount > len(env.mvReadMapList) {
-					log.Warn("blockstm - env.tcount > len(env.mvReadMapList)", "env.tcount", env.tcount, "len(mvReadMapList)", len(env.mvReadMapList))
-					return errors.New("transaction count exceeds dependency list length")
-				}
-
-				temp := blockstm.TxReadWriteSet{
-					Index:     env.tcount - 1,
-					ReadList:  env.state.MVReadList(),
-					WriteList: env.state.MVFullWriteList(),
-				}
-
-				// Send with timeout to prevent deadlock
-				select {
-				case chDeps <- temp:
-					// Successfully sent
-				case <-time.After(1 * time.Second):
-					// Timeout after 1 second - channel is blocked
-					log.Error("Transaction dependency channel blocked, aborting block building",
-						"txIndex", env.tcount-1,
-						"blockNumber", env.header.Number.Uint64())
-					once.Do(func() {
-						close(chDeps)
-					})
-					return errors.New("dependency channel timeout")
-				}
-			}
-
 			txs.Shift()
 
 			// Report freed gas to the prefetcher so it can predict overflow txs.
@@ -1816,80 +1740,6 @@ mainloop:
 			log.Debug("Transaction failed, account skipped", "hash", ltx.Hash, "err", err)
 			txs.Pop()
 		}
-
-		if EnableMVHashMap && w.IsRunning() {
-			env.state.ClearReadMap()
-			env.state.ClearWriteMap()
-		}
-	}
-
-	// nolint:nestif
-	if EnableMVHashMap && w.IsRunning() {
-		once.Do(func() {
-			close(chDeps)
-		})
-		depsWg.Wait()
-
-		deps = depsBuilder.GetDeps()
-		if deps == nil {
-			log.Warn("Failed to build tx dependency DAG, skipping metadata", "number", env.header.Number)
-		}
-
-		var blockExtraData types.BlockExtraData
-
-		tempVanity := env.header.Extra[:types.ExtraVanityLength]
-		tempSeal := env.header.Extra[len(env.header.Extra)-types.ExtraSealLength:]
-
-		// Always decode header extra data before overwriting TxDependency.
-		if err := rlp.DecodeBytes(env.header.Extra[types.ExtraVanityLength:len(env.header.Extra)-types.ExtraSealLength], &blockExtraData); err != nil {
-			log.Error("error while decoding block extra data", "err", err)
-			return err
-		}
-
-		// deps is nil when DepsBuilder errored, and non-nil empty when no transactions were added.
-		if deps != nil && len(env.mvReadMapList) > 0 {
-			tempDeps := make([][]uint64, len(env.mvReadMapList))
-
-			for j := range deps[0] {
-				tempDeps[0] = append(tempDeps[0], uint64(j))
-			}
-
-			delayFlag := true
-
-			for i := 1; i <= len(env.mvReadMapList)-1; i++ {
-				reads := env.mvReadMapList[i]
-
-				// Coinbase and burn-contract balance reads create an implicit ordering not captured by the DAG.
-				_, ok1 := reads[blockstm.NewSubpathKey(env.coinbase, state.BalancePath)]
-				_, ok2 := reads[blockstm.NewSubpathKey(common.HexToAddress(w.chainConfig.Bor.CalculateBurntContract(env.header.Number.Uint64())), state.BalancePath)]
-				if ok1 || ok2 {
-					delayFlag = false
-					break
-				}
-
-				for j := range deps[i] {
-					tempDeps[i] = append(tempDeps[i], uint64(j))
-				}
-			}
-
-			if delayFlag {
-				blockExtraData.TxDependency = tempDeps
-			} else {
-				blockExtraData.TxDependency = nil
-			}
-		} else {
-			blockExtraData.TxDependency = nil
-		}
-
-		blockExtraDataBytes, err := rlp.EncodeToBytes(blockExtraData)
-		if err != nil {
-			log.Error("error while encoding block extra data: %v", err)
-			return err
-		}
-
-		env.header.Extra = []byte{}
-		env.header.Extra = append(tempVanity, blockExtraDataBytes...)
-		env.header.Extra = append(env.header.Extra, tempSeal...)
 	}
 
 	if !w.IsRunning() && len(coalescedLogs) > 0 {

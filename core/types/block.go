@@ -121,7 +121,9 @@ type Header struct {
 	RequestsHash *common.Hash `json:"requestsHash" rlp:"optional"`
 }
 
-// Used for Encoding and Decoding of the Extra Data Field
+// BlockExtraData is the wire shape of the header's Extra field before
+// Austin, including TxDependency. Still the live encode/decode
+// format pre-Austin, and kept afterward to decode historical blocks.
 type BlockExtraData struct {
 	ValidatorBytes []byte
 
@@ -137,15 +139,45 @@ type BlockExtraData struct {
 	BaseFeeChangeDenominator *uint64 `rlp:"optional"`
 }
 
+// BlockExtraDataPostAustin drops TxDependency, which sat before the optional
+// GasTarget/BaseFeeChangeDenominator fields and so couldn't be removed via
+// rlp:"optional" (that only trims a trailing run).
+type BlockExtraDataPostAustin struct {
+	ValidatorBytes           []byte
+	GasTarget                *uint64 `rlp:"optional"`
+	BaseFeeChangeDenominator *uint64 `rlp:"optional"`
+}
+
 // blockExtraDataRawTxDeps mirrors BlockExtraData but keeps TxDependency as an
 // rlp.RawValue, delaying its decode. Header verification only needs
 // ValidatorBytes and the base-fee params, so this avoids expanding a
 // potentially large TxDependency into [][]uint64. The wire format is identical to BlockExtraData.
+// Only used pre-Austin; post-Austin headers decode straight into
+// BlockExtraDataPostAustin, which is already cheap.
 type blockExtraDataRawTxDeps struct {
 	ValidatorBytes           []byte
 	TxDependency             rlp.RawValue
 	GasTarget                *uint64 `rlp:"optional"`
 	BaseFeeChangeDenominator *uint64 `rlp:"optional"`
+}
+
+// EncodeBlockExtraData picks the fork-appropriate wire shape for number and
+// RLP-encodes validatorBytes and the post-Giugliano base-fee params into it.
+// Callers elsewhere should use this rather than reimplementing the fork check.
+func EncodeBlockExtraData(chainConfig *params.ChainConfig, number *big.Int, validatorBytes []byte, gasTarget, baseFeeChangeDenom *uint64) ([]byte, error) {
+	if chainConfig.Bor != nil && chainConfig.Bor.IsAustin(number) {
+		return rlp.EncodeToBytes(&BlockExtraDataPostAustin{
+			ValidatorBytes:           validatorBytes,
+			GasTarget:                gasTarget,
+			BaseFeeChangeDenominator: baseFeeChangeDenom,
+		})
+	}
+
+	return rlp.EncodeToBytes(&BlockExtraData{
+		ValidatorBytes:           validatorBytes,
+		GasTarget:                gasTarget,
+		BaseFeeChangeDenominator: baseFeeChangeDenom,
+	})
 }
 
 // field type overrides for gencodec
@@ -497,19 +529,33 @@ func (b *Block) ReceiptHash() common.Hash { return b.header.ReceiptHash }
 func (b *Block) UncleHash() common.Hash   { return b.header.UncleHash }
 func (b *Block) Extra() []byte            { return common.CopyBytes(b.header.Extra) }
 
-func (b *Block) GetTxDependency() [][]uint64 {
-	if len(b.header.Extra) < ExtraVanityLength+ExtraSealLength {
-		log.Error("length of extra less is than vanity and seal")
-		return nil
+// decodeExtraFieldsFast decodes validator bytes and base-fee params without
+// expanding TxDependency; use DecodeBlockExtraData if that value is needed.
+// Caller must ensure len(h.Extra) >= ExtraVanityLength+ExtraSealLength.
+func (h *Header) decodeExtraFieldsFast(chainConfig *params.ChainConfig) (validatorBytes []byte, gasTarget *uint64, baseFeeChangeDenom *uint64, ok bool) {
+	raw := h.Extra[ExtraVanityLength : len(h.Extra)-ExtraSealLength]
+
+	if chainConfig.Bor != nil && chainConfig.Bor.IsAustin(h.Number) {
+		var blockExtraData BlockExtraDataPostAustin
+		if err := rlp.DecodeBytes(raw, &blockExtraData); err != nil {
+			log.Debug("error while decoding block extra data", "err", err)
+			return nil, nil, nil, false
+		}
+
+		return blockExtraData.ValidatorBytes, blockExtraData.GasTarget, blockExtraData.BaseFeeChangeDenominator, true
 	}
 
-	var blockExtraData BlockExtraData
-	if err := rlp.DecodeBytes(b.header.Extra[ExtraVanityLength:len(b.header.Extra)-ExtraSealLength], &blockExtraData); err != nil {
+	var blockExtraData blockExtraDataRawTxDeps
+	if err := rlp.DecodeBytes(raw, &blockExtraData); err != nil {
 		log.Debug("error while decoding block extra data", "err", err)
-		return nil
+		return nil, nil, nil, false
 	}
 
-	return blockExtraData.TxDependency
+	if !txDependencyValidPreValencia(chainConfig, h.Number, blockExtraData.TxDependency) {
+		return nil, nil, nil, false
+	}
+
+	return blockExtraData.ValidatorBytes, blockExtraData.GasTarget, blockExtraData.BaseFeeChangeDenominator, true
 }
 
 // GetValidatorBytes extracts validator bytes from the header's Extra field.
@@ -525,17 +571,12 @@ func (h *Header) GetValidatorBytes(chainConfig *params.ChainConfig) []byte {
 		return h.Extra[ExtraVanityLength : len(h.Extra)-ExtraSealLength]
 	}
 
-	var blockExtraData blockExtraDataRawTxDeps
-	if err := rlp.DecodeBytes(h.Extra[ExtraVanityLength:len(h.Extra)-ExtraSealLength], &blockExtraData); err != nil {
-		log.Debug("error while decoding block extra data", "err", err)
+	validatorBytes, _, _, ok := h.decodeExtraFieldsFast(chainConfig)
+	if !ok {
 		return nil
 	}
 
-	if !txDependencyValidPreValencia(chainConfig, h.Number, blockExtraData.TxDependency) {
-		return nil
-	}
-
-	return blockExtraData.ValidatorBytes
+	return validatorBytes
 }
 
 // GetBaseFeeParams extracts the EIP-1559 gas target and base fee change denominator
@@ -551,16 +592,12 @@ func (h *Header) GetBaseFeeParams(chainConfig *params.ChainConfig) (gasTarget *u
 		return nil, nil
 	}
 
-	var blockExtraData blockExtraDataRawTxDeps
-	if err := rlp.DecodeBytes(h.Extra[ExtraVanityLength:len(h.Extra)-ExtraSealLength], &blockExtraData); err != nil {
+	_, gasTarget, baseFeeChangeDenom, ok := h.decodeExtraFieldsFast(chainConfig)
+	if !ok {
 		return nil, nil
 	}
 
-	if !txDependencyValidPreValencia(chainConfig, h.Number, blockExtraData.TxDependency) {
-		return nil, nil
-	}
-
-	return blockExtraData.GasTarget, blockExtraData.BaseFeeChangeDenominator
+	return gasTarget, baseFeeChangeDenom
 }
 
 // GetValidatorBytesAndBaseFeeParams decodes the consensus-relevant Extra fields
@@ -576,19 +613,16 @@ func (h *Header) GetValidatorBytesAndBaseFeeParams(chainConfig *params.ChainConf
 		return h.Extra[ExtraVanityLength : len(h.Extra)-ExtraSealLength], nil, nil
 	}
 
-	var blockExtraData blockExtraDataRawTxDeps
-	if err := rlp.DecodeBytes(h.Extra[ExtraVanityLength:len(h.Extra)-ExtraSealLength], &blockExtraData); err != nil {
-		log.Debug("error while decoding block extra data", "err", err)
+	validatorBytes, gasTarget, baseFeeChangeDenom, ok := h.decodeExtraFieldsFast(chainConfig)
+	if !ok {
 		return nil, nil, nil
 	}
 
-	if !txDependencyValidPreValencia(chainConfig, h.Number, blockExtraData.TxDependency) {
-		return nil, nil, nil
-	}
-
-	return blockExtraData.ValidatorBytes, blockExtraData.GasTarget, blockExtraData.BaseFeeChangeDenominator
+	return validatorBytes, gasTarget, baseFeeChangeDenom
 }
 
+// txDependencyValidPreValencia only matters in the Cancun..pre-Austin
+// window; post-Austin headers have no TxDependency to validate.
 func txDependencyValidPreValencia(chainConfig *params.ChainConfig, number *big.Int, raw rlp.RawValue) bool {
 	if chainConfig.Bor != nil && chainConfig.Bor.IsValencia(number) {
 		return true
@@ -599,7 +633,8 @@ func txDependencyValidPreValencia(chainConfig *params.ChainConfig, number *big.I
 }
 
 // DecodeBlockExtraData decodes the full BlockExtraData struct from the header's
-// Extra field in a single RLP decode. Returns nil for pre-Cancun blocks or on error.
+// Extra field in a single RLP decode. Returns nil for pre-Cancun blocks or on
+// error. TxDependency is always nil post-Austin.
 func (h *Header) DecodeBlockExtraData(chainConfig *params.ChainConfig) *BlockExtraData {
 	if !chainConfig.IsCancun(h.Number) {
 		return nil
@@ -609,8 +644,25 @@ func (h *Header) DecodeBlockExtraData(chainConfig *params.ChainConfig) *BlockExt
 		return nil
 	}
 
+	if chainConfig.Bor != nil && chainConfig.Bor.IsAustin(h.Number) {
+		validatorBytes, gasTarget, baseFeeChangeDenom, ok := h.decodeExtraFieldsFast(chainConfig)
+		if !ok {
+			return nil
+		}
+
+		return &BlockExtraData{
+			ValidatorBytes:           validatorBytes,
+			GasTarget:                gasTarget,
+			BaseFeeChangeDenominator: baseFeeChangeDenom,
+		}
+	}
+
+	// Pre-Austin blocks decode directly rather than via decodeExtraFieldsFast,
+	// which never expands TxDependency - this path needs the real value.
+	raw := h.Extra[ExtraVanityLength : len(h.Extra)-ExtraSealLength]
+
 	var blockExtraData BlockExtraData
-	if err := rlp.DecodeBytes(h.Extra[ExtraVanityLength:len(h.Extra)-ExtraSealLength], &blockExtraData); err != nil {
+	if err := rlp.DecodeBytes(raw, &blockExtraData); err != nil {
 		return nil
 	}
 

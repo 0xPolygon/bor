@@ -4050,6 +4050,50 @@ func TestPrepare_CancunEncoding(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, len(h2.Extra) > types.ExtraVanityLength+types.ExtraSealLength)
 }
+
+// TestPrepare_AustinEncoding verifies Prepare encodes headers as
+// BlockExtraDataPostAustin from the Austin block onward, and as the legacy
+// BlockExtraData shape just before it.
+func TestPrepare_AustinEncoding(t *testing.T) {
+	t.Parallel()
+	addr1 := common.HexToAddress("0x1")
+	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
+
+	const austin = 15 // coincide with the sprint-end block used below
+	borCfg := borConfigWithDelays(16)
+	borCfg.GiuglianoBlock = big.NewInt(0)
+	borCfg.AustinBlock = big.NewInt(austin)
+
+	cfg := newAllForksChainConfig(borCfg)
+	cfg.ShanghaiBlock = big.NewInt(0)
+	cfg.CancunBlock = big.NewInt(0)
+
+	chain, b := newChainAndBorForTestWithConfig(t, sp, cfg, true, addr1, uint64(time.Now().Unix())-200)
+	genesis := chain.HeaderChain().GetHeaderByNumber(0)
+
+	// Block 15 is sprint-end (IsSprintStart(16, 16)=true) and == austin: post-Austin wire shape.
+	h := &types.Header{
+		ParentHash: genesis.Hash(),
+		Number:     big.NewInt(austin),
+		GasLimit:   genesis.GasLimit,
+		UncleHash:  uncleHash,
+	}
+	require.NoError(t, b.Prepare(chain.HeaderChain(), h, false))
+
+	payload := h.Extra[types.ExtraVanityLength : len(h.Extra)-types.ExtraSealLength]
+	var noDep types.BlockExtraDataPostAustin
+	require.NoError(t, rlp.DecodeBytes(payload, &noDep), "post-Austin Extra must decode as BlockExtraDataPostAustin")
+	require.NotEmpty(t, noDep.ValidatorBytes)
+	require.NotNil(t, noDep.GasTarget)
+
+	vals, gt, den := h.GetValidatorBytesAndBaseFeeParams(cfg)
+	require.Equal(t, noDep.ValidatorBytes, vals)
+	require.Equal(t, noDep.GasTarget, gt)
+	require.Equal(t, noDep.BaseFeeChangeDenominator, den)
+	full := h.DecodeBlockExtraData(cfg)
+	require.NotNil(t, full)
+	require.Nil(t, full.TxDependency, "TxDependency must normalize to nil post-Austin")
+}
 func TestFinalize_SprintWithHeimdallCommitStates(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
@@ -5748,54 +5792,49 @@ func (s *giuglianoVerifySetup) makeSignedChild(t *testing.T, extra []byte, baseF
 	return h
 }
 
-func TestSetGiuglianoExtraFields_PreGiugliano(t *testing.T) {
+func TestGiuglianoExtraFields_PreGiugliano(t *testing.T) {
 	t.Parallel()
 	_, b, _ := newGiuglianoBorForTest(t, false)
 
 	header := &types.Header{Number: big.NewInt(1)}
 	parent := &types.Header{Number: big.NewInt(0), GasLimit: 30_000_000}
-	bed := &types.BlockExtraData{}
 
-	b.setGiuglianoExtraFields(header, parent, bed)
+	gasTarget, bfcd := b.giuglianoExtraFields(header, parent)
 
-	require.Nil(t, bed.GasTarget, "GasTarget should be nil for pre-Giugliano blocks")
-	require.Nil(t, bed.BaseFeeChangeDenominator, "BaseFeeChangeDenominator should be nil for pre-Giugliano blocks")
+	require.Nil(t, gasTarget, "GasTarget should be nil for pre-Giugliano blocks")
+	require.Nil(t, bfcd, "BaseFeeChangeDenominator should be nil for pre-Giugliano blocks")
 }
 
-func TestSetGiuglianoExtraFields_PostGiugliano(t *testing.T) {
+func TestGiuglianoExtraFields_PostGiugliano(t *testing.T) {
 	t.Parallel()
 	_, b, cfg := newGiuglianoBorForTest(t, true)
 
 	parent := &types.Header{Number: big.NewInt(0), GasLimit: 30_000_000, BaseFee: big.NewInt(1000000000)}
 	header := &types.Header{Number: big.NewInt(1)}
-	bed := &types.BlockExtraData{}
 
-	b.setGiuglianoExtraFields(header, parent, bed)
+	gasTarget, bfcd := b.giuglianoExtraFields(header, parent)
 
 	expectedGasTarget := eip1559.CalcGasTarget(cfg, parent)
 	expectedBFCD := params.BaseFeeChangeDenominator(cfg.Bor, parent.Number)
 
-	require.NotNil(t, bed.GasTarget)
-	require.Equal(t, expectedGasTarget, *bed.GasTarget)
-	require.NotNil(t, bed.BaseFeeChangeDenominator)
-	require.Equal(t, expectedBFCD, *bed.BaseFeeChangeDenominator)
+	require.NotNil(t, gasTarget)
+	require.Equal(t, expectedGasTarget, *gasTarget)
+	require.NotNil(t, bfcd)
+	require.Equal(t, expectedBFCD, *bfcd)
 }
 
-func TestSetGiuglianoExtraFields_UsesParentNotCurrent(t *testing.T) {
+func TestGiuglianoExtraFields_UsesParentNotCurrent(t *testing.T) {
 	t.Parallel()
 	_, b, _ := newGiuglianoBorForTest(t, true)
 
 	parent := &types.Header{Number: big.NewInt(5), GasLimit: 30_000_000, BaseFee: big.NewInt(1000000000)}
 	header := &types.Header{Number: big.NewInt(6), GasLimit: 30_000_100, BaseFee: big.NewInt(875000000)}
 
-	bedFromParent := &types.BlockExtraData{}
-	b.setGiuglianoExtraFields(header, parent, bedFromParent)
-
-	bedFromCurrent := &types.BlockExtraData{}
-	b.setGiuglianoExtraFields(header, header, bedFromCurrent)
+	gasTargetFromParent, _ := b.giuglianoExtraFields(header, parent)
+	gasTargetFromCurrent, _ := b.giuglianoExtraFields(header, header)
 
 	// parent.GasLimit=30_000_000 vs header.GasLimit=30_000_100 → different gas targets
-	require.NotEqual(t, *bedFromParent.GasTarget, *bedFromCurrent.GasTarget,
+	require.NotEqual(t, *gasTargetFromParent, *gasTargetFromCurrent,
 		"GasTarget should differ when using parent vs current header")
 }
 
