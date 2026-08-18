@@ -42,7 +42,7 @@ func headerWithReservedFields(t *testing.T, number int64, gasUsed, capacity *uin
 		if capacity != nil {
 			c = *capacity
 		}
-		require.NoError(t, h.SetReservedFields(*gasUsed, c))
+		require.NoError(t, h.SetReservedFields(&params.ChainConfig{ChainID: big.NewInt(137), CancunBlock: big.NewInt(0)}, *gasUsed, c))
 	}
 	return h
 }

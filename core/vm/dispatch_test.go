@@ -1593,10 +1593,9 @@ func runWithAbort(code []byte, gas uint64, switchDispatch bool) error {
 // mid-execution stops both paths and both return the same error.
 func TestInterruptDuringExecution(t *testing.T) {
 	t.Parallel()
-	// The gas budget must be large enough that exhaustion can never win the
-	// race against the harness's 5ms flag timer, so the loop terminates only
-	// via the interrupt on any machine.
-	const gas = uint64(1) << 62
+	// High enough that the loop can't exhaust gas before the 5ms interrupt
+	// fires, even under CPU contention.
+	const gas = uint64(10_000_000_000)
 
 	// Infinite loop — only the interrupt can stop it.
 	loop := []byte{
@@ -1620,9 +1619,8 @@ func TestInterruptDuringExecution(t *testing.T) {
 // JUMP/JUMPI to stop, and both paths produce the same result.
 func TestAbortDuringJump(t *testing.T) {
 	t.Parallel()
-	// See TestInterruptDuringExecution: the budget must outlast the 5ms flag
-	// timer so the loop terminates only via the abort.
-	const gas = uint64(1) << 62
+	// See TestInterruptDuringExecution.
+	const gas = uint64(10_000_000_000)
 
 	jumpLoop := []byte{
 		byte(JUMPDEST), // pc=0

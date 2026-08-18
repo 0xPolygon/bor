@@ -93,15 +93,9 @@ type ExecutionTask struct {
 	totalUsedGas               *uint64
 	receipts                   *types.Receipts
 	allLogs                    *[]*types.Log
-
-	// length of dependencies          -> 2 + k (k = a whole number)
-	// first 2 element in dependencies -> transaction index, and flag representing if delay is allowed or not
-	//                                       (0 -> delay is not allowed, 1 -> delay is allowed)
-	// next k elements in dependencies -> transaction indexes on which transaction i is dependent on
-	dependencies []int
-	coinbase     common.Address
-	blockContext vm.BlockContext
-	jumpDests    vm.JumpDestCache
+	coinbase                   common.Address
+	blockContext               vm.BlockContext
+	jumpDests                  vm.JumpDestCache
 }
 
 func (task *ExecutionTask) Execute(mvh *blockstm.MVHashMap, incarnation int) (err error) {
@@ -197,7 +191,7 @@ func (task *ExecutionTask) Hash() common.Hash {
 }
 
 func (task *ExecutionTask) Dependencies() []int {
-	return task.dependencies
+	return nil
 }
 
 func (task *ExecutionTask) Settle() {
@@ -327,7 +321,7 @@ func (p *ParallelStateProcessor) chainConfig() *params.ChainConfig {
 func (p *ParallelStateProcessor) maybeRerunWithoutFeeDelay(tasks []blockstm.ExecTask,
 	statedb, backupStateDB *state.StateDB, shouldDelayFeeCal *bool,
 	allLogs *[]*types.Log, receipts *types.Receipts, usedGas **uint64,
-	metadata bool, interruptCtx context.Context) (error, bool) {
+	interruptCtx context.Context) (error, bool) {
 	needsRerun := false
 	for _, task := range tasks {
 		if task.(*ExecutionTask).shouldRerunWithoutFeeDelay {
@@ -350,7 +344,7 @@ func (p *ParallelStateProcessor) maybeRerunWithoutFeeDelay(tasks []blockstm.Exec
 		et.receipts = receipts
 		et.totalUsedGas = *usedGas
 	}
-	_, err := blockstm.ExecuteParallel(tasks, false, metadata, p.bc.parallelSpeculativeProcesses, interruptCtx)
+	_, err := blockstm.ExecuteParallel(tasks, false, false, p.bc.parallelSpeculativeProcesses, interruptCtx)
 	return err, true
 }
 
@@ -408,7 +402,6 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 		blockTime   = block.Time()
 		allLogs     []*types.Log
 		usedGas     = new(uint64)
-		metadata    bool
 	)
 
 	// Set an empty context if nil
@@ -425,19 +418,6 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 	sharedJumpDests := vm.NewSyncJumpDestCache()
 
 	shouldDelayFeeCal := true
-
-	blockTxDependency := block.GetTxDependency()
-
-	deps := GetDeps(blockTxDependency)
-
-	if !VerifyDeps(deps) || len(blockTxDependency) != len(block.Transactions()) {
-		blockTxDependency = nil
-		deps = make(map[int][]int)
-	}
-
-	if blockTxDependency != nil {
-		metadata = true
-	}
 
 	blockContext := NewEVMBlockContext(header, p.bc, author)
 	// Same parent-state reserved snapshot the serial processor uses, so parallel
@@ -505,7 +485,6 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 			totalUsedGas:      usedGas,
 			receipts:          &receipts,
 			allLogs:           &allLogs,
-			dependencies:      deps[i],
 			coinbase:          coinbase,
 			blockContext:      blockContext,
 			jumpDests:         sharedJumpDests,
@@ -517,10 +496,7 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 	backupStateDB := statedb.Copy()
 
 	profile := false
-
-	var result blockstm.ParallelExecutionResult
-
-	result, err = blockstm.ExecuteParallel(tasks, profile, metadata, p.bc.parallelSpeculativeProcesses, interruptCtx)
+	result, err := blockstm.ExecuteParallel(tasks, profile, false, p.bc.parallelSpeculativeProcesses, interruptCtx)
 
 	if err == nil && profile && result.Deps != nil {
 		_, weight := result.Deps.LongestPath(*result.Stats)
@@ -535,7 +511,7 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 	}
 
 	if rerunErr, rerun := p.maybeRerunWithoutFeeDelay(tasks, statedb, backupStateDB,
-		&shouldDelayFeeCal, &allLogs, &receipts, &usedGas, metadata, interruptCtx); rerun {
+		&shouldDelayFeeCal, &allLogs, &receipts, &usedGas, interruptCtx); rerun {
 		err = rerunErr
 	}
 
@@ -580,38 +556,6 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 		ReservedTxIndexes:   reservedTxIndexes,
 		ReservedClientUsage: clientUsage,
 	}, nil
-}
-
-func GetDeps(txDependency [][]uint64) map[int][]int {
-	deps := make(map[int][]int)
-
-	for i := 0; i <= len(txDependency)-1; i++ {
-		deps[i] = []int{}
-
-		for j := 0; j <= len(txDependency[i])-1; j++ {
-			deps[i] = append(deps[i], int(txDependency[i][j]))
-		}
-	}
-
-	return deps
-}
-
-// returns true if dependencies are correct
-func VerifyDeps(deps map[int][]int) bool {
-	// number of transactions in the block
-	n := len(deps)
-
-	// Handle out-of-range and circular dependency problem
-	for i := 0; i <= n-1; i++ {
-		val := deps[i]
-		for _, depTx := range val {
-			if depTx < 0 || depTx >= n || depTx >= i {
-				return false
-			}
-		}
-	}
-
-	return true
 }
 
 // ---------------------------------------------------------------------------

@@ -80,7 +80,9 @@ func buildReservedHeader(t *testing.T, number, gasLimit, gasUsed uint64, reserve
 		if reservedCapacity != nil {
 			capacity = *reservedCapacity
 		}
-		if err := h.SetReservedFields(*reservedGasUsed, capacity); err != nil {
+		// The headers this helper builds carry the pre-Austin wire shape, so
+		// the write goes through a config without Austin scheduled.
+		if err := h.SetReservedFields(&params.ChainConfig{ChainID: big.NewInt(137), CancunBlock: big.NewInt(0)}, *reservedGasUsed, capacity); err != nil {
 			t.Fatalf("set reserved fields: %v", err)
 		}
 	}

@@ -94,7 +94,7 @@ func GetValidatorBytesTest(h *Header) []byte {
 	return blockExtraData.ValidatorBytes
 }
 
-func TestTxDependencyBlockDecoding(t *testing.T) {
+func TestValidatorBytesBlockDecoding(t *testing.T) {
 	t.Parallel()
 
 	blockEnc := common.FromHex("f9037df90270a00000000000000000000000000000000000000000000000000000000000000000a00000000000000000000000000000000000000000000000000000000000000000948888f1f195afa192cfee860698584c030f4c9db1a0ef1552a40b7165c3cd773806b9e0c165b75356e0314bf0706f279c729f51e017a00000000000000000000000000000000000000000000000000000000000000000a00000000000000000000000000000000000000000000000000000000000000000b90100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008302000080832fefd8825208845506eb07b8710000000000000000000000000000000000000000000000000000000000000000cf8776616c20736574c6c20201c201800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000a0bd4472abb6659ebe3ee06ee4d7b72a00a9f4d001caca51342001075469aff49888a13a5a8c8f2bb1c4843b9aca00f90106f85f800a82c35094095e7baea6a6c7c4c2dfeb977efac326af552d870a801ba09bea4c4daac7c7c52e093e6a4c35dbbcf8856f1af7b059ba20253e70848d094fa08a8fae537ce25ed8cb5af9adac3f141af69bd515bd2ba031522df09b97dd72b1b8a302f8a0018080843b9aca008301e24194095e7baea6a6c7c4c2dfeb977efac326af552d878080f838f7940000000000000000000000000000000000000001e1a0000000000000000000000000000000000000000000000000000000000000000080a0fe38ca4e44a30002ac54af7cf922a6ac2ba11b7d22f548e8ecb3f51f41cb31b0a06de6a5cbae13c0c856e33acf021b51819636cfc009d39eafb9f606d546e305a8c0")
@@ -126,10 +126,8 @@ func TestTxDependencyBlockDecoding(t *testing.T) {
 	tx1, _ = tx1.WithSignature(HomesteadSigner{}, common.Hex2Bytes("9bea4c4daac7c7c52e093e6a4c35dbbcf8856f1af7b059ba20253e70848d094f8a8fae537ce25ed8cb5af9adac3f141af69bd515bd2ba031522df09b97dd72b100"))
 
 	validatorBytes := GetValidatorBytesTest(block.header)
-	txDependency := block.GetTxDependency()
 
 	check("validatorBytes", validatorBytes, []byte("val set"))
-	check("txDependency", txDependency, [][]uint64{{2, 1}, {1, 0}})
 
 	addr := common.HexToAddress("0x0000000000000000000000000000000000000001")
 	accesses := AccessList{AccessTuple{
@@ -1204,7 +1202,7 @@ func TestSetReservedFields(t *testing.T) {
 	extra = append(extra, make([]byte, ExtraSealLength)...)
 	header := &Header{Number: big.NewInt(1), Extra: extra}
 
-	if err := header.SetReservedFields(7_500_000, 20_000_000); err != nil {
+	if err := header.SetReservedFields(chainConfig, 7_500_000, 20_000_000); err != nil {
 		t.Fatalf("SetReservedFields: %v", err)
 	}
 
@@ -1232,7 +1230,7 @@ func TestSetReservedFields(t *testing.T) {
 
 	// The write is idempotent-by-overwrite: setting again replaces both values
 	// in the same round-trip.
-	if err := header.SetReservedFields(0, 0); err != nil {
+	if err := header.SetReservedFields(chainConfig, 0, 0); err != nil {
 		t.Fatalf("second SetReservedFields: %v", err)
 	}
 	if got := header.GetReservedGasUsed(chainConfig); got == nil || *got != 0 {
@@ -1244,7 +1242,7 @@ func TestSetReservedFields(t *testing.T) {
 
 	// Too-short extra is rejected without touching the header.
 	short := &Header{Number: big.NewInt(1), Extra: []byte{0x01}}
-	if err := short.SetReservedFields(1, 1); err == nil {
+	if err := short.SetReservedFields(chainConfig, 1, 1); err == nil {
 		t.Error("expected error for short extra data")
 	}
 	if !bytes.Equal(short.Extra, []byte{0x01}) {
@@ -1464,5 +1462,88 @@ func TestGetValidatorBytesShortExtra(t *testing.T) {
 	if !bytes.Equal(got, extra[ExtraVanityLength:ExtraVanityLength+40]) {
 		t.Errorf("happy path: validator bytes mismatch: got %x, want %x",
 			got, extra[ExtraVanityLength:ExtraVanityLength+40])
+	}
+}
+
+// TestReservedFieldsPostAustin pins the reserved-field accessors on the
+// post-Austin wire shape (no TxDependency), which is the format every network
+// activating reserved blockspace after Austin will carry. The pre-Austin
+// shape is covered by TestSetReservedFields above; together they hold the
+// accessors to both encodings across the Austin boundary.
+func TestReservedFieldsPostAustin(t *testing.T) {
+	t.Parallel()
+
+	austinAt := func(block int64) *params.ChainConfig {
+		return &params.ChainConfig{
+			ChainID:     big.NewInt(137),
+			CancunBlock: big.NewInt(0),
+			Bor:         &params.BorConfig{AustinBlock: big.NewInt(block)},
+		}
+	}
+	chainConfig := austinAt(0)
+
+	gasTarget := uint64(30_000_000)
+	bfcd := uint64(64)
+	body, err := EncodeBlockExtraData(chainConfig, big.NewInt(1), []byte("validator-bytes"), &gasTarget, &bfcd, nil, nil)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	extra := make([]byte, ExtraVanityLength, ExtraVanityLength+len(body)+ExtraSealLength)
+	extra = append(extra, body...)
+	extra = append(extra, make([]byte, ExtraSealLength)...)
+	header := &Header{Number: big.NewInt(1), Extra: extra}
+
+	if got := header.GetReservedGasUsed(chainConfig); got != nil {
+		t.Errorf("field absent on the wire, want nil, got %v", got)
+	}
+
+	if err := header.SetReservedFields(chainConfig, 7_500_000, 20_000_000); err != nil {
+		t.Fatalf("SetReservedFields: %v", err)
+	}
+	if got := header.GetReservedGasUsed(chainConfig); got == nil || *got != 7_500_000 {
+		t.Errorf("ReservedGasUsed round-trip mismatch: got %v, want 7500000", got)
+	}
+	if got := header.GetReservedCapacity(chainConfig); got == nil || *got != 20_000_000 {
+		t.Errorf("ReservedCapacity round-trip mismatch: got %v, want 20000000", got)
+	}
+
+	// Sibling fields must survive the rewrite untouched.
+	var decoded BlockExtraDataPostAustin
+	if err := rlp.DecodeBytes(header.Extra[ExtraVanityLength:len(header.Extra)-ExtraSealLength], &decoded); err != nil {
+		t.Fatalf("extra no longer decodes: %v", err)
+	}
+	if !bytes.Equal(decoded.ValidatorBytes, []byte("validator-bytes")) {
+		t.Errorf("ValidatorBytes changed: %q", decoded.ValidatorBytes)
+	}
+	if decoded.GasTarget == nil || *decoded.GasTarget != gasTarget || decoded.BaseFeeChangeDenominator == nil || *decoded.BaseFeeChangeDenominator != bfcd {
+		t.Errorf("Giugliano fields changed: gt=%v bfcd=%v", decoded.GasTarget, decoded.BaseFeeChangeDenominator)
+	}
+
+	// A reserved value passed through EncodeBlockExtraData lands on the wire
+	// in both fork shapes.
+	reserved := uint64(21_000)
+	for _, tc := range []struct {
+		name   string
+		config *params.ChainConfig
+		number int64
+	}{
+		{"pre-austin shape", austinAt(5), 4},
+		{"at austin", austinAt(5), 5},
+		{"post-austin", austinAt(5), 6},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body, err := EncodeBlockExtraData(tc.config, big.NewInt(tc.number), nil, nil, nil, &reserved, &reserved)
+			if err != nil {
+				t.Fatalf("encode: %v", err)
+			}
+			extra := make([]byte, ExtraVanityLength, ExtraVanityLength+len(body)+ExtraSealLength)
+			extra = append(extra, body...)
+			extra = append(extra, make([]byte, ExtraSealLength)...)
+			h := &Header{Number: big.NewInt(tc.number), Extra: extra}
+			gasUsed, capacity := h.GetReservedFields(tc.config)
+			if gasUsed == nil || *gasUsed != reserved || capacity == nil || *capacity != reserved {
+				t.Fatalf("round-trip through EncodeBlockExtraData: gasUsed=%v capacity=%v, want both %d", gasUsed, capacity, reserved)
+			}
+		})
 	}
 }
