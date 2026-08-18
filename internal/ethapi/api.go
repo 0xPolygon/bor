@@ -161,17 +161,18 @@ func (api *EthereumAPI) MaxPriorityFeePerGas(ctx context.Context) (*hexutil.Big,
 }
 
 type feeHistoryResult struct {
-	OldestBlock      *hexutil.Big     `json:"oldestBlock"`
-	Reward           [][]*hexutil.Big `json:"reward,omitempty"`
-	BaseFee          []*hexutil.Big   `json:"baseFeePerGas,omitempty"`
-	GasUsedRatio     []float64        `json:"gasUsedRatio"`
-	BlobBaseFee      []*hexutil.Big   `json:"baseFeePerBlobGas,omitempty"`
-	BlobGasUsedRatio []float64        `json:"blobGasUsedRatio,omitempty"`
+	OldestBlock        *hexutil.Big     `json:"oldestBlock"`
+	Reward             [][]*hexutil.Big `json:"reward,omitempty"`
+	BaseFee            []*hexutil.Big   `json:"baseFeePerGas,omitempty"`
+	GasUsedRatio       []float64        `json:"gasUsedRatio"`
+	NormalGasUsedRatio []float64        `json:"normalGasUsedRatio,omitempty"`
+	BlobBaseFee        []*hexutil.Big   `json:"baseFeePerBlobGas,omitempty"`
+	BlobGasUsedRatio   []float64        `json:"blobGasUsedRatio,omitempty"`
 }
 
 // FeeHistory returns the fee market history.
 func (api *EthereumAPI) FeeHistory(ctx context.Context, blockCount math.HexOrDecimal64, lastBlock rpc.BlockNumber, rewardPercentiles []float64) (*feeHistoryResult, error) {
-	oldest, reward, baseFee, gasUsed, blobBaseFee, blobGasUsed, err := api.b.FeeHistory(ctx, uint64(blockCount), lastBlock, rewardPercentiles)
+	oldest, reward, baseFee, gasUsed, normalGasUsed, blobBaseFee, blobGasUsed, err := api.b.FeeHistory(ctx, uint64(blockCount), lastBlock, rewardPercentiles)
 	if err != nil {
 		return nil, err
 	}
@@ -195,6 +196,9 @@ func (api *EthereumAPI) FeeHistory(ctx context.Context, blockCount math.HexOrDec
 		for i, v := range baseFee {
 			results.BaseFee[i] = (*hexutil.Big)(v)
 		}
+	}
+	if normalGasUsed != nil {
+		results.NormalGasUsedRatio = normalGasUsed
 	}
 	if blobBaseFee != nil {
 		results.BlobBaseFee = make([]*hexutil.Big, len(blobBaseFee))

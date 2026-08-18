@@ -542,8 +542,8 @@ func (b testBackend) SyncProgress(ctx context.Context) ethereum.SyncProgress {
 func (b testBackend) SuggestGasTipCap(ctx context.Context) (*big.Int, error) {
 	return big.NewInt(0), nil
 }
-func (b testBackend) FeeHistory(ctx context.Context, blockCount uint64, lastBlock rpc.BlockNumber, rewardPercentiles []float64) (*big.Int, [][]*big.Int, []*big.Int, []float64, []*big.Int, []float64, error) {
-	return nil, nil, nil, nil, nil, nil, nil
+func (b testBackend) FeeHistory(ctx context.Context, blockCount uint64, lastBlock rpc.BlockNumber, rewardPercentiles []float64) (*big.Int, [][]*big.Int, []*big.Int, []float64, []float64, []*big.Int, []float64, error) {
+	return nil, nil, nil, nil, nil, nil, nil, nil
 }
 func (b testBackend) BlobBaseFee(ctx context.Context) *big.Int { return new(big.Int) }
 func (b testBackend) BaseFee(ctx context.Context) *big.Int     { return new(big.Int) }
