@@ -36,7 +36,7 @@ func headerWithReservedGasUsed(t *testing.T, number int64, reserved *uint64) *ty
 	extra = append(extra, make([]byte, types.ExtraSealLength)...)
 	h := &types.Header{Number: big.NewInt(number), Extra: extra}
 	if reserved != nil {
-		require.NoError(t, h.SetReservedGasUsed(*reserved))
+		require.NoError(t, h.SetReservedGasUsed(&params.ChainConfig{ChainID: big.NewInt(137), CancunBlock: big.NewInt(0)}, *reserved))
 	}
 	return h
 }

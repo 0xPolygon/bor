@@ -40,7 +40,6 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/clique"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core"
-	"github.com/ethereum/go-ethereum/core/blockstm"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/tracing"
@@ -55,7 +54,6 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/tests/bor/mocks"
 	"github.com/ethereum/go-ethereum/trie"
-	"github.com/ethereum/go-ethereum/triedb"
 
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
 	borSpan "github.com/ethereum/go-ethereum/consensus/bor/heimdall/span"
@@ -1293,132 +1291,6 @@ func BenchmarkBorMining(b *testing.B) {
 
 			if _, err := chain.InsertChain([]*types.Block{block}, false); err != nil {
 				b.Fatalf("failed to insert new mined block %d: %v", block.NumberU64(), err)
-			}
-
-			b.Log("block", block.NumberU64(), "time", block.Time()-prev, "txs", block.Transactions().Len(), "gasUsed", block.GasUsed(), "gasLimit", block.GasLimit())
-
-			prev = block.Time()
-		case <-time.After(time.Duration(blockPeriod) * time.Second):
-			b.Fatalf("timeout")
-		}
-	}
-}
-
-// uses core.NewParallelBlockChain to use the dependencies present in the block header
-// params.BorUnittestChainConfig contains the NapoliBlock as big.NewInt(5), so the first 4 blocks will not have metadata.
-// nolint:gocognit
-func BenchmarkBorMiningBlockSTMMetadata(b *testing.B) {
-	chainConfig := params.BorUnittestChainConfig
-
-	ctrl := gomock.NewController(b)
-	defer ctrl.Finish()
-
-	ethAPIMock := api.NewMockCaller(ctrl)
-	ethAPIMock.EXPECT().Call(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
-
-	spanner := bor.NewMockSpanner(ctrl)
-	spanner.EXPECT().GetCurrentValidatorsByHash(gomock.Any(), gomock.Any(), gomock.Any()).Return([]*valset.Validator{
-		{
-			ID:               0,
-			Address:          TestBankAddress,
-			VotingPower:      100,
-			ProposerPriority: 0,
-		},
-	}, nil).AnyTimes()
-
-	heimdallClientMock := mocks.NewMockIHeimdallClient(ctrl)
-	heimdallClientMock.EXPECT().FetchStatus(gomock.Any()).Return(&ctypes.SyncInfo{CatchingUp: false}, nil).AnyTimes()
-	heimdallWSClient := mocks.NewMockIHeimdallWSClient(ctrl)
-	heimdallClientMock.EXPECT().Close().Times(1)
-
-	contractMock := bor.NewMockGenesisContract(ctrl)
-
-	db, _, _ := NewDBForFakes(b)
-
-	engine := NewFakeBor(b, db, chainConfig, ethAPIMock, spanner, heimdallClientMock, heimdallWSClient, contractMock)
-	defer engine.Close()
-
-	chainConfig.LondonBlock = big.NewInt(0)
-
-	w, back, _ := newTestWorker(b, DefaultTestConfig(), chainConfig, engine, rawdb.NewMemoryDatabase(), false, 0)
-	defer w.close()
-
-	// This test chain imports the mined blocks.
-	db2 := rawdb.NewMemoryDatabase()
-	back.genesis.MustCommit(db2, triedb.NewDatabase(db2, triedb.HashDefaults))
-
-	chain, _ := core.NewParallelBlockChain(db2, back.genesis, engine, core.DefaultConfig(), 8, false)
-	defer chain.Stop()
-
-	// Ignore empty commit here for less noise.
-	w.skipSealHook = func(task *task) bool {
-		return len(task.receipts) == 0
-	}
-
-	// fulfill tx pool
-	const (
-		totalGas    = testGas + params.TxGas
-		totalBlocks = 10
-	)
-
-	var err error
-
-	txInBlock := int(back.genesis.GasLimit/totalGas) + 1
-
-	// a bit risky
-	for i := 0; i < 2*totalBlocks*txInBlock; i++ {
-		err = back.txPool.Add([]*types.Transaction{back.newRandomTx(true)}, false)[0]
-		if err != nil {
-			b.Fatal("while adding a local transaction", err)
-		}
-
-		err = back.txPool.Add([]*types.Transaction{back.newRandomTx(false)}, false)[0]
-		if err != nil {
-			b.Fatal("while adding a remote transaction", err)
-		}
-	}
-
-	// Wait for mined blocks.
-	sub := w.mux.Subscribe(core.NewMinedBlockEvent{})
-	defer sub.Unsubscribe()
-
-	b.ResetTimer()
-
-	prev := uint64(time.Now().Unix())
-
-	// Start mining!
-	w.start()
-
-	blockPeriod, ok := back.genesis.Config.Bor.Period["0"]
-	if !ok {
-		blockPeriod = 1
-	}
-
-	for i := 0; i < totalBlocks; i++ {
-		select {
-		case ev := <-sub.Chan():
-			block := ev.Data.(core.NewMinedBlockEvent).Block
-
-			if _, err := chain.InsertChain([]*types.Block{block}, false); err != nil {
-				b.Fatalf("failed to insert new mined block %d: %v", block.NumberU64(), err)
-			}
-
-			// check for dependencies for block number > 4
-			if block.NumberU64() <= 4 {
-				if block.GetTxDependency() != nil {
-					b.Fatalf("dependency not nil")
-				}
-			} else {
-				deps := block.GetTxDependency()
-				if len(deps[0]) != 0 {
-					b.Fatalf("wrong dependency")
-				}
-
-				for i := 1; i < block.Transactions().Len(); i++ {
-					if deps[i][0] != uint64(i-1) || len(deps[i]) != 1 {
-						b.Fatalf("wrong dependency")
-					}
-				}
 			}
 
 			b.Log("block", block.NumberU64(), "time", block.Time()-prev, "txs", block.Transactions().Len(), "gasUsed", block.GasUsed(), "gasLimit", block.GasLimit())
@@ -3211,53 +3083,6 @@ func TestWriteBlockAndSetHeadTimer(t *testing.T) {
 	if writeBlockAndSetHeadTimer.Snapshot().Count() <= countBefore {
 		t.Error("writeBlockAndSetHeadTimer should have been updated after mining blocks")
 	}
-}
-
-// TestDelayFlagOffByOne verifies that the delayFlag check inspects each transaction's
-// own read set rather than its predecessor's.
-func TestDelayFlagOffByOne(t *testing.T) {
-	t.Parallel()
-
-	coinbase := common.HexToAddress("0x000000000000000000000000000000000000bA5e")
-	burntContract := common.HexToAddress("0x000000000000000000000000000000000000dead")
-
-	// Initialize the mvReadMapList with 3 transactions.
-	n := 3
-	mvReadMapList := make([]map[blockstm.Key]blockstm.ReadDescriptor, n)
-	for i := range mvReadMapList {
-		mvReadMapList[i] = make(map[blockstm.Key]blockstm.ReadDescriptor)
-	}
-
-	// Only the last tx reads the coinbase and burnt-contract balances.
-	mvReadMapList[n-1][blockstm.NewSubpathKey(coinbase, state.BalancePath)] = blockstm.ReadDescriptor{}
-	mvReadMapList[n-1][blockstm.NewSubpathKey(burntContract, state.BalancePath)] = blockstm.ReadDescriptor{}
-
-	buggyDelayFlag := func() bool {
-		for i := 1; i <= len(mvReadMapList)-1; i++ {
-			reads := mvReadMapList[i-1] // bug: checks predecessor read set instead of current tx
-			_, ok1 := reads[blockstm.NewSubpathKey(coinbase, state.BalancePath)]
-			_, ok2 := reads[blockstm.NewSubpathKey(burntContract, state.BalancePath)]
-			if ok1 || ok2 {
-				return false
-			}
-		}
-		return true
-	}
-
-	fixedDelayFlag := func() bool {
-		for i := 1; i <= len(mvReadMapList)-1; i++ {
-			reads := mvReadMapList[i]
-			_, ok1 := reads[blockstm.NewSubpathKey(coinbase, state.BalancePath)]
-			_, ok2 := reads[blockstm.NewSubpathKey(burntContract, state.BalancePath)]
-			if ok1 || ok2 {
-				return false
-			}
-		}
-		return true
-	}
-
-	require.True(t, buggyDelayFlag(), "bug: last tx skipped, DAG hint incorrectly embedded")
-	require.False(t, fixedDelayFlag(), "fix: last tx detected, DAG hint suppressed")
 }
 
 // TestPrefetchFromPool_BuilderModeSwitch verifies that when builderStarted is signaled
