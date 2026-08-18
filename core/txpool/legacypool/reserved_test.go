@@ -112,12 +112,9 @@ func deregisterReserved(t *testing.T, pool *LegacyPool, addr common.Address) *fa
 	return fr
 }
 
-func reservedChainConfig() *params.ChainConfig {
-	return reservedChainConfigAt(big.NewInt(0))
-}
-
-// reservedChainConfigAt is reservedChainConfig with an explicit fork block, so
-// tests can exercise the pre-fork/post-fork boundary.
+// reservedChainConfigAt builds a chain config with the reserved-blockspace
+// fork at an explicit block, so tests can exercise the pre-fork/post-fork
+// boundary.
 func reservedChainConfigAt(forkBlock *big.Int) *params.ChainConfig {
 	cfg := *params.BorUnittestChainConfig // London active at 0
 	bor := *cfg.Bor
