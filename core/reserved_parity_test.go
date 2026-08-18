@@ -62,10 +62,11 @@ func (f *fakeParityReader) TotalReservedGas(_ *state.StateDB, _ uint64, _ common
 // reserved and non-reserved senders (all sharing one client, all within
 // quota) and confirms the serial, parallel-v1, and parallel-v2 (BlockSTM)
 // processors - the three independent ProcessResult assembly sites - derive
-// the identical ReservedTxIndexes for it. A registry reader is wired via
-// BlockChain.SetReservedRegistry with a fixed in-memory fake (real
-// registryreader.BuildSnapshot/ClassifyReserved, no deployed contract), and
-// each processor re-executes the same block from the same parent state.
+// identical ReservedTxIndexes and ReservedClientUsage for it. A registry
+// reader is wired via BlockChain.SetReservedRegistry with a fixed in-memory
+// fake (real registryreader.BuildSnapshot/ClassifyReserved, no deployed
+// contract), and each processor re-executes the same block from the same
+// parent state.
 //
 // This is a real run of each processor's Process method - including a real
 // registryreader.BuildSnapshot/ClassifyReserved classification pass, just
@@ -149,20 +150,27 @@ func TestReservedTxIndexesParity_ProcessorsAgree(t *testing.T) {
 	}
 
 	want := []uint64{0, 2} // addrReservedA at index 0, addrReservedB at index 2
+	// Both reserved senders share fakeParityReader's single client (id 1), so
+	// Used is the summed declared gas of both reserved transactions (21000
+	// each, from mkTx's Gas field) and Quota is the fake reader's quota.
+	wantUsage := map[uint64]registryreader.ClientUsage{1: {Used: 42000, Quota: 100_000}}
 
 	serialRes, err := bc.processor.Process(block, freshState(), vm.Config{}, nil, context.Background())
 	require.NoError(t, err)
 	require.Equal(t, want, serialRes.ReservedTxIndexes, "serial processor")
+	require.Equal(t, wantUsage, serialRes.ReservedClientUsage, "serial processor usage")
 
 	v1 := NewParallelStateProcessor(bc.hc, bc)
 	v1Res, err := v1.Process(block, freshState(), vm.Config{}, nil, context.Background())
 	require.NoError(t, err)
 	require.Equal(t, want, v1Res.ReservedTxIndexes, "parallel-v1 (ParallelStateProcessor)")
+	require.Equal(t, wantUsage, v1Res.ReservedClientUsage, "parallel-v1 (ParallelStateProcessor) usage")
 
 	v2 := NewV2StateProcessor(bc.hc, bc, 2)
 	v2Res, err := v2.Process(block, freshState(), vm.Config{}, nil, context.Background())
 	require.NoError(t, err)
 	require.Equal(t, want, v2Res.ReservedTxIndexes, "parallel-v2 (BlockSTM)")
+	require.Equal(t, wantUsage, v2Res.ReservedClientUsage, "parallel-v2 (BlockSTM) usage")
 }
 
 // TestWriteBlockWithState_NilReceiptsSuppressesReservedWrite is the focused

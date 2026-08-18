@@ -98,7 +98,8 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		tracingStateDB = state.NewHookedState(statedb, hooks)
 	}
 	context = NewEVMBlockContext(header, p.chain, author)
-	if err := p.applyReservedClassification(&context, statedb, header, block, signer); err != nil {
+	clientUsage, err := p.applyReservedClassification(&context, statedb, header, block, signer)
+	if err != nil {
 		return nil, err
 	}
 	evm := vm.NewEVM(context, tracingStateDB, p.chainConfig(), cfg)
@@ -205,13 +206,14 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	}
 
 	return &ProcessResult{
-		Receipts:          receipts,
-		Requests:          requests,
-		Logs:              allLogs,
-		GasUsed:           *usedGas,
-		ReservedGasUsed:   reservedGasUsed,
-		ReservedCapacity:  context.ReservedSnapshot.EffectiveCapacity(),
-		ReservedTxIndexes: ReservedTxIndexes(txs, signer, context.ReservedTxs),
+		Receipts:            receipts,
+		Requests:            requests,
+		Logs:                allLogs,
+		GasUsed:             *usedGas,
+		ReservedGasUsed:     reservedGasUsed,
+		ReservedCapacity:    context.ReservedSnapshot.EffectiveCapacity(),
+		ReservedTxIndexes:   ReservedTxIndexes(txs, signer, context.ReservedTxs),
+		ReservedClientUsage: clientUsage,
 	}, nil
 }
 
@@ -219,15 +221,18 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 // the parent post-state, before block execution) and stores the resulting
 // snapshot plus the per-block reserved transaction set on blockCtx. The
 // quota-aware reserved set is derived once from the ordered body so every
-// transaction's fee-free decision is fixed before (parallel) execution.
-func (p *StateProcessor) applyReservedClassification(blockCtx *vm.BlockContext, statedb *state.StateDB, header *types.Header, block *types.Block, signer types.Signer) error {
+// transaction's fee-free decision is fixed before (parallel) execution. The
+// returned usage map is the same classification walk's per-client tally,
+// handed back to the caller for ProcessResult rather than stored on blockCtx.
+func (p *StateProcessor) applyReservedClassification(blockCtx *vm.BlockContext, statedb *state.StateDB, header *types.Header, block *types.Block, signer types.Signer) (map[uint64]registryreader.ClientUsage, error) {
 	reservedSnapshot, err := ReservedSnapshotForBlock(p.chain, statedb, header)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	blockCtx.ReservedSnapshot = reservedSnapshot
-	blockCtx.ReservedTxs = registryreader.ClassifyReserved(block.Transactions(), signer, blockCtx.ReservedSnapshot)
-	return nil
+	reservedTxs, clientUsage := registryreader.ClassifyReserved(block.Transactions(), signer, blockCtx.ReservedSnapshot)
+	blockCtx.ReservedTxs = reservedTxs
+	return clientUsage, nil
 }
 
 // ReservedTxIndexes returns the ascending positions within txs whose

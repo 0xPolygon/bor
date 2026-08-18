@@ -116,27 +116,50 @@ func (w *ReservedWalk) Reserved(from common.Address, gas uint64) bool {
 	return reserved
 }
 
-// ClassifyReserved returns the set of transactions in txs (in final block order)
-// that are reserved — i.e. execute fee-free — under snap, keyed by (sender,
-// nonce). It runs a single ReservedWalk over the block, so a verifier and the
-// producer (which advances the same walk as it commits) derive the identical
-// split by construction. A nil or empty snapshot classifies nothing.
+// ClientUsage reports one registry client's reserved-region gas usage for a
+// single block, alongside its quota. Used is declared gas (tx.Gas()) summed
+// over that client's committed reserved transactions - the same basis
+// ReservedWalk.Peek/Commit charges quota against, not the executed gas a
+// receipt reports afterward.
+type ClientUsage struct {
+	Used  uint64
+	Quota uint64
+}
+
+// ClassifyReserved returns the set of transactions in txs (in final block
+// order) that are reserved - i.e. execute fee-free - under snap, keyed by
+// (sender, nonce), together with per-client usage for every client in snap's
+// effective set (idle clients included, with Used 0). It runs a single
+// ReservedWalk over the block, so a verifier and the producer (which advances
+// the same walk as it commits) derive the identical split by construction. A
+// nil or empty snapshot classifies nothing and returns (nil, nil). An empty
+// txs classifies nothing but still reports every effective client at zero
+// usage, so per-block gauges built from the map reset on empty blocks instead
+// of holding the previous block's values.
 //
 // signer must be the same signer execution uses, so sender recovery agrees.
-func ClassifyReserved(txs []*types.Transaction, signer types.Signer, snap *Snapshot) map[ReservedKey]struct{} {
-	if snap == nil || len(snap.clientIDs) == 0 || len(txs) == 0 {
-		return nil
+func ClassifyReserved(txs []*types.Transaction, signer types.Signer, snap *Snapshot) (map[ReservedKey]struct{}, map[uint64]ClientUsage) {
+	if snap == nil || len(snap.clientIDs) == 0 {
+		return nil, nil
 	}
 	walk := NewReservedWalk(snap)
-	reserved := make(map[ReservedKey]struct{})
-	for _, tx := range txs {
-		from, err := types.Sender(signer, tx)
-		if err != nil {
-			continue
-		}
-		if walk.Reserved(from, tx.Gas()) {
-			reserved[ReservedKey{From: from, Nonce: tx.Nonce()}] = struct{}{}
+	var reserved map[ReservedKey]struct{}
+	if len(txs) > 0 {
+		reserved = make(map[ReservedKey]struct{})
+		for _, tx := range txs {
+			from, err := types.Sender(signer, tx)
+			if err != nil {
+				continue
+			}
+			if walk.Reserved(from, tx.Gas()) {
+				reserved[ReservedKey{From: from, Nonce: tx.Nonce()}] = struct{}{}
+			}
 		}
 	}
-	return reserved
+	clients := snap.Clients()
+	usage := make(map[uint64]ClientUsage, len(clients))
+	for _, id := range clients {
+		usage[id] = ClientUsage{Used: walk.used[id], Quota: snap.Quota(id)}
+	}
+	return reserved, usage
 }

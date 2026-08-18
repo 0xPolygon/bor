@@ -334,6 +334,11 @@ type task struct {
 	// the result loop so reads report the correct effective gas price for
 	// reserved transactions.
 	reservedTxIndexes []uint64
+	// reservedClientUsage is the block's per-client reserved-region usage,
+	// re-derived from the final body with the same walk a verifier runs, so
+	// the producer's chain/reserved client gauges match what every importing
+	// node reports for this block.
+	reservedClientUsage map[uint64]registryreader.ClientUsage
 }
 
 // stateSyncReserveFor returns the block-size budget to hold back for the state-sync
@@ -1395,7 +1400,7 @@ func (w *worker) resultLoop() {
 
 			// Commit block and state to database.
 			writeStart := time.Now()
-			_, err = w.chain.WriteBlockAndSetHead(block, receipts, logs, task.state, task.reservedTxIndexes, true)
+			_, err = w.chain.WriteBlockAndSetHead(block, receipts, logs, task.state, task.reservedTxIndexes, task.reservedClientUsage, true)
 			writeElapsed := time.Since(writeStart)
 			writeBlockAndSetHeadTimer.Update(writeElapsed)
 
@@ -2669,7 +2674,7 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 		// correct while the registry carves out zero capacity. The reserved
 		// set is read from the pre-copy env: copy() does not carry evm over.
 		_ = w.writeReservedFields(emptyWork)
-		_ = w.commit(emptyWork, nil, false, start, genParams, reservedTxsOf(work))
+		_ = w.commit(emptyWork, nil, false, start, genParams, reservedTxsOf(work), reservedSnapshotOf(work))
 	}
 	// Mark the start of full-block building. Set after the optional empty pre-seal commit so that
 	// productionElapsed for the full block does not include empty-block overhead.
@@ -2720,7 +2725,7 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 		return
 	}
 	// Submit the generated block for consensus sealing.
-	_ = w.commit(work.copy(), w.fullTaskHook, true, start, genParams, reservedTxsOf(work))
+	_ = w.commit(work.copy(), w.fullTaskHook, true, start, genParams, reservedTxsOf(work), reservedSnapshotOf(work))
 
 	// Swap out the old work with the new one, terminating any leftover
 	// prefetcher processes in the mean time and starting a new one.
@@ -3154,16 +3159,26 @@ func reservedTxsOf(env *environment) map[registryreader.ReservedKey]struct{} {
 	return env.evm.Context.ReservedTxs
 }
 
+// reservedSnapshotOf returns the env's registry snapshot, or nil when the
+// build has no reserved-aware EVM context.
+func reservedSnapshotOf(env *environment) *registryreader.Snapshot {
+	if env.evm == nil {
+		return nil
+	}
+	return env.evm.Context.ReservedSnapshot
+}
+
 // commit runs any post-transaction state modifications, assembles the final block
 // and commits new work if consensus engine is running.
 // Note the assumption is held that the mutation is allowed to the passed env, do
 // the deep copy first.
 //
-// reservedTxs is the build's reserved-region tx set (keyed by sender+nonce),
-// read by the caller off the pre-copy environment's evm.Context: env.copy()
-// (below, and at both call sites before this function even sees env) does not
-// carry the evm field over, so it is not recoverable from env itself here.
-func (w *worker) commit(env *environment, interval func(), update bool, start time.Time, genParams *generateParams, reservedTxs map[registryreader.ReservedKey]struct{}) error {
+// reservedTxs is the build's reserved-region tx set (keyed by sender+nonce)
+// and reservedSnap the registry snapshot that classified it, both read by the
+// caller off the pre-copy environment's evm.Context: env.copy() (below, and
+// at both call sites before this function even sees env) does not carry the
+// evm field over, so neither is recoverable from env itself here.
+func (w *worker) commit(env *environment, interval func(), update bool, start time.Time, genParams *generateParams, reservedTxs map[registryreader.ReservedKey]struct{}, reservedSnap *registryreader.Snapshot) error {
 	// Track total block building time and report metrics at the end of the commit cycle.
 	defer func() {
 		// Update total commit timer (matches the "elapsed" time in log)
@@ -3251,9 +3266,13 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 		}
 
 		reservedTxIndexes := core.ReservedTxIndexes(block.Transactions(), env.signer, reservedTxs)
+		// Per-client usage is re-derived from the final body with the same
+		// walk a verifier runs, so the producer's chain/reserved client
+		// gauges report the identical numbers every importing node derives.
+		_, reservedClientUsage := registryreader.ClassifyReserved(block.Transactions(), env.signer, reservedSnap)
 
 		select {
-		case w.taskCh <- &task{receipts: env.receipts, state: env.state, block: block, createdAt: time.Now(), productionElapsed: time.Since(firstNonZeroTime(productionStartFrom(genParams), start)), intermediateRootTime: commitTime, reservedTxIndexes: reservedTxIndexes}:
+		case w.taskCh <- &task{receipts: env.receipts, state: env.state, block: block, createdAt: time.Now(), productionElapsed: time.Since(firstNonZeroTime(productionStartFrom(genParams), start)), intermediateRootTime: commitTime, reservedTxIndexes: reservedTxIndexes, reservedClientUsage: reservedClientUsage}:
 			fees := totalFees(block, env.receipts)
 			feesInEther := new(big.Float).Quo(new(big.Float).SetInt(fees), big.NewFloat(params.Ether))
 			log.Info("Commit new sealing work",

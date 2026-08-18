@@ -65,26 +65,42 @@ func TestClassifyReserved(t *testing.T) {
 
 	t.Run("nil snapshot classifies nothing", func(t *testing.T) {
 		t.Parallel()
-		require.Nil(t, ClassifyReserved([]*types.Transaction{signedTx(t, keyA1, 0, 21000)}, signer, nil))
+		got, usage := ClassifyReserved([]*types.Transaction{signedTx(t, keyA1, 0, 21000)}, signer, nil)
+		require.Nil(t, got)
+		require.Nil(t, usage)
 	})
 
 	t.Run("empty snapshot classifies nothing", func(t *testing.T) {
 		t.Parallel()
 		empty := NewSnapshot(common.Hash{}, 0, map[common.Address]Client{})
-		require.Nil(t, ClassifyReserved([]*types.Transaction{signedTx(t, keyA1, 0, 21000)}, signer, empty))
+		got, usage := ClassifyReserved([]*types.Transaction{signedTx(t, keyA1, 0, 21000)}, signer, empty)
+		require.Nil(t, got)
+		require.Nil(t, usage)
+	})
+
+	t.Run("empty txs still reports zero usage per client", func(t *testing.T) {
+		t.Parallel()
+		snap := snapOf(1_500_000, map[uint64][]common.Address{1: {a1}, 2: {b1}}, map[uint64]uint64{1: 1_000_000, 2: 500_000})
+		got, usage := ClassifyReserved(nil, signer, snap)
+		require.Nil(t, got)
+		require.Equal(t, map[uint64]ClientUsage{
+			1: {Used: 0, Quota: 1_000_000},
+			2: {Used: 0, Quota: 500_000},
+		}, usage)
 	})
 
 	t.Run("no registered senders present", func(t *testing.T) {
 		t.Parallel()
 		snap := snapOf(1_000_000, map[uint64][]common.Address{1: {a1}}, map[uint64]uint64{1: 1_000_000})
-		require.Empty(t, ClassifyReserved([]*types.Transaction{signedTx(t, keyX, 0, 21000)}, signer, snap))
+		got, _ := ClassifyReserved([]*types.Transaction{signedTx(t, keyX, 0, 21000)}, signer, snap)
+		require.Empty(t, got)
 	})
 
 	t.Run("all under quota are reserved", func(t *testing.T) {
 		t.Parallel()
 		snap := snapOf(1_000_000, map[uint64][]common.Address{1: {a1}}, map[uint64]uint64{1: 1_000_000})
 		txs := []*types.Transaction{signedTx(t, keyA1, 0, 100), signedTx(t, keyA1, 1, 100)}
-		got := ClassifyReserved(txs, signer, snap)
+		got, _ := ClassifyReserved(txs, signer, snap)
 		require.Len(t, got, 2)
 		require.True(t, has(got, a1, 0))
 		require.True(t, has(got, a1, 1))
@@ -98,7 +114,7 @@ func TestClassifyReserved(t *testing.T) {
 			signedTx(t, keyA1, 1, 600),
 			signedTx(t, keyA1, 2, 600),
 		}
-		got := ClassifyReserved(txs, signer, snap)
+		got, _ := ClassifyReserved(txs, signer, snap)
 		require.Len(t, got, 1)
 		require.True(t, has(got, a1, 0))
 		require.False(t, has(got, a1, 1))
@@ -108,14 +124,15 @@ func TestClassifyReserved(t *testing.T) {
 	t.Run("zero quota overflows everything", func(t *testing.T) {
 		t.Parallel()
 		snap := snapOf(0, map[uint64][]common.Address{1: {a1}}, map[uint64]uint64{1: 0})
-		require.Empty(t, ClassifyReserved([]*types.Transaction{signedTx(t, keyA1, 0, 1)}, signer, snap))
+		got, _ := ClassifyReserved([]*types.Transaction{signedTx(t, keyA1, 0, 1)}, signer, snap)
+		require.Empty(t, got)
 	})
 
 	t.Run("non-registered sender txs stay normal", func(t *testing.T) {
 		t.Parallel()
 		snap := snapOf(1_000_000, map[uint64][]common.Address{1: {a1}}, map[uint64]uint64{1: 1_000_000})
 		txs := []*types.Transaction{signedTx(t, keyA1, 0, 100), signedTx(t, keyX, 0, 100)}
-		got := ClassifyReserved(txs, signer, snap)
+		got, _ := ClassifyReserved(txs, signer, snap)
 		require.Len(t, got, 1)
 		require.True(t, has(got, a1, 0))
 	})
@@ -123,12 +140,12 @@ func TestClassifyReserved(t *testing.T) {
 	t.Run("per-client quota is independent", func(t *testing.T) {
 		t.Parallel()
 		// Two clients, each quota 100, capacity = sum (200, the registry
-		// invariant). Both single 100-gas txs are reserved — no global ceiling.
+		// invariant). Both single 100-gas txs are reserved - no global ceiling.
 		snap := snapOf(200,
 			map[uint64][]common.Address{1: {a1}, 2: {b1}},
 			map[uint64]uint64{1: 100, 2: 100})
 		txs := []*types.Transaction{signedTx(t, keyA1, 0, 100), signedTx(t, keyB1, 0, 100)}
-		got := ClassifyReserved(txs, signer, snap)
+		got, _ := ClassifyReserved(txs, signer, snap)
 		require.Len(t, got, 2)
 		require.True(t, has(got, a1, 0))
 		require.True(t, has(got, b1, 0))
@@ -139,8 +156,8 @@ func TestClassifyReserved(t *testing.T) {
 		snap := snapOf(200,
 			map[uint64][]common.Address{1: {a1}, 2: {b1}},
 			map[uint64]uint64{1: 100, 2: 100})
-		ab := ClassifyReserved([]*types.Transaction{signedTx(t, keyA1, 0, 100), signedTx(t, keyB1, 0, 100)}, signer, snap)
-		ba := ClassifyReserved([]*types.Transaction{signedTx(t, keyB1, 0, 100), signedTx(t, keyA1, 0, 100)}, signer, snap)
+		ab, _ := ClassifyReserved([]*types.Transaction{signedTx(t, keyA1, 0, 100), signedTx(t, keyB1, 0, 100)}, signer, snap)
+		ba, _ := ClassifyReserved([]*types.Transaction{signedTx(t, keyB1, 0, 100), signedTx(t, keyA1, 0, 100)}, signer, snap)
 		require.Len(t, ab, 2)
 		require.Len(t, ba, 2)
 		require.Equal(t, ab, ba)
@@ -155,14 +172,45 @@ func TestClassifyReserved(t *testing.T) {
 		// identical walk over committed txs, so it reaches the same conclusion.
 		snap := snapOf(100, map[uint64][]common.Address{1: {a1, a2}}, map[uint64]uint64{1: 100})
 
-		withBoth := ClassifyReserved([]*types.Transaction{signedTx(t, keyA1, 0, 100), signedTx(t, keyA2, 0, 100)}, signer, snap)
+		withBoth, _ := ClassifyReserved([]*types.Transaction{signedTx(t, keyA1, 0, 100), signedTx(t, keyA2, 0, 100)}, signer, snap)
 		require.Len(t, withBoth, 1)
 		require.True(t, has(withBoth, a1, 0), "first tx wins the shared client quota")
 		require.False(t, has(withBoth, a2, 0))
 
-		withoutFirst := ClassifyReserved([]*types.Transaction{signedTx(t, keyA2, 0, 100)}, signer, snap)
+		withoutFirst, _ := ClassifyReserved([]*types.Transaction{signedTx(t, keyA2, 0, 100)}, signer, snap)
 		require.Len(t, withoutFirst, 1)
 		require.True(t, has(withoutFirst, a2, 0), "freed quota reclassifies the survivor")
+	})
+
+	t.Run("usage attributes declared gas per client across multiple clients", func(t *testing.T) {
+		t.Parallel()
+		snap := snapOf(300,
+			map[uint64][]common.Address{1: {a1}, 2: {b1}},
+			map[uint64]uint64{1: 100, 2: 200})
+		txs := []*types.Transaction{signedTx(t, keyA1, 0, 60), signedTx(t, keyB1, 0, 150)}
+		_, usage := ClassifyReserved(txs, signer, snap)
+		require.Equal(t, ClientUsage{Used: 60, Quota: 100}, usage[1])
+		require.Equal(t, ClientUsage{Used: 150, Quota: 200}, usage[2])
+	})
+
+	t.Run("an overflowed transaction's declared gas is not counted toward usage", func(t *testing.T) {
+		t.Parallel()
+		snap := snapOf(100, map[uint64][]common.Address{1: {a1}}, map[uint64]uint64{1: 100})
+		txs := []*types.Transaction{signedTx(t, keyA1, 0, 60), signedTx(t, keyA1, 1, 60)}
+		got, usage := ClassifyReserved(txs, signer, snap)
+		require.Len(t, got, 1, "only the first tx fits under quota")
+		require.Equal(t, ClientUsage{Used: 60, Quota: 100}, usage[1], "the breaching second tx must not add to Used")
+	})
+
+	t.Run("an idle client with no transactions in the block reports zero Used", func(t *testing.T) {
+		t.Parallel()
+		snap := snapOf(150,
+			map[uint64][]common.Address{1: {a1}, 2: {b1}},
+			map[uint64]uint64{1: 100, 2: 50})
+		txs := []*types.Transaction{signedTx(t, keyA1, 0, 50)}
+		_, usage := ClassifyReserved(txs, signer, snap)
+		require.Equal(t, ClientUsage{Used: 50, Quota: 100}, usage[1])
+		require.Equal(t, ClientUsage{Used: 0, Quota: 50}, usage[2], "idle client still appears, with zero Used")
 	})
 }
 
@@ -283,7 +331,7 @@ func TestClassifyReservedMatrix(t *testing.T) {
 				block = append(block, signedTx(t, keys[x.who], x.nonce, x.gas))
 			}
 
-			got := ClassifyReserved(block, signer, snap)
+			got, _ := ClassifyReserved(block, signer, snap)
 			require.Len(t, got, len(tc.want), "reserved count")
 			for _, w := range tc.want {
 				_, ok := got[ReservedKey{From: addrs[w.who], Nonce: w.nonce}]

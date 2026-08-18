@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus/bor/registryreader"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
@@ -74,4 +75,13 @@ type ProcessResult struct {
 	// receipts so reads can report the correct effective gas price for
 	// reserved transactions without re-deriving the classification.
 	ReservedTxIndexes []uint64
+	// ReservedClientUsage reports, per registry client id, the declared gas
+	// consumed by this block's reserved transactions against that client's
+	// quota. It is derived observability data assembled from the same
+	// classification walk as ReservedTxIndexes, not a consensus-checked
+	// value - ValidateState never compares it against the header, which
+	// carries no per-client breakdown. The Used basis is declared gas
+	// (tx.Gas()) - the same basis quota admission itself is charged against -
+	// not the executed gas ReservedGasUsed reports. Nil pre-fork.
+	ReservedClientUsage map[uint64]registryreader.ClientUsage
 }
