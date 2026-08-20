@@ -36,7 +36,6 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/core"
-	"github.com/ethereum/go-ethereum/core/blockstm"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/txpool"
@@ -47,7 +46,6 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
-	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
 )
 
@@ -278,10 +276,7 @@ type environment struct {
 	sidecars []*types.BlobTxSidecar
 	blobs    int
 
-	mvReadMapList []map[blockstm.Key]blockstm.ReadDescriptor
-	depsBuilder   *blockstm.DepsBuilder
-	depsFailed    bool
-	witness       *stateless.Witness
+	witness *stateless.Witness
 
 	// Readers with stats tracking for metrics reporting
 	prefetchReader state.ReaderWithStats
@@ -340,7 +335,6 @@ func (env *environment) copy() *environment {
 		buildInterrupt:     newBuildInterruptState(),
 		header:             types.CopyHeader(env.header),
 		receipts:           copyReceipts(env.receipts),
-		mvReadMapList:      env.mvReadMapList,
 		prefetchReader:     env.prefetchReader,
 		processReader:      env.processReader,
 		prefetchedTxHashes: env.prefetchedTxHashes,
@@ -683,7 +677,11 @@ func (w *worker) setGasCeil(ceil uint64) {
 func (w *worker) calculateDesiredGasLimit(parent *types.Header) uint64 {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
+	return w.calculateDesiredGasLimitLocked(parent)
+}
 
+// calculateDesiredGasLimitLocked requires w.mu to be held for reading.
+func (w *worker) calculateDesiredGasLimitLocked(parent *types.Header) uint64 {
 	// If dynamic gas limit is not enabled, use the static GasCeil
 	if !w.config.EnableDynamicGasLimit {
 		return w.config.GasCeil
@@ -1621,7 +1619,6 @@ func (w *worker) makeEnv(header *types.Header, coinbase common.Address, witness 
 
 	// Keep track of transactions which return errors so they can be removed
 	env.tcount = 0
-	env.mvReadMapList = []map[blockstm.Key]blockstm.ReadDescriptor{}
 
 	return env, nil
 }
@@ -1677,15 +1674,6 @@ func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transac
 
 	var coalescedLogs []*types.Log
 
-	EnableMVHashMap := w.chainConfig.IsCancun(env.header.Number)
-
-	// Speculative blocks can be filled in more than one pass. Keep a single DAG
-	// builder on the environment so dependency indices continue from the first
-	// pass instead of restarting from zero on a refill.
-	if EnableMVHashMap && w.IsRunning() && env.depsBuilder == nil && !env.depsFailed {
-		env.depsBuilder = blockstm.NewDepsBuilder()
-	}
-
 	var lastTxHash common.Hash
 
 	var (
@@ -1704,10 +1692,6 @@ mainloop:
 			if signal := interrupt.Load(); signal != commitInterruptNone {
 				return signalToErr(signal)
 			}
-		}
-
-		if EnableMVHashMap && w.IsRunning() {
-			env.state.AddEmptyMVHashMap()
 		}
 
 		// Check for the flag to interrupt block building on timeout.
@@ -1904,25 +1888,6 @@ mainloop:
 				})
 			}
 
-			if EnableMVHashMap && w.IsRunning() {
-				env.mvReadMapList = append(env.mvReadMapList, env.state.MVReadMap())
-
-				if env.tcount > len(env.mvReadMapList) {
-					log.Warn("blockstm - env.tcount > len(env.mvReadMapList)", "env.tcount", env.tcount, "len(mvReadMapList)", len(env.mvReadMapList))
-					return errors.New("transaction count exceeds dependency list length")
-				}
-
-				if !env.depsFailed {
-					if env.depsBuilder == nil {
-						env.depsBuilder = blockstm.NewDepsBuilder()
-					}
-					if err := env.depsBuilder.AddTransaction(env.tcount-1, env.state.MVReadList(), env.state.MVFullWriteList()); err != nil {
-						log.Error("Failed to build tx dependency metadata, dropping DAG hint", "tx", env.tcount-1, "err", err)
-						env.depsFailed = true
-					}
-				}
-			}
-
 			txs.Shift()
 
 			// Report freed gas to the prefetcher so it can predict overflow txs.
@@ -1959,17 +1924,6 @@ mainloop:
 			log.Debug("Transaction failed, account skipped", "hash", ltx.Hash, "err", err)
 			txs.Pop()
 		}
-
-		if EnableMVHashMap && w.IsRunning() {
-			env.state.ClearReadMap()
-			env.state.ClearWriteMap()
-		}
-	}
-
-	if EnableMVHashMap && w.IsRunning() {
-		if err := w.updateTxDependencyMetadata(env); err != nil {
-			return err
-		}
 	}
 
 	if !w.IsRunning() && len(coalescedLogs) > 0 {
@@ -1989,68 +1943,6 @@ mainloop:
 	}
 
 	return nil
-}
-
-func (w *worker) updateTxDependencyMetadata(env *environment) error {
-	var deps map[int]map[int]bool
-	if env.depsBuilder != nil && !env.depsFailed {
-		deps = env.depsBuilder.GetDeps()
-	}
-	if deps == nil && len(env.mvReadMapList) > 0 {
-		log.Warn("Failed to build tx dependency DAG, skipping metadata", "number", env.header.Number)
-	}
-
-	var blockExtraData types.BlockExtraData
-	tempVanity := env.header.Extra[:types.ExtraVanityLength]
-	tempSeal := env.header.Extra[len(env.header.Extra)-types.ExtraSealLength:]
-
-	// Always decode header extra data before overwriting TxDependency.
-	if err := rlp.DecodeBytes(env.header.Extra[types.ExtraVanityLength:len(env.header.Extra)-types.ExtraSealLength], &blockExtraData); err != nil {
-		log.Error("error while decoding block extra data", "err", err)
-		return err
-	}
-
-	blockExtraData.TxDependency = w.buildTxDependencyArray(env, deps)
-
-	blockExtraDataBytes, err := rlp.EncodeToBytes(blockExtraData)
-	if err != nil {
-		log.Error("error while encoding block extra data: %v", err)
-		return err
-	}
-
-	env.header.Extra = []byte{}
-	env.header.Extra = append(tempVanity, blockExtraDataBytes...)
-	env.header.Extra = append(env.header.Extra, tempSeal...)
-	return nil
-}
-
-// buildTxDependencyArray projects the DepsBuilder output into the block's
-// TxDependency encoding. Returns nil when deps are unavailable or when any
-// transaction reads coinbase/burn-contract balance (implicit ordering the
-// DAG doesn't capture — signalled by delayFlag=false in the original code).
-func (w *worker) buildTxDependencyArray(env *environment, deps map[int]map[int]bool) [][]uint64 {
-	// deps is nil when DepsBuilder errored; non-nil empty when no txs were added.
-	if deps == nil || len(env.mvReadMapList) == 0 {
-		return nil
-	}
-	tempDeps := make([][]uint64, len(env.mvReadMapList))
-	for j := range deps[0] {
-		tempDeps[0] = append(tempDeps[0], uint64(j))
-	}
-	burntContract := common.HexToAddress(w.chainConfig.Bor.CalculateBurntContract(env.header.Number.Uint64()))
-	for i := 1; i <= len(env.mvReadMapList)-1; i++ {
-		reads := env.mvReadMapList[i]
-		// Coinbase and burn-contract balance reads create an implicit ordering not captured by the DAG.
-		_, ok1 := reads[blockstm.NewSubpathKey(env.coinbase, state.BalancePath)]
-		_, ok2 := reads[blockstm.NewSubpathKey(burntContract, state.BalancePath)]
-		if ok1 || ok2 {
-			return nil
-		}
-		for j := range deps[i] {
-			tempDeps[i] = append(tempDeps[i], uint64(j))
-		}
-	}
-	return tempDeps
 }
 
 // generateParams wraps various of settings for generating sealing task.
@@ -2077,7 +1969,8 @@ type generateParams struct {
 	planWg                    sync.WaitGroup          // Tracks sendPlan goroutines; must reach zero before builderPlanCh is closed
 }
 
-// makeHeader creates a new block header for sealing.
+// makeHeader creates a new block header for sealing. The caller must hold w.mu
+// for reading because the header includes mutable worker configuration.
 func (w *worker) makeHeader(genParams *generateParams, waitOnPrepare bool) (*types.Header, common.Address, error) {
 	// Find the parent block for sealing task
 	parent := w.chain.CurrentBlock()
@@ -2105,7 +1998,7 @@ func (w *worker) makeHeader(genParams *generateParams, waitOnPrepare bool) (*typ
 	coinbase := w.resolveCoinbase(newBlockNumber.Uint64(), genParams.coinbase)
 
 	// Calculate desired gas limit (may be dynamically adjusted based on base fee)
-	desiredGasLimit := w.calculateDesiredGasLimit(parent)
+	desiredGasLimit := w.calculateDesiredGasLimitLocked(parent)
 
 	// Construct the sealing block header.
 	header := &types.Header{
