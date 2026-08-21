@@ -79,13 +79,13 @@ func (h *ethHandler) Handle(peer *eth.Peer, packet eth.Packet) error {
 				return errors.New("disallowed broadcast blob transaction")
 			}
 		}
-		return h.txFetcher.Enqueue(peer.ID(), *packet, false)
+		return h.txFetcher.Enqueue(peer.ID(), *packet, false, 0)
 
-	case *eth.PooledTransactionsResponse:
+	case *eth.PooledTransactionsPacket:
 		// If we receive any blob transactions missing sidecars, or with
 		// sidecars that don't correspond to the versioned hashes reported
 		// in the header, disconnect from the sending peer.
-		for _, tx := range *packet {
+		for _, tx := range packet.PooledTransactionsResponse {
 			if tx.Type() == types.BlobTxType {
 				if tx.BlobTxSidecar() == nil {
 					return errors.New("received sidecar-less blob transaction")
@@ -95,7 +95,7 @@ func (h *ethHandler) Handle(peer *eth.Peer, packet eth.Packet) error {
 				}
 			}
 		}
-		return h.txFetcher.Enqueue(peer.ID(), *packet, true)
+		return h.txFetcher.Enqueue(peer.ID(), packet.PooledTransactionsResponse, true, packet.RequestId)
 
 	default:
 		return fmt.Errorf("unexpected eth packet type: %T", packet)
