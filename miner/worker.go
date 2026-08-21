@@ -2290,7 +2290,9 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 		// when prefetch is disabled.
 		genParams.builderStarted = new(atomic.Bool)
 		genParams.builderPrefetchedTxHashes = &sync.Map{}
+		w.wg.Add(1)
 		go func() {
+			defer w.wg.Done()
 			defer func() {
 				if r := recover(); r != nil {
 					log.Error("Prefetch goroutine panicked", "err", r, "stack", string(debug.Stack()))

@@ -257,12 +257,18 @@ func TestFailover_NoSwitchOnContextCanceled(t *testing.T) {
 }
 
 func TestFailover_NoSwitchOnServiceUnavailable(t *testing.T) {
+	var secondarySpanHits atomic.Int32
 	primary := &mockHeimdallClient{
 		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) {
 			return nil, ErrServiceUnavailable
 		},
 	}
-	secondary := &mockHeimdallClient{}
+	secondary := &mockHeimdallClient{
+		getSpanFn: func(_ context.Context, spanID uint64) (*types.Span, error) {
+			secondarySpanHits.Add(1)
+			return &types.Span{Id: spanID}, nil
+		},
+	}
 
 	fc, err := NewMultiHeimdallClient(primary, secondary)
 	require.NoError(t, err)
@@ -276,16 +282,22 @@ func TestFailover_NoSwitchOnServiceUnavailable(t *testing.T) {
 	_, err = fc.GetSpan(context.Background(), 1)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrServiceUnavailable))
-	assert.Equal(t, int32(0), secondary.hits.Load(), "should not failover on 503")
+	assert.Equal(t, int32(0), secondarySpanHits.Load(), "should not failover on 503")
 }
 
 func TestFailover_NoSwitchOnShutdownDetected(t *testing.T) {
+	var secondarySpanHits atomic.Int32
 	primary := &mockHeimdallClient{
 		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) {
 			return nil, ErrShutdownDetected
 		},
 	}
-	secondary := &mockHeimdallClient{}
+	secondary := &mockHeimdallClient{
+		getSpanFn: func(_ context.Context, spanID uint64) (*types.Span, error) {
+			secondarySpanHits.Add(1)
+			return &types.Span{Id: spanID}, nil
+		},
+	}
 
 	fc, err := NewMultiHeimdallClient(primary, secondary)
 	require.NoError(t, err)
@@ -299,7 +311,7 @@ func TestFailover_NoSwitchOnShutdownDetected(t *testing.T) {
 	_, err = fc.GetSpan(context.Background(), 1)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrShutdownDetected))
-	assert.Equal(t, int32(0), secondary.hits.Load(), "should not failover on shutdown")
+	assert.Equal(t, int32(0), secondarySpanHits.Load(), "should not failover on shutdown")
 }
 
 func TestFailover_StickyBehavior(t *testing.T) {
