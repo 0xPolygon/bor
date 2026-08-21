@@ -1,7 +1,7 @@
 module github.com/ethereum/go-ethereum
 
 // Note: Change the go image version in Dockerfile if you change this.
-go 1.26.5
+go 1.26.6
 
 require (
 	github.com/0xPolygon/crand v1.0.3
@@ -11,6 +11,7 @@ require (
 	github.com/BurntSushi/toml v1.4.0
 	github.com/JekaMas/go-grpc-net-conn v0.0.0-20220708155319-6aff21f2d13d
 	github.com/Microsoft/go-winio v0.6.2
+	github.com/ProtonMail/go-crypto v1.4.1
 	github.com/VictoriaMetrics/fastcache v1.13.0
 	github.com/aws/aws-sdk-go-v2 v1.27.2
 	github.com/aws/aws-sdk-go-v2/config v1.18.45
@@ -74,10 +75,11 @@ require (
 	github.com/olekukonko/tablewriter v0.0.5
 	github.com/pelletier/go-toml v1.9.5
 	github.com/peterh/liner v1.2.2
-	github.com/pion/stun/v3 v3.1.1
+	github.com/pion/stun/v3 v3.1.5
 	github.com/protolambda/bls12-381-util v0.1.0
 	github.com/protolambda/zrnt v0.34.1
 	github.com/protolambda/ztyp v0.2.2
+	github.com/quic-go/quic-go v0.56.0
 	github.com/rs/cors v1.11.1
 	github.com/ryanuber/columnize v2.1.2+incompatible
 	github.com/shirou/gopsutil v3.21.11+incompatible
@@ -93,15 +95,15 @@ require (
 	go.uber.org/automaxprocs v1.6.0
 	go.uber.org/goleak v1.3.0
 	go.uber.org/mock v0.5.2
-	golang.org/x/crypto v0.51.0
+	golang.org/x/crypto v0.53.0
 	golang.org/x/exp v0.0.0-20251125195548-87e1e737ad39
-	golang.org/x/sync v0.20.0
-	golang.org/x/sys v0.45.0
-	golang.org/x/text v0.37.0
-	golang.org/x/time v0.12.0
-	golang.org/x/tools v0.44.0
-	google.golang.org/grpc v1.79.3
-	google.golang.org/protobuf v1.36.10
+	golang.org/x/sync v0.21.0
+	golang.org/x/sys v0.46.0
+	golang.org/x/text v0.39.0
+	golang.org/x/time v0.14.0
+	golang.org/x/tools v0.47.0
+	google.golang.org/grpc v1.82.1
+	google.golang.org/protobuf v1.36.11
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -163,8 +165,8 @@ require (
 	github.com/tklauser/go-sysconf v0.3.16 // indirect
 	github.com/tklauser/numcpus v0.11.0 // indirect
 	github.com/xrash/smetrics v0.0.0-20240521201337-686a1a2994c1 // indirect
-	golang.org/x/mod v0.35.0 // indirect
-	golang.org/x/net v0.55.0 // indirect
+	golang.org/x/mod v0.37.0 // indirect
+	golang.org/x/net v0.56.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gotest.tools v2.2.0+incompatible
 	pgregory.net/rapid v1.2.0
@@ -210,6 +212,7 @@ require (
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.2 // indirect
 	github.com/chzyer/readline v1.5.1 // indirect
+	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/cockroachdb/apd/v2 v2.0.2 // indirect
 	github.com/cometbft/cometbft-db v0.14.1 // indirect
 	github.com/cosmos/btcutil v1.0.5 // indirect
@@ -270,10 +273,10 @@ require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jmhodges/levigo v1.0.0 // indirect
 	github.com/kelseyhightower/envconfig v1.4.0 // indirect
-	github.com/lib/pq v1.10.9 // indirect
+	github.com/lib/pq v1.12.0 // indirect
 	github.com/linxGnu/grocksdb v1.10.3 // indirect
 	github.com/manifoldco/promptui v0.9.0 // indirect
-	github.com/minio/highwayhash v1.0.3 // indirect
+	github.com/minio/highwayhash v1.0.4 // indirect
 	github.com/mitchellh/copystructure v1.0.0 // indirect
 	github.com/mitchellh/go-testing-interface v1.14.1 // indirect
 	github.com/mitchellh/go-wordwrap v1.0.1 // indirect
@@ -288,17 +291,16 @@ require (
 	github.com/oklog/run v1.1.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/petermattis/goid v0.0.0-20251121121749-a11dd1a45f9a // indirect
-	github.com/pion/dtls/v3 v3.0.11 // indirect
-	github.com/pion/transport/v4 v4.0.1 // indirect
+	github.com/pion/dtls/v3 v3.1.4 // indirect
+	github.com/pion/transport/v4 v4.0.2 // indirect
 	github.com/posener/complete v1.2.3 // indirect
-	github.com/quic-go/quic-go v0.56.0 // indirect
 	github.com/rabbitmq/amqp091-go v1.10.0 // indirect
 	github.com/rcrowley/go-metrics v0.0.0-20250401214520-65e299d6c5c9 // indirect
 	github.com/redis/go-redis/v9 v9.7.3 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/rs/zerolog v1.34.0 // indirect
 	github.com/sagikazarmark/locafero v0.12.0 // indirect
-	github.com/sasha-s/go-deadlock v0.3.6 // indirect
+	github.com/sasha-s/go-deadlock v0.3.9 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/spf13/afero v1.15.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
@@ -326,11 +328,11 @@ require (
 	go.uber.org/zap v1.27.1 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/oauth2 v0.34.0 // indirect
-	golang.org/x/term v0.43.0 // indirect
+	golang.org/x/oauth2 v0.36.0 // indirect
+	golang.org/x/term v0.44.0 // indirect
 	google.golang.org/api v0.247.0 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20251202230838-ff82c1b0f217 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20260414002931-afd174a4e478 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478 // indirect
 	gotest.tools/v3 v3.5.2 // indirect
 	nhooyr.io/websocket v1.8.7 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
@@ -351,9 +353,9 @@ require (
 replace (
 	cosmossdk.io/client/v2 => github.com/0xPolygon/cosmos-sdk/client/v2 v2.0.0-beta.6 // Same as heimdall-v2.
 	github.com/Masterminds/goutils => github.com/Masterminds/goutils v1.1.1
-	github.com/cometbft/cometbft => github.com/0xPolygon/cometbft v0.3.6-polygon
+	github.com/cometbft/cometbft => github.com/0xPolygon/cometbft v0.3.8-polygon
 	github.com/cometbft/cometbft-db => github.com/0xPolygon/cometbft-db v0.14.1-polygon
-	github.com/cosmos/cosmos-sdk => github.com/0xPolygon/cosmos-sdk v0.2.8-polygon
+	github.com/cosmos/cosmos-sdk => github.com/0xPolygon/cosmos-sdk v0.2.13-polygon
 	github.com/ethereum/go-ethereum => github.com/0xPolygon/bor v1.14.14-0.20260219070410-6b0405c0a5ca
 	github.com/ethereum/go-ethereum/common/math => github.com/0xPolygon/bor/common/math v1.5.5
 	go.mongodb.org/mongo-driver => go.mongodb.org/mongo-driver v1.14.0

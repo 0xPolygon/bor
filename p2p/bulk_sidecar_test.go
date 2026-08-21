@@ -1,6 +1,8 @@
 package p2p
 
 import (
+	"errors"
+	"io"
 	"net"
 	"testing"
 	"time"
@@ -12,9 +14,20 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/enr"
 )
 
+type readDeadlineErrorStream struct {
+	err error
+}
+
+func (s *readDeadlineErrorStream) Read([]byte) (int, error)    { return 0, io.EOF }
+func (s *readDeadlineErrorStream) Write(p []byte) (int, error) { return len(p), nil }
+func (s *readDeadlineErrorStream) SetReadDeadline(time.Time) error {
+	return s.err
+}
+func (s *readDeadlineErrorStream) SetWriteDeadline(time.Time) error { return nil }
+
 func TestBulkSessionStoreChannelReplacesExistingLane(t *testing.T) {
 	session := &bulkSession{
-		sidecar: &BulkSidecar{log: log.New()},
+		sidecar:  &BulkSidecar{log: log.New()},
 		remoteID: enode.ID{0x01},
 		channels: make(map[string]MsgReadWriter),
 		waiters:  make(map[string][]chan bulkChannelResult),
@@ -95,7 +108,6 @@ func TestBulkSidecarOpenChannelRoundTrip(t *testing.T) {
 			rightRW = result.rw
 		}
 	}
-
 	sendErr := make(chan error, 1)
 	go func() { sendErr <- SendItems(leftRW, 2, uint64(22)) }()
 	if err := ExpectMsg(rightRW, 2, []uint64{22}); err != nil {
@@ -103,6 +115,47 @@ func TestBulkSidecarOpenChannelRoundTrip(t *testing.T) {
 	}
 	if err := <-sendErr; err != nil {
 		t.Fatalf("bulk lane send failed: %v", err)
+	}
+}
+
+func TestBulkStreamReadClearsExpiredDeadline(t *testing.T) {
+	senderConn, receiverConn := net.Pipe()
+	defer senderConn.Close()
+	defer receiverConn.Close()
+
+	sender := &bulkStreamMsgRW{stream: senderConn, channel: "snap-trie", log: log.New()}
+	receiver := &bulkStreamMsgRW{stream: receiverConn, channel: "snap-trie", log: log.New()}
+	if err := receiverConn.SetReadDeadline(time.Now().Add(-time.Second)); err != nil {
+		t.Fatalf("failed to install expired authentication deadline: %v", err)
+	}
+
+	readErr := make(chan error, 1)
+	go func() { readErr <- ExpectMsg(receiver, 2, []uint64{22}) }()
+	select {
+	case err := <-readErr:
+		t.Fatalf("read returned before a message was sent: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	sendErr := make(chan error, 1)
+	go func() { sendErr <- SendItems(sender, 2, uint64(22)) }()
+	if err := <-readErr; err != nil {
+		t.Fatalf("bulk lane delivery failed: %v", err)
+	}
+	if err := <-sendErr; err != nil {
+		t.Fatalf("bulk lane send failed: %v", err)
+	}
+}
+
+func TestBulkStreamReadReturnsDeadlineResetError(t *testing.T) {
+	want := errors.New("deadline reset failed")
+	rw := &bulkStreamMsgRW{
+		stream:  &readDeadlineErrorStream{err: want},
+		channel: "snap-trie",
+		log:     log.New(),
+	}
+	if _, err := rw.ReadMsg(); !errors.Is(err, want) {
+		t.Fatalf("expected deadline reset error, got %v", err)
 	}
 }
 
