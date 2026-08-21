@@ -74,6 +74,12 @@ const (
 
 	// addTxsBatchSize it the max number of transactions to add in a single batch from a peer.
 	addTxsBatchSize = 128
+
+	// reqIDTestSeed seeds the independent, deterministic request-ID source used
+	// in tests/fuzzing (see requestIDs). Fixed and unrelated to any caller-supplied
+	// rand seed, so generating a request ID never perturbs the peer/hash shuffle
+	// sequence that rand drives.
+	reqIDTestSeed = 0x7e9713a
 )
 
 var (
@@ -81,9 +87,11 @@ var (
 	// requested transaction.
 	txFetchTimeout = 5 * time.Second
 
-	// txFetchDanglingRetry is the minimum age a peer's dangling request (timed
-	// out without a reply) must reach before that peer becomes eligible for a fresh retrieval again.
-	// Request-ID correlation in the txDelivery direct-delivery path handles late replies from abandoned requests.
+	// txFetchDanglingRetry is the minimum time since a request was originally
+	// sent (not since it went dangling at txFetchTimeout) before a peer whose
+	// request timed out without a reply becomes eligible for a fresh
+	// retrieval again. Request-ID correlation in the txDelivery direct-delivery
+	// path handles late replies from abandoned requests.
 	txFetchDanglingRetry = 4 * txFetchTimeout
 )
 
@@ -140,7 +148,7 @@ type txDrop struct {
 // The invariants of the fetcher are:
 //   - Each tracked transaction (hash) must only be present in one of the
 //     three stages. This ensures that the fetcher operates akin to a finite
-//     state automata and there's do data leak.
+//     state automata and there's no data leak.
 //   - Each peer that announced transactions may be scheduled retrievals, but
 //     only ever one concurrently. This ensures we can immediately know what is
 //     missing from a reply and reschedule it. Exception: a peer whose request
@@ -179,10 +187,11 @@ type TxFetcher struct {
 	fetchTxs func(string, uint64, []common.Hash) error // Retrieves a set of txs from a remote peer
 	dropPeer func(string)                              // Drops a peer in case of announcement violation
 
-	step     chan struct{}    // Notification channel when the fetcher loop iterates
-	clock    mclock.Clock     // Monotonic clock or simulated clock for tests
-	realTime func() time.Time // Real system time or simulated time for tests
-	rand     *mrand.Rand      // Randomizer to use in tests instead of map range loops (soft-random)
+	step       chan struct{}    // Notification channel when the fetcher loop iterates
+	clock      mclock.Clock     // Monotonic clock or simulated clock for tests
+	realTime   func() time.Time // Real system time or simulated time for tests
+	rand       *mrand.Rand      // Randomizer to use in tests instead of map range loops (soft-random)
+	requestIDs *mrand.Rand      // Independent, deterministic-in-tests source for request IDs; kept separate from rand so generating one doesn't perturb the peer/hash shuffle sequence rand drives
 }
 
 // NewTxFetcher creates a transaction fetcher to retrieve transaction
@@ -196,6 +205,10 @@ func NewTxFetcher(hasTx func(common.Hash) bool, addTxs func([]*types.Transaction
 func NewTxFetcherForTests(
 	hasTx func(common.Hash) bool, addTxs func([]*types.Transaction) []error, fetchTxs func(string, uint64, []common.Hash) error, dropPeer func(string),
 	clock mclock.Clock, realTime func() time.Time, rand *mrand.Rand) *TxFetcher {
+	var requestIDs *mrand.Rand
+	if rand != nil {
+		requestIDs = mrand.New(mrand.NewSource(reqIDTestSeed))
+	}
 	return &TxFetcher{
 		notify:      make(chan *txAnnounce),
 		cleanup:     make(chan *txDelivery),
@@ -217,6 +230,7 @@ func NewTxFetcherForTests(
 		clock:       clock,
 		realTime:    realTime,
 		rand:        rand,
+		requestIDs:  requestIDs,
 	}
 }
 
@@ -965,7 +979,7 @@ func (f *TxFetcher) evictStaleRequest(peer string, now mclock.AbsTime) (eligible
 		return false, false // genuinely in-flight, don't double-request
 	}
 	if time.Duration(now-req.time) < txFetchDanglingRetry {
-		return false, false // dangling, too recent to retry yet
+		return false, false // dangling, too recent (measured from the original send, not from timeout) to retry yet
 	}
 
 	return true, true
@@ -1059,6 +1073,9 @@ func (f *TxFetcher) scheduleFetches(timer *mclock.Timer, timeout chan struct{}, 
 }
 
 func (f *TxFetcher) nextRequestID() uint64 {
+	if f.requestIDs != nil {
+		return f.requestIDs.Uint64()
+	}
 	return mrand.Uint64()
 }
 

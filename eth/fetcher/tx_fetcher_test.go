@@ -2746,7 +2746,7 @@ func TestTransactionFetcherDanglingPeerRetriedAfterGracePeriod(t *testing.T) {
 				fetching: map[string][]common.Hash{"A": {{0x01}}},
 			},
 
-			// The request times out -- peer A becomes dangling.
+			// The request times out; peer A becomes dangling.
 			doWait{time: txFetchTimeout, step: true},
 			isScheduled{
 				tracking: nil,
@@ -2768,7 +2768,8 @@ func TestTransactionFetcherDanglingPeerRetriedAfterGracePeriod(t *testing.T) {
 
 			// Advance through more reschedule cycles (the "every 5 secs" loop the
 			// doc comment on rescheduleTimeout describes) that still fall short of
-			// txFetchDanglingRetry -- still stuck, exactly like before this fix.
+			// txFetchDanglingRetry, so the peer is still stuck, exactly like before
+			// this fix.
 			doWait{time: txFetchTimeout, step: true},
 			doWait{time: txFetchTimeout, step: true},
 			isScheduled{
@@ -2780,7 +2781,7 @@ func TestTransactionFetcherDanglingPeerRetriedAfterGracePeriod(t *testing.T) {
 				dangling: map[string][]common.Hash{"A": {}},
 			},
 
-			// One more cycle crosses txFetchDanglingRetry -- the periodic reschedule
+			// One more cycle crosses txFetchDanglingRetry: the periodic reschedule
 			// itself retries peer A with everything it currently has tracked, no
 			// Drop or new announcement required.
 			doWait{time: txFetchTimeout, step: true},
