@@ -528,9 +528,13 @@ type worker struct {
 	syncing atomic.Bool  // The indicator whether the node is still syncing.
 
 	// finalityLatched is set once a whitelisted milestone confirms this
-	// node's chain; startedAt anchors the startup grace before that.
+	// node's chain; eligibleSince (UnixNano) anchors the grace before
+	// that. Re-armed whenever sync completes, so the grace measures time
+	// spent eligible to build rather than process uptime — commitWork
+	// returns on syncing before it consults the gate, and a resync that
+	// outlives the grace would otherwise consume it silently.
 	finalityLatched atomic.Bool
-	startedAt       time.Time
+	eligibleSince   atomic.Int64
 
 	// newpayloadTimeout is the maximum timeout allowance for creating payload.
 	// The default value is 2 seconds but node operator can set it to arbitrary
@@ -581,7 +585,6 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 	worker := &worker{
 		config:              config,
 		chainConfig:         chainConfig,
-		startedAt:           time.Now(),
 		engine:              engine,
 		eth:                 eth,
 		chain:               eth.BlockChain(),
@@ -612,6 +615,7 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 	// a miner config knob. Keep the gauge at 0; import-side pipelining has its
 	// own chain/imports/pipelined/enabled gauge.
 	pipelineBuildEnabledGauge.Update(0)
+	worker.rearmFinalityGrace()
 	// Subscribe for transaction insertion events (whether from network or resurrects)
 	worker.txsSub = eth.TxPool().SubscribeTransactions(worker.txsCh, true)
 	// Subscribe events for blockchain
@@ -2788,7 +2792,7 @@ func (w *worker) finalityConfirmed() bool {
 
 	exists, number, hash := w.eth.WhitelistedMilestone()
 	if !exists {
-		return time.Since(w.startedAt) > finalityGrace
+		return time.Since(time.Unix(0, w.eligibleSince.Load())) > finalityGrace
 	}
 
 	if w.chain.GetCanonicalHash(number) == hash {
@@ -2798,6 +2802,13 @@ func (w *worker) finalityConfirmed() bool {
 	}
 
 	return false
+}
+
+// rearmFinalityGrace restarts the finality grace clock: at construction,
+// and again when sync completes — the point the node actually becomes
+// eligible to build, and the point the restart-fork window opens.
+func (w *worker) rearmFinalityGrace() {
+	w.eligibleSince.Store(time.Now().UnixNano())
 }
 
 // applyAdoption rewrites the prepared header with the adopted window's open

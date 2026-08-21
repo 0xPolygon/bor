@@ -67,8 +67,13 @@ func (p *Publisher) buildStartRead(ctx context.Context, number uint64) (tailInfo
 		return info, buildBehind
 	}
 
+	// probeDown's contract is h <= number whenever found; a height above
+	// the query means the probe regressed. Fail the read loudly rather
+	// than misclassify — buildUnknown builds from the pool, adopting
+	// nothing.
 	if h > number {
-		return tailInfo{}, buildSealedPast
+		log.Error("Sequence store probe above its query", "height", h, "number", number)
+		return tailInfo{}, buildUnknown
 	}
 
 	if h < number-1 {

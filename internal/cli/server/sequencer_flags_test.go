@@ -102,3 +102,20 @@ func TestSequencerPollFromConfigFile(t *testing.T) {
 	require.Equal(t, "h:2", c.config.Sequencer.ConsumerEndpoint)
 	require.Equal(t, 75*time.Millisecond, c.config.Sequencer.Poll)
 }
+
+// An HCL/JSON config without a [sequencer] block decodes the field as nil
+// (only the TOML path starts from DefaultConfig); flag registration must
+// install the defaults rather than dereference it.
+func TestSequencerFlagsWithoutConfigBlock(t *testing.T) {
+	t.Parallel()
+
+	var c Command
+
+	cfg := DefaultConfig()
+	cfg.Sequencer = nil
+
+	require.NotNil(t, c.Flags(cfg))
+	require.NotNil(t, c.cliConfig.Sequencer)
+	require.False(t, c.cliConfig.Sequencer.Enabled)
+	require.Equal(t, 200*time.Millisecond, c.cliConfig.Sequencer.Poll)
+}

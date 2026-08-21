@@ -271,6 +271,8 @@ func (miner *Miner) update() {
 				if shouldStart {
 					miner.worker.start()
 				}
+
+				miner.worker.rearmFinalityGrace()
 				miner.worker.syncing.Store(false)
 
 			case downloader.DoneEvent:
@@ -279,6 +281,8 @@ func (miner *Miner) update() {
 				if shouldStart {
 					miner.worker.start()
 				}
+
+				miner.worker.rearmFinalityGrace()
 				miner.worker.syncing.Store(false)
 
 				// Stop reacting to downloader events

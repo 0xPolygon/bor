@@ -147,15 +147,19 @@ func (c *Consumer) evictLoop(ctx context.Context) {
 	}
 }
 
-// resumeRequest picks the stream position: warm (the session's running head),
-// cold (a block anchor at the canonical head), or from the earliest retained
-// entry. attempt counts NOT_FOUND fallbacks within one session start.
+// resumeRequest picks the stream position, never asking the same anchor
+// twice: a warm session walks head → block anchor → earliest retained
+// entry, and a cold one — no head to resume — goes straight from the
+// block anchor to the earliest entry. attempt counts NOT_FOUND fallbacks
+// within one session start; a failed attempt resets the session, so
+// seededness names the rung that just failed.
 func (c *Consumer) resumeRequest(sess *session, attempt int) *pb.StreamRequest {
-	if sess != nil && sess.seeded && attempt == 0 {
+	warm := sess != nil && sess.seeded
+	if warm && attempt == 0 {
 		return &pb.StreamRequest{After: &pb.StreamRequest_Head{Head: sess.head.Bytes()}}
 	}
 
-	if attempt <= 1 {
+	if attempt == 0 || (warm && attempt == 1) {
 		return &pb.StreamRequest{After: &pb.StreamRequest_Block{Block: c.chain.CurrentBlock().Number.Uint64()}}
 	}
 

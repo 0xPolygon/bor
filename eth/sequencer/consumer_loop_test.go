@@ -167,3 +167,38 @@ func TestConsumerDeterminismGate(t *testing.T) {
 		t.Fatalf("rio with a coinbase map must be deterministic: %v", err)
 	}
 }
+
+// The resume ladder never asks the same anchor twice: a warm session walks
+// head, block anchor, earliest; a cold one has no head rung and goes
+// straight from the block anchor to the earliest retained entry.
+func TestResumeRequestLadder(t *testing.T) {
+	ex := startExecHarness(t)
+	c := &Consumer{chain: ex.chain, index: NewIndex()}
+
+	kind := func(r *pb.StreamRequest) string {
+		switch r.After.(type) {
+		case *pb.StreamRequest_Head:
+			return "head"
+		case *pb.StreamRequest_Block:
+			return "block"
+		default:
+			return "earliest"
+		}
+	}
+
+	warm := &session{consumer: c, seeded: true}
+	for attempt, want := range []string{"head", "block", "earliest"} {
+		if got := kind(c.resumeRequest(warm, attempt)); got != want {
+			t.Fatalf("warm attempt %d: %s, want %s", attempt, got, want)
+		}
+	}
+
+	for _, sess := range []*session{nil, {consumer: c}} {
+		for attempt, want := range []string{"block", "earliest"} {
+			if got := kind(c.resumeRequest(sess, attempt)); got != want {
+				t.Fatalf("cold attempt %d (fresh session=%v): %s, want %s",
+					attempt, sess != nil, got, want)
+			}
+		}
+	}
+}

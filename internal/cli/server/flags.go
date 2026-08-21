@@ -1479,6 +1479,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 }
 
 func (c *Command) registerSequencerFlags(f *flagset.Flagset) {
+	// An HCL/JSON config without a [sequencer] block decodes the field as
+	// nil (only TOML starts from DefaultConfig); register against the
+	// defaults so startup does not require the block to exist.
+	if c.cliConfig.Sequencer == nil {
+		c.cliConfig.Sequencer = DefaultConfig().Sequencer
+	}
+
 	f.BoolFlag(&flagset.BoolFlag{
 		Name:    "sequencer.enabled",
 		Usage:   "Enable the sequence store integration (a mining node publishes the block lifecycle)",

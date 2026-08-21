@@ -92,6 +92,29 @@ func TestFinalityGateOpensAfterGraceWithoutMilestone(t *testing.T) {
 	}
 }
 
+// The grace measures eligibility, not uptime. A restart's resync never
+// consults the gate (commitWork returns on syncing first), so a resync
+// that outlives the grace would otherwise consume it silently and open
+// the gate the instant sync completes — the exact window the gate covers.
+func TestFinalityGraceRearmsWhenSyncCompletes(t *testing.T) {
+	w, _, _ := newSequencerTestWorker(t)
+
+	// Age the anchor past the grace, as a long resync does.
+	w.eligibleSince.Store(time.Now().Add(-2 * finalityGrace).UnixNano())
+
+	if !w.finalityConfirmed() {
+		t.Fatal("sanity: an expired grace with no milestone opens the gate")
+	}
+
+	// Sync completion re-arms (miner's DoneEvent/FailedEvent handling).
+	w.rearmFinalityGrace()
+
+	if w.finalityConfirmed() {
+		t.Fatal("the gate opened with zero effective wait after sync: the " +
+			"grace must restart when the node becomes eligible to build")
+	}
+}
+
 // The gate must actually stop production, not merely report. Driven through
 // the running worker's own loops — commitWork is the single path every build
 // takes, and this asserts the wiring, not the predicate.
