@@ -576,6 +576,12 @@ func (f *TxFetcher) loop() {
 			// could also penalize (Drop), but there's nothing to gain, and if could
 			// possibly further increase the load on it.
 			for peer, req := range f.requests {
+				// Already dangling from a prior tick; skip so a single episode
+				// contributes exactly one txFetcherSlowPeers.Inc, matching the
+				// one-Dec-per-episode convention the dangling-retry path relies on.
+				if req.hashes == nil {
+					continue
+				}
 				if time.Duration(f.clock.Now()-req.time)+txGatherSlack > txFetchTimeout {
 					txRequestTimeoutMeter.Mark(int64(len(req.hashes)))
 
