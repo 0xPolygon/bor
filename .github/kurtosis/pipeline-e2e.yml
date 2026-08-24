@@ -1,0 +1,90 @@
+# Pipeline-enabled kurtosis leg (POS-3697).
+#
+# Mirrors pos-workflows/configs/kurtosis-stateless-e2e.yml (participants 1-9
+# keep the exact same indices — the pos-workflows stateless test suite
+# hardcodes them) and adds a released-image baseline validator as participant
+# 10. The workflow injects `[pipeline] enable-import-src = true` into the bor
+# config template for every node; behavior then falls out per node role:
+#
+#   - full-sync bor:local nodes (1-3, 6, 7) import via the pipelined SRC
+#   - stateless-sync nodes (4, 5, 8) self-gate the pipeline off
+#   - the released-image baseline (10) ignores the unknown [pipeline] section
+#     and independently validates every block the pipelined producers seal
+#   - stateless validators (4, 5) syncing at head proves witnesses produced
+#     by the pipelined SRC completion path replay correctly
+polygon_pos_package:
+  network_params:
+    el_block_interval_seconds: 1
+
+  participants:
+    # 3 validators producing witnesses, full sync (pipelined via template).
+    - kind: validator
+      cl_type: heimdall-v2
+      cl_image: heimdall-v2:local
+      el_type: bor
+      el_image: bor:local
+      el_bor_produce_witness: true
+      el_bor_sync_with_witness: false
+      count: 3
+
+    # 2 validators using stateless sync. Any of them having sync issue will
+    # cause the test to fail.
+    - kind: validator
+      cl_type: heimdall-v2
+      cl_image: heimdall-v2:local
+      el_type: bor
+      el_image: bor:local
+      el_bor_produce_witness: true
+      el_bor_sync_with_witness: true
+      count: 2
+
+    # 4 RPC nodes (same witness-flag matrix as the stateless leg).
+    - kind: rpc
+      cl_type: heimdall-v2
+      cl_image: heimdall-v2:local
+      el_type: bor
+      el_image: bor:local
+      el_bor_produce_witness: false
+      el_bor_sync_with_witness: false
+      count: 1
+
+    - kind: rpc
+      cl_type: heimdall-v2
+      cl_image: heimdall-v2:local
+      el_type: bor
+      el_image: bor:local
+      el_bor_produce_witness: true
+      el_bor_sync_with_witness: false
+      count: 1
+
+    - kind: rpc
+      cl_type: heimdall-v2
+      cl_image: heimdall-v2:local
+      el_type: bor
+      el_image: bor:local
+      el_bor_produce_witness: true
+      el_bor_sync_with_witness: true
+      count: 1
+
+    - kind: rpc
+      cl_type: heimdall-v2
+      cl_image: heimdall-v2:local
+      el_type: erigon
+      el_image: 0xpolygon/erigon:latest
+      el_bor_produce_witness: false
+      el_bor_sync_with_witness: false
+      count: 1
+
+    # Released-image baseline: a full-sync validator on the latest published
+    # bor release. Its BurntSushi TOML parser ignores the injected [pipeline]
+    # section, making it a genuine pipeline-off cross-check: it re-executes
+    # and must accept every block the pipelined nodes produce, and the
+    # pipelined nodes must accept every block it seals.
+    - kind: validator
+      cl_type: heimdall-v2
+      cl_image: heimdall-v2:local
+      el_type: bor
+      el_image: 0xpolygon/bor:latest
+      el_bor_produce_witness: false
+      el_bor_sync_with_witness: false
+      count: 1
