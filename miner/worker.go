@@ -2833,10 +2833,7 @@ func (w *worker) adoptionReject(a *AdoptedWindow, header *types.Header) string {
 		return "height mismatch"
 	}
 
-	minTime := parent.Time + 1
-	if w.chainConfig.Bor != nil {
-		minTime = parent.Time + w.chainConfig.Bor.CalculatePeriod(a.Number)
-	}
+	minTime := adoptionMinTime(w.chainConfig.Bor, parent.Time, a.Number)
 
 	switch {
 	case a.Timestamp < minTime:

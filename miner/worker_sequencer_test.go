@@ -577,44 +577,20 @@ func TestSequencerRioGate(t *testing.T) {
 	}
 }
 
-// Without a Bor config the adoption timestamp floor falls back to exactly
-// parent.Time+1: a window on the floor is accepted (a mutated floor —
-// off by one in either direction, or underflowed — rejects it).
-func TestApplyAdoptionMinTimeWithoutBor(t *testing.T) {
+// The adoption timestamp floor: the parent period under bor, parent.Time+1
+// without a bor config. Exercised on the pure helper — swapping a live
+// worker's chainConfig to vary it races the worker's newWorkLoop, which
+// re-reads chainConfig.Bor on every veblop tick.
+func TestAdoptionMinTime(t *testing.T) {
 	t.Parallel()
 
-	w, b, _ := newSequencerTestWorker(t)
-
-	parent := b.chain.CurrentBlock()
-	genParams := &generateParams{coinbase: testBankAddress}
-
-	header, _, err := w.makeHeader(genParams, false)
-	if err != nil {
-		t.Fatalf("makeHeader: %v", err)
+	if got := adoptionMinTime(nil, 41, 7); got != 42 {
+		t.Fatalf("nil-bor floor %d, want parent.Time+1", got)
 	}
 
-	saved := w.chainConfig
-	cfg := *saved
-	cfg.Bor = nil
-	w.chainConfig = &cfg
-
-	defer func() { w.chainConfig = saved }()
-
-	// Base fee copied from the prepared header (the value applyAdoption
-	// compares against): the timestamp floor is then the only bound that
-	// can reject this window.
-	genParams.adoption = &AdoptedWindow{
-		Number:     parent.Number.Uint64() + 1,
-		Timestamp:  parent.Time + 1, // exactly on the fallback floor
-		ParentHash: parent.Hash(),
-		GasLimit:   header.GasLimit,
-		BaseFee:    new(big.Int).Set(header.BaseFee),
-	}
-
-	w.applyAdoption(genParams, header)
-
-	if genParams.adoption == nil {
-		t.Fatal("window exactly on the parent.Time+1 floor must be accepted")
+	borCfg := &params.BorConfig{Period: map[string]uint64{"0": 2}}
+	if got := adoptionMinTime(borCfg, 40, 7); got != 42 {
+		t.Fatalf("bor floor %d, want parent.Time+period", got)
 	}
 }
 
@@ -672,7 +648,7 @@ func TestFillBlockZeroPollIsOneShot(t *testing.T) {
 // With a Bor config the adoption timestamp floor is parent.Time plus the
 // configured block period, not the +1 fallback: a window between the two
 // floors is rejected.
-func TestApplyAdoptionMinTimeBorPeriod(t *testing.T) {
+func TestApplyAdoptionTimestampFloor(t *testing.T) {
 	t.Parallel()
 
 	w, b, _ := newSequencerTestWorker(t)
@@ -685,27 +661,33 @@ func TestApplyAdoptionMinTimeBorPeriod(t *testing.T) {
 		t.Fatalf("makeHeader: %v", err)
 	}
 
-	saved := w.chainConfig
-	cfg := *saved
-	borCfg := *saved.Bor
-	borCfg.Period = map[string]uint64{"0": 2}
-	cfg.Bor = &borCfg
-	w.chainConfig = &cfg
+	floor := adoptionMinTime(w.chainConfig.Bor, parent.Time, parent.Number.Uint64()+1)
 
-	defer func() { w.chainConfig = saved }()
-
-	genParams.adoption = &AdoptedWindow{
-		Number:     parent.Number.Uint64() + 1,
-		Timestamp:  parent.Time + 1, // above +1 fallback, below the period-2 floor
-		ParentHash: parent.Hash(),
-		GasLimit:   header.GasLimit,
-		BaseFee:    new(big.Int).Set(header.BaseFee),
+	// Base fee copied from the prepared header (the value applyAdoption
+	// compares against): the timestamp floor is then the only bound that
+	// can reject this window.
+	window := func(ts uint64) *AdoptedWindow {
+		return &AdoptedWindow{
+			Number:     parent.Number.Uint64() + 1,
+			Timestamp:  ts,
+			ParentHash: parent.Hash(),
+			GasLimit:   header.GasLimit,
+			BaseFee:    new(big.Int).Set(header.BaseFee),
+		}
 	}
 
+	genParams.adoption = window(floor - 1)
 	w.applyAdoption(genParams, header)
 
 	if genParams.adoption != nil {
-		t.Fatal("window below the Bor period floor must be rejected")
+		t.Fatal("window below the timestamp floor must be rejected")
+	}
+
+	genParams.adoption = window(floor)
+	w.applyAdoption(genParams, header)
+
+	if genParams.adoption == nil {
+		t.Fatal("window exactly on the floor must be adopted")
 	}
 }
 

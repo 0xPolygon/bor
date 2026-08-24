@@ -168,6 +168,16 @@ func (w *worker) applyAdoption(genParams *generateParams, header *types.Header) 
 		"txs", len(a.Txs), "deadline", deadline.Format(time.RFC3339Nano))
 }
 
+// adoptionMinTime is the lowest timestamp an adopted window may carry:
+// the parent period under bor, parent.Time+1 without a bor config.
+func adoptionMinTime(bor *params.BorConfig, parentTime, number uint64) uint64 {
+	if bor != nil {
+		return parentTime + bor.CalculatePeriod(number)
+	}
+
+	return parentTime + 1
+}
+
 // sequencerPoll returns the sequencing poll cadence, or zero when the block
 // being built is not sequenced (no sequencer, not producing, or one-shot
 // fill configured).
