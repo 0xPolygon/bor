@@ -305,6 +305,120 @@ func TestBackfillDrainStopsAtTheByteBudget(t *testing.T) {
 	}
 }
 
+// A canonical whitelisted milestone floors the backfill: heights at or
+// below it are final and permanently served by the canonical chain, so
+// the drain starts past the milestone and the skipped prefix becomes a
+// counted forward jump.
+func TestBackfillFloorsAtTheMilestone(t *testing.T) {
+	blocks := map[uint64]*types.Block{}
+	parent := common.Hash{0xef}
+
+	for n := uint64(1); n <= 6; n++ {
+		b := types.NewBlockWithHeader(testHeader(n, parent))
+		blocks[n] = b
+		parent = b.Hash()
+	}
+
+	p := barePublisher()
+	p.chain = &fakeChain{
+		blocks:    blocks,
+		canonical: map[uint64]common.Hash{4: blocks[4].Hash()},
+		current:   blocks[6].Header(),
+	}
+	p.finality = func() (bool, uint64, common.Hash) { return true, 4, blocks[4].Hash() }
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.pendingFrom, p.pendingTo = 1, 6
+
+	fresh := newJournal()
+	p.backfillLocked(fresh, p.head)
+
+	if p.pendingFrom != 0 || p.pendingTo != 0 {
+		t.Fatalf("floored drain must settle the debt: %d..%d", p.pendingFrom, p.pendingTo)
+	}
+
+	// Two empty blocks past the milestone: an open and a seal each.
+	if len(fresh.items) != 4 {
+		t.Fatalf("two blocks past the milestone rebuild 4 entries, got %d", len(fresh.items))
+	}
+
+	if fresh.items[0].height != 5 {
+		t.Fatalf("drain must start past the milestone: first height %d", fresh.items[0].height)
+	}
+}
+
+// Without a usable milestone the depth cap floors the drain: at most
+// backfillDepthCap blocks below the tip rebuild, the rest jump.
+func TestBackfillDepthCapWithoutMilestone(t *testing.T) {
+	blocks := map[uint64]*types.Block{}
+	parent := common.Hash{0xef}
+	tip := uint64(backfillDepthCap + 10)
+
+	for n := uint64(1); n <= tip; n++ {
+		b := types.NewBlockWithHeader(testHeader(n, parent))
+		blocks[n] = b
+		parent = b.Hash()
+	}
+
+	p := barePublisher()
+	p.chain = &fakeChain{blocks: blocks, current: blocks[tip].Header()}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.pendingFrom, p.pendingTo = 1, tip
+
+	fresh := newJournal()
+	p.backfillLocked(fresh, p.head)
+
+	if len(fresh.items) == 0 {
+		t.Fatal("capped drain rebuilt nothing")
+	}
+
+	if want := tip - backfillDepthCap + 1; fresh.items[0].height != want {
+		t.Fatalf("drain must start at the depth cap %d, first height %d", want, fresh.items[0].height)
+	}
+}
+
+// Debt entirely at or below the milestone drops whole: the jump open
+// crosses it and nothing rebuilds.
+func TestBackfillDropsDebtBelowTheMilestone(t *testing.T) {
+	milestone := common.Hash{0x4d}
+	p := barePublisher()
+	p.chain = &fakeChain{canonical: map[uint64]common.Hash{9: milestone}}
+	p.finality = func() (bool, uint64, common.Hash) { return true, 9, milestone }
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.pendingFrom, p.pendingTo, p.pendingEntries = 3, 8, 12
+
+	fresh := newJournal()
+	p.backfillLocked(fresh, p.head)
+
+	if len(fresh.items) != 0 || p.pendingFrom != 0 || p.pendingTo != 0 || p.pendingEntries != 0 {
+		t.Fatalf("finalized debt must drop whole: %d entries, pending %d..%d",
+			len(fresh.items), p.pendingFrom, p.pendingTo)
+	}
+}
+
+// A milestone naming a chain we do not hold is no floor at all — the
+// depth cap (when the tip allows one) is the only bound then.
+func TestBackfillIgnoresANonCanonicalMilestone(t *testing.T) {
+	p := barePublisher()
+	p.chain = &fakeChain{canonical: map[uint64]common.Hash{9: {0x0c}}}
+	p.finality = func() (bool, uint64, common.Hash) { return true, 9, common.Hash{0xbe, 0xef} }
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if f := p.backfillFloorLocked(); f != 0 {
+		t.Fatalf("a non-canonical milestone must not floor the drain, got %d", f)
+	}
+}
+
 // primeBackfill's bounds: an unknown seal edge primes nothing, standing
 // debt widens rather than narrows, and an empty gap stays empty.
 func TestPrimeBackfillBounds(t *testing.T) {

@@ -458,7 +458,7 @@ func TestGrownWindowReadoptedNotStale(t *testing.T) {
 func TestRestartResumesOwnWindow(t *testing.T) {
 	h := startHarness(t)
 
-	first, err := NewPublisher(h.addr, h.addr, testChainID, 0, nil)
+	first, err := NewPublisher(h.addr, h.addr, testChainID, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("NewPublisher: %v", err)
 	}
@@ -478,7 +478,7 @@ func TestRestartResumesOwnWindow(t *testing.T) {
 	// locates the store tail from that height — no local state carried over.
 	chain := &fakeChain{current: &types.Header{Number: big.NewInt(1)}}
 
-	p, err := NewPublisher(h.addr, h.addr, testChainID, 0, chain)
+	p, err := NewPublisher(h.addr, h.addr, testChainID, 0, chain, nil)
 	if err != nil {
 		t.Fatalf("NewPublisher: %v", err)
 	}

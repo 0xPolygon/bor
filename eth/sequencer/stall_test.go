@@ -63,7 +63,7 @@ func startStallStore(t *testing.T) (*stallPublisher, *Publisher) {
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
 
-	p, err := NewPublisher(lis.Addr().String(), lis.Addr().String(), testChainID, 0, nil)
+	p, err := NewPublisher(lis.Addr().String(), lis.Addr().String(), testChainID, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("NewPublisher: %v", err)
 	}

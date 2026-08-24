@@ -116,6 +116,12 @@ type Publisher struct {
 	poll  time.Duration
 	chain chainReader
 
+	// finality reports the newest whitelisted milestone (nil when the node
+	// wires none). It floors the backfill: heights at or below a canonical
+	// milestone are final — permanently served by the canonical chain — so
+	// their store copies serve no consumer and the drain jumps them.
+	finality func() (bool, uint64, common.Hash)
+
 	pubConn  *grpc.ClientConn
 	consConn *grpc.ClientConn
 	pub      pb.PublisherServiceClient
@@ -140,7 +146,7 @@ type Publisher struct {
 // reads) have their own endpoints. On a cold start the store
 // tail is relocated from the chain's last imported block, so no
 // local position is persisted.
-func NewPublisher(publisherEndpoint, consumerEndpoint string, chainID uint64, poll time.Duration, chain chainReader) (*Publisher, error) {
+func NewPublisher(publisherEndpoint, consumerEndpoint string, chainID uint64, poll time.Duration, chain chainReader, finality func() (bool, uint64, common.Hash)) (*Publisher, error) {
 	pubConn, consConn, err := dialStore(publisherEndpoint, consumerEndpoint)
 	if err != nil {
 		return nil, err
@@ -157,6 +163,7 @@ func NewPublisher(publisherEndpoint, consumerEndpoint string, chainID uint64, po
 		wake:     make(chan struct{}, 1),
 		poll:     poll,
 		chain:    chain,
+		finality: finality,
 		pubConn:  pubConn,
 		consConn: consConn,
 		pub:      pb.NewPublisherServiceClient(pubConn),

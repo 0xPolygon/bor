@@ -171,7 +171,7 @@ func (s *Ethereum) attachSequencer(config *ethconfig.Config) error {
 
 		publisher, err := sequencer.NewPublisher(config.SequencerPublisherEndpoint,
 			config.SequencerConsumerEndpoint, s.blockchain.Config().ChainID.Uint64(),
-			config.SequencerPoll, s.blockchain)
+			config.SequencerPoll, s.blockchain, s.WhitelistedMilestone)
 		if err != nil {
 			return fmt.Errorf("sequencer publisher: %w", err)
 		}

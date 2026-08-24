@@ -88,7 +88,7 @@ func (h *harness) resume() {
 func newTestPublisher(t *testing.T, h *harness, chain chainReader) *Publisher {
 	t.Helper()
 
-	p, err := NewPublisher(h.addr, h.addr, testChainID, 0, chain)
+	p, err := NewPublisher(h.addr, h.addr, testChainID, 0, chain, nil)
 	if err != nil {
 		t.Fatalf("NewPublisher: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestRestartWarmResume(t *testing.T) {
 
 	jumps := reconcileForwardJump.Snapshot().Count()
 
-	first, err := NewPublisher(h.addr, h.addr, testChainID, 0, nil)
+	first, err := NewPublisher(h.addr, h.addr, testChainID, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("NewPublisher: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestRestartWarmResume(t *testing.T) {
 	// The restart locates the store tail from the chain's last block.
 	chain := &fakeChain{current: &types.Header{Number: big.NewInt(1)}}
 
-	second, err := NewPublisher(h.addr, h.addr, testChainID, 0, chain)
+	second, err := NewPublisher(h.addr, h.addr, testChainID, 0, chain, nil)
 	if err != nil {
 		t.Fatalf("NewPublisher: %v", err)
 	}
@@ -272,7 +272,7 @@ func TestStartupColdNonEmptyStore(t *testing.T) {
 
 	chain := &fakeChain{current: &types.Header{Number: big.NewInt(1)}}
 
-	p, err := NewPublisher(h.addr, h.addr, testChainID, 0, chain)
+	p, err := NewPublisher(h.addr, h.addr, testChainID, 0, chain, nil)
 	if err != nil {
 		t.Fatalf("NewPublisher: %v", err)
 	}
@@ -316,7 +316,7 @@ func TestRestartAgainstUnknownStore(t *testing.T) {
 	// the floor read seeds, and publishing resumes.
 	chain := &fakeChain{current: &types.Header{Number: big.NewInt(9)}}
 
-	p, err := NewPublisher(h.addr, h.addr, testChainID, 0, chain)
+	p, err := NewPublisher(h.addr, h.addr, testChainID, 0, chain, nil)
 	if err != nil {
 		t.Fatalf("NewPublisher: %v", err)
 	}
@@ -331,7 +331,7 @@ func TestRestartAgainstUnknownStore(t *testing.T) {
 
 // A dial-time error must surface, not return a nil publisher.
 func TestNewPublisherRejectsBadEndpoint(t *testing.T) {
-	if p, err := NewPublisher("bad\x7ftarget:99:99", "bad\x7ftarget:99:99", testChainID, 0, nil); err == nil {
+	if p, err := NewPublisher("bad\x7ftarget:99:99", "bad\x7ftarget:99:99", testChainID, 0, nil, nil); err == nil {
 		p.Close()
 		t.Fatal("bad endpoint accepted")
 	}

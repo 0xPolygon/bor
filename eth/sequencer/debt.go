@@ -85,14 +85,31 @@ func (p *Publisher) backfillLocked(fresh *journal, cur commitment.Head) commitme
 		return cur
 	}
 
-	// The whole pending range drains, storeSealedTip notwithstanding. The
-	// tip is the newest seal, not proof of anything below it: live flushes
-	// seal heights above the gap while it waits, and a store restart can
-	// shed acked writes, so "the store has these" was twice false on a
-	// devnet — pending heights skipped on the tip stayed holes forever.
-	// Re-delivering a height the store does have only adds an identical
-	// duplicate generation, which costs churn, not correctness.
+	// The drain never trusts storeSealedTip as a floor. The tip is the
+	// newest seal, not proof of anything below it: live flushes seal
+	// heights above the gap while it waits, and a store restart can shed
+	// acked writes — "the store has these" was twice false on a devnet,
+	// and pending heights skipped on that belief stayed holes forever.
+	// The only floor is our own finality view (backfillFloorLocked):
+	// a fact about the chain, not a belief about the store. Below it the
+	// hole is intentional — the jump open crosses it, and re-delivering a
+	// height the store does have only adds an identical duplicate
+	// generation, which costs churn, not correctness.
 	lo, hi := p.pendingFrom, p.pendingTo
+
+	if floor := p.backfillFloorLocked(); floor > lo {
+		reconcileForwardJump.Inc(1)
+		log.Warn("Sequencer backfill jumping finalized heights",
+			"from", lo, "through", min(floor-1, hi), "floor", floor)
+
+		if floor > hi {
+			p.pendingFrom, p.pendingTo, p.pendingEntries = 0, 0, 0
+
+			return cur
+		}
+
+		lo, p.pendingFrom = floor, floor
+	}
 
 	log.Info("Sequencer backfill starting", "from", lo, "to", hi,
 		"storeSealedTip", p.storeSealedTip)
@@ -104,6 +121,33 @@ func (p *Publisher) backfillLocked(fresh *journal, cur commitment.Head) commitme
 	}
 
 	return p.drainDebtLocked(fresh, cur, lo, hi)
+}
+
+// backfillFloorLocked returns the lowest height still worth delivering.
+// Heights at or below a canonical whitelisted milestone are final:
+// immutable and permanently served by the canonical chain, so their store
+// copies serve no consumer — a 1-hour outage owes seconds of blocks, not
+// the hour. Without a usable milestone (Heimdall down alongside the
+// store, or a milestone naming a chain we don't hold), backfillDepthCap
+// below the tip bounds the drain instead. Zero means no floor.
+func (p *Publisher) backfillFloorLocked() uint64 {
+	var floor uint64
+
+	if p.finality != nil && p.chain != nil {
+		if exists, number, hash := p.finality(); exists && p.chain.GetCanonicalHash(number) == hash {
+			floor = number + 1
+		}
+	}
+
+	if p.chain != nil {
+		if head := p.chain.CurrentBlock(); head != nil {
+			if tip := head.Number.Uint64(); tip > backfillDepthCap {
+				floor = max(floor, tip-backfillDepthCap+1)
+			}
+		}
+	}
+
+	return floor
 }
 
 // dropUndrainableDebtLocked zeroes debt no drain can serve: no chain to

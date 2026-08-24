@@ -122,6 +122,12 @@ const (
 	// journalMaxBytes caps the adoption-collection read and one backfill
 	// batch — not a retention bound.
 	journalMaxBytes = 32 << 20
+
+	// backfillDepthCap bounds the drain when no canonical milestone is
+	// available to floor it (Heimdall down alongside the store): at most
+	// this many blocks below the tip are rebuilt, the rest jumped. With a
+	// milestone the floor is finality itself, normally far tighter.
+	backfillDepthCap = 40
 )
 
 func newJournal() *journal {
