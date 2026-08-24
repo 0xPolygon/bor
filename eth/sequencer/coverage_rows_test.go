@@ -382,6 +382,48 @@ func TestBackfillDepthCapWithoutMilestone(t *testing.T) {
 	}
 }
 
+// A floor inside the pending range drops only the finalized prefix: the
+// drain rebuilds from the floor up and the debt settles completely.
+func TestBackfillDrainsAboveTheFloorOnly(t *testing.T) {
+	blocks := map[uint64]*types.Block{}
+	parent := common.Hash{0xef}
+
+	for n := uint64(1); n <= 6; n++ {
+		b := types.NewBlockWithHeader(testHeader(n, parent))
+		blocks[n] = b
+		parent = b.Hash()
+	}
+
+	p := barePublisher()
+	p.chain = &fakeChain{
+		blocks:    blocks,
+		canonical: map[uint64]common.Hash{3: blocks[3].Hash()},
+		current:   blocks[6].Header(),
+	}
+	p.finality = func() (bool, uint64, common.Hash) { return true, 3, blocks[3].Hash() }
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.pendingFrom, p.pendingTo = 1, 6
+
+	fresh := newJournal()
+	p.backfillLocked(fresh, p.head)
+
+	if p.pendingFrom != 0 || p.pendingTo != 0 {
+		t.Fatalf("drain above the floor must settle the debt: %d..%d", p.pendingFrom, p.pendingTo)
+	}
+
+	// Three empty blocks above the floor: an open and a seal each.
+	if len(fresh.items) != 6 {
+		t.Fatalf("blocks 4..6 rebuild 6 entries, got %d", len(fresh.items))
+	}
+
+	if fresh.items[0].height != 4 {
+		t.Fatalf("drain must start at the floor: first height %d", fresh.items[0].height)
+	}
+}
+
 // Debt entirely at or below the milestone drops whole: the jump open
 // crosses it and nothing rebuilds.
 func TestBackfillDropsDebtBelowTheMilestone(t *testing.T) {
