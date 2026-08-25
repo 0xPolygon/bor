@@ -980,6 +980,11 @@ func (bc *BlockChain) SetStateSync(stateData []*types.StateSyncData) {
 func (bc *BlockChain) GetStateSync() []*types.StateSyncData {
 	bc.stateSyncMu.RLock()
 	defer bc.stateSyncMu.RUnlock()
+	return bc.getStateSyncLocked()
+}
+
+// getStateSyncLocked returns state sync data while stateSyncMu is held.
+func (bc *BlockChain) getStateSyncLocked() []*types.StateSyncData {
 	return bc.stateSyncData
 }
 

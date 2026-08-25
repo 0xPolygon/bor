@@ -861,13 +861,20 @@ func connectAndWaitForPeers(t *testing.T, a, b *node.Node) {
 			time.Sleep(50 * time.Millisecond)
 		}
 	}
+	// Dial from one side only: mutual AddPeer invites simultaneous-connect
+	// collisions where each server can drop the other's inbound connection
+	// as a duplicate of its own in-flight dial, and because failed dials
+	// enter the dialer's per-node history (checkDial: errRecentlyDialed,
+	// ~35s) aligned retries can keep colliding until the deadline. A single
+	// static dial can't collide, and the scheduler retries it on its own
+	// after each history expiry.
 	a.Server().AddPeer(b.Server().Self())
-	b.Server().AddPeer(a.Server().Self())
 	for a.Server().PeerCount() == 0 || b.Server().PeerCount() == 0 {
 		select {
 		case <-deadline:
-			t.Fatalf("nodes failed to peer within deadline: peers a=%d b=%d",
-				a.Server().PeerCount(), b.Server().PeerCount())
+			t.Fatalf("nodes failed to peer within deadline: peers a=%d b=%d (a=%s b=%s)",
+				a.Server().PeerCount(), b.Server().PeerCount(),
+				a.Server().Self(), b.Server().Self())
 		default:
 			time.Sleep(250 * time.Millisecond)
 		}
