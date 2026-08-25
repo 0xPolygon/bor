@@ -88,6 +88,13 @@ func (w *worker) isPipelineEligible(_ uint64) bool {
 	// reservedBlockspaceBlock scheduled, integrate the reserved pass or gate
 	// eligibility on !IsReservedBlockspace(nextBlockNumber).
 	//
+	// Witness completeness: this path executes on a witness-less state and
+	// lets SRC build the shipped witness from the FlatDiff read surface
+	// alone. Isolated system-call reads (span, state-sync id, reserved
+	// registry) reach that surface via state.ReadIsolated's PropagateReadsTo;
+	// verify that invariant still holds before re-enabling, or stateless
+	// verifiers fail on those reads at every sprint boundary.
+	//
 	// if !w.config.EnablePipelinedSRC {
 	// 	return false
 	// }

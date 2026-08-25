@@ -1866,29 +1866,49 @@ func (c *Bor) checkAndCommitSpan(
 	var ctx = context.Background()
 	headerNumber := header.Number.Uint64()
 
-	tempState := state.Inner().Copy()
-	tempState.ResetPrefetcher()
-	tempState.StartPrefetcher("bor", state.Witness(), nil)
-
-	span, err := c.spanner.GetCurrentSpan(ctx, header.ParentHash, tempState)
+	span, err := c.readCurrentSpan(ctx, state.Inner(), header.ParentHash)
 	if err != nil {
 		return err
 	}
-
-	tempState.IntermediateRoot(false)
-
-	// Propagate addresses accessed during GetCurrentSpan back to the original
-	// state so they appear in the FlatDiff ReadSet. Without this, the pipelined
-	// SRC goroutine's witness won't capture their trie proof nodes (the copy's
-	// reads aren't tracked on the original), causing stateless execution to fail
-	// with missing trie nodes for the validator contract.
-	tempState.PropagateReadsTo(state.Inner())
 
 	if c.needToCommitSpan(span, headerNumber) {
 		return c.FetchAndCommitSpan(ctx, span.Id+1, state, header, chain)
 	}
 
 	return nil
+}
+
+// readCurrentSpan reads the span contract isolated from the live block state,
+// while keeping the read's trie nodes in any witness being produced - a
+// stateless verifier repeats this read, so the witness must carry them (see
+// state.ReadIsolated).
+func (c *Bor) readCurrentSpan(ctx context.Context, stateDB *state.StateDB, parentHash common.Hash) (*borTypes.Span, error) {
+	var span *borTypes.Span
+	err := stateDB.ReadIsolated(func(tmp *state.StateDB) error {
+		var err error
+		span, err = c.spanner.GetCurrentSpan(ctx, parentHash, tmp)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return span, nil
+}
+
+// readLastStateID reads the state-receiver contract's last state-sync id
+// isolated from the live block state, with the same witness guarantees as
+// readCurrentSpan.
+func (c *Bor) readLastStateID(stateDB *state.StateDB, number uint64, hash common.Hash) (*big.Int, error) {
+	var id *big.Int
+	err := stateDB.ReadIsolated(func(tmp *state.StateDB) error {
+		var err error
+		id, err = c.GenesisContractsClient.LastStateId(tmp, number, hash)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return id, nil
 }
 
 func (c *Bor) needToCommitSpan(currentSpan *borTypes.Span, headerNumber uint64) bool {
@@ -2018,22 +2038,10 @@ func (c *Bor) CommitStates(
 
 	if c.config.IsIndore(header.Number) {
 		// Fetch the LastStateId from contract via current state instance
-		tempState := state.Inner().Copy()
-		tempState.ResetPrefetcher()
-		tempState.StartPrefetcher("bor", state.Witness(), nil)
-
-		lastStateIDBig, err = c.GenesisContractsClient.LastStateId(tempState, number-1, header.ParentHash)
+		lastStateIDBig, err = c.readLastStateID(state.Inner(), number-1, header.ParentHash)
 		if err != nil {
 			return nil, err
 		}
-
-		tempState.IntermediateRoot(false)
-
-		// Propagate addresses accessed during LastStateId back to the original
-		// state so they appear in the FlatDiff ReadSet. Without this, the
-		// pipelined SRC goroutine's witness won't capture their trie proof
-		// nodes, causing stateless execution to fail with missing trie nodes.
-		tempState.PropagateReadsTo(state.Inner())
 
 		stateSyncDelay := c.config.CalculateStateSyncDelay(number)
 		to = time.Unix(int64(header.Time-stateSyncDelay), 0)

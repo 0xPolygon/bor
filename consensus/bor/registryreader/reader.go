@@ -97,13 +97,31 @@ func BuildSnapshot(r Reader, statedb *state.StateDB, number uint64, hash common.
 	if r == nil || !r.HasReservedRegistry() {
 		return nil, nil
 	}
-	// Registry reads run through the EVM, which mutates the statedb it executes
-	// against. On the execution path the caller passes the live block state, so
-	// read against a throwaway copy to keep the build state-neutral — reading
-	// against the live state would leak into the block and change the post-state.
-	if statedb != nil {
-		statedb = statedb.Copy()
+	if statedb == nil {
+		return readSnapshot(r, nil, number, hash, effectiveAt)
 	}
+	// Registry reads run through the EVM, which mutates the statedb it executes
+	// against, so on the execution path they run isolated from the live block
+	// state. The isolation must not drop them from a witness being produced: a
+	// stateless verifier rebuilds this snapshot from the witness before
+	// executing the block, and the block's own transactions don't necessarily
+	// touch the registry (the first transaction-free block after a registry
+	// change wouldn't).
+	var snap *Snapshot
+	err := statedb.ReadIsolated(func(tmp *state.StateDB) error {
+		var err error
+		snap, err = readSnapshot(r, tmp, number, hash, effectiveAt)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return snap, nil
+}
+
+// readSnapshot performs the registry reads against statedb and assembles the
+// snapshot.
+func readSnapshot(r Reader, statedb *state.StateDB, number uint64, hash common.Hash, effectiveAt uint64) (*Snapshot, error) {
 	root, err := r.Root(statedb, number, hash)
 	if err != nil {
 		return nil, err
