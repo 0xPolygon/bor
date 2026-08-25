@@ -146,6 +146,13 @@ func (v *BlockValidator) ValidateStateCheap(block *types.Block, statedb *state.S
 	if block.GasUsed() != res.GasUsed {
 		return fmt.Errorf("%w (remote: %d local: %d)", ErrGasUsedMismatch, block.GasUsed(), res.GasUsed)
 	}
+	// The reserved-blockspace check is header-vs-execution comparison and so
+	// belongs in the cheap tier too: the pipelined import path validates only
+	// through here, and the header's reserved fields feed the next block's
+	// base fee, so they must never be accepted unchecked.
+	if err := v.validateReservedFields(header, res); err != nil {
+		return err
+	}
 	rbloom := types.MergeBloom(res.Receipts)
 	if rbloom != header.Bloom {
 		return fmt.Errorf("%w (remote: %x  local: %x)", ErrBloomMismatch, header.Bloom, rbloom)

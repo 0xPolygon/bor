@@ -82,6 +82,12 @@ func placeholderParentHash(blockNumber uint64) common.Hash {
 func (w *worker) isPipelineEligible(_ uint64) bool {
 	// Re-enable reference:
 	//
+	// Reserved blockspace: the speculative fill path
+	// (fillSpeculativeTransactions) has no reserved sequencing, quota walk,
+	// or reserved-field header stamping. Before re-enabling on a chain with
+	// reservedBlockspaceBlock scheduled, integrate the reserved pass or gate
+	// eligibility on !IsReservedBlockspace(nextBlockNumber).
+	//
 	// if !w.config.EnablePipelinedSRC {
 	// 	return false
 	// }
