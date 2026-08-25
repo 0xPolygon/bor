@@ -85,12 +85,6 @@ jobs:
           repository: 0xPolygon/kurtosis-pos
           ref: v1.3.4
 
-      # Checkout bor for the leg's args file and check script
-      - name: Checkout bor
-        uses: actions/checkout@v5
-        with:
-          path: bor-repo
-
       # The whole point of this leg: every bor node gets the pipeline flag.
       # bor:local nodes enable pipelined import (stateless-sync nodes
       # self-gate it off); the released-image baseline ignores the unknown
@@ -116,7 +110,7 @@ jobs:
           path: pos-workflows
 
       - name: Copy kurtosis config
-        run: cp ./bor-repo/.github/kurtosis/pipeline-e2e.yml ./kurtosis-pipeline-e2e.yml
+        run: cp ./pos-workflows/configs/kurtosis-pipeline-e2e.yml ./kurtosis-pipeline-e2e.yml
 
       # Load images
       - name: Download bor docker image
@@ -165,7 +159,8 @@ jobs:
 
       - name: Run pipeline checks
         id: pipeline-checks
-        run: bash ./bor-repo/.github/kurtosis/pipeline-e2e-checks.sh
+        working-directory: pos-workflows/tests/pipeline_tests
+        run: bash kurtosis_pipeline_test.sh
 
       # Collect diagnostics on failure
       - name: Collect network diagnostics and state dump
