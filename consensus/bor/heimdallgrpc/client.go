@@ -150,10 +150,16 @@ func NewHeimdallGRPCClient(grpcAddress string, heimdallURL string, timeout time.
 		requestTimeout = defaultTimeout
 	}
 
+	restClient, err := heimdall.NewHeimdallClient(heimdallURL, timeout)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+
 	return &HeimdallGRPCClient{
 		conn:                  conn,
 		timeout:               requestTimeout,
-		client:                heimdall.NewHeimdallClient(heimdallURL, timeout),
+		client:                restClient,
 		borQueryClient:        borTypes.NewQueryClient(conn),
 		checkpointQueryClient: checkpointTypes.NewQueryClient(conn),
 		clerkQueryClient:      clerkTypes.NewQueryClient(conn),
