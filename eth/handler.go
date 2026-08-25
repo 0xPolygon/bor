@@ -164,13 +164,15 @@ type handler struct {
 	// privateTxGetter to check if a transaction needs to be treated as private or not
 	privateTxGetter relay.PrivateTxGetter
 
-	eventMux      *event.TypeMux
-	txsCh         chan core.NewTxsEvent
-	txsSub        event.Subscription
-	stuckTxsCh    chan core.StuckTxsEvent
-	stuckTxsSub   event.Subscription
-	minedBlockSub *event.TypeMuxSubscription
-	blockRange    *blockRangeState
+	eventMux        *event.TypeMux
+	txsCh           chan core.NewTxsEvent
+	txsSub          event.Subscription
+	stuckTxsCh      chan core.StuckTxsEvent
+	stuckTxsSub     event.Subscription
+	minedBlockSub   *event.TypeMuxSubscription
+	witnessReadyCh  chan core.WitnessReadyEvent
+	witnessReadySub event.Subscription
+	blockRange      *blockRangeState
 
 	requiredBlocks map[uint64]common.Hash
 
@@ -620,6 +622,12 @@ func (h *handler) Start(maxPeers int) {
 	h.minedBlockSub = h.eventMux.Subscribe(core.NewMinedBlockEvent{})
 	go h.minedBroadcastLoop()
 
+	// announce witnesses from pipelined import SRC
+	h.witnessReadyCh = make(chan core.WitnessReadyEvent, 10)
+	h.witnessReadySub = h.chain.SubscribeWitnessReadyEvent(h.witnessReadyCh)
+	h.wg.Add(1)
+	go h.witnessReadyBroadcastLoop()
+
 	h.wg.Add(1)
 	go h.chainSync.loop()
 
@@ -641,6 +649,9 @@ func (h *handler) Stop() {
 		h.stuckTxsSub.Unsubscribe() // quits stuckTxBroadcastLoop
 	}
 	h.minedBlockSub.Unsubscribe()
+	if h.witnessReadySub != nil {
+		h.witnessReadySub.Unsubscribe()
+	}
 	h.blockRange.stop()
 
 	// Quit chainSync and txsync64.
@@ -719,8 +730,9 @@ func (h *handler) BroadcastBlock(block *types.Block, witness *stateless.Witness,
 
 		return
 	}
-	// Otherwise if the block is indeed in out own chain, announce it
-	if h.chain.HasBlock(hash, block.NumberU64()) {
+	// Otherwise, announce the block if it is already written locally or if the
+	// witness is cached and the block is in-flight on the local write path.
+	if h.chain.HasBlock(hash, block.NumberU64()) || h.chain.HasWitness(hash) {
 		for _, peer := range peers {
 			peer.AsyncSendNewBlockHash(block)
 		}
@@ -831,9 +843,72 @@ func (h *handler) minedBroadcastLoop() {
 				log.Info("[block tracker] Broadcasting mined block", "number", ev.Block.NumberU64(), "hash", ev.Block.Hash(), "blockTime", ev.Block.Time(), "now", now.Unix(), "delay", delay, "delayInMs", delayInMs, "sealToBroadcast", common.PrettyDuration(sealToBcast))
 			}
 			loopStart := time.Now()
-			h.BroadcastBlock(ev.Block, ev.Witness, true)  // First propagate block to peers
-			h.BroadcastBlock(ev.Block, ev.Witness, false) // Only then announce to the rest
+			h.BroadcastBlock(ev.Block, ev.Witness, true) // First propagate block to peers
+			// Tracked on h.wg so Stop waits it out (bounded by the 500ms
+			// visibility poll) instead of racing peer shutdown.
+			h.wg.Add(1)
+			go func(block *types.Block, witness *stateless.Witness) {
+				defer h.wg.Done()
+				h.announceMinedBlock(block, witness)
+			}(ev.Block, ev.Witness)
 			broadcastLoopTimer.Update(time.Since(loopStart))
+		}
+	}
+}
+
+// announceMinedBlock announces a locally mined block after it becomes visible
+// through the local chain reader.
+//
+// The pipelined inline path broadcasts before its async DB write completes, so
+// announcing immediately can race with HasBlock() and silently skip the hash
+// announcement to non-propagation peers. Wait briefly for the write to land,
+// then announce. If the block still isn't visible but the witness is cached,
+// fall back to the witness-gated path so stateless peers can still progress.
+func (h *handler) announceMinedBlock(block *types.Block, witness *stateless.Witness) {
+	const (
+		pollInterval = 10 * time.Millisecond
+		maxWait      = 500 * time.Millisecond
+	)
+
+	hash := block.Hash()
+	number := block.NumberU64()
+	deadline := time.NewTimer(maxWait)
+	defer deadline.Stop()
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
+		if h.chain.HasBlock(hash, number) {
+			h.BroadcastBlock(block, witness, false)
+			return
+		}
+		select {
+		case <-ticker.C:
+		case <-deadline.C:
+			if h.chain.HasWitness(hash) {
+				h.BroadcastBlock(block, witness, false)
+			} else {
+				log.Debug("Skipping mined block announce before local write became visible", "hash", hash, "number", number)
+			}
+			return
+		}
+	}
+}
+
+// witnessReadyBroadcastLoop announces witness availability from the pipelined
+// import SRC goroutine. Without this, the stateless node would have to poll
+// for witnesses with 10-second retry intervals.
+func (h *handler) witnessReadyBroadcastLoop() {
+	defer h.wg.Done()
+
+	for {
+		select {
+		case ev := <-h.witnessReadyCh:
+			for _, peer := range h.peers.peersWithoutWitness(ev.BlockHash) {
+				peer.Peer.AsyncSendNewWitnessHash(ev.BlockHash, ev.BlockNumber)
+			}
+		case <-h.witnessReadySub.Err():
+			return
 		}
 	}
 }

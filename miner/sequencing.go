@@ -184,11 +184,15 @@ func (w *worker) sequenceTxs(env *environment, snap *registryreader.Snapshot, pe
 	prio := w.prio
 	w.mu.RUnlock()
 
+	// The heaps observe the per-build timeout flag, so a pipelined build's
+	// interrupt stops batch iteration exactly like the global override does.
+	timeoutInterrupt, _ := w.interruptStateForEnv(env)
+
 	newNormalTxSet := func(txs map[common.Address][]*txpool.LazyTransaction) *transactionsByPriceAndNonce {
-		return newTransactionsByPriceAndNonce(env.signer, txs, env.header.BaseFee, &w.interruptBlockBuilding)
+		return newTransactionsByPriceAndNonce(env.signer, txs, env.header.BaseFee, timeoutInterrupt)
 	}
 	newReservedTxSet := func(txs map[common.Address][]*txpool.LazyTransaction) *transactionsByPriceAndNonce {
-		return newReservedTransactionsByNonce(env.signer, txs, env.header.BaseFee, &w.interruptBlockBuilding)
+		return newReservedTransactionsByNonce(env.signer, txs, env.header.BaseFee, timeoutInterrupt)
 	}
 
 	var txBatches = make([]*transactionsByPriceAndNonce, 0)
