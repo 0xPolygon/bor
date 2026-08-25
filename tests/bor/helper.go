@@ -861,13 +861,25 @@ func connectAndWaitForPeers(t *testing.T, a, b *node.Node) {
 			time.Sleep(50 * time.Millisecond)
 		}
 	}
+	// Dial from one side only: mutual AddPeer invites simultaneous-connect
+	// collisions where each server can drop the other's inbound connection
+	// as a duplicate of its own in-flight dial, and with aligned retry
+	// backoff the collision can repeat until the deadline.
 	a.Server().AddPeer(b.Server().Self())
-	b.Server().AddPeer(a.Server().Self())
+	redial := time.NewTicker(10 * time.Second)
+	defer redial.Stop()
 	for a.Server().PeerCount() == 0 || b.Server().PeerCount() == 0 {
 		select {
 		case <-deadline:
-			t.Fatalf("nodes failed to peer within deadline: peers a=%d b=%d",
-				a.Server().PeerCount(), b.Server().PeerCount())
+			t.Fatalf("nodes failed to peer within deadline: peers a=%d b=%d (a=%s b=%s)",
+				a.Server().PeerCount(), b.Server().PeerCount(),
+				a.Server().Self(), b.Server().Self())
+		case <-redial.C:
+			// Clear the static-dial entry and re-add it so the next dial is
+			// scheduled fresh instead of waiting out the dialer's failure
+			// backoff with a possibly stale endpoint.
+			a.Server().RemovePeer(b.Server().Self())
+			a.Server().AddPeer(b.Server().Self())
 		default:
 			time.Sleep(250 * time.Millisecond)
 		}
