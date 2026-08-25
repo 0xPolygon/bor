@@ -1129,6 +1129,37 @@ func TestCommitInterruptPending(t *testing.T) {
 	w.stop()
 }
 
+func TestCreateInterruptTimer_IsolatedPerBuild(t *testing.T) {
+	t.Parallel()
+
+	first := newBuildInterruptState()
+	second := newBuildInterruptState()
+
+	stopFirst := createInterruptTimer(1, time.Now().Add(25*time.Millisecond), first.timeoutFlag(), first.flagSetAtPtr(), true)
+	defer stopFirst()
+	stopSecond := createInterruptTimer(2, time.Now().Add(500*time.Millisecond), second.timeoutFlag(), second.flagSetAtPtr(), true)
+	defer stopSecond()
+
+	require.Eventually(t, func() bool {
+		return first.timedOut.Load()
+	}, time.Second, 10*time.Millisecond)
+	require.NotZero(t, first.flagSetAt.Load())
+	require.False(t, second.timedOut.Load(), "one build's timeout must not trip another build")
+	require.Zero(t, second.flagSetAt.Load())
+}
+
+func TestCreateInterruptTimer_CancelDoesNotTripInterrupt(t *testing.T) {
+	t.Parallel()
+
+	state := newBuildInterruptState()
+	stop := createInterruptTimer(1, time.Now().Add(500*time.Millisecond), state.timeoutFlag(), state.flagSetAtPtr(), true)
+	stop()
+
+	time.Sleep(50 * time.Millisecond)
+	require.False(t, state.timedOut.Load(), "canceling a build timer must not look like a timeout")
+	require.Zero(t, state.flagSetAt.Load())
+}
+
 // TestBenchmarkPending is a simple benchmark test to measure the performance of transaction pool. It inserts
 // large number of transactions into the pool and captures the time taken for `pending` to return the list
 // of pending transactions. The purpose is just to compare the performance on different branches.
@@ -1529,7 +1560,7 @@ func TestCommitWorkLeaksPendingWorkBlockWhenSyncing(t *testing.T) {
 	w.pendingWorkBlock.Store(42)
 
 	// Call commitWork directly to drive the in-sync early-return path.
-	w.commitWork(nil, false, time.Now().Unix())
+	w.commitWork(nil, false, time.Now().Unix(), false)
 
 	got := w.pendingWorkBlock.Load()
 	if got != 0 {
@@ -3082,6 +3113,30 @@ func TestWriteBlockAndSetHeadTimer(t *testing.T) {
 
 	if writeBlockAndSetHeadTimer.Snapshot().Count() <= countBefore {
 		t.Error("writeBlockAndSetHeadTimer should have been updated after mining blocks")
+	}
+}
+
+// TestPipelineBuildGaugeAlwaysDisabled verifies that production-side pipelined
+// SRC is not exposed as a miner config option and stays disabled.
+func TestPipelineBuildGaugeAlwaysDisabled(t *testing.T) {
+	metrics.Enable()
+
+	var (
+		engine      consensus.Engine
+		chainConfig = params.BorUnittestChainConfig
+		db          = rawdb.NewMemoryDatabase()
+		ctrl        *gomock.Controller
+	)
+	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
+	defer engine.Close()
+	defer ctrl.Finish()
+
+	cfg := DefaultTestConfig()
+	w, _, _ := newTestWorker(t, cfg, chainConfig, engine, db, false, 0)
+	defer w.close()
+
+	if got := pipelineBuildEnabledGauge.Snapshot().Value(); got != 0 {
+		t.Errorf("pipelineBuildEnabledGauge = %d, want 0 when production pipelining is disabled", got)
 	}
 }
 
