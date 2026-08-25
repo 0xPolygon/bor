@@ -3,6 +3,7 @@ package miner
 import (
 	"errors"
 	"math/big"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -20,6 +21,18 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 )
 
+// stopWorkerOnces tracks workers stopped mid-test so the fixture cleanup does
+// not close the same worker a second time (worker.close does not support it).
+var stopWorkerOnces sync.Map // *worker -> *sync.Once
+
+// stopWorker shuts down the worker's background goroutines and closes exitCh.
+// Tests must call it before reassigning worker fields those goroutines read
+// (engine, speculativeWorkCh): reassigning them on a live worker is a data race.
+func stopWorker(w *worker) {
+	once, _ := stopWorkerOnces.LoadOrStore(w, new(sync.Once))
+	once.(*sync.Once).Do(w.close)
+}
+
 func newPipelineWorkerFixture(t *testing.T, configure func(*params.ChainConfig)) (*worker, *testWorkerBackend) {
 	t.Helper()
 
@@ -35,8 +48,8 @@ func newPipelineWorkerFixture(t *testing.T, configure func(*params.ChainConfig))
 	t.Cleanup(ctrl.Finish)
 	t.Cleanup(func() { require.NoError(t, engine.Close()) })
 
-	w, backend, cleanup := newTestWorker(t, DefaultTestConfig(), &chainConfig, engine, rawdb.NewMemoryDatabase(), false, 0)
-	t.Cleanup(cleanup)
+	w, backend, _ := newTestWorker(t, DefaultTestConfig(), &chainConfig, engine, rawdb.NewMemoryDatabase(), false, 0)
+	t.Cleanup(func() { stopWorker(w) })
 	return w, backend
 }
 
@@ -116,6 +129,7 @@ func TestPipelineSessionFailureAndExitBranches(t *testing.T) {
 	t.Run("non Bor engine rejects pipeline operations", func(t *testing.T) {
 		w, _, session := newPipelineSessionFixture(t, nil)
 		<-session.initialFillDone
+		stopWorker(w)
 		wrapped := &pipelineSealEngine{Engine: w.engine, seal: func(consensus.ChainHeaderReader, *types.Block, *stateless.Witness, chan<- *consensus.NewSealedBlockEvent, <-chan struct{}) error {
 			return nil
 		}}
@@ -279,6 +293,7 @@ func TestPipelineSessionAdditionalRecoveryBranches(t *testing.T) {
 
 	t.Run("inline broadcast returns seal error", func(t *testing.T) {
 		w, _, _ := newPipelineRequestFixture(t, nil)
+		stopWorker(w)
 		sealErr := errors.New("seal failed")
 		w.engine = &pipelineSealEngine{
 			Engine: w.engine,
@@ -317,13 +332,11 @@ func TestCommitPipelinedAdditionalBranches(t *testing.T) {
 
 	t.Run("worker exit cancels handoff", func(t *testing.T) {
 		w, _, req := newPipelineRequestFixture(t, nil)
+		// stopWorker closes exitCh; the unbuffered channel forces the handoff
+		// select onto that exit branch.
+		stopWorker(w)
 		w.running.Store(true)
-		originalExit := w.exitCh
-		stopped := make(chan struct{})
-		close(stopped)
-		w.exitCh = stopped
 		w.speculativeWorkCh = make(chan *speculativeWorkReq)
-		t.Cleanup(func() { w.exitCh = originalExit })
 
 		require.NoError(t, w.commitPipelined(req.blockNEnv, time.Now()))
 	})
@@ -342,11 +355,7 @@ func TestSpecSessionMoreFailureBranches(t *testing.T) {
 	t.Run("initial setup requires grandparent", func(t *testing.T) {
 		w, _, req := newPipelineRequestFixture(t, nil)
 		req.parentHeader.ParentHash = common.HexToHash("0xdead")
-		originalExit := w.exitCh
-		stopped := make(chan struct{})
-		close(stopped)
-		w.exitCh = stopped
-		t.Cleanup(func() { w.exitCh = originalExit })
+		stopWorker(w)
 
 		require.False(t, newSpecSession(w, req).setupInitial())
 	})
@@ -396,6 +405,7 @@ func TestSpecSessionMoreFailureBranches(t *testing.T) {
 		finalHeader, flatDiff, syncData, ok := session.finalizeCurrent()
 		require.True(t, ok)
 
+		stopWorker(w)
 		prepareErr := errors.New("prepare failed")
 		w.engine = &pipelinePrepareEngine{
 			Engine: w.engine,
@@ -425,11 +435,7 @@ func TestSealCurrentAndAdvanceExitAndSealFailure(t *testing.T) {
 	t.Run("worker exit interrupts announce wait", func(t *testing.T) {
 		w, session, finalHeader, syncData, next := newPreparedSession(t)
 		finalHeader.ActualTime = time.Now().Add(time.Hour)
-		originalExit := w.exitCh
-		stopped := make(chan struct{})
-		close(stopped)
-		w.exitCh = stopped
-		t.Cleanup(func() { w.exitCh = originalExit })
+		stopWorker(w)
 
 		sealed, exitEarly, ok := session.sealCurrentAndAdvance(finalHeader, syncData, next)
 		require.False(t, ok)
@@ -439,6 +445,7 @@ func TestSealCurrentAndAdvanceExitAndSealFailure(t *testing.T) {
 
 	t.Run("inline seal error stops iteration", func(t *testing.T) {
 		w, session, finalHeader, syncData, next := newPreparedSession(t)
+		stopWorker(w)
 		sealErr := errors.New("seal failed")
 		w.engine = &pipelineSealEngine{
 			Engine: w.engine,
