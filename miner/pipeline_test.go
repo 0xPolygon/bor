@@ -311,7 +311,7 @@ func TestPipelineTimingAndChainHelpers(t *testing.T) {
 	defer borEngine.(*bor.Bor).Close()
 
 	w, backend, cleanup := newTestWorker(t, DefaultTestConfig(), &chainConfig, borEngine, rawdb.NewMemoryDatabase(), false, 0)
-	defer cleanup()
+	cleanup()
 
 	parent := backend.chain.CurrentHeader()
 	wrappedEngine := &pipelineSealEngine{

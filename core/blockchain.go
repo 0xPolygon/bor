@@ -3860,7 +3860,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 
 		// BOR state sync feed related changes
 		bc.stateSyncMu.RLock()
-		for _, data := range bc.GetStateSync() {
+		for _, data := range bc.getStateSyncLocked() {
 			bc.stateSyncFeed.Send(StateSyncEvent{Data: data})
 		}
 		bc.stateSyncMu.RUnlock()
@@ -5033,7 +5033,7 @@ func (bc *BlockChain) emitPostWriteEvents(block *types.Block, receipts []*types.
 	}
 	bc.chainHeadFeed.Send(ChainHeadEvent{Header: block.Header()})
 	bc.stateSyncMu.RLock()
-	for _, data := range bc.GetStateSync() {
+	for _, data := range bc.getStateSyncLocked() {
 		bc.stateSyncFeed.Send(StateSyncEvent{Data: data})
 	}
 	bc.stateSyncMu.RUnlock()
@@ -5959,7 +5959,7 @@ func (bc *BlockChain) collectPrevImportSRCIfAny(block *types.Block, parent *type
 func (bc *BlockChain) emitStateSyncFeed() {
 	bc.stateSyncMu.RLock()
 	defer bc.stateSyncMu.RUnlock()
-	for _, data := range bc.GetStateSync() {
+	for _, data := range bc.getStateSyncLocked() {
 		bc.stateSyncFeed.Send(StateSyncEvent{Data: data})
 	}
 }

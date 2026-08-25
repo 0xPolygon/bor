@@ -108,6 +108,49 @@ func TestEmitQueuedStateSyncFeed(t *testing.T) {
 	require.Same(t, data, (<-events).Data)
 }
 
+func TestGetStateSyncLockedWithQueuedWriter(t *testing.T) {
+	chain, _, _ := newPipelineHelperChain(t)
+	data := &types.StateSyncData{ID: 99}
+	chain.SetStateSync([]*types.StateSyncData{data})
+	require.Equal(t, []*types.StateSyncData{data}, chain.GetStateSync())
+
+	chain.stateSyncMu.RLock()
+	lockHeld := true
+	defer func() {
+		if lockHeld {
+			chain.stateSyncMu.RUnlock()
+		}
+	}()
+
+	writerDone := make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		chain.SetStateSync(nil)
+	}()
+	require.Eventually(t, func() bool {
+		if chain.stateSyncMu.TryRLock() {
+			chain.stateSyncMu.RUnlock()
+			return false
+		}
+		return true
+	}, 5*time.Second, time.Millisecond, "writer did not wait for state sync lock")
+
+	readDone := make(chan []*types.StateSyncData, 1)
+	go func() { readDone <- chain.getStateSyncLocked() }()
+	select {
+	case got := <-readDone:
+		require.Equal(t, []*types.StateSyncData{data}, got)
+	case <-time.After(5 * time.Second):
+		chain.stateSyncMu.RUnlock()
+		lockHeld = false
+		<-writerDone
+		t.Fatal("lock-held state sync read blocked behind a queued writer")
+	}
+	chain.stateSyncMu.RUnlock()
+	lockHeld = false
+	<-writerDone
+}
+
 func TestRunSRCComputeFailureBranches(t *testing.T) {
 	t.Run("panic is converted to an SRC error", func(t *testing.T) {
 		chain, _, blocks := newPipelineHelperChain(t)
