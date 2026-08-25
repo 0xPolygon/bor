@@ -39,6 +39,10 @@ type Harness struct {
 	Reader         registryreader.Reader
 	ReservedAddr   common.Address
 	UnreservedAddr common.Address
+
+	reader   *evmReader
+	owner    common.Address
+	writeAbi abi.ABI
 }
 
 // NewHarness deploys the registry, initializes it under a fresh owner, and
@@ -48,6 +52,17 @@ func NewHarness(t *testing.T) *Harness {
 
 	statedb, err := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
 	require.NoError(t, err)
+
+	return NewHarnessOn(t, statedb)
+}
+
+// NewHarnessOn deploys the registry into the caller's statedb, which may be
+// backed by a real, committable trie database (the witness-completeness tests
+// need the registry state in a committed trie). The returned Reader runs each
+// call against the statedb that call receives, falling back to this one when
+// the call passes nil.
+func NewHarnessOn(t *testing.T, statedb *state.StateDB) *Harness {
+	t.Helper()
 
 	contractAddr := common.HexToAddress(params.DefaultReservedRegistryContract)
 	owner := common.HexToAddress("0x00000000000000000000000000000000000000aa")
@@ -71,15 +86,30 @@ func NewHarness(t *testing.T) *Harness {
 	require.NoError(t, err)
 	callContract(t, statedb, owner, contractAddr, createData)
 
+	r := &evmReader{
+		state:    statedb,
+		contract: contractAddr,
+		readerAB: borabi.ReservedBlockspaceRegistry(),
+	}
+
 	return &Harness{
-		Reader: &evmReader{
-			state:    statedb,
-			contract: contractAddr,
-			readerAB: borabi.ReservedBlockspaceRegistry(),
-		},
+		Reader:         r,
 		ReservedAddr:   reserved,
 		UnreservedAddr: unreserved,
+		reader:         r,
+		owner:          owner,
+		writeAbi:       writeAbi,
 	}
+}
+
+// CreateClient registers another client with the given fee mode and whitelisted
+// addresses, for tests exercising registry states beyond NewHarness's default
+// single free-mode client.
+func (h *Harness) CreateClient(t *testing.T, admin common.Address, gasQuota uint64, feeMode uint8, addresses []common.Address) {
+	t.Helper()
+	createData, err := h.writeAbi.Pack("createClient", admin, gasQuota, feeMode, uint64(0), "test", addresses)
+	require.NoError(t, err)
+	callContract(t, h.reader.state, h.owner, h.reader.contract, createData)
 }
 
 func callContract(t *testing.T, statedb *state.StateDB, from, to common.Address, data []byte) {
@@ -150,8 +180,8 @@ func (r *evmReader) HasReservedRegistry() bool {
 	return r != nil && r.contract != (common.Address{})
 }
 
-func (r *evmReader) IsReservedAddress(_ *state.StateDB, _ uint64, _ common.Hash, account common.Address) (bool, error) {
-	values, err := r.call("isReservedAddress", account)
+func (r *evmReader) IsReservedAddress(statedb *state.StateDB, _ uint64, _ common.Hash, account common.Address) (bool, error) {
+	values, err := r.call(statedb, "isReservedAddress", account)
 	if err != nil {
 		return false, err
 	}
@@ -165,8 +195,8 @@ func (r *evmReader) IsReservedAddress(_ *state.StateDB, _ uint64, _ common.Hash,
 	return reserved, nil
 }
 
-func (r *evmReader) ReservedClientForAddress(_ *state.StateDB, _ uint64, _ common.Hash, account common.Address) (registryreader.ClientLookup, error) {
-	values, err := r.call("getClientForAddress", account)
+func (r *evmReader) ReservedClientForAddress(statedb *state.StateDB, _ uint64, _ common.Hash, account common.Address) (registryreader.ClientLookup, error) {
+	values, err := r.call(statedb, "getClientForAddress", account)
 	if err != nil {
 		return registryreader.ClientLookup{}, err
 	}
@@ -192,8 +222,8 @@ func (r *evmReader) ReservedClientForAddress(_ *state.StateDB, _ uint64, _ commo
 	}, nil
 }
 
-func (r *evmReader) Root(_ *state.StateDB, _ uint64, _ common.Hash) (common.Hash, error) {
-	values, err := r.call("root")
+func (r *evmReader) Root(statedb *state.StateDB, _ uint64, _ common.Hash) (common.Hash, error) {
+	values, err := r.call(statedb, "root")
 	if err != nil {
 		return common.Hash{}, err
 	}
@@ -207,8 +237,8 @@ func (r *evmReader) Root(_ *state.StateDB, _ uint64, _ common.Hash) (common.Hash
 	return common.Hash(root), nil
 }
 
-func (r *evmReader) WhitelistedAddresses(_ *state.StateDB, _ uint64, _ common.Hash) ([]common.Address, error) {
-	values, err := r.call("getWhitelistedAddresses")
+func (r *evmReader) WhitelistedAddresses(statedb *state.StateDB, _ uint64, _ common.Hash) ([]common.Address, error) {
+	values, err := r.call(statedb, "getWhitelistedAddresses")
 	if err != nil {
 		return nil, err
 	}
@@ -222,8 +252,8 @@ func (r *evmReader) WhitelistedAddresses(_ *state.StateDB, _ uint64, _ common.Ha
 	return addrs, nil
 }
 
-func (r *evmReader) TotalReservedGas(_ *state.StateDB, _ uint64, _ common.Hash) (uint64, error) {
-	values, err := r.call("totalReservedGas")
+func (r *evmReader) TotalReservedGas(statedb *state.StateDB, _ uint64, _ common.Hash) (uint64, error) {
+	values, err := r.call(statedb, "totalReservedGas")
 	if err != nil {
 		return 0, err
 	}
@@ -237,20 +267,29 @@ func (r *evmReader) TotalReservedGas(_ *state.StateDB, _ uint64, _ common.Hash) 
 	return total, nil
 }
 
-func (r *evmReader) call(method string, args ...interface{}) ([]interface{}, error) {
+func (r *evmReader) call(statedb *state.StateDB, method string, args ...interface{}) ([]interface{}, error) {
+	if statedb == nil {
+		statedb = r.state
+	}
 	data, err := r.readerAB.Pack(method, args...)
 	if err != nil {
 		return nil, err
 	}
 	// View methods don't mutate state, but the EVM still consumes
 	// finalisation cycles; snapshot/revert keeps the harness DB pristine.
-	snap := r.state.Snapshot()
-	defer r.state.RevertToSnapshot(snap)
+	snap := statedb.Snapshot()
+	defer statedb.RevertToSnapshot(snap)
 
 	caller := common.HexToAddress("0x00000000000000000000000000000000deadbeef")
-	evm := newEVM(r.state, caller)
+	evm := newEVM(statedb, caller)
 	ret, _, err := evm.Call(caller, r.contract, data, 30_000_000, uint256.NewInt(0))
 	if err != nil {
+		return nil, err
+	}
+	if err := statedb.Error(); err != nil {
+		// A read that fell off the backing trie (e.g. a witness-backed state
+		// missing a node) is recorded on the statedb, not returned by the EVM;
+		// surface it so snapshot builds fail loudly like the production reader.
 		return nil, err
 	}
 	return r.readerAB.Unpack(method, ret)

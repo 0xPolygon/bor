@@ -40,9 +40,8 @@ func TestSnapshot_BuildsFromRegistry(t *testing.T) {
 	require.True(t, snap.IsReserved(h.ReservedAddr))
 	require.False(t, snap.IsReserved(h.UnreservedAddr))
 
-	// Snapshot mirrors the registry: feeMode free (0), capacity = the one
-	// client's quota, and a non-zero root it can be cached against.
-	require.Equal(t, uint8(0), snap.FeeMode(h.ReservedAddr))
+	// Snapshot mirrors the registry: capacity = the one client's quota, and a
+	// non-zero root it can be cached against.
 	require.Equal(t, uint64(10_000_000), snap.Capacity())
 	require.NotEqual(t, common.Hash{}, snap.Root())
 
@@ -50,4 +49,25 @@ func TestSnapshot_BuildsFromRegistry(t *testing.T) {
 	var none *registryreader.Snapshot
 	require.False(t, none.IsReserved(h.ReservedAddr))
 	require.Equal(t, uint64(0), none.Capacity())
+}
+
+// TestSnapshot_ExcludesRoutedFeeModeClient pins the fee-mode gate against the
+// real registry bytecode: a feeMode 1 client counts toward the contract's raw
+// totalReservedGas but never enters the effective set (see
+// registryreader.FeeModeFree).
+func TestSnapshot_ExcludesRoutedFeeModeClient(t *testing.T) {
+	h := NewHarness(t)
+
+	routedAdmin := common.HexToAddress("0x00000000000000000000000000000000000000ee")
+	routedSender := common.HexToAddress("0x00000000000000000000000000000000000000ff")
+	h.CreateClient(t, routedAdmin, 5_000_000, 1, []common.Address{routedSender})
+
+	snap, err := registryreader.BuildSnapshot(h.Reader, nil, 1, common.Hash{}, 1)
+	require.NoError(t, err)
+	require.NotNil(t, snap)
+
+	require.True(t, snap.IsReserved(h.ReservedAddr), "free-mode client stays reserved")
+	require.False(t, snap.IsReserved(routedSender), "routed-mode client must not classify reserved")
+	require.Equal(t, uint64(15_000_000), snap.Capacity(), "raw totalReservedGas counts both clients")
+	require.Equal(t, uint64(10_000_000), snap.EffectiveCapacity(), "effective capacity excludes the routed client")
 }

@@ -14,6 +14,14 @@ import (
 	"github.com/ethereum/go-ethereum/core/state"
 )
 
+// FeeModeFree is the only fee mode the protocol acts on: reserved transactions
+// from a free-mode client pay zero in-protocol fee. The registry also defines
+// feeMode 1 ("routed": fee paid, credited to the producer), reserved for a
+// future external-block-producer world and not implemented - clients with any
+// non-free fee mode are excluded from the effective set at snapshot build, so
+// their senders pay standard fees like normal transactions.
+const FeeModeFree uint8 = 0
+
 // ClientLookup mirrors the slim "client for address" view returned by the
 // registry contract. Defined here (not in consensus/bor/contract) so the
 // interface is self-contained in this leaf package.
@@ -22,7 +30,7 @@ type ClientLookup struct {
 	GasQuota uint64
 	Admin    common.Address
 	Active   bool
-	// FeeMode: 0 = free (zero in-protocol fee), 1 = routed (fee credited to the producer).
+	// FeeMode: see FeeModeFree. Only free-mode clients enter the effective set.
 	FeeMode uint8
 	// EffectiveFrom: block from which the client's reserved status applies.
 	// Callers gate on Active && EffectiveFrom <= number.
@@ -48,16 +56,14 @@ type Reader interface {
 
 // Client is the slim per-sender record a Snapshot stores: just what the hot
 // classification and sequencing paths need. Activation state (active,
-// effectiveFrom) is resolved at snapshot build time, so it never appears here.
+// effectiveFrom, feeMode) is resolved at snapshot build time, so it never
+// appears here: every stored client is active, effective, and free-mode.
 type Client struct {
 	// ID is the registry contract's incremental clientId.
 	ID uint64
 	// GasQuota is the client's per-block reserved gas allowance, charged
 	// against declared transaction gas limits.
 	GasQuota uint64
-	// FeeMode: 0 = free (zero in-protocol fee), 1 = routed (fee credited to
-	// the producer; reserved for a future mode, unused today).
-	FeeMode uint8
 }
 
 // Snapshot is an immutable, pure-lookup view of the reserved set effective for
@@ -121,7 +127,8 @@ func BuildSnapshot(r Reader, statedb *state.StateDB, number uint64, hash common.
 }
 
 // resolveClients reads each whitelisted address's client record and keeps only
-// those effective for effectiveAt (active and past their effectiveFrom delay).
+// those effective for effectiveAt: active, past their effectiveFrom delay, and
+// in free fee mode (see FeeModeFree for why non-free modes are excluded).
 func resolveClients(r Reader, statedb *state.StateDB, number uint64, hash common.Hash, addrs []common.Address, effectiveAt uint64) (map[common.Address]Client, error) {
 	clients := make(map[common.Address]Client, len(addrs))
 	for _, a := range addrs {
@@ -129,13 +136,13 @@ func resolveClients(r Reader, statedb *state.StateDB, number uint64, hash common
 		if err != nil {
 			return nil, err
 		}
-		if !c.Active || c.EffectiveFrom > effectiveAt {
+		if !c.Active || c.EffectiveFrom > effectiveAt || c.FeeMode != FeeModeFree {
 			continue
 		}
 		if c.ClientID == nil || !c.ClientID.IsUint64() {
 			return nil, fmt.Errorf("reserved registry returned invalid client id %v for %s", c.ClientID, a)
 		}
-		clients[a] = Client{ID: c.ClientID.Uint64(), GasQuota: c.GasQuota, FeeMode: c.FeeMode}
+		clients[a] = Client{ID: c.ClientID.Uint64(), GasQuota: c.GasQuota}
 	}
 	return clients, nil
 }
@@ -231,14 +238,6 @@ func (s *Snapshot) Clients() []uint64 {
 		return nil
 	}
 	return slices.Clone(s.clientIDs)
-}
-
-// FeeMode returns the fee mode of account's client (0 = free) or 0 if not reserved.
-func (s *Snapshot) FeeMode(account common.Address) uint8 {
-	if s == nil {
-		return 0
-	}
-	return s.byAddress[account].FeeMode
 }
 
 // Capacity returns the registry's raw totalReservedGas: the sum of active

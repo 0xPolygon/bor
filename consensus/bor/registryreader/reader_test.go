@@ -263,9 +263,6 @@ func TestSnapshotNilSafe(t *testing.T) {
 	if snap.Clients() != nil {
 		t.Error("nil snapshot Clients must be nil")
 	}
-	if snap.FeeMode(addr(1)) != 0 {
-		t.Error("nil snapshot FeeMode must be 0")
-	}
 	if snap.Capacity() != 0 {
 		t.Error("nil snapshot Capacity must be 0")
 	}
@@ -277,21 +274,43 @@ func TestSnapshotNilSafe(t *testing.T) {
 	}
 }
 
-func TestSnapshotFeeModeAndCapacity(t *testing.T) {
-	a := addr(1)
-	snap := NewSnapshot(common.HexToHash("0x2"), 12_345, map[common.Address]Client{
-		a: {ID: 1, GasQuota: 12_345, FeeMode: 1},
-	})
-	if snap.FeeMode(a) != 1 {
-		t.Errorf("FeeMode=%d, want 1", snap.FeeMode(a))
+// TestBuildSnapshotExcludesNonFreeFeeMode pins the fee-mode gate: only
+// free-mode (feeMode 0) clients enter the effective set; routed (1) and any
+// future mode classify as normal senders (see FeeModeFree).
+func TestBuildSnapshotExcludesNonFreeFeeMode(t *testing.T) {
+	a1, a2, a3 := addr(1), addr(2), addr(3)
+	r := &mockReader{
+		has:       true,
+		root:      common.HexToHash("0xabc"),
+		whitelist: []common.Address{a1, a2, a3},
+		totalGas:  60_000_000, // raw total counts every active client, any fee mode.
+		clients: map[common.Address]ClientLookup{
+			a1: {ClientID: big.NewInt(1), GasQuota: 30_000_000, Active: true, FeeMode: FeeModeFree},
+			a2: {ClientID: big.NewInt(2), GasQuota: 20_000_000, Active: true, FeeMode: 1},
+			a3: {ClientID: big.NewInt(3), GasQuota: 10_000_000, Active: true, FeeMode: 7},
+		},
 	}
-	if snap.FeeMode(addr(9)) != 0 {
-		t.Errorf("FeeMode(unknown)=%d, want 0", snap.FeeMode(addr(9)))
+
+	snap, err := BuildSnapshot(r, nil, 7, common.Hash{}, 8)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if snap.Capacity() != 12_345 {
-		t.Errorf("Capacity=%d, want 12345", snap.Capacity())
+	if !snap.IsReserved(a1) {
+		t.Error("free-mode client must be reserved")
 	}
-	if snap.EffectiveCapacity() != 12_345 {
-		t.Errorf("EffectiveCapacity=%d, want 12345", snap.EffectiveCapacity())
+	if snap.IsReserved(a2) {
+		t.Error("routed-mode client must not be reserved")
+	}
+	if snap.IsReserved(a3) {
+		t.Error("unknown-fee-mode client must not be reserved")
+	}
+	if got := snap.Capacity(); got != 60_000_000 {
+		t.Errorf("Capacity()=%d, want 60000000 (raw total unchanged)", got)
+	}
+	if got := snap.EffectiveCapacity(); got != 30_000_000 {
+		t.Errorf("EffectiveCapacity()=%d, want 30000000 (non-free clients excluded)", got)
+	}
+	if ids := snap.Clients(); len(ids) != 1 || ids[0] != 1 {
+		t.Errorf("Clients()=%v, want [1]", ids)
 	}
 }
