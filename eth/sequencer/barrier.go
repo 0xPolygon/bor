@@ -31,6 +31,8 @@ func coverageSkip(height uint64, reason string, ctx ...any) {
 //
 // A store that is merely unreachable, slow, or catching up after an outage
 // returns true on the deadline: block production never waits on the store.
+// A build the classification muted published nothing, so it seals without
+// a mirror; its seal flush reconciles the store afterward.
 func (p *Publisher) AwaitSequenced(timeout time.Duration, number uint64, txs []*types.Transaction) bool {
 	deadline := time.Now().Add(timeout)
 
@@ -43,9 +45,20 @@ func (p *Publisher) AwaitSequenced(timeout time.Duration, number uint64, txs []*
 		unacked := p.unackedLocked()
 		sticky := p.hold.kind == holdSticky
 		catchingUp := p.pendingFrom != 0
+		muted := p.mode.mutedAt(number)
 		p.mu.Unlock()
 
 		switch {
+		case muted:
+			// The build-start read already resolved this height (sealed
+			// ground, or a window on a displaced parent) and silenced the
+			// build: nothing was published, so there is no window to
+			// mirror, and a hold — the foreign window's watchdog re-arms
+			// one throughout the build — gates entries this build never
+			// wrote. Refusing here is what wedged production on a reorg.
+			coverageSkip(number, "build muted at classification")
+
+			return true
 		case sticky:
 			// Another producer owns this height (our writes STALEd). Adopt
 			// their window instead of sealing beside it: the rebuild's
@@ -185,6 +198,16 @@ func (p *Publisher) ResyncNeeded() bool {
 func (p *Publisher) mirrorVerdict(height uint64, promised []common.Hash,
 	txs []*types.Transaction, window int,
 ) bool {
+	// A partial adoption holds the block to the window's executable prefix:
+	// the worker proved the entry past it unexecutable on canonical state,
+	// so no block at this height can carry it, and refusing would re-adopt
+	// the same window and re-diverge forever. The seal flush supersedes the
+	// remainder. A build that never adopted keeps the full mirror — a
+	// dropped executable transaction must still refuse.
+	if matched, partial := p.adoptedPrefix(height); partial && matched <= len(promised) {
+		promised = promised[:matched]
+	}
+
 	if windowLeadsHashes(promised, txHashes(txs)) {
 		return true
 	}

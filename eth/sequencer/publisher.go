@@ -78,6 +78,11 @@ type Publisher struct {
 	// build-start classification; see buildMode.
 	mode buildMode
 
+	// diverged records a partial adoption for the current build; see the
+	// divergence type. Reset with mode: at the build-start classification
+	// and at the seal flush.
+	diverged divergence
+
 	// resync is set when the store shows another producer building the
 	// height this node is building: our block must not seal beside their
 	// sequence. Reading it clears it, ending the worker's current cycle —

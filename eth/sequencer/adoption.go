@@ -40,6 +40,46 @@ const (
 	modeOverSealed
 )
 
+// mutedAt reports whether the classification muted the build at this height.
+// A muted build publishes nothing, so the seal barrier has no window to
+// mirror and no hold can apply to it — the seal flush (or the gate, for
+// modeSealedWait) resolves the height instead.
+func (m buildMode) mutedAt(number uint64) bool {
+	return m.height == number &&
+		(m.kind == modeMuted || m.kind == modeSealedWait || m.kind == modeOverSealed)
+}
+
+// divergence records a partial adoption: the worker proved the adopted
+// window's transaction at index matched unexecutable on canonical state,
+// dropped it, and built on. No block at this height can honor the window
+// past that point, so the seal barrier holds the block to window[:matched]
+// and the seal flush supersedes the remainder. The zero value records
+// nothing (heights start at 1).
+type divergence struct {
+	height  uint64
+	matched int
+}
+
+// adoptedPrefix reports the executable-prefix length of a partially adopted
+// window at this height: a recorded divergence (a mid-window drop), or a
+// still-engaged adoption short of a full match (a trailing drop — nothing
+// committed past the prefix, so no mismatch ever fired). ok is false when
+// the build did not partially adopt, and the full-window mirror applies.
+func (p *Publisher) adoptedPrefix(height uint64) (int, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.diverged.height == height {
+		return p.diverged.matched, true
+	}
+
+	if a := p.adopt; a != nil && a.engaged && a.number == height && a.idx < len(a.txs) {
+		return a.idx, true
+	}
+
+	return 0, false
+}
+
 // keepNone is the keepFrom value for a refold that keeps no suffix: every
 // unacked entry is abandoned to supersession convergence.
 const keepNone = ^uint64(0)
@@ -132,6 +172,7 @@ func (p *Publisher) AdoptWindow(number uint64, parent common.Hash) *miner.Adopte
 	p.adopt = nil
 	p.mode = buildMode{}
 	p.resync = false
+	p.diverged = divergence{}
 
 	p.advanceStoreSealedTipLocked(info, "build-start read")
 
@@ -244,11 +285,13 @@ func (p *Publisher) boundaryWindowLocked(info tailInfo, number uint64, parent co
 		return p.adoptWindowLocked(info, a, items)
 	}
 
-	// Unparseable, or on a different parent (reorg territory): build
-	// locally, publish nothing; whoever seals resolves the height.
-	p.holdNewLocked(holdSticky)
-
-	return nil
+	// Unparseable, or on a different parent (reorg territory): the window
+	// extends a branch our build parent has displaced, so nothing built on
+	// it can seal here. A hold has nothing to wait for — every rebuild
+	// re-reads the same dead window — so mute instead: build locally,
+	// publish nothing, and the seal flush supersedes the window with
+	// sealed truth.
+	return p.muteLocked(number)
 }
 
 // primeBackfillLocked registers the store's gap [edge+1, parent] as owed
@@ -311,7 +354,7 @@ func (p *Publisher) muteLocked(number uint64) *miner.AdoptedWindow {
 	p.mode = buildMode{kind: modeMuted, height: number}
 
 	publishMutedCount.Inc(1)
-	log.Debug("Sequencer muting build at sealed height", "number", number, "sealedTip", p.sealedTip)
+	log.Debug("Sequencer muting build", "number", number, "sealedTip", p.sealedTip)
 
 	return nil
 }
@@ -613,6 +656,7 @@ func (p *Publisher) adoptTxLocked(hash common.Hash) (swallow bool) {
 		"number", a.number, "matched", a.idx, "of", len(a.txs))
 
 	p.rewindToPrefixLocked(a.idx)
+	p.diverged = divergence{height: a.number, matched: a.idx}
 	p.adopt = nil
 
 	return false // the divergent tx folds onto the rewound prefix, buffered

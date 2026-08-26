@@ -59,12 +59,13 @@ import (
 	borSpan "github.com/ethereum/go-ethereum/consensus/bor/heimdall/span"
 )
 
-// TestNonValidatorDoesNotBuild verifies that a Bor node whose signer is NOT
-// in the active validator set (post-Rio: not the span's producer) builds no
-// candidate at all: Prepare rejects the signer, so nothing is mined and —
-// with a sequencer attached — nothing is ever published. Nodes without a
-// signer (RPC) are unaffected by this check.
-func TestNonValidatorDoesNotBuild(t *testing.T) {
+// TestPendingStateNotStaleForNonValidator verifies that a Bor node whose signer
+// is NOT in the active validator set still keeps its pending snapshot fresh —
+// while, with a sequencer attached, publishing nothing to the store. Regression
+// test: previously, Prepare() returned UnauthorizedSignerError for
+// non-validators, which caused prepareWork to fail and the snapshot to never
+// update, leading to stale trie errors on "pending" RPC queries.
+func TestPendingStateNotStaleForNonValidator(t *testing.T) {
 	chainConfig := *params.BorUnittestChainConfig
 
 	engine, ctrl := getFakeBorFromConfig(t, &chainConfig)
@@ -82,20 +83,55 @@ func TestNonValidatorDoesNotBuild(t *testing.T) {
 	w := newWorker(DefaultTestConfig(), &chainConfig, engine, backend, new(event.TypeMux), nil, false, false)
 	defer w.close()
 
+	// Attach a sequencer: an unauthorized signer's build must stay local.
+	rec := &recordingSequencer{}
+	w.sequencer = rec
+
 	// Override the signer to one NOT in the validator set.
 	engine.(*bor.Bor).Authorize(nonValidatorAddr, func(account accounts.Account, s string, data []byte) ([]byte, error) {
 		return crypto.Sign(crypto.Keccak256(data), nonValidatorKey)
 	})
 	w.setEtherbase(nonValidatorAddr)
 
-	// Start the worker: commitWork calls Prepare, which rejects the
-	// unauthorized signer, so no pending snapshot is ever produced.
+	// Start the worker. Prepare succeeds for the unauthorized signer
+	// (succession defaults to 0), the snapshot refreshes, and Seal
+	// independently rejects the block.
 	w.start()
 
+	// Give the worker time to process the start event and run commitWork.
 	time.Sleep(1 * time.Second)
 
-	pendingBlock, _, _ := w.pending()
-	require.Nil(t, pendingBlock, "a signer outside the validator set must not build")
+	pendingBlock, _, pendingState := w.pending()
+	require.NotNil(t, pendingBlock, "pending block should not be nil for non-validator node")
+	require.NotNil(t, pendingState, "pending state should not be nil for non-validator node")
+
+	// The pending state must be readable without errors (not a stale trie).
+	balance := pendingState.GetBalance(testBankAddress)
+	require.False(t, balance.IsZero(),
+		"pending state balance for funded account should not be zero (would indicate stale trie)")
+	require.NoError(t, pendingState.Error(),
+		"pending state should have no database errors")
+
+	// Nothing of the unauthorized build may reach the sequence store.
+	rec.mu.Lock()
+	opens, txs, seals := len(rec.opens), rec.txs, len(rec.seals)
+	rec.mu.Unlock()
+
+	require.Zero(t, opens, "unauthorized signer must not publish opens")
+	require.Zero(t, txs, "unauthorized signer must not publish transactions")
+	require.Zero(t, seals, "unauthorized signer must not publish seals")
+
+	// The engine reports the signer unauthorized — the signal the miner uses
+	// to keep this build out of the sequence store — and flips once the
+	// validator's own key is restored.
+	require.False(t, engine.(*bor.Bor).IsAuthorizedSigner(w.chain, pendingBlock.Header()),
+		"non-validator signer must not be authorized")
+
+	engine.(*bor.Bor).Authorize(testBankAddress, func(account accounts.Account, s string, data []byte) ([]byte, error) {
+		return crypto.Sign(crypto.Keccak256(data), testBankKey)
+	})
+	require.True(t, engine.(*bor.Bor).IsAuthorizedSigner(w.chain, pendingBlock.Header()),
+		"the validator signer must be authorized")
 }
 
 // nolint : paralleltest

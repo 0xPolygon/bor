@@ -280,6 +280,12 @@ type environment struct {
 
 	witness *stateless.Witness
 
+	// sequencerMuted keeps this build out of the sequence store: the signer
+	// cannot seal (Seal would refuse the block), so nothing it produces may
+	// be published or adopted. The build itself proceeds for the pending
+	// snapshot.
+	sequencerMuted bool
+
 	// Readers with stats tracking for metrics reporting
 	prefetchReader state.ReaderWithStats
 	processReader  state.ReaderWithStats
@@ -1687,8 +1693,9 @@ func (w *worker) commitTransaction(env *environment, tx *types.Transaction) ([]*
 
 	// Only actual block production is sequenced: the pending-block snapshot
 	// and payload-building paths also commit transactions, but those never
-	// seal, and publishing them would poison the store chain.
-	if w.sequencingActive(env.header.Number) {
+	// seal, and publishing them would poison the store chain. A muted build
+	// (unauthorized signer) commits locally and publishes nothing.
+	if !env.sequencerMuted && w.sequencingActive(env.header.Number) {
 		w.sequencer.PublishTx(tx)
 	}
 
@@ -2002,6 +2009,7 @@ type generateParams struct {
 	planWg                    sync.WaitGroup          // Tracks sendPlan goroutines; must reach zero before builderPlanCh is closed
 	adoption                  *AdoptedWindow          // Dangling store window this build inherits and seeds
 	production                bool                    // Set only by commitWork: payload-building (generateWork) must never touch the sequencer
+	sequencerMuted            bool                    // Signer cannot seal (Seal would refuse): build locally, publish nothing to the store
 }
 
 // makeHeader creates a new block header for sealing. The caller must hold w.mu
@@ -2092,10 +2100,16 @@ func (w *worker) prepareWork(genParams *generateParams, witness bool) (*environm
 	if err != nil {
 		return nil, err
 	}
-	// Only an authorized build reads the store (Prepare rejected everyone
-	// else): a dangling window for this exact header is adopted rather
-	// than superseded — fetched at real build time so the snapshot cannot
-	// go stale against a still-streaming incumbent.
+	// A signer Seal would refuse still builds — the pending snapshot must
+	// refresh on every chain head for RPC reads — but the build stays
+	// local: publishing its sequence would preconfirm content that can
+	// never land, and its open would contend the store's height election
+	// against the real producer.
+	genParams.sequencerMuted = w.sequencerMutedBuild(genParams, header)
+	// Only an authorized build reads the store: a dangling window for this
+	// exact header is adopted rather than superseded — fetched at real
+	// build time so the snapshot cannot go stale against a still-streaming
+	// incumbent.
 	w.fetchAdoption(genParams, header)
 	// Before makeEnv: executed transactions must see the adopted context.
 	w.applyAdoption(genParams, header)
@@ -2112,6 +2126,7 @@ func (w *worker) prepareWork(genParams *generateParams, witness bool) (*environm
 	}
 	env.makeEnvDuration = time.Since(makeEnvStart)
 	env.makeHeaderDuration = makeHeaderDuration
+	env.sequencerMuted = genParams.sequencerMuted
 	if header.ParentBeaconRoot != nil {
 		context := core.NewEVMBlockContext(header, w.chain, nil)
 		vmenv := vm.NewEVM(context, env.state, w.chainConfig, w.vmConfig())
@@ -2838,6 +2853,8 @@ func (w *worker) adoptionReject(a *AdoptedWindow, header *types.Header) string {
 	switch {
 	case a.Timestamp < minTime:
 		return "timestamp below parent period"
+	case a.Timestamp > uint64(time.Now().Unix())+maxAdoptedFutureSeconds:
+		return "timestamp too far in the future"
 	case misc.VerifyGaslimit(parent.GasLimit, a.GasLimit) != nil:
 		return "gas limit out of bounds"
 	// Both producers derive the base fee from the same parent with the same

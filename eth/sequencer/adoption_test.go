@@ -160,12 +160,57 @@ func TestFollowDivergenceResolvesAtSeal(t *testing.T) {
 		t.Fatal("divergence published before sealing")
 	}
 
+	// The barrier must hold the block to the executable prefix, not the
+	// full incumbent window: refusing here re-adopts the same window and
+	// re-diverges forever.
+	blockTxs := []*types.Transaction{w.Txs[0], other}
+	if !p.AwaitSequenced(50*time.Millisecond, 2, blockTxs) {
+		t.Fatal("barrier refused a partial adoption")
+	}
+
 	header := windowHeader(2, parent, ts, gasLimit)
-	p.SealBlock(blockFor(header, []*types.Transaction{w.Txs[0], other}))
+	p.SealBlock(blockFor(header, blockTxs))
 	waitHead(t, h, p, 10*time.Second)
 
 	if _, err := h.store.GetBlock(t.Context(), &pb.GetBlockRequest{BlockNumber: 2}); err != nil {
 		t.Fatalf("sealed block missing after divergence flush: %v", err)
+	}
+}
+
+// A window whose trailing transaction fails to apply never fires the
+// mismatch (nothing commits after the prefix): the adoption stays engaged
+// short of a full match, and the barrier reads the executable prefix from
+// it live. The seal flush supersedes the dropped tail.
+func TestFollowTrailingDropSealsThrough(t *testing.T) {
+	h := startHarness(t)
+	p := newTestPublisher(t, h, nil)
+
+	sealed := publishBlock(t, p, 1, common.Hash{0xef}, 1)
+	waitHead(t, h, p, 5*time.Second)
+
+	parent := sealHash(t, sealed)
+	tx1, tx2 := testTx(t, 0), testTx(t, 1)
+	ts, gasLimit := foreignWindow(t, h, 2, parent, tx1, tx2)
+
+	w := p.AdoptWindow(2, parent)
+	if w == nil || len(w.Txs) != 2 {
+		t.Fatalf("offer: %+v", w)
+	}
+
+	p.OpenBlock(2, ts, parent, gasLimit, fee25())
+	p.PublishTx(w.Txs[0]) // tx2 failed to apply; nothing committed after it
+
+	blockTxs := []*types.Transaction{w.Txs[0]}
+	if !p.AwaitSequenced(50*time.Millisecond, 2, blockTxs) {
+		t.Fatal("barrier refused a trailing-drop adoption")
+	}
+
+	header := windowHeader(2, parent, ts, gasLimit)
+	p.SealBlock(blockFor(header, blockTxs))
+	waitHead(t, h, p, 10*time.Second)
+
+	if _, err := h.store.GetBlock(t.Context(), &pb.GetBlockRequest{BlockNumber: 2}); err != nil {
+		t.Fatalf("sealed block missing after trailing-drop flush: %v", err)
 	}
 }
 
@@ -234,6 +279,50 @@ func TestCheckTailForeignHeightHolds(t *testing.T) {
 
 	if ceiling == noHold || ceiling != next-1 {
 		t.Fatalf("foreign window must gate new entries (ceiling=%d next=%d)", ceiling, next)
+	}
+}
+
+// A live window at our height on a different parent (reorg territory) must
+// not wedge production: the build mutes, the barrier lets it seal even
+// under a sticky hold the foreign window armed, and the seal flush
+// supersedes the dead-parent window with sealed truth.
+func TestForeignParentWindowMutesAndSealsThrough(t *testing.T) {
+	h := startHarness(t)
+	p := newTestPublisher(t, h, nil)
+
+	sealed := publishBlock(t, p, 1, common.Hash{0xef}, 1)
+	waitHead(t, h, p, 5*time.Second)
+
+	// A window at our height whose parent lost the reorg.
+	foreignWindow(t, h, 2, common.Hash{0xaa}, testTx(t, 0))
+
+	parent := sealHash(t, sealed)
+	if w := p.AdoptWindow(2, parent); w != nil {
+		t.Fatalf("a dead-parent window must not be adopted: %+v", w)
+	}
+
+	// The held watchdog can re-arm a sticky hold while the muted build
+	// runs; the barrier must seal through it regardless.
+	p.mu.Lock()
+	p.hold = hold{after: p.ackedSeq, kind: holdSticky}
+	muted := p.mode.mutedAt(2)
+	p.mu.Unlock()
+
+	if !muted {
+		t.Fatal("a dead-parent window did not mute the build")
+	}
+
+	tx := testTx(t, 9)
+	if !p.AwaitSequenced(50*time.Millisecond, 2, []*types.Transaction{tx}) {
+		t.Fatal("barrier refused a muted build")
+	}
+
+	header := windowHeader(2, parent, sealed.Time+2, 30_000_000)
+	p.SealBlock(blockFor(header, []*types.Transaction{tx}))
+	waitHead(t, h, p, 10*time.Second)
+
+	if _, err := h.store.GetBlock(t.Context(), &pb.GetBlockRequest{BlockNumber: 2}); err != nil {
+		t.Fatalf("seal never superseded the dead-parent window: %v", err)
 	}
 }
 

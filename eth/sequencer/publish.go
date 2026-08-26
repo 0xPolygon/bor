@@ -109,6 +109,7 @@ func (p *Publisher) SealBlock(block *types.Block) {
 
 	mode := p.mode
 	p.mode = buildMode{}
+	p.diverged = divergence{}
 
 	n := header.Number.Uint64()
 	prevTip := p.sealedTip

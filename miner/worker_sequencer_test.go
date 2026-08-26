@@ -111,6 +111,53 @@ func (r *recordingSequencer) snapshot() (opens, seals []uint64, txs int, order [
 	return append([]uint64(nil), r.opens...), append([]uint64(nil), r.seals...), r.txs, append([]byte(nil), r.order...)
 }
 
+// A muted build (a signer Seal would refuse) keeps every sequencer hook
+// silent while still building: no open, no adoption read, and the barrier
+// seals through without consulting the store.
+func TestMutedBuildKeepsSequencerSilent(t *testing.T) {
+	t.Parallel()
+
+	w, b, rec := newSequencerTestWorker(t)
+	w.running.Store(true) // the hooks gate on IsRunning; no loops are started
+
+	parent := b.chain.CurrentBlock()
+	number := new(big.Int).Add(parent.Number, big.NewInt(1))
+	header := &types.Header{
+		Number:     number,
+		ParentHash: parent.Hash(),
+		Time:       parent.Time + 1,
+		GasLimit:   parent.GasLimit,
+		BaseFee:    big.NewInt(1),
+	}
+
+	env := &environment{header: header, sequencerMuted: true}
+	w.sequencerOpen(env)
+
+	rec.adoptable = &AdoptedWindow{Number: number.Uint64(), ParentHash: parent.Hash()}
+	genParams := &generateParams{production: true, sequencerMuted: true}
+	w.fetchAdoption(genParams, header)
+
+	// The mock refuses AwaitSequenced (contested): only the muted gate can
+	// let the seal through.
+	rec.contested = true
+
+	if !w.sealBarrier(env) {
+		t.Fatal("muted build must seal without consulting the store")
+	}
+
+	if genParams.adoption != nil {
+		t.Fatal("muted build must not adopt a store window")
+	}
+
+	rec.mu.Lock()
+	opens, adopted := len(rec.opens), rec.adopted
+	rec.mu.Unlock()
+
+	if opens != 0 || adopted != 0 {
+		t.Fatalf("muted build touched the store: opens=%d adopted=%d", opens, adopted)
+	}
+}
+
 func newSequencerTestWorker(t *testing.T) (*worker, *testWorkerBackend, *recordingSequencer) {
 	t.Helper()
 
@@ -446,6 +493,9 @@ func TestApplyAdoptionValidation(t *testing.T) {
 		{name: "wrong number", mutate: func(a *AdoptedWindow) { a.Number += 3 }},
 		{name: "wrong parent", mutate: func(a *AdoptedWindow) { a.ParentHash = common.Hash{0x99} }},
 		{name: "timestamp at parent", mutate: func(a *AdoptedWindow) { a.Timestamp = parent.Time }},
+		{name: "timestamp too far in future", mutate: func(a *AdoptedWindow) {
+			a.Timestamp = uint64(time.Now().Unix()) + maxAdoptedFutureSeconds + 10
+		}},
 		{name: "gas limit out of bound", mutate: func(a *AdoptedWindow) { a.GasLimit = parent.GasLimit * 3 }},
 		{name: "base fee mismatch", mutate: func(a *AdoptedWindow) { a.BaseFee = big.NewInt(1) }},
 		{name: "nil base fee", mutate: func(a *AdoptedWindow) { a.BaseFee = nil }},

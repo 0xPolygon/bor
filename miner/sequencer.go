@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ethereum/go-ethereum/consensus/bor"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
@@ -36,7 +37,7 @@ import (
 // republishes — downstream re-anchoring handles both. Gated on IsRunning:
 // pending-block maintenance also builds work cycles, but those never seal.
 func (w *worker) sequencerOpen(work *environment) {
-	if !w.sequencingActive(work.header.Number) {
+	if work.sequencerMuted || !w.sequencingActive(work.header.Number) {
 		return
 	}
 
@@ -65,7 +66,7 @@ func (w *worker) fillBlock(interrupt *atomic.Int32, work *environment, genParams
 	}
 
 	poll := w.sequencerPoll(work.header.Number)
-	if poll <= 0 {
+	if poll <= 0 || work.sequencerMuted {
 		return w.fillTransactions(interrupt, work, genParams)
 	}
 
@@ -80,7 +81,7 @@ func (w *worker) fillBlock(interrupt *atomic.Int32, work *environment, genParams
 func (w *worker) fetchAdoption(genParams *generateParams, header *types.Header) {
 	genParams.adoption = nil
 
-	if !genParams.production || !w.sequencingActive(header.Number) {
+	if genParams.sequencerMuted || !genParams.production || !w.sequencingActive(header.Number) {
 		return
 	}
 
@@ -104,7 +105,9 @@ func sequencerActive(bor *params.BorConfig, number *big.Int) bool {
 // confirmed there. Two blocks at one height is precisely what leaves
 // consumers holding revoked preconfirmations.
 func (w *worker) sealBarrier(work *environment) bool {
-	if !w.sequencingActive(work.header.Number) ||
+	// A muted build published nothing, so the store holds no window of ours
+	// to confirm — and Seal refuses its block regardless.
+	if work.sequencerMuted || !w.sequencingActive(work.header.Number) ||
 		w.sequencer.AwaitSequenced(sequenceBarrierTimeout,
 			work.header.Number.Uint64(), work.txs) {
 		return true
@@ -131,6 +134,25 @@ func (w *worker) sealBarrier(work *environment) bool {
 // gates without IsRunning — it only ever sees blocks this node sealed.
 func (w *worker) sequencingActive(number *big.Int) bool {
 	return w.sequencer != nil && w.IsRunning() && sequencerActive(w.chainConfig.Bor, number)
+}
+
+// sequencerMutedBuild reports whether this build must stay out of the
+// sequence store: the signer is configured but Seal would refuse its block,
+// so a published sequence would preconfirm content that can never land, and
+// its open would contend the store's height election against the real
+// producer. The build itself still runs so the pending snapshot stays fresh
+// for RPC reads. Only consulted for builds that would otherwise sequence.
+func (w *worker) sequencerMutedBuild(genParams *generateParams, header *types.Header) bool {
+	if !genParams.production || !w.sequencingActive(header.Number) {
+		return false
+	}
+
+	engine, ok := w.engine.(*bor.Bor)
+	if !ok {
+		return false
+	}
+
+	return !engine.IsAuthorizedSigner(w.chain, header)
 }
 
 func (w *worker) applyAdoption(genParams *generateParams, header *types.Header) {
@@ -177,6 +199,13 @@ func adoptionMinTime(bor *params.BorConfig, parentTime, number uint64) uint64 {
 
 	return parentTime + 1
 }
+
+// maxAdoptedFutureSeconds mirrors consensus/bor's
+// maxAllowedFutureBlockTimeSeconds: the verifier refuses any block further
+// in the future, so a window beyond it cannot seal a valid block — and
+// adopting one stalls the slot, since fillUntilAnnounce sleeps toward the
+// window's announce time.
+const maxAdoptedFutureSeconds = 30
 
 // sequencerPoll returns the sequencing poll cadence, or zero when the block
 // being built is not sequenced (no sequencer, not producing, or one-shot
