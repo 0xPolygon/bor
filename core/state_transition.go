@@ -231,6 +231,15 @@ func ApplyMessage(evm *vm.EVM, msg *Message, gp *GasPool) (*ExecutionResult, err
 	return newStateTransition(evm, msg, gp).execute()
 }
 
+// ApplyMessageNoFeeLog applies the message with inline fee burn/tip but skips
+// the fee transfer log and coinbase balance read. This eliminates the O(N)
+// coinbase ReadDelta that serializes parallel execution.
+func ApplyMessageNoFeeLog(evm *vm.EVM, msg *Message, gp *GasPool) (*ExecutionResult, error) {
+	st := newStateTransition(evm, msg, gp)
+	st.noFeeLog = true
+	return st.execute()
+}
+
 func ApplyMessageNoFeeBurnOrTip(evm *vm.EVM, msg Message, gp *GasPool) (*ExecutionResult, error) {
 	st := newStateTransition(evm, &msg, gp)
 	st.noFeeBurnAndTip = true
@@ -272,6 +281,7 @@ type stateTransition struct {
 	// ExecutionResult, which caller can use the values to update the balance of burner and coinbase account.
 	// This is useful during parallel state transition, where the common account read/write should be minimized.
 	noFeeBurnAndTip bool
+	noFeeLog        bool // If true, skip fee transfer log and coinbase balance read (for parallel execution)
 }
 
 // newStateTransition initialises and returns a new state transition object.
@@ -458,8 +468,7 @@ func (st *stateTransition) execute() (*ExecutionResult, error) {
 	input1 := st.state.GetBalance(st.msg.From)
 
 	var input2 *uint256.Int
-
-	if !st.noFeeBurnAndTip {
+	if !st.noFeeBurnAndTip && !st.noFeeLog {
 		input2 = st.state.GetBalance(st.evm.Context.Coinbase)
 	}
 	// First check this message satisfies all consensus rules before
@@ -608,15 +617,21 @@ func (st *stateTransition) execute() (*ExecutionResult, error) {
 	amount := new(big.Int).Mul(new(big.Int).SetUint64(st.gasUsed()), effectiveTip)
 
 	var burnAmount *big.Int
-
 	var burntContractAddress common.Address
 
 	if rules.IsLondon {
-		burntContractAddress = common.HexToAddress(st.evm.ChainConfig().Bor.CalculateBurntContract(st.evm.Context.BlockNumber.Uint64()))
-		burnAmount = new(big.Int).Mul(new(big.Int).SetUint64(st.gasUsed()), st.evm.Context.BaseFee)
-
-		if !st.noFeeBurnAndTip {
-			st.state.AddBalance(burntContractAddress, cmath.BigIntToUint256Int(burnAmount), tracing.BalanceChangeTransfer)
+		// Bor-specific behavior: redirect the burned base fee to a configured
+		// "burnt contract" (a dead address on bor mainnet/amoy). On non-Bor
+		// chain configs (Bor == nil), no credit happens — the base fee is
+		// implicitly burned the upstream go-ethereum way, matching Ethereum
+		// mainnet semantics. Without the nil-guard, Ethereum-spec test
+		// fixtures with Bor == nil panic here.
+		if bor := st.evm.ChainConfig().Bor; bor != nil {
+			burntContractAddress = common.HexToAddress(bor.CalculateBurntContract(st.evm.Context.BlockNumber.Uint64()))
+			burnAmount = new(big.Int).Mul(new(big.Int).SetUint64(st.gasUsed()), st.evm.Context.BaseFee)
+			if !st.noFeeBurnAndTip {
+				st.state.AddBalance(burntContractAddress, cmath.BigIntToUint256Int(burnAmount), tracing.BalanceChangeTransfer)
+			}
 		}
 	}
 
@@ -628,23 +643,27 @@ func (st *stateTransition) execute() (*ExecutionResult, error) {
 			st.evm.AccessEvents.AddAccount(st.evm.Context.Coinbase, true, math.MaxUint64)
 		}
 
-		output1 := new(big.Int).SetBytes(input1.Bytes())
-		output2 := new(big.Int).SetBytes(input2.Bytes())
+		if !st.noFeeLog && st.evm.ChainConfig().Bor != nil {
+			// Bor-specific fee transfer log; non-Bor chains (Ethereum spec)
+			// don't emit it.
+			output1 := new(big.Int).SetBytes(input1.Bytes())
+			output2 := new(big.Int).SetBytes(input2.Bytes())
 
-		// Deprecating transfer log and will be removed in future fork. PLEASE DO NOT USE this transfer log going forward. Parameters won't get updated as expected going forward with EIP1559
-		// add transfer log
-		AddFeeTransferLog(
-			st.state,
+			// Deprecating transfer log and will be removed in future fork. PLEASE DO NOT USE this transfer log going forward. Parameters won't get updated as expected going forward with EIP1559
+			// add transfer log
+			AddFeeTransferLog(
+				st.state,
 
-			msg.From,
-			st.evm.Context.Coinbase,
+				msg.From,
+				st.evm.Context.Coinbase,
 
-			amount,
-			input1.ToBig(),
-			input2.ToBig(),
-			output1.Sub(output1, amount),
-			output2.Add(output2, amount),
-		)
+				amount,
+				input1.ToBig(),
+				input2.ToBig(),
+				output1.Sub(output1, amount),
+				output2.Add(output2, amount),
+			)
+		}
 	}
 
 	return &ExecutionResult{

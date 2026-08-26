@@ -25,12 +25,14 @@ import (
 	"os"
 	"reflect"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/sha3"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 )
@@ -548,6 +550,108 @@ func TestAncientStorage(t *testing.T) {
 
 	if blob := ReadTdRLP(db, fakeHash, number); len(blob) != 0 {
 		t.Fatalf("invalid td returned")
+	}
+}
+
+// TestRecentReadsBypassFreezerLock verifies that lookups for recent (key-value
+// resident) blocks do not block on the freezer write-lock held by an in-progress
+// freeze. Reads of recent canonical hashes, headers and TDs must take the
+// leveldb fast path and return without acquiring the freezer read-lock.
+func TestRecentReadsBypassFreezerLock(t *testing.T) {
+	frdir := t.TempDir()
+
+	db, err := Open(NewMemoryDatabase(), OpenOptions{Ancient: frdir})
+	if err != nil {
+		t.Fatalf("failed to create database with ancient backend: %v", err)
+	}
+	defer db.Close()
+
+	// Write a recent block to the key-value store (not the freezer).
+	header := &types.Header{Number: big.NewInt(100), Extra: []byte("recent")}
+	hash, number := header.Hash(), header.Number.Uint64()
+	WriteHeader(db, header)
+	WriteCanonicalHash(db, hash, number)
+	WriteTd(db, hash, number, big.NewInt(42))
+
+	// Hold the freezer write-lock for the duration of the test, simulating an
+	// in-progress freeze. ModifyAncients holds the exclusive lock while fn runs.
+	held := make(chan struct{})
+	release := make(chan struct{})
+	modifyDone := make(chan error, 1)
+	defer close(release)
+
+	go func() {
+		_, err := db.ModifyAncients(func(ethdb.AncientWriteOp) error {
+			close(held)
+			<-release
+			return nil
+		})
+		modifyDone <- err
+	}()
+
+	// Wait until the write-lock is held, but fail fast rather than hang if
+	// ModifyAncients returns early or never acquires it.
+	select {
+	case <-held:
+	case err := <-modifyDone:
+		t.Fatalf("ModifyAncients returned before holding the write-lock: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the freezer write-lock to be held")
+	}
+
+	// Recent reads must complete while the freezer write-lock is held.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if got := ReadCanonicalHash(db, number); got != hash {
+			t.Errorf("canonical hash: got %x, want %x", got, hash)
+		}
+		if blob := ReadHeaderRLP(db, hash, number); len(blob) == 0 {
+			t.Errorf("header not returned via fast path")
+		}
+		if blob := ReadTdRLP(db, hash, number); len(blob) == 0 {
+			t.Errorf("td not returned via fast path")
+		}
+	}()
+
+	select {
+	case <-done:
+		// Reads completed without the freezer read-lock — fast path works.
+	case <-time.After(5 * time.Second):
+		t.Fatal("recent reads blocked on the freezer write-lock; leveldb fast path not taken")
+	}
+}
+
+// TestReadCanonicalHashAncientFallback ensures ReadCanonicalHash still resolves
+// a frozen entry via the ancient store when it is absent from the key-value
+// store: the leveldb fast path must fall through on a miss rather than return
+// the zero hash.
+func TestReadCanonicalHashAncientFallback(t *testing.T) {
+	frdir := t.TempDir()
+
+	db, err := Open(NewMemoryDatabase(), OpenOptions{Ancient: frdir})
+	if err != nil {
+		t.Fatalf("failed to create database with ancient backend: %v", err)
+	}
+	defer db.Close()
+
+	block := types.NewBlockWithHeader(&types.Header{
+		Number:      big.NewInt(0),
+		Extra:       []byte("test block"),
+		UncleHash:   types.EmptyUncleHash,
+		TxHash:      types.EmptyTxsHash,
+		ReceiptHash: types.EmptyReceiptsHash,
+	})
+	WriteAncientBlocks(db, []*types.Block{block}, types.EncodeBlockReceiptLists([]types.Receipts{nil}), types.EncodeBlockReceiptLists([]types.Receipts{nil}), big.NewInt(100))
+
+	// The canonical hash lives only in the ancient store (never written to
+	// leveldb), so the fast path must miss and fall through to it.
+	if got := ReadCanonicalHash(db, block.NumberU64()); got != block.Hash() {
+		t.Fatalf("frozen canonical hash: got %x, want %x", got, block.Hash())
+	}
+	// A number with no entry anywhere must return the zero hash.
+	if got := ReadCanonicalHash(db, 999); got != (common.Hash{}) {
+		t.Fatalf("missing canonical hash: got %x, want zero", got)
 	}
 }
 

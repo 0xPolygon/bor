@@ -378,6 +378,23 @@ jobs:
       - name: Confirming package built
         run: ls -ltr packaging/deb/ | grep bor
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@d7d6bc7722e3daa8354c50bcb52f4837da5e9b6a  # v3.7.0
+
+      - name: Sign release artifacts with cosign
+        run: |
+          shopt -s nullglob
+          artifacts=(packaging/deb/bor-*.deb)
+          if [ ${#artifacts[@]} -eq 0 ]; then
+            echo "No artifacts found to sign"
+            exit 1
+          fi
+          for artifact in "${artifacts[@]}"; do
+            cosign sign-blob --yes --oidc-provider=github-actions "$artifact" \
+              --output-signature "${artifact}.sig" \
+              --output-certificate "${artifact}.pem"
+          done
+
       - name: Release bor Packages
         uses: softprops/action-gh-release@v2
         with:
@@ -385,7 +402,9 @@ jobs:
           make_latest: false
           files: |
             packaging/deb/bor-amoy-**.deb
-            packaging/deb/bor-pbss-amoy-**.deb 
+            packaging/deb/bor-pbss-amoy-**.deb
             packaging/deb/bor-amoy-**.deb.checksum
             packaging/deb/bor-pbss-amoy-**.deb.checksum
+            packaging/deb/bor-**.deb.sig
+            packaging/deb/bor-**.deb.pem
             builder/files/genesis-amoy.json

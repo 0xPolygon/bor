@@ -145,6 +145,39 @@ func TestCreation(t *testing.T) {
 				// {123, 2000000000, ID{Hash: checksumToBytes(0x23aa1351), Next: 0}},          // Future BPO2 block
 			},
 		},
+		// Amoy test cases
+		{
+			params.AmoyChainConfig,
+			core.DefaultAmoyGenesisBlock().ToBlock(),
+			[]testcase{
+				{0, 0, ID{Hash: checksumToBytes(0xbe06a477), Next: 73100}},
+				{73099, 0, ID{Hash: checksumToBytes(0xbe06a477), Next: 73100}},       // Last block before London, Jaipur, Delhi, Indore, Agra
+				{73100, 0, ID{Hash: checksumToBytes(0x135d2cd5), Next: 5423600}},     // First London, Jaipur, Delhi, Indore, Agra
+				{5423599, 0, ID{Hash: checksumToBytes(0x135d2cd5), Next: 5423600}},   // Last block before Napoli
+				{5423600, 0, ID{Hash: checksumToBytes(0xb4f6ec4f), Next: 22765056}},  // First Napoli block
+				{22765055, 0, ID{Hash: checksumToBytes(0xb4f6ec4f), Next: 22765056}}, // Last block before Bhilai
+				{22765056, 0, ID{Hash: checksumToBytes(0x8b7e4175), Next: 0}},        // First Bhilai block
+			},
+		},
+		{
+			params.BorMainnetChainConfig,
+			core.DefaultBorMainnetGenesisBlock().ToBlock(),
+			[]testcase{
+				{0, 0, ID{Hash: checksumToBytes(0x0e07e722), Next: 3395000}},
+				{3394999, 0, ID{Hash: checksumToBytes(0x0e07e722), Next: 3395000}},   // Last block before Istanbul
+				{3395000, 0, ID{Hash: checksumToBytes(0x27806576), Next: 14750000}},  // First Istanbul block
+				{14749999, 0, ID{Hash: checksumToBytes(0x27806576), Next: 14750000}}, // Last Istanbul block
+				{14750000, 0, ID{Hash: checksumToBytes(0x66e26adb), Next: 23850000}}, // First Berlin block
+				{23849999, 0, ID{Hash: checksumToBytes(0x66e26adb), Next: 23850000}}, // Last Berlin block
+				{23850000, 0, ID{Hash: checksumToBytes(0x4f2f71cc), Next: 50523000}}, // First London block
+				{50522999, 0, ID{Hash: checksumToBytes(0x4f2f71cc), Next: 50523000}}, // Last London block
+				{50523000, 0, ID{Hash: checksumToBytes(0xdc08865c), Next: 54876000}}, // First Agra block
+				{54875999, 0, ID{Hash: checksumToBytes(0xdc08865c), Next: 54876000}}, // Last Agra block
+				{54876000, 0, ID{Hash: checksumToBytes(0xf097bc13), Next: 73440256}}, // First Napoli block
+				{73440255, 0, ID{Hash: checksumToBytes(0xf097bc13), Next: 73440256}}, // Last Napoli block
+				{73440256, 0, ID{Hash: checksumToBytes(0x22d523b2), Next: 0}},        // First Bhilai block
+			},
+		},
 	}
 	for i, tt := range tests {
 		for j, ttt := range tt.cases {

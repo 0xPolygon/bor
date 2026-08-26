@@ -532,7 +532,7 @@ func TestSnapSyncFailsOverEth68(t *testing.T) {
 	if err == nil {
 		t.Fatalf("snap sync succeeded instead of failing on eth/68 peer")
 	}
-	if !errors.Is(err, errPeersUnavailable) {
+	if !errors.Is(err, ErrPeersUnavailable) {
 		t.Fatalf("unexpected error while snap syncing with eth/68 peer: %v", err)
 	}
 }
@@ -1058,26 +1058,33 @@ func TestBlockHeaderAttackerDropping68(t *testing.T) { testBlockHeaderAttackerDr
 func TestBlockHeaderAttackerDropping69(t *testing.T) { testBlockHeaderAttackerDropping(t, eth.ETH69) }
 
 func testBlockHeaderAttackerDropping(t *testing.T, protocol uint) {
-	// Define the disconnection requirement for individual hash fetch errors
 	tests := []struct {
-		result error
-		drop   bool
+		name    string
+		result  error
+		drop    bool
+		backoff bool
 	}{
-		{nil, false},                        // Sync succeeded, all is well
-		{errBusy, false},                    // Sync is already in progress, no problem
-		{errUnknownPeer, false},             // Peer is unknown, was already dropped, don't double drop
-		{errBadPeer, true},                  // Peer was deemed bad for some reason, drop it
-		{errStallingPeer, true},             // Peer was detected to be stalling, drop it
-		{errUnsyncedPeer, true},             // Peer was detected to be unsynced, drop it
-		{errNoPeers, false},                 // No peers to download from, soft race, no issue
-		{errTimeout, true},                  // No hashes received in due time, drop the peer
-		{errEmptyHeaderSet, true},           // No headers were returned as a response, drop as it's a dead end
-		{errPeersUnavailable, true},         // Nobody had the advertised blocks, drop the advertiser
-		{errInvalidAncestor, true},          // Agreed upon ancestor is not acceptable, drop the chain rewriter
-		{errInvalidChain, true},             // Hash chain was detected as invalid, definitely drop
-		{errInvalidBody, false},             // A bad peer was detected, but not the sync origin
-		{errInvalidReceipt, false},          // A bad peer was detected, but not the sync origin
-		{errCancelContentProcessing, false}, // Synchronisation was canceled, origin may be innocent, don't drop
+		{name: "success"},
+		{name: "busy", result: errBusy},
+		{name: "unknown peer", result: errUnknownPeer},
+		{name: "bad peer", result: errBadPeer, drop: true},
+		{name: "stalling peer", result: errStallingPeer, backoff: true},
+		{name: "unsynced peer", result: errUnsyncedPeer, backoff: true},
+		{name: "no peers", result: errNoPeers},
+		{name: "timeout", result: errTimeout, backoff: true},
+		{name: "empty header set", result: errEmptyHeaderSet, backoff: true},
+		{name: "peers unavailable", result: ErrPeersUnavailable},
+		{name: "invalid ancestor", result: errInvalidAncestor, drop: true},
+		{name: "invalid chain", result: errInvalidChain, drop: true},
+		{
+			name:    "pruned sidechain mismatch",
+			result:  fmt.Errorf("%w: %w", errInvalidChain, errors.New(sidechainGhostStateMsg)),
+			backoff: true,
+		},
+		{name: "invalid body", result: errInvalidBody},
+		{name: "invalid receipt", result: errInvalidReceipt},
+		{name: "no ancestor found", result: errNoAncestorFound, backoff: true},
+		{name: "content processing canceled", result: errCancelContentProcessing},
 	}
 	// Run the tests and check disconnection status
 	tester := newTester(t)
@@ -1099,8 +1106,161 @@ func testBlockHeaderAttackerDropping(t *testing.T, protocol uint) {
 		tester.downloader.LegacySync(id, tester.chain.Genesis().Hash(), big.NewInt(1000), nil, FullSync)
 
 		if _, ok := tester.peers[id]; !ok != tt.drop {
-			t.Errorf("test %d: peer drop mismatch for %v: have %v, want %v", i, tt.result, !ok, tt.drop)
+			t.Errorf("test %q: peer drop mismatch for %v: have %v, want %v", tt.name, tt.result, !ok, tt.drop)
 		}
+		if tt.drop {
+			continue
+		}
+		assertPeerBackoffState(t, tt.name, tt.result, tt.backoff, tester.downloader.peers.Peer(id))
+	}
+}
+
+func assertPeerBackoffState(t *testing.T, name string, result error, wantBackoff bool, peer *peerConnection) {
+	t.Helper()
+	if wantBackoff {
+		if peer == nil || !peer.backedOff() {
+			t.Errorf("test %q: peer backoff mismatch for %v: have false, want true", name, result)
+		}
+		return
+	}
+	if peer != nil && peer.backedOff() {
+		t.Errorf("test %q: unexpected peer backoff for %v", name, result)
+	}
+}
+
+func TestDownloaderPeerBackoff(t *testing.T) {
+	tester := newTester(t)
+	defer tester.terminate()
+
+	chain := testChainBase.shorten(1)
+	tester.newPeer("peer", eth.ETH69, chain.blocks[1:])
+
+	peer := tester.downloader.peers.Peer("peer")
+	if peer == nil {
+		t.Fatal("registered peer not found")
+	}
+	peer.backoffFor(30 * time.Second)
+
+	remaining := tester.downloader.PeerBackoff("peer")
+	if remaining <= 0 || remaining > 30*time.Second {
+		t.Fatalf("peer backoff mismatch: have %v, want up to %v", remaining, 30*time.Second)
+	}
+	if remaining := tester.downloader.PeerBackoff("unknown"); remaining != 0 {
+		t.Fatalf("unknown peer backoff mismatch: have %v, want 0", remaining)
+	}
+}
+
+func TestDownloaderPeerBackoffConsultsPersistedPenalties(t *testing.T) {
+	t.Parallel()
+
+	d := &Downloader{peers: newPeerSet()}
+	live := newPeerConnection("dup", eth.ETH69, nil, log.New("id", "dup"))
+	if err := d.peers.Register(live); err != nil {
+		t.Fatalf("failed to register peer: %v", err)
+	}
+	if live.backedOff() {
+		t.Fatal("freshly registered peer should not be backed off")
+	}
+
+	d.peers.lock.Lock()
+	d.peers.jailed["dup"] = time.Now().Add(peerJailBackoff)
+	d.peers.lock.Unlock()
+	if d.PeerBackoff("dup") <= 0 {
+		t.Fatal("PeerBackoff must consult the persisted jail map, not just the live peer")
+	}
+
+	if remaining := d.PeerBackoff("unknown"); remaining != 0 {
+		t.Fatalf("unknown peer backoff mismatch: have %v, want 0", remaining)
+	}
+}
+
+func TestSetPeerBackoffForTestingPersistsAndClearsJail(t *testing.T) {
+	d := &Downloader{peers: newPeerSet()}
+	peer := newPeerConnection("peer", eth.ETH69, nil, log.New("id", "peer"))
+	if err := d.peers.Register(peer); err != nil {
+		t.Fatalf("failed to register peer: %v", err)
+	}
+
+	if !d.SetPeerBackoffForTesting("peer", time.Minute) {
+		t.Fatal("SetPeerBackoffForTesting must succeed for a registered peer")
+	}
+	if remaining := d.peers.persistentBackoff("peer"); remaining <= 0 {
+		t.Fatalf("SetPeerBackoffForTesting must persist the bench in the jail map: have %v, want > 0", remaining)
+	}
+
+	if !d.SetPeerBackoffForTesting("peer", 0) {
+		t.Fatal("SetPeerBackoffForTesting with zero duration must succeed")
+	}
+	if remaining := d.peers.persistentBackoff("peer"); remaining != 0 {
+		t.Fatalf("SetPeerBackoffForTesting with zero duration must clear the persisted jail: have %v, want 0", remaining)
+	}
+	if peer.backedOff() {
+		t.Fatal("SetPeerBackoffForTesting with zero duration must clear the live backoff")
+	}
+}
+
+func TestPeerBackoffExpiry(t *testing.T) {
+	peer := newPeerConnection("peer", eth.ETH69, nil, log.New("id", "peer"))
+
+	if exp := peer.backoffExpiry(); !exp.IsZero() {
+		t.Fatalf("fresh peer expiry mismatch: have %v, want zero", exp)
+	}
+
+	peer.backoffFor(30 * time.Second)
+	if exp := peer.backoffExpiry(); exp.IsZero() {
+		t.Fatal("backed-off peer should report a non-zero expiry")
+	}
+	if !peer.backedOff() {
+		t.Fatal("peer should be backed off")
+	}
+
+	peer.backoffFor(-time.Second)
+	peer.lock.Lock()
+	peer.backoff = time.Now().Add(-time.Second)
+	peer.lock.Unlock()
+	if remaining := peer.backoffRemaining(); remaining != 0 {
+		t.Fatalf("expired backoff mismatch: have %v, want 0", remaining)
+	}
+	if exp := peer.backoffExpiry(); !exp.IsZero() {
+		t.Fatalf("expired backoff should reset to zero, have %v", exp)
+	}
+}
+
+func TestLegacySyncReturnsPeerBackedOff(t *testing.T) {
+	tester := newTester(t)
+	defer tester.terminate()
+
+	chain := testChainBase.shorten(1)
+	tester.newPeer("peer", eth.ETH69, chain.blocks[1:])
+
+	peer := tester.downloader.peers.Peer("peer")
+	if peer == nil {
+		t.Fatal("registered peer not found")
+	}
+	peer.backoffFor(30 * time.Second)
+
+	err := tester.downloader.LegacySync("peer", tester.chain.Genesis().Hash(), big.NewInt(1000), nil, FullSync)
+	if err != ErrPeerBackedOff {
+		t.Fatalf("sync error mismatch: have %v, want %v", err, ErrPeerBackedOff)
+	}
+	if _, ok := tester.peers["peer"]; !ok {
+		t.Fatal("backed-off peer was dropped")
+	}
+}
+
+func TestImportBlockResultsWrapsInvalidChain(t *testing.T) {
+	tester := newTester(t)
+	defer tester.terminate()
+
+	header := &types.Header{
+		ParentHash: common.Hash{0x01},
+		Number:     big.NewInt(1),
+		Difficulty: big.NewInt(1),
+		GasLimit:   params.GenesisGasLimit,
+	}
+	err := tester.downloader.importBlockResults([]*fetchResult{{Header: header}})
+	if !errors.Is(err, errInvalidChain) {
+		t.Fatalf("import error mismatch: have %v, want %v", err, errInvalidChain)
 	}
 }
 

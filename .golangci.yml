@@ -1,7 +1,7 @@
 # This file configures github.com/golangci/golangci-lint.
 version: '2'
 run:
-  go: '1.26.3'
+  go: '1.26.5'
   tests: true
 linters:
   default: none
@@ -70,8 +70,6 @@ linters:
         text: "SA1019: cfg.TxLookupLimit is deprecated: use 'TransactionHistory' instead."
       - path: cmd/utils/flags.go
         text: "SA1019: ethconfig.Defaults.TxLookupLimit is deprecated: use 'TransactionHistory' instead."
-      - path: internal/build/pgp.go
-        text: 'SA1019: "golang.org/x/crypto/openpgp" is deprecated: this package is unmaintained except for security fixes.'
       - path: core/vm/contracts.go
         text: 'SA1019: "golang.org/x/crypto/ripemd160" is deprecated: RIPEMD-160 is a legacy hash and should not be used for new applications.'
       - path: (.+)\.go$

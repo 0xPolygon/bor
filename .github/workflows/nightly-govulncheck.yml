@@ -1,0 +1,38 @@
+name: Nightly Govulncheck
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-govulncheck-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  govulncheck:
+    name: Run govulncheck on develop
+    runs-on: ubuntu24.04-16core-64GB-600SSD-bor
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: develop
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-govulncheck-${{ hashFiles('**/go.sum') }}
+          restore-keys: ${{ runner.os }}-govulncheck-
+
+      - name: Run govulncheck
+        run: make vulncheck

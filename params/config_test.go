@@ -266,6 +266,33 @@ func TestIsAustin(t *testing.T) {
 	}
 }
 
+func TestIsHampi(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		fork   *big.Int
+		number int64
+		want   bool
+	}{
+		{"unset fork never active", nil, 0, false},
+		{"unset fork never active at height", nil, 1_000_000, false},
+		{"genesis activation at 0", big.NewInt(0), 0, true},
+		{"genesis activation above 0", big.NewInt(0), 1, true},
+		{"scheduled fork before activation", big.NewInt(100), 99, false},
+		{"scheduled fork at activation", big.NewInt(100), 100, true},
+		{"scheduled fork after activation", big.NewInt(100), 101, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c := &BorConfig{HampiBlock: tt.fork}
+			assert.Equal(t, c.IsHampi(big.NewInt(tt.number)), tt.want)
+		})
+	}
+}
+
 func TestOverrideStateSyncRecordsInRange(t *testing.T) {
 	t.Parallel()
 

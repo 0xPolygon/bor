@@ -213,6 +213,11 @@ func (api *EthereumAPI) BlobBaseFee(ctx context.Context) *hexutil.Big {
 	return (*hexutil.Big)(api.b.BlobBaseFee(ctx))
 }
 
+// BaseFee returns the base fee of the next block.
+func (api *EthereumAPI) BaseFee(ctx context.Context) *hexutil.Big {
+	return (*hexutil.Big)(api.b.BaseFee(ctx))
+}
+
 // Syncing returns false in case the node is currently not syncing with the network. It can be up-to-date or has not
 // yet received the latest block headers from its peers. In case it is synchronizing:
 // - startingBlock: block number this node started to synchronize from
@@ -1008,6 +1013,9 @@ func DoCall(ctx context.Context, b Backend, args TransactionArgs, blockNrOrHash 
 				log.Debug("Header not yet available during parallel stateless import, operation will be retried once headers are imported", "hash", blockNrOrHash.BlockHash, "err", err)
 			} else {
 				log.Warn("Error fetching header on CallWithState", "err", err)
+			}
+			if err == nil {
+				err = fmt.Errorf("header not found for hash %v", *blockNrOrHash.BlockHash)
 			}
 			return nil, err
 		}

@@ -220,7 +220,7 @@ func (db *CachingDB) Reader(stateRoot common.Hash) (Reader, error) {
 	// This reader offers improved performance but is optional and only
 	// partially useful if the snapshot data in path database is not
 	// fully generated.
-	if db.TrieDB().Scheme() == rawdb.PathScheme {
+	if db.TrieDB().Scheme() == rawdb.PathScheme && useSnap {
 		reader, err := db.triedb.StateReader(stateRoot)
 		if err == nil {
 			readers = append(readers, newFlatReader(reader))
@@ -241,6 +241,21 @@ func (db *CachingDB) Reader(stateRoot common.Hash) (Reader, error) {
 	return newReader(newCachingCodeReader(db.disk, db.codeCache, db.codeSizeCache), combined), nil
 }
 
+// ReaderTrieOnly creates a state reader that only uses the trie, skipping
+// snapshot layers. Useful for V2 parallel execution where the snapshot reader
+// may have thread-safety issues under concurrent access from multiple workers.
+func (db *CachingDB) ReaderTrieOnly(stateRoot common.Hash) (Reader, error) {
+	tr, err := newTrieReader(stateRoot, db.triedb, db.pointCache)
+	if err != nil {
+		return nil, err
+	}
+	combined, err := newMultiStateReader(tr)
+	if err != nil {
+		return nil, err
+	}
+	return newReader(newCachingCodeReader(db.disk, db.codeCache, db.codeSizeCache), combined), nil
+}
+
 // ReadersWithCacheStats creates a pair of state readers sharing the same internal cache and
 // same backing Reader, but exposing separate statistics.
 func (db *CachingDB) ReadersWithCacheStats(stateRoot common.Hash) (ReaderWithStats, ReaderWithStats, error) {
@@ -250,6 +265,21 @@ func (db *CachingDB) ReadersWithCacheStats(stateRoot common.Hash) (ReaderWithSta
 	}
 	shared := newReaderWithCache(reader)
 	return newReaderWithCacheStats(shared, rolePrefetch), newReaderWithCacheStats(shared, roleProcess), nil
+}
+
+// ReadersWithCacheStatsTriple creates three state readers sharing the same
+// internal cache: prefetch, process (serial), and parallel (V2).
+// The shared cache means prefetcher warms data that V2 reads for free.
+func (db *CachingDB) ReadersWithCacheStatsTriple(stateRoot common.Hash) (ReaderWithStats, ReaderWithStats, ReaderWithStats, error) {
+	reader, err := db.Reader(stateRoot)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	shared := newReaderWithCache(reader)
+	return newReaderWithCacheStats(shared, rolePrefetch),
+		newReaderWithCacheStats(shared, roleProcess),
+		newReaderWithCacheStats(shared, roleProcess), // V2 shares same cache
+		nil
 }
 
 // OpenTrie opens the main account trie at a specific root hash.
