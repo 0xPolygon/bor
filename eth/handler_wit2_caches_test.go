@@ -43,7 +43,9 @@ func registerEthWitPeer(t *testing.T, h *testHandler, version uint) (*wit.Peer, 
 	rand.Read(id[:])
 
 	app, net := p2p.MsgPipe()
+	ethApp, ethNet := p2p.MsgPipe()
 	done := make(chan struct{})
+	ethDone := make(chan struct{})
 	go func() {
 		for {
 			msg, err := app.ReadMsg()
@@ -54,17 +56,33 @@ func registerEthWitPeer(t *testing.T, h *testHandler, version uint) (*wit.Peer, 
 			msg.Discard()
 		}
 	}()
+	go func() {
+		for {
+			msg, err := ethApp.ReadMsg()
+			if err != nil {
+				close(ethDone)
+				return
+			}
+			msg.Discard()
+		}
+	}()
 
 	witPeer := wit.NewPeer(version, p2p.NewPeer(id, "test-peer", nil), net, log.New())
-	ethPeer := ethproto.NewPeer(ethproto.ETH68, p2p.NewPeer(id, "test-eth-peer", nil), nil, nil)
+	// A real MsgReadWriter is required: BroadcastBlock announces via the
+	// plain eth path (AsyncSendNewBlockHash) once a block's witness is
+	// cached, not only once HasBlock is true, so ethPeer's broadcast
+	// goroutine can fire during these tests.
+	ethPeer := ethproto.NewPeer(ethproto.ETH68, p2p.NewPeer(id, "test-eth-peer", nil), ethNet, nil)
 	require.NoError(t, h.handler.peers.registerPeer(ethPeer, nil, witPeer))
 
 	cleanup := func() {
 		h.handler.peers.unregisterPeer(ethPeer.ID())
 		app.Close()
+		ethApp.Close()
 		witPeer.Close()
 		ethPeer.Close()
 		<-done
+		<-ethDone
 	}
 	return witPeer, cleanup
 }

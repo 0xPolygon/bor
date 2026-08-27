@@ -484,6 +484,7 @@ func (h *witHandler) resolveWitnessBytes(pages []wit.WitnessPageRequest) (map[co
 	}
 	bytesByHash := make(map[common.Hash][]byte, len(seen))
 	sizeByHash := make(map[common.Hash]uint64, len(seen))
+	prefetchedBytes := uint64(0)
 	for blockHash := range seen {
 		if cached, _, ok := (*handler)(h).pendingWitnessBodies.get(blockHash); ok {
 			bytesByHash[blockHash] = cached
@@ -492,6 +493,25 @@ func (h *witHandler) resolveWitnessBytes(pages []wit.WitnessPageRequest) (map[co
 		}
 		if size := rawdb.ReadWitnessSize(h.Chain().DB(), blockHash); size != nil {
 			sizeByHash[blockHash] = *size
+			continue
+		}
+		// No persisted size and no BP-signed body on file. The header check
+		// guards against a peer DoSing us into a 2s pipelined-SRC wait per
+		// nonexistent hash; a known header may still be mid-computation by
+		// this node's own SRC goroutine, so wait for it rather than falling
+		// through to the WIT2 waiter path, which only tracks network-received
+		// (signed/deferred) hashes and would never fire for a locally-produced
+		// block. Prefetch bytes are capped at MaximumResponseSize — nothing
+		// beyond that can be served in this response anyway.
+		if h.Chain().GetHeaderByHash(blockHash) == nil {
+			continue
+		}
+		if w := h.Chain().GetWitnessUncachedWait(blockHash); len(w) > 0 {
+			sizeByHash[blockHash] = uint64(len(w))
+			if prefetchedBytes+uint64(len(w)) <= MaximumResponseSize {
+				bytesByHash[blockHash] = w
+				prefetchedBytes += uint64(len(w))
+			}
 		}
 	}
 	return bytesByHash, sizeByHash

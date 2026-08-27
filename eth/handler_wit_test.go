@@ -433,6 +433,48 @@ func TestLoadWitnessPageData_TruncatedWitness(t *testing.T) {
 	require.Nil(t, data)
 }
 
+// TestHandleGetWitness_UsesPipelinedCacheDuringSizeResolution covers
+// resolveWitnessBytes' fallback for a witness that is not yet persisted but
+// whose header is local: it must wait on the pipelined SRC goroutine
+// (GetWitnessUncachedWait) rather than falling through to the WIT2 waiter
+// path, which only tracks network-received (signed/deferred) hashes and would
+// never fire for a locally-produced block.
+func TestHandleGetWitness_UsesPipelinedCacheDuringSizeResolution(t *testing.T) {
+	handler := newTestHandler()
+	defer handler.close()
+
+	witHandler := (*witHandler)(handler.handler)
+	peer := newTestWitPeer()
+	defer peer.Close()
+
+	header := &types.Header{Number: big.NewInt(3_000_000)}
+	hash := header.Hash()
+	rawdb.WriteHeader(handler.chain.DB(), header)
+	witness := []byte{1, 2, 3, 4}
+	handler.chain.CacheWitness(hash, witness)
+
+	prefetched, sizes := witHandler.resolveWitnessBytes([]wit.WitnessPageRequest{{Hash: hash, Page: 0}})
+	require.Equal(t, uint64(len(witness)), sizes[hash])
+	require.Equal(t, witness, prefetched[hash])
+
+	missingHeader := &types.Header{Number: big.NewInt(3_000_001)}
+	missingHash := missingHeader.Hash()
+	rawdb.WriteHeader(handler.chain.DB(), missingHeader)
+	prefetched, sizes = witHandler.resolveWitnessBytes([]wit.WitnessPageRequest{{Hash: missingHash, Page: 0}})
+	require.Zero(t, sizes[missingHash])
+	require.NotContains(t, prefetched, missingHash)
+
+	response, err := witHandler.handleGetWitness(peer, &wit.GetWitnessPacket{
+		RequestId: 88,
+		GetWitnessRequest: &wit.GetWitnessRequest{
+			WitnessPages: []wit.WitnessPageRequest{{Hash: hash, Page: 0}},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, response, 1)
+	require.Equal(t, witness, response[0].Data)
+}
+
 // TestHandleGetWitnessMetadata_PageCalculation tests page calculation edge cases
 func TestHandleGetWitnessMetadata_PageCalculation(t *testing.T) {
 	handler := newTestHandler()

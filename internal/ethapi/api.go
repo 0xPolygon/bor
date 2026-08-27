@@ -480,6 +480,12 @@ func (api *BlockChainAPI) GetProof(ctx context.Context, address common.Address, 
 	if statedb == nil || err != nil {
 		return nil, err
 	}
+	// Proofs are built from trie nodes, which a pipelined import commits
+	// asynchronously — wait out the in-flight SRC when the queried root is
+	// the pending head so the trie opens below don't fail transiently.
+	if err := api.b.WaitForStateCommit(ctx, header.Root); err != nil {
+		return nil, err
+	}
 	codeHash := statedb.GetCodeHash(address)
 	storageRoot := statedb.GetStorageRoot(address)
 
@@ -1013,6 +1019,9 @@ func DoCall(ctx context.Context, b Backend, args TransactionArgs, blockNrOrHash 
 				log.Debug("Header not yet available during parallel stateless import, operation will be retried once headers are imported", "hash", blockNrOrHash.BlockHash, "err", err)
 			} else {
 				log.Warn("Error fetching header on CallWithState", "err", err)
+			}
+			if err == nil {
+				err = fmt.Errorf("header not found for hash %v", *blockNrOrHash.BlockHash)
 			}
 			return nil, err
 		}
