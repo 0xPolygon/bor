@@ -67,7 +67,7 @@ func borVerify(ctx context.Context, eth *Ethereum, handler *ethHandler, start ui
 	head := currentBlock.Number.Uint64()
 
 	if head < end {
-		log.Debug(fmt.Sprintf("Current head block behind incoming %s block", str), "head", head, "end block", end)
+		log.Info(fmt.Sprintf("Current head block behind incoming %s block", str), "head", head, "end block", end, "hint", "Check for updates if sync is stalled.")
 		return hash, errChainOutOfSync
 	}
 

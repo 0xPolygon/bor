@@ -224,7 +224,7 @@ var (
 	}
 )
 
-var app = flags.NewApp("the go-ethereum command line interface")
+var app = flags.NewApp("the go-ethereum command line interface. Check for updates at https://github.com/0xPolygon/bor/releases")
 
 func init() {
 	// Initialize the CLI app and start Geth

@@ -49,9 +49,9 @@ func (h *ethHandler) handleWhitelistCheckpoint(ctx context.Context, checkpoint *
 	hash, err := verifier.verify(ctx, eth, h, checkpoint.StartBlock, checkpoint.EndBlock, checkpoint.RootHash.String()[2:], true)
 	if err != nil {
 		if errors.Is(err, errChainOutOfSync) {
-			log.Info("Whitelisting checkpoint deferred", "err", err)
+			log.Info("Whitelisting checkpoint deferred. Check for updates if sync is stalled.", "err", err)
 		} else {
-			log.Warn("Failed to whitelist checkpoint", "err", err)
+			log.Warn("Failed to whitelist checkpoint. Check for updates if sync is stalled.", "err", err)
 		}
 		return common.Hash{}, err
 	}
@@ -91,9 +91,9 @@ func (h *ethHandler) handleMilestone(ctx context.Context, eth *Ethereum, milesto
 	_, err := verifier.verify(ctx, eth, h, milestone.StartBlock, milestone.EndBlock, milestone.Hash.String()[2:], false)
 	if err != nil {
 		if errors.Is(err, errChainOutOfSync) {
-			log.Info("Whitelisting milestone deferred", "err", err)
+			log.Info("Whitelisting milestone deferred. Check for updates if sync is stalled.", "err", err)
 		} else {
-			log.Warn("Failed to whitelist milestone", "err", err)
+			log.Warn("Failed to whitelist milestone. Check for updates if sync is stalled.", "err", err)
 		}
 		h.downloader.UnlockSprint(milestone.EndBlock)
 	}
