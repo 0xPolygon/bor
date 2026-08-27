@@ -742,10 +742,9 @@ func (f *TxFetcher) loop() {
 					log.Warn("Unexpected transaction delivery", "peer", delivery.origin)
 
 					// No tracked request for this peer to correlate against.
-					// Possibly because evictStaleRequest can clear a dangling
-					// placeholder without a replacement request ever being
-					// created (e.g. every announced hash already claimed by
-					// another peer's fetch), or because the delivery is unsolicited.
+					// Possibly because no request was ever scheduled for this peer (e.g. all
+					// announced hashes were already being fetched from others), because the peer
+					// was dropped before this delivery arrived, or because the delivery is unsolicited.
 					// Either way, a violation in it is still real and the shared check
 					// below is unreachable from this break, so enforce it here too.
 					f.dropPeerOnViolation(delivery)
