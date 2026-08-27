@@ -90,9 +90,12 @@ var (
 	// txFetchDanglingRetry is the minimum time since a request was originally
 	// sent (not since it went dangling at txFetchTimeout) before a peer whose
 	// request timed out without a reply becomes eligible for a fresh
-	// retrieval again. Request-ID correlation in the txDelivery direct-delivery
-	// path handles late replies from abandoned requests.
-	txFetchDanglingRetry = 4 * txFetchTimeout
+	// retrieval again. Kept above p2p's frameReadTimeout (30s): a peer whose
+	// underlying connection is actually dead gets dropped by then regardless,
+	// so a retry only ever races a reply from a peer that's merely slow, not
+	// disconnected. Request-ID correlation in the txDelivery direct-delivery
+	// path still handles a late reply from the superseded request either way.
+	txFetchDanglingRetry = 7 * txFetchTimeout
 )
 
 // txAnnounce is the notification of the availability of a batch
