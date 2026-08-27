@@ -59,7 +59,16 @@ const (
 	inmemorySnapshots  = 128             // Number of recent vote snapshots to keep in memory
 	inmemorySignatures = 4096            // Number of recent block signatures to keep in memory
 	veblopBlockTimeout = time.Second * 8 // Timeout for new span check. DO NOT CHANGE THIS VALUE.
-	minBlockBuildTime  = 1 * time.Second // Minimum remaining time before extending the block deadline to avoid empty blocks
+	// minBlockBuildTime is the minimum remaining time before Prepare() extends
+	// the block deadline to avoid producing empty blocks. If time.Until(target)
+	// is less than this value, the target timestamp is pushed forward by one
+	// blockTime period.
+	//
+	// Abort-recovery rebuilds from pipelined SRC are exempt from this push. By the
+	// time speculative execution is discarded, most of the slot may already be
+	// gone; moving the header to the next slot would create avoidable 3-second
+	// blocks on 2-second devnets.
+	minBlockBuildTime = 1 * time.Second
 )
 
 // Bor protocol constants.
@@ -1035,6 +1044,37 @@ func (c *Bor) giuglianoExtraFields(header *types.Header, parent *types.Header) (
 	return &gt, &bfcd
 }
 
+func (c *Bor) parentActualTime(parent *types.Header, parentHash common.Hash) time.Time {
+	parentBlockTime := time.Unix(int64(parent.Time), 0)
+	parentActualBlockTime := parentBlockTime
+	if c.parentActualTimeCache != nil {
+		if v, ok := c.parentActualTimeCache.Get(parentHash); ok {
+			if at, ok := v.(time.Time); ok && at.After(parentBlockTime) {
+				parentActualBlockTime = at
+			}
+		}
+	}
+	return parentActualBlockTime
+}
+
+// EarliestAnnounceTime returns the earliest local time at which a prepared
+// block can be announced without violating Bor's post-Giugliano future-block
+// checks. Primary producers may announce before the block's own timestamp, but
+// not before the parent slot boundary.
+func (c *Bor) EarliestAnnounceTime(chain consensus.ChainHeaderReader, header *types.Header) time.Time {
+	if header == nil || header.Number == nil || header.Number.Sign() == 0 {
+		return time.Now()
+	}
+	if !c.config.IsGiugliano(header.Number) {
+		return header.GetActualTime()
+	}
+	parent := chain.GetHeader(header.ParentHash, header.Number.Uint64()-1)
+	if parent == nil {
+		return header.GetActualTime()
+	}
+	return c.parentActualTime(parent, header.ParentHash)
+}
+
 // Prepare implements consensus.Engine, preparing all the consensus fields of the
 // header for running the transactions on top.
 func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, waitOnPrepare bool) error {
@@ -1138,17 +1178,7 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 	if c.blockTime > 0 && c.config.IsRio(header.Number) {
 		// Only enable custom block time for Rio and later
 
-		parentBlockTime := time.Unix(int64(parent.Time), 0)
-		// Default to parent block timestamp
-		parentActualBlockTime := parentBlockTime
-		// If we have the parent's ActualTime locally (by parent hash), prefer it
-		if c.parentActualTimeCache != nil {
-			if v, ok := c.parentActualTimeCache.Get(header.ParentHash); ok {
-				if at, ok := v.(time.Time); ok && at.After(parentBlockTime) {
-					parentActualBlockTime = at
-				}
-			}
-		}
+		parentActualBlockTime := c.parentActualTime(parent, header.ParentHash)
 		actualNewBlockTime := parentActualBlockTime.Add(c.blockTime)
 		header.Time = uint64(actualNewBlockTime.Unix())
 		header.ActualTime = actualNewBlockTime
@@ -1166,7 +1196,11 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 	// Ensure minimum build time so the block has enough time to include transactions.
 	// The interrupt timer reserves 500ms for state root computation, so without
 	// sufficient remaining time the block would end up empty.
-	if time.Until(header.GetActualTime()) < minBlockBuildTime {
+	//
+	// Abort-recovery rebuilds are different: speculative execution has already
+	// spent most of the slot, so pushing them again would create an avoidable
+	// extra block-time gap. Those late rebuilds should keep their original slot.
+	if !header.AbortRecovery && time.Until(header.GetActualTime()) < minBlockBuildTime {
 		header.Time = uint64(now.Add(blockTime).Unix())
 		belowMinBuildTimeCounter.Inc(1)
 		if c.blockTime > 0 && c.config.IsRio(header.Number) {
@@ -1174,11 +1208,17 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 		}
 	}
 
-	// Wait before start the block production if needed (previously this wait was on Seal)
+	// Giugliano introduced early block announcements: primary producers wait
+	// until the parent slot boundary before building, then Seal can return
+	// immediately and announce the block before its own timestamp. Speculative
+	// and prefetch callers pass waitOnPrepare=false because they intentionally
+	// build ahead and perform their own parent-boundary wait before sealing.
 	if c.config.IsGiugliano(header.Number) && waitOnPrepare {
-		// if signer is not empty (RPC nodes have empty signer)
 		if currentSigner.signer != (common.Address{}) {
-			if succession == 0 {
+			// Avoid allocating a timer when the parent boundary has already
+			// passed. This is equivalent to develop's immediate time.After path
+			// for non-positive delays, just cheaper and more explicit.
+			if succession == 0 && delay > 0 {
 				<-time.After(delay)
 			}
 		}
@@ -1416,6 +1456,69 @@ func (c *Bor) finalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 	return block, receipts, commitTime, nil
 }
 
+// FinalizeForPipeline runs the same post-transaction state modifications as
+// FinalizeAndAssemble (state sync, span commits, contract code changes) but
+// does NOT compute IntermediateRoot or assemble the block. It returns the
+// stateSyncData so the caller can pass it to AssembleBlock later after the
+// background SRC goroutine has computed the state root.
+//
+// This is the pipelined SRC equivalent of the first half of FinalizeAndAssemble.
+func (c *Bor) FinalizeForPipeline(chain consensus.ChainHeaderReader, header *types.Header, statedb *state.StateDB, body *types.Body, receipts []*types.Receipt) ([]*types.StateSyncData, error) {
+	headerNumber := header.Number.Uint64()
+	if body.Withdrawals != nil || header.WithdrawalsHash != nil {
+		return nil, consensus.ErrUnexpectedWithdrawals
+	}
+	if header.RequestsHash != nil {
+		return nil, consensus.ErrUnexpectedRequests
+	}
+
+	var (
+		stateSyncData []*types.StateSyncData
+		err           error
+	)
+
+	if IsSprintStart(headerNumber, c.config.CalculateSprint(headerNumber)) {
+		stateSyncData, err = c.commitSprintWork(chain, header, statedb)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if err = c.changeContractCodeIfNeeded(headerNumber, statedb); err != nil {
+		log.Error("Error changing contract code", "error", err)
+		return nil, err
+	}
+
+	return stateSyncData, nil
+}
+
+// AssembleBlock constructs the final block from a pre-computed state root,
+// without calling IntermediateRoot. This is used by pipelined SRC where the
+// state root is computed by a background goroutine.
+//
+// stateSyncData is the state sync data collected during Finalize(). If non-nil
+// and the Madhugiri fork is active, a StateSyncTx is appended to the body.
+func (c *Bor) AssembleBlock(chain consensus.ChainHeaderReader, header *types.Header, statedb *state.StateDB, body *types.Body, receipts []*types.Receipt, stateRoot common.Hash, stateSyncData []*types.StateSyncData) (*types.Block, []*types.Receipt, error) {
+	headerNumber := header.Number.Uint64()
+
+	header.Root = stateRoot
+	header.UncleHash = types.CalcUncleHash(nil)
+
+	if len(stateSyncData) > 0 && c.config != nil && c.config.IsMadhugiri(big.NewInt(int64(headerNumber))) {
+		stateSyncTx := types.NewTx(&types.StateSyncTx{
+			StateSyncData: stateSyncData,
+		})
+		body.Transactions = append(body.Transactions, stateSyncTx)
+		receipts = insertStateSyncTransactionAndCalculateReceipt(stateSyncTx, header, body, statedb, receipts)
+	} else {
+		bc := chain.(core.BorStateSyncer)
+		bc.SetStateSync(stateSyncData)
+	}
+
+	block := types.NewBlock(header, body, receipts, trie.NewStackTrie(nil))
+	return block, receipts, nil
+}
+
 // commitSprintWork commits the span (pre-Rio) and state-sync data at a
 // sprint-start block during block assembly.
 func (c *Bor) commitSprintWork(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB) ([]*types.StateSyncData, error) {
@@ -1499,11 +1602,15 @@ func (c *Bor) SealWithStopHook(chain consensus.ChainHeaderReader, block *types.B
 
 	var delay time.Duration
 
-	// Sweet, the protocol permits us to sign the block, wait for our time
+	// Sweet, the protocol permits us to sign the block, wait for our time.
+	// On Giugliano+ primary producers, the wait is performed before building
+	// in Prepare (or explicitly by the pipeline at the parent boundary), so Seal
+	// returns immediately and preserves early block announcement. Backups still
+	// wait until the block timestamp.
 	if c.config.IsGiugliano(header.Number) && successionNumber == 0 {
-		delay = 0 // delay was moved to Prepare for giugliano and later
+		delay = 0
 	} else {
-		delay = time.Until(header.GetActualTime()) // Wait until we reach header time
+		delay = time.Until(header.GetActualTime())
 	}
 
 	// wiggle was already accounted for in header.Time, this is just for logging
@@ -1520,7 +1627,13 @@ func (c *Bor) SealWithStopHook(chain consensus.ChainHeaderReader, block *types.B
 	}
 
 	// Wait until sealing is terminated or delay timeout.
-	log.Info("Waiting for slot to sign and propagate", "number", number, "hash", header.Hash(), "delay-in-sec", uint(delay), "delay", common.PrettyDuration(delay))
+	log.Info(
+		"Waiting for slot to sign and propagate",
+		"number", number,
+		"hash", header.Hash(),
+		"delay-ms", float64(delay)/float64(time.Millisecond),
+		"delay", common.PrettyDuration(delay),
+	)
 
 	go func() {
 		select {
@@ -1536,7 +1649,7 @@ func (c *Bor) SealWithStopHook(chain consensus.ChainHeaderReader, block *types.B
 					"Sealing out-of-turn",
 					"number", number,
 					"hash", header.Hash,
-					"wiggle-in-sec", uint(wiggle),
+					"wiggle-ms", float64(wiggle)/float64(time.Millisecond),
 					"wiggle", common.PrettyDuration(wiggle),
 					"in-turn-signer", snap.ValidatorSet.GetProposer().Address.Hex(),
 				)
@@ -1684,6 +1797,13 @@ func (c *Bor) checkAndCommitSpan(
 
 	tempState.IntermediateRoot(false)
 
+	// Propagate addresses accessed during GetCurrentSpan back to the original
+	// state so they appear in the FlatDiff ReadSet. Without this, the pipelined
+	// SRC goroutine's witness won't capture their trie proof nodes (the copy's
+	// reads aren't tracked on the original), causing stateless execution to fail
+	// with missing trie nodes for the validator contract.
+	tempState.PropagateReadsTo(state.Inner())
+
 	if c.needToCommitSpan(span, headerNumber) {
 		return c.FetchAndCommitSpan(ctx, span.Id+1, state, header, chain)
 	}
@@ -1828,6 +1948,12 @@ func (c *Bor) CommitStates(
 		}
 
 		tempState.IntermediateRoot(false)
+
+		// Propagate addresses accessed during LastStateId back to the original
+		// state so they appear in the FlatDiff ReadSet. Without this, the
+		// pipelined SRC goroutine's witness won't capture their trie proof
+		// nodes, causing stateless execution to fail with missing trie nodes.
+		tempState.PropagateReadsTo(state.Inner())
 
 		stateSyncDelay := c.config.CalculateStateSyncDelay(number)
 		to = time.Unix(int64(header.Time-stateSyncDelay), 0)

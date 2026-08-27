@@ -1,0 +1,178 @@
+name: Kurtosis Pipeline E2E Tests
+
+# Runs the stateless-sync topology with `pipeline.enable-import-src = true`
+# injected into every bor node's config template (POS-3697). The flag ships
+# default-off, so without this leg no CI job exercises the pipelined import
+# path on a real network. Adds a released-image baseline validator that
+# ignores the injected section — a pipeline-off cross-check on every block.
+
+on:
+  push:
+    branches:
+      - 'master'
+      - 'develop'
+  pull_request:
+    types: [opened, synchronize]
+
+concurrency:
+  group: kurtosis-pipeline-e2e-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  ENCLAVE_NAME: kurtosis-pipeline-e2e
+  POLYCLI_VERSION: v0.1.103
+
+jobs:
+  build-bor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout bor
+        uses: actions/checkout@v5
+
+      - name: Build bor docker image
+        run: docker build -t bor:local --file Dockerfile .
+
+      - name: Save bor docker image
+        run: docker save bor:local | gzip > bor-image.tar.gz
+
+      - name: Upload bor docker image
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-bor-image
+          path: bor-image.tar.gz
+          retention-days: 1
+
+  build-heimdall-v2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout heimdall-v2
+        uses: actions/checkout@v5
+        with:
+          repository: 0xPolygon/heimdall-v2
+          ref: develop
+
+      - name: Build heimdall-v2 docker image
+        run: docker build -t heimdall-v2:local --file Dockerfile .
+
+      - name: Save heimdall-v2 docker image
+        run: docker save heimdall-v2:local | gzip > heimdall-v2-image.tar.gz
+
+      - name: Upload heimdall-v2 docker image
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-heimdall-v2-image
+          path: heimdall-v2-image.tar.gz
+          retention-days: 1
+
+  pipeline-e2e-tests:
+    needs:
+      - build-bor
+      - build-heimdall-v2
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # These permissions are required to log in to GCR
+    permissions:
+      contents: read
+      actions: write
+      id-token: write
+    steps:
+      # Set up kurtosis
+      - name: Checkout kurtosis-pos
+        uses: actions/checkout@v5
+        with:
+          repository: 0xPolygon/kurtosis-pos
+          ref: v1.4.1
+
+      # The whole point of this leg: every bor node gets the pipeline flag.
+      # bor:local nodes enable pipelined import (stateless-sync nodes
+      # self-gate it off); the released-image baseline ignores the unknown
+      # section and stays pipeline-off.
+      - name: Enable pipelined import in the bor config template
+        run: |
+          printf '\n[pipeline]\n  enable-import-src = true\n  import-src-logs = true\n' >> static_files/el/bor/config.toml
+          tail -4 static_files/el/bor/config.toml
+
+      # This step will free disk space and thus remove any docker images previously built
+      - name: Pre kurtosis run
+        uses: ./.github/actions/kurtosis/setup
+        with:
+          main_branch: develop
+          docker_username: ${{ secrets.DOCKERHUB }}
+          docker_token: ${{ secrets.DOCKERHUB_KEY }}
+
+      - name: Checkout pos-workflows
+        uses: actions/checkout@v5
+        with:
+          repository: 0xPolygon/pos-workflows
+          ref: main
+          path: pos-workflows
+
+      - name: Copy kurtosis config
+        run: cp ./pos-workflows/configs/kurtosis-pipeline-e2e.yml ./kurtosis-pipeline-e2e.yml
+
+      # Load images
+      - name: Download bor docker image
+        uses: actions/download-artifact@v4
+        with:
+          name: pipeline-bor-image
+
+      - name: Download heimdall-v2 docker image
+        uses: actions/download-artifact@v4
+        with:
+          name: pipeline-heimdall-v2-image
+
+      - name: Load bor docker image
+        run: |
+          gunzip -c bor-image.tar.gz | docker load
+          echo "Loaded bor docker image:"
+          docker images bor:local --format "{{.ID}} {{.CreatedAt}}"
+
+      - name: Load heimdall-v2 docker image
+        run: |
+          gunzip -c heimdall-v2-image.tar.gz | docker load
+          echo "Loaded heimdall-v2 docker image:"
+          docker images heimdall-v2:local --format "{{.ID}} {{.CreatedAt}}"
+
+      # Deploy kurtosis enclave
+      - name: Kurtosis run
+        run: kurtosis run --args-file=kurtosis-pipeline-e2e.yml --enclave ${{ env.ENCLAVE_NAME }} .
+
+      - name: Inspect enclave
+        run: kurtosis enclave inspect ${{ env.ENCLAVE_NAME }}
+
+      # Run e2e tests
+      - name: Install polycli
+        run: |
+          tmp_dir=$(mktemp -d)
+          curl -L https://github.com/0xPolygon/polygon-cli/releases/download/${{ env.POLYCLI_VERSION }}/polycli_${{ env.POLYCLI_VERSION }}_linux_amd64.tar.gz | tar -xz -C "$tmp_dir"
+          mv "$tmp_dir"/* /usr/local/bin/polycli
+          rm -rf "$tmp_dir"
+          sudo chmod +x /usr/local/bin/polycli
+          polycli version
+
+      - name: Run stateless e2e tests (pipelined producers)
+        id: stateless-tests
+        working-directory: pos-workflows/tests/stateless_tests
+        run: bash kurtosis_stateless_test.sh
+
+      - name: Run pipeline checks
+        id: pipeline-checks
+        working-directory: pos-workflows/tests/pipeline_tests
+        run: bash kurtosis_pipeline_test.sh
+
+      # Collect diagnostics on failure
+      - name: Collect network diagnostics and state dump
+        if: always() && (steps.stateless-tests.outcome == 'failure' || steps.pipeline-checks.outcome == 'failure')
+        uses: ./pos-workflows/.github/actions/network-diagnostics-and-state-dump
+        with:
+          enclave_name: ${{ env.ENCLAVE_NAME }}
+
+      # Clean up
+      - name: Post kurtosis run
+        if: always()
+        uses: ./.github/actions/kurtosis/cleanup
+        with:
+          main_branch: develop
+          enclave_name: ${{ env.ENCLAVE_NAME }}
