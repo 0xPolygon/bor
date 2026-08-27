@@ -125,6 +125,12 @@ func TestStoreOwnedHeightDiscardsTheBuild(t *testing.T) {
 	w, _, rec := newSequencerTestWorker(t)
 	rec.refresh = 20 * time.Millisecond
 	rec.resyncN = 3
+	// The store owns this height: the barrier refuses every build for it,
+	// which the fill-loop resync abort races to beat. Marking it contested
+	// makes that refusal unconditional so a build the background loop or a
+	// slow fill lets slip past the abort still never seals — otherwise the
+	// assertion races the seal under constrained scheduling.
+	rec.contested = true
 	w.start()
 	defer w.stop()
 
