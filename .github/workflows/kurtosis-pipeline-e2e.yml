@@ -83,7 +83,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: 0xPolygon/kurtosis-pos
-          ref: v1.4.1
+          ref: v1.4.2
 
       # The whole point of this leg: every bor node gets the pipeline flag.
       # bor:local nodes enable pipelined import (stateless-sync nodes
