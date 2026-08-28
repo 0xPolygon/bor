@@ -1095,6 +1095,38 @@ func TestVerifyScheduledProducerRejectsBlockNumberMismatch(t *testing.T) {
 	}
 }
 
+// TestVerifyScheduledProducerUnrecoverableSealerDoesNotConfirmMisbehavior guards
+// against striking an honest relayer for a defect in the shared header rather
+// than in what the relayer sent. A header whose Extra field is too short to
+// hold a seal signature makes borEngine.Author() fail regardless of who
+// relayed the announce — every peer relaying an announce for this exact
+// block hash would hit the identical failure, so it proves nothing about any
+// individual signer's honesty. That must be treated like "not yet locally
+// verifiable" (defer, no strike), not folded into the confirmed-bad-signer
+// branch that isScheduledProducer's contract reserves for a real mismatch.
+func TestVerifyScheduledProducerUnrecoverableSealerDoesNotConfirmMisbehavior(t *testing.T) {
+	engine := bor.New(params.BorUnittestChainConfig, rawdb.NewMemoryDatabase(),
+		nil, nil, nil, nil, nil, false, time.Second, vm.Config{})
+	defer engine.Close()
+
+	unsealable := &types.Header{
+		Number:     big.NewInt(200),
+		Difficulty: big.NewInt(1),
+		Extra:      make([]byte, 10), // too short to contain a seal signature
+	}
+	signer := common.HexToAddress("0x0000000000000000000000000000000000000bad")
+
+	ok, headerAvailable := verifyScheduledProducer(engine, unsealable, signer, 200, unsealable.Hash())
+	if ok {
+		t.Fatal("a header with no recoverable sealer must not validate as ok")
+	}
+	if headerAvailable {
+		t.Fatal("Author() erroring is inconclusive, not confirmed misbehavior: " +
+			"headerAvailable=true here makes the caller strike the announcer for a " +
+			"defect in the header itself, not in anything the announcer sent")
+	}
+}
+
 // TestHandleWitnessBroadcastByteMismatchNotInjected guards the verification
 // boundary of the broadcast path: when a BP-signed witnessHash is on file and
 // a broadcast body does NOT match it, the witness must be fully rejected — not

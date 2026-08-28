@@ -328,14 +328,21 @@ func (h *handler) canonicalWitnessHash(blockHash common.Hash) (common.Hash, bool
 // Returns (ok, headerAvailable):
 //   - ok=true, headerAvailable=true: signer matches the block producer; safe
 //     to cache and relay.
-//   - ok=false, headerAvailable=true: confirmed bad signer; the caller MUST
-//     strike the relayer.
-//   - ok=false, headerAvailable=false: header not yet local. The announce
-//     cannot be bound to a producer right now. The caller MUST NOT strike —
-//     this is expected during the cosend window where a signed announce
-//     races the block to the receiver. The handler stashes the announce in
-//     the deferred queue and the chain-head loop re-evaluates it once the
-//     block arrives.
+//   - ok=false, headerAvailable=true: confirmed bad signer (block number
+//     mismatch, given hash cryptographically commits to number, or a
+//     recovered sealer that disagrees with the announced signer). The caller
+//     MUST strike the relayer.
+//   - ok=false, headerAvailable=false: the announce cannot be bound to a
+//     producer right now, through no fault of the announcer. The caller MUST
+//     NOT strike. This covers two cases: the header is not yet local (the
+//     cosend window where a signed announce races the block to the
+//     receiver), and the header IS local but its seal is unrecoverable
+//     (Author() errors) — a defect in the shared header, not evidence about
+//     any individual signer, since every relayer for that hash would hit the
+//     identical failure. The handler stashes the announce in the deferred
+//     queue; the chain-head loop re-evaluates it once the block arrives (and
+//     an unrecoverable-seal header simply ages out of that queue, since no
+//     future re-check will change the outcome).
 //
 // Header presence is checked first regardless of engine: an announce we
 // cannot match to a local block is by definition unverifiable here. Only
@@ -453,8 +460,15 @@ func verifyScheduledProducer(borEngine *bor.Bor, header *types.Header, signer co
 	}
 	producer, err := borEngine.Author(header)
 	if err != nil {
-		log.Debug("wit2: failed to recover header sealer", "blockHash", blockHash, "err", err)
-		return false, true
+		// Author() failing is a property of the header itself (malformed/
+		// missing seal), not of who announced it: every relayer for this exact
+		// block hash would hit the identical error, so it proves nothing about
+		// this signer's honesty. Treat it like header-not-yet-local — defer,
+		// do not strike — rather than folding it into the confirmed-bad-signer
+		// branch below.
+		log.Debug("wit2: failed to recover header sealer; treating as unverifiable, not misbehavior",
+			"blockHash", blockHash, "err", err)
+		return false, false
 	}
 	if producer != signer {
 		log.Debug("wit2: announce signer is not the block producer",
