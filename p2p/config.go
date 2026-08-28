@@ -127,8 +127,10 @@ type Config struct {
 
 	clock mclock.Clock
 
-	// TxArrivalWait is the duration (ms) that the node will wait after seeing
-	// an announced transaction before explicitly requesting it
+	// TxArrivalWait is the duration that the node will wait after seeing an
+	// announced transaction before explicitly requesting it, in case the
+	// transaction arrives via broadcast in the meantime. A value of zero
+	// requests announced transactions immediately.
 	TxArrivalWait time.Duration
 
 	// TxAnnouncementOnly is used to only announce transactions to peers

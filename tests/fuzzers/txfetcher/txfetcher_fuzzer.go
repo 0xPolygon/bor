@@ -87,6 +87,7 @@ func fuzz(input []byte) int {
 		},
 		func(string, []common.Hash) error { return nil },
 		nil,
+		fetcher.DefaultTxArrivalWait,
 		clock,
 		func() time.Time {
 			nanoTime := int64(clock.Now())
