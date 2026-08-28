@@ -706,6 +706,10 @@ func (h *handler) Start(maxPeers int) {
 	h.wit2HeadSub = h.chain.SubscribeChainHeadEvent(h.wit2HeadCh)
 	h.wg.Add(1)
 	go h.deferredAnnouncesLoop()
+
+	// THROWAWAY devnet-only hook, no-op unless WIT2_TEST_MALICIOUS_MODE is
+	// set. See eth/handler_wit2test_malicious.go.
+	h.startMaliciousWit2Broadcaster()
 }
 
 func (h *handler) Stop() {
