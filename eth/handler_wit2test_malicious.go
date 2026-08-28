@@ -86,12 +86,23 @@ func (h *handler) maliciousFloodLoop(key *ecdsa.PrivateKey) {
 	ticker := time.NewTicker(50 * time.Millisecond) // ~20/s per node
 	defer ticker.Stop()
 	sent := 0
+	const settledDepth = 20 // stay well clear of the bleeding edge so every
+	// receiver already has the header locally — otherwise most sends land in
+	// the "header not yet local, deferred, no strike" bucket instead of the
+	// confirmed-misbehavior/strike bucket, which is what this loop needs to
+	// exercise. Found via a debug-logged rerun of this exact scenario: at the
+	// live head, only 1 of ~77 sends actually reached the strike path.
 	for range ticker.C {
 		head := h.chain.CurrentHeader()
-		if head == nil {
+		if head == nil || head.Number.Uint64() <= settledDepth {
 			continue
 		}
-		ann := forgeWit2Announcement(key, head.Hash(), head.Number.Uint64(), randomHash())
+		targetNum := head.Number.Uint64() - settledDepth
+		target := h.chain.GetHeaderByNumber(targetNum)
+		if target == nil {
+			continue
+		}
+		ann := forgeWit2Announcement(key, target.Hash(), targetNum, randomHash())
 		h.relaySignedAnnouncement("", ann)
 		sent++
 		if sent%100 == 0 {
