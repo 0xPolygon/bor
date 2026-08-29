@@ -2,6 +2,7 @@ package sequencer
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -17,6 +18,10 @@ import (
 )
 
 const sealGateBudget = contestedGateTimeout
+
+// errUnauthorizedTestSigner stands in for the engine's "signer is not a part
+// of the producer set" rejection in gate tests.
+var errUnauthorizedTestSigner = errors.New("signer is not a part of the producer set")
 
 // gateBlock builds and seals a block through the publisher, returning it for
 // ConfirmSeal. The window drains first, as the pre-seal barrier guarantees
@@ -945,5 +950,140 @@ func TestFlushWithholdsUnderAForeignWindowAbove(t *testing.T) {
 
 	if p.gate.verdict != gateLost {
 		t.Fatalf("gate verdict = %d, want lost: the withhold is the verdict", p.gate.verdict)
+	}
+}
+
+// A foreign seal standing in the store must not refuse the elected producer
+// when consensus rejects that seal's signer. The devnet incident shape: a
+// producer rotated out mid-span kept sealing, its network-rejected block was
+// flushed to the store as sealed truth, and the rotated-in producer's valid
+// block was then discarded against it while the chain sat frozen a height
+// below. With the engine's verdict wired in, the gate treats such a seal as
+// noise and broadcasts.
+func TestSealGateBroadcastsPastConsensusInvalidSeal(t *testing.T) {
+	h := startHarness(t)
+	chain := &fakeChain{canonical: map[uint64]common.Hash{}}
+	p := newTestPublisher(t, h, chain)
+
+	sealed := publishBlock(t, p, 1, common.Hash{0xef}, 1)
+	waitHead(t, h, p, 5*time.Second)
+	parent := sealHash(t, sealed)
+
+	// The rotated-out producer's generation: sealed in the store, rejected
+	// by every chain ("signer is not a part of the producer set").
+	foreign := testHeader(2, parent)
+	foreign.Extra = []byte("rotated-out producer")
+	appendForeignOpen(t, h, 2, parent)
+	appendForeignSeal(t, h, foreign)
+
+	rejected := foreign.Hash()
+	p.SetSealVerifier(func(header *types.Header) error {
+		if header.Hash() == rejected {
+			return errUnauthorizedTestSigner
+		}
+
+		return nil
+	})
+
+	// The elected producer sealed blind: the incident's build-start read had
+	// failed, so nothing was published and the gate holds an unpublished
+	// seal awaiting its verdict.
+	tx := testTx(t, 0)
+	ours := blockFor(testHeader(2, parent), []*types.Transaction{tx})
+
+	p.mu.Lock()
+	p.gate = sealGate{height: 2, hash: ours.Hash(), txs: []common.Hash{tx.Hash()}}
+	p.mu.Unlock()
+
+	if v := p.ConfirmSeal(300 * time.Millisecond); v != miner.SealUnknown {
+		t.Fatalf("verdict = %v, want Unknown (broadcast): the store's seal is "+
+			"consensus-invalid and can never become canonical", v)
+	}
+}
+
+// The consensus check must not weaken the honest race: a foreign store seal
+// the engine accepts keeps its refusal — the winner's block may simply be in
+// flight, and broadcasting beside it is the double-broadcast the gate exists
+// to prevent. A publisher with no verifier wired behaves the same.
+func TestSealGateStillRefusesConsensusValidSeal(t *testing.T) {
+	cases := []struct {
+		name     string
+		verifier func(*types.Header) error
+	}{
+		{name: "engine accepts the seal", verifier: func(*types.Header) error { return nil }},
+		{name: "no verifier wired", verifier: nil},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := startHarness(t)
+			chain := &fakeChain{canonical: map[uint64]common.Hash{}}
+			p := newTestPublisher(t, h, chain)
+
+			sealed := publishBlock(t, p, 1, common.Hash{0xef}, 1)
+			waitHead(t, h, p, 5*time.Second)
+			parent := sealHash(t, sealed)
+
+			foreign := testHeader(2, parent)
+			foreign.Extra = []byte("in-flight winner")
+			appendForeignOpen(t, h, 2, parent)
+			appendForeignSeal(t, h, foreign)
+
+			if tc.verifier != nil {
+				p.SetSealVerifier(tc.verifier)
+			}
+
+			tx := testTx(t, 0)
+			ours := blockFor(testHeader(2, parent), []*types.Transaction{tx})
+
+			p.mu.Lock()
+			p.gate = sealGate{height: 2, hash: ours.Hash(), txs: []common.Hash{tx.Hash()}}
+			p.mu.Unlock()
+
+			if v := p.ConfirmSeal(300 * time.Millisecond); v != miner.SealRefused {
+				t.Fatalf("verdict = %v, want Refused: the winner's block may still arrive", v)
+			}
+		})
+	}
+}
+
+// The gateLost path — a tail read resolving the gate from a decoded foreign
+// seal — honors the same consensus verdict: the exact flow of
+// TestSealGateRefusesWhenOurSealIsRejected, but the store's seal is from a
+// signer the engine rejects, so our block broadcasts instead.
+func TestSealGateLostVerdictIgnoresConsensusInvalidSeal(t *testing.T) {
+	h := startHarness(t)
+	chain := &fakeChain{canonical: map[uint64]common.Hash{}}
+	p := newTestPublisher(t, h, chain)
+
+	sealed := publishBlock(t, p, 1, common.Hash{0xef}, 1)
+	waitHead(t, h, p, 5*time.Second)
+	parent := sealHash(t, sealed)
+
+	header := testHeader(2, parent)
+	p.OpenBlock(2, header.Time, parent, header.GasLimit, header.BaseFee)
+	tx := testTx(t, 0)
+	p.PublishTx(tx)
+	waitDrained(t, p, 5*time.Second)
+
+	rotated := testHeader(2, parent)
+	rotated.Extra = []byte("rotated-out producer")
+	appendForeignOpen(t, h, 2, parent)
+	appendForeignSeal(t, h, rotated)
+
+	rejected := rotated.Hash()
+	p.SetSealVerifier(func(h *types.Header) error {
+		if h.Hash() == rejected {
+			return errUnauthorizedTestSigner
+		}
+
+		return nil
+	})
+
+	p.SealBlock(blockFor(header, []*types.Transaction{tx}))
+
+	if v := p.ConfirmSeal(sealGateBudget); v == miner.SealRefused {
+		t.Fatal("verdict = Refused: a consensus-invalid store seal must not " +
+			"refuse the elected producer's block")
 	}
 }

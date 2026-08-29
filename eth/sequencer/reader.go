@@ -14,6 +14,7 @@ import (
 	pb "github.com/0xPolygon/sequence-store-proto/sequencestore/v1"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 )
 
@@ -79,6 +80,10 @@ type tailInfo struct {
 	haveSeal       bool
 	lastSealHeight uint64
 	lastSealHash   common.Hash
+	// lastSealHeader is the decoded header behind lastSealHash, kept so the
+	// broadcast gate can consensus-verify a foreign seal before treating it
+	// as ownership of the height. Nil when the seal was inferred, not read.
+	lastSealHeader *types.Header
 	// sealDecoded separates a seal this read actually decoded from one a
 	// probe merely inferred. Only the former may drive sealed-tip
 	// bookkeeping: an inferred "boundary" can be a live partial window,
@@ -395,6 +400,7 @@ func trackTip(info *tailInfo, entry *pb.Entry) {
 		info.sealDecoded = true
 		info.lastSealHeight = header.Number.Uint64()
 		info.lastSealHash = header.Hash()
+		info.lastSealHeader = header
 		info.window = nil
 		info.windowBytes = 0
 	}

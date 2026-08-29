@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/miner"
 )
@@ -51,6 +52,12 @@ type sealGate struct {
 	// txs is the gated block's transaction sequence, kept for the last
 	// look a verdictless timeout takes before broadcasting.
 	txs []common.Hash
+
+	// lostHeader is the decoded foreign seal that lost the gate, when a
+	// tail read carried it. It lets the verdict consumer consensus-verify
+	// the claim: a seal the engine rejects owns nothing. Nil when the loss
+	// came from a STALE ack alone (no header to inspect).
+	lostHeader *types.Header
 }
 
 // refusalStreak counts consecutive gate refusals at one height. The escape
@@ -133,6 +140,21 @@ func (p *Publisher) storedVerdict(g sealGate) (miner.SealVerdict, bool) {
 	case g.height == 0:
 		return miner.SealUnknown, true // nothing gated (muted or failed build)
 	case g.verdict == gateLost:
+		// A loss is only as good as the seal claiming the height: one the
+		// consensus engine rejects (a rotated-out producer's) can never own
+		// it, and refusing this node's block against such a seal froze a
+		// devnet chain. A tail read hands the header over directly; a STALE
+		// ack carries none, so the standing seal is fetched once. When the
+		// seal cannot be inspected the refusal stays — the STALE is real
+		// evidence, and the cap bounds it.
+		if g.lostHeader != nil && p.sealConsensusInvalid(g.lostHeader) {
+			return p.settle(miner.SealUnknown), true
+		}
+
+		if g.lostHeader == nil && p.lostSealInvalid(g) {
+			return p.settle(miner.SealUnknown), true
+		}
+
 		return p.refuseGated(), true
 	case g.verdict == gateConfirmed:
 		return p.settle(miner.SealConfirmed), true
@@ -320,6 +342,10 @@ func (p *Publisher) recheckSealedGeneration(ctx context.Context, g sealGate) min
 		}
 
 		v := g.verdictForSeal(header.Hash())
+		if v == miner.SealRefused && p.sealConsensusInvalid(header) {
+			return miner.SealUnknown
+		}
+
 		if v == miner.SealRefused {
 			gateRecheckRefused.Inc(1)
 			log.Warn("Sequencer refusing broadcast: the store sealed this height with other content",
@@ -330,6 +356,40 @@ func (p *Publisher) recheckSealedGeneration(ctx context.Context, g sealGate) min
 	}
 
 	return miner.SealUnknown // a live generation after all: nothing decisive
+}
+
+// lostSealInvalid fetches the seal standing at the lost height and reports
+// whether consensus rejects it — the check a header-less loss (a STALE ack)
+// needs before its refusal is honored. Unreadable, undecodable, or unsealed
+// keeps the refusal.
+func (p *Publisher) lostSealInvalid(g sealGate) bool {
+	if p.verifySeal == nil || p.unreachable.Load() || p.read == nil || p.read.cons == nil {
+		return false
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), checkTailTimeout)
+	defer cancel()
+
+	entries, err := p.read.generation(ctx, g.height)
+	if err != nil {
+		return false
+	}
+
+	for _, e := range entries {
+		seal := e.GetBlockSeal()
+		if seal == nil {
+			continue
+		}
+
+		header, err := decodeSealHeader(seal.GetHeader())
+		if err != nil || header.Hash() == g.hash {
+			return false // unreadable, or our own seal delivered after all
+		}
+
+		return p.sealConsensusInvalid(header)
+	}
+
+	return false
 }
 
 func (p *Publisher) clearGate() {
@@ -373,6 +433,10 @@ func (p *Publisher) resolveGateFromSealLocked(info tailInfo) {
 		p.gate.verdict = gateConfirmed
 	case miner.SealRefused:
 		p.gate.verdict = gateLost
+		// Keep the decoded header so the verdict consumer can consensus-
+		// verify the claim outside this lock (verifySeal can reach heimdall;
+		// p.mu must never wait on that).
+		p.gate.lostHeader = info.lastSealHeader
 	}
 }
 

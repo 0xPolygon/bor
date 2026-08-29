@@ -127,6 +127,13 @@ type Publisher struct {
 	// their store copies serve no consumer and the drain jumps them.
 	finality func() (bool, uint64, common.Hash)
 
+	// verifySeal is the consensus engine's sealed-header verification (nil
+	// when the node wires none). The gate consults it before honoring a
+	// foreign store seal as ownership of a height: a seal whose signer the
+	// engine rejects — a producer rotated out mid-span — can never become
+	// canonical, so it must not refuse this node's block.
+	verifySeal func(*types.Header) error
+
 	pubConn  *grpc.ClientConn
 	consConn *grpc.ClientConn
 	pub      pb.PublisherServiceClient
@@ -192,6 +199,33 @@ func NewPublisher(publisherEndpoint, consumerEndpoint string, chainID uint64, po
 // on every read and retire on every ack, so a recovered store stops being
 // treated as down the moment anything hears from it — and the contact
 // stamp is what holds the redial back.
+// SetSealVerifier wires the consensus engine's sealed-header verification
+// into the broadcast gate; see the verifySeal field. Call before Start.
+func (p *Publisher) SetSealVerifier(f func(*types.Header) error) {
+	p.verifySeal = f
+}
+
+// sealConsensusInvalid reports whether a store seal decodes to a header the
+// consensus engine refuses — typically a signer outside the producer set
+// after a mid-span rotation. Such a seal is noise, not ownership: no chain
+// will ever import its block, and honoring it wedged production on a devnet
+// (the elected producer discarded its own valid block against a rotated-out
+// producer's store seal while the chain sat frozen a height below).
+func (p *Publisher) sealConsensusInvalid(header *types.Header) bool {
+	if p.verifySeal == nil {
+		return false
+	}
+
+	err := p.verifySeal(header)
+	if err != nil {
+		gateUnknownCount.Inc(1)
+		log.Warn("Sequencer ignoring a consensus-invalid store seal",
+			"number", header.Number, "store", header.Hash(), "err", err)
+	}
+
+	return err != nil
+}
+
 func (p *Publisher) markReachable() {
 	p.unreachable.Store(false)
 	p.lastContact.Store(time.Now().UnixNano())

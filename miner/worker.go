@@ -1441,6 +1441,15 @@ func (w *worker) resultLoop() {
 			}
 
 			if !w.sealAndGate(block) {
+				// The refused block never reaches the chain, so nothing ever
+				// advances past it to age this task out via clearPending — and
+				// a task left here reads as "sealing in flight" to the veblop
+				// stall fallback (decideVeblopFallback), disabling the only
+				// recovery path while the chain is stalled at this exact height.
+				w.pendingMu.Lock()
+				delete(w.pendingTasks, sealhash)
+				w.pendingMu.Unlock()
+
 				continue
 			}
 

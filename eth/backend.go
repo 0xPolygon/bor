@@ -176,6 +176,18 @@ func (s *Ethereum) attachSequencer(config *ethconfig.Config) error {
 			return fmt.Errorf("sequencer publisher: %w", err)
 		}
 
+		// The broadcast gate consensus-verifies a foreign store seal before
+		// treating it as ownership of a height: a seal from a rotated-out
+		// producer can never become canonical and must not refuse this
+		// node's block.
+		if v, ok := s.engine.(interface {
+			VerifySeal(consensus.ChainHeaderReader, *types.Header) error
+		}); ok {
+			publisher.SetSealVerifier(func(header *types.Header) error {
+				return v.VerifySeal(s.blockchain, header)
+			})
+		}
+
 		s.seqPublisher = publisher
 		s.miner.SetSequencer(publisher)
 	case "consumer":

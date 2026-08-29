@@ -844,3 +844,64 @@ func TestSealGateRefusalStopsBroadcast(t *testing.T) {
 			"was written and broadcast", got)
 	}
 }
+
+// A refused seal must also clear its pending task. The devnet incident: the
+// elected producer's refused block left its task in pendingTasks — nothing
+// ever advances the chain past a refused height, so clearPending never ran —
+// and the veblop stall fallback (decideVeblopFallback) read the leaked task
+// as sealing-in-flight and skipped recovery forever. The chain froze one
+// height below with the producer never building again.
+func TestSealGateRefusalClearsPendingTask(t *testing.T) {
+	w, b, rec := newSequencerTestWorker(t)
+
+	head := b.chain.CurrentBlock()
+	b.setMilestone(head.Number.Uint64(), head.Hash())
+
+	rec.mu.Lock()
+	rec.verdict = SealRefused
+	rec.mu.Unlock()
+
+	w.start()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		_, seals, _, _ := rec.snapshot()
+		if len(seals) >= 1 {
+			break
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatal("worker never sealed")
+		}
+
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// Stop building so no fresh task races the assertion; leaked tasks have
+	// no other way out (clearPending needs chain progress a refused height
+	// never makes).
+	w.stop()
+
+	deadline = time.Now().Add(5 * time.Second)
+	for {
+		w.pendingMu.RLock()
+		pending := len(w.pendingTasks)
+		w.pendingMu.RUnlock()
+
+		if pending == 0 {
+			break
+		}
+
+		if time.Now().After(deadline) {
+			w.pendingMu.RLock()
+			for h, task := range w.pendingTasks {
+				t.Logf("leaked task: sealhash=%x block=%d created=%v", h[:4], task.block.NumberU64(), task.createdAt)
+			}
+			w.pendingMu.RUnlock()
+			t.Fatalf("%d pending tasks leaked by refused seals: the veblop stall "+
+				"fallback reads them as sealing-in-flight and never recovers", pending)
+		}
+
+		time.Sleep(20 * time.Millisecond)
+	}
+}
