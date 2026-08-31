@@ -1105,3 +1105,56 @@ func TestBarrierStillRefusesPromisedWindowAtTakeover(t *testing.T) {
 		t.Fatal("barrier passed a block that drops the promised window")
 	}
 }
+
+// A store that never shows a consistent, adoptable shape must cost bounded
+// slots, not the height. The trigger class is a split-view store — a load
+// balancer over replicas at different lags, or a Byzantine store — where
+// every read refuses and none converges; the gate has a refusal cap for
+// exactly this, and the barrier needs its own. Past the cap the barrier
+// seals for liveness and leaves the verdict to the gate and consensus.
+func TestBarrierRefusalCapSealsForLiveness(t *testing.T) {
+	h := startHarness(t)
+	p := newTestPublisher(t, h, &fakeChain{})
+
+	f1 := testHeader(1, common.Hash{0xef})
+	appendForeignOpen(t, h, 1, common.Hash{0xef})
+	appendForeignSeal(t, h, f1)
+
+	// A promised window at our height that this build never adopts: the
+	// mirror refuses every attempt, and no rebuild in this test converges.
+	appendForeignOpen(t, h, 2, f1.Hash())
+
+	promised := testTx(t, 7)
+	raw, err := promised.MarshalBinary()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	rec := &pb.Entry{Kind: &pb.Entry_Record{Record: &pb.Record{
+		Transactions:     [][]byte{raw},
+		PrefixCommitment: h.store.Head().Bytes(),
+	}}}
+	if status := h.store.Append(rec); status != pb.AckStatus_ACK_STATUS_OK {
+		t.Fatalf("promised record rejected: %v", status)
+	}
+
+	header := testHeader(2, f1.Hash())
+	ours := testTx(t, 0)
+	p.OpenBlock(2, header.Time, f1.Hash(), header.GasLimit, header.BaseFee)
+	p.PublishTx(ours)
+
+	refusals := 0
+
+	for range maxBarrierRefusals + 2 {
+		if p.AwaitSequenced(50*time.Millisecond, 2, []*types.Transaction{ours}) {
+			break
+		}
+
+		refusals++
+	}
+
+	if refusals != maxBarrierRefusals {
+		t.Fatalf("barrier allowed the seal after %d refusals, want exactly %d "+
+			"before liveness wins", refusals, maxBarrierRefusals)
+	}
+}

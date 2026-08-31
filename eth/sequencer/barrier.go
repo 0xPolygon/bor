@@ -77,7 +77,7 @@ func (p *Publisher) AwaitSequenced(timeout time.Duration, number uint64, txs []*
 
 			p.armResync()
 
-			return false
+			return p.barrierVerdict(number, false)
 		case catchingUp:
 			// The store is behind us by construction while the backfill
 			// drains, so there is nothing here worth comparing against and
@@ -87,7 +87,7 @@ func (p *Publisher) AwaitSequenced(timeout time.Duration, number uint64, txs []*
 
 			return true
 		case unacked == 0:
-			return p.sealMirror(number, txs)
+			return p.barrierVerdict(number, p.sealMirror(number, txs))
 		case time.Now().After(deadline):
 			publishBarrierTimeout.Inc(1)
 
@@ -98,7 +98,7 @@ func (p *Publisher) AwaitSequenced(timeout time.Duration, number uint64, txs []*
 			// our own block, so the comparison holds mid-drain; it was a
 			// block with none of a 9523-record window that rode this exit
 			// out to a broadcast.
-			return p.sealMirror(number, txs)
+			return p.barrierVerdict(number, p.sealMirror(number, txs))
 		}
 
 		time.Sleep(2 * time.Millisecond)
@@ -124,6 +124,46 @@ func (p *Publisher) sealedThroughParent(height uint64) bool {
 	info, out, done := p.tryWalk(ctx, blockReq(height-1), false)
 
 	return done && out == recOK && !info.tipOpen && !info.haveSeal && len(info.window) == 0
+}
+
+// maxBarrierRefusals bounds consecutive pre-seal refusals at one height —
+// the barrier's analog of the gate's maxGateRefusals. Sized past every
+// legitimate convergence (adoption is one rebuild; recovery's grace is a
+// few slots) and below heimdall's producer-ineffectiveness threshold, so a
+// store answering inconsistently across reads costs bounded slots and the
+// node seals for liveness before consensus rotates it away as dead.
+const maxBarrierRefusals = 8
+
+// barrierVerdict funnels every pre-seal pass/refuse through the per-height
+// refusal cap: a pass resets the streak, a refusal past the cap becomes a
+// pass — refuse → rebuild is convergent only when the store eventually
+// shows one consistent shape, and a Byzantine or split-view store (a load
+// balancer over replicas at different lags) never does. Past the cap the
+// post-seal gate and consensus arbitrate.
+func (p *Publisher) barrierVerdict(height uint64, ok bool) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if ok {
+		p.barrierRefusals = refusalStreak{}
+
+		return true
+	}
+
+	if p.barrierRefusals.height != height {
+		p.barrierRefusals = refusalStreak{height: height}
+	}
+
+	p.barrierRefusals.count++
+
+	if p.barrierRefusals.count > maxBarrierRefusals {
+		log.Warn("Sequencer barrier refused this height repeatedly, sealing for liveness",
+			"number", height, "refusals", p.barrierRefusals.count)
+
+		return true
+	}
+
+	return false
 }
 
 // armResync requests a rebuild that follows the store's sequence. Idempotent;

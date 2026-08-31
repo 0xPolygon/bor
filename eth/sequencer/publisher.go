@@ -107,7 +107,17 @@ type Publisher struct {
 	// gate is the broadcast gate for the last sealed block; see sealGate.
 	gate     sealGate
 	refusals refusalStreak
-	seed     commitment.Head // an empty store's head, computable without the store
+
+	// barrierRefusals counts consecutive pre-seal barrier refusals at one
+	// height — the barrier's analog of the gate's refusal cap. Every
+	// refusal shape converges when the store is consistent (adopt, mute,
+	// backfill, the clean-boundary proof), but a store answering
+	// inconsistently across reads — Byzantine, or a load balancer over
+	// replicas at different lags — can refuse every rebuild with no benign
+	// state ever showing. Past the cap, liveness wins and the seal
+	// proceeds; the post-seal gate and consensus remain the arbiters.
+	barrierRefusals refusalStreak
+	seed            commitment.Head // an empty store's head, computable without the store
 	// unreachable is set while the transport is failing. Every per-block
 	// wait on the store is pointless in that state, and paying them all
 	// pushes blocks past their slot — which is what arms bor's span-check
@@ -205,18 +215,43 @@ func (p *Publisher) SetSealVerifier(f func(*types.Header) error) {
 	p.verifySeal = f
 }
 
+// gateVerifyTimeout bounds the engine's seal verification inside the gate.
+// The engine resolves the signer's span, and that path waits on heimdall
+// availability with no deadline of its own — on the miner's result loop,
+// an unbounded wait there would freeze block import. A cached span answers
+// in microseconds; a heimdall round trip in milliseconds; anything slower
+// is heimdall being down, and the verdict is not worth production.
+const gateVerifyTimeout = 250 * time.Millisecond
+
 // sealConsensusInvalid reports whether a store seal decodes to a header the
 // consensus engine refuses — typically a signer outside the producer set
 // after a mid-span rotation. Such a seal is noise, not ownership: no chain
 // will ever import its block, and honoring it wedged production on a devnet
 // (the elected producer discarded its own valid block against a rotated-out
-// producer's store seal while the chain sat frozen a height below).
+// producer's store seal while the chain sat frozen a height below). A
+// verification that cannot complete in time proves nothing: the seal is
+// treated as unverifiable and keeps whatever verdict stood without it. The
+// abandoned call finishes on its own goroutine when heimdall recovers; the
+// gate's refusal cap bounds how many can pile up.
 func (p *Publisher) sealConsensusInvalid(header *types.Header) bool {
 	if p.verifySeal == nil {
 		return false
 	}
 
-	err := p.verifySeal(header)
+	verdict := make(chan error, 1)
+
+	go func() { verdict <- p.verifySeal(header) }()
+
+	var err error
+	select {
+	case err = <-verdict:
+	case <-time.After(gateVerifyTimeout):
+		log.Warn("Sequencer seal verification timed out, treating the store seal as unverifiable",
+			"number", header.Number, "store", header.Hash())
+
+		return false
+	}
+
 	if err != nil {
 		gateUnknownCount.Inc(1)
 		log.Warn("Sequencer ignoring a consensus-invalid store seal",
