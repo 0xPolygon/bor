@@ -60,9 +60,21 @@ func (p *Publisher) AwaitSequenced(timeout time.Duration, number uint64, txs []*
 
 			return true
 		case sticky:
-			// Another producer owns this height (our writes STALEd). Adopt
-			// their window instead of sealing beside it: the rebuild's
-			// boundary read collects it.
+			// A STALE armed this hold. Usually another producer owns the
+			// height and the rebuild adopts their window — but a takeover
+			// publisher's own stale-prefix entries STALE the same way with
+			// nobody owning anything, and refusing then starves the very
+			// seal flush the transport is holding for (the devnet
+			// seventeen-second takeover stall). The store arbitrates: a
+			// tail sealed exactly through this block's parent with nothing
+			// live past it proves the height unowned, and the seal passes;
+			// the simultaneous-open race stays with the CAS and the gate.
+			if p.sealedThroughParent(number) {
+				coverageSkip(number, "store sealed through parent, nothing owed here")
+
+				return true
+			}
+
 			p.armResync()
 
 			return false
@@ -91,6 +103,27 @@ func (p *Publisher) AwaitSequenced(timeout time.Duration, number uint64, txs []*
 
 		time.Sleep(2 * time.Millisecond)
 	}
+}
+
+// sealedThroughParent reports the clean-boundary proof: nothing stands in
+// the store at or past this height, so a seal here can revoke nothing. One
+// walk anchored at the parent answers it — an unsealed parent is served
+// from its open (a non-empty walk), a sealed one resumes just past its
+// seal, and an unknown one reads NOT_FOUND with nothing standing anywhere.
+// Any entry the walk returns — a live window, a later generation, a
+// re-anchor — is content this block cannot vouch for, and the refusal
+// stands, as it does for anything unreadable.
+func (p *Publisher) sealedThroughParent(height uint64) bool {
+	if height < 2 || p.unreachable.Load() || p.read == nil || p.read.cons == nil {
+		return false
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), tailReadTimeout)
+	defer cancel()
+
+	info, out, done := p.tryWalk(ctx, blockReq(height-1), false)
+
+	return done && out == recOK && !info.tipOpen && !info.haveSeal && len(info.window) == 0
 }
 
 // armResync requests a rebuild that follows the store's sequence. Idempotent;
@@ -157,6 +190,22 @@ func (p *Publisher) sealMirror(height uint64, txs []*types.Transaction) bool {
 
 	if atHead {
 		return p.mirrorVerdict(height, ourTxs, txs, len(ourTxs))
+	}
+
+	// A tail ending in a decoded seal exactly at this block's parent, with
+	// nothing live past it, proves the store owes nothing at this height —
+	// a broadcast can revoke nothing, whatever our anchor thinks. This is
+	// the takeover shape: this publisher idled muted while another
+	// produced, its anchor is behind on sealed history it already imported
+	// as blocks, and the seal flush's STALE rebases it right after.
+	// Refusing here wedged a fresh producer for 17 seconds on a devnet —
+	// the reconcile held every rebuild's open awaiting a seal flush this
+	// refusal was preventing — until heimdall rotated production away as
+	// ineffective.
+	if p.sealedThroughParent(height) {
+		coverageSkip(height, "store sealed through parent, nothing owed here")
+
+		return true
 	}
 
 	// The store holds content this block does not — a record extension of

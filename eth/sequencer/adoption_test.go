@@ -988,3 +988,120 @@ func TestIdleTickPreservesLiveWindow(t *testing.T) {
 		t.Fatalf("live window superseded after idle tick: %d -> %d", supersedes, got)
 	}
 }
+
+// The devnet takeover-stall shape: another producer's lineage sealed cleanly
+// through our parent while this publisher idled muted, so its anchor is
+// still the seed. The store owes nothing at the new height (decoded seal at
+// exactly the parent, no live window), so the barrier must pass within the
+// slot — refusing wedged a fresh producer for 17 seconds (the reconcile held
+// every rebuild's open awaiting the very seal flush the barrier was
+// refusing) until heimdall rotated production away as ineffective.
+func TestTakeoverSealsOverCleanForeignHistory(t *testing.T) {
+	h := startHarness(t)
+	p := newTestPublisher(t, h, &fakeChain{})
+
+	f1 := testHeader(1, common.Hash{0xef})
+	appendForeignOpen(t, h, 1, common.Hash{0xef})
+	appendForeignSeal(t, h, f1)
+
+	f2 := testHeader(2, f1.Hash())
+	appendForeignOpen(t, h, 2, f1.Hash())
+	appendForeignSeal(t, h, f2)
+
+	// Attempt one mirrors the race the devnet producer lost: it opened
+	// before any build-start read could rebase its anchor, so the journal
+	// now holds unacked entries that block every later rebase. Whatever
+	// this attempt's barrier says, the state it leaves is the wedge.
+	header := testHeader(3, f2.Hash())
+	tx := testTx(t, 0)
+	p.OpenBlock(3, header.Time, f2.Hash(), header.GasLimit, header.BaseFee)
+	p.PublishTx(tx)
+	p.AwaitSequenced(300*time.Millisecond, 3, []*types.Transaction{tx})
+
+	// Attempt two is the miner's normal rebuild cycle. The store owes
+	// nothing at 3 (decoded seal exactly at the parent, no live window),
+	// so the barrier must pass instead of wedging takeover production
+	// behind an anchor rebase the held opens forbid.
+	if w := p.AdoptWindow(3, f2.Hash()); w != nil {
+		t.Fatalf("nothing to adopt over sealed history, got window at %d", w.Number)
+	}
+
+	p.OpenBlock(3, header.Time, f2.Hash(), header.GasLimit, header.BaseFee)
+	p.PublishTx(tx)
+
+	if !p.AwaitSequenced(300*time.Millisecond, 3, []*types.Transaction{tx}) {
+		t.Fatal("barrier refused a takeover seal over clean foreign history")
+	}
+
+	// The seal flush's STALE rebases the stale anchor and redelivers: the
+	// store converges to our generation at 3 without operator intervention.
+	p.SealBlock(blockFor(header, []*types.Transaction{tx}))
+
+	deadline := time.Now().Add(5 * time.Second)
+
+	for {
+		sealed := false
+
+		for _, g := range readAllGenerations(t, h) {
+			if g.height == 3 && g.sealed {
+				sealed = true
+			}
+		}
+
+		if sealed {
+			break
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatal("takeover flush never converged: no sealed generation at 3")
+		}
+
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// The takeover escape must stay exact: a live window standing at the new
+// height is promised content, and a block that does not carry it keeps its
+// refusal — the empty-window proof is what lets the clean takeover through,
+// never a stale anchor alone.
+func TestBarrierStillRefusesPromisedWindowAtTakeover(t *testing.T) {
+	h := startHarness(t)
+	p := newTestPublisher(t, h, &fakeChain{})
+
+	f1 := testHeader(1, common.Hash{0xef})
+	appendForeignOpen(t, h, 1, common.Hash{0xef})
+	appendForeignSeal(t, h, f1)
+
+	f2 := testHeader(2, f1.Hash())
+	appendForeignOpen(t, h, 2, f1.Hash())
+	appendForeignSeal(t, h, f2)
+
+	// A dying producer opened 3 and promised one transaction.
+	appendForeignOpen(t, h, 3, f2.Hash())
+
+	promised := testTx(t, 7)
+	raw, err := promised.MarshalBinary()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	rec := &pb.Entry{Kind: &pb.Entry_Record{Record: &pb.Record{
+		Transactions:     [][]byte{raw},
+		PrefixCommitment: h.store.Head().Bytes(),
+	}}}
+	if status := h.store.Append(rec); status != pb.AckStatus_ACK_STATUS_OK {
+		t.Fatalf("promised record rejected: %v", status)
+	}
+
+	// A takeover that never adopts the promised window must not seal —
+	// the barrier's mirror refuses the block, and the clean-takeover
+	// escape must not fire while a live window stands at the height.
+	header := testHeader(3, f2.Hash())
+	p.OpenBlock(3, header.Time, f2.Hash(), header.GasLimit, header.BaseFee)
+	ours := testTx(t, 0)
+	p.PublishTx(ours)
+
+	if p.AwaitSequenced(300*time.Millisecond, 3, []*types.Transaction{ours}) {
+		t.Fatal("barrier passed a block that drops the promised window")
+	}
+}
