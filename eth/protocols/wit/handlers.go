@@ -18,6 +18,9 @@ func handleGetWitness(backend Backend, msg Decoder, peer *Peer) error {
 	if len(req.WitnessPages) == 0 {
 		return fmt.Errorf("invalid GetWitnessPacket: Hashes cannot be empty")
 	}
+	if len(req.WitnessPages) > MaxWitnessServe {
+		return fmt.Errorf("witness request exceeds %d page limit: got %d", MaxWitnessServe, len(req.WitnessPages))
+	}
 
 	return backend.Handle(peer, req)
 }
@@ -74,6 +77,9 @@ func handleGetWitnessMetadata(backend Backend, msg Decoder, peer *Peer) error {
 	// Validate request parameters
 	if len(req.Hashes) == 0 {
 		return fmt.Errorf("invalid GetWitnessMetadataPacket: Hashes cannot be empty")
+	}
+	if len(req.Hashes) > MaxWitnessMetadataServe {
+		return fmt.Errorf("witness metadata request exceeds %d hash limit: got %d", MaxWitnessMetadataServe, len(req.Hashes))
 	}
 
 	return backend.Handle(peer, req)

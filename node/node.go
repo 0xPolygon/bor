@@ -431,6 +431,7 @@ func (n *Node) startRPC() error {
 			Vhosts:             n.config.HTTPVirtualHosts,
 			Modules:            n.config.HTTPModules,
 			prefix:             n.config.HTTPPathPrefix,
+			executionPoolSize:  n.config.HTTPJsonRPCExecutionPoolSize,
 			rpcEndpointConfig:  rpcConfig,
 		}); err != nil {
 			return err

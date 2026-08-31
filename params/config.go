@@ -347,6 +347,10 @@ var (
 			LisovoProBlock:    big.NewInt(34062000),
 			GiuglianoBlock:    big.NewInt(35573500),
 			ChicagoBlock:      big.NewInt(38358000),
+			ValenciaBlock:     big.NewInt(40776000),
+			AustinBlock:       big.NewInt(44120000),
+			HampiBlock:        nil, // unscheduled
+
 			StateSyncConfirmationDelay: map[string]uint64{
 				"0": 128,
 			},
@@ -435,6 +439,10 @@ var (
 			LisovoProBlock:    big.NewInt(83756500),
 			GiuglianoBlock:    big.NewInt(85268500),
 			ChicagoBlock:      big.NewInt(87218600),
+			ValenciaBlock:     big.NewInt(89531000),
+			AustinBlock:       big.NewInt(91949700),
+			HampiBlock:        nil, // unscheduled
+
 			StateSyncConfirmationDelay: map[string]uint64{
 				"44934656": 128,
 			},
@@ -741,6 +749,8 @@ var (
 			LisovoBlock:       big.NewInt(0),
 			LisovoProBlock:    big.NewInt(0),
 			ChicagoBlock:      big.NewInt(0),
+			ValenciaBlock:     big.NewInt(0),
+			HampiBlock:        big.NewInt(0),
 		},
 	}
 
@@ -958,6 +968,9 @@ type BorConfig struct {
 	LisovoProBlock             *big.Int          `json:"lisovoProBlock"`             // LisovoPro switch block (nil = no fork, 0 = already on lisovoPro)
 	GiuglianoBlock             *big.Int          `json:"giuglianoBlock"`             // Giugliano switch block (nil = no fork, 0 = already on giugliano)
 	ChicagoBlock               *big.Int          `json:"chicagoBlock"`               // Chicago switch block (nil = no fork, 0 = already on chicago)
+	ValenciaBlock              *big.Int          `json:"valenciaBlock"`              // Valencia switch block (nil = no fork, 0 = already on valencia)
+	AustinBlock                *big.Int          `json:"austinBlock"`                // Austin switch block (nil = no fork, 0 = already on austin)
+	HampiBlock                 *big.Int          `json:"hampiBlock"`                 // Hampi switch block (nil = no fork, 0 = already on hampi)
 }
 
 // String implements the stringer interface, returning the consensus engine details.
@@ -1035,6 +1048,19 @@ func (c *BorConfig) IsGiugliano(number *big.Int) bool {
 
 func (c *BorConfig) IsChicago(number *big.Int) bool {
 	return isBlockForked(c.ChicagoBlock, number)
+}
+
+func (c *BorConfig) IsValencia(number *big.Int) bool {
+	return isBlockForked(c.ValenciaBlock, number)
+}
+
+// IsAustin reports whether state-sync gas accounting is active at number.
+func (c *BorConfig) IsAustin(number *big.Int) bool {
+	return isBlockForked(c.AustinBlock, number)
+}
+
+func (c *BorConfig) IsHampi(number *big.Int) bool {
+	return isBlockForked(c.HampiBlock, number)
 }
 
 // GetTargetGasPercentage returns the target gas percentage for gas limit calculation.
@@ -1246,7 +1272,16 @@ func (c *ChainConfig) Description() string {
 			banner += fmt.Sprintf(" - Giugliano:                   #%-8v\n", c.Bor.GiuglianoBlock)
 		}
 		if c.Bor.ChicagoBlock != nil {
-			banner += fmt.Sprintf(" - Chicago:                   #%-8v\n", c.Bor.ChicagoBlock)
+			banner += fmt.Sprintf(" - Chicago:                     #%-8v\n", c.Bor.ChicagoBlock)
+		}
+		if c.Bor.ValenciaBlock != nil {
+			banner += fmt.Sprintf(" - Valencia:                    #%-8v\n", c.Bor.ValenciaBlock)
+		}
+		if c.Bor.AustinBlock != nil {
+			banner += fmt.Sprintf(" - Austin:                      #%-8v\n", c.Bor.AustinBlock)
+		}
+		if c.Bor.HampiBlock != nil {
+			banner += fmt.Sprintf(" - Hampi:                     #%-8v\n", c.Bor.HampiBlock)
 		}
 		return banner
 	}
@@ -1887,6 +1922,7 @@ type Rules struct {
 	IsLisovo                                                bool
 	IsLisovoPro                                             bool
 	IsChicago                                               bool
+	IsHampi                                                 bool
 }
 
 // Rules ensures c's ChainID is not nil.
@@ -1923,5 +1959,6 @@ func (c *ChainConfig) Rules(num *big.Int, isMerge bool, _ uint64) Rules {
 		IsLisovo:         c.Bor != nil && c.Bor.IsLisovo(num),
 		IsLisovoPro:      c.Bor != nil && c.Bor.IsLisovoPro(num),
 		IsChicago:        c.Bor != nil && c.Bor.IsChicago(num),
+		IsHampi:          c.Bor != nil && c.Bor.IsHampi(num),
 	}
 }
