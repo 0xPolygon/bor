@@ -40,7 +40,7 @@ func startExecHarness(t *testing.T) *execHarness {
 	return startExecHarnessVM(t, vm.Config{})
 }
 
-func startExecHarnessVM(t *testing.T, vmConfig vm.Config) *execHarness {
+func startExecHarnessVM(t *testing.T, vmConfig vm.Config, configure ...func(*params.ChainConfig)) *execHarness {
 	t.Helper()
 
 	return startExecHarnessConfig(t, &params.BorConfig{
@@ -52,7 +52,7 @@ func startExecHarnessVM(t *testing.T, vmConfig vm.Config) *execHarness {
 		BurntContract: map[string]string{
 			"0": "0x000000000000000000000000000000000000dead",
 		},
-	}, vmConfig)
+	}, vmConfig, configure...)
 }
 
 func startExecHarnessBor(t *testing.T, bor *params.BorConfig) *execHarness {
@@ -60,12 +60,12 @@ func startExecHarnessBor(t *testing.T, bor *params.BorConfig) *execHarness {
 	return startExecHarnessConfig(t, bor, vm.Config{})
 }
 
-func startExecHarnessConfig(t *testing.T, bor *params.BorConfig, vmConfig vm.Config) *execHarness {
+func startExecHarnessConfig(t *testing.T, bor *params.BorConfig, vmConfig vm.Config, configure ...func(*params.ChainConfig)) *execHarness {
 	t.Helper()
-	return startExecHarnessEngine(t, bor, vmConfig, &partialReuseEngine{Ethash: ethash.NewFullFaker()})
+	return startExecHarnessEngine(t, bor, vmConfig, &partialReuseEngine{Ethash: ethash.NewFullFaker()}, configure...)
 }
 
-func startExecHarnessEngine(t *testing.T, bor *params.BorConfig, vmConfig vm.Config, engine consensus.Engine) *execHarness {
+func startExecHarnessEngine(t *testing.T, bor *params.BorConfig, vmConfig vm.Config, engine consensus.Engine, configure ...func(*params.ChainConfig)) *execHarness {
 	t.Helper()
 
 	key, err := crypto.GenerateKey()
@@ -77,6 +77,9 @@ func startExecHarnessEngine(t *testing.T, bor *params.BorConfig, vmConfig vm.Con
 
 	config := *params.TestChainConfig
 	config.Bor = bor
+	for _, apply := range configure {
+		apply(&config)
+	}
 
 	genesis := &core.Genesis{
 		Config:   &config,

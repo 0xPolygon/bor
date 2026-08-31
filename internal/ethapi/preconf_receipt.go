@@ -39,5 +39,6 @@ func preconfTransactionReceipt(backend Backend, hash common.Hash) map[string]int
 	}
 	result := marshalReceipt(&copyReceipt, common.Hash{}, blockNumber, signer, tx, int(receipt.TransactionIndex), false)
 	result["blockHash"] = nil
+	result["preconfirmation"] = true
 	return result
 }

@@ -222,10 +222,6 @@ func (oracle *Oracle) resolveBlockRange(ctx context.Context, reqEnd rpc.BlockNum
 		// Absolute number resolved.
 		reqEnd = rpc.BlockNumber(resolved.Number.Uint64())
 	}
-	if pendingBlock != nil && pendingBlock.NumberU64() > headBlock.Number.Uint64()+1 {
-		blocks = 1
-	}
-
 	// If there are no blocks to return, short circuit.
 	if blocks == 0 {
 		return nil, nil, 0, 0, nil
@@ -233,6 +229,18 @@ func (oracle *Oracle) resolveBlockRange(ctx context.Context, reqEnd rpc.BlockNum
 	// Ensure not trying to retrieve before genesis.
 	if uint64(reqEnd+1) < blocks {
 		blocks = uint64(reqEnd + 1)
+	}
+	if pendingBlock != nil && pendingBlock.NumberU64() > headBlock.Number.Uint64()+1 {
+		// The genesis clamp above guarantees blocks <= reqEnd+1, so this
+		// subtraction cannot underflow.
+		oldestBlock := uint64(reqEnd) + 1 - blocks
+		if oldestBlock <= headBlock.Number.Uint64() {
+			reqEnd = rpc.BlockNumber(headBlock.Number.Uint64())
+			blocks = headBlock.Number.Uint64() + 1 - oldestBlock
+			pendingBlock, pendingReceipts = nil, nil
+		} else {
+			blocks = 1
+		}
 	}
 
 	return pendingBlock, pendingReceipts, uint64(reqEnd), blocks, nil

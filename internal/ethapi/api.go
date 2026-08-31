@@ -1997,7 +1997,7 @@ func (api *TransactionAPI) GetTransactionReceipt(ctx context.Context, hash commo
 	}
 
 	if tx == nil {
-		return nil, nil
+		return preconfTransactionReceipt(api.b, hash), nil
 	}
 
 	var (
@@ -2212,20 +2212,15 @@ func (api *TransactionAPI) SendRawTransaction(ctx context.Context, input hexutil
 	}
 
 	hash, err := SubmitTransaction(ctx, api.b, tx)
-
-	// If preconf is enabled, submit tx directly to BP
-	if api.b.PreconfEnabled() {
-		// Preconf processing mostly happens in background so don't float the error back to user
-		if err := api.b.SubmitTxForPreconf(tx); err != nil {
-			log.Error("Transaction accepted locally but submission for preconf failed", "err", err)
-		}
+	if err == nil {
+		api.submitForPreconf(tx)
 	}
 
 	return hash, err
 }
 
-// SendRawTransactionSync will add the signed transaction to the transaction pool
-// and wait until the transaction has been included in a block and return the receipt, or the timeout.
+// SendRawTransactionSync adds the signed transaction to the transaction pool and
+// waits for either a preconfirmation or canonical receipt until the timeout.
 func (api *TransactionAPI) SendRawTransactionSync(ctx context.Context, input hexutil.Bytes, timeoutMs *hexutil.Uint64) (map[string]interface{}, error) {
 	tx := new(types.Transaction)
 	if err := tx.UnmarshalBinary(input); err != nil {
@@ -2252,6 +2247,7 @@ func (api *TransactionAPI) SendRawTransactionSync(ctx context.Context, input hex
 	if err != nil {
 		return nil, err
 	}
+	api.submitForPreconf(tx)
 
 	var (
 		maxTimeout     = api.b.RPCTxSyncMaxTimeout()
@@ -2268,9 +2264,11 @@ func (api *TransactionAPI) SendRawTransactionSync(ctx context.Context, input hex
 	}
 	receiptCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	preconfTick, stopPreconfPolling := api.preconfReceiptPolling()
+	defer stopPreconfPolling()
 
 	// Fast path.
-	if r, err := api.GetTransactionReceipt(receiptCtx, hash); err == nil && r != nil {
+	if r := api.receiptIfAvailable(receiptCtx, hash); r != nil {
 		return r, nil
 	}
 
@@ -2292,6 +2290,11 @@ func (api *TransactionAPI) SendRawTransactionSync(ctx context.Context, input hex
 				return nil, errSubClosed
 			}
 			return nil, err
+
+		case <-preconfTick:
+			if receipt := api.receiptIfAvailable(receiptCtx, hash); receipt != nil {
+				return receipt, nil
+			}
 
 		case ev, ok := <-ch:
 			if !ok {
@@ -2318,6 +2321,35 @@ func (api *TransactionAPI) SendRawTransactionSync(ctx context.Context, input hex
 				}
 			}
 		}
+	}
+}
+
+func (api *TransactionAPI) preconfReceiptPolling() (<-chan time.Time, func()) {
+	if !api.b.PreconfEnabled() {
+		return nil, func() {}
+	}
+	if _, ok := api.b.(preconfBackend); !ok {
+		return nil, func() {}
+	}
+	ticker := time.NewTicker(100 * time.Millisecond)
+	return ticker.C, ticker.Stop
+}
+
+// receiptIfAvailable treats receipt lookup errors as absence while polling.
+func (api *TransactionAPI) receiptIfAvailable(ctx context.Context, hash common.Hash) map[string]interface{} {
+	receipt, err := api.GetTransactionReceipt(ctx, hash)
+	if err != nil {
+		return nil
+	}
+	return receipt
+}
+
+func (api *TransactionAPI) submitForPreconf(tx *types.Transaction) {
+	if !api.b.PreconfEnabled() {
+		return
+	}
+	if err := api.b.SubmitTxForPreconf(tx); err != nil {
+		log.Error("Transaction accepted locally but submission for preconf failed", "err", err)
 	}
 }
 

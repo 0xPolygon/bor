@@ -4172,11 +4172,11 @@ func TestRPCPreconfirmationLookup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTransactionReceipt: %v", err)
 	}
-	if receipt != nil {
-		t.Fatalf("standard receipt returned a preconfirmation: %#v", receipt)
+	if receipt == nil || receipt["blockHash"] != nil || receipt["preconfirmation"] != true {
+		t.Fatalf("standard preconfirmation receipt = %#v", receipt)
 	}
 	receipt = NewBorAPI(backend).GetPreconfTransactionReceipt(tx.Hash())
-	if receipt == nil || receipt["blockHash"] != nil {
+	if receipt == nil || receipt["blockHash"] != nil || receipt["preconfirmation"] != true {
 		t.Fatalf("preconf receipt blockHash = %v", receipt["blockHash"])
 	}
 	if receipt["transactionHash"] != tx.Hash() {
@@ -5070,6 +5070,11 @@ func TestSendRawTransaction_PreconfPath(t *testing.T) {
 		require.Equal(t, tx.Hash(), hash)
 		require.Equal(t, int32(1), preconfCount.Load(), "SubmitTxForPreconf should be called once")
 		require.Equal(t, tx.Hash(), capturedTxHash, "SubmitTxForPreconf should receive the correct tx")
+
+		b.sendTxErr = errors.New("txpool rejected")
+		_, err = api.SendRawTransaction(context.Background(), raw)
+		require.Error(t, err)
+		require.Equal(t, int32(1), preconfCount.Load(), "rejected transaction should not be forwarded for preconfirmation")
 	})
 
 	t.Run("preconf enabled, SubmitTxForPreconf fails, error not propagated", func(t *testing.T) {
@@ -5224,6 +5229,41 @@ func TestSendRawTransactionSync_Timeout(t *testing.T) {
 	}
 	if got, want := de.ErrorData(), tx.Hash().Hex(); got != want {
 		t.Fatalf("expected ErrorData=%s, got %v", want, got)
+	}
+}
+
+func TestSendRawTransactionSync_Preconfirmation(t *testing.T) {
+	t.Parallel()
+	genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+	b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+	b.preconfEnabled = true
+	b.submitTxForPreconfFn = func(tx *types.Transaction) error {
+		go func() {
+			time.Sleep(20 * time.Millisecond)
+			b.preconf.mu.Lock()
+			b.preconf.tx = tx
+			b.preconf.receipt = &types.Receipt{
+				Type:              tx.Type(),
+				Status:            types.ReceiptStatusSuccessful,
+				CumulativeGasUsed: tx.Gas(),
+				GasUsed:           tx.Gas(),
+				EffectiveGasPrice: tx.GasPrice(),
+				TxHash:            tx.Hash(),
+				BlockNumber:       new(big.Int).Add(b.CurrentBlock().Number, common.Big1),
+			}
+			b.preconf.mu.Unlock()
+		}()
+		return nil
+	}
+	api := NewTransactionAPI(b, new(AddrLocker))
+	raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
+	timeout := hexutil.Uint64(500)
+	receipt, err := api.SendRawTransactionSync(t.Context(), raw, &timeout)
+	if err != nil {
+		t.Fatalf("preconfirmation: %v", err)
+	}
+	if receipt == nil || receipt["transactionHash"] != tx.Hash() || receipt["blockHash"] != nil || receipt["preconfirmation"] != true {
+		t.Fatalf("preconfirmation receipt = %#v", receipt)
 	}
 }
 

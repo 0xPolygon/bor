@@ -43,20 +43,53 @@ func TestResolveBlockRangeTruncatesSpeculativeGap(t *testing.T) {
 	}
 	oracle := NewOracle(future, Config{MaxHeaderHistory: 1000}, nil)
 
-	_, _, last, count, err := oracle.resolveBlockRange(t.Context(), rpc.PendingBlockNumber, 2)
+	pending, _, last, count, err := oracle.resolveBlockRange(t.Context(), rpc.PendingBlockNumber, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if last != testHead+2 || count != 1 {
 		t.Fatalf("resolved range = (%d, %d), want (%d, 1)", last, count, testHead+2)
 	}
+	if pending == nil {
+		t.Fatal("speculative range lost the pending snapshot")
+	}
 
-	_, _, last, count, err = oracle.resolveBlockRange(t.Context(), rpc.PendingBlockNumber, 3)
+	pending, receipts, last, count, err := oracle.resolveBlockRange(t.Context(), rpc.PendingBlockNumber, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last != testHead || count != 1 {
+		t.Fatalf("resolved historical range = (%d, %d), want (%d, 1)", last, count, testHead)
+	}
+	if pending != nil || receipts != nil {
+		t.Fatal("historical range retained the pending snapshot")
+	}
+
+	pending, receipts, last, count, err = oracle.resolveBlockRange(t.Context(), rpc.PendingBlockNumber, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last != testHead || count != 3 {
+		t.Fatalf("resolved historical range = (%d, %d), want (%d, 3)", last, count, testHead)
+	}
+	if pending != nil || receipts != nil {
+		t.Fatal("canonical history retained the pending snapshot")
+	}
+
+	_, _, last, count, err = oracle.resolveBlockRange(t.Context(), rpc.PendingBlockNumber, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if last != testHead+2 || count != 1 {
-		t.Fatalf("resolved historical range = (%d, %d), want (%d, 1)", last, count, testHead+2)
+		t.Fatalf("resolved speculative range = (%d, %d), want (%d, 1)", last, count, testHead+2)
+	}
+
+	first, _, baseFee, ratio, _, _, err := oracle.FeeHistory(t.Context(), 5, rpc.PendingBlockNumber, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Uint64() != testHead-2 || len(baseFee) != 4 || len(ratio) != 3 {
+		t.Fatalf("fee history = first %d, base fees %d, ratios %d", first.Uint64(), len(baseFee), len(ratio))
 	}
 }
 
