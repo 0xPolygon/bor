@@ -39,6 +39,7 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/filtermaps"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/state/pruner"
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/txpool/blobpool"
@@ -74,6 +75,16 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 	gethversion "github.com/ethereum/go-ethereum/version"
 )
+
+type sequenceConsumer interface {
+	PendingSnapshot(context.Context) (*types.Block, types.Receipts, *state.StateDB, error)
+	PendingBlock() *types.Block
+	PendingBlockAndReceipts() (*types.Block, types.Receipts)
+	PendingNonce(common.Address) (uint64, bool, error)
+	LookupPreconf(common.Hash) (*types.Transaction, *types.Receipt, bool)
+	SubscribePendingLogs(chan<- []*types.Log) event.Subscription
+	Close()
+}
 
 var (
 	MilestoneWhitelistedDelayTimer = metrics.NewRegisteredTimer("chain/milestone/whitelisteddelay", nil)
@@ -145,7 +156,7 @@ type Ethereum struct {
 	// Sequence store integration (design docs/sequencer-bor.md): at most
 	// one is set, by role.
 	seqPublisher *sequencer.Publisher // mining node: publishes the block lifecycle
-	seqConsumer  *sequencer.Consumer  // RPC node: re-executes the stream for preconf receipts
+	seqConsumer  sequenceConsumer     // RPC node: re-executes the stream for preconf receipts
 
 	networkID     uint64
 	netRPCService *ethapi.NetAPI
@@ -201,6 +212,7 @@ func (s *Ethereum) attachSequencer(config *ethconfig.Config) error {
 		}
 
 		s.seqConsumer = consumer
+		s.blockchain.SetPreconfProvider(consumer)
 		consumer.Start()
 	case "":
 	default:

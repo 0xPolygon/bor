@@ -139,6 +139,18 @@ func NewBorAPI(b Backend) *BorAPI {
 	return &BorAPI{b}
 }
 
+func (api *BorAPI) GetInvalidPreconfBlocks(limit *hexutil.Uint64) []rawdb.InvalidPreconfRecord {
+	requested := uint64(rawdb.InvalidPreconfQueryLimit)
+	if limit != nil {
+		requested = uint64(*limit)
+	}
+	return rawdb.ReadInvalidPreconfs(api.b.ChainDb(), requested)
+}
+
+func (api *BorAPI) GetPreconfTransactionReceipt(hash common.Hash) map[string]interface{} {
+	return preconfTransactionReceipt(api.b, hash)
+}
+
 // SendRawTransactionConditional will add the signed transaction to the transaction pool.
 // The sender/bundler is responsible for signing the transaction
 func (api *BorAPI) SendRawTransactionConditional(ctx context.Context, input hexutil.Bytes, options types.OptionsPIP15) (common.Hash, error) {
@@ -311,7 +323,7 @@ func (api *BorAPI) GetHeaderByHash(ctx context.Context, hash common.Hash) (*type
 func (api *BorAPI) GetHeaderByNumber(ctx context.Context, blockNumber rpc.BlockNumber) (*types.Header, error) {
 	// Pending block is only known by the miner/builder
 	if blockNumber == rpc.PendingBlockNumber {
-		block, _, _ := api.b.Pending()
+		block := pendingBlock(api.b)
 		if block == nil {
 			return nil, nil
 		}
@@ -783,14 +795,20 @@ func resolveBlockNumberOrHashWithCanonical(blockNrOrHash rpc.BlockNumberOrHash) 
 
 // getBalanceChangesForPending returns balance changes for the pending block
 func (api *BorAPI) getBalanceChangesForPending(ctx context.Context) (map[common.Address]*hexutil.Big, error) {
-	// Get pending block and state
-	pendingBlock, pendingReceipts, pendingState := api.b.Pending()
+	pendingBlock, pendingReceipts, pendingState, err := pendingSnapshot(ctx, api.b)
+	if err != nil {
+		return nil, err
+	}
 	if pendingBlock == nil || pendingState == nil {
 		return nil, fmt.Errorf("pending state not available")
 	}
+	head := api.b.CurrentHeader()
+	if head == nil || pendingBlock.NumberU64() != head.Number.Uint64()+1 || pendingBlock.ParentHash() != head.Hash() {
+		return nil, errors.New("balance changes are unavailable for multi-block pending state")
+	}
 
 	// Get parent state (current confirmed state)
-	parentNumber := rpc.BlockNumber(pendingBlock.NumberU64() - 1)
+	parentNumber := rpc.BlockNumber(head.Number.Uint64())
 	parentState, _, err := api.b.StateAndHeaderByNumber(ctx, parentNumber)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get parent state: %w", err)
@@ -915,6 +933,9 @@ func (api *BorAPI) GetLogsByHash(ctx context.Context, hash common.Hash) ([][]*ty
 func (api *BorAPI) GetLogs(ctx context.Context, crit FilterCriteria) ([]*types.Log, error) {
 	// Convert to ethereum.FilterQuery for internal use
 	filterQuery := ethereum.FilterQuery(crit)
+	if filterQuery.Pending {
+		return nil, errors.New("pending logs are not supported by bor_getLogs")
+	}
 
 	// Determine block range
 	begin, end, err := api.determineBlockRange(ctx, filterQuery)
@@ -1017,6 +1038,9 @@ func (api *BorAPI) GetLatestLogs(ctx context.Context, crit FilterCriteria, logOp
 
 	// Convert to ethereum.FilterQuery for internal use
 	filterQuery := ethereum.FilterQuery(crit)
+	if filterQuery.Pending {
+		return nil, errors.New("pending logs are not supported by bor_getLatestLogs")
+	}
 
 	// Determine block range
 	begin, end, err := api.determineBlockRange(ctx, filterQuery)
@@ -1274,12 +1298,14 @@ func (fc *FilterCriteria) UnmarshalJSON(data []byte) error {
 		ToBlock   *rpc.BlockNumber `json:"toBlock"`
 		Addresses interface{}      `json:"address"` // string or []string
 		Topics    []interface{}    `json:"topics"`
+		Pending   bool             `json:"pending"`
 	}
 
 	var raw input
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
+	fc.Pending = raw.Pending
 
 	// Validate blockHash is mutually exclusive with fromBlock/toBlock
 	if raw.BlockHash != nil {

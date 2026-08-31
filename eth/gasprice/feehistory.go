@@ -79,6 +79,10 @@ type txGasAndReward struct {
 	reward  *big.Int
 }
 
+type pendingBlockAndReceiptsBackend interface {
+	PendingBlockAndReceipts() (*types.Block, types.Receipts)
+}
+
 // processBlock takes a blockFees structure with the blockNumber, the header and optionally
 // the block field filled in, retrieves the block from the backend if not present yet and
 // fills in the rest of the fields.
@@ -191,7 +195,8 @@ func (oracle *Oracle) resolveBlockRange(ctx context.Context, reqEnd rpc.BlockNum
 
 		switch reqEnd {
 		case rpc.PendingBlockNumber:
-			if pendingBlock, pendingReceipts, _ = oracle.backend.Pending(); pendingBlock != nil {
+			pendingBlock, pendingReceipts = oracle.pendingBlockAndReceipts()
+			if pendingBlock != nil {
 				resolved = pendingBlock.Header()
 			} else {
 				// Pending block not supported by backend, process only until latest block.
@@ -217,6 +222,9 @@ func (oracle *Oracle) resolveBlockRange(ctx context.Context, reqEnd rpc.BlockNum
 		// Absolute number resolved.
 		reqEnd = rpc.BlockNumber(resolved.Number.Uint64())
 	}
+	if pendingBlock != nil && pendingBlock.NumberU64() > headBlock.Number.Uint64()+1 {
+		blocks = 1
+	}
 
 	// If there are no blocks to return, short circuit.
 	if blocks == 0 {
@@ -228,6 +236,14 @@ func (oracle *Oracle) resolveBlockRange(ctx context.Context, reqEnd rpc.BlockNum
 	}
 
 	return pendingBlock, pendingReceipts, uint64(reqEnd), blocks, nil
+}
+
+func (oracle *Oracle) pendingBlockAndReceipts() (*types.Block, types.Receipts) {
+	if backend, ok := oracle.backend.(pendingBlockAndReceiptsBackend); ok {
+		return backend.PendingBlockAndReceipts()
+	}
+	block, receipts, _ := oracle.backend.Pending()
+	return block, receipts
 }
 
 // FeeHistory returns data relevant for fee estimation based on the specified range of blocks.

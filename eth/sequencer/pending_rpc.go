@@ -1,0 +1,194 @@
+package sequencer
+
+import (
+	"context"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/types"
+)
+
+// PendingSnapshot returns one block/receipt/state view. A cancellable request
+// context keeps the state-copy lease until that request finishes.
+func (c *Consumer) PendingSnapshot(ctx context.Context) (*types.Block, types.Receipts, *state.StateDB, error) {
+	anchor, ok := c.pendingReadAnchor()
+	if !ok {
+		return nil, nil, nil, nil
+	}
+	block, receipts, statedb, err := c.pendingStore().PendingSnapshot(ctx)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if !c.pendingReadAnchorValid(anchor) {
+		return nil, nil, nil, nil
+	}
+	return block, receipts, statedb, nil
+}
+
+func (c *Consumer) PendingBlock() *types.Block {
+	anchor, ok := c.pendingReadAnchor()
+	if !ok {
+		return nil
+	}
+	block := c.pendingStore().PendingBlock()
+	if !c.pendingReadAnchorValid(anchor) {
+		return nil
+	}
+	return block
+}
+
+func (c *Consumer) PendingBlockAndReceipts() (*types.Block, types.Receipts) {
+	anchor, ok := c.pendingReadAnchor()
+	if !ok {
+		return nil, nil
+	}
+	block, receipts := c.pendingStore().PendingBlockAndReceipts()
+	if !c.pendingReadAnchorValid(anchor) {
+		return nil, nil
+	}
+	return block, receipts
+}
+
+func (c *Consumer) PendingNonce(address common.Address) (uint64, bool, error) {
+	anchor, ok := c.pendingReadAnchor()
+	if !ok {
+		return 0, false, nil
+	}
+	nonce, found, err := c.pendingStore().PendingNonce(address)
+	if !c.pendingReadAnchorValid(anchor) {
+		return 0, false, nil
+	}
+	return nonce, found, err
+}
+
+func (c *Consumer) LookupPreconf(hash common.Hash) (*types.Transaction, *types.Receipt, bool) {
+	anchor, ok := c.pendingReadAnchor()
+	if !ok {
+		return nil, nil, false
+	}
+	receipt, tx, found := c.index.Lookup(hash)
+	if !c.pendingReadAnchorValid(anchor) {
+		return nil, nil, false
+	}
+	return tx, cloneReceipt(receipt), found
+}
+
+func (c *Consumer) pendingHeadCurrent() bool {
+	_, ok := c.pendingReadAnchor()
+	return ok
+}
+
+func (c *Consumer) pendingReadAnchor() (*types.Header, bool) {
+	if c.chain == nil {
+		return nil, true
+	}
+	head := c.chain.CurrentBlock()
+	marker := c.reconciled.Load()
+	if marker == nil {
+		c.reconciled.CompareAndSwap(nil, types.CopyHeader(head))
+		marker = c.reconciled.Load()
+	}
+	if marker == nil || marker.Hash() != head.Hash() {
+		return nil, false
+	}
+	return marker, true
+}
+
+func (c *Consumer) pendingReadAnchorValid(anchor *types.Header) bool {
+	if c.chain == nil {
+		return true
+	}
+	return anchor != nil && c.reconciled.Load() == anchor && c.chain.CurrentBlock().Hash() == anchor.Hash()
+}
+
+// PendingSnapshot limits both concurrent copies and concurrently retained RPC
+// states. RPC request contexts are cancelled by the server when handlers exit.
+func (s *PendingStore) PendingSnapshot(ctx context.Context) (*types.Block, types.Receipts, *state.StateDB, error) {
+	if !s.acquireStateCopy(ctx) {
+		return nil, nil, nil, ctx.Err()
+	}
+	release := true
+	defer func() {
+		if release {
+			s.releaseStateCopy()
+		}
+	}()
+
+	s.mu.RLock()
+	entry := s.entries[s.active]
+	if !s.hasActive || entry == nil || entry.RPCView == nil {
+		s.mu.RUnlock()
+		return nil, nil, nil, nil
+	}
+	view := entry.RPCView
+	s.mu.RUnlock()
+	stateDB, err := view.State.NewStateDB()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if ctx.Done() != nil {
+		stop := context.AfterFunc(ctx, s.releaseStateCopy)
+		if err := ctx.Err(); err != nil {
+			if !stop() {
+				release = false
+			}
+			return nil, nil, nil, err
+		}
+		release = false
+	}
+	return view.Block, receiptsFromView(view.Block, view), stateDB, nil
+}
+
+func (s *PendingStore) acquireStateCopy(ctx context.Context) bool {
+	s.stateCopyOnce.Do(func() {
+		s.stateCopy = make(chan struct{}, 1)
+	})
+	if err := ctx.Err(); err != nil {
+		return false
+	}
+	select {
+	case s.stateCopy <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func (s *PendingStore) releaseStateCopy() {
+	<-s.stateCopy
+}
+
+func (s *PendingStore) PendingBlock() *types.Block {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	entry := s.entries[s.active]
+	if !s.hasActive || entry == nil || entry.RPCView == nil {
+		return nil
+	}
+	return entry.RPCView.Block
+}
+
+func (s *PendingStore) PendingBlockAndReceipts() (*types.Block, types.Receipts) {
+	s.mu.RLock()
+	entry := s.entries[s.active]
+	if !s.hasActive || entry == nil || entry.RPCView == nil {
+		s.mu.RUnlock()
+		return nil, nil
+	}
+	view := entry.RPCView
+	s.mu.RUnlock()
+	return view.Block, receiptsFromView(view.Block, view)
+}
+
+func (s *PendingStore) PendingNonce(address common.Address) (uint64, bool, error) {
+	s.mu.RLock()
+	entry := s.entries[s.active]
+	if !s.hasActive || entry == nil || entry.RPCView == nil || entry.RPCView.State == nil {
+		s.mu.RUnlock()
+		return 0, false, nil
+	}
+	reader := entry.RPCView.State
+	s.mu.RUnlock()
+	nonce, err := reader.GetNonceWithError(address)
+	return nonce, true, err
+}

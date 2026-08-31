@@ -29,6 +29,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -441,6 +442,7 @@ type testBackend struct {
 
 	pending         *types.Block
 	pendingReceipts types.Receipts
+	preconf         *testPreconf
 
 	chainFeed *event.Feed
 	autoMine  bool
@@ -467,6 +469,12 @@ type testBackend struct {
 
 	// Error to inject from SendTx (nil = existing logic)
 	sendTxErr error
+}
+
+type testPreconf struct {
+	mu      sync.RWMutex
+	tx      *types.Transaction
+	receipt *types.Receipt
 }
 
 func fakeBlockHash(txh common.Hash) common.Hash {
@@ -497,6 +505,7 @@ func newTestBackend(t *testing.T, n int, gspec *core.Genesis, engine consensus.E
 		acc:             acc,
 		pending:         blocks[n],
 		pendingReceipts: receipts[n],
+		preconf:         new(testPreconf),
 		chainFeed:       new(event.Feed),
 	}
 	return backend
@@ -719,6 +728,14 @@ func (b *testBackend) GetCanonicalTransaction(txHash common.Hash) (bool, *types.
 	}
 	tx, blockHash, blockNumber, index := rawdb.ReadCanonicalTransaction(b.db, txHash)
 	return tx != nil, tx, blockHash, blockNumber, index
+}
+func (b *testBackend) GetPreconfTransaction(txHash common.Hash) (*types.Transaction, *types.Receipt, bool) {
+	b.preconf.mu.RLock()
+	defer b.preconf.mu.RUnlock()
+	if b.preconf.tx != nil && b.preconf.tx.Hash() == txHash {
+		return b.preconf.tx, b.preconf.receipt, true
+	}
+	return nil, nil, false
 }
 func (b *testBackend) GetCanonicalReceipt(tx *types.Transaction, blockHash common.Hash, blockNumber, blockIndex uint64) (*types.Receipt, error) {
 	if b.autoMine && tx != nil && tx.Hash() == b.sentTxHash &&
@@ -4120,6 +4137,71 @@ func TestRPCGetTransactionByHash(t *testing.T) {
 			continue
 		}
 		testRPCResponseWithFile(t, i, result, "eth_getTransactionByHash", tt.file)
+	}
+}
+
+func TestRPCPreconfirmationLookup(t *testing.T) {
+	api, _, _ := setupTransactionsToApiTest(t)
+	backend := api.b.(*testBackend)
+	tx := backend.pending.Transactions()[0]
+	backend.preconf.tx = tx
+	backend.preconf.receipt = &types.Receipt{
+		Type:              tx.Type(),
+		Status:            types.ReceiptStatusSuccessful,
+		CumulativeGasUsed: tx.Gas(),
+		GasUsed:           tx.Gas(),
+		EffectiveGasPrice: tx.GasPrice(),
+		TxHash:            tx.Hash(),
+		BlockNumber:       new(big.Int).Add(backend.CurrentBlock().Number, common.Big1),
+		Logs:              []*types.Log{{BlockHash: common.HexToHash("0x1234")}, nil},
+	}
+	activation := new(big.Int).Add(backend.preconf.receipt.BlockNumber, common.Big1)
+	backend.ChainConfig().BerlinBlock = activation
+	backend.ChainConfig().LondonBlock = activation
+	backend.ChainConfig().CancunBlock = activation
+
+	rpcTx, err := api.GetTransactionByHash(t.Context(), tx.Hash())
+	if err != nil {
+		t.Fatalf("GetTransactionByHash: %v", err)
+	}
+	if rpcTx == nil || rpcTx.BlockHash != nil || rpcTx.BlockNumber != nil {
+		t.Fatalf("preconf transaction location = %+v", rpcTx)
+	}
+
+	receipt, err := api.GetTransactionReceipt(t.Context(), tx.Hash())
+	if err != nil {
+		t.Fatalf("GetTransactionReceipt: %v", err)
+	}
+	if receipt != nil {
+		t.Fatalf("standard receipt returned a preconfirmation: %#v", receipt)
+	}
+	receipt = NewBorAPI(backend).GetPreconfTransactionReceipt(tx.Hash())
+	if receipt == nil || receipt["blockHash"] != nil {
+		t.Fatalf("preconf receipt blockHash = %v", receipt["blockHash"])
+	}
+	if receipt["transactionHash"] != tx.Hash() {
+		t.Fatalf("preconf receipt transactionHash = %v, want %s", receipt["transactionHash"], tx.Hash())
+	}
+	if receipt["from"] != (common.Address{}) {
+		t.Fatalf("pre-fork transaction sender = %v, want zero address", receipt["from"])
+	}
+	wantNumber := hexutil.Uint64(backend.CurrentBlock().Number.Uint64() + 1)
+	if receipt["blockNumber"] != wantNumber || receipt["transactionIndex"] != hexutil.Uint64(0) {
+		t.Fatalf("preconf receipt location = block %v index %v", receipt["blockNumber"], receipt["transactionIndex"])
+	}
+	logs := receipt["logs"].([]*types.Log)
+	if len(logs) != 2 || logs[0].BlockHash != (common.Hash{}) || logs[1] != nil {
+		t.Fatalf("preconf receipt log block hash = %v", logs)
+	}
+
+	backend.pending = nil
+	receipt = NewBorAPI(backend).GetPreconfTransactionReceipt(tx.Hash())
+	wantFrom, err := types.Sender(types.LatestSigner(backend.ChainConfig()), tx)
+	if err != nil {
+		t.Fatalf("derive latest sender: %v", err)
+	}
+	if receipt["from"] != wantFrom {
+		t.Fatalf("fallback transaction sender = %v, want %v", receipt["from"], wantFrom)
 	}
 }
 

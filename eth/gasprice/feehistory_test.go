@@ -21,8 +21,44 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rpc"
 )
+
+type futurePendingBackend struct {
+	*testBackend
+	block *types.Block
+}
+
+func (b *futurePendingBackend) PendingBlockAndReceipts() (*types.Block, types.Receipts) {
+	return b.block, nil
+}
+
+func TestResolveBlockRangeTruncatesSpeculativeGap(t *testing.T) {
+	backend := newTestBackend(t, big.NewInt(16), big.NewInt(28), false)
+	defer backend.teardown()
+	future := &futurePendingBackend{
+		testBackend: backend,
+		block:       types.NewBlockWithHeader(&types.Header{Number: big.NewInt(testHead + 2)}),
+	}
+	oracle := NewOracle(future, Config{MaxHeaderHistory: 1000}, nil)
+
+	_, _, last, count, err := oracle.resolveBlockRange(t.Context(), rpc.PendingBlockNumber, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last != testHead+2 || count != 1 {
+		t.Fatalf("resolved range = (%d, %d), want (%d, 1)", last, count, testHead+2)
+	}
+
+	_, _, last, count, err = oracle.resolveBlockRange(t.Context(), rpc.PendingBlockNumber, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last != testHead+2 || count != 1 {
+		t.Fatalf("resolved historical range = (%d, %d), want (%d, 1)", last, count, testHead+2)
+	}
+}
 
 func TestFeeHistory(t *testing.T) {
 	var cases = []struct {

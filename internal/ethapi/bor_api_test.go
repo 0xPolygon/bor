@@ -44,6 +44,21 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
+func TestGetInvalidPreconfBlocks(t *testing.T) {
+	backend := newTestBackend(t, 0, &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}, ethash.NewFaker(), nil)
+	if err := rawdb.WriteInvalidPreconf(backend.ChainDb(), 4, "skipped"); err != nil {
+		t.Fatalf("write 4: %v", err)
+	}
+	if err := rawdb.WriteInvalidPreconf(backend.ChainDb(), 6, "canonical_mismatch"); err != nil {
+		t.Fatalf("write 6: %v", err)
+	}
+	limit := hexutil.Uint64(1)
+	records := NewBorAPI(backend).GetInvalidPreconfBlocks(&limit)
+	if len(records) != 1 || records[0].Number != 6 || records[0].Reason != "canonical_mismatch" {
+		t.Fatalf("records = %+v", records)
+	}
+}
+
 func TestBorWitnessAPI_Integration(t *testing.T) {
 	t.Parallel()
 	genesis := &core.Genesis{
@@ -3769,6 +3784,15 @@ func TestFilterCriteriaUnmarshalJSON(t *testing.T) {
 				}
 				if fc.ToBlock == nil || fc.ToBlock.Int64() != 10 {
 					t.Errorf("ToBlock = %v, want 10", fc.ToBlock)
+				}
+			},
+		},
+		{
+			name:  "pending flag",
+			input: `{"pending":true}`,
+			check: func(t *testing.T, fc FilterCriteria) {
+				if !fc.Pending {
+					t.Fatal("expected Pending to be set")
 				}
 			},
 		},

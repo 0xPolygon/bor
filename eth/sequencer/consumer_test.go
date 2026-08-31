@@ -10,7 +10,7 @@ import (
 )
 
 func testSession() *session {
-	return &session{consumer: &Consumer{index: NewIndex()}}
+	return newSession(&Consumer{index: NewIndex()})
 }
 
 // A cold-started session adopts the first entry's prefix as its seed and

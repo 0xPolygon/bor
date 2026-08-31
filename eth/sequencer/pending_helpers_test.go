@@ -1,0 +1,158 @@
+package sequencer
+
+import (
+	"errors"
+	"math/big"
+	"testing"
+
+	"github.com/holiman/uint256"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/tracing"
+	"github.com/ethereum/go-ethereum/core/types"
+)
+
+func TestPendingHelperNilInputs(t *testing.T) {
+	if removedLogs(nil) != nil {
+		t.Fatal("nil view returned logs")
+	}
+	if cloneProcessResult(nil) != nil {
+		t.Fatal("nil process result returned a clone")
+	}
+	if cloneReceipt(nil) != nil {
+		t.Fatal("nil receipt returned a clone")
+	}
+	if block, err := blockFromExecution(nil, nil, nil); err == nil || block != nil {
+		t.Fatalf("nil header returned block %v and error %v", block, err)
+	}
+}
+
+func TestCloneProcessResultDeepCopy(t *testing.T) {
+	source := &core.ProcessResult{
+		Receipts: types.Receipts{{
+			PostState: []byte{1},
+			Logs: []*types.Log{{
+				Topics: []common.Hash{{2}},
+				Data:   []byte{3},
+			}},
+		}},
+		Requests: [][]byte{{4}},
+		Logs: []*types.Log{{
+			Topics: []common.Hash{{5}},
+			Data:   []byte{6},
+		}},
+		GasUsed: 7,
+	}
+
+	clone := cloneProcessResult(source)
+	clone.Receipts[0].PostState[0] = 8
+	clone.Receipts[0].Logs[0].Topics[0][0] = 9
+	clone.Receipts[0].Logs[0].Data[0] = 10
+	clone.Requests[0][0] = 11
+	clone.Logs[0].Topics[0][0] = 12
+	clone.Logs[0].Data[0] = 13
+
+	if source.Receipts[0].PostState[0] != 1 || source.Receipts[0].Logs[0].Topics[0][0] != 2 || source.Receipts[0].Logs[0].Data[0] != 3 {
+		t.Fatal("receipt clone shares backing storage")
+	}
+	if source.Requests[0][0] != 4 || source.Logs[0].Topics[0][0] != 5 || source.Logs[0].Data[0] != 6 {
+		t.Fatal("process result clone shares backing storage")
+	}
+	if clone.GasUsed != source.GasUsed {
+		t.Fatalf("gas used = %d, want %d", clone.GasUsed, source.GasUsed)
+	}
+}
+
+func TestPendingComparisonsRejectMismatches(t *testing.T) {
+	txA := types.NewTransaction(0, common.Address{1}, big.NewInt(1), 21_000, big.NewInt(1), nil)
+	txB := types.NewTransaction(1, common.Address{1}, big.NewInt(1), 21_000, big.NewInt(1), nil)
+	base := types.NewBlockWithHeader(&types.Header{Number: big.NewInt(1), TxHash: common.Hash{1}})
+	one := base.WithBody(types.Body{Transactions: types.Transactions{txA}})
+	empty := base.WithBody(types.Body{})
+	different := base.WithBody(types.Body{Transactions: types.Transactions{txB}})
+
+	if sameTransactions(one, empty) {
+		t.Fatal("blocks with different transaction counts matched")
+	}
+	if sameTransactions(one, different) {
+		t.Fatal("blocks with different transactions matched")
+	}
+	receipt := &types.Receipt{TxHash: txA.Hash(), Status: types.ReceiptStatusSuccessful}
+	view := &PendingRPCView{Receipts: map[common.Hash]*types.Receipt{txA.Hash(): receipt}}
+	if sameReceipts(one, view, nil) {
+		t.Fatal("receipt slices with different lengths matched")
+	}
+}
+
+func TestPendingStateReaderAccessors(t *testing.T) {
+	statedb, err := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+	if err != nil {
+		t.Fatalf("state: %v", err)
+	}
+	address := common.Address{1}
+	slot := common.Hash{2}
+	value := common.Hash{3}
+	code := []byte{4, 5}
+	statedb.SetBalance(address, uint256.NewInt(6), tracing.BalanceChangeUnspecified)
+	statedb.SetNonce(address, 7, tracing.NonceChangeUnspecified)
+	statedb.SetCode(address, code, tracing.CodeChangeUnspecified)
+	statedb.SetState(address, slot, value)
+	reader := &pendingStateReader{state: statedb}
+
+	balance := reader.GetBalance(address)
+	if balance.Uint64() != 6 || reader.GetNonce(address) != 7 || reader.GetStorage(address, slot) != value {
+		t.Fatal("state reader returned incorrect account data")
+	}
+	balance.SetUint64(8)
+	if reader.GetBalance(address).Uint64() != 6 {
+		t.Fatal("balance mutation leaked into state")
+	}
+	returnedCode := reader.GetCode(address)
+	returnedCode[0] = 9
+	if reader.GetCode(address)[0] != 4 {
+		t.Fatal("code mutation leaked into state")
+	}
+	copy, err := reader.NewStateDB()
+	if err != nil {
+		t.Fatalf("copy state: %v", err)
+	}
+	copy.SetNonce(address, 10, tracing.NonceChangeUnspecified)
+	if reader.GetNonce(address) != 7 {
+		t.Fatal("state copy mutation leaked into source")
+	}
+}
+
+type failingStateReader struct {
+	err error
+}
+
+func (r failingStateReader) Account(common.Address) (*types.StateAccount, error) {
+	return nil, r.err
+}
+
+func (r failingStateReader) Storage(common.Address, common.Hash) (common.Hash, error) {
+	return common.Hash{}, r.err
+}
+
+func (r failingStateReader) Code(common.Address, common.Hash) ([]byte, error) {
+	return nil, r.err
+}
+
+func (r failingStateReader) CodeSize(common.Address, common.Hash) (int, error) {
+	return 0, r.err
+}
+
+func TestPendingStateReaderRejectsErroredState(t *testing.T) {
+	failure := errors.New("state read failed")
+	statedb, err := state.NewWithReader(types.EmptyRootHash, state.NewDatabaseForTesting(), failingStateReader{err: failure})
+	if err != nil {
+		t.Fatalf("state: %v", err)
+	}
+	statedb.GetBalance(common.Address{1})
+
+	if copy, err := (&pendingStateReader{state: statedb}).NewStateDB(); !errors.Is(err, failure) || copy != nil {
+		t.Fatalf("errored state returned copy %v and error %v", copy, err)
+	}
+}

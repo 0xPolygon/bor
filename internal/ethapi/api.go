@@ -755,7 +755,7 @@ func (api *BlockChainAPI) GetBlockReceipts(ctx context.Context, blockNrOrHash rp
 		receipts types.Receipts
 	)
 	if blockNr, ok := blockNrOrHash.Number(); ok && blockNr == rpc.PendingBlockNumber {
-		block, receipts, _ = api.b.Pending()
+		block, receipts = pendingBlockAndReceipts(api.b)
 		if block == nil {
 			return nil, errors.New("pending receipts is not available")
 		}
@@ -1924,6 +1924,11 @@ func (api *TransactionAPI) GetTransactionByHash(ctx context.Context, hash common
 		tx, blockHash, blockNumber, index, _ = api.b.GetBorBlockTransaction(ctx, hash)
 		borTx = true
 	}
+	if tx == nil {
+		if tx, _, found = getPreconfTransaction(api.b, hash); found {
+			return NewRPCPendingTransaction(tx, api.b.CurrentHeader(), api.b.ChainConfig()), nil
+		}
+	}
 
 	if tx != nil {
 		header, err := api.b.HeaderByHash(ctx, blockHash)
@@ -1962,6 +1967,9 @@ func (api *TransactionAPI) GetRawTransactionByHash(ctx context.Context, hash com
 	// Retrieve a finalized transaction, or a pooled otherwise
 	found, tx, _, _, _ := api.b.GetCanonicalTransaction(hash)
 	if !found {
+		if tx, _, ok := getPreconfTransaction(api.b, hash); ok {
+			return tx.MarshalBinary()
+		}
 		if tx = api.b.GetPoolTransaction(hash); tx != nil {
 			return tx.MarshalBinary()
 		}

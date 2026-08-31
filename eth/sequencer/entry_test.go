@@ -71,6 +71,47 @@ func TestContentEqual(t *testing.T) {
 	}
 }
 
+func TestFoldEntryRejectsMalformedWireShape(t *testing.T) {
+	prefix := make([]byte, len(commitment.Head{}))
+	for _, test := range []struct {
+		name  string
+		entry *pb.Entry
+	}{
+		{
+			name: "short open prefix",
+			entry: &pb.Entry{Kind: &pb.Entry_BlockOpen{BlockOpen: &pb.BlockOpen{
+				PrefixCommitment: prefix[:len(prefix)-1],
+				ParentHash:       make([]byte, common.HashLength),
+			}}},
+		},
+		{
+			name: "short open parent",
+			entry: &pb.Entry{Kind: &pb.Entry_BlockOpen{BlockOpen: &pb.BlockOpen{
+				PrefixCommitment: prefix,
+				ParentHash:       make([]byte, common.HashLength-1),
+			}}},
+		},
+		{
+			name: "short record prefix",
+			entry: &pb.Entry{Kind: &pb.Entry_Record{Record: &pb.Record{
+				PrefixCommitment: prefix[:len(prefix)-1],
+			}}},
+		},
+		{
+			name: "empty seal header",
+			entry: &pb.Entry{Kind: &pb.Entry_BlockSeal{BlockSeal: &pb.BlockSeal{
+				PrefixCommitment: prefix,
+			}}},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := foldEntry(commitment.Head{}, test.entry); err == nil {
+				t.Fatal("malformed entry was accepted")
+			}
+		})
+	}
+}
+
 func TestEntryHeight(t *testing.T) {
 	if h, ok := entryHeight(testOpen(7, common.Hash{0x01}, commitment.Head{})); !ok || h != 7 {
 		t.Fatalf("open height = %d/%v", h, ok)

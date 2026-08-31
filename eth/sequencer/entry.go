@@ -2,12 +2,14 @@ package sequencer
 
 import (
 	"bytes"
+	"errors"
 	"math/big"
 
 	"github.com/0xPolygon/sequence-store-proto/commitment"
 	pb "github.com/0xPolygon/sequence-store-proto/sequencestore/v1"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rlp"
 )
@@ -79,8 +81,41 @@ func openContext(bo *pb.BlockOpen) commitment.OpenContext {
 	}
 }
 
+func validateEntryShape(entry *pb.Entry) error {
+	if len(entryPrefix(entry)) != len(commitment.Head{}) {
+		return errors.New("malformed entry prefix")
+	}
+	switch kind := entry.GetKind().(type) {
+	case *pb.Entry_BlockOpen:
+		if len(kind.BlockOpen.GetParentHash()) != common.HashLength {
+			return errors.New("malformed open parent hash")
+		}
+		if len(kind.BlockOpen.GetBaseFee()) > pendingOpenBaseFeeLimit {
+			return errors.New("open base fee exceeds limit")
+		}
+	case *pb.Entry_Record:
+		var inputBytes uint64
+		for _, raw := range kind.Record.GetTransactions() {
+			if uint64(len(raw)) > pendingInputLimit-inputBytes {
+				return errors.New("record transaction input exceeds limit")
+			}
+			inputBytes += uint64(len(raw))
+		}
+	case *pb.Entry_BlockSeal:
+		if size := len(kind.BlockSeal.GetHeader()); size == 0 || size > pendingSealHeaderLimit {
+			return errors.New("seal header size outside limit")
+		}
+	default:
+		return errRefold
+	}
+	return nil
+}
+
 // foldEntry advances a commitment head by one entry, dispatching on kind.
 func foldEntry(cur commitment.Head, e *pb.Entry) (commitment.Head, error) {
+	if err := validateEntryShape(e); err != nil {
+		return commitment.Head{}, err
+	}
 	switch k := e.GetKind().(type) {
 	case *pb.Entry_BlockOpen:
 		return commitment.FoldOpen(cur, openContext(k.BlockOpen))
