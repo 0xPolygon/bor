@@ -88,7 +88,8 @@ func newExEnv(base *StateDB, poolSize int, scripts []txScript) *exEnv {
 }
 
 func (e *exEnv) BaseNonce(addr common.Address) uint64 {
-	return e.safeBase.GetNonce(addr)
+	nonce, _ := e.safeBase.GetNonce(addr)
+	return nonce
 }
 
 func (e *exEnv) acquire(idx int) *ParallelStateDB {
