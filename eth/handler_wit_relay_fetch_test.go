@@ -55,14 +55,14 @@ func (f *fakeWitnessPeer) RequestWitness(reqs []wit.WitnessPageRequest, sink cha
 func (f *fakeWitnessPeer) RequestWitnessMetadata(hashes []common.Hash, sink chan *wit.Response) (*wit.Request, error) {
 	return &wit.Request{}, nil
 }
-func (f *fakeWitnessPeer) AsyncSendNewWitness(witness *stateless.Witness)             {}
-func (f *fakeWitnessPeer) AsyncSendNewWitnessHash(hash common.Hash, number uint64)    {}
+func (f *fakeWitnessPeer) AsyncSendNewWitness(witness *stateless.Witness)                   {}
+func (f *fakeWitnessPeer) AsyncSendNewWitnessHash(hash common.Hash, number uint64)          {}
 func (f *fakeWitnessPeer) AsyncSendSignedWitnessAnnouncement(wit.SignedWitnessAnnouncement) {}
-func (f *fakeWitnessPeer) Close()                                                    {}
-func (f *fakeWitnessPeer) ID() string                                                 { return "fake" }
-func (f *fakeWitnessPeer) Version() uint                                             { return wit.WIT2 }
-func (f *fakeWitnessPeer) Log() log.Logger                                           { return log.Root() }
-func (f *fakeWitnessPeer) KnownWitnesses() *wit.KnownCache                           { return nil }
+func (f *fakeWitnessPeer) Close()                                                           {}
+func (f *fakeWitnessPeer) ID() string                                                       { return "fake" }
+func (f *fakeWitnessPeer) Version() uint                                                    { return wit.WIT2 }
+func (f *fakeWitnessPeer) Log() log.Logger                                                  { return log.Root() }
+func (f *fakeWitnessPeer) KnownWitnesses() *wit.KnownCache                                  { return nil }
 func (f *fakeWitnessPeer) AddKnownWitness(hash common.Hash) {
 	if f.knownWitness == nil {
 		f.knownWitness = make(map[common.Hash]bool)
@@ -77,8 +77,12 @@ func (f *fakeWitnessPeer) AddKnownAnnounce(hash common.Hash) {
 }
 func (f *fakeWitnessPeer) KnownWitnessesCount() int                         { return len(f.knownWitness) }
 func (f *fakeWitnessPeer) KnownWitnessesContains(w *stateless.Witness) bool { return false }
-func (f *fakeWitnessPeer) KnownWitnessContainsHash(hash common.Hash) bool   { return f.knownWitness[hash] }
-func (f *fakeWitnessPeer) KnownAnnounceContainsHash(hash common.Hash) bool  { return f.knownAnnounce[hash] }
+func (f *fakeWitnessPeer) KnownWitnessContainsHash(hash common.Hash) bool {
+	return f.knownWitness[hash]
+}
+func (f *fakeWitnessPeer) KnownAnnounceContainsHash(hash common.Hash) bool {
+	return f.knownAnnounce[hash]
+}
 func (f *fakeWitnessPeer) ReplyWitness(requestID uint64, response *wit.WitnessPacketResponse) error {
 	return nil
 }
@@ -737,8 +741,7 @@ func TestTriggerRelayFetch_GlobalConcurrencyCapBoundsSimultaneousFetches(t *test
 	for i := 0; i < numTriggers; i++ {
 		hash := common.BigToHash(big.NewInt(int64(9000 + i)))
 		hashes[i] = hash
-		hh := (*handler)(h)
-		hh.signedWitnesses.putIfNewer(wit.SignedWitnessAnnouncement{
+		h.signedWitnesses.putIfNewer(wit.SignedWitnessAnnouncement{
 			BlockHash:   hash,
 			WitnessHash: common.BigToHash(big.NewInt(int64(9500 + i))),
 			Signature:   make([]byte, wit.SignatureLength),
