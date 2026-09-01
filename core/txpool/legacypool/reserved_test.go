@@ -156,14 +156,23 @@ func setupReservedPoolWithConfig(cfg Config, forkBlock *big.Int, reserved ...com
 
 func zeroFeeTx(t *testing.T, cfg *params.ChainConfig, key *ecdsa.PrivateKey, nonce uint64, to common.Address) *types.Transaction {
 	t.Helper()
+	return zeroFeeTxWithGasAndData(t, cfg, key, nonce, to, 100_000, nil)
+}
+
+// zeroFeeTxWithGasAndData is zeroFeeTx with caller-chosen gas and calldata,
+// for tests that need a specific transaction size (e.g. bigZeroFeeTx, sized
+// to span multiple pool slots) without duplicating the DynamicFeeTx literal.
+func zeroFeeTxWithGasAndData(t *testing.T, cfg *params.ChainConfig, key *ecdsa.PrivateKey, nonce uint64, to common.Address, gas uint64, data []byte) *types.Transaction {
+	t.Helper()
 	tx, err := types.SignNewTx(key, types.LatestSigner(cfg), &types.DynamicFeeTx{
 		ChainID:   cfg.ChainID,
 		Nonce:     nonce,
 		GasTipCap: big.NewInt(0),
 		GasFeeCap: big.NewInt(0),
-		Gas:       100_000,
+		Gas:       gas,
 		To:        &to,
 		Value:     big.NewInt(0),
+		Data:      data,
 	})
 	if err != nil {
 		t.Fatal(err)

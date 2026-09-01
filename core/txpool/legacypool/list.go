@@ -310,6 +310,7 @@ type list struct {
 
 	totalcost  *uint256.Int // Total cost (value + gas*feeCap, ...) of all transactions in the list
 	totalvalue *uint256.Int // Total value (tx.Value() alone) of all transactions in the list
+	totalslots int          // Total numSlots of all transactions in the list
 
 	// costcap/totalcost and valuecap/totalvalue are two independent bases kept
 	// in lockstep by every mutation below. Reserved-blockspace senders are
@@ -318,6 +319,10 @@ type list struct {
 	// cost basis. Keeping both always in sync, rather than deriving one from
 	// the other on demand, lets Filter operate on whichever basis the caller
 	// selects without one basis's cap corrupting the other's (see Filter).
+	//
+	// totalslots follows the same lockstep convention so reservedSlots can
+	// read it directly instead of reconstructing it from Flatten() (a sort
+	// plus a full copy) on every call.
 }
 
 // newList creates a new transaction list for maintaining nonce-indexable fast,
@@ -391,8 +396,9 @@ func (l *list) Add(tx *types.Transaction, priceBump uint64) (bool, *types.Transa
 	}
 	l.totalcost = totalCost
 	l.totalvalue = totalValue
+	l.totalslots += numSlots(tx)
 
-	// Old is being replaced, subtract old cost and value
+	// Old is being replaced, subtract old cost, value and slots
 	if old != nil {
 		l.subTotals([]*types.Transaction{old})
 	}
@@ -603,10 +609,10 @@ func (l *list) Has(nonce uint64) bool {
 	return l != nil && l.txs.items[nonce] != nil
 }
 
-// subTotals subtracts the cost and value of the given transactions from the
-// list's cost and value totals. The two aggregates are always maintained
-// together so either basis is available at read time regardless of which
-// basis (if any) drove the removal.
+// subTotals subtracts the cost, value and slot count of the given
+// transactions from the list's running totals. The three aggregates are
+// always maintained together so any of them is available at read time
+// regardless of which basis (if any) drove the removal.
 func (l *list) subTotals(txs []*types.Transaction) {
 	for _, tx := range txs {
 		_, underflow := l.totalcost.SubOverflow(l.totalcost, uint256.MustFromBig(tx.Cost()))
@@ -616,6 +622,10 @@ func (l *list) subTotals(txs []*types.Transaction) {
 		_, underflow = l.totalvalue.SubOverflow(l.totalvalue, uint256.MustFromBig(tx.Value()))
 		if underflow {
 			panic("totalvalue underflow")
+		}
+		l.totalslots -= numSlots(tx)
+		if l.totalslots < 0 {
+			panic("totalslots underflow")
 		}
 	}
 }

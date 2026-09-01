@@ -29,6 +29,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/params"
 )
 
 // smallOccupancyConfig is testTxPoolConfig with a small combined slot ceiling,
@@ -109,6 +110,201 @@ func TestReservedOccupancyCapRejectsFloodPreservingNormalHeadroom(t *testing.T) 
 	require.NoError(t, err)
 	require.NoError(t, pool.Add([]*types.Transaction{normalTx}, true)[0])
 	require.NotNil(t, pool.Get(normalTx.Hash()), "normal sender's transaction must be admitted while reserved occupancy is saturated")
+}
+
+// bigZeroFeeTx is zeroFeeTx with calldata sized to occupy multiple pool
+// slots (see numSlots), so tests can tell slot-weighted occupancy accounting
+// apart from a flat per-transaction count.
+func bigZeroFeeTx(t *testing.T, cfg *params.ChainConfig, key *ecdsa.PrivateKey, nonce uint64, to common.Address, dataLen int) *types.Transaction {
+	t.Helper()
+	return zeroFeeTxWithGasAndData(t, cfg, key, nonce, to, 2_000_000, make([]byte, dataLen))
+}
+
+// bigReplacementTx is bigZeroFeeTx with a trivial positive fallback fee, so
+// it clears list.Add's same-nonce replacement threshold against a zero-fee
+// incumbent (any strictly positive fee beats a 0/0 predecessor - see the
+// price-bump math in list.Add) while still being large enough to span
+// multiple pool slots.
+func bigReplacementTx(t *testing.T, cfg *params.ChainConfig, key *ecdsa.PrivateKey, nonce uint64, to common.Address, dataLen int) *types.Transaction {
+	t.Helper()
+	tx, err := types.SignNewTx(key, types.LatestSigner(cfg), &types.DynamicFeeTx{
+		ChainID:   cfg.ChainID,
+		Nonce:     nonce,
+		GasTipCap: big.NewInt(1),
+		GasFeeCap: big.NewInt(1),
+		Gas:       2_000_000,
+		To:        &to,
+		Value:     big.NewInt(0),
+		Data:      make([]byte, dataLen),
+	})
+	require.NoError(t, err)
+	return tx
+}
+
+// TestReservedOccupancyCapBlocksOversizedReplacement guards the fix for a
+// real cap bypass: a same-nonce replacement isn't occupancy-neutral once
+// slot-weighting means the incumbent and its replacement can differ in
+// size, but the admission gate used to skip the cap check for ANY
+// same-nonce transaction on the pre-existing (correct-under-flat-counting,
+// now-stale) assumption that a replacement never changes combined
+// occupancy. A reserved sender could fill their cap with minimal 1-slot
+// transactions, then replace each at a trivial cost with a maximal 4-slot
+// (txMaxSize) transaction at the same nonce - every replacement skipping
+// the cap check entirely - ending up occupying up to 4x the intended
+// share while reservedOccupancy kept reporting exactly the cap. The
+// replacement must now be checked (and, if it fits, correctly costed)
+// like any other admission.
+func TestReservedOccupancyCapBlocksOversizedReplacement(t *testing.T) {
+	t.Parallel()
+
+	key, _ := crypto.GenerateKey()
+	addr := crypto.PubkeyToAddress(key.PublicKey)
+
+	cfg := smallOccupancyConfig(50) // cap = (20+20)*50/100 = 20
+	pool := setupReservedPoolWithConfig(cfg, big.NewInt(0), addr)
+	defer pool.Close()
+	testAddBalance(pool, addr, big.NewInt(1))
+
+	wantCap := pool.reservedOccupancyCap()
+	require.Equal(t, 20, wantCap)
+
+	// Fill the cap exactly with minimal (1-slot) transactions at distinct
+	// nonces - no calldata, well under txSlotSize.
+	for i := 0; i < wantCap; i++ {
+		tx := zeroFeeTx(t, pool.chainconfig, key, uint64(i), common.Address{0x42})
+		require.NoError(t, pool.Add([]*types.Transaction{tx}, true)[0])
+	}
+	pool.mu.RLock()
+	before := pool.reservedOccupancy
+	pool.mu.RUnlock()
+	require.Equal(t, wantCap, before)
+
+	// Replace nonce 0's 1-slot transaction with a maximal-size one. Sized
+	// well under txMaxSize (4 slots) but past 2 slots, same as the probe in
+	// TestReservedOccupancyCapWeightsBySlotsNotTxCount, so the delta versus
+	// the 1-slot incumbent is unambiguous.
+	oversized := bigReplacementTx(t, pool.chainconfig, key, 0, common.Address{0x42}, 70_000)
+	require.Equal(t, 3, numSlots(oversized), "test fixture must actually grow the occupied slot count")
+
+	err := pool.Add([]*types.Transaction{oversized}, true)[0]
+	require.ErrorIs(t, err, ErrReservedOccupancyExceeded,
+		"an oversized same-nonce replacement must be checked against the cap like any other admission, not skipped outright")
+
+	pool.mu.RLock()
+	after := pool.reservedOccupancy
+	pool.mu.RUnlock()
+	require.Equal(t, before, after, "a rejected replacement must not silently change occupancy")
+	require.Nil(t, pool.Get(oversized.Hash()), "the rejected replacement must not have replaced the incumbent")
+}
+
+// TestReservedOccupancyReplacementAppliesSizeDelta is the successful-path
+// counterpart to TestReservedOccupancyCapBlocksOversizedReplacement: a
+// same-nonce replacement that DOES fit under the cap must still update
+// reservedOccupancy by the real size delta, not leave it stale at the
+// incumbent's smaller size for the rest of the transaction's pending
+// lifetime (which would let the sender's real footprint silently drift
+// above what the counter reports).
+func TestReservedOccupancyReplacementAppliesSizeDelta(t *testing.T) {
+	t.Parallel()
+
+	key, _ := crypto.GenerateKey()
+	addr := crypto.PubkeyToAddress(key.PublicKey)
+
+	// Plenty of headroom - this test is about the delta being applied at
+	// all, not about hitting the cap.
+	pool := setupReservedPoolWithConfig(testTxPoolConfig, big.NewInt(0), addr)
+	defer pool.Close()
+	testAddBalance(pool, addr, big.NewInt(1))
+
+	small := zeroFeeTx(t, pool.chainconfig, key, 0, common.Address{0x42})
+	require.NoError(t, pool.Add([]*types.Transaction{small}, true)[0])
+	pool.mu.RLock()
+	afterSmall := pool.reservedOccupancy
+	pool.mu.RUnlock()
+	require.Equal(t, numSlots(small), afterSmall)
+
+	big3 := bigReplacementTx(t, pool.chainconfig, key, 0, common.Address{0x42}, 70_000)
+	require.Greater(t, numSlots(big3), numSlots(small), "test fixture must actually grow the slot count")
+	require.NoError(t, pool.Add([]*types.Transaction{big3}, true)[0])
+
+	pool.mu.RLock()
+	afterReplace := pool.reservedOccupancy
+	pool.mu.RUnlock()
+	require.Equal(t, numSlots(big3), afterReplace,
+		"occupancy must reflect the replacement's real size, not the incumbent's stale one")
+
+	// Layer-2 cross-check: an independent from-scratch recompute must agree.
+	pool.mu.Lock()
+	recomputed := pool.recomputeReservedOccupancy()
+	pool.mu.Unlock()
+	require.Equal(t, afterReplace, recomputed)
+}
+
+// TestReservedOccupancyCapWeightsBySlotsNotTxCount guards the fix for a real
+// gap: reservedOccupancy used to bump by a flat 1 per transaction while its
+// cap is computed in the pool's own slot unit (numSlots, the same one
+// pool.all.Slots() uses for real fullness). A handful of large-calldata
+// reserved transactions could then occupy far more of the pool's actual
+// capacity than a transaction-count-based cap would ever admit — exactly the
+// aggregate-starvation risk ReservedMaxOccupancyPercent exists to bound,
+// just via few big transactions instead of many small ones. A single
+// reserved sender submitting 3-slot transactions must get rejected once
+// their combined SLOT count would exceed the cap, well before their
+// transaction COUNT does.
+func TestReservedOccupancyCapWeightsBySlotsNotTxCount(t *testing.T) {
+	t.Parallel()
+
+	key, _ := crypto.GenerateKey()
+	addr := crypto.PubkeyToAddress(key.PublicKey)
+
+	cfg := smallOccupancyConfig(50) // cap = (20+20)*50/100 = 20
+	pool := setupReservedPoolWithConfig(cfg, big.NewInt(0), addr)
+	defer pool.Close()
+
+	// Gives addr a real state object (CodeHash = EmptyCodeHash) so
+	// checkDelegationLimit's short-circuit takes effect; without this, a
+	// never-touched address's GetCodeHash is the zero hash rather than
+	// EmptyCodeHash, and the pool treats it as delegated, capping it at one
+	// in-flight nonce regardless of the reserved-occupancy cap under test.
+	testAddBalance(pool, addr, big.NewInt(1))
+
+	wantCap := pool.reservedOccupancyCap()
+	require.Equal(t, 20, wantCap)
+
+	// Sized well under txMaxSize (4 slots) but comfortably past 2 slots, so
+	// numSlots(tx) == 3 regardless of minor RLP/signature overhead.
+	probe := bigZeroFeeTx(t, pool.chainconfig, key, 0, common.Address{0x42}, 70_000)
+	slotsPerTx := numSlots(probe)
+	require.Equal(t, 3, slotsPerTx, "test fixture must actually span multiple slots")
+
+	// A flat per-transaction counter would tolerate wantCap (20) of these
+	// before rejecting anything. Slot-weighted, it must reject well before
+	// the transaction count reaches that: floor(20/3) = 6 fit, a 7th (21
+	// slots) does not.
+	maxByTxCount := wantCap
+	maxBySlotCount := wantCap / slotsPerTx
+	require.Less(t, maxBySlotCount, maxByTxCount, "fixture must actually distinguish the two accounting schemes")
+
+	var admitted int
+	for i := 0; i <= maxByTxCount; i++ {
+		tx := bigZeroFeeTx(t, pool.chainconfig, key, uint64(i), common.Address{0x42}, 70_000)
+		err := pool.Add([]*types.Transaction{tx}, true)[0]
+		switch {
+		case err == nil:
+			admitted++
+		case errors.Is(err, ErrReservedOccupancyExceeded):
+			pool.mu.RLock()
+			occupancy := pool.reservedOccupancy
+			pool.mu.RUnlock()
+			require.Equal(t, maxBySlotCount, admitted,
+				"must reject once SLOT count would exceed the cap, not transaction count")
+			require.Equal(t, maxBySlotCount*slotsPerTx, occupancy)
+			return
+		default:
+			t.Fatalf("tx %d: unexpected error %v", i, err)
+		}
+	}
+	t.Fatalf("flood of %d multi-slot transactions never hit the occupancy cap; slot-weighting regressed", maxByTxCount+1)
 }
 
 // TestReservedOccupancyLayerAgreement is the direct counterpart of
