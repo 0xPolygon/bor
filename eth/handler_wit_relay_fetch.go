@@ -110,6 +110,19 @@ func fetchAndVerifyWitness(candidates []namedWitnessPeer, blockHash, wantHash co
 	return nil, nil, "", false
 }
 
+// maxRelayFetchPages bounds how many pages fetchWitnessPages will believe a
+// candidate's page-0 response claiming, before any cross-page consistency
+// check can happen. TotalPages is taken from the peer's own response and
+// used directly to size an allocation below — left unbounded, a single
+// malicious candidate reporting a huge TotalPages (or one whose value
+// overflows int, going negative) turns one crafted response into either an
+// out-of-memory allocation or an immediate "makeslice: cap out of range"
+// panic, and the goroutine running this has no recover — crashing the whole
+// node. Ties to the same overall per-witness memory budget the server side
+// already enforces (MaximumCachedWitnessOnARequest / PageSize), rounded up
+// by one so a witness landing exactly on the boundary isn't rejected.
+var maxRelayFetchPages = uint64(MaximumCachedWitnessOnARequest/PageSize) + 1
+
 // fetchWitnessPages pulls every page of hash's witness from peer and returns
 // the concatenated bytes. Mirrors ethPeer.RequestWitnessPageCount's WIT1
 // metadata request (falling back to the WIT0 page-0-probe for older peers),
@@ -125,6 +138,11 @@ func fetchWitnessPages(peer WitnessPeer, hash common.Hash) ([]byte, bool) {
 	}
 	if totalPages == 1 {
 		return firstPage, true
+	}
+	if totalPages > maxRelayFetchPages {
+		log.Warn("wit2: relay fetch candidate claimed an implausible page count; rejecting",
+			"hash", hash, "totalPages", totalPages, "max", maxRelayFetchPages)
+		return nil, false
 	}
 	all := make([]byte, 0, len(firstPage)*int(totalPages))
 	all = append(all, firstPage...)

@@ -289,6 +289,59 @@ func TestFetchWitnessPages_EmptyPageMeansUpstreamDoesNotHaveIt(t *testing.T) {
 	}
 }
 
+// TestFetchWitnessPages_ImplausibleTotalPagesIsRejectedNotCrashed guards the
+// finding a code review caught: fetchWitnessPages used to size
+// make([]byte, 0, len(firstPage)*int(totalPages)) directly from the peer's
+// own page-0 response with no bound check. A single malicious candidate
+// reporting a huge — or int-overflowing, i.e. negative once cast —
+// TotalPages turned one crafted response into either an OOM allocation or
+// an immediate "makeslice: cap out of range" panic, and the goroutine
+// running triggerRelayFetch has no recover, so that panic crashes the whole
+// node. Every case here must fail cleanly (ok=false), never panic.
+func TestFetchWitnessPages_ImplausibleTotalPagesIsRejectedNotCrashed(t *testing.T) {
+	hash := common.HexToHash("0xbadc0de")
+
+	for _, tc := range []struct {
+		name       string
+		totalPages uint64
+	}{
+		{"far beyond any real witness size", maxRelayFetchPages * 1000},
+		{"exactly one past the cap", maxRelayFetchPages + 1},
+		{"overflows int64 to negative when cast", uint64(1) << 63},
+		{"maximum possible uint64", ^uint64(0)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			peer := &fakeWitnessPeer{pages: map[uint64][]byte{0: []byte("small")}, totalPages: tc.totalPages}
+
+			if _, ok := fetchWitnessPages(peer, hash); ok {
+				t.Fatalf("expected rejection for an implausible TotalPages=%d, not success", tc.totalPages)
+			}
+			// Reaching this line at all (rather than the test process dying
+			// to a panic) is itself part of what this test verifies.
+		})
+	}
+}
+
+// TestFetchWitnessPages_TotalPagesAtCapIsAccepted confirms the cap isn't
+// simply rejecting every multi-page witness: a page count right at
+// maxRelayFetchPages — a large but legitimate witness — must still succeed.
+func TestFetchWitnessPages_TotalPagesAtCapIsAccepted(t *testing.T) {
+	hash := common.HexToHash("0xf00d")
+	pages := make(map[uint64][]byte, maxRelayFetchPages)
+	for i := uint64(0); i < maxRelayFetchPages; i++ {
+		pages[i] = []byte{byte(i)}
+	}
+	peer := &fakeWitnessPeer{pages: pages, totalPages: maxRelayFetchPages}
+
+	got, ok := fetchWitnessPages(peer, hash)
+	if !ok {
+		t.Fatal("expected a page count exactly at the cap to succeed")
+	}
+	if len(got) != int(maxRelayFetchPages) {
+		t.Fatalf("got %d bytes, want %d (one byte per page)", len(got), maxRelayFetchPages)
+	}
+}
+
 func TestFetchWitnessPages_MidFetchTotalPagesChangeIsRejected(t *testing.T) {
 	// A server that reports a different TotalPages on page 1 than it did on
 	// page 0 is either buggy or lying; either way the partial concatenation
