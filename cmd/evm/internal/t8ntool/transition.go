@@ -473,7 +473,7 @@ func BinKeys(ctx *cli.Context) error {
 			return err
 		}
 	}
-	db := triedb.NewDatabase(rawdb.NewMemoryDatabase(), triedb.VerkleDefaults)
+	db := triedb.NewDatabase(rawdb.NewMemoryDatabase(), triedb.UBTDefaults)
 	defer db.Close()
 
 	bt, err := genBinTrieFromAlloc(alloc, db)
@@ -517,7 +517,7 @@ func BinTrieRoot(ctx *cli.Context) error {
 			return err
 		}
 	}
-	db := triedb.NewDatabase(rawdb.NewMemoryDatabase(), triedb.VerkleDefaults)
+	db := triedb.NewDatabase(rawdb.NewMemoryDatabase(), triedb.UBTDefaults)
 	defer db.Close()
 
 	bt, err := genBinTrieFromAlloc(alloc, db)

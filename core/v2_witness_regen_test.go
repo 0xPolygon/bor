@@ -36,7 +36,7 @@ func witnessRegenRoundTrip(pb *preparedBlock, diskdb ethdb.Database, config *par
 	// prefetch-role read warms the author into the shared cache so fee
 	// credits during settle are cache hits, mirroring mainnet where the flat
 	// reader serves hot accounts without touching the trie.
-	db := state.NewDatabase(pb.tdb, nil)
+	db := state.NewMPTDatabase(pb.tdb, nil)
 	prefetchReader, _, parallelReader, err := db.ReadersWithCacheStatsTriple(pb.witness.Root())
 	if err != nil {
 		return fmt.Errorf("readers: %w", err)

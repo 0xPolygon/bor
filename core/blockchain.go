@@ -318,10 +318,10 @@ func (cfg BlockChainConfig) GetTriesInMemory() uint64 {
 }
 
 // triedbConfig derives the configures for trie database.
-func (cfg *BlockChainConfig) triedbConfig(isVerkle bool) *triedb.Config {
+func (cfg *BlockChainConfig) triedbConfig(isUBT bool) *triedb.Config {
 	config := &triedb.Config{
 		Preimages: cfg.Preimages,
-		IsVerkle:  isVerkle,
+		IsUBT:     isUBT,
 	}
 	if cfg.StateScheme == rawdb.HashScheme {
 		config.HashDB = &hashdb.Config{
@@ -383,7 +383,7 @@ type BlockChain struct {
 	lastWrite     uint64                           // Last block when the state was flushed
 	flushInterval atomic.Int64                     // Time interval (processing time) after which to flush a state
 	triedb        *triedb.Database                 // The database handler for maintaining trie nodes.
-	statedb       *state.CachingDB                 // State database to reuse between imports (contains state cache)
+	statedb       *state.MPTDatabase               // State database to reuse between imports (contains state cache)
 	txIndexer     *txIndexer                       // Transaction indexer, might be nil if not enabled
 
 	hc               *HeaderChain
@@ -454,7 +454,7 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 	}
 
 	// Open trie database with provided config
-	enableVerkle, err := EnableVerkleAtGenesis(db, genesis)
+	enableVerkle, err := EnableUBTAtGenesis(db, genesis)
 	if err != nil {
 		return nil, err
 	}
@@ -508,7 +508,7 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 	bc.flushInterval.Store(int64(cfg.TrieTimeLimit))
 	bc.forker = NewForkChoice(bc, cfg.ShouldPreserve, cfg.Checker)
 
-	bc.statedb = state.NewDatabase(bc.triedb, nil)
+	bc.statedb = state.NewMPTDatabase(bc.triedb, nil)
 	bc.validator = NewBlockValidator(chainConfig, bc)
 	bc.prefetcher = NewStatePrefetcher(chainConfig, bc.hc)
 	bc.processor = NewStateProcessor(bc.hc)
@@ -1032,7 +1032,7 @@ func (bc *BlockChain) setupSnapshot() {
 		bc.snaps, _ = snapshot.New(snapconfig, bc.db, bc.triedb, head.Root)
 
 		// Re-initialize the state database with snapshot
-		bc.statedb = state.NewDatabase(bc.triedb, bc.snaps)
+		bc.statedb = state.NewMPTDatabase(bc.triedb, bc.snaps)
 	}
 }
 

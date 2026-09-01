@@ -270,10 +270,10 @@ func newTrieReader(root common.Hash, db *triedb.Database) (*trieReader, error) {
 		tr  Trie
 		err error
 	)
-	if !db.IsVerkle() {
+	if !db.IsUBT() {
 		tr, err = trie.NewStateTrie(trie.StateTrieID(root), db)
 	} else {
-		// When IsVerkle() is true, create a BinaryTrie wrapped in TransitionTrie
+		// When IsUBT() is true, create a BinaryTrie wrapped in TransitionTrie
 		binTrie, binErr := bintrie.NewBinaryTrie(root, db)
 		if binErr != nil {
 			return nil, binErr
@@ -459,7 +459,7 @@ func (r *trieReader) subTrieConcurrent(addr common.Address) (Trie, error) {
 // subTrieLocked is the legacy mutex-protected path. Verkle uses the
 // merged main trie; MPT uses per-address sub tries cached in subTries.
 func (r *trieReader) subTrieLocked(addr common.Address) (Trie, error) {
-	if r.db.IsVerkle() {
+	if r.db.IsUBT() {
 		return r.mainTrie, nil
 	}
 	if v, ok := r.subTries.Load(addr); ok {

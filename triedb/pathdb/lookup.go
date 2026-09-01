@@ -99,7 +99,7 @@ func newLookup(head layer, descendant func(state common.Hash, ancestor common.Ha
 //
 // Note the returned hash may itself be common.Hash{} when the disk layer's
 // root is zero — as is the case for a fresh verkle/bintrie database whose
-// empty trie hashes to EmptyVerkleHash. Callers must therefore consult the
+// empty trie hashes to EmptyBinaryHash. Callers must therefore consult the
 // boolean rather than comparing the returned hash against common.Hash{}
 // directly.
 func (l *lookup) accountTip(accountHash common.Hash, stateID common.Hash, base common.Hash) (common.Hash, bool) {
