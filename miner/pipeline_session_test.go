@@ -36,7 +36,13 @@ func newPipelineWorkerFixture(t *testing.T, configure func(*params.ChainConfig))
 	t.Cleanup(func() { require.NoError(t, engine.Close()) })
 
 	w, backend, cleanup := newTestWorker(t, DefaultTestConfig(), &chainConfig, engine, rawdb.NewMemoryDatabase(), false, 0)
-	t.Cleanup(cleanup)
+	t.Cleanup(func() {
+		select {
+		case <-w.exitCh:
+		default:
+			cleanup()
+		}
+	})
 	return w, backend
 }
 
@@ -116,6 +122,7 @@ func TestPipelineSessionFailureAndExitBranches(t *testing.T) {
 	t.Run("non Bor engine rejects pipeline operations", func(t *testing.T) {
 		w, _, session := newPipelineSessionFixture(t, nil)
 		<-session.initialFillDone
+		w.close()
 		wrapped := &pipelineSealEngine{Engine: w.engine, seal: func(consensus.ChainHeaderReader, *types.Block, *stateless.Witness, chan<- *consensus.NewSealedBlockEvent, <-chan struct{}) error {
 			return nil
 		}}
@@ -279,6 +286,7 @@ func TestPipelineSessionAdditionalRecoveryBranches(t *testing.T) {
 
 	t.Run("inline broadcast returns seal error", func(t *testing.T) {
 		w, _, _ := newPipelineRequestFixture(t, nil)
+		w.close()
 		sealErr := errors.New("seal failed")
 		w.engine = &pipelineSealEngine{
 			Engine: w.engine,
@@ -317,13 +325,9 @@ func TestCommitPipelinedAdditionalBranches(t *testing.T) {
 
 	t.Run("worker exit cancels handoff", func(t *testing.T) {
 		w, _, req := newPipelineRequestFixture(t, nil)
+		w.close()
 		w.running.Store(true)
-		originalExit := w.exitCh
-		stopped := make(chan struct{})
-		close(stopped)
-		w.exitCh = stopped
 		w.speculativeWorkCh = make(chan *speculativeWorkReq)
-		t.Cleanup(func() { w.exitCh = originalExit })
 
 		require.NoError(t, w.commitPipelined(req.blockNEnv, time.Now()))
 	})
@@ -341,12 +345,8 @@ func TestSpecSessionMoreFailureBranches(t *testing.T) {
 
 	t.Run("initial setup requires grandparent", func(t *testing.T) {
 		w, _, req := newPipelineRequestFixture(t, nil)
+		w.close()
 		req.parentHeader.ParentHash = common.HexToHash("0xdead")
-		originalExit := w.exitCh
-		stopped := make(chan struct{})
-		close(stopped)
-		w.exitCh = stopped
-		t.Cleanup(func() { w.exitCh = originalExit })
 
 		require.False(t, newSpecSession(w, req).setupInitial())
 	})
@@ -396,6 +396,7 @@ func TestSpecSessionMoreFailureBranches(t *testing.T) {
 		finalHeader, flatDiff, syncData, ok := session.finalizeCurrent()
 		require.True(t, ok)
 
+		w.close()
 		prepareErr := errors.New("prepare failed")
 		w.engine = &pipelinePrepareEngine{
 			Engine: w.engine,
@@ -424,12 +425,8 @@ func TestSealCurrentAndAdvanceExitAndSealFailure(t *testing.T) {
 
 	t.Run("worker exit interrupts announce wait", func(t *testing.T) {
 		w, session, finalHeader, syncData, next := newPreparedSession(t)
+		w.close()
 		finalHeader.ActualTime = time.Now().Add(time.Hour)
-		originalExit := w.exitCh
-		stopped := make(chan struct{})
-		close(stopped)
-		w.exitCh = stopped
-		t.Cleanup(func() { w.exitCh = originalExit })
 
 		sealed, exitEarly, ok := session.sealCurrentAndAdvance(finalHeader, syncData, next)
 		require.False(t, ok)
@@ -439,6 +436,7 @@ func TestSealCurrentAndAdvanceExitAndSealFailure(t *testing.T) {
 
 	t.Run("inline seal error stops iteration", func(t *testing.T) {
 		w, session, finalHeader, syncData, next := newPreparedSession(t)
+		w.close()
 		sealErr := errors.New("seal failed")
 		w.engine = &pipelineSealEngine{
 			Engine: w.engine,

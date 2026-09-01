@@ -310,13 +310,13 @@ func newHandler(config *handlerConfig) (*handler, error) {
 
 	h.blockFetcher = fetcher.NewBlockFetcher(false, nil, h.chain.GetBlockByHash, validator, h.BroadcastBlock, heighter, h.chain.CurrentHeader, nil, inserter, h.removePeer, h.jailPeer, h.enableBlockTracking, h.statelessSync.Load() || h.syncWithWitnesses, config.gasCeil)
 
-	fetchTx := func(peer string, hashes []common.Hash) error {
+	fetchTx := func(peer string, requestID uint64, hashes []common.Hash) error {
 		p := h.peers.peer(peer)
 		if p == nil {
 			return errors.New("unknown peer")
 		}
 
-		return p.RequestTxs(hashes)
+		return p.RequestTxs(requestID, hashes)
 	}
 	addTxs := func(txs []*types.Transaction) []error {
 		return h.txpool.Add(txs, false)
