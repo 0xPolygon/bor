@@ -217,6 +217,10 @@ type BlockChain interface {
 	// HasFastBlock verifies a snap block's presence in the local chain.
 	HasFastBlock(common.Hash, uint64) bool
 
+	// GetCanonicalHash returns the canonical hash for the block at the given
+	// number, or the zero hash if no canonical block is present at that height.
+	GetCanonicalHash(uint64) common.Hash
+
 	// GetBlockByHash retrieves a block from the local chain.
 	GetBlockByHash(common.Hash) *types.Block
 
@@ -2203,7 +2207,9 @@ func (d *Downloader) commitPivotBlock(result *fetchResult) error {
 		return err
 	}
 
+	d.pivotLock.Lock()
 	d.committed.Store(true)
+	d.pivotLock.Unlock()
 
 	return nil
 }

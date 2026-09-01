@@ -124,7 +124,6 @@ func TestCalcBlobFeePostOsaka(t *testing.T) {
 			BlobScheduleConfig: &params.BlobScheduleConfig{
 				Cancun: params.DefaultCancunBlobConfig,
 				Prague: params.DefaultPragueBlobConfig,
-				Osaka:  params.DefaultOsakaBlobConfig,
 			}}
 		parent := &types.Header{
 			ExcessBlobGas: &tt.excessBlobGas,
@@ -186,7 +185,7 @@ func TestCalcExcessBlobGasEIP7918(t *testing.T) {
 	t.Skip("bor: not relevant")
 	var (
 		cfg           = params.MergedTestChainConfig
-		targetBlobs   = cfg.BlobScheduleConfig.Osaka.Target
+		targetBlobs   = cfg.BlobScheduleConfig.Prague.Target
 		blobGasTarget = uint64(targetBlobs) * params.BlobTxBlobGasPerBlob
 	)
 

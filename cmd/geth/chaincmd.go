@@ -61,6 +61,7 @@ var (
 		Flags: slices.Concat([]cli.Flag{
 			utils.CachePreimagesFlag,
 			utils.OverrideOsaka,
+			utils.OverrideAmsterdam,
 			utils.OverrideBPO1,
 			utils.OverrideBPO2,
 			utils.OverrideVerkle,
@@ -287,6 +288,10 @@ func initGenesis(ctx *cli.Context) error {
 	if ctx.IsSet(utils.OverrideOsaka.Name) {
 		v := ctx.Int64(utils.OverrideOsaka.Name)
 		overrides.OverrideOsaka = new(big.Int).SetInt64(v)
+	}
+	if ctx.IsSet(utils.OverrideAmsterdam.Name) {
+		v := ctx.Int64(utils.OverrideAmsterdam.Name)
+		overrides.OverrideAmsterdam = new(big.Int).SetInt64(v)
 	}
 	if ctx.IsSet(utils.OverrideVerkle.Name) {
 		v := ctx.Int64(utils.OverrideVerkle.Name)
@@ -781,8 +786,8 @@ func downloadEra(ctx *cli.Context) error {
 	var network = "mainnet"
 	if utils.IsNetworkPreset(ctx) {
 		switch {
-		case ctx.IsSet(utils.MainnetFlag.Name):
-		case ctx.IsSet(utils.SepoliaFlag.Name):
+		case ctx.Bool(utils.MainnetFlag.Name):
+		case ctx.Bool(utils.SepoliaFlag.Name):
 			network = "sepolia"
 		default:
 			return errors.New("unsupported network, no known era1 checksums")
@@ -809,7 +814,7 @@ func downloadEra(ctx *cli.Context) error {
 		return err
 	}
 	switch {
-	case ctx.IsSet(eraAllFlag.Name):
+	case ctx.Bool(eraAllFlag.Name):
 		return l.DownloadAll(dir)
 
 	case ctx.IsSet(eraBlockFlag.Name):

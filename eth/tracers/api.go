@@ -407,7 +407,7 @@ func (api *API) traceChain(start, end *types.Block, config *TraceConfig, closed 
 			context := core.NewEVMBlockContext(next.Header(), api.chainContext(ctx), nil)
 			evm := vm.NewEVM(context, statedb, api.backend.ChainConfig(), vm.Config{})
 
-			core.PreExecution(ctx, next.BeaconRoot(), next.ParentHash(), api.backend.ChainConfig(), evm, next.Number(), next.Time())
+			core.PreExecution(ctx, next.BeaconRoot(), block.Header(), api.backend.ChainConfig(), evm, next.Number(), next.Time())
 			// Clean out any pending release functions of trace state. Note this
 			// step must be done after constructing tracing state, because the
 			// tracing state of block next depends on the parent state and construction
@@ -571,7 +571,7 @@ func (api *API) IntermediateRoots(ctx context.Context, hash common.Hash, config 
 		evm                = vm.NewEVM(vmctx, statedb, chainConfig, vm.Config{})
 	)
 	// Run pre-execution system calls
-	core.PreExecution(ctx, block.BeaconRoot(), block.ParentHash(), chainConfig, evm, block.Number(), block.Time())
+	core.PreExecution(ctx, block.BeaconRoot(), parent.Header(), chainConfig, evm, block.Number(), block.Time())
 
 	for i, tx := range block.Transactions() {
 		if err := ctx.Err(); err != nil {
@@ -639,7 +639,7 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 	evm := vm.NewEVM(blockCtx, statedb, api.backend.ChainConfig(), vm.Config{})
 
 	// Run pre-execution system calls
-	core.PreExecution(ctx, block.BeaconRoot(), block.ParentHash(), api.backend.ChainConfig(), evm, block.Number(), block.Time())
+	core.PreExecution(ctx, block.BeaconRoot(), parent.Header(), api.backend.ChainConfig(), evm, block.Number(), block.Time())
 
 	// JS tracers have high overhead. In this case run a parallel
 	// process that generates states in one thread and traces txes
@@ -856,7 +856,7 @@ func (api *API) standardTraceBlockToFile(ctx context.Context, block *types.Block
 	evm := vm.NewEVM(vmctx, statedb, chainConfig, vm.Config{})
 
 	// Run pre-execution system calls
-	core.PreExecution(ctx, block.BeaconRoot(), block.ParentHash(), chainConfig, evm, block.Number(), block.Time())
+	core.PreExecution(ctx, block.BeaconRoot(), parent.Header(), chainConfig, evm, block.Number(), block.Time())
 
 	for i, tx := range block.Transactions() {
 		// Prepare the transaction for un-traced execution

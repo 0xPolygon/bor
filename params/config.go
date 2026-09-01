@@ -552,6 +552,7 @@ var (
 		CancunBlock:             nil,
 		PragueBlock:             nil,
 		OsakaBlock:              nil,
+		BogotaBlock:             nil,
 		VerkleBlock:             nil,
 		Ethash:                  new(EthashConfig),
 		Clique:                  nil,
@@ -583,7 +584,6 @@ var (
 		BlobScheduleConfig: &BlobScheduleConfig{
 			Cancun: DefaultCancunBlobConfig,
 			Prague: DefaultPragueBlobConfig,
-			Osaka:  DefaultOsakaBlobConfig,
 		},
 		Bor: &BorConfig{
 			BurntContract: map[string]string{"0": "0x000000000000000000000000000000000000dead"},
@@ -641,6 +641,7 @@ var (
 		CancunBlock:             nil,
 		PragueBlock:             nil,
 		OsakaBlock:              nil,
+		BogotaBlock:             nil,
 		VerkleBlock:             nil,
 		TerminalTotalDifficulty: big.NewInt(math.MaxInt64),
 		Ethash:                  nil,
@@ -675,6 +676,7 @@ var (
 		CancunBlock:             nil,
 		PragueBlock:             nil,
 		OsakaBlock:              nil,
+		BogotaBlock:             nil,
 		VerkleBlock:             nil,
 		TerminalTotalDifficulty: big.NewInt(math.MaxInt64),
 		Ethash:                  new(EthashConfig),
@@ -716,6 +718,7 @@ var (
 		CancunBlock:             big.NewInt(0),
 		PragueBlock:             big.NewInt(0),
 		OsakaBlock:              big.NewInt(0),
+		BogotaBlock:             nil,
 		VerkleBlock:             nil,
 		TerminalTotalDifficulty: big.NewInt(0),
 		Ethash:                  new(EthashConfig),
@@ -723,7 +726,6 @@ var (
 		BlobScheduleConfig: &BlobScheduleConfig{
 			Cancun: DefaultCancunBlobConfig,
 			Prague: DefaultPragueBlobConfig,
-			Osaka:  DefaultOsakaBlobConfig,
 		},
 		Bor: &BorConfig{
 			Sprint:                map[string]uint64{"0": 4},
@@ -777,6 +779,7 @@ var (
 		PragueBlock:             nil,
 		VerkleBlock:             nil,
 		OsakaBlock:              nil,
+		BogotaBlock:             nil,
 		TerminalTotalDifficulty: big.NewInt(math.MaxInt64),
 		Ethash:                  new(EthashConfig),
 		Clique:                  nil,
@@ -797,17 +800,10 @@ var (
 		Max:            9,
 		UpdateFraction: 5007716,
 	}
-	// DefaultOsakaBlobConfig is the default blob configuration for the Osaka fork.
-	DefaultOsakaBlobConfig = &BlobConfig{
-		Target:         6,
-		Max:            9,
-		UpdateFraction: 5007716,
-	}
 	// DefaultBlobSchedule is the latest configured blob schedule for Ethereum mainnet.
 	DefaultBlobSchedule = &BlobScheduleConfig{
 		Cancun: DefaultCancunBlobConfig,
 		Prague: DefaultPragueBlobConfig,
-		Osaka:  DefaultOsakaBlobConfig,
 	}
 )
 
@@ -860,6 +856,7 @@ type ChainConfig struct {
 	VerkleBlock    *big.Int `json:"verkleBlock,omitempty"`    // Verkle switch Block (nil = no fork, 0 = already on verkle)
 	OsakaBlock     *big.Int `json:"osakaBlock,omitempty"`     // Osaka switch Block (nil = no fork, 0 = already on osaka)
 	AmsterdamBlock *big.Int `json:"amsterdamBlock,omitempty"` // Amsterdam switch Block (nil = no fork, 0 = already on amsterdam)
+	BogotaBlock    *big.Int `json:"bogotaBlock,omitempty"`    // Bogota switch Block (nil = no fork, 0 = already on bogota)
 
 	// TerminalTotalDifficulty is the amount of total difficulty reached by
 	// the network that triggers the consensus upgrade.
@@ -1333,6 +1330,9 @@ func (c *ChainConfig) Description() string {
 	if c.OsakaBlock != nil {
 		banner += fmt.Sprintf(" - Osaka:                      #%-8v\n", *c.OsakaBlock)
 	}
+	if c.BogotaBlock != nil {
+		banner += fmt.Sprintf(" - Bogota:                     #%-8v\n", *c.BogotaBlock)
+	}
 	banner += fmt.Sprintf("\nAll fork specifications can be found at https://ethereum.github.io/execution-specs/src/ethereum/forks/\n")
 	return banner
 }
@@ -1353,10 +1353,12 @@ func (bc *BlobConfig) String() string {
 }
 
 // BlobScheduleConfig determines target and max number of blobs allow per fork.
+//
+// Named forks such as Osaka inherit the most recently configured entry and must
+// not declare their own BlobConfig.
 type BlobScheduleConfig struct {
 	Cancun *BlobConfig `json:"cancun,omitempty"`
 	Prague *BlobConfig `json:"prague,omitempty"`
-	Osaka  *BlobConfig `json:"osaka,omitempty"`
 	Verkle *BlobConfig `json:"verkle,omitempty"`
 }
 
@@ -1482,6 +1484,11 @@ func (c *ChainConfig) IsAmsterdam(num *big.Int) bool {
 	return c.IsLondon(num) && isBlockForked(c.AmsterdamBlock, num)
 }
 
+// IsBogota returns whether num is either equal to the Bogota fork block or greater.
+func (c *ChainConfig) IsBogota(num *big.Int) bool {
+	return c.IsLondon(num) && isBlockForked(c.BogotaBlock, num)
+}
+
 // IsVerkleGenesis checks whether the verkle fork is activated at the genesis block.
 //
 // Verkle mode is considered enabled if the verkle fork time is configured,
@@ -1560,6 +1567,7 @@ func (c *ChainConfig) CheckConfigForkOrder() error {
 		{name: "cancunBlock", block: c.CancunBlock, optional: true},
 		{name: "pragueBlock", block: c.PragueBlock, optional: true},
 		{name: "osakaBlock", block: c.OsakaBlock, optional: true},
+		{name: "bogotaBlock", block: c.BogotaBlock, optional: true},
 		{name: "verkleBlock", block: c.VerkleBlock, optional: true},
 	} {
 		if lastFork.name != "" {
@@ -1608,9 +1616,7 @@ func (c *ChainConfig) CheckConfigForkOrder() error {
 		config    *BlobConfig
 	}{
 		{name: "cancun", timestamp: nil, config: bsc.Cancun},
-		{name: "prague", timestamp: nil, config: bsc.Prague},
-		{name: "osaka", timestamp: nil, config: bsc.Osaka},
-	} {
+		{name: "prague", timestamp: nil, config: bsc.Prague}} {
 		if cur.config != nil {
 			if err := cur.config.validate(); err != nil {
 				return fmt.Errorf("invalid chain configuration in blobSchedule for fork %q: %v", cur.name, err)
@@ -1730,6 +1736,9 @@ func (c *ChainConfig) checkCompatible(newcfg *ChainConfig, headNumber *big.Int, 
 	if isForkBlockIncompatible(c.OsakaBlock, newcfg.OsakaBlock, headNumber) {
 		return newBlockCompatError("Osaka fork block", c.OsakaBlock, newcfg.OsakaBlock)
 	}
+	if isForkBlockIncompatible(c.BogotaBlock, newcfg.BogotaBlock, headNumber) {
+		return newBlockCompatError("Bogota fork block", c.BogotaBlock, newcfg.BogotaBlock)
+	}
 	return nil
 }
 
@@ -1762,18 +1771,28 @@ func (c *ChainConfig) LatestFork(_ uint64) forks.Fork {
 	}
 }
 
-// BlobConfig returns the blob config associated with the provided fork.
+// BlobConfig returns the blob config active at the provided fork. Since named
+// forks (Osaka, Amsterdam, ...) no longer carry their own blob schedule, the
+// lookup walks down from fork to Prague/Cancun and returns the first non-nil
+// entry.
 func (c *ChainConfig) BlobConfig(fork forks.Fork) *BlobConfig {
-	switch fork {
-	case forks.Osaka:
-		return c.BlobScheduleConfig.Osaka
-	case forks.Prague:
-		return c.BlobScheduleConfig.Prague
-	case forks.Cancun:
-		return c.BlobScheduleConfig.Cancun
-	default:
+	if c.BlobScheduleConfig == nil {
 		return nil
 	}
+	bsc := c.BlobScheduleConfig
+	chain := []struct {
+		at  forks.Fork
+		cfg *BlobConfig
+	}{
+		{forks.Prague, bsc.Prague},
+		{forks.Cancun, bsc.Cancun},
+	}
+	for _, e := range chain {
+		if e.at <= fork && e.cfg != nil {
+			return e.cfg
+		}
+	}
+	return nil
 }
 
 // ActiveSystemContracts returns the currently active system contracts at the
@@ -1781,6 +1800,11 @@ func (c *ChainConfig) BlobConfig(fork forks.Fork) *BlobConfig {
 func (c *ChainConfig) ActiveSystemContracts(time uint64) map[string]common.Address {
 	fork := c.LatestFork(time)
 	active := make(map[string]common.Address)
+	if fork >= forks.Amsterdam {
+		// EIP-8282 - Builder Execution Requests
+		active["BUILDER_DEPOSIT_CONTRACT_ADDRESS"] = BuilderDepositAddress
+		active["BUILDER_EXIT_CONTRACT_ADDRESS"] = BuilderExitAddress
+	}
 	if fork >= forks.Osaka {
 		// no new system contracts
 	}
@@ -1808,6 +1832,10 @@ func (c *ChainConfig) Block(fork forks.Fork) *big.Int {
 		return c.CancunBlock
 	case fork == forks.Shanghai:
 		return c.ShanghaiBlock
+	case fork == forks.Amsterdam:
+		return c.AmsterdamBlock
+	case fork == forks.Bogota:
+		return c.BogotaBlock
 	default:
 		return nil
 	}
@@ -1912,6 +1940,7 @@ type Rules struct {
 	IsBerlin, IsLondon                                      bool
 	IsMerge, IsShanghai, IsCancun, IsPrague, IsOsaka        bool
 	IsAmsterdam                                             bool
+	IsBogota                                                bool
 	IsVerkle                                                bool
 	IsMadhugiri                                             bool
 	IsMadhugiriPro                                          bool
@@ -1950,6 +1979,7 @@ func (c *ChainConfig) Rules(num *big.Int, isMerge bool, _ uint64) Rules {
 		IsVerkle:         c.IsVerkle(num),
 		IsOsaka:          c.IsOsaka(num),
 		IsAmsterdam:      c.IsAmsterdam(num),
+		IsBogota:         c.IsBogota(num),
 		IsEIP4762:        c.IsVerkle(num),
 		IsMadhugiri:      c.Bor != nil && c.Bor.IsMadhugiri(num),
 		IsMadhugiriPro:   c.Bor != nil && c.Bor.IsMadhugiriPro(num),

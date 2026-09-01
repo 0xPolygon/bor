@@ -351,6 +351,10 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	if config.OverrideOsaka != nil {
 		overrides.OverrideOsaka = config.OverrideOsaka
 	}
+	if config.OverrideAmsterdam != nil {
+		overrides.OverrideAmsterdam = config.OverrideAmsterdam
+	}
+
 	if config.OverrideVerkle != nil {
 		overrides.OverrideVerkle = config.OverrideVerkle
 	}

@@ -48,8 +48,8 @@ func (handler *jwtHandler) ServeHTTP(out http.ResponseWriter, r *http.Request) {
 		claims   jwt.RegisteredClaims
 	)
 
-	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
-		strToken = strings.TrimPrefix(auth, "Bearer ")
+	if auth := r.Header.Get("Authorization"); len(auth) >= 7 && strings.EqualFold(auth[:7], "bearer ") {
+		strToken = auth[7:]
 	}
 
 	if len(strToken) == 0 {

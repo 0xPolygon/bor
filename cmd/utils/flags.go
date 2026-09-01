@@ -269,6 +269,11 @@ var (
 		Usage:    "Manually specify the Osaka fork timestamp, overriding the bundled setting",
 		Category: flags.EthCategory,
 	}
+	OverrideAmsterdam = &cli.Uint64Flag{
+		Name:     "override.amsterdam",
+		Usage:    "Manually specify the Amsterdam fork timestamp, overriding the bundled setting",
+		Category: flags.EthCategory,
+	}
 	OverrideBPO1 = &cli.Uint64Flag{
 		Name:     "override.bpo1",
 		Usage:    "Manually specify the bpo1 fork timestamp, overriding the bundled setting",
@@ -882,6 +887,12 @@ var (
 		Value:    node.DefaultConfig.BatchResponseMaxSize,
 		Category: flags.APICategory,
 	}
+	HTTPBodyLimitFlag = &cli.IntFlag{
+		Name:     "rpc.http-body-limit",
+		Usage:    "Maximum size (in megabytes) of an HTTP request body",
+		Value:    node.DefaultConfig.HTTPBodyLimit / (1024 * 1024),
+		Category: flags.APICategory,
+	}
 
 	// Network Settings
 	MaxPeersFlag = &cli.IntFlag{
@@ -1342,6 +1353,10 @@ func setHTTP(ctx *cli.Context, cfg *node.Config) {
 
 	if ctx.IsSet(BatchResponseMaxSize.Name) {
 		cfg.BatchResponseMaxSize = ctx.Int(BatchResponseMaxSize.Name)
+	}
+
+	if ctx.IsSet(HTTPBodyLimitFlag.Name) {
+		cfg.HTTPBodyLimit = ctx.Int(HTTPBodyLimitFlag.Name) * 1024 * 1024
 	}
 }
 
@@ -1945,7 +1960,7 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 		cfg.RPCTxFeeCap = ctx.Float64(RPCGlobalTxFeeCapFlag.Name)
 	}
 
-	if ctx.IsSet(NoDiscoverFlag.Name) {
+	if ctx.Bool(NoDiscoverFlag.Name) {
 		cfg.EthDiscoveryURLs, cfg.SnapDiscoveryURLs = []string{}, []string{}
 	} else if ctx.IsSet(DNSDiscoveryFlag.Name) {
 		urls := ctx.String(DNSDiscoveryFlag.Name)
@@ -2332,7 +2347,7 @@ func SplitTagsFlag(tagsFlag string) map[string]string {
 
 	for _, t := range tags {
 		if t != "" {
-			kv := strings.Split(t, "=")
+			kv := strings.SplitN(t, "=", 2)
 
 			if len(kv) == 2 {
 				tagsMap[kv[0]] = kv[1]
@@ -2396,7 +2411,7 @@ func tryMakeReadOnlyDatabase(ctx *cli.Context, stack *node.Node) ethdb.Database 
 func IsNetworkPreset(ctx *cli.Context) bool {
 	for _, flag := range NetworkFlags {
 		bFlag, _ := flag.(*cli.BoolFlag)
-		if ctx.IsSet(bFlag.Name) {
+		if ctx.Bool(bFlag.Name) {
 			return true
 		}
 	}

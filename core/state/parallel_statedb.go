@@ -1195,31 +1195,6 @@ func (s *ParallelStateDB) AddPreimage(hash common.Hash, preimage []byte) {
 
 func (s *ParallelStateDB) Logs() []*types.Log { return s.logs }
 
-// LogsForBurnAccounts mirrors StateDB.LogsForBurnAccounts: an account
-// destructed by this tx can still receive funds afterwards, and that residual
-// balance is burned at removal, so EIP-7708 wants a burn log for it. The
-// address sort keeps the log order identical to the serial executor's.
-//
-// The logs are returned rather than added directly so the caller controls when
-// they enter the log list, which is what makes the tracer see them in order.
-func (s *ParallelStateDB) LogsForBurnAccounts() []*types.Log {
-	var list []common.Address
-	for addr, destructed := range s.destructed {
-		if destructed && !s.GetBalance(addr).IsZero() {
-			list = append(list, addr)
-		}
-	}
-	if list == nil {
-		return nil
-	}
-	slices.SortFunc(list, func(a, b common.Address) int { return a.Cmp(b) })
-	logs := make([]*types.Log, len(list))
-	for i, addr := range list {
-		logs[i] = types.EthBurnLog(addr, s.GetBalance(addr))
-	}
-	return logs
-}
-
 // ---------- Prepare ----------
 
 func (s *ParallelStateDB) Prepare(rules params.Rules, sender, coinbase common.Address, dest *common.Address, precompiles []common.Address, txAccesses types.AccessList) {
