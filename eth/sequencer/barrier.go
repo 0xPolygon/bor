@@ -223,12 +223,17 @@ func (p *Publisher) sealMirror(height uint64, txs []*types.Transaction) bool {
 
 	// The read shows nothing past the entries we published, so the store's
 	// window at this height is the one in our journal — already acked, so
-	// comparing the block against it compares it against the store.
+	// comparing the block against it compares it against the store. A
+	// verified mid-drain suffix proves the same equivalence with acks
+	// lagging: everything the walk returned is our own trailing records.
 	p.mu.Lock()
 	ourTxs, atHead := p.journalWindowLocked(height), info.s == p.anchor
 	p.mu.Unlock()
 
-	if atHead {
+	if atHead || info.suffixOurs {
+		if !atHead {
+			publishMidDrainMirror.Inc(1)
+		}
 		return p.mirrorVerdict(height, ourTxs, txs, len(ourTxs))
 	}
 
