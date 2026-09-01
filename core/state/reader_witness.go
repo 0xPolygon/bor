@@ -43,7 +43,7 @@ type witnessWalkItem struct {
 // Resolution errors are ignored: the trie reader is the gatekeeper for
 // committed state, and a stateless consumer validates the resulting witness
 // anyway. Returns the number of keys walked in this sweep.
-func (r *readerWithCache) resolveCachedKeysIntoTrie(tr *trieReader, workers int) int {
+func (r *readerWithCache) resolveCachedKeysIntoTrie(tr *mptTrieReader, workers int) int {
 	// Generation fast path: skip Ranging the maps when nothing new was
 	// cached since the last sweep — the prewalker ticks far more often than
 	// keys arrive. gen is captured before claiming, so an insert racing the
@@ -84,7 +84,7 @@ func (r *readerWithCache) claimUnwalkedItems() []witnessWalkItem {
 
 // walkWitnessItems resolves the claimed keys through the trie reader,
 // fanning out across workers when the batch is large enough to benefit.
-func walkWitnessItems(tr *trieReader, pending []witnessWalkItem, workers int) {
+func walkWitnessItems(tr *mptTrieReader, pending []witnessWalkItem, workers int) {
 	walk := func(it witnessWalkItem) {
 		if it.account {
 			_, _ = tr.Account(it.addr)

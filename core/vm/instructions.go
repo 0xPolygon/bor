@@ -19,8 +19,6 @@ package vm
 import (
 	"math"
 
-	"github.com/holiman/uint256"
-
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -285,7 +283,7 @@ func opKeccak256(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 }
 
 func opAddress(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
-	scope.Stack.push(new(uint256.Int).SetBytes(scope.Contract.Address().Bytes()))
+	scope.Stack.get().SetBytes(scope.Contract.Address().Bytes())
 	return nil, nil
 }
 
@@ -297,17 +295,17 @@ func opBalance(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 }
 
 func opOrigin(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
-	scope.Stack.push(new(uint256.Int).SetBytes(evm.Origin.Bytes()))
+	scope.Stack.get().SetBytes(evm.Origin.Bytes())
 	return nil, nil
 }
 
 func opCaller(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
-	scope.Stack.push(new(uint256.Int).SetBytes(scope.Contract.Caller().Bytes()))
+	scope.Stack.get().SetBytes(scope.Contract.Caller().Bytes())
 	return nil, nil
 }
 
 func opCallValue(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
-	scope.Stack.push(scope.Contract.value)
+	scope.Stack.get().Set(scope.Contract.value)
 
 	return nil, nil
 }
@@ -325,7 +323,7 @@ func opCallDataLoad(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 }
 
 func opCallDataSize(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
-	scope.Stack.push(new(uint256.Int).SetUint64(uint64(len(scope.Contract.Input))))
+	scope.Stack.get().SetUint64(uint64(len(scope.Contract.Input)))
 	return nil, nil
 }
 
@@ -349,7 +347,7 @@ func opCallDataCopy(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 }
 
 func opReturnDataSize(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
-	scope.Stack.push(new(uint256.Int).SetUint64(uint64(len(evm.returnData))))
+	scope.Stack.get().SetUint64(uint64(len(evm.returnData)))
 	return nil, nil
 }
 
@@ -384,7 +382,7 @@ func opExtCodeSize(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 }
 
 func opCodeSize(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
-	scope.Stack.push(new(uint256.Int).SetUint64(uint64(len(scope.Contract.Code))))
+	scope.Stack.get().SetUint64(uint64(len(scope.Contract.Code)))
 
 	return nil, nil
 }
@@ -467,7 +465,7 @@ func opExtCodeHash(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 }
 
 func opGasprice(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
-	scope.Stack.push(evm.GasPrice.Clone())
+	scope.Stack.get().Set(evm.GasPrice)
 	return nil, nil
 }
 
@@ -505,38 +503,35 @@ func opBlockhash(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 }
 
 func opCoinbase(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
-	scope.Stack.push(new(uint256.Int).SetBytes(evm.Context.Coinbase.Bytes()))
+	scope.Stack.get().SetBytes(evm.Context.Coinbase.Bytes())
 	return nil, nil
 }
 
 func opTimestamp(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
-	scope.Stack.push(new(uint256.Int).SetUint64(evm.Context.Time))
+	scope.Stack.get().SetUint64(evm.Context.Time)
 	return nil, nil
 }
 
 func opNumber(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
-	v, _ := uint256.FromBig(evm.Context.BlockNumber)
-	scope.Stack.push(v)
+	scope.Stack.get().SetFromBig(evm.Context.BlockNumber)
 
 	return nil, nil
 }
 
 func opDifficulty(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
-	v, _ := uint256.FromBig(evm.Context.Difficulty)
-	scope.Stack.push(v)
+	scope.Stack.get().SetFromBig(evm.Context.Difficulty)
 
 	return nil, nil
 }
 
 func opRandom(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
-	v := new(uint256.Int).SetBytes(evm.Context.Random.Bytes())
-	scope.Stack.push(v)
+	scope.Stack.get().SetBytes(evm.Context.Random.Bytes())
 
 	return nil, nil
 }
 
 func opGasLimit(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
-	scope.Stack.push(new(uint256.Int).SetUint64(evm.Context.GasLimit))
+	scope.Stack.get().SetUint64(evm.Context.GasLimit)
 	return nil, nil
 }
 
@@ -624,17 +619,17 @@ func opJumpdest(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 }
 
 func opPc(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
-	scope.Stack.push(new(uint256.Int).SetUint64(*pc))
+	scope.Stack.get().SetUint64(*pc)
 	return nil, nil
 }
 
 func opMsize(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
-	scope.Stack.push(new(uint256.Int).SetUint64(uint64(scope.Memory.Len())))
+	scope.Stack.get().SetUint64(uint64(scope.Memory.Len()))
 	return nil, nil
 }
 
 func opGas(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
-	scope.Stack.push(new(uint256.Int).SetUint64(scope.Contract.Gas.RegularGas))
+	scope.Stack.get().SetUint64(scope.Contract.Gas.RegularGas)
 	return nil, nil
 }
 
@@ -736,9 +731,9 @@ func opCreate(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 	// reuse size int for stackvalue
 	stackvalue := size
 
-	scope.Contract.UseGas(gas, evm.Config.Tracer, tracing.GasChangeCallContractCreation)
+	scope.Contract.UseGas(GasCosts{RegularGas: gas}, evm.Config.Tracer, tracing.GasChangeCallContractCreation)
 
-	res, addr, returnGas, suberr := evm.Create(scope.Contract.Address(), input, gas, &value)
+	res, addr, returnGas, suberr := evm.Create(scope.Contract.Address(), input, NewGasBudget(gas), &value)
 	// Push item on the stack based on the returned error. If the ruleset is
 	// homestead we must check for CodeStoreOutOfGasError (homestead only
 	// rule) and treat as an error, if the ruleset is frontier we must
@@ -778,10 +773,10 @@ func opCreate2(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 
 	// Apply EIP150
 	gas -= gas / 64
-	scope.Contract.UseGas(gas, evm.Config.Tracer, tracing.GasChangeCallContractCreation2)
+	scope.Contract.UseGas(GasCosts{RegularGas: gas}, evm.Config.Tracer, tracing.GasChangeCallContractCreation2)
 	// reuse size int for stackvalue
 	stackvalue := size
-	res, addr, returnGas, suberr := evm.Create2(scope.Contract.Address(), input, gas,
+	res, addr, returnGas, suberr := evm.Create2(scope.Contract.Address(), input, NewGasBudget(gas),
 		&endowment, &salt)
 	// Push item on the stack based on the returned error.
 	if suberr != nil {
@@ -820,7 +815,7 @@ func opCall(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 	if !value.IsZero() {
 		gas += params.CallStipend
 	}
-	ret, returnGas, err := evm.Call(scope.Contract.Address(), toAddr, args, gas, &value)
+	ret, returnGas, err := evm.Call(scope.Contract.Address(), toAddr, args, NewGasBudget(gas), &value)
 
 	if err != nil {
 		temp.Clear()
@@ -856,7 +851,7 @@ func opCallCode(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 		gas += params.CallStipend
 	}
 
-	ret, returnGas, err := evm.CallCode(scope.Contract.Address(), toAddr, args, gas, &value)
+	ret, returnGas, err := evm.CallCode(scope.Contract.Address(), toAddr, args, NewGasBudget(gas), &value)
 	if err != nil {
 		temp.Clear()
 	} else {
@@ -887,7 +882,7 @@ func opDelegateCall(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 	// Get arguments from the memory.
 	args := scope.Memory.GetPtr(inOffset.Uint64(), inSize.Uint64())
 
-	ret, returnGas, err := evm.DelegateCall(scope.Contract.Caller(), scope.Contract.Address(), toAddr, args, gas, scope.Contract.value)
+	ret, returnGas, err := evm.DelegateCall(scope.Contract.Caller(), scope.Contract.Address(), toAddr, args, NewGasBudget(gas), scope.Contract.value)
 	if err != nil {
 		temp.Clear()
 	} else {
@@ -918,7 +913,7 @@ func opStaticCall(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 	// Get arguments from the memory.
 	args := scope.Memory.GetPtr(inOffset.Uint64(), inSize.Uint64())
 
-	ret, returnGas, err := evm.StaticCall(scope.Contract.Address(), toAddr, args, gas)
+	ret, returnGas, err := evm.StaticCall(scope.Contract.Address(), toAddr, args, NewGasBudget(gas))
 	if err != nil {
 		temp.Clear()
 	} else {
@@ -1088,7 +1083,7 @@ func opDupN(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 	}
 
 	//The n‘th stack item is duplicated at the top of the stack.
-	scope.Stack.push(scope.Stack.Back(n - 1))
+	scope.Stack.push(scope.Stack.back(n - 1))
 	*pc += 1
 	return nil, nil
 }
@@ -1115,10 +1110,10 @@ func opSwapN(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 		return nil, &ErrStackUnderflow{stackLen: scope.Stack.len(), required: n + 1}
 	}
 
-	// The (n+1)‘th stack item is swapped with the top of the stack.
-	indexTop := scope.Stack.len() - 1
-	indexN := scope.Stack.len() - 1 - n
-	scope.Stack.data[indexTop], scope.Stack.data[indexN] = scope.Stack.data[indexN], scope.Stack.data[indexTop]
+	// The (n+1)’th stack item is swapped with the top of the stack.
+	top := scope.Stack.peek()
+	nth := scope.Stack.back(n)
+	*top, *nth = *nth, *top
 	*pc += 1
 	return nil, nil
 }
@@ -1148,10 +1143,10 @@ func opExchange(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 		return nil, &ErrStackUnderflow{stackLen: scope.Stack.len(), required: need}
 	}
 
-	// The (n+1)‘th stack item is swapped with the (m+1)‘th stack item.
-	indexN := scope.Stack.len() - 1 - n
-	indexM := scope.Stack.len() - 1 - m
-	scope.Stack.data[indexN], scope.Stack.data[indexM] = scope.Stack.data[indexM], scope.Stack.data[indexN]
+	// The (n+1)’th stack item is swapped with the (m+1)’th stack item.
+	nth := scope.Stack.back(n)
+	mth := scope.Stack.back(m)
+	*nth, *mth = *mth, *nth
 	*pc += 1
 	return nil, nil
 }
@@ -1189,14 +1184,14 @@ func makeLog(size int) executionFunc {
 func opPush1(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 	var (
 		codeLen = uint64(len(scope.Contract.Code))
-		integer = new(uint256.Int)
+		elem    = scope.Stack.get()
 	)
 
 	*pc += 1
 	if *pc < codeLen {
-		scope.Stack.push(integer.SetUint64(uint64(scope.Contract.Code[*pc])))
+		elem.SetUint64(uint64(scope.Contract.Code[*pc]))
 	} else {
-		scope.Stack.push(integer.Clear())
+		elem.Clear()
 	}
 
 	return nil, nil
@@ -1206,14 +1201,14 @@ func opPush1(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 func opPush2(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 	var (
 		codeLen = uint64(len(scope.Contract.Code))
-		integer = new(uint256.Int)
+		elem    = scope.Stack.get()
 	)
 	if *pc+2 < codeLen {
-		scope.Stack.push(integer.SetBytes2(scope.Contract.Code[*pc+1 : *pc+3]))
+		elem.SetBytes2(scope.Contract.Code[*pc+1 : *pc+3])
 	} else if *pc+1 < codeLen {
-		scope.Stack.push(integer.SetUint64(uint64(scope.Contract.Code[*pc+1]) << 8))
+		elem.SetUint64(uint64(scope.Contract.Code[*pc+1]) << 8)
 	} else {
-		scope.Stack.push(integer.Clear())
+		elem.Clear()
 	}
 	*pc += 2
 	return nil, nil
@@ -1227,13 +1222,13 @@ func makePush(size uint64, pushByteSize int) executionFunc {
 			start   = min(codeLen, int(*pc+1))
 			end     = min(codeLen, start+pushByteSize)
 		)
-		a := new(uint256.Int).SetBytes(scope.Contract.Code[start:end])
+		a := scope.Stack.get()
+		a.SetBytes(scope.Contract.Code[start:end])
 
 		// Missing bytes: pushByteSize - len(pushData)
 		if missing := pushByteSize - (end - start); missing > 0 {
 			a.Lsh(a, uint(8*missing))
 		}
-		scope.Stack.push(a)
 		*pc += size
 
 		return nil, nil

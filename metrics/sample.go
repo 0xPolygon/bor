@@ -316,7 +316,7 @@ func (s *UniformSample) Clear() {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	s.count = 0
-	clear(s.values)
+	s.values = s.values[:0]
 }
 
 // Snapshot returns a read-only copy of the sample.

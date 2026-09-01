@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/core/types/bal"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
 )
@@ -1244,7 +1245,17 @@ func (s *ParallelStateDB) Prepare(rules params.Rules, sender, coinbase common.Ad
 
 // Finalise is called at the end of each tx. In parallel mode, it's a no-op
 // since actual finalisation happens during settlement on the real StateDB.
-func (s *ParallelStateDB) Finalise(deleteEmptyObjects bool) {}
+//
+// The returned access list is always nil: V2 does not build block-level access
+// lists, and the serial StateDB it settles onto is the one that accumulates them.
+func (s *ParallelStateDB) Finalise(deleteEmptyObjects bool) *bal.StateAccessList { return nil }
+
+// Touch accesses the specific account without returning anything. Exist is the
+// V2 equivalent of the serial getStateObject: it registers the account read in
+// the versioned store so the access is tracked like any other.
+func (s *ParallelStateDB) Touch(addr common.Address) {
+	s.Exist(addr)
+}
 
 // Inner returns the underlying StateDB. Required by Bor consensus.
 func (s *ParallelStateDB) Inner() *StateDB { return s.rawBase }

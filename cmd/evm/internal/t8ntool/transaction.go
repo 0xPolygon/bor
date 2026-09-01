@@ -147,23 +147,23 @@ func Transaction(ctx *cli.Context) error {
 		}
 		// Check intrinsic gas
 		rules := chainConfig.Rules(common.Big0, true, 0)
-		gas, err := core.IntrinsicGas(tx.Data(), tx.AccessList(), tx.SetCodeAuthorizations(), tx.To() == nil, rules.IsHomestead, rules.IsIstanbul, rules.IsShanghai)
+		cost, err := core.IntrinsicGas(tx.Data(), tx.AccessList(), tx.SetCodeAuthorizations(), tx.To() == nil, rules.IsHomestead, rules.IsIstanbul, rules.IsShanghai, rules.IsAmsterdam)
 		if err != nil {
 			r.Error = err
 			results = append(results, r)
 
 			continue
 		}
-		r.IntrinsicGas = gas
-		if tx.Gas() < gas {
-			r.Error = fmt.Errorf("%w: have %d, want %d", core.ErrIntrinsicGas, tx.Gas(), gas)
+		r.IntrinsicGas = cost.RegularGas
+		if tx.Gas() < cost.RegularGas {
+			r.Error = fmt.Errorf("%w: have %d, want %d", core.ErrIntrinsicGas, tx.Gas(), cost.RegularGas)
 			results = append(results, r)
 			continue
 		}
 		// For Prague txs, validate the floor data gas.
 		// EIP-7623
 		if rules.IsPrague {
-			floorDataGas, err := core.FloorDataGas(tx.Data())
+			floorDataGas, err := core.FloorDataGas(rules, tx.Data(), tx.AccessList())
 			if err != nil {
 				r.Error = err
 				results = append(results, r)
@@ -202,12 +202,13 @@ func Transaction(ctx *cli.Context) error {
 			}
 		}
 
-		// Bor: EIP-7825 at Madhugiri HF block
+		// Bor: EIP-7825 at Madhugiri HF block, lifted again at Amsterdam
 		isOsaka := chainConfig.IsOsaka(new(big.Int))
 		isMadhugiri := chainConfig.Bor != nil && chainConfig.Bor.IsMadhugiri(new(big.Int))
+		isAmsterdam := chainConfig.IsAmsterdam(new(big.Int))
 
 		// Verify tx gas limit does not exceed EIP-7825 cap.
-		if (isOsaka || isMadhugiri) && tx.Gas() > params.MaxTxGas {
+		if (isOsaka || isMadhugiri) && !isAmsterdam && tx.Gas() > params.MaxTxGas {
 			r.Error = errors.New("gas limit exceeds maximum")
 		}
 

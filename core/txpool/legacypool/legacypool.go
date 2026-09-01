@@ -674,8 +674,8 @@ func (pool *LegacyPool) stats() (int, int) {
 // Content retrieves the data content of the transaction pool, returning all the
 // pending as well as queued transactions, grouped by account and sorted by nonce.
 func (pool *LegacyPool) Content() (map[common.Address][]*types.Transaction, map[common.Address][]*types.Transaction) {
-	pool.mu.Lock()
-	defer pool.mu.Unlock()
+	pool.mu.RLock()
+	defer pool.mu.RUnlock()
 
 	pending := make(map[common.Address][]*types.Transaction, len(pool.pending))
 	for addr, list := range pool.pending {
@@ -718,9 +718,9 @@ func (pool *LegacyPool) Pending(filter txpool.PendingFilter, interrupt *atomic.B
 
 	// Capture the time taken to acquire the lock
 	lockWait := time.Now()
-	pool.mu.Lock()
+	pool.mu.RLock()
 	pendingLockWaitTimer.Update(time.Since(lockWait))
-	defer pool.mu.Unlock()
+	defer pool.mu.RUnlock()
 
 	if interrupt == nil {
 		interrupt = new(atomic.Bool)
