@@ -35,8 +35,8 @@ import (
 const basefeeWiggleMultiplier = 2
 
 var (
-	errNoEventSignature       = errors.New("no event signature")
-	errEventSignatureMismatch = errors.New("event signature mismatch")
+	ErrNoEventSignature       = errors.New("no event signature")
+	ErrEventSignatureMismatch = errors.New("event signature mismatch")
 )
 
 // SignerFn is a signer function callback when a contract requires a method to
@@ -562,11 +562,11 @@ func (c *BoundContract) WatchLogs(opts *WatchOpts, name string, query ...[]any) 
 func (c *BoundContract) UnpackLog(out any, event string, log types.Log) error {
 	// Anonymous events are not supported.
 	if len(log.Topics) == 0 {
-		return errNoEventSignature
+		return ErrNoEventSignature
 	}
 
 	if log.Topics[0] != c.abi.Events[event].ID {
-		return errEventSignatureMismatch
+		return ErrEventSignatureMismatch
 	}
 
 	if len(log.Data) > 0 {
@@ -590,11 +590,11 @@ func (c *BoundContract) UnpackLog(out any, event string, log types.Log) error {
 func (c *BoundContract) UnpackLogIntoMap(out map[string]any, event string, log types.Log) error {
 	// Anonymous events are not supported.
 	if len(log.Topics) == 0 {
-		return errNoEventSignature
+		return ErrNoEventSignature
 	}
 
 	if log.Topics[0] != c.abi.Events[event].ID {
-		return errEventSignatureMismatch
+		return ErrEventSignatureMismatch
 	}
 
 	if len(log.Data) > 0 {

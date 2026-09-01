@@ -99,10 +99,6 @@ func (s *hookedStateDB) GetState(addr common.Address, hash common.Hash) common.H
 	return s.inner.GetState(addr, hash)
 }
 
-func (s *hookedStateDB) GetStorageRoot(addr common.Address) common.Hash {
-	return s.inner.GetStorageRoot(addr)
-}
-
 func (s *hookedStateDB) GetTransientState(addr common.Address, key common.Hash) common.Hash {
 	return s.inner.GetTransientState(addr, key)
 }
@@ -242,8 +238,8 @@ func (s *hookedStateDB) AddLog(log *types.Log) {
 	}
 }
 
-func (s *hookedStateDB) EmitLogsForBurnAccounts() {
-	s.inner.EmitLogsForBurnAccounts()
+func (s *hookedStateDB) LogsForBurnAccounts() []*types.Log {
+	return s.inner.LogsForBurnAccounts()
 }
 
 func (s *hookedStateDB) Finalise(deleteEmptyObjects bool) {
