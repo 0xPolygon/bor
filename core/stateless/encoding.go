@@ -25,8 +25,9 @@ import (
 )
 
 // BorWitness is the canonical 3-field RLP encoding used for network
-// transmission in Bor. The State field carries all proof data — both
-// contract bytecodes and MPT state trie nodes — as a flat list of byte slices.
+// transmission in Bor. The State field carries MPT trie proof nodes as a flat
+// list of byte slices. Contract bytecodes are not part of the BorWitness wire
+// format; verifiers read bytecode from local storage via CodeRoutingDB.
 type BorWitness struct {
 	Context *types.Header
 	Headers []*types.Header
