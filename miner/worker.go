@@ -346,7 +346,7 @@ func stateSyncReserveFor(config *params.ChainConfig, number *big.Int) uint64 {
 	return params.MaxStateSyncBytesPerBlock
 }
 
-// txFits reports whether the transaction fits into the block size limit.
+// txFitsSize reports whether the transaction fits into the block size limit.
 func (env *environment) txFitsSize(tx *types.Transaction) bool {
 	return env.size+tx.Size() < params.MaxBlockSize-maxBlockSizeBufferZone-env.stateSyncReserve
 }
@@ -1421,14 +1421,14 @@ func (w *worker) makeEnv(header *types.Header, coinbase common.Address, witness 
 	}
 
 	if witness {
-		bundle, err := stateless.NewWitness(header, w.chain)
+		bundle, err := stateless.NewWitness(header, w.chain, false)
 		if err != nil {
 			return nil, err
 		}
-		state.StartPrefetcher("miner", bundle, nil)
+		state.StartPrefetcher("miner", bundle)
 	} else {
 		// todo: @anshalshukla - check if witness is required
-		state.StartPrefetcher("miner", nil, nil)
+		state.StartPrefetcher("miner", nil)
 	}
 
 	// Note the passed coinbase may be different with header.Coinbase.
@@ -1475,16 +1475,18 @@ func (w *worker) updateSnapshot(env *environment) {
 func (w *worker) commitTransaction(env *environment, tx *types.Transaction) ([]*types.Log, error) {
 	var (
 		snap = env.state.Snapshot()
-		gp   = env.gasPool.Gas()
+		gp   = env.gasPool.Snapshot()
 	)
 
-	receipt, err := core.ApplyTransaction(env.evm, env.gasPool, env.state, env.header, tx, &env.header.GasUsed)
+	receipt, err := core.ApplyTransaction(env.evm, env.gasPool, env.state, env.header, tx)
 	if err != nil {
 		env.state.RevertToSnapshot(snap)
-		env.gasPool.SetGas(gp)
+		env.gasPool.Set(gp)
 
 		return nil, err
 	}
+
+	env.header.GasUsed = env.gasPool.Used()
 	env.txs = append(env.txs, tx)
 	env.receipts = append(env.receipts, receipt)
 	env.tcount++
@@ -1500,7 +1502,7 @@ func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transac
 
 	gasLimit := env.header.GasLimit
 	if env.gasPool == nil {
-		env.gasPool = new(core.GasPool).AddGas(gasLimit)
+		env.gasPool = core.NewGasPool(gasLimit)
 	}
 
 	var coalescedLogs []*types.Log
@@ -2716,7 +2718,7 @@ func (w *worker) runIdleTxProvider(txsCh chan<- *types.Transaction, header *type
 	filter := w.buildDefaultFilter(header.BaseFee, header.Number)
 	filter.BlobTxs = false
 
-	totalGasPool := new(core.GasPool).AddGas(header.GasLimit * idleGasLimitPercent(w.config) / 100)
+	totalGasPool := core.NewGasPool(header.GasLimit * idleGasLimitPercent(w.config) / 100)
 	localPrefetched := make(map[common.Hash]struct{})
 
 	shouldExit := func() bool {
@@ -2769,7 +2771,7 @@ func (w *worker) streamIdleBatch(
 	if loopGasLimit > headerGasLimit {
 		loopGasLimit = headerGasLimit
 	}
-	gaspool := new(core.GasPool).AddGas(loopGasLimit)
+	gaspool := core.NewGasPool(loopGasLimit)
 
 	for {
 		ltx, tx := nextViableIdleTx(txs, gaspool, localPrefetched)

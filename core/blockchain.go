@@ -887,7 +887,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 
 		go func() {
 			pstart := time.Now()
-			parallelStatedb.StartPrefetcher("chain", witness, nil)
+			parallelStatedb.StartPrefetcher("chain", witness)
 			v2VmCfg := bc.cfg.VmConfig
 			sharedCaches.applyTo(&v2VmCfg)
 			res, err := bc.parallelProcessor.Process(block, parallelStatedb, v2VmCfg, nil, ctx)
@@ -919,7 +919,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 
 		go func() {
 			pstart := time.Now()
-			statedb.StartPrefetcher("chain", witness, nil)
+			statedb.StartPrefetcher("chain", witness)
 			res, err := bc.processor.Process(block, statedb, bc.cfg.VmConfig, nil, ctx)
 			blockExecutionSerialTimer.UpdateSince(pstart)
 			var localVtime time.Duration
@@ -1159,8 +1159,12 @@ func (bc *BlockChain) loadLastState() error {
 
 // initializeHistoryPruning sets bc.historyPrunePoint.
 func (bc *BlockChain) initializeHistoryPruning(latest uint64) error {
-	freezerTail, _ := bc.db.Tail()
-
+	var (
+		freezerTail, _ = bc.db.Tail()
+		genesisHash    = bc.genesisBlock.Hash()
+		mergePoint     = history.MergePrunePoints[genesisHash]
+		praguePoint    = history.PraguePrunePoints[genesisHash]
+	)
 	switch bc.cfg.ChainHistoryMode {
 	case history.KeepAll:
 		if freezerTail == 0 {
@@ -1168,34 +1172,66 @@ func (bc *BlockChain) initializeHistoryPruning(latest uint64) error {
 		}
 		// The database was pruned somehow, so we need to figure out if it's a known
 		// configuration or an error.
-		predefinedPoint := history.PrunePoints[bc.genesisBlock.Hash()]
-		if predefinedPoint == nil || freezerTail != predefinedPoint.BlockNumber {
-			log.Error("Chain history database is pruned with unknown configuration", "tail", freezerTail)
-			return errors.New("unexpected database tail")
+		if mergePoint != nil && freezerTail == mergePoint.BlockNumber {
+			bc.historyPrunePoint.Store(mergePoint)
+			return nil
 		}
-		bc.historyPrunePoint.Store(predefinedPoint)
-		return nil
+		if praguePoint != nil && freezerTail == praguePoint.BlockNumber {
+			bc.historyPrunePoint.Store(praguePoint)
+			return nil
+		}
+		log.Error("Chain history database is pruned with unknown configuration", "tail", freezerTail)
+		return errors.New("unexpected database tail")
 
 	// nolint:staticcheck
 	case history.KeepPostMerge:
+		if mergePoint == nil {
+			return errors.New("history pruning requested for unknown network")
+		}
 		if freezerTail == 0 && latest != 0 {
-			// This is the case where a user is trying to run with --history.chain
-			// postmerge directly on an existing DB. We could just trigger the pruning
-			// here, but it'd be a bit dangerous since they may not have intended this
-			// action to happen. So just tell them how to do it.
 			log.Error(fmt.Sprintf("Chain history mode is configured as %q, but database is not pruned.", bc.cfg.ChainHistoryMode.String()))
-			log.Error(fmt.Sprintf("Run 'geth prune-history' to prune pre-merge history."))
+			log.Error("Run 'geth prune-history --history.chain postmerge' to prune pre-merge history.")
 			return errors.New("history pruning requested via configuration")
 		}
-		predefinedPoint := history.PrunePoints[bc.genesisBlock.Hash()]
-		if predefinedPoint == nil {
-			log.Error("Chain history pruning is not supported for this network", "genesis", bc.genesisBlock.Hash())
+		// Check if DB is pruned further than requested (to Prague).
+		if praguePoint != nil && freezerTail == praguePoint.BlockNumber {
+			log.Error("Chain history database is pruned to Prague block, but postmerge mode was requested.")
+			log.Error("History cannot be unpruned. To restore history, use 'geth import-history'.")
+			log.Error("If you intended to keep post-Prague history, use '--history.chain postprague' instead.")
+			return errors.New("database pruned beyond requested history mode")
+		}
+		if freezerTail > 0 && freezerTail != mergePoint.BlockNumber {
+			return errors.New("chain history database pruned to unknown block")
+		}
+		bc.historyPrunePoint.Store(mergePoint)
+		return nil
+
+	case history.KeepPostPrague:
+		if praguePoint == nil {
 			return errors.New("history pruning requested for unknown network")
-		} else if freezerTail > 0 && freezerTail != predefinedPoint.BlockNumber {
+		}
+		// Check if already at the prague prune point.
+		if freezerTail == praguePoint.BlockNumber {
+			bc.historyPrunePoint.Store(praguePoint)
+			return nil
+		}
+		// Check if database needs pruning.
+		if latest != 0 {
+			if freezerTail == 0 {
+				log.Error(fmt.Sprintf("Chain history mode is configured as %q, but database is not pruned.", bc.cfg.ChainHistoryMode.String()))
+				log.Error("Run 'geth prune-history --history.chain postprague' to prune pre-Prague history.")
+				return errors.New("history pruning requested via configuration")
+			}
+			if mergePoint != nil && freezerTail == mergePoint.BlockNumber {
+				log.Error(fmt.Sprintf("Chain history mode is configured as %q, but database is only pruned to merge block.", bc.cfg.ChainHistoryMode.String()))
+				log.Error("Run 'geth prune-history --history.chain postprague' to prune pre-Prague history.")
+				return errors.New("history pruning requested via configuration")
+			}
 			log.Error("Chain history database is pruned to unknown block", "tail", freezerTail)
 			return errors.New("unexpected database tail")
 		}
-		bc.historyPrunePoint.Store(predefinedPoint)
+		// Fresh database (latest == 0), will sync from prague point.
+		bc.historyPrunePoint.Store(praguePoint)
 		return nil
 
 	default:
@@ -1733,6 +1769,8 @@ func (bc *BlockChain) ExportN(w io.Writer, first uint64, last uint64) error {
 func (bc *BlockChain) writeHeadBlock(block *types.Block) {
 	// Add the block to the canonical chain number scheme and mark as the head
 	batch := bc.db.NewBatch()
+	defer batch.Close()
+
 	rawdb.WriteHeadHeaderHash(batch, block.Hash())
 	rawdb.WriteHeadFastBlockHash(batch, block.Hash())
 	rawdb.WriteCanonicalHash(batch, block.Hash(), block.NumberU64())
@@ -2373,6 +2411,8 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 	// Note all the components of block(td, hash->number map, header, body, receipts)
 	// should be written atomically. BlockBatch is used for containing all components.
 	blockBatch := bc.db.NewBatch()
+	defer blockBatch.Close()
+
 	rawdb.WriteTd(blockBatch, block.Hash(), block.NumberU64(), externTd)
 	rawdb.WriteBlock(blockBatch, block)
 	rawdb.WriteReceipts(blockBatch, block.Hash(), block.NumberU64(), receipts)
@@ -3310,7 +3350,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 			// only block being inserted. A bit crude, but witnesses are huge,
 			// so we refuse to make an entire chain of them.
 			if bc.cfg.VmConfig.StatelessSelfValidation || (makeWitness && len(chain) == 1) {
-				witness, err = stateless.NewWitness(block.Header(), bc)
+				witness, err = stateless.NewWitness(block.Header(), bc, bc.cfg.VmConfig.EnableWitnessStats)
 				if err != nil {
 					return nil, it.index, err
 				}
@@ -3350,7 +3390,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		}
 
 		if computeWitness {
-			witness, err = stateless.NewWitness(block.Header(), bc)
+			witness, err = stateless.NewWitness(block.Header(), bc, bc.cfg.VmConfig.EnableWitnessStats)
 			if err != nil {
 				log.Error("Error in witness generation", "err", err)
 			}
@@ -3557,7 +3597,6 @@ func (bc *BlockChain) processBlock(block *types.Block, statedb *state.StateDB, s
 	vtime := time.Since(vstart)
 
 	var witness *stateless.Witness
-	var witnessStats *stateless.WitnessStats
 
 	// If witnesses was generated and stateless self-validation requested, do
 	// that now. Self validation should *never* run in production, it's more of
@@ -3567,10 +3606,6 @@ func (bc *BlockChain) processBlock(block *types.Block, statedb *state.StateDB, s
 	xvstart := time.Now()
 	if witness = statedb.Witness(); witness != nil && bc.cfg.VmConfig.StatelessSelfValidation {
 		log.Warn("Running stateless self-validation", "block", block.Number(), "hash", block.Hash())
-
-		if bc.cfg.VmConfig.EnableWitnessStats {
-			witnessStats = stateless.NewWitnessStats()
-		}
 
 		// Remove critical computed fields from the block to force true recalculation
 		context := block.Header()
@@ -3629,8 +3664,8 @@ func (bc *BlockChain) processBlock(block *types.Block, statedb *state.StateDB, s
 		return nil, err
 	}
 	// Report the collected witness statistics
-	if witnessStats != nil {
-		witnessStats.ReportMetrics(block.NumberU64())
+	if witness != nil {
+		witness.ReportMetrics(block.NumberU64())
 	}
 
 	// Update the metrics touched during block commit
@@ -3996,6 +4031,7 @@ func (bc *BlockChain) reorg(oldHead *types.Header, newHead *types.Header) error 
 	// as the txlookups should be changed atomically, and all subsequent
 	// reads should be blocked until the mutation is complete.
 	bc.txLookupLock.Lock()
+	defer bc.txLookupLock.Unlock()
 
 	// Reorg can be executed, start reducing the chain's old blocks and appending
 	// the new blocks
@@ -4077,6 +4113,8 @@ func (bc *BlockChain) reorg(oldHead *types.Header, newHead *types.Header) error 
 	// Delete useless indexes right now which includes the non-canonical
 	// transaction indexes, canonical chain indexes which above the head.
 	batch := bc.db.NewBatch()
+	defer batch.Close()
+
 	for _, tx := range types.HashDifference(deletedTxs, rebirthTxs) {
 		rawdb.DeleteTxLookupEntry(batch, tx)
 	}
@@ -4099,9 +4137,6 @@ func (bc *BlockChain) reorg(oldHead *types.Header, newHead *types.Header) error 
 	}
 	// Reset the tx lookup cache to clear stale txlookup cache.
 	bc.txLookupCache.Purge()
-
-	// Release the tx-lookup lock after mutation.
-	bc.txLookupLock.Unlock()
 
 	return nil
 }

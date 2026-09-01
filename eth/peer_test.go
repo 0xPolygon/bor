@@ -73,7 +73,7 @@ func TestRequestWitnesses_Controlling_Max_Concurrent_Calls(t *testing.T) {
 	defer ctrl.Finish()
 
 	hashToRequest := common.Hash{123}
-	witness, _ := stateless.NewWitness(&types.Header{}, nil)
+	witness, _ := stateless.NewWitness(&types.Header{}, nil, false)
 	FillWitnessWithDeterministicRandomState(witness, 10*1024)
 	var witBuf bytes.Buffer
 	witness.EncodeRLP(&witBuf)
@@ -184,7 +184,7 @@ func FillWitnessWithDeterministicRandomState(w *stateless.Witness, targetSize in
 		states := map[string][]byte{
 			string(buf): buf,
 		}
-		w.AddState(states)
+		w.AddState(states, common.Hash{})
 		total += chunkSize
 	}
 }
@@ -566,7 +566,7 @@ func TestSupportsWitness(t *testing.T) {
 func TestReconstructWitness(t *testing.T) {
 	t.Run("SuccessfulReconstruction", func(t *testing.T) {
 		// Create a test witness and encode it
-		witness, _ := stateless.NewWitness(&types.Header{Number: big.NewInt(100)}, nil)
+		witness, _ := stateless.NewWitness(&types.Header{Number: big.NewInt(100)}, nil, false)
 		FillWitnessWithDeterministicRandomState(witness, 5*1024)
 		var buf bytes.Buffer
 		witness.EncodeRLP(&buf)
@@ -599,7 +599,7 @@ func TestReconstructWitness(t *testing.T) {
 
 	t.Run("OutOfOrderPages", func(t *testing.T) {
 		// Create pages out of order
-		witness, _ := stateless.NewWitness(&types.Header{Number: big.NewInt(100)}, nil)
+		witness, _ := stateless.NewWitness(&types.Header{Number: big.NewInt(100)}, nil, false)
 		FillWitnessWithDeterministicRandomState(witness, 3*1024)
 		var buf bytes.Buffer
 		witness.EncodeRLP(&buf)
@@ -1580,7 +1580,7 @@ func testPeer(t *testing.T) (*ethPeer, *MockWitnessPeer) {
 // testWitnessData returns RLP-encoded witness bytes for use in mock responses.
 func testWitnessData(t *testing.T) []byte {
 	t.Helper()
-	w, _ := stateless.NewWitness(&types.Header{}, nil)
+	w, _ := stateless.NewWitness(&types.Header{}, nil, false)
 	FillWitnessWithDeterministicRandomState(w, 10*1024)
 	var buf bytes.Buffer
 	w.EncodeRLP(&buf)

@@ -50,7 +50,7 @@ func witnessRegenRoundTrip(pb *preparedBlock, diskdb ethdb.Database, config *par
 	}
 
 	hc := &benchHeaderChain{config: config, chainDb: pb.memdb, headerCache: pb.headerCache, engine: engine}
-	w2, err := stateless.NewWitness(pb.block.Header(), hc)
+	w2, err := stateless.NewWitness(pb.block.Header(), hc, false)
 	if err != nil {
 		return fmt.Errorf("new witness: %w", err)
 	}
