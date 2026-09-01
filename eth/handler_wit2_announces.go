@@ -20,9 +20,39 @@ const (
 	// produce within strikeDecayWindow before being disconnected.
 	wit2MisbehaviorStrikeLimit = 5
 	wit2MisbehaviorWindow      = time.Minute
+
+	// wit2FetchTriggerBurstCap/RefillPerSecond bound how often a single peer
+	// can cause us to spawn a triggerRelayFetch goroutine via
+	// recordWitnessWaiter. Unlike announce ingestion (cheap, purely local),
+	// each allowed trigger costs a real upstream round trip (possibly several
+	// pages) against another peer — the per-hash dedup in
+	// handler.relayFetchInFlight only stops the SAME hash from being
+	// re-fetched concurrently, not a peer requesting many distinct
+	// real-but-unfetched signed hashes to force many concurrent fetches. The
+	// budget is sized well above any honest multi-hop relay's demand (a
+	// well-connected relay serves a handful of distinct in-flight hashes at
+	// the chain tip at once) while capping the cost an adversarial requester
+	// can impose.
+	wit2FetchTriggerBurstCap        = 8
+	wit2FetchTriggerRefillPerSecond = 2
+
+	// wit2RelayFetchGlobalConcurrencyCap bounds the total number of
+	// concurrently-running triggerRelayFetch goroutines across ALL peers
+	// combined, independent of wit2FetchTriggerBurstCap (which only limits
+	// a single requesting peer's own rate). Without a global cap, several
+	// distinct peers can each independently exhaust their own per-peer
+	// budget at the same time, stacking into dozens of concurrent fetch
+	// goroutines — enough to transiently exhaust file descriptors on a
+	// relay node with multiple downstream peers (confirmed on a real
+	// devnet run: a burst of concurrent fetches produced real "too many
+	// open files" errors that permanently dropped peer connections and the
+	// heimdall HTTP client, stalling the node). Sized well above what any
+	// single relay hop needs concurrently while bounding worst-case total
+	// concurrent outbound fetch attempts.
+	wit2RelayFetchGlobalConcurrencyCap = 8
 )
 
-// peerWit2State tracks a peer's wit2-announce burst budget and recent strikes.
+// peerWit2State tracks a peer's wit2 burst budget and recent strikes.
 // Lifecycle is tied to the eth handler's peer registration; entries are
 // cleaned up when the peer disconnects.
 type peerWit2State struct {
@@ -32,13 +62,28 @@ type peerWit2State struct {
 	firstStrikeAt time.Time
 }
 
+// peerWit2Tracker is a generic per-peer token-bucket + strike tracker. The
+// bucket's capacity and refill rate are fixed at construction so the same
+// type can back budgets of very different size (cheap announce ingestion vs.
+// expensive relay-fetch triggers) without cross-contaminating each other's
+// budget.
 type peerWit2Tracker struct {
-	mu    sync.Mutex
-	state map[string]*peerWit2State
+	mu         sync.Mutex
+	state      map[string]*peerWit2State
+	burstCap   float64
+	refillRate float64
 }
 
 func newPeerWit2Tracker() *peerWit2Tracker {
-	return &peerWit2Tracker{state: make(map[string]*peerWit2State)}
+	return newPeerWit2TrackerWithBudget(wit2AnnounceBurstCap, wit2AnnounceRefillPerSecond)
+}
+
+func newPeerWit2TrackerWithBudget(burstCap, refillPerSecond float64) *peerWit2Tracker {
+	return &peerWit2Tracker{
+		state:      make(map[string]*peerWit2State),
+		burstCap:   burstCap,
+		refillRate: refillPerSecond,
+	}
 }
 
 func (t *peerWit2Tracker) forget(peerID string) {
@@ -48,7 +93,7 @@ func (t *peerWit2Tracker) forget(peerID string) {
 }
 
 // allow returns true if the peer has enough budget to consume `count`
-// announcements right now. False means the packet should be dropped and a
+// units right now. False means the request should be dropped and a
 // rate-limit metric recorded; the caller decides whether to disconnect.
 func (t *peerWit2Tracker) allow(peerID string, count int) bool {
 	t.mu.Lock()
@@ -56,14 +101,14 @@ func (t *peerWit2Tracker) allow(peerID string, count int) bool {
 	st, ok := t.state[peerID]
 	now := time.Now()
 	if !ok {
-		st = &peerWit2State{tokens: wit2AnnounceBurstCap, lastRefill: now}
+		st = &peerWit2State{tokens: t.burstCap, lastRefill: now}
 		t.state[peerID] = st
 	}
 	elapsed := now.Sub(st.lastRefill).Seconds()
 	if elapsed > 0 {
-		st.tokens += elapsed * wit2AnnounceRefillPerSecond
-		if st.tokens > wit2AnnounceBurstCap {
-			st.tokens = wit2AnnounceBurstCap
+		st.tokens += elapsed * t.refillRate
+		if st.tokens > t.burstCap {
+			st.tokens = t.burstCap
 		}
 		st.lastRefill = now
 	}

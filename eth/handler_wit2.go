@@ -36,6 +36,19 @@ var (
 	wit2WaiterPushOversizeMeter         = metrics.NewRegisteredMeter("eth/wit2/serve/waiter_push_oversize", nil)
 	wit2BroadcastUnknownHeaderDropMeter = metrics.NewRegisteredMeter("eth/wit2/serve/broadcast_unknown_header_drop", nil)
 	wit2BroadcastDeferredImportMeter    = metrics.NewRegisteredMeter("eth/wit2/serve/broadcast_deferred_import_only", nil)
+	wit2FetchTriggerRateLimitDropMeter  = metrics.NewRegisteredMeter("eth/wit2/serve/fetch_trigger_rate_limit_drop", nil)
+	// wit2RelayFetchTriggeredMeter is marked synchronously, once per hash,
+	// the moment triggerRelayFetch passes its per-hash dedup gate and
+	// commits to spawning a fetch goroutine — before the goroutine itself
+	// runs, so (unlike relayFetchInFlight, which a fast no-candidate failure
+	// can clear before an observer gets to check it) this count is race-free
+	// to assert on immediately after the call returns.
+	wit2RelayFetchTriggeredMeter = metrics.NewRegisteredMeter("eth/wit2/serve/relay_fetch_triggered", nil)
+	// wit2RelayFetchConcurrencyDropMeter counts triggers dropped by the
+	// global concurrency cap (relayFetchSem) — distinct from
+	// wit2FetchTriggerRateLimitDropMeter, which counts drops from the
+	// per-peer rate limiter instead.
+	wit2RelayFetchConcurrencyDropMeter = metrics.NewRegisteredMeter("eth/wit2/serve/relay_fetch_concurrency_drop", nil)
 )
 
 // witnessPushMaxSize caps the encoded size of a witness we full-push to

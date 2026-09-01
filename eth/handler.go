@@ -202,6 +202,14 @@ type handler struct {
 	pendingWitnessBodies *pendingWitnessBodyCache
 	wit2PeerTracker      *peerWit2Tracker
 
+	// WIT2: separate, much tighter per-peer budget gating how often a peer's
+	// GetWitness request for a body we don't have can trigger a NEW
+	// triggerRelayFetch goroutine (see recordWitnessWaiter). Deliberately
+	// distinct from wit2PeerTracker, which only rate-limits cheap inbound
+	// announce ingestion — a fetch trigger costs a real round trip against
+	// another peer, so it needs its own, smaller budget.
+	wit2FetchTriggerTracker *peerWit2Tracker
+
 	// WIT2: signed announcements whose producer-binding could not be checked
 	// at receive time because the matching block header wasn't local yet.
 	// Drained from the chain-head subscription on each new block so the race
@@ -214,6 +222,27 @@ type handler struct {
 	// file). When we obtain the body we push it straight to them, restoring
 	// the WIT1-style hand-off the fast announce removed.
 	witnessWaiters *witnessWaiterRegistry
+
+	// WIT2: dedup guard for relayFetchOnDemand — a pure relay node (no
+	// produce_witness, no sync_with_witness) has no reason of its own to
+	// ever fetch witness bytes, so without this it can register waiters via
+	// recordWitnessWaiter forever without any path to satisfy them. Ensures
+	// at most one outstanding upstream fetch per hash.
+	relayFetchInFlight sync.Map
+
+	// WIT2: global concurrency cap on triggerRelayFetch, independent of the
+	// per-peer wit2FetchTriggerTracker budget above. That tracker only
+	// bounds a single requesting peer's trigger rate — it does nothing to
+	// stop several distinct peers from each independently bursting their
+	// own budget at once. On a relay node with multiple downstream peers
+	// (the exact multi-hop topology this fetch mechanism serves), enough
+	// simultaneous triggers can transiently exhaust file descriptors —
+	// confirmed on a real devnet run, where a burst of concurrent fetches
+	// produced "too many open files" and permanently dropped peer
+	// connections and the heimdall HTTP client. Sized well above any single
+	// relay hop's realistic concurrent demand while bounding the total
+	// number of simultaneous outbound fetch attempts network-wide.
+	relayFetchSem chan struct{}
 
 	wit2HeadCh  chan core.ChainHeadEvent
 	wit2HeadSub event.Subscription
@@ -260,6 +289,8 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		signedWitnesses:         newSignedWitnessCache(),
 		pendingWitnessBodies:    newPendingWitnessBodyCache(witnessBodyCacheCapacity),
 		wit2PeerTracker:         newPeerWit2Tracker(),
+		wit2FetchTriggerTracker: newPeerWit2TrackerWithBudget(wit2FetchTriggerBurstCap, wit2FetchTriggerRefillPerSecond),
+		relayFetchSem:           make(chan struct{}, wit2RelayFetchGlobalConcurrencyCap),
 		deferredAnnounces:       newDeferredAnnounceCache(deferredAnnounceCapacity),
 		witnessWaiters:          newWitnessWaiterRegistry(),
 	}
@@ -601,6 +632,9 @@ func (h *handler) removePeer(id string) {
 	if h.wit2PeerTracker != nil {
 		h.wit2PeerTracker.forget(id)
 	}
+	if h.wit2FetchTriggerTracker != nil {
+		h.wit2FetchTriggerTracker.forget(id)
+	}
 }
 
 // unregisterPeer removes a peer from the downloader, fetchers and main peer set.
@@ -621,6 +655,9 @@ func (h *handler) unregisterPeer(id string) {
 	// peer-set membership and must be cleared even for a half-registered peer.
 	if h.wit2PeerTracker != nil {
 		h.wit2PeerTracker.forget(id)
+	}
+	if h.wit2FetchTriggerTracker != nil {
+		h.wit2FetchTriggerTracker.forget(id)
 	}
 	// Likewise drop any witness-waiter entries this peer holds, on the same
 	// guaranteed teardown path. Otherwise a peer that asked for a not-yet-held

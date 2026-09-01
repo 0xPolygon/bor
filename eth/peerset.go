@@ -299,6 +299,30 @@ func (ps *peerSet) peer(id string) *ethPeer {
 	return ps.peers[id]
 }
 
+// peersWithWitnessCandidates returns every candidate body source for `hash`,
+// body-known peers first, then announce-only peers — same ordering rationale
+// as getOnePeerWithWitness, but as a full list so a caller that needs to
+// exclude one specific peer (e.g. the requester that just asked us, who by
+// construction doesn't have it) still has a real fallback instead of giving
+// up when that peer happens to be the single best candidate.
+func (ps *peerSet) peersWithWitnessCandidates(hash common.Hash) []*ethPeer {
+	ps.lock.RLock()
+	defer ps.lock.RUnlock()
+
+	var withBody, announceOnly []*ethPeer
+	for _, p := range ps.peers {
+		if p.witPeer == nil {
+			continue
+		}
+		if p.witPeer.Peer.KnownWitnessContainsHash(hash) {
+			withBody = append(withBody, p)
+		} else if p.witPeer.Peer.KnownAnnounceContainsHash(hash) {
+			announceOnly = append(announceOnly, p)
+		}
+	}
+	return append(withBody, announceOnly...)
+}
+
 // getOnePeerWithWitness returns a candidate body source for `hash`. Body-known
 // peers (those that broadcast or served the body) are preferred; if none is
 // available we fall back to peers that have only relayed a WIT2 signed
