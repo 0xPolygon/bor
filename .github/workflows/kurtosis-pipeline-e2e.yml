@@ -1,4 +1,10 @@
-name: Kurtosis E2E Tests
+name: Kurtosis Pipeline E2E Tests
+
+# Runs the stateless-sync topology with `pipeline.enable-import-src = true`
+# injected into every bor node's config template (POS-3697). The flag ships
+# default-off, so without this leg no CI job exercises the pipelined import
+# path on a real network. Adds a released-image baseline validator that
+# ignores the injected section — a pipeline-off cross-check on every block.
 
 on:
   push:
@@ -9,11 +15,11 @@ on:
     types: [opened, synchronize]
 
 concurrency:
-  group: kurtosis-e2e-${{ github.event.pull_request.number || github.ref }}
+  group: kurtosis-pipeline-e2e-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
-  ENCLAVE_NAME: kurtosis-e2e
+  ENCLAVE_NAME: kurtosis-pipeline-e2e
   POLYCLI_VERSION: v0.1.103
 
 jobs:
@@ -22,7 +28,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout bor
-        uses: actions/checkout@v7
+        uses: actions/checkout@v5
 
       - name: Build bor docker image
         run: docker build -t bor:local --file Dockerfile .
@@ -31,9 +37,9 @@ jobs:
         run: docker save bor:local | gzip > bor-image.tar.gz
 
       - name: Upload bor docker image
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
-          name: bor-image
+          name: pipeline-bor-image
           path: bor-image.tar.gz
           retention-days: 1
 
@@ -42,7 +48,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout heimdall-v2
-        uses: actions/checkout@v7
+        uses: actions/checkout@v5
         with:
           repository: 0xPolygon/heimdall-v2
           ref: develop
@@ -54,18 +60,18 @@ jobs:
         run: docker save heimdall-v2:local | gzip > heimdall-v2-image.tar.gz
 
       - name: Upload heimdall-v2 docker image
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
-          name: heimdall-v2-image
+          name: pipeline-heimdall-v2-image
           path: heimdall-v2-image.tar.gz
           retention-days: 1
 
-  e2e-tests:
+  pipeline-e2e-tests:
     needs:
       - build-bor
       - build-heimdall-v2
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     # These permissions are required to log in to GCR
     permissions:
       contents: read
@@ -74,10 +80,19 @@ jobs:
     steps:
       # Set up kurtosis
       - name: Checkout kurtosis-pos
-        uses: actions/checkout@v7
+        uses: actions/checkout@v5
         with:
           repository: 0xPolygon/kurtosis-pos
           ref: v1.4.2
+
+      # The whole point of this leg: every bor node gets the pipeline flag.
+      # bor:local nodes enable pipelined import (stateless-sync nodes
+      # self-gate it off); the released-image baseline ignores the unknown
+      # section and stays pipeline-off.
+      - name: Enable pipelined import in the bor config template
+        run: |
+          printf '\n[pipeline]\n  enable-import-src = true\n  import-src-logs = true\n' >> static_files/el/bor/config.toml
+          tail -4 static_files/el/bor/config.toml
 
       # This step will free disk space and thus remove any docker images previously built
       - name: Pre kurtosis run
@@ -88,25 +103,25 @@ jobs:
           docker_token: ${{ secrets.DOCKERHUB_KEY }}
 
       - name: Checkout pos-workflows
-        uses: actions/checkout@v7
+        uses: actions/checkout@v5
         with:
           repository: 0xPolygon/pos-workflows
           ref: main
           path: pos-workflows
 
       - name: Copy kurtosis config
-        run: cp ./pos-workflows/configs/kurtosis-e2e.yml ./kurtosis-e2e.yml
+        run: cp ./pos-workflows/configs/kurtosis-pipeline-e2e.yml ./kurtosis-pipeline-e2e.yml
 
       # Load images
       - name: Download bor docker image
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
-          name: bor-image
+          name: pipeline-bor-image
 
       - name: Download heimdall-v2 docker image
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
-          name: heimdall-v2-image
+          name: pipeline-heimdall-v2-image
 
       - name: Load bor docker image
         run: |
@@ -122,11 +137,12 @@ jobs:
 
       # Deploy kurtosis enclave
       - name: Kurtosis run
-        run: kurtosis run --args-file=kurtosis-e2e.yml --enclave=${{ env.ENCLAVE_NAME }} .
+        run: kurtosis run --args-file=kurtosis-pipeline-e2e.yml --enclave ${{ env.ENCLAVE_NAME }} .
 
       - name: Inspect enclave
         run: kurtosis enclave inspect ${{ env.ENCLAVE_NAME }}
 
+      # Run e2e tests
       - name: Install polycli
         run: |
           tmp_dir=$(mktemp -d)
@@ -136,30 +152,19 @@ jobs:
           sudo chmod +x /usr/local/bin/polycli
           polycli version
 
-      - name: Run smoke tests
-        id: smoke-tests
-        working-directory: pos-workflows/tests
-        run: bash kurtosis_smoke_test.sh
+      - name: Run stateless e2e tests (pipelined producers)
+        id: stateless-tests
+        working-directory: pos-workflows/tests/stateless_tests
+        run: bash kurtosis_stateless_test.sh
 
-      - name: Install Go
-        uses: actions/setup-go@v7
-        with:
-          go-version: 'stable'
-
-      - name: Run RPC tests
-        id: rpc-tests
-        working-directory: pos-workflows/tests/rpc_tests
-        run: |
-          export RPC_URL=$(kurtosis port print ${{ env.ENCLAVE_NAME }} l2-el-1-bor-heimdall-v2-validator rpc)
-          export PRIV_KEY="0xd40311b5a5ca5eaeb48dfba5403bde4993ece8eccf4190e98e19fcd4754260ea"
-          go run . --priv-key "$PRIV_KEY" --rpc-url "$RPC_URL" --log-req-res true
+      - name: Run pipeline checks
+        id: pipeline-checks
+        working-directory: pos-workflows/tests/pipeline_tests
+        run: bash kurtosis_pipeline_test.sh
 
       # Collect diagnostics on failure
       - name: Collect network diagnostics and state dump
-        if: >-
-          always() && (
-          steps.smoke-tests.outcome == 'failure' ||
-          steps.rpc-tests.outcome == 'failure')
+        if: always() && (steps.stateless-tests.outcome == 'failure' || steps.pipeline-checks.outcome == 'failure')
         uses: ./pos-workflows/.github/actions/network-diagnostics-and-state-dump
         with:
           enclave_name: ${{ env.ENCLAVE_NAME }}
