@@ -81,7 +81,7 @@ type ParallelStateDB struct {
 	TxIndex     int
 	Incarnation int                      // bumped on re-execution for validation
 	base        *SafeBase                // thread-safe pre-block state reads
-	rawBase     *StateDB                 // raw base for PointCache/Witness only
+	rawBase     *StateDB                 // raw base for Witness only
 	store       *blockstm.MVStore        // shared versioned values
 	bals        *blockstm.MVBalanceStore // shared balance deltas
 
