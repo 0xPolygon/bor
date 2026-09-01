@@ -42,7 +42,6 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/trie/trienode"
-	"github.com/ethereum/go-ethereum/trie/utils"
 )
 
 // TriesInMemory represents the number of layers that are kept in RAM.
@@ -209,7 +208,7 @@ func NewWithReader(root common.Hash, db Database, reader Reader) (*StateDB, erro
 		transientStorage:     newTransientStorage(),
 	}
 	if db.TrieDB().IsVerkle() {
-		sdb.accessEvents = NewAccessEvents(db.PointCache())
+		sdb.accessEvents = NewAccessEvents()
 	}
 
 	return sdb, nil
@@ -814,7 +813,6 @@ func (s *StateDB) Logs() []*types.Log {
 	for _, lgs := range s.logs {
 		logs = append(logs, lgs...)
 	}
-
 	return logs
 }
 
@@ -1603,13 +1601,13 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 				witness := trie.Witness()
 				s.witness.AddState(witness)
 				if s.witnessStats != nil {
-					s.witnessStats.Add(witness, obj.addrHash)
+					s.witnessStats.Add(witness, obj.addrHash())
 				}
 			} else if obj.trie != nil {
 				witness := obj.trie.Witness()
 				s.witness.AddState(witness)
 				if s.witnessStats != nil {
-					s.witnessStats.Add(witness, obj.addrHash)
+					s.witnessStats.Add(witness, obj.addrHash())
 				}
 			}
 		}
@@ -1627,13 +1625,13 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 				witness := trie.Witness()
 				s.witness.AddState(witness)
 				if s.witnessStats != nil {
-					s.witnessStats.Add(witness, obj.addrHash)
+					s.witnessStats.Add(witness, obj.addrHash())
 				}
 			} else if obj.trie != nil {
 				witness := obj.trie.Witness()
 				s.witness.AddState(witness)
 				if s.witnessStats != nil {
-					s.witnessStats.Add(witness, obj.addrHash)
+					s.witnessStats.Add(witness, obj.addrHash())
 				}
 			}
 		}
@@ -2024,7 +2022,7 @@ func (s *StateDB) commit(deleteEmptyObjects bool, noStorageWiping bool, blockNum
 				return err
 			}
 			lock.Lock()
-			updates[obj.addrHash] = update
+			updates[obj.addrHash()] = update
 			s.StorageCommits = time.Since(start) // overwrite with the longest storage commit runtime
 			lock.Unlock()
 			return nil
@@ -2362,7 +2360,7 @@ func (s *StateDB) FinaliseFastWithPrefetch(deleteEmptyObjects bool) {
 			if obj == nil {
 				continue
 			}
-			_ = s.prefetcher.prefetch(obj.addrHash, obj.data.Root, as.addr, nil, as.slots, false)
+			_ = s.prefetcher.prefetch(obj.addrHash(), obj.data.Root, as.addr, nil, as.slots, false)
 		}
 	}
 	s.FinaliseFast(deleteEmptyObjects)
@@ -2452,11 +2450,6 @@ func (s *StateDB) finalisePromote(addr common.Address, obj *stateObject) {
 // Used by V2 parallel execution where per-operation timing is not needed.
 func (s *StateDB) SkipTimers() {
 	s.skipTimers = true
-}
-
-// PointCache returns the point cache used by verkle tree.
-func (s *StateDB) PointCache() *utils.PointCache {
-	return s.db.PointCache()
 }
 
 // Witness retrieves the current state witness being collected.

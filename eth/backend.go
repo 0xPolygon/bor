@@ -307,22 +307,24 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 
 	var (
 		options = &core.BlockChainConfig{
-			TrieCleanLimit:    config.TrieCleanCache,
-			NoPrefetch:        config.NoPrefetch,
-			TrieDirtyLimit:    config.TrieDirtyCache,
-			ArchiveMode:       config.NoPruning,
-			TrieTimeLimit:     config.TrieTimeout,
-			SnapshotLimit:     config.SnapshotCache,
-			Preimages:         config.Preimages,
-			StateHistory:      config.StateHistory,
-			StateScheme:       scheme,
-			TriesInMemory:     config.TriesInMemory,
-			ChainHistoryMode:  config.HistoryMode,
-			TxLookupLimit:     int64(min(config.TransactionHistory, math.MaxInt64)),
-			AddressCacheSizes: config.AddressCacheSizes,
-			PreloadRateLimit:  config.PreloadRateLimit,
-			VmConfig:          vmCfg,
-			Stateless:         config.SyncMode == downloader.StatelessSync,
+			TrieCleanLimit:          config.TrieCleanCache,
+			NoPrefetch:              config.NoPrefetch,
+			TrieDirtyLimit:          config.TrieDirtyCache,
+			ArchiveMode:             config.NoPruning,
+			TrieTimeLimit:           config.TrieTimeout,
+			SnapshotLimit:           config.SnapshotCache,
+			Preimages:               config.Preimages,
+			StateHistory:            config.StateHistory,
+			TrienodeHistory:         config.TrienodeHistory,
+			NodeFullValueCheckpoint: config.NodeFullValueCheckpoint,
+			StateScheme:             scheme,
+			TriesInMemory:           config.TriesInMemory,
+			ChainHistoryMode:        config.HistoryMode,
+			TxLookupLimit:           int64(min(config.TransactionHistory, math.MaxInt64)),
+			AddressCacheSizes:       config.AddressCacheSizes,
+			PreloadRateLimit:        config.PreloadRateLimit,
+			VmConfig:                vmCfg,
+			Stateless:               config.SyncMode == downloader.StatelessSync,
 			// Enables file journaling for the trie database. The journal files will be stored
 			// within the data directory. The corresponding paths will be either:
 			// - DATADIR/triedb/merkle.journal
@@ -963,6 +965,9 @@ func (s *Ethereum) updateFilterMapsHeads() {
 		if head == nil || newHead.Hash() != head.Hash() {
 			head = newHead
 			chainView := s.newChainView(head)
+			if chainView == nil {
+				return
+			}
 			historyCutoff, _ := s.blockchain.HistoryPruningCutoff()
 			var finalBlock uint64
 			if fb := s.blockchain.CurrentFinalBlock(); fb != nil {
