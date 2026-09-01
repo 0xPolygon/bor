@@ -78,7 +78,7 @@ type Backend interface {
 	PurgePrivateTx(hash common.Hash)
 
 	// Blockchain API
-	SetHead(number uint64)
+	SetHead(number uint64) error
 	HeaderByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Header, error)
 	HeaderByHash(ctx context.Context, hash common.Hash) (*types.Header, error)
 	HeaderByNumberOrHash(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (*types.Header, error)
@@ -116,6 +116,7 @@ type Backend interface {
 	ChainConfig() *params.ChainConfig
 	Engine() consensus.Engine
 	HistoryPruningCutoff() uint64
+	HistoryRetention() HistoryRetention
 
 	// This is copied from filters.Backend
 	// eth/filters needs to be initialized from this backend type, so methods needed by

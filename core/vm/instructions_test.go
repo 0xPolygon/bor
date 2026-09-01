@@ -792,7 +792,7 @@ func TestRandom(t *testing.T) {
 		)
 		opRandom(&pc, evm, &ScopeContext{nil, stack, nil})
 		if have, want := stack.len(), 1; have != want {
-			t.Errorf("test '%v': want %d item(s) on stack, have %d: ", tt.name, have, want)
+			t.Errorf("test '%v': want %d item(s) on stack, have %d: ", tt.name, want, have)
 		}
 
 		actual := stack.pop()

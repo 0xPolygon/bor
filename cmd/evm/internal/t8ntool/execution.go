@@ -17,6 +17,7 @@
 package t8ntool
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	stdmath "math"
@@ -178,14 +179,15 @@ func (pre *Prestate) Apply(vmConfig vm.Config, chainConfig *params.ChainConfig, 
 		receipts    = make(types.Receipts, 0)
 	)
 	vmContext := vm.BlockContext{
-		CanTransfer: core.CanTransfer,
-		Transfer:    core.Transfer,
-		Coinbase:    pre.Env.Coinbase,
-		BlockNumber: new(big.Int).SetUint64(pre.Env.Number),
-		Time:        pre.Env.Timestamp,
-		Difficulty:  pre.Env.Difficulty,
-		GasLimit:    pre.Env.GasLimit,
-		GetHash:     getHash,
+		CanTransfer:      core.CanTransfer,
+		Transfer:         core.Transfer,
+		Coinbase:         pre.Env.Coinbase,
+		BlockNumber:      new(big.Int).SetUint64(pre.Env.Number),
+		Time:             pre.Env.Timestamp,
+		Difficulty:       pre.Env.Difficulty,
+		GasLimit:         pre.Env.GasLimit,
+		GetHash:          getHash,
+		CostPerStateByte: params.CostPerStateByte,
 	}
 	// If currentBaseFee is defined, add it to the vmContext.
 	if pre.Env.BaseFee != nil {
@@ -275,7 +277,7 @@ func (pre *Prestate) Apply(vmConfig vm.Config, chainConfig *params.ChainConfig, 
 				continue
 			}
 		}
-		statedb.SetTxContext(tx.Hash(), len(receipts))
+		statedb.SetTxContext(tx.Hash(), len(receipts), uint32(len(receipts)+1))
 		var (
 			snapshot = statedb.Snapshot()
 			gp       = gaspool.Snapshot()
@@ -342,26 +344,20 @@ func (pre *Prestate) Apply(vmConfig vm.Config, chainConfig *params.ChainConfig, 
 	// Polygon/bor: EIP-6110, EIP-7002, and EIP-7251 are not supported
 	// Gather the execution-layer triggered requests.
 	var requests [][]byte
-	if chainConfig.IsPrague(vmContext.BlockNumber) && chainConfig.Bor == nil {
-		requests = [][]byte{}
-		// EIP-6110
+
+	if chainConfig.Bor == nil {
 		var allLogs []*types.Log
 		for _, receipt := range receipts {
 			allLogs = append(allLogs, receipt.Logs...)
 		}
-		if err := core.ParseDepositLogs(&requests, allLogs, chainConfig); err != nil {
-			return nil, nil, nil, NewError(ErrorEVM, fmt.Errorf("could not parse requests logs: %v", err))
-		}
-		// EIP-7002
-		if err := core.ProcessWithdrawalQueue(&requests, evm); err != nil {
-			return nil, nil, nil, NewError(ErrorEVM, fmt.Errorf("could not process withdrawal requests: %v", err))
-		}
-		// EIP-7251
-		if err := core.ProcessConsolidationQueue(&requests, evm); err != nil {
-			return nil, nil, nil, NewError(ErrorEVM, fmt.Errorf("could not process consolidation requests: %v", err))
+
+		var err error
+
+		requests, err = core.PostExecution(context.Background(), chainConfig, vmContext.BlockNumber, vmContext.Time, allLogs, evm, uint32(len(receipts)+1))
+		if err != nil {
+			return nil, nil, nil, NewError(ErrorEVM, fmt.Errorf("failed to process post-execution: %v", err))
 		}
 	}
-
 	// Commit block
 	root, err := statedb.Commit(vmContext.BlockNumber.Uint64(), chainConfig.IsEIP158(vmContext.BlockNumber), chainConfig.IsCancun(vmContext.BlockNumber))
 	if err != nil {
@@ -405,9 +401,24 @@ func (pre *Prestate) Apply(vmConfig vm.Config, chainConfig *params.ChainConfig, 
 	return statedb, execRs, body, nil
 }
 
+// newPrestateTrieDBConfig returns the triedb config used to construct the
+// prestate. UBT mode requires the path-based backend; the legacy hash-based
+// backend cannot decode UBT-encoded nodes.
+func newPrestateTrieDBConfig(isBintrie bool) *triedb.Config {
+	if isBintrie {
+		cfg := *triedb.UBTDefaults
+		cfg.Preimages = true
+		return &cfg
+	}
+	return &triedb.Config{Preimages: true}
+}
+
 func MakePreState(db ethdb.Database, accounts types.GenesisAlloc, isBintrie bool) *state.StateDB {
-	tdb := triedb.NewDatabase(db, &triedb.Config{Preimages: true, IsUBT: isBintrie})
+	tdb := triedb.NewDatabase(db, newPrestateTrieDBConfig(isBintrie))
 	sdb := state.NewDatabase(tdb, nil)
+	if isBintrie {
+		sdb.(*state.UBTDatabase).EnableAllocRecording()
+	}
 
 	root := types.EmptyRootHash
 	if isBintrie {
@@ -445,8 +456,11 @@ func MakePreState(db ethdb.Database, accounts types.GenesisAlloc, isBintrie bool
 // MakePreStateStreaming is like MakePreState, but decodes the alloc from disk
 // one account at a time so the full map is never held in memory.
 func MakePreStateStreaming(db ethdb.Database, allocPath string, isBintrie bool) (*state.StateDB, error) {
-	tdb := triedb.NewDatabase(db, &triedb.Config{Preimages: true, IsUBT: isBintrie})
+	tdb := triedb.NewDatabase(db, newPrestateTrieDBConfig(isBintrie))
 	sdb := state.NewDatabase(tdb, nil)
+	if isBintrie {
+		sdb.(*state.UBTDatabase).EnableAllocRecording()
+	}
 
 	root := types.EmptyRootHash
 	if isBintrie {

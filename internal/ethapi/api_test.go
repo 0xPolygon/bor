@@ -561,7 +561,7 @@ func (b testBackend) RPCGasCap() uint64                        { return 10000000
 func (b testBackend) RPCEVMTimeout() time.Duration             { return time.Second }
 func (b testBackend) RPCTxFeeCap() float64                     { return 0 }
 func (b testBackend) UnprotectedAllowed() bool                 { return false }
-func (b testBackend) SetHead(number uint64)                    {}
+func (b testBackend) SetHead(number uint64) error              { return nil }
 func (b testBackend) HeaderByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Header, error) {
 	if number == rpc.LatestBlockNumber {
 		return b.chain.CurrentBlock(), nil
@@ -927,6 +927,9 @@ func (b testBackend) SubscribePendingLogsEvent(ch chan<- []*types.Log) event.Sub
 func (b testBackend) HistoryPruningCutoff() uint64 {
 	bn, _ := b.chain.HistoryPruningCutoff()
 	return bn
+}
+func (b testBackend) HistoryRetention() HistoryRetention {
+	return HistoryRetention{StateScheme: b.chain.TrieDB().Scheme()}
 }
 
 func (b testBackend) IsParallelImportActive() bool {
@@ -3134,6 +3137,77 @@ func TestSimulateV1TxSender(t *testing.T) {
 	require.Equal(t, sender3, summary[0].Transactions[2].From, "sender address mismatch")
 	require.Len(t, summary[1].Transactions, 1, "expected 1 transaction in simulated block")
 	require.Equal(t, sender2, summary[1].Transactions[0].From, "sender address mismatch")
+}
+
+// TestSimulateV1WithdrawalsByFork verifies that withdrawals and withdrawalsRoot
+// are only emitted in the simulated block result when the simulated block is
+// post-Shanghai. Pre-Shanghai blocks must omit both fields, otherwise the
+// header hash and size would not match a valid pre-Shanghai block.
+func TestSimulateV1WithdrawalsByFork(t *testing.T) {
+	t.Parallel()
+
+	run := func(t *testing.T, cfg *params.ChainConfig, blockTime *uint64, wantWithdrawals bool) {
+		t.Helper()
+		gspec := &core.Genesis{Config: cfg, Alloc: types.GenesisAlloc{}}
+		// bor's chain maker fills in a proof-of-work difficulty, which the beacon
+		// engine rejects once the config is merged from genesis, so mark the
+		// generated blocks as post-merge in that case. The unmerged test config
+		// carries a max terminal difficulty rather than a nil one, so the zero
+		// check is what separates the two.
+		merged := cfg.TerminalTotalDifficulty != nil && cfg.TerminalTotalDifficulty.Sign() == 0
+		backend := newTestBackend(t, 1, gspec, beacon.New(ethash.NewFaker()), func(i int, b *core.BlockGen) {
+			if merged {
+				b.SetPoS()
+			}
+		})
+
+		ctx := context.Background()
+		stateDB, baseHeader, err := backend.StateAndHeaderByNumberOrHash(ctx, rpc.BlockNumberOrHashWithNumber(rpc.LatestBlockNumber))
+		if err != nil {
+			t.Fatalf("failed to get state and header: %v", err)
+		}
+		sim := &simulator{
+			b:           backend,
+			state:       stateDB,
+			base:        baseHeader,
+			chainConfig: backend.ChainConfig(),
+			budget:      newGasBudget(0),
+		}
+
+		block := simBlock{}
+		if blockTime != nil {
+			t := hexutil.Uint64(*blockTime)
+			block.BlockOverrides = &override.BlockOverrides{Time: &t}
+		}
+		results, err := sim.execute(ctx, []simBlock{block})
+		if err != nil {
+			t.Fatalf("simulation execution failed: %v", err)
+		}
+		require.Len(t, results, 1)
+
+		enc, err := json.Marshal(results[0])
+		if err != nil {
+			t.Fatalf("failed to marshal result: %v", err)
+		}
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(enc, &raw); err != nil {
+			t.Fatalf("failed to unmarshal result: %v", err)
+		}
+		_, hasWithdrawals := raw["withdrawals"]
+		_, hasWithdrawalsRoot := raw["withdrawalsRoot"]
+		if hasWithdrawals != wantWithdrawals || hasWithdrawalsRoot != wantWithdrawals {
+			t.Fatalf("unexpected withdrawals fields: withdrawals=%v withdrawalsRoot=%v want=%v\n%s", hasWithdrawals, hasWithdrawalsRoot, wantWithdrawals, enc)
+		}
+	}
+
+	t.Run("pre-shanghai", func(t *testing.T) {
+		// TestChainConfig has ShanghaiTime=nil, so all simulated blocks are pre-Shanghai.
+		run(t, params.TestChainConfig, nil, false)
+	})
+	t.Run("post-shanghai", func(t *testing.T) {
+		// MergedTestChainConfig has every fork active from genesis.
+		run(t, params.MergedTestChainConfig, nil, true)
+	})
 }
 
 func TestSignTransaction(t *testing.T) {
@@ -5638,7 +5712,7 @@ func TestGetStorageValues(t *testing.T) {
 	result, err := api.GetStorageValues(context.Background(), map[common.Address][]common.Hash{
 		addr1: {slot0, slot1},
 		addr2: {slot2},
-	}, latest)
+	}, &latest)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -5658,7 +5732,7 @@ func TestGetStorageValues(t *testing.T) {
 	// Missing slot returns zero.
 	result, err = api.GetStorageValues(context.Background(), map[common.Address][]common.Hash{
 		addr1: {common.HexToHash("0xff")},
-	}, latest)
+	}, &latest)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -5667,7 +5741,7 @@ func TestGetStorageValues(t *testing.T) {
 	}
 
 	// Empty request returns error.
-	_, err = api.GetStorageValues(context.Background(), map[common.Address][]common.Hash{}, latest)
+	_, err = api.GetStorageValues(context.Background(), map[common.Address][]common.Hash{}, &latest)
 	if err == nil {
 		t.Fatal("expected error for empty request")
 	}
@@ -5679,7 +5753,7 @@ func TestGetStorageValues(t *testing.T) {
 	}
 	_, err = api.GetStorageValues(context.Background(), map[common.Address][]common.Hash{
 		addr1: tooMany,
-	}, latest)
+	}, &latest)
 	if err == nil {
 		t.Fatal("expected error for exceeding slot limit")
 	}
@@ -5742,4 +5816,81 @@ func TestSimulateV1DispatchesSimulationFinalize(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, res, 1)
 	require.True(t, engine.simFinalized, "simulation finalization hook was not used")
+}
+
+// TestStateMethodsDefaultToLatest verifies that the state-reading methods
+// default the optional block parameter to "latest".
+func TestStateMethodsDefaultToLatest(t *testing.T) {
+	t.Parallel()
+	var (
+		accounts = newAccounts(2)
+		slot     = common.HexToHash("0x01")
+		val      = common.HexToHash("0x42")
+		code     = []byte{0x60, 0x00, 0x60, 0x00}
+		genesis  = &core.Genesis{
+			Config: params.MergedTestChainConfig,
+			Alloc: types.GenesisAlloc{
+				accounts[0].addr: {Balance: big.NewInt(params.Ether)},
+				accounts[1].addr: {
+					Balance: big.NewInt(2 * params.Ether),
+					Nonce:   7,
+					Code:    code,
+					Storage: map[common.Hash]common.Hash{slot: val},
+				},
+			},
+		}
+		acc = accounts[1].addr
+		ctx = context.Background()
+	)
+	backend := newTestBackend(t, 1, genesis, beacon.New(ethash.NewFaker()), func(i int, b *core.BlockGen) {
+		b.SetPoS()
+	})
+	srv := rpc.NewServer("", 0, 0)
+	if err := srv.RegisterName("eth", NewBlockChainAPI(backend)); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.RegisterName("eth", NewTransactionAPI(backend, new(AddrLocker))); err != nil {
+		t.Fatal(err)
+	}
+	client := rpc.DialInProc(srv)
+	defer client.Close()
+
+	// call invokes method twice: once omitting the block param and once passing
+	// "latest" explicitly. Both must succeed and return identical results.
+	call := func(name string, dst func() any, explicit []any, omitted []any) {
+		t.Helper()
+		gotOmitted := dst()
+		if err := client.CallContext(ctx, gotOmitted, name, omitted...); err != nil {
+			t.Fatalf("%s with omitted block: unexpected error: %v", name, err)
+		}
+		gotLatest := dst()
+		if err := client.CallContext(ctx, gotLatest, name, explicit...); err != nil {
+			t.Fatalf("%s with explicit latest: unexpected error: %v", name, err)
+		}
+		o, _ := json.Marshal(gotOmitted)
+		l, _ := json.Marshal(gotLatest)
+		if !bytes.Equal(o, l) {
+			t.Errorf("%s: omitted-block result %s != latest result %s", name, o, l)
+		}
+	}
+
+	call("eth_getBalance",
+		func() any { return new(hexutil.Big) },
+		[]any{acc, "latest"}, []any{acc})
+	call("eth_getCode",
+		func() any { return new(hexutil.Bytes) },
+		[]any{acc, "latest"}, []any{acc})
+	call("eth_getTransactionCount",
+		func() any { return new(hexutil.Uint64) },
+		[]any{acc, "latest"}, []any{acc})
+	call("eth_getStorageAt",
+		func() any { return new(hexutil.Bytes) },
+		[]any{acc, slot, "latest"}, []any{acc, slot})
+	call("eth_getProof",
+		func() any { return new(AccountResult) },
+		[]any{acc, []string{slot.Hex()}, "latest"}, []any{acc, []string{slot.Hex()}})
+	call("eth_getStorageValues",
+		func() any { return new(map[common.Address][]hexutil.Bytes) },
+		[]any{map[common.Address][]common.Hash{acc: {slot}}, "latest"},
+		[]any{map[common.Address][]common.Hash{acc: {slot}}})
 }

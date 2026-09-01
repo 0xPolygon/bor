@@ -267,7 +267,7 @@ func gatherForks(configList ...interface{}) []*proto.StatusResponse_Fork {
 
 	for _, config := range configList {
 		kind := reflect.TypeOf(config)
-		for kind.Kind() == reflect.Ptr {
+		for kind.Kind() == reflect.Pointer {
 			kind = kind.Elem()
 		}
 

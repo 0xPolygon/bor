@@ -86,6 +86,55 @@ func (st *Stack) len() int {
 	return st.top
 }
 
+// drop removes the top element without reading it.
+func (st *Stack) drop() {
+	st.top--
+}
+
+// pop1 removes the top element and returns a pointer to it. The pointer
+// stays valid only until the next push or sub call.
+func (st *Stack) pop1() *uint256.Int {
+	st.top--
+	return &st.data[st.top]
+}
+
+// pop2 removes the top two elements and returns pointers to them. The
+// pointers stay valid only until the next push or sub call.
+func (st *Stack) pop2() (top, second *uint256.Int) {
+	st.top -= 2
+	return &st.data[st.top+1], &st.data[st.top]
+}
+
+// pop3 removes the top three elements and returns pointers to them. The
+// pointers stay valid only until the next push or sub call.
+func (st *Stack) pop3() (top, second, third *uint256.Int) {
+	st.top -= 3
+	return &st.data[st.top+2], &st.data[st.top+1], &st.data[st.top]
+}
+
+// pop4 removes the top four elements and returns pointers to them. The
+// pointers stay valid only until the next push or sub call.
+func (st *Stack) pop4() (top, second, third, fourth *uint256.Int) {
+	st.top -= 4
+	return &st.data[st.top+3], &st.data[st.top+2], &st.data[st.top+1], &st.data[st.top]
+}
+
+// pop1Peek1 removes the top element and returns pointers to it and to the new
+// top, the usual operand and write target of a binary operation. The first
+// pointer stays valid only until the next push or sub call.
+func (st *Stack) pop1Peek1() (top, rest *uint256.Int) {
+	st.top--
+	return &st.data[st.top], &st.data[st.top-1]
+}
+
+// pop2Peek1 removes the top two elements and returns pointers to them and to
+// the new top, for three operand operations. The first two pointers stay
+// valid only until the next push or sub call.
+func (st *Stack) pop2Peek1() (top, second, rest *uint256.Int) {
+	st.top -= 2
+	return &st.data[st.top+1], &st.data[st.top], &st.data[st.top-1]
+}
+
 func (st *Stack) swap1() {
 	st.data[st.top-2], st.data[st.top-1] = st.data[st.top-1], st.data[st.top-2]
 }

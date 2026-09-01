@@ -126,7 +126,7 @@ func TestDAOForkRangeExtradata(t *testing.T) {
 			t.Fatalf("pro-fork chain didn't accepted pro-fork block: %v", err)
 		}
 	}
-	// Verify that contra-forkers accept pro-fork extra-datas after forking finishes
+	// Verify that contra-forkers accept pro-fork extra-data after forking finishes
 	bc, _ := NewBlockChain(rawdb.NewMemoryDatabase(), congspec, ethash.NewFaker(), nil)
 	defer bc.Stop()
 
@@ -146,7 +146,7 @@ func TestDAOForkRangeExtradata(t *testing.T) {
 	if _, err := conBc.InsertChain(blocks, false); err != nil {
 		t.Fatalf("contra-fork chain didn't accept pro-fork block post-fork: %v", err)
 	}
-	// Verify that pro-forkers accept contra-fork extra-datas after forking finishes
+	// Verify that pro-forkers accept contra-fork extra-data after forking finishes
 	bc, _ = NewBlockChain(rawdb.NewMemoryDatabase(), progspec, ethash.NewFaker(), nil)
 	defer bc.Stop()
 

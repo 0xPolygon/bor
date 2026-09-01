@@ -213,7 +213,7 @@ func runIRTrial(t testing.TB, chain *BlockChain, txs []*types.Transaction, flag 
 
 	processStart := time.Now()
 	for i, tx := range txs {
-		statedb.SetTxContext(tx.Hash(), i)
+		statedb.SetTxContext(tx.Hash(), i, uint32(i+1))
 		msg, err := TransactionToMessage(tx, signer, header.BaseFee)
 		if err != nil {
 			procFails++
@@ -563,7 +563,7 @@ func runIRPebbleTrial(
 
 	processStart := time.Now()
 	for i, tx := range txs {
-		statedb.SetTxContext(tx.Hash(), i)
+		statedb.SetTxContext(tx.Hash(), i, uint32(i+1))
 		msg, err := TransactionToMessage(tx, signer, header.BaseFee)
 		if err != nil {
 			continue

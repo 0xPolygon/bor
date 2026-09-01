@@ -38,7 +38,23 @@ type UBTDatabase struct {
 	triedb        *triedb.Database
 	codeCache     *lru.SizeConstrainedCache[common.Hash, []byte]
 	codeSizeCache *lru.Cache[common.Hash, int]
+	recorder      *bintrie.Recorder
 }
+
+// EnableAllocRecording installs an alloc recorder shared across every binary
+// trie opened from this database. The recorder captures account, storage, and
+// code writes keyed by their original (unhashed) addresses, which is required
+// for tooling like evm t8n to render the post-state as a types.GenesisAlloc.
+func (db *UBTDatabase) EnableAllocRecording() *bintrie.Recorder {
+	if db.recorder == nil {
+		db.recorder = bintrie.NewRecorder()
+	}
+	return db.recorder
+}
+
+// AllocRecorder returns the attached recorder, or nil if recording was never
+// enabled on this database.
+func (db *UBTDatabase) AllocRecorder() *bintrie.Recorder { return db.recorder }
 
 // Type returns TypeUBT, indicating this database is backed by a Unified Binary Trie.
 func (db *UBTDatabase) Type() DatabaseType { return TypeUBT }
@@ -84,7 +100,14 @@ func (db *UBTDatabase) Reader(stateRoot common.Hash) (Reader, error) {
 
 // OpenTrie opens the main account trie at a specific root hash.
 func (db *UBTDatabase) OpenTrie(root common.Hash) (Trie, error) {
-	return bintrie.NewBinaryTrie(root, db.triedb, db.triedb.BinTrieGroupDepth())
+	tr, err := bintrie.NewBinaryTrie(root, db.triedb, db.triedb.BinTrieGroupDepth())
+	if err != nil {
+		return nil, err
+	}
+	if db.recorder != nil {
+		tr.SetRecorder(db.recorder)
+	}
+	return tr, nil
 }
 
 // OpenStorageTrie opens the storage trie of an account. In binary trie mode,

@@ -1173,6 +1173,14 @@ func (s *ParallelStateDB) RevertToSnapshot(revid int) {
 
 // ---------- Logs / Preimages ----------
 
+// SetTxContext exists to satisfy vm.StateDB. V2 is handed its transaction index
+// at construction, its logs are attributed during settlement rather than here,
+// and it does not build the block-level access list, so the hash and access
+// index have nothing to bind to.
+func (s *ParallelStateDB) SetTxContext(thash common.Hash, ti int, blockAccessIndex uint32) {
+	s.TxIndex = ti
+}
+
 func (s *ParallelStateDB) AddLog(l *types.Log) {
 	s.journalEntries = append(s.journalEntries, parallelJournalEntry{kind: jkLog, prevU: uint64(len(s.logs))})
 	s.logs = append(s.logs, l)
@@ -1248,7 +1256,9 @@ func (s *ParallelStateDB) Prepare(rules params.Rules, sender, coinbase common.Ad
 //
 // The returned access list is always nil: V2 does not build block-level access
 // lists, and the serial StateDB it settles onto is the one that accumulates them.
-func (s *ParallelStateDB) Finalise(deleteEmptyObjects bool) *bal.StateAccessList { return nil }
+func (s *ParallelStateDB) Finalise(deleteEmptyObjects bool) *bal.ConstructionBlockAccessList {
+	return nil
+}
 
 // Touch accesses the specific account without returning anything. Exist is the
 // V2 equivalent of the serial getStateObject: it registers the account read in

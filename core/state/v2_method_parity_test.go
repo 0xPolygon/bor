@@ -77,7 +77,6 @@ var pdbExemptMethods = map[string]pdbExemptCategory{
 	"FinaliseFastWithPrefetch":    catV2SettleHelper,
 	"StorageCache":                catV2SettleHelper,
 	"SkipTimers":                  catV2SettleHelper,
-	"SetTxContext":                catV2SettleHelper,
 	"SetWitness":                  catV2SettleHelper,
 	// Witness collection — V2's V2StateProcessor.Process calls
 	// statedb.CollectStateWitness on the underlying *StateDB after settle

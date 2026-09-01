@@ -43,6 +43,7 @@ type httpConfig struct {
 	CorsAllowedOrigins []string
 	Vhosts             []string
 	prefix             string // path prefix on which to mount http handler
+	disableGzip        bool
 
 	// Execution pool config
 	executionPoolSize uint64
@@ -226,8 +227,9 @@ func (h *httpServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if ws != nil && isWebsocket(r) {
 		if checkPath(r, ws.prefix) {
 			ws.ServeHTTP(w, r)
+			return
 		}
-
+		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
 
@@ -348,7 +350,7 @@ func (h *httpServer) enableRPC(apis []rpc.API, config httpConfig) error {
 
 	h.httpConfig = config
 	h.httpHandler.Store(&rpcHandler{
-		Handler: NewHTTPHandlerStack(srv, config.CorsAllowedOrigins, config.Vhosts, config.jwtSecret),
+		Handler: NewHTTPHandlerStack(srv, config.CorsAllowedOrigins, config.Vhosts, config.jwtSecret, config.disableGzip),
 		prefix:  config.prefix,
 		server:  srv,
 	})
@@ -435,7 +437,7 @@ func isWebsocket(r *http.Request) bool {
 }
 
 // NewHTTPHandlerStack returns wrapped http-related handlers
-func NewHTTPHandlerStack(srv http.Handler, cors []string, vhosts []string, jwtSecret []byte) http.Handler {
+func NewHTTPHandlerStack(srv http.Handler, cors []string, vhosts []string, jwtSecret []byte, disableGzip bool) http.Handler {
 	// Wrap the CORS-handler within a host-handler
 	handler := newCorsHandler(srv, cors)
 	handler = newVHostHandler(vhosts, handler)
@@ -443,7 +445,9 @@ func NewHTTPHandlerStack(srv http.Handler, cors []string, vhosts []string, jwtSe
 	if len(jwtSecret) != 0 {
 		handler = newJWTHandler(jwtSecret, handler)
 	}
-
+	if disableGzip {
+		return handler
+	}
 	return newGzipHandler(handler)
 }
 
@@ -504,6 +508,7 @@ func (h *virtualHostHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		host = r.Host
 	}
 
+	host = strings.ToLower(host)
 	if ipAddr := net.ParseIP(host); ipAddr != nil {
 		// It's an IP address, we can serve that
 		h.next.ServeHTTP(w, r)

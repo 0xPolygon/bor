@@ -1162,7 +1162,7 @@ func (bc *BlockChain) loadLastState() error {
 // initializeHistoryPruning sets bc.historyPrunePoint.
 func (bc *BlockChain) initializeHistoryPruning(latest uint64) error {
 	var (
-		freezerTail, _ = bc.db.Tail()
+		freezerTail, _ = bc.db.Tail(rawdb.ChainFreezerBlockDataGroup)
 		genesisHash    = bc.genesisBlock.Hash()
 		mergePoint     = history.MergePrunePoints[genesisHash]
 		praguePoint    = history.PraguePrunePoints[genesisHash]
@@ -1661,6 +1661,7 @@ func (bc *BlockChain) SnapSyncCommitHead(hash common.Hash) error {
 		return errChainStopped
 	}
 
+	rawdb.WriteHeadBlockHash(bc.db, hash)
 	bc.currentBlock.Store(block.Header())
 	headBlockGauge.Update(int64(block.NumberU64()))
 	bc.chainmu.Unlock()

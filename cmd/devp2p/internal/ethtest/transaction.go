@@ -152,7 +152,10 @@ func (s *Suite) sendInvalidTxs(t *utesting.T, txs []*types.Transaction) error {
 
 		switch msg := msg.(type) {
 		case *eth.TransactionsPacket:
-			for _, tx := range txs {
+			// Iterate what the peer actually sent, not the locally-sent txs:
+			// every one of those is in invalids by construction, so the check
+			// used to fire on the first packet regardless of its contents.
+			for _, tx := range *msg {
 				if _, ok := invalids[tx.Hash()]; ok {
 					return fmt.Errorf("received bad tx: %s", tx.Hash())
 				}

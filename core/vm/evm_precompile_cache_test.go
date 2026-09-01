@@ -32,7 +32,7 @@ func TestRunEcrecoverWithCache_NilCached(t *testing.T) {
 	evm.Config.EcrecoverCache = cache
 	p := &stubPrecompile{gasCost: 3000}
 
-	ret, remaining, err := evm.runPrecompile(p, ecrecoverAddr, input, NewGasBudget(10000))
+	ret, remaining, err := evm.runPrecompile(p, ecrecoverAddr, input, NewGasBudget(10000, 0))
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestRunEcrecoverWithCache_BytesCached(t *testing.T) {
 	evm.Config.EcrecoverCache = cache
 	p := &stubPrecompile{gasCost: 3000}
 
-	ret, remaining, err := evm.runPrecompile(p, ecrecoverAddr, input, NewGasBudget(10000))
+	ret, remaining, err := evm.runPrecompile(p, ecrecoverAddr, input, NewGasBudget(10000, 0))
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestRunEcrecoverWithCache_OOG(t *testing.T) {
 	evm.Config.EcrecoverCache = cache
 	p := &stubPrecompile{gasCost: 3000}
 
-	_, _, err := evm.runPrecompile(p, ecrecoverAddr, input, NewGasBudget(1000))
+	_, _, err := evm.runPrecompile(p, ecrecoverAddr, input, NewGasBudget(1000, 0))
 	if err != ErrOutOfGas {
 		t.Fatalf("expected ErrOutOfGas, got %v", err)
 	}

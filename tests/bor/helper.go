@@ -351,7 +351,7 @@ func (b *blockGen) addTxWithChain(bc *core.BlockChain, statedb *state.StateDB, t
 		b.setCoinbase(coinbase)
 	}
 
-	statedb.SetTxContext(tx.Hash(), len(b.txs))
+	statedb.SetTxContext(tx.Hash(), len(b.txs), uint32(len(b.txs)+1))
 
 	context := core.NewEVMBlockContext(b.header, bc, nil)
 	evm := vm.NewEVM(context, statedb, bc.Config(), vm.Config{})
