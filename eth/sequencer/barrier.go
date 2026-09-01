@@ -221,20 +221,8 @@ func (p *Publisher) sealMirror(height uint64, txs []*types.Transaction) bool {
 		}
 	}
 
-	// The read shows nothing past the entries we published, so the store's
-	// window at this height is the one in our journal — already acked, so
-	// comparing the block against it compares it against the store. A
-	// verified mid-drain suffix proves the same equivalence with acks
-	// lagging: everything the walk returned is our own trailing records.
-	p.mu.Lock()
-	ourTxs, atHead := p.journalWindowLocked(height), info.s == p.anchor
-	p.mu.Unlock()
-
-	if atHead || info.suffixOurs {
-		if !atHead {
-			publishMidDrainMirror.Inc(1)
-		}
-		return p.mirrorVerdict(height, ourTxs, txs, len(ourTxs))
+	if ok, decided := p.journalMirror(info, height, txs); decided {
+		return ok
 	}
 
 	// A tail ending in a decoded seal exactly at this block's parent, with
@@ -268,6 +256,30 @@ func (p *Publisher) sealMirror(height uint64, txs []*types.Transaction) bool {
 		"number", height, "ours", ours, "storeWindow", len(info.window))
 
 	return false
+}
+
+// journalMirror compares the block against this publisher's own published
+// window when the read proves the store holds nothing else: the tail ends at
+// our anchor, or the walked suffix is a verified prefix of our unacked
+// journal (the mid-drain read — acks lag the commits, the walk starts past
+// the window's open, and the matcher proved every returned record ours).
+// Either way the store's window at this height is the journal's, so the
+// journal comparison is the store comparison. Undecided when the tail holds
+// content we cannot account for.
+func (p *Publisher) journalMirror(info tailInfo, height uint64, txs []*types.Transaction) (ok, decided bool) {
+	p.mu.Lock()
+	ourTxs, atHead := p.journalWindowLocked(height), info.s == p.anchor
+	p.mu.Unlock()
+
+	if !atHead && !info.suffixOurs {
+		return false, false
+	}
+
+	if !atHead {
+		publishMidDrainMirror.Inc(1)
+	}
+
+	return p.mirrorVerdict(height, ourTxs, txs, len(ourTxs)), true
 }
 
 // ResyncNeeded reports whether a competing producer holds the height this
