@@ -6,24 +6,10 @@ on:
       - 'master'
       - 'develop'
   pull_request:
-    types: [opened, synchronize]
-  # Fork PRs get no secrets and no OIDC token on `pull_request`, so this leg
-  # can never run on them and merge confidence stays low. `pull_request_target`
-  # runs the base branch's copy of this workflow (a fork cannot rewrite the
-  # steps) with base-repo credentials, against the fork's head commit. Runs
-  # from outside collaborators are held for maintainer approval by the repo's
-  # "fork pull request workflows" setting, and each new push needs approving
-  # again. Approving runs fork-authored code against these credentials, so read
-  # the diff first.
-  pull_request_target:
     types: [opened, synchronize, reopened]
 
 concurrency:
-  # `github.event_name` keeps the `pull_request` and `pull_request_target`
-  # runs of one PR in separate groups. They resolve to the same PR number,
-  # so without it `cancel-in-progress` lets the all-skipped run cancel the
-  # real one.
-  group: kurtosis-stateless-e2e-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  group: kurtosis-stateless-e2e-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -32,16 +18,6 @@ env:
 
 jobs:
   build-bor:
-    # Fork PRs run only via `pull_request_target`, same-repo PRs only via
-    # `pull_request`; both would report the same check name twice.
-    if: >-
-      github.event_name == 'push' ||
-      (github.event_name == 'pull_request_target' &&
-       github.event.pull_request.head.repo.full_name != github.repository) ||
-      (github.event_name == 'pull_request' &&
-       github.event.pull_request.head.repo.full_name == github.repository)
-    # `pull_request_target` drops the read-only token that fork `pull_request`
-    # runs get, and this job builds fork-authored code.
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -50,13 +26,6 @@ jobs:
       - name: Checkout bor
         uses: actions/checkout@v7
         with:
-          # `pull_request_target` checks out the base branch by default, but the
-          # fork's head commit is what needs testing. Pinned to the SHA that was
-          # approved, not to the branch ref it could be moved off.
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
-          # The build context feeds a fork-authored Dockerfile and `COPY . .`
-          # ships .git with it, so the token checkout leaves in the repo config
-          # would land in an image layer. Nothing here needs it after checkout.
           persist-credentials: false
 
       - name: Build bor docker image
@@ -73,16 +42,6 @@ jobs:
           retention-days: 1
 
   build-heimdall-v2:
-    # Fork PRs run only via `pull_request_target`, same-repo PRs only via
-    # `pull_request`; both would report the same check name twice.
-    if: >-
-      github.event_name == 'push' ||
-      (github.event_name == 'pull_request_target' &&
-       github.event.pull_request.head.repo.full_name != github.repository) ||
-      (github.event_name == 'pull_request' &&
-       github.event.pull_request.head.repo.full_name == github.repository)
-    # `pull_request_target` drops the read-only token that fork `pull_request`
-    # runs get, and this job builds fork-authored code.
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -93,6 +52,7 @@ jobs:
         with:
           repository: 0xPolygon/heimdall-v2
           ref: develop
+          persist-credentials: false
 
       - name: Build heimdall-v2 docker image
         run: docker build -t heimdall-v2:local --file Dockerfile .
@@ -108,23 +68,15 @@ jobs:
           retention-days: 1
 
   e2e-tests:
-    # Fork PRs run only via `pull_request_target`, same-repo PRs only via
-    # `pull_request`; both would report the same check name twice.
-    if: >-
-      github.event_name == 'push' ||
-      (github.event_name == 'pull_request_target' &&
-       github.event.pull_request.head.repo.full_name != github.repository) ||
-      (github.event_name == 'pull_request' &&
-       github.event.pull_request.head.repo.full_name == github.repository)
     needs:
       - build-bor
       - build-heimdall-v2
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    # These permissions are required to log in to GCR
+    # GitHub withholds OIDC and repository secrets from fork pull_request runs.
+    # Trusted runs use OIDC only while preparing public dependency images.
     permissions:
       contents: read
-      actions: write
       id-token: write
     steps:
       # Set up kurtosis
@@ -133,14 +85,66 @@ jobs:
         with:
           repository: 0xPolygon/kurtosis-pos
           ref: v1.4.2
+          persist-credentials: false
 
       # This step will free disk space and thus remove any docker images previously built
-      - name: Pre kurtosis run
+      - name: Pre kurtosis run (trusted)
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: ./.github/actions/kurtosis/setup
         with:
           main_branch: develop
           docker_username: ${{ secrets.DOCKERHUB }}
           docker_token: ${{ secrets.DOCKERHUB_KEY }}
+
+      # Fork PRs deliberately avoid the authenticated registry setup above.
+      # Kurtosis pulls the package's public image references directly instead.
+      - name: Free disk space (fork)
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: true
+          swap-storage: true
+
+      - name: Restore public image cache (fork)
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        uses: actions/cache/restore@v5
+        with:
+          path: /tmp/docker-images
+          key: docker-images-develop-${{ github.sha }}
+          restore-keys: docker-images-develop-
+
+      - name: Load cached public images (fork)
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          if [[ -d /tmp/docker-images ]]; then
+            for image_tar in /tmp/docker-images/*.tar; do
+              if [[ -f "$image_tar" ]]; then
+                docker load -i "$image_tar" &
+              fi
+            done
+            wait
+          fi
+
+      - name: Install Kurtosis and yq (fork)
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          echo "deb [trusted=yes] https://sdk.kurtosis.com/kurtosis-cli-release-artifacts/ /" | sudo tee /etc/apt/sources.list.d/kurtosis.list
+          sudo apt update
+          sudo apt install -y kurtosis-cli=1.18.2
+          kurtosis analytics disable
+          pip3 install yq
+
+      - name: Install Foundry (fork)
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        uses: foundry-rs/foundry-toolchain@8789b3e21e6c11b2697f5eb56eddae542f746c10 # v1.7.0
+        with:
+          version: v1.5.1
+          cache: false
 
       - name: Checkout pos-workflows
         uses: actions/checkout@v7
@@ -148,6 +152,7 @@ jobs:
           repository: 0xPolygon/pos-workflows
           ref: main
           path: pos-workflows
+          persist-credentials: false
 
       - name: Copy kurtosis config
         run: cp ./pos-workflows/configs/kurtosis-stateless-e2e.yml ./kurtosis-stateless-e2e.yml
