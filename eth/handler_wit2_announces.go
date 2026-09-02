@@ -56,10 +56,12 @@ const (
 // Lifecycle is tied to the eth handler's peer registration; entries are
 // cleaned up when the peer disconnects.
 type peerWit2State struct {
-	tokens        float64
-	lastRefill    time.Time
-	strikeCount   int
-	firstStrikeAt time.Time
+	tokens     float64
+	lastRefill time.Time
+	// strikes holds the timestamps of recent misbehavior strikes, oldest
+	// first, pruned to wit2MisbehaviorWindow on every call to strike so it
+	// implements a true sliding window rather than a fixed/tumbling one.
+	strikes []time.Time
 }
 
 // peerWit2Tracker is a generic per-peer token-bucket + strike tracker. The
@@ -120,22 +122,33 @@ func (t *peerWit2Tracker) allow(peerID string, count int) bool {
 }
 
 // strike records a misbehavior for the peer. Returns true when the peer has
-// exceeded the threshold within the decay window and must be disconnected.
+// accumulated wit2MisbehaviorStrikeLimit or more strikes within a true
+// sliding wit2MisbehaviorWindow and must be disconnected.
+//
+// This must slide rather than tumble: a fixed window that only resets when
+// now-firstStrikeAt exceeds the window lets an attacker land a strike near
+// the end of one window and more right after it resets, netting up to ~2x
+// the documented budget indefinitely without ever crossing the threshold.
+// Pruning strikes older than the window on every call, instead of resetting
+// a counter at a fixed boundary, closes that gap.
 func (t *peerWit2Tracker) strike(peerID string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	st, ok := t.state[peerID]
 	now := time.Now()
 	if !ok {
-		st = &peerWit2State{tokens: wit2AnnounceBurstCap, lastRefill: now}
+		st = &peerWit2State{tokens: t.burstCap, lastRefill: now}
 		t.state[peerID] = st
 	}
-	if st.firstStrikeAt.IsZero() || now.Sub(st.firstStrikeAt) > wit2MisbehaviorWindow {
-		st.firstStrikeAt = now
-		st.strikeCount = 0
+	cutoff := now.Add(-wit2MisbehaviorWindow)
+	live := st.strikes[:0]
+	for _, s := range st.strikes {
+		if s.After(cutoff) {
+			live = append(live, s)
+		}
 	}
-	st.strikeCount++
-	return st.strikeCount >= wit2MisbehaviorStrikeLimit
+	st.strikes = append(live, now)
+	return len(st.strikes) >= wit2MisbehaviorStrikeLimit
 }
 
 // deferredAnnounceCapacity bounds how many header-unknown signed announcements

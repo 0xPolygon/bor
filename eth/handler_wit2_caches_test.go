@@ -129,12 +129,48 @@ func TestPeerWit2TrackerStrikeWindowReset(t *testing.T) {
 		require.False(t, tr.strike("p1"), "strike %d must stay under the limit", i)
 	}
 
-	// Age the window: the next strike opens a fresh window instead of
-	// tripping the limit.
+	// Age every recorded strike out of the window: the next strike must see
+	// an empty sliding window instead of tripping the limit.
 	tr.mu.Lock()
-	tr.state["p1"].firstStrikeAt = time.Now().Add(-2 * wit2MisbehaviorWindow)
+	st := tr.state["p1"]
+	for i := range st.strikes {
+		st.strikes[i] = time.Now().Add(-2 * wit2MisbehaviorWindow)
+	}
 	tr.mu.Unlock()
-	require.False(t, tr.strike("p1"), "strike after window expiry must reset the count")
+	require.False(t, tr.strike("p1"), "strike after every prior strike aged out must not trip the limit")
+}
+
+// TestPeerWit2TrackerStrikeSlidesAcrossWindowBoundary is the regression for
+// the fixed/tumbling-window finding: with a tumbling window, a peer could
+// land wit2MisbehaviorStrikeLimit-1 strikes right before the window's reset
+// boundary and more right after, netting up to ~2x the documented budget
+// indefinitely without ever tripping the limit. A true sliding window must
+// still catch that clustering: once wit2MisbehaviorStrikeLimit strikes exist
+// within any trailing wit2MisbehaviorWindow, the peer trips regardless of
+// where the strikes fall relative to a fixed boundary.
+func TestPeerWit2TrackerStrikeSlidesAcrossWindowBoundary(t *testing.T) {
+	tr := newPeerWit2Tracker()
+
+	// One strike lands, opening what a tumbling window would treat as its
+	// fixed boundary.
+	require.False(t, tr.strike("p1"))
+
+	// Backdate it to just under the window edge, then land the rest of the
+	// budget "just before" the boundary and "just after" it — exactly the
+	// clustering a tumbling window would reset through undetected.
+	tr.mu.Lock()
+	tr.state["p1"].strikes[0] = time.Now().Add(-wit2MisbehaviorWindow + 50*time.Millisecond)
+	tr.mu.Unlock()
+
+	for i := 0; i < wit2MisbehaviorStrikeLimit-2; i++ {
+		require.False(t, tr.strike("p1"), "strike %d must stay under the limit", i)
+	}
+
+	// This strike is the wit2MisbehaviorStrikeLimit-th one to land within the
+	// trailing window — a sliding window must trip here even though a
+	// tumbling window would have already reset past the first strike's
+	// nominal boundary.
+	require.True(t, tr.strike("p1"), "strikes clustered across where a tumbling window would reset must still trip the sliding-window limit")
 }
 
 // TestWitnessWaiterRegistryCapsAndExpiry covers the waiter registry's bounds:
@@ -598,7 +634,7 @@ func TestHandleSignedWitnessAnnouncementsRateLimitDrop(t *testing.T) {
 	require.False(t, cached, "rate-limited packet must not be processed")
 
 	h.handler.wit2PeerTracker.mu.Lock()
-	strikes := h.handler.wit2PeerTracker.state[peer.ID()].strikeCount
+	strikes := len(h.handler.wit2PeerTracker.state[peer.ID()].strikes)
 	h.handler.wit2PeerTracker.mu.Unlock()
 	require.Zero(t, strikes, "rate limiting must not strike the peer")
 }
@@ -629,7 +665,7 @@ func TestAcceptSignedAnnouncementStrikesOnNumberMismatch(t *testing.T) {
 	require.False(t, h.handler.deferredAnnounces.has(ann.BlockHash), "known-header mismatch must not defer")
 
 	h.handler.wit2PeerTracker.mu.Lock()
-	strikes := h.handler.wit2PeerTracker.state[peer.ID()].strikeCount
+	strikes := len(h.handler.wit2PeerTracker.state[peer.ID()].strikes)
 	h.handler.wit2PeerTracker.mu.Unlock()
 	require.Equal(t, 1, strikes, "confirmed mis-binding must strike the relayer")
 }
