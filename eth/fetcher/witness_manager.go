@@ -110,9 +110,21 @@ type witnessManager struct {
 	// fetches skip the signed-hash gate and fall back to WIT1 (import-time
 	// execution arbitrates the bytes) immediately instead of waiting out the TTL.
 	// Guarded by its own mutex (inner to m.mu in the rare paths that hold both).
+	//
+	// Unlike witnessUnavailable, entries here are cleared only by the 4
+	// pending-removal exits (forget/safeEnqueue/markWitnessUnavailable/
+	// handleWitnessFetchFailureExt) or a matching success — none of which fire
+	// again once a hash has already left m.pending. A response that mismatches
+	// AFTER that point (e.g. the block imported via broadcast, or forget()
+	// already ran) still runs verifyAgainstSignedHash and creates a fresh
+	// entry nothing will ever remove. wit2StateExpiry gives every entry a TTL,
+	// refreshed on each touch, swept by the same cleanupTicker that expires
+	// witnessUnavailable, so a late/adversarial mismatch can no longer leak
+	// state for the process lifetime.
 	wit2QuarantineMu  sync.Mutex
 	wit2MismatchPeers map[common.Hash]map[string]struct{}
 	wit2Quarantined   map[common.Hash]struct{}
+	wit2StateExpiry   map[common.Hash]time.Time
 
 	// Witness verification state
 	gasCeil uint64 // Gas ceiling for calculating dynamic page threshold
@@ -173,6 +185,7 @@ func newWitnessManager(
 		witnessCache:                 witnessCache,
 		wit2MismatchPeers:            make(map[common.Hash]map[string]struct{}),
 		wit2Quarantined:              make(map[common.Hash]struct{}),
+		wit2StateExpiry:              make(map[common.Hash]time.Time),
 		gasCeil:                      gasCeil,
 		injectNeedWitnessCh:          make(chan *injectBlockNeedWitnessMsg, 10),
 		injectWitnessCh:              make(chan *injectedWitnessMsg, 10),
@@ -250,6 +263,7 @@ func (m *witnessManager) loop() {
 		case <-cleanupTicker.C:
 			log.Debug("[wm] Cleanup ticker triggered")
 			m.cleanupUnavailableCache()
+			m.cleanupWit2QuarantineState()
 
 		// A poke indicates the timer was rescheduled by another goroutine. We
 		// simply loop around so that the timer channel is re-evaluated with the

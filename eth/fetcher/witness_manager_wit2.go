@@ -131,6 +131,15 @@ func (m *witnessManager) verifyAgainstSignedHash(peer string, hash common.Hash, 
 // hash that distinct honest servers all disagree with is itself the suspect.
 const signedHashMismatchQuarantineThreshold = 2
 
+// wit2QuarantineStateTTL bounds how long a wit2MismatchPeers/wit2Quarantined
+// entry can survive without being touched again, so a mismatch that arrives
+// after the block's own pending-removal exits already ran (and therefore will
+// never call clearSignedHashMismatch again) still gets cleaned up eventually
+// instead of leaking for the process lifetime. Generous relative to the
+// seconds-scale window a block normally resolves in, so it never interferes
+// with legitimate in-flight quarantine tracking.
+const wit2QuarantineStateTTL = 2 * time.Minute
+
 // isSignedHashQuarantined reports whether the signed hash for a block has been
 // quarantined (distinct servers repeatedly mismatched it).
 func (m *witnessManager) isSignedHashQuarantined(hash common.Hash) bool {
@@ -155,6 +164,7 @@ func (m *witnessManager) recordSignedHashMismatch(hash common.Hash, peer string)
 	}
 	m.wit2QuarantineMu.Lock()
 	defer m.wit2QuarantineMu.Unlock()
+	m.wit2StateExpiry[hash] = time.Now().Add(wit2QuarantineStateTTL)
 	if _, done := m.wit2Quarantined[hash]; done {
 		return false, false
 	}
@@ -182,6 +192,31 @@ func (m *witnessManager) clearSignedHashMismatch(hash common.Hash) {
 	defer m.wit2QuarantineMu.Unlock()
 	delete(m.wit2MismatchPeers, hash)
 	delete(m.wit2Quarantined, hash)
+	delete(m.wit2StateExpiry, hash)
+}
+
+// cleanupWit2QuarantineState removes wit2MismatchPeers/wit2Quarantined entries
+// whose TTL has lapsed. Backstops the 4 pending-removal exits for the case a
+// mismatch response arrives after they already ran for a hash (so none of
+// them will run again for it): without this sweep such an entry would leak
+// for the process lifetime. Called from the same ticker that expires
+// witnessUnavailable.
+func (m *witnessManager) cleanupWit2QuarantineState() {
+	now := time.Now()
+	cleaned := 0
+	m.wit2QuarantineMu.Lock()
+	for hash, expiry := range m.wit2StateExpiry {
+		if now.After(expiry) {
+			delete(m.wit2StateExpiry, hash)
+			delete(m.wit2MismatchPeers, hash)
+			delete(m.wit2Quarantined, hash)
+			cleaned++
+		}
+	}
+	m.wit2QuarantineMu.Unlock()
+	if cleaned > 0 {
+		log.Debug("[wm] Cleaned up expired wit2 quarantine state", "removed", cleaned)
+	}
 }
 
 // handleWitnessBodyNotReady backs off a pending witness request after an empty

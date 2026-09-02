@@ -395,6 +395,62 @@ func TestMarkWitnessUnavailableClearsQuarantine(t *testing.T) {
 	}
 }
 
+// TestWit2QuarantineStateExpiresAfterLateMismatch is the regression for the
+// unbounded wit2MismatchPeers/wit2Quarantined growth finding: clearSignedHashMismatch
+// is wired to the 4 pending-removal exits, but a mismatch that arrives AFTER a
+// hash already left m.pending through one of those exits (forget in this case)
+// creates a fresh entry that none of them will ever clear again. The TTL sweep
+// (cleanupWit2QuarantineState) is the only backstop for that case, so this test
+// drives exactly that ordering and asserts the entry does not survive past its TTL.
+func TestWit2QuarantineStateExpiresAfterLateMismatch(t *testing.T) {
+	tw := newTestWitnessManager()
+	defer tw.Close()
+
+	hash := common.HexToHash("0xd15c0")
+
+	// The block resolves through another path first (forget clears any state —
+	// there is none yet, so this is a no-op here, but marks the point after which
+	// none of the 4 pending-removal exits will run again for this hash).
+	tw.manager.forget(hash)
+
+	// A slow/malicious peer's mismatching response arrives late, after forget()
+	// already ran. verifyAgainstSignedHash still creates fresh mismatch/quarantine
+	// state for the hash even though nothing will ever call clearSignedHashMismatch
+	// for it again.
+	tw.manager.recordSignedHashMismatch(hash, "late-peer")
+
+	tw.manager.wit2QuarantineMu.Lock()
+	_, tracked := tw.manager.wit2StateExpiry[hash]
+	tw.manager.wit2QuarantineMu.Unlock()
+	if !tracked {
+		t.Fatal("recordSignedHashMismatch must register a TTL for the entry it creates")
+	}
+
+	// Not yet expired: the sweep must leave it alone.
+	tw.manager.cleanupWit2QuarantineState()
+	tw.manager.wit2QuarantineMu.Lock()
+	_, stillTracked := tw.manager.wit2MismatchPeers[hash]
+	tw.manager.wit2QuarantineMu.Unlock()
+	if !stillTracked {
+		t.Fatal("an unexpired entry must survive a cleanup sweep")
+	}
+
+	// Force expiry (as if wit2QuarantineStateTTL had elapsed) and sweep again.
+	tw.manager.wit2QuarantineMu.Lock()
+	tw.manager.wit2StateExpiry[hash] = time.Now().Add(-time.Second)
+	tw.manager.wit2QuarantineMu.Unlock()
+	tw.manager.cleanupWit2QuarantineState()
+
+	tw.manager.wit2QuarantineMu.Lock()
+	_, peersLeft := tw.manager.wit2MismatchPeers[hash]
+	_, quarantineLeft := tw.manager.wit2Quarantined[hash]
+	_, expiryLeft := tw.manager.wit2StateExpiry[hash]
+	tw.manager.wit2QuarantineMu.Unlock()
+	if peersLeft || quarantineLeft || expiryLeft {
+		t.Fatal("an expired late-mismatch entry must not survive a cleanup sweep — it would otherwise leak for the process lifetime")
+	}
+}
+
 // TestVerifyAgainstSignedHashStrikesNonEmptyMismatchServer is the regression for
 // the quarantine-weaponization / unpenalized-bad-bytes finding (E-1/E-2): a peer
 // that serves a NON-EMPTY witness whose bytes mismatch the on-file signed hash is
