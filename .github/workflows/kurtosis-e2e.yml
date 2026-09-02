@@ -7,6 +7,16 @@ on:
       - 'develop'
   pull_request:
     types: [opened, synchronize]
+  # Fork PRs get no secrets and no OIDC token on `pull_request`, so this leg
+  # can never run on them and merge confidence stays low. `pull_request_target`
+  # runs the base branch's copy of this workflow (a fork cannot rewrite the
+  # steps) with base-repo credentials, against the fork's head commit. Runs
+  # from outside collaborators are held for maintainer approval by the repo's
+  # "fork pull request workflows" setting, and each new push needs approving
+  # again. Approving runs fork-authored code against these credentials, so read
+  # the diff first.
+  pull_request_target:
+    types: [opened, synchronize, reopened]
 
 concurrency:
   group: kurtosis-e2e-${{ github.event.pull_request.number || github.ref }}
@@ -18,11 +28,28 @@ env:
 
 jobs:
   build-bor:
+    # Fork PRs run only via `pull_request_target`, same-repo PRs only via
+    # `pull_request`; both would report the same check name twice.
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request_target' &&
+       github.event.pull_request.head.repo.full_name != github.repository) ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    # `pull_request_target` drops the read-only token that fork `pull_request`
+    # runs get, and this job builds fork-authored code.
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - name: Checkout bor
         uses: actions/checkout@v7
+        with:
+          # `pull_request_target` checks out the base branch by default, but the
+          # fork's head commit is what needs testing. Pinned to the SHA that was
+          # approved, not to the branch ref it could be moved off.
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
 
       - name: Build bor docker image
         run: docker build -t bor:local --file Dockerfile .
@@ -38,6 +65,18 @@ jobs:
           retention-days: 1
 
   build-heimdall-v2:
+    # Fork PRs run only via `pull_request_target`, same-repo PRs only via
+    # `pull_request`; both would report the same check name twice.
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request_target' &&
+       github.event.pull_request.head.repo.full_name != github.repository) ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    # `pull_request_target` drops the read-only token that fork `pull_request`
+    # runs get, and this job builds fork-authored code.
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -61,6 +100,14 @@ jobs:
           retention-days: 1
 
   e2e-tests:
+    # Fork PRs run only via `pull_request_target`, same-repo PRs only via
+    # `pull_request`; both would report the same check name twice.
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request_target' &&
+       github.event.pull_request.head.repo.full_name != github.repository) ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
     needs:
       - build-bor
       - build-heimdall-v2
