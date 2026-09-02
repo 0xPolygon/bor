@@ -60,6 +60,10 @@ jobs:
           # fork's head commit is what needs testing. Pinned to the SHA that was
           # approved, not to the branch ref it could be moved off.
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
+          # The build context feeds a fork-authored Dockerfile and `COPY . .`
+          # ships .git with it, so the token checkout leaves in the repo config
+          # would land in an image layer. Nothing here needs it after checkout.
+          persist-credentials: false
 
       - name: Build bor docker image
         run: docker build -t bor:local --file Dockerfile .
