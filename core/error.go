@@ -48,6 +48,11 @@ var (
 	// transactions during validation.
 	ErrReservedGasUsedMismatch = errors.New("invalid reserved gas used")
 
+	// ErrReservedCapacityMismatch indicates the header's reserved-blockspace
+	// capacity does not match the registry snapshot's effective capacity
+	// recomputed during validation.
+	ErrReservedCapacityMismatch = errors.New("invalid reserved capacity")
+
 	// ErrBloomMismatch indicates a mismatch between locally computed
 	// bloom filter and the block's bloom during validation.
 	ErrBloomMismatch = errors.New("invalid bloom")

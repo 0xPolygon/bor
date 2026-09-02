@@ -991,20 +991,6 @@ type BorConfig struct {
 	AustinBlock                *big.Int          `json:"austinBlock"`                // Austin switch block (nil = no fork, 0 = already on austin)
 	HampiBlock                 *big.Int          `json:"hampiBlock"`                 // Hampi switch block (nil = no fork, 0 = already on hampi)
 	ReservedBlockspaceBlock    *big.Int          `json:"reservedBlockspaceBlock"`    // ReservedBlockspace switch block (nil = no fork, 0 = already on reservedBlockspace)
-
-	// ReservedClients feeds only the EIP-1559 base-fee capacity carve-out
-	// (ReservedCapacity), since CalcBaseFee is pure (config, parent) and has no
-	// parent state to read the registry from. Reserved-sender classification is
-	// sourced from the registry contract, not this field; the two are kept
-	// consistent until the capacity arrives via a producer-stamped header field.
-	ReservedClients []ReservedClient `json:"reservedClients,omitempty"`
-}
-
-// ReservedClient is one reserved-blockspace client in the config-backed stub
-// registry: whitelisted sender addresses sharing a single per-block gas quota.
-type ReservedClient struct {
-	Addresses []common.Address `json:"addresses"`
-	QuotaGas  uint64           `json:"quotaGas"`
 }
 
 // String implements the stringer interface, returning the consensus engine details.
@@ -1099,16 +1085,6 @@ func (c *BorConfig) IsHampi(number *big.Int) bool {
 
 func (c *BorConfig) IsReservedBlockspace(number *big.Int) bool {
 	return isBlockForked(c.ReservedBlockspaceBlock, number)
-}
-
-// ReservedCapacity returns the sum of all reserved clients' per-block gas
-// quotas — the capacity removed from the EIP-1559 normal region.
-func (c *BorConfig) ReservedCapacity() uint64 {
-	var total uint64
-	for i := range c.ReservedClients {
-		total += c.ReservedClients[i].QuotaGas
-	}
-	return total
 }
 
 // GetTargetGasPercentage returns the target gas percentage for gas limit calculation.
@@ -1687,17 +1663,18 @@ func (c *ChainConfig) CheckConfigForkOrder() error {
 }
 
 // checkReservedBlockspaceForkOrder enforces the rollout preconditions for the
-// reserved-blockspace fork. The producer writes the reserved header fields only
-// in the post-Cancun BlockExtraData format, while verifyHeader requires them on
-// every post-fork block — so activating reserved blockspace at or before Cancun
-// would make block production unverifiable at the boundary. The reserved set
-// also has no source without the registry contract configured.
+// reserved-blockspace fork. The producer writes the reserved header fields —
+// ReservedGasUsed and ReservedCapacity — only in the post-Cancun BlockExtraData
+// format, while verifyHeader requires both of them on every post-fork block —
+// so activating reserved blockspace at or before Cancun would make block
+// production unverifiable at the boundary. The reserved set also has no
+// source without the registry contract configured.
 //
 // Reserved blockspace must also not activate before Giugliano: ReservedGasUsed
-// is a later rlp:"optional" field of BlockExtraData than Giugliano's GasTarget
-// and BaseFeeChangeDenominator, so stamping ReservedGasUsed while those are
-// still nil forces them onto the wire as non-nil zero, corrupting the base-fee
-// params a peer decodes.
+// and ReservedCapacity are later rlp:"optional" fields of BlockExtraData than
+// Giugliano's GasTarget and BaseFeeChangeDenominator, so stamping them while
+// those are still nil forces them onto the wire as non-nil zero, corrupting
+// the base-fee params a peer decodes.
 func (c *ChainConfig) checkReservedBlockspaceForkOrder() error {
 	if c.Bor == nil || c.Bor.ReservedBlockspaceBlock == nil {
 		return nil

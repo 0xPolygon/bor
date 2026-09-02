@@ -383,8 +383,19 @@ type task struct {
 	productionStart      time.Time     // wall clock at build begin — used for worker/build_to_announce (fires from resultLoop at mux.Post)
 	productionElapsed    time.Duration // elapsed from after prepareWork to task submission (excludes sealing wait); used for workerMgaspsTimer and workerBlockExecutionTimer
 	intermediateRootTime time.Duration // time spent in IntermediateRoot inside FinalizeAndAssemble; subtracted when computing workerBlockExecutionTimer
-	pipelined            bool          // If true, state was already committed by SRC goroutine — skip CommitWithUpdate in writeBlockWithState
-	witnessBytes         []byte        // RLP-encoded witness from SRC goroutine (for pipelined blocks)
+	// reservedTxIndexes lists positions within block.Transactions() classified
+	// reserved (fee-free), strictly ascending. Persisted alongside receipts by
+	// the result loop so reads report the correct effective gas price for
+	// reserved transactions.
+	reservedTxIndexes []uint64
+	// reservedClientUsage is the block's per-client reserved-region usage,
+	// re-derived from the final body with the same walk a verifier runs, so
+	// the producer's chain/reserved client gauges match what every importing
+	// node reports for this block.
+	reservedClientUsage map[uint64]registryreader.ClientUsage
+
+	pipelined    bool   // If true, state was already committed by SRC goroutine — skip CommitWithUpdate in writeBlockWithState
+	witnessBytes []byte // RLP-encoded witness from SRC goroutine (for pipelined blocks)
 }
 
 // stateSyncReserveFor returns the block-size budget to hold back for the state-sync
@@ -1564,9 +1575,9 @@ func emitExecutionMetrics(task *task) {
 // path. Returns the write status for parity with the original inline call.
 func (w *worker) writeTaskBlock(task *task, block *types.Block, receipts []*types.Receipt, logs []*types.Log) (core.WriteStatus, error) {
 	if task.pipelined {
-		return w.chain.WriteBlockAndSetHeadPipelined(block, receipts, logs, task.state, true, task.witnessBytes)
+		return w.chain.WriteBlockAndSetHeadPipelined(block, receipts, logs, task.state, task.reservedTxIndexes, task.reservedClientUsage, true, task.witnessBytes)
 	}
-	return w.chain.WriteBlockAndSetHead(block, receipts, logs, task.state, true)
+	return w.chain.WriteBlockAndSetHead(block, receipts, logs, task.state, task.reservedTxIndexes, task.reservedClientUsage, true)
 }
 
 // emitCommitMetrics reports the task's post-write statedb timers, mgas/s,
@@ -1737,7 +1748,7 @@ func markReservedTentative(env *environment, walk *registryreader.ReservedWalk, 
 
 // commitReserved advances the reserved walk for a just-committed tx. Reserved
 // txs count toward the header's ReservedGasUsed by actual gas used; the verifier
-// recomputes the same sum from the block (validateReservedGasUsed).
+// recomputes the same sum from the block (validateReservedFields).
 func commitReserved(env *environment, walk *registryreader.ReservedWalk, from common.Address, tx *types.Transaction, reserved bool) {
 	walk.Commit(from, tx.Gas(), reserved)
 	if !reserved {
@@ -2455,7 +2466,7 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, gen
 	// Record reserved gas even when a commit pass was interrupted: callers
 	// seal the partial block, and its header must account for the reserved
 	// transactions that did commit.
-	if err := w.writeReservedGasUsed(env); err != nil {
+	if err := w.writeReservedFields(env); err != nil {
 		return err
 	}
 
@@ -2492,20 +2503,25 @@ func (w *worker) sequencingSnapshot(env *environment) *registryreader.Snapshot {
 	return env.evm.Context.ReservedSnapshot
 }
 
-// writeReservedGasUsed records the build's reserved-region gas total in the
-// header's BlockExtraData, overwriting the placeholder zero that Prepare
-// stamped. Post-fork headers must carry the field (verifyReservedFields), so
-// it is written on every post-fork build — including interrupted ones, whose
-// partial blocks still seal.
-func (w *worker) writeReservedGasUsed(env *environment) error {
+// writeReservedFields records the build's reserved-region gas total and the
+// sequencing snapshot's effective capacity in the header's BlockExtraData,
+// overwriting the placeholder zeros that Prepare stamped. Post-fork headers
+// must carry both fields (verifyReservedFields), so this runs on every
+// post-fork build — including interrupted ones, whose partial blocks still
+// seal. The capacity comes from the same snapshot sequencing and execution
+// classified with, so a producer can never stamp a value execution disagrees
+// with.
+func (w *worker) writeReservedFields(env *environment) error {
 	if w.chainConfig.Bor == nil || !w.chainConfig.Bor.IsReservedBlockspace(env.header.Number) {
 		return nil
 	}
 
+	capacity := w.sequencingSnapshot(env).EffectiveCapacity()
 	reservedGasUsedGauge.Update(int64(env.reservedGasUsed))
+	reservedCapacityGauge.Update(int64(capacity))
 
-	if err := env.header.SetReservedGasUsed(w.chainConfig, env.reservedGasUsed); err != nil {
-		log.Error("error while writing reserved gas used into block extra data", "err", err)
+	if err := env.header.SetReservedFields(w.chainConfig, env.reservedGasUsed, capacity); err != nil {
+		log.Error("error while writing reserved fields into block extra data", "err", err)
 		return err
 	}
 
@@ -2532,6 +2548,13 @@ func (w *worker) generateWork(params *generateParams, witness bool) *newPayloadR
 		if errors.Is(err, errBlockInterruptedByTimeout) {
 			log.Warn("Block building is interrupted", "allowance", common.PrettyDuration(w.newpayloadTimeout))
 		}
+	} else {
+		// fillTransactions (which stamps the reserved header fields at the
+		// end of a normal build) is skipped for a no-tx payload build, so
+		// without this the header would keep Prepare's placeholder
+		// ReservedCapacity — wrong as soon as the registry carves out any
+		// capacity, even for a genuinely empty block.
+		_ = w.writeReservedFields(work)
 	}
 
 	body := types.Body{Transactions: work.txs, Withdrawals: params.withdrawals}
@@ -2684,7 +2707,7 @@ func (w *worker) submitForSealing(work *environment, start time.Time, genParams 
 		_ = w.commitPipelined(work, start)
 		return
 	}
-	_ = w.commit(work.copy(), w.fullTaskHook, true, start, genParams)
+	_ = w.commit(work.copy(), w.fullTaskHook, true, start, genParams, reservedTxsOf(work), reservedSnapshotOf(work))
 }
 
 func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genParams *generateParams, interruptPrefetch *atomic.Bool) {
@@ -2766,7 +2789,13 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 	if !noempty && !w.noempty.Load() && !isRio {
 		emptyWork := work.copy()
 		emptyWork.state.ResetPrefetcher()
-		_ = w.commit(emptyWork, nil, false, start, genParams)
+		// This copy is taken before fillTransactions runs, so it never gets
+		// fillTransactions's end-of-build reserved-field write; stamp them
+		// here too. The placeholder ReservedCapacity Prepare set is only
+		// correct while the registry carves out zero capacity. The reserved
+		// set is read from the pre-copy env: copy() does not carry evm over.
+		_ = w.writeReservedFields(emptyWork)
+		_ = w.commit(emptyWork, nil, false, start, genParams, reservedTxsOf(work), reservedSnapshotOf(work))
 	}
 	// Mark the start of full-block building. Set after the optional empty pre-seal commit so that
 	// productionElapsed for the full block does not include empty-block overhead.
@@ -2816,6 +2845,7 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 		work.discard()
 		return
 	}
+	// Submit the generated block for consensus sealing.
 	w.submitForSealing(work, start, genParams)
 
 	// Swap out the old work with the new one, terminating any leftover
@@ -3245,11 +3275,36 @@ func createInterruptTimer(number uint64, actualTimestamp time.Time, interruptBlo
 	return cancel
 }
 
+// reservedTxsOf reads the reserved-region tx set off env's evm block context,
+// nil-safe for an environment that never had one attached (e.g. pre-fork, or
+// a shape that was never wired one up).
+func reservedTxsOf(env *environment) map[registryreader.ReservedKey]struct{} {
+	if env.evm == nil {
+		return nil
+	}
+	return env.evm.Context.ReservedTxs
+}
+
+// reservedSnapshotOf returns the env's registry snapshot, or nil when the
+// build has no reserved-aware EVM context.
+func reservedSnapshotOf(env *environment) *registryreader.Snapshot {
+	if env.evm == nil {
+		return nil
+	}
+	return env.evm.Context.ReservedSnapshot
+}
+
 // commit runs any post-transaction state modifications, assembles the final block
 // and commits new work if consensus engine is running.
 // Note the assumption is held that the mutation is allowed to the passed env, do
 // the deep copy first.
-func (w *worker) commit(env *environment, interval func(), update bool, start time.Time, genParams *generateParams) error {
+//
+// reservedTxs is the build's reserved-region tx set (keyed by sender+nonce)
+// and reservedSnap the registry snapshot that classified it, both read by the
+// caller off the pre-copy environment's evm.Context: env.copy() (below, and
+// at both call sites before this function even sees env) does not carry the
+// evm field over, so neither is recoverable from env itself here.
+func (w *worker) commit(env *environment, interval func(), update bool, start time.Time, genParams *generateParams, reservedTxs map[registryreader.ReservedKey]struct{}, reservedSnap *registryreader.Snapshot) error {
 	// Track total block building time and report metrics at the end of the commit cycle.
 	defer func() {
 		// Update total commit timer (matches the "elapsed" time in log)
@@ -3336,8 +3391,14 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 			return err
 		}
 
+		reservedTxIndexes := core.ReservedTxIndexes(block.Transactions(), env.signer, reservedTxs)
+		// Per-client usage is re-derived from the final body with the same
+		// walk a verifier runs, so the producer's chain/reserved client
+		// gauges report the identical numbers every importing node derives.
+		_, reservedClientUsage := registryreader.ClassifyReserved(block.Transactions(), env.signer, reservedSnap)
+
 		select {
-		case w.taskCh <- &task{receipts: env.receipts, state: env.state, block: block, createdAt: time.Now(), productionStart: firstNonZeroTime(productionStartFrom(genParams), start), productionElapsed: time.Since(firstNonZeroTime(productionStartFrom(genParams), start)), intermediateRootTime: commitTime}:
+		case w.taskCh <- &task{receipts: env.receipts, state: env.state, block: block, createdAt: time.Now(), productionStart: firstNonZeroTime(productionStartFrom(genParams), start), productionElapsed: time.Since(firstNonZeroTime(productionStartFrom(genParams), start)), intermediateRootTime: commitTime, reservedTxIndexes: reservedTxIndexes, reservedClientUsage: reservedClientUsage}:
 			fees := totalFees(block, env.receipts)
 			feesInEther := new(big.Float).Quo(new(big.Float).SetInt(fees), big.NewFloat(params.Ether))
 			log.Info("Commit new sealing work",

@@ -31,11 +31,9 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 )
 
-var (
-	// blobTxMinBlobGasPrice is the big.Int version of the configured protocol
-	// parameter to avoid constructing a new big integer for every transaction.
-	blobTxMinBlobGasPrice = big.NewInt(params.BlobTxMinBlobGasprice)
-)
+// blobTxMinBlobGasPrice is the big.Int version of the configured protocol
+// parameter to avoid constructing a new big integer for every transaction.
+var blobTxMinBlobGasPrice = big.NewInt(params.BlobTxMinBlobGasprice)
 
 // ValidationOptions define certain differences between transaction validation
 // across the different pools without having to duplicate those checks.
@@ -267,6 +265,14 @@ type ValidationOptionsWithState struct {
 	// ExistingCost is a mandatory callback to retrieve an already pooled
 	// transaction's cost with the given nonce to check for overdrafts.
 	ExistingCost func(addr common.Address, nonce uint64) *big.Int
+
+	// EffectiveCost prices a transaction for balance checks. Nil (either the
+	// field itself, or its return value for a given tx) means tx.Cost().
+	// Pools with a reserved-blockspace registry supply a reserved-aware
+	// implementation; ExistingExpenditure and ExistingCost must be priced on
+	// the same basis. Takes the already-recovered sender, matching the other
+	// callbacks below.
+	EffectiveCost func(addr common.Address, tx *types.Transaction) *big.Int
 }
 
 // ValidateTransactionWithState is a helper method to check whether a transaction
@@ -293,10 +299,14 @@ func ValidateTransactionWithState(tx *types.Transaction, signer types.Signer, op
 		}
 	}
 	// Ensure the transactor has enough funds to cover the transaction costs
-	var (
-		balance = opts.State.GetBalance(from).ToBig()
-		cost    = tx.Cost()
-	)
+	balance := opts.State.GetBalance(from).ToBig()
+	var cost *big.Int
+	if opts.EffectiveCost != nil {
+		cost = opts.EffectiveCost(from, tx)
+	}
+	if cost == nil {
+		cost = tx.Cost()
+	}
 	if balance.Cmp(cost) < 0 {
 		return fmt.Errorf("%w: balance %v, tx cost %v, overshot %v", core.ErrInsufficientFunds, balance, cost, new(big.Int).Sub(cost, balance))
 	}

@@ -26,7 +26,9 @@ contract ReservedBlockspaceRegistry {
         uint64 gasQuota;
         bool active;
         // feeMode: 0 = free (zero in-protocol fee), 1 = routed (fee paid but
-        // credited to the producer).
+        // credited to the producer). Routed mode is not implemented by the
+        // execution client: it excludes non-free clients from the reserved
+        // set, so their senders pay standard fees like normal transactions.
         uint8 feeMode;
         // effectiveFrom: block number from which this client's reserved status
         // applies. Lets governance schedule/announce a change at a future height

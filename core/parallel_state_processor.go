@@ -448,7 +448,8 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 	// Quota-aware reserved set, derived once from the ordered body and shared by
 	// every task's block context (map reference), so parallel classification
 	// matches serial and produce (consensus parity).
-	blockContext.ReservedTxs = registryreader.ClassifyReserved(txs, signer, blockContext.ReservedSnapshot)
+	var clientUsage map[uint64]registryreader.ClientUsage
+	blockContext.ReservedTxs, clientUsage = registryreader.ClassifyReserved(txs, signer, blockContext.ReservedSnapshot)
 	for i, tx := range txs {
 		if tx.Type() == types.StateSyncTxType {
 			continue
@@ -543,12 +544,17 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 		}
 	}
 
+	reservedGasUsed, reservedTxIndexes := sumReservedGasUsed(block.Transactions(), receipts, signer, blockContext.ReservedTxs)
+
 	return &ProcessResult{
-		Receipts:        receipts,
-		Requests:        requests,
-		Logs:            allLogs,
-		GasUsed:         *usedGas,
-		ReservedGasUsed: sumReservedGasUsed(block.Transactions(), receipts, signer, blockContext.ReservedTxs),
+		Receipts:            receipts,
+		Requests:            requests,
+		Logs:                allLogs,
+		GasUsed:             *usedGas,
+		ReservedGasUsed:     reservedGasUsed,
+		ReservedCapacity:    blockContext.ReservedSnapshot.EffectiveCapacity(),
+		ReservedTxIndexes:   reservedTxIndexes,
+		ReservedClientUsage: clientUsage,
 	}, nil
 }
 
@@ -1121,7 +1127,8 @@ func (p *V2StateProcessor) Process(block *types.Block, statedb *state.StateDB, c
 		return nil, err
 	}
 	blockCtx.ReservedSnapshot = reservedSnapshot
-	blockCtx.ReservedTxs = registryreader.ClassifyReserved(block.Transactions(), types.MakeSigner(config, header.Number, header.Time), blockCtx.ReservedSnapshot)
+	var clientUsage map[uint64]registryreader.ClientUsage
+	blockCtx.ReservedTxs, clientUsage = registryreader.ClassifyReserved(block.Transactions(), types.MakeSigner(config, header.Number, header.Time), blockCtx.ReservedSnapshot)
 	applyV2PreExecSystemCalls(block, statedb, config, cfg, blockCtx)
 
 	tasks, err := buildV2Tasks(block, config, header, interruptCtx)
@@ -1178,7 +1185,7 @@ func (p *V2StateProcessor) Process(block *types.Block, statedb *state.StateDB, c
 	}
 
 	return p.finalizeV2Block(block, statedb, header, config, tasks, result,
-		blockCtx.ReservedTxs, tProcess, tSetup, tCopy, tExec)
+		blockCtx.ReservedTxs, blockCtx.ReservedSnapshot.EffectiveCapacity(), clientUsage, tProcess, tSetup, tCopy, tExec)
 }
 
 // finalizeV2Block runs consensus-engine finalization, merges state-sync logs,
@@ -1187,7 +1194,8 @@ func (p *V2StateProcessor) Process(block *types.Block, statedb *state.StateDB, c
 func (p *V2StateProcessor) finalizeV2Block(block *types.Block, statedb *state.StateDB,
 	header *types.Header, config *params.ChainConfig,
 	tasks []V2Task, result *V2ExecutionResult,
-	reservedTxs map[registryreader.ReservedKey]struct{},
+	reservedTxs map[registryreader.ReservedKey]struct{}, reservedCapacity uint64,
+	reservedClientUsage map[uint64]registryreader.ClientUsage,
 	tProcess, tSetup, tCopy, tExec time.Time,
 ) (*ProcessResult, error) {
 	receiptsCountBeforeFinalize := len(result.Receipts)
@@ -1246,12 +1254,17 @@ func (p *V2StateProcessor) finalizeV2Block(block *types.Block, statedb *state.St
 		}
 	}
 
+	reservedGasUsed, reservedTxIndexes := sumReservedGasUsed(block.Transactions(), receipts, types.MakeSigner(config, header.Number, header.Time), reservedTxs)
+
 	return &ProcessResult{
-		Receipts:        receipts,
-		Requests:        requests,
-		Logs:            allLogs,
-		GasUsed:         result.GasUsed,
-		ReservedGasUsed: sumReservedGasUsed(block.Transactions(), receipts, types.MakeSigner(config, header.Number, header.Time), reservedTxs),
+		Receipts:            receipts,
+		Requests:            requests,
+		Logs:                allLogs,
+		GasUsed:             result.GasUsed,
+		ReservedGasUsed:     reservedGasUsed,
+		ReservedCapacity:    reservedCapacity,
+		ReservedTxIndexes:   reservedTxIndexes,
+		ReservedClientUsage: reservedClientUsage,
 	}, nil
 }
 
