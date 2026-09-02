@@ -87,19 +87,26 @@ func sliceDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
 // fold divergence there is version skew — terminal for this publisher, not
 // for the reader.
 func (p *Publisher) tryWalk(ctx context.Context, first *pb.RangeRequest, match bool) (tailInfo, reconcileOutcome, bool) {
-	info, out, done := p.read.tryWalk(ctx, first, p.absorber(match))
+	absorb, m := p.absorber(match)
+
+	info, out, done := p.read.tryWalk(ctx, first, absorb)
 	if done && out == recTerminal {
 		p.fail("fold divergence", "err", errFoldDivergence)
+	}
+
+	if m != nil && done && out == recOK {
+		info.suffixOurs = m.ours()
 	}
 
 	return info, out, done
 }
 
 // absorber arms the divergence check for the anchor rung; unmatched walks
-// carry no hook.
-func (p *Publisher) absorber(match bool) func(*pb.Entry) error {
+// carry no hook. The matcher comes back with the hook so the walk's caller
+// can read what the lockstep comparison established about the tail.
+func (p *Publisher) absorber(match bool) (func(*pb.Entry) error, *matcher) {
 	if !match {
-		return nil
+		return nil, nil
 	}
 
 	p.mu.Lock()
@@ -109,7 +116,7 @@ func (p *Publisher) absorber(match bool) func(*pb.Entry) error {
 
 	m := &matcher{snap: snap, on: true}
 
-	return m.absorb
+	return m.absorb, m
 }
 
 // matcher runs the divergence check on the anchor rung: tail entries are
@@ -141,4 +148,12 @@ func (m *matcher) absorb(entry *pb.Entry) error {
 	m.idx++
 
 	return nil
+}
+
+// ours reports whether every entry the walk absorbed matched the journal in
+// lockstep: the tail past the anchor is a prefix of this publisher's own
+// unacked window. A content mismatch or an entry beyond the journal turns the
+// matcher off, so a foreign record or an extension we do not hold reads false.
+func (m *matcher) ours() bool {
+	return m.on
 }

@@ -103,6 +103,14 @@ type tailInfo struct {
 	// producer already has a live window at the height we are about to
 	// open.
 	explained bool
+
+	// suffixOurs is set when the anchor rung's matcher absorbed every walked
+	// entry in lockstep with the unconfirmed journal: the store's tail past
+	// our anchor is a prefix of our own in-flight window, so the store's
+	// window at the build height is the journal's. A mid-drain read lands
+	// exactly here — the walk starts past the window's open, so tipOpen and
+	// window stay unset even though the store holds nothing but our sequence.
+	suffixOurs bool
 }
 
 // tryWalk runs one ladder rung; done=false falls through to the next rung:

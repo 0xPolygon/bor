@@ -60,12 +60,24 @@ func (p *Publisher) AwaitSequenced(timeout time.Duration, number uint64, txs []*
 
 			return true
 		case sticky:
-			// Another producer owns this height (our writes STALEd). Adopt
-			// their window instead of sealing beside it: the rebuild's
-			// boundary read collects it.
+			// A STALE armed this hold. Usually another producer owns the
+			// height and the rebuild adopts their window — but a takeover
+			// publisher's own stale-prefix entries STALE the same way with
+			// nobody owning anything, and refusing then starves the very
+			// seal flush the transport is holding for (the devnet
+			// seventeen-second takeover stall). The store arbitrates: a
+			// tail sealed exactly through this block's parent with nothing
+			// live past it proves the height unowned, and the seal passes;
+			// the simultaneous-open race stays with the CAS and the gate.
+			if p.sealedThroughParent(number) {
+				coverageSkip(number, "store sealed through parent, nothing owed here")
+
+				return true
+			}
+
 			p.armResync()
 
-			return false
+			return p.barrierVerdict(number, false)
 		case catchingUp:
 			// The store is behind us by construction while the backfill
 			// drains, so there is nothing here worth comparing against and
@@ -75,7 +87,7 @@ func (p *Publisher) AwaitSequenced(timeout time.Duration, number uint64, txs []*
 
 			return true
 		case unacked == 0:
-			return p.sealMirror(number, txs)
+			return p.barrierVerdict(number, p.sealMirror(number, txs))
 		case time.Now().After(deadline):
 			publishBarrierTimeout.Inc(1)
 
@@ -86,11 +98,72 @@ func (p *Publisher) AwaitSequenced(timeout time.Duration, number uint64, txs []*
 			// our own block, so the comparison holds mid-drain; it was a
 			// block with none of a 9523-record window that rode this exit
 			// out to a broadcast.
-			return p.sealMirror(number, txs)
+			return p.barrierVerdict(number, p.sealMirror(number, txs))
 		}
 
 		time.Sleep(2 * time.Millisecond)
 	}
+}
+
+// sealedThroughParent reports the clean-boundary proof: nothing stands in
+// the store at or past this height, so a seal here can revoke nothing. One
+// walk anchored at the parent answers it — an unsealed parent is served
+// from its open (a non-empty walk), a sealed one resumes just past its
+// seal, and an unknown one reads NOT_FOUND with nothing standing anywhere.
+// Any entry the walk returns — a live window, a later generation, a
+// re-anchor — is content this block cannot vouch for, and the refusal
+// stands, as it does for anything unreadable.
+func (p *Publisher) sealedThroughParent(height uint64) bool {
+	if height < 2 || p.unreachable.Load() || p.read == nil || p.read.cons == nil {
+		return false
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), tailReadTimeout)
+	defer cancel()
+
+	info, out, done := p.tryWalk(ctx, blockReq(height-1), false)
+
+	return done && out == recOK && !info.tipOpen && !info.haveSeal && len(info.window) == 0
+}
+
+// maxBarrierRefusals bounds consecutive pre-seal refusals at one height —
+// the barrier's analog of the gate's maxGateRefusals. Sized past every
+// legitimate convergence (adoption is one rebuild; recovery's grace is a
+// few slots) and below heimdall's producer-ineffectiveness threshold, so a
+// store answering inconsistently across reads costs bounded slots and the
+// node seals for liveness before consensus rotates it away as dead.
+const maxBarrierRefusals = 8
+
+// barrierVerdict funnels every pre-seal pass/refuse through the per-height
+// refusal cap: a pass resets the streak, a refusal past the cap becomes a
+// pass — refuse → rebuild is convergent only when the store eventually
+// shows one consistent shape, and a Byzantine or split-view store (a load
+// balancer over replicas at different lags) never does. Past the cap the
+// post-seal gate and consensus arbitrate.
+func (p *Publisher) barrierVerdict(height uint64, ok bool) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if ok {
+		p.barrierRefusals = refusalStreak{}
+
+		return true
+	}
+
+	if p.barrierRefusals.height != height {
+		p.barrierRefusals = refusalStreak{height: height}
+	}
+
+	p.barrierRefusals.count++
+
+	if p.barrierRefusals.count > maxBarrierRefusals {
+		log.Warn("Sequencer barrier refused this height repeatedly, sealing for liveness",
+			"number", height, "refusals", p.barrierRefusals.count)
+
+		return true
+	}
+
+	return false
 }
 
 // armResync requests a rebuild that follows the store's sequence. Idempotent;
@@ -148,15 +221,24 @@ func (p *Publisher) sealMirror(height uint64, txs []*types.Transaction) bool {
 		}
 	}
 
-	// The read shows nothing past the entries we published, so the store's
-	// window at this height is the one in our journal — already acked, so
-	// comparing the block against it compares it against the store.
-	p.mu.Lock()
-	ourTxs, atHead := p.journalWindowLocked(height), info.s == p.anchor
-	p.mu.Unlock()
+	if ok, decided := p.journalMirror(info, height, txs); decided {
+		return ok
+	}
 
-	if atHead {
-		return p.mirrorVerdict(height, ourTxs, txs, len(ourTxs))
+	// A tail ending in a decoded seal exactly at this block's parent, with
+	// nothing live past it, proves the store owes nothing at this height —
+	// a broadcast can revoke nothing, whatever our anchor thinks. This is
+	// the takeover shape: this publisher idled muted while another
+	// produced, its anchor is behind on sealed history it already imported
+	// as blocks, and the seal flush's STALE rebases it right after.
+	// Refusing here wedged a fresh producer for 17 seconds on a devnet —
+	// the reconcile held every rebuild's open awaiting a seal flush this
+	// refusal was preventing — until heimdall rotated production away as
+	// ineffective.
+	if p.sealedThroughParent(height) {
+		coverageSkip(height, "store sealed through parent, nothing owed here")
+
+		return true
 	}
 
 	// The store holds content this block does not — a record extension of
@@ -174,6 +256,30 @@ func (p *Publisher) sealMirror(height uint64, txs []*types.Transaction) bool {
 		"number", height, "ours", ours, "storeWindow", len(info.window))
 
 	return false
+}
+
+// journalMirror compares the block against this publisher's own published
+// window when the read proves the store holds nothing else: the tail ends at
+// our anchor, or the walked suffix is a verified prefix of our unacked
+// journal (the mid-drain read — acks lag the commits, the walk starts past
+// the window's open, and the matcher proved every returned record ours).
+// Either way the store's window at this height is the journal's, so the
+// journal comparison is the store comparison. Undecided when the tail holds
+// content we cannot account for.
+func (p *Publisher) journalMirror(info tailInfo, height uint64, txs []*types.Transaction) (ok, decided bool) {
+	p.mu.Lock()
+	ourTxs, atHead := p.journalWindowLocked(height), info.s == p.anchor
+	p.mu.Unlock()
+
+	if !atHead && !info.suffixOurs {
+		return false, false
+	}
+
+	if !atHead {
+		publishMidDrainMirror.Inc(1)
+	}
+
+	return p.mirrorVerdict(height, ourTxs, txs, len(ourTxs)), true
 }
 
 // ResyncNeeded reports whether a competing producer holds the height this

@@ -350,6 +350,85 @@ func TestBarrierChecksContentEvenWhenTheDrainOvershoots(t *testing.T) {
 	}
 }
 
+// Mid-drain, the anchor walk starts past the window's open and returns only
+// our trailing records: no window to reconstruct (storeWindow reads zero), a
+// head past our anchor, and a tip that is not "open at this height" as far as
+// the read can tell. Treating that as foreign content refused the producer's
+// own block, adopted its own window minus the in-flight tail, and cost the
+// height a rebuild cycle or two — the 2-3s blocks a devnet saw on every
+// ack-lag spike. The matcher already proved the suffix ours; the mirror must
+// use that and compare the block against the journal.
+func TestBarrierPassesMidDrainWhenStoreTailIsOurOwnWindow(t *testing.T) {
+	h := startHarness(t)
+	p := newTestPublisher(t, h, &fakeChain{canonical: map[uint64]common.Hash{}})
+
+	sealed := publishBlock(t, p, 1, common.Hash{0xef}, 1)
+	waitHead(t, h, p, 5*time.Second)
+	parent := sealHash(t, sealed)
+
+	t0, t1 := testTx(t, 0), testTx(t, 1)
+	p.OpenBlock(2, 1700000002, parent, 30_000_000, fee25())
+	p.PublishTx(t0)
+	p.PublishTx(t1)
+	waitDrained(t, p, 5*time.Second)
+
+	// Rewind the ack bookkeeping to just after the open: the records are
+	// committed and visible in the store, their acks not yet processed —
+	// the read lands mid-drain.
+	p.mu.Lock()
+	window := p.journal.suffixFromHeight(2)
+	if len(window) != 3 || window[0].kind != entryOpen {
+		p.mu.Unlock()
+		t.Fatalf("setup: journal window is not open+2 records: %d items", len(window))
+	}
+	p.ackedSeq, p.anchor = window[0].seq, window[0].post
+	p.mu.Unlock()
+
+	if !p.AwaitSequenced(150*time.Millisecond, 2, []*types.Transaction{t0, t1}) {
+		t.Fatal("barrier refused the producer's own block over its own " +
+			"still-draining window")
+	}
+
+	if p.ResyncNeeded() {
+		t.Fatal("a mid-drain read of our own window armed a rebuild")
+	}
+}
+
+// The same mid-drain shape with a record we do not hold is a real extension:
+// the store promises a transaction the block lacks, and the refusal stands.
+func TestBarrierStillRefusesWhenStoreExtendsPastOurJournal(t *testing.T) {
+	h := startHarness(t)
+	p := newTestPublisher(t, h, &fakeChain{canonical: map[uint64]common.Hash{}})
+
+	sealed := publishBlock(t, p, 1, common.Hash{0xef}, 1)
+	waitHead(t, h, p, 5*time.Second)
+	parent := sealHash(t, sealed)
+
+	t0, t1 := testTx(t, 0), testTx(t, 1)
+	p.OpenBlock(2, 1700000002, parent, 30_000_000, fee25())
+	p.PublishTx(t0)
+	p.PublishTx(t1)
+	waitDrained(t, p, 5*time.Second)
+
+	// A record past everything we hold: adopted-then-extended, or a rival's
+	// append onto our window's head.
+	appendForeignRecord(t, h, testTx(t, 7))
+
+	p.mu.Lock()
+	window := p.journal.suffixFromHeight(2)
+	p.ackedSeq, p.anchor = window[0].seq, window[0].post
+	p.mu.Unlock()
+
+	if p.AwaitSequenced(150*time.Millisecond, 2, []*types.Transaction{t0, t1}) {
+		t.Fatal("barrier passed a block missing a record the store holds " +
+			"past our journal")
+	}
+
+	if !p.ResyncNeeded() {
+		t.Fatal("a real extension refusal did not ask for a rebuild")
+	}
+}
+
 // The same deadline path must still pass a block that does carry the
 // promised prefix, or a slow drain would stall production outright.
 func TestBarrierDeadlineStillPassesACoveringBlock(t *testing.T) {

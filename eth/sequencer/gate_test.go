@@ -1087,3 +1087,45 @@ func TestSealGateLostVerdictIgnoresConsensusInvalidSeal(t *testing.T) {
 			"refuse the elected producer's block")
 	}
 }
+
+// The engine's seal verification waits on heimdall availability with no
+// deadline of its own, and the gate runs on the miner's result loop — a
+// verifier that never returns must cost the gate at most its bounded
+// timeout, and an unverifiable seal keeps its refusal. Without the bound,
+// a heimdall outage coinciding with a lost gate froze block import.
+func TestSealGateBoundsBlockedSealVerifier(t *testing.T) {
+	h := startHarness(t)
+	chain := &fakeChain{canonical: map[uint64]common.Hash{}}
+	p := newTestPublisher(t, h, chain)
+
+	sealed := publishBlock(t, p, 1, common.Hash{0xef}, 1)
+	waitHead(t, h, p, 5*time.Second)
+	parent := sealHash(t, sealed)
+
+	foreign := testHeader(2, parent)
+	foreign.Extra = []byte("unverifiable while heimdall is down")
+	appendForeignOpen(t, h, 2, parent)
+	appendForeignSeal(t, h, foreign)
+
+	// Heimdall down: verification never returns.
+	p.SetSealVerifier(func(*types.Header) error {
+		select {} // blocks forever
+	})
+
+	tx := testTx(t, 0)
+	ours := blockFor(testHeader(2, parent), []*types.Transaction{tx})
+
+	p.mu.Lock()
+	p.gate = sealGate{height: 2, hash: ours.Hash(), txs: []common.Hash{tx.Hash()}}
+	p.mu.Unlock()
+
+	start := time.Now()
+
+	if v := p.ConfirmSeal(300 * time.Millisecond); v != miner.SealRefused {
+		t.Fatalf("verdict = %v, want Refused: an unverifiable seal keeps its refusal", v)
+	}
+
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("gate took %v against a blocked verifier: the result loop would freeze", elapsed)
+	}
+}
