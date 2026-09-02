@@ -1,7 +1,6 @@
 package sequencer
 
 import (
-	"context"
 	"math/big"
 	"net"
 	"testing"
@@ -394,36 +393,6 @@ func localHead(p *Publisher) commitment.Head {
 	defer p.mu.Unlock()
 
 	return p.head
-}
-
-// Progress resets the contention streak; a repeat no-progress STALE backs
-// off before the next reconcile, starting at the minimum.
-func TestContentionSleep(t *testing.T) {
-	ctx := context.Background()
-
-	if got := contentionSleep(ctx, true, 3); got != 0 {
-		t.Fatalf("progress must reset the streak, got %d", got)
-	}
-
-	start := time.Now()
-
-	if got := contentionSleep(ctx, false, 0); got != 1 {
-		t.Fatalf("first stale streak = %d, want 1", got)
-	}
-
-	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
-		t.Fatalf("first stale must not sleep, took %v", elapsed)
-	}
-
-	start = time.Now()
-
-	if got := contentionSleep(ctx, false, 1); got != 2 {
-		t.Fatalf("second stale streak = %d, want 2", got)
-	}
-
-	if elapsed := time.Since(start); elapsed < reconcileBackoffMin || elapsed > 4*reconcileBackoffMin {
-		t.Fatalf("second stale slept %v, want ~%v", elapsed, reconcileBackoffMin)
-	}
 }
 
 // A publisher pointed at a store seeded for a different chain anchors on

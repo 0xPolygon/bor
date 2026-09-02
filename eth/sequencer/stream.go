@@ -76,7 +76,19 @@ func newStallTracker() *stallTracker {
 	return t
 }
 
-func (s *stallTracker) sent()  { s.inflight.Add(1) }
+// sent restarts the progress clock when it opens a fresh wait (inflight 0→1):
+// the deadline must measure how long this batch of acks has been outstanding,
+// not the idle gap before it. Without the reset, the first entry sent after a
+// quiet stretch longer than the deadline reads as stalled the instant it goes
+// out — the store never gets its window to ack — and the watchdog resets a
+// healthy low-load stream. Sends that pipeline onto an existing wait leave the
+// clock alone, so a genuinely hung store still trips.
+func (s *stallTracker) sent() {
+	if s.inflight.Add(1) == 1 {
+		s.lastAck.Store(time.Now().UnixNano())
+	}
+}
+
 func (s *stallTracker) acked() { s.inflight.Add(-1); s.lastAck.Store(time.Now().UnixNano()) }
 
 func (s *stallTracker) stalled(deadline time.Duration) bool {
@@ -490,6 +502,10 @@ func (p *Publisher) step(ctx context.Context, state *runState) bool {
 		p.unreachable.Store(false) // the store answered, whatever it said
 	}
 
+	// Price the next reconcile and carry the streak forward, cleared whenever
+	// this session made progress — whatever ended it.
+	delay := state.priceContention(res)
+
 	switch res.reason {
 	case endCtx, endTerminal:
 		return false
@@ -506,8 +522,7 @@ func (p *Publisher) step(ctx context.Context, state *runState) bool {
 	default: // endStale
 		publishStaleCount.Inc(1)
 
-		state.contention = contentionSleep(ctx, res.progressed, state.contention)
-		if ctx.Err() != nil {
+		if !contentionPause(ctx, delay) {
 			return false
 		}
 
@@ -564,21 +579,52 @@ func (p *Publisher) idleReanchor(ctx context.Context) bool {
 	return p.reconcile(ctx) != recTerminal
 }
 
-// contentionSleep applies the reconcile backoff when the previous
-// reconcile's corrective publish immediately re-STALEd; the
-// first STALE reconciles without delay, and progress resets the streak.
-func contentionSleep(ctx context.Context, progressed bool, streak int) int {
+// priceContention updates the streak for the session that just ended and
+// returns the delay owed before the next reconcile (nonzero only on the
+// stale path).
+func (s *runState) priceContention(res streamResult) time.Duration {
+	delay, streak := advanceContention(res.progressed, res.reason == endStale, s.contention)
+	s.contention = streak
+
+	return delay
+}
+
+// contentionPause waits out the reconcile backoff before a stale retry,
+// reporting false if the context ended during the wait.
+func contentionPause(ctx context.Context, delay time.Duration) bool {
+	if delay == 0 {
+		return true
+	}
+
+	publishStateGauge.Update(gaugeContending)
+
+	return sleepCtx(ctx, delay)
+}
+
+// advanceContention prices the gap before the next reconcile and returns the
+// streak to carry forward. Repeated stale-without-progress reconciles — head
+// races another writer never wins — lengthen the wait; the first is immediate.
+// Progress clears the streak whatever ended the session: a lost-ack resend
+// STALEs before any OK, so its own session never counts as progress, and until
+// a later healthy session cleared the streak it survived every quiet hour and
+// each blip paid the whole accumulated ladder. At the 8s cap on a 1s chain
+// that outlasts finality, stranding a completable flush behind a backfill jump
+// and leaving a store hole the auditor reads as a reorg.
+func advanceContention(progressed, stale bool, streak int) (time.Duration, int) {
 	if progressed {
-		return 0
+		return 0, 0
 	}
 
+	if !stale {
+		return 0, streak
+	}
+
+	var delay time.Duration
 	if streak > 0 {
-		delay := min(reconcileBackoffMin<<(streak-1), reconcileBackoffMax)
-		publishStateGauge.Update(gaugeContending)
-		sleepCtx(ctx, delay)
+		delay = min(reconcileBackoffMin<<(streak-1), reconcileBackoffMax)
 	}
 
-	return streak + 1
+	return delay, streak + 1
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) bool {
