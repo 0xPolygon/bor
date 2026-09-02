@@ -25,7 +25,11 @@ on:
     types: [opened, synchronize, reopened]
 
 concurrency:
-  group: kurtosis-pipeline-e2e-${{ github.event.pull_request.number || github.ref }}
+  # `github.event_name` keeps the `pull_request` and `pull_request_target`
+  # runs of one PR in separate groups. They resolve to the same PR number,
+  # so without it `cancel-in-progress` lets the all-skipped run cancel the
+  # real one.
+  group: kurtosis-pipeline-e2e-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
