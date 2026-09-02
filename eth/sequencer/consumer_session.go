@@ -308,12 +308,22 @@ func (s *session) applySeal(seal *pb.BlockSeal) {
 		return
 	}
 
-	assembled, reusable, ok := s.sealResult(sealed)
+	assembled, reusable, verified, ok := s.sealResult(sealed)
 	if !ok {
 		return
 	}
 
 	sealedHash := common.Hash(commitment.SealedHash(seal.GetHeader()))
+	if !verified {
+		block, payload, ok := preparePending(s.env, assembled.Header(), common.Hash{}, nil)
+		if !ok {
+			s.clearEnv()
+			s.parked = nil
+			return
+		}
+		s.publishUnverifiedSeal(block, payload, sealed, sealedHash)
+		return
+	}
 	block, payload, ok := preparePending(s.env, assembled.Header(), sealedHash, reusable)
 	if !ok {
 		s.clearEnv()
@@ -321,6 +331,36 @@ func (s *session) applySeal(seal *pb.BlockSeal) {
 		return
 	}
 	s.publishSeal(block, payload, sealed, sealedHash)
+}
+
+func (s *session) publishUnverifiedSeal(block *types.Block, payload pendingPayload, sealed *types.Header, sealedHash common.Hash) {
+	number := s.env.header.Number.Uint64()
+	s.consumer.publishMu.Lock()
+	if !s.consumer.publishPending(block, payload, s.env.generation) {
+		s.clearEnv()
+		s.parked = nil
+		s.consumer.publishMu.Unlock()
+		return
+	}
+	logs := s.indexPublishedTransactions()
+	s.consumer.enqueuePendingLogs(logs)
+	if s.sealed == nil {
+		s.sealed = map[uint64]common.Hash{}
+	}
+	s.sealed[number] = sealedHash
+	for height := range s.sealed {
+		if height+256 < number {
+			delete(s.sealed, height)
+			delete(s.verified, height)
+		}
+	}
+	s.tip = sealedHash
+	s.tipNumber = number
+	s.tipHeader = types.CopyHeader(sealed)
+	s.parked = s.env.statedb
+	s.clearEnv()
+	s.consumer.publishMu.Unlock()
+	log.Warn("Preconf seal verification deferred; retaining only an unsealed pending view", "number", number)
 }
 
 func (s *session) publishSeal(block *types.Block, payload pendingPayload, sealed *types.Header, sealedHash common.Hash) {

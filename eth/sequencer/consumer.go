@@ -51,6 +51,7 @@ type Consumer struct {
 	logsWG     sync.WaitGroup
 	worker     atomic.Pointer[preconfWorker]
 	reconciled atomic.Pointer[types.Header]
+	sealVerify atomic.Bool
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup

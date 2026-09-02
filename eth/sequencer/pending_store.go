@@ -139,6 +139,13 @@ func preparePending(env *blockEnv, header *types.Header, blockHash common.Hash, 
 				entry.BlockHash = blockHash
 			}
 		}
+	} else {
+		for _, receipt := range receipts {
+			receipt.BlockHash = common.Hash{}
+			for _, entry := range receipt.Logs {
+				entry.BlockHash = common.Hash{}
+			}
+		}
 	}
 	block, err := blockFromExecution(header, env.txs, receipts)
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math/big"
 	"testing"
+	"time"
 
 	"github.com/0xPolygon/sequence-store-proto/commitment"
 	pb "github.com/0xPolygon/sequence-store-proto/sequencestore/v1"
@@ -21,9 +22,13 @@ type headerGateEngine struct {
 	*partialReuseEngine
 	reject             bool
 	sawSpeculativeBase bool
+	block              <-chan struct{}
 }
 
 func (e *headerGateEngine) VerifyHeader(chain consensus.ChainHeaderReader, header *types.Header) error {
+	if e.block != nil {
+		<-e.block
+	}
 	if e.reject {
 		return errors.New("test header rejected")
 	}
@@ -176,6 +181,32 @@ func TestSessionSealVerificationUsesSpeculativeLineage(t *testing.T) {
 
 		if !engine.sawSpeculativeBase || s.tip != second.Hash() {
 			t.Fatalf("speculative parent verification = %v, tip = %s", engine.sawSpeculativeBase, s.tip)
+		}
+	})
+
+	t.Run("slow verification keeps the view unsealed", func(t *testing.T) {
+		gate := make(chan struct{})
+		engine := &headerGateEngine{partialReuseEngine: &partialReuseEngine{Ethash: ethash.NewFullFaker()}, block: gate}
+		h := startExecHarnessEngine(t, finalizationConfig(), vm.Config{}, engine)
+		s := h.session()
+		cur := handleOK(t, s, openOn(h.chain.CurrentBlock(), h.config, commitment.Head{0x93}))
+		tx := h.transfer(t, 0)
+		raw, _ := tx.MarshalBinary()
+		cur = handleOK(t, s, recordEntry(raw, cur))
+		sealed := sealedFromEnv(t, s)
+
+		previous := preconfSealVerifyTimeout
+		preconfSealVerifyTimeout = time.Millisecond
+		defer func() { preconfSealVerifyTimeout = previous }()
+		handleOK(t, s, sealEntry(encodeHeader(t, sealed), cur))
+		close(gate)
+
+		if s.env != nil || s.parked == nil || s.tip != sealed.Hash() {
+			t.Fatalf("deferred seal state = env:%v parked:%v tip:%s", s.env, s.parked != nil, s.tip)
+		}
+		receipt, _, ok := s.consumer.Index().Lookup(tx.Hash())
+		if !ok || receipt.BlockHash != (common.Hash{}) {
+			t.Fatalf("deferred seal receipt = %v, found = %v", receipt, ok)
 		}
 	})
 }

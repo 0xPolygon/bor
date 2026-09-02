@@ -106,8 +106,8 @@ func TestFinalizeSealBuildsReusableExecution(t *testing.T) {
 	stateSync := &types.StateSyncData{ID: 1}
 	h.chain.SetStateSync([]*types.StateSyncData{stateSync})
 	s := &session{consumer: &Consumer{chain: h.chain, index: NewIndex()}, env: env}
-	assembled, reusable, ok := s.sealResult(sealed)
-	if !ok {
+	assembled, reusable, verified, ok := s.sealResult(sealed)
+	if !ok || !verified {
 		t.Fatal("seal result was rejected")
 	}
 	if assembled.Hash() != sealed.Hash() {
@@ -200,8 +200,8 @@ func TestSealResultFallbackAndMismatch(t *testing.T) {
 			t.Fatalf("fallback seal check: %v", err)
 		}
 
-		assembled, reusable, ok := s.sealResult(sealed)
-		if !ok || assembled == nil || reusable != nil {
+		assembled, reusable, verified, ok := s.sealResult(sealed)
+		if !ok || !verified || assembled == nil || reusable != nil {
 			t.Fatalf("assembled = %v, reusable = %v, ok = %v", assembled, reusable, ok)
 		}
 		_, payload, ok := preparePending(env, assembled.Header(), assembled.Hash(), reusable)
@@ -216,7 +216,7 @@ func TestSealResultFallbackAndMismatch(t *testing.T) {
 		sealed.Root = env.statedb.IntermediateRoot(env.evm.ChainConfig().IsEIP158(env.header.Number))
 		sealed.Root[0] ^= 0xff
 		s := &session{consumer: &Consumer{chain: h.chain, index: NewIndex()}, env: env}
-		if _, _, ok := s.sealResult(sealed); ok {
+		if _, _, _, ok := s.sealResult(sealed); ok {
 			t.Fatal("divergent seal was accepted")
 		}
 	})
@@ -227,7 +227,7 @@ func TestSealResultFallbackAndMismatch(t *testing.T) {
 		sealed.Root = env.statedb.IntermediateRoot(env.evm.ChainConfig().IsEIP158(env.header.Number))
 		sealed.TxHash[0] ^= 0xff
 		s := &session{consumer: &Consumer{chain: h.chain, index: NewIndex()}, env: env}
-		if _, _, ok := s.sealResult(sealed); ok {
+		if _, _, _, ok := s.sealResult(sealed); ok {
 			t.Fatal("divergent body was accepted")
 		}
 	})

@@ -219,6 +219,9 @@ func effectiveGasPrice(tx *types.Transaction, baseFee *big.Int) *big.Int {
 
 var errSealMismatch = errors.New("sealed header diverges from re-execution")
 var errCachedFinalizationUnavailable = errors.New("cached sprint finalization input unavailable")
+var errSealVerificationDeferred = errors.New("sealed header verification deferred")
+
+var preconfSealVerifyTimeout = 250 * time.Millisecond
 
 type speculativeFinalizationChain struct {
 	*core.BlockChain
@@ -397,27 +400,52 @@ func (s *session) indexPublishedTransactions() []*types.Log {
 	return logs
 }
 
-func (s *session) sealResult(sealed *types.Header) (*types.Block, *ReusableExecution, bool) {
+func (c *Consumer) verifyPreconfSeal(headers consensus.ChainHeaderReader, sealed *types.Header) error {
+	if !c.sealVerify.CompareAndSwap(false, true) {
+		return errSealVerificationDeferred
+	}
+	result := make(chan error, 1)
+	go func() {
+		result <- c.chain.Engine().VerifyHeader(headers, sealed)
+		c.sealVerify.Store(false)
+	}()
+	select {
+	case err := <-result:
+		return err
+	case <-time.After(preconfSealVerifyTimeout):
+		return errSealVerificationDeferred
+	}
+}
+
+func (s *session) sealResult(sealed *types.Header) (*types.Block, *ReusableExecution, bool, bool) {
 	headers := &speculativeHeaderChain{ChainHeaderReader: s.consumer.chain, headers: s.verified}
-	if err := s.consumer.chain.Engine().VerifyHeader(headers, sealed); err != nil {
+	if err := s.consumer.verifyPreconfSeal(headers, sealed); err != nil {
+		if errors.Is(err, errSealVerificationDeferred) {
+			assembled, _, err := s.env.finalizeVerifiedSeal(s.consumer.chain, sealed)
+			if err == nil {
+				return assembled, nil, false, true
+			}
+			s.skip(s.env.header.Number.Uint64(), "sealed header verification deferred and finalization failed", "err", err)
+			return nil, nil, false, false
+		}
 		s.skip(s.env.header.Number.Uint64(), "sealed header verification failed", "err", err)
-		return nil, nil, false
+		return nil, nil, false, false
 	}
 	assembled, reusable, err := s.env.finalizeVerifiedSeal(s.consumer.chain, sealed)
 	if err == nil {
-		return assembled, reusable, true
+		return assembled, reusable, true, true
 	}
 	checkErr := s.env.checkSeal(sealed)
 	if checkErr != nil {
 		s.skip(s.env.header.Number.Uint64(), "seal cross-check failed", "err", checkErr)
-		return nil, nil, false
+		return nil, nil, false, false
 	}
 	assembled, err = blockFromExecution(sealed, s.env.txs, s.env.receipts)
 	if err != nil || assembled.Hash() != sealed.Hash() {
 		s.skip(s.env.header.Number.Uint64(), "sealed block body mismatch", "err", err)
-		return nil, nil, false
+		return nil, nil, false, false
 	}
-	return assembled, nil, true
+	return assembled, nil, true, true
 }
 
 func bigEqual(a, b *big.Int) bool {
