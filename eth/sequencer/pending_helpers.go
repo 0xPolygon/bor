@@ -46,6 +46,9 @@ func removedLogs(view *PendingRPCView) []*types.Log {
 	}
 	logs := make([]*types.Log, len(view.Logs))
 	for index, entry := range view.Logs {
+		if entry == nil {
+			continue
+		}
 		copy := *entry
 		copy.Removed = true
 		logs[index] = &copy
