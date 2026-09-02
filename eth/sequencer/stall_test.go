@@ -162,3 +162,57 @@ func TestRedialAfterProlongedSilence(t *testing.T) {
 	publishBlock(t, p, 2, first.Hash(), 2)
 	waitHead(t, h, p, 10*time.Second)
 }
+
+// The ack-stall watchdog measures how long the current batch of acks has been
+// outstanding, not the idle gap before it. sent() opening a fresh wait
+// (inflight 0→1) must restart the clock, or the first entry sent after a quiet
+// stretch longer than the deadline reads as stalled the instant it goes out —
+// the store never gets its window to ack — and the watchdog resets a healthy
+// low-load stream, the break behind the auditor's phantom reorg at 51933.
+func TestStallTrackerIgnoresIdleGapBeforeAFreshSend(t *testing.T) {
+	deadline := 5 * time.Second
+	tr := newStallTracker()
+
+	// A quiet stretch longer than the deadline, nothing in flight.
+	idle := time.Now().Add(-10 * time.Second)
+	tr.lastAck.Store(idle.UnixNano())
+
+	if tr.stalled(deadline) {
+		t.Fatal("an idle stream with nothing in flight must not read as stalled")
+	}
+
+	// The first entry after the lull opens a fresh wait: the clock restarts,
+	// so it is not instantly stalled before the store can ack.
+	tr.sent()
+
+	if tr.stalled(deadline) {
+		t.Fatal("the first send after an idle gap tripped the watchdog before " +
+			"the store had any chance to ack")
+	}
+
+	// A store that then genuinely withholds the ack past the deadline still
+	// trips: the clock measures this outstanding entry.
+	tr.lastAck.Store(time.Now().Add(-10 * time.Second).UnixNano())
+
+	if !tr.stalled(deadline) {
+		t.Fatal("a real ack drought on an in-flight entry must still stall")
+	}
+}
+
+// Sends that pipeline onto an existing wait must not restart the clock — only
+// a fresh wait does — so a hung store we keep feeding still trips the watchdog.
+func TestStallTrackerPipelinedSendKeepsTheClock(t *testing.T) {
+	deadline := 5 * time.Second
+	tr := newStallTracker()
+
+	tr.sent() // inflight 0→1, clock fresh
+
+	// The entry sits unacked past the deadline while a second entry pipelines
+	// behind it; the second send must not reset the wait.
+	tr.lastAck.Store(time.Now().Add(-10 * time.Second).UnixNano())
+	tr.sent() // inflight 1→2
+
+	if !tr.stalled(deadline) {
+		t.Fatal("a pipelined send reset the stall clock and masked a hung store")
+	}
+}
