@@ -744,47 +744,56 @@ func (p *ethPeer) doWitnessRequest(
 		<-witReqSem
 		return err
 	}
-
 	witReqsWg.Add(1)
-
-	go func() {
-		var witRes *wit.Response
-		select {
-		case witRes = <-witResCh:
-		case <-cancel:
-			witReqsWg.Done()
-			<-witReqSem
-			return
-		}
-
-		// Unblock the wit dispatcher now that we've received the response.
-		// Select with cancel to avoid blocking if Done is unbuffered and
-		// the dispatcher has already exited.
-		if witRes != nil && witRes.Done != nil {
-			select {
-			case witRes.Done <- nil:
-			case <-cancel:
-				witReqsWg.Done()
-				<-witReqSem
-				return
-			}
-		}
-
-		select {
-		case witReqResCh <- &witReqRes{Request: request, Response: witRes}:
-		case <-cancel:
-			witReqsWg.Done()
-			<-witReqSem
-		}
-	}()
+	go awaitWitnessResponse(request, witResCh, witReqResCh, witReqsWg, witReqSem, cancel)
 
 	mapsMu.Lock()
 	*witReqs = append(*witReqs, witReq)
-
 	if page >= witTotalRequest[hash] {
 		witTotalRequest[hash]++
 	}
 	mapsMu.Unlock()
-
 	return nil
+}
+
+// awaitWitnessResponse runs in a dedicated goroutine per outstanding witness
+// request. It waits for the peer's response (or cancel), unblocks the wit
+// dispatcher, and forwards the result on witReqResCh. On cancel at any
+// step we release the waitgroup + semaphore so the caller isn't wedged;
+// on successful delivery the consumer of witReqResCh owns that release.
+func awaitWitnessResponse(
+	request []wit.WitnessPageRequest,
+	witResCh <-chan *wit.Response,
+	witReqResCh chan *witReqRes,
+	witReqsWg *sync.WaitGroup,
+	witReqSem chan int,
+	cancel <-chan struct{},
+) {
+	releaseOnCancel := func() {
+		witReqsWg.Done()
+		<-witReqSem
+	}
+	var witRes *wit.Response
+	select {
+	case witRes = <-witResCh:
+	case <-cancel:
+		releaseOnCancel()
+		return
+	}
+	// Unblock the wit dispatcher now that we've received the response.
+	// Select with cancel to avoid blocking if Done is unbuffered and the
+	// dispatcher has already exited.
+	if witRes != nil && witRes.Done != nil {
+		select {
+		case witRes.Done <- nil:
+		case <-cancel:
+			releaseOnCancel()
+			return
+		}
+	}
+	select {
+	case witReqResCh <- &witReqRes{Request: request, Response: witRes}:
+	case <-cancel:
+		releaseOnCancel()
+	}
 }

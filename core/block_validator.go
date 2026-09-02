@@ -19,13 +19,20 @@ package core
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/trie"
 )
+
+// intermediateRootTimer may record 2 samples per block on close V1/V2
+// races where the loser also reaches ValidateState before cancel().
+// Count and rate inflate up to ~2x; mean/p99 stay representative.
+var intermediateRootTimer = metrics.NewRegisteredTimer("chain/intermediateroot", nil)
 
 // BlockValidator is responsible for validating block headers, uncles and
 // processed state.
@@ -127,6 +134,37 @@ func (v *BlockValidator) ValidateBody(block *types.Block) error {
 	return nil
 }
 
+// ValidateStateCheap validates the cheap (non-trie) post-state checks: gas used,
+// bloom filter, receipt root, and requests hash. It does NOT compute the state
+// root (IntermediateRoot), which is the expensive operation. Used by the pipelined
+// import path where IntermediateRoot is deferred to a background SRC goroutine.
+func (v *BlockValidator) ValidateStateCheap(block *types.Block, statedb *state.StateDB, res *ProcessResult) error {
+	if res == nil {
+		return errors.New("nil ProcessResult value")
+	}
+	header := block.Header()
+	if block.GasUsed() != res.GasUsed {
+		return fmt.Errorf("%w (remote: %d local: %d)", ErrGasUsedMismatch, block.GasUsed(), res.GasUsed)
+	}
+	rbloom := types.MergeBloom(res.Receipts)
+	if rbloom != header.Bloom {
+		return fmt.Errorf("%w (remote: %x  local: %x)", ErrBloomMismatch, header.Bloom, rbloom)
+	}
+	receiptSha := types.DeriveSha(res.Receipts, trie.NewStackTrie(nil))
+	if receiptSha != header.ReceiptHash {
+		return fmt.Errorf("%w (remote: %x local: %x)", ErrReceiptRootMismatch, header.ReceiptHash, receiptSha)
+	}
+	if header.RequestsHash != nil {
+		reqhash := types.CalcRequestsHash(res.Requests)
+		if reqhash != *header.RequestsHash {
+			return fmt.Errorf("%w (remote: %x local: %x)", ErrRequestsHashMismatch, *header.RequestsHash, reqhash)
+		}
+	} else if res.Requests != nil {
+		return errors.New("block has requests before prague fork")
+	}
+	return nil
+}
+
 // ValidateState validates the various changes that happen after a state transition,
 // such as amount of used gas, the receipt roots and the state root itself.
 func (v *BlockValidator) ValidateState(block *types.Block, statedb *state.StateDB, res *ProcessResult, stateless bool) error {
@@ -168,7 +206,10 @@ func (v *BlockValidator) ValidateState(block *types.Block, statedb *state.StateD
 	}
 	// Validate the state root against the received state root and throw
 	// an error if they don't match.
-	if root := statedb.IntermediateRoot(v.config.IsEIP158(header.Number)); header.Root != root {
+	irStart := time.Now()
+	root := statedb.IntermediateRoot(v.config.IsEIP158(header.Number))
+	intermediateRootTimer.UpdateSince(irStart)
+	if header.Root != root {
 		return fmt.Errorf("invalid merkle root (remote: %x local: %x) dberr: %w", header.Root, root, statedb.Error())
 	}
 

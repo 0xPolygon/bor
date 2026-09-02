@@ -190,7 +190,7 @@ type blockAnnouncementPeer interface {
 
 type txFetchPeer interface {
 	ID() string
-	RequestTxs([]common.Hash) error
+	RequestTxs(uint64, []common.Hash) error
 }
 
 type blockBodyFetchPeer interface {
@@ -942,8 +942,8 @@ func triggerBlockAnnouncementToPeers(peers []blockAnnouncementPeer, hash common.
 }
 
 func triggerTxFetchToPeers(peers []txFetchPeer, hashes []common.Hash) error {
-	for _, peer := range peers {
-		if err := peer.RequestTxs(hashes); err != nil {
+	for i, peer := range peers {
+		if err := peer.RequestTxs(uint64(i+1), hashes); err != nil {
 			return fmt.Errorf("request transactions from peer %s: %w", peer.ID(), err)
 		}
 	}

@@ -53,6 +53,7 @@ test_meter 0
 test_resetting_timer_count 6
 
 # TYPE test_resetting_timer summary
+test_resetting_timer {quantile="0.25"} 1.075e+07
 test_resetting_timer {quantile="0.5"} 1.25e+07
 test_resetting_timer {quantile="0.75"} 4.05e+07
 test_resetting_timer {quantile="0.95"} 1.2e+08
@@ -64,6 +65,7 @@ test_resetting_timer {quantile="0.9999"} 1.2e+08
 test_timer_count 6
 
 # TYPE test_timer summary
+test_timer {quantile="0.25"} 2.075e+07
 test_timer {quantile="0.5"} 2.25e+07
 test_timer {quantile="0.75"} 4.8e+07
 test_timer {quantile="0.95"} 1.2e+08

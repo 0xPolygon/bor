@@ -64,7 +64,7 @@ func TestBlockchain(t *testing.T) {
 	bt.skipLoad(`.*\.meta/.*`)
 
 	bt.walk(t, blockTestDir, func(t *testing.T, name string, test *BlockTest) {
-		execBlockTest(t, bt, test)
+		execBlockTest(t, bt, test, false)
 	})
 	// There is also a LegacyTests folder, containing blockchain tests generated
 	// prior to Istanbul. However, they are all derived from GeneralStateTests,
@@ -83,11 +83,34 @@ func TestExecutionSpecBlocktests(t *testing.T) {
 	bt.skipLoad(".*prague/eip7002_el_triggerable_withdrawals/test_system_contract_deployment.json")
 
 	bt.walk(t, executionSpecBlockchainTestDir, func(t *testing.T, name string, test *BlockTest) {
-		execBlockTest(t, bt, test)
+		execBlockTest(t, bt, test, false)
 	})
 }
 
-func execBlockTest(t *testing.T, bt *testMatcher, test *BlockTest) {
+// TestExecutionSpecBlocktestsV2 runs the same fixtures as
+// TestExecutionSpecBlocktests but forces every block through V2 BlockSTM
+// (NewParallelBlockChain with enforce=true). The pass/fail set must be
+// identical to the serial baseline — any test that passes serial and fails
+// V2 is a V2 BlockSTM regression. Bor-vs-Ethereum-spec divergences (PoA
+// engine, fork-schedule differences, missing system contracts) fail
+// uniformly on both runs and cancel out of the differential.
+func TestExecutionSpecBlocktestsV2(t *testing.T) {
+	if !common.FileExist(executionSpecBlockchainTestDir) {
+		t.Skipf("directory %s does not exist", executionSpecBlockchainTestDir)
+	}
+	bt := new(testMatcher)
+
+	// Same skip list as the serial path so the differential compares
+	// like-for-like. Any difference in the skip set would mask a divergence.
+	bt.skipLoad(".*prague/eip7251_consolidations/test_system_contract_deployment.json")
+	bt.skipLoad(".*prague/eip7002_el_triggerable_withdrawals/test_system_contract_deployment.json")
+
+	bt.walk(t, executionSpecBlockchainTestDir, func(t *testing.T, name string, test *BlockTest) {
+		execBlockTest(t, bt, test, true)
+	})
+}
+
+func execBlockTest(t *testing.T, bt *testMatcher, test *BlockTest, useV2 bool) {
 	// Define all the different flag combinations we should run the tests with,
 	// picking only one for short tests.
 	//
@@ -103,8 +126,14 @@ func execBlockTest(t *testing.T, bt *testMatcher, test *BlockTest) {
 	}
 	for _, snapshot := range snapshotConf {
 		for _, dbscheme := range dbschemeConf {
-			if err := bt.checkFailure(t, test.Run(snapshot, dbscheme, true, nil, nil)); err != nil {
-				t.Errorf("test with config {snapshotter:%v, scheme:%v} failed: %v", snapshot, dbscheme, err)
+			var err error
+			if useV2 {
+				err = test.RunV2(snapshot, dbscheme, true, nil, nil)
+			} else {
+				err = test.Run(snapshot, dbscheme, true, nil, nil)
+			}
+			if err := bt.checkFailure(t, err); err != nil {
+				t.Errorf("test with config {snapshotter:%v, scheme:%v, useV2:%v} failed: %v", snapshot, dbscheme, useV2, err)
 				return
 			}
 		}

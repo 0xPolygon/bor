@@ -64,9 +64,10 @@ type doTxNotify struct {
 	sizes  []uint32
 }
 type doTxEnqueue struct {
-	peer   string
-	txs    []*types.Transaction
-	direct bool
+	peer           string
+	txs            []*types.Transaction
+	direct         bool
+	wrongRequestID bool
 }
 type doWait struct {
 	time time.Duration
@@ -103,7 +104,7 @@ func TestTransactionFetcherWaiting(t *testing.T) {
 			return NewTxFetcher(
 				func(common.Hash) bool { return false },
 				nil,
-				func(string, []common.Hash) error { return nil },
+				func(string, uint64, []common.Hash) error { return nil },
 				nil,
 			)
 		},
@@ -305,7 +306,7 @@ func TestTransactionFetcherSkipWaiting(t *testing.T) {
 			return NewTxFetcher(
 				func(common.Hash) bool { return false },
 				nil,
-				func(string, []common.Hash) error { return nil },
+				func(string, uint64, []common.Hash) error { return nil },
 				nil,
 			)
 		},
@@ -395,7 +396,7 @@ func TestTransactionFetcherSingletonRequesting(t *testing.T) {
 			return NewTxFetcher(
 				func(common.Hash) bool { return false },
 				nil,
-				func(string, []common.Hash) error { return nil },
+				func(string, uint64, []common.Hash) error { return nil },
 				nil,
 			)
 		},
@@ -501,7 +502,7 @@ func TestTransactionFetcherFailedRescheduling(t *testing.T) {
 			return NewTxFetcher(
 				func(common.Hash) bool { return false },
 				nil,
-				func(origin string, hashes []common.Hash) error {
+				func(origin string, requestID uint64, hashes []common.Hash) error {
 					<-proceed
 					return errors.New("peer disconnected")
 				},
@@ -587,7 +588,7 @@ func TestTransactionFetcherCleanup(t *testing.T) {
 				func(txs []*types.Transaction) []error {
 					return make([]error, len(txs))
 				},
-				func(string, []common.Hash) error { return nil },
+				func(string, uint64, []common.Hash) error { return nil },
 				nil,
 			)
 		},
@@ -631,7 +632,7 @@ func TestTransactionFetcherCleanupEmpty(t *testing.T) {
 				func(txs []*types.Transaction) []error {
 					return make([]error, len(txs))
 				},
-				func(string, []common.Hash) error { return nil },
+				func(string, uint64, []common.Hash) error { return nil },
 				nil,
 			)
 		},
@@ -674,7 +675,7 @@ func TestTransactionFetcherMissingRescheduling(t *testing.T) {
 				func(txs []*types.Transaction) []error {
 					return make([]error, len(txs))
 				},
-				func(string, []common.Hash) error { return nil },
+				func(string, uint64, []common.Hash) error { return nil },
 				nil,
 			)
 		},
@@ -735,7 +736,7 @@ func TestTransactionFetcherMissingCleanup(t *testing.T) {
 				func(txs []*types.Transaction) []error {
 					return make([]error, len(txs))
 				},
-				func(string, []common.Hash) error { return nil },
+				func(string, uint64, []common.Hash) error { return nil },
 				nil,
 			)
 		},
@@ -784,7 +785,7 @@ func TestTransactionFetcherBroadcasts(t *testing.T) {
 				func(txs []*types.Transaction) []error {
 					return make([]error, len(txs))
 				},
-				func(string, []common.Hash) error { return nil },
+				func(string, uint64, []common.Hash) error { return nil },
 				nil,
 			)
 		},
@@ -838,7 +839,7 @@ func TestTransactionFetcherWaitTimerResets(t *testing.T) {
 			return NewTxFetcher(
 				func(common.Hash) bool { return false },
 				nil,
-				func(string, []common.Hash) error { return nil },
+				func(string, uint64, []common.Hash) error { return nil },
 				nil,
 			)
 		},
@@ -910,7 +911,7 @@ func TestTransactionFetcherTimeoutRescheduling(t *testing.T) {
 				func(txs []*types.Transaction) []error {
 					return make([]error, len(txs))
 				},
-				func(string, []common.Hash) error { return nil },
+				func(string, uint64, []common.Hash) error { return nil },
 				nil,
 			)
 		},
@@ -986,7 +987,7 @@ func TestTransactionFetcherTimeoutTimerResets(t *testing.T) {
 			return NewTxFetcher(
 				func(common.Hash) bool { return false },
 				nil,
-				func(string, []common.Hash) error { return nil },
+				func(string, uint64, []common.Hash) error { return nil },
 				nil,
 			)
 		},
@@ -1064,7 +1065,7 @@ func TestTransactionFetcherRateLimiting(t *testing.T) {
 			return NewTxFetcher(
 				func(common.Hash) bool { return false },
 				nil,
-				func(string, []common.Hash) error { return nil },
+				func(string, uint64, []common.Hash) error { return nil },
 				nil,
 			)
 		},
@@ -1094,7 +1095,7 @@ func TestTransactionFetcherBandwidthLimiting(t *testing.T) {
 			return NewTxFetcher(
 				func(common.Hash) bool { return false },
 				nil,
-				func(string, []common.Hash) error { return nil },
+				func(string, uint64, []common.Hash) error { return nil },
 				nil,
 			)
 		},
@@ -1193,7 +1194,7 @@ func TestTransactionFetcherDoSProtection(t *testing.T) {
 			return NewTxFetcher(
 				func(common.Hash) bool { return false },
 				nil,
-				func(string, []common.Hash) error { return nil },
+				func(string, uint64, []common.Hash) error { return nil },
 				nil,
 			)
 		},
@@ -1267,7 +1268,7 @@ func TestTransactionFetcherAnnouncementCapMatchesSenderQueue(t *testing.T) {
 			return NewTxFetcher(
 				func(common.Hash) bool { return false },
 				nil,
-				func(string, []common.Hash) error { return nil },
+				func(string, uint64, []common.Hash) error { return nil },
 				nil,
 			)
 		},
@@ -1302,7 +1303,7 @@ func TestTransactionFetcherFullCapDropsBatch(t *testing.T) {
 			return NewTxFetcher(
 				func(common.Hash) bool { return false },
 				nil,
-				func(string, []common.Hash) error { return nil },
+				func(string, uint64, []common.Hash) error { return nil },
 				nil,
 			)
 		},
@@ -1346,7 +1347,7 @@ func TestTransactionFetcherRequestsTransactionsOverBulkLane(t *testing.T) {
 			if origin != "peerA" {
 				t.Fatalf("unexpected fetch origin: got %s want peerA", origin)
 			}
-			return peer.RequestTxs(hashes)
+			return peer.RequestTxs(1, hashes)
 		},
 		nil,
 		clock,
@@ -1422,7 +1423,7 @@ func TestTransactionFetcherPartialBatchTrimming(t *testing.T) {
 			return NewTxFetcher(
 				func(common.Hash) bool { return false },
 				nil,
-				func(string, []common.Hash) error { return nil },
+				func(string, uint64, []common.Hash) error { return nil },
 				nil,
 			)
 		},
@@ -1475,7 +1476,7 @@ func TestTransactionFetcherPerPeerCapIndependence(t *testing.T) {
 			return NewTxFetcher(
 				func(common.Hash) bool { return false },
 				nil,
-				func(string, []common.Hash) error { return nil },
+				func(string, uint64, []common.Hash) error { return nil },
 				nil,
 			)
 		},
@@ -1537,7 +1538,7 @@ func TestTransactionFetcherCapSpansWaitAndScheduled(t *testing.T) {
 			return NewTxFetcher(
 				func(common.Hash) bool { return false },
 				nil,
-				func(string, []common.Hash) error { return nil },
+				func(string, uint64, []common.Hash) error { return nil },
 				nil,
 			)
 		},
@@ -1579,7 +1580,7 @@ func TestTransactionFetcherUnderpricedDedup(t *testing.T) {
 					}
 					return errs
 				},
-				func(string, []common.Hash) error { return nil },
+				func(string, uint64, []common.Hash) error { return nil },
 				nil,
 			)
 		},
@@ -1674,7 +1675,7 @@ func TestTransactionFetcherUnderpricedDoSProtection(t *testing.T) {
 					}
 					return errs
 				},
-				func(string, []common.Hash) error { return nil },
+				func(string, uint64, []common.Hash) error { return nil },
 				nil,
 			)
 		},
@@ -1702,7 +1703,7 @@ func TestTransactionFetcherOutOfBoundDeliveries(t *testing.T) {
 				func(txs []*types.Transaction) []error {
 					return make([]error, len(txs))
 				},
-				func(string, []common.Hash) error { return nil },
+				func(string, uint64, []common.Hash) error { return nil },
 				nil,
 			)
 		},
@@ -1761,7 +1762,7 @@ func TestTransactionFetcherDrop(t *testing.T) {
 				func(txs []*types.Transaction) []error {
 					return make([]error, len(txs))
 				},
-				func(string, []common.Hash) error { return nil },
+				func(string, uint64, []common.Hash) error { return nil },
 				nil,
 			)
 		},
@@ -1835,7 +1836,7 @@ func TestTransactionFetcherDropRescheduling(t *testing.T) {
 				func(txs []*types.Transaction) []error {
 					return make([]error, len(txs))
 				},
-				func(string, []common.Hash) error { return nil },
+				func(string, uint64, []common.Hash) error { return nil },
 				nil,
 			)
 		},
@@ -1881,7 +1882,7 @@ func TestInvalidAnnounceMetadata(t *testing.T) {
 				func(txs []*types.Transaction) []error {
 					return make([]error, len(txs))
 				},
-				func(string, []common.Hash) error { return nil },
+				func(string, uint64, []common.Hash) error { return nil },
 				func(peer string) { drop <- peer },
 			)
 		},
@@ -1964,7 +1965,7 @@ func TestTransactionFetcherFuzzCrash01(t *testing.T) {
 				func(txs []*types.Transaction) []error {
 					return make([]error, len(txs))
 				},
-				func(string, []common.Hash) error { return nil },
+				func(string, uint64, []common.Hash) error { return nil },
 				nil,
 			)
 		},
@@ -1992,7 +1993,7 @@ func TestTransactionFetcherFuzzCrash02(t *testing.T) {
 				func(txs []*types.Transaction) []error {
 					return make([]error, len(txs))
 				},
-				func(string, []common.Hash) error { return nil },
+				func(string, uint64, []common.Hash) error { return nil },
 				nil,
 			)
 		},
@@ -2022,7 +2023,7 @@ func TestTransactionFetcherFuzzCrash03(t *testing.T) {
 				func(txs []*types.Transaction) []error {
 					return make([]error, len(txs))
 				},
-				func(string, []common.Hash) error { return nil },
+				func(string, uint64, []common.Hash) error { return nil },
 				nil,
 			)
 		},
@@ -2061,7 +2062,7 @@ func TestTransactionFetcherFuzzCrash04(t *testing.T) {
 				func(txs []*types.Transaction) []error {
 					return make([]error, len(txs))
 				},
-				func(string, []common.Hash) error {
+				func(string, uint64, []common.Hash) error {
 					<-proceed
 					return errors.New("peer disconnected")
 				},
@@ -2095,7 +2096,7 @@ func TestBlobTransactionAnnounce(t *testing.T) {
 			return NewTxFetcher(
 				func(common.Hash) bool { return false },
 				nil,
-				func(string, []common.Hash) error { return nil },
+				func(string, uint64, []common.Hash) error { return nil },
 				nil,
 			)
 		},
@@ -2165,7 +2166,7 @@ func TestTransactionFetcherDropAlternates(t *testing.T) {
 				func(txs []*types.Transaction) []error {
 					return make([]error, len(txs))
 				},
-				func(string, []common.Hash) error { return nil },
+				func(string, uint64, []common.Hash) error { return nil },
 				nil,
 			)
 		},
@@ -2252,7 +2253,7 @@ func TestTransactionProtocolViolation(t *testing.T) {
 					}
 					return errs
 				},
-				func(a string, b []common.Hash) error {
+				func(a string, requestID uint64, b []common.Hash) error {
 					return nil
 				},
 				func(peer string) { drop <- struct{}{} },
@@ -2361,7 +2362,16 @@ func testTransactionFetcher(t *testing.T, tt txFetcherTest) {
 			}
 
 		case doTxEnqueue:
-			if err := fetcher.Enqueue(step.peer, step.txs, step.direct); err != nil {
+			var requestID uint64
+			if step.direct {
+				if req := fetcher.requests[step.peer]; req != nil {
+					requestID = req.requestID
+					if step.wrongRequestID {
+						requestID++
+					}
+				}
+			}
+			if err := fetcher.Enqueue(step.peer, step.txs, step.direct, requestID); err != nil {
 				t.Errorf("step %d: %v", i, err)
 			}
 
@@ -2714,7 +2724,7 @@ func TestTransactionForgotten(t *testing.T) {
 			}
 			return errs
 		},
-		func(string, []common.Hash) error { return nil },
+		func(string, uint64, []common.Hash) error { return nil },
 		func(string) {},
 		mockClock,
 		mockTime,
@@ -2732,7 +2742,7 @@ func TestTransactionForgotten(t *testing.T) {
 	tx2.SetTime(now)
 
 	// Initial state: both transactions should be marked as underpriced
-	if err := fetcher.Enqueue("peer", []*types.Transaction{tx1, tx2}, false); err != nil {
+	if err := fetcher.Enqueue("peer", []*types.Transaction{tx1, tx2}, false, 0); err != nil {
 		t.Fatal(err)
 	}
 	if !fetcher.isKnownUnderpriced(tx1.Hash()) {
@@ -2781,7 +2791,7 @@ func TestTransactionForgotten(t *testing.T) {
 
 	// Re-enqueue tx1 with updated timestamp
 	tx1.SetTime(mockTime())
-	if err := fetcher.Enqueue("peer", []*types.Transaction{tx1}, false); err != nil {
+	if err := fetcher.Enqueue("peer", []*types.Transaction{tx1}, false, 0); err != nil {
 		t.Fatal(err)
 	}
 	if !fetcher.isKnownUnderpriced(tx1.Hash()) {
@@ -2794,5 +2804,769 @@ func TestTransactionForgotten(t *testing.T) {
 	// Verify final cache state
 	if size := fetcher.underpriced.Len(); size != 1 {
 		t.Errorf("wrong final underpriced cache size: got %d, want 1", size)
+	}
+}
+
+// Tests that once a peer's in-flight transaction request times out without a
+// reply (dangling), that peer stays excluded from retrievals for a bounded grace period (txFetchDanglingRetry).
+// New announcements from it pile up in the tracking set without being
+// promoted to an actual fetch, but is automatically retried once that grace
+// period elapses, with no external disconnect required.
+//
+// This matters because a peer whose underlying connection lingers half-alive
+// (TCP session up, but unresponsive to GetPooledTransactions, plausible right
+// after a burst of simultaneous peer churn) would otherwise never get a second
+// chance: prior to txFetchDanglingRetry existing, nothing in this fetcher ever
+// retried a dangling peer on its own, only an explicit Drop (peer disconnect)
+// or the original stale reply finally arriving cleared it, which, on a real
+// network, could mean the peer's backlog never refills until something external
+// forces a reconnect.
+func TestTransactionFetcherDanglingPeerRetriedAfterGracePeriod(t *testing.T) {
+	testTransactionFetcherParallel(t, txFetcherTest{
+		init: func() *TxFetcher {
+			return NewTxFetcher(
+				func(common.Hash) bool { return false },
+				nil,
+				func(string, uint64, []common.Hash) error { return nil }, // "sent" successfully, but never replies
+				nil,
+			)
+		},
+		steps: []interface{}{
+			// Peer A announces and gets scheduled for a fetch that never returns.
+			doTxNotify{peer: "A", hashes: []common.Hash{{0x01}}, types: []byte{types.LegacyTxType}, sizes: []uint32{111}},
+			doWait{time: testTxArrivalWait, step: true},
+			isScheduled{
+				tracking: map[string][]announce{"A": {{common.Hash{0x01}, types.LegacyTxType, 111}}},
+				fetching: map[string][]common.Hash{"A": {{0x01}}},
+			},
+
+			// The request times out; peer A becomes dangling.
+			doWait{time: txFetchTimeout, step: true},
+			isScheduled{
+				tracking: nil,
+				fetching: nil,
+				dangling: map[string][]common.Hash{"A": {}},
+			},
+
+			// Peer A announces new hashes while still within the grace period.
+			// They get tracked but are not promoted to fetching yet.
+			doTxNotify{peer: "A", hashes: []common.Hash{{0x02}}, types: []byte{types.LegacyTxType}, sizes: []uint32{222}},
+			doWait{time: testTxArrivalWait, step: true},
+			isScheduled{
+				tracking: map[string][]announce{"A": {{common.Hash{0x02}, types.LegacyTxType, 222}}},
+				fetching: nil,
+				dangling: map[string][]common.Hash{"A": {}},
+			},
+			doTxNotify{peer: "A", hashes: []common.Hash{{0x03}}, types: []byte{types.LegacyTxType}, sizes: []uint32{333}},
+			doWait{time: testTxArrivalWait, step: true},
+
+			// Advance through more reschedule cycles (the "every 5 secs" loop the
+			// doc comment on rescheduleTimeout describes) that still fall short of
+			// txFetchDanglingRetry, so the peer is still stuck, exactly like before
+			// this fix.
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			isScheduled{
+				tracking: map[string][]announce{"A": {
+					{common.Hash{0x02}, types.LegacyTxType, 222},
+					{common.Hash{0x03}, types.LegacyTxType, 333},
+				}},
+				fetching: nil,
+				dangling: map[string][]common.Hash{"A": {}},
+			},
+
+			// One more cycle crosses txFetchDanglingRetry: the periodic reschedule
+			// itself retries peer A with everything it currently has tracked, no
+			// Drop or new announcement required.
+			doWait{time: txFetchTimeout, step: true},
+			isScheduled{
+				tracking: map[string][]announce{"A": {
+					{common.Hash{0x02}, types.LegacyTxType, 222},
+					{common.Hash{0x03}, types.LegacyTxType, 333},
+				}},
+				fetching: map[string][]common.Hash{"A": {{0x02}, {0x03}}},
+			},
+		},
+	})
+}
+
+// TestTransactionFetcherDanglingPeerClearedByDrop tests that an explicit disconnect (Drop),
+// e.g. restarting bor, still clears a dangling peer's placeholder instantly,
+// as an alternative to waiting out txFetchDanglingRetry.
+func TestTransactionFetcherDanglingPeerClearedByDrop(t *testing.T) {
+	testTransactionFetcherParallel(t, txFetcherTest{
+		init: func() *TxFetcher {
+			return NewTxFetcher(
+				func(common.Hash) bool { return false },
+				nil,
+				func(string, uint64, []common.Hash) error { return nil },
+				nil,
+			)
+		},
+		steps: []interface{}{
+			doTxNotify{peer: "A", hashes: []common.Hash{{0x01}}, types: []byte{types.LegacyTxType}, sizes: []uint32{111}},
+			doWait{time: testTxArrivalWait, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			isScheduled{
+				tracking: nil,
+				fetching: nil,
+				dangling: map[string][]common.Hash{"A": {}},
+			},
+
+			doDrop("A"),
+			doTxNotify{peer: "A", hashes: []common.Hash{{0x04}}, types: []byte{types.LegacyTxType}, sizes: []uint32{444}},
+			doWait{time: testTxArrivalWait, step: true},
+			isScheduled{
+				tracking: map[string][]announce{"A": {{common.Hash{0x04}, types.LegacyTxType, 444}}},
+				fetching: map[string][]common.Hash{"A": {{0x04}}},
+			},
+		},
+	})
+}
+
+// TestTransactionFetcherStaleDeliveryAfterDanglingRetry tests that a very late reply
+// for a request that's since been superseded by a txFetchDanglingRetry retry
+// (a straggler for the abandoned request finally arriving) is discarded
+// rather than clobbering the still-legitimately-in-flight current request's bookkeeping.
+func TestTransactionFetcherStaleDeliveryAfterDanglingRetry(t *testing.T) {
+	testTransactionFetcherParallel(t, txFetcherTest{
+		init: func() *TxFetcher {
+			return NewTxFetcher(
+				func(common.Hash) bool { return false },
+				func(txs []*types.Transaction) []error {
+					return make([]error, len(txs))
+				},
+				func(string, uint64, []common.Hash) error { return nil }, // never replies on its own
+				nil,
+			)
+		},
+		steps: []interface{}{
+			// First request to A goes dangling.
+			doTxNotify{
+				peer:   "A",
+				hashes: []common.Hash{testTxsHashes[0]},
+				types:  []byte{testTxs[0].Type()},
+				sizes:  []uint32{uint32(testTxs[0].Size())},
+			},
+			doWait{time: testTxArrivalWait, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			isScheduled{
+				tracking: nil,
+				fetching: nil,
+				dangling: map[string][]common.Hash{"A": {}},
+			},
+
+			// A new, disjoint hash is announced and, once the grace period passes,
+			// retried as a fresh request to A.
+			doTxNotify{
+				peer:   "A",
+				hashes: []common.Hash{testTxsHashes[1]},
+				types:  []byte{testTxs[1].Type()},
+				sizes:  []uint32{uint32(testTxs[1].Size())},
+			},
+			doWait{time: testTxArrivalWait, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			isScheduled{
+				tracking: map[string][]announce{"A": {{testTxsHashes[1], testTxs[1].Type(), uint32(testTxs[1].Size())}}},
+				fetching: map[string][]common.Hash{"A": {testTxsHashes[1]}},
+			},
+
+			// The original request's stale reply finally straggles in with a
+			// different request ID. It must not be mistaken for a reply to the
+			// current request.
+			doTxEnqueue{peer: "A", txs: []*types.Transaction{testTxs[0]}, direct: true, wrongRequestID: true},
+			isScheduled{
+				tracking: map[string][]announce{"A": {{testTxsHashes[1], testTxs[1].Type(), uint32(testTxs[1].Size())}}},
+				fetching: map[string][]common.Hash{"A": {testTxsHashes[1]}},
+			},
+		},
+	})
+}
+
+// TestTransactionFetcherStaleEmptyDeliveryAfterDanglingRetry tests that a very late empty reply
+// for a request that's since been superseded by a txFetchDanglingRetry retry is discarded too,
+// not just a non-empty disjoint one. Peers skip hashes they don't have, so an empty
+// reply is exactly as valid for the abandoned request as a matching one.
+// Without this, it would be mistaken for a reply to the current request and
+// wrongly clear that request's still-untouched hashes.
+func TestTransactionFetcherStaleEmptyDeliveryAfterDanglingRetry(t *testing.T) {
+	testTransactionFetcherParallel(t, txFetcherTest{
+		init: func() *TxFetcher {
+			return NewTxFetcher(
+				func(common.Hash) bool { return false },
+				func(txs []*types.Transaction) []error {
+					return make([]error, len(txs))
+				},
+				func(string, uint64, []common.Hash) error { return nil }, // never replies on its own
+				nil,
+			)
+		},
+		steps: []interface{}{
+			// First request to A goes dangling.
+			doTxNotify{
+				peer:   "A",
+				hashes: []common.Hash{testTxsHashes[0]},
+				types:  []byte{testTxs[0].Type()},
+				sizes:  []uint32{uint32(testTxs[0].Size())},
+			},
+			doWait{time: testTxArrivalWait, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			isScheduled{
+				tracking: nil,
+				fetching: nil,
+				dangling: map[string][]common.Hash{"A": {}},
+			},
+
+			// A new, disjoint hash is announced and, once the grace period passes,
+			// retried as a fresh request to A.
+			doTxNotify{
+				peer:   "A",
+				hashes: []common.Hash{testTxsHashes[1]},
+				types:  []byte{testTxs[1].Type()},
+				sizes:  []uint32{uint32(testTxs[1].Size())},
+			},
+			doWait{time: testTxArrivalWait, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			isScheduled{
+				tracking: map[string][]announce{"A": {{testTxsHashes[1], testTxs[1].Type(), uint32(testTxs[1].Size())}}},
+				fetching: map[string][]common.Hash{"A": {testTxsHashes[1]}},
+			},
+
+			// The original request's reply finally straggles in with a
+			// different request ID
+			doTxEnqueue{peer: "A", txs: []*types.Transaction{}, direct: true, wrongRequestID: true},
+			isScheduled{
+				tracking: map[string][]announce{"A": {{testTxsHashes[1], testTxs[1].Type(), uint32(testTxs[1].Size())}}},
+				fetching: map[string][]common.Hash{"A": {testTxsHashes[1]}},
+			},
+		},
+	})
+}
+
+func TestTransactionFetcherUnrelatedDeliveryDoesNotResolveDanglingRequest(t *testing.T) {
+	testTransactionFetcherParallel(t, txFetcherTest{
+		init: func() *TxFetcher {
+			return NewTxFetcher(
+				func(common.Hash) bool { return false },
+				func(txs []*types.Transaction) []error {
+					return make([]error, len(txs))
+				},
+				func(string, uint64, []common.Hash) error { return nil },
+				nil,
+			)
+		},
+		steps: []interface{}{
+			doTxNotify{
+				peer:   "A",
+				hashes: []common.Hash{testTxsHashes[0]},
+				types:  []byte{testTxs[0].Type()},
+				sizes:  []uint32{uint32(testTxs[0].Size())},
+			},
+			doWait{time: testTxArrivalWait, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			isScheduled{
+				tracking: nil,
+				fetching: nil,
+				dangling: map[string][]common.Hash{"A": {}},
+			},
+
+			// Unrelated noise from A must not resolve the dangling request.
+			doTxEnqueue{peer: "A", txs: []*types.Transaction{testTxs[2]}, direct: true, wrongRequestID: true},
+			isScheduled{
+				tracking: nil,
+				fetching: nil,
+				dangling: map[string][]common.Hash{"A": {}},
+			},
+
+			doTxNotify{
+				peer:   "A",
+				hashes: []common.Hash{testTxsHashes[1]},
+				types:  []byte{testTxs[1].Type()},
+				sizes:  []uint32{uint32(testTxs[1].Size())},
+			},
+			doWait{time: testTxArrivalWait, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			isScheduled{
+				tracking: map[string][]announce{"A": {{testTxsHashes[1], testTxs[1].Type(), uint32(testTxs[1].Size())}}},
+				fetching: map[string][]common.Hash{"A": {testTxsHashes[1]}},
+			},
+
+			// The original request's true reply must not resolve the fresh request.
+			doTxEnqueue{peer: "A", txs: []*types.Transaction{testTxs[0]}, direct: true, wrongRequestID: true},
+			isScheduled{
+				tracking: map[string][]announce{"A": {{testTxsHashes[1], testTxs[1].Type(), uint32(testTxs[1].Size())}}},
+				fetching: map[string][]common.Hash{"A": {testTxsHashes[1]}},
+			},
+		},
+	})
+}
+
+// TestTransactionFetcherNonOverlappingDeliveryWithoutDanglingRetryIsNotStale tests that
+// a non-overlapping direct delivery for a request that has never
+// gone dangling is not treated as a stale superseded reply.
+func TestTransactionFetcherNonOverlappingDeliveryWithoutDanglingRetryIsNotStale(t *testing.T) {
+	testTransactionFetcherParallel(t, txFetcherTest{
+		init: func() *TxFetcher {
+			return NewTxFetcher(
+				func(common.Hash) bool { return false },
+				func(txs []*types.Transaction) []error {
+					return make([]error, len(txs))
+				},
+				func(string, uint64, []common.Hash) error { return nil },
+				nil,
+			)
+		},
+		steps: []interface{}{
+			doTxNotify{
+				peer:   "A",
+				hashes: []common.Hash{testTxsHashes[0]},
+				types:  []byte{testTxs[0].Type()},
+				sizes:  []uint32{uint32(testTxs[0].Size())},
+			},
+			doWait{time: testTxArrivalWait, step: true},
+			isScheduled{
+				tracking: map[string][]announce{"A": {{testTxsHashes[0], testTxs[0].Type(), uint32(testTxs[0].Size())}}},
+				fetching: map[string][]common.Hash{"A": {testTxsHashes[0]}},
+			},
+
+			// Peer A replies with a hash it was never asked for. The protocol
+			// doesn't guarantee reply-subset-of-request
+			doTxEnqueue{peer: "A", txs: []*types.Transaction{testTxs[1]}, direct: true},
+			isScheduled{nil, nil, nil},
+		},
+	})
+}
+
+// TestTransactionFetcherStaleDeliveryStillChecksViolation tests that a direct delivery
+// with a stale request ID still gets checked for protocol violations before being discarded.
+// A peer must not be able to dodge a drop for an actual violation just by replying to an abandoned request.
+func TestTransactionFetcherStaleDeliveryStillChecksViolation(t *testing.T) {
+	drop := make(chan string, 1)
+	testTransactionFetcherParallel(t, txFetcherTest{
+		init: func() *TxFetcher {
+			return NewTxFetcher(
+				func(common.Hash) bool { return false },
+				func(txs []*types.Transaction) []error {
+					errs := make([]error, len(txs))
+					for i, tx := range txs {
+						if tx.Hash() == testTxsHashes[2] {
+							errs[i] = txpool.ErrKZGVerificationError
+						}
+					}
+					return errs
+				},
+				func(string, uint64, []common.Hash) error { return nil }, // never replies on its own
+				func(peer string) { drop <- peer },
+			)
+		},
+		steps: []interface{}{
+			// First request to A goes dangling.
+			doTxNotify{
+				peer:   "A",
+				hashes: []common.Hash{testTxsHashes[0]},
+				types:  []byte{testTxs[0].Type()},
+				sizes:  []uint32{uint32(testTxs[0].Size())},
+			},
+			doWait{time: testTxArrivalWait, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			isScheduled{
+				tracking: nil,
+				fetching: nil,
+				dangling: map[string][]common.Hash{"A": {}},
+			},
+
+			// A new, disjoint hash is announced and, once the grace period
+			// passes, retried as a fresh request to A.
+			doTxNotify{
+				peer:   "A",
+				hashes: []common.Hash{testTxsHashes[1]},
+				types:  []byte{testTxs[1].Type()},
+				sizes:  []uint32{uint32(testTxs[1].Size())},
+			},
+			doWait{time: testTxArrivalWait, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			isScheduled{
+				tracking: map[string][]announce{"A": {{testTxsHashes[1], testTxs[1].Type(), uint32(testTxs[1].Size())}}},
+				fetching: map[string][]common.Hash{"A": {testTxsHashes[1]}},
+			},
+
+			// A's reply has a stale request ID but also carries a transaction
+			// that fails KZG verification. A must still be dropped for the
+			// violation, and the current request must be left untouched.
+			doTxEnqueue{peer: "A", txs: []*types.Transaction{testTxs[2]}, direct: true, wrongRequestID: true},
+			doFunc(func() {
+				select {
+				case peer := <-drop:
+					if peer != "A" {
+						t.Fatalf("wrong peer dropped: have %v, want A", peer)
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("peer A was not dropped for the protocol violation")
+				}
+			}),
+			isScheduled{
+				tracking: map[string][]announce{"A": {{testTxsHashes[1], testTxs[1].Type(), uint32(testTxs[1].Size())}}},
+				fetching: map[string][]common.Hash{"A": {testTxsHashes[1]}},
+			},
+		},
+	})
+}
+
+// TestTransactionFetcherStaleDeliveryStillChecksAnnouncedMetadata tests that
+// a stale-request-ID direct delivery still runs the shared
+// per-hash announced-metadata comparison, dropping a peer that lied about a
+// transaction's type or size, even though the delivery cannot resolve the
+// (different) currently tracked request.
+func TestTransactionFetcherStaleDeliveryStillChecksAnnouncedMetadata(t *testing.T) {
+	drop := make(chan string, 1)
+	testTransactionFetcherParallel(t, txFetcherTest{
+		init: func() *TxFetcher {
+			return NewTxFetcher(
+				func(common.Hash) bool { return false },
+				func(txs []*types.Transaction) []error {
+					return make([]error, len(txs))
+				},
+				func(string, uint64, []common.Hash) error { return nil }, // never replies on its own
+				func(peer string) { drop <- peer },
+			)
+		},
+		steps: []interface{}{
+			// Announce hash0 to A with a size that doesn't match the real
+			// transaction that will eventually be delivered for it.
+			doTxNotify{
+				peer:   "A",
+				hashes: []common.Hash{testTxsHashes[0]},
+				types:  []byte{testTxs[0].Type()},
+				sizes:  []uint32{uint32(testTxs[0].Size()) + 100},
+			},
+			doWait{time: testTxArrivalWait, step: true},
+			isScheduled{
+				tracking: map[string][]announce{"A": {{testTxsHashes[0], testTxs[0].Type(), uint32(testTxs[0].Size()) + 100}}},
+				fetching: map[string][]common.Hash{"A": {testTxsHashes[0]}},
+			},
+
+			// A replies with a stale request ID carrying the real transaction.
+			// The delivery can't resolve the current request, but the
+			// mismatch between the announced (wrong) size and the actually
+			// delivered transaction must still be caught and A dropped.
+			doTxEnqueue{peer: "A", txs: []*types.Transaction{testTxs[0]}, direct: true, wrongRequestID: true},
+			doFunc(func() {
+				select {
+				case peer := <-drop:
+					if peer != "A" {
+						t.Fatalf("wrong peer dropped: have %v, want A", peer)
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("peer A was not dropped for the announced-metadata mismatch")
+				}
+			}),
+		},
+	})
+}
+
+// TestTransactionFetcherDeliveryViolationDropsPeer tests that a normal,
+// non-superseded direct delivery carrying a protocol violation still drops the peer,
+// via the shared check at the end of the txDelivery case (see dropPeerOnViolation).
+func TestTransactionFetcherDeliveryViolationDropsPeer(t *testing.T) {
+	drop := make(chan string, 1)
+	testTransactionFetcherParallel(t, txFetcherTest{
+		init: func() *TxFetcher {
+			return NewTxFetcher(
+				func(common.Hash) bool { return false },
+				func(txs []*types.Transaction) []error {
+					errs := make([]error, len(txs))
+					for i, tx := range txs {
+						if tx.Hash() == testTxsHashes[0] {
+							errs[i] = txpool.ErrKZGVerificationError
+						}
+					}
+					return errs
+				},
+				func(string, uint64, []common.Hash) error { return nil },
+				func(peer string) { drop <- peer },
+			)
+		},
+		steps: []interface{}{
+			doTxNotify{
+				peer:   "A",
+				hashes: []common.Hash{testTxsHashes[0]},
+				types:  []byte{testTxs[0].Type()},
+				sizes:  []uint32{uint32(testTxs[0].Size())},
+			},
+			doWait{time: testTxArrivalWait, step: true},
+			isScheduled{
+				tracking: map[string][]announce{"A": {{testTxsHashes[0], testTxs[0].Type(), uint32(testTxs[0].Size())}}},
+				fetching: map[string][]common.Hash{"A": {testTxsHashes[0]}},
+			},
+
+			doTxEnqueue{peer: "A", txs: []*types.Transaction{testTxs[0]}, direct: true},
+			doFunc(func() {
+				select {
+				case peer := <-drop:
+					if peer != "A" {
+						t.Fatalf("wrong peer dropped: have %v, want A", peer)
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("peer A was not dropped for the protocol violation")
+				}
+			}),
+		},
+	})
+}
+
+// TestTransactionFetcherGenuineDeliveryAfterDanglingRetryIsNotStale tests that once a peer has been retried
+// after going dangling, a delivery carrying the retried request's ID is still processed normally.
+func TestTransactionFetcherGenuineDeliveryAfterDanglingRetryIsNotStale(t *testing.T) {
+	testTransactionFetcherParallel(t, txFetcherTest{
+		init: func() *TxFetcher {
+			return NewTxFetcher(
+				func(common.Hash) bool { return false },
+				func(txs []*types.Transaction) []error {
+					return make([]error, len(txs))
+				},
+				func(string, uint64, []common.Hash) error { return nil }, // never replies on its own
+				nil,
+			)
+		},
+		steps: []interface{}{
+			// First request to A goes dangling.
+			doTxNotify{
+				peer:   "A",
+				hashes: []common.Hash{testTxsHashes[0]},
+				types:  []byte{testTxs[0].Type()},
+				sizes:  []uint32{uint32(testTxs[0].Size())},
+			},
+			doWait{time: testTxArrivalWait, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			isScheduled{
+				tracking: nil,
+				fetching: nil,
+				dangling: map[string][]common.Hash{"A": {}},
+			},
+
+			// A new hash is announced and, once the grace period passes,
+			// retried as a fresh request to A.
+			doTxNotify{
+				peer:   "A",
+				hashes: []common.Hash{testTxsHashes[1]},
+				types:  []byte{testTxs[1].Type()},
+				sizes:  []uint32{uint32(testTxs[1].Size())},
+			},
+			doWait{time: testTxArrivalWait, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			isScheduled{
+				tracking: map[string][]announce{"A": {{testTxsHashes[1], testTxs[1].Type(), uint32(testTxs[1].Size())}}},
+				fetching: map[string][]common.Hash{"A": {testTxsHashes[1]}},
+			},
+
+			// A correctly answers the current request. This must be processed
+			// as a normal, successful delivery.
+			doTxEnqueue{peer: "A", txs: []*types.Transaction{testTxs[1]}, direct: true},
+			isScheduled{nil, nil, nil},
+		},
+	})
+}
+
+// TestTransactionFetcherStaleDeliveryOverlappingCurrentRequestDoesNotCrash tests that
+// when a peer's dangling request is superseded by a new request
+// for the same hash (not just a disjoint one), a direct reply carrying a
+// request ID that doesn't match the new request (whether that's genuinely
+// the abandoned request's own ID or an arbitrary bad one) does not corrupt the new,
+// live request's own tracked hash. The reply's content still counts (it was
+// already pushed through addTxs before the request-ID check runs), so the
+// hash is marked stolen against the new request rather than being
+// independently rescheduled.
+func TestTransactionFetcherStaleDeliveryOverlappingCurrentRequestDoesNotCrash(t *testing.T) {
+	testTransactionFetcherParallel(t, txFetcherTest{
+		init: func() *TxFetcher {
+			return NewTxFetcher(
+				func(common.Hash) bool { return false },
+				func(txs []*types.Transaction) []error {
+					return make([]error, len(txs))
+				},
+				func(string, uint64, []common.Hash) error { return nil }, // never replies on its own
+				nil,
+			)
+		},
+		steps: []interface{}{
+			// First request to A (for hash0) goes dangling.
+			doTxNotify{
+				peer:   "A",
+				hashes: []common.Hash{testTxsHashes[0]},
+				types:  []byte{testTxs[0].Type()},
+				sizes:  []uint32{uint32(testTxs[0].Size())},
+			},
+			doWait{time: testTxArrivalWait, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			isScheduled{
+				tracking: nil,
+				fetching: nil,
+				dangling: map[string][]common.Hash{"A": {}},
+			},
+
+			// The same hash is re-announced and, once the grace period
+			// passes, retried as a fresh request to A, reusing the exact
+			// hash the abandoned request was for.
+			doTxNotify{
+				peer:   "A",
+				hashes: []common.Hash{testTxsHashes[0]},
+				types:  []byte{testTxs[0].Type()},
+				sizes:  []uint32{uint32(testTxs[0].Size())},
+			},
+			doWait{time: testTxArrivalWait, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			doWait{time: txFetchTimeout, step: true},
+			isScheduled{
+				tracking: map[string][]announce{"A": {{testTxsHashes[0], testTxs[0].Type(), uint32(testTxs[0].Size())}}},
+				fetching: map[string][]common.Hash{"A": {testTxsHashes[0]}},
+			},
+
+			doTxEnqueue{peer: "A", txs: []*types.Transaction{testTxs[0]}, direct: true, wrongRequestID: true},
+			isScheduled{
+				tracking: nil,
+				fetching: nil,
+				dangling: map[string][]common.Hash{"A": {testTxsHashes[0]}},
+			},
+
+			doWait{time: txFetchTimeout, step: true},
+			isScheduled{
+				tracking: nil,
+				fetching: nil,
+				dangling: map[string][]common.Hash{"A": {}},
+			},
+		},
+	})
+}
+
+// TestTransactionFetcherUnsolicitedDeliveryStillChecksViolation tests that
+// a fully unsolicited direct delivery (no tracked request for that
+// peer at all, f.requests[peer] == nil) carrying a protocol violation still
+// drops the peer.
+func TestTransactionFetcherUnsolicitedDeliveryStillChecksViolation(t *testing.T) {
+	drop := make(chan string, 1)
+	testTransactionFetcherParallel(t, txFetcherTest{
+		init: func() *TxFetcher {
+			return NewTxFetcher(
+				func(common.Hash) bool { return false },
+				func(txs []*types.Transaction) []error {
+					errs := make([]error, len(txs))
+					for i, tx := range txs {
+						if tx.Hash() == testTxsHashes[0] {
+							errs[i] = txpool.ErrKZGVerificationError
+						}
+					}
+					return errs
+				},
+				func(string, uint64, []common.Hash) error { return nil },
+				func(peer string) { drop <- peer },
+			)
+		},
+		steps: []interface{}{
+			// Peer Z was never announced/scheduled at all
+			doTxEnqueue{peer: "Z", txs: []*types.Transaction{testTxs[0]}, direct: true},
+			doFunc(func() {
+				select {
+				case peer := <-drop:
+					if peer != "Z" {
+						t.Fatalf("wrong peer dropped: have %v, want Z", peer)
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("peer Z was not dropped for the protocol violation")
+				}
+			}),
+		},
+	})
+}
+
+// TestEvictStaleRequestPreservesPlaceholderWithoutReplacement tests that
+// the dangling placeholder survives a scheduling cycle where the
+// grace period elapsed but no replacement request could actually be created
+// (every one of the peer's announced hashes already claimed by another peer's
+// in-flight fetch). Without this, the original request ID would no longer be
+// tracked, so a later stale reply could arrive with no request to correlate.
+func TestEvictStaleRequestPreservesPlaceholderWithoutReplacement(t *testing.T) {
+	clock := new(mclock.Simulated)
+	f := NewTxFetcherForTests(
+		func(common.Hash) bool { return false },
+		func(txs []*types.Transaction) []error { return make([]error, len(txs)) },
+		func(string, uint64, []common.Hash) error { return nil },
+		nil,
+		clock, time.Now, nil,
+	)
+
+	// A's request for testTxsHashes[0] already went dangling at t=0
+	f.requests["A"] = &txRequest{hashes: nil, time: clock.Now(), requestID: 111}
+
+	// A has since announced testTxsHashes[1], but it's already being
+	// fetched from peer "B".
+	f.announces["A"] = map[common.Hash]*txMetadata{
+		testTxsHashes[1]: {kind: testTxs[1].Type(), size: uint32(testTxs[1].Size())},
+	}
+	f.fetching[testTxsHashes[1]] = "B"
+
+	// A's grace period elapses.
+	clock.Run(txFetchDanglingRetry)
+
+	whitelist := map[string]struct{}{"A": {}}
+	var timer mclock.Timer
+	f.scheduleFetches(&timer, make(chan struct{}), whitelist)
+
+	// No replacement could be created (testTxsHashes[1] is claimed by B),
+	// so the dangling placeholder must survive untouched rather than being
+	// deleted.
+	req := f.requests["A"]
+	if req == nil {
+		t.Fatal("dangling placeholder was deleted despite no replacement request being created")
+	}
+	if req.hashes != nil {
+		t.Fatalf("expected the placeholder's hashes to remain nil, got %v", req.hashes)
+	}
+
+	// testTxsHashes[1] is no longer claimed by anyone
+	// A can now get a genuine replacement request.
+	delete(f.fetching, testTxsHashes[1])
+	f.scheduleFetches(&timer, make(chan struct{}), whitelist)
+
+	req = f.requests["A"]
+	if req == nil {
+		t.Fatal("expected a replacement request to have been created")
+	}
+	if len(req.hashes) != 1 || req.hashes[0] != testTxsHashes[1] {
+		t.Fatalf("expected the replacement request to cover testTxsHashes[1], got %v", req.hashes)
+	}
+	if req.requestID == 111 {
+		t.Fatal("replacement request reused the dangling request ID")
 	}
 }

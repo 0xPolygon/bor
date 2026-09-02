@@ -133,6 +133,9 @@ func TestTriggerTxFetchToPeers(t *testing.T) {
 		if len(peer.hashes[0]) != len(hashes) {
 			t.Fatalf("peer %s received %d tx fetch hashes, want %d", peer.id, len(peer.hashes[0]), len(hashes))
 		}
+		if len(peer.ids) != 1 || peer.ids[0] == 0 {
+			t.Fatalf("peer %s received request ids %v, want one non-zero id", peer.id, peer.ids)
+		}
 	}
 }
 
@@ -494,16 +497,18 @@ func (p *fakeBlockAnnouncementPeer) SendNewBlockHashes(hashes []common.Hash, num
 
 type fakeTxFetchPeer struct {
 	id     string
+	ids    []uint64
 	hashes [][]common.Hash
 	err    error
 }
 
 func (p *fakeTxFetchPeer) ID() string { return p.id }
 
-func (p *fakeTxFetchPeer) RequestTxs(hashes []common.Hash) error {
+func (p *fakeTxFetchPeer) RequestTxs(id uint64, hashes []common.Hash) error {
 	if p.err != nil {
 		return p.err
 	}
+	p.ids = append(p.ids, id)
 	p.hashes = append(p.hashes, append([]common.Hash(nil), hashes...))
 	return nil
 }

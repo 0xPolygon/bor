@@ -271,6 +271,9 @@ func TestFSWitnessStore_DeletePermissionError(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("permission-based test not reliable on Windows")
 	}
+	if os.Getuid() == 0 {
+		t.Skip("permission-based test not reliable as root")
+	}
 
 	dir := t.TempDir()
 	db := NewMemoryDatabase()
@@ -340,6 +343,9 @@ func TestFSWitnessStore_CleanupSkipsUnreadableEntries(t *testing.T) {
 func TestFSWitnessStore_CleanupNonRemovableTmpFile(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("permission-based test not reliable on Windows")
+	}
+	if os.Getuid() == 0 {
+		t.Skip("permission-based test not reliable as root")
 	}
 
 	dir := t.TempDir()
@@ -435,6 +441,9 @@ func TestFSWitnessStore_CritOnMkdirAllFailure(t *testing.T) {
 func TestFSWitnessStore_CritOnWriteFileFailure(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("permission-based test not reliable on Windows")
+	}
+	if os.Getuid() == 0 {
+		t.Skip("permission-based test not reliable as root")
 	}
 	if os.Getenv("WITNESS_CRASH_TEST") == "1" {
 		// Subprocess: create the shard dir as read-only so WriteFile fails.

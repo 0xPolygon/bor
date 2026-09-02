@@ -47,6 +47,7 @@ type triePrefetcher struct {
 	fetchers map[string]*subfetcher // Subfetchers for each trie
 	term     chan struct{}          // Channel to signal interruption
 	noreads  bool                   // Whether to ignore state-read-only prefetch requests
+	ioSem    chan struct{}          // Limits concurrent trie I/O to avoid starving execution
 
 	deliveryMissMeter *metrics.Meter
 
@@ -79,6 +80,7 @@ func newTriePrefetcher(db Database, root common.Hash, namespace string, noreads 
 		fetchers: make(map[string]*subfetcher), // Active prefetchers use the fetchers map
 		term:     make(chan struct{}),
 		noreads:  noreads,
+		ioSem:    nil, // No rate limiting — total I/O is the same regardless
 
 		deliveryMissMeter: metrics.GetOrRegisterMeter(prefix+"/deliverymiss", nil),
 
@@ -101,9 +103,71 @@ func newTriePrefetcher(db Database, root common.Hash, namespace string, noreads 
 	}
 }
 
+// snapshotWarmNodes collects the trie nodes accumulated by every subfetcher
+// into a list of (owner, path -> blob) maps. It MUST be called only after a
+// synchronous termination has returned — once subfetcher goroutines have exited
+// their loops, their tries are quiescent and trie.Witness() can be read safely.
+// Callers sequence this between a synchronous stop and report so the
+// prefetcher's lifecycle remains intact. The only requirement is that all
+// subfetcher goroutines have exited before collection starts.
+//
+// Returns nil when called on a nil receiver, an already-closed prefetcher
+// without subfetchers, or when no subfetcher loaded any nodes — callers must
+// tolerate a nil result. The stats return describes the subfetcher count and
+// warm-node mix observed while collecting the maps.
+func (p *triePrefetcher) snapshotWarmNodes() ([]TrieWarmNodes, PrefetcherSnapshotStats) {
+	var stats PrefetcherSnapshotStats
+	if p == nil {
+		return nil, stats
+	}
+	p.lock.RLock()
+	defer p.lock.RUnlock()
+
+	stats.Fetchers = len(p.fetchers)
+	if len(p.fetchers) == 0 {
+		return nil, stats
+	}
+	out := make([]TrieWarmNodes, 0, len(p.fetchers))
+	for _, fetcher := range p.fetchers {
+		nodes := fetcher.warmNodes()
+		if len(nodes) == 0 {
+			continue
+		}
+		stats.LoadedFetchers++
+		var bytes int
+		for _, blob := range nodes {
+			bytes += len(blob)
+		}
+		if fetcher.owner == (common.Hash{}) {
+			stats.AccountFetchers++
+			stats.AccountNodes += len(nodes)
+			stats.AccountBytes += bytes
+		} else {
+			stats.StorageFetchers++
+			stats.StorageNodes += len(nodes)
+			stats.StorageBytes += bytes
+		}
+		out = append(out, TrieWarmNodes{Owner: fetcher.owner, Nodes: nodes})
+	}
+	return out, stats
+}
+
+// fetcherCount returns the number of subfetchers currently owned by the
+// prefetcher. It is safe to call after synchronous termination when reporting
+// wait-only detached prefetcher stats.
+func (p *triePrefetcher) fetcherCount() int {
+	if p == nil {
+		return 0
+	}
+	p.lock.RLock()
+	defer p.lock.RUnlock()
+	return len(p.fetchers)
+}
+
 // terminate iterates over all the subfetchers and issues a termination request
-// to all of them. Depending on the async parameter, the method will either block
-// until all subfetchers spin down, or return immediately.
+// to all of them. Subfetchers finish queued work before exiting. Depending on
+// the async parameter, the method will either block until all subfetchers spin
+// down, or return immediately.
 func (p *triePrefetcher) terminate(async bool) {
 	p.lock.Lock()         // Lock for writing
 	defer p.lock.Unlock() // Ensure the lock is released after the function
@@ -203,7 +267,7 @@ func (p *triePrefetcher) prefetch(owner common.Hash, root common.Hash, addr comm
 
 	fetcher := p.fetchers[id]
 	if fetcher == nil {
-		fetcher = newSubfetcher(p.db, p.root, owner, root, addr)
+		fetcher = newSubfetcher(p.db, p.root, owner, root, addr, p.ioSem)
 		p.fetchers[id] = fetcher
 	}
 	return fetcher.schedule(addrs, slots, read)
@@ -219,7 +283,7 @@ func (p *triePrefetcher) trie(owner common.Hash, root common.Hash) Trie {
 	// Bail if no trie was prefetched for this root
 	fetcher := p.fetchers[p.trieID(owner, root)]
 	if fetcher == nil {
-		log.Error("Prefetcher missed to load trie", "owner", owner, "root", root)
+		log.Debug("Prefetcher missed to load trie", "owner", owner, "root", root)
 		p.deliveryMissMeter.Mark(1)
 		return nil
 	}
@@ -264,6 +328,7 @@ type subfetcher struct {
 	root  common.Hash    // Root hash of the trie to prefetch
 	addr  common.Address // Address of the account that the trie belongs to
 	trie  Trie           // Trie being populated with nodes
+	ioSem chan struct{}  // Shared semaphore limiting concurrent trie I/O
 
 	tasks []*subfetcherTask // Items queued up for retrieval
 	lock  sync.Mutex        // Lock protecting the task queue
@@ -298,13 +363,28 @@ type subfetcherTask struct {
 
 // newSubfetcher creates a goroutine to prefetch state items belonging to a
 // particular root hash.
-func newSubfetcher(db Database, state common.Hash, owner common.Hash, root common.Hash, addr common.Address) *subfetcher {
+// withIO runs fn while holding the optional shared I/O semaphore (nil-safe)
+// and adds the elapsed time to fetchTime. The semaphore caps concurrent
+// trie I/O across subfetchers so prefetcher activity doesn't starve the
+// main execution path.
+func (sf *subfetcher) withIO(fn func()) {
+	if sf.ioSem != nil {
+		sf.ioSem <- struct{}{}
+		defer func() { <-sf.ioSem }()
+	}
+	start := time.Now()
+	fn()
+	sf.fetchTime += time.Since(start)
+}
+
+func newSubfetcher(db Database, state common.Hash, owner common.Hash, root common.Hash, addr common.Address, ioSem chan struct{}) *subfetcher {
 	sf := &subfetcher{
 		db:            db,
 		state:         state,
 		owner:         owner,
 		root:          root,
 		addr:          addr,
+		ioSem:         ioSem,
 		wake:          make(chan struct{}, 1),
 		stop:          make(chan struct{}),
 		term:          make(chan struct{}),
@@ -324,10 +404,18 @@ func (sf *subfetcher) schedule(addrs []common.Address, slots []common.Hash, read
 	select {
 	case <-sf.term:
 		return errTerminated
+	case <-sf.stop:
+		return errTerminated
 	default:
 	}
 	// Append the tasks to the current queue
 	sf.lock.Lock()
+	select {
+	case <-sf.stop:
+		sf.lock.Unlock()
+		return errTerminated
+	default:
+	}
 	for _, addr := range addrs {
 		sf.tasks = append(sf.tasks, &subfetcherTask{read: read, addr: &addr})
 	}
@@ -376,7 +464,7 @@ func (sf *subfetcher) peek() Trie {
 }
 
 // terminate requests the subfetcher to stop accepting new tasks and spin down
-// as soon as everything is loaded. Depending on the async parameter, the method
+// once queued work is drained. Depending on the async parameter, the method
 // will either block until all disk loads finish or return immediately.
 func (sf *subfetcher) terminate(async bool) {
 	select {
@@ -388,6 +476,36 @@ func (sf *subfetcher) terminate(async bool) {
 		return
 	}
 	<-sf.term
+}
+
+// warmNodes returns the (path -> blob) map of trie nodes this subfetcher has
+// loaded into its trie. It must be called only after the subfetcher's loop has
+// exited — synchronous termination provides that ordering by waiting on
+// <-sf.term. Returns nil if the trie was never opened (openTrie failed) or has
+// not loaded any nodes.
+func (sf *subfetcher) warmNodes() map[string][]byte {
+	if sf == nil || sf.trie == nil {
+		return nil
+	}
+	return sf.trie.Witness()
+}
+
+func (sf *subfetcher) prefetchAccounts(addresses []common.Address) bool {
+	sf.withIO(func() {
+		if err := sf.trie.PrefetchAccount(addresses); err != nil {
+			log.Error("Failed to prefetch accounts", "err", err)
+		}
+	})
+	return true
+}
+
+func (sf *subfetcher) prefetchStorage(slots [][]byte) bool {
+	sf.withIO(func() {
+		if err := sf.trie.PrefetchStorage(sf.addr, slots); err != nil {
+			log.Error("Failed to prefetch storage", "err", err)
+		}
+	})
+	return true
 }
 
 // openTrie resolves the target trie from database for prefetching.
@@ -495,26 +613,19 @@ func (sf *subfetcher) loop() {
 					slots = append(slots, key.Bytes())
 				}
 			}
-			if len(addresses) != 0 {
-				start := time.Now()
-				if err := sf.trie.PrefetchAccount(addresses); err != nil {
-					log.Error("Failed to prefetch accounts", "err", err)
-				}
-				sf.fetchTime += time.Since(start)
+			if len(addresses) != 0 && !sf.prefetchAccounts(addresses) {
+				return
 			}
-			if len(slots) != 0 {
-				start := time.Now()
-				if err := sf.trie.PrefetchStorage(sf.addr, slots); err != nil {
-					log.Error("Failed to prefetch storage", "err", err)
-				}
-				sf.fetchTime += time.Since(start)
+			if len(slots) != 0 && !sf.prefetchStorage(slots) {
+				return
 			}
 
 		case <-sf.stop:
-			// Termination is requested, abort if no more tasks are pending. If
-			// there are some, exhaust them first.
+			// Termination is requested. Drain queued work before exiting so the
+			// caller can rely on the prefetcher having completed all scheduled
+			// warming by the time synchronous termination returns.
 			sf.lock.Lock()
-			done := sf.tasks == nil
+			done := len(sf.tasks) == 0
 			sf.lock.Unlock()
 
 			if done {

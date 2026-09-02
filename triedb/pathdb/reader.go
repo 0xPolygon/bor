@@ -64,32 +64,137 @@ type reader struct {
 // node info. Don't modify the returned byte slice since it's not deep-copied
 // and still be referenced by database.
 func (r *reader) Node(owner common.Hash, path []byte, hash common.Hash) ([]byte, error) {
+	// Fast path: consult the layer tree's node index. A hit is
+	// content-verified (the hash is part of the index key); a definitive
+	// miss guarantees no live diff layer holds the node, so it can only be
+	// in the disk layer — skip the layer-chain walk entirely.
+	if !r.noHashCheck && hash != (common.Hash{}) {
+		if blob, found, definitive := r.db.tree.node(owner, path, hash); found {
+			nodeIndexHitMeter.Mark(1)
+			return blob, nil
+		} else if definitive {
+			nodeIndexMissMeter.Mark(1)
+			if blob, ok := r.diskNode(owner, path, hash); ok {
+				return blob, nil
+			}
+			// Irregularity (stale disk layer mid-read, hash mismatch) —
+			// resolve through the legacy walk below, which owns fallback
+			// and error reporting.
+		}
+	}
+	return r.nodeWalk(owner, path, hash)
+}
+
+// diskNode serves a definitive node-index miss straight from the disk layer.
+// ok=false on any irregularity so the caller retries via the legacy walk.
+func (r *reader) diskNode(owner common.Hash, path []byte, hash common.Hash) ([]byte, bool) {
+	blob, got, loc, err := r.db.tree.bottom().node(owner, path, 0)
+	if err != nil {
+		return nil, false
+	}
+	if got == hash {
+		return blob, true
+	}
+	// Evict a potentially poisoned clean-cache entry before the legacy walk
+	// retries (see the mismatch commentary in nodeWalk).
+	if loc.loc == locCleanCache {
+		nodeCleanFalseMeter.Mark(1)
+		evictCachedNode(r.db.tree.bottom(), owner, path)
+	}
+	return nil, false
+}
+
+// nodeWalk resolves a trie node by walking the reader's layer chain. It is
+// the pre-index resolution path, kept as the authority for noHashCheck
+// readers, non-definitive index misses, and all irregular cases (stale
+// layers, hash mismatches), owning the fallback and error-reporting logic.
+func (r *reader) nodeWalk(owner common.Hash, path []byte, hash common.Hash) ([]byte, error) {
 	blob, got, loc, err := r.layer.node(owner, path, 0)
 	if err != nil {
-		return nil, err
-	}
-	// Error out if the local one is inconsistent with the target.
-	if !r.noHashCheck && got != hash {
-		// Location is always available even if the node
-		// is not found.
-		switch loc.loc {
-		case locCleanCache:
-			nodeCleanFalseMeter.Mark(1)
-		case locDirtyCache:
-			nodeDirtyFalseMeter.Mark(1)
-		case locDiffLayer:
-			nodeDiffFalseMeter.Mark(1)
-		case locDiskLayer:
-			nodeDiskFalseMeter.Mark(1)
+		// If the diff layer chain walks into a stale disk layer (marked stale
+		// by concurrent cap()/persist() during pipelined SRC), fall back to
+		// the current base disk layer — same strategy as accountFallback and
+		// storageFallback.
+		if errors.Is(err, errSnapshotStale) {
+			blob, got, loc, err = r.nodeFallback(owner, path)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			return nil, err
 		}
-		blobHex := "nil"
-		if len(blob) > 0 {
-			blobHex = hexutil.Encode(blob)
-		}
-		log.Error("Unexpected trie node", "location", loc.loc, "owner", owner.Hex(), "path", path, "expect", hash.Hex(), "got", got.Hex(), "blob", blobHex)
-		return nil, fmt.Errorf("unexpected node: (%x %v), %x!=%x, %s, blob: %s", owner, path, hash, got, loc.string(), blobHex)
 	}
-	return blob, nil
+	if r.noHashCheck || got == hash {
+		return blob, nil
+	}
+	// Hash mismatch path. The clean-cache writer (the biased preloader's
+	// async Has→Set) is racy: a flusher's Set(newer) can land between the
+	// preloader's Has(absent) and Set(older), poisoning the cache with a
+	// stale blob. Evict the offending cache entry and retry from disk so
+	// the cache self-heals instead of returning the same stale blob until
+	// natural eviction.
+	if loc.loc == locCleanCache {
+		nodeCleanFalseMeter.Mark(1)
+		evictCachedNode(r.layer, owner, path)
+		blob, got, loc, err = r.layer.node(owner, path, 0)
+		if err != nil {
+			return nil, err
+		}
+		if got == hash {
+			return blob, nil
+		}
+		// Still wrong after eviction → backing store is corrupt or the
+		// caller asked for a node that doesn't exist at this state.
+	}
+	switch loc.loc {
+	case locCleanCache:
+		nodeCleanFalseMeter.Mark(1)
+	case locDirtyCache:
+		nodeDirtyFalseMeter.Mark(1)
+	case locDiffLayer:
+		nodeDiffFalseMeter.Mark(1)
+	case locDiskLayer:
+		nodeDiskFalseMeter.Mark(1)
+	}
+	blobHex := "nil"
+	if len(blob) > 0 {
+		blobHex = hexutil.Encode(blob)
+	}
+	log.Error("Unexpected trie node", "location", loc.loc, "owner", owner.Hex(), "path", path, "expect", hash.Hex(), "got", got.Hex(), "blob", blobHex)
+	return nil, fmt.Errorf("unexpected node: (%x %v), %x!=%x, %s, blob: %s", owner, path, hash, got, loc.string(), blobHex)
+}
+
+// evictCachedNode walks the parentLayer chain to find the disk layer and
+// removes the given (owner, path) entry from its clean cache. Used by
+// reader.Node's hash-mismatch retry path.
+func evictCachedNode(l layer, owner common.Hash, path []byte) {
+	for l != nil {
+		if dl, ok := l.(*diskLayer); ok {
+			if dl.nodes != nil {
+				dl.nodes.Del(nodeCacheKey(owner, path))
+			}
+			return
+		}
+		l = l.parentLayer()
+	}
+}
+
+// nodeFallback retrieves a trie node when the normal diff layer walk fails
+// due to concurrent layer flattening (cap).
+//
+// During pipelined SRC, the background SRC goroutine's CommitWithUpdate can
+// trigger cap() which flattens bottom diff layers into a new disk layer,
+// marking the old disk layer as stale. Concurrently, the prefetcher's trie
+// walk may reach this stale disk layer and get errSnapshotStale.
+//
+// Unlike accountFallback/storageFallback — whose primary attempt is the
+// lookup-index path, making an entry-layer retry a genuinely different
+// second strategy — nodeWalk's primary attempt already IS the entry-layer
+// walk, so retrying r.layer.node would deterministically hit the same stale
+// disk layer. Go straight to tree.bottom(), the current base disk layer,
+// which holds the flattened data and is guaranteed non-stale.
+func (r *reader) nodeFallback(owner common.Hash, path []byte) ([]byte, common.Hash, *nodeLoc, error) {
+	return r.db.tree.bottom().node(owner, path, 0)
 }
 
 // AccountRLP directly retrieves the account associated with a particular hash.
@@ -102,6 +207,11 @@ func (r *reader) Node(owner common.Hash, path []byte, hash common.Hash) ([]byte,
 func (r *reader) AccountRLP(hash common.Hash) ([]byte, error) {
 	l, err := r.db.tree.lookupAccount(hash, r.state)
 	if err != nil {
+		// A lookup rejection is authoritative: accountTip only fails when the
+		// reader's state is neither the disk layer nor a descendant of it, so
+		// the disk layer's flat data does not correspond to the requested
+		// state. Surface the staleness rather than serving another state's
+		// values — flat reads carry no hash to catch the substitution.
 		return nil, err
 	}
 	// If the located layer is stale, fall back to the slow path to retrieve
@@ -114,7 +224,33 @@ func (r *reader) AccountRLP(hash common.Hash) ([]byte, error) {
 	// not affect the result unless the entry point layer is also stale.
 	blob, err := l.account(hash, 0)
 	if errors.Is(err, errSnapshotStale) {
-		return r.layer.account(hash, 0)
+		return r.accountFallback(hash)
+	}
+	return blob, err
+}
+
+// accountFallback retrieves account data when the located layer goes stale
+// between the lookup and the read — the disk layer was the lookup tip and
+// concurrent flattening (cap/persist) replaced it. It tries the reader's
+// entry-point layer first (still in memory), then the current base disk layer.
+// The base fallback is needed because persist() creates intermediate disk
+// layers that are marked stale during recursive flattening — only the final
+// base layer is guaranteed non-stale.
+//
+// The base is used only when it is an ancestor of (or equal to) the reader's
+// state. The lookup already proved no diff layer between the disk layer and
+// the reader's state touched this account, so an ancestor base holds the same
+// value the reader's state would; a base that has advanced past the reader's
+// state may have absorbed a newer write, and returning that would be silently
+// wrong — flat reads have no hash check to catch it.
+func (r *reader) accountFallback(hash common.Hash) ([]byte, error) {
+	blob, err := r.layer.account(hash, 0)
+	if errors.Is(err, errSnapshotStale) {
+		base := r.db.tree.bottomIfAncestorOf(r.state)
+		if base == nil {
+			return nil, fmt.Errorf("[%#x] %w", r.state, errSnapshotStale)
+		}
+		return base.account(hash, 0)
 	}
 	return blob, err
 }
@@ -151,6 +287,7 @@ func (r *reader) Account(hash common.Hash) (*types.SlimAccount, error) {
 func (r *reader) Storage(accountHash, storageHash common.Hash) ([]byte, error) {
 	l, err := r.db.tree.lookupStorage(accountHash, storageHash, r.state)
 	if err != nil {
+		// Authoritative rejection — see the equivalent comment in AccountRLP.
 		return nil, err
 	}
 	// If the located layer is stale, fall back to the slow path to retrieve
@@ -163,7 +300,21 @@ func (r *reader) Storage(accountHash, storageHash common.Hash) ([]byte, error) {
 	// not affect the result unless the entry point layer is also stale.
 	blob, err := l.storage(accountHash, storageHash, 0)
 	if errors.Is(err, errSnapshotStale) {
-		return r.layer.storage(accountHash, storageHash, 0)
+		return r.storageFallback(accountHash, storageHash)
+	}
+	return blob, err
+}
+
+// storageFallback is the storage counterpart of accountFallback, including the
+// ancestor check on the base disk layer.
+func (r *reader) storageFallback(accountHash, storageHash common.Hash) ([]byte, error) {
+	blob, err := r.layer.storage(accountHash, storageHash, 0)
+	if errors.Is(err, errSnapshotStale) {
+		base := r.db.tree.bottomIfAncestorOf(r.state)
+		if base == nil {
+			return nil, fmt.Errorf("[%#x] %w", r.state, errSnapshotStale)
+		}
+		return base.storage(accountHash, storageHash, 0)
 	}
 	return blob, err
 }
