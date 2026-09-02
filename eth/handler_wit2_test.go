@@ -1027,6 +1027,53 @@ func TestDrainDeferredCandidateBranches(t *testing.T) {
 	require.True(t, h.handler.deferredAnnounces.has(blockB), "candidate must be re-stashed while the header is still unavailable")
 }
 
+// TestDrainDeferredCandidateStrikesConfirmedForgery is the regression for the
+// finding that drainDeferredCandidate's confirmed-misbehavior branch (header
+// now local, signer proven not the scheduled producer) only marked a metric
+// and never struck the sender — unlike acceptSignedAnnouncement's identical
+// synchronous branch, which does. Without the strike, an attacker who always
+// times a forged announce to arrive before its header is local (so it defers
+// silently, correctly, with no strike) then gets re-verified as a confirmed
+// forgery on drain with no penalty either — repeatable indefinitely.
+func TestDrainDeferredCandidateStrikesConfirmedForgery(t *testing.T) {
+	h := newTestHandler()
+	defer h.close()
+
+	header := &types.Header{Number: big.NewInt(88_101)}
+	blockHash := header.Hash()
+
+	key, err := crypto.GenerateKey()
+	require.NoError(t, err)
+	// Mismatched block number is this test suite's producer-binding proxy
+	// (see TestDeferredDrainPromotesHonestAmongForged): the local chain here
+	// doesn't check the signer, so a number mismatch is what makes
+	// isScheduledProducer report a confirmed (not "header unknown") rejection.
+	forged := wit.SignedWitnessAnnouncement{
+		BlockHash:   blockHash,
+		BlockNumber: header.Number.Uint64() + 1,
+		WitnessHash: common.HexToHash("0xbadbad"),
+	}
+	d := wit.WitnessAnnouncementSigningHash(forged.BlockHash, forged.BlockNumber, forged.WitnessHash)
+	sig, err := crypto.Sign(d.Bytes(), key)
+	require.NoError(t, err)
+	forged.Signature = sig
+
+	const forgerID = "forger"
+	h.handler.deferredAnnounces.put(forged, forgerID)
+
+	// Header lands; drain re-verifies and must now confirm the forgery.
+	rawdb.WriteHeader(h.chain.DB(), header)
+	h.handler.drainDeferredAnnouncesFor(blockHash)
+
+	_, cached := h.handler.signedWitnesses.get(blockHash)
+	require.False(t, cached, "a confirmed forgery must never be promoted")
+
+	h.handler.wit2PeerTracker.mu.Lock()
+	strikes := len(h.handler.wit2PeerTracker.state[forgerID].strikes)
+	h.handler.wit2PeerTracker.mu.Unlock()
+	require.Equal(t, 1, strikes, "confirmed forgery on drain must strike the original sender, same as the synchronous path")
+}
+
 // TestDrainResolvedDeferredAnnouncesCoversBatchedImport is the regression for
 // the claude-bot finding that a batched insertChain (downloader catch-up) fires
 // a single accumulated ChainHeadEvent for the batch's last block, so draining

@@ -435,6 +435,12 @@ func (h *handler) drainDeferredCandidate(blockHash common.Hash, entry *deferredA
 		wit2NotValidatorMeter.Mark(1)
 		log.Debug("wit2: deferred announce signer is not the scheduled producer",
 			"blockHash", blockHash, "signer", signer)
+		// Same confirmed misbehavior acceptSignedAnnouncement strikes
+		// synchronously (signer != scheduled producer, header known) — without
+		// this, timing a forged announce to always arrive before its header is
+		// local lets an attacker repeat it indefinitely without ever accruing
+		// a strike.
+		h.strikeWit2PeerByID(entry.peerID)
 		return false
 	}
 	// Producer match. Promote the first one; any further producer-signed
