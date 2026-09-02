@@ -425,6 +425,10 @@ func (s *session) sealResult(sealed *types.Header) (*types.Block, *ReusableExecu
 			if err == nil {
 				return assembled, nil, false, true
 			}
+			if errors.Is(err, errCachedFinalizationUnavailable) {
+				s.reanchorFromCanonical(s.env.header.Number.Uint64(), "sprint finalization requires canonical state")
+				return nil, nil, false, false
+			}
 			s.skip(s.env.header.Number.Uint64(), "sealed header verification deferred and finalization failed", "err", err)
 			return nil, nil, false, false
 		}

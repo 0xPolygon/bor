@@ -211,6 +211,40 @@ func TestSessionSealVerificationUsesSpeculativeLineage(t *testing.T) {
 	})
 }
 
+func TestSessionReanchorsAfterDeferredSprintSeal(t *testing.T) {
+	gate := make(chan struct{})
+	config := finalizationConfig()
+	config.Sprint = map[string]uint64{"0": 4}
+	engine := &headerGateEngine{partialReuseEngine: &partialReuseEngine{Ethash: ethash.NewFullFaker()}, block: gate}
+	h := startExecHarnessEngine(t, config, vm.Config{}, engine)
+	s := h.session()
+
+	cur := handleOK(t, s, openOn(h.chain.CurrentBlock(), h.config, commitment.Head{0x94}))
+	tx := h.transfer(t, 0)
+	raw, err := tx.MarshalBinary()
+	if err != nil {
+		t.Fatalf("marshal transaction: %v", err)
+	}
+	cur = handleOK(t, s, recordEntry(raw, cur))
+	sealed := sealedFromEnv(t, s)
+
+	previous := preconfSealVerifyTimeout
+	preconfSealVerifyTimeout = time.Millisecond
+	defer func() { preconfSealVerifyTimeout = previous }()
+	defer close(gate)
+
+	err = s.handle(sealEntry(encodeHeader(t, sealed), cur))
+	if !errors.Is(err, errPreconfReanchor) {
+		t.Fatalf("handle deferred sprint seal: %v", err)
+	}
+	if s.env != nil || s.parked != nil || s.consumer.PendingBlock() != nil {
+		t.Fatal("deferred sprint seal retained speculative state")
+	}
+	if _, _, ok := s.consumer.Index().Lookup(tx.Hash()); ok {
+		t.Fatal("deferred sprint seal retained its receipt")
+	}
+}
+
 func TestValidateOpenExecutionContext(t *testing.T) {
 	h := startExecHarness(t)
 	parent := h.chain.CurrentBlock()

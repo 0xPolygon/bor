@@ -49,6 +49,21 @@ func (c *Consumer) PendingBlockAndReceipts() (*types.Block, types.Receipts) {
 	return block, receipts
 }
 
+func (c *Consumer) PendingParentState(ctx context.Context, block *types.Block) (*state.StateDB, error) {
+	anchor, ok := c.pendingReadAnchor()
+	if !ok {
+		return nil, nil
+	}
+	statedb, err := c.pendingStore().PendingParentState(block)
+	if err != nil {
+		return nil, err
+	}
+	if !c.pendingReadAnchorValid(anchor) {
+		return nil, nil
+	}
+	return statedb, nil
+}
+
 func (c *Consumer) PendingNonce(address common.Address) (uint64, bool, error) {
 	anchor, ok := c.pendingReadAnchor()
 	if !ok {
@@ -178,6 +193,26 @@ func (s *PendingStore) PendingBlockAndReceipts() (*types.Block, types.Receipts) 
 	view := entry.RPCView
 	s.mu.RUnlock()
 	return view.Block, receiptsFromView(view.Block, view)
+}
+
+func (s *PendingStore) PendingParentState(block *types.Block) (*state.StateDB, error) {
+	if block == nil || block.NumberU64() == 0 {
+		return nil, nil
+	}
+	s.mu.RLock()
+	var reader PendingStateReader
+	for key, entry := range s.entries {
+		if key.number+1 == block.NumberU64() && entry.RPCView != nil &&
+			entry.RPCView.Block != nil && entry.RPCView.Block.Hash() == block.ParentHash() {
+			reader = entry.RPCView.State
+			break
+		}
+	}
+	s.mu.RUnlock()
+	if reader == nil {
+		return nil, nil
+	}
+	return reader.NewStateDB()
 }
 
 func (s *PendingStore) PendingNonce(address common.Address) (uint64, bool, error) {

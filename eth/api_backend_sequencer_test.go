@@ -19,6 +19,7 @@ type apiSequenceConsumer struct {
 	block         *types.Block
 	receipts      types.Receipts
 	state         *state.StateDB
+	parentState   *state.StateDB
 	index         *sequencer.Index
 	feed          event.Feed
 	subscribed    bool
@@ -39,6 +40,10 @@ func (c *apiSequenceConsumer) PendingBlock() *types.Block {
 func (c *apiSequenceConsumer) PendingBlockAndReceipts() (*types.Block, types.Receipts) {
 	c.metadataCalls++
 	return c.block, c.receipts
+}
+
+func (c *apiSequenceConsumer) PendingParentState(context.Context, *types.Block) (*state.StateDB, error) {
+	return c.parentState, nil
 }
 
 func (c *apiSequenceConsumer) PendingNonce(address common.Address) (uint64, bool, error) {

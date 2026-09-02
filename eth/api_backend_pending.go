@@ -65,6 +65,13 @@ func (b *EthAPIBackend) PendingSnapshot(ctx context.Context) (*types.Block, type
 	return nil, nil, nil, errors.New("pending state is not available")
 }
 
+func (b *EthAPIBackend) PendingParentState(ctx context.Context, block *types.Block) (*state.StateDB, error) {
+	if b.eth.seqConsumer == nil {
+		return nil, nil
+	}
+	return b.eth.seqConsumer.PendingParentState(ctx, block)
+}
+
 func (b *EthAPIBackend) pendingStateAndHeader(ctx context.Context) (*state.StateDB, *types.Header, error) {
 	block, _, statedb, err := b.PendingSnapshot(ctx)
 	if err != nil {

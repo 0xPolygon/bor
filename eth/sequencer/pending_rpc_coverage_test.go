@@ -122,6 +122,25 @@ func TestPendingRPCMetadataAccessors(t *testing.T) {
 	}
 }
 
+func TestPendingParentState(t *testing.T) {
+	store := NewPendingStore(nil)
+	parent := newPendingRPCCoverageFixture(t, 2, common.HexToHash("0x1"))
+	if !store.publish(parent.block, types.Receipts{parent.receipt}, parent.state, nil, 0) {
+		t.Fatal("parent publish failed")
+	}
+	child := newPendingRPCCoverageFixture(t, 3, parent.block.Hash())
+	if !store.publish(child.block, types.Receipts{child.receipt}, child.state, nil, 0) {
+		t.Fatal("child publish failed")
+	}
+	parentState, err := store.PendingParentState(child.block)
+	if err != nil {
+		t.Fatalf("pending parent state: %v", err)
+	}
+	if parentState == nil || parentState.GetNonce(*parent.address) != 6 {
+		t.Fatalf("parent state = %v", parentState)
+	}
+}
+
 func TestPendingRPCEmptyStore(t *testing.T) {
 	store := NewPendingStore(nil)
 	consumer := &Consumer{store: store, index: NewIndex()}

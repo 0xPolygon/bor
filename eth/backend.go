@@ -80,6 +80,7 @@ type sequenceConsumer interface {
 	PendingSnapshot(context.Context) (*types.Block, types.Receipts, *state.StateDB, error)
 	PendingBlock() *types.Block
 	PendingBlockAndReceipts() (*types.Block, types.Receipts)
+	PendingParentState(context.Context, *types.Block) (*state.StateDB, error)
 	PendingNonce(common.Address) (uint64, bool, error)
 	LookupPreconf(common.Hash) (*types.Transaction, *types.Receipt, bool)
 	SubscribePendingLogs(chan<- []*types.Log) event.Subscription

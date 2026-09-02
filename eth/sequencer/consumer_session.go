@@ -1,6 +1,7 @@
 package sequencer
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 
@@ -29,7 +30,10 @@ type session struct {
 	sealed    map[uint64]common.Hash
 	verified  map[uint64]*types.Header
 	tipHeader *types.Header
+	reanchor  bool
 }
+
+var errPreconfReanchor = errors.New("preconf application requires canonical re-anchor")
 
 type preconfWorker struct {
 	session *session
@@ -105,6 +109,9 @@ func (s *session) handle(entry *pb.Entry) error {
 	s.applyMu.Lock()
 	s.apply(entry)
 	s.applyMu.Unlock()
+	if s.reanchor {
+		return errPreconfReanchor
+	}
 	s.head = next
 
 	return nil
@@ -145,6 +152,11 @@ func (s *session) skip(from uint64, reason string, args ...any) {
 	s.tipHeader = nil
 	s.sealed = nil
 	s.verified = nil
+}
+
+func (s *session) reanchorFromCanonical(from uint64, reason string, args ...any) {
+	s.skip(from, reason, args...)
+	s.reanchor = true
 }
 
 // applyOpen starts a speculative block. A canonical parent is preferred as
