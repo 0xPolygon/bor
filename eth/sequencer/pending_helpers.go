@@ -103,6 +103,9 @@ func cloneReceipt(receipt *types.Receipt) *types.Receipt {
 	copy.PostState = append([]byte(nil), receipt.PostState...)
 	copy.Logs = make([]*types.Log, len(receipt.Logs))
 	for index, entry := range receipt.Logs {
+		if entry == nil {
+			continue
+		}
 		logCopy := *entry
 		logCopy.Topics = append([]common.Hash(nil), entry.Topics...)
 		logCopy.Data = append([]byte(nil), entry.Data...)
@@ -115,6 +118,9 @@ func cloneReceiptWithBlockHash(receipt *types.Receipt, blockHash common.Hash) *t
 	copy := cloneReceipt(receipt)
 	copy.BlockHash = blockHash
 	for _, entry := range copy.Logs {
+		if entry == nil {
+			continue
+		}
 		entry.BlockHash = blockHash
 	}
 	return copy
