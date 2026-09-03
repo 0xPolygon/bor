@@ -10,11 +10,19 @@ import (
 	"github.com/ethereum/go-ethereum/trie"
 )
 
-func buildRPCView(block *types.Block, receipts types.Receipts, statedb *state.StateDB) *PendingRPCView {
+func buildRPCView(block *types.Block, receipts types.Receipts, statedb *state.StateDB, previous *PendingRPCView, blockHash common.Hash) *PendingRPCView {
 	receiptMap := make(map[common.Hash]*types.Receipt, len(receipts))
 	logs := make([]*types.Log, 0)
-	for index, receipt := range receipts {
-		copy := cloneReceipt(receipt)
+	start := 0
+	if reusableReceiptPrefix(previous, block, len(receipts), blockHash) {
+		for hash, receipt := range previous.Receipts {
+			receiptMap[hash] = receipt
+		}
+		logs = append(logs, previous.Logs...)
+		start = len(previous.Block.Transactions())
+	}
+	for index := start; index < len(receipts); index++ {
+		copy := cloneReceiptWithBlockHash(receipts[index], blockHash)
 		if index < len(block.Transactions()) {
 			receiptMap[block.Transactions()[index].Hash()] = copy
 		}
@@ -22,19 +30,28 @@ func buildRPCView(block *types.Block, receipts types.Receipts, statedb *state.St
 	}
 	stateCopy := statedb.Copy()
 	return &PendingRPCView{
-		Header:   block.Header(),
-		Block:    block,
-		State:    &pendingStateReader{state: stateCopy},
-		Receipts: receiptMap,
-		Logs:     logs,
+		Header:           block.Header(),
+		Block:            block,
+		State:            &pendingStateReader{state: stateCopy},
+		Receipts:         receiptMap,
+		Logs:             logs,
+		receiptBlockHash: blockHash,
 	}
+}
+
+func reusableReceiptPrefix(previous *PendingRPCView, block *types.Block, receiptCount int, blockHash common.Hash) bool {
+	if previous == nil || previous.Block == nil || previous.receiptBlockHash != blockHash ||
+		len(previous.Block.Transactions()) > receiptCount || len(previous.Receipts) != len(previous.Block.Transactions()) {
+		return false
+	}
+	return sameExecutionContext(previous.Header, block.Header()) && sameTransactionPrefix(previous.Block, block)
 }
 
 func receiptsFromView(block *types.Block, view *PendingRPCView) types.Receipts {
 	receipts := make(types.Receipts, 0, len(block.Transactions()))
 	for _, tx := range block.Transactions() {
 		if receipt := view.Receipts[tx.Hash()]; receipt != nil {
-			receipts = append(receipts, cloneReceipt(receipt))
+			receipts = append(receipts, cloneReceiptWithBlockHash(receipt, view.receiptBlockHash))
 		}
 	}
 	return receipts
@@ -50,6 +67,7 @@ func removedLogs(view *PendingRPCView) []*types.Log {
 			continue
 		}
 		copy := *entry
+		copy.BlockHash = view.receiptBlockHash
 		copy.Removed = true
 		logs[index] = &copy
 	}
@@ -88,6 +106,15 @@ func cloneReceipt(receipt *types.Receipt) *types.Receipt {
 		copy.Logs[index] = &logCopy
 	}
 	return &copy
+}
+
+func cloneReceiptWithBlockHash(receipt *types.Receipt, blockHash common.Hash) *types.Receipt {
+	copy := cloneReceipt(receipt)
+	copy.BlockHash = blockHash
+	for _, entry := range copy.Logs {
+		entry.BlockHash = blockHash
+	}
+	return copy
 }
 
 func cloneReceipts(receipts []*types.Receipt) types.Receipts {

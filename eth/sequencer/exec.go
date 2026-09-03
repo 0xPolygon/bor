@@ -3,6 +3,7 @@ package sequencer
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"math/big"
 	"sync/atomic"
 	"time"
@@ -36,6 +37,7 @@ type blockEnv struct {
 	inputBytes            uint64
 	txs                   []*types.Transaction
 	receipts              []*types.Receipt
+	rpcView               *PendingRPCView
 	publishedGas          uint64
 	publishedTxs          int
 	lastPublishedAt       time.Time
@@ -323,6 +325,7 @@ func (env *blockEnv) finalizeVerifiedSeal(chain *core.BlockChain, sealed *types.
 	env.evm.StateDB = workState
 	env.txs = append(types.Transactions(nil), assembled.Transactions()...)
 	env.receipts = cloneReceipts(receipts)
+	env.rpcView = nil
 	return assembled, reusable, nil
 }
 
@@ -438,7 +441,7 @@ func (c *Consumer) verifyPreconfSeal(headers consensus.ChainHeaderReader, sealed
 }
 
 func (s *session) sealResult(sealed *types.Header) (*types.Block, *ReusableExecution, bool, bool) {
-	headers := &speculativeHeaderChain{ChainHeaderReader: s.consumer.chain, headers: s.verified}
+	headers := &speculativeHeaderChain{ChainHeaderReader: s.consumer.chain, headers: maps.Clone(s.verified)}
 	if err := s.consumer.verifyPreconfSeal(headers, sealed); err != nil {
 		if errors.Is(err, errSealVerificationDeferred) {
 			assembled, _, err := s.env.finalizeVerifiedSeal(s.consumer.chain, sealed)

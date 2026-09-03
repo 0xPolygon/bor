@@ -140,17 +140,12 @@ func preparePending(env *blockEnv, header *types.Header, blockHash common.Hash, 
 }
 
 func preparePendingPayload(env *blockEnv, block *types.Block, blockHash common.Hash, reusable *ReusableExecution) (pendingPayload, bool) {
-	payload, ok := makePendingPayload(block, env.receipts, env.statedb, reusable)
+	payload, ok := makePendingPayloadWithPrevious(block, env.receipts, env.statedb, reusable, env.rpcView, blockHash)
 	if !ok {
 		return pendingPayload{}, false
 	}
-	for _, receipt := range payload.view.Receipts {
-		receipt.BlockHash = blockHash
-	}
-	for _, entry := range payload.view.Logs {
-		entry.BlockHash = blockHash
-	}
 	payload.finalized = blockHash != (common.Hash{})
+	env.rpcView = payload.view
 	return payload, ok
 }
 
@@ -225,10 +220,14 @@ func (s *PendingStore) publishPayload(block *types.Block, payload pendingPayload
 }
 
 func makePendingPayload(block *types.Block, receipts types.Receipts, statedb *state.StateDB, sealed *ReusableExecution) (pendingPayload, bool) {
+	return makePendingPayloadWithPrevious(block, receipts, statedb, sealed, nil, common.Hash{})
+}
+
+func makePendingPayloadWithPrevious(block *types.Block, receipts types.Receipts, statedb *state.StateDB, sealed *ReusableExecution, previous *PendingRPCView, blockHash common.Hash) (pendingPayload, bool) {
 	if block == nil || statedb == nil {
 		return pendingPayload{}, false
 	}
-	return pendingPayload{view: buildRPCView(block, receipts, statedb), sealed: sealed, finalized: sealed != nil}, true
+	return pendingPayload{view: buildRPCView(block, receipts, statedb, previous, blockHash), sealed: sealed, finalized: sealed != nil}, true
 }
 
 func (s *PendingStore) importingAtHeightLocked(number uint64) *pendingEntry {

@@ -99,6 +99,38 @@ func TestPreparePendingOwnsRPCSnapshot(t *testing.T) {
 	if !ok {
 		t.Fatal("prepare unsealed view")
 	}
+	unsealedReceipt := unsealed.view.Receipts[tx.Hash()]
+	repeated, ok := preparePendingPayload(env, block, common.Hash{}, nil)
+	if !ok || repeated.view.Receipts[tx.Hash()] != unsealedReceipt {
+		t.Fatal("unchanged receipt prefix was copied again")
+	}
+	nextTx := types.NewTransaction(1, address, big.NewInt(1), 21_000, big.NewInt(1), nil)
+	nextReceipt := &types.Receipt{
+		TxHash:            nextTx.Hash(),
+		BlockNumber:       big.NewInt(1),
+		Status:            types.ReceiptStatusSuccessful,
+		GasUsed:           21_000,
+		CumulativeGasUsed: 42_000,
+		PostState:         []byte{10},
+		Logs:              []*types.Log{{TxHash: nextTx.Hash(), Data: []byte{11}}},
+	}
+	env.txs = append(env.txs, nextTx)
+	env.receipts = append(env.receipts, nextReceipt)
+	env.header.GasUsed = 42_000
+	block, extended, ok := preparePending(env, env.header, common.Hash{}, nil)
+	if !ok {
+		t.Fatal("prepare extended view")
+	}
+	if extended.view.Receipts[tx.Hash()] != unsealedReceipt {
+		t.Fatal("extended view copied the existing receipt prefix")
+	}
+	if got := extended.view.Receipts[nextTx.Hash()]; got == nextReceipt || got.PostState[0] != 10 {
+		t.Fatal("extended view did not own the new receipt suffix")
+	}
+	if len(extended.view.Logs) != 2 || extended.view.Logs[0] != unsealedReceipt.Logs[0] ||
+		extended.view.Logs[1] != extended.view.Receipts[nextTx.Hash()].Logs[0] {
+		t.Fatal("extended view changed log ordering")
+	}
 	sealedHash := common.Hash{6}
 	sealed, ok := preparePendingPayload(env, block, sealedHash, nil)
 	if !ok {
@@ -110,7 +142,6 @@ func TestPreparePendingOwnsRPCSnapshot(t *testing.T) {
 	if unsealed.finalized || !sealed.finalized {
 		t.Fatalf("finalized markers = %v, %v", unsealed.finalized, sealed.finalized)
 	}
-	unsealedReceipt := unsealed.view.Receipts[tx.Hash()]
 	sealedReceipt := sealed.view.Receipts[tx.Hash()]
 	if receipt.BlockHash != sourceHash || receipt.Logs[0].BlockHash != sourceHash {
 		t.Fatal("preparing a view mutated the execution receipt")
@@ -121,12 +152,17 @@ func TestPreparePendingOwnsRPCSnapshot(t *testing.T) {
 	if sealedReceipt.BlockHash != sealedHash || sealedReceipt.Logs[0].BlockHash != sealedHash {
 		t.Fatal("sealed view did not receive the sealed block hash")
 	}
+	if sealedReceipt == unsealedReceipt {
+		t.Fatal("sealed view reused an unsealed receipt")
+	}
 
 	receipt.PostState[0] = 7
 	receipt.Logs[0].Topics[0][0] = 8
 	receipt.Logs[0].Data[0] = 9
+	nextReceipt.PostState[0] = 12
+	nextReceipt.Logs[0].Data[0] = 13
 	statedb.SetNonce(address, 10, tracing.NonceChangeUnspecified)
-	for name, view := range map[string]*PendingRPCView{"unsealed": unsealed.view, "sealed": sealed.view} {
+	for name, view := range map[string]*PendingRPCView{"unsealed": unsealed.view, "extended": extended.view, "sealed": sealed.view} {
 		got := view.Receipts[tx.Hash()]
 		if got.PostState[0] != 3 || got.Logs[0].Topics[0][0] != 4 || got.Logs[0].Data[0] != 5 {
 			t.Fatalf("%s view shares receipt storage with execution", name)
@@ -135,7 +171,13 @@ func TestPreparePendingOwnsRPCSnapshot(t *testing.T) {
 			t.Fatalf("%s view shares mutable execution state", name)
 		}
 	}
-	returned := receiptsFromView(block, unsealed.view)
+	for name, view := range map[string]*PendingRPCView{"extended": extended.view, "sealed": sealed.view} {
+		got := view.Receipts[nextTx.Hash()]
+		if got.PostState[0] != 10 || got.Logs[0].Data[0] != 11 {
+			t.Fatalf("%s view shares new receipt storage with execution", name)
+		}
+	}
+	returned := receiptsFromView(unsealed.view.Block, unsealed.view)
 	returned[0].PostState[0] = 11
 	if unsealed.view.Receipts[tx.Hash()].PostState[0] != 3 {
 		t.Fatal("receipt returned to a caller mutated the stored view")

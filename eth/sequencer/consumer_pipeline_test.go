@@ -23,11 +23,16 @@ type headerGateEngine struct {
 	reject             bool
 	sawSpeculativeBase bool
 	block              <-chan struct{}
+	lookupNumber       uint64
+	lookupResult       chan<- *types.Header
 }
 
 func (e *headerGateEngine) VerifyHeader(chain consensus.ChainHeaderReader, header *types.Header) error {
 	if e.block != nil {
 		<-e.block
+	}
+	if e.lookupResult != nil {
+		e.lookupResult <- chain.GetHeaderByNumber(e.lookupNumber)
 	}
 	if e.reject {
 		return errors.New("test header rejected")
@@ -208,6 +213,40 @@ func TestSessionSealVerificationUsesSpeculativeLineage(t *testing.T) {
 		if !ok || receipt.BlockHash != (common.Hash{}) {
 			t.Fatalf("deferred seal receipt = %v, found = %v", receipt, ok)
 		}
+	})
+
+	t.Run("slow verification owns its lineage snapshot", func(t *testing.T) {
+		engine := &headerGateEngine{partialReuseEngine: &partialReuseEngine{Ethash: ethash.NewFullFaker()}}
+		h := startExecHarnessEngine(t, finalizationConfig(), vm.Config{}, engine)
+		s := h.session()
+		cur := handleOK(t, s, openOn(h.chain.CurrentBlock(), h.config, commitment.Head{0x95}))
+		sealed := sealedFromEnv(t, s)
+
+		lookupNumber := uint64(10_000)
+		expected := &types.Header{Number: new(big.Int).SetUint64(lookupNumber), Extra: []byte{0x95}}
+		s.verified = map[uint64]*types.Header{lookupNumber: expected}
+		gate := make(chan struct{})
+		lookupResult := make(chan *types.Header, 1)
+		engine.block = gate
+		engine.lookupNumber = lookupNumber
+		engine.lookupResult = lookupResult
+
+		previous := preconfSealVerifyTimeout
+		preconfSealVerifyTimeout = time.Millisecond
+		defer func() { preconfSealVerifyTimeout = previous }()
+		handleOK(t, s, sealEntry(encodeHeader(t, sealed), cur))
+
+		delete(s.verified, lookupNumber)
+		close(gate)
+		select {
+		case got := <-lookupResult:
+			if got == nil || got.Hash() != expected.Hash() {
+				t.Fatalf("verification lineage header = %v, want %s", got, expected.Hash())
+			}
+		case <-time.After(time.Second):
+			t.Fatal("verification did not resume")
+		}
+		waitFor(t, time.Second, func() bool { return !s.consumer.sealVerify.Load() })
 	})
 }
 

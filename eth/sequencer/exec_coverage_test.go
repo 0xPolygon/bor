@@ -103,6 +103,7 @@ func TestBlockEnvProcessesPragueParentHash(t *testing.T) {
 
 func TestFinalizeSealBuildsReusableExecution(t *testing.T) {
 	h, env, sealed := finalizableEnv(t)
+	env.rpcView = new(PendingRPCView)
 	stateSync := &types.StateSyncData{ID: 1}
 	h.chain.SetStateSync([]*types.StateSyncData{stateSync})
 	s := &session{consumer: &Consumer{chain: h.chain, index: NewIndex()}, env: env}
@@ -133,6 +134,9 @@ func TestFinalizeSealBuildsReusableExecution(t *testing.T) {
 	}
 	if len(env.txs) != 1 || len(env.receipts) != 1 || env.txs[0].Hash() != reusable.Result.Receipts[0].TxHash {
 		t.Fatal("finalized environment body is inconsistent")
+	}
+	if env.rpcView != nil {
+		t.Fatal("finalized environment retained the pre-finalization receipt view")
 	}
 }
 

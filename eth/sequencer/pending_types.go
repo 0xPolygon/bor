@@ -91,11 +91,12 @@ func (r *pendingStateReader) NewStateDB() (*state.StateDB, error) {
 }
 
 type PendingRPCView struct {
-	Header   *types.Header
-	Block    *types.Block
-	State    PendingStateReader
-	Receipts map[common.Hash]*types.Receipt
-	Logs     []*types.Log
+	Header           *types.Header
+	Block            *types.Block
+	State            PendingStateReader
+	Receipts         map[common.Hash]*types.Receipt
+	Logs             []*types.Log
+	receiptBlockHash common.Hash
 }
 
 type ReusableExecution struct {
