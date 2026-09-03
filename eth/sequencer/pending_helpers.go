@@ -84,6 +84,9 @@ func cloneProcessResult(result *core.ProcessResult) *core.ProcessResult {
 	}
 	logs := make([]*types.Log, len(result.Logs))
 	for index, entry := range result.Logs {
+		if entry == nil {
+			continue
+		}
 		copy := *entry
 		copy.Topics = append([]common.Hash(nil), entry.Topics...)
 		copy.Data = append([]byte(nil), entry.Data...)
