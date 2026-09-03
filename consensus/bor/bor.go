@@ -1778,6 +1778,34 @@ func (c *Bor) runMilestoneFetcher() {
 	}
 }
 
+// stateTracingHooks is implemented by state wrappers (state.NewHookedState)
+// that emit tracing hooks for the state they wrap.
+type stateTracingHooks interface {
+	Hooks() *tracing.Hooks
+}
+
+// systemTxVMConfig returns the vm.Config to use when applying bor system
+// transactions (span commits and state-sync events) over the given state.
+//
+// The tracer is derived from the state itself rather than taken from
+// c.vmConfig: canonical block import passes a hooked state when a live tracer
+// is configured, so system transactions keep being traced there. Every other
+// caller — the miner and eth_simulateV1 via FinalizeAndAssemble, or historical
+// state regeneration via Finalize — passes a plain state and must not fire the
+// node-wide live tracer: those run outside the import goroutine, and invoking
+// the singleton live tracer concurrently corrupts its state and can crash the
+// node.
+func (c *Bor) systemTxVMConfig(state vm.StateDB) vm.Config {
+	cfg := c.vmConfig
+	if hooked, ok := state.(stateTracingHooks); ok {
+		cfg.Tracer = hooked.Hooks()
+	} else {
+		cfg.Tracer = nil
+	}
+
+	return cfg
+}
+
 func (c *Bor) checkAndCommitSpan(
 	state vm.StateDB,
 	header *types.Header,
@@ -1907,7 +1935,7 @@ func (c *Bor) FetchAndCommitSpan(
 		)
 	}
 
-	return c.spanner.CommitSpan(ctx, minSpan, validators, producers, state, header, chain, c.vmConfig)
+	return c.spanner.CommitSpan(ctx, minSpan, validators, producers, state, header, chain, c.systemTxVMConfig(state))
 }
 
 // CommitStates commit states
@@ -2018,6 +2046,8 @@ func (c *Bor) CommitStates(
 
 	var gasUsed uint64
 
+	vmConfig := c.systemTxVMConfig(state)
+
 	for _, eventRecord := range eventRecords {
 		if eventRecord.ID <= lastStateID {
 			continue
@@ -2063,7 +2093,7 @@ func (c *Bor) CommitStates(
 
 		// Receipt construction expects the receiver call to emit at least one log.
 		// A receiver without code can complete without producing one.
-		gasUsed, err = c.GenesisContractsClient.CommitState(eventRecord, state, header, chain, c.vmConfig)
+		gasUsed, err = c.GenesisContractsClient.CommitState(eventRecord, state, header, chain, vmConfig)
 		if err != nil {
 			return nil, err
 		}
