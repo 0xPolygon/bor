@@ -84,7 +84,7 @@ func TestSequencerPendingBackend(t *testing.T) {
 	receipt := &types.Receipt{TxHash: tx.Hash(), BlockNumber: big.NewInt(1)}
 	index := sequencer.NewIndex()
 	index.Add(tx, receipt)
-	consumer := &apiSequenceConsumer{block: block, receipts: types.Receipts{receipt}, state: statedb, index: index}
+	consumer := &apiSequenceConsumer{block: block, receipts: types.Receipts{receipt}, state: statedb, parentState: statedb, index: index}
 	b.eth.seqConsumer = consumer
 
 	gotHeader, err := b.HeaderByNumber(t.Context(), rpc.PendingBlockNumber)
@@ -114,6 +114,16 @@ func TestSequencerPendingBackend(t *testing.T) {
 	if nonce, err := b.GetPoolNonce(t.Context(), address); err != nil || nonce != 4 {
 		t.Fatalf("pending nonce = %d, %v", nonce, err)
 	}
+	parentState, err := b.PendingParentState(t.Context(), block)
+	if err != nil || parentState != statedb {
+		t.Fatalf("pending parent state = %v, %v", parentState, err)
+	}
+	b.eth.seqConsumer = nil
+	parentState, err = b.PendingParentState(t.Context(), block)
+	if err != nil || parentState != nil {
+		t.Fatalf("pending parent state without consumer = %v, %v", parentState, err)
+	}
+	b.eth.seqConsumer = consumer
 	logs := make(chan []*types.Log, 1)
 	sub := b.SubscribePendingLogsEvent(logs)
 	sub.Unsubscribe()

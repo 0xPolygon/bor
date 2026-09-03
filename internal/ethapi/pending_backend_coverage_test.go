@@ -2,9 +2,13 @@ package ethapi
 
 import (
 	"bytes"
+	"context"
+	"math/big"
 	"strings"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rpc"
 )
@@ -15,6 +19,7 @@ type pendingMetadataCoverageBackend struct {
 	receipts     types.Receipts
 	blockCalls   int
 	receiptCalls int
+	parentState  *state.StateDB
 }
 
 func (b *pendingMetadataCoverageBackend) PendingBlock() *types.Block {
@@ -27,6 +32,10 @@ func (b *pendingMetadataCoverageBackend) PendingBlockAndReceipts() (*types.Block
 	return b.block, b.receipts
 }
 
+func (b *pendingMetadataCoverageBackend) PendingParentState(_ context.Context, _ *types.Block) (*state.StateDB, error) {
+	return b.parentState, nil
+}
+
 func TestPendingBackendCoverage(t *testing.T) {
 	transactionAPI, _, _ := setupTransactionsToApiTest(t)
 	backend := transactionAPI.b.(*testBackend)
@@ -37,6 +46,11 @@ func TestPendingBackendCoverage(t *testing.T) {
 		block:       block,
 		receipts:    receipts,
 	}
+	parentState, _, err := backend.StateAndHeaderByNumber(t.Context(), rpc.BlockNumber(block.NumberU64()-1))
+	if err != nil {
+		t.Fatalf("parent state: %v", err)
+	}
+	metadata.parentState = parentState
 
 	if got := pendingBlock(metadata); got != block || metadata.blockCalls != 1 {
 		t.Fatalf("metadata pending block = %v, calls = %d", got, metadata.blockCalls)
@@ -62,6 +76,19 @@ func TestPendingBackendCoverage(t *testing.T) {
 	legacyResult, err := NewBlockChainAPI(backend).GetBlockReceipts(t.Context(), pending)
 	if err != nil || len(legacyResult) != len(receipts) {
 		t.Fatalf("legacy pending block receipts = %v, %v", legacyResult, err)
+	}
+
+	multiBlock := types.NewBlockWithHeader(&types.Header{Number: new(big.Int).Add(block.Number(), big.NewInt(1)), ParentHash: common.HexToHash("0x1")})
+	gotParentState, err := pendingParentState(t.Context(), metadata, multiBlock)
+	if err != nil || gotParentState != parentState {
+		t.Fatalf("multi-block pending parent state = %v, %v", gotParentState, err)
+	}
+	if _, err := pendingParentState(t.Context(), backend, multiBlock); err == nil {
+		t.Fatal("missing multi-block pending parent-state provider did not fail")
+	}
+	gotParentState, err = pendingParentState(t.Context(), metadata, block)
+	if err != nil || gotParentState == nil {
+		t.Fatalf("immediate pending parent state = %v, %v", gotParentState, err)
 	}
 
 	metadata.block = nil
