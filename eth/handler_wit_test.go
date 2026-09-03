@@ -364,6 +364,42 @@ func TestHandleGetWitness_ResponseEncodedSizeBound(t *testing.T) {
 	require.Contains(t, err.Error(), "response exceeds maximum p2p payload size")
 }
 
+func TestHandleGetWitness_UsesPipelinedCacheDuringSizeResolution(t *testing.T) {
+	handler := newTestHandler()
+	defer handler.close()
+
+	witHandler := (*witHandler)(handler.handler)
+	peer := newTestWitPeer()
+	defer peer.Close()
+
+	header := &types.Header{Number: big.NewInt(3_000_000)}
+	hash := header.Hash()
+	rawdb.WriteHeader(handler.chain.DB(), header)
+	witness := []byte{1, 2, 3, 4}
+	handler.chain.CacheWitness(hash, witness)
+
+	sizes, prefetched := witHandler.resolveWitnessSizes(map[common.Hash]struct{}{hash: {}})
+	require.Equal(t, uint64(len(witness)), sizes[hash])
+	require.Equal(t, witness, prefetched[hash])
+
+	missingHeader := &types.Header{Number: big.NewInt(3_000_001)}
+	missingHash := missingHeader.Hash()
+	rawdb.WriteHeader(handler.chain.DB(), missingHeader)
+	sizes, prefetched = witHandler.resolveWitnessSizes(map[common.Hash]struct{}{missingHash: {}})
+	require.Zero(t, sizes[missingHash])
+	require.NotContains(t, prefetched, missingHash)
+
+	response, err := witHandler.handleGetWitness(peer, &wit.GetWitnessPacket{
+		RequestId: 88,
+		GetWitnessRequest: &wit.GetWitnessRequest{
+			WitnessPages: []wit.WitnessPageRequest{{Hash: hash, Page: 0}},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, response, 1)
+	require.Equal(t, witness, response[0].Data)
+}
+
 // TestHandleGetWitnessMetadata_PageCalculation tests page calculation edge cases
 func TestHandleGetWitnessMetadata_PageCalculation(t *testing.T) {
 	handler := newTestHandler()
