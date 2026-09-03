@@ -3,6 +3,7 @@ package sequencer
 import (
 	"math/big"
 	"testing"
+	"time"
 
 	pb "github.com/0xPolygon/sequence-store-proto/sequencestore/v1"
 
@@ -160,44 +161,190 @@ func TestCompletePreconfPrefixRejectsInvalidInputs(t *testing.T) {
 	}
 }
 
-func TestPendingPublicationCountIsBounded(t *testing.T) {
+func TestPendingPublicationWorkIsLinear(t *testing.T) {
 	const transactionCount = 6000
-	unchanged := &blockEnv{header: new(types.Header), txs: make([]*types.Transaction, 1), publishedTxs: 1}
-	if unchanged.shouldPublishPending() {
-		t.Fatal("unchanged pending block was republished")
-	}
-
-	eager := &blockEnv{
-		header:       &types.Header{GasLimit: 1},
-		txs:          make([]*types.Transaction, pendingEagerPublicationTxs),
-		publishedTxs: pendingEagerPublicationTxs - 1,
-	}
-	if !eager.shouldPublishPending() {
-		t.Fatal("last eager transaction was not published")
-	}
-
+	now := time.Unix(1, 0)
 	env := &blockEnv{header: &types.Header{GasLimit: transactionCount*21_000 + 1}}
 	publications := 0
+	publishedWork := 0
+	lastPublished := 0
+	maxGap := 0
 	for index := 0; index < transactionCount; index++ {
+		now = now.Add(500 * time.Microsecond)
 		env.txs = append(env.txs, nil)
 		env.header.GasUsed += 21_000
-		if !env.shouldPublishPending() {
+		if !env.shouldPublishPending(now) {
 			continue
 		}
 		publications++
+		publishedWork += len(env.txs)
+		if gap := len(env.txs) - lastPublished; gap > maxGap {
+			maxGap = gap
+		}
+		lastPublished = len(env.txs)
+		env.markPendingPublished(now)
 		env.publishedTxs = len(env.txs)
 		env.publishedGas = env.header.GasUsed
 	}
-	if publications > pendingEagerPublicationTxs+pendingRPCPublicationLimit {
-		t.Fatalf("pending publications = %d", publications)
+	if gap := transactionCount - lastPublished; gap > maxGap {
+		maxGap = gap
 	}
+	if publications != 31 || publishedWork != 45_496 || lastPublished != 5_656 || maxGap != 376 {
+		t.Fatalf("publications = %d, work = %d, last = %d, max gap = %d", publications, publishedWork, lastPublished, maxGap)
+	}
+	maxPublishedWork := pendingEagerPublicationTxs*(pendingEagerPublicationTxs+1)/2 + pendingRPCPublicationLimit*transactionCount
+	if publishedWork > maxPublishedWork {
+		t.Fatalf("cumulative pending publication work = %d, want <= %d", publishedWork, maxPublishedWork)
+	}
+	if env.postEagerPublications != 15 {
+		t.Fatalf("post-eager publications = %d, want 15", env.postEagerPublications)
+	}
+}
 
-	small := &blockEnv{
-		header:       &types.Header{GasLimit: 1, GasUsed: 21_000},
-		txs:          make([]*types.Transaction, pendingEagerPublicationTxs+1),
-		publishedTxs: pendingEagerPublicationTxs,
+func TestPendingPublicationCadence(t *testing.T) {
+	now := time.Unix(1, 0)
+	tests := []struct {
+		name             string
+		txs              int
+		published        int
+		gasUsed          uint64
+		publishedGas     uint64
+		lastPublishedAt  time.Time
+		postPublications int
+		want             bool
+	}{
+		{"unchanged", 17, 17, 21_000, 21_000, now.Add(-pendingRPCPublishFallbackDelay), 0, false},
+		{"eager", 16, 15, 21_000, 0, now, pendingRPCPublicationLimit, true},
+		{"batched eager catchup", 20, 15, 420_000, 315_000, now, 0, true},
+		{"minimum delay", 17, 16, 500_000, 336_000, now.Add(-pendingRPCMinPublishDelay + time.Nanosecond), 0, false},
+		{"before time fallback", 17, 16, 357_000, 336_000, now.Add(-pendingRPCPublishFallbackDelay + time.Nanosecond), 0, false},
+		{"time fallback", 17, 16, 357_000, 336_000, now.Add(-pendingRPCPublishFallbackDelay), 0, true},
+		{"clock moved backwards", 17, 16, 500_000, 336_000, now.Add(time.Nanosecond), 0, false},
+		{"time reserve exhausted", 17, 16, 357_000, 336_000, now.Add(-pendingRPCPublishFallbackDelay), pendingRPCTimeFallbackLimit, false},
+		{"gas after time reserve", 17, 16, 436_000, 336_000, now.Add(-pendingRPCPublishFallbackDelay), pendingRPCTimeFallbackLimit, true},
+		{"budget exhausted", 17, 16, 500_000, 336_000, now.Add(-pendingRPCPublishFallbackDelay), pendingRPCPublicationLimit, false},
 	}
-	if !small.shouldPublishPending() {
-		t.Fatal("minimum gas checkpoint was not published")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			env := &blockEnv{
+				header:                &types.Header{GasLimit: 1_600_000, GasUsed: test.gasUsed},
+				txs:                   make([]*types.Transaction, test.txs),
+				publishedTxs:          test.published,
+				publishedGas:          test.publishedGas,
+				lastPublishedAt:       test.lastPublishedAt,
+				postEagerPublications: test.postPublications,
+			}
+			if got := env.shouldPublishPending(now); got != test.want {
+				t.Fatalf("shouldPublishPending = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestPendingPublicationGasThreshold(t *testing.T) {
+	now := time.Unix(1, 0)
+	tests := []struct {
+		name         string
+		gasLimit     uint64
+		gasUsed      uint64
+		publishedGas uint64
+		want         bool
+	}{
+		{"minimum below", 1, 20_999, 0, false},
+		{"minimum boundary", 1, 21_000, 0, true},
+		{"exact below", 1_600_000, 435_999, 336_000, false},
+		{"exact boundary", 1_600_000, 436_000, 336_000, true},
+		{"rounded below", 1_600_001, 436_000, 336_000, false},
+		{"rounded boundary", 1_600_001, 436_001, 336_000, true},
+		{"gas regression", 1_600_000, 335_999, 336_000, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			env := &blockEnv{
+				header:          &types.Header{GasLimit: test.gasLimit, GasUsed: test.gasUsed},
+				txs:             make([]*types.Transaction, pendingEagerPublicationTxs+1),
+				publishedTxs:    pendingEagerPublicationTxs,
+				publishedGas:    test.publishedGas,
+				lastPublishedAt: now.Add(-pendingRPCMinPublishDelay),
+			}
+			if got := env.shouldPublishPending(now); got != test.want {
+				t.Fatalf("shouldPublishPending = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestPendingPublicationTimeFallbackIsBounded(t *testing.T) {
+	now := time.Unix(1, 0)
+	env := &blockEnv{
+		header:          &types.Header{GasLimit: ^uint64(0), GasUsed: 16 * 21_000},
+		txs:             make([]*types.Transaction, pendingEagerPublicationTxs),
+		publishedTxs:    pendingEagerPublicationTxs,
+		publishedGas:    pendingEagerPublicationTxs * 21_000,
+		lastPublishedAt: now,
+	}
+	work := 0
+	for index := 1; index <= pendingRPCTimeFallbackLimit; index++ {
+		env.txs = append(env.txs, nil)
+		env.header.GasUsed += 21_000
+		now = now.Add(pendingRPCPublishFallbackDelay)
+		if !env.shouldPublishPending(now) || !env.shouldPublishPending(now) {
+			t.Fatalf("time publication %d was not ready", index)
+		}
+		if env.postEagerPublications != index-1 {
+			t.Fatal("publication decision consumed the budget")
+		}
+		env.markPendingPublished(now)
+		env.publishedTxs = len(env.txs)
+		env.publishedGas = env.header.GasUsed
+		work += len(env.txs)
+	}
+	if work != 164 || env.postEagerPublications != pendingRPCTimeFallbackLimit {
+		t.Fatalf("work = %d, publications = %d", work, env.postEagerPublications)
+	}
+	env.txs = append(env.txs, nil)
+	env.header.GasUsed += 21_000
+	now = now.Add(pendingRPCPublishFallbackDelay)
+	if env.shouldPublishPending(now) {
+		t.Fatal("time fallback exceeded its publication budget")
+	}
+	env.header.GasLimit = 1_600_000
+	env.header.GasUsed = env.publishedGas + 100_000
+	if !env.shouldPublishPending(now) {
+		t.Fatal("time fallback consumed the reserved gas budget")
+	}
+	env.markPendingPublished(now)
+	if env.postEagerPublications != pendingRPCTimeFallbackLimit+1 {
+		t.Fatalf("post-eager publications = %d", env.postEagerPublications)
+	}
+}
+
+func TestPendingPublicationImprovesPartialBlockFreshness(t *testing.T) {
+	now := time.Unix(1, 0)
+	env := &blockEnv{header: &types.Header{GasLimit: 200_000_000}}
+	publications := 0
+	lastPublished := 0
+	maxGap := 0
+	for index := 0; index < 200; index++ {
+		now = now.Add(5 * time.Millisecond)
+		env.txs = append(env.txs, nil)
+		env.header.GasUsed += 21_000
+		if !env.shouldPublishPending(now) {
+			continue
+		}
+		publications++
+		if gap := len(env.txs) - lastPublished; gap > maxGap {
+			maxGap = gap
+		}
+		lastPublished = len(env.txs)
+		env.markPendingPublished(now)
+		env.publishedTxs = len(env.txs)
+		env.publishedGas = env.header.GasUsed
+	}
+	if gap := 200 - lastPublished; gap > maxGap {
+		maxGap = gap
+	}
+	if publications != 20 || lastPublished != 176 || maxGap != 40 || env.postEagerPublications != 4 {
+		t.Fatalf("publications = %d, last = %d, max gap = %d, post-eager = %d", publications, lastPublished, maxGap, env.postEagerPublications)
 	}
 }

@@ -2,6 +2,7 @@ package sequencer
 
 import (
 	"sync"
+	"time"
 
 	"github.com/holiman/uint256"
 
@@ -13,13 +14,16 @@ import (
 )
 
 const (
-	pendingInputLimit          = 32 * 1024 * 1024
-	pendingOpenBaseFeeLimit    = 32
-	pendingSealHeaderLimit     = 1 * 1024 * 1024
-	pendingRPCPublicationLimit = 128
-	pendingEagerPublicationTxs = 16
-	pendingLogsQueueLimit      = 64
-	pendingEntryLimit          = 256
+	pendingInputLimit              = 32 * 1024 * 1024
+	pendingOpenBaseFeeLimit        = 32
+	pendingSealHeaderLimit         = 1 * 1024 * 1024
+	pendingRPCPublicationLimit     = 16
+	pendingEagerPublicationTxs     = 16
+	pendingRPCMinPublishDelay      = 100 * time.Millisecond
+	pendingRPCTimeFallbackLimit    = pendingRPCPublicationLimit / 2
+	pendingRPCPublishFallbackDelay = 200 * time.Millisecond
+	pendingLogsQueueLimit          = 64
+	pendingEntryLimit              = 256
 )
 
 type PendingPhase uint8

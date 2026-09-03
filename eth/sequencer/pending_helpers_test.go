@@ -65,6 +65,83 @@ func TestCloneProcessResultDeepCopy(t *testing.T) {
 	}
 }
 
+func TestPreparePendingOwnsRPCSnapshot(t *testing.T) {
+	statedb, err := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+	if err != nil {
+		t.Fatalf("state: %v", err)
+	}
+	address := common.Address{1}
+	statedb.SetNonce(address, 7, tracing.NonceChangeUnspecified)
+	tx := types.NewTransaction(0, address, big.NewInt(1), 21_000, big.NewInt(1), nil)
+	sourceHash := common.Hash{2}
+	receipt := &types.Receipt{
+		TxHash:            tx.Hash(),
+		BlockHash:         sourceHash,
+		BlockNumber:       big.NewInt(1),
+		Status:            types.ReceiptStatusSuccessful,
+		GasUsed:           21_000,
+		CumulativeGasUsed: 21_000,
+		PostState:         []byte{3},
+		Logs: []*types.Log{{
+			BlockHash: sourceHash,
+			TxHash:    tx.Hash(),
+			Topics:    []common.Hash{{4}},
+			Data:      []byte{5},
+		}},
+	}
+	env := &blockEnv{
+		header:   &types.Header{Number: big.NewInt(1), GasLimit: 30_000_000, GasUsed: 21_000},
+		statedb:  statedb,
+		txs:      types.Transactions{tx},
+		receipts: types.Receipts{receipt},
+	}
+	block, unsealed, ok := preparePending(env, env.header, common.Hash{}, nil)
+	if !ok {
+		t.Fatal("prepare unsealed view")
+	}
+	sealedHash := common.Hash{6}
+	sealed, ok := preparePendingPayload(env, block, sealedHash, nil)
+	if !ok {
+		t.Fatal("prepare sealed view")
+	}
+	if sealed.view.Block != block {
+		t.Fatal("sealed payload rebuilt the assembled block")
+	}
+	if unsealed.finalized || !sealed.finalized {
+		t.Fatalf("finalized markers = %v, %v", unsealed.finalized, sealed.finalized)
+	}
+	unsealedReceipt := unsealed.view.Receipts[tx.Hash()]
+	sealedReceipt := sealed.view.Receipts[tx.Hash()]
+	if receipt.BlockHash != sourceHash || receipt.Logs[0].BlockHash != sourceHash {
+		t.Fatal("preparing a view mutated the execution receipt")
+	}
+	if unsealedReceipt.BlockHash != (common.Hash{}) || unsealedReceipt.Logs[0].BlockHash != (common.Hash{}) {
+		t.Fatal("unsealed view retained a provisional block hash")
+	}
+	if sealedReceipt.BlockHash != sealedHash || sealedReceipt.Logs[0].BlockHash != sealedHash {
+		t.Fatal("sealed view did not receive the sealed block hash")
+	}
+
+	receipt.PostState[0] = 7
+	receipt.Logs[0].Topics[0][0] = 8
+	receipt.Logs[0].Data[0] = 9
+	statedb.SetNonce(address, 10, tracing.NonceChangeUnspecified)
+	for name, view := range map[string]*PendingRPCView{"unsealed": unsealed.view, "sealed": sealed.view} {
+		got := view.Receipts[tx.Hash()]
+		if got.PostState[0] != 3 || got.Logs[0].Topics[0][0] != 4 || got.Logs[0].Data[0] != 5 {
+			t.Fatalf("%s view shares receipt storage with execution", name)
+		}
+		if view.State.GetNonce(address) != 7 {
+			t.Fatalf("%s view shares mutable execution state", name)
+		}
+	}
+	returned := receiptsFromView(block, unsealed.view)
+	returned[0].PostState[0] = 11
+	if unsealed.view.Receipts[tx.Hash()].PostState[0] != 3 {
+		t.Fatal("receipt returned to a caller mutated the stored view")
+	}
+}
+
 func TestPendingComparisonsRejectMismatches(t *testing.T) {
 	txA := types.NewTransaction(0, common.Address{1}, big.NewInt(1), 21_000, big.NewInt(1), nil)
 	txB := types.NewTransaction(1, common.Address{1}, big.NewInt(1), 21_000, big.NewInt(1), nil)

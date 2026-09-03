@@ -327,22 +327,22 @@ func (s *session) applySeal(seal *pb.BlockSeal) {
 
 	sealedHash := common.Hash(commitment.SealedHash(seal.GetHeader()))
 	if !verified {
-		block, payload, ok := preparePending(s.env, assembled.Header(), common.Hash{}, nil)
+		payload, ok := preparePendingPayload(s.env, assembled, common.Hash{}, nil)
 		if !ok {
 			s.clearEnv()
 			s.parked = nil
 			return
 		}
-		s.publishUnverifiedSeal(block, payload, sealed, sealedHash)
+		s.publishUnverifiedSeal(assembled, payload, sealed, sealedHash)
 		return
 	}
-	block, payload, ok := preparePending(s.env, assembled.Header(), sealedHash, reusable)
+	payload, ok := preparePendingPayload(s.env, assembled, sealedHash, reusable)
 	if !ok {
 		s.clearEnv()
 		s.parked = nil
 		return
 	}
-	s.publishSeal(block, payload, sealed, sealedHash)
+	s.publishSeal(assembled, payload, sealed, sealedHash)
 }
 
 func (s *session) publishUnverifiedSeal(block *types.Block, payload pendingPayload, sealed *types.Header, sealedHash common.Hash) {

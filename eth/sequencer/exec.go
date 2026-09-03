@@ -26,18 +26,20 @@ import (
 // CalculateCoinbase (post-Rio), difficulty constant 1 under VEBLOP, and the
 // same pre-transaction system calls the producer runs (EIP-2935 post-Prague).
 type blockEnv struct {
-	generation   uint64
-	cacheable    bool
-	interrupt    atomic.Bool
-	header       *types.Header
-	statedb      *state.StateDB
-	evm          *vm.EVM
-	gasPool      *core.GasPool
-	inputBytes   uint64
-	txs          []*types.Transaction
-	receipts     []*types.Receipt
-	publishedGas uint64
-	publishedTxs int
+	generation            uint64
+	cacheable             bool
+	interrupt             atomic.Bool
+	header                *types.Header
+	statedb               *state.StateDB
+	evm                   *vm.EVM
+	gasPool               *core.GasPool
+	inputBytes            uint64
+	txs                   []*types.Transaction
+	receipts              []*types.Receipt
+	publishedGas          uint64
+	publishedTxs          int
+	lastPublishedAt       time.Time
+	postEagerPublications int
 }
 
 // newBlockEnv builds the execution environment. speculative maps heights of
@@ -349,7 +351,7 @@ func (s *session) executeRecord(record *pb.Record) {
 		s.parked = nil
 		return
 	}
-	if !s.env.shouldPublishPending() {
+	if !s.env.shouldPublishPending(time.Now()) {
 		return
 	}
 	block, payload, ok := preparePending(s.env, s.env.header, common.Hash{}, nil)
@@ -365,20 +367,28 @@ func (s *session) executeRecord(record *pb.Record) {
 		s.consumer.publishMu.Unlock()
 		return
 	}
+	s.env.markPendingPublished(time.Now())
 	logs := s.indexPublishedTransactions()
 	s.consumer.enqueuePendingLogs(logs)
 	s.consumer.publishMu.Unlock()
 }
 
-func (env *blockEnv) shouldPublishPending() bool {
+func (env *blockEnv) shouldPublishPending(now time.Time) bool {
 	if len(env.txs) == env.publishedTxs {
 		return false
 	}
-	if len(env.txs) <= pendingEagerPublicationTxs {
+	if env.publishedTxs < pendingEagerPublicationTxs {
 		return true
 	}
-	// Keep small pending blocks immediately visible while bounding expensive
-	// StateDB snapshots for high-volume blocks to a fixed number of checkpoints.
+	if env.postEagerPublications >= pendingRPCPublicationLimit {
+		return false
+	}
+	// Gas checkpoints spread snapshots through full blocks. The next-record
+	// time fallback keeps partial blocks fresh, while its reserved budget and
+	// minimum delay leave capacity for a later transaction burst.
+	if now.Before(env.lastPublishedAt.Add(pendingRPCMinPublishDelay)) {
+		return false
+	}
 	step := env.header.GasLimit / pendingRPCPublicationLimit
 	if env.header.GasLimit%pendingRPCPublicationLimit != 0 {
 		step++
@@ -386,7 +396,17 @@ func (env *blockEnv) shouldPublishPending() bool {
 	if step < 21_000 {
 		step = 21_000
 	}
-	return env.header.GasUsed >= env.publishedGas && env.header.GasUsed-env.publishedGas >= step
+	gasDue := env.header.GasUsed >= env.publishedGas && env.header.GasUsed-env.publishedGas >= step
+	timeDue := env.postEagerPublications < pendingRPCTimeFallbackLimit &&
+		!now.Before(env.lastPublishedAt.Add(pendingRPCPublishFallbackDelay))
+	return gasDue || timeDue
+}
+
+func (env *blockEnv) markPendingPublished(now time.Time) {
+	if len(env.txs) > pendingEagerPublicationTxs {
+		env.postEagerPublications++
+	}
+	env.lastPublishedAt = now
 }
 
 func (s *session) indexPublishedTransactions() []*types.Log {

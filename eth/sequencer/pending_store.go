@@ -131,29 +131,27 @@ func (c *Consumer) invalidatePendingFromReason(number uint64, reason string) {
 }
 
 func preparePending(env *blockEnv, header *types.Header, blockHash common.Hash, reusable *ReusableExecution) (*types.Block, pendingPayload, bool) {
-	receipts := cloneReceipts(env.receipts)
-	if blockHash != (common.Hash{}) {
-		for _, receipt := range receipts {
-			receipt.BlockHash = blockHash
-			for _, entry := range receipt.Logs {
-				entry.BlockHash = blockHash
-			}
-		}
-	} else {
-		for _, receipt := range receipts {
-			receipt.BlockHash = common.Hash{}
-			for _, entry := range receipt.Logs {
-				entry.BlockHash = common.Hash{}
-			}
-		}
-	}
-	block, err := blockFromExecution(header, env.txs, receipts)
+	block, err := blockFromExecution(header, env.txs, env.receipts)
 	if err != nil {
 		return nil, pendingPayload{}, false
 	}
-	payload, ok := makePendingPayload(block, receipts, env.statedb, reusable)
-	payload.finalized = blockHash != (common.Hash{})
+	payload, ok := preparePendingPayload(env, block, blockHash, reusable)
 	return block, payload, ok
+}
+
+func preparePendingPayload(env *blockEnv, block *types.Block, blockHash common.Hash, reusable *ReusableExecution) (pendingPayload, bool) {
+	payload, ok := makePendingPayload(block, env.receipts, env.statedb, reusable)
+	if !ok {
+		return pendingPayload{}, false
+	}
+	for _, receipt := range payload.view.Receipts {
+		receipt.BlockHash = blockHash
+	}
+	for _, entry := range payload.view.Logs {
+		entry.BlockHash = blockHash
+	}
+	payload.finalized = blockHash != (common.Hash{})
+	return payload, ok
 }
 
 func (c *Consumer) publishPending(block *types.Block, payload pendingPayload, generation uint64) bool {

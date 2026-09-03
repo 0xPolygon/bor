@@ -139,6 +139,14 @@ func TestPendingParentState(t *testing.T) {
 	if parentState == nil || parentState.GetNonce(*parent.address) != 6 {
 		t.Fatalf("parent state = %v", parentState)
 	}
+	consumer := &Consumer{store: store}
+	parentState, err = consumer.PendingParentState(t.Context(), child.block)
+	if err != nil {
+		t.Fatalf("consumer pending parent state: %v", err)
+	}
+	if parentState == nil || parentState.GetNonce(*parent.address) != 6 {
+		t.Fatalf("consumer parent state = %v", parentState)
+	}
 }
 
 func TestPendingRPCEmptyStore(t *testing.T) {
@@ -210,6 +218,13 @@ func TestPendingRPCStateErrors(t *testing.T) {
 	}
 	if nonce, found, err := consumer.PendingNonce(*fixture.address); nonce != 0 || !found || !errors.Is(err, failure) {
 		t.Fatalf("errored pending nonce = %d, %v, %v", nonce, err, found)
+	}
+	child := types.NewBlockWithHeader(&types.Header{
+		Number:     new(big.Int).Add(fixture.block.Number(), common.Big1),
+		ParentHash: fixture.block.Hash(),
+	})
+	if statedb, err := consumer.PendingParentState(t.Context(), child); statedb != nil || !errors.Is(err, failure) {
+		t.Fatalf("errored pending parent state = %v, %v", statedb, err)
 	}
 }
 
@@ -333,7 +348,7 @@ func (r *mutatingPendingStateReader) GetNonceWithError(address common.Address) (
 // Verified by mutation: deleting the trailing check from any accessor below
 // makes its subtest fail.
 //
-// Only the three accessors that consult the pending state reader are covered,
+// Only the four accessors that consult the pending state reader are covered,
 // because that is the only injection point the store exposes. PendingBlock,
 // PendingBlockAndReceipts and LookupPreconf read straight out of the view under
 // a lock, so their closing check has no deterministic hook; they are covered
@@ -351,6 +366,16 @@ func TestPendingAccessorsRecheckAnchorAfterRead(t *testing.T) {
 		{"PendingState", func(t *testing.T, c *Consumer) {
 			if b, s, err := c.PendingState(t.Context()); b != nil || s != nil || err != nil {
 				t.Fatalf("PendingState = %v, %v, %v", b, s, err)
+			}
+		}},
+		{"PendingParentState", func(t *testing.T, c *Consumer) {
+			parent := c.pendingStore().PendingBlock()
+			child := types.NewBlockWithHeader(&types.Header{
+				Number:     new(big.Int).Add(parent.Number(), common.Big1),
+				ParentHash: parent.Hash(),
+			})
+			if s, err := c.PendingParentState(t.Context(), child); s != nil || err != nil {
+				t.Fatalf("PendingParentState = %v, %v", s, err)
 			}
 		}},
 		{"PendingNonce", func(t *testing.T, c *Consumer) {
@@ -450,6 +475,11 @@ func TestPendingAccessorsRefuseUnreconciledHead(t *testing.T) {
 		{"PendingBlockAndReceipts", func(t *testing.T) {
 			if b, r := consumer.PendingBlockAndReceipts(); b != nil || r != nil {
 				t.Fatalf("PendingBlockAndReceipts = %v, %v", b, r)
+			}
+		}},
+		{"PendingParentState", func(t *testing.T) {
+			if s, err := consumer.PendingParentState(t.Context(), block); s != nil || err != nil {
+				t.Fatalf("PendingParentState = %v, %v", s, err)
 			}
 		}},
 		{"PendingNonce", func(t *testing.T) {
