@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -118,6 +119,16 @@ func (s *RelayService) SubmitPreconfTransaction(tx *types.Transaction) error {
 	}
 	err := s.txRelay.SubmitTransactionForPreconf(tx)
 	if err != nil {
+		return fmt.Errorf("request dropped: %w", err)
+	}
+	return nil
+}
+
+func (s *RelayService) SubmitPreconfTransactionSync(ctx context.Context, tx *types.Transaction) error {
+	if s.txRelay == nil {
+		return fmt.Errorf("request dropped: %w", errRelayNotConfigured)
+	}
+	if err := s.txRelay.SubmitTransactionForPreconfSync(ctx, tx); err != nil {
 		return fmt.Errorf("request dropped: %w", err)
 	}
 	return nil
