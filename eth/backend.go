@@ -85,6 +85,7 @@ type sequenceConsumer interface {
 	PendingNonce(common.Address) (uint64, bool, error)
 	LookupPreconf(common.Hash) (*types.Transaction, *types.Receipt, bool)
 	SubscribePendingLogs(chan<- []*types.Log) event.Subscription
+	SubscribePreconfReceipts(chan<- core.PreconfReceiptsEvent) event.Subscription
 	Close()
 }
 

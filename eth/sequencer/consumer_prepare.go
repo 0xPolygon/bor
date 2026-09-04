@@ -182,6 +182,12 @@ func (c *Consumer) prepareTransaction(raw []byte, signer types.Signer) preparedT
 
 func (c *Consumer) verifiedSender(tx *types.Transaction, signer types.Signer) (common.Address, error) {
 	hash := tx.Hash()
+	if cached := c.cachedPreconfTransaction(hash); cached != nil {
+		if sender, err := types.Sender(signer, cached); err == nil {
+			preconfSenderCacheHit.Inc(1)
+			return sender, nil
+		}
+	}
 	if c.txLookup != nil {
 		if pooled := c.txLookup.Get(hash); pooled != nil && pooled.Hash() == hash {
 			if sender, err := types.Sender(signer, pooled); err == nil {

@@ -114,6 +114,34 @@ func TestSessionIndexesExecutedReceiptBeforeNextStateCheckpoint(t *testing.T) {
 	}
 }
 
+func TestSessionIndexesLargeRecordIncrementally(t *testing.T) {
+	h := startExecHarness(t)
+	s := h.session()
+	handleOK(t, s, openOn(h.chain.CurrentBlock(), h.config, commitment.Head{0x74}))
+
+	rawTransactions := make([][]byte, pendingReceiptPublicationBatch+1)
+	txs := make(types.Transactions, len(rawTransactions))
+	for nonce := range rawTransactions {
+		txs[nonce] = h.transfer(t, uint64(nonce))
+		rawTransactions[nonce] = marshalTransaction(t, txs[nonce])
+	}
+	if !s.applyPreparedTransactions(rawTransactions, nil) {
+		t.Fatal("apply record")
+	}
+
+	for _, tx := range txs[:pendingReceiptPublicationBatch] {
+		if _, receipt, ok := s.consumer.LookupPreconf(tx.Hash()); !ok || receipt == nil {
+			t.Fatalf("batched receipt %s was not indexed", tx.Hash())
+		}
+	}
+	if _, _, ok := s.consumer.LookupPreconf(txs[pendingReceiptPublicationBatch].Hash()); ok {
+		t.Fatal("incomplete receipt batch was indexed")
+	}
+	if s.env.indexedTxs != pendingReceiptPublicationBatch {
+		t.Fatalf("indexed=%d, want %d", s.env.indexedTxs, pendingReceiptPublicationBatch)
+	}
+}
+
 func TestSessionRejectsOversizedStreamFields(t *testing.T) {
 	s := new(session)
 	prefix := make([]byte, len(commitment.Head{}))

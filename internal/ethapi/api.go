@@ -48,7 +48,6 @@ import (
 	"github.com/ethereum/go-ethereum/eth/gasestimator"
 	"github.com/ethereum/go-ethereum/eth/tracers/logger"
 	"github.com/ethereum/go-ethereum/ethdb"
-	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/internal/ethapi/override"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p"
@@ -64,11 +63,6 @@ const estimateGasErrorRatio = 0.015
 
 var errBlobTxNotSupported = errors.New("signing blob transactions not supported")
 var errSubClosed = errors.New("chain subscription closed")
-
-// txSyncCanonicalBackstop is how often a waiting sync call falls back to an
-// on-disk receipt lookup. Canonical arrival normally comes in as a chain event;
-// this only covers an event that carried no matching receipts.
-const txSyncCanonicalBackstop = time.Second
 
 // EthereumAPI provides an API to access Ethereum related information.
 type EthereumAPI struct {
@@ -1803,7 +1797,8 @@ type TransactionAPI struct {
 	signer    types.Signer
 
 	// admission for calls parked in awaitReceipt; nil when unbounded.
-	txSyncWaiters chan struct{}
+	txSyncWaiters  chan struct{}
+	txSyncReceipts *txSyncReceiptHub
 }
 
 // returns block transactions along with state-sync transaction if present
@@ -1838,6 +1833,7 @@ func NewTransactionAPI(b Backend, nonceLock *AddrLocker) *TransactionAPI {
 	signer := types.LatestSigner(b.ChainConfig())
 
 	api := &TransactionAPI{b: b, nonceLock: nonceLock, signer: signer}
+	api.txSyncReceipts = newTxSyncReceiptHub(api)
 	if n := b.RPCTxSyncMaxConcurrent(); n > 0 {
 		api.txSyncWaiters = make(chan struct{}, n)
 	}
@@ -2244,8 +2240,8 @@ func (api *TransactionAPI) SendRawTransaction(ctx context.Context, input hexutil
 	return hash, err
 }
 
-// SendRawTransactionSync adds the signed transaction to the transaction pool and
-// waits for either a preconfirmation or canonical receipt until the timeout.
+// SendRawTransactionSync submits the signed transaction and waits for either a
+// preconfirmation or canonical receipt until the timeout.
 func (api *TransactionAPI) SendRawTransactionSync(ctx context.Context, input hexutil.Bytes, timeoutMs *hexutil.Uint64) (map[string]interface{}, error) {
 	tx, err := api.decodeRawTransaction(input)
 	if err != nil {
@@ -2259,27 +2255,40 @@ func (api *TransactionAPI) SendRawTransactionSync(ctx context.Context, input hex
 	}
 	defer api.leaveTxSyncWait()
 
-	ch := make(chan core.ChainEvent, 128)
-	sub := api.b.SubscribeChainEvent(ch)
-	defer sub.Unsubscribe()
+	updates, unregister := api.txSyncReceipts.register(tx.Hash())
+	defer unregister()
 
-	hash, err := SubmitTransaction(ctx, api.b, tx)
+	hash, eventDriven, err := api.submitSyncTransaction(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
-	api.submitForPreconf(tx)
 
 	timeout := api.txSyncTimeout(timeoutMs)
 
 	receiptCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// Fast path.
-	if r := api.receiptIfAvailable(receiptCtx, hash); r != nil {
-		return r, nil
+	if !eventDriven {
+		if receipt := api.pollReceipt(receiptCtx, hash, false); receipt != nil {
+			return receipt, nil
+		}
 	}
 
-	return api.awaitReceipt(receiptCtx, hash, timeout, sub, ch)
+	return api.awaitReceipt(receiptCtx, hash, timeout, updates)
+}
+
+func (api *TransactionAPI) submitSyncTransaction(ctx context.Context, tx *types.Transaction) (common.Hash, bool, error) {
+	if submitter, ok := api.b.(preconfSyncSubmitter); ok && api.b.PreconfEnabled() {
+		if err := submitter.SubmitTxForPreconfSync(ctx, tx); err != nil {
+			return common.Hash{}, false, err
+		}
+		return tx.Hash(), true, nil
+	}
+	hash, err := SubmitTransaction(ctx, api.b, tx)
+	if err == nil {
+		api.submitForPreconf(tx)
+	}
+	return hash, false, err
 }
 
 // txSyncTimeout resolves the caller's requested wait window against the node's
@@ -2305,42 +2314,19 @@ func (api *TransactionAPI) awaitReceipt(
 	ctx context.Context,
 	hash common.Hash,
 	timeout time.Duration,
-	sub event.Subscription,
-	ch <-chan core.ChainEvent,
+	updates <-chan txSyncReceiptResult,
 ) (map[string]interface{}, error) {
 	slot := rpc.ExecutionSlotFromContext(ctx)
 	slot.Release()
 
 	defer slot.Acquire()
 
-	preconfTick, stopPreconfPolling := api.preconfReceiptPolling()
-	defer stopPreconfPolling()
-
-	backstop := time.NewTicker(txSyncCanonicalBackstop)
-	defer backstop.Stop()
-
 	for {
 		select {
 		case <-ctx.Done():
 			return nil, txSyncWaitClosed(ctx, hash, timeout)
-
-		case err, ok := <-sub.Err():
-			return nil, subscriptionFailure(err, ok)
-
-		case <-preconfTick:
-			if receipt := api.pollReceipt(ctx, hash, false); receipt != nil {
-				return receipt, nil
-			}
-
-		case <-backstop.C:
-			if receipt := api.pollReceipt(ctx, hash, true); receipt != nil {
-				return receipt, nil
-			}
-
-		case ev, open := <-ch:
-			if receipt, done, err := api.receiptFromChainEvent(ctx, ev, open, hash); done {
-				return receipt, err
-			}
+		case result := <-updates:
+			return result.receipt, result.err
 		}
 	}
 }
@@ -2359,14 +2345,23 @@ func txSyncWaitClosed(ctx context.Context, hash common.Hash, timeout time.Durati
 	}
 }
 
-// pollReceipt reads the pending view first, which is where a preconfirmation
-// shows up and costs a single in-memory lookup. Only once something is there,
-// or on the backstop tick, is the full lookup worth its two DB point-misses -
-// canonical arrival otherwise reaches awaitReceipt as a chain event. That
-// lookup prefers a canonical receipt and falls back to the same
-// preconfirmation, so there is nothing to return here on its own.
 func (api *TransactionAPI) pollReceipt(ctx context.Context, hash common.Hash, checkCanonical bool) map[string]interface{} {
-	if !checkCanonical && preconfTransactionReceipt(api.b, hash) == nil {
+	pending, pendingBlock, found := preconfTransactionReceiptAt(api.b, hash)
+	if found {
+		head := api.b.CurrentHeader()
+		if head != nil && head.Number != nil && head.Number.Uint64() < pendingBlock {
+			return pending
+		}
+		if canonical := api.receiptIfAvailable(ctx, hash); canonical != nil {
+			return canonical
+		}
+		return pending
+	}
+	if !checkCanonical {
+		return nil
+	}
+	status := api.b.TxStatus(hash)
+	if status == txpool.TxStatusPending || status == txpool.TxStatusQueued {
 		return nil
 	}
 
@@ -2382,47 +2377,6 @@ func subscriptionFailure(err error, open bool) error {
 }
 
 // receiptFromChainEvent reports done when ev settles the wait for hash.
-func (api *TransactionAPI) receiptFromChainEvent(
-	ctx context.Context,
-	ev core.ChainEvent,
-	open bool,
-	hash common.Hash,
-) (map[string]interface{}, bool, error) {
-	if !open {
-		return nil, true, errSubClosed
-	}
-
-	rs, txs := ev.Receipts, ev.Transactions
-	if len(rs) == 0 || len(rs) != len(txs) {
-		return nil, false, nil
-	}
-
-	for i := range rs {
-		if rs[i].TxHash != hash {
-			continue
-		}
-
-		if rs[i].BlockNumber != nil && rs[i].BlockHash != (common.Hash{}) {
-			signer := types.LatestSigner(api.b.ChainConfig())
-
-			return MarshalReceipt(
-				rs[i],
-				rs[i].BlockHash,
-				rs[i].BlockNumber.Uint64(),
-				signer,
-				txs[i],
-				int(rs[i].TransactionIndex),
-			), true, nil
-		}
-
-		receipt, err := api.GetTransactionReceipt(ctx, hash)
-
-		return receipt, true, err
-	}
-
-	return nil, false, nil
-}
-
 // enterTxSyncWait admits one more waiter, reporting false once the node holds
 // as many as it is configured for.
 func (api *TransactionAPI) enterTxSyncWait() bool {
@@ -2446,17 +2400,6 @@ func (api *TransactionAPI) leaveTxSyncWait() {
 	<-api.txSyncWaiters
 }
 
-func (api *TransactionAPI) preconfReceiptPolling() (<-chan time.Time, func()) {
-	if !api.b.PreconfEnabled() {
-		return nil, func() {}
-	}
-	if _, ok := api.b.(preconfBackend); !ok {
-		return nil, func() {}
-	}
-	ticker := time.NewTicker(100 * time.Millisecond)
-	return ticker.C, ticker.Stop
-}
-
 // receiptIfAvailable treats receipt lookup errors as absence while polling.
 func (api *TransactionAPI) receiptIfAvailable(ctx context.Context, hash common.Hash) map[string]interface{} {
 	receipt, err := api.GetTransactionReceipt(ctx, hash)
@@ -2477,7 +2420,7 @@ func (api *TransactionAPI) submitForPreconf(tx *types.Transaction) {
 
 // SendRawTransactionForPreconf will accept a preconf transaction from relay if enabled. It will
 // offer a soft inclusion confirmation if the transaction is accepted into the pending pool.
-func (api *TransactionAPI) SendRawTransactionForPreconf(ctx context.Context, input hexutil.Bytes) (map[string]interface{}, error) {
+func (api *TransactionAPI) SendRawTransactionForPreconf(ctx context.Context, input hexutil.Bytes, waitForPending *bool) (map[string]interface{}, error) {
 	if !api.b.AcceptPreconfTxs() {
 		return nil, errors.New("preconf transactions are not accepted on this node")
 	}
@@ -2494,25 +2437,40 @@ func (api *TransactionAPI) SendRawTransactionForPreconf(ctx context.Context, inp
 	}
 
 	if errors.Is(err, txpool.ErrAlreadyKnown) {
-		// If the tx is already known, update the hash. Skip the wait
-		// to check the tx pool status.
 		hash = tx.Hash()
-	} else {
-		// Check tx status leaving a small delay for internal pool rearrangements
-		// TODO: try to have a better estimate for this or replace with a subscription
-		time.Sleep(100 * time.Millisecond)
 	}
 
-	txStatus := api.b.TxStatus(hash)
-	var txConfirmed bool
-	if txStatus == txpool.TxStatusPending {
-		txConfirmed = true
+	txConfirmed := api.b.TxStatus(hash) == txpool.TxStatusPending
+	if waitForPending == nil || *waitForPending {
+		txConfirmed = api.waitForPendingTx(ctx, hash)
 	}
 
 	return map[string]interface{}{
 		"hash":         hash,
 		"preconfirmed": txConfirmed,
 	}, nil
+}
+
+func (api *TransactionAPI) waitForPendingTx(ctx context.Context, hash common.Hash) bool {
+	if api.b.TxStatus(hash) == txpool.TxStatusPending {
+		return true
+	}
+	timer := time.NewTimer(100 * time.Millisecond)
+	defer timer.Stop()
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-timer.C:
+			return api.b.TxStatus(hash) == txpool.TxStatusPending
+		case <-ticker.C:
+			if api.b.TxStatus(hash) == txpool.TxStatusPending {
+				return true
+			}
+		}
+	}
 }
 
 // SendRawTransactionForPreconf will accept a private transaction from relay if enabled. It will ensure

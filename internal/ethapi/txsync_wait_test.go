@@ -16,6 +16,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -95,12 +96,13 @@ func TestPollReceipt(t *testing.T) {
 		checkCanonical bool
 		wantReceipt    bool
 		wantPreconf    bool
+		wantLookup     bool
 	}{
 		{name: "nothing landed"},
 		{name: "preconf only", preconf: true, wantReceipt: true, wantPreconf: true},
-		{name: "preconf prefers canonical", preconf: true, canonical: true, wantReceipt: true},
+		{name: "preconf prefers canonical", preconf: true, canonical: true, wantReceipt: true, wantLookup: true},
 		{name: "canonical is not read on a preconf tick", canonical: true},
-		{name: "canonical is read on the backstop tick", canonical: true, checkCanonical: true, wantReceipt: true},
+		{name: "canonical is read on the backstop tick", canonical: true, checkCanonical: true, wantReceipt: true, wantLookup: true},
 	}
 
 	for _, tt := range tests {
@@ -108,6 +110,7 @@ func TestPollReceipt(t *testing.T) {
 			t.Parallel()
 
 			b := newTxSyncBackend(t)
+			b.canonicalLookups = new(atomic.Int64)
 			api := NewTransactionAPI(b, new(AddrLocker))
 			_, tx := makeSelfSignedRaw(t, api, b.acc.Address)
 
@@ -118,6 +121,10 @@ func TestPollReceipt(t *testing.T) {
 
 			if tt.preconf {
 				b.preconfEnabled = true
+				blockNumber := new(big.Int).Add(b.CurrentBlock().Number, common.Big1)
+				if tt.canonical {
+					blockNumber.Set(b.CurrentBlock().Number)
+				}
 				b.preconf.tx = tx
 				b.preconf.receipt = &types.Receipt{
 					Type:              tx.Type(),
@@ -126,7 +133,7 @@ func TestPollReceipt(t *testing.T) {
 					GasUsed:           tx.Gas(),
 					EffectiveGasPrice: tx.GasPrice(),
 					TxHash:            tx.Hash(),
-					BlockNumber:       new(big.Int).Add(b.CurrentBlock().Number, common.Big1),
+					BlockNumber:       blockNumber,
 				}
 			}
 
@@ -140,6 +147,9 @@ func TestPollReceipt(t *testing.T) {
 			}
 			if got := receipt["preconfirmation"] == true; got != tt.wantPreconf {
 				t.Fatalf("preconfirmation = %v, want %v (receipt %#v)", got, tt.wantPreconf, receipt)
+			}
+			if got := b.canonicalLookups.Load() > 0; got != tt.wantLookup {
+				t.Fatalf("canonical lookup = %v, want %v", got, tt.wantLookup)
 			}
 		})
 	}
@@ -262,16 +272,14 @@ func TestSubscriptionFailure(t *testing.T) {
 	}
 }
 
-func TestReceiptFromChainEvent(t *testing.T) {
+func TestTxSyncReceiptHubCanonical(t *testing.T) {
 	t.Parallel()
 
 	b := newTxSyncBackend(t)
 	api := NewTransactionAPI(b, new(AddrLocker))
 	_, tx := makeSelfSignedRaw(t, api, b.acc.Address)
-
 	blockHash := common.HexToHash("0xfeed")
-
-	sealed := &types.Receipt{
+	receipt := &types.Receipt{
 		Type:              tx.Type(),
 		Status:            types.ReceiptStatusSuccessful,
 		CumulativeGasUsed: 21000,
@@ -282,75 +290,81 @@ func TestReceiptFromChainEvent(t *testing.T) {
 		BlockNumber:       big.NewInt(7),
 		TransactionIndex:  0,
 	}
-	unsealed := &types.Receipt{TxHash: tx.Hash()}
-	other := &types.Receipt{TxHash: common.HexToHash("0xdead"), BlockHash: blockHash, BlockNumber: big.NewInt(7)}
+	first, unregisterFirst := api.txSyncReceipts.register(tx.Hash())
+	defer unregisterFirst()
+	second, unregisterSecond := api.txSyncReceipts.register(tx.Hash())
+	defer unregisterSecond()
+	b.chainFeed.Send(core.ChainEvent{
+		Receipts:     types.Receipts{receipt},
+		Transactions: types.Transactions{tx},
+	})
 
-	tests := []struct {
-		name      string
-		open      bool
-		event     core.ChainEvent
-		wantDone  bool
-		wantErr   error
-		wantBlock interface{}
-	}{
-		{
-			name:     "closed feed ends the wait",
-			open:     false,
-			wantDone: true,
-			wantErr:  errSubClosed,
-		},
-		{
-			name:  "empty event keeps waiting",
-			open:  true,
-			event: core.ChainEvent{},
-		},
-		{
-			name:  "mismatched lengths keep waiting",
-			open:  true,
-			event: core.ChainEvent{Receipts: types.Receipts{sealed}, Transactions: types.Transactions{}},
-		},
-		{
-			name:  "other transactions keep waiting",
-			open:  true,
-			event: core.ChainEvent{Receipts: types.Receipts{other}, Transactions: types.Transactions{tx}},
-		},
-		{
-			name:      "sealed receipt is marshalled from the event",
-			open:      true,
-			event:     core.ChainEvent{Receipts: types.Receipts{sealed}, Transactions: types.Transactions{tx}},
-			wantDone:  true,
-			wantBlock: blockHash,
-		},
-		{
-			name:     "receipt without a block falls back to lookup",
-			open:     true,
-			event:    core.ChainEvent{Receipts: types.Receipts{unsealed}, Transactions: types.Transactions{tx}},
-			wantDone: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			receipt, done, err := api.receiptFromChainEvent(context.Background(), tt.event, tt.open, tx.Hash())
-
-			if done != tt.wantDone {
-				t.Fatalf("done = %v, want %v", done, tt.wantDone)
+	for _, updates := range []<-chan txSyncReceiptResult{first, second} {
+		select {
+		case result := <-updates:
+			if result.err != nil {
+				t.Fatal(result.err)
 			}
-			if !errors.Is(err, tt.wantErr) {
-				t.Fatalf("err = %v, want %v", err, tt.wantErr)
+			if got := result.receipt["blockHash"]; got != blockHash {
+				t.Fatalf("blockHash = %v, want %v", got, blockHash)
 			}
-			if tt.wantBlock == nil {
-				return
-			}
-			if got := receipt["blockHash"]; got != tt.wantBlock {
-				t.Fatalf("blockHash = %v, want %v", got, tt.wantBlock)
-			}
-			if got := receipt["transactionHash"]; got != tx.Hash() {
+			if got := result.receipt["transactionHash"]; got != tx.Hash() {
 				t.Fatalf("transactionHash = %v, want %v", got, tx.Hash())
 			}
-		})
+		case <-time.After(time.Second):
+			t.Fatal("canonical receipt was not dispatched")
+		}
+	}
+}
+
+func TestTxSyncReceiptHubSharesSubscription(t *testing.T) {
+	t.Parallel()
+
+	b := newTxSyncBackend(t)
+	api := NewTransactionAPI(b, new(AddrLocker))
+	unregister := make([]func(), 100)
+	for index := range unregister {
+		_, unregister[index] = api.txSyncReceipts.register(common.BigToHash(big.NewInt(int64(index + 1))))
+	}
+	if got := b.chainSubscriptions.Load(); got != 1 {
+		t.Fatalf("chain subscriptions = %d, want 1", got)
+	}
+	for _, stop := range unregister {
+		stop()
+	}
+}
+
+func TestTxSyncReceiptHubUsesPublishedReceiptSnapshot(t *testing.T) {
+	t.Parallel()
+
+	b := newTxSyncBackend(t)
+	api := NewTransactionAPI(b, new(AddrLocker))
+	_, tx := makeSelfSignedRaw(t, api, b.acc.Address)
+	receipt := &types.Receipt{
+		Type:              tx.Type(),
+		Status:            types.ReceiptStatusSuccessful,
+		CumulativeGasUsed: 21000,
+		GasUsed:           21000,
+		EffectiveGasPrice: big.NewInt(1),
+		TxHash:            tx.Hash(),
+		BlockNumber:       big.NewInt(7),
+	}
+	updates, unregister := api.txSyncReceipts.register(tx.Hash())
+	defer unregister()
+
+	api.txSyncReceipts.preconfirmed(core.PreconfReceiptsEvent{
+		BlockTime:    10,
+		Receipts:     types.Receipts{receipt},
+		Transactions: types.Transactions{tx},
+	})
+
+	select {
+	case result := <-updates:
+		if result.err != nil || result.receipt["preconfirmation"] != true || result.receipt["blockHash"] != nil {
+			t.Fatalf("receipt result = %#v, err = %v", result.receipt, result.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("published receipt snapshot was not dispatched")
 	}
 }
 
@@ -493,10 +507,7 @@ func TestSendRawTransactionRejectsGarbage(t *testing.T) {
 	}
 }
 
-// TestPreconfTickSkipsCanonicalLookup pins the point of reading only the
-// pending view on a preconf tick: the on-disk lookup costs two point-misses
-// per waiter per tick, and canonical arrival comes in as a chain event.
-func TestPreconfTickSkipsCanonicalLookup(t *testing.T) {
+func TestPendingReceiptLookupSkipsCanonicalLookup(t *testing.T) {
 	t.Parallel()
 
 	b := newTxSyncBackend(t)
@@ -504,14 +515,21 @@ func TestPreconfTickSkipsCanonicalLookup(t *testing.T) {
 
 	api := NewTransactionAPI(b, new(AddrLocker))
 	_, tx := makeSelfSignedRaw(t, api, b.acc.Address)
+	b.preconf.tx = tx
+	b.preconf.receipt = &types.Receipt{
+		TxHash:      tx.Hash(),
+		BlockNumber: new(big.Int).Add(b.CurrentBlock().Number, common.Big1),
+	}
 
-	if got := api.pollReceipt(context.Background(), tx.Hash(), false); got != nil {
-		t.Fatalf("receipt = %#v, want nil", got)
+	if got := api.pollReceipt(context.Background(), tx.Hash(), false); got == nil || got["preconfirmation"] != true {
+		t.Fatalf("receipt = %#v, want preconfirmation", got)
 	}
 	if got := b.canonicalLookups.Load(); got != 0 {
 		t.Fatalf("preconf tick made %d canonical lookups, want 0", got)
 	}
 
+	b.preconf.tx = nil
+	b.preconf.receipt = nil
 	if got := api.pollReceipt(context.Background(), tx.Hash(), true); got != nil {
 		t.Fatalf("receipt = %#v, want nil", got)
 	}
@@ -520,63 +538,54 @@ func TestPreconfTickSkipsCanonicalLookup(t *testing.T) {
 	}
 }
 
-// TestBackstopFindsReceiptWithoutChainEvent covers the gap the backstop exists
-// for: the transaction goes canonical but no chain event names it, so the only
-// way out of the wait is the periodic on-disk lookup.
-func TestBackstopFindsReceiptWithoutChainEvent(t *testing.T) {
+func TestPollReceiptSkipsCanonicalLookupForPooledTransaction(t *testing.T) {
 	t.Parallel()
 
-	b := newTxSyncBackend(t)
+	for _, tt := range []struct {
+		name   string
+		status txpool.TxStatus
+	}{
+		{name: "pending", status: txpool.TxStatusPending},
+		{name: "queued", status: txpool.TxStatusQueued},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	api := NewTransactionAPI(b, new(AddrLocker))
-	raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
+			b := newTxSyncBackend(t)
+			b.canonicalLookups = new(atomic.Int64)
+			b.txStatusFn = func(common.Hash) txpool.TxStatus { return tt.status }
 
-	b.autoMine = true
-	b.suppressChainEvent = true
-	b.sentTx, b.sentTxHash = tx, tx.Hash()
-	// Not readable on the fast path, so only a later backstop tick can find it.
-	b.canonicalAfter = time.Now().Add(200 * time.Millisecond)
+			api := NewTransactionAPI(b, new(AddrLocker))
+			_, tx := makeSelfSignedRaw(t, api, b.acc.Address)
 
-	timeout := hexutil.Uint64(10_000)
-
-	start := time.Now()
-
-	receipt, err := api.SendRawTransactionSync(context.Background(), raw, &timeout)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if receipt == nil || receipt["transactionHash"] != tx.Hash() {
-		t.Fatalf("receipt = %#v", receipt)
-	}
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
-		t.Fatalf("backstop took %v, want it inside a few ticks", elapsed)
+			if got := api.pollReceipt(context.Background(), tx.Hash(), true); got != nil {
+				t.Fatalf("receipt = %#v, want nil", got)
+			}
+			if got := b.canonicalLookups.Load(); got != 0 {
+				t.Fatalf("pooled transaction made %d canonical lookups, want 0", got)
+			}
+		})
 	}
 }
 
-// TestWaitLoopPollsPendingViewOnly checks the tick wiring, not just pollReceipt
-// in isolation: across a whole wait window the loop must not be issuing an
-// on-disk lookup per 100ms tick.
-func TestWaitLoopPollsPendingViewOnly(t *testing.T) {
+func TestWaitLoopDoesNotPollPerRequest(t *testing.T) {
 	t.Parallel()
 
 	b := newTxSyncBackend(t)
 	b.autoMine = false
-	b.preconfEnabled = true // switches the 100ms preconf tick on
+	b.preconfEnabled = true
 	b.canonicalLookups = new(atomic.Int64)
 
 	api := NewTransactionAPI(b, new(AddrLocker))
 	raw, _ := makeSelfSignedRaw(t, api, b.acc.Address)
 
-	// Shorter than the 1s canonical backstop, so every lookup beyond the fast
-	// path would have to come from a preconf tick.
 	timeout := hexutil.Uint64(700)
 
 	if _, err := api.SendRawTransactionSync(context.Background(), raw, &timeout); err == nil {
 		t.Fatal("expected the wait window to elapse")
 	}
 
-	// One for the fast path, and no backstop tick inside 700ms.
-	if got := b.canonicalLookups.Load(); got > 3 {
-		t.Fatalf("%d canonical lookups over a 700ms wait, want the ticks to stay off disk", got)
+	if got := b.canonicalLookups.Load(); got != 0 {
+		t.Fatalf("%d canonical lookups over a 700ms wait, want 0", got)
 	}
 }

@@ -24,6 +24,8 @@ import (
 
 const consumerRetryDelay = 2 * time.Second
 
+const recentPreconfTransactionLimit = 65_536
+
 type TransactionLookup interface {
 	Get(common.Hash) *types.Transaction
 }
@@ -40,24 +42,29 @@ type TransactionLookup interface {
 // seal divergence — void the speculative work and skip forward until an open
 // record re-anchors on a canonical block.
 type Consumer struct {
-	chain      *core.BlockChain
-	endpoint   string
-	txLookup   TransactionLookup
-	index      *Index
-	publishMu  sync.Mutex
-	storeMu    sync.Mutex
-	store      *PendingStore
-	logsFeed   event.Feed
-	logsScope  event.SubscriptionScope
-	logsMu     sync.Mutex
-	logsQueue  [][]*types.Log
-	logsBusy   bool
-	logsClosed bool
-	logsWG     sync.WaitGroup
-	worker     atomic.Pointer[preconfWorker]
-	reconciled atomic.Pointer[types.Header]
-	handoff    atomic.Pointer[types.Header]
-	sealVerify atomic.Bool
+	chain        *core.BlockChain
+	endpoint     string
+	txLookup     TransactionLookup
+	index        *Index
+	publishMu    sync.Mutex
+	storeMu      sync.Mutex
+	store        *PendingStore
+	logsFeed     event.Feed
+	logsScope    event.SubscriptionScope
+	receiptFeed  event.Feed
+	receiptScope event.SubscriptionScope
+	recentMu     sync.Mutex
+	recentTxs    map[common.Hash]*types.Transaction
+	recentOrder  []common.Hash
+	logsMu       sync.Mutex
+	logsQueue    [][]*types.Log
+	logsBusy     bool
+	logsClosed   bool
+	logsWG       sync.WaitGroup
+	worker       atomic.Pointer[preconfWorker]
+	reconciled   atomic.Pointer[types.Header]
+	handoff      atomic.Pointer[types.Header]
+	sealVerify   atomic.Bool
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -76,14 +83,44 @@ func NewConsumerWithTransactionLookup(endpoint string, chain *core.BlockChain, t
 	}
 
 	consumer := &Consumer{
-		chain:    chain,
-		endpoint: endpoint,
-		txLookup: txLookup,
-		index:    NewIndex(),
-		store:    NewPendingStore(chain.DB()),
+		chain:     chain,
+		endpoint:  endpoint,
+		txLookup:  txLookup,
+		index:     NewIndex(),
+		store:     NewPendingStore(chain.DB()),
+		recentTxs: make(map[common.Hash]*types.Transaction),
 	}
-	consumer.reconciled.Store(types.CopyHeader(chain.CurrentBlock()))
+	consumer.reconciled.Store(chain.CurrentBlock())
 	return consumer, nil
+}
+
+func (c *Consumer) CachePreconfTransaction(tx *types.Transaction) error {
+	if tx == nil {
+		return errors.New("nil preconf transaction")
+	}
+	if _, err := types.Sender(types.LatestSigner(c.chain.Config()), tx); err != nil {
+		return err
+	}
+	hash := tx.Hash()
+	c.recentMu.Lock()
+	defer c.recentMu.Unlock()
+	if _, exists := c.recentTxs[hash]; exists {
+		return nil
+	}
+	c.recentTxs[hash] = tx
+	c.recentOrder = append(c.recentOrder, hash)
+	if len(c.recentTxs) > recentPreconfTransactionLimit {
+		oldest := c.recentOrder[0]
+		c.recentOrder = c.recentOrder[1:]
+		delete(c.recentTxs, oldest)
+	}
+	return nil
+}
+
+func (c *Consumer) cachedPreconfTransaction(hash common.Hash) *types.Transaction {
+	c.recentMu.Lock()
+	defer c.recentMu.Unlock()
+	return c.recentTxs[hash]
 }
 
 // Index exposes the preconf receipts for the RPC layer.
@@ -94,6 +131,16 @@ func (c *Consumer) Index() *Index {
 func (c *Consumer) SubscribePendingLogs(ch chan<- []*types.Log) event.Subscription {
 	sub := c.logsFeed.Subscribe(ch)
 	tracked := c.logsScope.Track(sub)
+	if tracked != nil {
+		return tracked
+	}
+	sub.Unsubscribe()
+	return sub
+}
+
+func (c *Consumer) SubscribePreconfReceipts(ch chan<- core.PreconfReceiptsEvent) event.Subscription {
+	sub := c.receiptFeed.Subscribe(ch)
+	tracked := c.receiptScope.Track(sub)
 	if tracked != nil {
 		return tracked
 	}
@@ -173,6 +220,7 @@ func (c *Consumer) Close() {
 	c.logsQueue = nil
 	c.logsMu.Unlock()
 	c.logsScope.Close()
+	c.receiptScope.Close()
 	c.logsWG.Wait()
 }
 
@@ -269,7 +317,7 @@ func (c *Consumer) reconcileCanonicalHeadLocked() []pendingInvalidation {
 	if clearFrom != nil {
 		c.index.ClearFrom(*clearFrom)
 	}
-	c.reconciled.Store(types.CopyHeader(head))
+	c.reconciled.Store(head)
 	c.clearCanonicalHandoffThrough(head)
 	c.enqueuePendingLogs(logs)
 	return invalidations

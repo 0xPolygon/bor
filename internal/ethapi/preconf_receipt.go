@@ -1,12 +1,24 @@
 package ethapi
 
 import (
+	"context"
+
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/event"
 )
 
 type preconfBackend interface {
 	GetPreconfTransaction(common.Hash) (*types.Transaction, *types.Receipt, bool)
+}
+
+type preconfReceiptSubscriber interface {
+	SubscribePreconfReceipts(chan<- core.PreconfReceiptsEvent) event.Subscription
+}
+
+type preconfSyncSubmitter interface {
+	SubmitTxForPreconfSync(context.Context, *types.Transaction) error
 }
 
 func getPreconfTransaction(backend Backend, hash common.Hash) (*types.Transaction, *types.Receipt, bool) {
@@ -18,9 +30,25 @@ func getPreconfTransaction(backend Backend, hash common.Hash) (*types.Transactio
 }
 
 func preconfTransactionReceipt(backend Backend, hash common.Hash) map[string]interface{} {
+	result, _, _ := preconfTransactionReceiptAt(backend, hash)
+	return result
+}
+
+func preconfTransactionReceiptAt(backend Backend, hash common.Hash) (map[string]interface{}, uint64, bool) {
 	tx, receipt, ok := getPreconfTransaction(backend, hash)
 	if !ok || tx == nil || receipt == nil || receipt.BlockNumber == nil {
-		return nil
+		return nil, 0, false
+	}
+	blockTime := uint64(0)
+	if block := pendingBlock(backend); block != nil && block.Number().Cmp(receipt.BlockNumber) == 0 {
+		blockTime = block.Time()
+	}
+	return marshalPreconfTransactionReceipt(backend, tx, receipt, blockTime)
+}
+
+func marshalPreconfTransactionReceipt(backend Backend, tx *types.Transaction, receipt *types.Receipt, blockTime uint64) (map[string]interface{}, uint64, bool) {
+	if tx == nil || receipt == nil || receipt.BlockNumber == nil {
+		return nil, 0, false
 	}
 	copyReceipt := *receipt
 	copyReceipt.Logs = make([]*types.Log, len(receipt.Logs))
@@ -34,11 +62,11 @@ func preconfTransactionReceipt(backend Backend, hash common.Hash) map[string]int
 	}
 	blockNumber := receipt.BlockNumber.Uint64()
 	signer := types.LatestSigner(backend.ChainConfig())
-	if block := pendingBlock(backend); block != nil && block.Number().Cmp(receipt.BlockNumber) == 0 {
-		signer = types.MakeSigner(backend.ChainConfig(), receipt.BlockNumber, block.Time())
+	if blockTime != 0 {
+		signer = types.MakeSigner(backend.ChainConfig(), receipt.BlockNumber, blockTime)
 	}
 	result := marshalReceipt(&copyReceipt, common.Hash{}, blockNumber, signer, tx, int(receipt.TransactionIndex), false)
 	result["blockHash"] = nil
 	result["preconfirmation"] = true
-	return result
+	return result, blockNumber, true
 }

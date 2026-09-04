@@ -400,6 +400,9 @@ func (s *session) applyPreparedTransactions(rawTransactions [][]byte, prepared [
 			return false
 		}
 		preconfApplyTimer.UpdateSince(start)
+		if len(s.env.txs)-s.env.indexedTxs >= pendingReceiptPublicationBatch && !s.publishExecutedTransactions() {
+			return false
+		}
 	}
 	return true
 }
@@ -475,23 +478,29 @@ func (s *session) publishExecutedTransactions() bool {
 		s.consumer.publishMu.Unlock()
 		return false
 	}
-	logs := s.indexExecutedTransactions()
+	logs, receipts := s.indexExecutedTransactions()
 	s.consumer.enqueuePendingLogs(logs)
 	s.consumer.publishMu.Unlock()
+	s.consumer.receiptFeed.Send(receipts)
 	return true
 }
 
-func (s *session) indexExecutedTransactions() []*types.Log {
+func (s *session) indexExecutedTransactions() ([]*types.Log, core.PreconfReceiptsEvent) {
 	var logs []*types.Log
 	start := s.env.indexedTxs
 	if start >= len(s.env.txs) || !s.consumer.index.AddBatch(s.env.txs[start:], s.env.receipts[start:]) {
-		return nil
+		return nil, core.PreconfReceiptsEvent{}
 	}
 	for index := start; index < len(s.env.txs); index++ {
 		logs = append(logs, s.env.receipts[index].Logs...)
 	}
+	receipts := core.PreconfReceiptsEvent{
+		BlockTime:    s.env.header.Time,
+		Receipts:     append(types.Receipts(nil), s.env.receipts[start:]...),
+		Transactions: append(types.Transactions(nil), s.env.txs[start:]...),
+	}
 	s.env.indexedTxs = len(s.env.txs)
-	return logs
+	return logs, receipts
 }
 
 func (c *Consumer) verifyPreconfSeal(headers consensus.ChainHeaderReader, sealed *types.Header) error {

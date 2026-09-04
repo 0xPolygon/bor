@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -22,6 +23,7 @@ type apiSequenceConsumer struct {
 	parentState   *state.StateDB
 	index         *sequencer.Index
 	feed          event.Feed
+	receiptFeed   event.Feed
 	subscribed    bool
 	snapshotCalls int
 	metadataCalls int
@@ -71,6 +73,10 @@ func (c *apiSequenceConsumer) LookupPreconf(hash common.Hash) (*types.Transactio
 func (c *apiSequenceConsumer) SubscribePendingLogs(ch chan<- []*types.Log) event.Subscription {
 	c.subscribed = true
 	return c.feed.Subscribe(ch)
+}
+
+func (c *apiSequenceConsumer) SubscribePreconfReceipts(ch chan<- core.PreconfReceiptsEvent) event.Subscription {
+	return c.receiptFeed.Subscribe(ch)
 }
 
 func (c *apiSequenceConsumer) Close() {}

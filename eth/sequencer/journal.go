@@ -56,18 +56,36 @@ func (p *Publisher) relateWindowLocked(info tailInfo, height uint64) windowRelat
 	if len(info.window) == 0 || len(ours) == 0 || ours[0].kind != entryOpen {
 		return windowForeign
 	}
+	if !contentEqual(info.window[0], ours[0].entry) {
+		return windowForeign
+	}
 
-	for i := 0; i < min(len(info.window), len(ours)); i++ {
-		if !contentEqual(info.window[i], ours[i].entry) {
+	theirs, ok := windowTxHashes(info.window)
+	if !ok {
+		return windowForeign
+	}
+	oursHashes := journalRecordHashes(ours[1:])
+	for i := 0; i < min(len(theirs), len(oursHashes)); i++ {
+		if theirs[i] != oursHashes[i] {
 			return windowForeign
 		}
 	}
-
-	if len(info.window) > len(ours) {
+	if len(theirs) > len(oursHashes) {
 		return windowExtendsOurs
 	}
 
 	return windowOurs
+}
+
+func journalRecordHashes(items []journalItem) []common.Hash {
+	var hashes []common.Hash
+	for _, item := range items {
+		if item.kind != entryRecord {
+			break
+		}
+		hashes = append(hashes, item.txHashes...)
+	}
+	return hashes
 }
 
 const (

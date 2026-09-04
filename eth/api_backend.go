@@ -486,6 +486,16 @@ func (b *EthAPIBackend) GetPreconfTransaction(txHash common.Hash) (*types.Transa
 	return nil, nil, false
 }
 
+func (b *EthAPIBackend) SubscribePreconfReceipts(ch chan<- core.PreconfReceiptsEvent) event.Subscription {
+	if b.eth.seqConsumer != nil {
+		return b.eth.seqConsumer.SubscribePreconfReceipts(ch)
+	}
+	return event.NewSubscription(func(quit <-chan struct{}) error {
+		<-quit
+		return nil
+	})
+}
+
 // TxIndexDone returns true if the transaction indexer has finished indexing.
 func (b *EthAPIBackend) TxIndexDone() bool {
 	return b.eth.blockchain.TxIndexDone()
@@ -827,6 +837,17 @@ func (b *EthAPIBackend) PreconfEnabled() bool {
 }
 func (b *EthAPIBackend) SubmitTxForPreconf(tx *types.Transaction) error {
 	return b.relay.SubmitPreconfTransaction(tx)
+}
+
+func (b *EthAPIBackend) SubmitTxForPreconfSync(ctx context.Context, tx *types.Transaction) error {
+	if consumer, ok := b.eth.seqConsumer.(interface {
+		CachePreconfTransaction(*types.Transaction) error
+	}); ok {
+		if err := consumer.CachePreconfTransaction(tx); err != nil {
+			return err
+		}
+	}
+	return b.relay.SubmitPreconfTransactionSync(ctx, tx)
 }
 
 func (b *EthAPIBackend) CheckPreconfStatus(hash common.Hash) (bool, error) {

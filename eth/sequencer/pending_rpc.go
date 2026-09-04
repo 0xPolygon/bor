@@ -112,10 +112,10 @@ func (c *Consumer) pendingReadAnchor() (*types.Header, bool) {
 	head := c.chain.CurrentBlock()
 	marker := c.reconciled.Load()
 	if marker == nil {
-		c.reconciled.CompareAndSwap(nil, types.CopyHeader(head))
+		c.reconciled.CompareAndSwap(nil, head)
 		marker = c.reconciled.Load()
 	}
-	if marker == nil || marker.Hash() != head.Hash() {
+	if marker == nil || marker != head && marker.Hash() != head.Hash() {
 		return nil, false
 	}
 	return marker, true
@@ -125,7 +125,8 @@ func (c *Consumer) pendingReadAnchorValid(anchor *types.Header) bool {
 	if c.chain == nil {
 		return true
 	}
-	return anchor != nil && c.reconciled.Load() == anchor && c.chain.CurrentBlock().Hash() == anchor.Hash()
+	head := c.chain.CurrentBlock()
+	return anchor != nil && c.reconciled.Load() == anchor && (head == anchor || head.Hash() == anchor.Hash())
 }
 
 // PendingSnapshot limits both concurrent copies and concurrently retained RPC

@@ -527,9 +527,10 @@ func (s *session) publishUnverifiedSeal(block *types.Block, payload pendingPaylo
 		}
 		return
 	}
-	logs := s.indexExecutedTransactions()
+	logs, receipts := s.indexExecutedTransactions()
 	s.consumer.enqueuePendingLogs(logs)
 	s.consumer.publishMu.Unlock()
+	s.consumer.receiptFeed.Send(receipts)
 	s.parkSeal(sealed, sealedHash, false)
 	log.Warn("Preconf seal verification deferred; retaining only an unsealed pending view", "number", number)
 }
@@ -553,11 +554,12 @@ func (s *session) publishSeal(block *types.Block, payload pendingPayload, sealed
 		}
 		return
 	}
-	logs := s.indexExecutedTransactions()
+	logs, receipts := s.indexExecutedTransactions()
 	s.consumer.enqueuePendingLogs(logs)
 	s.consumer.index.Seal(number, sealedHash)
 
 	s.consumer.publishMu.Unlock()
+	s.consumer.receiptFeed.Send(receipts)
 	s.parkSeal(sealed, sealedHash, true)
 }
 

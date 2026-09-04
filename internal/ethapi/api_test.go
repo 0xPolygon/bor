@@ -444,8 +444,9 @@ type testBackend struct {
 	pendingReceipts types.Receipts
 	preconf         *testPreconf
 
-	chainFeed *event.Feed
-	autoMine  bool
+	chainFeed   *event.Feed
+	preconfFeed *event.Feed
+	autoMine    bool
 
 	sentTx     *types.Transaction
 	sentTxHash common.Hash
@@ -454,13 +455,8 @@ type testBackend struct {
 	syncMaxTimeout     time.Duration
 	syncMaxConcurrent  int
 
-	canonicalLookups *atomic.Int64
-
-	// suppressChainEvent keeps an auto-mined tx from publishing a ChainEvent, and
-	// canonicalAfter delays when it becomes readable — together they let a test
-	// make a receipt appear with no event ever naming it.
-	suppressChainEvent bool
-	canonicalAfter     time.Time
+	canonicalLookups   *atomic.Int64
+	chainSubscriptions *atomic.Int64
 
 	// Relay / preconf / private tx mock controls
 	preconfEnabled   bool
@@ -508,14 +504,16 @@ func newTestBackend(t *testing.T, n int, gspec *core.Genesis, engine consensus.E
 		t.Fatalf("block %d: failed to insert into chain: %v", n, err)
 	}
 	backend := &testBackend{
-		db:              db,
-		chain:           chain,
-		accman:          accman,
-		acc:             acc,
-		pending:         blocks[n],
-		pendingReceipts: receipts[n],
-		preconf:         new(testPreconf),
-		chainFeed:       new(event.Feed),
+		db:                 db,
+		chain:              chain,
+		accman:             accman,
+		acc:                acc,
+		pending:            blocks[n],
+		pendingReceipts:    receipts[n],
+		preconf:            new(testPreconf),
+		chainFeed:          new(event.Feed),
+		preconfFeed:        new(event.Feed),
+		chainSubscriptions: new(atomic.Int64),
 	}
 	return backend
 }
@@ -530,6 +528,9 @@ func (b testBackend) SubmitTxForPreconf(tx *types.Transaction) error {
 		return b.submitTxForPreconfFn(tx)
 	}
 	return nil
+}
+func (b testBackend) SubmitTxForPreconfSync(ctx context.Context, tx *types.Transaction) error {
+	return b.SubmitTxForPreconf(tx)
 }
 func (b testBackend) CheckPreconfStatus(hash common.Hash) (bool, error) {
 	if b.checkPreconfStatusFn != nil {
@@ -694,7 +695,11 @@ func (b testBackend) GetEVM(ctx context.Context, state *state.StateDB, header *t
 	return vm.NewEVM(context, state, b.chain.Config(), *vmConfig)
 }
 func (b testBackend) SubscribeChainEvent(ch chan<- core.ChainEvent) event.Subscription {
+	b.chainSubscriptions.Add(1)
 	return b.chainFeed.Subscribe(ch)
+}
+func (b testBackend) SubscribePreconfReceipts(ch chan<- core.PreconfReceiptsEvent) event.Subscription {
+	return b.preconfFeed.Subscribe(ch)
 }
 func (b testBackend) SubscribeChainHeadEvent(ch chan<- core.ChainHeadEvent) event.Subscription {
 	panic("implement me")
@@ -706,7 +711,7 @@ func (b *testBackend) SendTx(ctx context.Context, tx *types.Transaction) error {
 	b.sentTx = tx
 	b.sentTxHash = tx.Hash()
 
-	if b.autoMine && !b.suppressChainEvent {
+	if b.autoMine {
 		// Synthesize a "mined" receipt at head+1
 		num := b.chain.CurrentHeader().Number.Uint64() + 1
 		receipt := &types.Receipt{
@@ -735,17 +740,13 @@ func (b *testBackend) GetCanonicalTransaction(txHash common.Hash) (bool, *types.
 	}
 
 	// Treat the auto-mined tx as canonically placed at head+1.
-	if b.autoMine && txHash == b.sentTxHash && b.canonicalReadable() {
+	if b.autoMine && txHash == b.sentTxHash {
 		num := b.chain.CurrentHeader().Number.Uint64() + 1
 		return true, b.sentTx, fakeBlockHash(txHash), num, 0
 	}
 	tx, blockHash, blockNumber, index := rawdb.ReadCanonicalTransaction(b.db, txHash)
 	return tx != nil, tx, blockHash, blockNumber, index
 }
-func (b *testBackend) canonicalReadable() bool {
-	return b.canonicalAfter.IsZero() || !time.Now().Before(b.canonicalAfter)
-}
-
 func (b *testBackend) GetPreconfTransaction(txHash common.Hash) (*types.Transaction, *types.Receipt, bool) {
 	b.preconf.mu.RLock()
 	defer b.preconf.mu.RUnlock()
@@ -4679,7 +4680,7 @@ func TestSendRawTransactionForPreconf(t *testing.T) {
 		api := NewTransactionAPI(b, new(AddrLocker))
 		raw, _ := makeSelfSignedRaw(t, api, b.acc.Address)
 
-		result, err := api.SendRawTransactionForPreconf(context.Background(), raw)
+		result, err := api.SendRawTransactionForPreconf(context.Background(), raw, nil)
 		require.Nil(t, result)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "preconf transactions are not accepted")
@@ -4692,7 +4693,7 @@ func TestSendRawTransactionForPreconf(t *testing.T) {
 		b.acceptPreconfTxs = true
 
 		api := NewTransactionAPI(b, new(AddrLocker))
-		result, err := api.SendRawTransactionForPreconf(context.Background(), hexutil.Bytes{0xde, 0xad})
+		result, err := api.SendRawTransactionForPreconf(context.Background(), hexutil.Bytes{0xde, 0xad}, nil)
 		require.Nil(t, result)
 		require.Error(t, err)
 	})
@@ -4707,7 +4708,7 @@ func TestSendRawTransactionForPreconf(t *testing.T) {
 		api := NewTransactionAPI(b, new(AddrLocker))
 		raw, _ := makeSelfSignedRaw(t, api, b.acc.Address)
 
-		result, err := api.SendRawTransactionForPreconf(context.Background(), raw)
+		result, err := api.SendRawTransactionForPreconf(context.Background(), raw, nil)
 		require.Nil(t, result)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "nonce too low")
@@ -4723,11 +4724,54 @@ func TestSendRawTransactionForPreconf(t *testing.T) {
 		api := NewTransactionAPI(b, new(AddrLocker))
 		raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
 
-		result, err := api.SendRawTransactionForPreconf(context.Background(), raw)
+		result, err := api.SendRawTransactionForPreconf(context.Background(), raw, nil)
 		require.NoError(t, err)
 		require.NotNil(t, result)
 		require.Equal(t, tx.Hash(), result["hash"])
 		require.Equal(t, true, result["preconfirmed"])
+	})
+
+	t.Run("waits for transaction promotion", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.acceptPreconfTxs = true
+		var calls atomic.Int32
+		b.txStatusFn = func(hash common.Hash) txpool.TxStatus {
+			if calls.Add(1) < 2 {
+				return txpool.TxStatusQueued
+			}
+			return txpool.TxStatusPending
+		}
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
+		result, err := api.SendRawTransactionForPreconf(context.Background(), raw, nil)
+		require.NoError(t, err)
+		require.Equal(t, tx.Hash(), result["hash"])
+		require.Equal(t, true, result["preconfirmed"])
+		require.GreaterOrEqual(t, calls.Load(), int32(2))
+	})
+
+	t.Run("returns immediately when pending wait is disabled", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.acceptPreconfTxs = true
+		var calls atomic.Int32
+		b.txStatusFn = func(hash common.Hash) txpool.TxStatus {
+			calls.Add(1)
+			return txpool.TxStatusQueued
+		}
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
+		waitForPending := false
+		result, err := api.SendRawTransactionForPreconf(context.Background(), raw, &waitForPending)
+		require.NoError(t, err)
+		require.Equal(t, tx.Hash(), result["hash"])
+		require.Equal(t, false, result["preconfirmed"])
+		require.Equal(t, int32(1), calls.Load())
 	})
 
 	t.Run("success with TxStatusQueued returns preconfirmed false", func(t *testing.T) {
@@ -4740,7 +4784,7 @@ func TestSendRawTransactionForPreconf(t *testing.T) {
 		api := NewTransactionAPI(b, new(AddrLocker))
 		raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
 
-		result, err := api.SendRawTransactionForPreconf(context.Background(), raw)
+		result, err := api.SendRawTransactionForPreconf(context.Background(), raw, nil)
 		require.NoError(t, err)
 		require.NotNil(t, result)
 		require.Equal(t, tx.Hash(), result["hash"])
@@ -4758,11 +4802,34 @@ func TestSendRawTransactionForPreconf(t *testing.T) {
 		api := NewTransactionAPI(b, new(AddrLocker))
 		raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
 
-		result, err := api.SendRawTransactionForPreconf(context.Background(), raw)
+		result, err := api.SendRawTransactionForPreconf(context.Background(), raw, nil)
 		require.NoError(t, err)
 		require.NotNil(t, result)
 		require.Equal(t, tx.Hash(), result["hash"], "hash should be tx.Hash() not zero hash")
 		require.Equal(t, true, result["preconfirmed"])
+	})
+
+	t.Run("ErrAlreadyKnown waits for transaction promotion", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.acceptPreconfTxs = true
+		b.sendTxErr = txpool.ErrAlreadyKnown
+		var calls atomic.Int32
+		b.txStatusFn = func(hash common.Hash) txpool.TxStatus {
+			if calls.Add(1) < 2 {
+				return txpool.TxStatusQueued
+			}
+			return txpool.TxStatusPending
+		}
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
+		result, err := api.SendRawTransactionForPreconf(context.Background(), raw, nil)
+		require.NoError(t, err)
+		require.Equal(t, tx.Hash(), result["hash"])
+		require.Equal(t, true, result["preconfirmed"])
+		require.GreaterOrEqual(t, calls.Load(), int32(2))
 	})
 
 	t.Run("ErrAlreadyKnown with TxStatusUnknown returns preconfirmed false", func(t *testing.T) {
@@ -4776,7 +4843,7 @@ func TestSendRawTransactionForPreconf(t *testing.T) {
 		api := NewTransactionAPI(b, new(AddrLocker))
 		raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
 
-		result, err := api.SendRawTransactionForPreconf(context.Background(), raw)
+		result, err := api.SendRawTransactionForPreconf(context.Background(), raw, nil)
 		require.NoError(t, err)
 		require.NotNil(t, result)
 		require.Equal(t, tx.Hash(), result["hash"])
@@ -5269,6 +5336,11 @@ func TestSendRawTransactionSync_Preconfirmation(t *testing.T) {
 				BlockNumber:       new(big.Int).Add(b.CurrentBlock().Number, common.Big1),
 			}
 			b.preconf.mu.Unlock()
+			b.preconfFeed.Send(core.PreconfReceiptsEvent{
+				BlockTime:    b.CurrentBlock().Time + 1,
+				Receipts:     types.Receipts{b.preconf.receipt},
+				Transactions: types.Transactions{tx},
+			})
 		}()
 		return nil
 	}
@@ -5282,6 +5354,47 @@ func TestSendRawTransactionSync_Preconfirmation(t *testing.T) {
 	if receipt == nil || receipt["transactionHash"] != tx.Hash() || receipt["blockHash"] != nil || receipt["preconfirmation"] != true {
 		t.Fatalf("preconfirmation receipt = %#v", receipt)
 	}
+	if b.sentTx != nil {
+		t.Fatalf("transaction was also submitted to the local txpool")
+	}
+}
+
+func TestSendRawTransactionSync_PrefersQueuedPreconfirmation(t *testing.T) {
+	t.Parallel()
+	genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+	b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+	b.preconfEnabled = true
+	b.submitTxForPreconfFn = func(tx *types.Transaction) error {
+		receipt := &types.Receipt{
+			Type:              tx.Type(),
+			Status:            types.ReceiptStatusSuccessful,
+			CumulativeGasUsed: tx.Gas(),
+			GasUsed:           tx.Gas(),
+			EffectiveGasPrice: tx.GasPrice(),
+			TxHash:            tx.Hash(),
+			BlockNumber:       new(big.Int).Set(b.CurrentBlock().Number),
+		}
+		b.preconf.mu.Lock()
+		b.preconf.tx = tx
+		b.preconf.receipt = receipt
+		b.preconf.mu.Unlock()
+		b.preconfFeed.Send(core.PreconfReceiptsEvent{
+			BlockTime:    b.CurrentBlock().Time,
+			Receipts:     types.Receipts{receipt},
+			Transactions: types.Transactions{tx},
+		})
+		b.sentTx = tx
+		b.sentTxHash = tx.Hash()
+		b.autoMine = true
+		return nil
+	}
+
+	api := NewTransactionAPI(b, new(AddrLocker))
+	raw, _ := makeSelfSignedRaw(t, api, b.acc.Address)
+	receipt, err := api.SendRawTransactionSync(t.Context(), raw, nil)
+	require.NoError(t, err)
+	require.Equal(t, true, receipt["preconfirmation"])
+	require.Nil(t, receipt["blockHash"])
 }
 
 func TestCoinbase(t *testing.T) {

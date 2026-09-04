@@ -135,14 +135,26 @@ func (m *matcher) absorb(entry *pb.Entry) error {
 	}
 
 	item := m.snap[m.idx]
-	if !contentEqual(entry, item.entry) {
-		m.on = false
+	if !bytes.Equal(entryPrefix(entry), entryPrefix(item.entry)) {
+		return errFoldDivergence
+	}
+
+	if entry.GetRecord() != nil {
+		consumed, ok := recordMatchesItems(entry, m.snap[m.idx:])
+		if !ok {
+			m.on = false
+
+			return nil
+		}
+		m.idx += consumed
 
 		return nil
 	}
 
-	if !bytes.Equal(entryPrefix(entry), entryPrefix(item.entry)) {
-		return errFoldDivergence
+	if !contentEqual(entry, item.entry) {
+		m.on = false
+
+		return nil
 	}
 
 	m.idx++
@@ -156,4 +168,31 @@ func (m *matcher) absorb(entry *pb.Entry) error {
 // matcher off, so a foreign record or an extension we do not hold reads false.
 func (m *matcher) ours() bool {
 	return m.on
+}
+
+func recordMatchesItems(entry *pb.Entry, items []journalItem) (int, bool) {
+	record := entry.GetRecord()
+	if record == nil {
+		return 0, false
+	}
+
+	transactions := record.GetTransactions()
+	matched := 0
+	for i, item := range items {
+		candidate := item.entry.GetRecord()
+		if candidate == nil {
+			return 0, false
+		}
+		for _, raw := range candidate.GetTransactions() {
+			if matched >= len(transactions) || !bytes.Equal(transactions[matched], raw) {
+				return 0, false
+			}
+			matched++
+		}
+		if matched == len(transactions) {
+			return i + 1, true
+		}
+	}
+
+	return 0, false
 }

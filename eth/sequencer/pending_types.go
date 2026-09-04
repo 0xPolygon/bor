@@ -19,6 +19,7 @@ const (
 	pendingSealHeaderLimit              = 1 * 1024 * 1024
 	pendingRPCPublicationLimit          = 4
 	pendingEagerPublicationTxs          = 16
+	pendingReceiptPublicationBatch      = 16
 	pendingRPCMinPublishDelay           = 100 * time.Millisecond
 	pendingRPCTimeFallbackLimit         = pendingRPCPublicationLimit / 2
 	pendingRPCPublishFallbackDelay      = 200 * time.Millisecond

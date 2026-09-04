@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math/big"
 	"testing"
+	"time"
 
 	"github.com/0xPolygon/sequence-store-proto/commitment"
 	pb "github.com/0xPolygon/sequence-store-proto/sequencestore/v1"
@@ -81,6 +82,9 @@ func TestSessionUnverifiedPublicationPaths(t *testing.T) {
 	t.Run("published", func(t *testing.T) {
 		consumer := &Consumer{index: NewIndex(), store: NewPendingStore(nil)}
 		t.Cleanup(consumer.Close)
+		receipts := make(chan core.PreconfReceiptsEvent, 1)
+		sub := consumer.SubscribePreconfReceipts(receipts)
+		defer sub.Unsubscribe()
 		generation := consumer.pendingStore().begin(fixture.block.NumberU64(), fixture.block.ParentHash(), true)
 		payload, ok := makePendingPayload(fixture.block, types.Receipts{fixture.receipt}, fixture.state, nil)
 		if !ok {
@@ -99,6 +103,15 @@ func TestSessionUnverifiedPublicationPaths(t *testing.T) {
 		}
 		if _, _, found := consumer.index.Lookup(fixture.tx.Hash()); !found {
 			t.Fatal("unverified receipt was not indexed")
+		}
+		select {
+		case published := <-receipts:
+			if len(published.Receipts) != 1 || published.Receipts[0].TxHash != fixture.tx.Hash() ||
+				len(published.Transactions) != 1 || published.Transactions[0] != fixture.tx {
+				t.Fatalf("receipt event = %#v", published)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("receipt publication was not announced")
 		}
 	})
 
