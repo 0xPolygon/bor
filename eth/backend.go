@@ -80,6 +80,7 @@ type sequenceConsumer interface {
 	PendingSnapshot(context.Context) (*types.Block, types.Receipts, *state.StateDB, error)
 	PendingBlock() *types.Block
 	PendingBlockAndReceipts() (*types.Block, types.Receipts)
+	PendingLogRange() (*types.Header, []*types.Block, []types.Receipts)
 	PendingParentState(context.Context, *types.Block) (*state.StateDB, error)
 	PendingNonce(common.Address) (uint64, bool, error)
 	LookupPreconf(common.Hash) (*types.Transaction, *types.Receipt, bool)
@@ -205,7 +206,7 @@ func (s *Ethereum) attachSequencer(config *ethconfig.Config) error {
 	case "consumer":
 		// A consumer that cannot start (not a bor chain) must not block the
 		// node: preconfs stay off, everything else runs.
-		consumer, err := sequencer.NewConsumer(config.SequencerConsumerEndpoint, s.blockchain)
+		consumer, err := sequencer.NewConsumerWithTransactionLookup(config.SequencerConsumerEndpoint, s.blockchain, s.txPool)
 		if err != nil {
 			log.Error("Sequencer consumer disabled", "err", err)
 
@@ -221,6 +222,13 @@ func (s *Ethereum) attachSequencer(config *ethconfig.Config) error {
 	}
 
 	return nil
+}
+
+func configureMinerForSequencer(config *ethconfig.Config, chainConfig *params.ChainConfig) {
+	if config.SequencerRole == "consumer" && chainConfig != nil && chainConfig.Bor != nil {
+		// PendingStore serves pending RPCs on consumer nodes, so the miner snapshot is redundant.
+		config.Miner.DisablePendingBlock = true
+	}
 }
 
 // New creates a new Ethereum object (including the initialisation of the common Ethereum object),
@@ -552,6 +560,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 
 	eth.dropper = newDropper(eth.p2pServer.MaxDialedConns(), eth.p2pServer.MaxInboundConns())
 
+	configureMinerForSequencer(config, eth.blockchain.Config())
 	if config.SyncMode != downloader.StatelessSync {
 		eth.miner = miner.New(eth, &config.Miner, eth.blockchain.Config(), eth.eventMux, eth.engine, eth.isLocalBlock, eth.config.WitnessProtocol)
 		eth.miner.SetExtra(makeExtraData(config.Miner.ExtraData))
@@ -1178,13 +1187,12 @@ func (s *Ethereum) Stop() error {
 	s.closeFilterMaps <- ch
 	<-ch
 	s.filterMaps.Stop()
+	if s.seqConsumer != nil {
+		s.seqConsumer.Close()
+	}
 	s.txPool.Close()
 	if s.seqPublisher != nil {
 		s.seqPublisher.Close()
-	}
-
-	if s.seqConsumer != nil {
-		s.seqConsumer.Close()
 	}
 
 	if s.miner != nil {

@@ -1,6 +1,7 @@
 package sequencer
 
 import (
+	"fmt"
 	"math/big"
 	"sync"
 	"testing"
@@ -19,6 +20,18 @@ import (
 
 type partialReuseEngine struct {
 	*ethash.Ethash
+}
+
+type importGateConsumer struct {
+	*Consumer
+	begun   chan *types.Block
+	release <-chan struct{}
+}
+
+func (c *importGateConsumer) BeginPreconfImport(block *types.Block) {
+	c.Consumer.BeginPreconfImport(block)
+	c.begun <- block
+	<-c.release
 }
 
 func (e *partialReuseEngine) VerifyHeader(consensus.ChainHeaderReader, *types.Header) error {
@@ -66,6 +79,7 @@ func publishPrefix(t *testing.T, h *execHarness, txs types.Transactions) *sessio
 		}
 		cur = handleOK(t, s, recordEntry(raw, cur))
 	}
+	publishPendingSnapshot(t, s)
 	return s
 }
 
@@ -124,6 +138,269 @@ func TestCanonicalImportResumesPreconfPrefix(t *testing.T) {
 	}
 	if records := rawdb.ReadInvalidPreconfs(h.chain.DB(), 1); len(records) != 0 {
 		t.Fatalf("valid prefix recorded as invalid: %+v", records)
+	}
+}
+
+func TestSessionWaitsForPrefixClaimParentCommit(t *testing.T) {
+	for _, delay := range []time.Duration{20 * time.Millisecond, 110 * time.Millisecond} {
+		t.Run(delay.String(), func(t *testing.T) {
+			h := partialReuseHarness(t)
+			txs := types.Transactions{h.transfer(t, 0), h.transfer(t, 1)}
+			block, _ := buildPartialReuseBlock(t, h, txs)
+			s := publishPrefix(t, h, txs[:1])
+			h.chain.SetPreconfProvider(s.consumer)
+			s.consumer.BeginPreconfImport(block)
+			if _, ok := s.consumer.ClaimPreconfPrefix(block); !ok {
+				t.Fatal("prefix claim failed")
+			}
+			if s.env != nil || s.parked != nil {
+				t.Fatal("claimed prefix retained the speculative worker")
+			}
+
+			cur := handleOK(t, s, sealEntry(encodeHeader(t, block.Header()), s.head))
+			importDone := make(chan error, 1)
+			go func() {
+				time.Sleep(delay)
+				_, err := h.chain.InsertChain(types.Blocks{block}, false)
+				importDone <- err
+			}()
+
+			started := time.Now()
+			handleOK(t, s, openOn(block.Header(), h.config, cur))
+			if elapsed := time.Since(started); elapsed >= preconfCanonicalParentWait {
+				t.Fatalf("child open waited for canonical timeout: %s", elapsed)
+			}
+			if err := <-importDone; err != nil {
+				t.Fatalf("import parent: %v", err)
+			}
+			if s.env == nil || s.env.header.ParentHash != block.Hash() || !s.env.cacheable {
+				t.Fatal("child open did not re-anchor on the canonical parent")
+			}
+			childTx := h.transfer(t, 2)
+			raw, err := childTx.MarshalBinary()
+			if err != nil {
+				t.Fatalf("marshal child transaction: %v", err)
+			}
+			handleOK(t, s, recordEntry(raw, s.head))
+			if _, _, ok := s.consumer.index.Lookup(childTx.Hash()); !ok {
+				t.Fatal("child preconfirmation was not published")
+			}
+		})
+	}
+}
+
+func TestSessionWaitsForObservedCanonicalImport(t *testing.T) {
+	for _, delay := range []time.Duration{20 * time.Millisecond, 110 * time.Millisecond} {
+		t.Run(delay.String(), func(t *testing.T) {
+			h := startExecHarnessEngine(t, finalizationConfig(), vm.Config{EnablePreimageRecording: true}, &partialReuseEngine{Ethash: ethash.NewFullFaker()})
+			block, _ := buildPartialReuseBlock(t, h, types.Transactions{h.transfer(t, 0)})
+			s := h.session()
+			release := make(chan struct{})
+			var releaseOnce sync.Once
+			releaseImport := func() { releaseOnce.Do(func() { close(release) }) }
+			t.Cleanup(releaseImport)
+			provider := &importGateConsumer{Consumer: s.consumer, begun: make(chan *types.Block, 1), release: release}
+			h.chain.SetPreconfProvider(provider)
+
+			insertDone := make(chan error, 1)
+			go func() {
+				_, err := h.chain.InsertChain(types.Blocks{block}, false)
+				insertDone <- err
+			}()
+			select {
+			case begun := <-provider.begun:
+				if begun.Hash() != block.Hash() {
+					t.Fatalf("observed import = %s, want %s", begun.Hash(), block.Hash())
+				}
+			case err := <-insertDone:
+				t.Fatalf("import finished before lifecycle observation: %v", err)
+			case <-time.After(time.Second):
+				t.Fatal("canonical import was not observed")
+			}
+
+			time.AfterFunc(delay, releaseImport)
+			started := time.Now()
+			handleOK(t, s, openOn(block.Header(), h.config, s.head))
+			if elapsed := time.Since(started); elapsed >= preconfCanonicalParentWait {
+				t.Fatalf("child open waited for timeout instead of canonical event: %s", elapsed)
+			}
+			if err := <-insertDone; err != nil {
+				t.Fatalf("import parent: %v", err)
+			}
+			if pending := s.consumer.PendingBlock(); pending == nil || pending.ParentHash() != block.Hash() {
+				t.Fatalf("pending child = %v", pending)
+			}
+		})
+	}
+}
+
+func TestSessionWaitsForCanonicalImportStartingAfterOpen(t *testing.T) {
+	h := startExecHarnessEngine(t, finalizationConfig(), vm.Config{EnablePreimageRecording: true}, &partialReuseEngine{Ethash: ethash.NewFullFaker()})
+	block, _ := buildPartialReuseBlock(t, h, types.Transactions{h.transfer(t, 0)})
+	s := h.session()
+	h.chain.SetPreconfProvider(s.consumer)
+
+	insertDone := make(chan error, 1)
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		_, err := h.chain.InsertChain(types.Blocks{block}, false)
+		insertDone <- err
+	}()
+
+	started := time.Now()
+	s.applyOpen(openOn(block.Header(), h.config, commitment.Head{0x55}).GetBlockOpen())
+	if elapsed := time.Since(started); elapsed < 5*time.Millisecond || elapsed >= preconfCanonicalParentWait {
+		t.Fatalf("child open wait took %s", elapsed)
+	}
+	if err := <-insertDone; err != nil {
+		t.Fatalf("import parent: %v", err)
+	}
+	if pending := s.consumer.PendingBlock(); pending == nil || pending.ParentHash() != block.Hash() {
+		t.Fatalf("pending child = %v", pending)
+	}
+}
+
+func TestSessionBoundsCanonicalParentWait(t *testing.T) {
+	h := partialReuseHarness(t)
+	s := h.session()
+	block, _ := buildPartialReuseBlock(t, h, nil)
+	started := time.Now()
+	header := s.waitForCanonicalParent(block.Hash(), block.NumberU64()+1, 10*time.Millisecond)
+	elapsed := time.Since(started)
+	if header != nil {
+		t.Fatalf("missing parent returned header %v", header)
+	}
+	if elapsed < 8*time.Millisecond || elapsed > 250*time.Millisecond {
+		t.Fatalf("canonical parent wait took %s", elapsed)
+	}
+}
+
+func TestSessionStopsCanonicalParentWaitAfterImportFailure(t *testing.T) {
+	h := partialReuseHarness(t)
+	s := h.session()
+	block, _ := buildPartialReuseBlock(t, h, nil)
+	s.consumer.BeginPreconfImport(block)
+	done := make(chan *types.Header, 1)
+	go func() {
+		done <- s.waitForCanonicalParent(block.Hash(), block.NumberU64()+1, preconfCanonicalParentWait)
+	}()
+	time.Sleep(10 * time.Millisecond)
+	s.consumer.CompletePreconf(block, nil, false)
+	select {
+	case header := <-done:
+		if header != nil {
+			t.Fatalf("failed import returned parent %v", header)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("child open did not stop waiting after canonical import failed")
+	}
+}
+
+func TestSessionReconcilesUncachedParentCommit(t *testing.T) {
+	h := partialReuseHarness(t)
+	s := h.session()
+	if !s.consumer.pendingHeadCurrent() {
+		t.Fatal("initial canonical marker is stale")
+	}
+	block, _ := buildPartialReuseBlock(t, h, nil)
+	s.consumer.CompletePreconf(block, nil, true)
+	h.chain.SetPreconfProvider(s.consumer)
+	importDone := make(chan error, 1)
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		_, err := h.chain.InsertChain(types.Blocks{block}, false)
+		importDone <- err
+	}()
+
+	handleOK(t, s, openOn(block.Header(), h.config, commitment.Head{0x52}))
+	if err := <-importDone; err != nil {
+		t.Fatalf("import parent: %v", err)
+	}
+	if s.env == nil || !s.env.cacheable || s.consumer.PendingBlock() == nil {
+		t.Fatal("child open was not published from the reconciled parent")
+	}
+}
+
+func TestSessionReconcilesAlreadyCanonicalParent(t *testing.T) {
+	h := partialReuseHarness(t)
+	s := h.session()
+	if !s.consumer.pendingHeadCurrent() {
+		t.Fatal("initial canonical marker is stale")
+	}
+	block, _ := buildPartialReuseBlock(t, h, nil)
+	h.chain.SetPreconfProvider(s.consumer)
+	if _, err := h.chain.InsertChain(types.Blocks{block}, false); err != nil {
+		t.Fatalf("import parent: %v", err)
+	}
+	if s.consumer.pendingHeadCurrent() {
+		t.Fatal("canonical marker advanced without reconciliation")
+	}
+
+	handleOK(t, s, openOn(block.Header(), h.config, commitment.Head{0x53}))
+	if s.env == nil || !s.env.cacheable || s.consumer.PendingBlock() == nil {
+		t.Fatal("child open was not published from the canonical parent")
+	}
+	if !s.consumer.pendingHeadCurrent() {
+		t.Fatal("canonical parent was not recorded as reconciled")
+	}
+}
+
+func TestSessionPreservesInFlightSameHeightReplacement(t *testing.T) {
+	for _, matched := range []bool{false, true} {
+		t.Run(fmt.Sprintf("matched=%t", matched), func(t *testing.T) {
+			h := partialReuseHarness(t)
+			txs := types.Transactions{h.transfer(t, 0)}
+			replacement, _ := buildPartialReuseBlock(t, h, txs)
+			canonical, _ := buildPartialReuseBlock(t, h, nil)
+			s := h.session()
+			if matched {
+				s = publishPrefix(t, h, txs)
+				s.clearEnv()
+			} else if !s.consumer.pendingHeadCurrent() {
+				t.Fatal("initial canonical marker is stale")
+			}
+			if _, err := h.chain.InsertChain(types.Blocks{canonical}, false); err != nil {
+				t.Fatalf("import old head: %v", err)
+			}
+			s.consumer.CompletePreconf(replacement, nil, true)
+			marker := s.consumer.reconciled.Load()
+			if matched && (marker == nil || marker.Hash() != replacement.Hash()) {
+				t.Fatal("replacement did not establish the canonical fence")
+			}
+			markerHash := marker.Hash()
+
+			s.applyOpen(openOn(canonical.Header(), h.config, commitment.Head{0x54}).GetBlockOpen())
+			if s.env != nil || s.consumer.PendingBlock() != nil {
+				t.Fatal("child was published on the head being replaced")
+			}
+			marker = s.consumer.reconciled.Load()
+			if marker == nil || marker.Hash() != markerHash {
+				var markerGot common.Hash
+				if marker != nil {
+					markerGot = marker.Hash()
+				}
+				t.Fatalf("reconciled marker = %s, want %s; handoff = %v; canonical = %s; replacement = %s", markerGot, markerHash, s.consumer.handoff.Load(), canonical.Hash(), replacement.Hash())
+			}
+		})
+	}
+}
+
+func TestRejectedClaimKeepsCanonicalHandoff(t *testing.T) {
+	h := partialReuseHarness(t)
+	txs := types.Transactions{h.transfer(t, 0), h.transfer(t, 1)}
+	block, _ := buildPartialReuseBlock(t, h, txs)
+	s := publishPrefix(t, h, txs[:1])
+	s.consumer.BeginPreconfImport(block)
+	if _, ok := s.consumer.ClaimPreconfPrefix(block); !ok {
+		t.Fatal("prefix claim failed")
+	}
+	s.consumer.RejectClaimedPreconf(block)
+	if !s.consumer.canonicalHandoffMatches(block.Hash(), block.NumberU64()+1) {
+		t.Fatal("rejected cache claim cleared the canonical handoff")
+	}
+	s.consumer.CompletePreconf(block, nil, false)
+	if s.consumer.canonicalHandoffMatches(block.Hash(), block.NumberU64()+1) {
+		t.Fatal("aborted import retained the canonical handoff")
 	}
 }
 
@@ -302,10 +579,6 @@ func TestCommittedPrefixRemovesLogsAfterReceiptMismatch(t *testing.T) {
 	block, receipts := buildPartialReuseBlock(t, h, txs)
 	s := publishPrefix(t, h, txs[:1])
 	store := s.consumer.pendingStore()
-	key := pendingKey{number: block.NumberU64(), parent: block.ParentHash()}
-	store.mu.Lock()
-	store.entries[key].RPCView.Logs = []*types.Log{{BlockNumber: block.NumberU64()}}
-	store.mu.Unlock()
 
 	mismatch := cloneReceipts(receipts)
 	mismatch[0].Status ^= 1
@@ -314,8 +587,13 @@ func TestCommittedPrefixRemovesLogsAfterReceiptMismatch(t *testing.T) {
 	}
 	logs, invalidations, _, _ := store.completePreconf(block, mismatch, true)
 	store.writeInvalidations(invalidations)
-	if len(logs) != 1 || !logs[0].Removed {
+	if len(logs) != len(receipts[0].Logs) {
 		t.Fatalf("removed logs = %+v", logs)
+	}
+	for _, entry := range logs {
+		if entry == nil || !entry.Removed {
+			t.Fatalf("log was not marked removed: %+v", entry)
+		}
 	}
 	if records := rawdb.ReadInvalidPreconfs(h.chain.DB(), 1); len(records) != 1 || records[0].Reason != "canonical_mismatch" {
 		t.Fatalf("invalidation records = %+v", records)

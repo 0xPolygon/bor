@@ -25,6 +25,10 @@ func (c *Consumer) pendingStore() *PendingStore {
 	return c.store
 }
 
+func (c *Consumer) BeginPreconfImport(block *types.Block) {
+	c.markCanonicalHandoff(block)
+}
+
 func (c *Consumer) ClaimPreconf(block *types.Block) (*core.PreconfExecution, bool) {
 	c.publishMu.Lock()
 	defer c.publishMu.Unlock()
@@ -32,7 +36,8 @@ func (c *Consumer) ClaimPreconf(block *types.Block) (*core.PreconfExecution, boo
 		return nil, false
 	}
 
-	return c.pendingStore().ClaimPreconf(block)
+	execution, ok := c.pendingStore().ClaimPreconf(block)
+	return execution, ok
 }
 
 func (c *Consumer) ClaimPreconfPrefix(block *types.Block) (*core.PreconfExecution, bool) {
@@ -60,16 +65,16 @@ func (c *Consumer) ClaimPreconfPrefix(block *types.Block) (*core.PreconfExecutio
 		return nil, false
 	}
 	if !c.interruptPreconfWorker(worker, prefix.Generation) {
-		c.CompletePreconf(block, nil, false)
+		c.releasePreconfClaim(block)
 		return nil, false
 	}
 	if prefix.State == nil {
-		c.CompletePreconf(block, nil, false)
+		c.releasePreconfClaim(block)
 		return nil, false
 	}
 	statedb, err := prefix.State.NewStateDB()
 	if err != nil {
-		c.CompletePreconf(block, nil, false)
+		c.releasePreconfClaim(block)
 		return nil, false
 	}
 	prefix.State = nil
@@ -80,6 +85,17 @@ func (c *Consumer) ClaimPreconfPrefix(block *types.Block) (*core.PreconfExecutio
 		return nil, false
 	}
 	return execution, true
+}
+
+func (c *Consumer) releasePreconfClaim(block *types.Block) {
+	c.publishMu.Lock()
+	logs, invalidations, removed, _ := c.pendingStore().completePreconf(block, nil, false)
+	if removed && block != nil && c.index != nil {
+		c.index.ClearFrom(block.NumberU64())
+	}
+	c.enqueuePendingLogs(logs)
+	c.publishMu.Unlock()
+	c.pendingStore().writeInvalidations(invalidations)
 }
 
 func (c *Consumer) RejectClaimedPreconf(block *types.Block) {
@@ -95,9 +111,15 @@ func (c *Consumer) RejectClaimedPreconf(block *types.Block) {
 
 func (c *Consumer) CompletePreconf(block *types.Block, receipts types.Receipts, committed bool) string {
 	c.publishMu.Lock()
+	if committed {
+		c.markCanonicalHandoff(block)
+	} else {
+		c.clearCanonicalHandoff(block)
+	}
 	logs, invalidations, removed, matched := c.pendingStore().completePreconf(block, receipts, committed)
 	if committed && block != nil {
 		if c.index != nil {
+			preconfCanonicalReceipts.Inc(int64(c.index.CountCanonical(block)))
 			c.index.EvictThrough(block.NumberU64())
 		}
 		if matched {
@@ -113,6 +135,43 @@ func (c *Consumer) CompletePreconf(block *types.Block, receipts types.Receipts, 
 	}
 	c.pendingStore().writeInvalidations(invalidations)
 	return ""
+}
+
+func (c *Consumer) markCanonicalHandoff(block *types.Block) {
+	if block != nil {
+		c.handoff.Store(block.Header())
+	}
+}
+
+func (c *Consumer) clearCanonicalHandoff(block *types.Block) {
+	if block == nil {
+		return
+	}
+	header := c.handoff.Load()
+	if header != nil && header.Hash() == block.Hash() {
+		c.handoff.CompareAndSwap(header, nil)
+	}
+}
+
+func (c *Consumer) clearCanonicalHandoffThrough(head *types.Header) {
+	if head == nil || head.Number == nil {
+		return
+	}
+	header := c.handoff.Load()
+	if header != nil && header.Number != nil && (header.Number.Cmp(head.Number) < 0 ||
+		header.Number.Cmp(head.Number) == 0 && header.Hash() == head.Hash()) {
+		c.handoff.CompareAndSwap(header, nil)
+	}
+}
+
+func (c *Consumer) canonicalHandoffMatches(parent common.Hash, number uint64) bool {
+	header := c.handoff.Load()
+	return number > 0 && header != nil && header.Number != nil && header.Hash() == parent && header.Number.Uint64() == number-1
+}
+
+func (c *Consumer) canonicalHandoffAt(number uint64) bool {
+	header := c.handoff.Load()
+	return header != nil && header.Number != nil && header.Number.Uint64() == number
 }
 
 func (c *Consumer) invalidatePendingFrom(number uint64) {
@@ -219,6 +278,29 @@ func (s *PendingStore) publishPayload(block *types.Block, payload pendingPayload
 	return true
 }
 
+func (s *PendingStore) acceptExecutedRecord(number uint64, parent common.Hash, generation uint64, start int, txs types.Transactions, receipts types.Receipts) bool {
+	if len(txs) == 0 || len(txs) != len(receipts) {
+		return false
+	}
+	for index, tx := range txs {
+		receipt := receipts[index]
+		if tx == nil || receipt == nil || receipt.BlockNumber == nil || receipt.BlockNumber.Uint64() != number {
+			return false
+		}
+	}
+	key := pendingKey{number: number, parent: parent}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry := s.entries[key]
+	if entry == nil || entry.phase != PendingBuilding || entry.generation != generation ||
+		entry.claimedHash != (common.Hash{}) || entry.rejected || len(entry.executedTransactions) != start {
+		return false
+	}
+	entry.executedTransactions = append(entry.executedTransactions, txs...)
+	entry.executedReceipts = append(entry.executedReceipts, receipts...)
+	return true
+}
+
 func makePendingPayload(block *types.Block, receipts types.Receipts, statedb *state.StateDB, sealed *ReusableExecution) (pendingPayload, bool) {
 	return makePendingPayloadWithPrevious(block, receipts, statedb, sealed, nil, common.Hash{})
 }
@@ -320,13 +402,21 @@ func (s *PendingStore) claimPreconfPrefix(block *types.Block) (*pendingPrefix, b
 		s.mu.Unlock()
 		return nil, false
 	}
+	prefixTxs := entry.RPCView.Block.Transactions()
+	// Avoid replacing a full parallel import with a large serial suffix when
+	// speculation has only covered a small part of the block.
+	remaining := len(block.Transactions()) - len(prefixTxs)
+	if remaining > maxPreconfPrefixCatchupTransactions {
+		s.mu.Unlock()
+		return nil, false
+	}
 	result, ok := prefixProcessResult(entry.RPCView)
 	if !ok || result.GasUsed > block.GasLimit() {
 		s.mu.Unlock()
 		return nil, false
 	}
 	view := entry.RPCView
-	txs := append(types.Transactions(nil), view.Block.Transactions()...)
+	txs := append(types.Transactions(nil), prefixTxs...)
 	entry.phase = PendingImporting
 	entry.claimedHash = block.Hash()
 	entry.partialClaim = true

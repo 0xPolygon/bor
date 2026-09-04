@@ -1497,9 +1497,9 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	return result.receipts, result.logs, result.usedGas, result.statedb, result.vtime, result.err
 }
 
-func (bc *BlockChain) claimPreconf(block *types.Block, requireWitness bool, compatible, allowPrefix bool) (*PreconfExecution, time.Duration) {
+func (bc *BlockChain) claimPreconf(block *types.Block, requireWitness bool, compatible, allowPrefix bool) (*PreconfExecution, time.Duration, bool) {
 	if bc.preconfProvider == nil || bc.logger != nil || !compatible || !bc.canClaimPreconf(requireWitness) {
-		return nil, 0
+		return nil, 0, false
 	}
 	cached, ok := bc.preconfProvider.ClaimPreconf(block)
 	if !ok && allowPrefix {
@@ -1511,16 +1511,16 @@ func (bc *BlockChain) claimPreconf(block *types.Block, requireWitness bool, comp
 		if ok {
 			bc.preconfProvider.RejectClaimedPreconf(block)
 		}
-		return nil, 0
+		return nil, 0, ok
 	}
 	start := time.Now()
 	err := bc.validator.ValidateState(block, cached.StateDB, cached.Result, false)
 	elapsed := time.Since(start)
 	if err != nil {
 		bc.preconfProvider.RejectClaimedPreconf(block)
-		return nil, elapsed
+		return nil, elapsed, true
 	}
-	return cached, elapsed
+	return cached, elapsed, true
 }
 
 func (bc *BlockChain) canClaimPreconf(requireWitness bool) bool {
@@ -1530,10 +1530,46 @@ func (bc *BlockChain) canClaimPreconf(requireWitness bool) bool {
 		len(config.ExtraEips) == 0 && !config.StatelessSelfValidation && !config.EnableWitnessStats
 }
 
-func (bc *BlockChain) processBlockForImport(block *types.Block, parent *types.Header, witness *stateless.Witness, interrupt *atomic.Bool, pipeOpts *PipelineImportOpts, requireWitness, preconfCompatible bool, outstanding map[common.Hash]*types.Block) (types.Receipts, []*types.Log, uint64, *state.StateDB, time.Duration, error) {
-	cached, validationTime := bc.claimPreconf(block, requireWitness, pipeOpts == nil && preconfCompatible, witness == nil)
-	if cached != nil {
+func (bc *BlockChain) beginPreconfImport(block *types.Block, setHead bool) bool {
+	if !setHead || block == nil || bc.preconfProvider == nil {
+		return false
+	}
+	head := bc.CurrentBlock()
+	if head == nil || head.Number == nil || block.NumberU64() != head.Number.Uint64()+1 || block.ParentHash() != head.Hash() {
+		return false
+	}
+	observer, ok := bc.preconfProvider.(PreconfImportObserver)
+	if !ok {
+		return false
+	}
+	observer.BeginPreconfImport(block)
+	return true
+}
+
+func (bc *BlockChain) trackPreconfImport(outstanding map[common.Hash]*types.Block, block *types.Block, setHead bool) {
+	if bc.beginPreconfImport(block, setHead) {
 		outstanding[block.Hash()] = block
+	}
+}
+
+func (bc *BlockChain) resolvePipelinedPreconf(outstanding map[common.Hash]*types.Block, block *types.Block) {
+	if head := bc.CurrentBlock(); head != nil && head.Hash() == block.Hash() {
+		delete(outstanding, block.Hash())
+	}
+}
+
+func (bc *BlockChain) resolveWrittenPreconf(outstanding map[common.Hash]*types.Block, block *types.Block, status WriteStatus) {
+	if status == CanonStatTy {
+		delete(outstanding, block.Hash())
+	}
+}
+
+func (bc *BlockChain) processBlockForImport(block *types.Block, parent *types.Header, witness *stateless.Witness, interrupt *atomic.Bool, pipeOpts *PipelineImportOpts, requireWitness, preconfCompatible bool, outstanding map[common.Hash]*types.Block) (types.Receipts, []*types.Log, uint64, *state.StateDB, time.Duration, error) {
+	cached, validationTime, claimed := bc.claimPreconf(block, requireWitness, pipeOpts == nil && preconfCompatible, witness == nil)
+	if claimed {
+		outstanding[block.Hash()] = block
+	}
+	if cached != nil {
 		return cached.Result.Receipts, cached.Result.Logs, cached.Result.GasUsed, cached.StateDB, validationTime, nil
 	}
 	return bc.ProcessBlock(block, parent, witness, interrupt, pipeOpts)
@@ -3764,6 +3800,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		if parent == nil {
 			parent = bc.GetHeader(block.ParentHash(), block.NumberU64()-1)
 		}
+		bc.trackPreconfImport(outstandingPreconfs, block, setHead)
 
 		// --- Pipelined import: check for pending SRC from previous block ---
 		//
@@ -3905,6 +3942,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 				}
 				return nil, idx, err
 			}
+			bc.resolvePipelinedPreconf(outstandingPreconfs, block)
 			followupInterrupt.Store(true)
 			stats.processed++
 			stats.usedGas += usedGas
@@ -3985,9 +4023,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		if err != nil {
 			return nil, it.index, err
 		}
-		if status == CanonStatTy {
-			delete(outstandingPreconfs, block.Hash())
-		}
+		bc.resolveWrittenPreconf(outstandingPreconfs, block, status)
 
 		// Update the metrics touched during block commit
 		accountCommitTimer.Update(statedb.AccountCommits)   // Account commits are complete, we can mark them

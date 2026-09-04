@@ -203,7 +203,7 @@ func TestPrefixClaimStateFailures(t *testing.T) {
 			consumer := &Consumer{chain: h.chain, index: NewIndex(), store: store}
 			session := &session{consumer: consumer}
 			env := &blockEnv{generation: generation}
-			worker := &preconfWorker{session: session, env: env}
+			worker := &preconfWorker{session: session, env: env, generation: generation}
 			session.env = env
 			session.worker = worker
 			consumer.worker.Store(worker)

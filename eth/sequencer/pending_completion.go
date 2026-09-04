@@ -12,6 +12,11 @@ func entryMatchesCanonical(entry *pendingEntry, block *types.Block, receipts typ
 		return false
 	}
 	if entry.phase == PendingBuilding || entry.phase == PendingImporting && entry.Sealed == nil {
+		if len(entry.executedTransactions) > 0 {
+			return sameExecutionContext(entry.RPCView.Header, block.Header()) &&
+				sameTransactionSlicePrefix(entry.executedTransactions, block.Transactions()) &&
+				(receipts == nil || sameReceiptSlicePrefix(entry.executedReceipts, receipts))
+		}
 		return sameExecutionContext(entry.RPCView.Header, block.Header()) &&
 			sameTransactionPrefix(entry.RPCView.Block, block) &&
 			(receipts == nil || sameReceiptPrefix(entry.RPCView.Block, entry.RPCView, receipts))
@@ -36,7 +41,7 @@ func (s *PendingStore) rejectClaimedPreconf(block *types.Block) ([]*types.Log, [
 	if entry := s.entries[key]; entry != nil && entry.phase == PendingImporting && entry.claimedHash == block.Hash() {
 		if entry.partialClaim {
 			if entry.deferredInvalidation != "" {
-				logs = removedLogs(entry.RPCView)
+				logs = removedEntryLogs(entry)
 				invalidation := pendingInvalidation{number: block.NumberU64(), reason: entry.deferredInvalidation}
 				s.removeLocked(key)
 				s.mu.Unlock()
@@ -53,7 +58,7 @@ func (s *PendingStore) rejectClaimedPreconf(block *types.Block) ([]*types.Log, [
 			return nil, nil, false
 		}
 		if entry.deferredInvalidation != "" {
-			logs = removedLogs(entry.RPCView)
+			logs = removedEntryLogs(entry)
 			invalidation := pendingInvalidation{number: block.NumberU64(), reason: entry.deferredInvalidation}
 			s.removeLocked(key)
 			s.mu.Unlock()
@@ -103,7 +108,7 @@ func (s *PendingStore) completeEntryLocked(key pendingKey, entry *pendingEntry, 
 		var reason string
 		matched := entry.RPCView != nil && entryMatchesCanonical(entry, block, receipts)
 		if !matched {
-			logs = removedLogs(entry.RPCView)
+			logs = removedEntryLogs(entry)
 			reason = "canonical_mismatch"
 		}
 		s.removeLocked(key)
@@ -113,7 +118,7 @@ func (s *PendingStore) completeEntryLocked(key pendingKey, entry *pendingEntry, 
 		return nil, "", false, false
 	}
 	if entry.partialClaim || entry.deferredInvalidation != "" {
-		logs := removedLogs(entry.RPCView)
+		logs := removedEntryLogs(entry)
 		reason := entry.deferredInvalidation
 		s.removeLocked(key)
 		return logs, reason, true, false
@@ -147,7 +152,7 @@ func (s *PendingStore) invalidateFromMemory(number uint64, reason string) ([]*ty
 			}
 			continue
 		}
-		removed = append(removed, removedLogs(entry.RPCView)...)
+		removed = append(removed, removedEntryLogs(entry)...)
 		invalidations = append(invalidations, pendingInvalidation{number: key.number, reason: reason})
 		s.removeLocked(key)
 	}

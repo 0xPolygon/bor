@@ -101,6 +101,10 @@ func TestPendingRPCMetadataAccessors(t *testing.T) {
 	if receipts[0] == fixture.receipt {
 		t.Fatal("store returned the source receipt")
 	}
+	blocks, receiptSets := store.PendingLogRange()
+	if len(blocks) != 1 || blocks[0] != fixture.block || len(receiptSets) != 1 || len(receiptSets[0]) != 1 {
+		t.Fatalf("store pending log range = %v, %v", blocks, receiptSets)
+	}
 	nonce, found, err := store.PendingNonce(*fixture.address)
 	if err != nil || !found || nonce != 7 {
 		t.Fatalf("store nonce = %d, %v, %v", nonce, err, found)
@@ -119,6 +123,25 @@ func TestPendingRPCMetadataAccessors(t *testing.T) {
 	tx, receipt, found := consumer.LookupPreconf(fixture.tx.Hash())
 	if !found || tx != fixture.tx || receipt == nil || receipt.TxHash != fixture.tx.Hash() {
 		t.Fatalf("consumer lookup = %v, %+v, %v", tx, receipt, found)
+	}
+}
+
+func TestPendingLogRangeFollowsActiveChain(t *testing.T) {
+	store := NewPendingStore(nil)
+	parent := newPendingRPCCoverageFixture(t, 2, common.HexToHash("0x1"))
+	child := newPendingRPCCoverageFixture(t, 3, parent.block.Hash())
+	for _, fixture := range []*pendingRPCCoverageFixture{parent, child} {
+		if !store.publish(fixture.block, types.Receipts{fixture.receipt}, fixture.state, nil, 0) {
+			t.Fatalf("publish block %d", fixture.block.NumberU64())
+		}
+	}
+
+	blocks, receipts := store.PendingLogRange()
+	if len(blocks) != 2 || blocks[0] != parent.block || blocks[1] != child.block {
+		t.Fatalf("pending blocks = %v", blocks)
+	}
+	if len(receipts) != 2 || receipts[0][0].TxHash != parent.tx.Hash() || receipts[1][0].TxHash != child.tx.Hash() {
+		t.Fatalf("pending receipts = %v", receipts)
 	}
 }
 
@@ -164,6 +187,9 @@ func TestPendingRPCEmptyStore(t *testing.T) {
 	}
 	if block, receipts := store.PendingBlockAndReceipts(); block != nil || receipts != nil {
 		t.Fatalf("store pending metadata = %v, %v", block, receipts)
+	}
+	if blocks, receipts := store.PendingLogRange(); blocks != nil || receipts != nil {
+		t.Fatalf("store pending log range = %v, %v", blocks, receipts)
 	}
 	if nonce, found, err := store.PendingNonce(common.Address{}); nonce != 0 || err != nil || found {
 		t.Fatalf("store nonce = %d, %v, %v", nonce, err, found)

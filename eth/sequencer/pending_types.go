@@ -14,16 +14,19 @@ import (
 )
 
 const (
-	pendingInputLimit              = 32 * 1024 * 1024
-	pendingOpenBaseFeeLimit        = 32
-	pendingSealHeaderLimit         = 1 * 1024 * 1024
-	pendingRPCPublicationLimit     = 16
-	pendingEagerPublicationTxs     = 16
-	pendingRPCMinPublishDelay      = 100 * time.Millisecond
-	pendingRPCTimeFallbackLimit    = pendingRPCPublicationLimit / 2
-	pendingRPCPublishFallbackDelay = 200 * time.Millisecond
-	pendingLogsQueueLimit          = 64
-	pendingEntryLimit              = 256
+	pendingInputLimit                   = 32 * 1024 * 1024
+	pendingOpenBaseFeeLimit             = 32
+	pendingSealHeaderLimit              = 1 * 1024 * 1024
+	pendingRPCPublicationLimit          = 4
+	pendingEagerPublicationTxs          = 16
+	pendingRPCMinPublishDelay           = 100 * time.Millisecond
+	pendingRPCTimeFallbackLimit         = pendingRPCPublicationLimit / 2
+	pendingRPCPublishFallbackDelay      = 200 * time.Millisecond
+	preconfCanonicalParentWait          = 2 * time.Second
+	preconfCanonicalParentPoll          = 5 * time.Millisecond
+	pendingLogsQueueLimit               = 64
+	pendingEntryLimit                   = 256
+	maxPreconfPrefixCatchupTransactions = 512
 )
 
 type PendingPhase uint8
@@ -137,6 +140,8 @@ type pendingEntry struct {
 	Number               uint64
 	ParentHash           common.Hash
 	RPCView              *PendingRPCView
+	executedTransactions types.Transactions
+	executedReceipts     types.Receipts
 	Sealed               *ReusableExecution
 	claimedHash          common.Hash
 	partialClaim         bool

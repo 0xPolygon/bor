@@ -189,15 +189,15 @@ func TestPendingPublicationWorkIsLinear(t *testing.T) {
 	if gap := transactionCount - lastPublished; gap > maxGap {
 		maxGap = gap
 	}
-	if publications != 31 || publishedWork != 45_496 || lastPublished != 5_656 || maxGap != 376 {
+	if publications != 5 || publishedWork != 7_383 || lastPublished != 3_818 || maxGap != 2_182 {
 		t.Fatalf("publications = %d, work = %d, last = %d, max gap = %d", publications, publishedWork, lastPublished, maxGap)
 	}
-	maxPublishedWork := pendingEagerPublicationTxs*(pendingEagerPublicationTxs+1)/2 + pendingRPCPublicationLimit*transactionCount
+	maxPublishedWork := pendingEagerPublicationTxs + pendingRPCPublicationLimit*transactionCount
 	if publishedWork > maxPublishedWork {
 		t.Fatalf("cumulative pending publication work = %d, want <= %d", publishedWork, maxPublishedWork)
 	}
-	if env.postEagerPublications != 15 {
-		t.Fatalf("post-eager publications = %d, want 15", env.postEagerPublications)
+	if env.postEagerPublications != pendingRPCPublicationLimit {
+		t.Fatalf("post-eager publications = %d, want %d", env.postEagerPublications, pendingRPCPublicationLimit)
 	}
 }
 
@@ -221,7 +221,7 @@ func TestPendingPublicationCadence(t *testing.T) {
 		{"time fallback", 17, 16, 357_000, 336_000, now.Add(-pendingRPCPublishFallbackDelay), 0, true},
 		{"clock moved backwards", 17, 16, 500_000, 336_000, now.Add(time.Nanosecond), 0, false},
 		{"time reserve exhausted", 17, 16, 357_000, 336_000, now.Add(-pendingRPCPublishFallbackDelay), pendingRPCTimeFallbackLimit, false},
-		{"gas after time reserve", 17, 16, 436_000, 336_000, now.Add(-pendingRPCPublishFallbackDelay), pendingRPCTimeFallbackLimit, true},
+		{"gas after time reserve", 17, 16, 736_000, 336_000, now.Add(-pendingRPCPublishFallbackDelay), pendingRPCTimeFallbackLimit, true},
 		{"budget exhausted", 17, 16, 500_000, 336_000, now.Add(-pendingRPCPublishFallbackDelay), pendingRPCPublicationLimit, false},
 	}
 	for _, test := range tests {
@@ -252,10 +252,10 @@ func TestPendingPublicationGasThreshold(t *testing.T) {
 	}{
 		{"minimum below", 1, 20_999, 0, false},
 		{"minimum boundary", 1, 21_000, 0, true},
-		{"exact below", 1_600_000, 435_999, 336_000, false},
-		{"exact boundary", 1_600_000, 436_000, 336_000, true},
-		{"rounded below", 1_600_001, 436_000, 336_000, false},
-		{"rounded boundary", 1_600_001, 436_001, 336_000, true},
+		{"exact below", 1_600_000, 735_999, 336_000, false},
+		{"exact boundary", 1_600_000, 736_000, 336_000, true},
+		{"rounded below", 1_600_001, 736_000, 336_000, false},
+		{"rounded boundary", 1_600_001, 736_001, 336_000, true},
 		{"gas regression", 1_600_000, 335_999, 336_000, false},
 	}
 	for _, test := range tests {
@@ -299,7 +299,7 @@ func TestPendingPublicationTimeFallbackIsBounded(t *testing.T) {
 		env.publishedGas = env.header.GasUsed
 		work += len(env.txs)
 	}
-	if work != 164 || env.postEagerPublications != pendingRPCTimeFallbackLimit {
+	if work != 35 || env.postEagerPublications != pendingRPCTimeFallbackLimit {
 		t.Fatalf("work = %d, publications = %d", work, env.postEagerPublications)
 	}
 	env.txs = append(env.txs, nil)
@@ -309,7 +309,7 @@ func TestPendingPublicationTimeFallbackIsBounded(t *testing.T) {
 		t.Fatal("time fallback exceeded its publication budget")
 	}
 	env.header.GasLimit = 1_600_000
-	env.header.GasUsed = env.publishedGas + 100_000
+	env.header.GasUsed = env.publishedGas + 400_000
 	if !env.shouldPublishPending(now) {
 		t.Fatal("time fallback consumed the reserved gas budget")
 	}
@@ -344,7 +344,7 @@ func TestPendingPublicationImprovesPartialBlockFreshness(t *testing.T) {
 	if gap := 200 - lastPublished; gap > maxGap {
 		maxGap = gap
 	}
-	if publications != 20 || lastPublished != 176 || maxGap != 40 || env.postEagerPublications != 4 {
+	if publications != 3 || lastPublished != 96 || maxGap != 104 || env.postEagerPublications != 2 {
 		t.Fatalf("publications = %d, last = %d, max gap = %d, post-eager = %d", publications, lastPublished, maxGap, env.postEagerPublications)
 	}
 }

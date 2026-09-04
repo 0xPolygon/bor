@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -30,16 +31,36 @@ func TestPipelinedPreconfLifecycleUsesInnerWritePath(t *testing.T) {
 	require.Equal(t, []rawdb.InvalidPreconfRecord{{Number: blocks[0].NumberU64(), Reason: "canonical_mismatch"}}, rawdb.ReadInvalidPreconfs(chain.DB(), 1))
 }
 
+func TestPipelinedCanonicalImportCompletesObservedLifecycleOnce(t *testing.T) {
+	chain, _, blocks := newPipelineHelperChain(t)
+	provider := new(testPreconfProvider)
+	chain.SetPreconfProvider(provider)
+
+	if _, err := chain.InsertChain(types.Blocks{blocks[0]}, false); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if provider.begun != 1 || provider.begunBlock != blocks[0].Hash() || provider.committed != 1 || provider.failed != 0 {
+		t.Fatalf("provider=%+v", provider)
+	}
+}
+
 type testPreconfProvider struct {
 	block           common.Hash
 	execution       *PreconfExecution
 	prefixBlock     common.Hash
 	prefixExecution *PreconfExecution
+	begun           int
+	begunBlock      common.Hash
 	claims          int
 	prefixClaims    int
 	committed       int
 	failed          int
 	invalidation    string
+}
+
+func (p *testPreconfProvider) BeginPreconfImport(block *types.Block) {
+	p.begun++
+	p.begunBlock = block.Hash()
 }
 
 func (p *testPreconfProvider) ClaimPreconfPrefix(block *types.Block) (*PreconfExecution, bool) {
@@ -74,6 +95,14 @@ func (p *testPreconfProvider) CompletePreconf(block *types.Block, receipts types
 type countingProcessor struct {
 	inner Processor
 	calls int
+}
+
+type failingPreconfProcessor struct {
+	err error
+}
+
+func (p *failingPreconfProcessor) Process(*types.Block, *state.StateDB, vm.Config, *common.Address, context.Context) (*ProcessResult, error) {
+	return nil, p.err
 }
 
 func (p *countingProcessor) Process(block *types.Block, statedb *state.StateDB, cfg vm.Config, author *common.Address, interrupt context.Context) (*ProcessResult, error) {
@@ -134,7 +163,32 @@ func TestCanonicalImportFallsBackOnPreconfMiss(t *testing.T) {
 	if _, err := blockchain.InsertChain(blocks, false); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
-	if counter.calls != 1 || provider.claims != 1 || provider.committed != 1 {
+	if counter.calls != 1 || provider.begun != 1 || provider.begunBlock != blocks[0].Hash() || provider.claims != 1 || provider.committed != 1 {
+		t.Fatalf("calls=%d provider=%+v", counter.calls, provider)
+	}
+}
+
+func TestCanonicalImportSignalsPreconfLifecycleWhenReuseDisabled(t *testing.T) {
+	engine := ethash.NewFaker()
+	_, genesis, blockchain, err := newCanonical(engine, 0, true, "hash")
+	if err != nil {
+		t.Fatalf("chain: %v", err)
+	}
+	defer blockchain.Stop()
+
+	_, blocks := makeBlockChainWithGenesis(genesis, 1, engine, canonicalSeed)
+	provider := new(testPreconfProvider)
+	blockchain.SetPreconfProvider(provider)
+	blockchain.cfg.VmConfig.EnablePreimageRecording = true
+	counter := &countingProcessor{inner: blockchain.processor}
+	blockchain.processor = counter
+	blockchain.parallelProcessor = nil
+
+	if _, err := blockchain.InsertChain(blocks, false); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if counter.calls != 1 || provider.begun != 1 || provider.begunBlock != blocks[0].Hash() ||
+		provider.claims != 0 || provider.prefixClaims != 0 || provider.committed != 1 || provider.failed != 0 {
 		t.Fatalf("calls=%d provider=%+v", counter.calls, provider)
 	}
 }
@@ -155,6 +209,9 @@ func TestStagedImportDefersPreconfInvalidation(t *testing.T) {
 	}
 	if provider.committed != 0 {
 		t.Fatalf("staged import finalized preconfirmation: %+v", provider)
+	}
+	if provider.begun != 0 {
+		t.Fatalf("staged import started canonical preconfirmation lifecycle: %+v", provider)
 	}
 }
 
@@ -251,6 +308,64 @@ func TestCanonicalImportRejectsInvalidPreconfExecution(t *testing.T) {
 	}
 	if counter.calls != 1 || provider.failed != 1 || provider.committed != 1 {
 		t.Fatalf("calls=%d provider=%+v", counter.calls, provider)
+	}
+}
+
+func TestFailedFallbackReleasesRejectedPreconf(t *testing.T) {
+	engine := ethash.NewFaker()
+	_, genesis, blockchain, err := newCanonical(engine, 0, true, "hash")
+	if err != nil {
+		t.Fatalf("chain: %v", err)
+	}
+	defer blockchain.Stop()
+
+	_, blocks := makeBlockChainWithGenesis(genesis, 1, engine, canonicalSeed)
+	block := blocks[0]
+	_, _, _, statedb, _, err := blockchain.ProcessBlock(block, blockchain.GetHeaderByHash(block.ParentHash()), nil, nil, nil)
+	if err != nil {
+		t.Fatalf("pre-execute: %v", err)
+	}
+	provider := &testPreconfProvider{
+		block: block.Hash(),
+		execution: &PreconfExecution{
+			StateDB: statedb,
+			Result:  &ProcessResult{GasUsed: block.GasUsed() + 1},
+		},
+	}
+	blockchain.SetPreconfProvider(provider)
+	processErr := errors.New("fallback failed")
+	blockchain.processor = &failingPreconfProcessor{err: processErr}
+	blockchain.parallelProcessor = nil
+
+	if _, err := blockchain.InsertChain(blocks, false); !errors.Is(err, processErr) {
+		t.Fatalf("insert error = %v, want %v", err, processErr)
+	}
+	if provider.begun != 1 || provider.failed != 2 || provider.committed != 0 {
+		t.Fatalf("provider=%+v", provider)
+	}
+}
+
+func TestFailedCanonicalImportReleasesPreconfLifecycle(t *testing.T) {
+	engine := ethash.NewFaker()
+	_, genesis, blockchain, err := newCanonical(engine, 0, true, "hash")
+	if err != nil {
+		t.Fatalf("chain: %v", err)
+	}
+	defer blockchain.Stop()
+
+	_, blocks := makeBlockChainWithGenesis(genesis, 1, engine, canonicalSeed)
+	provider := new(testPreconfProvider)
+	blockchain.SetPreconfProvider(provider)
+	blockchain.cfg.VmConfig.EnablePreimageRecording = true
+	processErr := errors.New("canonical execution failed")
+	blockchain.processor = &failingPreconfProcessor{err: processErr}
+	blockchain.parallelProcessor = nil
+
+	if _, err := blockchain.InsertChain(blocks, false); !errors.Is(err, processErr) {
+		t.Fatalf("insert error = %v, want %v", err, processErr)
+	}
+	if provider.begun != 1 || provider.begunBlock != blocks[0].Hash() || provider.failed != 1 || provider.committed != 0 {
+		t.Fatalf("provider=%+v", provider)
 	}
 }
 

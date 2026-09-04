@@ -1,7 +1,9 @@
 package sequencer
 
 import (
+	"bytes"
 	"errors"
+	"slices"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
@@ -28,7 +30,7 @@ func buildRPCView(block *types.Block, receipts types.Receipts, statedb *state.St
 		}
 		logs = append(logs, copy.Logs...)
 	}
-	stateCopy := statedb.Copy()
+	stateCopy := statedb.CopyWithoutLogHistory()
 	return &PendingRPCView{
 		Header:           block.Header(),
 		Block:            block,
@@ -74,6 +76,29 @@ func removedLogs(view *PendingRPCView) []*types.Log {
 	return logs
 }
 
+func removedEntryLogs(entry *pendingEntry) []*types.Log {
+	if entry == nil {
+		return nil
+	}
+	if entry.RPCView != nil && entry.RPCView.Block != nil &&
+		len(entry.RPCView.Block.Transactions()) >= len(entry.executedTransactions) {
+		return removedLogs(entry.RPCView)
+	}
+	var logs []*types.Log
+	for _, receipt := range entry.executedReceipts {
+		for _, logEntry := range receipt.Logs {
+			if logEntry == nil {
+				logs = append(logs, nil)
+				continue
+			}
+			copy := *logEntry
+			copy.Removed = true
+			logs = append(logs, &copy)
+		}
+	}
+	return logs
+}
+
 func cloneProcessResult(result *core.ProcessResult) *core.ProcessResult {
 	if result == nil {
 		return nil
@@ -88,7 +113,7 @@ func cloneProcessResult(result *core.ProcessResult) *core.ProcessResult {
 			continue
 		}
 		copy := *entry
-		copy.Topics = append([]common.Hash(nil), entry.Topics...)
+		copy.Topics = append([]common.Hash{}, entry.Topics...)
 		copy.Data = append([]byte(nil), entry.Data...)
 		logs[index] = &copy
 	}
@@ -107,7 +132,7 @@ func cloneReceipt(receipt *types.Receipt) *types.Receipt {
 			continue
 		}
 		logCopy := *entry
-		logCopy.Topics = append([]common.Hash(nil), entry.Topics...)
+		logCopy.Topics = append([]common.Hash{}, entry.Topics...)
 		logCopy.Data = append([]byte(nil), entry.Data...)
 		copy.Logs[index] = &logCopy
 	}
@@ -166,6 +191,18 @@ func sameTransactionPrefix(prefix, block *types.Block) bool {
 	return true
 }
 
+func sameTransactionSlicePrefix(prefix, block types.Transactions) bool {
+	if len(prefix) > len(block) {
+		return false
+	}
+	for index := range prefix {
+		if prefix[index] == nil || block[index] == nil || prefix[index].Hash() != block[index].Hash() {
+			return false
+		}
+	}
+	return true
+}
+
 func sameExecutionContext(prefix, canonical *types.Header) bool {
 	if prefix == nil || canonical == nil || prefix.Number == nil || canonical.Number == nil {
 		return false
@@ -200,18 +237,54 @@ func prefixProcessResult(view *PendingRPCView) (*core.ProcessResult, bool) {
 
 func sameReceipts(block *types.Block, view *PendingRPCView, canonical types.Receipts) bool {
 	pending := receiptsFromView(block, view)
-	if len(pending) != len(canonical) {
-		return false
-	}
-	return types.DeriveSha(pending, trie.NewStackTrie(nil)) == types.DeriveSha(canonical, trie.NewStackTrie(nil))
+	return len(pending) == len(canonical) && sameConsensusReceipts(pending, canonical)
 }
 
 func sameReceiptPrefix(block *types.Block, view *PendingRPCView, canonical types.Receipts) bool {
 	pending := receiptsFromView(block, view)
-	if len(pending) != len(block.Transactions()) || len(pending) > len(canonical) {
+	return len(pending) == len(block.Transactions()) && len(pending) <= len(canonical) &&
+		sameConsensusReceipts(pending, canonical[:len(pending)])
+}
+
+func sameReceiptSlicePrefix(pending, canonical types.Receipts) bool {
+	return len(pending) <= len(canonical) && sameConsensusReceipts(pending, canonical[:len(pending)])
+}
+
+func sameConsensusReceipts(left, right types.Receipts) bool {
+	if len(left) != len(right) {
 		return false
 	}
-	return types.DeriveSha(pending, trie.NewStackTrie(nil)) == types.DeriveSha(canonical[:len(pending)], trie.NewStackTrie(nil))
+	for index := range left {
+		if !sameConsensusReceipt(left[index], right[index]) {
+			return false
+		}
+	}
+	return true
+}
+
+func sameConsensusReceipt(left, right *types.Receipt) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	if left.Type != right.Type || left.Status != right.Status ||
+		left.CumulativeGasUsed != right.CumulativeGasUsed || left.Bloom != right.Bloom ||
+		!bytes.Equal(left.PostState, right.PostState) || len(left.Logs) != len(right.Logs) {
+		return false
+	}
+	for index := range left.Logs {
+		leftLog, rightLog := left.Logs[index], right.Logs[index]
+		if leftLog == nil || rightLog == nil {
+			if leftLog != rightLog {
+				return false
+			}
+			continue
+		}
+		if leftLog.Address != rightLog.Address || !slices.Equal(leftLog.Topics, rightLog.Topics) ||
+			!bytes.Equal(leftLog.Data, rightLog.Data) {
+			return false
+		}
+	}
+	return true
 }
 
 func blockFromExecution(header *types.Header, txs types.Transactions, receipts types.Receipts) (*types.Block, error) {

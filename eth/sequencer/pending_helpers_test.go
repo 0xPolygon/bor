@@ -1,9 +1,12 @@
 package sequencer
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"math/big"
 	"testing"
+	"time"
 
 	"github.com/holiman/uint256"
 
@@ -13,6 +16,20 @@ import (
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 )
+
+func publishPendingSnapshot(t *testing.T, s *session) {
+	t.Helper()
+	block, payload, ok := preparePending(s.env, s.env.header, common.Hash{}, nil)
+	if !ok {
+		t.Fatal("prepare pending snapshot failed")
+	}
+	s.consumer.publishMu.Lock()
+	defer s.consumer.publishMu.Unlock()
+	if !s.consumer.publishPending(block, payload, s.env.generation) {
+		t.Fatal("publish pending snapshot failed")
+	}
+	s.env.markPendingPublished(time.Now())
+}
 
 func TestPendingHelperNilInputs(t *testing.T) {
 	if removedLogs(nil) != nil {
@@ -62,6 +79,31 @@ func TestCloneProcessResultDeepCopy(t *testing.T) {
 	}
 	if clone.GasUsed != source.GasUsed {
 		t.Fatalf("gas used = %d, want %d", clone.GasUsed, source.GasUsed)
+	}
+}
+
+func TestCloneProcessResultPreservesEmptyTopics(t *testing.T) {
+	source := &core.ProcessResult{
+		Receipts: types.Receipts{{Logs: []*types.Log{{Topics: []common.Hash{}}}}},
+		Logs:     []*types.Log{{Topics: []common.Hash{}}},
+	}
+	clone := cloneProcessResult(source)
+
+	logs := map[string]*types.Log{
+		"receipt": clone.Receipts[0].Logs[0],
+		"result":  clone.Logs[0],
+	}
+	for name, entry := range logs {
+		if entry.Topics == nil {
+			t.Fatalf("%s topics are nil", name)
+		}
+		encoded, err := json.Marshal(entry)
+		if err != nil {
+			t.Fatalf("marshal %s log: %v", name, err)
+		}
+		if !bytes.Contains(encoded, []byte(`"topics":[]`)) {
+			t.Fatalf("%s log = %s, want empty topics array", name, encoded)
+		}
 	}
 }
 
@@ -202,6 +244,50 @@ func TestPendingComparisonsRejectMismatches(t *testing.T) {
 	view := &PendingRPCView{Receipts: map[common.Hash]*types.Receipt{txA.Hash(): receipt}}
 	if sameReceipts(one, view, nil) {
 		t.Fatal("receipt slices with different lengths matched")
+	}
+}
+
+func TestSameConsensusReceipts(t *testing.T) {
+	receipt := &types.Receipt{
+		Type:              types.DynamicFeeTxType,
+		Status:            types.ReceiptStatusSuccessful,
+		CumulativeGasUsed: 42,
+		Bloom:             types.Bloom{1},
+		Logs: []*types.Log{{
+			Address: common.Address{2},
+			Topics:  []common.Hash{{3}},
+			Data:    []byte{4},
+		}},
+		TxHash:    common.Hash{5},
+		BlockHash: common.Hash{6},
+	}
+	canonical := cloneReceipt(receipt)
+	canonical.TxHash = common.Hash{7}
+	canonical.BlockHash = common.Hash{8}
+	if !sameConsensusReceipts(types.Receipts{receipt}, types.Receipts{canonical}) {
+		t.Fatal("derived receipt fields changed consensus equality")
+	}
+
+	mutations := []struct {
+		name   string
+		mutate func(*types.Receipt)
+	}{
+		{"type", func(copy *types.Receipt) { copy.Type++ }},
+		{"status", func(copy *types.Receipt) { copy.Status = types.ReceiptStatusFailed }},
+		{"cumulative gas", func(copy *types.Receipt) { copy.CumulativeGasUsed++ }},
+		{"bloom", func(copy *types.Receipt) { copy.Bloom[0]++ }},
+		{"log address", func(copy *types.Receipt) { copy.Logs[0].Address[0]++ }},
+		{"log topic", func(copy *types.Receipt) { copy.Logs[0].Topics[0][0]++ }},
+		{"log data", func(copy *types.Receipt) { copy.Logs[0].Data[0]++ }},
+	}
+	for _, mutation := range mutations {
+		t.Run(mutation.name, func(t *testing.T) {
+			changed := cloneReceipt(receipt)
+			mutation.mutate(changed)
+			if sameConsensusReceipts(types.Receipts{receipt}, types.Receipts{changed}) {
+				t.Fatal("consensus receipt mismatch was accepted")
+			}
+		})
 	}
 }
 

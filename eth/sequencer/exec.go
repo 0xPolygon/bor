@@ -40,8 +40,10 @@ type blockEnv struct {
 	rpcView               *PendingRPCView
 	publishedGas          uint64
 	publishedTxs          int
+	indexedTxs            int
 	lastPublishedAt       time.Time
 	postEagerPublications int
+	detachedCanonical     atomic.Pointer[types.Header]
 }
 
 // newBlockEnv builds the execution environment. speculative maps heights of
@@ -104,10 +106,34 @@ func (env *blockEnv) applyRaw(raw []byte) (*types.Transaction, *types.Receipt, e
 	return env.applyTransaction(tx)
 }
 
+func (env *blockEnv) applyPrepared(raw []byte, prepared preparedTransaction) (*types.Transaction, *types.Receipt, error) {
+	if prepared.err != nil {
+		return nil, nil, prepared.err
+	}
+	if prepared.tx == nil {
+		return env.applyRaw(raw)
+	}
+	if prepared.senderVerified {
+		return env.applyTransactionWithVerifiedSender(prepared.tx, prepared.sender)
+	}
+	return env.applyTransaction(prepared.tx)
+}
+
 func (env *blockEnv) applyTransaction(tx *types.Transaction) (*types.Transaction, *types.Receipt, error) {
 	env.statedb.SetTxContext(tx.Hash(), len(env.txs))
 
 	receipt, err := core.ApplyTransaction(env.evm, env.gasPool, env.statedb, env.header, tx, &env.header.GasUsed)
+	return env.recordAppliedTransaction(tx, receipt, err)
+}
+
+func (env *blockEnv) applyTransactionWithVerifiedSender(tx *types.Transaction, sender common.Address) (*types.Transaction, *types.Receipt, error) {
+	env.statedb.SetTxContext(tx.Hash(), len(env.txs))
+	message := core.TransactionToMessageWithVerifiedSender(tx, sender, env.header.BaseFee)
+	receipt, err := core.ApplyTransactionWithEVM(message, env.gasPool, env.statedb, env.header.Number, env.header.Hash(), env.header.Time, tx, &env.header.GasUsed, env.evm)
+	return env.recordAppliedTransaction(tx, receipt, err)
+}
+
+func (env *blockEnv) recordAppliedTransaction(tx *types.Transaction, receipt *types.Receipt, err error) (*types.Transaction, *types.Receipt, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("re-execute tx %s: %w", tx.Hash(), err)
 	}
@@ -330,65 +356,84 @@ func (env *blockEnv) finalizeVerifiedSeal(chain *core.BlockChain, sealed *types.
 }
 
 func (s *session) executeRecord(record *pb.Record) {
-	for _, raw := range record.GetTransactions() {
-		if s.env.interrupt.Load() {
-			s.clearEnv()
-			s.parked = nil
-			return
-		}
-		start := time.Now()
-		_, _, err := s.env.applyRaw(raw)
-		if err != nil {
-			if s.env.interrupt.Load() {
-				s.clearEnv()
-				s.parked = nil
-				return
-			}
-			s.skip(s.env.header.Number.Uint64(), "re-execution diverged", "err", err)
-			return
-		}
-		preconfApplyTimer.UpdateSince(start)
-	}
-	if s.env.interrupt.Load() {
-		s.clearEnv()
-		s.parked = nil
+	s.executePreparedRecord(record, nil)
+}
+
+func (s *session) executePreparedRecord(record *pb.Record, prepared []preparedTransaction) {
+	rawTransactions := record.GetTransactions()
+	if !s.applyPreparedTransactions(rawTransactions, prepared) {
 		return
 	}
-	if !s.env.shouldPublishPending(time.Now()) {
+	if s.env.interrupt.Load() {
+		s.clearExecution()
+		return
+	}
+	if !s.publishExecutedTransactions() || !s.env.shouldPublishPending(time.Now()) {
 		return
 	}
 	block, payload, ok := preparePending(s.env, s.env.header, common.Hash{}, nil)
 	if !ok {
-		s.clearEnv()
-		s.parked = nil
+		s.clearExecution()
 		return
 	}
+	s.publishRecordCheckpoint(block, payload)
+}
+
+func (s *session) applyPreparedTransactions(rawTransactions [][]byte, prepared []preparedTransaction) bool {
+	for index, raw := range rawTransactions {
+		if s.env.interrupt.Load() {
+			s.clearExecution()
+			return false
+		}
+		start := time.Now()
+		var transaction preparedTransaction
+		if len(prepared) == len(rawTransactions) {
+			transaction = prepared[index]
+		}
+		_, _, err := s.env.applyPrepared(raw, transaction)
+		if err != nil {
+			if s.env.interrupt.Load() {
+				s.clearExecution()
+				return false
+			}
+			s.skip(s.env.header.Number.Uint64(), "re-execution diverged", "err", err)
+			return false
+		}
+		preconfApplyTimer.UpdateSince(start)
+	}
+	return true
+}
+
+func (s *session) publishRecordCheckpoint(block *types.Block, payload pendingPayload) {
 	s.consumer.publishMu.Lock()
+	defer s.consumer.publishMu.Unlock()
 	if !s.consumer.publishPending(block, payload, s.env.generation) {
-		s.clearEnv()
-		s.parked = nil
-		s.consumer.publishMu.Unlock()
+		if !s.detachRPCFromCanonicalLocked() && !s.consumer.canonicalTransitionMatches(s.env.header) {
+			s.clearExecution()
+		}
 		return
 	}
 	s.env.markPendingPublished(time.Now())
-	logs := s.indexPublishedTransactions()
-	s.consumer.enqueuePendingLogs(logs)
-	s.consumer.publishMu.Unlock()
+}
+
+func (s *session) clearExecution() {
+	s.clearEnv()
+	s.parked = nil
 }
 
 func (env *blockEnv) shouldPublishPending(now time.Time) bool {
-	if len(env.txs) == env.publishedTxs {
+	if env.detachedCanonical.Load() != nil || len(env.txs) == env.publishedTxs {
 		return false
 	}
 	if env.publishedTxs < pendingEagerPublicationTxs {
-		return true
+		return len(env.txs) >= pendingEagerPublicationTxs
 	}
 	if env.postEagerPublications >= pendingRPCPublicationLimit {
 		return false
 	}
 	// Gas checkpoints spread snapshots through full blocks. The next-record
-	// time fallback keeps partial blocks fresh, while its reserved budget and
-	// minimum delay leave capacity for a later transaction burst.
+	// time fallback keeps partial blocks fresh, while the minimum delay bounds
+	// snapshot work when records arrive in bursts.
 	if now.Before(env.lastPublishedAt.Add(pendingRPCMinPublishDelay)) {
 		return false
 	}
@@ -406,20 +451,49 @@ func (env *blockEnv) shouldPublishPending(now time.Time) bool {
 }
 
 func (env *blockEnv) markPendingPublished(now time.Time) {
-	if len(env.txs) > pendingEagerPublicationTxs {
+	if env.publishedTxs >= pendingEagerPublicationTxs {
 		env.postEagerPublications++
 	}
+	env.publishedTxs = len(env.txs)
+	env.publishedGas = env.header.GasUsed
 	env.lastPublishedAt = now
 }
 
-func (s *session) indexPublishedTransactions() []*types.Log {
+func (s *session) publishExecutedTransactions() bool {
+	env := s.env
+	if env == nil || env.indexedTxs == len(env.txs) || env.detachedCanonical.Load() != nil {
+		return true
+	}
+	start := env.indexedTxs
+	s.consumer.publishMu.Lock()
+	if !s.consumer.pendingHeadCurrent() || !s.consumer.pendingStore().acceptExecutedRecord(
+		env.header.Number.Uint64(), env.header.ParentHash, env.generation, start, env.txs[start:], env.receipts[start:],
+	) {
+		if s.detachRPCFromCanonicalLocked() || s.consumer.canonicalTransitionMatches(env.header) {
+			s.consumer.publishMu.Unlock()
+			return true
+		}
+		s.clearEnv()
+		s.parked = nil
+		s.consumer.publishMu.Unlock()
+		return false
+	}
+	logs := s.indexExecutedTransactions()
+	s.consumer.enqueuePendingLogs(logs)
+	s.consumer.publishMu.Unlock()
+	return true
+}
+
+func (s *session) indexExecutedTransactions() []*types.Log {
 	var logs []*types.Log
-	for index := s.env.publishedTxs; index < len(s.env.txs); index++ {
-		s.consumer.index.Add(s.env.txs[index], s.env.receipts[index])
+	start := s.env.indexedTxs
+	if start >= len(s.env.txs) || !s.consumer.index.AddBatch(s.env.txs[start:], s.env.receipts[start:]) {
+		return nil
+	}
+	for index := start; index < len(s.env.txs); index++ {
 		logs = append(logs, s.env.receipts[index].Logs...)
 	}
-	s.env.publishedTxs = len(s.env.txs)
-	s.env.publishedGas = s.env.header.GasUsed
+	s.env.indexedTxs = len(s.env.txs)
 	return logs
 }
 

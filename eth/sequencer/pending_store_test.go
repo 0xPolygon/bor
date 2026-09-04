@@ -38,6 +38,7 @@ func TestPendingStoreClaimLifecycle(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	handleOK(t, session, recordEntry(raw, cur))
+	publishPendingSnapshot(t, session)
 
 	block, receipts, statedb := session.consumer.Pending()
 	reusable := &ReusableExecution{
@@ -53,9 +54,13 @@ func TestPendingStoreClaimLifecycle(t *testing.T) {
 	if !session.consumer.pendingStore().publish(block, receipts, statedb, reusable, session.env.generation) {
 		t.Fatal("sealed publish failed")
 	}
+	session.consumer.BeginPreconfImport(block)
 	claim, ok := session.consumer.ClaimPreconf(block)
 	if !ok || claim == nil || claim.StateDB == reusable.StateDB || claim.Result == reusable.Result {
 		t.Fatalf("claim = %+v, ok = %v", claim, ok)
+	}
+	if !session.consumer.canonicalHandoffMatches(block.Hash(), block.NumberU64()+1) {
+		t.Fatal("canonical import did not register the handoff")
 	}
 	if _, ok := session.consumer.ClaimPreconf(block); ok {
 		t.Fatal("claimed execution was returned twice")
@@ -74,6 +79,9 @@ func TestPendingStoreClaimLifecycle(t *testing.T) {
 		t.Fatal("fresh execution after rejection was not reusable")
 	}
 	session.consumer.CompletePreconf(block, nil, false)
+	if session.consumer.canonicalHandoffMatches(block.Hash(), block.NumberU64()+1) {
+		t.Fatal("failed import retained the canonical handoff")
+	}
 	if _, ok := session.consumer.ClaimPreconf(block); !ok {
 		t.Fatal("failed import did not restore claim")
 	}
@@ -83,6 +91,23 @@ func TestPendingStoreClaimLifecycle(t *testing.T) {
 	}
 	if session.consumer.pendingStore().publish(block, receipts, statedb, reusable, session.env.generation) {
 		t.Fatal("late worker publication was accepted")
+	}
+}
+
+func TestCanonicalImportHandoffLifecycleWithoutClaim(t *testing.T) {
+	consumer := new(Consumer)
+	block := types.NewBlockWithHeader(&types.Header{
+		Number:     big.NewInt(1),
+		ParentHash: common.HexToHash("0x1234"),
+	})
+
+	consumer.BeginPreconfImport(block)
+	if !consumer.canonicalHandoffMatches(block.Hash(), block.NumberU64()+1) {
+		t.Fatal("canonical import did not register the handoff")
+	}
+	consumer.CompletePreconf(block, nil, false)
+	if consumer.canonicalHandoffMatches(block.Hash(), block.NumberU64()+1) {
+		t.Fatal("failed canonical import retained the handoff")
 	}
 }
 
@@ -315,7 +340,7 @@ func TestPendingStoreImportOwnsHeight(t *testing.T) {
 	if gotClaimed != claimed || claimed.phase != PendingImporting || gotCompeting != nil {
 		t.Fatalf("entries changed during import: claimed=%+v competing=%+v", gotClaimed, gotCompeting)
 	}
-	if records := rawdb.ReadInvalidPreconfs(db, 0); len(records) != 0 {
+	if records := rawdb.ReadInvalidPreconfs(db, rawdb.InvalidPreconfQueryLimit); len(records) != 0 {
 		t.Fatalf("invalidation records during import = %+v", records)
 	}
 

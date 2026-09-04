@@ -100,3 +100,48 @@ func TestIndexResetDropsEverything(t *testing.T) {
 		t.Fatal("reset left a receipt behind")
 	}
 }
+
+func TestIndexAddBatchIsAllOrNothing(t *testing.T) {
+	ix := NewIndex()
+	first := indexedTx(10)
+	second := indexedTx(11)
+
+	if ix.AddBatch(types.Transactions{first, second}, types.Receipts{indexedReceipt(7)}) {
+		t.Fatal("mismatched batch was accepted")
+	}
+	if _, _, ok := ix.Lookup(first.Hash()); ok {
+		t.Fatal("mismatched batch changed the index")
+	}
+
+	if ix.AddBatch(types.Transactions{first, second}, types.Receipts{indexedReceipt(7), indexedReceipt(8)}) {
+		t.Fatal("cross-height batch was accepted")
+	}
+	if _, _, ok := ix.Lookup(first.Hash()); ok {
+		t.Fatal("cross-height batch changed the index")
+	}
+
+	if !ix.AddBatch(types.Transactions{first, second}, types.Receipts{indexedReceipt(7), indexedReceipt(7)}) {
+		t.Fatal("valid batch was rejected")
+	}
+	for _, tx := range (types.Transactions{first, second}) {
+		if _, _, ok := ix.Lookup(tx.Hash()); !ok {
+			t.Fatalf("batch transaction %s missing", tx.Hash())
+		}
+	}
+}
+
+func TestIndexCountsOnlyMatchingCanonicalTransactions(t *testing.T) {
+	ix := NewIndex()
+	first := indexedTx(20)
+	second := indexedTx(21)
+	other := indexedTx(22)
+	ix.Add(first, indexedReceipt(9))
+	ix.Add(other, indexedReceipt(9))
+
+	block := types.NewBlockWithHeader(&types.Header{Number: big.NewInt(9)}).WithBody(types.Body{
+		Transactions: types.Transactions{first, second},
+	})
+	if count := ix.CountCanonical(block); count != 1 {
+		t.Fatalf("canonical receipt count = %d, want 1", count)
+	}
+}

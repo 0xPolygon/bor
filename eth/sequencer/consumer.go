@@ -24,6 +24,12 @@ import (
 
 const consumerRetryDelay = 2 * time.Second
 
+// TransactionLookup supplies a transaction already held by another local
+// subsystem. The consumer only uses it to reuse a verified sender cache.
+type TransactionLookup interface {
+	Get(common.Hash) *types.Transaction
+}
+
 // Consumer follows the sequence store stream on an RPC node, re-executes it
 // from canonical or parked speculative state, and fills the preconf receipt
 // Index exposed through the explicit Bor preconfirmation receipt endpoint.
@@ -38,6 +44,7 @@ const consumerRetryDelay = 2 * time.Second
 type Consumer struct {
 	chain      *core.BlockChain
 	endpoint   string
+	txLookup   TransactionLookup
 	index      *Index
 	publishMu  sync.Mutex
 	storeMu    sync.Mutex
@@ -51,6 +58,7 @@ type Consumer struct {
 	logsWG     sync.WaitGroup
 	worker     atomic.Pointer[preconfWorker]
 	reconciled atomic.Pointer[types.Header]
+	handoff    atomic.Pointer[types.Header]
 	sealVerify atomic.Bool
 
 	cancel context.CancelFunc
@@ -61,6 +69,12 @@ type Consumer struct {
 // active, coinbase map present) are re-checked per session, not here — a
 // node still syncing pre-Rio history becomes eligible once it catches up.
 func NewConsumer(endpoint string, chain *core.BlockChain) (*Consumer, error) {
+	return NewConsumerWithTransactionLookup(endpoint, chain, nil)
+}
+
+// NewConsumerWithTransactionLookup returns a stopped consumer that may reuse
+// sender recovery already performed by the local transaction pool.
+func NewConsumerWithTransactionLookup(endpoint string, chain *core.BlockChain, txLookup TransactionLookup) (*Consumer, error) {
 	if chain.Config().Bor == nil {
 		return nil, errors.New("sequencer consumer requires a bor chain")
 	}
@@ -68,6 +82,7 @@ func NewConsumer(endpoint string, chain *core.BlockChain) (*Consumer, error) {
 	consumer := &Consumer{
 		chain:    chain,
 		endpoint: endpoint,
+		txLookup: txLookup,
 		index:    NewIndex(),
 		store:    NewPendingStore(chain.DB()),
 	}
@@ -237,6 +252,12 @@ func (c *Consumer) evictLoop(ctx context.Context) {
 
 func (c *Consumer) handleCanonicalHead() {
 	c.publishMu.Lock()
+	invalidations := c.reconcileCanonicalHeadLocked()
+	c.publishMu.Unlock()
+	c.pendingStore().writeInvalidations(invalidations)
+}
+
+func (c *Consumer) reconcileCanonicalHeadLocked() []pendingInvalidation {
 	head := c.chain.CurrentBlock()
 	number := head.Number.Uint64()
 	c.index.EvictThrough(number)
@@ -253,9 +274,42 @@ func (c *Consumer) handleCanonicalHead() {
 		c.index.ClearFrom(*clearFrom)
 	}
 	c.reconciled.Store(types.CopyHeader(head))
+	c.clearCanonicalHandoffThrough(head)
 	c.enqueuePendingLogs(logs)
+	return invalidations
+}
+
+func (c *Consumer) ensureCanonicalHeadReconciled() bool {
+	c.publishMu.Lock()
+	head := c.chain.CurrentBlock()
+	if head == nil || head.Number == nil {
+		c.publishMu.Unlock()
+		return false
+	}
+	handoff := c.handoff.Load()
+	if handoff != nil && handoff.Number != nil && handoff.Number.Cmp(head.Number) == 0 && handoff.Hash() != head.Hash() {
+		c.publishMu.Unlock()
+		return false
+	}
+	marker := c.reconciled.Load()
+	if marker != nil {
+		if marker.Hash() == head.Hash() {
+			c.clearCanonicalHandoffThrough(head)
+			c.publishMu.Unlock()
+			return true
+		}
+		if marker.Number != nil && marker.Number.Cmp(head.Number) > 0 {
+			c.publishMu.Unlock()
+			return false
+		}
+	}
+	invalidations := c.reconcileCanonicalHeadLocked()
+	marker = c.reconciled.Load()
+	head = c.chain.CurrentBlock()
+	ready := marker != nil && head != nil && marker.Hash() == head.Hash()
 	c.publishMu.Unlock()
 	c.pendingStore().writeInvalidations(invalidations)
+	return ready
 }
 
 // resumeRequest picks the stream position, never asking the same anchor
@@ -297,8 +351,10 @@ func (c *Consumer) follow(ctx context.Context, sess *session) (*session, error) 
 	client := pb.NewConsumerServiceClient(conn)
 
 	for attempt := 0; ; attempt++ {
-		stream, serr := client.Stream(ctx, c.resumeRequest(sess, attempt))
+		streamCtx, cancelStream := context.WithCancel(ctx)
+		stream, serr := client.Stream(streamCtx, c.resumeRequest(sess, attempt))
 		if serr != nil {
+			cancelStream()
 			return sess, fmt.Errorf("open stream: %w", serr)
 		}
 
@@ -308,7 +364,7 @@ func (c *Consumer) follow(ctx context.Context, sess *session) (*session, error) 
 			c.invalidatePendingFromReason(0, "session_lost")
 		}
 
-		sess, err = c.consume(stream, sess)
+		sess, err = c.consume(streamCtx, cancelStream, stream, sess)
 		if status.Code(err) == codes.NotFound && attempt < 2 {
 			continue
 		}
@@ -317,23 +373,51 @@ func (c *Consumer) follow(ctx context.Context, sess *session) (*session, error) 
 	}
 }
 
-func (c *Consumer) consume(stream pb.ConsumerService_StreamClient, sess *session) (*session, error) {
+func (c *Consumer) consume(ctx context.Context, cancel context.CancelFunc, stream streamReceiver, sess *session) (*session, error) {
+	sess.ctx = ctx
+	prepared := make(chan preparedStreamFrame)
+	done := make(chan struct{})
+	state := sess.preparationSnapshot()
+	go func() {
+		defer close(done)
+		c.prepareStream(ctx, stream, state, prepared)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
 	for {
-		frame, err := stream.Recv()
-		if err != nil {
-			return sess, fmt.Errorf("stream recv: %w", err)
-		}
-
-		entry := frame.GetEntry()
-		if entry == nil {
-			log.Info("Sequence stream live", "head", fmt.Sprintf("%x", sess.head[:8]))
-
-			continue
-		}
-
-		if err := sess.handle(entry); err != nil {
-			// Position lost: the caller must re-anchor, not resume.
-			return nil, err
+		select {
+		case <-ctx.Done():
+			return sess, ctx.Err()
+		case frame, ok := <-prepared:
+			if !ok {
+				return sess, ctx.Err()
+			}
+			next, err := handlePreparedStreamFrame(sess, frame)
+			if err != nil {
+				return next, err
+			}
 		}
 	}
+}
+
+func handlePreparedStreamFrame(sess *session, frame preparedStreamFrame) (*session, error) {
+	if frame.recvErr != nil {
+		return sess, fmt.Errorf("stream recv: %w", frame.recvErr)
+	}
+	if frame.entry == nil {
+		log.Info("Sequence stream live", "head", fmt.Sprintf("%x", sess.head[:8]))
+		return sess, nil
+	}
+	err := sess.handlePrepared(frame)
+	if frame.openApplied != nil {
+		close(frame.openApplied)
+	}
+	if err != nil {
+		// Position lost: the caller must re-anchor, not resume.
+		return nil, err
+	}
+	return sess, nil
 }

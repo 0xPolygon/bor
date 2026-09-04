@@ -43,6 +43,23 @@ func (b *EthAPIBackend) PendingBlockAndReceipts() (*types.Block, types.Receipts)
 	return block, receipts
 }
 
+func (b *EthAPIBackend) PendingLogRange() (*types.Header, []*types.Block, []types.Receipts) {
+	if b.eth.seqConsumer != nil {
+		if anchor, blocks, receipts := b.eth.seqConsumer.PendingLogRange(); anchor != nil && len(blocks) != 0 {
+			return anchor, blocks, receipts
+		}
+	}
+	anchor := b.eth.blockchain.CurrentBlock()
+	if anchor == nil || b.eth.miner == nil {
+		return nil, nil, nil
+	}
+	block, receipts, _ := b.eth.miner.Pending()
+	if block == nil || block.NumberU64() != anchor.Number.Uint64()+1 || block.ParentHash() != anchor.Hash() {
+		return nil, nil, nil
+	}
+	return types.CopyHeader(anchor), []*types.Block{block}, []types.Receipts{receipts}
+}
+
 func (b *EthAPIBackend) PendingSnapshot(ctx context.Context) (*types.Block, types.Receipts, *state.StateDB, error) {
 	if b.eth.seqConsumer != nil {
 		block, receipts, statedb, err := b.eth.seqConsumer.PendingSnapshot(ctx)

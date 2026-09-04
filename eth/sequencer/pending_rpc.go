@@ -49,6 +49,18 @@ func (c *Consumer) PendingBlockAndReceipts() (*types.Block, types.Receipts) {
 	return block, receipts
 }
 
+func (c *Consumer) PendingLogRange() (*types.Header, []*types.Block, []types.Receipts) {
+	anchor, ok := c.pendingReadAnchor()
+	if !ok {
+		return nil, nil, nil
+	}
+	blocks, receipts := c.pendingStore().PendingLogRange()
+	if !c.pendingReadAnchorValid(anchor) {
+		return nil, nil, nil
+	}
+	return types.CopyHeader(anchor), blocks, receipts
+}
+
 func (c *Consumer) PendingParentState(ctx context.Context, block *types.Block) (*state.StateDB, error) {
 	anchor, ok := c.pendingReadAnchor()
 	if !ok {
@@ -193,6 +205,41 @@ func (s *PendingStore) PendingBlockAndReceipts() (*types.Block, types.Receipts) 
 	view := entry.RPCView
 	s.mu.RUnlock()
 	return view.Block, receiptsFromView(view.Block, view)
+}
+
+func (s *PendingStore) PendingLogRange() ([]*types.Block, []types.Receipts) {
+	s.mu.RLock()
+	entry := s.entries[s.active]
+	if !s.hasActive || entry == nil || entry.RPCView == nil || entry.RPCView.Block == nil {
+		s.mu.RUnlock()
+		return nil, nil
+	}
+	byHash := make(map[common.Hash]*PendingRPCView, len(s.entries))
+	for _, candidate := range s.entries {
+		if candidate.RPCView != nil && candidate.RPCView.Block != nil {
+			byHash[candidate.RPCView.Block.Hash()] = candidate.RPCView
+		}
+	}
+	views := make([]*PendingRPCView, 0, len(byHash))
+	for view := entry.RPCView; view != nil; {
+		views = append(views, view)
+		block := view.Block
+		parent := byHash[block.ParentHash()]
+		if parent == nil || parent.Block.NumberU64()+1 != block.NumberU64() {
+			break
+		}
+		view = parent
+	}
+	s.mu.RUnlock()
+
+	blocks := make([]*types.Block, len(views))
+	receipts := make([]types.Receipts, len(views))
+	for i := range views {
+		view := views[len(views)-1-i]
+		blocks[i] = view.Block
+		receipts[i] = receiptsFromView(view.Block, view)
+	}
+	return blocks, receipts
 }
 
 func (s *PendingStore) PendingParentState(block *types.Block) (*state.StateDB, error) {

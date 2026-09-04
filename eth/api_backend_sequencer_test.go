@@ -25,6 +25,9 @@ type apiSequenceConsumer struct {
 	subscribed    bool
 	snapshotCalls int
 	metadataCalls int
+	rangeAnchor   *types.Header
+	rangeBlocks   []*types.Block
+	rangeReceipts []types.Receipts
 	snapshotErr   error
 }
 
@@ -40,6 +43,10 @@ func (c *apiSequenceConsumer) PendingBlock() *types.Block {
 func (c *apiSequenceConsumer) PendingBlockAndReceipts() (*types.Block, types.Receipts) {
 	c.metadataCalls++
 	return c.block, c.receipts
+}
+
+func (c *apiSequenceConsumer) PendingLogRange() (*types.Header, []*types.Block, []types.Receipts) {
+	return c.rangeAnchor, c.rangeBlocks, c.rangeReceipts
 }
 
 func (c *apiSequenceConsumer) PendingParentState(context.Context, *types.Block) (*state.StateDB, error) {
@@ -84,7 +91,10 @@ func TestSequencerPendingBackend(t *testing.T) {
 	receipt := &types.Receipt{TxHash: tx.Hash(), BlockNumber: big.NewInt(1)}
 	index := sequencer.NewIndex()
 	index.Add(tx, receipt)
-	consumer := &apiSequenceConsumer{block: block, receipts: types.Receipts{receipt}, state: statedb, parentState: statedb, index: index}
+	consumer := &apiSequenceConsumer{
+		block: block, receipts: types.Receipts{receipt}, state: statedb, parentState: statedb, index: index,
+		rangeAnchor: b.eth.blockchain.CurrentBlock(), rangeBlocks: []*types.Block{block}, rangeReceipts: []types.Receipts{{receipt}},
+	}
 	b.eth.seqConsumer = consumer
 
 	gotHeader, err := b.HeaderByNumber(t.Context(), rpc.PendingBlockNumber)
@@ -106,6 +116,10 @@ func TestSequencerPendingBackend(t *testing.T) {
 	gotReceipts, err = b.GetReceipts(t.Context(), block.Hash())
 	if err != nil || len(gotReceipts) != 1 || gotReceipts[0] != receipt {
 		t.Fatalf("pending receipts = %v, %v", gotReceipts, err)
+	}
+	anchor, blocks, receiptSets := b.PendingLogRange()
+	if anchor.Hash() != b.eth.blockchain.CurrentBlock().Hash() || len(blocks) != 1 || blocks[0] != block || len(receiptSets) != 1 || receiptSets[0][0] != receipt {
+		t.Fatalf("pending log range = %v, %v, %v", anchor, blocks, receiptSets)
 	}
 	gotTx, gotReceipt, ok := b.GetPreconfTransaction(tx.Hash())
 	if !ok || gotTx != tx || gotReceipt != receipt {

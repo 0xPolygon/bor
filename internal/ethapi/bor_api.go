@@ -140,6 +140,9 @@ func NewBorAPI(b Backend) *BorAPI {
 	return &BorAPI{b}
 }
 
+// GetInvalidPreconfBlocks returns preconfirmations that did not become
+// canonical, newest first. An omitted limit returns up to
+// InvalidPreconfQueryLimit records; an explicit limit of zero returns none.
 func (api *BorAPI) GetInvalidPreconfBlocks(limit *hexutil.Uint64) []rawdb.InvalidPreconfRecord {
 	requested := uint64(rawdb.InvalidPreconfQueryLimit)
 	if limit != nil {

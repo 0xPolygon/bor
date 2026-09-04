@@ -31,6 +31,7 @@ func TestPendingViewTracksCompleteRecordsAndIsolatesState(t *testing.T) {
 		t.Fatalf("marshal tx: %v", err)
 	}
 	handleOK(t, s, recordEntry(raw, cur))
+	publishPendingSnapshot(t, s)
 
 	block, receipts, secondState := s.consumer.Pending()
 	if len(block.Transactions()) != 1 || block.Transactions()[0].Hash() != tx.Hash() {

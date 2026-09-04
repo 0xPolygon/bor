@@ -77,7 +77,7 @@ type PreconfProvider interface {
 	ClaimPreconf(block *types.Block) (*PreconfExecution, bool)
 	// RejectClaimedPreconf discards a claimed result that failed validation.
 	RejectClaimedPreconf(block *types.Block)
-	// CompletePreconf resolves a claim and reports a committed-view mismatch.
+	// CompletePreconf resolves an import attempt and reports a committed-view mismatch.
 	CompletePreconf(block *types.Block, receipts types.Receipts, committed bool) string
 }
 
@@ -85,4 +85,11 @@ type PreconfProvider interface {
 // the canonical block without waiting for the stream to finish the block.
 type PreconfPrefixProvider interface {
 	ClaimPreconfPrefix(block *types.Block) (*PreconfExecution, bool)
+}
+
+// PreconfImportObserver tracks an exact canonical candidate while it is being
+// processed, independently of whether its speculative execution can be reused.
+// Every notification is resolved by CompletePreconf.
+type PreconfImportObserver interface {
+	BeginPreconfImport(block *types.Block)
 }

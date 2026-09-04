@@ -30,7 +30,7 @@ func (s *PendingStore) reconcileCanonicalLocked(number uint64, canonical func(ui
 			continue
 		}
 		if reason != "" {
-			removed = append(removed, removedLogs(entry.RPCView)...)
+			removed = append(removed, removedEntryLogs(entry)...)
 			invalidations = append(invalidations, pendingInvalidation{number: key.number, reason: reason})
 		}
 		s.removeLocked(key)
@@ -109,7 +109,7 @@ func (s *PendingStore) reconcileBrokenFutureLocked(key pendingKey, entry *pendin
 		}
 		return nil, nil
 	}
-	logs := removedLogs(entry.RPCView)
+	logs := removedEntryLogs(entry)
 	invalidation := &pendingInvalidation{number: key.number, reason: "reorged"}
 	s.removeLocked(key)
 	return logs, invalidation

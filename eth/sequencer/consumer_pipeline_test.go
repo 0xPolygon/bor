@@ -81,6 +81,39 @@ func TestSessionIgnoresEmptyRecord(t *testing.T) {
 	}
 }
 
+func TestSessionIndexesExecutedReceiptBeforeNextStateCheckpoint(t *testing.T) {
+	h := startExecHarness(t)
+	s := h.session()
+	cur := handleOK(t, s, openOn(h.chain.CurrentBlock(), h.config, commitment.Head{0x73}))
+	for nonce := uint64(0); nonce < pendingEagerPublicationTxs; nonce++ {
+		tx := h.transfer(t, nonce)
+		cur = handleOK(t, s, recordEntry(marshalTransaction(t, tx), cur))
+	}
+	before := s.consumer.PendingBlock()
+	if before == nil {
+		t.Fatal("eager pending block is missing")
+	}
+	if len(before.Transactions()) != pendingEagerPublicationTxs {
+		t.Fatalf("eager pending block has %d transactions", len(before.Transactions()))
+	}
+
+	tail := h.transfer(t, pendingEagerPublicationTxs)
+	handleOK(t, s, recordEntry(marshalTransaction(t, tail), cur))
+	after := s.consumer.PendingBlock()
+	if after == nil {
+		t.Fatal("pending block disappeared")
+	}
+	if len(after.Transactions()) != pendingEagerPublicationTxs {
+		t.Fatalf("state checkpoint advanced to %d transactions", len(after.Transactions()))
+	}
+	if _, receipt, ok := s.consumer.LookupPreconf(tail.Hash()); !ok || receipt == nil {
+		t.Fatal("successfully executed tail receipt was not indexed")
+	}
+	if s.env.indexedTxs != pendingEagerPublicationTxs+1 || s.env.publishedTxs != pendingEagerPublicationTxs {
+		t.Fatalf("indexed=%d published=%d", s.env.indexedTxs, s.env.publishedTxs)
+	}
+}
+
 func TestSessionRejectsOversizedStreamFields(t *testing.T) {
 	s := new(session)
 	prefix := make([]byte, len(commitment.Head{}))
@@ -117,34 +150,67 @@ func TestSessionRejectsOversizedStreamFields(t *testing.T) {
 }
 
 func TestSessionAllowsSpeculativeParentCanonicalizedBeforePublish(t *testing.T) {
-	h := startExecHarness(t)
-	s := h.session()
-	cur := handleOK(t, s, openOn(h.chain.CurrentBlock(), h.config, commitment.Head{0x72}))
-	sealed := sealedFromEnv(t, s)
-	handleOK(t, s, sealEntry(encodeHeader(t, sealed), cur))
-	parentBlock := s.consumer.PendingBlock()
-	open := openOn(sealed, h.config, s.head).GetBlockOpen()
+	for _, test := range []struct {
+		name           string
+		canonicalFirst bool
+	}{
+		{name: "during handoff"},
+		{name: "after handoff", canonicalFirst: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			h := startExecHarness(t)
+			s := h.session()
+			cur := handleOK(t, s, openOn(h.chain.CurrentBlock(), h.config, commitment.Head{0x72}))
+			sealed := sealedFromEnv(t, s)
+			handleOK(t, s, sealEntry(encodeHeader(t, sealed), cur))
+			parentBlock, parentReceipts := s.consumer.PendingBlockAndReceipts()
+			open := openOn(sealed, h.config, s.head).GetBlockOpen()
 
-	parent, cacheable, ok := s.resolveOpenParent(sealed.Hash(), open.GetBlockNumber())
-	if !ok || cacheable {
-		t.Fatalf("speculative parent resolution = %v, %v", ok, cacheable)
-	}
-	statedb := s.parked
-	s.parked = nil
-	s.setEnv(newBlockEnv(h.chain, statedb, open, s.sealed))
-	s.env.cacheable = false
-	block, payload, ok := preparePending(s.env, s.env.header, common.Hash{}, nil)
-	if !ok {
-		t.Fatal("prepare child")
-	}
-	if _, err := h.chain.InsertChain(types.Blocks{parentBlock}, false); err != nil {
-		t.Fatalf("canonicalize parent: %v", err)
-	}
-	s.consumer.handleCanonicalHead()
-	s.publishOpen(block, payload, parent.Hash(), open.GetBlockNumber(), false)
+			parent, cacheable, ok := s.resolveOpenParent(sealed.Hash(), open.GetBlockNumber())
+			if !ok || cacheable {
+				t.Fatalf("speculative parent resolution = %v, %v", ok, cacheable)
+			}
+			statedb := s.parked
+			s.parked = nil
+			s.setEnv(newBlockEnv(h.chain, statedb, open, s.sealed))
+			s.env.cacheable = false
+			block, payload, ok := preparePending(s.env, s.env.header, common.Hash{}, nil)
+			if !ok {
+				t.Fatal("prepare child")
+			}
+			if _, ok := s.consumer.ClaimPreconf(parentBlock); !ok {
+				t.Fatal("claim parent")
+			}
+			s.consumer.CompletePreconf(parentBlock, parentReceipts, true)
+			h.chain.SetPreconfProvider(s.consumer)
+			if test.canonicalFirst {
+				if _, err := h.chain.InsertChain(types.Blocks{parentBlock}, false); err != nil {
+					t.Fatalf("canonicalize parent: %v", err)
+				}
+				s.consumer.handleCanonicalHead()
+				if s.consumer.handoff.Load() != nil {
+					t.Fatal("canonical handoff was not cleared")
+				}
+				if !s.retryCanonicalOpen(block, payload, parent.Hash(), open.GetBlockNumber()) {
+					t.Fatal("canonical parent was skipped after its handoff cleared")
+				}
+			} else {
+				importDone := make(chan error, 1)
+				go func() {
+					time.Sleep(20 * time.Millisecond)
+					_, err := h.chain.InsertChain(types.Blocks{parentBlock}, false)
+					importDone <- err
+				}()
+				s.publishOpen(block, payload, parent.Hash(), open.GetBlockNumber(), false)
+				if err := <-importDone; err != nil {
+					t.Fatalf("canonicalize parent: %v", err)
+				}
+			}
 
-	if pending := s.consumer.PendingBlock(); pending == nil || pending.ParentHash() != sealed.Hash() {
-		t.Fatalf("pending child = %v", pending)
+			if pending := s.consumer.PendingBlock(); pending == nil || pending.ParentHash() != sealed.Hash() {
+				t.Fatalf("pending child = %v", pending)
+			}
+		})
 	}
 }
 

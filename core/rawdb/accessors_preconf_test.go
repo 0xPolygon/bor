@@ -44,3 +44,24 @@ func TestInvalidPreconfRecords(t *testing.T) {
 		t.Fatalf("bounded query includes late old record: %+v", records[len(records)-1])
 	}
 }
+
+func TestInvalidPreconfZeroLimit(t *testing.T) {
+	db := NewMemoryDatabase()
+	if err := WriteInvalidPreconf(db, 7, "skipped"); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	// The stored record is what makes the empty result below meaningful: it
+	// proves the query honoured the limit rather than reading an empty
+	// keyspace.
+	if records := ReadInvalidPreconfs(db, 1); len(records) != 1 {
+		t.Fatalf("sanity read = %+v", records)
+	}
+
+	records := ReadInvalidPreconfs(db, 0)
+	if records == nil {
+		t.Fatal("zero limit returned a nil slice, which marshals as null rather than []")
+	}
+	if len(records) != 0 {
+		t.Fatalf("zero limit = %+v, want no records", records)
+	}
+}

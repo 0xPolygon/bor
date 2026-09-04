@@ -6,7 +6,71 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/trie"
 )
+
+func publishSizedPrefix(t *testing.T, prefixCount, totalCount int) (*PendingStore, *types.Block) {
+	t.Helper()
+	fixture := newPendingRPCCoverageFixture(t, 3, common.HexToHash("0x1"))
+	txs := make(types.Transactions, totalCount)
+	receipts := make(types.Receipts, prefixCount)
+	for index := range txs {
+		txs[index] = types.NewTransaction(uint64(index), common.Address{0xee}, big.NewInt(1), 21_000, big.NewInt(1), nil)
+		if index < prefixCount {
+			receipts[index] = &types.Receipt{
+				TxHash:            txs[index].Hash(),
+				BlockNumber:       big.NewInt(3),
+				TransactionIndex:  uint(index),
+				Status:            types.ReceiptStatusSuccessful,
+				GasUsed:           21_000,
+				CumulativeGasUsed: uint64(index+1) * 21_000,
+			}
+		}
+	}
+	header := fixture.block.Header()
+	header.GasLimit = 300_000_000
+	header.GasUsed = receipts[len(receipts)-1].CumulativeGasUsed
+	prefix := types.NewBlock(header, &types.Body{Transactions: txs[:prefixCount]}, receipts, trie.NewStackTrie(nil))
+	candidate := types.NewBlock(types.CopyHeader(header), &types.Body{Transactions: txs}, nil, trie.NewStackTrie(nil))
+	store := NewPendingStore(nil)
+	generation := store.begin(prefix.NumberU64(), prefix.ParentHash(), true)
+	if !store.publish(prefix, receipts, fixture.state, nil, generation) {
+		t.Fatal("prefix publish failed")
+	}
+	return store, candidate
+}
+
+func TestPendingStoreBoundsSerialPrefixCatchup(t *testing.T) {
+	t.Run("80 of 100 reuses", func(t *testing.T) {
+		store, candidate := publishSizedPrefix(t, 80, 100)
+		prefix, ok := store.claimPreconfPrefix(candidate)
+		if !ok || len(prefix.Transactions) != 80 {
+			t.Fatalf("prefix = %+v, ok = %v", prefix, ok)
+		}
+	})
+
+	t.Run("800 of 1000 reuses", func(t *testing.T) {
+		store, candidate := publishSizedPrefix(t, 800, 1000)
+		prefix, ok := store.claimPreconfPrefix(candidate)
+		if !ok || len(prefix.Transactions) != 800 {
+			t.Fatalf("prefix = %+v, ok = %v", prefix, ok)
+		}
+	})
+
+	t.Run("16 of 2000 uses normal import", func(t *testing.T) {
+		store, candidate := publishSizedPrefix(t, 16, 2000)
+		if prefix, ok := store.claimPreconfPrefix(candidate); ok || prefix != nil {
+			t.Fatalf("oversized serial catch-up = %+v, %v", prefix, ok)
+		}
+		key := pendingKey{number: candidate.NumberU64(), parent: candidate.ParentHash()}
+		store.mu.RLock()
+		phase := store.entries[key].phase
+		store.mu.RUnlock()
+		if phase != PendingBuilding {
+			t.Fatalf("rejected catch-up changed phase to %v", phase)
+		}
+	})
+}
 
 func TestPendingStoreInvalidOperationsLeaveNoState(t *testing.T) {
 	fixture := newPendingRPCCoverageFixture(t, 3, common.HexToHash("0x1"))
@@ -91,12 +155,17 @@ func TestConsumerReleasesPrefixWhenWorkerIsUnavailable(t *testing.T) {
 	store := NewPendingStore(nil)
 	_, candidate := publishPrefixWithTail(t, store)
 	consumer := &Consumer{chain: h.chain, index: NewIndex(), store: store}
+	consumer.BeginPreconfImport(candidate)
 	if execution, ok := consumer.ClaimPreconfPrefix(candidate); ok || execution != nil {
 		t.Fatalf("prefix without worker = %+v, %v", execution, ok)
+	}
+	if !consumer.canonicalHandoffMatches(candidate.Hash(), candidate.NumberU64()+1) {
+		t.Fatal("failed cache claim cleared the canonical import handoff")
 	}
 	if pending := store.PendingBlock(); pending != nil {
 		t.Fatalf("released prefix remained pending: %v", pending)
 	}
+	consumer.CompletePreconf(candidate, nil, false)
 }
 
 func TestConsumerRejectsClaimsFromStaleHead(t *testing.T) {

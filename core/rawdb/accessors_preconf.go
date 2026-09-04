@@ -35,7 +35,16 @@ func WriteInvalidPreconf(db ethdb.Database, number uint64, reason string) error 
 }
 
 func ReadInvalidPreconfs(db ethdb.Iteratee, limit uint64) []InvalidPreconfRecord {
-	if limit == 0 || limit > InvalidPreconfQueryLimit {
+	// A zero limit means zero records. Callers that want the default cap pass
+	// InvalidPreconfQueryLimit explicitly, and the RPC layer maps an omitted
+	// parameter to it. Returning early is also what keeps the loop's break
+	// reachable: with limit 0 the len(records) == limit test never fires after
+	// the first append, so the query would return the whole keyspace.
+	if limit == 0 {
+		return []InvalidPreconfRecord{}
+	}
+
+	if limit > InvalidPreconfQueryLimit {
 		limit = InvalidPreconfQueryLimit
 	}
 	iterator := db.NewIterator(invalidPreconfPrefix, nil)

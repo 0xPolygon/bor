@@ -491,6 +491,9 @@ func (api *FilterAPI) GetLogs(ctx context.Context, crit FilterCriteria) ([]*type
 
 	var borLogsFilter *BorBlockLogsFilter
 
+	if isCanonicalToPendingRange(crit) {
+		return api.getLogsThroughPending(ctx, crit)
+	}
 	if crit.Pending || isPendingRange(crit) {
 		return api.getPendingLogs(ctx, crit)
 	}
