@@ -46,16 +46,36 @@ import (
 
 func TestGetInvalidPreconfBlocks(t *testing.T) {
 	backend := newTestBackend(t, 0, &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}, ethash.NewFaker(), nil)
-	if err := rawdb.WriteInvalidPreconf(backend.ChainDb(), 4, "skipped"); err != nil {
-		t.Fatalf("write 4: %v", err)
+	for number, reason := range map[uint64]string{4: "skipped", 6: "canonical_mismatch", 9: "reorged"} {
+		if err := rawdb.WriteInvalidPreconf(backend.ChainDb(), number, reason); err != nil {
+			t.Fatalf("write %d: %v", number, err)
+		}
 	}
-	if err := rawdb.WriteInvalidPreconf(backend.ChainDb(), 6, "canonical_mismatch"); err != nil {
-		t.Fatalf("write 6: %v", err)
+	api := NewBorAPI(backend)
+	ctx := context.Background()
+
+	// Range [5,9] returns 9 then 6, newest first; 4 is below the range.
+	records, err := api.GetInvalidPreconfBlocks(ctx, rpc.BlockNumber(5), rpc.BlockNumber(9))
+	if err != nil {
+		t.Fatalf("range query: %v", err)
 	}
-	limit := hexutil.Uint64(1)
-	records := NewBorAPI(backend).GetInvalidPreconfBlocks(&limit)
-	if len(records) != 1 || records[0].Number != 6 || records[0].Reason != "canonical_mismatch" {
+	if len(records) != 2 || records[0].Number != 9 || records[1].Number != 6 || records[1].Reason != "canonical_mismatch" {
 		t.Fatalf("records = %+v", records)
+	}
+
+	// A single-block range hits exactly one record.
+	if records, err = api.GetInvalidPreconfBlocks(ctx, rpc.BlockNumber(4), rpc.BlockNumber(4)); err != nil || len(records) != 1 || records[0].Number != 4 {
+		t.Fatalf("single-block range = %+v, err = %v", records, err)
+	}
+
+	// A range with no invalidations returns a non-nil empty slice.
+	if records, err = api.GetInvalidPreconfBlocks(ctx, rpc.BlockNumber(10), rpc.BlockNumber(20)); err != nil || records == nil || len(records) != 0 {
+		t.Fatalf("empty range = %+v (nil=%t), err = %v", records, records == nil, err)
+	}
+
+	// from > to is rejected.
+	if _, err = api.GetInvalidPreconfBlocks(ctx, rpc.BlockNumber(9), rpc.BlockNumber(5)); err == nil {
+		t.Fatal("expected error for from > to")
 	}
 }
 

@@ -140,12 +140,40 @@ func NewBorAPI(b Backend) *BorAPI {
 	return &BorAPI{b}
 }
 
-func (api *BorAPI) GetInvalidPreconfBlocks(limit *hexutil.Uint64) []rawdb.InvalidPreconfRecord {
-	requested := uint64(rawdb.InvalidPreconfQueryLimit)
-	if limit != nil {
-		requested = uint64(*limit)
+// GetInvalidPreconfBlocks returns the preconfirmations that were invalidated for
+// blocks in the [from, to] range, newest block first. The response is capped at
+// rawdb.InvalidPreconfQueryLimit records to bound a wide range.
+func (api *BorAPI) GetInvalidPreconfBlocks(ctx context.Context, from, to rpc.BlockNumber) ([]rawdb.InvalidPreconfRecord, error) {
+	fromNum, err := api.resolveInvalidPreconfBound(ctx, from)
+	if err != nil {
+		return nil, err
 	}
-	return rawdb.ReadInvalidPreconfs(api.b.ChainDb(), requested)
+	toNum, err := api.resolveInvalidPreconfBound(ctx, to)
+	if err != nil {
+		return nil, err
+	}
+	if fromNum > toNum {
+		return nil, fmt.Errorf("invalid block range: from (%d) is greater than to (%d)", fromNum, toNum)
+	}
+	return rawdb.ReadInvalidPreconfsInRange(api.b.ChainDb(), fromNum, toNum), nil
+}
+
+// resolveInvalidPreconfBound converts an rpc.BlockNumber range bound into a
+// concrete height. Explicit heights pass through unchanged — invalidation
+// records may reference numbers that never became canonical — while the
+// latest/pending/finalized/safe tags resolve to the current head.
+func (api *BorAPI) resolveInvalidPreconfBound(ctx context.Context, number rpc.BlockNumber) (uint64, error) {
+	if number >= 0 {
+		return uint64(number), nil
+	}
+	header, err := api.b.HeaderByNumber(ctx, number)
+	if err != nil {
+		return 0, err
+	}
+	if header == nil {
+		return 0, fmt.Errorf("could not resolve block %v", number)
+	}
+	return header.Number.Uint64(), nil
 }
 
 func (api *BorAPI) GetPreconfTransactionReceipt(hash common.Hash) map[string]interface{} {

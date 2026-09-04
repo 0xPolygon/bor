@@ -62,3 +62,55 @@ func TestInvalidPreconfZeroLimit(t *testing.T) {
 		t.Fatalf("zero limit = %+v, want no records", records)
 	}
 }
+
+func TestInvalidPreconfsInRange(t *testing.T) {
+	db := NewMemoryDatabase()
+	for number, reason := range map[uint64]string{7: "skipped", 9: "canonical_mismatch", 8: "reorged"} {
+		if err := WriteInvalidPreconf(db, number, reason); err != nil {
+			t.Fatalf("write %d: %v", number, err)
+		}
+	}
+	if err := WriteInvalidPreconf(db, 8, "superseded"); err != nil {
+		t.Fatalf("overwrite: %v", err)
+	}
+
+	// [8,9] returns 9 then 8, newest first, with the overwritten reason; 7 is
+	// below the range and excluded.
+	records := ReadInvalidPreconfsInRange(db, 8, 9)
+	if len(records) != 2 || records[0].Number != 9 || records[1].Number != 8 || records[1].Reason != "superseded" {
+		t.Fatalf("range [8,9] = %+v", records)
+	}
+
+	// A bound below the stored set still works; 7 is the only record in [1,7].
+	if records = ReadInvalidPreconfsInRange(db, 1, 7); len(records) != 1 || records[0].Number != 7 {
+		t.Fatalf("range [1,7] = %+v", records)
+	}
+
+	// A single-block range hits exactly one record.
+	if records = ReadInvalidPreconfsInRange(db, 9, 9); len(records) != 1 || records[0].Number != 9 {
+		t.Fatalf("range [9,9] = %+v", records)
+	}
+
+	// A range with no invalidations returns a non-nil empty slice so it marshals
+	// as [] rather than null.
+	if records = ReadInvalidPreconfsInRange(db, 10, 20); records == nil || len(records) != 0 {
+		t.Fatalf("empty range = %+v (nil=%t)", records, records == nil)
+	}
+
+	// from > to is treated as an empty (non-nil) range.
+	if records = ReadInvalidPreconfsInRange(db, 9, 3); records == nil || len(records) != 0 {
+		t.Fatalf("inverted range = %+v (nil=%t)", records, records == nil)
+	}
+
+	// The response is capped at InvalidPreconfQueryLimit even for a wide range,
+	// returning the newest records first.
+	for number := uint64(10); number < InvalidPreconfQueryLimit+20; number++ {
+		if err := WriteInvalidPreconf(db, number, "skipped"); err != nil {
+			t.Fatalf("write %d: %v", number, err)
+		}
+	}
+	records = ReadInvalidPreconfsInRange(db, 0, InvalidPreconfQueryLimit+100)
+	if len(records) != InvalidPreconfQueryLimit || records[0].Number != InvalidPreconfQueryLimit+19 {
+		t.Fatalf("capped range = %d records, newest %d", len(records), records[0].Number)
+	}
+}
