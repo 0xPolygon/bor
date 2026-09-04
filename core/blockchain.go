@@ -4198,7 +4198,7 @@ func (bc *BlockChain) insertSideChain(block *types.Block, it *insertIterator, ma
 				continue
 			}
 
-			if canonical != nil && canonical.Root() == block.Root() {
+			if canonical != nil && canonical.Root() == block.Root() && bc.isSidechainGhostState(block, canonical) {
 				// This is most likely a shadow-state attack. When a fork is imported into the
 				// database, and it eventually reaches a block height which is not pruned, we
 				// just found that the state already exist! This means that the sidechain block
@@ -4315,6 +4315,52 @@ func (bc *BlockChain) insertSideChain(block *types.Block, it *insertIterator, ma
 		return bc.insertChain(blocks, true, makeWitness)
 	}
 	return nil, 0, nil
+}
+
+// isSidechainGhostState decides whether a sidechain block whose state root
+// already matches the canonical block at the same height is a shadow-state
+// attack (true) or a legitimate empty sibling (false). It is only meaningful
+// when canonical.Root() == block.Root() already holds.
+//
+// The exemption covers exactly one shape: a sibling of the canonical block
+// (same parent) that carries no body and therefore cannot have changed state,
+// at a height where the canonical chain also changed no state. Two such blocks
+// differ only in seal, timestamp, or coinbase, so they legitimately share a
+// state root and there is no forged state to skip-verify.
+//
+// Every input is trusted or already validated. canonical comes from the
+// canonical chain, so its parent hash and root cannot be influenced by an
+// attacker. The body predicates read block's own body, and ValidateBody has
+// already verified TxHash, UncleHash, and WithdrawalsHash against that body
+// before insertSideChain sees the block. Deliberately absent is any inference
+// from the side block's parent header: insertSideChain persists sidechain
+// headers via writeBlockWithoutState without executing them, so a side parent
+// Root proves nothing.
+//
+// canonNoOp is required on top of body emptiness because an empty body does not
+// imply an empty state transition in Bor. Finalize commits spans and state-sync
+// events at sprint boundaries (consensus/bor/bor.go), which move the state root
+// with no transactions in the block. If the canonical parent header is
+// unavailable we cannot establish canonNoOp, so we keep the conservative
+// behavior and treat the match as an attack.
+func (bc *BlockChain) isSidechainGhostState(block *types.Block, canonical *types.Block) bool {
+	canonParent := bc.GetHeaderByNumber(canonical.NumberU64() - 1)
+	if canonParent == nil {
+		return true
+	}
+
+	canonNoOp := canonParent.Root == canonical.Root()
+	sibling := block.ParentHash() == canonical.ParentHash()
+	// EIP-7685 requests: nil before the fork, a pointer to the empty-set hash
+	// after it. Both mean "carries no requests".
+	noRequests := block.RequestsHash() == nil || *block.RequestsHash() == types.EmptyRequestsHash
+	emptyBody := len(block.Transactions()) == 0 &&
+		block.GasUsed() == 0 &&
+		len(block.Uncles()) == 0 &&
+		len(block.Withdrawals()) == 0 &&
+		noRequests
+
+	return !(canonNoOp && sibling && emptyBody)
 }
 
 // recoverAncestors finds the closest ancestor with available state and re-execute
