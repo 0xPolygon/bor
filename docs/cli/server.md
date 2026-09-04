@@ -244,6 +244,8 @@ The ```bor server``` command runs the Bor client.
 
 - ```rpc.enabledeprecatedpersonal```: Enables the (deprecated) personal namespace (default: false)
 
+- ```rpc.enabletrace```: Enables the Parity-compatible trace namespace (trace_block, trace_transaction, trace_call, trace_callMany, trace_replayTransaction, trace_replayBlockTransactions) (default: false)
+
 - ```rpc.evmtimeout```: Sets a timeout used for eth_call (0=infinite) (default: 5s)
 
 - ```rpc.gascap```: Sets a cap on gas that can be used in eth_call/estimateGas (0=infinite) (default: 50000000)
@@ -327,6 +329,14 @@ The ```bor server``` command runs the Bor client.
 - ```v4disc```: Enables the V4 discovery mechanism (default: true)
 
 - ```v5disc```: Enables the V5 discovery mechanism (default: true)
+
+### Pipeline Options
+
+- ```pipeline.enable-import-src```: Enable pipelined state root computation during block import: overlap SRC(N) with block N+1 tx execution (default: false)
+
+- ```pipeline.import-src-logs```: Enable verbose logging for pipelined import SRC (default: false)
+
+- ```pipeline.warm-snapshot```: Enable warm-node handoff from the execution-side trie prefetcher to the pipelined SRC when witnesses are produced; no effect when import SRC is disabled or witnesses are off (default: true)
 
 ### Sealer Options
 

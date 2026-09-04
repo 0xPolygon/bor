@@ -87,6 +87,7 @@ devfakeauthor = false
   logquerylimit = 1000
   allow-unprotected-txs = false
   enabledeprecatedpersonal = false
+  enabletrace = false
   [jsonrpc.http]
     enabled = false
     port = 8545
