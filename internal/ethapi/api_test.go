@@ -452,6 +452,15 @@ type testBackend struct {
 
 	syncDefaultTimeout time.Duration
 	syncMaxTimeout     time.Duration
+	syncMaxConcurrent  int
+
+	canonicalLookups *atomic.Int64
+
+	// suppressChainEvent keeps an auto-mined tx from publishing a ChainEvent, and
+	// canonicalAfter delays when it becomes readable — together they let a test
+	// make a receipt appear with no event ever naming it.
+	suppressChainEvent bool
+	canonicalAfter     time.Time
 
 	// Relay / preconf / private tx mock controls
 	preconfEnabled   bool
@@ -697,7 +706,7 @@ func (b *testBackend) SendTx(ctx context.Context, tx *types.Transaction) error {
 	b.sentTx = tx
 	b.sentTxHash = tx.Hash()
 
-	if b.autoMine {
+	if b.autoMine && !b.suppressChainEvent {
 		// Synthesize a "mined" receipt at head+1
 		num := b.chain.CurrentHeader().Number.Uint64() + 1
 		receipt := &types.Receipt{
@@ -721,14 +730,22 @@ func (b *testBackend) SendTx(ctx context.Context, tx *types.Transaction) error {
 	return nil
 }
 func (b *testBackend) GetCanonicalTransaction(txHash common.Hash) (bool, *types.Transaction, common.Hash, uint64, uint64) {
+	if b.canonicalLookups != nil {
+		b.canonicalLookups.Add(1)
+	}
+
 	// Treat the auto-mined tx as canonically placed at head+1.
-	if b.autoMine && txHash == b.sentTxHash {
+	if b.autoMine && txHash == b.sentTxHash && b.canonicalReadable() {
 		num := b.chain.CurrentHeader().Number.Uint64() + 1
 		return true, b.sentTx, fakeBlockHash(txHash), num, 0
 	}
 	tx, blockHash, blockNumber, index := rawdb.ReadCanonicalTransaction(b.db, txHash)
 	return tx != nil, tx, blockHash, blockNumber, index
 }
+func (b *testBackend) canonicalReadable() bool {
+	return b.canonicalAfter.IsZero() || !time.Now().Before(b.canonicalAfter)
+}
+
 func (b *testBackend) GetPreconfTransaction(txHash common.Hash) (*types.Transaction, *types.Receipt, bool) {
 	b.preconf.mu.RLock()
 	defer b.preconf.mu.RUnlock()

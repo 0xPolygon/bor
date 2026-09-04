@@ -771,6 +771,10 @@ func (b *EthAPIBackend) RPCTxSyncMaxTimeout() time.Duration {
 	return b.eth.config.TxSyncMaxTimeout
 }
 
+func (b *EthAPIBackend) RPCTxSyncMaxConcurrent() int {
+	return b.eth.config.TxSyncMaxConcurrent
+}
+
 // Etherbase returns the address that mining rewards will be sent to.
 func (b *EthAPIBackend) Etherbase() (common.Address, error) {
 	return b.eth.Etherbase()

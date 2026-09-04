@@ -63,6 +63,7 @@ type Backend interface {
 	UnprotectedAllowed() bool      // allows only for EIP155 transactions.
 	RPCTxSyncDefaultTimeout() time.Duration
 	RPCTxSyncMaxTimeout() time.Duration
+	RPCTxSyncMaxConcurrent() int
 
 	// Preconf / Private tx related API for relay
 	PreconfEnabled() bool
