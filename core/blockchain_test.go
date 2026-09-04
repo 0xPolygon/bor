@@ -3272,135 +3272,190 @@ func testSideImportGhostStateStillRejected(t *testing.T, scheme string) {
 	}
 }
 
-// TestSidechainGhostStateCanonicalGate covers the hardening requested in PR #2293
-// review: the no-op exemption must be gated on the *canonical* chain also being a
-// no-op at that height, not only on the side block's own (possibly attacker-forged)
-// parent. This defends against an attacker who forges both side parent and side
-// child roots to match a canonical root at a height where the canonical chain
-// actually changed state (the forge-both-roots bypass). Because the side block's
-// parent can be unverified here while the canonical parent header is trusted,
-// isSidechainGhostState decides on the canonical parent. This exercises the
-// decision directly, since forging a header past GenerateChain's honest state
-// transitions is not otherwise reachable.
-func TestSidechainGhostStateCanonicalGate(t *testing.T) {
-	chain, _, blocks, _, forkIdx, _ := setupPrunedGhostStateChain(t, rawdb.HashScheme, false)
-
-	// canonical is a real state-transition block: its root differs from its parent.
-	canonical := blocks[forkIdx]
-	canonParent := blocks[forkIdx-1]
-	if canonical.Root() == canonParent.Root() {
-		t.Fatalf("test setup: canonical block must change state relative to its parent")
-	}
-
-	// Forge a side parent that already sits at the canonical root, then a no-op
-	// side child inheriting it: sideNoOp is true. But the canonical chain changed
-	// state here (canonNoOp false), so the exemption must be denied. The forged
-	// side parent is written to the header chain so GetHeader resolves it, mirroring
-	// how insertSideChain writes sidechain headers without state verification.
-	forgedParent := types.NewBlockWithHeader(&types.Header{
-		Number:     canonParent.Number(),
-		ParentHash: canonParent.ParentHash(),
-		Root:       canonical.Root(),
-		Coinbase:   common.Address{9},
-	})
-	rawdb.WriteHeader(chain.db, forgedParent.Header())
-	forged := types.NewBlockWithHeader(&types.Header{
-		Number:     canonical.Number(),
-		ParentHash: forgedParent.Hash(),
-		Root:       canonical.Root(),
-		Coinbase:   common.Address{2},
-	})
-	if forged.Hash() == canonical.Hash() {
-		t.Fatalf("test setup: forged side block must differ from canonical")
-	}
-	// Sanity: the side block is a no-op vs its (forged) parent, the precise input
-	// the pre-hardening check would have wrongly exempted.
-	if chain.GetHeader(forged.ParentHash(), forged.NumberU64()-1).Root != forged.Root() {
-		t.Fatalf("test setup: forged side block must be a no-op vs its parent")
-	}
-	if !chain.isSidechainGhostState(forged, canonical) {
-		t.Fatalf("attack not detected: no-op side block at a state-changing canonical height must be rejected")
-	}
+// TestSidechainGhostStateExemption covers isSidechainGhostState directly. The
+// exemption must fire for exactly one shape: an empty sibling of the canonical
+// block at a height where the canonical chain also changed no state. Every other
+// input must be treated as an attack.
+func TestSidechainGhostStateExemption(t *testing.T) {
+	testSidechainGhostStateExemption(t, rawdb.HashScheme)
+	testSidechainGhostStateExemption(t, rawdb.PathScheme)
 }
 
-// TestSidechainGhostStateNoOpCanonical covers the both-no-op path: when the
-// canonical block at the fork height also made no state change, a side block
-// that likewise made no state change is a legitimate empty sibling and the
-// exemption must fire (isSidechainGhostState returns false). A side block that
-// carries a state change at the same no-op canonical height must still be
-// rejected (returns true), since sideNoOp is false.
-func TestSidechainGhostStateNoOpCanonical(t *testing.T) {
-	// forkBlockEmpty=true: canonical block at forkIdx is empty, so canonNoOp=true.
-	chain, genDb, blocks, forkParent, forkIdx, _ := setupPrunedGhostStateChain(t, rawdb.HashScheme, true)
+func testSidechainGhostStateExemption(t *testing.T, scheme string) {
+	// forkBlockEmpty=true: the canonical block at forkIdx carries no body, so
+	// canonNoOp holds at that height. Every case below therefore isolates the
+	// sibling and body predicates, which is the point of this test.
+	chain, genDb, blocks, forkParent, forkIdx, forkTxNonce := setupPrunedGhostStateChain(t, scheme, true)
+	signer := types.LatestSigner(params.TestChainConfig)
 
 	canonical := blocks[forkIdx]
-	canonParent := blocks[forkIdx-1]
-	if canonical.Root() != canonParent.Root() {
-		t.Fatalf("test setup: canonical block must be a no-op (root must equal parent root)")
+	if canonical.Root() != forkParent.Root() {
+		t.Fatalf("test setup: canonical block at fork height must be a no-op")
 	}
 
-	// Legitimate empty sibling: different coinbase, same (parent's) root.
-	// Both canonNoOp and sideNoOp are true → exemption must fire.
-	legitSide, _ := GenerateChain(params.TestChainConfig, forkParent, chain.engine, genDb, 1, func(i int, b *BlockGen) {
+	// A genuine empty sibling: same parent as canonical, different coinbase, so a
+	// different hash but the same inherited state root. This is the #2224 shape.
+	siblings, _ := GenerateChain(params.TestChainConfig, forkParent, chain.engine, genDb, 1, func(i int, b *BlockGen) {
 		b.SetCoinbase(common.Address{2})
 	})
-	side := legitSide[0]
-	if side.Root() != canonical.Root() {
-		t.Fatalf("test setup: empty side block must share canonical root")
+	sibling := siblings[0]
+
+	if sibling.Hash() == canonical.Hash() {
+		t.Fatalf("test setup: sibling must differ from canonical")
 	}
-	if chain.isSidechainGhostState(side, canonical) {
-		t.Fatalf("legitimate empty sibling at no-op canonical height must be exempted (not an attack)")
+	if sibling.ParentHash() != canonical.ParentHash() {
+		t.Fatalf("test setup: sibling must share the canonical parent")
+	}
+	if chain.isSidechainGhostState(sibling, canonical) {
+		t.Fatalf("empty sibling at a no-op canonical height must be exempted")
 	}
 
-	// Tx-bearing forged side block declaring the canonical root: sideNoOp is
-	// false (parent root != block root after execution), so still an attack.
-	// Write a forged parent header so GetHeader resolves it.
-	forgedParent := types.NewBlockWithHeader(&types.Header{
-		Number:     canonParent.Number(),
-		ParentHash: canonParent.ParentHash(),
-		Root:       canonical.Root(),
-		Coinbase:   common.Address{9},
-	})
-	rawdb.WriteHeader(chain.db, forgedParent.Header())
-	// Forged child declares canonical root but its forged parent already had that
-	// root, so sideNoOp=true here too — we need a block where sideNoOp=false:
-	// forged parent root != canonical.Root() so the side block looks like a
-	// state-changing block claiming canonical root.
-	forgedParent2 := types.NewBlockWithHeader(&types.Header{
-		Number:     canonParent.Number(),
-		ParentHash: canonParent.ParentHash(),
-		Root:       common.Hash{0xab, 0xcd}, // different root → sideNoOp=false
-		Coinbase:   common.Address{8},
-	})
-	rawdb.WriteHeader(chain.db, forgedParent2.Header())
-	forged := types.NewBlockWithHeader(&types.Header{
+	// Same empty sibling, but reparented off the canonical grandparent so it is no
+	// longer a sibling of canonical. Body emptiness alone must not earn the
+	// exemption, since the skipped ancestors are then a different set.
+	nonSibling := types.NewBlockWithHeader(&types.Header{
 		Number:     canonical.Number(),
-		ParentHash: forgedParent2.Hash(),
+		ParentHash: forkParent.ParentHash(),
 		Root:       canonical.Root(),
-		Coinbase:   common.Address{2},
+		Coinbase:   common.Address{3},
 	})
-	if chain.isSidechainGhostState(forged, canonical) != true {
-		t.Fatalf("state-changing side block at no-op canonical height must be rejected")
+	if !chain.isSidechainGhostState(nonSibling, canonical) {
+		t.Fatalf("non-sibling parent must be treated as an attack")
+	}
+
+	// A true sibling that carries a transaction, at this same no-op canonical
+	// height. canonNoOp and sibling both hold, so only body emptiness can deny
+	// the exemption. A block that moved state must never be exempted, because
+	// the exemption exists solely for candidates that provably moved none.
+	txSiblings, _ := GenerateChain(params.TestChainConfig, forkParent, chain.engine, genDb, 1, func(i int, b *BlockGen) {
+		b.SetCoinbase(common.Address{4})
+		tx, _ := types.SignTx(types.NewTransaction(forkTxNonce, common.Address{0xaa}, big.NewInt(1), params.TxGas, b.BaseFee(), nil), signer, ghostStateTestKey)
+		b.AddTx(tx)
+	})
+	txSibling := txSiblings[0]
+
+	if txSibling.ParentHash() != canonical.ParentHash() {
+		t.Fatalf("test setup: tx sibling must share the canonical parent")
+	}
+	if len(txSibling.Transactions()) == 0 || txSibling.GasUsed() == 0 {
+		t.Fatalf("test setup: tx sibling must carry a transaction and burn gas")
+	}
+	// Claim the canonical root in the header so the caller's precondition
+	// (canonical.Root() == block.Root()) holds and only the body differs.
+	forgedRoot := types.NewBlockWithHeader(&types.Header{
+		Number:     txSibling.Number(),
+		ParentHash: txSibling.ParentHash(),
+		Root:       canonical.Root(),
+		Coinbase:   txSibling.Coinbase(),
+		GasUsed:    txSibling.GasUsed(),
+		TxHash:     txSibling.TxHash(),
+	}).WithBody(*txSibling.Body())
+	if !chain.isSidechainGhostState(forgedRoot, canonical) {
+		t.Fatalf("body-carrying sibling must be rejected even at a no-op canonical height")
+	}
+
+	// The emptiness conjuncts are checked one at a time below. Each case trips a
+	// single predicate and leaves the rest satisfied, so no one check can be
+	// dropped without a test failing.
+	sideBody := *txSibling.Body()
+	emptyHeader := func() *types.Header {
+		return &types.Header{
+			Number:     canonical.Number(),
+			ParentHash: canonical.ParentHash(),
+			Root:       canonical.Root(),
+			Coinbase:   common.Address{5},
+		}
+	}
+
+	// Transactions present, gas zero: only the transaction count denies it.
+	txOnly := emptyHeader()
+	txOnly.TxHash = txSibling.TxHash()
+	if !chain.isSidechainGhostState(types.NewBlockWithHeader(txOnly).WithBody(sideBody), canonical) {
+		t.Fatalf("sibling carrying transactions must be rejected")
+	}
+
+	// Gas burned, no transactions: only the gas figure denies it. A header that
+	// reports work without a body cannot be a no-op.
+	gasOnly := emptyHeader()
+	gasOnly.GasUsed = params.TxGas
+	if !chain.isSidechainGhostState(types.NewBlockWithHeader(gasOnly), canonical) {
+		t.Fatalf("sibling reporting gas use must be rejected")
+	}
+
+	// One uncle, nothing else: only the uncle count denies it.
+	uncleOnly := emptyHeader()
+	uncleOnly.UncleHash = types.CalcUncleHash([]*types.Header{forkParent.Header()})
+	uncleBlock := types.NewBlockWithHeader(uncleOnly).WithBody(types.Body{Uncles: []*types.Header{forkParent.Header()}})
+	if !chain.isSidechainGhostState(uncleBlock, canonical) {
+		t.Fatalf("sibling carrying uncles must be rejected")
+	}
+
+	// One withdrawal, nothing else: only the withdrawal count denies it.
+	withdrawals := types.Withdrawals{{Index: 1, Validator: 2, Address: common.Address{6}, Amount: 3}}
+	wdHash := types.DeriveSha(withdrawals, trie.NewStackTrie(nil))
+	wdOnly := emptyHeader()
+	wdOnly.WithdrawalsHash = &wdHash
+	wdBlock := types.NewBlockWithHeader(wdOnly).WithBody(types.Body{Withdrawals: withdrawals})
+	if !chain.isSidechainGhostState(wdBlock, canonical) {
+		t.Fatalf("sibling carrying withdrawals must be rejected")
+	}
+
+	// A non-empty EIP-7685 requests hash, nothing else: only noRequests denies it.
+	reqHash := common.Hash{0xaa}
+	reqOnly := emptyHeader()
+	reqOnly.RequestsHash = &reqHash
+	if !chain.isSidechainGhostState(types.NewBlockWithHeader(reqOnly), canonical) {
+		t.Fatalf("sibling carrying requests must be rejected")
+	}
+
+	// The empty-set requests hash is what a post-fork empty block actually
+	// carries, so it must still be exempted rather than read as a body.
+	emptyReq := types.EmptyRequestsHash
+	postFork := emptyHeader()
+	postFork.RequestsHash = &emptyReq
+	if chain.isSidechainGhostState(types.NewBlockWithHeader(postFork), canonical) {
+		t.Fatalf("empty-set requests hash must not deny the exemption")
 	}
 }
 
-// TestSidechainGhostStateMissingParentIsAttack covers the conservative fallback:
-// when either parent header is unavailable, isSidechainGhostState cannot prove the
-// blocks are genuine no-ops, so it must treat the match as an attack (return true).
-func TestSidechainGhostStateMissingParentIsAttack(t *testing.T) {
-	chain, _, blocks, _, forkIdx, _ := setupPrunedGhostStateChain(t, rawdb.HashScheme, false)
+// TestSidechainGhostStateAttackShapes covers the two remaining rejection paths:
+// a state-changing canonical height, and a missing canonical parent header.
+func TestSidechainGhostStateAttackShapes(t *testing.T) {
+	testSidechainGhostStateAttackShapes(t, rawdb.HashScheme)
+	testSidechainGhostStateAttackShapes(t, rawdb.PathScheme)
+}
+
+func testSidechainGhostStateAttackShapes(t *testing.T, scheme string) {
+	// forkBlockEmpty=false: the canonical block at forkIdx carries a tx, so
+	// canonNoOp is false at that height.
+	chain, _, blocks, forkParent, forkIdx, _ := setupPrunedGhostStateChain(t, scheme, false)
 
 	canonical := blocks[forkIdx]
+	if canonical.Root() == forkParent.Root() {
+		t.Fatalf("test setup: canonical block must change state at this height")
+	}
 
-	// A side block whose parent header is not in the database at all: GetHeader
-	// returns nil, so the exemption is denied without inspecting roots.
-	orphan := types.NewBlockWithHeader(&types.Header{
+	// An empty sibling at a state-changing canonical height. The candidate proves
+	// nothing about the ancestors the exemption would let it skip, because the
+	// canonical chain did move state here. canonNoOp denies it.
+	emptySibling := types.NewBlockWithHeader(&types.Header{
 		Number:     canonical.Number(),
-		ParentHash: common.Hash{0xde, 0xad},
+		ParentHash: canonical.ParentHash(),
 		Root:       canonical.Root(),
+		Coinbase:   common.Address{2},
 	})
-	if !chain.isSidechainGhostState(orphan, canonical) {
-		t.Fatalf("missing side parent must be treated as an attack")
+	if !chain.isSidechainGhostState(emptySibling, canonical) {
+		t.Fatalf("empty sibling at a state-changing canonical height must be rejected")
+	}
+
+	// Genesis has no parent header, so canonNoOp cannot be established. The
+	// conservative fallback must report an attack rather than exempt.
+	genesis := chain.GetBlockByNumber(0)
+	if genesis == nil {
+		t.Fatalf("test setup: genesis block must be present")
+	}
+	if !chain.isSidechainGhostState(genesis, genesis) {
+		t.Fatalf("missing canonical parent header must be treated as an attack")
 	}
 }
 
