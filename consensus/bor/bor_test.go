@@ -6083,6 +6083,33 @@ func TestVerifyHeader_HampiTimeNanoPresent(t *testing.T) {
 	gasTarget := uint64(15_000_000)
 	bfcd := uint64(64)
 	timeNano := uint64(1700000000_000_000_000) // example nanosecond timestamp
+	elapsedNano := uint64(2_648_000)
+	finalizeNano := uint64(1_500_000)
+	extra := buildBlockExtraBytes(&types.BlockExtraData{
+		GasTarget:                &gasTarget,
+		BaseFeeChangeDenominator: &bfcd,
+		TimeNano:                 &timeNano,
+		SealElapsedNano:          &elapsedNano,
+		SealFinalizeNano:         &finalizeNano,
+	})
+	h := s.makeSignedChild(t, extra, big.NewInt(params.InitialBaseFee))
+
+	chain := newRawDBChain(s.db, s.cfg, h, nil, nil)
+	err := s.b.verifyHeader(chain, h, nil)
+	// Should not fail with either Hampi extra-data error.
+	if err != nil {
+		require.NotErrorIs(t, err, errMissingTimeNano)
+		require.NotErrorIs(t, err, errMissingSealTimings)
+	}
+}
+
+func TestVerifyHeader_HampiMissingSealTimings(t *testing.T) {
+	t.Parallel()
+	s := newHampiVerifySetup(t, true)
+
+	gasTarget := uint64(15_000_000)
+	bfcd := uint64(64)
+	timeNano := uint64(1_700_000_000_000_000_000)
 	extra := buildBlockExtraBytes(&types.BlockExtraData{
 		GasTarget:                &gasTarget,
 		BaseFeeChangeDenominator: &bfcd,
@@ -6091,11 +6118,7 @@ func TestVerifyHeader_HampiTimeNanoPresent(t *testing.T) {
 	h := s.makeSignedChild(t, extra, big.NewInt(params.InitialBaseFee))
 
 	chain := newRawDBChain(s.db, s.cfg, h, nil, nil)
-	err := s.b.verifyHeader(chain, h, nil)
-	// Should not fail with errMissingTimeNano
-	if err != nil {
-		require.NotErrorIs(t, err, errMissingTimeNano)
-	}
+	require.ErrorIs(t, s.b.verifyHeader(chain, h, nil), errMissingSealTimings)
 }
 
 // hampiVerifySetup holds shared state for verifyHeader Hampi tests.

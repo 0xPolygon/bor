@@ -3157,6 +3157,20 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 			return err
 		}
 
+		// Post-Hampi: embed the commit-sealing timings into the block's extra
+		// data so they can be read directly from the chain (verifyHeader enforces
+		// their presence). The timings are only known after FinalizeAndAssemble, so
+		// the block built above carries the pre-timing Extra and must be rebuilt
+		// before it is handed off for sealing. The embedded elapsed is captured here
+		// rather than reusing the logged value below so the existing log line is left
+		// untouched; the two differ only by negligible sub-microsecond timing.
+		if w.chainConfig.Bor != nil && w.chainConfig.Bor.IsHampi(env.header.Number) {
+			if err := env.header.SetSealTimings(w.chainConfig, uint64(time.Since(start).Nanoseconds()), uint64(finalizeDuration.Nanoseconds())); err != nil {
+				return err
+			}
+			block = types.NewBlock(env.header, &types.Body{Transactions: env.txs}, env.receipts, trie.NewStackTrie(nil))
+		}
+
 		select {
 		case w.taskCh <- &task{receipts: env.receipts, state: env.state, block: block, createdAt: time.Now(), productionStart: firstNonZeroTime(productionStartFrom(genParams), start), productionElapsed: time.Since(firstNonZeroTime(productionStartFrom(genParams), start)), intermediateRootTime: commitTime}:
 			fees := totalFees(block, env.receipts)

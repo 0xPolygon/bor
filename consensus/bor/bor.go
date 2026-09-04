@@ -119,6 +119,7 @@ var (
 	// the gas target or base fee change denominator in its extra data.
 	errMissingGiuglianoFields = errors.New("missing gas target or base fee change denominator in extra data")
 	errMissingTimeNano        = errors.New("missing time nano in extra data")
+	errMissingSealTimings     = errors.New("missing seal timings in extra data")
 
 	// errInvalidMixDigest is returned if a block's mix digest is non-zero.
 	errInvalidMixDigest = errors.New("non-zero mix digest")
@@ -495,8 +496,14 @@ func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 			return consensus.ErrFutureBlock
 		}
 	}
-	if c.config.IsHampi(header.Number) && header.GetTimeNano(c.chainConfig) == nil {
-		return errMissingTimeNano
+	if c.config.IsHampi(header.Number) {
+		if header.GetTimeNano(c.chainConfig) == nil {
+			return errMissingTimeNano
+		}
+		elapsedNano, finalizeNano := header.GetSealTimings(c.chainConfig)
+		if elapsedNano == nil || finalizeNano == nil {
+			return errMissingSealTimings
+		}
 	}
 
 	if err := validateHeaderExtraField(header.Extra); err != nil {

@@ -143,6 +143,15 @@ type BlockExtraData struct {
 	BaseFeeChangeDenominator *uint64 `rlp:"optional"`
 	// TimeNano is the nanosecond-precision Unix timestamp when the block was prepared (post-Chicago)
 	TimeNano *uint64 `rlp:"optional"`
+	// SealElapsedNano is the producer's total commit-sealing time in nanoseconds
+	// (transaction processing + FinalizeAndAssemble). It mirrors the "elapsed" field
+	// of the "Commit new sealing work" log. The value is per-producer and not
+	// consensus-deterministic, so only its presence is validated (post-Hampi).
+	SealElapsedNano *uint64 `rlp:"optional"`
+	// SealFinalizeNano is the FinalizeAndAssemble duration in nanoseconds. It mirrors
+	// the "finalize" field of the "Commit new sealing work" log. Like SealElapsedNano,
+	// only its presence is validated (post-Hampi).
+	SealFinalizeNano *uint64 `rlp:"optional"`
 }
 
 // BlockExtraDataPostAustin drops TxDependency, which sat before the optional
@@ -153,6 +162,8 @@ type BlockExtraDataPostAustin struct {
 	GasTarget                *uint64 `rlp:"optional"`
 	BaseFeeChangeDenominator *uint64 `rlp:"optional"`
 	TimeNano                 *uint64 `rlp:"optional"`
+	SealElapsedNano          *uint64 `rlp:"optional"`
+	SealFinalizeNano         *uint64 `rlp:"optional"`
 }
 
 // blockExtraDataRawTxDeps mirrors BlockExtraData but keeps TxDependency as an
@@ -664,6 +675,8 @@ func (h *Header) DecodeBlockExtraData(chainConfig *params.ChainConfig) *BlockExt
 			GasTarget:                blockExtraData.GasTarget,
 			BaseFeeChangeDenominator: blockExtraData.BaseFeeChangeDenominator,
 			TimeNano:                 blockExtraData.TimeNano,
+			SealElapsedNano:          blockExtraData.SealElapsedNano,
+			SealFinalizeNano:         blockExtraData.SealFinalizeNano,
 		}
 	}
 
@@ -687,6 +700,66 @@ func (h *Header) GetTimeNano(chainConfig *params.ChainConfig) *uint64 {
 		return nil
 	}
 	return blockExtraData.TimeNano
+}
+
+// GetSealTimings extracts the producer's commit-sealing timings (elapsed and
+// finalize durations, in nanoseconds) from the header's Extra field. Either
+// value is nil for pre-Cancun blocks, on decode error, or if the producer did
+// not set it. Seal timings are presence-validated starting from the Hampi
+// fork. If you need multiple fields from BlockExtraData, prefer DecodeBlockExtraData
+// to avoid redundant RLP decodes.
+func (h *Header) GetSealTimings(chainConfig *params.ChainConfig) (elapsedNano *uint64, finalizeNano *uint64) {
+	blockExtraData := h.DecodeBlockExtraData(chainConfig)
+	if blockExtraData == nil {
+		return nil, nil
+	}
+
+	return blockExtraData.SealElapsedNano, blockExtraData.SealFinalizeNano
+}
+
+// SetSealTimings writes the producer's commit-sealing timings into the header's
+// already-encoded BlockExtraData. The header's Extra must be in the post-Cancun
+// [vanity | RLP(BlockExtraData) | seal] layout; it is decoded, the timing fields
+// are set, and Extra is re-encoded in place. This is a producer-only path — the
+// values are not consensus-validated, only their presence.
+func (h *Header) SetSealTimings(chainConfig *params.ChainConfig, elapsedNano, finalizeNano uint64) error {
+	if len(h.Extra) < ExtraVanityLength+ExtraSealLength {
+		return fmt.Errorf("invalid extra data length %d, cannot set seal timings", len(h.Extra))
+	}
+
+	vanity := h.Extra[:ExtraVanityLength]
+	seal := h.Extra[len(h.Extra)-ExtraSealLength:]
+
+	var blockExtraDataBytes []byte
+	var err error
+	if chainConfig.Bor != nil && chainConfig.Bor.IsAustin(h.Number) {
+		var blockExtraData BlockExtraDataPostAustin
+		if err := rlp.DecodeBytes(h.Extra[ExtraVanityLength:len(h.Extra)-ExtraSealLength], &blockExtraData); err != nil {
+			return fmt.Errorf("decode post-Austin block extra data: %w", err)
+		}
+		blockExtraData.SealElapsedNano = &elapsedNano
+		blockExtraData.SealFinalizeNano = &finalizeNano
+		blockExtraDataBytes, err = rlp.EncodeToBytes(&blockExtraData)
+	} else {
+		var blockExtraData BlockExtraData
+		if err := rlp.DecodeBytes(h.Extra[ExtraVanityLength:len(h.Extra)-ExtraSealLength], &blockExtraData); err != nil {
+			return fmt.Errorf("decode block extra data: %w", err)
+		}
+		blockExtraData.SealElapsedNano = &elapsedNano
+		blockExtraData.SealFinalizeNano = &finalizeNano
+		blockExtraDataBytes, err = rlp.EncodeToBytes(&blockExtraData)
+	}
+	if err != nil {
+		return fmt.Errorf("encode block extra data: %w", err)
+	}
+
+	extra := make([]byte, 0, ExtraVanityLength+len(blockExtraDataBytes)+ExtraSealLength)
+	extra = append(extra, vanity...)
+	extra = append(extra, blockExtraDataBytes...)
+	extra = append(extra, seal...)
+	h.Extra = extra
+
+	return nil
 }
 
 func (b *Block) BaseFee() *big.Int {
