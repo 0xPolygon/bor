@@ -107,6 +107,7 @@ var Defaults = Config{
 	WitnessAPIEnabled:     false,
 	TxSyncDefaultTimeout:  20 * time.Second,
 	TxSyncMaxTimeout:      1 * time.Minute,
+	TxSyncMaxConcurrent:   4096,
 }
 
 //go:generate go run github.com/fjl/gencodec -type Config -formats toml -out gen_config.go
@@ -339,6 +340,12 @@ type Config struct {
 	// EIP-7966: eth_sendRawTransactionSync timeouts
 	TxSyncDefaultTimeout time.Duration `toml:",omitempty"`
 	TxSyncMaxTimeout     time.Duration `toml:",omitempty"`
+
+	// TxSyncMaxConcurrent caps calls waiting for an eth_sendRawTransactionSync
+	// receipt. Waiters don't hold an RPC execution slot, so this is what bounds
+	// them; size it for parked goroutines and chain-event subscribers, not for
+	// worker threads. 0 removes the cap.
+	TxSyncMaxConcurrent int `toml:",omitempty"`
 
 	// Sequence store integration (design docs/sequencer-bor.md). Role is
 	// derived, not configured: "producer" on a mining node (publishes the

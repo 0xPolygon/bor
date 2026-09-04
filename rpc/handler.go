@@ -416,11 +416,11 @@ func (h *handler) startCallProc(fn func(*callProc)) {
 
 	ctx, cancel := context.WithCancel(h.rootCtx)
 
-	h.executionPool.Submit(context.Background(), func() error {
+	h.executionPool.SubmitWithSlot(context.Background(), func(slot *Slot) error {
 		defer h.callWG.Done()
 		defer cancel()
 
-		fn(&callProc{ctx: ctx})
+		fn(&callProc{ctx: withExecutionSlot(ctx, slot)})
 
 		h.executionPool.processed.Add(1)
 

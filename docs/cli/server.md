@@ -266,6 +266,8 @@ The ```bor server``` command runs the Bor client.
 
 - ```rpc.txsync.defaulttimeout```: Default timeout for eth_sendRawTransactionSync (e.g. 2s, 500ms) (default: 20s)
 
+- ```rpc.txsync.maxconcurrent```: Maximum eth_sendRawTransactionSync calls waiting for a receipt at once (0 = no limit) (default: 4096)
+
 - ```rpc.txsync.maxtimeout```: Maximum allowed timeout for eth_sendRawTransactionSync (e.g. 5m) (default: 1m0s)
 
 - ```ws```: Enable the WS-RPC server (default: false)

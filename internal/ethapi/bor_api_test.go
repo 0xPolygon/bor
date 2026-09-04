@@ -151,8 +151,13 @@ func (b *testBackend) RPCTxSyncMaxTimeout() time.Duration {
 	return 5 * time.Minute
 }
 
+func (b *testBackend) RPCTxSyncMaxConcurrent() int {
+	return b.syncMaxConcurrent
+}
+
 func (b *backendMock) RPCTxSyncDefaultTimeout() time.Duration { return 2 * time.Second }
 func (b *backendMock) RPCTxSyncMaxTimeout() time.Duration     { return 5 * time.Minute }
+func (b *backendMock) RPCTxSyncMaxConcurrent() int            { return 0 }
 
 func (b *testBackend) Etherbase() (common.Address, error) {
 	return common.Address{}, nil
