@@ -403,8 +403,6 @@ func (s *PendingStore) claimPreconfPrefix(block *types.Block) (*pendingPrefix, b
 		return nil, false
 	}
 	prefixTxs := entry.RPCView.Block.Transactions()
-	// Avoid replacing a full parallel import with a large serial suffix when
-	// speculation has only covered a small part of the block.
 	remaining := len(block.Transactions()) - len(prefixTxs)
 	if remaining > maxPreconfPrefixCatchupTransactions {
 		s.mu.Unlock()

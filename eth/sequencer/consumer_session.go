@@ -561,10 +561,6 @@ func (s *session) publishSeal(block *types.Block, payload pendingPayload, sealed
 	s.parkSeal(sealed, sealedHash, true)
 }
 
-// detachRPCFromCanonicalLocked keeps an execution alive after canonical
-// import has removed its pending entry. The completed canonical header is
-// remembered as a seal fence; no later snapshot from this environment can be
-// published back into PendingStore.
 func (s *session) detachRPCFromCanonicalLocked() bool {
 	if s.env == nil {
 		return false

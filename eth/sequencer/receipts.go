@@ -43,9 +43,6 @@ func (ix *Index) Add(tx *types.Transaction, receipt *types.Receipt) {
 	ix.AddBatch(types.Transactions{tx}, types.Receipts{receipt})
 }
 
-// AddBatch records a complete execution record while taking the index lock
-// once. Record execution is atomic, so none of its receipts should become
-// visible unless every transaction in the record was applied successfully.
 func (ix *Index) AddBatch(txs types.Transactions, receipts types.Receipts) bool {
 	if len(txs) == 0 || len(txs) != len(receipts) {
 		return false
@@ -142,8 +139,6 @@ func (ix *Index) Lookup(hash common.Hash) (*types.Receipt, *types.Transaction, b
 	return entry.receipt, entry.tx, true
 }
 
-// CountCanonical returns how many transactions in block were exposed through
-// this index before canonical completion evicts the height.
 func (ix *Index) CountCanonical(block *types.Block) int {
 	if block == nil {
 		return 0

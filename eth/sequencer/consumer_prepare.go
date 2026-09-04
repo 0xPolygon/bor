@@ -46,9 +46,6 @@ type streamPreparationState struct {
 	signer      types.Signer
 }
 
-// prepareStream is the sole stream reader. The unbuffered handoff lets it
-// decode and prewarm one frame while the previous frame is being applied,
-// without allowing an execution backlog to grow in memory.
 func (c *Consumer) prepareStream(ctx context.Context, stream streamReceiver, state streamPreparationState, out chan<- preparedStreamFrame) {
 	defer close(out)
 	for {

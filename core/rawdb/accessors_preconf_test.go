@@ -50,9 +50,6 @@ func TestInvalidPreconfZeroLimit(t *testing.T) {
 	if err := WriteInvalidPreconf(db, 7, "skipped"); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	// The stored record is what makes the empty result below meaningful: it
-	// proves the query honoured the limit rather than reading an empty
-	// keyspace.
 	if records := ReadInvalidPreconfs(db, 1); len(records) != 1 {
 		t.Fatalf("sanity read = %+v", records)
 	}

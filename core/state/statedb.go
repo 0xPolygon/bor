@@ -1607,11 +1607,6 @@ func (s *StateDB) Copy() *StateDB {
 	return s.copy(true)
 }
 
-// CopyWithoutLogHistory creates a deep, independent copy without retaining
-// logs emitted before the copy. The cumulative log index is preserved so logs
-// emitted by later transactions keep their block-global indices. A dirty
-// journal requires the full log history for safe snapshot reverts, so this
-// method falls back to Copy in that case.
 func (s *StateDB) CopyWithoutLogHistory() *StateDB {
 	if s.journal.length() != 0 {
 		return s.Copy()

@@ -226,7 +226,6 @@ func (s *Ethereum) attachSequencer(config *ethconfig.Config) error {
 
 func configureMinerForSequencer(config *ethconfig.Config, chainConfig *params.ChainConfig) {
 	if config.SequencerRole == "consumer" && chainConfig != nil && chainConfig.Bor != nil {
-		// PendingStore serves pending RPCs on consumer nodes, so the miner snapshot is redundant.
 		config.Miner.DisablePendingBlock = true
 	}
 }

@@ -24,8 +24,6 @@ import (
 
 const consumerRetryDelay = 2 * time.Second
 
-// TransactionLookup supplies a transaction already held by another local
-// subsystem. The consumer only uses it to reuse a verified sender cache.
 type TransactionLookup interface {
 	Get(common.Hash) *types.Transaction
 }
@@ -72,8 +70,6 @@ func NewConsumer(endpoint string, chain *core.BlockChain) (*Consumer, error) {
 	return NewConsumerWithTransactionLookup(endpoint, chain, nil)
 }
 
-// NewConsumerWithTransactionLookup returns a stopped consumer that may reuse
-// sender recovery already performed by the local transaction pool.
 func NewConsumerWithTransactionLookup(endpoint string, chain *core.BlockChain, txLookup TransactionLookup) (*Consumer, error) {
 	if chain.Config().Bor == nil {
 		return nil, errors.New("sequencer consumer requires a bor chain")

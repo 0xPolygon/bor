@@ -195,8 +195,6 @@ func TransactionToMessage(tx *types.Transaction, s types.Signer, baseFee *big.In
 	return msg, err
 }
 
-// TransactionToMessageWithVerifiedSender converts a transaction using a sender
-// that the caller has already recovered with the signer for the target block.
 func TransactionToMessageWithVerifiedSender(tx *types.Transaction, sender common.Address, baseFee *big.Int) *Message {
 	msg := &Message{
 		Nonce:                 tx.Nonce(),

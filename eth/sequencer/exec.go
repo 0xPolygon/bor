@@ -431,9 +431,6 @@ func (env *blockEnv) shouldPublishPending(now time.Time) bool {
 	if env.postEagerPublications >= pendingRPCPublicationLimit {
 		return false
 	}
-	// Gas checkpoints spread snapshots through full blocks. The next-record
-	// time fallback keeps partial blocks fresh, while the minimum delay bounds
-	// snapshot work when records arrive in bursts.
 	if now.Before(env.lastPublishedAt.Add(pendingRPCMinPublishDelay)) {
 		return false
 	}
