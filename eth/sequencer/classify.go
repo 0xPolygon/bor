@@ -459,12 +459,12 @@ func (p *Publisher) suffixExtendsLocked(s commitment.Head) bool {
 // onto its head. Nothing already published is re-sent and no new generation
 // is written — readers already have the prefix.
 func (p *Publisher) completeExtendedWindowLocked(info tailInfo, flushHeight uint64) bool {
-	ours, items, ok := p.matchExtendedWindowLocked(info, flushHeight)
+	ours, items, cut, ok := p.matchExtendedWindowLocked(info, flushHeight)
 	if !ok {
 		return false
 	}
 
-	p.absorbExtendedWindowLocked(info, ours, items, flushHeight)
+	p.absorbExtendedWindowLocked(info, ours, items, cut, flushHeight)
 
 	return true
 }
@@ -473,41 +473,43 @@ func (p *Publisher) completeExtendedWindowLocked(info tailInfo, flushHeight uint
 // a strict prefix of the flush at flushHeight (same open, records a
 // leading byte-subsequence of ours, same order), returning our flush
 // suffix and the store's window parsed as journal items.
-func (p *Publisher) matchExtendedWindowLocked(info tailInfo, flushHeight uint64) (ours, items []journalItem, ok bool) {
+func (p *Publisher) matchExtendedWindowLocked(info tailInfo, flushHeight uint64) (ours, items []journalItem, cut int, ok bool) {
 	if !info.tipOpen || info.tipOpenHeight != flushHeight || len(info.window) == 0 {
-		return nil, nil, false
+		return nil, nil, 0, false
 	}
 
 	// The window may still be building (no seal yet): a mid-build
 	// re-anchor completes in place just as a flush does.
 	ours = p.journal.suffixFromHeight(flushHeight)
 	if len(ours) == 0 || ours[0].kind != entryOpen {
-		return nil, nil, false
+		return nil, nil, 0, false
+	}
+	if !contentEqual(info.window[0], ours[0].entry) {
+		return nil, nil, 0, false
 	}
 
-	if len(info.window) > len(ours)-1 { // window can cover at most our records
-		return nil, nil, false
-	}
-
-	for i, entry := range info.window {
-		if !contentEqual(entry, ours[i].entry) {
-			return nil, nil, false
-		}
+	storedHashes, ok := windowTxHashes(info.window)
+	if !ok || !windowLeadsHashes(storedHashes, journalRecordHashes(ours[1:])) {
+		return nil, nil, 0, false
 	}
 
 	stored, items, ok := parseWindow(info)
 	if !ok || stored.number != flushHeight {
-		return nil, nil, false
+		return nil, nil, 0, false
+	}
+	cut, ok = journalRecordCut(ours, len(storedHashes))
+	if !ok {
+		return nil, nil, 0, false
 	}
 
-	return ours, items, true
+	return ours, items, cut, true
 }
 
 // absorbExtendedWindowLocked absorbs the store's copy as confirmed lineage
 // and re-folds the remainder (records past the stored prefix, and the
 // seal) onto its head for the send loop to deliver. A refold failure
 // latches fail(); nothing else to classify.
-func (p *Publisher) absorbExtendedWindowLocked(info tailInfo, ours, items []journalItem, flushHeight uint64) {
+func (p *Publisher) absorbExtendedWindowLocked(info tailInfo, ours, items []journalItem, cut int, flushHeight uint64) {
 	// Older stacked flushes below this window are abandoned by the swap:
 	// their heights are already represented byte-identically in the store
 	// lineage this window folds on (the open's parent hash pins it), but
@@ -526,7 +528,7 @@ func (p *Publisher) absorbExtendedWindowLocked(info tailInfo, ours, items []jour
 	p.ackedSeq = fresh.nextSeq - 1
 	cur := info.s
 
-	for _, item := range ours[len(info.window):] {
+	for _, item := range ours[cut:] {
 		entry, next, err := refoldEntry(cur, item)
 		if err != nil {
 			p.fail("refold flush remainder", "err", err)
@@ -541,6 +543,23 @@ func (p *Publisher) absorbExtendedWindowLocked(info tailInfo, ours, items []jour
 	log.Info("Sequencer completing extended window in place", "number", flushHeight,
 		"stored", len(info.window), "delivering", len(ours)-len(info.window))
 	p.installSwapLocked(fresh, cur, info.s)
+}
+
+func journalRecordCut(items []journalItem, transactions int) (int, bool) {
+	matched := 0
+	for i := 1; i < len(items); i++ {
+		if items[i].kind != entryRecord {
+			return i, matched == transactions
+		}
+		matched += len(items[i].txHashes)
+		if matched == transactions {
+			return i + 1, true
+		}
+		if matched > transactions {
+			return 0, false
+		}
+	}
+	return len(items), matched == transactions
 }
 
 // refoldLocked swaps the lineage: journal items from the first window at or

@@ -518,6 +518,9 @@ type JsonRPCConfig struct {
 	TxSyncMaxTimeout    time.Duration `hcl:"-,optional" toml:"-"`
 	TxSyncMaxTimeoutRaw string        `hcl:"txsync.maxtimeout,optional" toml:"txsync.maxtimeout,optional"`
 
+	// Maximum eth_sendRawTransactionSync calls waiting for a receipt at once (0 = no limit)
+	TxSyncMaxConcurrent int `hcl:"txsync.maxconcurrent,optional" toml:"txsync.maxconcurrent,optional"`
+
 	// AcceptPreconfTx allows the RPC server to accept preconf transactions
 	AcceptPreconfTx bool `hcl:"accept-preconf-tx,optional" toml:"accept-preconf-tx,optional"`
 
@@ -1014,6 +1017,7 @@ func DefaultConfig() *Config {
 			EnableTrace:          false,
 			TxSyncDefaultTimeout: ethconfig.Defaults.TxSyncDefaultTimeout,
 			TxSyncMaxTimeout:     ethconfig.Defaults.TxSyncMaxTimeout,
+			TxSyncMaxConcurrent:  ethconfig.Defaults.TxSyncMaxConcurrent,
 			AcceptPreconfTx:      false,
 			AcceptPrivateTx:      false,
 			Http: &APIConfig{
@@ -1724,6 +1728,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	n.RPCTxFeeCap = c.JsonRPC.TxFeeCap
 	n.TxSyncDefaultTimeout = c.JsonRPC.TxSyncDefaultTimeout
 	n.TxSyncMaxTimeout = c.JsonRPC.TxSyncMaxTimeout
+	n.TxSyncMaxConcurrent = c.JsonRPC.TxSyncMaxConcurrent
 
 	n.LogQueryLimit = c.JsonRPC.LogQueryLimit
 	n.RPCBlockRangeLimit = c.JsonRPC.RangeLimit

@@ -91,3 +91,43 @@ func TestAttachSequencerRoles(t *testing.T) {
 		}
 	})
 }
+
+func TestConfigureMinerForSequencer(t *testing.T) {
+	tests := []struct {
+		name         string
+		role         string
+		bor          *params.BorConfig
+		disabled     bool
+		wantDisabled bool
+	}{
+		{name: "consumer on bor", role: "consumer", bor: &params.BorConfig{}, wantDisabled: true},
+		{name: "consumer on non-bor", role: "consumer"},
+		{name: "producer", role: "producer", bor: &params.BorConfig{}},
+		{name: "sequencer disabled", bor: &params.BorConfig{}},
+		{name: "preserve explicit disable", role: "producer", bor: &params.BorConfig{}, disabled: true, wantDisabled: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := &ethconfig.Config{
+				SequencerRole: test.role,
+				Miner: miner.Config{
+					DisablePendingBlock: test.disabled,
+				},
+			}
+			configureMinerForSequencer(config, &params.ChainConfig{Bor: test.bor})
+
+			if config.Miner.DisablePendingBlock != test.wantDisabled {
+				t.Fatalf("DisablePendingBlock = %t, want %t", config.Miner.DisablePendingBlock, test.wantDisabled)
+			}
+		})
+	}
+
+	t.Run("nil chain config", func(t *testing.T) {
+		config := &ethconfig.Config{SequencerRole: "consumer"}
+		configureMinerForSequencer(config, nil)
+		if config.Miner.DisablePendingBlock {
+			t.Fatal("nil chain config must preserve miner pending snapshots")
+		}
+	})
+}

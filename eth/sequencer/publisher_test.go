@@ -382,6 +382,27 @@ func TestAwaitOpenSuppressesRecords(t *testing.T) {
 	}
 }
 
+func TestStaleOpenSuppressesRecords(t *testing.T) {
+	p := barePublisher()
+	p.sealedTip = 1
+
+	stale := testHeader(1, common.Hash{0x01})
+	p.OpenBlock(1, stale.Time, stale.ParentHash, stale.GasLimit, stale.BaseFee)
+	p.PublishTx(testTx(t, 0))
+
+	if items, _ := p.journal.after(0); len(items) != 0 {
+		t.Fatalf("stale lifecycle reached the journal: %d items", len(items))
+	}
+
+	fresh := testHeader(2, stale.Hash())
+	p.OpenBlock(2, fresh.Time, fresh.ParentHash, fresh.GasLimit, fresh.BaseFee)
+	p.PublishTx(testTx(t, 1))
+
+	if items, _ := p.journal.after(0); len(items) != 2 {
+		t.Fatalf("fresh open did not resume publishing: %d items", len(items))
+	}
+}
+
 func sealHash(t *testing.T, header *types.Header) common.Hash {
 	t.Helper()
 

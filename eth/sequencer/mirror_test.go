@@ -285,9 +285,9 @@ func TestDisplacementCountsOnlyWhatTheBlockDropped(t *testing.T) {
 	}
 
 	info := mustReadTail(t, p)
-	before := windowDisplacedRecords.Snapshot().Count()
 
 	p.mu.Lock()
+	orphans := p.orphanedByDisplacementLocked(info, 2)
 	may := p.mayDisplaceWindowLocked(info, 2)
 	p.mu.Unlock()
 
@@ -295,9 +295,9 @@ func TestDisplacementCountsOnlyWhatTheBlockDropped(t *testing.T) {
 		t.Fatal("withheld a displacement for a block the chain kept")
 	}
 
-	if got := windowDisplacedRecords.Snapshot().Count() - before; got != 1 {
+	if orphans != 1 {
 		t.Fatalf("counted %d orphaned records, want 1: only the transaction "+
-			"this block does not carry is lost", got)
+			"this block does not carry is lost", orphans)
 	}
 }
 

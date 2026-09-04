@@ -30,10 +30,16 @@ func (p *Publisher) OpenBlock(number uint64, timestamp uint64, parent common.Has
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if p.mode.kind != modeOpen || (number != 0 && number <= p.sealedTip) {
-		// Muted, or a seal result raced the mute clear between this
-		// build's check and its open: never open at/behind a sealed
-		// height.
+	if p.mode.kind != modeOpen {
+		return
+	}
+
+	if number != 0 && number <= p.sealedTip {
+		// A seal result raced this build's open: never open at or behind
+		// a sealed height.
+		p.awaitOpen = true
+		p.curHeight = 0
+
 		return
 	}
 
@@ -69,7 +75,7 @@ func (p *Publisher) PublishTx(tx *types.Transaction) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if p.mode.kind != modeOpen || p.awaitOpen {
+	if p.mode.kind != modeOpen || p.awaitOpen || p.curHeight == 0 {
 		return
 	}
 

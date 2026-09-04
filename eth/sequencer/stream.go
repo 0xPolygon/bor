@@ -56,9 +56,14 @@ type ackResult struct {
 }
 
 type sent struct {
-	item journalItem
-	at   time.Time
+	item  journalItem
+	batch []journalItem
+	at    time.Time
 }
+
+const maxTransactionsPerPublishedRecord = 64
+
+const publishedRecordBatchDelay = 5 * time.Millisecond
 
 // stallTracker watches ack progress from outside the send loop: a hung
 // store fills the stream's flow-control window and blocks Send, so no
@@ -196,6 +201,18 @@ func (p *Publisher) streamLoop(ctx, sctx context.Context, stream pb.PublisherSer
 				return streamResult{reason: endWatch, progressed: progressed}
 			}
 		case <-p.wake:
+			if p.nextSendableIsRecord(cursor) {
+				timer := time.NewTimer(publishedRecordBatchDelay)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return streamResult{reason: endCtx, progressed: progressed}
+				case <-sctx.Done():
+					timer.Stop()
+					return streamResult{reason: endTransport, progressed: progressed}
+				case <-timer.C:
+				}
+			}
 		case ack := <-acks:
 			res, done := p.handleAck(ack, inflight)
 			if done {
@@ -215,6 +232,11 @@ func (p *Publisher) streamLoop(ctx, sctx context.Context, stream pb.PublisherSer
 			return streamResult{reason: endStale, progressed: progressed}
 		}
 	}
+}
+
+func (p *Publisher) nextSendableIsRecord(cursor uint64) bool {
+	items, _, ok := p.sendableAfter(cursor, 1)
+	return ok && len(items) != 0 && items[0].kind == entryRecord
 }
 
 // sendableAfter snapshots, under the lock, the journal items past cursor
@@ -272,30 +294,73 @@ func (p *Publisher) sendAfter(stream pb.PublisherService_PublishClient, cursor u
 		return cursor, false
 	}
 
-	for _, item := range items {
+	for index := 0; index < len(items); {
+		item := items[index]
 		// An adoption can mark entries acked between
 		// this session's sends: the store already holds them, and sending
 		// them again guarantees a STALE (the adopter is silent).
 		if item.seq <= acked {
 			cursor = item.seq
-
+			index++
 			continue
 		}
 
-		if err := stream.Send(&pb.PublishRequest{Entry: item.entry}); err != nil {
+		entry, batch := coalescePublishedRecord(items[index:], acked)
+		if err := stream.Send(&pb.PublishRequest{Entry: entry}); err != nil {
 			// The recv side reports the definitive error; keep the cursor so
 			// nothing is skipped.
 			break
 		}
 
-		*inflight = append(*inflight, sent{item: item, at: time.Now()})
+		last := batch[len(batch)-1]
+		*inflight = append(*inflight, sent{item: item, batch: batch, at: time.Now()})
 		tracker.sent()
-		cursor = item.seq
+		cursor = last.seq
+		index += len(batch)
 
 		publishedCounter.Inc(1)
 	}
 
 	return cursor, true
+}
+
+func coalescePublishedRecord(items []journalItem, acked uint64) (*pb.Entry, []journalItem) {
+	first := items[0]
+	record := first.entry.GetRecord()
+	if record == nil {
+		return first.entry, []journalItem{first}
+	}
+
+	batch := make([]journalItem, 0, maxTransactionsPerPublishedRecord)
+	rawTransactions := make([][]byte, 0, maxTransactionsPerPublishedRecord)
+	var inputBytes uint64
+	for _, item := range items {
+		candidate := item.entry.GetRecord()
+		if item.seq <= acked || candidate == nil || item.height != first.height ||
+			len(rawTransactions)+len(candidate.GetTransactions()) > maxTransactionsPerPublishedRecord {
+			break
+		}
+		candidateBytes := uint64(0)
+		for _, raw := range candidate.GetTransactions() {
+			candidateBytes += uint64(len(raw))
+		}
+		if candidateBytes > pendingInputLimit-inputBytes {
+			break
+		}
+		batch = append(batch, item)
+		rawTransactions = append(rawTransactions, candidate.GetTransactions()...)
+		inputBytes += candidateBytes
+	}
+	if len(batch) == 0 {
+		return first.entry, []journalItem{first}
+	}
+	if len(batch) == 1 {
+		return first.entry, batch
+	}
+	return &pb.Entry{Kind: &pb.Entry_Record{Record: &pb.Record{
+		Transactions:     rawTransactions,
+		PrefixCommitment: record.GetPrefixCommitment(),
+	}}}, batch
 }
 
 // handleAck retires or rejects the oldest in-flight entry. done=true ends
@@ -317,8 +382,14 @@ func (p *Publisher) handleAck(ack ackResult, inflight *[]sent) (streamResult, bo
 
 	switch ack.status {
 	case pb.AckStatus_ACK_STATUS_OK:
-		if p.retire(first.item, first.at) {
-			return streamResult{reason: endWatch}, true
+		items := first.batch
+		if len(items) == 0 {
+			items = []journalItem{first.item}
+		}
+		for _, item := range items {
+			if p.retire(item, first.at) {
+				return streamResult{reason: endWatch}, true
+			}
 		}
 
 		return streamResult{}, false

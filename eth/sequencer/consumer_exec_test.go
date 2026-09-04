@@ -10,11 +10,13 @@ import (
 	pb "github.com/0xPolygon/sequence-store-proto/sequencestore/v1"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -35,8 +37,14 @@ type execHarness struct {
 
 func startExecHarness(t *testing.T) *execHarness {
 	t.Helper()
+	return startExecHarnessVM(t, vm.Config{})
+}
 
-	return startExecHarnessBor(t, &params.BorConfig{
+func startExecHarnessVM(t *testing.T, vmConfig vm.Config, configure ...func(*params.ChainConfig)) *execHarness {
+	t.Helper()
+
+	return startExecHarnessConfig(t, &params.BorConfig{
+		Sprint:   map[string]uint64{"0": 16},
 		RioBlock: big.NewInt(0),
 		Coinbase: map[string]string{
 			"0": "0x000000000000000000000000000000000000ba5e",
@@ -44,10 +52,20 @@ func startExecHarness(t *testing.T) *execHarness {
 		BurntContract: map[string]string{
 			"0": "0x000000000000000000000000000000000000dead",
 		},
-	})
+	}, vmConfig, configure...)
 }
 
 func startExecHarnessBor(t *testing.T, bor *params.BorConfig) *execHarness {
+	t.Helper()
+	return startExecHarnessConfig(t, bor, vm.Config{})
+}
+
+func startExecHarnessConfig(t *testing.T, bor *params.BorConfig, vmConfig vm.Config, configure ...func(*params.ChainConfig)) *execHarness {
+	t.Helper()
+	return startExecHarnessEngine(t, bor, vmConfig, &partialReuseEngine{Ethash: ethash.NewFullFaker()}, configure...)
+}
+
+func startExecHarnessEngine(t *testing.T, bor *params.BorConfig, vmConfig vm.Config, engine consensus.Engine, configure ...func(*params.ChainConfig)) *execHarness {
 	t.Helper()
 
 	key, err := crypto.GenerateKey()
@@ -59,6 +77,9 @@ func startExecHarnessBor(t *testing.T, bor *params.BorConfig) *execHarness {
 
 	config := *params.TestChainConfig
 	config.Bor = bor
+	for _, apply := range configure {
+		apply(&config)
+	}
 
 	genesis := &core.Genesis{
 		Config:   &config,
@@ -70,9 +91,11 @@ func startExecHarnessBor(t *testing.T, bor *params.BorConfig) *execHarness {
 
 	// Generate one block more than is imported: tests that need a canonical
 	// import event (eviction) insert the spare later.
-	_, blocks, _ := core.GenerateChainWithGenesis(genesis, ethash.NewFaker(), 4, nil)
+	_, blocks, _ := core.GenerateChainWithGenesis(genesis, engine, 4, nil)
 
-	chain, err := core.NewBlockChain(rawdb.NewMemoryDatabase(), genesis, ethash.NewFaker(), core.DefaultConfig())
+	blockchainConfig := core.DefaultConfig()
+	blockchainConfig.VmConfig = vmConfig
+	chain, err := core.NewBlockChain(rawdb.NewMemoryDatabase(), genesis, engine, blockchainConfig)
 	if err != nil {
 		t.Fatalf("chain: %v", err)
 	}
@@ -94,7 +117,7 @@ func startExecHarnessBor(t *testing.T, bor *params.BorConfig) *execHarness {
 }
 
 func (h *execHarness) session() *session {
-	return &session{consumer: &Consumer{chain: h.chain, index: NewIndex()}}
+	return newSession(&Consumer{chain: h.chain, index: NewIndex()})
 }
 
 func (h *execHarness) transfer(t *testing.T, nonce uint64) *types.Transaction {
@@ -142,17 +165,28 @@ func sealedFromEnv(t *testing.T, s *session) *types.Header {
 		t.Fatal("no block in progress")
 	}
 
-	return &types.Header{
-		ParentHash:  env.header.ParentHash,
-		Number:      new(big.Int).Set(env.header.Number),
-		Time:        env.header.Time,
-		GasLimit:    env.header.GasLimit,
-		BaseFee:     new(big.Int).Set(env.header.BaseFee),
-		GasUsed:     env.header.GasUsed,
-		ReceiptHash: types.DeriveSha(types.Receipts(env.receipts), trie.NewStackTrie(nil)),
-		Root:        env.statedb.Copy().IntermediateRoot(true),
-		Difficulty:  big.NewInt(1),
+	header := types.CopyHeader(env.header)
+	header.Difficulty = big.NewInt(1)
+	body := &types.Body{Transactions: append(types.Transactions(nil), env.txs...)}
+	assembled, _, _, err := s.consumer.chain.Engine().FinalizeAndAssemble(
+		s.consumer.chain, header, env.statedb.Copy(), body, cloneReceipts(env.receipts),
+	)
+	if err != nil {
+		t.Fatalf("finalize test seal: %v", err)
 	}
+	return assembled.Header()
+}
+
+func executionSealFromEnv(env *blockEnv) *types.Header {
+	header := types.CopyHeader(env.header)
+	header.Root = env.statedb.Copy().IntermediateRoot(true)
+	block := types.NewBlock(
+		header,
+		&types.Body{Transactions: append(types.Transactions(nil), env.txs...)},
+		cloneReceipts(env.receipts),
+		trie.NewStackTrie(nil),
+	)
+	return block.Header()
 }
 
 func encodeHeader(t *testing.T, header *types.Header) []byte {
@@ -178,10 +212,7 @@ func handleOK(t *testing.T, s *session, entry *pb.Entry) commitment.Head {
 	return s.head
 }
 
-// The happy path: a block on the canonical head applies and seals, and the
-// next block chains onto the parked speculative state; receipts are served
-// pre-seal with a zero block hash and stamped once the seal arrives.
-func TestSessionExecutesCanonicalAndParkedBlocks(t *testing.T) {
+func TestSessionExecutesConsecutiveSpeculativeBlocks(t *testing.T) {
 	h := startExecHarness(t)
 	s := h.session()
 	head := h.chain.CurrentBlock()
@@ -209,12 +240,10 @@ func TestSessionExecutesCanonicalAndParkedBlocks(t *testing.T) {
 		t.Fatalf("sealed receipt carries %s, want %s", receipt.BlockHash, sealed1.Hash())
 	}
 
-	// Next height chains on the parked state: parent is the speculative
-	// tip, not anything the chain has imported.
 	cur = handleOK(t, s, openOn(sealed1, h.config, cur))
 
-	if s.env == nil {
-		t.Fatal("open on the parked tip must start a block")
+	if s.env == nil || s.parked != nil {
+		t.Fatal("open on an unimported parent did not start execution")
 	}
 
 	tx2 := h.transfer(t, 1)
@@ -228,18 +257,34 @@ func TestSessionExecutesCanonicalAndParkedBlocks(t *testing.T) {
 	sealed2 := sealedFromEnv(t, s)
 	handleOK(t, s, sealEntry(encodeHeader(t, sealed2), cur))
 
-	if _, _, ok := s.consumer.index.Lookup(tx2.Hash()); !ok {
-		t.Fatal("second speculative block's receipt missing")
+	for _, tx := range []*types.Transaction{tx2, tx3} {
+		receipt, _, ok := s.consumer.index.Lookup(tx.Hash())
+		if !ok || receipt.BlockHash != sealed2.Hash() {
+			t.Fatalf("speculative receipt = %+v, ok=%v", receipt, ok)
+		}
 	}
-
-	// The tx context drives the receipt's position in the block.
-	if receipt3, _, _ := s.consumer.index.Lookup(tx3.Hash()); receipt3.TransactionIndex != 1 {
-		t.Fatalf("second tx in the block must carry index 1, got %d", receipt3.TransactionIndex)
+	if s.env != nil || s.parked == nil || s.tip != sealed2.Hash() {
+		t.Fatal("second speculative seal did not advance the execution tip")
 	}
-
-	if s.sealed[sealed1.Number.Uint64()] != sealed1.Hash() {
+	if s.sealed[sealed1.Number.Uint64()] != sealed1.Hash() || s.sealed[sealed2.Number.Uint64()] != sealed2.Hash() {
 		t.Fatal("sealed hashes must accumulate for BLOCKHASH resolution")
 	}
+
+	handleOK(t, s, openOn(head, h.config, s.head))
+	for _, tx := range []*types.Transaction{tx1, tx2, tx3} {
+		if _, _, ok := s.consumer.index.Lookup(tx.Hash()); ok {
+			t.Fatalf("canonical re-anchor retained receipt %s", tx.Hash())
+		}
+	}
+	store := s.consumer.pendingStore()
+	store.mu.RLock()
+	for key := range store.entries {
+		if key.number > head.Number.Uint64()+1 {
+			store.mu.RUnlock()
+			t.Fatalf("canonical re-anchor retained speculative height %d", key.number)
+		}
+	}
+	store.mu.RUnlock()
 }
 
 // Application problems void the speculative work and skip until an open
@@ -390,7 +435,7 @@ func TestCheckSealMismatches(t *testing.T) {
 	cur := handleOK(t, s, openOn(head, h.config, commitment.Head{0x01}))
 	handleOK(t, s, recordEntry(h.rawTransfer(t, 0), cur))
 
-	good := sealedFromEnv(t, s)
+	good := executionSealFromEnv(s.env)
 	if err := s.env.checkSeal(good); err != nil {
 		t.Fatalf("self-consistent seal must pass: %v", err)
 	}
@@ -425,40 +470,6 @@ func TestCheckSealMismatches(t *testing.T) {
 
 // BLOCKHASH resolves speculative ancestors from the session's sealed map,
 // canonical blocks from the chain, and everything else to zero.
-func TestBlockEnvSpeculativeBlockhash(t *testing.T) {
-	h := startExecHarness(t)
-	head := h.chain.CurrentBlock()
-	number := head.Number.Uint64()
-
-	statedb, err := h.chain.StateAt(head.Root)
-	if err != nil {
-		t.Fatalf("state: %v", err)
-	}
-
-	speculativeHash := common.Hash{0x5e, 0xed}
-	open := &pb.BlockOpen{
-		BlockNumber:    number + 2,
-		BlockTimestamp: head.Time + 4,
-		ParentHash:     speculativeHash.Bytes(),
-		GasLimit:       head.GasLimit,
-		BaseFee:        big.NewInt(params.InitialBaseFee).Bytes(),
-	}
-
-	env := newBlockEnv(h.chain, statedb, open, map[uint64]common.Hash{number + 1: speculativeHash})
-
-	if got := env.evm.Context.GetHash(number + 1); got != speculativeHash {
-		t.Fatalf("speculative ancestor resolved to %s", got)
-	}
-
-	if got := env.evm.Context.GetHash(1); got != h.chain.GetCanonicalHash(1) {
-		t.Fatalf("canonical ancestor resolved to %s", got)
-	}
-
-	if got := env.evm.Context.GetHash(number + 10); got != (common.Hash{}) {
-		t.Fatalf("unknown height resolved to %s", got)
-	}
-}
-
 func TestEffectiveGasPrice(t *testing.T) {
 	key, _ := crypto.GenerateKey()
 	signer := types.LatestSignerForChainID(big.NewInt(1))

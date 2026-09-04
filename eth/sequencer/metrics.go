@@ -44,8 +44,14 @@ var (
 
 	// Consumer-side preconfirmation pipeline: per-tx re-execution latency
 	// and receipts served to RPC readers before canonical import.
-	preconfApplyTimer  = metrics.NewRegisteredTimer("sequencer/preconf/apply", nil)
-	preconfServedMeter = metrics.NewRegisteredMeter("sequencer/preconf/served", nil)
+	preconfApplyTimer         = metrics.NewRegisteredTimer("sequencer/preconf/apply", nil)
+	preconfPublishedReceipts  = metrics.NewRegisteredCounter("sequencer/preconf/publishedreceipts", nil)
+	preconfCanonicalReceipts  = metrics.NewRegisteredCounter("sequencer/preconf/canonicalreceipts", nil)
+	preconfSenderCacheHit     = metrics.NewRegisteredCounter("sequencer/preconf/sendercachehit", nil)
+	preconfSenderCacheMiss    = metrics.NewRegisteredCounter("sequencer/preconf/sendercachemiss", nil)
+	preconfServedMeter        = metrics.NewRegisteredMeter("sequencer/preconf/served", nil)
+	preconfPendingLogsDropped = metrics.NewRegisteredCounter("sequencer/preconf/pendinglogsdropped", nil)
+	preconfPendingEntries     = metrics.NewRegisteredGauge("sequencer/preconf/pendingentries", nil)
 
 	reconcileGapfill     = metrics.NewRegisteredCounter("sequencer/reconcile/gapfill", nil)
 	reconcileAdopt       = metrics.NewRegisteredCounter("sequencer/reconcile/adopt", nil)

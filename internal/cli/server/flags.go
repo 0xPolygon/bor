@@ -798,6 +798,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.JsonRPC.TxSyncMaxTimeout,
 		Group:   "JsonRPC",
 	})
+	f.IntFlag(&flagset.IntFlag{
+		Name:    "rpc.txsync.maxconcurrent",
+		Usage:   "Maximum eth_sendRawTransactionSync calls waiting for a receipt at once (0 = no limit)",
+		Value:   &c.cliConfig.JsonRPC.TxSyncMaxConcurrent,
+		Default: c.cliConfig.JsonRPC.TxSyncMaxConcurrent,
+		Group:   "JsonRPC",
+	})
 	f.BoolFlag(&flagset.BoolFlag{
 		Name:    "ipcdisable",
 		Usage:   "Disable the IPC-RPC server",

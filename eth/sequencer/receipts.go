@@ -40,17 +40,39 @@ func NewIndex() *Index {
 // The receipt must not be mutated after this call — Lookup hands the stored
 // pointer to concurrent RPC readers.
 func (ix *Index) Add(tx *types.Transaction, receipt *types.Receipt) {
+	ix.AddBatch(types.Transactions{tx}, types.Receipts{receipt})
+}
+
+func (ix *Index) AddBatch(txs types.Transactions, receipts types.Receipts) bool {
+	if len(txs) == 0 || len(txs) != len(receipts) {
+		return false
+	}
+	if txs[0] == nil || receipts[0] == nil || receipts[0].BlockNumber == nil {
+		return false
+	}
+	number := receipts[0].BlockNumber.Uint64()
+	for index, tx := range txs {
+		receipt := receipts[index]
+		if tx == nil || receipt == nil || receipt.BlockNumber == nil || receipt.BlockNumber.Uint64() != number {
+			return false
+		}
+	}
+
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
-
-	number := receipt.BlockNumber.Uint64()
 
 	if _, held := ix.byBlock[number]; !held && len(ix.byBlock) >= maxIndexedHeights {
 		ix.dropLowestLocked()
 	}
 
-	ix.byHash[tx.Hash()] = &indexed{receipt: receipt, tx: tx}
-	ix.byBlock[number] = append(ix.byBlock[number], tx.Hash())
+	for index, tx := range txs {
+		receipt := receipts[index]
+		hash := tx.Hash()
+		ix.byHash[hash] = &indexed{receipt: receipt, tx: tx}
+		ix.byBlock[number] = append(ix.byBlock[number], hash)
+	}
+	preconfPublishedReceipts.Inc(int64(len(txs)))
+	return true
 }
 
 // Seal fills the sealed block hash into the height's receipts and their
@@ -115,6 +137,23 @@ func (ix *Index) Lookup(hash common.Hash) (*types.Receipt, *types.Transaction, b
 	preconfServedMeter.Mark(1)
 
 	return entry.receipt, entry.tx, true
+}
+
+func (ix *Index) CountCanonical(block *types.Block) int {
+	if block == nil {
+		return 0
+	}
+	ix.mu.RLock()
+	defer ix.mu.RUnlock()
+	number := block.NumberU64()
+	count := 0
+	for _, tx := range block.Transactions() {
+		entry := ix.byHash[tx.Hash()]
+		if entry != nil && entry.receipt != nil && entry.receipt.BlockNumber != nil && entry.receipt.BlockNumber.Uint64() == number {
+			count++
+		}
+	}
+	return count
 }
 
 // ClearFrom drops all entries at or above a height — a re-anchor voided them.

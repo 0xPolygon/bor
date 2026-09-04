@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc"
@@ -11,20 +13,26 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
-	"github.com/0xPolygon/sequence-store-proto/commitment"
 	pb "github.com/0xPolygon/sequence-store-proto/sequencestore/v1"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
-	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
 )
 
 const consumerRetryDelay = 2 * time.Second
 
+const recentPreconfTransactionLimit = 65_536
+
+type TransactionLookup interface {
+	Get(common.Hash) *types.Transaction
+}
+
 // Consumer follows the sequence store stream on an RPC node, re-executes it
-// on top of canonical state, and fills the preconf receipt Index that
-// eth_getTransactionReceipt consults for not-yet-imported transactions.
+// from canonical or parked speculative state, and fills the preconf receipt
+// Index exposed through the explicit Bor preconfirmation receipt endpoint.
 //
 // Position and application are handled separately, per the design's
 // chain-everything-apply-selectively rule: only commitment gaps and transport
@@ -34,27 +42,85 @@ const consumerRetryDelay = 2 * time.Second
 // seal divergence — void the speculative work and skip forward until an open
 // record re-anchors on a canonical block.
 type Consumer struct {
-	chain    *core.BlockChain
-	endpoint string
-	index    *Index
+	chain        *core.BlockChain
+	endpoint     string
+	txLookup     TransactionLookup
+	index        *Index
+	publishMu    sync.Mutex
+	storeMu      sync.Mutex
+	store        *PendingStore
+	logsFeed     event.Feed
+	logsScope    event.SubscriptionScope
+	receiptFeed  event.Feed
+	receiptScope event.SubscriptionScope
+	recentMu     sync.Mutex
+	recentTxs    map[common.Hash]*types.Transaction
+	recentOrder  []common.Hash
+	logsMu       sync.Mutex
+	logsQueue    [][]*types.Log
+	logsBusy     bool
+	logsClosed   bool
+	logsWG       sync.WaitGroup
+	worker       atomic.Pointer[preconfWorker]
+	reconciled   atomic.Pointer[types.Header]
+	handoff      atomic.Pointer[types.Header]
+	sealVerify   atomic.Bool
 
 	cancel context.CancelFunc
-	done   chan struct{}
+	wg     sync.WaitGroup
 }
 
 // NewConsumer returns a stopped consumer. Determinism preconditions (Rio
 // active, coinbase map present) are re-checked per session, not here — a
 // node still syncing pre-Rio history becomes eligible once it catches up.
 func NewConsumer(endpoint string, chain *core.BlockChain) (*Consumer, error) {
+	return NewConsumerWithTransactionLookup(endpoint, chain, nil)
+}
+
+func NewConsumerWithTransactionLookup(endpoint string, chain *core.BlockChain, txLookup TransactionLookup) (*Consumer, error) {
 	if chain.Config().Bor == nil {
 		return nil, errors.New("sequencer consumer requires a bor chain")
 	}
 
-	return &Consumer{
-		chain:    chain,
-		endpoint: endpoint,
-		index:    NewIndex(),
-	}, nil
+	consumer := &Consumer{
+		chain:     chain,
+		endpoint:  endpoint,
+		txLookup:  txLookup,
+		index:     NewIndex(),
+		store:     NewPendingStore(chain.DB()),
+		recentTxs: make(map[common.Hash]*types.Transaction),
+	}
+	consumer.reconciled.Store(chain.CurrentBlock())
+	return consumer, nil
+}
+
+func (c *Consumer) CachePreconfTransaction(tx *types.Transaction) error {
+	if tx == nil {
+		return errors.New("nil preconf transaction")
+	}
+	if _, err := types.Sender(types.LatestSigner(c.chain.Config()), tx); err != nil {
+		return err
+	}
+	hash := tx.Hash()
+	c.recentMu.Lock()
+	defer c.recentMu.Unlock()
+	if _, exists := c.recentTxs[hash]; exists {
+		return nil
+	}
+	c.recentTxs[hash] = tx
+	c.recentOrder = append(c.recentOrder, hash)
+	if len(c.recentTxs) > recentPreconfTransactionLimit {
+		oldest := c.recentOrder[0]
+		c.recentOrder = c.recentOrder[1:]
+		delete(c.recentTxs, oldest)
+	}
+	return nil
+}
+
+func (c *Consumer) cachedPreconfTransaction(hash common.Hash) *types.Transaction {
+	c.recentMu.Lock()
+	defer c.recentMu.Unlock()
+	return c.recentTxs[hash]
 }
 
 // Index exposes the preconf receipts for the RPC layer.
@@ -62,22 +128,100 @@ func (c *Consumer) Index() *Index {
 	return c.index
 }
 
+func (c *Consumer) SubscribePendingLogs(ch chan<- []*types.Log) event.Subscription {
+	sub := c.logsFeed.Subscribe(ch)
+	tracked := c.logsScope.Track(sub)
+	if tracked != nil {
+		return tracked
+	}
+	sub.Unsubscribe()
+	return sub
+}
+
+func (c *Consumer) SubscribePreconfReceipts(ch chan<- core.PreconfReceiptsEvent) event.Subscription {
+	sub := c.receiptFeed.Subscribe(ch)
+	tracked := c.receiptScope.Track(sub)
+	if tracked != nil {
+		return tracked
+	}
+	sub.Unsubscribe()
+	return sub
+}
+
+func (c *Consumer) enqueuePendingLogs(logs []*types.Log) {
+	if len(logs) == 0 {
+		return
+	}
+	c.logsMu.Lock()
+	if c.logsClosed {
+		c.logsMu.Unlock()
+		return
+	}
+	if len(c.logsQueue) == pendingLogsQueueLimit {
+		c.logsQueue[0] = nil
+		c.logsQueue = c.logsQueue[1:]
+		preconfPendingLogsDropped.Inc(1)
+	}
+	c.logsQueue = append(c.logsQueue, logs)
+	if c.logsBusy {
+		c.logsMu.Unlock()
+		return
+	}
+	c.logsBusy = true
+	c.logsWG.Add(1)
+	c.logsMu.Unlock()
+	go c.dispatchPendingLogs()
+}
+
+func (c *Consumer) dispatchPendingLogs() {
+	defer c.logsWG.Done()
+	for {
+		c.logsMu.Lock()
+		if len(c.logsQueue) == 0 {
+			c.logsBusy = false
+			c.logsMu.Unlock()
+			return
+		}
+		logs := c.logsQueue[0]
+		c.logsQueue[0] = nil
+		c.logsQueue = c.logsQueue[1:]
+		c.logsMu.Unlock()
+		c.logsFeed.Send(logs)
+	}
+}
+
 // Start launches the stream-follow loop.
 func (c *Consumer) Start() {
 	ctx, cancel := context.WithCancel(context.Background())
 	c.cancel = cancel
-	c.done = make(chan struct{})
 
-	go c.run(ctx)
-	go c.evictLoop(ctx)
+	c.wg.Add(2)
+	go func() {
+		defer c.wg.Done()
+		c.run(ctx)
+	}()
+	go func() {
+		defer c.wg.Done()
+		c.evictLoop(ctx)
+	}()
 }
 
-// Close stops the consumer and waits for the follow loop to exit.
+// Close stops the consumer and waits for its loops to exit.
 func (c *Consumer) Close() {
 	if c.cancel != nil {
 		c.cancel()
-		<-c.done
+		c.wg.Wait()
 	}
+	c.logsMu.Lock()
+	c.logsClosed = true
+	for index := range c.logsQueue {
+		c.logsQueue[index] = nil
+	}
+	c.logsQueue = nil
+	c.logsMu.Unlock()
+	c.logsScope.Close()
+	c.receiptScope.Close()
+	c.logsWG.Wait()
 }
 
 // deterministic reports whether the producer's execution context is
@@ -101,8 +245,6 @@ func (c *Consumer) deterministic() error {
 }
 
 func (c *Consumer) run(ctx context.Context) {
-	defer close(c.done)
-
 	var sess *session
 
 	for {
@@ -118,6 +260,7 @@ func (c *Consumer) run(ctx context.Context) {
 		}
 
 		log.Warn("Sequence stream session ended", "err", err)
+		c.invalidatePendingFromReason(0, "session_lost")
 
 		select {
 		case <-ctx.Done():
@@ -134,17 +277,83 @@ func (c *Consumer) evictLoop(ctx context.Context) {
 	sub := c.chain.SubscribeChainHeadEvent(heads)
 
 	defer sub.Unsubscribe()
+	c.handleCanonicalHead()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case head := <-heads:
-			c.index.EvictThrough(head.Header.Number.Uint64())
+		case _, ok := <-heads:
+			if !ok {
+				return
+			}
+			c.handleCanonicalHead()
 		case <-sub.Err():
 			return
 		}
 	}
+}
+
+func (c *Consumer) handleCanonicalHead() {
+	c.publishMu.Lock()
+	invalidations := c.reconcileCanonicalHeadLocked()
+	c.publishMu.Unlock()
+	c.pendingStore().writeInvalidations(invalidations)
+}
+
+func (c *Consumer) reconcileCanonicalHeadLocked() []pendingInvalidation {
+	head := c.chain.CurrentBlock()
+	number := head.Number.Uint64()
+	c.index.EvictThrough(number)
+	logs, invalidations := c.pendingStore().reconcileThroughMemory(number, c.chain.GetBlockByNumber, c.chain.GetReceiptsByHash)
+	var clearFrom *uint64
+	for _, invalidation := range invalidations {
+		if invalidation.number <= number || (clearFrom != nil && invalidation.number >= *clearFrom) {
+			continue
+		}
+		height := invalidation.number
+		clearFrom = &height
+	}
+	if clearFrom != nil {
+		c.index.ClearFrom(*clearFrom)
+	}
+	c.reconciled.Store(head)
+	c.clearCanonicalHandoffThrough(head)
+	c.enqueuePendingLogs(logs)
+	return invalidations
+}
+
+func (c *Consumer) ensureCanonicalHeadReconciled() bool {
+	c.publishMu.Lock()
+	head := c.chain.CurrentBlock()
+	if head == nil || head.Number == nil {
+		c.publishMu.Unlock()
+		return false
+	}
+	handoff := c.handoff.Load()
+	if handoff != nil && handoff.Number != nil && handoff.Number.Cmp(head.Number) == 0 && handoff.Hash() != head.Hash() {
+		c.publishMu.Unlock()
+		return false
+	}
+	marker := c.reconciled.Load()
+	if marker != nil {
+		if marker.Hash() == head.Hash() {
+			c.clearCanonicalHandoffThrough(head)
+			c.publishMu.Unlock()
+			return true
+		}
+		if marker.Number != nil && marker.Number.Cmp(head.Number) > 0 {
+			c.publishMu.Unlock()
+			return false
+		}
+	}
+	invalidations := c.reconcileCanonicalHeadLocked()
+	marker = c.reconciled.Load()
+	head = c.chain.CurrentBlock()
+	ready := marker != nil && head != nil && marker.Hash() == head.Hash()
+	c.publishMu.Unlock()
+	c.pendingStore().writeInvalidations(invalidations)
+	return ready
 }
 
 // resumeRequest picks the stream position, never asking the same anchor
@@ -170,7 +379,9 @@ func (c *Consumer) resumeRequest(sess *session, attempt int) *pb.StreamRequest {
 // resume when the stream position is still valid, or nil when position was
 // lost (commitment gap, malformed entry) and the next attempt must re-anchor.
 func (c *Consumer) follow(ctx context.Context, sess *session) (*session, error) {
-	conn, err := grpc.NewClient(c.endpoint, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// The endpoint is an operator-controlled internal service. Transport security
+	// is provided by that network boundary; Bor still authenticates sealed headers.
+	conn, err := grpc.NewClient(c.endpoint, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(pendingInputLimit+1024*1024)))
 	if err != nil {
 		return sess, fmt.Errorf("dial sequence store: %w", err)
 	}
@@ -184,18 +395,20 @@ func (c *Consumer) follow(ctx context.Context, sess *session) (*session, error) 
 	client := pb.NewConsumerServiceClient(conn)
 
 	for attempt := 0; ; attempt++ {
-		stream, serr := client.Stream(ctx, c.resumeRequest(sess, attempt))
+		streamCtx, cancelStream := context.WithCancel(ctx)
+		stream, serr := client.Stream(streamCtx, c.resumeRequest(sess, attempt))
 		if serr != nil {
+			cancelStream()
 			return sess, fmt.Errorf("open stream: %w", serr)
 		}
 
 		if attempt > 0 || sess == nil {
 			// Any non-warm position invalidates the old fold state.
-			sess = &session{consumer: c}
-			c.index.Reset()
+			sess = newSession(c)
+			c.invalidatePendingFromReason(0, "session_lost")
 		}
 
-		sess, err = c.consume(stream, sess)
+		sess, err = c.consume(streamCtx, cancelStream, stream, sess)
 		if status.Code(err) == codes.NotFound && attempt < 2 {
 			continue
 		}
@@ -204,229 +417,51 @@ func (c *Consumer) follow(ctx context.Context, sess *session) (*session, error) 
 	}
 }
 
-func (c *Consumer) consume(stream pb.ConsumerService_StreamClient, sess *session) (*session, error) {
+func (c *Consumer) consume(ctx context.Context, cancel context.CancelFunc, stream streamReceiver, sess *session) (*session, error) {
+	sess.ctx = ctx
+	prepared := make(chan preparedStreamFrame)
+	done := make(chan struct{})
+	state := sess.preparationSnapshot()
+	go func() {
+		defer close(done)
+		c.prepareStream(ctx, stream, state, prepared)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
 	for {
-		frame, err := stream.Recv()
-		if err != nil {
-			return sess, fmt.Errorf("stream recv: %w", err)
-		}
-
-		entry := frame.GetEntry()
-		if entry == nil {
-			log.Info("Sequence stream live", "head", fmt.Sprintf("%x", sess.head[:8]))
-
-			continue
-		}
-
-		if err := sess.handle(entry); err != nil {
-			// Position lost: the caller must re-anchor, not resume.
-			return nil, err
+		select {
+		case <-ctx.Done():
+			return sess, ctx.Err()
+		case frame, ok := <-prepared:
+			if !ok {
+				return sess, ctx.Err()
+			}
+			next, err := handlePreparedStreamFrame(sess, frame)
+			if err != nil {
+				return next, err
+			}
 		}
 	}
 }
 
-// session is one consistent stretch of the stream: a running commitment
-// head, the speculative execution state, and the speculative seal hashes for
-// BLOCKHASH resolution. env == nil between blocks and while skipping.
-type session struct {
-	consumer *Consumer
-	head     commitment.Head
-	seeded   bool
-	env      *blockEnv      // block currently being applied
-	parked   *state.StateDB // post-state of the last speculative seal
-	tip      common.Hash    // last speculatively sealed hash
-	sealed   map[uint64]common.Hash
-}
-
-// handle verifies one entry against the commitment chain, folds it, and
-// applies it best-effort. An error means the stream position itself is
-// invalid; application problems skip instead (void speculative work, wait
-// for a re-anchoring open).
-func (s *session) handle(entry *pb.Entry) error {
-	prefix, next, err := s.fold(entry)
+func handlePreparedStreamFrame(sess *session, frame preparedStreamFrame) (*session, error) {
+	if frame.recvErr != nil {
+		return sess, fmt.Errorf("stream recv: %w", frame.recvErr)
+	}
+	if frame.entry == nil {
+		log.Info("Sequence stream live", "head", fmt.Sprintf("%x", sess.head[:8]))
+		return sess, nil
+	}
+	err := sess.handlePrepared(frame)
+	if frame.openApplied != nil {
+		close(frame.openApplied)
+	}
 	if err != nil {
-		return err
+		// Position lost: the caller must re-anchor, not resume.
+		return nil, err
 	}
-
-	if !s.seeded {
-		// Cold start: adopt the stream's prefix as the seed; integrity from
-		// here comes from the chain and the self-authenticating seals.
-		s.head = prefix
-		s.seeded = true
-
-		var refold error
-		if _, next, refold = s.fold(entry); refold != nil {
-			return refold
-		}
-	} else if prefix != s.head {
-		return fmt.Errorf("commitment gap: entry prefix %x != running head %x", prefix[:8], s.head[:8])
-	}
-
-	s.apply(entry)
-	s.head = next
-
-	return nil
-}
-
-// fold checks an entry's wire shape, computes its post-fold head over the
-// running head, and returns the entry's claimed prefix alongside it.
-func (s *session) fold(entry *pb.Entry) (commitment.Head, commitment.Head, error) {
-	prefix := entryPrefix(entry)
-	if len(prefix) != 32 {
-		return commitment.Head{}, commitment.Head{}, errors.New("malformed entry prefix")
-	}
-
-	if open := entry.GetBlockOpen(); open != nil && len(open.GetParentHash()) != 32 {
-		return commitment.Head{}, commitment.Head{}, errors.New("malformed open parent hash")
-	}
-
-	next, err := foldEntry(s.head, entry)
-	if err != nil {
-		return commitment.Head{}, commitment.Head{}, err
-	}
-
-	return commitment.Head(prefix), next, nil
-}
-
-func (s *session) apply(entry *pb.Entry) {
-	switch kind := entry.GetKind().(type) {
-	case *pb.Entry_BlockOpen:
-		s.applyOpen(kind.BlockOpen)
-	case *pb.Entry_Record:
-		s.applyRecord(kind.Record)
-	case *pb.Entry_BlockSeal:
-		s.applySeal(kind.BlockSeal)
-	}
-}
-
-// skip voids the speculative work from a height upward and waits for the
-// next re-anchoring open.
-func (s *session) skip(from uint64, reason string, args ...any) {
-	log.Warn("Preconf application skipped: "+reason, args...)
-	s.consumer.index.ClearFrom(from)
-	s.env = nil
-	s.parked = nil
-}
-
-// applyOpen starts a speculative block. A canonical parent is preferred as
-// the base even on the happy path — it bounds how long one speculative
-// StateDB lives; the parked post-seal state covers parents the chain hasn't
-// imported yet.
-func (s *session) applyOpen(open *pb.BlockOpen) {
-	parent := common.BytesToHash(open.GetParentHash())
-	number := open.GetBlockNumber()
-
-	if s.env != nil {
-		// A new open while a block is still open is a producer rebuild of
-		// the in-progress height; its state is unusable.
-		s.skip(s.env.header.Number.Uint64(), "producer rebuilt in-progress block", "number", number)
-	}
-
-	if header := s.consumer.chain.GetHeaderByHash(parent); header != nil &&
-		s.consumer.chain.GetCanonicalHash(header.Number.Uint64()) == parent {
-		if number != header.Number.Uint64()+1 {
-			s.skip(number, "open height is not parent height+1", "number", number, "parent", header.Number)
-
-			return
-		}
-
-		statedb, err := s.consumer.chain.StateAt(header.Root)
-		if err != nil {
-			s.skip(number, "parent state unavailable", "parent", parent, "err", err)
-
-			return
-		}
-
-		s.consumer.index.ClearFrom(number)
-		s.pruneSealed(number)
-
-		s.tip = parent
-		s.parked = nil
-		s.env = newBlockEnv(s.consumer.chain, statedb, open, s.sealed)
-
-		return
-	}
-
-	if parent == s.tip && s.parked != nil {
-		s.env = newBlockEnv(s.consumer.chain, s.parked, open, s.sealed)
-		s.parked = nil
-
-		return
-	}
-
-	s.skip(number, "open parent neither canonical nor speculative tip", "parent", parent)
-}
-
-func (s *session) applyRecord(record *pb.Record) {
-	if s.env == nil {
-		return // skipping until the next re-anchoring open
-	}
-
-	for _, raw := range record.GetTransactions() {
-		start := time.Now()
-
-		tx, receipt, err := s.env.applyRaw(raw)
-		if err != nil {
-			s.skip(s.env.header.Number.Uint64(), "re-execution diverged", "err", err)
-
-			return
-		}
-
-		s.consumer.index.Add(tx, receipt)
-		preconfApplyTimer.UpdateSince(start)
-	}
-}
-
-func (s *session) applySeal(seal *pb.BlockSeal) {
-	if s.env == nil {
-		return // skipping until the next re-anchoring open
-	}
-
-	sealed, err := decodeSealHeader(seal.GetHeader())
-	if err != nil {
-		s.skip(s.env.header.Number.Uint64(), "undecodable sealed header", "err", err)
-
-		return
-	}
-
-	if err := s.env.checkSeal(sealed); err != nil {
-		s.skip(s.env.header.Number.Uint64(), "seal cross-check failed", "err", err)
-
-		return
-	}
-
-	sealedHash := common.Hash(commitment.SealedHash(seal.GetHeader()))
-	number := s.env.header.Number.Uint64()
-
-	s.consumer.index.Seal(number, sealedHash)
-
-	if s.sealed == nil {
-		s.sealed = map[uint64]common.Hash{}
-	}
-
-	s.sealed[number] = sealedHash
-
-	// BLOCKHASH reaches at most 256 back; older speculative hashes would
-	// otherwise accumulate for the whole parked stretch.
-	for height := range s.sealed {
-		if height+256 < number {
-			delete(s.sealed, height)
-		}
-	}
-
-	// Park the post-block state as the base for the next open.
-	s.tip = sealedHash
-	s.parked = s.env.statedb
-	s.env = nil
-}
-
-// pruneSealed drops speculative seal hashes that a canonical re-anchor
-// superseded (at or above the new height) or that BLOCKHASH can no longer
-// reach (more than 256 below it).
-func (s *session) pruneSealed(number uint64) {
-	for height := range s.sealed {
-		if height >= number || height+256 < number {
-			delete(s.sealed, height)
-		}
-	}
+	return sess, nil
 }

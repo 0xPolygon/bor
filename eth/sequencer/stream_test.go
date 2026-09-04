@@ -134,3 +134,51 @@ func TestHandleAckOKMarksProgress(t *testing.T) {
 		t.Fatal("ok ack must confirm the anchor")
 	}
 }
+
+func TestCoalescePublishedRecord(t *testing.T) {
+	start := commitment.Head{0x01}
+	items := make([]journalItem, 3)
+	head := start
+	for index := range items {
+		raw := []byte{byte(index + 1)}
+		next := commitment.FoldTx(head, raw)
+		items[index] = journalItem{
+			seq:    uint64(index + 1),
+			entry:  recordEntry(raw, head),
+			pre:    head,
+			post:   next,
+			kind:   entryRecord,
+			height: 7,
+		}
+		head = next
+	}
+
+	entry, batch := coalescePublishedRecord(items, 0)
+	if len(batch) != len(items) {
+		t.Fatalf("batch length = %d, want %d", len(batch), len(items))
+	}
+	if got := entry.GetRecord().GetTransactions(); len(got) != 3 || got[0][0] != 1 || got[2][0] != 3 {
+		t.Fatalf("transactions = %v", got)
+	}
+	if got := commitment.FoldTxs(start, entry.GetRecord().GetTransactions()); got != items[len(items)-1].post {
+		t.Fatalf("batch commitment = %x, want %x", got, items[len(items)-1].post)
+	}
+}
+
+func TestHandleAckRetiresPublishedRecordBatch(t *testing.T) {
+	p := barePublisher()
+	items := make([]journalItem, 3)
+	for index := range items {
+		items[index] = journalItem{seq: uint64(index + 1), post: commitment.Head{byte(index + 1)}}
+		p.journal.items = append(p.journal.items, items[index])
+	}
+	p.journal.nextSeq = 4
+	inflight := []sent{{item: items[0], batch: items, at: time.Now()}}
+
+	if _, done := p.handleAck(ackResult{status: pb.AckStatus_ACK_STATUS_OK}, &inflight); done {
+		t.Fatal("batched record ack ended the stream")
+	}
+	if p.ackedSeq != 3 || p.anchor != items[2].post {
+		t.Fatalf("acked = %d, anchor = %x", p.ackedSeq, p.anchor)
+	}
+}
