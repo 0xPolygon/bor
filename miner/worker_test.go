@@ -40,7 +40,6 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/clique"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core"
-	"github.com/ethereum/go-ethereum/core/blockstm"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/tracing"
@@ -55,7 +54,6 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/tests/bor/mocks"
 	"github.com/ethereum/go-ethereum/trie"
-	"github.com/ethereum/go-ethereum/triedb"
 
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
 	borSpan "github.com/ethereum/go-ethereum/consensus/bor/heimdall/span"
@@ -909,13 +907,21 @@ func testCommitInterruptExperimentBor(t *testing.T, delay uint, txCount int) {
 	// Start mining!
 	w.start()
 
-	// Wait for at least one block to be mined with a proper timeout
+	// Wait for the first non-empty block. Bor can pre-seal an empty block
+	// before the full block, and the test is about the interrupted full-block
+	// path rather than the empty pre-seal event.
 	var minedBlock *types.Block
-	select {
-	case ev := <-sub.Chan():
-		minedBlock = ev.Data.(core.NewMinedBlockEvent).Block
-	case <-time.After(8 * time.Second):
-		t.Fatal("timeout waiting for block to be mined")
+	timeout := time.After(8 * time.Second)
+	for minedBlock == nil {
+		select {
+		case ev := <-sub.Chan():
+			block := ev.Data.(core.NewMinedBlockEvent).Block
+			if block != nil && block.NumberU64() > 0 && block.Transactions().Len() > 0 {
+				minedBlock = block
+			}
+		case <-timeout:
+			t.Fatal("timeout waiting for non-empty block to be mined")
+		}
 	}
 
 	w.stop()
@@ -1026,14 +1032,10 @@ func TestCommitInterruptExperimentBor_NewTxFlow(t *testing.T) {
 
 	// Ensure that the last block was 3 and only 2/3 transactions are mined because
 	// of the 500ms timeout and 1s block time.
-	// Access w.current safely using getCurrent()
-	current := w.getCurrent()
-	if current == nil || current.header == nil {
-		t.Fatal("worker current state is not initialized")
-	}
-	assert.Equal(t, current.header.Number.Uint64(), uint64(3))
-	assert.Equal(t, current.tcount, 2)
-	assert.Equal(t, len(current.txs), 2)
+	require.Eventually(t, func() bool {
+		block := w.pendingBlock()
+		return block != nil && block.NumberU64() == 3 && block.Transactions().Len() == 2
+	}, 2*time.Second, 10*time.Millisecond, "expected pending block 3 with 2 transactions")
 }
 
 // nolint:paralleltest
@@ -1125,6 +1127,37 @@ func TestCommitInterruptPending(t *testing.T) {
 	// Wait for the goroutine to complete or timeout
 	<-testDone
 	w.stop()
+}
+
+func TestCreateInterruptTimer_IsolatedPerBuild(t *testing.T) {
+	t.Parallel()
+
+	first := newBuildInterruptState()
+	second := newBuildInterruptState()
+
+	stopFirst := createInterruptTimer(1, time.Now().Add(25*time.Millisecond), first.timeoutFlag(), first.flagSetAtPtr(), true)
+	defer stopFirst()
+	stopSecond := createInterruptTimer(2, time.Now().Add(500*time.Millisecond), second.timeoutFlag(), second.flagSetAtPtr(), true)
+	defer stopSecond()
+
+	require.Eventually(t, func() bool {
+		return first.timedOut.Load()
+	}, time.Second, 10*time.Millisecond)
+	require.NotZero(t, first.flagSetAt.Load())
+	require.False(t, second.timedOut.Load(), "one build's timeout must not trip another build")
+	require.Zero(t, second.flagSetAt.Load())
+}
+
+func TestCreateInterruptTimer_CancelDoesNotTripInterrupt(t *testing.T) {
+	t.Parallel()
+
+	state := newBuildInterruptState()
+	stop := createInterruptTimer(1, time.Now().Add(500*time.Millisecond), state.timeoutFlag(), state.flagSetAtPtr(), true)
+	stop()
+
+	time.Sleep(50 * time.Millisecond)
+	require.False(t, state.timedOut.Load(), "canceling a build timer must not look like a timeout")
+	require.Zero(t, state.flagSetAt.Load())
 }
 
 // TestBenchmarkPending is a simple benchmark test to measure the performance of transaction pool. It inserts
@@ -1289,132 +1322,6 @@ func BenchmarkBorMining(b *testing.B) {
 
 			if _, err := chain.InsertChain([]*types.Block{block}, false); err != nil {
 				b.Fatalf("failed to insert new mined block %d: %v", block.NumberU64(), err)
-			}
-
-			b.Log("block", block.NumberU64(), "time", block.Time()-prev, "txs", block.Transactions().Len(), "gasUsed", block.GasUsed(), "gasLimit", block.GasLimit())
-
-			prev = block.Time()
-		case <-time.After(time.Duration(blockPeriod) * time.Second):
-			b.Fatalf("timeout")
-		}
-	}
-}
-
-// uses core.NewParallelBlockChain to use the dependencies present in the block header
-// params.BorUnittestChainConfig contains the NapoliBlock as big.NewInt(5), so the first 4 blocks will not have metadata.
-// nolint:gocognit
-func BenchmarkBorMiningBlockSTMMetadata(b *testing.B) {
-	chainConfig := params.BorUnittestChainConfig
-
-	ctrl := gomock.NewController(b)
-	defer ctrl.Finish()
-
-	ethAPIMock := api.NewMockCaller(ctrl)
-	ethAPIMock.EXPECT().Call(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
-
-	spanner := bor.NewMockSpanner(ctrl)
-	spanner.EXPECT().GetCurrentValidatorsByHash(gomock.Any(), gomock.Any(), gomock.Any()).Return([]*valset.Validator{
-		{
-			ID:               0,
-			Address:          TestBankAddress,
-			VotingPower:      100,
-			ProposerPriority: 0,
-		},
-	}, nil).AnyTimes()
-
-	heimdallClientMock := mocks.NewMockIHeimdallClient(ctrl)
-	heimdallClientMock.EXPECT().FetchStatus(gomock.Any()).Return(&ctypes.SyncInfo{CatchingUp: false}, nil).AnyTimes()
-	heimdallWSClient := mocks.NewMockIHeimdallWSClient(ctrl)
-	heimdallClientMock.EXPECT().Close().Times(1)
-
-	contractMock := bor.NewMockGenesisContract(ctrl)
-
-	db, _, _ := NewDBForFakes(b)
-
-	engine := NewFakeBor(b, db, chainConfig, ethAPIMock, spanner, heimdallClientMock, heimdallWSClient, contractMock)
-	defer engine.Close()
-
-	chainConfig.LondonBlock = big.NewInt(0)
-
-	w, back, _ := newTestWorker(b, DefaultTestConfig(), chainConfig, engine, rawdb.NewMemoryDatabase(), false, 0)
-	defer w.close()
-
-	// This test chain imports the mined blocks.
-	db2 := rawdb.NewMemoryDatabase()
-	back.genesis.MustCommit(db2, triedb.NewDatabase(db2, triedb.HashDefaults))
-
-	chain, _ := core.NewParallelBlockChain(db2, back.genesis, engine, core.DefaultConfig(), 8, false)
-	defer chain.Stop()
-
-	// Ignore empty commit here for less noise.
-	w.skipSealHook = func(task *task) bool {
-		return len(task.receipts) == 0
-	}
-
-	// fulfill tx pool
-	const (
-		totalGas    = testGas + params.TxGas
-		totalBlocks = 10
-	)
-
-	var err error
-
-	txInBlock := int(back.genesis.GasLimit/totalGas) + 1
-
-	// a bit risky
-	for i := 0; i < 2*totalBlocks*txInBlock; i++ {
-		err = back.txPool.Add([]*types.Transaction{back.newRandomTx(true)}, false)[0]
-		if err != nil {
-			b.Fatal("while adding a local transaction", err)
-		}
-
-		err = back.txPool.Add([]*types.Transaction{back.newRandomTx(false)}, false)[0]
-		if err != nil {
-			b.Fatal("while adding a remote transaction", err)
-		}
-	}
-
-	// Wait for mined blocks.
-	sub := w.mux.Subscribe(core.NewMinedBlockEvent{})
-	defer sub.Unsubscribe()
-
-	b.ResetTimer()
-
-	prev := uint64(time.Now().Unix())
-
-	// Start mining!
-	w.start()
-
-	blockPeriod, ok := back.genesis.Config.Bor.Period["0"]
-	if !ok {
-		blockPeriod = 1
-	}
-
-	for i := 0; i < totalBlocks; i++ {
-		select {
-		case ev := <-sub.Chan():
-			block := ev.Data.(core.NewMinedBlockEvent).Block
-
-			if _, err := chain.InsertChain([]*types.Block{block}, false); err != nil {
-				b.Fatalf("failed to insert new mined block %d: %v", block.NumberU64(), err)
-			}
-
-			// check for dependencies for block number > 4
-			if block.NumberU64() <= 4 {
-				if block.GetTxDependency() != nil {
-					b.Fatalf("dependency not nil")
-				}
-			} else {
-				deps := block.GetTxDependency()
-				if len(deps[0]) != 0 {
-					b.Fatalf("wrong dependency")
-				}
-
-				for i := 1; i < block.Transactions().Len(); i++ {
-					if deps[i][0] != uint64(i-1) || len(deps[i]) != 1 {
-						b.Fatalf("wrong dependency")
-					}
-				}
 			}
 
 			b.Log("block", block.NumberU64(), "time", block.Time()-prev, "txs", block.Transactions().Len(), "gasUsed", block.GasUsed(), "gasLimit", block.GasLimit())
@@ -1653,7 +1560,7 @@ func TestCommitWorkLeaksPendingWorkBlockWhenSyncing(t *testing.T) {
 	w.pendingWorkBlock.Store(42)
 
 	// Call commitWork directly to drive the in-sync early-return path.
-	w.commitWork(nil, false, time.Now().Unix())
+	w.commitWork(nil, false, time.Now().Unix(), false)
 
 	got := w.pendingWorkBlock.Load()
 	if got != 0 {
@@ -1907,6 +1814,57 @@ func TestCalculateDesiredGasLimit_BufferUnderflow(t *testing.T) {
 	if result != parent.GasLimit {
 		t.Errorf("calculateDesiredGasLimit() with zero base fee = %d, want %d (parent gas limit)", result, parent.GasLimit)
 	}
+}
+
+func TestMakeHeaderWithQueuedWriter(t *testing.T) {
+	chainConfig := borUnittestChainConfigWithGiugliano()
+	engine, ctrl := getFakeBorFromConfig(t, chainConfig)
+	defer engine.Close()
+	defer ctrl.Finish()
+
+	w, _, cleanup := newTestWorker(t, DefaultTestConfig(), chainConfig, engine, rawdb.NewMemoryDatabase(), false, 0)
+	defer cleanup()
+
+	w.mu.RLock()
+	lockHeld := true
+	defer func() {
+		if lockHeld {
+			w.mu.RUnlock()
+		}
+	}()
+
+	writerDone := make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		w.setExtra([]byte("queued writer"))
+	}()
+	require.Eventually(t, func() bool {
+		if w.mu.TryRLock() {
+			w.mu.RUnlock()
+			return false
+		}
+		return true
+	}, 5*time.Second, time.Millisecond, "writer did not wait for worker lock")
+
+	headerDone := make(chan error, 1)
+	params := &generateParams{timestamp: uint64(time.Now().Unix()), coinbase: testBankAddress}
+	go func() {
+		_, _, err := w.makeHeader(params, false)
+		headerDone <- err
+	}()
+	select {
+	case err := <-headerDone:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		w.mu.RUnlock()
+		lockHeld = false
+		<-writerDone
+		require.NoError(t, <-headerDone)
+		t.Fatal("makeHeader blocked behind a writer while the caller held the read lock")
+	}
+	w.mu.RUnlock()
+	lockHeld = false
+	<-writerDone
 }
 
 // TestCommitMetrics tests that the commit function properly tracks metrics
@@ -2397,7 +2355,12 @@ func TestPrefetchGoroutineLifecycle(t *testing.T) {
 	config.Recommit = 500 * time.Millisecond
 
 	w, b, cleanup := newTestWorker(t, config, chainConfig, engine, db, false, 0)
-	defer cleanup()
+	closed := false
+	defer func() {
+		if !closed {
+			cleanup()
+		}
+	}()
 
 	// Add transactions to keep prefetch busy
 	addTransactionBatch(b, 50, false)
@@ -2424,10 +2387,10 @@ func TestPrefetchGoroutineLifecycle(t *testing.T) {
 		time.Sleep(150 * time.Millisecond)
 	}
 
-	// Stop the worker and wait for cleanup
-	// Increased wait time to allow prefetch goroutines to complete IntermediateRoot
-	w.stop()
-	time.Sleep(3 * time.Second)
+	// Close the worker so its loops cannot enqueue more prefetchers while
+	// prefetch cleanup is being measured.
+	cleanup()
+	closed = true
 
 	// Force garbage collection to surface any use-after-free issues
 	// Extra wait to ensure all goroutines complete after GC
@@ -2640,13 +2603,18 @@ func TestRapidBlockProduction_WithoutWait(t *testing.T) {
 	w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, 100, 200*time.Millisecond)
 	defer engine.Close()
 	defer ctrl.Finish()
+	closed := false
+	defer func() {
+		if !closed {
+			w.close()
+		}
+	}()
 
 	// Add many transactions
 	addTransactionBatch(b, 500, false)
 	time.Sleep(200 * time.Millisecond)
 
 	w.start()
-	defer w.stop()
 
 	goroutinesBefore := runtime.NumGoroutine()
 	t.Logf("Goroutines before test: %d", goroutinesBefore)
@@ -2673,7 +2641,8 @@ func TestRapidBlockProduction_WithoutWait(t *testing.T) {
 
 	wg.Wait()
 	t.Log("All block production requests sent, waiting for prefetch to complete...")
-	time.Sleep(5 * time.Second) // Let all prefetch complete
+	w.close()
+	closed = true
 
 	// Check for panics
 	panicCount := prefetchPanicMeter.Snapshot().Count()
@@ -3147,51 +3116,28 @@ func TestWriteBlockAndSetHeadTimer(t *testing.T) {
 	}
 }
 
-// TestDelayFlagOffByOne verifies that the delayFlag check inspects each transaction's
-// own read set rather than its predecessor's.
-func TestDelayFlagOffByOne(t *testing.T) {
-	t.Parallel()
+// TestPipelineBuildGaugeAlwaysDisabled verifies that production-side pipelined
+// SRC is not exposed as a miner config option and stays disabled.
+func TestPipelineBuildGaugeAlwaysDisabled(t *testing.T) {
+	metrics.Enable()
 
-	coinbase := common.HexToAddress("0x000000000000000000000000000000000000bA5e")
-	burntContract := common.HexToAddress("0x000000000000000000000000000000000000dead")
+	var (
+		engine      consensus.Engine
+		chainConfig = params.BorUnittestChainConfig
+		db          = rawdb.NewMemoryDatabase()
+		ctrl        *gomock.Controller
+	)
+	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
+	defer engine.Close()
+	defer ctrl.Finish()
 
-	// Initialize the mvReadMapList with 3 transactions.
-	n := 3
-	mvReadMapList := make([]map[blockstm.Key]blockstm.ReadDescriptor, n)
-	for i := range mvReadMapList {
-		mvReadMapList[i] = make(map[blockstm.Key]blockstm.ReadDescriptor)
+	cfg := DefaultTestConfig()
+	w, _, _ := newTestWorker(t, cfg, chainConfig, engine, db, false, 0)
+	defer w.close()
+
+	if got := pipelineBuildEnabledGauge.Snapshot().Value(); got != 0 {
+		t.Errorf("pipelineBuildEnabledGauge = %d, want 0 when production pipelining is disabled", got)
 	}
-
-	// Only the last tx reads the coinbase and burnt-contract balances.
-	mvReadMapList[n-1][blockstm.NewSubpathKey(coinbase, state.BalancePath)] = blockstm.ReadDescriptor{}
-	mvReadMapList[n-1][blockstm.NewSubpathKey(burntContract, state.BalancePath)] = blockstm.ReadDescriptor{}
-
-	buggyDelayFlag := func() bool {
-		for i := 1; i <= len(mvReadMapList)-1; i++ {
-			reads := mvReadMapList[i-1] // bug: checks predecessor read set instead of current tx
-			_, ok1 := reads[blockstm.NewSubpathKey(coinbase, state.BalancePath)]
-			_, ok2 := reads[blockstm.NewSubpathKey(burntContract, state.BalancePath)]
-			if ok1 || ok2 {
-				return false
-			}
-		}
-		return true
-	}
-
-	fixedDelayFlag := func() bool {
-		for i := 1; i <= len(mvReadMapList)-1; i++ {
-			reads := mvReadMapList[i]
-			_, ok1 := reads[blockstm.NewSubpathKey(coinbase, state.BalancePath)]
-			_, ok2 := reads[blockstm.NewSubpathKey(burntContract, state.BalancePath)]
-			if ok1 || ok2 {
-				return false
-			}
-		}
-		return true
-	}
-
-	require.True(t, buggyDelayFlag(), "bug: last tx skipped, DAG hint incorrectly embedded")
-	require.False(t, fixedDelayFlag(), "fix: last tx detected, DAG hint suppressed")
 }
 
 // TestPrefetchFromPool_BuilderModeSwitch verifies that when builderStarted is signaled
@@ -3448,9 +3394,8 @@ func TestBuildTxPlan(t *testing.T) {
 // what was already prefetched.
 //
 // Setup: 50 txs in pool, first 80% already marked as prefetched. Freed-gas channel
-// delivers 5 × 21000 gas BEFORE plan channel closes so the collect loop timer fires
-// and the overflow scan runs with a non-zero budget. Expected: the downstream
-// stream channel receives bonus txs from the unprefetched tail.
+// delivers 5 × 21000 gas while the plan channel remains open. Expected: the
+// downstream stream channel receives bonus txs from the unprefetched tail.
 func TestBuilderTxProvider_FreedGasFeedback(t *testing.T) {
 	t.Parallel()
 
@@ -3529,8 +3474,14 @@ func TestBuilderTxProvider_FreedGasFeedback(t *testing.T) {
 	}
 	close(gasFreedCh)
 
-	// Allow the 2ms timer to fire and the overflow scan to run. Then close planCh.
-	time.Sleep(20 * time.Millisecond)
+	// Keep the plan open until the overflow scan has produced an observable result.
+	// A fixed sleep can close the plan before the provider goroutine is scheduled.
+	var firstBonus *types.Transaction
+	select {
+	case firstBonus = <-streamCh:
+	case <-time.After(5 * time.Second):
+		interrupt.Store(true)
+	}
 	close(planCh)
 
 	select {
@@ -3540,7 +3491,8 @@ func TestBuilderTxProvider_FreedGasFeedback(t *testing.T) {
 	}
 
 	close(streamCh)
-	seen := make(map[common.Hash]struct{})
+	require.NotNil(t, firstBonus, "overflow scan did not forward a bonus transaction within timeout")
+	seen := map[common.Hash]struct{}{firstBonus.Hash(): {}}
 	for tx := range streamCh {
 		seen[tx.Hash()] = struct{}{}
 	}
@@ -3549,10 +3501,6 @@ func TestBuilderTxProvider_FreedGasFeedback(t *testing.T) {
 	t.Logf("streamCh received %d bonus txs (freed budget=%d gas, expected up to %d)",
 		forwarded, freedSignals*freedPerSignal, freedSignals)
 
-	// At least one bonus tx should reach the stream — the overflow scan found
-	// non-prefetched txs that fit within the freed-gas budget.
-	require.Greater(t, forwarded, 0,
-		"overflow scan should have forwarded bonus txs beyond the plan")
 	// None of the forwarded txs should be pre-prefetched.
 	for _, tx := range allTxs[:prePrefetchedCount] {
 		_, found := seen[tx.Hash()]
@@ -3930,21 +3878,54 @@ func TestTxFitsSize(t *testing.T) {
 	threshold := uint64(params.MaxBlockSize - maxBlockSizeBufferZone)
 	require.Greater(t, threshold, txSize, "buffer-zone leaves no room for a single tx in this test")
 
+	// Valencia reserves a slice of the block for the state-sync system tx, lowering
+	// the effective threshold by params.MaxStateSyncBytesPerBlock.
+	reservedThreshold := threshold - uint64(params.MaxStateSyncBytesPerBlock)
+	require.Greater(t, reservedThreshold, txSize, "reservation leaves no room for a single tx in this test")
+
 	cases := []struct {
-		name string
-		size uint64
-		want bool
+		name    string
+		size    uint64
+		reserve uint64
+		want    bool
 	}{
-		{"empty env accepts tx", 0, true},
-		{"plenty of room accepts tx", threshold / 2, true},
-		{"one byte under threshold accepts tx", threshold - txSize - 1, true},
-		{"exactly at threshold rejects tx", threshold - txSize, false},
-		{"over threshold rejects tx", threshold, false},
+		{"empty env accepts tx", 0, 0, true},
+		{"plenty of room accepts tx", threshold / 2, 0, true},
+		{"one byte under threshold accepts tx", threshold - txSize - 1, 0, true},
+		{"exactly at threshold rejects tx", threshold - txSize, 0, false},
+		{"over threshold rejects tx", threshold, 0, false},
+		{"reservation accepts tx under reduced threshold", reservedThreshold - txSize - 1, params.MaxStateSyncBytesPerBlock, true},
+		{"reservation rejects tx that would fit without it", reservedThreshold, params.MaxStateSyncBytesPerBlock, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			env := &environment{size: tc.size}
+			env := &environment{size: tc.size, stateSyncReserve: tc.reserve}
 			require.Equal(t, tc.want, env.txFitsSize(tx))
+		})
+	}
+}
+
+func TestStateSyncReserveFor(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		config *params.ChainConfig
+		number int64
+		want   uint64
+	}{
+		{"nil bor reserves nothing", &params.ChainConfig{}, 100, 0},
+		{"valencia unset reserves nothing", &params.ChainConfig{Bor: &params.BorConfig{}}, 100, 0},
+		{"before valencia reserves nothing", &params.ChainConfig{Bor: &params.BorConfig{ValenciaBlock: big.NewInt(100)}}, 99, 0},
+		{"at valencia reserves budget", &params.ChainConfig{Bor: &params.BorConfig{ValenciaBlock: big.NewInt(100)}}, 100, params.MaxStateSyncBytesPerBlock},
+		{"after valencia reserves budget", &params.ChainConfig{Bor: &params.BorConfig{ValenciaBlock: big.NewInt(0)}}, 1, params.MaxStateSyncBytesPerBlock},
+		{"sprint start reserves budget", &params.ChainConfig{Bor: &params.BorConfig{ValenciaBlock: big.NewInt(0), Sprint: map[string]uint64{"0": 16}}}, 160, params.MaxStateSyncBytesPerBlock},
+		{"non sprint start reserves nothing", &params.ChainConfig{Bor: &params.BorConfig{ValenciaBlock: big.NewInt(0), Sprint: map[string]uint64{"0": 16}}}, 161, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tc.want, stateSyncReserveFor(tc.config, big.NewInt(tc.number)))
 		})
 	}
 }

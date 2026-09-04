@@ -155,3 +155,122 @@ func TestParallelReadRecordingCompleteness(t *testing.T) {
 		})
 	}
 }
+
+// TestParallelExactWriterAcrossDestruction pins the fix for value-equality
+// masking a reordered writer across a destruction boundary. For a read resolved
+// relative to a prior SELFDESTRUCT (writerIdx vs suicideIdx) and for the
+// existence markers, the winning writer's *position* — not just its value —
+// determines the result. So when the winning writer changes to one producing an
+// EQUAL value, validation must still fail; accepting it by value equality
+// settles a stale read and diverges from serial.
+//
+// Each case stages the metamorphic shape at the MVStore level: tx0 creates the
+// account and SELFDESTRUCTs it (write at idx 0 + SuicidePath at idx 0), tx2
+// re-creates it with an equal value, the read observes tx2's value, then tx2's
+// write is withdrawn (re-execution) so the winner falls back to tx0 — which is
+// at/below the destruction and therefore wiped. The recorded read must be
+// rejected. The destructor sits at tx index 0 on purpose: that is the exact
+// suicideIdx>=0 boundary, so a `>0` regression (which would drop ExactWriter
+// when the destruction is the first tx) is caught here too.
+func TestParallelExactWriterAcrossDestruction(t *testing.T) {
+	addr := common.HexToAddress("0x00000000000000000000000000000000000000e0")
+	slot := common.HexToHash("0x01")
+	codeKey := blockstm.NewSubpathKey(addr, CodePath)
+	nonceKey := blockstm.NewSubpathKey(addr, NoncePath)
+	stateKey := blockstm.NewStateKey(addr, slot)
+	createKey := blockstm.NewSubpathKey(addr, CreatePath)
+	suicideKey := blockstm.NewSubpathKey(addr, SuicidePath)
+	code := []byte{0x60, 0x00}
+	stateVal := common.HexToHash("0x2a")
+
+	cases := []struct {
+		name string
+		key  blockstm.Key // the read's key, withdrawn after the read to move the winner
+		// pre stages tx0's create+suicide and tx2's equal-valued re-create.
+		pre  func(s *blockstm.MVStore)
+		read func(p *ParallelStateDB)
+	}{
+		{
+			name: "GetState",
+			key:  stateKey,
+			pre: func(s *blockstm.MVStore) {
+				s.WriteInc(suicideKey, 0, 0, true)
+				s.WriteInc(stateKey, 0, 0, stateVal)
+				s.WriteInc(stateKey, 2, 0, stateVal)
+			},
+			read: func(p *ParallelStateDB) { p.GetState(addr, slot) },
+		},
+		{
+			name: "GetCommittedState", // the diffguard-flagged site (parallel_statedb.go:947)
+			key:  stateKey,
+			pre: func(s *blockstm.MVStore) {
+				s.WriteInc(suicideKey, 0, 0, true)
+				s.WriteInc(stateKey, 0, 0, stateVal)
+				s.WriteInc(stateKey, 2, 0, stateVal)
+			},
+			read: func(p *ParallelStateDB) { p.GetCommittedState(addr, slot) },
+		},
+		{
+			name: "GetCode",
+			key:  codeKey,
+			pre: func(s *blockstm.MVStore) {
+				s.WriteInc(suicideKey, 0, 0, true)
+				s.WriteInc(codeKey, 0, 0, code)
+				s.WriteInc(codeKey, 2, 0, code)
+			},
+			read: func(p *ParallelStateDB) { p.GetCode(addr) },
+		},
+		{
+			name: "GetCodeHash",
+			key:  codeKey,
+			pre: func(s *blockstm.MVStore) {
+				s.WriteInc(suicideKey, 0, 0, true)
+				s.WriteInc(codeKey, 0, 0, code)
+				s.WriteInc(codeKey, 2, 0, code)
+			},
+			read: func(p *ParallelStateDB) { p.GetCodeHash(addr) },
+		},
+		{
+			name: "GetNonce",
+			key:  nonceKey,
+			pre: func(s *blockstm.MVStore) {
+				s.WriteInc(suicideKey, 0, 0, true)
+				s.WriteInc(nonceKey, 0, 0, uint64(7))
+				s.WriteInc(nonceKey, 2, 0, uint64(7))
+			},
+			read: func(p *ParallelStateDB) { p.GetNonce(addr) },
+		},
+		{
+			// Existence markers: their value is always true, so value equality is
+			// pure noise — only the writer's position carries information.
+			name: "Exist_CreatePathMarker",
+			key:  createKey,
+			pre: func(s *blockstm.MVStore) {
+				s.WriteInc(suicideKey, 0, 0, true)
+				s.WriteInc(createKey, 0, 0, true)
+				s.WriteInc(createKey, 2, 0, true)
+			},
+			read: func(p *ParallelStateDB) { p.Exist(addr) },
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pdb, store, _ := newTestPDB(t, 5)
+			pdb.EnableReadTracking()
+
+			tc.pre(store)
+			tc.read(pdb)
+			// Re-execution of tx2 withdraws its write; the winner falls back to
+			// tx0, which is wiped by the same-index destruction. The recorded read
+			// (writer=2, equal value) must no longer validate.
+			store.Delete(tc.key, 2)
+
+			if res := pdb.ValidateDetailed(); res.Valid {
+				t.Fatalf("%s: a reordered writer across the destruction boundary produced an "+
+					"equal value and was accepted by value equality; the read must require an "+
+					"exact writer match and invalidate the tx", tc.name)
+			}
+		})
+	}
+}

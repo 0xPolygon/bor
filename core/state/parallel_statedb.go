@@ -29,6 +29,15 @@ type StoreReadDesc struct {
 	WriterIdx int          // txIdx of writer (-1 = base)
 	WriterInc int          // incarnation of writer
 	StoreVal  interface{}  // actual value read (for value-based validation)
+	// ExactWriter disables the value-equality validation fallback for this
+	// read. Set when the winning writer's block-order position — not just its
+	// value — determined the read result: existence/ordering markers
+	// (CreatePath/SuicidePath) and any read resolved relative to a prior
+	// SELFDESTRUCT (writerIdx vs suicideIdx). For those reads a different
+	// writer producing an equal value can still flip the result (a reordered
+	// metamorphic CREATE2/SELFDESTRUCT moves the writer across the destruction
+	// boundary), so re-validation must require the same writer/incarnation.
+	ExactWriter bool
 }
 
 // BalReadDesc tracks a balance delta read for validation.
@@ -176,6 +185,22 @@ type ParallelStateDB struct {
 	// blob fork-gating violation). Such a tx must NOT be settled; the caller
 	// must abort the block and surface the error like the serial path does.
 	ExecErr error
+	// BaseReadErr records the first base-state read failure THIS incarnation
+	// observed (missing trie node, absent code). Reset clears it, so on the
+	// final ParallelStateDB of a tx it reflects only the incarnation that
+	// settled: a speculative incarnation chasing stale values may legitimately
+	// read outside the canonical state (fatal on witness-backed replay, where
+	// such nodes simply don't exist) and is then invalidated and re-executed —
+	// only an error observed by the SETTLED incarnation means a zero-ish read
+	// reached consensus state, and only that must abort the block.
+	BaseReadErr error
+}
+
+// noteBaseReadErr records the first base read failure of this incarnation.
+func (s *ParallelStateDB) noteBaseReadErr(err error) {
+	if err != nil && s.BaseReadErr == nil {
+		s.BaseReadErr = err
+	}
 }
 
 type parallelRevision struct {
@@ -266,6 +291,7 @@ func (s *ParallelStateDB) Reset(txIndex int, base *SafeBase, store *blockstm.MVS
 	s.ExecFailed = false
 	s.Panicked = false
 	s.ExecErr = nil
+	s.BaseReadErr = nil
 	s.TransferLogFn = nil
 	s.FeeLogFn = nil
 }
@@ -387,10 +413,17 @@ func (s *ParallelStateDB) EnableReadTracking() {
 }
 
 func (s *ParallelStateDB) recordStoreRead(key blockstm.Key, writerIdx, writerInc int, val interface{}) {
+	s.recordStoreReadEx(key, writerIdx, writerInc, val, false)
+}
+
+// recordStoreReadEx records a read, optionally marking it ExactWriter so
+// validation cannot accept a different writer by value equality. See
+// StoreReadDesc.ExactWriter.
+func (s *ParallelStateDB) recordStoreReadEx(key blockstm.Key, writerIdx, writerInc int, val interface{}, exact bool) {
 	if !s.trackReads {
 		return
 	}
-	s.StoreReads = append(s.StoreReads, StoreReadDesc{Key: key, WriterIdx: writerIdx, WriterInc: writerInc, StoreVal: val})
+	s.StoreReads = append(s.StoreReads, StoreReadDesc{Key: key, WriterIdx: writerIdx, WriterInc: writerInc, StoreVal: val, ExactWriter: exact})
 }
 
 func (s *ParallelStateDB) recordBalanceRead(addr common.Address, add, sub uint256.Int) {
@@ -548,12 +581,12 @@ func (s *ParallelStateDB) priorDestructedAt(addr common.Address) int {
 		}
 	}
 	suicideKey := blockstm.NewSubpathKey(addr, SuicidePath)
-	val, writerIdx, _, found := s.readStoreWait(suicideKey)
+	val, writerIdx, writerInc, found := s.readStoreWait(suicideKey)
 	idx := -1
 	if found {
 		idx = writerIdx
 		if _, seen := s.destructedSeen[addr]; !seen {
-			s.recordStoreRead(suicideKey, writerIdx, 0, val)
+			s.recordStoreReadEx(suicideKey, writerIdx, writerInc, val, true)
 		}
 	} else if _, seen := s.destructedSeen[addr]; !seen {
 		s.recordStoreRead(suicideKey, -1, 0, nil)
@@ -573,9 +606,9 @@ func (s *ParallelStateDB) priorDestructedAt(addr common.Address) int {
 // SELFDESTRUCT was followed by recreation.
 func (s *ParallelStateDB) priorCreatedAt(addr common.Address) int {
 	createKey := blockstm.NewSubpathKey(addr, CreatePath)
-	val, writerIdx, _, found := s.readStoreWait(createKey)
+	val, writerIdx, writerInc, found := s.readStoreWait(createKey)
 	if found {
-		s.recordStoreRead(createKey, writerIdx, 0, val)
+		s.recordStoreReadEx(createKey, writerIdx, writerInc, val, true)
 		return writerIdx
 	}
 	s.recordStoreRead(createKey, -1, 0, nil)
@@ -625,7 +658,9 @@ func (s *ParallelStateDB) Exist(addr common.Address) bool {
 	// No prior creation or destruction. Fall through to base + balance +
 	// nonce check (handles base-state accounts and addresses made to exist
 	// by a prior tx's value transfer or nonce bump).
-	if s.base.Exist(addr) {
+	exists, berr := s.base.Exist(addr)
+	s.noteBaseReadErr(berr)
+	if exists {
 		return true
 	}
 	if !s.GetBalance(addr).IsZero() {
@@ -660,7 +695,9 @@ func (s *ParallelStateDB) GetBalance(addr common.Address) *uint256.Int {
 	add, sub := s.priorBalanceDeltas(addr)
 	s.recordBalanceRead(addr, add, sub)
 
-	result := new(uint256.Int).Set(s.base.GetBalance(addr))
+	baseBal, berr := s.base.GetBalance(addr)
+	s.noteBaseReadErr(berr)
+	result := new(uint256.Int).Set(baseBal)
 	result.Add(result, &add)
 	result.Sub(result, &sub)
 	if a := s.localBalAdd[addr]; a != nil {
@@ -735,7 +772,7 @@ func (s *ParallelStateDB) GetNonce(addr common.Address) uint64 {
 	suicideIdx := s.priorDestructedAt(addr)
 	nonceKey := blockstm.NewSubpathKey(addr, NoncePath)
 	if val, writerIdx, writerInc, found := s.readStoreWait(nonceKey); found {
-		s.recordStoreRead(nonceKey, writerIdx, writerInc, val)
+		s.recordStoreReadEx(nonceKey, writerIdx, writerInc, val, suicideIdx >= 0)
 		// Only honor the nonce write if it landed AFTER the destruction.
 		// Otherwise the destruction wiped it.
 		if writerIdx > suicideIdx {
@@ -748,7 +785,8 @@ func (s *ParallelStateDB) GetNonce(addr common.Address) uint64 {
 		s.recordStoreRead(nonceKey, -1, 0, uint64(0))
 		return 0
 	}
-	baseNonce := s.base.GetNonce(addr)
+	baseNonce, berr := s.base.GetNonce(addr)
+	s.noteBaseReadErr(berr)
 	s.recordStoreRead(nonceKey, -1, 0, baseNonce)
 	return baseNonce
 }
@@ -777,7 +815,7 @@ func (s *ParallelStateDB) GetCode(addr common.Address) []byte {
 	suicideIdx := s.priorDestructedAt(addr)
 	codeKey := blockstm.NewSubpathKey(addr, CodePath)
 	if val, writerIdx, writerInc, found := s.readCodeKey(addr, codeKey); found {
-		s.recordStoreRead(codeKey, writerIdx, writerInc, val)
+		s.recordStoreReadEx(codeKey, writerIdx, writerInc, val, suicideIdx >= 0)
 		if writerIdx > suicideIdx {
 			return val.([]byte)
 		}
@@ -788,7 +826,8 @@ func (s *ParallelStateDB) GetCode(addr common.Address) []byte {
 		s.recordStoreRead(codeKey, -1, 0, []byte(nil))
 		return nil
 	}
-	baseCode := s.base.GetCode(addr)
+	baseCode, berr := s.base.GetCode(addr)
+	s.noteBaseReadErr(berr)
 	s.recordStoreRead(codeKey, -1, 0, baseCode)
 	return baseCode
 }
@@ -813,7 +852,7 @@ func (s *ParallelStateDB) GetCodeHash(addr common.Address) common.Hash {
 	// value when the writer is later invalidated.
 	codeKey := blockstm.NewSubpathKey(addr, CodePath)
 	if val, writerIdx, writerInc, found := s.readCodeKey(addr, codeKey); found {
-		s.recordStoreRead(codeKey, writerIdx, writerInc, val)
+		s.recordStoreReadEx(codeKey, writerIdx, writerInc, val, suicideIdx >= 0)
 		// Honor the code write only if it happened after the destruction
 		// (otherwise the destruction wiped it).
 		if writerIdx > suicideIdx {
@@ -842,7 +881,8 @@ func (s *ParallelStateDB) GetCodeHash(addr common.Address) common.Hash {
 		return common.Hash{}
 	}
 	// For base (pre-block) accounts, use the stored code hash.
-	baseHash := s.base.GetCodeHash(addr)
+	baseHash, berr := s.base.GetCodeHash(addr)
+	s.noteBaseReadErr(berr)
 	if baseHash != (common.Hash{}) {
 		return baseHash
 	}
@@ -895,7 +935,7 @@ func (s *ParallelStateDB) GetState(addr common.Address, key common.Hash) common.
 	suicideIdx := s.priorDestructedAt(addr)
 	stateKey := blockstm.NewStateKey(addr, key)
 	if val, writerIdx, writerInc, found := s.readStoreWait(stateKey); found {
-		s.recordStoreRead(stateKey, writerIdx, writerInc, val)
+		s.recordStoreReadEx(stateKey, writerIdx, writerInc, val, suicideIdx >= 0)
 		// Honor the slot write only if it landed AFTER the destruction.
 		// Otherwise the destruction wiped storage and recreation alone
 		// doesn't restore old slots.
@@ -910,7 +950,8 @@ func (s *ParallelStateDB) GetState(addr common.Address, key common.Hash) common.
 		s.recordStoreRead(stateKey, -1, 0, common.Hash{})
 		return common.Hash{}
 	}
-	baseVal := s.base.GetState(addr, key)
+	baseVal, berr := s.base.GetState(addr, key)
+	s.noteBaseReadErr(berr)
 	s.recordStoreRead(stateKey, -1, 0, baseVal)
 	return baseVal
 }
@@ -928,14 +969,16 @@ func (s *ParallelStateDB) GetCommittedState(addr common.Address, key common.Hash
 	mvKey := blockstm.NewStateKey(addr, key)
 	var result common.Hash
 	if val, writerIdx, writerInc, found := s.readStoreWait(mvKey); found {
-		s.recordStoreRead(mvKey, writerIdx, writerInc, val)
+		s.recordStoreReadEx(mvKey, writerIdx, writerInc, val, suicideIdx >= 0)
 		if writerIdx > suicideIdx {
 			result = val.(common.Hash)
 		}
 		// else: destroyed after this write → result stays zero
 	} else {
 		if suicideIdx < 0 {
-			result = s.base.GetCommittedState(addr, key)
+			var berr error
+			result, berr = s.base.GetCommittedState(addr, key)
+			s.noteBaseReadErr(berr)
 		}
 		s.recordStoreRead(mvKey, -1, 0, result)
 	}
@@ -1001,7 +1044,9 @@ func (s *ParallelStateDB) GetStorageRoot(addr common.Address) common.Hash {
 		// CreatePath in sync — Exist() handles that).
 		return common.Hash{}
 	}
-	return s.base.GetStorageRoot(addr)
+	root, berr := s.base.GetStorageRoot(addr)
+	s.noteBaseReadErr(berr)
+	return root
 }
 
 // ---------- Refund ----------

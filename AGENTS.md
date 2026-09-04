@@ -4,7 +4,7 @@
 
 At the start of every session, fetch the latest PoS team standards from:
 
-`<https://gist.githubusercontent.com/marcello33/370756d88be9c4cc8459b6afe969085c/raw/team-standards.md>`
+`<https://raw.githubusercontent.com/0xPolygon/pos-standards/main/team-standards.md>`
 
 These rules apply to every change in this repo unless this repo's
 `.claude/rules/` explicitly overrides them.

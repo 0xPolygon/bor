@@ -34,7 +34,7 @@ func (m *mockPeer) RequestReceipts([]common.Hash, chan *eth.Response) (*eth.Requ
 	m.receiptRequested.Store(true)
 	// Return a valid request so concurrentFetch can track it.
 	// peer field is nil so Close() is a no-op (test-safe per dispatcher.go).
-	return &eth.Request{Peer: m.id}, nil
+	return &eth.Request{Peer: m.id, Sent: time.Now()}, nil
 }
 func (m *mockPeer) RequestWitnesses([]common.Hash, chan *eth.Response) (*eth.Request, error) {
 	return nil, nil
@@ -56,17 +56,29 @@ func newTestDownloader() *Downloader {
 // schedules a header with non-empty receipts so concurrentFetch enters the
 // receipt peer selection path.
 func scheduleReceiptTask(d *Downloader) {
+	scheduleReceiptTasks(d, 1)
+}
+
+func scheduleReceiptTasks(d *Downloader, count int) {
 	d.queue.Prepare(1, SnapSync)
 
-	header := &types.Header{
-		Number:      big.NewInt(1),
-		ReceiptHash: common.HexToHash("0x1"), // non-empty so receipts get scheduled
+	var (
+		headers []*types.Header
+		hashes  []common.Hash
+	)
+	for i := 1; i <= count; i++ {
+		header := &types.Header{
+			Number:      big.NewInt(int64(i)),
+			ReceiptHash: common.Hash{byte(i)},
+		}
+		headers = append(headers, header)
+		hashes = append(hashes, header.Hash())
 	}
-	d.queue.Schedule([]*types.Header{header}, []common.Hash{header.Hash()}, 1)
+	d.queue.Schedule(headers, hashes, 1)
 }
 
 // TestConcurrentFetchReceipts_OnlyEth68Peers verifies that concurrentFetch
-// returns errPeersUnavailable when all peers are below eth/69, since only
+// returns ErrPeersUnavailable when all peers are below eth/69, since only
 // eth/69 peers include bor receipts in responses.
 func TestConcurrentFetchReceipts_OnlyEth68Peers(t *testing.T) {
 	d := newTestDownloader()
@@ -88,8 +100,8 @@ func TestConcurrentFetchReceipts_OnlyEth68Peers(t *testing.T) {
 	}
 
 	err := d.concurrentFetch((*receiptQueue)(d), false)
-	if err != errPeersUnavailable {
-		t.Fatalf("expected errPeersUnavailable, got %v", err)
+	if err != ErrPeersUnavailable {
+		t.Fatalf("expected ErrPeersUnavailable, got %v", err)
 	}
 
 	for _, peer := range mockPeers {
@@ -134,5 +146,95 @@ func TestConcurrentFetchReceipts_MixedPeers(t *testing.T) {
 
 	if !mockPeers[1].receiptRequested.Load() {
 		t.Error("eth/69 peer should have received a receipt request")
+	}
+}
+
+func TestConcurrentFetchReceipts_BackedOffPeer(t *testing.T) {
+	d := newTestDownloader()
+	scheduleReceiptTask(d)
+
+	peer := &mockPeer{id: "peer-eth69", protocol: eth.ETH69}
+	pc := newPeerConnection(peer.id, peer.protocol, peer, log.New("peer", peer.id))
+	pc.backoffFor(time.Minute)
+	if err := d.peers.Register(pc); err != nil {
+		t.Fatal(err)
+	}
+
+	err := d.concurrentFetch((*receiptQueue)(d), false)
+	if err != ErrPeerBackedOff {
+		t.Fatalf("expected ErrPeerBackedOff, got %v", err)
+	}
+	if peer.receiptRequested.Load() {
+		t.Fatal("backed-off peer should not receive a receipt request")
+	}
+}
+
+func TestConcurrentFetchGradesDepartedStalePeer(t *testing.T) {
+	d := newTestDownloader()
+	d.peers.rates.OverrideTTLLimit = 50 * time.Millisecond
+	scheduleReceiptTask(d)
+
+	peer := &mockPeer{id: "peer-eth69", protocol: eth.ETH69}
+	pc := newPeerConnection(peer.id, peer.protocol, peer, log.New("peer", peer.id))
+	if err := d.peers.Register(pc); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- d.concurrentFetch((*receiptQueue)(d), false)
+	}()
+
+	waitFor := func(cond func() bool) bool {
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			if cond() {
+				return true
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		return cond()
+	}
+
+	if !waitFor(func() bool { return peer.receiptRequested.Load() }) {
+		close(d.cancelCh)
+		<-done
+		t.Fatal("receipt request was never dispatched")
+	}
+
+	time.Sleep(200 * time.Millisecond)
+	if err := d.peers.Unregister(pc.id); err != nil {
+		t.Fatalf("failed to unregister peer: %v", err)
+	}
+
+	if !waitFor(func() bool { return softStrikeTally(d.peers, peer.id) >= 1 }) {
+		close(d.cancelCh)
+		<-done
+		t.Fatal("a peer that left with a stale request must be graded, not silently dropped")
+	}
+
+	close(d.cancelCh)
+	<-done
+}
+
+func TestConcurrentFetchMasterTimeoutAborts(t *testing.T) {
+	d := newTestDownloader()
+	d.peers.rates.OverrideTTLLimit = 50 * time.Millisecond
+	scheduleReceiptTask(d)
+
+	peer := &mockPeer{id: "master-eth69", protocol: eth.ETH69}
+	pc := newPeerConnection(peer.id, peer.protocol, peer, log.New("peer", peer.id))
+	if err := d.peers.Register(pc); err != nil {
+		t.Fatal(err)
+	}
+	d.cancelPeer = peer.id
+
+	if err := d.concurrentFetch((*receiptQueue)(d), false); err != errTimeout {
+		t.Fatalf("expected errTimeout when the master peer times out, got %v", err)
+	}
+	select {
+	case <-d.cancelCh:
+	default:
+		t.Fatal("a master timeout must cancel the sync cycle")
 	}
 }

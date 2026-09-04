@@ -59,7 +59,16 @@ const (
 	inmemorySnapshots  = 128             // Number of recent vote snapshots to keep in memory
 	inmemorySignatures = 4096            // Number of recent block signatures to keep in memory
 	veblopBlockTimeout = time.Second * 8 // Timeout for new span check. DO NOT CHANGE THIS VALUE.
-	minBlockBuildTime  = 1 * time.Second // Minimum remaining time before extending the block deadline to avoid empty blocks
+	// minBlockBuildTime is the minimum remaining time before Prepare() extends
+	// the block deadline to avoid producing empty blocks. If time.Until(target)
+	// is less than this value, the target timestamp is pushed forward by one
+	// blockTime period.
+	//
+	// Abort-recovery rebuilds from pipelined SRC are exempt from this push. By the
+	// time speculative execution is discarded, most of the slot may already be
+	// gone; moving the header to the next slot would create avoidable 3-second
+	// blocks on 2-second devnets.
+	minBlockBuildTime = 1 * time.Second
 )
 
 // Bor protocol constants.
@@ -94,6 +103,10 @@ var (
 	// to contain a 65 byte secp256k1 signature.
 	errMissingSignature = errors.New("extra-data 65 byte signature suffix missing")
 
+	// errNonCanonicalSeal is returned if a block's seal signature is invalid or
+	// not in the canonical low-S encoding.
+	errNonCanonicalSeal = errors.New("invalid or non-canonical seal signature")
+
 	// errExtraValidators is returned if non-sprint-end block contain validator data in
 	// their extra-data fields.
 	errExtraValidators = errors.New("non-sprint-end block contains extra validator list")
@@ -105,14 +118,8 @@ var (
 	// errMissingGiuglianoFields is returned if a post-Giugliano block is missing
 	// the gas target or base fee change denominator in its extra data.
 	errMissingGiuglianoFields = errors.New("missing gas target or base fee change denominator in extra data")
-
-	// errMissingTimeNano is returned if a post-Placeholder block is missing
-	// the nanosecond-precision timestamp in its extra data.
-	errMissingTimeNano = errors.New("missing time nano in extra data")
-
-	// errMissingSealTimings is returned if a post-Placeholder block is missing
-	// the producer's commit-sealing timings (elapsed/finalize) in its extra data.
-	errMissingSealTimings = errors.New("missing seal timings in extra data")
+	errMissingTimeNano        = errors.New("missing time nano in extra data")
+	errMissingSealTimings     = errors.New("missing seal timings in extra data")
 
 	// errInvalidMixDigest is returned if a block's mix digest is non-zero.
 	errInvalidMixDigest = errors.New("non-zero mix digest")
@@ -163,6 +170,15 @@ func ecrecover(header *types.Header, sigcache *lru.ARCCache, c *params.BorConfig
 	}
 
 	signature := header.Extra[len(header.Extra)-types.ExtraSealLength:]
+
+	// Enforce the canonical low-S signature encoding before recovery. crypto.Sign
+	// always produces low-S seals, so this never rejects a seal a validator
+	// legitimately produced.
+	r := new(big.Int).SetBytes(signature[:32])
+	s := new(big.Int).SetBytes(signature[32:64])
+	if !crypto.ValidateSignatureValues(signature[64], r, s, true) {
+		return common.Address{}, errNonCanonicalSeal
+	}
 
 	// Recover the public key and the Ethereum address
 	pubkey, err := crypto.Ecrecover(SealHash(header, c).Bytes(), signature)
@@ -480,16 +496,28 @@ func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 			return consensus.ErrFutureBlock
 		}
 	}
+	if c.config.IsHampi(header.Number) {
+		if header.GetTimeNano(c.chainConfig) == nil {
+			return errMissingTimeNano
+		}
+		elapsedNano, finalizeNano := header.GetSealTimings(c.chainConfig)
+		if elapsedNano == nil || finalizeNano == nil {
+			return errMissingSealTimings
+		}
+	}
 
 	if err := validateHeaderExtraField(header.Extra); err != nil {
 		return err
 	}
 
-	// check extr adata
+	// Check extra data.
 	isSprintEnd := IsSprintStart(number+1, c.config.CalculateSprint(number))
 
-	// Ensure that the extra-data contains a signer list on checkpoint, but none otherwise
-	signersBytes := len(header.GetValidatorBytes(c.chainConfig))
+	// Decode validator bytes and base-fee params.
+	validatorBytes, gasTarget, bfcd := header.GetValidatorBytesAndBaseFeeParams(c.chainConfig)
+
+	// Ensure that the extra-data contains a signer list on checkpoint, but none otherwise.
+	signersBytes := len(validatorBytes)
 
 	if !isSprintEnd && signersBytes != 0 {
 		return errExtraValidators
@@ -506,25 +534,8 @@ func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 	// different configurations to reject each other's blocks. The actual base fee
 	// calculation in CalcBaseFee uses its own computation and does not read these fields.
 	if c.config.IsGiugliano(header.Number) {
-		gasTarget, bfcd := header.GetBaseFeeParams(c.chainConfig)
 		if gasTarget == nil || bfcd == nil {
 			return errMissingGiuglianoFields
-		}
-	}
-
-	// Post-Placeholder: verify that nanosecond-precision timestamp is present.
-	if c.config.IsPlaceholder(header.Number) {
-		timeNano := header.GetTimeNano(c.chainConfig)
-		if timeNano == nil {
-			return errMissingTimeNano
-		}
-
-		// Verify that the producer's commit-sealing timings are present. As with
-		// TimeNano and the Giugliano fields, we only check presence, not the values,
-		// since they are per-producer and not consensus-deterministic.
-		elapsedNano, finalizeNano := header.GetSealTimings(c.chainConfig)
-		if elapsedNano == nil || finalizeNano == nil {
-			return errMissingSealTimings
 		}
 	}
 
@@ -1031,26 +1042,48 @@ func IsBlockEarly(parent *types.Header, header *types.Header, number uint64, suc
 	return parent != nil && header.Time < parent.Time+CalcProducerDelay(number, succession, cfg)
 }
 
-// setGiuglianoExtraFields populates the GasTarget and BaseFeeChangeDenominator
-// fields in BlockExtraData for post-Giugliano blocks. CalcGasTarget and
-// BaseFeeChangeDenominator both operate on the parent header's values.
-func (c *Bor) setGiuglianoExtraFields(header *types.Header, parent *types.Header, blockExtraData *types.BlockExtraData) {
-	if c.config.IsGiugliano(header.Number) {
-		gasTarget := eip1559.CalcGasTarget(c.chainConfig, parent)
-		bfcd := params.BaseFeeChangeDenominator(c.config, parent.Number)
-		blockExtraData.GasTarget = &gasTarget
-		blockExtraData.BaseFeeChangeDenominator = &bfcd
+// giuglianoExtraFields returns the post-Giugliano EIP-1559 gas target and
+// base fee change denominator computed from parent, or (nil, nil) pre-Giugliano.
+func (c *Bor) giuglianoExtraFields(header *types.Header, parent *types.Header) (gasTarget *uint64, baseFeeChangeDenom *uint64) {
+	if !c.config.IsGiugliano(header.Number) {
+		return nil, nil
 	}
+
+	gt := eip1559.CalcGasTarget(c.chainConfig, parent)
+	bfcd := params.BaseFeeChangeDenominator(c.config, parent.Number)
+
+	return &gt, &bfcd
 }
 
-// setTimeNano sets the nanosecond-precision block timestamp in BlockExtraData.
-// Only set for Placeholder+ blocks where it is consensus-validated.
-// Must be called after header.Time/ActualTime are finalized.
-func (c *Bor) setTimeNano(header *types.Header, blockExtraData *types.BlockExtraData) {
-	if c.config.IsPlaceholder(header.Number) {
-		timeNano := uint64(header.GetActualTime().UnixNano())
-		blockExtraData.TimeNano = &timeNano
+func (c *Bor) parentActualTime(parent *types.Header, parentHash common.Hash) time.Time {
+	parentBlockTime := time.Unix(int64(parent.Time), 0)
+	parentActualBlockTime := parentBlockTime
+	if c.parentActualTimeCache != nil {
+		if v, ok := c.parentActualTimeCache.Get(parentHash); ok {
+			if at, ok := v.(time.Time); ok && at.After(parentBlockTime) {
+				parentActualBlockTime = at
+			}
+		}
 	}
+	return parentActualBlockTime
+}
+
+// EarliestAnnounceTime returns the earliest local time at which a prepared
+// block can be announced without violating Bor's post-Giugliano future-block
+// checks. Primary producers may announce before the block's own timestamp, but
+// not before the parent slot boundary.
+func (c *Bor) EarliestAnnounceTime(chain consensus.ChainHeaderReader, header *types.Header) time.Time {
+	if header == nil || header.Number == nil || header.Number.Sign() == 0 {
+		return time.Now()
+	}
+	if !c.config.IsGiugliano(header.Number) {
+		return header.GetActualTime()
+	}
+	parent := chain.GetHeader(header.ParentHash, header.Number.Uint64()-1)
+	if parent == nil {
+		return header.GetActualTime()
+	}
+	return c.parentActualTime(parent, header.ParentHash)
 }
 
 // Prepare implements consensus.Engine, preparing all the consensus fields of the
@@ -1085,57 +1118,42 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 		return consensus.ErrUnknownAncestor
 	}
 
-	// Calculate succession — needed for timestamp calculation
 	var succession int
 	if currentSigner.signer != (common.Address{}) {
 		succession, err = snap.GetSignerSuccessionNumber(currentSigner.signer)
 		if err != nil {
-			// If the signer is not in the active validator set, use succession 0
-			// so that the pending block header is still valid for RPC queries.
-			// Seal() will independently reject the block if unauthorized.
 			succession = 0
 		}
 	}
-
-	// Validate custom block time configuration
 	if c.blockTime > 0 && uint64(c.blockTime.Seconds()) < c.config.CalculatePeriod(number) {
 		return fmt.Errorf("the floor of custom mining block time (%v) is less than the consensus block time: %v < %v", c.blockTime, c.blockTime.Seconds(), c.config.CalculatePeriod(number))
 	}
-
-	// Calculate header.Time and header.ActualTime early so they're available for BlockExtraData.TimeNano
 	var delay time.Duration
 	if c.blockTime > 0 && c.config.IsRio(header.Number) {
-		// Only enable custom block time for Rio and later
-		parentBlockTime := time.Unix(int64(parent.Time), 0)
-		parentActualBlockTime := parentBlockTime
-		if c.parentActualTimeCache != nil {
-			if v, ok := c.parentActualTimeCache.Get(header.ParentHash); ok {
-				if at, ok := v.(time.Time); ok && at.After(parentBlockTime) {
-					parentActualBlockTime = at
-				}
-			}
-		}
-		actualNewBlockTime := parentActualBlockTime.Add(c.blockTime)
+		actualNewBlockTime := c.parentActualTime(parent, header.ParentHash).Add(c.blockTime)
 		header.Time = uint64(actualNewBlockTime.Unix())
 		header.ActualTime = actualNewBlockTime
-		delay = time.Until(parentActualBlockTime)
+		delay = time.Until(c.parentActualTime(parent, header.ParentHash))
 	} else {
 		header.Time = parent.Time + CalcProducerDelay(number, succession, c.config)
 		delay = time.Until(time.Unix(int64(parent.Time), 0))
 	}
-
 	now := time.Now()
 	blockTime := time.Duration(c.config.CalculatePeriod(number)) * time.Second
 	if c.blockTime > 0 && c.config.IsRio(header.Number) {
 		blockTime = c.blockTime
 	}
-	// Ensure minimum build time so the block has enough time to include transactions.
-	if time.Until(header.GetActualTime()) < minBlockBuildTime {
+	if !header.AbortRecovery && time.Until(header.GetActualTime()) < minBlockBuildTime {
 		header.Time = uint64(now.Add(blockTime).Unix())
 		belowMinBuildTimeCounter.Inc(1)
 		if c.blockTime > 0 && c.config.IsRio(header.Number) {
 			header.ActualTime = now.Add(blockTime)
 		}
+	}
+	var timeNano *uint64
+	if c.config.IsHampi(header.Number) {
+		value := uint64(header.GetActualTime().UnixNano())
+		timeNano = &value
 	}
 
 	// get validator set if number
@@ -1155,15 +1173,9 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 				tempValidatorBytes = append(tempValidatorBytes, validator.HeaderBytes()...)
 			}
 
-			blockExtraData := &types.BlockExtraData{
-				ValidatorBytes: tempValidatorBytes,
-				TxDependency:   nil,
-			}
+			gasTarget, baseFeeChangeDenom := c.giuglianoExtraFields(header, parent)
 
-			c.setGiuglianoExtraFields(header, parent, blockExtraData)
-			c.setTimeNano(header, blockExtraData)
-
-			blockExtraDataBytes, err := rlp.EncodeToBytes(blockExtraData)
+			blockExtraDataBytes, err := types.EncodeBlockExtraData(c.chainConfig, header.Number, tempValidatorBytes, gasTarget, baseFeeChangeDenom, timeNano)
 			if err != nil {
 				log.Error("error while encoding block extra data", "err", err)
 				return fmt.Errorf("error while encoding block extra data: %v", err)
@@ -1176,15 +1188,9 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 			}
 		}
 	} else if c.chainConfig.IsCancun(header.Number) {
-		blockExtraData := &types.BlockExtraData{
-			ValidatorBytes: nil,
-			TxDependency:   nil,
-		}
+		gasTarget, baseFeeChangeDenom := c.giuglianoExtraFields(header, parent)
 
-		c.setGiuglianoExtraFields(header, parent, blockExtraData)
-		c.setTimeNano(header, blockExtraData)
-
-		blockExtraDataBytes, err := rlp.EncodeToBytes(blockExtraData)
+		blockExtraDataBytes, err := types.EncodeBlockExtraData(c.chainConfig, header.Number, nil, gasTarget, baseFeeChangeDenom, timeNano)
 		if err != nil {
 			log.Error("error while encoding block extra data", "err", err)
 			return fmt.Errorf("error while encoding block extra data: %v", err)
@@ -1199,11 +1205,17 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 	// Mix digest is reserved for now, set to empty
 	header.MixDigest = common.Hash{}
 
-	// Wait before start the block production if needed (previously this wait was on Seal)
+	// Giugliano introduced early block announcements: primary producers wait
+	// until the parent slot boundary before building, then Seal can return
+	// immediately and announce the block before its own timestamp. Speculative
+	// and prefetch callers pass waitOnPrepare=false because they intentionally
+	// build ahead and perform their own parent-boundary wait before sealing.
 	if c.config.IsGiugliano(header.Number) && waitOnPrepare {
-		// if signer is not empty (RPC nodes have empty signer)
 		if currentSigner.signer != (common.Address{}) {
-			if succession == 0 {
+			// Avoid allocating a timer when the parent boundary has already
+			// passed. This is equivalent to develop's immediate time.After path
+			// for non-positive delays, just cheaper and more explicit.
+			if succession == 0 && delay > 0 {
 				<-time.After(delay)
 			}
 		}
@@ -1374,6 +1386,21 @@ func (c *Bor) changeContractCodeIfNeeded(headerNumber uint64, state vm.StateDB) 
 // FinalizeAndAssemble implements consensus.Engine, ensuring no uncles are set,
 // nor block rewards given, and returns the final block.
 func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, body *types.Body, receipts []*types.Receipt) (*types.Block, []*types.Receipt, time.Duration, error) {
+	return c.finalizeAndAssemble(chain, header, state, body, receipts, false)
+}
+
+// FinalizeAndAssembleForSimulation is FinalizeAndAssemble for simulated blocks
+// (eth_simulateV1). It skips the sprint-start span and state-sync commits:
+// their internal genesis contract calls resolve the parent header by hash from
+// the database, but a simulated block's parent may be a phantom header that is
+// never persisted (the pending block, or an earlier simulated block). The
+// skipped data is external Heimdall input that cannot be known for a future
+// block anyway.
+func (c *Bor) FinalizeAndAssembleForSimulation(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, body *types.Body, receipts []*types.Receipt) (*types.Block, []*types.Receipt, time.Duration, error) {
+	return c.finalizeAndAssemble(chain, header, state, body, receipts, true)
+}
+
+func (c *Bor) finalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, body *types.Body, receipts []*types.Receipt, simulated bool) (*types.Block, []*types.Receipt, time.Duration, error) {
 	headerNumber := header.Number.Uint64()
 	if body.Withdrawals != nil || header.WithdrawalsHash != nil {
 		return nil, nil, 0, consensus.ErrUnexpectedWithdrawals
@@ -1387,27 +1414,11 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 		err           error
 	)
 
-	if IsSprintStart(headerNumber, c.config.CalculateSprint(headerNumber)) {
-		borStart := time.Now()
-		cx := statefull.ChainContext{Chain: chain, Bor: c}
-
-		// check and commit span
-		if !c.config.IsRio(header.Number) {
-			if err = c.checkAndCommitSpan(state, header, cx); err != nil {
-				log.Error("Error while committing span", "error", err)
-				return nil, nil, 0, err
-			}
+	if !simulated && IsSprintStart(headerNumber, c.config.CalculateSprint(headerNumber)) {
+		stateSyncData, err = c.commitSprintWork(chain, header, state)
+		if err != nil {
+			return nil, nil, 0, err
 		}
-
-		if c.HeimdallClient != nil {
-			// commit states
-			stateSyncData, err = c.CommitStates(state, header, cx)
-			if err != nil {
-				log.Error("Error while committing states", "error", err)
-				return nil, nil, 0, err
-			}
-		}
-		state.BorConsensusTime = time.Since(borStart)
 	}
 
 	if err = c.changeContractCodeIfNeeded(headerNumber, state); err != nil {
@@ -1440,6 +1451,100 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 
 	// return the final block for sealing
 	return block, receipts, commitTime, nil
+}
+
+// FinalizeForPipeline runs the same post-transaction state modifications as
+// FinalizeAndAssemble (state sync, span commits, contract code changes) but
+// does NOT compute IntermediateRoot or assemble the block. It returns the
+// stateSyncData so the caller can pass it to AssembleBlock later after the
+// background SRC goroutine has computed the state root.
+//
+// This is the pipelined SRC equivalent of the first half of FinalizeAndAssemble.
+func (c *Bor) FinalizeForPipeline(chain consensus.ChainHeaderReader, header *types.Header, statedb *state.StateDB, body *types.Body, receipts []*types.Receipt) ([]*types.StateSyncData, error) {
+	headerNumber := header.Number.Uint64()
+	if body.Withdrawals != nil || header.WithdrawalsHash != nil {
+		return nil, consensus.ErrUnexpectedWithdrawals
+	}
+	if header.RequestsHash != nil {
+		return nil, consensus.ErrUnexpectedRequests
+	}
+
+	var (
+		stateSyncData []*types.StateSyncData
+		err           error
+	)
+
+	if IsSprintStart(headerNumber, c.config.CalculateSprint(headerNumber)) {
+		stateSyncData, err = c.commitSprintWork(chain, header, statedb)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if err = c.changeContractCodeIfNeeded(headerNumber, statedb); err != nil {
+		log.Error("Error changing contract code", "error", err)
+		return nil, err
+	}
+
+	return stateSyncData, nil
+}
+
+// AssembleBlock constructs the final block from a pre-computed state root,
+// without calling IntermediateRoot. This is used by pipelined SRC where the
+// state root is computed by a background goroutine.
+//
+// stateSyncData is the state sync data collected during Finalize(). If non-nil
+// and the Madhugiri fork is active, a StateSyncTx is appended to the body.
+func (c *Bor) AssembleBlock(chain consensus.ChainHeaderReader, header *types.Header, statedb *state.StateDB, body *types.Body, receipts []*types.Receipt, stateRoot common.Hash, stateSyncData []*types.StateSyncData) (*types.Block, []*types.Receipt, error) {
+	headerNumber := header.Number.Uint64()
+
+	header.Root = stateRoot
+	header.UncleHash = types.CalcUncleHash(nil)
+
+	if len(stateSyncData) > 0 && c.config != nil && c.config.IsMadhugiri(big.NewInt(int64(headerNumber))) {
+		stateSyncTx := types.NewTx(&types.StateSyncTx{
+			StateSyncData: stateSyncData,
+		})
+		body.Transactions = append(body.Transactions, stateSyncTx)
+		receipts = insertStateSyncTransactionAndCalculateReceipt(stateSyncTx, header, body, statedb, receipts)
+	} else {
+		bc := chain.(core.BorStateSyncer)
+		bc.SetStateSync(stateSyncData)
+	}
+
+	block := types.NewBlock(header, body, receipts, trie.NewStackTrie(nil))
+	return block, receipts, nil
+}
+
+// commitSprintWork commits the span (pre-Rio) and state-sync data at a
+// sprint-start block during block assembly.
+func (c *Bor) commitSprintWork(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB) ([]*types.StateSyncData, error) {
+	borStart := time.Now()
+	cx := statefull.ChainContext{Chain: chain, Bor: c}
+
+	// check and commit span
+	if !c.config.IsRio(header.Number) {
+		if err := c.checkAndCommitSpan(state, header, cx); err != nil {
+			log.Error("Error while committing span", "error", err)
+			return nil, err
+		}
+	}
+
+	var stateSyncData []*types.StateSyncData
+
+	if c.HeimdallClient != nil {
+		// commit states
+		var err error
+		stateSyncData, err = c.CommitStates(state, header, cx)
+		if err != nil {
+			log.Error("Error while committing states", "error", err)
+			return nil, err
+		}
+	}
+
+	state.BorConsensusTime = time.Since(borStart)
+
+	return stateSyncData, nil
 }
 
 // Authorize injects a private key into the consensus engine to mint new blocks
@@ -1494,11 +1599,15 @@ func (c *Bor) SealWithStopHook(chain consensus.ChainHeaderReader, block *types.B
 
 	var delay time.Duration
 
-	// Sweet, the protocol permits us to sign the block, wait for our time
+	// Sweet, the protocol permits us to sign the block, wait for our time.
+	// On Giugliano+ primary producers, the wait is performed before building
+	// in Prepare (or explicitly by the pipeline at the parent boundary), so Seal
+	// returns immediately and preserves early block announcement. Backups still
+	// wait until the block timestamp.
 	if c.config.IsGiugliano(header.Number) && successionNumber == 0 {
-		delay = 0 // delay was moved to Prepare for giugliano and later
+		delay = 0
 	} else {
-		delay = time.Until(header.GetActualTime()) // Wait until we reach header time
+		delay = time.Until(header.GetActualTime())
 	}
 
 	// wiggle was already accounted for in header.Time, this is just for logging
@@ -1515,7 +1624,13 @@ func (c *Bor) SealWithStopHook(chain consensus.ChainHeaderReader, block *types.B
 	}
 
 	// Wait until sealing is terminated or delay timeout.
-	log.Info("Waiting for slot to sign and propagate", "number", number, "hash", header.Hash(), "delay-in-sec", uint(delay), "delay", common.PrettyDuration(delay))
+	log.Info(
+		"Waiting for slot to sign and propagate",
+		"number", number,
+		"hash", header.Hash(),
+		"delay-ms", float64(delay)/float64(time.Millisecond),
+		"delay", common.PrettyDuration(delay),
+	)
 
 	go func() {
 		select {
@@ -1531,7 +1646,7 @@ func (c *Bor) SealWithStopHook(chain consensus.ChainHeaderReader, block *types.B
 					"Sealing out-of-turn",
 					"number", number,
 					"hash", header.Hash,
-					"wiggle-in-sec", uint(wiggle),
+					"wiggle-ms", float64(wiggle)/float64(time.Millisecond),
 					"wiggle", common.PrettyDuration(wiggle),
 					"in-turn-signer", snap.ValidatorSet.GetProposer().Address.Hex(),
 				)
@@ -1679,6 +1794,13 @@ func (c *Bor) checkAndCommitSpan(
 
 	tempState.IntermediateRoot(false)
 
+	// Propagate addresses accessed during GetCurrentSpan back to the original
+	// state so they appear in the FlatDiff ReadSet. Without this, the pipelined
+	// SRC goroutine's witness won't capture their trie proof nodes (the copy's
+	// reads aren't tracked on the original), causing stateless execution to fail
+	// with missing trie nodes for the validator contract.
+	tempState.PropagateReadsTo(state.Inner())
+
 	if c.needToCommitSpan(span, headerNumber) {
 		return c.FetchAndCommitSpan(ctx, span.Id+1, state, header, chain)
 	}
@@ -1824,6 +1946,12 @@ func (c *Bor) CommitStates(
 
 		tempState.IntermediateRoot(false)
 
+		// Propagate addresses accessed during LastStateId back to the original
+		// state so they appear in the FlatDiff ReadSet. Without this, the
+		// pipelined SRC goroutine's witness won't capture their trie proof
+		// nodes, causing stateless execution to fail with missing trie nodes.
+		tempState.PropagateReadsTo(state.Inner())
+
 		stateSyncDelay := c.config.CalculateStateSyncDelay(number)
 		to = time.Unix(int64(header.Time-stateSyncDelay), 0)
 	} else {
@@ -1875,9 +2003,15 @@ func (c *Bor) CommitStates(
 
 	fetchTime := time.Since(fetchStart)
 	processStart := time.Now()
-	totalGas := 0 /// limit on gas for state sync per block
+
+	var totalGas uint64
 	chainID := c.chainConfig.ChainID.String()
 	stateSyncs := make([]*types.StateSyncData, 0, len(eventRecords))
+
+	enforceStateSyncBudget := c.config.IsValencia(header.Number)
+	enforceStateSyncGasBudget := c.config.IsAustin(header.Number)
+	stateReceiver := common.HexToAddress(c.config.StateReceiverContract)
+	var stateSyncBytes uint64
 
 	var gasUsed uint64
 
@@ -1891,6 +2025,29 @@ func (c *Bor) CommitStates(
 			break
 		}
 
+		// From Valencia on, cap the state-sync bytes committed per block; records over
+		// the budget wait for a later sprint (lastStateID only advances for the ones we
+		// include). The first record always goes in, so a single over-budget record
+		// can't stall state sync forever.
+		recordSize := uint64(len(eventRecord.Data))
+		if len(stateSyncs) > 0 && stateSyncBudgetExceeded(enforceStateSyncBudget, stateSyncBytes, recordSize) {
+			log.Info("state-sync byte budget reached, deferring remaining records", "number", number, "includedBytes", stateSyncBytes, "deferredFromID", eventRecord.ID)
+			break
+		}
+
+		// totalGas starts at zero, so the first pending record is always admitted.
+		if enforceStateSyncGasBudget && totalGas >= params.MaxStateSyncGasPerBlock {
+			log.Info("state-sync gas budget reached, deferring remaining records", "number", number, "includedGas", totalGas, "deferredFromID", eventRecord.ID)
+			break
+		}
+
+		// A record over Heimdall's per-record cap shouldn't happen; log it if one does.
+		if enforceStateSyncBudget && recordSize > params.MaxStateSyncRecordBytes {
+			log.Error("state-sync record exceeds expected per-record cap", "number", number, "id", eventRecord.ID, "size", recordSize, "cap", params.MaxStateSyncRecordBytes)
+		}
+
+		stateSyncBytes += recordSize
+
 		stateData := types.StateSyncData{
 			ID:       eventRecord.ID,
 			Contract: eventRecord.Contract,
@@ -1899,16 +2056,16 @@ func (c *Bor) CommitStates(
 		}
 
 		stateSyncs = append(stateSyncs, &stateData)
+		statefull.PrepareStateSyncContext(state, c.chainConfig, header.Number, header.Time, header.Coinbase, stateReceiver)
 
-		// we expect that this call MUST emit an event, otherwise we wouldn't make a receipt
-		// if the receiver address is not a contract then we'll skip the most of the execution and emitting an event as well
-		// https://github.com/0xPolygon/genesis-contracts/blob/master/contracts/StateReceiver.sol#L27
+		// Receipt construction expects the receiver call to emit at least one log.
+		// A receiver without code can complete without producing one.
 		gasUsed, err = c.GenesisContractsClient.CommitState(eventRecord, state, header, chain, c.vmConfig)
 		if err != nil {
 			return nil, err
 		}
 
-		totalGas += int(gasUsed)
+		totalGas += gasUsed
 
 		lastStateID++
 	}
@@ -1927,6 +2084,18 @@ func validateEventRecord(eventRecord *clerk.EventRecordWithTime, number uint64, 
 	}
 
 	return nil
+}
+
+// stateSyncBudgetExceeded reports whether committing a record of recordSize bytes
+// on top of includedBytes already committed would push the block's state-sync data
+// past params.MaxStateSyncBytesPerBlock. When enforce is false (pre-Valencia) the
+// batch stays unbounded, preserving the historical state transition.
+func stateSyncBudgetExceeded(enforce bool, includedBytes, recordSize uint64) bool {
+	if !enforce {
+		return false
+	}
+
+	return includedBytes+recordSize > params.MaxStateSyncBytesPerBlock
 }
 
 func (c *Bor) SetHeimdallClient(h IHeimdallClient) {

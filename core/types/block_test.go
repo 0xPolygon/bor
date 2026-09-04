@@ -94,7 +94,7 @@ func GetValidatorBytesTest(h *Header) []byte {
 	return blockExtraData.ValidatorBytes
 }
 
-func TestTxDependencyBlockDecoding(t *testing.T) {
+func TestValidatorBytesBlockDecoding(t *testing.T) {
 	t.Parallel()
 
 	blockEnc := common.FromHex("f9037df90270a00000000000000000000000000000000000000000000000000000000000000000a00000000000000000000000000000000000000000000000000000000000000000948888f1f195afa192cfee860698584c030f4c9db1a0ef1552a40b7165c3cd773806b9e0c165b75356e0314bf0706f279c729f51e017a00000000000000000000000000000000000000000000000000000000000000000a00000000000000000000000000000000000000000000000000000000000000000b90100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008302000080832fefd8825208845506eb07b8710000000000000000000000000000000000000000000000000000000000000000cf8776616c20736574c6c20201c201800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000a0bd4472abb6659ebe3ee06ee4d7b72a00a9f4d001caca51342001075469aff49888a13a5a8c8f2bb1c4843b9aca00f90106f85f800a82c35094095e7baea6a6c7c4c2dfeb977efac326af552d870a801ba09bea4c4daac7c7c52e093e6a4c35dbbcf8856f1af7b059ba20253e70848d094fa08a8fae537ce25ed8cb5af9adac3f141af69bd515bd2ba031522df09b97dd72b1b8a302f8a0018080843b9aca008301e24194095e7baea6a6c7c4c2dfeb977efac326af552d878080f838f7940000000000000000000000000000000000000001e1a0000000000000000000000000000000000000000000000000000000000000000080a0fe38ca4e44a30002ac54af7cf922a6ac2ba11b7d22f548e8ecb3f51f41cb31b0a06de6a5cbae13c0c856e33acf021b51819636cfc009d39eafb9f606d546e305a8c0")
@@ -126,10 +126,8 @@ func TestTxDependencyBlockDecoding(t *testing.T) {
 	tx1, _ = tx1.WithSignature(HomesteadSigner{}, common.Hex2Bytes("9bea4c4daac7c7c52e093e6a4c35dbbcf8856f1af7b059ba20253e70848d094f8a8fae537ce25ed8cb5af9adac3f141af69bd515bd2ba031522df09b97dd72b100"))
 
 	validatorBytes := GetValidatorBytesTest(block.header)
-	txDependency := block.GetTxDependency()
 
 	check("validatorBytes", validatorBytes, []byte("val set"))
-	check("txDependency", txDependency, [][]uint64{{2, 1}, {1, 0}})
 
 	addr := common.HexToAddress("0x0000000000000000000000000000000000000001")
 	accesses := AccessList{AccessTuple{
@@ -870,6 +868,10 @@ func TestSetSealTimings(t *testing.T) {
 	chainConfig := &params.ChainConfig{
 		ChainID:     big.NewInt(137),
 		CancunBlock: cancunBlock,
+		Bor: &params.BorConfig{
+			AustinBlock: big.NewInt(100),
+			HampiBlock:  big.NewInt(200),
+		},
 	}
 
 	// Distinctive vanity and seal bytes to confirm they survive the rewrite.
@@ -879,11 +881,7 @@ func TestSetSealTimings(t *testing.T) {
 	gasTarget := uint64(15000000)
 	bfcd := uint64(64)
 	timeNano := uint64(1700000000_000_000_000) + 123456789
-	encoded, err := rlp.EncodeToBytes(&BlockExtraData{
-		GasTarget:                &gasTarget,
-		BaseFeeChangeDenominator: &bfcd,
-		TimeNano:                 &timeNano,
-	})
+	encoded, err := EncodeBlockExtraData(chainConfig, big.NewInt(200), nil, &gasTarget, &bfcd, &timeNano)
 	if err != nil {
 		t.Fatalf("failed to encode BlockExtraData: %v", err)
 	}
@@ -894,7 +892,7 @@ func TestSetSealTimings(t *testing.T) {
 	// Use values with non-zero nanosecond components to prove full precision.
 	elapsedNano := uint64(2_648_123) // 2.648123ms
 	finalizeNano := uint64(1_500_456)
-	if err := header.SetSealTimings(elapsedNano, finalizeNano); err != nil {
+	if err := header.SetSealTimings(chainConfig, elapsedNano, finalizeNano); err != nil {
 		t.Fatalf("SetSealTimings failed: %v", err)
 	}
 
@@ -928,7 +926,7 @@ func TestSetSealTimings(t *testing.T) {
 
 	// Short extra data must error rather than panic.
 	short := &Header{Number: big.NewInt(200), Extra: []byte{0x01, 0x02}}
-	if err := short.SetSealTimings(1, 2); err == nil {
+	if err := short.SetSealTimings(chainConfig, 1, 2); err == nil {
 		t.Errorf("expected error for short extra data, got nil")
 	}
 }
@@ -999,6 +997,35 @@ func TestDecodeBlockExtraData(t *testing.T) {
 	}
 	if len(result.TxDependency) != 2 || len(result.TxDependency[0]) != 1 || result.TxDependency[0][0] != 0 {
 		t.Errorf("TxDependency mismatch: got %v, want %v", result.TxDependency, txDep)
+	}
+}
+
+func TestGetTimeNanoPostAustin(t *testing.T) {
+	t.Parallel()
+
+	chainConfig := &params.ChainConfig{
+		ChainID:     big.NewInt(137),
+		CancunBlock: big.NewInt(100),
+		Bor: &params.BorConfig{
+			AustinBlock: big.NewInt(100),
+			HampiBlock:  big.NewInt(200),
+		},
+	}
+	gasTarget := uint64(15_000_000)
+	bfcd := uint64(64)
+	timeNano := uint64(1_700_000_000_123_456_789)
+	encoded, err := EncodeBlockExtraData(chainConfig, big.NewInt(200), nil, &gasTarget, &bfcd, &timeNano)
+	if err != nil {
+		t.Fatalf("encode block extra data: %v", err)
+	}
+	header := &Header{
+		Number: big.NewInt(200),
+		Extra:  append(append(make([]byte, ExtraVanityLength), encoded...), make([]byte, ExtraSealLength)...),
+	}
+
+	got := header.GetTimeNano(chainConfig)
+	if got == nil || *got != timeNano {
+		t.Errorf("TimeNano mismatch: got %v, want %d", got, timeNano)
 	}
 }
 
