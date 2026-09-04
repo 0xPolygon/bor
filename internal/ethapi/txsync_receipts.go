@@ -212,10 +212,6 @@ func (h *txSyncReceiptHub) canonicalReceipt(receipt *types.Receipt, tx *types.Tr
 	)
 }
 
-func (h *txSyncReceiptHub) deliver(hash common.Hash, result txSyncReceiptResult) {
-	h.deliverBatch(map[common.Hash]txSyncReceiptResult{hash: result})
-}
-
 func (h *txSyncReceiptHub) deliverBatch(results map[common.Hash]txSyncReceiptResult) {
 	if len(results) == 0 {
 		return
