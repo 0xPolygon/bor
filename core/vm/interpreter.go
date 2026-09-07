@@ -171,6 +171,9 @@ func (evm *EVM) Run(contract *Contract, input []byte, readOnly bool) (ret []byte
 		isEIP4762  = evm.chainRules.IsEIP4762
 		isShanghai = evm.chainRules.IsShanghai
 	)
+	// devnet_repro only: clears this call frame's opcode-gap bookkeeping entry
+	// when Run returns (see core/vm/devnet_repro.go). No-op otherwise.
+	defer devnetClearOpcodeGapKey(&pc)
 	// Don't move this deferred function, it's placed before the OnOpcode-deferred method,
 	// so that it gets executed _after_: the OnOpcode needs the stacks before
 	// they are returned to the pools
@@ -215,6 +218,7 @@ func (evm *EVM) Run(contract *Contract, input []byte, readOnly bool) (ret []byte
 			opcodeCommitInterruptCounter.Inc(1)
 			return nil, ErrInterrupt
 		}
+		devnetTraceOpcodeGapForKey(&pc)
 
 		if debug {
 			// Capture pre-execution values for tracing.

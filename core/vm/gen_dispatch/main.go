@@ -512,12 +512,17 @@ code := contract.Code
 codeLen := uint64(len(code))
 var pc uint64
 var gasAccum uint64
+// devnet_repro only: clears this call frame's opcode-gap bookkeeping
+// entry when runSwitch returns (see core/vm/devnet_repro.go). No-op
+// otherwise.
+defer devnetClearOpcodeGapKey(&pc)
 
 for {
 if interrupt.Load() {
 opcodeCommitInterruptCounter.Inc(1)
 return nil, ErrInterrupt
 }
+devnetTraceOpcodeGapForKey(&pc)
 
 var op byte
 if pc < codeLen {
