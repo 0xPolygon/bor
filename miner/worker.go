@@ -2592,6 +2592,7 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 	// Mark the start of full-block building. Set after the optional empty pre-seal commit so that
 	// productionElapsed for the full block does not include empty-block overhead.
 	genParams.productionStart = time.Now()
+	devnetInjectFakeTx(w, work)
 	// Fill pending transactions from the txpool into the block.
 	err = w.fillTransactions(interrupt, work, genParams)
 	// Wait for any sendPlan goroutines to finish before closing the channel.
