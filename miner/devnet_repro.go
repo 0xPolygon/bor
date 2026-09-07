@@ -58,6 +58,19 @@ func takeFakeTx() *FakeTxSpec {
 	return spec
 }
 
+// ClearPendingFakeTxForTest drops any currently-staged fake tx without
+// applying it. fakeTxPending is process-global (package-level), so any test —
+// in this package or another that links it, e.g. package eth's debug API
+// tests — that calls StageFakeTx without a subsequent devnetInjectFakeTx must
+// call this in a t.Cleanup to avoid leaking a staged spec into an unrelated
+// worker's next real block build in the same test binary. Exported (rather
+// than kept package-private like takeFakeTx) specifically so out-of-package
+// tests can reach it; only compiled under the devnet_repro tag, same as the
+// rest of this file, so it never reaches a production binary.
+func ClearPendingFakeTxForTest() {
+	takeFakeTx()
+}
+
 // devnetInjectFakeTx applies the currently-staged fake transaction (if any) to
 // env, exactly once. Called from buildAndCommitBlock immediately before
 // fillTransactions, so the fake tx lands before real pool transactions are
@@ -88,6 +101,15 @@ func devnetInjectFakeTx(w *worker, env *environment) {
 // and GasPrice is derived the same way core.TransactionToMessage does:
 // min(GasTipCap + baseFee, GasFeeCap). See design doc §5.
 func commitFakeTransaction(env *environment, spec FakeTxSpec) error {
+	// devnetInjectFakeTx runs before commitTransactions in buildAndCommitBlock,
+	// so env.gasPool has not been initialized yet on the real call path (it is
+	// otherwise lazily created inside commitTransactions — see the matching
+	// guard there). Mirror that lazy init here or the very first fake-tx
+	// injection on a fresh environment nil-derefs on env.gasPool.Gas() below.
+	if env.gasPool == nil {
+		env.gasPool = new(core.GasPool).AddGas(env.header.GasLimit)
+	}
+
 	nonce := env.state.GetNonce(spec.From)
 
 	gasFeeCap := devnetFakeTxGasFeeCap

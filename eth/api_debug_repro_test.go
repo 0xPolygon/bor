@@ -23,6 +23,14 @@ func newTestEthereumForDebugAPI(t *testing.T) *Ethereum {
 // correctly-typed pass-through to (*miner.Miner).StageFakeTx — the actual
 // injection behavior is covered by miner package tests (Task 1).
 func TestDebugAPIStageFakeTxForwardsToMiner(t *testing.T) {
+	// fakeTxPending is a package-level (process-global) var in package miner:
+	// this test stages a spec but never runs a real block build to consume
+	// it via devnetInjectFakeTx, so it must be drained here or it leaks into
+	// whichever other test in this binary's process next builds a real block
+	// (any worker created by any eth-package test shares the same miner
+	// package global). See miner.ClearPendingFakeTxForTest's doc comment.
+	t.Cleanup(miner.ClearPendingFakeTxForTest)
+
 	eth := newTestEthereumForDebugAPI(t)
 
 	api := NewDebugAPI(eth)
