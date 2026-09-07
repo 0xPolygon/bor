@@ -38,3 +38,13 @@ func TestDebugAPIStageFakeTxForwardsToMiner(t *testing.T) {
 	err := api.StageFakeTx(spec)
 	require.NoError(t, err)
 }
+
+// TestDebugAPIDrainSlowOpcodeGaps verifies the RPC method returns a non-nil
+// (possibly empty) slice, even when nothing has been recorded yet.
+func TestDebugAPIDrainSlowOpcodeGaps(t *testing.T) {
+	eth := newTestEthereumForDebugAPI(t)
+	api := NewDebugAPI(eth)
+
+	gaps := api.DrainSlowOpcodeGaps()
+	require.NotNil(t, gaps) // empty slice, not nil, when nothing has been recorded yet
+}

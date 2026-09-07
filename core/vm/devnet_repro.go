@@ -55,6 +55,12 @@ func drainSlowOpcodeGaps() []time.Duration {
 	return gaps
 }
 
+// DrainSlowOpcodeGaps is the exported form of drainSlowOpcodeGaps, for callers
+// outside package vm (the debug RPC layer, eth/api_debug_repro.go).
+func DrainSlowOpcodeGaps() []time.Duration {
+	return drainSlowOpcodeGaps()
+}
+
 // devnetClearOpcodeGapKey removes the bookkeeping entry for a completed call
 // frame. Without this, devnetLastOpcodeAt would grow without bound: every
 // Run/runSwitch invocation (including deeply nested CALL frames) registers a

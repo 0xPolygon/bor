@@ -3,6 +3,9 @@
 package eth
 
 import (
+	"time"
+
+	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/miner"
 )
 
@@ -13,4 +16,16 @@ import (
 func (api *DebugAPI) StageFakeTx(spec miner.FakeTxSpec) error {
 	api.eth.miner.StageFakeTx(spec)
 	return nil
+}
+
+// DrainSlowOpcodeGaps returns and clears the log of per-opcode execution gaps
+// exceeding the slow-opcode threshold, recorded since the last call. Only
+// exists in binaries built with -tags devnet_repro. See design doc §8.
+func (api *DebugAPI) DrainSlowOpcodeGaps() []time.Duration {
+	gaps := vm.DrainSlowOpcodeGaps()
+	if gaps == nil {
+		return []time.Duration{}
+	}
+
+	return gaps
 }
