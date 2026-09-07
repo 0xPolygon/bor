@@ -522,12 +522,12 @@ if interrupt.Load() {
 opcodeCommitInterruptCounter.Inc(1)
 return nil, ErrInterrupt
 }
-devnetTraceOpcodeGapForKey(&pc)
-
 var op byte
 if pc < codeLen {
 op = code[pc]
 }
+
+devnetTraceOpcodeGapForKey(&pc, OpCode(op), pc, contract.Address())
 
 switch OpCode(op) {
 `)

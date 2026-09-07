@@ -218,7 +218,7 @@ func (evm *EVM) Run(contract *Contract, input []byte, readOnly bool) (ret []byte
 			opcodeCommitInterruptCounter.Inc(1)
 			return nil, ErrInterrupt
 		}
-		devnetTraceOpcodeGapForKey(&pc)
+		devnetTraceOpcodeGapForKey(&pc, contract.GetOp(pc), pc, contract.Address())
 
 		if debug {
 			// Capture pre-execution values for tracing.

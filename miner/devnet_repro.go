@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
@@ -22,13 +23,21 @@ var devnetFakeTxGasFeeCap = new(big.Int).Mul(big.NewInt(1000), big.NewInt(1_000_
 // FakeTxSpec describes a devnet-only, signature-bypassed transaction to splice
 // into the next block this worker builds. See design doc
 // docs/superpowers/specs/2026-09-03-heavy-contract-slow-block-repro-design.md §5.
+//
+// Field types are go-ethereum's RPC-friendly wire types (hexutil.Bytes,
+// hexutil.Big, hexutil.Uint64), not the plain Go types (fixed by final
+// review finding C1): the raw types don't decode from the hex/JSON shape the
+// debug_stageFakeTx runbook invocation actually sends — encoding/json decodes
+// []byte as base64, rejects a "0x..." string into *big.Int, and rejects a
+// hex string into uint64. There is no GasPrice field: it was already unused
+// by fee calculation (commitFakeTransaction derives its own fee fields, see
+// below) and is dropped entirely rather than kept and documented.
 type FakeTxSpec struct {
 	From     common.Address
 	To       common.Address
-	Data     []byte
-	Value    *big.Int
-	GasLimit uint64
-	GasPrice *big.Int
+	Data     hexutil.Bytes
+	Value    *hexutil.Big
+	GasLimit hexutil.Uint64
 }
 
 var (
@@ -75,13 +84,28 @@ func ClearPendingFakeTxForTest() {
 // env, exactly once. Called from buildAndCommitBlock immediately before
 // fillTransactions, so the fake tx lands before real pool transactions are
 // packed around it.
+//
+// A deferred recover() here is a safety net for any FUTURE bug of this shape
+// inside commitFakeTransaction (I1, final review): the design's whole safety
+// argument is that a failed/malformed fake-tx injection must never take down
+// the real block build, so any panic reached from this call is logged and
+// swallowed rather than allowed to propagate up into the real miner
+// goroutine. This is defense in depth, not a substitute for fixing known
+// panic causes (e.g. the nil-Value case, handled directly in
+// commitFakeTransaction below).
 func devnetInjectFakeTx(w *worker, env *environment) {
 	spec := takeFakeTx()
 	if spec == nil {
 		return
 	}
 
-	if err := commitFakeTransaction(env, *spec); err != nil {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error("devnet_repro: panic while injecting fake transaction, recovered", "from", spec.From, "to", spec.To, "panic", r)
+		}
+	}()
+
+	if err := devnetCommitFakeTransaction(env, *spec); err != nil {
 		log.Error("devnet_repro: failed to inject fake transaction", "from", spec.From, "to", spec.To, "err", err)
 		return
 	}
@@ -100,7 +124,38 @@ func devnetInjectFakeTx(w *worker, env *environment) {
 // fixed at a value comfortably above any realistic baseFee, GasTipCap is 0,
 // and GasPrice is derived the same way core.TransactionToMessage does:
 // min(GasTipCap + baseFee, GasFeeCap). See design doc §5.
+// devnetCommitFakeTransaction indirects commitFakeTransaction through a
+// package-level var so tests can substitute a deliberately panicking
+// implementation to exercise devnetInjectFakeTx's recover() safety net
+// (final review finding I1) without needing to reconstruct a real internal
+// panic trigger — that safety net exists for ANY future bug of this shape,
+// not only the nil-Value case commitFakeTransaction itself now guards
+// against directly.
+var devnetCommitFakeTransaction = commitFakeTransaction
+
 func commitFakeTransaction(env *environment, spec FakeTxSpec) error {
+	// I1 (final review): a nil spec.Value (e.g. omitted from the RPC call)
+	// otherwise flows through as a nil *big.Int into core.Message.Value, and
+	// state_transition.go's buyGas does balanceCheck.Add(balanceCheck,
+	// st.msg.Value) — big.Int.Add with a nil operand panics, taking down the
+	// whole node from the miner goroutine with no recover below this point
+	// (devnetInjectFakeTx's recover() is a backstop, not a substitute for
+	// this). Default nil Value to zero explicitly.
+	value := new(big.Int)
+	if spec.Value != nil {
+		value = spec.Value.ToInt()
+	}
+
+	// A zero GasLimit is never a legitimate fake-tx request (it can't even
+	// cover intrinsic gas) and is rejected rather than allowed to proceed
+	// into ApplyTransactionWithEVM with confusing downstream failure modes.
+	if spec.GasLimit == 0 {
+		return fmt.Errorf("commitFakeTransaction: spec.GasLimit must be non-zero")
+	}
+
+	gasLimit := uint64(spec.GasLimit)
+	data := []byte(spec.Data)
+
 	// devnetInjectFakeTx runs before commitTransactions in buildAndCommitBlock,
 	// so env.gasPool has not been initialized yet on the real call path (it is
 	// otherwise lazily created inside commitTransactions — see the matching
@@ -127,12 +182,12 @@ func commitFakeTransaction(env *environment, spec FakeTxSpec) error {
 		From:      spec.From,
 		To:        &spec.To,
 		Nonce:     nonce,
-		Value:     spec.Value,
-		GasLimit:  spec.GasLimit,
+		Value:     value,
+		GasLimit:  gasLimit,
 		GasPrice:  gasPrice,
 		GasFeeCap: gasFeeCap,
 		GasTipCap: gasTipCap,
-		Data:      spec.Data,
+		Data:      data,
 	}
 
 	// tx is only used by ApplyTransactionWithEVM for receipt/tx-hash bookkeeping
@@ -142,11 +197,20 @@ func commitFakeTransaction(env *environment, spec FakeTxSpec) error {
 	tx := types.NewTx(&types.LegacyTx{
 		Nonce:    nonce,
 		To:       &spec.To,
-		Value:    spec.Value,
-		Gas:      spec.GasLimit,
+		Value:    value,
+		Gas:      gasLimit,
 		GasPrice: gasPrice,
-		Data:     spec.Data,
+		Data:     data,
 	})
+
+	// M4 (final review): real commitTransactions calls SetTxContext
+	// immediately before every commitTransaction so the state DB attributes
+	// any logs emitted during execution to the right tx hash/index.
+	// commitFakeTransaction must do the same or the fake tx's logs/bloom get
+	// filed under a stale/zero tx hash instead of its own — silently
+	// dropping them from its own receipt, which matters for reading back the
+	// XEN call's emitted events (the whole point of the experiment).
+	env.state.SetTxContext(tx.Hash(), env.tcount)
 
 	snap := env.state.Snapshot()
 	gp := env.gasPool.Gas()
