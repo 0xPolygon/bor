@@ -319,8 +319,8 @@ func TestPeerAttachBulkRWRoutesEthTraffic(t *testing.T) {
 		t.Fatalf("failed to send block hashes: %v", err)
 	}
 
-	const requestID = uint64(17)
-	go func() { errc <- peer.RequestTxs(requestID, hashes) }()
+	const txRequestID = uint64(9)
+	go func() { errc <- peer.RequestTxs(txRequestID, hashes) }()
 	msg, err = txFetchApp.ReadMsg()
 	if err != nil {
 		t.Fatalf("failed to read pooled transaction request: %v", err)
@@ -332,8 +332,8 @@ func TestPeerAttachBulkRWRoutesEthTraffic(t *testing.T) {
 	if err := msg.Decode(&txReq); err != nil {
 		t.Fatalf("failed to decode pooled transaction request: %v", err)
 	}
-	if txReq.RequestId != requestID {
-		t.Fatalf("unexpected pooled transaction request ID: got %d want %d", txReq.RequestId, requestID)
+	if txReq.RequestId != txRequestID {
+		t.Fatalf("unexpected pooled transaction request ID: got %d want %d", txReq.RequestId, txRequestID)
 	}
 	if len(txReq.GetPooledTransactionsRequest) != len(hashes) {
 		t.Fatalf("unexpected pooled transaction request size: got %d want %d", len(txReq.GetPooledTransactionsRequest), len(hashes))
