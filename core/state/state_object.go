@@ -286,9 +286,7 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 	// accounts, this is the committed parent's storage root (not block N's).
 	if s.db.prefetcher != nil {
 		if root := s.getPrefetchRoot(); root != types.EmptyRootHash || s.db.db.TrieDB().IsVerkle() {
-			if err = s.db.prefetcher.prefetch(s.addrHash, root, s.address, nil, []common.Hash{key}, true); err != nil {
-				log.Error("Failed to prefetch storage slot", "addr", s.address, "key", key, "err", err)
-			}
+			s.db.recordWitnessSlotRead(s.addrHash, root, s.address, key)
 		}
 	}
 	s.originStorage[key] = value

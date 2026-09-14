@@ -160,6 +160,10 @@ type StateDB struct {
 	// State witness if cross validation is needed
 	witness      *stateless.Witness
 	witnessStats *stateless.WitnessStats
+
+	// witnessTx, when non-nil, defers the witness-relevant bookkeeping a
+	// still-abandonable transaction produces. See BeginWitnessTx.
+	witnessTx *witnessTxReads
 	// witnessPrewalkStop stops the read-set prewalker started by
 	// StartWitnessReadSetPrewalk; CollectStateWitness invokes it before
 	// collecting. Idempotent. Deliberately not carried across Copy.
@@ -791,6 +795,162 @@ func (s *StateDB) GetWriteMapDump() []DumpStruct {
 func (s *StateDB) AddEmptyMVHashMap() {
 	mvh := blockstm.MakeMVHashMap()
 	s.mvHashmap = mvh
+}
+
+// witnessTxReads buffers the read-driven bookkeeping of one attempted
+// transaction. These are not witness calls, but each one ends up in the
+// witness later: a scheduled read-prefetch resolves a trie path that
+// IntermediateRoot harvests, and a non-existent-account read becomes a
+// proof-of-absence walk in the pipelined SRC goroutine.
+type witnessTxReads struct {
+	accounts    []common.Address
+	slots       []witnessSlotRead
+	nonExistent []common.Address
+}
+
+// witnessSlotRead is a deferred storage-slot prefetch, carrying the same
+// trie identity the immediate call would have used.
+type witnessSlotRead struct {
+	owner common.Hash
+	root  common.Hash
+	addr  common.Address
+	key   common.Hash
+}
+
+// BeginWitnessTx starts deferring the witness contributions of a transaction
+// whose inclusion is not yet decided, so a producer that drops it leaves no
+// trace in the block's witness.
+//
+// Two kinds of contribution are held back. Direct additions (code blobs, block
+// hashes, execution-time nodes) are staged on the witness itself. Indirect
+// ones are buffered here: read-prefetch scheduling, whose resolved trie paths
+// IntermediateRoot would otherwise harvest, and non-existent-account reads,
+// which drive proof-of-absence walks.
+//
+// No-op without a witness, so non-producing paths keep today's behaviour
+// exactly. Calls do not nest.
+func (s *StateDB) BeginWitnessTx() {
+	if s.witness == nil {
+		return
+	}
+	s.witnessTx = &witnessTxReads{}
+	s.witness.BeginTx()
+}
+
+// CommitWitnessTx applies everything the transaction contributed: the staged
+// witness additions, plus the read-prefetch work that was held back. The
+// prefetcher still resolves these well before IntermediateRoot harvests it,
+// so completeness is unchanged -- only the scheduling moves to end-of-tx.
+func (s *StateDB) CommitWitnessTx() {
+	if s.witnessTx == nil {
+		s.witness.CommitTx()
+		return
+	}
+	buf := s.witnessTx
+	s.witnessTx = nil
+
+	if s.prefetcher != nil {
+		if len(buf.accounts) > 0 {
+			if err := s.prefetcher.prefetch(common.Hash{}, s.originalRoot, common.Address{}, buf.accounts, nil, true); err != nil {
+				log.Error("Failed to prefetch accounts", "count", len(buf.accounts), "err", err)
+			}
+		}
+		for _, sl := range buf.slots {
+			if err := s.prefetcher.prefetch(sl.owner, sl.root, sl.addr, nil, []common.Hash{sl.key}, true); err != nil {
+				log.Error("Failed to prefetch storage slot", "addr", sl.addr, "key", sl.key, "err", err)
+			}
+		}
+	}
+	for _, addr := range buf.nonExistent {
+		if s.nonExistentReads == nil {
+			s.nonExistentReads = make(map[common.Address]struct{})
+		}
+		s.nonExistentReads[addr] = struct{}{}
+	}
+	s.witness.CommitTx()
+}
+
+// DiscardWitnessTx throws away everything the attempted transaction
+// contributed, leaving the witness as it was at BeginWitnessTx.
+//
+// Call it AFTER RevertToSnapshot: it evicts read caches, and doing that while
+// the journal still holds the transaction's changes would strand them.
+func (s *StateDB) DiscardWitnessTx() {
+	buf := s.witnessTx
+	s.witnessTx = nil
+	s.witness.DiscardTx()
+	if buf == nil {
+		return
+	}
+	// Evict the read caches this transaction populated. Both getStateObject
+	// and GetCommittedState return early on a cache hit, ahead of the
+	// read-prefetch call that puts the path into the witness. Leaving the
+	// discarded transaction's entries behind would turn a later, genuinely
+	// included read into a silent cache hit whose trie path is never resolved
+	// -- a witness that is too SMALL, which fails stateless execution outright
+	// rather than merely carrying too much.
+	for _, sl := range buf.slots {
+		obj := s.stateObjects[sl.addr]
+		if obj == nil {
+			continue
+		}
+		obj.storageMutex.Lock()
+		delete(obj.originStorage, sl.key)
+		obj.storageMutex.Unlock()
+	}
+	for _, addr := range buf.accounts {
+		// Only freshly loaded objects reach the buffer: the prefetch call site
+		// sits on getStateObject's miss path. An object that is still dirty
+		// after the revert was brought in by an included transaction, so it
+		// stays.
+		if _, dirty := s.mutations[addr]; dirty {
+			continue
+		}
+		delete(s.stateObjects, addr)
+	}
+}
+
+// recordWitnessAccountRead schedules an account read-prefetch, deferring it
+// when the transaction may still be abandoned.
+func (s *StateDB) recordWitnessAccountRead(addr common.Address) {
+	if s.prefetcher == nil {
+		return
+	}
+	if s.witnessTx != nil {
+		s.witnessTx.accounts = append(s.witnessTx.accounts, addr)
+		return
+	}
+	if err := s.prefetcher.prefetch(common.Hash{}, s.originalRoot, common.Address{}, []common.Address{addr}, nil, true); err != nil {
+		log.Error("Failed to prefetch account", "addr", addr, "err", err)
+	}
+}
+
+// recordWitnessSlotRead schedules a storage-slot read-prefetch, deferring it
+// when the transaction may still be abandoned.
+func (s *StateDB) recordWitnessSlotRead(owner, root common.Hash, addr common.Address, key common.Hash) {
+	if s.prefetcher == nil {
+		return
+	}
+	if s.witnessTx != nil {
+		s.witnessTx.slots = append(s.witnessTx.slots, witnessSlotRead{owner: owner, root: root, addr: addr, key: key})
+		return
+	}
+	if err := s.prefetcher.prefetch(owner, root, addr, nil, []common.Hash{key}, true); err != nil {
+		log.Error("Failed to prefetch storage slot", "addr", addr, "key", key, "err", err)
+	}
+}
+
+// recordNonExistentRead notes a read of an account that does not exist,
+// deferring it when the transaction may still be abandoned.
+func (s *StateDB) recordNonExistentRead(addr common.Address) {
+	if s.witnessTx != nil {
+		s.witnessTx.nonExistent = append(s.witnessTx.nonExistent, addr)
+		return
+	}
+	if s.nonExistentReads == nil {
+		s.nonExistentReads = make(map[common.Address]struct{})
+	}
+	s.nonExistentReads[addr] = struct{}{}
 }
 
 func (s *StateDB) SetWitness(witness *stateless.Witness) {
@@ -1465,21 +1625,14 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 		// Independent of where we loaded the data from, add it to the prefetcher.
 		// Whilst this would be a bit weird if snapshots are disabled, but we still
 		// want the trie nodes to end up in the prefetcher too, so just push through.
-		if s.prefetcher != nil {
-			if err = s.prefetcher.prefetch(common.Hash{}, s.originalRoot, common.Address{}, []common.Address{addr}, nil, true); err != nil {
-				log.Error("Failed to prefetch account", "addr", addr, "err", err)
-			}
-		}
+		s.recordWitnessAccountRead(addr)
 		// Short circuit if the account is not found
 		if acct == nil {
 			// Track the address so the pipelined SRC goroutine can walk
 			// the trie path and capture proof-of-absence nodes for the
 			// witness. Without this, stateless execution can't verify
 			// non-existent accounts.
-			if s.nonExistentReads == nil {
-				s.nonExistentReads = make(map[common.Address]struct{})
-			}
-			s.nonExistentReads[addr] = struct{}{}
+			s.recordNonExistentRead(addr)
 			return nil
 		}
 		// Insert into the live set
@@ -1810,6 +1963,15 @@ func (s *StateDB) addObjectWitness(obj *stateObject) {
 // It is called in between transactions to get the root hash that
 // goes into transaction receipts.
 func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
+	// A witness scope left open here is a caller bug: the block root is being
+	// computed while additions are still staged, and they would be dropped on
+	// the floor. Close it toward the safe side -- a witness carrying too much
+	// is merely large, one missing a node fails stateless execution outright --
+	// and say so loudly.
+	if s.witnessTx != nil {
+		log.Error("Witness transaction scope still open at IntermediateRoot; committing it to avoid dropping nodes")
+		s.CommitWitnessTx()
+	}
 	// Finalise all the dirty storage states and write them into the tries
 	s.Finalise(deleteEmptyObjects)
 
