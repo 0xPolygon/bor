@@ -72,7 +72,6 @@ type Consumer struct {
 	// held at that height, which is what lets the audit watermark advance.
 	watching     atomic.Bool
 	auditTrigger chan struct{}
-	auditWindow  uint64
 	auditMu      sync.Mutex
 
 	cancel context.CancelFunc

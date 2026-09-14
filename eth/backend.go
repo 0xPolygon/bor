@@ -214,7 +214,6 @@ func (s *Ethereum) attachSequencer(config *ethconfig.Config) error {
 			return nil
 		}
 
-		consumer.SetAuditWindow(config.SequencerAuditWindow)
 		s.seqConsumer = consumer
 		s.blockchain.SetPreconfProvider(consumer)
 		consumer.Start()

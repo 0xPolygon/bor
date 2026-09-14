@@ -5,6 +5,10 @@ import (
 	"testing"
 )
 
+// manyRecords is enough invalidations to tell a bounded read from an
+// unbounded one; the accessors have no ceiling of their own.
+const manyRecords = 1024
+
 func TestInvalidPreconfRecords(t *testing.T) {
 	db := NewMemoryDatabase()
 	for number, reason := range map[uint64]string{7: "skipped", 9: "canonical_mismatch", 8: "reorged"} {
@@ -19,7 +23,7 @@ func TestInvalidPreconfRecords(t *testing.T) {
 	if len(records) != 2 || records[0].Number != 9 || records[1].Number != 8 || records[1].Reason != "superseded" {
 		t.Fatalf("records = %+v", records)
 	}
-	for number := uint64(10); number < InvalidPreconfQueryLimit+20; number++ {
+	for number := uint64(10); number < manyRecords+20; number++ {
 		if err := WriteInvalidPreconf(db, number, "skipped"); err != nil {
 			t.Fatalf("write %d: %v", number, err)
 		}
@@ -30,11 +34,11 @@ func TestInvalidPreconfRecords(t *testing.T) {
 	for iterator.Next() {
 		stored++
 	}
-	if stored != InvalidPreconfQueryLimit+13 {
+	if stored != manyRecords+13 {
 		t.Fatalf("stored records = %d", stored)
 	}
-	records = ReadInvalidPreconfs(db, InvalidPreconfQueryLimit+1)
-	if len(records) != InvalidPreconfQueryLimit || records[0].Number != InvalidPreconfQueryLimit+19 {
+	records = ReadInvalidPreconfs(db, manyRecords+1)
+	if len(records) != manyRecords+1 || records[0].Number != manyRecords+19 {
 		t.Fatalf("bounded query = %d records, newest %d", len(records), records[0].Number)
 	}
 	if err := WriteInvalidPreconf(db, 1, "late_invalidation"); err != nil {
@@ -43,7 +47,7 @@ func TestInvalidPreconfRecords(t *testing.T) {
 	if retained, err := db.Has(invalidPreconfKey(1)); err != nil || !retained {
 		t.Fatalf("late invalidation retained = %t, err = %v", retained, err)
 	}
-	if records = ReadInvalidPreconfs(db, InvalidPreconfQueryLimit); len(records) != InvalidPreconfQueryLimit || records[len(records)-1].Number == 1 {
+	if records = ReadInvalidPreconfs(db, manyRecords); len(records) != manyRecords || records[len(records)-1].Number == 1 {
 		t.Fatalf("bounded query includes late old record: %+v", records[len(records)-1])
 	}
 }
@@ -105,16 +109,16 @@ func TestInvalidPreconfsInRange(t *testing.T) {
 		t.Fatalf("inverted range = %+v (nil=%t)", records, records == nil)
 	}
 
-	// The response is capped at InvalidPreconfQueryLimit even for a wide range,
-	// returning the newest records first.
-	for number := uint64(10); number < InvalidPreconfQueryLimit+20; number++ {
+	// A wide range returns every record in it, newest first: there is one
+	// record per height, so the caller capping the range caps the response.
+	for number := uint64(10); number < manyRecords+20; number++ {
 		if err := WriteInvalidPreconf(db, number, "skipped"); err != nil {
 			t.Fatalf("write %d: %v", number, err)
 		}
 	}
-	records = ReadInvalidPreconfsInRange(db, 0, InvalidPreconfQueryLimit+100)
-	if len(records) != InvalidPreconfQueryLimit || records[0].Number != InvalidPreconfQueryLimit+19 {
-		t.Fatalf("capped range = %d records, newest %d", len(records), records[0].Number)
+	records = ReadInvalidPreconfsInRange(db, 0, manyRecords+100)
+	if len(records) != manyRecords+13 || records[0].Number != manyRecords+19 {
+		t.Fatalf("wide range = %d records, newest %d", len(records), records[0].Number)
 	}
 }
 
@@ -125,9 +129,6 @@ func TestPreconfAuditWatermarks(t *testing.T) {
 	// having audited through block zero.
 	if _, ok, _ := ReadPreconfAuditedThrough(db); ok {
 		t.Fatal("watermark present on a fresh database")
-	}
-	if _, ok, _ := ReadPreconfUnauditedThrough(db); ok {
-		t.Fatal("unaudited mark present on a fresh database")
 	}
 
 	if err := WritePreconfAuditedThrough(db, 0); err != nil {
@@ -142,22 +143,6 @@ func TestPreconfAuditWatermarks(t *testing.T) {
 	}
 	if number, ok, _ := ReadPreconfAuditedThrough(db); !ok || number != 4_200_000_000_000 {
 		t.Fatalf("watermark = (%d, %v)", number, ok)
-	}
-}
-
-// The unaudited mark only rises: a later pass over a narrower window does not
-// make an older gap disappear.
-func TestPreconfUnauditedThroughOnlyRises(t *testing.T) {
-	db := NewMemoryDatabase()
-
-	for _, number := range []uint64{90, 40, 91, 12} {
-		if err := WritePreconfUnauditedThrough(db, number); err != nil {
-			t.Fatalf("write %d: %v", number, err)
-		}
-	}
-
-	if number, ok, _ := ReadPreconfUnauditedThrough(db); !ok || number != 91 {
-		t.Fatalf("unaudited mark = (%d, %v), want (91, true)", number, ok)
 	}
 }
 
@@ -201,7 +186,7 @@ func TestPreconfHeightSeparatesAbsenceFromFailure(t *testing.T) {
 	})
 
 	t.Run("failing value read is an error", func(t *testing.T) {
-		number, ok, err := ReadPreconfUnauditedThrough(presentButUnreadable{})
+		number, ok, err := ReadPreconfAuditedThrough(presentButUnreadable{})
 		if err == nil {
 			t.Fatal("a failing value read reported absence")
 		}

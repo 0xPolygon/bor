@@ -22,13 +22,6 @@ import (
 // was published to callers and then invalidated, which is a stronger claim.
 const unobservedMismatchReason = "unobserved_mismatch"
 
-// defaultAuditWindow bounds one pass. GetBlock returns a height's whole
-// generation, transaction records included, so a wide walk pays for payloads
-// the seal comparison never reads; roughly an hour of blocks covers a restart
-// while staying cheap. Heights older than the window are recorded as
-// unaudited rather than walked.
-const defaultAuditWindow = 3600
-
 // auditReadTimeout bounds one per-height store read.
 const auditReadTimeout = 5 * time.Second
 
@@ -36,9 +29,23 @@ const auditReadTimeout = 5 * time.Second
 // restarting still converges instead of re-walking the same prefix forever.
 const auditCheckpointInterval = 256
 
+// auditFloorEntries and auditFloorPages bound the scan for the store's oldest
+// fully retained block. A page ends at the first block boundary in all but the
+// pathological case of a block with more records than a page holds, so the
+// page budget is small on purpose: the floor is an optimisation, and failing
+// to resolve it costs a NOT_FOUND per aged-out height rather than correctness.
+const (
+	auditFloorEntries = 1024
+	auditFloorPages   = 4
+)
+
 // fetchGeneration reads the latest generation stored at a height. A NotFound
 // error means the store holds nothing there.
 type fetchGeneration func(ctx context.Context, height uint64) ([]*pb.Entry, error)
+
+// fetchOldest reads forward from the store's earliest retained entry, or from
+// after a previous page's resume token, and returns the next token with it.
+type fetchOldest func(ctx context.Context, after []byte) ([]*pb.Entry, []byte, error)
 
 // auditChain is the canonical-chain surface the audit needs: it compares
 // stored seals against canonical hashes and never executes anything, so it
@@ -52,7 +59,7 @@ type auditor struct {
 	db      ethdb.Database
 	chain   auditChain
 	fetch   fetchGeneration
-	window  uint64
+	oldest  fetchOldest
 	advance func(uint64)
 }
 
@@ -70,7 +77,7 @@ type auditSummary struct {
 	through uint64
 	// walked counts every height the pass visited; compared counts the ones
 	// the store actually held a generation for. Reporting only walked cannot
-	// tell "audited the window, all matched" from "the store held nothing for
+	// tell "audited the range, all matched" from "the store held nothing for
 	// any of it", which are very different answers for an operator.
 	walked   uint64
 	compared uint64
@@ -79,130 +86,178 @@ type auditSummary struct {
 	// alreadyJudged counts mismatches the live path had already recorded, so
 	// this pass left the stronger record in place.
 	alreadyJudged uint64
-	skippedTo     uint64 // highest height left unaudited by the window bound
-	// leadingUnheld is the last height of the run of heights at the oldest
-	// end of the window that the store held nothing for. Retention aging a
-	// height out and a producer never publishing there are both NOT_FOUND, so
-	// the run is reported unknown rather than advanced over as clean.
-	leadingUnheld uint64
+	// unheld counts heights the store answered NOT_FOUND for, and skipped the
+	// heights its retention floor had already passed when this pass started.
+	// Nothing was promised at either, so there is nothing to invalidate — but
+	// nothing was compared either, and the watermark advances over both.
+	unheld  uint64
+	skipped uint64
 }
 
-// windowToAudit reports the height range this pass should walk. ok is false when
-// there is nothing to do, which includes the first run on a node that has
-// never audited: that seeds the watermark at the current head rather than
-// walking backwards from an arbitrary point.
-func (a *auditor) windowToAudit() (from, through, skippedTo uint64, ok bool) {
+// rangeToAudit reports the height range this pass should walk: everything
+// between the watermark and the current head. ok is false when there is
+// nothing to do, which includes the first run on a node that has never
+// audited — that seeds the watermark at the current head rather than walking
+// backwards from an arbitrary point.
+func (a *auditor) rangeToAudit() (from, through uint64, ok bool) {
 	head := a.chain.CurrentBlock()
 	if head == nil || head.Number == nil {
-		return 0, 0, 0, false
+		return 0, 0, false
 	}
 	through = head.Number.Uint64()
 
 	watermark, stored, err := rawdb.ReadPreconfAuditedThrough(a.db)
 	if err != nil {
 		// Absence seeds the watermark at the head; an unreadable watermark
-		// must not, or a failed read would mark the whole window audited and
+		// must not, or a failed read would mark the whole range audited and
 		// the monotonic writes would never let it back.
 		log.Warn("Sequence store audit watermark unreadable", "err", err)
 
-		return 0, 0, 0, false
+		return 0, 0, false
 	}
 	if !stored {
 		a.persist(through)
 		log.Info("Sequence store audit watermark seeded", "height", through)
 
-		return 0, 0, 0, false
+		return 0, 0, false
 	}
 	if watermark >= through {
-		return 0, 0, 0, false
+		return 0, 0, false
 	}
 
-	from = watermark + 1
-	if window := a.auditDepth(); through-from+1 > window {
-		// Audit the most recent window and declare the rest unaudited:
-		// callers care whether a recent preconfirmation held, and the older
-		// end is the part they are least likely to ask about.
-		skippedTo = through - window
-		from = skippedTo + 1
-	}
-
-	return from, through, skippedTo, true
+	return watermark + 1, through, true
 }
 
-func (a *auditor) auditDepth() uint64 {
-	if a.window == 0 {
-		return defaultAuditWindow
-	}
-	return a.window
-}
-
-// run walks the unaudited window and records the heights where the store's
-// final generation disagrees with the canonical chain.
+// run walks from the watermark to the head and records the heights where the
+// store's final generation disagrees with the canonical chain. The store's
+// retention is the only bound on the walk: a second bound on this side would
+// be one operators had to keep aligned with the store's.
 func (a *auditor) run(ctx context.Context) (auditSummary, error) {
-	from, through, skippedTo, ok := a.windowToAudit()
+	from, through, ok := a.rangeToAudit()
 	if !ok {
 		return auditSummary{}, nil
 	}
 
-	summary := auditSummary{from: from, through: through, skippedTo: skippedTo}
-	a.recordSkippedWindow(skippedTo, from, through)
+	summary := auditSummary{through: through}
+	summary.from, summary.skipped = a.skipToStoreFloor(ctx, from, through)
 
-	log.Info("Auditing sequence store against canonical chain", "from", from, "through", through)
+	log.Info("Auditing sequence store against canonical chain", "from", summary.from, "through", through)
 
-	for height := from; height <= through; height++ {
+	for height := summary.from; height <= through; height++ {
 		if err := ctx.Err(); err != nil {
-			a.stopAt(&summary, height-1)
+			a.persist(height - 1)
 			return summary, err
 		}
 
 		if err := a.auditHeightInto(ctx, height, &summary); err != nil {
-			a.stopAt(&summary, height-1)
+			a.persist(height - 1)
 			return summary, err
 		}
 
-		if (height-from+1)%auditCheckpointInterval == 0 {
+		if (height-summary.from+1)%auditCheckpointInterval == 0 {
 			a.persist(height)
 		}
 	}
 
-	a.stopAt(&summary, through)
-	log.Info("Sequence store audit complete", "from", from, "through", through,
-		"walked", summary.walked, "compared", summary.compared,
-		"mismatched", summary.mismatch, "uncomparable", summary.unknown,
-		"alreadyJudged", summary.alreadyJudged, "unheld", summary.leadingUnheld)
+	a.persist(through)
+	a.report(&summary)
 
 	return summary, nil
 }
 
-// stopAt closes a pass at height: it reports any run of heights the store held
-// nothing for at the oldest end of the window before raising the watermark, so
-// the two writes cannot be separated by a crash in a way that reports an
-// uncompared range as clean.
-func (a *auditor) stopAt(summary *auditSummary, height uint64) {
-	if summary.leadingUnheld != 0 {
-		if err := rawdb.WritePreconfUnauditedThrough(a.db, summary.leadingUnheld); err != nil {
-			log.Warn("Failed to record unheld sequence store window", "through", summary.leadingUnheld, "err", err)
-		} else {
-			log.Warn("Sequence store held nothing for the oldest end of the audit window",
-				"unaudited", summary.leadingUnheld, "from", summary.from)
+// report closes a pass. The uncompared counts are logged at warning level
+// because the watermark has advanced over those heights: a later query
+// covering them finds no invalidation, and that absence is not evidence they
+// were checked.
+func (a *auditor) report(summary *auditSummary) {
+	log.Info("Sequence store audit complete", "from", summary.from, "through", summary.through,
+		"walked", summary.walked, "compared", summary.compared,
+		"mismatched", summary.mismatch, "uncomparable", summary.unknown,
+		"alreadyJudged", summary.alreadyJudged, "unheld", summary.unheld)
+
+	if summary.unheld != 0 {
+		log.Warn("Sequence store held nothing for part of the audited range",
+			"heights", summary.unheld, "from", summary.from, "through", summary.through)
+	}
+}
+
+// skipToStoreFloor advances from past the heights the store no longer serves,
+// and reports how many it passed over. Walking them would be one NOT_FOUND per
+// height; the floor answers the whole run in one read.
+//
+// It is an optimisation, not a correctness boundary — an unresolved floor
+// leaves the walk to find the same heights unheld, one at a time. Either way
+// the watermark ends up above them without having compared them, which is
+// what the counter is for.
+func (a *auditor) skipToStoreFloor(ctx context.Context, from, through uint64) (uint64, uint64) {
+	floor, ok := a.storeFloor(ctx)
+	if !ok || floor <= from {
+		return from, 0
+	}
+
+	last := floor - 1
+	if last > through {
+		last = through
+	}
+	skipped := last - from + 1
+	auditRetentionSkipped.Inc(int64(skipped))
+	log.Warn("Sequence store no longer retains part of the unaudited range",
+		"from", from, "through", last, "heights", skipped)
+
+	return floor, skipped
+}
+
+// storeFloor resolves the oldest height the store still serves in full. A
+// Range with after unset starts at the earliest retained entry, and the first
+// open at or after it opens the oldest block the store holds whole: a block
+// whose open has aged out is retained only in part, and a partial record list
+// is not comparable against a canonical block.
+func (a *auditor) storeFloor(ctx context.Context) (uint64, bool) {
+	if a.oldest == nil {
+		return 0, false
+	}
+
+	var after []byte
+	for page := 0; page < auditFloorPages; page++ {
+		entries, next, err := a.oldest(ctx, after)
+		if err != nil {
+			log.Debug("Sequence store audit could not resolve the retention floor", "err", err)
+
+			return 0, false
+		}
+		if len(entries) == 0 {
+			return 0, false
+		}
+		if height, ok := floorFromEntries(entries); ok {
+			return height, true
+		}
+
+		after = next
+	}
+
+	return 0, false
+}
+
+// floorFromEntries reports the oldest fully retained height one page proves.
+// A seal reached before any open closes a block whose earlier entries are
+// gone, so the first height that page can vouch for is the one above it.
+// Records carry no height and prove nothing about their own block.
+func floorFromEntries(entries []*pb.Entry) (uint64, bool) {
+	for _, entry := range entries {
+		switch kind := entry.GetKind().(type) {
+		case *pb.Entry_BlockOpen:
+			return kind.BlockOpen.GetBlockNumber(), true
+		case *pb.Entry_BlockSeal:
+			header, err := decodeSealHeader(kind.BlockSeal.GetHeader())
+			if err != nil {
+				continue
+			}
+
+			return header.Number.Uint64() + 1, true
 		}
 	}
 
-	a.persist(height)
-}
-
-// recordSkippedWindow marks the heights the depth bound left out, so an empty
-// invalidation range there reads as unknown rather than clean.
-func (a *auditor) recordSkippedWindow(skippedTo, from, through uint64) {
-	if skippedTo == 0 {
-		return
-	}
-
-	if err := rawdb.WritePreconfUnauditedThrough(a.db, skippedTo); err != nil {
-		log.Warn("Failed to record unaudited sequence store window", "through", skippedTo, "err", err)
-	}
-
-	log.Warn("Sequence store audit window truncated", "unaudited", skippedTo, "from", from, "through", through)
+	return 0, false
 }
 
 // auditHeightInto compares one height and folds the verdict into summary. An
@@ -214,15 +269,12 @@ func (a *auditor) auditHeightInto(ctx context.Context, height uint64, summary *a
 	case err == nil:
 	case isNotFound(err):
 		// The store holds nothing here: it was down, the producer never
-		// published, or retention aged the height out. Nothing was promised,
-		// so there is nothing to invalidate — but while no height in this
-		// window has held anything yet, the run is indistinguishable from a
-		// retention floor, and advancing over it would report a window
-		// nothing compared as clean.
+		// published, or retention aged the height out mid-walk. Nothing was
+		// promised, so there is nothing to invalidate, and the walk advances
+		// — counted, because the height went uncompared.
 		summary.walked++
-		if summary.compared == 0 {
-			summary.leadingUnheld = height
-		}
+		summary.unheld++
+		auditUnheldHeights.Inc(1)
 
 		return nil
 	default:
@@ -240,6 +292,7 @@ func (a *auditor) recordVerdict(height uint64, verdict auditVerdict, summary *au
 	switch verdict {
 	case auditMismatch:
 		summary.mismatch++
+		auditMismatchCount.Inc(1)
 
 		// A record already at this height came from the live path, which
 		// served a preconfirmation and then invalidated it. That is a
@@ -253,11 +306,11 @@ func (a *auditor) recordVerdict(height uint64, verdict auditVerdict, summary *au
 		}
 	case auditUnknown:
 		// Held but undecidable — no canonical hash, or a seal that does not
-		// decode or sits at the wrong height. Counted and logged, not marked:
-		// the unaudited mark is a prefix, so raising it for one scattered
-		// height would declare the whole history below it uncompared. All
-		// three causes are a store or data fault rather than a normal state.
+		// decode or sits at the wrong height. Counted and logged rather than
+		// marked invalid: all three causes are a store or data fault, not a
+		// verdict about the preconfirmation at that height.
 		summary.unknown++
+		auditUnknownCount.Inc(1)
 	case auditMatch, auditNoSeal:
 	}
 }
@@ -322,15 +375,9 @@ func lastSeal(entries []*pb.Entry) *pb.BlockSeal {
 	return nil
 }
 
-// SetAuditWindow bounds how many blocks one audit pass walks. Zero keeps the
-// package default. Call it before Start; the value is read by the audit loop.
-func (c *Consumer) SetAuditWindow(window uint64) {
-	c.auditWindow = window
-}
-
 // requestAudit asks for an audit pass without waiting for one. The trigger
 // holds a single slot: a pass already queued covers everything a second
-// request would, since the window is recomputed when the pass starts.
+// request would, since the range is recomputed when the pass starts.
 func (c *Consumer) requestAudit() {
 	select {
 	case c.auditTrigger <- struct{}{}:
@@ -353,15 +400,15 @@ func (c *Consumer) auditLoop(ctx context.Context) {
 }
 
 func (c *Consumer) runAuditPass(ctx context.Context) {
-	audit := &auditor{db: c.chain.DB(), chain: c.chain, window: c.auditWindow, advance: c.advanceAudited}
+	audit := &auditor{db: c.chain.DB(), chain: c.chain, advance: c.advanceAudited}
 
-	// Resolve the window before building a client: the common case is nothing
+	// Resolve the range before building a client: the common case is nothing
 	// to audit and a trigger fires on every session retry. grpc.NewClient is
 	// lazy, so this saves a client and its teardown rather than a connection,
 	// and it keeps a bad endpoint from logging once per retry while there is
-	// no work to do. run recomputes the window, so removing this changes
+	// no work to do. run recomputes the range, so removing this changes
 	// nothing observable in-process — there is deliberately no test for it.
-	from, through, _, ok := audit.windowToAudit()
+	from, through, ok := audit.rangeToAudit()
 	if !ok {
 		return
 	}
@@ -380,7 +427,16 @@ func (c *Consumer) runAuditPass(ctx context.Context) {
 	}()
 
 	client := pb.NewConsumerServiceClient(conn)
-	audit.fetch = func(ctx context.Context, height uint64) ([]*pb.Entry, error) {
+	audit.fetch = fetchGenerationVia(client)
+	audit.oldest = fetchOldestVia(client)
+
+	if _, err := audit.run(ctx); err != nil && ctx.Err() == nil {
+		log.Warn("Sequence store audit stopped early", "err", err)
+	}
+}
+
+func fetchGenerationVia(client pb.ConsumerServiceClient) fetchGeneration {
+	return func(ctx context.Context, height uint64) ([]*pb.Entry, error) {
 		readCtx, cancel := context.WithTimeout(ctx, auditReadTimeout)
 		defer cancel()
 
@@ -391,9 +447,25 @@ func (c *Consumer) runAuditPass(ctx context.Context) {
 
 		return resp.GetEntries(), nil
 	}
+}
 
-	if _, err := audit.run(ctx); err != nil && ctx.Err() == nil {
-		log.Warn("Sequence store audit stopped early", "err", err)
+func fetchOldestVia(client pb.ConsumerServiceClient) fetchOldest {
+	return func(ctx context.Context, after []byte) ([]*pb.Entry, []byte, error) {
+		readCtx, cancel := context.WithTimeout(ctx, auditReadTimeout)
+		defer cancel()
+
+		// after unset resolves to the earliest retained entry.
+		req := &pb.RangeRequest{Limit: auditFloorEntries}
+		if len(after) != 0 {
+			req.After = &pb.RangeRequest_Head{Head: after}
+		}
+
+		resp, err := client.Range(readCtx, req)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		return resp.GetEntries(), resp.GetNext(), nil
 	}
 }
 
@@ -404,9 +476,9 @@ func (c *Consumer) runAuditPass(ctx context.Context) {
 // A verdict is therefore only ever as good as the canonical chain at the time
 // it was reached. A reorg below the mark replaces heights this pass already
 // judged, and nothing revisits them — re-auditing would mean rewinding the
-// mark on every reorg and re-walking the window, which is the cost this
-// monotonicity exists to avoid. Bor reorgs are shallow and milestones make
-// deep ones rare, so the trade is deliberate rather than free.
+// mark on every reorg and re-walking, which is the cost this monotonicity
+// exists to avoid. Bor reorgs are shallow and milestones make deep ones rare,
+// so the trade is deliberate rather than free.
 func (c *Consumer) advanceAudited(number uint64) {
 	c.auditMu.Lock()
 	defer c.auditMu.Unlock()

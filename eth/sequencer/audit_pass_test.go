@@ -213,34 +213,6 @@ func TestAuditAdvancesPastHeightsThatPromisedNothing(t *testing.T) {
 	}
 }
 
-func TestAuditWindowTruncatesAndMarksTheRemainderUnaudited(t *testing.T) {
-	db := rawdb.NewMemoryDatabase()
-	chain, sealed := auditFixture(t, 100)
-
-	if err := rawdb.WritePreconfAuditedThrough(db, 1); err != nil {
-		t.Fatalf("seed watermark: %v", err)
-	}
-
-	audit := &auditor{db: db, chain: chain, fetch: fetchFrom(t, sealed), window: 10}
-	summary, err := audit.run(context.Background())
-	if err != nil {
-		t.Fatalf("run: %v", err)
-	}
-
-	if summary.from != 91 || summary.through != 100 {
-		t.Fatalf("window = [%d,%d], want the most recent 10: [91,100]", summary.from, summary.through)
-	}
-
-	if summary.skippedTo != 90 {
-		t.Fatalf("skippedTo = %d, want 90", summary.skippedTo)
-	}
-
-	unaudited, ok, _ := rawdb.ReadPreconfUnauditedThrough(db)
-	if !ok || unaudited != 90 {
-		t.Fatalf("unaudited mark = (%d, %v), want (90, true): a truncated window must not read as clean", unaudited, ok)
-	}
-}
-
 func TestAuditPersistsProgressWhenTheStoreFails(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	chain, sealed := auditFixture(t, 40)
@@ -319,7 +291,7 @@ func TestAuditDoesNotRewindTheWatermark(t *testing.T) {
 	}
 }
 
-func TestAuditWindowIsEmptyAtTheHead(t *testing.T) {
+func TestAuditRangeIsEmptyAtTheHead(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	chain, _ := auditFixture(t, 20)
 
@@ -332,8 +304,8 @@ func TestAuditWindowIsEmptyAtTheHead(t *testing.T) {
 		return nil, nil
 	}}
 
-	if _, _, _, ok := audit.windowToAudit(); ok {
-		t.Fatal("window is non-empty at the head")
+	if _, _, ok := audit.rangeToAudit(); ok {
+		t.Fatal("range is non-empty at the head")
 	}
 
 	if _, err := audit.run(context.Background()); err != nil {
@@ -425,20 +397,10 @@ func TestLastSealTakesTheFinalSeal(t *testing.T) {
 	}
 }
 
-func TestAuditDepthFallsBackToTheDefault(t *testing.T) {
-	if got := (&auditor{}).auditDepth(); got != defaultAuditWindow {
-		t.Fatalf("depth = %d, want %d", got, defaultAuditWindow)
-	}
-
-	if got := (&auditor{window: 7}).auditDepth(); got != 7 {
-		t.Fatalf("depth = %d, want 7", got)
-	}
-}
-
-func TestAuditWindowWithoutAHead(t *testing.T) {
+func TestAuditRangeWithoutAHead(t *testing.T) {
 	audit := &auditor{db: rawdb.NewMemoryDatabase(), chain: &headlessAuditChain{}}
-	if _, _, _, ok := audit.windowToAudit(); ok {
-		t.Fatal("window resolved without a canonical head")
+	if _, _, ok := audit.rangeToAudit(); ok {
+		t.Fatal("range resolved without a canonical head")
 	}
 }
 
@@ -481,8 +443,11 @@ func TestAuditSummaryCounts(t *testing.T) {
 	if summary.unknown != 1 {
 		t.Fatalf("unknown = %d, want 1", summary.unknown)
 	}
-	if summary.skippedTo != 0 {
-		t.Fatalf("skippedTo = %d, want 0 for a window inside the depth", summary.skippedTo)
+	if summary.unheld != 1 {
+		t.Fatalf("unheld = %d, want 1: height 8 was walked but the store held nothing for it", summary.unheld)
+	}
+	if summary.skipped != 0 {
+		t.Fatalf("skipped = %d, want 0 with no retention floor resolved", summary.skipped)
 	}
 }
 
@@ -526,42 +491,6 @@ func TestRecordVerdict(t *testing.T) {
 	}
 }
 
-// The window boundary: exactly the depth is walked whole, one more truncates.
-func TestAuditWindowDepthBoundary(t *testing.T) {
-	cases := []struct {
-		name          string
-		watermark     uint64
-		wantFrom      uint64
-		wantSkippedTo uint64
-	}{
-		{name: "exactly the depth", watermark: 90, wantFrom: 91, wantSkippedTo: 0},
-		{name: "one past the depth", watermark: 89, wantFrom: 91, wantSkippedTo: 90},
-		{name: "well past the depth", watermark: 1, wantFrom: 91, wantSkippedTo: 90},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			db := rawdb.NewMemoryDatabase()
-			chain, _ := auditFixture(t, 100)
-
-			if err := rawdb.WritePreconfAuditedThrough(db, tc.watermark); err != nil {
-				t.Fatalf("seed watermark: %v", err)
-			}
-
-			audit := &auditor{db: db, chain: chain, window: 10}
-			from, through, skippedTo, ok := audit.windowToAudit()
-			if !ok {
-				t.Fatal("no window to audit")
-			}
-
-			if from != tc.wantFrom || through != 100 || skippedTo != tc.wantSkippedTo {
-				t.Fatalf("window = [%d,%d] skippedTo %d, want [%d,100] skippedTo %d",
-					from, through, skippedTo, tc.wantFrom, tc.wantSkippedTo)
-			}
-		})
-	}
-}
-
 // The watermark is written at the checkpoint interval, so a pass that is
 // interrupted repeatedly still converges instead of re-walking its prefix.
 func TestAuditCheckpointsMidPass(t *testing.T) {
@@ -577,7 +506,7 @@ func TestAuditCheckpointsMidPass(t *testing.T) {
 	var atCheckpoint uint64
 	seen := false
 
-	audit := &auditor{db: db, chain: chain, window: through, fetch: func(ctx context.Context, height uint64) ([]*pb.Entry, error) {
+	audit := &auditor{db: db, chain: chain, fetch: func(ctx context.Context, height uint64) ([]*pb.Entry, error) {
 		if height == checkpoint+1 && !seen {
 			seen = true
 			atCheckpoint, _, _ = rawdb.ReadPreconfAuditedThrough(db)
@@ -630,21 +559,6 @@ func TestAuditPersistNeverLowersTheWatermark(t *testing.T) {
 	}
 }
 
-func TestRecordSkippedWindowOnlyWritesAGap(t *testing.T) {
-	db := rawdb.NewMemoryDatabase()
-	audit := &auditor{db: db}
-
-	audit.recordSkippedWindow(0, 1, 10)
-	if _, ok, _ := rawdb.ReadPreconfUnauditedThrough(db); ok {
-		t.Fatal("an untruncated window recorded a gap")
-	}
-
-	audit.recordSkippedWindow(7, 8, 10)
-	if got, ok, _ := rawdb.ReadPreconfUnauditedThrough(db); !ok || got != 7 {
-		t.Fatalf("unaudited mark = (%d, %v), want (7, true)", got, ok)
-	}
-}
-
 // failingWriteDB fails every write, direct or batched, so the pass's
 // write-error paths run.
 type failingWriteDB struct {
@@ -672,11 +586,11 @@ func TestAuditSurvivesWriteFailures(t *testing.T) {
 	sealed[95] = testHeader(95, common.Hash{0xee})
 
 	backing := rawdb.NewMemoryDatabase()
-	if err := rawdb.WritePreconfAuditedThrough(backing, 1); err != nil {
+	if err := rawdb.WritePreconfAuditedThrough(backing, 90); err != nil {
 		t.Fatalf("seed watermark: %v", err)
 	}
 
-	audit := &auditor{db: failingWriteDB{backing}, chain: chain, fetch: fetchFrom(t, sealed), window: 10}
+	audit := &auditor{db: failingWriteDB{backing}, chain: chain, fetch: fetchFrom(t, sealed)}
 	summary, err := audit.run(context.Background())
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -690,8 +604,8 @@ func TestAuditSurvivesWriteFailures(t *testing.T) {
 	if summary.mismatch != 1 {
 		t.Fatalf("mismatch = %d, want 1", summary.mismatch)
 	}
-	if got, _, _ := rawdb.ReadPreconfAuditedThrough(backing); got != 1 {
-		t.Fatalf("watermark = %d, want it unchanged at 1 when writes fail", got)
+	if got, _, _ := rawdb.ReadPreconfAuditedThrough(backing); got != 90 {
+		t.Fatalf("watermark = %d, want it unchanged at 90 when writes fail", got)
 	}
 }
 
@@ -747,17 +661,6 @@ func TestAuditPersistHoldsOnAReadFailure(t *testing.T) {
 	}
 }
 
-func unauditedThrough(t *testing.T, db ethdb.Database) (uint64, bool) {
-	t.Helper()
-
-	number, ok, err := rawdb.ReadPreconfUnauditedThrough(db)
-	if err != nil {
-		t.Fatalf("read unaudited mark: %v", err)
-	}
-
-	return number, ok
-}
-
 func TestAuditLeavesALiveRecordInPlace(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	chain, sealed := auditFixture(t, 12)
@@ -792,12 +695,13 @@ func TestAuditLeavesALiveRecordInPlace(t *testing.T) {
 	}
 }
 
-func TestAuditReportsAWindowTheStoreHeldNothingFor(t *testing.T) {
+// A node down longer than the store's retention finds nothing anywhere. The
+// watermark still advances — the alternative is re-walking the range forever —
+// so the count is the only record that nothing was compared.
+func TestAuditCountsARangeTheStoreHeldNothingFor(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	chain, _ := auditFixture(t, 12)
 
-	// Down longer than the store's retention: every height in the window
-	// answers NOT_FOUND.
 	if err := rawdb.WritePreconfAuditedThrough(db, 4); err != nil {
 		t.Fatalf("seed watermark: %v", err)
 	}
@@ -808,67 +712,251 @@ func TestAuditReportsAWindowTheStoreHeldNothingFor(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 
-	if summary.compared != 0 || summary.walked != 8 {
-		t.Fatalf("walked/compared = %d/%d, want 8/0", summary.walked, summary.compared)
+	if summary.compared != 0 || summary.walked != 8 || summary.unheld != 8 {
+		t.Fatalf("walked/compared/unheld = %d/%d/%d, want 8/0/8",
+			summary.walked, summary.compared, summary.unheld)
 	}
-	// The watermark still advances, or the window is re-walked forever, so
-	// the unaudited mark is what keeps the range from reading as clean.
 	if got := auditedThrough(t, db); got != 12 {
 		t.Fatalf("watermark = %d, want 12", got)
 	}
-	unaudited, ok := unauditedThrough(t, db)
-	if !ok || unaudited != 12 {
-		t.Fatalf("unaudited = %d (stored %v), want 12", unaudited, ok)
+}
+
+// Where the unheld heights sit does not change how they are treated: a
+// retention floor at the oldest end and the store having been down for a few
+// heights mid-range are the same NOT_FOUND, and both are counted.
+func TestAuditCountsUnheldHeightsWhereverTheySit(t *testing.T) {
+	cases := []struct {
+		name         string
+		unheld       []uint64
+		wantCompared uint64
+	}{
+		{name: "at the oldest end of the range", unheld: []uint64{5, 6, 7}, wantCompared: 5},
+		{name: "in the middle of the range", unheld: []uint64{9, 10}, wantCompared: 6},
+		{name: "at the newest end of the range", unheld: []uint64{11, 12}, wantCompared: 6},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := rawdb.NewMemoryDatabase()
+			chain, sealed := auditFixture(t, 12)
+			for _, height := range tc.unheld {
+				delete(sealed, height)
+			}
+			if err := rawdb.WritePreconfAuditedThrough(db, 4); err != nil {
+				t.Fatalf("seed watermark: %v", err)
+			}
+
+			audit := &auditor{db: db, chain: chain, fetch: fetchFrom(t, sealed)}
+			summary, err := audit.run(context.Background())
+			if err != nil {
+				t.Fatalf("run: %v", err)
+			}
+
+			if summary.compared != tc.wantCompared {
+				t.Fatalf("compared = %d, want %d", summary.compared, tc.wantCompared)
+			}
+			if summary.unheld != uint64(len(tc.unheld)) {
+				t.Fatalf("unheld = %d, want %d", summary.unheld, len(tc.unheld))
+			}
+			if got := auditedThrough(t, db); got != 12 {
+				t.Fatalf("watermark = %d, want 12", got)
+			}
+		})
 	}
 }
 
-func TestAuditReportsOnlyTheUnheldOldestEnd(t *testing.T) {
-	db := rawdb.NewMemoryDatabase()
-	chain, sealed := auditFixture(t, 12)
+// oldestFrom serves Range from the store's earliest retained entry, one page
+// per call, so a test can hand back a page with no block boundary in it. It
+// counts its calls into calls, which is how a test tells "stopped scanning"
+// from "kept asking".
+func oldestFrom(calls *int, pages ...[]*pb.Entry) fetchOldest {
+	return func(context.Context, []byte) ([]*pb.Entry, []byte, error) {
+		*calls++
+		if *calls > len(pages) {
+			return nil, nil, nil
+		}
 
-	// Retention floor at 8: the window's oldest heights are gone, the rest
-	// compare normally.
-	for height := uint64(5); height < 8; height++ {
+		return pages[*calls-1], []byte{byte(*calls)}, nil
+	}
+}
+
+// The floor is what bounds the walk now, so a pass starts at the oldest height
+// the store still serves rather than probing the aged-out ones one at a time.
+func TestAuditStartsAtTheStoreRetentionFloor(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	chain, sealed := auditFixture(t, 20)
+
+	for height := uint64(1); height < 15; height++ {
 		delete(sealed, height)
 	}
 	if err := rawdb.WritePreconfAuditedThrough(db, 4); err != nil {
 		t.Fatalf("seed watermark: %v", err)
 	}
 
-	audit := &auditor{db: db, chain: chain, fetch: fetchFrom(t, sealed)}
+	probed := map[uint64]bool{}
+	fetch := func(ctx context.Context, height uint64) ([]*pb.Entry, error) {
+		probed[height] = true
+
+		return fetchFrom(t, sealed)(ctx, height)
+	}
+	audit := &auditor{db: db, chain: chain, fetch: fetch, oldest: oldestFrom(new(int), sealedGeneration(t, sealed[15]))}
+
 	summary, err := audit.run(context.Background())
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
-	if summary.compared != 5 {
-		t.Fatalf("compared = %d, want 5", summary.compared)
+	if summary.from != 15 {
+		t.Fatalf("from = %d, want the retention floor 15", summary.from)
 	}
-	unaudited, ok := unauditedThrough(t, db)
-	if !ok || unaudited != 7 {
-		t.Fatalf("unaudited = %d (stored %v), want 7", unaudited, ok)
+	if summary.skipped != 10 {
+		t.Fatalf("skipped = %d, want the ten aged-out heights 5..14", summary.skipped)
+	}
+	if summary.unheld != 0 {
+		t.Fatalf("unheld = %d, want 0: the aged-out heights were skipped, not probed", summary.unheld)
+	}
+	for height := uint64(5); height < 15; height++ {
+		if probed[height] {
+			t.Fatalf("height %d was probed despite being below the retention floor", height)
+		}
+	}
+	if got := auditedThrough(t, db); got != 20 {
+		t.Fatalf("watermark = %d, want 20", got)
 	}
 }
 
-func TestAuditDoesNotReportAGapAfterTheStoreHasHeldSomething(t *testing.T) {
-	db := rawdb.NewMemoryDatabase()
-	chain, sealed := auditFixture(t, 12)
-
-	// A hole in the middle is the store having been down for those heights,
-	// not a retention floor: nothing was promised there and the run is not
-	// reported. Documented so the narrower guarantee is deliberate.
-	delete(sealed, 9)
-	delete(sealed, 10)
-	if err := rawdb.WritePreconfAuditedThrough(db, 4); err != nil {
-		t.Fatalf("seed watermark: %v", err)
+// A floor at or below the watermark is not a skip, and one above the head
+// cannot report more skipped heights than the range held.
+func TestSkipToStoreFloor(t *testing.T) {
+	cases := []struct {
+		name        string
+		floor       *uint64
+		wantFrom    uint64
+		wantSkipped uint64
+	}{
+		{name: "unresolved floor leaves the range alone", wantFrom: 10},
+		{name: "floor below the range start", floor: ptrToHeight(4), wantFrom: 10},
+		{name: "floor at the range start", floor: ptrToHeight(10), wantFrom: 10},
+		{name: "floor inside the range", floor: ptrToHeight(15), wantFrom: 15, wantSkipped: 5},
+		{name: "floor above the head clamps to the range", floor: ptrToHeight(400), wantFrom: 400, wantSkipped: 11},
 	}
 
-	audit := &auditor{db: db, chain: chain, fetch: fetchFrom(t, sealed)}
-	if _, err := audit.run(context.Background()); err != nil {
-		t.Fatalf("run: %v", err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			audit := &auditor{}
+			if tc.floor != nil {
+				audit.oldest = oldestFrom(new(int), []*pb.Entry{
+					{Kind: &pb.Entry_BlockOpen{BlockOpen: &pb.BlockOpen{BlockNumber: *tc.floor}}},
+				})
+			}
+
+			from, skipped := audit.skipToStoreFloor(context.Background(), 10, 20)
+			if from != tc.wantFrom || skipped != tc.wantSkipped {
+				t.Fatalf("from/skipped = %d/%d, want %d/%d", from, skipped, tc.wantFrom, tc.wantSkipped)
+			}
+		})
+	}
+}
+
+func ptrToHeight(v uint64) *uint64 { return &v }
+
+// Retention can age out the middle of a block, leaving a page that opens with
+// records or a seal. Only an open proves a block is held whole, so a seal
+// reached first puts the floor at the height above it, and records alone prove
+// nothing about the page's own height.
+func TestFloorFromEntries(t *testing.T) {
+	header := testHeader(9, common.Hash{0x09})
+	raw, err := rlp.EncodeToBytes(header)
+	if err != nil {
+		t.Fatalf("rlp: %v", err)
+	}
+	record := &pb.Entry{Kind: &pb.Entry_Record{Record: &pb.Record{Transactions: [][]byte{{0x01}}}}}
+	seal := &pb.Entry{Kind: &pb.Entry_BlockSeal{BlockSeal: &pb.BlockSeal{Header: raw}}}
+	open := &pb.Entry{Kind: &pb.Entry_BlockOpen{BlockOpen: &pb.BlockOpen{BlockNumber: 12}}}
+
+	cases := []struct {
+		name    string
+		entries []*pb.Entry
+		want    uint64
+		wantOk  bool
+	}{
+		{name: "an open is the floor", entries: []*pb.Entry{open}, want: 12, wantOk: true},
+		{name: "records before an open do not move it", entries: []*pb.Entry{record, record, open}, want: 12, wantOk: true},
+		{name: "a seal first puts the floor above it", entries: []*pb.Entry{record, seal, open}, want: 10, wantOk: true},
+		{name: "records alone resolve nothing", entries: []*pb.Entry{record, record}},
+		{name: "an empty page resolves nothing"},
+		{name: "an undecodable seal is skipped", entries: []*pb.Entry{
+			{Kind: &pb.Entry_BlockSeal{BlockSeal: &pb.BlockSeal{Header: []byte{0xff}}}}, open,
+		}, want: 12, wantOk: true},
 	}
 
-	if unaudited, ok := unauditedThrough(t, db); ok {
-		t.Fatalf("unaudited = %d, want nothing recorded", unaudited)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := floorFromEntries(tc.entries)
+			if got != tc.want || ok != tc.wantOk {
+				t.Fatalf("floor = (%d, %v), want (%d, %v)", got, ok, tc.want, tc.wantOk)
+			}
+		})
+	}
+}
+
+// The floor is an optimisation: when the store cannot answer, the walk starts
+// at the watermark and discovers the same heights unheld one at a time.
+func TestStoreFloorFallsBackWhenTheStoreCannotAnswer(t *testing.T) {
+	records := []*pb.Entry{{Kind: &pb.Entry_Record{Record: &pb.Record{Transactions: [][]byte{{0x01}}}}}}
+
+	cases := []struct {
+		name      string
+		pages     [][]*pb.Entry
+		failRead  bool
+		wantCalls int
+	}{
+		{name: "no reader wired"},
+		{name: "the read fails", failRead: true, wantCalls: 1},
+		// An empty page ends the scan: the store has nothing to hand over,
+		// and asking again up to the page budget is wasted round trips.
+		{name: "the store returns nothing", pages: [][]*pb.Entry{nil}, wantCalls: 1},
+		{name: "no block boundary within the page budget", pages: [][]*pb.Entry{
+			records, records, records, records, records,
+		}, wantCalls: auditFloorPages},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			audit := &auditor{}
+
+			switch {
+			case tc.failRead:
+				audit.oldest = func(context.Context, []byte) ([]*pb.Entry, []byte, error) {
+					calls++
+
+					return nil, nil, errReadRefused
+				}
+			case tc.pages != nil:
+				audit.oldest = oldestFrom(&calls, tc.pages...)
+			}
+
+			if height, ok := audit.storeFloor(context.Background()); ok {
+				t.Fatalf("floor = %d, want none resolved", height)
+			}
+			if calls != tc.wantCalls {
+				t.Fatalf("read the store %d times, want %d", calls, tc.wantCalls)
+			}
+		})
+	}
+}
+
+// Paging: a block with more records than one page holds still resolves, as
+// long as the boundary arrives inside the page budget.
+func TestStoreFloorPagesToTheNextBoundary(t *testing.T) {
+	records := []*pb.Entry{{Kind: &pb.Entry_Record{Record: &pb.Record{Transactions: [][]byte{{0x01}}}}}}
+	audit := &auditor{oldest: oldestFrom(new(int), records, records, []*pb.Entry{
+		{Kind: &pb.Entry_BlockOpen{BlockOpen: &pb.BlockOpen{BlockNumber: 31}}},
+	})}
+
+	height, ok := audit.storeFloor(context.Background())
+	if !ok || height != 31 {
+		t.Fatalf("floor = (%d, %v), want (31, true)", height, ok)
 	}
 }

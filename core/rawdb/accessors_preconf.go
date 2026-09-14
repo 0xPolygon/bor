@@ -7,8 +7,6 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 )
 
-const InvalidPreconfQueryLimit = 1024
-
 type InvalidPreconfRecord struct {
 	Number uint64 `json:"number"`
 	Reason string `json:"reason"`
@@ -69,9 +67,6 @@ func ReadInvalidPreconfs(db ethdb.Iteratee, limit uint64) []InvalidPreconfRecord
 		return []InvalidPreconfRecord{}
 	}
 
-	if limit > InvalidPreconfQueryLimit {
-		limit = InvalidPreconfQueryLimit
-	}
 	iterator := db.NewIterator(invalidPreconfPrefix, nil)
 	defer iterator.Release()
 
@@ -93,9 +88,9 @@ func ReadInvalidPreconfs(db ethdb.Iteratee, limit uint64) []InvalidPreconfRecord
 }
 
 // ReadInvalidPreconfsInRange returns the invalid-preconfirmation records whose
-// block number falls within [from, to] inclusive, newest block first. At most
-// InvalidPreconfQueryLimit records are returned so a wide range cannot produce
-// an unbounded response.
+// block number falls within [from, to] inclusive, newest block first. There is
+// one record per height at most, so bounding the range bounds the response;
+// callers cap the range rather than having results silently truncated here.
 func ReadInvalidPreconfsInRange(db ethdb.Iteratee, from, to uint64) []InvalidPreconfRecord {
 	if from > to {
 		return []InvalidPreconfRecord{}
@@ -124,9 +119,6 @@ func ReadInvalidPreconfsInRange(db ethdb.Iteratee, from, to uint64) []InvalidPre
 			Number: number,
 			Reason: string(iterator.Value()),
 		})
-		if uint64(len(records)) >= InvalidPreconfQueryLimit {
-			break
-		}
 	}
 	return records
 }
@@ -136,65 +128,33 @@ func ReadInvalidPreconfsInRange(db ethdb.Iteratee, from, to uint64) []InvalidPre
 // at all. A node that has never audited has no watermark, which is not the same
 // as having audited through block zero — and neither is the same as a database
 // that could not answer, which is why a read failure is an error rather than a
-// third spelling of absence.
+// third spelling of absence. Collapsing the last into the second would let a
+// read failure read as "never audited", which seeds the watermark at the
+// current head and so reports an uncompared range as audited.
 func ReadPreconfAuditedThrough(db ethdb.KeyValueReader) (uint64, bool, error) {
-	return readPreconfHeight(db, preconfAuditedThroughKey)
-}
-
-// WritePreconfAuditedThrough stores the audit watermark.
-func WritePreconfAuditedThrough(db ethdb.KeyValueWriter, number uint64) error {
-	return writePreconfHeight(db, preconfAuditedThroughKey, number)
-}
-
-// ReadPreconfUnauditedThrough returns the highest block the audit did not
-// compare. Two causes raise it: the depth bound skipped the height, or the
-// store answered NOT_FOUND for the oldest end of a window it walked, which
-// retention aging the height out is indistinguishable from. Heights at or
-// below it may hold preconfirmations this node never compared against the
-// chain, so an empty invalidation range there means unknown, not clean.
-func ReadPreconfUnauditedThrough(db ethdb.KeyValueReader) (uint64, bool, error) {
-	return readPreconfHeight(db, preconfUnauditedThroughKey)
-}
-
-// WritePreconfUnauditedThrough raises the skipped-window mark. It never lowers
-// it: a later pass auditing a narrower window does not make an older gap go
-// away. An unreadable current mark is treated as absent and the write goes
-// ahead — recording a gap this node knows about beats leaving the window
-// unrecorded because the comparison could not be made.
-func WritePreconfUnauditedThrough(db ethdb.KeyValueStore, number uint64) error {
-	current, stored, err := ReadPreconfUnauditedThrough(db)
-	if err == nil && stored && current >= number {
-		return nil
-	}
-	return writePreconfHeight(db, preconfUnauditedThroughKey, number)
-}
-
-// readPreconfHeight separates the three answers a stored height can have:
-// present, absent, and unavailable. Collapsing the last into the second would
-// let a read failure read as "never audited", which seeds the audit watermark
-// at the current head and marks an uncompared window clean.
-func readPreconfHeight(db ethdb.KeyValueReader, key []byte) (uint64, bool, error) {
-	present, err := db.Has(key)
+	present, err := db.Has(preconfAuditedThroughKey)
 	if err != nil {
-		return 0, false, fmt.Errorf("read preconf height %s: %w", key, err)
+		return 0, false, fmt.Errorf("read preconf audit watermark: %w", err)
 	}
 	if !present {
 		return 0, false, nil
 	}
 
-	value, err := db.Get(key)
+	value, err := db.Get(preconfAuditedThroughKey)
 	if err != nil {
-		return 0, false, fmt.Errorf("read preconf height %s: %w", key, err)
+		return 0, false, fmt.Errorf("read preconf audit watermark: %w", err)
 	}
 	if len(value) != 8 {
-		return 0, false, fmt.Errorf("preconf height %s is %d bytes, want 8", key, len(value))
+		return 0, false, fmt.Errorf("preconf audit watermark is %d bytes, want 8", len(value))
 	}
 
 	return binary.BigEndian.Uint64(value), true, nil
 }
 
-func writePreconfHeight(db ethdb.KeyValueWriter, key []byte, number uint64) error {
+// WritePreconfAuditedThrough stores the audit watermark.
+func WritePreconfAuditedThrough(db ethdb.KeyValueWriter, number uint64) error {
 	value := make([]byte, 8)
 	binary.BigEndian.PutUint64(value, number)
-	return db.Put(key, value)
+
+	return db.Put(preconfAuditedThroughKey, value)
 }

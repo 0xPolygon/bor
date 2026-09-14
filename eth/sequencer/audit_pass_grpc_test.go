@@ -17,14 +17,35 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
-// auditStoreStub serves GetBlock for the audit and nothing else: the pass
-// reads one generation per height and never streams.
+// auditStoreStub serves the two reads the audit makes and nothing else: one
+// generation per height, and a Range to resolve the retention floor. The pass
+// never streams.
 type auditStoreStub struct {
 	pb.UnimplementedConsumerServiceServer
 
 	t      *testing.T
 	sealed map[uint64]*types.Header
 	asked  chan uint64
+
+	// floor is the oldest height this store still serves; zero serves an
+	// empty Range, which is a store that cannot place its own floor.
+	floor  uint64
+	ranged chan *pb.RangeRequest
+}
+
+func (s *auditStoreStub) Range(_ context.Context, req *pb.RangeRequest) (*pb.RangeResponse, error) {
+	select {
+	case s.ranged <- req:
+	default:
+	}
+
+	if s.floor == 0 {
+		return &pb.RangeResponse{}, nil
+	}
+
+	return &pb.RangeResponse{Entries: []*pb.Entry{
+		{Kind: &pb.Entry_BlockOpen{BlockOpen: &pb.BlockOpen{BlockNumber: s.floor}}},
+	}}, nil
 }
 
 func (s *auditStoreStub) GetBlock(_ context.Context, req *pb.GetBlockRequest) (*pb.GetBlockResponse, error) {
@@ -68,7 +89,11 @@ func startAuditStore(t *testing.T, sealed map[uint64]*types.Header) (string, *au
 	}
 
 	lis := &countingListener{Listener: base}
-	stub := &auditStoreStub{t: t, sealed: sealed, asked: make(chan uint64, 64)}
+	stub := &auditStoreStub{
+		t: t, sealed: sealed,
+		asked:  make(chan uint64, 256),
+		ranged: make(chan *pb.RangeRequest, 8),
+	}
 	srv := grpc.NewServer()
 	pb.RegisterConsumerServiceServer(srv, stub)
 
@@ -176,20 +201,6 @@ func TestAuditPassHoldsTheWatermarkWhenTheStoreIsUnreachable(t *testing.T) {
 	}
 }
 
-func TestSetAuditWindow(t *testing.T) {
-	consumer := &Consumer{}
-	if consumer.auditWindow != 0 {
-		t.Fatal("a fresh consumer carries an audit window")
-	}
-
-	consumer.SetAuditWindow(512)
-	if consumer.auditWindow != 512 {
-		t.Fatalf("auditWindow = %d, want 512", consumer.auditWindow)
-	}
-}
-
-// A malformed endpoint fails at client construction; the pass logs and leaves
-// the watermark alone rather than treating the window as audited.
 func TestAuditPassHandlesAnUndialableEndpoint(t *testing.T) {
 	h := startExecHarness(t)
 	consumer := newAuditTestConsumer(h)
@@ -203,5 +214,69 @@ func TestAuditPassHandlesAnUndialableEndpoint(t *testing.T) {
 
 	if got, _, _ := rawdb.ReadPreconfAuditedThrough(h.chain.DB()); got != 1 {
 		t.Fatalf("watermark = %d, want it held at 1", got)
+	}
+}
+
+// The retention floor as the consumer actually reads it. The unit tests inject
+// the reader; this asserts the request the store really receives — after
+// unset, which is what resolves to the earliest retained entry — and that the
+// pass then leaves the aged-out heights alone instead of probing each one.
+func TestAuditPassStartsAtTheStoreFloorOverGRPC(t *testing.T) {
+	h := startExecHarness(t)
+	head := h.chain.CurrentBlock().Number.Uint64()
+	if head < 3 {
+		t.Fatalf("harness head is %d, too low for a floor inside the range", head)
+	}
+	floor := head - 1
+
+	// The store retains only the floor and above; below it, GetBlock would
+	// answer NOT_FOUND, and the point is that it is never asked.
+	sealed := map[uint64]*types.Header{}
+	for height := floor; height <= head; height++ {
+		block := h.chain.GetBlockByNumber(height)
+		if block == nil {
+			t.Fatalf("no canonical block at %d", height)
+		}
+		sealed[height] = block.Header()
+	}
+
+	endpoint, stub, _ := startAuditStore(t, sealed)
+	stub.floor = floor
+
+	consumer := newAuditTestConsumer(h)
+	consumer.endpoint = endpoint
+
+	if err := rawdb.WritePreconfAuditedThrough(h.chain.DB(), 0); err != nil {
+		t.Fatalf("seed watermark: %v", err)
+	}
+
+	consumer.runAuditPass(t.Context())
+
+	var req *pb.RangeRequest
+	select {
+	case req = <-stub.ranged:
+	default:
+		t.Fatal("the pass never asked the store for its retention floor")
+	}
+	if after := req.GetAfter(); after != nil {
+		t.Fatalf("the floor read asked to resume after %v, want the earliest retained entry", after)
+	}
+	if req.GetLimit() != auditFloorEntries {
+		t.Fatalf("floor read limit = %d, want %d", req.GetLimit(), auditFloorEntries)
+	}
+
+	for {
+		select {
+		case asked := <-stub.asked:
+			if asked < floor {
+				t.Fatalf("the pass read height %d, below the store floor %d", asked, floor)
+			}
+		default:
+			if got, ok, _ := rawdb.ReadPreconfAuditedThrough(h.chain.DB()); !ok || got != head {
+				t.Fatalf("watermark = (%d, %v), want (%d, true)", got, ok, head)
+			}
+
+			return
+		}
 	}
 }

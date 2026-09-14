@@ -564,7 +564,7 @@ func TestPendingStoreSupersessionLifecycle(t *testing.T) {
 			if firstEntry != nil || secondEntry == nil || entryCount != 1 {
 				t.Fatalf("replacement entries = first=%+v second=%+v count=%d", firstEntry, secondEntry, entryCount)
 			}
-			records := rawdb.ReadInvalidPreconfs(db, rawdb.InvalidPreconfQueryLimit)
+			records := rawdb.ReadInvalidPreconfs(db, allInvalidPreconfs)
 			if len(records) != 1 || records[0].Number != first.block.NumberU64() || records[0].Reason != "superseded" {
 				t.Fatalf("supersession records = %+v", records)
 			}
@@ -616,7 +616,7 @@ func TestPendingStoreRejectsDeferredPartialClaim(t *testing.T) {
 	if pending := store.PendingBlock(); pending != nil {
 		t.Fatalf("rejected prefix remained pending: %v", pending)
 	}
-	records := rawdb.ReadInvalidPreconfs(db, rawdb.InvalidPreconfQueryLimit)
+	records := rawdb.ReadInvalidPreconfs(db, allInvalidPreconfs)
 	if len(records) != 1 || records[0].Number != candidate.NumberU64() || records[0].Reason != "session_lost" {
 		t.Fatalf("deferred invalidation records = %+v", records)
 	}

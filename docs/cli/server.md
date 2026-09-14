@@ -104,8 +104,6 @@ The ```bor server``` command runs the Bor client.
 
 - ```rpc.returndatalimit```: Maximum size (in bytes) a result of an rpc request could have (use 0 for no limits) (default: 100000)
 
-- ```sequencer.audit-window```: Blocks one startup audit of the sequence store walks before the rest of the gap is reported unaudited (0 uses the built-in window) (default: 0)
-
 - ```sequencer.consumer-endpoint```: Sequence store consumer service gRPC endpoint (tail reads during reconciliation)
 
 - ```sequencer.enabled```: Enable the sequence store integration (a mining node publishes the block lifecycle) (default: false)

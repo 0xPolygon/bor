@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"strings"
 	"testing"
@@ -38,7 +39,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/internal/ethapi/override"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -52,26 +52,36 @@ func TestGetInvalidPreconfBlocks(t *testing.T) {
 			t.Fatalf("write %d: %v", number, err)
 		}
 	}
+	if err := rawdb.WritePreconfAuditedThrough(backend.ChainDb(), 77); err != nil {
+		t.Fatalf("write watermark: %v", err)
+	}
 	api := NewBorAPI(backend)
 	ctx := context.Background()
 
-	// Range [5,9] returns 9 then 6, newest first; 4 is below the range.
-	records, err := api.GetInvalidPreconfBlocks(ctx, rpc.BlockNumber(5), rpc.BlockNumber(9))
+	// Range [5,9] returns 9 then 6, newest first; 4 is below the range. The
+	// whole range is audited, so nothing is pending.
+	result, err := api.GetInvalidPreconfBlocks(ctx, rpc.BlockNumber(5), rpc.BlockNumber(9))
 	if err != nil {
 		t.Fatalf("range query: %v", err)
 	}
-	if len(records) != 2 || records[0].Number != 9 || records[1].Number != 6 || records[1].Reason != "canonical_mismatch" {
-		t.Fatalf("records = %+v", records)
+	if len(result.Invalid) != 2 || uint64(result.Invalid[0]) != 9 || uint64(result.Invalid[1]) != 6 {
+		t.Fatalf("invalid = %+v", result.Invalid)
+	}
+	if result.PendingFrom != nil {
+		t.Fatalf("pendingFrom = %v, want nil for a fully audited range", result.PendingFrom)
 	}
 
 	// A single-block range hits exactly one record.
-	if records, err = api.GetInvalidPreconfBlocks(ctx, rpc.BlockNumber(4), rpc.BlockNumber(4)); err != nil || len(records) != 1 || records[0].Number != 4 {
-		t.Fatalf("single-block range = %+v, err = %v", records, err)
+	if result, err = api.GetInvalidPreconfBlocks(ctx, rpc.BlockNumber(4), rpc.BlockNumber(4)); err != nil ||
+		len(result.Invalid) != 1 || uint64(result.Invalid[0]) != 4 {
+		t.Fatalf("single-block range = %+v, err = %v", result, err)
 	}
 
-	// A range with no invalidations returns a non-nil empty slice.
-	if records, err = api.GetInvalidPreconfBlocks(ctx, rpc.BlockNumber(10), rpc.BlockNumber(20)); err != nil || records == nil || len(records) != 0 {
-		t.Fatalf("empty range = %+v (nil=%t), err = %v", records, records == nil, err)
+	// A range with no invalidations returns a non-nil empty slice, so the
+	// answer marshals as [] rather than null.
+	if result, err = api.GetInvalidPreconfBlocks(ctx, rpc.BlockNumber(10), rpc.BlockNumber(20)); err != nil ||
+		result.Invalid == nil || len(result.Invalid) != 0 {
+		t.Fatalf("empty range = %+v, err = %v", result, err)
 	}
 
 	// from > to is rejected.
@@ -79,6 +89,125 @@ func TestGetInvalidPreconfBlocks(t *testing.T) {
 		t.Fatal("expected error for from > to")
 	}
 }
+
+// The wire shape is the contract: heights only, and one field saying where the
+// audit's coverage of the range ends.
+func TestGetInvalidPreconfBlocksJSON(t *testing.T) {
+	backend := newTestBackend(t, 0, &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}, ethash.NewFaker(), nil)
+	for number, reason := range map[uint64]string{6: "canonical_mismatch", 9: "reorged"} {
+		if err := rawdb.WriteInvalidPreconf(backend.ChainDb(), number, reason); err != nil {
+			t.Fatalf("write %d: %v", number, err)
+		}
+	}
+	if err := rawdb.WritePreconfAuditedThrough(backend.ChainDb(), 77); err != nil {
+		t.Fatalf("write watermark: %v", err)
+	}
+
+	result, err := NewBorAPI(backend).GetInvalidPreconfBlocks(context.Background(), rpc.BlockNumber(5), rpc.BlockNumber(96))
+	if err != nil {
+		t.Fatalf("range query: %v", err)
+	}
+
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if want := `{"invalid":["0x9","0x6"],"pendingFrom":"0x4e"}`; string(encoded) != want {
+		t.Fatalf("json = %s, want %s", encoded, want)
+	}
+}
+
+// pendingFrom is max(from, auditedThrough+1): the watermark is a prefix mark,
+// so the part of a range the audit has not reached is always its tail.
+func TestGetInvalidPreconfBlocksReportsWhereTheAuditStops(t *testing.T) {
+	cases := []struct {
+		name    string
+		audited *uint64
+		want    *uint64
+	}{
+		{name: "never audited reports the whole range pending", want: ptrTo(uint64(50))},
+		{name: "watermark below the range leaves it all pending", audited: ptrTo(uint64(20)), want: ptrTo(uint64(50))},
+		{name: "watermark at the range start leaves the tail pending", audited: ptrTo(uint64(50)), want: ptrTo(uint64(51))},
+		{name: "watermark inside the range leaves the tail pending", audited: ptrTo(uint64(70)), want: ptrTo(uint64(71))},
+		{name: "watermark at the range end leaves nothing pending", audited: ptrTo(uint64(99))},
+		{name: "watermark above the range leaves nothing pending", audited: ptrTo(uint64(400))},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := newTestBackend(t, 0, &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}, ethash.NewFaker(), nil)
+			if tc.audited != nil {
+				if err := rawdb.WritePreconfAuditedThrough(backend.ChainDb(), *tc.audited); err != nil {
+					t.Fatalf("write watermark: %v", err)
+				}
+			}
+
+			result, err := NewBorAPI(backend).GetInvalidPreconfBlocks(context.Background(), rpc.BlockNumber(50), rpc.BlockNumber(99))
+			if err != nil {
+				t.Fatalf("range query: %v", err)
+			}
+
+			switch {
+			case tc.want == nil && result.PendingFrom != nil:
+				t.Fatalf("pendingFrom = %d, want nil", uint64(*result.PendingFrom))
+			case tc.want != nil && result.PendingFrom == nil:
+				t.Fatalf("pendingFrom = nil, want %d", *tc.want)
+			case tc.want != nil && uint64(*result.PendingFrom) != *tc.want:
+				t.Fatalf("pendingFrom = %d, want %d", uint64(*result.PendingFrom), *tc.want)
+			}
+		})
+	}
+}
+
+// One record per height means a bounded range bounds the response, so the cap
+// is on the request: too wide a question is an error rather than a truncated
+// answer a caller cannot tell from a complete one.
+func TestGetInvalidPreconfBlocksCapsTheRange(t *testing.T) {
+	backend := newTestBackend(t, 0, &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}, ethash.NewFaker(), nil)
+	api := NewBorAPI(backend)
+	ctx := context.Background()
+
+	widest := rpc.BlockNumber(invalidPreconfRangeLimit)
+	if _, err := api.GetInvalidPreconfBlocks(ctx, rpc.BlockNumber(1), widest); err != nil {
+		t.Fatalf("a range of exactly %d heights was rejected: %v", invalidPreconfRangeLimit, err)
+	}
+	if _, err := api.GetInvalidPreconfBlocks(ctx, rpc.BlockNumber(1), widest+1); err == nil {
+		t.Fatalf("a range of %d heights was accepted", invalidPreconfRangeLimit+1)
+	}
+
+	// The widest range expressible: to-from+1 overflows to zero here, so a
+	// count-based cap would wave this through and scan the whole keyspace.
+	if _, err := api.GetInvalidPreconfBlocks(ctx, rpc.BlockNumber(0), rpc.BlockNumber(math.MaxInt64)); err == nil {
+		t.Fatal("the widest possible range was accepted")
+	}
+}
+
+// An unreadable watermark cannot answer as "nothing pending": that is the
+// claim the whole range was compared.
+func TestGetInvalidPreconfBlocksSurfacesAnUnreadableWatermark(t *testing.T) {
+	backend := newTestBackend(t, 0, &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}, ethash.NewFaker(), nil)
+	api := NewBorAPI(backend)
+
+	// A literal key, mirroring core/rawdb's unexported one; the read below
+	// asserts the corruption took, so a renamed key fails here rather than
+	// leaving this passing against a watermark that reads fine.
+	if err := backend.ChainDb().Put([]byte("PreconfAuditedThrough"), []byte{0xff, 0xff}); err != nil {
+		t.Fatalf("corrupt watermark: %v", err)
+	}
+	if _, _, err := rawdb.ReadPreconfAuditedThrough(backend.ChainDb()); err == nil {
+		t.Fatal("the watermark still reads cleanly; the key no longer matches rawdb")
+	}
+
+	result, err := api.GetInvalidPreconfBlocks(context.Background(), rpc.BlockNumber(5), rpc.BlockNumber(9))
+	if err == nil {
+		t.Fatalf("result = %+v, want an error for an unreadable watermark", result)
+	}
+	if result != nil {
+		t.Fatalf("result = %+v, want nil alongside the error", result)
+	}
+}
+
+func ptrTo[T any](v T) *T { return &v }
 
 func TestBorWitnessAPI_Integration(t *testing.T) {
 	t.Parallel()
@@ -4458,88 +4587,6 @@ func TestSystemTxGasCapBypass(t *testing.T) {
 			} else {
 				require.True(t, gasAvailable.Uint64() > rpcGasCap,
 					"gas should bypass RPCGasCap (%d), got %s", rpcGasCap, gasAvailable)
-			}
-		})
-	}
-}
-
-func TestGetPreconfAuditStatus(t *testing.T) {
-	backend := newTestBackend(t, 0, &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}, ethash.NewFaker(), nil)
-	api := NewBorAPI(backend)
-
-	// A node that never audited reports neither mark, so an empty
-	// invalidation range cannot be read as a clean window.
-	status, err := api.GetPreconfAuditStatus()
-	if err != nil {
-		t.Fatalf("status: %v", err)
-	}
-	if status.AuditedThrough != nil || status.UnauditedThrough != nil {
-		t.Fatalf("status = %+v, want both marks absent", status)
-	}
-
-	if err := rawdb.WritePreconfAuditedThrough(backend.ChainDb(), 77); err != nil {
-		t.Fatalf("write watermark: %v", err)
-	}
-	if err := rawdb.WritePreconfUnauditedThrough(backend.ChainDb(), 30); err != nil {
-		t.Fatalf("write unaudited: %v", err)
-	}
-
-	status, err = api.GetPreconfAuditStatus()
-	if err != nil {
-		t.Fatalf("status: %v", err)
-	}
-	if status.AuditedThrough == nil || uint64(*status.AuditedThrough) != 77 {
-		t.Fatalf("auditedThrough = %v, want 77", status.AuditedThrough)
-	}
-	if status.UnauditedThrough == nil || uint64(*status.UnauditedThrough) != 30 {
-		t.Fatalf("unauditedThrough = %v, want 30", status.UnauditedThrough)
-	}
-
-	encoded, err := json.Marshal(status)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	if want := `{"auditedThrough":"0x4d","unauditedThrough":"0x1e"}`; string(encoded) != want {
-		t.Fatalf("json = %s, want %s", encoded, want)
-	}
-}
-
-func TestGetPreconfAuditStatusSurfacesAnUnreadableMark(t *testing.T) {
-	// Each mark gets its own case: corrupting both would let the first read
-	// fail and short-circuit, leaving the second branch unexercised.
-	//
-	// Literal keys, mirroring core/rawdb's unexported ones. Each case asserts
-	// the corruption actually took, so a renamed key fails here rather than
-	// leaving this passing against a mark that reads fine.
-	cases := []struct {
-		name string
-		key  string
-		read func(ethdb.KeyValueReader) (uint64, bool, error)
-	}{
-		{"audited", "PreconfAuditedThrough", rawdb.ReadPreconfAuditedThrough},
-		{"unaudited", "PreconfUnauditedThrough", rawdb.ReadPreconfUnauditedThrough},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			backend := newTestBackend(t, 0, &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}, ethash.NewFaker(), nil)
-			api := NewBorAPI(backend)
-
-			if err := backend.ChainDb().Put([]byte(tc.key), []byte{0xff, 0xff}); err != nil {
-				t.Fatalf("corrupt %s: %v", tc.key, err)
-			}
-			if _, _, err := tc.read(backend.ChainDb()); err == nil {
-				t.Fatalf("%s still reads cleanly; the key no longer matches rawdb", tc.key)
-			}
-
-			// Reporting no marks here would read as "never audited", which is
-			// the clean-looking answer this method exists to avoid giving.
-			status, err := api.GetPreconfAuditStatus()
-			if err == nil {
-				t.Fatalf("status = %+v, want an error for an unreadable mark", status)
-			}
-			if status != nil {
-				t.Fatalf("status = %+v, want nil alongside the error", status)
 			}
 		})
 	}

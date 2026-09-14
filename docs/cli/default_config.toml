@@ -279,4 +279,3 @@ devfakeauthor = false
   publisher-endpoint = ""
   consumer-endpoint = ""
   poll = "200ms"
-  audit-window = 0
