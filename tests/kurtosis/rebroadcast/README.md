@@ -9,8 +9,8 @@ leave rebroadcast disabled. These recovery cases have Go regression tests.
 
 ## CI integration
 
-The existing `e2e-tests` job in `.github/workflows/kurtosis-e2e.yml` runs the
-rebroadcast checks after the smoke and RPC tests, against the same enclave.
+The existing `e2e-tests` job in `.github/workflows/kurtosis-e2e.yml` runs smoke,
+RPC, and rebroadcast checks in one `Run E2E tests` step, against the same enclave.
 It reuses the Bor and Heimdall images, setup, network diagnostics, and cleanup.
 The shared Bor template enables debug logs and a two-second rebroadcast interval
 with a 30-minute eligibility window. The fixture uses all four validators,
@@ -39,7 +39,7 @@ restoration on every validator; any failure fails the test and is recorded.
 
 `summary.json` records initialization errors as well as phase results and cleanup
 errors. `samples.jsonl` contains phase evidence and `target.log` contains target
-logs. CI uploads these as `rebroadcast-e2e-diagnostics`, including on failure.
+logs. CI uploads these as `kurtosis-e2e-diagnostics`, including on failure.
 Counts represent handler batches, not per-peer gossip deliveries.
 
 ## Local execution

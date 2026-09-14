@@ -143,11 +143,10 @@ jobs:
           path: bor-tests
           persist-credentials: false
 
-      - name: Prepare rebroadcast fixture settings
-        run: python3 bor-tests/tests/kurtosis/rebroadcast/prepare.py .
-
-      - name: Copy kurtosis config
-        run: cp ./pos-workflows/configs/kurtosis-e2e.yml ./kurtosis-e2e.yml
+      - name: Prepare E2E config
+        run: |
+          cp ./pos-workflows/configs/kurtosis-e2e.yml ./kurtosis-e2e.yml
+          python3 bor-tests/tests/kurtosis/rebroadcast/prepare.py .
 
       # Load images
       - name: Download bor docker image
@@ -188,28 +187,19 @@ jobs:
           sudo chmod +x /usr/local/bin/polycli
           polycli version
 
-      - name: Run smoke tests
-        id: smoke-tests
-        working-directory: pos-workflows/tests
-        run: bash kurtosis_smoke_test.sh
-
       - name: Install Go
         uses: actions/setup-go@v7
         with:
           go-version: 'stable'
 
-      - name: Run RPC tests
-        id: rpc-tests
-        working-directory: pos-workflows/tests/rpc_tests
+      - name: Run E2E tests
+        id: e2e-tests
         run: |
+          (cd pos-workflows/tests && bash kurtosis_smoke_test.sh)
           export RPC_URL=$(kurtosis port print ${{ env.ENCLAVE_NAME }} l2-el-1-bor-heimdall-v2-validator rpc)
           export PRIV_KEY="0xd40311b5a5ca5eaeb48dfba5403bde4993ece8eccf4190e98e19fcd4754260ea"
-          go run . --priv-key "$PRIV_KEY" --rpc-url "$RPC_URL" --log-req-res true
-          echo "REBROADCAST_FUNDER_KEY=$PRIV_KEY" >> "$GITHUB_ENV"
-
-      - name: Run rebroadcast checks
-        id: rebroadcast-tests
-        run: |
+          (cd pos-workflows/tests/rpc_tests && go run . --priv-key "$PRIV_KEY" --rpc-url "$RPC_URL" --log-req-res true)
+          export REBROADCAST_FUNDER_KEY="$PRIV_KEY"
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s bor-tests/tests/kurtosis/rebroadcast -p 'test_*.py' -v
           python3 bor-tests/tests/kurtosis/rebroadcast/e2e.py \
             --enclave "${{ env.ENCLAVE_NAME }}" --artifacts build/rebroadcast-e2e \
@@ -218,22 +208,18 @@ jobs:
               l2-el-3-bor-heimdall-v2-validator l2-el-4-bor-heimdall-v2-validator \
             --other-peers l2-el-6-bor-heimdall-v2-rpc --timeout 240
 
-      - name: Upload rebroadcast diagnostics
+      - name: Upload E2E test diagnostics
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: rebroadcast-e2e-diagnostics
+          name: kurtosis-e2e-diagnostics
           path: build/rebroadcast-e2e/
           if-no-files-found: warn
           retention-days: 14
 
       # Collect diagnostics on failure
       - name: Collect network diagnostics and state dump
-        if: >-
-          always() && (
-          steps.smoke-tests.outcome == 'failure' ||
-          steps.rpc-tests.outcome == 'failure' ||
-          steps.rebroadcast-tests.outcome == 'failure')
+        if: always() && steps.e2e-tests.outcome == 'failure'
         uses: ./pos-workflows/.github/actions/network-diagnostics-and-state-dump
         with:
           enclave_name: ${{ env.ENCLAVE_NAME }}
