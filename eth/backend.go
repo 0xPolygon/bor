@@ -316,6 +316,35 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		trieJournalDirectory = stack.ResolvePath("triedb")
 	}
 
+	// Witness recording is only sound on the serial, non-pipelined execution
+	// path, so a node that records witnesses gives up both accelerators.
+	//
+	//   - Parallel EVM: ProcessBlock hands the same *stateless.Witness to the
+	//     serial and the parallel processor and keeps whichever finishes first.
+	//     Both have already written into it by then, so the witness is the union
+	//     of the two engines' reads and its size depends on how far the loser got
+	//     before cancellation — i.e. on wall clock.
+	//
+	//   - Pipelined import SRC: CommitSnapshot finishes by draining the shared
+	//     readerWithCache into the FlatDiff, and that read set carries no
+	//     attribution — reads made by the speculative block prefetcher and by
+	//     transactions that were attempted and dropped land in it alongside the
+	//     block's own reads.
+	//
+	// Both yield witnesses that differ between nodes for the same block, which
+	// WIT/2's cross-peer page-count check treats as a misbehaving peer. Disable
+	// them with a warning rather than refusing to boot: witness generation is the
+	// feature the operator asked for, and a node that keeps running without the
+	// accelerators is strictly better than one that does not start.
+	recordsWitnesses := config.WitnessProtocol || config.SyncAndProduceWitnesses
+
+	pipelinedImportSRC := config.EnablePipelinedImportSRC
+	if pipelinedImportSRC && recordsWitnesses {
+		log.Warn("Disabling pipelined import SRC: witness generation requires the non-pipelined state root path")
+
+		pipelinedImportSRC = false
+	}
+
 	var (
 		options = &core.BlockChainConfig{
 			TrieCleanLimit:           config.TrieCleanCache,
@@ -333,7 +362,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			AddressCacheSizes:        config.AddressCacheSizes,
 			PreloadRateLimit:         config.PreloadRateLimit,
 			VmConfig:                 vmCfg,
-			EnablePipelinedImportSRC: config.EnablePipelinedImportSRC,
+			EnablePipelinedImportSRC: pipelinedImportSRC,
 			PipelinedImportSRCLogs:   config.PipelinedImportSRCLogs,
 			PipelinedSRCWarmSnapshot: config.PipelinedSRCWarmSnapshot,
 			Stateless:                config.SyncMode == downloader.StatelessSync,
@@ -373,7 +402,14 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 
 	// check if Parallel EVM is enabled
 	// if enabled, use parallel state processor
-	if config.ParallelEVM.Enable {
+	parallelEVM := config.ParallelEVM.Enable
+	if parallelEVM && recordsWitnesses {
+		log.Warn("Disabling parallel EVM: witness generation requires the serial state processor")
+
+		parallelEVM = false
+	}
+
+	if parallelEVM {
 		eth.blockchain, err = core.NewParallelBlockChain(chainDb, config.Genesis, eth.engine, options, config.ParallelEVM.SpeculativeProcesses, config.ParallelEVM.Enforce)
 	} else {
 		eth.blockchain, err = core.NewBlockChain(chainDb, config.Genesis, eth.engine, options)

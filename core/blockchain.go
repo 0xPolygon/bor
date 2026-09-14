@@ -1334,17 +1334,42 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		execTo   time.Time
 	}
 
-	var resultChanLen int = 2
-	if bc.enforceParallelProcessor {
-		log.Debug("Processing block using Block STM only", "number", block.NumberU64())
-		resultChanLen = 1
+	// Witness recording is only supported by the serial processor, so blocks that
+	// record a witness skip the parallel one. Both processors share the witness
+	// pointer below, so letting them race would make the witness contents depend
+	// on which engine won and how far the loser got before cancellation.
+	//
+	// eth.New already declines to build a parallel blockchain on a witness-
+	// recording node; this is the second line of defence, and it also covers the
+	// per-block cases that configuration cannot see — stateless self-validation
+	// and single-block InsertChain witness generation, both of which can hand a
+	// witness to a node that is otherwise entitled to run Block STM.
+	//
+	// enforceParallelProcessor normally suppresses the serial processor. A block
+	// recording a witness overrides that: without the serial run there would be
+	// no processor left to execute it.
+	runParallel := bc.parallelProcessor != nil && witness == nil
+	runSerial := bc.processor != nil && (!bc.enforceParallelProcessor || !runParallel)
+
+	resultChanLen := 0
+	if runParallel {
+		resultChanLen++
 	}
+
+	if runSerial {
+		resultChanLen++
+	}
+
+	if runParallel && !runSerial {
+		log.Debug("Processing block using Block STM only", "number", block.NumberU64())
+	}
+
 	resultChan := make(chan Result, resultChanLen)
 
 	processorCount := 0
 	execStart := time.Now()
 
-	if bc.parallelProcessor != nil {
+	if runParallel {
 		processorCount++
 
 		go func() {
@@ -1388,7 +1413,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		}()
 	}
 
-	if bc.processor != nil && !bc.enforceParallelProcessor {
+	if runSerial {
 		processorCount++
 
 		go func() {
