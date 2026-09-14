@@ -1646,14 +1646,26 @@ func (w *worker) commitTransaction(env *environment, tx *types.Transaction) ([]*
 		snap = env.state.Snapshot()
 		gp   = env.gasPool.Gas()
 	)
+	// Scope the witness to this attempt. commitTransactions drops a
+	// transaction on several paths below -- the build deadline firing
+	// mid-EVM (vm.ErrInterrupt), a nonce race, plain invalidity -- and while
+	// RevertToSnapshot undoes the state, the witness has no journal of its
+	// own. Without this scope the discarded transaction's reads stay in the
+	// witness of a block that does not contain it, so the producer signs a
+	// witness hash no importing node can reproduce.
+	env.state.BeginWitnessTx()
 
 	receipt, err := core.ApplyTransaction(env.evm, env.gasPool, env.state, env.header, tx, &env.header.GasUsed)
 	if err != nil {
 		env.state.RevertToSnapshot(snap)
+		// After the state revert, so the cache eviction it performs cannot
+		// strand journalled changes.
+		env.state.DiscardWitnessTx()
 		env.gasPool.SetGas(gp)
 
 		return nil, err
 	}
+	env.state.CommitWitnessTx()
 	env.txs = append(env.txs, tx)
 	env.receipts = append(env.receipts, receipt)
 	env.tcount++
@@ -1824,7 +1836,16 @@ mainloop:
 				continue
 			}
 
-			if err := env.state.ValidateKnownAccounts(options.KnownAccounts); err != nil {
+			// Same reasoning as commitTransaction: this reads state for a
+			// transaction that may be dropped on the next line.
+			env.state.BeginWitnessTx()
+			err := env.state.ValidateKnownAccounts(options.KnownAccounts)
+			if err != nil {
+				env.state.DiscardWitnessTx()
+			} else {
+				env.state.CommitWitnessTx()
+			}
+			if err != nil {
 				log.Trace("Dropping conditional transaction", "from", from, "hash", tx.Hash(), "reason", err)
 				txs.Pop()
 
