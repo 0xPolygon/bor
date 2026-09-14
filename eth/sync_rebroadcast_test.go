@@ -27,6 +27,68 @@ import (
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 )
 
+func TestEnableSyncedFeaturesRebroadcastWithPeers(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		tdDelta     int64
+		wasEligible bool
+		want        bool
+	}{
+		{"higher peer on startup", 1, false, false},
+		{"higher peer after sync", 1, true, false},
+		{"equal peer", 0, false, true},
+		{"lower peer", -1, false, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			handler, cleanup := newChainSyncerTestHandler(t)
+			defer cleanup()
+			handler.synced.Store(test.wasEligible)
+			handler.rebroadcastOK.Store(test.wasEligible)
+			_, ourTD := handler.chainSync.modeAndLocalHead()
+			peer := registerPeerWithTD(t, handler.peers, ourTD.Int64()+test.tdDelta)
+			handler.enableSyncedFeatures()
+			if !handler.synced.Load() || handler.snapSync.Load() {
+				t.Fatal("enabling synced features should enable transaction processing and disable snap sync")
+			}
+			if got := handler.rebroadcastOK.Load(); got != test.want {
+				t.Fatalf("rebroadcast gate: have %v, want %v", got, test.want)
+			}
+			head, _ := peer.Head()
+			peer.SetHead(head, ourTD)
+			handler.enableSyncedFeatures()
+			if !handler.rebroadcastOK.Load() {
+				t.Fatal("caught-up handler should resume rebroadcast")
+			}
+		})
+	}
+}
+
+func TestChainSyncerRebroadcastWithoutLocalTD(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		synced bool
+		td     int64
+		want   bool
+	}{
+		{"higher peer", true, 1, false},
+		{"equal peer", true, 0, true},
+		{"initial sync with higher peer", false, 1, false},
+		{"initial sync with equal peer", false, 0, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			handler, cleanup := newChainSyncerTestHandler(t)
+			defer cleanup()
+			handler.synced.Store(test.synced)
+			handler.rebroadcastOK.Store(!test.want)
+			registerPeerWithTD(t, handler.peers, test.td)
+			handler.chainSync.updateRebroadcastStatus(nil)
+			if got := handler.rebroadcastOK.Load(); got != test.want {
+				t.Fatalf("rebroadcast gate without local TD: have %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestChainSyncerRebroadcastAfterSyncFailure(t *testing.T) {
 	for _, test := range []struct {
 		name   string

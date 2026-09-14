@@ -484,7 +484,7 @@ func TestRebroadcastStuckTransactionsNotSynced(t *testing.T) {
 	}
 
 	if handler.handler.rebroadcastStuckTransactions(types.Transactions{signedTx}) {
-		t.Fatal("unsynced handler rebroadcast stuck transaction")
+		t.Fatal("unsynced handler should not rebroadcast stuck transactions")
 	}
 }
 

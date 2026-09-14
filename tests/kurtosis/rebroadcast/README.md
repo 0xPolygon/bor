@@ -2,6 +2,11 @@
 
 ## Automated end-to-end test
 
+The `rebroadcast-e2e-tests` job in `.github/workflows/kurtosis-e2e.yml` runs this
+scenario on pull requests and pushes to `develop` and `master`. It reuses the
+workflow's Bor image build, requires no repository secrets, and uploads launch
+logs and phase evidence as `rebroadcast-e2e-diagnostics`, including on failure.
+
 Run from the repository root with Docker, Kurtosis, Git, and Python 3 available:
 
 ```bash

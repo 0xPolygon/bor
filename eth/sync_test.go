@@ -52,12 +52,15 @@ func TestChainSyncerNextSyncOpStates(t *testing.T) {
 	}
 
 	syncer.doneCh = nil
+	handler.enableSyncedFeatures()
+	if !handler.rebroadcastOK.Load() {
+		t.Fatal("caught-up handler should enable rebroadcast before a higher-TD peer connects")
+	}
 	peer := registerPeerWithTD(t, handler.peers, 1_000_000)
 	if err := handler.downloader.RegisterPeer(peer.ID(), eth.ETH68, &ethPeer{Peer: peer}); err != nil {
 		t.Fatal(err)
 	}
 
-	handler.enableSyncedFeatures()
 	op, wait := syncer.nextSyncOp()
 	if op == nil {
 		t.Fatal("expected sync operation")

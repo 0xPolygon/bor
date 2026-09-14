@@ -1082,7 +1082,6 @@ func (h *handler) rebroadcastStuckTransactions(txs types.Transactions) bool {
 func (h *handler) enableSyncedFeatures() {
 	// Mark the local node as synced.
 	h.synced.Store(true)
-	h.rebroadcastOK.Store(true)
 
 	// If we were running snap sync and it finished, disable doing another
 	// round on next sync cycle
@@ -1090,6 +1089,9 @@ func (h *handler) enableSyncedFeatures() {
 		log.Info("Snap sync complete, auto disabling")
 		h.snapSync.Store(false)
 	}
+	// Mining startup also enables these features, even if a peer is still ahead.
+	_, ourTD := h.chainSync.modeAndLocalHead()
+	h.chainSync.updateRebroadcastStatus(ourTD)
 }
 
 // PeerStats represents a short summary of the information known about a connected

@@ -41,6 +41,66 @@ jobs:
           path: bor-image.tar.gz
           retention-days: 1
 
+  rebroadcast-e2e-tests:
+    needs: build-bor
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ENCLAVE: rebroadcast-e2e
+      BOR_IMAGE: bor:local
+      ARTIFACTS: ${{ github.workspace }}/build/rebroadcast-e2e
+    steps:
+      - name: Checkout bor
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: true
+          swap-storage: true
+
+      - name: Install Kurtosis
+        run: |
+          KURTOSIS_DEB=/tmp/kurtosis-cli_1.18.2_linux_amd64.deb
+          curl --proto '=https' --tlsv1.2 -fsSL \
+            https://github.com/kurtosis-tech/kurtosis-cli-release-artifacts/releases/download/1.18.2/kurtosis-cli_1.18.2_linux_amd64.deb \
+            -o "$KURTOSIS_DEB"
+          echo "6522717e33ede4e08b5fd3f2a47689c016c045075777c938f43d4b94e17c760d  $KURTOSIS_DEB" | sha256sum --check -
+          sudo apt-get install -y "$KURTOSIS_DEB"
+          kurtosis analytics disable
+
+      - name: Download bor docker image
+        uses: actions/download-artifact@v8
+        with:
+          name: bor-image
+
+      - name: Load bor docker image
+        run: gunzip -c bor-image.tar.gz | docker load
+
+      - name: Test rebroadcast assertions and cleanup
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests/kurtosis/rebroadcast -p 'test_*.py' -v
+
+      - name: Run rebroadcast end-to-end test
+        run: tests/kurtosis/rebroadcast/run.sh --timeout 240
+
+      - name: Upload rebroadcast diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rebroadcast-e2e-diagnostics
+          path: build/rebroadcast-e2e/
+          if-no-files-found: warn
+          retention-days: 14
+
   build-heimdall-v2:
     permissions:
       contents: read
