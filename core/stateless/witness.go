@@ -109,6 +109,85 @@ type Witness struct {
 
 	chain HeaderReader // Chain reader to convert block hash ops to header proofs
 	lock  sync.RWMutex // Lock to allow concurrent state insertions
+
+	// tx, when non-nil, stages every addition made on behalf of a transaction
+	// the caller may still abandon. See BeginTx.
+	tx *witnessTxScope
+}
+
+// witnessTxScope holds what one still-abandonable transaction contributed.
+// Headers are tracked by length because AddBlockHash only ever extends the
+// ancestor chain, so rolling back is a truncation.
+type witnessTxScope struct {
+	codes   map[string]struct{}
+	state   map[string]struct{}
+	headers int
+}
+
+// BeginTx starts staging additions for a transaction whose inclusion is not
+// yet decided. Until CommitTx or DiscardTx, AddCode and AddState land in a
+// scratch set rather than the witness, and AddBlockHash's header extension is
+// recorded so it can be rolled back.
+//
+// A block producer needs this because the witness has no journal while the
+// state does: miner/worker.go attempts a transaction, and on the interrupt,
+// nonce and validity paths rolls the state back with RevertToSnapshot and
+// drops it. Without staging, whatever that transaction read stays in the
+// witness of a block that does not contain it, so the producer publishes a
+// witness no importing node can reproduce -- and the BP-signed hash then
+// identifies bytes only the producer can produce.
+//
+// Calls do not nest: BeginTx replaces any open scope. Safe to call on a
+// witness that concurrent readers are adding to; only the caller driving the
+// transaction may Begin/Commit/Discard.
+func (w *Witness) BeginTx() {
+	if w == nil {
+		return
+	}
+	w.lock.Lock()
+	defer w.lock.Unlock()
+	w.tx = &witnessTxScope{
+		codes:   make(map[string]struct{}),
+		state:   make(map[string]struct{}),
+		headers: len(w.Headers),
+	}
+}
+
+// CommitTx folds the staged additions into the witness. It is a no-op when no
+// scope is open, so callers that only sometimes stage stay correct.
+func (w *Witness) CommitTx() {
+	if w == nil {
+		return
+	}
+	w.lock.Lock()
+	defer w.lock.Unlock()
+	if w.tx == nil {
+		return
+	}
+	for code := range w.tx.codes {
+		w.Codes[code] = struct{}{}
+	}
+	for node := range w.tx.state {
+		w.State[node] = struct{}{}
+	}
+	w.tx = nil
+}
+
+// DiscardTx throws the staged additions away and rolls back any headers the
+// transaction pulled in, leaving the witness exactly as it was at BeginTx.
+func (w *Witness) DiscardTx() {
+	if w == nil {
+		return
+	}
+	w.lock.Lock()
+	defer w.lock.Unlock()
+	if w.tx == nil {
+		return
+	}
+	if w.tx.headers < len(w.Headers) {
+		w.Headers = w.Headers[:w.tx.headers]
+	}
+	w.tx = nil
 }
 
 // NewWitness creates an empty witness ready for population.
@@ -166,6 +245,10 @@ func (w *Witness) AddCode(code []byte) {
 	}
 	w.lock.Lock()
 	defer w.lock.Unlock()
+	if w.tx != nil {
+		w.tx.codes[string(code)] = struct{}{}
+		return
+	}
 	w.Codes[string(code)] = struct{}{}
 }
 
@@ -177,6 +260,12 @@ func (w *Witness) AddState(nodes map[string][]byte) {
 	w.lock.Lock()
 	defer w.lock.Unlock()
 
+	if w.tx != nil {
+		for _, value := range nodes {
+			w.tx.state[string(value)] = struct{}{}
+		}
+		return
+	}
 	for _, value := range nodes {
 		w.State[string(value)] = struct{}{}
 	}

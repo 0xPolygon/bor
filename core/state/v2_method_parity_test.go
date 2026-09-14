@@ -88,6 +88,17 @@ var pdbExemptMethods = map[string]pdbExemptCategory{
 	// read cache into the witness concurrently with execution. Per-tx PDBs
 	// never orchestrate block-level witness recording.
 	"StartWitnessReadSetPrewalk": catV2SettleHelper,
+	// Per-transaction witness scoping — only a block PRODUCER needs it, to
+	// keep a transaction it attempts and then drops out of the block's
+	// witness (miner/worker.go commitTransaction). BlockSTM v2 does not
+	// produce witnesses, and a ParallelStateDB is per-transaction and
+	// discarded wholesale on invalidation, so it has nothing to scope.
+	"BeginWitnessTx":   catV2SettleHelper,
+	"CommitWitnessTx":  catV2SettleHelper,
+	"DiscardWitnessTx": catV2SettleHelper,
+	// Block-level filter installed on finalDB before workers run; the
+	// per-transaction PDB records into it rather than owning it.
+	"SetWitnessReadFilter": catV2SettleHelper,
 	// V2 calls this on the underlying *StateDB at SafeBase construction
 	// to flush pre-block dirty/pending storage (system calls, DAO fork)
 	// into the shared trieReader storage cache. PDB never needs to do
