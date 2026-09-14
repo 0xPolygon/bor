@@ -207,12 +207,10 @@ jobs:
           go run . --priv-key "$PRIV_KEY" --rpc-url "$RPC_URL" --log-req-res true
           echo "REBROADCAST_FUNDER_KEY=$PRIV_KEY" >> "$GITHUB_ENV"
 
-      - name: Test rebroadcast assertions and cleanup
-        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s bor-tests/tests/kurtosis/rebroadcast -p 'test_*.py' -v
-
       - name: Run rebroadcast checks
         id: rebroadcast-tests
         run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s bor-tests/tests/kurtosis/rebroadcast -p 'test_*.py' -v
           python3 bor-tests/tests/kurtosis/rebroadcast/e2e.py \
             --enclave "${{ env.ENCLAVE_NAME }}" --artifacts build/rebroadcast-e2e \
             --service l2-el-5-bor-heimdall-v2-rpc \
