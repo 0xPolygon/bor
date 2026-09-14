@@ -246,3 +246,39 @@ func ReadFutureMilestoneList(db ethdb.KeyValueReader) ([]uint64, map[uint64]comm
 
 	return order, list, nil
 }
+
+// PurgeStaleMilestonesFromDb removes any persisted milestone, lock field, or future milestone list
+// entries from the database that are strictly higher than head.
+func PurgeStaleMilestonesFromDb(db ethdb.KeyValueStore, head uint64) {
+	if persistedNum, _, err := ReadFinality[*Milestone](db); err == nil && persistedNum > head {
+		if err := DeleteLastFinality[*Milestone](db); err != nil {
+			log.Error("Failed to delete stale last milestone from db during rewind", "err", err)
+		}
+	}
+
+	if _, lockBlock, _, _, err := ReadLockField(db); err == nil && lockBlock > head {
+		if err := db.Delete(lockFieldKey); err != nil {
+			log.Error("Failed to delete stale milestone lock from db during rewind", "err", err)
+		}
+	}
+
+	if order, list, err := ReadFutureMilestoneList(db); err == nil && len(order) > 0 {
+		var filteredOrder []uint64
+		filteredList := make(map[uint64]common.Hash)
+		for _, num := range order {
+			if num <= head {
+				filteredOrder = append(filteredOrder, num)
+				if hash, ok := list[num]; ok {
+					filteredList[num] = hash
+				}
+			}
+		}
+		if len(filteredOrder) != len(order) {
+			if len(filteredOrder) == 0 {
+				_ = db.Delete(futureMilestoneKey)
+			} else {
+				_ = WriteFutureMilestoneList(db, filteredOrder, filteredList)
+			}
+		}
+	}
+}
