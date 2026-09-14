@@ -89,6 +89,40 @@ func TestChainSyncerRebroadcastWithoutLocalTD(t *testing.T) {
 	}
 }
 
+func TestChainSyncerRebroadcastOnSyncFailureWhenCaughtUp(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		synced bool
+		err    error
+	}{
+		{"initial sync", false, context.DeadlineExceeded},
+		{"catch-up timeout", true, context.DeadlineExceeded},
+		{"catch-up cancellation", true, context.Canceled},
+		{"catch-up peer unavailable", true, downloader.ErrPeersUnavailable},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			handler, cleanup := newChainSyncerTestHandler(t)
+			defer cleanup()
+			handler.synced.Store(test.synced)
+			cs := handler.chainSync
+			cs.force = time.NewTimer(time.Hour)
+			defer cs.force.Stop()
+			peer := registerPeerWithTD(t, handler.peers, 1_000_000)
+			if op, _ := cs.nextSyncOp(); op == nil {
+				t.Fatal("higher peer should require catch-up")
+			}
+			cs.doneCh = make(chan error, 1)
+			head, _ := peer.Head()
+			_, localTD := cs.modeAndLocalHead()
+			peer.SetHead(head, localTD)
+			cs.onSyncDone(test.err)
+			if got := handler.rebroadcastOK.Load(); got != test.synced {
+				t.Fatalf("rebroadcast gate after failed sync with no peer ahead: have %v, want %v", got, test.synced)
+			}
+		})
+	}
+}
+
 func TestChainSyncerRebroadcastAfterSyncFailure(t *testing.T) {
 	for _, test := range []struct {
 		name   string

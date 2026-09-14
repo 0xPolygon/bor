@@ -432,7 +432,10 @@ func TestStuckTxBroadcastLoop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to sign tx: %v", err)
 	}
-	handler.txpool.Add(types.Transactions{signedTx}, true)
+	// Seed without a NewTxsEvent so only the stuck-tx loop can send the packet.
+	handler.txpool.lock.Lock()
+	handler.txpool.pool[signedTx.Hash()] = signedTx
+	handler.txpool.lock.Unlock()
 
 	app, net := p2p.MsgPipe()
 	defer app.Close()

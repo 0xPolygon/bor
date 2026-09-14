@@ -1,11 +1,22 @@
 # Out-of-sync transaction rebroadcast observation
 
+Rebroadcast requires the handler's synced flag and no known peer with higher
+total difficulty, including peers temporarily excluded from sync attempts.
+After a failed catch-up, a previously synced node may resume rebroadcast once
+no known peer remains ahead, even without another successful sync. This prevents
+a disconnected or backed-off peer from disabling rebroadcast indefinitely.
+Initial-sync failures leave rebroadcast disabled. These recovery cases are
+covered by `eth/sync_rebroadcast_test.go`; the devnet below exercises connected
+catch-up and recovery.
+
 ## Automated end-to-end test
 
 The `rebroadcast-e2e-tests` job in `.github/workflows/kurtosis-e2e.yml` runs this
 scenario on pull requests and pushes to `develop` and `master`. It reuses the
 workflow's Bor image build, requires no repository secrets, and uploads launch
 logs and phase evidence as `rebroadcast-e2e-diagnostics`, including on failure.
+Enclave names include the GitHub run ID and attempt so reruns do not collide
+with retained enclaves.
 
 Run from the repository root with Docker, Kurtosis, Git, and Python 3 available:
 

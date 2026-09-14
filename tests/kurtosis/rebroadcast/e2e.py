@@ -165,9 +165,25 @@ class Test:
             self.gas_price(node, 1_000_000_000_000)
 
     def restore_fees(self):
+        failures = []
         for node, price in self.fees[:]:
-            self.gas_price(node, price)
-            self.fees.remove((node, price))
+            try:
+                self.gas_price(node, price)
+                self.fees.remove((node, price))
+            except (RuntimeError, subprocess.SubprocessError) as error:
+                failures.append(str(error))
+        if failures:
+            raise RuntimeError("Gas-price cleanup failed: " + "; ".join(failures))
+
+    def cleanup(self):
+        failures = []
+        for name in ("restore", "reconnect", "restore_fees"):
+            try:
+                getattr(self, name)()
+            except (Exception, KeyboardInterrupt) as error:
+                failures.append(f"{name}: {error}")
+        if failures:
+            raise RuntimeError("Cleanup failed: " + "; ".join(failures))
 
     def create_gap(self):
         self.removed_peer = self.peer_enode(self.producers[0])
@@ -287,9 +303,7 @@ def main():
         raise
     finally:
         try:
-            test.restore()
-            test.reconnect()
-            test.restore_fees()
+            test.cleanup()
         except Exception as error:
             test.summary.update(result="FAIL", cleanup_error=str(error))
             raise

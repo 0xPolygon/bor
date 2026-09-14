@@ -48,7 +48,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      ENCLAVE: rebroadcast-e2e
+      ENCLAVE: rebroadcast-e2e-${{ github.run_id }}-${{ github.run_attempt }}
       BOR_IMAGE: bor:local
       ARTIFACTS: ${{ github.workspace }}/build/rebroadcast-e2e
     steps:

@@ -1,4 +1,6 @@
 import json
+import pathlib
+import tempfile
 import types
 import unittest
 from unittest.mock import Mock, patch
@@ -57,6 +59,53 @@ class SuppressionTest(unittest.TestCase):
             test.restore()
         self.assertEqual(test.tc.call_count, 2)
         self.assertEqual(test.shaped, [first])
+
+    def test_cleanup_attempts_every_action(self):
+        actions = ("restore", "reconnect", "restore_fees")
+        for failing in ((), ("restore",), ("reconnect",), ("restore_fees",), actions):
+            with self.subTest(failing=failing):
+                test = e2e.Test.__new__(e2e.Test)
+                for name in actions:
+                    setattr(test, name, Mock(side_effect=RuntimeError(name) if name in failing else None))
+                if failing:
+                    with self.assertRaises(RuntimeError) as raised:
+                        test.cleanup()
+                    for name in failing:
+                        self.assertIn(name, str(raised.exception))
+                else:
+                    test.cleanup()
+                for name in actions:
+                    getattr(test, name).assert_called_once_with()
+
+    def test_fee_cleanup_continues_after_one_failure(self):
+        test = e2e.Test.__new__(e2e.Test)
+        first, second = {"id": "first"}, {"id": "second"}
+        test.fees = [(first, 30), (second, 40)]
+        test.gas_price = Mock(side_effect=[RuntimeError("first failed"), None])
+        with self.assertRaisesRegex(RuntimeError, "Gas-price cleanup failed"):
+            test.restore_fees()
+        self.assertEqual(test.gas_price.call_count, 2)
+        self.assertEqual(test.fees, [(first, 30)])
+
+    def test_main_records_cleanup_failure_after_all_restorations(self):
+        with tempfile.TemporaryDirectory() as output:
+            test = e2e.Test.__new__(e2e.Test)
+            test.output = pathlib.Path(output)
+            test.summary = {}
+            test.run = Mock()
+            test.restore = Mock(side_effect=RuntimeError("network rule remains"))
+            test.reconnect = Mock()
+            test.restore_fees = Mock(side_effect=RuntimeError("fee remains"))
+            argv = ["e2e.py", "--enclave", "test", "--artifacts", output]
+            with patch("e2e.Test", return_value=test), patch("sys.argv", argv), patch("e2e.signal.signal"):
+                with self.assertRaisesRegex(RuntimeError, "Cleanup failed"):
+                    e2e.main()
+            test.reconnect.assert_called_once_with()
+            test.restore_fees.assert_called_once_with()
+            summary = json.loads((test.output / "summary.json").read_text())
+            self.assertEqual(summary["result"], "FAIL")
+            self.assertIn("network rule remains", summary["cleanup_error"])
+            self.assertIn("fee remains", summary["cleanup_error"])
 
 
 if __name__ == "__main__":
