@@ -80,8 +80,13 @@ func (b *EthAPIBackend) GetFinalizedBlockNumber(_ context.Context) (uint64, erro
 }
 
 func (b *EthAPIBackend) SetHead(number uint64) {
-	b.eth.handler.downloader.Cancel()
-	b.eth.blockchain.SetHead(number)
+	if b.eth != nil && b.eth.handler != nil && b.eth.handler.downloader != nil {
+		b.eth.handler.downloader.Cancel()
+		b.eth.handler.downloader.PurgeMilestonesAfter(number)
+	}
+	if b.eth != nil && b.eth.blockchain != nil {
+		b.eth.blockchain.SetHead(number)
+	}
 }
 
 func (b *EthAPIBackend) HeaderByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Header, error) {

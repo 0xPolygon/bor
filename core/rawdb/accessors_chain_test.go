@@ -1232,3 +1232,41 @@ func TestWriteBlockPruneHead(t *testing.T) {
 		}
 	}
 }
+
+func TestPurgeStaleMilestonesFromDb(t *testing.T) {
+	db := NewMemoryDatabase()
+
+	// Write stale milestone, lock field, and future milestones above block 100
+	_ = WriteLastFinality[*Milestone](db, 110, common.HexToHash("0x110"))
+	_ = WriteLockField(db, true, 120, common.HexToHash("0x120"), map[string]struct{}{"p1": {}})
+	_ = WriteFutureMilestoneList(db, []uint64{90, 115, 130}, map[uint64]common.Hash{
+		90:  common.HexToHash("0x90"),
+		115: common.HexToHash("0x115"),
+		130: common.HexToHash("0x130"),
+	})
+
+	// Purge entries above head 100
+	PurgeStaleMilestonesFromDb(db, 100)
+
+	// Verify last milestone is purged
+	if num, _, err := ReadFinality[*Milestone](db); err == nil {
+		t.Fatalf("Expected last milestone > 100 to be purged, found block %d", num)
+	}
+
+	// Verify lock field is purged
+	if _, lockBlock, _, _, err := ReadLockField(db); err == nil {
+		t.Fatalf("Expected lock field > 100 to be purged, found lockBlock %d", lockBlock)
+	}
+
+	// Verify future milestones are trimmed to <= 100
+	order, list, err := ReadFutureMilestoneList(db)
+	if err != nil {
+		t.Fatalf("Expected future milestone list to remain, got err: %v", err)
+	}
+	if len(order) != 1 || order[0] != 90 {
+		t.Fatalf("Expected future milestone order to contain [90], got %v", order)
+	}
+	if _, ok := list[90]; !ok {
+		t.Fatalf("Expected block 90 in future milestone map")
+	}
+}
