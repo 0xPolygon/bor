@@ -3,6 +3,7 @@ package core
 import (
 	"errors"
 	"fmt"
+	"runtime"
 	"sync/atomic"
 	"testing"
 
@@ -75,9 +76,23 @@ type wdGhost struct {
 //     transaction never enters the block
 func (f *witnessDropFixture) wdBuild(t *testing.T, ghosts []wdGhost) *stateless.Witness {
 	t.Helper()
+	w, sdb := f.wdBuildState(t, ghosts, nil)
+	sdb.IntermediateRoot(f.config.IsEIP158(f.blockCtx.BlockNumber))
+	sdb.StopPrefetcher()
+	return w
+}
+
+// wdBuildState is wdBuild without the final root computation, so callers can
+// also inspect what the build left on the StateDB itself. ghostReads, when
+// set, are read through the shared PREFETCH reader before the build starts,
+// standing in for the block-level speculative prefetcher
+// (core/state_prefetcher.go PrefetchStream), which executes transactions on a
+// throwaway StateDB that shares this reader.
+func (f *witnessDropFixture) wdBuildState(t *testing.T, ghosts []wdGhost, ghostReads []common.Address) (*stateless.Witness, *state.StateDB) {
+	t.Helper()
 
 	db := state.NewDatabase(f.tdb, nil)
-	_, processReader, _, err := db.ReadersWithCacheStatsTriple(f.root)
+	prefetchReader, processReader, _, err := db.ReadersWithCacheStatsTriple(f.root)
 	if err != nil {
 		t.Fatalf("readers: %v", err)
 	}
@@ -89,8 +104,18 @@ func (f *witnessDropFixture) wdBuild(t *testing.T, ghosts []wdGhost) *stateless.
 	if err != nil {
 		t.Fatalf("new witness: %v", err)
 	}
+	if len(ghostReads) > 0 {
+		throwaway, err := state.NewWithReader(f.root, db, prefetchReader)
+		if err != nil {
+			t.Fatalf("throwaway: %v", err)
+		}
+		for _, a := range ghostReads {
+			_ = throwaway.GetBalance(a)
+			_ = throwaway.GetState(a, common.Hash{})
+		}
+	}
+
 	sdb.StartPrefetcher("miner", w, nil)
-	defer sdb.StopPrefetcher()
 
 	gp := new(GasPool).AddGas(f.blockCtx.GasLimit)
 	var usedGas uint64
@@ -165,8 +190,7 @@ func (f *witnessDropFixture) wdBuild(t *testing.T, ghosts []wdGhost) *stateless.
 		}
 	}
 
-	sdb.IntermediateRoot(f.config.IsEIP158(f.blockCtx.BlockNumber))
-	return w
+	return w, sdb
 }
 
 // wdImport replays the block the way an importing node does: exactly the
@@ -457,4 +481,210 @@ func TestWitnessScopeLeftOpenFailsSafe(t *testing.T) {
 			t.Fatalf("an open witness scope dropped a code blob the block needs: %s", wdDiff(reference, w))
 		}
 	}
+}
+
+// TestPipelinedProducerFlatDiffIgnoresDroppedTransaction covers the OTHER
+// witness-production path in the miner.
+//
+// Under pipelined sealing the witness is not the one execution accumulated:
+// miner/pipeline.go hands SpawnSRCGoroutine a FlatDiff with makeWitness=true
+// and allowOwnWitness=true, and the SRC goroutine builds a fresh witness by
+// walking that diff's read set (recordAndPreloadSRCWitnessReads ->
+// preloadFlatDiffReads). So a dropped transaction contaminates this path
+// through the diff rather than through the witness object.
+//
+// CommitSnapshot builds ReadSet from s.stateObjects, ReadStorage from each
+// object's originStorage, and NonExistentReads from s.nonExistentReads --
+// exactly the three structures DiscardWitnessTx cleans. This test is what
+// makes that a fact rather than a reading of the code.
+func TestPipelinedProducerFlatDiffIgnoresDroppedTransaction(t *testing.T) {
+	t.Skip("pipelined SRC witness production is contaminated by a shared, " +
+		"attribution-free read record and is NOT fixed by per-transaction scoping. " +
+		"CommitSnapshot ends with drainExternalReadsIntoDiff, which pours the whole " +
+		"readerWithCache read set into the diff -- including reads by dropped " +
+		"transactions AND by the speculative block prefetcher, whose throwaway " +
+		"StateDB shares that reader (core/state_prefetcher.go PrefetchStream). " +
+		"Closing it needs read attribution on the shared reader, not a StateDB " +
+		"scope. Latent today: --pipeline.enable-import-src defaults to false and " +
+		"no chain_pipelined_src_* metric exists on any mainnet or Amoy node. " +
+		"Un-skip and fix before enabling pipelined SRC on a witness producer.")
+
+	f := newWitnessDropFixture(t)
+
+	snapshot := func(ghosts []wdGhost) *state.FlatDiff {
+		_, sdb := f.wdBuildState(t, ghosts, nil)
+		defer sdb.StopPrefetcher()
+		return sdb.CommitSnapshot(f.config.IsEIP158(f.blockCtx.BlockNumber))
+	}
+
+	want := snapshot(nil)
+
+	for _, tc := range []struct {
+		name   string
+		ghosts []wdGhost
+	}{
+		{"interrupted mid-execution", []wdGhost{{at: 3, tx: f.ghosts[0], mode: wdDropInterrupt, afterOps: 18}}},
+		{"interrupted early", []wdGhost{{at: 1, tx: f.ghosts[1], mode: wdDropInterrupt, afterOps: 2}}},
+		{"reads an already-loaded account", []wdGhost{{at: 10, tx: f.ghosts[2], mode: wdDropInterrupt, afterOps: 12}}},
+		{"pre-check failure", []wdGhost{{at: 5, tx: f.wdTxNonce(t, len(f.txs), wdGhostA, 42), mode: wdDropPreCheck}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := snapshot(tc.ghosts)
+			wdRequireSameFlatDiff(t, want, got)
+		})
+	}
+}
+
+// wdRequireSameFlatDiff compares the parts of a FlatDiff the SRC witness is
+// derived from.
+func wdRequireSameFlatDiff(t *testing.T, want, got *state.FlatDiff) {
+	t.Helper()
+
+	wantReads, gotReads := wdAddrSet(want.ReadSet), wdAddrSet(got.ReadSet)
+	for a := range gotReads {
+		if _, ok := wantReads[a]; !ok {
+			t.Errorf("FlatDiff ReadSet gained %x from a dropped transaction (%d vs %d entries)",
+				a[14:], len(got.ReadSet), len(want.ReadSet))
+		}
+	}
+	for a := range wantReads {
+		if _, ok := gotReads[a]; !ok {
+			t.Errorf("FlatDiff ReadSet lost %x the block needs (%d vs %d entries)",
+				a[14:], len(got.ReadSet), len(want.ReadSet))
+		}
+	}
+
+	for addr, slots := range got.ReadStorage {
+		wantSlots := wdHashSet(want.ReadStorage[addr])
+		for _, s := range slots {
+			if _, ok := wantSlots[s]; !ok {
+				t.Errorf("FlatDiff ReadStorage[%x] gained slot %x from a dropped transaction", addr[14:], s[26:])
+			}
+		}
+	}
+	for addr, slots := range want.ReadStorage {
+		gotSlots := wdHashSet(got.ReadStorage[addr])
+		for _, s := range slots {
+			if _, ok := gotSlots[s]; !ok {
+				t.Errorf("FlatDiff ReadStorage[%x] lost slot %x the block needs", addr[14:], s[26:])
+			}
+		}
+	}
+
+	if len(got.NonExistentReads) != len(want.NonExistentReads) {
+		t.Errorf("FlatDiff NonExistentReads changed: %d, want %d",
+			len(got.NonExistentReads), len(want.NonExistentReads))
+	}
+	if len(got.Accounts) != len(want.Accounts) || len(got.Storage) != len(want.Storage) ||
+		len(got.Destructs) != len(want.Destructs) || len(got.Code) != len(want.Code) {
+		t.Errorf("FlatDiff mutations changed: accounts %d/%d storage %d/%d destructs %d/%d code %d/%d",
+			len(got.Accounts), len(want.Accounts), len(got.Storage), len(want.Storage),
+			len(got.Destructs), len(want.Destructs), len(got.Code), len(want.Code))
+	}
+}
+
+func wdAddrSet(in []common.Address) map[common.Address]struct{} {
+	out := make(map[common.Address]struct{}, len(in))
+	for _, a := range in {
+		out[a] = struct{}{}
+	}
+	return out
+}
+
+func wdHashSet(in []common.Hash) map[common.Hash]struct{} {
+	out := make(map[common.Hash]struct{}, len(in))
+	for _, h := range in {
+		out[h] = struct{}{}
+	}
+	return out
+}
+
+// TestSerialWitnessIsDeterministicAcrossRuns pins the base property the whole
+// scheme rests on: with the trie prefetcher live -- the only configuration
+// that exists, since --cache.noprefetch is never read by core and read-only
+// prefetching is what makes the witness complete -- replaying the same block
+// yields the same witness every time, whatever the scheduler does.
+//
+// GOMAXPROCS is varied because IntermediateRoot updates each mutated account's
+// storage trie in its own goroutine, and every one of them calls
+// witness.AddState concurrently.
+func TestSerialWitnessIsDeterministicAcrossRuns(t *testing.T) {
+	f := newWitnessDropFixture(t)
+
+	orig := runtime.GOMAXPROCS(0)
+	defer runtime.GOMAXPROCS(orig)
+
+	var want common.Hash
+	seen := map[common.Hash][]int{}
+
+	for _, procs := range []int{1, 2, 4, 8, 16} {
+		runtime.GOMAXPROCS(procs)
+		for i := 0; i < 6; i++ {
+			w := f.wdBuild(t, nil)
+			h := wdCommit(t, w)
+			if want == (common.Hash{}) {
+				want = h
+				t.Logf("nodes=%d codes=%d commit=%x", len(w.State), len(w.Codes), h[:12])
+			}
+			seen[h] = append(seen[h], procs)
+		}
+	}
+	if len(seen) > 1 {
+		t.Errorf("serial production produced %d distinct witnesses for one block", len(seen))
+		for h, procs := range seen {
+			t.Logf("  commit=%x runs=%d gomaxprocs=%v", h[:12], len(procs), procs)
+		}
+	}
+}
+
+// TestSerialWitnessIgnoresBlockPrefetcher guards the property that keeps the
+// serial path clean where BlockSTM v2's is not.
+//
+// BlockChain.ProcessBlock hands the speculative block prefetcher a throwaway
+// StateDB built from the same ReadersWithCacheStatsTriple as the processor, so
+// all three wrap one readerWithCache over one trieReader. That prefetcher
+// executes transactions in parallel against the PARENT state
+// (core/state_prefetcher.go: "each worker makes a per-tx Copy"), so a
+// transaction branching on a slot an earlier one writes takes a path the
+// ordered execution never takes, and reads accounts no committed execution
+// touches.
+//
+// Those reads must not reach the witness. They cannot on the serial path,
+// because it collects from its OWN tries and never drains the shared reader --
+// unlike V2, whose CollectStateWitness does exactly that. This test fails the
+// moment serial starts harvesting the shared reader.
+func TestSerialWitnessIgnoresBlockPrefetcher(t *testing.T) {
+	f := newWitnessDropFixture(t)
+
+	build := func(ghostReads []common.Address) *stateless.Witness {
+		w, sdb := f.wdBuildState(t, nil, ghostReads)
+		sdb.IntermediateRoot(f.config.IsEIP158(f.blockCtx.BlockNumber))
+		sdb.StopPrefetcher()
+		return w
+	}
+
+	// Accounts and contracts no transaction in the block touches.
+	ghostReads := []common.Address{wdGhostA, wdGhostB, wdGhostProbe}
+
+	clean := build(nil)
+	withPrefetch := build(ghostReads)
+
+	wdRequireSame(t, "speculative block prefetcher reads", clean, withPrefetch)
+
+	// Control: prove the prefetcher's reads really did land in the shared
+	// reader, so the assertion above is not vacuous. CollectStateWitness --
+	// which the serial path never calls, and V2 does -- drains exactly that
+	// shared record, and must therefore pick the ghost reads up.
+	w, sdb := f.wdBuildState(t, nil, ghostReads)
+	sdb.IntermediateRoot(f.config.IsEIP158(f.blockCtx.BlockNumber))
+	sdb.CollectStateWitness()
+	sdb.StopPrefetcher()
+
+	drained := wdCommit(t, w)
+	if drained == wdCommit(t, clean) {
+		t.Fatal("control failed: draining the shared reader changed nothing, so the " +
+			"speculative reads never reached it and this test proves nothing")
+	}
+	t.Logf("control: draining the shared reader adds %d nodes the serial path correctly ignores",
+		len(w.State)-len(clean.State))
 }

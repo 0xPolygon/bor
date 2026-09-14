@@ -96,9 +96,6 @@ var pdbExemptMethods = map[string]pdbExemptCategory{
 	"BeginWitnessTx":   catV2SettleHelper,
 	"CommitWitnessTx":  catV2SettleHelper,
 	"DiscardWitnessTx": catV2SettleHelper,
-	// Block-level filter installed on finalDB before workers run; the
-	// per-transaction PDB records into it rather than owning it.
-	"SetWitnessReadFilter": catV2SettleHelper,
 	// V2 calls this on the underlying *StateDB at SafeBase construction
 	// to flush pre-block dirty/pending storage (system calls, DAO fork)
 	// into the shared trieReader storage cache. PDB never needs to do
