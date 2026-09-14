@@ -43,20 +43,19 @@ func TestEnableSyncedFeaturesRebroadcastWithPeers(t *testing.T) {
 			handler, cleanup := newChainSyncerTestHandler(t)
 			defer cleanup()
 			handler.synced.Store(test.wasEligible)
-			handler.rebroadcastOK.Store(test.wasEligible)
 			_, ourTD := handler.chainSync.modeAndLocalHead()
 			peer := registerPeerWithTD(t, handler.peers, ourTD.Int64()+test.tdDelta)
 			handler.enableSyncedFeatures()
 			if !handler.synced.Load() || handler.snapSync.Load() {
 				t.Fatal("enabling synced features should enable transaction processing and disable snap sync")
 			}
-			if got := handler.rebroadcastOK.Load(); got != test.want {
+			if got := handler.canRebroadcast(); got != test.want {
 				t.Fatalf("rebroadcast gate: have %v, want %v", got, test.want)
 			}
 			head, _ := peer.Head()
 			peer.SetHead(head, ourTD)
 			handler.enableSyncedFeatures()
-			if !handler.rebroadcastOK.Load() {
+			if !handler.canRebroadcast() {
 				t.Fatal("caught-up handler should resume rebroadcast")
 			}
 		})
@@ -79,10 +78,8 @@ func TestChainSyncerRebroadcastWithoutLocalTD(t *testing.T) {
 			handler, cleanup := newChainSyncerTestHandler(t)
 			defer cleanup()
 			handler.synced.Store(test.synced)
-			handler.rebroadcastOK.Store(!test.want)
 			registerPeerWithTD(t, handler.peers, test.td)
-			handler.chainSync.updateRebroadcastStatus(nil)
-			if got := handler.rebroadcastOK.Load(); got != test.want {
+			if got := handler.rebroadcastAllowed(nil, time.Now()); got != test.want {
 				t.Fatalf("rebroadcast gate without local TD: have %v, want %v", got, test.want)
 			}
 		})
@@ -116,7 +113,7 @@ func TestChainSyncerRebroadcastOnSyncFailureWhenCaughtUp(t *testing.T) {
 			_, localTD := cs.modeAndLocalHead()
 			peer.SetHead(head, localTD)
 			cs.onSyncDone(test.err)
-			if got := handler.rebroadcastOK.Load(); got != test.synced {
+			if got := handler.canRebroadcast(); got != test.synced {
 				t.Fatalf("rebroadcast gate after failed sync with no peer ahead: have %v, want %v", got, test.synced)
 			}
 		})
@@ -138,17 +135,16 @@ func TestChainSyncerRebroadcastAfterSyncFailure(t *testing.T) {
 			handler, cleanup := newChainSyncerTestHandler(t)
 			defer cleanup()
 			handler.synced.Store(test.synced)
-			handler.rebroadcastOK.Store(test.synced)
 			cs := newChainSyncer(handler)
 			cs.force = time.NewTimer(time.Hour)
 			defer cs.force.Stop()
 			peer := registerPeerWithTD(t, handler.peers, 1_000_000)
-			if op, _ := cs.nextSyncOp(); op == nil || handler.rebroadcastOK.Load() {
+			if op, _ := cs.nextSyncOp(); op == nil || handler.canRebroadcast() {
 				t.Fatal("catch-up sync should disable rebroadcast")
 			}
 			cs.doneCh = make(chan error, 1)
 			cs.onSyncDone(test.err)
-			if handler.rebroadcastOK.Load() {
+			if handler.canRebroadcast() {
 				t.Fatal("failed sync should keep rebroadcast disabled while a peer is ahead")
 			}
 			head, _ := peer.Head()
@@ -157,11 +153,11 @@ func TestChainSyncerRebroadcastAfterSyncFailure(t *testing.T) {
 			if op, _ := cs.nextSyncOp(); op != nil {
 				t.Fatal("caught-up node should not schedule another sync")
 			}
-			if got := handler.rebroadcastOK.Load(); got != test.synced {
+			if got := handler.canRebroadcast(); got != test.synced {
 				t.Fatalf("rebroadcast gate after failed sync: have %v, want %v", got, test.synced)
 			}
 			peer.SetHead(head, big.NewInt(1_000_000))
-			if op, _ := cs.nextSyncOp(); op == nil || handler.rebroadcastOK.Load() {
+			if op, _ := cs.nextSyncOp(); op == nil || handler.canRebroadcast() {
 				t.Fatal("subsequent catch-up sync should disable rebroadcast again")
 			}
 		})
@@ -188,7 +184,6 @@ func TestChainSyncerRebroadcastWhilePeerBenched(t *testing.T) {
 			handler, cleanup := newChainSyncerTestHandler(t)
 			defer cleanup()
 			handler.synced.Store(true)
-			handler.rebroadcastOK.Store(true)
 			handler.maxPeers = test.minPeers
 			cs := newChainSyncer(handler)
 			if test.cooldown {
@@ -205,13 +200,13 @@ func TestChainSyncerRebroadcastWhilePeerBenched(t *testing.T) {
 			if op, _ := cs.nextSyncOp(); op != nil {
 				t.Fatal("benched peer should not produce a sync operation")
 			}
-			if got := handler.rebroadcastOK.Load(); got != test.want {
+			if got := handler.canRebroadcast(); got != test.want {
 				t.Fatalf("rebroadcast gate: have %v, want %v", got, test.want)
 			}
 			head, _ := peer.Head()
 			peer.SetHead(head, big.NewInt(0))
 			cs.nextSyncOp()
-			if !handler.rebroadcastOK.Load() {
+			if !handler.canRebroadcast() {
 				t.Fatal("caught-up node should resume rebroadcast without another sync")
 			}
 		})
@@ -234,10 +229,10 @@ func TestChainSyncerRebroadcastAfterPeerRemoval(t *testing.T) {
 		t.Fatal(err)
 	}
 	cs.onSyncDone(downloader.ErrPeersUnavailable)
-	if !handler.rebroadcastOK.Load() {
+	if !handler.canRebroadcast() {
 		t.Fatal("previously synced node should resume rebroadcast after its higher peer disconnects")
 	}
-	if op, wait := cs.nextSyncOp(); op != nil || wait <= 0 || !handler.rebroadcastOK.Load() {
+	if op, wait := cs.nextSyncOp(); op != nil || wait <= 0 || !handler.canRebroadcast() {
 		t.Fatal("peer cooldown should preserve rebroadcast after the higher peer disconnects")
 	}
 }
@@ -245,6 +240,8 @@ func TestChainSyncerRebroadcastAfterPeerRemoval(t *testing.T) {
 func TestChainSyncerRebroadcastAfterBenchedPeerUnregister(t *testing.T) {
 	handler, cleanup := newChainSyncerTestHandler(t)
 	defer cleanup()
+	handler.txFetcher.Start()
+	defer handler.txFetcher.Stop()
 	handler.synced.Store(true)
 	peer := registerPeerWithTD(t, handler.peers, 1_000_000)
 	if err := handler.downloader.RegisterPeer(peer.ID(), eth.ETH68, &ethPeer{Peer: peer}); err != nil {
@@ -252,37 +249,11 @@ func TestChainSyncerRebroadcastAfterBenchedPeerUnregister(t *testing.T) {
 	}
 	setDownloaderPeerBackoff(t, handler.downloader, peer.ID(), time.Hour)
 	cs := handler.chainSync
-	if op, retry := cs.nextSyncOp(); op != nil || retry <= 0 || handler.rebroadcastOK.Load() {
+	if op, retry := cs.nextSyncOp(); op != nil || retry <= 0 || handler.canRebroadcast() {
 		t.Fatal("benched higher peer should suppress rebroadcast until its retry or removal")
 	}
-	handler.rebroadcastOK.Store(true)
-	handler.wg.Add(1)
-	done := make(chan struct{})
-	go func() {
-		cs.loop()
-		close(done)
-	}()
-	defer func() {
-		close(handler.quitSync)
-		select {
-		case <-done:
-		case <-time.After(time.Second):
-			t.Error("sync loop did not stop")
-		}
-	}()
-	deadline := time.Now().Add(time.Second)
-	for handler.rebroadcastOK.Load() && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	if handler.rebroadcastOK.Load() {
-		t.Fatal("sync loop did not evaluate the benched peer")
-	}
 	handler.unregisterPeer(peer.ID())
-	deadline = time.Now().Add(time.Second)
-	for !handler.rebroadcastOK.Load() && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	if !handler.rebroadcastOK.Load() {
-		t.Fatal("peer removal should restore rebroadcast without waiting for the backoff timer")
+	if !handler.canRebroadcast() {
+		t.Fatal("peer removal should restore rebroadcast without waiting for the syncer")
 	}
 }

@@ -1,11 +1,18 @@
 # Out-of-sync transaction rebroadcast observation
 
-Rebroadcast requires the handler's synced flag and no known peer with higher
-total difficulty, including peers temporarily excluded from sync attempts.
-After a failed catch-up, a previously synced node may resume rebroadcast once
-no known peer remains ahead, even without another successful sync. Peer removal
-wakes the syncer without waiting for the backoff timer. Initial-sync failures
-leave rebroadcast disabled. These recovery cases have Go regression tests.
+Each rebroadcast batch checks the handler's synced flag, current local total
+difficulty, and current peers directly. A known head uses locally calculated TD.
+An unverified higher head suppresses rebroadcast for at most one minute, including
+during peer backoff. Announcements, retries, and unrelated local chain progress
+cannot extend that window. It can renew only after the previous advertised head
+and TD are verified locally and the local TD has caught up to that claim.
+
+A previously synced node resumes when no peer has an outstanding claim within
+that window, even after failed catch-up. This deliberately permits rebroadcast
+after the window expires if the advertised head is still unverified, including
+during a long catch-up. Peer removal takes effect without waiting for the syncer.
+Initial-sync failures leave rebroadcast disabled. These cases have Go regression
+tests.
 
 ## CI integration
 

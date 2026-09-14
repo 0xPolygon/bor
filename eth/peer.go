@@ -57,6 +57,8 @@ type ethPeer struct {
 	*eth.Peer
 	snapExt *snapPeer // Satellite `snap` connection
 	witPeer *witPeer
+
+	rebroadcast rebroadcastPeerState
 }
 
 // jailPeerForViolation handles logging and jailing a peer for a protocol violation.

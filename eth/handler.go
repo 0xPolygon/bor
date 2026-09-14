@@ -147,7 +147,6 @@ type handler struct {
 	snapSync      atomic.Bool // Flag whether snap sync is enabled (gets disabled if we already have blocks)
 	statelessSync atomic.Bool // Flag whether stateless sync is enabled
 	synced        atomic.Bool // Flag whether we're considered synchronised (enables transaction processing)
-	rebroadcastOK atomic.Bool // Allows stuck-tx rebroadcast when synced and no known peer requires catch-up
 
 	database ethdb.Database
 	txpool   txPool
@@ -1070,7 +1069,7 @@ func (h *handler) stuckTxBroadcastLoop() {
 }
 
 func (h *handler) rebroadcastStuckTransactions(txs types.Transactions) bool {
-	if !h.rebroadcastOK.Load() {
+	if !h.canRebroadcast() {
 		return false
 	}
 	hashes := make([]common.Hash, len(txs))
@@ -1094,9 +1093,6 @@ func (h *handler) enableSyncedFeatures() {
 		log.Info("Snap sync complete, auto disabling")
 		h.snapSync.Store(false)
 	}
-	// Mining startup also enables these features, even if a peer is still ahead.
-	_, ourTD := h.chainSync.modeAndLocalHead()
-	h.chainSync.updateRebroadcastStatus(ourTD)
 }
 
 // PeerStats represents a short summary of the information known about a connected
