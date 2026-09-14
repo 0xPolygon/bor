@@ -33,7 +33,7 @@ class ReliabilityTest(unittest.TestCase):
 
     def test_partition_and_reconnect_cover_all_original_peers(self):
         test = e2e.Test.__new__(e2e.Test)
-        test.target = {"url": "target", "ip": "172.16.0.9"}
+        test.target = {"url": "target", "ip": "172.16.0.9", "id": "target-container"}
         test.nodes = [{"id": "validator1"}, {"id": "validator2"}, {"id": "rpc"}]
         test.args = types.SimpleNamespace(initial_gap=20)
         test.shaped = []
@@ -41,8 +41,11 @@ class ReliabilityTest(unittest.TestCase):
         test.set_peer = Mock()
         test.wait = Mock()
         enodes = ["enode://validator1", "enode://validator2", "enode://rpc"]
-        with patch("e2e.rpc", return_value=[{"enode": node} for node in enodes]):
+        output = json.dumps(json.dumps([{"enode": node} for node in enodes])) + "\n"
+        with patch("e2e.command", return_value=output) as command:
             test.partition()
+        command.assert_called_once_with("docker", "exec", "target-container", "bor", "attach",
+                                        "/var/lib/bor/bor.ipc", "--exec", "JSON.stringify(admin.peers)")
         self.assertEqual(test.shaped, test.nodes)
         test.create_gap()
         self.assertEqual(test.set_peer.call_args_list, [call("remove", node) for node in enodes])

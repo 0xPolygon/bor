@@ -220,7 +220,10 @@ class Test:
                        "--cap-add", "NET_ADMIN", "--entrypoint", "tc", self.args.tc_image, *args)
 
     def partition(self):
-        peers = json.loads(command("docker", "exec", self.target["id"], "bor", "attach", "/var/lib/bor/bor.ipc", "--exec", "JSON.stringify(admin.peers())"))
+        output = command("docker", "exec", self.target["id"], "bor", "attach",
+                         "/var/lib/bor/bor.ipc", "--exec", "JSON.stringify(admin.peers)")
+        # The console quotes the JSON string returned by the expression.
+        peers = json.loads(json.loads(output))
         self.removed_peers = [peer["enode"] for peer in peers]
         for node in self.nodes:
             self.tc(node, "qdisc", "add", "dev", "eth0", "root", "handle", "1:",
