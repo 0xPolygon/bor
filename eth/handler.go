@@ -686,6 +686,11 @@ func (h *handler) unregisterPeer(id string) {
 	if err := h.peers.unregisterPeer(id); err != nil {
 		logger.Error("Ethereum peer removal failed", "err", err)
 	}
+	// Coalesce removals without blocking teardown while the syncer is busy.
+	select {
+	case h.chainSync.peerEventCh <- struct{}{}:
+	default:
+	}
 }
 
 func (h *handler) Start(maxPeers int) {

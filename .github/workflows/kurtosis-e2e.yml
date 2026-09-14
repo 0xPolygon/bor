@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  ENCLAVE_NAME: kurtosis-e2e
+  ENCLAVE_NAME: kurtosis-e2e-${{ github.run_id }}-${{ github.run_attempt }}
   POLYCLI_VERSION: v0.1.103
 
 jobs:
@@ -40,66 +40,6 @@ jobs:
           name: bor-image
           path: bor-image.tar.gz
           retention-days: 1
-
-  rebroadcast-e2e-tests:
-    needs: build-bor
-    permissions:
-      contents: read
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      ENCLAVE: rebroadcast-e2e-${{ github.run_id }}-${{ github.run_attempt }}
-      BOR_IMAGE: bor:local
-      ARTIFACTS: ${{ github.workspace }}/build/rebroadcast-e2e
-    steps:
-      - name: Checkout bor
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Free disk space
-        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
-        with:
-          tool-cache: false
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: false
-          docker-images: true
-          swap-storage: true
-
-      - name: Install Kurtosis
-        run: |
-          KURTOSIS_DEB=/tmp/kurtosis-cli_1.18.2_linux_amd64.deb
-          curl --proto '=https' --tlsv1.2 -fsSL \
-            https://github.com/kurtosis-tech/kurtosis-cli-release-artifacts/releases/download/1.18.2/kurtosis-cli_1.18.2_linux_amd64.deb \
-            -o "$KURTOSIS_DEB"
-          echo "6522717e33ede4e08b5fd3f2a47689c016c045075777c938f43d4b94e17c760d  $KURTOSIS_DEB" | sha256sum --check -
-          sudo apt-get install -y "$KURTOSIS_DEB"
-          kurtosis analytics disable
-
-      - name: Download bor docker image
-        uses: actions/download-artifact@v8
-        with:
-          name: bor-image
-
-      - name: Load bor docker image
-        run: gunzip -c bor-image.tar.gz | docker load
-
-      - name: Test rebroadcast assertions and cleanup
-        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests/kurtosis/rebroadcast -p 'test_*.py' -v
-
-      - name: Run rebroadcast end-to-end test
-        run: tests/kurtosis/rebroadcast/run.sh --timeout 240
-
-      - name: Upload rebroadcast diagnostics
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: rebroadcast-e2e-diagnostics
-          path: build/rebroadcast-e2e/
-          if-no-files-found: warn
-          retention-days: 14
 
   build-heimdall-v2:
     permissions:
@@ -132,7 +72,7 @@ jobs:
       - build-bor
       - build-heimdall-v2
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     # GitHub withholds OIDC and repository secrets from fork pull_request runs.
     # Trusted runs use OIDC only while preparing public dependency images.
     permissions:
@@ -197,6 +137,15 @@ jobs:
           path: pos-workflows
           persist-credentials: false
 
+      - name: Checkout bor test scripts
+        uses: actions/checkout@v7
+        with:
+          path: bor-tests
+          persist-credentials: false
+
+      - name: Prepare rebroadcast fixture settings
+        run: python3 bor-tests/tests/kurtosis/rebroadcast/prepare.py .
+
       - name: Copy kurtosis config
         run: cp ./pos-workflows/configs/kurtosis-e2e.yml ./kurtosis-e2e.yml
 
@@ -256,13 +205,37 @@ jobs:
           export RPC_URL=$(kurtosis port print ${{ env.ENCLAVE_NAME }} l2-el-1-bor-heimdall-v2-validator rpc)
           export PRIV_KEY="0xd40311b5a5ca5eaeb48dfba5403bde4993ece8eccf4190e98e19fcd4754260ea"
           go run . --priv-key "$PRIV_KEY" --rpc-url "$RPC_URL" --log-req-res true
+          echo "REBROADCAST_FUNDER_KEY=$PRIV_KEY" >> "$GITHUB_ENV"
+
+      - name: Test rebroadcast assertions and cleanup
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s bor-tests/tests/kurtosis/rebroadcast -p 'test_*.py' -v
+
+      - name: Run rebroadcast checks
+        id: rebroadcast-tests
+        run: |
+          python3 bor-tests/tests/kurtosis/rebroadcast/e2e.py \
+            --enclave "${{ env.ENCLAVE_NAME }}" --artifacts build/rebroadcast-e2e \
+            --service l2-el-5-bor-heimdall-v2-rpc \
+            --producers l2-el-1-bor-heimdall-v2-validator l2-el-2-bor-heimdall-v2-validator \
+              l2-el-3-bor-heimdall-v2-validator l2-el-4-bor-heimdall-v2-validator \
+            --other-peers l2-el-6-bor-heimdall-v2-rpc --timeout 240
+
+      - name: Upload rebroadcast diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rebroadcast-e2e-diagnostics
+          path: build/rebroadcast-e2e/
+          if-no-files-found: warn
+          retention-days: 14
 
       # Collect diagnostics on failure
       - name: Collect network diagnostics and state dump
         if: >-
           always() && (
           steps.smoke-tests.outcome == 'failure' ||
-          steps.rpc-tests.outcome == 'failure')
+          steps.rpc-tests.outcome == 'failure' ||
+          steps.rebroadcast-tests.outcome == 'failure')
         uses: ./pos-workflows/.github/actions/network-diagnostics-and-state-dump
         with:
           enclave_name: ${{ env.ENCLAVE_NAME }}

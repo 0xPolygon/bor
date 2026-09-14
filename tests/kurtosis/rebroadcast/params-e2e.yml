@@ -9,14 +9,13 @@ polygon_pos_package:
   participants:
     - kind: validator
       cl_type: heimdall-v2
+      cl_image: heimdall-v2:local
       el_type: bor
       el_image: bor:rebroadcast-e2e
       count: 1
     - kind: rpc
       cl_type: heimdall-v2
+      cl_image: heimdall-v2:local
       el_type: bor
       el_image: bor:rebroadcast-e2e
       count: 1
-
-  additional_services:
-    - tx_spammer

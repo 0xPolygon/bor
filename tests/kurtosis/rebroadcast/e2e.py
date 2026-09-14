@@ -4,6 +4,7 @@
 import argparse
 import datetime
 import json
+import os
 import pathlib
 import re
 import signal
@@ -35,6 +36,12 @@ def interrupted(signum, frame):
     raise KeyboardInterrupt("Test interrupted; restoring network rules")
 
 
+def pool_hashes(url):
+    content = rpc(url, "txpool_content")
+    return {tx["hash"] for category in ("pending", "queued")
+            for account in content[category].values() for tx in account.values()}
+
+
 def service(enclave, name):
     url = command("kurtosis", "port", "print", enclave, name, "rpc").strip()
     ids = command("docker", "ps", "-q").split()
@@ -64,13 +71,14 @@ class Test:
         self.output.mkdir(parents=True, exist_ok=True)
         self.target = service(args.enclave, args.service)
         self.producers = [service(args.enclave, name) for name in args.producers]
-        if any(node["enclave"] != self.target["enclave"] for node in self.producers):
+        self.nodes = self.producers + [service(args.enclave, name) for name in args.other_peers]
+        if any(node["enclave"] != self.target["enclave"] for node in self.nodes):
             raise RuntimeError("All test services must belong to the same enclave")
         self.start = datetime.datetime.now(datetime.timezone.utc).isoformat()
         self.tx = None
         self.shaped = []
         self.fees = []
-        self.removed_peer = None
+        self.removed_peers = []
         self.summary = {"enclave": args.enclave, "target": self.target,
                         "producers": self.producers, "started": self.start}
 
@@ -95,6 +103,8 @@ class Test:
             tx = rpc(url, "eth_getTransactionByHash", [self.tx])
             if tx is None or tx["blockHash"] is not None:
                 raise RuntimeError("Fixture transaction must remain pending throughout the test")
+            if pool_hashes(url) != {self.tx}:
+                raise RuntimeError("The fixture must be the only transaction in the target pool")
         with (self.output / "samples.jsonl").open("a") as output:
             output.write(json.dumps(sample) + "\n")
         print(json.dumps(sample), flush=True)
@@ -117,26 +127,33 @@ class Test:
             raise RuntimeError(f"Timed out waiting for {phase}: {last_error}")
         raise RuntimeError(f"Timed out waiting for {phase}")
 
+    def cast(self, *args):
+        return command("docker", "run", "--rm", "--add-host",
+                       "host.docker.internal:host-gateway", "--entrypoint", "cast",
+                       self.args.cast_image, *args).strip()
+
+    def fund_fixture(self):
+        if not self.args.funding_key:
+            raise RuntimeError("Set REBROADCAST_FUNDER_KEY to a funded devnet account")
+        wallet = json.loads(self.cast("wallet", "new", "--json"))[0]
+        self.fixture_key = wallet["private_key"]
+        self.docker_url = self.target["url"].replace("127.0.0.1", "host.docker.internal", 1)
+        funding = self.cast("send", "--async", "--rpc-url", self.docker_url,
+                            "--private-key", self.args.funding_key, "--legacy",
+                            "--gas-price", "30000000000", wallet["address"], "--value", "1ether")
+        self.wait("fund-fixture", lambda s: rpc(self.target["url"], "eth_getTransactionReceipt", [funding]) is not None)
+        receipt = rpc(self.target["url"], "eth_getTransactionReceipt", [funding])
+        if receipt["status"] != "0x1":
+            raise RuntimeError("Fixture funding transaction failed")
+        self.wait("empty-pools", lambda s: all(not pool_hashes(node["url"])
+                  for node in [self.target] + self.nodes))
+
     def seed(self):
-        url = self.target["url"]
-        key_log = command("kurtosis", "service", "logs", self.args.enclave,
-                          "l2-tx-spammer", "--all", "--match", "PRIVATE_KEY")
-        match = re.search(r"PRIVATE_KEY:\s*(0x[0-9a-fA-F]+)", key_log)
-        if match is None:
-            raise RuntimeError("Could not find the devnet transaction-spammer key")
-        private_key = match[1]
-        sender = command("docker", "run", "--rm", "--add-host",
-                         "host.docker.internal:host-gateway", "--entrypoint", "cast",
-                         self.args.cast_image, "wallet", "address", "--private-key",
-                         private_key).strip()
-        nonce = int(rpc(url, "eth_getTransactionCount", [sender, "pending"]), 16)
-        docker_url = url.replace("127.0.0.1", "host.docker.internal", 1)
-        self.tx = command("docker", "run", "--rm", "--add-host",
-                          "host.docker.internal:host-gateway", "--entrypoint", "cast",
-                          self.args.cast_image, "send", "--async", "--rpc-url", docker_url,
-                          "--private-key", private_key, "--legacy", "--nonce", str(nonce),
-                          "--gas-price", "30000000000",
-                          "0x000000000000000000000000000000000000dEaD", "--value", "1").strip()
+        self.tx = self.cast("send", "--async", "--rpc-url", self.docker_url,
+                            "--private-key", self.fixture_key, "--legacy", "--nonce", "0",
+                            "--gas-price", "30000000000",
+                            "0x000000000000000000000000000000000000dEaD", "--value", "1")
+        self.start = datetime.datetime.now(datetime.timezone.utc).isoformat()
         self.summary["transaction"] = self.tx
 
     def gas_price(self, node, price):
@@ -144,10 +161,6 @@ class Test:
                          "--exec", f"miner.setGasPrice({price})")
         if result.strip() != "true":
             raise RuntimeError(f"Could not set fixture gas price for {node['name']}: {result}")
-
-    def peer_enode(self, node):
-        return command("docker", "exec", node["id"], "bor", "attach", "/var/lib/bor/bor.ipc",
-                       "--exec", "admin.nodeInfo.enode").strip().strip('"')
 
     def set_peer(self, action, enode):
         result = command("docker", "exec", self.target["id"], "bor", "attach",
@@ -186,23 +199,29 @@ class Test:
             raise RuntimeError("Cleanup failed: " + "; ".join(failures))
 
     def create_gap(self):
-        self.removed_peer = self.peer_enode(self.producers[0])
-        self.set_peer("remove", self.removed_peer)
+        for enode in self.removed_peers:
+            self.set_peer("remove", enode)
         self.wait("build-gap", lambda s: s["peers"] == 0
                   and s["lag"] >= self.args.initial_gap)
 
     def reconnect(self):
-        if self.removed_peer is None:
-            return
-        self.set_peer("add", self.removed_peer)
-        self.removed_peer = None
+        failures = []
+        for enode in self.removed_peers[:]:
+            try:
+                self.set_peer("add", enode)
+                self.removed_peers.remove(enode)
+            except (RuntimeError, subprocess.SubprocessError) as error:
+                failures.append(str(error))
+        if failures:
+            raise RuntimeError("Peer cleanup failed: " + "; ".join(failures))
 
     def tc(self, node, *args):
         return command("docker", "run", "--rm", "--network", f"container:{node['id']}",
                        "--cap-add", "NET_ADMIN", "--entrypoint", "tc", self.args.tc_image, *args)
 
     def partition(self):
-        for node in self.producers:
+        self.removed_peers = [peer["enode"] for peer in rpc(self.target["url"], "admin_peers")]
+        for node in self.nodes:
             self.tc(node, "qdisc", "add", "dev", "eth0", "root", "handle", "1:",
                     "prio", "bands", "3", "priomap", *(["0"] * 16))
             self.shaped.append(node)
@@ -260,6 +279,7 @@ class Test:
     def run(self):
         self.wait("initial-sync", lambda s: s["head"] >= 20 and s["lag"] <= 2
                   and s["peers"] > 0 and s["syncing"] is False)
+        self.fund_fixture()
         self.retain_pending()
         self.seed()
         self.summary["baseline"] = self.wait("baseline", lambda s: s["rebroadcast"] >= 3)
@@ -282,6 +302,8 @@ def main():
     parser.add_argument("--service", default="l2-el-2-bor-heimdall-v2-rpc")
     parser.add_argument("--producers", nargs="+", default=[
         "l2-el-1-bor-heimdall-v2-validator"])
+    parser.add_argument("--other-peers", nargs="*", default=[])
+    parser.add_argument("--funding-key", default=os.environ.get("REBROADCAST_FUNDER_KEY"))
     parser.add_argument("--delay", default="1500ms")
     parser.add_argument("--rate", default="64kbit")
     parser.add_argument("--window", type=int, default=12)
@@ -293,22 +315,28 @@ def main():
     args = parser.parse_args()
     if args.window < 8 or args.min_lag < 1 or args.initial_gap < args.min_lag or args.timeout < 1:
         parser.error("window must be >=8 seconds; lag values and timeout must be positive")
-    test = Test(args)
+    output = pathlib.Path(args.artifacts)
+    output.mkdir(parents=True, exist_ok=True)
+    summary = {"enclave": args.enclave, "result": "FAIL", "phase": "initialization"}
+    test = None
     signal.signal(signal.SIGTERM, interrupted)
     try:
+        test = Test(args)
+        summary = test.summary
         test.run()
-        test.summary["result"] = "PASS"
+        summary["result"] = "PASS"
     except (Exception, KeyboardInterrupt) as error:
-        test.summary.update(result="FAIL", error=str(error))
+        summary.update(result="FAIL", error=str(error))
         raise
     finally:
         try:
-            test.cleanup()
+            if test is not None:
+                test.cleanup()
         except Exception as error:
-            test.summary.update(result="FAIL", cleanup_error=str(error))
+            summary.update(result="FAIL", cleanup_error=str(error))
             raise
         finally:
-            (test.output / "summary.json").write_text(json.dumps(test.summary, indent=2) + "\n")
+            (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print("PASS: rebroadcast enabled when synced, suppressed while behind, restored after catch-up")
 
 

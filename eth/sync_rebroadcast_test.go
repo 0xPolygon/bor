@@ -241,3 +241,48 @@ func TestChainSyncerRebroadcastAfterPeerRemoval(t *testing.T) {
 		t.Fatal("peer cooldown should preserve rebroadcast after the higher peer disconnects")
 	}
 }
+
+func TestChainSyncerRebroadcastAfterBenchedPeerUnregister(t *testing.T) {
+	handler, cleanup := newChainSyncerTestHandler(t)
+	defer cleanup()
+	handler.synced.Store(true)
+	peer := registerPeerWithTD(t, handler.peers, 1_000_000)
+	if err := handler.downloader.RegisterPeer(peer.ID(), eth.ETH68, &ethPeer{Peer: peer}); err != nil {
+		t.Fatal(err)
+	}
+	setDownloaderPeerBackoff(t, handler.downloader, peer.ID(), time.Hour)
+	cs := handler.chainSync
+	if op, retry := cs.nextSyncOp(); op != nil || retry <= 0 || handler.rebroadcastOK.Load() {
+		t.Fatal("benched higher peer should suppress rebroadcast until its retry or removal")
+	}
+	handler.rebroadcastOK.Store(true)
+	handler.wg.Add(1)
+	done := make(chan struct{})
+	go func() {
+		cs.loop()
+		close(done)
+	}()
+	defer func() {
+		close(handler.quitSync)
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("sync loop did not stop")
+		}
+	}()
+	deadline := time.Now().Add(time.Second)
+	for handler.rebroadcastOK.Load() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if handler.rebroadcastOK.Load() {
+		t.Fatal("sync loop did not evaluate the benched peer")
+	}
+	handler.unregisterPeer(peer.ID())
+	deadline = time.Now().Add(time.Second)
+	for !handler.rebroadcastOK.Load() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !handler.rebroadcastOK.Load() {
+		t.Fatal("peer removal should restore rebroadcast without waiting for the backoff timer")
+	}
+}

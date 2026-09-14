@@ -9,12 +9,14 @@ tc_image=${TC_IMAGE:-gaiadocker/iproute2:3.3}
 cast_image=${CAST_IMAGE:-ghcr.io/foundry-rs/foundry@sha256:0c00cb0bda1ab1b91c9a6bf60f4c76c09c1a8870824b6d4718afbabacf6f9a17}
 seed_tx=${SEED_TX:-true}
 
-containers=$(docker ps --format '{{.Names}}')
-container=$(printf '%s\n' "$containers" | grep -F -- "$service" | head -n 1 || true)
-if [[ -z "$container" ]]; then
-  echo "No running container found for service $service" >&2
-  exit 1
-fi
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+container=$(PYTHONDONTWRITEBYTECODE=1 python3 - "$script_dir" "$enclave" "$service" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from e2e import service
+print(service(sys.argv[2], sys.argv[3])["id"])
+PY
+)
 
 cleanup() {
   docker run --rm --network "container:$container" --cap-add NET_ADMIN \

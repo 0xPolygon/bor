@@ -3,69 +3,69 @@
 Rebroadcast requires the handler's synced flag and no known peer with higher
 total difficulty, including peers temporarily excluded from sync attempts.
 After a failed catch-up, a previously synced node may resume rebroadcast once
-no known peer remains ahead, even without another successful sync. This prevents
-a disconnected or backed-off peer from disabling rebroadcast indefinitely.
-Initial-sync failures leave rebroadcast disabled. These recovery cases are
-covered by `eth/sync_rebroadcast_test.go`; the devnet below exercises connected
-catch-up and recovery.
+no known peer remains ahead, even without another successful sync. Peer removal
+wakes the syncer without waiting for the backoff timer. Initial-sync failures
+leave rebroadcast disabled. These recovery cases have Go regression tests.
 
-## Automated end-to-end test
+## CI integration
 
-The `rebroadcast-e2e-tests` job in `.github/workflows/kurtosis-e2e.yml` runs this
-scenario on pull requests and pushes to `develop` and `master`. It reuses the
-workflow's Bor image build, requires no repository secrets, and uploads launch
-logs and phase evidence as `rebroadcast-e2e-diagnostics`, including on failure.
-Enclave names include the GitHub run ID and attempt so reruns do not collide
-with retained enclaves.
+The existing `e2e-tests` job in `.github/workflows/kurtosis-e2e.yml` runs the
+rebroadcast checks after the smoke and RPC tests, against the same enclave.
+It reuses the Bor and Heimdall images, setup, network diagnostics, and cleanup.
+The shared Bor template enables debug logs and a two-second rebroadcast interval
+with a 30-minute eligibility window. The fixture uses all four validators,
+the candidate RPC node, and the baseline RPC peer from the smoke-test topology.
 
-Run from the repository root with Docker, Kurtosis, Git, and Python 3 available:
+The test funds a fresh account using `REBROADCAST_FUNDER_KEY`, waits for the
+funding receipt and empty pools, then raises validator gas-tip thresholds and
+submits a single transaction from that account. It checks that this transaction
+remains the only transaction in the target pool throughout observation. No
+spammer is used, and other pending traffic makes the fixture fail.
+
+The test asserts three phases:
+
+1. The synced target rebroadcasts the fixture transaction in at least three batches.
+2. After isolating P2P traffic and removing all original target peers, validators
+   advance at least 20 blocks. The test reconnects with delay and bandwidth
+   limits. During catch-up, the target must stay connected, advance its head,
+   report active sync, identify at least three stuck-tx batches, and emit none.
+3. Removing impairment lets the target catch up and rebroadcast at least three
+   more batches containing the same sole pending transaction.
+
+Network rules cover P2P traffic from all configured validators and other peers
+to the target. Heimdall and HTTP RPC traffic stay intact. Cleanup independently
+attempts network restoration, reconnection of the original peers, and gas-price
+restoration on every validator; any failure fails the test and is recorded.
+
+`summary.json` records initialization errors as well as phase results and cleanup
+errors. `samples.jsonl` contains phase evidence and `target.log` contains target
+logs. CI uploads these as `rebroadcast-e2e-diagnostics`, including on failure.
+Counts represent handler batches, not per-peer gossip deliveries.
+
+## Local execution
+
+With Docker, Kurtosis, Git, Python 3, a local `heimdall-v2:local` image, and a
+funded devnet account available:
 
 ```bash
+export REBROADCAST_FUNDER_KEY=<funded-devnet-account-key>
 tests/kurtosis/rebroadcast/run.sh
 ```
 
-The runner builds the current checkout, downloads Kurtosis PoS v1.4.2 into a
-temporary directory, and starts a dedicated enclave with one validator and one
-RPC node. It stops that enclave on exit and retains its data for inspection.
-Use `BOR_IMAGE=<already-built-image>` to skip building and `KEEP_ENCLAVE=true`
-to keep the test network running. Existing enclaves are not reused or stopped.
+The runner builds Bor, prepares Kurtosis PoS v1.4.2, and starts a dedicated
+one-validator/one-RPC enclave without a spammer. Its default enclave name has a
+random suffix. Set `BOR_IMAGE` to reuse a built image or `ENCLAVE` to choose a
+name. `KEEP_ENCLAVE=true` keeps the network running after restoring test changes.
+Otherwise the runner stops its enclave and retains it for diagnostics.
+Results default to `build/rebroadcast-e2e/<enclave>/`; override with `ARTIFACTS`.
 
-The test asserts all three phases:
+To use an existing devnet, call `e2e.py` with `--enclave`, `--artifacts`, the
+candidate `--service`, all `--producers`, and any non-validator Bor services in
+`--other-peers`. Prepare its Bor template using `prepare.py` before launch.
+The default impairment is 1.5 seconds and 64 kbit/s; `--delay`, `--rate`, and
+`--timeout` can be adjusted for the host. Missing catch-up evidence fails.
 
-1. The RPC node catches up and rebroadcasts a pending transaction at least three
-   times, proving that rebroadcast is enabled and the transaction is eligible.
-2. The test briefly isolates P2P traffic and removes the RPC node's validator
-   peer while the validator advances 20 blocks. It then changes the same
-   targeted `netem` rule to a small delay and bandwidth limit and reconnects.
-   During catch-up, the test requires the node to report active sync, remain
-   connected, advance its own block height, identify at least three new stuck-tx
-   batches, and emit zero rebroadcast batches.
-3. Removing the network rules lets the node catch up and rebroadcast the same
-   pending transaction at least three more times.
-
-The fixture uses a two-second rebroadcast interval and higher validator gas-tip
-thresholds so the transaction stays executable in the RPC pool without being
-mined. These changes apply only to the temporary devnet configuration. Network
-rules match only TCP P2P traffic from the validator to the test RPC node;
-Heimdall connections and HTTP RPC stay intact.
-The test removes its rules on success, failure, or interruption.
-
-The default impairment is 1.5 seconds of delay with a 64 kbit/s rate. The test
-fails if it cannot establish or maintain the connected-but-behind state; zero
-rebroadcast from an idle pool or disconnected node does not count as a pass.
-Adjust the impairment or observation timeout on faster/slower machines:
-
-```bash
-tests/kurtosis/rebroadcast/run.sh --delay 1500ms --rate 64kbit --timeout 240
-```
-
-Results are written under `build/rebroadcast-e2e/<enclave>/`: `summary.json`
-contains the pass/fail result and phase evidence, `samples.jsonl` records
-heights, peer counts, sync status, and batch counts, and `target.log` contains
-the RPC node logs. `ARTIFACTS` overrides the output directory. Counts represent
-handler rebroadcast batches, not per-peer gossip deliveries or mined transactions.
-
-To exercise the assertions and cleanup handling without Docker:
+Run assertion, initialization, and cleanup tests without Docker:
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
