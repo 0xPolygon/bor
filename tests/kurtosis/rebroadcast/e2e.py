@@ -15,6 +15,9 @@ import urllib.error
 import urllib.request
 
 
+CAST_IMAGE = "ghcr.io/foundry-rs/foundry@sha256:0c00cb0bda1ab1b91c9a6bf60f4c76c09c1a8870824b6d4718afbabacf6f9a17"
+
+
 def command(*args, timeout=60):
     result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
     if result.returncode:
@@ -341,7 +344,7 @@ def main():
     parser.add_argument("--initial-gap", type=int, default=20)
     parser.add_argument("--timeout", type=int, default=180)
     parser.add_argument("--tc-image", default="gaiadocker/iproute2:3.3")
-    parser.add_argument("--cast-image", default="ghcr.io/foundry-rs/foundry@sha256:0c00cb0bda1ab1b91c9a6bf60f4c76c09c1a8870824b6d4718afbabacf6f9a17")
+    parser.add_argument("--cast-image", default=CAST_IMAGE)
     args = parser.parse_args()
     if args.window < 8 or args.min_lag < 1 or args.initial_gap < args.min_lag or args.timeout < 1:
         parser.error("window must be >=8 seconds; lag values and timeout must be positive")

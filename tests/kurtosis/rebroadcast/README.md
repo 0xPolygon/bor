@@ -23,6 +23,11 @@ The shared Bor template enables debug logs and a two-second rebroadcast interval
 with a 30-minute eligibility window. The fixture uses all four validators,
 the candidate RPC node, and the baseline RPC peer from the smoke-test topology.
 
+CI generates a dedicated funder for each run and gives only its public address
+a balance in the disposable devnet genesis. Its private key is masked and passed
+through the runner environment as `REBROADCAST_FUNDER_KEY`; it is not copied into
+the Kurtosis package or diagnostics. The smoke-test signer is not reused.
+
 The test funds a fresh account using `REBROADCAST_FUNDER_KEY`, waits for the
 funding receipt and empty pools, then raises validator gas-tip thresholds and
 submits a single transaction from that account. It checks that this transaction

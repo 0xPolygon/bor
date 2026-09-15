@@ -147,6 +147,7 @@ jobs:
         run: |
           cp ./pos-workflows/configs/kurtosis-e2e.yml ./kurtosis-e2e.yml
           python3 bor-tests/tests/kurtosis/rebroadcast/prepare.py .
+          python3 bor-tests/tests/kurtosis/rebroadcast/provision.py . --env-file "$GITHUB_ENV"
 
       # Load images
       - name: Download bor docker image
@@ -199,7 +200,6 @@ jobs:
           export RPC_URL=$(kurtosis port print ${{ env.ENCLAVE_NAME }} l2-el-1-bor-heimdall-v2-validator rpc)
           export PRIV_KEY="0xd40311b5a5ca5eaeb48dfba5403bde4993ece8eccf4190e98e19fcd4754260ea"
           (cd pos-workflows/tests/rpc_tests && go run . --priv-key "$PRIV_KEY" --rpc-url "$RPC_URL" --log-req-res true)
-          export REBROADCAST_FUNDER_KEY="$PRIV_KEY"
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s bor-tests/tests/kurtosis/rebroadcast -p 'test_*.py' -v
           python3 bor-tests/tests/kurtosis/rebroadcast/e2e.py \
             --enclave "${{ env.ENCLAVE_NAME }}" --artifacts build/rebroadcast-e2e \
