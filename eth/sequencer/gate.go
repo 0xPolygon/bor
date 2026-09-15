@@ -85,8 +85,8 @@ const maxGateRefusals = 3
 // covers the phantom case of a winner that sealed in the store and then
 // died without broadcasting.
 func (p *Publisher) ConfirmSeal(timeout time.Duration) miner.SealVerdict {
-	if p.unreachable.Load() {
-		return p.settle(miner.SealUnknown) // no verdict is coming; do not wait for one
+	if p.writeDown.Load() {
+		return p.writeDownVerdict() // no ack is coming; do not wait for one
 	}
 
 	start := time.Now()
@@ -131,6 +131,35 @@ func (p *Publisher) ConfirmSeal(timeout time.Duration) miner.SealVerdict {
 
 		return p.expiredVerdict(g, failed)
 	}
+}
+
+// writeDownVerdict resolves a gate whose ack can no longer arrive. Waiting
+// could only end at the deadline, so this takes one pass of what the wait
+// would still have resolved — the store's own record, then the chain, where
+// a rival's block at our height is the rejection notice and needs no store
+// read — and stops there.
+//
+// storedVerdict first, and not the chain alone: a build with nothing gated
+// carries height 0, and asking the chain about height 0 compares genesis
+// against an empty hash and refuses a seal nobody contested.
+func (p *Publisher) writeDownVerdict() miner.SealVerdict {
+	p.mu.Lock()
+	g := p.gate
+	p.mu.Unlock()
+
+	if v, done := p.storedVerdict(g); done {
+		return v
+	}
+
+	if p.chain != nil {
+		if v, done := p.chainVerdict(g); done {
+			return v
+		}
+	}
+
+	gateWriteDownSkip.Inc(1)
+
+	return p.settle(miner.SealUnknown)
 }
 
 // storedVerdict resolves the gate from what the store already decided: an
@@ -289,7 +318,7 @@ func (p *Publisher) dropRefusedFlushLocked(height uint64, hash common.Hash) {
 // what the broadcast would bury. Anything unreadable keeps the timeout
 // verdict — production never waits on a store it cannot see.
 func (p *Publisher) gateRecheck(g sealGate) miner.SealVerdict {
-	if p.unreachable.Load() || p.read == nil || p.read.cons == nil {
+	if p.read == nil || p.read.cons == nil {
 		return miner.SealUnknown
 	}
 
@@ -363,7 +392,7 @@ func (p *Publisher) recheckSealedGeneration(ctx context.Context, g sealGate) min
 // needs before its refusal is honored. Unreadable, undecodable, or unsealed
 // keeps the refusal.
 func (p *Publisher) lostSealInvalid(g sealGate) bool {
-	if p.verifySeal == nil || p.unreachable.Load() || p.read == nil || p.read.cons == nil {
+	if p.verifySeal == nil || p.read == nil || p.read.cons == nil {
 		return false
 	}
 

@@ -46,10 +46,14 @@ type reader struct {
 
 	seed commitment.Head // the empty log's head, computed from the chain id
 
-	// onRead runs after every successful store round trip. The publisher
-	// hangs its reachability bookkeeping on it: the build-start read runs
-	// every block, so it is what notices the store is back.
+	// onRead runs after every store round trip the store answered. The
+	// publisher hangs its reachability bookkeeping on it: the build-start
+	// read runs every block, so it is what notices the store is back.
 	onRead func()
+
+	// breaker keeps the producer's critical path off a read path that has
+	// gone quiet. Every read below goes through it.
+	breaker readBreaker
 }
 
 func newReader(cons pb.ConsumerServiceClient, seed commitment.Head, onRead func()) *reader {
@@ -362,21 +366,52 @@ func (f *folder) reached(s commitment.Head) {
 }
 
 func (r *reader) rangeOnce(ctx context.Context, req *pb.RangeRequest) (*pb.RangeResponse, error) {
-	cctx, cancel := context.WithTimeout(ctx, tailReadTimeout)
+	allowed, probing := r.breaker.allow()
+	if !allowed {
+		return nil, errReadPathDown
+	}
+
+	cctx, cancel := context.WithTimeout(ctx, readBudget(probing))
 	defer cancel()
 
 	resp, err := r.client().Range(cctx, req)
-	if err == nil && r.onRead != nil {
-		r.onRead()
-	}
+	r.note(err)
 
 	return resp, err
+}
+
+// note feeds the breaker and the publisher's reachability bookkeeping.
+// Anything the store answered proves the path alive, NOT_FOUND included;
+// only silence counts against it.
+func (r *reader) note(err error) {
+	if isSilent(err) {
+		r.breaker.silent()
+
+		return
+	}
+
+	r.breaker.answered()
+
+	if r.onRead != nil {
+		r.onRead()
+	}
 }
 
 // generation fetches the entries of the newest generation standing at a
 // height — open, records, and seal when one closed it.
 func (r *reader) generation(ctx context.Context, height uint64) ([]*pb.Entry, error) {
-	resp, err := r.client().GetBlock(ctx, &pb.GetBlockRequest{BlockNumber: height})
+	allowed, probing := r.breaker.allow()
+	if !allowed {
+		return nil, errReadPathDown
+	}
+
+	cctx, cancel := context.WithTimeout(ctx, readBudget(probing))
+	defer cancel()
+
+	resp, err := r.client().GetBlock(cctx, &pb.GetBlockRequest{BlockNumber: height})
+
+	r.note(err)
+
 	if err != nil {
 		return nil, err
 	}
