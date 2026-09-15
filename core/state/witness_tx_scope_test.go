@@ -397,3 +397,27 @@ func TestCommitWitnessTxKeepsWitnessComplete(t *testing.T) {
 
 	t.Logf("immediate=%d deferred=%d nodes, none lost", len(immediate), len(deferred))
 }
+
+// TestRecordWitnessReadsWithoutPrefetcher pins the prefetcher nil-guards on the
+// read-recording helpers.
+//
+// With no scope open these fall straight through to s.prefetcher.prefetch, so
+// without the guards a read taken after StopPrefetcher -- during shutdown, or
+// between builds -- is a nil dereference on the state read path.
+func TestRecordWitnessReadsWithoutPrefetcher(t *testing.T) {
+	state, addrs, roots, keys := witnessScopeState(t)
+
+	state.StopPrefetcher()
+
+	// No scope open: each of these reaches the prefetch call unless guarded.
+	state.recordWitnessAccountRead(addrs[0])
+	state.recordWitnessSlotRead(crypto.Keccak256Hash(addrs[0][:]), roots[addrs[0]], addrs[0], keys[0])
+
+	// Non-existent reads have no prefetcher dependency and must still land.
+	ghost := common.BytesToAddress([]byte("does-not-exist"))
+	state.recordNonExistentRead(ghost)
+
+	if _, ok := state.nonExistentReads[ghost]; !ok {
+		t.Fatal("a non-existent read must land even with no prefetcher")
+	}
+}

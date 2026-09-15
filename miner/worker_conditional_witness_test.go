@@ -122,3 +122,81 @@ func TestValidateConditionalOptionsIsWitnessNeutral(t *testing.T) {
 			validated, baseline)
 	}
 }
+
+// TestValidateConditionalOptionsRejectsOutOfRange covers the PIP-15 range
+// checks, which decide whether a conditional transaction is eligible for THIS
+// block at all. Swallowing either error includes a transaction whose own
+// stated preconditions do not hold.
+func TestValidateConditionalOptionsRejectsOutOfRange(t *testing.T) {
+	t.Parallel()
+
+	var (
+		tooLate  = uint64(50)  // header.Time is 100, so a max of 50 is in the past
+		tooEarly = uint64(200) // ... and a min of 200 is in the future
+	)
+
+	for _, tc := range []struct {
+		name    string
+		options *types.OptionsPIP15
+		wantErr bool
+	}{
+		{
+			name:    "in range",
+			options: &types.OptionsPIP15{BlockNumberMin: big.NewInt(1), BlockNumberMax: big.NewInt(10)},
+		},
+		{
+			name:    "block number below min",
+			options: &types.OptionsPIP15{BlockNumberMin: big.NewInt(5)},
+			wantErr: true,
+		},
+		{
+			name:    "block number above max",
+			options: &types.OptionsPIP15{BlockNumberMax: big.NewInt(0)},
+			wantErr: true,
+		},
+		{
+			name:    "timestamp before min",
+			options: &types.OptionsPIP15{TimestampMin: &tooEarly},
+			wantErr: true,
+		},
+		{
+			name:    "timestamp after max",
+			options: &types.OptionsPIP15{TimestampMax: &tooLate},
+			wantErr: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			env := &environment{header: &types.Header{Number: big.NewInt(1), Time: 100}}
+
+			tx := types.NewTx(&types.LegacyTx{Nonce: 0, Gas: 21000, Value: big.NewInt(0)})
+			tx.PutOptions(tc.options)
+
+			err := validateConditionalOptions(env, tx)
+			if tc.wantErr && err == nil {
+				t.Error("out-of-range conditional transaction was accepted")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("in-range conditional transaction was rejected: %v", err)
+			}
+		})
+	}
+}
+
+// TestValidateConditionalOptionsIgnoresPlainTransaction pins the nil-options
+// fast path: a transaction with no conditions must not touch the witness scope
+// at all.
+func TestValidateConditionalOptionsIgnoresPlainTransaction(t *testing.T) {
+	t.Parallel()
+
+	env := &environment{header: &types.Header{Number: big.NewInt(1), Time: 100}}
+
+	tx := types.NewTx(&types.LegacyTx{Nonce: 0, Gas: 21000, Value: big.NewInt(0)})
+
+	// env.state is nil here on purpose: touching it would panic, which is the
+	// assertion.
+	if err := validateConditionalOptions(env, tx); err != nil {
+		t.Errorf("a transaction with no options must validate trivially, got %v", err)
+	}
+}

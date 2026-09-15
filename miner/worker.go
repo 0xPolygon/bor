@@ -1690,6 +1690,10 @@ func (w *worker) commitTransaction(env *environment, tx *types.Transaction) ([]*
 // read of the same slot still resolves its trie path into the witness instead
 // of returning a silent cache hit.
 //
+// A conditional transaction that only constrains block number or timestamp
+// never reaches the state at all: there is nothing to check, so no scope is
+// opened.
+//
 // core/state.TestKnownAccountsValidationIsWitnessNeutral pins the property.
 func validateConditionalOptions(env *environment, tx *types.Transaction) error {
 	options := tx.GetOptions()
@@ -1703,6 +1707,10 @@ func validateConditionalOptions(env *environment, tx *types.Transaction) error {
 
 	if err := env.header.ValidateTimestampOptionsPIP15(options.TimestampMin, options.TimestampMax); err != nil {
 		return err
+	}
+
+	if options.KnownAccounts == nil {
+		return nil
 	}
 
 	env.state.BeginWitnessTx()
