@@ -1974,6 +1974,17 @@ func (c *Bor) FetchAndCommitSpan(
 	return c.spanner.CommitSpan(ctx, minSpan, validators, producers, state, header, chain, c.systemTxVMConfig(state))
 }
 
+// truncateEventRecords caps the records committed in a block at an override
+// count. The override is an upper bound on the block's records, so when
+// Heimdall returned fewer than that every fetched record is kept instead of
+// slicing past the end of the response.
+func truncateEventRecords(records []*clerk.EventRecordWithTime, limit int) []*clerk.EventRecordWithTime {
+	if limit < 0 || limit >= len(records) {
+		return records
+	}
+	return records[:limit]
+}
+
 // CommitStates commit states
 func (c *Bor) CommitStates(
 	state vm.StateDB,
@@ -2055,7 +2066,7 @@ func (c *Bor) CommitStates(
 	// If there are, it truncates the eventRecords array to the specified number of records.
 	if c.config.OverrideStateSyncRecords != nil {
 		if val, ok := c.config.OverrideStateSyncRecords[strconv.FormatUint(number, 10)]; ok {
-			eventRecords = eventRecords[0:val]
+			eventRecords = truncateEventRecords(eventRecords, val)
 		}
 	}
 
@@ -2064,7 +2075,7 @@ func (c *Bor) CommitStates(
 	if c.config.OverrideStateSyncRecordsInRange != nil {
 		overrideStateSyncRecord, ok := c.config.GetOverrideStateSyncRecord(number)
 		if ok {
-			eventRecords = eventRecords[0:overrideStateSyncRecord]
+			eventRecords = truncateEventRecords(eventRecords, overrideStateSyncRecord)
 		}
 	}
 
