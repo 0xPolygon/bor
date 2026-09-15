@@ -112,8 +112,17 @@ func TestDiscardWitnessTxEvictsReadCaches(t *testing.T) {
 	state.recordWitnessAccountRead(addr)
 	state.recordWitnessSlotRead(crypto.Keccak256Hash(addr[:]), roots[addr], addr, key)
 
-	if state.stateObjects[addr] == nil {
+	// Capture the object BEFORE the discard. Re-fetching it afterwards would
+	// make the storage assertion unreachable: the account-eviction loop removes
+	// the object from s.stateObjects, so a `stateObjects[addr] != nil` guard
+	// silently skips the check and the test passes whatever the slot loop did.
+	obj := state.stateObjects[addr]
+	if obj == nil {
 		t.Fatal("precondition: account was not loaded")
+	}
+
+	if _, ok := obj.originStorage[key]; !ok {
+		t.Fatal("precondition: the slot was never cached, so eviction proves nothing")
 	}
 
 	state.DiscardWitnessTx()
@@ -121,10 +130,11 @@ func TestDiscardWitnessTxEvictsReadCaches(t *testing.T) {
 	if state.witnessTx != nil {
 		t.Fatal("DiscardWitnessTx left the scope open")
 	}
-	if obj := state.stateObjects[addr]; obj != nil {
-		if _, ok := obj.originStorage[key]; ok {
-			t.Error("DiscardWitnessTx left the dropped transaction's slot in originStorage")
-		}
+	if _, ok := obj.originStorage[key]; ok {
+		t.Error("DiscardWitnessTx left the dropped transaction's slot in originStorage")
+	}
+	if _, ok := state.stateObjects[addr]; ok {
+		t.Error("DiscardWitnessTx left the dropped transaction's account in stateObjects")
 	}
 }
 
