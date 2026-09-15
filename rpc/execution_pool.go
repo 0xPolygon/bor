@@ -63,9 +63,7 @@ func NewExecutionPool(initialSize int, timeout time.Duration, service string, re
 func (s *SafePool) Submit(ctx context.Context, fn func() error) (<-chan error, bool) {
 	semPtr := s.sem.Load()
 	if s.fastPath.Load() || semPtr == nil {
-		go func() {
-			_ = fn()
-		}()
+		go s.run(fn)
 
 		return nil, true
 	}
@@ -89,19 +87,23 @@ func (s *SafePool) Submit(ctx context.Context, fn func() error) (<-chan error, b
 				s.inFlight.Add(-1)
 			}()
 
-			_ = fn()
+			s.run(fn)
 		}()
 	case <-ctx.Done():
-		go func() {
-			_ = fn()
-		}()
+		go s.run(fn)
 	case <-timeout:
-		go func() {
-			_ = fn()
-		}()
+		go s.run(fn)
 	}
 
 	return nil, true
+}
+
+// run executes fn and counts it towards the processed metric. Every Submit
+// path ends up here, including the shed paths, so the metric reflects all
+// tasks the pool ran and not just the ones that acquired a slot.
+func (s *SafePool) run(fn func() error) {
+	defer s.processed.Add(1)
+	_ = fn()
 }
 
 func (s *SafePool) ChangeSize(n int) {
