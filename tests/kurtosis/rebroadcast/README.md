@@ -109,10 +109,17 @@ keeps transaction gossip active during the observation.
 
 ## Add delay and observe
 
+Seeding requires `OBSERVATION_PRIVATE_KEY` from a dedicated devnet account that
+is not used by `tx_spammer` or any other sender. Fund it in genesis or before
+block 128 so its balance exists in the halted baseline's state. Funding it only
+on the current chain after the fork will not fund it on the halted node. Run
+observations sequentially when reusing this account.
+
 The baseline RPC node uses Bor v2.9.0. Apply 1.5 seconds of delay for 90
 seconds:
 
 ```bash
+export OBSERVATION_PRIVATE_KEY=<dedicated-prefunded-devnet-account-key>
 tests/kurtosis/rebroadcast/observe.sh
 ```
 
@@ -134,7 +141,8 @@ network require a catch-up sync.
 The delay is applied from a short-lived container sharing the target's network
 namespace, so the Bor image does not need `tc` or additional Linux capabilities.
 The cleanup trap removes the rule when the script exits. Set `SEED_TX=false` to
-observe an existing txpool without submitting another transaction.
+observe an existing txpool without submitting another transaction or requiring
+an observation key.
 
 Remove the devnet when finished:
 

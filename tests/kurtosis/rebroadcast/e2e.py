@@ -42,6 +42,23 @@ def pool_hashes(url):
             for account in content[category].values() for tx in account.values()}
 
 
+def parse_wallet(output):
+    wallets = json.loads(output)
+    # Newer Cast versions wrap JSON results in a success/data envelope.
+    if isinstance(wallets, dict):
+        if wallets.get("success") is not True:
+            raise RuntimeError("Cast wallet generation did not succeed")
+        wallets = wallets.get("data")
+    if not isinstance(wallets, list) or len(wallets) != 1:
+        raise RuntimeError("Cast must return exactly one new wallet")
+    wallet = wallets[0]
+    if not isinstance(wallet, dict) or any(
+            not isinstance(wallet.get(key), str) or not wallet[key]
+            for key in ("address", "private_key")):
+        raise RuntimeError("Cast wallet is missing its address or private key")
+    return wallet
+
+
 def service(enclave, name):
     url = command("kurtosis", "port", "print", enclave, name, "rpc").strip()
     ids = command("docker", "ps", "-q").split()
@@ -135,7 +152,7 @@ class Test:
     def fund_fixture(self):
         if not self.args.funding_key:
             raise RuntimeError("Set REBROADCAST_FUNDER_KEY to a funded devnet account")
-        wallet = json.loads(self.cast("wallet", "new", "--json"))[0]
+        wallet = parse_wallet(self.cast("wallet", "new", "--json"))
         self.fixture_key = wallet["private_key"]
         self.docker_url = self.target["url"].replace("127.0.0.1", "host.docker.internal", 1)
         funding = self.cast("send", "--async", "--rpc-url", self.docker_url,

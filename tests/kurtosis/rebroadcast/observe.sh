@@ -9,6 +9,11 @@ tc_image=${TC_IMAGE:-gaiadocker/iproute2:3.3}
 cast_image=${CAST_IMAGE:-ghcr.io/foundry-rs/foundry@sha256:0c00cb0bda1ab1b91c9a6bf60f4c76c09c1a8870824b6d4718afbabacf6f9a17}
 seed_tx=${SEED_TX:-true}
 
+if [[ "$seed_tx" == "true" && -z "${OBSERVATION_PRIVATE_KEY:-}" ]]; then
+  echo "Set OBSERVATION_PRIVATE_KEY to a dedicated funded devnet account not used by the transaction spammer or another sender" >&2
+  exit 1
+fi
+
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 container=$(PYTHONDONTWRITEBYTECODE=1 python3 - "$script_dir" "$enclave" "$service" <<'PY'
 import sys
@@ -27,11 +32,7 @@ trap cleanup EXIT INT TERM
 before=$(kurtosis service logs "$enclave" "$service" --all --match 'Rebroadcast stuck transactions' | wc -l | tr -d ' ')
 
 if [[ "$seed_tx" == "true" ]]; then
-  private_key=$(kurtosis service logs "$enclave" l2-tx-spammer --all --match 'PRIVATE_KEY' | sed -n 's/.*PRIVATE_KEY: \(0x[0-9a-fA-F]*\).*/\1/p' | head -1)
-  if [[ -z "$private_key" ]]; then
-    echo "Could not find the devnet transaction-spammer key" >&2
-    exit 1
-  fi
+  private_key=$OBSERVATION_PRIVATE_KEY
   rpc_url=$(kurtosis port print "$enclave" "$service" rpc)
   docker_rpc_url=${rpc_url/127.0.0.1/host.docker.internal}
   sender=$(docker run --rm --entrypoint cast "$cast_image" wallet address --private-key "$private_key")
