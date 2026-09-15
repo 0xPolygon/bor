@@ -26,7 +26,9 @@ the candidate RPC node, and the baseline RPC peer from the smoke-test topology.
 CI generates a dedicated funder for each run and gives only its public address
 a balance in the disposable devnet genesis. Its private key is masked and passed
 through the runner environment as `REBROADCAST_FUNDER_KEY`; it is not copied into
-the Kurtosis package or diagnostics. The smoke-test signer is not reused.
+the Kurtosis package or diagnostics. Command timeout messages omit arguments and
+failure output redacts the supplied signing key before it can reach the summary
+or traceback. The smoke-test signer is not reused.
 
 The test funds a fresh account using `REBROADCAST_FUNDER_KEY`, waits for the
 funding receipt and empty pools, then raises validator gas-tip thresholds and
@@ -57,8 +59,16 @@ restoration on every validator; any failure fails the test and is recorded.
 
 `summary.json` records initialization errors as well as phase results and cleanup
 errors. `samples.jsonl` contains phase evidence and `target.log` contains target
-logs. CI uploads these as `kurtosis-e2e-diagnostics`, including on failure.
+logs. Docker log reads retry up to three times with a five-second timeout per
+attempt and a one-second pause between attempts. Failed attempts are recorded in
+`log-read-errors.jsonl`; partial output never counts as observation evidence and
+exhausted retries fail the test without replacing the last complete `target.log`.
 Counts represent handler batches, not per-peer gossip deliveries.
+
+On test failure CI collects network diagnostics and the devnet state before
+uploading `kurtosis-e2e-diagnostics`. The upload always runs, even if collection
+fails, and includes `build/rebroadcast-e2e/`, `network-diagnostics.txt`, and
+`devnet-state/` when present. Enclave cleanup runs afterwards.
 
 ## Local execution
 

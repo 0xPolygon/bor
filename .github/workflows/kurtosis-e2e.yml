@@ -208,21 +208,24 @@ jobs:
               l2-el-3-bor-heimdall-v2-validator l2-el-4-bor-heimdall-v2-validator \
             --other-peers l2-el-6-bor-heimdall-v2-rpc --timeout 240
 
-      - name: Upload E2E test diagnostics
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: kurtosis-e2e-diagnostics
-          path: build/rebroadcast-e2e/
-          if-no-files-found: warn
-          retention-days: 14
-
       # Collect diagnostics on failure
       - name: Collect network diagnostics and state dump
         if: always() && steps.e2e-tests.outcome == 'failure'
         uses: ./pos-workflows/.github/actions/network-diagnostics-and-state-dump
         with:
           enclave_name: ${{ env.ENCLAVE_NAME }}
+
+      - name: Upload E2E test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: kurtosis-e2e-diagnostics
+          path: |
+            build/rebroadcast-e2e/
+            network-diagnostics.txt
+            devnet-state/
+          if-no-files-found: warn
+          retention-days: 14
 
       # Clean up
       - name: Post kurtosis run

@@ -19,9 +19,17 @@ CAST_IMAGE = "ghcr.io/foundry-rs/foundry@sha256:0c00cb0bda1ab1b91c9a6bf60f4c76c0
 
 
 def command(*args, timeout=60):
-    result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # TimeoutExpired includes argv, which can contain the fixture signing key.
+        raise RuntimeError(f"{args[0]} timed out after {timeout} seconds") from None
     if result.returncode:
-        raise RuntimeError(f"{args[0]} failed: {result.stderr or result.stdout}")
+        detail = result.stderr or result.stdout
+        for option, value in zip(args, args[1:]):
+            if option == "--private-key" and value:
+                detail = detail.replace(value, "[REDACTED]")
+        raise RuntimeError(f"{args[0]} failed: {detail}")
     return result.stdout
 
 
@@ -103,17 +111,32 @@ class Test:
                         "producers": self.producers, "started": self.start}
 
     def logs(self):
-        result = subprocess.run(["docker", "logs", "--since", self.start, self.target["id"]],
-                                capture_output=True, text=True, timeout=20, check=True)
-        logs = result.stdout + result.stderr
-        (self.output / "target.log").write_text(logs)
-        return logs
+        for attempt in range(1, 4):
+            try:
+                result = subprocess.run(["docker", "logs", "--since", self.start, self.target["id"]],
+                                        capture_output=True, text=True, timeout=5, check=True)
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+                detail = error.stderr or error.stdout or ""
+                if isinstance(detail, bytes):
+                    detail = detail.decode(errors="replace")
+                detail = detail[-4000:]
+                with (self.output / "log-read-errors.jsonl").open("a") as output:
+                    output.write(json.dumps({"time": time.time(), "attempt": attempt,
+                                             "error": str(error), "detail": detail}) + "\n")
+                if attempt == 3:
+                    raise RuntimeError(f"Docker logs failed after 3 attempts: {error}; {detail}") from None
+                time.sleep(1)
+                continue
+            # Retry the same complete interval; partial output is not evidence.
+            logs = result.stdout + result.stderr
+            (self.output / "target.log").write_text(logs)
+            return logs
 
     def sample(self, phase):
+        logs = self.logs()
         url = self.target["url"]
         head = int(rpc(url, "eth_blockNumber"), 16)
         reference = max(int(rpc(node["url"], "eth_blockNumber"), 16) for node in self.producers)
-        logs = self.logs()
         sample = {"time": time.time(), "phase": phase, "head": head, "reference": reference,
                   "lag": reference - head, "peers": int(rpc(url, "net_peerCount"), 16),
                   "syncing": rpc(url, "eth_syncing"),
