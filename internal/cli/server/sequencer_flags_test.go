@@ -121,3 +121,6 @@ func TestSequencerFlagsWithoutConfigBlock(t *testing.T) {
 	require.False(t, c.cliConfig.Sequencer.Enabled)
 	require.Equal(t, 200*time.Millisecond, c.cliConfig.Sequencer.Poll)
 }
+
+// The audit depth only reaches the node when the integration is on; zero
+// leaves the sequencer package default in place.

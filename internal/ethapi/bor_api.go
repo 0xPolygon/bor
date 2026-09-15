@@ -140,10 +140,33 @@ func NewBorAPI(b Backend) *BorAPI {
 	return &BorAPI{b}
 }
 
-// GetInvalidPreconfBlocks returns the preconfirmations that were invalidated for
-// blocks in the [from, to] range, newest block first. The response is capped at
-// rawdb.InvalidPreconfQueryLimit records to bound a wide range.
-func (api *BorAPI) GetInvalidPreconfBlocks(ctx context.Context, from, to rpc.BlockNumber) ([]rawdb.InvalidPreconfRecord, error) {
+// invalidPreconfRangeLimit bounds one range query. There is at most one record
+// per height, so capping the range caps the response; the cap is on the
+// request so a caller asking too wide a question gets an error instead of a
+// silently truncated answer it cannot tell from a complete one.
+const invalidPreconfRangeLimit = 1024
+
+// InvalidPreconfBlocks answers one range query: the heights in range that
+// carry an invalidation, and where the audit's coverage of the range ends.
+// Every other height in range was compared and matched.
+type InvalidPreconfBlocks struct {
+	// Invalid lists the heights with an invalidation record, newest first.
+	// The reason a height was invalidated stays in the database for logs; a
+	// caller only needs to know which heights not to trust.
+	Invalid []hexutil.Uint64 `json:"invalid"`
+
+	// PendingFrom is the first height in range the audit has not reached.
+	// Heights from there to the end of the range are pending rather than
+	// clean, and a caller asks again later for them. Nil once the whole range
+	// is audited; equal to the range start on a node that has not audited at
+	// all.
+	PendingFrom *hexutil.Uint64 `json:"pendingFrom"`
+}
+
+// GetInvalidPreconfBlocks returns the preconfirmations that were invalidated
+// for blocks in the [from, to] range, newest block first, together with the
+// point where this node's audit of that range stops.
+func (api *BorAPI) GetInvalidPreconfBlocks(ctx context.Context, from, to rpc.BlockNumber) (*InvalidPreconfBlocks, error) {
 	fromNum, err := api.resolveInvalidPreconfBound(ctx, from)
 	if err != nil {
 		return nil, err
@@ -155,7 +178,49 @@ func (api *BorAPI) GetInvalidPreconfBlocks(ctx context.Context, from, to rpc.Blo
 	if fromNum > toNum {
 		return nil, fmt.Errorf("invalid block range: from (%d) is greater than to (%d)", fromNum, toNum)
 	}
-	return rawdb.ReadInvalidPreconfsInRange(api.b.ChainDb(), fromNum, toNum), nil
+	// Subtraction rather than a count: from and to are unbounded uint64s, and
+	// to-from+1 overflows to zero on the widest possible range.
+	if toNum-fromNum >= invalidPreconfRangeLimit {
+		return nil, fmt.Errorf("block range %d..%d is wider than the %d height limit", fromNum, toNum, invalidPreconfRangeLimit)
+	}
+
+	pendingFrom, err := api.pendingAuditFrom(fromNum, toNum)
+	if err != nil {
+		return nil, err
+	}
+
+	records := rawdb.ReadInvalidPreconfsInRange(api.b.ChainDb(), fromNum, toNum)
+	invalid := make([]hexutil.Uint64, 0, len(records))
+	for _, record := range records {
+		invalid = append(invalid, hexutil.Uint64(record.Number))
+	}
+
+	return &InvalidPreconfBlocks{Invalid: invalid, PendingFrom: pendingFrom}, nil
+}
+
+// pendingAuditFrom reports the first height in [from, to] the audit has not
+// reached, or nil when it has reached them all. The watermark is a prefix
+// mark, so the pending part of a range is always its tail.
+//
+// An unreadable watermark is an error rather than a nil mark: nil is the
+// claim that the whole range was compared.
+func (api *BorAPI) pendingAuditFrom(from, to uint64) (*hexutil.Uint64, error) {
+	audited, stored, err := rawdb.ReadPreconfAuditedThrough(api.b.ChainDb())
+	if err != nil {
+		return nil, err
+	}
+
+	pending := hexutil.Uint64(from)
+	switch {
+	case !stored:
+		return &pending, nil
+	case audited >= to:
+		return nil, nil
+	case audited >= from:
+		pending = hexutil.Uint64(audited + 1)
+	}
+
+	return &pending, nil
 }
 
 // resolveInvalidPreconfBound converts an rpc.BlockNumber range bound into a

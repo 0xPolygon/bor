@@ -16,6 +16,10 @@ import (
 	"github.com/ethereum/go-ethereum/trie"
 )
 
+// allInvalidPreconfs is a limit above anything these tests write, for reads
+// that mean "every record"; the accessor has no ceiling of its own.
+const allInvalidPreconfs = 1024
+
 type blockingPendingStateReader struct {
 	PendingStateReader
 	started chan struct{}
@@ -340,7 +344,7 @@ func TestPendingStoreImportOwnsHeight(t *testing.T) {
 	if gotClaimed != claimed || claimed.phase != PendingImporting || gotCompeting != nil {
 		t.Fatalf("entries changed during import: claimed=%+v competing=%+v", gotClaimed, gotCompeting)
 	}
-	if records := rawdb.ReadInvalidPreconfs(db, rawdb.InvalidPreconfQueryLimit); len(records) != 0 {
+	if records := rawdb.ReadInvalidPreconfs(db, allInvalidPreconfs); len(records) != 0 {
 		t.Fatalf("invalidation records during import = %+v", records)
 	}
 

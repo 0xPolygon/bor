@@ -2,11 +2,10 @@ package rawdb
 
 import (
 	"encoding/binary"
+	"fmt"
 
 	"github.com/ethereum/go-ethereum/ethdb"
 )
-
-const InvalidPreconfQueryLimit = 1024
 
 type InvalidPreconfRecord struct {
 	Number uint64 `json:"number"`
@@ -34,14 +33,40 @@ func WriteInvalidPreconf(db ethdb.Database, number uint64, reason string) error 
 	return batch.Write()
 }
 
+// WriteInvalidPreconfIfAbsent writes an invalidation only where the height
+// carries none, and reports whether it wrote. The audit backfills heights the
+// live path may already have judged; a live record means a preconfirmation
+// reached callers, which is a stronger claim than any after-the-fact verdict,
+// so it must not be overwritten by one.
+//
+// The check and the write are not atomic. A live record landing between them
+// is still overwritten, which needs the live path to judge the exact height a
+// pass is judging, in that window — the two only overlap at a height a dropped
+// session left behind the watermark. Narrowing it further would need a
+// compare-and-set the key-value layer does not offer.
+func WriteInvalidPreconfIfAbsent(db ethdb.Database, number uint64, reason string) (bool, error) {
+	key := invalidPreconfKey(number)
+
+	present, err := db.Has(key)
+	if err != nil {
+		return false, fmt.Errorf("read invalid preconf %d: %w", number, err)
+	}
+	if present {
+		return false, nil
+	}
+
+	if err := WriteInvalidPreconf(db, number, reason); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
 func ReadInvalidPreconfs(db ethdb.Iteratee, limit uint64) []InvalidPreconfRecord {
 	if limit == 0 {
 		return []InvalidPreconfRecord{}
 	}
 
-	if limit > InvalidPreconfQueryLimit {
-		limit = InvalidPreconfQueryLimit
-	}
 	iterator := db.NewIterator(invalidPreconfPrefix, nil)
 	defer iterator.Release()
 
@@ -63,9 +88,9 @@ func ReadInvalidPreconfs(db ethdb.Iteratee, limit uint64) []InvalidPreconfRecord
 }
 
 // ReadInvalidPreconfsInRange returns the invalid-preconfirmation records whose
-// block number falls within [from, to] inclusive, newest block first. At most
-// InvalidPreconfQueryLimit records are returned so a wide range cannot produce
-// an unbounded response.
+// block number falls within [from, to] inclusive, newest block first. There is
+// one record per height at most, so bounding the range bounds the response;
+// callers cap the range rather than having results silently truncated here.
 func ReadInvalidPreconfsInRange(db ethdb.Iteratee, from, to uint64) []InvalidPreconfRecord {
 	if from > to {
 		return []InvalidPreconfRecord{}
@@ -94,9 +119,42 @@ func ReadInvalidPreconfsInRange(db ethdb.Iteratee, from, to uint64) []InvalidPre
 			Number: number,
 			Reason: string(iterator.Value()),
 		})
-		if uint64(len(records)) >= InvalidPreconfQueryLimit {
-			break
-		}
 	}
 	return records
+}
+
+// ReadPreconfAuditedThrough returns the highest block the sequence-store audit
+// has compared against the canonical chain, and whether a watermark is stored
+// at all. A node that has never audited has no watermark, which is not the same
+// as having audited through block zero — and neither is the same as a database
+// that could not answer, which is why a read failure is an error rather than a
+// third spelling of absence. Collapsing the last into the second would let a
+// read failure read as "never audited", which seeds the watermark at the
+// current head and so reports an uncompared range as audited.
+func ReadPreconfAuditedThrough(db ethdb.KeyValueReader) (uint64, bool, error) {
+	present, err := db.Has(preconfAuditedThroughKey)
+	if err != nil {
+		return 0, false, fmt.Errorf("read preconf audit watermark: %w", err)
+	}
+	if !present {
+		return 0, false, nil
+	}
+
+	value, err := db.Get(preconfAuditedThroughKey)
+	if err != nil {
+		return 0, false, fmt.Errorf("read preconf audit watermark: %w", err)
+	}
+	if len(value) != 8 {
+		return 0, false, fmt.Errorf("preconf audit watermark is %d bytes, want 8", len(value))
+	}
+
+	return binary.BigEndian.Uint64(value), true, nil
+}
+
+// WritePreconfAuditedThrough stores the audit watermark.
+func WritePreconfAuditedThrough(db ethdb.KeyValueWriter, number uint64) error {
+	value := make([]byte, 8)
+	binary.BigEndian.PutUint64(value, number)
+
+	return db.Put(preconfAuditedThroughKey, value)
 }
