@@ -38,11 +38,11 @@ class SuppressionTest(unittest.TestCase):
         ]:
             with self.subTest(name=name):
                 test = e2e.Test.__new__(e2e.Test)
-                test.args = types.SimpleNamespace(window=8, min_lag=3)
+                test.args = types.SimpleNamespace(window=8, min_lag=3, timeout=20)
                 test.summary = {}
-                test.wait = Mock(return_value={"syncing": {"currentBlock": "0x1"}})
-                test.sample = Mock(side_effect=[start, dict(start, **changes)])
-                with patch("e2e.time.sleep"), patch("e2e.time.monotonic", side_effect=[0, 0, 8]):
+                test.wait = Mock(return_value=start)
+                test.sample = Mock(return_value=dict(start, **changes))
+                with patch("e2e.time.sleep"), patch("e2e.time.monotonic", side_effect=[0, 0, 20, 21]):
                     if error:
                         with self.assertRaisesRegex(RuntimeError, error):
                             test.suppression()

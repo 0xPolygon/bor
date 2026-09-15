@@ -36,6 +36,12 @@ The test asserts three phases:
    advance at least 20 blocks. The test reconnects with delay and bandwidth
    limits. During catch-up, the target must stay connected, advance its head,
    report active sync, identify at least three stuck-tx batches, and emit none.
+   Peer reconnection and ancestor discovery get the phase timeout; the shorter
+   `--window` starts when `eth_syncing` first reports active progress. Suppression
+   is checked from the first connected, lagging sample, including preparation.
+   The phase ends once all evidence is present or the target catches up; catching
+   up without the required evidence still fails. This avoids continuing the
+   observation into normal rebroadcast after catch-up.
 3. Removing impairment lets the target catch up and rebroadcast at least three
    more batches containing the same sole pending transaction.
 

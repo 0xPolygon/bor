@@ -272,18 +272,26 @@ class Test:
 
     def suppression(self):
         first = self.wait("detect-sync", lambda s: s["lag"] >= self.args.min_lag and s["peers"] > 0)
-        start = self.sample("suppressed")
-        deadline = time.monotonic() + self.args.window
+        start = first
+        active_sync = start if start["syncing"] is not False else None
+        duration = min(self.args.timeout, self.args.window) if active_sync else self.args.timeout
+        deadline = time.monotonic() + duration
         last = start
-        saw_syncing = start["syncing"] is not False
         while time.monotonic() < deadline:
             last = self.sample("suppressed")
             if last["peers"] == 0:
                 raise RuntimeError("Suppression window lost its connected-peer precondition")
             if last["rebroadcast"] != start["rebroadcast"]:
                 raise RuntimeError("Out-of-sync node rebroadcast stuck transactions")
-            saw_syncing = saw_syncing or last["syncing"] is not False
+            # Peer handshakes and ancestor discovery precede eth_syncing progress.
+            # Keep checking suppression, but start the short window at active sync.
+            if active_sync is None and last["syncing"] is not False:
+                active_sync = last
+                deadline = min(deadline, time.monotonic() + self.args.window)
             if last["lag"] < self.args.min_lag:
+                break
+            if (active_sync is not None and last["head"] > start["head"]
+                    and last["identified"] - start["identified"] >= 3):
                 break
             time.sleep(1)
         identified = last["identified"] - start["identified"]
@@ -291,10 +299,10 @@ class Test:
             raise RuntimeError("Need at least three stuck-tx batches to prove suppression")
         if last["head"] <= start["head"]:
             raise RuntimeError("Target block did not advance during suppressed catch-up")
-        if not saw_syncing:
+        if active_sync is None:
             raise RuntimeError("Target never reported an active catch-up sync")
         self.summary["suppression"] = {"first_sync": first, "start": start, "end": last,
-                                       "observed_active_sync": saw_syncing,
+                                       "active_sync": active_sync, "observed_active_sync": True,
                                        "identified_batches": identified, "rebroadcast_batches": 0}
 
     def run(self):
@@ -327,7 +335,8 @@ def main():
     parser.add_argument("--funding-key", default=os.environ.get("REBROADCAST_FUNDER_KEY"))
     parser.add_argument("--delay", default="1500ms")
     parser.add_argument("--rate", default="64kbit")
-    parser.add_argument("--window", type=int, default=12)
+    parser.add_argument("--window", type=int, default=12,
+                        help="Seconds allowed to collect remaining evidence after active sync begins")
     parser.add_argument("--min-lag", type=int, default=3)
     parser.add_argument("--initial-gap", type=int, default=20)
     parser.add_argument("--timeout", type=int, default=180)
