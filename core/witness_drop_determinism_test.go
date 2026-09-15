@@ -498,16 +498,22 @@ func TestWitnessScopeLeftOpenFailsSafe(t *testing.T) {
 // exactly the three structures DiscardWitnessTx cleans. This test is what
 // makes that a fact rather than a reading of the code.
 func TestPipelinedProducerFlatDiffIgnoresDroppedTransaction(t *testing.T) {
-	t.Skip("pipelined SRC witness production is contaminated by a shared, " +
-		"attribution-free read record and is NOT fixed by per-transaction scoping. " +
-		"CommitSnapshot ends with drainExternalReadsIntoDiff, which pours the whole " +
-		"readerWithCache read set into the diff -- including reads by dropped " +
-		"transactions AND by the speculative block prefetcher, whose throwaway " +
-		"StateDB shares that reader (core/state_prefetcher.go PrefetchStream). " +
-		"Closing it needs read attribution on the shared reader, not a StateDB " +
-		"scope. Latent today: --pipeline.enable-import-src defaults to false and " +
-		"no chain_pipelined_src_* metric exists on any mainnet or Amoy node. " +
-		"Un-skip and fix before enabling pipelined SRC on a witness producer.")
+	t.Skip("KNOWN FAILING, and deliberately kept: this test has been run, and all " +
+		"four drop modes leak. Pipelined SRC witness production is contaminated by a " +
+		"shared, attribution-free read record and is NOT fixed by per-transaction " +
+		"scoping. CommitSnapshot ends with drainExternalReadsIntoDiff, which pours " +
+		"the whole readerWithCache read set into the diff. Closing it needs read " +
+		"attribution on the shared reader, not a StateDB scope. " +
+		"Unreachable today rather than latent: the PRODUCER side this test models " +
+		"cannot run at all -- miner.isPipelineEligible is hard-wired to return " +
+		"false (\"Production-side pipelining is intentionally disabled\"), so no " +
+		"block is sealed through miner/pipeline.go. The IMPORT side is live and " +
+		"leaks too, but through the speculative block prefetcher rather than " +
+		"dropped transactions -- importers drop nothing. " +
+		"TestPipelinedSRCDiffCarriesBlockPrefetcherReads pins that one, and it is " +
+		"why eth.witnessSafeAccelerators turns pipelined import SRC off on a " +
+		"witness-recording node. Un-skip and fix this one before production-side " +
+		"pipelining is re-enabled.")
 
 	f := newWitnessDropFixture(t)
 
@@ -533,6 +539,63 @@ func TestPipelinedProducerFlatDiffIgnoresDroppedTransaction(t *testing.T) {
 			wdRequireSameFlatDiff(t, want, got)
 		})
 	}
+}
+
+// TestPipelinedSRCDiffCarriesBlockPrefetcherReads is a tripwire, not a
+// property test: it asserts that the defect is still present.
+//
+// The import-side pipelined SRC path builds its witness by walking a FlatDiff
+// (recordAndPreloadSRCWitnessReads -> preloadFlatDiffReads). CommitSnapshot
+// ends with drainExternalReadsIntoDiff, which pours the whole readerWithCache
+// read set into that diff. ProcessBlock hands the speculative block prefetcher
+// a throwaway StateDB built from the same reader triple, so the prefetcher's
+// reads are in that record -- and how far it got before the block finished is
+// wall-clock dependent. Two nodes importing the same block therefore derive
+// witnesses of different sizes, which WIT/2's cross-peer page-count check
+// reads as a misbehaving peer.
+//
+// Unlike the producer-side leak, this one is reachable: --pipeline.enable-
+// import-src is a live flag with its own CI leg. eth.witnessSafeAccelerators
+// turns it off on a witness-recording node because of exactly this.
+//
+// When someone gives the shared reader read attribution, this test starts
+// failing. That is the signal to drop the guard in eth.witnessSafeAccelerators
+// -- delete this test with it.
+func TestPipelinedSRCDiffCarriesBlockPrefetcherReads(t *testing.T) {
+	f := newWitnessDropFixture(t)
+
+	snapshot := func(ghostReads []common.Address) *state.FlatDiff {
+		_, sdb := f.wdBuildState(t, nil, ghostReads)
+		defer sdb.StopPrefetcher()
+
+		return sdb.CommitSnapshot(f.config.IsEIP158(f.blockCtx.BlockNumber))
+	}
+
+	// Accounts and contracts no transaction in the block touches, read only
+	// through the shared PREFETCH reader -- standing in for the speculative
+	// block prefetcher's out-of-order execution.
+	clean := snapshot(nil)
+	withPrefetch := snapshot([]common.Address{wdGhostA, wdGhostB, wdGhostProbe})
+
+	cleanReads := wdAddrSet(clean.ReadSet)
+
+	var gained []common.Address
+
+	for addr := range wdAddrSet(withPrefetch.ReadSet) {
+		if _, ok := cleanReads[addr]; !ok {
+			gained = append(gained, addr)
+		}
+	}
+
+	if len(gained) == 0 {
+		t.Fatal("FlatDiff no longer carries the speculative block prefetcher's reads: " +
+			"the shared reader has gained attribution, so the pipelined-SRC guard in " +
+			"eth.witnessSafeAccelerators can be dropped and this test deleted")
+	}
+
+	t.Logf("FlatDiff gained %d accounts the block never read (%d vs %d entries) -- "+
+		"a witness derived from it is not reproducible by another importer",
+		len(gained), len(withPrefetch.ReadSet), len(clean.ReadSet))
 }
 
 // wdRequireSameFlatDiff compares the parts of a FlatDiff the SRC witness is
