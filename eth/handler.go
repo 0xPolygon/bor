@@ -685,6 +685,11 @@ func (h *handler) unregisterPeer(id string) {
 	if err := h.peers.unregisterPeer(id); err != nil {
 		logger.Error("Ethereum peer removal failed", "err", err)
 	}
+	// Coalesce removals without blocking teardown while the syncer is busy.
+	select {
+	case h.chainSync.peerEventCh <- struct{}{}:
+	default:
+	}
 }
 
 func (h *handler) Start(maxPeers int) {
@@ -1054,29 +1059,26 @@ func (h *handler) stuckTxBroadcastLoop() {
 	for {
 		select {
 		case event := <-h.stuckTxsCh:
-			// Only rebroadcast when synced
-			if !h.synced.Load() {
-				continue
+			if h.rebroadcastStuckTransactions(event.Txs) {
+				log.Debug("Rebroadcast stuck transactions", "count", len(event.Txs))
 			}
-
-			// Collect hashes to clear from knownTxs
-			hashes := make([]common.Hash, len(event.Txs))
-			for i, tx := range event.Txs {
-				hashes[i] = tx.Hash()
-			}
-
-			// Clear from all peers' knownTxs
-			h.peers.ForgetTransactions(hashes)
-
-			// Rebroadcast
-			h.BroadcastTransactions(event.Txs)
-
-			log.Debug("Rebroadcast stuck transactions", "count", len(event.Txs))
-
 		case <-h.stuckTxsSub.Err():
 			return
 		}
 	}
+}
+
+func (h *handler) rebroadcastStuckTransactions(txs types.Transactions) bool {
+	if !h.canRebroadcast() {
+		return false
+	}
+	hashes := make([]common.Hash, len(txs))
+	for i, tx := range txs {
+		hashes[i] = tx.Hash()
+	}
+	h.peers.ForgetTransactions(hashes)
+	h.BroadcastTransactions(txs)
+	return true
 }
 
 // enableSyncedFeatures enables the post-sync functionalities when the initial

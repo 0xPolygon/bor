@@ -1,0 +1,400 @@
+#!/usr/bin/env python3
+"""Exercise stuck-tx rebroadcast on a dedicated Kurtosis devnet."""
+
+import argparse
+import datetime
+import json
+import os
+import pathlib
+import re
+import signal
+import subprocess
+import time
+import urllib.parse
+import urllib.error
+import urllib.request
+
+
+CAST_IMAGE = "ghcr.io/foundry-rs/foundry@sha256:0c00cb0bda1ab1b91c9a6bf60f4c76c09c1a8870824b6d4718afbabacf6f9a17"
+
+
+def command(*args, timeout=60):
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # TimeoutExpired includes argv, which can contain the fixture signing key.
+        raise RuntimeError(f"{args[0]} timed out after {timeout} seconds") from None
+    if result.returncode:
+        detail = result.stderr or result.stdout
+        for option, value in zip(args, args[1:]):
+            if option == "--private-key" and value:
+                detail = detail.replace(value, "[REDACTED]")
+        raise RuntimeError(f"{args[0]} failed: {detail}")
+    return result.stdout
+
+
+def rpc(url, method, params=None):
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params or []})
+    request = urllib.request.Request(url, body.encode(), {"Content-Type": "application/json"})
+    with urllib.request.urlopen(request, timeout=10) as response:
+        result = json.load(response)
+    if "error" in result:
+        raise RuntimeError(f"{method}: {result['error']}")
+    return result["result"]
+
+
+def interrupted(signum, frame):
+    raise KeyboardInterrupt("Test interrupted; restoring network rules")
+
+
+def pool_hashes(url):
+    content = rpc(url, "txpool_content")
+    return {tx["hash"] for category in ("pending", "queued")
+            for account in content[category].values() for tx in account.values()}
+
+
+def parse_wallet(output):
+    wallets = json.loads(output)
+    # Newer Cast versions wrap JSON results in a success/data envelope.
+    if isinstance(wallets, dict):
+        if wallets.get("success") is not True:
+            raise RuntimeError("Cast wallet generation did not succeed")
+        wallets = wallets.get("data")
+    if not isinstance(wallets, list) or len(wallets) != 1:
+        raise RuntimeError("Cast must return exactly one new wallet")
+    wallet = wallets[0]
+    if not isinstance(wallet, dict) or any(
+            not isinstance(wallet.get(key), str) or not wallet[key]
+            for key in ("address", "private_key")):
+        raise RuntimeError("Cast wallet is missing its address or private key")
+    return wallet
+
+
+def service(enclave, name):
+    url = command("kurtosis", "port", "print", enclave, name, "rpc").strip()
+    ids = command("docker", "ps", "-q").split()
+    if not ids:
+        raise RuntimeError(f"No running container for {name}")
+    candidates = [item for item in json.loads(command("docker", "inspect", *ids))
+                  if item["Name"].lstrip("/").startswith(f"{name}--")]
+    port = str(urllib.parse.urlparse(url).port)
+    matches = [item for item in candidates if any(
+        binding["HostPort"] == port
+        for bindings in item["NetworkSettings"]["Ports"].values()
+        for binding in (bindings or [])
+    )]
+    if len(matches) != 1:
+        raise RuntimeError(f"Expected one container matching {name} and RPC port {port}")
+    item = matches[0]
+    labels = item["Config"]["Labels"]
+    return {"name": name, "url": url, "id": item["Id"],
+            "ip": labels["com.kurtosistech.private-ip"],
+            "enclave": labels["com.kurtosistech.enclave-id"], "image": item["Image"]}
+
+
+class Test:
+    def __init__(self, args):
+        self.args = args
+        self.output = pathlib.Path(args.artifacts)
+        self.output.mkdir(parents=True, exist_ok=True)
+        self.target = service(args.enclave, args.service)
+        self.producers = [service(args.enclave, name) for name in args.producers]
+        self.nodes = self.producers + [service(args.enclave, name) for name in args.other_peers]
+        if any(node["enclave"] != self.target["enclave"] for node in self.nodes):
+            raise RuntimeError("All test services must belong to the same enclave")
+        self.start = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        self.tx = None
+        self.shaped = []
+        self.fees = []
+        self.removed_peers = []
+        self.summary = {"enclave": args.enclave, "target": self.target,
+                        "producers": self.producers, "started": self.start}
+
+    def logs(self):
+        for attempt in range(1, 4):
+            try:
+                result = subprocess.run(["docker", "logs", "--since", self.start, self.target["id"]],
+                                        capture_output=True, text=True, timeout=5, check=True)
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+                detail = error.stderr or error.stdout or ""
+                if isinstance(detail, bytes):
+                    detail = detail.decode(errors="replace")
+                detail = detail[-4000:]
+                with (self.output / "log-read-errors.jsonl").open("a") as output:
+                    output.write(json.dumps({"time": time.time(), "attempt": attempt,
+                                             "error": str(error), "detail": detail}) + "\n")
+                if attempt == 3:
+                    raise RuntimeError(f"Docker logs failed after 3 attempts: {error}; {detail}") from None
+                time.sleep(1)
+                continue
+            # Retry the same complete interval; partial output is not evidence.
+            logs = result.stdout + result.stderr
+            (self.output / "target.log").write_text(logs)
+            return logs
+
+    def sample(self, phase):
+        logs = self.logs()
+        url = self.target["url"]
+        head = int(rpc(url, "eth_blockNumber"), 16)
+        reference = max(int(rpc(node["url"], "eth_blockNumber"), 16) for node in self.producers)
+        sample = {"time": time.time(), "phase": phase, "head": head, "reference": reference,
+                  "lag": reference - head, "peers": int(rpc(url, "net_peerCount"), 16),
+                  "syncing": rpc(url, "eth_syncing"),
+                  "identified": logs.count("Identified stuck transactions for rebroadcast"),
+                  "rebroadcast": logs.count("Rebroadcast stuck transactions")}
+        if self.tx:
+            tx = rpc(url, "eth_getTransactionByHash", [self.tx])
+            if tx is None or tx["blockHash"] is not None:
+                raise RuntimeError("Fixture transaction must remain pending throughout the test")
+            if pool_hashes(url) != {self.tx}:
+                raise RuntimeError("The fixture must be the only transaction in the target pool")
+        with (self.output / "samples.jsonl").open("a") as output:
+            output.write(json.dumps(sample) + "\n")
+        print(json.dumps(sample), flush=True)
+        return sample
+
+    def wait(self, phase, condition):
+        deadline = time.monotonic() + self.args.timeout
+        last_error = None
+        while time.monotonic() < deadline:
+            try:
+                sample = self.sample(phase)
+            except (OSError, urllib.error.URLError) as error:
+                last_error = error
+                time.sleep(1)
+                continue
+            if condition(sample):
+                return sample
+            time.sleep(1)
+        if last_error is not None:
+            raise RuntimeError(f"Timed out waiting for {phase}: {last_error}")
+        raise RuntimeError(f"Timed out waiting for {phase}")
+
+    def cast(self, *args):
+        return command("docker", "run", "--rm", "--add-host",
+                       "host.docker.internal:host-gateway", "--entrypoint", "cast",
+                       self.args.cast_image, *args).strip()
+
+    def fund_fixture(self):
+        if not self.args.funding_key:
+            raise RuntimeError("Set REBROADCAST_FUNDER_KEY to a funded devnet account")
+        wallet = parse_wallet(self.cast("wallet", "new", "--json"))
+        self.fixture_key = wallet["private_key"]
+        self.docker_url = self.target["url"].replace("127.0.0.1", "host.docker.internal", 1)
+        funding = self.cast("send", "--async", "--rpc-url", self.docker_url,
+                            "--private-key", self.args.funding_key, "--legacy",
+                            "--gas-price", "30000000000", wallet["address"], "--value", "1ether")
+        self.wait("fund-fixture", lambda s: rpc(self.target["url"], "eth_getTransactionReceipt", [funding]) is not None)
+        receipt = rpc(self.target["url"], "eth_getTransactionReceipt", [funding])
+        if receipt["status"] != "0x1":
+            raise RuntimeError("Fixture funding transaction failed")
+        self.wait("empty-pools", lambda s: all(not pool_hashes(node["url"])
+                  for node in [self.target] + self.nodes))
+
+    def seed(self):
+        self.tx = self.cast("send", "--async", "--rpc-url", self.docker_url,
+                            "--private-key", self.fixture_key, "--legacy", "--nonce", "0",
+                            "--gas-price", "30000000000",
+                            "0x000000000000000000000000000000000000dEaD", "--value", "1")
+        self.start = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        self.summary["transaction"] = self.tx
+
+    def gas_price(self, node, price):
+        result = command("docker", "exec", node["id"], "bor", "attach", "/var/lib/bor/bor.ipc",
+                         "--exec", f"miner.setGasPrice({price})")
+        if result.strip() != "true":
+            raise RuntimeError(f"Could not set fixture gas price for {node['name']}: {result}")
+
+    def set_peer(self, action, enode):
+        result = command("docker", "exec", self.target["id"], "bor", "attach",
+                         "/var/lib/bor/bor.ipc", "--exec", f'admin.{action}Peer("{enode}")')
+        if result.strip() != "true":
+            raise RuntimeError(f"Could not {action} fixture peer: {result}")
+
+    def retain_pending(self):
+        for node in self.producers:
+            config = command("docker", "exec", node["id"], "cat", "/etc/bor/config.toml")
+            match = re.search(r'^\s*gasprice\s*=\s*"(\d+)"', config, re.MULTILINE)
+            if match is None:
+                raise RuntimeError("Fixture needs an explicit validator gas price to restore")
+            self.fees.append((node, int(match[1])))
+            self.gas_price(node, 1_000_000_000_000)
+
+    def restore_fees(self):
+        failures = []
+        for node, price in self.fees[:]:
+            try:
+                self.gas_price(node, price)
+                self.fees.remove((node, price))
+            except (RuntimeError, subprocess.SubprocessError) as error:
+                failures.append(str(error))
+        if failures:
+            raise RuntimeError("Gas-price cleanup failed: " + "; ".join(failures))
+
+    def cleanup(self):
+        failures = []
+        for name in ("restore", "reconnect", "restore_fees"):
+            try:
+                getattr(self, name)()
+            except (Exception, KeyboardInterrupt) as error:
+                failures.append(f"{name}: {error}")
+        if failures:
+            raise RuntimeError("Cleanup failed: " + "; ".join(failures))
+
+    def create_gap(self):
+        for enode in self.removed_peers:
+            self.set_peer("remove", enode)
+        self.wait("build-gap", lambda s: s["peers"] == 0
+                  and s["lag"] >= self.args.initial_gap)
+
+    def reconnect(self):
+        failures = []
+        for enode in self.removed_peers[:]:
+            try:
+                self.set_peer("add", enode)
+                self.removed_peers.remove(enode)
+            except (RuntimeError, subprocess.SubprocessError) as error:
+                failures.append(str(error))
+        if failures:
+            raise RuntimeError("Peer cleanup failed: " + "; ".join(failures))
+
+    def tc(self, node, *args):
+        return command("docker", "run", "--rm", "--network", f"container:{node['id']}",
+                       "--cap-add", "NET_ADMIN", "--entrypoint", "tc", self.args.tc_image, *args)
+
+    def partition(self):
+        output = command("docker", "exec", self.target["id"], "bor", "attach",
+                         "/var/lib/bor/bor.ipc", "--exec", "JSON.stringify(admin.peers)")
+        # The console quotes the JSON string returned by the expression.
+        peers = json.loads(json.loads(output))
+        self.removed_peers = [peer["enode"] for peer in peers]
+        for node in self.nodes:
+            self.tc(node, "qdisc", "add", "dev", "eth0", "root", "handle", "1:",
+                    "prio", "bands", "3", "priomap", *(["0"] * 16))
+            self.shaped.append(node)
+            self.tc(node, "qdisc", "add", "dev", "eth0", "parent", "1:3", "handle", "30:",
+                    "netem", "loss", "100%")
+            for port in ["sport", "dport"]:
+                self.tc(node, "filter", "add", "dev", "eth0", "protocol", "ip", "parent", "1:",
+                        "prio", "1", "u32", "match", "ip", "dst", self.target["ip"] + "/32",
+                        "match", "ip", "protocol", "6", "0xff", "match", "ip", port,
+                        "30303", "0xffff", "flowid", "1:3")
+
+    def impair(self):
+        for node in self.shaped:
+            self.tc(node, "qdisc", "change", "dev", "eth0", "parent", "1:3", "handle", "30:",
+                    "netem", "delay", self.args.delay, "rate", self.args.rate, "limit", "10000")
+
+    def restore(self):
+        failures = []
+        for node in self.shaped[:]:
+            try:
+                self.tc(node, "qdisc", "del", "dev", "eth0", "root")
+                self.shaped.remove(node)
+            except (RuntimeError, subprocess.SubprocessError) as error:
+                failures.append(str(error))
+        if failures:
+            raise RuntimeError("Network cleanup failed: " + "; ".join(failures))
+
+    def suppression(self):
+        first = self.wait("detect-sync", lambda s: s["lag"] >= self.args.min_lag and s["peers"] > 0)
+        start = first
+        active_sync = start if start["syncing"] is not False else None
+        duration = min(self.args.timeout, self.args.window) if active_sync else self.args.timeout
+        deadline = time.monotonic() + duration
+        last = start
+        while time.monotonic() < deadline:
+            last = self.sample("suppressed")
+            if last["peers"] == 0:
+                raise RuntimeError("Suppression window lost its connected-peer precondition")
+            if last["rebroadcast"] != start["rebroadcast"]:
+                raise RuntimeError("Out-of-sync node rebroadcast stuck transactions")
+            # Peer handshakes and ancestor discovery precede eth_syncing progress.
+            # Keep checking suppression, but start the short window at active sync.
+            if active_sync is None and last["syncing"] is not False:
+                active_sync = last
+                deadline = min(deadline, time.monotonic() + self.args.window)
+            if last["lag"] < self.args.min_lag:
+                break
+            if (active_sync is not None and last["head"] > start["head"]
+                    and last["identified"] - start["identified"] >= 3):
+                break
+            time.sleep(1)
+        identified = last["identified"] - start["identified"]
+        if identified < 3:
+            raise RuntimeError("Need at least three stuck-tx batches to prove suppression")
+        if last["head"] <= start["head"]:
+            raise RuntimeError("Target block did not advance during suppressed catch-up")
+        if active_sync is None:
+            raise RuntimeError("Target never reported an active catch-up sync")
+        self.summary["suppression"] = {"first_sync": first, "start": start, "end": last,
+                                       "active_sync": active_sync, "observed_active_sync": True,
+                                       "identified_batches": identified, "rebroadcast_batches": 0}
+
+    def run(self):
+        self.wait("initial-sync", lambda s: s["head"] >= 20 and s["lag"] <= 2
+                  and s["peers"] > 0 and s["syncing"] is False)
+        self.fund_fixture()
+        self.retain_pending()
+        self.seed()
+        self.summary["baseline"] = self.wait("baseline", lambda s: s["rebroadcast"] >= 3)
+        self.partition()
+        self.create_gap()
+        self.impair()
+        self.reconnect()
+        self.suppression()
+        self.restore()
+        caught_up = self.wait("catch-up", lambda s: s["lag"] <= 2 and s["syncing"] is False)
+        self.summary["recovery"] = self.wait(
+            "recovery", lambda s: s["lag"] <= 2 and s["peers"] > 0
+            and s["rebroadcast"] >= caught_up["rebroadcast"] + 3)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--enclave", required=True)
+    parser.add_argument("--artifacts", required=True)
+    parser.add_argument("--service", default="l2-el-2-bor-heimdall-v2-rpc")
+    parser.add_argument("--producers", nargs="+", default=[
+        "l2-el-1-bor-heimdall-v2-validator"])
+    parser.add_argument("--other-peers", nargs="*", default=[])
+    parser.add_argument("--funding-key", default=os.environ.get("REBROADCAST_FUNDER_KEY"))
+    parser.add_argument("--delay", default="1500ms")
+    parser.add_argument("--rate", default="64kbit")
+    parser.add_argument("--window", type=int, default=12,
+                        help="Seconds allowed to collect remaining evidence after active sync begins")
+    parser.add_argument("--min-lag", type=int, default=3)
+    parser.add_argument("--initial-gap", type=int, default=20)
+    parser.add_argument("--timeout", type=int, default=180)
+    parser.add_argument("--tc-image", default="gaiadocker/iproute2:3.3")
+    parser.add_argument("--cast-image", default=CAST_IMAGE)
+    args = parser.parse_args()
+    if args.window < 8 or args.min_lag < 1 or args.initial_gap < args.min_lag or args.timeout < 1:
+        parser.error("window must be >=8 seconds; lag values and timeout must be positive")
+    output = pathlib.Path(args.artifacts)
+    output.mkdir(parents=True, exist_ok=True)
+    summary = {"enclave": args.enclave, "result": "FAIL", "phase": "initialization"}
+    test = None
+    signal.signal(signal.SIGTERM, interrupted)
+    try:
+        test = Test(args)
+        summary = test.summary
+        test.run()
+        summary["result"] = "PASS"
+    except (Exception, KeyboardInterrupt) as error:
+        summary.update(result="FAIL", error=str(error))
+        raise
+    finally:
+        try:
+            if test is not None:
+                test.cleanup()
+        except Exception as error:
+            summary.update(result="FAIL", cleanup_error=str(error))
+            raise
+        finally:
+            (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    print("PASS: rebroadcast enabled when synced, suppressed while behind, restored after catch-up")
+
+
+if __name__ == "__main__":
+    main()

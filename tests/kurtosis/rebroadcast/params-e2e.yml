@@ -1,0 +1,21 @@
+dev:
+  l1_backend: anvil
+
+polygon_pos_package:
+  log_level: debug
+  log_format: json
+  network_params:
+    el_block_interval_seconds: 1
+  participants:
+    - kind: validator
+      cl_type: heimdall-v2
+      cl_image: heimdall-v2:local
+      el_type: bor
+      el_image: bor:rebroadcast-e2e
+      count: 1
+    - kind: rpc
+      cl_type: heimdall-v2
+      cl_image: heimdall-v2:local
+      el_type: bor
+      el_image: bor:rebroadcast-e2e
+      count: 1
