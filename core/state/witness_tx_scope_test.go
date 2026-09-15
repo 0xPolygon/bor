@@ -178,3 +178,59 @@ func TestIntermediateRootClosesOpenScope(t *testing.T) {
 		t.Fatal("IntermediateRoot dropped the staged non-existent read")
 	}
 }
+
+// TestCommitWitnessTxSurvivesStoppedPrefetcher pins the prefetcher nil-guard in
+// CommitWitnessTx.
+//
+// The buffer is filled while the prefetcher is live and drained after it is
+// gone -- the ordering a shutdown or a StopPrefetcher between attempt and
+// commit produces. Without the guard the drain dereferences a nil prefetcher
+// and takes the node down; the deferred non-existent reads must still be
+// applied.
+func TestCommitWitnessTxSurvivesStoppedPrefetcher(t *testing.T) {
+	state, addrs, roots, keys := witnessScopeState(t)
+
+	ghost := common.BytesToAddress([]byte("does-not-exist"))
+
+	state.BeginWitnessTx()
+	state.recordWitnessAccountRead(addrs[0])
+	state.recordWitnessSlotRead(crypto.Keccak256Hash(addrs[0][:]), roots[addrs[0]], addrs[0], keys[0])
+	state.recordNonExistentRead(ghost)
+
+	if len(state.witnessTx.accounts) == 0 || len(state.witnessTx.slots) == 0 {
+		t.Fatal("precondition: nothing was buffered while the prefetcher was live")
+	}
+
+	state.StopPrefetcher()
+
+	state.CommitWitnessTx()
+
+	if state.witnessTx != nil {
+		t.Fatal("CommitWitnessTx left the scope open")
+	}
+	if _, ok := state.nonExistentReads[ghost]; !ok {
+		t.Fatal("CommitWitnessTx dropped the non-existent read when the prefetcher was gone")
+	}
+}
+
+// TestRecordWitnessReadsWithoutScopeAreImmediate pins the other side of the
+// branch the scope adds: with no scope open, the read-driven bookkeeping must
+// take effect at once rather than being buffered. This is the path every
+// non-producing caller runs.
+func TestRecordWitnessReadsWithoutScopeAreImmediate(t *testing.T) {
+	state, addrs, roots, keys := witnessScopeState(t)
+
+	ghost := common.BytesToAddress([]byte("does-not-exist"))
+
+	// No BeginWitnessTx: these must not be buffered.
+	state.recordWitnessAccountRead(addrs[0])
+	state.recordWitnessSlotRead(crypto.Keccak256Hash(addrs[0][:]), roots[addrs[0]], addrs[0], keys[0])
+	state.recordNonExistentRead(ghost)
+
+	if state.witnessTx != nil {
+		t.Fatal("reads outside a scope opened one")
+	}
+	if _, ok := state.nonExistentReads[ghost]; !ok {
+		t.Fatal("a non-existent read outside a scope must land immediately")
+	}
+}

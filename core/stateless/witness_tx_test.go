@@ -175,3 +175,21 @@ func TestWitnessTxBeginReplacesOpenScope(t *testing.T) {
 		t.Error("the reopened scope's code did not commit")
 	}
 }
+
+// TestWitnessTxScopeNilReceiver pins the nil-receiver guards on all three scope
+// entry points.
+//
+// StateDB calls these through s.witness, which is nil on every node that does
+// not record witnesses -- that is, all of mainnet today. Without the guards
+// each call is a nil dereference on the hot path, so the guards are the reason
+// the feature is inert rather than fatal when it is off.
+func TestWitnessTxScopeNilReceiver(t *testing.T) {
+	t.Parallel()
+
+	var w *Witness
+
+	// Each of these dereferences w if its guard is removed.
+	w.BeginTx()
+	w.CommitTx()
+	w.DiscardTx()
+}
