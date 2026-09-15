@@ -455,7 +455,7 @@ func TestBarrierDeadlineStillPassesACoveringBlock(t *testing.T) {
 // failing, and paying them all pushes blocks past their slot — which is what
 // arms bor's span-check path and turns a store outage into a chain
 // slowdown. A devnet outage cost 22s per block this way.
-func TestUnreachableStoreCostsNoWaiting(t *testing.T) {
+func TestWriteDownCostsNoWaiting(t *testing.T) {
 	h := startHarness(t)
 	p := newTestPublisher(t, h, &fakeChain{canonical: map[uint64]common.Hash{}})
 
@@ -463,7 +463,7 @@ func TestUnreachableStoreCostsNoWaiting(t *testing.T) {
 	waitHead(t, h, p, 5*time.Second)
 	parent := sealHash(t, sealed)
 
-	p.unreachable.Store(true)
+	p.writeDown.Store(true)
 
 	header := testHeader(2, parent)
 	p.SealBlock(blockFor(header, nil))
@@ -471,11 +471,11 @@ func TestUnreachableStoreCostsNoWaiting(t *testing.T) {
 	start := time.Now()
 
 	if v := p.ConfirmSeal(4 * time.Second); v != miner.SealUnknown {
-		t.Fatalf("verdict = %v, want Unknown with the store unreachable", v)
+		t.Fatalf("verdict = %v, want Unknown with the write path down", v)
 	}
 
 	if !p.AwaitSequenced(4*time.Second, 3, nil) {
-		t.Fatal("the barrier gated production on an unreachable store")
+		t.Fatal("the barrier gated production while the write path was down")
 	}
 
 	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
@@ -483,20 +483,54 @@ func TestUnreachableStoreCostsNoWaiting(t *testing.T) {
 	}
 }
 
-// And the moment a read succeeds the publisher stops treating the store as
-// down: a latched flag would keep holding builds after recovery.
-func TestSuccessfulReadClearsUnreachable(t *testing.T) {
+// A successful read closes the read breaker, so the critical path stops
+// skipping reads the moment the consumer endpoint is back: a latched breaker
+// would keep building blind after recovery.
+func TestSuccessfulReadClosesTheReadBreaker(t *testing.T) {
+	shortProbeInterval(t)
+
 	h := startHarness(t)
 	p := newTestPublisher(t, h, &fakeChain{canonical: map[uint64]common.Hash{}})
 
 	sealed := publishBlock(t, p, 1, common.Hash{0xef}, 1)
 	waitHead(t, h, p, 5*time.Second)
 
-	p.unreachable.Store(true)
+	p.read.breaker.silent()
+	p.read.breaker.silent()
+
+	if !p.read.breaker.isOpen() {
+		t.Fatal("the breaker did not open after consecutive silent reads")
+	}
+
+	// The probe interval has to elapse before a read goes out at all; the
+	// breaker's own probe slot is what lets this one through.
+	time.Sleep(readProbeInterval)
 	p.AdoptWindow(2, sealHash(t, sealed))
 
-	if p.unreachable.Load() {
-		t.Fatal("a successful build-start read left the store marked down")
+	if p.read.breaker.isOpen() {
+		t.Fatal("a successful build-start read left the breaker open")
+	}
+}
+
+// And a read going through must not clear the write flag. The two endpoints
+// fail independently: while the ingress is down every gateway read succeeds,
+// and a shared flag was cleared by each of them — so the producer went on
+// waiting out the pre-seal barrier and the seal gate on every block for an
+// ack that could never arrive. That is the 25-33 % throughput loss the
+// fault-injection campaign measured against a healthy read path.
+func TestSuccessfulReadDoesNotClearTheWriteFlag(t *testing.T) {
+	h := startHarness(t)
+	p := newTestPublisher(t, h, &fakeChain{canonical: map[uint64]common.Hash{}})
+
+	sealed := publishBlock(t, p, 1, common.Hash{0xef}, 1)
+	waitHead(t, h, p, 5*time.Second)
+
+	p.writeDown.Store(true)
+	p.AdoptWindow(2, sealHash(t, sealed))
+
+	if !p.writeDown.Load() {
+		t.Fatal("a successful read cleared the write-path flag, which it " +
+			"proves nothing about")
 	}
 }
 
@@ -533,10 +567,10 @@ func TestCatchUpDoesNotGateSealing(t *testing.T) {
 	}
 }
 
-// The unreachable flag must be set by the transport layer itself when the
-// store goes away — the no-wait short-circuits are worthless if nothing
-// arms them.
-func TestTransportFailureMarksTheStoreUnreachable(t *testing.T) {
+// The write flag must be set by the transport layer itself when the store
+// goes away — the no-wait short-circuits are worthless if nothing arms
+// them.
+func TestTransportFailureMarksTheWritePathDown(t *testing.T) {
 	h := startHarness(t)
 	p := newTestPublisher(t, h, &fakeChain{canonical: map[uint64]common.Hash{}})
 
@@ -547,7 +581,7 @@ func TestTransportFailureMarksTheStoreUnreachable(t *testing.T) {
 	p.OpenBlock(2, 1700000002, common.Hash{0xaa}, 30_000_000, fee25())
 	p.PublishTx(testTx(t, 0))
 
-	waitFor(t, 10*time.Second, func() bool { return p.unreachable.Load() })
+	waitFor(t, 10*time.Second, func() bool { return p.writeDown.Load() })
 }
 
 // A sealed foreign generation at the flush height is a stronger claim than a

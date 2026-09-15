@@ -60,4 +60,16 @@ var (
 	reconcileYield       = metrics.NewRegisteredCounter("sequencer/reconcile/yield", nil)
 	reconcileResync      = metrics.NewRegisteredCounter("sequencer/reconcile/resync", nil)
 	reconcileTimer       = metrics.NewRegisteredTimer("sequencer/reconcile/duration", nil)
+
+	// The store kept off the block path. Each counter is a wait the producer
+	// declined to pay because the answer could not arrive: barrierskipped
+	// and gatewritedown when the publish transport is down, readskipped and
+	// readbreakeropened when the consumer endpoint has gone quiet. Rising
+	// values mean the store is degraded and block production is not — which
+	// is the whole point, and the only place it shows.
+	publishBarrierSkipped = metrics.NewRegisteredCounter("sequencer/publish/barrierskipped", nil)
+	gateWriteDownSkip     = metrics.NewRegisteredCounter("sequencer/gate/writedownskip", nil)
+	readsSkipped          = metrics.NewRegisteredCounter("sequencer/read/skipped", nil)
+	readBreakerOpened     = metrics.NewRegisteredCounter("sequencer/read/breakeropened", nil)
+	readBreakerClosed     = metrics.NewRegisteredCounter("sequencer/read/breakerclosed", nil)
 )

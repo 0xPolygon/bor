@@ -118,11 +118,26 @@ type Publisher struct {
 	// proceeds; the post-seal gate and consensus remain the arbiters.
 	barrierRefusals refusalStreak
 	seed            commitment.Head // an empty store's head, computable without the store
-	// unreachable is set while the transport is failing. Every per-block
-	// wait on the store is pointless in that state, and paying them all
-	// pushes blocks past their slot — which is what arms bor's span-check
-	// path and turns a store outage into a chain slowdown.
-	unreachable atomic.Bool
+	// writeDown is set while the publish transport is failing. No ack can
+	// arrive in that state, so every per-block wait for one is pointless,
+	// and paying them all pushes blocks past their slot — which is what
+	// arms bor's span-check path and turns a store outage into a chain
+	// slowdown.
+	//
+	// It covers the write path alone. A successful read proves nothing
+	// about whether our entries are landing: the two endpoints fail
+	// independently, and a single flag fed by both was clear during an
+	// ingress outage (every gateway read cleared it) and clear during a
+	// gateway outage (nothing but the publish transport ever set it), so
+	// each outage went on paying the other path's waits. The read path
+	// carries its own breaker.
+	//
+	// An arriving ack is the only thing that clears it, because an ack is
+	// the only evidence. A stream session ending is not: while an outage
+	// holds a build, the held-build watchdog ends one every 400 ms from a
+	// local timer, and clearing on that left the flag false for all but a
+	// handful of blocks — the waits went on being paid.
+	writeDown atomic.Bool
 
 	failed atomic.Bool
 
@@ -261,8 +276,10 @@ func (p *Publisher) sealConsensusInvalid(header *types.Header) bool {
 	return err != nil
 }
 
+// markReachable records that the store answered a read. It deliberately
+// does not clear writeDown: a read going through says the consumer endpoint
+// is alive, not that our entries are landing.
 func (p *Publisher) markReachable() {
-	p.unreachable.Store(false)
 	p.lastContact.Store(time.Now().UnixNano())
 }
 

@@ -30,7 +30,7 @@ func coverageSkip(height uint64, reason string, ctx ...any) {
 // here means exactly that (the resync signal is armed).
 //
 // A store that is merely unreachable, slow, or catching up after an outage
-// returns true on the deadline: block production never waits on the store.
+// returns true without waiting: block production never waits on the store.
 // A build the classification muted published nothing, so it seals without
 // a mirror; its seal flush reconciles the store afterward.
 func (p *Publisher) AwaitSequenced(timeout time.Duration, number uint64, txs []*types.Transaction) bool {
@@ -39,6 +39,18 @@ func (p *Publisher) AwaitSequenced(timeout time.Duration, number uint64, txs []*
 	for {
 		if p.failed.Load() {
 			return true // publishing is off; it must not gate production
+		}
+
+		if p.writeDown.Load() {
+			// The entries this waits on cannot be acked while the publish
+			// transport is down, so the wait can only end at the deadline,
+			// and the verdict it ends with is the one available now. Waiting
+			// out the budget every block is what coupled the chain's cadence
+			// to the store.
+			publishBarrierSkipped.Inc(1)
+			coverageSkip(number, "write path down")
+
+			return true
 		}
 
 		p.mu.Lock()
@@ -114,7 +126,7 @@ func (p *Publisher) AwaitSequenced(timeout time.Duration, number uint64, txs []*
 // re-anchor — is content this block cannot vouch for, and the refusal
 // stands, as it does for anything unreadable.
 func (p *Publisher) sealedThroughParent(height uint64) bool {
-	if height < 2 || p.unreachable.Load() || p.read == nil || p.read.cons == nil {
+	if height < 2 || p.read == nil || p.read.cons == nil {
 		return false
 	}
 
@@ -187,12 +199,6 @@ func (p *Publisher) armResync() {
 // content — position agreement says nothing about the transactions we are
 // about to broadcast, and those are what the store promised.
 func (p *Publisher) sealMirror(height uint64, txs []*types.Transaction) bool {
-	if p.unreachable.Load() {
-		coverageSkip(height, "store unreachable")
-
-		return true // production never waits on a store we cannot reach
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), tailReadTimeout)
 	defer cancel()
 
