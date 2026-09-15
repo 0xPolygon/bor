@@ -1836,15 +1836,22 @@ mainloop:
 				continue
 			}
 
-			// Same reasoning as commitTransaction: this reads state for a
-			// transaction that may be dropped on the next line.
+			// PIP-15 known-accounts validation is producer-side admission
+			// control: the conditional options arrive with the submission and
+			// never travel in the block, so no importing node re-runs this
+			// check. Its reads therefore belong in nobody's witness -- not even
+			// when the transaction goes on to be included, where keeping them
+			// would make the producer's witness a strict superset of every
+			// importer's and trip WIT/2's cross-peer page-count check.
+			//
+			// So the scope is always discarded, never committed. Discarding
+			// also evicts the read caches these lookups populated, so a later
+			// genuinely-included read of the same slot still resolves its trie
+			// path into the witness instead of returning a silent cache hit.
 			env.state.BeginWitnessTx()
 			err := env.state.ValidateKnownAccounts(options.KnownAccounts)
-			if err != nil {
-				env.state.DiscardWitnessTx()
-			} else {
-				env.state.CommitWitnessTx()
-			}
+			env.state.DiscardWitnessTx()
+
 			if err != nil {
 				log.Trace("Dropping conditional transaction", "from", from, "hash", tx.Hash(), "reason", err)
 				txs.Pop()

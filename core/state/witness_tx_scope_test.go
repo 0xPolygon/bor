@@ -234,3 +234,83 @@ func TestRecordWitnessReadsWithoutScopeAreImmediate(t *testing.T) {
 		t.Fatal("a non-existent read outside a scope must land immediately")
 	}
 }
+
+// TestKnownAccountsValidationIsWitnessNeutral pins the PIP-15 property.
+//
+// Conditional (known-accounts) validation is producer-side admission control:
+// the options arrive with the submission and never travel in the block, so no
+// importing node re-runs the check. Its reads must therefore leave the witness
+// exactly as they found it — whether the transaction is later dropped OR
+// included. Committing them instead would make the producer's witness a strict
+// superset of every importer's, which is what WIT/2's cross-peer page-count
+// check punishes.
+//
+// miner/worker.go discards this scope unconditionally; this test is what makes
+// that a property rather than a comment.
+func TestKnownAccountsValidationIsWitnessNeutral(t *testing.T) {
+	run := func(validate bool, commitScope bool) map[string]struct{} {
+		state, addrs, _, keys := benchState(4, 4)
+
+		witness, err := stateless.NewWitness(&types.Header{Number: big.NewInt(1)}, nil)
+		if err != nil {
+			t.Fatalf("witness: %v", err)
+		}
+		state.StartPrefetcher("known-accounts", witness, nil)
+		defer state.StopPrefetcher()
+
+		if validate {
+			// A check that PASSES: the expected value is the stored one.
+			known := types.KnownAccounts{
+				addrs[1]: &types.Value{Storage: map[common.Hash]common.Hash{keys[1]: keys[1]}},
+			}
+
+			state.BeginWitnessTx()
+			if err := state.ValidateKnownAccounts(known); err != nil {
+				t.Fatalf("precondition: validation must succeed, got %v", err)
+			}
+			if commitScope {
+				state.CommitWitnessTx()
+			} else {
+				state.DiscardWitnessTx()
+			}
+		}
+
+		// The block's own work, identical in every variant.
+		state.SetBalance(addrs[0], uint256.NewInt(7), tracing.BalanceChangeUnspecified)
+		state.IntermediateRoot(true)
+
+		nodes := make(map[string]struct{}, len(witness.State))
+		for k := range witness.State {
+			nodes[k] = struct{}{}
+		}
+
+		return nodes
+	}
+
+	baseline := run(false, false)
+	discarded := run(true, false)
+	committed := run(true, true)
+
+	for node := range discarded {
+		if _, ok := baseline[node]; !ok {
+			t.Errorf("discarded known-accounts validation still added a node to the witness (%d vs %d)",
+				len(discarded), len(baseline))
+
+			break
+		}
+	}
+
+	if len(discarded) != len(baseline) {
+		t.Errorf("witness size changed after a discarded validation: %d, want %d", len(discarded), len(baseline))
+	}
+
+	// Control: committing the same scope must change the witness, or the
+	// assertion above is vacuous and the validation never read anything.
+	if len(committed) == len(baseline) {
+		t.Fatalf("control failed: committing the validation scope changed nothing (%d nodes both ways), "+
+			"so this test proves nothing", len(committed))
+	}
+
+	t.Logf("known-accounts validation stages %d nodes; discarding leaves the witness at the baseline %d",
+		len(committed)-len(baseline), len(baseline))
+}
