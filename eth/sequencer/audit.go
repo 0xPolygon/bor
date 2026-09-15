@@ -2,6 +2,7 @@ package sequencer
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"google.golang.org/grpc"
@@ -29,23 +30,20 @@ const auditReadTimeout = 5 * time.Second
 // restarting still converges instead of re-walking the same prefix forever.
 const auditCheckpointInterval = 256
 
-// auditFloorEntries and auditFloorPages bound the scan for the store's oldest
-// fully retained block. A page ends at the first block boundary in all but the
-// pathological case of a block with more records than a page holds, so the
-// page budget is small on purpose: the floor is an optimisation, and failing
-// to resolve it costs a NOT_FOUND per aged-out height rather than correctness.
-const (
-	auditFloorEntries = 1024
-	auditFloorPages   = 4
-)
+// auditFloorEntries bounds the floor read. One entry is all it needs: the
+// gateway's served window always begins at a BlockOpen — it skips entries
+// until the first open on a cold start and evicts at generation boundaries —
+// so the first entry of a Range with after unset names the oldest height the
+// store serves whole. A handful of entries rather than one costs nothing and
+// leaves the response readable in a log.
+const auditFloorEntries = 8
 
 // fetchGeneration reads the latest generation stored at a height. A NotFound
 // error means the store holds nothing there.
 type fetchGeneration func(ctx context.Context, height uint64) ([]*pb.Entry, error)
 
-// fetchOldest reads forward from the store's earliest retained entry, or from
-// after a previous page's resume token, and returns the next token with it.
-type fetchOldest func(ctx context.Context, after []byte) ([]*pb.Entry, []byte, error)
+// fetchOldest reads the store's earliest retained entries.
+type fetchOldest func(ctx context.Context) ([]*pb.Entry, error)
 
 // auditChain is the canonical-chain surface the audit needs: it compares
 // stored seals against canonical hashes and never executes anything, so it
@@ -56,11 +54,16 @@ type auditChain interface {
 }
 
 type auditor struct {
-	db      ethdb.Database
-	chain   auditChain
-	fetch   fetchGeneration
-	oldest  fetchOldest
-	advance func(uint64)
+	db     ethdb.Database
+	chain  auditChain
+	fetch  fetchGeneration
+	oldest fetchOldest
+	// finalized reports the newest finalized height and whether there is
+	// one yet. It is the walk's ceiling (see rangeToAudit), and nil on a
+	// node with no milestone source — which is not the same as a source
+	// reporting nothing final, and gets the opposite treatment.
+	finalized func() (uint64, bool)
+	advance   func(uint64)
 }
 
 type auditVerdict int
@@ -95,16 +98,35 @@ type auditSummary struct {
 }
 
 // rangeToAudit reports the height range this pass should walk: everything
-// between the watermark and the current head. ok is false when there is
-// nothing to do, which includes the first run on a node that has never
-// audited — that seeds the watermark at the current head rather than walking
-// backwards from an arbitrary point.
+// between the watermark and finality. ok is false when there is nothing to
+// do, which includes the first run on a node that has never audited — that
+// seeds the watermark at the current head rather than walking backwards from
+// an arbitrary point.
+//
+// Finality, not the head, is the ceiling. A verdict is only as good as the
+// canonical chain it was reached against, and the watermark never rewinds,
+// so a height judged before a reorg replaced it would keep a verdict about
+// a block that no longer exists. At or below a milestone that cannot happen.
+// Heights above it are not judged at all; they report as pendingFrom, which
+// is what they are. The lag is a handful of blocks, so coverage is unchanged.
+//
+// A node with no milestone source falls back to the head: bounding at a
+// finality it cannot see would freeze the watermark forever.
 func (a *auditor) rangeToAudit() (from, through uint64, ok bool) {
 	head := a.chain.CurrentBlock()
 	if head == nil || head.Number == nil {
 		return 0, 0, false
 	}
 	through = head.Number.Uint64()
+
+	if a.finalized != nil {
+		final, have := a.finalized()
+		if !have {
+			return 0, 0, false // nothing is final yet; nothing is safe to judge
+		}
+
+		through = min(through, final)
+	}
 
 	watermark, stored, err := rawdb.ReadPreconfAuditedThrough(a.db)
 	if err != nil {
@@ -116,8 +138,11 @@ func (a *auditor) rangeToAudit() (from, through uint64, ok bool) {
 		return 0, 0, false
 	}
 	if !stored {
-		a.persist(through)
-		log.Info("Sequence store audit watermark seeded", "height", through)
+		// Seeded at the head rather than at finality: this judges nothing,
+		// it only declines to walk history that predates the node.
+		seed := head.Number.Uint64()
+		a.persist(seed)
+		log.Info("Sequence store audit watermark seeded", "height", seed)
 
 		return 0, 0, false
 	}
@@ -207,57 +232,44 @@ func (a *auditor) skipToStoreFloor(ctx context.Context, from, through uint64) (u
 	return floor, skipped
 }
 
-// storeFloor resolves the oldest height the store still serves in full. A
-// Range with after unset starts at the earliest retained entry, and the first
-// open at or after it opens the oldest block the store holds whole: a block
-// whose open has aged out is retained only in part, and a partial record list
-// is not comparable against a canonical block.
+// storeFloor resolves the oldest height the store still serves in full: the
+// block opened by the first entry of a Range with after unset.
+//
+// The store's contract is that a served window begins at a BlockOpen, so
+// anything else as the first entry means the read is not the one this
+// expects, and the floor goes unresolved rather than guessed. That costs
+// nothing but the walk finding the same heights unheld one at a time, which
+// is where it started.
 func (a *auditor) storeFloor(ctx context.Context) (uint64, bool) {
 	if a.oldest == nil {
 		return 0, false
 	}
 
-	var after []byte
-	for page := 0; page < auditFloorPages; page++ {
-		entries, next, err := a.oldest(ctx, after)
-		if err != nil {
-			log.Debug("Sequence store audit could not resolve the retention floor", "err", err)
+	entries, err := a.oldest(ctx)
+	if err != nil {
+		log.Debug("Sequence store audit could not resolve the retention floor", "err", err)
 
-			return 0, false
-		}
-		if len(entries) == 0 {
-			return 0, false
-		}
-		if height, ok := floorFromEntries(entries); ok {
-			return height, true
-		}
-
-		after = next
+		return 0, false
 	}
 
-	return 0, false
+	return floorFromEntries(entries)
 }
 
-// floorFromEntries reports the oldest fully retained height one page proves.
-// A seal reached before any open closes a block whose earlier entries are
-// gone, so the first height that page can vouch for is the one above it.
-// Records carry no height and prove nothing about their own block.
+// floorFromEntries reads the floor off a served window's first entry.
 func floorFromEntries(entries []*pb.Entry) (uint64, bool) {
-	for _, entry := range entries {
-		switch kind := entry.GetKind().(type) {
-		case *pb.Entry_BlockOpen:
-			return kind.BlockOpen.GetBlockNumber(), true
-		case *pb.Entry_BlockSeal:
-			header, err := decodeSealHeader(kind.BlockSeal.GetHeader())
-			if err != nil {
-				continue
-			}
-
-			return header.Number.Uint64() + 1, true
-		}
+	if len(entries) == 0 {
+		return 0, false
 	}
 
-	return 0, false
+	open := entries[0].GetBlockOpen()
+	if open == nil {
+		log.Warn("Sequence store served a window that does not start at an open",
+			"kind", fmt.Sprintf("%T", entries[0].GetKind()))
+
+		return 0, false
+	}
+
+	return open.GetBlockNumber(), true
 }
 
 // auditHeightInto compares one height and folds the verdict into summary. An
@@ -402,6 +414,13 @@ func (c *Consumer) auditLoop(ctx context.Context) {
 func (c *Consumer) runAuditPass(ctx context.Context) {
 	audit := &auditor{db: c.chain.DB(), chain: c.chain, advance: c.advanceAudited}
 
+	// Left nil on a node that wires no milestone source, which is a
+	// different answer from a source that has nothing final yet: the first
+	// falls back to the head, the second judges nothing.
+	if c.finality != nil {
+		audit.finalized = c.finalizedHeight
+	}
+
 	// Resolve the range before building a client: the common case is nothing
 	// to audit and a trigger fires on every session retry. grpc.NewClient is
 	// lazy, so this saves a client and its teardown rather than a connection,
@@ -450,22 +469,17 @@ func fetchGenerationVia(client pb.ConsumerServiceClient) fetchGeneration {
 }
 
 func fetchOldestVia(client pb.ConsumerServiceClient) fetchOldest {
-	return func(ctx context.Context, after []byte) ([]*pb.Entry, []byte, error) {
+	return func(ctx context.Context) ([]*pb.Entry, error) {
 		readCtx, cancel := context.WithTimeout(ctx, auditReadTimeout)
 		defer cancel()
 
 		// after unset resolves to the earliest retained entry.
-		req := &pb.RangeRequest{Limit: auditFloorEntries}
-		if len(after) != 0 {
-			req.After = &pb.RangeRequest_Head{Head: after}
-		}
-
-		resp, err := client.Range(readCtx, req)
+		resp, err := client.Range(readCtx, &pb.RangeRequest{Limit: auditFloorEntries})
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 
-		return resp.GetEntries(), resp.GetNext(), nil
+		return resp.GetEntries(), nil
 	}
 }
 
@@ -473,12 +487,10 @@ func fetchOldestVia(client pb.ConsumerServiceClient) fetchOldest {
 // audit pass and the canonical-head path both advance it, and a pass that
 // finishes after the live path has moved on must not rewind the mark.
 //
-// A verdict is therefore only ever as good as the canonical chain at the time
-// it was reached. A reorg below the mark replaces heights this pass already
-// judged, and nothing revisits them — re-auditing would mean rewinding the
-// mark on every reorg and re-walking, which is the cost this monotonicity
-// exists to avoid. Bor reorgs are shallow and milestones make deep ones rare,
-// so the trade is deliberate rather than free.
+// A verdict is only ever as good as the canonical chain it was reached
+// against, which is why nothing above finality is judged: at or below a
+// milestone a reorg cannot replace a height this mark has passed, so a
+// monotonic mark needs no rewinding and no re-walk.
 func (c *Consumer) advanceAudited(number uint64) {
 	c.auditMu.Lock()
 	defer c.auditMu.Unlock()

@@ -4,6 +4,7 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -130,4 +131,19 @@ func TestConfigureMinerForSequencer(t *testing.T) {
 			t.Fatal("nil chain config must preserve miner pending snapshots")
 		}
 	})
+}
+
+// The sequencer consumer takes WhitelistedMilestone and calls it from its
+// audit loop, which Start launches during construction — so it must answer
+// rather than panic before the handler is up. attachSequencer runs after
+// newHandler in production, but a goroutine holding this function is not
+// something to leave depending on that ordering, and it is exactly how the
+// wiring tests reach it.
+func TestWhitelistedMilestoneBeforeTheHandlerIsUp(t *testing.T) {
+	s := &Ethereum{blockchain: wiringChain(t, &params.BorConfig{RioBlock: big.NewInt(0)})}
+
+	whitelisted, number, hash := s.WhitelistedMilestone()
+	if whitelisted || number != 0 || hash != (common.Hash{}) {
+		t.Fatalf("milestone = (%v, %d, %v), want nothing whitelisted", whitelisted, number, hash)
+	}
 }

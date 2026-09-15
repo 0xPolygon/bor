@@ -208,7 +208,8 @@ func (s *Ethereum) attachSequencer(config *ethconfig.Config) error {
 	case "consumer":
 		// A consumer that cannot start (not a bor chain) must not block the
 		// node: preconfs stay off, everything else runs.
-		consumer, err := sequencer.NewConsumerWithTransactionLookup(config.SequencerConsumerEndpoint, s.blockchain, s.txPool)
+		consumer, err := sequencer.NewConsumerWithTransactionLookup(config.SequencerConsumerEndpoint,
+			s.blockchain, s.txPool, s.WhitelistedMilestone)
 		if err != nil {
 			log.Error("Sequencer consumer disabled", "err", err)
 
@@ -806,6 +807,14 @@ func (s *Ethereum) IsListening() bool                 { return true } // Always 
 // The miner's finality gate compares it against the local chain before a
 // producer builds.
 func (s *Ethereum) WhitelistedMilestone() (bool, uint64, common.Hash) {
+	// The sequencer holds this function and calls it from loops that start
+	// during construction, so it cannot assume the handler is up. Nothing
+	// is whitelisted before the downloader exists, which is the same answer
+	// as a node that has not reached its first milestone.
+	if s.handler == nil || s.handler.downloader == nil {
+		return false, 0, common.Hash{}
+	}
+
 	return s.Downloader().ChainValidator.GetWhitelistedMilestone()
 }
 

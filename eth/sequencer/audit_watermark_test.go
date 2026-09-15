@@ -9,6 +9,7 @@ import (
 
 	pb "github.com/0xPolygon/sequence-store-proto/sequencestore/v1"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/params"
 )
@@ -333,5 +334,64 @@ func TestStartWiresTheAuditLoop(t *testing.T) {
 			t.Fatal("Start did not run an audit pass; the loop is not wired")
 		case <-time.After(5 * time.Millisecond):
 		}
+	}
+}
+
+// The live path stops at finality too.
+//
+// Reconciling a height is not proof it will stay canonical. The pending
+// entry is removed once reconciled — whether it matched the chain or was
+// invalidated — so a reorg arriving after that writes no record anywhere,
+// and the mark has already passed the height. Below a milestone that cannot
+// happen, which is what makes a mark that never rewinds honest.
+func TestWatermarkStopsAtFinality(t *testing.T) {
+	h := startExecHarness(t)
+	consumer := newAuditTestConsumer(h)
+	consumer.watching.Store(true)
+
+	head := h.chain.CurrentBlock().Number.Uint64()
+	if err := rawdb.WritePreconfAuditedThrough(h.chain.DB(), head-1); err != nil {
+		t.Fatalf("seed watermark: %v", err)
+	}
+
+	// Finality trails the head, so the height the live path would step to is
+	// still reorgable.
+	consumer.finality = func() (bool, uint64, common.Hash) { return true, head - 1, common.Hash{} }
+
+	consumer.markCanonicalHeadAudited()
+
+	if got, _, _ := rawdb.ReadPreconfAuditedThrough(h.chain.DB()); got != head-1 {
+		t.Fatalf("watermark = %d, want it held at %d: the head is above finality", got, head-1)
+	}
+
+	// Once the milestone covers it, the same call steps.
+	consumer.finality = func() (bool, uint64, common.Hash) { return true, head, common.Hash{} }
+	consumer.markCanonicalHeadAudited()
+
+	if got, _, _ := rawdb.ReadPreconfAuditedThrough(h.chain.DB()); got != head {
+		t.Fatalf("watermark = %d, want %d once finality covers the height", got, head)
+	}
+}
+
+// A node with no milestone source keeps the old behaviour rather than
+// freezing: no source is not the same as nothing final.
+func TestWatermarkWithoutAMilestoneSourceStillAdvances(t *testing.T) {
+	h := startExecHarness(t)
+	consumer := newAuditTestConsumer(h)
+	consumer.watching.Store(true)
+
+	head := h.chain.CurrentBlock().Number.Uint64()
+	if err := rawdb.WritePreconfAuditedThrough(h.chain.DB(), head-1); err != nil {
+		t.Fatalf("seed watermark: %v", err)
+	}
+
+	if consumer.finality != nil {
+		t.Fatal("the test consumer unexpectedly wires a milestone source")
+	}
+
+	consumer.markCanonicalHeadAudited()
+
+	if got, _, _ := rawdb.ReadPreconfAuditedThrough(h.chain.DB()); got != head {
+		t.Fatalf("watermark = %d, want %d with no milestone source", got, head)
 	}
 }

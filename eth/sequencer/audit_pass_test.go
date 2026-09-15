@@ -765,18 +765,22 @@ func TestAuditCountsUnheldHeightsWhereverTheySit(t *testing.T) {
 	}
 }
 
-// oldestFrom serves Range from the store's earliest retained entry, one page
-// per call, so a test can hand back a page with no block boundary in it. It
-// counts its calls into calls, which is how a test tells "stopped scanning"
-// from "kept asking".
-func oldestFrom(calls *int, pages ...[]*pb.Entry) fetchOldest {
-	return func(context.Context, []byte) ([]*pb.Entry, []byte, error) {
+// oldestFrom serves the store's earliest retained entries, counting its
+// calls so a test can tell "read once" from "read again".
+func oldestFrom(calls *int, entries []*pb.Entry) fetchOldest {
+	return func(context.Context) ([]*pb.Entry, error) {
 		*calls++
-		if *calls > len(pages) {
-			return nil, nil, nil
-		}
 
-		return pages[*calls-1], []byte{byte(*calls)}, nil
+		return entries, nil
+	}
+}
+
+// servedWindow is what the gateway hands back: a window that starts at the
+// open of the oldest block it still holds whole.
+func servedWindow(height uint64) []*pb.Entry {
+	return []*pb.Entry{
+		{Kind: &pb.Entry_BlockOpen{BlockOpen: &pb.BlockOpen{BlockNumber: height}}},
+		{Kind: &pb.Entry_Record{Record: &pb.Record{Transactions: [][]byte{{0x01}}}}},
 	}
 }
 
@@ -799,7 +803,7 @@ func TestAuditStartsAtTheStoreRetentionFloor(t *testing.T) {
 
 		return fetchFrom(t, sealed)(ctx, height)
 	}
-	audit := &auditor{db: db, chain: chain, fetch: fetch, oldest: oldestFrom(new(int), sealedGeneration(t, sealed[15]))}
+	audit := &auditor{db: db, chain: chain, fetch: fetch, oldest: oldestFrom(new(int), servedWindow(15))}
 
 	summary, err := audit.run(context.Background())
 	if err != nil {
@@ -845,9 +849,7 @@ func TestSkipToStoreFloor(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			audit := &auditor{}
 			if tc.floor != nil {
-				audit.oldest = oldestFrom(new(int), []*pb.Entry{
-					{Kind: &pb.Entry_BlockOpen{BlockOpen: &pb.BlockOpen{BlockNumber: *tc.floor}}},
-				})
+				audit.oldest = oldestFrom(new(int), servedWindow(*tc.floor))
 			}
 
 			from, skipped := audit.skipToStoreFloor(context.Background(), 10, 20)
@@ -860,16 +862,18 @@ func TestSkipToStoreFloor(t *testing.T) {
 
 func ptrToHeight(v uint64) *uint64 { return &v }
 
-// Retention can age out the middle of a block, leaving a page that opens with
-// records or a seal. Only an open proves a block is held whole, so a seal
-// reached first puts the floor at the height above it, and records alone prove
-// nothing about the page's own height.
+// The floor is the first entry's open. The store's contract is that a served
+// window starts at one — the gateway skips to the first open on a cold start
+// and evicts at generation boundaries — so anything else as the first entry
+// is a read this does not understand, and it resolves nothing rather than
+// guessing a height from a record that carries none.
 func TestFloorFromEntries(t *testing.T) {
 	header := testHeader(9, common.Hash{0x09})
 	raw, err := rlp.EncodeToBytes(header)
 	if err != nil {
 		t.Fatalf("rlp: %v", err)
 	}
+
 	record := &pb.Entry{Kind: &pb.Entry_Record{Record: &pb.Record{Transactions: [][]byte{{0x01}}}}}
 	seal := &pb.Entry{Kind: &pb.Entry_BlockSeal{BlockSeal: &pb.BlockSeal{Header: raw}}}
 	open := &pb.Entry{Kind: &pb.Entry_BlockOpen{BlockOpen: &pb.BlockOpen{BlockNumber: 12}}}
@@ -880,14 +884,10 @@ func TestFloorFromEntries(t *testing.T) {
 		want    uint64
 		wantOk  bool
 	}{
-		{name: "an open is the floor", entries: []*pb.Entry{open}, want: 12, wantOk: true},
-		{name: "records before an open do not move it", entries: []*pb.Entry{record, record, open}, want: 12, wantOk: true},
-		{name: "a seal first puts the floor above it", entries: []*pb.Entry{record, seal, open}, want: 10, wantOk: true},
-		{name: "records alone resolve nothing", entries: []*pb.Entry{record, record}},
-		{name: "an empty page resolves nothing"},
-		{name: "an undecodable seal is skipped", entries: []*pb.Entry{
-			{Kind: &pb.Entry_BlockSeal{BlockSeal: &pb.BlockSeal{Header: []byte{0xff}}}}, open,
-		}, want: 12, wantOk: true},
+		{name: "an open is the floor", entries: []*pb.Entry{open, record}, want: 12, wantOk: true},
+		{name: "a record first resolves nothing", entries: []*pb.Entry{record, open}},
+		{name: "a seal first resolves nothing", entries: []*pb.Entry{seal, open}},
+		{name: "an empty window resolves nothing"},
 	}
 
 	for _, tc := range cases {
@@ -903,60 +903,146 @@ func TestFloorFromEntries(t *testing.T) {
 // The floor is an optimisation: when the store cannot answer, the walk starts
 // at the watermark and discovers the same heights unheld one at a time.
 func TestStoreFloorFallsBackWhenTheStoreCannotAnswer(t *testing.T) {
-	records := []*pb.Entry{{Kind: &pb.Entry_Record{Record: &pb.Record{Transactions: [][]byte{{0x01}}}}}}
-
 	cases := []struct {
-		name      string
-		pages     [][]*pb.Entry
-		failRead  bool
-		wantCalls int
+		name     string
+		oldest   fetchOldest
+		wantRead bool
 	}{
 		{name: "no reader wired"},
-		{name: "the read fails", failRead: true, wantCalls: 1},
-		// An empty page ends the scan: the store has nothing to hand over,
-		// and asking again up to the page budget is wasted round trips.
-		{name: "the store returns nothing", pages: [][]*pb.Entry{nil}, wantCalls: 1},
-		{name: "no block boundary within the page budget", pages: [][]*pb.Entry{
-			records, records, records, records, records,
-		}, wantCalls: auditFloorPages},
+		{name: "the read fails", wantRead: true, oldest: func(context.Context) ([]*pb.Entry, error) {
+			return nil, errReadRefused
+		}},
+		{name: "the store serves nothing", wantRead: true, oldest: func(context.Context) ([]*pb.Entry, error) {
+			return nil, nil
+		}},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			calls := 0
-			audit := &auditor{}
-
-			switch {
-			case tc.failRead:
-				audit.oldest = func(context.Context, []byte) ([]*pb.Entry, []byte, error) {
-					calls++
-
-					return nil, nil, errReadRefused
-				}
-			case tc.pages != nil:
-				audit.oldest = oldestFrom(&calls, tc.pages...)
-			}
-
+			audit := &auditor{oldest: tc.oldest}
 			if height, ok := audit.storeFloor(context.Background()); ok {
 				t.Fatalf("floor = %d, want none resolved", height)
-			}
-			if calls != tc.wantCalls {
-				t.Fatalf("read the store %d times, want %d", calls, tc.wantCalls)
 			}
 		})
 	}
 }
 
-// Paging: a block with more records than one page holds still resolves, as
-// long as the boundary arrives inside the page budget.
-func TestStoreFloorPagesToTheNextBoundary(t *testing.T) {
-	records := []*pb.Entry{{Kind: &pb.Entry_Record{Record: &pb.Record{Transactions: [][]byte{{0x01}}}}}}
-	audit := &auditor{oldest: oldestFrom(new(int), records, records, []*pb.Entry{
-		{Kind: &pb.Entry_BlockOpen{BlockOpen: &pb.BlockOpen{BlockNumber: 31}}},
-	})}
+// finalityAt reports a whitelisted milestone at height, the shape
+// eth.WhitelistedMilestone returns.
+func finalityAt(height uint64) func() (uint64, bool) {
+	return func() (uint64, bool) { return height, true }
+}
 
-	height, ok := audit.storeFloor(context.Background())
-	if !ok || height != 31 {
-		t.Fatalf("floor = (%d, %v), want (31, true)", height, ok)
+// The walk stops at finality, not at the head.
+//
+// A verdict is only as good as the canonical chain it was reached against,
+// and the mark never rewinds, so judging a height a reorg can still replace
+// would leave a verdict about a block that no longer exists. Heights above
+// the milestone are left for a later pass and report as pendingFrom, which
+// is what they are.
+func TestAuditStopsAtFinality(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	chain, sealed := auditFixture(t, 20)
+
+	// Everything above 15 disagrees with the chain. None of it may be
+	// judged: it is above finality and still reorgable.
+	for height := uint64(16); height <= 20; height++ {
+		sealed[height] = testHeader(height, common.Hash{byte(height), 0xee})
+	}
+
+	if err := rawdb.WritePreconfAuditedThrough(db, 10); err != nil {
+		t.Fatalf("seed watermark: %v", err)
+	}
+
+	audit := &auditor{db: db, chain: chain, fetch: fetchFrom(t, sealed), finalized: finalityAt(15)}
+	summary, err := audit.run(context.Background())
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if summary.through != 15 {
+		t.Fatalf("through = %d, want the milestone 15 rather than the head 20", summary.through)
+	}
+	if summary.mismatch != 0 {
+		t.Fatalf("mismatch = %d, want 0: the mismatching heights are above finality", summary.mismatch)
+	}
+	if got := auditedThrough(t, db); got != 15 {
+		t.Fatalf("watermark = %d, want it held at finality 15", got)
+	}
+
+	// And nothing above the milestone was recorded, so a later pass over
+	// those heights still has them to judge.
+	if records := rawdb.ReadInvalidPreconfsInRange(db, 16, 20); len(records) != 0 {
+		t.Fatalf("records above finality = %+v, want none", records)
+	}
+}
+
+// A milestone source that has nothing final yet judges nothing: a fresh node
+// before its first milestone has no chain it can vouch for.
+func TestAuditWaitsForTheFirstMilestone(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	chain, sealed := auditFixture(t, 20)
+
+	if err := rawdb.WritePreconfAuditedThrough(db, 5); err != nil {
+		t.Fatalf("seed watermark: %v", err)
+	}
+
+	audit := &auditor{
+		db: db, chain: chain, fetch: fetchFrom(t, sealed),
+		finalized: func() (uint64, bool) { return 0, false },
+	}
+
+	summary, err := audit.run(context.Background())
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if summary.walked != 0 {
+		t.Fatalf("walked %d heights with nothing final", summary.walked)
+	}
+	if got := auditedThrough(t, db); got != 5 {
+		t.Fatalf("watermark = %d, want it held at 5", got)
+	}
+}
+
+// A node with no milestone source at all falls back to the head. Bounding at
+// a finality it cannot see would freeze the watermark forever, which is worse
+// than the reorg exposure the bound exists to remove.
+func TestAuditWithoutAMilestoneSourceUsesTheHead(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	chain, sealed := auditFixture(t, 20)
+
+	if err := rawdb.WritePreconfAuditedThrough(db, 18); err != nil {
+		t.Fatalf("seed watermark: %v", err)
+	}
+
+	audit := &auditor{db: db, chain: chain, fetch: fetchFrom(t, sealed)}
+	summary, err := audit.run(context.Background())
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if summary.through != 20 {
+		t.Fatalf("through = %d, want the head 20", summary.through)
+	}
+	if got := auditedThrough(t, db); got != 20 {
+		t.Fatalf("watermark = %d, want 20", got)
+	}
+}
+
+// Seeding is not judging. A first-run node seeds at the head, not at
+// finality: it walks nothing either way, and seeding low would leave the
+// heights between finality and the head to be walked for no reason.
+func TestAuditSeedsAtTheHeadNotFinality(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	chain, sealed := auditFixture(t, 20)
+
+	audit := &auditor{db: db, chain: chain, fetch: fetchFrom(t, sealed), finalized: finalityAt(15)}
+	if _, err := audit.run(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if got := auditedThrough(t, db); got != 20 {
+		t.Fatalf("seeded watermark = %d, want the head 20", got)
 	}
 }

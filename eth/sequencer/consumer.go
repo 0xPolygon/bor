@@ -74,6 +74,10 @@ type Consumer struct {
 	auditTrigger chan struct{}
 	auditMu      sync.Mutex
 
+	// finality reports the newest whitelisted milestone, or nil on a node
+	// that wires none. It bounds the audit watermark: see rangeToAudit.
+	finality func() (bool, uint64, common.Hash)
+
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
@@ -82,16 +86,22 @@ type Consumer struct {
 // active, coinbase map present) are re-checked per session, not here — a
 // node still syncing pre-Rio history becomes eligible once it catches up.
 func NewConsumer(endpoint string, chain *core.BlockChain) (*Consumer, error) {
-	return NewConsumerWithTransactionLookup(endpoint, chain, nil)
+	return NewConsumerWithTransactionLookup(endpoint, chain, nil, nil)
 }
 
-func NewConsumerWithTransactionLookup(endpoint string, chain *core.BlockChain, txLookup TransactionLookup) (*Consumer, error) {
+// NewConsumerWithTransactionLookup builds a consumer. finality reports the
+// newest whitelisted milestone and may be nil, which leaves the audit
+// watermark bounded by the chain head instead — see rangeToAudit.
+func NewConsumerWithTransactionLookup(endpoint string, chain *core.BlockChain,
+	txLookup TransactionLookup, finality func() (bool, uint64, common.Hash),
+) (*Consumer, error) {
 	if chain.Config().Bor == nil {
 		return nil, errors.New("sequencer consumer requires a bor chain")
 	}
 
 	consumer := &Consumer{
 		chain:        chain,
+		finality:     finality,
 		endpoint:     endpoint,
 		txLookup:     txLookup,
 		index:        NewIndex(),
@@ -383,7 +393,32 @@ func (c *Consumer) markCanonicalHeadAudited() {
 		return
 	}
 
+	// Finality bounds this path too, for the reason the audit pass is bounded
+	// by it. Reconciling a height is not proof it will stay canonical: the
+	// pending entry is removed once reconciled, whether it matched or was
+	// invalidated, so a reorg arriving after that leaves no record anywhere —
+	// and the mark has already passed the height. Below a milestone that
+	// cannot happen. The mark then trails finality by a few blocks and closes
+	// the distance one height per canonical head, which is the cadence blocks
+	// arrive at anyway.
+	if final, have := c.finalizedHeight(); have && number > final {
+		return
+	}
+
 	c.advanceAudited(number)
+}
+
+// finalizedHeight reports the newest finalized height. A node with no
+// milestone source has none, and every caller falls back to the head rather
+// than freezing on a finality it cannot see.
+func (c *Consumer) finalizedHeight() (uint64, bool) {
+	if c.finality == nil {
+		return 0, false
+	}
+
+	whitelisted, number, _ := c.finality()
+
+	return number, whitelisted
 }
 
 func (c *Consumer) reconcileCanonicalHeadLocked() []pendingInvalidation {
