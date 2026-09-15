@@ -658,7 +658,9 @@ Adopted:
   upstream verbatim and ported every Bor call site: `core/state_processor.go` (kept Bor's
   `interruptCtx` guard and state-sync/Finalize block), `core/parallel_state_processor.go` (3
   BlockSTM per-task pools — V1/V2 keep their own `totalUsedGas`, so parallel accounting is
-  untouched), `miner/worker.go` (`gasPool.Set(gp)` snapshot-restore;
+  untouched **pre-Amsterdam only**: post-Amsterdam the serial path reports the refund-excluded
+  `gp.Used()` while V2 keeps summing the post-refund `result.UsedGas`, so `header.GasUsed`
+  diverges and V2 validation fails — POS-3717, found in review of #2328), `miner/worker.go` (`gasPool.Set(gp)` snapshot-restore;
   `env.header.GasUsed = env.gasPool.Used()` replaces the out-parameter),
   `cmd/evm/internal/t8ntool`, `core/state_prefetcher.go`, `eth/{state_accessor,tracers}`,
   `internal/ethapi`, `accounts/abi/bind/backends`, `tests/bor/helper.go` + 8 test files.
