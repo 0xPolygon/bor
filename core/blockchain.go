@@ -1298,6 +1298,29 @@ func (bc *BlockChain) startPrefetchGoroutine(block *types.Block, throwaway *stat
 	}(time.Now())
 }
 
+// processorsFor decides which execution engines run for a block.
+//
+// Witness recording is only supported by the serial processor, so blocks that
+// record a witness skip the parallel one. Both processors share one witness
+// pointer, so letting them race would make the witness contents depend on
+// which engine won and how far the loser got before cancellation.
+//
+// eth.New already declines to build a parallel blockchain on a witness-
+// recording node; this is the second line of defence, and it also covers the
+// per-block cases that configuration cannot see — stateless self-validation
+// and single-block InsertChain witness generation, both of which can hand a
+// witness to a node that is otherwise entitled to run Block STM.
+//
+// enforceParallelProcessor normally suppresses the serial processor. A block
+// recording a witness overrides that: without the serial run there would be no
+// processor left to execute it.
+func (bc *BlockChain) processorsFor(witness *stateless.Witness) (runParallel, runSerial bool) {
+	runParallel = bc.parallelProcessor != nil && witness == nil
+	runSerial = bc.processor != nil && (!bc.enforceParallelProcessor || !runParallel)
+
+	return runParallel, runSerial
+}
+
 func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, witness *stateless.Witness, followupInterrupt *atomic.Bool, pipeOpts *PipelineImportOpts) (_ types.Receipts, _ []*types.Log, _ uint64, _ *state.StateDB, vtime time.Duration, blockEndErr error) {
 	// Process the block using processor and parallelProcessor at the same time, take the one which finishes first, cancel the other, and return the result
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1334,22 +1357,10 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		execTo   time.Time
 	}
 
-	// Witness recording is only supported by the serial processor, so blocks that
-	// record a witness skip the parallel one. Both processors share the witness
-	// pointer below, so letting them race would make the witness contents depend
-	// on which engine won and how far the loser got before cancellation.
-	//
-	// eth.New already declines to build a parallel blockchain on a witness-
-	// recording node; this is the second line of defence, and it also covers the
-	// per-block cases that configuration cannot see — stateless self-validation
-	// and single-block InsertChain witness generation, both of which can hand a
-	// witness to a node that is otherwise entitled to run Block STM.
-	//
-	// enforceParallelProcessor normally suppresses the serial processor. A block
-	// recording a witness overrides that: without the serial run there would be
-	// no processor left to execute it.
-	runParallel := bc.parallelProcessor != nil && witness == nil
-	runSerial := bc.processor != nil && (!bc.enforceParallelProcessor || !runParallel)
+	runParallel, runSerial := bc.processorsFor(witness)
+	if runParallel && !runSerial {
+		log.Debug("Processing block using Block STM only", "number", block.NumberU64())
+	}
 
 	resultChanLen := 0
 	if runParallel {
@@ -1358,10 +1369,6 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 
 	if runSerial {
 		resultChanLen++
-	}
-
-	if runParallel && !runSerial {
-		log.Debug("Processing block using Block STM only", "number", block.NumberU64())
 	}
 
 	resultChan := make(chan Result, resultChanLen)
