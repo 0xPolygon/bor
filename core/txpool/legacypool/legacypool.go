@@ -2015,7 +2015,7 @@ func (pool *LegacyPool) demoteUnexecutables() {
 			pool.enqueueTx(hash, tx, false)
 		}
 		// bor: Drop all transactions that no longer have valid TxOptions
-		txConditionalsRemoved := list.FilterTxConditional(pool.currentState, currentHeader)
+		txConditionalsRemoved, txConditionalInvalids := list.FilterTxConditional(pool.currentState, currentHeader)
 
 		for _, tx := range txConditionalsRemoved {
 			hash := tx.Hash()
@@ -2023,8 +2023,15 @@ func (pool *LegacyPool) demoteUnexecutables() {
 			delete(pool.lastRebroadcast, hash)
 			log.Trace("Removed invalid conditional transaction", "hash", hash)
 		}
+		for _, tx := range txConditionalInvalids {
+			hash := tx.Hash()
+			log.Trace("Demoting pending transaction behind dropped conditional transaction", "hash", hash)
 
-		pendingGauge.Dec(int64(len(olds) + len(drops) + len(invalids) + len(txConditionalsRemoved)))
+			// Internal shuffle shouldn't touch the lookup set.
+			pool.enqueueTx(hash, tx, false)
+		}
+
+		pendingGauge.Dec(int64(len(olds) + len(drops) + len(invalids) + len(txConditionalsRemoved) + len(txConditionalInvalids)))
 		// If there's a gap in front, alert (should never happen) and postpone all transactions
 		if list.Len() > 0 && list.txs.Get(nonce) == nil {
 			gapped := list.Cap(0)
