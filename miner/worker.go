@@ -1674,6 +1674,44 @@ func (w *worker) commitTransaction(env *environment, tx *types.Transaction) ([]*
 	return receipt.Logs, nil
 }
 
+// validateConditionalOptions runs the PIP-15 admission checks for a
+// conditional transaction. It returns nil for a transaction with no options.
+//
+// The known-accounts check reads state, and those reads are producer-side
+// admission control: the conditional options arrive with the submission and
+// never travel in the block, so no importing node re-runs this check. Its
+// reads therefore belong in nobody's witness -- not even when the transaction
+// goes on to be included, where keeping them would make the producer's witness
+// a strict superset of every importer's and trip WIT/2's cross-peer page-count
+// check.
+//
+// So the witness scope is always discarded, never committed. Discarding also
+// evicts the read caches these lookups populated, so a later genuinely-included
+// read of the same slot still resolves its trie path into the witness instead
+// of returning a silent cache hit.
+//
+// core/state.TestKnownAccountsValidationIsWitnessNeutral pins the property.
+func validateConditionalOptions(env *environment, tx *types.Transaction) error {
+	options := tx.GetOptions()
+	if options == nil {
+		return nil
+	}
+
+	if err := env.header.ValidateBlockNumberOptionsPIP15(options.BlockNumberMin, options.BlockNumberMax); err != nil {
+		return err
+	}
+
+	if err := env.header.ValidateTimestampOptionsPIP15(options.TimestampMin, options.TimestampMax); err != nil {
+		return err
+	}
+
+	env.state.BeginWitnessTx()
+	err := env.state.ValidateKnownAccounts(options.KnownAccounts)
+	env.state.DiscardWitnessTx()
+
+	return err
+}
+
 func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transactionsByPriceAndNonce, interrupt *atomic.Int32, builderGasFreedCh chan<- uint64) error {
 	defer func(t0 time.Time) {
 		commitTransactionsTimer.Update(time.Since(t0))
@@ -1820,44 +1858,11 @@ mainloop:
 		from, _ := types.Sender(env.signer, tx)
 
 		// not prioritising conditional transaction, yet.
-		//nolint:nestif
-		if options := tx.GetOptions(); options != nil {
-			if err := env.header.ValidateBlockNumberOptionsPIP15(options.BlockNumberMin, options.BlockNumberMax); err != nil {
-				log.Trace("Dropping conditional transaction", "from", from, "hash", tx.Hash(), "reason", err)
-				txs.Pop()
+		if err := validateConditionalOptions(env, tx); err != nil {
+			log.Trace("Dropping conditional transaction", "from", from, "hash", tx.Hash(), "reason", err)
+			txs.Pop()
 
-				continue
-			}
-
-			if err := env.header.ValidateTimestampOptionsPIP15(options.TimestampMin, options.TimestampMax); err != nil {
-				log.Trace("Dropping conditional transaction", "from", from, "hash", tx.Hash(), "reason", err)
-				txs.Pop()
-
-				continue
-			}
-
-			// PIP-15 known-accounts validation is producer-side admission
-			// control: the conditional options arrive with the submission and
-			// never travel in the block, so no importing node re-runs this
-			// check. Its reads therefore belong in nobody's witness -- not even
-			// when the transaction goes on to be included, where keeping them
-			// would make the producer's witness a strict superset of every
-			// importer's and trip WIT/2's cross-peer page-count check.
-			//
-			// So the scope is always discarded, never committed. Discarding
-			// also evicts the read caches these lookups populated, so a later
-			// genuinely-included read of the same slot still resolves its trie
-			// path into the witness instead of returning a silent cache hit.
-			env.state.BeginWitnessTx()
-			err := env.state.ValidateKnownAccounts(options.KnownAccounts)
-			env.state.DiscardWitnessTx()
-
-			if err != nil {
-				log.Trace("Dropping conditional transaction", "from", from, "hash", tx.Hash(), "reason", err)
-				txs.Pop()
-
-				continue
-			}
+			continue
 		}
 
 		// Check whether the tx is replay protected. If we're not in the EIP155 hf

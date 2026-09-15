@@ -314,3 +314,76 @@ func TestKnownAccountsValidationIsWitnessNeutral(t *testing.T) {
 	t.Logf("known-accounts validation stages %d nodes; discarding leaves the witness at the baseline %d",
 		len(committed)-len(baseline), len(baseline))
 }
+
+// TestCommitWitnessTxKeepsWitnessComplete pins the central claim of the whole
+// deferral design: holding a transaction's read-prefetches back until it
+// commits must not cost the witness a single node.
+//
+// The scope defers each read and replays it at CommitWitnessTx with the same
+// trie identity and the same read flag. If any of that is wrong -- the read
+// flag flipped, the account batch skipped, a slot's owner or root lost -- the
+// prefetcher resolves fewer paths and IntermediateRoot harvests a SMALLER
+// witness. That is the dangerous direction: a witness carrying too much is
+// merely large, one missing a node fails stateless execution outright.
+func TestCommitWitnessTxKeepsWitnessComplete(t *testing.T) {
+	build := func(scoped bool) map[string]struct{} {
+		state, addrs, _, keys := benchState(4, 4)
+
+		witness, err := stateless.NewWitness(&types.Header{Number: big.NewInt(1)}, nil)
+		if err != nil {
+			t.Fatalf("witness: %v", err)
+		}
+		state.StartPrefetcher("completeness", witness, nil)
+		defer state.StopPrefetcher()
+
+		if scoped {
+			state.BeginWitnessTx()
+		}
+
+		// Identical reads either way.
+		for _, addr := range addrs {
+			state.GetBalance(addr)
+
+			for _, key := range keys {
+				state.GetState(addr, key)
+			}
+		}
+
+		if scoped {
+			state.CommitWitnessTx()
+		}
+
+		state.SetBalance(addrs[0], uint256.NewInt(5), tracing.BalanceChangeUnspecified)
+		state.IntermediateRoot(true)
+
+		nodes := make(map[string]struct{}, len(witness.State))
+		for k := range witness.State {
+			nodes[k] = struct{}{}
+		}
+
+		return nodes
+	}
+
+	immediate := build(false)
+	deferred := build(true)
+
+	if len(immediate) == 0 {
+		t.Fatal("control failed: the unscoped build collected no witness nodes, so this test proves nothing")
+	}
+
+	var missing int
+
+	for node := range immediate {
+		if _, ok := deferred[node]; !ok {
+			missing++
+		}
+	}
+
+	if missing > 0 {
+		t.Errorf("deferring reads to CommitWitnessTx lost %d of %d witness nodes (%d vs %d) — "+
+			"a witness this small fails stateless execution",
+			missing, len(immediate), len(deferred), len(immediate))
+	}
+
+	t.Logf("immediate=%d deferred=%d nodes, none lost", len(immediate), len(deferred))
+}
