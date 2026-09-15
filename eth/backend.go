@@ -311,8 +311,13 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		EnableEVMSwitchDispatch: config.EnableEVMSwitchDispatch,
 	}
 
+	// Resolved before the live tracer below, which needs the EFFECTIVE parallel
+	// EVM setting rather than the configured one: a witness-recording node has
+	// parallel EVM turned off here, and must still get its tracer.
+	parallelEVM, pipelinedImportSRC := witnessSafeAccelerators(config)
+
 	// Setup live tracer if requested
-	if config.VMTrace != "" && config.ParallelEVM.Enable {
+	if config.VMTrace != "" && parallelEVM {
 		log.Warn("Live tracing requested but not supported with ParallelEVM enabled. Disable ParallelEVM via `--parallelevm.enable=false` to use live tracing.")
 	} else if config.VMTrace != "" {
 		traceConfig := json.RawMessage("{}")
@@ -362,8 +367,6 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	if trieJournalDirectory == "" {
 		trieJournalDirectory = stack.ResolvePath("triedb")
 	}
-
-	parallelEVM, pipelinedImportSRC := witnessSafeAccelerators(config)
 
 	var (
 		options = &core.BlockChainConfig{
