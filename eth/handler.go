@@ -376,7 +376,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		}
 	}
 
-	h.blockFetcher = fetcher.NewBlockFetcher(false, nil, h.chain.GetBlockByHash, validator, h.BroadcastBlock, heighter, h.chain.CurrentHeader, nil, inserter, h.removePeer, h.jailPeer, h.enableBlockTracking, h.statelessSync.Load() || h.syncWithWitnesses, config.gasCeil, h.lookupSignedWitnessHash, h.cacheVerifiedWitnessForServing)
+	h.blockFetcher = fetcher.NewBlockFetcher(false, nil, h.chain.GetBlockByHash, validator, h.BroadcastBlock, heighter, h.chain.CurrentHeader, nil, inserter, h.removePeer, h.enableBlockTracking, h.statelessSync.Load() || h.syncWithWitnesses, config.gasCeil, h.lookupSignedWitnessHash, h.cacheVerifiedWitnessForServing)
 	// WIT2: penalize a peer that serves a non-empty witness whose bytes mismatch
 	// the BP-signed commitment (strike, not drop — see strikeWit2PeerByID).
 	h.blockFetcher.SetWitnessServerStriker(h.strikeWit2PeerByID)
