@@ -21,6 +21,7 @@ import (
 	"math/rand"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	mapset "github.com/deckarep/golang-set/v2"
 
@@ -76,6 +77,7 @@ type Peer struct {
 	*p2p.Peer                   // The embedded P2P package peer
 	rw        p2p.MsgReadWriter // Input/output streams for snap
 	version   uint              // Protocol version negotiated
+	limits    peerLimits
 	lastRange atomic.Pointer[BlockRangeUpdatePacket]
 
 	head common.Hash // Latest advertised head block hash
@@ -106,6 +108,7 @@ func NewPeer(version uint, p *p2p.Peer, rw p2p.MsgReadWriter, txpool TxPool) *Pe
 		Peer:            p,
 		rw:              rw,
 		version:         version,
+		limits:          newPeerLimits(),
 		td:              new(big.Int),
 		knownTxs:        newKnownCache(maxKnownTxs),
 		knownBlocks:     newKnownCache(maxKnownBlocks),
@@ -214,12 +217,20 @@ func (p *Peer) SendTransactions(txs types.Transactions) error {
 // propagate to a remote peer. The number of pending sends are capped (new ones
 // will force old sends to be dropped)
 func (p *Peer) AsyncSendTransactions(hashes []common.Hash) {
+	p.QueueTransactions(hashes)
+}
+
+// QueueTransactions is like AsyncSendTransactions but reports queue acceptance,
+// not delivery to the remote peer.
+func (p *Peer) QueueTransactions(hashes []common.Hash) bool {
 	select {
 	case p.txBroadcast <- hashes:
 		// Mark all the transactions as known, but ensure we don't overflow our limits
 		p.knownTxs.Add(hashes...)
+		return true
 	case <-p.term:
 		p.Log().Debug("Dropping transaction propagation", "count", len(hashes))
+		return false
 	}
 }
 
@@ -240,12 +251,20 @@ func (p *Peer) sendPooledTransactionHashes(hashes []common.Hash, types []byte, s
 // announce to a remote peer.  The number of pending sends are capped (new ones
 // will force old sends to be dropped)
 func (p *Peer) AsyncSendPooledTransactionHashes(hashes []common.Hash) {
+	p.QueuePooledTransactionHashes(hashes)
+}
+
+// QueuePooledTransactionHashes is like AsyncSendPooledTransactionHashes but
+// reports queue acceptance, not delivery to the remote peer.
+func (p *Peer) QueuePooledTransactionHashes(hashes []common.Hash) bool {
 	select {
 	case p.txAnnounce <- hashes:
 		// Mark all the transactions as known, but ensure we don't overflow our limits
 		p.knownTxs.Add(hashes...)
+		return true
 	case <-p.term:
 		p.Log().Debug("Dropping transaction announcement", "count", len(hashes))
+		return false
 	}
 }
 
@@ -312,6 +331,9 @@ func (p *Peer) AsyncSendNewBlock(block *types.Block, td *big.Int) {
 
 // ReplyBlockHeadersRLP is the response to GetBlockHeaders.
 func (p *Peer) ReplyBlockHeadersRLP(id uint64, headers []rlp.RawValue) error {
+	if err := p.checkReplyRate(id, headers, time.Now()); err != nil {
+		return err
+	}
 	return p2p.Send(p.rw, BlockHeadersMsg, &BlockHeadersRLPPacket{
 		RequestId:               id,
 		BlockHeadersRLPResponse: headers,
@@ -320,6 +342,9 @@ func (p *Peer) ReplyBlockHeadersRLP(id uint64, headers []rlp.RawValue) error {
 
 // ReplyBlockBodiesRLP is the response to GetBlockBodies.
 func (p *Peer) ReplyBlockBodiesRLP(id uint64, bodies []rlp.RawValue) error {
+	if err := p.checkReplyRate(id, bodies, time.Now()); err != nil {
+		return err
+	}
 	// Not packed into BlockBodiesResponse to avoid RLP decoding
 	return p2p.Send(p.rw, BlockBodiesMsg, &BlockBodiesRLPPacket{
 		RequestId:              id,
@@ -329,6 +354,9 @@ func (p *Peer) ReplyBlockBodiesRLP(id uint64, bodies []rlp.RawValue) error {
 
 // ReplyReceiptsRLP is the response to GetReceipts.
 func (p *Peer) ReplyReceiptsRLP(id uint64, receipts []rlp.RawValue) error {
+	if err := p.checkReplyRate(id, receipts, time.Now()); err != nil {
+		return err
+	}
 	return p2p.Send(p.rw, ReceiptsMsg, &ReceiptsRLPPacket{
 		RequestId:           id,
 		ReceiptsRLPResponse: receipts,

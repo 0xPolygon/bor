@@ -119,12 +119,18 @@ type Server struct {
 
 type peerOpFunc func(map[enode.ID]*Peer)
 
+const (
+	maxPeerJailEntries = 4096
+	noPeerJailExpiry   = mclock.AbsTime(1<<63 - 1)
+)
+
 // peerJail tracks temporarily banned peers to prevent connections
 type peerJail struct {
 	mu         sync.RWMutex
 	jailed     map[enode.ID]mclock.AbsTime // peer ID -> unban time
 	jailPeriod time.Duration               // default jail period
 	clock      mclock.Clock
+	nextExpiry mclock.AbsTime
 }
 
 // newPeerJail creates a new peer jail with the given jail period
@@ -133,14 +139,47 @@ func newPeerJail(jailPeriod time.Duration, clock mclock.Clock) *peerJail {
 		jailed:     make(map[enode.ID]mclock.AbsTime),
 		jailPeriod: jailPeriod,
 		clock:      clock,
+		nextExpiry: noPeerJailExpiry,
 	}
 }
 
 // JailPeer jails a peer for the default jail period
 func (pj *peerJail) JailPeer(id enode.ID) {
+	pj.JailPeerFor(id, pj.jailPeriod)
+}
+
+func (pj *peerJail) JailPeerFor(id enode.ID, period time.Duration) {
+	now := pj.clock.Now()
+	unbanTime := now + mclock.AbsTime(period)
+
 	pj.mu.Lock()
 	defer pj.mu.Unlock()
-	pj.jailed[id] = pj.clock.Now() + mclock.AbsTime(pj.jailPeriod)
+
+	if current, exists := pj.jailed[id]; exists {
+		pj.jailed[id] = max(current, unbanTime)
+		return
+	}
+	if len(pj.jailed) >= maxPeerJailEntries {
+		if now > pj.nextExpiry {
+			pj.removeExpired(now)
+		}
+		if len(pj.jailed) >= maxPeerJailEntries {
+			return
+		}
+	}
+	pj.jailed[id] = unbanTime
+	pj.nextExpiry = min(pj.nextExpiry, unbanTime)
+}
+
+func (pj *peerJail) removeExpired(now mclock.AbsTime) {
+	pj.nextExpiry = noPeerJailExpiry
+	for id, unbanTime := range pj.jailed {
+		if now > unbanTime {
+			delete(pj.jailed, id)
+			continue
+		}
+		pj.nextExpiry = min(pj.nextExpiry, unbanTime)
+	}
 }
 
 // IsJailed checks if a peer is currently jailed
@@ -340,14 +379,23 @@ func (srv *Server) AddPeer(node *enode.Node) {
 // it will be disconnected.
 func (srv *Server) JailPeer(nodeID enode.ID) {
 	if srv.peerJail != nil {
-		srv.peerJail.JailPeer(nodeID)
-		// If peer is currently connected, disconnect it
-		srv.doPeerOp(func(peers map[enode.ID]*Peer) {
-			if peer, ok := peers[nodeID]; ok {
-				peer.Disconnect(DiscJailed)
-			}
-		})
+		srv.jailPeerFor(nodeID, srv.peerJail.jailPeriod)
 	}
+}
+
+func (srv *Server) JailPeerFor(nodeID enode.ID, period time.Duration) {
+	if srv.peerJail != nil && period > 0 {
+		srv.jailPeerFor(nodeID, period)
+	}
+}
+
+func (srv *Server) jailPeerFor(nodeID enode.ID, period time.Duration) {
+	srv.peerJail.JailPeerFor(nodeID, period)
+	srv.doPeerOp(func(peers map[enode.ID]*Peer) {
+		if peer, ok := peers[nodeID]; ok {
+			peer.Disconnect(DiscJailed)
+		}
+	})
 }
 
 // RemovePeer removes a node from the static node set. It also disconnects from the given

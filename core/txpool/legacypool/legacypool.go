@@ -152,7 +152,7 @@ var (
 	evictTimer  = metrics.NewRegisteredTimer("txpool/misc/evict", nil)
 
 	// rebroadcast metrics
-	rebroadcastTxMeter       = metrics.NewRegisteredMeter("txpool/rebroadcast", nil)          // Transactions identified for rebroadcast
+	rebroadcastTxMeter       = metrics.NewRegisteredMeter("txpool/rebroadcast", nil)          // Transactions queued for rebroadcast
 	rebroadcastIdentifyTimer = metrics.NewRegisteredTimer("txpool/rebroadcast/identify", nil) // Time to identify stuck transactions
 	rebroadcastTrackingGauge = metrics.NewRegisteredGauge("txpool/rebroadcast/tracking", nil) // Transactions being tracked for rebroadcast
 )
@@ -487,17 +487,13 @@ func (pool *LegacyPool) loop() {
 			rebroadcastIdentifyTimer.Update(time.Since(identifyStart))
 
 			if len(stuckTxs) > 0 {
-				// Brief Lock only to update lastRebroadcast timestamps
-				now := time.Now()
-				pool.mu.Lock()
-				for _, tx := range stuckTxs {
-					pool.lastRebroadcast[tx.Hash()] = now
+				if pool.rebroadcastTxFeed.Send(core.StuckTxsEvent{Txs: stuckTxs}) == 0 {
+					hashes := make([]common.Hash, len(stuckTxs))
+					for i, tx := range stuckTxs {
+						hashes[i] = tx.Hash()
+					}
+					pool.rebroadcastAcknowledgement(stuckTxs, false)(hashes)
 				}
-				rebroadcastTrackingGauge.Update(int64(len(pool.lastRebroadcast)))
-				pool.mu.Unlock()
-
-				pool.rebroadcastTxFeed.Send(core.StuckTxsEvent{Txs: stuckTxs})
-				rebroadcastTxMeter.Mark(int64(len(stuckTxs)))
 				log.Debug("Identified stuck transactions for rebroadcast", "count", len(stuckTxs))
 			}
 

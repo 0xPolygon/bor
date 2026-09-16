@@ -52,6 +52,10 @@ func TestChainSyncerNextSyncOpStates(t *testing.T) {
 	}
 
 	syncer.doneCh = nil
+	handler.enableSyncedFeatures()
+	if !handler.canRebroadcast() {
+		t.Fatal("caught-up handler should enable rebroadcast before a higher-TD peer connects")
+	}
 	peer := registerPeerWithTD(t, handler.peers, 1_000_000)
 	if err := handler.downloader.RegisterPeer(peer.ID(), eth.ETH68, &ethPeer{Peer: peer}); err != nil {
 		t.Fatal(err)
@@ -66,6 +70,9 @@ func TestChainSyncerNextSyncOpStates(t *testing.T) {
 	}
 	if wait != 0 {
 		t.Fatalf("sync wait mismatch: have %v, want 0", wait)
+	}
+	if handler.canRebroadcast() {
+		t.Fatal("required sync must disable transaction rebroadcast")
 	}
 }
 
@@ -386,6 +393,16 @@ func TestChainSyncerOnSyncDone(t *testing.T) {
 	}
 	if cs.forced {
 		t.Fatal("onSyncDone should reset forced to false")
+	}
+}
+
+func TestEnableSyncedFeaturesEnablesRebroadcast(t *testing.T) {
+	handler, cleanup := newChainSyncerTestHandler(t)
+	defer cleanup()
+
+	handler.enableSyncedFeatures()
+	if !handler.canRebroadcast() {
+		t.Fatal("a completed sync must enable transaction rebroadcast")
 	}
 }
 

@@ -147,6 +147,7 @@ type handler struct {
 	snapSync      atomic.Bool // Flag whether snap sync is enabled (gets disabled if we already have blocks)
 	statelessSync atomic.Bool // Flag whether stateless sync is enabled
 	synced        atomic.Bool // Flag whether we're considered synchronised (enables transaction processing)
+	rebroadcast   rebroadcastState
 
 	database ethdb.Database
 	txpool   txPool
@@ -613,13 +614,31 @@ func (h *handler) jailPeer(id string) {
 	if h.p2pServer == nil {
 		return
 	}
-	// Convert peer ID (string) to enode.ID
-	nodeID, err := enode.ParseID(id)
-	if err != nil {
-		log.Warn("Failed to parse peer ID for jailing", "peer", id, "err", err)
+	nodeID, ok := parsePeerIDForJail(id)
+	if !ok {
 		return
 	}
 	h.p2pServer.JailPeer(nodeID)
+}
+
+func (h *handler) jailPeerFor(id string, period time.Duration) {
+	if h.p2pServer == nil {
+		return
+	}
+	nodeID, ok := parsePeerIDForJail(id)
+	if !ok {
+		return
+	}
+	h.p2pServer.JailPeerFor(nodeID, period)
+}
+
+func parsePeerIDForJail(id string) (enode.ID, bool) {
+	nodeID, err := enode.ParseID(id)
+	if err != nil {
+		log.Warn("Failed to parse peer ID for jailing", "peer", id, "err", err)
+		return enode.ID{}, false
+	}
+	return nodeID, true
 }
 
 // removePeer requests disconnection of a peer.
@@ -684,6 +703,11 @@ func (h *handler) unregisterPeer(id string) {
 
 	if err := h.peers.unregisterPeer(id); err != nil {
 		logger.Error("Ethereum peer removal failed", "err", err)
+	}
+	// Coalesce removals without blocking teardown while the syncer is busy.
+	select {
+	case h.chainSync.peerEventCh <- struct{}{}:
+	default:
 	}
 }
 
@@ -878,12 +902,14 @@ func EthPeersContainsID(ethPeers []*ethPeer, id string) bool {
 // - And, separately, as announcements to all peers which are not known to
 // already have the given transaction.
 func (h *handler) BroadcastTransactions(txs types.Transactions) {
-	var (
-		blobTxs  int // Number of blob transactions to announce only
-		largeTxs int // Number of large transactions to announce only
+	h.broadcastTransactions(txs, nil)
+}
 
-		directCount int // Number of transactions sent directly to peers (duplicates included)
-		annCount    int // Number of transactions announced across all peers (duplicates included)
+func (h *handler) broadcastTransactions(txs types.Transactions, onBroadcast func([]common.Hash)) bool {
+	var (
+		blobTxs        int // Number of blob transactions to announce only
+		largeTxs       int // Number of large transactions to announce only
+		conditionalTxs int
 
 		txset = make(map[*ethPeer][]common.Hash) // Set peer->hash to transfer directly
 		annos = make(map[*ethPeer][]common.Hash) // Set peer->hash to announce
@@ -894,6 +920,10 @@ func (h *handler) BroadcastTransactions(txs types.Transactions) {
 	)
 
 	for _, tx := range txs {
+		if tx.GetOptions() != nil {
+			conditionalTxs++
+			continue
+		}
 		// Skip gossip if transaction is marked as private
 		if h.privateTxGetter != nil && h.privateTxGetter.IsTxPrivate(tx.Hash()) {
 			log.Debug("[tx-relay] skip tx broadcast for private tx", "hash", tx.Hash())
@@ -916,31 +946,15 @@ func (h *handler) BroadcastTransactions(txs types.Transactions) {
 			}
 		}
 
-		for _, peer := range peers {
-			if peer.KnownTransaction(tx.Hash()) {
-				continue
-			}
-			if _, ok := directSet[peer]; ok {
-				// Send direct.
-				txset[peer] = append(txset[peer], tx.Hash())
-			} else {
-				// Send announcement.
-				annos[peer] = append(annos[peer], tx.Hash())
-			}
-		}
+		assignTransactionPeers(tx.Hash(), peers, directSet, txset, annos)
 	}
 
-	for peer, hashes := range txset {
-		directCount += len(hashes)
-		peer.AsyncSendTransactions(hashes)
-	}
-
-	for peer, hashes := range annos {
-		annCount += len(hashes)
-		peer.AsyncSendPooledTransactionHashes(hashes)
-	}
-	log.Debug("Distributed transactions", "plaintxs", len(txs)-blobTxs-largeTxs, "blobtxs", blobTxs, "largetxs", largeTxs,
+	directCount := queueTransactions(txset, false, onBroadcast)
+	annCount := queueTransactions(annos, true, onBroadcast)
+	log.Debug("Distributed transactions", "plaintxs", len(txs)-blobTxs-largeTxs-conditionalTxs, "blobtxs", blobTxs, "largetxs", largeTxs,
+		"conditionaltxs", conditionalTxs,
 		"bcastcount", directCount, "anncount", annCount)
+	return directCount+annCount > 0
 }
 
 // minedBroadcastLoop sends mined blocks to connected peers.
@@ -1054,29 +1068,25 @@ func (h *handler) stuckTxBroadcastLoop() {
 	for {
 		select {
 		case event := <-h.stuckTxsCh:
-			// Only rebroadcast when synced
-			if !h.synced.Load() {
-				continue
+			if h.rebroadcastStuckTransactions(event.Txs, h.rebroadcastAcknowledgement(event.Txs)) {
+				log.Debug("Rebroadcast stuck transactions", "count", len(event.Txs))
 			}
-
-			// Collect hashes to clear from knownTxs
-			hashes := make([]common.Hash, len(event.Txs))
-			for i, tx := range event.Txs {
-				hashes[i] = tx.Hash()
-			}
-
-			// Clear from all peers' knownTxs
-			h.peers.ForgetTransactions(hashes)
-
-			// Rebroadcast
-			h.BroadcastTransactions(event.Txs)
-
-			log.Debug("Rebroadcast stuck transactions", "count", len(event.Txs))
-
 		case <-h.stuckTxsSub.Err():
 			return
 		}
 	}
+}
+
+func (h *handler) rebroadcastStuckTransactions(txs types.Transactions, onBroadcast func([]common.Hash)) bool {
+	if !h.canRebroadcast() {
+		return false
+	}
+	hashes := make([]common.Hash, len(txs))
+	for i, tx := range txs {
+		hashes[i] = tx.Hash()
+	}
+	h.peers.ForgetTransactions(hashes)
+	return h.broadcastTransactions(txs, onBroadcast)
 }
 
 // enableSyncedFeatures enables the post-sync functionalities when the initial

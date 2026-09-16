@@ -212,6 +212,9 @@ func handleMessage(backend Backend, peer *Peer) error {
 		return fmt.Errorf("%w: %v > %v", errMsgTooLarge, msg.Size, maxMessageSize)
 	}
 	defer msg.Discard()
+	if err := peer.checkMessageRate(msg.Code, msg.Size, time.Now()); err != nil {
+		return err
+	}
 
 	var handlers map[uint64]msgHandler
 	if peer.version == ETH68 {

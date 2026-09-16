@@ -436,6 +436,32 @@ func (p *TxPool) SubscribeRebroadcastTransactions(ch chan<- core.StuckTxsEvent) 
 	return p.subs.Track(event.JoinSubscriptions(subs...))
 }
 
+// RebroadcastAcknowledgement gathers optional batch accounting from subpools
+// without extending SubPool or changing the public rebroadcast event. Existing
+// subpools without this capability retain their own accounting behavior.
+func (p *TxPool) RebroadcastAcknowledgement(txs []*types.Transaction) func([]common.Hash) {
+	if p == nil {
+		return nil
+	}
+	var callbacks []func([]common.Hash)
+	for _, subpool := range p.subpools {
+		pool, ok := subpool.(interface {
+			RebroadcastAcknowledgement([]*types.Transaction) func([]common.Hash)
+		})
+		if !ok {
+			continue
+		}
+		if callback := pool.RebroadcastAcknowledgement(txs); callback != nil {
+			callbacks = append(callbacks, callback)
+		}
+	}
+	return func(hashes []common.Hash) {
+		for _, callback := range callbacks {
+			callback(hashes)
+		}
+	}
+}
+
 // PoolNonce returns the next nonce of an account, with all transactions executable
 // by the pool already applied on top.
 func (p *TxPool) PoolNonce(addr common.Address) uint64 {
