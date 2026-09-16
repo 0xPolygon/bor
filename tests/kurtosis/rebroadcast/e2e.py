@@ -303,31 +303,38 @@ class Test:
         duration = min(self.args.timeout, self.args.window) if active_sync else self.args.timeout
         deadline = time.monotonic() + duration
         last = start
+        last_suppressed = start
+        catch_up_boundary = None
         while time.monotonic() < deadline:
             last = self.sample("suppressed")
             if last["peers"] == 0:
                 raise RuntimeError("Suppression window lost its connected-peer precondition")
+            # A near-tip sample is outside the suppression interval. Its log
+            # counters can already include normal gossip after the final import.
+            if last["lag"] < self.args.min_lag:
+                catch_up_boundary = last
+                break
             if last["rebroadcast"] != start["rebroadcast"]:
                 raise RuntimeError("Out-of-sync node rebroadcast stuck transactions")
+            last_suppressed = last
             # Peer handshakes and ancestor discovery precede eth_syncing progress.
             # Keep checking suppression, but start the short window at active sync.
             if active_sync is None and last["syncing"] is not False:
                 active_sync = last
                 deadline = min(deadline, time.monotonic() + self.args.window)
-            if last["lag"] < self.args.min_lag:
-                break
             if (active_sync is not None and last["head"] > start["head"]
                     and last["identified"] - start["identified"] >= 3):
                 break
             time.sleep(1)
-        identified = last["identified"] - start["identified"]
+        identified = last_suppressed["identified"] - start["identified"]
         if identified < 3:
             raise RuntimeError("Need at least three stuck-tx batches to prove suppression")
         if last["head"] <= start["head"]:
             raise RuntimeError("Target block did not advance during suppressed catch-up")
         if active_sync is None:
             raise RuntimeError("Target never reported an active catch-up sync")
-        self.summary["suppression"] = {"first_sync": first, "start": start, "end": last,
+        self.summary["suppression"] = {"first_sync": first, "start": start, "end": last_suppressed,
+                                       "catch_up_boundary": catch_up_boundary,
                                        "active_sync": active_sync, "observed_active_sync": True,
                                        "identified_batches": identified, "rebroadcast_batches": 0}
 

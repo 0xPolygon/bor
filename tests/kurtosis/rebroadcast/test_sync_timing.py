@@ -75,7 +75,8 @@ class SyncTimingTest(unittest.TestCase):
         test.sample = Mock(side_effect=[active, dict(start, head=450, lag=0, identified=17)])
         with patch("e2e.time.sleep"), patch("e2e.time.monotonic", side_effect=[0, 0, 0, 1]):
             test.suppression()
-        self.assertEqual(test.summary["suppression"]["end"]["head"], 450)
+        self.assertEqual(test.summary["suppression"]["end"], active)
+        self.assertEqual(test.summary["suppression"]["catch_up_boundary"]["head"], 450)
 
 
 if __name__ == "__main__":

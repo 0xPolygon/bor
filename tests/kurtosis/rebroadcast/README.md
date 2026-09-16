@@ -76,9 +76,13 @@ The test asserts three phases:
    Peer reconnection and ancestor discovery get the phase timeout; the shorter
    `--window` starts when `eth_syncing` first reports active progress. Suppression
    is checked from the first connected, lagging sample, including preparation.
-   The phase ends once all evidence is present or the target catches up; catching
-   up without the required evidence still fails. This avoids continuing the
-   observation into normal rebroadcast after catch-up.
+   The phase ends once all evidence is present or lag drops below `--min-lag`.
+   That near-tip boundary is checked before the rebroadcast counter because the
+   final import can already have reenabled normal gossip. Boundary-sample batches
+   do not count toward the three suppressed batches or active-sync evidence.
+   The summary keeps `end` at the last lagging sample and records the transition
+   separately as `catch_up_boundary`; head progress may finish in that final
+   import. Catching up without the required earlier evidence still fails.
 3. Removing impairment lets the target catch up and rebroadcast at least three
    more batches containing the same sole pending transaction.
 
