@@ -70,4 +70,20 @@ var (
 	auditUnknownCount     = metrics.NewRegisteredCounter("sequencer/audit/unknown", nil)
 	auditRetentionSkipped = metrics.NewRegisteredCounter("sequencer/audit/retentionskipped", nil)
 	auditUnheldHeights    = metrics.NewRegisteredCounter("sequencer/audit/unheld", nil)
+
+	// The store kept off the block path. Each counter is a wait the producer
+	// declined to pay because the answer could not arrive: barrierskipped
+	// and gatewritedownskip when the publish transport is down, readskipped,
+	// readbreakeropened and gatereaddownskip when the consumer endpoint has
+	// gone quiet. Rising values mean the store is degraded and block
+	// production is not — which is the whole point, and the only place it
+	// shows. The two gate counters separate the causes: a seal abandoned
+	// because no ack could be delivered, or because the store could not be
+	// asked.
+	publishBarrierSkipped = metrics.NewRegisteredCounter("sequencer/publish/barrierskipped", nil)
+	gateWriteDownSkip     = metrics.NewRegisteredCounter("sequencer/gate/writedownskip", nil)
+	gateReadDownSkip      = metrics.NewRegisteredCounter("sequencer/gate/readdownskip", nil)
+	readsSkipped          = metrics.NewRegisteredCounter("sequencer/read/skipped", nil)
+	readBreakerOpened     = metrics.NewRegisteredCounter("sequencer/read/breakeropened", nil)
+	readBreakerClosed     = metrics.NewRegisteredCounter("sequencer/read/breakerclosed", nil)
 )
