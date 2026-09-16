@@ -7,6 +7,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/miner"
 )
 
@@ -85,8 +86,8 @@ const maxGateRefusals = 3
 // covers the phantom case of a winner that sealed in the store and then
 // died without broadcasting.
 func (p *Publisher) ConfirmSeal(timeout time.Duration) miner.SealVerdict {
-	if p.unreachable.Load() {
-		return p.settle(miner.SealUnknown) // no verdict is coming; do not wait for one
+	if skip := p.storeDownSkip(); skip != nil {
+		return p.storeDownVerdict(skip) // no verdict is coming; do not wait for one
 	}
 
 	start := time.Now()
@@ -131,6 +132,70 @@ func (p *Publisher) ConfirmSeal(timeout time.Duration) miner.SealVerdict {
 
 		return p.expiredVerdict(g, failed)
 	}
+}
+
+// storeDownSkip reports the counter for a store that can no longer answer
+// this gate, and nil while the wait is still worth paying. The write path
+// down means the seal cannot be delivered for an ack to come back; the read
+// path down means the store cannot be asked. Either way the budget can only
+// end at the deadline, and delaying the broadcast buys nothing the consensus
+// engine does not already arbitrate — which is what it arbitrates on a node
+// running no store at all.
+//
+// The read breaker is the right signal for the read side and staleness is
+// not: only silent reads trip it, so a contended store that still answers —
+// NOT_FOUND included — leaves the gate fully armed, and an open breaker
+// means the store cannot inform us rather than that it says we lost.
+//
+// A withheld seal is the exception and keeps its full wait. refuseOnTimeout
+// is set from a read that already found the height closed with content this
+// block does not carry, so its refusal is evidence in hand rather than an
+// answer still owed, and broadcasting over it is the displacement the gate
+// exists to prevent.
+func (p *Publisher) storeDownSkip() *metrics.Counter {
+	p.mu.Lock()
+	withheld := p.gate.refuseOnTimeout
+	p.mu.Unlock()
+
+	switch {
+	case withheld:
+		return nil
+	case p.writeDown.Load():
+		return gateWriteDownSkip
+	case p.read.breaker.isOpen():
+		return gateReadDownSkip
+	}
+
+	return nil
+}
+
+// storeDownVerdict resolves a gate no store answer can reach. Waiting could
+// only end at the deadline, so this takes one pass of what the wait would
+// still have resolved — the store's own record, then the chain, where a
+// rival's block at our height is the rejection notice and needs no store
+// read — and stops there.
+//
+// storedVerdict first, and not the chain alone: a build with nothing gated
+// carries height 0, and asking the chain about height 0 compares genesis
+// against an empty hash and refuses a seal nobody contested.
+func (p *Publisher) storeDownVerdict(skipped *metrics.Counter) miner.SealVerdict {
+	p.mu.Lock()
+	g := p.gate
+	p.mu.Unlock()
+
+	if v, done := p.storedVerdict(g); done {
+		return v
+	}
+
+	if p.chain != nil {
+		if v, done := p.chainVerdict(g); done {
+			return v
+		}
+	}
+
+	skipped.Inc(1)
+
+	return p.settle(miner.SealUnknown)
 }
 
 // storedVerdict resolves the gate from what the store already decided: an
@@ -289,7 +354,7 @@ func (p *Publisher) dropRefusedFlushLocked(height uint64, hash common.Hash) {
 // what the broadcast would bury. Anything unreadable keeps the timeout
 // verdict — production never waits on a store it cannot see.
 func (p *Publisher) gateRecheck(g sealGate) miner.SealVerdict {
-	if p.unreachable.Load() || p.read == nil || p.read.cons == nil {
+	if p.read == nil || p.read.cons == nil {
 		return miner.SealUnknown
 	}
 
@@ -363,7 +428,7 @@ func (p *Publisher) recheckSealedGeneration(ctx context.Context, g sealGate) min
 // needs before its refusal is honored. Unreadable, undecodable, or unsealed
 // keeps the refusal.
 func (p *Publisher) lostSealInvalid(g sealGate) bool {
-	if p.verifySeal == nil || p.unreachable.Load() || p.read == nil || p.read.cons == nil {
+	if p.verifySeal == nil || p.read == nil || p.read.cons == nil {
 		return false
 	}
 

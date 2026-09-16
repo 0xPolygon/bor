@@ -38,7 +38,7 @@ var heldWatchInterval = 400 * time.Millisecond
 // trailing entry's ack latency stays a queue drain, not a backlog: an
 // unbounded sender once buried the store under 23k entries of its own
 // republish churn, tripped the stall watchdog on the self-made backlog, and
-// produced blind while flagged unreachable. With the cap, a stall means the
+// produced blind while the write path was down. With the cap, a stall means the
 // store stopped — nobody is being promised anything — which is the only
 // state where producing without a verdict is safe. Var for tests.
 var maxInflightEntries = 2048
@@ -384,6 +384,12 @@ func (p *Publisher) handleAck(ack ackResult, inflight *[]sent) (streamResult, bo
 		return streamResult{reason: endTransport}, true
 	}
 
+	// An ack arriving is the direct disproof of writeDown, whatever it says
+	// about the entry. Waiting for the stream to end instead would leave the
+	// pre-seal barrier and the seal gate skipping their checks for as long
+	// as a healthy session runs.
+	p.writeDown.Store(false)
+
 	if len(*inflight) == 0 {
 		p.fail("ack without a pending entry")
 
@@ -549,7 +555,7 @@ type runState struct {
 }
 
 // run owns transport: anchor via reconciliation, then send loop the journal into the
-// store, reconciling on STALE and probing with backoff while unreachable.
+// store, reconciling on STALE and probing with backoff while it is down.
 func (p *Publisher) run(ctx context.Context) {
 	defer close(p.done)
 	defer func() {
@@ -584,10 +590,6 @@ func (p *Publisher) step(ctx context.Context, state *runState) bool {
 
 	res := p.runStream(ctx)
 
-	if res.reason != endTransport {
-		p.unreachable.Store(false) // the store answered, whatever it said
-	}
-
 	// Price the next reconcile and carry the streak forward, cleared whenever
 	// this session made progress — whatever ended it.
 	delay := state.priceContention(res)
@@ -602,7 +604,7 @@ func (p *Publisher) step(ctx context.Context, state *runState) bool {
 		// build's height so the tail is classified against it.
 		return p.reconcile(ctx) != recTerminal
 	case endTransport:
-		p.unreachable.Store(true)
+		p.writeDown.Store(true)
 
 		return state.degradedSleep(ctx)
 	default: // endStale
@@ -621,7 +623,10 @@ func (p *Publisher) step(ctx context.Context, state *runState) bool {
 
 func (p *Publisher) anchorStep(ctx context.Context, state *runState) bool {
 	if p.reconcile(ctx) == recOK {
-		p.unreachable.Store(false) // the read went through
+		// writeDown deliberately stays as it is: reconciling reads the
+		// store, which proves the consumer endpoint is alive and says
+		// nothing about whether our entries land. The ack that the stream
+		// below earns is what clears it.
 		state.probe = probeBackoffMin
 
 		return true
