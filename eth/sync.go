@@ -225,7 +225,6 @@ func (cs *chainSyncer) nextSyncOp() (*chainSyncOp, time.Duration) {
 	if cs.doneCh != nil {
 		return nil, 0 // Sync already running
 	}
-	mode, ourTD := cs.modeAndLocalHead()
 	if remaining := time.Until(cs.peersUnavailableUntil); remaining > 0 {
 		return nil, remaining
 	}
@@ -248,6 +247,7 @@ func (cs *chainSyncer) nextSyncOp() (*chainSyncOp, time.Duration) {
 		return nil, retry
 	}
 
+	mode, ourTD := cs.modeAndLocalHead()
 	op := peerToSyncOp(mode, peer)
 
 	if ourTD == nil {

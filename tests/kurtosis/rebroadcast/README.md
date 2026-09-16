@@ -2,17 +2,27 @@
 
 Each rebroadcast batch checks the handler's synced flag, current local total
 difficulty, and current peers directly. A known head uses locally calculated TD.
-An unverified higher head suppresses rebroadcast for at most one minute, including
-during peer backoff. Announcements, retries, and unrelated local chain progress
-cannot extend that window. It can renew only after the previous advertised head
-and TD are verified locally and the local TD has caught up to that claim.
+An unverified higher head suppresses rebroadcast for at most one minute per
+authenticated peer ID, including during peer backoff and across reconnects.
+Announcements, retries, and unrelated local chain progress cannot extend that
+window. It can renew only after the previous advertised head and TD are verified
+locally and the local TD has caught up to that claim.
+
+Claim history belongs to the node handler rather than a connection and retains
+at most 4096 identities for the handler's lifetime. Unresolved claims are never
+evicted or expired from that history. At capacity, unfamiliar identities cannot
+suppress rebroadcast until a tracked peer's verified catch-up frees a slot.
+This deliberately favors rebroadcast over resetting deadlines through eviction.
+The bound is per identity, not a single node-wide minute: distinct identities can
+receive separate windows while capacity remains. A node restart resets history.
 
 A previously synced node resumes when no peer has an outstanding claim within
 that window, even after failed catch-up. This deliberately permits rebroadcast
 after the window expires if the advertised head is still unverified, including
 during a long catch-up. Peer removal takes effect without waiting for the syncer.
 Initial-sync failures leave rebroadcast disabled. These cases have Go regression
-tests.
+tests. Rebroadcast checks read local TD without invoking sync-mode recovery;
+the sync scheduler evaluates that mode only after selecting an available peer.
 
 ## CI integration
 
