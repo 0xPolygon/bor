@@ -61,9 +61,11 @@ var (
 type testTxPool struct {
 	pool map[common.Hash]*types.Transaction // Hash map of collected transactions
 
-	txFeed          event.Feed   // Notification feed to allow waiting for inclusion
-	rebroadcastFeed event.Feed   // Notification feed for stuck tx rebroadcast
-	lock            sync.RWMutex // Protects the transaction pool
+	txFeed           event.Feed   // Notification feed to allow waiting for inclusion
+	rebroadcastFeed  event.Feed   // Notification feed for stuck tx rebroadcast
+	lock             sync.RWMutex // Protects the transaction pool
+	onRebroadcast    func([]common.Hash)
+	rebroadcastBatch []*types.Transaction
 }
 
 // newTestTxPool creates a mock transaction pool.
@@ -173,6 +175,13 @@ func (p *testTxPool) SubscribeTransactions(ch chan<- core.NewTxsEvent, reorgs bo
 // SubscribeRebroadcastTransactions returns a subscription to the rebroadcast feed.
 func (p *testTxPool) SubscribeRebroadcastTransactions(ch chan<- core.StuckTxsEvent) event.Subscription {
 	return p.rebroadcastFeed.Subscribe(ch)
+}
+
+func (p *testTxPool) RebroadcastAcknowledgement(txs []*types.Transaction) func([]common.Hash) {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+	p.rebroadcastBatch = txs
+	return p.onRebroadcast
 }
 
 // SendStuckTxs sends stuck transactions to the rebroadcast feed for testing.
@@ -466,12 +475,10 @@ func testTransactionGossipLoop(t *testing.T, announce, rebroadcast bool) {
 
 	acknowledged := make(chan []common.Hash, 1)
 	if rebroadcast {
-		handler.txpool.rebroadcastFeed.Send(core.StuckTxsEvent{
-			Txs: types.Transactions{signedTx},
-			OnBroadcast: func(hashes []common.Hash) {
-				acknowledged <- hashes
-			},
-		})
+		handler.txpool.lock.Lock()
+		handler.txpool.onRebroadcast = func(hashes []common.Hash) { acknowledged <- hashes }
+		handler.txpool.lock.Unlock()
+		handler.txpool.rebroadcastFeed.Send(core.StuckTxsEvent{Txs: types.Transactions{signedTx}})
 	} else {
 		handler.txpool.txFeed.Send(core.NewTxsEvent{Txs: types.Transactions{signedTx}})
 	}
@@ -500,6 +507,12 @@ func testTransactionGossipLoop(t *testing.T, announce, rebroadcast bool) {
 	case hashes := <-acknowledged:
 		if len(hashes) != 1 || hashes[0] != signedTx.Hash() {
 			t.Fatalf("unexpected acknowledged hashes: %v", hashes)
+		}
+		handler.txpool.lock.RLock()
+		batch := handler.txpool.rebroadcastBatch
+		handler.txpool.lock.RUnlock()
+		if len(batch) != 1 || batch[0] != signedTx {
+			t.Fatal("rebroadcast loop did not pass the original batch to pool accounting")
 		}
 	case <-time.After(time.Second):
 		t.Fatal("rebroadcast loop did not acknowledge the queued transaction")
@@ -542,7 +555,7 @@ func TestBroadcastChoice(t *testing.T) {
 
 	// Evaluate choice49 first.
 	expectedCount := 7 // sqrt(49)
-	var chosen49 = make([]map[*ethPeer]struct{}, len(txsenders))
+	chosen49 := make([]map[*ethPeer]struct{}, len(txsenders))
 	for i, txSender := range txsenders {
 		set := choice49.choosePeers(peers[:49], txSender)
 		chosen49[i] = maps.Clone(set)

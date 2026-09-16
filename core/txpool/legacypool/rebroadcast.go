@@ -20,16 +20,19 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
-func (pool *LegacyPool) rebroadcastEvent(txs []*types.Transaction) core.StuckTxsEvent {
+// RebroadcastAcknowledgement creates a batch-scoped callback for gossip queue
+// acceptance. Selecting candidates or creating the callback does not record a
+// send. Duplicate acknowledgments within a batch are ignored, including those
+// from multiple peers. This is separate from the public StuckTxsEvent shape.
+func (pool *LegacyPool) RebroadcastAcknowledgement(txs []*types.Transaction) func([]common.Hash) {
 	remaining := make(map[common.Hash]*types.Transaction, len(txs))
 	for _, tx := range txs {
 		remaining[tx.Hash()] = tx
 	}
-	return core.StuckTxsEvent{Txs: txs, OnBroadcast: func(hashes []common.Hash) {
+	return func(hashes []common.Hash) {
 		pool.mu.Lock()
 		defer pool.mu.Unlock()
 
@@ -49,5 +52,5 @@ func (pool *LegacyPool) rebroadcastEvent(txs []*types.Transaction) core.StuckTxs
 		}
 		rebroadcastTrackingGauge.Update(int64(len(pool.lastRebroadcast)))
 		rebroadcastTxMeter.Mark(count)
-	}}
+	}
 }

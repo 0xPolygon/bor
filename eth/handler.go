@@ -883,7 +883,11 @@ func EthPeersContainsID(ethPeers []*ethPeer, id string) bool {
 // - To a square root of all peers for non-blob transactions
 // - And, separately, as announcements to all peers which are not known to
 // already have the given transaction.
-func (h *handler) BroadcastTransactions(txs types.Transactions, onBroadcast func([]common.Hash)) bool {
+func (h *handler) BroadcastTransactions(txs types.Transactions) {
+	h.broadcastTransactions(txs, nil)
+}
+
+func (h *handler) broadcastTransactions(txs types.Transactions, onBroadcast func([]common.Hash)) bool {
 	var (
 		blobTxs  int // Number of blob transactions to announce only
 		largeTxs int // Number of large transactions to announce only
@@ -919,18 +923,7 @@ func (h *handler) BroadcastTransactions(txs types.Transactions, onBroadcast func
 			}
 		}
 
-		for _, peer := range peers {
-			if peer.KnownTransaction(tx.Hash()) {
-				continue
-			}
-			if _, ok := directSet[peer]; ok {
-				// Send direct.
-				txset[peer] = append(txset[peer], tx.Hash())
-			} else {
-				// Send announcement.
-				annos[peer] = append(annos[peer], tx.Hash())
-			}
-		}
+		assignTransactionPeers(tx.Hash(), peers, directSet, txset, annos)
 	}
 
 	directCount := queueTransactions(txset, false, onBroadcast)
@@ -1035,7 +1028,7 @@ func (h *handler) txBroadcastLoop() {
 	for {
 		select {
 		case event := <-h.txsCh:
-			h.BroadcastTransactions(event.Txs, nil)
+			h.BroadcastTransactions(event.Txs)
 		case <-h.txsSub.Err():
 			return
 		}
@@ -1051,7 +1044,7 @@ func (h *handler) stuckTxBroadcastLoop() {
 	for {
 		select {
 		case event := <-h.stuckTxsCh:
-			if h.rebroadcastStuckTransactions(event.Txs, event.OnBroadcast) {
+			if h.rebroadcastStuckTransactions(event.Txs, h.rebroadcastAcknowledgement(event.Txs)) {
 				log.Debug("Rebroadcast stuck transactions", "count", len(event.Txs))
 			}
 		case <-h.stuckTxsSub.Err():
@@ -1069,7 +1062,7 @@ func (h *handler) rebroadcastStuckTransactions(txs types.Transactions, onBroadca
 		hashes[i] = tx.Hash()
 	}
 	h.peers.ForgetTransactions(hashes)
-	return h.BroadcastTransactions(txs, onBroadcast)
+	return h.broadcastTransactions(txs, onBroadcast)
 }
 
 // enableSyncedFeatures enables the post-sync functionalities when the initial

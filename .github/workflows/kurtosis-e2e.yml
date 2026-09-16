@@ -148,7 +148,8 @@ jobs:
         run: |
           cp ./pos-workflows/configs/kurtosis-e2e.yml ./kurtosis-e2e.yml
           python3 bor-tests/tests/kurtosis/rebroadcast/prepare.py .
-          python3 bor-tests/tests/kurtosis/rebroadcast/provision.py . --env-file "$GITHUB_ENV"
+          python3 bor-tests/tests/kurtosis/rebroadcast/provision.py . \
+            --env-file "$GITHUB_ENV" --artifacts build/rebroadcast-e2e
 
       # Load images
       - name: Download bor docker image

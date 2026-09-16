@@ -37,6 +37,11 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn("if: always()", checkout)
         self.assertLess(self.workflow.index(checkout), self.workflow.index(collector))
 
+    def test_funder_and_harness_use_the_uploaded_artifact_root(self):
+        for name in ("Prepare E2E config", "Run E2E tests"):
+            self.assertIn("--artifacts build/rebroadcast-e2e", self.step(name))
+        self.assertIn('--env-file "$GITHUB_ENV"', self.step("Prepare E2E config"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -35,6 +35,12 @@ after `RebroadcastMaxAge`; the existing age limit still applies after a successf
 queue attempt. Duplicate acknowledgments are ignored within a batch, and removed
 or replaced transactions cannot regain stale tracking entries.
 
+`StuckTxsEvent` retains its single `Txs` field and both `Peer.AsyncSend*` methods
+retain their original signatures. The handler obtains batch accounting through
+the pool's optional `RebroadcastAcknowledgement` method; `SubPool` is unchanged.
+Custom rebroadcast consumers can use that callback to acknowledge accepted hashes.
+The additive `Peer.Queue*` methods report acceptance when that information is needed.
+
 ## CI integration
 
 The existing `e2e-tests` job in `.github/workflows/kurtosis-e2e.yml` runs smoke,
@@ -93,6 +99,14 @@ On test failure CI collects network diagnostics and the devnet state before
 uploading `kurtosis-e2e-diagnostics`. The upload always runs, even if collection
 fails, and includes `build/rebroadcast-e2e/`, `network-diagnostics.txt`, and
 `devnet-state/` when present. Enclave cleanup runs afterwards.
+
+Funder provisioning rejects environment files inside the workspace, the Kurtosis
+package, or the artifact root before generating a key or modifying genesis.
+Paths are resolved to catch directory aliases; symlink and hard-linked output
+files are refused. CI uses the runner's private `$GITHUB_ENV` file. For manual
+provisioning use a private temporary file outside these directories and pass
+`provision.py --artifacts` the same artifact root used by `e2e.py` or `run.sh`
+(default `build/rebroadcast-e2e`). Do not upload or copy the environment file.
 
 ## Local execution
 

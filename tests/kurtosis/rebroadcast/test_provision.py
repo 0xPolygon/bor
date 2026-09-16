@@ -75,6 +75,84 @@ class ProvisionTest(unittest.TestCase):
             command.assert_not_called()
             self.assertEqual(builder.read_text(), provision.GENESIS_MARKER + "\n")
 
+    def test_refuses_all_workflow_upload_paths_outside_the_package(self):
+        for relative in ("build/rebroadcast-e2e/funder.env", "devnet-state/funder.env",
+                         "network-diagnostics.txt"):
+            with self.subTest(path=relative), tempfile.TemporaryDirectory() as root:
+                package, builder = self.package(root)
+                workspace = pathlib.Path(root) / "workspace"
+                env_file = workspace / relative
+                env_file.parent.mkdir(parents=True)
+                with patch("provision.pathlib.Path.cwd", return_value=workspace), \
+                        patch("provision.command") as command:
+                    with self.assertRaisesRegex(RuntimeError, "outside"):
+                        provision.provision(package, env_file)
+                command.assert_not_called()
+                self.assertFalse(env_file.exists())
+                self.assertEqual(builder.read_text(), provision.GENESIS_MARKER + "\n")
+
+    def test_refuses_custom_artifacts_and_directory_aliases(self):
+        for alias in (False, True):
+            with self.subTest(alias=alias), tempfile.TemporaryDirectory() as root:
+                package, builder = self.package(root)
+                artifacts = pathlib.Path(root) / "external-artifacts"
+                artifacts.mkdir()
+                destination = artifacts
+                if alias:
+                    destination = pathlib.Path(root) / "alias"
+                    destination.symlink_to(artifacts, target_is_directory=True)
+                env_file = destination / "funder.env"
+                with patch("provision.command") as command:
+                    with self.assertRaisesRegex(RuntimeError, "outside"):
+                        provision.provision(package, env_file, artifacts=artifacts)
+                command.assert_not_called()
+                self.assertFalse(env_file.exists())
+                self.assertEqual(builder.read_text(), provision.GENESIS_MARKER + "\n")
+
+    def test_refuses_github_workspace_when_invoked_from_elsewhere(self):
+        with tempfile.TemporaryDirectory() as root:
+            package, builder = self.package(root)
+            workspace = pathlib.Path(root) / "workspace"
+            workspace.mkdir()
+            with patch.dict(os.environ, {"GITHUB_WORKSPACE": str(workspace)}), \
+                    patch("provision.command") as command:
+                with self.assertRaisesRegex(RuntimeError, "outside"):
+                    provision.provision(package, workspace / "funder.env")
+            command.assert_not_called()
+            self.assertEqual(list(workspace.iterdir()), [])
+
+    def test_refuses_linked_output_files_before_generating_a_key(self):
+        for kind in ("symlink", "hardlink", "directory"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as root:
+                package, builder = self.package(root)
+                target = package / "shared.env"
+                target.write_text("unchanged\n")
+                env_file = pathlib.Path(root) / "runner.env"
+                if kind == "symlink":
+                    env_file.symlink_to(target)
+                elif kind == "hardlink":
+                    os.link(target, env_file)
+                else:
+                    env_file.mkdir()
+                with patch("provision.command") as command:
+                    with self.assertRaises(RuntimeError):
+                        provision.provision(package, env_file)
+                command.assert_not_called()
+                self.assertEqual(target.read_text(), "unchanged\n")
+                self.assertEqual(builder.read_text(), provision.GENESIS_MARKER + "\n")
+
+    def test_appends_to_existing_runner_file_with_private_permissions(self):
+        wallet = {"address": "0x" + "a" * 40, "private_key": "0x" + secrets.token_hex(32)}
+        with tempfile.TemporaryDirectory() as root:
+            package, builder = self.package(root)
+            env_file = pathlib.Path(root) / "runner.env"
+            env_file.write_text("EXISTING=value\n")
+            env_file.chmod(0o644)
+            with patch("provision.command", return_value=json.dumps([wallet])), patch("builtins.print"):
+                provision.provision(package, env_file, artifacts=pathlib.Path(root) / "artifacts")
+            self.assertEqual(env_file.read_text(), f"EXISTING=value\nREBROADCAST_FUNDER_KEY={wallet['private_key']}\n")
+            self.assertEqual(env_file.stat().st_mode & 0o777, 0o600)
+
 
 if __name__ == "__main__":
     unittest.main()

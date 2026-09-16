@@ -23,14 +23,37 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/types"
 )
+
+func (h *handler) rebroadcastAcknowledgement(txs []*types.Transaction) func([]common.Hash) {
+	if pool, ok := h.txpool.(interface {
+		RebroadcastAcknowledgement([]*types.Transaction) func([]common.Hash)
+	}); ok {
+		return pool.RebroadcastAcknowledgement(txs)
+	}
+	return nil
+}
+
+func assignTransactionPeers(hash common.Hash, peers []*ethPeer, directSet map[*ethPeer]struct{}, txset, annos map[*ethPeer][]common.Hash) {
+	for _, peer := range peers {
+		if peer.KnownTransaction(hash) {
+			continue
+		}
+		if _, direct := directSet[peer]; direct {
+			txset[peer] = append(txset[peer], hash)
+		} else {
+			annos[peer] = append(annos[peer], hash)
+		}
+	}
+}
 
 func queueTransactions(peers map[*ethPeer][]common.Hash, announce bool, onBroadcast func([]common.Hash)) int {
 	count := 0
 	for peer, hashes := range peers {
-		send := peer.AsyncSendTransactions
+		send := peer.QueueTransactions
 		if announce {
-			send = peer.AsyncSendPooledTransactionHashes
+			send = peer.QueuePooledTransactionHashes
 		}
 		if send(hashes) {
 			count += len(hashes)

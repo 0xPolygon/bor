@@ -213,8 +213,13 @@ func (p *Peer) SendTransactions(txs types.Transactions) error {
 // AsyncSendTransactions queues a list of transactions (by hash) to eventually
 // propagate to a remote peer. The number of pending sends are capped (new ones
 // will force old sends to be dropped)
-// It reports queue acceptance, not delivery to the remote peer.
-func (p *Peer) AsyncSendTransactions(hashes []common.Hash) bool {
+func (p *Peer) AsyncSendTransactions(hashes []common.Hash) {
+	p.QueueTransactions(hashes)
+}
+
+// QueueTransactions is like AsyncSendTransactions but reports queue acceptance,
+// not delivery to the remote peer.
+func (p *Peer) QueueTransactions(hashes []common.Hash) bool {
 	select {
 	case p.txBroadcast <- hashes:
 		// Mark all the transactions as known, but ensure we don't overflow our limits
@@ -242,8 +247,13 @@ func (p *Peer) sendPooledTransactionHashes(hashes []common.Hash, types []byte, s
 // AsyncSendPooledTransactionHashes queues a list of transactions hashes to eventually
 // announce to a remote peer.  The number of pending sends are capped (new ones
 // will force old sends to be dropped)
-// It reports queue acceptance, not delivery to the remote peer.
-func (p *Peer) AsyncSendPooledTransactionHashes(hashes []common.Hash) bool {
+func (p *Peer) AsyncSendPooledTransactionHashes(hashes []common.Hash) {
+	p.QueuePooledTransactionHashes(hashes)
+}
+
+// QueuePooledTransactionHashes is like AsyncSendPooledTransactionHashes but
+// reports queue acceptance, not delivery to the remote peer.
+func (p *Peer) QueuePooledTransactionHashes(hashes []common.Hash) bool {
 	select {
 	case p.txAnnounce <- hashes:
 		// Mark all the transactions as known, but ensure we don't overflow our limits

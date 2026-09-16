@@ -104,15 +104,17 @@ func TestTransactionQueueAcceptance(t *testing.T) {
 					capacity = 0
 				}
 				queue := make(chan []common.Hash, capacity)
-				peer := &Peer{Peer: p2p.NewPeer(enode.ID{}, "test", nil),
+				peer := &Peer{
+					Peer: p2p.NewPeer(enode.ID{}, "test", nil),
 					term: make(chan struct{}), knownTxs: newKnownCache(10),
-					txBroadcast: queue, txAnnounce: queue}
+					txBroadcast: queue, txAnnounce: queue,
+				}
 				if closed {
 					close(peer.term)
 				}
-				send := peer.AsyncSendTransactions
+				send := peer.QueueTransactions
 				if announce {
-					send = peer.AsyncSendPooledTransactionHashes
+					send = peer.QueuePooledTransactionHashes
 				}
 				hash := common.Hash{1}
 				if accepted := send([]common.Hash{hash}); accepted == closed {

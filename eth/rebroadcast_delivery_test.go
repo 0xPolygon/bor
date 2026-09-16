@@ -31,6 +31,46 @@ import (
 
 type rebroadcastLogWriter chan struct{}
 
+// Hide the optional acknowledgment capability to exercise existing pool implementations.
+type legacyRebroadcastPool struct{ txPool }
+
+var _ interface{ BroadcastTransactions(types.Transactions) } = (*handler)(nil)
+
+func TestRebroadcastAcknowledgementLegacyPool(t *testing.T) {
+	h, txs := rebroadcastDeliveryFixture(t, false)
+	h.txpool = &legacyRebroadcastPool{h.txpool}
+	if h.rebroadcastAcknowledgement(txs) != nil {
+		t.Fatal("legacy pools must remain usable without the optional callback")
+	}
+}
+
+func TestRebroadcastPeerAssignment(t *testing.T) {
+	for _, mode := range []string{"direct", "announce", "known"} {
+		t.Run(mode, func(t *testing.T) {
+			h, txs := rebroadcastDeliveryFixture(t, true)
+			peers := h.peers.all()
+			peer, hash := peers[0], txs[0].Hash()
+			direct := make(map[*ethPeer]struct{})
+			if mode == "direct" || mode == "known" {
+				direct[peer] = struct{}{}
+			}
+			if mode == "known" {
+				peer.AsyncSendTransactions([]common.Hash{hash})
+			}
+			bodies, annos := make(map[*ethPeer][]common.Hash), make(map[*ethPeer][]common.Hash)
+			assignTransactionPeers(hash, peers, direct, bodies, annos)
+			if (len(bodies) == 1) != (mode == "direct") || (len(annos) == 1) != (mode == "announce") {
+				t.Fatal("peer assignment did not respect body selection and known hashes")
+			}
+			for _, set := range []map[*ethPeer][]common.Hash{bodies, annos} {
+				if hashes := set[peer]; len(hashes) > 0 && (len(hashes) != 1 || hashes[0] != hash) {
+					t.Fatal("peer assignment changed the transaction hash")
+				}
+			}
+		})
+	}
+}
+
 func (w rebroadcastLogWriter) Write(data []byte) (int, error) {
 	if bytes.Contains(data, []byte("Rebroadcast stuck transactions")) {
 		select {

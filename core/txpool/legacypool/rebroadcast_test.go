@@ -65,7 +65,7 @@ func TestRebroadcastSelectionDoesNotRecordSend(t *testing.T) {
 			t.Fatal("unsent transaction must remain eligible past max age")
 		}
 	}
-	batch.OnBroadcast([]common.Hash{tx.Hash()})
+	pool.RebroadcastAcknowledgement(batch.Txs)([]common.Hash{tx.Hash()})
 	pool.mu.RLock()
 	_, tracked = pool.lastRebroadcast[tx.Hash()]
 	eligible := pool.identifyStuckTransactions()
@@ -85,8 +85,8 @@ func TestRebroadcastAcknowledgementTracksOnlySentHashes(t *testing.T) {
 	pool.mu.Lock()
 	setTxAge(pool, from, 3*time.Hour)
 	pool.mu.Unlock()
-	batch := pool.rebroadcastEvent([]*types.Transaction{first, second})
-	batch.OnBroadcast([]common.Hash{first.Hash(), common.Hash{255}})
+	acknowledge := pool.RebroadcastAcknowledgement([]*types.Transaction{first, second})
+	acknowledge([]common.Hash{first.Hash(), {255}})
 	pool.mu.RLock()
 	eligible := pool.identifyStuckTransactions()
 	tracked := len(pool.lastRebroadcast)
@@ -94,7 +94,7 @@ func TestRebroadcastAcknowledgementTracksOnlySentHashes(t *testing.T) {
 	if tracked != 1 || len(eligible) != 1 || eligible[0].Hash() != second.Hash() {
 		t.Fatal("only the acknowledged batch member may lose eligibility")
 	}
-	batch.OnBroadcast([]common.Hash{second.Hash()})
+	acknowledge([]common.Hash{second.Hash()})
 	pool.mu.RLock()
 	tracked = len(pool.lastRebroadcast)
 	pool.mu.RUnlock()
@@ -106,8 +106,8 @@ func TestRebroadcastAcknowledgementTracksOnlySentHashes(t *testing.T) {
 func TestRebroadcastAcknowledgementIsIdempotent(t *testing.T) {
 	pool, _, _, tx := setupRebroadcastTest(t, time.Hour, 2*time.Hour, 100)
 	defer pool.Close()
-	batch := pool.rebroadcastEvent([]*types.Transaction{tx})
-	batch.OnBroadcast([]common.Hash{tx.Hash()})
+	acknowledge := pool.RebroadcastAcknowledgement([]*types.Transaction{tx})
+	acknowledge([]common.Hash{tx.Hash()})
 	pool.mu.RLock()
 	first := pool.lastRebroadcast[tx.Hash()]
 	pool.mu.RUnlock()
@@ -116,7 +116,7 @@ func TestRebroadcastAcknowledgementIsIdempotent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			batch.OnBroadcast([]common.Hash{tx.Hash(), tx.Hash()})
+			acknowledge([]common.Hash{tx.Hash(), tx.Hash()})
 		}()
 	}
 	wg.Wait()
@@ -132,12 +132,12 @@ func TestRebroadcastAcknowledgementMetrics(t *testing.T) {
 	defer pool.Close()
 	before := rebroadcastTxMeter.Snapshot().Count()
 	rebroadcastTrackingGauge.Update(0)
-	batch := pool.rebroadcastEvent([]*types.Transaction{tx})
+	acknowledge := pool.RebroadcastAcknowledgement([]*types.Transaction{tx})
 	if rebroadcastTxMeter.Snapshot().Count() != before {
 		t.Fatal("identification must not count as rebroadcast")
 	}
-	batch.OnBroadcast([]common.Hash{tx.Hash(), tx.Hash()})
-	batch.OnBroadcast([]common.Hash{tx.Hash()})
+	acknowledge([]common.Hash{tx.Hash(), tx.Hash()})
+	acknowledge([]common.Hash{tx.Hash()})
 	if rebroadcastTxMeter.Snapshot().Count() != before+1 {
 		t.Fatal("one batch member must be counted exactly once")
 	}
@@ -151,7 +151,7 @@ func TestRebroadcastAcknowledgementDoesNotRestoreRemovedTracking(t *testing.T) {
 		t.Run(map[bool]string{false: "removed", true: "replaced"}[replaced], func(t *testing.T) {
 			pool, key, _, tx := setupRebroadcastTest(t, time.Hour, 2*time.Hour, 100)
 			defer pool.Close()
-			batch := pool.rebroadcastEvent([]*types.Transaction{tx})
+			acknowledge := pool.RebroadcastAcknowledgement([]*types.Transaction{tx})
 			if replaced {
 				replacement := pricedTransaction(0, 100000, big.NewInt(2*params.BorDefaultTxPoolPriceLimit), key)
 				if err := pool.addRemoteSync(replacement); err != nil {
@@ -162,7 +162,7 @@ func TestRebroadcastAcknowledgementDoesNotRestoreRemovedTracking(t *testing.T) {
 				pool.removeTx(tx.Hash(), true, true)
 				pool.mu.Unlock()
 			}
-			batch.OnBroadcast([]common.Hash{tx.Hash()})
+			acknowledge([]common.Hash{tx.Hash()})
 			pool.mu.RLock()
 			defer pool.mu.RUnlock()
 			if len(pool.lastRebroadcast) != 0 {

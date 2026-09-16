@@ -487,7 +487,7 @@ func (pool *LegacyPool) loop() {
 			rebroadcastIdentifyTimer.Update(time.Since(identifyStart))
 
 			if len(stuckTxs) > 0 {
-				pool.rebroadcastTxFeed.Send(pool.rebroadcastEvent(stuckTxs))
+				pool.rebroadcastTxFeed.Send(core.StuckTxsEvent{Txs: stuckTxs})
 				log.Debug("Identified stuck transactions for rebroadcast", "count", len(stuckTxs))
 			}
 
