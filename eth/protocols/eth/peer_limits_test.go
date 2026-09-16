@@ -27,7 +27,7 @@ func TestPeerMessageLimits(t *testing.T) {
 		burst int
 		rate  int
 	}{
-		{"requests", []uint64{GetBlockHeadersMsg, GetBlockBodiesMsg, GetReceiptsMsg}, peerRequestBurst, peerRequestRate},
+		{"requests", []uint64{GetBlockHeadersMsg, GetBlockBodiesMsg, GetReceiptsMsg, GetPooledTransactionsMsg}, peerRequestBurst, peerRequestRate},
 		{"gossip", []uint64{NewBlockMsg, NewBlockHashesMsg}, peerGossipBurst, peerGossipRate},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -99,7 +99,7 @@ func TestPeerLimitsIsolation(t *testing.T) {
 	}
 	for _, code := range []uint64{
 		NewBlockMsg, NewBlockHashesMsg, BlockHeadersMsg, BlockBodiesMsg, ReceiptsMsg,
-		TransactionsMsg, NewPooledTransactionHashesMsg, GetPooledTransactionsMsg, PooledTransactionsMsg, BlockRangeUpdateMsg,
+		TransactionsMsg, NewPooledTransactionHashesMsg, PooledTransactionsMsg, BlockRangeUpdateMsg,
 	} {
 		if err := peer.checkMessageRate(code, 1, now); err != nil {
 			t.Fatalf("request allowance affected message %#x: %v", code, err)
@@ -110,46 +110,18 @@ func TestPeerLimitsIsolation(t *testing.T) {
 	}
 }
 
-func TestPeerReplyAccounting(t *testing.T) {
-	for _, id := range []uint64{0, 127, 128, ^uint64(0)} {
-		t.Run(fmt.Sprint(id), func(t *testing.T) {
-			data := []rlp.RawValue{{0xc0}, {0x82, 0x01, 0x02}}
-			encoded, err := rlp.EncodeToBytes(&BlockBodiesRLPPacket{id, data})
-			if err != nil {
-				t.Fatal(err)
-			}
-			peer, now := limitedTestPeer(), time.Now()
-			peer.limits.replyBytes = rate.NewLimiter(0, len(encoded))
-			if err := peer.checkReplyRate(id, data, now); err != nil {
-				t.Fatalf("exact allowance: %v", err)
-			}
-			if tokens := peer.limits.replyBytes.TokensAt(now); tokens != 0 {
-				t.Fatalf("uncharged encoded bytes: %v", tokens)
-			}
-			if err := peer.checkReplyRate(id, nil, now); !errors.Is(err, errPeerResponseScheduling) {
-				t.Fatalf("empty response beyond allowance: %v", err)
-			}
-			if tokens := peer.limits.replyBytes.TokensAt(now); tokens != 0 {
-				t.Fatalf("failed reservation consumed tokens: %v", tokens)
-			}
-		})
-	}
-}
-
 type limitTestRW struct {
-	msg    p2p.Msg
-	writes int
+	msg p2p.Msg
 }
 
 func (rw *limitTestRW) ReadMsg() (p2p.Msg, error) { return rw.msg, nil }
 func (rw *limitTestRW) WriteMsg(msg p2p.Msg) error {
-	rw.writes++
 	return msg.Discard()
 }
 
 func TestPeerMessageLimitBeforeDecode(t *testing.T) {
 	for _, version := range ProtocolVersions {
-		for _, code := range []uint64{GetBlockHeadersMsg, GetBlockBodiesMsg, GetReceiptsMsg, NewBlockMsg, NewBlockHashesMsg} {
+		for _, code := range []uint64{GetBlockHeadersMsg, GetBlockBodiesMsg, GetReceiptsMsg, GetPooledTransactionsMsg, NewBlockMsg, NewBlockHashesMsg} {
 			t.Run(fmt.Sprintf("%d/%d", version, code), func(t *testing.T) {
 				rw := &limitTestRW{msg: p2p.Msg{Code: code, Size: 1, Payload: bytes.NewReader([]byte{0xff})}}
 				peer := NewPeer(version, p2p.NewPeer(enode.ID{1}, "", nil), rw, nil)
@@ -161,78 +133,6 @@ func TestPeerMessageLimitBeforeDecode(t *testing.T) {
 				}
 			})
 		}
-	}
-}
-
-func TestPeerReplyLimitBeforeSend(t *testing.T) {
-	peer := limitedTestPeer()
-	rw := new(limitTestRW)
-	peer.rw = rw
-	peer.limits.replyBytes = rate.NewLimiter(0, 0)
-	for _, reply := range []func(uint64, []rlp.RawValue) error{
-		peer.ReplyBlockHeadersRLP, peer.ReplyBlockBodiesRLP, peer.ReplyReceiptsRLP,
-	} {
-		if err := reply(1, []rlp.RawValue{{0xc0}}); !errors.Is(err, errPeerResponseScheduling) {
-			t.Fatalf("expected limited response: %v", err)
-		}
-	}
-	if rw.writes != 0 {
-		t.Fatalf("sent %d responses beyond allowance", rw.writes)
-	}
-}
-
-func TestPeerReplyLimitWaits(t *testing.T) {
-	data := []rlp.RawValue{{0xc0}}
-	encoded, err := rlp.EncodeToBytes(&BlockBodiesRLPPacket{1, data})
-	if err != nil {
-		t.Fatal(err)
-	}
-	peer := limitedTestPeer()
-	rw := new(limitTestRW)
-	peer.rw = rw
-	peer.limits.replyBytes = rate.NewLimiter(rate.Limit(len(encoded)*20), len(encoded))
-	if err := peer.ReplyBlockBodiesRLP(1, data); err != nil {
-		t.Fatal(err)
-	}
-	started := time.Now()
-	if err := peer.ReplyBlockBodiesRLP(2, data); err != nil {
-		t.Fatal(err)
-	}
-	if elapsed := time.Since(started); elapsed < 40*time.Millisecond {
-		t.Fatalf("response was not throttled: %v", elapsed)
-	}
-	if rw.writes != 2 {
-		t.Fatalf("sent %d responses, want 2", rw.writes)
-	}
-}
-
-func TestPeerReplyLimitStopsAfterDisconnect(t *testing.T) {
-	data := []rlp.RawValue{{0xc0}}
-	encoded, err := rlp.EncodeToBytes(&BlockBodiesRLPPacket{1, data})
-	if err != nil {
-		t.Fatal(err)
-	}
-	peer := limitedTestPeer()
-	rw := new(limitTestRW)
-	peer.rw = rw
-	peer.limits.replyBytes = rate.NewLimiter(rate.Limit(1), len(encoded))
-	if err := peer.ReplyBlockBodiesRLP(1, data); err != nil {
-		t.Fatal(err)
-	}
-
-	result := make(chan error, 1)
-	go func() { result <- peer.ReplyBlockBodiesRLP(2, data) }()
-	close(peer.term)
-	select {
-	case err := <-result:
-		if !errors.Is(err, ErrDisconnected) {
-			t.Fatalf("reply error: got %v, want %v", err, ErrDisconnected)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("reply did not stop after disconnect")
-	}
-	if rw.writes != 1 {
-		t.Fatalf("sent %d responses, want 1", rw.writes)
 	}
 }
 
@@ -256,52 +156,57 @@ func TestPeerAnnouncementLimitBeforeBackend(t *testing.T) {
 	}
 }
 
-func TestPeerServingWithinAllowance(t *testing.T) {
-	peer, now := limitedTestPeer(), time.Now()
-	data := []rlp.RawValue{bytes.Repeat([]byte{0xc0}, 256<<10)}
-	for i := 0; i < 320; i++ {
-		at := now.Add(time.Duration(i) * time.Second / 32)
-		for _, code := range []uint64{GetBlockHeadersMsg, GetBlockBodiesMsg} {
-			if err := peer.checkMessageRate(code, 1, at); err != nil {
-				t.Fatalf("request %d: %v", i, err)
+func TestPeerConfiguredLimits(t *testing.T) {
+	for _, mode := range []string{"ordinary", "trusted", "static"} {
+		t.Run(mode, func(t *testing.T) {
+			p := configuredLimitsTestPeer(t, mode)
+			peer, now := &Peer{Peer: p, limits: newPeerLimits()}, time.Now()
+			peer.limits.requests = rate.NewLimiter(0, 0)
+			peer.limits.gossip = rate.NewLimiter(0, 0)
+			peer.limits.hashes = rate.NewLimiter(0, 0)
+			for _, code := range []uint64{GetBlockHeadersMsg, GetBlockBodiesMsg, GetReceiptsMsg, GetPooledTransactionsMsg, NewBlockMsg, NewBlockHashesMsg} {
+				err := peer.checkMessageRate(code, maxMessageSize, now)
+				if (err == nil) != (mode != "ordinary") {
+					t.Fatalf("message %#x exemption: %v", code, err)
+				}
 			}
-		}
-		if err := peer.checkReplyRate(uint64(i), data, at); err != nil {
-			t.Fatalf("reply %d: %v", i, err)
-		}
+			err := peer.checkAnnouncementRate(peerHashBurst+1, now)
+			if (err == nil) != (mode != "ordinary") {
+				t.Fatalf("announcement exemption: %v", err)
+			}
+		})
 	}
 }
 
-func TestPeerTrustedLimits(t *testing.T) {
+func configuredLimitsTestPeer(t *testing.T, mode string) *p2p.Peer {
+	t.Helper()
 	stop := make(chan struct{})
 	remote := limitsTestServer(t, nil, func(*p2p.Peer, p2p.MsgReadWriter) error { <-stop; return nil })
+	var trusted []*enode.Node
+	if mode == "trusted" {
+		trusted = append(trusted, remote.Self())
+	}
 	connected := make(chan *p2p.Peer, 1)
-	local := limitsTestServer(t, []*enode.Node{remote.Self()}, func(p *p2p.Peer, _ p2p.MsgReadWriter) error {
+	local := limitsTestServer(t, trusted, func(p *p2p.Peer, _ p2p.MsgReadWriter) error {
 		connected <- p
 		<-stop
 		return nil
 	})
 	t.Cleanup(func() { close(stop) })
-	remote.AddPeer(local.Self())
+	if mode == "static" {
+		local.AddPeer(remote.Self())
+	} else {
+		remote.AddPeer(local.Self())
+	}
 	select {
 	case p := <-connected:
-		peer, now := &Peer{Peer: p}, time.Now()
-		if !p.Inbound() || !p.Trusted() {
-			t.Fatal("expected authenticated inbound trusted peer")
+		if p.Trusted() != (mode == "trusted") || p.StaticDialed() != (mode == "static") {
+			t.Fatal("unexpected connection flags")
 		}
-		for _, code := range []uint64{GetBlockHeadersMsg, GetBlockBodiesMsg, GetReceiptsMsg, NewBlockMsg, NewBlockHashesMsg} {
-			if err := peer.checkMessageRate(code, maxMessageSize, now); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if err := peer.checkAnnouncementRate(peerHashBurst+1, now); err != nil {
-			t.Fatal(err)
-		}
-		if err := peer.checkReplyRate(1, nil, now); err != nil {
-			t.Fatal(err)
-		}
+		return p
 	case <-time.After(5 * time.Second):
-		t.Fatal("trusted peer did not connect")
+		t.Fatal("peer did not connect")
+		return nil
 	}
 }
 

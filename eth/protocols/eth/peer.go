@@ -21,7 +21,6 @@ import (
 	"math/rand"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	mapset "github.com/deckarep/golang-set/v2"
 
@@ -331,9 +330,6 @@ func (p *Peer) AsyncSendNewBlock(block *types.Block, td *big.Int) {
 
 // ReplyBlockHeadersRLP is the response to GetBlockHeaders.
 func (p *Peer) ReplyBlockHeadersRLP(id uint64, headers []rlp.RawValue) error {
-	if err := p.checkReplyRate(id, headers, time.Now()); err != nil {
-		return err
-	}
 	return p2p.Send(p.rw, BlockHeadersMsg, &BlockHeadersRLPPacket{
 		RequestId:               id,
 		BlockHeadersRLPResponse: headers,
@@ -342,9 +338,6 @@ func (p *Peer) ReplyBlockHeadersRLP(id uint64, headers []rlp.RawValue) error {
 
 // ReplyBlockBodiesRLP is the response to GetBlockBodies.
 func (p *Peer) ReplyBlockBodiesRLP(id uint64, bodies []rlp.RawValue) error {
-	if err := p.checkReplyRate(id, bodies, time.Now()); err != nil {
-		return err
-	}
 	// Not packed into BlockBodiesResponse to avoid RLP decoding
 	return p2p.Send(p.rw, BlockBodiesMsg, &BlockBodiesRLPPacket{
 		RequestId:              id,
@@ -354,9 +347,6 @@ func (p *Peer) ReplyBlockBodiesRLP(id uint64, bodies []rlp.RawValue) error {
 
 // ReplyReceiptsRLP is the response to GetReceipts.
 func (p *Peer) ReplyReceiptsRLP(id uint64, receipts []rlp.RawValue) error {
-	if err := p.checkReplyRate(id, receipts, time.Now()); err != nil {
-		return err
-	}
 	return p2p.Send(p.rw, ReceiptsMsg, &ReceiptsRLPPacket{
 		RequestId:           id,
 		ReceiptsRLPResponse: receipts,
