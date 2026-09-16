@@ -213,13 +213,16 @@ func (p *Peer) SendTransactions(txs types.Transactions) error {
 // AsyncSendTransactions queues a list of transactions (by hash) to eventually
 // propagate to a remote peer. The number of pending sends are capped (new ones
 // will force old sends to be dropped)
-func (p *Peer) AsyncSendTransactions(hashes []common.Hash) {
+// It reports queue acceptance, not delivery to the remote peer.
+func (p *Peer) AsyncSendTransactions(hashes []common.Hash) bool {
 	select {
 	case p.txBroadcast <- hashes:
 		// Mark all the transactions as known, but ensure we don't overflow our limits
 		p.knownTxs.Add(hashes...)
+		return true
 	case <-p.term:
 		p.Log().Debug("Dropping transaction propagation", "count", len(hashes))
+		return false
 	}
 }
 
@@ -239,13 +242,16 @@ func (p *Peer) sendPooledTransactionHashes(hashes []common.Hash, types []byte, s
 // AsyncSendPooledTransactionHashes queues a list of transactions hashes to eventually
 // announce to a remote peer.  The number of pending sends are capped (new ones
 // will force old sends to be dropped)
-func (p *Peer) AsyncSendPooledTransactionHashes(hashes []common.Hash) {
+// It reports queue acceptance, not delivery to the remote peer.
+func (p *Peer) AsyncSendPooledTransactionHashes(hashes []common.Hash) bool {
 	select {
 	case p.txAnnounce <- hashes:
 		// Mark all the transactions as known, but ensure we don't overflow our limits
 		p.knownTxs.Add(hashes...)
+		return true
 	case <-p.term:
 		p.Log().Debug("Dropping transaction announcement", "count", len(hashes))
+		return false
 	}
 }
 

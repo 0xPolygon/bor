@@ -19,7 +19,8 @@ class WorkflowTest(unittest.TestCase):
         positions = [self.workflow.index(self.step(name)) for name in names]
         self.assertEqual(positions, sorted(positions))
         self.assertIn("id: e2e-tests", self.step(names[0]))
-        self.assertIn("if: always() && steps.e2e-tests.outcome == 'failure'", self.step(names[1]))
+        self.assertIn("if: failure()", self.step(names[1]))
+        self.assertNotIn("steps.e2e-tests.outcome", self.step(names[1]))
         self.assertIn("if: always()", self.step(names[2]))
         self.assertIn("if: always()", self.step(names[3]))
 
@@ -29,6 +30,12 @@ class WorkflowTest(unittest.TestCase):
         self.assertIsNotNone(match)
         self.assertEqual({line.strip() for line in match[1].splitlines()},
                          {"build/rebroadcast-e2e/", "network-diagnostics.txt", "devnet-state/"})
+
+    def test_diagnostics_action_is_available_after_setup_failure(self):
+        checkout = self.step("Checkout pos-workflows")
+        collector = self.step("Collect network diagnostics and state dump")
+        self.assertIn("if: always()", checkout)
+        self.assertLess(self.workflow.index(checkout), self.workflow.index(collector))
 
 
 if __name__ == "__main__":

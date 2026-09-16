@@ -25,6 +25,23 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 )
 
+func queueTransactions(peers map[*ethPeer][]common.Hash, announce bool, onBroadcast func([]common.Hash)) int {
+	count := 0
+	for peer, hashes := range peers {
+		send := peer.AsyncSendTransactions
+		if announce {
+			send = peer.AsyncSendPooledTransactionHashes
+		}
+		if send(hashes) {
+			count += len(hashes)
+			if onBroadcast != nil {
+				onBroadcast(hashes)
+			}
+		}
+	}
+	return count
+}
+
 const (
 	rebroadcastPeerGrace     = time.Minute
 	maxRebroadcastPeerClaims = 4096
@@ -63,6 +80,7 @@ func (h *handler) rebroadcastAllowed(ourTD *big.Int, now time.Time) bool {
 	state := &h.rebroadcast
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	state.clearVerifiedClaims(h.chain, ourTD)
 
 	allowed := true
 	for _, peer := range h.peers.all() {
@@ -74,17 +92,21 @@ func (h *handler) rebroadcastAllowed(ourTD *big.Int, now time.Time) bool {
 	return allowed
 }
 
+func (s *rebroadcastState) clearVerifiedClaims(chain *core.BlockChain, ourTD *big.Int) {
+	// Catch-up can be completed by another peer after the claimant disconnects.
+	for id, claim := range s.claims {
+		if claim.caughtUp(chain, ourTD) {
+			delete(s.claims, id)
+		}
+	}
+}
+
 func (s *rebroadcastState) blocksRebroadcast(p *ethPeer, chain *core.BlockChain, ourTD *big.Int, now time.Time) bool {
 	head, td := p.Head()
 	if known := rebroadcastHeadTD(chain, head); known != nil {
 		td = known
 	}
 	state := s.claims[p.ID()]
-	// Expiry and disconnects retain the claim; only verified catch-up can renew it.
-	if state != nil && state.caughtUp(chain, ourTD) {
-		delete(s.claims, p.ID())
-		state = nil
-	}
 	if td.Cmp(ourTD) <= 0 {
 		return false
 	}

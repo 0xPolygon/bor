@@ -5589,6 +5589,7 @@ func TestRebroadcastLoopIntegration(t *testing.T) {
 		if event.Txs[0].Hash() != tx.Hash() {
 			t.Errorf("wrong transaction hash in rebroadcast event")
 		}
+		event.OnBroadcast([]common.Hash{tx.Hash()})
 	case <-time.After(500 * time.Millisecond):
 		t.Error("timeout waiting for rebroadcast event")
 	}

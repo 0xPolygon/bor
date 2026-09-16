@@ -883,13 +883,10 @@ func EthPeersContainsID(ethPeers []*ethPeer, id string) bool {
 // - To a square root of all peers for non-blob transactions
 // - And, separately, as announcements to all peers which are not known to
 // already have the given transaction.
-func (h *handler) BroadcastTransactions(txs types.Transactions) {
+func (h *handler) BroadcastTransactions(txs types.Transactions, onBroadcast func([]common.Hash)) bool {
 	var (
 		blobTxs  int // Number of blob transactions to announce only
 		largeTxs int // Number of large transactions to announce only
-
-		directCount int // Number of transactions sent directly to peers (duplicates included)
-		annCount    int // Number of transactions announced across all peers (duplicates included)
 
 		txset = make(map[*ethPeer][]common.Hash) // Set peer->hash to transfer directly
 		annos = make(map[*ethPeer][]common.Hash) // Set peer->hash to announce
@@ -936,17 +933,11 @@ func (h *handler) BroadcastTransactions(txs types.Transactions) {
 		}
 	}
 
-	for peer, hashes := range txset {
-		directCount += len(hashes)
-		peer.AsyncSendTransactions(hashes)
-	}
-
-	for peer, hashes := range annos {
-		annCount += len(hashes)
-		peer.AsyncSendPooledTransactionHashes(hashes)
-	}
+	directCount := queueTransactions(txset, false, onBroadcast)
+	annCount := queueTransactions(annos, true, onBroadcast)
 	log.Debug("Distributed transactions", "plaintxs", len(txs)-blobTxs-largeTxs, "blobtxs", blobTxs, "largetxs", largeTxs,
 		"bcastcount", directCount, "anncount", annCount)
+	return directCount+annCount > 0
 }
 
 // minedBroadcastLoop sends mined blocks to connected peers.
@@ -1044,7 +1035,7 @@ func (h *handler) txBroadcastLoop() {
 	for {
 		select {
 		case event := <-h.txsCh:
-			h.BroadcastTransactions(event.Txs)
+			h.BroadcastTransactions(event.Txs, nil)
 		case <-h.txsSub.Err():
 			return
 		}
@@ -1060,7 +1051,7 @@ func (h *handler) stuckTxBroadcastLoop() {
 	for {
 		select {
 		case event := <-h.stuckTxsCh:
-			if h.rebroadcastStuckTransactions(event.Txs) {
+			if h.rebroadcastStuckTransactions(event.Txs, event.OnBroadcast) {
 				log.Debug("Rebroadcast stuck transactions", "count", len(event.Txs))
 			}
 		case <-h.stuckTxsSub.Err():
@@ -1069,7 +1060,7 @@ func (h *handler) stuckTxBroadcastLoop() {
 	}
 }
 
-func (h *handler) rebroadcastStuckTransactions(txs types.Transactions) bool {
+func (h *handler) rebroadcastStuckTransactions(txs types.Transactions, onBroadcast func([]common.Hash)) bool {
 	if !h.canRebroadcast() {
 		return false
 	}
@@ -1078,8 +1069,7 @@ func (h *handler) rebroadcastStuckTransactions(txs types.Transactions) bool {
 		hashes[i] = tx.Hash()
 	}
 	h.peers.ForgetTransactions(hashes)
-	h.BroadcastTransactions(txs)
-	return true
+	return h.BroadcastTransactions(txs, onBroadcast)
 }
 
 // enableSyncedFeatures enables the post-sync functionalities when the initial

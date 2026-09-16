@@ -38,7 +38,7 @@ func TestRebroadcastRechecksPeerState(t *testing.T) {
 			h, cleanup := newChainSyncerTestHandler(t)
 			defer cleanup()
 			h.enableSyncedFeatures()
-			if !h.rebroadcastStuckTransactions(nil) {
+			if !h.canRebroadcast() {
 				t.Fatal("caught-up node should rebroadcast")
 			}
 			if updateHead {
@@ -47,11 +47,11 @@ func TestRebroadcastRechecksPeerState(t *testing.T) {
 			} else {
 				registerPeerWithTD(t, h.peers, 1_000_000)
 			}
-			if h.rebroadcastStuckTransactions(nil) {
+			if h.canRebroadcast() {
 				t.Fatal("current higher peer must suppress rebroadcast before the syncer runs")
 			}
 			h.synced.Store(false)
-			if h.rebroadcastStuckTransactions(nil) {
+			if h.canRebroadcast() {
 				t.Fatal("initial sync must suppress rebroadcast")
 			}
 		})
@@ -89,17 +89,17 @@ func TestRebroadcastPeerClaimWindow(t *testing.T) {
 			}
 			peer.SetHead(common.Hash{2}, big.NewInt(2_000_000))
 			h.chainSync.nextSyncOp()
-			if !h.rebroadcastStuckTransactions(nil) {
+			if !h.canRebroadcast() {
 				t.Fatal("announcements and sync retries must not renew an expired claim")
 			}
 			peer.SetHead(common.Hash{3}, big.NewInt(0))
 			h.rebroadcastAllowed(td, time.Now())
 			peer.SetHead(common.Hash{4}, big.NewInt(3_000_000))
-			if !h.rebroadcastStuckTransactions(nil) {
+			if !h.canRebroadcast() {
 				t.Fatal("lowering and raising an unverified claim must not renew it")
 			}
 			h.synced.Store(false)
-			if h.rebroadcastStuckTransactions(nil) {
+			if h.canRebroadcast() {
 				t.Fatal("expiry must not enable an initially unsynced node")
 			}
 		})
@@ -112,7 +112,7 @@ func TestRebroadcastUsesLocalHeadTD(t *testing.T) {
 	h.enableSyncedFeatures()
 	peer := registerPeerWithTD(t, h.peers, 1_000_000)
 	peer.SetHead(h.chain.CurrentBlock().Hash(), big.NewInt(1_000_000))
-	if !h.rebroadcastStuckTransactions(nil) {
+	if !h.canRebroadcast() {
 		t.Fatal("a known head must use locally verified TD")
 	}
 }
@@ -141,7 +141,7 @@ func TestRebroadcastVerifiedClaimRenewsWindow(t *testing.T) {
 	if _, err := h.chain.InsertChain(blocks[1:], false); err != nil {
 		t.Fatal(err)
 	}
-	if !h.rebroadcastStuckTransactions(nil) {
+	if !h.canRebroadcast() {
 		t.Fatal("catching up should restore rebroadcast")
 	}
 }
@@ -160,11 +160,11 @@ func TestRebroadcastUnrelatedProgressDoesNotRenewWindow(t *testing.T) {
 	if _, err := h.chain.InsertChain(blocks, false); err != nil {
 		t.Fatal(err)
 	}
-	if !h.rebroadcastStuckTransactions(nil) {
+	if !h.canRebroadcast() {
 		t.Fatal("unrelated chain progress must not renew an unverified claim")
 	}
 	registerPeerWithTD(t, h.peers, 2_000_000)
-	if h.rebroadcastStuckTransactions(nil) {
+	if h.canRebroadcast() {
 		t.Fatal("a second, newly ahead peer must still suppress rebroadcast")
 	}
 }
@@ -186,7 +186,7 @@ func TestRebroadcastClaimRequiresMatchingTD(t *testing.T) {
 		t.Fatal(err)
 	}
 	peer.SetHead(common.Hash{3}, new(big.Int).Mul(claimed, big.NewInt(10)))
-	if !h.rebroadcastStuckTransactions(nil) {
+	if !h.canRebroadcast() {
 		t.Fatal("importing the advertised block with a different TD must not renew its claim")
 	}
 }
@@ -201,7 +201,7 @@ func TestRebroadcastObservesAllPeerClaims(t *testing.T) {
 	if h.rebroadcastAllowed(td, time.Now().Add(-2*rebroadcastPeerGrace)) {
 		t.Fatal("new claims should suppress rebroadcast")
 	}
-	if !h.rebroadcastStuckTransactions(nil) {
+	if !h.canRebroadcast() {
 		t.Fatal("all claims must expire even when another peer already suppressed rebroadcast")
 	}
 }
@@ -223,7 +223,7 @@ func TestRebroadcastConcurrentPeerUpdates(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 100; i++ {
-			h.rebroadcastStuckTransactions(nil)
+			h.canRebroadcast()
 		}
 	}()
 	wg.Wait()

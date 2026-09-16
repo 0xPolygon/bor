@@ -130,6 +130,7 @@ jobs:
           cache: false
 
       - name: Checkout pos-workflows
+        if: always()
         uses: actions/checkout@v7
         with:
           repository: 0xPolygon/pos-workflows
@@ -210,7 +211,7 @@ jobs:
 
       # Collect diagnostics on failure
       - name: Collect network diagnostics and state dump
-        if: always() && steps.e2e-tests.outcome == 'failure'
+        if: failure()
         uses: ./pos-workflows/.github/actions/network-diagnostics-and-state-dump
         with:
           enclave_name: ${{ env.ENCLAVE_NAME }}

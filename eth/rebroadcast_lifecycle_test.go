@@ -201,6 +201,38 @@ func TestRebroadcastCaughtUpPeersDoNotAllocateHistory(t *testing.T) {
 	}
 }
 
+func TestRebroadcastDisconnectedClaimReclaimsCapacity(t *testing.T) {
+	h, cleanup := newChainSyncerTestHandler(t)
+	defer cleanup()
+	h.enableSyncedFeatures()
+	blocks, _ := core.GenerateChain(h.chain.Config(), h.chain.Genesis(), ethash.NewFaker(), h.database, 1, nil)
+	_, td := h.chainSync.modeAndLocalHead()
+	claimedTD := new(big.Int).Add(td, blocks[0].Difficulty())
+	peer := registerPeerWithTD(t, h.peers, claimedTD.Int64())
+	peer.SetHead(blocks[0].Hash(), claimedTD)
+	start := time.Now()
+	if h.rebroadcastAllowed(td, start) {
+		t.Fatal("initial claim must suppress rebroadcast")
+	}
+	fillRebroadcastHistory(h, start.Add(rebroadcastPeerGrace))
+	if err := h.peers.unregisterPeer(peer.ID()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.chain.InsertChain(blocks, false); err != nil {
+		t.Fatal(err)
+	}
+	newPeer := registerPeerWithTD(t, h.peers, 2_000_000)
+	if h.rebroadcastAllowed(claimedTD, start.Add(2*rebroadcastPeerGrace)) {
+		t.Fatal("verified disconnected claim must free capacity for a new ahead peer")
+	}
+	if h.rebroadcast.claims[peer.ID()] != nil || h.rebroadcast.claims[newPeer.ID()] == nil {
+		t.Fatal("disconnected claim was not replaced with the new claim")
+	}
+	if len(h.rebroadcast.claims) != maxRebroadcastPeerClaims {
+		t.Fatal("unverified disconnected claims must remain recorded")
+	}
+}
+
 func TestRebroadcastUsesSelectedLocalHead(t *testing.T) {
 	for _, mode := range []string{"full", "snap", "stateless"} {
 		t.Run(mode, func(t *testing.T) {

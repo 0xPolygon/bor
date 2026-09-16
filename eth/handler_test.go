@@ -422,17 +422,35 @@ func TestJailPeer(t *testing.T) {
 }
 
 func TestStuckTxBroadcastLoop(t *testing.T) {
+	for _, announce := range []bool{false, true} {
+		t.Run(map[bool]string{false: "bodies", true: "announcements"}[announce], func(t *testing.T) {
+			testTransactionGossipLoop(t, announce, true)
+		})
+	}
+}
+
+func TestRebroadcastPreservesNewTransactionGossip(t *testing.T) {
+	for _, announce := range []bool{false, true} {
+		t.Run(map[bool]string{false: "bodies", true: "announcements"}[announce], func(t *testing.T) {
+			testTransactionGossipLoop(t, announce, false)
+		})
+	}
+}
+
+func testTransactionGossipLoop(t *testing.T, announce, rebroadcast bool) {
+	logged := captureRebroadcastLog(t)
 	handler := newTestHandler()
 	defer handler.close()
 
 	handler.handler.enableSyncedFeatures()
+	handler.handler.txAnnouncementOnly = announce
 
 	tx := types.NewTransaction(0, testAddr, big.NewInt(100), 21000, big.NewInt(1000000000), nil)
 	signedTx, err := types.SignTx(tx, types.HomesteadSigner{}, testKey)
 	if err != nil {
 		t.Fatalf("failed to sign tx: %v", err)
 	}
-	// Seed without a NewTxsEvent so only the stuck-tx loop can send the packet.
+	// Seed silently so only the explicitly selected feed can send the packet.
 	handler.txpool.lock.Lock()
 	handler.txpool.pool[signedTx.Hash()] = signedTx
 	handler.txpool.lock.Unlock()
@@ -446,7 +464,17 @@ func TestStuckTxBroadcastLoop(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handler.txpool.SendStuckTxs(types.Transactions{signedTx})
+	acknowledged := make(chan []common.Hash, 1)
+	if rebroadcast {
+		handler.txpool.rebroadcastFeed.Send(core.StuckTxsEvent{
+			Txs: types.Transactions{signedTx},
+			OnBroadcast: func(hashes []common.Hash) {
+				acknowledged <- hashes
+			},
+		})
+	} else {
+		handler.txpool.txFeed.Send(core.NewTxsEvent{Txs: types.Transactions{signedTx}})
+	}
 	type readResult struct {
 		msg p2p.Msg
 		err error
@@ -461,18 +489,25 @@ func TestStuckTxBroadcastLoop(t *testing.T) {
 		if result.err != nil {
 			t.Fatal(result.err)
 		}
-		if result.msg.Code != eth.TransactionsMsg {
-			t.Fatalf("message code mismatch: have %d, want %d", result.msg.Code, eth.TransactionsMsg)
-		}
-		var txs eth.TransactionsPacket
-		if err := result.msg.Decode(&txs); err != nil {
-			t.Fatal(err)
-		}
-		if len(txs) != 1 || txs[0].Hash() != signedTx.Hash() {
-			t.Fatalf("rebroadcast transactions mismatch: have %v, want %s", txs, signedTx.Hash())
-		}
+		checkRebroadcastPacket(t, result.msg, signedTx.Hash(), announce)
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for rebroadcast transaction")
+	}
+	if !rebroadcast {
+		return
+	}
+	select {
+	case hashes := <-acknowledged:
+		if len(hashes) != 1 || hashes[0] != signedTx.Hash() {
+			t.Fatalf("unexpected acknowledged hashes: %v", hashes)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("rebroadcast loop did not acknowledge the queued transaction")
+	}
+	select {
+	case <-logged:
+	case <-time.After(time.Second):
+		t.Fatal("rebroadcast loop did not emit its observation log")
 	}
 }
 
@@ -486,7 +521,7 @@ func TestRebroadcastStuckTransactionsNotSynced(t *testing.T) {
 		t.Fatalf("failed to sign tx: %v", err)
 	}
 
-	if handler.handler.rebroadcastStuckTransactions(types.Transactions{signedTx}) {
+	if handler.handler.rebroadcastStuckTransactions(types.Transactions{signedTx}, nil) {
 		t.Fatal("unsynced handler should not rebroadcast stuck transactions")
 	}
 }

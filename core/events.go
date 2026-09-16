@@ -28,7 +28,12 @@ import (
 type NewTxsEvent struct{ Txs []*types.Transaction }
 
 // StuckTxsEvent is posted when stuck transactions need rebroadcast.
-type StuckTxsEvent struct{ Txs []*types.Transaction }
+type StuckTxsEvent struct {
+	Txs []*types.Transaction
+	// OnBroadcast records only hashes accepted by a peer's gossip queue. It may
+	// be called more than once or with overlapping subsets of this batch.
+	OnBroadcast func([]common.Hash)
+}
 
 // NewMinedBlockEvent is posted when a block has been imported.
 type NewMinedBlockEvent struct {

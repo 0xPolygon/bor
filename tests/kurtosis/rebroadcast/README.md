@@ -11,7 +11,9 @@ locally and the local TD has caught up to that claim.
 Claim history belongs to the node handler rather than a connection and retains
 at most 4096 identities for the handler's lifetime. Unresolved claims are never
 evicted or expired from that history. At capacity, unfamiliar identities cannot
-suppress rebroadcast until a tracked peer's verified catch-up frees a slot.
+suppress rebroadcast until a stored claim's verified catch-up frees a slot.
+Every batch checks all stored claims against local TD and headers, including
+claims from disconnected peers. Unrelated progress does not clear a claim.
 This deliberately favors rebroadcast over resetting deadlines through eviction.
 The bound is per identity, not a single node-wide minute: distinct identities can
 receive separate windows while capacity remains. A node restart resets history.
@@ -24,11 +26,23 @@ Initial-sync failures leave rebroadcast disabled. These cases have Go regression
 tests. Rebroadcast checks read local TD without invoking sync-mode recovery;
 the sync scheduler evaluates that mode only after selecting an available peer.
 
+Identifying a candidate batch does not update rebroadcast history or the
+rebroadcast meter. The handler acknowledges only transaction hashes accepted by
+a peer's asynchronous gossip queue. This records an attempted send, not remote
+receipt. Suppressed batches, private transactions, and batches with no accepting
+peer remain unacknowledged. Transactions never actually queued remain eligible
+after `RebroadcastMaxAge`; the existing age limit still applies after a successful
+queue attempt. Duplicate acknowledgments are ignored within a batch, and removed
+or replaced transactions cannot regain stale tracking entries.
+
 ## CI integration
 
 The existing `e2e-tests` job in `.github/workflows/kurtosis-e2e.yml` runs smoke,
 RPC, and rebroadcast checks in one `Run E2E tests` step, against the same enclave.
 It reuses the Bor and Heimdall images, setup, network diagnostics, and cleanup.
+Diagnostics run on any job failure, including partial enclave startup and setup
+failures before the E2E step. The diagnostics action is checked out even after an
+earlier setup failure. Collection still precedes artifact upload and cleanup.
 The shared Bor template enables debug logs and a two-second rebroadcast interval
 with a 30-minute eligibility window. The fixture uses all four validators,
 the candidate RPC node, and the baseline RPC peer from the smoke-test topology.
