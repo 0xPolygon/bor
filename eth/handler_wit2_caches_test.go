@@ -474,10 +474,10 @@ func TestCosendWitnessAnnouncementVersionSplit(t *testing.T) {
 
 	// lookupSignedWitnessHash round-trip: hit for the cached announce, miss
 	// for an unknown hash.
-	got, ok := h.handler.lookupSignedWitnessHash(hash)
+	got, _, ok := h.handler.lookupSignedWitnessHash(hash)
 	require.True(t, ok)
 	require.Equal(t, common.HexToHash("0xc0de"), got)
-	_, ok = h.handler.lookupSignedWitnessHash(common.HexToHash("0xabsent"))
+	_, _, ok = h.handler.lookupSignedWitnessHash(common.HexToHash("0xabsent"))
 	require.False(t, ok)
 
 	// Re-cosend via the static/trusted list: both peers now know the witness,
@@ -562,7 +562,7 @@ func signTestAnnouncement(t *testing.T, ann *wit.SignedWitnessAnnouncement) {
 
 	key, err := crypto.GenerateKey()
 	require.NoError(t, err)
-	digest := wit.WitnessAnnouncementSigningHash(ann.BlockHash, ann.BlockNumber, ann.WitnessHash)
+	digest := wit.WitnessAnnouncementSigningHash(ann.BlockHash, ann.BlockNumber, ann.WitnessHash, ann.WitnessSize)
 	sig, err := crypto.Sign(digest.Bytes(), key)
 	require.NoError(t, err)
 	ann.Signature = sig
@@ -1063,12 +1063,12 @@ func TestCanonicalWitnessHashStorageGate(t *testing.T) {
 	defer h.close()
 
 	hash := common.HexToHash("0x4242")
-	_, ok := h.handler.canonicalWitnessHash(hash)
+	_, _, ok := h.handler.canonicalWitnessHash(hash)
 	require.False(t, ok, "absent witness must yield no commitment")
 
 	body := []byte{0x01, 0x02, 0x03}
 	rawdb.WriteWitness(h.chain.DB(), hash, body)
-	got, ok := h.handler.canonicalWitnessHash(hash)
+	got, _, ok := h.handler.canonicalWitnessHash(hash)
 	require.True(t, ok)
 	require.Equal(t, stateless.WitnessCommitHash(body), got)
 }

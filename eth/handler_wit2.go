@@ -138,7 +138,7 @@ func verifySignedAnnouncement(ann wit.SignedWitnessAnnouncement) (common.Address
 	if len(ann.Signature) != wit.SignatureLength {
 		return common.Address{}, errInvalidSignatureLength
 	}
-	digest := wit.WitnessAnnouncementSigningHash(ann.BlockHash, ann.BlockNumber, ann.WitnessHash)
+	digest := wit.WitnessAnnouncementSigningHash(ann.BlockHash, ann.BlockNumber, ann.WitnessHash, ann.WitnessSize)
 	// Normalize the recovery id to 0/1 before recovery. External signers (Clef)
 	// return V in 27/28 form for any mimetype other than Clique — see
 	// accounts/external.SignData, which only de-offsets MimetypeClique — and
@@ -198,12 +198,12 @@ func (h *handler) cosendWitnessAnnouncement(blockHash common.Hash, blockNumber u
 // lookupSignedWitnessHash returns the BP-signed witness hash for a block, if
 // the local cache has a verified announcement. Used by the witness manager
 // on fetch success to verify byte-correctness against the signed commitment.
-func (h *handler) lookupSignedWitnessHash(blockHash common.Hash) (common.Hash, bool) {
+func (h *handler) lookupSignedWitnessHash(blockHash common.Hash) (common.Hash, uint64, bool) {
 	ann, ok := h.signedWitnesses.get(blockHash)
 	if !ok {
-		return common.Hash{}, false
+		return common.Hash{}, 0, false
 	}
-	return ann.WitnessHash, true
+	return ann.WitnessHash, ann.WitnessSize, true
 }
 
 // cacheVerifiedWitnessForServing receives canonical-encoded witness bytes from
@@ -265,11 +265,11 @@ func (h *handler) signLocalWitnessAnnouncement(blockHash common.Hash, blockNumbe
 		return wit.SignedWitnessAnnouncement{}, false
 	}
 
-	witnessHash, ok := h.canonicalWitnessHash(blockHash)
+	witnessHash, witnessSize, ok := h.canonicalWitnessHash(blockHash)
 	if !ok {
 		return wit.SignedWitnessAnnouncement{}, false
 	}
-	preimage := wit.WitnessAnnouncementSigningPreImage(blockHash, blockNumber, witnessHash)
+	preimage := wit.WitnessAnnouncementSigningPreImage(blockHash, blockNumber, witnessHash, witnessSize)
 	_, sig, err := borEngine.SignBytes(accounts.MimetypeBorWitnessAnnounce, preimage)
 	if err != nil {
 		log.Warn("wit2: failed to sign witness announcement", "blockHash", blockHash, "err", err)
@@ -287,6 +287,7 @@ func (h *handler) signLocalWitnessAnnouncement(blockHash common.Hash, blockNumbe
 		BlockHash:   blockHash,
 		BlockNumber: blockNumber,
 		WitnessHash: witnessHash,
+		WitnessSize: witnessSize,
 		Signature:   sig,
 	}
 	// Honor the cache's conflict decision. We reach here only when the early
@@ -322,12 +323,12 @@ func maySignAnnouncementForBlock(borEngine *bor.Bor, header *types.Header, local
 // written witness blob is canonical at write time and can be hashed directly
 // without a decode/re-encode round-trip — saving roughly the cost of one RLP
 // pass on the announce path. Returns (_, false) when no witness is on file.
-func (h *handler) canonicalWitnessHash(blockHash common.Hash) (common.Hash, bool) {
+func (h *handler) canonicalWitnessHash(blockHash common.Hash) (common.Hash, uint64, bool) {
 	stored := h.chain.GetWitness(blockHash)
 	if len(stored) == 0 {
-		return common.Hash{}, false
+		return common.Hash{}, 0, false
 	}
-	return stateless.WitnessCommitHash(stored), true
+	return stateless.WitnessCommitHash(stored), uint64(len(stored)), true
 }
 
 // isScheduledProducer binds the recovered signer of a wit2 announcement to the

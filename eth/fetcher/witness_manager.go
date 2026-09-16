@@ -64,7 +64,7 @@ type cachedWitness struct {
 // if the encoded witness bytes don't hash to the signed witnessHash, the
 // serving peer lied and is dropped. If no signed announcement is on file
 // (e.g., WIT1-only fetch), the check is skipped.
-type signedWitnessHashFn func(blockHash common.Hash) (witnessHash common.Hash, ok bool)
+type signedWitnessHashFn func(blockHash common.Hash) (witnessHash common.Hash, witnessSize uint64, ok bool)
 
 // cacheWitnessForServingFn hands successfully-fetched witness bytes to the
 // network handler so peers can serve them pre-import. Called only after the

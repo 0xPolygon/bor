@@ -32,9 +32,17 @@ var (
 	witnessVerifyPeersInsuffMeter = metrics.NewRegisteredMeter("eth/fetcher/witness/verify/peers/insufficient", nil)
 	witnessVerifyNoConsensusMeter = metrics.NewRegisteredMeter("eth/fetcher/witness/verify/consensus/none", nil)
 
-	// witnessByteMismatchMeter tracks WIT2 byte-correctness drops: a serving
-	// peer delivered bytes whose keccak256 did not match the BP-signed hash.
-	witnessByteMismatchMeter = metrics.NewRegisteredMeter("eth/fetcher/witness/byte_mismatch", nil)
+	// witnessOversizedMeter tracks WIT2 size-oracle rejections: a serving peer
+	// delivered a witness larger than the accepted band around the BP-signed
+	// WitnessSize. This is the only witness-content size limit enforced on the
+	// signed path; a differing hash within the band is tolerated.
+	witnessOversizedMeter = metrics.NewRegisteredMeter("eth/fetcher/witness/oversized", nil)
+
+	// witnessHashDivergenceMeter tracks accepted witnesses whose hash differed
+	// from the BP-signed WitnessHash but whose size was within band — expected
+	// under non-deterministic witness production. Observability only, NOT a
+	// drop/strike.
+	witnessHashDivergenceMeter = metrics.NewRegisteredMeter("eth/fetcher/witness/hash_divergence", nil)
 
 	// Witness page count metrics
 	witnessPageCountBelowThresholdMeter = metrics.NewRegisteredMeter("eth/fetcher/witness/pagecount/below_threshold", nil)

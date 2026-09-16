@@ -96,7 +96,7 @@ func TestVerifySignedAnnouncementRoundTrip(t *testing.T) {
 		BlockNumber: 42,
 		WitnessHash: common.HexToHash("0xc0ffee00"),
 	}
-	digest := wit.WitnessAnnouncementSigningHash(ann.BlockHash, ann.BlockNumber, ann.WitnessHash)
+	digest := wit.WitnessAnnouncementSigningHash(ann.BlockHash, ann.BlockNumber, ann.WitnessHash, ann.WitnessSize)
 	sig, err := crypto.Sign(digest.Bytes(), key)
 	if err != nil {
 		t.Fatalf("sign: %v", err)
@@ -129,7 +129,7 @@ func TestVerifySignedAnnouncementNormalizesLegacyV(t *testing.T) {
 		BlockNumber: 42,
 		WitnessHash: common.HexToHash("0xc0ffee00"),
 	}
-	digest := wit.WitnessAnnouncementSigningHash(ann.BlockHash, ann.BlockNumber, ann.WitnessHash)
+	digest := wit.WitnessAnnouncementSigningHash(ann.BlockHash, ann.BlockNumber, ann.WitnessHash, ann.WitnessSize)
 	sig, err := crypto.Sign(digest.Bytes(), key)
 	if err != nil {
 		t.Fatalf("sign: %v", err)
@@ -174,7 +174,7 @@ func TestVerifySignedAnnouncementWalletSemantics(t *testing.T) {
 		WitnessHash: common.HexToHash("0xcd"),
 	}
 	// Production wallet path: SignData hashes its input once, then signs.
-	preimage := wit.WitnessAnnouncementSigningPreImage(ann.BlockHash, ann.BlockNumber, ann.WitnessHash)
+	preimage := wit.WitnessAnnouncementSigningPreImage(ann.BlockHash, ann.BlockNumber, ann.WitnessHash, ann.WitnessSize)
 	walletDigest := crypto.Keccak256(preimage)
 	sig, err := crypto.Sign(walletDigest, key)
 	if err != nil {
@@ -208,7 +208,7 @@ func TestVerifySignedAnnouncementDetectsTampering(t *testing.T) {
 		BlockNumber: 7,
 		WitnessHash: common.HexToHash("0xb2"),
 	}
-	digest := wit.WitnessAnnouncementSigningHash(original.BlockHash, original.BlockNumber, original.WitnessHash)
+	digest := wit.WitnessAnnouncementSigningHash(original.BlockHash, original.BlockNumber, original.WitnessHash, original.WitnessSize)
 	sig, err := crypto.Sign(digest.Bytes(), key)
 	if err != nil {
 		t.Fatalf("sign: %v", err)
@@ -731,7 +731,7 @@ func TestCanonicalWitnessHashUsesStoredBytesDirectly(t *testing.T) {
 	canonical := encodeWitnessForTest(t, w)
 	rawdb.WriteWitness(h.chain.DB(), hash, canonical)
 
-	got, ok := h.handler.canonicalWitnessHash(hash)
+	got, _, ok := h.handler.canonicalWitnessHash(hash)
 	require.True(t, ok)
 
 	want := stateless.WitnessCommitHash(canonical)
@@ -878,7 +878,7 @@ func TestDeferredSignedAnnounceDrainedAfterHeaderArrives(t *testing.T) {
 		BlockNumber: header.Number.Uint64(),
 		WitnessHash: common.HexToHash("0xc0ffee01"),
 	}
-	digest := wit.WitnessAnnouncementSigningHash(ann.BlockHash, ann.BlockNumber, ann.WitnessHash)
+	digest := wit.WitnessAnnouncementSigningHash(ann.BlockHash, ann.BlockNumber, ann.WitnessHash, ann.WitnessSize)
 	sig, err := crypto.Sign(digest.Bytes(), key)
 	if err != nil {
 		t.Fatalf("sign: %v", err)
@@ -939,7 +939,7 @@ func TestDeferredDrainPromotesHonestAmongForged(t *testing.T) {
 		key, err := crypto.GenerateKey()
 		require.NoError(t, err)
 		a := wit.SignedWitnessAnnouncement{BlockHash: blockHash, BlockNumber: num, WitnessHash: wh}
-		d := wit.WitnessAnnouncementSigningHash(a.BlockHash, a.BlockNumber, a.WitnessHash)
+		d := wit.WitnessAnnouncementSigningHash(a.BlockHash, a.BlockNumber, a.WitnessHash, a.WitnessSize)
 		s, err := crypto.Sign(d.Bytes(), key)
 		require.NoError(t, err)
 		a.Signature = s
@@ -989,7 +989,7 @@ func TestDrainDeferredCandidateBranches(t *testing.T) {
 		key, err := crypto.GenerateKey()
 		require.NoError(t, err)
 		a := wit.SignedWitnessAnnouncement{BlockHash: blockHash, BlockNumber: number, WitnessHash: wh}
-		d := wit.WitnessAnnouncementSigningHash(a.BlockHash, a.BlockNumber, a.WitnessHash)
+		d := wit.WitnessAnnouncementSigningHash(a.BlockHash, a.BlockNumber, a.WitnessHash, a.WitnessSize)
 		s, err := crypto.Sign(d.Bytes(), key)
 		require.NoError(t, err)
 		a.Signature = s
@@ -1053,7 +1053,7 @@ func TestDrainDeferredCandidateStrikesConfirmedForgery(t *testing.T) {
 		BlockNumber: header.Number.Uint64() + 1,
 		WitnessHash: common.HexToHash("0xbadbad"),
 	}
-	d := wit.WitnessAnnouncementSigningHash(forged.BlockHash, forged.BlockNumber, forged.WitnessHash)
+	d := wit.WitnessAnnouncementSigningHash(forged.BlockHash, forged.BlockNumber, forged.WitnessHash, forged.WitnessSize)
 	sig, err := crypto.Sign(d.Bytes(), key)
 	require.NoError(t, err)
 	forged.Signature = sig
@@ -1099,7 +1099,7 @@ func TestDrainResolvedDeferredAnnouncesCoversBatchedImport(t *testing.T) {
 			BlockNumber: header.Number.Uint64(),
 			WitnessHash: common.BytesToHash([]byte{0xc0, byte(i)}),
 		}
-		d := wit.WitnessAnnouncementSigningHash(ann.BlockHash, ann.BlockNumber, ann.WitnessHash)
+		d := wit.WitnessAnnouncementSigningHash(ann.BlockHash, ann.BlockNumber, ann.WitnessHash, ann.WitnessSize)
 		s, err := crypto.Sign(d.Bytes(), key)
 		require.NoError(t, err)
 		ann.Signature = s
