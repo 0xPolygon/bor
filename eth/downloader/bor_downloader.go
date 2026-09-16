@@ -2418,9 +2418,9 @@ func (d *Downloader) importBlockResultsStateless(results []*fetchResult) error {
 // insertStatelessWithHeal imports the batch and, on a recoverable missing-code
 // failure, fetches the absent bytecode from a snap peer and retries — bounded by
 // maxStatelessCodeHeals. The heal is abortable through the downloader's
-// quit/cancel channels: cancelling the derived context aborts an in-flight fetch
-// and stops the retry loop promptly, so Cancel()/Terminate() is never blocked
-// for the full span of outstanding network timeouts (up to
+// quit/cancel channels: stopping() ends the retry loop before the next attempt
+// and cancelOnStop aborts an in-flight fetch, so Cancel()/Terminate() is never
+// blocked for the full span of outstanding network timeouts (up to
 // maxStatelessCodeHeals * statelessCodeHealTimeout) as it would be otherwise.
 func (d *Downloader) insertStatelessWithHeal(blocks []*types.Block, witnesses []*stateless.Witness) (int, error) {
 	index, err := d.blockchain.InsertChainStateless(blocks, witnesses)
@@ -2429,25 +2429,41 @@ func (d *Downloader) insertStatelessWithHeal(blocks []*types.Block, witnesses []
 	}
 	healCtx, cancelHeal := context.WithCancel(context.Background())
 	defer cancelHeal()
-	go func() {
-		select {
-		case <-d.quitCh:
-			cancelHeal()
-		case <-d.cancelCh:
-			cancelHeal()
-		case <-healCtx.Done():
-		}
-	}()
-	for attempts := 0; err != nil && attempts < maxStatelessCodeHeals; attempts++ {
-		if healCtx.Err() != nil {
-			break
-		}
+	go d.cancelOnStop(healCtx, cancelHeal)
+
+	for attempts := 0; attempts < maxStatelessCodeHeals && !d.stopping(); attempts++ {
 		if !d.recoverMissingStatelessCode(healCtx, err) {
 			break
 		}
-		index, err = d.blockchain.InsertChainStateless(blocks, witnesses)
+		if index, err = d.blockchain.InsertChainStateless(blocks, witnesses); err == nil {
+			break
+		}
 	}
 	return index, err
+}
+
+// stopping reports, without blocking, whether the downloader has been cancelled
+// or terminated.
+func (d *Downloader) stopping() bool {
+	select {
+	case <-d.quitCh:
+		return true
+	case <-d.cancelCh:
+		return true
+	default:
+		return false
+	}
+}
+
+// cancelOnStop cancels ctx as soon as the downloader is cancelled or terminated,
+// and returns once that happens or ctx is done by other means.
+func (d *Downloader) cancelOnStop(ctx context.Context, cancel context.CancelFunc) {
+	select {
+	case <-d.quitCh:
+	case <-d.cancelCh:
+	case <-ctx.Done():
+	}
+	cancel()
 }
 
 // maxStatelessCodeHeals bounds how many missing contract codes a single
@@ -2476,13 +2492,9 @@ func (d *Downloader) recoverMissingStatelessCode(ctx context.Context, err error)
 	defer cancel()
 
 	codes, ferr := d.SnapSyncer.FetchByteCodes(fetchCtx, []common.Hash{mce.Hash})
-	if ferr != nil {
-		log.Warn("Stateless self-heal: bytecode fetch failed", "hash", mce.Hash, "err", ferr)
-		return false
-	}
 	code, ok := codes[mce.Hash]
 	if !ok {
-		log.Warn("Stateless self-heal: no peer served missing bytecode", "hash", mce.Hash)
+		log.Warn("Stateless self-heal: missing bytecode not served by any peer", "hash", mce.Hash, "err", ferr)
 		return false
 	}
 	rawdb.WriteCode(d.stateDB, mce.Hash, code)

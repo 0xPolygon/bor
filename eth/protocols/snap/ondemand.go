@@ -35,8 +35,9 @@ import (
 const onDemandReqidBit = uint64(1) << 63
 
 // onDemandCodeFetchTimeout bounds how long a single peer is given to answer a
-// targeted bytecode request before the next peer is tried.
-const onDemandCodeFetchTimeout = 15 * time.Second
+// targeted bytecode request before the next peer is tried. A variable rather
+// than a constant so tests can shorten it.
+var onDemandCodeFetchTimeout = 15 * time.Second
 
 // onDemandCodeReq tracks one in-flight targeted bytecode request.
 type onDemandCodeReq struct {
@@ -51,37 +52,35 @@ type onDemandCodeReq struct {
 // content-addressed blob and re-persists it, instead of stalling.
 //
 // It returns the subset of hashes it could fetch and verify, keyed by hash; a
-// missing entry means no connected peer served it. Peers are tried in turn
-// until every hash is found, the peer set is exhausted, or ctx is cancelled.
-// Peers are registered by lifecycle (Register/Unregister) independently of a
-// running Sync cycle, so this works while the syncer is otherwise idle.
+// missing entry means no connected peer served it. Each eligible peer is tried
+// at most once, until every hash is found, the peer set is exhausted, or ctx is
+// cancelled. An error is returned only when nothing at all could be verified —
+// a partial result is still worth persisting, so it is returned without one.
 func (s *Syncer) FetchByteCodes(ctx context.Context, hashes []common.Hash) (map[common.Hash][]byte, error) {
 	out := make(map[common.Hash][]byte, len(hashes))
-	if len(hashes) == 0 {
-		return out, nil
-	}
-	tried := make(map[string]struct{})
-	for {
+	for _, peer := range s.codePeers() {
 		pending := pendingByteCodes(hashes, out)
 		if len(pending) == 0 {
 			return out, nil
 		}
-		peer := s.pickUntriedCodePeer(tried)
-		if peer == nil {
-			if len(out) > 0 {
-				return out, nil
-			}
-			return out, fmt.Errorf("snap: no peer available to serve %d bytecode(s) on demand", len(pending))
-		}
 		if err := s.fetchByteCodesFromPeer(ctx, peer, pending, out); err != nil {
-			// Only ctx cancellation returns an error; a partial result is still
-			// worth returning.
-			if len(out) > 0 {
-				return out, nil
-			}
-			return out, err
+			return out, partialOrErr(out, err)
 		}
 	}
+	if pending := pendingByteCodes(hashes, out); len(pending) > 0 {
+		return out, partialOrErr(out, fmt.Errorf("snap: no peer available to serve %d bytecode(s) on demand", len(pending)))
+	}
+	return out, nil
+}
+
+// partialOrErr returns nil when out already holds at least one verified blob —
+// the caller learns of the unserved remainder from the missing keys — and err
+// otherwise.
+func partialOrErr(out map[common.Hash][]byte, err error) error {
+	if len(out) > 0 {
+		return nil
+	}
+	return err
 }
 
 // pendingByteCodes returns the hashes not yet present in out, capped at a single
@@ -93,61 +92,72 @@ func pendingByteCodes(hashes []common.Hash, out map[common.Hash][]byte) []common
 			pending = append(pending, h)
 		}
 	}
-	if len(pending) > maxCodeRequestCount {
-		pending = pending[:maxCodeRequestCount]
-	}
-	return pending
+	return pending[:min(len(pending), maxCodeRequestCount)]
 }
 
-// pickUntriedCodePeer returns a connected peer absent from tried and not flagged
-// as stateless, recording it in tried; it returns nil once the peer set is
-// exhausted.
-func (s *Syncer) pickUntriedCodePeer(tried map[string]struct{}) SyncPeer {
-	s.lock.Lock()
-	defer s.lock.Unlock()
+// codePeers snapshots the connected peers eligible to serve a targeted bytecode
+// request: every registered peer not flagged as stateless. Peers are registered
+// by lifecycle (Register/Unregister) independently of a running Sync cycle, so
+// this is populated whenever snap peers are connected, even with the syncer
+// otherwise idle.
+func (s *Syncer) codePeers() []SyncPeer {
+	s.lock.RLock()
+	defer s.lock.RUnlock()
+	peers := make([]SyncPeer, 0, len(s.peers))
 	for id, p := range s.peers {
-		if _, done := tried[id]; done {
+		if _, stateless := s.statelessPeers[id]; stateless {
 			continue
 		}
-		if _, bad := s.statelessPeers[id]; bad {
-			continue
-		}
-		tried[id] = struct{}{}
-		return p
+		peers = append(peers, p)
 	}
-	return nil
+	return peers
 }
 
 // fetchByteCodesFromPeer issues one targeted bytecode request to peer and folds
 // any verified blobs into out. A non-nil error means ctx was cancelled and the
 // caller should stop; a failed send or a timeout returns nil so the caller can
-// try the next peer.
+// try the next peer. The request is forgotten on every return path, so a late
+// or duplicate response is dropped harmlessly by onDemandByteCodes.
 func (s *Syncer) fetchByteCodesFromPeer(ctx context.Context, peer SyncPeer, pending []common.Hash, out map[common.Hash][]byte) error {
-	s.lock.Lock()
-	reqid := uint64(rand.Int63()) | onDemandReqidBit
-	req := &onDemandCodeReq{deliver: make(chan [][]byte, 1)}
-	s.onDemandCodeReqs[reqid] = req
-	s.lock.Unlock()
+	reqid, req := s.newOnDemandCodeReq()
+	defer s.forgetOnDemandCodeReq(reqid)
 
 	if err := peer.RequestByteCodes(reqid, pending, maxRequestSize); err != nil {
-		s.forgetOnDemandCodeReq(reqid)
 		log.Debug("On-demand bytecode request failed to send", "peer", peer.ID(), "err", err)
 		return nil
 	}
+	timeout := time.NewTimer(onDemandCodeFetchTimeout)
+	defer timeout.Stop()
 
 	select {
 	case codes := <-req.deliver:
-		s.forgetOnDemandCodeReq(reqid)
 		verifyAndCollectByteCodes(pending, codes, out)
 		return nil
-	case <-time.After(onDemandCodeFetchTimeout):
-		s.forgetOnDemandCodeReq(reqid)
+	case <-timeout.C:
 		log.Debug("On-demand bytecode request timed out", "peer", peer.ID(), "hashes", len(pending))
 		return nil
 	case <-ctx.Done():
-		s.forgetOnDemandCodeReq(reqid)
 		return ctx.Err()
 	}
+}
+
+// newOnDemandCodeReq registers a fresh in-flight targeted request under a
+// top-bit reqid and returns both.
+func (s *Syncer) newOnDemandCodeReq() (uint64, *onDemandCodeReq) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	reqid := uint64(rand.Int63()) | onDemandReqidBit
+	req := &onDemandCodeReq{deliver: make(chan [][]byte, 1)}
+	s.onDemandCodeReqs[reqid] = req
+	return reqid, req
+}
+
+// forgetOnDemandCodeReq drops an in-flight targeted request; forgetting an
+// already-delivered (and hence already-removed) request is a no-op.
+func (s *Syncer) forgetOnDemandCodeReq(reqid uint64) {
+	s.lock.Lock()
+	delete(s.onDemandCodeReqs, reqid)
+	s.lock.Unlock()
 }
 
 // onDemandByteCodes delivers a targeted bytecode response (top-bit reqid) to its
@@ -170,34 +180,25 @@ func (s *Syncer) onDemandByteCodes(id uint64, bytecodes [][]byte) error {
 	return nil
 }
 
-func (s *Syncer) forgetOnDemandCodeReq(reqid uint64) {
-	s.lock.Lock()
-	delete(s.onDemandCodeReqs, reqid)
-	s.lock.Unlock()
-}
-
-// verifyAndCollectByteCodes hashes each delivered blob and, for any that matches
-// a still-wanted hash, records it into out. Unmatched or corrupt blobs are
-// ignored — a peer that returns garbage simply does not count as having served
-// that hash, and the caller moves on to the next peer. Because entry is keyed by
-// the verified keccak of the blob, a peer cannot inject code for the wrong hash.
+// verifyAndCollectByteCodes hashes each delivered blob and, if that hash is one
+// of wanted, records the blob into out under it. Because the key is the verified
+// keccak of the blob itself, a peer cannot inject code for a hash it was not
+// asked for; a blob whose hash matches nothing wanted (corrupt or unrequested)
+// is simply ignored — that peer does not count as having served the hash, and
+// the caller moves on to the next one.
 func verifyAndCollectByteCodes(wanted []common.Hash, delivered [][]byte, out map[common.Hash][]byte) {
+	want := make(map[common.Hash]struct{}, len(wanted))
+	for _, h := range wanted {
+		want[h] = struct{}{}
+	}
 	hasher := crypto.NewKeccakState()
 	var h common.Hash
 	for _, blob := range delivered {
-		if len(blob) == 0 {
-			continue
-		}
 		hasher.Reset()
 		hasher.Write(blob)
 		hasher.Read(h[:])
-		for _, w := range wanted {
-			if h == w {
-				if _, ok := out[w]; !ok {
-					out[w] = blob
-				}
-				break
-			}
+		if _, ok := want[h]; ok {
+			out[h] = blob
 		}
 	}
 }

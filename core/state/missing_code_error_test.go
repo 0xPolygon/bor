@@ -18,6 +18,7 @@ package state
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -82,5 +83,14 @@ func TestStateObjectMissingCodeError(t *testing.T) {
 			t.Fatalf("expected zero code size for an absent blob, got %d", size)
 		}
 		assertMissing(t, db.Error())
+	})
+
+	// The message keeps the historical "code is not found <hash>" wording that
+	// witness-regen fixtures assert on; only the type is new.
+	t.Run("Error", func(t *testing.T) {
+		err := &MissingCodeError{Addr: addr, Hash: missing}
+		if got, want := err.Error(), fmt.Sprintf("code is not found %x", missing); got != want {
+			t.Fatalf("unexpected message: got %q want %q", got, want)
+		}
 	})
 }
