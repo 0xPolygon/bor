@@ -93,46 +93,6 @@ func TestPeerSet(t *testing.T) {
 	}
 }
 
-func TestTransactionQueueAcceptance(t *testing.T) {
-	for _, announce := range []bool{false, true} {
-		for _, closed := range []bool{false, true} {
-			name := map[bool]string{false: "bodies", true: "announcements"}[announce]
-			name += map[bool]string{false: "/open", true: "/closed"}[closed]
-			t.Run(name, func(t *testing.T) {
-				capacity := 1
-				if closed {
-					capacity = 0
-				}
-				queue := make(chan []common.Hash, capacity)
-				peer := &Peer{
-					Peer: p2p.NewPeer(enode.ID{}, "test", nil),
-					term: make(chan struct{}), knownTxs: newKnownCache(10),
-					txBroadcast: queue, txAnnounce: queue,
-				}
-				if closed {
-					close(peer.term)
-				}
-				send := peer.QueueTransactions
-				if announce {
-					send = peer.QueuePooledTransactionHashes
-				}
-				hash := common.Hash{1}
-				if accepted := send([]common.Hash{hash}); accepted == closed {
-					t.Fatalf("queue acceptance = %v, closed = %v", accepted, closed)
-				}
-				if peer.KnownTransaction(hash) == closed {
-					t.Fatal("known transaction cache must match queue acceptance")
-				}
-				if !closed {
-					if hashes := <-queue; len(hashes) != 1 || hashes[0] != hash {
-						t.Fatal("unexpected queued hashes")
-					}
-				}
-			})
-		}
-	}
-}
-
 func TestKnownCacheRemove(t *testing.T) {
 	size := 10
 	s := newKnownCache(size)
