@@ -277,3 +277,107 @@ func TestReadBreakerOpensOnSilentGenerationFetches(t *testing.T) {
 		t.Fatal("silent generation fetches left the breaker closed")
 	}
 }
+
+// A frozen read path must not hold the broadcast gate either.
+//
+// The gate waits for the store's verdict on the seal: an ack, a STALE, or
+// the deadline. With the read path silent the recheck at the deadline cannot
+// run and the wait ends where it started, so the whole budget is spent
+// resolving nothing — measured on a devnet as 21 of 47 blocks settling
+// Unknown after paying for it, with the contested ones paying four seconds.
+func TestFrozenReadPathDoesNotHoldTheSealGate(t *testing.T) {
+	h := startHarness(t)
+
+	p, err := NewPublisher(h.addr, stalledEndpoint(t), testChainID, 0,
+		&fakeChain{canonical: map[uint64]common.Hash{}}, nil)
+	if err != nil {
+		t.Fatalf("NewPublisher: %v", err)
+	}
+
+	t.Cleanup(p.Close)
+
+	for i := 0; i < readFailuresToTrip; i++ {
+		p.read.breaker.silent()
+	}
+
+	// A height nothing published, so no ack can resolve it: the gate stands
+	// pending exactly as it does when the seal's own ack never comes back.
+	p.mu.Lock()
+	p.gate = sealGate{height: 500, hash: common.Hash{0x5a}}
+	p.mu.Unlock()
+
+	const budget = 400 * time.Millisecond
+
+	start := time.Now()
+	v := p.ConfirmSeal(budget)
+	elapsed := time.Since(start)
+
+	if v != miner.SealUnknown {
+		t.Fatalf("verdict = %v with the read path down, want Unknown", v)
+	}
+
+	if elapsed > budget/4 {
+		t.Fatalf("gate spent %v of a %v budget with the read path down; the "+
+			"wait cannot resolve anything in that state", elapsed, budget)
+	}
+}
+
+// Except for a withheld seal, which keeps its wait and its refusal.
+//
+// refuseOnTimeout is set from a read that already found this height closed
+// in the store with content this block does not carry. That refusal rests on
+// evidence in hand, not on an answer still owed, so a read path that went
+// quiet afterwards must not turn it into a broadcast — that is the
+// displacement the gate exists to prevent.
+func TestReadDownGiveUpKeepsAWithheldSealRefusal(t *testing.T) {
+	h := startHarness(t)
+
+	p, err := NewPublisher(h.addr, stalledEndpoint(t), testChainID, 0,
+		&fakeChain{canonical: map[uint64]common.Hash{}}, nil)
+	if err != nil {
+		t.Fatalf("NewPublisher: %v", err)
+	}
+
+	t.Cleanup(p.Close)
+
+	for i := 0; i < readFailuresToTrip; i++ {
+		p.read.breaker.silent()
+	}
+
+	p.mu.Lock()
+	p.gate = sealGate{height: 500, hash: common.Hash{0x5a}, refuseOnTimeout: true}
+	p.mu.Unlock()
+
+	if v := p.ConfirmSeal(20 * time.Millisecond); v != miner.SealRefused {
+		t.Fatalf("verdict = %v for a withheld seal, want Refused", v)
+	}
+}
+
+// What counts as silence, directly. The breaker's whole value rests on this
+// distinction, and one case is not reachable through a gRPC call: a deadline
+// that fires before the RPC leaves the client returns the raw context error
+// rather than a status, and treating that as an answer would leave the
+// breaker closed against a path that never replied.
+func TestIsSilent(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"no error", nil, false},
+		{"raw context deadline", context.DeadlineExceeded, true},
+		{"raw context cancel", context.Canceled, true},
+		{"status deadline", status.Error(codes.DeadlineExceeded, "too slow"), true},
+		{"status unavailable", status.Error(codes.Unavailable, "no backend"), true},
+		{"not found is an answer", status.Error(codes.NotFound, "no such height"), false},
+		{"invalid argument is an answer", status.Error(codes.InvalidArgument, "bad range"), false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isSilent(tc.err); got != tc.want {
+				t.Fatalf("isSilent(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
