@@ -17,19 +17,15 @@
 package eth
 
 import (
-	"bytes"
 	"math/big"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 )
-
-type rebroadcastLogWriter chan struct{}
 
 // Hide the optional acknowledgment capability to exercise existing pool implementations.
 type legacyRebroadcastPool struct{ txPool }
@@ -69,25 +65,6 @@ func TestRebroadcastPeerAssignment(t *testing.T) {
 			}
 		})
 	}
-}
-
-func (w rebroadcastLogWriter) Write(data []byte) (int, error) {
-	if bytes.Contains(data, []byte("Rebroadcast stuck transactions")) {
-		select {
-		case w <- struct{}{}:
-		default:
-		}
-	}
-	return len(data), nil
-}
-
-func captureRebroadcastLog(t *testing.T) <-chan struct{} {
-	t.Helper()
-	previous := log.Root()
-	t.Cleanup(func() { log.SetDefault(previous) })
-	logged := make(rebroadcastLogWriter, 1)
-	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(logged, log.LevelDebug, false)))
-	return logged
 }
 
 func rebroadcastDeliveryFixture(t *testing.T, withPeer bool) (*handler, types.Transactions) {
@@ -154,32 +131,5 @@ func TestRebroadcastAcknowledgesOnlyQueuedTransactions(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func checkRebroadcastPacket(t *testing.T, msg p2p.Msg, hash common.Hash, announce bool) {
-	t.Helper()
-	if announce {
-		if msg.Code != eth.NewPooledTransactionHashesMsg {
-			t.Fatalf("announcement code = %d", msg.Code)
-		}
-		var packet eth.NewPooledTransactionHashesPacket
-		if err := msg.Decode(&packet); err != nil {
-			t.Fatal(err)
-		}
-		if len(packet.Hashes) != 1 || packet.Hashes[0] != hash {
-			t.Fatal("unexpected announced hashes")
-		}
-		return
-	}
-	if msg.Code != eth.TransactionsMsg {
-		t.Fatalf("transaction code = %d", msg.Code)
-	}
-	var packet eth.TransactionsPacket
-	if err := msg.Decode(&packet); err != nil {
-		t.Fatal(err)
-	}
-	if len(packet) != 1 || packet[0].Hash() != hash {
-		t.Fatal("unexpected broadcast transactions")
 	}
 }
