@@ -19,12 +19,17 @@ package eth
 import (
 	"math/big"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/eth/ethconfig"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
+	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/ethereum/go-ethereum/params"
 )
 
 // Hide the optional acknowledgment capability to exercise existing pool implementations.
@@ -131,5 +136,59 @@ func TestRebroadcastAcknowledgesOnlyQueuedTransactions(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRebroadcastEventsExcludeNonGossipableTransactions(t *testing.T) {
+	stack, err := node.New(&node.Config{DataDir: t.TempDir(), P2P: p2p.Config{NoDiscovery: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := stack.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	config := ethconfig.Defaults
+	config.Genesis = loadBorTestGenesis(t)
+	config.Genesis.Alloc[testAddr] = types.Account{Balance: big.NewInt(1e18)}
+	config.WithoutHeimdall, config.AcceptPrivateTx = true, true
+	config.TxPool.Journal, config.TxPool.NoLocals = "", true
+	config.TxPool.RebroadcastInterval, config.TxPool.RebroadcastBatchSize = time.Second, 2
+	backend, err := New(stack, &config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stack.Start(); err != nil {
+		t.Fatal(err)
+	}
+	ch := make(chan core.StuckTxsEvent, 10)
+	sub := backend.txPool.SubscribeRebroadcastTransactions(ch)
+	defer sub.Unsubscribe()
+	var txs types.Transactions
+	for nonce := uint64(0); nonce < 3; nonce++ {
+		tx, err := types.SignTx(types.NewTransaction(nonce, testAddr, big.NewInt(1), 21000, big.NewInt(params.BorDefaultTxPoolPriceLimit), nil), types.LatestSigner(config.Genesis.Config), testKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tx.SetTime(time.Now().Add(-time.Hour))
+		txs = append(txs, tx)
+	}
+	backend.APIBackend.RecordPrivateTx(txs[0].Hash())
+	txs[1].PutOptions(new(types.OptionsPIP15))
+	for _, err := range backend.txPool.Add(txs, true) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 2 {
+		select {
+		case event := <-ch:
+			if len(event.Txs) != 1 || event.Txs[0].Hash() != txs[2].Hash() {
+				t.Fatal("rebroadcast event must contain only the public transaction")
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for the public rebroadcast candidate")
+		}
 	}
 }

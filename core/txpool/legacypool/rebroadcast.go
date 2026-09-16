@@ -23,6 +23,16 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
+func (pool *LegacyPool) SetPrivateTxChecker(checker func(common.Hash) bool) {
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+	pool.isTxPrivate = checker
+}
+
+func (pool *LegacyPool) canRebroadcast(tx *types.Transaction) bool {
+	return tx.GetOptions() == nil && (pool.isTxPrivate == nil || !pool.isTxPrivate(tx.Hash()))
+}
+
 // RebroadcastAcknowledgement creates a batch-scoped callback for gossip queue
 // acceptance. Selecting candidates or creating the callback does not record a
 // send. Duplicate acknowledgments within a batch are ignored, including those

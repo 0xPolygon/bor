@@ -334,6 +334,7 @@ type LegacyPool struct {
 	// Rebroadcast tracking
 	rebroadcastTxFeed event.Feed                // Feed for stuck transaction events
 	lastRebroadcast   map[common.Hash]time.Time // Track last rebroadcast time per tx hash
+	isTxPrivate       func(common.Hash) bool
 }
 
 type txpoolResetRequest struct {
@@ -598,6 +599,9 @@ func (pool *LegacyPool) identifyStuckTransactions() []*types.Transaction {
 				continue
 			}
 			if tx.GasTipCap().Cmp(minTip) < 0 {
+				continue
+			}
+			if !pool.canRebroadcast(tx) {
 				continue
 			}
 

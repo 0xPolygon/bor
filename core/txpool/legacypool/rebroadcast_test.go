@@ -103,6 +103,55 @@ func TestRebroadcastWithoutSubscriberRecordsFallback(t *testing.T) {
 	}
 }
 
+func TestRebroadcastSelectionSkipsNonGossipableTransactions(t *testing.T) {
+	for _, mode := range []string{"private", "conditional", "mixed"} {
+		t.Run(mode, func(t *testing.T) {
+			pool, key, from, first := setupRebroadcastTest(t, time.Hour, 2*time.Hour, 2)
+			defer pool.Close()
+			txs := []*types.Transaction{first}
+			for nonce := uint64(1); nonce < 4; nonce++ {
+				tx := pricedTransaction(nonce, 100000, big.NewInt(params.BorDefaultTxPoolPriceLimit), key)
+				if err := pool.addRemoteSync(tx); err != nil {
+					t.Fatal(err)
+				}
+				txs = append(txs, tx)
+			}
+			var private sync.Map
+			pool.SetPrivateTxChecker(func(hash common.Hash) bool {
+				_, ok := private.Load(hash)
+				return ok
+			})
+			pool.mu.Lock()
+			defer pool.mu.Unlock()
+			for i, tx := range txs[:2] {
+				if mode == "conditional" || (mode == "mixed" && i == 0) {
+					tx.PutOptions(new(types.OptionsPIP15))
+				} else {
+					private.Store(tx.Hash(), true)
+				}
+			}
+			setTxAge(pool, from, 3*time.Hour)
+			before := rebroadcastTxMeter.Snapshot().Count()
+			for range 3 {
+				batch := pool.identifyStuckTransactions()
+				if len(batch) != 2 || batch[0] != txs[2] || batch[1] != txs[3] {
+					t.Fatal("non-gossipable transactions occupied the rebroadcast batch")
+				}
+			}
+			if len(pool.lastRebroadcast) != 0 || rebroadcastTxMeter.Snapshot().Count() != before {
+				t.Fatal("filtered transactions must not be counted as sent")
+			}
+			if mode == "private" {
+				private.Clear()
+				batch := pool.identifyStuckTransactions()
+				if len(batch) != 2 || batch[0] != txs[0] || batch[1] != txs[1] {
+					t.Fatal("transactions must become eligible when privacy is cleared")
+				}
+			}
+		})
+	}
+}
+
 func TestRebroadcastAcknowledgementTracksOnlySentHashes(t *testing.T) {
 	pool, key, from, first := setupRebroadcastTest(t, time.Hour, 2*time.Hour, 100)
 	defer pool.Close()
