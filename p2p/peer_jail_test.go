@@ -3,6 +3,7 @@ package p2p
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -16,6 +17,20 @@ func TestPeerJailReconnect(t *testing.T) {
 
 func TestPeerJailReconnectAfterCustomPeriod(t *testing.T) {
 	testPeerJailReconnect(t, 2*time.Minute, func(srv *Server, id enode.ID) { srv.JailPeerFor(id, 2*time.Minute) })
+}
+
+func TestPeerJailReconnectAtCapacity(t *testing.T) {
+	testPeerJailReconnect(t, 2*time.Minute, func(srv *Server, id enode.ID) {
+		for i := range maxPeerJailEntries {
+			var existing enode.ID
+			binary.BigEndian.PutUint64(existing[:], uint64(i))
+			srv.peerJail.JailPeer(existing)
+		}
+		srv.JailPeerFor(id, 2*time.Minute)
+		if len(srv.peerJail.jailed) != maxPeerJailEntries {
+			t.Fatal("replacement exceeded jail capacity")
+		}
+	})
 }
 
 func testPeerJailReconnect(t *testing.T, period time.Duration, jail func(*Server, enode.ID)) {
@@ -83,35 +98,75 @@ func TestPeerJailIgnoresNonPositivePeriod(t *testing.T) {
 
 func TestPeerJailCapacity(t *testing.T) {
 	clock := new(mclock.Simulated)
-	jail := newPeerJail(2*time.Minute, clock)
-	var overflow enode.ID
-	for i := 0; i <= maxPeerJailEntries; i++ {
+	jail := newPeerJail(5*time.Minute, clock)
+	for i := range maxPeerJailEntries {
 		var id enode.ID
-		binary.BigEndian.PutUint64(id[:], uint64(i+1))
-		jail.JailPeer(id)
-		overflow = id
+		binary.BigEndian.PutUint64(id[:], uint64(i))
+		period := 5 * time.Minute
+		if i < 2 {
+			period = time.Duration(i+1) * time.Minute
+		}
+		jail.JailPeerFor(id, period)
 	}
+	jail.JailPeer(enode.ID{})
+	clock.Run(30 * time.Second)
+	var replacement enode.ID
+	binary.BigEndian.PutUint64(replacement[:], maxPeerJailEntries)
+	jail.JailPeerFor(replacement, 2*time.Minute)
 	if len(jail.jailed) != maxPeerJailEntries {
 		t.Fatalf("jail size: got %d, want %d", len(jail.jailed), maxPeerJailEntries)
 	}
-	if want := mclock.AbsTime(2 * time.Minute); jail.nextExpiry != want {
-		t.Fatalf("next expiry: got %v, want %v", jail.nextExpiry, want)
+	for i := range maxPeerJailEntries {
+		var id enode.ID
+		binary.BigEndian.PutUint64(id[:], uint64(i))
+		if jail.IsJailed(id) != (i != 1) {
+			t.Fatalf("incorrect retention for peer %d", i)
+		}
 	}
-	if jail.IsJailed(overflow) {
-		t.Fatal("peer added beyond jail capacity")
+	if !jail.IsJailed(replacement) {
+		t.Fatal("replacement peer was not jailed")
 	}
-
 	clock.Run(2 * time.Minute)
-	jail.JailPeer(overflow)
-	if jail.IsJailed(overflow) {
-		t.Fatal("peer added before existing jails expired")
+	if !jail.IsJailed(replacement) {
+		t.Fatal("replacement jail expired early")
 	}
-
 	clock.Run(time.Nanosecond)
-	var id enode.ID
-	binary.BigEndian.PutUint64(id[:], maxPeerJailEntries+2)
-	jail.JailPeer(id)
-	if len(jail.jailed) != 1 {
-		t.Fatalf("jail size after expiry: got %d, want 1", len(jail.jailed))
+	if jail.IsJailed(replacement) {
+		t.Fatal("replacement jail did not expire")
+	}
+}
+
+func TestPeerJailReclaimsExpiredCapacity(t *testing.T) {
+	for _, expired := range []int{maxPeerJailEntries / 2, maxPeerJailEntries} {
+		t.Run(fmt.Sprint(expired), func(t *testing.T) {
+			clock := new(mclock.Simulated)
+			jail := newPeerJail(2*time.Minute, clock)
+			for i := range maxPeerJailEntries {
+				var id enode.ID
+				binary.BigEndian.PutUint64(id[:], uint64(i))
+				period := 2 * time.Minute
+				if i >= expired {
+					period = 5 * time.Minute
+				}
+				jail.JailPeerFor(id, period)
+			}
+			clock.Run(2*time.Minute + time.Nanosecond)
+			var replacement enode.ID
+			binary.BigEndian.PutUint64(replacement[:], maxPeerJailEntries)
+			jail.JailPeer(replacement)
+			if want := maxPeerJailEntries - expired + 1; len(jail.jailed) != want {
+				t.Fatalf("jail size after expiry: got %d, want %d", len(jail.jailed), want)
+			}
+			for i := expired; i < maxPeerJailEntries; i++ {
+				var id enode.ID
+				binary.BigEndian.PutUint64(id[:], uint64(i))
+				if !jail.IsJailed(id) {
+					t.Fatalf("active peer %d was evicted despite expired capacity", i)
+				}
+			}
+			if !jail.IsJailed(replacement) {
+				t.Fatal("replacement did not use reclaimed capacity")
+			}
+		})
 	}
 }

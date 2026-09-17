@@ -131,7 +131,6 @@ type peerJail struct {
 	jailed     map[enode.ID]mclock.AbsTime // peer ID -> unban time
 	jailPeriod time.Duration               // default jail period
 	clock      mclock.Clock
-	nextExpiry mclock.AbsTime
 }
 
 // newPeerJail creates a new peer jail with the given jail period
@@ -140,7 +139,6 @@ func newPeerJail(jailPeriod time.Duration, clock mclock.Clock) *peerJail {
 		jailed:     make(map[enode.ID]mclock.AbsTime),
 		jailPeriod: jailPeriod,
 		clock:      clock,
-		nextExpiry: noPeerJailExpiry,
 	}
 }
 
@@ -161,25 +159,25 @@ func (pj *peerJail) JailPeerFor(id enode.ID, period time.Duration) {
 		return
 	}
 	if len(pj.jailed) >= maxPeerJailEntries {
-		if now > pj.nextExpiry {
-			pj.removeExpired(now)
-		}
-		if len(pj.jailed) >= maxPeerJailEntries {
-			return
-		}
+		pj.makeRoom(now)
 	}
 	pj.jailed[id] = unbanTime
-	pj.nextExpiry = min(pj.nextExpiry, unbanTime)
 }
 
-func (pj *peerJail) removeExpired(now mclock.AbsTime) {
-	pj.nextExpiry = noPeerJailExpiry
+func (pj *peerJail) makeRoom(now mclock.AbsTime) {
+	var earliestID enode.ID
+	earliestExpiry := noPeerJailExpiry
 	for id, unbanTime := range pj.jailed {
 		if now > unbanTime {
 			delete(pj.jailed, id)
 			continue
 		}
-		pj.nextExpiry = min(pj.nextExpiry, unbanTime)
+		if unbanTime <= earliestExpiry {
+			earliestID, earliestExpiry = id, unbanTime
+		}
+	}
+	if len(pj.jailed) >= maxPeerJailEntries {
+		delete(pj.jailed, earliestID)
 	}
 }
 
