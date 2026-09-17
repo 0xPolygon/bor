@@ -127,6 +127,9 @@ func (p *Peer) queueReply(code uint64, packet interface{}) error {
 
 // Close cancels allowance waits; transport shutdown interrupts an active write.
 func (p *Peer) sendReplies(replies *peerReplies) {
+	replies.mu.Lock()
+	queue := replies.queue
+	replies.mu.Unlock()
 	defer func() {
 		replies.mu.Lock()
 		defer replies.mu.Unlock()
@@ -135,7 +138,7 @@ func (p *Peer) sendReplies(replies *peerReplies) {
 	}()
 	for {
 		select {
-		case msg := <-replies.queue:
+		case msg := <-queue:
 			if err := p.waitReplyAllowance(replies.limiter, int(msg.Size)); err != nil {
 				return
 			}
