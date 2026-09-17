@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
 	"golang.org/x/time/rate"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/rlp"
 )
@@ -52,7 +54,13 @@ func (p *Peer) checkMessageRate(code uint64, size uint32, now time.Time) error {
 		if !p.limits.requests.AllowN(now, 1) {
 			return fmt.Errorf("%w: data requests", ErrPeerRateLimit)
 		}
-	case NewBlockHashesMsg, NewBlockMsg:
+	case NewBlockHashesMsg:
+		maxSize := rlp.ListSize(peerHashBurst * rlp.ListSize(common.HashLength+1+uint64(rlp.IntSize(math.MaxUint64))))
+		if uint64(size) > maxSize {
+			return fmt.Errorf("%w: block announcements", ErrPeerRateLimit)
+		}
+		fallthrough
+	case NewBlockMsg:
 		if !p.limits.gossip.AllowN(now, 1) || !p.limits.gossipBytes.AllowN(now, int(size)) {
 			return fmt.Errorf("%w: block gossip", ErrPeerRateLimit)
 		}

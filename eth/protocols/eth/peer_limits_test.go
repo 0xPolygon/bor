@@ -309,3 +309,63 @@ func TestPeerPooledTransactionRequestRejectedBeforeDecode(t *testing.T) {
 		}
 	}
 }
+
+func TestPeerAnnouncementSizeBeforeDecode(t *testing.T) {
+	ann := make(NewBlockHashesPacket, peerHashBurst)
+	for i := range ann {
+		ann[i].Hash, ann[i].Number = common.Hash{1}, math.MaxUint64
+	}
+	data, err := rlp.EncodeToBytes(ann)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, version := range ProtocolVersions {
+		for _, size := range []uint32{uint32(len(data) + 1), maxMessageSize} {
+			t.Run(fmt.Sprintf("%d/%d", version, size), func(t *testing.T) {
+				payload := bytes.NewReader([]byte{0xff})
+				rw := &limitTestRW{msg: p2p.Msg{Code: NewBlockHashesMsg, Size: size, Payload: payload}}
+				peer := NewPeer(version, p2p.NewPeer(enode.ID{1}, "", nil), rw, nil)
+				defer peer.Close()
+				backend := new(packetCapturingBackend)
+				if err := handleMessage(backend, peer); !errors.Is(err, ErrPeerRateLimit) {
+					t.Fatalf("expected announcement backoff before decoding: %v", err)
+				}
+				if payload.Len() != 1 || backend.packet != nil {
+					t.Fatal("oversized announcement was read or delivered to the backend")
+				}
+			})
+		}
+	}
+}
+
+func TestPeerAnnouncementSizeBoundary(t *testing.T) {
+	for _, version := range ProtocolVersions {
+		for _, mode := range []string{"ordinary", "trusted", "static", "static inbound", "added inbound"} {
+			t.Run(fmt.Sprintf("%d/%s", version, mode), func(t *testing.T) {
+				count := peerHashBurst
+				if mode != "ordinary" {
+					count++
+				}
+				ann := make(NewBlockHashesPacket, count)
+				for i := range ann {
+					ann[i].Hash, ann[i].Number = common.Hash{1}, math.MaxUint64
+				}
+				data, err := rlp.EncodeToBytes(ann)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rw := &limitTestRW{msg: p2p.Msg{Code: NewBlockHashesMsg, Size: uint32(len(data)), Payload: bytes.NewReader(data)}}
+				peer := NewPeer(version, configuredLimitsTestPeer(t, mode), rw, nil)
+				defer peer.Close()
+				backend := new(packetCapturingBackend)
+				if err := handleMessage(backend, peer); err != nil {
+					t.Fatal(err)
+				}
+				got, ok := backend.packet.(*NewBlockHashesPacket)
+				if !ok || len(*got) != count || !peer.KnownBlock(common.Hash{1}) {
+					t.Fatal("accepted announcement was not tracked and delivered")
+				}
+			})
+		}
+	}
+}
