@@ -61,6 +61,16 @@ var (
 	reconcileResync      = metrics.NewRegisteredCounter("sequencer/reconcile/resync", nil)
 	reconcileTimer       = metrics.NewRegisteredTimer("sequencer/reconcile/duration", nil)
 
+	// The store audit's verdicts, and the two ways a height gets past it
+	// uncompared: retention had already aged it out when a pass started, or
+	// the store answered NOT_FOUND for it mid-walk. The watermark advances
+	// over both, so an empty invalidation range covering them is not evidence
+	// they were checked — these are the counters to alert on.
+	auditMismatchCount    = metrics.NewRegisteredCounter("sequencer/audit/mismatch", nil)
+	auditUnknownCount     = metrics.NewRegisteredCounter("sequencer/audit/unknown", nil)
+	auditRetentionSkipped = metrics.NewRegisteredCounter("sequencer/audit/retentionskipped", nil)
+	auditUnheldHeights    = metrics.NewRegisteredCounter("sequencer/audit/unheld", nil)
+
 	// The store kept off the block path. Each counter is a wait the producer
 	// declined to pay because the answer could not arrive: barrierskipped
 	// and gatewritedownskip when the publish transport is down, readskipped,

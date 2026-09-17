@@ -42,7 +42,7 @@ func TestPendingStoreRetainsEntriesAndInvalidatesReorg(t *testing.T) {
 	if entryCount != 3 {
 		t.Fatalf("entry count = %d, want 3", entryCount)
 	}
-	records := rawdb.ReadInvalidPreconfs(db, rawdb.InvalidPreconfQueryLimit)
+	records := rawdb.ReadInvalidPreconfs(db, allInvalidPreconfs)
 	if len(records) != 0 {
 		t.Fatalf("unexpected invalidation records = %+v", records)
 	}
@@ -256,7 +256,7 @@ func TestCanonicalHeadClearsReorgedReceiptSuffix(t *testing.T) {
 	if remaining != 0 {
 		t.Fatalf("future store entries after reconciliation = %d", remaining)
 	}
-	records := rawdb.ReadInvalidPreconfs(h.chain.DB(), rawdb.InvalidPreconfQueryLimit)
+	records := rawdb.ReadInvalidPreconfs(h.chain.DB(), allInvalidPreconfs)
 	found := false
 	for _, record := range records {
 		if record.Number == block2.NumberU64() && record.Reason == "reorged" {
