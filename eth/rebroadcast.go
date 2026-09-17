@@ -170,7 +170,7 @@ func (s *rebroadcastState) addClaim(id string, claim *rebroadcastPeerClaim) {
 
 func (s *rebroadcastState) blocksRebroadcast(p *ethPeer, chain *core.BlockChain, ourTD *big.Int, now time.Time) bool {
 	head, td := p.Head()
-if known := rebroadcastHeadTD(chain, head); known != nil {
+	if known := rebroadcastHeadTD(chain, head); known != nil {
 		return known.Cmp(ourTD) > 0
 	}
 	state := s.claims[p.ID()]
