@@ -422,6 +422,7 @@ func (srv *Server) RemovePeer(node *enode.Node) {
 		srv.dialsched.removeStatic(node)
 
 		if peer := peers[node.ID()]; peer != nil {
+			peer.rw.set(staticConn, false)
 			ch = make(chan *PeerEvent, 1)
 			sub = srv.peerFeed.Subscribe(ch)
 

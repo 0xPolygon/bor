@@ -27,6 +27,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -226,11 +227,20 @@ func TestServerDial(t *testing.T) {
 
 // This test checks that RemovePeer disconnects the peer if it is connected.
 func TestServerRemovePeerDisconnect(t *testing.T) {
+	release := make(chan struct{})
+	protocol := Protocol{
+		Name: "test", Length: 1,
+		Run: func(*Peer, MsgReadWriter) error {
+			<-release
+			return nil
+		},
+	}
 	srv1 := &Server{Config: Config{
 		PrivateKey:  newkey(),
 		MaxPeers:    1,
 		NoDiscovery: true,
 		Logger:      testlog.Logger(t, log.LvlTrace).New("server", "1"),
+		Protocols:   []Protocol{protocol},
 	}}
 	srv2 := &Server{Config: Config{
 		PrivateKey:  newkey(),
@@ -239,6 +249,7 @@ func TestServerRemovePeerDisconnect(t *testing.T) {
 		NoDial:      true,
 		ListenAddr:  "127.0.0.1:0",
 		Logger:      testlog.Logger(t, log.LvlTrace).New("server", "2"),
+		Protocols:   []Protocol{protocol},
 	}}
 
 	srv1.Start()
@@ -247,6 +258,8 @@ func TestServerRemovePeerDisconnect(t *testing.T) {
 	srv2.Start()
 
 	defer srv2.Stop()
+	releaseProtocols := sync.OnceFunc(func() { close(release) })
+	defer releaseProtocols()
 
 	s := strings.Split(srv2.ListenAddr, ":")
 	if len(s) != 2 {
@@ -260,7 +273,29 @@ func TestServerRemovePeerDisconnect(t *testing.T) {
 		t.Fatal("peer not connected")
 	}
 
-	srv1.RemovePeer(srv2.Self())
+	peer := srv1.Peers()[0]
+	if !peer.Static() || !peer.StaticDialed() {
+		t.Fatal("peer lacks static membership before removal")
+	}
+	removed := make(chan struct{})
+	go func() {
+		srv1.RemovePeer(srv2.Self())
+		close(removed)
+	}()
+	select {
+	case <-peer.closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("peer disconnect did not begin")
+	}
+	if peer.Static() || peer.Info().Network.Static || !peer.StaticDialed() {
+		t.Error("removal must clear static membership before protocols exit, preserving dial history")
+	}
+	releaseProtocols()
+	select {
+	case <-removed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("peer removal did not complete")
+	}
 
 	if srv1.PeerCount() > 0 {
 		t.Fatal("removed peer still connected")
