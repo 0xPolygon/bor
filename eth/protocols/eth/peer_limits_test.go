@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -239,4 +240,72 @@ func limitsTestServer(t *testing.T, trusted, static []*enode.Node, run func(*p2p
 	}
 	t.Cleanup(srv.Stop)
 	return srv
+}
+
+func TestPeerPooledTransactionRequestBounds(t *testing.T) {
+	for _, version := range ProtocolVersions {
+		for _, tc := range []struct {
+			name  string
+			count int
+			id    uint64
+		}{
+			{"empty", 0, 0},
+			{"single", 1, 1},
+			{"full batch", maxPooledTxsServe, 1},
+			{"full batch maximum ID", maxPooledTxsServe, math.MaxUint64},
+		} {
+			t.Run(fmt.Sprintf("%d/%s", version, tc.name), func(t *testing.T) {
+				data, err := rlp.EncodeToBytes(GetPooledTransactionsPacket{tc.id, make(GetPooledTransactionsRequest, tc.count)})
+				if err != nil {
+					t.Fatal(err)
+				}
+				rw := &replyTestRW{sent: make(chan p2p.Msg, 1)}
+				rw.msg = p2p.Msg{Code: GetPooledTransactionsMsg, Size: uint32(len(data)), Payload: bytes.NewReader(data)}
+				peer := NewPeer(version, p2p.NewPeer(enode.ID{1}, "", nil), rw, nil)
+				defer peer.Close()
+				peer.limits.requests = rate.NewLimiter(0, 0)
+				pool := new(replyLookupPool)
+				if err := handleMessage(&replyLookupBackend{pool: pool}, peer); err != nil {
+					t.Fatal(err)
+				}
+				if pool.lookups != tc.count {
+					t.Fatalf("got %d lookups, want %d", pool.lookups, tc.count)
+				}
+				select {
+				case reply := <-rw.sent:
+					var response PooledTransactionsPacket
+					if err := reply.Decode(&response); err != nil || response.RequestId != tc.id {
+						t.Fatalf("incorrect reply: %v, %v", response, err)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("request-compliant peer did not receive a reply")
+				}
+			})
+		}
+	}
+}
+
+func TestPeerPooledTransactionRequestRejectedBeforeDecode(t *testing.T) {
+	data, err := rlp.EncodeToBytes(GetPooledTransactionsPacket{0, make(GetPooledTransactionsRequest, maxPooledTxsServe+1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, version := range ProtocolVersions {
+		for _, size := range []uint32{uint32(len(data)), maxMessageSize} {
+			t.Run(fmt.Sprintf("%d/%d", version, size), func(t *testing.T) {
+				payload := bytes.NewReader(data)
+				rw := &limitTestRW{msg: p2p.Msg{Code: GetPooledTransactionsMsg, Size: size, Payload: payload}}
+				peer := NewPeer(version, p2p.NewPeer(enode.ID{1}, "", nil), rw, nil)
+				defer peer.Close()
+				pool := new(replyLookupPool)
+				err := handleMessage(&replyLookupBackend{pool: pool}, peer)
+				if !errors.Is(err, errMsgTooLarge) || errors.Is(err, ErrPeerRateLimit) {
+					t.Fatalf("oversized request should disconnect without jail: %v", err)
+				}
+				if payload.Len() != len(data) || pool.lookups != 0 {
+					t.Fatalf("rejected request consumed %d bytes and performed %d lookups", len(data)-payload.Len(), pool.lookups)
+				}
+			})
+		}
+	}
 }

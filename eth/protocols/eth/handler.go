@@ -18,6 +18,7 @@ package eth
 
 import (
 	"fmt"
+	"math"
 	"math/big"
 	"time"
 
@@ -30,6 +31,7 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/enr"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rlp"
 )
 
 const (
@@ -209,8 +211,12 @@ func handleMessage(backend Backend, peer *Peer) error {
 	if err != nil {
 		return err
 	}
-	if msg.Size > maxMessageSize {
-		return fmt.Errorf("%w: %v > %v", errMsgTooLarge, msg.Size, maxMessageSize)
+	maxSize := uint64(maxMessageSize)
+	if msg.Code == GetPooledTransactionsMsg {
+		maxSize = rlp.ListSize(uint64(rlp.IntSize(math.MaxUint64)) + rlp.ListSize(maxPooledTxsServe*(common.HashLength+1)))
+	}
+	if uint64(msg.Size) > maxSize {
+		return fmt.Errorf("%w: %v > %v", errMsgTooLarge, msg.Size, maxSize)
 	}
 	defer msg.Discard()
 	if err := peer.checkMessageRate(msg.Code, msg.Size, time.Now()); err != nil {
