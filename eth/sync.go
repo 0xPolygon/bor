@@ -43,6 +43,9 @@ func (h *handler) syncTransactions(p *eth.Peer) {
 			if h.privateTxGetter != nil && h.privateTxGetter.IsTxPrivate(tx.Hash) {
 				continue
 			}
+			if resolved := tx.Resolve(); resolved == nil || resolved.GetOptions() != nil {
+				continue
+			}
 			hashes = append(hashes, tx.Hash)
 		}
 	}
