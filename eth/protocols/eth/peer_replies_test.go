@@ -328,6 +328,7 @@ func TestPeerReplyValidation(t *testing.T) {
 
 func TestPeerRepliesUnderConcurrentLoad(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
+		const requestsPerSecond = 128
 		p, rw := newReplyTestPeer(t)
 		data, err := rlp.EncodeToBytes(make([]byte, 128*1024-13))
 		if err != nil {
@@ -337,7 +338,7 @@ func TestPeerRepliesUnderConcurrentLoad(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for i := 0; i < 80*30; i++ {
+		for i := 0; i < requestsPerSecond*30; i++ {
 			if err := p.checkMessageRate(GetPooledTransactionsMsg, 1, time.Now()); err != nil {
 				t.Fatalf("honest fetcher rejected at request %d: %v", i, err)
 			}
@@ -361,7 +362,7 @@ func TestPeerRepliesUnderConcurrentLoad(t *testing.T) {
 			for range want {
 				<-rw.sent
 			}
-			time.Sleep(time.Second / 80)
+			time.Sleep(time.Second / requestsPerSecond)
 		}
 	})
 }
