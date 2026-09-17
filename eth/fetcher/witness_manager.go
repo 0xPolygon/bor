@@ -701,10 +701,13 @@ func (m *witnessManager) processWitnessResponse(peer string, hash common.Hash, r
 		return
 	}
 
-	// WIT2: byte-correctness check. If we have a BP-signed announcement on
-	// file for this block, the encoded witness bytes must hash to the
-	// signed witnessHash. State-root failures (content-correctness) are
-	// handled later in the import path and do NOT drop the server.
+	// WIT2: size-oracle check. If we have a BP-signed announcement on file
+	// for this block, the encoded witness only needs to fall within the
+	// signed-size band — hash divergence from non-deterministic witness
+	// content is expected and observability-only, not rejected. Only an
+	// oversized witness is rejected here. State-root failures
+	// (content-correctness) are handled later in the import path and do NOT
+	// drop the server.
 	body, witnessHash, ok := m.verifyAgainstSignedHash(peer, hash, witness[0])
 	if !ok {
 		return
