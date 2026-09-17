@@ -489,15 +489,7 @@ func (pool *LegacyPool) loop() {
 			rebroadcastIdentifyTimer.Update(time.Since(identifyStart))
 
 			if len(stuckTxs) > 0 {
-				explicit := pool.rebroadcastAckFeed.Send(core.StuckTxsEvent{Txs: stuckTxs})
-				legacy := pool.rebroadcastTxFeed.Send(core.StuckTxsEvent{Txs: stuckTxs})
-				if explicit == 0 || legacy > 0 {
-					hashes := make([]common.Hash, len(stuckTxs))
-					for i, tx := range stuckTxs {
-						hashes[i] = tx.Hash()
-					}
-					pool.rebroadcastAcknowledgement(stuckTxs, false)(hashes)
-				}
+				pool.publishRebroadcastTransactions(stuckTxs)
 				log.Debug("Identified stuck transactions for rebroadcast", "count", len(stuckTxs))
 			}
 

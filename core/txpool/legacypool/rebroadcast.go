@@ -41,6 +41,18 @@ func (pool *LegacyPool) canRebroadcast(tx *types.Transaction) bool {
 	return tx.GetOptions() == nil && (pool.isTxPrivate == nil || !pool.isTxPrivate(tx.Hash()))
 }
 
+func (pool *LegacyPool) publishRebroadcastTransactions(txs []*types.Transaction) {
+	explicit := pool.rebroadcastAckFeed.Send(core.StuckTxsEvent{Txs: txs})
+	legacy := pool.rebroadcastTxFeed.Send(core.StuckTxsEvent{Txs: txs})
+	if explicit == 0 || legacy > 0 {
+		hashes := make([]common.Hash, len(txs))
+		for i, tx := range txs {
+			hashes[i] = tx.Hash()
+		}
+		pool.rebroadcastAcknowledgement(txs, false)(hashes)
+	}
+}
+
 // RebroadcastAcknowledgement creates a batch-scoped callback for gossip queue
 // acceptance. Selecting candidates or creating the callback does not record a
 // send. Duplicate acknowledgments within a batch are ignored, including those
