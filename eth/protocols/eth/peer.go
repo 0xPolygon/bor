@@ -39,15 +39,15 @@ const (
 	// before starting to randomly evict them.
 	maxKnownBlocks = 1024
 
-	// maxQueuedTxs is the maximum number of transactions to queue up before dropping
-	// older broadcasts.
+	// maxQueuedTxs is the maximum number of transactions to queue up before rejecting
+	// additional broadcasts.
 	maxQueuedTxs = 4096
 
 	// maxQueuedTxAnns is the maximum number of transaction announcements to queue up
-	// before dropping older announcements.
+	// before rejecting additional announcements.
 	maxQueuedTxAnns = 16384
 
-	// maxQueuedTxAnnsTrusted is the maximum number of transaction announcements to queue up before dropping older announcements for trusted and static peers. Specific to Bor.
+	// maxQueuedTxAnnsTrusted is the maximum number of transaction announcements to queue up for trusted and static peers. Specific to Bor.
 	maxQueuedTxAnnsTrusted = 40960
 
 	// maxQueuedBlocks is the maximum number of block propagations to queue up before
@@ -86,17 +86,16 @@ type Peer struct {
 	queuedBlocks    chan *blockPropagation // Queue of blocks to broadcast to the peer
 	queuedBlockAnns chan *types.Block      // Queue of blocks to announce to the peer
 
-	txpool      TxPool             // Transaction pool used by the broadcasters for liveness checks
-	knownTxs    *knownCache        // Set of transaction hashes known to be known by this peer
-	txBroadcast chan []common.Hash // Channel used to queue transaction propagation requests
-	txAnnounce  chan []common.Hash // Channel used to queue transaction announcement requests
+	txpool      TxPool              // Transaction pool used by the broadcasters for liveness checks
+	knownTxs    *knownCache         // Set of transaction hashes known to be known by this peer
+	txBroadcast chan *txPropagation // Channel used to queue transaction propagation requests
+	txAnnounce  chan *txPropagation // Channel used to queue transaction announcement requests
 
-	reqDispatch chan *request  // Dispatch channel to send requests and track then until fulfillment
-	reqCancel   chan *cancel   // Dispatch channel to cancel pending requests and untrack them
-	resDispatch chan *response // Dispatch channel to fulfil pending requests and untrack them
-	replyQueue  chan p2p.Msg
-	replyBytes  int
-	replyLock   sync.Mutex
+	reqDispatch  chan *request  // Dispatch channel to send requests and track then until fulfillment
+	reqCancel    chan *cancel   // Dispatch channel to cancel pending requests and untrack them
+	resDispatch  chan *response // Dispatch channel to fulfil pending requests and untrack them
+	blockReplies *peerReplies
+	txReplies    *peerReplies
 
 	term chan struct{} // Termination channel to stop the broadcasters
 	lock sync.RWMutex  // Mutex protecting the internal fields
@@ -116,12 +115,13 @@ func NewPeer(version uint, p *p2p.Peer, rw p2p.MsgReadWriter, txpool TxPool) *Pe
 		knownBlocks:     newKnownCache(maxKnownBlocks),
 		queuedBlocks:    make(chan *blockPropagation, maxQueuedBlocks),
 		queuedBlockAnns: make(chan *types.Block, maxQueuedBlockAnns),
-		txBroadcast:     make(chan []common.Hash),
-		txAnnounce:      make(chan []common.Hash),
+		txBroadcast:     make(chan *txPropagation),
+		txAnnounce:      make(chan *txPropagation),
 		reqDispatch:     make(chan *request),
 		reqCancel:       make(chan *cancel),
 		resDispatch:     make(chan *response),
-		replyQueue:      make(chan p2p.Msg, peerRequestBurst),
+		blockReplies:    newPeerReplies(),
+		txReplies:       newPeerReplies(),
 		txpool:          txpool,
 		term:            make(chan struct{}),
 	}
@@ -130,7 +130,8 @@ func NewPeer(version uint, p *p2p.Peer, rw p2p.MsgReadWriter, txpool TxPool) *Pe
 	go peer.broadcastTransactions()
 	go peer.announceTransactions()
 	go peer.dispatcher()
-	go peer.sendReplies()
+	go peer.sendReplies(peer.blockReplies)
+	go peer.sendReplies(peer.txReplies)
 
 	return peer
 }
@@ -218,24 +219,14 @@ func (p *Peer) SendTransactions(txs types.Transactions) error {
 }
 
 // AsyncSendTransactions queues a list of transactions (by hash) to eventually
-// propagate to a remote peer. The number of pending sends are capped (new ones
-// will force old sends to be dropped)
+// propagate to a remote peer. Excess hashes are not queued.
 func (p *Peer) AsyncSendTransactions(hashes []common.Hash) {
 	p.QueueTransactions(hashes)
 }
 
-// QueueTransactions is like AsyncSendTransactions but reports queue acceptance,
-// not delivery to the remote peer.
-func (p *Peer) QueueTransactions(hashes []common.Hash) bool {
-	select {
-	case p.txBroadcast <- hashes:
-		// Mark all the transactions as known, but ensure we don't overflow our limits
-		p.knownTxs.Add(hashes...)
-		return true
-	case <-p.term:
-		p.Log().Debug("Dropping transaction propagation", "count", len(hashes))
-		return false
-	}
+// QueueTransactions is like AsyncSendTransactions but returns the hashes retained for sending.
+func (p *Peer) QueueTransactions(hashes []common.Hash) []common.Hash {
+	return p.queueTxPropagation(p.txBroadcast, hashes)
 }
 
 // sendPooledTransactionHashes sends transaction hashes (tagged with their type
@@ -252,24 +243,15 @@ func (p *Peer) sendPooledTransactionHashes(hashes []common.Hash, types []byte, s
 }
 
 // AsyncSendPooledTransactionHashes queues a list of transactions hashes to eventually
-// announce to a remote peer.  The number of pending sends are capped (new ones
-// will force old sends to be dropped)
+// announce to a remote peer.  Excess hashes are not queued.
 func (p *Peer) AsyncSendPooledTransactionHashes(hashes []common.Hash) {
 	p.QueuePooledTransactionHashes(hashes)
 }
 
 // QueuePooledTransactionHashes is like AsyncSendPooledTransactionHashes but
-// reports queue acceptance, not delivery to the remote peer.
-func (p *Peer) QueuePooledTransactionHashes(hashes []common.Hash) bool {
-	select {
-	case p.txAnnounce <- hashes:
-		// Mark all the transactions as known, but ensure we don't overflow our limits
-		p.knownTxs.Add(hashes...)
-		return true
-	case <-p.term:
-		p.Log().Debug("Dropping transaction announcement", "count", len(hashes))
-		return false
-	}
+// returns the hashes retained for sending.
+func (p *Peer) QueuePooledTransactionHashes(hashes []common.Hash) []common.Hash {
+	return p.queueTxPropagation(p.txAnnounce, hashes)
 }
 
 // ReplyPooledTransactionsRLP is the response to RequestTxs.

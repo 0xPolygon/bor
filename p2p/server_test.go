@@ -20,6 +20,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"io"
 	"math/rand"
 	"net"
@@ -737,4 +738,58 @@ func TestServerStopDialing(t *testing.T) {
 
 	// Full Stop after StopDialing must complete cleanly.
 	srv.Stop()
+}
+
+func TestServerStaticMembership(t *testing.T) {
+	for _, configured := range []bool{false, true} {
+		t.Run(fmt.Sprint("configured=", configured), func(t *testing.T) {
+			remote := newStaticMembershipServer(t, false, nil)
+			var static []*enode.Node
+			if configured {
+				static = []*enode.Node{remote.Self()}
+			}
+			local := newStaticMembershipServer(t, true, static)
+			events := make(chan *PeerEvent, 1)
+			sub := local.SubscribeEvents(events)
+			defer sub.Unsubscribe()
+			if !syncAddPeer(remote, local.Self()) {
+				t.Fatal("peer not connected")
+			}
+			select {
+			case <-events:
+			case <-time.After(5 * time.Second):
+				t.Fatal("inbound peer not connected")
+			}
+			peer := local.Peers()[0]
+			if !peer.Inbound() || peer.StaticDialed() || peer.Trusted() || peer.Static() != configured {
+				t.Fatal("incorrect configured inbound membership")
+			}
+			if !remote.Peers()[0].Static() {
+				t.Fatal("dialed static peer lacks membership")
+			}
+			local.AddPeer(remote.Self())
+			if !peer.Static() || peer.Trusted() || peer.StaticDialed() {
+				t.Fatal("adding an inbound peer must only set static membership")
+			}
+			local.RemovePeer(remote.Self())
+			local.doPeerOp(func(map[enode.ID]*Peer) {
+				if local.staticNodes[remote.Self().ID()] {
+					t.Error("removed peer retains static membership")
+				}
+			})
+		})
+	}
+}
+
+func newStaticMembershipServer(t *testing.T, noDial bool, static []*enode.Node) *Server {
+	t.Helper()
+	srv := &Server{Config: Config{
+		PrivateKey: newkey(), MaxPeers: 1, NoDiscovery: true,
+		NoDial: noDial, ListenAddr: "127.0.0.1:0", StaticNodes: static,
+	}}
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(srv.Stop)
+	return srv
 }

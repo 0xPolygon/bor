@@ -20,8 +20,16 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/event"
 )
+
+// SubscribeRebroadcastTransactionsWithAcknowledgement requires the consumer to
+// acknowledge retained hashes through RebroadcastAcknowledgement.
+func (pool *LegacyPool) SubscribeRebroadcastTransactionsWithAcknowledgement(ch chan<- core.StuckTxsEvent) event.Subscription {
+	return pool.rebroadcastAckFeed.Subscribe(ch)
+}
 
 func (pool *LegacyPool) SetPrivateTxChecker(checker func(common.Hash) bool) {
 	pool.mu.Lock()

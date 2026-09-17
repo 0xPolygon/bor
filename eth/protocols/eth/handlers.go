@@ -706,8 +706,8 @@ func answerGetPooledTransactions(backend Backend, query GetPooledTransactionsReq
 		txs    []rlp.RawValue
 	)
 
-	for _, hash := range query {
-		if bytes >= softResponseLimit {
+	for lookups, hash := range query {
+		if bytes >= softResponseLimit || lookups >= maxPooledTxsServe {
 			break
 		}
 		// Retrieve the requested transaction, skipping if unknown to us

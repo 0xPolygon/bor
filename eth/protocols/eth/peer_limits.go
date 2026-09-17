@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -31,7 +32,6 @@ type peerLimits struct {
 	gossip      *rate.Limiter
 	hashes      *rate.Limiter
 	gossipBytes *rate.Limiter
-	replyBytes  *rate.Limiter
 }
 
 func newPeerLimits() peerLimits {
@@ -40,16 +40,15 @@ func newPeerLimits() peerLimits {
 		gossip:      rate.NewLimiter(peerGossipRate, peerGossipBurst),
 		hashes:      rate.NewLimiter(peerHashRate, peerHashBurst),
 		gossipBytes: rate.NewLimiter(peerByteRate, peerByteBurst),
-		replyBytes:  rate.NewLimiter(peerByteRate, peerByteBurst),
 	}
 }
 
 func (p *Peer) checkMessageRate(code uint64, size uint32, now time.Time) error {
-	if p.Trusted() || p.StaticDialed() {
+	if p.Trusted() || p.Static() {
 		return nil
 	}
 	switch code {
-	case GetBlockHeadersMsg, GetBlockBodiesMsg, GetReceiptsMsg, GetPooledTransactionsMsg:
+	case GetBlockHeadersMsg, GetBlockBodiesMsg, GetReceiptsMsg:
 		if !p.limits.requests.AllowN(now, 1) {
 			return fmt.Errorf("%w: data requests", ErrPeerRateLimit)
 		}
@@ -62,16 +61,27 @@ func (p *Peer) checkMessageRate(code uint64, size uint32, now time.Time) error {
 }
 
 func (p *Peer) checkAnnouncementRate(count int, now time.Time) error {
-	if !p.Trusted() && !p.StaticDialed() && !p.limits.hashes.AllowN(now, count) {
+	if !p.Trusted() && !p.Static() && !p.limits.hashes.AllowN(now, count) {
 		return fmt.Errorf("%w: block announcements", ErrPeerRateLimit)
 	}
 	return nil
 }
 
+type peerReplies struct {
+	mu      sync.Mutex
+	queue   chan p2p.Msg
+	bytes   int
+	limiter *rate.Limiter
+}
+
+func newPeerReplies() *peerReplies {
+	return &peerReplies{queue: make(chan p2p.Msg, peerRequestBurst), limiter: rate.NewLimiter(peerByteRate, peerByteBurst)}
+}
+
 var errReplyQueueFull = errors.New("peer response queue full")
 
 func (p *Peer) queueReply(code uint64, packet interface{}) error {
-	if p.Trusted() || p.StaticDialed() {
+	if p.Trusted() || p.Static() {
 		return p2p.Send(p.rw, code, packet)
 	}
 	data, err := rlp.EncodeToBytes(packet)
@@ -81,22 +91,26 @@ func (p *Peer) queueReply(code uint64, packet interface{}) error {
 	if len(data) > maxMessageSize {
 		return errMsgTooLarge
 	}
-	p.replyLock.Lock()
-	defer p.replyLock.Unlock()
+	replies := p.blockReplies
+	if code == PooledTransactionsMsg {
+		replies = p.txReplies
+	}
+	replies.mu.Lock()
+	defer replies.mu.Unlock()
 	select {
 	case <-p.term:
 		return ErrDisconnected
 	default:
 	}
-	if p.replyQueue == nil {
+	if replies.queue == nil {
 		return ErrDisconnected
 	}
-	if p.replyBytes+len(data) > peerByteBurst {
+	if replies.bytes+len(data) > peerByteBurst/2 {
 		return errReplyQueueFull
 	}
 	select {
-	case p.replyQueue <- p2p.Msg{Code: code, Size: uint32(len(data)), Payload: bytes.NewReader(data)}:
-		p.replyBytes += len(data)
+	case replies.queue <- p2p.Msg{Code: code, Size: uint32(len(data)), Payload: bytes.NewReader(data)}:
+		replies.bytes += len(data)
 		return nil
 	default:
 		return errReplyQueueFull
@@ -104,17 +118,17 @@ func (p *Peer) queueReply(code uint64, packet interface{}) error {
 }
 
 // Close cancels allowance waits; transport shutdown interrupts an active write.
-func (p *Peer) sendReplies() {
+func (p *Peer) sendReplies(replies *peerReplies) {
 	defer func() {
-		p.replyLock.Lock()
-		defer p.replyLock.Unlock()
-		p.replyQueue = nil
-		p.replyBytes = 0
+		replies.mu.Lock()
+		defer replies.mu.Unlock()
+		replies.queue = nil
+		replies.bytes = 0
 	}()
 	for {
 		select {
-		case msg := <-p.replyQueue:
-			if err := p.waitReplyAllowance(int(msg.Size)); err != nil {
+		case msg := <-replies.queue:
+			if err := p.waitReplyAllowance(replies.limiter, int(msg.Size)); err != nil {
 				return
 			}
 			if err := p.rw.WriteMsg(msg); err != nil {
@@ -122,17 +136,17 @@ func (p *Peer) sendReplies() {
 				p.Disconnect(p2p.DiscNetworkError)
 				return
 			}
-			p.replyLock.Lock()
-			p.replyBytes -= int(msg.Size)
-			p.replyLock.Unlock()
+			replies.mu.Lock()
+			replies.bytes -= int(msg.Size)
+			replies.mu.Unlock()
 		case <-p.term:
 			return
 		}
 	}
 }
 
-func (p *Peer) waitReplyAllowance(size int) error {
-	reservation := p.limits.replyBytes.ReserveN(time.Now(), size)
+func (p *Peer) waitReplyAllowance(limiter *rate.Limiter, size int) error {
+	reservation := limiter.ReserveN(time.Now(), size)
 	if !reservation.OK() {
 		return errMsgTooLarge
 	}

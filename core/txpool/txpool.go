@@ -423,6 +423,16 @@ func (p *TxPool) SubscribeTransactions(ch chan<- core.NewTxsEvent, reorgs bool) 
 // SubscribeRebroadcastTransactions registers a subscription for stuck transaction
 // rebroadcast events from all subpools.
 func (p *TxPool) SubscribeRebroadcastTransactions(ch chan<- core.StuckTxsEvent) event.Subscription {
+	return p.subscribeRebroadcastTransactions(ch, false)
+}
+
+// SubscribeRebroadcastTransactionsWithAcknowledgement opts into explicit
+// accounting for subpools that support RebroadcastAcknowledgement.
+func (p *TxPool) SubscribeRebroadcastTransactionsWithAcknowledgement(ch chan<- core.StuckTxsEvent) event.Subscription {
+	return p.subscribeRebroadcastTransactions(ch, true)
+}
+
+func (p *TxPool) subscribeRebroadcastTransactions(ch chan<- core.StuckTxsEvent, acknowledge bool) event.Subscription {
 	if p == nil {
 		return event.NewSubscription(func(quit <-chan struct{}) error {
 			<-quit
@@ -431,6 +441,12 @@ func (p *TxPool) SubscribeRebroadcastTransactions(ch chan<- core.StuckTxsEvent) 
 	}
 	subs := make([]event.Subscription, len(p.subpools))
 	for i, subpool := range p.subpools {
+		if pool, ok := subpool.(interface {
+			SubscribeRebroadcastTransactionsWithAcknowledgement(chan<- core.StuckTxsEvent) event.Subscription
+		}); acknowledge && ok {
+			subs[i] = pool.SubscribeRebroadcastTransactionsWithAcknowledgement(ch)
+			continue
+		}
 		subs[i] = subpool.SubscribeRebroadcastTransactions(ch)
 	}
 	return p.subs.Track(event.JoinSubscriptions(subs...))

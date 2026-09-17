@@ -43,7 +43,7 @@ func TestRebroadcastSelectionDoesNotRecordSend(t *testing.T) {
 	pool, _, from, tx := setupRebroadcastTest(t, 20*time.Millisecond, 60*time.Millisecond, 100)
 	defer pool.Close()
 	ch := make(chan core.StuckTxsEvent, 10)
-	sub := pool.SubscribeRebroadcastTransactions(ch)
+	sub := pool.SubscribeRebroadcastTransactionsWithAcknowledgement(ch)
 	defer sub.Unsubscribe()
 	pool.mu.Lock()
 	setTxAge(pool, from, 40*time.Millisecond)
@@ -75,31 +75,43 @@ func TestRebroadcastSelectionDoesNotRecordSend(t *testing.T) {
 	}
 }
 
-func TestRebroadcastWithoutSubscriberRecordsFallback(t *testing.T) {
-	pool, _, from, tx := setupRebroadcastTest(t, 20*time.Millisecond, 60*time.Millisecond, 100)
-	defer pool.Close()
-	pool.mu.Lock()
-	setTxAge(pool, from, time.Second)
-	pool.mu.Unlock()
-	deadline := time.After(2 * time.Second)
-	for {
-		pool.mu.RLock()
-		_, tracked := pool.lastRebroadcast[tx.Hash()]
-		pool.mu.RUnlock()
-		if tracked {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatal("unconsumed rebroadcast candidate was not bounded")
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
-	pool.mu.RLock()
-	eligible := pool.identifyStuckTransactions()
-	pool.mu.RUnlock()
-	if len(eligible) != 0 {
-		t.Fatal("fallback tracking must stop reselection")
+func TestRebroadcastLegacyAccounting(t *testing.T) {
+	for _, mode := range []string{"no subscriber", "legacy", "mixed"} {
+		t.Run(mode, func(t *testing.T) {
+			pool, _, from, tx := setupRebroadcastTest(t, 20*time.Millisecond, 60*time.Millisecond, 100)
+			defer pool.Close()
+			if mode != "no subscriber" {
+				sub := pool.SubscribeRebroadcastTransactions(make(chan core.StuckTxsEvent, 10))
+				defer sub.Unsubscribe()
+			}
+			if mode == "mixed" {
+				sub := pool.SubscribeRebroadcastTransactionsWithAcknowledgement(make(chan core.StuckTxsEvent, 10))
+				defer sub.Unsubscribe()
+			}
+			pool.mu.Lock()
+			setTxAge(pool, from, time.Second)
+			pool.mu.Unlock()
+			deadline := time.After(2 * time.Second)
+			for {
+				pool.mu.RLock()
+				_, tracked := pool.lastRebroadcast[tx.Hash()]
+				pool.mu.RUnlock()
+				if tracked {
+					break
+				}
+				select {
+				case <-deadline:
+					t.Fatal("unconsumed rebroadcast candidate was not bounded")
+				case <-time.After(10 * time.Millisecond):
+				}
+			}
+			pool.mu.RLock()
+			eligible := pool.identifyStuckTransactions()
+			pool.mu.RUnlock()
+			if len(eligible) != 0 {
+				t.Fatal("fallback tracking must stop reselection")
+			}
+		})
 	}
 }
 

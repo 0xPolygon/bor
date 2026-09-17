@@ -9,6 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/event"
 )
 
 type speculativeTestSubPool struct {
@@ -94,6 +95,47 @@ func TestRebroadcastAcknowledgementForwardsToSubpools(t *testing.T) {
 			if !slices.Equal(hashes, []common.Hash{txs[j].Hash()}) {
 				t.Fatalf("subpool %d received wrong acknowledged hashes: %v", i, hashes)
 			}
+		}
+	}
+}
+
+type legacyRebroadcastSubPool struct {
+	SubPool
+	feed event.Feed
+}
+
+func (p *legacyRebroadcastSubPool) SubscribeRebroadcastTransactions(ch chan<- core.StuckTxsEvent) event.Subscription {
+	return p.feed.Subscribe(ch)
+}
+
+type acknowledgedRebroadcastSubPool struct {
+	legacyRebroadcastSubPool
+	acknowledged event.Feed
+}
+
+func (p *acknowledgedRebroadcastSubPool) SubscribeRebroadcastTransactionsWithAcknowledgement(ch chan<- core.StuckTxsEvent) event.Subscription {
+	return p.acknowledged.Subscribe(ch)
+}
+
+func TestRebroadcastSubscriptionContract(t *testing.T) {
+	for _, explicit := range []bool{false, true} {
+		legacy, modern := new(legacyRebroadcastSubPool), new(acknowledgedRebroadcastSubPool)
+		pool := &TxPool{subpools: []SubPool{legacy, modern}}
+		ch := make(chan core.StuckTxsEvent, 2)
+		subscribe := pool.SubscribeRebroadcastTransactions
+		feed := &modern.feed
+		if explicit {
+			subscribe = pool.SubscribeRebroadcastTransactionsWithAcknowledgement
+			feed = &modern.acknowledged
+		}
+		sub := subscribe(ch)
+		t.Cleanup(sub.Unsubscribe)
+		if legacy.feed.Send(core.StuckTxsEvent{}) != 1 || feed.Send(core.StuckTxsEvent{}) != 1 || len(ch) != 2 {
+			t.Fatal("rebroadcast subscription did not preserve the requested accounting contract")
+		}
+		sub.Unsubscribe()
+		if legacy.feed.Send(core.StuckTxsEvent{}) != 0 || feed.Send(core.StuckTxsEvent{}) != 0 {
+			t.Fatal("rebroadcast subscription did not release subpool subscriptions")
 		}
 	}
 }

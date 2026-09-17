@@ -90,12 +90,13 @@ type Server struct {
 	peerFeed     event.Feed
 	log          log.Logger
 
-	nodedb    *enode.DB
-	localnode *enode.LocalNode
-	discv4    *discover.UDPv4
-	discv5    *discover.UDPv5
-	discmix   *enode.FairMix
-	dialsched *dialScheduler
+	nodedb      *enode.DB
+	localnode   *enode.LocalNode
+	discv4      *discover.UDPv4
+	discv5      *discover.UDPv5
+	discmix     *enode.FairMix
+	dialsched   *dialScheduler
+	staticNodes map[enode.ID]bool // Owned by the server loop.
 
 	// This is read by the NAT port mapping loop.
 	portMappingRegister chan *portMapping
@@ -219,6 +220,7 @@ const (
 	staticDialedConn
 	inboundConn
 	trustedConn
+	staticConn
 )
 
 // conn wraps a network connection with information gathered
@@ -371,7 +373,13 @@ func (srv *Server) PeerCount() int {
 // the server will connect to the node. If the connection fails for any reason, the server
 // will attempt to reconnect the peer.
 func (srv *Server) AddPeer(node *enode.Node) {
-	srv.dialsched.addStatic(node)
+	srv.doPeerOp(func(peers map[enode.ID]*Peer) {
+		srv.staticNodes[node.ID()] = true
+		if peer := peers[node.ID()]; peer != nil {
+			peer.rw.set(staticConn, true)
+		}
+		srv.dialsched.addStatic(node)
+	})
 }
 
 // JailPeer jails a peer for the default jail period, preventing connections
@@ -410,6 +418,7 @@ func (srv *Server) RemovePeer(node *enode.Node) {
 	)
 	// Disconnect the peer on the main loop.
 	srv.doPeerOp(func(peers map[enode.ID]*Peer) {
+		delete(srv.staticNodes, node.ID())
 		srv.dialsched.removeStatic(node)
 
 		if peer := peers[node.ID()]; peer != nil {
@@ -746,7 +755,9 @@ func (srv *Server) setupDialScheduler() {
 	}
 
 	srv.dialsched = newDialScheduler(config, srv.discmix, srv.SetupConn)
+	srv.staticNodes = make(map[enode.ID]bool, len(srv.StaticNodes))
 	for _, n := range srv.StaticNodes {
+		srv.staticNodes[n.ID()] = true
 		srv.dialsched.addStatic(n)
 	}
 }
@@ -903,6 +914,7 @@ running:
 		case c := <-srv.checkpointAddPeer:
 			// At this point the connection is past the protocol handshake.
 			// Its capabilities are known and the remote identity is verified.
+			c.set(staticConn, srv.staticNodes[c.node.ID()])
 			err := srv.addPeerChecks(peers, inboundCount, c)
 			if err == nil {
 				// The handshakes are done and it passed all checks.

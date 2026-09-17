@@ -18,6 +18,7 @@ package eth
 
 import (
 	"math/big"
+	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -35,6 +36,37 @@ const (
 type blockPropagation struct {
 	block *types.Block
 	td    *big.Int
+}
+
+type txPropagation struct {
+	hashes   []common.Hash
+	retained chan []common.Hash
+}
+
+func (p *Peer) queueTxPropagation(queue chan<- *txPropagation, hashes []common.Hash) []common.Hash {
+	batch := &txPropagation{hashes: hashes, retained: make(chan []common.Hash, 1)}
+	select {
+	case queue <- batch:
+	case <-p.term:
+		return nil
+	}
+	select {
+	case retained := <-batch.retained:
+		p.knownTxs.Add(retained...)
+		return retained
+	case <-p.term:
+		return nil
+	}
+}
+
+func retainTxPropagation(queue []common.Hash, batch *txPropagation, limit int, failed bool) []common.Hash {
+	var retained []common.Hash
+	if !failed {
+		retained = batch.hashes[:min(len(batch.hashes), limit-len(queue))]
+		queue = append(queue, retained...)
+	}
+	batch.retained <- retained
+	return queue
 }
 
 // broadcastBlocks is a write loop that multiplexes blocks and block announcements
@@ -66,10 +98,9 @@ func (p *Peer) broadcastBlocks() {
 // node internals and at the same time rate limits queued data.
 func (p *Peer) broadcastTransactions() {
 	var (
-		queue  []common.Hash         // Queue of hashes to broadcast as full transactions
-		done   chan struct{}         // Non-nil if background broadcaster is running
-		fail   = make(chan error, 1) // Channel used to receive network error
-		failed bool                  // Flag whether a send failed, discard everything onward
+		queue  []common.Hash // Queue of hashes to broadcast as full transactions
+		done   chan struct{} // Non-nil if background broadcaster is running
+		failed atomic.Bool
 	)
 	for {
 		// If there's no in-flight broadcast running, check if a new one is needed
@@ -99,7 +130,8 @@ func (p *Peer) broadcastTransactions() {
 				done = make(chan struct{})
 				go func() {
 					if err := p.SendTransactions(txs); err != nil {
-						fail <- err
+						failed.Store(true)
+						p.Log().Debug("Broadcast: failed to send transactions, discarding future txs", "err", err)
 						return
 					}
 					close(done)
@@ -109,26 +141,11 @@ func (p *Peer) broadcastTransactions() {
 		}
 		// Transfer goroutine may or may not have been started, listen for events
 		select {
-		case hashes := <-p.txBroadcast:
-			// If the connection failed, discard all transaction events
-			if failed {
-				continue
-			}
-			// New batch of transactions to be broadcast, queue them (with cap)
-			queue = append(queue, hashes...)
-			if len(queue) > maxQueuedTxs {
-				dropped := len(queue) - maxQueuedTxs
-				p.Log().Debug("Broadcast: queue overflowed, dropping oldest", "dropped", dropped, "queueLen", len(queue), "queueLimit", maxQueuedTxs)
-				// Fancy copy and resize to ensure buffer doesn't grow indefinitely
-				queue = queue[:copy(queue, queue[len(queue)-maxQueuedTxs:])]
-			}
+		case batch := <-p.txBroadcast:
+			queue = retainTxPropagation(queue, batch, maxQueuedTxs, failed.Load())
 
 		case <-done:
 			done = nil
-
-		case err := <-fail:
-			p.Log().Debug("Broadcast: failed to send transactions, discarding future txs", "err", err)
-			failed = true
 
 		case <-p.term:
 			return
@@ -141,10 +158,9 @@ func (p *Peer) broadcastTransactions() {
 // node internals and at the same time rate limits queued data.
 func (p *Peer) announceTransactions() {
 	var (
-		queue  []common.Hash         // Queue of hashes to announce as transaction stubs
-		done   chan struct{}         // Non-nil if background announcer is running
-		fail   = make(chan error, 1) // Channel used to receive network error
-		failed bool                  // Flag whether a send failed, discard everything onward
+		queue  []common.Hash // Queue of hashes to announce as transaction stubs
+		done   chan struct{} // Non-nil if background announcer is running
+		failed atomic.Bool
 	)
 
 	queueLimit := maxQueuedTxAnns
@@ -183,7 +199,8 @@ func (p *Peer) announceTransactions() {
 				done = make(chan struct{})
 				go func() {
 					if err := p.sendPooledTransactionHashes(pending, pendingTypes, pendingSizes); err != nil {
-						fail <- err
+						failed.Store(true)
+						p.Log().Debug("Broadcast: failed to announce transactions, discarding future txs", "err", err)
 						return
 					}
 					close(done)
@@ -193,25 +210,11 @@ func (p *Peer) announceTransactions() {
 		}
 		// Transfer goroutine may or may not have been started, listen for events
 		select {
-		case hashes := <-p.txAnnounce:
-			// If the connection failed, discard all transaction events
-			if failed {
-				continue
-			}
-			// New batch of transactions to be broadcast, queue them (with cap)
-			queue = append(queue, hashes...)
-			if len(queue) > queueLimit {
-				dropped := len(queue) - queueLimit
-				p.Log().Debug("Announce: queue overflowed, dropping oldest", "dropped", dropped, "queueLimit", queueLimit)
-				// Fancy copy and resize to ensure buffer doesn't grow indefinitely
-				queue = queue[:copy(queue, queue[len(queue)-queueLimit:])]
-			}
+		case batch := <-p.txAnnounce:
+			queue = retainTxPropagation(queue, batch, queueLimit, failed.Load())
 
 		case <-done:
 			done = nil
-
-		case <-fail:
-			failed = true
 
 		case <-p.term:
 			return

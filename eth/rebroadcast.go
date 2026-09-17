@@ -24,7 +24,17 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/event"
 )
+
+func (h *handler) subscribeRebroadcastTransactions(ch chan<- core.StuckTxsEvent) event.Subscription {
+	if pool, ok := h.txpool.(interface {
+		SubscribeRebroadcastTransactionsWithAcknowledgement(chan<- core.StuckTxsEvent) event.Subscription
+	}); ok {
+		return pool.SubscribeRebroadcastTransactionsWithAcknowledgement(ch)
+	}
+	return h.txpool.SubscribeRebroadcastTransactions(ch)
+}
 
 func (h *handler) rebroadcastAcknowledgement(txs []*types.Transaction) func([]common.Hash) {
 	if pool, ok := h.txpool.(interface {
@@ -55,10 +65,10 @@ func queueTransactions(peers map[*ethPeer][]common.Hash, announce bool, onBroadc
 		if announce {
 			send = peer.QueuePooledTransactionHashes
 		}
-		if send(hashes) {
-			count += len(hashes)
+		if retained := send(hashes); len(retained) > 0 {
+			count += len(retained)
 			if onBroadcast != nil {
-				onBroadcast(hashes)
+				onBroadcast(retained)
 			}
 		}
 	}

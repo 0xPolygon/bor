@@ -43,6 +43,8 @@ func TestRebroadcastAcknowledgementLegacyPool(t *testing.T) {
 	if h.rebroadcastAcknowledgement(txs) != nil {
 		t.Fatal("legacy pools must remain usable without the optional callback")
 	}
+	sub := h.subscribeRebroadcastTransactions(make(chan core.StuckTxsEvent, 1))
+	sub.Unsubscribe()
 }
 
 func TestRebroadcastPeerAssignment(t *testing.T) {
@@ -163,7 +165,7 @@ func TestRebroadcastEventsExcludeNonGossipableTransactions(t *testing.T) {
 		t.Fatal(err)
 	}
 	ch := make(chan core.StuckTxsEvent, 10)
-	sub := backend.txPool.SubscribeRebroadcastTransactions(ch)
+	sub := backend.txPool.SubscribeRebroadcastTransactionsWithAcknowledgement(ch)
 	defer sub.Unsubscribe()
 	var txs types.Transactions
 	for nonce := uint64(0); nonce < 3; nonce++ {
@@ -189,6 +191,19 @@ func TestRebroadcastEventsExcludeNonGossipableTransactions(t *testing.T) {
 			}
 		case <-time.After(5 * time.Second):
 			t.Fatal("timed out waiting for the public rebroadcast candidate")
+		}
+	}
+}
+
+func TestRebroadcastEmptyQueueAcknowledgement(t *testing.T) {
+	h, _ := rebroadcastDeliveryFixture(t, true)
+	for _, announce := range []bool{false, true} {
+		peers := map[*ethPeer][]common.Hash{h.peers.all()[0]: nil}
+		count := queueTransactions(peers, announce, func([]common.Hash) {
+			t.Error("empty batch must not acknowledge a rebroadcast")
+		})
+		if count != 0 {
+			t.Fatal("empty batch counted as a rebroadcast")
 		}
 	}
 }

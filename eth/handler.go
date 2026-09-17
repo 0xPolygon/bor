@@ -732,7 +732,7 @@ func (h *handler) Start(maxPeers int) {
 	if !h.disableTxPropagation {
 		h.wg.Add(1)
 		h.stuckTxsCh = make(chan core.StuckTxsEvent, txChanSize)
-		h.stuckTxsSub = h.txpool.SubscribeRebroadcastTransactions(h.stuckTxsCh)
+		h.stuckTxsSub = h.subscribeRebroadcastTransactions(h.stuckTxsCh)
 		go h.stuckTxBroadcastLoop()
 	}
 

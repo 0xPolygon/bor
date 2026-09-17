@@ -332,9 +332,10 @@ type LegacyPool struct {
 	filteredAddrs map[common.Address]struct{} // Map of addresses to filter
 
 	// Rebroadcast tracking
-	rebroadcastTxFeed event.Feed                // Feed for stuck transaction events
-	lastRebroadcast   map[common.Hash]time.Time // Track last rebroadcast time per tx hash
-	isTxPrivate       func(common.Hash) bool
+	rebroadcastTxFeed  event.Feed // Feed for stuck transaction events
+	rebroadcastAckFeed event.Feed
+	lastRebroadcast    map[common.Hash]time.Time // Track last rebroadcast time per tx hash
+	isTxPrivate        func(common.Hash) bool
 }
 
 type txpoolResetRequest struct {
@@ -488,7 +489,9 @@ func (pool *LegacyPool) loop() {
 			rebroadcastIdentifyTimer.Update(time.Since(identifyStart))
 
 			if len(stuckTxs) > 0 {
-				if pool.rebroadcastTxFeed.Send(core.StuckTxsEvent{Txs: stuckTxs}) == 0 {
+				explicit := pool.rebroadcastAckFeed.Send(core.StuckTxsEvent{Txs: stuckTxs})
+				legacy := pool.rebroadcastTxFeed.Send(core.StuckTxsEvent{Txs: stuckTxs})
+				if explicit == 0 || legacy > 0 {
 					hashes := make([]common.Hash, len(stuckTxs))
 					for i, tx := range stuckTxs {
 						hashes[i] = tx.Hash()
