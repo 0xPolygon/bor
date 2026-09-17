@@ -161,6 +161,9 @@ func TestPeerConfiguredLimits(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			p := configuredLimitsTestPeer(t, mode)
 			peer, now := &Peer{Peer: p, limits: newPeerLimits()}, time.Now()
+			if peer.IsStatic() != p.Static() {
+				t.Fatal("broadcast static classification differs from configured membership")
+			}
 			peer.limits.requests = rate.NewLimiter(0, 0)
 			peer.limits.gossip = rate.NewLimiter(0, 0)
 			peer.limits.hashes = rate.NewLimiter(0, 0)

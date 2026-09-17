@@ -256,14 +256,15 @@ func (p *Peer) QueuePooledTransactionHashes(hashes []common.Hash) []common.Hash 
 
 // ReplyPooledTransactionsRLP is the response to RequestTxs.
 func (p *Peer) ReplyPooledTransactionsRLP(id uint64, hashes []common.Hash, txs []rlp.RawValue) error {
-	// Mark all the transactions as known, but ensure we don't overflow our limits
-	p.knownTxs.Add(hashes...)
-
 	// Not packed into PooledTransactionsResponse to avoid RLP decoding
-	return p.queueReply(PooledTransactionsMsg, &PooledTransactionsRLPPacket{
+	if err := p.queueReply(PooledTransactionsMsg, &PooledTransactionsRLPPacket{
 		RequestId:                     id,
 		PooledTransactionsRLPResponse: txs,
-	})
+	}); err != nil {
+		return err
+	}
+	p.knownTxs.Add(hashes...)
+	return nil
 }
 
 // SendNewBlockHashes announces the availability of a number of blocks through
@@ -482,7 +483,7 @@ func (p *Peer) IsTrusted() bool {
 
 // IsStatic returns whether the peer is a static peer or not.
 func (p *Peer) IsStatic() bool {
-	return p.Info().Network.Static
+	return p.Static()
 }
 
 // SendBlockRangeUpdate sends a notification about our available block range to the peer.

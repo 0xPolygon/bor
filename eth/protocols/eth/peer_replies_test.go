@@ -253,6 +253,45 @@ func TestPeerReplyConfiguredExemptions(t *testing.T) {
 					t.Fatal("configured peer reply was throttled")
 				}
 			}
+			rw.err = io.ErrClosedPipe
+			hash := common.Hash{1}
+			if err := p.ReplyPooledTransactionsRLP(1, []common.Hash{hash}, nil); !errors.Is(err, io.ErrClosedPipe) || p.KnownTransaction(hash) {
+				t.Fatal("failed direct reply marked a transaction known")
+			}
+		})
+	}
+}
+
+func TestPeerPooledReplyKnownHashes(t *testing.T) {
+	for _, mode := range []string{"accepted", "full", "oversized", "closed", "stopped"} {
+		t.Run(mode, func(t *testing.T) {
+			p := limitedTestPeer()
+			p.knownTxs, p.txReplies = newKnownCache(maxKnownTxs), newPeerReplies()
+			var want error
+			var data []rlp.RawValue
+			switch mode {
+			case "full":
+				for range peerRequestBurst {
+					if err := p.ReplyPooledTransactionsRLP(1, nil, nil); err != nil {
+						t.Fatal(err)
+					}
+				}
+				want = errReplyQueueFull
+			case "oversized":
+				data, want = []rlp.RawValue{make([]byte, maxMessageSize)}, errMsgTooLarge
+			case "closed":
+				p.Close()
+				want = ErrDisconnected
+			case "stopped":
+				p.txReplies.queue, want = nil, ErrDisconnected
+			}
+			hash := common.Hash{1}
+			if err := p.ReplyPooledTransactionsRLP(1, []common.Hash{hash}, data); !errors.Is(err, want) {
+				t.Fatalf("reply error: got %v, want %v", err, want)
+			}
+			if p.KnownTransaction(hash) != (want == nil) {
+				t.Fatal("known transaction tracking does not match reply acceptance")
+			}
 		})
 	}
 }

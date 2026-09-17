@@ -21,6 +21,7 @@ import (
 	"slices"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/txpool"
@@ -40,10 +41,11 @@ func TestTxPropagationRetention(t *testing.T) {
 		{"oversized", 0, 6, 4, false},
 		{"partial", 2, 3, 2, false},
 		{"full", 4, 1, 0, false},
+		{"lowered limit", 6, 1, 0, false},
 		{"failed", 0, 2, 0, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			previous := []common.Hash{{1}, {2}, {3}, {4}}[:tc.queued]
+			previous := []common.Hash{{1}, {2}, {3}, {4}, {5}, {6}}[:tc.queued]
 			hashes := []common.Hash{{5}, {6}, {7}, {8}, {9}, {10}}[:tc.incoming]
 			batch := &txPropagation{hashes: hashes, retained: make(chan []common.Hash, 1)}
 			queue := retainTxPropagation(slices.Clone(previous), batch, 4, tc.failed)
@@ -52,6 +54,39 @@ func TestTxPropagationRetention(t *testing.T) {
 				t.Fatal("retention discarded queued hashes or acknowledged rejected hashes")
 			}
 		})
+	}
+}
+
+func TestPeerStaticAnnouncementCapacity(t *testing.T) {
+	stop := make(chan struct{})
+	remote := limitsTestServer(t, nil, nil, func(*p2p.Peer, p2p.MsgReadWriter) error { <-stop; return nil })
+	connected := make(chan *p2p.Peer, 1)
+	local := limitsTestServer(t, nil, nil, func(p *p2p.Peer, _ p2p.MsgReadWriter) error {
+		connected <- p
+		<-stop
+		return nil
+	})
+	t.Cleanup(func() { close(stop) })
+	remote.AddPeer(local.Self())
+	var connection *p2p.Peer
+	select {
+	case connection = <-connected:
+	case <-time.After(5 * time.Second):
+		t.Fatal("inbound peer did not connect")
+	}
+	source, sink := p2p.MsgPipe()
+	defer source.Close()
+	defer sink.Close()
+	pool := &broadcastTestPool{tx: types.NewTx(&types.LegacyTx{})}
+	peer := NewPeer(ETH68, connection, source, pool)
+	defer peer.Close()
+	if len(peer.QueuePooledTransactionHashes([]common.Hash{pool.tx.Hash()})) != 1 {
+		t.Fatal("initial announcement was not retained")
+	}
+	local.AddPeer(remote.Self())
+	hashes := make([]common.Hash, maxQueuedTxAnns+1)
+	if retained := peer.QueuePooledTransactionHashes(hashes); len(retained) != len(hashes) {
+		t.Fatalf("runtime static peer retained %d of %d announcements", len(retained), len(hashes))
 	}
 }
 

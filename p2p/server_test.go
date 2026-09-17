@@ -761,14 +761,14 @@ func TestServerStaticMembership(t *testing.T) {
 				t.Fatal("inbound peer not connected")
 			}
 			peer := local.Peers()[0]
-			if !peer.Inbound() || peer.StaticDialed() || peer.Trusted() || peer.Static() != configured {
+			if !peer.Inbound() || peer.StaticDialed() || peer.Trusted() || peer.Static() != configured || peer.Info().Network.Static != configured {
 				t.Fatal("incorrect configured inbound membership")
 			}
-			if !remote.Peers()[0].Static() {
+			if !remote.Peers()[0].Static() || !remote.Peers()[0].Info().Network.Static {
 				t.Fatal("dialed static peer lacks membership")
 			}
 			local.AddPeer(remote.Self())
-			if !peer.Static() || peer.Trusted() || peer.StaticDialed() {
+			if !peer.Static() || !peer.Info().Network.Static || peer.Trusted() || peer.StaticDialed() {
 				t.Fatal("adding an inbound peer must only set static membership")
 			}
 			local.RemovePeer(remote.Self())

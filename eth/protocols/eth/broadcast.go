@@ -61,7 +61,7 @@ func (p *Peer) queueTxPropagation(queue chan<- *txPropagation, hashes []common.H
 
 func retainTxPropagation(queue []common.Hash, batch *txPropagation, limit int, failed bool) []common.Hash {
 	var retained []common.Hash
-	if !failed {
+	if !failed && len(queue) < limit {
 		retained = batch.hashes[:min(len(batch.hashes), limit-len(queue))]
 		queue = append(queue, retained...)
 	}
@@ -163,11 +163,6 @@ func (p *Peer) announceTransactions() {
 		failed atomic.Bool
 	)
 
-	queueLimit := maxQueuedTxAnns
-	if p.IsTrusted() || p.IsStatic() {
-		queueLimit = maxQueuedTxAnnsTrusted
-	}
-
 	for {
 		// If there's no in-flight announce running, check if a new one is needed
 		if done == nil && len(queue) > 0 {
@@ -211,6 +206,10 @@ func (p *Peer) announceTransactions() {
 		// Transfer goroutine may or may not have been started, listen for events
 		select {
 		case batch := <-p.txAnnounce:
+			queueLimit := maxQueuedTxAnns
+			if p.Trusted() || p.Static() {
+				queueLimit = maxQueuedTxAnnsTrusted
+			}
 			queue = retainTxPropagation(queue, batch, queueLimit, failed.Load())
 
 		case <-done:
