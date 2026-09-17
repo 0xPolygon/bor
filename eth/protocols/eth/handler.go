@@ -215,11 +215,18 @@ func handleMessage(backend Backend, peer *Peer) error {
 	if msg.Code == GetPooledTransactionsMsg {
 		maxSize = rlp.ListSize(uint64(rlp.IntSize(math.MaxUint64)) + rlp.ListSize(maxPooledTxsServe*(common.HashLength+1)))
 	}
+	if msg.Code == NewBlockHashesMsg {
+		if err := peer.checkMessageRate(msg.Code, msg.Size, time.Now()); err != nil {
+			return err
+		}
+	}
 	if uint64(msg.Size) > maxSize {
 		return fmt.Errorf("%w: %v > %v", errMsgTooLarge, msg.Size, maxSize)
 	}
-	if err := peer.checkMessageRate(msg.Code, msg.Size, time.Now()); err != nil {
-		return err
+	if msg.Code != NewBlockHashesMsg {
+		if err := peer.checkMessageRate(msg.Code, msg.Size, time.Now()); err != nil {
+			return err
+		}
 	}
 	defer msg.Discard()
 
