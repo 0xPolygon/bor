@@ -1,6 +1,7 @@
 package sequencer
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"sync"
@@ -17,6 +18,14 @@ import (
 // pre-seal mirror check for a whole probe interval — and a larger number
 // pays another full read budget per block before it helps.
 const readFailuresToTrip = 2
+
+// staleReadsToTrip is how many consecutive reads that reach the live tail at
+// an unchanged head open the breaker. A gateway cut from its broker keeps
+// answering from a window that no longer advances -- an answer, so the
+// silence path never fires -- and the producer, reading the same held height
+// every retry, refuses to seal until the fault clears. Treating a tail that
+// does not move as one that does not answer keeps production off it.
+const staleReadsToTrip = 6
 
 // readProbeInterval is how often an open breaker lets one read through to
 // look for the path again. It bounds the recovery delay and the steady-state
@@ -59,9 +68,15 @@ var errReadPathDown = errors.New("store read path not answering")
 // it. One probe per interval finds the path again, which is also what closes
 // the breaker: there is no other way to learn that a silent path is back.
 type readBreaker struct {
-	mu        sync.Mutex
-	failures  int
-	open      bool
+	mu       sync.Mutex
+	failures int
+	open     bool
+	// stale marks the breaker open because the tail answers but does not
+	// advance, as against open on silence. Only an advancing tail clears it;
+	// a bare successful round trip does not, because a frozen tail answers.
+	stale     bool
+	freeze    int
+	lastTail  []byte
 	nextProbe time.Time
 }
 
@@ -111,6 +126,12 @@ func (b *readBreaker) answered() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	if b.stale {
+		// A frozen tail still answers; only an advancing tail (observeLiveTail)
+		// clears a staleness hold, never a bare successful round trip.
+		return
+	}
+
 	if b.open {
 		readBreakerClosed.Inc(1)
 		log.Info("Sequencer store read path is answering again")
@@ -135,6 +156,43 @@ func (b *readBreaker) silent() {
 	readBreakerOpened.Inc(1)
 	log.Warn("Sequencer store read path is not answering; keeping it off the block path",
 		"failures", b.failures, "probeEvery", readProbeInterval)
+}
+
+// observeLiveTail feeds the breaker the head a read reached at the live tail.
+// A head that does not move across staleReadsToTrip live reads is a store
+// answering with a frozen window -- treated exactly like a silent one, so a
+// broker-partitioned gateway that keeps a green light cannot wedge block
+// production. Advancement clears the hold; a bare answer cannot.
+func (b *readBreaker) observeLiveTail(tail []byte) {
+	if len(tail) == 0 {
+		return
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if !bytes.Equal(tail, b.lastTail) {
+		b.lastTail = append(b.lastTail[:0], tail...)
+		b.freeze = 0
+		if b.stale {
+			b.open, b.stale, b.failures = false, false, 0
+			readBreakerClosed.Inc(1)
+			log.Info("Sequencer store tail is advancing again")
+		}
+
+		return
+	}
+
+	b.freeze++
+	if b.freeze < staleReadsToTrip || b.open {
+		return
+	}
+
+	b.open, b.stale = true, true
+	b.nextProbe = time.Now().Add(readProbeInterval)
+	readBreakerOpened.Inc(1)
+	log.Warn("Sequencer store tail is frozen (answering but not advancing); keeping it off the block path",
+		"reads", b.freeze, "probeEvery", readProbeInterval)
 }
 
 // isSilent reports an error that means the read path did not answer, as
