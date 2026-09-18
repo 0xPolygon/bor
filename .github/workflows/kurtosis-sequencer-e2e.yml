@@ -1,0 +1,212 @@
+name: Kurtosis Sequencer E2E Tests
+
+# Exercises the sequence-store publisher and consumer end to end against a
+# bor built from this checkout: publishers live after Rio, production
+# through a store outage, the recovery backfill, preconf receipts on the RPC
+# node, and the store chaos episodes. The suites and devnet config live in
+# pos-workflows; this workflow only supplies the bor under test.
+#
+# Scoped to the sequencing branch: pos-workflows runs the same suites, but
+# builds bor from a fixed ref, so it cannot gate a bor PR.
+on:
+  push:
+    branches:
+      - 'cffls/sequence-publisher'
+  pull_request:
+    branches:
+      - 'cffls/sequence-publisher'
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+concurrency:
+  group: kurtosis-sequencer-e2e-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  ENCLAVE_NAME: kurtosis-sequencer-e2e
+  # sequence-store publishes `dev` on every push to its default branch and
+  # version tags on `v*` releases; pin a vX.Y.Z once one is cut.
+  SEQUENCE_STORE_TAG: dev
+  POLYCLI_VERSION: v0.1.103
+
+jobs:
+  build-bor:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout bor
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Build bor docker image
+        run: docker build -t bor:local --file Dockerfile .
+
+      - name: Save bor docker image
+        run: docker save bor:local | gzip > bor-image.tar.gz
+
+      - name: Upload bor docker image
+        uses: actions/upload-artifact@v7
+        with:
+          name: sequencer-bor-image
+          path: bor-image.tar.gz
+          retention-days: 1
+
+  build-heimdall-v2:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout heimdall-v2
+        uses: actions/checkout@v7
+        with:
+          repository: 0xPolygon/heimdall-v2
+          ref: develop
+          persist-credentials: false
+
+      - name: Build heimdall-v2 docker image
+        run: docker build -t heimdall-v2:local --file Dockerfile .
+
+      - name: Save heimdall-v2 docker image
+        run: docker save heimdall-v2:local | gzip > heimdall-v2-image.tar.gz
+
+      - name: Upload heimdall-v2 docker image
+        uses: actions/upload-artifact@v7
+        with:
+          name: sequencer-heimdall-v2-image
+          path: heimdall-v2-image.tar.gz
+          retention-days: 1
+
+  e2e-tests:
+    needs:
+      - build-bor
+      - build-heimdall-v2
+    # The sequence-store image is a private ghcr package. Fork pull_request
+    # runs get neither repository secrets nor a token that can read it, so
+    # the suite would only fail at the pull; run it for trusted refs only.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    # Three suites share one enclave: functional (~25m, most of it reaching
+    # Rio at 4s blocks), rpc (~5m), chaos (~10m).
+    timeout-minutes: 75
+    permissions:
+      contents: read
+      id-token: write
+      # Lets the default GITHUB_TOKEN pull the sequence-store package, which
+      # this repository is granted read access on.
+      packages: read
+    steps:
+      # v1.4.2 is the first release tag carrying the sequence-store launcher.
+      - name: Checkout kurtosis-pos
+        uses: actions/checkout@v7
+        with:
+          repository: 0xPolygon/kurtosis-pos
+          ref: v1.4.2
+          persist-credentials: false
+
+      - name: Pre kurtosis run
+        uses: ./.github/actions/kurtosis/setup
+        with:
+          main_branch: develop
+          docker_username: ${{ secrets.DOCKERHUB }}
+          docker_token: ${{ secrets.DOCKERHUB_KEY }}
+
+      - name: Checkout pos-workflows
+        uses: actions/checkout@v7
+        with:
+          repository: 0xPolygon/pos-workflows
+          ref: main
+          path: pos-workflows
+          persist-credentials: false
+
+      - name: Copy kurtosis config
+        run: cp ./pos-workflows/configs/kurtosis-sequencer-e2e.yml ./kurtosis-sequencer-e2e.yml
+
+      # Load images
+      - name: Download bor docker image
+        uses: actions/download-artifact@v8
+        with:
+          name: sequencer-bor-image
+
+      - name: Download heimdall-v2 docker image
+        uses: actions/download-artifact@v8
+        with:
+          name: sequencer-heimdall-v2-image
+
+      - name: Load bor docker image
+        run: |
+          gunzip -c bor-image.tar.gz | docker load
+          echo "Loaded bor docker image:"
+          docker images bor:local --format "{{.ID}} {{.CreatedAt}}"
+
+      - name: Load heimdall-v2 docker image
+        run: |
+          gunzip -c heimdall-v2-image.tar.gz | docker load
+          echo "Loaded heimdall-v2 docker image:"
+          docker images heimdall-v2:local --format "{{.ID}} {{.CreatedAt}}"
+
+      # The package grant covers the default token; SEQUENCE_STORE_GHCR_TOKEN
+      # is an optional fine-grained PAT (read:packages) override.
+      - name: Pull sequence-store image
+        env:
+          GHCR_TOKEN: ${{ secrets.SEQUENCE_STORE_GHCR_TOKEN != '' && secrets.SEQUENCE_STORE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          docker pull ghcr.io/0xpolygon/sequence-store:${{ env.SEQUENCE_STORE_TAG }}
+          docker tag ghcr.io/0xpolygon/sequence-store:${{ env.SEQUENCE_STORE_TAG }} seqstore:local
+          docker images seqstore:local --format "{{.ID}} {{.CreatedAt}}"
+
+      # Deploy kurtosis enclave
+      - name: Kurtosis run
+        run: kurtosis run --args-file=kurtosis-sequencer-e2e.yml --enclave=${{ env.ENCLAVE_NAME }} .
+
+      - name: Inspect enclave
+        run: kurtosis enclave inspect ${{ env.ENCLAVE_NAME }}
+
+      - name: Install polycli
+        run: |
+          tmp_dir=$(mktemp -d)
+          curl -L https://github.com/0xPolygon/polygon-cli/releases/download/${{ env.POLYCLI_VERSION }}/polycli_${{ env.POLYCLI_VERSION }}_linux_amd64.tar.gz | tar -xz -C "$tmp_dir"
+          mv "$tmp_dir"/* /usr/local/bin/polycli
+          rm -rf "$tmp_dir"
+          sudo chmod +x /usr/local/bin/polycli
+          polycli version
+
+      - name: Run sequencer e2e tests
+        id: sequencer-tests
+        working-directory: pos-workflows/tests/sequencer_tests
+        run: bash kurtosis_sequencer_test.sh
+
+      - name: Run sequencer rpc tests
+        id: sequencer-rpc-tests
+        working-directory: pos-workflows/tests/sequencer_tests
+        run: bash sequencer_rpc_test.sh
+
+      # Last: every episode breaks a store component, so the enclave is left
+      # perturbed even when all of them repair cleanly.
+      - name: Run sequencer chaos tests
+        id: sequencer-chaos-tests
+        working-directory: pos-workflows/tests/sequencer_tests
+        run: bash sequencer_chaos_test.sh
+
+      # Collect diagnostics on failure
+      - name: Collect network diagnostics and state dump
+        if: >-
+          always() && (
+          steps.sequencer-tests.outcome == 'failure' ||
+          steps.sequencer-rpc-tests.outcome == 'failure' ||
+          steps.sequencer-chaos-tests.outcome == 'failure')
+        uses: ./pos-workflows/.github/actions/network-diagnostics-and-state-dump
+        with:
+          enclave_name: ${{ env.ENCLAVE_NAME }}
+
+      # Clean up
+      - name: Post kurtosis run
+        if: always()
+        uses: ./.github/actions/kurtosis/cleanup
+        with:
+          main_branch: develop
+          enclave_name: ${{ env.ENCLAVE_NAME }}
