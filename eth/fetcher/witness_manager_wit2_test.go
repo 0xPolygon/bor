@@ -60,6 +60,18 @@ func encodedCommitHash(t *testing.T, witness *stateless.Witness) common.Hash {
 	return stateless.WitnessCommitHash(buf.Bytes())
 }
 
+// encodedSize returns the canonical RLP-encoded byte length of the witness —
+// the value a BP would sign as WitnessSize for this witness.
+func encodedSize(t *testing.T, witness *stateless.Witness) uint64 {
+	t.Helper()
+
+	var buf bytes.Buffer
+	if err := witness.EncodeRLP(&buf); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	return uint64(buf.Len())
+}
+
 // requireNoDroppedPeers fails the test when any peer was drop-disconnected.
 func requireNoDroppedPeers(t *testing.T, tw *testWitnessManager, context string) {
 	t.Helper()
@@ -71,19 +83,15 @@ func requireNoDroppedPeers(t *testing.T, tw *testWitnessManager, context string)
 	}
 }
 
-// TestProcessWitnessResponseDoesNotDropOnByteMismatch encodes the post-
-// adversarial-review safety policy: when the served witness bytes do not
-// match the BP-signed witnessHash on file, the manager must back off and
-// retry, but it MUST NOT drop the byte-server. The accepted announcement
-// only proves *some* BP signed *some* hash — not that the hash matches the
-// canonical witness. A faulty or malicious scheduled producer that signs a
-// bogus hash would otherwise weaponise this code path to disconnect every
-// honest peer serving the real witness.
-//
-// The mismatched bytes are still rejected (not cached for serving), and the
-// pending state stays alive with a fresh back-off so another peer (or another
-// announcement) gets a chance. Blame-pinning belongs at execution time, where
-// import-side validation can attribute fault to signer vs. server vs. caller.
+// TestProcessWitnessResponseDoesNotDropOnByteMismatch encodes the
+// non-determinism-tolerant policy: a served witness whose bytes hash
+// differently from the BP-signed WitnessHash is NOT a fault — witnesses vary
+// between honest nodes (BlockSTM speculative reads), so a differing hash within
+// the signed size band is a valid witness. The manager must neither drop NOR
+// strike the server for a within-band hash divergence; import-time state-root
+// execution arbitrates content-correctness, which is the responsibility of the
+// producer that signed the announcement, not the serving peer. Only an oversized
+// witness (beyond the size band) is rejected — covered separately.
 func TestProcessWitnessResponseDoesNotDropOnByteMismatch(t *testing.T) {
 	tw := newTestWitnessManager()
 	defer tw.Close()
@@ -99,18 +107,25 @@ func TestProcessWitnessResponseDoesNotDropOnByteMismatch(t *testing.T) {
 	// processWitnessResponse will see canonical bytes whose hash does not
 	// match what parentSignedWitnessHash reports.
 	rogueSignedHash := common.HexToHash("0xdeadbeef")
-	tw.manager.parentSignedWitnessHash = func(h common.Hash) (common.Hash, bool) {
+	signedSize := encodedSize(t, canonical)
+	tw.manager.parentSignedWitnessHash = func(h common.Hash) (common.Hash, uint64, bool) {
 		if h == hash {
-			return rogueSignedHash, true
+			return rogueSignedHash, signedSize, true
 		}
-		return common.Hash{}, false
+		return common.Hash{}, 0, false
 	}
+
+	struck := 0
+	tw.manager.parentStrikeWitnessServer = func(string) { struck++ }
 
 	primePendingWitness(tw, "honest", block)
 
 	tw.manager.processWitnessResponse("honest-server", hash, witnessResponse(canonical), time.Now())
 
-	requireNoDroppedPeers(t, tw, "byte-server must not be dropped on signed-hash mismatch (BP may have signed bogus)")
+	requireNoDroppedPeers(t, tw, "byte-server must not be dropped on signed-hash divergence (witnesses are non-deterministic)")
+	if struck != 0 {
+		t.Fatalf("a witness within the signed size band must not strike the server despite a differing hash; got %d strikes", struck)
+	}
 }
 
 // TestProcessWitnessResponseAcceptsMatchingHash is the contrapositive: a
@@ -125,8 +140,8 @@ func TestProcessWitnessResponseAcceptsMatchingHash(t *testing.T) {
 	witness := createTestWitnessForBlock(block)
 	matchingHash := encodedCommitHash(t, witness)
 
-	tw.manager.parentSignedWitnessHash = func(h common.Hash) (common.Hash, bool) {
-		return matchingHash, true
+	tw.manager.parentSignedWitnessHash = func(h common.Hash) (common.Hash, uint64, bool) {
+		return matchingHash, encodedSize(t, witness), true
 	}
 
 	primePendingWitness(tw, "honest", block)
@@ -161,11 +176,11 @@ func TestProcessWitnessResponseCachesForServingAfterByteCheck(t *testing.T) {
 		gotBytes = append([]byte{}, witnessBytes...)
 		gotHash = witnessHash
 	}
-	tw.manager.parentSignedWitnessHash = func(h common.Hash) (common.Hash, bool) {
+	tw.manager.parentSignedWitnessHash = func(h common.Hash) (common.Hash, uint64, bool) {
 		if h == hash {
-			return want, true
+			return want, encodedSize(t, witness), true
 		}
-		return common.Hash{}, false
+		return common.Hash{}, 0, false
 	}
 
 	primePendingWitness(tw, "honest", block)
@@ -195,8 +210,8 @@ func TestProcessWitnessResponseSkipsCheckWhenNoSignature(t *testing.T) {
 	witness := createTestWitnessForBlock(block)
 
 	// No lookup configured → skip path.
-	tw.manager.parentSignedWitnessHash = func(common.Hash) (common.Hash, bool) {
-		return common.Hash{}, false
+	tw.manager.parentSignedWitnessHash = func(common.Hash) (common.Hash, uint64, bool) {
+		return common.Hash{}, 0, false
 	}
 
 	primePendingWitness(tw, "wit1-peer", block)
@@ -227,11 +242,11 @@ func TestVerifyAgainstSignedHashSkipsEncodeWhenNoSignedHash(t *testing.T) {
 	}
 	// No signed hash on file for any block → verification must return
 	// body=nil so the caller skips the cache.
-	tw.manager.parentSignedWitnessHash = func(common.Hash) (common.Hash, bool) {
-		return common.Hash{}, false
+	tw.manager.parentSignedWitnessHash = func(common.Hash) (common.Hash, uint64, bool) {
+		return common.Hash{}, 0, false
 	}
 
-	body, _, ok := tw.manager.verifyAgainstSignedHash("peer1", hash, witness)
+	body, _, _, ok := tw.manager.verifyAgainstSignedHash("peer1", hash, witness)
 	if !ok {
 		t.Fatalf("verifyAgainstSignedHash returned ok=false on WIT1 path")
 	}
@@ -328,18 +343,19 @@ func TestSignedHashQuarantineAfterDistinctMismatches(t *testing.T) {
 	hash := block.Hash()
 	witness := createTestWitnessForBlock(block)
 
-	// Signed hash on file does NOT match the canonical witness — the bad/stale
-	// producer-hash case. Every server serving the real witness will mismatch.
-	tw.manager.parentSignedWitnessHash = func(h common.Hash) (common.Hash, bool) {
+	// Signed size is tiny, so the canonical witness is oversized against the
+	// band for every server that serves it — the size-oracle analog of the
+	// bad/stale producer case. Distinct oversizing servers quarantine the hash.
+	tw.manager.parentSignedWitnessHash = func(h common.Hash) (common.Hash, uint64, bool) {
 		if h == hash {
-			return common.HexToHash("0xbadbadbad"), true
+			return common.HexToHash("0xbadbadbad"), 1, true
 		}
-		return common.Hash{}, false
+		return common.Hash{}, 0, false
 	}
 	primePendingWitness(tw, "peerA", block)
 
 	// First distinct server mismatches: rejected, but not yet quarantined.
-	if _, _, ok := tw.manager.verifyAgainstSignedHash("peerA", hash, witness); ok {
+	if _, _, _, ok := tw.manager.verifyAgainstSignedHash("peerA", hash, witness); ok {
 		t.Fatal("mismatch must return ok=false")
 	}
 	if tw.manager.isSignedHashQuarantined(hash) {
@@ -347,7 +363,7 @@ func TestSignedHashQuarantineAfterDistinctMismatches(t *testing.T) {
 	}
 
 	// Second DISTINCT server mismatches: the signed hash is now the suspect.
-	if _, _, ok := tw.manager.verifyAgainstSignedHash("peerB", hash, witness); ok {
+	if _, _, _, ok := tw.manager.verifyAgainstSignedHash("peerB", hash, witness); ok {
 		t.Fatal("mismatch must return ok=false")
 	}
 	if !tw.manager.isSignedHashQuarantined(hash) {
@@ -356,7 +372,7 @@ func TestSignedHashQuarantineAfterDistinctMismatches(t *testing.T) {
 
 	// A subsequent fetch falls back to WIT1: body=nil, ok=true, so the witness
 	// is accepted for import (execution validates) instead of stalling for 30s.
-	body, _, ok := tw.manager.verifyAgainstSignedHash("peerC", hash, witness)
+	body, _, _, ok := tw.manager.verifyAgainstSignedHash("peerC", hash, witness)
 	if !ok {
 		t.Fatal("quarantined signed hash must fall back to WIT1 (accept, execution validates)")
 	}
@@ -467,12 +483,12 @@ func TestVerifyAgainstSignedHashStrikesNonEmptyMismatchServer(t *testing.T) {
 	hash := block.Hash()
 	witness := createTestWitnessForBlock(block)
 
-	// Signed hash on file does not match the served (canonical) bytes.
-	tw.manager.parentSignedWitnessHash = func(h common.Hash) (common.Hash, bool) {
+	// Signed size is tiny → the served (canonical) witness is oversized.
+	tw.manager.parentSignedWitnessHash = func(h common.Hash) (common.Hash, uint64, bool) {
 		if h == hash {
-			return common.HexToHash("0xdeadbeef"), true
+			return common.HexToHash("0xdeadbeef"), 1, true
 		}
-		return common.Hash{}, false
+		return common.Hash{}, 0, false
 	}
 
 	var struck []string
@@ -480,11 +496,11 @@ func TestVerifyAgainstSignedHashStrikesNonEmptyMismatchServer(t *testing.T) {
 		struck = append(struck, peer)
 	}
 
-	if _, _, ok := tw.manager.verifyAgainstSignedHash("sybil-server", hash, witness); ok {
-		t.Fatal("non-empty byte mismatch must return ok=false")
+	if _, _, _, ok := tw.manager.verifyAgainstSignedHash("sybil-server", hash, witness); ok {
+		t.Fatal("oversized witness must return ok=false")
 	}
 	if len(struck) != 1 || struck[0] != "sybil-server" {
-		t.Fatalf("a server that served non-empty mismatching bytes must be struck; got strikes=%v", struck)
+		t.Fatalf("a server that served an oversized witness must be struck; got strikes=%v", struck)
 	}
 
 	// Must NOT also drop the peer (drop would let a bad BP hash disconnect honest
@@ -503,8 +519,8 @@ func TestVerifyAgainstSignedHashDoesNotStrikeOnWit1Path(t *testing.T) {
 	hash := block.Hash()
 	witness := createTestWitnessForBlock(block)
 
-	tw.manager.parentSignedWitnessHash = func(common.Hash) (common.Hash, bool) {
-		return common.Hash{}, false
+	tw.manager.parentSignedWitnessHash = func(common.Hash) (common.Hash, uint64, bool) {
+		return common.Hash{}, 0, false
 	}
 	struck := 0
 	tw.manager.parentStrikeWitnessServer = func(string) { struck++ }
@@ -527,8 +543,8 @@ func TestSignedHashSingleServerDoesNotQuarantine(t *testing.T) {
 	hash := block.Hash()
 	witness := createTestWitnessForBlock(block)
 
-	tw.manager.parentSignedWitnessHash = func(common.Hash) (common.Hash, bool) {
-		return common.HexToHash("0xdeadbeef"), true
+	tw.manager.parentSignedWitnessHash = func(common.Hash) (common.Hash, uint64, bool) {
+		return common.HexToHash("0xdeadbeef"), 1, true
 	}
 	primePendingWitness(tw, "lonely", block)
 
@@ -556,8 +572,8 @@ func TestVerifyAgainstSignedHashStrikesSolePeerOncePerBlock(t *testing.T) {
 	hash := block.Hash()
 	witness := createTestWitnessForBlock(block)
 
-	tw.manager.parentSignedWitnessHash = func(common.Hash) (common.Hash, bool) {
-		return common.HexToHash("0xdeadbeef"), true
+	tw.manager.parentSignedWitnessHash = func(common.Hash) (common.Hash, uint64, bool) {
+		return common.HexToHash("0xdeadbeef"), 1, true
 	}
 	struck := 0
 	tw.manager.parentStrikeWitnessServer = func(string) { struck++ }
@@ -629,5 +645,119 @@ func TestEmptyResponseBackoff(t *testing.T) {
 	}
 	if d := emptyResponseBackoff(1000); d != emptyResponseMaxBackoff {
 		t.Fatalf("large n must clamp to max %v, got %v", emptyResponseMaxBackoff, d)
+	}
+}
+
+// TestVerifyAgainstSignedHashAcceptsDivergentHashWithinBand is the core
+// non-determinism-tolerance property: a witness whose bytes hash DIFFERENTLY
+// from the BP-signed WitnessHash but whose size is within the band around the
+// signed WitnessSize must be ACCEPTED FOR IMPORT (ok=true), not rejected and not
+// struck. It must NOT be returned for the serving cache (body=nil): only a
+// byte-identical (hash-matching) witness is re-served/relayed, so the serving
+// and relay fast-paths carry only the BP's own bytes. Import-time state-root
+// execution is the content-correctness arbiter; a differing hash is expected
+// because honest nodes produce different-but-valid witnesses.
+func TestVerifyAgainstSignedHashAcceptsDivergentHashWithinBand(t *testing.T) {
+	tw := newTestWitnessManager()
+	defer tw.Close()
+
+	block := createTestBlock(308)
+	hash := block.Hash()
+	witness := createTestWitnessForBlock(block)
+
+	// BP signed a different hash (non-deterministic divergence) but a size the
+	// received witness is within band of.
+	tw.manager.parentSignedWitnessHash = func(h common.Hash) (common.Hash, uint64, bool) {
+		if h == hash {
+			return common.HexToHash("0xd1ffe7e17"), encodedSize(t, witness), true
+		}
+		return common.Hash{}, 0, false
+	}
+	struck := 0
+	tw.manager.parentStrikeWitnessServer = func(string) { struck++ }
+
+	body, _, _, ok := tw.manager.verifyAgainstSignedHash("honest-diverging", hash, witness)
+	if !ok {
+		t.Fatal("a witness within the signed size band must be accepted for import despite a differing hash")
+	}
+	if body != nil {
+		t.Fatal("a non-identical within-band witness must import but NOT be cached for serving (body=nil), so the fast-path carries only the BP's bytes")
+	}
+	if struck != 0 {
+		t.Fatalf("within-band divergence must not strike the server; got %d strikes", struck)
+	}
+	if tw.manager.isSignedHashQuarantined(hash) {
+		t.Fatal("within-band divergence must not quarantine the signed size")
+	}
+}
+
+// TestVerifyAgainstSignedHashServesOnExactMatch is the contrapositive of the
+// above: a witness byte-identical to the BP's (hash match) within the band is
+// accepted AND returned as body for the pre-import serving cache, so the BP's
+// own bytes propagate on the fast-path.
+func TestVerifyAgainstSignedHashServesOnExactMatch(t *testing.T) {
+	tw := newTestWitnessManager()
+	defer tw.Close()
+
+	block := createTestBlock(309)
+	hash := block.Hash()
+	witness := createTestWitnessForBlock(block)
+	match := encodedCommitHash(t, witness)
+
+	tw.manager.parentSignedWitnessHash = func(h common.Hash) (common.Hash, uint64, bool) {
+		if h == hash {
+			return match, encodedSize(t, witness), true
+		}
+		return common.Hash{}, 0, false
+	}
+
+	body, gotHash, _, ok := tw.manager.verifyAgainstSignedHash("honest-matching", hash, witness)
+	if !ok {
+		t.Fatal("a byte-identical within-band witness must be accepted")
+	}
+	if body == nil {
+		t.Fatal("a byte-identical witness must return canonical bytes for the serving cache")
+	}
+	if gotHash != match {
+		t.Fatalf("served witness hash must be the signed hash; got %s want %s", gotHash.Hex(), match.Hex())
+	}
+}
+
+// TestAcceptableWitnessSizeCeiling pins the two-tier ceiling: the dynamic
+// working bound is wit2SizeBandMultiplier*signedSize, clamped by the retained
+// gas-derived absolute cap so an implausibly large signed size cannot lift the
+// band.
+func TestAcceptableWitnessSizeCeiling(t *testing.T) {
+	tw := newTestWitnessManager()
+	defer tw.Close()
+
+	abs := tw.manager.calculatePageThreshold() * maxPageSizeMB * bytesPerMiB
+
+	// A small signed size → the band (3*S) dominates, well under the absolute.
+	if got := tw.manager.acceptableWitnessSizeCeiling(1000); got != wit2SizeBandMultiplier*1000 {
+		t.Fatalf("band = %d*signedSize expected %d, got %d", wit2SizeBandMultiplier, wit2SizeBandMultiplier*1000, got)
+	}
+	// A signed size whose 3x band would exceed the absolute must clamp to it.
+	if got := tw.manager.acceptableWitnessSizeCeiling(abs); got != abs {
+		t.Fatalf("band exceeding the absolute must clamp to %d, got %d", abs, got)
+	}
+	// An implausibly large signed size must still clamp to the absolute.
+	if got := tw.manager.acceptableWitnessSizeCeiling(abs * 10); got != abs {
+		t.Fatalf("implausibly large signed size must clamp to absolute %d, got %d", abs, got)
+	}
+}
+
+// TestWitnessSizeExceedsCeiling pins the accept/reject boundary of the size
+// oracle: a witness exactly at the ceiling is accepted (not oversized), and one
+// byte over is rejected.
+func TestWitnessSizeExceedsCeiling(t *testing.T) {
+	if witnessSizeExceedsCeiling(100, 100) {
+		t.Fatal("a witness exactly at the ceiling must be accepted (not oversized)")
+	}
+	if !witnessSizeExceedsCeiling(101, 100) {
+		t.Fatal("a witness one byte over the ceiling must be rejected as oversized")
+	}
+	if witnessSizeExceedsCeiling(99, 100) {
+		t.Fatal("a witness below the ceiling must be accepted")
 	}
 }

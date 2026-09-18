@@ -159,6 +159,15 @@ type blockOrHeaderInject struct {
 	header  *types.Header      // Used for light mode fetcher which only cares about header.
 	block   *types.Block       // Used for normal mode fetcher which imports full block.
 	witness *stateless.Witness // Used for witness mode fetcher which imports witness.
+
+	// WIT2 witness provenance, set by the witness manager when the witness was
+	// obtained by paged fetch. importBlocks uses it to charge an import failure
+	// to the serving peer and re-fetch from another source when the witness was
+	// accepted on the size oracle alone (hash differs from the BP-signed one).
+	witnessPeer           string             // Peer that served the witness; empty when not fetched (broadcast, local).
+	witnessDiverged       bool               // Witness accepted on size alone: hash differs from the BP-signed hash.
+	witnessImportFailures int                // Import attempts of this block that already failed with a diverged witness.
+	fetchWitness          witnessRequesterFn // Fetch closure to re-request the witness after an import failure.
 }
 
 // number returns the block number of the injected object.
@@ -214,8 +223,9 @@ type BlockFetcher struct {
 	headerFilter chan chan *headerFilterTask
 	bodyFilter   chan chan *bodyFilterTask
 
-	done chan common.Hash
-	quit chan struct{}
+	done         chan common.Hash
+	witnessRetry chan *blockOrHeaderInject // Import failed with a size-oracle-accepted witness: forget, then re-fetch the witness
+	quit         chan struct{}
 
 	// Protect concurrent map access from goroutines
 	mu sync.RWMutex
@@ -269,6 +279,7 @@ func NewBlockFetcher(light bool, getHeader HeaderRetrievalFn, getBlock blockRetr
 		headerFilter:        make(chan chan *headerFilterTask),
 		bodyFilter:          make(chan chan *bodyFilterTask),
 		done:                make(chan common.Hash),
+		witnessRetry:        make(chan *blockOrHeaderInject),
 		quit:                make(chan struct{}),
 		announces:           make(map[string]int),
 		announced:           make(map[common.Hash][]*blockAnnounce),
@@ -324,13 +335,25 @@ func (f *BlockFetcher) Stop() {
 }
 
 // SetWitnessServerStriker wires the callback used to penalize a peer that serves
-// a non-empty witness whose bytes mismatch the BP-signed commitment (WIT2). It
-// is set post-construction (rather than threaded through NewBlockFetcher) to keep
-// the constructor signature stable. Must be called before Start; optional —
-// when unset, byte-mismatch servers are not struck.
+// a witness beyond the BP-signed size band, or one accepted on the size oracle
+// alone that then fails import (WIT2). It is set post-construction (rather than
+// threaded through NewBlockFetcher) to keep the constructor signature stable.
+// Must be called before Start; optional — when unset, such servers are not
+// struck.
 func (f *BlockFetcher) SetWitnessServerStriker(fn func(id string)) {
 	if f.wm != nil {
 		f.wm.parentStrikeWitnessServer = fn
+	}
+}
+
+// SetWitnessSourceExcluder wires the callback that removes a peer from the set
+// of fetch sources for one block after the witness it served was accepted on
+// the size oracle and failed import, so the re-fetch reaches a different peer.
+// Must be called before Start; optional — when unset the re-fetch may target the
+// same peer again (bounded by maxWitnessImportRetries).
+func (f *BlockFetcher) SetWitnessSourceExcluder(fn func(peer string, blockHash common.Hash)) {
+	if f.wm != nil {
+		f.wm.parentExcludeWitnessSource = fn
 	}
 }
 
@@ -555,7 +578,7 @@ func (f *BlockFetcher) loop() {
 				f.importHeaders(op.origin, op.header)
 			} else {
 				// Block must have witness if required, handled by enqueue logic or WM
-				f.importBlocks(op.origin, op.block, op.witness)
+				f.importBlocks(op)
 			}
 		}
 
@@ -625,13 +648,24 @@ func (f *BlockFetcher) loop() {
 				log.Error("Received nil enqueue request")
 				continue
 			}
-			// Enqueue the fully assembled block (potentially with witness)
-			f.enqueue(req.op.origin, nil, req.op.block, req.op.witness)
+			// Enqueue the fully assembled block (potentially with witness),
+			// keeping the op so its witness provenance survives to import.
+			f.enqueueOp(req.op)
 
 		case hash := <-f.done:
 			// A pending import finished, remove all traces of the notification
 			f.forgetHash(hash)  // This calls wm.forget
 			f.forgetBlock(hash) // This calls wm.forget
+
+		case op := <-f.witnessRetry:
+			// An import failed with a witness accepted on the WIT2 size oracle
+			// alone. Forget the attempt exactly as `done` does, THEN hand the
+			// block back to the witness manager for a fresh fetch — sequenced
+			// on this loop so the forget cannot race the re-registration.
+			hash := op.hash()
+			f.forgetHash(hash)
+			f.forgetBlock(hash)
+			f.wm.retryAfterImportFailure(op)
 
 		case <-fetchTimer.C:
 			// At least one block's timer ran out, check for needing retrieval
@@ -1070,16 +1104,38 @@ func (f *BlockFetcher) rescheduleComplete(complete *time.Timer) {
 // enqueue schedules a new header or block import operation, if the component
 // to be imported has not yet been seen.
 func (f *BlockFetcher) enqueue(peer string, header *types.Header, block *types.Block, witness *stateless.Witness) {
+	if header == nil && block == nil {
+		log.Error("Enqueue called with nil header and block", "peer", peer)
+		return
+	}
+	op := &blockOrHeaderInject{origin: peer}
+	if header != nil {
+		op.header = header
+	} else { // Prioritize block over header if both somehow provided
+		op.block = block
+		// Attach witness only if block is present
+		op.witness = witness
+	}
+	f.enqueueOp(op)
+}
+
+// enqueueOp schedules an already-built import operation. Used directly for
+// operations completed by the witness manager so the WIT2 witness provenance it
+// attached (serving peer, size-oracle divergence, fetch closure) reaches
+// importBlocks intact; rebuilding the op from its parts would drop it and make
+// an import failure impossible to charge to the server.
+func (f *BlockFetcher) enqueueOp(op *blockOrHeaderInject) {
 	var (
+		peer   = op.origin
 		hash   common.Hash
 		number uint64
 	)
 
 	// Determine hash and number from block first, then header
-	if block != nil {
-		hash, number = block.Hash(), block.NumberU64()
-	} else if header != nil {
-		hash, number = header.Hash(), header.Number.Uint64()
+	if op.block != nil {
+		hash, number = op.block.Hash(), op.block.NumberU64()
+	} else if op.header != nil {
+		hash, number = op.header.Hash(), op.header.Number.Uint64()
 	} else {
 		log.Error("Enqueue called with nil header and block", "peer", peer)
 		return
@@ -1116,19 +1172,6 @@ func (f *BlockFetcher) enqueue(peer string, header *types.Header, block *types.B
 	}
 
 	// Schedule the block for future importing
-	op := &blockOrHeaderInject{origin: peer}
-	if header != nil {
-		op.header = header
-	} else if block != nil { // Prioritize block over header if both somehow provided
-		op.block = block
-		// Attach witness only if block is present
-		op.witness = witness
-	} else {
-		log.Error("Invalid state in enqueue: header and block are nil", "peer", peer, "hash", hash)
-		f.mu.Unlock()
-		return // Should not happen due to check above
-	}
-
 	f.queues[peer] = count
 	f.queued[hash] = op
 	f.queue.Push(op, -int64(number))
@@ -1179,17 +1222,47 @@ func (f *BlockFetcher) importHeaders(peer string, header *types.Header) {
 	}()
 }
 
+// maxWitnessImportRetries bounds how many times a block whose import failed with
+// a witness accepted on the WIT2 size oracle alone is re-fetched from another
+// source before the fetcher gives it up as it would any other failed import. A
+// small bound keeps a genuinely invalid block (every honest witness fails) from
+// cycling through the peer set, while still recovering from a single server
+// that handed out an unusable within-band witness.
+const maxWitnessImportRetries = 2
+
 // importBlocks spawns a new goroutine to run a block insertion into the chain. If the
 // block's number is at the same height as the current import phase, it updates
 // the phase states accordingly.
-func (f *BlockFetcher) importBlocks(peer string, block *types.Block, witness *stateless.Witness) {
+//
+// WIT2: when the block's witness was fetched and accepted on the size oracle
+// alone (op.witnessDiverged — its hash differs from the BP-signed one, so the
+// serving peer, not the BP, chose these bytes) and the import fails, the
+// failure is charged to that peer: it is struck and excluded as a source for
+// this block, and the block is handed back to the witness manager to fetch the
+// witness again from someone else (bounded by maxWitnessImportRetries). Without
+// this, a peer that relays the valid BP announce could serve up to the size
+// band in unusable bytes per block at no cost, and the block would simply be
+// forgotten. A BP-identical witness (hash match) that fails import is the BP's
+// fault and is handled as before: logged and forgotten.
+func (f *BlockFetcher) importBlocks(op *blockOrHeaderInject) {
+	peer, block, witness := op.origin, op.block, op.witness
 	hash := block.Hash()
 
 	// Run the import on a new thread
 	log.Debug("Importing propagated block", "peer", peer, "number", block.Number(), "hash", hash)
 
 	go func() {
-		defer func() { f.done <- hash }()
+		retryWitness := false
+		defer func() {
+			if retryWitness {
+				select {
+				case f.witnessRetry <- op:
+				case <-f.quit:
+				}
+				return
+			}
+			f.done <- hash
+		}()
 
 		// If the parent's unknown, abort insertion
 		parent := f.getBlock(block.ParentHash())
@@ -1220,6 +1293,7 @@ func (f *BlockFetcher) importBlocks(peer string, block *types.Block, witness *st
 		// Create slices even for a single block/witness to match the expected signature.
 		if _, err := f.insertChain(types.Blocks{block}, []*stateless.Witness{witness}); err != nil {
 			log.Debug("Propagated block import failed", "peer", peer, "number", block.Number(), "hash", hash, "err", err)
+			retryWitness = f.chargeDivergedWitnessImportFailure(op, err)
 			return
 		}
 
@@ -1256,6 +1330,33 @@ func (f *BlockFetcher) importBlocks(peer string, block *types.Block, witness *st
 			f.importedHook(nil, block)
 		}
 	}()
+}
+
+// chargeDivergedWitnessImportFailure applies the WIT2 consequence of an import
+// failure to the peer that served the block's witness, when that witness was
+// accepted on the size oracle alone. It strikes the peer, excludes it as a
+// witness source for this block, and reports whether the block should be
+// handed back to the witness manager for a re-fetch (false once the retry
+// budget is spent, or when the witness was not a fetched, diverged one).
+func (f *BlockFetcher) chargeDivergedWitnessImportFailure(op *blockOrHeaderInject, importErr error) bool {
+	if op.witness == nil || !op.witnessDiverged || op.witnessPeer == "" {
+		return false
+	}
+	hash := op.hash()
+	witnessImportFailureMeter.Mark(1)
+	log.Warn("Import failed with a witness accepted on the WIT2 size oracle; striking its server",
+		"server", op.witnessPeer, "number", op.number(), "hash", hash, "attempt", op.witnessImportFailures+1, "err", importErr)
+	f.wm.strikeWitnessServer(op.witnessPeer)
+	f.wm.excludeWitnessSource(op.witnessPeer, hash)
+
+	op.witnessImportFailures++
+	if op.fetchWitness == nil || op.witnessImportFailures >= maxWitnessImportRetries {
+		log.Warn("Giving up witness re-fetch for block after repeated import failures",
+			"number", op.number(), "hash", hash, "failures", op.witnessImportFailures)
+		return false
+	}
+	witnessImportRetryMeter.Mark(1)
+	return true
 }
 
 // forgetHash removes all traces of a block announcement from the fetcher's
