@@ -384,11 +384,15 @@ func newHandler(config *handlerConfig) (*handler, error) {
 	}
 
 	h.blockFetcher = fetcher.NewBlockFetcher(false, nil, h.chain.GetBlockByHash, validator, h.BroadcastBlock, heighter, h.chain.CurrentHeader, nil, inserter, h.removePeer, h.jailPeer, h.enableBlockTracking, h.statelessSync.Load() || h.syncWithWitnesses, config.gasCeil, h.lookupSignedWitnessHash, h.cacheVerifiedWitnessForServing)
-	// WIT2: penalize a peer that serves a witness beyond the BP-signed size band,
-	// or one accepted on the size oracle alone that then fails import (strike,
-	// not drop — see strikeWit2PeerByID); in the latter case also stop asking
-	// that peer for this block's witness so the re-fetch lands elsewhere.
+	// WIT2: penalize a peer that serves a non-empty witness whose bytes mismatch
+	// the BP-signed commitment (strike, not drop — see strikeWit2PeerByID).
 	h.blockFetcher.SetWitnessServerStriker(h.strikeWit2PeerByID)
+
+	// WIT2 size oracle: the striker above fires for a witness beyond the
+	// BP-signed size band, and for one accepted on the size oracle alone that
+	// then fails import. In the latter case the fetcher also asks us to stop
+	// offering that peer as a witness source for the block, so its re-fetch
+	// lands on a different peer (see resolveWitnessFetchPeer).
 	h.blockFetcher.SetWitnessSourceExcluder(h.excludeWitnessSource)
 
 	fetchTx := func(peer string, requestID uint64, hashes []common.Hash) error {
