@@ -41,6 +41,7 @@ type blockEnv struct {
 	publishedGas          uint64
 	publishedTxs          int
 	indexedTxs            int
+	servedDigest          common.Hash
 	lastPublishedAt       time.Time
 	postEagerPublications int
 	detachedCanonical     atomic.Pointer[types.Header]
@@ -499,7 +500,12 @@ func (s *session) indexExecutedTransactions() ([]*types.Log, core.PreconfReceipt
 		Receipts:     append(types.Receipts(nil), s.env.receipts[start:]...),
 		Transactions: append(types.Transactions(nil), s.env.txs[start:]...),
 	}
+	// Record the promise durably before returning: these receipts are about
+	// to reach callers, and a crash after this must leave the audit able to
+	// judge the height even if the store loses the generation.
+	s.env.servedDigest = foldServed(s.env.servedDigest, s.env.txs[start:])
 	s.env.indexedTxs = len(s.env.txs)
+	s.consumer.persistServed(s.env.header.Number.Uint64(), uint64(s.env.indexedTxs), s.env.servedDigest)
 	return logs, receipts
 }
 
