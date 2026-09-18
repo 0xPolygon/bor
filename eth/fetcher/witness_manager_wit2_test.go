@@ -246,7 +246,7 @@ func TestVerifyAgainstSignedHashSkipsEncodeWhenNoSignedHash(t *testing.T) {
 		return common.Hash{}, 0, false
 	}
 
-	body, _, ok := tw.manager.verifyAgainstSignedHash("peer1", hash, witness)
+	body, _, _, ok := tw.manager.verifyAgainstSignedHash("peer1", hash, witness)
 	if !ok {
 		t.Fatalf("verifyAgainstSignedHash returned ok=false on WIT1 path")
 	}
@@ -355,7 +355,7 @@ func TestSignedHashQuarantineAfterDistinctMismatches(t *testing.T) {
 	primePendingWitness(tw, "peerA", block)
 
 	// First distinct server mismatches: rejected, but not yet quarantined.
-	if _, _, ok := tw.manager.verifyAgainstSignedHash("peerA", hash, witness); ok {
+	if _, _, _, ok := tw.manager.verifyAgainstSignedHash("peerA", hash, witness); ok {
 		t.Fatal("mismatch must return ok=false")
 	}
 	if tw.manager.isSignedHashQuarantined(hash) {
@@ -363,7 +363,7 @@ func TestSignedHashQuarantineAfterDistinctMismatches(t *testing.T) {
 	}
 
 	// Second DISTINCT server mismatches: the signed hash is now the suspect.
-	if _, _, ok := tw.manager.verifyAgainstSignedHash("peerB", hash, witness); ok {
+	if _, _, _, ok := tw.manager.verifyAgainstSignedHash("peerB", hash, witness); ok {
 		t.Fatal("mismatch must return ok=false")
 	}
 	if !tw.manager.isSignedHashQuarantined(hash) {
@@ -372,7 +372,7 @@ func TestSignedHashQuarantineAfterDistinctMismatches(t *testing.T) {
 
 	// A subsequent fetch falls back to WIT1: body=nil, ok=true, so the witness
 	// is accepted for import (execution validates) instead of stalling for 30s.
-	body, _, ok := tw.manager.verifyAgainstSignedHash("peerC", hash, witness)
+	body, _, _, ok := tw.manager.verifyAgainstSignedHash("peerC", hash, witness)
 	if !ok {
 		t.Fatal("quarantined signed hash must fall back to WIT1 (accept, execution validates)")
 	}
@@ -496,7 +496,7 @@ func TestVerifyAgainstSignedHashStrikesNonEmptyMismatchServer(t *testing.T) {
 		struck = append(struck, peer)
 	}
 
-	if _, _, ok := tw.manager.verifyAgainstSignedHash("sybil-server", hash, witness); ok {
+	if _, _, _, ok := tw.manager.verifyAgainstSignedHash("sybil-server", hash, witness); ok {
 		t.Fatal("oversized witness must return ok=false")
 	}
 	if len(struck) != 1 || struck[0] != "sybil-server" {
@@ -676,7 +676,7 @@ func TestVerifyAgainstSignedHashAcceptsDivergentHashWithinBand(t *testing.T) {
 	struck := 0
 	tw.manager.parentStrikeWitnessServer = func(string) { struck++ }
 
-	body, _, ok := tw.manager.verifyAgainstSignedHash("honest-diverging", hash, witness)
+	body, _, _, ok := tw.manager.verifyAgainstSignedHash("honest-diverging", hash, witness)
 	if !ok {
 		t.Fatal("a witness within the signed size band must be accepted for import despite a differing hash")
 	}
@@ -711,7 +711,7 @@ func TestVerifyAgainstSignedHashServesOnExactMatch(t *testing.T) {
 		return common.Hash{}, 0, false
 	}
 
-	body, gotHash, ok := tw.manager.verifyAgainstSignedHash("honest-matching", hash, witness)
+	body, gotHash, _, ok := tw.manager.verifyAgainstSignedHash("honest-matching", hash, witness)
 	if !ok {
 		t.Fatal("a byte-identical within-band witness must be accepted")
 	}

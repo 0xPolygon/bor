@@ -593,6 +593,7 @@ func TestHandleSignedWitnessAnnouncementsAcceptCacheRelayAndDedup(t *testing.T) 
 		BlockHash:   hash,
 		BlockNumber: header.Number.Uint64(),
 		WitnessHash: common.HexToHash("0xab"),
+		WitnessSize: 1000,
 	}
 	signTestAnnouncement(t, &ann)
 
@@ -658,6 +659,7 @@ func TestAcceptSignedAnnouncementStrikesOnNumberMismatch(t *testing.T) {
 		BlockHash:   header.Hash(),
 		BlockNumber: header.Number.Uint64() + 1, // contradicts the local header
 		WitnessHash: common.HexToHash("0xcc"),
+		WitnessSize: 1000, // plausible, so the number-mismatch branch (not the size check) is what strikes
 	}
 	signTestAnnouncement(t, &ann)
 
@@ -1071,4 +1073,150 @@ func TestCanonicalWitnessHashStorageGate(t *testing.T) {
 	got, _, ok := h.handler.canonicalWitnessHash(hash)
 	require.True(t, ok)
 	require.Equal(t, stateless.WitnessCommitHash(body), got)
+}
+
+// TestAcceptSignedAnnouncementRejectsImplausibleWitnessSize pins the announce-
+// time sanity check on the size oracle: a BP-signed WitnessSize of zero (which
+// would yield a zero band and reject every honest server) or above the absolute
+// gas-derived cap is refused outright — not cached, not deferred — and the
+// sender is struck, so a bad size is charged to whoever signed or forwarded it
+// rather than to the servers it would later mis-judge.
+func TestAcceptSignedAnnouncementRejectsImplausibleWitnessSize(t *testing.T) {
+	h := newTestHandler()
+	defer h.close()
+	witH := (*witHandler)(h.handler)
+
+	maxSize := h.handler.blockFetcher.GetWitnessManager().MaxWitnessSize()
+	require.NotZero(t, maxSize)
+
+	for _, tc := range []struct {
+		name string
+		size uint64
+	}{
+		{"zero", 0},
+		{"above absolute cap", maxSize + 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			peer, cleanup := newTestWit2PeerWithReader()
+			defer cleanup()
+
+			header := &types.Header{Number: big.NewInt(4400 + int64(tc.size%7))} // NOT written: would otherwise defer
+			ann := wit.SignedWitnessAnnouncement{
+				BlockHash:   header.Hash(),
+				BlockNumber: header.Number.Uint64(),
+				WitnessHash: common.HexToHash("0xab"),
+				WitnessSize: tc.size,
+			}
+			signTestAnnouncement(t, &ann)
+
+			require.False(t, witH.acceptSignedAnnouncement(peer, ann))
+			_, cached := h.handler.signedWitnesses.get(ann.BlockHash)
+			require.False(t, cached, "implausible size must not be cached")
+			require.False(t, h.handler.deferredAnnounces.has(ann.BlockHash), "implausible size must not be deferred even though the header is unknown")
+
+			h.handler.wit2PeerTracker.mu.Lock()
+			strikes := len(h.handler.wit2PeerTracker.state[peer.ID()].strikes)
+			h.handler.wit2PeerTracker.mu.Unlock()
+			require.Equal(t, 1, strikes, "the announcer must be struck for an implausible signed size")
+		})
+	}
+
+	// Control: the same announce with a plausible size is deferred normally
+	// (header unknown) without a strike.
+	peer, cleanup := newTestWit2PeerWithReader()
+	defer cleanup()
+	header := &types.Header{Number: big.NewInt(4499)}
+	ann := wit.SignedWitnessAnnouncement{
+		BlockHash:   header.Hash(),
+		BlockNumber: header.Number.Uint64(),
+		WitnessHash: common.HexToHash("0xab"),
+		WitnessSize: maxSize,
+	}
+	signTestAnnouncement(t, &ann)
+	require.False(t, witH.acceptSignedAnnouncement(peer, ann))
+	require.True(t, h.handler.deferredAnnounces.has(ann.BlockHash), "a plausible size at the cap must defer on an unknown header")
+	_, tracked := h.handler.wit2PeerTracker.state[peer.ID()]
+	require.False(t, tracked, "deferral must not strike")
+}
+
+// TestResolveWitnessFetchPeerSkipsExcludedSource pins the source exclusion the
+// block fetcher relies on for its re-fetch after an import failure: a peer
+// excluded for a block is skipped at every tier of resolveWitnessFetchPeer, the
+// exclusion is per block, and it is released when the block imports.
+func TestResolveWitnessFetchPeerSkipsExcludedSource(t *testing.T) {
+	h := newTestHandler()
+	defer h.close()
+	ethH := (*ethHandler)(h.handler)
+
+	peerA, cleanupA := registerEthWitPeer(t, h, wit.WIT2)
+	defer cleanupA()
+	peerB, cleanupB := registerEthWitPeer(t, h, wit.WIT2)
+	defer cleanupB()
+
+	hash := common.HexToHash("0xb10c")
+	other := common.HexToHash("0xb10d")
+	peerA.AddKnownWitness(hash)
+	peerB.AddKnownWitness(hash)
+	peerA.AddKnownWitness(other)
+
+	// Both hold the body: either may be picked.
+	require.NotNil(t, ethH.resolveWitnessFetchPeer(hash))
+
+	// Exclude A for this block: over many resolutions B must always win.
+	h.handler.excludeWitnessSource(peerA.ID(), hash)
+	for i := 0; i < 32; i++ {
+		got := ethH.resolveWitnessFetchPeer(hash)
+		require.NotNil(t, got, "B still holds the body and must be offered")
+		require.Equal(t, peerB.ID(), got.ID(), "excluded peer A must never be resolved for the block")
+	}
+	// The exclusion is per block: A is still a valid source for another hash.
+	got := ethH.resolveWitnessFetchPeer(other)
+	require.NotNil(t, got)
+	require.Equal(t, peerA.ID(), got.ID())
+
+	// Exclude B too: no source remains, rather than falling back to A.
+	h.handler.excludeWitnessSource(peerB.ID(), hash)
+	require.Nil(t, ethH.resolveWitnessFetchPeer(hash))
+
+	// The deferred-relayer tier honours the exclusion as well.
+	h.handler.deferredAnnounces.put(wit.SignedWitnessAnnouncement{
+		BlockHash: hash, BlockNumber: 1, WitnessHash: common.HexToHash("0x01"), WitnessSize: 10,
+		Signature: make([]byte, wit.SignatureLength),
+	}, peerA.ID())
+	require.Nil(t, ethH.resolveWitnessFetchPeer(hash), "an excluded deferred relayer must not be offered either")
+
+	// Block imports: exclusions for it are released.
+	h.handler.onBlockImported(hash)
+	require.NotNil(t, ethH.resolveWitnessFetchPeer(hash))
+}
+
+// TestWitnessSourceExclusionSetLifecycle pins add/excluded/drop and the TTL
+// backstop of the per-block source exclusion set.
+func TestWitnessSourceExclusionSetLifecycle(t *testing.T) {
+	s := newWitnessSourceExclusionSet()
+	hash := common.HexToHash("0x01")
+
+	require.False(t, s.excluded(hash, "p1"))
+	s.add(hash, "")
+	require.Empty(t, s.entries, "an empty peer id must not be recorded")
+
+	s.add(hash, "p1")
+	require.True(t, s.excluded(hash, "p1"))
+	require.False(t, s.excluded(hash, "p2"))
+	require.False(t, s.excluded(common.HexToHash("0x02"), "p1"), "exclusions are per block")
+
+	s.drop(hash)
+	require.False(t, s.excluded(hash, "p1"))
+
+	// TTL backstop: a stale entry stops excluding and is swept on the next add.
+	s.add(hash, "p1")
+	s.mu.Lock()
+	s.entries[hash]["p1"] = time.Now().Add(-2 * witnessSourceExclusionTTL)
+	s.mu.Unlock()
+	require.False(t, s.excluded(hash, "p1"), "an exclusion past its TTL must lapse")
+	s.add(common.HexToHash("0x03"), "p9")
+	s.mu.Lock()
+	_, still := s.entries[hash]
+	s.mu.Unlock()
+	require.False(t, still, "stale entries must be swept on add")
 }

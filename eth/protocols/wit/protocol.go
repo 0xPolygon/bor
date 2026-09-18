@@ -16,8 +16,12 @@ const (
 	// WIT2 adds BP-signed witness announcements, allowing peers to fast-validate
 	// announces via signature recovery (microseconds) instead of full block
 	// execution (~500ms). Signed announces are safe to relay transitively
-	// because byte-correctness is verified at fetch time against the signed
-	// witness hash; content-correctness blame attaches to the BP signer.
+	// because the announcement commits to the producer's witness size, which
+	// bounds what a receiver accepts from any server at fetch time (witnesses
+	// are non-deterministic, so the signed hash identifies the BP's own bytes
+	// rather than the only valid ones); content-correctness is arbitrated at
+	// import and blame attaches to the BP signer, or to a server whose
+	// non-identical witness fails import.
 	WIT2 = 3
 )
 

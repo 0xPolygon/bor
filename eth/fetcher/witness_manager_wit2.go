@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -33,13 +34,13 @@ const (
 	emptyResponseMaxBackoff  = 1 * time.Second
 )
 
-// cacheVerifiedWitnessForServing forwards canonical-encoded witness bytes
-// (already verified against a BP-signed witness hash by the caller) to the
-// handler so other peers can fetch them pre-import. No-op when no cache
-// callback is configured (legacy WIT1-only paths) or when body is empty —
-// the latter signals the WIT1 path with no signed hash on file, where
-// caching unverified bytes would expose us to byte-blame from downstream
-// peers.
+// cacheVerifiedWitnessForServing forwards canonical-encoded witness bytes that
+// are byte-identical to the BP's (hash match, see verifyAgainstSignedHash) to
+// the handler so other peers can fetch them pre-import. No-op when no cache
+// callback is configured (legacy WIT1-only paths) or when body is empty — the
+// latter covers the WIT1 path with no signed hash on file and the within-band
+// non-identical variant, neither of which is re-served pre-import: the
+// pre-import serving cache carries only the BP's own bytes.
 func (m *witnessManager) cacheVerifiedWitnessForServing(blockHash common.Hash, body []byte, witnessHash common.Hash) {
 	if m.parentCacheWitnessForServing == nil || len(body) == 0 {
 		return
@@ -60,25 +61,31 @@ func (m *witnessManager) cacheVerifiedWitnessForServing(blockHash common.Hash, b
 // bytes, keyed by the signed hash, so a downstream byte check against that hash
 // stays meaningful.
 //
+// diverged is true when the witness was accepted on the size oracle alone
+// (signed announcement on file, size within band, hash differs). The fetcher
+// uses it at import time: an import failure of such a witness is charged to the
+// serving peer (strike + re-fetch from another source), because with hash
+// identity gone the server, not the BP, is the party that chose these bytes.
+//
 // body is also nil on the WIT1 path (no signed announcement). ok is false only
 // when the witness is oversized or a local EncodeRLP failure occurs; the latter
 // is the local node's own error, not a peer fault, so it does not strike.
-func (m *witnessManager) verifyAgainstSignedHash(peer string, hash common.Hash, witness *stateless.Witness) (body []byte, witnessHash common.Hash, ok bool) {
+func (m *witnessManager) verifyAgainstSignedHash(peer string, hash common.Hash, witness *stateless.Witness) (body []byte, witnessHash common.Hash, diverged bool, ok bool) {
 	if m.parentSignedWitnessHash == nil {
-		return nil, common.Hash{}, true
+		return nil, common.Hash{}, false, true
 	}
 	expected, expectedSize, has := m.parentSignedWitnessHash(hash)
 	if !has || m.isSignedHashQuarantined(hash) {
 		// No signed announcement on file, or it has been quarantined after
 		// distinct servers repeatedly served oversized bytes: fall back to the
 		// WIT1 path so import-time execution arbitrates the bytes.
-		return nil, common.Hash{}, true
+		return nil, common.Hash{}, false, true
 	}
 	var buf bytes.Buffer
 	if err := witness.EncodeRLP(&buf); err != nil {
 		log.Warn("[wm] Failed to encode received witness for size check", "peer", peer, "hash", hash, "err", err)
 		m.handleWitnessFetchFailureExt(hash, "", fmt.Errorf("witness encode failed: %w", err), false)
-		return nil, common.Hash{}, false
+		return nil, common.Hash{}, false, false
 	}
 	encoded := buf.Bytes()
 	actualSize := uint64(len(encoded))
@@ -122,7 +129,7 @@ func (m *witnessManager) verifyAgainstSignedHash(peer string, hash common.Hash, 
 			m.parentStrikeWitnessServer(peer)
 		}
 		m.handleWitnessFetchFailureExt(hash, "", errors.New("witness exceeds signed size band"), false)
-		return nil, common.Hash{}, false
+		return nil, common.Hash{}, false, false
 	}
 
 	// Within band: forget any earlier oversize noise for this block.
@@ -133,12 +140,13 @@ func (m *witnessManager) verifyAgainstSignedHash(peer string, hash common.Hash, 
 		// import (state-root execution validates), but return body=nil so it is
 		// NOT cached for pre-import serving or relayed — those fast-paths carry
 		// only the BP's own bytes so a downstream check against the signed hash
-		// stays meaningful. Observability only.
+		// stays meaningful. Flagged diverged so an import failure is charged to
+		// the server (see importBlocks) rather than silently forgotten.
 		witnessHashDivergenceMeter.Mark(1)
-		return nil, common.Hash{}, true
+		return nil, common.Hash{}, true, true
 	}
 	// Byte-identical to the BP's witness: safe to serve/relay under the signed hash.
-	return encoded, expected, true
+	return encoded, expected, false, true
 }
 
 // wit2SizeBandMultiplier bounds how many times the BP-signed witness size a
@@ -155,15 +163,51 @@ const bytesPerMiB = 1024 * 1024
 // accepted for a block whose BP-signed witness size is signedSize. It is
 // min(wit2SizeBandMultiplier*signedSize, absolute), where the absolute cap is
 // the pre-existing gas-derived page ceiling expressed in bytes — retained so the
-// accepted size stays bounded even when the signed size is implausibly large,
-// and so a witness with no useful signed size still has a hard bound.
+// accepted size stays bounded even when the signed size is implausibly large.
+//
+// Two degenerate inputs must not turn into a zero ceiling that would reject
+// every honest server: a signedSize of 0 (no usable oracle) falls back to the
+// absolute cap alone, and the multiplication saturates instead of wrapping for
+// a hostile signedSize near MaxUint64. The announce path additionally refuses
+// announcements whose WitnessSize is 0 or above the absolute cap, so under
+// normal operation neither branch is reached; they are defence in depth.
 func (m *witnessManager) acceptableWitnessSizeCeiling(signedSize uint64) uint64 {
-	band := signedSize * wit2SizeBandMultiplier
-	absBytes := m.calculatePageThreshold() * maxPageSizeMB * bytesPerMiB
+	absBytes := m.MaxWitnessSize()
+	if signedSize == 0 {
+		return absBytes
+	}
+	band := saturatingMulUint64(signedSize, wit2SizeBandMultiplier)
 	if absBytes == 0 {
 		return band
 	}
 	return min(band, absBytes)
+}
+
+// AcceptableWitnessSizeCeiling is the exported form of
+// acceptableWitnessSizeCeiling for the network handler, which applies the same
+// size oracle to witnesses that arrive by NewWitness broadcast rather than by
+// paged fetch, so both delivery paths accept and reject identically.
+func (m *witnessManager) AcceptableWitnessSizeCeiling(signedSize uint64) uint64 {
+	return m.acceptableWitnessSizeCeiling(signedSize)
+}
+
+// MaxWitnessSize returns the absolute encoded-size cap for any witness: the
+// gas-derived page ceiling (calculatePageThreshold) expressed in bytes. It bounds
+// the size oracle from above and is the plausibility bound a BP-signed
+// WitnessSize must satisfy to be accepted at announce time.
+func (m *witnessManager) MaxWitnessSize() uint64 {
+	return m.calculatePageThreshold() * maxPageSizeMB * bytesPerMiB
+}
+
+// saturatingMulUint64 returns a*b, or math.MaxUint64 if the product would wrap.
+func saturatingMulUint64(a, b uint64) uint64 {
+	if a == 0 || b == 0 {
+		return 0
+	}
+	if a > math.MaxUint64/b {
+		return math.MaxUint64
+	}
+	return a * b
 }
 
 // witnessSizeExceedsCeiling reports whether an encoded witness of actualSize

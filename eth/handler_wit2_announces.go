@@ -402,6 +402,26 @@ func (c *deferredAnnounceCache) hasWitnessHash(blockHash common.Hash, witnessHas
 	return false
 }
 
+// hasWitnessSizeWithin reports whether a fresh candidate for blockHash has a
+// signed WitnessSize whose accepted band (ceiling(candidateSize)) admits size.
+// Used by the broadcast path to bind pushed bytes to a pending (deferred, not
+// yet producer-verified) commitment under the non-determinism-tolerant size
+// oracle when no candidate's hash matches the bytes exactly.
+func (c *deferredAnnounceCache) hasWitnessSizeWithin(blockHash common.Hash, size uint64, ceiling func(signedSize uint64) uint64) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	cutoff := time.Now().Add(-wit2AnnounceTTL)
+	for _, e := range c.entries[blockHash] {
+		if e.receivedAt.Before(cutoff) {
+			continue
+		}
+		if size <= ceiling(e.announcement.WitnessSize) {
+			return true
+		}
+	}
+	return false
+}
+
 // has reports whether any fresh candidate exists for blockHash.
 func (c *deferredAnnounceCache) has(blockHash common.Hash) bool {
 	c.mu.RLock()

@@ -2,6 +2,7 @@ package eth
 
 import (
 	"errors"
+	"math"
 
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/common"
@@ -24,7 +25,9 @@ var (
 	wit2InvalidSigMeter                 = metrics.NewRegisteredMeter("eth/wit2/announce/invalid_sig", nil)
 	wit2NotValidatorMeter               = metrics.NewRegisteredMeter("eth/wit2/announce/not_validator", nil)
 	wit2DuplicateMeter                  = metrics.NewRegisteredMeter("eth/wit2/announce/duplicate", nil)
-	wit2BroadcastByteMismatchMeter      = metrics.NewRegisteredMeter("eth/wit2/serve/broadcast_byte_mismatch", nil)
+	wit2BroadcastOversizeMeter          = metrics.NewRegisteredMeter("eth/wit2/serve/broadcast_oversize", nil)
+	wit2BroadcastHashDivergenceMeter    = metrics.NewRegisteredMeter("eth/wit2/serve/broadcast_hash_divergence", nil)
+	wit2ImplausibleSizeMeter            = metrics.NewRegisteredMeter("eth/wit2/announce/implausible_size", nil)
 	wit2BroadcastUnverifiedSkippedMeter = metrics.NewRegisteredMeter("eth/wit2/serve/broadcast_unverified_skipped", nil)
 	wit2DeferredPerPeerDropMeter        = metrics.NewRegisteredMeter("eth/wit2/announce/deferred_per_peer_drop", nil)
 	wit2DeferredPerBlockDropMeter       = metrics.NewRegisteredMeter("eth/wit2/announce/deferred_per_block_drop", nil)
@@ -106,11 +109,12 @@ func (h *handler) flushWitnessWaitersForImported(blockHash common.Hash) {
 	h.pushWitnessBytesToWaiters(blockHash, body)
 }
 
-// pushWitnessBytesToWaiters decodes verified witness bytes (already checked
-// against the BP-signed hash by the caller) and pushes them to waiting peers.
-// The decode — re-encoded canonically on send — round-trips to the same bytes,
-// so downstream byte-correctness checks still pass. Skipped entirely when no
-// peer is waiting, so the common (no-waiter) case pays nothing.
+// pushWitnessBytesToWaiters decodes witness bytes this node holds (the BP's own
+// bytes from the pre-import cache, or the node's own witness from chain storage)
+// and pushes them to waiting peers. The decode — re-encoded canonically on send
+// — round-trips to the same bytes, so the receiver's size-oracle check sees the
+// same size. Skipped entirely when no peer is waiting, so the common
+// (no-waiter) case pays nothing.
 func (h *handler) pushWitnessBytesToWaiters(hash common.Hash, witnessBytes []byte) {
 	if h.witnessWaiters == nil || len(witnessBytes) == 0 || !h.witnessWaiters.has(hash) {
 		return
@@ -195,9 +199,11 @@ func (h *handler) cosendWitnessAnnouncement(blockHash common.Hash, blockNumber u
 	}
 }
 
-// lookupSignedWitnessHash returns the BP-signed witness hash for a block, if
-// the local cache has a verified announcement. Used by the witness manager
-// on fetch success to verify byte-correctness against the signed commitment.
+// lookupSignedWitnessHash returns the BP-signed witness commitment (hash and
+// encoded size) for a block, if the local cache has a verified announcement.
+// Used by the witness manager on fetch success as the size oracle: the size
+// bounds what is accepted for import, the hash decides whether the bytes are
+// the BP's own and may be re-served pre-import.
 func (h *handler) lookupSignedWitnessHash(blockHash common.Hash) (common.Hash, uint64, bool) {
 	ann, ok := h.signedWitnesses.get(blockHash)
 	if !ok {
@@ -206,14 +212,56 @@ func (h *handler) lookupSignedWitnessHash(blockHash common.Hash) (common.Hash, u
 	return ann.WitnessHash, ann.WitnessSize, true
 }
 
+// witnessSizeCeiling returns the maximum encoded witness size accepted for a
+// block whose BP-signed WitnessSize is signedSize — the fetcher's size oracle
+// (witnessManager.acceptableWitnessSizeCeiling), applied here to bodies that
+// arrive by NewWitness broadcast so both delivery paths judge a witness
+// identically. Without a block fetcher (not expected outside tests) no bound is
+// applied, mirroring handleWitnessBroadcast, which cannot inject either.
+func (h *handler) witnessSizeCeiling(signedSize uint64) uint64 {
+	if h.blockFetcher == nil {
+		return math.MaxUint64
+	}
+	return h.blockFetcher.GetWitnessManager().AcceptableWitnessSizeCeiling(signedSize)
+}
+
+// plausibleSignedWitnessSize reports whether a BP-signed WitnessSize can serve
+// as a size oracle: it must be non-zero (a zero size yields a zero band that
+// rejects every honest server) and no larger than the absolute gas-derived
+// witness cap (a size beyond what the block gas limit can produce is not a
+// witness the BP can have). Announcements failing this are refused at accept
+// time and the sender struck, so a bad size is charged to whoever signed or
+// forwarded it rather than to the servers it would later mis-judge.
+func (h *handler) plausibleSignedWitnessSize(size uint64) bool {
+	if size == 0 {
+		return false
+	}
+	if h.blockFetcher == nil {
+		return true
+	}
+	return size <= h.blockFetcher.GetWitnessManager().MaxWitnessSize()
+}
+
+// excludeWitnessSource records that peer must not be asked again for the
+// witness of blockHash: the witness it served was accepted on the size oracle
+// alone and then failed import (see fetcher.BlockFetcher.importBlocks).
+// Consulted by resolveWitnessFetchPeer so the re-fetch reaches another source.
+func (h *handler) excludeWitnessSource(peer string, blockHash common.Hash) {
+	if h.witnessSourceExclusions == nil {
+		return
+	}
+	h.witnessSourceExclusions.add(blockHash, peer)
+}
+
 // cacheVerifiedWitnessForServing receives canonical-encoded witness bytes from
-// the fetcher after a successful, byte-verified paged download and stores them
-// in the in-flight cache so peers can fetch the body before this node finishes
-// chain-write. Bytes here have already passed verifyAgainstSignedHash (when a
-// signed announcement was on file), or arrived via WIT1 unsigned path; in both
-// cases they're the same bytes the upstream peer agreed upon, so serving them
-// to downstream peers cannot expose this node to byte-mismatch drops beyond
-// the upstream's already-incurred risk.
+// the fetcher after a paged download whose bytes are byte-identical to the
+// BP-signed commitment, and stores them in the in-flight cache so peers can
+// fetch the body before this node finishes chain-write. The fetcher hands over
+// only such bytes (a within-band non-identical variant, or a WIT1 fetch with no
+// commitment on file, arrives here as an empty body and is not cached), so the
+// pre-import serving path carries the BP's own bytes exclusively and serving
+// them early cannot expose this node to a downstream size-band rejection or
+// import-failure strike the BP would not equally incur.
 func (h *handler) cacheVerifiedWitnessForServing(blockHash common.Hash, witnessBytes []byte, witnessHash common.Hash) {
 	if h.pendingWitnessBodies == nil {
 		return

@@ -83,20 +83,21 @@ func (h *witHandler) Handle(peer *wit.Peer, packet wit.Packet) error {
 }
 
 // handleWitnessBroadcast handles a witness broadcast from a peer. A broadcast
-// witness is only accepted — sender marked as a body-holder, bytes cached,
-// witness injected for import — when we can bind it to something we already
-// trust: a BP-signed announcement whose witnessHash matches the received
-// bytes (WIT2), or a locally known block header (WIT1 fallback). Anything
-// else is dropped: bytes contradicting a BP-signed commitment are provably
-// wrong and must not bypass the verification the paged-fetch path enforces,
-// and an unsigned witness for an unknown header is unverifiable on the
-// sender's say-so alone.
+// witness is only accepted — sender marked as a body-holder, witness injected
+// for import — when we can bind it to something we already trust: a BP-signed
+// announcement whose size oracle admits the received bytes (WIT2; the bytes are
+// additionally cached for pre-import serving only when byte-identical to the
+// BP's), or a locally known block header (WIT1 fallback). Anything else is
+// dropped: bytes beyond a BP-signed size band exceed any plausible
+// non-deterministic variation and must not bypass the acceptance the
+// paged-fetch path enforces, and an unsigned witness for an unknown header is
+// unverifiable on the sender's say-so alone.
 func (h *witHandler) handleWitnessBroadcast(peer *wit.Peer, witness *stateless.Witness) error {
 	hash := witness.Header().Hash()
 
 	var accepted bool
 	if signed, hasSigned := (*handler)(h).signedWitnesses.get(hash); hasSigned {
-		accepted = h.acceptSignedBroadcast(peer, witness, hash, signed.WitnessHash)
+		accepted = h.acceptSignedBroadcast(peer, witness, hash, signed)
 	} else if (*handler)(h).deferredAnnounces.has(hash) {
 		accepted = h.acceptDeferredBroadcast(peer, witness, hash)
 	} else {
@@ -136,31 +137,47 @@ func encodedBroadcastBytes(peer *wit.Peer, witness *stateless.Witness, hash comm
 	return buf.Bytes(), true
 }
 
-// acceptSignedBroadcast is the WIT2 accept path of the witness broadcast:
-// verify against the BP-signed witnessHash on file, then cache the encoded
-// body so this node can serve it pre-import. We only expose the cache for
-// serving when bytes match — otherwise an upstream that lied about the bytes
-// would make us serve garbage and get dropped by downstream peers as liars,
-// even though we just relayed what we received. On mismatch nothing is
-// cached, the sender is not marked as a body-holder, and the witness is not
-// injected: the broadcast path must not be a bypass of the byte verification
-// the paged-fetch path performs. No disconnect — the sender may itself have
-// been fed bad bytes upstream.
-func (h *witHandler) acceptSignedBroadcast(peer *wit.Peer, witness *stateless.Witness, hash common.Hash, signedHash common.Hash) bool {
+// acceptSignedBroadcast is the WIT2 accept path of the witness broadcast. The
+// BP-signed announcement on file supplies the size oracle, exactly as on the
+// paged-fetch path (witnessManager.verifyAgainstSignedHash): a pushed body whose
+// encoded size is within the accepted band of the signed WitnessSize is accepted
+// for IMPORT and the sender marked as a body-holder, whether or not its hash
+// matches — witnesses are non-deterministic, so a peer pushing its own
+// post-import witness (flushWitnessWaitersForImported) routinely differs from
+// the BP's bytes while being perfectly valid, and import-time execution
+// arbitrates content. Only bytes byte-identical to the BP's (hash match) are
+// additionally cached for pre-import serving and pushed on to our own waiters:
+// the pre-import fast path carries the BP's bytes only, so an upstream that
+// pushed us garbage cannot make us amplify it before we have validated it, nor
+// get us blamed by our downstream for bytes we did not choose. An oversized
+// body is dropped without marking or injecting — it exceeds any plausible
+// non-deterministic variation. No disconnect — the sender may itself have been
+// fed the bytes upstream.
+func (h *witHandler) acceptSignedBroadcast(peer *wit.Peer, witness *stateless.Witness, hash common.Hash, signed wit.SignedWitnessAnnouncement) bool {
 	bodyBytes, ok := encodedBroadcastBytes(peer, witness, hash)
 	if !ok {
 		return false
 	}
-	bodyHash := stateless.WitnessCommitHash(bodyBytes)
-	if signedHash != bodyHash {
-		wit2BroadcastByteMismatchMeter.Mark(1)
-		peer.Log().Warn("wit2: broadcast bytes do not match signed witnessHash; dropping",
-			"blockHash", hash, "expected", signedHash, "actual", bodyHash)
+	ceiling := (*handler)(h).witnessSizeCeiling(signed.WitnessSize)
+	if uint64(len(bodyBytes)) > ceiling {
+		wit2BroadcastOversizeMeter.Mark(1)
+		peer.Log().Warn("wit2: broadcast witness exceeds the BP-signed size band; dropping",
+			"blockHash", hash, "signedSize", signed.WitnessSize, "ceiling", ceiling, "received", len(bodyBytes))
 		return false
 	}
 	peer.AddKnownWitness(hash)
+	bodyHash := stateless.WitnessCommitHash(bodyBytes)
+	if bodyHash != signed.WitnessHash {
+		// A valid non-deterministic variant of the BP's witness: import it, but
+		// do not re-serve it pre-import (the serving cache carries the BP's
+		// bytes only).
+		wit2BroadcastHashDivergenceMeter.Mark(1)
+		peer.Log().Debug("wit2: broadcast witness within the size band but not the BP's bytes; importing without re-serving",
+			"blockHash", hash, "signed", signed.WitnessHash, "actual", bodyHash)
+		return true
+	}
 	(*handler)(h).pendingWitnessBodies.put(hash, bodyBytes, bodyHash)
-	// We now hold servable bytes — push to any peer that asked us
+	// We now hold the BP's own bytes — push to any peer that asked us
 	// for this body before we had it.
 	(*handler)(h).pushWitnessToWaiters(hash, witness, len(bodyBytes))
 	return true
@@ -184,14 +201,20 @@ func (h *witHandler) acceptDeferredBroadcast(peer *wit.Peer, witness *stateless.
 	if !ok {
 		return false
 	}
-	// Bind against any deferred candidate's commitment: with multiple candidates
-	// on file we accept the body if its hash matches one of them. The drain still
-	// arbitrates which signer is the real producer at import time.
+	// Bind against the deferred candidates' commitments: with multiple
+	// candidates on file we accept the body if it is byte-identical to one of
+	// them (hash match) or, failing that, within the size band of one of them —
+	// the same size oracle the verified path applies, since honest bodies
+	// (a pusher's own post-import witness) routinely differ from the BP's bytes.
+	// The drain still arbitrates which signer is the real producer at import
+	// time, and import validates the content.
+	hh := (*handler)(h)
 	bodyHash := stateless.WitnessCommitHash(bodyBytes)
-	if !(*handler)(h).deferredAnnounces.hasWitnessHash(hash, bodyHash) {
-		wit2BroadcastByteMismatchMeter.Mark(1)
-		peer.Log().Warn("wit2: broadcast bytes do not match any deferred announce witnessHash; dropping",
-			"blockHash", hash, "actual", bodyHash)
+	if !hh.deferredAnnounces.hasWitnessHash(hash, bodyHash) &&
+		!hh.deferredAnnounces.hasWitnessSizeWithin(hash, uint64(len(bodyBytes)), hh.witnessSizeCeiling) {
+		wit2BroadcastOversizeMeter.Mark(1)
+		peer.Log().Warn("wit2: broadcast witness exceeds the size band of every deferred announce; dropping",
+			"blockHash", hash, "received", len(bodyBytes))
 		return false
 	}
 	peer.AddKnownWitness(hash)
@@ -204,9 +227,9 @@ func (h *witHandler) acceptDeferredBroadcast(peer *wit.Peer, witness *stateless.
 // we actually know — without it, an unsolicited 16MB body for an arbitrary
 // hash would be decoded and cached purely on the sender's word. Unknown
 // headers are dropped silently: a peer racing ahead of our import is early,
-// not malicious. For known headers we cannot prove byte-correctness to
-// downstream WIT2 peers — the body is not exposed for pre-import serving but
-// still flows into the import path.
+// not malicious. For known headers there is no BP commitment to bound the
+// bytes by, so the body is not exposed for pre-import serving but still flows
+// into the import path.
 func (h *witHandler) acceptUnsignedBroadcast(peer *wit.Peer, hash common.Hash) bool {
 	if h.Chain().GetHeaderByHash(hash) == nil {
 		wit2BroadcastUnknownHeaderDropMeter.Mark(1)
@@ -234,11 +257,12 @@ func (h *witHandler) handleWitnessHashesAnnounce(peer *wit.Peer, hashes []common
 //
 // Failure policy (enforced in acceptSignedAnnouncement): a header-unknown
 // announce is deferred silently — no strike, no relay — because it may simply
-// be racing ahead of its block. Confirmed misbehavior against a known header
-// (bad signature, or signer ≠ scheduled producer) is struck, and a peer that
-// reaches wit2MisbehaviorStrikeLimit strikes within the decay window is
-// disconnected. Byte-correctness failures at fetch time are handled separately
-// in the witness manager. All invalid announcements are also metered.
+// be racing ahead of its block. Confirmed misbehavior (bad signature, an
+// implausible signed witness size, or signer ≠ scheduled producer for a known
+// header) is struck, and a peer that reaches wit2MisbehaviorStrikeLimit
+// strikes within the decay window is disconnected. Oversized or import-failing
+// witness bytes at fetch time are handled separately in the witness manager.
+// All invalid announcements are also metered.
 func (h *witHandler) handleSignedWitnessAnnouncements(peer *wit.Peer, anns []wit.SignedWitnessAnnouncement) error {
 	wit2RelayInMeter.Mark(int64(len(anns)))
 
@@ -283,21 +307,35 @@ func (h *witHandler) handleSignedWitnessAnnouncements(peer *wit.Peer, anns []wit
 	return nil
 }
 
-// acceptSignedAnnouncement runs signature recovery and producer-binding for a
-// single announcement. Returns true when the announcement is verified and the
-// caller should proceed to cache + relay; false when the caller should skip
-// it. Strikes are issued only on confirmed misbehavior (bad signature or
-// signer ≠ scheduled producer for a known header). Pre-import deferral
-// (header not yet local) is silent: no strike, no relay. The announcement is
-// stashed in the deferred queue so the chain-head loop can re-evaluate it
-// once the block arrives — without that, an announce that races ahead of its
-// block is lost permanently and subsequent witness fetches silently skip
-// byte-verification.
+// acceptSignedAnnouncement runs signature recovery, witness-size plausibility
+// and producer-binding for a single announcement. Returns true when the
+// announcement is verified and the caller should proceed to cache + relay;
+// false when the caller should skip it. Strikes are issued only on confirmed
+// misbehavior (bad signature, implausible signed size, or signer ≠ scheduled
+// producer for a known header). Pre-import deferral (header not yet local) is
+// silent: no strike, no relay. The announcement is stashed in the deferred
+// queue so the chain-head loop can re-evaluate it once the block arrives —
+// without that, an announce that races ahead of its block is lost permanently
+// and subsequent witness fetches silently skip the size-oracle check.
 func (h *witHandler) acceptSignedAnnouncement(peer *wit.Peer, ann wit.SignedWitnessAnnouncement) bool {
 	signer, err := verifySignedAnnouncement(ann)
 	if err != nil {
 		wit2InvalidSigMeter.Mark(1)
 		peer.Log().Debug("wit2: invalid signed announcement", "blockHash", ann.BlockHash, "err", err)
+		(*handler)(h).strikeWit2Peer(peer)
+		return false
+	}
+
+	// The signed WitnessSize is the size oracle every receiver judges servers
+	// by: a zero value yields a zero band that rejects every honest server, an
+	// implausibly large one admits arbitrary bloat. The size is part of the
+	// signed preimage, so a bad value is the signer's — or a forwarding
+	// relayer's — doing: refuse and strike here, ahead of deferral, so a bad
+	// size never enters the deferred queue or the signed cache either.
+	if !(*handler)(h).plausibleSignedWitnessSize(ann.WitnessSize) {
+		wit2ImplausibleSizeMeter.Mark(1)
+		peer.Log().Debug("wit2: signed announcement carries an implausible witness size; refusing",
+			"blockHash", ann.BlockHash, "blockNumber", ann.BlockNumber, "witnessSize", ann.WitnessSize)
 		(*handler)(h).strikeWit2Peer(peer)
 		return false
 	}
@@ -347,10 +385,10 @@ func (h *handler) relaySignedAnnouncement(senderID string, ann wit.SignedWitness
 //
 // WIT2: per-block lookup consults the in-flight body cache before falling back
 // to chain storage. This lets nodes serve witnesses they have received from
-// the network but not yet imported. Byte-correctness blame attaches to the
-// server only on hash mismatch (the requester verifies bytes against the BP-
-// signed WitnessHash); content-correctness failures during execution attach
-// to the BP, so this server is not at additional risk by serving early.
+// the network but not yet imported. The in-flight cache holds only bytes
+// byte-identical to the BP's signed commitment, so serving them early cannot
+// expose this node to a size-band rejection or an import-failure strike
+// downstream that the BP would not equally incur.
 func (h *witHandler) handleGetWitness(peer *wit.Peer, req *wit.GetWitnessPacket) (wit.WitnessPacketResponse, error) {
 	log.Debug("handleGetWitness processing request", "peer", peer.ID(), "reqID", req.RequestId, "witnessPages", len(req.WitnessPages))
 
