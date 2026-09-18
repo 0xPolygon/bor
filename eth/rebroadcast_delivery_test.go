@@ -17,7 +17,10 @@
 package eth
 
 import (
+	"context"
+	"log/slog"
 	"math/big"
+	"slices"
 	"testing"
 	"time"
 
@@ -26,6 +29,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/enode"
@@ -205,5 +209,80 @@ func TestRebroadcastEmptyQueueAcknowledgement(t *testing.T) {
 		if count != 0 {
 			t.Fatal("empty batch counted as a rebroadcast")
 		}
+	}
+}
+
+type rebroadcastLogCapture struct {
+	slog.Handler
+	records chan slog.Record
+}
+
+func (h *rebroadcastLogCapture) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *rebroadcastLogCapture) Handle(_ context.Context, record slog.Record) error {
+	if record.Message == "Distributed transactions" {
+		h.records <- record.Clone()
+	}
+	return nil
+}
+
+func TestRebroadcastDistributionCounts(t *testing.T) {
+	h, txs := rebroadcastDeliveryFixture(t, false)
+	txs[1].PutOptions(new(types.OptionsPIP15))
+	txs = append(txs, types.NewTx(&types.BlobTx{}), types.NewTx(&types.LegacyTx{Data: make([]byte, txMaxBroadcastSize+1)}))
+	capture := &rebroadcastLogCapture{Handler: log.DiscardHandler(), records: make(chan slog.Record, 1)}
+	previous := log.Root()
+	log.SetDefault(log.NewLogger(capture))
+	defer log.SetDefault(previous)
+	if h.broadcastTransactions(txs, nil) {
+		t.Fatal("broadcast reported delivery without peers")
+	}
+	select {
+	case record := <-capture.records:
+		counts := make(map[string]int64)
+		record.Attrs(func(attr slog.Attr) bool {
+			counts[attr.Key] = attr.Value.Int64()
+			return true
+		})
+		for key, want := range map[string]int64{"plaintxs": 1, "blobtxs": 1, "largetxs": 1, "conditionaltxs": 1, "bcastcount": 0, "anncount": 0} {
+			if got, ok := counts[key]; !ok || got != want {
+				t.Errorf("distribution count %s: got %d (present %v), want %d", key, got, ok, want)
+			}
+		}
+	default:
+		t.Fatal("transaction distribution counts were not logged")
+	}
+}
+
+func TestRebroadcastQueueDeliveryMode(t *testing.T) {
+	for _, announce := range []bool{false, true} {
+		t.Run(map[bool]string{false: "bodies", true: "announcements"}[announce], func(t *testing.T) {
+			h, txs := rebroadcastDeliveryFixture(t, false)
+			source, sink := p2p.MsgPipe()
+			peer := eth.NewPeer(eth.ETH69, p2p.NewPeer(enode.ID{1}, "", nil), source, h.txpool)
+			defer peer.Close()
+			defer source.Close()
+			defer sink.Close()
+			hashes := []common.Hash{txs[0].Hash(), txs[1].Hash()}
+			var acknowledged []common.Hash
+			count := queueTransactions(map[*ethPeer][]common.Hash{{Peer: peer}: hashes}, announce, func(retained []common.Hash) {
+				acknowledged = append(acknowledged, retained...)
+			})
+			if count != len(hashes) || !slices.Equal(acknowledged, hashes) {
+				t.Fatal("queued hashes were not acknowledged")
+			}
+			if announce {
+				packet := eth.NewPooledTransactionHashesPacket{Hashes: hashes}
+				for _, tx := range txs {
+					packet.Types = append(packet.Types, tx.Type())
+					packet.Sizes = append(packet.Sizes, uint32(tx.Size()))
+				}
+				if err := p2p.ExpectMsg(sink, eth.NewPooledTransactionHashesMsg, packet); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := p2p.ExpectMsg(sink, eth.TransactionsMsg, txs); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

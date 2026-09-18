@@ -209,6 +209,13 @@ func TestPeerReplyQueueShutdown(t *testing.T) {
 		if got := p.blockReplies.limiter.Tokens(); got != 0 {
 			t.Fatalf("close did not refund reserved bytes: %v", got)
 		}
+		immediate := rate.NewLimiter(peerByteRate, peerByteBurst)
+		if err := p.waitReplyAllowance(immediate, 1024); !errors.Is(err, ErrDisconnected) {
+			t.Fatalf("closed peer received available allowance: %v", err)
+		}
+		if got := immediate.Tokens(); got != peerByteBurst {
+			t.Fatalf("close did not refund immediate allowance: %v", got)
+		}
 		p.blockReplies.limiter.SetLimit(rate.Inf)
 		if err := p.waitReplyAllowance(p.blockReplies.limiter, 1); !errors.Is(err, ErrDisconnected) {
 			t.Fatalf("closed peer received immediate allowance: %v", err)
