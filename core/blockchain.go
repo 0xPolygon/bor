@@ -4359,6 +4359,11 @@ func (bc *BlockChain) insertSideChain(block *types.Block, it *insertIterator, ma
 // an anchor. That parent was itself proven empty with a root chaining back to
 // the canonical fork header, so it introduces no untrusted input.
 //
+// exempted is built by one insertSideChain call and never outlives it. Each call
+// starts from an empty map, so an anchor is only ever a block proven in the same
+// batch. Nothing here is persisted, and a later import cannot inherit an anchor
+// from an earlier one.
+//
 // On Bor only the transaction count and GasUsed do real work here. Bor.verifyHeader
 // rejects a non-empty UncleHash, a non-nil WithdrawalsHash and a non-nil
 // RequestsHash, and those errors reach the insert iterator before ValidateBody
@@ -4376,7 +4381,7 @@ func (bc *BlockChain) isSidechainGhostState(block *types.Block, canonical *types
 
 	canonNoOp := canonParent.Root == canonical.Root()
 	_, anchored := exempted[block.ParentHash()]
-	sibling := block.ParentHash() == canonical.ParentHash() || anchored
+	siblingOrAnchored := block.ParentHash() == canonical.ParentHash() || anchored
 	// Bor headers always carry a nil RequestsHash. The empty-set hash is accepted
 	// too so the predicate stays correct upstream, where a post-Prague empty block
 	// sets it rather than leaving it nil.
@@ -4387,7 +4392,7 @@ func (bc *BlockChain) isSidechainGhostState(block *types.Block, canonical *types
 		len(block.Withdrawals()) == 0 &&
 		noRequests
 
-	return !(canonNoOp && sibling && emptyBody)
+	return !(canonNoOp && siblingOrAnchored && emptyBody)
 }
 
 // recoverAncestors finds the closest ancestor with available state and re-execute

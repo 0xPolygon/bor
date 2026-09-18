@@ -3243,6 +3243,15 @@ func testSideImportEmptyBlockGhostState(t *testing.T, scheme string) {
 	if _, err := chain.InsertChain(sideBlocks, false); err != nil {
 		t.Fatalf("empty side blocks falsely rejected: %v", err)
 	}
+
+	// Both blocks must be on disk. A ghost-state rejection returns before
+	// writeBlockWithoutState, so this proves the second block cleared the guard on
+	// its anchor rather than the batch stopping after the first.
+	for i, side := range sideBlocks {
+		if !chain.HasBlock(side.Hash(), side.NumberU64()) {
+			t.Fatalf("side block %d was not persisted", i)
+		}
+	}
 }
 
 // TestSideImportGhostStateStillRejected is the security counterpart to
