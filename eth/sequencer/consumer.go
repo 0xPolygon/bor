@@ -406,6 +406,26 @@ func (c *Consumer) markCanonicalHeadAudited() {
 	}
 
 	c.advanceAudited(number)
+
+	// This height was watched and reconciled on the live path, so its served
+	// commitment is no longer needed. Dropping it here keeps the set bounded
+	// to heights still in flight; the audit clears the rest as it walks them.
+	if err := rawdb.DeletePreconfServed(c.chain.DB(), number); err != nil {
+		log.Warn("Failed to clear served preconf commitment", "number", number, "err", err)
+	}
+}
+
+// persistServed records the commitment to the preconfirmations this node has
+// served at a height. It is best-effort logging on failure: a lost write only
+// costs the audit its fallback for that height, never correctness on the live
+// path.
+func (c *Consumer) persistServed(height, count uint64, digest common.Hash) {
+	if c.chain == nil {
+		return
+	}
+	if err := rawdb.WritePreconfServed(c.chain.DB(), height, count, digest); err != nil {
+		log.Warn("Failed to persist served preconf commitment", "number", height, "err", err)
+	}
 }
 
 // finalizedHeight reports the newest finalized height. A node with no

@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethdb"
 )
 
@@ -157,4 +158,88 @@ func WritePreconfAuditedThrough(db ethdb.KeyValueWriter, number uint64) error {
 	binary.BigEndian.PutUint64(value, number)
 
 	return db.Put(preconfAuditedThroughKey, value)
+}
+
+const servedPreconfValueLen = 8 + common.HashLength
+
+// servedPreconfKey = preconfServedPrefix + num (big endian). Forward order, so
+// ascending key iteration yields ascending heights.
+func servedPreconfKey(number uint64) []byte {
+	return append(preconfServedPrefix, encodeBlockNumber(number)...)
+}
+
+// WritePreconfServed records what this node served at a height: count is how
+// many transactions it preconfirmed there, digest a fold over their hashes in
+// served order. It is the node's own promise, kept so the audit can judge the
+// height even after the store stops holding that generation. A later
+// generation at the same height overwrites the earlier promise, which is what
+// the audit should compare against — the live path records the superseded one.
+func WritePreconfServed(db ethdb.KeyValueWriter, number, count uint64, digest common.Hash) error {
+	value := make([]byte, servedPreconfValueLen)
+	binary.BigEndian.PutUint64(value, count)
+	copy(value[8:], digest[:])
+
+	return db.Put(servedPreconfKey(number), value)
+}
+
+// ReadPreconfServed returns the served-preconf commitment at a height, and
+// whether one is stored. A malformed value is reported as an error rather than
+// absence, so a corrupt record cannot read as "nothing was served".
+func ReadPreconfServed(db ethdb.KeyValueReader, number uint64) (count uint64, digest common.Hash, ok bool, err error) {
+	key := servedPreconfKey(number)
+
+	present, err := db.Has(key)
+	if err != nil {
+		return 0, common.Hash{}, false, fmt.Errorf("read served preconf %d: %w", number, err)
+	}
+	if !present {
+		return 0, common.Hash{}, false, nil
+	}
+
+	value, err := db.Get(key)
+	if err != nil {
+		return 0, common.Hash{}, false, fmt.Errorf("read served preconf %d: %w", number, err)
+	}
+	if len(value) != servedPreconfValueLen {
+		return 0, common.Hash{}, false, fmt.Errorf("served preconf %d is %d bytes, want %d", number, len(value), servedPreconfValueLen)
+	}
+
+	return binary.BigEndian.Uint64(value[:8]), common.BytesToHash(value[8:]), true, nil
+}
+
+// DeletePreconfServed drops the commitment once the height has been judged
+// (audited, or reconciled on the live path); it is only needed until then.
+func DeletePreconfServed(db ethdb.KeyValueWriter, number uint64) error {
+	return db.Delete(servedPreconfKey(number))
+}
+
+// ReadServedPreconfHeightsInRange returns the heights in [from, to] inclusive
+// that carry a served-preconf commitment, ascending. The audit uses it to
+// reconcile commitments in a range it advanced past without walking (store
+// retention had aged those heights out), so a promise there is still judged and
+// its commitment cleared rather than leaked.
+func ReadServedPreconfHeightsInRange(db ethdb.Iteratee, from, to uint64) []uint64 {
+	if from > to {
+		return nil
+	}
+
+	// Keys are prefix + big-endian number in forward order, so seeking to
+	// `from` and walking upward yields ascending heights until one exceeds to.
+	iterator := db.NewIterator(preconfServedPrefix, encodeBlockNumber(from))
+	defer iterator.Release()
+
+	var heights []uint64
+	for iterator.Next() {
+		key := iterator.Key()
+		if len(key) != len(preconfServedPrefix)+8 {
+			continue
+		}
+		number := binary.BigEndian.Uint64(key[len(preconfServedPrefix):])
+		if number > to {
+			break
+		}
+		heights = append(heights, number)
+	}
+
+	return heights
 }
