@@ -10,7 +10,7 @@ on:
         default: develop
 
 concurrency:
-  group: nightly-govulncheck-${{ github.ref }}
+  group: nightly-govulncheck-${{ inputs.ref || 'develop' }}
   cancel-in-progress: true
 
 jobs:
@@ -50,7 +50,7 @@ jobs:
         with:
           payload: |
             {
-              "text": ":warning: Nightly govulncheck failed on ${{ github.repository }} (${{ inputs.ref || 'develop' }})\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>"
+              "text": ${{ toJSON(format(':warning: Nightly govulncheck failed on {0} ({1}){2}<{3}/{0}/actions/runs/{4}|View Run>', github.repository, inputs.ref || 'develop', fromJSON('"\n"'), github.server_url, github.run_id)) }}
             }
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
