@@ -253,6 +253,9 @@ func (r *reader) walk(ctx context.Context, first *pb.RangeRequest, absorb func(*
 
 		if resp.GetLive() {
 			info.explained = f.ok
+			if info.s != r.seed {
+				r.breaker.observeLiveTail(resp.GetNext())
+			}
 
 			return info, nil
 		}
