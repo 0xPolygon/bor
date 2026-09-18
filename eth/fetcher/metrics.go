@@ -24,13 +24,8 @@ import (
 
 var (
 	// Witness verification metrics
-	witnessVerifyCheckMeter       = metrics.NewRegisteredMeter("eth/fetcher/witness/verify/check", nil)
-	witnessVerifySuccessMeter     = metrics.NewRegisteredMeter("eth/fetcher/witness/verify/success", nil)
-	witnessVerifyFailureMeter     = metrics.NewRegisteredMeter("eth/fetcher/witness/verify/failure", nil)
-	witnessVerifyDropMeter        = metrics.NewRegisteredMeter("eth/fetcher/witness/verify/drop", nil)
-	witnessVerifyJailMeter        = metrics.NewRegisteredMeter("eth/fetcher/witness/verify/jail", nil)
-	witnessVerifyPeersInsuffMeter = metrics.NewRegisteredMeter("eth/fetcher/witness/verify/peers/insufficient", nil)
-	witnessVerifyNoConsensusMeter = metrics.NewRegisteredMeter("eth/fetcher/witness/verify/consensus/none", nil)
+	witnessVerifyCheckMeter   = metrics.NewRegisteredMeter("eth/fetcher/witness/verify/check", nil)
+	witnessVerifyFailureMeter = metrics.NewRegisteredMeter("eth/fetcher/witness/verify/failure", nil)
 
 	// witnessByteMismatchMeter tracks WIT2 byte-correctness drops: a serving
 	// peer delivered bytes whose keccak256 did not match the BP-signed hash.
