@@ -426,6 +426,9 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		config.TxPool.Journal = stack.ResolvePath(config.TxPool.Journal)
 	}
 	legacyPool := legacypool.New(config.TxPool, eth.blockchain)
+	if privateTxGetter != nil {
+		legacyPool.SetPrivateTxChecker(privateTxGetter.IsTxPrivate)
+	}
 
 	// BOR changes
 	// Blob pool is removed from Subpool for Bor

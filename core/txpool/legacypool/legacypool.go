@@ -152,7 +152,7 @@ var (
 	evictTimer  = metrics.NewRegisteredTimer("txpool/misc/evict", nil)
 
 	// rebroadcast metrics
-	rebroadcastTxMeter       = metrics.NewRegisteredMeter("txpool/rebroadcast", nil)          // Transactions identified for rebroadcast
+	rebroadcastTxMeter       = metrics.NewRegisteredMeter("txpool/rebroadcast", nil)          // Transactions queued for rebroadcast
 	rebroadcastIdentifyTimer = metrics.NewRegisteredTimer("txpool/rebroadcast/identify", nil) // Time to identify stuck transactions
 	rebroadcastTrackingGauge = metrics.NewRegisteredGauge("txpool/rebroadcast/tracking", nil) // Transactions being tracked for rebroadcast
 )
@@ -332,8 +332,10 @@ type LegacyPool struct {
 	filteredAddrs map[common.Address]struct{} // Map of addresses to filter
 
 	// Rebroadcast tracking
-	rebroadcastTxFeed event.Feed                // Feed for stuck transaction events
-	lastRebroadcast   map[common.Hash]time.Time // Track last rebroadcast time per tx hash
+	rebroadcastTxFeed  event.Feed // Feed for stuck transaction events
+	rebroadcastAckFeed event.Feed
+	lastRebroadcast    map[common.Hash]time.Time // Track last rebroadcast time per tx hash
+	isTxPrivate        func(common.Hash) bool
 }
 
 type txpoolResetRequest struct {
@@ -487,17 +489,7 @@ func (pool *LegacyPool) loop() {
 			rebroadcastIdentifyTimer.Update(time.Since(identifyStart))
 
 			if len(stuckTxs) > 0 {
-				// Brief Lock only to update lastRebroadcast timestamps
-				now := time.Now()
-				pool.mu.Lock()
-				for _, tx := range stuckTxs {
-					pool.lastRebroadcast[tx.Hash()] = now
-				}
-				rebroadcastTrackingGauge.Update(int64(len(pool.lastRebroadcast)))
-				pool.mu.Unlock()
-
-				pool.rebroadcastTxFeed.Send(core.StuckTxsEvent{Txs: stuckTxs})
-				rebroadcastTxMeter.Mark(int64(len(stuckTxs)))
+				pool.publishRebroadcastTransactions(stuckTxs)
 				log.Debug("Identified stuck transactions for rebroadcast", "count", len(stuckTxs))
 			}
 
@@ -602,6 +594,9 @@ func (pool *LegacyPool) identifyStuckTransactions() []*types.Transaction {
 				continue
 			}
 			if tx.GasTipCap().Cmp(minTip) < 0 {
+				continue
+			}
+			if !pool.canRebroadcast(tx) {
 				continue
 			}
 
