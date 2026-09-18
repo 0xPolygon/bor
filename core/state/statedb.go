@@ -1595,9 +1595,6 @@ func (s *StateDB) CreateContract(addr common.Address) {
 	MVWrite(s, blockstm.NewAddressKey(addr))
 }
 
-// Copy creates a deep, independent copy of the state.
-// Snapshots of the copied state cannot be applied to the copy.
-
 // IsNewContract reports whether the contract at the given address was deployed
 // during the current transaction.
 func (s *StateDB) IsNewContract(addr common.Address) bool {
@@ -1608,6 +1605,8 @@ func (s *StateDB) IsNewContract(addr common.Address) bool {
 	return obj.newContract
 }
 
+// Copy creates a deep, independent copy of the state.
+// Snapshots of the copied state cannot be applied to the copy.
 func (s *StateDB) Copy() *StateDB {
 	// Copy all the basic fields, initialize the memory ones
 	state := &StateDB{

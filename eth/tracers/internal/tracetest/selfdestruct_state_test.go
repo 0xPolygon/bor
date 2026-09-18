@@ -144,8 +144,12 @@ func setupTestBlockchain(t *testing.T, genesis *core.Genesis, tx *types.Transact
 	if useBeacon {
 		// Bor's block validator rejects a non-zero difficulty on the beacon
 		// path, so mark the chain as merged from genesis — the same thing the
-		// sibling tracer tests (e.g. supply_test.go) do.
-		genesis.Config.TerminalTotalDifficulty = big.NewInt(0)
+		// sibling tracer tests (e.g. supply_test.go) do. The table hands in a
+		// shared params global and the subtests run in parallel, so copy before
+		// writing.
+		config := *genesis.Config
+		config.TerminalTotalDifficulty = big.NewInt(0)
+		genesis.Config = &config
 		engine = beacon.New(ethash.NewFaker())
 	} else {
 		engine = ethash.NewFaker()
