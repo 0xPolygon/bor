@@ -689,13 +689,18 @@ func handleNewPooledTransactionHashes(backend Backend, msg Decoder, peer *Peer) 
 }
 
 func handleGetPooledTransactions(backend Backend, msg Decoder, peer *Peer) error {
+	reservation, err := peer.reservePooledReply()
+	if err != nil {
+		return err
+	}
+	defer reservation.release()
 	// Decode the pooled transactions retrieval message
 	var query GetPooledTransactionsPacket
 	if err := msg.Decode(&query); err != nil {
 		return err
 	}
 	hashes, txs := answerGetPooledTransactions(backend, query.GetPooledTransactionsRequest)
-	return peer.ReplyPooledTransactionsRLP(query.RequestId, hashes, txs)
+	return peer.replyPooledTransactionsRLP(query.RequestId, hashes, txs, reservation)
 }
 
 func answerGetPooledTransactions(backend Backend, query GetPooledTransactionsRequest) ([]common.Hash, []rlp.RawValue) {

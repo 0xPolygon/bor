@@ -34,8 +34,8 @@ func TestEnableSyncedFeaturesRebroadcastWithPeers(t *testing.T) {
 		wasEligible bool
 		want        bool
 	}{
-		{"higher peer on startup", 1, false, false},
-		{"higher peer after sync", 1, true, false},
+		{"higher peer on startup", 1, false, true},
+		{"higher peer after sync", 1, true, true},
 		{"equal peer", 0, false, true},
 		{"lower peer", -1, false, true},
 	} {
@@ -69,7 +69,7 @@ func TestChainSyncerRebroadcastWithoutLocalTD(t *testing.T) {
 		td     int64
 		want   bool
 	}{
-		{"higher peer", true, 1, false},
+		{"higher peer", true, 1, true},
 		{"equal peer", true, 0, true},
 		{"initial sync with higher peer", false, 1, false},
 		{"initial sync with equal peer", false, 0, false},
@@ -79,7 +79,7 @@ func TestChainSyncerRebroadcastWithoutLocalTD(t *testing.T) {
 			defer cleanup()
 			handler.synced.Store(test.synced)
 			registerPeerWithTD(t, handler.peers, test.td)
-			if got := handler.rebroadcastAllowed(nil, time.Now()); got != test.want {
+			if got := handler.rebroadcastAllowed(nil); got != test.want {
 				t.Fatalf("rebroadcast gate without local TD: have %v, want %v", got, test.want)
 			}
 		})
@@ -139,13 +139,13 @@ func TestChainSyncerRebroadcastAfterSyncFailure(t *testing.T) {
 			cs.force = time.NewTimer(time.Hour)
 			defer cs.force.Stop()
 			peer := registerPeerWithTD(t, handler.peers, 1_000_000)
-			if op, _ := cs.nextSyncOp(); op == nil || handler.canRebroadcast() {
-				t.Fatal("catch-up sync should disable rebroadcast")
+			if op, _ := cs.nextSyncOp(); op == nil || handler.canRebroadcast() != test.synced {
+				t.Fatal("unverified catch-up target changed rebroadcast eligibility")
 			}
 			cs.doneCh = make(chan error, 1)
 			cs.onSyncDone(test.err)
-			if handler.canRebroadcast() {
-				t.Fatal("failed sync should keep rebroadcast disabled while a peer is ahead")
+			if handler.canRebroadcast() != test.synced {
+				t.Fatal("failed sync with an unverified peer changed rebroadcast eligibility")
 			}
 			head, _ := peer.Head()
 			_, localTD := cs.modeAndLocalHead()
@@ -157,8 +157,8 @@ func TestChainSyncerRebroadcastAfterSyncFailure(t *testing.T) {
 				t.Fatalf("rebroadcast gate after failed sync: have %v, want %v", got, test.synced)
 			}
 			peer.SetHead(head, big.NewInt(1_000_000))
-			if op, _ := cs.nextSyncOp(); op == nil || handler.canRebroadcast() {
-				t.Fatal("subsequent catch-up sync should disable rebroadcast again")
+			if op, _ := cs.nextSyncOp(); op == nil || handler.canRebroadcast() != test.synced {
+				t.Fatal("another unverified catch-up target changed rebroadcast eligibility")
 			}
 		})
 	}
@@ -173,12 +173,12 @@ func TestChainSyncerRebroadcastWhilePeerBenched(t *testing.T) {
 		minPeers int
 		want     bool
 	}{
-		{"higher peer with eligible peer", 1_000_000, true, false, 0, false},
-		{"only higher peer", 1_000_000, false, false, 0, false},
+		{"higher peer with eligible peer", 1_000_000, true, false, 0, true},
+		{"only higher peer", 1_000_000, false, false, 0, true},
 		{"lower peer", 0, true, false, 0, true},
-		{"higher peer during cooldown", 1_000_000, true, true, 0, false},
+		{"higher peer during cooldown", 1_000_000, true, true, 0, true},
 		{"lower peer during cooldown", 0, true, true, 0, true},
-		{"higher peer below minimum count", 1_000_000, false, false, defaultMinSyncPeers, false},
+		{"higher peer below minimum count", 1_000_000, false, false, defaultMinSyncPeers, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			handler, cleanup := newChainSyncerTestHandler(t)
@@ -249,8 +249,8 @@ func TestChainSyncerRebroadcastAfterBenchedPeerUnregister(t *testing.T) {
 	}
 	setDownloaderPeerBackoff(t, handler.downloader, peer.ID(), time.Hour)
 	cs := handler.chainSync
-	if op, retry := cs.nextSyncOp(); op != nil || retry <= 0 || handler.canRebroadcast() {
-		t.Fatal("benched higher peer should suppress rebroadcast until its retry or removal")
+	if op, retry := cs.nextSyncOp(); op != nil || retry <= 0 || !handler.canRebroadcast() {
+		t.Fatal("benched peer with an unverified head must not suppress rebroadcast")
 	}
 	handler.unregisterPeer(peer.ID())
 	if !handler.canRebroadcast() {

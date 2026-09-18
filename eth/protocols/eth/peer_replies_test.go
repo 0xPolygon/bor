@@ -3,6 +3,7 @@ package eth
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"testing"
 	"testing/synctest"
@@ -243,6 +244,9 @@ func TestPeerReplyConfiguredExemptions(t *testing.T) {
 			defer p.Close()
 			p.blockReplies.limiter = rate.NewLimiter(0, 0)
 			p.txReplies.limiter = rate.NewLimiter(0, 0)
+			if reservation, err := p.reservePooledReply(); reservation != nil || err != nil {
+				t.Fatalf("configured peer reserved reply capacity: %v, %v", reservation, err)
+			}
 			for _, code := range queueTestReplies(t, p) {
 				select {
 				case msg := <-rw.sent:
@@ -338,11 +342,17 @@ func TestPeerRepliesUnderConcurrentLoad(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		query, err := rlp.EncodeToBytes(GetPooledTransactionsPacket{1, []common.Hash{{1}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		backend := &replyLookupBackend{pool: &replyLookupPool{encoded: data}}
 		for i := 0; i < requestsPerSecond*30; i++ {
 			if err := p.checkMessageRate(GetPooledTransactionsMsg, 1, time.Now()); err != nil {
 				t.Fatalf("honest fetcher rejected at request %d: %v", i, err)
 			}
-			if err := p.ReplyPooledTransactionsRLP(1, nil, []rlp.RawValue{data}); err != nil {
+			msg := p2p.Msg{Code: GetPooledTransactionsMsg, Size: uint32(len(query)), Payload: bytes.NewReader(query)}
+			if err := handleGetPooledTransactions(backend, msg, p); err != nil {
 				t.Fatal(err)
 			}
 			want := 1
@@ -373,6 +383,54 @@ type replyLookupPool struct {
 	encoded []byte
 }
 
+func TestPeerPooledRequestWithStalledWriter(t *testing.T) {
+	for _, version := range ProtocolVersions {
+		for _, limit := range []string{"count", "bytes"} {
+			t.Run(fmt.Sprintf("%d/%s", version, limit), func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					source, sink := p2p.MsgPipe()
+					defer source.Close()
+					defer sink.Close()
+					peer := NewPeer(version, p2p.NewPeer(enode.ID{1}, "", nil), source, nil)
+					defer peer.Close()
+					var txs []rlp.RawValue
+					if limit == "bytes" {
+						data, err := rlp.EncodeToBytes(make([]byte, 8*1024*1024-13))
+						if err != nil {
+							t.Fatal(err)
+						}
+						txs = []rlp.RawValue{data}
+					}
+					for i := 0; ; i++ {
+						if err := peer.ReplyPooledTransactionsRLP(1, nil, txs); errors.Is(err, errReplyQueueFull) {
+							break
+						} else if err != nil || i > peerRequestBurst {
+							t.Fatalf("could not fill reply queue: %v", err)
+						}
+						synctest.Wait()
+					}
+					data, err := rlp.EncodeToBytes(GetPooledTransactionsPacket{1, make(GetPooledTransactionsRequest, maxPooledTxsServe)})
+					if err != nil {
+						t.Fatal(err)
+					}
+					pool := &replyLookupPool{encoded: []byte{0x80}}
+					for range peerRequestBurst {
+						payload := bytes.NewReader(data)
+						msg := p2p.Msg{Code: GetPooledTransactionsMsg, Size: uint32(len(data)), Payload: payload}
+						err := handleGetPooledTransactions(&replyLookupBackend{pool: pool}, msg, peer)
+						if !errors.Is(err, errReplyQueueFull) || errors.Is(err, ErrPeerRateLimit) {
+							t.Fatalf("full queue must reject without jailing: %v", err)
+						}
+						if pool.lookups != 0 || payload.Len() != len(data) {
+							t.Fatal("rejected request performed decoding or pool lookups")
+						}
+					}
+				})
+			})
+		}
+	}
+}
+
 func (p *replyLookupPool) GetRLP(common.Hash) []byte {
 	p.lookups++
 	return p.encoded
@@ -384,6 +442,117 @@ type replyLookupBackend struct {
 }
 
 func (b *replyLookupBackend) TxPool() TxPool { return b.pool }
+
+func TestPeerPooledRequestReleasesCapacity(t *testing.T) {
+	for _, mode := range []string{"accepted", "malformed", "oversized", "closed", "stopped"} {
+		t.Run(mode, func(t *testing.T) {
+			p := limitedTestPeer()
+			p.knownTxs, p.txReplies = newKnownCache(maxKnownTxs), newPeerReplies()
+			hash := common.Hash{1}
+			data, err := rlp.EncodeToBytes(GetPooledTransactionsPacket{1, []common.Hash{hash}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			pool := &replyLookupPool{encoded: []byte{0x80}}
+			var want error
+			switch mode {
+			case "malformed":
+				data = []byte{0xff}
+			case "oversized":
+				pool.encoded, want = make([]byte, maxMessageSize), errMsgTooLarge
+			case "closed":
+				p.Close()
+				want = ErrDisconnected
+			case "stopped":
+				p.txReplies.queue, want = nil, ErrDisconnected
+			}
+			msg := p2p.Msg{Code: GetPooledTransactionsMsg, Size: uint32(len(data)), Payload: bytes.NewReader(data)}
+			err = handleGetPooledTransactions(&replyLookupBackend{pool: pool}, msg, p)
+			if mode == "malformed" {
+				if err == nil || pool.lookups != 0 {
+					t.Fatal("malformed query reached the pool")
+				}
+			} else if !errors.Is(err, want) {
+				t.Fatalf("request error: got %v, want %v", err, want)
+			}
+			var queuedBytes int
+			if mode == "accepted" {
+				if len(p.txReplies.queue) != 1 {
+					t.Fatal("accepted response was not queued")
+				}
+				queuedBytes = int((<-p.txReplies.queue).Size)
+			} else if len(p.txReplies.queue) != 0 {
+				t.Fatal("rejected response was queued")
+			}
+			if p.txReplies.bytes != queuedBytes || p.txReplies.reserved != 0 || p.KnownTransaction(hash) != (mode == "accepted") {
+				t.Fatal("request left reserved capacity or incorrect known hashes")
+			}
+		})
+	}
+}
+
+func TestPeerPooledReplyReservations(t *testing.T) {
+	for _, limit := range []string{"count", "bytes"} {
+		t.Run(limit, func(t *testing.T) {
+			p := limitedTestPeer()
+			p.knownTxs, p.txReplies = newKnownCache(maxKnownTxs), newPeerReplies()
+			var txs []rlp.RawValue
+			count := peerRequestBurst - 1
+			if limit == "bytes" {
+				txs, count = []rlp.RawValue{make([]byte, maxMessageSize-13)}, 2
+			}
+			for range count {
+				if err := p.ReplyPooledTransactionsRLP(1, nil, txs); err != nil {
+					t.Fatal(err)
+				}
+			}
+			reservation, err := p.reservePooledReply()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reservation.release()
+			if other, err := p.reservePooledReply(); !errors.Is(err, errReplyQueueFull) || other != nil {
+				t.Fatalf("another request consumed reserved capacity: %v", err)
+			}
+			if err := p.ReplyPooledTransactionsRLP(2, nil, txs); !errors.Is(err, errReplyQueueFull) {
+				t.Fatalf("another response consumed reserved capacity: %v", err)
+			}
+			hash := common.Hash{1}
+			if err := p.replyPooledTransactionsRLP(3, []common.Hash{hash}, txs, reservation); err != nil {
+				t.Fatalf("reserved response was rejected: %v", err)
+			}
+			reservation.release()
+			var queuedBytes int
+			for len(p.txReplies.queue) > 0 {
+				queuedBytes += int((<-p.txReplies.queue).Size)
+			}
+			if !p.KnownTransaction(hash) || p.txReplies.bytes != queuedBytes || p.txReplies.reserved != 0 {
+				t.Fatal("committed reservation was not replaced by actual response accounting")
+			}
+		})
+	}
+}
+
+func TestPeerPooledReservationShutdown(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p := NewPeer(ETH68, p2p.NewPeer(enode.ID{1}, "", nil), new(replyTestRW), nil)
+		reservation, err := p.reservePooledReply()
+		if err != nil {
+			p.Close()
+			t.Fatal(err)
+		}
+		p.Close()
+		synctest.Wait()
+		hash := common.Hash{1}
+		if err := p.replyPooledTransactionsRLP(1, []common.Hash{hash}, nil, reservation); !errors.Is(err, ErrDisconnected) {
+			t.Fatalf("reserved response accepted after shutdown: %v", err)
+		}
+		reservation.release()
+		if p.txReplies.bytes != 0 || p.txReplies.reserved != 0 || p.KnownTransaction(hash) {
+			t.Fatal("shutdown left reservation accounting or known hashes")
+		}
+	})
+}
 
 func TestPooledTransactionReplyBoundsLookups(t *testing.T) {
 	for _, tc := range []struct {

@@ -256,11 +256,15 @@ func (p *Peer) QueuePooledTransactionHashes(hashes []common.Hash) []common.Hash 
 
 // ReplyPooledTransactionsRLP is the response to RequestTxs.
 func (p *Peer) ReplyPooledTransactionsRLP(id uint64, hashes []common.Hash, txs []rlp.RawValue) error {
+	return p.replyPooledTransactionsRLP(id, hashes, txs, nil)
+}
+
+func (p *Peer) replyPooledTransactionsRLP(id uint64, hashes []common.Hash, txs []rlp.RawValue, reservation *replyReservation) error {
 	// Not packed into PooledTransactionsResponse to avoid RLP decoding
-	if err := p.queueReply(PooledTransactionsMsg, &PooledTransactionsRLPPacket{
+	if err := p.queueReservedReply(PooledTransactionsMsg, &PooledTransactionsRLPPacket{
 		RequestId:                     id,
 		PooledTransactionsRLPResponse: txs,
-	}); err != nil {
+	}, reservation); err != nil {
 		return err
 	}
 	p.knownTxs.Add(hashes...)

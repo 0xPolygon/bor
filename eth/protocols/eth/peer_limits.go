@@ -76,10 +76,11 @@ func (p *Peer) checkAnnouncementRate(count int, now time.Time) error {
 }
 
 type peerReplies struct {
-	mu      sync.Mutex
-	queue   chan p2p.Msg
-	bytes   int
-	limiter *rate.Limiter
+	mu       sync.Mutex
+	queue    chan p2p.Msg
+	bytes    int
+	reserved int
+	limiter  *rate.Limiter
 }
 
 func newPeerReplies() *peerReplies {
@@ -88,8 +89,59 @@ func newPeerReplies() *peerReplies {
 
 var errReplyQueueFull = errors.New("peer response queue full")
 
-func (p *Peer) queueReply(code uint64, packet interface{}) error {
+type replyReservation struct {
+	replies *peerReplies
+	active  bool
+}
+
+func (p *Peer) reservePooledReply() (*replyReservation, error) {
 	if p.Trusted() || p.Static() {
+		return nil, nil
+	}
+	replies := p.txReplies
+	replies.mu.Lock()
+	defer replies.mu.Unlock()
+	select {
+	case <-p.term:
+		return nil, ErrDisconnected
+	default:
+	}
+	if replies.queue == nil {
+		return nil, ErrDisconnected
+	}
+	if len(replies.queue)+replies.reserved >= cap(replies.queue) || replies.bytes+maxMessageSize > peerByteBurst/2 {
+		return nil, errReplyQueueFull
+	}
+	// The response size is unknown until pool lookups and encoding finish.
+	replies.bytes += maxMessageSize
+	replies.reserved++
+	return &replyReservation{replies: replies, active: true}, nil
+}
+
+func (r *replyReservation) release() {
+	if r != nil {
+		r.replies.mu.Lock()
+		defer r.replies.mu.Unlock()
+		r.releaseLocked()
+	}
+}
+
+func (r *replyReservation) releaseLocked() {
+	if r != nil && r.active {
+		if r.replies.queue != nil {
+			r.replies.bytes -= maxMessageSize
+			r.replies.reserved--
+		}
+		r.active = false
+	}
+}
+
+func (p *Peer) queueReply(code uint64, packet interface{}) error {
+	return p.queueReservedReply(code, packet, nil)
+}
+
+func (p *Peer) queueReservedReply(code uint64, packet interface{}, reservation *replyReservation) error {
+	if reservation == nil && (p.Trusted() || p.Static()) {
 		return p2p.Send(p.rw, code, packet)
 	}
 	data, err := rlp.EncodeToBytes(packet)
@@ -105,6 +157,7 @@ func (p *Peer) queueReply(code uint64, packet interface{}) error {
 	}
 	replies.mu.Lock()
 	defer replies.mu.Unlock()
+	reservation.releaseLocked()
 	select {
 	case <-p.term:
 		return ErrDisconnected
@@ -113,7 +166,7 @@ func (p *Peer) queueReply(code uint64, packet interface{}) error {
 	if replies.queue == nil {
 		return ErrDisconnected
 	}
-	if replies.bytes+len(data) > peerByteBurst/2 {
+	if len(replies.queue)+replies.reserved >= cap(replies.queue) || replies.bytes+len(data) > peerByteBurst/2 {
 		return errReplyQueueFull
 	}
 	select {
@@ -135,6 +188,7 @@ func (p *Peer) sendReplies(replies *peerReplies) {
 		defer replies.mu.Unlock()
 		replies.queue = nil
 		replies.bytes = 0
+		replies.reserved = 0
 	}()
 	for {
 		select {
