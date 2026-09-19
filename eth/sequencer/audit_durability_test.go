@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -59,7 +58,7 @@ func TestServedCommitmentSurvivesCrashAndIsAudited(t *testing.T) {
 		}
 		if writeCommitment {
 			// Exactly what persistServed writes on the serve path.
-			if err := rawdb.WritePreconfServed(db, atRisk, uint64(len(served)), foldServed(common.Hash{}, served)); err != nil {
+			if err := rawdb.WritePreconfServed(db, atRisk, uint64(len(served)), servedDigest(atRisk, served)); err != nil {
 				t.Fatalf("persist served: %v", err)
 			}
 		}

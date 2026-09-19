@@ -423,9 +423,13 @@ func (c *Consumer) persistServed(height, count uint64, digest common.Hash) {
 	if c.chain == nil {
 		return
 	}
+	start := time.Now()
 	if err := rawdb.WritePreconfServed(c.chain.DB(), height, count, digest); err != nil {
 		log.Warn("Failed to persist served preconf commitment", "number", height, "err", err)
+
+		return
 	}
+	preconfServedPersistTimer.UpdateSince(start)
 }
 
 // finalizedHeight reports the newest finalized height. A node with no

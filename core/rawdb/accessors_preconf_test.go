@@ -314,6 +314,17 @@ func TestServedPreconfHeightsInRange(t *testing.T) {
 	}
 }
 
+// A failing read must surface as an error, never as absence — absence would
+// tell the audit the height was never served.
+func TestPreconfServedReadFailuresAreErrors(t *testing.T) {
+	if _, _, ok, err := ReadPreconfServed(failingReader{}, 7); err == nil || ok {
+		t.Fatalf("presence-check failure = (ok %v, err %v), want an error", ok, err)
+	}
+	if _, _, ok, err := ReadPreconfServed(presentButUnreadable{}, 7); err == nil || ok {
+		t.Fatalf("value-read failure = (ok %v, err %v), want an error", ok, err)
+	}
+}
+
 // A malformed value must read as an error, not as absence. Absence tells the
 // audit the height was never served, which would skip a served height instead
 // of judging it — the exact gap this commitment exists to close.
