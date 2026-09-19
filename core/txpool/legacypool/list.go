@@ -435,42 +435,68 @@ func (l *list) Filter(costLimit *uint256.Int, gasLimit uint64) (types.Transactio
 	return removed, invalids
 }
 
-// FilterTxConditional returns the conditional transactions with invalid PIP15 options
-func (l *list) FilterTxConditional(state *state.StateDB, header *types.Header) types.Transactions {
-	if state == nil || header == nil {
+// conditionalOptionsHold reports whether a transaction either carries no
+// PIP-15 options or its options are still satisfied by state and header.
+func conditionalOptionsHold(tx *types.Transaction, state *state.StateDB, header *types.Header) bool {
+	options := tx.GetOptions()
+	if options == nil {
+		return true
+	}
+	if err := state.ValidateKnownAccounts(options.KnownAccounts); err != nil {
+		log.Debug("Error while Filtering Tx Conditional's known accounts", "err", err)
+		return false
+	}
+	if err := header.ValidateBlockNumberOptionsPIP15(options.BlockNumberMin, options.BlockNumberMax); err != nil {
+		log.Debug("Error while Filtering Tx Conditional's block number options", "err", err)
+		return false
+	}
+	if err := header.ValidateTimestampOptionsPIP15(options.TimestampMin, options.TimestampMax); err != nil {
+		log.Debug("Error while Filtering Tx Conditional's timestamp options", "err", err)
+		return false
+	}
+	return true
+}
+
+// invalidsAbove returns, for a strict list, every transaction with a nonce
+// above the lowest nonce in removed: they sit behind a gap and are no longer
+// executable. Non-strict lists have no ordering requirement and return nil.
+func (l *list) invalidsAbove(removed types.Transactions) types.Transactions {
+	if !l.strict || len(removed) == 0 {
 		return nil
+	}
+	lowest := uint64(math.MaxUint64)
+	for _, tx := range removed {
+		if nonce := tx.Nonce(); lowest > nonce {
+			lowest = nonce
+		}
+	}
+	return l.txs.filter(func(tx *types.Transaction) bool { return tx.Nonce() > lowest })
+}
+
+// FilterTxConditional removes the conditional transactions whose PIP-15 options
+// no longer hold and returns them. Like Filter, a strict (pending) list also
+// returns every transaction above the lowest removed nonce as invalids: those
+// are no longer executable behind the gap and must be queued again by the
+// caller instead of staying in pending.
+func (l *list) FilterTxConditional(state *state.StateDB, header *types.Header) (types.Transactions, types.Transactions) {
+	if state == nil || header == nil {
+		return nil, nil
 	}
 
 	removed := l.txs.filter(func(tx *types.Transaction) bool {
-		if options := tx.GetOptions(); options != nil {
-			if err := state.ValidateKnownAccounts(options.KnownAccounts); err != nil {
-				log.Debug("Error while Filtering Tx Conditional's known accounts", "err", err)
-				return true
-			}
-
-			if err := header.ValidateBlockNumberOptionsPIP15(options.BlockNumberMin, options.BlockNumberMax); err != nil {
-				log.Debug("Error while Filtering Tx Conditional's block number options", "err", err)
-				return true
-			}
-
-			if err := header.ValidateTimestampOptionsPIP15(options.TimestampMin, options.TimestampMax); err != nil {
-				log.Debug("Error while Filtering Tx Conditional's timestamp options", "err", err)
-				return true
-			}
-
-			return false
-		}
-
-		return false
+		return !conditionalOptionsHold(tx, state, header)
 	})
-
 	if len(removed) == 0 {
-		return nil
+		return nil, nil
 	}
 
+	invalids := l.invalidsAbove(removed)
+
+	l.subTotalCost(removed)
+	l.subTotalCost(invalids)
 	l.txs.reheap()
 
-	return removed
+	return removed, invalids
 }
 
 // Cap places a hard limit on the number of items, returning all transactions
