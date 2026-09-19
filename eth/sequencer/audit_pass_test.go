@@ -21,6 +21,7 @@ import (
 type stubAuditChain struct {
 	head   uint64
 	hashes map[uint64]common.Hash
+	blocks map[uint64]*types.Block
 }
 
 func (s *stubAuditChain) CurrentBlock() *types.Header {
@@ -31,13 +32,17 @@ func (s *stubAuditChain) GetCanonicalHash(number uint64) common.Hash {
 	return s.hashes[number]
 }
 
+func (s *stubAuditChain) GetBlockByNumber(number uint64) *types.Block {
+	return s.blocks[number]
+}
+
 // auditFixture builds a chain whose canonical hash at every height is the
 // header the store also sealed, so the store and the chain agree everywhere
 // until a test makes them disagree.
 func auditFixture(t *testing.T, through uint64) (*stubAuditChain, map[uint64]*types.Header) {
 	t.Helper()
 
-	chain := &stubAuditChain{head: through, hashes: map[uint64]common.Hash{}}
+	chain := &stubAuditChain{head: through, hashes: map[uint64]common.Hash{}, blocks: map[uint64]*types.Block{}}
 	sealed := map[uint64]*types.Header{}
 
 	for height := uint64(1); height <= through; height++ {
@@ -199,9 +204,14 @@ func TestAuditAdvancesPastHeightsThatPromisedNothing(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 
-	// 6 is unretained and 7 was never sealed: both walked, only 7 compared.
-	if summary.walked != 3 || summary.compared != 2 {
-		t.Fatalf("walked/compared = %d/%d, want 3/2", summary.walked, summary.compared)
+	// 6 is unretained and 7 is held but never sealed. Neither the store nor a
+	// served commitment offers anything to compare, so both count as unheld and
+	// only the sealed height 8 is compared.
+	if summary.walked != 3 || summary.compared != 1 {
+		t.Fatalf("walked/compared = %d/%d, want 3/1", summary.walked, summary.compared)
+	}
+	if summary.unheld != 2 {
+		t.Fatalf("unheld = %d, want 2", summary.unheld)
 	}
 
 	if records := rawdb.ReadInvalidPreconfsInRange(db, 0, 8); len(records) != 0 {
@@ -406,8 +416,9 @@ func TestAuditRangeWithoutAHead(t *testing.T) {
 
 type headlessAuditChain struct{}
 
-func (headlessAuditChain) CurrentBlock() *types.Header         { return nil }
-func (headlessAuditChain) GetCanonicalHash(uint64) common.Hash { return common.Hash{} }
+func (headlessAuditChain) CurrentBlock() *types.Header          { return nil }
+func (headlessAuditChain) GetCanonicalHash(uint64) common.Hash  { return common.Hash{} }
+func (headlessAuditChain) GetBlockByNumber(uint64) *types.Block { return nil }
 
 // The counters are the pass's report to its caller; without asserting them a
 // mutation to any of the tallies goes unnoticed.

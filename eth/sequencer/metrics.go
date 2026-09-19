@@ -70,6 +70,13 @@ var (
 	auditUnknownCount     = metrics.NewRegisteredCounter("sequencer/audit/unknown", nil)
 	auditRetentionSkipped = metrics.NewRegisteredCounter("sequencer/audit/retentionskipped", nil)
 	auditUnheldHeights    = metrics.NewRegisteredCounter("sequencer/audit/unheld", nil)
+	// A height the store no longer holds, judged instead against the
+	// commitment this node kept for the preconfirmations it served there.
+	auditServedMismatch = metrics.NewRegisteredCounter("sequencer/audit/servedmismatch", nil)
+	auditServedVerified = metrics.NewRegisteredCounter("sequencer/audit/servedverified", nil)
+	// Latency of the durable served-commitment write on the serve path, so its
+	// cost can be measured rather than assumed. It is a NoSync KV write.
+	preconfServedPersistTimer = metrics.NewRegisteredTimer("sequencer/preconf/servedpersist", nil)
 
 	// The store kept off the block path. Each counter is a wait the producer
 	// declined to pay because the answer could not arrive: barrierskipped
