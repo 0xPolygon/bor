@@ -92,10 +92,11 @@ const (
 type auditSummary struct {
 	from    uint64
 	through uint64
-	// walked counts every height the pass visited; compared counts the ones
-	// the store actually held a generation for. Reporting only walked cannot
-	// tell "audited the range, all matched" from "the store held nothing for
-	// any of it", which are very different answers for an operator.
+	// walked counts every height the pass visited; compared counts the ones it
+	// judged — against the store's sealed generation, or, where the store could
+	// not confirm the height, against this node's served commitment. Reporting
+	// only walked cannot tell "audited the range, all matched" from "nothing was
+	// comparable", which are very different answers for an operator.
 	walked   uint64
 	compared uint64
 	mismatch uint64
@@ -340,7 +341,11 @@ func (a *auditor) auditHeightInto(ctx context.Context, height uint64, summary *a
 	// garbage seal — from a corrupt store, or a malicious one — would bury a
 	// broken preconfirmation unjudged before the watermark advances past it.
 	if verdict == auditUnknown {
-		if count, digest, ok, err := rawdb.ReadPreconfServed(a.db, height); err == nil && ok {
+		count, digest, ok, err := rawdb.ReadPreconfServed(a.db, height)
+		if err != nil {
+			log.Warn("Served preconf commitment unreadable", "number", height, "err", err)
+		}
+		if err == nil && ok {
 			a.judgeServed(height, count, digest, summary)
 
 			return nil
@@ -394,14 +399,7 @@ func (a *auditor) judgeServed(height, count uint64, digest common.Hash, summary 
 	case servedDiverged:
 		summary.mismatch++
 		auditServedMismatch.Inc(1)
-
-		wrote, werr := rawdb.WriteInvalidPreconfIfAbsent(a.db, height, servedMismatchReason)
-		switch {
-		case werr != nil:
-			log.Warn("Failed to record served preconf mismatch", "number", height, "err", werr)
-		case !wrote:
-			summary.alreadyJudged++
-		}
+		a.recordMismatch(height, servedMismatchReason, "Failed to record served preconf mismatch", summary)
 		a.clearServed(height)
 	case servedUnjudgeable:
 		// The canonical block is not available locally — the header is
@@ -431,6 +429,12 @@ func (a *auditor) reconcileSkippedServed(from, to uint64, summary *auditSummary)
 // prefix (content was promised the chain did not keep). servedUnjudgeable: the
 // canonical block is not available locally, so nothing can be concluded — a
 // missing body must not read as a broken promise.
+//
+// Receipts are not compared: execution is deterministic given the parent state
+// (pinned by ParentHash), the ordered transaction prefix, and the header
+// context, so matching those already implies matching receipts. A receipts fold
+// here would be redundant and would need canonical receipts the audit, unlike
+// the live path, does not hold.
 func (a *auditor) judgeServedAgainstCanonical(height, count uint64, digest common.Hash) servedVerdict {
 	block := a.chain.GetBlockByNumber(height)
 	if block == nil {
@@ -459,7 +463,7 @@ func contextSeed(h *types.Header) common.Hash {
 		return common.Hash{}
 	}
 
-	buf := make([]byte, 0, common.HashLength+3*8+2*common.HashLength)
+	var buf []byte
 	buf = append(buf, h.ParentHash.Bytes()...)
 	buf = binary.BigEndian.AppendUint64(buf, h.Number.Uint64())
 	buf = binary.BigEndian.AppendUint64(buf, h.Time)
@@ -482,8 +486,27 @@ func bigTo32(v *big.Int) []byte {
 // clearServed drops the served commitment once the audit has judged the
 // height; it is only needed until then.
 func (a *auditor) clearServed(height uint64) {
-	if err := rawdb.DeletePreconfServed(a.db, height); err != nil {
+	clearServedPreconf(a.db, height)
+}
+
+// clearServedPreconf drops a served commitment once its height is judged —
+// on the audit walk, or on the live head path in markCanonicalHeadAudited.
+func clearServedPreconf(db ethdb.KeyValueWriter, height uint64) {
+	if err := rawdb.DeletePreconfServed(db, height); err != nil {
 		log.Warn("Failed to clear served preconf commitment", "number", height, "err", err)
+	}
+}
+
+// recordMismatch writes an invalidation for a height, unless the live path
+// already recorded a stronger one there — that record stands and the height
+// counts as alreadyJudged instead.
+func (a *auditor) recordMismatch(height uint64, reason, failLog string, summary *auditSummary) {
+	wrote, err := rawdb.WriteInvalidPreconfIfAbsent(a.db, height, reason)
+	switch {
+	case err != nil:
+		log.Warn(failLog, "number", height, "err", err)
+	case !wrote:
+		summary.alreadyJudged++
 	}
 }
 
@@ -514,13 +537,7 @@ func (a *auditor) recordVerdict(height uint64, verdict auditVerdict, summary *au
 		// A record already at this height came from the live path, which
 		// served a preconfirmation and then invalidated it. That is a
 		// stronger claim than this pass can make, so it stands.
-		wrote, err := rawdb.WriteInvalidPreconfIfAbsent(a.db, height, unobservedMismatchReason)
-		switch {
-		case err != nil:
-			log.Warn("Failed to record unobserved preconfirmation mismatch", "number", height, "err", err)
-		case !wrote:
-			summary.alreadyJudged++
-		}
+		a.recordMismatch(height, unobservedMismatchReason, "Failed to record unobserved preconfirmation mismatch", summary)
 	case auditUnknown:
 		// Held but undecidable — no canonical hash, or a seal that does not
 		// decode or sits at the wrong height. Counted and logged rather than
