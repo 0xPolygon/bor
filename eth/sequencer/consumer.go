@@ -410,9 +410,7 @@ func (c *Consumer) markCanonicalHeadAudited() {
 	// This height was watched and reconciled on the live path, so its served
 	// commitment is no longer needed. Dropping it here keeps the set bounded
 	// to heights still in flight; the audit clears the rest as it walks them.
-	if err := rawdb.DeletePreconfServed(c.chain.DB(), number); err != nil {
-		log.Warn("Failed to clear served preconf commitment", "number", number, "err", err)
-	}
+	clearServedPreconf(c.chain.DB(), number)
 }
 
 // persistServed records the commitment to the preconfirmations this node has
