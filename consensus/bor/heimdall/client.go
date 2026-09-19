@@ -57,6 +57,9 @@ const (
 	heimdallAPIBodyLimit = 128 * 1024 * 1024 // 128 MB
 	stateFetchLimit      = 50
 	retryCall            = 5 * time.Second
+	// defaultFetchTimeout bounds a single request when the client has no
+	// timeout configured.
+	defaultFetchTimeout = 30 * time.Second
 )
 
 type HeimdallClient struct {
@@ -490,11 +493,11 @@ func internalFetch(ctx context.Context, client http.Client, u *url.URL) ([]byte,
 }
 
 func internalFetchWithTimeout(ctx context.Context, client http.Client, url *url.URL) ([]byte, error) {
+	// Honor the configured timeout (--bor.heimdalltimeout); only fall back to
+	// the default when the caller left it unset.
 	if client.Timeout == 0 {
-		// If no timeout is set, use a default timeout
-		client.Timeout = 1 * time.Second
+		client.Timeout = defaultFetchTimeout
 	}
-	client.Timeout = 30 * time.Second
 	ctx, cancel := context.WithTimeout(ctx, client.Timeout)
 	defer cancel()
 
