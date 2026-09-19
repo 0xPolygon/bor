@@ -35,9 +35,21 @@ func servedTxs(n int) types.Transactions {
 
 // canonicalBlock is the block that became canonical at a height, carrying txs
 // in canonical order. Only its number and transactions matter to the audit.
+func canonicalBlockHeader(height uint64) *types.Header {
+	return testHeader(height, common.Hash{byte(height)})
+}
+
 func canonicalBlock(height uint64, txs types.Transactions) *types.Block {
-	return types.NewBlock(testHeader(height, common.Hash{byte(height)}),
+	return types.NewBlock(canonicalBlockHeader(height),
 		&types.Body{Transactions: txs}, nil, trie.NewStackTrie(nil))
+}
+
+// servedDigest is the commitment a node persists for txs served at a height,
+// seeded with that height's canonical execution context — the same way the
+// serve path builds it and the audit folds canonical, so a match turns on the
+// transactions and their context, not on a seed mismatch.
+func servedDigest(height uint64, txs types.Transactions) common.Hash {
+	return foldServed(contextSeed(canonicalBlockHeader(height)), txs)
 }
 
 // The open-block loss window: the producer served preconfirmations at a height,
@@ -58,7 +70,7 @@ func TestAuditReconcilesServedMismatchAtAnUnheldHeight(t *testing.T) {
 	reordered := types.Transactions{served[1], served[0], served[2]}
 	chain.blocks[7] = canonicalBlock(7, reordered)
 
-	if err := rawdb.WritePreconfServed(db, 7, uint64(len(served)), foldServed(common.Hash{}, served)); err != nil {
+	if err := rawdb.WritePreconfServed(db, 7, uint64(len(served)), servedDigest(7, served)); err != nil {
 		t.Fatalf("seed served commitment: %v", err)
 	}
 	if err := rawdb.WritePreconfAuditedThrough(db, 4); err != nil {
@@ -111,7 +123,7 @@ func TestAuditReconcilesServedMatchAtAnUnheldHeight(t *testing.T) {
 	// was kept.
 	chain.blocks[7] = canonicalBlock(7, servedTxs(5))
 
-	if err := rawdb.WritePreconfServed(db, 7, uint64(len(served)), foldServed(common.Hash{}, served)); err != nil {
+	if err := rawdb.WritePreconfServed(db, 7, uint64(len(served)), servedDigest(7, served)); err != nil {
 		t.Fatalf("seed served commitment: %v", err)
 	}
 	if err := rawdb.WritePreconfAuditedThrough(db, 4); err != nil {
@@ -141,6 +153,77 @@ func TestAuditReconcilesServedMatchAtAnUnheldHeight(t *testing.T) {
 	}
 }
 
+// Same transactions, different execution context. A producer handover rebuilds
+// the height with a different context (succession-based difficulty, and often
+// time or parent), so a preconfirmation served against the old context is a
+// broken promise even though its transactions are unchanged. Folding the
+// context into the commitment is what catches it.
+func TestAuditReconcilesServedMismatchOnDifferentContext(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	chain, sealed := auditFixture(t, 12)
+
+	delete(sealed, 7)
+
+	served := servedTxs(3)
+	// The node served these transactions against a context with a different
+	// difficulty than the one that became canonical at 7.
+	servedHeader := canonicalBlockHeader(7)
+	servedHeader.Difficulty = big.NewInt(2)
+	chain.blocks[7] = canonicalBlock(7, served) // canonical difficulty stays 1
+
+	if err := rawdb.WritePreconfServed(db, 7, uint64(len(served)), foldServed(contextSeed(servedHeader), served)); err != nil {
+		t.Fatalf("seed served commitment: %v", err)
+	}
+	if err := rawdb.WritePreconfAuditedThrough(db, 4); err != nil {
+		t.Fatalf("seed watermark: %v", err)
+	}
+
+	audit := &auditor{db: db, chain: chain, fetch: fetchFrom(t, sealed)}
+	summary, err := audit.run(context.Background())
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if summary.mismatch != 1 {
+		t.Fatalf("mismatch = %d, want 1: same txs but a different context is a broken promise", summary.mismatch)
+	}
+	records := rawdb.ReadInvalidPreconfsInRange(db, 5, 12)
+	if len(records) != 1 || records[0].Number != 7 || records[0].Reason != servedMismatchReason {
+		t.Fatalf("records = %+v, want one %s at 7", records, servedMismatchReason)
+	}
+}
+
+// A canonical block whose body is not available locally (pruned, or a snap-sync
+// gap) cannot be judged. The audit must count it uncomparable and leave the
+// commitment in place — never record a spurious served_mismatch, which would be
+// a false entry in the ledger.
+func TestReconcileServedLeavesUnjudgeableCommitment(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	chain := &stubAuditChain{blocks: map[uint64]*types.Block{}} // no block at 7
+
+	served := servedTxs(3)
+	if err := rawdb.WritePreconfServed(db, 7, uint64(len(served)), servedDigest(7, served)); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	audit := &auditor{db: db, chain: chain}
+	summary := auditSummary{}
+	audit.reconcileServed(7, &summary)
+
+	if summary.mismatch != 0 {
+		t.Fatalf("mismatch = %d, want 0: a missing body must not read as a broken promise", summary.mismatch)
+	}
+	if summary.unknown != 1 {
+		t.Fatalf("unknown = %d, want 1: an unjudgeable height is uncomparable", summary.unknown)
+	}
+	if records := rawdb.ReadInvalidPreconfsInRange(db, 7, 7); len(records) != 0 {
+		t.Fatalf("records = %+v, want none", records)
+	}
+	if _, _, ok, _ := rawdb.ReadPreconfServed(db, 7); !ok {
+		t.Fatal("commitment was cleared; it should be left for a later pass")
+	}
+}
+
 // reconcileServed judges an unheld height against the node's own commitment.
 // The verdict turns on what the commitment says and how it compares to the
 // canonical block; the surrounding walk is not needed to exercise it.
@@ -148,7 +231,7 @@ func TestReconcileServed(t *testing.T) {
 	const height = 7
 
 	served := servedTxs(3)
-	digest := foldServed(common.Hash{}, served)
+	digest := servedDigest(height, served)
 
 	cases := []struct {
 		name    string
@@ -245,7 +328,7 @@ func TestAuditReconcilesServedMismatchAtAnUnsealedHeight(t *testing.T) {
 	reordered := types.Transactions{served[1], served[0], served[2]}
 	chain.blocks[7] = canonicalBlock(7, reordered)
 
-	if err := rawdb.WritePreconfServed(db, 7, uint64(len(served)), foldServed(common.Hash{}, served)); err != nil {
+	if err := rawdb.WritePreconfServed(db, 7, uint64(len(served)), servedDigest(7, served)); err != nil {
 		t.Fatalf("seed served commitment: %v", err)
 	}
 	if err := rawdb.WritePreconfAuditedThrough(db, 4); err != nil {
@@ -289,7 +372,7 @@ func TestAuditReconcilesServedMismatchDespiteUnusableSeal(t *testing.T) {
 	reordered := types.Transactions{served[1], served[0], served[2]}
 	chain.blocks[7] = canonicalBlock(7, reordered)
 
-	if err := rawdb.WritePreconfServed(db, 7, uint64(len(served)), foldServed(common.Hash{}, served)); err != nil {
+	if err := rawdb.WritePreconfServed(db, 7, uint64(len(served)), servedDigest(7, served)); err != nil {
 		t.Fatalf("seed served commitment: %v", err)
 	}
 	if err := rawdb.WritePreconfAuditedThrough(db, 4); err != nil {
@@ -343,7 +426,7 @@ func TestAuditReconcilesServedMismatchInTheSkippedRange(t *testing.T) {
 	reordered := types.Transactions{served[1], served[0], served[2]}
 	chain.blocks[8] = canonicalBlock(8, reordered) // 8 sits inside the skipped range
 
-	if err := rawdb.WritePreconfServed(db, 8, uint64(len(served)), foldServed(common.Hash{}, served)); err != nil {
+	if err := rawdb.WritePreconfServed(db, 8, uint64(len(served)), servedDigest(8, served)); err != nil {
 		t.Fatalf("seed served commitment: %v", err)
 	}
 	if err := rawdb.WritePreconfAuditedThrough(db, 4); err != nil {
@@ -389,22 +472,31 @@ func TestReconcileServedCountsUnheldWhenTheCommitmentIsUnreadable(t *testing.T) 
 	}
 }
 
-// servedMatchesCanonical holds only when the served transactions are the
-// canonical block's leading transactions, in the same order.
-func TestServedMatchesCanonical(t *testing.T) {
+// judgeServedAgainstCanonical is verified only when the served transactions are
+// the canonical block's leading prefix, in order and against the same execution
+// context; diverged when they are not (or the block is shorter); unjudgeable
+// when the canonical block is not available locally.
+func TestJudgeServedAgainstCanonical(t *testing.T) {
 	served := servedTxs(3)
-	digest := foldServed(common.Hash{}, served)
+	digest := servedDigest(7, served)
+
+	// A block at height 7 whose leading transactions match but whose execution
+	// context differs (succession-based difficulty after a producer handover).
+	diffContext := canonicalBlockHeader(7)
+	diffContext.Difficulty = big.NewInt(2)
+	diffContextBlock := types.NewBlock(diffContext, &types.Body{Transactions: served}, nil, trie.NewStackTrie(nil))
 
 	cases := []struct {
 		name  string
 		block *types.Block
-		want  bool
+		want  servedVerdict
 	}{
-		{name: "leading txs match", block: canonicalBlock(7, servedTxs(5)), want: true},
-		{name: "exact txs match", block: canonicalBlock(7, servedTxs(3)), want: true},
-		{name: "reordered leading txs", block: canonicalBlock(7, types.Transactions{served[1], served[0], served[2]})},
-		{name: "fewer txs than served", block: canonicalBlock(7, servedTxs(2))},
-		{name: "no canonical block"},
+		{name: "leading txs match", block: canonicalBlock(7, servedTxs(5)), want: servedVerified},
+		{name: "exact txs match", block: canonicalBlock(7, servedTxs(3)), want: servedVerified},
+		{name: "reordered leading txs", block: canonicalBlock(7, types.Transactions{served[1], served[0], served[2]}), want: servedDiverged},
+		{name: "fewer txs than served", block: canonicalBlock(7, servedTxs(2)), want: servedDiverged},
+		{name: "same txs, different context", block: diffContextBlock, want: servedDiverged},
+		{name: "no canonical block available", want: servedUnjudgeable},
 	}
 
 	for _, tc := range cases {
@@ -415,8 +507,8 @@ func TestServedMatchesCanonical(t *testing.T) {
 			}
 
 			audit := &auditor{chain: chain}
-			if got := audit.servedMatchesCanonical(7, uint64(len(served)), digest); got != tc.want {
-				t.Fatalf("servedMatchesCanonical = %v, want %v", got, tc.want)
+			if got := audit.judgeServedAgainstCanonical(7, uint64(len(served)), digest); got != tc.want {
+				t.Fatalf("judgeServedAgainstCanonical = %v, want %v", got, tc.want)
 			}
 		})
 	}

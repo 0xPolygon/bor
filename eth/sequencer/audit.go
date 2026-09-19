@@ -2,7 +2,9 @@ package sequencer
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
+	"math/big"
 	"time"
 
 	"google.golang.org/grpc"
@@ -372,14 +374,24 @@ func (a *auditor) reconcileServed(height uint64, summary *auditSummary) {
 	a.judgeServed(height, count, digest, summary)
 }
 
+type servedVerdict int
+
+const (
+	servedVerified    servedVerdict = iota // canonical carries the served prefix, same context
+	servedDiverged                         // canonical differs, or is shorter than the served prefix
+	servedUnjudgeable                      // the canonical block is not available locally
+)
+
 // judgeServed compares an already-read served commitment against the canonical
 // block and records served_mismatch if they diverge, then clears the
 // commitment. The caller owns the walked/compared/unheld bookkeeping; this only
 // folds in the mismatch verdict and drops the now-judged commitment.
 func (a *auditor) judgeServed(height, count uint64, digest common.Hash, summary *auditSummary) {
-	if a.servedMatchesCanonical(height, count, digest) {
+	switch a.judgeServedAgainstCanonical(height, count, digest) {
+	case servedVerified:
 		auditServedVerified.Inc(1)
-	} else {
+		a.clearServed(height)
+	case servedDiverged:
 		summary.mismatch++
 		auditServedMismatch.Inc(1)
 
@@ -390,8 +402,16 @@ func (a *auditor) judgeServed(height, count uint64, digest common.Hash, summary 
 		case !wrote:
 			summary.alreadyJudged++
 		}
+		a.clearServed(height)
+	case servedUnjudgeable:
+		// The canonical block is not available locally — the header is
+		// canonical but its body is pruned, or a snap-sync gap. The commitment
+		// cannot be compared, so count it uncomparable rather than recording a
+		// spurious mismatch (which would be a false entry in the ledger), and
+		// leave it in place so a later pass can judge it if the body arrives.
+		summary.unknown++
+		auditUnknownCount.Inc(1)
 	}
-	a.clearServed(height)
 }
 
 // reconcileSkippedServed judges the served commitments in a range the walk
@@ -404,21 +424,59 @@ func (a *auditor) reconcileSkippedServed(from, to uint64, summary *auditSummary)
 	}
 }
 
-// servedMatchesCanonical reports whether the count transactions this node
-// preconfirmed at a height are the canonical block's leading transactions, in
-// the same order. A missing block or one with fewer transactions than were
-// served is a mismatch: content was promised the chain did not keep.
-func (a *auditor) servedMatchesCanonical(height, count uint64, digest common.Hash) bool {
+// judgeServedAgainstCanonical compares the served commitment at a height with
+// the canonical block. servedVerified: the block carries the count served
+// transactions as its leading prefix, in the same order and against the same
+// execution context. servedDiverged: it does not, or it is shorter than the
+// prefix (content was promised the chain did not keep). servedUnjudgeable: the
+// canonical block is not available locally, so nothing can be concluded — a
+// missing body must not read as a broken promise.
+func (a *auditor) judgeServedAgainstCanonical(height, count uint64, digest common.Hash) servedVerdict {
 	block := a.chain.GetBlockByNumber(height)
 	if block == nil {
-		return false
+		return servedUnjudgeable
 	}
 	txs := block.Transactions()
 	if uint64(len(txs)) < count {
-		return false
+		return servedDiverged
+	}
+	if foldServed(contextSeed(block.Header()), txs[:count]) == digest {
+		return servedVerified
 	}
 
-	return foldServed(common.Hash{}, txs[:count]) == digest
+	return servedDiverged
+}
+
+// contextSeed is the value the served fold starts from: a keccak over the
+// block's execution context — the same fields the live path's
+// sameExecutionContext checks (ParentHash, Number, Time, GasLimit, BaseFee,
+// Difficulty). Seeding the fold with it makes the served commitment match
+// canonical only when the context matches too, so a producer handover that
+// rebuilds the height with a different context (succession-based Difficulty, and
+// often Time or parent) is caught even when the transactions are unchanged.
+func contextSeed(h *types.Header) common.Hash {
+	if h == nil || h.Number == nil {
+		return common.Hash{}
+	}
+
+	buf := make([]byte, 0, common.HashLength+3*8+2*common.HashLength)
+	buf = append(buf, h.ParentHash.Bytes()...)
+	buf = binary.BigEndian.AppendUint64(buf, h.Number.Uint64())
+	buf = binary.BigEndian.AppendUint64(buf, h.Time)
+	buf = binary.BigEndian.AppendUint64(buf, h.GasLimit)
+	buf = append(buf, bigTo32(h.BaseFee)...)
+	buf = append(buf, bigTo32(h.Difficulty)...)
+
+	return crypto.Keccak256Hash(buf)
+}
+
+// bigTo32 left-pads a big.Int to 32 bytes; a nil value folds as zero.
+func bigTo32(v *big.Int) []byte {
+	if v == nil {
+		return make([]byte, common.HashLength)
+	}
+
+	return common.BigToHash(v).Bytes()
 }
 
 // clearServed drops the served commitment once the audit has judged the

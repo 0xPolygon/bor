@@ -108,6 +108,50 @@ func newAuditTestConsumer(h *execHarness) *Consumer {
 	}
 }
 
+// The live path clears the served commitment for a height once it reconciles
+// and audits that height at the tip; the durable copy is only needed until then.
+func TestMarkCanonicalHeadClearsServedCommitment(t *testing.T) {
+	h := startExecHarness(t)
+	consumer := newAuditTestConsumer(h)
+	consumer.watching.Store(true)
+
+	head := h.chain.CurrentBlock().Number.Uint64()
+	if err := rawdb.WritePreconfAuditedThrough(h.chain.DB(), head-1); err != nil {
+		t.Fatalf("seed watermark: %v", err)
+	}
+	if err := rawdb.WritePreconfServed(h.chain.DB(), head, 2, common.Hash{0x01}); err != nil {
+		t.Fatalf("seed served: %v", err)
+	}
+
+	consumer.markCanonicalHeadAudited()
+
+	if got, _, _ := rawdb.ReadPreconfAuditedThrough(h.chain.DB()); got != head {
+		t.Fatalf("watermark = %d, want %d", got, head)
+	}
+	if _, _, ok, _ := rawdb.ReadPreconfServed(h.chain.DB(), head); ok {
+		t.Fatal("served commitment was not cleared on the live head path")
+	}
+}
+
+// persistServed writes the commitment the audit later reads back, and is a
+// no-op (not a panic) on a consumer with no chain.
+func TestPersistServedWritesCommitment(t *testing.T) {
+	h := startExecHarness(t)
+	consumer := newAuditTestConsumer(h)
+
+	consumer.persistServed(7, 3, common.Hash{0xab})
+
+	count, digest, ok, err := rawdb.ReadPreconfServed(h.chain.DB(), 7)
+	if err != nil || !ok {
+		t.Fatalf("read = (ok %v, err %v), want a stored commitment", ok, err)
+	}
+	if count != 3 || digest != (common.Hash{0xab}) {
+		t.Fatalf("read = (%d, %s), want (3, 0xab..)", count, digest)
+	}
+
+	(&Consumer{}).persistServed(7, 3, common.Hash{0xab}) // no chain: no-op
+}
+
 func TestAdvanceAuditedNeverRewinds(t *testing.T) {
 	h := startExecHarness(t)
 	consumer := newAuditTestConsumer(h)
