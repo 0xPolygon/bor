@@ -204,19 +204,20 @@ func TestServiceAcceptsCanonicalReimportWhileLocked(t *testing.T) {
 	lockedBefore := MilestoneLockedCanonicalMeter.Snapshot().Count()
 	staleBefore := MilestoneStaleCanonicalMeter.Snapshot().Count()
 
-	// Canonical re-import below the whitelisted milestone: both gates exempt it.
+	// Canonical re-import below the whitelisted milestone: both gates exempt it,
+	// and only the below-whitelist meter counts it.
 	valid, err := s.IsValidChain(byNum(363), []*types.Header{byNum(330), byNum(331)})
 	require.NoError(t, err)
 	require.True(t, valid, "canonical re-import below the whitelisted milestone rejected while locked")
 	require.Equal(t, int64(1), MilestoneStaleCanonicalMeter.Snapshot().Count()-staleBefore, "stale-canonical meter")
-	require.Equal(t, int64(1), MilestoneLockedCanonicalMeter.Snapshot().Count()-lockedBefore, "locked-canonical meter")
+	require.Equal(t, int64(0), MilestoneLockedCanonicalMeter.Snapshot().Count()-lockedBefore, "locked-canonical meter must not double count a below-whitelist segment")
 
 	// Canonical re-import between the whitelisted milestone and the locked
 	// candidate: only the lock gate is in play, and it must let it through.
 	valid, err = s.IsValidChain(byNum(363), []*types.Header{byNum(350), byNum(351)})
 	require.NoError(t, err)
 	require.True(t, valid, "canonical re-import below the locked candidate rejected")
-	require.Equal(t, int64(2), MilestoneLockedCanonicalMeter.Snapshot().Count()-lockedBefore, "locked-canonical meter")
+	require.Equal(t, int64(1), MilestoneLockedCanonicalMeter.Snapshot().Count()-lockedBefore, "locked-canonical meter")
 	require.Equal(t, int64(1), MilestoneStaleCanonicalMeter.Snapshot().Count()-staleBefore, "stale-canonical meter must not double count")
 
 	// A fork below the locked candidate is still a contradiction of the vote.

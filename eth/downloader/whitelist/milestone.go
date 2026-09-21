@@ -65,9 +65,11 @@ var (
 	// re-import, not a reorg attempt). Such segments used to be reported as a mismatch.
 	MilestoneStaleCanonicalMeter = metrics.NewRegisteredMeter("chain/milestone/stalecanonical", nil)
 
-	// MilestoneLockedCanonicalMeter counts segments ending at or below the locked milestone candidate
-	// that were accepted because every block in them is already canonical locally. While a vote is
-	// in flight such segments used to be rejected as a mismatch even though they change nothing.
+	// MilestoneLockedCanonicalMeter counts segments ending between the whitelisted milestone and the
+	// locked milestone candidate that were accepted because every block in them is already canonical
+	// locally. While a vote is in flight such segments used to be rejected as a mismatch even though
+	// they change nothing. Segments below the whitelisted milestone are counted by
+	// MilestoneStaleCanonicalMeter instead.
 	MilestoneLockedCanonicalMeter = metrics.NewRegisteredMeter("chain/milestone/lockedcanonical", nil)
 
 	// PurgeAfterDBErrorMeter is a metric for tracking the purge after database errors when deleting stale milestones after a mismatch rewind
@@ -258,9 +260,14 @@ func (m *milestone) contradictsLockedMilestone(chain []*types.Header) bool {
 	if !isCanonicalSegment(chain, m.finality.canonical) {
 		return true
 	}
-	MilestoneLockedCanonicalMeter.Mark(1)
-	log.Info("Whitelist: accepted re-import of canonical blocks at or below the locked milestone candidate",
-		"from", chain[0].Number, "to", chain[len(chain)-1].Number, "locked", m.LockedMilestoneNumber)
+	// A segment lying entirely below the whitelisted entry was already reported
+	// by isValidChain; only the window between the whitelisted entry and the
+	// locked candidate is counted here, so the two meters stay distinct.
+	if tip := chain[len(chain)-1].Number.Uint64(); tip >= m.Number {
+		MilestoneLockedCanonicalMeter.Mark(1)
+		log.Info("Whitelist: accepted re-import of canonical blocks at or below the locked milestone candidate",
+			"from", chain[0].Number, "to", tip, "locked", m.LockedMilestoneNumber)
+	}
 	return false
 }
 
