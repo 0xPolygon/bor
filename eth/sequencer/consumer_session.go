@@ -2,7 +2,6 @@ package sequencer
 
 import (
 	"context"
-	"errors"
 	"math/big"
 	"sync"
 	"time"
@@ -34,10 +33,11 @@ type session struct {
 	sealed    map[uint64]common.Hash
 	verified  map[uint64]*types.Header
 	tipHeader *types.Header
-	reanchor  bool
+	// deferToCanonical is set by sealResult for a sprint-start block whose
+	// state-sync tx (absent from the stream) makes the seal irreproducible.
+	// applySeal parks it and leaves the judgement to canonical import.
+	deferToCanonical bool
 }
-
-var errPreconfReanchor = errors.New("preconf application requires canonical re-anchor")
 
 type preconfWorker struct {
 	session    *session
@@ -131,9 +131,6 @@ func (s *session) handlePrepared(prepared preparedStreamFrame) error {
 	s.applyMu.Lock()
 	s.applyPrepared(prepared.entry, prepared.transactions)
 	s.applyMu.Unlock()
-	if s.reanchor {
-		return errPreconfReanchor
-	}
 	s.head = prepared.fold.next
 
 	return nil
@@ -174,11 +171,6 @@ func (s *session) skip(from uint64, reason string, args ...any) {
 	s.tipHeader = nil
 	s.sealed = nil
 	s.verified = nil
-}
-
-func (s *session) reanchorFromCanonical(from uint64, reason string, args ...any) {
-	s.skip(from, reason, args...)
-	s.reanchor = true
 }
 
 // applyOpen starts a speculative block. A canonical parent is preferred as
@@ -477,6 +469,11 @@ func (s *session) applySeal(seal *pb.BlockSeal) {
 	}
 
 	assembled, reusable, verified, ok := s.sealResult(sealed)
+	if s.deferToCanonical {
+		s.deferToCanonical = false
+		s.parkSealPendingCanonical(sealed, common.Hash(commitment.SealedHash(seal.GetHeader())))
+		return
+	}
 	if !ok {
 		return
 	}
@@ -637,4 +634,14 @@ func (s *session) parkSeal(sealed *types.Header, sealedHash common.Hash, verifie
 	s.tipHeader = types.CopyHeader(sealed)
 	s.parked = s.env.statedb
 	s.clearEnv()
+}
+
+// parkSealPendingCanonical parks a sprint-start seal the consumer can't verify
+// speculatively (its state-sync tx is not in the stream). Like parkSeal but
+// unverified and without retaining the speculative post-state, which lacks the
+// state-sync effects — so the next block anchors on the canonical parent. The
+// block is not invalidated: canonical import reconciles its pending entry.
+func (s *session) parkSealPendingCanonical(sealed *types.Header, sealedHash common.Hash) {
+	s.parkSeal(sealed, sealedHash, false)
+	s.parked = nil
 }

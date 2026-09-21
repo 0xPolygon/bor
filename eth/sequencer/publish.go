@@ -244,7 +244,7 @@ func (p *Publisher) windowMirrorsLocked(block *types.Block) bool {
 		return false
 	}
 
-	return recordsMirrorTxs(p.journal.items[start+1:], block.Transactions())
+	return recordsMirrorTxs(p.journal.items[start+1:], streamTxs(block.Transactions()))
 }
 
 // rebuildWindowLocked replaces the lineage's trailing window with one built
@@ -274,7 +274,7 @@ func (p *Publisher) rebuildWindowLocked(block *types.Block) bool {
 
 	p.appendLocked(open, next, entryOpen, header.Number.Uint64(), nil)
 
-	for _, tx := range block.Transactions() {
+	for _, tx := range streamTxs(block.Transactions()) {
 		rawTx, err := tx.MarshalBinary()
 		if err != nil {
 			p.fail("encode flush transaction", "hash", tx.Hash(), "err", err)

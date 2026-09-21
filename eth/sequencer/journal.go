@@ -426,6 +426,16 @@ func windowLeadsHashes(window, txs []common.Hash) bool {
 	return true
 }
 
+// streamTxs drops the trailing state-sync tx. It never enters the journal via
+// PublishTx, and the consumer can't re-execute it (maxFeePerGas 0 < baseFee),
+// so streaming it voids the block.
+func streamTxs(txs types.Transactions) types.Transactions {
+	if n := len(txs); n > 0 && txs[n-1].Type() == types.StateSyncTxType {
+		return txs[:n-1]
+	}
+	return txs
+}
+
 // txHashes projects transactions onto their hashes.
 func txHashes(txs types.Transactions) []common.Hash {
 	out := make([]common.Hash, len(txs))
