@@ -57,7 +57,7 @@ func (f *finality[T]) IsValidChain(currentHeader *types.Header, chain []*types.H
 		return false, nil
 	}
 
-	return isValidChain(currentHeader, chain, f.doExist, f.Number, f.Hash, f.canonical)
+	return isValidChain(currentHeader, chain, f.doExist, f.Number, f.Hash, f.canonical, f.name)
 }
 
 // reportWhitelist logs the block number and hash if a new and unique entry is being inserted

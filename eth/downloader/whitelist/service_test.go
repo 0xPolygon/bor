@@ -42,6 +42,13 @@ func (m *MockChainReader) GetBlockByNumber(number uint64) *types.Block {
 	return m.blocks[number]
 }
 
+func (m *MockChainReader) GetHeaderByNumber(number uint64) *types.Header {
+	if b := m.blocks[number]; b != nil {
+		return b.Header()
+	}
+	return nil
+}
+
 func (m *MockChainReader) SetCurrentBlock(header *types.Header) {
 	m.currentBlock = header
 }

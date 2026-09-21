@@ -13,6 +13,7 @@ import (
 type ChainReader interface {
 	CurrentBlock() *types.Header
 	GetBlockByNumber(number uint64) *types.Block
+	GetHeaderByNumber(number uint64) *types.Header
 }
 
 type milestone struct {
@@ -58,6 +59,11 @@ var (
 
 	// MilestonePeerMeter is a metric for collecting the number of valid peers received
 	MilestonePeerMeter = metrics.NewRegisteredMeter("chain/milestone/isvalidpeer", nil)
+
+	// MilestoneStaleCanonicalMeter counts segments lying entirely below the whitelisted milestone
+	// that were accepted because every block in them is already canonical locally (a late
+	// re-import, not a reorg attempt). Such segments used to be reported as a mismatch.
+	MilestoneStaleCanonicalMeter = metrics.NewRegisteredMeter("chain/milestone/stalecanonical", nil)
 
 	// PurgeAfterDBErrorMeter is a metric for tracking the purge after database errors when deleting stale milestones after a mismatch rewind
 	PurgeAfterDBErrorMeter = metrics.NewRegisteredMeter("chain/milestone/purgeafter/dberror", nil)

@@ -147,8 +147,8 @@ func (s *Service) SetBlockchain(blockchain ChainReader) {
 		if blockchain == nil {
 			return common.Hash{}
 		}
-		if b := blockchain.GetBlockByNumber(number); b != nil {
-			return b.Hash()
+		if h := blockchain.GetHeaderByNumber(number); h != nil {
+			return h.Hash()
 		}
 		return common.Hash{}
 	}
@@ -396,8 +396,25 @@ func splitChain(current uint64, chain []*types.Header) ([]*types.Header, []*type
 	return pastChain, futureChain
 }
 
+// reportStaleCanonicalReimport records that a segment lying entirely below the
+// whitelisted entry was accepted because every block in it is already canonical
+// locally. It replaces the whitelist mismatch, and the downloader peer strike
+// that followed, which this situation used to produce; it is rare (a handful of
+// times a day on a busy node), so it is logged at Info to make the new path
+// observable after rollout.
+func reportStaleCanonicalReimport(name string, chain []*types.Header, number, current uint64) {
+	switch name {
+	case "checkpoint":
+		CheckpointStaleCanonicalMeter.Mark(1)
+	case "milestone":
+		MilestoneStaleCanonicalMeter.Mark(1)
+	}
+	log.Info("Whitelist: accepted re-import of canonical blocks below the whitelisted entry",
+		"service", name, "from", chain[0].Number, "to", chain[len(chain)-1].Number, "whitelisted", number, "head", current)
+}
+
 //nolint:unparam
-func isValidChain(currentHeader *types.Header, chain []*types.Header, doExist bool, number uint64, hash common.Hash, canonical func(number uint64) common.Hash) (bool, error) {
+func isValidChain(currentHeader *types.Header, chain []*types.Header, doExist bool, number uint64, hash common.Hash, canonical func(number uint64) common.Hash, name string) (bool, error) {
 	// Check if we have milestone to validate incoming chain in memory
 	if !doExist {
 		// We don't have any entry, no additional validation will be possible
@@ -428,6 +445,7 @@ func isValidChain(currentHeader *types.Header, chain []*types.Header, doExist bo
 				}
 			}
 			if allCanonical {
+				reportStaleCanonicalReimport(name, chain, number, current)
 				return true, nil
 			}
 		}

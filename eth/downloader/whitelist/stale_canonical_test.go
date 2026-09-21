@@ -52,7 +52,7 @@ func TestIsValidChainAcceptsStaleCanonicalSegment(t *testing.T) {
 	// The downloader's late segment: blocks 330 and 331, both canonical.
 	stale := []*types.Header{byNum(330), byNum(331)}
 
-	valid, err := isValidChain(current, stale, true, milestone.Number.Uint64(), milestone.Hash(), canonical)
+	valid, err := isValidChain(current, stale, true, milestone.Number.Uint64(), milestone.Hash(), canonical, "milestone")
 	require.NoError(t, err)
 	require.True(t, valid, "canonical segment [330,331] rejected as whitelist mismatch (milestone=360 head=363): this is the INC-192 false positive")
 }
@@ -72,7 +72,7 @@ func TestIsValidChainStillRejectsForkBelowMilestone(t *testing.T) {
 	}
 
 	// Without a canonical oracle the strict behaviour must be kept.
-	valid, err := isValidChain(current, fork, true, 360, canon.Hash(), nil)
+	valid, err := isValidChain(current, fork, true, 360, canon.Hash(), nil, "milestone")
 	require.NoError(t, err)
 	require.False(t, valid, "fork segment below milestone accepted without canonical oracle")
 
@@ -81,7 +81,7 @@ func TestIsValidChainStillRejectsForkBelowMilestone(t *testing.T) {
 	other := func(n uint64) common.Hash {
 		return (&types.Header{Number: new(big.Int).SetUint64(n), Extra: []byte("canon")}).Hash()
 	}
-	valid, err = isValidChain(current, fork, true, 360, canon.Hash(), other)
+	valid, err = isValidChain(current, fork, true, 360, canon.Hash(), other, "milestone")
 	require.NoError(t, err)
 	require.False(t, valid, "fork segment below milestone accepted with canonical oracle")
 }
@@ -100,7 +100,7 @@ func TestIsValidChainRejectsPartiallyCanonicalSegment(t *testing.T) {
 	require.NotEqual(t, byNum(331).Hash(), forked331.Hash())
 
 	segment := []*types.Header{byNum(330), forked331}
-	valid, err := isValidChain(current, segment, true, milestone.Number.Uint64(), milestone.Hash(), canonical)
+	valid, err := isValidChain(current, segment, true, milestone.Number.Uint64(), milestone.Hash(), canonical, "milestone")
 	require.NoError(t, err)
 	require.False(t, valid, "segment with a non-canonical header below the milestone was accepted")
 }
