@@ -45,6 +45,11 @@ type blockEnv struct {
 	lastPublishedAt       time.Time
 	postEagerPublications int
 	detachedCanonical     atomic.Pointer[types.Header]
+	// logCount numbers this block's logs. Index cannot be left to the
+	// StateDB: a speculative block opens on its predecessor's parked
+	// post-state, and the StateDB counter that stamps Index never resets, so
+	// served receipts carried the previous blocks' log counts.
+	logCount uint
 }
 
 // newBlockEnv builds the execution environment. speculative maps heights of
@@ -146,6 +151,10 @@ func (env *blockEnv) recordAppliedTransaction(tx *types.Transaction, receipt *ty
 	receipt.BlockHash = common.Hash{}
 	for _, l := range receipt.Logs {
 		l.BlockHash = common.Hash{}
+		// Per block, as canonical import numbers them; the StateDB counter
+		// behind Index continues across a reused parked state.
+		l.Index = env.logCount
+		env.logCount++
 	}
 
 	receipt.EffectiveGasPrice = effectiveGasPrice(tx, env.header.BaseFee)
@@ -179,9 +188,19 @@ func newBlockEnvFromPrefix(chain *core.BlockChain, block *types.Block, prefix *p
 		gasPool:   gasPool,
 		txs:       append(types.Transactions(nil), prefix.Transactions...),
 		receipts:  cloneReceipts(prefix.Result.Receipts),
+		logCount:  countLogs(prefix.Result.Receipts),
 	}
 	env.evm.SetInterrupt(&env.interrupt)
 	return env, nil
+}
+
+// countLogs is where a continuation of these receipts resumes numbering.
+func countLogs(receipts []*types.Receipt) uint {
+	var n uint
+	for _, receipt := range receipts {
+		n += uint(len(receipt.Logs))
+	}
+	return n
 }
 
 func (c *Consumer) completePreconfPrefix(block *types.Block, prefix *pendingPrefix) (*core.PreconfExecution, error) {
