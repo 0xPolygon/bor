@@ -96,3 +96,40 @@ func TestTrustedPeerExemptFromResponse(t *testing.T) {
 		t.Fatal("trusted peer benched after repeated whitelist mismatch")
 	}
 }
+
+func TestStaticPeerResponsePenalties(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		reason   peerFailureReason
+		err      error
+		attempts int
+		wantDrop bool
+	}{
+		{"invalid chain", peerFailureInvalidChain, errInvalidChain, 1, true},
+		{"timeout", peerFailureTimeout, errTimeout, 1, false},
+		{"whitelist mismatch", peerFailureWhitelistMismatch, errInvalidChain, whitelistMismatchDropThreshold, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			peer := newPeerConnection("static", eth.ETH69, staticOnlyFakePeer{}, log.New())
+			dropped := false
+			d := &Downloader{peers: newPeerSet(), dropPeer: func(id string) {
+				if id != peer.id {
+					t.Fatalf("dropped peer %q, want %q", id, peer.id)
+				}
+				dropped = true
+			}}
+			if err := d.peers.Register(peer); err != nil {
+				t.Fatalf("register static peer: %v", err)
+			}
+			for i := 0; i < tc.attempts; i++ {
+				d.respondToPeer(peer, tc.reason, tc.err)
+			}
+			if dropped != tc.wantDrop {
+				t.Fatalf("static peer dropped = %t, want %t", dropped, tc.wantDrop)
+			}
+			if peer.backoffRemaining() <= 0 {
+				t.Fatal("static peer was not benched")
+			}
+		})
+	}
+}

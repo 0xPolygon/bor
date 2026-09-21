@@ -1,13 +1,16 @@
 package server
 
 import (
+	"bytes"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -112,6 +115,43 @@ func TestDefaultDatatypeOverride(t *testing.T) {
 }
 
 var dummyEnodeAddr = "enode://0cb82b395094ee4a2915e9714894627de9ed8498fb881cec6db7c65e8b9a5bd7f2f25cc84e71e89d0947e51c76e85d0847de848c7782b13c0255247a6758178c@44.232.55.71:30303"
+
+func TestConfigStaticPeerWarning(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		static    []string
+		trusted   []string
+		developer bool
+		wantWarn  bool
+	}{
+		{name: "no peers"},
+		{name: "trusted only", trusted: []string{dummyEnodeAddr}},
+		{name: "static only", static: []string{dummyEnodeAddr}, wantWarn: true},
+		{name: "static and trusted", static: []string{dummyEnodeAddr}, trusted: []string{dummyEnodeAddr}},
+		{name: "developer mode", static: []string{dummyEnodeAddr}, developer: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var output bytes.Buffer
+			previous := log.Root()
+			t.Cleanup(func() { log.SetDefault(previous) })
+			log.SetDefault(log.NewLogger(log.LogfmtHandlerWithLevel(&output, log.LevelWarn)))
+
+			config := DefaultConfig()
+			config.DataDir = t.TempDir()
+			config.Developer.Enabled = tc.developer
+			config.P2P.Discovery.StaticNodes = tc.static
+			config.P2P.Discovery.TrustedNodes = tc.trusted
+			if _, err := config.buildNode(); err != nil {
+				t.Fatalf("build node: %v", err)
+			}
+
+			warned := strings.Contains(output.String(), "static-nodes set without trusted-nodes")
+			if warned != tc.wantWarn {
+				t.Fatalf("static peer warning = %t, want %t; logs: %s", warned, tc.wantWarn, output.String())
+			}
+		})
+	}
+}
 
 func TestConfigBootnodesDefault(t *testing.T) {
 	t.Run("EmptyBootnodes", func(t *testing.T) {

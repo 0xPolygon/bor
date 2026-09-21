@@ -160,7 +160,7 @@ func isTransientFailure(err error) bool {
 
 func (d *Downloader) respondToPeer(peer *peerConnection, reason peerFailureReason, err error) {
 	if peer.trusted {
-		peer.log.Warn("Downloader: trusted peer hit a sync failure, not penalizing", "reason", reason, "err", err)
+		peer.log.Debug("Downloader: trusted peer hit a sync failure, not penalizing", "reason", reason, "err", err)
 		return
 	}
 	decision := peer.responseDecision(reason)
