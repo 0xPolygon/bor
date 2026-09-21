@@ -3,6 +3,8 @@ package rawdb
 import (
 	"errors"
 	"testing"
+
+	"github.com/ethereum/go-ethereum/common"
 )
 
 // manyRecords is enough invalidations to tell a bounded read from an
@@ -232,5 +234,111 @@ func TestWriteInvalidPreconfIfAbsent(t *testing.T) {
 	records := ReadInvalidPreconfsInRange(db, 9, 9)
 	if len(records) != 1 || records[0].Reason != "unobserved_mismatch" {
 		t.Fatalf("records = %+v, want the first reason kept", records)
+	}
+}
+
+func TestPreconfServedRoundTrip(t *testing.T) {
+	db := NewMemoryDatabase()
+
+	// A height with no commitment is absent, which is not the same as one that
+	// served zero transactions.
+	if _, _, ok, err := ReadPreconfServed(db, 7); err != nil || ok {
+		t.Fatalf("fresh height = (ok %v, err %v), want (false, nil)", ok, err)
+	}
+
+	digest := common.HexToHash("0xdeadbeef")
+	if err := WritePreconfServed(db, 7, 4, digest); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	count, got, ok, err := ReadPreconfServed(db, 7)
+	if err != nil || !ok {
+		t.Fatalf("read = (ok %v, err %v), want a stored commitment", ok, err)
+	}
+	if count != 4 || got != digest {
+		t.Fatalf("read = (%d, %s), want (4, %s)", count, got, digest)
+	}
+
+	// The commitment is keyed by height; a neighbour is untouched.
+	if _, _, ok, _ := ReadPreconfServed(db, 8); ok {
+		t.Fatal("the commitment at 7 answered for 8")
+	}
+
+	// A later generation at the same height overwrites the earlier promise.
+	if err := WritePreconfServed(db, 7, 1, common.Hash{0x02}); err != nil {
+		t.Fatalf("overwrite: %v", err)
+	}
+	if count, got, _, _ := ReadPreconfServed(db, 7); count != 1 || got != (common.Hash{0x02}) {
+		t.Fatalf("read after overwrite = (%d, %s), want (1, 0x02..)", count, got)
+	}
+
+	if err := DeletePreconfServed(db, 7); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, _, ok, _ := ReadPreconfServed(db, 7); ok {
+		t.Fatal("the commitment survived a delete")
+	}
+	// Deleting an absent commitment is not an error; the audit clears heights
+	// unconditionally after judging them.
+	if err := DeletePreconfServed(db, 7); err != nil {
+		t.Fatalf("delete absent: %v", err)
+	}
+}
+
+func TestServedPreconfHeightsInRange(t *testing.T) {
+	db := NewMemoryDatabase()
+	for _, height := range []uint64{3, 7, 8, 12, 40} {
+		if err := WritePreconfServed(db, height, 1, common.Hash{byte(height)}); err != nil {
+			t.Fatalf("write %d: %v", height, err)
+		}
+	}
+
+	// Ascending, inclusive of both bounds.
+	if got := ReadServedPreconfHeightsInRange(db, 7, 12); len(got) != 3 || got[0] != 7 || got[1] != 8 || got[2] != 12 {
+		t.Fatalf("range [7,12] = %v, want [7 8 12]", got)
+	}
+
+	// Bounds that fall between stored heights include neither neighbour.
+	if got := ReadServedPreconfHeightsInRange(db, 9, 11); len(got) != 0 {
+		t.Fatalf("range [9,11] = %v, want none", got)
+	}
+
+	// A single-height range hits exactly one.
+	if got := ReadServedPreconfHeightsInRange(db, 40, 40); len(got) != 1 || got[0] != 40 {
+		t.Fatalf("range [40,40] = %v, want [40]", got)
+	}
+
+	// from > to is an empty range.
+	if got := ReadServedPreconfHeightsInRange(db, 12, 7); got != nil {
+		t.Fatalf("inverted range = %v, want nil", got)
+	}
+}
+
+// A failing read must surface as an error, never as absence — absence would
+// tell the audit the height was never served.
+func TestPreconfServedReadFailuresAreErrors(t *testing.T) {
+	if _, _, ok, err := ReadPreconfServed(failingReader{}, 7); err == nil || ok {
+		t.Fatalf("presence-check failure = (ok %v, err %v), want an error", ok, err)
+	}
+	if _, _, ok, err := ReadPreconfServed(presentButUnreadable{}, 7); err == nil || ok {
+		t.Fatalf("value-read failure = (ok %v, err %v), want an error", ok, err)
+	}
+}
+
+// A malformed value must read as an error, not as absence. Absence tells the
+// audit the height was never served, which would skip a served height instead
+// of judging it — the exact gap this commitment exists to close.
+func TestPreconfServedMalformedValueIsAnError(t *testing.T) {
+	db := NewMemoryDatabase()
+	if err := db.Put(servedPreconfKey(7), []byte{0x01, 0x02}); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	count, digest, ok, err := ReadPreconfServed(db, 7)
+	if err == nil {
+		t.Fatal("a truncated value read back without an error")
+	}
+	if ok || count != 0 || digest != (common.Hash{}) {
+		t.Fatalf("read = (%d, %s, %v), want the zero value", count, digest, ok)
 	}
 }

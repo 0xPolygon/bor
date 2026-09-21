@@ -2,7 +2,9 @@ package sequencer
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
+	"math/big"
 	"time"
 
 	"google.golang.org/grpc"
@@ -13,6 +15,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/log"
 )
@@ -22,6 +25,14 @@ import (
 // audit found it after the fact. The other reasons all mean a preconfirmation
 // was published to callers and then invalidated, which is a stronger claim.
 const unobservedMismatchReason = "unobserved_mismatch"
+
+// servedMismatchReason marks a height the store no longer holds a generation
+// for, whose canonical block does not carry the transactions this node
+// preconfirmed there — the open-block loss window, where the producer died
+// before sealing and its successor rebuilt the height without the store. The
+// live path could not catch it (the node had crashed and lost its pending
+// state); only the durable served commitment can.
+const servedMismatchReason = "served_mismatch"
 
 // auditReadTimeout bounds one per-height store read.
 const auditReadTimeout = 5 * time.Second
@@ -51,6 +62,9 @@ type fetchOldest func(ctx context.Context) ([]*pb.Entry, error)
 type auditChain interface {
 	CurrentBlock() *types.Header
 	GetCanonicalHash(number uint64) common.Hash
+	// GetBlockByNumber returns the canonical block at a height, for judging a
+	// served commitment against the transactions the block actually carried.
+	GetBlockByNumber(number uint64) *types.Block
 }
 
 type auditor struct {
@@ -78,10 +92,11 @@ const (
 type auditSummary struct {
 	from    uint64
 	through uint64
-	// walked counts every height the pass visited; compared counts the ones
-	// the store actually held a generation for. Reporting only walked cannot
-	// tell "audited the range, all matched" from "the store held nothing for
-	// any of it", which are very different answers for an operator.
+	// walked counts every height the pass visited; compared counts the ones it
+	// judged — against the store's sealed generation, or, where the store could
+	// not confirm the height, against this node's served commitment. Reporting
+	// only walked cannot tell "audited the range, all matched" from "nothing was
+	// comparable", which are very different answers for an operator.
 	walked   uint64
 	compared uint64
 	mismatch uint64
@@ -89,10 +104,11 @@ type auditSummary struct {
 	// alreadyJudged counts mismatches the live path had already recorded, so
 	// this pass left the stronger record in place.
 	alreadyJudged uint64
-	// unheld counts heights the store answered NOT_FOUND for, and skipped the
-	// heights its retention floor had already passed when this pass started.
-	// Nothing was promised at either, so there is nothing to invalidate — but
-	// nothing was compared either, and the watermark advances over both.
+	// unheld counts heights the store could not confirm — it answered NOT_FOUND,
+	// or held a generation it never sealed — and where this node also kept no
+	// served commitment to fall back on. Nothing could be compared, so there is
+	// nothing to invalidate, but the watermark still advances over them.
+	// (Retention-skipped heights are counted separately, in skipped.)
 	unheld  uint64
 	skipped uint64
 }
@@ -165,6 +181,15 @@ func (a *auditor) run(ctx context.Context) (auditSummary, error) {
 
 	summary := auditSummary{through: through}
 	summary.from, summary.skipped = a.skipToStoreFloor(ctx, from, through)
+
+	// Skipped heights are never walked, so the store fetch that would trigger
+	// their served fallback never runs. The store no longer holds them, but a
+	// served commitment reconciles against the canonical chain regardless:
+	// judge the ones that exist so a promise in the skipped range is recorded
+	// and cleared, not advanced past unseen.
+	if summary.skipped > 0 {
+		a.reconcileSkippedServed(from, summary.from-1, &summary)
+	}
 
 	log.Info("Auditing sequence store against canonical chain", "from", summary.from, "through", through)
 
@@ -280,13 +305,13 @@ func (a *auditor) auditHeightInto(ctx context.Context, height uint64, summary *a
 	switch {
 	case err == nil:
 	case isNotFound(err):
-		// The store holds nothing here: it was down, the producer never
-		// published, or retention aged the height out mid-walk. Nothing was
-		// promised, so there is nothing to invalidate, and the walk advances
-		// — counted, because the height went uncompared.
+		// The store holds no generation here. It may have held one this node
+		// served preconfirmations from and then lost (producer died before
+		// sealing, successor rebuilt store-blind): the store cannot answer,
+		// but the node's own served commitment can. Reconcile against that;
+		// with no commitment the height is genuinely unheld.
 		summary.walked++
-		summary.unheld++
-		auditUnheldHeights.Inc(1)
+		a.reconcileServed(height, summary)
 
 		return nil
 	default:
@@ -294,10 +319,213 @@ func (a *auditor) auditHeightInto(ctx context.Context, height uint64, summary *a
 	}
 
 	summary.walked++
+	verdict := auditHeight(entries, height, a.chain.GetCanonicalHash(height))
+	if verdict == auditNoSeal {
+		// The store holds an unsealed generation, so it confirmed nothing
+		// canonical here — no differently than holding nothing at all. This is
+		// the loss window's other half: the producer streamed the open and then
+		// died before sealing. Fall back to the served commitment, or the
+		// broken promise it left behind goes unrecorded.
+		a.reconcileServed(height, summary)
+
+		return nil
+	}
+
 	summary.compared++
-	a.recordVerdict(height, auditHeight(entries, height, a.chain.GetCanonicalHash(height)), summary)
+	a.recordVerdict(height, verdict, summary)
+
+	// auditUnknown means the store held entries but its seal is unusable — it
+	// does not decode, or it names the wrong height. An unusable seal cannot
+	// confirm the height canonical, so it must not clear a served commitment:
+	// judge the commitment against canonical instead of dropping it, or a
+	// garbage seal — from a corrupt store, or a malicious one — would bury a
+	// broken preconfirmation unjudged before the watermark advances past it.
+	if verdict == auditUnknown {
+		count, digest, ok, err := rawdb.ReadPreconfServed(a.db, height)
+		if err != nil {
+			log.Warn("Served preconf commitment unreadable", "number", height, "err", err)
+		}
+		if err == nil && ok {
+			a.judgeServed(height, count, digest, summary)
+
+			return nil
+		}
+	}
+	a.clearServed(height)
 
 	return nil
+}
+
+// reconcileServed judges an unheld height against the commitment this node
+// kept for the preconfirmations it served there. With no commitment nothing
+// was served and the height is unheld; otherwise the served transactions must
+// be the canonical block's leading transactions, in order, or a
+// preconfirmation was broken and goes on record.
+func (a *auditor) reconcileServed(height uint64, summary *auditSummary) {
+	count, digest, ok, err := rawdb.ReadPreconfServed(a.db, height)
+	if err != nil {
+		log.Warn("Served preconf commitment unreadable", "number", height, "err", err)
+	}
+	if err != nil || !ok {
+		// No commitment to fall back on (never served here, or unreadable), so
+		// nothing was promised that can be judged: the height is unheld.
+		summary.unheld++
+		auditUnheldHeights.Inc(1)
+
+		return
+	}
+
+	summary.compared++
+	a.judgeServed(height, count, digest, summary)
+}
+
+type servedVerdict int
+
+const (
+	servedVerified    servedVerdict = iota // canonical carries the served prefix, same context
+	servedDiverged                         // canonical differs, or is shorter than the served prefix
+	servedUnjudgeable                      // the canonical block is not available locally
+)
+
+// judgeServed compares an already-read served commitment against the canonical
+// block and records served_mismatch if they diverge, then clears the
+// commitment. The caller owns the walked/compared/unheld bookkeeping; this only
+// folds in the mismatch verdict and drops the now-judged commitment.
+func (a *auditor) judgeServed(height, count uint64, digest common.Hash, summary *auditSummary) {
+	switch a.judgeServedAgainstCanonical(height, count, digest) {
+	case servedVerified:
+		auditServedVerified.Inc(1)
+		a.clearServed(height)
+	case servedDiverged:
+		summary.mismatch++
+		auditServedMismatch.Inc(1)
+		a.recordMismatch(height, servedMismatchReason, "Failed to record served preconf mismatch", summary)
+		a.clearServed(height)
+	case servedUnjudgeable:
+		// The canonical block is not available locally — the header is
+		// canonical but its body is pruned, or a snap-sync gap. The commitment
+		// cannot be compared, so count it uncomparable rather than recording a
+		// spurious mismatch (which would be a false entry in the ledger), and
+		// leave it in place so a later pass can judge it if the body arrives.
+		summary.unknown++
+		auditUnknownCount.Inc(1)
+	}
+}
+
+// reconcileSkippedServed judges the served commitments in a range the walk
+// advanced past for store retention. It scans the served prefix, so it visits
+// only the heights that actually carry a commitment rather than every skipped
+// height.
+func (a *auditor) reconcileSkippedServed(from, to uint64, summary *auditSummary) {
+	for _, height := range rawdb.ReadServedPreconfHeightsInRange(a.db, from, to) {
+		a.reconcileServed(height, summary)
+	}
+}
+
+// judgeServedAgainstCanonical compares the served commitment at a height with
+// the canonical block. servedVerified: the block carries the count served
+// transactions as its leading prefix, in the same order and against the same
+// execution context. servedDiverged: it does not, or it is shorter than the
+// prefix (content was promised the chain did not keep). servedUnjudgeable: the
+// canonical block is not available locally, so nothing can be concluded — a
+// missing body must not read as a broken promise.
+//
+// Receipts are not compared: execution is deterministic given the parent state
+// (pinned by ParentHash), the ordered transaction prefix, and the header
+// context, so matching those already implies matching receipts. A receipts fold
+// here would be redundant and would need canonical receipts the audit, unlike
+// the live path, does not hold.
+func (a *auditor) judgeServedAgainstCanonical(height, count uint64, digest common.Hash) servedVerdict {
+	block := a.chain.GetBlockByNumber(height)
+	if block == nil {
+		return servedUnjudgeable
+	}
+	txs := block.Transactions()
+	if uint64(len(txs)) < count {
+		return servedDiverged
+	}
+	if foldServed(contextSeed(block.Header()), txs[:count]) == digest {
+		return servedVerified
+	}
+
+	return servedDiverged
+}
+
+// contextSeed is the value the served fold starts from: a keccak over the
+// block's execution context — the same fields the live path's
+// sameExecutionContext checks (ParentHash, Number, Time, GasLimit, BaseFee,
+// Difficulty). Seeding the fold with it makes the served commitment match
+// canonical only when the context matches too, so a producer handover that
+// rebuilds the height with a different context (succession-based Difficulty, and
+// often Time or parent) is caught even when the transactions are unchanged.
+func contextSeed(h *types.Header) common.Hash {
+	if h == nil || h.Number == nil {
+		return common.Hash{}
+	}
+
+	var buf []byte
+	buf = append(buf, h.ParentHash.Bytes()...)
+	buf = binary.BigEndian.AppendUint64(buf, h.Number.Uint64())
+	buf = binary.BigEndian.AppendUint64(buf, h.Time)
+	buf = binary.BigEndian.AppendUint64(buf, h.GasLimit)
+	buf = append(buf, bigTo32(h.BaseFee)...)
+	buf = append(buf, bigTo32(h.Difficulty)...)
+
+	return crypto.Keccak256Hash(buf)
+}
+
+// bigTo32 left-pads a big.Int to 32 bytes; a nil value folds as zero.
+func bigTo32(v *big.Int) []byte {
+	if v == nil {
+		return make([]byte, common.HashLength)
+	}
+
+	return common.BigToHash(v).Bytes()
+}
+
+// clearServed drops the served commitment once the audit has judged the
+// height; it is only needed until then.
+func (a *auditor) clearServed(height uint64) {
+	clearServedPreconf(a.db, height)
+}
+
+// clearServedPreconf drops a served commitment once its height is judged —
+// on the audit walk, or on the live head path in markCanonicalHeadAudited.
+func clearServedPreconf(db ethdb.KeyValueWriter, height uint64) {
+	if err := rawdb.DeletePreconfServed(db, height); err != nil {
+		log.Warn("Failed to clear served preconf commitment", "number", height, "err", err)
+	}
+}
+
+// recordMismatch writes an invalidation for a height, unless the live path
+// already recorded a stronger one there — that record stands and the height
+// counts as alreadyJudged instead.
+func (a *auditor) recordMismatch(height uint64, reason, failLog string, summary *auditSummary) {
+	wrote, err := rawdb.WriteInvalidPreconfIfAbsent(a.db, height, reason)
+	switch {
+	case err != nil:
+		log.Warn(failLog, "number", height, "err", err)
+	case !wrote:
+		summary.alreadyJudged++
+	}
+}
+
+// foldServed folds transaction hashes into a running commitment in served
+// order: the result changes if any transaction in the prefix is reordered,
+// dropped, or replaced. The serve path and the audit fold identically, so
+// their commitments are comparable.
+//
+// This is deliberately not the sequence-store commitment.Fold scheme. That one
+// folds raw transaction bytes under a domain tag for the on-wire stream; this
+// digest never leaves the node — it is only ever compared against itself, serve
+// time versus audit time — so it folds the already-cached tx.Hash() instead,
+// which is cheaper on the serve path and needs no tag or chain seed.
+func foldServed(prev common.Hash, txs types.Transactions) common.Hash {
+	for _, tx := range txs {
+		prev = crypto.Keccak256Hash(prev.Bytes(), tx.Hash().Bytes())
+	}
+
+	return prev
 }
 
 func (a *auditor) recordVerdict(height uint64, verdict auditVerdict, summary *auditSummary) {
@@ -309,13 +537,7 @@ func (a *auditor) recordVerdict(height uint64, verdict auditVerdict, summary *au
 		// A record already at this height came from the live path, which
 		// served a preconfirmation and then invalidated it. That is a
 		// stronger claim than this pass can make, so it stands.
-		wrote, err := rawdb.WriteInvalidPreconfIfAbsent(a.db, height, unobservedMismatchReason)
-		switch {
-		case err != nil:
-			log.Warn("Failed to record unobserved preconfirmation mismatch", "number", height, "err", err)
-		case !wrote:
-			summary.alreadyJudged++
-		}
+		a.recordMismatch(height, unobservedMismatchReason, "Failed to record unobserved preconfirmation mismatch", summary)
 	case auditUnknown:
 		// Held but undecidable — no canonical hash, or a seal that does not
 		// decode or sits at the wrong height. Counted and logged rather than
