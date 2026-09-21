@@ -23,13 +23,13 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 )
 
-// trustedFakePeer embeds Peer so it compiles; only IsTrusted is ever read.
+// trustedFakePeer embeds Peer so it compiles; only Trusted is ever read.
 type trustedFakePeer struct {
 	Peer
 	trusted bool
 }
 
-func (p *trustedFakePeer) IsTrusted() bool { return p.trusted }
+func (p *trustedFakePeer) Trusted() bool { return p.trusted }
 
 // staticOnlyFakePeer is static but not trusted, which grants no exemption.
 type staticOnlyFakePeer struct{ Peer }

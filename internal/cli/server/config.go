@@ -1917,7 +1917,7 @@ func getNodeKey(hex string, file string) *ecdsa.PrivateKey {
 	return nil
 }
 
-func (c *Config) buildNode() (*node.Config, error) {
+func (c *Config) buildNode(logger log.Logger) (*node.Config, error) {
 	ipcPath := ""
 	if !c.JsonRPC.IPCDisable {
 		ipcPath = clientIdentifier + ".ipc"
@@ -2053,7 +2053,7 @@ func (c *Config) buildNode() (*node.Config, error) {
 			cfg.P2P.TrustedNodes = cfg.TrustedNodes()
 		}
 
-		warnUntrustedStaticNodes(cfg.P2P.StaticNodes, cfg.P2P.TrustedNodes)
+		warnUntrustedStaticNodes(logger, cfg.P2P.StaticNodes, cfg.P2P.TrustedNodes)
 	}
 
 	if c.P2P.NoDiscover {
@@ -2064,7 +2064,7 @@ func (c *Config) buildNode() (*node.Config, error) {
 	return cfg, nil
 }
 
-func warnUntrustedStaticNodes(staticNodes, trustedNodes []*enode.Node) {
+func warnUntrustedStaticNodes(logger log.Logger, staticNodes, trustedNodes []*enode.Node) {
 	trusted := make(map[enode.ID]struct{}, len(trustedNodes))
 	for _, node := range trustedNodes {
 		trusted[node.ID()] = struct{}{}
@@ -2077,7 +2077,7 @@ func warnUntrustedStaticNodes(staticNodes, trustedNodes []*enode.Node) {
 		}
 	}
 	if untrusted > 0 {
-		log.Warn("static-nodes without matching trusted-nodes: these peers can still be benched or dropped by sync peer-response", "static", len(staticNodes), "untrusted", untrusted)
+		logger.Warn("static-nodes without matching trusted-nodes: these peers can still be benched or dropped by sync peer-response", "static", len(staticNodes), "untrusted", untrusted)
 	}
 }
 
