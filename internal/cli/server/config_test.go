@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -117,7 +118,53 @@ func TestDefaultDatatypeOverride(t *testing.T) {
 
 var dummyEnodeAddr = "enode://0cb82b395094ee4a2915e9714894627de9ed8498fb881cec6db7c65e8b9a5bd7f2f25cc84e71e89d0947e51c76e85d0847de848c7782b13c0255247a6758178c@44.232.55.71:30303"
 
+type configLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *configLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *configLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func TestConfigLogCaptureConcurrent(t *testing.T) {
+	var output configLogBuffer
+	logger := log.NewLogger(log.LogfmtHandlerWithLevel(&output, log.LevelWarn))
+	const writers, messages = 2, 200
+	start := make(chan struct{})
+	var pending sync.WaitGroup
+	for range writers {
+		pending.Add(1)
+		go func() {
+			defer pending.Done()
+			<-start
+			for range messages {
+				logger.Warn("concurrent log capture")
+			}
+		}()
+	}
+	close(start)
+	for range messages {
+		if count := strings.Count(output.String(), "\n"); count > writers*messages {
+			t.Errorf("captured %d log records, want at most %d", count, writers*messages)
+		}
+	}
+	pending.Wait()
+	if count := strings.Count(output.String(), "\n"); count != writers*messages {
+		t.Fatalf("captured %d log records, want %d", count, writers*messages)
+	}
+}
+
 func TestConfigStaticPeerWarning(t *testing.T) {
+	// Keep this test sequential while it replaces the global logger.
 	const otherEnodeAddr = "enode://d860a01f9722d78051619d1e2351aba3f43f943f6f00718d1b9baa4101932a1f5011f16bb2b1bb35db20d6fe28fa0bf09636d26a87d31de9ec6203eeedb1f666@127.0.0.1:30303"
 	samePeerDifferentAddress := strings.Replace(dummyEnodeAddr, "44.232.55.71:30303", "127.0.0.1:30304", 1)
 
@@ -141,7 +188,7 @@ func TestConfigStaticPeerWarning(t *testing.T) {
 		{name: "developer mode", static: []string{dummyEnodeAddr}, developer: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var output bytes.Buffer
+			var output configLogBuffer
 			previous := log.Root()
 			t.Cleanup(func() { log.SetDefault(previous) })
 			log.SetDefault(log.NewLogger(log.LogfmtHandlerWithLevel(&output, log.LevelWarn)))
@@ -155,12 +202,13 @@ func TestConfigStaticPeerWarning(t *testing.T) {
 				t.Fatalf("build node: %v", err)
 			}
 
-			warned := strings.Contains(output.String(), "benched or dropped by sync peer-response")
+			logs := output.String()
+			warned := strings.Contains(logs, "benched or dropped by sync peer-response")
 			if wantWarn := tc.wantUntrusted > 0; warned != wantWarn {
-				t.Fatalf("static peer warning = %t, want %t; logs: %s", warned, wantWarn, output.String())
+				t.Fatalf("static peer warning = %t, want %t; logs: %s", warned, wantWarn, logs)
 			}
-			if warned && !strings.Contains(output.String(), fmt.Sprintf("untrusted=%d\n", tc.wantUntrusted)) {
-				t.Fatalf("missing untrusted peer count %d; logs: %s", tc.wantUntrusted, output.String())
+			if warned && !strings.Contains(logs, fmt.Sprintf("untrusted=%d\n", tc.wantUntrusted)) {
+				t.Fatalf("missing untrusted peer count %d; logs: %s", tc.wantUntrusted, logs)
 			}
 		})
 	}
