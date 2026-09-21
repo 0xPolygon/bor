@@ -24,28 +24,17 @@ import (
 )
 
 // trustedFakePeer embeds Peer so it compiles; only IsTrusted is ever read.
-type trustedFakePeer struct{ Peer }
+type trustedFakePeer struct {
+	Peer
+	trusted bool
+}
 
-func (trustedFakePeer) IsTrusted() bool { return true }
+func (p *trustedFakePeer) IsTrusted() bool { return p.trusted }
 
 // staticOnlyFakePeer is static but not trusted, which grants no exemption.
 type staticOnlyFakePeer struct{ Peer }
 
 func (staticOnlyFakePeer) IsStatic() bool { return true }
-
-// TestTrustedPeerCaptured checks the trusted bit is recorded at registration.
-func TestTrustedPeerCaptured(t *testing.T) {
-	if pc := newPeerConnection("trusted", eth.ETH69, trustedFakePeer{}, log.New()); !pc.trusted {
-		t.Fatal("trusted peer was not captured at registration")
-	}
-	if pc := newPeerConnection("plain", eth.ETH69, nil, log.New()); pc.trusted {
-		t.Fatal("peer with no trusted signal was marked trusted")
-	}
-	// Static alone must not exempt: the flag is outbound-only.
-	if pc := newPeerConnection("static", eth.ETH69, staticOnlyFakePeer{}, log.New()); pc.trusted {
-		t.Fatal("static-only peer was marked trusted")
-	}
-}
 
 // TestTrustedPeerExemptFromResponse is the incident regression: a trusted peer
 // is never benched or dropped, while an ordinary peer on the same verdict is.
@@ -69,7 +58,7 @@ func TestTrustedPeerExemptFromResponse(t *testing.T) {
 	}
 
 	// Trusted peer, same verdict: untouched.
-	trusted := newPeerConnection("trusted", eth.ETH69, trustedFakePeer{}, log.New())
+	trusted := newPeerConnection("trusted", eth.ETH69, &trustedFakePeer{trusted: true}, log.New())
 	if err := d.peers.Register(trusted); err != nil {
 		t.Fatalf("register trusted: %v", err)
 	}
@@ -94,6 +83,42 @@ func TestTrustedPeerExemptFromResponse(t *testing.T) {
 	}
 	if trusted.backoffRemaining() > 0 {
 		t.Fatal("trusted peer benched after repeated whitelist mismatch")
+	}
+}
+
+func TestPeerResponseTrustChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		initialTrusted bool
+		currentTrusted bool
+		wantPenalty    bool
+	}{
+		{"add trusted peer", false, true, false},
+		{"remove trusted peer", true, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			remote := &trustedFakePeer{trusted: tc.initialTrusted}
+			peer := newPeerConnection("peer", eth.ETH69, remote, log.New())
+			dropped := false
+			d := &Downloader{peers: newPeerSet(), dropPeer: func(id string) {
+				if id != peer.id {
+					t.Fatalf("dropped peer %q, want %q", id, peer.id)
+				}
+				dropped = true
+			}}
+			if err := d.peers.Register(peer); err != nil {
+				t.Fatalf("register peer: %v", err)
+			}
+
+			remote.trusted = tc.currentTrusted
+			d.respondToPeer(peer, peerFailureInvalidChain, errInvalidChain)
+			if dropped != tc.wantPenalty {
+				t.Errorf("peer dropped = %t, want %t", dropped, tc.wantPenalty)
+			}
+			if benched := peer.backedOff(); benched != tc.wantPenalty {
+				t.Errorf("peer benched = %t, want %t", benched, tc.wantPenalty)
+			}
+		})
 	}
 }
 

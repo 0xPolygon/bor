@@ -55,8 +55,6 @@ type peerConnection struct {
 	log     log.Logger // Contextual logger to add extra infos to peer logs
 	lock    sync.RWMutex
 	backoff time.Time
-
-	trusted bool // exempt from peer-response penalties
 }
 
 // Peer encapsulates the methods required to synchronise with a remote full peer.
@@ -75,17 +73,12 @@ type Peer interface {
 
 // newPeerConnection creates a new downloader peer.
 func newPeerConnection(id string, version uint, peer Peer, logger log.Logger) *peerConnection {
-	trusted := false
-	if t, ok := peer.(interface{ IsTrusted() bool }); ok && t.IsTrusted() {
-		trusted = true
-	}
 	return &peerConnection{
 		id:      id,
 		lacking: make(map[common.Hash]struct{}),
 		peer:    peer,
 		version: version,
 		log:     logger,
-		trusted: trusted,
 	}
 }
 
