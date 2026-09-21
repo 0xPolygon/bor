@@ -19,6 +19,13 @@ type finality[T rawdb.BlockFinality[T]] struct {
 	interval uint64      // Interval, until which we can allow importing
 	doExist  bool
 	name     string // Name of the service (checkpoint or milestone)
+
+	// canonical returns the locally canonical hash for a block number (zero
+	// hash if unknown). It lets IsValidChain distinguish a benign re-import of
+	// already-canonical blocks below the whitelisted entry from a real reorg
+	// attempt below finality. Nil means "unknown", which keeps the strict
+	// behaviour.
+	canonical func(number uint64) common.Hash
 }
 
 type finalityService interface {
@@ -50,7 +57,7 @@ func (f *finality[T]) IsValidChain(currentHeader *types.Header, chain []*types.H
 		return false, nil
 	}
 
-	return isValidChain(currentHeader, chain, f.doExist, f.Number, f.Hash)
+	return isValidChain(currentHeader, chain, f.doExist, f.Number, f.Hash, f.canonical)
 }
 
 // reportWhitelist logs the block number and hash if a new and unique entry is being inserted

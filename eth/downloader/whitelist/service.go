@@ -139,10 +139,29 @@ func NewService(db ethdb.Database, disableBlindForkValidation bool, maxBlindFork
 
 // SetBlockchain sets the blockchain reference for the milestone service
 func (s *Service) SetBlockchain(blockchain ChainReader) {
+	// canonical resolves a block number to the locally canonical hash so that
+	// isValidChain can tell a late re-import of blocks we already have from a
+	// reorg attempt below the whitelisted entry. Both the milestone and the
+	// checkpoint service share it.
+	canonical := func(number uint64) common.Hash {
+		if blockchain == nil {
+			return common.Hash{}
+		}
+		if b := blockchain.GetBlockByNumber(number); b != nil {
+			return b.Hash()
+		}
+		return common.Hash{}
+	}
 	if milestone, ok := s.milestoneService.(*milestone); ok {
 		milestone.finality.Lock()
-		defer milestone.finality.Unlock()
 		milestone.blockchain = blockchain
+		milestone.finality.canonical = canonical
+		milestone.finality.Unlock()
+	}
+	if checkpoint, ok := s.checkpointService.(*checkpoint); ok {
+		checkpoint.finality.Lock()
+		checkpoint.finality.canonical = canonical
+		checkpoint.finality.Unlock()
 	}
 }
 
@@ -378,7 +397,7 @@ func splitChain(current uint64, chain []*types.Header) ([]*types.Header, []*type
 }
 
 //nolint:unparam
-func isValidChain(currentHeader *types.Header, chain []*types.Header, doExist bool, number uint64, hash common.Hash) (bool, error) {
+func isValidChain(currentHeader *types.Header, chain []*types.Header, doExist bool, number uint64, hash common.Hash, canonical func(number uint64) common.Hash) (bool, error) {
 	// Check if we have milestone to validate incoming chain in memory
 	if !doExist {
 		// We don't have any entry, no additional validation will be possible
@@ -389,11 +408,30 @@ func isValidChain(currentHeader *types.Header, chain []*types.Header, doExist bo
 
 	// Check if imported chain is less than whitelisted number
 	if chain[len(chain)-1].Number.Uint64() < number {
-		if current >= number { //If current tip of the chain is greater than whitelist number then return false
-			return false, nil
-		} else {
+		if current < number {
 			return true, nil
 		}
+		// The local tip is already past the whitelisted entry, so a segment that
+		// lies entirely below it can only be (a) a reorg attempt below finality,
+		// which must be rejected, or (b) a late re-import of blocks that are
+		// already canonical locally (e.g. a downloader cycle whose bodies
+		// arrived after the block fetcher imported the same blocks and after
+		// the milestone moved past them). Case (b) is harmless and must not be
+		// reported as a whitelist mismatch: InsertChain will treat the blocks
+		// as known. Only accept it when every header is provably canonical.
+		if canonical != nil {
+			allCanonical := true
+			for _, h := range chain {
+				if canonical(h.Number.Uint64()) != h.Hash() {
+					allCanonical = false
+					break
+				}
+			}
+			if allCanonical {
+				return true, nil
+			}
+		}
+		return false, nil
 	}
 
 	// Split the chain into past and future chain
