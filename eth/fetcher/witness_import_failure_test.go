@@ -11,9 +11,12 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/eth/downloader/whitelist"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
+	"github.com/ethereum/go-ethereum/trie"
 )
 
 // TestAcceptableWitnessSizeCeilingDegenerateSignedSizes pins the two inputs that
@@ -83,7 +86,7 @@ func TestChargeDivergedWitnessImportFailure(t *testing.T) {
 	block := createTestBlock(501)
 	witness := createTestWitnessForBlock(block)
 	noopFetch := func(common.Hash, chan *eth.Response) (*eth.Request, error) { return nil, errors.New("noop") }
-	importErr := errors.New("stateless self-validation failed")
+	importErr := fmt.Errorf("%w (remote: 1 local: 2)", core.ErrGasUsedMismatch) // witness-attributable
 
 	// BP-identical witness (not diverged): the BP's fault, nothing charged.
 	identical := &blockOrHeaderInject{origin: "o", block: block, witness: witness, witnessPeer: "srv", fetchWitness: noopFetch}
@@ -134,6 +137,96 @@ func TestChargeDivergedWitnessImportFailure(t *testing.T) {
 	}
 	if len(excluded) != len(strikes) {
 		t.Fatalf("every charged failure must exclude its server for the block: %v", excluded)
+	}
+}
+
+// TestChargeDivergedWitnessImportFailureIgnoresNonWitnessErrors pins the error
+// gate: an import failure the witness could not have caused — a local
+// interruption, a whitelist mismatch, a stopped chain, an unknown error — is not
+// charged to the serving peer even when the witness was fetched and diverged.
+// Without this gate every import failure on a stateless node would strike and
+// exclude honest witness sources, since diverged is the normal case there.
+func TestChargeDivergedWitnessImportFailureIgnoresNonWitnessErrors(t *testing.T) {
+	tester := newTester(false)
+	defer tester.fetcher.Stop()
+
+	var (
+		mu       sync.Mutex
+		strikes  []string
+		excluded []string
+	)
+	tester.fetcher.SetWitnessServerStriker(func(id string) {
+		mu.Lock()
+		strikes = append(strikes, id)
+		mu.Unlock()
+	})
+	tester.fetcher.SetWitnessSourceExcluder(func(peer string, _ common.Hash) {
+		mu.Lock()
+		excluded = append(excluded, peer)
+		mu.Unlock()
+	})
+
+	block := createTestBlock(503)
+	witness := createTestWitnessForBlock(block)
+	fetch := func(common.Hash, chan *eth.Response) (*eth.Request, error) { return nil, errors.New("noop") }
+
+	for _, importErr := range []error{
+		errors.New("insertion is interrupted"),
+		errors.New("blockchain is stopped"),
+		whitelist.ErrMismatch,
+		errors.New("unknown parent"),
+		fmt.Errorf("propagated block verification failed: %w", errors.New("invalid timestamp")),
+		nil,
+	} {
+		op := &blockOrHeaderInject{origin: "o", block: block, witness: witness, witnessPeer: "srv", witnessDiverged: true, fetchWitness: fetch}
+		if tester.fetcher.chargeDivergedWitnessImportFailure(op, importErr) {
+			t.Fatalf("error %v is not witness-attributable and must not trigger a re-fetch", importErr)
+		}
+		if op.witnessImportFailures != 0 {
+			t.Fatalf("error %v must not consume the retry budget", importErr)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(strikes) != 0 || len(excluded) != 0 {
+		t.Fatalf("non-witness import errors must not strike or exclude the server; strikes=%v excluded=%v", strikes, excluded)
+	}
+}
+
+// TestIsWitnessAttributableImportError pins the allowlist: incomplete-witness
+// and execution-mismatch failures are attributable, everything else — notably
+// errors that wrap nothing the witness carries — is not.
+func TestIsWitnessAttributableImportError(t *testing.T) {
+	attributable := []error{
+		&trie.MissingNodeError{NodeHash: common.HexToHash("0x01"), Path: []byte{0x1}},
+		fmt.Errorf("stateless execution hit incomplete state or code: %w", &trie.MissingNodeError{NodeHash: common.HexToHash("0x02")}),
+		core.ErrStatelessStateRootMismatch,
+		fmt.Errorf("%w (remote: 1 local: 2)", core.ErrGasUsedMismatch),
+		fmt.Errorf("%w (remote: 0a local: 0b)", core.ErrReceiptRootMismatch),
+		fmt.Errorf("%w (remote: 0a local: 0b)", core.ErrBloomMismatch),
+		fmt.Errorf("%w (remote: 0a local: 0b)", core.ErrRequestsHashMismatch),
+		errors.New("invalid merkle root (remote: 0a local: 0b) dberr: <nil>"),
+		errors.New("stateless self-validation root mismatch (cross: 0a local: 0b)"),
+		errors.New("stateless self-validation receipt root mismatch: remote 0a != local 0b"),
+	}
+	for _, err := range attributable {
+		if !isWitnessAttributableImportError(err) {
+			t.Fatalf("%v must be attributable to the witness server", err)
+		}
+	}
+	notAttributable := []error{
+		nil,
+		errors.New("insertion is interrupted"),
+		errors.New("blockchain is stopped"),
+		whitelist.ErrMismatch,
+		errors.New("unknown parent"),
+		errors.New("stateless execution hit incomplete state or code: code is not found: addr 0x01 hash 0x02"),
+		errors.New("leveldb: closed"),
+	}
+	for _, err := range notAttributable {
+		if isWitnessAttributableImportError(err) {
+			t.Fatalf("%v must not be attributable to the witness server", err)
+		}
 	}
 }
 
@@ -243,7 +336,7 @@ func TestImportFailureWithDivergedWitnessRefetchesFromAnotherPeer(t *testing.T) 
 	// First import fails (an unusable witness), the second succeeds.
 	tester.fetcher.insertChain = func(blocks types.Blocks, witnesses []*stateless.Witness) (int, error) {
 		if imports.Add(1) == 1 {
-			return 0, errors.New("stateless self-validation failed: missing trie node")
+			return 0, fmt.Errorf("%w (cross: 01 local: 02)", core.ErrStatelessStateRootMismatch)
 		}
 		return tester.insertChain(blocks, witnesses)
 	}

@@ -172,15 +172,11 @@ const bytesPerMiB = 1024 * 1024
 // announcements whose WitnessSize is 0 or above the absolute cap, so under
 // normal operation neither branch is reached; they are defence in depth.
 func (m *witnessManager) acceptableWitnessSizeCeiling(signedSize uint64) uint64 {
-	absBytes := m.MaxWitnessSize()
+	absBytes := m.MaxWitnessSize() // never zero: calculatePageThreshold floors at one page
 	if signedSize == 0 {
 		return absBytes
 	}
-	band := saturatingMulUint64(signedSize, wit2SizeBandMultiplier)
-	if absBytes == 0 {
-		return band
-	}
-	return min(band, absBytes)
+	return min(saturatingMulUint64(signedSize, wit2SizeBandMultiplier), absBytes)
 }
 
 // AcceptableWitnessSizeCeiling is the exported form of

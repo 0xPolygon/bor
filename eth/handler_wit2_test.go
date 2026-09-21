@@ -1353,6 +1353,7 @@ func TestHandleWitnessBroadcastAcceptedWhileAnnounceDeferred(t *testing.T) {
 		BlockHash:   hash,
 		BlockNumber: header.Number.Uint64(),
 		WitnessHash: stateless.WitnessCommitHash(buf.Bytes()),
+		WitnessSize: 1, // size band alone would reject the body; only the exact hash match admits it
 		Signature:   make([]byte, wit.SignatureLength),
 	}
 	h.handler.deferredAnnounces.put(ann, "upstream-peer")

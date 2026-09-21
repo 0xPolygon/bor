@@ -1334,15 +1334,28 @@ func (f *BlockFetcher) importBlocks(op *blockOrHeaderInject) {
 
 // chargeDivergedWitnessImportFailure applies the WIT2 consequence of an import
 // failure to the peer that served the block's witness, when that witness was
-// accepted on the size oracle alone. It strikes the peer, excludes it as a
-// witness source for this block, and reports whether the block should be
-// handed back to the witness manager for a re-fetch (false once the retry
+// accepted on the size oracle alone AND the failure is one the witness could
+// have caused (isWitnessAttributableImportError). It strikes the peer, excludes
+// it as a witness source for this block, and reports whether the block should
+// be handed back to the witness manager for a re-fetch (false once the retry
 // budget is spent, or when the witness was not a fetched, diverged one).
+//
+// The error gate matters because "diverged" is the normal case — every node
+// persists its own generated witness, so nearly every witness fetched from
+// anyone but the BP differs from the signed hash. Charging every import
+// failure would let a local problem (a contract bytecode missing from disk,
+// which the downloader heals; an interrupted insert) strike and exclude two
+// honest witness sources per block until the node has none left.
 func (f *BlockFetcher) chargeDivergedWitnessImportFailure(op *blockOrHeaderInject, importErr error) bool {
 	if op.witness == nil || !op.witnessDiverged || op.witnessPeer == "" {
 		return false
 	}
 	hash := op.hash()
+	if !isWitnessAttributableImportError(importErr) {
+		log.Debug("Import failed for a reason the witness server did not cause; not charging it",
+			"server", op.witnessPeer, "number", op.number(), "hash", hash, "err", importErr)
+		return false
+	}
 	witnessImportFailureMeter.Mark(1)
 	log.Warn("Import failed with a witness accepted on the WIT2 size oracle; striking its server",
 		"server", op.witnessPeer, "number", op.number(), "hash", hash, "attempt", op.witnessImportFailures+1, "err", importErr)

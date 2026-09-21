@@ -3,6 +3,7 @@ package eth
 import (
 	"crypto/rand"
 	"fmt"
+	"math"
 	"math/big"
 	"testing"
 	"time"
@@ -1219,4 +1220,40 @@ func TestWitnessSourceExclusionSetLifecycle(t *testing.T) {
 	_, still := s.entries[hash]
 	s.mu.Unlock()
 	require.False(t, still, "stale entries must be swept on add")
+}
+
+// TestSizeOracleHelpersWithoutFetcher covers the handler-side size-oracle
+// helpers on a handler with no block fetcher and no exclusion set (only
+// reachable in tests): no bound is applied, a non-zero size is plausible, and
+// excluding a source is a no-op rather than a panic.
+func TestSizeOracleHelpersWithoutFetcher(t *testing.T) {
+	h := &handler{}
+	require.Equal(t, uint64(math.MaxUint64), h.witnessSizeCeiling(123), "no fetcher: no size bound")
+	require.False(t, h.plausibleSignedWitnessSize(0), "zero is never a usable size oracle")
+	require.True(t, h.plausibleSignedWitnessSize(1), "no fetcher: any non-zero size is plausible")
+	require.NotPanics(t, func() { h.excludeWitnessSource("p", common.HexToHash("0x01")) })
+}
+
+// TestDeferredAnnounceCacheHasWitnessSizeWithin pins the size-band binding used
+// by the deferred broadcast path: the boundary is inclusive, expired candidates
+// are ignored, and an unknown block matches nothing.
+func TestDeferredAnnounceCacheHasWitnessSizeWithin(t *testing.T) {
+	c := newDeferredAnnounceCache(8)
+	hash := common.HexToHash("0xe1")
+	c.put(wit.SignedWitnessAnnouncement{
+		BlockHash: hash, BlockNumber: 1, WitnessHash: common.HexToHash("0x01"), WitnessSize: 100,
+		Signature: make([]byte, wit.SignatureLength),
+	}, "p1")
+	ceiling := func(signedSize uint64) uint64 { return 3 * signedSize }
+
+	require.True(t, c.hasWitnessSizeWithin(hash, 300, ceiling), "a body exactly at the ceiling is within band")
+	require.False(t, c.hasWitnessSizeWithin(hash, 301, ceiling), "one byte over the ceiling is out of band")
+	require.False(t, c.hasWitnessSizeWithin(common.HexToHash("0xe2"), 1, ceiling), "unknown block matches nothing")
+
+	c.mu.Lock()
+	for _, e := range c.entries[hash] {
+		e.receivedAt = time.Now().Add(-2 * wit2AnnounceTTL)
+	}
+	c.mu.Unlock()
+	require.False(t, c.hasWitnessSizeWithin(hash, 300, ceiling), "an expired candidate must not bind a body")
 }
