@@ -489,7 +489,13 @@ func ServiceGetReceiptsQuery70(chain *core.BlockChain, query GetReceiptsRequest,
 	)
 	borCfg := chain.Config().Bor
 	for i, hash := range query {
-		if bytes >= softResponseLimit || len(receipts) >= maxReceiptsServe {
+		// The lookup bound matters more here than in the size and count bounds
+		// above: a hash that misses is skipped without adding to either, so
+		// without it a peer can make the node pay one database lookup per hash
+		// for as many hashes as fit in a message. eth/68 and eth/69 bound it the
+		// same way.
+		if bytes >= softResponseLimit || len(receipts) >= maxReceiptsServe ||
+			i >= 2*maxReceiptsServe {
 			break
 		}
 
