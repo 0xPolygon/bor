@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/trie"
 )
 
@@ -40,6 +41,16 @@ var witnessAttributableMessageFragments = []string{
 // strike honest peers on every such block. Unknown errors are not charged.
 func isWitnessAttributableImportError(err error) bool {
 	if err == nil {
+		return false
+	}
+	// A contract bytecode missing from the local disk. Witnesses carry no code,
+	// so the server could not have supplied it; the blob is content-addressed
+	// and the downloader's self-heal fetches it. Checked first because it
+	// arrives wrapped in core.ErrStatelessIncompleteState, the same sentinel
+	// that wraps a missing trie node — the wrapped cause, not the sentinel,
+	// decides attribution.
+	var missingCode *state.MissingCodeError
+	if errors.As(err, &missingCode) {
 		return false
 	}
 	// The witness did not carry a trie node the block reads: an incomplete

@@ -12,6 +12,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/downloader/whitelist"
@@ -170,7 +171,14 @@ func TestChargeDivergedWitnessImportFailureIgnoresNonWitnessErrors(t *testing.T)
 	witness := createTestWitnessForBlock(block)
 	fetch := func(common.Hash, chan *eth.Response) (*eth.Request, error) { return nil, errors.New("noop") }
 
+	// The first entry is the #2401 case: a contract bytecode missing from local
+	// disk surfaces from ExecuteStateless as ErrStatelessIncompleteState wrapping
+	// a *state.MissingCodeError. The witness never carried code, so the server
+	// must not be struck, excluded, or re-fetched from for it.
+	missingCode := fmt.Errorf("%w: %w", core.ErrStatelessIncompleteState,
+		&state.MissingCodeError{Addr: common.HexToAddress("0xc0de"), Hash: common.HexToHash("0xf98d")})
 	for _, importErr := range []error{
+		missingCode,
 		errors.New("insertion is interrupted"),
 		errors.New("blockchain is stopped"),
 		whitelist.ErrMismatch,
@@ -199,7 +207,7 @@ func TestChargeDivergedWitnessImportFailureIgnoresNonWitnessErrors(t *testing.T)
 func TestIsWitnessAttributableImportError(t *testing.T) {
 	attributable := []error{
 		&trie.MissingNodeError{NodeHash: common.HexToHash("0x01"), Path: []byte{0x1}},
-		fmt.Errorf("stateless execution hit incomplete state or code: %w", &trie.MissingNodeError{NodeHash: common.HexToHash("0x02")}),
+		fmt.Errorf("%w: %w", core.ErrStatelessIncompleteState, &trie.MissingNodeError{NodeHash: common.HexToHash("0x02")}), // incomplete witness
 		core.ErrStatelessStateRootMismatch,
 		fmt.Errorf("%w (remote: 1 local: 2)", core.ErrGasUsedMismatch),
 		fmt.Errorf("%w (remote: 0a local: 0b)", core.ErrReceiptRootMismatch),
@@ -220,7 +228,8 @@ func TestIsWitnessAttributableImportError(t *testing.T) {
 		errors.New("blockchain is stopped"),
 		whitelist.ErrMismatch,
 		errors.New("unknown parent"),
-		errors.New("stateless execution hit incomplete state or code: code is not found: addr 0x01 hash 0x02"),
+		fmt.Errorf("%w: %w", core.ErrStatelessIncompleteState, &state.MissingCodeError{Addr: common.HexToAddress("0x01"), Hash: common.HexToHash("0x02")}), // #2401: missing code, not the witness
+		core.ErrStatelessIncompleteState, // sentinel alone: cause unknown, not charged
 		errors.New("leveldb: closed"),
 	}
 	for _, err := range notAttributable {
