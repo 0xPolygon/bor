@@ -20,8 +20,10 @@ import (
 	"errors"
 	"math/big"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -34,6 +36,49 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/params"
 )
+
+func TestSyncTransactionsFiltersNonGossipable(t *testing.T) {
+	for _, protocol := range eth.ProtocolVersions {
+		for _, includePublic := range []bool{false, true} {
+			synctest.Test(t, func(t *testing.T) {
+				pool := newTestTxPool()
+				public := types.NewTx(&types.LegacyTx{})
+				conditional := types.NewTx(&types.LegacyTx{Nonce: 1})
+				private := types.NewTx(&types.LegacyTx{Nonce: 2})
+				conditional.PutOptions(new(types.OptionsPIP15))
+				pool.pool[conditional.Hash()], pool.pool[private.Hash()] = conditional, private
+				if includePublic {
+					pool.pool[public.Hash()] = public
+				}
+				h := &handler{txpool: pool, privateTxGetter: &PrivateTxStore{
+					store: map[common.Hash]struct{}{private.Hash(): {}},
+				}}
+				source, sink := p2p.MsgPipe()
+				defer source.Close()
+				defer sink.Close()
+				peer := eth.NewPeer(protocol, p2p.NewPeer(enode.ID{1}, "", nil), source, pool)
+				defer peer.Close()
+				h.syncTransactions(peer)
+				synctest.Wait()
+				if peer.KnownTransaction(conditional.Hash()) || peer.KnownTransaction(private.Hash()) {
+					t.Fatal("initial sync marked a non-gossipable transaction known")
+				}
+				if peer.KnownTransaction(public.Hash()) != includePublic {
+					t.Fatal("initial sync did not track the public transaction correctly")
+				}
+				if includePublic {
+					packet := &eth.NewPooledTransactionHashesPacket{
+						Types: []byte{public.Type()}, Sizes: []uint32{uint32(public.Size())},
+						Hashes: []common.Hash{public.Hash()},
+					}
+					if err := p2p.ExpectMsg(sink, eth.NewPooledTransactionHashesMsg, packet); err != nil {
+						t.Fatal(err)
+					}
+				}
+			})
+		}
+	}
+}
 
 // Tests that snap sync is disabled after a successful sync cycle.
 func TestSnapSyncDisabling69(t *testing.T) { testSnapSyncDisabling(t, eth.ETH69, snap.SNAP1) }
@@ -195,6 +240,7 @@ func TestChainSyncerCooldownSurvivesBlockAnnounce(t *testing.T) {
 	if err := handler.downloader.RegisterPeer(peer.ID(), eth.ETH68, &ethPeer{Peer: peer}); err != nil {
 		t.Fatal(err)
 	}
+	syncer.onPeerEvent()
 
 	syncer.onSyncDone(downloader.ErrPeersUnavailable)
 	if syncer.peersUnavailableUntil.IsZero() {
@@ -210,9 +256,50 @@ func TestChainSyncerCooldownSurvivesBlockAnnounce(t *testing.T) {
 	if err := handler.downloader.RegisterPeer(peer2.ID(), eth.ETH68, &ethPeer{Peer: peer2}); err != nil {
 		t.Fatal(err)
 	}
+	if err := handler.peers.unregisterPeer(peer.ID()); err != nil {
+		t.Fatal(err)
+	}
+	if handler.peers.len() != 1 {
+		t.Fatalf("peer replacement should preserve peer count, have %d", handler.peers.len())
+	}
+	syncer.onSyncDone(downloader.ErrPeersUnavailable)
 	syncer.onPeerEvent()
 	if !syncer.peersUnavailableUntil.IsZero() {
-		t.Fatal("a genuine peer-set change must clear the cooldown")
+		t.Fatal("a peer replacement must clear the cooldown")
+	}
+}
+
+func TestChainSyncerLoopInitializesPeerRevision(t *testing.T) {
+	handler, cleanup := newChainSyncerTestHandler(t)
+	defer cleanup()
+	handler.maxPeers = defaultMinSyncPeers
+
+	peer := registerPeerWithTD(t, handler.peers, 1_000_000)
+	if err := handler.downloader.RegisterPeer(peer.ID(), eth.ETH68, &ethPeer{Peer: peer}); err != nil {
+		t.Fatal(err)
+	}
+
+	syncer := handler.chainSync
+	syncer.peersUnavailableUntil = time.Now().Add(time.Hour)
+	handler.wg.Add(1)
+	done := make(chan struct{})
+	go func() {
+		syncer.loop()
+		close(done)
+	}()
+
+	if !syncer.handlePeerEvent() {
+		t.Fatal("chain syncer stopped before processing the peer event")
+	}
+	close(handler.quitSync)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("chain syncer did not stop")
+	}
+	if syncer.peersUnavailableUntil.IsZero() {
+		t.Fatal("an initial peer event with no peer-set change must not clear the cooldown")
 	}
 }
 

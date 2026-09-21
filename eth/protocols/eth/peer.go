@@ -39,15 +39,15 @@ const (
 	// before starting to randomly evict them.
 	maxKnownBlocks = 1024
 
-	// maxQueuedTxs is the maximum number of transactions to queue up before dropping
-	// older broadcasts.
+	// maxQueuedTxs is the maximum number of transactions to queue up before rejecting
+	// additional broadcasts.
 	maxQueuedTxs = 4096
 
 	// maxQueuedTxAnns is the maximum number of transaction announcements to queue up
-	// before dropping older announcements.
+	// before rejecting additional announcements.
 	maxQueuedTxAnns = 16384
 
-	// maxQueuedTxAnnsTrusted is the maximum number of transaction announcements to queue up before dropping older announcements for trusted and static peers. Specific to Bor.
+	// maxQueuedTxAnnsTrusted is the maximum number of transaction announcements to queue up for trusted and static peers. Specific to Bor.
 	maxQueuedTxAnnsTrusted = 40960
 
 	// maxQueuedBlocks is the maximum number of block propagations to queue up before
@@ -76,6 +76,7 @@ type Peer struct {
 	*p2p.Peer                   // The embedded P2P package peer
 	rw        p2p.MsgReadWriter // Input/output streams for snap
 	version   uint              // Protocol version negotiated
+	limits    peerLimits
 	lastRange atomic.Pointer[BlockRangeUpdatePacket]
 
 	head common.Hash // Latest advertised head block hash
@@ -85,14 +86,16 @@ type Peer struct {
 	queuedBlocks    chan *blockPropagation // Queue of blocks to broadcast to the peer
 	queuedBlockAnns chan *types.Block      // Queue of blocks to announce to the peer
 
-	txpool      TxPool             // Transaction pool used by the broadcasters for liveness checks
-	knownTxs    *knownCache        // Set of transaction hashes known to be known by this peer
-	txBroadcast chan []common.Hash // Channel used to queue transaction propagation requests
-	txAnnounce  chan []common.Hash // Channel used to queue transaction announcement requests
+	txpool      TxPool              // Transaction pool used by the broadcasters for liveness checks
+	knownTxs    *knownCache         // Set of transaction hashes known to be known by this peer
+	txBroadcast chan *txPropagation // Channel used to queue transaction propagation requests
+	txAnnounce  chan *txPropagation // Channel used to queue transaction announcement requests
 
-	reqDispatch chan *request  // Dispatch channel to send requests and track then until fulfillment
-	reqCancel   chan *cancel   // Dispatch channel to cancel pending requests and untrack them
-	resDispatch chan *response // Dispatch channel to fulfil pending requests and untrack them
+	reqDispatch  chan *request  // Dispatch channel to send requests and track then until fulfillment
+	reqCancel    chan *cancel   // Dispatch channel to cancel pending requests and untrack them
+	resDispatch  chan *response // Dispatch channel to fulfil pending requests and untrack them
+	blockReplies *peerReplies
+	txReplies    *peerReplies
 
 	term chan struct{} // Termination channel to stop the broadcasters
 	lock sync.RWMutex  // Mutex protecting the internal fields
@@ -106,16 +109,19 @@ func NewPeer(version uint, p *p2p.Peer, rw p2p.MsgReadWriter, txpool TxPool) *Pe
 		Peer:            p,
 		rw:              rw,
 		version:         version,
+		limits:          newPeerLimits(),
 		td:              new(big.Int),
 		knownTxs:        newKnownCache(maxKnownTxs),
 		knownBlocks:     newKnownCache(maxKnownBlocks),
 		queuedBlocks:    make(chan *blockPropagation, maxQueuedBlocks),
 		queuedBlockAnns: make(chan *types.Block, maxQueuedBlockAnns),
-		txBroadcast:     make(chan []common.Hash),
-		txAnnounce:      make(chan []common.Hash),
+		txBroadcast:     make(chan *txPropagation),
+		txAnnounce:      make(chan *txPropagation),
 		reqDispatch:     make(chan *request),
 		reqCancel:       make(chan *cancel),
 		resDispatch:     make(chan *response),
+		blockReplies:    newPeerReplies(),
+		txReplies:       newPeerReplies(),
 		txpool:          txpool,
 		term:            make(chan struct{}),
 	}
@@ -124,6 +130,8 @@ func NewPeer(version uint, p *p2p.Peer, rw p2p.MsgReadWriter, txpool TxPool) *Pe
 	go peer.broadcastTransactions()
 	go peer.announceTransactions()
 	go peer.dispatcher()
+	go peer.sendReplies(peer.blockReplies)
+	go peer.sendReplies(peer.txReplies)
 
 	return peer
 }
@@ -211,16 +219,14 @@ func (p *Peer) SendTransactions(txs types.Transactions) error {
 }
 
 // AsyncSendTransactions queues a list of transactions (by hash) to eventually
-// propagate to a remote peer. The number of pending sends are capped (new ones
-// will force old sends to be dropped)
+// propagate to a remote peer. Excess hashes are not queued.
 func (p *Peer) AsyncSendTransactions(hashes []common.Hash) {
-	select {
-	case p.txBroadcast <- hashes:
-		// Mark all the transactions as known, but ensure we don't overflow our limits
-		p.knownTxs.Add(hashes...)
-	case <-p.term:
-		p.Log().Debug("Dropping transaction propagation", "count", len(hashes))
-	}
+	p.QueueTransactions(hashes)
+}
+
+// QueueTransactions is like AsyncSendTransactions but returns the hashes retained for sending.
+func (p *Peer) QueueTransactions(hashes []common.Hash) []common.Hash {
+	return p.queueTxPropagation(p.txBroadcast, hashes)
 }
 
 // sendPooledTransactionHashes sends transaction hashes (tagged with their type
@@ -237,28 +243,32 @@ func (p *Peer) sendPooledTransactionHashes(hashes []common.Hash, types []byte, s
 }
 
 // AsyncSendPooledTransactionHashes queues a list of transactions hashes to eventually
-// announce to a remote peer.  The number of pending sends are capped (new ones
-// will force old sends to be dropped)
+// announce to a remote peer.  Excess hashes are not queued.
 func (p *Peer) AsyncSendPooledTransactionHashes(hashes []common.Hash) {
-	select {
-	case p.txAnnounce <- hashes:
-		// Mark all the transactions as known, but ensure we don't overflow our limits
-		p.knownTxs.Add(hashes...)
-	case <-p.term:
-		p.Log().Debug("Dropping transaction announcement", "count", len(hashes))
-	}
+	p.QueuePooledTransactionHashes(hashes)
+}
+
+// QueuePooledTransactionHashes is like AsyncSendPooledTransactionHashes but
+// returns the hashes retained for sending.
+func (p *Peer) QueuePooledTransactionHashes(hashes []common.Hash) []common.Hash {
+	return p.queueTxPropagation(p.txAnnounce, hashes)
 }
 
 // ReplyPooledTransactionsRLP is the response to RequestTxs.
 func (p *Peer) ReplyPooledTransactionsRLP(id uint64, hashes []common.Hash, txs []rlp.RawValue) error {
-	// Mark all the transactions as known, but ensure we don't overflow our limits
-	p.knownTxs.Add(hashes...)
+	return p.replyPooledTransactionsRLP(id, hashes, txs, nil)
+}
 
+func (p *Peer) replyPooledTransactionsRLP(id uint64, hashes []common.Hash, txs []rlp.RawValue, reservation *replyReservation) error {
 	// Not packed into PooledTransactionsResponse to avoid RLP decoding
-	return p2p.Send(p.rw, PooledTransactionsMsg, &PooledTransactionsRLPPacket{
+	if err := p.queueReservedReply(PooledTransactionsMsg, &PooledTransactionsRLPPacket{
 		RequestId:                     id,
 		PooledTransactionsRLPResponse: txs,
-	})
+	}, reservation); err != nil {
+		return err
+	}
+	p.knownTxs.Add(hashes...)
+	return nil
 }
 
 // SendNewBlockHashes announces the availability of a number of blocks through
@@ -312,7 +322,7 @@ func (p *Peer) AsyncSendNewBlock(block *types.Block, td *big.Int) {
 
 // ReplyBlockHeadersRLP is the response to GetBlockHeaders.
 func (p *Peer) ReplyBlockHeadersRLP(id uint64, headers []rlp.RawValue) error {
-	return p2p.Send(p.rw, BlockHeadersMsg, &BlockHeadersRLPPacket{
+	return p.queueReply(BlockHeadersMsg, &BlockHeadersRLPPacket{
 		RequestId:               id,
 		BlockHeadersRLPResponse: headers,
 	})
@@ -321,7 +331,7 @@ func (p *Peer) ReplyBlockHeadersRLP(id uint64, headers []rlp.RawValue) error {
 // ReplyBlockBodiesRLP is the response to GetBlockBodies.
 func (p *Peer) ReplyBlockBodiesRLP(id uint64, bodies []rlp.RawValue) error {
 	// Not packed into BlockBodiesResponse to avoid RLP decoding
-	return p2p.Send(p.rw, BlockBodiesMsg, &BlockBodiesRLPPacket{
+	return p.queueReply(BlockBodiesMsg, &BlockBodiesRLPPacket{
 		RequestId:              id,
 		BlockBodiesRLPResponse: bodies,
 	})
@@ -329,7 +339,7 @@ func (p *Peer) ReplyBlockBodiesRLP(id uint64, bodies []rlp.RawValue) error {
 
 // ReplyReceiptsRLP is the response to GetReceipts.
 func (p *Peer) ReplyReceiptsRLP(id uint64, receipts []rlp.RawValue) error {
-	return p2p.Send(p.rw, ReceiptsMsg, &ReceiptsRLPPacket{
+	return p.queueReply(ReceiptsMsg, &ReceiptsRLPPacket{
 		RequestId:           id,
 		ReceiptsRLPResponse: receipts,
 	})
@@ -477,7 +487,7 @@ func (p *Peer) IsTrusted() bool {
 
 // IsStatic returns whether the peer is a static peer or not.
 func (p *Peer) IsStatic() bool {
-	return p.Info().Network.Static
+	return p.Static()
 }
 
 // SendBlockRangeUpdate sends a notification about our available block range to the peer.

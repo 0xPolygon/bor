@@ -18,6 +18,7 @@
 package downloader
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math/big"
@@ -30,6 +31,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/checkpoint"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/state/snapshot"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -1610,6 +1612,9 @@ func (d *Downloader) fillHeaderSkeleton(from uint64, skeleton []*types.Header) (
 	d.queue.ScheduleSkeleton(from, skeleton)
 
 	err := d.concurrentFetch((*headerQueue)(d), false)
+	if errors.Is(err, ErrPeersUnavailable) {
+		err = fmt.Errorf("skeleton fill failed: %v", err)
+	}
 	if err != nil {
 		log.Debug("Skeleton fill failed", "err", err)
 	}
@@ -2387,13 +2392,117 @@ func (d *Downloader) importBlockResultsStateless(results []*fetchResult) error {
 	if d.chainInsertHook != nil {
 		d.chainInsertHook(results)
 	}
-	// Import the batch of blocks
-	if index, err := d.blockchain.InsertChainStateless(blocks, witnesses); err != nil {
+	// Import the batch of blocks. A stateless node reads contract code from
+	// local disk (WIT2 witnesses carry no code); if a witness-verified block
+	// referenced a contract whose bytecode was momentarily absent, the import
+	// fails with a recoverable *state.MissingCodeError. Fetch exactly that
+	// content-addressed blob from a peer, persist it, and retry — bounded so a
+	// blob no peer can serve degrades to the existing safe failure rather than
+	// looping. A batch may reference more than one missing code, each surfacing
+	// on a successive attempt.
+	index, err := d.insertStatelessWithHeal(blocks, witnesses)
+	if err != nil {
+		// A cancel/terminate during the (network-bound) self-heal must surface as
+		// the corresponding lifecycle error, not a body error.
+		select {
+		case <-d.quitCh:
+			return errTerminated
+		case <-d.cancelCh:
+			return errCanceled
+		default:
+		}
 		log.Warn("Stateless block import failed", "index", index, "hash", blocks[index].Hash(), "err", err)
 		return errInvalidBody
 	}
 
 	return nil
+}
+
+// insertStatelessWithHeal imports the batch and, on a recoverable missing-code
+// failure, fetches the absent bytecode from a snap peer and retries — bounded by
+// maxStatelessCodeHeals. The heal is abortable through the downloader's
+// quit/cancel channels: stopping() ends the retry loop before the next attempt
+// and cancelOnStop aborts an in-flight fetch, so Cancel()/Terminate() is never
+// blocked for the full span of outstanding network timeouts (up to
+// maxStatelessCodeHeals * statelessCodeHealTimeout) as it would be otherwise.
+func (d *Downloader) insertStatelessWithHeal(blocks []*types.Block, witnesses []*stateless.Witness) (int, error) {
+	index, err := d.blockchain.InsertChainStateless(blocks, witnesses)
+	if err == nil {
+		return index, nil
+	}
+	healCtx, cancelHeal := context.WithCancel(context.Background())
+	defer cancelHeal()
+	go d.cancelOnStop(healCtx, cancelHeal)
+
+	for attempts := 0; attempts < maxStatelessCodeHeals && !d.stopping(); attempts++ {
+		if !d.recoverMissingStatelessCode(healCtx, err) {
+			break
+		}
+		if index, err = d.blockchain.InsertChainStateless(blocks, witnesses); err == nil {
+			break
+		}
+	}
+	return index, err
+}
+
+// stopping reports, without blocking, whether the downloader has been cancelled
+// or terminated.
+func (d *Downloader) stopping() bool {
+	select {
+	case <-d.quitCh:
+		return true
+	case <-d.cancelCh:
+		return true
+	default:
+		return false
+	}
+}
+
+// cancelOnStop cancels ctx as soon as the downloader is cancelled or terminated,
+// and returns once that happens or ctx is done by other means.
+func (d *Downloader) cancelOnStop(ctx context.Context, cancel context.CancelFunc) {
+	select {
+	case <-d.quitCh:
+	case <-d.cancelCh:
+	case <-ctx.Done():
+	}
+	cancel()
+}
+
+// maxStatelessCodeHeals bounds how many missing contract codes a single
+// stateless batch import will fetch-and-retry before giving up, so a blob no
+// peer can serve cannot spin the import forever.
+const maxStatelessCodeHeals = 8
+
+// statelessCodeHealTimeout bounds a single self-heal bytecode fetch.
+const statelessCodeHealTimeout = 30 * time.Second
+
+// recoverMissingStatelessCode attempts to self-heal a stateless import failure
+// caused by a contract whose bytecode is absent from local disk. If err carries
+// a *state.MissingCodeError, it fetches that content-addressed blob from a snap
+// peer, verifies it (FetchByteCodes checks the hash), and persists it to the
+// chain db so a retry can read it. It reports whether a retry is now warranted.
+// Any non-code failure, a missing SnapSyncer, or an unservable blob returns
+// false, leaving the caller's existing (safe) failure path intact. The fetch is
+// bounded by both statelessCodeHealTimeout and ctx, so a cancelled ctx (download
+// cancel/terminate) aborts it promptly instead of waiting out the timeout.
+func (d *Downloader) recoverMissingStatelessCode(ctx context.Context, err error) bool {
+	var mce *state.MissingCodeError
+	if !errors.As(err, &mce) || d.SnapSyncer == nil {
+		return false
+	}
+	fetchCtx, cancel := context.WithTimeout(ctx, statelessCodeHealTimeout)
+	defer cancel()
+
+	codes, ferr := d.SnapSyncer.FetchByteCodes(fetchCtx, []common.Hash{mce.Hash})
+	code, ok := codes[mce.Hash]
+	if !ok {
+		log.Warn("Stateless self-heal: missing bytecode not served by any peer", "hash", mce.Hash, "err", ferr)
+		return false
+	}
+	rawdb.WriteCode(d.stateDB, mce.Hash, code)
+	log.Info("Stateless self-heal: fetched and persisted missing contract code", "hash", mce.Hash, "size", len(code))
+	return true
 }
 
 // fetchWitnesses is a dedicated goroutine responsible for fetching block witnesses.

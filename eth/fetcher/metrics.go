@@ -24,13 +24,8 @@ import (
 
 var (
 	// Witness verification metrics
-	witnessVerifyCheckMeter       = metrics.NewRegisteredMeter("eth/fetcher/witness/verify/check", nil)
-	witnessVerifySuccessMeter     = metrics.NewRegisteredMeter("eth/fetcher/witness/verify/success", nil)
-	witnessVerifyFailureMeter     = metrics.NewRegisteredMeter("eth/fetcher/witness/verify/failure", nil)
-	witnessVerifyDropMeter        = metrics.NewRegisteredMeter("eth/fetcher/witness/verify/drop", nil)
-	witnessVerifyJailMeter        = metrics.NewRegisteredMeter("eth/fetcher/witness/verify/jail", nil)
-	witnessVerifyPeersInsuffMeter = metrics.NewRegisteredMeter("eth/fetcher/witness/verify/peers/insufficient", nil)
-	witnessVerifyNoConsensusMeter = metrics.NewRegisteredMeter("eth/fetcher/witness/verify/consensus/none", nil)
+	witnessVerifyCheckMeter   = metrics.NewRegisteredMeter("eth/fetcher/witness/verify/check", nil)
+	witnessVerifyFailureMeter = metrics.NewRegisteredMeter("eth/fetcher/witness/verify/failure", nil)
 
 	// witnessOversizedMeter tracks WIT2 size-oracle rejections: a serving peer
 	// delivered a witness larger than the accepted band around the BP-signed

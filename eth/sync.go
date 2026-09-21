@@ -43,6 +43,9 @@ func (h *handler) syncTransactions(p *eth.Peer) {
 			if h.privateTxGetter != nil && h.privateTxGetter.IsTxPrivate(tx.Hash) {
 				continue
 			}
+			if resolved := tx.Resolve(); resolved == nil || resolved.GetOptions() != nil {
+				continue
+			}
 			hashes = append(hashes, tx.Hash)
 		}
 	}
@@ -61,8 +64,8 @@ type chainSyncer struct {
 	peerEventCh chan struct{}
 	doneCh      chan error // non-nil when sync is running
 
-	peersUnavailableUntil   time.Time
-	peersUnavailableAtCount int
+	peersUnavailableUntil time.Time
+	observedPeerRevision  uint64
 }
 
 // chainSyncOp is a scheduled sync operation.
@@ -77,7 +80,7 @@ type chainSyncOp struct {
 func newChainSyncer(handler *handler) *chainSyncer {
 	return &chainSyncer{
 		handler:     handler,
-		peerEventCh: make(chan struct{}),
+		peerEventCh: make(chan struct{}, 1),
 	}
 }
 
@@ -112,6 +115,7 @@ func (cs *chainSyncer) loop() {
 	retry := newResettableTimer()
 	defer retry.stop()
 
+	cs.observedPeerRevision = cs.handler.peers.currentRevision()
 	for {
 		if op, wait := cs.nextSyncOp(); op != nil {
 			retry.stop()
@@ -143,7 +147,6 @@ func (cs *chainSyncer) onSyncDone(err error) {
 
 	if errors.Is(err, downloader.ErrPeersUnavailable) || errors.Is(err, downloader.ErrPeerBackedOff) || errors.Is(err, whitelist.ErrNoRemote) {
 		cs.peersUnavailableUntil = time.Now().Add(forceSyncCycle)
-		cs.peersUnavailableAtCount = cs.handler.peers.len()
 	} else {
 		cs.peersUnavailableUntil = time.Time{}
 	}
@@ -159,9 +162,11 @@ func (cs *chainSyncer) onSyncDone(err error) {
 }
 
 func (cs *chainSyncer) onPeerEvent() {
-	if !cs.peersUnavailableUntil.IsZero() && cs.handler.peers.len() != cs.peersUnavailableAtCount {
+	revision := cs.handler.peers.currentRevision()
+	if !cs.peersUnavailableUntil.IsZero() && revision != cs.observedPeerRevision {
 		cs.peersUnavailableUntil = time.Time{}
 	}
+	cs.observedPeerRevision = revision
 }
 
 func (cs *chainSyncer) shutdown() {

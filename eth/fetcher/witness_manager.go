@@ -32,10 +32,6 @@ const (
 	witnessCacheSize = 10
 	witnessCacheTTL  = 2 * time.Minute
 
-	// Witness verification constants
-	witnessVerificationPeers   = 2               // Number of random peers to query for verification
-	witnessVerificationTimeout = 5 * time.Second // Timeout for verification queries
-
 	// Witness size estimation constants
 	// Assuming 1M gas results in 1MB witness, and max page size is 15MB
 	gasPerMB             = 1_000_000 // 1M gas per MB of witness
@@ -98,7 +94,6 @@ type witnessManager struct {
 	// Parent fetcher fields/methods required
 	parentQuit                   <-chan struct{}          // Parent fetcher's quit channel
 	parentDropPeer               peerDropFn               // Function to drop a misbehaving peer
-	parentJailPeer               peerJailFn               // Function to jail a peer to prevent reconnection (optional)
 	parentEnqueueCh              chan<- *enqueueRequest   // Channel to send completed blocks+witnesses back
 	parentGetBlock               blockRetrievalFn         // Function to check if block is known locally
 	parentGetHeader              HeaderRetrievalFn        // Function to check if header is known locally (needed for checks)
@@ -165,7 +160,6 @@ type witnessManager struct {
 func newWitnessManager(
 	parentQuit <-chan struct{},
 	parentDropPeer peerDropFn,
-	parentJailPeer peerJailFn,
 	parentEnqueueCh chan<- *enqueueRequest,
 	parentGetBlock blockRetrievalFn,
 	parentGetHeader HeaderRetrievalFn,
@@ -184,7 +178,6 @@ func newWitnessManager(
 	m := &witnessManager{
 		parentQuit:                   parentQuit,
 		parentDropPeer:               parentDropPeer,
-		parentJailPeer:               parentJailPeer,
 		parentEnqueueCh:              parentEnqueueCh,
 		parentGetBlock:               parentGetBlock,
 		parentGetHeader:              parentGetHeader,
@@ -1193,107 +1186,33 @@ func (m *witnessManager) calculatePageThreshold() uint64 {
 	return threshold
 }
 
-// getConsensusPageCountWithOriginal gets consensus page count including the original peer
-func (m *witnessManager) getConsensusPageCountWithOriginal(peers []string, hash common.Hash, originalPageCount uint64, getWitnessPageCount func(peer string, hash common.Hash) (uint64, error)) uint64 {
-	// Start with the original peer's count
-	countMap := make(map[uint64]int)
-	countMap[originalPageCount] = 1
-
-	// Query random peers and add their counts
-	for _, peer := range peers {
-		pageCount, err := getWitnessPageCount(peer, hash)
-		if err == nil {
-			countMap[pageCount]++
-		}
-	}
-
-	// Find the most common page count (majority vote)
-	var maxCount int
-	var consensusCount uint64
-	for count, freq := range countMap {
-		if freq > maxCount {
-			maxCount = freq
-			consensusCount = count
-		}
-	}
-
-	// Log the consensus result
-	log.Debug("[wm] Consensus calculation", "counts", countMap, "consensus", consensusCount, "maxVotes", maxCount)
-
-	// Only return consensus if we have majority (at least 2 out of 3)
-	if maxCount >= 2 {
-		return consensusCount
-	}
-
-	// No clear majority, return 0 (will be treated as no consensus)
-	return 0
-}
-
-// CheckWitnessPageCount checks if a witness page count should trigger verification
-// Returns true if peer is honest (or under threshold), false if peer should be dropped
-func (m *witnessManager) CheckWitnessPageCount(hash common.Hash, pageCount uint64, peer string, getRandomPeers func() []string, getWitnessPageCount func(peer string, hash common.Hash) (uint64, error)) bool {
-	// Track that a verification check is being performed
+// CheckWitnessPageCount bounds the page count a peer may report for a witness.
+//
+// Page counts are non-deterministic across honest nodes: a valid witness can be
+// one page larger on one node than on another (the trie-node set collected
+// during execution varies). We therefore do NOT compare page counts across
+// peers and do NOT jail. The previous cross-peer "consensus" vote both
+// false-positively disconnected honest peers whose witness rounded to an extra
+// page and failed open when the sampled peers did not have the witness.
+//
+// Instead the count is bounded by the gas-derived page threshold, which already
+// carries large headroom over the real per-block witness size. A report within
+// the threshold is accepted; a report above it is larger than the block gas
+// limit can plausibly produce, so it is refused for this peer — the fetch simply
+// tries another peer — without disconnecting or jailing.
+func (m *witnessManager) CheckWitnessPageCount(hash common.Hash, pageCount uint64, peer string) bool {
 	witnessVerifyCheckMeter.Mark(1)
 
-	// Calculate dynamic threshold based on gas ceiling
 	threshold := m.calculatePageThreshold()
-
-	// If page count is within threshold, no verification needed
-	// No peer queries are made in this case
 	if pageCount <= threshold {
-		log.Debug("[wm] Witness page count within threshold, no verification needed", "peer", peer, "pageCount", pageCount, "threshold", threshold)
+		log.Debug("[wm] Witness page count within threshold", "peer", peer, "pageCount", pageCount, "threshold", threshold)
 		witnessPageCountBelowThresholdMeter.Mark(1)
 		return true
 	}
 
-	// Page count exceeds threshold - verify synchronously
-	log.Debug("[wm] Witness page count exceeds threshold, running synchronous verification", "peer", peer, "hash", hash, "pageCount", pageCount, "threshold", threshold)
+	log.Warn("[wm] Witness page count exceeds gas-derived ceiling; refusing this peer's offering for the block (no jail)",
+		"peer", peer, "hash", hash, "pageCount", pageCount, "threshold", threshold)
 	witnessPageCountAboveThresholdMeter.Mark(1)
-	return m.verifyWitnessPageCountSync(hash, pageCount, peer, getRandomPeers, getWitnessPageCount)
-}
-
-// verifyWitnessPageCountSync verifies a witness page count synchronously and returns result
-func (m *witnessManager) verifyWitnessPageCountSync(hash common.Hash, reportedPageCount uint64, reportingPeer string, getRandomPeers func() []string, getWitnessPageCount func(peer string, hash common.Hash) (uint64, error)) bool {
-	// Get random peers for verification
-	randomPeers := getRandomPeers()
-	if len(randomPeers) < witnessVerificationPeers {
-		// Not enough peers for verification, assume honest (conservative approach)
-		log.Debug("[wm] Not enough peers for verification, assuming honest", "peer", reportingPeer, "availablePeers", len(randomPeers))
-		witnessVerifyPeersInsuffMeter.Mark(1)
-		return true
-	}
-
-	// Select random peers for verification
-	selectedPeers := randomPeers[:witnessVerificationPeers]
-
-	// Query selected peers for page count and include original peer's count in consensus
-	consensusPageCount := m.getConsensusPageCountWithOriginal(selectedPeers, hash, reportedPageCount, getWitnessPageCount)
-
-	// Determine if original peer is honest based on majority consensus
-	if consensusPageCount != reportedPageCount && consensusPageCount != 0 {
-		// Peer is dishonest - drop and jail immediately
-		log.Warn("Dropping dishonest peer - consensus verification failed", "peer", reportingPeer, "reported", reportedPageCount, "consensus", consensusPageCount)
-		witnessVerifyFailureMeter.Mark(1)
-
-		m.parentDropPeer(reportingPeer)
-		witnessVerifyDropMeter.Mark(1)
-
-		// Also jail the peer to prevent reconnection
-		if m.parentJailPeer != nil {
-			log.Warn("Jailing dishonest peer", "peer", reportingPeer)
-			m.parentJailPeer(reportingPeer)
-			witnessVerifyJailMeter.Mark(1)
-		}
-		return false
-	}
-
-	// Track no consensus case
-	if consensusPageCount == 0 {
-		witnessVerifyNoConsensusMeter.Mark(1)
-	}
-
-	// Peer is honest or no consensus (assume honest to avoid false positives)
-	log.Debug("[wm] Peer verification successful", "peer", reportingPeer, "pageCount", reportedPageCount, "hash", hash)
-	witnessVerifySuccessMeter.Mark(1)
-	return true
+	witnessVerifyFailureMeter.Mark(1)
+	return false
 }

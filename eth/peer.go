@@ -340,7 +340,7 @@ func (p *ethPeer) RequestWitnessesWithVerification(hashes []common.Hash, dlResCh
 	cancelCh := make(chan struct{})
 
 	// Build all the initial requests synchronously.
-	buildWitReqErr := p.buildWitnessRequests(hashes, &witReqs, &witReqsWg, witTotalPages, witTotalRequest, witReqResCh, witReqSem, &mapsMu, &buildRequestMu, failedRequests, cancelCh)
+	buildWitReqErr := p.buildWitnessRequests(hashes, &witReqs, &witReqsWg, witTotalPages, witTotalRequest, witReqResCh, witReqSem, &mapsMu, &buildRequestMu, failedRequests, downloadPaused, cancelCh)
 	if buildWitReqErr != nil {
 		p.witPeer.Peer.Log().Error("Error in building witness requests", "peer", p.ID(), "err", buildWitReqErr)
 		return nil, buildWitReqErr
@@ -503,7 +503,7 @@ func (p *ethPeer) receiveWitnessPage(
 			// non blocking call to avoid race condition because of semaphore
 			witReqsWg.Add(1) // protecting from not finishing before requests are built
 			go func() {
-				buildWitReqErr := p.buildWitnessRequests(hashes, witReqs, witReqsWg, witTotalPages, witTotalRequest, witResCh, witReqSem, mapsMu, buildRequestMu, failedRequests, cancel)
+				buildWitReqErr := p.buildWitnessRequests(hashes, witReqs, witReqsWg, witTotalPages, witTotalRequest, witResCh, witReqSem, mapsMu, buildRequestMu, failedRequests, downloadPaused, cancel)
 				if buildWitReqErr != nil {
 					p.witPeer.Peer.Log().Error("Error in building witness requests", "peer", p.ID(), "err", buildWitReqErr)
 				}
@@ -530,6 +530,18 @@ func (p *ethPeer) receiveWitnessPage(
 			continue
 		}
 
+		// A hash whose download is paused (page count refused, or a structural
+		// violation already recorded) takes no further pages from this peer.
+		// Discard rather than accumulate: in-flight pages that land after the
+		// pause must neither complete a refused witness nor re-trigger request
+		// building for it.
+		mapsMu.RLock()
+		paused := downloadPaused[page.Hash]
+		mapsMu.RUnlock()
+		if paused {
+			continue
+		}
+
 		// Validate that current page number is within bounds
 		if page.Page >= page.TotalPages {
 			return p.jailPeerForViolation(jailPeer, "invalid page number", map[string]interface{}{
@@ -539,23 +551,14 @@ func (p *ethPeer) receiveWitnessPage(
 			})
 		}
 
-		receivedWitPages[page.Hash] = append(receivedWitPages[page.Hash], page)
-		if len(receivedWitPages[page.Hash]) == int(page.TotalPages) {
-			wit, err := p.reconstructWitness(receivedWitPages[page.Hash])
-			if err != nil {
-				return err
-			}
-			reconstructedWitness[page.Hash] = wit
-		}
-
 		// Check and validate TotalPages consistency
 		mapsMu.Lock()
 		existingTotalPages, hasTotalPages := witTotalPages[page.Hash]
 		if hasTotalPages {
 			// We already know TotalPages - verify it hasn't changed
 			if existingTotalPages != page.TotalPages {
-				mapsMu.Unlock()
 				downloadPaused[page.Hash] = true
+				mapsMu.Unlock()
 				return p.jailPeerForViolation(jailPeer, "inconsistent TotalPages", map[string]interface{}{
 					"hash":     page.Hash,
 					"existing": existingTotalPages,
@@ -568,51 +571,52 @@ func (p *ethPeer) receiveWitnessPage(
 		}
 		mapsMu.Unlock()
 
-		// Trigger page count verification if callback is provided (only on first page)
-		// If verification fails (peer is dishonest), drop the peer immediately
-		if verifyPageCount != nil && !hasTotalPages {
-			isHonest := verifyPageCount(page.Hash, page.TotalPages, p.ID())
-			if !isHonest {
-				// Peer is dishonest - pause download and discard pages
-				mapsMu.Lock()
-				downloadPaused[page.Hash] = true
-				mapsMu.Unlock()
-				p.witPeer.Peer.Log().Warn("Peer failed verification, dropping peer", "peer", p.ID(), "hash", page.Hash, "totalPages", page.TotalPages)
-				// Return error to trigger peer drop
-				return fmt.Errorf("peer failed page count verification: claimed=%d pages", page.TotalPages)
-			}
+		// Bound the page count the first time we learn it, BEFORE storing the
+		// page. A count above the gas-derived ceiling is refused for this peer
+		// (see witnessManager.CheckWitnessPageCount): pause the hash so no
+		// further page of it is accepted or requested from this peer, discard
+		// what we hold, and move on WITHOUT returning an error. Returning one
+		// would route through the deferred retry handler, which rebuilds
+		// requests for every remaining page of the refused witness — exactly
+		// the download we are declining. The peer is neither dropped nor
+		// jailed; the request resolves empty and the fetch tries another peer.
+		if verifyPageCount != nil && !hasTotalPages && !verifyPageCount(page.Hash, page.TotalPages, p.ID()) {
+			mapsMu.Lock()
+			downloadPaused[page.Hash] = true
+			mapsMu.Unlock()
+			delete(receivedWitPages, page.Hash)
+			delete(reconstructedWitness, page.Hash)
+			p.witPeer.Peer.Log().Warn("Refusing witness offering: page count exceeds gas-derived ceiling (peer kept, not jailed)", "peer", p.ID(), "hash", page.Hash, "totalPages", page.TotalPages)
+			continue
 		}
 
-		// Additional check: Verify we haven't received more pages than claimed
-		mapsMu.RLock()
-		currentTotalPages := witTotalPages[page.Hash]
-		mapsMu.RUnlock()
+		receivedWitPages[page.Hash] = append(receivedWitPages[page.Hash], page)
 
-		if len(receivedWitPages[page.Hash]) > int(currentTotalPages) {
+		// Verify we haven't received more pages than claimed (a duplicate page
+		// number slips past the per-page bounds check above).
+		if len(receivedWitPages[page.Hash]) > int(page.TotalPages) {
 			mapsMu.Lock()
 			downloadPaused[page.Hash] = true
 			mapsMu.Unlock()
 			return p.jailPeerForViolation(jailPeer, "more pages than TotalPages", map[string]interface{}{
 				"hash":     page.Hash,
 				"received": len(receivedWitPages[page.Hash]),
-				"total":    currentTotalPages,
+				"total":    page.TotalPages,
 			})
 		}
 
-		// Check if download is paused before building more requests
-		mapsMu.RLock()
-		paused := downloadPaused[page.Hash]
-		mapsMu.RUnlock()
-
-		if paused {
-			// Download is paused, don't build more requests
-			return nil
+		if len(receivedWitPages[page.Hash]) == int(page.TotalPages) {
+			wit, err := p.reconstructWitness(receivedWitPages[page.Hash])
+			if err != nil {
+				return err
+			}
+			reconstructedWitness[page.Hash] = wit
 		}
 
 		// non blocking call to avoid race condition because of semaphore
 		witReqsWg.Add(1) // protecting from not finishing before requests are built
 		go func() {
-			buildWitReqErr := p.buildWitnessRequests(hashes, witReqs, witReqsWg, witTotalPages, witTotalRequest, witResCh, witReqSem, mapsMu, buildRequestMu, failedRequests, cancel)
+			buildWitReqErr := p.buildWitnessRequests(hashes, witReqs, witReqsWg, witTotalPages, witTotalRequest, witResCh, witReqSem, mapsMu, buildRequestMu, failedRequests, downloadPaused, cancel)
 			if buildWitReqErr != nil {
 				p.witPeer.Peer.Log().Error("Error in building witness requests", "peer", p.ID(), "err", buildWitReqErr)
 			}
@@ -651,6 +655,7 @@ func (p *ethPeer) buildWitnessRequests(hashes []common.Hash,
 	mapsMu *sync.RWMutex,
 	buildRequestMu *sync.RWMutex,
 	failedRequests map[common.Hash]map[uint64]witReqRetryCount,
+	downloadPaused map[common.Hash]bool,
 	cancel <-chan struct{},
 ) error {
 	buildRequestMu.Lock()
@@ -659,9 +664,16 @@ func (p *ethPeer) buildWitnessRequests(hashes []common.Hash,
 	//checking requests to be done
 	for _, hash := range hashes {
 		mapsMu.RLock()
+		paused := downloadPaused[hash]
 		start := witTotalRequest[hash]
 		end, ok := witTotalPages[hash]
 		mapsMu.RUnlock()
+		if paused {
+			// Refused (or violating) offering: request nothing further for it
+			// from this peer, including the remaining pages learned from the
+			// page that triggered the pause.
+			continue
+		}
 		if !ok || end == 0 {
 			end = DefaultPagesRequestPerWitness
 		}
@@ -692,6 +704,11 @@ func (p *ethPeer) buildWitnessRequests(hashes []common.Hash,
 
 	mapsMu.RLock()
 	for hash, pages := range failedRequests {
+		if downloadPaused[hash] {
+			// Never retry a page of a paused hash: a refused offering must
+			// not be re-requested from the peer we just refused it from.
+			continue
+		}
 		for page, retryCount := range pages {
 			if retryCount.ShouldRetryAgain {
 				toRetry = append(toRetry, retryItem{hash, page})
