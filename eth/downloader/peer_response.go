@@ -30,9 +30,9 @@ import (
 )
 
 const (
-	peerJailBackoff = 1 * time.Minute
-	peerSoftBackoff = 30 * time.Second
-	peerDropBackoff = 5 * time.Minute
+	peerJailBackoff = 30 * time.Second
+	peerSoftBackoff = 10 * time.Second
+	peerDropBackoff = 1 * time.Minute
 
 	softFailureWindow        = 10 * time.Minute
 	softFailureJailThreshold = 4

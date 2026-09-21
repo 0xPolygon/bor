@@ -2052,6 +2052,11 @@ func (c *Config) buildNode() (*node.Config, error) {
 		if len(cfg.P2P.TrustedNodes) == 0 {
 			cfg.P2P.TrustedNodes = cfg.TrustedNodes()
 		}
+
+		// Penalties are waived for trusted peers only.
+		if len(cfg.P2P.StaticNodes) > 0 && len(cfg.P2P.TrustedNodes) == 0 {
+			log.Warn("static-nodes set without trusted-nodes: these peers can still be benched or dropped by sync peer-response", "static", len(cfg.P2P.StaticNodes))
+		}
 	}
 
 	if c.P2P.NoDiscover {
