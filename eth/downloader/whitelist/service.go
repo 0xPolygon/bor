@@ -413,6 +413,21 @@ func reportStaleCanonicalReimport(name string, chain []*types.Header, number, cu
 		"service", name, "from", chain[0].Number, "to", chain[len(chain)-1].Number, "whitelisted", number, "head", current)
 }
 
+// isCanonicalSegment reports whether every header in chain is the locally
+// canonical block at its number according to the oracle. A nil oracle means
+// the chain cannot be checked and the segment is not considered canonical.
+func isCanonicalSegment(chain []*types.Header, canonical func(number uint64) common.Hash) bool {
+	if canonical == nil {
+		return false
+	}
+	for _, h := range chain {
+		if canonical(h.Number.Uint64()) != h.Hash() {
+			return false
+		}
+	}
+	return true
+}
+
 //nolint:unparam
 func isValidChain(currentHeader *types.Header, chain []*types.Header, doExist bool, number uint64, hash common.Hash, canonical func(number uint64) common.Hash, name string) (bool, error) {
 	// Check if we have milestone to validate incoming chain in memory
@@ -436,18 +451,9 @@ func isValidChain(currentHeader *types.Header, chain []*types.Header, doExist bo
 		// the milestone moved past them). Case (b) is harmless and must not be
 		// reported as a whitelist mismatch: InsertChain will treat the blocks
 		// as known. Only accept it when every header is provably canonical.
-		if canonical != nil {
-			allCanonical := true
-			for _, h := range chain {
-				if canonical(h.Number.Uint64()) != h.Hash() {
-					allCanonical = false
-					break
-				}
-			}
-			if allCanonical {
-				reportStaleCanonicalReimport(name, chain, number, current)
-				return true, nil
-			}
+		if isCanonicalSegment(chain, canonical) {
+			reportStaleCanonicalReimport(name, chain, number, current)
+			return true, nil
 		}
 		return false, nil
 	}

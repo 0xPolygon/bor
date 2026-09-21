@@ -43,7 +43,7 @@ func canonicalTestChain(start, end uint64) (byNum func(uint64) *types.Header, ca
 // oracle isValidChain reports the segment as invalid because it lies entirely
 // below the milestone number.
 func TestIsValidChainAcceptsStaleCanonicalSegment(t *testing.T) {
-	t.Parallel()
+	// Not parallel: it marks MilestoneStaleCanonicalMeter, which other tests read.
 
 	byNum, canonical := canonicalTestChain(320, 363)
 	milestone := byNum(360) // whitelisted milestone: block 360 with its canonical hash
@@ -112,7 +112,7 @@ func TestIsValidChainRejectsPartiallyCanonicalSegment(t *testing.T) {
 // same below-whitelist branch, so both need the oracle for the re-import to be
 // accepted.
 func TestServiceAcceptsStaleCanonicalReimport(t *testing.T) {
-	t.Parallel()
+	// Not parallel: it asserts on the package-level stale-canonical meters.
 
 	byNum, _ := canonicalTestChain(320, 363)
 
@@ -126,11 +126,18 @@ func TestServiceAcceptsStaleCanonicalReimport(t *testing.T) {
 	s.ProcessCheckpoint(340, byNum(340).Hash())
 	s.ProcessMilestone(360, byNum(360).Hash())
 
+	checkpointBefore := CheckpointStaleCanonicalMeter.Snapshot().Count()
+	milestoneBefore := MilestoneStaleCanonicalMeter.Snapshot().Count()
+
 	// Late re-import of already-canonical blocks below both whitelisted entries.
 	stale := []*types.Header{byNum(330), byNum(331)}
 	valid, err := s.IsValidChain(byNum(363), stale)
 	require.NoError(t, err)
 	require.True(t, valid, "stale canonical re-import rejected through Service.IsValidChain")
+
+	// Both services took the accept path and each reported it once.
+	require.Equal(t, int64(1), CheckpointStaleCanonicalMeter.Snapshot().Count()-checkpointBefore, "checkpoint stale-canonical meter")
+	require.Equal(t, int64(1), MilestoneStaleCanonicalMeter.Snapshot().Count()-milestoneBefore, "milestone stale-canonical meter")
 
 	// A fork below the whitelisted entries is still rejected.
 	fork330 := &types.Header{Number: big.NewInt(330), ParentHash: byNum(329).Hash(), Extra: []byte("fork")}
@@ -145,4 +152,21 @@ func TestServiceAcceptsStaleCanonicalReimport(t *testing.T) {
 	valid, err = s.IsValidChain(byNum(363), []*types.Header{unknown})
 	require.NoError(t, err)
 	require.False(t, valid, "unknown block below the whitelisted entries accepted")
+}
+
+// TestServiceWithoutBlockchainKeepsStrictBelowWhitelist: with no chain reader
+// the oracle cannot prove anything canonical, so a segment below the
+// whitelisted entry keeps the historical strict rejection.
+func TestServiceWithoutBlockchainKeepsStrictBelowWhitelist(t *testing.T) {
+	t.Parallel()
+
+	byNum, _ := canonicalTestChain(320, 363)
+
+	s := NewMockService(rawdb.NewMemoryDatabase())
+	s.SetBlockchain(nil)
+	s.ProcessMilestone(360, byNum(360).Hash())
+
+	valid, err := s.IsValidChain(byNum(363), []*types.Header{byNum(330), byNum(331)})
+	require.NoError(t, err)
+	require.False(t, valid, "segment below the milestone accepted without a chain reader")
 }

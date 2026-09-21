@@ -66,6 +66,7 @@ func NewMockService(db ethdb.Database) *Service {
 				doExist:  false,
 				interval: 256,
 				db:       db,
+				name:     "checkpoint",
 			},
 		},
 		milestoneService: &milestone{
@@ -73,6 +74,7 @@ func NewMockService(db ethdb.Database) *Service {
 				doExist:  false,
 				interval: 256,
 				db:       db,
+				name:     "milestone",
 			},
 			LockedMilestoneIDs:   make(map[string]struct{}),
 			FutureMilestoneList:  make(map[uint64]common.Hash),
