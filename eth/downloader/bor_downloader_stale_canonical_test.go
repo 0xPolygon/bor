@@ -108,4 +108,21 @@ func TestImportBlockResultsStaleCanonicalReimport(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, peerFailureWhitelistMismatch, reason)
 	require.Equal(t, uint64(64), tester.chain.CurrentBlock().Number.Uint64(), "head must be untouched")
+	// This node then votes on the next candidate, ending at 62, which locks the
+	// milestone service until that candidate finalizes. On a validator this is
+	// the normal state. The locked gate refuses every segment ending at or
+	// below 62 unless it is already canonical.
+	require.True(t, service.LockMutex(62))
+	service.UnlockMutex(true, "milestone-62", 62, base[62].Hash())
+
+	// Canonical blocks below the whitelisted milestone, and canonical block 61
+	// between the whitelisted milestone and the locked candidate, both re-import.
+	require.NoError(t, tester.downloader.importBlockResults(fetchResultsFor(base[30:32])), "re-import below the milestone must pass while locked")
+	require.NoError(t, tester.downloader.importBlockResults(fetchResultsFor(base[61:62])), "re-import below the locked candidate must pass while locked")
+	require.Equal(t, uint64(64), tester.chain.CurrentBlock().Number.Uint64(), "head must be untouched")
+
+	// The fork below the locked candidate is still a whitelist mismatch.
+	err = tester.downloader.importBlockResults(forkResults)
+	require.ErrorIs(t, err, errInvalidChain)
+	require.ErrorIs(t, err, whitelist.ErrMismatch)
 }

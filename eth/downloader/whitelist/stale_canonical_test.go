@@ -170,3 +170,65 @@ func TestServiceWithoutBlockchainKeepsStrictBelowWhitelist(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, valid, "segment below the milestone accepted without a chain reader")
 }
+
+// TestServiceAcceptsCanonicalReimportWhileLocked covers the second gate the
+// milestone service applies once this node has voted on a milestone candidate
+// (GetVoteOnHash locks the service until the candidate finalizes, which on a
+// validator is the normal state). While locked, IsReorgAllowed refuses every
+// segment ending at or below the locked number. A late re-import of blocks
+// that are already canonical must still pass, both below the whitelisted
+// milestone and in the gap between the whitelisted milestone and the locked
+// candidate, while a fork in that range is still rejected.
+func TestServiceAcceptsCanonicalReimportWhileLocked(t *testing.T) {
+	// Not parallel: it asserts on the package-level stale-canonical meters.
+
+	byNum, _ := canonicalTestChain(320, 363)
+
+	reader := NewMockChainReader()
+	for n := uint64(320); n <= 363; n++ {
+		reader.SetBlock(n, types.NewBlockWithHeader(byNum(n)))
+	}
+	reader.SetCurrentBlock(byNum(363))
+
+	s := NewMockServiceWithBlockchain(rawdb.NewMemoryDatabase(), reader)
+	s.ProcessMilestone(340, byNum(340).Hash())
+
+	// This node voted for the candidate ending at 362: the service is locked.
+	require.True(t, s.LockMutex(362))
+	s.UnlockMutex(true, "milestone-362", 362, byNum(362).Hash())
+	require.True(t, s.milestoneService.(*milestone).Locked)
+
+	// Sanity: while locked, IsReorgAllowed refuses anything ending at or below 362.
+	require.False(t, s.milestoneService.(*milestone).IsReorgAllowed([]*types.Header{byNum(350), byNum(351)}, 362, byNum(362).Hash()))
+
+	lockedBefore := MilestoneLockedCanonicalMeter.Snapshot().Count()
+	staleBefore := MilestoneStaleCanonicalMeter.Snapshot().Count()
+
+	// Canonical re-import below the whitelisted milestone: both gates exempt it.
+	valid, err := s.IsValidChain(byNum(363), []*types.Header{byNum(330), byNum(331)})
+	require.NoError(t, err)
+	require.True(t, valid, "canonical re-import below the whitelisted milestone rejected while locked")
+	require.Equal(t, int64(1), MilestoneStaleCanonicalMeter.Snapshot().Count()-staleBefore, "stale-canonical meter")
+	require.Equal(t, int64(1), MilestoneLockedCanonicalMeter.Snapshot().Count()-lockedBefore, "locked-canonical meter")
+
+	// Canonical re-import between the whitelisted milestone and the locked
+	// candidate: only the lock gate is in play, and it must let it through.
+	valid, err = s.IsValidChain(byNum(363), []*types.Header{byNum(350), byNum(351)})
+	require.NoError(t, err)
+	require.True(t, valid, "canonical re-import below the locked candidate rejected")
+	require.Equal(t, int64(2), MilestoneLockedCanonicalMeter.Snapshot().Count()-lockedBefore, "locked-canonical meter")
+	require.Equal(t, int64(1), MilestoneStaleCanonicalMeter.Snapshot().Count()-staleBefore, "stale-canonical meter must not double count")
+
+	// A fork below the locked candidate is still a contradiction of the vote.
+	fork350 := &types.Header{Number: big.NewInt(350), ParentHash: byNum(349).Hash(), Extra: []byte("fork")}
+	fork351 := &types.Header{Number: big.NewInt(351), ParentHash: fork350.Hash(), Extra: []byte("fork")}
+	valid, err = s.IsValidChain(byNum(363), []*types.Header{fork350, fork351})
+	require.NoError(t, err)
+	require.False(t, valid, "fork below the locked candidate accepted")
+
+	// A segment that carries the locked block with a different hash is still rejected.
+	fork362 := &types.Header{Number: big.NewInt(362), ParentHash: byNum(361).Hash(), Extra: []byte("fork")}
+	valid, err = s.IsValidChain(byNum(363), []*types.Header{byNum(361), fork362, {Number: big.NewInt(363), ParentHash: fork362.Hash()}})
+	require.NoError(t, err)
+	require.False(t, valid, "segment contradicting the locked candidate accepted")
+}

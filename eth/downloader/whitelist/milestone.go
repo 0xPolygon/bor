@@ -65,6 +65,11 @@ var (
 	// re-import, not a reorg attempt). Such segments used to be reported as a mismatch.
 	MilestoneStaleCanonicalMeter = metrics.NewRegisteredMeter("chain/milestone/stalecanonical", nil)
 
+	// MilestoneLockedCanonicalMeter counts segments ending at or below the locked milestone candidate
+	// that were accepted because every block in them is already canonical locally. While a vote is
+	// in flight such segments used to be rejected as a mismatch even though they change nothing.
+	MilestoneLockedCanonicalMeter = metrics.NewRegisteredMeter("chain/milestone/lockedcanonical", nil)
+
 	// PurgeAfterDBErrorMeter is a metric for tracking the purge after database errors when deleting stale milestones after a mismatch rewind
 	PurgeAfterDBErrorMeter = metrics.NewRegisteredMeter("chain/milestone/purgeafter/dberror", nil)
 )
@@ -97,7 +102,7 @@ func (m *milestone) IsValidChain(currentHeader *types.Header, chain []*types.Hea
 		return isValid, err
 	}
 
-	if m.Locked && !m.IsReorgAllowed(chain, m.LockedMilestoneNumber, m.LockedMilestoneHash) {
+	if m.contradictsLockedMilestone(chain) {
 		isValid = false
 		return isValid, nil
 	}
@@ -237,6 +242,26 @@ func (m *milestone) RemoveMilestoneID(milestoneId string) {
 	}
 
 	m.finality.Unlock()
+}
+
+// contradictsLockedMilestone reports whether an incoming segment would move the
+// chain against the milestone candidate this node voted for. The vote locks the
+// service from GetVoteOnHash until the candidate finalizes, and IsReorgAllowed
+// refuses every segment ending at or below the locked number. A segment whose
+// every block is already canonical locally is a no-op re-import, not a reorg,
+// so it can never contradict the vote: it is let through and reported, the
+// same way isValidChain treats a canonical segment below the whitelisted entry.
+func (m *milestone) contradictsLockedMilestone(chain []*types.Header) bool {
+	if !m.Locked || m.IsReorgAllowed(chain, m.LockedMilestoneNumber, m.LockedMilestoneHash) {
+		return false
+	}
+	if !isCanonicalSegment(chain, m.finality.canonical) {
+		return true
+	}
+	MilestoneLockedCanonicalMeter.Mark(1)
+	log.Info("Whitelist: accepted re-import of canonical blocks at or below the locked milestone candidate",
+		"from", chain[0].Number, "to", chain[len(chain)-1].Number, "locked", m.LockedMilestoneNumber)
+	return false
 }
 
 // IsReorgAllowed checks whether the incoming chain matches the locked sprint hash
