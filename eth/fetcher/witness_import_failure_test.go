@@ -36,6 +36,11 @@ func TestAcceptableWitnessSizeCeilingDegenerateSignedSizes(t *testing.T) {
 	if got := tw.manager.acceptableWitnessSizeCeiling(0); got != abs {
 		t.Fatalf("signedSize=0 must fall back to the absolute cap %d, got %d", abs, got)
 	}
+	// The exported form used by the handler's broadcast path must agree with the
+	// fetch path's ceiling, so both delivery paths judge a witness identically.
+	if got, want := tw.manager.AcceptableWitnessSizeCeiling(1000), tw.manager.acceptableWitnessSizeCeiling(1000); got != want {
+		t.Fatalf("AcceptableWitnessSizeCeiling = %d, want %d", got, want)
+	}
 	for _, hostile := range []uint64{math.MaxUint64, math.MaxUint64 / 2, math.MaxUint64/wit2SizeBandMultiplier + 1} {
 		if got := tw.manager.acceptableWitnessSizeCeiling(hostile); got != abs {
 			t.Fatalf("signedSize=%d must saturate and clamp to the absolute cap %d, got %d", hostile, abs, got)
@@ -285,6 +290,27 @@ func TestRetryAfterImportFailureReRegistersPending(t *testing.T) {
 	tw.manager.retryAfterImportFailure(op)
 	if tw.PendingCount() != 1 {
 		t.Fatalf("duplicate re-registration must be a no-op; pending count = %d", tw.PendingCount())
+	}
+
+	// A block that meanwhile became known locally is not re-fetched.
+	known := createTestBlock(504)
+	tw.manager.parentGetBlock = func(h common.Hash) *types.Block {
+		if h == known.Hash() {
+			return known
+		}
+		return nil
+	}
+	tw.manager.retryAfterImportFailure(&blockOrHeaderInject{origin: "o", block: known, witness: createTestWitnessForBlock(known), witnessPeer: "srv-2", witnessDiverged: true, fetchWitness: fetch})
+	if tw.PendingCount() != 1 {
+		t.Fatalf("a locally known block must not be re-registered; pending count = %d", tw.PendingCount())
+	}
+
+	// A block whose witness was marked unavailable is not re-fetched either.
+	unavailable := createTestBlock(505)
+	tw.manager.markWitnessUnavailable(unavailable.Hash())
+	tw.manager.retryAfterImportFailure(&blockOrHeaderInject{origin: "o", block: unavailable, witness: createTestWitnessForBlock(unavailable), witnessPeer: "srv-3", witnessDiverged: true, fetchWitness: fetch})
+	if tw.PendingCount() != 1 {
+		t.Fatalf("an unavailable-marked block must not be re-registered; pending count = %d", tw.PendingCount())
 	}
 }
 
