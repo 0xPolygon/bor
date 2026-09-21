@@ -300,7 +300,8 @@ func (db *HistoricDB) Snapshot() *snapshot.Tree {
 	return nil
 }
 
-// Iteratee returns a state iteratee associated with the specified state root.
+// Iteratee returns a state iteratee associated with the specified state root,
+// through which the account iterator and storage iterator can be created.
 func (db *HistoricDB) Iteratee(root common.Hash) (Iteratee, error) {
 	return nil, errors.New("not implemented")
 }
