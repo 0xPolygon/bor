@@ -1472,3 +1472,182 @@ func TestMaySignAnnouncementForBlockBindsToSealer(t *testing.T) {
 		maySignAnnouncementForBlock(engine, unsealable, producer, 200, unsealable.Hash()),
 		"a header without a recoverable sealer must refuse the producer binding")
 }
+
+// TestSignedWitnessCacheRejectsConflictingWitnessSize: WitnessSize is signed
+// and decides the accept band, so a second producer-signed announcement that
+// agrees on WitnessHash but carries another size is a conflict, not a refresh —
+// otherwise it would replace the band under an in-flight fetch once the relay
+// window lapsed.
+func TestSignedWitnessCacheRejectsConflictingWitnessSize(t *testing.T) {
+	c := newSignedWitnessCache()
+	first := wit.SignedWitnessAnnouncement{
+		BlockHash:   common.HexToHash("0xabce"),
+		BlockNumber: 51,
+		WitnessHash: common.HexToHash("0x1111"),
+		WitnessSize: 4096,
+		Signature:   make([]byte, wit.SignatureLength),
+	}
+	if !c.putIfNewer(first) {
+		t.Fatal("first put should succeed")
+	}
+	conflict := first
+	conflict.WitnessSize = 10 * 4096
+	if c.putIfNewer(conflict) {
+		t.Fatal("same-hash announce with a different signed WitnessSize must be rejected")
+	}
+	// Age the entry past the relay window: an identical re-announce would now
+	// refresh it, so only the conflict rule can be what rejects the other size.
+	c.mu.Lock()
+	c.entries[first.BlockHash].receivedAt = time.Now().Add(-2 * wit2RelayWindow)
+	c.mu.Unlock()
+	if c.putIfNewer(conflict) {
+		t.Fatal("same-hash announce with a different WitnessSize must be rejected after the relay window too; it would replace the accept band")
+	}
+	got, ok := c.get(first.BlockHash)
+	if !ok {
+		t.Fatal("first announcement must remain cached after conflict rejection")
+	}
+	if got.WitnessSize != first.WitnessSize {
+		t.Fatalf("cache poisoned: WitnessSize=%d want=%d", got.WitnessSize, first.WitnessSize)
+	}
+	if !c.putIfNewer(first) {
+		t.Fatal("identical commitment after the relay window must refresh (return true): the size rule must not reject the same commitment")
+	}
+}
+
+// TestAcceptSignedBroadcastReportsDivergence pins the provenance bit the
+// broadcast path hands to the fetcher: a within-band body that is not the BP's
+// bytes is accepted AND flagged diverged (so an import failure is charged to the
+// pusher, as on the fetch path); BP-identical bytes are accepted, not diverged;
+// an oversized body is neither.
+func TestAcceptSignedBroadcastReportsDivergence(t *testing.T) {
+	h := newTestHandler()
+	defer h.close()
+
+	witH := (*witHandler)(h.handler)
+	peer, cleanup := newTestWit2PeerWithReader()
+	defer cleanup()
+
+	header := &types.Header{Number: big.NewInt(7781)}
+	hash := header.Hash()
+	rawdb.WriteHeader(h.chain.DB(), header)
+	witness, err := stateless.NewWitness(header, nil)
+	require.NoError(t, err)
+	var buf bytes.Buffer
+	require.NoError(t, witness.EncodeRLP(&buf))
+
+	signed := wit.SignedWitnessAnnouncement{
+		BlockHash:   hash,
+		BlockNumber: header.Number.Uint64(),
+		WitnessHash: common.HexToHash("0xdeadbeef"),
+		WitnessSize: uint64(buf.Len()),
+		Signature:   make([]byte, wit.SignatureLength),
+	}
+	accepted, diverged := witH.acceptSignedBroadcast(peer, witness, hash, signed)
+	require.True(t, accepted, "within-band body must be accepted for import")
+	require.True(t, diverged, "within-band body with another hash must be flagged diverged so an import failure is charged to the pusher")
+
+	signed.WitnessHash = stateless.WitnessCommitHash(buf.Bytes())
+	accepted, diverged = witH.acceptSignedBroadcast(peer, witness, hash, signed)
+	require.True(t, accepted)
+	require.False(t, diverged, "BP-identical bytes are not diverged")
+
+	signed.WitnessSize = 1
+	accepted, diverged = witH.acceptSignedBroadcast(peer, witness, hash, signed)
+	require.False(t, accepted, "oversized body must be dropped")
+	require.False(t, diverged)
+}
+
+// TestAcceptDeferredBroadcastReportsDivergence: the deferred accept path flags a
+// body accepted on a candidate's size band alone as diverged, and a body
+// byte-identical to a candidate's commitment as not diverged.
+func TestAcceptDeferredBroadcastReportsDivergence(t *testing.T) {
+	h := newTestHandler()
+	defer h.close()
+
+	witH := (*witHandler)(h.handler)
+	peer, cleanup := newTestWit2PeerWithReader()
+	defer cleanup()
+
+	header := &types.Header{Number: big.NewInt(7783)}
+	hash := header.Hash()
+	witness, err := stateless.NewWitness(header, nil)
+	require.NoError(t, err)
+	var buf bytes.Buffer
+	require.NoError(t, witness.EncodeRLP(&buf))
+
+	// Deferred candidate with another hash, size within band → diverged.
+	h.handler.deferredAnnounces.put(wit.SignedWitnessAnnouncement{
+		BlockHash:   hash,
+		BlockNumber: header.Number.Uint64(),
+		WitnessHash: common.HexToHash("0xdeadbeef"),
+		WitnessSize: uint64(buf.Len()),
+		Signature:   make([]byte, wit.SignatureLength),
+	}, "announcer-1")
+	accepted, diverged := witH.acceptDeferredBroadcast(peer, witness, hash)
+	require.True(t, accepted)
+	require.True(t, diverged, "deferred body accepted on the size band alone must be flagged diverged")
+
+	// A candidate whose hash the body matches → not diverged.
+	h.handler.deferredAnnounces.put(wit.SignedWitnessAnnouncement{
+		BlockHash:   hash,
+		BlockNumber: header.Number.Uint64(),
+		WitnessHash: stateless.WitnessCommitHash(buf.Bytes()),
+		WitnessSize: uint64(buf.Len()),
+		Signature:   make([]byte, wit.SignatureLength),
+	}, "announcer-2")
+	accepted, diverged = witH.acceptDeferredBroadcast(peer, witness, hash)
+	require.True(t, accepted)
+	require.False(t, diverged, "body byte-identical to a deferred candidate is not diverged")
+}
+
+// TestHandleWitnessBroadcastDropsExcludedSource: a peer excluded as a witness
+// source for a block (its earlier size-oracle-accepted bytes failed import) is
+// refused on the push path too — not marked as a body-holder, nothing cached,
+// nothing injected — even when the bytes it now pushes are the BP's own.
+// Without this it could beat every honest re-fetch with the same body, since
+// the witness manager attaches the first witness to arrive. Another peer's
+// identical push is unaffected.
+func TestHandleWitnessBroadcastDropsExcludedSource(t *testing.T) {
+	h := newTestHandler()
+	defer h.close()
+
+	witH := (*witHandler)(h.handler)
+	excludedPeer, cleanup := newTestWit2PeerWithReader()
+	defer cleanup()
+	otherPeer, cleanup2 := newTestWit2PeerWithReader()
+	defer cleanup2()
+
+	header := &types.Header{Number: big.NewInt(7784)}
+	hash := header.Hash()
+	rawdb.WriteHeader(h.chain.DB(), header)
+	witness, err := stateless.NewWitness(header, nil)
+	require.NoError(t, err)
+	var buf bytes.Buffer
+	require.NoError(t, witness.EncodeRLP(&buf))
+
+	h.handler.signedWitnesses.putIfNewer(wit.SignedWitnessAnnouncement{
+		BlockHash:   hash,
+		BlockNumber: header.Number.Uint64(),
+		WitnessHash: stateless.WitnessCommitHash(buf.Bytes()),
+		WitnessSize: uint64(buf.Len()),
+		Signature:   make([]byte, wit.SignatureLength),
+	})
+	h.handler.witnessSourceExclusions.add(hash, excludedPeer.ID())
+
+	require.NoError(t, witH.handleWitnessBroadcast(excludedPeer, witness))
+	if excludedPeer.KnownWitnessContainsHash(hash) {
+		t.Fatal("excluded pusher must not be marked as a body-holder")
+	}
+	if _, _, ok := h.handler.pendingWitnessBodies.get(hash); ok {
+		t.Fatal("excluded pusher's bytes must not enter the pre-import serving cache")
+	}
+
+	require.NoError(t, witH.handleWitnessBroadcast(otherPeer, witness))
+	if !otherPeer.KnownWitnessContainsHash(hash) {
+		t.Fatal("a non-excluded peer's identical push must still be accepted")
+	}
+	if _, _, ok := h.handler.pendingWitnessBodies.get(hash); !ok {
+		t.Fatal("BP-identical bytes from a non-excluded peer must be cached for serving")
+	}
+}

@@ -425,3 +425,205 @@ func TestImportFailureWithDivergedWitnessRefetchesFromAnotherPeer(t *testing.T) 
 		t.Fatalf("exactly the first server must be excluded for the block, got %v", excluded)
 	}
 }
+
+// waitForCachedWitness blocks until the witness manager has cached a broadcast
+// witness for hash (it arrives on the manager loop asynchronously).
+func waitForCachedWitness(t *testing.T, f *BlockFetcher, hash common.Hash) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if f.wm.witnessCache.Get(hash) != nil {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("broadcast witness never reached the witness cache")
+}
+
+// waitForPendingWitness blocks until the witness manager has registered hash as
+// pending a witness fetch (block injection is processed on the manager loop).
+func waitForPendingWitness(t *testing.T, f *BlockFetcher, hash common.Hash) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if f.wm.isPending(hash) {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("block never became pending a witness")
+}
+
+// divergedBroadcastImportFailureHarness wires the striker/excluder recorders,
+// the fail-once insertChain and the imported hook shared by the two push-path
+// import-failure tests below.
+type divergedBroadcastImportFailureHarness struct {
+	mu       sync.Mutex
+	strikes  []string
+	excluded []string
+	fetches  atomic.Int32
+	imports  atomic.Int32
+	imported chan *types.Block
+}
+
+func newDivergedBroadcastImportFailureHarness(t *testing.T, tester *fetcherTester, hash common.Hash) *divergedBroadcastImportFailureHarness {
+	t.Helper()
+	hs := &divergedBroadcastImportFailureHarness{imported: make(chan *types.Block, 1)}
+	tester.fetcher.SetWitnessServerStriker(func(id string) {
+		hs.mu.Lock()
+		hs.strikes = append(hs.strikes, id)
+		hs.mu.Unlock()
+	})
+	tester.fetcher.SetWitnessSourceExcluder(func(peer string, h common.Hash) {
+		if h != hash {
+			t.Errorf("exclusion for unexpected block %s", h)
+		}
+		hs.mu.Lock()
+		hs.excluded = append(hs.excluded, peer)
+		hs.mu.Unlock()
+	})
+	// First import fails (an unusable witness), the second succeeds.
+	tester.fetcher.insertChain = func(blocks types.Blocks, witnesses []*stateless.Witness) (int, error) {
+		if hs.imports.Add(1) == 1 {
+			return 0, fmt.Errorf("%w (cross: 01 local: 02)", core.ErrStatelessStateRootMismatch)
+		}
+		return tester.insertChain(blocks, witnesses)
+	}
+	tester.fetcher.importedHook = func(_ *types.Header, b *types.Block) { hs.imported <- b }
+	return hs
+}
+
+// fetchWitnessFor answers each fetch from a distinct "server" with a valid
+// witness, after release is closed (nil release = answer immediately).
+func (hs *divergedBroadcastImportFailureHarness) fetchWitnessFor(block *types.Block, release <-chan struct{}) witnessRequesterFn {
+	return func(h common.Hash, sink chan *eth.Response) (*eth.Request, error) {
+		n := hs.fetches.Add(1)
+		req := &eth.Request{Peer: fmt.Sprintf("server-%d", n), Cancel: make(chan struct{})}
+		go func() {
+			if release != nil {
+				<-release
+			}
+			w, err := stateless.NewWitness(block.Header(), nil)
+			if err != nil {
+				return
+			}
+			sink <- &eth.Response{Req: req, Res: []*stateless.Witness{w}, Time: time.Millisecond, Done: make(chan error, 1)}
+		}()
+		return req, nil
+	}
+}
+
+func (hs *divergedBroadcastImportFailureHarness) assertPusherCharged(t *testing.T, hash common.Hash) {
+	t.Helper()
+	select {
+	case got := <-hs.imported:
+		if got.Hash() != hash {
+			t.Fatalf("imported unexpected block %s", got.Hash())
+		}
+	case <-time.After(10 * time.Second):
+		hs.mu.Lock()
+		defer hs.mu.Unlock()
+		t.Fatalf("block never imported after the witness re-fetch (fetches=%d imports=%d strikes=%v excluded=%v)",
+			hs.fetches.Load(), hs.imports.Load(), hs.strikes, hs.excluded)
+	}
+	if n := hs.imports.Load(); n != 2 {
+		t.Fatalf("import attempt count = %d, want 2", n)
+	}
+	hs.mu.Lock()
+	defer hs.mu.Unlock()
+	if len(hs.strikes) != 1 || hs.strikes[0] != "pusher" {
+		t.Fatalf("exactly the pusher must be struck once, got %v", hs.strikes)
+	}
+	if len(hs.excluded) != 1 || hs.excluded[0] != "pusher" {
+		t.Fatalf("exactly the pusher must be excluded for the block, got %v", hs.excluded)
+	}
+}
+
+// TestImportFailureWithDivergedBroadcastWitnessChargesPusher is the push-path
+// twin of TestImportFailureWithDivergedWitnessRefetchesFromAnotherPeer: a
+// within-band witness that arrives by NewWitness broadcast BEFORE its block (so
+// it waits in the witness cache) and then fails import must cost the pusher a
+// strike and an exclusion, and the witness must be fetched again from another
+// peer — the consequence the paged-fetch path already carries. Before this,
+// the cached witness was attached without provenance, so
+// chargeDivergedWitnessImportFailure returned on its first guard and a push was
+// the free way to deliver unusable within-band bytes.
+func TestImportFailureWithDivergedBroadcastWitnessChargesPusher(t *testing.T) {
+	hashes, blocks := makeChain(1, 0, genesis)
+	block := blocks[hashes[0]]
+	hash := block.Hash()
+
+	tester := newTester(false)
+	defer tester.fetcher.Stop()
+	hs := newDivergedBroadcastImportFailureHarness(t, tester, hash)
+
+	pushed, err := stateless.NewWitness(block.Header(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The body arrives first, accepted on the size oracle alone (diverged).
+	if err := tester.fetcher.InjectWitness("pusher", pushed, true); err != nil {
+		t.Fatal(err)
+	}
+	waitForCachedWitness(t, tester.fetcher, hash)
+
+	if err := tester.fetcher.InjectBlockWithWitnessRequirement("origin", block, hs.fetchWitnessFor(block, nil)); err != nil {
+		t.Fatal(err)
+	}
+	hs.assertPusherCharged(t, hash)
+	if n := hs.fetches.Load(); n != 1 {
+		t.Fatalf("witness fetch count = %d, want 1 (only the re-fetch after the pushed witness failed import)", n)
+	}
+}
+
+// TestImportFailureWithDivergedBroadcastWitnessOnPendingBlockChargesPusher
+// covers the other attach site: the block is already pending a witness fetch
+// when the divergent body is pushed. handleBroadcast attaches it (first witness
+// to arrive wins), the import fails, and the pusher — not the in-flight fetch's
+// server — must be the one struck and excluded, with the witness then fetched
+// again. Fetch responses are held back until the strike has landed so the
+// pushed body is the one imported first.
+func TestImportFailureWithDivergedBroadcastWitnessOnPendingBlockChargesPusher(t *testing.T) {
+	hashes, blocks := makeChain(1, 0, genesis)
+	block := blocks[hashes[0]]
+	hash := block.Hash()
+
+	tester := newTester(false)
+	defer tester.fetcher.Stop()
+	hs := newDivergedBroadcastImportFailureHarness(t, tester, hash)
+
+	release := make(chan struct{})
+	if err := tester.fetcher.InjectBlockWithWitnessRequirement("origin", block, hs.fetchWitnessFor(block, release)); err != nil {
+		t.Fatal(err)
+	}
+	// The block must be pending before the push arrives, or the push would
+	// take the before-the-block cache path covered by the previous test.
+	waitForPendingWitness(t, tester.fetcher, hash)
+	pushed, err := stateless.NewWitness(block.Header(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tester.fetcher.InjectWitness("pusher", pushed, true); err != nil {
+		t.Fatal(err)
+	}
+	// The pushed body imports (and fails) first; once the pusher has been
+	// struck, let every fetch answer so the re-fetch can complete.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		hs.mu.Lock()
+		struck := len(hs.strikes) > 0
+		hs.mu.Unlock()
+		if struck {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("pusher never struck (imports=%d fetches=%d)", hs.imports.Load(), hs.fetches.Load())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	close(release)
+	hs.assertPusherCharged(t, hash)
+	if n := hs.fetches.Load(); n < 1 {
+		t.Fatalf("witness fetch count = %d, want at least the re-fetch", n)
+	}
+}

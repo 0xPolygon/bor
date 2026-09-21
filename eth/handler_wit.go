@@ -94,12 +94,27 @@ func (h *witHandler) Handle(peer *wit.Peer, packet wit.Packet) error {
 // unverifiable on the sender's say-so alone.
 func (h *witHandler) handleWitnessBroadcast(peer *wit.Peer, witness *stateless.Witness) error {
 	hash := witness.Header().Hash()
+	hh := (*handler)(h)
 
-	var accepted bool
-	if signed, hasSigned := (*handler)(h).signedWitnesses.get(hash); hasSigned {
-		accepted = h.acceptSignedBroadcast(peer, witness, hash, signed)
-	} else if (*handler)(h).deferredAnnounces.has(hash) {
-		accepted = h.acceptDeferredBroadcast(peer, witness, hash)
+	// A pusher whose earlier bytes for this block were accepted on the size
+	// oracle and then failed import is excluded as a witness source for the
+	// block — for pushes as for fetches (resolveWitnessFetchPeer). Otherwise it
+	// could beat every honest re-fetch with the same unusable bytes, since the
+	// witness manager attaches the first witness to arrive for a pending block.
+	if hh.witnessSourceExclusions != nil && hh.witnessSourceExclusions.excluded(hash, peer.ID()) {
+		wit2BroadcastExcludedSourceDropMeter.Mark(1)
+		peer.Log().Debug("wit2: dropping witness broadcast from a source excluded for this block after an import failure", "blockHash", hash)
+		return nil
+	}
+
+	// diverged: accepted on the size oracle alone (hash differs from the
+	// BP-signed one); carried into the fetcher so an import failure is charged
+	// to this pusher, as it is to a serving peer on the paged-fetch path.
+	var accepted, diverged bool
+	if signed, hasSigned := hh.signedWitnesses.get(hash); hasSigned {
+		accepted, diverged = h.acceptSignedBroadcast(peer, witness, hash, signed)
+	} else if hh.deferredAnnounces.has(hash) {
+		accepted, diverged = h.acceptDeferredBroadcast(peer, witness, hash)
 	} else {
 		accepted = h.acceptUnsignedBroadcast(peer, hash)
 	}
@@ -110,9 +125,9 @@ func (h *witHandler) handleWitnessBroadcast(peer *wit.Peer, witness *stateless.W
 
 	// Inject the witness into the block fetcher's cache
 	if h.blockFetcher != nil {
-		log.Debug("Injecting witness into block fetcher", "hash", hash, "peer", peer.ID(), "number", witness.Header().Number)
+		log.Debug("Injecting witness into block fetcher", "hash", hash, "peer", peer.ID(), "number", witness.Header().Number, "diverged", diverged)
 
-		if err := h.blockFetcher.InjectWitness(peer.ID(), witness); err != nil {
+		if err := h.blockFetcher.InjectWitness(peer.ID(), witness, diverged); err != nil {
 			peer.Log().Warn("Failed to inject broadcast witness into fetcher", "hash", hash, "err", err)
 			// Don't return error, just log, as block might still be importable via other means
 		}
@@ -153,17 +168,22 @@ func encodedBroadcastBytes(peer *wit.Peer, witness *stateless.Witness, hash comm
 // body is dropped without marking or injecting — it exceeds any plausible
 // non-deterministic variation. No disconnect — the sender may itself have been
 // fed the bytes upstream.
-func (h *witHandler) acceptSignedBroadcast(peer *wit.Peer, witness *stateless.Witness, hash common.Hash, signed wit.SignedWitnessAnnouncement) bool {
+//
+// diverged reports a within-band body whose hash is not the BP's: the fetcher
+// records it, with the pusher, as the witness's provenance so an import failure
+// is charged to the pusher (chargeDivergedWitnessImportFailure) instead of
+// being forgotten for free.
+func (h *witHandler) acceptSignedBroadcast(peer *wit.Peer, witness *stateless.Witness, hash common.Hash, signed wit.SignedWitnessAnnouncement) (accepted bool, diverged bool) {
 	bodyBytes, ok := encodedBroadcastBytes(peer, witness, hash)
 	if !ok {
-		return false
+		return false, false
 	}
 	ceiling := (*handler)(h).witnessSizeCeiling(signed.WitnessSize)
 	if uint64(len(bodyBytes)) > ceiling {
 		wit2BroadcastOversizeMeter.Mark(1)
 		peer.Log().Warn("wit2: broadcast witness exceeds the BP-signed size band; dropping",
 			"blockHash", hash, "signedSize", signed.WitnessSize, "ceiling", ceiling, "received", len(bodyBytes))
-		return false
+		return false, false
 	}
 	peer.AddKnownWitness(hash)
 	bodyHash := stateless.WitnessCommitHash(bodyBytes)
@@ -174,13 +194,13 @@ func (h *witHandler) acceptSignedBroadcast(peer *wit.Peer, witness *stateless.Wi
 		wit2BroadcastHashDivergenceMeter.Mark(1)
 		peer.Log().Debug("wit2: broadcast witness within the size band but not the BP's bytes; importing without re-serving",
 			"blockHash", hash, "signed", signed.WitnessHash, "actual", bodyHash)
-		return true
+		return true, true
 	}
 	(*handler)(h).pendingWitnessBodies.put(hash, bodyBytes, bodyHash)
 	// We now hold the BP's own bytes — push to any peer that asked us
 	// for this body before we had it.
 	(*handler)(h).pushWitnessToWaiters(hash, witness, len(bodyBytes))
-	return true
+	return true, false
 }
 
 // acceptDeferredBroadcast handles a broadcast whose signed announcement is on
@@ -196,10 +216,13 @@ func (h *witHandler) acceptSignedBroadcast(peer *wit.Peer, witness *stateless.Wi
 // post-import drain checks it against the chain-validated header. Verifying
 // against the header embedded in the pushed witness instead would let a peer
 // self-seal a fabricated header and pass its own announce as the producer's.
-func (h *witHandler) acceptDeferredBroadcast(peer *wit.Peer, witness *stateless.Witness, hash common.Hash) bool {
+//
+// diverged reports a body accepted on the size band alone (no candidate's hash
+// matched), so the fetcher can charge an import failure to the pusher.
+func (h *witHandler) acceptDeferredBroadcast(peer *wit.Peer, witness *stateless.Witness, hash common.Hash) (accepted bool, diverged bool) {
 	bodyBytes, ok := encodedBroadcastBytes(peer, witness, hash)
 	if !ok {
-		return false
+		return false, false
 	}
 	// Bind against the deferred candidates' commitments: with multiple
 	// candidates on file we accept the body if it is byte-identical to one of
@@ -210,16 +233,16 @@ func (h *witHandler) acceptDeferredBroadcast(peer *wit.Peer, witness *stateless.
 	// time, and import validates the content.
 	hh := (*handler)(h)
 	bodyHash := stateless.WitnessCommitHash(bodyBytes)
-	if !hh.deferredAnnounces.hasWitnessHash(hash, bodyHash) &&
-		!hh.deferredAnnounces.hasWitnessSizeWithin(hash, uint64(len(bodyBytes)), hh.witnessSizeCeiling) {
+	hashMatch := hh.deferredAnnounces.hasWitnessHash(hash, bodyHash)
+	if !hashMatch && !hh.deferredAnnounces.hasWitnessSizeWithin(hash, uint64(len(bodyBytes)), hh.witnessSizeCeiling) {
 		wit2BroadcastOversizeMeter.Mark(1)
 		peer.Log().Warn("wit2: broadcast witness exceeds the size band of every deferred announce; dropping",
 			"blockHash", hash, "received", len(bodyBytes))
-		return false
+		return false, false
 	}
 	peer.AddKnownWitness(hash)
 	wit2BroadcastDeferredImportMeter.Mark(1)
-	return true
+	return true, !hashMatch
 }
 
 // acceptUnsignedBroadcast is the WIT1 fallback with no signed announcement on

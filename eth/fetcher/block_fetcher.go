@@ -159,11 +159,12 @@ type blockOrHeaderInject struct {
 	block   *types.Block       // Used for normal mode fetcher which imports full block.
 	witness *stateless.Witness // Used for witness mode fetcher which imports witness.
 
-	// WIT2 witness provenance, set by the witness manager when the witness was
-	// obtained by paged fetch. importBlocks uses it to charge an import failure
-	// to the serving peer and re-fetch from another source when the witness was
-	// accepted on the size oracle alone (hash differs from the BP-signed one).
-	witnessPeer           string             // Peer that served the witness; empty when not fetched (broadcast, local).
+	// WIT2 witness provenance, set by the witness manager whether the witness
+	// was obtained by paged fetch or pushed by broadcast. importBlocks uses it
+	// to charge an import failure to the peer that chose the bytes and re-fetch
+	// from another source when the witness was accepted on the size oracle
+	// alone (hash differs from the BP-signed one).
+	witnessPeer           string             // Peer that served or pushed the witness; empty when local.
 	witnessDiverged       bool               // Witness accepted on size alone: hash differs from the BP-signed hash.
 	witnessImportFailures int                // Import attempts of this block that already failed with a diverged witness.
 	fetchWitness          witnessRequesterFn // Fetch closure to re-request the witness after an import failure.
@@ -198,9 +199,10 @@ type injectBlockNeedWitnessMsg struct {
 
 // injectedWitnessMsg is used to inject a witness received externally via broadcast.
 type injectedWitnessMsg struct {
-	peer    string
-	witness *stateless.Witness
-	time    time.Time // Arrival time
+	peer     string
+	witness  *stateless.Witness
+	diverged bool      // Accepted on the WIT2 size oracle alone: hash differs from the BP-signed one.
+	time     time.Time // Arrival time
 }
 
 // enqueueRequest is used to shuttle fully assembled blocks (with witness)
@@ -420,11 +422,18 @@ func (f *BlockFetcher) InjectBlockWithWitnessRequirement(origin string, block *t
 }
 
 // InjectWitness injects a witness received via broadcast into the fetcher.
-func (f *BlockFetcher) InjectWitness(peer string, witness *stateless.Witness) error {
+// diverged reports that the pushed bytes were accepted on the WIT2 size oracle
+// alone (their hash differs from the BP-signed one). The witness manager records
+// it, with peer, as the witness's provenance, so an import failure is charged to
+// the pusher exactly as it is to a serving peer on the paged-fetch path
+// (chargeDivergedWitnessImportFailure) — a push must not be the free way to
+// deliver unusable within-band bytes.
+func (f *BlockFetcher) InjectWitness(peer string, witness *stateless.Witness, diverged bool) error {
 	msg := &injectedWitnessMsg{
-		peer:    peer,
-		witness: witness,
-		time:    time.Now(),
+		peer:     peer,
+		witness:  witness,
+		diverged: diverged,
+		time:     time.Now(),
 	}
 	log.Debug("Injecting witness from broadcast", "peer", peer, "hash", witness.Header().Hash())
 	// Send to witness manager's channel

@@ -51,7 +51,23 @@ type witnessRequestState struct {
 type cachedWitness struct {
 	witness   *stateless.Witness
 	peer      string
+	diverged  bool // Accepted on the WIT2 size oracle alone (see InjectWitness).
 	timestamp time.Time
+}
+
+// injectFor builds the import op for block from a witness that arrived by
+// broadcast before the block did, carrying the pusher and the size-oracle
+// divergence bit as the op's provenance (see blockOrHeaderInject) and the fetch
+// closure a re-fetch after an import failure needs (retryAfterImportFailure).
+func (c *cachedWitness) injectFor(origin string, block *types.Block, fetchWitness witnessRequesterFn) *blockOrHeaderInject {
+	return &blockOrHeaderInject{
+		origin:          origin,
+		block:           block,
+		witness:         c.witness,
+		witnessPeer:     c.peer,
+		witnessDiverged: c.diverged,
+		fetchWitness:    fetchWitness,
+	}
 }
 
 // signedWitnessHashFn returns the BP-signed witness commitment for a block —
@@ -361,12 +377,8 @@ func (m *witnessManager) handleNeed(msg *injectBlockNeedWitnessMsg) {
 	// Check if we have a cached witness for this block
 	if item := m.witnessCache.Get(hash); item != nil {
 		cached := item.Value()
-		// Use the cached witness
-		op := &blockOrHeaderInject{
-			origin:  msg.origin,
-			block:   msg.block,
-			witness: cached.witness,
-		}
+		// Use the cached witness, with the pusher's provenance
+		op := cached.injectFor(msg.origin, msg.block, msg.fetchWitness)
 		m.witnessCache.Delete(hash)
 		m.mu.Unlock()
 
@@ -415,6 +427,15 @@ func (m *witnessManager) handleBroadcast(msg *injectedWitnessMsg) {
 		// Ensure witness isn't already set
 		if state.op.witness == nil {
 			state.op.witness = msg.witness
+			// Provenance, exactly as handleWitnessFetchSuccess records it for a
+			// fetched witness: the pusher chose these bytes, so an import failure
+			// of a size-oracle-accepted (diverged) body is charged to it and the
+			// witness re-fetched from someone else via the announce's closure.
+			state.op.witnessPeer = msg.peer
+			state.op.witnessDiverged = msg.diverged
+			if state.op.fetchWitness == nil && state.announce != nil {
+				state.op.fetchWitness = state.announce.fetchWitness
+			}
 			// Update block timestamps if needed
 			if state.op.block != nil && msg.time.After(state.op.block.ReceivedAt) {
 				state.op.block.ReceivedAt = msg.time
@@ -434,6 +455,7 @@ func (m *witnessManager) handleBroadcast(msg *injectedWitnessMsg) {
 		m.witnessCache.Set(hash, &cachedWitness{
 			witness:   msg.witness,
 			peer:      msg.peer,
+			diverged:  msg.diverged,
 			timestamp: msg.time,
 		}, ttlcache.DefaultTTL)
 		log.Debug("[wm] No matching pending block for injected witness, caching for later", "hash", hash, "peer", msg.peer)
@@ -1053,12 +1075,8 @@ func (m *witnessManager) handleFilterResult(announce *blockAnnounce, block *type
 	// Check if we have a cached witness for this block
 	if item := m.witnessCache.Get(hash); item != nil {
 		cached := item.Value()
-		// Use the cached witness
-		op := &blockOrHeaderInject{
-			origin:  announce.origin,
-			block:   block,
-			witness: cached.witness,
-		}
+		// Use the cached witness, with the pusher's provenance
+		op := cached.injectFor(announce.origin, block, announce.fetchWitness)
 		m.witnessCache.Delete(hash)
 		log.Debug("[wm] Found cached witness for filter result block, using it", "hash", hash, "cachedPeer", cached.peer)
 		m.safeEnqueue(op)

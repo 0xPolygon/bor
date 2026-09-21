@@ -783,3 +783,58 @@ func TestVerifyAgainstSignedHashWithoutLookupIsWit1(t *testing.T) {
 		t.Fatalf("WIT1-only path must return (nil, zero, false, true); got body=%v hash=%s diverged=%v ok=%v", body != nil, gotHash.Hex(), diverged, ok)
 	}
 }
+
+// TestVerifyAgainstSignedHashDivergentInBandKeepsMismatchState: a within-band
+// body that is NOT the BP's bytes proves nothing about the signed size, so it
+// must not reset the distinct-server oversize count — otherwise a server
+// alternating oversized and in-band bodies keeps a block out of quarantine
+// indefinitely. Only BP-identical bytes (hash match) clear the state.
+func TestVerifyAgainstSignedHashDivergentInBandKeepsMismatchState(t *testing.T) {
+	tw := newTestWitnessManager()
+	defer tw.Close()
+
+	block := createTestBlock(304)
+	hash := block.Hash()
+	witness := createTestWitnessForBlock(block)
+	var buf bytes.Buffer
+	if err := witness.EncodeRLP(&buf); err != nil {
+		t.Fatal(err)
+	}
+	size := uint64(buf.Len())
+	actual := stateless.WitnessCommitHash(buf.Bytes())
+
+	// Signed commitment the canonical body is within band of but does not hash to.
+	signedHash := common.HexToHash("0xd1ffe7e17")
+	tw.manager.parentSignedWitnessHash = func(h common.Hash) (common.Hash, uint64, bool) {
+		if h == hash {
+			return signedHash, size, true
+		}
+		return common.Hash{}, 0, false
+	}
+	primePendingWitness(tw, "peerA", block)
+
+	if q, _ := tw.manager.recordSignedHashMismatch(hash, "oversizer-A"); q {
+		t.Fatal("one oversizing server must not quarantine")
+	}
+	body, _, diverged, ok := tw.manager.verifyAgainstSignedHash("peerX", hash, witness)
+	if !ok || !diverged || body != nil {
+		t.Fatalf("in-band divergent body: ok=%v diverged=%v body=%v, want accepted, diverged, no serving bytes", ok, diverged, body != nil)
+	}
+	if q, _ := tw.manager.recordSignedHashMismatch(hash, "oversizer-B"); !q {
+		t.Fatal("a divergent in-band acceptance reset the distinct-server oversize count; only BP-identical bytes may clear it")
+	}
+
+	// Control: BP-identical bytes DO clear it — the signed commitment is proven.
+	signedHash = actual
+	tw.manager.clearSignedHashMismatch(hash)
+	if q, _ := tw.manager.recordSignedHashMismatch(hash, "oversizer-A"); q {
+		t.Fatal("one oversizing server must not quarantine")
+	}
+	body, got, diverged, ok := tw.manager.verifyAgainstSignedHash("peerY", hash, witness)
+	if !ok || diverged || body == nil || got != actual {
+		t.Fatalf("BP-identical body: ok=%v diverged=%v body=%v hash=%s, want accepted, not diverged, serving bytes", ok, diverged, body != nil, got)
+	}
+	if q, _ := tw.manager.recordSignedHashMismatch(hash, "oversizer-B"); q {
+		t.Fatal("BP-identical bytes must clear earlier oversize noise; second server must start a fresh count")
+	}
+}

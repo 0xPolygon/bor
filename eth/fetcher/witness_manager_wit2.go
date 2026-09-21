@@ -132,9 +132,6 @@ func (m *witnessManager) verifyAgainstSignedHash(peer string, hash common.Hash, 
 		return nil, common.Hash{}, false, false
 	}
 
-	// Within band: forget any earlier oversize noise for this block.
-	m.clearSignedHashMismatch(hash)
-
 	if actual != expected {
 		// A valid, non-deterministic variant of the BP's witness. Accept it for
 		// import (state-root execution validates), but return body=nil so it is
@@ -145,7 +142,13 @@ func (m *witnessManager) verifyAgainstSignedHash(peer string, hash common.Hash, 
 		witnessHashDivergenceMeter.Mark(1)
 		return nil, common.Hash{}, true, true
 	}
-	// Byte-identical to the BP's witness: safe to serve/relay under the signed hash.
+	// Byte-identical to the BP's witness: safe to serve/relay under the signed
+	// hash. Only this proves the signed commitment good, so only this forgets
+	// earlier oversize noise for the block: a divergent in-band body says nothing
+	// about the signed size, and clearing on it would let a server alternating
+	// oversized and in-band bodies reset the distinct-server count and keep the
+	// block out of quarantine indefinitely.
+	m.clearSignedHashMismatch(hash)
 	return encoded, expected, false, true
 }
 
