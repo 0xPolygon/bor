@@ -56,6 +56,8 @@ func TestSaturatingMulUint64(t *testing.T) {
 		{7, 3, 21},
 		{math.MaxUint64 / 3, 3, math.MaxUint64 / 3 * 3},
 		{math.MaxUint64/3 + 1, 3, math.MaxUint64},
+		{math.MaxUint64 / 2, 2, math.MaxUint64 - 1}, // exactly at the bound: must multiply, not saturate
+		{math.MaxUint64/2 + 1, 2, math.MaxUint64},
 		{math.MaxUint64, 2, math.MaxUint64},
 	}
 	for _, c := range cases {

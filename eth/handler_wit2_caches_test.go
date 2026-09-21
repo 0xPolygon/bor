@@ -1257,3 +1257,30 @@ func TestDeferredAnnounceCacheHasWitnessSizeWithin(t *testing.T) {
 	c.mu.Unlock()
 	require.False(t, c.hasWitnessSizeWithin(hash, 300, ceiling), "an expired candidate must not bind a body")
 }
+
+// TestFetcherWitnessPenaltiesAreWiredToHandler pins the newHandler wiring of the
+// block fetcher's two WIT2 penalty callbacks: a strike issued by the witness
+// manager lands in the handler's wit2 strike tracker, and a source exclusion
+// lands in the handler's exclusion set consulted by resolveWitnessFetchPeer.
+// Without the wiring both are silent no-ops and the import-failure consequence
+// never reaches the peer.
+func TestFetcherWitnessPenaltiesAreWiredToHandler(t *testing.T) {
+	h := newTestHandler()
+	defer h.close()
+	wm := h.handler.blockFetcher.GetWitnessManager()
+
+	wm.StrikeWitnessServer("fetcher-struck-peer")
+	h.handler.wit2PeerTracker.mu.Lock()
+	st, tracked := h.handler.wit2PeerTracker.state["fetcher-struck-peer"]
+	strikes := 0
+	if tracked {
+		strikes = len(st.strikes)
+	}
+	h.handler.wit2PeerTracker.mu.Unlock()
+	require.Equal(t, 1, strikes, "a fetcher strike must reach the handler's wit2 strike tracker")
+
+	hash := common.HexToHash("0xf00d")
+	wm.ExcludeWitnessSource("fetcher-excluded-peer", hash)
+	require.True(t, h.handler.witnessSourceExclusions.excluded(hash, "fetcher-excluded-peer"),
+		"a fetcher source exclusion must reach the handler's exclusion set")
+}

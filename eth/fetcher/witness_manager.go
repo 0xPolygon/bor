@@ -878,17 +878,19 @@ func (m *witnessManager) safeEnqueue(op *blockOrHeaderInject) {
 	m.rescheduleWitness()
 }
 
-// strikeWitnessServer records a WIT2 strike against peer via the parent
-// callback, if one is wired.
-func (m *witnessManager) strikeWitnessServer(peer string) {
+// StrikeWitnessServer records a WIT2 strike against peer via the parent
+// callback, if one is wired. Exported so the network handler can pin that its
+// striker is wired to this manager.
+func (m *witnessManager) StrikeWitnessServer(peer string) {
 	if peer != "" && m.parentStrikeWitnessServer != nil {
 		m.parentStrikeWitnessServer(peer)
 	}
 }
 
-// excludeWitnessSource asks the parent to stop offering peer as a witness
-// source for hash, if a callback is wired.
-func (m *witnessManager) excludeWitnessSource(peer string, hash common.Hash) {
+// ExcludeWitnessSource asks the parent to stop offering peer as a witness
+// source for hash, if a callback is wired. Exported so the network handler can
+// pin that its excluder is wired to this manager.
+func (m *witnessManager) ExcludeWitnessSource(peer string, hash common.Hash) {
 	if peer != "" && m.parentExcludeWitnessSource != nil {
 		m.parentExcludeWitnessSource(peer, hash)
 	}

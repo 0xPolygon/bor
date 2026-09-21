@@ -1241,91 +1241,106 @@ const maxWitnessImportRetries = 2
 // forgotten. A BP-identical witness (hash match) that fails import is the BP's
 // fault and is handled as before: logged and forgotten.
 func (f *BlockFetcher) importBlocks(op *blockOrHeaderInject) {
-	peer, block, witness := op.origin, op.block, op.witness
+	block := op.block
 	hash := block.Hash()
 
 	// Run the import on a new thread
-	log.Debug("Importing propagated block", "peer", peer, "number", block.Number(), "hash", hash)
+	log.Debug("Importing propagated block", "peer", op.origin, "number", block.Number(), "hash", hash)
 
 	go func() {
-		retryWitness := false
-		defer func() {
-			if retryWitness {
-				select {
-				case f.witnessRetry <- op:
-				case <-f.quit:
-				}
-				return
+		if f.runBlockImport(op) {
+			// Hand the block back to the fetcher loop for a witness re-fetch
+			// (the witnessRetry case) instead of marking it done.
+			select {
+			case f.witnessRetry <- op:
+			case <-f.quit:
 			}
-			f.done <- hash
-		}()
-
-		// If the parent's unknown, abort insertion
-		parent := f.getBlock(block.ParentHash())
-		if parent == nil {
-			log.Debug("Unknown parent of propagated block", "peer", peer, "number", block.Number(), "hash", hash, "parent", block.ParentHash())
 			return
 		}
-		// Quickly validate the header and propagate the block if it passes
-		switch err := f.verifyHeader(block.Header()); err {
-		case nil:
-			// All ok, quickly propagate to our peers
-			blockBroadcastOutTimer.UpdateSince(block.ReceivedAt)
-
-			go f.broadcastBlock(block, witness, true)
-
-		case consensus.ErrFutureBlock:
-			// Weird future block, don't fail, but neither propagate
-
-		default:
-			// Something went very wrong, drop the peer
-			log.Debug("Propagated block verification failed", "peer", peer, "number", block.Number(), "hash", hash, "err", err)
-			f.dropPeer(peer)
-
-			return
-		}
-		// Run the actual import and log any issues
-		// Pass the witness along with the block to the insertion function.
-		// Create slices even for a single block/witness to match the expected signature.
-		if _, err := f.insertChain(types.Blocks{block}, []*stateless.Witness{witness}); err != nil {
-			log.Debug("Propagated block import failed", "peer", peer, "number", block.Number(), "hash", hash, "err", err)
-			retryWitness = f.chargeDivergedWitnessImportFailure(op, err)
-			return
-		}
-
-		if f.enableBlockTracking {
-			// Log the insertion event
-			var (
-				msg         string
-				delayInMs   int64
-				prettyDelay common.PrettyDuration
-			)
-
-			if block.AnnouncedAt != nil {
-				msg = "[block tracker] Inserted new block with announcement"
-				delayInMs = time.Since(*block.AnnouncedAt).Milliseconds()
-				prettyDelay = common.PrettyDuration(time.Since(*block.AnnouncedAt))
-			} else {
-				msg = "[block tracker] Inserted new block without announcement"
-				delayInMs = time.Since(block.ReceivedAt).Milliseconds()
-				prettyDelay = common.PrettyDuration(time.Since(block.ReceivedAt))
-			}
-
-			totalDelayInMs := time.Now().UnixMilli() - int64(block.Time())*1000
-			totalDelay := common.PrettyDuration(time.Millisecond * time.Duration(totalDelayInMs))
-
-			log.Info(msg, "number", block.Number().Uint64(), "hash", hash, "delay", prettyDelay, "delayInMs", delayInMs, "totalDelay", totalDelay, "totalDelayInMs", totalDelayInMs)
-		}
-
-		// If import succeeded, broadcast the block
-		blockAnnounceOutTimer.UpdateSince(block.ReceivedAt)
-		go f.broadcastBlock(block, witness, false)
-
-		// Invoke the testing hook if needed
-		if f.importedHook != nil {
-			f.importedHook(nil, block)
-		}
+		f.done <- hash
 	}()
+}
+
+// runBlockImport performs one propagated-block import: parent check, header
+// verification with early propagation, chain insertion, and the post-import
+// broadcast and hooks. It reports whether the failed import should be retried
+// with a witness fetched from another peer (chargeDivergedWitnessImportFailure);
+// the caller then routes the op to the fetcher loop's witnessRetry case rather
+// than done.
+func (f *BlockFetcher) runBlockImport(op *blockOrHeaderInject) (retryWitness bool) {
+	peer, block, witness := op.origin, op.block, op.witness
+	hash := block.Hash()
+
+	// If the parent's unknown, abort insertion
+	if f.getBlock(block.ParentHash()) == nil {
+		log.Debug("Unknown parent of propagated block", "peer", peer, "number", block.Number(), "hash", hash, "parent", block.ParentHash())
+		return false
+	}
+	// Quickly validate the header and propagate the block if it passes
+	switch err := f.verifyHeader(block.Header()); err {
+	case nil:
+		// All ok, quickly propagate to our peers
+		blockBroadcastOutTimer.UpdateSince(block.ReceivedAt)
+
+		go f.broadcastBlock(block, witness, true)
+
+	case consensus.ErrFutureBlock:
+		// Weird future block, don't fail, but neither propagate
+
+	default:
+		// Something went very wrong, drop the peer
+		log.Debug("Propagated block verification failed", "peer", peer, "number", block.Number(), "hash", hash, "err", err)
+		f.dropPeer(peer)
+
+		return false
+	}
+	// Run the actual import and log any issues
+	// Pass the witness along with the block to the insertion function.
+	// Create slices even for a single block/witness to match the expected signature.
+	if _, err := f.insertChain(types.Blocks{block}, []*stateless.Witness{witness}); err != nil {
+		log.Debug("Propagated block import failed", "peer", peer, "number", block.Number(), "hash", hash, "err", err)
+		return f.chargeDivergedWitnessImportFailure(op, err)
+	}
+
+	if f.enableBlockTracking {
+		f.logTrackedImport(block, hash)
+	}
+
+	// If import succeeded, broadcast the block
+	blockAnnounceOutTimer.UpdateSince(block.ReceivedAt)
+	go f.broadcastBlock(block, witness, false)
+
+	// Invoke the testing hook if needed
+	if f.importedHook != nil {
+		f.importedHook(nil, block)
+	}
+	return false
+}
+
+// logTrackedImport emits the block-tracker insertion line with the
+// announce-to-insert (or receive-to-insert) delay and the header-time-to-insert
+// total delay.
+func (f *BlockFetcher) logTrackedImport(block *types.Block, hash common.Hash) {
+	var (
+		msg         string
+		delayInMs   int64
+		prettyDelay common.PrettyDuration
+	)
+
+	if block.AnnouncedAt != nil {
+		msg = "[block tracker] Inserted new block with announcement"
+		delayInMs = time.Since(*block.AnnouncedAt).Milliseconds()
+		prettyDelay = common.PrettyDuration(time.Since(*block.AnnouncedAt))
+	} else {
+		msg = "[block tracker] Inserted new block without announcement"
+		delayInMs = time.Since(block.ReceivedAt).Milliseconds()
+		prettyDelay = common.PrettyDuration(time.Since(block.ReceivedAt))
+	}
+
+	totalDelayInMs := time.Now().UnixMilli() - int64(block.Time())*1000
+	totalDelay := common.PrettyDuration(time.Millisecond * time.Duration(totalDelayInMs))
+
+	log.Info(msg, "number", block.Number().Uint64(), "hash", hash, "delay", prettyDelay, "delayInMs", delayInMs, "totalDelay", totalDelay, "totalDelayInMs", totalDelayInMs)
 }
 
 // chargeDivergedWitnessImportFailure applies the WIT2 consequence of an import
@@ -1355,8 +1370,8 @@ func (f *BlockFetcher) chargeDivergedWitnessImportFailure(op *blockOrHeaderInjec
 	witnessImportFailureMeter.Mark(1)
 	log.Warn("Import failed with a witness accepted on the WIT2 size oracle; striking its server",
 		"server", op.witnessPeer, "number", op.number(), "hash", hash, "attempt", op.witnessImportFailures+1, "err", importErr)
-	f.wm.strikeWitnessServer(op.witnessPeer)
-	f.wm.excludeWitnessSource(op.witnessPeer, hash)
+	f.wm.StrikeWitnessServer(op.witnessPeer)
+	f.wm.ExcludeWitnessSource(op.witnessPeer, hash)
 
 	op.witnessImportFailures++
 	if op.fetchWitness == nil || op.witnessImportFailures >= maxWitnessImportRetries {

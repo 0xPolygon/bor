@@ -676,9 +676,12 @@ func TestVerifyAgainstSignedHashAcceptsDivergentHashWithinBand(t *testing.T) {
 	struck := 0
 	tw.manager.parentStrikeWitnessServer = func(string) { struck++ }
 
-	body, _, _, ok := tw.manager.verifyAgainstSignedHash("honest-diverging", hash, witness)
+	body, _, diverged, ok := tw.manager.verifyAgainstSignedHash("honest-diverging", hash, witness)
 	if !ok {
 		t.Fatal("a witness within the signed size band must be accepted for import despite a differing hash")
+	}
+	if !diverged {
+		t.Fatal("a within-band witness with a differing hash must be flagged diverged so an import failure is charged to the server")
 	}
 	if body != nil {
 		t.Fatal("a non-identical within-band witness must import but NOT be cached for serving (body=nil), so the fast-path carries only the BP's bytes")
@@ -711,9 +714,12 @@ func TestVerifyAgainstSignedHashServesOnExactMatch(t *testing.T) {
 		return common.Hash{}, 0, false
 	}
 
-	body, gotHash, _, ok := tw.manager.verifyAgainstSignedHash("honest-matching", hash, witness)
+	body, gotHash, diverged, ok := tw.manager.verifyAgainstSignedHash("honest-matching", hash, witness)
 	if !ok {
 		t.Fatal("a byte-identical within-band witness must be accepted")
+	}
+	if diverged {
+		t.Fatal("a byte-identical witness must not be flagged diverged: an import failure of the BP's own bytes is the BP's fault, not the server's")
 	}
 	if body == nil {
 		t.Fatal("a byte-identical witness must return canonical bytes for the serving cache")
@@ -759,5 +765,21 @@ func TestWitnessSizeExceedsCeiling(t *testing.T) {
 	}
 	if witnessSizeExceedsCeiling(99, 100) {
 		t.Fatal("a witness below the ceiling must be accepted")
+	}
+}
+
+// TestVerifyAgainstSignedHashWithoutLookupIsWit1 pins the WIT1-only wiring: with
+// no signed-hash lookup configured at all, every witness is accepted for import
+// (ok), nothing is offered for pre-import serving (body nil), and nothing is
+// flagged diverged (there is no commitment to diverge from).
+func TestVerifyAgainstSignedHashWithoutLookupIsWit1(t *testing.T) {
+	tw := newTestWitnessManager()
+	defer tw.Close()
+	tw.manager.parentSignedWitnessHash = nil
+
+	block := createTestBlock(310)
+	body, gotHash, diverged, ok := tw.manager.verifyAgainstSignedHash("peer", block.Hash(), createTestWitnessForBlock(block))
+	if !ok || body != nil || gotHash != (common.Hash{}) || diverged {
+		t.Fatalf("WIT1-only path must return (nil, zero, false, true); got body=%v hash=%s diverged=%v ok=%v", body != nil, gotHash.Hex(), diverged, ok)
 	}
 }
