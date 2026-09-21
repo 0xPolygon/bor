@@ -1,13 +1,17 @@
 package server
 
 import (
+	"bytes"
+	"fmt"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -16,7 +20,7 @@ func TestConfigDefault(t *testing.T) {
 	config := DefaultConfig()
 	assert.NoError(t, config.loadChain())
 
-	_, err := config.buildNode()
+	_, err := config.buildNode(log.Root())
 	assert.NoError(t, err)
 
 	ethConfig, err := config.buildEth(nil, nil)
@@ -113,13 +117,63 @@ func TestDefaultDatatypeOverride(t *testing.T) {
 
 var dummyEnodeAddr = "enode://0cb82b395094ee4a2915e9714894627de9ed8498fb881cec6db7c65e8b9a5bd7f2f25cc84e71e89d0947e51c76e85d0847de848c7782b13c0255247a6758178c@44.232.55.71:30303"
 
+func TestConfigStaticPeerWarning(t *testing.T) {
+	t.Parallel()
+	const otherEnodeAddr = "enode://d860a01f9722d78051619d1e2351aba3f43f943f6f00718d1b9baa4101932a1f5011f16bb2b1bb35db20d6fe28fa0bf09636d26a87d31de9ec6203eeedb1f666@127.0.0.1:30303"
+	samePeerDifferentAddress := strings.Replace(dummyEnodeAddr, "44.232.55.71:30303", "127.0.0.1:30304", 1)
+
+	for _, tc := range []struct {
+		name          string
+		static        []string
+		trusted       []string
+		developer     bool
+		wantUntrusted int
+	}{
+		{name: "no peers"},
+		{name: "trusted only", trusted: []string{dummyEnodeAddr}},
+		{name: "static only", static: []string{dummyEnodeAddr}, wantUntrusted: 1},
+		{name: "multiple untrusted static peers", static: []string{dummyEnodeAddr, otherEnodeAddr}, wantUntrusted: 2},
+		{name: "static and trusted", static: []string{dummyEnodeAddr}, trusted: []string{dummyEnodeAddr}},
+		{name: "unrelated trusted peer", static: []string{dummyEnodeAddr}, trusted: []string{otherEnodeAddr}, wantUntrusted: 1},
+		{name: "partial overlap", static: []string{dummyEnodeAddr, otherEnodeAddr}, trusted: []string{dummyEnodeAddr}, wantUntrusted: 1},
+		{name: "all static peers trusted", static: []string{dummyEnodeAddr, otherEnodeAddr}, trusted: []string{otherEnodeAddr, dummyEnodeAddr}},
+		{name: "additional trusted peer", static: []string{dummyEnodeAddr}, trusted: []string{dummyEnodeAddr, otherEnodeAddr}},
+		{name: "same peer different address", static: []string{dummyEnodeAddr}, trusted: []string{samePeerDifferentAddress}},
+		{name: "developer mode", static: []string{dummyEnodeAddr}, developer: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var output bytes.Buffer
+			logger := log.NewLogger(log.LogfmtHandlerWithLevel(&output, log.LevelWarn))
+
+			config := DefaultConfig()
+			config.DataDir = t.TempDir()
+			config.Developer.Enabled = tc.developer
+			config.P2P.Discovery.StaticNodes = tc.static
+			config.P2P.Discovery.TrustedNodes = tc.trusted
+			if _, err := config.buildNode(logger); err != nil {
+				t.Fatalf("build node: %v", err)
+			}
+
+			logs := output.String()
+			warned := strings.Contains(logs, "benched or dropped by sync peer-response")
+			if wantWarn := tc.wantUntrusted > 0; warned != wantWarn {
+				t.Fatalf("static peer warning = %t, want %t; logs: %s", warned, wantWarn, logs)
+			}
+			if warned && !strings.Contains(logs, fmt.Sprintf("untrusted=%d\n", tc.wantUntrusted)) {
+				t.Fatalf("missing untrusted peer count %d; logs: %s", tc.wantUntrusted, logs)
+			}
+		})
+	}
+}
+
 func TestConfigBootnodesDefault(t *testing.T) {
 	t.Run("EmptyBootnodes", func(t *testing.T) {
 		// if no bootnodes are specific, we use the ones from the genesis chain
 		config := DefaultConfig()
 		assert.NoError(t, config.loadChain())
 
-		cfg, err := config.buildNode()
+		cfg, err := config.buildNode(log.Root())
 		assert.NoError(t, err)
 		assert.NotEmpty(t, cfg.P2P.BootstrapNodes)
 	})
@@ -128,7 +182,7 @@ func TestConfigBootnodesDefault(t *testing.T) {
 		config := DefaultConfig()
 		config.P2P.Discovery.Bootnodes = []string{dummyEnodeAddr}
 
-		cfg, err := config.buildNode()
+		cfg, err := config.buildNode(log.Root())
 		assert.NoError(t, err)
 		assert.Len(t, cfg.P2P.BootstrapNodes, 1)
 	})
@@ -152,7 +206,7 @@ func TestConfigStateScheme(t *testing.T) {
 
 	assert.NoError(t, config.loadChain())
 
-	_, err := config.buildNode()
+	_, err := config.buildNode(log.Root())
 	assert.NoError(t, err)
 
 	_, err = config.buildEth(nil, nil)
@@ -169,7 +223,7 @@ func TestSealerTargetGasPercentageConfig(t *testing.T) {
 
 			assert.NoError(t, config.loadChain())
 
-			_, err := config.buildNode()
+			_, err := config.buildNode(log.Root())
 			assert.NoError(t, err)
 
 			ethConfig, err := config.buildEth(nil, nil)
@@ -189,7 +243,7 @@ func TestSealerTargetGasPercentageConfig(t *testing.T) {
 
 			assert.NoError(t, config.loadChain())
 
-			_, err := config.buildNode()
+			_, err := config.buildNode(log.Root())
 			assert.NoError(t, err)
 
 			_, err = config.buildEth(nil, nil)
@@ -209,7 +263,7 @@ func TestSealerBaseFeeChangeDenominatorConfig(t *testing.T) {
 
 			assert.NoError(t, config.loadChain())
 
-			_, err := config.buildNode()
+			_, err := config.buildNode(log.Root())
 			assert.NoError(t, err)
 
 			ethConfig, err := config.buildEth(nil, nil)
@@ -229,7 +283,7 @@ func TestSealerBothGasParametersConfig(t *testing.T) {
 
 		assert.NoError(t, config.loadChain())
 
-		_, err := config.buildNode()
+		_, err := config.buildNode(log.Root())
 		assert.NoError(t, err)
 
 		ethConfig, err := config.buildEth(nil, nil)
@@ -249,7 +303,7 @@ func TestSealerBothGasParametersConfig(t *testing.T) {
 
 		assert.NoError(t, config.loadChain())
 
-		_, err := config.buildNode()
+		_, err := config.buildNode(log.Root())
 		assert.NoError(t, err)
 
 		ethConfig, err := config.buildEth(nil, nil)
@@ -266,7 +320,7 @@ func TestSealerBothGasParametersConfig(t *testing.T) {
 
 		assert.NoError(t, config.loadChain())
 
-		_, err := config.buildNode()
+		_, err := config.buildNode(log.Root())
 		assert.NoError(t, err)
 
 		ethConfig, err := config.buildEth(nil, nil)
@@ -283,7 +337,7 @@ func TestSealerBothGasParametersConfig(t *testing.T) {
 
 		assert.NoError(t, config.loadChain())
 
-		_, err := config.buildNode()
+		_, err := config.buildNode(log.Root())
 		assert.NoError(t, err)
 
 		_, err = config.buildEth(nil, nil)
@@ -397,7 +451,7 @@ func TestSealerDynamicTargetGasConfig(t *testing.T) {
 	buildConfig := func(t *testing.T, config *Config) (*ethconfig.Config, error) {
 		t.Helper()
 		assert.NoError(t, config.loadChain())
-		_, err := config.buildNode()
+		_, err := config.buildNode(log.Root())
 		assert.NoError(t, err)
 		return config.buildEth(nil, nil)
 	}
@@ -408,7 +462,7 @@ func TestSealerDynamicTargetGasConfig(t *testing.T) {
 		config.Sealer.EnableDynamicTargetGas = true
 
 		assert.NoError(t, config.loadChain())
-		_, err := config.buildNode()
+		_, err := config.buildNode(log.Root())
 		assert.NoError(t, err)
 		_, err = config.buildEth(nil, nil)
 		assert.Error(t, err)
