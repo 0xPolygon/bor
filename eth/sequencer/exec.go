@@ -262,11 +262,10 @@ func (*speculativeFinalizationChain) SetStateSync([]*types.StateSyncData) {}
 
 // checkSeal cross-checks the sealed header against the open context this
 // block was executed under and against the re-execution results, including
-// the state root — the catch-all for anything execution missed. State-sync
-// transactions are applied by the producer in Finalize and never enter the
-// stream, and their gas and receipts live outside the header's GasUsed and
-// ReceiptHash — so a sprint-start block with pending events passes the gas
-// and receipts comparisons and is caught only by the state root differing.
+// the state root — the catch-all for anything execution missed. At a sprint
+// start with a state-sync tx (absent from the stream) re-execution can't
+// reproduce the sealed roots and this fails; sealResult treats that as a
+// defer-to-canonical, not a bad preconf.
 func (env *blockEnv) checkSeal(sealed *types.Header) error {
 	switch {
 	case sealed.Number.Cmp(env.header.Number) != 0,
@@ -542,7 +541,7 @@ func (s *session) sealResult(sealed *types.Header) (*types.Block, *ReusableExecu
 				return assembled, nil, false, true
 			}
 			if errors.Is(err, errCachedFinalizationUnavailable) {
-				s.reanchorFromCanonical(s.env.header.Number.Uint64(), "sprint finalization requires canonical state")
+				s.deferToCanonical = true
 				return nil, nil, false, false
 			}
 			s.skip(s.env.header.Number.Uint64(), "sealed header verification deferred and finalization failed", "err", err)
@@ -555,15 +554,28 @@ func (s *session) sealResult(sealed *types.Header) (*types.Block, *ReusableExecu
 	if err == nil {
 		return assembled, reusable, true, true
 	}
-	checkErr := s.env.checkSeal(sealed)
-	if checkErr != nil {
-		s.skip(s.env.header.Number.Uint64(), "seal cross-check failed", "err", checkErr)
+	// finalizeVerifiedSeal reports errCachedFinalizationUnavailable at sprint
+	// starts, where the block's state-sync tx is absent from the stream. When
+	// there are no pending events re-execution still matches and the block is
+	// served below; when a state-sync tx changed the sealed roots the checks
+	// fail, but that is not a bad preconf — the consumer just can't reproduce
+	// it. fail then defers to canonical import and the audit (applySeal parks
+	// the seal) instead of voiding the block as invalid.
+	deferToCanonical := errors.Is(err, errCachedFinalizationUnavailable)
+	fail := func(reason string, cause error) (*types.Block, *ReusableExecution, bool, bool) {
+		if deferToCanonical {
+			s.deferToCanonical = true
+		} else {
+			s.skip(s.env.header.Number.Uint64(), reason, "err", cause)
+		}
 		return nil, nil, false, false
+	}
+	if checkErr := s.env.checkSeal(sealed); checkErr != nil {
+		return fail("seal cross-check failed", checkErr)
 	}
 	assembled, err = blockFromExecution(sealed, s.env.txs, s.env.receipts)
 	if err != nil || assembled.Hash() != sealed.Hash() {
-		s.skip(s.env.header.Number.Uint64(), "sealed block body mismatch", "err", err)
-		return nil, nil, false, false
+		return fail("sealed block body mismatch", err)
 	}
 	return assembled, nil, true, true
 }

@@ -344,7 +344,11 @@ func TestSessionSealVerificationUsesSpeculativeLineage(t *testing.T) {
 	})
 }
 
-func TestSessionReanchorsAfterDeferredSprintSeal(t *testing.T) {
+// A sprint-start seal the consumer can't verify (its state-sync tx is absent
+// from the stream) is deferred to canonical import: the session stays alive,
+// the speculative post-state is dropped so the next block anchors on canonical,
+// and the already-served preconf (a valid leading tx) is not voided.
+func TestSessionDefersSprintSealToCanonical(t *testing.T) {
 	gate := make(chan struct{})
 	config := finalizationConfig()
 	config.Sprint = map[string]uint64{"0": 4}
@@ -360,21 +364,27 @@ func TestSessionReanchorsAfterDeferredSprintSeal(t *testing.T) {
 	}
 	cur = handleOK(t, s, recordEntry(raw, cur))
 	sealed := sealedFromEnv(t, s)
+	sealedHash := common.Hash(commitment.SealedHash(encodeHeader(t, sealed)))
 
 	previous := preconfSealVerifyTimeout
 	preconfSealVerifyTimeout = time.Millisecond
 	defer func() { preconfSealVerifyTimeout = previous }()
 	defer close(gate)
 
-	err = s.handle(sealEntry(encodeHeader(t, sealed), cur))
-	if !errors.Is(err, errPreconfReanchor) {
-		t.Fatalf("handle deferred sprint seal: %v", err)
+	if err = s.handle(sealEntry(encodeHeader(t, sealed), cur)); err != nil {
+		t.Fatalf("deferred sprint seal ended the session: %v", err)
 	}
-	if s.env != nil || s.parked != nil || s.consumer.PendingBlock() != nil {
-		t.Fatal("deferred sprint seal retained speculative state")
+	if s.env != nil {
+		t.Fatal("deferred sprint seal retained its execution env")
 	}
-	if _, _, ok := s.consumer.Index().Lookup(tx.Hash()); ok {
-		t.Fatal("deferred sprint seal retained its receipt")
+	if s.parked != nil {
+		t.Fatal("deferred sprint seal parked speculative state; the next block must anchor on canonical")
+	}
+	if s.sealed[sealed.Number.Uint64()] != sealedHash {
+		t.Fatal("deferred sprint seal was not recorded for BLOCKHASH resolution")
+	}
+	if _, _, ok := s.consumer.Index().Lookup(tx.Hash()); !ok {
+		t.Fatal("deferred sprint seal voided a valid preconf receipt")
 	}
 }
 

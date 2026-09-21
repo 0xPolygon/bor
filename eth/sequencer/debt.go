@@ -255,7 +255,7 @@ func (p *Publisher) appendBlockLocked(fresh *journal, cur commitment.Head, block
 	fresh.append(open, cur, next, entryOpen, n, 0, nil)
 	cur = next
 
-	for _, tx := range block.Transactions() {
+	for _, tx := range streamTxs(block.Transactions()) {
 		raw, err := tx.MarshalBinary()
 		if err != nil {
 			p.fail("backfill encode transaction", "hash", tx.Hash(), "err", err)
