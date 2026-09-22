@@ -69,10 +69,11 @@ func (b *EthAPIBackend) PendingLogRange() (*types.Header, []*types.Block, []type
 		}
 	}
 	anchor := b.eth.blockchain.CurrentBlock()
-	if anchor == nil || b.eth.miner == nil {
+	if anchor == nil {
 		return nil, nil, nil
 	}
-	block, receipts, _ := b.eth.miner.Pending()
+	// Reuse the block accessor's head fallback for the import->next-open gap.
+	block, receipts := b.PendingBlockAndReceipts()
 	if block == nil || block.NumberU64() != anchor.Number.Uint64()+1 || block.ParentHash() != anchor.Hash() {
 		return nil, nil, nil
 	}

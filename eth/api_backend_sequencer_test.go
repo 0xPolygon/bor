@@ -319,4 +319,11 @@ func TestSequencerPendingSnapshotHeadFallback(t *testing.T) {
 	if pb, _ := b.PendingBlockAndReceipts(); pb != empty {
 		t.Fatalf("PendingBlockAndReceipts did not use the head fallback: %v", pb)
 	}
+	anchor, blocks, receiptSets := b.PendingLogRange()
+	if anchor == nil || anchor.Hash() != head.Hash() {
+		t.Fatalf("PendingLogRange anchor did not match head: %v", anchor)
+	}
+	if len(blocks) != 1 || blocks[0] != empty || len(receiptSets) != 1 {
+		t.Fatalf("PendingLogRange did not use the head fallback: %v, %v", blocks, receiptSets)
+	}
 }
