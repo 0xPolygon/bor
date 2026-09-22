@@ -409,6 +409,43 @@ func TestAuditReconcilesServedMismatchDespiteUnusableSeal(t *testing.T) {
 	}
 }
 
+// A store seal matching canonical proves nothing about what this node served;
+// the commitment is judged, not dropped.
+func TestAuditJudgesServedCommitmentDespiteMatchingSeal(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	chain, sealed := auditFixture(t, 12)
+
+	// The seal at 7 is the canonical block; its body is not what was served.
+	served := servedTxs(3)
+	block := canonicalBlock(7, types.Transactions{served[1], served[0], served[2]})
+	chain.blocks[7], chain.hashes[7], sealed[7] = block, block.Hash(), block.Header()
+
+	if err := rawdb.WritePreconfServed(db, 7, uint64(len(served)), servedDigest(7, served)); err != nil {
+		t.Fatalf("seed served commitment: %v", err)
+	}
+	if err := rawdb.WritePreconfAuditedThrough(db, 4); err != nil {
+		t.Fatalf("seed watermark: %v", err)
+	}
+
+	audit := &auditor{db: db, chain: chain, fetch: fetchFrom(t, sealed)}
+
+	summary, err := audit.run(context.Background())
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if summary.mismatch != 1 {
+		t.Fatalf("mismatch = %d, want 1: a matching store seal must not skip judging the served commitment", summary.mismatch)
+	}
+	records := rawdb.ReadInvalidPreconfsInRange(db, 5, 12)
+	if len(records) != 1 || records[0].Number != 7 || records[0].Reason != servedMismatchReason {
+		t.Fatalf("records = %+v, want one %s at 7", records, servedMismatchReason)
+	}
+	if _, _, ok, _ := rawdb.ReadPreconfServed(db, 7); ok {
+		t.Fatal("served commitment not cleared after judging")
+	}
+}
+
 // A commitment in a range the audit skips for store retention must still be
 // judged. The store aged those heights out, but the commitment reconciles
 // against the canonical chain, and skipping it silently would both drop a broken

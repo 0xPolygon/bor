@@ -389,6 +389,8 @@ func (c *Consumer) markCanonicalHeadAudited() {
 
 	number := head.Number.Uint64()
 	if number <= watermark {
+		// A rewind can leave newly served commitments below the mark.
+		c.requestAudit()
 		return
 	}
 	if number > watermark+1 {
