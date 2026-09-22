@@ -189,8 +189,9 @@ type handler struct {
 	// WIT2: cache of BP-signed witness announcements, keyed by block hash.
 	// Populated by both produced (signed locally) and received-and-verified
 	// announcements. Consulted by the relay path to dedup, by the body
-	// broadcast path to re-emit signed announces, and by the fetch path to
-	// supply the byte-correctness comparison hash.
+	// broadcast path to re-emit signed announces, and by the fetch and
+	// broadcast-accept paths to supply the size oracle (signed WitnessSize)
+	// and the BP's WitnessHash that gates pre-import re-serving.
 	signedWitnesses *signedWitnessCache
 
 	// WIT2: in-flight witness bodies received via NewWitness broadcast but
@@ -222,6 +223,11 @@ type handler struct {
 	// file). When we obtain the body we push it straight to them, restoring
 	// the WIT1-style hand-off the fast announce removed.
 	witnessWaiters *witnessWaiterRegistry
+
+	// WIT2: per-block set of peers whose served witness was accepted on the
+	// size oracle alone and then failed import. Skipped when resolving a
+	// witness fetch source so the fetcher's re-fetch reaches another peer.
+	witnessSourceExclusions *witnessSourceExclusionSet
 
 	// WIT2: dedup guard for relayFetchOnDemand — a pure relay node (no
 	// produce_witness, no sync_with_witness) has no reason of its own to
@@ -293,6 +299,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		relayFetchSem:           make(chan struct{}, wit2RelayFetchGlobalConcurrencyCap),
 		deferredAnnounces:       newDeferredAnnounceCache(deferredAnnounceCapacity),
 		witnessWaiters:          newWitnessWaiterRegistry(),
+		witnessSourceExclusions: newWitnessSourceExclusionSet(),
 	}
 
 	log.Info("Sync with witnesses", "enabled", config.syncWithWitnesses)
@@ -380,6 +387,13 @@ func newHandler(config *handlerConfig) (*handler, error) {
 	// WIT2: penalize a peer that serves a non-empty witness whose bytes mismatch
 	// the BP-signed commitment (strike, not drop — see strikeWit2PeerByID).
 	h.blockFetcher.SetWitnessServerStriker(h.strikeWit2PeerByID)
+
+	// WIT2 size oracle: the striker above fires for a witness beyond the
+	// BP-signed size band, and for one accepted on the size oracle alone that
+	// then fails import. In the latter case the fetcher also asks us to stop
+	// offering that peer as a witness source for the block, so its re-fetch
+	// lands on a different peer (see resolveWitnessFetchPeer).
+	h.blockFetcher.SetWitnessSourceExcluder(h.excludeWitnessSource)
 
 	fetchTx := func(peer string, requestID uint64, hashes []common.Hash) error {
 		p := h.peers.peer(peer)

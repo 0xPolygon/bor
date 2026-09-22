@@ -51,31 +51,58 @@ type witnessRequestState struct {
 type cachedWitness struct {
 	witness   *stateless.Witness
 	peer      string
+	diverged  bool // Accepted on the WIT2 size oracle alone (see InjectWitness).
 	timestamp time.Time
 }
 
-// signedWitnessHashFn returns the BP-signed witness content hash for a block,
-// if a WIT2 signed announcement has been received and verified locally. It is
-// used by the witness manager on fetch success to verify byte-correctness:
-// if the encoded witness bytes don't hash to the signed witnessHash, the
-// serving peer lied and is dropped. If no signed announcement is on file
-// (e.g., WIT1-only fetch), the check is skipped.
-type signedWitnessHashFn func(blockHash common.Hash) (witnessHash common.Hash, ok bool)
+// injectFor builds the import op for block from a witness that arrived by
+// broadcast before the block did, carrying the pusher and the size-oracle
+// divergence bit as the op's provenance (see blockOrHeaderInject) and the fetch
+// closure a re-fetch after an import failure needs (retryAfterImportFailure).
+func (c *cachedWitness) injectFor(origin string, block *types.Block, fetchWitness witnessRequesterFn) *blockOrHeaderInject {
+	return &blockOrHeaderInject{
+		origin:          origin,
+		block:           block,
+		witness:         c.witness,
+		witnessPeer:     c.peer,
+		witnessDiverged: c.diverged,
+		fetchWitness:    fetchWitness,
+	}
+}
+
+// signedWitnessHashFn returns the BP-signed witness commitment for a block —
+// the producer's own witness hash and encoded size — if a WIT2 signed
+// announcement has been received and verified locally. The witness manager uses
+// it on fetch success as a size oracle (see verifyAgainstSignedHash): a served
+// witness is accepted for import when its encoded size is within a band of the
+// signed size; its hash is compared only to decide whether the bytes are the
+// BP's own and therefore eligible for pre-import re-serving. If no signed
+// announcement is on file (e.g., WIT1-only fetch), the check is skipped.
+type signedWitnessHashFn func(blockHash common.Hash) (witnessHash common.Hash, witnessSize uint64, ok bool)
 
 // cacheWitnessForServingFn hands successfully-fetched witness bytes to the
-// network handler so peers can serve them pre-import. Called only after the
-// byte-correctness check (vs. BP-signed witnessHash, when present) has passed,
-// so the cached bytes are safe to serve. The witnessHash is the canonical
-// keccak256 of the canonical encoding, identical to what the BP signed.
+// network handler so peers can serve them pre-import. Called only for bytes that
+// are byte-identical to the BP's own witness (hash match against the signed
+// commitment), so the pre-import serving cache never carries a variant the BP
+// did not produce. The witnessHash is the WIT2 commitment over the canonical
+// encoding, identical to what the BP signed.
 type cacheWitnessForServingFn func(blockHash common.Hash, witnessBytes []byte, witnessHash common.Hash)
 
 // peerStrikeFn records a WIT2 misbehavior strike against a peer (by id) that
-// served a non-empty witness whose bytes mismatch the on-file BP-signed hash.
-// Unlike peerDropFn it does not immediately disconnect: a single mismatch is
-// tolerated (a faulty/malicious BP that signed a bogus hash makes honest servers
-// mismatch too), but sustained byte-serving misbehavior accrues toward the same
-// disconnect threshold as bad announces. Optional; nil disables the penalty.
+// served a witness we could not use: one beyond the BP-signed size band, or
+// one accepted on the size oracle alone whose import then failed. Unlike
+// peerDropFn it does not immediately disconnect: a single strike is tolerated
+// (a faulty BP, or a bad block, makes honest servers look wrong too), but
+// sustained misbehavior accrues toward the same disconnect threshold as bad
+// announces. Optional; nil disables the penalty.
 type peerStrikeFn func(id string)
+
+// witnessSourceExcludeFn tells the network handler that peer's copy of the
+// witness for blockHash must not be fetched again: it was accepted on the size
+// oracle and failed import. The handler skips that peer when resolving the
+// fetch target for blockHash so the re-fetch reaches a different source.
+// Optional; nil means the re-fetch may land on the same peer.
+type witnessSourceExcludeFn func(peer string, blockHash common.Hash)
 
 // witnessManager handles the logic specific to fetching and managing witnesses
 // for blocks, isolating it from the main BlockFetcher loop.
@@ -88,9 +115,10 @@ type witnessManager struct {
 	parentGetHeader              HeaderRetrievalFn        // Function to check if header is known locally (needed for checks)
 	parentChainHeight            chainHeightFn            // Retrieve chain height for distance checks
 	parentCurrentHeader          currentHeaderFn          // Retrieve current block header for gas limit
-	parentSignedWitnessHash      signedWitnessHashFn      // WIT2: lookup a BP-signed witness hash for byte-correctness verification
-	parentCacheWitnessForServing cacheWitnessForServingFn // WIT2: hand bytes to the handler for pre-import serving by peers
-	parentStrikeWitnessServer    peerStrikeFn             // WIT2: strike a peer that served non-empty bytes mismatching the signed hash (optional)
+	parentSignedWitnessHash      signedWitnessHashFn      // WIT2: lookup the BP-signed witness commitment (hash + size) for the size oracle
+	parentCacheWitnessForServing cacheWitnessForServingFn // WIT2: hand BP-identical bytes to the handler for pre-import serving by peers
+	parentStrikeWitnessServer    peerStrikeFn             // WIT2: strike a peer that served an oversized or import-failing witness (optional)
+	parentExcludeWitnessSource   witnessSourceExcludeFn   // WIT2: exclude a peer as fetch source for a block after its witness failed import (optional)
 
 	// Witness-specific state
 	pending            map[common.Hash]*witnessRequestState         // Blocks waiting for witness or actively fetching.
@@ -349,12 +377,8 @@ func (m *witnessManager) handleNeed(msg *injectBlockNeedWitnessMsg) {
 	// Check if we have a cached witness for this block
 	if item := m.witnessCache.Get(hash); item != nil {
 		cached := item.Value()
-		// Use the cached witness
-		op := &blockOrHeaderInject{
-			origin:  msg.origin,
-			block:   msg.block,
-			witness: cached.witness,
-		}
+		// Use the cached witness, with the pusher's provenance
+		op := cached.injectFor(msg.origin, msg.block, msg.fetchWitness)
 		m.witnessCache.Delete(hash)
 		m.mu.Unlock()
 
@@ -403,6 +427,15 @@ func (m *witnessManager) handleBroadcast(msg *injectedWitnessMsg) {
 		// Ensure witness isn't already set
 		if state.op.witness == nil {
 			state.op.witness = msg.witness
+			// Provenance, exactly as handleWitnessFetchSuccess records it for a
+			// fetched witness: the pusher chose these bytes, so an import failure
+			// of a size-oracle-accepted (diverged) body is charged to it and the
+			// witness re-fetched from someone else via the announce's closure.
+			state.op.witnessPeer = msg.peer
+			state.op.witnessDiverged = msg.diverged
+			if state.op.fetchWitness == nil && state.announce != nil {
+				state.op.fetchWitness = state.announce.fetchWitness
+			}
 			// Update block timestamps if needed
 			if state.op.block != nil && msg.time.After(state.op.block.ReceivedAt) {
 				state.op.block.ReceivedAt = msg.time
@@ -422,6 +455,7 @@ func (m *witnessManager) handleBroadcast(msg *injectedWitnessMsg) {
 		m.witnessCache.Set(hash, &cachedWitness{
 			witness:   msg.witness,
 			peer:      msg.peer,
+			diverged:  msg.diverged,
 			timestamp: msg.time,
 		}, ttlcache.DefaultTTL)
 		log.Debug("[wm] No matching pending block for injected witness, caching for later", "hash", hash, "peer", msg.peer)
@@ -694,29 +728,38 @@ func (m *witnessManager) processWitnessResponse(peer string, hash common.Hash, r
 		return
 	}
 
-	// WIT2: byte-correctness check. If we have a BP-signed announcement on
-	// file for this block, the encoded witness bytes must hash to the
-	// signed witnessHash. State-root failures (content-correctness) are
-	// handled later in the import path and do NOT drop the server.
-	body, witnessHash, ok := m.verifyAgainstSignedHash(peer, hash, witness[0])
+	// WIT2: size-oracle check. If we have a BP-signed announcement on file
+	// for this block, the encoded witness only needs to fall within the
+	// signed-size band — hash divergence from non-deterministic witness
+	// content is expected and is not rejected here. Only an oversized witness
+	// is rejected. Content-correctness is arbitrated by import-time execution;
+	// when a witness accepted on the size oracle alone (diverged) then fails
+	// import, the fetcher strikes this server and re-fetches from another
+	// source (see BlockFetcher.importBlocks).
+	body, witnessHash, diverged, ok := m.verifyAgainstSignedHash(peer, hash, witness[0])
 	if !ok {
 		return
 	}
 
-	// WIT2: hand the verified bytes to the handler for pre-import serving.
+	// WIT2: hand BP-identical bytes to the handler for pre-import serving.
 	// Done before import-side enqueue so a peer asking us for the body
 	// during the chain-write window gets bytes from the in-flight cache
 	// rather than empty results. body is nil on the WIT1 path (no signed
-	// hash on file) — cacheVerifiedWitnessForServing no-ops in that case.
+	// hash on file) and for a within-band non-identical variant —
+	// cacheVerifiedWitnessForServing no-ops in both cases.
 	m.cacheVerifiedWitnessForServing(hash, body, witnessHash)
 
 	metrics.RecordPerItemDuration(blockWitnessItemDownloadTimer, res.Time, 1)
-	m.handleWitnessFetchSuccess(peer, hash, witness[0], announcedAt)
+	m.handleWitnessFetchSuccess(peer, hash, witness[0], announcedAt, diverged)
 }
 
 // handleWitnessFetchSuccess processes a successfully fetched witness.
 // It needs the original origin from the op state for consistency checks.
-func (m *witnessManager) handleWitnessFetchSuccess(fetchPeer string, hash common.Hash, witness *stateless.Witness, announcedAt time.Time) {
+// diverged records that the witness was accepted on the size oracle alone (hash
+// differs from the BP-signed one); together with the serving peer and the
+// fetch closure it is carried on the import op so an import failure can be
+// charged to the server and re-fetched from another source.
+func (m *witnessManager) handleWitnessFetchSuccess(fetchPeer string, hash common.Hash, witness *stateless.Witness, announcedAt time.Time, diverged bool) {
 	m.mu.Lock()
 	state, exists := m.pending[hash]
 	if !exists {
@@ -732,10 +775,15 @@ func (m *witnessManager) handleWitnessFetchSuccess(fetchPeer string, hash common
 		return // Already handled
 	}
 
-	log.Debug("[wm] Witness received via fetch, queuing block for import", "peer", fetchPeer, "origin", state.op.origin, "number", state.op.number(), "hash", hash)
+	log.Debug("[wm] Witness received via fetch, queuing block for import", "peer", fetchPeer, "origin", state.op.origin, "number", state.op.number(), "hash", hash, "diverged", diverged)
 
-	// Attach witness (under lock)
+	// Attach witness and its provenance (under lock)
 	state.op.witness = witness
+	state.op.witnessPeer = fetchPeer
+	state.op.witnessDiverged = diverged
+	if state.announce != nil {
+		state.op.fetchWitness = state.announce.fetchWitness
+	}
 	m.mu.Unlock()
 
 	// Update timestamps on the block
@@ -852,6 +900,72 @@ func (m *witnessManager) safeEnqueue(op *blockOrHeaderInject) {
 	m.rescheduleWitness()
 }
 
+// StrikeWitnessServer records a WIT2 strike against peer via the parent
+// callback, if one is wired. Exported so the network handler can pin that its
+// striker is wired to this manager.
+func (m *witnessManager) StrikeWitnessServer(peer string) {
+	if peer != "" && m.parentStrikeWitnessServer != nil {
+		m.parentStrikeWitnessServer(peer)
+	}
+}
+
+// ExcludeWitnessSource asks the parent to stop offering peer as a witness
+// source for hash, if a callback is wired. Exported so the network handler can
+// pin that its excluder is wired to this manager.
+func (m *witnessManager) ExcludeWitnessSource(peer string, hash common.Hash) {
+	if peer != "" && m.parentExcludeWitnessSource != nil {
+		m.parentExcludeWitnessSource(peer, hash)
+	}
+}
+
+// retryAfterImportFailure re-registers a block whose import failed with a
+// witness accepted on the WIT2 size oracle alone, so its witness is fetched
+// again — from a different source, the failed one having been excluded by the
+// fetcher. Called from the BlockFetcher loop right after the failed attempt has
+// been forgotten, so the pending map is free for the hash. The carried
+// witnessImportFailures count bounds the cycle (see maxWitnessImportRetries).
+func (m *witnessManager) retryAfterImportFailure(op *blockOrHeaderInject) {
+	if op == nil || op.block == nil || op.fetchWitness == nil {
+		return
+	}
+	hash := op.block.Hash()
+	if m.isWitnessUnavailable(hash) {
+		log.Debug("[wm] Not re-fetching witness after import failure: marked unavailable", "hash", hash)
+		return
+	}
+	if m.parentGetBlock(hash) != nil {
+		log.Debug("[wm] Not re-fetching witness after import failure: block now known locally", "hash", hash)
+		return
+	}
+
+	m.mu.Lock()
+	if _, exists := m.pending[hash]; exists {
+		m.mu.Unlock()
+		log.Debug("[wm] Not re-fetching witness after import failure: already pending", "hash", hash)
+		return
+	}
+	m.pending[hash] = &witnessRequestState{
+		op: &blockOrHeaderInject{
+			origin:                op.origin,
+			block:                 op.block,
+			fetchWitness:          op.fetchWitness,
+			witnessImportFailures: op.witnessImportFailures,
+		},
+		announce: &blockAnnounce{
+			origin:       op.origin,
+			hash:         hash,
+			number:       op.block.NumberU64(),
+			time:         time.Now(),
+			fetchWitness: op.fetchWitness,
+		},
+	}
+	m.mu.Unlock()
+
+	log.Info("[wm] Re-fetching witness from another peer after import failure",
+		"number", op.block.NumberU64(), "hash", hash, "failedServer", op.witnessPeer, "failures", op.witnessImportFailures)
+	m.rescheduleWitness()
+}
+
 // forget cleans up any pending state for a given hash. Called when a block is
 // imported or discarded by the main fetcher *before* witness handling completed.
 func (m *witnessManager) forget(hash common.Hash) {
@@ -961,12 +1075,8 @@ func (m *witnessManager) handleFilterResult(announce *blockAnnounce, block *type
 	// Check if we have a cached witness for this block
 	if item := m.witnessCache.Get(hash); item != nil {
 		cached := item.Value()
-		// Use the cached witness
-		op := &blockOrHeaderInject{
-			origin:  announce.origin,
-			block:   block,
-			witness: cached.witness,
-		}
+		// Use the cached witness, with the pusher's provenance
+		op := cached.injectFor(announce.origin, block, announce.fetchWitness)
 		m.witnessCache.Delete(hash)
 		log.Debug("[wm] Found cached witness for filter result block, using it", "hash", hash, "cachedPeer", cached.peer)
 		m.safeEnqueue(op)

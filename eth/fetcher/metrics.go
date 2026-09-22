@@ -27,9 +27,28 @@ var (
 	witnessVerifyCheckMeter   = metrics.NewRegisteredMeter("eth/fetcher/witness/verify/check", nil)
 	witnessVerifyFailureMeter = metrics.NewRegisteredMeter("eth/fetcher/witness/verify/failure", nil)
 
-	// witnessByteMismatchMeter tracks WIT2 byte-correctness drops: a serving
-	// peer delivered bytes whose keccak256 did not match the BP-signed hash.
-	witnessByteMismatchMeter = metrics.NewRegisteredMeter("eth/fetcher/witness/byte_mismatch", nil)
+	// witnessOversizedMeter tracks WIT2 size-oracle rejections: a serving peer
+	// delivered a witness larger than the accepted band around the BP-signed
+	// WitnessSize. This is the only witness-content size limit enforced on the
+	// signed path; a differing hash within the band is tolerated.
+	witnessOversizedMeter = metrics.NewRegisteredMeter("eth/fetcher/witness/oversized", nil)
+
+	// witnessHashDivergenceMeter tracks accepted witnesses whose hash differed
+	// from the BP-signed WitnessHash but whose size was within band — expected
+	// under non-deterministic witness production. Not a drop/strike at fetch
+	// time; such a witness is charged to its server only if it then fails
+	// import (witnessImportFailureMeter).
+	witnessHashDivergenceMeter = metrics.NewRegisteredMeter("eth/fetcher/witness/hash_divergence", nil)
+
+	// witnessImportFailureMeter counts block imports that failed with a witness
+	// accepted on the size oracle alone; each occurrence strikes the serving
+	// peer and excludes it as a source for that block.
+	witnessImportFailureMeter = metrics.NewRegisteredMeter("eth/fetcher/witness/import_failure", nil)
+
+	// witnessImportRetryMeter counts the subset of those failures that were
+	// handed back to the witness manager for a re-fetch from another peer
+	// (bounded by maxWitnessImportRetries).
+	witnessImportRetryMeter = metrics.NewRegisteredMeter("eth/fetcher/witness/import_retry", nil)
 
 	// Witness page count metrics
 	witnessPageCountBelowThresholdMeter = metrics.NewRegisteredMeter("eth/fetcher/witness/pagecount/below_threshold", nil)
