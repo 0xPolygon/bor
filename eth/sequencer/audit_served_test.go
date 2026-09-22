@@ -415,10 +415,10 @@ func TestAuditJudgesServedCommitmentDespiteMatchingSeal(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	chain, sealed := auditFixture(t, 12)
 
-	// The seal at 7 matches canonical; the body is not what was served.
+	// The seal at 7 is the canonical block; its body is not what was served.
 	served := servedTxs(3)
-	reordered := types.Transactions{served[1], served[0], served[2]}
-	chain.blocks[7] = canonicalBlock(7, reordered)
+	block := canonicalBlock(7, types.Transactions{served[1], served[0], served[2]})
+	chain.blocks[7], chain.hashes[7], sealed[7] = block, block.Hash(), block.Header()
 
 	if err := rawdb.WritePreconfServed(db, 7, uint64(len(served)), servedDigest(7, served)); err != nil {
 		t.Fatalf("seed served commitment: %v", err)
