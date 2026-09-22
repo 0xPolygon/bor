@@ -129,19 +129,9 @@ type auditSummary struct {
 // A node with no milestone source falls back to the head: bounding at a
 // finality it cannot see would freeze the watermark forever.
 func (a *auditor) rangeToAudit() (from, through uint64, ok bool) {
-	head := a.chain.CurrentBlock()
-	if head == nil || head.Number == nil {
+	head, through, ok := a.ceiling()
+	if !ok {
 		return 0, 0, false
-	}
-	through = head.Number.Uint64()
-
-	if a.finalized != nil {
-		final, have := a.finalized()
-		if !have {
-			return 0, 0, false // nothing is final yet; nothing is safe to judge
-		}
-
-		through = min(through, final)
 	}
 
 	watermark, stored, err := rawdb.ReadPreconfAuditedThrough(a.db)
@@ -156,7 +146,7 @@ func (a *auditor) rangeToAudit() (from, through uint64, ok bool) {
 	if !stored {
 		// Seeded at the head rather than at finality: this judges nothing,
 		// it only declines to walk history that predates the node.
-		seed := head.Number.Uint64()
+		seed := head
 		a.persist(seed)
 		log.Info("Sequence store audit watermark seeded", "height", seed)
 
@@ -169,19 +159,56 @@ func (a *auditor) rangeToAudit() (from, through uint64, ok bool) {
 	return watermark + 1, through, true
 }
 
+// ceiling is the highest height a pass may judge: the head, bounded by
+// finality when there is a source. ok is false when nothing is safe to judge.
+func (a *auditor) ceiling() (head, through uint64, ok bool) {
+	current := a.chain.CurrentBlock()
+	if current == nil || current.Number == nil {
+		return 0, 0, false
+	}
+	head = current.Number.Uint64()
+	through = head
+
+	if a.finalized != nil {
+		final, have := a.finalized()
+		if !have {
+			return 0, 0, false // nothing is final yet; nothing is safe to judge
+		}
+
+		through = min(through, final)
+	}
+
+	return head, through, true
+}
+
+// hasRangeToWalk is rangeToAudit without its first-run seeding, for a caller
+// that must not persist anything.
+func (a *auditor) hasRangeToWalk() bool {
+	watermark, stored, err := rawdb.ReadPreconfAuditedThrough(a.db)
+	if err != nil || !stored {
+		return false
+	}
+	_, through, ok := a.ceiling()
+
+	return ok && watermark < through
+}
+
 // run walks from the watermark to the head and records the heights where the
 // store's final generation disagrees with the canonical chain. The store's
 // retention is the only bound on the walk: a second bound on this side would
 // be one operators had to keep aligned with the store's.
 func (a *auditor) run(ctx context.Context) (auditSummary, error) {
 	var summary auditSummary
+	if err := ctx.Err(); err != nil {
+		return summary, err
+	}
 
 	// Heights at or below the watermark are never walked again, and the live
 	// path never clears a commitment once the head has passed it. Judge them
 	// unconditionally, before rangeToAudit: after a rewind there may be no
 	// range to walk for many passes.
-	if watermark, stored, err := rawdb.ReadPreconfAuditedThrough(a.db); err == nil && stored {
-		a.reconcileSkippedServed(0, watermark, &summary)
+	if err := a.sweepBelowWatermark(ctx, &summary); err != nil {
+		return summary, err
 	}
 
 	from, through, ok := a.rangeToAudit()
@@ -203,7 +230,9 @@ func (a *auditor) run(ctx context.Context) (auditSummary, error) {
 	// judge the ones that exist so a promise in the skipped range is recorded
 	// and cleared, not advanced past unseen.
 	if summary.skipped > 0 {
-		a.reconcileSkippedServed(from, summary.from-1, &summary)
+		if err := a.reconcileSkippedServed(ctx, from, summary.from-1, &summary); err != nil {
+			return summary, err
+		}
 	}
 
 	log.Info("Auditing sequence store against canonical chain", "from", summary.from, "through", through)
@@ -428,13 +457,33 @@ func (a *auditor) judgeServed(height, count uint64, digest common.Hash, summary 
 }
 
 // reconcileSkippedServed judges the served commitments in a range the walk
-// advanced past for store retention. It scans the served prefix, so it visits
-// only the heights that actually carry a commitment rather than every skipped
-// height.
-func (a *auditor) reconcileSkippedServed(from, to uint64, summary *auditSummary) {
+// does not visit. It scans the served prefix, so it visits only the heights
+// that actually carry a commitment.
+func (a *auditor) reconcileSkippedServed(ctx context.Context, from, to uint64, summary *auditSummary) error {
 	for _, height := range rawdb.ReadServedPreconfHeightsInRange(a.db, from, to) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		a.reconcileServed(height, summary)
 	}
+
+	return nil
+}
+
+// sweepBelowWatermark judges the served commitments the walk never reaches,
+// bounded by finality like the walk: a verdict above it is about a block that
+// can still change.
+func (a *auditor) sweepBelowWatermark(ctx context.Context, summary *auditSummary) error {
+	watermark, stored, err := rawdb.ReadPreconfAuditedThrough(a.db)
+	if err != nil || !stored {
+		return nil
+	}
+	_, through, ok := a.ceiling()
+	if !ok {
+		return nil
+	}
+
+	return a.reconcileSkippedServed(ctx, 0, min(watermark, through), summary)
 }
 
 // judgeServedAgainstCanonical compares the served commitment at a height with
@@ -661,12 +710,13 @@ func (c *Consumer) runAuditPass(ctx context.Context) {
 	// Only the walk needs the store; the sweep below the watermark is local
 	// and runs every pass. Dial only when there is a range — grpc.NewClient
 	// is lazy, so this saves the client, its teardown and a log line per
-	// retry, not a connection. run skips the walk when fetch is nil.
-	if from, through, ok := audit.rangeToAudit(); ok {
+	// retry, not a connection. run skips the walk when fetch is nil and owns
+	// the first-run seeding rangeToAudit does, so decide from a plain read.
+	if audit.hasRangeToWalk() {
 		conn, err := grpc.NewClient(c.endpoint, grpc.WithTransportCredentials(insecure.NewCredentials()),
 			grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(pendingInputLimit+1024*1024)))
 		if err != nil {
-			log.Warn("Sequence store audit could not dial", "from", from, "through", through, "err", err)
+			log.Warn("Sequence store audit could not dial", "err", err)
 		} else {
 			defer func() {
 				if cerr := conn.Close(); cerr != nil {
