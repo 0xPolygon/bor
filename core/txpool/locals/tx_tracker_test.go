@@ -22,6 +22,7 @@ import (
 	"math/big"
 	"math/rand"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -56,6 +57,26 @@ type testEnv struct {
 	pool    *txpool.TxPool
 	tracker *TxTracker
 	genDb   ethdb.Database
+}
+
+type blockingTrackerPool struct {
+	nonceStarted chan struct{}
+	nonceRelease chan struct{}
+	startOnce    sync.Once
+}
+
+func (pool *blockingTrackerPool) Add(txs []*types.Transaction, _ bool) []error {
+	return make([]error, len(txs))
+}
+
+func (pool *blockingTrackerPool) Has(common.Hash) bool {
+	return false
+}
+
+func (pool *blockingTrackerPool) Nonce(common.Address) uint64 {
+	pool.startOnce.Do(func() { close(pool.nonceStarted) })
+	<-pool.nonceRelease
+	return 0
 }
 
 func newTestEnv(t *testing.T, n int, gasTip uint64, journal string) *testEnv {
@@ -156,7 +177,12 @@ func TestResubmit(t *testing.T) {
 		t.Fatalf("Unexpected txpool content: %d, %d", len(pending), len(queued))
 	}
 	env.tracker.TrackAll(txs)
+	env.tracker.Track(env.makeTx(1, nil))
 
+	result := env.tracker.inspect(env.tracker.snapshot())
+	if result.numOk != len(txsA) || len(result.missing) != len(txsB) {
+		t.Fatalf("Unexpected inspection result, present: %d, missing: %d", result.numOk, len(result.missing))
+	}
 	resubmit := env.tracker.recheck(true)
 	if len(resubmit) != len(txsB) {
 		t.Fatalf("Unexpected transactions to resubmit, got: %d, want: %d", len(resubmit), len(txsB))
@@ -167,6 +193,58 @@ func TestResubmit(t *testing.T) {
 
 	if len(allCopy) != len(txs) {
 		t.Fatalf("Unexpected transactions being tracked, got: %d, want: %d", len(allCopy), len(txs))
+	}
+}
+
+func TestRecheckDoesNotBlockTrack(t *testing.T) {
+	pool := &blockingTrackerPool{
+		nonceStarted: make(chan struct{}),
+		nonceRelease: make(chan struct{}),
+	}
+	defer func() {
+		select {
+		case <-pool.nonceRelease:
+		default:
+			close(pool.nonceRelease)
+		}
+	}()
+	tracker := &TxTracker{
+		all:    make(map[common.Hash]*types.Transaction),
+		byAddr: make(map[common.Address]*legacypool.SortedMap),
+		pool:   pool,
+		signer: signer,
+	}
+	env := newTestEnv(t, 0, 0, "")
+	defer env.close()
+	txs := env.makeTxs(2)
+	tracker.Track(txs[0])
+
+	recheckDone := make(chan []*types.Transaction, 1)
+	go func() { recheckDone <- tracker.recheck(false) }()
+	select {
+	case <-pool.nonceStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Recheck did not inspect txpool state")
+	}
+
+	trackDone := make(chan struct{})
+	go func() {
+		tracker.Track(txs[1])
+		close(trackDone)
+	}()
+	select {
+	case <-trackDone:
+	case <-time.After(time.Second):
+		t.Fatal("Track blocked on a txpool state lookup")
+	}
+	close(pool.nonceRelease)
+	resubmits := <-recheckDone
+
+	if len(resubmits) != 1 || resubmits[0].Hash() != txs[0].Hash() {
+		t.Fatalf("Unexpected transactions to resubmit: %v", resubmits)
+	}
+	if len(tracker.all) != len(txs) {
+		t.Fatalf("Unexpected transactions being tracked, got: %d, want: %d", len(tracker.all), len(txs))
 	}
 }
 
