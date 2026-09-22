@@ -302,19 +302,7 @@ func floorFromEntries(entries []*pb.Entry) (uint64, bool) {
 // does not hold is not an error.
 func (a *auditor) auditHeightInto(ctx context.Context, height uint64, summary *auditSummary) error {
 	entries, err := a.fetch(ctx, height)
-	switch {
-	case err == nil:
-	case isNotFound(err):
-		// The store holds no generation here. It may have held one this node
-		// served preconfirmations from and then lost (producer died before
-		// sealing, successor rebuilt store-blind): the store cannot answer,
-		// but the node's own served commitment can. Reconcile against that;
-		// with no commitment the height is genuinely unheld.
-		summary.walked++
-		a.reconcileServed(height, summary)
-
-		return nil
-	default:
+	if err != nil && !isNotFound(err) {
 		return err
 	}
 
@@ -332,7 +320,9 @@ func (a *auditor) auditHeightInto(ctx context.Context, height uint64, summary *a
 	}
 
 	summary.compared++
-	a.recordVerdict(height, verdict, summary)
+	if !a.recordVerdict(height, verdict, summary) {
+		return nil
+	}
 
 	// A mismatch is already recorded. Neither other verdict proves what was
 	// served: an unusable seal confirms nothing, and a matching seal is only
@@ -343,6 +333,10 @@ func (a *auditor) auditHeightInto(ctx context.Context, height uint64, summary *a
 		switch {
 		case err != nil:
 			log.Warn("Served preconf commitment unreadable", "number", height, "err", err)
+			summary.unheld++
+			auditUnheldHeights.Inc(1)
+
+			return nil
 		case ok:
 			a.judgeServed(height, count, digest, summary)
 
@@ -397,8 +391,9 @@ func (a *auditor) judgeServed(height, count uint64, digest common.Hash, summary 
 	case servedDiverged:
 		summary.mismatch++
 		auditServedMismatch.Inc(1)
-		a.recordMismatch(height, servedMismatchReason, "Failed to record served preconf mismatch", summary)
-		a.clearServed(height)
+		if a.recordMismatch(height, servedMismatchReason, "Failed to record served preconf mismatch", summary) {
+			a.clearServed(height)
+		}
 	case servedUnjudgeable:
 		// The canonical block is not available locally — the header is
 		// canonical but its body is pruned, or a snap-sync gap. The commitment
@@ -497,8 +492,8 @@ func clearServedPreconf(db ethdb.KeyValueWriter, height uint64) {
 
 // recordMismatch writes an invalidation for a height, unless the live path
 // already recorded a stronger one there — that record stands and the height
-// counts as alreadyJudged instead.
-func (a *auditor) recordMismatch(height uint64, reason, failLog string, summary *auditSummary) {
+// counts as alreadyJudged instead. It reports whether a durable record exists.
+func (a *auditor) recordMismatch(height uint64, reason, failLog string, summary *auditSummary) bool {
 	wrote, err := rawdb.WriteInvalidPreconfIfAbsent(a.db, height, reason)
 	switch {
 	case err != nil:
@@ -506,6 +501,8 @@ func (a *auditor) recordMismatch(height uint64, reason, failLog string, summary 
 	case !wrote:
 		summary.alreadyJudged++
 	}
+
+	return err == nil
 }
 
 // foldServed folds transaction hashes into a running commitment in served
@@ -526,7 +523,7 @@ func foldServed(prev common.Hash, txs types.Transactions) common.Hash {
 	return prev
 }
 
-func (a *auditor) recordVerdict(height uint64, verdict auditVerdict, summary *auditSummary) {
+func (a *auditor) recordVerdict(height uint64, verdict auditVerdict, summary *auditSummary) bool {
 	switch verdict {
 	case auditMismatch:
 		summary.mismatch++
@@ -535,7 +532,7 @@ func (a *auditor) recordVerdict(height uint64, verdict auditVerdict, summary *au
 		// A record already at this height came from the live path, which
 		// served a preconfirmation and then invalidated it. That is a
 		// stronger claim than this pass can make, so it stands.
-		a.recordMismatch(height, unobservedMismatchReason, "Failed to record unobserved preconfirmation mismatch", summary)
+		return a.recordMismatch(height, unobservedMismatchReason, "Failed to record unobserved preconfirmation mismatch", summary)
 	case auditUnknown:
 		// Held but undecidable — no canonical hash, or a seal that does not
 		// decode or sits at the wrong height. Counted and logged rather than
@@ -545,6 +542,8 @@ func (a *auditor) recordVerdict(height uint64, verdict auditVerdict, summary *au
 		auditUnknownCount.Inc(1)
 	case auditMatch, auditNoSeal:
 	}
+
+	return true
 }
 
 // persist raises the watermark. advance is injected so the consumer can route
