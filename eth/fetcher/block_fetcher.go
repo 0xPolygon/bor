@@ -1227,14 +1227,6 @@ func (f *BlockFetcher) importHeaders(peer string, header *types.Header) {
 	}()
 }
 
-// maxWitnessImportRetries bounds how many times a block whose import failed with
-// a witness accepted on the WIT2 size oracle alone is re-fetched from another
-// source before the fetcher gives it up as it would any other failed import. A
-// small bound keeps a genuinely invalid block (every honest witness fails) from
-// cycling through the peer set, while still recovering from a single server
-// that handed out an unusable within-band witness.
-const maxWitnessImportRetries = 2
-
 // importBlocks spawns a new goroutine to run a block insertion into the chain. If the
 // block's number is at the same height as the current import phase, it updates
 // the phase states accordingly.
@@ -1350,46 +1342,6 @@ func (f *BlockFetcher) logTrackedImport(block *types.Block, hash common.Hash) {
 	totalDelay := common.PrettyDuration(time.Millisecond * time.Duration(totalDelayInMs))
 
 	log.Info(msg, "number", block.Number().Uint64(), "hash", hash, "delay", prettyDelay, "delayInMs", delayInMs, "totalDelay", totalDelay, "totalDelayInMs", totalDelayInMs)
-}
-
-// chargeDivergedWitnessImportFailure applies the WIT2 consequence of an import
-// failure to the peer that served the block's witness, when that witness was
-// accepted on the size oracle alone AND the failure is one the witness could
-// have caused (isWitnessAttributableImportError). It strikes the peer, excludes
-// it as a witness source for this block, and reports whether the block should
-// be handed back to the witness manager for a re-fetch (false once the retry
-// budget is spent, or when the witness was not a fetched, diverged one).
-//
-// The error gate matters because "diverged" is the normal case — every node
-// persists its own generated witness, so nearly every witness fetched from
-// anyone but the BP differs from the signed hash. Charging every import
-// failure would let a local problem (a contract bytecode missing from disk,
-// which the downloader heals; an interrupted insert) strike and exclude two
-// honest witness sources per block until the node has none left.
-func (f *BlockFetcher) chargeDivergedWitnessImportFailure(op *blockOrHeaderInject, importErr error) bool {
-	if op.witness == nil || !op.witnessDiverged || op.witnessPeer == "" {
-		return false
-	}
-	hash := op.hash()
-	if !isWitnessAttributableImportError(importErr) {
-		log.Debug("Import failed for a reason the witness server did not cause; not charging it",
-			"server", op.witnessPeer, "number", op.number(), "hash", hash, "err", importErr)
-		return false
-	}
-	witnessImportFailureMeter.Mark(1)
-	log.Warn("Import failed with a witness accepted on the WIT2 size oracle; striking its server",
-		"server", op.witnessPeer, "number", op.number(), "hash", hash, "attempt", op.witnessImportFailures+1, "err", importErr)
-	f.wm.StrikeWitnessServer(op.witnessPeer)
-	f.wm.ExcludeWitnessSource(op.witnessPeer, hash)
-
-	op.witnessImportFailures++
-	if op.fetchWitness == nil || op.witnessImportFailures >= maxWitnessImportRetries {
-		log.Warn("Giving up witness re-fetch for block after repeated import failures",
-			"number", op.number(), "hash", hash, "failures", op.witnessImportFailures)
-		return false
-	}
-	witnessImportRetryMeter.Mark(1)
-	return true
 }
 
 // forgetHash removes all traces of a block announcement from the fetcher's
