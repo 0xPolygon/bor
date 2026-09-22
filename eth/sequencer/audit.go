@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math/big"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc"
@@ -72,6 +73,8 @@ type auditor struct {
 	chain  auditChain
 	fetch  fetchGeneration
 	oldest fetchOldest
+	// servedMu serializes commitment reads and deletion with live writes.
+	servedMu *sync.Mutex
 	// finalized reports the newest finalized height and whether there is
 	// one yet. It is the pass's ceiling (see ceiling), and nil on a
 	// node with no milestone source — which is not the same as a source
@@ -182,9 +185,11 @@ func (a *auditor) run(ctx context.Context) (auditSummary, error) {
 	// path never clears a commitment once the head has passed it. Judge them
 	// every pass, bounded like the walk: after a rewind there may be no range
 	// to walk for many passes.
-	a.reconcileSkippedServed(0, min(watermark, through), &summary)
+	if err := a.reconcileSkippedServed(ctx, 0, min(watermark, through), &summary); err != nil {
+		return summary, err
+	}
 
-	if watermark >= through {
+	if watermark >= through || a.fetch == nil {
 		return summary, nil
 	}
 
@@ -197,8 +202,8 @@ func (a *auditor) run(ctx context.Context) (auditSummary, error) {
 	// served commitment reconciles against the canonical chain regardless:
 	// judge the ones that exist so a promise in the skipped range is recorded
 	// and cleared, not advanced past unseen.
-	if summary.skipped > 0 {
-		a.reconcileSkippedServed(from, summary.from-1, &summary)
+	if err := a.reconcileSkippedServed(ctx, from, min(summary.from-1, through), &summary); err != nil {
+		return summary, err
 	}
 
 	log.Info("Auditing sequence store against canonical chain", "from", summary.from, "through", through)
@@ -341,6 +346,11 @@ func (a *auditor) auditHeightInto(ctx context.Context, height uint64, summary *a
 		return nil
 	}
 
+	if a.servedMu != nil {
+		a.servedMu.Lock()
+		defer a.servedMu.Unlock()
+	}
+
 	summary.compared++
 	a.recordVerdict(height, verdict, summary)
 
@@ -372,6 +382,11 @@ func (a *auditor) auditHeightInto(ctx context.Context, height uint64, summary *a
 // be the canonical block's leading transactions, in order, or a
 // preconfirmation was broken and goes on record.
 func (a *auditor) reconcileServed(height uint64, summary *auditSummary) {
+	if a.servedMu != nil {
+		a.servedMu.Lock()
+		defer a.servedMu.Unlock()
+	}
+
 	count, digest, ok, err := rawdb.ReadPreconfServed(a.db, height)
 	if err != nil {
 		log.Warn("Served preconf commitment unreadable", "number", height, "err", err)
@@ -425,10 +440,15 @@ func (a *auditor) judgeServed(height, count uint64, digest common.Hash, summary 
 // reconcileSkippedServed judges the served commitments in a range the walk
 // does not visit. It scans the served prefix, so it visits only the heights
 // that actually carry a commitment.
-func (a *auditor) reconcileSkippedServed(from, to uint64, summary *auditSummary) {
+func (a *auditor) reconcileSkippedServed(ctx context.Context, from, to uint64, summary *auditSummary) error {
 	for _, height := range rawdb.ReadServedPreconfHeightsInRange(a.db, from, to) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		a.reconcileServed(height, summary)
 	}
+
+	return ctx.Err()
 }
 
 // judgeServedAgainstCanonical compares the served commitment at a height with
@@ -645,7 +665,7 @@ func (c *Consumer) auditLoop(ctx context.Context) {
 }
 
 func (c *Consumer) runAuditPass(ctx context.Context) {
-	audit := &auditor{db: c.chain.DB(), chain: c.chain, advance: c.advanceAudited}
+	audit := &auditor{db: c.chain.DB(), chain: c.chain, advance: c.advanceAudited, servedMu: &c.servedMu}
 
 	// Left nil on a node that wires no milestone source, which is a
 	// different answer from a source that has nothing final yet: the first
@@ -660,18 +680,17 @@ func (c *Consumer) runAuditPass(ctx context.Context) {
 		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(pendingInputLimit+1024*1024)))
 	if err != nil {
 		log.Warn("Sequence store audit could not dial", "err", err)
-		return
+	} else {
+		defer func() {
+			if cerr := conn.Close(); cerr != nil {
+				log.Warn("Sequence store audit connection close", "err", cerr)
+			}
+		}()
+
+		client := pb.NewConsumerServiceClient(conn)
+		audit.fetch = fetchGenerationVia(client)
+		audit.oldest = fetchOldestVia(client)
 	}
-
-	defer func() {
-		if cerr := conn.Close(); cerr != nil {
-			log.Warn("Sequence store audit connection close", "err", cerr)
-		}
-	}()
-
-	client := pb.NewConsumerServiceClient(conn)
-	audit.fetch = fetchGenerationVia(client)
-	audit.oldest = fetchOldestVia(client)
 
 	if _, err := audit.run(ctx); err != nil && ctx.Err() == nil {
 		log.Warn("Sequence store audit stopped early", "err", err)

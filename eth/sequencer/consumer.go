@@ -73,6 +73,7 @@ type Consumer struct {
 	watching     atomic.Bool
 	auditTrigger chan struct{}
 	auditMu      sync.Mutex
+	servedMu     sync.Mutex
 
 	// finality reports the newest whitelisted milestone, or nil on a node
 	// that wires none. It bounds the audit watermark: see ceiling.
@@ -361,6 +362,9 @@ func (c *Consumer) handleCanonicalHead() {
 // the store's own outage contract uses, and it holds for the entries a
 // producer backfills long after the block went canonical.
 func (c *Consumer) markCanonicalHeadAudited() {
+	c.servedMu.Lock()
+	defer c.servedMu.Unlock()
+
 	if !c.watching.Load() {
 		return
 	}
@@ -418,6 +422,9 @@ func (c *Consumer) markCanonicalHeadAudited() {
 // costs the audit its fallback for that height, never correctness on the live
 // path.
 func (c *Consumer) persistServed(height, count uint64, digest common.Hash) {
+	c.servedMu.Lock()
+	defer c.servedMu.Unlock()
+
 	if c.chain == nil {
 		return
 	}
