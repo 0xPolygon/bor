@@ -334,24 +334,20 @@ func (a *auditor) auditHeightInto(ctx context.Context, height uint64, summary *a
 	summary.compared++
 	a.recordVerdict(height, verdict, summary)
 
-	if verdict == auditMismatch {
-		// Already recorded; nothing to judge the commitment against.
-		a.clearServed(height)
+	// A mismatch is already recorded. Neither other verdict proves what was
+	// served: an unusable seal confirms nothing, and a matching seal is only
+	// the store's current generation, which may not be the one this node
+	// followed. Judge, don't drop.
+	if verdict != auditMismatch {
+		count, digest, ok, err := rawdb.ReadPreconfServed(a.db, height)
+		switch {
+		case err != nil:
+			log.Warn("Served preconf commitment unreadable", "number", height, "err", err)
+		case ok:
+			a.judgeServed(height, count, digest, summary)
 
-		return nil
-	}
-
-	// Neither verdict proves what was served: an unusable seal confirms
-	// nothing, and a matching seal is only the store's current generation,
-	// which may not be the one this node followed. Judge, don't drop.
-	count, digest, ok, err := rawdb.ReadPreconfServed(a.db, height)
-	if err != nil {
-		log.Warn("Served preconf commitment unreadable", "number", height, "err", err)
-	}
-	if err == nil && ok {
-		a.judgeServed(height, count, digest, summary)
-
-		return nil
+			return nil
+		}
 	}
 	a.clearServed(height)
 
