@@ -73,7 +73,7 @@ type auditor struct {
 	fetch  fetchGeneration
 	oldest fetchOldest
 	// finalized reports the newest finalized height and whether there is
-	// one yet. It is the walk's ceiling (see rangeToAudit), and nil on a
+	// one yet. It is the pass's ceiling (see ceiling), and nil on a
 	// node with no milestone source — which is not the same as a source
 	// reporting nothing final, and gets the opposite treatment.
 	finalized func() (uint64, bool)
@@ -113,11 +113,8 @@ type auditSummary struct {
 	skipped uint64
 }
 
-// rangeToAudit reports the height range this pass should walk: everything
-// between the watermark and finality. ok is false when there is nothing to
-// do, which includes the first run on a node that has never audited — that
-// seeds the watermark at the current head rather than walking backwards from
-// an arbitrary point.
+// ceiling is the highest height a pass may judge. ok is false when nothing
+// is safe to judge yet.
 //
 // Finality, not the head, is the ceiling. A verdict is only as good as the
 // canonical chain it was reached against, and the watermark never rewinds,
@@ -128,39 +125,6 @@ type auditSummary struct {
 //
 // A node with no milestone source falls back to the head: bounding at a
 // finality it cannot see would freeze the watermark forever.
-func (a *auditor) rangeToAudit() (from, through uint64, ok bool) {
-	head, through, ok := a.ceiling()
-	if !ok {
-		return 0, 0, false
-	}
-
-	watermark, stored, err := rawdb.ReadPreconfAuditedThrough(a.db)
-	if err != nil {
-		// Absence seeds the watermark at the head; an unreadable watermark
-		// must not, or a failed read would mark the whole range audited and
-		// the monotonic writes would never let it back.
-		log.Warn("Sequence store audit watermark unreadable", "err", err)
-
-		return 0, 0, false
-	}
-	if !stored {
-		// Seeded at the head rather than at finality: this judges nothing,
-		// it only declines to walk history that predates the node.
-		seed := head
-		a.persist(seed)
-		log.Info("Sequence store audit watermark seeded", "height", seed)
-
-		return 0, 0, false
-	}
-	if watermark >= through {
-		return 0, 0, false
-	}
-
-	return watermark + 1, through, true
-}
-
-// ceiling is the highest height a pass may judge: the head, bounded by
-// finality when there is a source. ok is false when nothing is safe to judge.
 func (a *auditor) ceiling() (head, through uint64, ok bool) {
 	current := a.chain.CurrentBlock()
 	if current == nil || current.Number == nil {
@@ -181,46 +145,50 @@ func (a *auditor) ceiling() (head, through uint64, ok bool) {
 	return head, through, true
 }
 
-// hasRangeToWalk is rangeToAudit without its first-run seeding, for a caller
-// that must not persist anything.
-func (a *auditor) hasRangeToWalk() bool {
-	watermark, stored, err := rawdb.ReadPreconfAuditedThrough(a.db)
-	if err != nil || !stored {
-		return false
-	}
-	_, through, ok := a.ceiling()
-
-	return ok && watermark < through
-}
-
-// run walks from the watermark to the head and records the heights where the
-// store's final generation disagrees with the canonical chain. The store's
-// retention is the only bound on the walk: a second bound on this side would
-// be one operators had to keep aligned with the store's.
+// run judges the served commitments below the watermark, then walks from the
+// watermark to the ceiling and records the heights where the store's final
+// generation disagrees with the canonical chain. The store's retention is the
+// only bound on the walk: a second bound on this side would be one operators
+// had to keep aligned with the store's.
 func (a *auditor) run(ctx context.Context) (auditSummary, error) {
 	var summary auditSummary
 	if err := ctx.Err(); err != nil {
 		return summary, err
 	}
 
-	// Heights at or below the watermark are never walked again, and the live
-	// path never clears a commitment once the head has passed it. Judge them
-	// unconditionally, before rangeToAudit: after a rewind there may be no
-	// range to walk for many passes.
-	if err := a.sweepBelowWatermark(ctx, &summary); err != nil {
-		return summary, err
-	}
-
-	from, through, ok := a.rangeToAudit()
+	head, through, ok := a.ceiling()
 	if !ok {
 		return summary, nil
 	}
-	if a.fetch == nil {
-		// The caller saw no range before dialing; one appeared since.
-		// The next pass walks it.
+
+	watermark, stored, err := rawdb.ReadPreconfAuditedThrough(a.db)
+	if err != nil {
+		// Absence seeds the watermark at the head; an unreadable watermark
+		// must not, or a failed read would mark the whole range audited and
+		// the monotonic writes would never let it back.
+		log.Warn("Sequence store audit watermark unreadable", "err", err)
+
+		return summary, nil
+	}
+	if !stored {
+		// Seeded at the head rather than at finality: the seed judges nothing,
+		// it only declines to walk history that predates the node.
+		a.persist(head)
+		log.Info("Sequence store audit watermark seeded", "height", head)
+		watermark = head
+	}
+
+	// Heights at or below the watermark are never walked again, and the live
+	// path never clears a commitment once the head has passed it. Judge them
+	// every pass, bounded like the walk: after a rewind there may be no range
+	// to walk for many passes.
+	a.reconcileSkippedServed(0, min(watermark, through), &summary)
+
+	if watermark >= through {
 		return summary, nil
 	}
 
+	from := watermark + 1
 	summary.through = through
 	summary.from, summary.skipped = a.skipToStoreFloor(ctx, from, through)
 
@@ -230,9 +198,7 @@ func (a *auditor) run(ctx context.Context) (auditSummary, error) {
 	// judge the ones that exist so a promise in the skipped range is recorded
 	// and cleared, not advanced past unseen.
 	if summary.skipped > 0 {
-		if err := a.reconcileSkippedServed(ctx, from, summary.from-1, &summary); err != nil {
-			return summary, err
-		}
+		a.reconcileSkippedServed(from, summary.from-1, &summary)
 	}
 
 	log.Info("Auditing sequence store against canonical chain", "from", summary.from, "through", through)
@@ -459,31 +425,10 @@ func (a *auditor) judgeServed(height, count uint64, digest common.Hash, summary 
 // reconcileSkippedServed judges the served commitments in a range the walk
 // does not visit. It scans the served prefix, so it visits only the heights
 // that actually carry a commitment.
-func (a *auditor) reconcileSkippedServed(ctx context.Context, from, to uint64, summary *auditSummary) error {
+func (a *auditor) reconcileSkippedServed(from, to uint64, summary *auditSummary) {
 	for _, height := range rawdb.ReadServedPreconfHeightsInRange(a.db, from, to) {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
 		a.reconcileServed(height, summary)
 	}
-
-	return nil
-}
-
-// sweepBelowWatermark judges the served commitments the walk never reaches,
-// bounded by finality like the walk: a verdict above it is about a block that
-// can still change.
-func (a *auditor) sweepBelowWatermark(ctx context.Context, summary *auditSummary) error {
-	watermark, stored, err := rawdb.ReadPreconfAuditedThrough(a.db)
-	if err != nil || !stored {
-		return nil
-	}
-	_, through, ok := a.ceiling()
-	if !ok {
-		return nil
-	}
-
-	return a.reconcileSkippedServed(ctx, 0, min(watermark, through), summary)
 }
 
 // judgeServedAgainstCanonical compares the served commitment at a height with
@@ -571,6 +516,8 @@ func (a *auditor) recordMismatch(height uint64, reason, failLog string, summary 
 		log.Warn(failLog, "number", height, "err", err)
 	case !wrote:
 		summary.alreadyJudged++
+	default:
+		log.Warn("Preconfirmation invalidated by audit", "number", height, "reason", reason)
 	}
 }
 
@@ -707,28 +654,24 @@ func (c *Consumer) runAuditPass(ctx context.Context) {
 		audit.finalized = c.finalizedHeight
 	}
 
-	// Only the walk needs the store; the sweep below the watermark is local
-	// and runs every pass. Dial only when there is a range — grpc.NewClient
-	// is lazy, so this saves the client, its teardown and a log line per
-	// retry, not a connection. run skips the walk when fetch is nil and owns
-	// the first-run seeding rangeToAudit does, so decide from a plain read.
-	if audit.hasRangeToWalk() {
-		conn, err := grpc.NewClient(c.endpoint, grpc.WithTransportCredentials(insecure.NewCredentials()),
-			grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(pendingInputLimit+1024*1024)))
-		if err != nil {
-			log.Warn("Sequence store audit could not dial", "err", err)
-		} else {
-			defer func() {
-				if cerr := conn.Close(); cerr != nil {
-					log.Warn("Sequence store audit connection close", "err", cerr)
-				}
-			}()
-
-			client := pb.NewConsumerServiceClient(conn)
-			audit.fetch = fetchGenerationVia(client)
-			audit.oldest = fetchOldestVia(client)
-		}
+	// grpc.NewClient is lazy: nothing connects until the walk reads, so a
+	// pass with nothing to walk costs a client and its teardown.
+	conn, err := grpc.NewClient(c.endpoint, grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(pendingInputLimit+1024*1024)))
+	if err != nil {
+		log.Warn("Sequence store audit could not dial", "err", err)
+		return
 	}
+
+	defer func() {
+		if cerr := conn.Close(); cerr != nil {
+			log.Warn("Sequence store audit connection close", "err", cerr)
+		}
+	}()
+
+	client := pb.NewConsumerServiceClient(conn)
+	audit.fetch = fetchGenerationVia(client)
+	audit.oldest = fetchOldestVia(client)
 
 	if _, err := audit.run(ctx); err != nil && ctx.Err() == nil {
 		log.Warn("Sequence store audit stopped early", "err", err)

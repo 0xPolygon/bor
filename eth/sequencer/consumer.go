@@ -75,7 +75,7 @@ type Consumer struct {
 	auditMu      sync.Mutex
 
 	// finality reports the newest whitelisted milestone, or nil on a node
-	// that wires none. It bounds the audit watermark: see rangeToAudit.
+	// that wires none. It bounds the audit watermark: see ceiling.
 	finality func() (bool, uint64, common.Hash)
 
 	cancel context.CancelFunc
@@ -91,7 +91,7 @@ func NewConsumer(endpoint string, chain *core.BlockChain) (*Consumer, error) {
 
 // NewConsumerWithTransactionLookup builds a consumer. finality reports the
 // newest whitelisted milestone and may be nil, which leaves the audit
-// watermark bounded by the chain head instead — see rangeToAudit.
+// watermark bounded by the chain head instead — see ceiling.
 func NewConsumerWithTransactionLookup(endpoint string, chain *core.BlockChain,
 	txLookup TransactionLookup, finality func() (bool, uint64, common.Hash),
 ) (*Consumer, error) {

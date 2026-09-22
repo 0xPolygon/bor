@@ -181,7 +181,7 @@ func TestAuditPassWithNothingToAuditReadsNothing(t *testing.T) {
 	}
 }
 
-// Nothing to walk means nothing to dial, but a served commitment below the
+// Nothing to walk means no store reads, but a served commitment below the
 // mark must still be judged by the pass the consumer actually runs.
 func TestAuditPassSweepsBelowWatermarkWithNothingToWalk(t *testing.T) {
 	h := startExecHarness(t)

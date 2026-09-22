@@ -7,7 +7,34 @@ import (
 
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/ethdb"
 )
+
+// seedServedMismatch records a served commitment at height whose canonical
+// block carries the same transactions in a different order.
+func seedServedMismatch(t *testing.T, db ethdb.Database, chain *stubAuditChain, height uint64) {
+	t.Helper()
+
+	served := servedTxs(3)
+	chain.blocks[height] = canonicalBlock(height, types.Transactions{served[1], served[0], served[2]})
+	if err := rawdb.WritePreconfServed(db, height, uint64(len(served)), servedDigest(height, served)); err != nil {
+		t.Fatalf("seed served commitment: %v", err)
+	}
+}
+
+// wantServedMismatch asserts the only record through head is a served
+// mismatch at height, and that the commitment there is gone.
+func wantServedMismatch(t *testing.T, db ethdb.Database, height, head uint64) {
+	t.Helper()
+
+	records := rawdb.ReadInvalidPreconfsInRange(db, 1, head)
+	if len(records) != 1 || records[0].Number != height || records[0].Reason != servedMismatchReason {
+		t.Fatalf("records = %+v, want one %s at %d", records, servedMismatchReason, height)
+	}
+	if _, _, ok, _ := rawdb.ReadPreconfServed(db, height); ok {
+		t.Fatal("served commitment not cleared after judging")
+	}
+}
 
 // Heights below the watermark are never walked again and the live path never
 // clears a commitment once the head has passed it; every pass must judge
@@ -15,16 +42,7 @@ import (
 func TestAuditJudgesServedCommitmentBelowTheWatermark(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	chain, sealed := auditFixture(t, 12)
-
-	// 7 is below the mark; its canonical body differs from what was served and
-	// the store's seal is that block, so only the sweep can catch it.
-	served := servedTxs(3)
-	block := canonicalBlock(7, types.Transactions{served[1], served[0], served[2]})
-	chain.blocks[7], chain.hashes[7], sealed[7] = block, block.Hash(), block.Header()
-
-	if err := rawdb.WritePreconfServed(db, 7, uint64(len(served)), servedDigest(7, served)); err != nil {
-		t.Fatalf("seed served commitment: %v", err)
-	}
+	seedServedMismatch(t, db, chain, 7)
 	if err := rawdb.WritePreconfAuditedThrough(db, 10); err != nil {
 		t.Fatalf("seed watermark: %v", err)
 	}
@@ -34,34 +52,20 @@ func TestAuditJudgesServedCommitmentBelowTheWatermark(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-
 	if summary.mismatch != 1 {
 		t.Fatalf("mismatch = %d, want 1: the commitment below the watermark was not judged", summary.mismatch)
 	}
-	records := rawdb.ReadInvalidPreconfsInRange(db, 1, 12)
-	if len(records) != 1 || records[0].Number != 7 || records[0].Reason != servedMismatchReason {
-		t.Fatalf("records = %+v, want one %s at 7", records, servedMismatchReason)
-	}
-	if _, _, ok, _ := rawdb.ReadPreconfServed(db, 7); ok {
-		t.Fatal("served commitment not cleared after judging")
-	}
+	wantServedMismatch(t, db, 7, 12)
 }
 
-// The sweep runs even when rangeToAudit finds nothing to walk; a commitment
-// below the mark can sit through many such passes.
+// The sweep runs even with nothing to walk; a commitment below the mark can
+// sit through many such passes.
 func TestAuditJudgesServedCommitmentBelowTheWatermarkWithNoRangeToWalk(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	chain, sealed := auditFixture(t, 12)
-
-	// Mark at the head: nothing to walk forward.
+	seedServedMismatch(t, db, chain, 7)
 	if err := rawdb.WritePreconfAuditedThrough(db, 12); err != nil {
 		t.Fatalf("seed watermark: %v", err)
-	}
-	served := servedTxs(3)
-	reordered := types.Transactions{served[1], served[0], served[2]}
-	chain.blocks[7] = canonicalBlock(7, reordered)
-	if err := rawdb.WritePreconfServed(db, 7, uint64(len(served)), servedDigest(7, served)); err != nil {
-		t.Fatalf("seed served commitment: %v", err)
 	}
 
 	audit := &auditor{db: db, chain: chain, fetch: fetchFrom(t, sealed)}
@@ -69,17 +73,10 @@ func TestAuditJudgesServedCommitmentBelowTheWatermarkWithNoRangeToWalk(t *testin
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-
 	if summary.mismatch != 1 {
 		t.Fatalf("mismatch = %d, want 1: no forward range, and the commitment below the mark was not judged", summary.mismatch)
 	}
-	records := rawdb.ReadInvalidPreconfsInRange(db, 1, 12)
-	if len(records) != 1 || records[0].Number != 7 || records[0].Reason != servedMismatchReason {
-		t.Fatalf("records = %+v, want one %s at 7", records, servedMismatchReason)
-	}
-	if _, _, ok, _ := rawdb.ReadPreconfServed(db, 7); ok {
-		t.Fatal("served commitment not cleared after judging")
-	}
+	wantServedMismatch(t, db, 7, 12)
 	if got := auditedThrough(t, db); got != 12 {
 		t.Fatalf("watermark = %d, want 12: the sweep must not move the mark", got)
 	}
@@ -119,9 +116,7 @@ func TestAuditRevisitsUnjudgeableCommitmentOnALaterPass(t *testing.T) {
 
 	// The body arrives, and it is not what was served. 7 is below the mark and
 	// there is nothing new to walk; the sweep alone must judge it.
-	reordered := types.Transactions{served[1], served[0], served[2]}
-	chain.blocks[7] = canonicalBlock(7, reordered)
-
+	chain.blocks[7] = canonicalBlock(7, types.Transactions{served[1], served[0], served[2]})
 	second, err := audit.run(context.Background())
 	if err != nil {
 		t.Fatalf("second run: %v", err)
@@ -129,24 +124,14 @@ func TestAuditRevisitsUnjudgeableCommitmentOnALaterPass(t *testing.T) {
 	if second.mismatch != 1 {
 		t.Fatalf("second pass mismatch = %d, want 1: the later pass never revisited 7", second.mismatch)
 	}
-	records := rawdb.ReadInvalidPreconfsInRange(db, 1, 14)
-	if len(records) != 1 || records[0].Number != 7 || records[0].Reason != servedMismatchReason {
-		t.Fatalf("records = %+v, want one %s at 7", records, servedMismatchReason)
-	}
-	if _, _, ok, _ := rawdb.ReadPreconfServed(db, 7); ok {
-		t.Fatal("served commitment not cleared after judging")
-	}
+	wantServedMismatch(t, db, 7, 12)
 }
 
 // A canceled pass judges nothing; the commitment waits for the next one.
 func TestAuditSweepStopsOnCancel(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	chain, sealed := auditFixture(t, 12)
-	served := servedTxs(3)
-	chain.blocks[7] = canonicalBlock(7, types.Transactions{served[1], served[0], served[2]})
-	if err := rawdb.WritePreconfServed(db, 7, uint64(len(served)), servedDigest(7, served)); err != nil {
-		t.Fatalf("seed served commitment: %v", err)
-	}
+	seedServedMismatch(t, db, chain, 7)
 	if err := rawdb.WritePreconfAuditedThrough(db, 12); err != nil {
 		t.Fatalf("seed watermark: %v", err)
 	}
@@ -169,11 +154,7 @@ func TestAuditSweepStopsOnCancel(t *testing.T) {
 func TestAuditSweepStopsAtFinality(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	chain, sealed := auditFixture(t, 12)
-	served := servedTxs(3)
-	chain.blocks[7] = canonicalBlock(7, types.Transactions{served[1], served[0], served[2]})
-	if err := rawdb.WritePreconfServed(db, 7, uint64(len(served)), servedDigest(7, served)); err != nil {
-		t.Fatalf("seed served commitment: %v", err)
-	}
+	seedServedMismatch(t, db, chain, 7)
 	if err := rawdb.WritePreconfAuditedThrough(db, 12); err != nil {
 		t.Fatalf("seed watermark: %v", err)
 	}
@@ -191,34 +172,26 @@ func TestAuditSweepStopsAtFinality(t *testing.T) {
 	if summary, err := audit.run(context.Background()); err != nil || summary.mismatch != 1 {
 		t.Fatalf("run = %d mismatches, %v; want 1 once 7 is final", summary.mismatch, err)
 	}
-	records := rawdb.ReadInvalidPreconfsInRange(db, 1, 12)
-	if len(records) != 1 || records[0].Number != 7 || records[0].Reason != servedMismatchReason {
-		t.Fatalf("records = %+v, want one %s at 7", records, servedMismatchReason)
-	}
+	wantServedMismatch(t, db, 7, 12)
 }
 
-// A first run only seeds the watermark; the pass after it sweeps.
-func TestAuditFirstRunSeedsBeforeSweeping(t *testing.T) {
+// A first run seeds the watermark at the head and sweeps below it without
+// walking anything.
+func TestAuditFirstRunSeedsAndSweeps(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	chain, sealed := auditFixture(t, 12)
-	served := servedTxs(3)
-	chain.blocks[7] = canonicalBlock(7, types.Transactions{served[1], served[0], served[2]})
-	if err := rawdb.WritePreconfServed(db, 7, uint64(len(served)), servedDigest(7, served)); err != nil {
-		t.Fatalf("seed served commitment: %v", err)
-	}
+	seedServedMismatch(t, db, chain, 7)
 
 	audit := &auditor{db: db, chain: chain, fetch: fetchFrom(t, sealed)}
-	if _, err := audit.run(context.Background()); err != nil {
-		t.Fatalf("first run: %v", err)
+	summary, err := audit.run(context.Background())
+	if err != nil {
+		t.Fatalf("run: %v", err)
 	}
 	if got := auditedThrough(t, db); got != 12 {
 		t.Fatalf("watermark = %d, want seeded at 12", got)
 	}
-	if _, _, ok, _ := rawdb.ReadPreconfServed(db, 7); !ok {
-		t.Fatal("the seeding pass judged the commitment")
+	if summary.walked != 0 || summary.mismatch != 1 {
+		t.Fatalf("walked = %d mismatch = %d, want 0 and 1", summary.walked, summary.mismatch)
 	}
-
-	if summary, err := audit.run(context.Background()); err != nil || summary.mismatch != 1 {
-		t.Fatalf("second run = %d mismatches, %v; want 1", summary.mismatch, err)
-	}
+	wantServedMismatch(t, db, 7, 12)
 }
