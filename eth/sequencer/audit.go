@@ -334,22 +334,24 @@ func (a *auditor) auditHeightInto(ctx context.Context, height uint64, summary *a
 	summary.compared++
 	a.recordVerdict(height, verdict, summary)
 
-	// auditUnknown means the store held entries but its seal is unusable — it
-	// does not decode, or it names the wrong height. An unusable seal cannot
-	// confirm the height canonical, so it must not clear a served commitment:
-	// judge the commitment against canonical instead of dropping it, or a
-	// garbage seal — from a corrupt store, or a malicious one — would bury a
-	// broken preconfirmation unjudged before the watermark advances past it.
-	if verdict == auditUnknown {
-		count, digest, ok, err := rawdb.ReadPreconfServed(a.db, height)
-		if err != nil {
-			log.Warn("Served preconf commitment unreadable", "number", height, "err", err)
-		}
-		if err == nil && ok {
-			a.judgeServed(height, count, digest, summary)
+	if verdict == auditMismatch {
+		// Already recorded; nothing to judge the commitment against.
+		a.clearServed(height)
 
-			return nil
-		}
+		return nil
+	}
+
+	// Neither verdict proves what was served: an unusable seal confirms
+	// nothing, and a matching seal is only the store's current generation,
+	// which may not be the one this node followed. Judge, don't drop.
+	count, digest, ok, err := rawdb.ReadPreconfServed(a.db, height)
+	if err != nil {
+		log.Warn("Served preconf commitment unreadable", "number", height, "err", err)
+	}
+	if err == nil && ok {
+		a.judgeServed(height, count, digest, summary)
+
+		return nil
 	}
 	a.clearServed(height)
 
