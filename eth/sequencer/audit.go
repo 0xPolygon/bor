@@ -174,12 +174,27 @@ func (a *auditor) rangeToAudit() (from, through uint64, ok bool) {
 // retention is the only bound on the walk: a second bound on this side would
 // be one operators had to keep aligned with the store's.
 func (a *auditor) run(ctx context.Context) (auditSummary, error) {
-	from, through, ok := a.rangeToAudit()
-	if !ok {
-		return auditSummary{}, nil
+	var summary auditSummary
+
+	// Heights at or below the watermark are never walked again, and the live
+	// path never clears a commitment once the head has passed it. Judge them
+	// unconditionally, before rangeToAudit: after a rewind there may be no
+	// range to walk for many passes.
+	if watermark, stored, err := rawdb.ReadPreconfAuditedThrough(a.db); err == nil && stored {
+		a.reconcileSkippedServed(0, watermark, &summary)
 	}
 
-	summary := auditSummary{through: through}
+	from, through, ok := a.rangeToAudit()
+	if !ok {
+		return summary, nil
+	}
+	if a.fetch == nil {
+		// The caller saw no range before dialing; one appeared since.
+		// The next pass walks it.
+		return summary, nil
+	}
+
+	summary.through = through
 	summary.from, summary.skipped = a.skipToStoreFloor(ctx, from, through)
 
 	// Skipped heights are never walked, so the store fetch that would trigger
@@ -643,33 +658,27 @@ func (c *Consumer) runAuditPass(ctx context.Context) {
 		audit.finalized = c.finalizedHeight
 	}
 
-	// Resolve the range before building a client: the common case is nothing
-	// to audit and a trigger fires on every session retry. grpc.NewClient is
-	// lazy, so this saves a client and its teardown rather than a connection,
-	// and it keeps a bad endpoint from logging once per retry while there is
-	// no work to do. run recomputes the range, so removing this changes
-	// nothing observable in-process — there is deliberately no test for it.
-	from, through, ok := audit.rangeToAudit()
-	if !ok {
-		return
-	}
+	// Only the walk needs the store; the sweep below the watermark is local
+	// and runs every pass. Dial only when there is a range — grpc.NewClient
+	// is lazy, so this saves the client, its teardown and a log line per
+	// retry, not a connection. run skips the walk when fetch is nil.
+	if from, through, ok := audit.rangeToAudit(); ok {
+		conn, err := grpc.NewClient(c.endpoint, grpc.WithTransportCredentials(insecure.NewCredentials()),
+			grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(pendingInputLimit+1024*1024)))
+		if err != nil {
+			log.Warn("Sequence store audit could not dial", "from", from, "through", through, "err", err)
+		} else {
+			defer func() {
+				if cerr := conn.Close(); cerr != nil {
+					log.Warn("Sequence store audit connection close", "err", cerr)
+				}
+			}()
 
-	conn, err := grpc.NewClient(c.endpoint, grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(pendingInputLimit+1024*1024)))
-	if err != nil {
-		log.Warn("Sequence store audit could not dial", "from", from, "through", through, "err", err)
-		return
-	}
-
-	defer func() {
-		if cerr := conn.Close(); cerr != nil {
-			log.Warn("Sequence store audit connection close", "err", cerr)
+			client := pb.NewConsumerServiceClient(conn)
+			audit.fetch = fetchGenerationVia(client)
+			audit.oldest = fetchOldestVia(client)
 		}
-	}()
-
-	client := pb.NewConsumerServiceClient(conn)
-	audit.fetch = fetchGenerationVia(client)
-	audit.oldest = fetchOldestVia(client)
+	}
 
 	if _, err := audit.run(ctx); err != nil && ctx.Err() == nil {
 		log.Warn("Sequence store audit stopped early", "err", err)
