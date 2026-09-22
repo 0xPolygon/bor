@@ -24,6 +24,10 @@ var (
 
 	//Metrics for collecting the number of valid peers received
 	CheckpointPeerMeter = metrics.NewRegisteredMeter("chain/checkpoint/isvalidpeer", nil)
+
+	// CheckpointStaleCanonicalMeter counts segments lying entirely below the whitelisted checkpoint
+	// that were accepted because every block in them is already canonical locally.
+	CheckpointStaleCanonicalMeter = metrics.NewRegisteredMeter("chain/checkpoint/stalecanonical", nil)
 )
 
 // IsValidChain checks the validity of chain by comparing it

@@ -42,6 +42,13 @@ func (m *MockChainReader) GetBlockByNumber(number uint64) *types.Block {
 	return m.blocks[number]
 }
 
+func (m *MockChainReader) GetHeaderByNumber(number uint64) *types.Header {
+	if b := m.blocks[number]; b != nil {
+		return b.Header()
+	}
+	return nil
+}
+
 func (m *MockChainReader) SetCurrentBlock(header *types.Header) {
 	m.currentBlock = header
 }
@@ -59,6 +66,7 @@ func NewMockService(db ethdb.Database) *Service {
 				doExist:  false,
 				interval: 256,
 				db:       db,
+				name:     "checkpoint",
 			},
 		},
 		milestoneService: &milestone{
@@ -66,6 +74,7 @@ func NewMockService(db ethdb.Database) *Service {
 				doExist:  false,
 				interval: 256,
 				db:       db,
+				name:     "milestone",
 			},
 			LockedMilestoneIDs:   make(map[string]struct{}),
 			FutureMilestoneList:  make(map[uint64]common.Hash),

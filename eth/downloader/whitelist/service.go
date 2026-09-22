@@ -143,10 +143,29 @@ func NewService(db ethdb.Database, disableBlindForkValidation bool, maxBlindFork
 
 // SetBlockchain sets the blockchain reference for the milestone service
 func (s *Service) SetBlockchain(blockchain ChainReader) {
+	// canonical resolves a block number to the locally canonical hash so that
+	// isValidChain can tell a late re-import of blocks we already have from a
+	// reorg attempt below the whitelisted entry. Both the milestone and the
+	// checkpoint service share it.
+	canonical := func(number uint64) common.Hash {
+		if blockchain == nil {
+			return common.Hash{}
+		}
+		if h := blockchain.GetHeaderByNumber(number); h != nil {
+			return h.Hash()
+		}
+		return common.Hash{}
+	}
 	if milestone, ok := s.milestoneService.(*milestone); ok {
 		milestone.finality.Lock()
-		defer milestone.finality.Unlock()
 		milestone.blockchain = blockchain
+		milestone.finality.canonical = canonical
+		milestone.finality.Unlock()
+	}
+	if checkpoint, ok := s.checkpointService.(*checkpoint); ok {
+		checkpoint.finality.Lock()
+		checkpoint.finality.canonical = canonical
+		checkpoint.finality.Unlock()
 	}
 }
 
@@ -383,8 +402,40 @@ func splitChain(current uint64, chain []*types.Header) ([]*types.Header, []*type
 	return pastChain, futureChain
 }
 
+// reportStaleCanonicalReimport records that a segment lying entirely below the
+// whitelisted entry was accepted because every block in it is already canonical
+// locally. It replaces the whitelist mismatch, and the downloader peer strike
+// that followed, which this situation used to produce; it is rare (a handful of
+// times a day on a busy node), so it is logged at Info to make the new path
+// observable after rollout.
+func reportStaleCanonicalReimport(name string, chain []*types.Header, number, current uint64) {
+	switch name {
+	case "checkpoint":
+		CheckpointStaleCanonicalMeter.Mark(1)
+	case "milestone":
+		MilestoneStaleCanonicalMeter.Mark(1)
+	}
+	log.Info("Whitelist: accepted re-import of canonical blocks below the whitelisted entry",
+		"service", name, "from", chain[0].Number, "to", chain[len(chain)-1].Number, "whitelisted", number, "head", current)
+}
+
+// isCanonicalSegment reports whether every header in chain is the locally
+// canonical block at its number according to the oracle. A nil oracle means
+// the chain cannot be checked and the segment is not considered canonical.
+func isCanonicalSegment(chain []*types.Header, canonical func(number uint64) common.Hash) bool {
+	if canonical == nil {
+		return false
+	}
+	for _, h := range chain {
+		if canonical(h.Number.Uint64()) != h.Hash() {
+			return false
+		}
+	}
+	return true
+}
+
 //nolint:unparam
-func isValidChain(currentHeader *types.Header, chain []*types.Header, doExist bool, number uint64, hash common.Hash) (bool, error) {
+func isValidChain(currentHeader *types.Header, chain []*types.Header, doExist bool, number uint64, hash common.Hash, canonical func(number uint64) common.Hash, name string) (bool, error) {
 	// Check if we have milestone to validate incoming chain in memory
 	if !doExist {
 		// We don't have any entry, no additional validation will be possible
@@ -395,11 +446,22 @@ func isValidChain(currentHeader *types.Header, chain []*types.Header, doExist bo
 
 	// Check if imported chain is less than whitelisted number
 	if chain[len(chain)-1].Number.Uint64() < number {
-		if current >= number { //If current tip of the chain is greater than whitelist number then return false
-			return false, nil
-		} else {
+		if current < number {
 			return true, nil
 		}
+		// The local tip is already past the whitelisted entry, so a segment that
+		// lies entirely below it can only be (a) a reorg attempt below finality,
+		// which must be rejected, or (b) a late re-import of blocks that are
+		// already canonical locally (e.g. a downloader cycle whose bodies
+		// arrived after the block fetcher imported the same blocks and after
+		// the milestone moved past them). Case (b) is harmless and must not be
+		// reported as a whitelist mismatch: InsertChain will treat the blocks
+		// as known. Only accept it when every header is provably canonical.
+		if isCanonicalSegment(chain, canonical) {
+			reportStaleCanonicalReimport(name, chain, number, current)
+			return true, nil
+		}
+		return false, nil
 	}
 
 	// Split the chain into past and future chain

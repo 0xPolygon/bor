@@ -2028,7 +2028,7 @@ func getNodeKey(hex string, file string) *ecdsa.PrivateKey {
 	return nil
 }
 
-func (c *Config) buildNode() (*node.Config, error) {
+func (c *Config) buildNode(logger log.Logger) (*node.Config, error) {
 	ipcPath := ""
 	if !c.JsonRPC.IPCDisable {
 		ipcPath = clientIdentifier + ".ipc"
@@ -2163,6 +2163,8 @@ func (c *Config) buildNode() (*node.Config, error) {
 		if len(cfg.P2P.TrustedNodes) == 0 {
 			cfg.P2P.TrustedNodes = cfg.TrustedNodes()
 		}
+
+		warnUntrustedStaticNodes(logger, cfg.P2P.StaticNodes, cfg.P2P.TrustedNodes)
 	}
 
 	if c.P2P.NoDiscover {
@@ -2171,6 +2173,23 @@ func (c *Config) buildNode() (*node.Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func warnUntrustedStaticNodes(logger log.Logger, staticNodes, trustedNodes []*enode.Node) {
+	trusted := make(map[enode.ID]struct{}, len(trustedNodes))
+	for _, node := range trustedNodes {
+		trusted[node.ID()] = struct{}{}
+	}
+
+	untrusted := 0
+	for _, node := range staticNodes {
+		if _, ok := trusted[node.ID()]; !ok {
+			untrusted++
+		}
+	}
+	if untrusted > 0 {
+		logger.Warn("static-nodes without matching trusted-nodes: these peers can still be benched or dropped by sync peer-response", "static", len(staticNodes), "untrusted", untrusted)
+	}
 }
 
 func (c *Config) Merge(cc ...*Config) error {
