@@ -314,10 +314,6 @@ func TestAuditRangeIsEmptyAtTheHead(t *testing.T) {
 		return nil, nil
 	}}
 
-	if _, _, ok := audit.rangeToAudit(); ok {
-		t.Fatal("range is non-empty at the head")
-	}
-
 	if _, err := audit.run(context.Background()); err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -408,9 +404,13 @@ func TestLastSealTakesTheFinalSeal(t *testing.T) {
 }
 
 func TestAuditRangeWithoutAHead(t *testing.T) {
-	audit := &auditor{db: rawdb.NewMemoryDatabase(), chain: &headlessAuditChain{}}
-	if _, _, ok := audit.rangeToAudit(); ok {
-		t.Fatal("range resolved without a canonical head")
+	db := rawdb.NewMemoryDatabase()
+	audit := &auditor{db: db, chain: &headlessAuditChain{}}
+	if _, err := audit.run(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if _, stored, _ := rawdb.ReadPreconfAuditedThrough(db); stored {
+		t.Fatal("watermark seeded without a canonical head")
 	}
 }
 

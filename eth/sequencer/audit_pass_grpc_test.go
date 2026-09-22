@@ -152,10 +152,8 @@ func TestAuditPassOverGRPCRecordsMismatches(t *testing.T) {
 	}
 }
 
-// With nothing to audit the pass reads nothing and leaves the watermark
-// alone. It deliberately does not assert that no client was built: the
-// pre-dial short-circuit in runAuditPass has no observable effect, because
-// grpc.NewClient is lazy and run recomputes the window anyway.
+// With nothing to walk the pass reads nothing and leaves the watermark alone.
+// It still runs: the sweep below the watermark needs no store.
 func TestAuditPassWithNothingToAuditReadsNothing(t *testing.T) {
 	h := startExecHarness(t)
 	head := h.chain.CurrentBlock().Number.Uint64()
@@ -178,6 +176,45 @@ func TestAuditPassWithNothingToAuditReadsNothing(t *testing.T) {
 		t.Fatalf("the pass connected %d times with nothing to audit", got)
 	}
 
+	if got, _, _ := rawdb.ReadPreconfAuditedThrough(h.chain.DB()); got != head {
+		t.Fatalf("watermark = %d, want it untouched at %d", got, head)
+	}
+}
+
+// Nothing to walk means no store reads, but a served commitment below the
+// mark must still be judged by the pass the consumer actually runs.
+func TestAuditPassSweepsBelowWatermarkWithNothingToWalk(t *testing.T) {
+	h := startExecHarness(t)
+	head := h.chain.CurrentBlock().Number.Uint64()
+	height := head - 1
+
+	endpoint, stub, lis := startAuditStore(t, map[uint64]*types.Header{})
+	consumer := newAuditTestConsumer(h)
+	consumer.endpoint = endpoint
+
+	if err := rawdb.WritePreconfAuditedThrough(h.chain.DB(), head); err != nil {
+		t.Fatalf("seed watermark: %v", err)
+	}
+	// Three txs the canonical block lacks, folded against the real header
+	// context so only the content differs.
+	served := servedTxs(3)
+	digest := foldServed(contextSeed(h.chain.GetHeaderByNumber(height)), served)
+	if err := rawdb.WritePreconfServed(h.chain.DB(), height, uint64(len(served)), digest); err != nil {
+		t.Fatalf("seed served commitment: %v", err)
+	}
+
+	consumer.runAuditPass(t.Context())
+
+	records := rawdb.ReadInvalidPreconfsInRange(h.chain.DB(), 1, head)
+	if len(records) != 1 || records[0].Number != height || records[0].Reason != servedMismatchReason {
+		t.Fatalf("records = %+v, want one %s at %d: the sweep did not run through runAuditPass", records, servedMismatchReason, height)
+	}
+	if _, _, ok, _ := rawdb.ReadPreconfServed(h.chain.DB(), height); ok {
+		t.Fatal("served commitment not cleared after judging")
+	}
+	if len(stub.asked) != 0 || lis.accepted.Load() != 0 {
+		t.Fatalf("the sweep needed the store: asked=%d connections=%d", len(stub.asked), lis.accepted.Load())
+	}
 	if got, _, _ := rawdb.ReadPreconfAuditedThrough(h.chain.DB()); got != head {
 		t.Fatalf("watermark = %d, want it untouched at %d", got, head)
 	}
