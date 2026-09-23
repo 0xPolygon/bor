@@ -262,6 +262,8 @@ func (c *mockConn) closed() <-chan interface{} { return nil }
 // remoteAddr returns the peer address of the connection.
 func (c *mockConn) remoteAddr() string { return "" }
 
+func (c *mockConn) close() {}
+
 // BenchmarkNotify benchmarks the performance of notifying a subscription.
 func BenchmarkNotify(b *testing.B) {
 	id := ID("test")

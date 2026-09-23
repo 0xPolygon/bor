@@ -224,25 +224,24 @@ func (api *FilterAPI) NewPendingTransactions(ctx context.Context, fullTx *bool) 
 
 		chainConfig := api.sys.backend.ChainConfig()
 
-		for {
-			select {
-			case txs := <-txs:
-				// To keep the original behaviour, send a single tx hash in one notification.
-				// TODO(rjl493456442) Send a batch of tx hashes in one notification
-				latest := api.sys.backend.CurrentHeader()
+		deliver(rpcSub, txs, func(batch []*types.Transaction) error {
+			// To keep the original behaviour, send a single tx hash in one notification.
+			// TODO(rjl493456442) Send a batch of tx hashes in one notification
+			latest := api.sys.backend.CurrentHeader()
 
-				for _, tx := range txs {
-					if fullTx != nil && *fullTx {
-						rpcTx := ethapi.NewRPCPendingTransaction(tx, latest, chainConfig)
-						_ = notifier.Notify(rpcSub.ID, rpcTx)
-					} else {
-						_ = notifier.Notify(rpcSub.ID, tx.Hash())
-					}
+			for _, tx := range batch {
+				var err error
+				if fullTx != nil && *fullTx {
+					err = notifier.Notify(rpcSub.ID, ethapi.NewRPCPendingTransaction(tx, latest, chainConfig))
+				} else {
+					err = notifier.Notify(rpcSub.ID, tx.Hash())
 				}
-			case <-rpcSub.Err():
-				return
+				if err != nil {
+					return err
+				}
 			}
-		}
+			return nil
+		}, notifier.CloseConn)
 	}()
 
 	return rpcSub, nil
@@ -297,14 +296,9 @@ func (api *FilterAPI) NewHeads(ctx context.Context) (*rpc.Subscription, error) {
 		headersSub := api.events.SubscribeNewHeads(headers)
 		defer headersSub.Unsubscribe()
 
-		for {
-			select {
-			case h := <-headers:
-				notifier.Notify(rpcSub.ID, h)
-			case <-rpcSub.Err():
-				return
-			}
-		}
+		deliver(rpcSub, headers, func(h *types.Header) error {
+			return notifier.Notify(rpcSub.ID, h)
+		}, notifier.CloseConn)
 	}()
 
 	return rpcSub, nil
@@ -329,16 +323,14 @@ func (api *FilterAPI) Logs(ctx context.Context, crit FilterCriteria) (*rpc.Subsc
 
 	go func() {
 		defer logsSub.Unsubscribe()
-		for {
-			select {
-			case logs := <-matchedLogs:
-				for _, log := range logs {
-					notifier.Notify(rpcSub.ID, &log)
+		deliver(rpcSub, matchedLogs, func(logs []*types.Log) error {
+			for _, log := range logs {
+				if err := notifier.Notify(rpcSub.ID, &log); err != nil {
+					return err
 				}
-			case <-rpcSub.Err(): // client send an unsubscribe request
-				return
 			}
-		}
+			return nil
+		}, notifier.CloseConn)
 	}()
 
 	return rpcSub, nil
@@ -392,30 +384,26 @@ func (api *FilterAPI) TransactionReceipts(ctx context.Context, filter *Transacti
 
 		signer := types.LatestSigner(api.sys.backend.ChainConfig())
 
-		for {
-			select {
-			case receiptsWithTxs := <-matchedReceipts:
-				if len(receiptsWithTxs) > 0 {
-					// Convert to the same format as eth_getTransactionReceipt
-					marshaledReceipts := make([]map[string]interface{}, len(receiptsWithTxs))
-					for i, receiptWithTx := range receiptsWithTxs {
-						marshaledReceipts[i] = ethapi.MarshalReceipt(
-							receiptWithTx.Receipt,
-							receiptWithTx.Receipt.BlockHash,
-							receiptWithTx.Receipt.BlockNumber.Uint64(),
-							signer,
-							receiptWithTx.Transaction,
-							int(receiptWithTx.Receipt.TransactionIndex),
-						)
-					}
-
-					// Send a batch of tx receipts in one notification
-					notifier.Notify(rpcSub.ID, marshaledReceipts)
-				}
-			case <-rpcSub.Err():
-				return
+		deliver(rpcSub, matchedReceipts, func(receiptsWithTxs []*ReceiptWithTx) error {
+			if len(receiptsWithTxs) == 0 {
+				return nil
 			}
-		}
+			// Convert to the same format as eth_getTransactionReceipt
+			marshaledReceipts := make([]map[string]interface{}, len(receiptsWithTxs))
+			for i, receiptWithTx := range receiptsWithTxs {
+				marshaledReceipts[i] = ethapi.MarshalReceipt(
+					receiptWithTx.Receipt,
+					receiptWithTx.Receipt.BlockHash,
+					receiptWithTx.Receipt.BlockNumber.Uint64(),
+					signer,
+					receiptWithTx.Transaction,
+					int(receiptWithTx.Receipt.TransactionIndex),
+				)
+			}
+
+			// Send a batch of tx receipts in one notification
+			return notifier.Notify(rpcSub.ID, marshaledReceipts)
+		}, notifier.CloseConn)
 	}()
 
 	return rpcSub, nil
