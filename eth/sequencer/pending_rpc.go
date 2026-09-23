@@ -172,7 +172,20 @@ func (c *Consumer) pendingReadAnchorValid(anchor *types.Header) bool {
 	if c.chain == nil {
 		return true
 	}
-	return anchor != nil && c.reconciled.Load() == anchor && c.anchorsHead(anchor, c.chain.CurrentBlock())
+	if anchor == nil {
+		return false
+	}
+	marker := c.reconciled.Load()
+	if marker == nil {
+		return false
+	}
+	// A read that began on the parent stays current when CompletePreconf
+	// matches its child mid-read: that child's receipts are kept until the
+	// head write, so what the read saw is still what the chain commits.
+	if marker != anchor && (c.landing.Load() != marker || marker.ParentHash != anchor.Hash()) {
+		return false
+	}
+	return c.anchorsHead(marker, c.chain.CurrentBlock())
 }
 
 // anchorsHead reports whether preconf reads anchored on marker are current

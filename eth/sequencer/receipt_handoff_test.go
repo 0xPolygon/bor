@@ -98,14 +98,43 @@ func TestPreconfReadAnchorRequiresLandingMatch(t *testing.T) {
 	}
 }
 
+// A read that took its anchor on the head stays valid when CompletePreconf
+// matches the head's child before the read finishes, and not when the new
+// marker is some other block.
+func TestPreconfReadSurvivesMatchedHandoffMidRead(t *testing.T) {
+	h := partialReuseHarness(t)
+	consumer := h.session().consumer
+	head := h.chain.CurrentBlock()
+	anchor, ok := consumer.pendingReadAnchor()
+	if !ok || anchor.Hash() != head.Hash() {
+		t.Fatal("head did not anchor reads")
+	}
+	child := &types.Header{Number: new(big.Int).Add(head.Number, common.Big1), ParentHash: head.Hash(), Difficulty: common.Big1}
+
+	// CompletePreconf's order: landing, then reconciled.
+	consumer.landing.Store(child)
+	consumer.reconciled.Store(child)
+	if !consumer.pendingReadAnchorValid(anchor) {
+		t.Fatal("matched handoff mid-read invalidated a read on the parent")
+	}
+
+	other := &types.Header{Number: child.Number, ParentHash: common.Hash{0xde, 0xad}, Difficulty: common.Big1}
+	consumer.landing.Store(other)
+	consumer.reconciled.Store(other)
+	if consumer.pendingReadAnchorValid(anchor) {
+		t.Fatal("a marker that is not the anchor's child kept the read valid")
+	}
+}
+
 // A committed block that did not match its preconfirmation withdraws, before
 // the head write, the entry above it built on another parent; one that
 // extends the canonical block survives.
 func TestMismatchedCompletionWithdrawsStaleDescendants(t *testing.T) {
 	for _, test := range []struct {
-		name  string
-		stale bool
-	}{{"stale parent is withdrawn", true}, {"canonical parent is kept", false}} {
+		name      string
+		stale     bool
+		importing bool
+	}{{"stale parent is withdrawn", true, false}, {"stale importing child loses its receipts", true, true}, {"canonical parent is kept", false, false}} {
 		t.Run(test.name, func(t *testing.T) {
 			h := partialReuseHarness(t)
 			consumer := h.session().consumer
@@ -122,6 +151,11 @@ func TestMismatchedCompletionWithdrawsStaleDescendants(t *testing.T) {
 				t.Fatal("publish child")
 			}
 			consumer.index.Add(fixture.tx, fixture.receipt)
+			if test.importing {
+				store.mu.Lock()
+				store.entries[pendingKey{number: number, parent: parent}].phase = PendingImporting
+				store.mu.Unlock()
+			}
 
 			if reason := consumer.CompletePreconf(block, receipts, true); reason != "" {
 				t.Fatalf("completion with no entry at the height returned %q", reason)
@@ -131,6 +165,14 @@ func TestMismatchedCompletionWithdrawsStaleDescendants(t *testing.T) {
 			entry := store.entries[pendingKey{number: number, parent: parent}]
 			store.mu.RUnlock()
 			records := rawdb.ReadInvalidPreconfsInRange(h.chain.DB(), number, number)
+			if test.importing {
+				// The import still owns the entry and records its invalidation
+				// when it resolves; only its receipts must stop being served.
+				if served || entry == nil || entry.deferredInvalidation != "reorged" || len(records) != 0 {
+					t.Fatalf("stale importing child: served=%v entry=%v invalidations=%+v", served, entry != nil, records)
+				}
+				return
+			}
 			if test.stale {
 				if served || entry != nil {
 					t.Fatalf("child of a rejected parent survived completion: served=%v entry=%v", served, entry != nil)

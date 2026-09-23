@@ -120,29 +120,9 @@ func (c *Consumer) CompletePreconf(block *types.Block, receipts types.Receipts, 
 	logs, invalidations, removed, matched := store.completePreconf(block, receipts, committed)
 	var writes []pendingInvalidation
 	if committed && block != nil {
-		if c.index != nil {
-			preconfCanonicalReceipts.Inc(int64(c.index.CountCanonical(block)))
-		}
-		if matched {
-			// Matched receipts stay until the head write makes the canonical
-			// ones readable (PreconfHeadWritten).
-			// landing first: a reader that sees the new reconciled marker must
-			// also see that its head write is in flight.
-			header := types.CopyHeader(block.Header())
-			c.landing.Store(header)
-			c.reconciled.Store(header)
-		} else {
-			// Anything built past this height on another parent is dead the
-			// moment block commits; withdraw it before the head write rather
-			// than serve it until the next reconcile.
-			withdrawnLogs, withdrawn := store.withdrawOffCanonical(block)
-			logs = append(logs, withdrawnLogs...)
-			writes = withdrawn
-			if c.index != nil {
-				c.index.EvictThrough(block.NumberU64())
-				c.clearIndexAbove(block.NumberU64(), withdrawn)
-			}
-		}
+		var withdrawnLogs []*types.Log
+		withdrawnLogs, writes = c.settleCommittedLocked(store, block, matched)
+		logs = append(logs, withdrawnLogs...)
 	} else if removed && block != nil && c.index != nil {
 		c.index.ClearFrom(block.NumberU64())
 	}
@@ -158,6 +138,36 @@ func (c *Consumer) CompletePreconf(block *types.Block, receipts types.Receipts, 
 	c.publishMu.Unlock()
 	store.writeInvalidations(writes)
 	return reason
+}
+
+// settleCommittedLocked updates the read state for a block canonical import
+// has just committed, before its head write. A matched block keeps its
+// receipts until PreconfHeadWritten; for one that did not match, it returns
+// the removed logs and invalidations of the entries built on another parent.
+// The caller holds publishMu.
+func (c *Consumer) settleCommittedLocked(store *PendingStore, block *types.Block, matched bool) ([]*types.Log, []pendingInvalidation) {
+	if c.index != nil {
+		preconfCanonicalReceipts.Inc(int64(c.index.CountCanonical(block)))
+	}
+	if matched {
+		// landing first: a reader that sees the new reconciled marker must
+		// also see that its head write is in flight.
+		header := types.CopyHeader(block.Header())
+		c.landing.Store(header)
+		c.reconciled.Store(header)
+		return nil, nil
+	}
+	// Anything built past this height on another parent is dead the moment
+	// block commits; withdraw it before the head write rather than serve it
+	// until the next reconcile.
+	logs, withdrawn, staleFrom := store.withdrawOffCanonical(block)
+	if c.index != nil {
+		c.index.EvictThrough(block.NumberU64())
+		if staleFrom != 0 {
+			c.index.ClearFrom(staleFrom)
+		}
+	}
+	return logs, withdrawn
 }
 
 // PreconfHeadWritten runs once block is the canonical head: its receipts are

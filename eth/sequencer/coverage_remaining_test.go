@@ -257,7 +257,7 @@ func TestRemainingStoreAndIndexEdges(t *testing.T) {
 	}
 	key := pendingKey{number: 2, parent: common.HexToHash("0x1")}
 	store.entries[key] = nil
-	if logs, invalidations := store.reconcileFutureLocked(1, nil); len(logs) != 0 || len(invalidations) != 0 {
+	if logs, invalidations, _ := store.reconcileFutureLocked(1, nil); len(logs) != 0 || len(invalidations) != 0 {
 		t.Fatalf("nil future entry = %v, %v", logs, invalidations)
 	}
 	if hash, broken := futureAnchor(nil); hash != (common.Hash{}) || !broken {

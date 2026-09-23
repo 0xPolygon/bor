@@ -37,7 +37,7 @@ func (s *PendingStore) publish(block *types.Block, receipts types.Receipts, stat
 }
 
 func (s *PendingStore) reconcileThrough(number uint64, canonical func(uint64) *types.Block, canonicalReceipts func(common.Hash) types.Receipts) []*types.Log {
-	logs, invalidations := s.reconcileThroughMemory(number, canonical, canonicalReceipts)
+	logs, invalidations, _ := s.reconcileThroughMemory(number, canonical, canonicalReceipts)
 	s.writeInvalidations(invalidations)
 	return logs
 }

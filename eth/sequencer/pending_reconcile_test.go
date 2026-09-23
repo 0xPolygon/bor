@@ -86,12 +86,12 @@ func TestPendingStoreReconcilesSpeculativeAncestry(t *testing.T) {
 	}
 	canonical := map[uint64]*types.Block{head.NumberU64(): head}
 	lookup := func(number uint64) *types.Block { return canonical[number] }
-	if _, invalidations := store.reconcileThroughMemory(head.NumberU64(), lookup, func(common.Hash) types.Receipts { return nil }); len(invalidations) != 0 {
+	if _, invalidations, _ := store.reconcileThroughMemory(head.NumberU64(), lookup, func(common.Hash) types.Receipts { return nil }); len(invalidations) != 0 {
 		t.Fatalf("valid lineage invalidations = %+v", invalidations)
 	}
 
 	canonical[blocks[0].NumberU64()] = blocks[0]
-	if _, invalidations := store.reconcileThroughMemory(blocks[0].NumberU64(), lookup, func(common.Hash) types.Receipts { return nil }); len(invalidations) != 0 {
+	if _, invalidations, _ := store.reconcileThroughMemory(blocks[0].NumberU64(), lookup, func(common.Hash) types.Receipts { return nil }); len(invalidations) != 0 {
 		t.Fatalf("matching import invalidations = %+v", invalidations)
 	}
 	store.mu.RLock()
@@ -103,7 +103,7 @@ func TestPendingStoreReconcilesSpeculativeAncestry(t *testing.T) {
 
 	replacement := types.NewBlockWithHeader(&types.Header{Number: blocks[0].Number(), ParentHash: head.Hash(), Extra: []byte("replacement")})
 	canonical[blocks[0].NumberU64()] = replacement
-	_, invalidations := store.reconcileThroughMemory(blocks[0].NumberU64(), lookup, func(common.Hash) types.Receipts { return nil })
+	_, invalidations, _ := store.reconcileThroughMemory(blocks[0].NumberU64(), lookup, func(common.Hash) types.Receipts { return nil })
 	if len(invalidations) != 2 || invalidations[0].reason != "reorged" || invalidations[1].reason != "reorged" {
 		t.Fatalf("descendant invalidations = %+v", invalidations)
 	}
@@ -142,7 +142,7 @@ func TestReconciliationDefersClaimedEntryInvalidation(t *testing.T) {
 		ParentHash: block.ParentHash(),
 		Extra:      []byte("replacement"),
 	})
-	_, invalidations := store.reconcileThroughMemory(block.NumberU64(), func(uint64) *types.Block {
+	_, invalidations, _ := store.reconcileThroughMemory(block.NumberU64(), func(uint64) *types.Block {
 		return replacement
 	}, func(common.Hash) types.Receipts { return nil })
 	if len(invalidations) != 0 {
@@ -183,7 +183,7 @@ func TestReconciliationDefersClaimedFutureReorg(t *testing.T) {
 	entry.claimedHash = block.Hash()
 	store.mu.Unlock()
 
-	_, invalidations := store.reconcileThroughMemory(anchor.NumberU64(), func(number uint64) *types.Block {
+	_, invalidations, _ := store.reconcileThroughMemory(anchor.NumberU64(), func(number uint64) *types.Block {
 		if number == anchor.NumberU64() {
 			return anchor
 		}
