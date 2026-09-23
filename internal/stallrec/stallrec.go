@@ -65,6 +65,7 @@ type Op struct {
 	num     uint64
 	start   time.Time
 	stacked bool
+	ended   bool
 }
 
 func init() {
@@ -93,8 +94,11 @@ func init() {
 	}
 	enabled.Store(true)
 	go watchdog()
-	log.Info("stallrec: enabled", "dir", dir, "flightRecorder", fr != nil, "thresholds", fmt.Sprint(thresholds))
 }
+
+// announce logs the configuration once, on first use: package init runs
+// before bor installs its log handler, so a log line there would be lost.
+var announce sync.Once
 
 // Enabled reports whether stall recording is active.
 func Enabled() bool { return enabled.Load() }
@@ -105,6 +109,9 @@ func Begin(kind string, num uint64) *Op {
 	if !enabled.Load() {
 		return nil
 	}
+	announce.Do(func() {
+		log.Info("stallrec: enabled", "dir", dir, "flightRecorder", fr != nil, "thresholds", fmt.Sprint(thresholds))
+	})
 	mu.Lock()
 	nextID++
 	op := &Op{id: nextID, kind: kind, num: num, start: time.Now()}
@@ -121,6 +128,11 @@ func (op *Op) End() time.Duration {
 	}
 	d := time.Since(op.start)
 	mu.Lock()
+	if op.ended {
+		mu.Unlock()
+		return d
+	}
+	op.ended = true
 	delete(active, op.id)
 	mu.Unlock()
 	if d >= thresholds[op.kind] {

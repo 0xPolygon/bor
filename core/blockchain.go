@@ -3632,6 +3632,9 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		canonAccum = canonAccum[:0]
 	}
 
+	var importOp *stallrec.Op
+	defer func() { importOp.End() }()
+
 	for ; block != nil && err == nil || errors.Is(err, ErrKnownBlock); block, err = it.next() {
 		// If the chain is terminating, stop processing blocks
 		if bc.insertStopped() {
@@ -3697,6 +3700,8 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		}
 		// Retrieve the parent block and it's state to execute on top
 		start := time.Now()
+		importOp.End()
+		importOp = stallrec.Begin(stallrec.KindImport, block.NumberU64())
 
 		parent := it.previous()
 		if parent == nil {
@@ -3934,6 +3939,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 
 		blockWriteTimer.Update(time.Since(wstart) - statedb.AccountCommits - statedb.StorageCommits - statedb.SnapshotCommits - statedb.TrieDBCommits)
 		elapsedNormal := time.Since(start)
+		importOp.End()
 		blockInsertTimer.Update(elapsedNormal)
 		normalImportTotalTimer.Update(elapsedNormal)
 		bc.logSlowNormalImport(block, cheapExecElapsed, vtime, reorgCheckElapsed, writeElapsed, elapsedNormal, statedb)
@@ -4033,8 +4039,6 @@ func (bpr *blockProcessingResult) Witness() *stateless.Witness {
 // nolint : unused
 func (bc *BlockChain) processBlock(block *types.Block, statedb *state.StateDB, start time.Time, setHead bool, diskdb ethdb.Database) (_ *blockProcessingResult, blockEndErr error) {
 	startTime := time.Now()
-	importOp := stallrec.Begin(stallrec.KindImport, block.NumberU64())
-	defer importOp.End()
 	if bc.logger != nil && bc.logger.OnBlockStart != nil {
 		td := bc.GetTd(block.ParentHash(), block.NumberU64()-1)
 		bc.logger.OnBlockStart(tracing.BlockEvent{
