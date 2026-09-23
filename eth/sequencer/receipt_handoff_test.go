@@ -15,8 +15,10 @@ import (
 // eth_getTransactionReceipt does) still finds every watched transaction.
 type receiptProbeConsumer struct {
 	*Consumer
-	watched types.Transactions
-	misses  []string
+	watched         types.Transactions
+	misses          []string
+	beforeHeadWrite func()
+	afterHeadWrite  func()
 }
 
 func (c *receiptProbeConsumer) probe(step string) {
@@ -34,15 +36,84 @@ func (c *receiptProbeConsumer) probe(step string) {
 func (c *receiptProbeConsumer) CompletePreconf(block *types.Block, receipts types.Receipts, committed bool) string {
 	reason := c.Consumer.CompletePreconf(block, receipts, committed)
 	if committed {
+		if c.beforeHeadWrite != nil {
+			c.beforeHeadWrite()
+		}
 		c.probe("after CompletePreconf, before the head write")
 	}
 	return reason
 }
 
 func (c *receiptProbeConsumer) PreconfHeadWritten(block *types.Block) {
+	if c.afterHeadWrite != nil {
+		c.afterHeadWrite()
+	}
 	c.probe("after the head write, before eviction")
 	c.Consumer.PreconfHeadWritten(block)
 	c.probe("after eviction")
+}
+
+func TestPreconfLandingSurvivesDelayedHeadEvent(t *testing.T) {
+	h := partialReuseHarness(t)
+	txs := types.Transactions{h.transfer(t, 0)}
+	block, _ := buildPartialReuseBlock(t, h, txs)
+	consumer := publishPrefix(t, h, txs).consumer
+	parentHead := h.chain.CurrentBlock()
+	child := newPendingRPCCoverageFixture(t, block.NumberU64()+1, block.Hash())
+	store := consumer.pendingStore()
+	generation := store.begin(child.block.NumberU64(), child.block.ParentHash(), false)
+	if !store.publish(child.block, types.Receipts{child.receipt}, child.state, nil, generation) {
+		t.Fatal("publish descendant")
+	}
+	consumer.index.Add(child.tx, child.receipt)
+	probe := &receiptProbeConsumer{Consumer: consumer, watched: txs}
+	probe.beforeHeadWrite = func() {
+		if consumer.landing.Load() == nil || h.chain.CurrentBlock() != parentHead {
+			t.Fatal("expected matched completion before the head write")
+		}
+		anchor, ok := consumer.pendingReadAnchor()
+		if !ok {
+			t.Fatal("landing failed to anchor read")
+		}
+		receipt, _, found := consumer.index.Lookup(txs[0].Hash())
+		if !found || receipt == nil {
+			t.Fatal("matched receipt missing before delayed head event")
+		}
+		// Model a queued event running between the receipt lookup and its
+		// closing anchor check, while canonical lookup still cannot recover it.
+		consumer.handleCanonicalHead()
+		if !consumer.pendingReadAnchorValid(anchor) {
+			t.Error("delayed head event invalidated an in-flight receipt read")
+		}
+		if _, _, ok := consumer.LookupPreconf(child.tx.Hash()); !ok {
+			t.Error("delayed head event withdrew a valid descendant")
+		}
+	}
+	probe.afterHeadWrite = func() {
+		if consumer.landing.Load() == nil {
+			t.Fatal("landing cleared before observer")
+		}
+		consumer.handleCanonicalHead()
+		if _, _, ok := consumer.index.Lookup(txs[0].Hash()); ok {
+			t.Error("reconciliation deferred after the landing became canonical")
+		}
+	}
+	h.chain.SetPreconfProvider(probe)
+	if _, err := h.chain.InsertChain(types.Blocks{block}, false); err != nil {
+		t.Fatalf("insert canonical block: %v", err)
+	}
+	if len(probe.misses) != 0 {
+		t.Fatalf("receipt disappeared during import: %v", probe.misses)
+	}
+	if consumer.landing.Load() != nil {
+		t.Fatal("landing survived the head write")
+	}
+	if _, _, ok := consumer.LookupPreconf(child.tx.Hash()); !ok {
+		t.Fatal("valid descendant receipt missing after import")
+	}
+	if records := rawdb.ReadInvalidPreconfsInRange(h.chain.DB(), child.block.NumberU64(), child.block.NumberU64()); len(records) != 0 {
+		t.Fatalf("valid descendant was invalidated: %+v", records)
+	}
 }
 
 func TestPreconfReceiptNeverVanishesAcrossCanonicalImport(t *testing.T) {

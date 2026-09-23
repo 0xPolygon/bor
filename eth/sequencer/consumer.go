@@ -462,6 +462,12 @@ func (c *Consumer) finalizedHeight() (uint64, bool) {
 
 func (c *Consumer) reconcileCanonicalHeadLocked() []pendingInvalidation {
 	head := c.chain.CurrentBlock()
+	// A delayed head event can still see the parent after matched completion
+	// removed the landing block from the store. Reconciling that parent would
+	// break the read anchor and mistake valid descendants for a gap.
+	if landing := c.landing.Load(); landing != nil && landing.ParentHash == head.Hash() {
+		return nil
+	}
 	number := head.Number.Uint64()
 	c.index.EvictThrough(number)
 	logs, invalidations, staleFrom := c.pendingStore().reconcileThroughMemory(number, c.chain.GetBlockByNumber, c.chain.GetReceiptsByHash)
