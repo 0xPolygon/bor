@@ -94,6 +94,8 @@ func ClearPendingFakeTxForTest() {
 // panic causes (e.g. the nil-Value case, handled directly in
 // commitFakeTransaction below).
 func devnetInjectFakeTx(w *worker, env *environment) {
+	devnetInjectStateDiff(env)
+
 	spec := takeFakeTx()
 	if spec == nil {
 		return

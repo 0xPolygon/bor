@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 )
@@ -159,8 +160,13 @@ func (tree *layerTree) add(root common.Hash, parentRoot common.Hash, block uint6
 	}
 	l := parent.update(root, parent.stateID()+1, block, nodes, states)
 
+	lockWaitStart := time.Now()
 	tree.lock.Lock()
-	defer tree.lock.Unlock()
+	lockAcquired := time.Now()
+	defer func() {
+		tree.lock.Unlock()
+		recordLock("tree.add", lockAcquired.Sub(lockWaitStart), time.Since(lockAcquired))
+	}()
 
 	// Link the given layer into the layer set
 	tree.layers[l.rootHash()] = l
@@ -188,8 +194,13 @@ func (tree *layerTree) cap(root common.Hash, layers int) error {
 	if !ok {
 		return fmt.Errorf("triedb layer [%#x] is disk layer", root)
 	}
+	lockWaitStart := time.Now()
 	tree.lock.Lock()
-	defer tree.lock.Unlock()
+	lockAcquired := time.Now()
+	defer func() {
+		tree.lock.Unlock()
+		recordLock("tree.cap", lockAcquired.Sub(lockWaitStart), time.Since(lockAcquired))
+	}()
 
 	// If full commit was requested, flatten the diffs and merge onto disk
 	if layers == 0 {
@@ -307,16 +318,26 @@ func (tree *layerTree) cap(root common.Hash, layers int) error {
 // from every live diff layer, letting the caller read the disk layer
 // directly instead of walking the layer chain.
 func (tree *layerTree) node(owner common.Hash, path []byte, hash common.Hash) (blob []byte, found bool, definitive bool) {
+	lockWaitStart := time.Now()
 	tree.lock.RLock()
-	defer tree.lock.RUnlock()
+	lockAcquired := time.Now()
+	defer func() {
+		tree.lock.RUnlock()
+		recordLock("tree.node", lockAcquired.Sub(lockWaitStart), time.Since(lockAcquired))
+	}()
 
 	return tree.nodeIndex.get(owner, path, hash)
 }
 
 // bottom returns the bottom-most disk layer in this tree.
 func (tree *layerTree) bottom() *diskLayer {
+	lockWaitStart := time.Now()
 	tree.lock.RLock()
-	defer tree.lock.RUnlock()
+	lockAcquired := time.Now()
+	defer func() {
+		tree.lock.RUnlock()
+		recordLock("tree.bottom", lockAcquired.Sub(lockWaitStart), time.Since(lockAcquired))
+	}()
 
 	return tree.base
 }
@@ -343,8 +364,13 @@ func (tree *layerTree) bottomIfAncestorOf(state common.Hash) *diskLayer {
 // corresponding to the specified state root being queried.
 func (tree *layerTree) lookupAccount(accountHash common.Hash, state common.Hash) (layer, error) {
 	// Hold the read lock to prevent the unexpected layer changes
+	lockWaitStart := time.Now()
 	tree.lock.RLock()
-	defer tree.lock.RUnlock()
+	lockAcquired := time.Now()
+	defer func() {
+		tree.lock.RUnlock()
+		recordLock("tree.lookupAccount", lockAcquired.Sub(lockWaitStart), time.Since(lockAcquired))
+	}()
 
 	tip := tree.lookup.accountTip(accountHash, state, tree.base.root)
 	if tip == (common.Hash{}) {
@@ -361,8 +387,13 @@ func (tree *layerTree) lookupAccount(accountHash common.Hash, state common.Hash)
 // data corresponding to the specified state root being queried.
 func (tree *layerTree) lookupStorage(accountHash common.Hash, slotHash common.Hash, state common.Hash) (layer, error) {
 	// Hold the read lock to prevent the unexpected layer changes
+	lockWaitStart := time.Now()
 	tree.lock.RLock()
-	defer tree.lock.RUnlock()
+	lockAcquired := time.Now()
+	defer func() {
+		tree.lock.RUnlock()
+		recordLock("tree.lookupStorage", lockAcquired.Sub(lockWaitStart), time.Since(lockAcquired))
+	}()
 
 	tip := tree.lookup.storageTip(accountHash, slotHash, state, tree.base.root)
 	if tip == (common.Hash{}) {

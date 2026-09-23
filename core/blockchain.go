@@ -50,6 +50,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/downloader/whitelist"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
+	"github.com/ethereum/go-ethereum/internal/stallrec"
 	"github.com/ethereum/go-ethereum/internal/syncx"
 	"github.com/ethereum/go-ethereum/internal/version"
 	"github.com/ethereum/go-ethereum/log"
@@ -4032,6 +4033,8 @@ func (bpr *blockProcessingResult) Witness() *stateless.Witness {
 // nolint : unused
 func (bc *BlockChain) processBlock(block *types.Block, statedb *state.StateDB, start time.Time, setHead bool, diskdb ethdb.Database) (_ *blockProcessingResult, blockEndErr error) {
 	startTime := time.Now()
+	importOp := stallrec.Begin(stallrec.KindImport, block.NumberU64())
+	defer importOp.End()
 	if bc.logger != nil && bc.logger.OnBlockStart != nil {
 		td := bc.GetTd(block.ParentHash(), block.NumberU64()-1)
 		bc.logger.OnBlockStart(tracing.BlockEvent{

@@ -61,3 +61,16 @@ func (api *DebugAPI) DrainSlowOpcodeGaps() []vm.SlowOpcodeGap {
 
 	return gaps
 }
+
+// StageStateDiff stages a write set (accounts, balances, nonces, code,
+// storage) to be applied directly to the next block this node's miner builds,
+// replaying a historical block's state footprint without executing its
+// transactions. Same p2p-disconnected precondition as StageFakeTx.
+func (api *DebugAPI) StageStateDiff(spec miner.StateDiffSpec) error {
+	if n := devnetPeerCount(api); n > 0 {
+		return fmt.Errorf("debug_stageStateDiff: refusing to stage: node has %d connected peer(s)", n)
+	}
+
+	api.eth.miner.StageStateDiff(spec)
+	return nil
+}

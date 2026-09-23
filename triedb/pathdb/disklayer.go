@@ -117,8 +117,13 @@ func (dl *diskLayer) markStale() {
 // node implements the layer interface, retrieving the trie node with the
 // provided node info. No error will be returned if the node is not found.
 func (dl *diskLayer) node(owner common.Hash, path []byte, depth int) ([]byte, common.Hash, *nodeLoc, error) {
+	lockWaitStart := time.Now()
 	dl.lock.RLock()
-	defer dl.lock.RUnlock()
+	lockAcquired := time.Now()
+	defer func() {
+		dl.lock.RUnlock()
+		recordLock("disk.node", lockAcquired.Sub(lockWaitStart), time.Since(lockAcquired))
+	}()
 
 	if dl.stale {
 		return nil, common.Hash{}, nil, errSnapshotStale
@@ -173,8 +178,13 @@ func (dl *diskLayer) node(owner common.Hash, path []byte, depth int) ([]byte, co
 //
 // Note the returned account is not a copy, please don't modify it.
 func (dl *diskLayer) account(hash common.Hash, depth int) ([]byte, error) {
+	lockWaitStart := time.Now()
 	dl.lock.RLock()
-	defer dl.lock.RUnlock()
+	lockAcquired := time.Now()
+	defer func() {
+		dl.lock.RUnlock()
+		recordLock("disk.account", lockAcquired.Sub(lockWaitStart), time.Since(lockAcquired))
+	}()
 
 	if dl.stale {
 		return nil, errSnapshotStale
@@ -251,8 +261,13 @@ func (dl *diskLayer) account(hash common.Hash, depth int) ([]byte, error) {
 func (dl *diskLayer) storage(accountHash, storageHash common.Hash, depth int) ([]byte, error) {
 	// Hold the lock, ensure the parent won't be changed during the
 	// state accessing.
+	lockWaitStart := time.Now()
 	dl.lock.RLock()
-	defer dl.lock.RUnlock()
+	lockAcquired := time.Now()
+	defer func() {
+		dl.lock.RUnlock()
+		recordLock("disk.storage", lockAcquired.Sub(lockWaitStart), time.Since(lockAcquired))
+	}()
 
 	if dl.stale {
 		return nil, errSnapshotStale
@@ -395,8 +410,13 @@ func (dl *diskLayer) writeStateHistory(diff *diffLayer) (bool, error) {
 // and returns a newly constructed disk layer. Note the current disk
 // layer must be tagged as stale first to prevent re-access.
 func (dl *diskLayer) commit(bottom *diffLayer, force bool) (*diskLayer, error) {
+	lockWaitStart := time.Now()
 	dl.lock.Lock()
-	defer dl.lock.Unlock()
+	lockAcquired := time.Now()
+	defer func() {
+		dl.lock.Unlock()
+		recordLock("disk.commit", lockAcquired.Sub(lockWaitStart), time.Since(lockAcquired))
+	}()
 
 	// Construct and store the state history first. If crash happens after storing
 	// the state history but without flushing the corresponding states(journal),
@@ -637,8 +657,13 @@ func (dl *diskLayer) genComplete() bool {
 
 // waitFlush blocks until the background buffer flush is completed.
 func (dl *diskLayer) waitFlush() error {
+	lockWaitStart := time.Now()
 	dl.lock.RLock()
-	defer dl.lock.RUnlock()
+	lockAcquired := time.Now()
+	defer func() {
+		dl.lock.RUnlock()
+		recordLock("disk.waitFlush", lockAcquired.Sub(lockWaitStart), time.Since(lockAcquired))
+	}()
 
 	if dl.frozen == nil {
 		return nil
