@@ -71,23 +71,15 @@ func (api *FilterAPI) NewDeposits(ctx context.Context, crit ethereum.StateSyncFi
 	go func() {
 		stateSyncData := make(chan *types.StateSyncData, 10)
 		stateSyncSub := api.events.SubscribeNewDeposits(stateSyncData)
+		defer stateSyncSub.Unsubscribe()
 
-		//nolint:staticcheck
-		for {
-			select {
-			case h := <-stateSyncData:
-				if h != nil && (crit.ID == h.ID || crit.Contract == h.Contract ||
-					(crit.ID == 0 && crit.Contract == common.Address{})) {
-					notifier.Notify(rpcSub.ID, h)
-				}
-			case <-rpcSub.Err():
-				stateSyncSub.Unsubscribe()
-				return
-			case <-notifier.Closed():
-				stateSyncSub.Unsubscribe()
-				return
+		deliver(rpcSub, stateSyncData, func(h *types.StateSyncData) error {
+			if h != nil && (crit.ID == h.ID || crit.Contract == h.Contract ||
+				(crit.ID == 0 && crit.Contract == common.Address{})) {
+				return notifier.Notify(rpcSub.ID, h)
 			}
-		}
+			return nil
+		})
 	}()
 
 	return rpcSub, nil
