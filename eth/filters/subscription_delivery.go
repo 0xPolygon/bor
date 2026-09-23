@@ -12,7 +12,7 @@ import (
 // while its connection is not taking writes. It matches the event system's
 // own burst allowance (txChanSize), so only a client that is not reading, not
 // a burst, reaches it. A variable only so tests can lower it.
-var subscriptionBacklogLimit = 4096
+var subscriptionBacklogLimit = txChanSize
 
 var subscriptionsDroppedMeter = metrics.NewRegisteredMeter("eth/filters/subscriptions/dropped", nil)
 
@@ -25,8 +25,9 @@ var subscriptionsDroppedMeter = metrics.NewRegisteredMeter("eth/filters/subscrip
 // behind ends, and closeConn tells the client so, rather than silently skip
 // events it can no longer be sent.
 //
-// The backlog is a slice rather than a buffered channel so an idle or
-// keeping-up subscription holds no preallocated buffer.
+// The backlog is a pair of slices the writer swaps under one lock, rather
+// than a buffered channel, so an idle subscription holds no preallocated
+// buffer and a keeping-up one reuses the same two without allocating.
 func deliver[T any](sub *rpc.Subscription, events <-chan T, notify func(T) error, closeConn func()) {
 	var (
 		mu      sync.Mutex
@@ -38,6 +39,7 @@ func deliver[T any](sub *rpc.Subscription, events <-chan T, notify func(T) error
 	defer close(done)
 
 	go func() {
+		var batch []T
 		for {
 			select {
 			case <-wake:
@@ -46,30 +48,41 @@ func deliver[T any](sub *rpc.Subscription, events <-chan T, notify func(T) error
 			}
 			for {
 				mu.Lock()
-				if len(backlog) == 0 {
-					backlog = nil
-					mu.Unlock()
+				batch, backlog = backlog, batch[:0]
+				mu.Unlock()
+				if len(batch) == 0 {
 					break
 				}
-				event := backlog[0]
-				var zero T
-				backlog[0] = zero
-				backlog = backlog[1:]
-				mu.Unlock()
-				select {
-				case <-done:
-					return
-				default:
+				for i, event := range batch {
+					var zero T
+					batch[i] = zero
+					select {
+					case <-done:
+						return
+					default:
+					}
+					if err := notify(event); err != nil {
+						log.Debug("Ending RPC subscription after a failed write", "id", sub.ID, "err", err)
+						close(failed)
+						return
+					}
 				}
-				if err := notify(event); err != nil {
-					log.Debug("Ending RPC subscription after a failed write", "id", sub.ID, "err", err)
-					close(failed)
-					return
+				// Keep the spare slice for reuse only while it is small, so one
+				// burst does not pin its high-water buffer for the lifetime of
+				// the subscription.
+				if cap(batch) > 64 {
+					batch = nil
 				}
 			}
 		}
 	}()
 
+	abandon := func() {
+		subscriptionsDroppedMeter.Mark(1)
+		// Closing can wait on the connection's ping loop; it must not hold
+		// up the events this goroutine drains for the loop.
+		go closeConn()
+	}
 	for {
 		select {
 		case event := <-events:
@@ -81,10 +94,7 @@ func deliver[T any](sub *rpc.Subscription, events <-chan T, notify func(T) error
 			mu.Unlock()
 			if full {
 				log.Debug("Ending RPC subscription that stopped reading", "id", sub.ID, "backlog", subscriptionBacklogLimit)
-				subscriptionsDroppedMeter.Mark(1)
-				// Closing can wait on the connection's ping loop; it must not
-				// hold up the events this goroutine drains for the loop.
-				go closeConn()
+				abandon()
 				return
 			}
 			select {
@@ -92,8 +102,7 @@ func deliver[T any](sub *rpc.Subscription, events <-chan T, notify func(T) error
 			default:
 			}
 		case <-failed:
-			subscriptionsDroppedMeter.Mark(1)
-			go closeConn()
+			abandon()
 			return
 		case <-sub.Err():
 			return

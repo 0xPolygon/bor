@@ -116,44 +116,46 @@ func (c *Consumer) CompletePreconf(block *types.Block, receipts types.Receipts, 
 	} else {
 		c.clearCanonicalHandoff(block)
 	}
-	logs, invalidations, removed, matched := c.pendingStore().completePreconf(block, receipts, committed)
-	var withdrawn []pendingInvalidation
+	store := c.pendingStore()
+	logs, invalidations, removed, matched := store.completePreconf(block, receipts, committed)
+	var writes []pendingInvalidation
 	if committed && block != nil {
-		if !matched {
-			// Anything built past this height on another parent is dead the
-			// moment block commits; withdraw it before the head write rather
-			// than serve it until the next reconcile.
-			var withdrawnLogs []*types.Log
-			withdrawnLogs, withdrawn = c.pendingStore().withdrawOffCanonical(block)
-			logs = append(logs, withdrawnLogs...)
-		}
 		if c.index != nil {
 			preconfCanonicalReceipts.Inc(int64(c.index.CountCanonical(block)))
-			// Matched receipts stay until the head write makes the canonical
-			// ones readable (PreconfHeadWritten); mismatched ones go now.
-			if !matched {
-				c.index.EvictThrough(block.NumberU64())
-				if len(withdrawn) > 0 {
-					c.index.ClearFrom(withdrawn[0].number)
-				}
-			}
 		}
 		if matched {
+			// Matched receipts stay until the head write makes the canonical
+			// ones readable (PreconfHeadWritten).
 			header := types.CopyHeader(block.Header())
 			c.reconciled.Store(header)
 			c.landing.Store(header)
+		} else {
+			// Anything built past this height on another parent is dead the
+			// moment block commits; withdraw it before the head write rather
+			// than serve it until the next reconcile.
+			withdrawnLogs, withdrawn := store.withdrawOffCanonical(block)
+			logs = append(logs, withdrawnLogs...)
+			writes = withdrawn
+			if c.index != nil {
+				c.index.EvictThrough(block.NumberU64())
+				c.clearIndexAbove(block.NumberU64(), withdrawn)
+			}
 		}
 	} else if removed && block != nil && c.index != nil {
 		c.index.ClearFrom(block.NumberU64())
 	}
+	// A committed block's own invalidation goes back to the caller, which
+	// writes it in the head batch; everything else is written here.
+	reason := ""
+	if committed && len(invalidations) > 0 {
+		reason = invalidations[0].reason
+	} else {
+		writes = append(writes, invalidations...)
+	}
 	c.enqueuePendingLogs(logs)
 	c.publishMu.Unlock()
-	c.pendingStore().writeInvalidations(withdrawn)
-	if committed && len(invalidations) > 0 {
-		return invalidations[0].reason
-	}
-	c.pendingStore().writeInvalidations(invalidations)
-	return ""
+	store.writeInvalidations(writes)
+	return reason
 }
 
 // PreconfHeadWritten runs once block is the canonical head: its receipts are

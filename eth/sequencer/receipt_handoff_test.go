@@ -6,9 +6,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
-	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/trie"
 )
 
 // receiptProbeConsumer checks, at each step canonical import takes through
@@ -118,24 +116,17 @@ func TestMismatchedCompletionWithdrawsStaleDescendants(t *testing.T) {
 				parent = common.Hash{0xde, 0xad}
 			}
 
-			tx := h.transfer(t, 1)
-			child := types.NewBlock(&types.Header{Number: new(big.Int).SetUint64(number), ParentHash: parent, GasLimit: block.GasLimit()},
-				&types.Body{Transactions: types.Transactions{tx}}, nil, trie.NewStackTrie(nil))
-			receipt := &types.Receipt{TxHash: tx.Hash(), BlockNumber: new(big.Int).SetUint64(number), Logs: []*types.Log{}}
-			stateDB, err := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
-			if err != nil {
-				t.Fatalf("state: %v", err)
-			}
+			fixture := newPendingRPCCoverageFixture(t, number, parent)
 			store := consumer.pendingStore()
-			if !store.publish(child, types.Receipts{receipt}, stateDB, nil, store.begin(number, parent, false)) {
+			if !store.publish(fixture.block, types.Receipts{fixture.receipt}, fixture.state, nil, store.begin(number, parent, false)) {
 				t.Fatal("publish child")
 			}
-			consumer.index.Add(tx, receipt)
+			consumer.index.Add(fixture.tx, fixture.receipt)
 
 			if reason := consumer.CompletePreconf(block, receipts, true); reason != "" {
 				t.Fatalf("completion with no entry at the height returned %q", reason)
 			}
-			_, _, served := consumer.LookupPreconf(tx.Hash())
+			_, _, served := consumer.LookupPreconf(fixture.tx.Hash())
 			store.mu.RLock()
 			entry := store.entries[pendingKey{number: number, parent: parent}]
 			store.mu.RUnlock()

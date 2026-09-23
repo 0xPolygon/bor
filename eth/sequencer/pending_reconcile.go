@@ -20,6 +20,9 @@ func (s *PendingStore) reconcileThroughMemory(number uint64, canonical func(uint
 func (s *PendingStore) withdrawOffCanonical(block *types.Block) ([]*types.Log, []pendingInvalidation) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if len(s.entries) == 0 {
+		return nil, nil
+	}
 	return s.reconcileFutureLocked(block.NumberU64(), block)
 }
 

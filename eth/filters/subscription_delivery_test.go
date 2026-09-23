@@ -69,7 +69,8 @@ func TestStalledSubscriberDoesNotBlockOthers(t *testing.T) {
 	t.Cleanup(sub.Unsubscribe)
 
 	// Lower the limit so the stalled subscription overflows within the test
-	// and the server has to close its connection.
+	// and the server has to close its connection. This rewrites a package
+	// variable every subscription reads, so this test must not run in parallel.
 	defaultLimit := subscriptionBacklogLimit
 	subscriptionBacklogLimit = 64
 	t.Cleanup(func() { subscriptionBacklogLimit = defaultLimit })

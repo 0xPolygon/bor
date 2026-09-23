@@ -159,9 +159,7 @@ func (n *Notifier) Notify(id ID, data any) error {
 // single subscription, so a server that can no longer deliver one closes the
 // connection rather than let the subscription go silent.
 func (n *Notifier) CloseConn() {
-	if conn, ok := n.h.conn.(interface{ close() }); ok {
-		conn.close()
-	}
+	n.h.conn.close()
 }
 
 // Closed returns a channel that is closed when the RPC connection is closed.

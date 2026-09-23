@@ -465,6 +465,16 @@ func (c *Consumer) reconcileCanonicalHeadLocked() []pendingInvalidation {
 	number := head.Number.Uint64()
 	c.index.EvictThrough(number)
 	logs, invalidations := c.pendingStore().reconcileThroughMemory(number, c.chain.GetBlockByNumber, c.chain.GetReceiptsByHash)
+	c.clearIndexAbove(number, invalidations)
+	c.reconciled.Store(head)
+	c.clearCanonicalHandoffThrough(head)
+	c.enqueuePendingLogs(logs)
+	return invalidations
+}
+
+// clearIndexAbove drops the index from the lowest invalidated height above
+// number: those receipts were built on entries a reconcile just voided.
+func (c *Consumer) clearIndexAbove(number uint64, invalidations []pendingInvalidation) {
 	var clearFrom *uint64
 	for _, invalidation := range invalidations {
 		if invalidation.number <= number || (clearFrom != nil && invalidation.number >= *clearFrom) {
@@ -476,10 +486,6 @@ func (c *Consumer) reconcileCanonicalHeadLocked() []pendingInvalidation {
 	if clearFrom != nil {
 		c.index.ClearFrom(*clearFrom)
 	}
-	c.reconciled.Store(head)
-	c.clearCanonicalHandoffThrough(head)
-	c.enqueuePendingLogs(logs)
-	return invalidations
 }
 
 func (c *Consumer) ensureCanonicalHeadReconciled() bool {
