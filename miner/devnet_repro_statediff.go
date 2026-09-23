@@ -29,6 +29,10 @@ type StateDiffAccount struct {
 type StateDiffSpec struct {
 	Label    string                              `json:"label"`
 	Accounts map[common.Address]StateDiffAccount `json:"accounts"`
+	// Reads lists accounts and slots to read (not write) before the writes are
+	// applied, replaying a block's read footprint: every read is scheduled on
+	// the trie prefetcher, which IntermediateRoot drains before hashing.
+	Reads map[common.Address][]common.Hash `json:"reads,omitempty"`
 }
 
 var (
@@ -69,7 +73,16 @@ func devnetInjectStateDiff(env *environment) {
 	}()
 
 	start := time.Now()
-	slots := 0
+	slots, reads := 0, 0
+
+	for addr, keys := range spec.Reads {
+		env.state.GetBalance(addr)
+		for _, k := range keys {
+			env.state.GetState(addr, k)
+			reads++
+		}
+	}
+	readsDone := time.Since(start)
 
 	for addr, acc := range spec.Accounts {
 		if acc.Balance != nil {
@@ -91,5 +104,6 @@ func devnetInjectStateDiff(env *environment) {
 	}
 
 	log.Info("devnet_repro: injected state diff", "label", spec.Label, "accounts", len(spec.Accounts),
-		"slots", slots, "number", env.header.Number, "elapsed", time.Since(start))
+		"slots", slots, "readAccounts", len(spec.Reads), "readSlots", reads, "readElapsed", readsDone,
+		"number", env.header.Number, "elapsed", time.Since(start))
 }
