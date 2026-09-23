@@ -101,12 +101,8 @@ func TestStalledSubscriberDoesNotBlockOthers(t *testing.T) {
 		sent++
 	}
 	dropped := subscriptionsDroppedMeter.Snapshot().Count()
-	start := time.Now()
 	for range 400 {
 		send()
-	}
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
-		t.Fatalf("healthy client took %s: the stalled subscriber held up delivery", elapsed)
 	}
 	// How much the kernel buffers before the stalled write blocks varies by
 	// platform, so keep feeding until the server gives up on that client.
@@ -116,6 +112,12 @@ func TestStalledSubscriberDoesNotBlockOthers(t *testing.T) {
 
 	// The stalled client learns its subscription ended: once it drains what
 	// was already sent, the connection is closed rather than left silent.
+	// Stop throttling reads before draining already-buffered notifications.
+	if tcp, ok := stalled.UnderlyingConn().(*net.TCPConn); ok {
+		if err := tcp.SetReadBuffer(1 << 20); err != nil {
+			t.Fatalf("restore receive buffer: %v", err)
+		}
+	}
 	if err := stalled.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		t.Fatalf("set deadline: %v", err)
 	}
@@ -193,5 +195,90 @@ func TestUnsubscribeDrainsStateSyncChannel(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("unsubscribe deadlocked against a pending state-sync event")
+	}
+}
+
+func TestDeliverBacklogLimit(t *testing.T) {
+	queue := &backlog[int]{wake: make(chan struct{}, 1)}
+	for i := 0; i < subscriptionBacklogLimit; i++ {
+		if !queue.push(i) {
+			t.Fatalf("queue rejected event %d before the limit", i)
+		}
+	}
+	if queue.push(subscriptionBacklogLimit) {
+		t.Fatal("queue accepted an event beyond the limit")
+	}
+	for i, event := range queue.take(nil) {
+		if event != i {
+			t.Fatalf("event %d delivered as %d", i, event)
+		}
+	}
+	if !queue.push(42) {
+		t.Fatal("drained queue still rejects events")
+	}
+}
+
+func TestDeliverBacklogReleasesBurstBuffer(t *testing.T) {
+	for _, size := range []int{64, 65} {
+		queue := &backlog[int]{wake: make(chan struct{}, 1)}
+		queue.take(make([]int, size))
+		if size == 64 && cap(queue.queued) != size {
+			t.Fatal("small buffer was not reused")
+		}
+		if size == 65 && cap(queue.queued) != 0 {
+			t.Fatal("burst buffer was retained")
+		}
+	}
+}
+
+func TestDeliverCancelledBatch(t *testing.T) {
+	done := make(chan struct{})
+	close(done)
+	stopped, err := writeBatch([]int{1}, func(int) error {
+		t.Fatal("notification attempted after cancellation")
+		return nil
+	}, done)
+	if !stopped || err != nil {
+		t.Fatalf("cancelled batch returned stopped=%v err=%v", stopped, err)
+	}
+}
+
+func TestDeliverIsolatesBlockedWriter(t *testing.T) {
+	stalled, healthy := make(chan int), make(chan int)
+	entered, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	stopped := make(chan struct{}, 2)
+	received := make(chan int, 1)
+	go deliver(&rpc.Subscription{ID: "stalled"}, stalled, func(int) error {
+		close(entered)
+		<-release
+		return errors.New("closed")
+	}, func() { stopped <- struct{}{} })
+	go deliver(&rpc.Subscription{ID: "healthy"}, healthy, func(event int) error {
+		received <- event
+		return errors.New("closed")
+	}, func() { stopped <- struct{}{} })
+	stalled <- 1
+	<-entered
+	// The common event loop can feed both subscriptions while one writer blocks.
+	for _, events := range []chan int{stalled, healthy} {
+		select {
+		case events <- 2:
+		case <-time.After(5 * time.Second):
+			t.Fatal("blocked writer stopped event delivery")
+		}
+	}
+	select {
+	case event := <-received:
+		if event != 2 {
+			t.Fatalf("received %d, want 2", event)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("healthy subscriber did not receive its event")
+	}
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("healthy subscription did not finish")
 	}
 }

@@ -5418,14 +5418,15 @@ func TestSendRawTransactionSync_PrefersQueuedPreconfirmation(t *testing.T) {
 		b.preconf.tx = tx
 		b.preconf.receipt = receipt
 		b.preconf.mu.Unlock()
+		// Finish backend mutations before the receipt hub handles the event.
+		b.sentTx = tx
+		b.sentTxHash = tx.Hash()
+		b.autoMine = true
 		b.preconfFeed.Send(core.PreconfReceiptsEvent{
 			BlockTime:    b.CurrentBlock().Time,
 			Receipts:     types.Receipts{receipt},
 			Transactions: types.Transactions{tx},
 		})
-		b.sentTx = tx
-		b.sentTxHash = tx.Hash()
-		b.autoMine = true
 		return nil
 	}
 

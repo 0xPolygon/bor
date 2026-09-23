@@ -736,6 +736,7 @@ func TestPrefixClaimSerializesWorkerPublication(t *testing.T) {
 		if pending, _, _ := s.consumer.Pending(); pending != nil {
 			t.Fatalf("attempt %d retained pending block %v", attempt, pending)
 		}
+		s.consumer.PreconfHeadWritten(block)
 		if _, _, ok := s.consumer.index.Lookup(txs[1].Hash()); ok {
 			t.Fatalf("attempt %d retained suffix receipt", attempt)
 		}

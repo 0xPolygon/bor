@@ -3,6 +3,7 @@ package sequencer
 import (
 	"math/big"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -126,6 +127,41 @@ func TestPreconfReadSurvivesMatchedHandoffMidRead(t *testing.T) {
 	}
 }
 
+func TestPreconfReceiptReadConcurrentWithMatchedCompletion(t *testing.T) {
+	h := partialReuseHarness(t)
+	txs := types.Transactions{h.transfer(t, 0)}
+	block, receipts := buildPartialReuseBlock(t, h, txs)
+	consumer := publishPrefix(t, h, txs).consumer
+	captured := make(chan struct{})
+	completed := make(chan struct{})
+	result := make(chan bool, 1)
+	go func() {
+		// Pause LookupPreconf's read sequence after capturing its receipt.
+		anchor, ok := consumer.pendingReadAnchor()
+		receipt, _, found := consumer.index.Lookup(txs[0].Hash())
+		close(captured)
+		<-completed
+		result <- ok && found && receipt != nil && consumer.pendingReadAnchorValid(anchor)
+	}()
+	<-captured
+	reason := consumer.CompletePreconf(block, receipts, true)
+	close(completed)
+	if reason != "" || consumer.landing.Load() == nil {
+		t.Fatalf("completion did not match: reason=%q", reason)
+	}
+	if h.chain.CurrentBlock().Hash() == block.Hash() {
+		t.Fatal("head moved before the read completed")
+	}
+	select {
+	case found := <-result:
+		if !found {
+			t.Fatal("receipt disappeared while its matched block was landing")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("receipt read did not finish")
+	}
+}
+
 // A committed block that did not match its preconfirmation withdraws, before
 // the head write, the entry above it built on another parent; one that
 // extends the canonical block survives.
@@ -134,11 +170,24 @@ func TestMismatchedCompletionWithdrawsStaleDescendants(t *testing.T) {
 		name      string
 		stale     bool
 		importing bool
-	}{{"stale parent is withdrawn", true, false}, {"stale importing child loses its receipts", true, true}, {"canonical parent is kept", false, false}} {
+		reconcile bool
+	}{
+		{"stale parent is withdrawn", true, false, false},
+		{"stale importing child loses its receipts", true, true, false},
+		{"canonical parent is kept", false, false, false},
+		{"canonical importing child is kept", false, true, false},
+		{"reconcile stale importing child", true, true, true},
+		{"reconcile canonical importing child", false, true, true},
+	} {
 		t.Run(test.name, func(t *testing.T) {
 			h := partialReuseHarness(t)
 			consumer := h.session().consumer
 			block, receipts := buildPartialReuseBlock(t, h, types.Transactions{h.transfer(t, 0)})
+			if test.reconcile {
+				if _, err := h.chain.InsertChain(types.Blocks{block}, false); err != nil {
+					t.Fatalf("insert canonical block: %v", err)
+				}
+			}
 			number := block.NumberU64() + 1
 			parent := block.Hash()
 			if test.stale {
@@ -157,7 +206,12 @@ func TestMismatchedCompletionWithdrawsStaleDescendants(t *testing.T) {
 				store.mu.Unlock()
 			}
 
-			if reason := consumer.CompletePreconf(block, receipts, true); reason != "" {
+			if test.reconcile {
+				consumer.publishMu.Lock()
+				invalidations := consumer.reconcileCanonicalHeadLocked()
+				consumer.publishMu.Unlock()
+				store.writeInvalidations(invalidations)
+			} else if reason := consumer.CompletePreconf(block, receipts, true); reason != "" {
 				t.Fatalf("completion with no entry at the height returned %q", reason)
 			}
 			_, _, served := consumer.LookupPreconf(fixture.tx.Hash())
@@ -165,7 +219,7 @@ func TestMismatchedCompletionWithdrawsStaleDescendants(t *testing.T) {
 			entry := store.entries[pendingKey{number: number, parent: parent}]
 			store.mu.RUnlock()
 			records := rawdb.ReadInvalidPreconfsInRange(h.chain.DB(), number, number)
-			if test.importing {
+			if test.importing && test.stale {
 				// The import still owns the entry and records its invalidation
 				// when it resolves; only its receipts must stop being served.
 				if served || entry == nil || entry.deferredInvalidation != "reorged" || len(records) != 0 {
