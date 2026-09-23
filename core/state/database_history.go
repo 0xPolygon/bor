@@ -17,6 +17,7 @@
 package state
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 
@@ -297,4 +298,10 @@ func (db *HistoricDB) TrieDB() *triedb.Database {
 // Snapshot returns the underlying state snapshot.
 func (db *HistoricDB) Snapshot() *snapshot.Tree {
 	return nil
+}
+
+// Iteratee returns a state iteratee associated with the specified state root,
+// through which the account iterator and storage iterator can be created.
+func (db *HistoricDB) Iteratee(root common.Hash) (Iteratee, error) {
+	return nil, errors.New("not implemented")
 }
