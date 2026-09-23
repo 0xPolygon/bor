@@ -47,6 +47,7 @@ type API struct {
 type ServerCodec interface {
 	peerInfo() PeerInfo
 	readBatch() (msgs []*jsonrpcMessage, isBatch bool, err error)
+	close()
 
 	jsonWriter
 }
@@ -59,8 +60,6 @@ type jsonWriter interface {
 
 	// Closed returns a channel which is closed when the connection is closed.
 	closed() <-chan interface{}
-	// close ends the connection.
-	close()
 	// RemoteAddr returns the peer address of the connection.
 	remoteAddr() string
 }
