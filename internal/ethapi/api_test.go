@@ -5894,3 +5894,56 @@ func TestSimulateV1DispatchesSimulationFinalize(t *testing.T) {
 	require.Len(t, res, 1)
 	require.True(t, engine.simFinalized, "simulation finalization hook was not used")
 }
+
+// laggingCanonicalBackend misses the first canonical lookup and, when landed
+// is set, reports a new head after it: a block that became canonical between
+// a receipt read's two lookups.
+type laggingCanonicalBackend struct {
+	*testBackend
+	landed  bool
+	lookups int
+	parent  *types.Header
+}
+
+func (b *laggingCanonicalBackend) GetCanonicalTransaction(txHash common.Hash) (bool, *types.Transaction, common.Hash, uint64, uint64) {
+	b.lookups++
+	if b.lookups == 1 {
+		return false, nil, common.Hash{}, 0, 0
+	}
+	return b.testBackend.GetCanonicalTransaction(txHash)
+}
+
+func (b *laggingCanonicalBackend) CurrentHeader() *types.Header {
+	if b.lookups == 0 || !b.landed {
+		return b.parent
+	}
+	return b.testBackend.CurrentHeader()
+}
+
+func TestRPCGetTransactionReceiptRetriesCanonicalAfterPreconfMiss(t *testing.T) {
+	api, _, testSuite := setupTransactionsToApiTest(t)
+	hash := testSuite[0].txHash
+	want, err := api.GetTransactionReceipt(t.Context(), hash)
+	if err != nil || want == nil {
+		t.Fatalf("canonical receipt = %v, %v", want, err)
+	}
+
+	parent := &types.Header{Number: common.Big0}
+	for _, landed := range []bool{true, false} {
+		backend := &laggingCanonicalBackend{testBackend: api.b.(*testBackend), landed: landed, parent: parent}
+		got, err := NewTransactionAPI(backend, new(AddrLocker)).GetTransactionReceipt(t.Context(), hash)
+		if err != nil {
+			t.Fatalf("GetTransactionReceipt: %v", err)
+		}
+		if !landed {
+			// No head change, no retry: an unknown hash costs no extra lookup.
+			if got != nil || backend.lookups != 1 {
+				t.Fatalf("unchanged head: receipt=%v lookups=%d, want nil after 1", got, backend.lookups)
+			}
+			continue
+		}
+		if backend.lookups != 2 || got == nil || got["blockHash"] != want["blockHash"] || got["transactionHash"] != want["transactionHash"] {
+			t.Fatalf("receipt after the head moved = %v (lookups %d), want %v after 2", got, backend.lookups, want)
+		}
+	}
+}

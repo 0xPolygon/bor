@@ -126,9 +126,11 @@ func (c *Consumer) CompletePreconf(block *types.Block, receipts types.Receipts, 
 		if matched {
 			// Matched receipts stay until the head write makes the canonical
 			// ones readable (PreconfHeadWritten).
+			// landing first: a reader that sees the new reconciled marker must
+			// also see that its head write is in flight.
 			header := types.CopyHeader(block.Header())
-			c.reconciled.Store(header)
 			c.landing.Store(header)
+			c.reconciled.Store(header)
 		} else {
 			// Anything built past this height on another parent is dead the
 			// moment block commits; withdraw it before the head write rather

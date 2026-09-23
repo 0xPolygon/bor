@@ -310,6 +310,7 @@ func (sub *Subscription) Unsubscribe() {
 			case <-sub.f.txs:
 			case <-sub.f.headers:
 			case <-sub.f.receipts:
+			case <-sub.f.stateSyncData:
 			}
 		}
 

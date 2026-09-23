@@ -12,6 +12,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -77,29 +78,40 @@ func TestStalledSubscriberDoesNotBlockOthers(t *testing.T) {
 
 	// Each log is sent once the healthy client has the previous one, so it
 	// keeps up by construction and only the stalled client falls behind.
-	const batches = 400
-	start := time.Now()
 	deadline := time.After(20 * time.Second)
-	for i := range batches {
+	sent := 0
+	send := func() {
+		t.Helper()
 		backend.pendingLogsFeed.Send([]*types.Log{{
 			Address:     common.Address{0x1},
 			Topics:      []common.Hash{},
 			Data:        make([]byte, 16<<10),
-			BlockNumber: uint64(i),
+			BlockNumber: uint64(sent),
 		}})
 		select {
 		case log := <-received:
-			if log.BlockNumber != uint64(i) {
-				t.Fatalf("log %d arrived as %d", i, log.BlockNumber)
+			if log.BlockNumber != uint64(sent) {
+				t.Fatalf("log %d arrived as %d", sent, log.BlockNumber)
 			}
 		case err := <-sub.Err():
-			t.Fatalf("healthy subscription failed after %d logs: %v", i, err)
+			t.Fatalf("healthy subscription failed after %d logs: %v", sent, err)
 		case <-deadline:
-			t.Fatalf("healthy client received %d of %d logs in 20s", i, batches)
+			t.Fatalf("healthy client received %d logs before the deadline", sent)
 		}
+		sent++
+	}
+	dropped := subscriptionsDroppedMeter.Snapshot().Count()
+	start := time.Now()
+	for range 400 {
+		send()
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("healthy client took %s: the stalled subscriber held up delivery", elapsed)
+	}
+	// How much the kernel buffers before the stalled write blocks varies by
+	// platform, so keep feeding until the server gives up on that client.
+	for subscriptionsDroppedMeter.Snapshot().Count() == dropped {
+		send()
 	}
 
 	// The stalled client learns its subscription ended: once it drains what
@@ -129,13 +141,15 @@ func TestDeliverClosesConnWhenSubscriptionIsAbandoned(t *testing.T) {
 			<-release
 			return nil
 		}, func() { close(closed) })
-		for i := 0; i <= subscriptionBacklogLimit+1; i++ {
+		// The writer may already hold part of the backlog when it blocks, so
+		// up to twice the limit can be taken before the overflow.
+		for i := 0; i <= 2*subscriptionBacklogLimit+1; i++ {
 			select {
 			case events <- i:
 			case <-closed:
 				return
 			case <-time.After(time.Second):
-				t.Fatalf("deliver stopped taking events at %d", i)
+				t.Fatalf("deliver stopped taking events at %d without closing", i)
 			}
 		}
 		select {
@@ -157,4 +171,27 @@ func TestDeliverClosesConnWhenSubscriptionIsAbandoned(t *testing.T) {
 			t.Fatal("failed write did not close the connection")
 		}
 	})
+}
+
+// Ending a state-sync subscription must drain its channel like the others,
+// or the event loop, blocked sending it an event, never takes the uninstall.
+func TestUnsubscribeDrainsStateSyncChannel(t *testing.T) {
+	backend, sys := newTestFilterSystem(rawdb.NewMemoryDatabase(), Config{})
+	es := NewEventSystem(sys)
+	sub := es.SubscribeNewDeposits(make(chan *types.StateSyncData))
+	// The feed hands the event to the loop's buffered channel; give the loop
+	// a moment to pick it up and block on the unread subscription channel.
+	backend.stateSyncFeed.Send(core.StateSyncEvent{Data: &types.StateSyncData{ID: 1}})
+	time.Sleep(100 * time.Millisecond)
+
+	done := make(chan struct{})
+	go func() {
+		sub.Unsubscribe()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("unsubscribe deadlocked against a pending state-sync event")
+	}
 }
