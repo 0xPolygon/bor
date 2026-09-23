@@ -242,7 +242,7 @@ func (api *FilterAPI) NewPendingTransactions(ctx context.Context, fullTx *bool) 
 				}
 			}
 			return nil
-		})
+		}, notifier.CloseConn)
 	}()
 
 	return rpcSub, nil
@@ -299,7 +299,7 @@ func (api *FilterAPI) NewHeads(ctx context.Context) (*rpc.Subscription, error) {
 
 		deliver(rpcSub, headers, func(h *types.Header) error {
 			return notifier.Notify(rpcSub.ID, h)
-		})
+		}, notifier.CloseConn)
 	}()
 
 	return rpcSub, nil
@@ -331,7 +331,7 @@ func (api *FilterAPI) Logs(ctx context.Context, crit FilterCriteria) (*rpc.Subsc
 				}
 			}
 			return nil
-		})
+		}, notifier.CloseConn)
 	}()
 
 	return rpcSub, nil
@@ -404,7 +404,7 @@ func (api *FilterAPI) TransactionReceipts(ctx context.Context, filter *Transacti
 
 			// Send a batch of tx receipts in one notification
 			return notifier.Notify(rpcSub.ID, marshaledReceipts)
-		})
+		}, notifier.CloseConn)
 	}()
 
 	return rpcSub, nil

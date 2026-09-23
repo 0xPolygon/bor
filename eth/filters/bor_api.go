@@ -79,7 +79,7 @@ func (api *FilterAPI) NewDeposits(ctx context.Context, crit ethereum.StateSyncFi
 				return notifier.Notify(rpcSub.ID, h)
 			}
 			return nil
-		})
+		}, notifier.CloseConn)
 	}()
 
 	return rpcSub, nil

@@ -2,6 +2,7 @@ package filters
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http/httptest"
 	"strings"
@@ -67,21 +68,24 @@ func TestStalledSubscriberDoesNotBlockOthers(t *testing.T) {
 	}
 	t.Cleanup(sub.Unsubscribe)
 
-	const batches = 400
-	go func() {
-		for i := range batches {
-			backend.pendingLogsFeed.Send([]*types.Log{{
-				Address:     common.Address{0x1},
-				Topics:      []common.Hash{},
-				Data:        make([]byte, 64<<10),
-				BlockNumber: uint64(i),
-			}})
-		}
-	}()
+	// Lower the limit so the stalled subscription overflows within the test
+	// and the server has to close its connection.
+	defaultLimit := subscriptionBacklogLimit
+	subscriptionBacklogLimit = 64
+	t.Cleanup(func() { subscriptionBacklogLimit = defaultLimit })
 
+	// Each log is sent once the healthy client has the previous one, so it
+	// keeps up by construction and only the stalled client falls behind.
+	const batches = 400
 	start := time.Now()
 	deadline := time.After(20 * time.Second)
 	for i := range batches {
+		backend.pendingLogsFeed.Send([]*types.Log{{
+			Address:     common.Address{0x1},
+			Topics:      []common.Hash{},
+			Data:        make([]byte, 16<<10),
+			BlockNumber: uint64(i),
+		}})
 		select {
 		case log := <-received:
 			if log.BlockNumber != uint64(i) {
@@ -96,4 +100,60 @@ func TestStalledSubscriberDoesNotBlockOthers(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("healthy client took %s: the stalled subscriber held up delivery", elapsed)
 	}
+
+	// The stalled client learns its subscription ended: once it drains what
+	// was already sent, the connection is closed rather than left silent.
+	if err := stalled.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("set deadline: %v", err)
+	}
+	for {
+		_, _, err := stalled.ReadMessage()
+		if err == nil {
+			continue
+		}
+		if ne, ok := err.(net.Error); ok && ne.Timeout() {
+			t.Fatal("stalled subscription's connection was left open")
+		}
+		break
+	}
+}
+
+func TestDeliverClosesConnWhenSubscriptionIsAbandoned(t *testing.T) {
+	t.Run("backlog overflow", func(t *testing.T) {
+		events := make(chan int)
+		release := make(chan struct{})
+		defer close(release)
+		closed := make(chan struct{})
+		go deliver(&rpc.Subscription{ID: "stalled"}, events, func(int) error {
+			<-release
+			return nil
+		}, func() { close(closed) })
+		for i := 0; i <= subscriptionBacklogLimit+1; i++ {
+			select {
+			case events <- i:
+			case <-closed:
+				return
+			case <-time.After(time.Second):
+				t.Fatalf("deliver stopped taking events at %d", i)
+			}
+		}
+		select {
+		case <-closed:
+		case <-time.After(time.Second):
+			t.Fatal("overflowing subscription did not close its connection")
+		}
+	})
+	t.Run("failed write", func(t *testing.T) {
+		events := make(chan int)
+		closed := make(chan struct{})
+		go deliver(&rpc.Subscription{ID: "broken"}, events, func(int) error {
+			return errors.New("write: i/o timeout")
+		}, func() { close(closed) })
+		events <- 1
+		select {
+		case <-closed:
+		case <-time.After(time.Second):
+			t.Fatal("failed write did not close the connection")
+		}
+	})
 }

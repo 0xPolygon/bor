@@ -9,8 +9,10 @@ import (
 )
 
 // subscriptionBacklogLimit bounds the events one RPC subscription may hold
-// while its connection is not taking writes.
-const subscriptionBacklogLimit = 1024
+// while its connection is not taking writes. It matches the event system's
+// own burst allowance (txChanSize), so only a client that is not reading, not
+// a burst, reaches it. A variable only so tests can lower it.
+var subscriptionBacklogLimit = 4096
 
 var subscriptionsDroppedMeter = metrics.NewRegisteredMeter("eth/filters/subscriptions/dropped", nil)
 
@@ -20,11 +22,12 @@ var subscriptionsDroppedMeter = metrics.NewRegisteredMeter("eth/filters/subscrip
 // goroutine: a client that stops reading holds up only itself, never the
 // loop and with it every other subscriber and the chain feeds behind it.
 // A subscription that fails a write or falls subscriptionBacklogLimit events
-// behind ends, rather than silently skip events it can no longer be sent.
+// behind ends, and closeConn tells the client so, rather than silently skip
+// events it can no longer be sent.
 //
 // The backlog is a slice rather than a buffered channel so an idle or
 // keeping-up subscription holds no preallocated buffer.
-func deliver[T any](sub *rpc.Subscription, events <-chan T, notify func(T) error) {
+func deliver[T any](sub *rpc.Subscription, events <-chan T, notify func(T) error, closeConn func()) {
 	var (
 		mu      sync.Mutex
 		backlog []T
@@ -79,6 +82,9 @@ func deliver[T any](sub *rpc.Subscription, events <-chan T, notify func(T) error
 			if full {
 				log.Debug("Ending RPC subscription that stopped reading", "id", sub.ID, "backlog", subscriptionBacklogLimit)
 				subscriptionsDroppedMeter.Mark(1)
+				// Closing can wait on the connection's ping loop; it must not
+				// hold up the events this goroutine drains for the loop.
+				go closeConn()
 				return
 			}
 			select {
@@ -87,6 +93,7 @@ func deliver[T any](sub *rpc.Subscription, events <-chan T, notify func(T) error
 			}
 		case <-failed:
 			subscriptionsDroppedMeter.Mark(1)
+			go closeConn()
 			return
 		case <-sub.Err():
 			return

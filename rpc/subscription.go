@@ -154,6 +154,16 @@ func (n *Notifier) Notify(id ID, data any) error {
 	return nil
 }
 
+// CloseConn closes the connection the notifier writes to, which ends every
+// subscription on it with an error the client sees. JSON-RPC cannot fail a
+// single subscription, so a server that can no longer deliver one closes the
+// connection rather than let the subscription go silent.
+func (n *Notifier) CloseConn() {
+	if conn, ok := n.h.conn.(interface{ close() }); ok {
+		conn.close()
+	}
+}
+
 // Closed returns a channel that is closed when the RPC connection is closed.
 // Deprecated: use subscription error channel
 func (n *Notifier) Closed() <-chan interface{} {
