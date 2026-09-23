@@ -241,6 +241,7 @@ Deferred — entangled with Bor consensus divergence (`needs-wiring.md`):
 - **core/vm write-protection + selfdestruct cluster (#33281 gas-handler write-protection, #33637 per-opcode read-only, #33450 selfdestruct cold-access gas, #32919 selfdestruct tracer hooks)** — intertwined across `gas_table.go`/`operations_acl.go`/`instructions.go`/`interface.go`. #32919 makes `StateDB.SelfDestruct` void, removes `SelfDestruct6780` from the `vm.StateDB` interface, adds `IsNewContract` — clashes with Bor's BlockSTM `*StateDB.SelfDestruct` (returns prevBalance + `MVWrite`; `SelfDestruct6780` consumes the return). All four intertwined → reverted `core/vm/{gas_table,operations_acl,instructions,interface}.go`, `core/state/{statedb,statedb_hooked,statedb_hooked_test}.go`, `core/tracing/{hooks,gen_nonce_change_reason_stringer}.go` to HEAD; removed the new `eth/tracers/internal/tracetest/selfdestruct_state_test.go` + `selfdestruct_test_contracts/*.yul`. Bor's existing write-protection + gas accounting (EIP-214 unconditional; EIP-2929 cold-access) are correct and tested (`core/vm` tests pass).
 - **#33644 deterministic hook emission order** — `statedb_hooked.go`; builds on the batch-8-deferred #33490 hook infra. Reverted to HEAD.
 - **OpenTelemetry JSON-RPC tracing (#33452)** — new `internal/telemetry` pkg + `tracerProvider` threaded through `rpc/{client,handler,server,service}.go` (`newHandler` collides with Bor's `pool *SafePool`; `serviceRegistry.callback` → 3 returns). Reverted the 4 rpc files to HEAD; removed `internal/telemetry/telemetry.go` + `rpc/tracing_test.go`; otel deps dropped by tidy.
+  - **Correction (review of #2319, 2026-09-01):** the revert missed `rpc/http.go`, which kept #33452's `otel.GetTextMapPropagator().Extract(...)` in `Server.ServeHTTP` plus the two otel imports. Not inert — Bor installs a global `propagation.TraceContext` at `internal/cli/server/server.go:470`, so caller-supplied `traceparent` headers would have been stitched into Bor's own spans while nothing in `rpc` consumed the extracted context. Removed, completing the decline. Bor's own otel usage (`common/tracing`, `internal/cli/server`, `miner/worker.go`) is unaffected and still holds the module in `go.mod`.
 - **#33647 signature-length panic fix** — Bor keeps its per-fork signer chain (`pragueSigner`/`cancunSigner`) + 3-return `decodeSignature`; the fix is embedded in the `modernSigner` refactor + `tx_setcode.go`. Reverted `core/types/{transaction_signing,transaction_signing_test,tx_setcode}.go` to HEAD. Bor's `decodeSignature` still panics on bad length, but only on the signing path (crypto-generated 65-byte sigs), not the peer-facing recover path — low external exploitability.
 - **#33610 fetcher test refactor** — depends on the batch-6-declined #33378 `NewTxFetcher(func(common.Hash, byte) error, …)` signature; reverted `eth/fetcher/tx_fetcher_test.go` to HEAD.
 
@@ -452,6 +453,35 @@ Fork/EIP surfaces (invariant 6 — all merged DORMANT, no activation moved on an
   value is discarded and `originStorage`/return stay empty → state root unchanged
   (behavior-preserving; committed-state reads are pre-block-immutable, no BlockSTM impact).
   `core/state` tests pass.
+  - **Correction (review of #2325, 2026-09-08, raised by @lucca30):** "behavior-preserving" held for
+    state but not for the **witness**, and the read arrived ungated while every other Amsterdam
+    surface in this milestone is gated. `NewTrieOnly` forces reads through the MPT so the witness
+    captures the nodes walked, so this read adds the destructed account's storage proof path to the
+    witness. A node on this version reading against a witness from a producer without it gets a
+    reader error → `setError` → `dbErr` → commit aborts (`statedb.go:2177`) → import fails. Reachable
+    by create-and-selfdestruct in one tx then reading that address's storage later in the same block.
+    That is the producer/consumer witness skew Hampi exists for, and an ungated fork surface also
+    fails invariant 9 as `fork-register.md` defines `verified-dormant`. Gated on a new
+    `StateDB.amsterdam`, set from `rules.IsAmsterdam` in `Prepare` and carried through `Copy`;
+    `TestDestructedSlotReadIsAmsterdamGated` fails without the gate. Deliberate divergence from
+    upstream, which does not gate it. **Caveat:** `Prepare` is per-transaction, so a path reaching
+    `GetCommittedState` without preparing a transaction (system calls, state-sync in `Finalize`, the
+    pooled `StateDB`s behind `SafeBase`) leaves the flag false and skips the read — correct while
+    Amsterdam is dormant, but it must be revisited when the fork is scheduled, or BAL will
+    under-record on those paths.
+  - **Measured, not argued (2026-09-08):** `TestDestructedReadWitnessSkew` (`core/state`)
+    drives one destructed-account read against a committed storage trie and harvests the
+    witness both ways: **1 node with the gate on, 5 with it off — 4 extra nodes the reading
+    path demands, a clean superset.** It fails if the gate is removed, so it pins the
+    direction rather than restating it.
+  - **Subtlety worth keeping, because it nearly caused a wrong retraction:** #2180's comment
+    in `stateObject.updateTrie` says reader reads go through "a separate trie with its own
+    PrevalueTracer" and their nodes "are NOT in obj.trie". That is true, and it reads exactly
+    like "reader reads never reach the witness" — which is false. They reach it by a
+    different route: `trieReader.CollectStateWitness` harvests the reader's `mainTrie` and
+    per-address sub-tries, and `StateDB.CollectStateWitness()` is called from
+    `core/parallel_state_processor.go:1192` on the V2 BlockSTM path. "Not in `obj.trie`" and
+    "not in the witness" are different claims; only the first holds.
 
 Notable resolutions:
 
@@ -500,6 +530,15 @@ Fork/EIP surfaces (invariant 6 — all merged DORMANT):
   `TestReinforceMultiClientPreCompilesTest`'s expected Rules-field list. This corrects the v1.17.0 drop of
   upstream's `AmsterdamTime`/`IsAmsterdam` — enabling Amsterdam later is now "set `AmsterdamBlock`", like the
   other dormant forks.
+  - **Correction (review of #2325, 2026-09-07):** the block-based conversion carried the field, `IsAmsterdam`
+    and `Rules` but dropped three surfaces upstream wires for `AmsterdamTime` — `CheckConfigForkOrder`'s
+    ordered list (upstream `params/config.go:954`), `checkCompatible`'s `isForkTimestampIncompatible` call
+    (upstream `:1125`) and the startup banner (upstream `:690`). Left as-is, a genesis could schedule
+    `amsterdamBlock` before `osakaBlock` and pass validation, and moving it under an already-synced head
+    would produce no `ConfigCompatError` and no rewind. Latent while nil on every preset, live the moment any
+    config sets it. Added all three plus `TestAmsterdamForkGuards`, which fails on each surface without the
+    fix. `ChainConfig.Block(forks.Amsterdam)` was examined and deliberately left alone — the method has no
+    callers in the tree.
 - **EIP-7843 SLOTNUM (#33589, `f811bfe4f`)** — opcode `SLOTNUM (0x4b)` + `opSlotNum` + `enable7843` wired into
   `newAmsterdamInstructionSet`, instantiated (`amsterdamInstructionSet` var in `jump_table.go`) and dispatched
   (`case evm.chainRules.IsAmsterdam` in `core/vm/evm.go`, above `IsOsaka`). Header field `SlotNumber *uint64
@@ -542,6 +581,66 @@ copylocks); `go mod tidy` clean (go.mod diff = c-kzg bump + olekukonko removal).
 `core/vm` (guards), `core/` (182s), `miner` (196s), `eth/protocols/eth`, `trie`, `core/txpool/blobpool`,
 `consensus/beacon`. No leftover conflict markers.
 
+## v1.17.1 MILESTONE-TIER VERIFICATION (2026-09-08)
+
+Run against `ppatil-upstream-v1.17.1` at `4570596178` plus the uncommitted N-1/N/N+1
+boundary test. First milestone-tier run recorded in this ledger; every prior entry is
+per-batch tier only.
+
+**Use the repo's own contract, not `go test ./...`.** `make test` is:
+
+```
+GODEBUG=cgocheck=0 go test -p 1 --timeout 30m -cover -short $(go list ./... | grep -v go-ethereum/cmd/)
+```
+
+Three differences from a naive `go test ./...`, each of which manufactures a false failure:
+
+- **`cmd/` is excluded** from `TESTALL`. Running it surfaces `cmd/evm`, `cmd/geth` and
+  `cmd/devp2p/internal/ethtest` failures that are not part of the suite. The `cmd/evm`
+  t8n entries on this ledger's known-red list came from a run that was outside the
+  contract in the same way.
+- **`--timeout 30m`**, not the 10m default. `core` takes 604s under parallel package
+  execution and is killed at 600s; the failure presents as a `subfetcher` goroutine dump
+  that reads like a prefetcher deadlock and is not one.
+- **`-p 1`** (serial packages). With it, `core` finishes in 175s — the 604s figure was
+  CPU contention, not a slow test.
+
+Result: **144 packages pass, 0 failures, no panics, exit 0.** Slowest: `miner` 220s,
+`core` 175s, `rlp/rlpgen` 141s, `eth/fetcher` 137s.
+
+Adjacent finding (pre-existing, not introduced by this stack): `miner/worker.go:913`
+calls `w.chainConfig.Bor.CalculatePeriod(...)` with no nil check on `w.chainConfig.Bor`,
+so `newWorkLoop` segfaults on a chain config with no Bor section. Identical on `develop`,
+on the base branch and here (3 occurrences each). Unreachable in Bor production, where
+`Bor` is always set; it only shows up in the excluded `cmd/` tests, which spin standard
+Ethereum configs. Left alone — out of scope for a sync PR.
+
+### Known-red list, corrected (2026-09-08)
+
+Every batch entry above carries a "pre-existing failures" line. Re-checked at
+`6b4820b5e` against the actual test contract; none of the three recurring
+entries is currently a known-red.
+
+- **`core/state TestPDBMethodParity` — RESOLVED, remove.** Passes. The standing
+  TODO ("milestone fix = add `DumpBinTrieLeaves` to `pdbExemptMethods`") is
+  stale; the `#32445` drift no longer reproduces. It was already observed
+  passing during the Hampi/#2319 cascade and has stayed green since.
+- **`core/vm TestAbortDuringJump` / `TestInterruptDuringExecution` — not
+  currently failing.** They are *not* skipped by `-short` (0 skips), and ran
+  20/20 green over 10 iterations. The flakiness recorded above predates the
+  cascade that brought in `2ea9635db` ("core, miner: fix pipeline race test
+  failures", #2371), which is a plausible cause but has not been confirmed.
+  Worth leaving on a watch list rather than a known-red list.
+- **`cmd/evm TestT8n` / `TestEvmRun` / `TestEVMTracing` / `TestEvmRunRegEx` —
+  category error, remove.** `cmd/` is excluded from `TESTALL`, so these were
+  never part of the suite. They were recorded as accepted breakage from runs
+  made outside the contract. The t8n golden drift is real if you run those
+  packages directly; it simply is not something this sync gates on, and listing
+  it as known-red trains reviewers to expect red where the suite is in fact
+  green.
+
+The milestone-tier run is **144 packages, 0 failures**. Treat any red as new
+until shown otherwise.
 ## v1.17.2 batch 1/4 (`00540f946`, plan row 16) — merged `09c784851` — MILESTONE-OPENING
 
 Branch `ppatil-upstream-v1.17.2` cut from `ppatil-upstream-v1.17.1` @ `dbae0f4a1` (stacked).
@@ -559,7 +658,9 @@ Adopted:
   upstream verbatim and ported every Bor call site: `core/state_processor.go` (kept Bor's
   `interruptCtx` guard and state-sync/Finalize block), `core/parallel_state_processor.go` (3
   BlockSTM per-task pools — V1/V2 keep their own `totalUsedGas`, so parallel accounting is
-  untouched), `miner/worker.go` (`gasPool.Set(gp)` snapshot-restore;
+  untouched **pre-Amsterdam only**: post-Amsterdam the serial path reports the refund-excluded
+  `gp.Used()` while V2 keeps summing the post-refund `result.UsedGas`, so `header.GasUsed`
+  diverges and V2 validation fails — POS-3717, found in review of #2328), `miner/worker.go` (`gasPool.Set(gp)` snapshot-restore;
   `env.header.GasUsed = env.gasPool.Used()` replaces the out-parameter),
   `cmd/evm/internal/t8ntool`, `core/state_prefetcher.go`, `eth/{state_accessor,tracers}`,
   `internal/ethapi`, `accounts/abi/bind/backends`, `tests/bor/helper.go` + 8 test files.
@@ -1106,7 +1207,7 @@ Two whole features deferred; they account for 18 of the 30 conflicts.
 | `core/types/block.go` | #34064 | 2 | Import combine — `core/types/bal` alongside Bor's `log`/`params`. |
 | `core/rawdb/schema.go` | #34064 | 2 | Combine — Bor's block-prune keys plus upstream's `accessListPrefix`. |
 | `core/state/database.go`, `database_history.go` | #33102 | 1 | Kept Bor's `Snapshot()` and Bor's removal of `Commit` (Bor uses `CommitWithUpdate`); **re-added upstream's `Iteratee()` implementations**, which the hunk-level take-ours dropped while the interface retained the method. Build caught it. |
-| `core/state/dump.go` | #33102 | 2 | Took upstream's `acctIt.Hash().Hex()`; Bor's `it.Key` was stale once the iterator refactor auto-merged around it. |
+| `core/state/dump.go` | #33102 | 2 | Took upstream's `acctIt.Hash().Hex()`; Bor's `it.Key` was stale once the iterator refactor auto-merged around it. **Operator-visible consequence, raised in review on #2340 and accepted rather than patched:** the same restructure changed how a `DumpConfig.Start` shorter than 32 bytes is read. Bor previously seeked with the raw bytes (`tr.NodeIterator(conf.Start)`), treating them as a high-order prefix; upstream converts first via `common.BytesToHash`, which left-pads — so a 2-byte start `0x1234` becomes `0x00…001234` and iteration begins near the bottom of the keyspace instead of roughly 7% in. Reaches `debug_accountRange` and `geth dump --start`. Paging is unaffected: `nextKey` is always a full 32-byte `acctIt.Hash().Bytes()`, so a client using the returned `Next` round-trips through `BytesToHash` unchanged, and only a hand-written short prefix differs — returning an earlier page rather than wrong account data. The file has zero divergence from upstream at `04e40995d`, so a local fix would be a Bor-only divergence that conflicts on every future batch touching it. To be reported upstream. |
 | `core/rawdb/accessors_chain_test.go` | #34064 | 2 | Append collision, base empty — combined both sides. Ours' two closing braces were consumed by the conflict split; `gofmt` caught the imbalance. |
 | `eth/api_backend.go` | #33102 | 1 | Kept Bor's `Miner()`/`StartMining()`; took upstream's `StateAtBlock` without `reexec`. |
 | `eth/tracers/api.go` (6 hunks), `api_test.go` | #33102, #34093 | 1 | Dropped all `reexec` plumbing; kept Bor's `gasBailout` field and develop's `canonicalTxTraceEnv` refactor. |
@@ -1224,3 +1325,94 @@ behavior is exercised by unit tests over synthetic size limits, not end to end.
 Upstream's `cmd/devp2p/internal/ethtest` eth/70 suite and its regenerated
 testdata were not ported (geth-chain-specific; Bor's ethtest is already a
 known-failing surface).
+
+
+## Stack review cycle — #2337 to #2342 (2026-09-18 to 2026-09-21)
+
+Recorded here, at the top of the worked stack, rather than split across four
+branches: `ledger.md` exists on each of them, and editing it in four places is
+what produced the one real conflict in the #2341 cascade. This branch merges
+last, so a single entry lands the record exactly once.
+
+Each PR's own fixes are in its commits; what this section keeps is the reasoning
+a release reader cannot reconstruct from a diff.
+
+### Review findings, and which were actually ours
+
+Eleven AI review comments across three PRs — #2342 drew none — resolving to ten distinct findings, the #2341 deadlock having been reported by both bots. The one row below marked with a dash was found while classifying the others, not reported. The provenance check — diff the file
+against the upstream commit before reasoning about the code — decided most of
+them, and is worth repeating on every batch: on a merge PR the majority of what
+gets flagged is upstream's own code arriving verbatim.
+
+| PR | Finding | Provenance | Outcome |
+| -- | ------- | ---------- | ------- |
+| #2337 | `gasCallCodeIntrinsic` missing a static-context value check | upstream verbatim (`fd859638b`), ignore-blank-lines diff empty | declined — and wrong on merit: EIP-214 bars value-bearing `CALL` in a static context, not `CALLCODE`, which transfers nothing (`EVM.CallCode` calls `CanTransfer` and never `Transfer`) |
+| #2337 | Parallel subtests race on a shared `*params.ChainConfig` | **ours** — the beacon-path `TerminalTotalDifficulty` write is a Bor adaptation absent from upstream's `715bf8e81e` | **fixed** `4f5215b4d` — six table cases pass the `params.AllDevChainProtocolChanges` global and every subtest is parallel; failed on every `-race` run, seven subtests. Copy before writing, as `supply_test.go` does |
+| #2337 | `Copy`'s doc comment orphaned above `IsNewContract` | ours — merge artifact | **fixed** `4f5215b4d` |
+| #2337 | — | ours, found while classifying | **fixed** `ccf36bb47` — `NonceChangeSelfdestruct` reached the enum without the stringer being regenerated, so `String()` returned `"NonceChangeReason(7)"`. `statedb_hooked.go` is its only emitter and this PR is what makes it reachable |
+| #2340 | `historyIndexer.prune` drops signals while busy | upstream verbatim (differs only by import grouping) | declined |
+| #2340 | `HistoricDB.Iteratee` returns `not implemented` | upstream's body verbatim; only the doc comment was truncated in the re-add | declined, comment **restored** `73ca1197b`. Also unreachable: `debug_accountRange` resolves via `StateAt`, and no `HistoricState` caller reaches `DumpToCollector` |
+| #2340 | `debug_accountRange` short-`start` semantics changed | upstream verbatim (`04e40995d`), zero divergence | **accepted, not patched** — see the `core/state/dump.go` row in batch 20 |
+| #2341 | `receiptBufferLock` held across `dispatchRequest` | upstream has the same shape (`965bd6b6a` peer.go:409) | **fixed** `b246fba3d` — a genuine deadlock: `dispatchRequest` waits on the peer's only dispatcher goroutine, which takes the same lock on its cancel path for any request. An unrelated header timeout wedges the peer for its lifetime. `RequestReceipts` already unlocks first, which settles it as an oversight |
+| #2341 | `ServiceGetReceiptsQuery70` unbounded lookups | upstream's eth/70 omits the bound too; only its 68/69 keep it | **fixed** `b246fba3d` — every skip path continues without touching the size or count counters, so a query of misses costs one DB lookup per hash. Fixed despite being upstream's, because the function is already a Bor rewrite, so the bound hardens our own code rather than diverging a converged file |
+| #2341 | `validateLastBlockReceipt` comment claims the buffer survives the error path | ours — upstream has no such comment | **fixed** `b246fba3d` — `bufferReceipts` deletes the entry for any error returned there |
+| #2341 | eth/70 response not index-aligned with its query | upstream's design verbatim, on both halves | **recorded, not fixed** — see the EIP-7975 row in `needs-wiring.md`. Bor is already the safer of the two: our `bufferReceipts` bounds-checks an index upstream reads unguarded |
+
+The rule the two "fixed despite being upstream's" rows follow: fix when the
+repair changes nothing a peer or caller can observe (lock discipline, an
+internal bound), record when it would change wire behaviour or a converged
+file's bytes.
+
+### Cascades
+
+Pre-cascading the next PR before its base merges, rather than after, was applied
+four times and held up each time — every PR in the stack now sits `MERGEABLE`
+ahead of its turn instead of conflicting when its base lands. The work is not
+duplicated: #2337's pre-merge cascade moved 176 files and the post-merge hop was
+then only 10.
+
+Two things this cycle taught, both cheap and both learned the hard way:
+
+- **`go build ./...` is not sufficient verification for a cascade.** It does not
+  compile test files. The #2341 cascade passed it and still failed to build:
+  `eth.NewPeer` had gained a `*params.ChainConfig` parameter for the eth/70
+  Amsterdam gate, and the merge brought in newer test files from `develop` still
+  calling the four-argument form — eight call sites across six files, no
+  conflict raised. `go test -run XXXNOMATCH ./...` compiles test packages and
+  takes seconds. This is the ledger's own "Bor-only twin scan" gap arriving in
+  the opposite direction: new code depending on an *old* signature.
+- **`-short` skips every witness test.** The #2342 conflict was in
+  `core/stateless/encoding.go`, so the full suite passing proved nothing about
+  the code actually resolved. Run the regeneration tests non-short when witness
+  code moves.
+
+### #2342 — the witness encoding resolution
+
+The only conflict in the #2342 cascade, and the only one in this cycle escalated
+to the operator rather than resolved directly, witness encoding being a
+deliberate Bor divergence.
+
+It read as an import collision (`errors` against `bytes`) but each side had
+added its import for a different change, and both were wanted:
+
+- the base contributes WIT2's lexicographic sort of state entries in
+  `EncodeRLP`. This is load-bearing, not tidiness: the WIT2 BP-signed witness
+  hash is computed independently by the producer and every verifier and must
+  match byte for byte, and Go's randomized map iteration would otherwise encode
+  the same witness differently on each call. It also contributes the corrected
+  note that bytecodes are not in the wire format — verifiers read them through
+  `CodeRoutingDB`.
+- this branch contributes upstream's #34683 empty-witness check in
+  `FromExtWitness`.
+
+Combined, keeping all three imports. Checked before asking: `NewWitness` builds
+a header-less witness only when its `chain` argument is nil, and all three
+production call sites in `core/blockchain.go` pass a real chain, so the new
+rejection is unreachable from the live path.
+
+Verified non-short, since `-short` skips all of it: `TestV2WitnessRegenerationAllBlocks`,
+`TestV2WitnessRegenerationPipelinedSRCAllBlocks`, and
+`TestV2WitnessRegenerationPipelinedSRCChained` at 222 of 222 mainnet pairs with
+no skips — the last being the test that failed on every pair before #2180's
+completeness fix, and the one that exercises exactly the producer/consumer byte
+identity the sort protects.

@@ -530,17 +530,25 @@ func (p *Peer) RequestReceipts(hashes []common.Hash, gasUsed []uint64, numbers [
 // request ID of the original request so the buffered partial lists stay addressable.
 func (p *Peer) requestPartialReceipts(id uint64) error {
 	p.receiptBufferLock.Lock()
-	defer p.receiptBufferLock.Unlock()
 
 	// Do not re-request for a stale request.
 	buffer, ok := p.receiptBuffer[id]
 	if !ok {
+		p.receiptBufferLock.Unlock()
 		return nil
 	}
 	lastBlock := len(buffer.list) - 1
 	lastReceipt := buffer.list[lastBlock].Len()
-	hashes := buffer.request[lastBlock:]
+	// Copy rather than alias: the dispatch below runs unlocked, and a concurrent
+	// cancellation may drop this buffer entry while it is in flight.
+	hashes := append(GetReceiptsRequest(nil), buffer.request[lastBlock:]...)
+	p.receiptBufferLock.Unlock()
 
+	// Dispatch with the lock released. dispatchRequest blocks until this peer's
+	// single dispatcher goroutine services the request, and that goroutine takes
+	// receiptBufferLock on its cancellation path — holding the lock across the
+	// dispatch lets the two wait on each other and wedges the peer permanently.
+	// RequestReceipts unlocks before dispatching for the same reason.
 	return p.dispatchRequest(&Request{
 		id:   id,
 		sink: nil,
@@ -661,7 +669,7 @@ func (p *Peer) validateLastBlockReceipt(receiptLists []*ReceiptList69, id uint64
 	// A Bor block carries one extra receipt for the state-sync transaction, which burns
 	// no gas and so is not accounted for by the gas-derived bound.
 	if uint64(previousTxs+lastReceipts.Len()) > gasUsed/minTxGas+1 {
-		// Drop the response but keep the buffer, the peer may still be dropped instead.
+		// bufferReceipts drops the buffer entry for any error returned here.
 		return 0, errors.New("total number of tx exceeded limit")
 	}
 	logSize, err := lastReceipts.LogsSize()
@@ -676,9 +684,8 @@ func (p *Peer) validateLastBlockReceipt(receiptLists []*ReceiptList69, id uint64
 }
 
 // RequestTxs fetches a batch of transactions from a remote node.
-func (p *Peer) RequestTxs(hashes []common.Hash) error {
-	p.Log().Trace("Fetching batch of transactions", "count", len(hashes))
-	id := rand.Uint64()
+func (p *Peer) RequestTxs(id uint64, hashes []common.Hash) error {
+	p.Log().Debug("Fetching batch of transactions", "count", len(hashes))
 
 	requestTracker.Track(p.id, p.version, GetPooledTransactionsMsg, PooledTransactionsMsg, id)
 	return p2p.Send(p.rw, GetPooledTransactionsMsg, &GetPooledTransactionsPacket{
