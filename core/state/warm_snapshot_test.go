@@ -380,13 +380,12 @@ func TestSnapshotStateDatabaseVerkleTrieOperations(t *testing.T) {
 	db := newSnapshotStateDatabase(cdb, NewWarmSnapshot(nil))
 
 	accountTrie, err := db.OpenTrie(types.EmptyRootHash)
-	require.NoError(t, err)
-	require.NotNil(t, accountTrie)
+	require.ErrorIs(t, err, errWarmSnapshotUBT)
+	require.Nil(t, accountTrie)
 
-	self := accountTrie
-	storageTrie, err := db.OpenStorageTrie(types.EmptyRootHash, common.HexToAddress("0x1"), types.EmptyRootHash, self)
-	require.NoError(t, err)
-	require.Same(t, self, storageTrie)
+	storageTrie, err := db.OpenStorageTrie(types.EmptyRootHash, common.HexToAddress("0x1"), types.EmptyRootHash, nil)
+	require.ErrorIs(t, err, errWarmSnapshotUBT)
+	require.Nil(t, storageTrie)
 }
 
 func TestSnapshotNodeDatabaseForwardingAndErrors(t *testing.T) {

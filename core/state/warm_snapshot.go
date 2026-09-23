@@ -17,12 +17,19 @@
 package state
 
 import (
+	"errors"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/triedb/database"
 )
+
+// errWarmSnapshotUBT is returned when the MPT-only warm-snapshot wrapper is
+// opened over a unified-binary-trie database. Pipelined SRC is MPT-only, so
+// failing here beats silently opening an MPT trie over binary state.
+var errWarmSnapshotUBT = errors.New("warm snapshot: UBT scheme is not supported")
 
 var (
 	// These meters are intentionally emitted from snapshotNodeReader.Node so
@@ -245,7 +252,7 @@ func (db *snapshotStateDatabase) Reader(stateRoot common.Hash) (Reader, error) {
 
 func (db *snapshotStateDatabase) OpenTrie(root common.Hash) (Trie, error) {
 	if db.triedb.IsUBT() {
-		return db.MPTDatabase.OpenTrie(root)
+		return nil, errWarmSnapshotUBT
 	}
 	tr, err := trie.NewStateTrie(trie.StateTrieID(root), db.nodeDB)
 	if err != nil {
@@ -256,7 +263,7 @@ func (db *snapshotStateDatabase) OpenTrie(root common.Hash) (Trie, error) {
 
 func (db *snapshotStateDatabase) OpenStorageTrie(stateRoot common.Hash, address common.Address, root common.Hash, self Trie) (Trie, error) {
 	if db.triedb.IsUBT() {
-		return self, nil
+		return nil, errWarmSnapshotUBT
 	}
 	tr, err := trie.NewStateTrie(trie.StorageTrieID(stateRoot, crypto.Keccak256Hash(address.Bytes()), root), db.nodeDB)
 	if err != nil {

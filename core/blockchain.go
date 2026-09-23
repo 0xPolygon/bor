@@ -721,6 +721,12 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 	if err != nil {
 		return nil, err
 	}
+	// The chain's state database is always an MPTDatabase (see bc.statedb
+	// below); selecting UBTDatabase per block is the fork-boundary plumbing
+	// not yet adopted. Refuse rather than compute MPT roots over binary state.
+	if enableVerkle {
+		return nil, errors.New("unified binary trie at genesis is not supported")
+	}
 	triedb := triedb.NewDatabase(db, cfg.triedbConfig(enableVerkle))
 
 	// Write the supplied genesis to the database if it has not been initialized
