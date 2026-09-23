@@ -117,13 +117,25 @@ func (c *Consumer) CompletePreconf(block *types.Block, receipts types.Receipts, 
 		c.clearCanonicalHandoff(block)
 	}
 	logs, invalidations, removed, matched := c.pendingStore().completePreconf(block, receipts, committed)
+	var withdrawn []pendingInvalidation
 	if committed && block != nil {
+		if !matched {
+			// Anything built past this height on another parent is dead the
+			// moment block commits; withdraw it before the head write rather
+			// than serve it until the next reconcile.
+			var withdrawnLogs []*types.Log
+			withdrawnLogs, withdrawn = c.pendingStore().withdrawOffCanonical(block)
+			logs = append(logs, withdrawnLogs...)
+		}
 		if c.index != nil {
 			preconfCanonicalReceipts.Inc(int64(c.index.CountCanonical(block)))
 			// Matched receipts stay until the head write makes the canonical
 			// ones readable (PreconfHeadWritten); mismatched ones go now.
 			if !matched {
 				c.index.EvictThrough(block.NumberU64())
+				if len(withdrawn) > 0 {
+					c.index.ClearFrom(withdrawn[0].number)
+				}
 			}
 		}
 		if matched {
@@ -136,6 +148,7 @@ func (c *Consumer) CompletePreconf(block *types.Block, receipts types.Receipts, 
 	}
 	c.enqueuePendingLogs(logs)
 	c.publishMu.Unlock()
+	c.pendingStore().writeInvalidations(withdrawn)
 	if committed && len(invalidations) > 0 {
 		return invalidations[0].reason
 	}

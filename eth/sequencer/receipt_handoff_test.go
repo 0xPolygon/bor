@@ -5,7 +5,10 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/trie"
 )
 
 // receiptProbeConsumer checks, at each step canonical import takes through
@@ -94,5 +97,61 @@ func TestPreconfReadAnchorRequiresLandingMatch(t *testing.T) {
 	consumer.landing.Store(nil)
 	if consumer.pendingReadAnchorValid(anchor) {
 		t.Fatal("anchor stayed valid after the landing cleared")
+	}
+}
+
+// A committed block that did not match its preconfirmation withdraws, before
+// the head write, the entry above it built on another parent; one that
+// extends the canonical block survives.
+func TestMismatchedCompletionWithdrawsStaleDescendants(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		stale bool
+	}{{"stale parent is withdrawn", true}, {"canonical parent is kept", false}} {
+		t.Run(test.name, func(t *testing.T) {
+			h := partialReuseHarness(t)
+			consumer := h.session().consumer
+			block, receipts := buildPartialReuseBlock(t, h, types.Transactions{h.transfer(t, 0)})
+			number := block.NumberU64() + 1
+			parent := block.Hash()
+			if test.stale {
+				parent = common.Hash{0xde, 0xad}
+			}
+
+			tx := h.transfer(t, 1)
+			child := types.NewBlock(&types.Header{Number: new(big.Int).SetUint64(number), ParentHash: parent, GasLimit: block.GasLimit()},
+				&types.Body{Transactions: types.Transactions{tx}}, nil, trie.NewStackTrie(nil))
+			receipt := &types.Receipt{TxHash: tx.Hash(), BlockNumber: new(big.Int).SetUint64(number), Logs: []*types.Log{}}
+			stateDB, err := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+			if err != nil {
+				t.Fatalf("state: %v", err)
+			}
+			store := consumer.pendingStore()
+			if !store.publish(child, types.Receipts{receipt}, stateDB, nil, store.begin(number, parent, false)) {
+				t.Fatal("publish child")
+			}
+			consumer.index.Add(tx, receipt)
+
+			if reason := consumer.CompletePreconf(block, receipts, true); reason != "" {
+				t.Fatalf("completion with no entry at the height returned %q", reason)
+			}
+			_, _, served := consumer.LookupPreconf(tx.Hash())
+			store.mu.RLock()
+			entry := store.entries[pendingKey{number: number, parent: parent}]
+			store.mu.RUnlock()
+			records := rawdb.ReadInvalidPreconfsInRange(h.chain.DB(), number, number)
+			if test.stale {
+				if served || entry != nil {
+					t.Fatalf("child of a rejected parent survived completion: served=%v entry=%v", served, entry != nil)
+				}
+				if len(records) != 1 || records[0].Reason != "reorged" {
+					t.Fatalf("invalidations at %d = %+v, want one reorged", number, records)
+				}
+				return
+			}
+			if !served || entry == nil || len(records) != 0 {
+				t.Fatalf("child of the canonical block was withdrawn: served=%v entry=%v invalidations=%+v", served, entry != nil, records)
+			}
+		})
 	}
 }

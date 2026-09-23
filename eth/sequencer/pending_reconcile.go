@@ -15,6 +15,14 @@ func (s *PendingStore) reconcileThroughMemory(number uint64, canonical func(uint
 	return append(removed, futureLogs...), append(invalidations, futureInvalidations...)
 }
 
+// withdrawOffCanonical drops the entries above block that do not extend it,
+// lowest height first, as the post-import reconcile would.
+func (s *PendingStore) withdrawOffCanonical(block *types.Block) ([]*types.Log, []pendingInvalidation) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reconcileFutureLocked(block.NumberU64(), block)
+}
+
 func (s *PendingStore) reconcileCanonicalLocked(number uint64, canonical func(uint64) *types.Block, canonicalReceipts func(common.Hash) types.Receipts) ([]*types.Log, []pendingInvalidation) {
 	var removed []*types.Log
 	var invalidations []pendingInvalidation
