@@ -336,6 +336,8 @@ type LegacyPool struct {
 	rebroadcastAckFeed event.Feed
 	lastRebroadcast    map[common.Hash]time.Time // Track last rebroadcast time per tx hash
 	isTxPrivate        func(common.Hash) bool
+
+	stranded strandedState // Pending chains blocked by an unminable head
 }
 
 type txpoolResetRequest struct {
@@ -366,6 +368,7 @@ func New(config Config, chain BlockChain, options ...func(pool *LegacyPool)) *Le
 		initDoneCh:      make(chan struct{}),
 		filteredAddrs:   make(map[common.Address]struct{}),
 		lastRebroadcast: make(map[common.Hash]time.Time),
+		stranded:        newStrandedState(),
 	}
 	pool.priced = newPricedList(pool.all)
 
@@ -501,6 +504,7 @@ func (pool *LegacyPool) loop() {
 				// Any old enough should be removed
 				pool.removeTx(hash, true, true)
 			}
+			pool.evictStranded(start)
 			evictTimer.Update(time.Since(start))
 			pool.mu.Unlock()
 		}
@@ -987,6 +991,13 @@ func (pool *LegacyPool) add(tx *types.Transaction, async bool) (replaced bool, e
 		invalidTxMeter.Mark(1)
 		stage0Duration = time.Since(stage0Time)
 		return false, err
+	}
+	// Refuse evicted stranded transactions that are still unminable
+	if pool.isEvictedStranded(tx) {
+		log.Trace("Discarding evicted stranded transaction", "hash", hash, "gasFeeCap", tx.GasFeeCap())
+		underpricedTxMeter.Mark(1)
+		stage0Duration = time.Since(stage0Time)
+		return false, txpool.ErrUnderpriced
 	}
 	// already validated by this point
 	from, _ := types.Sender(pool.signer, tx)
