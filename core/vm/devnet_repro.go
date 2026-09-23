@@ -3,6 +3,7 @@
 package vm
 
 import (
+	"os"
 	"sync"
 	"time"
 
@@ -68,7 +69,15 @@ var (
 // current call site (not yet run) — see SlowOpcodeGap's doc comment for why
 // a recorded gap ends up attributed to the PREVIOUS call's op/pc/contract,
 // not this call's.
+// devnetOpcodeGapsEnabled gates the per-opcode tracer: it takes a sync.Map
+// swap on every opcode, which is measurable contention on the parallel EVM,
+// so it is off unless BOR_OPCODE_GAPS is set.
+var devnetOpcodeGapsEnabled = os.Getenv("BOR_OPCODE_GAPS") != ""
+
 func devnetTraceOpcodeGapForKey(key *uint64, op OpCode, pc uint64, contractAddr common.Address) {
+	if !devnetOpcodeGapsEnabled {
+		return
+	}
 	now := time.Now()
 	entry := devnetOpcodeGapEntry{At: now, Op: op, Pc: pc, Contract: contractAddr}
 

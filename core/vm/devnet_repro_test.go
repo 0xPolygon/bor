@@ -16,6 +16,10 @@ import (
 // devnetTraceOpcodeGapForKey's doc comment for the attribution reasoning),
 // and that a fast gap is not recorded.
 func TestDevnetTraceOpcodeGapLogsSlowGap(t *testing.T) {
+	prev := devnetOpcodeGapsEnabled
+	devnetOpcodeGapsEnabled = true
+	t.Cleanup(func() { devnetOpcodeGapsEnabled = prev })
+
 	// Deferred minor (final review): this test previously asserted against
 	// the shared global devnetSlowGaps without draining first, which is
 	// safe only by accident of test ordering — drain up front so this test
