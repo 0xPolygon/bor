@@ -109,7 +109,7 @@ type dialScheduler struct {
 	// Everything below here belongs to loop and
 	// should only be accessed by code on the loop goroutine.
 	dialing   map[enode.ID]*dialTask // active tasks
-	peers     map[enode.ID]struct{}  // all connected peers
+	peers     map[enode.ID]bool      // all connected peers, true if we dialed them
 	dialPeers int                    // current number of dialed peers
 
 	// The static map tracks all static dial tasks. The subset of usable static dial tasks
@@ -140,7 +140,7 @@ type dialConfig struct {
 	log            log.Logger
 	clock          mclock.Clock
 	rand           *mrand.Rand
-	jailChecker    func(enode.ID) bool // function to check if peer is jailed
+	jailedUntil    func(enode.ID) (mclock.AbsTime, bool) // returns the unban time if the peer is jailed
 }
 
 func (cfg dialConfig) withDefaults() dialConfig {
@@ -175,7 +175,7 @@ func newDialScheduler(config dialConfig, it enode.Iterator, setupFunc dialSetupF
 		dnsLookupFunc: net.DefaultResolver.LookupNetIP,
 		dialing:       make(map[enode.ID]*dialTask),
 		static:        make(map[enode.ID]*dialTask),
-		peers:         make(map[enode.ID]struct{}),
+		peers:         make(map[enode.ID]bool),
 		doneCh:        make(chan *dialTask),
 		nodesIn:       make(chan *enode.Node),
 		addStaticCh:   make(chan *enode.Node),
@@ -239,9 +239,10 @@ func (d *dialScheduler) loop(it enode.Iterator) {
 
 loop:
 	for {
-		// Launch new dials if slots are available.
+		// Launch new dials if slots are available. Static dials have their own
+		// budget so that dynamic peers cannot starve them.
+		d.startStaticDials(d.freeStaticDialSlots())
 		slots := d.freeDialSlots()
-		slots -= d.startStaticDials(slots)
 		if slots > 0 {
 			nodesCh = d.nodesIn
 		} else {
@@ -265,11 +266,12 @@ loop:
 			d.doneSinceLastLog++
 
 		case c := <-d.addPeerCh:
-			if c.is(dynDialedConn) || c.is(staticDialedConn) {
+			dialed := c.is(dynDialedConn) || c.is(staticDialedConn)
+			if dialed {
 				d.dialPeers++
 			}
 			id := c.node.ID()
-			d.peers[id] = struct{}{}
+			d.peers[id] = dialed
 			// Remove from static pool because the node is now connected.
 			task := d.static[id]
 			if task != nil && task.staticPoolIndex >= 0 {
@@ -291,11 +293,8 @@ loop:
 			if exists {
 				continue loop
 			}
-			task := newDialTask(node, staticDialedConn)
-			d.static[id] = task
-			if d.checkDial(node) == nil {
-				d.addToStaticPool(task)
-			}
+			d.static[id] = newDialTask(node, staticDialedConn)
+			d.updateStaticPool(id)
 
 		case node := <-d.remStaticCh:
 			id := node.ID()
@@ -389,6 +388,22 @@ func (d *dialScheduler) freeDialSlots() int {
 	return free
 }
 
+// freeStaticDialSlots returns the number of free slots for static dials. Unlike
+// freeDialSlots, only dialed peers that are configured as static count against the
+// budget, so a full set of dynamic peers cannot keep static nodes from being dialed.
+func (d *dialScheduler) freeStaticDialSlots() int {
+	staticPeers := 0
+	for id := range d.static {
+		if d.peers[id] {
+			staticPeers++
+		}
+	}
+
+	slots := min((d.maxDialPeers-staticPeers)*2, d.maxActiveDials)
+
+	return slots - len(d.dialing)
+}
+
 // checkDial returns an error if node n should not be dialed.
 func (d *dialScheduler) checkDial(n *enode.Node) error {
 	if n.ID() == d.self {
@@ -396,8 +411,10 @@ func (d *dialScheduler) checkDial(n *enode.Node) error {
 	}
 
 	// Check if peer is jailed (blocks outbound connections)
-	if d.jailChecker != nil && d.jailChecker(n.ID()) {
-		return errJailed
+	if d.jailedUntil != nil {
+		if _, jailed := d.jailedUntil(n.ID()); jailed {
+			return errJailed
+		}
 	}
 
 	if n.IPAddr().IsValid() && n.TCP() == 0 {
@@ -440,8 +457,22 @@ func (d *dialScheduler) startStaticDials(n int) (started int) {
 // updateStaticPool attempts to move the given static dial back into staticPool.
 func (d *dialScheduler) updateStaticPool(id enode.ID) {
 	task, ok := d.static[id]
-	if ok && task.staticPoolIndex < 0 && d.checkDial(task.dest()) == nil {
+	if !ok || task.staticPoolIndex >= 0 {
+		return
+	}
+
+	switch err := d.checkDial(task.dest()); {
+	case err == nil:
 		d.addToStaticPool(task)
+	case errors.Is(err, errJailed):
+		// Nothing else wakes the pool when the jail expires, so park the node in
+		// the dial history until its unban time. expireHistory will call back here.
+		until, jailed := d.jailedUntil(id)
+		if !jailed {
+			// The jail expired after checkDial, retry on the next history expiry.
+			until = d.clock.Now()
+		}
+		d.history.add(string(id.Bytes()), until)
 	}
 }
 
