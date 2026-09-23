@@ -120,10 +120,16 @@ func (c *Consumer) CompletePreconf(block *types.Block, receipts types.Receipts, 
 	if committed && block != nil {
 		if c.index != nil {
 			preconfCanonicalReceipts.Inc(int64(c.index.CountCanonical(block)))
-			c.index.EvictThrough(block.NumberU64())
+			// Matched receipts stay until the head write makes the canonical
+			// ones readable (PreconfHeadWritten); mismatched ones go now.
+			if !matched {
+				c.index.EvictThrough(block.NumberU64())
+			}
 		}
 		if matched {
-			c.reconciled.Store(types.CopyHeader(block.Header()))
+			header := types.CopyHeader(block.Header())
+			c.reconciled.Store(header)
+			c.landing.Store(header)
 		}
 	} else if removed && block != nil && c.index != nil {
 		c.index.ClearFrom(block.NumberU64())
@@ -135,6 +141,22 @@ func (c *Consumer) CompletePreconf(block *types.Block, receipts types.Receipts, 
 	}
 	c.pendingStore().writeInvalidations(invalidations)
 	return ""
+}
+
+// PreconfHeadWritten runs once block is the canonical head: its receipts are
+// now served by the canonical path, so the preconf copies can go.
+func (c *Consumer) PreconfHeadWritten(block *types.Block) {
+	// Only a matched completion defers its eviction to here; every other
+	// canonical write has nothing left to drop.
+	if block == nil || c.landing.Load() == nil {
+		return
+	}
+	c.publishMu.Lock()
+	if c.index != nil {
+		c.index.EvictThrough(block.NumberU64())
+	}
+	c.landing.Store(nil)
+	c.publishMu.Unlock()
 }
 
 func (c *Consumer) markCanonicalHandoff(block *types.Block) {

@@ -65,7 +65,15 @@ type Consumer struct {
 	worker       atomic.Pointer[preconfWorker]
 	reconciled   atomic.Pointer[types.Header]
 	handoff      atomic.Pointer[types.Header]
-	sealVerify   atomic.Bool
+
+	// landing is the matched block CompletePreconf reconciled to while its
+	// head write is still in flight. Until PreconfHeadWritten clears it, the
+	// head lags reconciled by exactly this block, and preconf reads stay
+	// anchored on it so a receipt never disappears between the two. A parent
+	// check alone is not enough: after a rewind, reconciled can sit one block
+	// past the head with no import in flight.
+	landing    atomic.Pointer[types.Header]
+	sealVerify atomic.Bool
 
 	// watching reports whether a stream session has reached the store tip.
 	// Only then does a canonical head mean this node saw whatever the store

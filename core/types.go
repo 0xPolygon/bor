@@ -90,3 +90,10 @@ type PreconfPrefixProvider interface {
 type PreconfImportObserver interface {
 	BeginPreconfImport(block *types.Block)
 }
+
+// PreconfHeadObserver learns when a block CompletePreconf committed has become
+// the canonical head, so the provider can drop what it served for that block
+// only once canonical reads can answer for it.
+type PreconfHeadObserver interface {
+	PreconfHeadWritten(block *types.Block)
+}

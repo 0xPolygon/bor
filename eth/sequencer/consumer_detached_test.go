@@ -60,10 +60,13 @@ func newDetachedSessionFixture(t *testing.T) *detachedSessionFixture {
 	if pending := s.consumer.PendingBlock(); pending != nil {
 		t.Fatalf("suffix checkpoint resurrected pending block %v", pending)
 	}
-	for _, tx := range txs {
-		if _, _, ok := s.consumer.index.Lookup(tx.Hash()); ok {
-			t.Fatalf("transaction %s remained in the speculative index", tx.Hash())
-		}
+	// The matched prefix stays served until the head write evicts it; the
+	// detached suffix must never be.
+	if _, _, ok := s.consumer.index.Lookup(txs[0].Hash()); !ok {
+		t.Fatal("matched prefix receipt left the index before the head write")
+	}
+	if _, _, ok := s.consumer.index.Lookup(txs[1].Hash()); ok {
+		t.Fatal("detached suffix transaction entered the speculative index")
 	}
 	return &detachedSessionFixture{h: h, s: s, block: block, txs: txs, stream: stream}
 }

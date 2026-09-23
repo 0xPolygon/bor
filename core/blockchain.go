@@ -5122,6 +5122,9 @@ func (bc *BlockChain) emitPostWriteEvents(block *types.Block, receipts []*types.
 		invalidation = bc.preconfProvider.CompletePreconf(block, receipts, true)
 	}
 	bc.writeHeadBlockWithPreconf(block, invalidation)
+	if observer, ok := bc.preconfProvider.(PreconfHeadObserver); ok {
+		observer.PreconfHeadWritten(block)
+	}
 	bc.chainFeed.Send(ChainEvent{
 		Header:       block.Header(),
 		Receipts:     receipts,
