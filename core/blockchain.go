@@ -2595,7 +2595,7 @@ func (bc *BlockChain) writeBlockAndSetHead(block *types.Block, receipts []*types
 			bc.chainHeadFeed.Send(ChainHeadEvent{Header: block.Header()})
 			// BOR state sync feed related changes
 			bc.stateSyncMu.RLock()
-			for _, data := range bc.GetStateSync() {
+			for _, data := range bc.getStateSyncLocked() {
 				bc.stateSyncFeed.Send(StateSyncEvent{Data: data})
 			}
 			bc.stateSyncMu.RUnlock()
@@ -3356,7 +3356,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 
 		// BOR state sync feed related changes
 		bc.stateSyncMu.RLock()
-		for _, data := range bc.GetStateSync() {
+		for _, data := range bc.getStateSyncLocked() {
 			bc.stateSyncFeed.Send(StateSyncEvent{Data: data})
 		}
 		bc.stateSyncMu.RUnlock()
