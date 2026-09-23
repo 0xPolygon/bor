@@ -467,12 +467,12 @@ func (d *dialScheduler) updateStaticPool(id enode.ID) {
 	case errors.Is(err, errJailed):
 		// Nothing else wakes the pool when the jail expires, so park the node in
 		// the dial history until its unban time. expireHistory will call back here.
-		until, jailed := d.jailedUntil(id)
-		if !jailed {
-			// The jail expired after checkDial, retry on the next history expiry.
-			until = d.clock.Now()
+		if until, jailed := d.jailedUntil(id); jailed {
+			d.history.add(string(id.Bytes()), until)
+		} else {
+			// The jail expired after checkDial, so try again right away.
+			d.updateStaticPool(id)
 		}
-		d.history.add(string(id.Bytes()), until)
 	}
 }
 
