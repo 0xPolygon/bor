@@ -313,3 +313,53 @@ func TestMismatchedCompletionWithdrawsStaleDescendants(t *testing.T) {
 		})
 	}
 }
+
+func TestMismatchedCompletionPersistsCurrentAndDescendantInvalidations(t *testing.T) {
+	h := partialReuseHarness(t)
+	block, _ := buildPartialReuseBlock(t, h, types.Transactions{h.transfer(t, 0)})
+	consumer := h.session().consumer
+	store := consumer.pendingStore()
+	parent := block.ParentHash()
+	first := block.NumberU64()
+	for number := first; number <= first+2; number++ {
+		fixture := newPendingRPCCoverageFixture(t, number, parent)
+		generation := store.begin(number, parent, false)
+		if !store.publish(fixture.block, types.Receipts{fixture.receipt}, fixture.state, nil, generation) {
+			t.Fatalf("publish preconfirmation %d", number)
+		}
+		consumer.index.Add(fixture.tx, fixture.receipt)
+		parent = fixture.block.Hash()
+	}
+	probe := &receiptProbeConsumer{Consumer: consumer}
+	probe.beforeHeadWrite = func() {
+		if records := rawdb.ReadInvalidPreconfsInRange(h.chain.DB(), first, first); len(records) != 0 {
+			t.Fatalf("current invalidation written before the head batch: %+v", records)
+		}
+		records := rawdb.ReadInvalidPreconfsInRange(h.chain.DB(), first+1, first+2)
+		if len(records) != 2 {
+			t.Fatalf("descendant invalidations before head write = %+v, want both", records)
+		}
+		for _, record := range records {
+			if record.Reason != "reorged" {
+				t.Errorf("descendant %d reason = %q", record.Number, record.Reason)
+			}
+		}
+	}
+	h.chain.SetPreconfProvider(probe)
+	if _, err := h.chain.InsertChain(types.Blocks{block}, false); err != nil {
+		t.Fatalf("insert canonical block: %v", err)
+	}
+	records := rawdb.ReadInvalidPreconfsInRange(h.chain.DB(), first, first+2)
+	if len(records) != 3 {
+		t.Fatalf("persisted invalidations = %+v, want current block and both descendants", records)
+	}
+	for _, record := range records {
+		want := "reorged"
+		if record.Number == first {
+			want = "canonical_mismatch"
+		}
+		if record.Reason != want {
+			t.Errorf("invalidation at %d = %q, want %q", record.Number, record.Reason, want)
+		}
+	}
+}
