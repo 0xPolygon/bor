@@ -1997,6 +1997,7 @@ func (api *TransactionAPI) GetRawTransactionByHash(ctx context.Context, hash com
 // GetTransactionReceipt returns the transaction receipt for the given transaction hash.
 func (api *TransactionAPI) GetTransactionReceipt(ctx context.Context, hash common.Hash) (map[string]interface{}, error) {
 	var borTx bool
+	head := api.b.CurrentHeader()
 	found, tx, blockHash, blockNumber, index := api.b.GetCanonicalTransaction(hash)
 	if !found {
 		tx, blockHash, blockNumber, index, _ = api.b.GetBorBlockTransaction(ctx, hash)
@@ -2008,7 +2009,20 @@ func (api *TransactionAPI) GetTransactionReceipt(ctx context.Context, hash commo
 	}
 
 	if tx == nil {
-		return preconfTransactionReceipt(api.b, hash), nil
+		if result := preconfTransactionReceipt(api.b, hash); result != nil {
+			return result, nil
+		}
+		// The preconf copy is evicted only after the canonical write, so a
+		// miss after the head moved can mean the block landed since the
+		// lookup above. A hit there is a regular transaction, not a bor one.
+		if api.b.CurrentHeader() == head {
+			return nil, nil
+		}
+		found, tx, blockHash, blockNumber, index = api.b.GetCanonicalTransaction(hash)
+		if !found {
+			return nil, nil
+		}
+		borTx = false
 	}
 
 	var (

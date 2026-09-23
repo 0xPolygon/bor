@@ -116,25 +116,74 @@ func (c *Consumer) CompletePreconf(block *types.Block, receipts types.Receipts, 
 	} else {
 		c.clearCanonicalHandoff(block)
 	}
-	logs, invalidations, removed, matched := c.pendingStore().completePreconf(block, receipts, committed)
+	store := c.pendingStore()
+	logs, invalidations, removed, matched := store.completePreconf(block, receipts, committed)
+	var writes []pendingInvalidation
 	if committed && block != nil {
-		if c.index != nil {
-			preconfCanonicalReceipts.Inc(int64(c.index.CountCanonical(block)))
-			c.index.EvictThrough(block.NumberU64())
-		}
-		if matched {
-			c.reconciled.Store(types.CopyHeader(block.Header()))
-		}
+		var withdrawnLogs []*types.Log
+		withdrawnLogs, writes = c.settleCommittedLocked(store, block, matched)
+		logs = append(logs, withdrawnLogs...)
 	} else if removed && block != nil && c.index != nil {
 		c.index.ClearFrom(block.NumberU64())
 	}
+	// A committed block's own invalidation goes back to the caller, which
+	// writes it in the head batch; everything else is written here.
+	reason := ""
+	if committed && len(invalidations) > 0 {
+		reason = invalidations[0].reason
+	} else {
+		writes = append(writes, invalidations...)
+	}
 	c.enqueuePendingLogs(logs)
 	c.publishMu.Unlock()
-	if committed && len(invalidations) > 0 {
-		return invalidations[0].reason
+	store.writeInvalidations(writes)
+	return reason
+}
+
+// settleCommittedLocked updates the read state for a block canonical import
+// has just committed, before its head write. A matched block keeps its
+// receipts until PreconfHeadWritten; for one that did not match, it returns
+// the removed logs and invalidations of the entries built on another parent.
+// The caller holds publishMu.
+func (c *Consumer) settleCommittedLocked(store *PendingStore, block *types.Block, matched bool) ([]*types.Log, []pendingInvalidation) {
+	if c.index != nil {
+		preconfCanonicalReceipts.Inc(int64(c.index.CountCanonical(block)))
 	}
-	c.pendingStore().writeInvalidations(invalidations)
-	return ""
+	if matched {
+		// landing first: a reader that sees the new reconciled marker must
+		// also see that its head write is in flight.
+		header := types.CopyHeader(block.Header())
+		c.landing.Store(header)
+		c.reconciled.Store(header)
+		return nil, nil
+	}
+	// Anything built past this height on another parent is dead the moment
+	// block commits; withdraw it before the head write rather than serve it
+	// until the next reconcile.
+	logs, withdrawn, staleFrom := store.withdrawOffCanonical(block)
+	if c.index != nil {
+		c.index.EvictThrough(block.NumberU64())
+		if staleFrom != 0 {
+			c.index.ClearFrom(staleFrom)
+		}
+	}
+	return logs, withdrawn
+}
+
+// PreconfHeadWritten runs once block is the canonical head: its receipts are
+// now served by the canonical path, so the preconf copies can go.
+func (c *Consumer) PreconfHeadWritten(block *types.Block) {
+	// Only a matched completion defers its eviction to here; every other
+	// canonical write has nothing left to drop.
+	if block == nil || c.landing.Load() == nil {
+		return
+	}
+	c.publishMu.Lock()
+	if c.index != nil {
+		c.index.EvictThrough(block.NumberU64())
+	}
+	c.landing.Store(nil)
+	c.publishMu.Unlock()
 }
 
 func (c *Consumer) markCanonicalHandoff(block *types.Block) {

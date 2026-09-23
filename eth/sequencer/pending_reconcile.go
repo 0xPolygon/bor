@@ -7,12 +7,29 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
-func (s *PendingStore) reconcileThroughMemory(number uint64, canonical func(uint64) *types.Block, canonicalReceipts func(common.Hash) types.Receipts) ([]*types.Log, []pendingInvalidation) {
+// reconcileThroughMemory settles the entries at or below number against the
+// canonical chain and drops the ones above it that no longer extend it.
+// staleFrom is the lowest height above number whose entry does not extend the
+// chain (0 when none): its preconf receipts and everything above are dead,
+// including entries still importing, which are only marked here.
+func (s *PendingStore) reconcileThroughMemory(number uint64, canonical func(uint64) *types.Block, canonicalReceipts func(common.Hash) types.Receipts) ([]*types.Log, []pendingInvalidation, uint64) {
 	s.mu.Lock()
 	removed, invalidations := s.reconcileCanonicalLocked(number, canonical, canonicalReceipts)
-	futureLogs, futureInvalidations := s.reconcileFutureLocked(number, canonical(number))
+	futureLogs, futureInvalidations, staleFrom := s.reconcileFutureLocked(number, canonical(number))
 	s.mu.Unlock()
-	return append(removed, futureLogs...), append(invalidations, futureInvalidations...)
+	return append(removed, futureLogs...), append(invalidations, futureInvalidations...), staleFrom
+}
+
+// withdrawOffCanonical drops the entries above block that do not extend it,
+// lowest height first, as the post-import reconcile would. staleFrom is as
+// for reconcileThroughMemory.
+func (s *PendingStore) withdrawOffCanonical(block *types.Block) ([]*types.Log, []pendingInvalidation, uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.entries) == 0 {
+		return nil, nil, 0
+	}
+	return s.reconcileFutureLocked(block.NumberU64(), block)
 }
 
 func (s *PendingStore) reconcileCanonicalLocked(number uint64, canonical func(uint64) *types.Block, canonicalReceipts func(common.Hash) types.Receipts) ([]*types.Log, []pendingInvalidation) {
@@ -38,10 +55,11 @@ func (s *PendingStore) reconcileCanonicalLocked(number uint64, canonical func(ui
 	return removed, invalidations
 }
 
-func (s *PendingStore) reconcileFutureLocked(number uint64, anchor *types.Block) ([]*types.Log, []pendingInvalidation) {
+func (s *PendingStore) reconcileFutureLocked(number uint64, anchor *types.Block) ([]*types.Log, []pendingInvalidation, uint64) {
 	keys := s.futureKeysLocked(number)
 	var removed []*types.Log
 	var invalidations []pendingInvalidation
+	var staleFrom uint64
 	expectedNumber := number + 1
 	expectedParent, broken := futureAnchor(anchor)
 	for _, key := range keys {
@@ -58,13 +76,16 @@ func (s *PendingStore) reconcileFutureLocked(number uint64, anchor *types.Block)
 			expectedParent = viewBlock.Hash()
 			continue
 		}
+		if staleFrom == 0 {
+			staleFrom = key.number
+		}
 		entryLogs, invalidation := s.reconcileBrokenFutureLocked(key, entry)
 		removed = append(removed, entryLogs...)
 		if invalidation != nil {
 			invalidations = append(invalidations, *invalidation)
 		}
 	}
-	return removed, invalidations
+	return removed, invalidations, staleFrom
 }
 
 func (s *PendingStore) futureKeysLocked(number uint64) []pendingKey {

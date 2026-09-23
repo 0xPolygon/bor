@@ -681,8 +681,12 @@ func TestRejectedPrefixWaitsForCanonicalComparison(t *testing.T) {
 		t.Fatal("matching canonical prefix was marked invalid")
 	}
 	s.consumer.CompletePreconf(block, receipts, true)
+	if _, _, ok := s.consumer.index.Lookup(txs[0].Hash()); !ok {
+		t.Fatal("committed prefix receipt left the index before the head write")
+	}
+	s.consumer.PreconfHeadWritten(block)
 	if _, _, ok := s.consumer.index.Lookup(txs[0].Hash()); ok {
-		t.Fatal("committed prefix receipt remained indexed")
+		t.Fatal("committed prefix receipt remained indexed after the head write")
 	}
 	if pending, _, _ := s.consumer.Pending(); pending != nil {
 		t.Fatalf("committed prefix remained pending: %v", pending)
@@ -732,6 +736,7 @@ func TestPrefixClaimSerializesWorkerPublication(t *testing.T) {
 		if pending, _, _ := s.consumer.Pending(); pending != nil {
 			t.Fatalf("attempt %d retained pending block %v", attempt, pending)
 		}
+		s.consumer.PreconfHeadWritten(block)
 		if _, _, ok := s.consumer.index.Lookup(txs[1].Hash()); ok {
 			t.Fatalf("attempt %d retained suffix receipt", attempt)
 		}

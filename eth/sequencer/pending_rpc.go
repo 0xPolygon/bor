@@ -162,7 +162,7 @@ func (c *Consumer) pendingReadAnchor() (*types.Header, bool) {
 		c.reconciled.CompareAndSwap(nil, head)
 		marker = c.reconciled.Load()
 	}
-	if marker == nil || marker != head && marker.Hash() != head.Hash() {
+	if marker == nil || !c.anchorsHead(marker, head) {
 		return nil, false
 	}
 	return marker, true
@@ -172,8 +172,31 @@ func (c *Consumer) pendingReadAnchorValid(anchor *types.Header) bool {
 	if c.chain == nil {
 		return true
 	}
-	head := c.chain.CurrentBlock()
-	return anchor != nil && c.reconciled.Load() == anchor && (head == anchor || head.Hash() == anchor.Hash())
+	if anchor == nil {
+		return false
+	}
+	marker := c.reconciled.Load()
+	if marker == nil {
+		return false
+	}
+	// A read that began on the parent stays current when CompletePreconf
+	// matches its child mid-read: that child's receipts are kept until the
+	// head write, so what the read saw is still what the chain commits.
+	if marker != anchor && (c.landing.Load() != marker || marker.ParentHash != anchor.Hash()) {
+		return false
+	}
+	return c.anchorsHead(marker, c.chain.CurrentBlock())
+}
+
+// anchorsHead reports whether preconf reads anchored on marker are current
+// for head: marker is the head, or marker is the matched child whose head
+// write is still in flight (see landing).
+func (c *Consumer) anchorsHead(marker, head *types.Header) bool {
+	headHash := head.Hash()
+	if marker == head || marker.Hash() == headHash {
+		return true
+	}
+	return c.landing.Load() == marker && marker.ParentHash == headHash
 }
 
 // PendingSnapshot limits both concurrent copies and concurrently retained RPC

@@ -65,7 +65,15 @@ type Consumer struct {
 	worker       atomic.Pointer[preconfWorker]
 	reconciled   atomic.Pointer[types.Header]
 	handoff      atomic.Pointer[types.Header]
-	sealVerify   atomic.Bool
+
+	// landing is the matched block CompletePreconf reconciled to while its
+	// head write is still in flight. Until PreconfHeadWritten clears it, the
+	// head lags reconciled by exactly this block, and preconf reads stay
+	// anchored on it so a receipt never disappears between the two. A parent
+	// check alone is not enough: after a rewind, reconciled can sit one block
+	// past the head with no import in flight.
+	landing    atomic.Pointer[types.Header]
+	sealVerify atomic.Bool
 
 	// watching reports whether a stream session has reached the store tip.
 	// Only then does a canonical head mean this node saw whatever the store
@@ -454,19 +462,17 @@ func (c *Consumer) finalizedHeight() (uint64, bool) {
 
 func (c *Consumer) reconcileCanonicalHeadLocked() []pendingInvalidation {
 	head := c.chain.CurrentBlock()
+	// A delayed head event can still see the parent after matched completion
+	// removed the landing block from the store. Reconciling that parent would
+	// break the read anchor and mistake valid descendants for a gap.
+	if landing := c.landing.Load(); landing != nil && landing.ParentHash == head.Hash() {
+		return nil
+	}
 	number := head.Number.Uint64()
 	c.index.EvictThrough(number)
-	logs, invalidations := c.pendingStore().reconcileThroughMemory(number, c.chain.GetBlockByNumber, c.chain.GetReceiptsByHash)
-	var clearFrom *uint64
-	for _, invalidation := range invalidations {
-		if invalidation.number <= number || (clearFrom != nil && invalidation.number >= *clearFrom) {
-			continue
-		}
-		height := invalidation.number
-		clearFrom = &height
-	}
-	if clearFrom != nil {
-		c.index.ClearFrom(*clearFrom)
+	logs, invalidations, staleFrom := c.pendingStore().reconcileThroughMemory(number, c.chain.GetBlockByNumber, c.chain.GetReceiptsByHash)
+	if staleFrom != 0 {
+		c.index.ClearFrom(staleFrom)
 	}
 	c.reconciled.Store(head)
 	c.clearCanonicalHandoffThrough(head)
