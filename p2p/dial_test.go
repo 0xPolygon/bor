@@ -411,6 +411,72 @@ func TestDialSchedStaticRedialAfterJail(t *testing.T) {
 	})
 }
 
+// oneShotJail reports a peer as jailed to the first query after arm is called,
+// and as free to every query after that. It simulates a jail expiring between
+// checkDial and the unban time lookup in updateStaticPool.
+type oneShotJail struct {
+	mu    sync.Mutex
+	armed bool
+}
+
+func (j *oneShotJail) arm() {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.armed = true
+}
+
+func (j *oneShotJail) jailedUntil(enode.ID) (mclock.AbsTime, bool) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if !j.armed {
+		return 0, false
+	}
+	j.armed = false
+	return mclock.AbsTime(time.Hour), true
+}
+
+// This test checks that a static node is not lost when its jail expires between
+// checkDial and the unban time lookup.
+func TestDialSchedStaticRedialJailExpiryRace(t *testing.T) {
+	t.Parallel()
+
+	var (
+		jail = new(oneShotJail)
+		node = newNode(uintID(0x01), "127.0.0.1:30303")
+	)
+	config := dialConfig{
+		maxActiveDials: 1,
+		maxDialPeers:   1,
+		jailedUntil:    jail.jailedUntil,
+	}
+	runDialTest(t, config, []dialTestRound{
+		// t=0: the static node is dialed.
+		{
+			update:       func(d *dialScheduler) { d.addStatic(node) },
+			wantNewDials: []*enode.Node{node},
+		},
+		// t=16s: the dial succeeds.
+		{
+			succeeded: []enode.ID{uintID(0x01)},
+		},
+		// t=32s and t=48s: the initial dial history entry expires at t=35s. The
+		// scheduler handles that asynchronously and queries the jail, so give it
+		// a full round before arming to keep it from consuming the query below.
+		{},
+		{},
+		// t=64s: the next jail query reports the peer as jailed, then free.
+		{
+			update: func(d *dialScheduler) { jail.arm() },
+		},
+		// t=80s: the peer disconnects. checkDial sees it jailed, but the lookup
+		// that follows sees the jail expired, so it is dialed again right away.
+		{
+			peersRemoved: []enode.ID{uintID(0x01)},
+			wantNewDials: []*enode.Node{node},
+		},
+	})
+}
+
 // This test checks that past dials are not retried for some time.
 func TestDialSchedHistory(t *testing.T) {
 	t.Parallel()
