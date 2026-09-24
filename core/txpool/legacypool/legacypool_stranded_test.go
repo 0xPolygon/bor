@@ -16,10 +16,8 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 )
 
-// The fee values below mirror the mainnet incident of 2026-09-19: an account
-// signed its head transactions with a 40 gwei fee cap while the base fee was
-// ~15 gwei, the base fee then recovered to ~248 gwei and the whole nonce chain
-// behind the head was stranded in the pending set indefinitely.
+// Fee values: an account signs its head transactions with a 40 gwei fee cap
+// while the base fee is ~15 gwei, then the base fee returns to ~248 gwei.
 var (
 	strandedLowBaseFee  = big.NewInt(15 * params.GWei)
 	strandedHighBaseFee = big.NewInt(248 * params.GWei)
@@ -149,10 +147,14 @@ func TestStrandedPendingChainEvicted(t *testing.T) {
 	}
 
 	// Base fee recovers above the head's fee cap: the head can never be mined.
+	evictedBefore := strandedEvictionMeter.Snapshot().Count()
 	setStrandedBaseFee(pool, strandedHighBaseFee)
 
 	if pending, queued := waitForCounts(pool, bot, 0, 0, 4*strandedTestLifetime); pending != 0 || queued != 0 {
 		t.Fatalf("stranded account not evicted after lifetime: pending %d, queued %d", pending, queued)
+	}
+	if got := strandedEvictionMeter.Snapshot().Count() - evictedBefore; got != strandedChainLength {
+		t.Fatalf("stranded eviction meter = %d, want %d", got, strandedChainLength)
 	}
 	if pending, _ := accountCounts(pool, honest); pending != 5 {
 		t.Fatalf("healthy account pending = %d, want 5", pending)
@@ -236,8 +238,12 @@ func TestStrandedEvictedTxNotReaccepted(t *testing.T) {
 
 	// Re-announced evicted head: rejected as underpriced so the fetcher also
 	// stops requesting it.
+	rejectedBefore := strandedRejectMeter.Snapshot().Count()
 	if err := pool.addRemoteSync(txs[0]); !errors.Is(err, txpool.ErrUnderpriced) {
 		t.Fatalf("re-adding evicted head: err = %v, want %v", err, txpool.ErrUnderpriced)
+	}
+	if got := strandedRejectMeter.Snapshot().Count() - rejectedBefore; got != 1 {
+		t.Fatalf("stranded reject meter = %d, want 1", got)
 	}
 	// A payable tail transaction may come back, but only as a gapped (queued)
 	// transaction bounded by the queue limits and lifetime.
@@ -392,5 +398,69 @@ func TestStrandedNoBaseFee(t *testing.T) {
 	evictAt(t0.Add(strandedTestLifetime + 2*time.Millisecond))
 	if pending, _ := accountCounts(pool, addr); pending != 1 {
 		t.Fatalf("stale stranded clock survived a base fee gap: pending %d, want 1", pending)
+	}
+}
+
+// TestStrandedDropBookkeeping checks the pool side state that dropping a
+// stranded account must release: rebroadcast tracking, priced heap stale
+// accounting and the pending gauge.
+func TestStrandedDropBookkeeping(t *testing.T) {
+	pool := setupManualStrandedPool(t)
+	evictAt := strandedEvictor(pool)
+
+	botKey, bot := fundedKey(t, pool)
+	honestKey, _ := fundedKey(t, pool)
+	txs := addStrandedChain(t, pool, botKey)
+	addHealthyChain(t, pool, honestKey, 5)
+
+	pool.mu.Lock()
+	pool.lastRebroadcast[txs[strandedHeadCount].Hash()] = time.Now()
+	pool.mu.Unlock()
+	gaugeBefore := pendingGauge.Snapshot().Value()
+
+	setStrandedBaseFee(pool, strandedHighBaseFee)
+	t0 := time.Now()
+	evictAt(t0)
+	evictAt(t0.Add(strandedTestLifetime + time.Millisecond))
+	if pending, queued := accountCounts(pool, bot); pending != 0 || queued != 0 {
+		t.Fatalf("stranded account not evicted: pending %d, queued %d", pending, queued)
+	}
+
+	pool.mu.RLock()
+	defer pool.mu.RUnlock()
+	if _, ok := pool.lastRebroadcast[txs[strandedHeadCount].Hash()]; ok {
+		t.Fatal("rebroadcast tracking kept for an evicted transaction")
+	}
+	// Priced heap entries minus stale entries must equal the live transactions.
+	heaped := len(pool.priced.urgent.list) + len(pool.priced.floating.list)
+	if live := heaped - int(pool.priced.stales.Load()); live != pool.all.Count() {
+		t.Fatalf("priced heap live entries = %d, want %d", live, pool.all.Count())
+	}
+	if got := gaugeBefore - pendingGauge.Snapshot().Value(); got != strandedChainLength {
+		t.Fatalf("pending gauge dropped by %d, want %d", got, strandedChainLength)
+	}
+}
+
+func TestUnminable(t *testing.T) {
+	key, _ := crypto.GenerateKey()
+	baseFee := big.NewInt(100 * params.GWei)
+	tests := []struct {
+		name   string
+		feeCap int64
+		tip    int64
+		minTip uint64
+		want   bool
+	}{
+		{"fee cap below base fee", 99, 30, 25, true},
+		{"fee cap equals base fee, no min tip", 100, 30, 0, false},
+		{"effective tip below min tip", 110, 30, 25, true},
+		{"effective tip at min tip", 125, 30, 25, false},
+		{"tip cap limits effective tip", 200, 20, 25, true},
+	}
+	for _, tt := range tests {
+		tx := dynamicFeeTx(0, 21_000, big.NewInt(tt.feeCap*params.GWei), big.NewInt(tt.tip*params.GWei), key)
+		if got := unminable(tx, baseFee, uint256.NewInt(tt.minTip*params.GWei)); got != tt.want {
+			t.Errorf("%s: unminable = %v, want %v", tt.name, got, tt.want)
+		}
 	}
 }

@@ -30,10 +30,7 @@ type strandedHead struct {
 }
 
 // strandedState tracks accounts whose pending chain is blocked by a head that
-// no block producer would include at the current base fee. Pending
-// transactions are otherwise never expired: Lifetime only applies to the
-// queue, so a gapless chain behind such a head stays in the pool until the
-// base fee drops enough for the head to be mined.
+// block producers would not include at the current base fee.
 type strandedState struct {
 	heads   map[common.Address]strandedHead
 	evicted lru.BasicLRU[common.Hash, time.Time] // evicted txs that were unminable
@@ -46,11 +43,9 @@ func newStrandedState() strandedState {
 	}
 }
 
-// unminable reports whether a block producer would never include tx at the
-// given base fee: either its fee cap is below the base fee, or its effective tip
-// is below the minimum tip producers enforce (see the MinTip filter in Pending).
-// The fee cap check is explicit because EffectiveGasTipIntCmp falls back to the
-// tip cap when the fee cap is below the base fee.
+// unminable reports whether a block producer would not include tx at the given
+// base fee: its fee cap is below the base fee, or its effective tip is below
+// the minimum tip producers enforce.
 func unminable(tx *types.Transaction, baseFee *big.Int, minTip *uint256.Int) bool {
 	if tx.GasFeeCap().Cmp(baseFee) < 0 {
 		return true
@@ -69,9 +64,7 @@ func (pool *LegacyPool) strandedBaseFee() *big.Int {
 }
 
 // evictStranded drops the whole pending chain of every account whose head has
-// been unminable at the current base fee for longer than the pool lifetime.
-// On a chain whose base fee is held near a target, such a head will not become
-// payable again, and everything behind it can never be mined.
+// been unminable for longer than the pool lifetime.
 //
 // Must be called with pool.mu held.
 func (pool *LegacyPool) evictStranded(now time.Time) {
@@ -83,17 +76,7 @@ func (pool *LegacyPool) evictStranded(now time.Time) {
 	minTip := pool.gasTip.Load()
 
 	for addr, list := range pool.pending {
-		first := list.txs.firstElement()
-		if first == nil || !unminable(first, baseFee, minTip) {
-			delete(pool.stranded.heads, addr)
-			continue
-		}
-		stranded, ok := pool.stranded.heads[addr]
-		if !ok || stranded.nonce != first.Nonce() {
-			pool.stranded.heads[addr] = strandedHead{nonce: first.Nonce(), since: now}
-			continue
-		}
-		if now.Sub(stranded.since) <= pool.config.Lifetime {
+		if !pool.strandedExpired(addr, list, baseFee, minTip, now) {
 			continue
 		}
 		for _, tx := range list.txs.flatten() {
@@ -102,13 +85,30 @@ func (pool *LegacyPool) evictStranded(now time.Time) {
 			}
 		}
 		pool.dropPendingAccount(addr, list)
-		delete(pool.stranded.heads, addr)
 	}
 	for addr := range pool.stranded.heads {
 		if _, ok := pool.pending[addr]; !ok {
 			delete(pool.stranded.heads, addr)
 		}
 	}
+}
+
+// strandedExpired updates the stranded clock of addr and reports whether its
+// head has been unminable for longer than the pool lifetime.
+//
+// Must be called with pool.mu held.
+func (pool *LegacyPool) strandedExpired(addr common.Address, list *list, baseFee *big.Int, minTip *uint256.Int, now time.Time) bool {
+	first := list.txs.firstElement()
+	if first == nil || !unminable(first, baseFee, minTip) {
+		delete(pool.stranded.heads, addr)
+		return false
+	}
+	stranded, ok := pool.stranded.heads[addr]
+	if !ok || stranded.nonce != first.Nonce() {
+		pool.stranded.heads[addr] = strandedHead{nonce: first.Nonce(), since: now}
+		return false
+	}
+	return now.Sub(stranded.since) > pool.config.Lifetime
 }
 
 // dropPendingAccount removes every pending transaction of addr in one pass.
@@ -136,18 +136,12 @@ func (pool *LegacyPool) dropPendingAccount(addr common.Address, list *list) {
 }
 
 // isEvictedStranded reports whether tx was evicted as stranded within the
-// lifetime and is still unminable at the current base fee. Rejecting it as
-// underpriced keeps peers from pushing it straight back, and lets the tx
-// fetcher remember it as underpriced too.
+// lifetime and is still unminable, so it is refused as underpriced.
 //
 // Must be called with pool.mu held.
 func (pool *LegacyPool) isEvictedStranded(tx *types.Transaction) bool {
 	evictedAt, ok := pool.stranded.evicted.Peek(tx.Hash())
-	if !ok {
-		return false
-	}
-	if time.Since(evictedAt) > pool.config.Lifetime {
-		pool.stranded.evicted.Remove(tx.Hash())
+	if !ok || time.Since(evictedAt) > pool.config.Lifetime {
 		return false
 	}
 	baseFee := pool.strandedBaseFee()
