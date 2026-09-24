@@ -40,8 +40,9 @@ const (
 const ProtocolName = "eth"
 
 // ProtocolVersions are the supported versions of the `eth` protocol (first
-// is primary).
-var ProtocolVersions = []uint{ETH70, ETH69, ETH68}
+// is primary). ETH70 is implemented but not advertised yet, so it is never
+// negotiated with a peer.
+var ProtocolVersions = []uint{ETH69, ETH68}
 
 // protocolLengths are the number of implemented message corresponding to
 // different protocol versions.
