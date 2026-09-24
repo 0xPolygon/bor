@@ -245,6 +245,12 @@ func TestStrandedEvictedTxNotReaccepted(t *testing.T) {
 	if got := strandedRejectMeter.Snapshot().Count() - rejectedBefore; got != 1 {
 		t.Fatalf("stranded reject meter = %d, want 1", got)
 	}
+	// The same slot re-signed with a slightly higher, still unminable fee
+	// cap is refused too.
+	resigned := dynamicFeeTx(0, 100_000, new(big.Int).Add(strandedHeadFeeCap, common.Big1), strandedTip, botKey)
+	if err := pool.addRemoteSync(resigned); !errors.Is(err, txpool.ErrUnderpriced) {
+		t.Fatalf("re-signed evicted head: err = %v, want %v", err, txpool.ErrUnderpriced)
+	}
 	// A payable tail transaction may come back, but only as a gapped (queued)
 	// transaction bounded by the queue limits and lifetime.
 	if err := pool.addRemoteSync(txs[strandedHeadCount]); err != nil {
@@ -474,7 +480,7 @@ func TestStrandedEvictedMemorySizedToPool(t *testing.T) {
 	state := newStrandedState(config)
 
 	for i := range 200 {
-		state.evicted.Add(common.BigToHash(big.NewInt(int64(i))), time.Now())
+		state.evicted.Add(strandedKey{nonce: uint64(i)}, time.Now())
 	}
 	if got := state.evicted.Len(); got != 128 {
 		t.Fatalf("evicted memory holds %d entries, want GlobalSlots+GlobalQueue = 128", got)

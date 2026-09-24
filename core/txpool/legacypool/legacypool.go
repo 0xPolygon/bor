@@ -997,15 +997,16 @@ func (pool *LegacyPool) add(tx *types.Transaction, async bool) (replaced bool, e
 		stage0Duration = time.Since(stage0Time)
 		return false, err
 	}
+	// already validated by this point
+	from, _ := types.Sender(pool.signer, tx)
+
 	// Refuse evicted stranded transactions that are still unminable
-	if pool.isEvictedStranded(tx) {
+	if pool.isEvictedStranded(from, tx) {
 		log.Trace("Discarding evicted stranded transaction", "hash", hash, "gasFeeCap", tx.GasFeeCap())
 		underpricedTxMeter.Mark(1)
 		stage0Duration = time.Since(stage0Time)
 		return false, txpool.ErrUnderpriced
 	}
-	// already validated by this point
-	from, _ := types.Sender(pool.signer, tx)
 
 	// If the address is not yet known, request exclusivity to track the account
 	// only by this subpool until all transactions are evicted

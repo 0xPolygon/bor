@@ -29,7 +29,15 @@ type strandedHead struct {
 // block producers would not include at the current base fee.
 type strandedState struct {
 	heads   map[common.Address]strandedHead
-	evicted lru.BasicLRU[common.Hash, time.Time] // evicted txs that were unminable
+	evicted lru.BasicLRU[strandedKey, time.Time] // sender and nonce of evicted unminable txs
+}
+
+// strandedKey identifies an evicted transaction by sender and nonce, so any
+// still-unminable transaction for the same slot is refused, not just the same
+// signed transaction.
+type strandedKey struct {
+	addr  common.Address
+	nonce uint64
 }
 
 // newStrandedState sizes the evicted-tx memory to the pool capacity, so a
@@ -38,7 +46,7 @@ type strandedState struct {
 func newStrandedState(config Config) strandedState {
 	return strandedState{
 		heads:   make(map[common.Address]strandedHead),
-		evicted: lru.NewBasicLRU[common.Hash, time.Time](int(config.GlobalSlots + config.GlobalQueue)),
+		evicted: lru.NewBasicLRU[strandedKey, time.Time](int(config.GlobalSlots + config.GlobalQueue)),
 	}
 }
 
@@ -80,7 +88,7 @@ func (pool *LegacyPool) evictStranded(now time.Time) {
 		}
 		for _, tx := range list.txs.flatten() {
 			if unminable(tx, baseFee, minTip) {
-				pool.stranded.evicted.Add(tx.Hash(), now)
+				pool.stranded.evicted.Add(strandedKey{addr, tx.Nonce()}, now)
 			}
 		}
 		pool.dropPendingAccount(addr, list)
@@ -134,12 +142,13 @@ func (pool *LegacyPool) dropPendingAccount(addr common.Address, list *list) {
 	}
 }
 
-// isEvictedStranded reports whether tx was evicted as stranded within the
-// lifetime and is still unminable, so it is refused as underpriced.
+// isEvictedStranded reports whether a transaction from the same sender and
+// nonce was evicted as stranded within the lifetime and tx is still unminable,
+// so it is refused as underpriced.
 //
 // Must be called with pool.mu held.
-func (pool *LegacyPool) isEvictedStranded(tx *types.Transaction) bool {
-	evictedAt, ok := pool.stranded.evicted.Peek(tx.Hash())
+func (pool *LegacyPool) isEvictedStranded(from common.Address, tx *types.Transaction) bool {
+	evictedAt, ok := pool.stranded.evicted.Peek(strandedKey{from, tx.Nonce()})
 	if !ok || time.Since(evictedAt) > pool.config.Lifetime {
 		return false
 	}
