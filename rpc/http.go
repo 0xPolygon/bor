@@ -31,7 +31,6 @@ import (
 	"sync"
 	"time"
 
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 )
 
@@ -352,9 +351,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	connInfo.HTTP.UserAgent = r.Header.Get("User-Agent")
 	ctx := r.Context()
 	ctx = context.WithValue(ctx, peerInfoContextKey{}, connInfo)
-
-	// Extract trace context from incoming headers.
-	ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.HeaderCarrier(r.Header))
 
 	// All checks passed, create a codec that reads directly from the request body
 	// until EOF, writes the response to w, and orders the server to process a

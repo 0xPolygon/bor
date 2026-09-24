@@ -40,8 +40,9 @@ const (
 const ProtocolName = "eth"
 
 // ProtocolVersions are the supported versions of the `eth` protocol (first
-// is primary).
-var ProtocolVersions = []uint{ETH70, ETH69, ETH68}
+// is primary). ETH70 is implemented but not advertised yet, so it is never
+// negotiated with a peer.
+var ProtocolVersions = []uint{ETH69, ETH68}
 
 // protocolLengths are the number of implemented message corresponding to
 // different protocol versions.
@@ -49,6 +50,11 @@ var protocolLengths = map[uint]uint64{ETH68: 17, ETH69: 18, ETH70: 18}
 
 // maxMessageSize is the maximum cap on the size of a protocol message.
 const maxMessageSize = 10 * 1024 * 1024
+
+// receiptsPacketOverhead is reserved out of maxMessageSize when truncating an eth/70
+// receipts response, since the size limit only budgets the receipt lists: the outer
+// list header, request ID, truncation flag and inner list header must fit too.
+const receiptsPacketOverhead = 64
 
 const (
 	StatusMsg                     = 0x00
