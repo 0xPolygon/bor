@@ -481,8 +481,10 @@ Fork/EIP surfaces (invariant 6 — all merged DORMANT, no activation moved on an
     upstream's deletion and removed the dead `StateDB.amsterdam` flag. The two tests now pin
     the stronger invariant: `TestDestructedSlotReadSkipsReader` (zero reader accesses at
     N-1/N/N+1) and `TestDestructedReadWitnessIsForkIndependent` (identical witnesses across
-    the fork). The `Prepare` caveat above is moot too: `AddState` runs on every path, prepared
-    or not.
+    the fork). The `Prepare` caveat above still stands, in a new form: `AddState` is called on
+    every path but is a no-op unless `Prepare` allocated `stateReadList` under
+    `rules.IsAmsterdam`, so a path that reaches `GetCommittedState` without preparing a
+    transaction still records nothing. Revisit it when Amsterdam is scheduled.
   - **Subtlety worth keeping, because it nearly caused a wrong retraction:** #2180's comment
     in `stateObject.updateTrie` says reader reads go through "a separate trie with its own
     PrevalueTracer" and their nodes "are NOT in obj.trie". That is true, and it reads exactly
