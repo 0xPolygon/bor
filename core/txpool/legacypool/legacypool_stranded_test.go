@@ -39,9 +39,21 @@ const (
 // eviction ticker, restoring the package level ticker on cleanup.
 func setupStrandedPool(t *testing.T) *LegacyPool {
 	t.Helper()
+	return setupStrandedPoolWithInterval(t, strandedTestInterval)
+}
+
+// setupManualStrandedPool creates the same pool with the eviction ticker
+// effectively disabled, for tests that drive evictStranded with explicit times.
+func setupManualStrandedPool(t *testing.T) *LegacyPool {
+	t.Helper()
+	return setupStrandedPoolWithInterval(t, time.Hour)
+}
+
+func setupStrandedPoolWithInterval(t *testing.T, interval time.Duration) *LegacyPool {
+	t.Helper()
 
 	oldInterval := evictionInterval
-	evictionInterval = strandedTestInterval
+	evictionInterval = interval
 	t.Cleanup(func() { evictionInterval = oldInterval })
 
 	pool, _ := setupPoolWithConfig(eip1559Config, func(pool *LegacyPool) {
@@ -155,17 +167,12 @@ func TestStrandedPendingChainEvicted(t *testing.T) {
 // never drops transactions. It drives evictStranded with explicit times so the
 // result doesn't depend on ticker scheduling.
 func TestStrandedPendingNotEvictedBeforeLifetime(t *testing.T) {
-	pool := setupStrandedPool(t)
-	evictionInterval = time.Hour // keep the ticker out of the way; evict manually
+	pool := setupManualStrandedPool(t)
 
 	botKey, bot := fundedKey(t, pool)
 	addStrandedChain(t, pool, botKey)
 
-	evictAt := func(now time.Time) {
-		pool.mu.Lock()
-		defer pool.mu.Unlock()
-		pool.evictStranded(now)
-	}
+	evictAt := strandedEvictor(pool)
 	t0 := time.Now()
 
 	// Stranded for half a lifetime, then payable again, then stranded again:
@@ -284,5 +291,106 @@ func addHealthyTail(t *testing.T, pool *LegacyPool, key *ecdsa.PrivateKey, from,
 		if err := pool.addRemoteSync(dynamicFeeTx(nonce, 100_000, strandedTailFeeCap, strandedTip, key)); err != nil {
 			t.Fatalf("failed to add tail tx %d: %v", nonce, err)
 		}
+	}
+}
+
+func strandedEvictor(pool *LegacyPool) func(time.Time) {
+	return func(now time.Time) {
+		pool.mu.Lock()
+		defer pool.mu.Unlock()
+		pool.evictStranded(now)
+	}
+}
+
+// TestStrandedClockRestartsAfterAccountLeaves checks that an account whose
+// pending txs left the pool (mined or dropped) starts a fresh stranded clock
+// when a new unminable head arrives, instead of inheriting the old one.
+func TestStrandedClockRestartsAfterAccountLeaves(t *testing.T) {
+	pool := setupManualStrandedPool(t)
+	evictAt := strandedEvictor(pool)
+
+	key, addr := fundedKey(t, pool)
+	head := dynamicFeeTx(0, 100_000, strandedHeadFeeCap, strandedTip, key)
+	if err := pool.addRemoteSync(head); err != nil {
+		t.Fatalf("failed to add head: %v", err)
+	}
+	setStrandedBaseFee(pool, strandedHighBaseFee)
+	t0 := time.Now()
+	evictAt(t0)
+
+	// The account leaves the pending set before the lifetime passes.
+	pool.mu.Lock()
+	pool.removeTx(head.Hash(), true, true)
+	pool.mu.Unlock()
+	evictAt(t0.Add(time.Millisecond))
+
+	// A new unminable head arrives later: the old clock must not apply.
+	if err := pool.addRemoteSync(dynamicFeeTx(0, 100_000, strandedHeadFeeCap, big.NewInt(35*params.GWei), key)); err != nil {
+		t.Fatalf("failed to add new head: %v", err)
+	}
+	restart := t0.Add(strandedTestLifetime)
+	evictAt(restart)
+	evictAt(restart.Add(time.Millisecond))
+	if pending, _ := accountCounts(pool, addr); pending != 1 {
+		t.Fatalf("new head evicted with the old stranded clock: pending %d, want 1", pending)
+	}
+	evictAt(restart.Add(strandedTestLifetime + time.Millisecond))
+	if pending, _ := accountCounts(pool, addr); pending != 0 {
+		t.Fatalf("new head not evicted after its own lifetime: pending %d, want 0", pending)
+	}
+}
+
+// TestStrandedRejectionExpires checks that the evicted-tx memory only refuses
+// re-admission for one lifetime.
+func TestStrandedRejectionExpires(t *testing.T) {
+	pool := setupManualStrandedPool(t)
+	evictAt := strandedEvictor(pool)
+
+	key, addr := fundedKey(t, pool)
+	head := dynamicFeeTx(0, 100_000, strandedHeadFeeCap, strandedTip, key)
+	if err := pool.addRemoteSync(head); err != nil {
+		t.Fatalf("failed to add head: %v", err)
+	}
+	setStrandedBaseFee(pool, strandedHighBaseFee)
+	t0 := time.Now().Add(-3 * strandedTestLifetime)
+	evictAt(t0)
+	evictAt(t0.Add(strandedTestLifetime + time.Millisecond))
+	if pending, _ := accountCounts(pool, addr); pending != 0 {
+		t.Fatalf("head not evicted: pending %d", pending)
+	}
+	// Evicted more than a lifetime ago: the memory has expired.
+	if err := pool.addRemoteSync(head); err != nil {
+		t.Fatalf("re-adding head after the memory expired: %v", err)
+	}
+	if pending, _ := accountCounts(pool, addr); pending != 1 {
+		t.Fatalf("head not re-admitted: pending %d, want 1", pending)
+	}
+}
+
+// TestStrandedNoBaseFee checks that nothing is tracked or evicted while the
+// head carries no base fee (pre-London), and that tracking restarts from zero.
+func TestStrandedNoBaseFee(t *testing.T) {
+	pool := setupManualStrandedPool(t)
+	evictAt := strandedEvictor(pool)
+
+	key, addr := fundedKey(t, pool)
+	head := dynamicFeeTx(0, 100_000, strandedHeadFeeCap, strandedTip, key)
+	if err := pool.addRemoteSync(head); err != nil {
+		t.Fatalf("failed to add head: %v", err)
+	}
+	setStrandedBaseFee(pool, strandedHighBaseFee)
+	t0 := time.Now()
+	evictAt(t0)
+
+	setStrandedBaseFee(pool, nil)
+	evictAt(t0.Add(strandedTestLifetime + time.Millisecond))
+	if pending, _ := accountCounts(pool, addr); pending != 1 {
+		t.Fatalf("evicted without a base fee: pending %d, want 1", pending)
+	}
+	// Base fee is back: the earlier sample must not count towards the lifetime.
+	setStrandedBaseFee(pool, strandedHighBaseFee)
+	evictAt(t0.Add(strandedTestLifetime + 2*time.Millisecond))
+	if pending, _ := accountCounts(pool, addr); pending != 1 {
+		t.Fatalf("stale stranded clock survived a base fee gap: pending %d, want 1", pending)
 	}
 }
