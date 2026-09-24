@@ -109,6 +109,7 @@ type Peer struct {
 
 	reqDispatch chan *request  // Dispatch channel to send requests and track then until fulfillment
 	reqCancel   chan *cancel   // Dispatch channel to cancel pending requests and untrack them
+	reqResend   chan *resend   // Dispatch channel to send follow-ups for still-pending requests
 	resDispatch chan *response // Dispatch channel to fulfil pending requests and untrack them
 
 	chainConfig *params.ChainConfig // Chain configuration for fork-aware validation
@@ -137,6 +138,7 @@ func NewPeer(version uint, p *p2p.Peer, rw p2p.MsgReadWriter, txpool TxPool, cha
 		txAnnounce:      make(chan []common.Hash),
 		reqDispatch:     make(chan *request),
 		reqCancel:       make(chan *cancel),
+		reqResend:       make(chan *resend),
 		resDispatch:     make(chan *response),
 		txpool:          txpool,
 		chainConfig:     chainConfig,
@@ -491,6 +493,14 @@ func (p *Peer) RequestReceipts(hashes []common.Hash, gasUsed []uint64, numbers [
 				FirstBlockReceiptIndex: 0,
 				GetReceiptsRequest:     hashes,
 			},
+			// The buffer entry lives and dies with the request: the dispatcher
+			// releases it if the request is cancelled or fails to send, while
+			// a completed response consumes it on the delivery path.
+			cleanup: func() {
+				p.receiptBufferLock.Lock()
+				delete(p.receiptBuffer, id)
+				p.receiptBufferLock.Unlock()
+			},
 		}
 		p.receiptBufferLock.Lock()
 		p.receiptBuffer[id] = &receiptRequest{
@@ -526,31 +536,31 @@ func (p *Peer) RequestReceipts(hashes []common.Hash, gasUsed []uint64, numbers [
 	return req, nil
 }
 
-// requestPartialReceipts resumes a truncated eth/70 receipt response, re-using the
-// request ID of the original request so the buffered partial lists stay addressable.
+// requestPartialReceipts re-requests the remainder of a partially delivered
+// receipt request under its original id.
 func (p *Peer) requestPartialReceipts(id uint64) error {
 	p.receiptBufferLock.Lock()
-	defer p.receiptBufferLock.Unlock()
 
-	// Do not re-request for a stale request.
+	// Do not re-request for the stale request
 	buffer, ok := p.receiptBuffer[id]
 	if !ok {
+		p.receiptBufferLock.Unlock()
 		return nil
 	}
 	lastBlock := len(buffer.list) - 1
 	lastReceipt := buffer.list[lastBlock].Len()
-	hashes := buffer.request[lastBlock:]
 
-	return p.dispatchRequest(&Request{
-		id:   id,
-		sink: nil,
-		code: GetReceiptsMsg,
-		want: ReceiptsMsg,
-		data: &GetReceiptsPacket70{
-			RequestId:              id,
-			FirstBlockReceiptIndex: uint64(lastReceipt),
-			GetReceiptsRequest:     hashes,
-		},
+	hashes := buffer.request[lastBlock:]
+	p.receiptBufferLock.Unlock()
+
+	// The follow-up continues the original request under its original id,
+	// hand it to the dispatcher as a resend operation. The dispatcher only
+	// sends it if the original request is still pending, or silently drop
+	// the request if the original one is cancelled (with no error returned).
+	return p.dispatchResend(id, GetReceiptsMsg, &GetReceiptsPacket70{
+		RequestId:              id,
+		FirstBlockReceiptIndex: uint64(lastReceipt),
+		GetReceiptsRequest:     hashes,
 	})
 }
 
@@ -578,6 +588,11 @@ func (p *Peer) bufferReceipts(requestId uint64, receiptLists []*ReceiptList69, l
 		return nil
 	}
 	if lastBlockIncomplete {
+		// Prevent sending a single empty receipt.
+		if len(receiptLists) == 1 && receiptLists[0].Len() == 0 {
+			delete(p.receiptBuffer, requestId)
+			return errors.New("no receipt delivered in incomplete receipt response")
+		}
 		lastBlock := len(receiptLists) - 1
 		if len(buffer.list) > 0 {
 			lastBlock += len(buffer.list) - 1
@@ -661,7 +676,7 @@ func (p *Peer) validateLastBlockReceipt(receiptLists []*ReceiptList69, id uint64
 	// A Bor block carries one extra receipt for the state-sync transaction, which burns
 	// no gas and so is not accounted for by the gas-derived bound.
 	if uint64(previousTxs+lastReceipts.Len()) > gasUsed/minTxGas+1 {
-		// Drop the response but keep the buffer, the peer may still be dropped instead.
+		// bufferReceipts drops the buffer entry for any error returned here.
 		return 0, errors.New("total number of tx exceeded limit")
 	}
 	logSize, err := lastReceipts.LogsSize()
@@ -676,9 +691,8 @@ func (p *Peer) validateLastBlockReceipt(receiptLists []*ReceiptList69, id uint64
 }
 
 // RequestTxs fetches a batch of transactions from a remote node.
-func (p *Peer) RequestTxs(hashes []common.Hash) error {
-	p.Log().Trace("Fetching batch of transactions", "count", len(hashes))
-	id := rand.Uint64()
+func (p *Peer) RequestTxs(id uint64, hashes []common.Hash) error {
+	p.Log().Debug("Fetching batch of transactions", "count", len(hashes))
 
 	requestTracker.Track(p.id, p.version, GetPooledTransactionsMsg, PooledTransactionsMsg, id)
 	return p2p.Send(p.rw, GetPooledTransactionsMsg, &GetPooledTransactionsPacket{

@@ -26,6 +26,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/ethereum/go-ethereum/rlp"
 )
 
 // testPeer is a simulated peer to allow testing direct network calls.
@@ -168,5 +169,44 @@ func TestPeerForgetTransactions(t *testing.T) {
 	}
 	if !peer.knownTxs.Contains(hashes[1]) {
 		t.Error("hash[1] should still be known")
+	}
+}
+
+// TestBufferReceiptsNoProgress checks that an incomplete receipt response
+// delivering no receipt is rejected, while an empty list at the end of a
+// multi-block response is still accepted.
+func TestBufferReceiptsNoProgress(t *testing.T) {
+	p := &Peer{receiptBuffer: make(map[uint64]*receiptRequest)}
+
+	newRequest := func(id uint64, blocks int) {
+		req := new(receiptRequest)
+		for i := 0; i < blocks; i++ {
+			req.request = append(req.request, common.Hash{byte(i + 1)})
+			req.gasUsed = append(req.gasUsed, 1_000_000)
+			req.numbers = append(req.numbers, 0)
+		}
+		p.receiptBuffer[id] = req
+	}
+
+	// A single empty list with the incomplete flag makes no progress.
+	newRequest(1, 1)
+	if err := p.bufferReceipts(1, []*ReceiptList69{{}}, true); err == nil {
+		t.Fatal("expected error for incomplete response without receipts")
+	}
+	if _, ok := p.receiptBuffer[1]; ok {
+		t.Fatal("buffer entry not removed after invalid response")
+	}
+
+	// An empty list preceded by other lists advances the request and is valid.
+	newRequest(2, 2)
+	lists := []*ReceiptList69{
+		{items: []Receipt{{Logs: rlp.EmptyList}}},
+		{},
+	}
+	if err := p.bufferReceipts(2, lists, true); err != nil {
+		t.Fatalf("unexpected error for multi-block incomplete response: %v", err)
+	}
+	if _, ok := p.receiptBuffer[2]; !ok {
+		t.Fatal("buffer entry missing after valid incomplete response")
 	}
 }

@@ -389,3 +389,25 @@ func TestValidateLastBlockReceiptAmsterdamGate(t *testing.T) {
 		t.Fatalf("expected the Amsterdam bound to accept the response, got %v", err)
 	}
 }
+
+// TestReceiptsPacket70FitsMessageCap checks that a response filled right up to the
+// truncation limit, wrapped in the eth/70 packet envelope with a worst-case request ID,
+// still fits under maxMessageSize.
+func TestReceiptsPacket70FitsMessageCap(t *testing.T) {
+	payload := maxMessageSize - receiptsPacketOverhead
+	// Raw values are written verbatim, so one item of exactly payload bytes models a
+	// response that blockReceiptsToNetwork69 filled right up to the limit.
+	item := make([]byte, payload)
+	packet := &ReceiptsRLPPacket70{
+		RequestId:           ^uint64(0),
+		LastBlockIncomplete: true,
+		ReceiptsRLPResponse: ReceiptsRLPResponse{rlp.RawValue(item)},
+	}
+	enc, err := rlp.EncodeToBytes(packet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(enc) > maxMessageSize {
+		t.Fatalf("packet at truncation limit is %d bytes, over the %d cap", len(enc), maxMessageSize)
+	}
+}
