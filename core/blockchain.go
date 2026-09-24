@@ -50,6 +50,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/downloader/whitelist"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
+	"github.com/ethereum/go-ethereum/internal/stallrec"
 	"github.com/ethereum/go-ethereum/internal/syncx"
 	"github.com/ethereum/go-ethereum/internal/version"
 	"github.com/ethereum/go-ethereum/log"
@@ -3631,6 +3632,9 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		canonAccum = canonAccum[:0]
 	}
 
+	var importOp *stallrec.Op
+	defer func() { importOp.End() }()
+
 	for ; block != nil && err == nil || errors.Is(err, ErrKnownBlock); block, err = it.next() {
 		// If the chain is terminating, stop processing blocks
 		if bc.insertStopped() {
@@ -3696,6 +3700,8 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		}
 		// Retrieve the parent block and it's state to execute on top
 		start := time.Now()
+		importOp.End()
+		importOp = stallrec.Begin(stallrec.KindImport, block.NumberU64())
 
 		parent := it.previous()
 		if parent == nil {
@@ -3933,6 +3939,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 
 		blockWriteTimer.Update(time.Since(wstart) - statedb.AccountCommits - statedb.StorageCommits - statedb.SnapshotCommits - statedb.TrieDBCommits)
 		elapsedNormal := time.Since(start)
+		importOp.End()
 		blockInsertTimer.Update(elapsedNormal)
 		normalImportTotalTimer.Update(elapsedNormal)
 		bc.logSlowNormalImport(block, cheapExecElapsed, vtime, reorgCheckElapsed, writeElapsed, elapsedNormal, statedb)

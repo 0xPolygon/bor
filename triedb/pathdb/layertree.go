@@ -159,8 +159,11 @@ func (tree *layerTree) add(root common.Hash, parentRoot common.Hash, block uint6
 	}
 	l := parent.update(root, parent.stateID()+1, block, nodes, states)
 
+	lt := startLockTiming()
 	tree.lock.Lock()
 	defer tree.lock.Unlock()
+	lt.acquired()
+	defer lt.done("tree.add")
 
 	// Link the given layer into the layer set
 	tree.layers[l.rootHash()] = l
@@ -188,8 +191,11 @@ func (tree *layerTree) cap(root common.Hash, layers int) error {
 	if !ok {
 		return fmt.Errorf("triedb layer [%#x] is disk layer", root)
 	}
+	lt := startLockTiming()
 	tree.lock.Lock()
 	defer tree.lock.Unlock()
+	lt.acquired()
+	defer lt.done("tree.cap")
 
 	// If full commit was requested, flatten the diffs and merge onto disk
 	if layers == 0 {
@@ -307,16 +313,22 @@ func (tree *layerTree) cap(root common.Hash, layers int) error {
 // from every live diff layer, letting the caller read the disk layer
 // directly instead of walking the layer chain.
 func (tree *layerTree) node(owner common.Hash, path []byte, hash common.Hash) (blob []byte, found bool, definitive bool) {
+	lt := startLockTiming()
 	tree.lock.RLock()
 	defer tree.lock.RUnlock()
+	lt.acquired()
+	defer lt.done("tree.node")
 
 	return tree.nodeIndex.get(owner, path, hash)
 }
 
 // bottom returns the bottom-most disk layer in this tree.
 func (tree *layerTree) bottom() *diskLayer {
+	lt := startLockTiming()
 	tree.lock.RLock()
 	defer tree.lock.RUnlock()
+	lt.acquired()
+	defer lt.done("tree.bottom")
 
 	return tree.base
 }
@@ -343,8 +355,11 @@ func (tree *layerTree) bottomIfAncestorOf(state common.Hash) *diskLayer {
 // corresponding to the specified state root being queried.
 func (tree *layerTree) lookupAccount(accountHash common.Hash, state common.Hash) (layer, error) {
 	// Hold the read lock to prevent the unexpected layer changes
+	lt := startLockTiming()
 	tree.lock.RLock()
 	defer tree.lock.RUnlock()
+	lt.acquired()
+	defer lt.done("tree.lookupAccount")
 
 	tip := tree.lookup.accountTip(accountHash, state, tree.base.root)
 	if tip == (common.Hash{}) {
@@ -361,8 +376,11 @@ func (tree *layerTree) lookupAccount(accountHash common.Hash, state common.Hash)
 // data corresponding to the specified state root being queried.
 func (tree *layerTree) lookupStorage(accountHash common.Hash, slotHash common.Hash, state common.Hash) (layer, error) {
 	// Hold the read lock to prevent the unexpected layer changes
+	lt := startLockTiming()
 	tree.lock.RLock()
 	defer tree.lock.RUnlock()
+	lt.acquired()
+	defer lt.done("tree.lookupStorage")
 
 	tip := tree.lookup.storageTip(accountHash, slotHash, state, tree.base.root)
 	if tip == (common.Hash{}) {

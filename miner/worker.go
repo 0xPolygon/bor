@@ -43,6 +43,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/event"
+	"github.com/ethereum/go-ethereum/internal/stallrec"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
@@ -2257,6 +2258,7 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, gen
 	w.mu.RUnlock()
 
 	pendingStart := time.Now()
+	pendingOp := stallrec.Begin(stallrec.KindPending, env.header.Number.Uint64())
 
 	filter := w.buildDefaultFilter(env.header.BaseFee, env.header.Number)
 	timeoutInterrupt, _ := w.interruptStateForEnv(env)
@@ -2272,6 +2274,7 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, gen
 	}
 	pendingBlobTxs := w.eth.TxPool().Pending(filter, timeoutInterrupt)
 
+	pendingOp.End()
 	env.pendingDuration = time.Since(pendingStart)
 	pendingTimer.Update(env.pendingDuration)
 
@@ -2526,6 +2529,8 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 	// Starts accounting time after prepareWork. Slot timing is handled in Seal
 	// for sequential paths and explicitly in the pipeline path.
 	start := time.Now()
+	buildOp := stallrec.Begin(stallrec.KindBuild, work.header.Number.Uint64())
+	defer buildOp.End()
 
 	// Create the builder plan channel before signalling builder mode so the prefetcher goroutine
 	// always finds a valid channel when it transitions. The buffer covers a full block's worth
@@ -3145,10 +3150,12 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 
 		// Track time for FinalizeAndAssemble (state root calculation + block assembly)
 		finalizeStart := time.Now()
+		finalizeOp := stallrec.Begin(stallrec.KindFinalize, env.header.Number.Uint64())
 		var commitTime time.Duration
 		block, env.receipts, commitTime, err = w.engine.FinalizeAndAssemble(w.chain, env.header, env.state, &types.Body{
 			Transactions: env.txs,
 		}, env.receipts)
+		finalizeOp.End()
 		finalizeDuration := time.Since(finalizeStart)
 		finalizeAndAssembleTimer.Update(finalizeDuration)
 		intermediateRootTimer.Update(commitTime)

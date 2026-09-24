@@ -117,8 +117,11 @@ func (dl *diskLayer) markStale() {
 // node implements the layer interface, retrieving the trie node with the
 // provided node info. No error will be returned if the node is not found.
 func (dl *diskLayer) node(owner common.Hash, path []byte, depth int) ([]byte, common.Hash, *nodeLoc, error) {
+	lt := startLockTiming()
 	dl.lock.RLock()
 	defer dl.lock.RUnlock()
+	lt.acquired()
+	defer lt.done("disk.node")
 
 	if dl.stale {
 		return nil, common.Hash{}, nil, errSnapshotStale
@@ -173,8 +176,11 @@ func (dl *diskLayer) node(owner common.Hash, path []byte, depth int) ([]byte, co
 //
 // Note the returned account is not a copy, please don't modify it.
 func (dl *diskLayer) account(hash common.Hash, depth int) ([]byte, error) {
+	lt := startLockTiming()
 	dl.lock.RLock()
 	defer dl.lock.RUnlock()
+	lt.acquired()
+	defer lt.done("disk.account")
 
 	if dl.stale {
 		return nil, errSnapshotStale
@@ -251,8 +257,11 @@ func (dl *diskLayer) account(hash common.Hash, depth int) ([]byte, error) {
 func (dl *diskLayer) storage(accountHash, storageHash common.Hash, depth int) ([]byte, error) {
 	// Hold the lock, ensure the parent won't be changed during the
 	// state accessing.
+	lt := startLockTiming()
 	dl.lock.RLock()
 	defer dl.lock.RUnlock()
+	lt.acquired()
+	defer lt.done("disk.storage")
 
 	if dl.stale {
 		return nil, errSnapshotStale
@@ -395,8 +404,11 @@ func (dl *diskLayer) writeStateHistory(diff *diffLayer) (bool, error) {
 // and returns a newly constructed disk layer. Note the current disk
 // layer must be tagged as stale first to prevent re-access.
 func (dl *diskLayer) commit(bottom *diffLayer, force bool) (*diskLayer, error) {
+	lt := startLockTiming()
 	dl.lock.Lock()
 	defer dl.lock.Unlock()
+	lt.acquired()
+	defer lt.done("disk.commit")
 
 	// Construct and store the state history first. If crash happens after storing
 	// the state history but without flushing the corresponding states(journal),
@@ -637,8 +649,11 @@ func (dl *diskLayer) genComplete() bool {
 
 // waitFlush blocks until the background buffer flush is completed.
 func (dl *diskLayer) waitFlush() error {
+	lt := startLockTiming()
 	dl.lock.RLock()
 	defer dl.lock.RUnlock()
+	lt.acquired()
+	defer lt.done("disk.waitFlush")
 
 	if dl.frozen == nil {
 		return nil
