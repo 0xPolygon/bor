@@ -49,11 +49,12 @@ func TestPreloadQueue_FIFOOrder(t *testing.T) {
 		next int
 	)
 	rng := rand.New(rand.NewSource(1))
+	p := &boundedPusher{t: t, q: &q}
 
 	// Push a random number of items (0..16, like a branch node) for each pop,
 	// until enough items went through to cross several segments.
 	push := func() {
-		q.push(preloadQueueItem{path: []byte{byte(next)}, depth: next})
+		p.push(preloadQueueItem{path: []byte{byte(next)}, depth: next})
 		ref = append(ref, next)
 		next++
 	}
@@ -152,15 +153,38 @@ func TestPreloadQueue_SegmentRelease(t *testing.T) {
 	}
 }
 
-// TestPreloadQueue_LargeN pushes a large number of items and checks order.
-func TestPreloadQueue_LargeN(t *testing.T) {
-	n := 5_000_000
-	if testing.Short() {
-		n = 500_000
+// boundedPusher pushes into a queue and fails the test as soon as the queue
+// holds more segments than its item count needs, so a broken segment
+// rollover fails fast instead of allocating one segment per push.
+type boundedPusher struct {
+	t      testing.TB
+	q      *preloadQueue
+	pushes int
+	segs   int
+	last   *preloadQueueSegment
+}
+
+func (b *boundedPusher) push(item preloadQueueItem) {
+	b.t.Helper()
+	b.q.push(item)
+	b.pushes++
+	if b.q.tail != b.last {
+		b.segs++
+		b.last = b.q.tail
 	}
+	if limit := (b.pushes+preloadQueueSegmentSize-1)/preloadQueueSegmentSize + 1; b.segs > limit {
+		b.t.Fatalf("after %d pushes the queue made %d segments, want <= %d", b.pushes, b.segs, limit)
+	}
+}
+
+// TestPreloadQueue_LargeN pushes many items across many segments and checks
+// order.
+func TestPreloadQueue_LargeN(t *testing.T) {
+	n := 200_000 // ~49 segments
 	var q preloadQueue
+	p := &boundedPusher{t: t, q: &q}
 	for i := 0; i < n; i++ {
-		q.push(preloadQueueItem{depth: i})
+		p.push(preloadQueueItem{depth: i})
 	}
 	if q.len() != n {
 		t.Fatalf("len: have %d, want %d", q.len(), n)
@@ -187,8 +211,9 @@ func TestPreloadQueue_AllocationBounded(t *testing.T) {
 
 	var q preloadQueue
 	// Pre-grow the queue so the measured pushes happen on a long queue.
+	p := &boundedPusher{t: t, q: &q}
 	for i := 0; i < 10*preloadQueueSegmentSize; i++ {
-		q.push(preloadQueueItem{depth: i})
+		p.push(preloadQueueItem{depth: i})
 	}
 	allocs := testing.AllocsPerRun(20, func() {
 		for i := 0; i < preloadQueueSegmentSize; i++ {
