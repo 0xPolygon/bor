@@ -13,10 +13,6 @@ import (
 	"github.com/ethereum/go-ethereum/metrics"
 )
 
-// strandedEvictedCacheSize bounds how many evicted underpriced transactions the
-// pool remembers to refuse re-admission from peers.
-const strandedEvictedCacheSize = 8192
-
 var (
 	strandedEvictionMeter = metrics.NewRegisteredMeter("txpool/pending/stranded/eviction", nil)
 	strandedRejectMeter   = metrics.NewRegisteredMeter("txpool/pending/stranded/reject", nil)
@@ -36,10 +32,13 @@ type strandedState struct {
 	evicted lru.BasicLRU[common.Hash, time.Time] // evicted txs that were unminable
 }
 
-func newStrandedState() strandedState {
+// newStrandedState sizes the evicted-tx memory to the pool capacity, so a
+// full pool's worth of evicted txs is kept for the whole lifetime. The LRU
+// allocates per entry, so an unused capacity costs nothing.
+func newStrandedState(config Config) strandedState {
 	return strandedState{
 		heads:   make(map[common.Address]strandedHead),
-		evicted: lru.NewBasicLRU[common.Hash, time.Time](strandedEvictedCacheSize),
+		evicted: lru.NewBasicLRU[common.Hash, time.Time](int(config.GlobalSlots + config.GlobalQueue)),
 	}
 }
 

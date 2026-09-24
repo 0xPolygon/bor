@@ -464,3 +464,19 @@ func TestUnminable(t *testing.T) {
 		}
 	}
 }
+
+// TestStrandedEvictedMemorySizedToPool checks that the evicted-tx memory can
+// hold as many entries as the pool has slots, so a broad eviction does not push
+// entries out before their lifetime ends.
+func TestStrandedEvictedMemorySizedToPool(t *testing.T) {
+	config := testTxPoolConfig
+	config.GlobalSlots, config.GlobalQueue = 96, 32
+	state := newStrandedState(config)
+
+	for i := range 200 {
+		state.evicted.Add(common.BigToHash(big.NewInt(int64(i))), time.Now())
+	}
+	if got := state.evicted.Len(); got != 128 {
+		t.Fatalf("evicted memory holds %d entries, want GlobalSlots+GlobalQueue = 128", got)
+	}
+}
