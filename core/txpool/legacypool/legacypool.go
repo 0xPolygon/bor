@@ -366,7 +366,7 @@ func New(config Config, chain BlockChain, options ...func(pool *LegacyPool)) *Le
 		initDoneCh:      make(chan struct{}),
 		filteredAddrs:   make(map[common.Address]struct{}),
 		lastRebroadcast: make(map[common.Hash]time.Time),
-		stranded:        newStrandedState(),
+		stranded:        newStrandedState(config),
 	}
 	pool.priced = newPricedList(pool.all)
 
