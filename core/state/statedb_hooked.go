@@ -316,3 +316,8 @@ func (s *hookedStateDB) Inner() *StateDB {
 func (s *hookedStateDB) SetTxContext(thash common.Hash, ti int, blockAccessIndex uint32) {
 	s.inner.SetTxContext(thash, ti, blockAccessIndex)
 }
+
+// Hooks returns the tracing hooks this state emits to.
+func (s *hookedStateDB) Hooks() *tracing.Hooks {
+	return s.hooks
+}

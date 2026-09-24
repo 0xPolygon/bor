@@ -710,7 +710,13 @@ func (api *API) traceBlockParallel(ctx context.Context, block *types.Block, stat
 			defer pend.Done()
 			// Fetch and execute the next transaction trace tasks
 			for task := range jobs {
-				msg, _ := core.TransactionToMessage(txs[task.index], signer, block.BaseFee())
+				// This runs off the RPC handler's goroutine, so a nil message
+				// would not be recovered: report it as this transaction's result.
+				msg, err := core.TransactionToMessage(txs[task.index], signer, block.BaseFee())
+				if err != nil {
+					results[task.index] = &txTraceResult{TxHash: txs[task.index].Hash(), Error: err.Error()}
+					continue
+				}
 				txctx := &Context{
 					BlockHash:   blockHash,
 					BlockNumber: block.Number(),
@@ -757,7 +763,11 @@ txloop:
 		}
 
 		// Generate the next state snapshot fast without tracing
-		msg, _ := core.TransactionToMessage(tx, signer, block.BaseFee())
+		msg, err := core.TransactionToMessage(tx, signer, block.BaseFee())
+		if err != nil {
+			failed = err
+			break txloop
+		}
 		statedb.SetTxContext(tx.Hash(), i, uint32(i+1))
 		res, err := core.ApplyMessage(evm, msg, nil)
 		if err != nil {

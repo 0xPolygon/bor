@@ -1614,6 +1614,9 @@ func (d *Downloader) fillHeaderSkeleton(from uint64, skeleton []*types.Header) (
 	d.queue.ScheduleSkeleton(from, skeleton)
 
 	err := d.concurrentFetch((*headerQueue)(d), false)
+	if errors.Is(err, ErrPeersUnavailable) {
+		err = fmt.Errorf("skeleton fill failed: %v", err)
+	}
 	if err != nil {
 		log.Debug("Skeleton fill failed", "err", err)
 	}
@@ -1921,7 +1924,7 @@ func (d *Downloader) importBlockResults(results []*fetchResult) error {
 	// transition. Because the downloaded chain is guided by the
 	// consensus-layer.
 	if index, err := d.blockchain.InsertChain(blocks, d.syncAndProduceWitnesses); err != nil {
-		if index < len(results) {
+		if index >= 0 && index < len(results) {
 			log.Debug("Downloaded item processing failed", "number", results[index].Header.Number, "hash", results[index].Header.Hash(), "firstnum", first.Number, "firsthash", first.Hash(), "lastnum", last.Number, "lasthash", last.Hash(), "err", err)
 
 			// In post-merge, notify the engine API of encountered bad chains
