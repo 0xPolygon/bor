@@ -2055,7 +2055,10 @@ func (c *Config) buildNode() (*node.Config, error) {
 	if !c.Developer.Enabled {
 		// Discovery
 		// Append the bootnodes defined with those hardcoded in the config file
-		bootnodes := c.P2P.Discovery.Bootnodes
+		// bootnodesv4 is the discv4 counterpart of bootnodesv5 and feeds the
+		// same table as bootnodes; it used to be parsed and then ignored.
+		bootnodes := append([]string{}, c.P2P.Discovery.Bootnodes...)
+		bootnodes = append(bootnodes, c.P2P.Discovery.BootnodesV4...)
 		if c.chain != nil {
 			bootnodes = append(bootnodes, c.chain.Bootnodes...)
 		}
