@@ -118,7 +118,7 @@ func (cm *dropper) dropRandomPeer() bool {
 		// Avoid dropping trusted and static peers, or recent peers.
 		// Only drop peers if their respective category (dialed/inbound)
 		// is close to limit capacity.
-		return p.Trusted() || p.StaticDialed() ||
+		return p.Trusted() || p.Static() ||
 			p.Lifetime() < mclock.AbsTime(doNotDropBefore) ||
 			(p.DynDialed() && cm.maxDialPeers-numDialed > peerDropThreshold) ||
 			(p.Inbound() && cm.maxInboundPeers-numInbound > peerDropThreshold)

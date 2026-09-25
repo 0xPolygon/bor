@@ -341,6 +341,101 @@ func TestServerAtCap(t *testing.T) {
 	}
 }
 
+// This test checks that connections from static nodes carry the static flag
+// regardless of direction, so a static node that dials us first is still
+// recognized as static.
+func TestServerStaticFlag(t *testing.T) {
+	staticID := randomID()
+
+	srv := &Server{
+		Config: Config{
+			PrivateKey:  newkey(),
+			MaxPeers:    10,
+			NoDial:      true,
+			NoDiscovery: true,
+			StaticNodes: []*enode.Node{newNode(staticID, "")},
+			Logger:      testlog.Logger(t, log.LvlTrace),
+		},
+	}
+	if err := srv.Start(); err != nil {
+		t.Fatalf("could not start: %v", err)
+	}
+	defer srv.Stop()
+
+	newconn := func(id enode.ID) *conn {
+		fd, _ := net.Pipe()
+		tx := newTestTransport(&newkey().PublicKey, fd, nil)
+		node := enode.SignNull(new(enr.Record), id)
+
+		return &conn{fd: fd, transport: tx, flags: inboundConn, node: node, cont: make(chan error)}
+	}
+	checkStatic := func(id enode.ID, want bool) {
+		t.Helper()
+		c := newconn(id)
+		if err := srv.checkpoint(c, srv.checkpointPostHandshake); err != nil {
+			t.Fatalf("unexpected error @posthandshake: %v", err)
+		}
+		if got := c.is(staticConn); got != want {
+			t.Errorf("static flag for %v: got %v, want %v", id, got, want)
+		}
+	}
+
+	checkStatic(staticID, true)
+
+	otherID := randomID()
+	checkStatic(otherID, false)
+
+	srv.AddPeer(newNode(otherID, ""))
+	checkStatic(otherID, true)
+
+	srv.RemovePeer(newNode(staticID, ""))
+	checkStatic(staticID, false)
+}
+
+// This test checks that adding a connected peer to the static set marks it as
+// static without reconnecting.
+func TestServerStaticFlagConnectedPeer(t *testing.T) {
+	srv := &Server{
+		Config: Config{
+			PrivateKey:  newkey(),
+			MaxPeers:    10,
+			NoDial:      true,
+			NoDiscovery: true,
+			Logger:      testlog.Logger(t, log.LvlTrace),
+		},
+	}
+	if err := srv.Start(); err != nil {
+		t.Fatalf("could not start: %v", err)
+	}
+	defer srv.Stop()
+
+	id := randomID()
+	fd, _ := net.Pipe()
+	c := &conn{
+		fd:        fd,
+		transport: newTestTransport(&newkey().PublicKey, fd, nil),
+		flags:     inboundConn,
+		node:      enode.SignNull(new(enr.Record), id),
+		cont:      make(chan error),
+	}
+	if err := srv.checkpoint(c, srv.checkpointAddPeer); err != nil {
+		t.Fatalf("could not add conn: %v", err)
+	}
+	peer := srv.Peers()[0]
+	if peer.Static() {
+		t.Fatal("inbound peer is static before AddPeer")
+	}
+
+	srv.AddPeer(newNode(id, ""))
+	// Peers goes through the run loop, so the flag update has been applied.
+	if peer := srv.Peers()[0]; !peer.Static() {
+		t.Error("connected peer is not static after AddPeer")
+	}
+	if !peer.Inbound() {
+		t.Error("peer lost its inbound flag")
+	}
+}
+
 func TestServerPeerLimits(t *testing.T) {
 	srvkey := newkey()
 	clientkey := newkey()
