@@ -204,10 +204,10 @@ func execPathResultWithConfig(
 		GasPrice:   uint256.NewInt(66),
 		BlobHashes: blobHashes,
 	})
-	ret, gasLeft, err := evm.Call(caller, addr, input, gas, uint256.NewInt(77))
+	ret, gasLeft, err := evm.Call(caller, addr, input, NewGasBudget(gas), uint256.NewInt(77))
 	return execResult{
 		ret:  ret,
-		gas:  gasLeft,
+		gas:  gasLeft.RegularGas,
 		err:  err,
 		logs: db.Logs(),
 	}
@@ -1570,7 +1570,7 @@ func runWithInterrupt(code []byte, gas uint64, switchDispatch bool) error {
 	}()
 
 	caller := common.BytesToAddress([]byte("caller"))
-	_, _, err := evm.Call(caller, addr, nil, gas, uint256.NewInt(0))
+	_, _, err := evm.Call(caller, addr, nil, NewGasBudget(gas), uint256.NewInt(0))
 	return err
 }
 
@@ -1585,7 +1585,7 @@ func runWithAbort(code []byte, gas uint64, switchDispatch bool) error {
 	}()
 
 	caller := common.BytesToAddress([]byte("caller"))
-	_, _, err := evm.Call(caller, addr, nil, gas, uint256.NewInt(0))
+	_, _, err := evm.Call(caller, addr, nil, NewGasBudget(gas), uint256.NewInt(0))
 	return err
 }
 

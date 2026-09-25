@@ -22,13 +22,13 @@ func (r *countingReader) Storage(addr common.Address, slot common.Hash) (common.
 	return r.Reader.Storage(addr, slot)
 }
 
-// EIP-7928 makes GetCommittedState read a destructed account's slot purely to
-// record the access for the block-level access list. The read walks the trie, so
-// under a witness-building reader it adds the account's storage proof path to the
-// witness. A node performing it against a witness from a producer that did not
-// would fail the import, so it stays behind the Amsterdam gate that the access
-// list itself lives behind.
-func TestDestructedSlotReadIsAmsterdamGated(t *testing.T) {
+// A destructed account's slot read in GetCommittedState must not reach the
+// reader at any height. Upstream #34776 records the access for the block-level
+// access list in memory instead of reading it, so the storage trie is never
+// walked for it and the witness never gains the account's storage proof path.
+// A reader access here would put nodes into the witness that a producer on an
+// older version never recorded, and fail the import on the consuming side.
+func TestDestructedSlotReadSkipsReader(t *testing.T) {
 	t.Parallel()
 
 	addr := common.HexToAddress("0xdead")
@@ -58,9 +58,8 @@ func TestDestructedSlotReadIsAmsterdamGated(t *testing.T) {
 		return statedb, counting
 	}
 
-	// Drive the gate through ChainConfig.Rules at a real activation boundary
-	// rather than a hand-built Rules value, so the test also covers IsAmsterdam
-	// itself rather than only the plumbing downstream of it.
+	// Cover both sides of a real Amsterdam activation boundary, since the
+	// access list the read once served exists only after it.
 	const forkBlock = 100
 
 	cfg := *params.TestChainConfig
@@ -69,39 +68,28 @@ func TestDestructedSlotReadIsAmsterdamGated(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		number    int64
-		wantReads int
+		amsterdam bool
 	}{
-		{name: "N-1", number: forkBlock - 1, wantReads: 0},
-		{name: "N", number: forkBlock, wantReads: 1},
-		{name: "N+1", number: forkBlock + 1, wantReads: 1},
+		{name: "N-1", number: forkBlock - 1, amsterdam: false},
+		{name: "N", number: forkBlock, amsterdam: true},
+		{name: "N+1", number: forkBlock + 1, amsterdam: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
 			statedb, counting := newDestructedState(t)
 			rules := cfg.Rules(big.NewInt(tc.number), false, 0)
-			if want := tc.wantReads == 1; rules.IsAmsterdam != want {
-				t.Fatalf("IsAmsterdam at block %d = %v, want %v", tc.number, rules.IsAmsterdam, want)
+			if rules.IsAmsterdam != tc.amsterdam {
+				t.Fatalf("IsAmsterdam at block %d = %v, want %v", tc.number, rules.IsAmsterdam, tc.amsterdam)
 			}
 			statedb.Prepare(rules, addr, common.Address{}, nil, nil, nil)
 
 			if got := statedb.GetCommittedState(addr, slot); got != (common.Hash{}) {
 				t.Errorf("expected empty slot, got %x", got)
 			}
-			if counting.storageReads != tc.wantReads {
-				t.Errorf("reader accesses = %d, want %d", counting.storageReads, tc.wantReads)
+			if counting.storageReads != 0 {
+				t.Errorf("reader accesses = %d, want 0", counting.storageReads)
 			}
 		})
 	}
-
-	t.Run("copy carries the gate", func(t *testing.T) {
-		t.Parallel()
-
-		statedb, _ := newDestructedState(t)
-		statedb.Prepare(cfg.Rules(big.NewInt(forkBlock), false, 0), addr, common.Address{}, nil, nil, nil)
-
-		if !statedb.Copy().amsterdam {
-			t.Error("Copy dropped the Amsterdam gate")
-		}
-	})
 }

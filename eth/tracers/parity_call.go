@@ -15,6 +15,10 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
 	"github.com/ethereum/go-ethereum/rpc"
+
+	cmath "github.com/ethereum/go-ethereum/common/math"
+
+	"github.com/holiman/uint256"
 )
 
 const maxTraceCallManyCalls = 100
@@ -170,12 +174,15 @@ func (api *API) traceCallExec(ctx context.Context, args ethapi.TransactionArgs, 
 	// sender is not debited for gas while the base-fee burn and tip still appear.
 	// Clamp the effective gas price to the basefee to avoid a negative tip when
 	// callers omit fee fields; the internal TraceConfig below enables bailout.
-	if blockCtx.BaseFee != nil && msg.GasPrice.Cmp(blockCtx.BaseFee) < 0 {
-		msg.GasPrice = new(big.Int).Set(blockCtx.BaseFee)
-		// Keep the fee cap consistent with the effective price so buyGas's
-		// balance check (fee cap based) matches the actual debit (price based).
-		if msg.GasFeeCap != nil && msg.GasFeeCap.Cmp(msg.GasPrice) < 0 {
-			msg.GasFeeCap = new(big.Int).Set(msg.GasPrice)
+	if blockCtx.BaseFee != nil {
+		baseFee := cmath.BigIntToUint256Int(blockCtx.BaseFee)
+		if msg.GasPrice.Cmp(baseFee) < 0 {
+			msg.GasPrice = new(uint256.Int).Set(baseFee)
+			// Keep the fee cap consistent with the effective price so buyGas's
+			// balance check (fee cap based) matches the actual debit (price based).
+			if msg.GasFeeCap != nil && msg.GasFeeCap.Cmp(msg.GasPrice) < 0 {
+				msg.GasFeeCap = new(uint256.Int).Set(msg.GasPrice)
+			}
 		}
 	}
 	if msg.BlobGasFeeCap != nil && msg.BlobGasFeeCap.BitLen() == 0 {

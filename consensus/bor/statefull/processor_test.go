@@ -179,7 +179,7 @@ func TestApplyMessage_SuccessPath(t *testing.T) {
 func newSystemMessage() *core.Message {
 	return &core.Message{
 		From:     params.BorSystemAddress,
-		GasPrice: big.NewInt(0),
+		GasPrice: new(uint256.Int),
 	}
 }
 

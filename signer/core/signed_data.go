@@ -17,6 +17,7 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -337,7 +338,8 @@ func (api *SignerAPI) EcRecover(ctx context.Context, data hexutil.Bytes, sig hex
 		return common.Address{}, errors.New("invalid Ethereum signature (V is not 27 or 28)")
 	}
 
-	sig[64] -= 27 // Transform yellow paper V from 27/28 to 0/1
+	sig = bytes.Clone(sig) // Avoid mutating the input
+	sig[64] -= 27          // Transform yellow paper V from 27/28 to 0/1
 	hash := accounts.TextHash(data)
 
 	rpk, err := crypto.SigToPub(hash, sig)

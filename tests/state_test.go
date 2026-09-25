@@ -32,8 +32,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/holiman/uint256"
-
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -373,7 +371,7 @@ func runBenchmark(b *testing.B, t *StateTest) {
 			evm.SetTxContext(txContext)
 
 			// Create "contract" for sender to cache code analysis.
-			sender := vm.NewContract(msg.From, msg.From, nil, 0, nil)
+			sender := vm.NewContract(msg.From, msg.From, nil, vm.GasBudget{}, nil)
 
 			var (
 				gasUsed uint64
@@ -387,8 +385,10 @@ func runBenchmark(b *testing.B, t *StateTest) {
 				b.StartTimer()
 				start := time.Now()
 
+				initialGas := vm.NewGasBudget(msg.GasLimit)
+
 				// Execute the message.
-				_, leftOverGas, err := evm.Call(sender.Address(), *msg.To, msg.Data, msg.GasLimit, uint256.MustFromBig(msg.Value))
+				_, leftOverGas, err := evm.Call(sender.Address(), *msg.To, msg.Data, initialGas.Copy(), msg.Value)
 				if err != nil {
 					b.Error(err)
 					return
@@ -397,7 +397,7 @@ func runBenchmark(b *testing.B, t *StateTest) {
 				b.StopTimer()
 				elapsed += uint64(time.Since(start))
 				refund += state.StateDB.GetRefund()
-				gasUsed += msg.GasLimit - leftOverGas
+				gasUsed += leftOverGas.Used(initialGas)
 
 				state.StateDB.RevertToSnapshot(snapshot)
 			}

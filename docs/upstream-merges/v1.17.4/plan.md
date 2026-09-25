@@ -42,12 +42,12 @@ Status legend: `pending` / `in-progress` / `merged` / `skipped`.
 | 18 | v1.17.2   | 3/4   | `e23b0cbc2` | 20      | stateless codedb fix, **call-variant gas measurement rework (`core/vm`)**, bintrie parallel hash | merged (`1abb57b8f`) |
 | 19 | v1.17.2   | 4/4   | `be4dc0c4b` | 17      | **EIP-7708**, simulateV1/getProofs limits, **v1.17.2 release**                                  | merged (`682b4c380`) |
 | 20 | v1.17.3   | 1/7   | `04e40995d` | 20      | **eth/70 partial receipts**, BAL storage layer + snap/2 BAL serving                             | merged `d9a3a0bc9` (snap/2 deferred; **eth/70 adopted separately**, see below) |
-| 21 | v1.17.3   | 2/7   | `c453b99a5` | 20      | **gas becomes vector <regularGas, stateGas> (`core`)**, bintrie fixes                           | pending |
-| 22 | v1.17.3   | 3/7   | `5af5510b1` | 20      | EIP-7610 rework, CachingDB split (merkle/binary), freezer fsync fix                             | pending |
-| 23 | v1.17.3   | 4/7   | `33c1bd59f` | 20      | **gas budget (`core/vm`)**, **EIP-7976 calldata floor**, **FinalizeAndAssemble removed (consensus iface)** | pending |
-| 24 | v1.17.3   | 5/7   | `41b856d47` | 20      | BAL spec update, **stack arena (`core/vm`)**, skip tx gas cap post-Amsterdam                    | pending |
-| 25 | v1.17.3   | 6/7   | `1abbae239` | 20      | **EIP-7981 access-list cost**, eth_call block overrides, TypeMux removal                        | pending |
-| 26 | v1.17.3   | 7/7   | `117e067f0` | 16      | misc fixes, **core.Message moves to uint256**, **v1.17.3 release**                              | pending |
+| 21 | v1.17.3   | 2/7   | `c453b99a5` | 20      | **gas becomes vector <regularGas, stateGas> (`core`)**, bintrie fixes                           | merged (`582a825ae`) |
+| 22 | v1.17.3   | 3/7   | `5af5510b1` | 20      | EIP-7610 rework, CachingDB split (merkle/binary), freezer fsync fix                             | merged (`e15a2b63b`) — **CachingDB split (#34700) deferred**, adopted separately in `b0ea85ca0`, see below |
+| 23 | v1.17.3   | 4/7   | `33c1bd59f` | 20      | **gas budget (`core/vm`)**, **EIP-7976 calldata floor**, **FinalizeAndAssemble removed (consensus iface)** | merged (`7b7b9f352`) — 37 conflicts, **#34726 FinalizeAndAssemble removal DECLINED** (Bor's finalization produces state-sync receipts) |
+| 24 | v1.17.3   | 5/7   | `41b856d47` | 20      | BAL spec update, **stack arena (`core/vm`)**, skip tx gas cap post-Amsterdam                    | merged (`9c16c4244`) — 29 conflicts, **#33960 stack arena: API adopted, Bor's GEVM storage layout kept** (operator decision; `EVM.Release()` + 17 call sites declined) |
+| 25 | v1.17.3   | 6/7   | `1abbae239` | 20      | **EIP-7981 access-list cost**, eth_call block overrides, TypeMux removal                        | merged (`90cbef62b`) — 17 conflicts, **#32585 TypeMux→Feed DECLINED** (entangled with the deferred #33157 SyncMode relocation + Bor's forked downloader) |
+| 26 | v1.17.3   | 7/7   | `117e067f0` | 16      | misc fixes, **core.Message moves to uint256**, **v1.17.3 release**                              | merged (`96945e338`) — 7 conflicts; caught and fixed a real regression (Bor's signed `effectiveTip` wrapped as uint256 on the NoBaseFee path). `version/version.go` deliberately not bumped — belongs in the milestone chores commit |
 | 27 | v1.17.4   | 1/7   | `1149f76dc` | 20      | pre/post-execution wrap (`core`+miner), GasChangeHook v2, block-level accessList                | pending |
 | 28 | v1.17.4   | 2/7   | `ca1a027fa` | 20      | **block accessList construction (consensus/miner)**, eth71 BAL response, engine_hasBlobs        | pending |
 | 29 | v1.17.4   | 3/7   | `4017efe34` | 20      | **jumpdest bitmap global cache (`core/vm`)**, RPC hardening, deprecated CLI flag removal        | pending |
@@ -67,13 +67,32 @@ upstream's commit expected.
 | ------- | ----------- | ------ | -------- |
 | `core/vm` catch-up | batches 4–19 | `ppatil-corevm-catchup` | `ppatil-upstream-v1.17.2` tip |
 | EIP-7975 / eth/70 partial receipts (#33153) | batch 20 | `ppatil-upstream-eth70` | `d9a3a0bc9` (batch 20 tip) |
+| `CachingDB` split into `MPTDatabase` + `UBTDatabase` (#34700) | batch 22 | `ppatil-upstream-mptubt` — `b0ea85ca0` | `e15a2b63b` (batch 22 tip) |
 
-Milestone v1.17.3 is therefore split across two PRs, with the eth/70 PR stacked
-between them: batch 20 alone, then eth/70, then batches 21–26 plus the milestone
-chores.
+Milestone v1.17.3 is therefore split across four PRs, with two adoption PRs
+stacked between the merge PRs: batch 20 alone (#2340), then eth/70 (#2341), then
+batches 21–22 (#2342), then the `CachingDB` split (#2343), then batches 23–26 plus
+the milestone chores on `ppatil-upstream-v1.17.3-part3`.
+
+The #34700 adoption was **scheduled before batch 23**, not open-ended: its sequel
+#34763 applies the same MPT/UBT split to `core/state/reader.go` inside batch 23,
+so batch 23 must not be attempted against a non-split tree. Adopted partially —
+the type split, not the runtime fork-boundary plumbing; see the `needs-wiring.md`
+row for what was declined and why.
 
 ## Bor-specific risk flags (advance warning, not a substitute for per-batch review)
 
+- **Witness logic is off-limits for the whole sync (operator-directed).** Bor's
+  witness generation, propagation and import are a deliberate divergence, so no
+  batch may alter them as a side effect of an upstream merge. Treat as no-go:
+  `core/stateless/`, `eth/protocols/wit/`, the `s.witness` collection blocks in
+  `core/state/statedb.go`, and witness handling in `core/blockchain.go`,
+  `miner/worker.go` and the downloader. A *file* overlapping is not the feature
+  overlapping — `statedb.go` in particular holds witness blocks next to
+  unrelated state code, so resolve around them. If an upstream change genuinely
+  requires changing witness behaviour, stop and surface it; record it in
+  `needs-wiring.md` rather than resolving it autonomously. State the check in
+  each batch report, the same way fork gates are stated.
 - **Consensus interface churn:** batch 23 removes `FinalizeAndAssemble` from the
   consensus interface and batches 27–28 rework block assembly around block
   access lists — `consensus/bor` implements this interface, so expect class-3
@@ -103,3 +122,20 @@ chores.
   from `upstream-merge-v1.17.4` on the milestone's first batch.
 - Full first-parent logs per milestone captured in the planning run directory:
   `runs/pos-merge-upstream/2026-07-06T09-56-56Z-claude-v1.17.4-plan/log-<tag>.txt`.
+
+### Milestone v1.17.3 — complete
+
+Batches 20–26 plus two hand-written adoption commits are merged on four stacked
+branches. The milestone deliberately spans four PRs rather than one:
+
+| PR | Head | Contents |
+| -- | ---- | -------- |
+| #2340 | `ppatil-upstream-v1.17.3` | batch 20 |
+| #2341 | `ppatil-upstream-eth70` | eth/70 adoption |
+| #2342 | `ppatil-upstream-v1.17.3-part2` | batches 21–22 |
+| #2343 | `ppatil-upstream-mptubt` | #34700 `CachingDB` split adoption |
+| #2345 | `ppatil-upstream-v1.17.3-part3` | batches 23–26 |
+
+Next: milestone v1.17.4 (rows 27–33). The risk flags below still apply — batches
+27–28 rework block assembly around block access lists, which is where the
+`FinalizeAndAssemble` decline from batch 23 will resurface.

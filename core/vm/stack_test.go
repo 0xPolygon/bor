@@ -171,7 +171,7 @@ func BenchmarkStackRandomWorkload(b *testing.B) {
 	returnStack(stack)
 }
 
-// BenchmarkStackBack measures random-depth Back() access.
+// BenchmarkStackBack measures random-depth back() access.
 func BenchmarkStackBack(b *testing.B) {
 	stack := newstack()
 	for i := 0; i < 256; i++ {
@@ -179,10 +179,10 @@ func BenchmarkStackBack(b *testing.B) {
 	}
 
 	for b.Loop() {
-		_ = stack.Back(0)
-		_ = stack.Back(15)
-		_ = stack.Back(127)
-		_ = stack.Back(255)
+		_ = stack.back(0)
+		_ = stack.back(15)
+		_ = stack.back(127)
+		_ = stack.back(255)
 	}
 
 	returnStack(stack)

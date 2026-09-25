@@ -722,7 +722,13 @@ func (api *API) traceBlockParallel(ctx context.Context, block *types.Block, stat
 			defer pend.Done()
 			// Fetch and execute the next transaction trace tasks
 			for task := range jobs {
-				msg, _ := core.TransactionToMessage(txs[task.index], signer, block.BaseFee())
+				// This runs off the RPC handler's goroutine, so a nil message
+				// would not be recovered: report it as this transaction's result.
+				msg, err := core.TransactionToMessage(txs[task.index], signer, block.BaseFee())
+				if err != nil {
+					results[task.index] = &txTraceResult{TxHash: txs[task.index].Hash(), Error: err.Error()}
+					continue
+				}
 				txctx := &Context{
 					BlockHash:   blockHash,
 					BlockNumber: block.Number(),
@@ -769,7 +775,11 @@ txloop:
 		}
 
 		// Generate the next state snapshot fast without tracing
-		msg, _ := core.TransactionToMessage(tx, signer, block.BaseFee())
+		msg, err := core.TransactionToMessage(tx, signer, block.BaseFee())
+		if err != nil {
+			failed = err
+			break txloop
+		}
 		statedb.SetTxContext(tx.Hash(), i)
 		res, err := core.ApplyMessage(evm, msg, nil)
 		if err != nil {
@@ -960,7 +970,7 @@ func (api *API) standardTraceBlockToFile(ctx context.Context, block *types.Block
 		}
 		// Finalize the state so any modifications are written to the trie
 		// Only delete empty objects if EIP158/161 (a.k.a Spurious Dragon) is in effect
-		statedb.Finalise(evm.ChainConfig().IsEIP158(block.Number()))
+		statedb.Finalise(chainConfig.IsEIP158(block.Number()))
 
 		// If we've traced the transaction we were looking for, abort
 		if tx.Hash() == txHash {

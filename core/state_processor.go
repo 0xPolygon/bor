@@ -31,6 +31,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/holiman/uint256"
 )
 
 const maxSystemCallRet = 64 << 20 // 64 MiB
@@ -65,7 +66,7 @@ func (p *StateProcessor) chainConfig() *params.ChainConfig {
 func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg vm.Config, author *common.Address, interruptCtx context.Context) (*ProcessResult, error) {
 	var (
 		config      = p.chainConfig()
-		receipts    types.Receipts
+		receipts    = make(types.Receipts, 0, len(block.Transactions()))
 		header      = block.Header()
 		blockHash   = block.Hash()
 		blockNumber = block.Number()
@@ -356,15 +357,15 @@ func ProcessBeaconBlockRoot(beaconRoot common.Hash, evm *vm.EVM) {
 	msg := &Message{
 		From:      params.SystemAddress,
 		GasLimit:  30_000_000,
-		GasPrice:  common.Big0,
-		GasFeeCap: common.Big0,
-		GasTipCap: common.Big0,
+		GasPrice:  uint256.NewInt(0),
+		GasFeeCap: uint256.NewInt(0),
+		GasTipCap: uint256.NewInt(0),
 		To:        &params.BeaconRootsAddress,
 		Data:      beaconRoot[:],
 	}
 	evm.SetTxContext(NewEVMTxContext(msg))
 	evm.StateDB.AddAddressToAccessList(params.BeaconRootsAddress)
-	_, _, _ = evm.Call(msg.From, *msg.To, msg.Data, 30_000_000, common.U2560)
+	_, _, _ = evm.Call(msg.From, *msg.To, msg.Data, vm.NewGasBudget(30_000_000), common.U2560)
 	if evm.StateDB.AccessEvents() != nil {
 		evm.StateDB.AccessEvents().Merge(evm.AccessEvents)
 	}
@@ -383,15 +384,15 @@ func ProcessParentBlockHash(prevHash common.Hash, evm *vm.EVM) {
 	msg := &Message{
 		From:      params.SystemAddress,
 		GasLimit:  30_000_000,
-		GasPrice:  common.Big0,
-		GasFeeCap: common.Big0,
-		GasTipCap: common.Big0,
+		GasPrice:  uint256.NewInt(0),
+		GasFeeCap: uint256.NewInt(0),
+		GasTipCap: uint256.NewInt(0),
 		To:        &params.HistoryStorageAddress,
 		Data:      prevHash.Bytes(),
 	}
 	evm.SetTxContext(NewEVMTxContext(msg))
 	evm.StateDB.AddAddressToAccessList(params.HistoryStorageAddress)
-	_, _, err := evm.Call(msg.From, *msg.To, msg.Data, 30_000_000, common.U2560)
+	_, _, err := evm.Call(msg.From, *msg.To, msg.Data, vm.NewGasBudget(30_000_000), common.U2560)
 	if err != nil {
 		panic(err)
 	}
@@ -423,14 +424,14 @@ func processRequestsSystemCall(requests *[][]byte, evm *vm.EVM, requestType byte
 	msg := &Message{
 		From:      params.SystemAddress,
 		GasLimit:  30_000_000,
-		GasPrice:  common.Big0,
-		GasFeeCap: common.Big0,
-		GasTipCap: common.Big0,
+		GasPrice:  uint256.NewInt(0),
+		GasFeeCap: uint256.NewInt(0),
+		GasTipCap: uint256.NewInt(0),
 		To:        &addr,
 	}
 	evm.SetTxContext(NewEVMTxContext(msg))
 	evm.StateDB.AddAddressToAccessList(addr)
-	ret, _, err := evm.Call(msg.From, *msg.To, msg.Data, 30_000_000, common.U2560)
+	ret, _, err := evm.Call(msg.From, *msg.To, msg.Data, vm.NewGasBudget(30_000_000), common.U2560)
 	if evm.StateDB.AccessEvents() != nil {
 		evm.StateDB.AccessEvents().Merge(evm.AccessEvents)
 	}

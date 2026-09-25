@@ -91,7 +91,7 @@ func TestCollectStateWitnessIncludesFlatServedReads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("flat inner reader: %v", err)
 	}
-	tr, err := newTrieReader(root, tdb)
+	tr, err := newMPTTrieReader(root, tdb)
 	if err != nil {
 		t.Fatalf("trie reader: %v", err)
 	}
