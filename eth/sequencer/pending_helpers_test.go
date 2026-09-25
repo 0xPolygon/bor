@@ -329,6 +329,38 @@ func TestPendingStateReaderAccessors(t *testing.T) {
 	}
 }
 
+func TestPendingStateReaderOverlayView(t *testing.T) {
+	db := state.NewDatabaseForTesting()
+	parent, _ := state.New(types.EmptyRootHash, db)
+	address, changed, kept := common.Address{1}, common.Hash{1}, common.Hash{2}
+	parent.SetNonce(address, 1, tracing.NonceChangeUnspecified)
+	parent.SetState(address, changed, common.Hash{1})
+	parent.SetState(address, kept, common.Hash{2})
+	root, err := parent.Commit(0, true, false)
+	if err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	pending, _ := state.New(root, db)
+	pending.SetState(address, changed, common.Hash{9})
+	pending.SetNonce(address, 7, tracing.NonceChangeUnspecified)
+
+	reader := newPendingStateReader(pending)
+	if reader.diff == nil {
+		t.Fatal("reader did not build an overlay")
+	}
+	view, err := reader.NewStateDB()
+	if err != nil {
+		t.Fatalf("view: %v", err)
+	}
+	if view.GetState(address, changed) != (common.Hash{9}) || view.GetState(address, kept) != (common.Hash{2}) || view.GetNonce(address) != 7 {
+		t.Fatal("overlay view returned wrong pending state")
+	}
+	view.SetNonce(address, 8, tracing.NonceChangeUnspecified)
+	if other, _ := reader.NewStateDB(); other.GetNonce(address) != 7 {
+		t.Fatal("overlay view mutation leaked into another view")
+	}
+}
+
 type failingStateReader struct {
 	err error
 }

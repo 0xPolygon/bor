@@ -2980,6 +2980,16 @@ func NewWithFlatBase(parentCommittedRoot common.Hash, db Database, flatDiff *Fla
 	return sdb, nil
 }
 
+// FlatOverlay returns s's base root and mutations for NewWithFlatBase, or false if s is already an overlay.
+func (s *StateDB) FlatOverlay() (common.Hash, *FlatDiff, bool) {
+	if s.flatDiffRef != nil {
+		return common.Hash{}, nil, false
+	}
+	diff := s.CommitSnapshot(true)
+	diff.trackOverlayReads = false
+	return s.originalRoot, diff, true
+}
+
 // SetFlatDiffRef sets the read-only FlatDiff reference for lazy lookups.
 func (s *StateDB) SetFlatDiffRef(diff *FlatDiff) {
 	s.flatDiffRef = diff

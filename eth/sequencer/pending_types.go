@@ -51,6 +51,16 @@ type PendingStateReader interface {
 type pendingStateReader struct {
 	mu    sync.RWMutex
 	state *state.StateDB
+	base  common.Hash
+	diff  *state.FlatDiff // nil: NewStateDB deep-copies state
+}
+
+func newPendingStateReader(statedb *state.StateDB) *pendingStateReader {
+	r := &pendingStateReader{state: statedb.CopyWithoutLogHistory()}
+	if base, diff, ok := r.state.FlatOverlay(); ok {
+		r.base, r.diff = base, diff
+	}
+	return r
 }
 
 func (r *pendingStateReader) GetBalance(address common.Address) *uint256.Int {
@@ -90,6 +100,9 @@ func (r *pendingStateReader) NewStateDB() (*state.StateDB, error) {
 	defer r.mu.RUnlock()
 	if err := r.state.Error(); err != nil {
 		return nil, err
+	}
+	if r.diff != nil {
+		return state.NewWithFlatBase(r.base, r.state.Database(), r.diff)
 	}
 	return r.state.Copy(), nil
 }

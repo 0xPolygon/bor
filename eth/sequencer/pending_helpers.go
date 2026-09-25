@@ -30,11 +30,10 @@ func buildRPCView(block *types.Block, receipts types.Receipts, statedb *state.St
 		}
 		logs = append(logs, copy.Logs...)
 	}
-	stateCopy := statedb.CopyWithoutLogHistory()
 	return &PendingRPCView{
 		Header:           block.Header(),
 		Block:            block,
-		State:            &pendingStateReader{state: stateCopy},
+		State:            newPendingStateReader(statedb),
 		Receipts:         receiptMap,
 		Logs:             logs,
 		receiptBlockHash: blockHash,

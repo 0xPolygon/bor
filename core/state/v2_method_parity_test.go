@@ -114,6 +114,7 @@ var pdbExemptMethods = map[string]pdbExemptCategory{
 	"ApplyFlatDiffForCommitFast": catPipelinedSRC,
 	"CommitSnapshot":             catPipelinedSRC,
 	"DetachPrefetcher":           catPipelinedSRC,
+	"FlatOverlay":                catPipelinedSRC,
 	"PropagateReadsTo":           catPipelinedSRC,
 	"SetFlatDiffRef":             catPipelinedSRC,
 	"WasStorageSlotRead":         catPipelinedSRC,
