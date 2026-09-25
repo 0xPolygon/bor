@@ -111,7 +111,7 @@ func runTransientStorageParity(t *testing.T, gasBoundBlock *big.Int) common.Hash
 	message, err := core.TransactionToMessage(stateSyncTx, types.MakeSigner(chainConfig, header.Number, header.Time), header.BaseFee)
 	require.NoError(t, err)
 	traceState := newState()
-	traceState.SetTxContext(stateSyncTx.Hash(), 0)
+	traceState.SetTxContext(stateSyncTx.Hash(), 0, 1)
 	traceEVM := vm.NewEVM(core.NewEVMBlockContext(header, chainContext, &header.Coinbase), traceState, chainConfig, vm.Config{})
 	traceResult, err := statefull.ApplyStateSyncEvents(t.Context(), traceEVM, stateSyncTx, message, receiver)
 	require.NoError(t, err)

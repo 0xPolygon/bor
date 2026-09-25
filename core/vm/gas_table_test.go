@@ -99,12 +99,12 @@ func TestEIP2200(t *testing.T) {
 			Transfer:    func(StateDB, common.Address, common.Address, *uint256.Int, *params.Rules) {},
 		}
 		evm := NewEVM(vmctx, statedb, params.AllEthashProtocolChanges, Config{ExtraEips: []int{2200}})
-		initialGas := NewGasBudget(tt.gaspool)
-		_, leftOver, err := evm.Call(common.Address{}, address, nil, initialGas.Copy(), new(uint256.Int))
+		initialGas := NewGasBudget(tt.gaspool, 0)
+		_, result, err := evm.Call(common.Address{}, address, nil, initialGas, new(uint256.Int))
 		if !errors.Is(err, tt.failure) {
 			t.Errorf("test %d: failure mismatch: have %v, want %v", i, err, tt.failure)
 		}
-		if used := leftOver.Used(initialGas); used != tt.used {
+		if used := result.Used(initialGas); used != tt.used {
 			t.Errorf("test %d: gas used mismatch: have %v, want %v", i, used, tt.used)
 		}
 		if refund := evm.StateDB.GetRefund(); refund != tt.refund {
@@ -164,12 +164,12 @@ func TestCreateGas(t *testing.T) {
 			}
 
 			evm := NewEVM(vmctx, statedb, chainConfig, config)
-			initialGas := NewGasBudget(uint64(testGas))
-			ret, leftOver, err := evm.Call(common.Address{}, address, nil, initialGas.Copy(), new(uint256.Int))
+			initialGas := NewGasBudget(uint64(testGas), 0)
+			ret, result, err := evm.Call(common.Address{}, address, nil, initialGas, new(uint256.Int))
 			if err != nil {
 				return false
 			}
-			gasUsed = leftOver.Used(initialGas)
+			gasUsed = result.Used(initialGas)
 			if len(ret) != 32 {
 				t.Fatalf("test %d: expected 32 bytes returned, have %d", i, len(ret))
 			}
@@ -265,7 +265,7 @@ func TestPIP88SStoreAccessCheck(t *testing.T) {
 			blockCtx := BlockContext{BlockNumber: big.NewInt(tt.block)}
 			evm := NewEVM(blockCtx, sdb, hampiTestChainConfig(big.NewInt(forkBlock)), Config{})
 
-			contract := NewContract(common.Address{}, addr, uint256.NewInt(0), NewGasBudget(tt.gas), nil)
+			contract := NewContract(common.Address{}, addr, uint256.NewInt(0), NewGasBudget(tt.gas, 0), nil)
 			stack := newstack()
 			stack.push(uint256.NewInt(1)) // value  (Back(1))
 			stack.push(new(uint256.Int))  // key    (peek) -> slot 0

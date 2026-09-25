@@ -116,7 +116,7 @@ func TestV2SerialParity_MetamorphicCreate2(t *testing.T) {
 		gp := NewGasPool(blockCtx.GasLimit)
 		serialEVM := vm.NewEVM(blockCtx, serialDB, &cfg, vm.Config{})
 		for j, tx := range txs {
-			serialDB.SetTxContext(tx.Hash(), j)
+			serialDB.SetTxContext(tx.Hash(), j, uint32(j+1))
 			if _, err := ApplyTransactionWithEVM(msgs[j], gp, serialDB, blockCtx.BlockNumber,
 				common.Hash{}, blockCtx.Time, tx, serialEVM); err != nil {
 				t.Fatalf("iter %d serial tx %d: %v", i, j, err)

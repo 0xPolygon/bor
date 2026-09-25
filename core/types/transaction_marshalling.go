@@ -400,6 +400,9 @@ func (tx *Transaction) UnmarshalJSON(input []byte) error {
 		if dec.BlobVersionedHashes == nil {
 			return errors.New("missing required field 'blobVersionedHashes' in transaction")
 		}
+		if len(dec.BlobVersionedHashes) == 0 {
+			return errors.New("'blobVersionedHashes' must contain at least one hash")
+		}
 		itx.BlobHashes = dec.BlobVersionedHashes
 
 		// signature R

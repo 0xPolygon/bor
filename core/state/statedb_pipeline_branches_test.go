@@ -35,7 +35,7 @@ func TestFlatDiffInternalBranchHelpers(t *testing.T) {
 	addr := common.HexToAddress("0x1234")
 
 	require.False(t, statedb.hasAccountMutation(addr))
-	statedb.journal.dirty(addr)
+	statedb.journal.mutationStateFor(addr).add(journalMutationKindTouch)
 	require.True(t, statedb.hasAccountMutation(addr))
 	statedb.clearJournalAndRefund()
 	statedb.mutations[addr] = &mutation{typ: update}
@@ -98,7 +98,7 @@ func TestFinaliseFastPrefetchSkipsMissingDirtyObject(t *testing.T) {
 	t.Cleanup(statedb.StopPrefetcher)
 
 	missing := common.HexToAddress("0xbeef")
-	statedb.journal.dirty(missing)
+	statedb.journal.mutationStateFor(missing).add(journalMutationKindTouch)
 	require.Empty(t, statedb.snapshotDirtyStorageSlots())
 	statedb.FinaliseFastWithPrefetch(false)
 }

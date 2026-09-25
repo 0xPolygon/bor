@@ -99,7 +99,6 @@ if one is set.  Otherwise it prints the genesis from the datadir.`,
 			utils.CachePreimagesFlag,
 			utils.NoCompactionFlag,
 			utils.MetricsEnabledFlag,
-			utils.MetricsEnabledExpensiveFlag,
 			utils.MetricsHTTPFlag,
 			utils.MetricsPortFlag,
 			utils.MetricsEnableInfluxDBFlag,
@@ -114,7 +113,6 @@ if one is set.  Otherwise it prints the genesis from the datadir.`,
 			utils.MetricsInfluxDBBucketFlag,
 			utils.MetricsInfluxDBOrganizationFlag,
 			utils.StateSizeTrackingFlag,
-			utils.TxLookupLimitFlag,
 			utils.VMTraceFlag,
 			utils.VMTraceJsonConfigFlag,
 			utils.TransactionHistoryFlag,
@@ -155,7 +153,7 @@ be gzipped.`,
 		Name:      "import-history",
 		Usage:     "Import an Era archive",
 		ArgsUsage: "<dir>",
-		Flags:     slices.Concat([]cli.Flag{utils.TxLookupLimitFlag, utils.TransactionHistoryFlag}, utils.DatabaseFlags, utils.NetworkFlags),
+		Flags:     slices.Concat([]cli.Flag{utils.TransactionHistoryFlag}, utils.DatabaseFlags, utils.NetworkFlags),
 		Description: `
 The import-history command will import blocks and their corresponding receipts
 from Era archives.
@@ -733,7 +731,7 @@ func pruneHistory(ctx *cli.Context) error {
 	)
 
 	// Check the current freezer tail to see if pruning is needed/possible.
-	freezerTail, _ := chaindb.Tail()
+	freezerTail, _ := chaindb.Tail(rawdb.ChainFreezerBlockDataGroup)
 	if freezerTail > 0 {
 		if freezerTail == targetBlock {
 			log.Info("Database already pruned to target block", "tail", freezerTail)
@@ -765,7 +763,7 @@ func pruneHistory(ctx *cli.Context) error {
 	log.Info("Starting history pruning", "head", currentHeader.Number, "target", targetBlock, "targetHash", targetBlockHash.Hex())
 	start := time.Now()
 	rawdb.PruneTransactionIndex(chaindb, targetBlock)
-	if _, err := chaindb.TruncateTail(targetBlock); err != nil {
+	if _, err := chaindb.TruncateTail(rawdb.ChainFreezerBlockDataGroup, targetBlock); err != nil {
 		return fmt.Errorf("failed to truncate ancient data: %v", err)
 	}
 	log.Info("History pruning completed", "tail", targetBlock, "elapsed", common.PrettyDuration(time.Since(start)))

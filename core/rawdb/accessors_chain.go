@@ -837,9 +837,18 @@ func HasAccessList(db ethdb.Reader, hash common.Hash, number uint64) bool {
 	return has
 }
 
-// ReadAccessListRLP retrieves the RLP-encoded block access list for a block from KV.
+// ReadAccessListRLP retrieves the RLP-encoded block access list for a block.
 func ReadAccessListRLP(db ethdb.Reader, hash common.Hash, number uint64) rlp.RawValue {
-	data, _ := db.Get(accessListKey(number, hash))
+	var data []byte
+	db.ReadAncients(func(reader ethdb.AncientReaderOp) error {
+		data, _ = reader.Ancient(ChainFreezerBALTable, number)
+		if len(data) > 0 {
+			return nil
+		}
+		// Block is not in ancients, read from key-value store by hash and number.
+		data, _ = db.Get(accessListKey(number, hash))
+		return nil
+	})
 	return data
 }
 
@@ -1000,7 +1009,46 @@ func writeAncientBlock(op ethdb.AncientWriteOp, block *types.Block, header *type
 	if err := op.Append(ChainFreezerDifficultyTable, num, td); err != nil {
 		return fmt.Errorf("can't append block %d total difficulty: %v", num, err)
 	}
+
+	// The assumption is held that BAL of ancient block is no longer available
+	// (it may still reachable, but it's not worthwhile to even retrieve it
+	// from the network). A nil entry is stored in the BAL table as the absence
+	// placeholder.
+	if err := op.AppendRaw(ChainFreezerBALTable, num, nil); err != nil {
+		return fmt.Errorf("can't append block %d bals: %v", num, err)
+	}
 	return nil
+}
+
+// WriteAncientHeaderChain writes the supplied headers along with nil block
+// bodies and receipts into the ancient store. It's supposed to be used for
+// storing chain segment before the chain cutoff.
+func WriteAncientHeaderChain(db ethdb.AncientWriter, headers []*types.Header) (int64, error) {
+	return db.ModifyAncients(func(op ethdb.AncientWriteOp) error {
+		for _, header := range headers {
+			num := header.Number.Uint64()
+			if err := op.AppendRaw(ChainFreezerHashTable, num, header.Hash().Bytes()); err != nil {
+				return fmt.Errorf("can't add block %d hash: %v", num, err)
+			}
+			if err := op.Append(ChainFreezerHeaderTable, num, header); err != nil {
+				return fmt.Errorf("can't append block header %d: %v", num, err)
+			}
+			if err := op.AppendRaw(ChainFreezerBodiesTable, num, nil); err != nil {
+				return fmt.Errorf("can't append block body %d: %v", num, err)
+			}
+			if err := op.AppendRaw(ChainFreezerReceiptTable, num, nil); err != nil {
+				return fmt.Errorf("can't append block %d receipts: %v", num, err)
+			}
+			// The assumption is held that BAL of ancient block is no longer available
+			// (it may still reachable, but it's not worthwhile to even retrieve it
+			// from the network). A nil entry is stored in the BAL table as the absence
+			// placeholder.
+			if err := op.AppendRaw(ChainFreezerBALTable, num, nil); err != nil {
+				return fmt.Errorf("can't append block %d bals: %v", num, err)
+			}
+		}
+		return nil
+	})
 }
 
 // DeleteBlock removes all block data associated with a hash.
@@ -1009,6 +1057,7 @@ func DeleteBlock(db ethdb.KeyValueWriter, hash common.Hash, number uint64) {
 	DeleteHeader(db, hash, number)
 	DeleteBody(db, hash, number)
 	DeleteTd(db, hash, number)
+	DeleteAccessList(db, hash, number)
 
 	// delete bor receipt
 	DeleteBorReceipt(db, hash, number)
@@ -1021,6 +1070,7 @@ func DeleteBlockWithoutNumber(db ethdb.KeyValueWriter, hash common.Hash, number 
 	deleteHeaderWithoutNumber(db, hash, number)
 	DeleteBody(db, hash, number)
 	DeleteTd(db, hash, number)
+	DeleteAccessList(db, hash, number)
 
 	// delete bor receipt
 	DeleteBorReceipt(db, hash, number)

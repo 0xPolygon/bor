@@ -39,7 +39,7 @@ func (s *blockingAncientStore) Ancients() (uint64, error) {
 	return 0, nil
 }
 
-func (s *blockingAncientStore) Tail() (uint64, error) {
+func (s *blockingAncientStore) Tail(string) (uint64, error) {
 	return 0, nil
 }
 
@@ -73,7 +73,7 @@ func (s *blockingAncientStore) TruncateHead(uint64) (uint64, error) {
 	return 0, nil
 }
 
-func (s *blockingAncientStore) TruncateTail(uint64) (uint64, error) {
+func (s *blockingAncientStore) TruncateTail(string, uint64) (uint64, error) {
 	return 0, nil
 }
 

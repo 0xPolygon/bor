@@ -34,7 +34,6 @@ import (
 	"time"
 
 	pcsclite "github.com/gballet/go-libpcsclite"
-	gopsutil "github.com/shirou/gopsutil/mem"
 	"github.com/urfave/cli/v2"
 
 	"github.com/ethereum/go-ethereum/accounts"
@@ -63,6 +62,7 @@ import (
 	"github.com/ethereum/go-ethereum/graphql"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
 	"github.com/ethereum/go-ethereum/internal/flags"
+	"github.com/ethereum/go-ethereum/internal/memlimit"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/metrics/exp"
@@ -1457,9 +1457,6 @@ func MakeAddress(ks *keystore.KeyStore, account string) (accounts.Account, error
 
 // setEtherbase retrieves the etherbase from the directly specified command line flags.
 func setEtherbase(ctx *cli.Context, cfg *ethconfig.Config) {
-	if ctx.IsSet(MinerEtherbaseFlag.Name) {
-		log.Warn("Option --miner.etherbase is deprecated as the etherbase is set by the consensus client post-merge")
-	}
 	if !ctx.IsSet(MinerPendingFeeRecipientFlag.Name) {
 		return
 	}
@@ -1553,9 +1550,6 @@ func SetNodeConfig(ctx *cli.Context, cfg *node.Config) {
 	if ctx.IsSet(JWTSecretFlag.Name) {
 		cfg.JWTSecret = ctx.String(JWTSecretFlag.Name)
 	}
-	if ctx.IsSet(EnablePersonal.Name) {
-		log.Warn(fmt.Sprintf("Option --%s is deprecated. The 'personal' RPC namespace has been removed.", EnablePersonal.Name))
-	}
 
 	if ctx.IsSet(ExternalSignerFlag.Name) {
 		cfg.ExternalSigner = ctx.String(ExternalSignerFlag.Name)
@@ -1572,19 +1566,9 @@ func SetNodeConfig(ctx *cli.Context, cfg *node.Config) {
 	if ctx.IsSet(LightKDFFlag.Name) {
 		cfg.UseLightweightKDF = ctx.Bool(LightKDFFlag.Name)
 	}
-
-	if ctx.IsSet(NoUSBFlag.Name) || cfg.NoUSB {
-		log.Warn("Option --nousb is deprecated and USB is deactivated by default. Use --usb to enable")
-	}
-
 	if ctx.IsSet(USBFlag.Name) {
 		cfg.USB = ctx.Bool(USBFlag.Name)
 	}
-
-	if ctx.IsSet(InsecureUnlockAllowedFlag.Name) {
-		log.Warn(fmt.Sprintf("Option --%s is deprecated and has no effect", InsecureUnlockAllowedFlag.Name))
-	}
-
 	if ctx.IsSet(DBEngineFlag.Name) {
 		dbEngine := ctx.String(DBEngineFlag.Name)
 		if dbEngine != "leveldb" && dbEngine != "pebble" {
@@ -1593,13 +1577,6 @@ func SetNodeConfig(ctx *cli.Context, cfg *node.Config) {
 
 		log.Info(fmt.Sprintf("Using %s as db engine", dbEngine))
 		cfg.DBEngine = dbEngine
-	}
-	// deprecation notice for log debug flags (TODO: find a more appropriate place to put these?)
-	if ctx.IsSet(LogBacktraceAtFlag.Name) {
-		log.Warn("Option --log.backtrace flag is deprecated")
-	}
-	if ctx.IsSet(LogDebugFlag.Name) {
-		log.Warn("Option --log.debug flag is deprecated")
 	}
 }
 
@@ -1665,7 +1642,7 @@ func setTxPool(ctx *cli.Context, cfg *legacypool.Config) {
 			if trimmed := strings.TrimSpace(account); !common.IsHexAddress(trimmed) {
 				Fatalf("Invalid account in --txpool.locals: %s", trimmed)
 			} else {
-				cfg.Locals = append(cfg.Locals, common.HexToAddress(account))
+				cfg.Locals = append(cfg.Locals, common.HexToAddress(trimmed))
 			}
 		}
 	}
@@ -1724,9 +1701,6 @@ func setBlobPool(ctx *cli.Context, cfg *blobpool.Config) {
 }
 
 func setMiner(ctx *cli.Context, cfg *miner.Config) {
-	if ctx.Bool(MiningEnabledFlag.Name) {
-		log.Warn("The flag --mine is deprecated and will be removed")
-	}
 	if ctx.IsSet(MinerExtraDataFlag.Name) {
 		cfg.ExtraData = []byte(ctx.String(MinerExtraDataFlag.Name))
 	}
@@ -1742,22 +1716,12 @@ func setMiner(ctx *cli.Context, cfg *miner.Config) {
 	if ctx.IsSet(MinerRecommitIntervalFlag.Name) {
 		cfg.Recommit = ctx.Duration(MinerRecommitIntervalFlag.Name)
 	}
-	if ctx.IsSet(MinerNewPayloadTimeoutFlag.Name) {
-		log.Warn("The flag --miner.newpayload-timeout is deprecated and will be removed, please use --miner.recommit")
-		cfg.Recommit = ctx.Duration(MinerNewPayloadTimeoutFlag.Name)
-	}
 }
 
 func setRequiredBlocks(ctx *cli.Context, cfg *ethconfig.Config) {
 	requiredBlocks := ctx.String(EthRequiredBlocksFlag.Name)
 	if requiredBlocks == "" {
-		if ctx.IsSet(LegacyWhitelistFlag.Name) {
-			log.Warn("The flag --whitelist is deprecated and will be removed, please use --eth.requiredblocks")
-
-			requiredBlocks = ctx.String(LegacyWhitelistFlag.Name)
-		} else {
-			return
-		}
+		return
 	}
 
 	cfg.RequiredBlocks = make(map[uint64]common.Hash)
@@ -1796,18 +1760,20 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 	setMiner(ctx, &cfg.Miner)
 	setRequiredBlocks(ctx, cfg)
 
-	// Cap the cache allowance and tune the garbage collector
-	mem, err := gopsutil.VirtualMemory()
-	if err == nil {
-		if 32<<(^uintptr(0)>>63) == 32 && mem.Total > 2*1024*1024*1024 {
-			log.Warn("Lowering memory allowance on 32bit arch", "available", mem.Total/1024/1024, "addressable", 2*1024)
-			mem.Total = 2 * 1024 * 1024 * 1024
+	// Cap the cache allowance and tune the garbage collector against
+	// the effective memory limit (cgroup-imposed when running in a
+	// container, total system memory otherwise).
+	total, source := memlimit.Limit()
+	if total > 0 {
+		if 32<<(^uintptr(0)>>63) == 32 && total > 2*1024*1024*1024 {
+			log.Warn("Lowering memory allowance on 32bit arch", "available", total/1024/1024, "addressable", 2*1024)
+			total = 2 * 1024 * 1024 * 1024
 		}
 
-		allowance := int(mem.Total / 1024 / 1024 / 3)
+		allowance := int(total / 1024 / 1024 / 3)
 
 		if cache := ctx.Int(CacheFlag.Name); cache > allowance {
-			log.Warn("Sanitizing cache to Go's GC limits", "provided", cache, "updated", allowance)
+			log.Warn("Sanitizing cache to Go's GC limits", "source", source, "provided", cache, "updated", allowance)
 			_ = ctx.Set(CacheFlag.Name, strconv.Itoa(allowance))
 		}
 	}
@@ -1822,14 +1788,14 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 		cfg.SyncMode = downloader.FullSync // dev sync target forces full sync
 	} else if ctx.IsSet(SyncModeFlag.Name) {
 		value := ctx.String(SyncModeFlag.Name)
-		if err = cfg.SyncMode.UnmarshalText([]byte(value)); err != nil {
+		if err := cfg.SyncMode.UnmarshalText([]byte(value)); err != nil {
 			Fatalf("--%v: %v", SyncModeFlag.Name, err)
 		}
 	}
 
 	if ctx.IsSet(ChainHistoryFlag.Name) {
 		value := ctx.String(ChainHistoryFlag.Name)
-		if err = cfg.HistoryMode.UnmarshalText([]byte(value)); err != nil {
+		if err := cfg.HistoryMode.UnmarshalText([]byte(value)); err != nil {
 			Fatalf("--%s: %v", ChainHistoryFlag.Name, err)
 		}
 	}
@@ -1890,11 +1856,8 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 	}
 	if ctx.IsSet(TransactionHistoryFlag.Name) {
 		cfg.TransactionHistory = ctx.Uint64(TransactionHistoryFlag.Name)
-	} else if ctx.IsSet(TxLookupLimitFlag.Name) {
-		log.Warn("The flag --txlookuplimit is deprecated and will be removed, please use --history.transactions")
-		cfg.TransactionHistory = ctx.Uint64(TxLookupLimitFlag.Name)
 	}
-	if ctx.String(GCModeFlag.Name) == "archive" {
+	if cfg.NoPruning {
 		if cfg.TransactionHistory != 0 {
 			cfg.TransactionHistory = 0
 			log.Warn("Disabled transaction unindexing for archive node")
@@ -1992,8 +1955,8 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 			cfg.EthDiscoveryURLs = SplitAndTrim(urls)
 		}
 	}
-	if ctx.Bool(StateSizeTrackingFlag.Name) {
-		cfg.EnableStateSizeTracking = true
+	if ctx.IsSet(StateSizeTrackingFlag.Name) {
+		cfg.EnableStateSizeTracking = ctx.Bool(StateSizeTrackingFlag.Name)
 	}
 	// Override any default configs for hard coded networks.
 	switch {
