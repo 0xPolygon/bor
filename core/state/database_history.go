@@ -228,6 +228,12 @@ type HistoricDB struct {
 	codeSizeCache *lru.Cache[common.Hash, int]
 }
 
+// Type returns the trie type of the underlying database.
+func (db *HistoricDB) Type() DatabaseType {
+	// TODO(rjl493456442) support UBT in the future
+	return TypeMPT
+}
+
 // NewHistoricDatabase creates a historic state database.
 func NewHistoricDatabase(disk ethdb.KeyValueStore, triedb *triedb.Database) *HistoricDB {
 	return &HistoricDB{

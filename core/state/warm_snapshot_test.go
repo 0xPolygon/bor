@@ -207,7 +207,7 @@ func TestWarmSnapshot_NilAndEmpty(t *testing.T) {
 // TestNewTrieOnlyWithSnapshotInstallsStateDBWrapper verifies that the snapshot
 // handoff is installed on StateDB.db, not only on the initial Reader. Commit
 // paths call StateDB.db.OpenTrie/OpenStorageTrie directly; if db remained the
-// plain CachingDB those calls would bypass WarmSnapshot.
+// plain MPTDatabase those calls would bypass WarmSnapshot.
 func TestNewTrieOnlyWithSnapshotInstallsStateDBWrapper(t *testing.T) {
 	cdb := NewDatabaseForTesting()
 	snap := NewWarmSnapshot([]TrieWarmNodes{{
@@ -376,17 +376,16 @@ func TestSnapshotStateDatabaseTrieOperations(t *testing.T) {
 }
 
 func TestSnapshotStateDatabaseVerkleTrieOperations(t *testing.T) {
-	cdb := NewDatabase(triedb.NewDatabase(rawdb.NewMemoryDatabase(), triedb.VerkleDefaults), nil)
+	cdb := NewMPTDatabase(triedb.NewDatabase(rawdb.NewMemoryDatabase(), triedb.UBTDefaults), nil)
 	db := newSnapshotStateDatabase(cdb, NewWarmSnapshot(nil))
 
 	accountTrie, err := db.OpenTrie(types.EmptyRootHash)
-	require.NoError(t, err)
-	require.NotNil(t, accountTrie)
+	require.ErrorIs(t, err, errWarmSnapshotUBT)
+	require.Nil(t, accountTrie)
 
-	self := accountTrie
-	storageTrie, err := db.OpenStorageTrie(types.EmptyRootHash, common.HexToAddress("0x1"), types.EmptyRootHash, self)
-	require.NoError(t, err)
-	require.Same(t, self, storageTrie)
+	storageTrie, err := db.OpenStorageTrie(types.EmptyRootHash, common.HexToAddress("0x1"), types.EmptyRootHash, nil)
+	require.ErrorIs(t, err, errWarmSnapshotUBT)
+	require.Nil(t, storageTrie)
 }
 
 func TestSnapshotNodeDatabaseForwardingAndErrors(t *testing.T) {

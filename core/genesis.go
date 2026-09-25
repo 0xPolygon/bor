@@ -144,22 +144,22 @@ func ReadGenesis(db ethdb.Database) (*Genesis, error) {
 }
 
 // hashAlloc computes the state root according to the genesis specification.
-func hashAlloc(ga *types.GenesisAlloc, isVerkle bool) (common.Hash, error) {
+func hashAlloc(ga *types.GenesisAlloc, isUBT bool) (common.Hash, error) {
 	// If a genesis-time verkle trie is requested, create a trie config
 	// with the verkle trie enabled so that the tree can be initialized
 	// as such.
 	var config *triedb.Config
-	if isVerkle {
+	if isUBT {
 		config = &triedb.Config{
-			PathDB:   pathdb.Defaults,
-			IsVerkle: true,
+			PathDB: pathdb.Defaults,
+			IsUBT:  true,
 		}
 	}
 	// Create an ephemeral in-memory database for computing hash,
 	// all the derived states will be discarded to not pollute disk.
 	emptyRoot := types.EmptyRootHash
-	if isVerkle {
-		emptyRoot = types.EmptyVerkleHash
+	if isUBT {
+		emptyRoot = types.EmptyBinaryHash
 	}
 	db := rawdb.NewMemoryDatabase()
 	statedb, err := state.New(emptyRoot, state.NewDatabase(triedb.NewDatabase(db, config), nil))
@@ -184,8 +184,8 @@ func hashAlloc(ga *types.GenesisAlloc, isVerkle bool) (common.Hash, error) {
 // generated states will be persisted into the given database.
 func flushAlloc(ga *types.GenesisAlloc, triedb *triedb.Database) (common.Hash, error) {
 	emptyRoot := types.EmptyRootHash
-	if triedb.IsVerkle() {
-		emptyRoot = types.EmptyVerkleHash
+	if triedb.IsUBT() {
+		emptyRoot = types.EmptyBinaryHash
 	}
 	statedb, err := state.New(emptyRoot, state.NewDatabase(triedb, nil))
 	if err != nil {
@@ -474,15 +474,15 @@ func (g *Genesis) chainConfigOrDefault(ghash common.Hash, stored *params.ChainCo
 	}
 }
 
-// IsVerkle indicates whether the state is already stored in a verkle
+// IsUBT indicates whether the state is already stored in a unified binary
 // tree at genesis time.
-func (g *Genesis) IsVerkle() bool {
+func (g *Genesis) IsUBT() bool {
 	return false
 }
 
 // ToBlock returns the genesis block according to genesis specification.
 func (g *Genesis) ToBlock() *types.Block {
-	root, err := hashAlloc(&g.Alloc, g.IsVerkle())
+	root, err := hashAlloc(&g.Alloc, g.IsUBT())
 	if err != nil {
 		panic(err)
 	}
@@ -631,14 +631,14 @@ func GenesisBlockForTesting(db ethdb.Database, addr common.Address, balance *big
 	return g.MustCommit(db, triedb.NewDatabase(db, triedb.HashDefaults))
 }
 
-// EnableVerkleAtGenesis indicates whether the verkle fork should be activated
+// EnableUBTAtGenesis indicates whether the verkle fork should be activated
 // at genesis. This is a temporary solution only for verkle devnet testing, where
 // verkle fork is activated at genesis, and the configured activation date has
 // already passed.
 //
 // In production networks (mainnet and public testnets), verkle activation always
 // occurs after the genesis block, making this function irrelevant in those cases.
-func EnableVerkleAtGenesis(db ethdb.Database, genesis *Genesis) (bool, error) {
+func EnableUBTAtGenesis(db ethdb.Database, genesis *Genesis) (bool, error) {
 	if genesis != nil {
 		if genesis.Config == nil {
 			return false, errGenesisNoConfig

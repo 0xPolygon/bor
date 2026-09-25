@@ -276,10 +276,10 @@ func newTrieReader(root common.Hash, db *triedb.Database) (*trieReader, error) {
 		tr  Trie
 		err error
 	)
-	if !db.IsVerkle() {
+	if !db.IsUBT() {
 		tr, err = trie.NewStateTrie(trie.StateTrieID(root), db)
 	} else {
-		// When IsVerkle() is true, create a BinaryTrie wrapped in TransitionTrie
+		// When IsUBT() is true, create a BinaryTrie wrapped in TransitionTrie
 		binTrie, binErr := bintrie.NewBinaryTrie(root, db)
 		if binErr != nil {
 			return nil, binErr
@@ -336,8 +336,8 @@ func newTrieReader(root common.Hash, db *triedb.Database) (*trieReader, error) {
 // snapshot is constructed from MPT trie nodes. Callers that need verkle
 // readers must use newTrieReader.
 func newTrieReaderWithSnapshot(root common.Hash, db *triedb.Database, nodeDB database.NodeDatabase) (*trieReader, error) {
-	if db.IsVerkle() {
-		return nil, errors.New("warm snapshot reader: verkle scheme is not supported")
+	if db.IsUBT() {
+		return nil, errors.New("warm snapshot reader: UBT scheme is not supported")
 	}
 	tr, err := trie.NewStateTrie(trie.StateTrieID(root), nodeDB)
 	if err != nil {
@@ -494,7 +494,7 @@ func (r *trieReader) subTrieConcurrent(addr common.Address) (Trie, error) {
 // subTrieLocked is the legacy mutex-protected path. Verkle uses the
 // merged main trie; MPT uses per-address sub tries cached in subTries.
 func (r *trieReader) subTrieLocked(addr common.Address) (Trie, error) {
-	if r.db.IsVerkle() {
+	if r.db.IsUBT() {
 		return r.mainTrie, nil
 	}
 	if v, ok := r.subTries.Load(addr); ok {

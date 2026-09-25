@@ -35,7 +35,7 @@ func TestCacheAttribution_PrefetchToProcess(t *testing.T) {
 	// Setup: Create a state database with some accounts
 	db := rawdb.NewMemoryDatabase()
 	triedb := triedb.NewDatabase(db, nil)
-	statedb := NewDatabase(triedb, nil)
+	statedb := NewMPTDatabase(triedb, nil)
 
 	// Create initial state with some accounts
 	state, err := New(types.EmptyRootHash, statedb)
@@ -180,7 +180,7 @@ func TestCacheAttribution_UniqueUsageTracking(t *testing.T) {
 	// Setup: Create a state database with an account
 	db := rawdb.NewMemoryDatabase()
 	triedb := triedb.NewDatabase(db, nil)
-	statedb := NewDatabase(triedb, nil)
+	statedb := NewMPTDatabase(triedb, nil)
 
 	// Create initial state
 	state, err := New(types.EmptyRootHash, statedb)
@@ -285,7 +285,7 @@ func TestReaderWithCache_ConcurrentAccess(t *testing.T) {
 	// Setup: Create a state database with many accounts
 	db := rawdb.NewMemoryDatabase()
 	triedb := triedb.NewDatabase(db, nil)
-	statedb := NewDatabase(triedb, nil)
+	statedb := NewMPTDatabase(triedb, nil)
 
 	// Create initial state with 100 accounts
 	state, err := New(types.EmptyRootHash, statedb)

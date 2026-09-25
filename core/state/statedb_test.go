@@ -2387,12 +2387,10 @@ func BenchmarkMVReadOverhead(b *testing.B) {
 // type *bintrie.BinaryTrie", because the type switch only covered *trie.StateTrie
 // and *transitiontrie.TransitionTrie.
 //
-// Upstream names this TestStateDBCopyUBT and reaches the binary tree via
-// triedb.UBTDefaults; Bor kept the pre-rename triedb.VerkleDefaults, which sets
-// IsVerkle and so yields the same binary trie now that go-verkle is gone.
+// Upstream names this TestStateDBCopyUBT.
 func TestStateDBCopyBinaryTrie(t *testing.T) {
 	disk := rawdb.NewMemoryDatabase()
-	tdb := triedb.NewDatabase(disk, triedb.VerkleDefaults)
+	tdb := triedb.NewDatabase(disk, triedb.UBTDefaults)
 	sdb := NewDatabase(tdb, nil)
 
 	orig, err := New(types.EmptyRootHash, sdb)

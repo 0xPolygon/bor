@@ -42,11 +42,11 @@ func (*recordingGenesisContract) LastStateId(*state.StateDB, uint64, common.Hash
 	return new(big.Int), nil
 }
 
-func commitStateDatabase(t *testing.T, code map[common.Address][]byte, funded common.Address) (*state.CachingDB, common.Hash) {
+func commitStateDatabase(t *testing.T, code map[common.Address][]byte, funded common.Address) (*state.MPTDatabase, common.Hash) {
 	t.Helper()
 	memoryDB := rawdb.NewMemoryDatabase()
 	trieDB := triedb.NewDatabase(memoryDB, triedb.HashDefaults)
-	stateDatabase := state.NewDatabase(trieDB, nil)
+	stateDatabase := state.NewMPTDatabase(trieDB, nil)
 	statedb, err := state.New(common.Hash{}, stateDatabase)
 	require.NoError(t, err)
 	for address, bytecode := range code {

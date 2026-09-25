@@ -330,6 +330,6 @@ func (t *StateTrie) MustNodeIterator(start []byte) NodeIterator {
 	return t.trie.MustNodeIterator(start)
 }
 
-func (t *StateTrie) IsVerkle() bool {
+func (t *StateTrie) IsUBT() bool {
 	return false
 }
