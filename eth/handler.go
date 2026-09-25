@@ -202,6 +202,13 @@ type handler struct {
 	pendingWitnessBodies *pendingWitnessBodyCache
 	wit2PeerTracker      *peerWit2Tracker
 
+	// peerTrusted reports whether a peer id belongs to a configured trusted
+	// node. Held as a field rather than called inline so tests can drive the
+	// trusted and untrusted branches of the wit2 strike path without needing
+	// to construct a p2p.Peer carrying trustedConn, which package p2p does not
+	// expose.
+	peerTrusted func(id string) bool
+
 	// WIT2: separate, much tighter per-peer budget gating how often a peer's
 	// GetWitness request for a body we don't have can trigger a NEW
 	// triggerRelayFetch goroutine (see recordWitnessWaiter). Deliberately
@@ -294,6 +301,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		deferredAnnounces:       newDeferredAnnounceCache(deferredAnnounceCapacity),
 		witnessWaiters:          newWitnessWaiterRegistry(),
 	}
+	h.peerTrusted = h.peerSetTrusted
 
 	log.Info("Sync with witnesses", "enabled", config.syncWithWitnesses)
 

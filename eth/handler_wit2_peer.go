@@ -3,6 +3,7 @@ package eth
 import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/eth/protocols/wit"
+	"github.com/ethereum/go-ethereum/log"
 )
 
 // This file holds the WIT2-specific handler methods split out of handler.go to
@@ -22,6 +23,11 @@ func (h *handler) strikeWit2Peer(peer *wit.Peer) {
 		return
 	}
 	wit2StrikeDisconnectMeter.Mark(1)
+
+	if h.shedWit2StrikeWithoutJail(peer.ID(), peer.Log()) {
+		return
+	}
+
 	peer.Log().Warn("wit2: disconnecting and jailing peer for repeated invalid signed announcements")
 	// Jail before disconnecting: removePeer's forget() wipes the strike ledger,
 	// so without a jail the peer could re-dial immediately with a clean slate and
@@ -30,6 +36,38 @@ func (h *handler) strikeWit2Peer(peer *wit.Peer) {
 	// trivial same-identity reconnect loop.
 	h.jailPeer(peer.ID())
 	h.removePeer(peer.ID())
+}
+
+// shedWit2StrikeWithoutJail disconnects a trusted peer that crossed the strike
+// threshold but leaves it out of the jail, reporting whether it handled the
+// peer. Trusted peers are our own infrastructure, and the strike conditions
+// that reach here are not all self-incriminating: "signer is not the scheduled
+// producer" is a judgement about our view of the chain, and the strike lands on
+// whoever relayed the announcement rather than whoever signed it. Jailing on
+// that can remove a sentry from our own mesh, and it costs more than the jail
+// period suggests because nothing re-arms the dial scheduler when a jail lapses
+// (dialScheduler.updateStaticPool is only called on a dial completing, a peer
+// disconnecting, or dial history expiring). Disconnecting still sheds a
+// genuinely broken node: it reconnects, and if it really is misbehaving it
+// crosses the threshold again and shows up in the meter.
+func (h *handler) shedWit2StrikeWithoutJail(id string, logger log.Logger) bool {
+	if h.peerTrusted == nil || !h.peerTrusted(id) {
+		return false
+	}
+
+	wit2StrikeTrustedShedMeter.Mark(1)
+	logger.Warn("wit2: trusted peer crossed the strike threshold, disconnecting without jail", "peer", id)
+	h.removePeer(id)
+
+	return true
+}
+
+// peerSetTrusted resolves trust through the live peer set. It is the default
+// wiring for handler.peerTrusted.
+func (h *handler) peerSetTrusted(id string) bool {
+	peer := h.peers.peer(id)
+
+	return peer != nil && peer.Peer.Peer.Trusted()
 }
 
 // strikeWit2PeerByID records a WIT2 byte-serving strike against the peer with the
@@ -45,6 +83,11 @@ func (h *handler) strikeWit2PeerByID(id string) {
 		return
 	}
 	wit2StrikeDisconnectMeter.Mark(1)
+
+	if h.shedWit2StrikeWithoutJail(id, log.Root()) {
+		return
+	}
+
 	h.jailPeer(id)
 	h.removePeer(id)
 }

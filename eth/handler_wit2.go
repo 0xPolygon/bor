@@ -49,6 +49,12 @@ var (
 	// wit2FetchTriggerRateLimitDropMeter, which counts drops from the
 	// per-peer rate limiter instead.
 	wit2RelayFetchConcurrencyDropMeter = metrics.NewRegisteredMeter("eth/wit2/serve/relay_fetch_concurrency_drop", nil)
+
+	// wit2StrikeTrustedShedMeter counts trusted peers disconnected on a strike
+	// but deliberately not jailed. A non-zero rate means our own strike
+	// conditions are firing against our own infrastructure, which is worth
+	// investigating on its own regardless of the jail.
+	wit2StrikeTrustedShedMeter = metrics.NewRegisteredMeter("eth/wit2/strike/trusted_shed", nil)
 )
 
 // witnessPushMaxSize caps the encoded size of a witness we full-push to
