@@ -286,12 +286,16 @@ func TestDialSchedManyStaticNodes(t *testing.T) {
 
 	config := dialConfig{maxDialPeers: 2}
 	runDialTest(t, config, []dialTestRound{
+		// Two connected static peers use up the static budget,
+		// so none of the other static nodes are dialed yet.
 		{
 			peersAdded: []*conn{
-				{flags: dynDialedConn, node: newNode(uintID(0xFFFE), "")},
-				{flags: dynDialedConn, node: newNode(uintID(0xFFFF), "")},
+				{flags: staticDialedConn, node: newNode(uintID(0xFFFE), "")},
+				{flags: staticDialedConn, node: newNode(uintID(0xFFFF), "")},
 			},
 			update: func(d *dialScheduler) {
+				d.addStatic(newNode(uintID(0xFFFE), ""))
+				d.addStatic(newNode(uintID(0xFFFF), ""))
 				for id := uint16(0); id < 2000; id++ {
 					n := newNode(uintID(id), "127.0.0.1:30303")
 					d.addStatic(n)
@@ -304,11 +308,171 @@ func TestDialSchedManyStaticNodes(t *testing.T) {
 				uintID(0xFFFF),
 			},
 			wantNewDials: []*enode.Node{
-				newNode(uintID(0x0085), "127.0.0.1:30303"),
-				newNode(uintID(0x02dc), "127.0.0.1:30303"),
-				newNode(uintID(0x0285), "127.0.0.1:30303"),
-				newNode(uintID(0x00cb), "127.0.0.1:30303"),
+				newNode(uintID(0x03d6), "127.0.0.1:30303"),
+				newNode(uintID(0x01e3), "127.0.0.1:30303"),
+				newNode(uintID(0x05d0), "127.0.0.1:30303"),
+				newNode(uintID(0x00a6), "127.0.0.1:30303"),
 			},
+		},
+	})
+}
+
+// This test checks that a static node is dialed when all dialed peer slots are
+// taken by dynamic peers, and that the static budget is still enforced.
+func TestDialSchedStaticNotStarvedByDynamic(t *testing.T) {
+	t.Parallel()
+
+	config := dialConfig{
+		maxActiveDials: 5,
+		maxDialPeers:   2,
+	}
+	runDialTest(t, config, []dialTestRound{
+		// Dynamic peers fill both dialed peer slots. The static node is
+		// dialed anyway, and no dynamic candidates are dialed.
+		{
+			peersAdded: []*conn{
+				{flags: dynDialedConn, node: newNode(uintID(0x01), "127.0.0.1:30303")},
+				{flags: dynDialedConn, node: newNode(uintID(0x02), "127.0.0.2:30303")},
+			},
+			update: func(d *dialScheduler) {
+				d.addStatic(newNode(uintID(0x10), "127.0.0.16:30303"))
+			},
+			discovered: []*enode.Node{
+				newNode(uintID(0x20), "127.0.0.32:30303"),
+			},
+			wantNewDials: []*enode.Node{
+				newNode(uintID(0x10), "127.0.0.16:30303"),
+			},
+		},
+		// Two more static nodes are dialed and the first static dial succeeds.
+		{
+			update: func(d *dialScheduler) {
+				d.addStatic(newNode(uintID(0x11), "127.0.0.17:30303"))
+				d.addStatic(newNode(uintID(0x12), "127.0.0.18:30303"))
+			},
+			succeeded: []enode.ID{
+				uintID(0x10),
+			},
+			wantNewDials: []*enode.Node{
+				newNode(uintID(0x11), "127.0.0.17:30303"),
+				newNode(uintID(0x12), "127.0.0.18:30303"),
+			},
+		},
+		// One static peer is connected and two static dials are running, which
+		// uses up the static budget of (2-1)*2 = 2. Another static node waits.
+		{
+			update: func(d *dialScheduler) {
+				d.addStatic(newNode(uintID(0x13), "127.0.0.19:30303"))
+			},
+		},
+	})
+}
+
+// This test checks that a static node that was jailed while connected is dialed
+// again once its jail period expires.
+func TestDialSchedStaticRedialAfterJail(t *testing.T) {
+	t.Parallel()
+
+	var (
+		clock = new(mclock.Simulated)
+		jail  = newPeerJail(60*time.Second, clock)
+		node  = newNode(uintID(0x01), "127.0.0.1:30303")
+	)
+	config := dialConfig{
+		maxActiveDials: 1,
+		maxDialPeers:   1,
+		clock:          clock,
+		jailedUntil:    jail.JailedUntil,
+	}
+	runDialTest(t, config, []dialTestRound{
+		// t=0: the static node is dialed.
+		{
+			update:       func(d *dialScheduler) { d.addStatic(node) },
+			wantNewDials: []*enode.Node{node},
+		},
+		// t=16s: the dial succeeds.
+		{
+			succeeded: []enode.ID{uintID(0x01)},
+		},
+		// t=32s: the peer is jailed until t=92s.
+		{
+			update: func(d *dialScheduler) { jail.JailPeer(uintID(0x01)) },
+		},
+		// t=48s: the jailed peer disconnects and must not be dialed while jailed.
+		{
+			peersRemoved: []enode.ID{uintID(0x01)},
+		},
+		{}, // t=64s
+		{}, // t=80s
+		// t=96s: the jail has expired and the static node is dialed again.
+		{
+			wantNewDials: []*enode.Node{node},
+		},
+	})
+}
+
+// oneShotJail reports a peer as jailed to the first query after arm is called,
+// and as free to every query after that. It simulates a jail expiring between
+// checkDial and the unban time lookup in updateStaticPool.
+type oneShotJail struct {
+	mu    sync.Mutex
+	armed bool
+}
+
+func (j *oneShotJail) arm() {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.armed = true
+}
+
+func (j *oneShotJail) jailedUntil(enode.ID) (mclock.AbsTime, bool) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if !j.armed {
+		return 0, false
+	}
+	j.armed = false
+	return mclock.AbsTime(time.Hour), true
+}
+
+// This test checks that a static node is not lost when its jail expires between
+// checkDial and the unban time lookup.
+func TestDialSchedStaticRedialJailExpiryRace(t *testing.T) {
+	t.Parallel()
+
+	var (
+		jail = new(oneShotJail)
+		node = newNode(uintID(0x01), "127.0.0.1:30303")
+	)
+	config := dialConfig{
+		maxActiveDials: 1,
+		maxDialPeers:   1,
+		jailedUntil:    jail.jailedUntil,
+	}
+	runDialTest(t, config, []dialTestRound{
+		// t=0: the static node is dialed.
+		{
+			update:       func(d *dialScheduler) { d.addStatic(node) },
+			wantNewDials: []*enode.Node{node},
+		},
+		// t=16s: the dial succeeds.
+		{
+			succeeded: []enode.ID{uintID(0x01)},
+		},
+		// t=32s and t=48s: the initial dial history entry expires at t=35s. The
+		// scheduler handles that asynchronously and queries the jail, so give it
+		// a full round before arming to keep it from consuming the query below.
+		{},
+		{},
+		// t=64s: the next jail query reports the peer as jailed, then free.
+		{
+			update: func(d *dialScheduler) { jail.arm() },
+		},
+		// t=80s: the peer disconnects. checkDial sees it jailed, but the lookup
+		// that follows sees the jail expired, so it is dialed again right away.
+		{
+			peersRemoved: []enode.ID{uintID(0x01)},
+			wantNewDials: []*enode.Node{node},
 		},
 	})
 }
@@ -439,8 +603,13 @@ type dialTestRound struct {
 }
 
 func runDialTest(t *testing.T, config dialConfig, rounds []dialTestRound) {
+	// Tests may pass their own simulated clock to share it with other components.
+	clock, _ := config.clock.(*mclock.Simulated)
+	if clock == nil {
+		clock = new(mclock.Simulated)
+	}
+
 	var (
-		clock    = new(mclock.Simulated)
 		iterator = newDialTestIterator()
 		dialer   = newDialTestDialer()
 		resolver = new(dialTestResolver)
