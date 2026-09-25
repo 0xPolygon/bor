@@ -90,6 +90,10 @@ func (b *EthAPIBackend) PendingSnapshot(ctx context.Context) (*types.Block, type
 			return block, receipts, statedb, nil
 		}
 	}
+	return b.pendingFallback(ctx)
+}
+
+func (b *EthAPIBackend) pendingFallback(ctx context.Context) (*types.Block, types.Receipts, *state.StateDB, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, nil, err
 	}
@@ -119,7 +123,16 @@ func (b *EthAPIBackend) PendingParentState(ctx context.Context, block *types.Blo
 }
 
 func (b *EthAPIBackend) pendingStateAndHeader(ctx context.Context) (*state.StateDB, *types.Header, error) {
-	block, _, statedb, err := b.PendingSnapshot(ctx)
+	if b.eth.seqConsumer != nil {
+		block, statedb, err := b.eth.seqConsumer.PendingState(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		if block != nil && statedb != nil {
+			return statedb, block.Header(), nil
+		}
+	}
+	block, _, statedb, err := b.pendingFallback(ctx)
 	if err != nil {
 		return nil, nil, err
 	}

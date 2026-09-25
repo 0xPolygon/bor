@@ -13,11 +13,21 @@ import (
 // PendingSnapshot returns one block/receipt/state view. A cancellable request
 // context keeps the state-copy lease until that request finishes.
 func (c *Consumer) PendingSnapshot(ctx context.Context) (*types.Block, types.Receipts, *state.StateDB, error) {
+	return c.pendingSnapshot(ctx, true)
+}
+
+// PendingState is PendingSnapshot without copying the receipts.
+func (c *Consumer) PendingState(ctx context.Context) (*types.Block, *state.StateDB, error) {
+	block, _, statedb, err := c.pendingSnapshot(ctx, false)
+	return block, statedb, err
+}
+
+func (c *Consumer) pendingSnapshot(ctx context.Context, withReceipts bool) (*types.Block, types.Receipts, *state.StateDB, error) {
 	anchor, ok := c.pendingReadAnchor()
 	if !ok {
 		return nil, nil, nil, nil
 	}
-	block, receipts, statedb, err := c.pendingStore().PendingSnapshot(ctx)
+	block, receipts, statedb, err := c.pendingStore().snapshot(ctx, withReceipts)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -202,6 +212,10 @@ func (c *Consumer) anchorsHead(marker, head *types.Header) bool {
 // PendingSnapshot limits both concurrent copies and concurrently retained RPC
 // states. RPC request contexts are cancelled by the server when handlers exit.
 func (s *PendingStore) PendingSnapshot(ctx context.Context) (*types.Block, types.Receipts, *state.StateDB, error) {
+	return s.snapshot(ctx, true)
+}
+
+func (s *PendingStore) snapshot(ctx context.Context, withReceipts bool) (*types.Block, types.Receipts, *state.StateDB, error) {
 	if !s.acquireStateCopy(ctx) {
 		return nil, nil, nil, ctx.Err()
 	}
@@ -234,7 +248,11 @@ func (s *PendingStore) PendingSnapshot(ctx context.Context) (*types.Block, types
 		}
 		release = false
 	}
-	return view.Block, receiptsFromView(view.Block, view), stateDB, nil
+	var receipts types.Receipts
+	if withReceipts {
+		receipts = receiptsFromView(view.Block, view)
+	}
+	return view.Block, receipts, stateDB, nil
 }
 
 func (s *PendingStore) acquireStateCopy(ctx context.Context) bool {
