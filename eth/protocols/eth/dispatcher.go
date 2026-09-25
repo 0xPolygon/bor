@@ -47,12 +47,15 @@ type Request struct {
 	sink   chan *Response // Channel to deliver the response on
 	Cancel chan struct{}  // Channel to cancel requests ahead of time
 
-	code uint64      // Message code of the request packet
-	want uint64      // Message code of the response packet
-	data interface{} // Data content of the request packet
+	code    uint64      // Message code of the request packet
+	want    uint64      // Message code of the response packet
+	data    interface{} // Data content of the request packet
+	cleanup func()      // Optional callback to release protocol-specific state if the request dies unfulfilled
 
 	Peer string    // Demultiplexer if cross-peer requests are batched together
 	Sent time.Time // Timestamp when the request was sent
+
+	roundtrips int // Number of network round trips made under this request id
 }
 
 // Close aborts an in-flight request. Although there's no way to notify the
@@ -103,6 +106,17 @@ type cancel struct {
 	fail chan error
 }
 
+// resend is a maintenance type on the dispatcher to send a follow-up packet
+// continuing a pending request under its original id. Routing it through the
+// dispatcher serializes the continuation against cancellation: the follow-up
+// is only sent if the original request is still pending.
+type resend struct {
+	id   uint64      // Request ID to continue
+	code uint64      // Message code of the follow-up packet
+	data interface{} // Data content of the follow-up packet
+	fail chan error
+}
+
 // Response is a reply packet to a previously created request. It is delivered
 // on the channel assigned by the requester subsystem and contains the original
 // request embedded to allow uniquely matching it caller side.
@@ -116,6 +130,8 @@ type Response struct {
 	Meta interface{}   // Metadata generated locally on the receiver thread
 	Time time.Duration // Time it took for the request to be served
 	Done chan error    // Channel to signal message handling to the reader
+
+	Roundtrips int // Number of network round trips the exchange took
 }
 
 func (r *Response) String() string {
@@ -147,6 +163,24 @@ func (p *Peer) dispatchRequest(req *Request) error {
 	select {
 	case p.reqDispatch <- reqOp:
 		return <-reqOp.fail
+	case <-p.term:
+		return ErrDisconnected
+	}
+}
+
+// dispatchResend schedules a follow-up packet continuing a pending request,
+// blocking until it's sent. The follow-up is silently dropped if the original
+// request has already been cancelled or fulfilled.
+func (p *Peer) dispatchResend(id uint64, code uint64, data interface{}) error {
+	resendOp := &resend{
+		id:   id,
+		code: code,
+		data: data,
+		fail: make(chan error),
+	}
+	select {
+	case p.reqResend <- resendOp:
+		return <-resendOp.fail
 	case <-p.term:
 		return ErrDisconnected
 	}
@@ -214,11 +248,31 @@ func (p *Peer) dispatcher() {
 
 			requestTracker.Track(p.id, p.version, req.code, req.want, req.id)
 			err := p2p.Send(p.rw, req.code, req.data)
+			if err != nil && req.cleanup != nil {
+				req.cleanup()
+			}
 			reqOp.fail <- err
 
 			if err == nil {
+				req.roundtrips = 1
 				pending[req.id] = req
 			}
+
+		case resendOp := <-p.reqResend:
+			// Only continue a request that is still pending: if it has been
+			// cancelled or fulfilled in the meantime, drop the follow-up
+			// silently instead of re-requesting on behalf of nobody.
+			req := pending[resendOp.id]
+			if req == nil {
+				resendOp.fail <- nil
+				continue
+			}
+			requestTracker.Track(p.id, p.version, resendOp.code, req.want, req.id)
+			err := p2p.Send(p.rw, resendOp.code, resendOp.data)
+			if err == nil {
+				req.roundtrips++
+			}
+			resendOp.fail <- err
 
 		case cancelOp := <-p.reqCancel:
 			// Retrieve the pending request to cancel and short circuit if it
@@ -228,9 +282,14 @@ func (p *Peer) dispatcher() {
 				cancelOp.fail <- nil
 				continue
 			}
-			// Stop tracking the request
+			// Stop tracking the request and release any protocol-specific
+			// state tied to it.
 			delete(pending, cancelOp.id)
 			requestTracker.Fulfil(p.id, p.version, req.code, cancelOp.id)
+
+			if req.cleanup != nil {
+				req.cleanup()
+			}
 			cancelOp.fail <- nil
 
 		case resOp := <-p.resDispatch:
@@ -259,6 +318,7 @@ func (p *Peer) dispatcher() {
 				// with the matching request. Signal to the delivery routine that
 				// it can wait for a handler response and dispatch the data.
 				res.Time = res.recv.Sub(res.Req.Sent)
+				res.Roundtrips = res.Req.roundtrips
 				resOp.fail <- nil
 
 				// Stop tracking the request, the response dispatcher will deliver

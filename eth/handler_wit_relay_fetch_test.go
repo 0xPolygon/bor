@@ -477,7 +477,7 @@ func unregisterFakePeer(ps *peerSet, id string) {
 func newFakeEthPeerWithWitness(id byte, fake WitnessPeer) *ethPeer {
 	p2pPeer := p2p.NewPeer(enode.ID{id}, "test-peer", []p2p.Cap{})
 	return &ethPeer{
-		Peer:    eth.NewPeer(eth.ETH69, p2pPeer, nil, nil),
+		Peer:    eth.NewPeer(eth.ETH69, p2pPeer, nil, nil, nil),
 		witPeer: &witPeer{Peer: fake},
 	}
 }

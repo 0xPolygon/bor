@@ -72,7 +72,7 @@ func registerEthWitPeer(t *testing.T, h *testHandler, version uint) (*wit.Peer, 
 	// plain eth path (AsyncSendNewBlockHash) once a block's witness is
 	// cached, not only once HasBlock is true, so ethPeer's broadcast
 	// goroutine can fire during these tests.
-	ethPeer := ethproto.NewPeer(ethproto.ETH68, p2p.NewPeer(id, "test-eth-peer", nil), ethNet, nil)
+	ethPeer := ethproto.NewPeer(ethproto.ETH68, p2p.NewPeer(id, "test-eth-peer", nil), ethNet, nil, nil)
 	require.NoError(t, h.handler.peers.registerPeer(ethPeer, nil, witPeer))
 
 	cleanup := func() {
