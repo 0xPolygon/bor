@@ -104,6 +104,8 @@ type Server struct {
 	quit                    chan struct{}
 	addtrusted              chan *enode.Node
 	removetrusted           chan *enode.Node
+	addstatic               chan *enode.Node
+	removestatic            chan *enode.Node
 	peerOp                  chan peerOpFunc
 	peerOpDone              chan struct{}
 	delpeer                 chan peerDrop
@@ -180,6 +182,7 @@ const (
 	staticDialedConn
 	inboundConn
 	trustedConn
+	staticConn
 )
 
 // conn wraps a network connection with information gathered
@@ -235,6 +238,10 @@ func (f connFlag) String() string {
 
 	if f&inboundConn != 0 {
 		s += "-inbound"
+	}
+
+	if f&staticConn != 0 {
+		s += "-static"
 	}
 
 	if s != "" {
@@ -332,6 +339,11 @@ func (srv *Server) PeerCount() int {
 // the server will connect to the node. If the connection fails for any reason, the server
 // will attempt to reconnect the peer.
 func (srv *Server) AddPeer(node *enode.Node) {
+	select {
+	case srv.addstatic <- node:
+	case <-srv.quit:
+		return
+	}
 	srv.dialsched.addStatic(node)
 }
 
@@ -360,6 +372,11 @@ func (srv *Server) RemovePeer(node *enode.Node) {
 		ch  chan *PeerEvent
 		sub event.Subscription
 	)
+	select {
+	case srv.removestatic <- node:
+	case <-srv.quit:
+		return
+	}
 	// Disconnect the peer on the main loop.
 	srv.doPeerOp(func(peers map[enode.ID]*Peer) {
 		srv.dialsched.removeStatic(node)
@@ -533,6 +550,8 @@ func (srv *Server) Start() (err error) {
 	srv.checkpointAddPeer = make(chan *conn)
 	srv.addtrusted = make(chan *enode.Node)
 	srv.removetrusted = make(chan *enode.Node)
+	srv.addstatic = make(chan *enode.Node)
+	srv.removestatic = make(chan *enode.Node)
 	srv.peerOp = make(chan peerOpFunc)
 	srv.peerOpDone = make(chan struct{})
 
@@ -805,11 +824,15 @@ func (srv *Server) run() {
 		peers        = make(map[enode.ID]*Peer)
 		inboundCount = 0
 		trusted      = make(map[enode.ID]bool, len(srv.TrustedNodes))
+		static       = make(map[enode.ID]bool, len(srv.StaticNodes))
 	)
 	// Put trusted nodes into a map to speed up checks.
 	// Trusted peers are loaded on startup or added via AddTrustedPeer RPC.
 	for _, n := range srv.TrustedNodes {
 		trusted[n.ID()] = true
+	}
+	for _, n := range srv.StaticNodes {
+		static[n.ID()] = true
 	}
 
 running:
@@ -837,6 +860,20 @@ running:
 				p.rw.set(trustedConn, false)
 			}
 
+		case n := <-srv.addstatic:
+			// Static membership is tracked apart from the dial flags because a
+			// static node that dials us first is held as an inbound connection.
+			static[n.ID()] = true
+			if p, ok := peers[n.ID()]; ok {
+				p.rw.set(staticConn, true)
+			}
+
+		case n := <-srv.removestatic:
+			delete(static, n.ID())
+			if p, ok := peers[n.ID()]; ok {
+				p.rw.set(staticConn, false)
+			}
+
 		case op := <-srv.peerOp:
 			// This channel is used by Peers and PeerCount.
 			op(peers)
@@ -848,6 +885,9 @@ running:
 			if trusted[c.node.ID()] {
 				// Ensure that the trusted flag is set before checking against MaxPeers.
 				c.flags |= trustedConn
+			}
+			if static[c.node.ID()] {
+				c.flags |= staticConn
 			}
 			// TODO: track in-progress inbound node IDs (pre-Peer) to avoid dialing them.
 			c.cont <- srv.postHandshakeChecks(peers, inboundCount, c)
