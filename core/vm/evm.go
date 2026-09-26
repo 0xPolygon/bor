@@ -185,6 +185,10 @@ type EVM struct {
 	readOnly   bool   // Whether to throw on stateful modifications
 	returnData []byte // Last CALL's return data for subsequent reuse
 
+	// mulmodMemo caches the reciprocal of the last full-width MULMOD modulus so
+	// that repeated moduli skip uint256.MulMod's internal Reciprocal recompute.
+	mulmodMemo modReciprocal
+
 	// interrupt is the block-building timeout flag. When set, the interpreter
 	// checks it on every opcode across all call depths (Call, DelegateCall,
 	// StaticCall, CallCode, Create). Use SetInterrupt to configure.
