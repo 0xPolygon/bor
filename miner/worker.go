@@ -501,6 +501,10 @@ type worker struct {
 	// Block number which is currently being worked on (0 = none).
 	// Used to prevent duplicate work.
 	pendingWorkBlock atomic.Uint64
+	// pendingWorkParent is the hash of the head the outstanding build for
+	// pendingWorkBlock was started on. A ChainHeadEvent at the same height but
+	// a different hash (a depth-1 reorg) must restart the build.
+	pendingWorkParent atomic.Value // common.Hash
 
 	// When set, the next sequential build is recovering a discarded
 	// speculative block and should preserve its original target slot.
@@ -883,6 +887,16 @@ func decideVeblopFallback(pendingWorkBlock, nextBlock uint64, hasPendingTasks bo
 	return veblopWait
 }
 
+// pendingWorkCoversHead reports whether the outstanding build (for block
+// pendingBlock on top of pendingParent) already targets the child of head.
+// Matching the number alone is not enough: after a depth-1 reorg the new head
+// has the same number but a different hash, and a build kept on the old head
+// seals a block whose parent is no longer canonical, costing the producer its
+// slot.
+func pendingWorkCoversHead(pendingBlock uint64, pendingParent common.Hash, head *types.Header) bool {
+	return pendingBlock == head.Number.Uint64()+1 && pendingParent == head.Hash()
+}
+
 // newWorkLoop is a standalone goroutine to submit new sealing work upon received events.
 //
 //nolint:gocognit
@@ -966,21 +980,24 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 			w.clearPending(w.chain.CurrentBlock().Number.Uint64())
 
 			timestamp = time.Now().Unix()
-			w.pendingWorkBlock.Store(w.chain.CurrentBlock().Number.Uint64() + 1)
+			current := w.chain.CurrentBlock()
+			w.pendingWorkBlock.Store(current.Number.Uint64() + 1)
+			w.pendingWorkParent.Store(current.Hash())
 			pendingWorkSubmittedAt = time.Now()
 			commit(false, commitInterruptNewHead, false)
 
 		case head := <-w.chainHeadCh:
 			w.clearPending(head.Header.Number.Uint64())
 
-			pendingWorkBlock := w.pendingWorkBlock.Load()
-			if pendingWorkBlock == head.Header.Number.Uint64()+1 {
-				// Next block is already being worked on, skip the commit.
+			pendingParent, _ := w.pendingWorkParent.Load().(common.Hash)
+			if pendingWorkCoversHead(w.pendingWorkBlock.Load(), pendingParent, head.Header) {
+				// Next block is already being worked on top of this head, skip the commit.
 				continue
 			}
 
 			timestamp = time.Now().Unix()
 			w.pendingWorkBlock.Store(head.Header.Number.Uint64() + 1)
+			w.pendingWorkParent.Store(head.Header.Hash())
 			pendingWorkSubmittedAt = time.Now()
 			commit(false, commitInterruptNewHead, false)
 
@@ -1047,6 +1064,7 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 				timestamp = time.Now().Unix()
 				if commit(false, commitInterruptNewHead, true) {
 					w.pendingWorkBlock.Store(currentBlock.Number.Uint64() + 1)
+					w.pendingWorkParent.Store(currentBlock.Hash())
 					pendingWorkSubmittedAt = time.Now()
 				} else {
 					// mainLoop not ready; retry on the next tick.
@@ -1143,6 +1161,7 @@ func (w *worker) schedulePipelineRetry() {
 			return
 		}
 		w.pendingWorkBlock.Store(target)
+		w.pendingWorkParent.Store(current.Hash())
 
 		select {
 		case w.newWorkCh <- &newWorkReq{timestamp: time.Now().Unix()}:
