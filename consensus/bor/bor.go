@@ -1164,7 +1164,9 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 		if err != nil {
 			// If the signer is not in the active validator set, use succession 0
 			// so that the pending block header is still valid for RPC queries.
-			// Seal() will independently reject the block if unauthorized.
+			// Seal() will independently reject the block if unauthorized, and
+			// the miner keeps such a build out of the sequence store (see
+			// IsAuthorizedSigner).
 			succession = 0
 		}
 	}
@@ -1552,6 +1554,31 @@ func (c *Bor) commitSprintWork(chain consensus.ChainHeaderReader, header *types.
 
 // Authorize injects a private key into the consensus engine to mint new blocks
 // with.
+// IsAuthorizedSigner reports whether the node's signer may seal the given
+// prepared header (post-Rio: whether it is among the span's selected
+// producers), mirroring Seal's refusal checks. The miner consults it before
+// publishing a build's sequence: a block Seal would refuse must produce no
+// store records. Nodes without a signer are not authorized.
+func (c *Bor) IsAuthorizedSigner(chain consensus.ChainHeaderReader, header *types.Header) bool {
+	signer := c.authorizedSigner.Load().signer
+	if signer == (common.Address{}) {
+		return false
+	}
+
+	snap, err := c.snapshot(chain, header, nil, false)
+	if err != nil {
+		return false
+	}
+
+	if !snap.ValidatorSet.HasAddress(signer) && !snap.isAllowedByValidatorSetOverride(signer, header.Number.Uint64()) {
+		return false
+	}
+
+	_, err = snap.GetSignerSuccessionNumber(signer)
+
+	return err == nil
+}
+
 func (c *Bor) Authorize(currentSigner common.Address, signFn SignerFn) {
 	c.authorizedSigner.Store(&signer{
 		signer: currentSigner,
