@@ -170,7 +170,7 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	})
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "log.backtrace",
-		Usage:   "Request a stack trace at a specific logging statement (e.g. 'block.go:271')",
+		Usage:   "Deprecated: has no effect (the logger no longer supports per-site backtraces)",
 		Value:   &c.cliConfig.Logging.Backtrace,
 		Default: c.cliConfig.Logging.Backtrace,
 		Group:   "Logging",

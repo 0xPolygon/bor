@@ -613,6 +613,12 @@ func setupLogger(logLevel int, loggingInfo LoggingConfig) {
 	}
 
 	log.SetDefault(log.NewLogger(handler))
+
+	// The slog-based logger has no backtrace hook, so the option cannot be
+	// honoured; say so instead of silently ignoring it, as cmd/utils does.
+	if loggingInfo.Backtrace != "" {
+		log.Warn("Option --log.backtrace is deprecated and has no effect")
+	}
 }
 
 func (s *Server) GetLatestBlockNumber() *big.Int {

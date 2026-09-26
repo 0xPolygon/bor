@@ -132,6 +132,17 @@ func TestConfigBootnodesDefault(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Len(t, cfg.P2P.BootstrapNodes, 1)
 	})
+	t.Run("BootnodesV4", func(t *testing.T) {
+		// bootnodesv4 feeds the discv4 bootstrap table alongside bootnodes;
+		// it was accepted by the config parser but never used.
+		config := DefaultConfig()
+		config.P2P.Discovery.BootnodesV4 = []string{dummyEnodeAddr}
+
+		cfg, err := config.buildNode()
+		assert.NoError(t, err)
+		assert.Len(t, cfg.P2P.BootstrapNodes, 1)
+		assert.Equal(t, dummyEnodeAddr, cfg.P2P.BootstrapNodes[0].URLv4())
+	})
 }
 
 func TestMakePasswordListFromFile(t *testing.T) {
