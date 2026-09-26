@@ -556,3 +556,89 @@ func TestWSClient_ProactiveSwitchSetsConnNil(t *testing.T) {
 
 	require.NoError(t, client.Unsubscribe(ctx))
 }
+
+func TestParseMilestoneRange(t *testing.T) {
+	t.Parallel()
+
+	ok := map[string]string{"start_block": "100", "end_block": "200", "hash": "0x02"}
+	start, end, err := parseMilestoneRange(ok)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(100), start)
+	assert.Equal(t, uint64(200), end)
+
+	// A single-block milestone (start == end) is valid.
+	start, end, err = parseMilestoneRange(map[string]string{"start_block": "300", "end_block": "300", "hash": "0x02"})
+	require.NoError(t, err)
+	assert.Equal(t, uint64(300), start)
+	assert.Equal(t, uint64(300), end)
+
+	for name, attrs := range map[string]map[string]string{
+		"missing end_block":   {"start_block": "100", "hash": "0x02"},
+		"unparsable start":    {"start_block": "abc", "end_block": "200", "hash": "0x02"},
+		"end before start":    {"start_block": "300", "end_block": "200", "hash": "0x02"},
+		"zero end":            {"start_block": "0", "end_block": "0", "hash": "0x02"},
+		"missing hash":        {"start_block": "100", "end_block": "200"},
+		"all attributes gone": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, _, err := parseMilestoneRange(attrs)
+			require.Error(t, err, "a milestone event without a usable range must be rejected")
+		})
+	}
+}
+
+// newTestWSServerWithMalformedThenValidMilestone sends an event without a
+// block range first and a valid one second: only the valid one may surface.
+func newTestWSServerWithMalformedThenValidMilestone(t *testing.T) *httptest.Server {
+	t.Helper()
+
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if _, _, err = conn.ReadMessage(); err != nil {
+			return
+		}
+		build := func(attrs []attribute) []byte {
+			data, _ := json.Marshal(wsResponse{JSONRPC: "2.0", Result: wsResult{Data: wsData{Value: wsValue{FinalizeBlock: finalizeBlock{Events: []wsEvent{{Type: "milestone", Attributes: attrs}}}}}}})
+			return data
+		}
+		malformed := build([]attribute{{Key: "hash", Value: "0x0000000000000000000000000000000000000000000000000000000000000009"}, {Key: "milestone_id", Value: "bad"}})
+		valid := build([]attribute{{Key: "hash", Value: "0x0000000000000000000000000000000000000000000000000000000000000002"}, {Key: "start_block", Value: "100"}, {Key: "end_block", Value: "200"}, {Key: "milestone_id", Value: "good"}})
+		if err := conn.WriteMessage(websocket.TextMessage, malformed); err != nil {
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, valid); err != nil {
+			return
+		}
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+}
+
+func TestWSClient_MalformedMilestoneIsDropped(t *testing.T) {
+	server := newTestWSServerWithMalformedThenValidMilestone(t)
+	defer server.Close()
+
+	client, err := NewHeimdallWSClient(wsURL(server.URL))
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	events := client.SubscribeMilestoneEvents(ctx)
+	select {
+	case m := <-events:
+		require.NotNil(t, m)
+		assert.Equal(t, "good", m.MilestoneID, "the event without a block range must not be delivered")
+		assert.Equal(t, uint64(200), m.EndBlock)
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for milestone event")
+	}
+	require.NoError(t, client.Unsubscribe(ctx))
+}
