@@ -5602,3 +5602,49 @@ func TestRebroadcastLoopIntegration(t *testing.T) {
 		t.Error("transaction should be tracked in lastRebroadcast after rebroadcast")
 	}
 }
+
+// TestDroppedConditionalTxDemotesFollowers: when a conditional (PIP-15) tx is
+// dropped from the middle of the pending list because its options no longer
+// hold, the account's higher-nonce transactions behind it are no longer
+// executable and must be moved back to the queue, exactly as Filter does for
+// unpayable transactions. Leaving them in pending strands them behind a nonce
+// gap that only the front-of-list check would catch.
+func TestDroppedConditionalTxDemotesFollowers(t *testing.T) {
+	t.Parallel()
+
+	pool, key := setupPool()
+	defer pool.Close()
+
+	account := crypto.PubkeyToAddress(key.PublicKey)
+	testAddBalance(pool, account, big.NewInt(1000000))
+
+	// The test chain's head has Time == 0, so a TimestampMin of 1 is a
+	// condition that never holds once the pool re-validates the options.
+	first := transaction(0, 100000, key)
+	conditional := transaction(1, 100000, key)
+	minTs := uint64(1)
+	conditional.PutOptions(&types.OptionsPIP15{TimestampMin: &minTs})
+	follower := transaction(2, 100000, key)
+
+	if errs := pool.addRemotesSync([]*types.Transaction{first, conditional, follower}); errs[0] != nil || errs[1] != nil || errs[2] != nil {
+		t.Fatalf("failed to add transactions: %v", errs)
+	}
+	if pending, queued := pool.Stats(); pending != 3 || queued != 0 {
+		t.Fatalf("before reset: pending %d, queued %d, want 3 pending", pending, queued)
+	}
+
+	<-pool.requestReset(nil, nil)
+
+	if pool.all.Get(conditional.Hash()) != nil {
+		t.Fatalf("conditional transaction with an unsatisfiable option should have been dropped")
+	}
+	if pool.all.Get(follower.Hash()) == nil {
+		t.Fatalf("follower transaction should still be in the pool")
+	}
+	if pending, queued := pool.Stats(); pending != 1 || queued != 1 {
+		t.Fatalf("after reset: pending %d, queued %d, want nonce 0 pending and the follower demoted to the queue", pending, queued)
+	}
+	if err := validatePoolInternals(pool); err != nil {
+		t.Fatalf("pool internal state corrupted: %v", err)
+	}
+}

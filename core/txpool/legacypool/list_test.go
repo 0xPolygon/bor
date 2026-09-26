@@ -124,7 +124,7 @@ func TestFilterTxConditionalKnownAccounts(t *testing.T) {
 
 	// There should be no drops at this point.
 	// No state has been modified.
-	drops := list.FilterTxConditional(state, header)
+	drops, _ := list.FilterTxConditional(state, header)
 
 	count := len(drops)
 	require.Equal(t, 0, count, "got %d filtered by TxOptions when there should not be any", count)
@@ -157,7 +157,7 @@ func TestFilterTxConditionalKnownAccounts(t *testing.T) {
 	list.Add(tx2, DefaultConfig.PriceBump)
 
 	// There should still be no drops as no state has been modified.
-	drops = list.FilterTxConditional(state, header)
+	drops, _ = list.FilterTxConditional(state, header)
 
 	count = len(drops)
 	require.Equal(t, 0, count, "got %d filtered by TxOptions when there should not be any", count)
@@ -171,7 +171,7 @@ func TestFilterTxConditionalKnownAccounts(t *testing.T) {
 	_ = trie
 
 	// tx2 should be the single transaction filtered out
-	drops = list.FilterTxConditional(state, header)
+	drops, _ = list.FilterTxConditional(state, header)
 
 	count = len(drops)
 	require.Equal(t, 1, count, "got %d filtered by TxOptions when there should be a single one", count)
@@ -205,7 +205,7 @@ func TestFilterTxConditionalBlockNumber(t *testing.T) {
 
 	// There should be no drops at this point.
 	// No state has been modified.
-	drops := list.FilterTxConditional(state, header)
+	drops, _ := list.FilterTxConditional(state, header)
 
 	count := len(drops)
 	require.Equal(t, 0, count, "got %d filtered by TxOptions when there should not be any", count)
@@ -222,7 +222,7 @@ func TestFilterTxConditionalBlockNumber(t *testing.T) {
 	list.Add(tx2, DefaultConfig.PriceBump)
 
 	// There should still be no drops as no state has been modified.
-	drops = list.FilterTxConditional(state, header)
+	drops, _ = list.FilterTxConditional(state, header)
 
 	count = len(drops)
 	require.Equal(t, 0, count, "got %d filtered by TxOptions when there should not be any", count)
@@ -231,7 +231,7 @@ func TestFilterTxConditionalBlockNumber(t *testing.T) {
 	header.Number = big.NewInt(120)
 
 	// tx2 should be the single transaction filtered out
-	drops = list.FilterTxConditional(state, header)
+	drops, _ = list.FilterTxConditional(state, header)
 
 	count = len(drops)
 	require.Equal(t, 1, count, "got %d filtered by TxOptions when there should be a single one", count)
@@ -266,7 +266,7 @@ func TestFilterTxConditionalTimestamp(t *testing.T) {
 
 	// There should be no drops at this point.
 	// No state has been modified.
-	drops := list.FilterTxConditional(state, header)
+	drops, _ := list.FilterTxConditional(state, header)
 
 	count := len(drops)
 	require.Equal(t, 0, count, "got %d filtered by TxOptions when there should not be any", count)
@@ -286,7 +286,7 @@ func TestFilterTxConditionalTimestamp(t *testing.T) {
 	list.Add(tx2, DefaultConfig.PriceBump)
 
 	// There should still be no drops as no state has been modified.
-	drops = list.FilterTxConditional(state, header)
+	drops, _ = list.FilterTxConditional(state, header)
 
 	count = len(drops)
 	require.Equal(t, 0, count, "got %d filtered by TxOptions when there should not be any", count)
@@ -295,7 +295,7 @@ func TestFilterTxConditionalTimestamp(t *testing.T) {
 	header.Time = 120
 
 	// tx2 should be the single transaction filtered out
-	drops = list.FilterTxConditional(state, header)
+	drops, _ = list.FilterTxConditional(state, header)
 
 	count = len(drops)
 	require.Equal(t, 1, count, "got %d filtered by TxOptions when there should be a single one", count)
@@ -380,4 +380,48 @@ func BenchmarkListCapOneTx(b *testing.B) {
 		list.Cap(list.Len() - 1)
 		b.StopTimer()
 	}
+}
+
+// TestFilterTxConditionalCascade: dropping a conditional transaction from a
+// strict list returns the higher-nonce transactions behind it as invalids;
+// a non-strict list has no ordering requirement and returns none. A nil
+// state or header is a no-op.
+func TestFilterTxConditionalCascade(t *testing.T) {
+	t.Parallel()
+
+	memDb := rawdb.NewMemoryDatabase()
+	tdb := triedb.NewDatabase(memDb, &triedb.Config{Preimages: true})
+	state, _ := state.New(common.Hash{}, state.NewDatabase(tdb, nil))
+	header := &types.Header{Number: big.NewInt(0)}
+	key, _ := crypto.GenerateKey()
+
+	build := func(strict bool) *list {
+		l := newList(strict)
+		l.Add(transaction(0, 1000, key), DefaultConfig.PriceBump)
+		conditional := transaction(1, 1000, key)
+		minTs := uint64(1) // header.Time is 0, so this never holds
+		conditional.PutOptions(&types.OptionsPIP15{TimestampMin: &minTs})
+		l.Add(conditional, DefaultConfig.PriceBump)
+		l.Add(transaction(2, 1000, key), DefaultConfig.PriceBump)
+		return l
+	}
+
+	strict := build(true)
+	removed, invalids := strict.FilterTxConditional(nil, header)
+	require.Empty(t, removed)
+	require.Empty(t, invalids)
+	require.Equal(t, 3, strict.Len(), "nil state must leave the list untouched")
+
+	removed, invalids = strict.FilterTxConditional(state, header)
+	require.Len(t, removed, 1)
+	require.Equal(t, uint64(1), removed[0].Nonce())
+	require.Len(t, invalids, 1)
+	require.Equal(t, uint64(2), invalids[0].Nonce(), "the transaction behind the gap must be returned as invalid")
+	require.Equal(t, 1, strict.Len())
+
+	loose := build(false)
+	removed, invalids = loose.FilterTxConditional(state, header)
+	require.Len(t, removed, 1)
+	require.Empty(t, invalids, "a non-strict list has no gap to cascade")
+	require.Equal(t, 2, loose.Len())
 }
