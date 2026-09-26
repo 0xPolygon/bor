@@ -13,11 +13,6 @@ func (c *Consumer) Pending() (*types.Block, types.Receipts, *state.StateDB) {
 	return block, receipts, statedb
 }
 
-func (c *Consumer) PendingState(ctx context.Context) (*types.Block, *state.StateDB, error) {
-	block, _, statedb, err := c.PendingSnapshot(ctx)
-	return block, statedb, err
-}
-
 func (s *PendingStore) Pending() (*types.Block, types.Receipts, *state.StateDB) {
 	block, receipts, statedb, _ := s.PendingSnapshot(context.Background())
 	return block, receipts, statedb

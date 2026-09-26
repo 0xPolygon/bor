@@ -45,6 +45,10 @@ func (c *apiSequenceConsumer) PendingSnapshot(context.Context) (*types.Block, ty
 	return c.block, c.receipts, c.state, c.snapshotErr
 }
 
+func (c *apiSequenceConsumer) PendingState(context.Context) (*types.Block, *state.StateDB, error) {
+	return c.block, c.state, c.snapshotErr
+}
+
 func (c *apiSequenceConsumer) PendingBlock() *types.Block {
 	return c.block
 }
@@ -125,6 +129,9 @@ func TestSequencerPendingBackend(t *testing.T) {
 	gotState, gotHeader, err = b.StateAndHeaderByNumber(t.Context(), rpc.PendingBlockNumber)
 	if err != nil || gotState != statedb || gotHeader.Hash() != block.Header().Hash() {
 		t.Fatalf("pending state/header = %v, %v, %v", gotState, gotHeader, err)
+	}
+	if consumer.snapshotCalls != 0 {
+		t.Fatalf("pending state read copied receipts: snapshots=%d", consumer.snapshotCalls)
 	}
 	gotReceipts, err = b.GetReceipts(t.Context(), block.Hash())
 	if err != nil || len(gotReceipts) != 1 || gotReceipts[0] != receipt {
