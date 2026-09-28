@@ -60,6 +60,26 @@ func snapshotPath(journalDir string, accountHash common.Hash) string {
 	return filepath.Join(journalDir, "addresscache", accountHash.Hex()+".cache")
 }
 
+// warmFillThreshold returns the byte-fill level, out of cacheSize, that a
+// reloaded snapshot must reach to be considered warm. It matches the 66.6%
+// target preloadAddressAsync itself fills toward (see the totalBytesLoaded
+// check there), so a reload and a from-scratch preload are held to the same
+// bar.
+func warmFillThreshold(cacheSize int) uint64 {
+	return uint64(cacheSize * 2 / 3)
+}
+
+// isWarmReload reports whether a reloaded snapshot of bytesSize is warm
+// enough to skip the top-up preload for cacheSize. Without this check, a
+// snapshot persisted mid-preload (e.g. two restarts in quick succession)
+// would be marked warm and permanently skip the top-up preload — leaving the
+// cache stuck near-empty for addresses that are rarely touched by organic
+// block-processing traffic, which is exactly the profile of the addresses
+// this feature targets.
+func isWarmReload(bytesSize uint64, cacheSize int) bool {
+	return bytesSize >= warmFillThreshold(cacheSize)
+}
+
 // NewAddressBiasedCache creates a new address-biased cache with preloading.
 // It scans the database for storage trie nodes of the specified addresses and
 // loads them into dedicated caches. The addressCacheSizes maps each address to
@@ -112,15 +132,7 @@ func (c *AddressBiasedCache) initAddressCache(addr common.Address, cacheSize int
 
 	var stats fastcache.Stats
 	addrCache.UpdateStats(&stats)
-	// A reload is only "warm" if it reached the same 2/3-of-cacheSize fill
-	// target preloadAddressAsync itself targets (see the totalBytesLoaded
-	// check in preloadAddressAsync). Without this check, a snapshot
-	// persisted mid-preload (e.g. two restarts in quick succession) would
-	// be marked warm and permanently skip the top-up preload — leaving the
-	// cache stuck near-empty for addresses that are rarely touched by
-	// organic block-processing traffic, which is exactly the profile of
-	// the addresses this feature targets.
-	warm = stats.BytesSize >= uint64(cacheSize*2/3)
+	warm = isWarmReload(stats.BytesSize, cacheSize)
 	if warm {
 		log.Info("Reloaded address cache snapshot", "address", addr, "entries", stats.EntriesCount, "bytes", stats.BytesSize, "path", snapshotPath(c.journalDir, accountHash))
 	}
