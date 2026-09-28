@@ -8,6 +8,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/0xPolygon/sequence-store-proto/commitment"
 	pb "github.com/0xPolygon/sequence-store-proto/sequencestore/v1"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -228,4 +229,85 @@ func TestBuildStartStoreShapes(t *testing.T) {
 			t.Fatal("a recovery build must publish nothing")
 		}
 	})
+}
+
+func TestBehindReadTrailingOurSeal(t *testing.T) {
+	const (
+		open = iota
+		record
+		seal
+		none = -1
+	)
+
+	cases := []struct {
+		name        string
+		ackTo       int
+		readAt      int
+		otherParent bool
+		owed        bool
+		wantHold    bool
+	}{
+		{name: "replica behind our acked seal", ackTo: seal, readAt: record},
+		{name: "read at our acked seal", ackTo: seal, readAt: seal},
+		{name: "parent seal unacked", ackTo: none, readAt: record, wantHold: true},
+		{name: "acked through the record only", ackTo: record, readAt: open, wantHold: true},
+		{name: "foreign window at parent", ackTo: seal, readAt: none, wantHold: true},
+		{name: "acked seal is not our parent", ackTo: seal, readAt: record, otherParent: true, wantHold: true},
+		{name: "backfill already owed", ackTo: seal, readAt: record, owed: true, wantHold: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := barePublisher()
+			sealed := publishBlock(t, p, 1, common.Hash{0xef}, 1)
+
+			items, _ := p.journal.after(0)
+			if tc.ackTo != none {
+				p.ackedSeq, p.anchor = items[tc.ackTo].seq, items[tc.ackTo].post
+			}
+
+			if tc.owed {
+				p.pendingFrom, p.pendingTo = 1, 1
+			}
+
+			info := tailInfo{
+				s:             commitment.Head{0xaa},
+				tipOpen:       true,
+				tipOpenHeight: 1,
+				tipOpenParent: common.Hash{0xef},
+				window:        []*pb.Entry{items[open].entry, items[record].entry},
+			}
+			if tc.readAt != none {
+				info.s = items[tc.readAt].post
+			}
+
+			parent := sealed.Hash()
+			if tc.otherParent {
+				parent = common.Hash{0x99}
+			}
+
+			p.mu.Lock()
+			_, handled := p.stateWindowLocked(info, buildBehind, 2, parent)
+			p.mu.Unlock()
+
+			if !handled {
+				t.Fatal("buildBehind not handled")
+			}
+
+			p.OpenBlock(2, sealed.Time+1, parent, sealed.GasLimit, sealed.BaseFee)
+
+			sendable, _, _ := p.sendableAfter(p.ackedSeq, maxInflightEntries)
+
+			streamed := false
+			for _, it := range sendable {
+				if it.kind == entryOpen && it.height == 2 {
+					streamed = true
+				}
+			}
+
+			if streamed == tc.wantHold {
+				t.Fatalf("open streamed = %v, want %v", streamed, !tc.wantHold)
+			}
+		})
+	}
 }

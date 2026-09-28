@@ -230,3 +230,34 @@ func (p *Publisher) recoverSealed(ctx context.Context, number uint64) (tailInfo,
 		window:        window,
 	}, recoverReady
 }
+
+// behindWindowLocked resolves a build start that reads as lacking our parent.
+func (p *Publisher) behindWindowLocked(info tailInfo, number uint64, parent common.Hash) {
+	// A replica still applying our acked parent seal owes nothing, and a
+	// hold here has no ack left to lift it: the window would batch to its seal.
+	if p.pendingFrom == 0 && p.readTrailsOurSealLocked(info, parent) {
+		p.hold = clearedHold()
+
+		return
+	}
+
+	// The store is owed every block from its seal edge to our parent.
+	// Build and buffer: the backfill drains oldest-first, and the live
+	// window follows only once the store reaches our boundary.
+	p.primeBackfillLocked(info, number)
+	p.holdNewLocked(holdBuild)
+}
+
+// readTrailsOurSealLocked reports whether the read's head is our own
+// lineage at or behind our store-acked seal of parent.
+func (p *Publisher) readTrailsOurSealLocked(info tailInfo, parent common.Hash) bool {
+	seq, ok := p.journal.findPost(info.s)
+	if !ok || seq > p.ackedSeq {
+		return false
+	}
+
+	tip, _ := p.journal.itemAt(p.ackedSeq)
+	header, err := decodeSealHeader(tip.entry.GetBlockSeal().GetHeader())
+
+	return err == nil && header.Hash() == parent
+}

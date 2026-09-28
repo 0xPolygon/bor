@@ -248,11 +248,7 @@ func (p *Publisher) stateWindowLocked(info tailInfo, state buildStartState,
 		return offerLocked(a), true
 
 	case buildBehind:
-		// The store is owed every block from its seal edge to our parent.
-		// Build and buffer: the backfill drains oldest-first, and the live
-		// window follows only once the store reaches our boundary.
-		p.primeBackfillLocked(info, number)
-		p.holdNewLocked(holdBuild)
+		p.behindWindowLocked(info, number, parent)
 
 		return nil, true
 	}
