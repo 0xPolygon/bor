@@ -69,7 +69,8 @@ type Config struct {
 	// Use switch-based fast path EVM interpreter
 	EnableEVMSwitchDispatch bool `hcl:"evm-switch-dispatch,optional" toml:"evm-switch-dispatch,optional"`
 
-	// Enable state size tracking
+	// StateSizeTracking is deprecated and ignored. State size tracking was removed
+	// upstream; the key stays so existing config files still parse.
 	StateSizeTracking bool `hcl:"state.size-tracking,optional" toml:"state.size-tracking,optional"`
 
 	// DataDir is the directory to store the state in
@@ -850,7 +851,6 @@ func DefaultConfig() *Config {
 		Verbosity:                   3,
 		EnablePreimageRecording:     false,
 		EnableEVMSwitchDispatch:     false,
-		StateSizeTracking:           ethconfig.Defaults.EnableStateSizeTracking,
 		DataDir:                     DefaultDataDir(),
 		Ancient:                     "",
 		DBEngine:                    "pebble",
@@ -1278,7 +1278,6 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 
 	n.EnablePreimageRecording = c.EnablePreimageRecording
 	n.EnableEVMSwitchDispatch = c.EnableEVMSwitchDispatch
-	n.EnableStateSizeTracking = c.StateSizeTracking
 	n.VMTrace = c.VMTrace
 	n.VMTraceJsonConfig = c.VMTraceJsonConfig
 

@@ -276,6 +276,12 @@ type environment struct {
 	sidecars []*types.BlobTxSidecar
 	blobs    int
 
+	// revertedTxs and revertedIdx record transactions that were executed during
+	// block building but then reverted (excluded from the block), together with
+	// the index each was tried at.
+	revertedTxs []*types.Transaction
+	revertedIdx []uint32
+
 	witness *stateless.Witness
 
 	// Readers with stats tracking for metrics reporting
@@ -437,6 +443,10 @@ type newPayloadResult struct {
 	requests [][]byte               // Consensus layer requests collected during block construction
 	witness  *stateless.Witness     // Witness is an optional stateless proof
 
+	// revertedTxs and revertedIdx record the transactions tried-and-reverted
+	// during construction and the index each was assigned.
+	revertedTxs []*types.Transaction
+	revertedIdx []uint32
 }
 
 // getWorkReq represents a request for getting a new sealing work with provided parameters.

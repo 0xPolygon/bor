@@ -254,6 +254,7 @@ func (t *BlockTest) genesis(config *params.ChainConfig) *core.Genesis {
 		BaseFee:       t.json.Genesis.BaseFeePerGas,
 		BlobGasUsed:   t.json.Genesis.BlobGasUsed,
 		ExcessBlobGas: t.json.Genesis.ExcessBlobGas,
+		SlotNumber:    t.json.Genesis.SlotNumber,
 	}
 }
 

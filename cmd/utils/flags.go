@@ -311,12 +311,6 @@ var (
 		Usage:    "Scheme to use for storing ethereum state ('hash' or 'path')",
 		Category: flags.StateCategory,
 	}
-	StateSizeTrackingFlag = &cli.BoolFlag{
-		Name:     "state.size-tracking",
-		Usage:    "Enable state size tracking, retrieve state size with debug_stateSize.",
-		Value:    ethconfig.Defaults.EnableStateSizeTracking,
-		Category: flags.StateCategory,
-	}
 	BinTrieGroupDepthFlag = &cli.IntFlag{
 		Name:     "bintrie.groupdepth",
 		Usage:    "Number of levels per serialized group in binary trie (1-8, default 5). Lower values create smaller groups with more nodes.",
@@ -1970,9 +1964,6 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 			cfg.EthDiscoveryURLs = SplitAndTrim(urls)
 		}
 	}
-	if ctx.IsSet(StateSizeTrackingFlag.Name) {
-		cfg.EnableStateSizeTracking = ctx.Bool(StateSizeTrackingFlag.Name)
-	}
 	// Override any default configs for hard coded networks.
 	switch {
 	case ctx.Bool(MainnetFlag.Name):
@@ -2523,9 +2514,6 @@ func MakeChain(ctx *cli.Context, stack *node.Node, readonly bool) (*core.BlockCh
 		// - DATADIR/triedb/merkle.journal
 		// - DATADIR/triedb/verkle.journal
 		TrieJournalDirectory: stack.ResolvePath("triedb"),
-
-		// Enable state size tracking if enabled
-		StateSizeTracking: ctx.Bool(StateSizeTrackingFlag.Name),
 	}
 	if options.ArchiveMode && !options.Preimages {
 		options.Preimages = true

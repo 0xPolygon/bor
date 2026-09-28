@@ -2514,8 +2514,8 @@ func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool, noStorageWiping 
 	return ret.Root, nil
 }
 
-// CommitWithUpdate writes the state mutations and returns both the root hash and the state update.
-// This is useful for tracking state changes at the blockchain level.
+// CommitWithUpdate writes the state mutations and returns the state update for
+// external processing (e.g., live tracing hooks).
 func (s *StateDB) CommitWithUpdate(block uint64, deleteEmptyObjects bool, noStorageWiping bool) (common.Hash, *StateUpdate, error) {
 	ret, err := s.commitAndFlush(block, deleteEmptyObjects, noStorageWiping)
 	if err != nil {
