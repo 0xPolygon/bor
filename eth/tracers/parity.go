@@ -18,7 +18,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
-	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/holiman/uint256"
 )
@@ -290,11 +289,11 @@ func (api *API) parityIntrinsicGas(in parityExecInput) uint64 {
 		return 0
 	}
 	rules := api.backend.ChainConfig().Rules(in.vmctx.BlockNumber, in.vmctx.Random != nil, in.vmctx.Time)
-	ig, err := core.IntrinsicGas(in.msg.Data, in.msg.AccessList, in.msg.SetCodeAuthorizations, in.msg.From, in.msg.To, in.msg.Value, rules, params.CostPerStateByte)
+	ig, err := core.IntrinsicGas(in.msg.Data, in.msg.AccessList, in.msg.SetCodeAuthorizations, in.msg.From, in.msg.To, in.msg.Value, rules)
 	if err != nil {
 		return 0
 	}
-	return ig.RegularGas
+	return ig
 }
 
 // parityRootGasUsed computes the root trace's gross EVM execution gas =
