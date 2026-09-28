@@ -1951,7 +1951,7 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 		cfg.StatelessSelfValidation = ctx.Bool(VMStatelessSelfValidationFlag.Name)
 	}
 	// Auto-enable StatelessSelfValidation when witness stats are enabled
-	if ctx.Bool(VMWitnessStatsFlag.Name) {
+	if cfg.EnableWitnessStats {
 		cfg.StatelessSelfValidation = true
 	}
 
