@@ -50,7 +50,7 @@ func witnessRegenRoundTrip(pb *preparedBlock, diskdb ethdb.Database, config *par
 	// prefetch-role read warms the author into the shared cache so fee
 	// credits during settle are cache hits, mirroring mainnet where the flat
 	// reader serves hot accounts without touching the trie.
-	db := state.NewDatabase(pb.tdb, nil)
+	db := state.NewMPTDatabase(pb.tdb, nil)
 	prefetchReader, _, parallelReader, err := db.ReadersWithCacheStatsTriple(pb.witness.Root())
 	if err != nil {
 		return fmt.Errorf("readers: %w", err)
@@ -334,7 +334,7 @@ func witnessRegenPipelinedRoundTrip(pb *preparedBlock, diskdb ethdb.Database, co
 		return fmt.Errorf("original witness replay diverges from real block: receipt root %x, want %x", refReceipt, pb.receiptRoot)
 	}
 
-	db := state.NewDatabase(pb.tdb, nil)
+	db := state.NewMPTDatabase(pb.tdb, nil)
 	prefetchReader, _, parallelReader, err := db.ReadersWithCacheStatsTriple(pb.witness.Root())
 	if err != nil {
 		return fmt.Errorf("readers: %w", err)
@@ -488,7 +488,7 @@ func witnessRegenChainedPipelinedRoundTrip(prev, cur *testBlockData, diskdb ethd
 	memdb := prev.witness.MakeHashDB(diskdb)
 	injectWitnessIntoHashDB(memdb, cur.witness)
 	tdb := triedb.NewDatabase(memdb, triedb.HashDefaults)
-	db := state.NewDatabase(tdb, nil)
+	db := state.NewMPTDatabase(tdb, nil)
 
 	rootN2 := prev.witness.Root()
 	rootN1 := cur.witness.Root()

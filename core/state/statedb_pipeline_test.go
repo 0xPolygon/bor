@@ -636,7 +636,7 @@ func TestPipelinedSRC_RootParity_NewVsTrieOnly(t *testing.T) {
 	defer disk.Close()
 	tdb := triedb.NewDatabase(disk, &triedb.Config{PathDB: pathdb.Defaults})
 	defer tdb.Close()
-	sdb := NewDatabase(tdb, nil)
+	sdb := NewMPTDatabase(tdb, nil)
 
 	addrMutate := common.HexToAddress("0xa1")    // existing → balance/nonce mutation
 	addrZeroSlot := common.HexToAddress("0xa2")  // existing storage → zero a slot, write a fresh slot

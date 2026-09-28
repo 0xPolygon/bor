@@ -2041,7 +2041,7 @@ func testSetHeadWithScheme(t *testing.T, tt *rewindTest, snapshots bool, scheme 
 		dbconfig.HashDB = hashdb.Defaults
 	}
 	chain.triedb = triedb.NewDatabase(chain.db, dbconfig)
-	chain.statedb = state.NewDatabase(chain.triedb, chain.snaps)
+	chain.statedb = state.NewMPTDatabase(chain.triedb, chain.snaps)
 
 	// Force run a freeze cycle
 	type freezer interface {

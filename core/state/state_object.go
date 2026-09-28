@@ -206,7 +206,7 @@ func (s *stateObject) getPrefetchedTrie() Trie {
 	// If there's nothing to meaningfully return, let the user figure it out by
 	// pulling the trie from disk.
 	root := s.getPrefetchRoot()
-	if (root == types.EmptyRootHash && !s.db.db.TrieDB().IsVerkle()) || s.db.prefetcher == nil {
+	if (root == types.EmptyRootHash && s.db.db.Type().Is(TypeMPT)) || s.db.prefetcher == nil {
 		return nil
 	}
 	// Use getPrefetchRoot() so the trieID matches the one used when scheduling
@@ -321,7 +321,7 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 	// is consistent with the prefetcher's NodeReader state root. For FlatDiff
 	// accounts, this is the committed parent's storage root (not block N's).
 	if s.db.prefetcher != nil {
-		if root := s.getPrefetchRoot(); root != types.EmptyRootHash || s.db.db.TrieDB().IsVerkle() {
+		if root := s.getPrefetchRoot(); root != types.EmptyRootHash || s.db.db.Type().Is(TypeUBT) {
 			if err = s.db.prefetcher.prefetch(s.addrHash(), root, s.address, nil, []common.Hash{key}, true); err != nil {
 				log.Error("Failed to prefetch storage slot", "addr", s.address, "key", key, "err", err)
 			}
@@ -386,7 +386,7 @@ func (s *stateObject) finalise() {
 	}
 	// Use getPrefetchRoot() for consistency with other prefetcher calls.
 	if s.db.prefetcher != nil && len(slotsToPrefetch) > 0 {
-		if root := s.getPrefetchRoot(); root != types.EmptyRootHash || s.db.db.TrieDB().IsVerkle() {
+		if root := s.getPrefetchRoot(); root != types.EmptyRootHash || s.db.db.Type().Is(TypeUBT) {
 			if err := s.db.prefetcher.prefetch(s.addrHash(), root, s.address, nil, slotsToPrefetch, false); err != nil {
 				log.Error("Failed to prefetch slots", "addr", s.address, "slots", len(slotsToPrefetch), "err", err)
 			}
@@ -485,7 +485,7 @@ func (s *stateObject) updateTrie() (Trie, error) {
 
 	// Use getPrefetchRoot() so the trieID matches the one used during scheduling.
 	if s.db.prefetcher != nil {
-		if root := s.getPrefetchRoot(); root != types.EmptyRootHash || s.db.db.TrieDB().IsVerkle() {
+		if root := s.getPrefetchRoot(); root != types.EmptyRootHash || s.db.db.Type().Is(TypeUBT) {
 			s.db.prefetcher.used(s.addrHash(), root, nil, used)
 		}
 	}
@@ -598,7 +598,7 @@ func (s *stateObject) commit() (*accountUpdate, *trienode.NodeSet, error) {
 	// The main account trie commit in stateDB.commit() already calls
 	// CollectNodes on this trie, so calling Commit here again would
 	// redundantly traverse and serialize the entire tree per dirty account.
-	if s.db.GetTrie().IsVerkle() {
+	if s.db.GetTrie().IsUBT() {
 		s.origin = s.data.Copy()
 		return op, nil, nil
 	}
