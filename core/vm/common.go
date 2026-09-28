@@ -37,7 +37,6 @@ func CheckMaxInitCodeSize(rules *params.Rules, size uint64) error {
 			return fmt.Errorf("%w: code size %v limit %v", ErrMaxInitCodeSizeExceeded, size, params.MaxInitCodeSize)
 		}
 	}
-
 	return nil
 }
 
