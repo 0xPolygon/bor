@@ -168,3 +168,27 @@ func TestCloseDoesPersistAddressCache(t *testing.T) {
 		t.Fatalf("expected Close to persist the address cache, got stat err: %v", err)
 	}
 }
+
+// TestDisableAndClosePropagateTerminateError checks that Disable and Close
+// return the error from disk.terminate instead of continuing.
+func TestDisableAndClosePropagateTerminateError(t *testing.T) {
+	for name, call := range map[string]func(*Database) error{
+		"Disable": (*Database).Disable,
+		"Close":   (*Database).Close,
+	} {
+		t.Run(name, func(t *testing.T) {
+			db := New(rawdb.NewMemoryDatabase(), nil, false)
+			disk := db.tree.bottom()
+
+			boom := errors.New("flush boom")
+			frozen := &buffer{done: make(chan struct{})}
+			close(frozen.done)
+			frozen.flushErr = boom
+			disk.frozen = frozen
+
+			if err := call(db); !errors.Is(err, boom) {
+				t.Fatalf("expected %s to propagate disk.terminate's error, got: %v", name, err)
+			}
+		})
+	}
+}
