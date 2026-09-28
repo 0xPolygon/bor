@@ -1251,15 +1251,17 @@ func (s *Ethereum) SyncMode() downloader.SyncMode {
 	// We are in a full sync, but the associated head state is missing. To complete
 	// the head state, forcefully rerun the snap sync. Note it doesn't mean the
 	// persistent state is corrupted, just mismatch with the head block.
-	if !s.blockchain.HasCommittedState(head.Root) && !s.handler.statelessSync.Load() {
-		// Pipelined import can briefly expose a head whose SRC commit is still
-		// in flight. Report full sync during that bounded handoff only; once it
-		// expires, this remains a real missing-state signal.
-		if hasPendingPipelinedHeadState(s.blockchain, head) {
-			return downloader.FullSync
+	if !s.handler.statelessSync.Load() {
+		if head, missing := s.blockchain.HeadStateMissing(); missing {
+			// Pipelined import can briefly expose a head whose SRC commit is still
+			// in flight. Report full sync during that bounded handoff only; once it
+			// expires, this remains a real missing-state signal.
+			if hasPendingPipelinedHeadState(s.blockchain, head) {
+				return downloader.FullSync
+			}
+			log.Info("Reenabled snap sync as chain is stateless")
+			return downloader.SnapSync
 		}
-		log.Info("Reenabled snap sync as chain is stateless")
-		return downloader.SnapSync
 	}
 	// Nope, we're really full syncing
 	if s.handler.statelessSync.Load() {

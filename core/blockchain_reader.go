@@ -612,6 +612,19 @@ func (bc *BlockChain) HasState(root common.Hash) bool {
 	return bc.HasCommittedState(root) || bc.hasRecentPipelinedState(common.Hash{}, root, time.Now(), false)
 }
 
+// HeadStateMissing returns the head and whether its state is missing. SetHead
+// and imports briefly leave the head without state while holding chainmu, so
+// the state is only reported missing when chainmu is free.
+func (bc *BlockChain) HeadStateMissing() (*types.Header, bool) {
+	head := bc.CurrentBlock()
+	if bc.HasCommittedState(head.Root) || !bc.chainmu.TryLockNow() {
+		return head, false
+	}
+	defer bc.chainmu.Unlock()
+	head = bc.CurrentBlock()
+	return head, !bc.HasCommittedState(head.Root)
+}
+
 // HasCommittedState checks if a state trie is fully present in the database.
 func (bc *BlockChain) HasCommittedState(root common.Hash) bool {
 	_, err := bc.statedb.OpenTrie(root)

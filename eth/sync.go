@@ -287,10 +287,9 @@ func (cs *chainSyncer) modeAndLocalHead() (downloader.SyncMode, *big.Int) {
 	}
 
 	// If we're in stateless sync mode, return that directly
-	head := cs.handler.chain.CurrentBlock()
-	td := cs.handler.chain.GetTd(head.Hash(), head.Number.Uint64())
 	if cs.handler.statelessSync.Load() {
-		return downloader.StatelessSync, td
+		head := cs.handler.chain.CurrentBlock()
+		return downloader.StatelessSync, cs.handler.chain.GetTd(head.Hash(), head.Number.Uint64())
 	}
 
 	// The check below switches to snap sync if current block is before the last
@@ -312,7 +311,9 @@ func (cs *chainSyncer) modeAndLocalHead() (downloader.SyncMode, *big.Int) {
 	// We are in a full sync, but the associated head state is missing. To complete
 	// the head state, forcefully rerun the snap sync. Note it doesn't mean the
 	// persistent state is corrupted, just mismatch with the head block.
-	if !cs.handler.chain.HasCommittedState(head.Root) {
+	head, missing := cs.handler.chain.HeadStateMissing()
+	td := cs.handler.chain.GetTd(head.Hash(), head.Number.Uint64())
+	if missing {
 		// Pipelined import may have already advanced the canonical head while
 		// the matching SRC commit is still in flight. Stay in full sync for
 		// that bounded handoff only; otherwise the snap recovery path below
