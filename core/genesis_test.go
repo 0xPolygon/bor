@@ -191,7 +191,6 @@ func TestGenesisHashes(t *testing.T) {
 	}{
 		{DefaultGenesisBlock(), params.MainnetGenesisHash},
 		{DefaultSepoliaGenesisBlock(), params.SepoliaGenesisHash},
-		{DefaultHoleskyGenesisBlock(), params.HoleskyGenesisHash},
 		// bor: hoodi expects a non-nil withdrawals hash
 		// {DefaultHoodiGenesisBlock(), params.HoodiGenesisHash},
 

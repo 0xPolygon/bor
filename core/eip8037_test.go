@@ -84,7 +84,7 @@ func mkState(alloc types.GenesisAlloc) *state.StateDB {
 // mkCommittedState is mkState with the allocation committed to disk and
 // reloaded. EIP-161-empty accounts carrying only storage do not survive an
 // in-memory Finalise; committing without empty-account deletion reproduces
-// the synthesized prestate an EIP-7610 fixture would load from disk.
+// the synthesized prestate such a fixture would load from disk.
 func mkCommittedState(t *testing.T, alloc types.GenesisAlloc) *state.StateDB {
 	t.Helper()
 	db := state.NewDatabaseForTesting()
@@ -383,7 +383,7 @@ func TestCreate2TransientEmptyDestNoRefill(t *testing.T) {
 	}
 }
 
-// ========== Storage-only (EIP-7610-shaped) deployment destination ===========
+// ============== Storage-only deployment destination =========================
 //
 // A destination carrying storage while having zero nonce, zero balance and
 // empty code is EIP-161-empty, so the account-creation state gas is
@@ -416,8 +416,8 @@ func storageOnlyAlloc(orchestrator common.Address, initCode []byte) (types.Genes
 }
 
 // Deploying onto a storage-only destination pre-charges the account creation.
-// Under the registry-based EIP-7610 check the creation proceeds, so the
-// charge is consumed like any other creation.
+// Storage alone does not constitute an address collision, so the creation
+// proceeds and the charge is consumed like any other creation.
 func TestCreate2StorageOnlyDestCharged(t *testing.T) {
 	t.Skip("bor: Chicago's instruction set takes precedence over Amsterdam's, so EIP-8037 opcode charges are not active on a config with bor forks (POS-3738)")
 	orchestrator := common.HexToAddress("0xc0de000000000000000000000000000000000004")
