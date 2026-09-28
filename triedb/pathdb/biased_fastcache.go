@@ -256,26 +256,13 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 			}
 		}
 
-		// Check if adding this node would exceed cache size
-		// Key format: owner (32 bytes) + path
-		nodeSize := uint64(common.HashLength + len(item.path) + len(nodeData))
-
-		// Preload 66.6% of the cache size to allow hot paths to be added later
-		if totalBytesLoaded+nodeSize > uint64(cacheSize*2/3) {
-			log.Info("Cache size limit reached, stopping preload",
-				"account hash", accountHash.Hex(),
-				"entries", entriesLoaded,
-				"current depth", item.depth,
-				"max depth reached", maxDepthReached,
-				"size", common.StorageSize(totalBytesLoaded).String())
-			break
-		}
-
 		// Construct the cache key using the same format as nodeCacheKey
 		// Format: owner (32 bytes) + path
 		key := append(accountHash.Bytes(), item.path...)
 
-		// Skip if key already exists to avoid overwriting potentially newer data.
+		// Don't overwrite a key that already exists (e.g. reloaded from a snapshot),
+		// to avoid overwriting potentially newer data. Its children are still
+		// enqueued below, so a top-up can descend past cached ancestors.
 		// Both Has and Set are thread-safe on fastcache (internal sharding), but
 		// the Has → Set sequence is not atomic: a flusher's Set(newer) can land
 		// between our Has(false) and our Set(older), leaving the cache holding
@@ -289,25 +276,38 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 		//      evictCachedNode). The cache self-heals on the next read of
 		//      that key — it does not stay poisoned until natural eviction.
 		// Worst case is one extra disk fetch per stale-blob occurrence.
-		if addrCache.Has(key) {
-			continue
-		}
+		if !addrCache.Has(key) {
+			// Check if adding this node would exceed cache size
+			// Key format: owner (32 bytes) + path
+			nodeSize := uint64(common.HashLength + len(item.path) + len(nodeData))
 
-		addrCache.Set(key, nodeData)
+			// Preload 66.6% of the cache size to allow hot paths to be added later
+			if totalBytesLoaded+nodeSize > uint64(cacheSize*2/3) {
+				log.Info("Cache size limit reached, stopping preload",
+					"account hash", accountHash.Hex(),
+					"entries", entriesLoaded,
+					"current depth", item.depth,
+					"max depth reached", maxDepthReached,
+					"size", common.StorageSize(totalBytesLoaded).String())
+				break
+			}
 
-		entriesLoaded++
-		totalBytesLoaded += nodeSize
+			addrCache.Set(key, nodeData)
 
-		// Log progress periodically
-		if entriesLoaded%logInterval == 0 {
-			log.Info("Preloading storage trie progress",
-				"account hash", accountHash.Hex(),
-				"entries", entriesLoaded,
-				"current depth", item.depth,
-				"max depth", maxDepthReached,
-				"size", common.StorageSize(totalBytesLoaded).String(),
-				"cache usage", fmt.Sprintf("%.1f%%", float64(totalBytesLoaded)*100/float64(cacheSize)),
-				"elapsed", time.Since(startTime))
+			entriesLoaded++
+			totalBytesLoaded += nodeSize
+
+			// Log progress periodically
+			if entriesLoaded%logInterval == 0 {
+				log.Info("Preloading storage trie progress",
+					"account hash", accountHash.Hex(),
+					"entries", entriesLoaded,
+					"current depth", item.depth,
+					"max depth", maxDepthReached,
+					"size", common.StorageSize(totalBytesLoaded).String(),
+					"cache usage", fmt.Sprintf("%.1f%%", float64(totalBytesLoaded)*100/float64(cacheSize)),
+					"elapsed", time.Since(startTime))
+			}
 		}
 
 		// Decode actual children from the node and enqueue them.

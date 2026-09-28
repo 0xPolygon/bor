@@ -1799,3 +1799,33 @@ func TestPreloadCountsBytesAlreadyInCache(t *testing.T) {
 		t.Fatal("expected preload to stop because the cache is already at its fill target, but the root node was loaded")
 	}
 }
+
+// TestPreloadDescendsPastCachedNodes checks that the top-up preload still
+// walks into the children of a node that is already cached, as happens after
+// a partial snapshot reload where the root is always present.
+func TestPreloadDescendsPastCachedNodes(t *testing.T) {
+	addr := common.HexToAddress("0x1234567890123456789012345678901234567890")
+	accountHash := crypto.Keccak256Hash(addr.Bytes())
+
+	const cacheSize = 16 * 1024 * 1024
+	db := rawdb.NewMemoryDatabase()
+	rootData := encodeBranchNode(t, []byte{0}, bytes.Repeat([]byte{0x55}, 32))
+	rawdb.WriteStorageTrieNode(db, accountHash, nil, rootData)
+	rawdb.WriteStorageTrieNode(db, accountHash, []byte{0}, encodeBranchNode(t, nil, nil))
+
+	// The root is already cached, as if reloaded from a partial snapshot.
+	addrCache := fastcache.New(cacheSize)
+	addrCache.Set(accountHash.Bytes(), rootData)
+
+	c, err := NewAddressBiasedCache(db, nil, 1024, 0, "")
+	if err != nil {
+		t.Fatalf("failed to create cache: %v", err)
+	}
+	c.addressCaches.Store(accountHash, addrCache)
+	c.wg.Add(1)
+	c.preloadAddressAsync(db, addr, cacheSize)
+
+	if !addrCache.Has(append(accountHash.Bytes(), 0)) {
+		t.Fatal("expected preload to load the child of the already-cached root")
+	}
+}
