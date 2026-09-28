@@ -101,3 +101,70 @@ func TestJournalPropagatesTerminateError(t *testing.T) {
 		t.Fatalf("expected Journal to propagate disk.terminate's error, got: %v", err)
 	}
 }
+
+// attachAddressCache replaces the disk layer's node cache with an
+// address-biased cache that persists snapshots under a temp dir, and returns
+// the snapshot path for addr.
+func attachAddressCache(t *testing.T, disk *diskLayer) string {
+	t.Helper()
+
+	addr := common.HexToAddress("0x1234567890123456789012345678901234567890")
+	journalDir := t.TempDir()
+
+	cache, err := NewAddressBiasedCache(rawdb.NewMemoryDatabase(), map[common.Address]int{addr: 32 * 1024}, 16*1024, 0, journalDir)
+	if err != nil {
+		t.Fatalf("failed to create address cache: %v", err)
+	}
+	cache.wg.Wait()
+	disk.nodes = cache
+
+	return snapshotPath(journalDir, crypto.Keccak256Hash(addr.Bytes()))
+}
+
+// TestDisableDoesNotPersistAddressCache checks that Database.Disable marks
+// state sync as running and does not save the address cache snapshot, since
+// it is not a final shutdown.
+func TestDisableDoesNotPersistAddressCache(t *testing.T) {
+	diskdb := rawdb.NewMemoryDatabase()
+	db := New(diskdb, nil, false)
+	path := attachAddressCache(t, db.tree.bottom())
+
+	if err := db.Disable(); err != nil {
+		t.Fatalf("Disable returned an unexpected error: %v", err)
+	}
+	if status := rawdb.ReadSnapSyncStatusFlag(diskdb); status != rawdb.StateSyncRunning {
+		t.Fatalf("expected snap sync status %d after Disable, got %d", rawdb.StateSyncRunning, status)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("expected Disable not to persist the address cache, got stat err: %v", err)
+	}
+}
+
+// TestJournalDoesNotPersistAddressCache checks that Database.Journal does not
+// save the address cache snapshot. Only Database.Close persists it.
+func TestJournalDoesNotPersistAddressCache(t *testing.T) {
+	db := New(rawdb.NewMemoryDatabase(), nil, false)
+	disk := db.tree.bottom()
+	path := attachAddressCache(t, disk)
+
+	if err := db.Journal(disk.rootHash()); err != nil {
+		t.Fatalf("Journal returned an unexpected error: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("expected Journal not to persist the address cache, got stat err: %v", err)
+	}
+}
+
+// TestCloseDoesPersistAddressCache checks that Database.Close, the final
+// shutdown, saves the address cache snapshot.
+func TestCloseDoesPersistAddressCache(t *testing.T) {
+	db := New(rawdb.NewMemoryDatabase(), nil, false)
+	path := attachAddressCache(t, db.tree.bottom())
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close returned an unexpected error: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected Close to persist the address cache, got stat err: %v", err)
+	}
+}

@@ -38,8 +38,8 @@ func (h *capturingHandler) Handle(_ stdcontext.Context, r slog.Record) error {
 }
 
 func (h *capturingHandler) Enabled(stdcontext.Context, slog.Level) bool { return true }
-func (h *capturingHandler) WithGroup(string) slog.Handler            { return h }
-func (h *capturingHandler) WithAttrs([]slog.Attr) slog.Handler       { return h }
+func (h *capturingHandler) WithGroup(string) slog.Handler               { return h }
+func (h *capturingHandler) WithAttrs([]slog.Attr) slog.Handler          { return h }
 
 func (h *capturingHandler) contains(substr string) bool {
 	h.mu.Lock()
@@ -1629,9 +1629,9 @@ func TestWarmFillThreshold(t *testing.T) {
 		want      uint64
 	}{
 		{cacheSize: 0, want: 0},
-		{cacheSize: 3, want: 2},    // 3*2/3 = 2; catches * -> / (3/2/3 = 0)
+		{cacheSize: 3, want: 2},     // 3*2/3 = 2; catches * -> / (3/2/3 = 0)
 		{cacheSize: 300, want: 200}, // 300*2/3 = 200; catches * -> / (300/2/3 = 50)
-		{cacheSize: 6, want: 4},    // 6*2/3 = 4; catches * -> / (6/2/3 = 1)
+		{cacheSize: 6, want: 4},     // 6*2/3 = 4; catches * -> / (6/2/3 = 1)
 	}
 	for _, tt := range tests {
 		if got := warmFillThreshold(tt.cacheSize); got != tt.want {
@@ -1647,7 +1647,7 @@ func TestIsWarmReload(t *testing.T) {
 		bytesSize uint64
 		want      bool
 	}{
-		{name: "exactly at threshold is warm", bytesSize: 200, want: true},   // catches >= -> > (200 > 200 is false)
+		{name: "exactly at threshold is warm", bytesSize: 200, want: true}, // catches >= -> > (200 > 200 is false)
 		{name: "one below threshold is cold", bytesSize: 199, want: false},
 		{name: "far above threshold is warm", bytesSize: 250, want: true},
 		{name: "between mutant and real threshold is cold", bytesSize: 100, want: false}, // catches * -> / (100 >= 50 would wrongly be true)
