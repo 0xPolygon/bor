@@ -5441,6 +5441,7 @@ func TestEIP7702(t *testing.T) {
 			},
 		},
 	}
+	gspec.Alloc = withSystemContracts(gspec.Alloc)
 
 	// Sign authorization tuples.
 	// The way the auths are combined, it becomes
@@ -8378,4 +8379,20 @@ func testPipelinedImportSRC_WarmSnapshotStorageTrieParity(t *testing.T, scheme s
 			}
 		}
 	})
+}
+
+// withSystemContracts adds the system contracts the post-shanghai forks issue
+// system calls into to the given alloc. The request-producing ones invalidate
+// the block when empty, so any chain generated on a merged config needs them.
+// Entries the caller set explicitly are left alone.
+func withSystemContracts(alloc types.GenesisAlloc) types.GenesisAlloc {
+	if alloc == nil {
+		alloc = types.GenesisAlloc{}
+	}
+	for addr, account := range SystemContractAllocs() {
+		if _, ok := alloc[addr]; !ok {
+			alloc[addr] = account
+		}
+	}
+	return alloc
 }
