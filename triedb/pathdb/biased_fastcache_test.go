@@ -1770,3 +1770,32 @@ func TestAddressBiasedCache_CloseLogsSaveFailure(t *testing.T) {
 		t.Fatal("expected Close(true) to log the per-address snapshot save failure")
 	}
 }
+
+// TestPreloadCountsBytesAlreadyInCache checks that the top-up preload counts
+// the bytes a partial snapshot reload already put in the cache, so it does
+// not add another full 2/3 fill on top of them.
+func TestPreloadCountsBytesAlreadyInCache(t *testing.T) {
+	addr := common.HexToAddress("0x1234567890123456789012345678901234567890")
+	accountHash := crypto.Keccak256Hash(addr.Bytes())
+
+	// One entry allocates a full 64KiB fastcache chunk, far above 2/3 of
+	// this cacheSize, so the cache is already at its fill target.
+	const cacheSize = 1024
+	addrCache := fastcache.New(cacheSize)
+	addrCache.Set([]byte("reloaded"), []byte{0x01})
+
+	db := rawdb.NewMemoryDatabase()
+	rawdb.WriteStorageTrieNode(db, accountHash, nil, encodeBranchNode(t, []byte{0}, bytes.Repeat([]byte{0x55}, 32)))
+
+	c, err := NewAddressBiasedCache(db, nil, 1024, 0, "")
+	if err != nil {
+		t.Fatalf("failed to create cache: %v", err)
+	}
+	c.addressCaches.Store(accountHash, addrCache)
+	c.wg.Add(1)
+	c.preloadAddressAsync(db, addr, cacheSize)
+
+	if addrCache.Has(accountHash.Bytes()) {
+		t.Fatal("expected preload to stop because the cache is already at its fill target, but the root node was loaded")
+	}
+}
