@@ -368,6 +368,38 @@ func TestDialSchedStaticNotStarvedByDynamic(t *testing.T) {
 	})
 }
 
+// This test checks that dynamic dials in flight do not use up the static budget.
+func TestDialSchedStaticNotDeferredByDynamicDials(t *testing.T) {
+	t.Parallel()
+
+	config := dialConfig{
+		maxActiveDials: 2,
+		maxDialPeers:   5,
+	}
+	runDialTest(t, config, []dialTestRound{
+		// Two dynamic dials fill the dial queue.
+		{
+			discovered: []*enode.Node{
+				newNode(uintID(0x01), "127.0.0.1:30303"),
+				newNode(uintID(0x02), "127.0.0.2:30303"),
+			},
+			wantNewDials: []*enode.Node{
+				newNode(uintID(0x01), "127.0.0.1:30303"),
+				newNode(uintID(0x02), "127.0.0.2:30303"),
+			},
+		},
+		// Both dynamic dials are still running. The static node is dialed anyway.
+		{
+			update: func(d *dialScheduler) {
+				d.addStatic(newNode(uintID(0x10), "127.0.0.16:30303"))
+			},
+			wantNewDials: []*enode.Node{
+				newNode(uintID(0x10), "127.0.0.16:30303"),
+			},
+		},
+	})
+}
+
 // This test checks that a static node that was jailed while connected is dialed
 // again once its jail period expires.
 func TestDialSchedStaticRedialAfterJail(t *testing.T) {

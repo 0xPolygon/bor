@@ -391,6 +391,9 @@ func (d *dialScheduler) freeDialSlots() int {
 // freeStaticDialSlots returns the number of free slots for static dials. Unlike
 // freeDialSlots, only dialed peers that are configured as static count against the
 // budget, so a full set of dynamic peers cannot keep static nodes from being dialed.
+// Only static dials in flight count against it, so a queue full of dynamic dials
+// cannot defer statics either. Total dials in flight can therefore exceed
+// maxActiveDials by at most the static budget.
 func (d *dialScheduler) freeStaticDialSlots() int {
 	staticPeers := 0
 	for id := range d.static {
@@ -399,9 +402,16 @@ func (d *dialScheduler) freeStaticDialSlots() int {
 		}
 	}
 
+	staticDialing := 0
+	for _, task := range d.dialing {
+		if task.flags&staticDialedConn != 0 {
+			staticDialing++
+		}
+	}
+
 	slots := min((d.maxDialPeers-staticPeers)*2, d.maxActiveDials)
 
-	return slots - len(d.dialing)
+	return slots - staticDialing
 }
 
 // checkDial returns an error if node n should not be dialed.
