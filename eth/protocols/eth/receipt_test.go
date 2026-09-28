@@ -477,3 +477,33 @@ func TestBlockReceiptsToNetwork69_MalformedInput_ReturnsError(t *testing.T) {
 		t.Fatalf("expected error for malformed (non-list) receipts blob, got nil")
 	}
 }
+
+// TestBlockReceiptsToNetwork69_MoreReceiptsThanTxs pins the eth/69 behaviour for a
+// block whose stored receipts outnumber its body transactions: the block is refused
+// rather than served with a made-up type-0 receipt. A trailing pre-Madhugiri
+// state-sync receipt, which has no body transaction by design, is still served.
+func TestBlockReceiptsToNetwork69_MoreReceiptsThanTxs(t *testing.T) {
+	tx := types.NewTx(&types.LegacyTx{Nonce: 0, Gas: 21000, GasPrice: big.NewInt(1)})
+	body, err := rlp.EncodeToBytes(types.Body{Transactions: []*types.Transaction{tx}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := []*types.ReceiptForStorage{
+		{Status: types.ReceiptStatusSuccessful, CumulativeGasUsed: 21000, Logs: []*types.Log{}},
+		{Status: types.ReceiptStatusSuccessful, CumulativeGasUsed: 21000, Logs: []*types.Log{}},
+	}
+	receipts, err := rlp.EncodeToBytes(stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	noStateSync := func(int) bool { return false }
+	if _, _, err := blockReceiptsToNetwork69(receipts, body, noStateSync, receiptQueryParams{}); err == nil {
+		t.Fatal("expected an error for a block with more receipts than transactions")
+	}
+
+	lastIsStateSync := func(i int) bool { return i == 1 }
+	if _, _, err := blockReceiptsToNetwork69(receipts, body, lastIsStateSync, receiptQueryParams{}); err != nil {
+		t.Fatalf("state-sync receipt without a body transaction must still be served: %v", err)
+	}
+}
