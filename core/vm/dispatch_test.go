@@ -207,7 +207,7 @@ func execPathResultWithConfig(
 	ret, gasLeft, err := evm.Call(caller, addr, input, NewGasBudget(gas, 0), uint256.NewInt(77))
 	return execResult{
 		ret:  ret,
-		gas:  gasLeft.RegularGas,
+		gas:  gasLeft.ExecutionGas,
 		err:  err,
 		logs: db.Logs(),
 	}

@@ -39,7 +39,7 @@ func TestRunEcrecoverWithCache_NilCached(t *testing.T) {
 	if ret != nil {
 		t.Fatalf("expected nil return (cached nil), got %x", ret)
 	}
-	if remaining.RegularGas != 10000-3000 {
+	if remaining.ExecutionGas != 10000-3000 {
 		t.Fatalf("expected gas=%d, got %d", 10000-3000, remaining)
 	}
 }
@@ -64,7 +64,7 @@ func TestRunEcrecoverWithCache_BytesCached(t *testing.T) {
 	if len(ret) != 4 || ret[0] != 0xde {
 		t.Fatalf("expected cached bytes, got %x", ret)
 	}
-	if remaining.RegularGas != 7000 {
+	if remaining.ExecutionGas != 7000 {
 		t.Fatalf("expected gas=7000, got %d", remaining)
 	}
 }

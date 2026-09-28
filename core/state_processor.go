@@ -205,11 +205,6 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 // ctx is carried to keep the signature aligned with upstream, where it feeds
 // tracing spans that bor does not wire up.
 func PreExecution(ctx context.Context, beaconRoot *common.Hash, parent *types.Header, config *params.ChainConfig, evm *vm.EVM, number *big.Int, time uint64) {
-	// EIP-7997: insert the deterministic deployment factory at the Amsterdam
-	// activation block via an irregular state transition.
-	if config.IsAmsterdam(number) && !config.IsAmsterdam(parent.Number) {
-		misc.ApplyEIP7997(evm.StateDB)
-	}
 	// EIP-4788
 	if beaconRoot != nil {
 		ProcessBeaconBlockRoot(*beaconRoot, evm)

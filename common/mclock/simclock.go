@@ -43,7 +43,7 @@ type simTimer struct {
 	at    AbsTime
 	index int // position in s.scheduled
 	s     *Simulated
-	do    func()
+	run   func()
 	ch    <-chan AbsTime
 }
 
@@ -64,7 +64,7 @@ func (s *Simulated) Run(d time.Duration) {
 
 	for len(s.scheduled) > 0 && s.scheduled[0].at <= end {
 		ev := heap.Pop(&s.scheduled).(*simTimer)
-		do = append(do, ev.do)
+		do = append(do, ev.run)
 	}
 
 	s.now = end
@@ -140,7 +140,7 @@ func (s *Simulated) schedule(d time.Duration, fn func()) *simTimer {
 	s.init()
 
 	at := s.now.Add(d)
-	ev := &simTimer{do: fn, at: at, s: s}
+	ev := &simTimer{run: fn, at: at, s: s}
 	heap.Push(&s.scheduled, ev)
 	s.cond.Broadcast()
 

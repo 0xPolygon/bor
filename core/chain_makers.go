@@ -98,11 +98,10 @@ func (b *BlockGen) Difficulty() *big.Int {
 }
 
 // SetParentBeaconRoot sets the parent beacon root field of the generated
-// block.
+// block. The corresponding EIP-4788 system call is applied later, during block
+// finalization, so that generation mirrors the real block processor.
 func (b *BlockGen) SetParentBeaconRoot(root common.Hash) {
 	b.header.ParentBeaconRoot = &root
-	blockContext := NewEVMBlockContext(b.header, b.cm, &b.header.Coinbase)
-	ProcessBeaconBlockRoot(root, vm.NewEVM(blockContext, b.statedb, b.cm.config, vm.Config{}))
 }
 
 // addTx adds a transaction to the generated block. If no coinbase has
@@ -397,12 +396,6 @@ func GenerateChain(config *params.ChainConfig, parent *types.Block, engine conse
 		if config.DAOForkSupport && config.DAOForkBlock != nil && config.DAOForkBlock.Cmp(b.header.Number) == 0 {
 			misc.ApplyDAOHardFork(statedb)
 		}
-		// EIP-7997: insert the deterministic deployment factory at the Amsterdam
-		// activation block via an irregular state transition.
-		if config.IsAmsterdam(b.header.Number) && !config.IsAmsterdam(parent.Number()) {
-			misc.ApplyEIP7997(statedb)
-		}
-
 		if config.IsPrague(b.header.Number) || config.IsVerkle(b.header.Number) {
 			// EIP-2935
 			blockContext := NewEVMBlockContext(b.header, cm, &b.header.Coinbase)
@@ -414,6 +407,18 @@ func GenerateChain(config *params.ChainConfig, parent *types.Block, engine conse
 		// Execute any user modifications to the block
 		if gen != nil {
 			gen(i, b)
+		}
+
+		// EIP-4788: process the parent beacon block root as a pre-execution
+		// system call.
+		//
+		// It is applied after the gen callback so an explicit SetParentBeaconRoot
+		// is honored.
+		if b.header.ParentBeaconRoot != nil {
+			blockContext := NewEVMBlockContext(b.header, cm, &b.header.Coinbase)
+			blockContext.Random = &common.Hash{} // enable post-merge instruction set
+			evm := vm.NewEVM(blockContext, statedb, cm.config, vm.Config{})
+			ProcessBeaconBlockRoot(*b.header.ParentBeaconRoot, evm)
 		}
 
 		requests := b.collectRequests(false)
