@@ -107,7 +107,7 @@ type StateDB interface {
 	Logs() []*types.Log
 
 	// Finalise must be invoked at the end of a transaction
-	Finalise(bool) *bal.ConstructionBlockAccessList
+	Finalise(rules params.Rules) *bal.ConstructionBlockAccessList
 	SetTxContext(thash common.Hash, ti int, blockAccessIndex uint32)
 
 	// Inner returns the underlying state instance. Needed for bor consensus.

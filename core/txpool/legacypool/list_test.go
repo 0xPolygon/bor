@@ -17,6 +17,7 @@
 package legacypool
 
 import (
+	"github.com/ethereum/go-ethereum/params"
 	"math/big"
 	"math/rand"
 	"testing"
@@ -185,7 +186,7 @@ func TestFilterTxConditionalKnownAccounts(t *testing.T) {
 
 	state.SetState(common.Address{19: 1}, common.Hash{}, common.Hash{30: 1})
 
-	state.Finalise(true)
+	state.Finalise(params.Rules{IsEIP158: true})
 
 	trie, _ = state.StorageTrie(common.Address{19: 1})
 	_ = trie
@@ -202,7 +203,7 @@ func TestFilterTxConditionalKnownAccounts(t *testing.T) {
 	// Set state that conflicts with tx2's policy
 	state.SetState(common.Address{19: 1}, common.Hash{}, common.Hash{31: 1})
 
-	state.Finalise(true)
+	state.Finalise(params.Rules{IsEIP158: true})
 
 	trie, _ = state.StorageTrie(common.Address{19: 1})
 	_ = trie

@@ -163,6 +163,7 @@ func hashAlloc(ga *types.GenesisAlloc, isUBT bool) (common.Hash, error) {
 		emptyRoot = types.EmptyBinaryHash
 	}
 	db := rawdb.NewMemoryDatabase()
+
 	statedb, err := state.New(emptyRoot, state.NewDatabase(triedb.NewDatabase(db, config), nil))
 	if err != nil {
 		return common.Hash{}, err
@@ -178,7 +179,7 @@ func hashAlloc(ga *types.GenesisAlloc, isUBT bool) (common.Hash, error) {
 			statedb.SetState(addr, key, value)
 		}
 	}
-	return statedb.Commit(0, false, false)
+	return statedb.Commit(params.Rules{}, 0)
 }
 
 // flushAlloc is very similar with hash, but the main difference is all the
@@ -205,7 +206,7 @@ func flushAlloc(ga *types.GenesisAlloc, triedb *triedb.Database) (common.Hash, e
 			statedb.SetState(addr, key, value)
 		}
 	}
-	root, err := statedb.Commit(0, false, false)
+	root, err := statedb.Commit(params.Rules{}, 0)
 	if err != nil {
 		return common.Hash{}, err
 	}

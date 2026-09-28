@@ -2902,7 +2902,7 @@ func (api *DebugAPI) AccountAt(ctx context.Context, blockHash common.Hash, txInd
 		}
 
 		// Finalize state after each transaction
-		stateDb.Finalise(evm.ChainConfig().IsEIP158(block.Number()))
+		stateDb.Finalise(evm.GetRules())
 	}
 
 	// Query account state

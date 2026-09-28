@@ -177,7 +177,7 @@ func execPathResultWithConfig(
 	if setup != nil {
 		setup(db)
 	}
-	db.Finalise(true)
+	db.Finalise(params.Rules{IsEIP158: true})
 
 	bctx := BlockContext{
 		CanTransfer: func(StateDB, common.Address, *uint256.Int) bool { return true },
@@ -1533,7 +1533,7 @@ func makeEVM(code []byte, gas uint64, switchDispatch bool) (*EVM, common.Address
 	db.SetCode(addr, code, tracing.CodeChangeUnspecified)
 	db.CreateAccount(caller)
 	db.SetBalance(caller, uint256.NewInt(0x5678), tracing.BalanceChangeUnspecified)
-	db.Finalise(true)
+	db.Finalise(params.Rules{IsEIP158: true})
 
 	bctx := BlockContext{
 		CanTransfer: func(StateDB, common.Address, *uint256.Int) bool { return true },

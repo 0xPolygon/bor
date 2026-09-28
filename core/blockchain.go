@@ -2976,7 +2976,7 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 
 	// Commit all cached state changes into underlying memory database.
 	commitStart := time.Now()
-	root, _, err := statedb.CommitWithUpdate(block.NumberU64(), bc.chainConfig.IsEIP158(block.Number()), bc.chainConfig.IsCancun(block.Number()))
+	root, _, err := statedb.CommitWithUpdate(bc.chainConfig.Rules(block.Number(), false, block.Time()), block.NumberU64())
 	commitDuration := time.Since(commitStart)
 	stateCommitTimer.Update(commitDuration)
 	if commitDuration > 100*time.Millisecond {
@@ -5311,9 +5311,9 @@ func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block
 		tmpDB.CollectStateWitness()
 	}
 
-	deleteEmptyObjects := bc.chainConfig.IsEIP158(block.Number())
+	rules := bc.chainConfig.Rules(block.Number(), false, block.Time())
 	commitStart := time.Now()
-	root, _, err := tmpDB.CommitWithUpdate(block.NumberU64(), deleteEmptyObjects, bc.chainConfig.IsCancun(block.Number()))
+	root, _, err := tmpDB.CommitWithUpdate(rules, block.NumberU64())
 	commitElapsed := time.Since(commitStart)
 	pipelineImportSRCCommitTimer.Update(commitElapsed)
 	stateCommitTimer.Update(commitElapsed)

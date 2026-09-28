@@ -368,7 +368,7 @@ func GenerateChain(config *params.ChainConfig, parent *types.Block, engine conse
 
 	genblock := func(i int, parent *types.Block, triedb *triedb.Database, statedb *state.StateDB) (*types.Block, types.Receipts) {
 		b := &BlockGen{i: i, cm: cm, parent: parent, statedb: statedb, engine: engine}
-		b.header = cm.makeHeader(parent, statedb, b.engine)
+		b.header = cm.makeHeader(parent, b.engine)
 
 		// Set the difficulty for clique block. The chain maker doesn't have access
 		// to a chain, so the difficulty will be left unset (nil). Set it here to the
@@ -435,7 +435,8 @@ func GenerateChain(config *params.ChainConfig, parent *types.Block, engine conse
 			panic(err)
 		}
 		// Write state changes to db
-		root, err := statedb.Commit(b.header.Number.Uint64(), config.IsEIP158(b.header.Number), config.IsCancun(b.header.Number))
+		rules := config.Rules(b.header.Number, b.header.Difficulty.Sign() == 0, b.header.Time)
+		root, err := statedb.Commit(rules, b.header.Number.Uint64())
 		if err != nil {
 			panic(fmt.Sprintf("state write error: %v", err))
 		}
@@ -446,7 +447,7 @@ func GenerateChain(config *params.ChainConfig, parent *types.Block, engine conse
 	}
 
 	// Forcibly use hash-based state scheme for retaining all nodes in disk.
-	var triedbConfig *triedb.Config = triedb.HashDefaults
+	var triedbConfig = triedb.HashDefaults
 	if config.IsVerkle(config.ChainID) {
 		triedbConfig = triedb.UBTDefaults
 	}
@@ -513,11 +514,10 @@ func GenerateChainWithGenesis(genesis *Genesis, engine consensus.Engine, n int, 
 	return db, blocks, receipts
 }
 
-func (cm *chainMaker) makeHeader(parent *types.Block, state *state.StateDB, engine consensus.Engine) *types.Header {
+func (cm *chainMaker) makeHeader(parent *types.Block, engine consensus.Engine) *types.Header {
 	time := parent.Time() + 10 // block time is fixed at 10 seconds
 	parentHeader := parent.Header()
 	header := &types.Header{
-		Root:       state.IntermediateRoot(cm.config.IsEIP158(parent.Number())),
 		ParentHash: parent.Hash(),
 		Coinbase:   parent.Coinbase(),
 		Difficulty: engine.CalcDifficulty(cm, time, parentHeader),
@@ -525,7 +525,6 @@ func (cm *chainMaker) makeHeader(parent *types.Block, state *state.StateDB, engi
 		Number:     new(big.Int).Add(parent.Number(), common.Big1),
 		Time:       time,
 	}
-
 	if cm.config.IsLondon(header.Number) {
 		header.BaseFee = eip1559.CalcBaseFee(cm.config, parentHeader)
 		if !cm.config.IsLondon(parent.Number()) {

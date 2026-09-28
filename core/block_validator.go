@@ -198,7 +198,7 @@ func (v *BlockValidator) ValidateState(block *types.Block, statedb *state.StateD
 	// an error if they don't match.
 	var rootErr error
 	irStart := time.Now()
-	root := statedb.IntermediateRoot(v.config.IsEIP158(header.Number))
+	root := statedb.IntermediateRoot(v.config.Rules(header.Number, false, header.Time))
 	intermediateRootTimer.UpdateSince(irStart)
 	if header.Root != root {
 		rootErr = fmt.Errorf("invalid merkle root (remote: %x local: %x) dberr: %w", header.Root, root, statedb.Error())

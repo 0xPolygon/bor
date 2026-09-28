@@ -58,7 +58,7 @@ func runEIP4788Roundtrip(t *testing.T, useV2 bool) {
 	key, _ := crypto.GenerateKey()
 	sender := crypto.PubkeyToAddress(key.PublicKey)
 	sdb.AddBalance(sender, uint256.NewInt(1e18), tracing.BalanceChangeUnspecified)
-	root, _ := sdb.Commit(0, false, false)
+	root, _ := sdb.Commit(params.Rules{}, 0)
 	tdb.Commit(root, false)
 
 	statedb, _ := state.New(root, state.NewDatabase(tdb, nil))

@@ -288,7 +288,7 @@ func TestGenesisContractChange(t *testing.T) {
 		require.NoError(t, err)
 
 		// write state to database
-		root, err := statedb.Commit(0, false, true)
+		root, err := statedb.Commit(params.Rules{IsCancun: true}, 0)
 		require.NoError(t, err)
 		require.NoError(t, statedb.Database().TrieDB().Commit(root, true))
 

@@ -2,6 +2,7 @@ package state
 
 import (
 	"fmt"
+	"github.com/ethereum/go-ethereum/params"
 	"testing"
 
 	"github.com/holiman/uint256"
@@ -51,9 +52,9 @@ func finalizeAndRoot(t *testing.T, sdb *StateDB, fast bool) common.Hash {
 	if fast {
 		sdb.FinaliseFastWithPrefetch(true)
 	} else {
-		sdb.Finalise(true)
+		sdb.Finalise(params.Rules{IsEIP158: true})
 	}
-	return sdb.IntermediateRoot(true)
+	return sdb.IntermediateRoot(params.Rules{IsEIP158: true})
 }
 
 // runParity is the workhorse: applies journaledOp to one fresh SDB and
@@ -101,7 +102,7 @@ func TestDirectSetterParity_SetNonce(t *testing.T) {
 	seed := func(s *StateDB) {
 		s.CreateAccount(addr)
 		s.SetNonce(addr, 3, tracing.NonceChangeUnspecified)
-		s.Finalise(true)
+		s.Finalise(params.Rules{IsEIP158: true})
 	}
 
 	runParity(t, "SetNonce",
@@ -122,7 +123,7 @@ func TestDirectSetterParity_AddBalance(t *testing.T) {
 	seed1 := func(s *StateDB) {
 		s.CreateAccount(addr)
 		s.AddBalance(addr, uint256.NewInt(1000), tracing.BalanceChangeUnspecified)
-		s.Finalise(true)
+		s.Finalise(params.Rules{IsEIP158: true})
 	}
 	delta := uint256.NewInt(250)
 	runParity(t, "AddBalance/NonZero",
@@ -142,11 +143,11 @@ func TestDirectSetterParity_AddBalance(t *testing.T) {
 	seedEmptyButPresent := func(s *StateDB) {
 		s.CreateAccount(addr)
 		s.AddBalance(addr, uint256.NewInt(7), tracing.BalanceChangeUnspecified)
-		s.Finalise(true)
-		_ = s.IntermediateRoot(true)
+		s.Finalise(params.Rules{IsEIP158: true})
+		_ = s.IntermediateRoot(params.Rules{IsEIP158: true})
 		s.SubBalance(addr, uint256.NewInt(7), tracing.BalanceChangeUnspecified)
-		s.Finalise(false) // keep the now-empty account in pending state
-		_ = s.IntermediateRoot(false)
+		s.Finalise(params.Rules{}) // keep the now-empty account in pending state
+		_ = s.IntermediateRoot(params.Rules{})
 	}
 	zero := uint256.NewInt(0)
 	runParity(t, "AddBalance/ZeroOnEmptyExisting",
@@ -161,7 +162,7 @@ func TestDirectSetterParity_SubBalance(t *testing.T) {
 	seed := func(s *StateDB) {
 		s.CreateAccount(addr)
 		s.AddBalance(addr, uint256.NewInt(1000), tracing.BalanceChangeUnspecified)
-		s.Finalise(true)
+		s.Finalise(params.Rules{IsEIP158: true})
 	}
 	delta := uint256.NewInt(123)
 	runParity(t, "SubBalance",
@@ -185,8 +186,8 @@ func TestDirectSetterParity_SetStorageDirectWithOrigins(t *testing.T) {
 		s.CreateAccount(addr)
 		s.AddBalance(addr, uint256.NewInt(1), tracing.BalanceChangeUnspecified)
 		s.SetState(addr, slot, prev)
-		s.Finalise(true)
-		s.IntermediateRoot(true) // promote so origin lookup stable
+		s.Finalise(params.Rules{IsEIP158: true})
+		s.IntermediateRoot(params.Rules{IsEIP158: true}) // promote so origin lookup stable
 	}
 
 	runParity(t, "SetStorageDirectWithOrigins",
@@ -218,7 +219,7 @@ func TestDirectSetterParity_MultipleSlots(t *testing.T) {
 	seed := func(s *StateDB) {
 		s.CreateAccount(addr)
 		s.AddBalance(addr, uint256.NewInt(1), tracing.BalanceChangeUnspecified)
-		s.Finalise(true)
+		s.Finalise(params.Rules{IsEIP158: true})
 	}
 	runParity(t, "Storage/MultiSlot",
 		seed,
@@ -248,7 +249,7 @@ func TestDirectSetterParity_CombinedTx(t *testing.T) {
 		s.CreateAccount(addr)
 		s.AddBalance(addr, uint256.NewInt(1000), tracing.BalanceChangeUnspecified)
 		s.SetNonce(addr, 1, tracing.NonceChangeUnspecified)
-		s.Finalise(true)
+		s.Finalise(params.Rules{IsEIP158: true})
 	}
 
 	runParity(t, "Combined",

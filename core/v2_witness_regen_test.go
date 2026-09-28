@@ -86,7 +86,7 @@ func witnessRegenRoundTrip(pb *preparedBlock, diskdb ethdb.Database, config *par
 	// Production always computes the post-state root on the V2 statedb
 	// (ProcessBlock → ValidateState → IntermediateRoot); that is also where
 	// update- and deletion-path trie nodes get recorded into the witness.
-	if got := finalDB.IntermediateRoot(config.IsEIP158(pb.block.Number())); got != refState {
+	if got := finalDB.IntermediateRoot(params.Rules{IsEIP158: config.IsEIP158(pb.block.Number())}); got != refState {
 		return fmt.Errorf("v2 execution diverged from serial: state root %x, want %x", got, refState)
 	}
 
@@ -382,7 +382,7 @@ func witnessRegenPipelinedRoundTrip(pb *preparedBlock, diskdb ethdb.Database, co
 	tmpDB.ApplyFlatDiffForCommit(flatDiff)
 	preloadFlatDiffReads(tmpDB, flatDiff)
 	tmpDB.CollectStateWitness()
-	srcRoot, _, err := tmpDB.CommitWithUpdate(pb.block.NumberU64(), deleteEmptyObjects, config.IsCancun(pb.block.Number()))
+	srcRoot, _, err := tmpDB.CommitWithUpdate(params.Rules{IsEIP158: deleteEmptyObjects, IsCancun: config.IsCancun(pb.block.Number())}, pb.block.NumberU64())
 	if err != nil {
 		return fmt.Errorf("SRC commit: %w", err)
 	}
@@ -567,7 +567,7 @@ func witnessRegenChainedPipelinedRoundTrip(prev, cur *testBlockData, diskdb ethd
 		return fmt.Errorf("open SRC state for block N-1: %w", err)
 	}
 	srcPrev.ApplyFlatDiffForCommitFast(flatDiffPrev)
-	committedRoot, _, err := srcPrev.CommitWithUpdate(prev.block.NumberU64(), deleteEmptyPrev, config.IsCancun(prev.block.Number()))
+	committedRoot, _, err := srcPrev.CommitWithUpdate(params.Rules{IsEIP158: deleteEmptyPrev, IsCancun: config.IsCancun(prev.block.Number())}, prev.block.NumberU64())
 	if err != nil {
 		return fmt.Errorf("SRC commit block N-1: %w", err)
 	}
@@ -621,7 +621,7 @@ func witnessRegenChainedPipelinedRoundTrip(prev, cur *testBlockData, diskdb ethd
 	srcCur.ApplyFlatDiffForCommit(flatDiffCur)
 	preloadFlatDiffReads(srcCur, flatDiffCur)
 	srcCur.CollectStateWitness()
-	srcRoot, _, err := srcCur.CommitWithUpdate(cur.block.NumberU64(), deleteEmptyCur, config.IsCancun(cur.block.Number()))
+	srcRoot, _, err := srcCur.CommitWithUpdate(params.Rules{IsEIP158: deleteEmptyCur, IsCancun: config.IsCancun(cur.block.Number())}, cur.block.NumberU64())
 	if err != nil {
 		return fmt.Errorf("SRC commit block N: %w", err)
 	}
@@ -675,7 +675,7 @@ func debugStatelessReplayDBError(config *params.ChainConfig, block *types.Block,
 	if _, err := NewStateProcessor(headerChain).Process(block, db, benchVMConfig, author, context.Background()); err != nil {
 		return err
 	}
-	db.IntermediateRoot(config.IsEIP158(block.Number()))
+	db.IntermediateRoot(params.Rules{IsEIP158: config.IsEIP158(block.Number())})
 	return db.Error()
 }
 

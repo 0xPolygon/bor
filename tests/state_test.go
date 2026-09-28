@@ -38,6 +38,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/eth/tracers/logger"
+	"github.com/ethereum/go-ethereum/params"
 )
 
 func initMatcher(st *testMatcher) {
@@ -197,7 +198,7 @@ func execStateTest(t *testing.T, st *testMatcher, test *StateTest) {
 				var result error
 				test.Run(subtest, vmconfig, true, rawdb.HashScheme, func(err error, state *StateTestState) {
 					if state.Snapshots != nil && state.StateDB != nil {
-						if _, err := state.Snapshots.Journal(state.StateDB.IntermediateRoot(false)); err != nil {
+						if _, err := state.Snapshots.Journal(state.StateDB.IntermediateRoot(params.Rules{})); err != nil {
 							result = err
 							return
 						}
@@ -227,7 +228,7 @@ func execStateTest(t *testing.T, st *testMatcher, test *StateTest) {
 				var result error
 				test.Run(subtest, vmconfig, true, rawdb.PathScheme, func(err error, state *StateTestState) {
 					if state.TrieDB != nil && state.StateDB != nil {
-						if err := state.TrieDB.Journal(state.StateDB.IntermediateRoot(false)); err != nil {
+						if err := state.TrieDB.Journal(state.StateDB.IntermediateRoot(params.Rules{})); err != nil {
 							result = err
 							return
 						}

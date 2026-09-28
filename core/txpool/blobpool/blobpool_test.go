@@ -725,7 +725,7 @@ func TestOpenDrops(t *testing.T) {
 	statedb.AddBalance(crypto.PubkeyToAddress(overcapper.PublicKey), uint256.NewInt(10000000), tracing.BalanceChangeUnspecified)
 	statedb.AddBalance(crypto.PubkeyToAddress(duplicater.PublicKey), uint256.NewInt(1000000), tracing.BalanceChangeUnspecified)
 	statedb.AddBalance(crypto.PubkeyToAddress(repeater.PublicKey), uint256.NewInt(1000000), tracing.BalanceChangeUnspecified)
-	_, _ = statedb.Commit(0, true, false)
+	_, _ = statedb.Commit(params.Rules{IsEIP158: true}, 0)
 
 	chain := &testBlockChain{
 		config:  testChainConfig,
@@ -848,7 +848,7 @@ func TestOpenIndex(t *testing.T) {
 	// Create a blob pool out of the pre-seeded data
 	statedb, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
 	statedb.AddBalance(addr, uint256.NewInt(1_000_000_000), tracing.BalanceChangeUnspecified)
-	_, _ = statedb.Commit(0, true, false)
+	_, _ = statedb.Commit(params.Rules{IsEIP158: true}, 0)
 
 	chain := &testBlockChain{
 		config:  testChainConfig,
@@ -954,7 +954,7 @@ func TestOpenHeap(t *testing.T) {
 	statedb.AddBalance(addr1, uint256.NewInt(1_000_000_000), tracing.BalanceChangeUnspecified)
 	statedb.AddBalance(addr2, uint256.NewInt(1_000_000_000), tracing.BalanceChangeUnspecified)
 	statedb.AddBalance(addr3, uint256.NewInt(1_000_000_000), tracing.BalanceChangeUnspecified)
-	_, _ = statedb.Commit(0, true, false)
+	_, _ = statedb.Commit(params.Rules{IsEIP158: true}, 0)
 
 	chain := &testBlockChain{
 		config:  testChainConfig,
@@ -1039,7 +1039,7 @@ func TestOpenCap(t *testing.T) {
 		statedb.AddBalance(addr1, uint256.NewInt(1_000_000_000), tracing.BalanceChangeUnspecified)
 		statedb.AddBalance(addr2, uint256.NewInt(1_000_000_000), tracing.BalanceChangeUnspecified)
 		statedb.AddBalance(addr3, uint256.NewInt(1_000_000_000), tracing.BalanceChangeUnspecified)
-		_, _ = statedb.Commit(0, true, false)
+		_, _ = statedb.Commit(params.Rules{IsEIP158: true}, 0)
 
 		chain := &testBlockChain{
 			config:  testChainConfig,
@@ -1126,7 +1126,7 @@ func TestChangingSlotterSize(t *testing.T) {
 		statedb.AddBalance(addr1, uint256.NewInt(1_000_000_000), tracing.BalanceChangeUnspecified)
 		statedb.AddBalance(addr2, uint256.NewInt(1_000_000_000), tracing.BalanceChangeUnspecified)
 		statedb.AddBalance(addr3, uint256.NewInt(1_000_000_000), tracing.BalanceChangeUnspecified)
-		_, _ = statedb.Commit(0, true, false)
+		_, _ = statedb.Commit(params.Rules{IsEIP158: true}, 0)
 
 		// Make custom chain config where the max blob count changes based on the loop variable.
 		config := &params.ChainConfig{
@@ -1230,7 +1230,7 @@ func TestBillyMigration(t *testing.T) {
 		statedb.AddBalance(addr1, uint256.NewInt(1_000_000_000), tracing.BalanceChangeUnspecified)
 		statedb.AddBalance(addr2, uint256.NewInt(1_000_000_000), tracing.BalanceChangeUnspecified)
 		statedb.AddBalance(addr3, uint256.NewInt(1_000_000_000), tracing.BalanceChangeUnspecified)
-		_, _ = statedb.Commit(0, true, false)
+		_, _ = statedb.Commit(params.Rules{IsEIP158: true}, 0)
 
 		// Make custom chain config where the max blob count changes based on the loop variable.
 		config := &params.ChainConfig{
@@ -1326,7 +1326,7 @@ func TestLegacyTxConversion(t *testing.T) {
 	statedb, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
 	statedb.AddBalance(addr1, uint256.NewInt(1_000_000_000), tracing.BalanceChangeUnspecified)
 	statedb.AddBalance(addr2, uint256.NewInt(1_000_000_000), tracing.BalanceChangeUnspecified)
-	statedb.Commit(0, true, false)
+	statedb.Commit(params.Rules{IsEIP158: true}, 0)
 
 	chain := &testBlockChain{
 		config:  testChainConfig,
@@ -1380,7 +1380,7 @@ func TestBlobCountLimit(t *testing.T) {
 	statedb, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
 	statedb.AddBalance(addr1, uint256.NewInt(1_000_000_000), tracing.BalanceChangeUnspecified)
 	statedb.AddBalance(addr2, uint256.NewInt(1_000_000_000), tracing.BalanceChangeUnspecified)
-	statedb.Commit(0, true, false)
+	statedb.Commit(params.Rules{IsEIP158: true}, 0)
 
 	// Make Prague-enabled custom chain config.
 	config := &params.ChainConfig{
@@ -1834,7 +1834,7 @@ func TestAdd(t *testing.T) {
 				_, _ = store.Put(blob)
 			}
 		}
-		_, _ = statedb.Commit(0, true, false)
+		_, _ = statedb.Commit(params.Rules{IsEIP158: true}, 0)
 		_ = store.Close()
 
 		// Create a blob pool out of the pre-seeded dats
@@ -1957,7 +1957,7 @@ func TestGetBlobs(t *testing.T) {
 	statedb.AddBalance(addr1, uint256.NewInt(1_000_000_000), tracing.BalanceChangeUnspecified)
 	statedb.AddBalance(addr2, uint256.NewInt(1_000_000_000), tracing.BalanceChangeUnspecified)
 	statedb.AddBalance(addr3, uint256.NewInt(1_000_000_000), tracing.BalanceChangeUnspecified)
-	_, _ = statedb.Commit(0, true, false)
+	_, _ = statedb.Commit(params.Rules{IsEIP158: true}, 0)
 
 	// Make custom chain config where the max blob count changes based on the loop variable.
 	config := &params.ChainConfig{
@@ -2222,7 +2222,7 @@ func benchmarkPoolPending(b *testing.B, datacap uint64) {
 		statedb.AddBalance(addr, uint256.NewInt(1_000_000_000), tracing.BalanceChangeUnspecified)
 		_ = pool.add(tx)
 	}
-	_, _ = statedb.Commit(0, true, false)
+	_, _ = statedb.Commit(params.Rules{IsEIP158: true}, 0)
 	defer func(pool *BlobPool) {
 		err := pool.Close()
 		if err != nil {
@@ -2255,7 +2255,7 @@ func TestSubscribeRebroadcastTransactions(t *testing.T) {
 
 	// Create a minimal state database
 	statedb, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
-	statedb.Commit(0, true, false)
+	statedb.Commit(params.Rules{IsEIP158: true}, 0)
 
 	// Create a test blockchain with minimal config
 	chain := &testBlockChain{

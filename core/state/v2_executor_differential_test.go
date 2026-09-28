@@ -2,6 +2,7 @@ package state
 
 import (
 	"context"
+	"github.com/ethereum/go-ethereum/params"
 	"reflect"
 	"sync"
 	"testing"
@@ -162,9 +163,9 @@ func runExecutorSerial(t *testing.T, sc exScenario) (common.Hash, []probeResult,
 		for _, op := range tx.ops {
 			op.applyTo(sdb)
 		}
-		sdb.Finalise(true) // between-tx finalise matches V2's SettleTo flow
+		sdb.Finalise(params.Rules{IsEIP158: true}) // between-tx finalise matches V2's SettleTo flow
 	}
-	root := sdb.IntermediateRoot(true)
+	root := sdb.IntermediateRoot(params.Rules{IsEIP158: true})
 	return root, collectProbes(sdb, sc.probes), collectStateDBLogs(sdb)
 }
 
@@ -204,7 +205,7 @@ func runExecutorV2(t *testing.T, sc exScenario) (common.Hash, []probeResult, []l
 
 	_ = blockstm.ExecuteV2BlockSTM(context.Background(), tasks, env, common.Address{}, workers, nil, settleFn)
 
-	finalRoot := finalDB.IntermediateRoot(true)
+	finalRoot := finalDB.IntermediateRoot(params.Rules{IsEIP158: true})
 	return finalRoot, collectProbes(finalDB, sc.probes), collectStateDBLogs(finalDB)
 }
 

@@ -18,6 +18,7 @@ package state
 
 import (
 	"fmt"
+	"github.com/ethereum/go-ethereum/params"
 	"math/big"
 	"sync"
 	"testing"
@@ -61,7 +62,7 @@ func TestCacheAttribution_PrefetchToProcess(t *testing.T) {
 	state.SetState(addr1, storageKey, common.HexToHash("0xabcd"))
 
 	// Commit state to database
-	root, err := state.Commit(0, false, false)
+	root, err := state.Commit(params.Rules{}, 0)
 	if err != nil {
 		t.Fatalf("Failed to commit state: %v", err)
 	}
@@ -194,7 +195,7 @@ func TestCacheAttribution_UniqueUsageTracking(t *testing.T) {
 	obj.SetBalance(uint256.NewInt(1000))
 
 	// Commit state
-	root, err := state.Commit(0, false, false)
+	root, err := state.Commit(params.Rules{}, 0)
 	if err != nil {
 		t.Fatalf("Failed to commit state: %v", err)
 	}
@@ -307,7 +308,7 @@ func TestReaderWithCache_ConcurrentAccess(t *testing.T) {
 	}
 
 	// Commit state
-	root, err := state.Commit(0, false, false)
+	root, err := state.Commit(params.Rules{}, 0)
 	if err != nil {
 		t.Fatalf("Failed to commit state: %v", err)
 	}

@@ -849,6 +849,11 @@ func (evm *EVM) resolveCodeHash(addr common.Address) common.Hash {
 // ChainConfig returns the environment's chain configuration
 func (evm *EVM) ChainConfig() *params.ChainConfig { return evm.chainConfig }
 
+// GetRules returns the chain rules used throughout the EVM execution.
+func (evm *EVM) GetRules() params.Rules {
+	return evm.chainRules
+}
+
 func (evm *EVM) captureBegin(depth int, typ OpCode, from common.Address, to common.Address, input []byte, startGas GasBudget, value *big.Int) {
 	tracer := evm.Config.Tracer
 	if tracer.OnEnter != nil {

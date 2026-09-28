@@ -116,7 +116,7 @@ func (task *ExecutionTask) Execute(mvh *blockstm.MVHashMap, incarnation int) (er
 		return
 	}
 	if mvh2 := task.statedb.GetMVHashmap(); mvh2 == nil || !mvh2.SkipFinalise {
-		task.statedb.Finalise(task.config.IsEIP158(task.blockNumber))
+		task.statedb.Finalise(evm.GetRules())
 	}
 	return
 }
@@ -262,11 +262,12 @@ func (task *ExecutionTask) applyDelayedFee(coinbaseBalance *uint256.Int) {
 // finaliseFinalState commits pending writes on finalStateDB and returns
 // the post-state root for the receipt (empty post-Byzantium).
 func (task *ExecutionTask) finaliseFinalState() []byte {
-	if task.config.IsByzantium(task.blockNumber) {
-		task.finalStateDB.Finalise(true)
+	rules := task.config.Rules(task.blockNumber, task.blockContext.Random != nil, task.blockTime)
+	if rules.IsByzantium {
+		task.finalStateDB.Finalise(rules)
 		return nil
 	}
-	return task.finalStateDB.IntermediateRoot(task.config.IsEIP158(task.blockNumber)).Bytes()
+	return task.finalStateDB.IntermediateRoot(rules).Bytes()
 }
 
 // buildReceipt builds the Receipt for the settled tx with logs, bloom,
@@ -966,7 +967,7 @@ func newV2SettleFn(tasks []V2Task, env *v2Env, finalDB *state.StateDB,
 	receipts *types.Receipts, allLogs *[]*types.Log, totalUsedGas *uint64,
 	panickedIdx *int, execErrIdx *int, execErr *error, readErr *error) blockstm.V2SettleFn {
 	isByzantium := chainConfig.IsByzantium(blockCtx.BlockNumber)
-	isEIP158 := chainConfig.IsEIP158(blockCtx.BlockNumber)
+	rules := chainConfig.Rules(blockCtx.BlockNumber, blockCtx.Random != nil, blockCtx.Time)
 	return func(txIdx int, st blockstm.V2TxState) {
 		if st == nil {
 			return
@@ -1007,7 +1008,7 @@ func newV2SettleFn(tasks []V2Task, env *v2Env, finalDB *state.StateDB,
 		*totalUsedGas += pdb.UsedGas
 		var root []byte
 		if !isByzantium {
-			root = finalDB.IntermediateRoot(isEIP158).Bytes()
+			root = finalDB.IntermediateRoot(rules).Bytes()
 		}
 		receipt := buildV2Receipt(tx, pdb, tasks[txIdx].Msg, root, *totalUsedGas, finalDB, blockCtx, blockHash)
 		*receipts = append(*receipts, receipt)

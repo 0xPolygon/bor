@@ -1,6 +1,7 @@
 package state
 
 import (
+	"github.com/ethereum/go-ethereum/params"
 	"testing"
 
 	"github.com/holiman/uint256"
@@ -55,7 +56,7 @@ func TestTouchAddressAndStorage_LoadsBalanceWithNoSlots(t *testing.T) {
 	addr := common.HexToAddress("0xtouch1")
 	sdb.CreateAccount(addr)
 	sdb.SetBalance(addr, uint256.NewInt(99), 0)
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	diff := &FlatDiff{
@@ -86,7 +87,7 @@ func TestTouchAddressAndStorage_LoadsEachSlot(t *testing.T) {
 	sdb.SetBalance(addr, uint256.NewInt(1), 0)
 	sdb.SetState(addr, slot1, common.HexToHash("0xb1"))
 	sdb.SetState(addr, slot2, common.HexToHash("0xb2"))
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	diff := &FlatDiff{
@@ -120,7 +121,7 @@ func TestTouchAllAddresses_ReadSetSlotsLoaded(t *testing.T) {
 	sdb.CreateAccount(addr)
 	sdb.SetBalance(addr, uint256.NewInt(42), 0)
 	sdb.SetState(addr, slot, common.HexToHash("0xbeef"))
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	diff := &FlatDiff{
@@ -149,7 +150,7 @@ func TestTouchAllAddresses_DestructsLoadBalance(t *testing.T) {
 	addr := common.HexToAddress("0xtouch4")
 	sdb.CreateAccount(addr)
 	sdb.SetBalance(addr, uint256.NewInt(5), 0)
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	diff := &FlatDiff{
@@ -171,7 +172,7 @@ func TestTouchAllAddresses_NonExistentReadsRegistered(t *testing.T) {
 	db := NewDatabaseForTesting()
 	sdb, err := New(types.EmptyRootHash, db)
 	require.NoError(t, err)
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	missing := common.HexToAddress("0xtouch5-missing")
@@ -202,7 +203,7 @@ func TestCommitSnapshot_DestructedAccountExcludedFromAccounts(t *testing.T) {
 	addr := common.HexToAddress("0xcap1")
 	sdb.CreateAccount(addr)
 	sdb.SetBalance(addr, uint256.NewInt(100), 0)
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	sdb2, err := New(root, db)
@@ -301,7 +302,7 @@ func TestCaptureObjectStorage_SplitsPendingAndRead(t *testing.T) {
 	sdb.SetBalance(addr, uint256.NewInt(1), 0)
 	sdb.SetState(addr, readSlot, common.HexToHash("0xb1"))
 	sdb.SetState(addr, writeSlot, common.HexToHash("0xb2"))
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	sdb2, err := New(root, db)
@@ -334,7 +335,7 @@ func TestCaptureReadOnlyAccount_AddsToReadSet(t *testing.T) {
 	addr := common.HexToAddress("0xro1")
 	sdb.CreateAccount(addr)
 	sdb.SetBalance(addr, uint256.NewInt(55), 0)
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	sdb2, err := New(root, db)
@@ -372,7 +373,7 @@ func TestCaptureReadOnlyAccount_SkipDestructed(t *testing.T) {
 	addr := common.HexToAddress("0xro3")
 	sdb.CreateAccount(addr)
 	sdb.SetBalance(addr, uint256.NewInt(88), 0)
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	sdb2, err := New(root, db)
@@ -394,7 +395,7 @@ func TestCaptureReadOnlyAccount_PopulatesReadStorage(t *testing.T) {
 	sdb.CreateAccount(addr)
 	sdb.SetBalance(addr, uint256.NewInt(1), 0)
 	sdb.SetState(addr, slot, common.HexToHash("0xcafe"))
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	sdb2, err := New(root, db)
@@ -479,7 +480,7 @@ func TestCaptureNonExistentRead_SkipExistingStateObject(t *testing.T) {
 	// account stays in mutations, which is already covered by the previous test.
 	sdb.CreateAccount(addr)
 	sdb.SetBalance(addr, uint256.NewInt(1), 0)
-	sdb.Finalise(false)
+	sdb.Finalise(params.Rules{})
 	// Drop the mutation so captureNonExistentRead's `isMutation` guard is not hit.
 	delete(sdb.mutations, addr)
 	// Inject non-existent read for an addr that now lives in stateObjects.
@@ -629,7 +630,7 @@ func TestNewWithFlatBase_SuccessInstallsFlatDiffRef(t *testing.T) {
 	db := NewDatabaseForTesting()
 	sdb, err := New(types.EmptyRootHash, db)
 	require.NoError(t, err)
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	diff := &FlatDiff{
@@ -649,7 +650,7 @@ func TestNewWithFlatBase_NilFlatDiffLeavesRefNil(t *testing.T) {
 	db := NewDatabaseForTesting()
 	sdb, err := New(types.EmptyRootHash, db)
 	require.NoError(t, err)
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	overlay, err := NewWithFlatBase(root, db, nil)
@@ -666,7 +667,7 @@ func TestApplyFlatMutation_StorageWritesApplied(t *testing.T) {
 	addr := common.HexToAddress("0xafm_storage")
 	sdb.CreateAccount(addr)
 	sdb.SetNonce(addr, 1, 0)
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	sdb2, err := New(root, db)
@@ -704,7 +705,7 @@ func TestApplyFlatDiffForCommit_PureDestructTriggersSelfDestruct(t *testing.T) {
 	addr := common.HexToAddress("0xafc1")
 	sdb.CreateAccount(addr)
 	sdb.SetBalance(addr, uint256.NewInt(42), 0)
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	sdb2, err := New(root, db)
@@ -740,7 +741,7 @@ func TestApplyFlatDiffForCommit_ResurrectionSkipsSelfDestruct(t *testing.T) {
 	sdb.CreateAccount(addr)
 	sdb.SetBalance(addr, uint256.NewInt(5), 0)
 	sdb.SetNonce(addr, 1, 0)
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	sdb2, err := New(root, db)
@@ -781,7 +782,7 @@ func TestApplyFlatMutation_SetNonceCalled(t *testing.T) {
 	sdb.CreateAccount(addr)
 	sdb.SetNonce(addr, 1, 0)
 	sdb.SetBalance(addr, uint256.NewInt(10), 0)
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	sdb2, err := New(root, db)
@@ -814,7 +815,7 @@ func TestApplyFlatMutation_SetBalanceCalled(t *testing.T) {
 	sdb.CreateAccount(addr)
 	sdb.SetNonce(addr, 1, 0)
 	sdb.SetBalance(addr, uint256.NewInt(10), 0)
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	sdb2, err := New(root, db)
@@ -856,7 +857,7 @@ func TestApplyFlatMutation_DestructBranchDeletesStateObject(t *testing.T) {
 	sdb.CreateAccount(addr)
 	sdb.SetBalance(addr, uint256.NewInt(500), 0)
 	sdb.SetNonce(addr, 7, 0)
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	sdb2, err := New(root, db)
@@ -896,7 +897,7 @@ func TestApplyFlatMutation_WithCodeCallsSetCode(t *testing.T) {
 	require.NoError(t, err)
 	addr := common.HexToAddress("0xafm4")
 	sdb.CreateAccount(addr)
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	sdb2, err := New(root, db)
@@ -968,7 +969,7 @@ func TestPropagateReadsTo_LoadsAddrIntoDst(t *testing.T) {
 	addr := common.HexToAddress("0xprop1")
 	sdb.CreateAccount(addr)
 	sdb.SetBalance(addr, uint256.NewInt(1), 0)
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	src, err := New(root, db)
@@ -992,7 +993,7 @@ func TestPropagateReadsTo_LoadsStorageSlotsIntoDst(t *testing.T) {
 	sdb.CreateAccount(addr)
 	sdb.SetBalance(addr, uint256.NewInt(1), 0)
 	sdb.SetState(addr, slot, common.HexToHash("0xbadc0de"))
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	src, err := New(root, db)

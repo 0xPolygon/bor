@@ -647,7 +647,7 @@ func (c *Clique) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *
 
 	// Assign the final state root to header.
 	start := time.Now()
-	header.Root = state.IntermediateRoot(chain.Config().IsEIP158(header.Number))
+	header.Root = state.IntermediateRoot(chain.Config().Rules(header.Number, header.Difficulty.Sign() == 0, header.Time))
 	commitTime := time.Since(start)
 
 	// Assemble and return the final block for sealing.

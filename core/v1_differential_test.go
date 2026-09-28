@@ -134,7 +134,7 @@ func newV1TestStateDB(t *testing.T, keys []*ecdsa.PrivateKey) (*state.StateDB, [
 		sdb.SetNonce(addr, 0, 0)
 		recipients[i] = common.BigToAddress(big.NewInt(int64(0x1000 + i)))
 	}
-	root, err := sdb.Commit(0, false, false)
+	root, err := sdb.Commit(params.Rules{}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,10 +183,10 @@ func runV1Serial(t *testing.T, sc v1Scenario, chainConfig *params.ChainConfig) c
 			t.Fatalf("tx %d apply: %v", i, err)
 		}
 		usedGas += result.UsedGas
-		sdb.Finalise(true)
+		sdb.Finalise(params.Rules{IsEIP158: true})
 	}
 	_ = usedGas
-	return sdb.IntermediateRoot(true)
+	return sdb.IntermediateRoot(params.Rules{IsEIP158: true})
 }
 
 // runV1Parallel drives the V1 BlockSTM path via blockstm.ExecuteParallel.
@@ -263,7 +263,7 @@ func runV1Parallel(t *testing.T, sc v1Scenario, chainConfig *params.ChainConfig)
 		t.Fatalf("ExecuteParallel: %v", err)
 	}
 
-	return sdb.IntermediateRoot(true)
+	return sdb.IntermediateRoot(params.Rules{IsEIP158: true})
 }
 
 // TestV1ParallelStateProcessor_Differential runs each scenario through the

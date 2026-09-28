@@ -65,7 +65,7 @@ func testStaleBalanceReadCaught(t *testing.T) {
 	tdb := triedb.NewDatabase(memdb, triedb.HashDefaults)
 	sdb, _ := state.New(common.Hash{}, state.NewDatabase(tdb, nil))
 	sdb.AddBalance(contract, oneEth, 0)
-	root, _ := sdb.Commit(0, false, false)
+	root, _ := sdb.Commit(params.Rules{}, 0)
 	tdb.Commit(root, false)
 	base, _ := state.New(root, state.NewDatabase(tdb, nil))
 
@@ -118,7 +118,7 @@ func testExecutorBalanceValidation(t *testing.T) {
 	sdb, _ := state.New(common.Hash{}, state.NewDatabase(tdb, nil))
 	sdb.AddBalance(sender, oneEth, 0)
 	sdb.SetNonce(sender, 0, 0)
-	root, _ := sdb.Commit(0, false, false)
+	root, _ := sdb.Commit(params.Rules{}, 0)
 	tdb.Commit(root, false)
 	base, _ := state.New(root, state.NewDatabase(tdb, nil))
 
@@ -341,7 +341,7 @@ func TestV2_SelfDestructTransferLog_MispairsWithSerial(t *testing.T) {
 	sender := crypto.PubkeyToAddress(key.PublicKey)
 	gen.AddBalance(sender, uint256.NewInt(1e18), tracing.BalanceChangeUnspecified)
 
-	root, _ := gen.Commit(0, false, false)
+	root, _ := gen.Commit(params.Rules{}, 0)
 	tdb.Commit(root, false)
 
 	signer := types.NewLondonSigner(cfg.ChainID)
@@ -388,7 +388,7 @@ func TestV2_SelfDestructTransferLog_MispairsWithSerial(t *testing.T) {
 	res := ExecuteV2BlockSTM(context.Background(), []V2Task{{Index: 0, Tx: tx, Msg: msg}},
 		readBase, blockstm.NewMVStore(), blockstm.NewMVBalanceStore(),
 		blockCtx, common.Hash{}, vm.Config{}, &cfg, blockCtx.GasLimit, 1, v2DB, nil)
-	v2DB.Finalise(true)
+	v2DB.Finalise(params.Rules{IsEIP158: true})
 
 	serialLog := decodeTransferLog(t, serialReceipt)
 	v2Log := decodeTransferLog(t, res.Receipts[0])

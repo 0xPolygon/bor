@@ -1019,7 +1019,7 @@ func (w *worker) fallbackToSequential(req *speculativeWorkReq) {
 		return
 	}
 
-	root := req.blockNEnv.state.IntermediateRoot(w.chainConfig.IsEIP158(req.blockNEnv.header.Number))
+	root := req.blockNEnv.state.IntermediateRoot(w.chainConfig.Rules(req.blockNEnv.header.Number, false, req.blockNEnv.header.Time))
 
 	block, receipts, err := borEngine.AssembleBlock(w.chain, req.blockNEnv.header, req.blockNEnv.state, &types.Body{
 		Transactions: req.blockNEnv.txs,

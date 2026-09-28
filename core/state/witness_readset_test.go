@@ -2,6 +2,7 @@ package state
 
 import (
 	"errors"
+	"github.com/ethereum/go-ethereum/params"
 	"math/big"
 	"testing"
 
@@ -77,7 +78,7 @@ func TestCollectStateWitnessIncludesFlatServedReads(t *testing.T) {
 	setup.SetBalance(cold, uint256.NewInt(22), tracing.BalanceChangeUnspecified)
 	setup.SetBalance(contract, uint256.NewInt(33), tracing.BalanceChangeUnspecified)
 	setup.SetState(contract, slot, value)
-	root, err := setup.Commit(0, false, false)
+	root, err := setup.Commit(params.Rules{}, 0)
 	if err != nil {
 		t.Fatalf("commit: %v", err)
 	}

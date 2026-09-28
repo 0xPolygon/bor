@@ -81,7 +81,7 @@ func runSerial(t testing.TB, tdb *triedb.Database, root common.Hash, txs []*type
 		}
 		receipts = append(receipts, receipt)
 	}
-	return sdb.IntermediateRoot(true), receipts
+	return sdb.IntermediateRoot(params.Rules{IsEIP158: true}), receipts
 }
 
 // runV2 runs txs through ExecuteV2BlockSTM with `workers` parallel
@@ -116,7 +116,7 @@ func runV2(t testing.TB, tdb *triedb.Database, root common.Hash, txs []*types.Tr
 		t.Fatalf("V2 executor: tx %d consensus error: %v", res.ExecErrIdx, res.ExecErr)
 	}
 
-	return finalDB.IntermediateRoot(true), res.Receipts
+	return finalDB.IntermediateRoot(params.Rules{IsEIP158: true}), res.Receipts
 }
 
 // assertReceiptParity compares every consensus field of the two receipt

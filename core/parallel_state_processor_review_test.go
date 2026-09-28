@@ -356,7 +356,7 @@ func TestV2StateProcessor_PanickedTxFailsBlock(t *testing.T) {
 	sender := crypto.PubkeyToAddress(key.PublicKey)
 	sdb.AddBalance(sender, uint256.NewInt(1e18), 0)
 	sdb.SetNonce(sender, 0, 0)
-	root, _ := sdb.Commit(0, false, false)
+	root, _ := sdb.Commit(params.Rules{}, 0)
 	tdb.Commit(root, false)
 	base, _ := state.New(root, state.NewDatabase(tdb, nil))
 
@@ -444,7 +444,7 @@ func TestV2ApplyMessage_FirstIncarnationPanicLogsDebug(t *testing.T) {
 	sender := crypto.PubkeyToAddress(key.PublicKey)
 	sdb.AddBalance(sender, uint256.NewInt(1e18), 0)
 	sdb.SetNonce(sender, 0, 0)
-	root, _ := sdb.Commit(0, false, false)
+	root, _ := sdb.Commit(params.Rules{}, 0)
 	tdb.Commit(root, false)
 	base, _ := state.New(root, state.NewDatabase(tdb, nil))
 
@@ -519,7 +519,7 @@ func TestV2StateProcessor_ProducesWitness(t *testing.T) {
 	sender := crypto.PubkeyToAddress(key.PublicKey)
 	sdb.AddBalance(sender, uint256.NewInt(1e18), 0)
 	sdb.SetNonce(sender, 0, 0)
-	root, _ := sdb.Commit(0, false, false)
+	root, _ := sdb.Commit(params.Rules{}, 0)
 	tdb.Commit(root, false)
 	base, _ := state.New(root, state.NewDatabase(tdb, nil))
 
@@ -579,7 +579,7 @@ func TestV2StateProcessor_ProducesWitness(t *testing.T) {
 	// invokes after settle), addresses that were only-read by workers
 	// would be missing from the witness.
 	finalDB.CollectStateWitness()
-	finalDB.IntermediateRoot(true)
+	finalDB.IntermediateRoot(params.Rules{IsEIP158: true})
 
 	if len(w.State) == 0 {
 		t.Error("witness.State is empty — V2 worker reads did not populate the prevalue tracer")
@@ -600,7 +600,7 @@ func TestExecuteV2BlockSTM_MidFlightCancellation(t *testing.T) {
 	sender := crypto.PubkeyToAddress(key.PublicKey)
 	sdb.AddBalance(sender, uint256.NewInt(1e18), 0)
 	sdb.SetNonce(sender, 0, 0)
-	root, _ := sdb.Commit(0, false, false)
+	root, _ := sdb.Commit(params.Rules{}, 0)
 	tdb.Commit(root, false)
 	base, _ := state.New(root, state.NewDatabase(tdb, nil))
 
@@ -679,7 +679,7 @@ func TestExecuteV2BlockSTM_HonoursCancellation(t *testing.T) {
 	sender := crypto.PubkeyToAddress(key.PublicKey)
 	sdb.AddBalance(sender, uint256.NewInt(1e18), 0)
 	sdb.SetNonce(sender, 0, 0)
-	root, _ := sdb.Commit(0, false, false)
+	root, _ := sdb.Commit(params.Rules{}, 0)
 	tdb.Commit(root, false)
 	base, _ := state.New(root, state.NewDatabase(tdb, nil))
 
@@ -782,7 +782,7 @@ func TestV2StateProcessor_ReceiptHasBlockHash(t *testing.T) {
 	sender := crypto.PubkeyToAddress(key.PublicKey)
 	sdb.AddBalance(sender, uint256.NewInt(1e18), 0)
 	sdb.SetNonce(sender, 0, 0)
-	root, _ := sdb.Commit(0, false, false)
+	root, _ := sdb.Commit(params.Rules{}, 0)
 	tdb.Commit(root, false)
 	base, _ := state.New(root, state.NewDatabase(tdb, nil))
 
@@ -850,7 +850,7 @@ func TestV2StateProcessor_ApplyMessageErrorFailsBlock(t *testing.T) {
 	// Real account nonce is 0 — sign a tx with nonce=5 so ApplyMessage
 	// returns ErrNonceTooHigh.
 	sdb.SetNonce(sender, 0, 0)
-	root, _ := sdb.Commit(0, false, false)
+	root, _ := sdb.Commit(params.Rules{}, 0)
 	tdb.Commit(root, false)
 	base, _ := state.New(root, state.NewDatabase(tdb, nil))
 

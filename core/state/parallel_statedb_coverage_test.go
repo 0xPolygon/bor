@@ -1,6 +1,7 @@
 package state
 
 import (
+	"github.com/ethereum/go-ethereum/params"
 	"math/big"
 	"testing"
 
@@ -648,7 +649,7 @@ func TestPDB_RecordTransfer(t *testing.T) {
 // TestPDB_Finalise is a no-op but must not panic.
 func TestPDB_Finalise(t *testing.T) {
 	pdb, _, _ := newTestPDB(t, 0)
-	pdb.Finalise(true)
+	pdb.Finalise(params.Rules{IsEIP158: true})
 }
 
 // ---------------------------------------------------------------------------

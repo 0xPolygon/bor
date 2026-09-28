@@ -55,7 +55,7 @@ func benchSnailtracer(b *testing.B, switchDispatch bool) {
 		db.SetCode(addr, code, tracing.CodeChangeUnspecified)
 		db.CreateAccount(caller)
 		db.AddBalance(caller, uint256.NewInt(1e18), tracing.BalanceChangeUnspecified)
-		db.Finalise(true)
+		db.Finalise(params.Rules{IsEIP158: true})
 
 		bctx := BlockContext{
 			CanTransfer: func(StateDB, common.Address, *uint256.Int) bool { return true },

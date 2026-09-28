@@ -3,6 +3,7 @@ package core
 import (
 	"crypto/ecdsa"
 	"crypto/sha256"
+	"github.com/ethereum/go-ethereum/params"
 	"math/big"
 	"testing"
 
@@ -756,7 +757,7 @@ func buildBaseStateRoot(t testing.TB) (*triedb.Database, common.Hash) {
 	sdb.SetCode(metaHarness.delegate, metaHarness.delegateCode, 0)
 	sdb.SetCode(metaHarness.clearRefund, metaHarness.clearRefundCode, 0)
 	sdb.SetCode(metaHarness.logger, metaHarness.loggerCode, 0)
-	root, err := sdb.Commit(0, false, false)
+	root, err := sdb.Commit(params.Rules{}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

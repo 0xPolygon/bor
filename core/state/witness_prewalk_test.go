@@ -1,6 +1,7 @@
 package state
 
 import (
+	"github.com/ethereum/go-ethereum/params"
 	"math/big"
 	"runtime"
 	"testing"
@@ -31,7 +32,7 @@ func prewalkFixture(t *testing.T) (*StateDB, *readerWithCache, common.Address, *
 		t.Fatalf("setup state: %v", err)
 	}
 	setup.SetBalance(hot, uint256.NewInt(7), tracing.BalanceChangeUnspecified)
-	root, err := setup.Commit(0, false, false)
+	root, err := setup.Commit(params.Rules{}, 0)
 	if err != nil {
 		t.Fatalf("commit: %v", err)
 	}

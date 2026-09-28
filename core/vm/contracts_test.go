@@ -774,7 +774,7 @@ func TestPIP88SStoreGas(t *testing.T) {
 			// using `true` would drop our account since it has no balance/code.
 			if tc.original != (common.Hash{}) {
 				statedb.SetState(addr, slot, tc.original)
-				statedb.Finalise(false)
+				statedb.Finalise(params.Rules{})
 			}
 			if tc.current != tc.original {
 				statedb.SetState(addr, slot, tc.current)

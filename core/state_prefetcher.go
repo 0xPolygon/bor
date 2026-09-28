@@ -255,7 +255,7 @@ func (p *StatePrefetcher) prefetchOneTx(
 		return 0, false
 	}
 	if intermediateRootPrefetch {
-		stateCpy.IntermediateRoot(true)
+		stateCpy.IntermediateRoot(evm.GetRules())
 	}
 	return result.UsedGas, true
 }

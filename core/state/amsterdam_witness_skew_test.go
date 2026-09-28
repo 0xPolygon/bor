@@ -45,7 +45,7 @@ func TestDestructedReadWitnessIsForkIndependent(t *testing.T) {
 	for i := int64(1); i <= 32; i++ {
 		setup.SetState(contract, common.BigToHash(big.NewInt(i)), common.BigToHash(big.NewInt(i*7)))
 	}
-	root, err := setup.Commit(0, false, false)
+	root, err := setup.Commit(params.Rules{}, 0)
 	if err != nil {
 		t.Fatalf("commit: %v", err)
 	}

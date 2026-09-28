@@ -42,6 +42,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/trie/trienode"
@@ -75,7 +76,7 @@ func TestUpdateLeaks(t *testing.T) {
 		}
 	}
 
-	root := state.IntermediateRoot(false)
+	root := state.IntermediateRoot(params.Rules{})
 	if err := tdb.Commit(root, false); err != nil {
 		t.Errorf("can not commit trie %v to persistent database", root.Hex())
 	}
@@ -117,7 +118,7 @@ func TestIntermediateLeaks(t *testing.T) {
 		modify(transState, common.Address{i}, i, 0)
 	}
 	// Write modifications to trie.
-	transState.IntermediateRoot(false)
+	transState.IntermediateRoot(params.Rules{})
 
 	// Overwrite all the data with new values in the transient database.
 	for i := byte(0); i < 255; i++ {
@@ -126,7 +127,7 @@ func TestIntermediateLeaks(t *testing.T) {
 	}
 
 	// Commit and cross check the databases.
-	transRoot, err := transState.Commit(0, false, false)
+	transRoot, err := transState.Commit(params.Rules{}, 0)
 	if err != nil {
 		t.Fatalf("failed to commit transition state: %v", err)
 	}
@@ -134,7 +135,7 @@ func TestIntermediateLeaks(t *testing.T) {
 		t.Errorf("can not commit trie %v to persistent database", transRoot.Hex())
 	}
 
-	finalRoot, err := finalState.Commit(0, false, false)
+	finalRoot, err := finalState.Commit(params.Rules{}, 0)
 	if err != nil {
 		t.Fatalf("failed to commit final state: %v", err)
 	}
@@ -183,7 +184,7 @@ func TestCopy(t *testing.T) {
 		obj := orig.getOrNewStateObject(common.BytesToAddress([]byte{i}))
 		obj.AddBalance(uint256.NewInt(uint64(i)))
 	}
-	orig.Finalise(false)
+	orig.Finalise(params.Rules{})
 
 	// Copy the state
 	copy := orig.Copy()
@@ -205,7 +206,7 @@ func TestCopy(t *testing.T) {
 	// Finalise the changes on all concurrently
 	finalise := func(wg *sync.WaitGroup, db *StateDB) {
 		defer wg.Done()
-		db.Finalise(true)
+		db.Finalise(params.Rules{IsEIP158: true})
 	}
 
 	var wg sync.WaitGroup
@@ -249,7 +250,7 @@ func TestCopyWithDirtyJournal(t *testing.T) {
 		obj.AddBalance(uint256.NewInt(uint64(i)))
 		obj.data.Root = common.HexToHash("0xdeadbeef")
 	}
-	root, _ := orig.Commit(0, true, false)
+	root, _ := orig.Commit(params.Rules{IsEIP158: true}, 0)
 	orig, _ = New(root, db)
 
 	// modify all in memory without finalizing
@@ -260,21 +261,21 @@ func TestCopyWithDirtyJournal(t *testing.T) {
 	}
 	cpy := orig.Copy()
 
-	orig.Finalise(true)
+	orig.Finalise(params.Rules{IsEIP158: true})
 	for i := byte(0); i < 255; i++ {
 		balance := orig.GetBalance(common.BytesToAddress([]byte{i}))
 		if !balance.IsZero() {
 			t.Errorf("Unexpected balance %v", balance)
 		}
 	}
-	cpy.Finalise(true)
+	cpy.Finalise(params.Rules{IsEIP158: true})
 	for i := byte(0); i < 255; i++ {
 		balance := cpy.GetBalance(common.BytesToAddress([]byte{i}))
 		if !balance.IsZero() {
 			t.Errorf("Unexpected balance %v", balance)
 		}
 	}
-	if cpy.IntermediateRoot(true) != orig.IntermediateRoot(true) {
+	if cpy.IntermediateRoot(params.Rules{IsEIP158: true}) != orig.IntermediateRoot(params.Rules{IsEIP158: true}) {
 		t.Error("State is not equal after copy")
 	}
 }
@@ -292,14 +293,14 @@ func TestCopyObjectState(t *testing.T) {
 		obj.AddBalance(uint256.NewInt(uint64(i)))
 		obj.data.Root = common.HexToHash("0xdeadbeef")
 	}
-	orig.Finalise(true)
+	orig.Finalise(params.Rules{IsEIP158: true})
 	cpy := orig.Copy()
 	for _, op := range cpy.mutations {
 		if have, want := op.applied, false; have != want {
 			t.Fatalf("Error in test itself, the 'done' flag should not be set before Commit, have %v want %v", have, want)
 		}
 	}
-	orig.Commit(0, true, false)
+	orig.Commit(params.Rules{IsEIP158: true}, 0)
 	for _, op := range cpy.mutations {
 		if have, want := op.applied, false; have != want {
 			t.Fatalf("Error: original state affected copy, have %v want %v", have, want)
@@ -724,7 +725,7 @@ func equalMutationSets(a, b map[common.Address]*journalMutationState) bool {
 func TestTouchDelete(t *testing.T) {
 	s := newStateEnv()
 	s.state.getOrNewStateObject(common.Address{})
-	root, _ := s.state.Commit(0, false, false)
+	root, _ := s.state.Commit(params.Rules{}, 0)
 	s.state, _ = New(root, s.state.db)
 
 	snapshot := s.state.Snapshot()
@@ -837,7 +838,7 @@ func TestMVHashMapReadWriteDelete(t *testing.T) {
 	assert.Equal(t, val, v)
 
 	// After finalizing Tx 3, the state will change
-	states[3].Finalise(false)
+	states[3].Finalise(params.Rules{})
 	v = states[3].GetState(addr, key)
 	assert.Equal(t, common.Hash{}, v)
 	states[3].FlushMVWriteSet()
@@ -958,7 +959,7 @@ func TestMVHashMapRevert(t *testing.T) {
 
 	assert.Equal(t, val, v)
 	assert.Equal(t, balance, b)
-	states[1].Finalise(false)
+	states[1].Finalise(params.Rules{})
 	states[1].FlushMVWriteSet()
 
 	// Tx2 check the state and balance
@@ -1240,7 +1241,7 @@ func TestApplyMVWriteSet(t *testing.T) {
 	states[0].SetBalance(addr1, balance1, tracing.BalanceChangeTransfer)
 	states[0].SetState(addr2, key2, val2)
 	states[0].getOrNewStateObject(addr3)
-	states[0].Finalise(true)
+	states[0].Finalise(params.Rules{IsEIP158: true})
 	states[0].FlushMVWriteSet()
 
 	sSingleProcess.getOrNewStateObject(addr1)
@@ -1251,13 +1252,13 @@ func TestApplyMVWriteSet(t *testing.T) {
 
 	sClean.ApplyMVWriteSet(states[0].MVWriteList())
 
-	assert.Equal(t, sSingleProcess.IntermediateRoot(true), sClean.IntermediateRoot(true))
+	assert.Equal(t, sSingleProcess.IntermediateRoot(params.Rules{IsEIP158: true}), sClean.IntermediateRoot(params.Rules{IsEIP158: true}))
 
 	// Tx1 write
 	states[1].SetState(addr1, key2, val2)
 	states[1].SetBalance(addr1, balance2, tracing.BalanceChangeTransfer)
 	states[1].SetNonce(addr1, 1, tracing.NonceChangeUnspecified)
-	states[1].Finalise(true)
+	states[1].Finalise(params.Rules{IsEIP158: true})
 	states[1].FlushMVWriteSet()
 
 	sSingleProcess.SetState(addr1, key2, val2)
@@ -1266,13 +1267,13 @@ func TestApplyMVWriteSet(t *testing.T) {
 
 	sClean.ApplyMVWriteSet(states[1].MVWriteList())
 
-	assert.Equal(t, sSingleProcess.IntermediateRoot(true), sClean.IntermediateRoot(true))
+	assert.Equal(t, sSingleProcess.IntermediateRoot(params.Rules{IsEIP158: true}), sClean.IntermediateRoot(params.Rules{IsEIP158: true}))
 
 	// Tx2 write
 	states[2].SetState(addr1, key1, val2)
 	states[2].SetBalance(addr1, balance2, tracing.BalanceChangeTransfer)
 	states[2].SetNonce(addr1, 2, tracing.NonceChangeUnspecified)
-	states[2].Finalise(true)
+	states[2].Finalise(params.Rules{IsEIP158: true})
 	states[2].FlushMVWriteSet()
 
 	sSingleProcess.SetState(addr1, key1, val2)
@@ -1281,12 +1282,12 @@ func TestApplyMVWriteSet(t *testing.T) {
 
 	sClean.ApplyMVWriteSet(states[2].MVWriteList())
 
-	assert.Equal(t, sSingleProcess.IntermediateRoot(true), sClean.IntermediateRoot(true))
+	assert.Equal(t, sSingleProcess.IntermediateRoot(params.Rules{IsEIP158: true}), sClean.IntermediateRoot(params.Rules{IsEIP158: true}))
 
 	// Tx3 write
 	states[3].SelfDestruct(addr2)
 	states[3].SetCode(addr1, code, tracing.CodeChangeUnspecified)
-	states[3].Finalise(true)
+	states[3].Finalise(params.Rules{IsEIP158: true})
 	states[3].FlushMVWriteSet()
 
 	sSingleProcess.SelfDestruct(addr2)
@@ -1294,7 +1295,7 @@ func TestApplyMVWriteSet(t *testing.T) {
 
 	sClean.ApplyMVWriteSet(states[3].MVWriteList())
 
-	assert.Equal(t, sSingleProcess.IntermediateRoot(true), sClean.IntermediateRoot(true))
+	assert.Equal(t, sSingleProcess.IntermediateRoot(params.Rules{IsEIP158: true}), sClean.IntermediateRoot(params.Rules{IsEIP158: true}))
 }
 
 func TestMVHashMapRevertConcurrent(t *testing.T) {
@@ -1319,7 +1320,7 @@ func TestMVHashMapRevertConcurrent(t *testing.T) {
 	// Tx0 touches the account. Amount doesn't matter.
 	// This is to make sure that Tx1 and Tx2 will use the same state object from Tx0.
 	states[0].AddBalance(addr, uint256.MustFromBig(common.Big0), tracing.BalanceChangeUnspecified)
-	states[0].Finalise(false)
+	states[0].Finalise(params.Rules{})
 	states[0].FlushMVWriteSet()
 
 	// Tx1 creates the account and add balance
@@ -1331,14 +1332,14 @@ func TestMVHashMapRevertConcurrent(t *testing.T) {
 	snapshot2 := states[2].Snapshot()
 	states[2].CreateAccount(addr)
 	states[2].RevertToSnapshot(snapshot2)
-	states[2].Finalise(false)
+	states[2].Finalise(params.Rules{})
 
 	// Tx2 adds balance
 	states[2].AddBalance(addr, uint256.MustFromBig(balance), tracing.BalanceChangeUnspecified)
 
 	// Tx1 now reverts
 	states[1].RevertToSnapshot(snapshot1)
-	states[1].Finalise(false)
+	states[1].Finalise(params.Rules{})
 
 	// Balance after executing Tx0 should be 0 because it shouldn't be affected by Tx1 or Tx2
 	b := states[0].GetBalance(addr)
@@ -1435,7 +1436,7 @@ func TestCopyCommitCopy(t *testing.T) {
 		t.Fatalf("second copy committed storage slot mismatch: have %x, want %x", val, common.Hash{})
 	}
 	// Commit state, ensure states can be loaded from disk
-	root, _ := state.Commit(0, false, false)
+	root, _ := state.Commit(params.Rules{}, 0)
 	state, _ = New(root, tdb)
 	if balance := state.GetBalance(addr); balance.Cmp(uint256.NewInt(42)) != 0 {
 		t.Fatalf("state post-commit balance mismatch: have %v, want %v", balance, 42)
@@ -1560,11 +1561,11 @@ func TestCommitCopy(t *testing.T) {
 	if val := state.GetCommittedState(addr, skey1); val != (common.Hash{}) {
 		t.Fatalf("initial committed storage slot mismatch: have %x, want %x", val, common.Hash{})
 	}
-	root, _ := state.Commit(0, true, false)
+	root, _ := state.Commit(params.Rules{IsEIP158: true}, 0)
 
 	state, _ = New(root, db)
 	state.SetState(addr, skey2, sval2)
-	state.Commit(1, true, false)
+	state.Commit(params.Rules{IsEIP158: true}, 1)
 
 	// Copy the committed state database, the copied one is not fully functional.
 	copied := state.Copy()
@@ -1605,19 +1606,19 @@ func TestDeleteCreateRevert(t *testing.T) {
 	addr := common.BytesToAddress([]byte("so"))
 	state.SetBalance(addr, uint256.NewInt(1), tracing.BalanceChangeUnspecified)
 
-	root, _ := state.Commit(0, false, false)
+	root, _ := state.Commit(params.Rules{}, 0)
 	state, _ = New(root, state.db)
 
 	// Simulate self-destructing in one transaction, then create-reverting in another
 	state.SelfDestruct(addr)
-	state.Finalise(true)
+	state.Finalise(params.Rules{IsEIP158: true})
 
 	id := state.Snapshot()
 	state.SetBalance(addr, uint256.NewInt(2), tracing.BalanceChangeUnspecified)
 	state.RevertToSnapshot(id)
 
 	// Commit the entire state and make sure we don't crash and have the correct state
-	root, _ = state.Commit(0, true, false)
+	root, _ = state.Commit(params.Rules{IsEIP158: true}, 0)
 	state, _ = New(root, state.db)
 
 	if state.getStateObject(addr) != nil {
@@ -1632,7 +1633,7 @@ func TestWitnessIncludesAbsentAccountReads(t *testing.T) {
 		addr := common.Address{i + 1}
 		state.SetBalance(addr, uint256.NewInt(uint64(i+1)), tracing.BalanceChangeUnspecified)
 	}
-	root, err := state.Commit(0, false, false)
+	root, err := state.Commit(params.Rules{}, 0)
 	if err != nil {
 		t.Fatalf("failed to commit initial state: %v", err)
 	}
@@ -1653,7 +1654,7 @@ func TestWitnessIncludesAbsentAccountReads(t *testing.T) {
 	if err := state.Error(); err != nil {
 		t.Fatalf("unexpected state error after read: %v", err)
 	}
-	if got := state.IntermediateRoot(false); got != root {
+	if got := state.IntermediateRoot(params.Rules{}); got != root {
 		t.Fatalf("unexpected root after read-only access: have %x want %x", got, root)
 	}
 	if err := state.Error(); err != nil {
@@ -1702,7 +1703,7 @@ func testMissingTrieNodes(t *testing.T, scheme string) {
 		a2 := common.BytesToAddress([]byte("another"))
 		state.SetBalance(a2, uint256.NewInt(100), tracing.BalanceChangeUnspecified)
 		state.SetCode(a2, []byte{1, 2, 4}, tracing.CodeChangeUnspecified)
-		root, _ = state.Commit(0, false, false)
+		root, _ = state.Commit(params.Rules{}, 0)
 		t.Logf("root: %x", root)
 		// force-flush
 		tdb.Commit(root, false)
@@ -1733,7 +1734,7 @@ func testMissingTrieNodes(t *testing.T, scheme string) {
 	}
 	// Modify the state
 	state.SetBalance(addr, uint256.NewInt(2), tracing.BalanceChangeUnspecified)
-	root, err := state.Commit(0, false, false)
+	root, err := state.Commit(params.Rules{}, 0)
 	if err == nil {
 		t.Fatalf("expected error, got root :%x", root)
 	}
@@ -1956,7 +1957,7 @@ func TestFlushOrderDataLoss(t *testing.T) {
 			state.SetState(common.Address{a}, common.Hash{a, s}, common.Hash{a, s})
 		}
 	}
-	root, err := state.Commit(0, false, false)
+	root, err := state.Commit(params.Rules{}, 0)
 	if err != nil {
 		t.Fatalf("failed to commit state trie: %v", err)
 	}
@@ -2037,7 +2038,7 @@ func TestDeleteStorage(t *testing.T) {
 		value := common.Hash(uint256.NewInt(uint64(10 * i)).Bytes32())
 		state.SetState(addr, slot, value)
 	}
-	root, _ := state.Commit(0, true, false)
+	root, _ := state.Commit(params.Rules{IsEIP158: true}, 0)
 	// Init phase done, create two states, one with snap and one without
 	fastState, _ := New(root, NewDatabase(tdb, snaps))
 	slowState, _ := New(root, NewDatabase(tdb, nil))
@@ -2131,7 +2132,7 @@ func TestShouldDeleteSmartContractIfItExistsInState(t *testing.T) {
 	s.getOrNewStateObject(addr)
 	s.CreateContract(addr)
 	s.SetCode(addr, code, tracing.CodeChangeUnspecified)
-	s.Finalise(true)
+	s.Finalise(params.Rules{IsEIP158: true})
 
 	secondDB := s.Copy()
 	secondDB.SelfDestruct(addr)
@@ -2140,7 +2141,7 @@ func TestShouldDeleteSmartContractIfItExistsInState(t *testing.T) {
 	assert.Equal(t, code, codeBeforeDeletion, "smart contract should exist before deletion")
 
 	s.ApplyMVWriteSet(secondDB.MVWriteList())
-	s.Finalise(true)
+	s.Finalise(params.Rules{IsEIP158: true})
 
 	codeAfterDeletion := s.GetCode(addr)
 	assert.Equal(t, []byte(nil), codeAfterDeletion, "smart contract should be deleted")
@@ -2206,7 +2207,7 @@ func TestWitnessCollectionTiming(t *testing.T) {
 		state.SetState(addr, common.BytesToHash([]byte{i}), common.BytesToHash([]byte{i, i}))
 	}
 
-	state.IntermediateRoot(true)
+	state.IntermediateRoot(params.Rules{IsEIP158: true})
 
 	if state.WitnessCollection == 0 {
 		t.Error("WitnessCollection should be > 0 when witness is attached")
@@ -2221,7 +2222,7 @@ func TestWitnessCollectionTiming(t *testing.T) {
 		state2.SetState(addr, common.BytesToHash([]byte{i}), common.BytesToHash([]byte{i, i}))
 	}
 
-	state2.IntermediateRoot(true)
+	state2.IntermediateRoot(params.Rules{IsEIP158: true})
 
 	if state2.WitnessCollection != 0 {
 		t.Errorf("WitnessCollection should be 0 without witness, got %v", state2.WitnessCollection)
@@ -2266,7 +2267,7 @@ func BenchmarkMVReadOverhead(b *testing.B) {
 		}
 	}
 
-	base.Finalise(true)
+	base.Finalise(params.Rules{IsEIP158: true})
 	base.FlushMVWriteSet()
 
 	// Simulate some earlier txs having written to the MVHashMap (realistic scenario)
@@ -2278,7 +2279,7 @@ func BenchmarkMVReadOverhead(b *testing.B) {
 		slot := slots[txIdx%numSlotsPerAccount]
 		writer.SetState(addr, slot, common.BigToHash(big.NewInt(int64(txIdx+100))))
 		writer.SetBalance(addr, uint256.NewInt(uint64(txIdx+2000)), tracing.BalanceChangeUnspecified)
-		writer.Finalise(true)
+		writer.Finalise(params.Rules{IsEIP158: true})
 		writer.FlushMVWriteSet()
 	}
 
@@ -2332,7 +2333,7 @@ func BenchmarkMVReadOverhead(b *testing.B) {
 		// Simulates multiple workers reading the same storage slots from a clean
 		// statedb (no pre-populated stateObjects), matching production where
 		// cleanStateDB is created from the trie root with empty stateObjects.
-		root, _ := base.Commit(0, true, false)
+		root, _ := base.Commit(params.Rules{IsEIP158: true}, 0)
 
 		cleanDB, _ := New(root, db)
 		cleanDB.SetMVHashmap(mvhm)
@@ -2356,7 +2357,7 @@ func BenchmarkMVReadOverhead(b *testing.B) {
 	b.Run("GetState_8Workers", func(b *testing.B) {
 		// 8 concurrent workers sharing the same MVHashMap, each reading
 		// 5 addresses × 20 slots = 100 state reads per iteration.
-		root, _ := base.Commit(0, true, false)
+		root, _ := base.Commit(params.Rules{IsEIP158: true}, 0)
 
 		cleanDB, _ := New(root, db)
 		cleanDB.SetMVHashmap(mvhm)
@@ -2419,7 +2420,7 @@ func BenchmarkMVReadOverhead(b *testing.B) {
 			}
 		}
 
-		writer.Finalise(true)
+		writer.Finalise(params.Rules{IsEIP158: true})
 		writes := writer.MVWriteList()
 
 		b.ResetTimer()
@@ -2428,13 +2429,13 @@ func BenchmarkMVReadOverhead(b *testing.B) {
 			target := base.Copy()
 			target.mvHashmap = nil // settlement mode: no MVHashMap
 			target.ApplyMVWriteSet(writes)
-			target.Finalise(true)
+			target.Finalise(params.Rules{IsEIP158: true})
 		}
 	})
 
 	b.Run("Copy_Empty", func(b *testing.B) {
 		// Copy of a clean statedb with no stateObjects (first tx scenario)
-		root, _ := base.Commit(0, true, false)
+		root, _ := base.Commit(params.Rules{IsEIP158: true}, 0)
 		cleanDB, _ := New(root, db)
 
 		b.ResetTimer()
@@ -2446,7 +2447,7 @@ func BenchmarkMVReadOverhead(b *testing.B) {
 
 	b.Run("Copy_WithObjects", func(b *testing.B) {
 		// Copy of a statedb that has accumulated some stateObjects (mid-block scenario)
-		root, _ := base.Commit(0, true, false)
+		root, _ := base.Commit(params.Rules{IsEIP158: true}, 0)
 		cleanDB, _ := New(root, db)
 
 		// Touch some accounts to populate stateObjects

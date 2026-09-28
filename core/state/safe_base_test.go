@@ -2,6 +2,7 @@ package state
 
 import (
 	"errors"
+	"github.com/ethereum/go-ethereum/params"
 	"sync"
 	"testing"
 
@@ -200,7 +201,7 @@ func TestStateDB_FlatDiffStorageMasksStaleOriginStorage(t *testing.T) {
 		t.Fatal(err)
 	}
 	sdb.SetState(addr, slot, baseValue)
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +237,7 @@ func TestStateDB_FlatDiffStorageMasksStaleOriginLoadedBeforeRef(t *testing.T) {
 		t.Fatal(err)
 	}
 	sdb.SetState(addr, slot, baseValue)
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +275,7 @@ func TestStateDB_FlatDiffDestructMasksStaleOriginStorage(t *testing.T) {
 		t.Fatal(err)
 	}
 	sdb.SetState(addr, slot, baseValue)
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,7 +315,7 @@ func TestStateDB_FlatDiffAccountScalarsMaskStaleStateObject(t *testing.T) {
 	sdb.SetBalance(addr, uint256.NewInt(1), tracing.BalanceChangeUnspecified)
 	sdb.SetNonce(addr, 1, tracing.NonceChangeUnspecified)
 	sdb.SetCode(addr, baseCode, tracing.CodeChangeUnspecified)
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -375,7 +376,7 @@ func TestStateDB_FlatDiffDestructMasksStaleStateObject(t *testing.T) {
 	sdb.SetBalance(addr, uint256.NewInt(1), tracing.BalanceChangeUnspecified)
 	sdb.SetNonce(addr, 1, tracing.NonceChangeUnspecified)
 	sdb.SetCode(addr, []byte{0x60, 0x00}, tracing.CodeChangeUnspecified)
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -422,7 +423,7 @@ func TestStateDB_FlatDiffDoesNotMaskCurrentAccountMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
