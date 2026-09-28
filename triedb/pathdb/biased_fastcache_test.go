@@ -2,8 +2,12 @@ package pathdb
 
 import (
 	"bytes"
+	stdcontext "context"
 	"fmt"
+	"log/slog"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -13,8 +17,52 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rlp"
 )
+
+// capturingHandler is a minimal slog.Handler that records log messages so
+// tests can assert on log-only code paths (this package logs and does not
+// otherwise change observable state or return an error on things like a
+// snapshot save failure).
+type capturingHandler struct {
+	mu   sync.Mutex
+	msgs []string
+}
+
+func (h *capturingHandler) Handle(_ stdcontext.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.msgs = append(h.msgs, r.Message)
+	return nil
+}
+
+func (h *capturingHandler) Enabled(stdcontext.Context, slog.Level) bool { return true }
+func (h *capturingHandler) WithGroup(string) slog.Handler            { return h }
+func (h *capturingHandler) WithAttrs([]slog.Attr) slog.Handler       { return h }
+
+func (h *capturingHandler) contains(substr string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, m := range h.msgs {
+		if strings.Contains(m, substr) {
+			return true
+		}
+	}
+	return false
+}
+
+// installCapturingHandler swaps in a capturingHandler as the package-wide
+// default logger for the duration of the test and restores the previous one
+// on cleanup.
+func installCapturingHandler(t *testing.T) *capturingHandler {
+	t.Helper()
+	h := &capturingHandler{}
+	prev := log.Root()
+	log.SetDefault(log.NewLogger(h))
+	t.Cleanup(func() { log.SetDefault(prev) })
+	return h
+}
 
 // nibblesToCompact converts a nibble slice to compact encoding (inverse of compactKeyToNibbles).
 // isLeaf sets the terminator flag (bit 5 of first byte).
@@ -1514,5 +1562,211 @@ func TestAddressBiasedCache_ReloadPartialFillFallsBackToPreload(t *testing.T) {
 
 	if spy.gets() == 0 {
 		t.Fatal("expected preloadAddressAsync to have run (and read from disk) for a partially-filled reloaded snapshot, but no disk reads occurred")
+	}
+}
+
+// TestAddressBiasedCache_WarmReloadSkipsPreload proves that a genuinely warm
+// reload (BytesSize >= the 2/3-of-cacheSize fill target) skips
+// preloadAddressAsync entirely — not just that the reloaded data happens to
+// already be present (which fastcache.LoadFromFileOrNew provides regardless
+// of the warm/cold decision). It uses a countingDatabase spy on the reload so
+// any disk read at all — even one that finds nothing — proves the skip
+// didn't happen.
+func TestAddressBiasedCache_WarmReloadSkipsPreload(t *testing.T) {
+	addr := common.HexToAddress("0x1234567890123456789012345678901234567890")
+	accountHash := crypto.Keccak256Hash(addr.Bytes())
+	journalDir := t.TempDir()
+
+	// A tiny cache size relative to fastcache's 64KiB-per-bucket chunk
+	// granularity: any single stored entry forces at least one full chunk
+	// to be allocated, so UpdateStats reports BytesSize far above this
+	// cacheSize's 2/3 fill target — a deterministically warm reload.
+	const cacheSize = 1024
+
+	base := rawdb.NewMemoryDatabase()
+	rootData := encodeBranchNode(t, []byte{0}, bytes.Repeat([]byte{0x55}, 32))
+	rawdb.WriteStorageTrieNode(base, accountHash, nil, rootData)
+
+	addressCacheSizes := map[common.Address]int{addr: cacheSize}
+	first, err := NewAddressBiasedCache(base, addressCacheSizes, 4*1024, 0, journalDir)
+	if err != nil {
+		t.Fatalf("failed to create first cache: %v", err)
+	}
+	first.wg.Wait()
+	first.Close(true)
+
+	// Sanity-check the premise: the persisted snapshot really is warm by
+	// this package's own definition, independent of the reload path below.
+	reloadedRaw := fastcache.LoadFromFileOrNew(snapshotPath(journalDir, accountHash), cacheSize)
+	var stats fastcache.Stats
+	reloadedRaw.UpdateStats(&stats)
+	if !isWarmReload(stats.BytesSize, cacheSize) {
+		t.Fatalf("test setup did not produce a warm snapshot: bytes=%d threshold=%d", stats.BytesSize, warmFillThreshold(cacheSize))
+	}
+
+	spy := &countingDatabase{Database: rawdb.NewMemoryDatabase()} // empty: any Get proves a real disk read was attempted
+	second, err := NewAddressBiasedCache(spy, addressCacheSizes, 4*1024, 0, journalDir)
+	if err != nil {
+		t.Fatalf("failed to reopen cache: %v", err)
+	}
+	second.wg.Wait()
+
+	if got := spy.gets(); got != 0 {
+		t.Fatalf("expected a warm reload to skip preloadAddressAsync entirely (0 disk reads), got %d", got)
+	}
+}
+
+// TestWarmFillThreshold and TestIsWarmReload pin down the exact arithmetic
+// isWarmReload/warmFillThreshold uses to decide whether a reloaded snapshot
+// is warm. These are unit tests on the pure functions rather than the full
+// NewAddressBiasedCache/fastcache integration, because fastcache's BytesSize
+// is quantized to 64KiB-per-bucket chunks (see countingDatabase-based tests
+// above) and can't be steered to an exact boundary value the way a plain
+// uint64 can.
+func TestWarmFillThreshold(t *testing.T) {
+	tests := []struct {
+		cacheSize int
+		want      uint64
+	}{
+		{cacheSize: 0, want: 0},
+		{cacheSize: 3, want: 2},    // 3*2/3 = 2; catches * -> / (3/2/3 = 0)
+		{cacheSize: 300, want: 200}, // 300*2/3 = 200; catches * -> / (300/2/3 = 50)
+		{cacheSize: 6, want: 4},    // 6*2/3 = 4; catches * -> / (6/2/3 = 1)
+	}
+	for _, tt := range tests {
+		if got := warmFillThreshold(tt.cacheSize); got != tt.want {
+			t.Errorf("warmFillThreshold(%d) = %d, want %d", tt.cacheSize, got, tt.want)
+		}
+	}
+}
+
+func TestIsWarmReload(t *testing.T) {
+	const cacheSize = 300 // threshold = 200 under the real (*2/3) formula, 50 under a (/2/3) mutant
+	tests := []struct {
+		name      string
+		bytesSize uint64
+		want      bool
+	}{
+		{name: "exactly at threshold is warm", bytesSize: 200, want: true},   // catches >= -> > (200 > 200 is false)
+		{name: "one below threshold is cold", bytesSize: 199, want: false},
+		{name: "far above threshold is warm", bytesSize: 250, want: true},
+		{name: "between mutant and real threshold is cold", bytesSize: 100, want: false}, // catches * -> / (100 >= 50 would wrongly be true)
+		{name: "zero is cold", bytesSize: 0, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isWarmReload(tt.bytesSize, cacheSize); got != tt.want {
+				t.Errorf("isWarmReload(%d, %d) = %v, want %v", tt.bytesSize, cacheSize, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestAddressBiasedCache_ReloadLogsWarmSnapshot proves the "Reloaded address
+// cache snapshot" log line actually fires on a warm reload. Nothing else in
+// this package observes that a reload was treated as warm besides the
+// (already separately tested) preload skip, so without a log assertion a
+// mutant that deletes this log.Info call would be unobservable.
+func TestAddressBiasedCache_ReloadLogsWarmSnapshot(t *testing.T) {
+	h := installCapturingHandler(t)
+
+	addr := common.HexToAddress("0x1234567890123456789012345678901234567890")
+	accountHash := crypto.Keccak256Hash(addr.Bytes())
+	journalDir := t.TempDir()
+	const cacheSize = 1024 // see TestAddressBiasedCache_WarmReloadSkipsPreload for why this is deterministically warm
+
+	base := rawdb.NewMemoryDatabase()
+	rootData := encodeBranchNode(t, []byte{0}, bytes.Repeat([]byte{0x66}, 32))
+	rawdb.WriteStorageTrieNode(base, accountHash, nil, rootData)
+
+	addressCacheSizes := map[common.Address]int{addr: cacheSize}
+	first, err := NewAddressBiasedCache(base, addressCacheSizes, 4*1024, 0, journalDir)
+	if err != nil {
+		t.Fatalf("failed to create first cache: %v", err)
+	}
+	first.wg.Wait()
+	first.Close(true)
+
+	if h.contains("Reloaded address cache snapshot") {
+		t.Fatal("did not expect the warm-reload log line before any reload happened")
+	}
+
+	second, err := NewAddressBiasedCache(base, addressCacheSizes, 4*1024, 0, journalDir)
+	if err != nil {
+		t.Fatalf("failed to reopen cache: %v", err)
+	}
+	second.wg.Wait()
+
+	if !h.contains("Reloaded address cache snapshot") {
+		t.Fatal("expected a warm reload to log \"Reloaded address cache snapshot\"")
+	}
+}
+
+// TestAddressBiasedCache_CloseLogsSnapshotDirFailure proves Close(true) logs
+// (rather than silently drops) a failure to create the snapshot directory,
+// per its documented "must not block shutdown" contract: Close still returns
+// normally, so a log assertion is the only way to observe this path at all.
+func TestAddressBiasedCache_CloseLogsSnapshotDirFailure(t *testing.T) {
+	h := installCapturingHandler(t)
+
+	// journalDir is itself a plain file, not a directory, so
+	// filepath.Join(journalDir, "addresscache") can never be created:
+	// os.MkdirAll fails because a path component is a non-directory file.
+	parent := t.TempDir()
+	journalDir := filepath.Join(parent, "not-a-dir")
+	if err := os.WriteFile(journalDir, []byte("x"), 0o644); err != nil {
+		t.Fatalf("failed to create blocking file: %v", err)
+	}
+
+	addr := common.HexToAddress("0x1234567890123456789012345678901234567890")
+	db := rawdb.NewMemoryDatabase()
+	cache, err := NewAddressBiasedCache(db, map[common.Address]int{addr: 32 * 1024}, 16*1024, 0, journalDir)
+	if err != nil {
+		t.Fatalf("failed to create cache: %v", err)
+	}
+	cache.wg.Wait()
+
+	cache.Close(true) // must not panic or block despite the directory being unwritable
+
+	if !h.contains("Failed to create address cache snapshot directory") {
+		t.Fatal("expected Close(true) to log the snapshot directory creation failure")
+	}
+}
+
+// TestAddressBiasedCache_CloseLogsSaveFailure proves Close(true) logs (rather
+// than silently drops) a failure to save an individual address's snapshot
+// file, per the same "must not block shutdown" contract as above.
+func TestAddressBiasedCache_CloseLogsSaveFailure(t *testing.T) {
+	h := installCapturingHandler(t)
+
+	addr := common.HexToAddress("0x1234567890123456789012345678901234567890")
+	journalDir := t.TempDir()
+
+	// Pre-create the addresscache dir and strip write permission on it.
+	// fastcache.SaveToFileConcurrent creates a temporary directory inside
+	// filepath.Dir(filePath) (the addresscache dir) before renaming it into
+	// place, so a read-only addresscache dir makes every address's save
+	// fail, regardless of the RemoveAll-then-Rename dance it does on the
+	// final destination path itself.
+	addressCacheDir := filepath.Join(journalDir, "addresscache")
+	if err := os.MkdirAll(addressCacheDir, 0o755); err != nil {
+		t.Fatalf("failed to pre-create addresscache dir: %v", err)
+	}
+	if err := os.Chmod(addressCacheDir, 0o500); err != nil {
+		t.Fatalf("failed to make addresscache dir read-only: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(addressCacheDir, 0o755) }) // let t.TempDir() clean up
+
+	db := rawdb.NewMemoryDatabase()
+	cache, err := NewAddressBiasedCache(db, map[common.Address]int{addr: 32 * 1024}, 16*1024, 0, journalDir)
+	if err != nil {
+		t.Fatalf("failed to create cache: %v", err)
+	}
+	cache.wg.Wait()
+
+	cache.Close(true) // must not panic or block despite the destination path being unwritable
+
+	if !h.contains("Failed to persist address cache") {
+		t.Fatal("expected Close(true) to log the per-address snapshot save failure")
 	}
 }
