@@ -174,9 +174,13 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 		limiter = rate.NewLimiter(rate.Limit(c.rateLimitBPS), 64*1024)
 	}
 
-	// Local stats for logging progress
+	// Local stats for logging progress. The byte count starts from what the
+	// cache already holds (e.g. a partial snapshot reloaded from disk), so a
+	// reload plus this top-up together respect the 2/3 fill target.
 	var entriesLoaded int
-	var totalBytesLoaded uint64
+	var stats fastcache.Stats
+	addrCache.UpdateStats(&stats)
+	totalBytesLoaded := stats.BytesSize
 
 	rateLimitStr := "unlimited"
 	if c.rateLimitBPS > 0 {
