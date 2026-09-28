@@ -206,6 +206,18 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 	}
 	queue := []queueItem{{path: nil, depth: 0}} // Start from root
 
+	// Decode actual children from the node and enqueue them.
+	// Only real trie children are returned, keeping queue size proportional
+	// to trie width rather than growing exponentially with depth.
+	enqueueChildren := func(nodeData []byte, item queueItem) {
+		for _, childPath := range decodeChildPaths(nodeData, item.path) {
+			queue = append(queue, queueItem{
+				path:  childPath,
+				depth: item.depth + 1,
+			})
+		}
+	}
+
 	for len(queue) > 0 {
 		// Check for shutdown signal periodically
 		select {
@@ -276,50 +288,44 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 		//      evictCachedNode). The cache self-heals on the next read of
 		//      that key — it does not stay poisoned until natural eviction.
 		// Worst case is one extra disk fetch per stale-blob occurrence.
-		if !addrCache.Has(key) {
-			// Check if adding this node would exceed cache size
-			// Key format: owner (32 bytes) + path
-			nodeSize := uint64(common.HashLength + len(item.path) + len(nodeData))
-
-			// Preload 66.6% of the cache size to allow hot paths to be added later
-			if totalBytesLoaded+nodeSize > uint64(cacheSize*2/3) {
-				log.Info("Cache size limit reached, stopping preload",
-					"account hash", accountHash.Hex(),
-					"entries", entriesLoaded,
-					"current depth", item.depth,
-					"max depth reached", maxDepthReached,
-					"size", common.StorageSize(totalBytesLoaded).String())
-				break
-			}
-
-			addrCache.Set(key, nodeData)
-
-			entriesLoaded++
-			totalBytesLoaded += nodeSize
-
-			// Log progress periodically
-			if entriesLoaded%logInterval == 0 {
-				log.Info("Preloading storage trie progress",
-					"account hash", accountHash.Hex(),
-					"entries", entriesLoaded,
-					"current depth", item.depth,
-					"max depth", maxDepthReached,
-					"size", common.StorageSize(totalBytesLoaded).String(),
-					"cache usage", fmt.Sprintf("%.1f%%", float64(totalBytesLoaded)*100/float64(cacheSize)),
-					"elapsed", time.Since(startTime))
-			}
+		if addrCache.Has(key) {
+			enqueueChildren(nodeData, item)
+			continue
 		}
 
-		// Decode actual children from the node and enqueue them.
-		// Only real trie children are returned, keeping queue size proportional
-		// to trie width rather than growing exponentially with depth.
-		childPaths := decodeChildPaths(nodeData, item.path)
-		for _, childPath := range childPaths {
-			queue = append(queue, queueItem{
-				path:  childPath,
-				depth: item.depth + 1,
-			})
+		// Check if adding this node would exceed cache size
+		// Key format: owner (32 bytes) + path
+		nodeSize := uint64(common.HashLength + len(item.path) + len(nodeData))
+
+		// Preload 66.6% of the cache size to allow hot paths to be added later
+		if totalBytesLoaded+nodeSize > uint64(cacheSize*2/3) {
+			log.Info("Cache size limit reached, stopping preload",
+				"account hash", accountHash.Hex(),
+				"entries", entriesLoaded,
+				"current depth", item.depth,
+				"max depth reached", maxDepthReached,
+				"size", common.StorageSize(totalBytesLoaded).String())
+			break
 		}
+
+		addrCache.Set(key, nodeData)
+
+		entriesLoaded++
+		totalBytesLoaded += nodeSize
+
+		// Log progress periodically
+		if entriesLoaded%logInterval == 0 {
+			log.Info("Preloading storage trie progress",
+				"account hash", accountHash.Hex(),
+				"entries", entriesLoaded,
+				"current depth", item.depth,
+				"max depth", maxDepthReached,
+				"size", common.StorageSize(totalBytesLoaded).String(),
+				"cache usage", fmt.Sprintf("%.1f%%", float64(totalBytesLoaded)*100/float64(cacheSize)),
+				"elapsed", time.Since(startTime))
+		}
+
+		enqueueChildren(nodeData, item)
 	}
 
 	// Log the completion
