@@ -2101,8 +2101,7 @@ func SubmitTransaction(ctx context.Context, b Backend, tx *types.Transaction) (c
 	head := b.CurrentBlock()
 	signer := types.MakeSigner(b.ChainConfig(), head.Number, head.Time)
 	from, err := types.Sender(signer, tx)
-
-	if err != nil && (!b.UnprotectedAllowed() || (b.UnprotectedAllowed() && err != types.ErrInvalidChainId)) {
+	if err != nil {
 		return common.Hash{}, err
 	}
 
@@ -2543,11 +2542,6 @@ func (api *TransactionAPI) Resend(ctx context.Context, sendArgs TransactionArgs,
 	for _, p := range pending {
 		wantSigHash := api.signer.Hash(matchTx)
 		pFrom, err := types.Sender(api.signer, p)
-
-		if err != nil && (api.b.UnprotectedAllowed() && err == types.ErrInvalidChainId) {
-			err = nil
-		}
-
 		if err == nil && pFrom == sendArgs.from() && api.signer.Hash(p) == wantSigHash {
 			// Match. Re-sign and send the transaction.
 			if gasPrice != nil && (*big.Int)(gasPrice).Sign() != 0 {
