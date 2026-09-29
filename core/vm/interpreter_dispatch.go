@@ -772,10 +772,15 @@ func (evm *EVM) runSwitch(
 				if err != nil {
 					return nil, fmt.Errorf("%w: %v", ErrOutOfGas, err)
 				}
-				if contract.Gas.RegularGas < dynamicCost.RegularGas {
+				// Charge exactly as Run does: regular-only when there is no EIP-8037
+				// state cost (always, pre-Amsterdam), otherwise both dimensions at once.
+				if dynamicCost.StateGas == 0 {
+					if !contract.Gas.ChargeRegularOnly(dynamicCost.RegularGas) {
+						return nil, ErrOutOfGas
+					}
+				} else if !contract.Gas.charge(dynamicCost) {
 					return nil, ErrOutOfGas
 				}
-				contract.Gas.RegularGas -= dynamicCost.RegularGas
 				if memorySize > 0 {
 					mem.Resize(memorySize)
 				}

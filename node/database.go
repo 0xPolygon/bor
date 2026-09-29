@@ -142,11 +142,14 @@ func newLevelDBDatabase(file string, cache int, handles int, namespace string, r
 // moving immutable chain segments into cold storage.
 //
 // If the database already exists with a legacy pebble v1 format, it is opened
-// using pebble v1 for backward compatibility and a warning is logged directing
-// the user to upgrade offline. New databases use pebble v2.
+// using pebble v1 for backward compatibility. New databases use pebble v2.
+//
+// Every database bor created before pebble v2 is in the legacy format, since
+// bor never set FormatMajorVersion, and bor has no offline upgrade command, so
+// the v1 path is the normal one for existing nodes and is not warned about.
 func newPebbleDBDatabase(file string, cache int, handles int, namespace string, readonly bool) (ethdb.KeyValueStore, error) {
 	if pebble.NeedsV1(file) {
-		log.Warn("Pebble database uses legacy v1 format; upgrade offline with 'geth db pebble-upgrade'")
+		log.Info("Opening pebble database in its legacy v1 format", "path", file)
 		db, err := pebble.NewV1(file, cache, handles, namespace, readonly)
 		if err != nil {
 			return nil, err

@@ -3321,7 +3321,7 @@ func (s *StateDB) SubBalanceDirect(addr common.Address, amount *uint256.Int) {
 
 // FinaliseFastWithPrefetch is FinaliseFast plus prefetcher triggering for
 // storage tries — matching serial Finalise's prefetch behavior.
-func (s *StateDB) FinaliseFastWithPrefetch(deleteEmptyObjects bool) {
+func (s *StateDB) FinaliseFastWithPrefetch(deleteEmptyObjects, isAmsterdam bool) {
 	// Snapshot dirty storage slots BEFORE FinaliseFast moves them to pending,
 	// then prefetch their tries so the GetCommittedState calls inside
 	// FinaliseFast hit cached data instead of going to Pebble.
@@ -3334,7 +3334,7 @@ func (s *StateDB) FinaliseFastWithPrefetch(deleteEmptyObjects bool) {
 			_ = s.prefetcher.prefetch(obj.addrHash(), as.root, as.addr, nil, as.slots, false)
 		}
 	}
-	s.FinaliseFast(deleteEmptyObjects)
+	s.FinaliseFast(deleteEmptyObjects, isAmsterdam)
 }
 
 type addrDirtySlots struct {
@@ -3370,16 +3370,22 @@ func (s *StateDB) snapshotDirtyStorageSlots() []addrDirtySlots {
 // when origin values are cached, and triggers prefetcher in the background.
 // Used during pipelined settlement where incremental commit tracking is
 // not required — the final Finalise before IntermediateRoot handles that.
-func (s *StateDB) FinaliseFast(deleteEmptyObjects bool) {
+//
+// isAmsterdam selects the self-destruct handling of serial finaliseAmsterdam,
+// which V2 can't reach through stateAccessList because it builds no access list.
+func (s *StateDB) FinaliseFast(deleteEmptyObjects, isAmsterdam bool) {
 	var addressesToPrefetch []common.Address
 	for addr := range s.journal.mutations {
 		obj, exist := s.stateObjects[addr]
 		if !exist {
 			continue
 		}
-		if obj.selfDestructed || (deleteEmptyObjects && obj.empty()) {
+		switch {
+		case obj.selfDestructed && isAmsterdam && !obj.Balance().IsZero():
+			s.finaliseKeepBalance(addr, obj)
+		case obj.selfDestructed || (deleteEmptyObjects && obj.empty()):
 			s.finaliseDelete(addr, obj)
-		} else {
+		default:
 			s.finalisePromote(addr, obj)
 		}
 		addressesToPrefetch = append(addressesToPrefetch, addr)
@@ -3401,6 +3407,16 @@ func (s *StateDB) finaliseDelete(addr common.Address, obj *stateObject) {
 		s.stateObjectsDestruct[obj.address] = obj
 	}
 	s.currentBlockDestructs[obj.address] = struct{}{}
+}
+
+// finaliseKeepBalance replaces a self-destructed account that still holds a
+// balance with a fresh balance-only account, as finaliseAmsterdam does under
+// EIP-8246: nonce, code and storage are cleared and the balance is kept.
+func (s *StateDB) finaliseKeepBalance(addr common.Address, obj *stateObject) {
+	o := newObject(s, obj.address, obj.origin)
+	o.setBalance(new(uint256.Int).Set(obj.Balance()))
+	s.setStateObject(o)
+	s.markUpdate(addr)
 }
 
 // finalisePromote moves dirty storage to pending, capturing origin values

@@ -49,7 +49,7 @@ func freshSDB(t *testing.T) *StateDB {
 func finalizeAndRoot(t *testing.T, sdb *StateDB, fast bool) common.Hash {
 	t.Helper()
 	if fast {
-		sdb.FinaliseFastWithPrefetch(true)
+		sdb.FinaliseFastWithPrefetch(true, false)
 	} else {
 		sdb.Finalise(true)
 	}

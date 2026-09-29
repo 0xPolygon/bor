@@ -4269,3 +4269,29 @@ Verified non-short, since `-short` skips all of it: `TestV2WitnessRegenerationAl
 no skips — the last being the test that failed on every pair before #2180's
 completeness fix, and the one that exercises exactly the producer/consumer byte
 identity the sort protects.
+
+## Post-review fix — switch dispatch charges EIP-8037 state gas (PR #2346, 2026-09-29)
+
+Found in human review. Batch 32 adopted EIP-8037 (#33601), which made `Run`'s
+dynamic-gas charge split into `chargeRegular` then `chargeState`. Bor's
+generated switch interpreter (`runSwitch`, `core/vm/interpreter_dispatch.go`,
+from `core/vm/gen_dispatch`) is Bor-only, so the merge never touched it: its
+`default` fallback, the path SSTORE, CREATE and CALL take, still subtracted
+`dynamicCost.RegularGas` and dropped `dynamicCost.StateGas`. Every mainnet BP
+runs with `evm-switch-dispatch = true`, so once Amsterdam is enabled the BPs
+would undercharge state creation against every node using `Run`.
+
+Dormant today: `StateGas` is non-zero only under Amsterdam, which is nil on
+every bor surface. The generator now emits the same two charges as `Run`, and
+`interpreter_dispatch.go` is regenerated from it. `TestDispatchDifferentialAmsterdam`
+adds an Amsterdam config to the differential suite, with budgets where state
+gas comes from the reservoir, partly from it, or spills into regular gas, and
+compares both regular and state gas left. Against the old generated file it
+fails (for a new storage slot the fast path keeps ~97,920 gas the slow path
+charges). The suite's block context now sets `CostPerStateByte` as
+`core/evm.go` does; without it every EIP-8037 state charge is zero and the
+comparison is vacuous.
+
+The fast path's direct `RegularGas` subtractions still skip `UsedRegularGas`.
+That counter is bookkeeping only: nothing that decides a receipt, gas used or
+refund reads it here or at the v1.17.6 tip.

@@ -186,6 +186,13 @@ basic metrics until the database reaches a v2-capable format. `go.mod` keeps
 both pebble v1 and v2 — `pebble_v1.go` needs v1, so that is correct rather than
 residue.
 
+**Reversed in PR review (2026-09-29).** The v1 path is not transitional on bor.
+Bor never set `FormatMajorVersion`, so every existing bor database is
+`FormatMostCompatible`; `NeedsV1` sends all of them to `pebble_v1.go`, and bor
+has no `pebble-upgrade` command to move off it. `pebble_v1.go` is now bor's
+pre-v2 `pebble.go` with upstream's v1 renames applied — see "Post-review fixes"
+at the end of this ledger.
+
 ### Remaining resolutions
 
 | Path | Class | Decision |
@@ -864,3 +871,51 @@ propagation or import.
   `TestConsoleWelcome`, `TestExport`, `TestCustomBackend`, `TestCustomGenesis`),
   `cmd/evm` (`TestT8n`, `TestEvmRun`, `TestEVMTracing`, `TestEvmRunRegEx`). All
   invisible to CI, which excludes `cmd/`.
+
+## Post-review fixes (PR #2354, 2026-09-29)
+
+Two findings from human review, both fixed on this branch because the code they
+concern landed in this milestone.
+
+### pebble v1 path carries bor's tuning again
+
+`pebble_v1.go` was upstream's untuned copy of its old `pebble.go`. Every
+existing bor database opens through it (see the pebble v2 section above), so
+the fleet would have lost `#2170`'s write-path tuning (`BytesPerSync` and
+friends), the SST/WAL listeners and the amplification gauges the pebble-tuning
+dashboard reads.
+
+The file is rebuilt as a three-way merge: base upstream `v1.17.4`
+`pebble.go`, ours bor's pre-v2 `pebble.go`, theirs upstream's `pebble_v1.go`.
+Three conflicts, each a declaration now shared with the v2 file (`panicLogger`,
+`upperBound`, the constants) or a rename; bor-only methods were moved to the
+`*V1Database` receiver by hand, since a merge can't rename code upstream never
+had. The result differs from bor's pre-v2 file only by upstream's renames.
+`node/database.go`'s startup message no longer points at `geth db
+pebble-upgrade`, which `bor` doesn't ship, and is Info rather than Warn because
+it is the normal path.
+
+Release decision (2026-09-29): existing databases stay on v1 with bor's tuning
+for this release, brand-new databases use v2 (upstream behaviour; created at
+`FormatFlushableIngest`, which pebble v1.1.5 still opens, so a rollback needs no
+resync), and existing databases move to v2 through an explicit `bor`
+pebble-upgrade command, tracked as POS-3746.
+
+### EIP-8246 self-destruct settlement under V2
+
+Serial `Finalise` reaches `finaliseAmsterdam` through `stateAccessList`, set by
+`Prepare` under Amsterdam, and keeps a self-destructed account's leftover
+balance as a fresh balance-only account (EIP-8246). V2 settles each tx with
+`FinaliseFast`, which always deleted it, so the executors would have produced
+different roots once Amsterdam is enabled.
+
+`FinaliseFast` now takes the fork flag and applies the same branch via
+`finaliseKeepBalance`. V2's final StateDB is never prepared and builds no access
+list, so the flag is passed explicitly: `ParallelStateDB` records
+`rules.IsAmsterdam` in `Prepare` and hands it over in `SettleTo`, and
+`finalizeV2Block` uses `config.IsAmsterdam(header.Number)` for the pass after
+`engine.Finalize`. `TestFinaliseFastSelfDestructParity` compares serial and
+fast on balance, existence and root, before and at Amsterdam; without the new
+branch the Amsterdam/balance case fails with serial=100, fast=0.
+`TestV2ForkParity` now classifies `IsAmsterdam` as read by both V1 and V2, with
+the reason in its rationale.
