@@ -94,10 +94,11 @@ func classifyErr(err error) string {
 }
 
 type execResult struct {
-	ret  []byte
-	gas  uint64
-	err  error
-	logs []*types.Log
+	ret      []byte
+	gas      uint64
+	stateGas uint64
+	err      error
+	logs     []*types.Log
 }
 
 func sameLogs(a, b []*types.Log) bool {
@@ -157,6 +158,18 @@ func execPathResultWithConfig(
 	chainCfg *params.ChainConfig,
 	setup func(*state.StateDB),
 ) execResult {
+	return execPathResultWithBudget(code, input, NewGasBudget(gas, 0), switchDispatch, chainCfg, setup)
+}
+
+func execPathResultWithBudget(
+	code []byte,
+	input []byte,
+	budget GasBudget,
+	switchDispatch bool,
+	chainCfg *params.ChainConfig,
+	setup func(*state.StateDB),
+) execResult {
+	gas := budget.ExecutionGas
 	addr := common.BytesToAddress([]byte("contract"))
 	caller := common.BytesToAddress([]byte("caller"))
 	origin := common.BytesToAddress([]byte("origin"))
@@ -191,6 +204,8 @@ func execPathResultWithConfig(
 		BaseFee:     big.NewInt(44),
 		BlobBaseFee: big.NewInt(55),
 		Random:      &random,
+		// Only read by the EIP-8037 gas functions, i.e. under Amsterdam.
+		CostPerStateByte: params.CostPerStateByte,
 	}
 
 	rules := chainCfg.Rules(bctx.BlockNumber, bctx.Random != nil, bctx.Time)
@@ -204,12 +219,13 @@ func execPathResultWithConfig(
 		GasPrice:   uint256.NewInt(66),
 		BlobHashes: blobHashes,
 	})
-	ret, gasLeft, err := evm.Call(caller, addr, input, NewGasBudget(gas, 0), uint256.NewInt(77))
+	ret, gasLeft, err := evm.Call(caller, addr, input, budget, uint256.NewInt(77))
 	return execResult{
-		ret:  ret,
-		gas:  gasLeft.ExecutionGas,
-		err:  err,
-		logs: db.Logs(),
+		ret:      ret,
+		gas:      gasLeft.ExecutionGas,
+		stateGas: gasLeft.StateGas,
+		err:      err,
+		logs:     db.Logs(),
 	}
 }
 
@@ -1653,6 +1669,66 @@ func TestAbortDuringJump(t *testing.T) {
 			// abort → errStopToken → Run() converts to nil.
 			if errFast != nil {
 				t.Fatalf("expected nil error after abort, got %v", errFast)
+			}
+		})
+	}
+}
+
+// Amsterdam enables EIP-8037, whose dynamic gas functions return state gas.
+// The switch dispatch's default fallback must charge it exactly as Run does,
+// both when the reservoir covers it and when it spills into regular gas.
+func TestDispatchDifferentialAmsterdam(t *testing.T) {
+	t.Parallel()
+
+	cfg := *diffChainConfig
+	cfg.AmsterdamBlock = new(big.Int)
+
+	sstoreNew := cc(p1(1), p1(0), op1(SSTORE), op1(STOP))
+	sstoreTwo := cc(p1(1), p1(0), op1(SSTORE), p1(2), p1(1), op1(SSTORE), op1(STOP))
+	create := cc(
+		p1(byte(STOP)), p1(0), op1(MSTORE8),
+		p1(1), p1(0), p1(0), op1(CREATE),
+		retSeq,
+	)
+	callNewAccount := cc(
+		p1(0), p1(0), p1(0), p1(0),
+		p1(1),    // value
+		p1(0xEE), // target address (empty account)
+		p1(0xFF), // gas
+		op1(CALL),
+		retSeq,
+	)
+
+	tests := []struct {
+		name   string
+		code   []byte
+		budget GasBudget
+	}{
+		{"SSTORE/new_slot/spill", sstoreNew, NewGasBudget(500_000, 0)},
+		{"SSTORE/new_slot/reservoir", sstoreNew, NewGasBudget(500_000, 200_000)},
+		{"SSTORE/new_slot/partial_reservoir", sstoreNew, NewGasBudget(500_000, 1_000)},
+		{"SSTORE/two_slots/spill", sstoreTwo, NewGasBudget(500_000, 0)},
+		{"SSTORE/new_slot/oog", sstoreNew, NewGasBudget(30_000, 0)},
+		{"CREATE/spill", create, NewGasBudget(1_000_000, 0)},
+		{"CREATE/reservoir", create, NewGasBudget(1_000_000, 500_000)},
+		{"CALL/new_account/spill", callNewAccount, NewGasBudget(500_000, 0)},
+		{"CALL/new_account/reservoir", callNewAccount, NewGasBudget(500_000, 200_000)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fast := execPathResultWithBudget(tt.code, nil, tt.budget, true, &cfg, nil)
+			slow := execPathResultWithBudget(tt.code, nil, tt.budget, false, &cfg, nil)
+
+			if fmt.Sprint(fast.err) != fmt.Sprint(slow.err) {
+				t.Fatalf("error mismatch:\n  fast: %v\n  slow: %v", fast.err, slow.err)
+			}
+			if !bytes.Equal(fast.ret, slow.ret) {
+				t.Fatalf("return data mismatch:\n  fast: %x\n  slow: %x", fast.ret, slow.ret)
+			}
+			if fast.gas != slow.gas || fast.stateGas != slow.stateGas {
+				t.Fatalf("gas mismatch: fast=<%d,%d> slow=<%d,%d>", fast.gas, fast.stateGas, slow.gas, slow.stateGas)
 			}
 		})
 	}

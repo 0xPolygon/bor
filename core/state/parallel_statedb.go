@@ -111,6 +111,7 @@ type ParallelStateDB struct {
 	logs             []*types.Log
 	logSize          uint
 	preimages        map[common.Hash][]byte
+	isAmsterdam      bool // from Prepare; selects EIP-8246 self-destruct settlement
 
 	// Snapshot/revert
 	journalEntries []parallelJournalEntry
@@ -262,6 +263,7 @@ func (s *ParallelStateDB) Reset(txIndex int, base *SafeBase, store *blockstm.MVS
 	s.accessList.slots = s.accessList.slots[:0]
 	s.logs = s.logs[:0]
 	s.logSize = 0
+	s.isAmsterdam = false
 	s.journalEntries = s.journalEntries[:0]
 	s.validRevisions = s.validRevisions[:0]
 	s.nextRevisionId = 0
@@ -1227,6 +1229,7 @@ func (s *ParallelStateDB) Logs() []*types.Log { return s.logs }
 // ---------- Prepare ----------
 
 func (s *ParallelStateDB) Prepare(rules params.Rules, sender, coinbase common.Address, dest *common.Address, precompiles []common.Address, txAccesses types.AccessList) {
+	s.isAmsterdam = rules.IsAmsterdam
 	s.accessList = newAccessList()
 	s.transientStorage = newTransientStorage()
 

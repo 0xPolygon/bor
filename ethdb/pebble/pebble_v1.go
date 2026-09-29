@@ -30,6 +30,7 @@ import (
 
 	"github.com/cockroachdb/pebble"
 	"github.com/cockroachdb/pebble/bloom"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/log"
@@ -71,6 +72,40 @@ type V1Database struct {
 	liveIterGauge          *metrics.Gauge   // Gauge for tracking the number of live database iterators
 	levelsGauge            []*metrics.Gauge // Gauge for tracking the number of tables in levels
 
+	// Read and Write Amplification metrics
+	readAmpGauge       *metrics.GaugeFloat64   // Gauge for tracking read amplification
+	levelWriteAmpGauge []*metrics.GaugeFloat64 // Gauge for tracking write amplification per level
+	totalWriteAmpGauge *metrics.GaugeFloat64   // Gauge for tracking total write amplification
+
+	// Detailed I/O tracking metrics
+	walBytesWrittenMeter   *metrics.Meter // Bytes written to WAL
+	walFileCountGauge      *metrics.Gauge // Number of WAL files
+	sstBytesReadMeter      *metrics.Meter // Bytes read from SST files (compaction input)
+	sstBytesWrittenMeter   *metrics.Meter // Bytes written to SST files (compaction output)
+	flushBytesWrittenMeter *metrics.Meter // Bytes written during memtable flush
+
+	// Per-level size tracking
+	levelSizeGauge  []*metrics.Gauge // Size of each level in bytes
+	levelScoreGauge []*metrics.Gauge // Compaction score per level (>1 means needs compaction)
+
+	// Detailed WAL metrics
+	walSizeGauge         *metrics.Gauge // Current WAL size
+	walPhysicalSizeGauge *metrics.Gauge // Physical WAL size on disk
+	walObsoleteSizeGauge *metrics.Gauge // Obsolete WAL data size
+
+	// Snapshot metrics
+	snapshotCountGauge *metrics.Gauge // Number of snapshots
+
+	// Keys metrics for understanding data distribution
+	keysCountGauge []*metrics.Gauge // Number of keys per level
+
+	// Calculated amplification metrics
+	calcWriteAmpGauge   *metrics.GaugeFloat64 // Calculated write amplification: total physical writes / logical user data
+	calcReadAmpGauge    *metrics.GaugeFloat64 // Calculated read amplification (same as readamp)
+	calcSpaceAmpGauge   *metrics.GaugeFloat64 // Calculated space amplification: disk/size / actual data size
+	walWriteAmpGauge    *metrics.GaugeFloat64 // WAL write amplification: WAL physical / logical data
+	actualDataSizeGauge *metrics.Gauge        // Actual user data size (from live SST files)
+
 	quitLock sync.RWMutex    // Mutex protecting the quit channel and the closed flag
 	quitChan chan chan error // Quit channel to stop the metrics collection before closing the database
 	closed   bool            // keep track of whether we're Closed
@@ -96,12 +131,15 @@ func (d *V1Database) onCompactionBegin(info pebble.CompactionInfo) {
 	if d.activeComp == 0 {
 		d.compStartTime = time.Now()
 	}
+
 	l0 := info.Input[0]
+
 	if l0.Level == 0 {
 		d.level0Comp.Add(1)
 	} else {
 		d.nonLevel0Comp.Add(1)
 	}
+
 	d.activeComp++
 }
 
@@ -111,6 +149,7 @@ func (d *V1Database) onCompactionEnd(info pebble.CompactionInfo) {
 	} else if d.activeComp == 0 {
 		panic("should not happen")
 	}
+
 	d.activeComp--
 }
 
@@ -144,6 +183,26 @@ func (d *V1Database) onWriteStallEnd() {
 	d.writeDelayStartTime = time.Time{}
 }
 
+// Track SST file operations
+func (d *V1Database) onTableCreated(info pebble.TableCreateInfo) {
+	metrics.GetOrRegisterMeter(d.namespace+"file/sst/created", nil).Mark(1)
+	d.log.Debug("SST file created", "reason", info.Reason, "fileNum", info.FileNum)
+}
+
+func (d *V1Database) onTableDeleted(info pebble.TableDeleteInfo) {
+	metrics.GetOrRegisterMeter(d.namespace+"file/sst/deleted", nil).Mark(1)
+}
+
+// Track WAL (.log) file operations
+func (d *V1Database) onWALCreated(info pebble.WALCreateInfo) {
+	metrics.GetOrRegisterMeter(d.namespace+"file/wal/created", nil).Mark(1)
+	d.log.Debug("WAL file created", "fileNum", info.FileNum, "recycled", info.RecycledFileNum)
+}
+
+func (d *V1Database) onWALDeleted(info pebble.WALDeleteInfo) {
+	metrics.GetOrRegisterMeter(d.namespace+"file/wal/deleted", nil).Mark(1)
+}
+
 // NewV1 returns a wrapped pebble v1 DB object. The namespace is the prefix that the
 // metrics reporting should use for surfacing internal stats.
 func NewV1(file string, cache int, handles int, namespace string, readonly bool) (*V1Database, error) {
@@ -151,9 +210,11 @@ func NewV1(file string, cache int, handles int, namespace string, readonly bool)
 	if cache < minCache {
 		cache = minCache
 	}
+
 	if handles < minHandles {
 		handles = minHandles
 	}
+
 	logger := log.New("database", file)
 	logger.Info("Allocated cache and file handles", "cache", common.StorageSize(cache*1024*1024), "handles", handles, "version", "v1")
 
@@ -186,6 +247,7 @@ func NewV1(file string, cache int, handles int, namespace string, readonly bool)
 	if memTableSize >= maxMemTableSize {
 		memTableSize = maxMemTableSize - 1
 	}
+
 	db := &V1Database{
 		fn:        file,
 		log:       logger,
@@ -207,6 +269,8 @@ func NewV1(file string, cache int, handles int, namespace string, readonly bool)
 		// memory allowance for cache.
 		Cache:        pebble.NewCache(int64(cache * 1024 * 1024)),
 		MaxOpenFiles: handles,
+		// BytesPerSync was 512 KB as implicit default. Increasing it will provide fewer but larger syncs during compaction
+		BytesPerSync: 1 * 1024 * 1024,
 
 		// The size of memory table(as well as the write buffer).
 		// Note, there may have more than two memory tables in the system.
@@ -246,6 +310,10 @@ func NewV1(file string, cache int, handles int, namespace string, readonly bool)
 			CompactionEnd:   db.onCompactionEnd,
 			WriteStallBegin: db.onWriteStallBegin,
 			WriteStallEnd:   db.onWriteStallEnd,
+			TableCreated:    db.onTableCreated,
+			TableDeleted:    db.onTableDeleted,
+			WALCreated:      db.onWALCreated,
+			WALDeleted:      db.onWALDeleted,
 		},
 		Logger: panicLogger{}, // TODO(karalabe): Delete when this is upstreamed in Pebble
 
@@ -283,11 +351,18 @@ func NewV1(file string, cache int, handles int, namespace string, readonly bool)
 	opt.Experimental.L0CompactionConcurrency = 1
 	opt.Experimental.CompactionDebtConcurrency = 1 << 28 // 256MB
 
+	// Adaptive compaction scales the workers based on the load instead of always using all CPUs
+	// L0CompactionConcurrency compaction worker per overlapping sublevel
+	opt.Experimental.L0CompactionConcurrency = 1
+	// CompactionDebtConcurrency worker per 256 MB of compaction debt
+	opt.Experimental.CompactionDebtConcurrency = 1 << 28
+
 	// Open the db and recover any potential corruptions
 	innerDB, err := pebble.Open(file, opt)
 	if err != nil {
 		return nil, err
 	}
+
 	db.db = innerDB
 
 	db.compTimeMeter = metrics.GetOrRegisterMeter(namespace+"compact/time", nil)
@@ -316,6 +391,32 @@ func NewV1(file string, cache int, handles int, namespace string, readonly bool)
 	db.liveCompSizeGauge = metrics.GetOrRegisterGauge(namespace+"compact/live/size", nil)
 	db.liveIterGauge = metrics.GetOrRegisterGauge(namespace+"iter/count", nil)
 
+	// Register read and write amplification metrics
+	db.readAmpGauge = metrics.GetOrRegisterGaugeFloat64(namespace+"readamp", nil)
+	db.totalWriteAmpGauge = metrics.GetOrRegisterGaugeFloat64(namespace+"writeamp/total", nil)
+
+	// Register detailed I/O tracking metrics
+	db.walBytesWrittenMeter = metrics.GetOrRegisterMeter(namespace+"wal/bytes", nil)
+	db.walFileCountGauge = metrics.GetOrRegisterGauge(namespace+"wal/files", nil)
+	db.sstBytesReadMeter = metrics.GetOrRegisterMeter(namespace+"sst/read", nil)
+	db.sstBytesWrittenMeter = metrics.GetOrRegisterMeter(namespace+"sst/written", nil)
+	db.flushBytesWrittenMeter = metrics.GetOrRegisterMeter(namespace+"flush/bytes", nil)
+
+	// WAL size metrics
+	db.walSizeGauge = metrics.GetOrRegisterGauge(namespace+"wal/size", nil)
+	db.walPhysicalSizeGauge = metrics.GetOrRegisterGauge(namespace+"wal/physicalsize", nil)
+	db.walObsoleteSizeGauge = metrics.GetOrRegisterGauge(namespace+"wal/obsoletesize", nil)
+
+	// Snapshot metrics
+	db.snapshotCountGauge = metrics.GetOrRegisterGauge(namespace+"snapshots/count", nil)
+
+	// Calculated amplification metrics
+	db.calcWriteAmpGauge = metrics.GetOrRegisterGaugeFloat64(namespace+"amplification/write/calculated", nil)
+	db.calcReadAmpGauge = metrics.GetOrRegisterGaugeFloat64(namespace+"amplification/read/calculated", nil)
+	db.calcSpaceAmpGauge = metrics.GetOrRegisterGaugeFloat64(namespace+"amplification/space/calculated", nil)
+	db.walWriteAmpGauge = metrics.GetOrRegisterGaugeFloat64(namespace+"amplification/wal", nil)
+	db.actualDataSizeGauge = metrics.GetOrRegisterGauge(namespace+"disk/actualsize", nil)
+
 	// Start up the metrics gathering and return
 	go db.meter(metricsGatheringInterval, namespace)
 	return db, nil
@@ -334,11 +435,14 @@ func (d *V1Database) Close() error {
 	if d.quitChan != nil {
 		errc := make(chan error)
 		d.quitChan <- errc
+
 		if err := <-errc; err != nil {
 			d.log.Error("Metrics collection failed", "err", err)
 		}
+
 		d.quitChan = nil
 	}
+
 	return d.db.Close()
 }
 
@@ -372,6 +476,7 @@ func (d *V1Database) Get(key []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	ret := make([]byte, len(dat))
 	copy(ret, dat)
 	if err = closer.Close(); err != nil {
@@ -460,6 +565,7 @@ func (d *V1Database) Compact(start []byte, limit []byte) error {
 	if limit == nil {
 		limit = ethdb.MaximumKey
 	}
+
 	return d.db.Compact(start, limit, true) // Parallelization is preferred
 }
 
@@ -496,7 +602,9 @@ func (d *V1Database) NewIterator(prefix []byte, start []byte) ethdb.Iterator {
 // the metrics subsystem.
 func (d *V1Database) meter(refresh time.Duration, namespace string) {
 	var errc chan error
+
 	timer := time.NewTimer(refresh)
+
 	defer timer.Stop()
 
 	// Create storage and warning log tracer for write delay.
@@ -505,7 +613,9 @@ func (d *V1Database) meter(refresh time.Duration, namespace string) {
 		compWrites [2]int64
 		compReads  [2]int64
 
-		nWrites [2]int64
+		nWrites    [2]int64
+		flushBytes [2]int64 // Add tracking for flush bytes
+		walWrites  [2]int64 // Track WAL writes separately
 
 		writeDelayTimes      [2]int64
 		writeDelayCounts     [2]int64
@@ -526,22 +636,40 @@ func (d *V1Database) meter(refresh time.Duration, namespace string) {
 			nonLevel0CompCount = int64(d.nonLevel0Comp.Load())
 			level0CompCount    = int64(d.level0Comp.Load())
 		)
+
 		writeDelayTimes[i%2] = writeDelayTime
 		writeDelayCounts[i%2] = writeDelayCount
 		compTimes[i%2] = compTime
 
+		var totalFlushBytes int64
 		for _, levelMetrics := range stats.Levels {
-			nWrite += int64(levelMetrics.BytesCompacted)
-			nWrite += int64(levelMetrics.BytesFlushed)
+			// Don't add to nWrite yet - we'll calculate physical writes separately
 			compWrite += int64(levelMetrics.BytesCompacted)
 			compRead += int64(levelMetrics.BytesRead)
+			totalFlushBytes += int64(levelMetrics.BytesFlushed)
 		}
 
-		nWrite += int64(stats.WAL.BytesWritten)
+		// Track both logical and physical WAL metrics
+		walLogicalWrites := int64(stats.WAL.BytesWritten)
+		walPhysicalSize := int64(stats.WAL.PhysicalSize)
+
+		// Calculate physical writes including WAL overhead
+		// For nWrite, we need to account for physical WAL overhead
+		// Use the ratio of physical/logical for current WAL as a multiplier
+		walOverheadRatio := 1.0
+		if stats.WAL.BytesWritten > 0 {
+			walOverheadRatio = float64(walPhysicalSize) / float64(stats.WAL.BytesWritten)
+		}
+
+		// Estimate physical writes as: SST writes + (logical WAL * overhead ratio)
+		// This gives us a better approximation of actual disk I/O
+		nWrite = compWrite + totalFlushBytes + int64(float64(walLogicalWrites)*walOverheadRatio)
 
 		compWrites[i%2] = compWrite
 		compReads[i%2] = compRead
 		nWrites[i%2] = nWrite
+		walWrites[i%2] = walLogicalWrites
+		flushBytes[i%2] = totalFlushBytes
 
 		d.writeDelayNMeter.Mark(writeDelayCounts[i%2] - writeDelayCounts[(i-1)%2])
 		d.writeDelayMeter.Mark(writeDelayTimes[i%2] - writeDelayTimes[(i-1)%2])
@@ -580,21 +708,92 @@ func (d *V1Database) meter(refresh time.Duration, namespace string) {
 		d.filterHitGauge.Update(stats.Filter.Hits)
 		d.filterMissGauge.Update(stats.Filter.Misses)
 
+		// Update read amplification metric
+		// ReadAmp returns the current read amplification of the database
+		d.readAmpGauge.Update(float64(stats.ReadAmp()))
+
+		// Track detailed I/O metrics
+		var (
+			totalSSTBytesRead    int64
+			totalSSTBytesWritten int64
+		)
+
+		// Calculate and update write amplification metrics per level
 		for i, level := range stats.Levels {
 			// Append metrics for additional layers
 			if i >= len(d.levelsGauge) {
 				d.levelsGauge = append(d.levelsGauge, metrics.GetOrRegisterGauge(namespace+fmt.Sprintf("tables/level%v", i), nil))
+				d.levelWriteAmpGauge = append(d.levelWriteAmpGauge, metrics.GetOrRegisterGaugeFloat64(namespace+fmt.Sprintf("writeamp/level%v", i), nil))
+				d.levelSizeGauge = append(d.levelSizeGauge, metrics.GetOrRegisterGauge(namespace+fmt.Sprintf("size/level%v", i), nil))
+				d.levelScoreGauge = append(d.levelScoreGauge, metrics.GetOrRegisterGauge(namespace+fmt.Sprintf("score/level%v", i), nil))
+				d.keysCountGauge = append(d.keysCountGauge, metrics.GetOrRegisterGauge(namespace+fmt.Sprintf("keys/level%v", i), nil))
 			}
 			d.levelsGauge[i].Update(level.NumFiles)
+
+			// Update write amplification for this level
+			writeAmp := level.WriteAmp()
+			d.levelWriteAmpGauge[i].Update(writeAmp)
+
+			// Update level size
+			d.levelSizeGauge[i].Update(level.Size)
+
+			// Update compaction score (>1.0 means level needs compaction)
+			d.levelScoreGauge[i].Update(int64(level.Score * 1000)) // Multiply by 1000 for precision
+
+			// Update keys count per level
+			d.keysCountGauge[i].Update(level.NumFiles) // Approximate by file count
+
+			// Accumulate I/O stats (these are cumulative from Pebble)
+			totalSSTBytesRead += int64(level.BytesRead)
+			totalSSTBytesWritten += int64(level.BytesCompacted)
 		}
+		// Update I/O meters (mark only the delta since last measurement)
+		if i > 1 {
+			deltaRead := totalSSTBytesRead - compReads[(i-1)%2]
+			deltaWrite := totalSSTBytesWritten - compWrites[(i-1)%2]
+			deltaWAL := walWrites[i%2] - walWrites[(i-1)%2]
+			deltaFlush := flushBytes[i%2] - flushBytes[(i-1)%2]
+
+			// Only mark positive deltas to avoid negative values
+			if deltaRead > 0 {
+				d.sstBytesReadMeter.Mark(deltaRead)
+			}
+			if deltaWrite > 0 {
+				d.sstBytesWrittenMeter.Mark(deltaWrite)
+			}
+			// Track WAL logical writes (the actual application data)
+			if deltaWAL > 0 {
+				d.walBytesWrittenMeter.Mark(deltaWAL)
+			}
+			if deltaFlush > 0 {
+				d.flushBytesWrittenMeter.Mark(deltaFlush)
+			}
+		}
+
+		// Calculate total write amplification using Pebble's built-in method
+		totalMetrics := stats.Total()
+		totalWriteAmp := totalMetrics.WriteAmp()
+		d.totalWriteAmpGauge.Update(totalWriteAmp)
+
+		// Update WAL metrics
+		d.walFileCountGauge.Update(stats.WAL.Files)
+		d.walSizeGauge.Update(int64(stats.WAL.Size))
+		d.walPhysicalSizeGauge.Update(int64(stats.WAL.PhysicalSize))
+		d.walObsoleteSizeGauge.Update(int64(stats.WAL.ObsoletePhysicalSize))
+
+		// Update snapshot count
+		d.snapshotCountGauge.Update(int64(stats.Snapshots.Count))
+
+		// Calculate and update custom amplification metrics
+		d.updateCalculatedAmplifications(stats)
 
 		// Sleep a bit, then repeat the stats collection
 		select {
 		case errc = <-d.quitChan:
 			// Quit requesting, stop hammering the database
 		case <-timer.C:
-			timer.Reset(refresh)
 			// Timeout, gather a new set of stats
+			timer.Reset(refresh)
 		}
 	}
 	errc <- nil
@@ -614,6 +813,7 @@ func (b *v1batch) Put(key, value []byte) error {
 		return err
 	}
 	b.size += len(key) + len(value)
+
 	return nil
 }
 
@@ -623,6 +823,7 @@ func (b *v1batch) Delete(key []byte) error {
 		return err
 	}
 	b.size += len(key)
+
 	return nil
 }
 
@@ -667,6 +868,7 @@ func (b *v1batch) Reset() {
 // Replay replays the batch contents.
 func (b *v1batch) Replay(w ethdb.KeyValueWriter) error {
 	reader := b.b.Reader()
+
 	for {
 		kind, k, v, ok, err := reader.Next()
 		if !ok || err != nil {
@@ -720,6 +922,7 @@ func (iter *v1pebbleIterator) Next() bool {
 		iter.moved = false
 		return iter.iter.Valid()
 	}
+
 	return iter.iter.Next()
 }
 
@@ -750,4 +953,102 @@ func (iter *v1pebbleIterator) Release() {
 		iter.iter.Close()
 		iter.released = true
 	}
+}
+
+// updateCalculatedAmplifications calculates and updates custom amplification metrics
+func (d *V1Database) updateCalculatedAmplifications(stats *pebble.Metrics) {
+	// Calculate Write Amplification for the database
+	calcWriteAmp := d.calculateDatabaseWriteAmp(stats)
+	if calcWriteAmp >= 0 {
+		d.calcWriteAmpGauge.Update(calcWriteAmp)
+	}
+
+	// Calculate WAL Write Amplification
+	walWriteAmp := d.calculateWALWriteAmp(stats)
+	if walWriteAmp >= 0 {
+		d.walWriteAmpGauge.Update(walWriteAmp)
+	}
+
+	// Calculate Read Amplification (same as Pebble's built-in metric)
+	// This represents how many levels/sublevels need to be checked for a read
+	readAmp := float64(stats.ReadAmp())
+	d.calcReadAmpGauge.Update(readAmp)
+
+	// Calculate Space Amplification: Total disk space / Actual user data size
+	// This represents how much extra space is used compared to the logical data size
+	diskSpaceUsed := int64(stats.DiskSpaceUsage())
+
+	// Calculate actual user data size (sum of all live SST file sizes)
+	// This excludes obsolete files, WAL files, and internal metadata
+	// level.Size is the CURRENT live size, which already accounts for deleted files
+	var actualDataSize int64
+	for _, level := range stats.Levels {
+		actualDataSize += level.Size
+	}
+
+	d.actualDataSizeGauge.Update(actualDataSize)
+
+	if actualDataSize > 0 {
+		// Space Amp = Total disk usage / Live data size
+		// A value of 1.0 means no amplification (ideal)
+		// A value of 2.0 means using 2x the space of actual data
+		spaceAmp := float64(diskSpaceUsed) / float64(actualDataSize)
+		d.calcSpaceAmpGauge.Update(spaceAmp)
+	}
+}
+
+// calculateDatabaseWriteAmp calculates the write amplification for database writes.
+func (d *V1Database) calculateDatabaseWriteAmp(stats *pebble.Metrics) float64 {
+	var totalBytesIn uint64
+	for _, level := range stats.Levels {
+		totalBytesIn += level.BytesIn
+	}
+
+	if totalBytesIn == 0 {
+		return -1
+	}
+
+	// Calculate SST writes (cumulative)
+	var totalSSTWrites uint64
+	for _, level := range stats.Levels {
+		totalSSTWrites += level.BytesFlushed + level.BytesCompacted
+	}
+
+	// WAL.BytesWritten is the cumulative physical bytes written to .log files
+	// This already includes:
+	// - Record headers and checksums
+	// - Batching overhead
+	// - fsync/sync overhead
+	//
+	// But it does NOT include:
+	// - Block alignment padding
+	// - Pre-allocated space
+	// - Recycled file space
+	//
+	// The ratio BytesWritten/BytesIn gives us the WAL encoding overhead
+	walBytesWritten := stats.WAL.BytesWritten
+
+	// Calculate total physical writes
+	totalPhysicalWrites := walBytesWritten + totalSSTWrites
+
+	// Write Amplification = Total physical writes / Logical user input
+	writeAmp := float64(totalPhysicalWrites) / float64(totalBytesIn)
+
+	return writeAmp
+}
+
+// calculateWALWriteAmp calculates WAL-specific write amplification
+func (d *V1Database) calculateWALWriteAmp(stats *pebble.Metrics) float64 {
+	if stats.WAL.BytesIn == 0 {
+		return -1
+	}
+
+	// WAL write amplification = Physical writes / Logical application writes
+	// This captures the overhead from:
+	// - WAL record format (headers, checksums)
+	// - Batching (multiple logical writes in one physical write)
+	// - Sync overhead
+	walWriteAmp := float64(stats.WAL.BytesWritten) / float64(stats.WAL.BytesIn)
+
+	return walWriteAmp
 }

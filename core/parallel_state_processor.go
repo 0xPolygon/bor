@@ -1180,7 +1180,7 @@ func (p *V2StateProcessor) finalizeV2Block(block *types.Block, statedb *state.St
 	// Prefetch storage tries for accounts dirtied by engine.Finalize
 	// (state sync contract, validator rewards) so IntermediateRoot
 	// doesn't need to load them from pebble synchronously.
-	statedb.FinaliseFastWithPrefetch(true)
+	statedb.FinaliseFastWithPrefetch(true, config.IsAmsterdam(header.Number))
 
 	// V2 worker reads went through pool copies that share `statedb`'s reader
 	// by reference, so the trie tracers on that reader hold every node V2

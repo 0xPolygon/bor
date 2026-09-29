@@ -439,10 +439,15 @@ if err != nil {
 	e.buf.WriteString(`%w: %v`)
 	e.p("\", ErrOutOfGas, err)\n")
 	e.p(`}
-if contract.Gas.ExecutionGas < dynamicCost.ExecutionGas {
+// Charge exactly as Run does: execution-only when there is no EIP-8037
+// state cost (always, pre-Amsterdam), otherwise both dimensions at once.
+if dynamicCost.StateGas == 0 {
+if !contract.Gas.ChargeExecutionOnly(dynamicCost.ExecutionGas) {
 return nil, ErrOutOfGas
 }
-contract.Gas.ExecutionGas -= dynamicCost.ExecutionGas
+} else if !contract.Gas.charge(dynamicCost) {
+return nil, ErrOutOfGas
+}
 if memorySize > 0 {
 mem.Resize(memorySize)
 }
