@@ -4,8 +4,6 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/holiman/uint256"
-
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/lru"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
@@ -40,24 +38,27 @@ type strandedKey struct {
 	nonce uint64
 }
 
-// newStrandedState sizes the evicted-tx memory to the pool capacity, so a
-// full pool's worth of evicted txs is kept for the whole lifetime. The LRU
-// allocates per entry, so an unused capacity costs nothing.
+// strandedRefuseFactor is how many stranded lifetimes an evicted transaction
+// stays refused while it is still unminable. Peers that never evict keep
+// re-offering stranded chains, and a longer window keeps them out of pending
+// for a larger share of the time.
+const strandedRefuseFactor = 2
+
+// newStrandedState sizes the evicted-tx memory to one full pool per stranded
+// lifetime of the refusal window, so entries are not dropped before the window
+// ends. The LRU allocates per entry, so an unused capacity costs nothing.
 func newStrandedState(config Config) strandedState {
 	return strandedState{
 		heads:   make(map[common.Address]strandedHead),
-		evicted: lru.NewBasicLRU[strandedKey, time.Time](int(config.GlobalSlots + config.GlobalQueue)),
+		evicted: lru.NewBasicLRU[strandedKey, time.Time](strandedRefuseFactor * int(config.GlobalSlots+config.GlobalQueue)),
 	}
 }
 
-// unminable reports whether a block producer would not include tx at the given
-// base fee: its fee cap is below the base fee, or its effective tip is below
-// the minimum tip producers enforce.
-func unminable(tx *types.Transaction, baseFee *big.Int, minTip *uint256.Int) bool {
-	if tx.GasFeeCap().Cmp(baseFee) < 0 {
-		return true
-	}
-	return tx.EffectiveGasTipIntCmp(minTip, uint256.MustFromBig(baseFee)) < 0
+// unminable reports whether no block producer can include tx at the given
+// base fee because its fee cap is below it. The tip is not checked: producers
+// filter on their own miner.gasprice, which the pool does not know.
+func unminable(tx *types.Transaction, baseFee *big.Int) bool {
+	return tx.GasFeeCap().Cmp(baseFee) < 0
 }
 
 // strandedBaseFee returns the base fee of the next block, the same one the
@@ -71,23 +72,22 @@ func (pool *LegacyPool) strandedBaseFee() *big.Int {
 }
 
 // evictStranded drops the whole pending chain of every account whose head has
-// been unminable for longer than the pool lifetime.
+// been unminable for longer than the stranded lifetime.
 //
 // Must be called with pool.mu held.
 func (pool *LegacyPool) evictStranded(now time.Time) {
 	baseFee := pool.strandedBaseFee()
-	if baseFee == nil {
+	if baseFee == nil || pool.config.StrandedLifetime == 0 {
 		clear(pool.stranded.heads)
 		return
 	}
-	minTip := pool.gasTip.Load()
 
 	for addr, list := range pool.pending {
-		if !pool.strandedExpired(addr, list, baseFee, minTip, now) {
+		if !pool.strandedExpired(addr, list, baseFee, now) {
 			continue
 		}
 		for _, tx := range list.txs.flatten() {
-			if unminable(tx, baseFee, minTip) {
+			if unminable(tx, baseFee) {
 				pool.stranded.evicted.Add(strandedKey{addr, tx.Nonce()}, now)
 			}
 		}
@@ -101,12 +101,12 @@ func (pool *LegacyPool) evictStranded(now time.Time) {
 }
 
 // strandedExpired updates the stranded clock of addr and reports whether its
-// head has been unminable for longer than the pool lifetime.
+// head has been unminable for longer than the stranded lifetime.
 //
 // Must be called with pool.mu held.
-func (pool *LegacyPool) strandedExpired(addr common.Address, list *list, baseFee *big.Int, minTip *uint256.Int, now time.Time) bool {
+func (pool *LegacyPool) strandedExpired(addr common.Address, list *list, baseFee *big.Int, now time.Time) bool {
 	first := list.txs.firstElement()
-	if first == nil || !unminable(first, baseFee, minTip) {
+	if first == nil || !unminable(first, baseFee) {
 		delete(pool.stranded.heads, addr)
 		return false
 	}
@@ -115,7 +115,7 @@ func (pool *LegacyPool) strandedExpired(addr common.Address, list *list, baseFee
 		pool.stranded.heads[addr] = strandedHead{nonce: first.Nonce(), since: now}
 		return false
 	}
-	return now.Sub(stranded.since) > pool.config.Lifetime
+	return now.Sub(stranded.since) > pool.config.StrandedLifetime
 }
 
 // dropPendingAccount removes every pending transaction of addr in one pass.
@@ -143,17 +143,17 @@ func (pool *LegacyPool) dropPendingAccount(addr common.Address, list *list) {
 }
 
 // isEvictedStranded reports whether a transaction from the same sender and
-// nonce was evicted as stranded within the lifetime and tx is still unminable,
-// so it is refused as underpriced.
+// nonce was evicted as stranded within the refusal window and tx is still
+// unminable, so it is refused as underpriced.
 //
 // Must be called with pool.mu held.
 func (pool *LegacyPool) isEvictedStranded(from common.Address, tx *types.Transaction) bool {
 	evictedAt, ok := pool.stranded.evicted.Peek(strandedKey{from, tx.Nonce()})
-	if !ok || time.Since(evictedAt) > pool.config.Lifetime {
+	if !ok || time.Since(evictedAt) > strandedRefuseFactor*pool.config.StrandedLifetime {
 		return false
 	}
 	baseFee := pool.strandedBaseFee()
-	if baseFee == nil || !unminable(tx, baseFee, pool.gasTip.Load()) {
+	if baseFee == nil || !unminable(tx, baseFee) {
 		return false
 	}
 	strandedRejectMeter.Mark(1)
