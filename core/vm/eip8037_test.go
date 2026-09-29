@@ -44,6 +44,9 @@ var (
 // amsterdam8037Config clones MergedTestChainConfig with Amsterdam (EIP-8037) live.
 func amsterdam8037Config() *params.ChainConfig {
 	cfg := *params.MergedTestChainConfig
+	// Without bor forks, so Amsterdam's instruction set is selected rather than
+	// shadowed by Chicago's (POS-3738).
+	cfg.Bor = nil
 	cfg.AmsterdamBlock = new(big.Int)
 	return &cfg
 }
@@ -122,7 +125,6 @@ func setSlot(slot, val byte) func(*state.StateDB, common.Address) {
 
 // 0 -> 0 -> x: brand-new slot is charged one storage-creation.
 func TestSStoreNewSlot(t *testing.T) {
-	t.Skip("bor: Chicago's instruction set takes precedence over Amsterdam's, so EIP-8037 opcode charges are not active on a config with bor forks (POS-3738)")
 	_, res, err := run8037(t, sstore(0, 1), hugeBudget(), new(uint256.Int), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -181,7 +183,6 @@ func TestSStoreOtherWrite(t *testing.T) {
 // New-slot charge is metered at the opcode: with a reservoir smaller than the
 // charge it spills into regular gas exactly at the SSTORE.
 func TestSStoreChargedAtOpcodeEnd(t *testing.T) {
-	t.Skip("bor: Chicago's instruction set takes precedence over Amsterdam's, so EIP-8037 opcode charges are not active on a config with bor forks (POS-3738)")
 	_, res, err := run8037(t, sstore(0, 1), NewGasBudget(1_000_000, 100), new(uint256.Int), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -196,7 +197,6 @@ func TestSStoreChargedAtOpcodeEnd(t *testing.T) {
 // sentry (2300) for a 2306 budget. Under EIP-8038 the cold-slot access that
 // follows a cleared sentry costs COLD_STORAGE_ACCESS (3000).
 func TestSStoreStipendExcludesReservoir(t *testing.T) {
-	t.Skip("bor: Chicago's instruction set takes precedence over Amsterdam's, so EIP-8037 opcode charges are not active on a config with bor forks (POS-3738)")
 	// regular at the sentry, huge reservoir: must still fail, proving the
 	// reservoir does not count toward the sentry.
 	if _, _, err := run8037(t, sstore(0, 1), NewGasBudget(2306, math.MaxUint64/2), new(uint256.Int), setSlot(0, 1)); err == nil {
@@ -265,7 +265,6 @@ func fund(addr common.Address, wei int64) func(*state.StateDB, common.Address) {
 
 // CALL with value to a non-existent account charges one account creation.
 func TestCallValueToNewAccount(t *testing.T) {
-	t.Skip("bor: Chicago's instruction set takes precedence over Amsterdam's, so EIP-8037 opcode charges are not active on a config with bor forks (POS-3738)")
 	_, res, err := run8037(t, callCode(freshAddr, 1, stop), hugeBudget(), new(uint256.Int), fund(common.BytesToAddress([]byte("self")), 10))
 	if err != nil {
 		t.Fatal(err)
@@ -304,7 +303,6 @@ func TestCallZeroValueToNewAccount(t *testing.T) {
 
 // CALL that fails before the child frame (insufficient balance) refills the charge.
 func TestCallInsufficientBalanceRefill(t *testing.T) {
-	t.Skip("bor: Chicago's instruction set takes precedence over Amsterdam's, so EIP-8037 opcode charges are not active on a config with bor forks (POS-3738)")
 	// self has no balance, so the value transfer fails the CanTransfer check.
 	_, res, err := run8037(t, callCode(freshAddr, 1, stop), hugeBudget(), new(uint256.Int), nil)
 	if err != nil {
@@ -463,7 +461,6 @@ func TestCreateCodeDepositChargedSeparately(t *testing.T) {
 
 // selfdestruct sending balance to a non-existent beneficiary creates it.
 func TestSelfdestructCreatesNewAccount(t *testing.T) {
-	t.Skip("bor: Chicago's instruction set takes precedence over Amsterdam's, so EIP-8037 opcode charges are not active on a config with bor forks (POS-3738)")
 	code := append([]byte{0x73}, freshAddr.Bytes()...) // PUSH20 beneficiary
 	code = append(code, 0xff)                          // SELFDESTRUCT
 	_, res, err := run8037(t, code, hugeBudget(), new(uint256.Int), fund(common.BytesToAddress([]byte("self")), 10))
@@ -529,7 +526,6 @@ func TestSelfdestructPreexistingNoRefill(t *testing.T) {
 // State-gas is drawn from the reservoir first: a charge within reservoir size
 // does not spill into regular gas.
 func TestReservoirDrawnFirst(t *testing.T) {
-	t.Skip("bor: Chicago's instruction set takes precedence over Amsterdam's, so EIP-8037 opcode charges are not active on a config with bor forks (POS-3738)")
 	_, res, err := run8037(t, sstore(0, 1), NewGasBudget(1_000_000, 200_000), new(uint256.Int), nil)
 	if err != nil {
 		t.Fatal(err)
