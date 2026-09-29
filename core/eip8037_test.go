@@ -41,6 +41,9 @@ import (
 // Amsterdam active from genesis. Bor schedules Amsterdam by block number.
 func amsterdamTestChainConfig() *params.ChainConfig {
 	cfg := *params.MergedTestChainConfig
+	// Without bor forks, so Amsterdam's instruction set is selected rather than
+	// shadowed by Chicago's (POS-3738).
+	cfg.Bor = nil
 	cfg.AmsterdamBlock = new(big.Int)
 	return &cfg
 }
@@ -326,7 +329,6 @@ func TestCreateTxCollisionConsumesGasLeft(t *testing.T) {
 // e.g. after being touched as the zero-balance beneficiary of a SELFDESTRUCT.
 // Deploying onto such an account should charge account-creation cost.
 func TestCreate2TransientEmptyDestNoRefill(t *testing.T) {
-	t.Skip("bor: Chicago's instruction set takes precedence over Amsterdam's, so EIP-8037 opcode charges are not active on a config with bor forks (POS-3738)")
 	var (
 		orchestrator = common.HexToAddress("0xc0de000000000000000000000000000000000002")
 		destructor   = common.HexToAddress("0xc0de000000000000000000000000000000000003")
@@ -419,7 +421,6 @@ func storageOnlyAlloc(orchestrator common.Address, initCode []byte) (types.Genes
 // Storage alone does not constitute an address collision, so the creation
 // proceeds and the charge is consumed like any other creation.
 func TestCreate2StorageOnlyDestCharged(t *testing.T) {
-	t.Skip("bor: Chicago's instruction set takes precedence over Amsterdam's, so EIP-8037 opcode charges are not active on a config with bor forks (POS-3738)")
 	orchestrator := common.HexToAddress("0xc0de000000000000000000000000000000000004")
 	alloc, target := storageOnlyAlloc(orchestrator, deploy3)
 	sdb := mkCommittedState(t, senderAlloc(alloc))
@@ -753,7 +754,6 @@ func TestBlockValidityAgainstMax(t *testing.T) {
 // The block header gas_used reflects the bottleneck dimension (here, state),
 // which the base-fee update then equilibrates against.
 func TestBlockBaseFeeUsesMax(t *testing.T) {
-	t.Skip("bor: Chicago's instruction set takes precedence over Amsterdam's, so EIP-8037 opcode charges are not active on a config with bor forks (POS-3738)")
 	c := common.HexToAddress("0x5707e5")
 	var code []byte
 	for s := 1; s <= 5; s++ {
