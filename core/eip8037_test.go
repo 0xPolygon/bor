@@ -41,6 +41,9 @@ import (
 // Amsterdam active from genesis. Bor schedules Amsterdam by block number.
 func amsterdamTestChainConfig() *params.ChainConfig {
 	cfg := *params.MergedTestChainConfig
+	// Without bor forks, so Amsterdam's instruction set is selected rather than
+	// shadowed by Chicago's (POS-3738).
+	cfg.Bor = nil
 	cfg.AmsterdamBlock = new(big.Int)
 	return &cfg
 }
@@ -623,7 +626,8 @@ func TestValidationFloorCostCap(t *testing.T) {
 	// All-zero calldata: the floor charges 64/byte while the intrinsic
 	// charges only 4/byte, so the floor crosses the cap long before the
 	// intrinsic does.
-	data := make([]byte, 300_000) // floor ~19.2M > 16.77M cap, intrinsic ~1.2M
+	// Upstream uses 300,000 bytes against its 2^24 MaxTxGas; bor's cap is 2^25.
+	data := make([]byte, 600_000) // floor ~38.4M > 33.55M cap, intrinsic ~2.4M
 	floor, err := FloorDataGas(rules8037, senderAddr, &senderAddr, new(uint256.Int), data, nil)
 	if err != nil {
 		t.Fatal(err)
