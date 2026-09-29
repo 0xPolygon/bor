@@ -69,6 +69,11 @@ var (
 	headFinalizedBlockGauge = metrics.NewRegisteredGauge("chain/head/finalized", nil)
 	headSafeBlockGauge      = metrics.NewRegisteredGauge("chain/head/safe", nil)
 
+	// Metrics for the ancient store writes performed during snap sync.
+	ancientWriteTimer = metrics.NewRegisteredTimer("chain/ancient/write", nil)
+	ancientSyncTimer  = metrics.NewRegisteredTimer("chain/ancient/sync", nil)
+	ancientBytesMeter = metrics.NewRegisteredMeter("chain/ancient/bytes", nil)
+
 	chainInfoGauge   = metrics.NewRegisteredGaugeInfo("chain/info", nil)
 	chainMgaspsMeter = metrics.NewRegisteredResettingTimer("chain/mgasps", nil)
 
@@ -2664,6 +2669,7 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 		}
 
 		// Write all chain data to ancients.
+		start := time.Now()
 		td := bc.GetTd(first.Hash(), first.NumberU64())
 		writeSize, err := rawdb.WriteAncientBlocks(bc.db, blockChain, receiptChain, borReceipts, td)
 		if err != nil {
@@ -2671,6 +2677,8 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 			return 0, err
 		}
 		size += writeSize
+		ancientWriteTimer.UpdateSince(start)
+		ancientBytesMeter.Mark(writeSize)
 
 		// Write tx indices if any condition is satisfied:
 		// * If user requires to reserve all tx indices(txlookuplimit=0)
@@ -2716,9 +2724,11 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 		}
 
 		// Sync the ancient store explicitly to ensure all data has been flushed to disk.
+		start = time.Now()
 		if err := bc.db.SyncAncient(); err != nil {
 			return 0, err
 		}
+		ancientSyncTimer.UpdateSince(start)
 		// Update the current snap block because all block data is now present in DB.
 		previousSnapBlock := bc.CurrentSnapBlock().Number.Uint64()
 		if !updateHead(blockChain[len(blockChain)-1], headers) {

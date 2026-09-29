@@ -17,16 +17,17 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
 	"time"
 
-	"github.com/urfave/cli/v2"
-
 	"github.com/ethereum/go-ethereum/cmd/devp2p/internal/v5test"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/p2p/discover"
+	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/urfave/cli/v2"
 )
 
 var (
@@ -77,7 +78,9 @@ var (
 		Name:   "listen",
 		Usage:  "Runs a node",
 		Action: discv5Listen,
-		Flags:  discoveryNodeFlags,
+		Flags: slices.Concat(discoveryNodeFlags, []cli.Flag{
+			httpAddrFlag,
+		}),
 	}
 )
 
@@ -142,7 +145,8 @@ func discv5Listen(ctx *cli.Context) error {
 	defer disc.Close()
 
 	fmt.Println(disc.Self())
-	select {}
+
+	return runRPCServer(ctx.String(httpAddrFlag.Name), map[string]any{"discv5": &discv5API{disc}})
 }
 
 // startV5 starts an ephemeral discovery v5 node.
@@ -155,4 +159,23 @@ func startV5(ctx *cli.Context) (*discover.UDPv5, discover.Config) {
 		exit(err)
 	}
 	return disc, config
+}
+
+type discv5API struct {
+	host *discover.UDPv5
+}
+
+func (api *discv5API) LookupRandom(ctx context.Context, n int) []*enode.Node {
+	n = min(n, maxLookupResults)
+	it := api.host.RandomNodes()
+	defer it.Close()
+	go func() {
+		<-ctx.Done()
+		it.Close()
+	}()
+	return enode.ReadNodes(it, n)
+}
+
+func (api *discv5API) Self() *enode.Node {
+	return api.host.Self()
 }
