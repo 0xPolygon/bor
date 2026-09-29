@@ -1,7 +1,6 @@
 package state
 
 import (
-	"github.com/ethereum/go-ethereum/params"
 	"testing"
 
 	"github.com/holiman/uint256"
@@ -10,6 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/params"
 )
 
 // The tests in this file exercise pipelined-SRC-authored code paths in

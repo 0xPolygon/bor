@@ -307,7 +307,7 @@ func buildNextBlock(t *testing.T, _bor consensus.Engine, chain *core.BlockChain,
 	}
 
 	// Write state changes to db
-	root, err := state.Commit(block.NumberU64(), chain.Config().IsEIP158(b.header.Number), false)
+	root, err := state.Commit(params.Rules{IsEIP158: chain.Config().IsEIP158(b.header.Number)}, block.NumberU64())
 	if err != nil {
 		panic(fmt.Sprintf("state write error: %v", err))
 	}

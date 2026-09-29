@@ -276,12 +276,6 @@ type environment struct {
 	sidecars []*types.BlobTxSidecar
 	blobs    int
 
-	// revertedTxs and revertedIdx record transactions that were executed during
-	// block building but then reverted (excluded from the block), together with
-	// the index each was tried at.
-	revertedTxs []*types.Transaction
-	revertedIdx []uint32
-
 	witness *stateless.Witness
 
 	// Readers with stats tracking for metrics reporting

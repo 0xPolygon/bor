@@ -2,7 +2,6 @@ package state
 
 import (
 	"context"
-	"github.com/ethereum/go-ethereum/params"
 	"reflect"
 	"sync"
 	"testing"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/blockstm"
+	"github.com/ethereum/go-ethereum/params"
 )
 
 // ---------------------------------------------------------------------------

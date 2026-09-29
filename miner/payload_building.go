@@ -146,6 +146,7 @@ func (payload *Payload) update(r *newPayloadResult, elapsed time.Duration) {
 			"root", r.block.Root(),
 			"elapsed", common.PrettyDuration(elapsed),
 		)
+		log.Info("Updated payload", attrs...)
 	}
 
 	payload.cond.Broadcast() // fire signal for notifying full block

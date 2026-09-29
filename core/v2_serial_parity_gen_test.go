@@ -3,7 +3,6 @@ package core
 import (
 	"crypto/ecdsa"
 	"crypto/sha256"
-	"github.com/ethereum/go-ethereum/params"
 	"math/big"
 	"testing"
 
@@ -16,6 +15,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/core/vm/program"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/triedb"
 )
 
