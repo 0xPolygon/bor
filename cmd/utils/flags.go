@@ -266,12 +266,12 @@ var (
 	}
 	OverrideOsaka = &cli.Uint64Flag{
 		Name:     "override.osaka",
-		Usage:    "Manually specify the Osaka fork timestamp, overriding the bundled setting",
+		Usage:    "Manually specify the Osaka fork block, overriding the bundled setting",
 		Category: flags.EthCategory,
 	}
 	OverrideAmsterdam = &cli.Uint64Flag{
 		Name:     "override.amsterdam",
-		Usage:    "Manually specify the Amsterdam fork timestamp, overriding the bundled setting",
+		Usage:    "Manually specify the Amsterdam fork block, overriding the bundled setting",
 		Category: flags.EthCategory,
 	}
 	OverrideBPO1 = &cli.Uint64Flag{
