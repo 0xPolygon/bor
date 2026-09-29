@@ -19,6 +19,7 @@ package eth
 import (
 	"bytes"
 	"crypto/sha256"
+	"errors"
 	"math"
 	"math/big"
 	"math/rand"
@@ -46,6 +47,46 @@ import (
 
 	"github.com/holiman/uint256"
 )
+
+type singleMessageReader struct {
+	msg p2p.Msg
+}
+
+func (r *singleMessageReader) ReadMsg() (p2p.Msg, error) {
+	return r.msg, nil
+}
+
+func (*singleMessageReader) WriteMsg(p2p.Msg) error {
+	return errors.New("unexpected write")
+}
+
+func TestMessageSizeLimits(t *testing.T) {
+	tests := []struct {
+		name     string
+		code     uint64
+		size     uint32
+		tooLarge bool
+	}{
+		{"regular message at limit", BlockBodiesMsg, maxMessageSize, false},
+		{"regular message above limit", BlockBodiesMsg, maxMessageSize + 1, true},
+		{"receipt request above regular limit", GetReceiptsMsg, maxMessageSize + 1, true},
+		{"receipt response above regular limit", ReceiptsMsg, maxMessageSize + 1, false},
+		{"receipt response at RLPx limit", ReceiptsMsg, maxReceiptsMessageSize, false},
+		{"receipt response above RLPx limit", ReceiptsMsg, maxReceiptsMessageSize + 1, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			peer := &Peer{
+				rw:      &singleMessageReader{msg: p2p.Msg{Code: tt.code, Size: tt.size, Payload: bytes.NewReader(nil)}},
+				version: ETH69,
+			}
+			err := handleMessage(nil, peer)
+			if got := errors.Is(err, errMsgTooLarge); got != tt.tooLarge {
+				t.Fatalf("message size rejection = %v, want %v (error: %v)", got, tt.tooLarge, err)
+			}
+		})
+	}
+}
 
 var (
 	// testKey is a private key to use for funding a tester account.
