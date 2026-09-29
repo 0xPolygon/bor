@@ -439,10 +439,14 @@ if err != nil {
 	e.buf.WriteString(`%w: %v`)
 	e.p("\", ErrOutOfGas, err)\n")
 	e.p(`}
-if contract.Gas.RegularGas < dynamicCost.RegularGas {
+// EIP-8037: charge regular gas before state gas, as Run does. The state
+// charge is a no-op when dynamicCost.StateGas == 0 (e.g., pre-Amsterdam).
+if !contract.chargeRegular(dynamicCost.RegularGas, nil, tracing.GasChangeIgnored) {
 return nil, ErrOutOfGas
 }
-contract.Gas.RegularGas -= dynamicCost.RegularGas
+if !contract.chargeState(dynamicCost.StateGas, nil, tracing.GasChangeIgnored) {
+return nil, ErrOutOfGas
+}
 if memorySize > 0 {
 mem.Resize(memorySize)
 }
@@ -544,6 +548,7 @@ func (e *emitter) emitHeader() {
 	e.p("\t\"fmt\"\n")
 	e.p("\t\"sync/atomic\"\n\n")
 	e.p("\t\"github.com/ethereum/go-ethereum/common/math\"\n")
+	e.p("\t\"github.com/ethereum/go-ethereum/core/tracing\"\n")
 	e.p("\t\"github.com/ethereum/go-ethereum/params\"\n")
 	e.p("\t\"github.com/holiman/uint256\"\n")
 	e.p(")\n\n")

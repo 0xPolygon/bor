@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/common/math"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/holiman/uint256"
 )
@@ -772,10 +773,14 @@ func (evm *EVM) runSwitch(
 				if err != nil {
 					return nil, fmt.Errorf("%w: %v", ErrOutOfGas, err)
 				}
-				if contract.Gas.RegularGas < dynamicCost.RegularGas {
+				// EIP-8037: charge regular gas before state gas, as Run does. The state
+				// charge is a no-op when dynamicCost.StateGas == 0 (e.g., pre-Amsterdam).
+				if !contract.chargeRegular(dynamicCost.RegularGas, nil, tracing.GasChangeIgnored) {
 					return nil, ErrOutOfGas
 				}
-				contract.Gas.RegularGas -= dynamicCost.RegularGas
+				if !contract.chargeState(dynamicCost.StateGas, nil, tracing.GasChangeIgnored) {
+					return nil, ErrOutOfGas
+				}
 				if memorySize > 0 {
 					mem.Resize(memorySize)
 				}
