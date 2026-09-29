@@ -194,6 +194,7 @@ type Config struct {
 	GlobalQueue  uint64 // Maximum number of non-executable transaction slots for all accounts
 
 	Lifetime            time.Duration // Maximum amount of time non-executable transaction are queued
+	StrandedLifetime    time.Duration // Maximum amount of time a pending head can stay below the base fee (0 disables)
 	AllowUnprotectedTxs bool          // Allow non-EIP-155 transactions
 
 	// Transaction filtering configuration
@@ -220,6 +221,7 @@ var DefaultConfig = Config{
 	GlobalQueue:  1024,
 
 	Lifetime:            3 * time.Hour,
+	StrandedLifetime:    3 * time.Hour,
 	AllowUnprotectedTxs: false,
 
 	Rebroadcast:          true,
@@ -260,6 +262,10 @@ func (config *Config) sanitize() Config {
 	if conf.Lifetime < 1 {
 		log.Warn("Sanitizing invalid txpool lifetime", "provided", conf.Lifetime, "updated", DefaultConfig.Lifetime)
 		conf.Lifetime = DefaultConfig.Lifetime
+	}
+	if conf.StrandedLifetime < 0 {
+		log.Warn("Sanitizing invalid txpool stranded lifetime", "provided", conf.StrandedLifetime, "updated", DefaultConfig.StrandedLifetime)
+		conf.StrandedLifetime = DefaultConfig.StrandedLifetime
 	}
 	// Sanitize rebroadcast configuration
 	if conf.RebroadcastInterval < 1*time.Second {

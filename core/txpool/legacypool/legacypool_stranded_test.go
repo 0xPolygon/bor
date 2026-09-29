@@ -55,11 +55,11 @@ func setupStrandedPoolWithInterval(t *testing.T, interval time.Duration) *Legacy
 	t.Cleanup(func() { evictionInterval = oldInterval })
 
 	pool, _ := setupPoolWithConfig(eip1559Config, func(pool *LegacyPool) {
-		pool.config.Lifetime = strandedTestLifetime
+		pool.config.StrandedLifetime = strandedTestLifetime
 	})
 	t.Cleanup(func() { pool.Close() })
 
-	// Enforce the mainnet minimum tip that producers apply in Pending.
+	// Enforce the mainnet minimum tip for pool admission.
 	pool.gasTip.Store(uint256.NewInt(params.BorDefaultTxPoolPriceLimit))
 	setStrandedBaseFee(pool, strandedLowBaseFee)
 	return pool
@@ -274,10 +274,10 @@ func TestStrandedEvictedTxNotReaccepted(t *testing.T) {
 	}
 }
 
-// TestStrandedLowEffectiveTipEvicted covers a head whose fee cap covers the
-// base fee but leaves an effective tip below the pool minimum: producers skip
-// it in the same way, so the chain is stranded as well.
-func TestStrandedLowEffectiveTipEvicted(t *testing.T) {
+// TestStrandedLowEffectiveTipNotEvicted covers a head whose fee cap covers the
+// base fee but leaves an effective tip below the pool minimum. A producer with
+// a lower miner.gasprice can still include it, so the chain is kept.
+func TestStrandedLowEffectiveTipNotEvicted(t *testing.T) {
 	pool := setupStrandedPool(t)
 
 	key, addr := fundedKey(t, pool)
@@ -292,8 +292,9 @@ func TestStrandedLowEffectiveTipEvicted(t *testing.T) {
 	addHealthyTail(t, pool, key, 1, 20)
 	setStrandedBaseFee(pool, strandedHighBaseFee)
 
-	if pending, queued := waitForCounts(pool, addr, 0, 0, 4*strandedTestLifetime); pending != 0 || queued != 0 {
-		t.Fatalf("low effective tip chain not evicted: pending %d, queued %d", pending, queued)
+	time.Sleep(4 * strandedTestLifetime)
+	if pending, _ := accountCounts(pool, addr); pending != 20 {
+		t.Fatalf("low effective tip chain evicted: pending %d, want 20", pending)
 	}
 }
 
@@ -353,7 +354,7 @@ func TestStrandedClockRestartsAfterAccountLeaves(t *testing.T) {
 }
 
 // TestStrandedRejectionExpires checks that the evicted-tx memory only refuses
-// re-admission for one lifetime.
+// re-admission for the refusal window.
 func TestStrandedRejectionExpires(t *testing.T) {
 	pool := setupManualStrandedPool(t)
 	evictAt := strandedEvictor(pool)
@@ -364,13 +365,13 @@ func TestStrandedRejectionExpires(t *testing.T) {
 		t.Fatalf("failed to add head: %v", err)
 	}
 	setStrandedBaseFee(pool, strandedHighBaseFee)
-	t0 := time.Now().Add(-3 * strandedTestLifetime)
+	t0 := time.Now().Add(-(strandedRefuseFactor + 2) * strandedTestLifetime)
 	evictAt(t0)
 	evictAt(t0.Add(strandedTestLifetime + time.Millisecond))
 	if pending, _ := accountCounts(pool, addr); pending != 0 {
 		t.Fatalf("head not evicted: pending %d", pending)
 	}
-	// Evicted more than a lifetime ago: the memory has expired.
+	// Evicted more than the refusal window ago: the memory has expired.
 	if err := pool.addRemoteSync(head); err != nil {
 		t.Fatalf("re-adding head after the memory expired: %v", err)
 	}
@@ -454,35 +455,79 @@ func TestUnminable(t *testing.T) {
 		name   string
 		feeCap int64
 		tip    int64
-		minTip uint64
 		want   bool
 	}{
-		{"fee cap below base fee", 99, 30, 25, true},
-		{"fee cap equals base fee, no min tip", 100, 30, 0, false},
-		{"effective tip below min tip", 110, 30, 25, true},
-		{"effective tip at min tip", 125, 30, 25, false},
-		{"tip cap limits effective tip", 200, 20, 25, true},
+		{"fee cap below base fee", 99, 30, true},
+		{"fee cap equals base fee", 100, 30, false},
+		{"effective tip below pool minimum", 110, 30, false},
+		{"zero tip cap", 200, 0, false},
 	}
 	for _, tt := range tests {
 		tx := dynamicFeeTx(0, 21_000, big.NewInt(tt.feeCap*params.GWei), big.NewInt(tt.tip*params.GWei), key)
-		if got := unminable(tx, baseFee, uint256.NewInt(tt.minTip*params.GWei)); got != tt.want {
+		if got := unminable(tx, baseFee); got != tt.want {
 			t.Errorf("%s: unminable = %v, want %v", tt.name, got, tt.want)
 		}
 	}
 }
 
 // TestStrandedEvictedMemorySizedToPool checks that the evicted-tx memory can
-// hold as many entries as the pool has slots, so a broad eviction does not push
-// entries out before their lifetime ends.
+// hold one pool's worth of entries per lifetime of the refusal window, so a
+// broad eviction does not push entries out before the window ends.
 func TestStrandedEvictedMemorySizedToPool(t *testing.T) {
 	config := testTxPoolConfig
 	config.GlobalSlots, config.GlobalQueue = 96, 32
 	state := newStrandedState(config)
 
-	for i := range 200 {
+	for i := range 300 {
 		state.evicted.Add(strandedKey{nonce: uint64(i)}, time.Now())
 	}
-	if got := state.evicted.Len(); got != 128 {
-		t.Fatalf("evicted memory holds %d entries, want GlobalSlots+GlobalQueue = 128", got)
+	if got := state.evicted.Len(); got != 256 {
+		t.Fatalf("evicted memory holds %d entries, want 2*(GlobalSlots+GlobalQueue) = 256", got)
+	}
+}
+
+// TestStrandedRejectionLastsRefusalWindow checks that an evicted head is still
+// refused after one stranded lifetime, while inside the refusal window.
+func TestStrandedRejectionLastsRefusalWindow(t *testing.T) {
+	pool := setupManualStrandedPool(t)
+	evictAt := strandedEvictor(pool)
+
+	key, addr := fundedKey(t, pool)
+	head := dynamicFeeTx(0, 100_000, strandedHeadFeeCap, strandedTip, key)
+	if err := pool.addRemoteSync(head); err != nil {
+		t.Fatalf("failed to add head: %v", err)
+	}
+	setStrandedBaseFee(pool, strandedHighBaseFee)
+	// Evicted 1.5 lifetimes ago: past one lifetime, inside the 2x window.
+	t0 := time.Now().Add(-5 * strandedTestLifetime / 2)
+	evictAt(t0)
+	evictAt(t0.Add(strandedTestLifetime + time.Millisecond))
+	if pending, _ := accountCounts(pool, addr); pending != 0 {
+		t.Fatalf("head not evicted: pending %d", pending)
+	}
+	if err := pool.addRemoteSync(head); !errors.Is(err, txpool.ErrUnderpriced) {
+		t.Fatalf("re-adding head inside the refusal window: err = %v, want %v", err, txpool.ErrUnderpriced)
+	}
+}
+
+// TestStrandedDisabled checks that a zero stranded lifetime turns eviction off.
+func TestStrandedDisabled(t *testing.T) {
+	pool := setupManualStrandedPool(t)
+	pool.config.StrandedLifetime = 0
+	evictAt := strandedEvictor(pool)
+
+	key, addr := fundedKey(t, pool)
+	if err := pool.addRemoteSync(dynamicFeeTx(0, 100_000, strandedHeadFeeCap, strandedTip, key)); err != nil {
+		t.Fatalf("failed to add head: %v", err)
+	}
+	setStrandedBaseFee(pool, strandedHighBaseFee)
+	t0 := time.Now()
+	evictAt(t0)
+	evictAt(t0.Add(time.Hour))
+	if pending, _ := accountCounts(pool, addr); pending != 1 {
+		t.Fatalf("head evicted with stranded eviction disabled: pending %d, want 1", pending)
+	}
+	if n := len(pool.stranded.heads); n != 0 {
+		t.Fatalf("stranded heads tracked while disabled: %d", n)
 	}
 }
