@@ -1,0 +1,597 @@
+package sequencer
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
+
+	pb "github.com/0xPolygon/sequence-store-proto/sequencestore/v1"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/event"
+	"github.com/ethereum/go-ethereum/log"
+)
+
+const consumerRetryDelay = 2 * time.Second
+
+const recentPreconfTransactionLimit = 65_536
+
+type TransactionLookup interface {
+	Get(common.Hash) *types.Transaction
+}
+
+// Consumer follows the sequence store stream on an RPC node, re-executes it
+// from canonical or parked speculative state, and fills the preconf receipt
+// Index exposed through the explicit Bor preconfirmation receipt endpoint.
+//
+// Position and application are handled separately, per the design's
+// chain-everything-apply-selectively rule: only commitment gaps and transport
+// errors abandon the stream position (warm resume by running head, falling
+// back to a cold block anchor, falling back to the earliest retained entry);
+// application problems — unknown parents, unavailable state, execution or
+// seal divergence — void the speculative work and skip forward until an open
+// record re-anchors on a canonical block.
+type Consumer struct {
+	chain        *core.BlockChain
+	endpoint     string
+	txLookup     TransactionLookup
+	index        *Index
+	publishMu    sync.Mutex
+	storeMu      sync.Mutex
+	store        *PendingStore
+	logsFeed     event.Feed
+	logsScope    event.SubscriptionScope
+	receiptFeed  event.Feed
+	receiptScope event.SubscriptionScope
+	recentMu     sync.Mutex
+	recentTxs    map[common.Hash]*types.Transaction
+	recentOrder  []common.Hash
+	logsMu       sync.Mutex
+	logsQueue    [][]*types.Log
+	logsBusy     bool
+	logsClosed   bool
+	logsWG       sync.WaitGroup
+	worker       atomic.Pointer[preconfWorker]
+	reconciled   atomic.Pointer[types.Header]
+	handoff      atomic.Pointer[types.Header]
+	sealVerify   atomic.Bool
+
+	// watching reports whether a stream session has reached the store tip.
+	// Only then does a canonical head mean this node saw whatever the store
+	// held at that height, which is what lets the audit watermark advance.
+	watching     atomic.Bool
+	auditTrigger chan struct{}
+	auditMu      sync.Mutex
+
+	// finality reports the newest whitelisted milestone, or nil on a node
+	// that wires none. It bounds the audit watermark: see rangeToAudit.
+	finality func() (bool, uint64, common.Hash)
+
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+}
+
+// NewConsumer returns a stopped consumer. Determinism preconditions (Rio
+// active, coinbase map present) are re-checked per session, not here — a
+// node still syncing pre-Rio history becomes eligible once it catches up.
+func NewConsumer(endpoint string, chain *core.BlockChain) (*Consumer, error) {
+	return NewConsumerWithTransactionLookup(endpoint, chain, nil, nil)
+}
+
+// NewConsumerWithTransactionLookup builds a consumer. finality reports the
+// newest whitelisted milestone and may be nil, which leaves the audit
+// watermark bounded by the chain head instead — see rangeToAudit.
+func NewConsumerWithTransactionLookup(endpoint string, chain *core.BlockChain,
+	txLookup TransactionLookup, finality func() (bool, uint64, common.Hash),
+) (*Consumer, error) {
+	if chain.Config().Bor == nil {
+		return nil, errors.New("sequencer consumer requires a bor chain")
+	}
+
+	consumer := &Consumer{
+		chain:        chain,
+		finality:     finality,
+		endpoint:     endpoint,
+		txLookup:     txLookup,
+		index:        NewIndex(),
+		store:        NewPendingStore(chain.DB()),
+		recentTxs:    make(map[common.Hash]*types.Transaction),
+		auditTrigger: make(chan struct{}, 1),
+	}
+	consumer.reconciled.Store(chain.CurrentBlock())
+	return consumer, nil
+}
+
+func (c *Consumer) CachePreconfTransaction(tx *types.Transaction) error {
+	if tx == nil {
+		return errors.New("nil preconf transaction")
+	}
+	if _, err := types.Sender(types.LatestSigner(c.chain.Config()), tx); err != nil {
+		return err
+	}
+	hash := tx.Hash()
+	c.recentMu.Lock()
+	defer c.recentMu.Unlock()
+	if _, exists := c.recentTxs[hash]; exists {
+		return nil
+	}
+	c.recentTxs[hash] = tx
+	c.recentOrder = append(c.recentOrder, hash)
+	if len(c.recentTxs) > recentPreconfTransactionLimit {
+		oldest := c.recentOrder[0]
+		c.recentOrder = c.recentOrder[1:]
+		delete(c.recentTxs, oldest)
+	}
+	return nil
+}
+
+func (c *Consumer) cachedPreconfTransaction(hash common.Hash) *types.Transaction {
+	c.recentMu.Lock()
+	defer c.recentMu.Unlock()
+	return c.recentTxs[hash]
+}
+
+// Index exposes the preconf receipts for the RPC layer.
+func (c *Consumer) Index() *Index {
+	return c.index
+}
+
+func (c *Consumer) SubscribePendingLogs(ch chan<- []*types.Log) event.Subscription {
+	sub := c.logsFeed.Subscribe(ch)
+	tracked := c.logsScope.Track(sub)
+	if tracked != nil {
+		return tracked
+	}
+	sub.Unsubscribe()
+	return sub
+}
+
+func (c *Consumer) SubscribePreconfReceipts(ch chan<- core.PreconfReceiptsEvent) event.Subscription {
+	sub := c.receiptFeed.Subscribe(ch)
+	tracked := c.receiptScope.Track(sub)
+	if tracked != nil {
+		return tracked
+	}
+	sub.Unsubscribe()
+	return sub
+}
+
+func (c *Consumer) enqueuePendingLogs(logs []*types.Log) {
+	if len(logs) == 0 {
+		return
+	}
+	c.logsMu.Lock()
+	if c.logsClosed {
+		c.logsMu.Unlock()
+		return
+	}
+	if len(c.logsQueue) == pendingLogsQueueLimit {
+		c.logsQueue[0] = nil
+		c.logsQueue = c.logsQueue[1:]
+		preconfPendingLogsDropped.Inc(1)
+	}
+	c.logsQueue = append(c.logsQueue, logs)
+	if c.logsBusy {
+		c.logsMu.Unlock()
+		return
+	}
+	c.logsBusy = true
+	c.logsWG.Add(1)
+	c.logsMu.Unlock()
+	go c.dispatchPendingLogs()
+}
+
+func (c *Consumer) dispatchPendingLogs() {
+	defer c.logsWG.Done()
+	for {
+		c.logsMu.Lock()
+		if len(c.logsQueue) == 0 {
+			c.logsBusy = false
+			c.logsMu.Unlock()
+			return
+		}
+		logs := c.logsQueue[0]
+		c.logsQueue[0] = nil
+		c.logsQueue = c.logsQueue[1:]
+		c.logsMu.Unlock()
+		c.logsFeed.Send(logs)
+	}
+}
+
+// Start launches the stream-follow loop.
+func (c *Consumer) Start() {
+	ctx, cancel := context.WithCancel(context.Background())
+	c.cancel = cancel
+
+	c.wg.Add(3)
+	go func() {
+		defer c.wg.Done()
+		c.run(ctx)
+	}()
+	go func() {
+		defer c.wg.Done()
+		c.evictLoop(ctx)
+	}()
+	go func() {
+		defer c.wg.Done()
+		c.auditLoop(ctx)
+	}()
+}
+
+// Close stops the consumer and waits for its loops to exit.
+func (c *Consumer) Close() {
+	if c.cancel != nil {
+		c.cancel()
+		c.wg.Wait()
+	}
+	c.logsMu.Lock()
+	c.logsClosed = true
+	for index := range c.logsQueue {
+		c.logsQueue[index] = nil
+	}
+	c.logsQueue = nil
+	c.logsMu.Unlock()
+	c.logsScope.Close()
+	c.receiptScope.Close()
+	c.logsWG.Wait()
+}
+
+// deterministic reports whether the producer's execution context is
+// reproducible at the current head: pre-Rio the EVM coinbase is the
+// producer's own address, unknowable pre-seal; post-Rio it is
+// CalculateCoinbase from the chain config — reproducible only when the
+// coinbase map is set.
+func (c *Consumer) deterministic() error {
+	config := c.chain.Config().Bor
+
+	head := c.chain.CurrentBlock().Number
+	if !config.IsRio(head) {
+		return errors.New("rio fork not active at current head")
+	}
+
+	if common.HexToAddress(config.CalculateCoinbase(head.Uint64())) == (common.Address{}) {
+		return errors.New("chain config has no coinbase map")
+	}
+
+	return nil
+}
+
+func (c *Consumer) run(ctx context.Context) {
+	var sess *session
+
+	// Startup: whatever window the previous process left open is this one's
+	// to close.
+	c.requestAudit()
+
+	for {
+		var err error
+		sess, err = c.runSession(ctx, sess)
+
+		if ctx.Err() != nil {
+			return
+		}
+
+		log.Warn("Sequence stream session ended", "err", err)
+		c.invalidatePendingFromReason(0, "session_lost")
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(consumerRetryDelay):
+		}
+	}
+}
+
+// runSession runs one stream session, and asks for an audit only when one
+// actually ran. A precondition failure must not: nothing was being followed,
+// so no new window opened, and this loop retries every consumerRetryDelay —
+// a node sitting pre-Rio would otherwise audit the store on a two-second
+// loop for as long as it stayed ineligible.
+func (c *Consumer) runSession(ctx context.Context, sess *session) (*session, error) {
+	// A session that has returned is following nothing, so the canonical head
+	// stops standing for "this node saw what the store held". Leaving this set
+	// would let the watermark advance across a window nobody compared.
+	defer c.watching.Store(false)
+
+	if derr := c.deterministic(); derr != nil {
+		return sess, fmt.Errorf("preconf re-execution not deterministic yet: %w", derr)
+	}
+
+	next, err := c.follow(ctx, sess)
+	c.requestAudit()
+
+	return next, err
+}
+
+// evictLoop drops preconf receipts for heights the canonical chain has
+// imported — the normal receipt path serves them from there on.
+func (c *Consumer) evictLoop(ctx context.Context) {
+	heads := make(chan core.ChainHeadEvent, 16)
+	sub := c.chain.SubscribeChainHeadEvent(heads)
+
+	defer sub.Unsubscribe()
+	c.handleCanonicalHead()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case _, ok := <-heads:
+			if !ok {
+				return
+			}
+			c.handleCanonicalHead()
+		case <-sub.Err():
+			return
+		}
+	}
+}
+
+func (c *Consumer) handleCanonicalHead() {
+	c.publishMu.Lock()
+	invalidations := c.reconcileCanonicalHeadLocked()
+	c.publishMu.Unlock()
+	c.pendingStore().writeInvalidations(invalidations)
+	c.markCanonicalHeadAudited()
+}
+
+// markCanonicalHeadAudited advances the audit watermark for a height this node
+// reconciled while following the store tip.
+//
+// Two conditions gate it. watching: a session that dropped, or one still
+// replaying history, leaves heights nobody compared. Contiguity: the mark may
+// only step to the next height, because a jump would carry it over a window
+// the session never compared — the catch-up backlog it dropped before
+// reaching the tip. A gap instead asks for an audit pass, which walks the
+// window properly and lets contiguous stepping resume.
+//
+// Heights the store never held do advance. Nothing was promised at those
+// heights, so there is no preconfirmation to invalidate — the same reasoning
+// the store's own outage contract uses, and it holds for the entries a
+// producer backfills long after the block went canonical.
+func (c *Consumer) markCanonicalHeadAudited() {
+	if !c.watching.Load() {
+		return
+	}
+	head := c.chain.CurrentBlock()
+	if head == nil || head.Number == nil {
+		return
+	}
+
+	watermark, stored, err := rawdb.ReadPreconfAuditedThrough(c.chain.DB())
+	if err != nil {
+		log.Warn("Sequence store audit watermark unreadable", "err", err)
+
+		return
+	}
+	if !stored {
+		// The audit seeds the first watermark; until it does there is no
+		// position to step from.
+		c.requestAudit()
+
+		return
+	}
+
+	number := head.Number.Uint64()
+	if number <= watermark {
+		return
+	}
+	if number > watermark+1 {
+		c.requestAudit()
+
+		return
+	}
+
+	// Finality bounds this path too, for the reason the audit pass is bounded
+	// by it. Reconciling a height is not proof it will stay canonical: the
+	// pending entry is removed once reconciled, whether it matched or was
+	// invalidated, so a reorg arriving after that leaves no record anywhere —
+	// and the mark has already passed the height. Below a milestone that
+	// cannot happen. The mark then trails finality by a few blocks and closes
+	// the distance one height per canonical head, which is the cadence blocks
+	// arrive at anyway.
+	if final, have := c.finalizedHeight(); have && number > final {
+		return
+	}
+
+	c.advanceAudited(number)
+}
+
+// finalizedHeight reports the newest finalized height. A node with no
+// milestone source has none, and every caller falls back to the head rather
+// than freezing on a finality it cannot see.
+func (c *Consumer) finalizedHeight() (uint64, bool) {
+	if c.finality == nil {
+		return 0, false
+	}
+
+	whitelisted, number, _ := c.finality()
+
+	return number, whitelisted
+}
+
+func (c *Consumer) reconcileCanonicalHeadLocked() []pendingInvalidation {
+	head := c.chain.CurrentBlock()
+	number := head.Number.Uint64()
+	c.index.EvictThrough(number)
+	logs, invalidations := c.pendingStore().reconcileThroughMemory(number, c.chain.GetBlockByNumber, c.chain.GetReceiptsByHash)
+	var clearFrom *uint64
+	for _, invalidation := range invalidations {
+		if invalidation.number <= number || (clearFrom != nil && invalidation.number >= *clearFrom) {
+			continue
+		}
+		height := invalidation.number
+		clearFrom = &height
+	}
+	if clearFrom != nil {
+		c.index.ClearFrom(*clearFrom)
+	}
+	c.reconciled.Store(head)
+	c.clearCanonicalHandoffThrough(head)
+	c.enqueuePendingLogs(logs)
+	return invalidations
+}
+
+func (c *Consumer) ensureCanonicalHeadReconciled() bool {
+	c.publishMu.Lock()
+	head := c.chain.CurrentBlock()
+	if head == nil || head.Number == nil {
+		c.publishMu.Unlock()
+		return false
+	}
+	handoff := c.handoff.Load()
+	if handoff != nil && handoff.Number != nil && handoff.Number.Cmp(head.Number) == 0 && handoff.Hash() != head.Hash() {
+		c.publishMu.Unlock()
+		return false
+	}
+	marker := c.reconciled.Load()
+	if marker != nil {
+		if marker.Hash() == head.Hash() {
+			c.clearCanonicalHandoffThrough(head)
+			c.publishMu.Unlock()
+			return true
+		}
+		if marker.Number != nil && marker.Number.Cmp(head.Number) > 0 {
+			c.publishMu.Unlock()
+			return false
+		}
+	}
+	invalidations := c.reconcileCanonicalHeadLocked()
+	marker = c.reconciled.Load()
+	head = c.chain.CurrentBlock()
+	ready := marker != nil && head != nil && marker.Hash() == head.Hash()
+	c.publishMu.Unlock()
+	c.pendingStore().writeInvalidations(invalidations)
+	return ready
+}
+
+// resumeRequest picks the stream position, never asking the same anchor
+// twice: a warm session walks head → block anchor → earliest retained
+// entry, and a cold one — no head to resume — goes straight from the
+// block anchor to the earliest entry. attempt counts NOT_FOUND fallbacks
+// within one session start; a failed attempt resets the session, so
+// seededness names the rung that just failed.
+func (c *Consumer) resumeRequest(sess *session, attempt int) *pb.StreamRequest {
+	warm := sess != nil && sess.seeded
+	if warm && attempt == 0 {
+		return &pb.StreamRequest{After: &pb.StreamRequest_Head{Head: sess.head.Bytes()}}
+	}
+
+	if attempt == 0 || (warm && attempt == 1) {
+		return &pb.StreamRequest{After: &pb.StreamRequest_Block{Block: c.chain.CurrentBlock().Number.Uint64()}}
+	}
+
+	return &pb.StreamRequest{}
+}
+
+// follow runs one streaming session. It returns the session for a warm
+// resume when the stream position is still valid, or nil when position was
+// lost (commitment gap, malformed entry) and the next attempt must re-anchor.
+func (c *Consumer) follow(ctx context.Context, sess *session) (*session, error) {
+	// The endpoint is an operator-controlled internal service. Transport security
+	// is provided by that network boundary; Bor still authenticates sealed headers.
+	conn, err := grpc.NewClient(c.endpoint, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(pendingInputLimit+1024*1024)))
+	if err != nil {
+		return sess, fmt.Errorf("dial sequence store: %w", err)
+	}
+
+	defer func() {
+		if cerr := conn.Close(); cerr != nil {
+			log.Warn("Sequence store connection close", "err", cerr)
+		}
+	}()
+
+	client := pb.NewConsumerServiceClient(conn)
+
+	for attempt := 0; ; attempt++ {
+		// Each attempt is a fresh position: nothing is being followed until
+		// the new session reaches the tip again.
+		c.watching.Store(false)
+
+		streamCtx, cancelStream := context.WithCancel(ctx)
+		stream, serr := client.Stream(streamCtx, c.resumeRequest(sess, attempt))
+		if serr != nil {
+			cancelStream()
+			return sess, fmt.Errorf("open stream: %w", serr)
+		}
+
+		if attempt > 0 || sess == nil {
+			// Any non-warm position invalidates the old fold state.
+			sess = newSession(c)
+			c.invalidatePendingFromReason(0, "session_lost")
+		}
+
+		sess, err = c.consume(streamCtx, cancelStream, stream, sess)
+		if status.Code(err) == codes.NotFound && attempt < 2 {
+			continue
+		}
+
+		return sess, err
+	}
+}
+
+func (c *Consumer) consume(ctx context.Context, cancel context.CancelFunc, stream streamReceiver, sess *session) (*session, error) {
+	sess.ctx = ctx
+	prepared := make(chan preparedStreamFrame)
+	done := make(chan struct{})
+	state := sess.preparationSnapshot()
+	go func() {
+		defer close(done)
+		c.prepareStream(ctx, stream, state, prepared)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return sess, ctx.Err()
+		case frame, ok := <-prepared:
+			if !ok {
+				return sess, ctx.Err()
+			}
+			next, err := handlePreparedStreamFrame(sess, frame)
+			if err != nil {
+				return next, err
+			}
+		}
+	}
+}
+
+func handlePreparedStreamFrame(sess *session, frame preparedStreamFrame) (*session, error) {
+	if frame.recvErr != nil {
+		return sess, fmt.Errorf("stream recv: %w", frame.recvErr)
+	}
+	if frame.entry == nil {
+		if frame.live {
+			sess.consumer.watching.Store(true)
+			// Catch-up is over; audit whatever it replayed past instead of
+			// executing.
+			sess.consumer.requestAudit()
+			log.Info("Sequence stream live", "head", fmt.Sprintf("%x", sess.head[:8]))
+		}
+		return sess, nil
+	}
+	err := sess.handlePrepared(frame)
+	if frame.openApplied != nil {
+		close(frame.openApplied)
+	}
+	if err != nil {
+		// Position lost: the caller must re-anchor, not resume.
+		return nil, err
+	}
+	return sess, nil
+}

@@ -99,7 +99,12 @@ var (
 	offsetOfLastAncientFreezer = []byte("offsetOfLastAncientFreezer")
 
 	// badBlockKey tracks the list of bad blocks seen by local
-	badBlockKey = []byte("InvalidBlock")
+	badBlockKey          = []byte("InvalidBlock")
+	invalidPreconfPrefix = []byte("InvalidPreconf-")
+
+	// preconfAuditedThroughKey tracks the highest block the sequence-store
+	// audit has compared against the canonical chain.
+	preconfAuditedThroughKey = []byte("PreconfAuditedThrough")
 
 	// uncleanShutdownKey tracks the list of local crashes
 	uncleanShutdownKey = []byte("unclean-shutdown") // config prefix for the db
