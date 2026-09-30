@@ -1263,15 +1263,15 @@ func reportReaderStats(prefetch, process, parallel state.ReaderWithStats) {
 // prefetcher goroutine and the V2 BlockSTM workers for a single block.
 type sharedBlockCaches struct {
 	jumpDests vm.JumpDestCache
-	keccak    *sync.Map
-	ecrecover *sync.Map
+	keccak    *vm.Keccak256Cache
+	ecrecover *vm.EcrecoverCache
 }
 
 func newSharedBlockCaches() *sharedBlockCaches {
 	return &sharedBlockCaches{
 		jumpDests: vm.NewSyncJumpDestCache(),
-		keccak:    &sync.Map{},
-		ecrecover: &sync.Map{},
+		keccak:    vm.NewKeccak256Cache(),
+		ecrecover: vm.NewEcrecoverCache(),
 	}
 }
 

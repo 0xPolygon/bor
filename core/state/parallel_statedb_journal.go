@@ -91,9 +91,12 @@ func (j *parallelJournalEntry) revertBalance(s *ParallelStateDB) {
 }
 
 func (j *parallelJournalEntry) revertCreate(s *ParallelStateDB) {
+	// Keeps codeHashCache consistent with localCode even if a future caller
+	// reverts a CreateAccount without a matching jkCode entry.
 	delete(s.created, j.addr)
 	delete(s.newContract, j.addr)
 	delete(s.localCode, j.addr)
+	delete(s.codeHashCache, j.addr)
 	if s.DeferMVWrites {
 		return
 	}
@@ -108,6 +111,7 @@ func (j *parallelJournalEntry) revertCode(s *ParallelStateDB) {
 	} else {
 		delete(s.localCode, j.addr)
 	}
+	delete(s.codeHashCache, j.addr)
 	if s.DeferMVWrites {
 		return
 	}
