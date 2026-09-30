@@ -68,6 +68,7 @@ type accountCache struct {
 	keydir   string
 	watcher  *watcher
 	mu       sync.Mutex
+	scanMu   sync.Mutex // serializes directory scans against key file removal
 	all      []accounts.Account
 	byAddr   map[common.Address][]accounts.Account
 	throttle *time.Timer
@@ -253,6 +254,9 @@ func (ac *accountCache) close() {
 // scanAccounts checks if any changes have occurred on the filesystem, and
 // updates the account cache accordingly
 func (ac *accountCache) scanAccounts() error {
+	ac.scanMu.Lock()
+	defer ac.scanMu.Unlock()
+
 	// Scan the entire folder metadata for file changes
 	creates, deletes, updates, err := ac.fileC.scan(ac.keydir)
 	if err != nil {

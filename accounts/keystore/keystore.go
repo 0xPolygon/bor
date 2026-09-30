@@ -253,10 +253,19 @@ func (ks *KeyStore) Delete(a accounts.Account, passphrase string) error {
 	}
 	// The order is crucial here. The key is dropped from the
 	// cache after the file is gone so that a reload happening in
-	// between won't insert it into the cache again.
+	// between won't insert it into the cache again. Holding scanMu also
+	// keeps a scan that already read the file from adding it after the
+	// cache entry is dropped.
+	ks.cache.scanMu.Lock()
+
 	err = os.Remove(a.URL.Path)
 	if err == nil {
 		ks.cache.delete(a)
+	}
+
+	ks.cache.scanMu.Unlock()
+
+	if err == nil {
 		ks.refreshWallets()
 	}
 
