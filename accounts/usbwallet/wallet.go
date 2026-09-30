@@ -25,7 +25,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/karalabe/hid"
+	"github.com/ethereum/hid"
 
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts"

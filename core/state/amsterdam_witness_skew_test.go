@@ -15,18 +15,15 @@ import (
 	"github.com/ethereum/go-ethereum/triedb"
 )
 
-// The EIP-7928 read on a destructed account walks that account's storage trie
-// through the StateDB's reader, and every node a reader touches is harvested
-// into the block witness by CollectStateWitness. So the read is not only a
-// wasted disk access before Amsterdam — it changes what the witness contains.
-//
-// That is what makes the gate matter rather than being a tidiness fix. Witness
-// content is not committed to any header field, so a producer and a consumer
-// disagreeing about it is invisible to consensus: the consumer simply demands
-// nodes the producer never recorded and fails the import. This test pins the
-// direction of that difference so a future change cannot quietly reintroduce
-// it.
-func TestDestructedReadWitnessSkew(t *testing.T) {
+// Witness content is not committed to any header field, so a producer and a
+// consumer disagreeing about it is invisible to consensus: the consumer simply
+// demands nodes the producer never recorded and fails the import. A destructed
+// account's slot read used to walk its storage trie for the EIP-7928 access
+// list, which would have pulled that proof path into the witness after
+// Amsterdam only. Upstream #34776 replaced the read with in-memory access
+// tracking, so the witness must be identical on both sides of the fork. This
+// test pins that, so a future change cannot quietly reintroduce the read.
+func TestDestructedReadWitnessIsForkIndependent(t *testing.T) {
 	t.Parallel()
 
 	var (
@@ -61,7 +58,7 @@ func TestDestructedReadWitnessSkew(t *testing.T) {
 	collect := func(t *testing.T, amsterdam bool) *stateless.Witness {
 		t.Helper()
 
-		tr, err := newTrieReader(root, tdb)
+		tr, err := newMPTTrieReader(root, tdb)
 		if err != nil {
 			t.Fatalf("trie reader: %v", err)
 		}
@@ -77,7 +74,7 @@ func TestDestructedReadWitnessSkew(t *testing.T) {
 		sdb.SetWitness(witness)
 
 		// Same setup on both sides, so the account-trie access it costs cancels
-		// out and the only difference left is the gated storage read.
+		// out and any difference left can only come from the storage read.
 		obj := sdb.getOrNewStateObject(contract)
 		sdb.stateObjectsDestruct[contract] = obj
 
@@ -98,28 +95,15 @@ func TestDestructedReadWitnessSkew(t *testing.T) {
 		return witness
 	}
 
-	witnessOff := collect(t, false)
-	witnessOn := collect(t, true)
+	witnessPre := collect(t, false)
+	witnessPost := collect(t, true)
 
-	t.Logf("witness state nodes: gated-off=%d gated-on=%d", len(witnessOff.State), len(witnessOn.State))
-
-	extra := 0
-	for node := range witnessOn.State {
-		if _, ok := witnessOff.State[node]; !ok {
-			extra++
-		}
+	if len(witnessPre.State) != len(witnessPost.State) {
+		t.Fatalf("witness state nodes differ across the fork: pre=%d post=%d", len(witnessPre.State), len(witnessPost.State))
 	}
-	if extra == 0 {
-		t.Fatal("ungating the read added no witness nodes: the skew this gate exists to prevent is not being reproduced, so this test would not catch a regression")
-	}
-	t.Logf("nodes required by the reading path but absent without it: %d", extra)
-
-	// The dangerous direction: everything the non-reading producer recorded is
-	// also present for the reading consumer, so the failure can only come from
-	// what the consumer additionally demands.
-	for node := range witnessOff.State {
-		if _, ok := witnessOn.State[node]; !ok {
-			t.Fatal("gated-off witness holds a node the gated-on witness lacks; the difference is not a clean superset")
+	for node := range witnessPost.State {
+		if _, ok := witnessPre.State[node]; !ok {
+			t.Fatal("post-Amsterdam witness holds a node the pre-Amsterdam witness lacks")
 		}
 	}
 }

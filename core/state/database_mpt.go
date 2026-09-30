@@ -76,7 +76,7 @@ func (db *MPTDatabase) EnableSnapInReader() {
 // the walk. Without this, flat readers short-circuit the trie and proof paths are
 // never captured.
 func (db *MPTDatabase) TrieOnlyReader(stateRoot common.Hash) (Reader, error) {
-	tr, err := newTrieReader(stateRoot, db.triedb)
+	tr, err := newMPTTrieReader(stateRoot, db.triedb)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +111,7 @@ func (db *MPTDatabase) Reader(stateRoot common.Hash) (Reader, error) {
 	}
 	// Configure the trie reader, which is expected to be available as the
 	// gatekeeper unless the state is corrupted.
-	tr, err := newTrieReader(stateRoot, db.triedb)
+	tr, err := newMPTTrieReader(stateRoot, db.triedb)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +128,7 @@ func (db *MPTDatabase) Reader(stateRoot common.Hash) (Reader, error) {
 // snapshot layers. Useful for V2 parallel execution where the snapshot reader
 // may have thread-safety issues under concurrent access from multiple workers.
 func (db *MPTDatabase) ReaderTrieOnly(stateRoot common.Hash) (Reader, error) {
-	tr, err := newTrieReader(stateRoot, db.triedb)
+	tr, err := newMPTTrieReader(stateRoot, db.triedb)
 	if err != nil {
 		return nil, err
 	}
