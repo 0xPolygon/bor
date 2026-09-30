@@ -107,7 +107,9 @@ func runEIP4788Roundtrip(t *testing.T, useV2 bool) {
 		// pending storage, not the earlier committed-state read.
 		_ = statedb.GetState(params.BeaconRootsAddress, common.BigToHash(new(big.Int).SetUint64(timestamp%8191)))
 		body := &types.Body{Transactions: types.Transactions{tx}}
+		parent := &types.Header{Number: big.NewInt(0)}
 		header := &types.Header{
+			ParentHash:       parent.Hash(),
 			Number:           big.NewInt(1),
 			Time:             timestamp,
 			GasLimit:         blockCtx.GasLimit,
@@ -115,7 +117,7 @@ func runEIP4788Roundtrip(t *testing.T, useV2 bool) {
 			BaseFee:          blockCtx.BaseFee,
 		}
 		block := types.NewBlockWithHeader(header).WithBody(*body)
-		applyV2PreExecSystemCalls(block, statedb, &cfg, vm.Config{}, blockCtx)
+		applyV2PreExecSystemCalls(block, parent, statedb, &cfg, vm.Config{}, blockCtx)
 
 		msg, _ := TransactionToMessage(tx, signer, blockCtx.BaseFee)
 		tasks := []V2Task{{Index: 0, Tx: tx, Msg: msg}}
@@ -139,5 +141,57 @@ func runEIP4788Roundtrip(t *testing.T, useV2 bool) {
 		if got != expected {
 			t.Errorf("caller storage[%d]: got %s, want %s", slot, got.Hex(), expected.Hex())
 		}
+	}
+}
+
+// V2 runs its pre-execution system calls through PreExecution, so it applies
+// the EIP-7997 deterministic-deployment-factory insert on the first Amsterdam
+// block, and only there, exactly like the serial processor.
+func TestV2PreExecEIP7997Activation(t *testing.T) {
+	cfg := *params.MergedTestChainConfig
+	cfg.Bor = nil
+	cfg.AmsterdamBlock = big.NewInt(2)
+
+	tests := []struct {
+		name   string
+		number int64
+		want   bool
+	}{
+		{"before_activation", 1, false},
+		{"activation_block", 2, true},
+		{"after_activation", 3, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			run := func(v2 bool) []byte {
+				sdb, _ := state.New(types.EmptyRootHash, state.NewDatabase(triedb.NewDatabase(rawdb.NewMemoryDatabase(), triedb.HashDefaults), nil))
+				parent := &types.Header{Number: big.NewInt(tt.number - 1)}
+				header := &types.Header{ParentHash: parent.Hash(), Number: big.NewInt(tt.number), Time: uint64(tt.number), GasLimit: 30_000_000, BaseFee: big.NewInt(1)}
+				block := types.NewBlockWithHeader(header)
+				blockCtx := vm.BlockContext{
+					CanTransfer: CanTransfer,
+					Transfer:    Transfer,
+					GetHash:     func(uint64) common.Hash { return common.Hash{} },
+					BlockNumber: header.Number,
+					Time:        header.Time,
+					GasLimit:    header.GasLimit,
+					BaseFee:     header.BaseFee,
+					Difficulty:  new(big.Int),
+				}
+				if v2 {
+					applyV2PreExecSystemCalls(block, parent, sdb, &cfg, vm.Config{}, blockCtx)
+				} else {
+					PreExecution(context.Background(), block.BeaconRoot(), parent, &cfg, vm.NewEVM(blockCtx, sdb, &cfg, vm.Config{}), block.Number(), block.Time())
+				}
+				return sdb.GetCode(params.DeterministicFactoryAddress)
+			}
+			serial, v2 := run(false), run(true)
+			if string(serial) != string(v2) {
+				t.Fatalf("factory code differs: serial=%x v2=%x", serial, v2)
+			}
+			if got := len(v2) > 0; got != tt.want {
+				t.Fatalf("factory present = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

@@ -90,7 +90,10 @@ var forkExpectations = map[string]forkExpect{
 	"IsEIP158":    {inV1: true, inV2: true}, // empty-account deletion at finalise
 	"IsLondon":    {inV1: true, inV2: true}, // EIP-1559 fee burn + receipt fields
 	"IsPrague":    {inV1: true, inV2: true}, // EIP-2935 history storage system call
-	"IsVerkle":    {inV1: true, inV2: true}, // EIP-2935 also fires under Verkle
+	"IsVerkle": {inV1: true, inV2: false, rationale: "" +
+		"EIP-2935 also fires under Verkle. The gate lives in PreExecution in the V1 file, " +
+		"and both BlockSTM processors call PreExecution for their pre-execution system " +
+		"calls, so every path gets it without naming the fork."},
 }
 
 // pathsForV1 / pathsForV2 are the files whose source the test scans

@@ -919,3 +919,20 @@ fast on balance, existence and root, before and at Amsterdam; without the new
 branch the Amsterdam/balance case fails with serial=100, fast=0.
 `TestV2ForkParity` now classifies `IsAmsterdam` as read by both V1 and V2, with
 the reason in its rationale.
+
+### EIP-7997 in the BlockSTM processors (cascaded from #2346)
+
+Following review on #2346, both BlockSTM processors now make their
+pre-execution system calls through `PreExecution` instead of inline copies of
+the EIP-4788 and EIP-2935 calls. Merged up here, that also closes a gap batch 3
+missed: #35285 moved the EIP-7997 factory insert into `PreExecution`, and the
+batch-3 record noted the miner as its only missing landing site. V1 and V2 had
+no EIP-7997 either, so on the first Amsterdam block they would have skipped the
+insert and computed a different root from serial.
+
+`PreExecution` now takes the parent header, so V1 `Process` looks it up the way
+serial does and `applyV2PreExecSystemCalls` takes it as a parameter.
+`TestV2PreExecEIP7997Activation` checks that serial and V2 agree on the factory
+before, at and after activation, and that it is present only at activation. It
+fails against the previous inline V2 body. The miner gap is unchanged and stays
+in `needs-wiring.md`.
