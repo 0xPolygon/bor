@@ -1,6 +1,7 @@
 package sequencer
 
 import (
+	"context"
 	"math/big"
 	"testing"
 	"time"
@@ -49,6 +50,32 @@ func foreignWindow(t *testing.T, h *harness, number uint64, parent common.Hash, 
 	}
 
 	return ts, gasLimit
+}
+
+// waitReadPath blocks until the publisher's read client gets an answer from
+// the store. It calls the raw client, not the reader, so the failed tries do
+// not count against the read breaker.
+func waitReadPath(t *testing.T, p *Publisher, timeout time.Duration) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	req := &pb.RangeRequest{After: &pb.RangeRequest_Block{Block: 1}, Limit: 1}
+
+	for {
+		ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+		_, err := p.read.client().Range(ctx, req)
+		cancel()
+
+		if err == nil || isNotFound(err) {
+			return
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("store read path never answered: %v", err)
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func fee25() *big.Int {
@@ -711,6 +738,11 @@ func TestBuildStartDiscardsSupersededBuffer(t *testing.T) {
 	h.resume()
 	ts, gasLimit := foreignWindow(t, h, 2, parent, testTx(t, 1))
 	appendForeignSeal(t, h, windowHeader(2, parent, ts, gasLimit))
+
+	// The build-start read must see the store. Right after resume the read
+	// client may still hold the transport the outage killed; a read on it
+	// fails at once (buildUnknown), and that blind path keeps the buffer.
+	waitReadPath(t, p, 5*time.Second)
 
 	p.mu.Lock()
 	buffered := p.journal.nextSeq - 1 - p.ackedSeq
