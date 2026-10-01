@@ -26,15 +26,41 @@ import (
 // otherwise change observable state or return an error on things like a
 // snapshot save failure).
 type capturingHandler struct {
-	mu   sync.Mutex
-	msgs []string
+	mu      sync.Mutex
+	msgs    []string
+	records []slog.Record
 }
 
 func (h *capturingHandler) Handle(_ stdcontext.Context, r slog.Record) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.msgs = append(h.msgs, r.Message)
+	h.records = append(h.records, r.Clone())
 	return nil
+}
+
+// attr returns the value of key on the first record whose message is msg.
+func (h *capturingHandler) attr(msg, key string) (slog.Value, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, r := range h.records {
+		if r.Message != msg {
+			continue
+		}
+		var (
+			val   slog.Value
+			found bool
+		)
+		r.Attrs(func(a slog.Attr) bool {
+			if a.Key == key {
+				val, found = a.Value, true
+				return false
+			}
+			return true
+		})
+		return val, found
+	}
+	return slog.Value{}, false
 }
 
 func (h *capturingHandler) Enabled(stdcontext.Context, slog.Level) bool { return true }
@@ -1827,5 +1853,120 @@ func TestPreloadDescendsPastCachedNodes(t *testing.T) {
 
 	if !addrCache.Has(append(accountHash.Bytes(), 0)) {
 		t.Fatal("expected preload to load the child of the already-cached root")
+	}
+}
+
+// TestPreloadLogsMaxDepth checks that the completion log reports how deep the
+// BFS went. Each enqueued child must sit one level below its parent.
+func TestPreloadLogsMaxDepth(t *testing.T) {
+	h := installCapturingHandler(t)
+
+	addr := common.HexToAddress("0xfacefacefacefacefacefacefacefacefaceface")
+	accountHash := crypto.Keccak256Hash(addr.Bytes())
+	db := rawdb.NewMemoryDatabase()
+	hash := bytes.Repeat([]byte{0x11}, 32)
+
+	// root (depth 0) -> extension to [1, 2] (depth 1) -> leaf at [1, 2, 3] (depth 2)
+	rawdb.WriteStorageTrieNode(db, accountHash, nil,
+		encodeShortNode(t, nibblesToCompact([]byte{1, 2}, false), hash))
+	rawdb.WriteStorageTrieNode(db, accountHash, []byte{1, 2}, encodeBranchNode(t, []byte{3}, hash))
+	rawdb.WriteStorageTrieNode(db, accountHash, []byte{1, 2, 3},
+		encodeShortNode(t, nibblesToCompact([]byte{0xd}, true), []byte("v123")))
+
+	cache, err := NewAddressBiasedCache(db, map[common.Address]int{addr: 1024 * 1024}, 512*1024, 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Close(false)
+	cache.wg.Wait()
+
+	got, ok := h.attr("Completed storage trie preload", "max depth")
+	if !ok {
+		t.Fatal("expected the completion log to carry a \"max depth\" attribute")
+	}
+	if got.Int64() != 2 {
+		t.Fatalf("expected max depth 2, got %v", got)
+	}
+}
+
+// TestPreloadStopsAtFillThreshold checks the exact fill boundary. A node is
+// charged its key (owner + path) plus its blob, and it loads only while the
+// running total stays at or under the threshold.
+func TestPreloadStopsAtFillThreshold(t *testing.T) {
+	addr := common.HexToAddress("0x1234567890123456789012345678901234567890")
+	accountHash := crypto.Keccak256Hash(addr.Bytes())
+
+	db := rawdb.NewMemoryDatabase()
+	rootData := encodeBranchNode(t, []byte{0}, bytes.Repeat([]byte{0x55}, 32))
+	childData := encodeShortNode(t, nibblesToCompact([]byte{0xa}, true), []byte("v0"))
+	rawdb.WriteStorageTrieNode(db, accountHash, nil, rootData)
+	rawdb.WriteStorageTrieNode(db, accountHash, []byte{0}, childData)
+
+	rootSize := uint64(common.HashLength + len(rootData))
+	childSize := uint64(common.HashLength + 1 + len(childData))
+
+	tests := []struct {
+		name      string
+		threshold uint64
+		wantRoot  bool
+		wantChild bool
+	}{
+		{name: "root exactly at threshold", threshold: rootSize, wantRoot: true},
+		{name: "child one byte over threshold", threshold: rootSize + childSize - 1, wantRoot: true},
+		{name: "child exactly at threshold", threshold: rootSize + childSize, wantRoot: true, wantChild: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// floor(cacheSize*2/3) == threshold for this cacheSize.
+			cacheSize := int(3*tt.threshold+1) / 2
+			if got := warmFillThreshold(cacheSize); got != tt.threshold {
+				t.Fatalf("test setup: threshold %d, want %d", got, tt.threshold)
+			}
+
+			addrCache := fastcache.New(cacheSize)
+			c, err := NewAddressBiasedCache(db, nil, 1024, 0, "")
+			if err != nil {
+				t.Fatalf("failed to create cache: %v", err)
+			}
+			c.addressCaches.Store(accountHash, addrCache)
+			c.wg.Add(1)
+			c.preloadAddressAsync(db, addr, cacheSize)
+
+			if got := addrCache.Has(accountHash.Bytes()); got != tt.wantRoot {
+				t.Errorf("root cached = %v, want %v", got, tt.wantRoot)
+			}
+			if got := addrCache.Has(append(accountHash.Bytes(), 0)); got != tt.wantChild {
+				t.Errorf("child cached = %v, want %v", got, tt.wantChild)
+			}
+		})
+	}
+}
+
+// TestAddressBiasedCache_ClosePersistsEveryAddress checks that Close(true)
+// writes a snapshot for each configured address, not only the first one.
+func TestAddressBiasedCache_ClosePersistsEveryAddress(t *testing.T) {
+	journalDir := t.TempDir()
+	addrs := []common.Address{
+		common.HexToAddress("0x1111111111111111111111111111111111111111"),
+		common.HexToAddress("0x2222222222222222222222222222222222222222"),
+		common.HexToAddress("0x3333333333333333333333333333333333333333"),
+	}
+	sizes := make(map[common.Address]int, len(addrs))
+	for _, addr := range addrs {
+		sizes[addr] = 32 * 1024
+	}
+
+	cache, err := NewAddressBiasedCache(rawdb.NewMemoryDatabase(), sizes, 16*1024, 0, journalDir)
+	if err != nil {
+		t.Fatalf("failed to create cache: %v", err)
+	}
+	cache.wg.Wait()
+	cache.Close(true)
+
+	for _, addr := range addrs {
+		path := snapshotPath(journalDir, crypto.Keccak256Hash(addr.Bytes()))
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("expected a snapshot for %s at %s: %v", addr.Hex(), path, err)
+		}
 	}
 }
