@@ -173,6 +173,10 @@ func testSendTx(t *testing.T, withLocal bool) {
 		},
 	})
 	b.SendTx(t.Context(), txA)
+	// Promotion to pending is async: txB must see txA pending to hit the in-flight limit.
+	require.Eventually(t, func() bool {
+		return b.eth.txPool.Status(txA.Hash()) == txpool.TxStatusPending
+	}, 5*time.Second, 10*time.Millisecond)
 
 	txB := makeTx(1, nil, nil, key)
 	err := b.SendTx(t.Context(), txB)
