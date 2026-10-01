@@ -240,11 +240,18 @@ func (b *BulkSidecar) run() {
 }
 
 func (b *BulkSidecar) OpenChannel(peer *Peer, channel string) (MsgReadWriter, error) {
+	return b.OpenChannelContext(context.Background(), peer, channel)
+}
+
+func (b *BulkSidecar) OpenChannelContext(ctx context.Context, peer *Peer, channel string) (MsgReadWriter, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if peer == nil || peer.Node() == nil {
 		return nil, errBulkSidecarNoPeer
 	}
 	session := b.session(peer.Node())
-	ctx, cancel := context.WithTimeout(context.Background(), bulkChannelOpenTimeout)
+	ctx, cancel := context.WithTimeout(ctx, bulkChannelOpenTimeout)
 	defer cancel()
 	return session.openChannel(ctx, channel)
 }
@@ -648,13 +655,18 @@ func (s *bulkSession) waitChannel(ctx context.Context, channel string) (MsgReadW
 
 func (s *bulkSession) storeChannel(channel string, rw MsgReadWriter) {
 	s.lock.Lock()
-	_, exists := s.channels[channel]
+	old, exists := s.channels[channel]
 	s.channels[channel] = rw
 	waiters := s.waiters[channel]
 	delete(s.waiters, channel)
 	s.lock.Unlock()
 
 	if exists {
+		if closer, ok := old.(interface{ Close() error }); ok {
+			if err := closer.Close(); err != nil {
+				s.sidecar.log.Debug("Bulk sidecar replaced channel close failed", "peer", s.remoteID, "channel", channel, "err", err)
+			}
+		}
 		bulkSidecarChannelReplaceMeter.Mark(1)
 		bulkSidecarStats.markChannelReplaced(channel)
 	} else {
@@ -722,6 +734,22 @@ func (rw *bulkStreamMsgRW) WriteMsg(msg Msg) error {
 	bulkSidecarStats.markChannelWrite(rw.channel)
 	rw.log.Trace("Bulk sidecar wrote message", "code", msg.Code, "size", msg.Size)
 	return nil
+}
+
+func (rw *bulkStreamMsgRW) Close() error {
+	var err error
+	if closer, ok := rw.stream.(interface{ Close() error }); ok {
+		err = closer.Close()
+	}
+	if canceler, ok := rw.stream.(interface {
+		CancelRead(quic.StreamErrorCode)
+		CancelWrite(quic.StreamErrorCode)
+	}); ok {
+		code := quic.StreamErrorCode(bulkSidecarCloseErrorCode)
+		canceler.CancelRead(code)
+		canceler.CancelWrite(code)
+	}
+	return err
 }
 
 func writeBulkControl(stream *quic.Stream, msg interface{}) error {
