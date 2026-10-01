@@ -87,7 +87,24 @@ func (s *SafePool) SubmitWithSlot(ctx context.Context, fn func(*Slot) error) {
 	}
 
 	sem := *semPtr
+	if !s.acquire(ctx, sem) {
+		unbounded()
 
+		return
+	}
+
+	slot := &Slot{pool: s, sem: sem, held: true}
+
+	go func() {
+		defer slot.Release()
+
+		_ = fn(slot)
+	}()
+}
+
+// acquire takes a slot from sem, giving up once ctx is done or the configured
+// timeout elapses.
+func (s *SafePool) acquire(ctx context.Context, sem chan struct{}) bool {
 	var timeout <-chan time.Time
 	if d := s.Timeout(); d > 0 {
 		timer := time.NewTimer(d)
@@ -96,21 +113,15 @@ func (s *SafePool) SubmitWithSlot(ctx context.Context, fn func(*Slot) error) {
 	}
 
 	select {
-	case sem <- struct{}{}: // acquired a slot
+	case sem <- struct{}{}:
 		s.inFlight.Add(1)
 
-		slot := &Slot{pool: s, sem: sem, held: true}
-
-		go func() {
-			defer slot.Release()
-
-			_ = fn(slot)
-		}()
+		return true
 	case <-ctx.Done():
-		unbounded()
 	case <-timeout:
-		unbounded()
 	}
+
+	return false
 }
 
 func (s *SafePool) ChangeSize(n int) {

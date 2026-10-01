@@ -222,23 +222,28 @@ func (h *handler) handleBatch(msgs []*jsonrpcMessage) {
 		// Cancel the request context after timeout and send an error response. Since the
 		// currently-running method might not return immediately on timeout, we must wait
 		// for the timeout concurrently with processing the request.
+		timeoutErr := &internalServerError{errcodeTimeout, errMsgTimeout}
 		if timeout, ok := ContextRequestTimeout(cp.ctx); ok {
 			timer = time.AfterFunc(timeout, func() {
 				cancel()
-				err := &internalServerError{errcodeTimeout, errMsgTimeout}
-				callBuffer.respondWithError(cp.ctx, h.conn, err)
+				callBuffer.respondWithError(cp.ctx, h.conn, timeoutErr)
 			})
 		}
 
+		slot := ExecutionSlotFromContext(cp.ctx)
 		responseBytes := 0
 		for {
-			// No need to handle rest of calls if timed out.
-			if cp.ctx.Err() != nil {
+			msg := callBuffer.nextCall()
+			if msg == nil {
 				break
 			}
 
-			msg := callBuffer.nextCall()
-			if msg == nil {
+			// The previous item may have handed the slot back and not got it again.
+			slot.acquireWait(cp.ctx)
+
+			// The timeout callback cancels before it responds; answer here in case we're first.
+			if cp.ctx.Err() != nil {
+				callBuffer.respondWithError(cp.ctx, h.conn, timeoutErr)
 				break
 			}
 
