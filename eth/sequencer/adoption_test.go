@@ -1,6 +1,7 @@
 package sequencer
 
 import (
+	"context"
 	"math/big"
 	"testing"
 	"time"
@@ -719,6 +720,16 @@ func TestBuildStartDiscardsSupersededBuffer(t *testing.T) {
 	if buffered == 0 {
 		t.Fatal("test setup: nothing buffered")
 	}
+
+	// The restart leaves the consumer conn in reconnect backoff: wait until the store reads again.
+	waitFor(t, 5*time.Second, func() bool {
+		ctx, cancel := context.WithTimeout(t.Context(), checkTailTimeout)
+		defer cancel()
+
+		_, _, err := p.read.probeDown(ctx, 2)
+
+		return err == nil
+	})
 
 	// Next work cycle: the read shows the foreign sealed tip covering our
 	// whole buffer — it is discarded and the lineage re-anchors.
