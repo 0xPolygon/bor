@@ -127,7 +127,7 @@ func ApplyMessage(
 
 	// Update the state with pending changes
 	if err != nil {
-		state.Finalise(true)
+		state.Finalise(vmenv.GetRules())
 	}
 
 	gasUsed := gasLeft.Used(vm.NewGasBudget(initialGas, 0))
@@ -148,7 +148,7 @@ func ApplyBorMessage(vmenv *vm.EVM, msg Callmsg) (*core.ExecutionResult, error) 
 	)
 	// Update the state with pending changes
 	if err != nil {
-		vmenv.StateDB.Finalise(true)
+		vmenv.StateDB.Finalise(vmenv.GetRules())
 	}
 
 	gasUsed := gasLeft.Used(vm.NewGasBudget(initialGas, 0))

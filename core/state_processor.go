@@ -205,11 +205,6 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 // ctx is carried to keep the signature aligned with upstream, where it feeds
 // tracing spans that bor does not wire up.
 func PreExecution(ctx context.Context, beaconRoot *common.Hash, parent *types.Header, config *params.ChainConfig, evm *vm.EVM, number *big.Int, time uint64) {
-	// EIP-7997: insert the deterministic deployment factory at the Amsterdam
-	// activation block via an irregular state transition.
-	if config.IsAmsterdam(number) && !config.IsAmsterdam(parent.Number) {
-		misc.ApplyEIP7997(evm.StateDB)
-	}
 	// EIP-4788
 	if beaconRoot != nil {
 		ProcessBeaconBlockRoot(*beaconRoot, evm)
@@ -330,9 +325,9 @@ func ApplyTransactionWithEVM(msg *Message, gp *GasPool, statedb *state.StateDB, 
 	var root []byte
 
 	if evm.ChainConfig().IsByzantium(blockNumber) {
-		evm.StateDB.Finalise(true)
+		evm.StateDB.Finalise(evm.GetRules())
 	} else {
-		root = statedb.IntermediateRoot(evm.ChainConfig().IsEIP158(blockNumber)).Bytes()
+		root = statedb.IntermediateRoot(evm.GetRules()).Bytes()
 	}
 	// Merge the tx-local access event into the "block-local" one, in order to collect
 	// all values, so that the witness can be built.
@@ -435,7 +430,7 @@ func ProcessBeaconBlockRoot(beaconRoot common.Hash, evm *vm.EVM) {
 	if evm.StateDB.AccessEvents() != nil {
 		evm.StateDB.AccessEvents().Merge(evm.AccessEvents)
 	}
-	evm.StateDB.Finalise(true)
+	evm.StateDB.Finalise(evm.GetRules())
 }
 
 // ProcessParentBlockHash stores the parent block hash in the history storage contract
@@ -467,7 +462,7 @@ func ProcessParentBlockHash(prevHash common.Hash, evm *vm.EVM) {
 	if evm.StateDB.AccessEvents() != nil {
 		evm.StateDB.AccessEvents().Merge(evm.AccessEvents)
 	}
-	evm.StateDB.Finalise(true)
+	evm.StateDB.Finalise(evm.GetRules())
 }
 
 // ProcessWithdrawalQueue calls the EIP-7002 withdrawal queue contract.
@@ -495,6 +490,9 @@ func ProcessBuilderExitQueue(requests *[][]byte, evm *vm.EVM, blockAccessIndex u
 }
 
 func processRequestsSystemCall(requests *[][]byte, evm *vm.EVM, requestType byte, addr common.Address, blockAccessIndex uint32) error {
+	if evm.StateDB.GetCodeSize(addr) == 0 {
+		return fmt.Errorf("empty system contract: no code at %v", addr)
+	}
 	if tracer := evm.Config.Tracer; tracer != nil {
 		onSystemCallStart(tracer, evm.GetVMContext())
 		if tracer.OnSystemCallEnd != nil {
@@ -517,7 +515,7 @@ func processRequestsSystemCall(requests *[][]byte, evm *vm.EVM, requestType byte
 	if evm.StateDB.AccessEvents() != nil {
 		evm.StateDB.AccessEvents().Merge(evm.AccessEvents)
 	}
-	evm.StateDB.Finalise(true)
+	evm.StateDB.Finalise(evm.GetRules())
 	if err != nil {
 		return fmt.Errorf("system call failed to execute: %v", err)
 	}

@@ -15,6 +15,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/core/vm/program"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/triedb"
 )
 
@@ -756,7 +757,7 @@ func buildBaseStateRoot(t testing.TB) (*triedb.Database, common.Hash) {
 	sdb.SetCode(metaHarness.delegate, metaHarness.delegateCode, 0)
 	sdb.SetCode(metaHarness.clearRefund, metaHarness.clearRefundCode, 0)
 	sdb.SetCode(metaHarness.logger, metaHarness.loggerCode, 0)
-	root, err := sdb.Commit(0, false, false)
+	root, err := sdb.Commit(params.Rules{}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

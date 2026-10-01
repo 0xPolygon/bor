@@ -77,6 +77,6 @@ func ExecuteStateless(config *params.ChainConfig, vmconfig vm.Config, block *typ
 	}
 	// Almost everything validated, but receipt and state root needs to be returned
 	receiptRoot := types.DeriveSha(res.Receipts, trie.NewStackTrie(nil))
-	stateRoot := db.IntermediateRoot(config.IsEIP158(block.Number()))
+	stateRoot := db.IntermediateRoot(config.Rules(block.Number(), false, block.Time()))
 	return stateRoot, receiptRoot, db, res, nil
 }

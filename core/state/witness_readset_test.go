@@ -10,6 +10,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/triedb"
 	"github.com/holiman/uint256"
 )
@@ -77,7 +78,7 @@ func TestCollectStateWitnessIncludesFlatServedReads(t *testing.T) {
 	setup.SetBalance(cold, uint256.NewInt(22), tracing.BalanceChangeUnspecified)
 	setup.SetBalance(contract, uint256.NewInt(33), tracing.BalanceChangeUnspecified)
 	setup.SetState(contract, slot, value)
-	root, err := setup.Commit(0, false, false)
+	root, err := setup.Commit(params.Rules{}, 0)
 	if err != nil {
 		t.Fatalf("commit: %v", err)
 	}

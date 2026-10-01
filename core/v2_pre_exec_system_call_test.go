@@ -58,7 +58,7 @@ func runEIP4788Roundtrip(t *testing.T, useV2 bool) {
 	key, _ := crypto.GenerateKey()
 	sender := crypto.PubkeyToAddress(key.PublicKey)
 	sdb.AddBalance(sender, uint256.NewInt(1e18), tracing.BalanceChangeUnspecified)
-	root, _ := sdb.Commit(0, false, false)
+	root, _ := sdb.Commit(params.Rules{}, 0)
 	tdb.Commit(root, false)
 
 	statedb, _ := state.New(root, state.NewDatabase(tdb, nil))
@@ -141,57 +141,5 @@ func runEIP4788Roundtrip(t *testing.T, useV2 bool) {
 		if got != expected {
 			t.Errorf("caller storage[%d]: got %s, want %s", slot, got.Hex(), expected.Hex())
 		}
-	}
-}
-
-// V2 runs its pre-execution system calls through PreExecution, so it applies
-// the EIP-7997 deterministic-deployment-factory insert on the first Amsterdam
-// block, and only there, exactly like the serial processor.
-func TestV2PreExecEIP7997Activation(t *testing.T) {
-	cfg := *params.MergedTestChainConfig
-	cfg.Bor = nil
-	cfg.AmsterdamBlock = big.NewInt(2)
-
-	tests := []struct {
-		name   string
-		number int64
-		want   bool
-	}{
-		{"before_activation", 1, false},
-		{"activation_block", 2, true},
-		{"after_activation", 3, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			run := func(v2 bool) []byte {
-				sdb, _ := state.New(types.EmptyRootHash, state.NewDatabase(triedb.NewDatabase(rawdb.NewMemoryDatabase(), triedb.HashDefaults), nil))
-				parent := &types.Header{Number: big.NewInt(tt.number - 1)}
-				header := &types.Header{ParentHash: parent.Hash(), Number: big.NewInt(tt.number), Time: uint64(tt.number), GasLimit: 30_000_000, BaseFee: big.NewInt(1)}
-				block := types.NewBlockWithHeader(header)
-				blockCtx := vm.BlockContext{
-					CanTransfer: CanTransfer,
-					Transfer:    Transfer,
-					GetHash:     func(uint64) common.Hash { return common.Hash{} },
-					BlockNumber: header.Number,
-					Time:        header.Time,
-					GasLimit:    header.GasLimit,
-					BaseFee:     header.BaseFee,
-					Difficulty:  new(big.Int),
-				}
-				if v2 {
-					applyV2PreExecSystemCalls(block, parent, sdb, &cfg, vm.Config{}, blockCtx)
-				} else {
-					PreExecution(context.Background(), block.BeaconRoot(), parent, &cfg, vm.NewEVM(blockCtx, sdb, &cfg, vm.Config{}), block.Number(), block.Time())
-				}
-				return sdb.GetCode(params.DeterministicFactoryAddress)
-			}
-			serial, v2 := run(false), run(true)
-			if string(serial) != string(v2) {
-				t.Fatalf("factory code differs: serial=%x v2=%x", serial, v2)
-			}
-			if got := len(v2) > 0; got != tt.want {
-				t.Fatalf("factory present = %v, want %v", got, tt.want)
-			}
-		})
 	}
 }

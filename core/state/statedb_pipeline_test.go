@@ -11,6 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/triedb"
 	"github.com/ethereum/go-ethereum/triedb/pathdb"
 )
@@ -30,7 +31,7 @@ func TestWasStorageSlotRead(t *testing.T) {
 	// Create an account and read its storage
 	sdb.CreateAccount(addr)
 	sdb.SetNonce(addr, 1, 0)
-	sdb.Finalise(false)
+	sdb.Finalise(params.Rules{})
 
 	// Read the slot
 	sdb.GetState(addr, slot)
@@ -62,7 +63,7 @@ func TestFlatDiffOverlay_ReadThrough(t *testing.T) {
 	sdb.CreateAccount(baseAddr)
 	sdb.SetNonce(baseAddr, 1, 0)
 	sdb.SetBalance(baseAddr, uint256.NewInt(100), 0)
-	root, _, _ := sdb.CommitWithUpdate(0, false, false)
+	root, _, _ := sdb.CommitWithUpdate(params.Rules{}, 0)
 
 	// Create a FlatDiff with a new account
 	overlayAddr := common.HexToAddress("0xoverlay")
@@ -140,7 +141,7 @@ func TestFlatDiffOverlay_DestructedAccountReturnsNil(t *testing.T) {
 	addr := common.HexToAddress("0xdead01")
 	sdb.CreateAccount(addr)
 	sdb.SetBalance(addr, uint256.NewInt(999), 0)
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	// FlatDiff marks account as destructed but does NOT add it to Accounts.
@@ -168,7 +169,7 @@ func TestFlatDiffOverlay_DestructAndResurrect(t *testing.T) {
 	sdb.CreateAccount(addr)
 	sdb.SetNonce(addr, 5, 0)
 	sdb.SetState(addr, slot, common.HexToHash("0xbeef"))
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	// FlatDiff has addr in BOTH Destructs and Accounts (destruct + resurrect with new nonce).
@@ -203,7 +204,7 @@ func TestTrieOnlyReader_SkipsFlatReaders(t *testing.T) {
 	addr := common.HexToAddress("0xacc001")
 	sdb.CreateAccount(addr)
 	sdb.SetBalance(addr, uint256.NewInt(42), 0)
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	// Create StateDB via NewTrieOnly — reads go through trie, not flat/snapshot.
@@ -230,7 +231,7 @@ func TestTrieOnlyReader_SkipsFlatReaders(t *testing.T) {
 	// Modify the account so that IntermediateRoot walks the trie and collects
 	// witness nodes from the account trie.
 	trieDB2.SetBalance(addr, uint256.NewInt(99), 0)
-	trieDB2.IntermediateRoot(false)
+	trieDB2.IntermediateRoot(params.Rules{})
 
 	require.NotEmpty(t, witness.State, "witness should capture trie nodes when using trie-only reader")
 }
@@ -258,7 +259,7 @@ func TestNewTrieOnly_ReadsCorrectData(t *testing.T) {
 	slot := common.HexToHash("0xaa01")
 	sdb.SetState(addr3, slot, common.HexToHash("0xbb01"))
 
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	// Create via NewTrieOnly and verify all data.
@@ -295,7 +296,7 @@ func TestPropagateReadsTo_AccountsAndStorage(t *testing.T) {
 	sdb.CreateAccount(addr2)
 	sdb.SetBalance(addr2, uint256.NewInt(222), 0)
 
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	// Create src and dst StateDBs at the same root.
@@ -329,7 +330,7 @@ func TestCommitSnapshot_CapturesDestructs(t *testing.T) {
 	addr := common.HexToAddress("0xdestruct01")
 	sdb.CreateAccount(addr)
 	sdb.SetBalance(addr, uint256.NewInt(500), 0)
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	// Create a new StateDB at the committed root and self-destruct the account.
@@ -361,9 +362,9 @@ func TestPrefetchRoot_FlatDiffAccountUsesCommittedRoot(t *testing.T) {
 	sdb.CreateAccount(addr)
 	sdb.SetNonce(addr, 1, 0)
 	sdb.SetState(addr, common.HexToHash("0x01"), common.HexToHash("0xaa"))
-	sdb.Finalise(false)
+	sdb.Finalise(params.Rules{})
 
-	committedRoot, _, err := sdb.CommitWithUpdate(0, false, false)
+	committedRoot, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	// Read back the committed account to get its storage root.
@@ -378,7 +379,7 @@ func TestPrefetchRoot_FlatDiffAccountUsesCommittedRoot(t *testing.T) {
 	sdb2, err := New(committedRoot, db)
 	require.NoError(t, err)
 	sdb2.SetState(addr, common.HexToHash("0x02"), common.HexToHash("0xbb")) // new slot
-	sdb2.Finalise(false)
+	sdb2.Finalise(params.Rules{})
 	diff := sdb2.CommitSnapshot(false)
 
 	// The FlatDiff account has block N's storage root (different from committed).
@@ -421,9 +422,9 @@ func TestPrefetchRoot_NormalAccountFallsBackToDataRoot(t *testing.T) {
 	sdb.CreateAccount(addr)
 	sdb.SetNonce(addr, 1, 0)
 	sdb.SetState(addr, common.HexToHash("0x01"), common.HexToHash("0xaa"))
-	sdb.Finalise(false)
+	sdb.Finalise(params.Rules{})
 
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	// Load the account normally (no FlatDiff)
@@ -450,7 +451,7 @@ func TestPrefetchRoot_NewAccountInFlatDiff(t *testing.T) {
 	// Commit an empty state
 	sdb, err := New(types.EmptyRootHash, db)
 	require.NoError(t, err)
-	committedRoot, _, err := sdb.CommitWithUpdate(0, false, false)
+	committedRoot, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	// FlatDiff with a new account that doesn't exist in committed state
@@ -498,9 +499,9 @@ func TestSnapshotDirtyStorageSlots_UsesCommittedPrefetchRootForFlatDiff(t *testi
 	sdb.CreateAccount(addr)
 	sdb.SetNonce(addr, 1, 0)
 	sdb.SetState(addr, slot, common.HexToHash("0xaa"))
-	sdb.Finalise(false)
+	sdb.Finalise(params.Rules{})
 
-	committedRoot, _, err := sdb.CommitWithUpdate(0, false, false)
+	committedRoot, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	committedDB, err := New(committedRoot, db)
@@ -544,7 +545,7 @@ func TestSnapshotDirtyStorageSlots_SkipsNewFlatDiffAccount(t *testing.T) {
 
 	sdb, err := New(types.EmptyRootHash, db)
 	require.NoError(t, err)
-	committedRoot, _, err := sdb.CommitWithUpdate(0, false, false)
+	committedRoot, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	addr := common.HexToAddress("0xnew")
@@ -583,16 +584,16 @@ func TestPrefetchRoot_DeepCopyPreserves(t *testing.T) {
 	sdb.CreateAccount(addr)
 	sdb.SetNonce(addr, 1, 0)
 	sdb.SetState(addr, common.HexToHash("0x01"), common.HexToHash("0xaa"))
-	sdb.Finalise(false)
+	sdb.Finalise(params.Rules{})
 
-	committedRoot, _, err := sdb.CommitWithUpdate(0, false, false)
+	committedRoot, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	// Simulate a FlatDiff account with a different storage root
 	sdb2, err := New(committedRoot, db)
 	require.NoError(t, err)
 	sdb2.SetState(addr, common.HexToHash("0x02"), common.HexToHash("0xbb"))
-	sdb2.Finalise(false)
+	sdb2.Finalise(params.Rules{})
 	diff := sdb2.CommitSnapshot(false)
 
 	// Create overlay StateDB and load account
@@ -677,7 +678,7 @@ func TestPipelinedSRC_RootParity_NewVsTrieOnly(t *testing.T) {
 	initial.SetBalance(addrReadOnly, uint256.NewInt(400), 0)
 	initial.SetState(addrReadOnly, slotReadOnly, common.HexToHash("0xdddd"))
 
-	parentRoot, _, err := initial.CommitWithUpdate(0, false, false)
+	parentRoot, _, err := initial.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 	require.NoError(t, tdb.Commit(parentRoot, false))
 
@@ -709,7 +710,7 @@ func TestPipelinedSRC_RootParity_NewVsTrieOnly(t *testing.T) {
 	// overwrites the destruct trail and CommitSnapshot would emit only an
 	// Accounts entry, not the destruct+resurrect shape we want to exercise.
 	exec.SelfDestruct(addrResurrect)
-	exec.Finalise(false)
+	exec.Finalise(params.Rules{})
 	exec.CreateAccount(addrResurrect)
 	exec.SetBalance(addrResurrect, uint256.NewInt(999), 0)
 	exec.SetNonce(addrResurrect, 1, 0)
@@ -743,19 +744,19 @@ func TestPipelinedSRC_RootParity_NewVsTrieOnly(t *testing.T) {
 	trieOnlyDB, err := NewTrieOnly(parentRoot, sdb)
 	require.NoError(t, err)
 	trieOnlyDB.ApplyFlatDiffForCommit(flatDiff)
-	rootTrieOnly := trieOnlyDB.IntermediateRoot(false)
+	rootTrieOnly := trieOnlyDB.IntermediateRoot(params.Rules{})
 
 	// --- Path B: state.New (witness-off multi-reader path) ---
 	multiDB, err := New(parentRoot, sdb)
 	require.NoError(t, err)
 	multiDB.ApplyFlatDiffForCommit(flatDiff)
-	rootMulti := multiDB.IntermediateRoot(false)
+	rootMulti := multiDB.IntermediateRoot(params.Rules{})
 
 	// --- Path C: state.New + fast witness-off replay path ---
 	fastDB, err := New(parentRoot, sdb)
 	require.NoError(t, err)
 	fastDB.ApplyFlatDiffForCommitFast(flatDiff)
-	rootFast := fastDB.IntermediateRoot(false)
+	rootFast := fastDB.IntermediateRoot(params.Rules{})
 
 	// --- Parity assertion: byte-identical state roots ---
 	require.Equal(t, rootTrieOnly, rootMulti,
@@ -781,7 +782,7 @@ func TestPipelinedSRC_RootParity_NewVsTrieOnly(t *testing.T) {
 	// resurrection. Without this, the cross-check would diverge from the
 	// FlatDiff path because the FlatDiff captured a destruct+resurrect shape
 	// that only exists when there is a Finalise between the two operations.
-	direct.Finalise(false)
+	direct.Finalise(params.Rules{})
 	direct.CreateAccount(addrResurrect)
 	direct.SetBalance(addrResurrect, uint256.NewInt(999), 0)
 	direct.SetNonce(addrResurrect, 1, 0)
@@ -790,7 +791,7 @@ func TestPipelinedSRC_RootParity_NewVsTrieOnly(t *testing.T) {
 	direct.CreateAccount(addrCodeNew)
 	direct.SetBalance(addrCodeNew, uint256.NewInt(77), 0)
 	direct.SetCode(addrCodeNew, []byte{0x60, 0x03}, 0)
-	rootDirect := direct.IntermediateRoot(false)
+	rootDirect := direct.IntermediateRoot(params.Rules{})
 	require.Equal(t, rootDirect, rootTrieOnly,
 		"FlatDiff replay path must produce the same root as direct execution")
 }
@@ -805,7 +806,7 @@ func TestApplyFlatDiffForCommitFast_PreservesParentStorageRootAfterOverlayExecut
 	require.NoError(t, err)
 	initial.CreateAccount(addr)
 	initial.SetBalance(addr, uint256.NewInt(1), 0)
-	root0, _, err := initial.CommitWithUpdate(0, false, false)
+	root0, _, err := initial.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	// Block N changes storage. The resulting FlatDiff is used as an overlay
@@ -818,7 +819,7 @@ func TestApplyFlatDiffForCommitFast_PreservesParentStorageRootAfterOverlayExecut
 	blockNSRC, err := New(root0, db)
 	require.NoError(t, err)
 	blockNSRC.ApplyFlatDiffForCommit(diffN)
-	rootN, _, err := blockNSRC.CommitWithUpdate(1, false, false)
+	rootN, _, err := blockNSRC.CommitWithUpdate(params.Rules{}, 1)
 	require.NoError(t, err)
 
 	// Block N+1 sees block N's storage through the FlatDiff overlay, but its
@@ -836,17 +837,17 @@ func TestApplyFlatDiffForCommitFast_PreservesParentStorageRootAfterOverlayExecut
 	direct, err := New(rootN, db)
 	require.NoError(t, err)
 	direct.SetBalance(addr, uint256.NewInt(2), 0)
-	rootDirect := direct.IntermediateRoot(false)
+	rootDirect := direct.IntermediateRoot(params.Rules{})
 
 	slow, err := New(rootN, db)
 	require.NoError(t, err)
 	slow.ApplyFlatDiffForCommit(diffN1)
-	rootSlow := slow.IntermediateRoot(false)
+	rootSlow := slow.IntermediateRoot(params.Rules{})
 
 	fast, err := New(rootN, db)
 	require.NoError(t, err)
 	fast.ApplyFlatDiffForCommitFast(diffN1)
-	rootFast := fast.IntermediateRoot(false)
+	rootFast := fast.IntermediateRoot(params.Rules{})
 
 	require.Equal(t, rootDirect, rootSlow)
 	require.Equal(t, rootSlow, rootFast,
@@ -871,7 +872,7 @@ func TestFlatDiffOverlay_DestructByExecutingBlock(t *testing.T) {
 	sdb.CreateAccount(addr)
 	sdb.SetNonce(addr, 5, 0)
 	sdb.SetState(addr, slot, common.HexToHash("0x1111"))
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	// Parent block rewrote the slot; the overlay carries that post-state.
@@ -898,7 +899,7 @@ func TestFlatDiffOverlay_DestructByExecutingBlock(t *testing.T) {
 	// Now the executing block destructs the account and recreates it at the
 	// same address, then reads the slot it never rewrote.
 	overlayDB.SelfDestruct(addr)
-	overlayDB.Finalise(true)
+	overlayDB.Finalise(params.Rules{IsEIP158: true})
 	overlayDB.CreateAccount(addr)
 
 	require.Equal(t, common.Hash{}, overlayDB.GetState(addr, slot),
@@ -926,7 +927,7 @@ func TestFlatDiffOverlay_ParentDestructKeepsOverlayStorage(t *testing.T) {
 	sdb.CreateAccount(addr)
 	sdb.SetNonce(addr, 5, 0)
 	sdb.SetState(addr, oldSlot, common.HexToHash("0x1111"))
-	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	root, _, err := sdb.CommitWithUpdate(params.Rules{}, 0)
 	require.NoError(t, err)
 
 	// Parent block destructed addr, resurrected it, and wrote newSlot.

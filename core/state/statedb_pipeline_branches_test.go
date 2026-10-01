@@ -10,6 +10,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/params"
 )
 
 func TestTrieOnlyConstructorsRejectUnknownRoot(t *testing.T) {
@@ -37,7 +38,7 @@ func TestFlatDiffInternalBranchHelpers(t *testing.T) {
 	require.False(t, statedb.hasAccountMutation(addr))
 	statedb.journal.mutationStateFor(addr).add(journalMutationKindTouch)
 	require.True(t, statedb.hasAccountMutation(addr))
-	statedb.clearJournalAndRefund()
+	statedb.clearInternal()
 	statedb.mutations[addr] = &mutation{typ: update}
 	require.True(t, statedb.hasAccountMutation(addr))
 
@@ -108,7 +109,7 @@ func TestCommittedStoragePrefetchAndWitnessBranches(t *testing.T) {
 	slot := common.HexToHash("0xaaa")
 
 	base := filledStateDB()
-	root, _, err := base.CommitWithUpdate(1, false, false)
+	root, _, err := base.CommitWithUpdate(params.Rules{}, 1)
 	require.NoError(t, err)
 
 	t.Run("storage reads and writes use the committed prefetch root", func(t *testing.T) {
@@ -119,8 +120,8 @@ func TestCommittedStoragePrefetchAndWitnessBranches(t *testing.T) {
 
 		require.NotEqual(t, common.Hash{}, statedb.GetState(addr, slot))
 		statedb.SetState(addr, slot, common.BigToHash(big.NewInt(999)))
-		statedb.Finalise(false)
-		require.NotEqual(t, common.Hash{}, statedb.IntermediateRoot(false))
+		statedb.Finalise(params.Rules{})
+		require.NotEqual(t, common.Hash{}, statedb.IntermediateRoot(params.Rules{}))
 	})
 
 	t.Run("witness rereads read-only storage without a prefetcher", func(t *testing.T) {
@@ -131,7 +132,7 @@ func TestCommittedStoragePrefetchAndWitnessBranches(t *testing.T) {
 		statedb.SetWitness(witness)
 
 		require.NotEqual(t, common.Hash{}, statedb.GetState(addr, slot))
-		require.NotEqual(t, common.Hash{}, statedb.IntermediateRoot(false))
+		require.NotEqual(t, common.Hash{}, statedb.IntermediateRoot(params.Rules{}))
 		require.NotEmpty(t, witness.State)
 	})
 
@@ -143,7 +144,7 @@ func TestCommittedStoragePrefetchAndWitnessBranches(t *testing.T) {
 		statedb.SetWitness(witness)
 		require.NotEqual(t, common.Hash{}, statedb.GetState(addr, slot))
 		statedb.SelfDestruct(addr)
-		statedb.IntermediateRoot(false)
+		statedb.IntermediateRoot(params.Rules{})
 		require.NotEmpty(t, witness.State)
 	})
 }
@@ -212,7 +213,7 @@ func TestTerminatedPrefetcherErrorsAreSoft(t *testing.T) {
 	addr := common.HexToAddress("0xaffeaffeaffeaffeaffeaffeaffeaffeaffeaffe")
 	slot := common.HexToHash("0xaaa")
 	base := filledStateDB()
-	root, _, err := base.CommitWithUpdate(1, false, false)
+	root, _, err := base.CommitWithUpdate(params.Rules{}, 1)
 	require.NoError(t, err)
 
 	statedb, err := New(root, base.db)
@@ -222,7 +223,7 @@ func TestTerminatedPrefetcherErrorsAreSoft(t *testing.T) {
 
 	require.NotEqual(t, common.Hash{}, statedb.GetState(addr, slot))
 	statedb.SetState(addr, slot, common.HexToHash("0x1234"))
-	statedb.Finalise(false)
+	statedb.Finalise(params.Rules{})
 	require.NoError(t, statedb.Error())
 }
 

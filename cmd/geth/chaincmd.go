@@ -113,7 +113,7 @@ if one is set.  Otherwise it prints the genesis from the datadir.`,
 			utils.MetricsInfluxDBTokenFlag,
 			utils.MetricsInfluxDBBucketFlag,
 			utils.MetricsInfluxDBOrganizationFlag,
-			utils.StateSizeTrackingFlag,
+			utils.StateSizeTrackingFlag, // deprecated
 			utils.VMTraceFlag,
 			utils.VMTraceJsonConfigFlag,
 			utils.TransactionHistoryFlag,
@@ -508,8 +508,6 @@ func importHistory(ctx *cli.Context) error {
 			network = "mainnet"
 		case ctx.Bool(utils.SepoliaFlag.Name):
 			network = "sepolia"
-		case ctx.Bool(utils.HoleskyFlag.Name):
-			network = "holesky"
 		case ctx.Bool(utils.HoodiFlag.Name):
 			network = "hoodi"
 		}

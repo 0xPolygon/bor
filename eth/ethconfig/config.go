@@ -241,9 +241,6 @@ type Config struct {
 	// Use switch-based fast path interpreter
 	EnableEVMSwitchDispatch bool
 
-	// Enables tracking of state size
-	EnableStateSizeTracking bool
-
 	// Enables VM tracing
 	VMTrace           string
 	VMTraceJsonConfig string

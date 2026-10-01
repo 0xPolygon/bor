@@ -75,7 +75,7 @@ func runSelfDestructSelfBeneficiary(t *testing.T, useV2 bool) {
 	sender := crypto.PubkeyToAddress(key.PublicKey)
 	sdb.AddBalance(sender, uint256.NewInt(1e18), tracing.BalanceChangeUnspecified)
 
-	root, _ := sdb.Commit(0, false, false)
+	root, _ := sdb.Commit(params.Rules{}, 0)
 	tdb.Commit(root, false)
 
 	statedb, _ := state.New(root, state.NewDatabase(tdb, nil))
@@ -111,7 +111,7 @@ func runSelfDestructSelfBeneficiary(t *testing.T, useV2 bool) {
 		if _, err := ApplyMessage(evm, msg, gp); err != nil {
 			t.Fatalf("ApplyMessage: %v", err)
 		}
-		statedb.Finalise(true)
+		statedb.Finalise(params.Rules{IsEIP158: true})
 	} else {
 		msg, _ := TransactionToMessage(tx, signer, blockCtx.BaseFee)
 		tasks := []V2Task{{Index: 0, Tx: tx, Msg: msg}}
@@ -121,7 +121,7 @@ func runSelfDestructSelfBeneficiary(t *testing.T, useV2 bool) {
 		bals := blockstm.NewMVBalanceStore()
 		_ = ExecuteV2BlockSTM(context.Background(), tasks, readBase, store, bals, blockCtx, common.Hash{}, vm.Config{}, &cfg,
 			blockCtx.GasLimit, 1, statedb, nil)
-		statedb.Finalise(true)
+		statedb.Finalise(params.Rules{IsEIP158: true})
 	}
 
 	// Critical assertion: outerB (the SELFDESTRUCT subject WITH self-as-

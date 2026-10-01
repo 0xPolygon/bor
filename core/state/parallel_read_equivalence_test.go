@@ -11,6 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/triedb"
 )
 
@@ -112,7 +113,7 @@ func TestParallelReadEquivalence(t *testing.T) {
 					t.Fatal(err)
 				}
 				m.apply(serial)
-				serial.Finalise(true)
+				serial.Finalise(params.Rules{IsEIP158: true})
 
 				parBase, err := New(root, db)
 				if err != nil {
@@ -182,7 +183,7 @@ func buildEquivBase(t *testing.T, addr common.Address, prefunded bool) (common.H
 		pre.AddBalance(addr, uint256.NewInt(500), tracing.BalanceChangeTransfer)
 		pre.SetNonce(addr, 1, tracing.NonceChangeEoACall)
 	}
-	root, err := pre.Commit(0, false, false)
+	root, err := pre.Commit(params.Rules{}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -169,7 +169,7 @@ func execPathResultWithBudget(
 	chainCfg *params.ChainConfig,
 	setup func(*state.StateDB),
 ) execResult {
-	gas := budget.RegularGas
+	gas := budget.ExecutionGas
 	addr := common.BytesToAddress([]byte("contract"))
 	caller := common.BytesToAddress([]byte("caller"))
 	origin := common.BytesToAddress([]byte("origin"))
@@ -190,7 +190,7 @@ func execPathResultWithBudget(
 	if setup != nil {
 		setup(db)
 	}
-	db.Finalise(true)
+	db.Finalise(params.Rules{IsEIP158: true})
 
 	bctx := BlockContext{
 		CanTransfer: func(StateDB, common.Address, *uint256.Int) bool { return true },
@@ -222,7 +222,7 @@ func execPathResultWithBudget(
 	ret, gasLeft, err := evm.Call(caller, addr, input, budget, uint256.NewInt(77))
 	return execResult{
 		ret:      ret,
-		gas:      gasLeft.RegularGas,
+		gas:      gasLeft.ExecutionGas,
 		stateGas: gasLeft.StateGas,
 		err:      err,
 		logs:     db.Logs(),
@@ -1549,7 +1549,7 @@ func makeEVM(code []byte, gas uint64, switchDispatch bool) (*EVM, common.Address
 	db.SetCode(addr, code, tracing.CodeChangeUnspecified)
 	db.CreateAccount(caller)
 	db.SetBalance(caller, uint256.NewInt(0x5678), tracing.BalanceChangeUnspecified)
-	db.Finalise(true)
+	db.Finalise(params.Rules{IsEIP158: true})
 
 	bctx := BlockContext{
 		CanTransfer: func(StateDB, common.Address, *uint256.Int) bool { return true },

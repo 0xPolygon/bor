@@ -576,11 +576,7 @@ func runIRPebbleTrial(
 
 	// --- Commit phase: where pebble/clean-cache warming would actually pay. ---
 	commitStart := time.Now()
-	_, err = statedb.Commit(
-		header.Number.Uint64(),
-		chain.Config().IsEIP158(header.Number),
-		chain.Config().IsCancun(header.Number),
-	)
+	_, err = statedb.Commit(chain.Config().Rules(header.Number, false, header.Time), header.Number.Uint64())
 	commitDur := time.Since(commitStart)
 	if err != nil {
 		t.Fatalf("statedb.Commit: %v", err)

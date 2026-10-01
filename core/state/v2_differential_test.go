@@ -11,6 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/triedb"
 )
 
@@ -309,8 +310,8 @@ func newDiffStateDB(t *testing.T) (*StateDB, Database) {
 // the committed root, matching how Bor reopens state between blocks.
 func commitAndReopen(t *testing.T, sdb *StateDB, db Database, block uint64) (*StateDB, common.Hash) {
 	t.Helper()
-	sdb.Finalise(true)
-	root, err := sdb.Commit(block, true, false)
+	sdb.Finalise(params.Rules{IsEIP158: true})
+	root, err := sdb.Commit(params.Rules{IsEIP158: true}, block)
 	if err != nil {
 		t.Fatalf("commit: %v", err)
 	}
@@ -392,8 +393,8 @@ func runSerial(t *testing.T, sc scenario) (common.Hash, []probeResult, []logSumm
 		op.applyTo(sdb)
 	}
 	refund := sdb.GetRefund()
-	sdb.Finalise(true)
-	root := sdb.IntermediateRoot(true)
+	sdb.Finalise(params.Rules{IsEIP158: true})
+	root := sdb.IntermediateRoot(params.Rules{IsEIP158: true})
 	return root, collectProbes(sdb, sc.probes), collectStateDBLogs(sdb), refund
 }
 
@@ -425,7 +426,7 @@ func runParallel(t *testing.T, sc scenario) (common.Hash, []probeResult, []logSu
 	}
 	refund := pdb.GetRefund()
 	pdb.SettleTo(finalDB)
-	finalRoot := finalDB.IntermediateRoot(true)
+	finalRoot := finalDB.IntermediateRoot(params.Rules{IsEIP158: true})
 	return finalRoot, collectProbes(finalDB, sc.probes), collectStateDBLogs(finalDB), refund
 }
 

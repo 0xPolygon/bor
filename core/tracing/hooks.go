@@ -109,13 +109,35 @@ type (
 	// see [OnSystemCallStartHook] and [OnSystemCallEndHook] for more information.
 	ExitHook = func(depth int, output []byte, gasUsed uint64, err error, reverted bool)
 
+	// EnterHookV2 is the multi-dimensional successor to EnterHook: gas is the
+	// frame's complete entry budget rather than its execution dimension alone.
+	// Pre-Amsterdam the State field is always zero. If both hooks are set, only
+	// V2 is invoked; register at most one.
+	EnterHookV2 = func(depth int, typ byte, from common.Address, to common.Address, input []byte, gas Gas, value *big.Int)
+
+	// ExitHookV2 is the multi-dimensional successor to ExitHook. It reports the
+	// budget the frame leaves behind instead of the gas it used: under EIP-8037 a
+	// frame can be refilled more state-gas than it charged, so its state usage can
+	// be negative and does not fit ExitHook's unsigned difference. Usage is the
+	// difference against the gas reported by the matching EnterHookV2. If both
+	// hooks are set, only V2 is invoked; register at most one.
+	ExitHookV2 = func(depth int, output []byte, gasLeft Gas, err error, reverted bool)
+
 	// OpcodeHook is invoked just prior to the execution of an opcode.
 	OpcodeHook = func(pc uint64, op byte, gas, cost uint64, scope OpContext, rData []byte, depth int, err error)
 
 	// FaultHook is invoked when an error occurs during the execution of an opcode.
 	FaultHook = func(pc uint64, op byte, gas, cost uint64, scope OpContext, depth int, err error)
 
-	// GasChangeHook reports changes to the regular execution gas. Tracers
+	// OpcodeHookV2 is the multi-dimensional successor to OpcodeHook: gas and cost
+	// are vectors. If both hooks are set, only V2 is invoked; register at most one.
+	OpcodeHookV2 = func(pc uint64, op byte, gas, cost Gas, scope OpContext, rData []byte, depth int, err error)
+
+	// FaultHookV2 is the multi-dimensional successor to FaultHook. See OpcodeHookV2
+	// for how the two dimensions relate.
+	FaultHookV2 = func(pc uint64, op byte, gas, cost Gas, scope OpContext, depth int, err error)
+
+	// GasChangeHook reports changes to the execution gas. Tracers
 	// that don't need the EIP-8037 (Amsterdam) state-access dimension can
 	// implement only this hook; it fires unchanged across the fork. If both
 	// this and GasChangeHookV2 are set, only V2 is invoked; implement exactly
@@ -124,7 +146,7 @@ type (
 
 	// GasChangeHookV2 is the multi-dimensional successor to GasChangeHook,
 	// invoked when any gas dimension changes and exposing the EIP-8037
-	// (Amsterdam) state-access dimension alongside the regular one. The
+	// (Amsterdam) state-access dimension alongside the execution one. The
 	// non-changing dimension is passed through unchanged in both `old` and
 	// `new`, so consumers always see the complete gas vector. Pre-Amsterdam
 	// the State field is always zero, making a V2-only tracer behave exactly
@@ -210,11 +232,16 @@ type Hooks struct {
 	OnTxStart     TxStartHook
 	OnTxEnd       TxEndHook
 	OnEnter       EnterHook
+	OnEnterV2     EnterHookV2
 	OnExit        ExitHook
+	OnExitV2      ExitHookV2
 	OnOpcode      OpcodeHook
+	OnOpcodeV2    OpcodeHookV2
 	OnFault       FaultHook
+	OnFaultV2     FaultHookV2
 	OnGasChange   GasChangeHook
 	OnGasChangeV2 GasChangeHookV2
+
 	// Chain events
 	OnBlockchainInit    BlockchainInitHook
 	OnClose             CloseHook
@@ -233,6 +260,7 @@ type Hooks struct {
 	OnCodeChangeV2  CodeChangeHookV2
 	OnStorageChange StorageChangeHook
 	OnLog           LogHook
+
 	// Block hash read
 	OnBlockHashRead BlockHashReadHook
 }
@@ -248,7 +276,7 @@ func (h *Hooks) HasGasHook() bool {
 // EmitGasChange dispatches a gas change event to the registered hooks. If the
 // multi-dimensional OnGasChangeV2 hook is set it is invoked with the full Gas
 // vectors; otherwise the single-dimensional OnGasChange hook is invoked with
-// the regular-gas dimension only. The call is a no-op when the receiver is
+// the execution-gas dimension only. The call is a no-op when the receiver is
 // nil, when neither hook is registered, or when the reason is GasChangeIgnored.
 //
 // Call sites SHOULD use this helper instead of invoking the hooks directly so
@@ -262,7 +290,80 @@ func (h *Hooks) EmitGasChange(old, new Gas, reason GasChangeReason) {
 		return
 	}
 	if h.OnGasChange != nil {
-		h.OnGasChange(old.Regular, new.Regular, reason)
+		h.OnGasChange(old.Execution, new.Execution, reason)
+	}
+}
+
+// EmitEnter dispatches a frame-entry event, preferring the multi-dimensional
+// hook and falling back to the execution dimension for the single-dimensional one.
+func (h *Hooks) EmitEnter(depth int, typ byte, from common.Address, to common.Address, input []byte, gas Gas, value *big.Int) {
+	if h == nil {
+		return
+	}
+	if h.OnEnterV2 != nil {
+		h.OnEnterV2(depth, typ, from, to, input, gas, value)
+		return
+	}
+	if h.OnEnter != nil {
+		h.OnEnter(depth, typ, from, to, input, gas.Execution, value)
+	}
+}
+
+// EmitExit dispatches a frame-exit event. The multi-dimensional hook receives the
+// leftover budget; the single-dimensional one keeps receiving the execution gas
+// the frame consumed, derived from the entry budget.
+func (h *Hooks) EmitExit(depth int, output []byte, gas, gasLeft Gas, err error, reverted bool) {
+	if h == nil {
+		return
+	}
+	if h.OnExitV2 != nil {
+		h.OnExitV2(depth, output, gasLeft, err, reverted)
+		return
+	}
+	if h.OnExit != nil {
+		var used uint64
+		if gas.Execution > gasLeft.Execution {
+			used = gas.Execution - gasLeft.Execution
+		}
+		h.OnExit(depth, output, used, err, reverted)
+	}
+}
+
+// HasOpcodeHook reports whether an opcode hook is registered.
+func (h *Hooks) HasOpcodeHook() bool {
+	return h != nil && (h.OnOpcodeV2 != nil || h.OnOpcode != nil)
+}
+
+// EmitOpcode dispatches an opcode event.
+func (h *Hooks) EmitOpcode(pc uint64, op byte, gas, cost Gas, scope OpContext, rData []byte, depth int, err error) {
+	if h == nil {
+		return
+	}
+	if h.OnOpcodeV2 != nil {
+		h.OnOpcodeV2(pc, op, gas, cost, scope, rData, depth, err)
+		return
+	}
+	if h.OnOpcode != nil {
+		h.OnOpcode(pc, op, gas.Execution, cost.Execution, scope, rData, depth, err)
+	}
+}
+
+// HasFaultHook reports whether a fault hook is registered.
+func (h *Hooks) HasFaultHook() bool {
+	return h != nil && (h.OnFaultV2 != nil || h.OnFault != nil)
+}
+
+// EmitFault dispatches an opcode fault event.
+func (h *Hooks) EmitFault(pc uint64, op byte, gas, cost Gas, scope OpContext, depth int, err error) {
+	if h == nil {
+		return
+	}
+	if h.OnFaultV2 != nil {
+		h.OnFaultV2(pc, op, gas, cost, scope, depth, err)
+		return
+	}
+	if h.OnFault != nil {
+		h.OnFault(pc, op, gas.Execution, cost.Execution, scope, depth, err)
 	}
 }
 
@@ -335,16 +436,16 @@ const (
 )
 
 // Gas represents a multi-dimensional gas budget introduced by EIP-8037.
-// It carries the regular execution gas and the state-access gas, which are
+// It carries the execution gas and the state-access gas, which are
 // metered independently from the Amsterdam fork onwards.
 //
-// Before Amsterdam, gas metering is single-dimensional and only the Regular
+// Before Amsterdam, gas metering is single-dimensional and only the Execution
 // field is meaningful; State is always zero. The struct is shaped so that
-// pre-Amsterdam call sites can populate it as Gas{Regular: g} without loss
+// pre-Amsterdam call sites can populate it as Gas{Execution: g} without loss
 // of fidelity relative to the legacy single-uint64 hook.
 type Gas struct {
-	Regular uint64 // Regular is the budget for ordinary execution gas.
-	State   uint64 // State is the budget dedicated to state-access gas (zero pre-Amsterdam).
+	Execution uint64 // Execution is the budget for ordinary execution gas.
+	State     uint64 // State is the budget dedicated to state-access gas (zero pre-Amsterdam).
 }
 
 // GasChangeReason is used to indicate the reason for a gas change, useful
@@ -385,12 +486,16 @@ const (
 	// gas limit. At most one per call.
 	GasChangeCallInitialBalance GasChangeReason = 5
 
-	// GasChangeCallLeftOverReturned is the gas left over that is returned to the
-	// caller. Always a decrease towards 0; not emitted when no gas is left.
+	// GasChangeCallLeftOverReturned is recorded on the callee: its leftover leaving
+	// it for the caller, always down to 0. Emitted before the callee's OnExit; not
+	// emitted when no gas is left. The caller books the same transfer as
+	// GasChangeCallLeftOverRefunded.
 	GasChangeCallLeftOverReturned GasChangeReason = 6
 
-	// GasChangeCallLeftOverRefunded is the child call's left-over gas given back
-	// to the caller. Always an increase; not emitted when nothing is refunded.
+	// GasChangeCallLeftOverRefunded is recorded on the caller: the callee's
+	// leftover arriving, always an increase. Emitted after the callee's OnExit;
+	// not emitted when nothing is refunded. For the top-level frame the caller is
+	// the transaction itself.
 	GasChangeCallLeftOverRefunded GasChangeReason = 7
 
 	// GasChangeCallContractCreation is the gas burned for a CREATE.
@@ -411,6 +516,9 @@ const (
 
 	// GasChangeCallStorageColdAccess is the gas charged for a cold storage
 	// access under EIP-2929.
+	//
+	// Deprecated: no longer emitted. Cold accesses are charged while computing an
+	// opcode's dynamic gas and are reported by its GasChangeCallOpCode event.
 	GasChangeCallStorageColdAccess GasChangeReason = 13
 
 	// GasChangeCallFailedExecution is the remaining gas burned when execution
@@ -450,8 +558,24 @@ const (
 	// to create a new account (EIP-8037).
 	GasChangeAccountCreation GasChangeReason = 22
 
-	// GasChangeIgnored is a special value that can be used to indicate that the gas change should be ignored as
-	// it will be "manually" tracked by a direct emit of the gas change event.
+	// GasChangeRefundRevertedState is the state-gas refilled into a frame's budget
+	// when it reverts, because the state creations it paid for are rolled back
+	// (EIP-8037).
+	GasChangeRefundRevertedState GasChangeReason = 23
+
+	// GasChangeTxGasForwarded is the transaction's whole budget being handed to its
+	// top-level frame, which reports the receiving side as GasChangeCallInitialBalance.
+	// Deeper frames are funded by their caller's opcode instead.
+	GasChangeTxGasForwarded GasChangeReason = 24
+
+	// GasChangeStateGasRepaid is state-gas moved from a frame's reservoir back to
+	// its gas_left when a child merges, repaying execution gas the frame had lent
+	// to state charges that the child then refilled (EIP-8037). Emitted right
+	// after GasChangeCallLeftOverRefunded; not emitted when nothing is owed.
+	GasChangeStateGasRepaid GasChangeReason = 25
+
+	// GasChangeIgnored indicates the gas change should be ignored, as it is
+	// tracked manually by a direct emit of the gas change event.
 	GasChangeIgnored GasChangeReason = 0xFF
 )
 

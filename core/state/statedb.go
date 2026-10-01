@@ -1741,9 +1741,9 @@ func (s *StateDB) GetRefund() uint64 {
 // Finalise finalises the state by removing the destructed objects and clears
 // the journal as well as the refunds. Finalise, however, will not push any updates
 // into the tries just yet. Only IntermediateRoot or Commit will do that.
-func (s *StateDB) Finalise(deleteEmptyObjects bool) *bal.ConstructionBlockAccessList {
-	if s.stateAccessList != nil {
-		return s.finaliseAmsterdam(deleteEmptyObjects)
+func (s *StateDB) Finalise(rules params.Rules) *bal.ConstructionBlockAccessList {
+	if rules.IsAmsterdam {
+		return s.finaliseAmsterdam(rules)
 	}
 	addressesToPrefetch := make([]common.Address, 0, len(s.journal.mutations))
 	for addr := range s.journal.mutations {
@@ -1761,7 +1761,7 @@ func (s *StateDB) Finalise(deleteEmptyObjects bool) *bal.ConstructionBlockAccess
 			continue
 		}
 
-		if obj.selfDestructed || (deleteEmptyObjects && obj.empty()) {
+		if obj.selfDestructed || (rules.IsEIP158 && obj.empty()) {
 			delete(s.stateObjects, obj.address)
 			s.markDelete(addr)
 
@@ -1786,12 +1786,17 @@ func (s *StateDB) Finalise(deleteEmptyObjects bool) *bal.ConstructionBlockAccess
 		}
 	}
 	// Invalidate journal because reverting across transactions is not allowed.
-	s.clearJournalAndRefund()
+	s.clearInternal()
 
 	return nil
 }
 
 func (s *StateDB) recordAccessListChanges(addr common.Address, state *journalMutationState) {
+	// No list means we are outside a transaction scope (e.g, PostExecution
+	// without a preceding Prepare), skip BAL recording.
+	if s.stateAccessList == nil {
+		return
+	}
 	var (
 		balance = uint256.NewInt(0)
 		nonce   uint64
@@ -1818,7 +1823,7 @@ func (s *StateDB) recordAccessListChanges(addr common.Address, state *journalMut
 }
 
 // finaliseAmsterdam is the Amsterdam-and-later variant of Finalise.
-func (s *StateDB) finaliseAmsterdam(deleteEmptyObjects bool) *bal.ConstructionBlockAccessList {
+func (s *StateDB) finaliseAmsterdam(rules params.Rules) *bal.ConstructionBlockAccessList {
 	addressesToPrefetch := make([]common.Address, 0, len(s.journal.mutations))
 	for addr, state := range s.journal.mutations {
 		obj, exist := s.stateObjects[addr]
@@ -1836,7 +1841,7 @@ func (s *StateDB) finaliseAmsterdam(deleteEmptyObjects bool) *bal.ConstructionBl
 		}
 		switch {
 		case obj.selfDestructed:
-			// EIP-8264: accounts marked for self-destruction, instead of
+			// EIP-8246: accounts marked for self-destruction, instead of
 			// being deleted, are modified as follows:
 			// - nonce is reset to 0,
 			// - balance is unchanged,
@@ -1856,7 +1861,7 @@ func (s *StateDB) finaliseAmsterdam(deleteEmptyObjects bool) *bal.ConstructionBl
 				s.currentBlockDestructs[obj.address] = struct{}{}
 			}
 
-		case deleteEmptyObjects && obj.empty():
+		case rules.IsEIP158 && obj.empty():
 			// EIP-161: a touched, empty account is removed.
 			delete(s.stateObjects, obj.address)
 			s.markDelete(addr)
@@ -1887,9 +1892,9 @@ func (s *StateDB) finaliseAmsterdam(deleteEmptyObjects bool) *bal.ConstructionBl
 		}
 	}
 	// Invalidate journal because reverting across transactions is not allowed.
-	s.clearJournalAndRefund()
-
-	return s.stateAccessList
+	bal := s.stateAccessList
+	s.clearInternal()
+	return bal
 }
 
 // addWitnessNodes adds storage-trie nodes to the block witness. addrHash is the
@@ -1922,9 +1927,9 @@ func (s *StateDB) addObjectWitness(obj *stateObject) {
 // IntermediateRoot computes the current root hash of the state trie.
 // It is called in between transactions to get the root hash that
 // goes into transaction receipts.
-func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
+func (s *StateDB) IntermediateRoot(rules params.Rules) common.Hash {
 	// Finalise all the dirty storage states and write them into the tries
-	s.Finalise(deleteEmptyObjects)
+	s.Finalise(rules)
 
 	// Initialize the trie if it's not constructed yet. If the prefetch
 	// is enabled, the trie constructed below will be replaced by the
@@ -2155,9 +2160,17 @@ func (s *StateDB) SetTxContext(thash common.Hash, ti int, blockAccessIndex uint3
 	s.blockAccessIndex = blockAccessIndex
 }
 
-func (s *StateDB) clearJournalAndRefund() {
+func (s *StateDB) clearInternal() {
 	s.journal.reset()
 	s.refund = 0
+
+	// The access list built during this scope has been handed off to the caller,
+	// which merges it into the block-level list by adopting the account objects
+	// rather than copying them.
+	//
+	// Dereferencing the accessList explicitly, avoiding any following mutations
+	// affecting the external BAL.
+	s.stateAccessList = nil
 }
 
 // deleteStorage is designed to delete the storage trie of a designated account.
@@ -2225,7 +2238,7 @@ func (s *StateDB) deleteStorage(addrHash common.Hash, root common.Hash) (map[com
 // with their values be tracked as original value.
 // In case (d), **original** account along with its storages should be deleted,
 // with their values be tracked as original value.
-func (s *StateDB) handleDestruction(noStorageWiping bool) (map[common.Hash]*AccountDelete, []*trienode.NodeSet, error) {
+func (s *StateDB) handleDestruction(rules params.Rules) (map[common.Hash]*AccountDelete, []*trienode.NodeSet, error) {
 	var (
 		nodes   []*trienode.NodeSet
 		deletes = make(map[common.Hash]*AccountDelete)
@@ -2253,7 +2266,7 @@ func (s *StateDB) handleDestruction(noStorageWiping bool) (map[common.Hash]*Acco
 		if prev.Root == types.EmptyRootHash || s.db.Type().Is(TypeUBT) {
 			continue
 		}
-		if noStorageWiping {
+		if rules.IsCancun {
 			return nil, nil, fmt.Errorf("unexpected storage wiping, %x", addr)
 		}
 		// Remove storage slots belonging to the account.
@@ -2277,13 +2290,13 @@ func (s *StateDB) GetTrie() Trie {
 
 // commit gathers the state mutations accumulated along with the associated
 // trie changes, resetting all internal flags with the new state as the base.
-func (s *StateDB) commit(deleteEmptyObjects bool, noStorageWiping bool, blockNumber uint64) (*StateUpdate, error) {
+func (s *StateDB) commit(rules params.Rules, blockNumber uint64) (*StateUpdate, error) {
 	// Short circuit in case any database failure occurred earlier.
 	if s.dbErr != nil {
 		return nil, fmt.Errorf("commit aborted due to earlier error: %v", s.dbErr)
 	}
 	// Finalize any pending changes and merge everything into the tries
-	root := s.IntermediateRoot(deleteEmptyObjects)
+	root := s.IntermediateRoot(rules)
 
 	// Short circuit if any error occurs within the IntermediateRoot.
 	if s.dbErr != nil {
@@ -2331,7 +2344,7 @@ func (s *StateDB) commit(deleteEmptyObjects bool, noStorageWiping bool, blockNum
 	// the same block, account deletions must be processed first. This ensures
 	// that the storage trie nodes deleted during destruction and recreated
 	// during subsequent resurrection can be combined correctly.
-	deletes, delNodes, err := s.handleDestruction(noStorageWiping)
+	deletes, delNodes, err := s.handleDestruction(rules)
 	if err != nil {
 		return nil, err
 	}
@@ -2428,7 +2441,7 @@ func (s *StateDB) commit(deleteEmptyObjects bool, noStorageWiping bool, blockNum
 	s.originalRoot = root
 
 	typ := StorageKeyHashed
-	if noStorageWiping {
+	if rules.IsCancun {
 		typ = StorageKeyPlain
 	}
 	return NewStateUpdate(typ, origin, root, blockNumber, deletes, updates, nodes), nil
@@ -2436,8 +2449,8 @@ func (s *StateDB) commit(deleteEmptyObjects bool, noStorageWiping bool, blockNum
 
 // commitAndFlush is a wrapper of commit which also commits the state mutations
 // to the configured data stores.
-func (s *StateDB) commitAndFlush(block uint64, deleteEmptyObjects bool, noStorageWiping bool) (*StateUpdate, error) {
-	ret, err := s.commit(deleteEmptyObjects, noStorageWiping, block)
+func (s *StateDB) commitAndFlush(rules params.Rules, block uint64) (*StateUpdate, error) {
+	ret, err := s.commit(rules, block)
 	if err != nil {
 		return nil, err
 	}
@@ -2504,22 +2517,20 @@ func (s *StateDB) commitAndFlush(block uint64, deleteEmptyObjects bool, noStorag
 // The associated block number of the state transition is also provided
 // for more chain context.
 //
-// noStorageWiping is a flag indicating whether storage wiping is permitted.
-// Since self-destruction was deprecated with the Cancun fork and there are
-// no empty accounts left that could be deleted by EIP-158, storage wiping
-// should not occur.
-func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool, noStorageWiping bool) (common.Hash, error) {
-	ret, err := s.commitAndFlush(block, deleteEmptyObjects, noStorageWiping)
+// Whether empty accounts are deleted and whether storage wiping is permitted
+// both follow from the fork rules this state was created with.
+func (s *StateDB) Commit(rules params.Rules, block uint64) (common.Hash, error) {
+	ret, err := s.commitAndFlush(rules, block)
 	if err != nil {
 		return common.Hash{}, err
 	}
 	return ret.Root, nil
 }
 
-// CommitWithUpdate writes the state mutations and returns both the root hash and the state update.
-// This is useful for tracking state changes at the blockchain level.
-func (s *StateDB) CommitWithUpdate(block uint64, deleteEmptyObjects bool, noStorageWiping bool) (common.Hash, *StateUpdate, error) {
-	ret, err := s.commitAndFlush(block, deleteEmptyObjects, noStorageWiping)
+// CommitWithUpdate writes the state mutations and returns the state update for
+// external processing (e.g., live tracing hooks).
+func (s *StateDB) CommitWithUpdate(rules params.Rules, block uint64) (common.Hash, *StateUpdate, error) {
+	ret, err := s.commitAndFlush(rules, block)
 	if err != nil {
 		return common.Hash{}, nil, err
 	}
@@ -2694,7 +2705,9 @@ func (diff *FlatDiff) mutatedStorageKeys(addr common.Address) []common.Hash {
 // mutations without performing any MPT hashing (~1ms). After this call the
 // StateDB should no longer be used by the caller.
 func (s *StateDB) CommitSnapshot(deleteEmptyObjects bool) *FlatDiff {
-	s.Finalise(deleteEmptyObjects)
+	// IsAmsterdam mirrors the pre-#35498 dispatch, which chose the Amsterdam
+	// finaliser whenever a block access list was attached.
+	s.Finalise(params.Rules{IsEIP158: deleteEmptyObjects, IsAmsterdam: s.stateAccessList != nil})
 
 	diff := &FlatDiff{
 		Accounts:    make(map[common.Address]types.StateAccount),
@@ -3371,8 +3384,8 @@ func (s *StateDB) snapshotDirtyStorageSlots() []addrDirtySlots {
 // Used during pipelined settlement where incremental commit tracking is
 // not required — the final Finalise before IntermediateRoot handles that.
 //
-// isAmsterdam selects the self-destruct handling of serial finaliseAmsterdam,
-// which V2 can't reach through stateAccessList because it builds no access list.
+// isAmsterdam selects the self-destruct handling of serial finaliseAmsterdam
+// (EIP-8246). V2 passes it explicitly: its StateDB is never handed the rules.
 func (s *StateDB) FinaliseFast(deleteEmptyObjects, isAmsterdam bool) {
 	var addressesToPrefetch []common.Address
 	for addr := range s.journal.mutations {
@@ -3395,7 +3408,7 @@ func (s *StateDB) FinaliseFast(deleteEmptyObjects, isAmsterdam bool) {
 		// errors mean the prefetcher already terminated and are safe to drop.
 		_ = s.prefetcher.prefetch(common.Hash{}, s.originalRoot, common.Address{}, addressesToPrefetch, nil, false)
 	}
-	s.clearJournalAndRefund()
+	s.clearInternal()
 }
 
 // finaliseDelete tears down a self-destructed or empty object during

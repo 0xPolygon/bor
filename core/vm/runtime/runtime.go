@@ -137,7 +137,7 @@ func Execute(code, input []byte, cfg *Config, interrupt *atomic.Bool) ([]byte, *
 	var (
 		address = common.BytesToAddress([]byte("contract"))
 		vmenv   = NewEnv(cfg)
-		rules   = cfg.ChainConfig.Rules(vmenv.Context.BlockNumber, vmenv.Context.Random != nil, vmenv.Context.Time)
+		rules   = cfg.ChainConfig.Rules(cfg.BlockNumber, cfg.Random != nil, cfg.Time)
 	)
 	if cfg.EVMConfig.Tracer != nil && cfg.EVMConfig.Tracer.OnTxStart != nil {
 		cfg.EVMConfig.Tracer.OnTxStart(vmenv.GetVMContext(), types.NewTx(&types.LegacyTx{To: &address, Data: input, Value: cfg.Value, Gas: cfg.GasLimit}), cfg.Origin)
@@ -164,7 +164,7 @@ func Execute(code, input []byte, cfg *Config, interrupt *atomic.Bool) ([]byte, *
 		uint256.MustFromBig(cfg.Value),
 	)
 	if cfg.EVMConfig.Tracer != nil && cfg.EVMConfig.Tracer.OnTxEnd != nil {
-		cfg.EVMConfig.Tracer.OnTxEnd(&types.Receipt{GasUsed: cfg.GasLimit - result.RegularGas}, err)
+		cfg.EVMConfig.Tracer.OnTxEnd(&types.Receipt{GasUsed: cfg.GasLimit - result.ExecutionGas}, err)
 	}
 	return ret, cfg.State, err
 }
@@ -183,7 +183,7 @@ func Create(input []byte, cfg *Config) ([]byte, common.Address, uint64, error) {
 
 	var (
 		vmenv = NewEnv(cfg)
-		rules = cfg.ChainConfig.Rules(vmenv.Context.BlockNumber, vmenv.Context.Random != nil, vmenv.Context.Time)
+		rules = cfg.ChainConfig.Rules(cfg.BlockNumber, cfg.Random != nil, cfg.Time)
 	)
 	if cfg.EVMConfig.Tracer != nil && cfg.EVMConfig.Tracer.OnTxStart != nil {
 		cfg.EVMConfig.Tracer.OnTxStart(vmenv.GetVMContext(), types.NewTx(&types.LegacyTx{Data: input, Value: cfg.Value, Gas: cfg.GasLimit}), cfg.Origin)
@@ -204,9 +204,9 @@ func Create(input []byte, cfg *Config) ([]byte, common.Address, uint64, error) {
 		uint256.MustFromBig(cfg.Value),
 	)
 	if cfg.EVMConfig.Tracer != nil && cfg.EVMConfig.Tracer.OnTxEnd != nil {
-		cfg.EVMConfig.Tracer.OnTxEnd(&types.Receipt{GasUsed: cfg.GasLimit - result.RegularGas}, err)
+		cfg.EVMConfig.Tracer.OnTxEnd(&types.Receipt{GasUsed: cfg.GasLimit - result.ExecutionGas}, err)
 	}
-	return code, address, result.RegularGas, err
+	return code, address, result.ExecutionGas, err
 }
 
 // Call executes the code given by the contract's address. It will return the
@@ -243,7 +243,7 @@ func Call(address common.Address, input []byte, cfg *Config) ([]byte, uint64, er
 		uint256.MustFromBig(cfg.Value),
 	)
 	if cfg.EVMConfig.Tracer != nil && cfg.EVMConfig.Tracer.OnTxEnd != nil {
-		cfg.EVMConfig.Tracer.OnTxEnd(&types.Receipt{GasUsed: cfg.GasLimit - result.RegularGas}, err)
+		cfg.EVMConfig.Tracer.OnTxEnd(&types.Receipt{GasUsed: cfg.GasLimit - result.ExecutionGas}, err)
 	}
-	return ret, result.RegularGas, err
+	return ret, result.ExecutionGas, err
 }

@@ -450,7 +450,8 @@ web3._extend({
 		new web3._extend.Method({
 			name: 'getBadBlocks',
 			call: 'debug_getBadBlocks',
-			params: 0,
+			params: 1,
+			inputFormatter: [null]
 		}),
 		new web3._extend.Method({
 			name: 'storageRangeAt',
@@ -539,12 +540,6 @@ web3._extend({
 			name: 'sync',
 			call: 'debug_sync',
 			params: 1
-		}),
-		new web3._extend.Method({
-			name: 'stateSize',
-			call: 'debug_stateSize',
-			params: 1,
-			inputFormatter: [null],
 		}),
 	],
 	properties: []

@@ -580,23 +580,27 @@ func decodeStorageKey(s string) (h common.Hash, inputLength int, err error) {
 }
 
 // GetHeaderByNumber returns the requested canonical block header.
-//   - When number is -1 the chain pending header is returned.
 //   - When number is -2 the chain latest header is returned.
 //   - When number is -3 the chain finalized header is returned.
 //   - When number is -4 the chain safe header is returned.
+//
+// Per the specification, the result is null for the pending tag and for a
+// safe or finalized tag that cannot be resolved to a block.
 func (api *BlockChainAPI) GetHeaderByNumber(ctx context.Context, number rpc.BlockNumber) (map[string]interface{}, error) {
-	header, err := api.b.HeaderByNumber(ctx, number)
-	if header != nil && err == nil {
-		response := RPCMarshalHeader(header)
-		if number == rpc.PendingBlockNumber {
-			// Pending header need to nil out a few fields
-			for _, field := range []string{"hash", "nonce", "miner"} {
-				response[field] = nil
-			}
-		}
-		return response, err
+	if number == rpc.PendingBlockNumber {
+		return nil, nil
 	}
-	return nil, err
+	header, err := api.b.HeaderByNumber(ctx, number)
+	if err != nil {
+		if number == rpc.SafeBlockNumber || number == rpc.FinalizedBlockNumber {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if header == nil {
+		return nil, nil
+	}
+	return RPCMarshalHeader(header), nil
 }
 
 // GetHeaderByHash returns the requested header by hash.
@@ -1792,12 +1796,6 @@ func AccessList(ctx context.Context, b Backend, blockNrOrHash rpc.BlockNumberOrH
 		addressesToExclude[addr] = struct{}{}
 	}
 
-	// Prevent redundant operations if args contain more authorizations than EVM may handle
-	maxAuthorizations := uint64(*args.Gas) / params.CallNewAccountGas
-	if uint64(len(args.AuthorizationList)) > maxAuthorizations {
-		return nil, 0, nil, errors.New("insufficient gas to process all authorizations")
-	}
-
 	for _, auth := range args.AuthorizationList {
 		// Duplicating stateTransition.validateAuthorization() logic
 		if (!auth.ChainID.IsZero() && auth.ChainID.CmpBig(b.ChainConfig().ChainID) != 0) || auth.Nonce+1 < auth.Nonce {
@@ -2902,7 +2900,7 @@ func (api *DebugAPI) AccountAt(ctx context.Context, blockHash common.Hash, txInd
 		}
 
 		// Finalize state after each transaction
-		stateDb.Finalise(evm.ChainConfig().IsEIP158(block.Number()))
+		stateDb.Finalise(evm.GetRules())
 	}
 
 	// Query account state

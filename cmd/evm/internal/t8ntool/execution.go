@@ -159,6 +159,7 @@ func (pre *Prestate) Apply(vmConfig vm.Config, chainConfig *params.ChainConfig, 
 	var (
 		isEIP4762 = chainConfig.IsVerkle(big.NewInt(int64(pre.Env.Number)))
 		statedb   *state.StateDB
+		rules     = chainConfig.Rules(big.NewInt(int64(pre.Env.Number)), pre.Env.Random != nil, pre.Env.Timestamp)
 	)
 	if pre.AllocPath != "" {
 		var err error
@@ -235,13 +236,6 @@ func (pre *Prestate) Apply(vmConfig vm.Config, chainConfig *params.ChainConfig, 
 		chainConfig.DAOForkBlock.Cmp(new(big.Int).SetUint64(pre.Env.Number)) == 0 {
 		misc.ApplyDAOHardFork(statedb)
 	}
-	// EIP-7997: insert the deterministic deployment factory at the Amsterdam
-	// activation block via an irregular state transition.
-	if pre.Env.Number > 0 &&
-		chainConfig.IsAmsterdam(new(big.Int).SetUint64(pre.Env.Number)) &&
-		!chainConfig.IsAmsterdam(new(big.Int).SetUint64(pre.Env.Number-1)) {
-		misc.ApplyEIP7997(statedb)
-	}
 	evm := vm.NewEVM(vmContext, statedb, chainConfig, vmConfig)
 	if beaconRoot := pre.Env.ParentBeaconBlockRoot; beaconRoot != nil {
 		core.ProcessBeaconBlockRoot(*beaconRoot, evm)
@@ -309,8 +303,7 @@ func (pre *Prestate) Apply(vmConfig vm.Config, chainConfig *params.ChainConfig, 
 		blobGasUsed += txBlobGas
 		receipts = append(receipts, receipt)
 	}
-
-	statedb.IntermediateRoot(chainConfig.IsEIP158(vmContext.BlockNumber))
+	statedb.IntermediateRoot(rules)
 
 	// Add mining reward? (-1 means rewards are disabled)
 	if miningReward >= 0 {
@@ -366,7 +359,7 @@ func (pre *Prestate) Apply(vmConfig vm.Config, chainConfig *params.ChainConfig, 
 		}
 	}
 	// Commit block
-	root, err := statedb.Commit(vmContext.BlockNumber.Uint64(), chainConfig.IsEIP158(vmContext.BlockNumber), chainConfig.IsCancun(vmContext.BlockNumber))
+	root, err := statedb.Commit(rules, vmContext.BlockNumber.Uint64())
 	if err != nil {
 		return nil, nil, nil, NewError(ErrorEVM, fmt.Errorf("could not commit state: %v", err))
 	}
@@ -444,7 +437,7 @@ func MakePreState(db ethdb.Database, accounts types.GenesisAlloc, isBintrie bool
 		}
 	}
 	// Commit and re-open to start with a clean state.
-	root, err = statedb.Commit(0, false, false)
+	root, err = statedb.Commit(params.Rules{}, 0)
 	if err != nil {
 		panic(fmt.Errorf("failed to commit initial state: %v", err))
 	}
@@ -519,7 +512,7 @@ func MakePreStateStreaming(db ethdb.Database, allocPath string, isBintrie bool) 
 		return nil, NewError(ErrorJson, fmt.Errorf("failed reading alloc closing token: %v", err))
 	}
 
-	root, err = statedb.Commit(0, false, false)
+	root, err = statedb.Commit(params.Rules{}, 0)
 	if err != nil {
 		return nil, NewError(ErrorEVM, fmt.Errorf("failed to commit initial state: %v", err))
 	}

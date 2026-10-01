@@ -45,7 +45,8 @@ func TestFinaliseFastSelfDestructParity(t *testing.T) {
 			sdb.SetCode(addr, []byte{0x60, 0x00}, tracing.CodeChangeUnspecified)
 			sdb.SetState(addr, common.Hash{1}, common.Hash{2})
 			sdb.SetBalance(addr, uint256.NewInt(tt.balance), tracing.BalanceChangeUnspecified)
-			root, err := sdb.Commit(0, true, false)
+			rules := params.Rules{IsEIP158: true, IsAmsterdam: tt.isAmsterdam}
+			root, err := sdb.Commit(params.Rules{IsEIP158: true}, 0)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -57,12 +58,10 @@ func TestFinaliseFastSelfDestructParity(t *testing.T) {
 				}
 				return db
 			}
-			rules := params.Rules{IsAmsterdam: tt.isAmsterdam}
-
 			serial := open()
 			serial.Prepare(rules, common.Address{}, common.Address{}, nil, nil, nil)
 			serial.SelfDestruct(addr)
-			serial.Finalise(true)
+			serial.Finalise(rules)
 
 			// V2's final StateDB is never prepared, so it only learns the
 			// fork from the flag.
@@ -76,7 +75,7 @@ func TestFinaliseFastSelfDestructParity(t *testing.T) {
 			if s, f := serial.Exist(addr), fast.Exist(addr); s != f {
 				t.Fatalf("existence mismatch: serial=%v fast=%v", s, f)
 			}
-			if s, f := serial.IntermediateRoot(true), fast.IntermediateRoot(true); s != f {
+			if s, f := serial.IntermediateRoot(rules), fast.IntermediateRoot(rules); s != f {
 				t.Fatalf("root mismatch: serial=%x fast=%x", s, f)
 			}
 		})

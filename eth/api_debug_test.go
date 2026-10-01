@@ -45,6 +45,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/triedb"
 )
 
@@ -137,7 +138,7 @@ func TestAccountRange(t *testing.T) {
 			m[addr] = true
 		}
 	}
-	root, _ := sdb.Commit(0, true, false)
+	root, _ := sdb.Commit(params.Rules{IsEIP158: true}, 0)
 	sdb, _ = state.New(root, statedb)
 
 	trie, err := statedb.OpenTrie(root)
@@ -195,7 +196,7 @@ func TestEmptyAccountRange(t *testing.T) {
 		st, _   = state.New(types.EmptyRootHash, statedb)
 	)
 	// Commit(although nothing to flush) and re-init the statedb
-	st.Commit(0, true, false)
+	st.Commit(params.Rules{IsEIP158: true}, 0)
 	st, _ = state.New(types.EmptyRootHash, statedb)
 
 	results := st.RawDump(&state.DumpConfig{
@@ -240,7 +241,7 @@ func TestStorageRangeAt(t *testing.T) {
 	for _, entry := range storage {
 		sdb.SetState(addr, *entry.Key, entry.Value)
 	}
-	root, _ := sdb.Commit(0, false, false)
+	root, _ := sdb.Commit(params.Rules{}, 0)
 	sdb, _ = state.New(root, db)
 
 	// Check a few combinations of limit and start/end.
@@ -368,6 +369,33 @@ func TestGetModifiedAccounts(t *testing.T) {
 
 		assert.Len(t, filtered, len(accounts)+1)
 	})
+}
+
+// TestExecutionWitnessMissingBlock ensures that debug_executionWitness returns
+// an error, rather than panicking, when the requested block does not exist.
+// BlockByNumberOrHash returns a nil block without an error for an unknown hash,
+// which previously caused a nil pointer dereference.
+func TestExecutionWitnessMissingBlock(t *testing.T) {
+	t.Parallel()
+
+	accounts := newAccounts(1)
+	genesis := &core.Genesis{
+		Config: params.TestChainConfig,
+		Alloc: types.GenesisAlloc{
+			accounts[0].addr: {Balance: big.NewInt(params.Ether)},
+		},
+	}
+	blockChain := newTestBlockChain(t, 1, genesis, func(_ int, _ *core.BlockGen) {})
+	defer blockChain.Stop()
+
+	eth := &Ethereum{blockchain: blockChain}
+	eth.APIBackend = &EthAPIBackend{eth: eth}
+	api := NewDebugAPI(eth)
+
+	// A height past the head. This makes BlockByNumber return (nil, nil).
+	missing := rpc.BlockNumber(1000)
+	_, err := api.ExecutionWitness(missing)
+	assert.Error(t, err, "expected an error for a missing block, got nil")
 }
 
 func TestDebugAPI_ClearTxpool(t *testing.T) {

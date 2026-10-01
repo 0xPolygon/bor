@@ -53,7 +53,7 @@ func commitStateDatabase(t *testing.T, code map[common.Address][]byte, funded co
 		statedb.SetCode(address, bytecode, tracing.CodeChangeUnspecified)
 	}
 	statedb.AddBalance(funded, uint256.NewInt(params.Ether), tracing.BalanceChangeUnspecified)
-	root, err := statedb.Commit(0, false, false)
+	root, err := statedb.Commit(params.Rules{}, 0)
 	require.NoError(t, err)
 	require.NoError(t, trieDB.Commit(root, false))
 	return stateDatabase, root
@@ -120,7 +120,7 @@ func runTransientStorageParity(t *testing.T, gasBoundBlock *big.Int) common.Hash
 	observedSlot := common.BigToHash(big.NewInt(1))
 	require.Equal(t, common.BigToHash(big.NewInt(1)), liveState.GetState(receiver, common.Hash{}))
 	require.Equal(t, liveState.GetState(receiver, observedSlot), traceState.GetState(receiver, observedSlot))
-	require.Equal(t, liveState.Copy().IntermediateRoot(true), traceState.Copy().IntermediateRoot(true))
+	require.Equal(t, liveState.Copy().IntermediateRoot(params.Rules{IsEIP158: true}), traceState.Copy().IntermediateRoot(params.Rules{IsEIP158: true}))
 	return liveState.GetState(receiver, observedSlot)
 }
 

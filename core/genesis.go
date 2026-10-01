@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math/big"
 	"strings"
 
@@ -163,6 +164,7 @@ func hashAlloc(ga *types.GenesisAlloc, isUBT bool) (common.Hash, error) {
 		emptyRoot = types.EmptyBinaryHash
 	}
 	db := rawdb.NewMemoryDatabase()
+
 	statedb, err := state.New(emptyRoot, state.NewDatabase(triedb.NewDatabase(db, config), nil))
 	if err != nil {
 		return common.Hash{}, err
@@ -178,7 +180,7 @@ func hashAlloc(ga *types.GenesisAlloc, isUBT bool) (common.Hash, error) {
 			statedb.SetState(addr, key, value)
 		}
 	}
-	return statedb.Commit(0, false, false)
+	return statedb.Commit(params.Rules{}, 0)
 }
 
 // flushAlloc is very similar with hash, but the main difference is all the
@@ -205,7 +207,7 @@ func flushAlloc(ga *types.GenesisAlloc, triedb *triedb.Database) (common.Hash, e
 			statedb.SetState(addr, key, value)
 		}
 	}
-	root, err := statedb.Commit(0, false, false)
+	root, err := statedb.Commit(params.Rules{}, 0)
 	if err != nil {
 		return common.Hash{}, err
 	}
@@ -239,8 +241,6 @@ func getGenesisState(db ethdb.Database, blockhash common.Hash) (alloc types.Gene
 		genesis = DefaultGenesisBlock()
 	case params.SepoliaGenesisHash:
 		genesis = DefaultSepoliaGenesisBlock()
-	case params.HoleskyGenesisHash:
-		genesis = DefaultHoleskyGenesisBlock()
 	case params.HoodiGenesisHash:
 		genesis = DefaultHoodiGenesisBlock()
 	}
@@ -264,6 +264,7 @@ type genesisSpecMarshaling struct {
 	BaseFee       *math.HexOrDecimal256
 	ExcessBlobGas *math.HexOrDecimal64
 	BlobGasUsed   *math.HexOrDecimal64
+	SlotNumber    *math.HexOrDecimal64
 }
 
 // GenesisMismatchError is raised when trying to overwrite an existing
@@ -460,8 +461,6 @@ func (g *Genesis) chainConfigOrDefault(ghash common.Hash, stored *params.ChainCo
 		return g.Config
 	case ghash == params.MainnetGenesisHash:
 		return params.MainnetChainConfig
-	case ghash == params.HoleskyGenesisHash:
-		return params.HoleskyChainConfig
 	case ghash == params.SepoliaGenesisHash:
 		return params.SepoliaChainConfig
 	case ghash == params.GoerliGenesisHash:
@@ -684,18 +683,6 @@ func DefaultSepoliaGenesisBlock() *Genesis {
 	}
 }
 
-// DefaultHoleskyGenesisBlock returns the Holesky network genesis block.
-func DefaultHoleskyGenesisBlock() *Genesis {
-	return &Genesis{
-		Config:     params.HoleskyChainConfig,
-		Nonce:      0x1234,
-		GasLimit:   0x17d7840,
-		Difficulty: big.NewInt(0x01),
-		Timestamp:  1695902100,
-		Alloc:      decodePrealloc(holeskyAllocData),
-	}
-}
-
 // DefaultMumbaiGenesisBlock returns the Mumbai network genesis block.
 func DefaultMumbaiGenesisBlock() *Genesis {
 	return &Genesis{
@@ -750,6 +737,29 @@ func DefaultHoodiGenesisBlock() *Genesis {
 	}
 }
 
+// SystemContractAllocs returns the genesis allocation of the system contracts
+// that the post-shanghai forks issue system calls into.
+func SystemContractAllocs() types.GenesisAlloc {
+	return types.GenesisAlloc{
+		// EIP-4788 - Beacon block root in the EVM
+		params.BeaconRootsAddress: {Nonce: 1, Code: params.BeaconRootsCode, Balance: common.Big0},
+
+		// EIP-2935 - Historical block hashes from state
+		params.HistoryStorageAddress: {Nonce: 1, Code: params.HistoryStorageCode, Balance: common.Big0},
+
+		// EIP-7002 / EIP-7251 - Triggerable withdrawals and consolidations
+		params.WithdrawalQueueAddress:    {Nonce: 1, Code: params.WithdrawalQueueCode, Balance: common.Big0},
+		params.ConsolidationQueueAddress: {Nonce: 1, Code: params.ConsolidationQueueCode, Balance: common.Big0},
+
+		// EIP-8282 - Builder execution requests
+		params.BuilderDepositAddress: {Nonce: 1, Code: params.BuilderDepositCode, Balance: common.Big0},
+		params.BuilderExitAddress:    {Nonce: 1, Code: params.BuilderExitCode, Balance: common.Big0},
+
+		// EIP-7997 - Deterministic deployment factory
+		params.DeterministicFactoryAddress: {Nonce: 1, Code: params.DeterministicFactoryCode, Balance: common.Big0},
+	}
+}
+
 // DeveloperGenesisBlock returns the 'geth --dev' genesis block.
 func DeveloperGenesisBlock(gasLimit uint64, faucet *common.Address) *Genesis {
 	// Override the default period to the user requested one
@@ -780,18 +790,10 @@ func DeveloperGenesisBlock(gasLimit uint64, faucet *common.Address) *Genesis {
 			common.BytesToAddress([]byte{0x10}):    {Balance: big.NewInt(1)}, // BLSG1MapG1
 			common.BytesToAddress([]byte{0x11}):    {Balance: big.NewInt(1)}, // BLSG2MapG2
 			common.BytesToAddress([]byte{0x1, 00}): {Balance: big.NewInt(1)}, // P256Verify
-			// Pre-deploy system contracts
-			params.BeaconRootsAddress:        {Nonce: 1, Code: params.BeaconRootsCode, Balance: common.Big0},
-			params.HistoryStorageAddress:     {Nonce: 1, Code: params.HistoryStorageCode, Balance: common.Big0},
-			params.WithdrawalQueueAddress:    {Nonce: 1, Code: params.WithdrawalQueueCode, Balance: common.Big0},
-			params.ConsolidationQueueAddress: {Nonce: 1, Code: params.ConsolidationQueueCode, Balance: common.Big0},
-			// EIP-8282 - Builder Execution Requests
-			params.BuilderDepositAddress: {Nonce: 1, Code: params.BuilderDepositCode, Balance: common.Big0},
-			params.BuilderExitAddress:    {Nonce: 1, Code: params.BuilderExitCode, Balance: common.Big0},
-			// EIP-7997 - Deterministic deployment factory
-			params.DeterministicFactoryAddress: {Nonce: 1, Code: params.DeterministicFactoryCode, Balance: common.Big0},
 		},
 	}
+	// Pre-deploy the system contracts the enabled forks call into
+	maps.Copy(genesis.Alloc, SystemContractAllocs())
 	if faucet != nil {
 		genesis.Alloc[*faucet] = types.Account{Balance: new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(9))}
 	}

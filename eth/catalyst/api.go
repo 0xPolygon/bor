@@ -203,7 +203,7 @@ func (api *ConsensusAPI) ForkchoiceUpdatedV3(update engine.ForkchoiceStateV1, pa
 			return engine.STATUS_INVALID, attributesErr("missing withdrawals")
 		case params.BeaconRoot == nil:
 			return engine.STATUS_INVALID, attributesErr("missing beacon root")
-		case !api.checkFork(params.Timestamp, forks.Cancun, forks.Prague, forks.Osaka, forks.BPO1, forks.BPO2, forks.BPO3, forks.BPO4, forks.BPO5):
+		case !api.checkFork(params.Timestamp, forks.Cancun, forks.Prague, forks.Osaka, forks.BPO1, forks.BPO2):
 			return engine.STATUS_INVALID, unsupportedForkErr("fcuV3 must only be called for cancun/prague/osaka payloads")
 		}
 	}
@@ -368,7 +368,7 @@ func (api *ConsensusAPI) forkchoiceUpdated(update engine.ForkchoiceStateV1, payl
 		// generating the payload. It's a special corner case that a few slots are
 		// missing and we are requested to generate the payload in slot.
 	} else {
-		if finalized := api.eth.BlockChain().CurrentFinalBlock(); finalized != nil && block.NumberU64() <= finalized.Number.Uint64() {
+		if finalized := api.eth.BlockChain().CurrentFinalBlock(); finalized != nil && block.NumberU64() < finalized.Number.Uint64() {
 			log.Info("Skipping beacon update to finalized ancestor", "number", block.NumberU64(), "hash", update.HeadBlockHash)
 			return valid(nil), nil
 		}
@@ -535,9 +535,6 @@ func (api *ConsensusAPI) GetPayloadV5(payloadID engine.PayloadID) (*engine.Execu
 			forks.Osaka,
 			forks.BPO1,
 			forks.BPO2,
-			forks.BPO3,
-			forks.BPO4,
-			forks.BPO5,
 		})
 }
 
@@ -786,7 +783,7 @@ func (api *ConsensusAPI) NewPayloadV4(params engine.ExecutableData, versionedHas
 		return invalidStatus, paramsErr("nil beaconRoot post-cancun")
 	case executionRequests == nil:
 		return invalidStatus, paramsErr("nil executionRequests post-prague")
-	case !api.checkFork(params.Timestamp, forks.Prague, forks.Osaka, forks.BPO1, forks.BPO2, forks.BPO3, forks.BPO4, forks.BPO5):
+	case !api.checkFork(params.Timestamp, forks.Prague, forks.Osaka, forks.BPO1, forks.BPO2):
 		return invalidStatus, unsupportedForkErr("newPayloadV4 must only be called for prague/osaka payloads")
 	}
 	requests := convertRequests(executionRequests)
@@ -910,6 +907,30 @@ func (api *ConsensusAPI) newPayload(params engine.ExecutableData, versionedHashe
 	if err != nil {
 		log.Warn("NewPayload: inserting block failed", "error", err)
 
+		// If this block was also built locally, its local build succeeded while
+		// re-import now fails.
+		localBlock, localReceipts, revertedTxs, revertedIdx := api.localBlocks.getWithDetails(block.Root())
+		if localBlock != nil {
+			log.Warn("NewPayload: locally-built block failed to import", "number", localBlock.NumberU64(), "hash", localBlock.Hash(), "root", localBlock.Root())
+
+			reverted := make([]*rawdb.RevertedTx, len(revertedTxs))
+			for i, tx := range revertedTxs {
+				reverted[i] = &rawdb.RevertedTx{
+					Index: revertedIdx[i],
+					Tx:    tx,
+				}
+			}
+			receipts := make([]*types.ReceiptForStorage, len(localReceipts))
+			for i, r := range localReceipts {
+				receipts[i] = (*types.ReceiptForStorage)(r)
+			}
+			rawdb.WriteBadBlockWithDetails(api.eth.ChainDb(), localBlock, &rawdb.ExecutionDetail{
+				AccessList: localBlock.AccessList(),
+				Receipts:   receipts,
+				Reason:     err.Error(),
+				Reverted:   reverted,
+			})
+		}
 		api.invalidLock.Lock()
 		api.invalidBlocksHits[block.Hash()] = 1
 		api.invalidTipsets[block.Hash()] = block.Header()

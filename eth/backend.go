@@ -354,7 +354,6 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			// - DATADIR/triedb/merkle.journal
 			// - DATADIR/triedb/verkle.journal
 			TrieJournalDirectory: trieJournalDirectory,
-			StateSizeTracking:    config.EnableStateSizeTracking,
 		}
 	)
 

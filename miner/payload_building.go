@@ -74,11 +74,16 @@ func (args *BuildPayloadArgs) Id() engine.PayloadID {
 // the revenue. Therefore, the empty-block here is always available and full-block
 // will be set/updated afterwards.
 type Payload struct {
-	id            engine.PayloadID
-	empty         *types.Block
-	emptyWitness  *stateless.Witness
-	full          *types.Block
-	fullWitness   *stateless.Witness
+	id           engine.PayloadID
+	empty        *types.Block
+	emptyWitness *stateless.Witness
+
+	full            *types.Block
+	fullReceipts    []*types.Receipt
+	fullRevertedTxs []*types.Transaction
+	fullRevertedIdx []uint32
+	fullWitness     *stateless.Witness
+
 	sidecars      []*types.BlobTxSidecar
 	emptyRequests [][]byte
 	requests      [][]byte
@@ -118,13 +123,19 @@ func (payload *Payload) update(r *newPayloadResult, elapsed time.Duration) {
 	// fee(apart from the mev revenue) is the only indicator for comparison.
 	if payload.full == nil || r.fees.Cmp(payload.fullFees) > 0 {
 		payload.full = r.block
+		payload.fullReceipts = r.receipts
+		payload.fullRevertedTxs = r.revertedTxs
+		payload.fullRevertedIdx = r.revertedIdx
 		payload.fullFees = r.fees
 		payload.sidecars = r.sidecars
 		payload.requests = r.requests
 		payload.fullWitness = r.witness
 
-		feesInEther := new(big.Float).Quo(new(big.Float).SetInt(r.fees), big.NewFloat(params.Ether))
-		log.Info("Updated payload",
+		var (
+			attrs       []any
+			feesInEther = new(big.Float).Quo(new(big.Float).SetInt(r.fees), big.NewFloat(params.Ether))
+		)
+		attrs = append(attrs,
 			"id", payload.id,
 			"number", r.block.NumberU64(),
 			"hash", r.block.Hash(),
@@ -135,9 +146,20 @@ func (payload *Payload) update(r *newPayloadResult, elapsed time.Duration) {
 			"root", r.block.Root(),
 			"elapsed", common.PrettyDuration(elapsed),
 		)
+		log.Info("Updated payload", attrs...)
 	}
 
 	payload.cond.Broadcast() // fire signal for notifying full block
+}
+
+// FullBlockAndReceipts returns the latest built full block together with the
+// receipts produced during its construction and the transactions that were
+// tried-and-reverted during building.
+func (payload *Payload) FullBlockAndReceipts() (*types.Block, []*types.Receipt, []*types.Transaction, []uint32) {
+	payload.lock.Lock()
+	defer payload.lock.Unlock()
+
+	return payload.full, payload.fullReceipts, payload.fullRevertedTxs, payload.fullRevertedIdx
 }
 
 // Resolve returns the latest built payload and also terminates the background

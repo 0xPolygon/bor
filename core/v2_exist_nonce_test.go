@@ -9,6 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/triedb"
 )
 
@@ -37,7 +38,7 @@ func TestV2_ExistMissesPriorTxNonce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	root, err := bsdb.Commit(0, false, false)
+	root, err := bsdb.Commit(params.Rules{}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +52,7 @@ func TestV2_ExistMissesPriorTxNonce(t *testing.T) {
 		t.Fatal(err)
 	}
 	serial.SetNonce(e, 5, tracing.NonceChangeEoACall)
-	serial.Finalise(true)
+	serial.Finalise(params.Rules{IsEIP158: true})
 	serialExist := serial.Exist(e)
 
 	// --- V2: prior tx (idx 0) bumps E's nonce via the MVStore ---

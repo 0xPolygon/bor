@@ -1431,7 +1431,7 @@ func (c *Bor) finalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 
 	// No block rewards in PoA, so the state remains as it is
 	start := time.Now()
-	header.Root = state.IntermediateRoot(chain.Config().IsEIP158(header.Number))
+	header.Root = state.IntermediateRoot(chain.Config().Rules(header.Number, false, header.Time))
 	commitTime := time.Since(start)
 
 	// Uncles are dropped
@@ -1859,7 +1859,7 @@ func (c *Bor) checkAndCommitSpan(
 		return err
 	}
 
-	tempState.IntermediateRoot(false)
+	tempState.IntermediateRoot(params.Rules{})
 
 	// Propagate addresses accessed during GetCurrentSpan back to the original
 	// state so they appear in the FlatDiff ReadSet. Without this, the pipelined
@@ -2011,7 +2011,7 @@ func (c *Bor) CommitStates(
 			return nil, err
 		}
 
-		tempState.IntermediateRoot(false)
+		tempState.IntermediateRoot(params.Rules{})
 
 		// Propagate addresses accessed during LastStateId back to the original
 		// state so they appear in the FlatDiff ReadSet. Without this, the

@@ -412,7 +412,7 @@ func (beacon *Beacon) FinalizeAndAssemble(chain consensus.ChainHeaderReader, hea
 
 	// Assign the final state root to header.
 	start := time.Now()
-	header.Root = state.IntermediateRoot(true)
+	header.Root = state.IntermediateRoot(chain.Config().Rules(header.Number, true, header.Time))
 	commitTime := time.Since(start)
 
 	// Assemble the final block.

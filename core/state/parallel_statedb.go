@@ -1263,7 +1263,7 @@ func (s *ParallelStateDB) Prepare(rules params.Rules, sender, coinbase common.Ad
 //
 // The returned access list is always nil: V2 does not build block-level access
 // lists, and the serial StateDB it settles onto is the one that accumulates them.
-func (s *ParallelStateDB) Finalise(deleteEmptyObjects bool) *bal.ConstructionBlockAccessList {
+func (s *ParallelStateDB) Finalise(_ params.Rules) *bal.ConstructionBlockAccessList {
 	return nil
 }
 

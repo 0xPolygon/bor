@@ -632,7 +632,7 @@ func executeStatelessSerial(config *params.ChainConfig, block *types.Block, witn
 	}
 
 	receiptRoot := types.DeriveSha(res.Receipts, trie.NewStackTrie(nil))
-	stateRoot := db.IntermediateRoot(config.IsEIP158(block.Number()))
+	stateRoot := db.IntermediateRoot(params.Rules{IsEIP158: config.IsEIP158(block.Number())})
 	return stateRoot, receiptRoot, res, nil
 }
 
@@ -694,7 +694,7 @@ func executeStatelessParallel(config *params.ChainConfig, block *types.Block, wi
 	}
 
 	receiptRoot := types.DeriveSha(res.Receipts, trie.NewStackTrie(nil))
-	stateRoot := db.IntermediateRoot(config.IsEIP158(block.Number()))
+	stateRoot := db.IntermediateRoot(params.Rules{IsEIP158: config.IsEIP158(block.Number())})
 	return stateRoot, receiptRoot, res, nil
 }
 
@@ -1777,7 +1777,7 @@ func runV2BlockSTMConsistency(t *testing.T, blocks []testBlockData, diskdb ethdb
 			if config.IsPrague(bd.block.Number()) || config.IsVerkle(bd.block.Number()) {
 				ProcessParentBlockHash(bd.block.ParentHash(), sysEvm)
 			}
-			sdb.Finalise(true)
+			sdb.Finalise(params.Rules{IsEIP158: true})
 		}
 
 		var tasks []V2Task
@@ -1804,7 +1804,7 @@ func runV2BlockSTMConsistency(t *testing.T, blocks []testBlockData, diskdb ethdb
 		}
 
 		engine.Finalize(nil, bd.block.Header(), finalDB, bd.block.Body(), nil)
-		v2State := finalDB.IntermediateRoot(config.IsEIP158(bd.block.Number()))
+		v2State := finalDB.IntermediateRoot(params.Rules{IsEIP158: config.IsEIP158(bd.block.Number())})
 		v2ReceiptRoot := types.DeriveSha(result.Receipts, trie.NewStackTrie(nil))
 
 		// Validate V2 matches serial execution

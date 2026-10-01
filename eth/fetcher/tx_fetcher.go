@@ -661,9 +661,11 @@ func (f *TxFetcher) loop() {
 								if math.Abs(float64(delivery.metas[i].size)-float64(meta.size)) > 8 {
 									log.Warn("Announced transaction size mismatch", "peer", peer, "tx", hash, "size", delivery.metas[i].size, "ann", meta.size, "origin", delivery.origin, "direct", delivery.direct)
 
-									// Normally we should drop a peer considering this is a protocol violation.
-									// However, due to the RLP vs consensus format messyness, allow a few bytes
-									// wiggle-room where we only warn, but don't drop.
+									// Announcing a size that disagrees with the transaction served is a
+									// protocol violation, so the peer is dropped. Due to the RLP vs consensus
+									// format messyness, a few bytes of wiggle-room are tolerated: a difference
+									// of 8 bytes or less is neither warned about nor dropped for, which is why
+									// this branch is guarded above.
 									//
 									// TODO(karalabe): Get rid of this relaxation when clients are proven stable.
 									f.dropPeer(peer)
@@ -689,9 +691,11 @@ func (f *TxFetcher) loop() {
 								if math.Abs(float64(delivery.metas[i].size)-float64(meta.size)) > 8 {
 									log.Warn("Announced transaction size mismatch", "peer", peer, "tx", hash, "size", delivery.metas[i].size, "ann", meta.size, "origin", delivery.origin, "direct", delivery.direct)
 
-									// Normally we should drop a peer considering this is a protocol violation.
-									// However, due to the RLP vs consensus format messyness, allow a few bytes
-									// wiggle-room where we only warn, but don't drop.
+									// Announcing a size that disagrees with the transaction served is a
+									// protocol violation, so the peer is dropped. Due to the RLP vs consensus
+									// format messyness, a few bytes of wiggle-room are tolerated: a difference
+									// of 8 bytes or less is neither warned about nor dropped for, which is why
+									// this branch is guarded above.
 									//
 									// TODO(karalabe): Get rid of this relaxation when clients are proven stable.
 									f.dropPeer(peer)

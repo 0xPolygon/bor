@@ -253,10 +253,10 @@ func (e *emitter) emitGas(gasExpr string) {
 
 // emitFlush emits the gasAccum flush check + deduction.
 func (e *emitter) emitFlush() {
-	e.p("if contract.Gas.RegularGas < gasAccum {\n")
+	e.p("if contract.Gas.ExecutionGas < gasAccum {\n")
 	e.p("return nil, ErrOutOfGas\n")
 	e.p("}\n")
-	e.p("contract.Gas.RegularGas -= gasAccum\n")
+	e.p("contract.Gas.ExecutionGas -= gasAccum\n")
 	e.p("gasAccum = 0\n")
 }
 
@@ -414,10 +414,10 @@ return nil, &ErrStackOverflow{stackLen: sLen, limit: operation.maxStack}
 }
 
 cost := operation.constantGas
-if contract.Gas.RegularGas < cost {
+if contract.Gas.ExecutionGas < cost {
 return nil, ErrOutOfGas
 }
-contract.Gas.RegularGas -= cost
+contract.Gas.ExecutionGas -= cost
 
 if operation.dynamicGas != nil {
 var memorySize uint64
@@ -439,12 +439,13 @@ if err != nil {
 	e.buf.WriteString(`%w: %v`)
 	e.p("\", ErrOutOfGas, err)\n")
 	e.p(`}
-// EIP-8037: charge regular gas before state gas, as Run does. The state
-// charge is a no-op when dynamicCost.StateGas == 0 (e.g., pre-Amsterdam).
-if !contract.chargeRegular(dynamicCost.RegularGas, nil, tracing.GasChangeIgnored) {
+// Charge exactly as Run does: execution-only when there is no EIP-8037
+// state cost (always, pre-Amsterdam), otherwise both dimensions at once.
+if dynamicCost.StateGas == 0 {
+if !contract.Gas.ChargeExecutionOnly(dynamicCost.ExecutionGas) {
 return nil, ErrOutOfGas
 }
-if !contract.chargeState(dynamicCost.StateGas, nil, tracing.GasChangeIgnored) {
+} else if !contract.Gas.charge(dynamicCost) {
 return nil, ErrOutOfGas
 }
 if memorySize > 0 {
@@ -548,7 +549,6 @@ func (e *emitter) emitHeader() {
 	e.p("\t\"fmt\"\n")
 	e.p("\t\"sync/atomic\"\n\n")
 	e.p("\t\"github.com/ethereum/go-ethereum/common/math\"\n")
-	e.p("\t\"github.com/ethereum/go-ethereum/core/tracing\"\n")
 	e.p("\t\"github.com/ethereum/go-ethereum/params\"\n")
 	e.p("\t\"github.com/holiman/uint256\"\n")
 	e.p(")\n\n")

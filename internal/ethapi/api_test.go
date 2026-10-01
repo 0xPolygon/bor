@@ -485,7 +485,19 @@ func newTestBackend(t *testing.T, n int, gspec *core.Genesis, engine consensus.E
 	options.TxLookupLimit = 0 // index all txs
 
 	accman, acc := newTestAccountManager(t)
+	if gspec.Alloc == nil {
+		gspec.Alloc = types.GenesisAlloc{}
+	}
 	gspec.Alloc[acc.Address] = types.Account{Balance: big.NewInt(params.Ether)}
+
+	// Most of the configs used here are merged up to the latest fork, whose
+	// system calls invalidate every generated block unless the contracts they
+	// target are deployed. Anything the caller allocated explicitly wins.
+	for addr, account := range core.SystemContractAllocs() {
+		if _, ok := gspec.Alloc[addr]; !ok {
+			gspec.Alloc[addr] = account
+		}
+	}
 
 	// Generate blocks for testing
 	db, blocks, receipts := core.GenerateChainWithGenesis(gspec, engine, n+1, generator)
@@ -4449,7 +4461,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 		{
 			txHash: txHashes[0],
 			want: `{
-				"blockHash": "0xcdbefbd0a516759927751ca4c00084f967cef3817ce6e0fd819f0534b271cb4a",
+				"blockHash": "0x8ea5fe3cbcfaf615697bdd5d49a0594b42cb796ef937f07ac43aad4b38e7c2d5",
 				"blockNumber": "0x1",
 				"contractAddress": null,
 				"cumulativeGasUsed": "0x5208",
@@ -4470,7 +4482,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 					"blockTimestamp": "0xa",
 					"transactionHash": "0x644a31c354391520d00e95b9affbbb010fc79ac268144ab8e28207f4cf51097e",
 					"transactionIndex": "0x0",
-					"blockHash": "0xcdbefbd0a516759927751ca4c00084f967cef3817ce6e0fd819f0534b271cb4a",
+					"blockHash": "0x8ea5fe3cbcfaf615697bdd5d49a0594b42cb796ef937f07ac43aad4b38e7c2d5",
 					"logIndex": "0x0",
 					"removed": false
 				  }
@@ -4487,7 +4499,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 		{
 			txHash: txHashes[1],
 			want: `{
-				"blockHash": "0xcdbefbd0a516759927751ca4c00084f967cef3817ce6e0fd819f0534b271cb4a",
+				"blockHash": "0x8ea5fe3cbcfaf615697bdd5d49a0594b42cb796ef937f07ac43aad4b38e7c2d5",
 				"blockNumber": "0x1",
 				"contractAddress": "0xae9bea628c4ce503dcfd7e305cab4e29e7476592",
 				"cumulativeGasUsed": "0x12156",
@@ -4507,7 +4519,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 		{
 			txHash: txHashes[2],
 			want: `{
-				"blockHash": "0xcdbefbd0a516759927751ca4c00084f967cef3817ce6e0fd819f0534b271cb4a",
+				"blockHash": "0x8ea5fe3cbcfaf615697bdd5d49a0594b42cb796ef937f07ac43aad4b38e7c2d5",
 				"blockNumber": "0x1",
 				"contractAddress": null,
 				"cumulativeGasUsed": "0x17f7e",
@@ -4527,7 +4539,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 					"blockTimestamp": "0xa",
 					"transactionHash": "0xa228af0975b99799bd28331085a6966aba2fb5814a8d89aabc342462aa40429a",
 					"transactionIndex": "0x2",
-					"blockHash": "0xcdbefbd0a516759927751ca4c00084f967cef3817ce6e0fd819f0534b271cb4a",
+					"blockHash": "0x8ea5fe3cbcfaf615697bdd5d49a0594b42cb796ef937f07ac43aad4b38e7c2d5",
 					"logIndex": "0x1",
 					"removed": false
 				  }
@@ -4544,7 +4556,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 		{
 			txHash: txHashes[3],
 			want: `{
-				"blockHash": "0xcdbefbd0a516759927751ca4c00084f967cef3817ce6e0fd819f0534b271cb4a",
+				"blockHash": "0x8ea5fe3cbcfaf615697bdd5d49a0594b42cb796ef937f07ac43aad4b38e7c2d5",
 				"blockNumber": "0x1",
 				"contractAddress": null,
 				"cumulativeGasUsed": "0x1d30b",
@@ -4565,7 +4577,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 					"blockTimestamp": "0xa",
 					"transactionHash": "0xc2cc458a65bc96f642d4a2063cce162b0da642613d801271bdbc4aa7e775f3ed",
 					"transactionIndex": "0x3",
-					"blockHash": "0xcdbefbd0a516759927751ca4c00084f967cef3817ce6e0fd819f0534b271cb4a",
+					"blockHash": "0x8ea5fe3cbcfaf615697bdd5d49a0594b42cb796ef937f07ac43aad4b38e7c2d5",
 					"logIndex": "0x2",
 					"removed": false
 				  }
@@ -4582,7 +4594,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 		{
 			txHash: txHashes[4],
 			want: `{
-				"blockHash": "0xcdbefbd0a516759927751ca4c00084f967cef3817ce6e0fd819f0534b271cb4a",
+				"blockHash": "0x8ea5fe3cbcfaf615697bdd5d49a0594b42cb796ef937f07ac43aad4b38e7c2d5",
 				"blockNumber": "0x1",
 				"contractAddress": "0xfdaa97661a584d977b4d3abb5370766ff5b86a18",
 				"cumulativeGasUsed": "0x2b325",
@@ -4602,7 +4614,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 		{
 			txHash: txHashes[5],
 			want: `{
-				"blockHash": "0xcdbefbd0a516759927751ca4c00084f967cef3817ce6e0fd819f0534b271cb4a",
+				"blockHash": "0x8ea5fe3cbcfaf615697bdd5d49a0594b42cb796ef937f07ac43aad4b38e7c2d5",
 				"blockNumber": "0x1",
 				"contractAddress": null,
 				"cumulativeGasUsed": "0x2b325",
@@ -4613,7 +4625,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 				"logsBloom": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
 				"status": "0x1",
 				"to": "0x0000000000000000000000000000000000000000",
-				"transactionHash": "0xcd9b0d3d7c08df38f716a708b13e38cb286af42680feb37e6a34a1b4197231a3",
+				"transactionHash": "0xca0eaa56e8be5c77be4766380f7917187c789d5a29715c0c5dc955265c5b8996",
 				"transactionIndex": "0x5",
 				"type": "0x0"
 			  }`,
@@ -4698,6 +4710,68 @@ func TestCreateAccessListWithStateOverrides(t *testing.T) {
 		StorageKeys: []common.Hash{{}},
 	}}
 	require.Equal(t, expected, result.Accesslist)
+}
+
+func TestEstimateGasAmsterdam(t *testing.T) {
+	t.Skip("bor: a chain with Amsterdam active from genesis fails to start (missing head header), see POS-3738")
+	t.Parallel()
+	var (
+		accounts = newAccounts(2)
+		config   = *params.MergedTestChainConfig
+		genesis  = &core.Genesis{
+			Config:     &config,
+			Difficulty: common.Big0,
+			Alloc: types.GenesisAlloc{
+				accounts[0].addr: {Balance: big.NewInt(params.Ether)},
+				accounts[1].addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+	)
+	config.AmsterdamBlock = big.NewInt(0)
+	api := NewBlockChainAPI(newTestBackend(t, 0, genesis, beacon.New(ethash.NewFaker()), nil))
+
+	var testSuite = []struct {
+		call TransactionArgs
+		want uint64
+	}{
+		// value transfer to an existing account: EIP-2780 intrinsic gas
+		{
+			call: TransactionArgs{
+				From:  &accounts[0].addr,
+				To:    &accounts[1].addr,
+				Value: (*hexutil.Big)(big.NewInt(1000)),
+			},
+			want: 21000,
+		},
+		// zero-value call to an existing account: below the legacy 21000 floor
+		{
+			call: TransactionArgs{
+				From: &accounts[0].addr,
+				To:   &accounts[1].addr,
+			},
+			want: 15000,
+		},
+		// self transfer: base cost only
+		{
+			call: TransactionArgs{
+				From:  &accounts[0].addr,
+				To:    &accounts[0].addr,
+				Value: (*hexutil.Big)(big.NewInt(1000)),
+			},
+			want: 12000,
+		},
+	}
+	latest := rpc.LatestBlockNumber
+	for i, tc := range testSuite {
+		result, err := api.EstimateGas(context.Background(), tc.call, &rpc.BlockNumberOrHash{BlockNumber: &latest}, nil, nil)
+		if err != nil {
+			t.Errorf("test %d: want no error, have %v", i, err)
+			continue
+		}
+		if uint64(result) != tc.want {
+			t.Errorf("test %d: result mismatch, have %v, want %v", i, uint64(result), tc.want)
+		}
+	}
 }
 
 func TestSendRawTransactionForPreconf(t *testing.T) {
@@ -5896,4 +5970,65 @@ func TestStateMethodsDefaultToLatest(t *testing.T) {
 		func() any { return new(map[common.Address][]hexutil.Bytes) },
 		[]any{map[common.Address][]common.Hash{acc: {slot}}, "latest"},
 		[]any{map[common.Address][]common.Hash{acc: {slot}}})
+}
+
+// TestCreateAccessListAuthorizationGas checks that eth_createAccessList accepts
+// the gas limit returned by eth_estimateGas for a set-code transaction with
+// several authorizations, both before and after Amsterdam.
+func TestCreateAccessListAuthorizationGas(t *testing.T) {
+	t.Parallel()
+
+	const numAuths = 9
+	accounts := newAccounts(numAuths + 1)
+	// accounts[0] is the sender; every other account is already delegated and
+	// re-delegates, so that no account or authorization creation is charged.
+	var authList []types.SetCodeAuthorization
+	for _, acc := range accounts[1:] {
+		auth, err := types.SignSetCode(acc.key, types.SetCodeAuthorization{
+			Address: common.Address{0xaa},
+		})
+		require.NoError(t, err)
+		authList = append(authList, auth)
+	}
+	newAPI := func(amsterdam bool) *BlockChainAPI {
+		alloc := types.GenesisAlloc{accounts[0].addr: {Balance: big.NewInt(params.Ether)}}
+		for _, acc := range accounts[1:] {
+			alloc[acc.addr] = types.Account{
+				Balance: big.NewInt(params.Ether),
+				Code:    types.AddressToDelegation(common.Address{0xbb}),
+			}
+		}
+		config := *params.MergedTestChainConfig
+		if amsterdam {
+			config.AmsterdamBlock = big.NewInt(0)
+		}
+		genesis := &core.Genesis{Config: &config, Difficulty: common.Big0, Alloc: alloc}
+		return NewBlockChainAPI(newTestBackend(t, 0, genesis, beacon.New(ethash.NewFaker()), nil))
+	}
+	for _, tc := range []struct {
+		name      string
+		amsterdam bool
+	}{
+		{"pre-Amsterdam", false},
+		{"Amsterdam", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.amsterdam {
+				t.Skip("bor: a chain with Amsterdam active from genesis fails to start (missing head header), see POS-3738")
+			}
+			api := newAPI(tc.amsterdam)
+			args := TransactionArgs{
+				From:              &accounts[0].addr,
+				To:                &accounts[0].addr,
+				AuthorizationList: authList,
+			}
+			estimated, err := api.EstimateGas(context.Background(), args, nil, nil, nil)
+			require.NoError(t, err)
+
+			args.Gas = &estimated
+			result, err := api.CreateAccessList(context.Background(), args, nil, nil)
+			require.NoError(t, err)
+			require.Empty(t, result.Error)
+		})
+	}
 }
