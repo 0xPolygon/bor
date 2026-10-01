@@ -192,3 +192,32 @@ func TestDisableAndClosePropagateTerminateError(t *testing.T) {
 		})
 	}
 }
+
+// TestAddressCachePersistFlag checks that the address cache is only saved on
+// Close when Config.AddressCachePersist is set, even with a journal
+// directory configured.
+func TestAddressCachePersistFlag(t *testing.T) {
+	addr := common.HexToAddress("0x1234567890123456789012345678901234567890")
+	accountHash := crypto.Keccak256Hash(addr.Bytes())
+
+	for _, persist := range []bool{false, true} {
+		journalDir := t.TempDir()
+		config := *Defaults
+		config.JournalDirectory = journalDir
+		config.AddressCacheSizes = map[common.Address]int{addr: 32 * 1024}
+		config.AddressCachePersist = persist
+
+		db := New(rawdb.NewMemoryDatabase(), &config, false)
+		if err := db.Close(); err != nil {
+			t.Fatalf("persist=%v: Close returned an unexpected error: %v", persist, err)
+		}
+
+		_, err := os.Stat(snapshotPath(journalDir, accountHash))
+		if persist && err != nil {
+			t.Fatalf("expected Close to persist the address cache with the flag on, got stat err: %v", err)
+		}
+		if !persist && !os.IsNotExist(err) {
+			t.Fatalf("expected Close not to persist the address cache with the flag off, got stat err: %v", err)
+		}
+	}
+}

@@ -626,6 +626,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.Cache.PreloadRateLimit,
 		Group:   "Cache",
 	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "cache.addresscachepersist",
+		Usage:   "Persist the address-specific caches to disk on shutdown and reload them on startup, skipping the preload walk",
+		Value:   &c.cliConfig.Cache.AddressCachePersist,
+		Default: c.cliConfig.Cache.AddressCachePersist,
+		Group:   "Cache",
+	})
 	f.Uint64Flag(&flagset.Uint64Flag{
 		Name:    "cache.triesinmemory",
 		Usage:   "Number of block states (tries) to keep in memory",
