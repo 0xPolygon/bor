@@ -396,6 +396,15 @@ func TestServerStaticFlag(t *testing.T) {
 	addPeer(newconn(staticID), false)
 }
 
+func TestConnFlagStringStatic(t *testing.T) {
+	if got, want := (inboundConn | staticConn).String(), "inbound-static"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if got, want := inboundConn.String(), "inbound"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
 // This test checks that AddPeer and RemovePeer return once the server is stopped.
 func TestServerStaticAfterStop(t *testing.T) {
 	srv := &Server{

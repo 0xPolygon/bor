@@ -820,6 +820,31 @@ func (srv *Server) doPeerOp(fn peerOpFunc) {
 	}
 }
 
+func staticNodeIDs(nodes []*enode.Node) map[enode.ID]bool {
+	ids := make(map[enode.ID]bool, len(nodes))
+	for _, n := range nodes {
+		ids[n.ID()] = true
+	}
+	return ids
+}
+
+// setStatic updates static membership for n on the run loop. Membership is
+// tracked apart from the dial flags because a static node that dials us first is
+// held as an inbound connection. The dial scheduler is updated here too so both
+// copies of the set change together.
+func (srv *Server) setStatic(static map[enode.ID]bool, peers map[enode.ID]*Peer, n *enode.Node, member bool) {
+	if member {
+		static[n.ID()] = true
+		srv.dialsched.addStatic(n)
+	} else {
+		delete(static, n.ID())
+		srv.dialsched.removeStatic(n)
+	}
+	if p, ok := peers[n.ID()]; ok {
+		p.rw.set(staticConn, member)
+	}
+}
+
 // run is the main loop of the server.
 func (srv *Server) run() {
 	srv.log.Info("Started P2P networking", "self", srv.localnode.Node().URLv4())
@@ -832,15 +857,12 @@ func (srv *Server) run() {
 		peers        = make(map[enode.ID]*Peer)
 		inboundCount = 0
 		trusted      = make(map[enode.ID]bool, len(srv.TrustedNodes))
-		static       = make(map[enode.ID]bool, len(srv.StaticNodes))
+		static       = staticNodeIDs(srv.StaticNodes)
 	)
 	// Put trusted nodes into a map to speed up checks.
 	// Trusted peers are loaded on startup or added via AddTrustedPeer RPC.
 	for _, n := range srv.TrustedNodes {
 		trusted[n.ID()] = true
-	}
-	for _, n := range srv.StaticNodes {
-		static[n.ID()] = true
 	}
 
 running:
@@ -869,22 +891,10 @@ running:
 			}
 
 		case n := <-srv.addstatic:
-			// Static membership is tracked apart from the dial flags because a
-			// static node that dials us first is held as an inbound connection.
-			// The dial scheduler is updated here too so both copies of the set
-			// change together.
-			static[n.ID()] = true
-			if p, ok := peers[n.ID()]; ok {
-				p.rw.set(staticConn, true)
-			}
-			srv.dialsched.addStatic(n)
+			srv.setStatic(static, peers, n, true)
 
 		case n := <-srv.removestatic:
-			delete(static, n.ID())
-			if p, ok := peers[n.ID()]; ok {
-				p.rw.set(staticConn, false)
-			}
-			srv.dialsched.removeStatic(n)
+			srv.setStatic(static, peers, n, false)
 
 		case op := <-srv.peerOp:
 			// This channel is used by Peers and PeerCount.
