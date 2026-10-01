@@ -51,6 +51,12 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Value:   &c.cliConfig.EnableEVMSwitchDispatch,
 		Default: c.cliConfig.EnableEVMSwitchDispatch,
 	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "precompile-cache",
+		Usage:   "Enable widened per-block VM result caches (keccak/ecrecover) shared across the prefetcher and V2 BlockSTM workers",
+		Value:   &c.cliConfig.EnablePrecompileCache,
+		Default: c.cliConfig.EnablePrecompileCache,
+	})
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "vmtrace",
 		Usage:   "Name of a tracer to record internal VM operations during blockchain synchronization (costly) (e.g. 'json')",
