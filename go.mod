@@ -36,6 +36,7 @@ require (
 	github.com/ethereum/hid v1.0.1-0.20260421154323-c2ab8d9bf68a
 	github.com/fatih/color v1.17.0
 	github.com/ferranbt/fastssz v0.1.2
+	github.com/fjl/jsonw v0.1.0
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/gballet/go-libpcsclite v0.0.0-20250918194357-1ec6f2e601c6
 	github.com/gofrs/flock v0.13.0

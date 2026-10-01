@@ -73,14 +73,24 @@ var forkExpectations = map[string]forkExpect{
 	"IsVerkleGenesis":    {inV1: false, inV2: false},
 	"IsEIP4762":          {inV1: false, inV2: false},
 	"IsOsaka":            {inV1: false, inV2: false},
-	"IsAmsterdam":        {inV1: false, inV2: false}, // EIP-7843 SLOTNUM / EIP-8024 / BAL precompile-touch are EVM/consensus-gated, not state-processor-gated.
+	"IsAmsterdam": {inV1: true, inV2: false, rationale: "" +
+		"EIP-7843 SLOTNUM / EIP-8024 / BAL precompile-touch are EVM/consensus-gated. " +
+		"The one state-processor branch is EIP-8037's systemCallGasBudget, which gives " +
+		"system calls a state-gas allowance once Amsterdam is live. It reads IsAmsterdam " +
+		"in the V1 file only because that is where it is defined: every system call goes " +
+		"through the shared ProcessBeaconBlockRoot / ProcessParentBlockHash / " +
+		"ProcessWithdrawalQueue / ProcessConsolidationQueue helpers, and V2 calls all four " +
+		"itself, so both paths get an identical budget. Dormant while AmsterdamBlock is nil."},
 
 	// State-processor-level forks that BOTH paths must gate.
 	"IsByzantium": {inV1: true, inV2: true}, // selects intermediate root vs receipt status
 	"IsEIP158":    {inV1: true, inV2: true}, // empty-account deletion at finalise
 	"IsLondon":    {inV1: true, inV2: true}, // EIP-1559 fee burn + receipt fields
 	"IsPrague":    {inV1: true, inV2: true}, // EIP-2935 history storage system call
-	"IsVerkle":    {inV1: true, inV2: true}, // EIP-2935 also fires under Verkle
+	"IsVerkle": {inV1: true, inV2: false, rationale: "" +
+		"EIP-2935 also fires under Verkle. The gate lives in PreExecution in the V1 file, " +
+		"and both BlockSTM processors call PreExecution for their pre-execution system " +
+		"calls, so every path gets it without naming the fork."},
 }
 
 // pathsForV1 / pathsForV2 are the files whose source the test scans

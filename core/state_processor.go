@@ -84,27 +84,18 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	if hooks := cfg.Tracer; hooks != nil {
 		tracingStateDB = state.NewHookedState(statedb, hooks)
 	}
-
 	// Mutate the block and state according to any hard-fork specs
 	if config.DAOForkSupport && config.DAOForkBlock != nil && config.DAOForkBlock.Cmp(block.Number()) == 0 {
 		misc.ApplyDAOHardFork(tracingStateDB)
 	}
 	var (
-		context vm.BlockContext
+		context = NewEVMBlockContext(header, p.chain, author)
 		signer  = types.MakeSigner(config, header.Number, header.Time)
+		evm     = vm.NewEVM(context, tracingStateDB, config, cfg)
 	)
 
 	// Apply pre-execution system calls.
-	context = NewEVMBlockContext(header, p.chain, author)
-	evm := vm.NewEVM(context, tracingStateDB, config, cfg)
-
-	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
-		ProcessBeaconBlockRoot(*beaconRoot, evm)
-	}
-	if p.chainConfig().IsPrague(block.Number()) || p.chainConfig().IsVerkle(block.Number()) {
-		// EIP-2935
-		ProcessParentBlockHash(block.ParentHash(), evm)
-	}
+	PreExecution(interruptCtx, block.BeaconRoot(), block.ParentHash(), config, evm, block.Number(), block.Time())
 
 	// Iterate over and process the individual transactions
 	txs := block.Transactions()
@@ -124,7 +115,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 			return nil, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
 		}
 
-		statedb.SetTxContext(tx.Hash(), i)
+		statedb.SetTxContext(tx.Hash(), i, uint32(i+1))
 
 		receipt, err := ApplyTransactionWithEVM(msg, gp, statedb, blockNumber, blockHash, context.Time, tx, evm)
 		if err != nil {
@@ -139,17 +130,18 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	// Read requests if Prague is enabled.
 	var requests [][]byte
 	if p.chainConfig().IsPrague(block.Number()) && p.chainConfig().Bor == nil {
+		blockAccessIndex := uint32(len(block.Transactions()) + 1)
 		requests = [][]byte{}
 		// EIP-6110
 		if err := ParseDepositLogs(&requests, allLogs, config); err != nil {
 			return nil, fmt.Errorf("failed to parse deposit logs: %w", err)
 		}
 		// EIP-7002
-		if err := ProcessWithdrawalQueue(&requests, evm); err != nil {
+		if err := ProcessWithdrawalQueue(&requests, evm, blockAccessIndex); err != nil {
 			return nil, fmt.Errorf("failed to process withdrawal queue: %w", err)
 		}
 		// EIP-7251
-		if err := ProcessConsolidationQueue(&requests, evm); err != nil {
+		if err := ProcessConsolidationQueue(&requests, evm, blockAccessIndex); err != nil {
 			return nil, fmt.Errorf("failed to process consolidation queue: %w", err)
 		}
 	}
@@ -202,6 +194,44 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		Logs:     allLogs,
 		GasUsed:  gp.Used(),
 	}, nil
+}
+
+// PreExecution processes pre-execution system calls.
+//
+// ctx is carried to keep the signature aligned with upstream, where it feeds
+// tracing spans that bor does not wire up.
+func PreExecution(ctx context.Context, beaconRoot *common.Hash, parent common.Hash, config *params.ChainConfig, evm *vm.EVM, number *big.Int, time uint64) {
+	// EIP-4788
+	if beaconRoot != nil {
+		ProcessBeaconBlockRoot(*beaconRoot, evm)
+	}
+	// EIP-2935
+	if config.IsPrague(number) || config.IsVerkle(number) {
+		ProcessParentBlockHash(parent, evm)
+	}
+}
+
+// PostExecution processes post-execution system calls when Prague is enabled.
+// If Prague is not activated, it returns null requests to differentiate from
+// empty requests.
+func PostExecution(ctx context.Context, config *params.ChainConfig, number *big.Int, time uint64, allLogs []*types.Log, evm *vm.EVM, blockAccessIndex uint32) (requests [][]byte, err error) {
+	// Read requests if Prague is enabled.
+	if config.IsPrague(number) {
+		requests = [][]byte{}
+		// EIP-6110
+		if err := ParseDepositLogs(&requests, allLogs, config); err != nil {
+			return nil, fmt.Errorf("failed to parse deposit logs: %w", err)
+		}
+		// EIP-7002
+		if err := ProcessWithdrawalQueue(&requests, evm, blockAccessIndex); err != nil {
+			return nil, fmt.Errorf("failed to process withdrawal queue: %w", err)
+		}
+		// EIP-7251
+		if err := ProcessConsolidationQueue(&requests, evm, blockAccessIndex); err != nil {
+			return nil, fmt.Errorf("failed to process consolidation queue: %w", err)
+		}
+	}
+	return requests, nil
 }
 
 // ApplyTransactionWithEVM attempts to apply a transaction to the given state database
@@ -345,6 +375,21 @@ func ApplyTransaction(evm *vm.EVM, gp *GasPool, statedb *state.StateDB, header *
 	return ApplyTransactionWithEVM(msg, gp, statedb, header.Number, header.Hash(), header.Time, tx, evm)
 }
 
+// systemCallGasBudget returns the gas budget for system calls.
+func systemCallGasBudget(evm *vm.EVM) (gasLimit uint64, gasBudget vm.GasBudget) {
+	if !evm.ChainConfig().IsAmsterdam(evm.Context.BlockNumber) {
+		gasLimit = 30_000_000
+		gasBudget = vm.NewGasBudget(gasLimit, 0)
+	} else {
+		// SYSTEM_MAX_SSTORES_PER_CALL = 16 is the upper bound on the number of
+		// new storage slots a single system call is expected to write.
+		stateBudget := params.SystemMaxSStoresPerCall * evm.Context.CostPerStateByte * params.StorageCreationSize
+		gasLimit = 30_000_000
+		gasBudget = vm.NewGasBudget(gasLimit, stateBudget)
+	}
+	return gasLimit, gasBudget
+}
+
 // ProcessBeaconBlockRoot applies the EIP-4788 system call to the beacon block root
 // contract. This method is exported to be used in tests.
 func ProcessBeaconBlockRoot(beaconRoot common.Hash, evm *vm.EVM) {
@@ -354,9 +399,10 @@ func ProcessBeaconBlockRoot(beaconRoot common.Hash, evm *vm.EVM) {
 			defer tracer.OnSystemCallEnd()
 		}
 	}
+	gasLimit, gasBudget := systemCallGasBudget(evm)
 	msg := &Message{
 		From:      params.SystemAddress,
-		GasLimit:  30_000_000,
+		GasLimit:  gasLimit,
 		GasPrice:  uint256.NewInt(0),
 		GasFeeCap: uint256.NewInt(0),
 		GasTipCap: uint256.NewInt(0),
@@ -364,8 +410,9 @@ func ProcessBeaconBlockRoot(beaconRoot common.Hash, evm *vm.EVM) {
 		Data:      beaconRoot[:],
 	}
 	evm.SetTxContext(NewEVMTxContext(msg))
+	evm.StateDB.SetTxContext(common.Hash{}, 0, 0)
 	evm.StateDB.AddAddressToAccessList(params.BeaconRootsAddress)
-	_, _, _ = evm.Call(msg.From, *msg.To, msg.Data, vm.NewGasBudget(30_000_000), common.U2560)
+	_, _, _ = evm.Call(msg.From, *msg.To, msg.Data, gasBudget, common.U2560)
 	if evm.StateDB.AccessEvents() != nil {
 		evm.StateDB.AccessEvents().Merge(evm.AccessEvents)
 	}
@@ -381,9 +428,10 @@ func ProcessParentBlockHash(prevHash common.Hash, evm *vm.EVM) {
 			defer tracer.OnSystemCallEnd()
 		}
 	}
+	gasLimit, gasBudget := systemCallGasBudget(evm)
 	msg := &Message{
 		From:      params.SystemAddress,
-		GasLimit:  30_000_000,
+		GasLimit:  gasLimit,
 		GasPrice:  uint256.NewInt(0),
 		GasFeeCap: uint256.NewInt(0),
 		GasTipCap: uint256.NewInt(0),
@@ -391,8 +439,9 @@ func ProcessParentBlockHash(prevHash common.Hash, evm *vm.EVM) {
 		Data:      prevHash.Bytes(),
 	}
 	evm.SetTxContext(NewEVMTxContext(msg))
+	evm.StateDB.SetTxContext(common.Hash{}, 0, 0)
 	evm.StateDB.AddAddressToAccessList(params.HistoryStorageAddress)
-	_, _, err := evm.Call(msg.From, *msg.To, msg.Data, vm.NewGasBudget(30_000_000), common.U2560)
+	_, _, err := evm.Call(msg.From, *msg.To, msg.Data, gasBudget, common.U2560)
 	if err != nil {
 		panic(err)
 	}
@@ -404,34 +453,36 @@ func ProcessParentBlockHash(prevHash common.Hash, evm *vm.EVM) {
 
 // ProcessWithdrawalQueue calls the EIP-7002 withdrawal queue contract.
 // It returns the opaque request data returned by the contract.
-func ProcessWithdrawalQueue(requests *[][]byte, evm *vm.EVM) error {
-	return processRequestsSystemCall(requests, evm, 0x01, params.WithdrawalQueueAddress)
+func ProcessWithdrawalQueue(requests *[][]byte, evm *vm.EVM, blockAccessIndex uint32) error {
+	return processRequestsSystemCall(requests, evm, 0x01, params.WithdrawalQueueAddress, blockAccessIndex)
 }
 
 // ProcessConsolidationQueue calls the EIP-7251 consolidation queue contract.
 // It returns the opaque request data returned by the contract.
-func ProcessConsolidationQueue(requests *[][]byte, evm *vm.EVM) error {
-	return processRequestsSystemCall(requests, evm, 0x02, params.ConsolidationQueueAddress)
+func ProcessConsolidationQueue(requests *[][]byte, evm *vm.EVM, blockAccessIndex uint32) error {
+	return processRequestsSystemCall(requests, evm, 0x02, params.ConsolidationQueueAddress, blockAccessIndex)
 }
 
-func processRequestsSystemCall(requests *[][]byte, evm *vm.EVM, requestType byte, addr common.Address) error {
+func processRequestsSystemCall(requests *[][]byte, evm *vm.EVM, requestType byte, addr common.Address, blockAccessIndex uint32) error {
 	if tracer := evm.Config.Tracer; tracer != nil {
 		onSystemCallStart(tracer, evm.GetVMContext())
 		if tracer.OnSystemCallEnd != nil {
 			defer tracer.OnSystemCallEnd()
 		}
 	}
+	gasLimit, gasBudget := systemCallGasBudget(evm)
 	msg := &Message{
 		From:      params.SystemAddress,
-		GasLimit:  30_000_000,
+		GasLimit:  gasLimit,
 		GasPrice:  uint256.NewInt(0),
 		GasFeeCap: uint256.NewInt(0),
 		GasTipCap: uint256.NewInt(0),
 		To:        &addr,
 	}
 	evm.SetTxContext(NewEVMTxContext(msg))
+	evm.StateDB.SetTxContext(common.Hash{}, 0, blockAccessIndex)
 	evm.StateDB.AddAddressToAccessList(addr)
-	ret, _, err := evm.Call(msg.From, *msg.To, msg.Data, vm.NewGasBudget(30_000_000), common.U2560)
+	ret, _, err := evm.Call(msg.From, *msg.To, msg.Data, gasBudget, common.U2560)
 	if evm.StateDB.AccessEvents() != nil {
 		evm.StateDB.AccessEvents().Merge(evm.AccessEvents)
 	}

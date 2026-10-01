@@ -81,7 +81,7 @@ func (db *Database) ItemAmountInAncient() (uint64, error) {
 	panic("not supported")
 }
 
-func (db *Database) Tail() (uint64, error) {
+func (db *Database) Tail(group string) (uint64, error) {
 	panic("not supported")
 }
 
@@ -113,7 +113,7 @@ func (db *Database) TruncateHead(n uint64) (uint64, error) {
 	panic("not supported")
 }
 
-func (db *Database) TruncateTail(n uint64) (uint64, error) {
+func (db *Database) TruncateTail(group string, n uint64) (uint64, error) {
 	panic("not supported")
 }
 

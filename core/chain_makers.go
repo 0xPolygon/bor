@@ -17,6 +17,7 @@
 package core
 
 import (
+	"context"
 	"fmt"
 	"math/big"
 
@@ -119,7 +120,7 @@ func (b *BlockGen) addTx(bc *BlockChain, vmConfig vm.Config, tx *types.Transacti
 		blockContext = NewEVMBlockContext(b.header, bc, &b.header.Coinbase)
 		evm          = vm.NewEVM(blockContext, b.statedb, b.cm.config, vmConfig)
 	)
-	b.statedb.SetTxContext(tx.Hash(), len(b.txs))
+	b.statedb.SetTxContext(tx.Hash(), len(b.txs), uint32(len(b.txs)+1))
 	receipt, err := ApplyTransaction(evm, b.gasPool, b.statedb, b.header, tx)
 	if err != nil {
 		panic(err)
@@ -325,28 +326,21 @@ func (b *BlockGen) collectRequests(readonly bool) (requests [][]byte) {
 		// off the statedb before executing the system calls.
 		statedb = statedb.Copy()
 	}
+	var blockLogs []*types.Log
+	for _, r := range b.receipts {
+		blockLogs = append(blockLogs, r.Logs...)
+	}
+	// TODO use the shared EVM throughout the entire generation cycle
+	blockContext := NewEVMBlockContext(b.header, b.cm, &b.header.Coinbase)
+	evm := vm.NewEVM(blockContext, statedb, b.cm.config, vm.Config{})
 
 	// Polygon/bor: EIP-6110, EIP-7002, and EIP-7251 are not supported
-	if b.cm.config.IsPrague(b.header.Number) && b.cm.config.Bor == nil {
-		requests = [][]byte{}
-		// EIP-6110 deposits
-		var blockLogs []*types.Log
-		for _, r := range b.receipts {
-			blockLogs = append(blockLogs, r.Logs...)
-		}
-		if err := ParseDepositLogs(&requests, blockLogs, b.cm.config); err != nil {
-			panic(fmt.Sprintf("failed to parse deposit log: %v", err))
-		}
-		// create EVM for system calls
-		blockContext := NewEVMBlockContext(b.header, b.cm, &b.header.Coinbase)
-		evm := vm.NewEVM(blockContext, statedb, b.cm.config, vm.Config{})
-		// EIP-7002
-		if err := ProcessWithdrawalQueue(&requests, evm); err != nil {
-			panic(fmt.Sprintf("could not process withdrawal requests: %v", err))
-		}
-		// EIP-7251
-		if err := ProcessConsolidationQueue(&requests, evm); err != nil {
-			panic(fmt.Sprintf("could not process consolidation requests: %v", err))
+	if b.cm.config.Bor == nil {
+		var err error
+
+		requests, err = PostExecution(context.Background(), b.cm.config, b.header.Number, b.header.Time, blockLogs, evm, uint32(len(b.txs)+1))
+		if err != nil {
+			panic(fmt.Sprintf("failed to run post-execution: %v", err))
 		}
 	}
 	return requests
@@ -534,6 +528,13 @@ func (cm *chainMaker) makeHeader(parent *types.Block, state *state.StateDB, engi
 		header.ExcessBlobGas = &excessBlobGas
 		header.BlobGasUsed = new(uint64)
 		header.ParentBeaconRoot = new(common.Hash)
+	}
+	if cm.config.IsAmsterdam(header.Number) {
+		var slot uint64
+		if parentHeader.SlotNumber != nil {
+			slot = *parentHeader.SlotNumber + 1
+		}
+		header.SlotNumber = &slot
 	}
 	return header
 }

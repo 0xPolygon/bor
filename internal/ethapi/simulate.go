@@ -344,13 +344,9 @@ func (sim *simulator) processBlock(ctx context.Context, block *simBlock, header,
 	if precompiles != nil {
 		evm.SetPrecompiles(precompiles)
 	}
-	if sim.chainConfig.IsPrague(header.Number) || sim.chainConfig.IsVerkle(header.Number) {
-		// EIP-2935
-		core.ProcessParentBlockHash(header.ParentHash, evm)
-	}
-	if header.ParentBeaconRoot != nil {
-		core.ProcessBeaconBlockRoot(*header.ParentBeaconRoot, evm)
-	}
+	// Run pre-execution system calls
+	core.PreExecution(ctx, header.ParentBeaconRoot, header.ParentHash, sim.chainConfig, evm, header.Number, header.Time)
+
 	var allLogs []*types.Log
 	for i, call := range block.Calls {
 		// Terminate if the context is cancelled
@@ -370,7 +366,7 @@ func (sim *simulator) processBlock(ctx context.Context, block *simBlock, header,
 		tracer.reset(txHash, uint(i))
 
 		// EoA check is always skipped, even in validation mode.
-		sim.state.SetTxContext(txHash, i)
+		sim.state.SetTxContext(txHash, i, uint32(i+1))
 		msg := call.ToMessage(header.BaseFee, !sim.validate)
 		result, err := applyMessageWithEVM(ctx, evm, msg, timeout, gp)
 		if err != nil {
@@ -421,19 +417,13 @@ func (sim *simulator) processBlock(ctx context.Context, block *simBlock, header,
 
 	// Polygon/bor: EIP-6110, EIP-7002, and EIP-7251 are not supported
 	var requests [][]byte
+
 	// Process EIP-7685 requests
-	if sim.chainConfig.IsPrague(header.Number) && sim.chainConfig.Bor == nil {
-		requests = [][]byte{}
-		// EIP-6110
-		if err := core.ParseDepositLogs(&requests, allLogs, sim.chainConfig); err != nil {
-			return nil, nil, nil, err
-		}
-		// EIP-7002
-		if err := core.ProcessWithdrawalQueue(&requests, evm); err != nil {
-			return nil, nil, nil, err
-		}
-		// EIP-7251
-		if err := core.ProcessConsolidationQueue(&requests, evm); err != nil {
+	if sim.chainConfig.Bor == nil {
+		var err error
+
+		requests, err = core.PostExecution(ctx, sim.chainConfig, header.Number, header.Time, allLogs, evm, uint32(len(block.Calls)+1))
+		if err != nil {
 			return nil, nil, nil, err
 		}
 	}
@@ -441,12 +431,17 @@ func (sim *simulator) processBlock(ctx context.Context, block *simBlock, header,
 		reqHash := types.CalcRequestsHash(requests)
 		header.RequestsHash = &reqHash
 	}
-	// For Bor chains, Withdrawals will be nil, so we need to handle that
-	var withdrawals types.Withdrawals
-	if block.BlockOverrides.Withdrawals != nil {
-		withdrawals = *block.BlockOverrides.Withdrawals
+	blockBody := &types.Body{
+		Transactions: txes,
 	}
-	blockBody := &types.Body{Transactions: txes, Withdrawals: withdrawals}
+	// Withdrawals are a post-Shanghai field. Attaching a non-nil withdrawals
+	// slice would cause types.NewBlock to populate WithdrawalsHash on the
+	// header and emit withdrawals fields for pre-Shanghai blocks. On bor chains
+	// the override stays nil even post-Shanghai, so the nil check is load-bearing
+	// too, not just the fork gate.
+	if sim.chainConfig.IsShanghai(header.Number) && block.BlockOverrides.Withdrawals != nil {
+		blockBody.Withdrawals = *block.BlockOverrides.Withdrawals
+	}
 	chainHeadReader := &simChainHeadReader{ctx, sim.b}
 	b, err := sim.finalizeAndAssemble(chainHeadReader, header, blockBody, receipts)
 	if err != nil {

@@ -125,7 +125,7 @@ func (task *ExecutionTask) Execute(mvh *blockstm.MVHashMap, incarnation int) (er
 // message context.
 func (task *ExecutionTask) setupEVM(mvh *blockstm.MVHashMap, incarnation int) *vm.EVM {
 	task.statedb = task.cleanStateDB.Copy()
-	task.statedb.SetTxContext(task.tx.Hash(), task.index)
+	task.statedb.SetTxContext(task.tx.Hash(), task.index, uint32(task.index+1))
 	task.statedb.SetMVHashmap(mvh)
 	task.statedb.SetIncarnation(incarnation)
 	evm := vm.NewEVM(task.blockContext, task.statedb, task.config, task.evmConfig)
@@ -205,7 +205,7 @@ func (task *ExecutionTask) Settle() {
 	mvhm := task.finalStateDB.GetMVHashmap()
 	task.finalStateDB.SetMVHashmap(nil)
 
-	task.finalStateDB.SetTxContext(task.tx.Hash(), task.index)
+	task.finalStateDB.SetTxContext(task.tx.Hash(), task.index, uint32(task.index+1))
 	coinbaseBalance := task.finalStateDB.GetBalance(task.coinbase)
 
 	task.finalStateDB.ApplyMVWriteSet(task.statedb.MVWriteList())
@@ -425,13 +425,9 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 
 	vmenv := vm.NewEVM(context, statedb, config, cfg)
 
-	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
-		ProcessBeaconBlockRoot(*beaconRoot, vmenv)
-	}
-	if config.IsPrague(block.Number()) {
-		// EIP-2935
-		ProcessParentBlockHash(block.ParentHash(), vmenv)
-	}
+	// Shared with the serial processor so upstream changes to the
+	// pre-execution system calls reach every executor.
+	PreExecution(interruptCtx, block.BeaconRoot(), block.ParentHash(), config, vmenv, block.Number(), block.Time())
 	signer := types.MakeSigner(config, header.Number, header.Time)
 	prewarmReaderCache(statedb, block, signer)
 
@@ -1001,7 +997,7 @@ func newV2SettleFn(tasks []V2Task, env *v2Env, finalDB *state.StateDB,
 			return
 		}
 		tx := tasks[txIdx].Tx
-		finalDB.SetTxContext(tx.Hash(), tasks[txIdx].Index)
+		finalDB.SetTxContext(tx.Hash(), tasks[txIdx].Index, uint32(tasks[txIdx].Index+1))
 		pdb.SettleTo(finalDB)
 
 		*totalUsedGas += pdb.UsedGas
@@ -1218,10 +1214,11 @@ func (p *V2StateProcessor) finalizeV2Block(block *types.Block, statedb *state.St
 		}
 		blockCtx := NewEVMBlockContext(header, p.chain, nil)
 		evm := vm.NewEVM(blockCtx, statedb, config, vm.Config{})
-		if err := ProcessWithdrawalQueue(&requests, evm); err != nil {
+		blockAccessIndex := uint32(len(block.Transactions()) + 1)
+		if err := ProcessWithdrawalQueue(&requests, evm, blockAccessIndex); err != nil {
 			return nil, fmt.Errorf("failed to process withdrawal queue: %w", err)
 		}
-		if err := ProcessConsolidationQueue(&requests, evm); err != nil {
+		if err := ProcessConsolidationQueue(&requests, evm, blockAccessIndex); err != nil {
 			return nil, fmt.Errorf("failed to process consolidation queue: %w", err)
 		}
 	}
@@ -1234,17 +1231,13 @@ func (p *V2StateProcessor) finalizeV2Block(block *types.Block, statedb *state.St
 	}, nil
 }
 
-// applyV2PreExecSystemCalls runs the EIP-4788 beacon root and EIP-2935
-// parent-hash system contracts when active for this block.
+// applyV2PreExecSystemCalls runs the pre-execution system calls (EIP-4788
+// beacon root, EIP-2935 parent hash) through the serial processor's
+// PreExecution, so upstream changes to them reach V2 as well.
 func applyV2PreExecSystemCalls(block *types.Block, statedb *state.StateDB,
 	config *params.ChainConfig, cfg vm.Config, blockCtx vm.BlockContext) {
 	evm := vm.NewEVM(blockCtx, statedb, config, cfg)
-	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
-		ProcessBeaconBlockRoot(*beaconRoot, evm)
-	}
-	if config.IsPrague(block.Number()) || config.IsVerkle(block.Number()) {
-		ProcessParentBlockHash(block.ParentHash(), evm)
-	}
+	PreExecution(context.Background(), block.BeaconRoot(), block.ParentHash(), config, evm, block.Number(), block.Time())
 }
 
 // buildV2Tasks converts non-StateSync transactions in the block into V2Tasks,

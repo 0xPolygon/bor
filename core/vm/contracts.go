@@ -421,13 +421,12 @@ func ActivePrecompiles(rules params.Rules) []common.Address {
 // - any error that occurred
 func RunPrecompiledContract(stateDB StateDB, p PrecompiledContract, address common.Address, input []byte, gas GasBudget, logger *tracing.Hooks, rules params.Rules) (ret []byte, remaining GasBudget, err error) {
 	gasCost := p.RequiredGas(input)
-	prior, ok := gas.Charge(GasCosts{RegularGas: gasCost})
+	prior, ok := gas.ChargeRegular(gasCost)
 	if !ok {
-		gas.Exhaust()
 		return nil, gas, ErrOutOfGas
 	}
-	if logger != nil && logger.OnGasChange != nil {
-		logger.OnGasChange(prior, gas.RegularGas, tracing.GasChangeCallPrecompiledContract)
+	if logger.HasGasHook() {
+		logger.EmitGasChange(prior.AsTracing(), gas.AsTracing(), tracing.GasChangeCallPrecompiledContract)
 	}
 	// Touch the precompile for block-level accessList recording once Amsterdam
 	// fork is activated.

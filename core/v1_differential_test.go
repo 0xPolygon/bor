@@ -171,7 +171,7 @@ func runV1Serial(t *testing.T, sc v1Scenario, chainConfig *params.ChainConfig) c
 
 	var usedGas uint64
 	for i, tx := range txs {
-		sdb.SetTxContext(tx.Hash(), i)
+		sdb.SetTxContext(tx.Hash(), i, uint32(i+1))
 		msg, err := TransactionToMessage(tx, signer, baseFee)
 		if err != nil {
 			t.Fatalf("tx %d msg: %v", i, err)

@@ -69,7 +69,7 @@ func runSerial(t testing.TB, tdb *triedb.Database, root common.Hash, txs []*type
 	gp := NewGasPool(blockCtx.GasLimit)
 	receipts := make(types.Receipts, 0, len(txs))
 	for i, tx := range txs {
-		sdb.SetTxContext(tx.Hash(), i)
+		sdb.SetTxContext(tx.Hash(), i, uint32(i+1))
 		evm := vm.NewEVM(blockCtx, sdb, fuzzChainConfig, vm.Config{})
 		// The generator only emits consensus-valid txs (tracked nonces,
 		// bounded values against huge balances), so an apply error is a
@@ -503,7 +503,7 @@ func TestMetamorphicHarnessSemantics(t *testing.T) {
 		}
 		gp := NewGasPool(blockCtx.GasLimit)
 		for i, tx := range txs {
-			sdb.SetTxContext(tx.Hash(), i)
+			sdb.SetTxContext(tx.Hash(), i, uint32(i+1))
 			evm := vm.NewEVM(blockCtx, sdb, fuzzChainConfig, vm.Config{})
 			if _, err := ApplyTransactionWithEVM(msgs[i], gp, sdb, blockCtx.BlockNumber, common.Hash{}, blockCtx.Time, tx, evm); err != nil {
 				t.Fatalf("tx %d: %v", i, err)

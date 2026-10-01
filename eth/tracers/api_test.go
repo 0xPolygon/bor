@@ -2025,7 +2025,7 @@ func TestStandardTraceBlockToFile(t *testing.T) {
 			},
 		},
 	}
-	txHashs := make([]common.Hash, 0, 2)
+	txHashes := make([]common.Hash, 0, 2)
 	backend := newTestBackend(t, 1, genesis, func(i int, b *core.BlockGen) {
 		b.SetCoinbase(common.Address{1})
 		// first tx to aa
@@ -2038,7 +2038,7 @@ func TestStandardTraceBlockToFile(t *testing.T) {
 			Data:     nil,
 		}), types.HomesteadSigner{}, key)
 		b.AddTx(tx)
-		txHashs = append(txHashs, tx.Hash())
+		txHashes = append(txHashes, tx.Hash())
 		// second tx to bb
 		tx, _ = types.SignTx(types.NewTx(&types.LegacyTx{
 			Nonce:    1,
@@ -2049,7 +2049,7 @@ func TestStandardTraceBlockToFile(t *testing.T) {
 			Data:     nil,
 		}), types.HomesteadSigner{}, key)
 		b.AddTx(tx)
-		txHashs = append(txHashs, tx.Hash())
+		txHashes = append(txHashes, tx.Hash())
 	})
 	defer backend.teardown()
 
@@ -2078,7 +2078,7 @@ func TestStandardTraceBlockToFile(t *testing.T) {
 		{
 			// test that only a specific tx is traced if specified
 			blockNumber: rpc.LatestBlockNumber,
-			config:      &StdTraceConfig{TxHash: txHashs[1]},
+			config:      &StdTraceConfig{TxHash: txHashes[1]},
 			want: []string{
 				`{"pc":0,"op":97,"gas":"0x13498","gasCost":"0x3","memSize":0,"stack":[],"depth":1,"refund":0,"opName":"PUSH2"}
 {"pc":3,"op":80,"gas":"0x13495","gasCost":"0x2","memSize":0,"stack":["0x1"],"depth":1,"refund":0,"opName":"POP"}
@@ -2115,7 +2115,7 @@ func TestTraceBadBlock(t *testing.T) {
 		accounts        = newAccounts(2)
 		storageContract = common.HexToAddress("0x00000000000000000000000000000000deadbeef")
 		signer          = types.HomesteadSigner{}
-		txHashs         = make([]common.Hash, 0, 2)
+		txHashes        = make([]common.Hash, 0, 2)
 		genesis         = &core.Genesis{
 			Config: params.TestChainConfig,
 			Alloc: types.GenesisAlloc{
@@ -2145,7 +2145,7 @@ func TestTraceBadBlock(t *testing.T) {
 			Data:     nil}),
 			signer, accounts[0].key)
 		b.AddTx(tx)
-		txHashs = append(txHashs, tx.Hash())
+		txHashes = append(txHashes, tx.Hash())
 
 		// tx 1: call storage contract (executes PUSH1, PUSH1, SSTORE, STOP)
 		tx, _ = types.SignTx(types.NewTx(&types.LegacyTx{
@@ -2157,7 +2157,7 @@ func TestTraceBadBlock(t *testing.T) {
 			Data:     nil}),
 			signer, accounts[0].key)
 		b.AddTx(tx)
-		txHashs = append(txHashs, tx.Hash())
+		txHashes = append(txHashes, tx.Hash())
 	})
 	defer backend.teardown()
 
@@ -2187,8 +2187,8 @@ func TestTraceBadBlock(t *testing.T) {
 	if err := json.Unmarshal(have, &traces); err != nil {
 		t.Fatalf("failed to unmarshal traces: %v", err)
 	}
-	if traces[0].TxHash != txHashs[0] {
-		t.Errorf("tx 0: hash mismatch, have %v, want %v", traces[0].TxHash, txHashs[0])
+	if traces[0].TxHash != txHashes[0] {
+		t.Errorf("tx 0: hash mismatch, have %v, want %v", traces[0].TxHash, txHashes[0])
 	}
 	if traces[0].Result.Gas != params.TxGas {
 		t.Errorf("tx 0: gas mismatch, have %d, want %d", traces[0].Result.Gas, params.TxGas)
@@ -2198,8 +2198,8 @@ func TestTraceBadBlock(t *testing.T) {
 	}
 
 	// Second tx: contract call
-	if traces[1].TxHash != txHashs[1] {
-		t.Errorf("tx 1: hash mismatch, have %v, want %v", traces[1].TxHash, txHashs[1])
+	if traces[1].TxHash != txHashes[1] {
+		t.Errorf("tx 1: hash mismatch, have %v, want %v", traces[1].TxHash, txHashes[1])
 	}
 	if traces[1].Result.Failed {
 		t.Error("tx 1: expected success, got failed")
@@ -2363,7 +2363,7 @@ func TestStandardTraceBadBlockToFile(t *testing.T) {
 			},
 		},
 	}
-	txHashs := make([]common.Hash, 0, 2)
+	txHashes := make([]common.Hash, 0, 2)
 	backend := newTestBackend(t, 1, genesis, func(i int, b *core.BlockGen) {
 		b.SetCoinbase(common.Address{1})
 		tx, _ := types.SignTx(types.NewTx(&types.LegacyTx{
@@ -2375,7 +2375,7 @@ func TestStandardTraceBadBlockToFile(t *testing.T) {
 			Data:     nil,
 		}), types.HomesteadSigner{}, key)
 		b.AddTx(tx)
-		txHashs = append(txHashs, tx.Hash())
+		txHashes = append(txHashes, tx.Hash())
 
 		tx, _ = types.SignTx(types.NewTx(&types.LegacyTx{
 			Nonce:    1,
@@ -2386,7 +2386,7 @@ func TestStandardTraceBadBlockToFile(t *testing.T) {
 			Data:     nil,
 		}), types.HomesteadSigner{}, key)
 		b.AddTx(tx)
-		txHashs = append(txHashs, tx.Hash())
+		txHashes = append(txHashes, tx.Hash())
 	})
 	defer backend.teardown()
 
@@ -2416,7 +2416,7 @@ func TestStandardTraceBadBlockToFile(t *testing.T) {
 		},
 		{
 			// Specific tx traced
-			config: &StdTraceConfig{TxHash: txHashs[1]},
+			config: &StdTraceConfig{TxHash: txHashes[1]},
 			want: []string{
 				`{"pc":0,"op":97,"gas":"0x13498","gasCost":"0x3","memSize":0,"stack":[],"depth":1,"refund":0,"opName":"PUSH2"}
 {"pc":3,"op":80,"gas":"0x13495","gasCost":"0x2","memSize":0,"stack":["0x1"],"depth":1,"refund":0,"opName":"POP"}

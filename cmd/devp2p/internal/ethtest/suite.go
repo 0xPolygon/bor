@@ -331,7 +331,7 @@ same request ID. The node should handle the request by responding to both reques
 }
 
 // collectResponses waits for n messages of type T on the given connection.
-// The messsages are collected according to the 'identity' function.
+// The messages are collected according to the 'identity' function.
 func collectResponses[T any, P msgTypePtr[T]](conn *Conn, n int, identity func(P) uint64) (map[uint64]P, error) {
 	resp := make(map[uint64]P, n)
 	for range n {
@@ -597,7 +597,7 @@ func (s *Suite) TestBlockRangeUpdateInvalid(t *utesting.T) {
 
 func (s *Suite) TestBlockRangeUpdateFuture(t *utesting.T) {
 	t.Log(`This test sends a BlockRangeUpdate that is beyond the chain head.
-The node should accept the update and should not disonnect.`)
+The node should accept the update and should not disconnect.`)
 	conn, err := s.dialAndPeer(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -633,7 +633,7 @@ The node should accept the update and should not disonnect.`)
 
 func (s *Suite) TestBlockRangeUpdateHistoryExp(t *utesting.T) {
 	t.Log(`This test sends a BlockRangeUpdate announcing incomplete (expired) history.
-The node should accept the update and should not disonnect.`)
+The node should accept the update and should not disconnect.`)
 	conn, err := s.dialAndPeer(nil)
 	if err != nil {
 		t.Fatal(err)

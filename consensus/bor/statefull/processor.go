@@ -106,7 +106,7 @@ func ApplyMessage(
 		msg.From(),
 		*msg.To(),
 		msg.Data(),
-		vm.NewGasBudget(msg.Gas()),
+		vm.NewGasBudget(msg.Gas(), 0),
 		uint256.NewInt(msg.Value().Uint64()),
 	)
 
@@ -130,7 +130,7 @@ func ApplyMessage(
 		state.Finalise(true)
 	}
 
-	gasUsed := gasLeft.Used(vm.NewGasBudget(initialGas))
+	gasUsed := gasLeft.Used(vm.NewGasBudget(initialGas, 0))
 
 	return gasUsed, nil
 }
@@ -143,7 +143,7 @@ func ApplyBorMessage(vmenv *vm.EVM, msg Callmsg) (*core.ExecutionResult, error) 
 		msg.From(),
 		*msg.To(),
 		msg.Data(),
-		vm.NewGasBudget(msg.Gas()),
+		vm.NewGasBudget(msg.Gas(), 0),
 		uint256.NewInt(msg.Value().Uint64()),
 	)
 	// Update the state with pending changes
@@ -151,7 +151,7 @@ func ApplyBorMessage(vmenv *vm.EVM, msg Callmsg) (*core.ExecutionResult, error) 
 		vmenv.StateDB.Finalise(true)
 	}
 
-	gasUsed := gasLeft.Used(vm.NewGasBudget(initialGas))
+	gasUsed := gasLeft.Used(vm.NewGasBudget(initialGas, 0))
 
 	return &core.ExecutionResult{
 		UsedGas:    gasUsed,
