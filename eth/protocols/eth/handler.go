@@ -55,7 +55,7 @@ const (
 	maxReceiptsServe  = 1024
 	maxPooledTxsServe = 256
 
-	// maxHeavyResponseWorkers bounds concurrent large body/receipt serving so a
+	// maxHeavyResponseWorkers bounds concurrent large body/receipt lookups so a
 	// burst of expensive requests can't monopolize handler resources.
 	maxHeavyResponseWorkers = 4
 )
