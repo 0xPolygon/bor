@@ -298,7 +298,7 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 		nodeSize := uint64(common.HashLength + len(item.path) + len(nodeData))
 
 		// Preload 66.6% of the cache size to allow hot paths to be added later
-		if totalBytesLoaded+nodeSize > uint64(cacheSize*2/3) {
+		if totalBytesLoaded+nodeSize > warmFillThreshold(cacheSize) {
 			log.Info("Cache size limit reached, stopping preload",
 				"account hash", accountHash.Hex(),
 				"entries", entriesLoaded,
