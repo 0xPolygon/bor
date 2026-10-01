@@ -3604,61 +3604,80 @@ func TestPrefetchStream_EvmAbortSkipsAndResumes(t *testing.T) {
 
 	prefetcher := core.NewStatePrefetcher(w.chainConfig, w.chain.HeaderChain())
 
-	txsCh := make(chan *types.Transaction, len(allTxs))
-	hardKill := new(atomic.Bool)
-	evmAbort := new(atomic.Bool)
+	t.Run("skips while abort remains set", func(t *testing.T) {
+		txsCh := make(chan *types.Transaction, 4)
+		for _, tx := range allTxs[:4] {
+			txsCh <- tx
+		}
+		close(txsCh)
 
-	// Start evmAbort=true so early txs are skipped.
-	evmAbort.Store(true)
+		evmAbort := new(atomic.Bool)
+		evmAbort.Store(true)
+		result := prefetcher.PrefetchStream(header, throwaway, w.vmConfig(), true,
+			new(atomic.Bool), evmAbort, txsCh, nil)
+		require.Empty(t, result.SuccessfulTxs)
+	})
 
-	var processedMu sync.Mutex
-	var processed []common.Hash
-	onSuccess := func(h common.Hash, _ uint64) {
+	t.Run("resumes after abort clears", func(t *testing.T) {
+		_, resumedState, _, _, err := w.chain.StateAtWithReaders(w.chain.CurrentBlock().Root)
+		require.NoError(t, err)
+
+		txsCh := make(chan *types.Transaction, len(allTxs))
+		hardKill := new(atomic.Bool)
+		evmAbort := new(atomic.Bool)
+		evmAbort.Store(true)
+
+		var processedMu sync.Mutex
+		var processed []common.Hash
+		onSuccess := func(h common.Hash, _ uint64) {
+			processedMu.Lock()
+			processed = append(processed, h)
+			processedMu.Unlock()
+		}
+
+		streamDone := make(chan struct{})
+		go func() {
+			defer close(streamDone)
+			prefetcher.PrefetchStream(header, resumedState, w.vmConfig(), true,
+				hardKill, evmAbort, txsCh, onSuccess)
+		}()
+
+		for _, tx := range allTxs[:4] {
+			txsCh <- tx
+		}
+		require.Eventually(t, func() bool { return len(txsCh) == 0 },
+			3*time.Second, time.Millisecond, "workers did not consume the aborted batch")
+
 		processedMu.Lock()
-		processed = append(processed, h)
+		processedBeforeReset := len(processed)
 		processedMu.Unlock()
-	}
+		require.Zero(t, processedBeforeReset, "transactions must not complete while evmAbort is set")
 
-	streamDone := make(chan struct{})
-	go func() {
-		defer close(streamDone)
-		prefetcher.PrefetchStream(header, throwaway, w.vmConfig(), true,
-			hardKill, evmAbort, txsCh, onSuccess)
-	}()
+		// evmAbort is sampled by workers after dequeue, not when producers enqueue.
+		// Once it clears, a dequeued transaction may legitimately proceed, so verify
+		// resumption using the distinct post-reset batch instead of enqueue timing.
+		evmAbort.Store(false)
+		for _, tx := range allTxs[4:] {
+			txsCh <- tx
+		}
+		close(txsCh)
+		<-streamDone
 
-	// Send first 4 txs while evmAbort=true — they should all be skipped.
-	for i := 0; i < 4; i++ {
-		txsCh <- allTxs[i]
-	}
-
-	// Let workers drain the skipped batch.
-	time.Sleep(30 * time.Millisecond)
-
-	// Reset evmAbort; subsequent sends should be processed.
-	evmAbort.Store(false)
-
-	// Send next batch — these should reach onSuccess.
-	for i := 4; i < len(allTxs); i++ {
-		txsCh <- allTxs[i]
-	}
-
-	close(txsCh)
-	<-streamDone
-
-	// Only txs sent AFTER evmAbort=false should appear in processed.
-	processedMu.Lock()
-	defer processedMu.Unlock()
-
-	skippedHashes := make(map[common.Hash]struct{})
-	for _, tx := range allTxs[:4] {
-		skippedHashes[tx.Hash()] = struct{}{}
-	}
-	for _, h := range processed {
-		_, wasSkipped := skippedHashes[h]
-		require.False(t, wasSkipped, "tx %s was sent during evmAbort=true and must not have been processed", h)
-	}
-
-	t.Logf("evmAbort phase: 4 skipped; resume phase: %d/%d processed", len(processed), len(allTxs)-4)
+		resumedHashes := make(map[common.Hash]struct{}, len(allTxs)-4)
+		for _, tx := range allTxs[4:] {
+			resumedHashes[tx.Hash()] = struct{}{}
+		}
+		processedMu.Lock()
+		defer processedMu.Unlock()
+		var resumed int
+		for _, hash := range processed {
+			if _, ok := resumedHashes[hash]; ok {
+				resumed++
+			}
+		}
+		require.Positive(t, resumed, "workers did not resume after evmAbort was cleared")
+		t.Logf("resume phase: %d/%d post-reset transactions processed", resumed, len(allTxs)-4)
+	})
 }
 
 // TestPrefetchStream_BlockEquivalence confirms the refactored Prefetch(block, ...)

@@ -1182,50 +1182,23 @@ func TestQueueAccountLimiting(t *testing.T) {
 	}
 }
 
-// Test that txpool rejects unprotected txs by default
-// FIXME: The below test causes some tests to fail randomly (probably due to parallel execution)
-//
-//nolint:paralleltest
-func TestRejectUnprotectedTransaction(t *testing.T) {
-	//nolint:paralleltest
-	t.Skip()
+// Tests that the pool accepts unprotected txs but rejects txs signed for another chain.
+func TestUnprotectedAndOtherChainTransactions(t *testing.T) {
+	t.Parallel()
 
 	pool, key := setupPool()
 	defer pool.Close()
 
-	tx := dynamicFeeTx(0, 22000, big.NewInt(5), big.NewInt(2), key)
-	from := crypto.PubkeyToAddress(key.PublicKey)
+	testAddBalance(pool, crypto.PubkeyToAddress(key.PublicKey), big.NewInt(0xffffffffffffff))
 
-	pool.chainconfig.ChainID = big.NewInt(5)
-	pool.signer = types.LatestSignerForChainID(pool.chainconfig.ChainID)
-	testAddBalance(pool, from, big.NewInt(0xffffffffffffff))
-
-	if err := pool.addRemote(tx); !errors.Is(err, types.ErrInvalidChainId) {
-		t.Error("expected", types.ErrInvalidChainId, "got", err)
+	if err := pool.addRemoteSync(transaction(0, 100000, key)); err != nil {
+		t.Fatalf("unprotected tx rejected: %v", err)
 	}
-}
-
-// Test that txpool allows unprotected txs when AllowUnprotectedTxs flag is set
-// FIXME: The below test causes some tests to fail randomly (probably due to parallel execution)
-//
-//nolint:paralleltest
-func TestAllowUnprotectedTransactionWhenSet(t *testing.T) {
-	t.Skip()
-
-	pool, key := setupPool()
-	defer pool.Close()
-
-	tx := dynamicFeeTx(0, 22000, big.NewInt(5), big.NewInt(2), key)
-	from := crypto.PubkeyToAddress(key.PublicKey)
-
-	// Allow unprotected txs
-	pool.config.AllowUnprotectedTxs = true
-	pool.chainconfig.ChainID = big.NewInt(5)
-	pool.signer = types.LatestSignerForChainID(pool.chainconfig.ChainID)
-	testAddBalance(pool, from, big.NewInt(0xffffffffffffff))
-
-	if err := pool.addRemote(tx); err != nil {
-		t.Error("expected", nil, "got", err)
+	tx, _ := types.SignNewTx(key, types.LatestSignerForChainID(big.NewInt(999)), &types.DynamicFeeTx{
+		ChainID: big.NewInt(999), Nonce: 1, GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(1), Gas: 100000, To: &common.Address{0x01}, Value: big.NewInt(1),
+	})
+	if err := pool.addRemoteSync(tx); !errors.Is(err, txpool.ErrInvalidSender) {
+		t.Fatalf("tx for another chain: got %v, want %v", err, txpool.ErrInvalidSender)
 	}
 }
 

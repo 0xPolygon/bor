@@ -49,7 +49,7 @@ func (api *TraceAPI) ReplayTransaction(ctx context.Context, txHash common.Hash, 
 		TxHash:      txHash,
 		// Only consulted for Bor state-sync txs, which are always last in a block.
 		CumulativeGasUsed: block.GasUsed(),
-		LogIndex:          len(statedb.Logs()),
+		LogIndex:          statedb.LogCount(),
 	}
 
 	msg, err := core.TransactionToMessage(tx, types.MakeSigner(api.backend.ChainConfig(), block.Number(), block.Time()), block.BaseFee())

@@ -222,7 +222,7 @@ func (e *parityBlockExec) txInput(txIndex int, tx *types.Transaction, cumulative
 		TxIndex:           txIndex,
 		TxHash:            tx.Hash(),
 		CumulativeGasUsed: cumulativeGasUsed,
-		LogIndex:          len(e.statedb.Logs()),
+		LogIndex:          e.statedb.LogCount(),
 	}
 	return message, txctx, nil
 }
@@ -434,7 +434,7 @@ func (api *API) canonicalTxTraceEnv(ctx context.Context, hash common.Hash, confi
 		// CumulativeGasUsed is only consulted for Bor state-sync transactions,
 		// which are always the last tx in a block; use the block's total gas.
 		CumulativeGasUsed: block.GasUsed(),
-		LogIndex:          len(statedb.Logs()),
+		LogIndex:          statedb.LogCount(),
 	}
 
 	msg, err := core.TransactionToMessage(tx, types.MakeSigner(api.backend.ChainConfig(), block.Number(), block.Time()), block.BaseFee())
