@@ -114,17 +114,9 @@ func (cm *dropper) dropRandomPeer() bool {
 	}
 	numDialed := len(peers) - numInbound
 
-	selectDoNotDrop := func(p *p2p.Peer) bool {
-		// Avoid dropping trusted and static peers, or recent peers.
-		// Only drop peers if their respective category (dialed/inbound)
-		// is close to limit capacity.
-		return p.Trusted() || p.StaticDialed() ||
-			p.Lifetime() < mclock.AbsTime(doNotDropBefore) ||
-			(p.DynDialed() && cm.maxDialPeers-numDialed > peerDropThreshold) ||
-			(p.Inbound() && cm.maxInboundPeers-numInbound > peerDropThreshold)
-	}
-
-	droppable := slices.DeleteFunc(peers, selectDoNotDrop)
+	droppable := slices.DeleteFunc(peers, func(p *p2p.Peer) bool {
+		return cm.doNotDrop(p, numDialed, numInbound)
+	})
 	if len(droppable) > 0 {
 		p := droppable[mrand.Intn(len(droppable))]
 		log.Debug("Dropper: dropping random peer", "peer", p.ID(), "inbound", p.Inbound(), "duration", common.PrettyDuration(p.Lifetime()), "peercountbefore", len(peers))
@@ -137,6 +129,25 @@ func (cm *dropper) dropRandomPeer() bool {
 		return true
 	}
 	return false
+}
+
+// dropCandidate is the part of *p2p.Peer the drop decision reads.
+type dropCandidate interface {
+	Trusted() bool
+	Static() bool
+	DynDialed() bool
+	Inbound() bool
+	Lifetime() mclock.AbsTime
+}
+
+// doNotDrop avoids dropping trusted and static peers, or recent peers. Peers are
+// only dropped if their respective category (dialed/inbound) is close to limit
+// capacity.
+func (cm *dropper) doNotDrop(p dropCandidate, numDialed, numInbound int) bool {
+	return p.Trusted() || p.Static() ||
+		p.Lifetime() < mclock.AbsTime(doNotDropBefore) ||
+		(p.DynDialed() && cm.maxDialPeers-numDialed > peerDropThreshold) ||
+		(p.Inbound() && cm.maxInboundPeers-numInbound > peerDropThreshold)
 }
 
 // randomDuration generates a random duration between min and max.
