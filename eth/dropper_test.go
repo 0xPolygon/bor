@@ -33,6 +33,7 @@ func TestDropperDoNotDrop(t *testing.T) {
 		{"inbound trusted at capacity", fakeDropCandidate{inbound: true, trusted: true, lifetime: old}, 10, 20, true},
 		{"inbound below capacity", fakeDropCandidate{inbound: true, lifetime: old}, 10, 19, true},
 		{"recent inbound at capacity", fakeDropCandidate{inbound: true}, 10, 20, true},
+		{"inbound at the age boundary", fakeDropCandidate{inbound: true, lifetime: mclock.AbsTime(doNotDropBefore)}, 10, 20, false},
 		{"dialed at capacity", fakeDropCandidate{dynDialed: true, lifetime: old}, 10, 20, false},
 		{"dialed below capacity", fakeDropCandidate{dynDialed: true, lifetime: old}, 9, 20, true},
 	}
