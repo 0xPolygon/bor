@@ -369,27 +369,60 @@ func TestServerStaticFlag(t *testing.T) {
 
 		return &conn{fd: fd, transport: tx, flags: inboundConn, node: node, cont: make(chan error)}
 	}
-	checkStatic := func(id enode.ID, want bool) {
+	addPeer := func(c *conn, want bool) {
 		t.Helper()
-		c := newconn(id)
-		if err := srv.checkpoint(c, srv.checkpointPostHandshake); err != nil {
-			t.Fatalf("unexpected error @posthandshake: %v", err)
+		if err := srv.checkpoint(c, srv.checkpointAddPeer); err != nil {
+			t.Fatalf("could not add conn: %v", err)
 		}
 		if got := c.is(staticConn); got != want {
-			t.Errorf("static flag for %v: got %v, want %v", id, got, want)
+			t.Errorf("static flag for %v: got %v, want %v", c.node.ID(), got, want)
 		}
 	}
 
-	checkStatic(staticID, true)
+	addPeer(newconn(staticID), true)
+	addPeer(newconn(randomID()), false)
 
-	otherID := randomID()
-	checkStatic(otherID, false)
-
-	srv.AddPeer(newNode(otherID, ""))
-	checkStatic(otherID, true)
+	// Membership changes between the two handshake checkpoints are picked up
+	// when the peer is launched.
+	addedID := randomID()
+	c := newconn(addedID)
+	if err := srv.checkpoint(c, srv.checkpointPostHandshake); err != nil {
+		t.Fatalf("unexpected error @posthandshake: %v", err)
+	}
+	srv.AddPeer(newNode(addedID, ""))
+	addPeer(c, true)
 
 	srv.RemovePeer(newNode(staticID, ""))
-	checkStatic(staticID, false)
+	addPeer(newconn(staticID), false)
+}
+
+// This test checks that AddPeer and RemovePeer return once the server is stopped.
+func TestServerStaticAfterStop(t *testing.T) {
+	srv := &Server{
+		Config: Config{
+			PrivateKey:  newkey(),
+			MaxPeers:    10,
+			NoDial:      true,
+			NoDiscovery: true,
+			Logger:      testlog.Logger(t, log.LvlTrace),
+		},
+	}
+	if err := srv.Start(); err != nil {
+		t.Fatalf("could not start: %v", err)
+	}
+	srv.Stop()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srv.AddPeer(newNode(randomID(), ""))
+		srv.RemovePeer(newNode(randomID(), ""))
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("AddPeer/RemovePeer blocked on a stopped server")
+	}
 }
 
 // This test checks that adding a connected peer to the static set marks it as

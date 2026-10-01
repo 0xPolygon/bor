@@ -354,9 +354,7 @@ func (srv *Server) AddPeer(node *enode.Node) {
 	select {
 	case srv.addstatic <- node:
 	case <-srv.quit:
-		return
 	}
-	srv.dialsched.addStatic(node)
 }
 
 // JailPeer jails a peer for the default jail period, preventing connections
@@ -391,8 +389,6 @@ func (srv *Server) RemovePeer(node *enode.Node) {
 	}
 	// Disconnect the peer on the main loop.
 	srv.doPeerOp(func(peers map[enode.ID]*Peer) {
-		srv.dialsched.removeStatic(node)
-
 		if peer := peers[node.ID()]; peer != nil {
 			ch = make(chan *PeerEvent, 1)
 			sub = srv.peerFeed.Subscribe(ch)
@@ -875,16 +871,20 @@ running:
 		case n := <-srv.addstatic:
 			// Static membership is tracked apart from the dial flags because a
 			// static node that dials us first is held as an inbound connection.
+			// The dial scheduler is updated here too so both copies of the set
+			// change together.
 			static[n.ID()] = true
 			if p, ok := peers[n.ID()]; ok {
 				p.rw.set(staticConn, true)
 			}
+			srv.dialsched.addStatic(n)
 
 		case n := <-srv.removestatic:
 			delete(static, n.ID())
 			if p, ok := peers[n.ID()]; ok {
 				p.rw.set(staticConn, false)
 			}
+			srv.dialsched.removeStatic(n)
 
 		case op := <-srv.peerOp:
 			// This channel is used by Peers and PeerCount.
@@ -898,15 +898,15 @@ running:
 				// Ensure that the trusted flag is set before checking against MaxPeers.
 				c.flags |= trustedConn
 			}
-			if static[c.node.ID()] {
-				c.flags |= staticConn
-			}
 			// TODO: track in-progress inbound node IDs (pre-Peer) to avoid dialing them.
 			c.cont <- srv.postHandshakeChecks(peers, inboundCount, c)
 
 		case c := <-srv.checkpointAddPeer:
 			// At this point the connection is past the protocol handshake.
 			// Its capabilities are known and the remote identity is verified.
+			// Static membership can change between the two checkpoints, so
+			// it is applied here, right before the peer is launched.
+			c.set(staticConn, static[c.node.ID()])
 			err := srv.addPeerChecks(peers, inboundCount, c)
 			if err == nil {
 				// The handshakes are done and it passed all checks.
