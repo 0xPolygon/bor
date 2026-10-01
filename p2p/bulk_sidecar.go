@@ -56,6 +56,7 @@ const (
 	bulkChannelOpenTimeout    = 5 * time.Second
 	bulkMessageReadTimeout    = 30 * time.Second
 	bulkMessageWriteTimeout   = 20 * time.Second
+	bulkSidecarTLSServerName  = "bor-bulk-sidecar"
 	bulkConnReceiveWindow     = 16 * bulkMaxMessageSize
 	bulkSocketReadBufferSize  = 8 * 1024 * 1024
 	bulkSocketWriteBufferSize = 8 * 1024 * 1024
@@ -353,12 +354,7 @@ func (b *BulkSidecar) dialConn(ctx context.Context, remote *enode.Node) (*quic.C
 	dialCtx, cancel := context.WithTimeout(ctx, bulkDialTimeout)
 	defer cancel()
 
-	tlsConf := &tls.Config{
-		InsecureSkipVerify: false,
-		NextProtos:         []string{bulkSidecarNextProto},
-		MinVersion:         tls.VersionTLS13,
-	}
-	conn, err := quic.DialAddr(dialCtx, endpoint.String(), tlsConf, b.config)
+	conn, err := quic.DialAddr(dialCtx, endpoint.String(), newBulkSidecarVerifiedTLSConfig(), b.config)
 	if err != nil {
 		return nil, err
 	}
@@ -810,6 +806,40 @@ func bulkAuthTranscriptHash(from, to enode.ID, nonceA, nonceB [32]byte) []byte {
 	)
 }
 
+func newBulkSidecarVerifiedTLSConfig() *tls.Config {
+	return &tls.Config{
+		InsecureSkipVerify: true,
+		ServerName:         bulkSidecarTLSServerName,
+		VerifyConnection:   verifyBulkSidecarTLSConnection,
+		NextProtos:         []string{bulkSidecarNextProto},
+		MinVersion:         tls.VersionTLS13,
+	}
+}
+
+func verifyBulkSidecarTLSConnection(state tls.ConnectionState) error {
+	if len(state.PeerCertificates) == 0 {
+		return errors.New("bulk sidecar tls peer certificate missing")
+	}
+	cert := state.PeerCertificates[0]
+	now := time.Now()
+	if now.Before(cert.NotBefore) || now.After(cert.NotAfter) {
+		return errors.New("bulk sidecar tls peer certificate expired or not yet valid")
+	}
+	if err := cert.VerifyHostname(bulkSidecarTLSServerName); err != nil {
+		return fmt.Errorf("bulk sidecar tls peer certificate name invalid: %w", err)
+	}
+	if cert.KeyUsage&x509.KeyUsageDigitalSignature == 0 {
+		return errors.New("bulk sidecar tls peer certificate missing digital signature usage")
+	}
+	if len(cert.ExtKeyUsage) != 0 && !slices.Contains(cert.ExtKeyUsage, x509.ExtKeyUsageServerAuth) {
+		return errors.New("bulk sidecar tls peer certificate missing server auth usage")
+	}
+	if err := cert.CheckSignature(cert.SignatureAlgorithm, cert.RawTBSCertificate, cert.Signature); err != nil {
+		return fmt.Errorf("bulk sidecar tls peer certificate signature invalid: %w", err)
+	}
+	return nil
+}
+
 func generateBulkSidecarCertificate() (tls.Certificate, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), crand.Reader)
 	if err != nil {
@@ -826,6 +856,7 @@ func generateBulkSidecarCertificate() (tls.Certificate, error) {
 		NotAfter:     time.Now().Add(24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		DNSNames:     []string{bulkSidecarTLSServerName},
 	}
 	der, err := x509.CreateCertificate(crand.Reader, template, template, &key.PublicKey, key)
 	if err != nil {
