@@ -3,11 +3,11 @@ package heimdall
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"path"
@@ -79,7 +79,11 @@ type Request struct {
 }
 
 func NewHeimdallClient(urlString string, timeout time.Duration) (*HeimdallClient, error) {
-	normalizedURL, client, transportCloser, err := newHeimdallHTTPClient(urlString, timeout)
+	return newHeimdallClientWithRootCAs(urlString, timeout, nil)
+}
+
+func newHeimdallClientWithRootCAs(urlString string, timeout time.Duration, rootCAs *x509.CertPool) (*HeimdallClient, error) {
+	normalizedURL, client, transportCloser, err := newHeimdallHTTPClient(urlString, timeout, rootCAs)
 	if err != nil {
 		return nil, err
 	}
@@ -91,7 +95,7 @@ func NewHeimdallClient(urlString string, timeout time.Duration) (*HeimdallClient
 	}, nil
 }
 
-func newHeimdallHTTPClient(urlString string, timeout time.Duration) (string, http.Client, io.Closer, error) {
+func newHeimdallHTTPClient(urlString string, timeout time.Duration, rootCAs *x509.CertPool) (string, http.Client, io.Closer, error) {
 	client := http.Client{Timeout: timeout}
 
 	u, err := url.Parse(urlString)
@@ -105,9 +109,7 @@ func newHeimdallHTTPClient(urlString string, timeout time.Duration) (string, htt
 	tlsConf := &tls.Config{
 		MinVersion: tls.VersionTLS13,
 		ServerName: u.Hostname(),
-	}
-	if isLocalhost(u.Hostname()) {
-		tlsConf.InsecureSkipVerify = true
+		RootCAs:    rootCAs,
 	}
 
 	transport := &http3.Transport{
@@ -547,12 +549,4 @@ func (h *HeimdallClient) Close() {
 	if h.transportCloser != nil {
 		_ = h.transportCloser.Close()
 	}
-}
-
-func isLocalhost(host string) bool {
-	if host == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }

@@ -214,6 +214,11 @@ func (p *Peer) Disconnect(reason DiscReason) {
 	}
 }
 
+// Done is closed when the peer connection is shutting down.
+func (p *Peer) Done() <-chan struct{} {
+	return p.closed
+}
+
 // String implements fmt.Stringer.
 func (p *Peer) String() string {
 	id := p.ID()

@@ -247,6 +247,49 @@ func TestMultiChannelRoutedMsgReadWriterRoutesWritesByChannel(t *testing.T) {
 	}
 }
 
+func TestMultiChannelRoutedMsgReadWriterRoutesSharedBulkLane(t *testing.T) {
+	primaryApp, primaryNet := MsgPipe()
+	defer primaryApp.Close()
+	defer primaryNet.Close()
+
+	bulkApp, bulkNet := MsgPipe()
+	defer bulkApp.Close()
+	defer bulkNet.Close()
+
+	routed, ok := NewMultiChannelRoutedMsgReadWriter(primaryNet, func(code uint64) string {
+		switch code {
+		case 3:
+			return "eth-control"
+		case 5:
+			return "eth-bulk"
+		default:
+			return ""
+		}
+	}).(interface {
+		AttachBulkChannels([]string, MsgReadWriter)
+		WriteMsg(Msg) error
+	})
+	if !ok {
+		t.Fatal("expected shared bulk lane attachment")
+	}
+	routed.AttachBulkChannels([]string{"eth-control", "eth-bulk"}, bulkNet)
+
+	errc := make(chan error, 2)
+	go func() { errc <- SendItems(routed, 3, uint64(33)) }()
+	if err := ExpectMsg(bulkApp, 3, []uint64{33}); err != nil {
+		t.Fatalf("shared control lane mismatch: %v", err)
+	}
+	go func() { errc <- SendItems(routed, 5, uint64(55)) }()
+	if err := ExpectMsg(bulkApp, 5, []uint64{55}); err != nil {
+		t.Fatalf("shared bulk lane mismatch: %v", err)
+	}
+	for range 2 {
+		if err := <-errc; err != nil {
+			t.Fatalf("send failed: %v", err)
+		}
+	}
+}
+
 func TestRoutedMsgReadWriterReadsBothLanes(t *testing.T) {
 	primaryApp, primaryNet := MsgPipe()
 	defer primaryApp.Close()

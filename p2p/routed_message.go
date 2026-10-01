@@ -182,6 +182,14 @@ func (rw *routedMsgReadWriter) AttachBulk(bulk MsgReadWriter) {
 	rw.AttachBulkChannel(rw.defaultChannel, bulk)
 }
 
+func (rw *routedMsgReadWriter) AttachBulkChannels(channels []string, bulk MsgReadWriter) {
+	lane := rw.setBulkChannels(channels, bulk)
+	if lane == nil {
+		return
+	}
+	go rw.readLoop(lane.rw, false, lane.channel, lane.id)
+}
+
 func (rw *routedMsgReadWriter) AttachBulkChannel(channel string, bulk MsgReadWriter) {
 	if channel == "" || bulk == nil {
 		return
@@ -215,16 +223,40 @@ func (rw *routedMsgReadWriter) HasBulk() bool {
 }
 
 func (rw *routedMsgReadWriter) setBulk(channel string, bulk MsgReadWriter) *routedBulkLane {
+	return rw.setBulkChannels([]string{channel}, bulk)
+}
+
+func (rw *routedMsgReadWriter) setBulkChannels(channels []string, bulk MsgReadWriter) *routedBulkLane {
+	if bulk == nil {
+		return nil
+	}
 	rw.bulkMu.Lock()
 	defer rw.bulkMu.Unlock()
 
+	unique := make([]string, 0, len(channels))
+	seen := make(map[string]struct{}, len(channels))
+	for _, channel := range channels {
+		if channel == "" {
+			continue
+		}
+		if _, ok := seen[channel]; ok {
+			continue
+		}
+		seen[channel] = struct{}{}
+		unique = append(unique, channel)
+	}
+	if len(unique) == 0 {
+		return nil
+	}
 	rw.bulkSeq++
 	lane := &routedBulkLane{
 		id:      rw.bulkSeq,
-		channel: channel,
+		channel: unique[0],
 		rw:      bulk,
 	}
-	rw.bulks[channel] = lane
+	for _, channel := range unique {
+		rw.bulks[channel] = lane
+	}
 	return lane
 }
 
@@ -240,9 +272,10 @@ func (rw *routedMsgReadWriter) clearBulk(channel string, id uint64) {
 	rw.bulkMu.Lock()
 	defer rw.bulkMu.Unlock()
 
-	lane := rw.bulks[channel]
-	if lane != nil && lane.id == id {
-		delete(rw.bulks, channel)
+	for name, candidate := range rw.bulks {
+		if candidate.id == id {
+			delete(rw.bulks, name)
+		}
 	}
 }
 

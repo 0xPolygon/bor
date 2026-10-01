@@ -26,7 +26,7 @@ state.scheme = "hash"
   port = 30303
   bulk-sidecar = true
   bulk-port = 30304
-  nat = "extip:<reachable-ip-or-dns>"
+  nat = "extip:<reachable-ip>"
 
 [jsonrpc]
   [jsonrpc.http]
@@ -47,7 +47,7 @@ What matters:
 - if you want to remove config-parser ambiguity entirely, start Bor with
   `--state.scheme hash` in addition to the TOML setting.
 - `p2p.bulk-port` must be reachable between the two Bor nodes over UDP.
-- `p2p.nat = "extip:..."` should advertise the real address the other node can
+- `p2p.nat = "extip:..."` should advertise the real IP address the other node can
   dial for both devp2p and the sidecar metadata.
 - `[witness].enable = true` is required if you want to validate `wit-bulk`.
 - No extra compile-time switch is required for any of the QUIC sidecar lanes,

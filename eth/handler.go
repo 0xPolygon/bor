@@ -18,6 +18,7 @@ package eth
 
 import (
 	"cmp"
+	"context"
 	crand "crypto/rand"
 	"errors"
 	"maps"
@@ -615,24 +616,39 @@ func (h *handler) attachBulkSidecar(peer *eth.Peer, snapPeer *snap.Peer, witPeer
 	}
 	sidecar := h.p2pServer.BulkSidecar()
 	go func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go func() {
+			select {
+			case <-peer.Peer.Done():
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
 		for _, channel := range []string{"eth-control", "eth-blocks", "eth-tx", "eth-tx-fetch", "eth-bulk"} {
-			if rw, err := sidecar.OpenChannel(peer.Peer, channel); err != nil {
+			if rw, err := sidecar.OpenChannelContext(ctx, peer.Peer, channel); err != nil {
 				peer.Log().Debug("Bulk eth sidecar unavailable", "channel", channel, "err", err)
 			} else {
 				peer.AttachBulkChannelRW(channel, rw)
 			}
+			if ctx.Err() != nil {
+				return
+			}
 		}
 		if snapPeer != nil {
 			for _, channel := range []string{"snap-accounts", "snap-storage", "snap-code", "snap-trie"} {
-				if rw, err := sidecar.OpenChannel(snapPeer.Peer, channel); err != nil {
+				if rw, err := sidecar.OpenChannelContext(ctx, snapPeer.Peer, channel); err != nil {
 					snapPeer.Log().Debug("Bulk snap sidecar unavailable", "channel", channel, "err", err)
 				} else {
 					snapPeer.AttachBulkChannelRW(channel, rw)
 				}
+				if ctx.Err() != nil {
+					return
+				}
 			}
 		}
 		if witPeer != nil {
-			if rw, err := sidecar.OpenChannel(witPeer.Peer, "wit-bulk"); err != nil {
+			if rw, err := sidecar.OpenChannelContext(ctx, witPeer.Peer, "wit-bulk"); err != nil {
 				witPeer.Log().Debug("Bulk wit sidecar unavailable", "err", err)
 			} else {
 				witPeer.AttachBulkRW(rw)

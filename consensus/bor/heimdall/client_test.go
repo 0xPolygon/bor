@@ -475,7 +475,8 @@ func TestFetchHonorsConfiguredTimeout(t *testing.T) {
 	srv, err := CreateMockHeimdallServer(wg, port, listener, handler)
 	require.NoError(t, err, "expect no error in starting mock heimdall server")
 
-	client := NewHeimdallClient(fmt.Sprintf("http://localhost:%d", port), clientTimeout)
+	client, err := NewHeimdallClient(fmt.Sprintf("http://localhost:%d", port), clientTimeout)
+	require.NoError(t, err)
 
 	url, err := checkpointURL(client.urlString, -1)
 	require.NoError(t, err)
@@ -511,7 +512,8 @@ func TestFetchDefaultsTimeoutWhenUnset(t *testing.T) {
 	srv, err := CreateMockHeimdallServer(wg, port, listener, handler)
 	require.NoError(t, err, "expect no error in starting mock heimdall server")
 
-	client := NewHeimdallClient(fmt.Sprintf("http://localhost:%d", port), 0)
+	client, err := NewHeimdallClient(fmt.Sprintf("http://localhost:%d", port), 0)
+	require.NoError(t, err)
 
 	url, err := checkpointURL(client.urlString, -1)
 	require.NoError(t, err)

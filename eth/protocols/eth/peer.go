@@ -151,9 +151,16 @@ func (p *Peer) ID() string {
 // protocol. Status stays on the primary devp2p lane because the sidecar is
 // attached after the initial protocol handshake completes.
 func (p *Peer) AttachBulkRW(rw p2p.MsgReadWriter) {
-	for _, channel := range []string{ethControlChannel, ethBlocksChannel, ethTxChannel, ethTxFetchChannel, ethBulkChannel} {
-		p.AttachBulkChannelRW(channel, rw)
+	channels := []string{ethControlChannel, ethBlocksChannel, ethTxChannel, ethTxFetchChannel, ethBulkChannel}
+	if multi, ok := p.rw.(interface {
+		AttachBulkChannels([]string, p2p.MsgReadWriter)
+	}); ok {
+		multi.AttachBulkChannels(channels, rw)
+		return
 	}
+	p.rw = p2p.NewChannelRoutedMsgReadWriter(p.rw, rw, ethBulkChannel, func(code uint64) bool {
+		return ethSidecarChannelForMsg(code) != ""
+	})
 }
 
 // AttachBulkChannelRW installs an auxiliary sidecar lane for a specific eth

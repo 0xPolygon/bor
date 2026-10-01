@@ -24,7 +24,7 @@ import (
 func TestNewHeimdallClientFetchStatusOverQUIC(t *testing.T) {
 	t.Parallel()
 
-	tlsConf, err := newTestQUICServerTLSConfig()
+	tlsConf, rootCAs, err := newTestQUICServerTLSConfig()
 	require.NoError(t, err)
 
 	udpAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
@@ -61,7 +61,7 @@ func TestNewHeimdallClientFetchStatusOverQUIC(t *testing.T) {
 
 	time.Sleep(150 * time.Millisecond)
 
-	client, err := NewHeimdallClient("h3://127.0.0.1:"+strconv.Itoa(port), 5*time.Second)
+	client, err := newHeimdallClientWithRootCAs("h3://127.0.0.1:"+strconv.Itoa(port), 5*time.Second, rootCAs)
 	require.NoError(t, err)
 	status, err := client.FetchStatus(t.Context())
 	require.NoError(t, err)
@@ -146,15 +146,15 @@ func TestExternalHeimdallEndpointSuiteOverQUIC(t *testing.T) {
 	}
 }
 
-func newTestQUICServerTLSConfig() (*tls.Config, error) {
+func newTestQUICServerTLSConfig() (*tls.Config, *x509.CertPool, error) {
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	template := &x509.Certificate{
@@ -172,8 +172,14 @@ func newTestQUICServerTLSConfig() (*tls.Config, error) {
 
 	der, err := x509.CreateCertificate(rand.Reader, template, template, &priv.PublicKey, priv)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		return nil, nil, err
+	}
+	rootCAs := x509.NewCertPool()
+	rootCAs.AddCert(cert)
 
 	return &tls.Config{
 		Certificates: []tls.Certificate{{
@@ -182,5 +188,5 @@ func newTestQUICServerTLSConfig() (*tls.Config, error) {
 		}},
 		MinVersion: tls.VersionTLS13,
 		NextProtos: []string{http3.NextProtoH3},
-	}, nil
+	}, rootCAs, nil
 }

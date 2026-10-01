@@ -797,6 +797,13 @@ func (srv *Server) setupBulkSidecar() error {
 
 	if udp, ok := bulk.Addr().(*net.UDPAddr); ok {
 		srv.setBulkQUICRecord(udp)
+		if !udp.IP.IsLoopback() && !udp.IP.IsPrivate() {
+			srv.portMappingRegister <- &portMapping{
+				protocol: "UDP",
+				name:     "ethereum bulk sidecar",
+				port:     udp.Port,
+			}
+		}
 	}
 
 	srv.loopWG.Add(1)

@@ -47,7 +47,7 @@ wait_for_peer() {
 	attempt=0
 	while [ "${attempt}" -lt 60 ]; do
 		count_hex=$(hex_result "$(rpc "${service}" "net_peerCount")")
-		count_dec=$((16#${count_hex#0x}))
+		count_dec=$(printf '%d' "${count_hex:-0}")
 		if [ "${count_dec}" -ge 1 ]; then
 			return 0
 		fi
