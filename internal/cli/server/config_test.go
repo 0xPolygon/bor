@@ -22,6 +22,9 @@ func TestConfigDefault(t *testing.T) {
 	ethConfig, err := config.buildEth(nil, nil)
 	assert.NoError(t, err)
 	assertBorDefaultGasPrice(t, ethConfig)
+	// The default must match the deadline HTTP requests to Heimdall effectively
+	// had while the configured value was being overridden (docs/cli/server.md).
+	assert.Equal(t, 30*time.Second, ethConfig.HeimdallTimeout)
 }
 
 // assertBorDefaultGasPrice asserts the bor default gas price is set correctly.
