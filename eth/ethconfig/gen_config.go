@@ -56,6 +56,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		LogQueryLimit                        int
 		AddressCacheSizes                    map[common.Address]int
 		PreloadRateLimit                     int64
+		AddressCachePersist                  bool
 		Miner                                miner.Config
 		TxPool                               legacypool.Config
 		BlobPool                             blobpool.Config
@@ -144,6 +145,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.LogQueryLimit = c.LogQueryLimit
 	enc.AddressCacheSizes = c.AddressCacheSizes
 	enc.PreloadRateLimit = c.PreloadRateLimit
+	enc.AddressCachePersist = c.AddressCachePersist
 	enc.Miner = c.Miner
 	enc.TxPool = c.TxPool
 	enc.BlobPool = c.BlobPool
@@ -236,6 +238,7 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		LogQueryLimit                        *int
 		AddressCacheSizes                    map[common.Address]int
 		PreloadRateLimit                     *int64
+		AddressCachePersist                  *bool
 		Miner                                *miner.Config
 		TxPool                               *legacypool.Config
 		BlobPool                             *blobpool.Config
@@ -398,6 +401,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.PreloadRateLimit != nil {
 		c.PreloadRateLimit = *dec.PreloadRateLimit
+	}
+	if dec.AddressCachePersist != nil {
+		c.AddressCachePersist = *dec.AddressCachePersist
 	}
 	if dec.Miner != nil {
 		c.Miner = *dec.Miner

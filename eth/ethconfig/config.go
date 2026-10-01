@@ -202,6 +202,10 @@ type Config struct {
 	// 0 = unlimited (legacy behavior), default = 1MB/s
 	PreloadRateLimit int64
 
+	// AddressCachePersist persists the address-specific caches to disk on
+	// shutdown and reloads them on startup. Default: false
+	AddressCachePersist bool
+
 	// Mining options
 	Miner miner.Config
 

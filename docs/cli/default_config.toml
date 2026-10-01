@@ -203,6 +203,7 @@ devfakeauthor = false
   fdlimit = 0
   addresscachesizes = ""
   preloadratelimit = ""
+  addresscachepersist = false
   gomemlimit = ""
   gogc = 100
   godebug = ""

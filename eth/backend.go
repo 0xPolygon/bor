@@ -332,6 +332,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			TxLookupLimit:            int64(min(config.TransactionHistory, math.MaxInt64)),
 			AddressCacheSizes:        config.AddressCacheSizes,
 			PreloadRateLimit:         config.PreloadRateLimit,
+			AddressCachePersist:      config.AddressCachePersist,
 			VmConfig:                 vmCfg,
 			EnablePipelinedImportSRC: config.EnablePipelinedImportSRC,
 			PipelinedImportSRCLogs:   config.PipelinedImportSRCLogs,

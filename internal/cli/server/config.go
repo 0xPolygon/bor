@@ -734,6 +734,11 @@ type CacheConfig struct {
 	// Accepts values like "500KB", "1MB", "0" (for unlimited). Default: 1MB/s
 	PreloadRateLimit string `hcl:"preloadratelimit,optional" toml:"preloadratelimit,optional"`
 
+	// AddressCachePersist persists the address-specific caches to the trie
+	// journal directory on shutdown and reloads them on startup, skipping the
+	// preload walk when the snapshot is warm. Default: false
+	AddressCachePersist bool `hcl:"addresscachepersist,optional" toml:"addresscachepersist,optional"`
+
 	// GC settings
 	// GoMemLimit sets the soft memory limit for the runtime
 	GoMemLimit string `hcl:"gomemlimit,optional" toml:"gomemlimit,optional"`
@@ -1632,6 +1637,8 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 			// Default to 1MB/s per address if not specified
 			n.PreloadRateLimit = 1024 * 1024
 		}
+
+		n.AddressCachePersist = c.Cache.AddressCachePersist
 	}
 
 	// History
