@@ -8,6 +8,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/protocols/wit"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
 )
 
@@ -27,6 +28,7 @@ func TestPeerPolicyObservationDoesNotEnforce(t *testing.T) {
 func TestPeerPolicyDisabled(t *testing.T) {
 	h := &handler{}
 	h.initPeerPolicy(false)
+	h.observeProtocolPeer(nil)
 	h.observePeer("peer", peerpolicy.InvalidBlock)
 	if h.peerPolicy != nil {
 		t.Fatal("observation enabled by default")
@@ -60,12 +62,17 @@ func TestPeerPolicyHandlerIntegration(t *testing.T) {
 	if info.Reputation == nil || info.Reputation.Risk != 60 {
 		t.Fatalf("missing peer information: %+v", info)
 	}
+	items := metrics.GetOrRegisterCounter("eth/peerpolicy/items/transactions", nil)
+	before := items.Snapshot().Count()
 	tx := types.NewTx(&types.LegacyTx{})
 	if err := h.handler.txFetcher.Enqueue("sender", []*types.Transaction{tx}, false, 0); err != nil {
 		t.Fatal(err)
 	}
 	if got := h.handler.peerPolicy.Snapshot("sender"); got.Risk != 60 {
 		t.Fatalf("missing validation evidence: %+v", got)
+	}
+	if items.Snapshot().Count()-before != 1 {
+		t.Fatal("unsolicited transaction not counted")
 	}
 	h.handler.dropFetcherPeer("missing")
 	if got := h.handler.peerPolicy.Snapshot("missing"); got.Risk != 0 || got.Windows[peerpolicy.FetcherDrop.String()] != 1 {

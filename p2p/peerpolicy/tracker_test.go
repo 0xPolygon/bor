@@ -10,6 +10,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/mclock"
+	"github.com/ethereum/go-ethereum/metrics"
 )
 
 func TestPeerPolicyScoreAndExpiry(t *testing.T) {
@@ -63,6 +64,7 @@ func TestPeerPolicyTrafficBoundaries(t *testing.T) {
 
 func TestPeerPolicyRepetition(t *testing.T) {
 	clock := new(mclock.Simulated)
+	clock.Run(40 * time.Second)
 	tracker := New(clock)
 	event := Evidence{Family: TransactionAnnouncements, Items: 1, Hashes: []common.Hash{{1}}}
 	tracker.Observe("a", event)
@@ -76,7 +78,9 @@ func TestPeerPolicyRepetition(t *testing.T) {
 	tracker.Observe("b", event)
 	assertRisk(t, tracker, "b", 0, "none")
 	clock.Run(60 * time.Second)
-	tracker.Observe("a", event)
+	for range 34 {
+		tracker.Observe("a", event)
+	}
 	assertRisk(t, tracker, "a", 0, "none")
 }
 
@@ -141,6 +145,9 @@ func TestPeerPolicyRejectsUnknownEvidence(t *testing.T) {
 }
 
 func BenchmarkPeerPolicyObserve(b *testing.B) {
+	if !metrics.Enabled() {
+		metrics.Enable()
+	}
 	tracker := New(new(mclock.Simulated))
 	event := Evidence{Family: Blocks, Items: 1, Bytes: 1024}
 	tracker.Observe("a", event)

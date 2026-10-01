@@ -54,8 +54,78 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (__name__) (rate({__name__=~\"eth_peerpolicy_windows_.*\",instance=~\"$instance\"}[5m]))",
-          "legendFormat": "{{__name__}} {{instance}}"
+          "expr": "sum(rate(eth_peerpolicy_windows_invalid_encoding{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "invalid encoding"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(eth_peerpolicy_windows_invalid_block{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "invalid block"
+        },
+        {
+          "refId": "C",
+          "expr": "sum(rate(eth_peerpolicy_windows_invalid_transaction{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "invalid transaction"
+        },
+        {
+          "refId": "D",
+          "expr": "sum(rate(eth_peerpolicy_windows_invalid_witness_announcement{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "invalid witness announcement"
+        },
+        {
+          "refId": "E",
+          "expr": "sum(rate(eth_peerpolicy_windows_invalid_witness_body{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "invalid witness body"
+        },
+        {
+          "refId": "F",
+          "expr": "sum(rate(eth_peerpolicy_windows_announcement_volume{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "announcement volume"
+        },
+        {
+          "refId": "G",
+          "expr": "sum(rate(eth_peerpolicy_windows_announcement_repetition{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "announcement repetition"
+        },
+        {
+          "refId": "H",
+          "expr": "sum(rate(eth_peerpolicy_windows_transaction_volume{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "transaction volume"
+        },
+        {
+          "refId": "I",
+          "expr": "sum(rate(eth_peerpolicy_windows_block_volume{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "block volume"
+        },
+        {
+          "refId": "J",
+          "expr": "sum(rate(eth_peerpolicy_windows_request_volume{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "request volume"
+        },
+        {
+          "refId": "K",
+          "expr": "sum(rate(eth_peerpolicy_windows_downloader_failure{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "downloader failure"
+        },
+        {
+          "refId": "L",
+          "expr": "sum(rate(eth_peerpolicy_windows_fetcher_drop{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "fetcher drop"
+        },
+        {
+          "refId": "M",
+          "expr": "sum(rate(eth_peerpolicy_windows_legacy_jail{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "legacy jail"
+        },
+        {
+          "refId": "N",
+          "expr": "sum(rate(eth_peerpolicy_windows_serving_volume{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "serving volume"
+        },
+        {
+          "refId": "O",
+          "expr": "sum(rate(eth_peerpolicy_windows_serving_repetition{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "serving repetition"
         }
       ]
     },
@@ -76,8 +146,13 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (__name__) (rate({__name__=~\"eth_peerpolicy_would_.*\",instance=~\"$instance\"}[5m]))",
-          "legendFormat": "{{__name__}} {{instance}}"
+          "expr": "sum(rate(eth_peerpolicy_would_throttle{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "throttle"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(eth_peerpolicy_would_jail{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "jail"
         }
       ]
     },
@@ -120,8 +195,68 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (__name__) (rate({__name__=~\"eth_peerpolicy_downloader_.*\",instance=~\"$instance\"}[5m]))",
-          "legendFormat": "{{__name__}} {{instance}}"
+          "expr": "sum(rate(eth_peerpolicy_downloader_invalid_chain{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "invalid chain"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(eth_peerpolicy_downloader_pruned_sidechain{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "pruned sidechain"
+        },
+        {
+          "refId": "C",
+          "expr": "sum(rate(eth_peerpolicy_downloader_bad_peer{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "bad peer"
+        },
+        {
+          "refId": "D",
+          "expr": "sum(rate(eth_peerpolicy_downloader_timeout{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "timeout"
+        },
+        {
+          "refId": "E",
+          "expr": "sum(rate(eth_peerpolicy_downloader_stalling{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "stalling"
+        },
+        {
+          "refId": "F",
+          "expr": "sum(rate(eth_peerpolicy_downloader_unsynced{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "unsynced"
+        },
+        {
+          "refId": "G",
+          "expr": "sum(rate(eth_peerpolicy_downloader_empty_header_set{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "empty header set"
+        },
+        {
+          "refId": "H",
+          "expr": "sum(rate(eth_peerpolicy_downloader_peers_unavailable{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "peers unavailable"
+        },
+        {
+          "refId": "I",
+          "expr": "sum(rate(eth_peerpolicy_downloader_too_old{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "too old"
+        },
+        {
+          "refId": "J",
+          "expr": "sum(rate(eth_peerpolicy_downloader_invalid_ancestor{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "invalid ancestor"
+        },
+        {
+          "refId": "K",
+          "expr": "sum(rate(eth_peerpolicy_downloader_whitelist_mismatch{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "whitelist mismatch"
+        },
+        {
+          "refId": "L",
+          "expr": "sum(rate(eth_peerpolicy_downloader_disconnected{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "disconnected"
+        },
+        {
+          "refId": "M",
+          "expr": "sum(rate(eth_peerpolicy_downloader_whitelist_no_remote{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "whitelist no remote"
         }
       ]
     },

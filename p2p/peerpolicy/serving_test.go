@@ -10,6 +10,7 @@ import (
 
 func TestPeerPolicyRepeatedBodyDownloads(t *testing.T) {
 	clock := new(mclock.Simulated)
+	clock.Run(40 * time.Second)
 	tracker := New(clock)
 	e := Evidence{Family: BodyReplies, Items: 1, Bytes: 16 << 20, Hashes: []common.Hash{{1}}, ObjectBytes: []uint64{16 << 20}}
 	for range 4 {
@@ -24,7 +25,9 @@ func TestPeerPolicyRepeatedBodyDownloads(t *testing.T) {
 	tracker.Observe("b", e)
 	assertRisk(t, tracker, "b", 0, "none")
 	clock.Run(time.Minute)
-	tracker.Observe("a", e)
+	for range 3 {
+		tracker.Observe("a", e)
+	}
 	assertRisk(t, tracker, "a", 0, "none")
 }
 

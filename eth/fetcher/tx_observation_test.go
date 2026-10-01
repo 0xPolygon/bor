@@ -29,6 +29,7 @@ func TestPeerPolicyTransactionClassification(t *testing.T) {
 
 func TestPeerPolicyTransactionObserver(t *testing.T) {
 	f := &TxFetcher{}
+	f.observeValidation("peer", false, nil, false)
 	txs := []*types.Transaction{types.NewTx(&types.LegacyTx{Nonce: 1}), types.NewTx(&types.LegacyTx{Nonce: 2})}
 	calls := 0
 	f.SetValidationObserver(func(id string, direct bool, count, bytes uint64, invalid bool) {
