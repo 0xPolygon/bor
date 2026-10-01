@@ -833,15 +833,17 @@ func staticNodeIDs(nodes []*enode.Node) map[enode.ID]bool {
 // held as an inbound connection. The dial scheduler is updated here too so both
 // copies of the set change together.
 func (srv *Server) setStatic(static map[enode.ID]bool, peers map[enode.ID]*Peer, n *enode.Node, member bool) {
+	// The peer flag goes first so the dropper never sees a stale value while
+	// the dial scheduler call is pending.
+	if p, ok := peers[n.ID()]; ok {
+		p.rw.set(staticConn, member)
+	}
 	if member {
 		static[n.ID()] = true
 		srv.dialsched.addStatic(n)
 	} else {
 		delete(static, n.ID())
 		srv.dialsched.removeStatic(n)
-	}
-	if p, ok := peers[n.ID()]; ok {
-		p.rw.set(staticConn, member)
 	}
 }
 
