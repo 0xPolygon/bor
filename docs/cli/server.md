@@ -278,7 +278,7 @@ The ```bor server``` command runs the Bor client.
 
 ### Logging Options
 
-- ```log.backtrace```: Request a stack trace at a specific logging statement (e.g. 'block.go:271')
+- ```log.backtrace```: Deprecated: has no effect (the logger no longer supports per-site backtraces)
 
 - ```log.debug```: Prepends log messages with call-site location (file and line number) (default: false)
 
