@@ -1,9 +1,11 @@
 # Peer reputation observation
 
-This draft implements opt-in reputation measurement in Bor. Enable it with
-`bor server --peer-reputation` or `peer-reputation = true` in the `[p2p]`
-configuration block. It is disabled by default. Enable the existing metrics
-exporter separately to collect dashboard data.
+This draft enables reputation measurement by default on Bor's native peer network.
+Normal `bor server` startup activates scoring. Use `--peer-reputation=false` or
+`peer-reputation = false` in the `[p2p]` configuration block to disable it. Existing
+configs without this field inherit the enabled default; an explicit false remains
+an opt-out. Enable the existing metrics exporter separately to collect dashboard
+data. Scoring starts even when metrics export is disabled.
 
 The implementation computes scores and reports hypothetical actions. It does
 not throttle, disconnect, jail, change slots, grant contribution credit or

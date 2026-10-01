@@ -877,6 +877,7 @@ func DefaultConfig() *Config {
 			EnableBlockTracking: false,
 		},
 		P2P: &P2PConfig{
+			PeerReputation:       true,
 			MaxPeers:             50,
 			MaxPendPeers:         50,
 			Bind:                 "0.0.0.0",
@@ -1196,6 +1197,7 @@ func readConfigFile(path string) (*Config, error) {
 	}
 
 	config := &Config{
+		P2P:    &P2PConfig{PeerReputation: true},
 		TxPool: &TxPoolConfig{},
 		Cache:  &CacheConfig{},
 		Sealer: &SealerConfig{},

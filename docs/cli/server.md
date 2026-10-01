@@ -314,7 +314,7 @@ The ```bor server``` command runs the Bor client.
 
 - ```p2p.nosnap```: Disable serving snap sync requests to peers (snap/1 protocol is not advertised) (default: false)
 
-- ```peer-reputation```: Observe peer reputation without changing serving or connection decisions (default: false)
+- ```peer-reputation```: Observe peer reputation without changing serving or connection decisions (disable with --peer-reputation=false) (default: true)
 
 - ```port```: Network listening port (default: 30303)
 

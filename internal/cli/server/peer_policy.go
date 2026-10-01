@@ -5,7 +5,7 @@ import "github.com/ethereum/go-ethereum/internal/cli/flagset"
 func (c *Command) peerReputationFlag(f *flagset.Flagset) {
 	f.BoolFlag(&flagset.BoolFlag{
 		Name:    "peer-reputation",
-		Usage:   "Observe peer reputation without changing serving or connection decisions",
+		Usage:   "Observe peer reputation without changing serving or connection decisions (disable with --peer-reputation=false)",
 		Value:   &c.cliConfig.P2P.PeerReputation,
 		Default: c.cliConfig.P2P.PeerReputation,
 		Group:   "P2P",

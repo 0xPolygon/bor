@@ -8,6 +8,25 @@ import (
 	"github.com/naoina/toml"
 )
 
+func TestPeerPolicyDefault(t *testing.T) {
+	if !Defaults.PeerReputation {
+		t.Fatal("peer reputation must default to enabled")
+	}
+	config := Defaults
+	if err := toml.NewDecoder(bytes.NewBufferString("NetworkId = 137\n")).Decode(&config); err != nil {
+		t.Fatal(err)
+	}
+	if !config.PeerReputation {
+		t.Fatal("omitted field disabled reputation")
+	}
+	if err := toml.NewDecoder(bytes.NewBufferString("PeerReputation = false\n")).Decode(&config); err != nil {
+		t.Fatal(err)
+	}
+	if config.PeerReputation {
+		t.Fatal("explicit false did not disable reputation")
+	}
+}
+
 func TestPeerPolicyConfigRoundTrip(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		encoded, err := (Config{PeerReputation: enabled}).MarshalTOML()

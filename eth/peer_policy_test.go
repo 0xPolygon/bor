@@ -7,6 +7,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/mclock"
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/eth/ethconfig"
 	"github.com/ethereum/go-ethereum/eth/protocols/wit"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
@@ -31,7 +32,7 @@ func TestPeerPolicyDisabled(t *testing.T) {
 	h.observeProtocolPeer(nil)
 	h.observePeer("peer", peerpolicy.InvalidBlock)
 	if h.peerPolicy != nil {
-		t.Fatal("observation enabled by default")
+		t.Fatal("explicit opt-out ignored")
 	}
 }
 
@@ -47,7 +48,7 @@ func (p *rejectingPolicyPool) Add(txs []*types.Transaction, _ bool) []error {
 
 func TestPeerPolicyHandlerIntegration(t *testing.T) {
 	h := newTestHandlerWithConfig(func(config *handlerConfig) *handlerConfig {
-		config.peerReputation = true
+		config.peerReputation = ethconfig.Defaults.PeerReputation
 		config.TxPool = &rejectingPolicyPool{newTestTxPool()}
 		return config
 	})
