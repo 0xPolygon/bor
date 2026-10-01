@@ -761,6 +761,7 @@ func (hc *HeaderChain) setHead(headBlock uint64, headTime uint64, updateFn Updat
 	hc.headerCache.Purge()
 	hc.tdCache.Purge()
 	hc.numberCache.Purge()
+	rawdb.PurgeStaleMilestonesFromDb(hc.chainDb, hc.CurrentHeader().Number.Uint64())
 }
 
 // SetGenesis sets a new genesis block header for the chain
