@@ -57,7 +57,17 @@ type AddressBiasedCache struct {
 // address's cache. journalDir is expected to already be an absolute,
 // resolved directory (see triedb/pathdb.Config.JournalDirectory).
 func snapshotPath(journalDir string, accountHash common.Hash) string {
-	return filepath.Join(journalDir, "addresscache", accountHash.Hex()+".cache")
+	return filepath.Join(snapshotDir(journalDir), accountHash.Hex()+".cache")
+}
+
+// snapshotDir returns the directory holding all address cache snapshots.
+func snapshotDir(journalDir string) string {
+	return filepath.Join(journalDir, "addresscache")
+}
+
+// removeSnapshots deletes every address cache snapshot under journalDir.
+func removeSnapshots(journalDir string) error {
+	return os.RemoveAll(snapshotDir(journalDir))
 }
 
 // warmFillThreshold returns the byte-fill level, out of cacheSize, that a
@@ -520,7 +530,7 @@ func (c *AddressBiasedCache) Close(persist bool) {
 		return
 	}
 
-	dir := filepath.Join(c.journalDir, "addresscache")
+	dir := snapshotDir(c.journalDir)
 	if err := ensureDir(dir); err != nil {
 		log.Warn("Failed to create address cache snapshot directory", "dir", dir, "err", err)
 		return

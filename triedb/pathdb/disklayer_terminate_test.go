@@ -19,10 +19,12 @@ package pathdb
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
@@ -219,5 +221,120 @@ func TestAddressCachePersistFlag(t *testing.T) {
 		if !persist && !os.IsNotExist(err) {
 			t.Fatalf("expected Close not to persist the address cache with the flag off, got stat err: %v", err)
 		}
+	}
+}
+
+// writeStaleSnapshot creates a fake address cache snapshot under journalDir
+// and returns its path.
+func writeStaleSnapshot(t *testing.T, journalDir string) string {
+	t.Helper()
+
+	path := snapshotPath(journalDir, common.HexToHash("0x01"))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("failed to create snapshot dir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("stale"), 0o644); err != nil {
+		t.Fatalf("failed to write snapshot: %v", err)
+	}
+	return path
+}
+
+// TestDisableRemovesStaleSnapshots checks that Disable drops saved address
+// cache snapshots when persistence is on, since state sync is about to
+// rebuild the trie they describe, and leaves files alone when it is off.
+func TestDisableRemovesStaleSnapshots(t *testing.T) {
+	for _, persist := range []bool{false, true} {
+		journalDir := t.TempDir()
+		path := writeStaleSnapshot(t, journalDir)
+
+		config := *Defaults
+		config.JournalDirectory = journalDir
+		config.AddressCachePersist = persist
+		db := New(rawdb.NewMemoryDatabase(), &config, false)
+
+		if err := db.Disable(); err != nil {
+			t.Fatalf("persist=%v: Disable returned an unexpected error: %v", persist, err)
+		}
+		_, err := os.Stat(path)
+		if persist && !os.IsNotExist(err) {
+			t.Fatalf("expected Disable to remove the stale snapshot, got stat err: %v", err)
+		}
+		if !persist && err != nil {
+			t.Fatalf("expected Disable to keep files when persistence is off, got stat err: %v", err)
+		}
+	}
+}
+
+// TestDisableLogsSnapshotRemovalFailure checks that a failure to drop stale
+// snapshots is logged and does not fail Disable.
+func TestDisableLogsSnapshotRemovalFailure(t *testing.T) {
+	h := installCapturingHandler(t)
+
+	journalDir := t.TempDir()
+	writeStaleSnapshot(t, journalDir)
+
+	// A read-only snapshot dir makes RemoveAll fail on its entries.
+	dir := snapshotDir(journalDir)
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatalf("failed to make snapshot dir read-only: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	config := *Defaults
+	config.JournalDirectory = journalDir
+	config.AddressCachePersist = true
+	db := New(rawdb.NewMemoryDatabase(), &config, false)
+
+	if err := db.Disable(); err != nil {
+		t.Fatalf("Disable returned an unexpected error: %v", err)
+	}
+	if !h.contains("Failed to remove stale address cache snapshots") {
+		t.Fatal("expected Disable to log the snapshot removal failure")
+	}
+}
+
+// TestEnableAfterDisableRunsColdPreload checks the full state-sync cycle: a
+// warm snapshot saved before the sync must not be reloaded by the disk layer
+// that Enable builds, so that layer runs a real preload of the new trie.
+func TestEnableAfterDisableRunsColdPreload(t *testing.T) {
+	addr := common.HexToAddress("0x1234567890123456789012345678901234567890")
+	journalDir := t.TempDir()
+	// See TestAddressBiasedCache_WarmReloadSkipsPreload for why this size
+	// makes any saved snapshot deterministically warm.
+	const cacheSize = 1024
+	sizes := map[common.Address]int{addr: cacheSize}
+
+	accountHash := crypto.Keccak256Hash(addr.Bytes())
+	seed := rawdb.NewMemoryDatabase()
+	rawdb.WriteStorageTrieNode(seed, accountHash, nil, encodeBranchNode(t, []byte{0}, make([]byte, 32)))
+	first, err := NewAddressBiasedCache(seed, sizes, 4*1024, 0, journalDir)
+	if err != nil {
+		t.Fatalf("failed to create cache: %v", err)
+	}
+	first.wg.Wait()
+	first.Close(true)
+
+	config := *Defaults
+	config.JournalDirectory = journalDir
+	config.AddressCacheSizes = sizes
+	config.AddressCachePersist = true
+	db := New(rawdb.NewMemoryDatabase(), &config, false)
+	defer db.Close()
+
+	if err := db.Disable(); err != nil {
+		t.Fatalf("Disable returned an unexpected error: %v", err)
+	}
+
+	h := installCapturingHandler(t)
+	if err := db.Enable(types.EmptyRootHash); err != nil {
+		t.Fatalf("Enable returned an unexpected error: %v", err)
+	}
+	db.tree.bottom().nodes.wg.Wait()
+
+	if h.contains("Reloaded address cache snapshot") {
+		t.Fatal("expected Enable not to reload the pre-sync snapshot")
+	}
+	if !h.contains("Starting storage trie preload") {
+		t.Fatal("expected Enable to run a cold preload")
 	}
 }
