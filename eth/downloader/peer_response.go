@@ -160,6 +160,7 @@ func isTransientFailure(err error) bool {
 
 func (d *Downloader) respondToPeer(peer *peerConnection, reason peerFailureReason, err error) {
 	decision := peer.responseDecision(reason)
+	d.observeFailure(peer.id, reason)
 
 	switch decision.action {
 	case peerResponseBackoff:

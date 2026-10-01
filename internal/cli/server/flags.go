@@ -1002,6 +1002,7 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	})
 
 	// p2p options
+	c.peerReputationFlag(f)
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "bind",
 		Usage:   "Network binding address",

@@ -46,7 +46,12 @@ func (h *ethHandler) RunPeer(peer *eth.Peer, hand eth.Handler) error {
 // PeerInfo retrieves all known `eth` information about a peer.
 func (h *ethHandler) PeerInfo(id enode.ID) interface{} {
 	if p := h.peers.peer(id.String()); p != nil {
-		return p.info()
+		info := p.info()
+		if h.peerPolicy != nil {
+			snapshot := h.peerPolicy.Snapshot(id.String())
+			info.Reputation = &snapshot
+		}
+		return info
 	}
 
 	return nil

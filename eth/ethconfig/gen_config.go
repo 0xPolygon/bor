@@ -21,6 +21,7 @@ import (
 func (c Config) MarshalTOML() (interface{}, error) {
 	type Config struct {
 		Genesis                              *core.Genesis `toml:",omitempty"`
+		PeerReputation                       bool
 		NetworkId                            uint64
 		SyncMode                             downloader.SyncMode
 		HistoryMode                          history.HistoryMode
@@ -109,6 +110,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	}
 	var enc Config
 	enc.Genesis = c.Genesis
+	enc.PeerReputation = c.PeerReputation
 	enc.NetworkId = c.NetworkId
 	enc.SyncMode = c.SyncMode
 	enc.HistoryMode = c.HistoryMode
@@ -201,6 +203,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	type Config struct {
 		Genesis                              *core.Genesis `toml:",omitempty"`
+		PeerReputation                       *bool
 		NetworkId                            *uint64
 		SyncMode                             *downloader.SyncMode
 		HistoryMode                          *history.HistoryMode
@@ -293,6 +296,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.Genesis != nil {
 		c.Genesis = dec.Genesis
+	}
+	if dec.PeerReputation != nil {
+		c.PeerReputation = *dec.PeerReputation
 	}
 	if dec.NetworkId != nil {
 		c.NetworkId = *dec.NetworkId
