@@ -123,7 +123,12 @@ func (p *Peer) dispatchResponse(code uint64, packet trackedResponse) (bool, erro
 	}
 	select {
 	case req.sink <- res:
-		return true, <-res.Done
+		select {
+		case err := <-res.Done:
+			return true, err
+		case <-req.cancel:
+			return true, nil
+		}
 	case <-req.cancel:
 		return true, nil
 	}

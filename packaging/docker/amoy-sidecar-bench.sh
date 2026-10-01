@@ -189,7 +189,7 @@ pair_nodes() {
 ensure_stack() {
 	profile="$1"
 	set_profile "${profile}"
-	compose up -d bor-a bor-b bor-observer >/dev/null
+	compose up -d --force-recreate bor-a bor-b bor-observer >/dev/null
 	wait_for_rpc bor-a
 	wait_for_rpc bor-b
 	wait_for_rpc bor-observer
@@ -329,7 +329,7 @@ run_downloader_counterbalanced() {
 	: >"${results}"
 	for profile in tcp quic quic tcp; do
 		set_profile "${profile}"
-		compose up -d bor-b bor-observer >/dev/null
+		compose up -d --force-recreate bor-b bor-observer >/dev/null
 		wait_for_rpc bor-b
 		wait_for_rpc bor-observer
 		reset_service_volume bor-a "${volume_a}"

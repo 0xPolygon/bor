@@ -91,9 +91,16 @@ func (p *Peer) Log() log.Logger {
 // AttachBulkRW installs an auxiliary sidecar lane for the negotiated snap
 // protocol. When unavailable, traffic falls back to the primary devp2p lane.
 func (p *Peer) AttachBulkRW(rw p2p.MsgReadWriter) {
-	for _, channel := range []string{snapAccountsChannel, snapStorageChannel, snapCodeChannel, snapTrieChannel} {
-		p.AttachBulkChannelRW(channel, rw)
+	channels := []string{snapAccountsChannel, snapStorageChannel, snapCodeChannel, snapTrieChannel}
+	if multi, ok := p.rw.(interface {
+		AttachBulkChannels([]string, p2p.MsgReadWriter)
+	}); ok {
+		multi.AttachBulkChannels(channels, rw)
+		return
 	}
+	p.rw = p2p.NewChannelRoutedMsgReadWriter(p.rw, rw, snapTrieChannel, func(code uint64) bool {
+		return snapSidecarChannelForMsg(code) != ""
+	})
 }
 
 // AttachBulkChannelRW installs an auxiliary sidecar lane for a specific snap
