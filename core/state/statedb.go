@@ -969,6 +969,11 @@ func (s *StateDB) GetLogs(hash common.Hash, blockNumber uint64, blockHash common
 	return logs
 }
 
+// LogCount returns the number of logs added so far.
+func (s *StateDB) LogCount() int {
+	return int(s.logSize)
+}
+
 func (s *StateDB) Logs() []*types.Log {
 	logs := make([]*types.Log, 0, s.logSize)
 	for _, lgs := range s.logs {

@@ -237,6 +237,26 @@ func TestCopy(t *testing.T) {
 	}
 }
 
+func TestLogCount(t *testing.T) {
+	statedb, err := New(types.EmptyRootHash, NewDatabaseForTesting())
+	if err != nil {
+		t.Fatalf("create state: %v", err)
+	}
+	statedb.SetTxContext(common.Hash{1}, 0)
+	statedb.AddLog(&types.Log{})
+	statedb.SetTxContext(common.Hash{2}, 1)
+	statedb.AddLog(&types.Log{})
+	snapshot := statedb.Snapshot()
+	statedb.AddLog(&types.Log{})
+	if got, want := statedb.LogCount(), len(statedb.Logs()); got != 3 || got != want {
+		t.Fatalf("log count = %d, want 3 and len(Logs()) = %d", got, want)
+	}
+	statedb.RevertToSnapshot(snapshot)
+	if got, want := statedb.LogCount(), len(statedb.Logs()); got != 2 || got != want {
+		t.Fatalf("log count after revert = %d, want 2 and len(Logs()) = %d", got, want)
+	}
+}
+
 // TestCopyWithDirtyJournal tests if Copy can correct create a equal copied
 // stateDB with dirty journal present.
 func TestCopyWithDirtyJournal(t *testing.T) {

@@ -193,8 +193,7 @@ type Config struct {
 	AccountQueue uint64 // Maximum number of non-executable transaction slots permitted per account
 	GlobalQueue  uint64 // Maximum number of non-executable transaction slots for all accounts
 
-	Lifetime            time.Duration // Maximum amount of time non-executable transaction are queued
-	AllowUnprotectedTxs bool          // Allow non-EIP-155 transactions
+	Lifetime time.Duration // Maximum amount of time non-executable transaction are queued
 
 	// Transaction filtering configuration
 	FilteredAddresses map[common.Address]struct{} // Pre-loaded filtered addresses (populated by config)
@@ -219,8 +218,7 @@ var DefaultConfig = Config{
 	AccountQueue: 64,
 	GlobalQueue:  1024,
 
-	Lifetime:            3 * time.Hour,
-	AllowUnprotectedTxs: false,
+	Lifetime: 3 * time.Hour,
 
 	Rebroadcast:          true,
 	RebroadcastInterval:  30 * time.Second,
@@ -777,8 +775,7 @@ func (pool *LegacyPool) Pending(filter txpool.PendingFilter, interrupt *atomic.B
 // and does not require the pool mutex to be held.
 func (pool *LegacyPool) ValidateTxBasics(tx *types.Transaction) error {
 	opts := &txpool.ValidationOptions{
-		Config:              pool.chainconfig,
-		AllowUnprotectedTxs: pool.config.AllowUnprotectedTxs,
+		Config: pool.chainconfig,
 		Accept: 0 |
 			1<<types.LegacyTxType |
 			1<<types.AccessListTxType |
@@ -980,10 +977,6 @@ func (pool *LegacyPool) add(tx *types.Transaction, async bool) (replaced bool, e
 		knownTxMeter.Mark(1)
 		stage0Duration = time.Since(stage0Time)
 		return false, txpool.ErrAlreadyKnown
-	}
-
-	if pool.config.AllowUnprotectedTxs {
-		pool.signer = types.NewFakeSigner(tx.ChainId())
 	}
 
 	// If the transaction fails basic validation, discard it
@@ -1302,10 +1295,6 @@ func (pool *LegacyPool) Add(txs []*types.Transaction, sync bool) []error {
 			errs[i] = txpool.ErrAlreadyKnown
 			knownTxMeter.Mark(1)
 			continue
-		}
-
-		if pool.config.AllowUnprotectedTxs {
-			pool.signer = types.NewFakeSigner(tx.ChainId())
 		}
 
 		// Exclude transactions with basic errors, e.g invalid signatures and

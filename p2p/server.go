@@ -169,6 +169,18 @@ func (pj *peerJail) IsJailed(id enode.ID) bool {
 	return false
 }
 
+// JailedUntil returns the unban time of a peer if it is currently jailed.
+func (pj *peerJail) JailedUntil(id enode.ID) (mclock.AbsTime, bool) {
+	if !pj.IsJailed(id) {
+		return 0, false
+	}
+
+	pj.mu.RLock()
+	defer pj.mu.RUnlock()
+	unbanTime, exists := pj.jailed[id]
+	return unbanTime, exists
+}
+
 type peerDrop struct {
 	*Peer
 	err       error
@@ -704,9 +716,9 @@ func (srv *Server) setupDialScheduler() {
 		dialer:         srv.Dialer,
 		clock:          srv.clock,
 	}
-	// Pass jail checker function to dial scheduler
+	// Pass jail lookup function to dial scheduler
 	if srv.peerJail != nil {
-		config.jailChecker = srv.peerJail.IsJailed
+		config.jailedUntil = srv.peerJail.JailedUntil
 	}
 	if srv.discv4 != nil {
 		config.resolver = srv.discv4
