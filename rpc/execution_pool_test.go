@@ -180,3 +180,43 @@ func TestSubmitShedsOnCtxCancel(t *testing.T) {
 	close(release)
 	wg.Wait()
 }
+
+// TestProcessedCountsEveryPath: processed must count tasks completed through
+// the slot path as well as the ctx-cancel and timeout shed paths; the
+// rpc/ep/processed histogram was fed from a counter nothing incremented.
+func TestProcessedCountsEveryPath(t *testing.T) {
+	pool := NewExecutionPool(1, 50*time.Millisecond, "", false)
+	defer pool.Stop()
+
+	current, _, release, wg := submitBlockingTasks(pool, 1) // occupies the only slot
+	waitForAtomic(t, current, 1, time.Second)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	shed := new(sync.WaitGroup)
+	shed.Add(2)
+	pool.Submit(ctx, func() error { shed.Done(); return nil })                  // ctx path
+	pool.Submit(context.Background(), func() error { shed.Done(); return nil }) // timeout path
+	shed.Wait()
+
+	close(release)
+	wg.Wait()
+
+	waitForAtomic(t, &pool.processed, 3, time.Second)
+}
+
+// TestProcessedCountsFastPath: the unbounded fast path is counted too.
+func TestProcessedCountsFastPath(t *testing.T) {
+	pool := NewExecutionPool(0, 0, "", false)
+	defer pool.Stop()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	for range 2 {
+		pool.Submit(context.Background(), func() error { wg.Done(); return nil })
+	}
+	wg.Wait()
+
+	waitForAtomic(t, &pool.processed, 2, time.Second)
+}
