@@ -159,6 +159,8 @@ type txDrop struct {
 //     abandoned request is dead on the wire; the request ID echoed in
 //     PooledTransactionsMsg identifies stale replies from abandoned requests.
 type TxFetcher struct {
+	validationObserver func(string, bool, uint64, uint64, bool)
+
 	notify  chan *txAnnounce
 	cleanup chan *txDelivery
 	drop    chan *txDrop
@@ -302,6 +304,8 @@ func (f *TxFetcher) isKnownUnderpriced(hash common.Hash) bool {
 // direct request replies. The differentiation is important so the fetcher can
 // re-schedule missing transactions as soon as possible.
 func (f *TxFetcher) Enqueue(peer string, txs []*types.Transaction, direct bool, requestID uint64) error {
+	var invalid bool
+	defer func() { f.observeValidation(peer, direct, txs, invalid) }()
 	var (
 		inMeter          = txReplyInMeter
 		knownMeter       = txReplyKnownMeter
@@ -341,6 +345,9 @@ func (f *TxFetcher) Enqueue(peer string, txs []*types.Transaction, direct bool, 
 		batch := txs[i:end]
 
 		for j, err := range f.addTxs(batch) {
+			if f.validationObserver != nil {
+				invalid = invalid || invalidTransaction(err)
+			}
 			// Track the transaction hash if the price is too low for us.
 			// Avoid re-request this transaction when we receive another
 			// announcement.

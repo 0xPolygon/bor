@@ -1,0 +1,151 @@
+{
+  "title": "Bor peer reputation observation",
+  "uid": "bor-peer-reputation",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "tags": [
+    "bor",
+    "p2p",
+    "observation"
+  ],
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus"
+      },
+      {
+        "name": "instance",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "query": "label_values(eth_peerpolicy_evictions, instance)",
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "refresh": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Reason windows",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (__name__) (rate({__name__=~\"eth_peerpolicy_windows_.*\",instance=~\"$instance\"}[5m]))",
+          "legendFormat": "{{__name__}} {{instance}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Hypothetical action transitions",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (__name__) (rate({__name__=~\"eth_peerpolicy_would_.*\",instance=~\"$instance\"}[5m]))",
+          "legendFormat": "{{__name__}} {{instance}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Completed body serving bytes",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(eth_peerpolicy_bytes_body_replies{instance=~\"$instance\"}[5m])",
+          "legendFormat": "{{__name__}} {{instance}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Downloader outcomes",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (__name__) (rate({__name__=~\"eth_peerpolicy_downloader_.*\",instance=~\"$instance\"}[5m]))",
+          "legendFormat": "{{__name__}} {{instance}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Peer record evictions",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(eth_peerpolicy_evictions{instance=~\"$instance\"}[5m])",
+          "legendFormat": "{{__name__}} {{instance}}"
+        }
+      ]
+    }
+  ]
+}

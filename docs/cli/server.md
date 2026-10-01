@@ -314,6 +314,8 @@ The ```bor server``` command runs the Bor client.
 
 - ```p2p.nosnap```: Disable serving snap sync requests to peers (snap/1 protocol is not advertised) (default: false)
 
+- ```peer-reputation```: Observe peer reputation without changing serving or connection decisions (default: false)
+
 - ```port```: Network listening port (default: 30303)
 
 - ```relay.bp-rpc-endpoints```: Comma separated rpc endpoints of all block producers

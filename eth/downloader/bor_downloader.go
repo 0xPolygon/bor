@@ -107,6 +107,8 @@ type headerTask struct {
 }
 
 type Downloader struct {
+	failureObserver func(string)
+
 	mode atomic.Uint32  // Synchronisation mode defining the strategy used (per sync cycle), use d.getMode() to get the SyncMode
 	mux  *event.TypeMux // Event multiplexer to announce sync operation events
 
