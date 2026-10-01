@@ -406,7 +406,7 @@ func (s *Suite) TestGetBlockBodies(t *utesting.T) {
 		t.Fatalf("error reading block bodies msg: %v", err)
 	}
 	if got, want := resp.RequestId, req.RequestId; got != want {
-		t.Fatalf("unexpected request id in respond", got, want)
+		t.Fatalf("unexpected request id in response: got %d, want %d", got, want)
 	}
 	bodies := resp.BlockBodiesResponse
 	if len(bodies) != len(req.GetBlockBodiesRequest) {
@@ -448,7 +448,7 @@ func (s *Suite) TestGetReceipts(t *utesting.T) {
 		t.Fatalf("error reading block bodies msg: %v", err)
 	}
 	if got, want := resp.RequestId, req.RequestId; got != want {
-		t.Fatalf("unexpected request id in respond", got, want)
+		t.Fatalf("unexpected request id in response: got %d, want %d", got, want)
 	}
 	if len(resp.List) != len(req.GetReceiptsRequest) {
 		t.Fatalf("wrong bodies in response: expected %d bodies, got %d", len(req.GetReceiptsRequest), len(resp.List))
@@ -936,11 +936,11 @@ func makeSidecar(data ...byte) *types.BlobTxSidecar {
 	for i := range blobs {
 		blobs[i][0] = data[i]
 		c, _ := kzg4844.BlobToCommitment(&blobs[i])
-		p, _ := kzg4844.ComputeBlobProof(&blobs[i], c)
+		cellProofs, _ := kzg4844.ComputeCellProofs(&blobs[i])
 		commitments = append(commitments, c)
-		proofs = append(proofs, p)
+		proofs = append(proofs, cellProofs...)
 	}
-	return types.NewBlobTxSidecar(types.BlobSidecarVersion0, blobs, commitments, proofs)
+	return types.NewBlobTxSidecar(types.BlobSidecarVersion1, blobs, commitments, proofs)
 }
 
 func (s *Suite) makeBlobTxs(count, blobs int, discriminator byte) (txs types.Transactions) {

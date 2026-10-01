@@ -92,6 +92,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		SyncAndProduceWitnesses              bool
 		DevFakeAuthor                        bool     `hcl:"devfakeauthor,optional" toml:"devfakeauthor,optional"`
 		OverrideOsaka                        *big.Int `toml:",omitempty"`
+		OverrideAmsterdam                    *big.Int `toml:",omitempty"`
 		OverrideVerkle                       *big.Int `toml:",omitempty"`
 		EnableBlockTracking                  bool
 		FastForwardThreshold                 uint64
@@ -184,6 +185,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.SyncAndProduceWitnesses = c.SyncAndProduceWitnesses
 	enc.DevFakeAuthor = c.DevFakeAuthor
 	enc.OverrideOsaka = c.OverrideOsaka
+	enc.OverrideAmsterdam = c.OverrideAmsterdam
 	enc.OverrideVerkle = c.OverrideVerkle
 	enc.EnableBlockTracking = c.EnableBlockTracking
 	enc.FastForwardThreshold = c.FastForwardThreshold
@@ -280,6 +282,7 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		SyncAndProduceWitnesses              *bool
 		DevFakeAuthor                        *bool    `hcl:"devfakeauthor,optional" toml:"devfakeauthor,optional"`
 		OverrideOsaka                        *big.Int `toml:",omitempty"`
+		OverrideAmsterdam                    *big.Int `toml:",omitempty"`
 		OverrideVerkle                       *big.Int `toml:",omitempty"`
 		EnableBlockTracking                  *bool
 		FastForwardThreshold                 *uint64
@@ -518,6 +521,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.OverrideOsaka != nil {
 		c.OverrideOsaka = dec.OverrideOsaka
+	}
+	if dec.OverrideAmsterdam != nil {
+		c.OverrideAmsterdam = dec.OverrideAmsterdam
 	}
 	if dec.OverrideVerkle != nil {
 		c.OverrideVerkle = dec.OverrideVerkle

@@ -18,6 +18,7 @@
 package pebble
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"runtime"
@@ -26,8 +27,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/cockroachdb/pebble"
-	"github.com/cockroachdb/pebble/bloom"
+	"github.com/cockroachdb/pebble/v2"
+	"github.com/cockroachdb/pebble/v2/bloom"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -53,7 +54,7 @@ const (
 	degradationWarnInterval = time.Minute
 )
 
-// Database is a persistent key-value store based on the pebble storage engine.
+// Database is a persistent key-value store based on the pebble v2 storage engine.
 // Apart from basic data storage functionality it also supports batch writes and
 // iterating over the keyspace in binary-alphabetical order.
 type Database struct {
@@ -78,8 +79,8 @@ type Database struct {
 	zombieMemTablesGauge   *metrics.Gauge   // Gauge for tracking the number of zombie memory tables
 	blockCacheHitGauge     *metrics.Gauge   // Gauge for tracking the number of total hit in the block cache
 	blockCacheMissGauge    *metrics.Gauge   // Gauge for tracking the number of total miss in the block cache
-	tableCacheHitGauge     *metrics.Gauge   // Gauge for tracking the number of total hit in the table cache
-	tableCacheMissGauge    *metrics.Gauge   // Gauge for tracking the number of total miss in the table cache
+	tableCacheHitGauge     *metrics.Gauge   // Gauge for tracking the number of total hit in the file cache
+	tableCacheMissGauge    *metrics.Gauge   // Gauge for tracking the number of total miss in the file cache
 	filterHitGauge         *metrics.Gauge   // Gauge for tracking the number of total hit in bloom filter
 	filterMissGauge        *metrics.Gauge   // Gauge for tracking the number of total miss in bloom filter
 	estimatedCompDebtGauge *metrics.Gauge   // Gauge for tracking the number of bytes that need to be compacted
@@ -247,7 +248,7 @@ func New(file string, cache int, handles int, namespace string, readonly bool) (
 	}
 
 	logger := log.New("database", file)
-	logger.Info("Allocated cache and file handles", "cache", common.StorageSize(cache*1024*1024), "handles", handles)
+	logger.Info("Allocated cache and file handles", "cache", common.StorageSize(cache*1024*1024), "handles", handles, "version", "v2")
 
 	// The max memtable size is limited by the uint32 offsets stored in
 	// internal/arenaskl.node, DeferredBatchOp, and flushableBatchEntry.
@@ -294,6 +295,7 @@ func New(file string, cache int, handles int, namespace string, readonly bool) (
 		// of course). Geth is expected to handle recovery from an unclean shutdown.
 		writeOptions: pebble.NoSync,
 	}
+	numCPU := runtime.NumCPU()
 	opt := &pebble.Options{
 		// Pebble has a single combined cache area and the write
 		// buffers are taken from this too. Assign all available
@@ -320,20 +322,30 @@ func New(file string, cache int, handles int, namespace string, readonly bool) (
 
 		// The default compaction concurrency(1 thread),
 		// Here use all available CPUs for faster compaction.
-		MaxConcurrentCompactions: runtime.NumCPU,
+		CompactionConcurrencyRange: func() (int, int) { return 1, numCPU },
 
 		// Per-level options. Options for at least one level must be specified. The
 		// options for the last level are used for all subsequent levels.
-		Levels: []pebble.LevelOptions{
-			{TargetFileSize: 2 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
-			{TargetFileSize: 4 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
-			{TargetFileSize: 8 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
-			{TargetFileSize: 16 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
-			{TargetFileSize: 32 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
-			{TargetFileSize: 64 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
+		Levels: [7]pebble.LevelOptions{
+			{FilterPolicy: bloom.FilterPolicy(10)},
+			{FilterPolicy: bloom.FilterPolicy(10)},
+			{FilterPolicy: bloom.FilterPolicy(10)},
+			{FilterPolicy: bloom.FilterPolicy(10)},
+			{FilterPolicy: bloom.FilterPolicy(10)},
+			{FilterPolicy: bloom.FilterPolicy(10)},
 
 			// Pebble doesn't use the Bloom filter at level6 for read efficiency.
-			{TargetFileSize: 128 * 1024 * 1024},
+			{},
+		},
+		// Per-level target file sizes (replaces LevelOptions.TargetFileSize in v2).
+		TargetFileSizes: [7]int64{
+			2 * 1024 * 1024,
+			4 * 1024 * 1024,
+			8 * 1024 * 1024,
+			16 * 1024 * 1024,
+			32 * 1024 * 1024,
+			64 * 1024 * 1024,
+			128 * 1024 * 1024,
 		},
 		ReadOnly: readonly,
 		EventListener: &pebble.EventListener{
@@ -367,6 +379,14 @@ func New(file string, cache int, handles int, namespace string, readonly bool) (
 		// the compaction debt as around 10GB. By reducing it to 2, the compaction
 		// debt will be less than 1GB, but with more frequent compactions scheduled.
 		L0CompactionThreshold: 2,
+
+		// FormatFlushableIngest is the minimum FormatMajorVersion supported by
+		// pebble v2. The more advanced version can be enabled later.
+		//
+		// This version is supported by both v1 and v2. It serves as the natural
+		// bridge point: a v1 database can be ratcheted up to FormatFlushableIngest
+		// using pebble v1, and then pebble v2 can open it since that's its minimum.
+		FormatMajorVersion: formatMinV2,
 	}
 	// Disable seek compaction explicitly. Check https://github.com/ethereum/go-ethereum/pull/20130
 	// for more details.
@@ -377,7 +397,7 @@ func New(file string, cache int, handles int, namespace string, readonly bool) (
 	// - there is one more overlapping sub-level0;
 	// - there is an additional 256 MB of compaction debt;
 	//
-	// The maximum concurrency is still capped by MaxConcurrentCompactions, but with
+	// The maximum concurrency is still capped by CompactionConcurrencyRange, but with
 	// these settings compactions can scale up more readily.
 	opt.Experimental.L0CompactionConcurrency = 1
 	opt.Experimental.CompactionDebtConcurrency = 1 << 28 // 256MB
@@ -615,7 +635,7 @@ func (d *Database) Compact(start []byte, limit []byte) error {
 		limit = ethdb.MaximumKey
 	}
 
-	return d.db.Compact(start, limit, true) // Parallelization is preferred
+	return d.db.Compact(context.Background(), start, limit, true) // Parallelization is preferred
 }
 
 // Path returns the path to the database directory.
@@ -681,9 +701,9 @@ func (d *Database) meter(refresh time.Duration, namespace string) {
 		var totalFlushBytes int64
 		for _, levelMetrics := range stats.Levels {
 			// Don't add to nWrite yet - we'll calculate physical writes separately
-			compWrite += int64(levelMetrics.BytesCompacted)
-			compRead += int64(levelMetrics.BytesRead)
-			totalFlushBytes += int64(levelMetrics.BytesFlushed)
+			compWrite += int64(levelMetrics.TableBytesCompacted)
+			compRead += int64(levelMetrics.TableBytesRead)
+			totalFlushBytes += int64(levelMetrics.TableBytesFlushed)
 		}
 
 		// Track both logical and physical WAL metrics
@@ -738,8 +758,8 @@ func (d *Database) meter(refresh time.Duration, namespace string) {
 		d.liveMemTablesGauge.Update(stats.MemTable.Count)
 		d.zombieMemTablesGauge.Update(stats.MemTable.ZombieCount)
 		d.estimatedCompDebtGauge.Update(int64(stats.Compact.EstimatedDebt))
-		d.tableCacheHitGauge.Update(stats.TableCache.Hits)
-		d.tableCacheMissGauge.Update(stats.TableCache.Misses)
+		d.tableCacheHitGauge.Update(stats.FileCache.Hits)
+		d.tableCacheMissGauge.Update(stats.FileCache.Misses)
 		d.blockCacheHitGauge.Update(stats.BlockCache.Hits)
 		d.blockCacheMissGauge.Update(stats.BlockCache.Misses)
 		d.filterHitGauge.Update(stats.Filter.Hits)
@@ -765,24 +785,24 @@ func (d *Database) meter(refresh time.Duration, namespace string) {
 				d.levelScoreGauge = append(d.levelScoreGauge, metrics.GetOrRegisterGauge(namespace+fmt.Sprintf("score/level%v", i), nil))
 				d.keysCountGauge = append(d.keysCountGauge, metrics.GetOrRegisterGauge(namespace+fmt.Sprintf("keys/level%v", i), nil))
 			}
-			d.levelsGauge[i].Update(level.NumFiles)
+			d.levelsGauge[i].Update(level.TablesCount)
 
 			// Update write amplification for this level
 			writeAmp := level.WriteAmp()
 			d.levelWriteAmpGauge[i].Update(writeAmp)
 
 			// Update level size
-			d.levelSizeGauge[i].Update(level.Size)
+			d.levelSizeGauge[i].Update(level.TablesSize)
 
 			// Update compaction score (>1.0 means level needs compaction)
 			d.levelScoreGauge[i].Update(int64(level.Score * 1000)) // Multiply by 1000 for precision
 
 			// Update keys count per level
-			d.keysCountGauge[i].Update(level.NumFiles) // Approximate by file count
+			d.keysCountGauge[i].Update(level.TablesCount) // Approximate by file count
 
 			// Accumulate I/O stats (these are cumulative from Pebble)
-			totalSSTBytesRead += int64(level.BytesRead)
-			totalSSTBytesWritten += int64(level.BytesCompacted)
+			totalSSTBytesRead += int64(level.TableBytesRead)
+			totalSSTBytesWritten += int64(level.TableBytesCompacted)
 		}
 		// Update I/O meters (mark only the delta since last measurement)
 		if i > 1 {
@@ -1029,10 +1049,10 @@ func (d *Database) updateCalculatedAmplifications(stats *pebble.Metrics) {
 
 	// Calculate actual user data size (sum of all live SST file sizes)
 	// This excludes obsolete files, WAL files, and internal metadata
-	// level.Size is the CURRENT live size, which already accounts for deleted files
+	// level.TablesSize is the CURRENT live size, which already accounts for deleted files
 	var actualDataSize int64
 	for _, level := range stats.Levels {
-		actualDataSize += level.Size
+		actualDataSize += level.TablesSize
 	}
 
 	d.actualDataSizeGauge.Update(actualDataSize)
@@ -1050,7 +1070,7 @@ func (d *Database) updateCalculatedAmplifications(stats *pebble.Metrics) {
 func (d *Database) calculateDatabaseWriteAmp(stats *pebble.Metrics) float64 {
 	var totalBytesIn uint64
 	for _, level := range stats.Levels {
-		totalBytesIn += level.BytesIn
+		totalBytesIn += level.TableBytesIn
 	}
 
 	if totalBytesIn == 0 {
@@ -1060,7 +1080,7 @@ func (d *Database) calculateDatabaseWriteAmp(stats *pebble.Metrics) float64 {
 	// Calculate SST writes (cumulative)
 	var totalSSTWrites uint64
 	for _, level := range stats.Levels {
-		totalSSTWrites += level.BytesFlushed + level.BytesCompacted
+		totalSSTWrites += level.TableBytesFlushed + level.TableBytesCompacted
 	}
 
 	// WAL.BytesWritten is the cumulative physical bytes written to .log files

@@ -100,7 +100,7 @@ func TestFinaliseFastPrefetchSkipsMissingDirtyObject(t *testing.T) {
 	missing := common.HexToAddress("0xbeef")
 	statedb.journal.mutationStateFor(missing).add(journalMutationKindTouch)
 	require.Empty(t, statedb.snapshotDirtyStorageSlots())
-	statedb.FinaliseFastWithPrefetch(false)
+	statedb.FinaliseFastWithPrefetch(false, false)
 }
 
 func TestCommittedStoragePrefetchAndWitnessBranches(t *testing.T) {

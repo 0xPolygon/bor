@@ -229,6 +229,10 @@ func makeFullNode(ctx *cli.Context) (*node.Node, ethapi.Backend) {
 		v := ctx.Int64(utils.OverrideOsaka.Name)
 		cfg.Eth.OverrideOsaka = new(big.Int).SetInt64(v)
 	}
+	if ctx.IsSet(utils.OverrideAmsterdam.Name) {
+		v := ctx.Int64(utils.OverrideAmsterdam.Name)
+		cfg.Eth.OverrideAmsterdam = new(big.Int).SetInt64(v)
+	}
 	if ctx.IsSet(utils.OverrideVerkle.Name) {
 		v := ctx.Int64(utils.OverrideVerkle.Name)
 		cfg.Eth.OverrideVerkle = new(big.Int).SetInt64(v)

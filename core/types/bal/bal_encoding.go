@@ -80,7 +80,7 @@ func (e *BlockAccessList) DecodeRLP(s *rlp.Stream) error {
 // according to the spec or any code changes are contained which exceed protocol
 // max code size.
 func (e *BlockAccessList) Validate(rules params.Rules) error {
-	if !slices.IsSortedFunc(*e, func(a, b AccountAccess) int {
+	if !isStrictlySortedFunc(*e, func(a, b AccountAccess) int {
 		return bytes.Compare(a.Address[:], b.Address[:])
 	}) {
 		return errors.New("block access list accounts not in lexicographic order")
@@ -403,4 +403,16 @@ func (e *BlockAccessList) Copy() *BlockAccessList {
 		cpy = append(cpy, accountAccess.Copy())
 	}
 	return &cpy
+}
+
+// isStrictlySortedFunc reports whether x is sorted with no adjacent duplicates.
+// EIP-7928 requires each address to appear exactly once in the block access
+// list, which a non-strict sort check cannot detect.
+func isStrictlySortedFunc[S ~[]E, E any](x S, cmp func(a, b E) int) bool {
+	for i := 1; i < len(x); i++ {
+		if cmp(x[i-1], x[i]) >= 0 {
+			return false // includes both unsorted and duplicate
+		}
+	}
+	return true
 }

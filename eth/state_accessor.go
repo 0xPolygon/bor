@@ -262,7 +262,7 @@ func (eth *Ethereum) stateAtTransaction(ctx context.Context, block *types.Block,
 	context := core.NewEVMBlockContext(block.Header(), eth.blockchain, nil)
 	evm := vm.NewEVM(context, statedb, eth.blockchain.Config(), vm.Config{})
 	// Run pre-execution system calls
-	core.PreExecution(ctx, block.BeaconRoot(), block.ParentHash(), eth.blockchain.Config(), evm, block.Number(), block.Time())
+	core.PreExecution(ctx, block.BeaconRoot(), parent.Header(), eth.blockchain.Config(), evm, block.Number(), block.Time())
 
 	if txIndex == 0 && len(block.Transactions()) == 0 {
 		return nil, context, statedb, release, nil

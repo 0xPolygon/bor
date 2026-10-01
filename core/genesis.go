@@ -278,10 +278,11 @@ func (e *GenesisMismatchError) Error() string {
 
 // ChainOverrides contains the changes to chain config.
 type ChainOverrides struct {
-	OverrideOsaka  *big.Int
-	OverrideBPO1   *big.Int
-	OverrideBPO2   *big.Int
-	OverrideVerkle *big.Int
+	OverrideOsaka     *big.Int
+	OverrideAmsterdam *big.Int
+	OverrideBPO1      *big.Int
+	OverrideBPO2      *big.Int
+	OverrideVerkle    *big.Int
 }
 
 // apply applies the chain overrides on the supplied chain config.
@@ -291,6 +292,9 @@ func (o *ChainOverrides) apply(cfg *params.ChainConfig) error {
 	}
 	if o.OverrideOsaka != nil {
 		cfg.OsakaBlock = o.OverrideOsaka
+	}
+	if o.OverrideAmsterdam != nil {
+		cfg.AmsterdamBlock = o.OverrideAmsterdam
 	}
 	if o.OverrideVerkle != nil {
 		cfg.VerkleBlock = o.OverrideVerkle
@@ -781,6 +785,11 @@ func DeveloperGenesisBlock(gasLimit uint64, faucet *common.Address) *Genesis {
 			params.HistoryStorageAddress:     {Nonce: 1, Code: params.HistoryStorageCode, Balance: common.Big0},
 			params.WithdrawalQueueAddress:    {Nonce: 1, Code: params.WithdrawalQueueCode, Balance: common.Big0},
 			params.ConsolidationQueueAddress: {Nonce: 1, Code: params.ConsolidationQueueCode, Balance: common.Big0},
+			// EIP-8282 - Builder Execution Requests
+			params.BuilderDepositAddress: {Nonce: 1, Code: params.BuilderDepositCode, Balance: common.Big0},
+			params.BuilderExitAddress:    {Nonce: 1, Code: params.BuilderExitCode, Balance: common.Big0},
+			// EIP-7997 - Deterministic deployment factory
+			params.DeterministicFactoryAddress: {Nonce: 1, Code: params.DeterministicFactoryCode, Balance: common.Big0},
 		},
 	}
 	if faucet != nil {

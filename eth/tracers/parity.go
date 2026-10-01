@@ -290,7 +290,7 @@ func (api *API) parityIntrinsicGas(in parityExecInput) uint64 {
 		return 0
 	}
 	rules := api.backend.ChainConfig().Rules(in.vmctx.BlockNumber, in.vmctx.Random != nil, in.vmctx.Time)
-	ig, err := core.IntrinsicGas(in.msg.Data, in.msg.AccessList, in.msg.SetCodeAuthorizations, in.msg.To == nil, rules, params.CostPerStateByte)
+	ig, err := core.IntrinsicGas(in.msg.Data, in.msg.AccessList, in.msg.SetCodeAuthorizations, in.msg.From, in.msg.To, in.msg.Value, rules, params.CostPerStateByte)
 	if err != nil {
 		return 0
 	}

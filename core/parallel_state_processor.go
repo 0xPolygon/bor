@@ -412,6 +412,10 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 	if config.DAOForkSupport && config.DAOForkBlock != nil && config.DAOForkBlock.Cmp(block.Number()) == 0 {
 		misc.ApplyDAOHardFork(statedb)
 	}
+	parent := p.chain.GetHeader(block.ParentHash(), block.NumberU64()-1)
+	if parent == nil {
+		return nil, fmt.Errorf("missing parent %#x", block.ParentHash())
+	}
 
 	tasks := make([]blockstm.ExecTask, 0, len(block.Transactions()))
 	sharedJumpDests := vm.NewSyncJumpDestCache()
@@ -427,7 +431,7 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 
 	// Shared with the serial processor so upstream changes to the
 	// pre-execution system calls reach every executor.
-	PreExecution(interruptCtx, block.BeaconRoot(), block.ParentHash(), config, vmenv, block.Number(), block.Time())
+	PreExecution(interruptCtx, block.BeaconRoot(), parent, config, vmenv, block.Number(), block.Time())
 	signer := types.MakeSigner(config, header.Number, header.Time)
 	prewarmReaderCache(statedb, block, signer)
 
@@ -1098,8 +1102,12 @@ func (p *V2StateProcessor) Process(block *types.Block, statedb *state.StateDB, c
 	if config.DAOForkSupport && config.DAOForkBlock != nil && config.DAOForkBlock.Cmp(block.Number()) == 0 {
 		misc.ApplyDAOHardFork(statedb)
 	}
+	parent := p.chain.GetHeader(block.ParentHash(), block.NumberU64()-1)
+	if parent == nil {
+		return nil, fmt.Errorf("missing parent %#x", block.ParentHash())
+	}
 	blockCtx := NewEVMBlockContext(header, p.chain, author)
-	applyV2PreExecSystemCalls(block, statedb, config, cfg, blockCtx)
+	applyV2PreExecSystemCalls(block, parent, statedb, config, cfg, blockCtx)
 
 	tasks, err := buildV2Tasks(block, config, header, interruptCtx)
 	if err != nil {
@@ -1175,7 +1183,7 @@ func (p *V2StateProcessor) finalizeV2Block(block *types.Block, statedb *state.St
 	// Prefetch storage tries for accounts dirtied by engine.Finalize
 	// (state sync contract, validator rewards) so IntermediateRoot
 	// doesn't need to load them from pebble synchronously.
-	statedb.FinaliseFastWithPrefetch(true)
+	statedb.FinaliseFastWithPrefetch(true, config.IsAmsterdam(header.Number))
 
 	// V2 worker reads went through pool copies that share `statedb`'s reader
 	// by reference, so the trie tracers on that reader hold every node V2
@@ -1231,13 +1239,13 @@ func (p *V2StateProcessor) finalizeV2Block(block *types.Block, statedb *state.St
 	}, nil
 }
 
-// applyV2PreExecSystemCalls runs the pre-execution system calls (EIP-4788
-// beacon root, EIP-2935 parent hash) through the serial processor's
-// PreExecution, so upstream changes to them reach V2 as well.
-func applyV2PreExecSystemCalls(block *types.Block, statedb *state.StateDB,
+// applyV2PreExecSystemCalls runs the pre-execution system calls (EIP-7997
+// factory insert, EIP-4788 beacon root, EIP-2935 parent hash) through the
+// serial processor's PreExecution, so upstream changes to them reach V2 as well.
+func applyV2PreExecSystemCalls(block *types.Block, parent *types.Header, statedb *state.StateDB,
 	config *params.ChainConfig, cfg vm.Config, blockCtx vm.BlockContext) {
 	evm := vm.NewEVM(blockCtx, statedb, config, cfg)
-	PreExecution(context.Background(), block.BeaconRoot(), block.ParentHash(), config, evm, block.Number(), block.Time())
+	PreExecution(context.Background(), block.BeaconRoot(), parent, config, evm, block.Number(), block.Time())
 }
 
 // buildV2Tasks converts non-StateSync transactions in the block into V2Tasks,

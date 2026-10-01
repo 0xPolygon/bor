@@ -922,6 +922,7 @@ func dumpState(ctx *cli.Context) error {
 			for stIt.Next() {
 				da.Storage[stIt.Hash()] = common.Bytes2Hex(stIt.Slot())
 			}
+			stIt.Release()
 		}
 		enc.Encode(da)
 		accounts++
@@ -1053,6 +1054,7 @@ func listEIP7610EligibleAccounts(ctx *cli.Context) error {
 		log.Error("Failed to get account iterator", "err", err)
 		return err
 	}
+	defer iter.Release()
 	var (
 		start    = time.Now()
 		accounts []common.Address

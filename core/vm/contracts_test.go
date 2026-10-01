@@ -535,6 +535,7 @@ func TestReinforceMultiClientPreCompilesTest(t *testing.T) {
 		"IsPrague",
 		"IsOsaka",
 		"IsAmsterdam",
+		"IsBogota",
 		"IsVerkle",
 		"IsMadhugiri",
 		"IsMadhugiriPro",
