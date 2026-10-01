@@ -391,6 +391,15 @@ func (db *Database) Disable() error {
 	}
 	disk.markStale()
 
+	// State sync rebuilds the trie, so a saved address cache snapshot now
+	// describes the old one. Drop it, so the disk layer built by Enable does
+	// a cold preload instead of trusting a stale warm reload.
+	if db.config.AddressCachePersist && db.config.JournalDirectory != "" {
+		if err := removeSnapshots(db.config.JournalDirectory); err != nil {
+			log.Warn("Failed to remove stale address cache snapshots", "err", err)
+		}
+	}
+
 	// Write the initial sync flag to persist it across restarts.
 	rawdb.WriteSnapSyncStatusFlag(db.diskdb, rawdb.StateSyncRunning)
 	log.Info("Disabled trie database due to state sync")
