@@ -47,6 +47,11 @@ type scriptedMsgRW struct {
 	results chan scriptedResult
 }
 
+type partialFailMsgRW struct {
+	closed chan struct{}
+	once   sync.Once
+}
+
 type scriptedResult struct {
 	msg Msg
 	err error
@@ -109,6 +114,25 @@ func (rw *scriptedMsgRW) ReadMsg() (Msg, error) {
 
 func (rw *scriptedMsgRW) WriteMsg(msg Msg) error {
 	return nil
+}
+
+func (rw *partialFailMsgRW) ReadMsg() (Msg, error) {
+	<-rw.closed
+	return Msg{}, ErrPipeClosed
+}
+
+func (rw *partialFailMsgRW) WriteMsg(msg Msg) error {
+	if msg.Size > 0 {
+		buf := make([]byte, 1)
+		if _, err := msg.Payload.Read(buf); err != nil {
+			return err
+		}
+	}
+	return errPartialPayload
+}
+
+func (rw *partialFailMsgRW) Close() {
+	rw.once.Do(func() { close(rw.closed) })
 }
 
 func TestRoutedPayloadConvertsEarlyEOF(t *testing.T) {
@@ -351,6 +375,26 @@ func TestRoutedMsgReadWriterFallsBackToPrimaryWhenBulkWriteFails(t *testing.T) {
 	}
 	if err := <-errc; err != nil {
 		t.Fatalf("send failed after fallback: %v", err)
+	}
+}
+
+func TestRoutedMsgReadWriterFallsBackWithFullPayloadAfterPartialBulkWrite(t *testing.T) {
+	primaryApp, primaryNet := MsgPipe()
+	defer primaryApp.Close()
+	defer primaryNet.Close()
+
+	bulk := &partialFailMsgRW{closed: make(chan struct{})}
+	defer bulk.Close()
+
+	rw := NewRoutedMsgReadWriter(primaryNet, bulk, func(code uint64) bool { return code == 2 })
+
+	errc := make(chan error, 1)
+	go func() { errc <- SendItems(rw, 2, uint64(22)) }()
+	if err := ExpectMsg(primaryApp, 2, []uint64{22}); err != nil {
+		t.Fatalf("primary fallback saw drained payload: %v", err)
+	}
+	if err := <-errc; err != nil {
+		t.Fatalf("send failed after partial bulk fallback: %v", err)
 	}
 }
 

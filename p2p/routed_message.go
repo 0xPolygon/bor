@@ -17,7 +17,9 @@
 package p2p
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -143,15 +145,37 @@ func (rw *routedMsgReadWriter) ReadMsg() (Msg, error) {
 func (rw *routedMsgReadWriter) WriteMsg(msg Msg) error {
 	if channel := rw.route(msg.Code); channel != "" {
 		if bulk, ok := rw.bulk(channel); ok {
-			if err := bulk.WriteMsg(msg); err == nil {
-				return nil
-			} else {
+			if msg.Size > bulkMaxMessageSize {
 				bulkSidecarWriteFallbackMeter.Mark(1)
 				bulkSidecarStats.markChannelWriteFallback(channel)
+			} else {
+				payload, err := readRoutedWritePayload(msg)
+				if err != nil {
+					return err
+				}
+				bulkMsg := msg
+				bulkMsg.Payload = bytes.NewReader(payload)
+				if err := bulk.WriteMsg(bulkMsg); err == nil {
+					return nil
+				}
+				bulkSidecarWriteFallbackMeter.Mark(1)
+				bulkSidecarStats.markChannelWriteFallback(channel)
+				msg.Payload = bytes.NewReader(payload)
 			}
 		}
 	}
 	return rw.primary.WriteMsg(msg)
+}
+
+func readRoutedWritePayload(msg Msg) ([]byte, error) {
+	payload := make([]byte, msg.Size)
+	if msg.Size == 0 {
+		return payload, nil
+	}
+	if _, err := io.ReadFull(msg.Payload, payload); err != nil {
+		return nil, fmt.Errorf("buffer routed message payload: %w", err)
+	}
+	return payload, nil
 }
 
 func (rw *routedMsgReadWriter) AttachBulk(bulk MsgReadWriter) {

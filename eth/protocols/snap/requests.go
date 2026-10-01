@@ -100,10 +100,10 @@ func (p *Peer) dispatchResponse(code uint64, packet trackedResponse) (bool, erro
 	}
 	p.pendingLock.Unlock()
 
-	requestTracker.Fulfil(p.id, p.version, code, id)
 	if req == nil {
 		return false, nil
 	}
+	requestTracker.Fulfil(p.id, p.version, code, id)
 	if req.want != code {
 		return true, fmt.Errorf("%w: have %d want %d", errSnapMismatchingResponse, code, req.want)
 	}

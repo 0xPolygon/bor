@@ -255,11 +255,18 @@ func handleGetBlockBodies(backend Backend, msg Decoder, peer *Peer) error {
 	if err := msg.Decode(&query); err != nil {
 		return err
 	}
+
+	response := serveHeavyResponseQuery(func() []rlp.RawValue {
+		return ServiceGetBlockBodiesQuery(backend.Chain(), query.GetBlockBodiesRequest)
+	})
+	return peer.ReplyBlockBodiesRLP(query.RequestId, response)
+}
+
+func serveHeavyResponseQuery(query func() []rlp.RawValue) []rlp.RawValue {
 	heavyResponseServeSlots <- struct{}{}
 	defer func() { <-heavyResponseServeSlots }()
 
-	response := ServiceGetBlockBodiesQuery(backend.Chain(), query.GetBlockBodiesRequest)
-	return peer.ReplyBlockBodiesRLP(query.RequestId, response)
+	return query()
 }
 
 // ServiceGetBlockBodiesQuery assembles the response to a body query. It is
@@ -309,10 +316,10 @@ func handleGetReceipts68(backend Backend, msg Decoder, peer *Peer) error {
 	if err := msg.Decode(&query); err != nil {
 		return err
 	}
-	heavyResponseServeSlots <- struct{}{}
-	defer func() { <-heavyResponseServeSlots }()
 
-	response := ServiceGetReceiptsQuery68(backend.Chain(), query.GetReceiptsRequest)
+	response := serveHeavyResponseQuery(func() []rlp.RawValue {
+		return ServiceGetReceiptsQuery68(backend.Chain(), query.GetReceiptsRequest)
+	})
 	return peer.ReplyReceiptsRLP(query.RequestId, response)
 }
 
@@ -322,10 +329,10 @@ func handleGetReceipts69(backend Backend, msg Decoder, peer *Peer) error {
 	if err := msg.Decode(&query); err != nil {
 		return err
 	}
-	heavyResponseServeSlots <- struct{}{}
-	defer func() { <-heavyResponseServeSlots }()
 
-	response := ServiceGetReceiptsQuery69(backend.Chain(), query.GetReceiptsRequest)
+	response := serveHeavyResponseQuery(func() []rlp.RawValue {
+		return ServiceGetReceiptsQuery69(backend.Chain(), query.GetReceiptsRequest)
+	})
 	return peer.ReplyReceiptsRLP(query.RequestId, response)
 }
 

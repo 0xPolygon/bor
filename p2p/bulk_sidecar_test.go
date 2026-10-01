@@ -18,12 +18,23 @@ type readDeadlineErrorStream struct {
 	err error
 }
 
+type closeTrackingRW struct {
+	closed chan struct{}
+}
+
 func (s *readDeadlineErrorStream) Read([]byte) (int, error)    { return 0, io.EOF }
 func (s *readDeadlineErrorStream) Write(p []byte) (int, error) { return len(p), nil }
 func (s *readDeadlineErrorStream) SetReadDeadline(time.Time) error {
 	return s.err
 }
 func (s *readDeadlineErrorStream) SetWriteDeadline(time.Time) error { return nil }
+
+func (rw *closeTrackingRW) ReadMsg() (Msg, error) { return Msg{}, ErrPipeClosed }
+func (rw *closeTrackingRW) WriteMsg(Msg) error    { return nil }
+func (rw *closeTrackingRW) Close() error {
+	close(rw.closed)
+	return nil
+}
 
 func TestBulkSessionStoreChannelReplacesExistingLane(t *testing.T) {
 	session := &bulkSession{
@@ -48,6 +59,28 @@ func TestBulkSessionStoreChannelReplacesExistingLane(t *testing.T) {
 	}
 	if got != secondNet {
 		t.Fatal("expected latest bulk channel to replace the previous lane")
+	}
+}
+
+func TestBulkSessionStoreChannelClosesReplacedLane(t *testing.T) {
+	session := &bulkSession{
+		sidecar:  &BulkSidecar{log: log.New()},
+		remoteID: enode.ID{0x01},
+		channels: make(map[string]MsgReadWriter),
+		waiters:  make(map[string][]chan bulkChannelResult),
+	}
+	first := &closeTrackingRW{closed: make(chan struct{})}
+	secondApp, secondNet := MsgPipe()
+	defer secondApp.Close()
+	defer secondNet.Close()
+
+	session.storeChannel("eth-bulk", first)
+	session.storeChannel("eth-bulk", secondNet)
+
+	select {
+	case <-first.closed:
+	case <-time.After(time.Second):
+		t.Fatal("expected replaced bulk lane to be closed")
 	}
 }
 
