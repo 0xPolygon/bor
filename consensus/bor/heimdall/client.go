@@ -78,7 +78,21 @@ type Request struct {
 	start  time.Time
 }
 
-func NewHeimdallClient(urlString string, timeout time.Duration) (*HeimdallClient, error) {
+// NewHeimdallClient preserves deferred URL validation for existing callers.
+// Use NewHeimdallClientWithError to reject invalid endpoints at startup.
+func NewHeimdallClient(urlString string, timeout time.Duration) *HeimdallClient {
+	client, err := NewHeimdallClientWithError(urlString, timeout)
+	if err == nil {
+		return client
+	}
+	return &HeimdallClient{
+		urlString: urlString,
+		client:    http.Client{Timeout: timeout},
+		closeCh:   make(chan struct{}),
+	}
+}
+
+func NewHeimdallClientWithError(urlString string, timeout time.Duration) (*HeimdallClient, error) {
 	return newHeimdallClientWithRootCAs(urlString, timeout, nil)
 }
 

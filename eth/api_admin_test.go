@@ -19,6 +19,7 @@ package eth
 import (
 	"errors"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -156,14 +157,14 @@ func TestTriggerBlockBodyFetchToPeers(t *testing.T) {
 		t.Fatalf("unexpected block body request for peerB: %+v", peerB.hashes)
 	}
 	deadline := time.Now().Add(500 * time.Millisecond)
-	for (peerA.responsesAcked != 1 || peerB.responsesAcked != 1 || peerA.requestsClosed != 1 || peerB.requestsClosed != 1) && time.Now().Before(deadline) {
+	for (peerA.responsesAcked.Load() != 1 || peerB.responsesAcked.Load() != 1 || peerA.requestsClosed.Load() != 1 || peerB.requestsClosed.Load() != 1) && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if peerA.responsesAcked != 1 || peerB.responsesAcked != 1 {
-		t.Fatalf("expected response acknowledgements, got peerA=%d peerB=%d", peerA.responsesAcked, peerB.responsesAcked)
+	if peerA.responsesAcked.Load() != 1 || peerB.responsesAcked.Load() != 1 {
+		t.Fatalf("expected response acknowledgements, got peerA=%d peerB=%d", peerA.responsesAcked.Load(), peerB.responsesAcked.Load())
 	}
-	if peerA.requestsClosed != 1 || peerB.requestsClosed != 1 {
-		t.Fatalf("expected requests to close, got peerA=%d peerB=%d", peerA.requestsClosed, peerB.requestsClosed)
+	if peerA.requestsClosed.Load() != 1 || peerB.requestsClosed.Load() != 1 {
+		t.Fatalf("expected requests to close, got peerA=%d peerB=%d", peerA.requestsClosed.Load(), peerB.requestsClosed.Load())
 	}
 }
 
@@ -185,7 +186,7 @@ func TestTriggerSnapAccountRangeFetchToPeers(t *testing.T) {
 			t.Fatalf("peer %s received unexpected account request: %+v", peer.id, peer.requests[0])
 		}
 	}
-	assertSnapAcks(t, func() int { return peerA.responsesAcked }, func() int { return peerB.responsesAcked }, "snap account range")
+	assertSnapAcks(t, peerA.responsesAcked.Load, peerB.responsesAcked.Load, "snap account range")
 }
 
 func TestTriggerSnapStorageRangeFetchToPeers(t *testing.T) {
@@ -208,7 +209,7 @@ func TestTriggerSnapStorageRangeFetchToPeers(t *testing.T) {
 			t.Fatalf("peer %s received unexpected storage request: %+v", peer.id, req)
 		}
 	}
-	assertSnapAcks(t, func() int { return peerA.responsesAcked }, func() int { return peerB.responsesAcked }, "snap storage range")
+	assertSnapAcks(t, peerA.responsesAcked.Load, peerB.responsesAcked.Load, "snap storage range")
 }
 
 func TestTriggerSnapByteCodeFetchToPeers(t *testing.T) {
@@ -230,7 +231,7 @@ func TestTriggerSnapByteCodeFetchToPeers(t *testing.T) {
 			t.Fatalf("peer %s received unexpected bytecode request: %+v", peer.id, req)
 		}
 	}
-	assertSnapAcks(t, func() int { return peerA.responsesAcked }, func() int { return peerB.responsesAcked }, "snap bytecode")
+	assertSnapAcks(t, peerA.responsesAcked.Load, peerB.responsesAcked.Load, "snap bytecode")
 }
 
 func TestTriggerSnapTrieNodeFetchToPeers(t *testing.T) {
@@ -258,7 +259,7 @@ func TestTriggerSnapTrieNodeFetchToPeers(t *testing.T) {
 			t.Fatalf("peer %s received unexpected trie paths: %#v", peer.id, peer.requests[0].paths)
 		}
 	}
-	assertSnapAcks(t, func() int { return peerA.responsesAcked }, func() int { return peerB.responsesAcked }, "snap trie node")
+	assertSnapAcks(t, peerA.responsesAcked.Load, peerB.responsesAcked.Load, "snap trie node")
 }
 
 func TestSnapTriggerStorageAccountFallbackUsesSnapshotStorage(t *testing.T) {
@@ -354,11 +355,11 @@ func TestTriggerWitnessMetadataFetchToPeers(t *testing.T) {
 		t.Fatalf("unexpected witness metadata request for peerB: %+v", peerB.hashes)
 	}
 	deadline := time.Now().Add(500 * time.Millisecond)
-	for (peerA.responsesAcked != 1 || peerB.responsesAcked != 1) && time.Now().Before(deadline) {
+	for (peerA.responsesAcked.Load() != 1 || peerB.responsesAcked.Load() != 1) && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if peerA.responsesAcked != 1 || peerB.responsesAcked != 1 {
-		t.Fatalf("expected witness metadata acknowledgements, got peerA=%d peerB=%d", peerA.responsesAcked, peerB.responsesAcked)
+	if peerA.responsesAcked.Load() != 1 || peerB.responsesAcked.Load() != 1 {
+		t.Fatalf("expected witness metadata acknowledgements, got peerA=%d peerB=%d", peerA.responsesAcked.Load(), peerB.responsesAcked.Load())
 	}
 }
 
@@ -400,11 +401,11 @@ func TestTriggerWitnessFetchToPeers(t *testing.T) {
 		}
 	}
 	deadline := time.Now().Add(500 * time.Millisecond)
-	for (peerA.responsesAcked != 1 || peerB.responsesAcked != 1) && time.Now().Before(deadline) {
+	for (peerA.responsesAcked.Load() != 1 || peerB.responsesAcked.Load() != 1) && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if peerA.responsesAcked != 1 || peerB.responsesAcked != 1 {
-		t.Fatalf("expected witness fetch acknowledgements, got peerA=%d peerB=%d", peerA.responsesAcked, peerB.responsesAcked)
+	if peerA.responsesAcked.Load() != 1 || peerB.responsesAcked.Load() != 1 {
+		t.Fatalf("expected witness fetch acknowledgements, got peerA=%d peerB=%d", peerA.responsesAcked.Load(), peerB.responsesAcked.Load())
 	}
 }
 
@@ -518,8 +519,8 @@ type fakeBlockBodyFetchPeer struct {
 	hashes         [][]common.Hash
 	err            error
 	respond        bool
-	requestsClosed int
-	responsesAcked int
+	requestsClosed atomic.Int32
+	responsesAcked atomic.Int32
 }
 
 func (p *fakeBlockBodyFetchPeer) ID() string { return p.id }
@@ -535,13 +536,13 @@ func (p *fakeBlockBodyFetchPeer) RequestBodies(hashes []common.Hash, sink chan *
 			done := make(chan error, 1)
 			sink <- &ethproto.Response{Done: done}
 			if err := <-done; err == nil {
-				p.responsesAcked++
+				p.responsesAcked.Add(1)
 			}
 		}()
 	}
 	go func() {
 		<-req.Cancel
-		p.requestsClosed++
+		p.requestsClosed.Add(1)
 	}()
 	return req, nil
 }
@@ -550,7 +551,7 @@ type fakeSnapAccountRangeFetchPeer struct {
 	id             string
 	err            error
 	respond        bool
-	responsesAcked int
+	responsesAcked atomic.Int32
 	requests       []snapAccountRangeRequest
 }
 
@@ -579,7 +580,7 @@ func (p *fakeSnapAccountRangeFetchPeer) RequestAccountRangeWithSink(root common.
 				Done: done,
 			}
 			if err := <-done; err == nil {
-				p.responsesAcked++
+				p.responsesAcked.Add(1)
 			}
 		}()
 	}
@@ -590,7 +591,7 @@ type fakeSnapStorageRangeFetchPeer struct {
 	id             string
 	err            error
 	respond        bool
-	responsesAcked int
+	responsesAcked atomic.Int32
 	requests       []snapStorageRangeRequest
 }
 
@@ -626,7 +627,7 @@ func (p *fakeSnapStorageRangeFetchPeer) RequestStorageRangesWithSink(root common
 				Done: done,
 			}
 			if err := <-done; err == nil {
-				p.responsesAcked++
+				p.responsesAcked.Add(1)
 			}
 		}()
 	}
@@ -637,7 +638,7 @@ type fakeSnapByteCodeFetchPeer struct {
 	id             string
 	err            error
 	respond        bool
-	responsesAcked int
+	responsesAcked atomic.Int32
 	requests       []snapByteCodeRequest
 }
 
@@ -664,7 +665,7 @@ func (p *fakeSnapByteCodeFetchPeer) RequestByteCodesWithSink(hashes []common.Has
 				Done: done,
 			}
 			if err := <-done; err == nil {
-				p.responsesAcked++
+				p.responsesAcked.Add(1)
 			}
 		}()
 	}
@@ -675,7 +676,7 @@ type fakeSnapTrieNodeFetchPeer struct {
 	id             string
 	err            error
 	respond        bool
-	responsesAcked int
+	responsesAcked atomic.Int32
 	requests       []snapTrieNodeRequest
 }
 
@@ -710,14 +711,14 @@ func (p *fakeSnapTrieNodeFetchPeer) RequestTrieNodesWithSink(root common.Hash, p
 				Done: done,
 			}
 			if err := <-done; err == nil {
-				p.responsesAcked++
+				p.responsesAcked.Add(1)
 			}
 		}()
 	}
 	return req, nil
 }
 
-func assertSnapAcks(t *testing.T, gotA, gotB func() int, label string) {
+func assertSnapAcks(t *testing.T, gotA, gotB func() int32, label string) {
 	t.Helper()
 
 	deadline := time.Now().Add(500 * time.Millisecond)
@@ -747,7 +748,7 @@ type fakeWitnessMetadataFetchPeer struct {
 	hashes         [][]common.Hash
 	err            error
 	respond        bool
-	responsesAcked int
+	responsesAcked atomic.Int32
 	available      bool
 }
 
@@ -772,7 +773,7 @@ func (p *fakeWitnessMetadataFetchPeer) RequestWitnessMetadata(hashes []common.Ha
 				Done: done,
 			}
 			if err := <-done; err == nil {
-				p.responsesAcked++
+				p.responsesAcked.Add(1)
 			}
 		}()
 	}
@@ -784,7 +785,7 @@ type fakeWitnessFetchPeer struct {
 	requests       [][]witproto.WitnessPageRequest
 	err            error
 	respond        bool
-	responsesAcked int
+	responsesAcked atomic.Int32
 }
 
 func (p *fakeWitnessFetchPeer) ID() string { return p.id }
@@ -810,7 +811,7 @@ func (p *fakeWitnessFetchPeer) RequestWitness(witnessPages []witproto.WitnessPag
 				Done: done,
 			}
 			if err := <-done; err == nil {
-				p.responsesAcked++
+				p.responsesAcked.Add(1)
 			}
 		}()
 	}

@@ -2,7 +2,6 @@
 FROM golang:1.26.8-alpine AS builder
 
 ARG BOR_DIR=/var/lib/bor/
-ARG GIT_COMMIT=""
 ENV BOR_DIR=$BOR_DIR
 
 RUN apk add --no-cache build-base git linux-headers
@@ -20,15 +19,7 @@ COPY . .
 RUN --mount=type=ssh \
     --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    if [ -f prod.pprof ]; then \
-      PGO_FLAG="-pgo=prod.pprof"; \
-    else \
-      PGO_FLAG=""; \
-    fi && \
-    mkdir -p ${BOR_DIR}/build/bin && \
-    go build ${PGO_FLAG} -buildvcs=false \
-      -ldflags "-X github.com/ethereum/go-ethereum/params.GitCommit=${GIT_COMMIT}" \
-      -o ${BOR_DIR}/build/bin/bor ./cmd/cli/main.go
+    make bor
 
 # ─── RUNTIME STAGE ────────────────────────────────────────────────────────────────
 FROM alpine:3.23
@@ -36,7 +27,7 @@ FROM alpine:3.23
 ARG BOR_DIR=/var/lib/bor/
 ENV BOR_DIR=$BOR_DIR
 
-RUN apk add --no-cache bash ca-certificates wget && \
+RUN apk add --no-cache bash ca-certificates && \
     mkdir -p ${BOR_DIR}
 
 WORKDIR ${BOR_DIR}
