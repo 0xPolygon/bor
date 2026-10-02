@@ -4679,12 +4679,28 @@ func TestCommitStates_WithOverrideStateSyncRecords(t *testing.T) {
 // TestCommitStates_OverrideAboveFetchedRecords: an override larger than the
 // number of records Heimdall actually returned must not slice past the end of
 // the response. The override caps how many records the block may commit; when
-// fewer are available, all of them are committed.
+// fewer are available, all of them are committed. Both override forms are
+// covered.
 func TestCommitStates_OverrideAboveFetchedRecords(t *testing.T) {
 	t.Parallel()
+
+	t.Run("per block", func(t *testing.T) {
+		t.Parallel()
+		borCfg := indoreBorConfig()
+		borCfg.OverrideStateSyncRecords = map[string]int{"16": 3}
+		testCommitStatesOverrideAboveFetched(t, borCfg)
+	})
+	t.Run("in range", func(t *testing.T) {
+		t.Parallel()
+		borCfg := indoreBorConfig()
+		borCfg.OverrideStateSyncRecordsInRange = []params.BlockRangeOverride{{StartBlock: 10, EndBlock: 20, Value: 3}}
+		testCommitStatesOverrideAboveFetched(t, borCfg)
+	})
+}
+
+func testCommitStatesOverrideAboveFetched(t *testing.T, borCfg *params.BorConfig) {
+	t.Helper()
 	addr1 := common.HexToAddress("0x1")
-	borCfg := indoreBorConfig()
-	borCfg.OverrideStateSyncRecords = map[string]int{"16": 3}
 	chain, b := newChainAndBorForTest(t, &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}, borCfg, true, addr1, uint64(time.Now().Unix())-200)
 
 	genesis := chain.HeaderChain().GetHeaderByNumber(0)
@@ -6100,7 +6116,7 @@ func TestTruncateEventRecords(t *testing.T) {
 		{"zero", 0, 0},
 		{"equal to length", 3, 3},
 		{"above length", 5, 3},
-		{"negative", -1, 3},
+		{"negative", -1, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

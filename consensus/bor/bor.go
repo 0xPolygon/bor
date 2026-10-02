@@ -1977,12 +1977,14 @@ func (c *Bor) FetchAndCommitSpan(
 // truncateEventRecords caps the records committed in a block at an override
 // count. The override is an upper bound on the block's records, so when
 // Heimdall returned fewer than that every fetched record is kept instead of
-// slicing past the end of the response.
+// slicing past the end of the response. A negative override is treated like
+// zero and keeps no records.
 func truncateEventRecords(records []*clerk.EventRecordWithTime, limit int) []*clerk.EventRecordWithTime {
-	if limit < 0 || limit >= len(records) {
-		return records
+	limit = max(limit, 0)
+	if limit < len(records) {
+		return records[:limit]
 	}
-	return records[:limit]
+	return records
 }
 
 // CommitStates commit states
