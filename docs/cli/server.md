@@ -148,6 +148,8 @@ The ```bor server``` command runs the Bor client.
 
 - ```cache```: Megabytes of memory allocated to internal caching (default: 1024)
 
+- ```cache.addresscachepersist```: Persist the address-specific caches to disk on shutdown and reload them on startup, skipping the preload walk (default: false)
+
 - ```cache.addresscachesizes```: Address-specific cache sizes for biased caching in MB (format: address=sizeMB,address=sizeMB, e.g. 0x1234...=1024,0x5678...=512)
 
 - ```cache.blocklogs```: Size (in number of blocks) of the log cache for filtering (default: 32)
