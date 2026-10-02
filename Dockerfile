@@ -25,6 +25,7 @@ RUN --mount=type=ssh \
     else \
       PGO_FLAG=""; \
     fi && \
+    mkdir -p ${BOR_DIR}/build/bin && \
     go build ${PGO_FLAG} -buildvcs=false \
       -ldflags "-X github.com/ethereum/go-ethereum/params.GitCommit=${GIT_COMMIT}" \
       -o ${BOR_DIR}/build/bin/bor ./cmd/cli/main.go
