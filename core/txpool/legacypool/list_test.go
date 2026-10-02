@@ -418,10 +418,17 @@ func TestFilterTxConditionalCascade(t *testing.T) {
 	require.Len(t, invalids, 1)
 	require.Equal(t, uint64(2), invalids[0].Nonce(), "the transaction behind the gap must be returned as invalid")
 	require.Equal(t, 1, strict.Len())
+	remaining := strict.Flatten()[0]
+	require.Equal(t, uint256.MustFromBig(remaining.Cost()), strict.totalcost, "totalcost must only cover the remaining transaction")
 
 	loose := build(false)
 	removed, invalids = loose.FilterTxConditional(state, header)
 	require.Len(t, removed, 1)
 	require.Empty(t, invalids, "a non-strict list has no gap to cascade")
 	require.Equal(t, 2, loose.Len())
+	want := new(uint256.Int)
+	for _, tx := range loose.Flatten() {
+		want.Add(want, uint256.MustFromBig(tx.Cost()))
+	}
+	require.Equal(t, want, loose.totalcost)
 }
