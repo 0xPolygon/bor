@@ -41,15 +41,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential
 
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/Library/Caches/go-build
-            ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: ${{ runner.os }}-go-
-
       - name: Build
         run: make all
 
@@ -107,15 +98,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential
 
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/Library/Caches/go-build
-            ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: ${{ runner.os }}-go-
-
       - name: Test
         run: make test
 
@@ -146,15 +128,6 @@ jobs:
           sudo find /etc/apt/sources.list.d -maxdepth 1 -type f \( -name 'azure-cli*' -o -name 'microsoft-prod*' \) -delete
           sudo apt-get update
           sudo apt-get install -y build-essential
-
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/Library/Caches/go-build
-            ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: ${{ runner.os }}-go-
 
       - name: test-integration
         run: make test-integration
