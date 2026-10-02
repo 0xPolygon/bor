@@ -310,6 +310,65 @@ func TestSetBulkQUICRecordPublishesBothFamiliesForUnspecifiedListener(t *testing
 	}
 }
 
+func TestSetBulkQUICRecordDoesNotPublishIPv6ForIPv4Wildcard(t *testing.T) {
+	srv := &Server{
+		Config: Config{
+			PrivateKey: newkey(),
+			Name:       "test",
+			Logger:     testlog.Logger(t, log.LvlTrace),
+		},
+	}
+	if err := srv.setupLocalNode(); err != nil {
+		t.Fatalf("failed to set up local node: %v", err)
+	}
+
+	srv.setBulkQUICRecord(&net.UDPAddr{IP: net.IPv4zero, Port: 30304})
+
+	node := srv.localnode.Node()
+	if endpoint, ok := node.QUICEndpoint(); !ok || int(endpoint.Port()) != 30304 {
+		t.Fatalf("missing ipv4 quic endpoint, got ok=%v endpoint=%v", ok, endpoint)
+	}
+
+	var quic6 enr.QUIC6
+	if err := node.Load(&quic6); err == nil {
+		t.Fatalf("unexpected quic6 record for ipv4 wildcard listener: %d", quic6)
+	}
+}
+
+func TestDeriveBulkListenAddrUsesEphemeralPort(t *testing.T) {
+	tests := []struct {
+		name       string
+		listenAddr string
+		discAddr   string
+		want       string
+	}{
+		{
+			name:       "listen address",
+			listenAddr: "127.0.0.1:30303",
+			want:       "127.0.0.1:0",
+		},
+		{
+			name:       "discovery address",
+			listenAddr: "127.0.0.1:30303",
+			discAddr:   "192.0.2.1:30303",
+			want:       "192.0.2.1:0",
+		},
+		{
+			name:       "empty",
+			listenAddr: "",
+			want:       ":0",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := deriveBulkListenAddr(tt.listenAddr, tt.discAddr)
+			if got != tt.want {
+				t.Fatalf("deriveBulkListenAddr() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // This test checks that RemovePeer disconnects the peer if it is connected.
 func TestServerRemovePeerDisconnect(t *testing.T) {
 	srv1 := &Server{Config: Config{

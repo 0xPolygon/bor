@@ -62,6 +62,7 @@ const (
 	bulkSocketWriteBufferSize = 8 * 1024 * 1024
 	bulkSidecarCloseErrorCode = quic.ApplicationErrorCode(0x424f52)
 	bulkSidecarProtocolError  = quic.ApplicationErrorCode(0x424f53)
+	bulkSidecarCertLifetime   = 365 * 24 * time.Hour
 )
 
 var (
@@ -881,7 +882,7 @@ func generateBulkSidecarCertificate() (tls.Certificate, error) {
 	template := &x509.Certificate{
 		SerialNumber: serial,
 		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
+		NotAfter:     time.Now().Add(bulkSidecarCertLifetime),
 		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 		DNSNames:     []string{bulkSidecarTLSServerName},

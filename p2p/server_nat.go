@@ -22,7 +22,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common/mclock"
 	"github.com/ethereum/go-ethereum/log"
-	"github.com/ethereum/go-ethereum/p2p/enr"
 	"github.com/ethereum/go-ethereum/p2p/nat"
 )
 
@@ -38,6 +37,7 @@ type portMapping struct {
 	protocol string
 	name     string
 	port     int
+	update   func(int)
 	retries  int // number of failed attempts to refresh the mapping
 
 	// for use by the portMappingLoop goroutine:
@@ -92,7 +92,7 @@ func (srv *Server) portMappingLoop() {
 	}
 
 	var (
-		mappings  = make(map[string]*portMapping, 2)
+		mappings  = make(map[string]*portMapping, 3)
 		refresh   = mclock.NewAlarm(srv.clock)
 		extip     = mclock.NewAlarm(srv.clock)
 		lastExtIP net.IP
@@ -112,8 +112,14 @@ func (srv *Server) portMappingLoop() {
 
 	for {
 		// Schedule refresh of existing mappings.
+		var nextTime mclock.AbsTime
 		for _, m := range mappings {
-			refresh.Schedule(m.nextTime)
+			if nextTime == 0 || m.nextTime < nextTime {
+				nextTime = m.nextTime
+			}
+		}
+		if nextTime != 0 {
+			refresh.Schedule(nextTime)
 		}
 
 		select {
@@ -142,7 +148,7 @@ func (srv *Server) portMappingLoop() {
 			if m.protocol != "TCP" && m.protocol != "UDP" {
 				panic("unknown NAT protocol name: " + m.protocol)
 			}
-			mappings[m.protocol] = m
+			mappings[m.name] = m
 			m.nextTime = srv.clock.Now()
 
 		case <-refresh.C():
@@ -189,12 +195,8 @@ func (srv *Server) portMappingLoop() {
 						log.Info("NAT mapped port")
 					}
 
-					// Update port in local ENR.
-					switch m.protocol {
-					case "TCP":
-						srv.localnode.Set(enr.TCP(m.extPort))
-					case "UDP":
-						srv.localnode.SetFallbackUDP(m.extPort)
+					if m.update != nil {
+						m.update(m.extPort)
 					}
 				}
 				m.nextTime = srv.clock.Now().Add(portMapRefreshInterval)

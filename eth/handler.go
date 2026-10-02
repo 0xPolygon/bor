@@ -618,6 +618,11 @@ func (h *handler) attachBulkSidecar(peer *eth.Peer, snapPeer *snap.Peer, witPeer
 	go func() {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
+		closeRW := func(rw p2p.MsgReadWriter) {
+			if closer, ok := rw.(interface{ Close() error }); ok {
+				_ = closer.Close()
+			}
+		}
 		go func() {
 			select {
 			case <-peer.Peer.Done():
@@ -626,30 +631,42 @@ func (h *handler) attachBulkSidecar(peer *eth.Peer, snapPeer *snap.Peer, witPeer
 			}
 		}()
 		for _, channel := range []string{"eth-control", "eth-blocks", "eth-tx", "eth-tx-fetch", "eth-bulk"} {
-			if rw, err := sidecar.OpenChannelContext(ctx, peer.Peer, channel); err != nil {
-				peer.Log().Debug("Bulk eth sidecar unavailable", "channel", channel, "err", err)
-			} else {
-				peer.AttachBulkChannelRW(channel, rw)
-			}
 			if ctx.Err() != nil {
 				return
+			}
+			if rw, err := sidecar.OpenChannelContext(ctx, peer.Peer, channel); err != nil {
+				peer.Log().Debug("Bulk eth sidecar unavailable", "channel", channel, "err", err)
+			} else if ctx.Err() != nil {
+				closeRW(rw)
+				return
+			} else {
+				peer.AttachBulkChannelRW(channel, rw)
 			}
 		}
 		if snapPeer != nil {
 			for _, channel := range []string{"snap-accounts", "snap-storage", "snap-code", "snap-trie"} {
-				if rw, err := sidecar.OpenChannelContext(ctx, snapPeer.Peer, channel); err != nil {
-					snapPeer.Log().Debug("Bulk snap sidecar unavailable", "channel", channel, "err", err)
-				} else {
-					snapPeer.AttachBulkChannelRW(channel, rw)
-				}
 				if ctx.Err() != nil {
 					return
+				}
+				if rw, err := sidecar.OpenChannelContext(ctx, snapPeer.Peer, channel); err != nil {
+					snapPeer.Log().Debug("Bulk snap sidecar unavailable", "channel", channel, "err", err)
+				} else if ctx.Err() != nil {
+					closeRW(rw)
+					return
+				} else {
+					snapPeer.AttachBulkChannelRW(channel, rw)
 				}
 			}
 		}
 		if witPeer != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			if rw, err := sidecar.OpenChannelContext(ctx, witPeer.Peer, "wit-bulk"); err != nil {
 				witPeer.Log().Debug("Bulk wit sidecar unavailable", "err", err)
+			} else if ctx.Err() != nil {
+				closeRW(rw)
+				return
 			} else {
 				witPeer.AttachBulkRW(rw)
 			}

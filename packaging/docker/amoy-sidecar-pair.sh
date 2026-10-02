@@ -2,9 +2,12 @@
 
 set -eu
 
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+repo_root=$(CDPATH= cd -- "${script_dir}/../.." && pwd)
+
 compose_file="${COMPOSE_FILE:-docker-compose.amoy-sidecar-pair.yml}"
-gocache_dir="${GOCACHE_DIR:-/Users/djones/Github/bor/.gocache}"
-gomodcache_dir="${GOMODCACHE_DIR:-/Users/djones/Github/bor/.gomodcache}"
+gocache_dir="${GOCACHE_DIR:-${repo_root}/.gocache}"
+gomodcache_dir="${GOMODCACHE_DIR:-${repo_root}/.gomodcache}"
 log_tail_lines="${LOG_TAIL_LINES:-2000}"
 preserve_volumes="${PRESERVE_VOLUMES:-0}"
 

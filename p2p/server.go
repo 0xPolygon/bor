@@ -768,6 +768,9 @@ func (srv *Server) setupListening() error {
 				protocol: "TCP",
 				name:     "ethereum p2p",
 				port:     tcp.Port,
+				update: func(extPort int) {
+					srv.localnode.Set(enr.TCP(extPort))
+				},
 			}
 		}
 	}
@@ -784,10 +787,7 @@ func (srv *Server) setupBulkSidecar() error {
 	}
 	listenAddr := srv.BulkListenAddr
 	if listenAddr == "" {
-		listenAddr = srv.ListenAddr
-		if listenAddr == "" {
-			listenAddr = ":0"
-		}
+		listenAddr = deriveBulkListenAddr(srv.ListenAddr, srv.DiscAddr)
 	}
 	bulk, err := newBulkSidecar(srv, listenAddr)
 	if err != nil {
@@ -802,6 +802,9 @@ func (srv *Server) setupBulkSidecar() error {
 				protocol: "UDP",
 				name:     "ethereum bulk sidecar",
 				port:     udp.Port,
+				update: func(extPort int) {
+					srv.setBulkQUICRecord(&net.UDPAddr{IP: udp.IP, Port: extPort})
+				},
 			}
 		}
 	}
@@ -814,15 +817,36 @@ func (srv *Server) setupBulkSidecar() error {
 	return nil
 }
 
+func deriveBulkListenAddr(listenAddr string, discAddr string) string {
+	base := discAddr
+	if base == "" {
+		base = listenAddr
+	}
+	if base == "" {
+		return ":0"
+	}
+	addr, err := net.ResolveUDPAddr("udp", base)
+	if err != nil {
+		return base
+	}
+	if addr.IP == nil {
+		return ":0"
+	}
+	return net.JoinHostPort(addr.IP.String(), "0")
+}
+
 func (srv *Server) setBulkQUICRecord(udp *net.UDPAddr) {
 	if udp == nil {
 		return
 	}
 	switch {
-	case udp.IP == nil || udp.IP.IsUnspecified():
-		// Unspecified listeners may later announce either an IPv4 or IPv6 node IP.
-		// Publish both QUIC records so the sidecar remains reachable whichever family
-		// the local node record ultimately prefers.
+	case udp.IP == nil:
+		srv.localnode.Set(enr.QUIC(udp.Port))
+		srv.localnode.Set(enr.QUIC6(udp.Port))
+	case udp.IP.IsUnspecified() && udp.IP.To4() != nil:
+		srv.localnode.Set(enr.QUIC(udp.Port))
+	case udp.IP.IsUnspecified():
+		// IPv6 unspecified listeners may later announce either an IPv4 or IPv6 node IP.
 		srv.localnode.Set(enr.QUIC(udp.Port))
 		srv.localnode.Set(enr.QUIC6(udp.Port))
 	case udp.IP.To4() == nil && udp.IP.To16() != nil:
@@ -856,6 +880,9 @@ func (srv *Server) setupUDPListening() (*net.UDPConn, error) {
 			protocol: "UDP",
 			name:     "ethereum peer discovery",
 			port:     laddr.Port,
+			update: func(extPort int) {
+				srv.localnode.SetFallbackUDP(extPort)
+			},
 		}
 	}
 

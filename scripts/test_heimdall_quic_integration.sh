@@ -4,18 +4,20 @@ set -euo pipefail
 
 BOR_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HEIMDALL_ROOT="${HEIMDALL_ROOT:-$(cd "${BOR_ROOT}/../heimdall-v2" && pwd)}"
+TMP_ROOT="${TMPDIR:-/tmp}"
+TMP_ROOT="${TMP_ROOT%/}"
 
-BOR_GOCACHE="${BOR_GOCACHE:-/private/tmp/bor-gocache}"
-BOR_GOMODCACHE="${BOR_GOMODCACHE:-/private/tmp/bor-gomodcache}"
-HEIMDALL_GOCACHE="${HEIMDALL_GOCACHE:-/private/tmp/heimdall-v2-gocache}"
-HEIMDALL_GOMODCACHE="${HEIMDALL_GOMODCACHE:-/private/tmp/heimdall-v2-gomodcache}"
+BOR_GOCACHE="${BOR_GOCACHE:-${TMP_ROOT}/bor-gocache}"
+BOR_GOMODCACHE="${BOR_GOMODCACHE:-${TMP_ROOT}/bor-gomodcache}"
+HEIMDALL_GOCACHE="${HEIMDALL_GOCACHE:-${TMP_ROOT}/heimdall-v2-gocache}"
+HEIMDALL_GOMODCACHE="${HEIMDALL_GOMODCACHE:-${TMP_ROOT}/heimdall-v2-gomodcache}"
 TEST_CHAIN="${TEST_CHAIN:-local}"
 SOAK_ITERATIONS="${SOAK_ITERATIONS:-1}"
 SOAK_SLEEP_SECONDS="${SOAK_SLEEP_SECONDS:-0}"
 RUN_REAL_BOR="${RUN_REAL_BOR:-false}"
 BOR_SERVER_SECONDS="${BOR_SERVER_SECONDS:-120}"
 
-HEIMDALL_HOME="$(mktemp -d /private/tmp/heimdall-quic-home.XXXXXX)"
+HEIMDALL_HOME="$(mktemp -d "${TMP_ROOT}/heimdall-quic-home.XXXXXX")"
 HEIMDALL_LOG="${HEIMDALL_HOME}/heimdalld.log"
 HEIMDALL_PID=""
 BOR_DATADIR=""
@@ -312,7 +314,7 @@ read_bor_listener_pids() {
 
 start_bor() {
   local chain_arg
-  BOR_DATADIR="$(mktemp -d /private/tmp/bor-quic-node.XXXXXX)"
+  BOR_DATADIR="$(mktemp -d "${TMP_ROOT}/bor-quic-node.XXXXXX")"
   BOR_LOG="${BOR_DATADIR}/bor.log"
 
   case "${TEST_CHAIN}" in

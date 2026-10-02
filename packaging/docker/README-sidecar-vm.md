@@ -31,7 +31,7 @@ state.scheme = "hash"
 [jsonrpc]
   [jsonrpc.http]
     enabled = true
-    host = "0.0.0.0"
+    host = "127.0.0.1"
     port = 8545
     api = ["eth", "net", "web3", "txpool", "bor", "admin"]
 
@@ -49,6 +49,9 @@ What matters:
 - `p2p.bulk-port` must be reachable between the two Bor nodes over UDP.
 - `p2p.nat = "extip:..."` should advertise the real IP address the other node can
   dial for both devp2p and the sidecar metadata.
+- Keep the `admin` JSON-RPC namespace bound to localhost or another trusted
+  operator-only interface. Use SSH tunneling or a private management network for
+  remote administration.
 - `[witness].enable = true` is required if you want to validate `wit-bulk`.
 - No extra compile-time switch is required for any of the QUIC sidecar lanes,
   including `eth-tx`, `eth-tx-fetch`, `eth-bulk`, `snap-*`, or `wit-bulk`.
