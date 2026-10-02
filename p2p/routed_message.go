@@ -23,6 +23,8 @@ import (
 	"io"
 	"net"
 	"sync"
+
+	"github.com/ethereum/go-ethereum/log"
 )
 
 const routedDefaultBulkChannel = "__bulk__"
@@ -143,7 +145,7 @@ func (e *bulkWriteError) Unwrap() error { return e.err }
 
 func (rw *routedMsgReadWriter) ReadMsg() (Msg, error) {
 	rw.start.Do(func() {
-		go rw.readLoop(rw.primary, true, "", 0)
+		go rw.readPrimaryLoop()
 	})
 
 	result := <-rw.reads
@@ -159,7 +161,7 @@ func (rw *routedMsgReadWriter) WriteMsg(msg Msg) error {
 	if msg.Size > bulkMaxMessageSize {
 		return rw.writeFallback(msg, channel)
 	}
-	payload, err := readRoutedWritePayload(msg)
+	payload, err := readRoutedPayload(msg)
 	if err != nil {
 		return err
 	}
@@ -188,7 +190,10 @@ func (rw *routedMsgReadWriter) writeFallback(msg Msg, channel string) error {
 	return rw.primary.WriteMsg(msg)
 }
 
-func readRoutedWritePayload(msg Msg) ([]byte, error) {
+func readRoutedPayload(msg Msg) ([]byte, error) {
+	if msg.Size > bulkMaxMessageSize {
+		return nil, fmt.Errorf("routed message too large: %d", msg.Size)
+	}
 	payload := make([]byte, msg.Size)
 	if msg.Size == 0 {
 		return payload, nil
@@ -208,7 +213,7 @@ func (rw *routedMsgReadWriter) AttachBulkChannels(channels []string, bulk MsgRea
 	if lane == nil {
 		return
 	}
-	go rw.readLoop(lane.rw, false, lane.channel, lane.id)
+	go rw.readBulkLoop(lane)
 }
 
 func (rw *routedMsgReadWriter) AttachBulkChannel(channel string, bulk MsgReadWriter) {
@@ -216,7 +221,7 @@ func (rw *routedMsgReadWriter) AttachBulkChannel(channel string, bulk MsgReadWri
 		return
 	}
 	lane := rw.setBulk(channel, bulk)
-	go rw.readLoop(lane.rw, false, lane.channel, lane.id)
+	go rw.readBulkLoop(lane)
 }
 
 func (rw *routedMsgReadWriter) bulk(channel string) (*routedBulkLane, bool) {
@@ -311,39 +316,64 @@ func (rw *routedMsgReadWriter) failBulkRead(channel string, bulkID uint64, err e
 	rw.clearBulk(channel, bulkID)
 }
 
-func (rw *routedMsgReadWriter) handleReadError(msg Msg, err error, forwardErr bool, channel string, bulkID uint64) {
-	if forwardErr {
-		rw.reads <- routedReadResult{msg: msg, err: err}
-		return
+func (rw *routedMsgReadWriter) readPrimaryLoop() {
+	for {
+		msg, err := rw.primary.ReadMsg()
+		if err != nil {
+			rw.reads <- routedReadResult{msg: msg, err: err}
+			return
+		}
+		if err := rw.forwardMsg(msg); err != nil {
+			return
+		}
 	}
-	rw.failBulkRead(channel, bulkID, err)
 }
 
-func (rw *routedMsgReadWriter) readLoop(reader MsgReader, forwardErr bool, channel string, bulkID uint64) {
+func (rw *routedMsgReadWriter) readBulkLoop(lane *routedBulkLane) {
+	defer lane.closeReader()
 	for {
-		msg, err := reader.ReadMsg()
-		if !forwardErr && !rw.isCurrentBulk(channel, bulkID) {
+		msg, err := rw.readBulkMsg(lane)
+		if !rw.isCurrentBulk(lane.channel, lane.id) {
 			return
 		}
 		if err != nil {
-			rw.handleReadError(msg, err, forwardErr, channel, bulkID)
+			rw.failBulkRead(lane.channel, lane.id, err)
 			return
 		}
-		if msg.Size == 0 {
-			rw.reads <- routedReadResult{msg: msg}
-			continue
-		}
-		done := make(chan error, 1)
-		msg.Payload = &routedPayload{reader: msg.Payload, remaining: msg.Size, done: done}
-		rw.reads <- routedReadResult{msg: msg}
-
-		if err := <-done; err != nil {
-			if !forwardErr {
-				rw.failBulkRead(channel, bulkID, err)
-			}
+		if err := rw.forwardMsg(msg); err != nil {
 			return
 		}
 	}
+}
+
+func (rw *routedMsgReadWriter) readBulkMsg(lane *routedBulkLane) (Msg, error) {
+	msg, err := lane.rw.ReadMsg()
+	if err != nil || !rw.isCurrentBulk(lane.channel, lane.id) {
+		return msg, err
+	}
+	// Protocol handlers must never observe a partially received sidecar frame.
+	payload, err := readRoutedPayload(msg)
+	msg.Payload = bytes.NewReader(payload)
+	return msg, err
+}
+
+func (lane *routedBulkLane) closeReader() {
+	if closer, ok := lane.rw.(io.Closer); ok {
+		if err := closer.Close(); err != nil {
+			log.Debug("Failed to close bulk lane", "channel", lane.channel, "err", err)
+		}
+	}
+}
+
+func (rw *routedMsgReadWriter) forwardMsg(msg Msg) error {
+	if msg.Size == 0 {
+		rw.reads <- routedReadResult{msg: msg}
+		return nil
+	}
+	done := make(chan error, 1)
+	msg.Payload = &routedPayload{reader: msg.Payload, remaining: msg.Size, done: done}
+	rw.reads <- routedReadResult{msg: msg}
+	return <-done
 }
 
 func isTimeoutError(err error) bool {

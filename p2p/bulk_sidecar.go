@@ -179,8 +179,9 @@ func newBulkSidecar(srv *Server, listenAddr string) (*BulkSidecar, error) {
 	bulkSidecarStats.setSocketBuffers(socketBuffers)
 
 	transport := &quic.Transport{
-		Conn:   udpConn,
-		Tracer: bulkSidecarStats.newTransportRecorder(),
+		Conn:        udpConn,
+		Tracer:      bulkSidecarStats.newTransportRecorder(),
+		ConnContext: newBulkConnContext(srv.MaxPeers, srv.MaxPendingPeers),
 	}
 	listener, err := transport.Listen(tlsConf, quicConf)
 	if err != nil {
@@ -310,6 +311,7 @@ func (b *BulkSidecar) handleIncomingConn(conn *quic.Conn) {
 		_ = conn.CloseWithError(bulkSidecarCloseErrorCode, "duplicate bulk connection")
 		return
 	}
+	releaseBulkPendingAuth(conn.Context())
 	b.runConn(remote.ID(), conn)
 }
 

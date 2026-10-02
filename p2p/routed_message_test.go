@@ -560,12 +560,13 @@ func TestRoutedMsgReadWriterDropsBulkLaneAfterReadTimeout(t *testing.T) {
 	}
 }
 
-func TestRoutedMsgReadWriterStreamsBulkPayload(t *testing.T) {
+func TestRoutedMsgReadWriterBuffersBulkPayload(t *testing.T) {
 	primaryApp, primaryNet := MsgPipe()
 	defer primaryApp.Close()
 	defer primaryNet.Close()
 
-	bulk := &scriptedMsgRW{results: make(chan scriptedResult, 1)}
+	bulk := newStressMsgRW()
+	defer bulk.Close()
 	routed := NewRoutedMsgReadWriter(primaryNet, bulk, func(code uint64) bool { return code == 2 })
 	payloadReader, payloadWriter := io.Pipe()
 	defer payloadReader.Close()
@@ -578,20 +579,25 @@ func TestRoutedMsgReadWriterStreamsBulkPayload(t *testing.T) {
 		readc <- scriptedResult{msg: msg, err: err}
 	}()
 
-	var result scriptedResult
 	select {
-	case result = <-readc:
-	case <-time.After(time.Second):
-		t.Fatal("message header was not delivered before its payload")
-	}
-	if result.err != nil {
-		t.Fatalf("failed to read streamed message: %v", result.err)
+	case <-readc:
+		t.Fatal("message was delivered before its payload was buffered")
+	case <-time.After(50 * time.Millisecond):
 	}
 	writeErr := make(chan error, 1)
 	go func() {
 		_, err := payloadWriter.Write([]byte{0xc1, 0x80})
 		writeErr <- err
 	}()
+	var result scriptedResult
+	select {
+	case result = <-readc:
+	case <-time.After(time.Second):
+		t.Fatal("complete message was not delivered")
+	}
+	if result.err != nil {
+		t.Fatalf("failed to read buffered message: %v", result.err)
+	}
 	payload, err := io.ReadAll(result.msg.Payload)
 	if err != nil {
 		t.Fatalf("failed to consume streamed payload: %v", err)
@@ -661,13 +667,6 @@ func TestRoutedMsgReadWriterDropsBulkLaneAfterPartialPayloadTimeout(t *testing.T
 	}
 	bulk.results <- scriptedResult{msg: Msg{Code: 2, Size: 2, Payload: &partialTimeoutReader{}}}
 
-	msg, err := routed.ReadMsg()
-	if err != nil {
-		t.Fatalf("failed to read partial frame header: %v", err)
-	}
-	if _, err := io.ReadAll(msg.Payload); !isTimeoutError(err) {
-		t.Fatalf("expected payload timeout, got %v", err)
-	}
 	deadline := time.Now().Add(time.Second)
 	for routed.HasBulk() && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
@@ -683,6 +682,7 @@ func TestRoutedMsgReadWriterDropsBulkLaneAfterPartialPayloadTimeout(t *testing.T
 	if afterCounters.ReadErrors != beforeCounters.ReadErrors {
 		t.Fatalf("payload timeout was recorded as a read error: before=%d after=%d", beforeCounters.ReadErrors, afterCounters.ReadErrors)
 	}
+	assertRoutedPrimaryRead(t, primaryApp, routed)
 }
 
 func TestRoutedMsgReadWriterDropsBulkLaneAfterPartialPayloadError(t *testing.T) {
@@ -702,13 +702,6 @@ func TestRoutedMsgReadWriterDropsBulkLaneAfterPartialPayloadError(t *testing.T) 
 	}
 	bulk.results <- scriptedResult{msg: Msg{Code: 2, Size: 2, Payload: &partialErrorReader{}}}
 
-	msg, err := routed.ReadMsg()
-	if err != nil {
-		t.Fatalf("failed to read partial frame header: %v", err)
-	}
-	if _, err := io.ReadAll(msg.Payload); !errors.Is(err, errPartialPayload) {
-		t.Fatalf("expected payload failure, got %v", err)
-	}
 	deadline := time.Now().Add(time.Second)
 	for routed.HasBulk() && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
@@ -724,6 +717,7 @@ func TestRoutedMsgReadWriterDropsBulkLaneAfterPartialPayloadError(t *testing.T) 
 	if afterCounters.ReadTimeouts != beforeCounters.ReadTimeouts {
 		t.Fatalf("payload error was recorded as a timeout: before=%d after=%d", beforeCounters.ReadTimeouts, afterCounters.ReadTimeouts)
 	}
+	assertRoutedPrimaryRead(t, primaryApp, routed)
 }
 
 func TestMultiChannelRoutedMsgReadWriterConcurrentAttachAndTraffic(t *testing.T) {
