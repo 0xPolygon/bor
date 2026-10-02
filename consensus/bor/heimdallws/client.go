@@ -2,9 +2,12 @@ package heimdallws
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -352,12 +355,16 @@ func (c *HeimdallWSClient) readMessages(ctx context.Context) {
 			BorChainID:  attrs["bor_chain_id"],
 			MilestoneID: attrs["milestone_id"],
 		}
-		if startBlock, err := strconv.ParseUint(attrs["start_block"], 10, 64); err == nil {
-			m.StartBlock = startBlock
+		// The block range and hash are what the whitelist acts on; an event
+		// missing them would otherwise be delivered as a milestone ending at
+		// block 0 and re-processed every second by the consumer.
+		startBlock, endBlock, err := parseMilestoneRange(attrs)
+		if err != nil {
+			log.Warn("Ignoring malformed milestone event on heimdall ws subscription", "err", err)
+			continue
 		}
-		if endBlock, err := strconv.ParseUint(attrs["end_block"], 10, 64); err == nil {
-			m.EndBlock = endBlock
-		}
+		m.StartBlock = startBlock
+		m.EndBlock = endBlock
 		if timestamp, err := strconv.ParseUint(attrs["timestamp"], 10, 64); err == nil {
 			m.Timestamp = timestamp
 		}
@@ -372,6 +379,29 @@ func (c *HeimdallWSClient) readMessages(ctx context.Context) {
 			return
 		}
 	}
+}
+
+// parseMilestoneRange extracts the start and end block of a milestone event
+// and rejects events without a usable range or hash.
+func parseMilestoneRange(attrs map[string]string) (uint64, uint64, error) {
+	startBlock, err := strconv.ParseUint(attrs["start_block"], 10, 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid start_block %q: %w", attrs["start_block"], err)
+	}
+	endBlock, err := strconv.ParseUint(attrs["end_block"], 10, 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid end_block %q: %w", attrs["end_block"], err)
+	}
+	if endBlock == 0 || endBlock < startBlock {
+		return 0, 0, fmt.Errorf("invalid milestone range %d-%d", startBlock, endBlock)
+	}
+	// Heimdall encodes the hash as bare hex; common.HexToHash would turn
+	// anything that is not 32 bytes of hex into a zero or padded hash.
+	hash, err := hex.DecodeString(strings.TrimPrefix(attrs["hash"], "0x"))
+	if err != nil || len(hash) != common.HashLength {
+		return 0, 0, fmt.Errorf("invalid milestone hash %q", attrs["hash"])
+	}
+	return startBlock, endBlock, nil
 }
 
 // Unsubscribe signals the reader goroutine to stop.
