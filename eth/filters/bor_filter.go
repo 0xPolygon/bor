@@ -109,7 +109,10 @@ func (f *BorBlockLogsFilter) Logs(ctx context.Context) ([]*types.Log, error) {
 		return nil, err
 	}
 
-	// adjust begin for sprint
+	// adjust begin for sprint. Bor receipts only exist on blocks that are a
+	// multiple of the sprint length, so begin is rounded up to the next one;
+	// a begin of latest taken mid-sprint therefore lands past the head and
+	// returns no logs until the head reaches that block.
 	f.begin = currentSprintEnd(f.borConfig.CalculateSprint(uint64(begin)), begin)
 
 	// begin already on PIP-74, no more need for bor logs
@@ -129,25 +132,33 @@ func (f *BorBlockLogsFilter) Logs(ctx context.Context) ([]*types.Log, error) {
 // resolveBlockNumber maps the negative rpc.BlockNumber sentinels onto concrete
 // block numbers, mirroring resolveSpecial in filter.go: latest and pending
 // resolve to the current head, finalized and safe to the corresponding
-// headers, and earliest to genesis.
+// headers, and earliest to the first block kept after history pruning.
 func (f *BorBlockLogsFilter) resolveBlockNumber(ctx context.Context, number int64, head uint64) (int64, error) {
 	switch number {
 	case rpc.LatestBlockNumber.Int64(), rpc.PendingBlockNumber.Int64():
 		return int64(head), nil
 	case rpc.FinalizedBlockNumber.Int64(), rpc.SafeBlockNumber.Int64():
-		hdr, _ := f.backend.HeaderByNumber(ctx, rpc.BlockNumber(number))
-		if hdr == nil {
-			return 0, fmt.Errorf("%s header not found", rpc.BlockNumber(number).String())
-		}
-		return hdr.Number.Int64(), nil
+		return f.resolveHeader(ctx, rpc.BlockNumber(number), rpc.BlockNumber(number).String())
 	case rpc.EarliestBlockNumber.Int64():
-		return 0, nil
+		return f.resolveHeader(ctx, rpc.BlockNumber(f.backend.HistoryPruningCutoff()), "earliest")
 	default:
 		if number < 0 {
 			return 0, fmt.Errorf("invalid block number %d", number)
 		}
 		return number, nil
 	}
+}
+
+// resolveHeader looks up the header for number and returns its height.
+func (f *BorBlockLogsFilter) resolveHeader(ctx context.Context, number rpc.BlockNumber, name string) (int64, error) {
+	hdr, err := f.backend.HeaderByNumber(ctx, number)
+	if err != nil {
+		return 0, err
+	}
+	if hdr == nil {
+		return 0, fmt.Errorf("%s header not found", name)
+	}
+	return hdr.Number.Int64(), nil
 }
 
 // unindexedLogs returns the logs matching the filter criteria based on raw block
