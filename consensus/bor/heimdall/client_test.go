@@ -149,8 +149,7 @@ func TestFetchCheckpointFromMockHeimdall(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Create a new heimdall client and use same port for connection
-	client, err := NewHeimdallClient(fmt.Sprintf("http://localhost:%d", port), 5*time.Second)
-	require.NoError(t, err)
+	client := NewHeimdallClient(fmt.Sprintf("http://localhost:%d", port), 5*time.Second)
 	_, err = client.FetchCheckpoint(t.Context(), -1)
 	require.NoError(t, err, "expect no error in fetching checkpoint")
 
@@ -219,8 +218,7 @@ func TestFetchMilestoneFromMockHeimdall(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Create a new heimdall client and use same port for connection
-	client, err := NewHeimdallClient(fmt.Sprintf("http://localhost:%d", port), 5*time.Second)
-	require.NoError(t, err)
+	client := NewHeimdallClient(fmt.Sprintf("http://localhost:%d", port), 5*time.Second)
 	_, err = client.FetchMilestone(t.Context())
 	require.NoError(t, err, "expect no error in fetching milestone")
 
@@ -275,8 +273,7 @@ func TestFetchShutdown(t *testing.T) {
 	require.NoError(t, err, "expect no error in starting mock heimdall server")
 
 	// Create a new heimdall client and use same port for connection
-	client, err := NewHeimdallClient(fmt.Sprintf("http://localhost:%d", port), 5*time.Second)
-	require.NoError(t, err)
+	client := NewHeimdallClient(fmt.Sprintf("http://localhost:%d", port), 5*time.Second)
 
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 
@@ -475,8 +472,7 @@ func TestFetchHonorsConfiguredTimeout(t *testing.T) {
 	srv, err := CreateMockHeimdallServer(wg, port, listener, handler)
 	require.NoError(t, err, "expect no error in starting mock heimdall server")
 
-	client, err := NewHeimdallClient(fmt.Sprintf("http://localhost:%d", port), clientTimeout)
-	require.NoError(t, err)
+	client := NewHeimdallClient(fmt.Sprintf("http://localhost:%d", port), clientTimeout)
 
 	url, err := checkpointURL(client.urlString, -1)
 	require.NoError(t, err)
@@ -512,8 +508,7 @@ func TestFetchDefaultsTimeoutWhenUnset(t *testing.T) {
 	srv, err := CreateMockHeimdallServer(wg, port, listener, handler)
 	require.NoError(t, err, "expect no error in starting mock heimdall server")
 
-	client, err := NewHeimdallClient(fmt.Sprintf("http://localhost:%d", port), 0)
-	require.NoError(t, err)
+	client := NewHeimdallClient(fmt.Sprintf("http://localhost:%d", port), 0)
 
 	url, err := checkpointURL(client.urlString, -1)
 	require.NoError(t, err)

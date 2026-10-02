@@ -133,6 +133,14 @@ type routedBulkLane struct {
 	rw      MsgReadWriter
 }
 
+type bulkWriteError struct {
+	err       error
+	committed bool
+}
+
+func (e *bulkWriteError) Error() string { return e.err.Error() }
+func (e *bulkWriteError) Unwrap() error { return e.err }
+
 func (rw *routedMsgReadWriter) ReadMsg() (Msg, error) {
 	rw.start.Do(func() {
 		go rw.readLoop(rw.primary, true, "", 0)
@@ -143,27 +151,40 @@ func (rw *routedMsgReadWriter) ReadMsg() (Msg, error) {
 }
 
 func (rw *routedMsgReadWriter) WriteMsg(msg Msg) error {
-	if channel := rw.route(msg.Code); channel != "" {
-		if bulk, ok := rw.bulk(channel); ok {
-			if msg.Size > bulkMaxMessageSize {
-				bulkSidecarWriteFallbackMeter.Mark(1)
-				bulkSidecarStats.markChannelWriteFallback(channel)
-			} else {
-				payload, err := readRoutedWritePayload(msg)
-				if err != nil {
-					return err
-				}
-				bulkMsg := msg
-				bulkMsg.Payload = bytes.NewReader(payload)
-				if err := bulk.WriteMsg(bulkMsg); err == nil {
-					return nil
-				}
-				bulkSidecarWriteFallbackMeter.Mark(1)
-				bulkSidecarStats.markChannelWriteFallback(channel)
-				msg.Payload = bytes.NewReader(payload)
-			}
-		}
+	channel := rw.route(msg.Code)
+	lane, ok := rw.bulk(channel)
+	if !ok {
+		return rw.primary.WriteMsg(msg)
 	}
+	if msg.Size > bulkMaxMessageSize {
+		return rw.writeFallback(msg, channel)
+	}
+	payload, err := readRoutedWritePayload(msg)
+	if err != nil {
+		return err
+	}
+	bulkMsg := msg
+	bulkMsg.Payload = bytes.NewReader(payload)
+	err = lane.rw.WriteMsg(bulkMsg)
+	if err == nil {
+		return nil
+	}
+	rw.clearBulk(channel, lane.id)
+	if closer, ok := lane.rw.(io.Closer); ok {
+		err = errors.Join(err, closer.Close())
+	}
+	// Only the transport can confirm that replay will not duplicate a frame.
+	var writeErr *bulkWriteError
+	if !errors.As(err, &writeErr) || writeErr.committed {
+		return err
+	}
+	msg.Payload = bytes.NewReader(payload)
+	return rw.writeFallback(msg, channel)
+}
+
+func (rw *routedMsgReadWriter) writeFallback(msg Msg, channel string) error {
+	bulkSidecarWriteFallbackMeter.Mark(1)
+	bulkSidecarStats.markChannelWriteFallback(channel)
 	return rw.primary.WriteMsg(msg)
 }
 
@@ -198,7 +219,7 @@ func (rw *routedMsgReadWriter) AttachBulkChannel(channel string, bulk MsgReadWri
 	go rw.readLoop(lane.rw, false, lane.channel, lane.id)
 }
 
-func (rw *routedMsgReadWriter) bulk(channel string) (MsgReadWriter, bool) {
+func (rw *routedMsgReadWriter) bulk(channel string) (*routedBulkLane, bool) {
 	if channel == "" {
 		return nil, false
 	}
@@ -208,7 +229,7 @@ func (rw *routedMsgReadWriter) bulk(channel string) (MsgReadWriter, bool) {
 	if lane == nil {
 		return nil, false
 	}
-	return lane.rw, true
+	return lane, true
 }
 
 func (rw *routedMsgReadWriter) HasBulkChannel(channel string) bool {

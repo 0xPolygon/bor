@@ -1,6 +1,7 @@
 package p2p
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"net"
@@ -99,17 +100,41 @@ type testPooledTransactionsPacket struct {
 }
 
 func TestBulkSidecarOpenChannelRoundTrip(t *testing.T) {
+	for _, inbound := range []string{"none", "initiator", "responder"} {
+		t.Run(inbound, func(t *testing.T) { testBulkSidecarOpenChannelRoundTrip(t, inbound) })
+	}
+}
+
+func testBulkSidecarOpenChannelRoundTrip(t *testing.T, inbound string) {
+	t.Helper()
 	left := newTestBulkServer(t)
 	defer left.close()
 
 	right := newTestBulkServer(t)
 	defer right.close()
+	if bytes.Compare(left.bulk.localID[:], right.bulk.localID[:]) > 0 {
+		left, right = right, left
+	}
 
 	left.setQUICPort()
 	right.setQUICPort()
 
 	leftPeer := newTestTrackedPeer(right.localnode.Node())
 	rightPeer := newTestTrackedPeer(left.localnode.Node())
+	if inbound != "none" {
+		local, remote, peer := left, right, leftPeer
+		if inbound == "responder" {
+			local, remote, peer = right, left, rightPeer
+		}
+		if err := local.db.UpdateNode(remote.localnode.Node()); err != nil {
+			t.Fatal(err)
+		}
+		peer.rw.node = enode.NewV4(&remote.server.PrivateKey.PublicKey, net.IPv4(127, 0, 0, 1), 40000, 40000)
+		peer.rw.flags = inboundConn
+		if _, ok := peer.Node().QUICEndpoint(); ok {
+			t.Fatal("inbound RLPx peer unexpectedly has a QUIC endpoint")
+		}
+	}
 	left.setPeer(leftPeer)
 	right.setPeer(rightPeer)
 
@@ -436,6 +461,7 @@ func newTestBulkServer(t *testing.T) *testBulkServer {
 
 	srv := &Server{
 		Config:     Config{PrivateKey: priv, Logger: log.Root()},
+		nodedb:     db,
 		localnode:  localnode,
 		log:        log.Root(),
 		quit:       make(chan struct{}),

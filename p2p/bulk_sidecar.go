@@ -137,10 +137,11 @@ type bulkFrameStream interface {
 }
 
 type bulkStreamMsgRW struct {
-	stream  bulkFrameStream
-	channel string
-	log     log.Logger
-	write   sync.Mutex
+	stream   bulkFrameStream
+	channel  string
+	log      log.Logger
+	write    sync.Mutex
+	writeErr error
 }
 
 func newBulkSidecar(srv *Server, listenAddr string) (*BulkSidecar, error) {
@@ -268,11 +269,16 @@ func (b *BulkSidecar) DropPeer(id enode.ID) {
 }
 
 func (b *BulkSidecar) session(remote *enode.Node) *bulkSession {
+	remote = b.peerRecord(remote)
 	remoteID := remote.ID()
 	b.lock.Lock()
 	defer b.lock.Unlock()
 	if session, ok := b.sessions[remoteID]; ok {
-		session.remote = remote
+		session.lock.Lock()
+		if remote.Seq() > session.remote.Seq() {
+			session.remote = remote
+		}
+		session.lock.Unlock()
 		return session
 	}
 	session := &bulkSession{
@@ -712,25 +718,42 @@ func (rw *bulkStreamMsgRW) ReadMsg() (Msg, error) {
 func (rw *bulkStreamMsgRW) WriteMsg(msg Msg) error {
 	rw.write.Lock()
 	defer rw.write.Unlock()
+	if rw.writeErr != nil {
+		return rw.writeErr
+	}
+	err := rw.writeFrame(msg)
+	if err != nil {
+		rw.writeErr = err
+		if closeErr := rw.Close(); closeErr != nil {
+			rw.log.Debug("Bulk sidecar failed stream close", "err", closeErr)
+		}
+	}
+	return err
+}
 
+func (rw *bulkStreamMsgRW) writeFrame(msg Msg) error {
 	if msg.Size > bulkMaxMessageSize {
-		return fmt.Errorf("bulk message too large: %d", msg.Size)
+		return &bulkWriteError{err: fmt.Errorf("bulk message too large: %d", msg.Size)}
 	}
 	if err := rw.stream.SetWriteDeadline(time.Now().Add(bulkMessageWriteTimeout)); err != nil {
-		return err
+		return &bulkWriteError{err: err}
 	}
 	var header [bulkFrameHeaderSize]byte
 	binary.BigEndian.PutUint64(header[:8], msg.Code)
 	binary.BigEndian.PutUint32(header[8:], msg.Size)
-	if _, err := rw.stream.Write(header[:]); err != nil {
-		return err
-	}
-	n, err := io.CopyN(rw.stream, msg.Payload, int64(msg.Size))
+	n, err := rw.stream.Write(header[:])
 	if err != nil {
-		return err
+		return &bulkWriteError{err: err, committed: n > 0}
 	}
-	if n != int64(msg.Size) {
-		return io.ErrUnexpectedEOF
+	if n != len(header) {
+		return &bulkWriteError{err: io.ErrShortWrite, committed: n > 0}
+	}
+	written, err := io.Copy(rw.stream, io.LimitReader(msg.Payload, int64(msg.Size)))
+	if err != nil {
+		return &bulkWriteError{err: err, committed: true}
+	}
+	if written != int64(msg.Size) {
+		return &bulkWriteError{err: io.ErrUnexpectedEOF, committed: true}
 	}
 	bulkSidecarStats.markChannelWrite(rw.channel)
 	rw.log.Trace("Bulk sidecar wrote message", "code", msg.Code, "size", msg.Size)

@@ -50,6 +50,7 @@ type scriptedMsgRW struct {
 type partialFailMsgRW struct {
 	closed chan struct{}
 	once   sync.Once
+	err    error
 }
 
 type scriptedResult struct {
@@ -82,7 +83,7 @@ func (rw *stressMsgRW) ReadMsg() (Msg, error) {
 func (rw *stressMsgRW) WriteMsg(msg Msg) error {
 	select {
 	case <-rw.closed:
-		return ErrPipeClosed
+		return &bulkWriteError{err: ErrPipeClosed}
 	default:
 	}
 	_, err := io.Copy(io.Discard, msg.Payload)
@@ -127,6 +128,9 @@ func (rw *partialFailMsgRW) WriteMsg(msg Msg) error {
 		if _, err := msg.Payload.Read(buf); err != nil {
 			return err
 		}
+	}
+	if rw.err != nil {
+		return rw.err
 	}
 	return errPartialPayload
 }
@@ -397,19 +401,14 @@ func TestRoutedMsgReadWriterAttachesBulkLate(t *testing.T) {
 	}
 }
 
-func TestRoutedMsgReadWriterFallsBackToPrimaryWhenBulkWriteFails(t *testing.T) {
+func TestRoutedMsgReadWriterFallsBackToPrimaryBeforeBulkWrite(t *testing.T) {
 	primaryApp, primaryNet := MsgPipe()
 	defer primaryApp.Close()
 	defer primaryNet.Close()
 
-	bulkApp, bulkNet := MsgPipe()
-	defer bulkNet.Close()
-
-	rw := NewRoutedMsgReadWriter(primaryNet, bulkNet, func(code uint64) bool { return code == 2 })
-
-	if err := bulkApp.Close(); err != nil {
-		t.Fatalf("failed to close bulk lane: %v", err)
-	}
+	bulk := &partialFailMsgRW{closed: make(chan struct{}), err: &bulkWriteError{err: errPartialPayload}}
+	defer bulk.Close()
+	rw := NewRoutedMsgReadWriter(primaryNet, bulk, func(code uint64) bool { return code == 2 })
 
 	errc := make(chan error, 1)
 	go func() { errc <- SendItems(rw, 2, uint64(22)) }()
@@ -421,23 +420,14 @@ func TestRoutedMsgReadWriterFallsBackToPrimaryWhenBulkWriteFails(t *testing.T) {
 	}
 }
 
-func TestRoutedMsgReadWriterFallsBackWithFullPayloadAfterPartialBulkWrite(t *testing.T) {
-	primaryApp, primaryNet := MsgPipe()
-	defer primaryApp.Close()
-	defer primaryNet.Close()
-
+func TestRoutedMsgReadWriterReturnsUnknownBulkWriteError(t *testing.T) {
+	primary := newStressMsgRW()
+	defer primary.Close()
 	bulk := &partialFailMsgRW{closed: make(chan struct{})}
 	defer bulk.Close()
-
-	rw := NewRoutedMsgReadWriter(primaryNet, bulk, func(code uint64) bool { return code == 2 })
-
-	errc := make(chan error, 1)
-	go func() { errc <- SendItems(rw, 2, uint64(22)) }()
-	if err := ExpectMsg(primaryApp, 2, []uint64{22}); err != nil {
-		t.Fatalf("primary fallback saw drained payload: %v", err)
-	}
-	if err := <-errc; err != nil {
-		t.Fatalf("send failed after partial bulk fallback: %v", err)
+	rw := NewRoutedMsgReadWriter(primary, bulk, func(code uint64) bool { return code == 2 })
+	if err := SendItems(rw, 2, uint64(22)); !errors.Is(err, errPartialPayload) {
+		t.Fatalf("expected bulk write error without replay, got %v", err)
 	}
 }
 
@@ -446,8 +436,8 @@ func TestMultiChannelRoutedMsgReadWriterFallsBackPerChannel(t *testing.T) {
 	defer primaryApp.Close()
 	defer primaryNet.Close()
 
-	controlApp, controlNet := MsgPipe()
-	defer controlNet.Close()
+	control := &partialFailMsgRW{closed: make(chan struct{}), err: &bulkWriteError{err: errPartialPayload}}
+	defer control.Close()
 
 	routed, ok := NewMultiChannelRoutedMsgReadWriter(primaryNet, func(code uint64) string {
 		if code == 3 {
@@ -461,11 +451,7 @@ func TestMultiChannelRoutedMsgReadWriterFallsBackPerChannel(t *testing.T) {
 	if !ok {
 		t.Fatal("expected multi-channel routed msg read writer")
 	}
-	routed.AttachBulkChannel("eth-control", controlNet)
-
-	if err := controlApp.Close(); err != nil {
-		t.Fatalf("failed to close control lane: %v", err)
-	}
+	routed.AttachBulkChannel("eth-control", control)
 
 	errc := make(chan error, 1)
 	go func() { errc <- SendItems(routed, 3, uint64(33)) }()

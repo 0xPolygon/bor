@@ -63,6 +63,7 @@ func TestNewHeimdallClientFetchStatusOverQUIC(t *testing.T) {
 
 	client, err := newHeimdallClientWithRootCAs("h3://127.0.0.1:"+strconv.Itoa(port), 5*time.Second, rootCAs)
 	require.NoError(t, err)
+	t.Cleanup(client.Close)
 	status, err := client.FetchStatus(t.Context())
 	require.NoError(t, err)
 	require.NotNil(t, status)
@@ -71,7 +72,7 @@ func TestNewHeimdallClientFetchStatusOverQUIC(t *testing.T) {
 func TestNewHeimdallClientRejectsInvalidQUICEndpoint(t *testing.T) {
 	t.Parallel()
 
-	client, err := NewHeimdallClient("h3:///status-only", 5*time.Second)
+	client, err := NewHeimdallClientWithError("h3:///status-only", 5*time.Second)
 	require.Nil(t, client)
 	require.ErrorContains(t, err, "empty host")
 }
@@ -82,8 +83,9 @@ func TestExternalHeimdallFetchStatusOverQUIC(t *testing.T) {
 		t.Skip("set BOR_HEIMDALL_H3_URL to run against a live Heimdall QUIC sidecar")
 	}
 
-	client, err := NewHeimdallClient(endpoint, 10*time.Second)
+	client, err := NewHeimdallClientWithError(endpoint, 10*time.Second)
 	require.NoError(t, err)
+	t.Cleanup(client.Close)
 
 	status, err := client.FetchStatus(t.Context())
 	require.NoError(t, err)
@@ -96,8 +98,9 @@ func TestExternalHeimdallEndpointSuiteOverQUIC(t *testing.T) {
 		t.Skip("set BOR_HEIMDALL_H3_URL to run against a live Heimdall QUIC sidecar")
 	}
 
-	client, err := NewHeimdallClient(endpoint, 10*time.Second)
+	client, err := NewHeimdallClientWithError(endpoint, 10*time.Second)
 	require.NoError(t, err)
+	t.Cleanup(client.Close)
 
 	status, err := client.FetchStatus(t.Context())
 	require.NoError(t, err)

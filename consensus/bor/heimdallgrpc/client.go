@@ -150,9 +150,11 @@ func NewHeimdallGRPCClient(grpcAddress string, heimdallURL string, timeout time.
 		requestTimeout = defaultTimeout
 	}
 
-	restClient, err := heimdall.NewHeimdallClient(heimdallURL, timeout)
+	restClient, err := heimdall.NewHeimdallClientWithError(heimdallURL, timeout)
 	if err != nil {
-		_ = conn.Close()
+		if closeErr := conn.Close(); closeErr != nil {
+			log.Error("Error closing Heimdall gRPC client connection", "err", closeErr)
+		}
 		return nil, err
 	}
 
