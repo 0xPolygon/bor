@@ -90,6 +90,15 @@ func installCapturingHandler(t *testing.T) *capturingHandler {
 	return h
 }
 
+// skipIfRoot skips tests that rely on directory permissions to force an I/O
+// error: root bypasses them, so the operation would succeed.
+func skipIfRoot(t *testing.T) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+}
+
 // nibblesToCompact converts a nibble slice to compact encoding (inverse of compactKeyToNibbles).
 // isLeaf sets the terminator flag (bit 5 of first byte).
 func nibblesToCompact(nibbles []byte, isLeaf bool) []byte {
@@ -1763,6 +1772,7 @@ func TestAddressBiasedCache_CloseLogsSnapshotDirFailure(t *testing.T) {
 // than silently drops) a failure to save an individual address's snapshot
 // file, per the same "must not block shutdown" contract as above.
 func TestAddressBiasedCache_CloseLogsSaveFailure(t *testing.T) {
+	skipIfRoot(t)
 	h := installCapturingHandler(t)
 
 	addr := common.HexToAddress("0x1234567890123456789012345678901234567890")

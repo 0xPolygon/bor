@@ -268,6 +268,7 @@ func TestDisableRemovesStaleSnapshots(t *testing.T) {
 // TestDisableLogsSnapshotRemovalFailure checks that a failure to drop stale
 // snapshots is logged and does not fail Disable.
 func TestDisableLogsSnapshotRemovalFailure(t *testing.T) {
+	skipIfRoot(t)
 	h := installCapturingHandler(t)
 
 	journalDir := t.TempDir()
