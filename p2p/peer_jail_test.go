@@ -44,7 +44,7 @@ func testPeerJailReconnect(t *testing.T, period time.Duration, jail func(*Server
 	}
 	t.Cleanup(srv.Stop)
 	node := enode.NewV4(&newkey().PublicKey, nil, 0, 0)
-	dial := &dialScheduler{dialConfig: dialConfig{jailChecker: srv.peerJail.IsJailed}}
+	dial := &dialScheduler{dialConfig: dialConfig{jailedUntil: srv.peerJail.JailedUntil}}
 	jail(srv, node.ID())
 	if err := dial.checkDial(node); !errors.Is(err, errJailed) {
 		t.Fatalf("jailed outbound dial: %v", err)
