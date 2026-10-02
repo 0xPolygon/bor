@@ -46,8 +46,13 @@ var ProtocolVersions = []uint{ETH69, ETH68}
 // different protocol versions.
 var protocolLengths = map[uint]uint64{ETH68: 17, ETH69: 18}
 
-// maxMessageSize is the maximum cap on the size of a protocol message.
-const maxMessageSize = 10 * 1024 * 1024
+const (
+	// maxMessageSize is the maximum cap on the size of a protocol message.
+	maxMessageSize = 10 * 1024 * 1024
+
+	// maxReceiptsMessageSize is the maximum decoded payload accepted by RLPx.
+	maxReceiptsMessageSize = (1 << 24) - 1
+)
 
 const (
 	StatusMsg                     = 0x00
