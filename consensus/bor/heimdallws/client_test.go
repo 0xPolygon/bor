@@ -560,29 +560,33 @@ func TestWSClient_ProactiveSwitchSetsConnNil(t *testing.T) {
 func TestParseMilestoneRange(t *testing.T) {
 	t.Parallel()
 
-	ok := map[string]string{"start_block": "100", "end_block": "200", "hash": "0x02"}
-	start, end, err := parseMilestoneRange(ok)
+	const hash = "0000000000000000000000000000000000000000000000000000000000000002"
+
+	start, end, err := parseMilestoneRange(map[string]string{"start_block": "100", "end_block": "200", "hash": hash})
 	require.NoError(t, err)
 	assert.Equal(t, uint64(100), start)
 	assert.Equal(t, uint64(200), end)
 
-	// A single-block milestone (start == end) is valid.
-	start, end, err = parseMilestoneRange(map[string]string{"start_block": "300", "end_block": "300", "hash": "0x02"})
+	// A single-block milestone (start == end) and a 0x-prefixed hash are valid.
+	start, end, err = parseMilestoneRange(map[string]string{"start_block": "300", "end_block": "300", "hash": "0x" + hash})
 	require.NoError(t, err)
 	assert.Equal(t, uint64(300), start)
 	assert.Equal(t, uint64(300), end)
 
 	for name, attrs := range map[string]map[string]string{
-		"missing end_block":   {"start_block": "100", "hash": "0x02"},
-		"unparsable start":    {"start_block": "abc", "end_block": "200", "hash": "0x02"},
-		"end before start":    {"start_block": "300", "end_block": "200", "hash": "0x02"},
-		"zero end":            {"start_block": "0", "end_block": "0", "hash": "0x02"},
+		"missing end_block":   {"start_block": "100", "hash": hash},
+		"unparsable start":    {"start_block": "abc", "end_block": "200", "hash": hash},
+		"end before start":    {"start_block": "300", "end_block": "200", "hash": hash},
+		"zero end":            {"start_block": "0", "end_block": "0", "hash": hash},
 		"missing hash":        {"start_block": "100", "end_block": "200"},
+		"non-hex hash":        {"start_block": "100", "end_block": "200", "hash": "not-a-hash"},
+		"short hash":          {"start_block": "100", "end_block": "200", "hash": "0x02"},
+		"long hash":           {"start_block": "100", "end_block": "200", "hash": hash + "00"},
 		"all attributes gone": {},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, _, err := parseMilestoneRange(attrs)
-			require.Error(t, err, "a milestone event without a usable range must be rejected")
+			require.Error(t, err, "a milestone event without a usable range or hash must be rejected")
 		})
 	}
 }

@@ -2,10 +2,12 @@ package heimdallws
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -380,7 +382,7 @@ func (c *HeimdallWSClient) readMessages(ctx context.Context) {
 }
 
 // parseMilestoneRange extracts the start and end block of a milestone event
-// and rejects events without a usable range.
+// and rejects events without a usable range or hash.
 func parseMilestoneRange(attrs map[string]string) (uint64, uint64, error) {
 	startBlock, err := strconv.ParseUint(attrs["start_block"], 10, 64)
 	if err != nil {
@@ -393,8 +395,11 @@ func parseMilestoneRange(attrs map[string]string) (uint64, uint64, error) {
 	if endBlock == 0 || endBlock < startBlock {
 		return 0, 0, fmt.Errorf("invalid milestone range %d-%d", startBlock, endBlock)
 	}
-	if attrs["hash"] == "" {
-		return 0, 0, fmt.Errorf("missing milestone hash")
+	// Heimdall encodes the hash as bare hex; common.HexToHash would turn
+	// anything that is not 32 bytes of hex into a zero or padded hash.
+	hash, err := hex.DecodeString(strings.TrimPrefix(attrs["hash"], "0x"))
+	if err != nil || len(hash) != common.HashLength {
+		return 0, 0, fmt.Errorf("invalid milestone hash %q", attrs["hash"])
 	}
 	return startBlock, endBlock, nil
 }
