@@ -447,6 +447,11 @@ type testBulkServer struct {
 
 func newTestBulkServer(t *testing.T) *testBulkServer {
 	t.Helper()
+	return newTestBulkServerWithConfig(t, Config{MaxPeers: 10})
+}
+
+func newTestBulkServerWithConfig(t *testing.T, config Config) *testBulkServer {
+	t.Helper()
 
 	priv, err := crypto.GenerateKey()
 	if err != nil {
@@ -459,8 +464,10 @@ func newTestBulkServer(t *testing.T) *testBulkServer {
 	localnode := enode.NewLocalNode(db, priv)
 	localnode.SetFallbackIP(net.IP{127, 0, 0, 1})
 
+	config.PrivateKey = priv
+	config.Logger = log.Root()
 	srv := &Server{
-		Config:     Config{PrivateKey: priv, Logger: log.Root()},
+		Config:     config,
 		nodedb:     db,
 		localnode:  localnode,
 		log:        log.Root(),
