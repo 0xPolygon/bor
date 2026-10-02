@@ -2,15 +2,20 @@
 
 set -eu
 
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+repo_root=$(CDPATH= cd -- "${script_dir}/../.." && pwd)
+tmp_root="${TMPDIR:-/tmp}"
+tmp_root="${tmp_root%/}"
+
 compose_file="${COMPOSE_FILE:-docker-compose.amoy-sidecar-pair.yml}"
 project_name="${COMPOSE_PROJECT_NAME:-bor}"
 log_tail_lines="${LOG_TAIL_LINES:-2000}"
 rounds="${ROUNDS:-5}"
-benchmark_dir="${BENCHMARK_DIR:-/private/tmp/bor-amoy-sidecar-bench}"
+benchmark_dir="${BENCHMARK_DIR:-${tmp_root}/bor-amoy-sidecar-bench}"
 
-template_a="${TEMPLATE_A:-/Users/djones/Github/bor/packaging/docker/bor-amoy-sidecar-a.toml}"
-template_b="${TEMPLATE_B:-/Users/djones/Github/bor/packaging/docker/bor-amoy-sidecar-b.toml}"
-template_observer="${TEMPLATE_OBSERVER:-/Users/djones/Github/bor/packaging/docker/bor-amoy-sidecar-observer.toml}"
+template_a="${TEMPLATE_A:-${repo_root}/packaging/docker/bor-amoy-sidecar-a.toml}"
+template_b="${TEMPLATE_B:-${repo_root}/packaging/docker/bor-amoy-sidecar-b.toml}"
+template_observer="${TEMPLATE_OBSERVER:-${repo_root}/packaging/docker/bor-amoy-sidecar-observer.toml}"
 
 config_dir="${benchmark_dir}/configs"
 mkdir -p "${config_dir}"

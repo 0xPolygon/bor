@@ -6,4 +6,3 @@ tests/testdata
 .git
 .gocache
 .gomodcache
-prod.pprof
