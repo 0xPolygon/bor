@@ -54,12 +54,7 @@ import (
 // transfer logs are skipped identically on both paths; the 0x1010
 // LogTransfer for value transfers is emitted unconditionally by
 // core.Transfer and is part of the compared receipts.
-var fuzzChainConfig = func() *params.ChainConfig {
-	c := *params.MergedTestChainConfig
-	bor := *params.BorTestChainConfig.Bor
-	c.Bor = &bor
-	return &c
-}()
+var fuzzChainConfig = params.MergedTestChainConfig
 
 // runSerial applies txs sequentially via ApplyTransactionWithEVM (the
 // production serial path — it finalises per tx and emits receipts) on
