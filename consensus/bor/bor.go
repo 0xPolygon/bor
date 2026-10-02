@@ -1980,11 +1980,7 @@ func (c *Bor) FetchAndCommitSpan(
 // slicing past the end of the response. A negative override is treated like
 // zero and keeps no records.
 func truncateEventRecords(records []*clerk.EventRecordWithTime, limit int) []*clerk.EventRecordWithTime {
-	limit = max(limit, 0)
-	if limit < len(records) {
-		return records[:limit]
-	}
-	return records
+	return records[:min(max(limit, 0), len(records))]
 }
 
 // CommitStates commit states
