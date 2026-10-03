@@ -347,3 +347,14 @@ func (ev *msgEventer) Close() error {
 
 	return nil
 }
+
+func (ev *msgEventer) Done() <-chan struct{} {
+	if rw, ok := ev.MsgReadWriter.(interface{ Done() <-chan struct{} }); ok {
+		return rw.Done()
+	}
+	return nil
+}
+
+func (ev *msgEventer) bulkBuffers() *bulkBufferBudget {
+	return bulkBuffersFor(ev.MsgReadWriter)
+}
