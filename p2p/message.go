@@ -355,3 +355,7 @@ func (ev *msgEventer) Done() <-chan struct{} {
 	}
 	return nil
 }
+
+func (ev *msgEventer) bulkBuffers() *bulkBufferBudget {
+	return bulkBuffersFor(ev.MsgReadWriter)
+}

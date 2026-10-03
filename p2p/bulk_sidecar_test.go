@@ -503,7 +503,9 @@ func newTestBulkServerWithConfig(t *testing.T, config Config) *testBulkServer {
 }
 
 func (s *testBulkServer) setPeer(peer *Peer) {
-	s.peers[peer.ID()] = peer
+	s.server.doPeerOp(func(peers map[enode.ID]*Peer) {
+		peers[peer.ID()] = peer
+	})
 }
 
 func (s *testBulkServer) setQUICPort() {
