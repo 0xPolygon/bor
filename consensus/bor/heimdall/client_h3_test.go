@@ -72,9 +72,25 @@ func TestNewHeimdallClientFetchStatusOverQUIC(t *testing.T) {
 func TestNewHeimdallClientRejectsInvalidQUICEndpoint(t *testing.T) {
 	t.Parallel()
 
-	client, err := NewHeimdallClientWithError("h3:///status-only", 5*time.Second)
-	require.Nil(t, client)
-	require.ErrorContains(t, err, "empty host")
+	for _, endpoint := range []string{"h3:///status-only", "h3://:1317", "h3://[]:1317", "h3://user@:1317", "h3://"} {
+		t.Run(endpoint, func(t *testing.T) {
+			client, err := NewHeimdallClientWithError(endpoint, 5*time.Second)
+			require.Nil(t, client)
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestNewHeimdallClientQUICEndpointHostnames(t *testing.T) {
+	for _, host := range []string{"localhost:1317", "127.0.0.1:1317", "[::1]:1317", "heimdall.example"} {
+		t.Run(host, func(t *testing.T) {
+			client, err := NewHeimdallClientWithError("h3://"+host+"/api", time.Second)
+			require.NoError(t, err)
+			defer client.Close()
+			require.Equal(t, "https://"+host+"/api", client.urlString)
+			require.IsType(t, &http3.Transport{}, client.client.Transport)
+		})
+	}
 }
 
 func TestExternalHeimdallFetchStatusOverQUIC(t *testing.T) {

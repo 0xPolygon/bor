@@ -575,6 +575,10 @@ func (rw *protoRW) canContribute(code uint64) bool {
 	return rw.Name == "eth" && rw.CanContribute != nil && rw.CanContribute(code-rw.offset)
 }
 
+func (rw *protoRW) Done() <-chan struct{} {
+	return rw.closed
+}
+
 func (rw *protoRW) WriteMsg(msg Msg) (err error) {
 	if msg.Code >= rw.Length {
 		return newPeerError(errInvalidMsgCode, "not handled")

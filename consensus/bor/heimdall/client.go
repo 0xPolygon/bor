@@ -116,7 +116,7 @@ func newHeimdallHTTPClient(urlString string, timeout time.Duration, rootCAs *x50
 	if err != nil || u.Scheme != "h3" {
 		return urlString, client, nil, err
 	}
-	if u.Host == "" {
+	if u.Hostname() == "" {
 		return "", http.Client{}, nil, fmt.Errorf("invalid Heimdall QUIC endpoint %q: empty host", urlString)
 	}
 

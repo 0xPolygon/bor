@@ -300,7 +300,9 @@ func serviceGetBlockBodiesQuery(chain *core.BlockChain, query GetBlockBodiesRequ
 			body := &BlockBody{
 				Transactions: []*types.Transaction{},
 				Uncles:       []*types.Header{},
-				Withdrawals:  []*types.Withdrawal{},
+			}
+			if header.WithdrawalsHash != nil {
+				body.Withdrawals = []*types.Withdrawal{}
 			}
 			data, err := rlp.EncodeToBytes(body)
 			if err != nil {
