@@ -18,6 +18,7 @@ package p2p
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -42,6 +43,7 @@ func NewMultiChannelRoutedMsgReadWriter(primary MsgReadWriter, route func(code u
 		reads:   make(chan Msg),
 		closed:  make(chan struct{}),
 		bulks:   make(map[string]*routedBulkLane),
+		buffers: bulkBuffersFor(primary),
 	}
 	if source, ok := primary.(interface{ Done() <-chan struct{} }); ok && source.Done() != nil {
 		go rw.watchPrimary(source.Done())
@@ -131,13 +133,15 @@ type routedMsgReadWriter struct {
 	bulkMu    sync.RWMutex
 	bulks     map[string]*routedBulkLane
 	bulkSeq   uint64
+	buffers   *bulkBufferBudget
 }
 
 type routedBulkLane struct {
 	id        uint64
 	channel   string
 	rw        MsgReadWriter
-	closed    chan struct{}
+	closed    <-chan struct{}
+	cancel    context.CancelFunc
 	closeOnce sync.Once
 	closeErr  error
 }
@@ -178,6 +182,11 @@ func (rw *routedMsgReadWriter) WriteMsg(msg Msg) error {
 	if msg.Size > bulkMaxMessageSize {
 		return rw.writeFallback(msg, channel)
 	}
+	// Writes can use the primary lane without copying when buffers are busy.
+	if !rw.buffers.tryAcquireWrite(msg.Size) {
+		return rw.writeFallback(msg, channel)
+	}
+	defer rw.buffers.releaseWrite(msg.Size)
 	payload, err := readRoutedPayload(msg)
 	if err != nil {
 		return err
@@ -225,11 +234,13 @@ func (rw *routedMsgReadWriter) AttachBulk(bulk MsgReadWriter) {
 }
 
 func (rw *routedMsgReadWriter) AttachBulkChannels(channels []string, bulk MsgReadWriter) {
-	lane := rw.setBulkChannels(channels, bulk)
+	ctx, cancel := context.WithCancel(context.Background())
+	lane := rw.setBulkChannels(channels, bulk, ctx.Done(), cancel)
 	if lane == nil {
+		cancel()
 		return
 	}
-	go rw.readBulkLoop(lane)
+	go rw.readBulkLoop(ctx, lane)
 }
 
 func (rw *routedMsgReadWriter) AttachBulkChannel(channel string, bulk MsgReadWriter) {
@@ -260,7 +271,7 @@ func (rw *routedMsgReadWriter) HasBulk() bool {
 	return len(rw.bulks) > 0
 }
 
-func (rw *routedMsgReadWriter) setBulkChannels(channels []string, bulk MsgReadWriter) *routedBulkLane {
+func (rw *routedMsgReadWriter) setBulkChannels(channels []string, bulk MsgReadWriter, closed <-chan struct{}, cancel context.CancelFunc) *routedBulkLane {
 	if bulk == nil {
 		return nil
 	}
@@ -282,7 +293,8 @@ func (rw *routedMsgReadWriter) setBulkChannels(channels []string, bulk MsgReadWr
 	lane := &routedBulkLane{
 		channel: unique[0],
 		rw:      bulk,
-		closed:  make(chan struct{}),
+		closed:  closed,
+		cancel:  cancel,
 	}
 	if !rw.installBulk(unique, lane) {
 		lane.closeReader()
@@ -334,10 +346,10 @@ func (rw *routedMsgReadWriter) readPrimaryLoop() {
 	}
 }
 
-func (rw *routedMsgReadWriter) readBulkLoop(lane *routedBulkLane) {
+func (rw *routedMsgReadWriter) readBulkLoop(ctx context.Context, lane *routedBulkLane) {
 	defer lane.closeReader()
 	for {
-		msg, err := rw.readBulkMsg(lane)
+		err := rw.forwardBulkMsg(ctx, lane)
 		if !rw.isCurrentBulk(lane.id) {
 			return
 		}
@@ -345,26 +357,35 @@ func (rw *routedMsgReadWriter) readBulkLoop(lane *routedBulkLane) {
 			rw.failBulkRead(lane.channel, lane.id, err)
 			return
 		}
-		if err := rw.forwardMsg(msg, lane.closed); err != nil {
-			return
-		}
 	}
 }
 
-func (rw *routedMsgReadWriter) readBulkMsg(lane *routedBulkLane) (Msg, error) {
+func (rw *routedMsgReadWriter) forwardBulkMsg(ctx context.Context, lane *routedBulkLane) error {
 	msg, err := lane.rw.ReadMsg()
 	if err != nil || !rw.isCurrentBulk(lane.id) {
-		return msg, err
+		return err
+	}
+	if msg.Size > bulkMaxMessageSize {
+		return fmt.Errorf("routed message too large: %d", msg.Size)
+	}
+	if err := rw.buffers.acquire(ctx, msg.Size); err != nil {
+		return err
 	}
 	// Protocol handlers must never observe a partially received sidecar frame.
 	payload, err := readRoutedPayload(msg)
-	msg.Payload = bytes.NewReader(payload)
-	return msg, err
+	if err != nil {
+		rw.buffers.release(msg.Size)
+		return err
+	}
+	buffered := &bulkBufferedPayload{reader: *bytes.NewReader(payload), budget: rw.buffers, size: msg.Size}
+	defer buffered.release()
+	msg.Payload = buffered
+	return rw.forwardMsg(msg, lane.closed)
 }
 
 func (lane *routedBulkLane) closeReader() {
 	lane.closeOnce.Do(func() {
-		close(lane.closed)
+		lane.cancel()
 		if closer, ok := lane.rw.(io.Closer); ok {
 			lane.closeErr = closer.Close()
 			if lane.closeErr != nil {
@@ -389,11 +410,11 @@ func (rw *routedMsgReadWriter) forwardMsg(msg Msg, laneClosed <-chan struct{}) e
 	if msg.Size == 0 {
 		return nil
 	}
+	// Once delivered, the complete buffered frame belongs to the handler.
+	// Replacing its lane must not truncate it; peer shutdown still cancels it.
 	select {
 	case <-rw.closed:
 		return rw.readErr
-	case <-laneClosed:
-		return io.EOF
 	case err := <-done:
 		return err
 	}

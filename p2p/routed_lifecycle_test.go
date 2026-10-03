@@ -200,13 +200,21 @@ func TestRoutedLifecycleLaneCancellation(t *testing.T) {
 			go func() {
 				result <- rw.forwardMsg(Msg{Size: 1, Payload: bytes.NewReader([]byte{0xc0})}, closed)
 			}()
+			var msg Msg
 			if delivered {
-				readRoutedTestMessage(t, rw)
+				msg = readRoutedTestMessage(t, rw)
 			}
 			close(closed)
+			if delivered {
+				require.NoError(t, msg.Discard())
+			}
 			select {
 			case err := <-result:
-				require.ErrorIs(t, err, io.EOF)
+				if delivered {
+					require.NoError(t, err)
+				} else {
+					require.ErrorIs(t, err, io.EOF)
+				}
 			case <-time.After(time.Second):
 				t.Fatal("lane cancellation did not release forward")
 			}

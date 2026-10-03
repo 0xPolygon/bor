@@ -735,6 +735,7 @@ func TestMultiChannelRoutedMsgReadWriterConcurrentAttachAndTraffic(t *testing.T)
 		AttachBulkChannel(string, MsgReadWriter)
 		ReadMsg() (Msg, error)
 		WriteMsg(Msg) error
+		Done() <-chan struct{}
 	})
 	if !ok {
 		t.Fatal("expected multi-channel routed msg read writer")
@@ -759,6 +760,13 @@ func TestMultiChannelRoutedMsgReadWriterConcurrentAttachAndTraffic(t *testing.T)
 				return
 			}
 			if err := msg.Discard(); err != nil {
+				if errors.Is(err, io.ErrUnexpectedEOF) {
+					select {
+					case <-routed.Done():
+						return
+					default:
+					}
+				}
 				readErrc <- err
 				return
 			}

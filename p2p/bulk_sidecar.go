@@ -601,21 +601,30 @@ func (s *bulkSession) openChannel(ctx context.Context, channel string) (MsgReadW
 		if err != nil {
 			return nil, err
 		}
-		if err := writeBulkControl(stream, bulkChannelHello{Version: bulkSidecarVersion, Channel: channel}); err != nil {
-			return nil, err
-		}
-		rw := &bulkStreamMsgRW{
-			stream:  stream,
-			channel: channel,
-			log:     log.New("peer", s.remoteID, "channel", channel),
-		}
-		s.storeChannel(channel, rw)
-		return rw, nil
+		return s.openChannelStream(stream, channel)
 	}
 	return s.waitChannel(ctx, channel)
 }
 
-func (s *bulkSession) acceptChannel(stream *quic.Stream) error {
+func (s *bulkSession) openChannelStream(stream bulkFrameStream, channel string) (MsgReadWriter, error) {
+	rw := &bulkStreamMsgRW{
+		stream: stream, channel: channel,
+		log: log.New("peer", s.remoteID, "channel", channel),
+	}
+	if err := writeBulkControl(stream, bulkChannelHello{Version: bulkSidecarVersion, Channel: channel}); err != nil {
+		return nil, errors.Join(err, rw.Close())
+	}
+	s.storeChannel(channel, rw)
+	return rw, nil
+}
+
+func (s *bulkSession) acceptChannel(stream bulkFrameStream) (err error) {
+	rw := &bulkStreamMsgRW{stream: stream}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, rw.Close())
+		}
+	}()
 	var hello bulkChannelHello
 	if err := readBulkControl(stream, bulkChannelControlMaxSize, &hello); err != nil {
 		return err
@@ -626,11 +635,9 @@ func (s *bulkSession) acceptChannel(stream *quic.Stream) error {
 	if hello.Channel == "" || len(hello.Channel) > 64 {
 		return errors.New("invalid bulk channel name")
 	}
-	s.storeChannel(hello.Channel, &bulkStreamMsgRW{
-		stream:  stream,
-		channel: hello.Channel,
-		log:     log.New("peer", s.remoteID, "channel", hello.Channel),
-	})
+	rw.channel = hello.Channel
+	rw.log = log.New("peer", s.remoteID, "channel", hello.Channel)
+	s.storeChannel(hello.Channel, rw)
 	return nil
 }
 
@@ -778,7 +785,7 @@ func (rw *bulkStreamMsgRW) Close() error {
 	return err
 }
 
-func writeBulkControl(stream *quic.Stream, msg interface{}) error {
+func writeBulkControl(stream bulkFrameStream, msg interface{}) error {
 	payload, err := rlp.EncodeToBytes(msg)
 	if err != nil {
 		return err
@@ -831,7 +838,7 @@ func socketBufferSize(conn *net.UDPConn, opt int) int {
 	return value
 }
 
-func readBulkControl(stream *quic.Stream, maxSize uint32, out interface{}) error {
+func readBulkControl(stream bulkFrameStream, maxSize uint32, out interface{}) error {
 	if err := stream.SetReadDeadline(time.Now().Add(bulkAuthTimeout)); err != nil {
 		return err
 	}

@@ -509,7 +509,9 @@ outer:
 
 func (p *Peer) startProtocols(writeStart <-chan struct{}, writeErr chan<- error) {
 	p.wg.Add(len(p.running))
+	buffers := newBulkBufferBudget()
 	for _, proto := range p.running {
+		proto.buffers = buffers
 		proto.closed = p.closed
 		proto.wstart = writeStart
 		proto.werr = writeErr
@@ -545,13 +547,16 @@ func (p *Peer) getProto(code uint64) (*protoRW, error) {
 
 type protoRW struct {
 	Protocol
-	in     chan Msg        // receives read messages
-	closed <-chan struct{} // receives when peer is shutting down
-	wstart <-chan struct{} // receives when write may start
-	werr   chan<- error    // for write results
-	offset uint64
-	w      MsgWriter
+	in      chan Msg        // receives read messages
+	closed  <-chan struct{} // receives when peer is shutting down
+	wstart  <-chan struct{} // receives when write may start
+	werr    chan<- error    // for write results
+	offset  uint64
+	w       MsgWriter
+	buffers *bulkBufferBudget
 }
+
+func (rw *protoRW) bulkBuffers() *bulkBufferBudget { return rw.buffers }
 
 func (rw *protoRW) Done() <-chan struct{} {
 	return rw.closed
