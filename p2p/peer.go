@@ -553,6 +553,10 @@ type protoRW struct {
 	w      MsgWriter
 }
 
+func (rw *protoRW) Done() <-chan struct{} {
+	return rw.closed
+}
+
 func (rw *protoRW) WriteMsg(msg Msg) (err error) {
 	if msg.Code >= rw.Length {
 		return newPeerError(errInvalidMsgCode, "not handled")
