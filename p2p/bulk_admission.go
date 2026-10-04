@@ -30,11 +30,18 @@ func newBulkConnContext(maxPeers, maxPendingPeers int) func(context.Context, *qu
 			<-pending
 			return nil, errBulkAdmissionLimit
 		}
+		releaseWindow, err := reserveBulkQUICWindow()
+		if err != nil {
+			<-connections
+			<-pending
+			return nil, err
+		}
 		releasePending := sync.OnceFunc(func() { <-pending })
 		// QUIC cancels this context on handshake failure as well as connection close.
 		context.AfterFunc(ctx, func() {
 			releasePending()
 			<-connections
+			releaseWindow()
 		})
 		return context.WithValue(ctx, bulkPendingAuthKey{}, releasePending), nil
 	}

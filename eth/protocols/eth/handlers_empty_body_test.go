@@ -2,6 +2,7 @@ package eth
 
 import (
 	"math/big"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -11,6 +12,15 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rlp"
 )
+
+func TestHeavyResponseWorkerLimit(t *testing.T) {
+	original := runtime.GOMAXPROCS(0)
+	defer runtime.GOMAXPROCS(original)
+	for _, cpus := range []int{1, 2, 4, 5, 16} {
+		runtime.GOMAXPROCS(cpus)
+		require.Equal(t, min(cpus, 4), heavyResponseWorkerLimit())
+	}
+}
 
 func TestServiceGetBlockBodiesQueryEmptyBodyEncoding(t *testing.T) {
 	for _, withdrawals := range []bool{false, true} {

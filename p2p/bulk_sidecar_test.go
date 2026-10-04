@@ -51,8 +51,8 @@ func TestBulkSessionStoreChannelReplacesExistingLane(t *testing.T) {
 	defer secondApp.Close()
 	defer secondNet.Close()
 
-	session.storeChannel("eth-bulk", firstNet)
-	session.storeChannel("eth-bulk", secondNet)
+	session.storeChannel(nil, "eth-bulk", firstNet)
+	session.storeChannel(nil, "eth-bulk", secondNet)
 
 	got, ok := session.getChannel("eth-bulk")
 	if !ok {
@@ -75,8 +75,8 @@ func TestBulkSessionStoreChannelClosesReplacedLane(t *testing.T) {
 	defer secondApp.Close()
 	defer secondNet.Close()
 
-	session.storeChannel("eth-bulk", first)
-	session.storeChannel("eth-bulk", secondNet)
+	session.storeChannel(nil, "eth-bulk", first)
+	session.storeChannel(nil, "eth-bulk", secondNet)
 
 	select {
 	case <-first.closed:
@@ -146,11 +146,11 @@ func testBulkSidecarOpenChannelRoundTrip(t *testing.T, inbound string) {
 	results := make(chan openResult, 2)
 
 	go func() {
-		rw, err := left.bulk.OpenChannel(leftPeer, "snap-bulk")
+		rw, err := left.bulk.OpenChannel(leftPeer, "snap-trie")
 		results <- openResult{side: "left", rw: rw, err: err}
 	}()
 	go func() {
-		rw, err := right.bulk.OpenChannel(rightPeer, "snap-bulk")
+		rw, err := right.bulk.OpenChannel(rightPeer, "snap-trie")
 		results <- openResult{side: "right", rw: rw, err: err}
 	}()
 
@@ -521,6 +521,8 @@ func (s *testBulkServer) close() {
 
 func newTestTrackedPeer(node *enode.Node) *Peer {
 	return &Peer{
+		running: map[string]*protoRW{"eth": {}, "snap": {}, "wit": {}},
+		closed:  make(chan struct{}),
 		rw: &conn{
 			node: node,
 		},

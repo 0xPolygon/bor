@@ -55,9 +55,18 @@ const (
 	// maxHeavyResponseWorkers bounds concurrent large body/receipt lookups so a
 	// burst of expensive requests can't monopolize handler resources.
 	maxHeavyResponseWorkers = 4
+
+	// heavyResponseQueueTimeout caps how long a peer's message loop may wait
+	// for one of those slots before replying without results.
+	heavyResponseQueueTimeout = 250 * time.Millisecond
 )
 
-var heavyResponseServeSlots = make(chan struct{}, heavyResponseWorkerLimit())
+var (
+	heavyResponseServeSlots = make(chan struct{}, heavyResponseWorkerLimit())
+
+	// heavyResponseOverflowMeter counts queries skipped at the queue timeout.
+	heavyResponseOverflowMeter = metrics.NewRegisteredMeter("eth/serves/heavy/overflow", nil)
+)
 
 func heavyResponseWorkerLimit() int {
 	limit := runtime.GOMAXPROCS(0)

@@ -3,6 +3,9 @@ package wit
 import (
 	"crypto/rand"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
@@ -156,6 +159,7 @@ func TestIsBulkWitMsgRoutesAllMessages(t *testing.T) {
 	}{
 		{NewWitnessMsg, true},
 		{NewWitnessHashesMsg, true},
+		{SignedNewWitnessHashesMsg, true},
 		{GetMsgWitness, true},
 		{MsgWitness, true},
 		{GetWitnessMetadataMsg, true},
@@ -166,6 +170,45 @@ func TestIsBulkWitMsgRoutesAllMessages(t *testing.T) {
 		if got := isBulkWitMsg(test.code); got != test.want {
 			t.Fatalf("isBulkWitMsg(%d) = %v, want %v", test.code, got, test.want)
 		}
+	}
+}
+
+func TestPeerAttachBulkRWRoutesSignedWitAnnouncements(t *testing.T) {
+	for _, lane := range []string{"bulk", "primary", "fallback"} {
+		t.Run(lane, func(t *testing.T) {
+			primaryApp, primaryNet := p2p.MsgPipe()
+			defer primaryApp.Close()
+			defer primaryNet.Close()
+			bulkApp, bulkNet := p2p.MsgPipe()
+			defer bulkApp.Close()
+			defer bulkNet.Close()
+			peer := NewPeer(WIT2, p2p.NewPeer(enode.ID{1}, "wit-test", nil), primaryNet, log.New())
+			defer peer.Close()
+			expected := primaryApp
+			if lane != "primary" {
+				peer.AttachBulkRW(bulkNet)
+				if lane == "bulk" {
+					expected = bulkApp
+				} else {
+					require.NoError(t, bulkApp.Close())
+					require.Eventually(t, func() bool { return !peer.HasBulkRW() }, time.Second, time.Millisecond)
+				}
+			}
+			packet := &SignedNewWitnessHashesPacket{Announcements: []SignedWitnessAnnouncement{{
+				BlockHash: common.Hash{1}, BlockNumber: 42, WitnessHash: common.Hash{2}, Signature: make([]byte, 65),
+			}}}
+			sent, received := make(chan error, 1), make(chan error, 1)
+			go func() { sent <- peer.sendSignedNewWitnessHashes(packet) }()
+			go func() { received <- p2p.ExpectMsg(expected, SignedNewWitnessHashesMsg, packet) }()
+			for _, result := range []<-chan error{received, sent} {
+				select {
+				case err := <-result:
+					require.NoError(t, err)
+				case <-time.After(time.Second):
+					t.Fatalf("signed witness announcement did not use %s lane", lane)
+				}
+			}
+		})
 	}
 }
 

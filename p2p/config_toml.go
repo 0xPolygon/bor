@@ -34,8 +34,8 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		Protocols          []Protocol       `toml:"-" json:"-"`
 		ListenAddr         string
 		DiscAddr           string
-		EnableBulkSidecar  bool   `toml:",omitempty"`
-		BulkListenAddr     string `toml:",omitempty"`
+		EnableBulkSidecar  bool          `toml:",omitempty"`
+		BulkListenAddr     string        `toml:",omitempty"`
 		NAT                nat.Interface `toml:",omitempty"`
 		Dialer             NodeDialer    `toml:"-"`
 		NoDial             bool          `toml:",omitempty"`
@@ -94,8 +94,8 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		Protocols          []Protocol       `toml:"-" json:"-"`
 		ListenAddr         *string
 		DiscAddr           *string
-		EnableBulkSidecar  *bool   `toml:",omitempty"`
-		BulkListenAddr     *string `toml:",omitempty"`
+		EnableBulkSidecar  *bool      `toml:",omitempty"`
+		BulkListenAddr     *string    `toml:",omitempty"`
 		NAT                *configNAT `toml:",omitempty"`
 		Dialer             NodeDialer `toml:"-"`
 		NoDial             *bool      `toml:",omitempty"`

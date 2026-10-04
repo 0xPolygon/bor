@@ -22,6 +22,16 @@ func TestBulkBufferWriteHeadroom(t *testing.T) {
 			budget.release(2)
 			budget.releaseWrite(2)
 			assertBulkBudgetAvailable(t, budget, 2)
+			peerLimit, processLimit := int64(4), int64(4)
+			if scope == "peer" {
+				peerLimit = 2
+			} else {
+				processLimit = 2
+			}
+			require.True(t, budget.writePeer.TryAcquire(peerLimit))
+			budget.writePeer.Release(peerLimit)
+			require.True(t, budget.writeGlobal.TryAcquire(processLimit))
+			budget.writeGlobal.Release(processLimit)
 		})
 	}
 }

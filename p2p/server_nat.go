@@ -83,6 +83,18 @@ func (srv *Server) consumePortMappingRequests() {
 	}
 }
 
+func nextMappingRefresh(mappings map[string]*portMapping) (mclock.AbsTime, bool) {
+	var next mclock.AbsTime
+	found := false
+	for _, mapping := range mappings {
+		if !found || mapping.nextTime < next {
+			next = mapping.nextTime
+			found = true
+		}
+	}
+	return next, found
+}
+
 // portMappingLoop manages port mappings for UDP and TCP.
 func (srv *Server) portMappingLoop() {
 	defer srv.loopWG.Done()
@@ -112,13 +124,7 @@ func (srv *Server) portMappingLoop() {
 
 	for {
 		// Schedule refresh of existing mappings.
-		var nextTime mclock.AbsTime
-		for _, m := range mappings {
-			if nextTime == 0 || m.nextTime < nextTime {
-				nextTime = m.nextTime
-			}
-		}
-		if nextTime != 0 {
+		if nextTime, ok := nextMappingRefresh(mappings); ok {
 			refresh.Schedule(nextTime)
 		}
 

@@ -6,7 +6,7 @@ The ```bor server``` command runs the Bor client.
 
 - ```bor.devfakeauthor```: Run miner without validator set authorization [dev mode] : Use with '--bor.withoutheimdall' (default: false)
 
-- ```bor.heimdall```: URL of Heimdall service (comma-separated for failover: "url1,url2"). Use h3://host:port to force the QUIC sidecar (default: http://localhost:1317)
+- ```bor.heimdall```: URL of Heimdall service (comma-separated for failover: "url1,url2") (default: http://localhost:1317)
 
 - ```bor.heimdallWS```: Address of Heimdall WS subscription service (comma-separated for failover: "addr1,addr2")
 
@@ -293,10 +293,6 @@ The ```bor server``` command runs the Bor client.
 - ```bind```: Network binding address (default: 0.0.0.0)
 
 - ```bootnodes```: Comma separated enode URLs for P2P discovery bootstrap
-
-- ```bulk-port```: UDP port for the QUIC bulk-transfer sidecar (default: 30304)
-
-- ```bulk-sidecar```: Enable the QUIC bulk-transfer sidecar for snap and large sync traffic (default: false)
 
 - ```disable-tx-propagation```: Disable transaction broadcast and announcements to all peers (default: false)
 

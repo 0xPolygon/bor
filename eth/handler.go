@@ -618,11 +618,6 @@ func (h *handler) attachBulkSidecar(peer *eth.Peer, snapPeer *snap.Peer, witPeer
 	go func() {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		closeRW := func(rw p2p.MsgReadWriter) {
-			if closer, ok := rw.(interface{ Close() error }); ok {
-				_ = closer.Close()
-			}
-		}
 		go func() {
 			select {
 			case <-peer.Peer.Done():
@@ -630,48 +625,43 @@ func (h *handler) attachBulkSidecar(peer *eth.Peer, snapPeer *snap.Peer, witPeer
 			case <-ctx.Done():
 			}
 		}()
-		for _, channel := range []string{"eth-control", "eth-blocks", "eth-tx", "eth-tx-fetch", "eth-bulk"} {
-			if ctx.Err() != nil {
-				return
-			}
-			if rw, err := sidecar.OpenChannelContext(ctx, peer.Peer, channel); err != nil {
-				peer.Log().Debug("Bulk eth sidecar unavailable", "channel", channel, "err", err)
-			} else if ctx.Err() != nil {
-				closeRW(rw)
-				return
-			} else {
-				peer.AttachBulkChannelRW(channel, rw)
-			}
-		}
+		attachBulkChannels(ctx, sidecar, peer.Peer,
+			[]string{"eth-control", "eth-blocks", "eth-tx", "eth-tx-fetch", "eth-bulk"}, peer.AttachBulkChannelRW)
 		if snapPeer != nil {
-			for _, channel := range []string{"snap-accounts", "snap-storage", "snap-code", "snap-trie"} {
-				if ctx.Err() != nil {
-					return
-				}
-				if rw, err := sidecar.OpenChannelContext(ctx, snapPeer.Peer, channel); err != nil {
-					snapPeer.Log().Debug("Bulk snap sidecar unavailable", "channel", channel, "err", err)
-				} else if ctx.Err() != nil {
-					closeRW(rw)
-					return
-				} else {
-					snapPeer.AttachBulkChannelRW(channel, rw)
-				}
-			}
+			attachBulkChannels(ctx, sidecar, snapPeer.Peer,
+				[]string{"snap-accounts", "snap-storage", "snap-code", "snap-trie"}, snapPeer.AttachBulkChannelRW)
 		}
 		if witPeer != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			if rw, err := sidecar.OpenChannelContext(ctx, witPeer.Peer, "wit-bulk"); err != nil {
-				witPeer.Log().Debug("Bulk wit sidecar unavailable", "err", err)
-			} else if ctx.Err() != nil {
-				closeRW(rw)
-				return
-			} else {
-				witPeer.AttachBulkRW(rw)
-			}
+			attachBulkChannels(ctx, sidecar, witPeer.Peer, []string{"wit-bulk"},
+				func(_ string, rw p2p.MsgReadWriter) { witPeer.AttachBulkRW(rw) })
 		}
 	}()
+}
+
+type bulkChannelOpener interface {
+	OpenChannelContext(context.Context, *p2p.Peer, string) (p2p.MsgReadWriter, error)
+}
+
+func attachBulkChannels(ctx context.Context, sidecar bulkChannelOpener, peer *p2p.Peer, channels []string, attach func(string, p2p.MsgReadWriter)) {
+	for _, channel := range channels {
+		if ctx.Err() != nil {
+			return
+		}
+		rw, err := sidecar.OpenChannelContext(ctx, peer, channel)
+		if err != nil {
+			peer.Log().Debug("Bulk sidecar unavailable", "channel", channel, "err", err)
+			continue
+		}
+		if ctx.Err() != nil {
+			if closer, ok := rw.(interface{ Close() error }); ok {
+				if err := closer.Close(); err != nil {
+					peer.Log().Debug("Bulk sidecar channel close failed", "channel", channel, "err", err)
+				}
+			}
+			return
+		}
+		attach(channel, rw)
+	}
 }
 
 // jailPeer jails a peer to prevent reconnection for a period of time

@@ -262,9 +262,20 @@ func handleGetBlockBodies(backend Backend, msg Decoder, peer *Peer) error {
 	return peer.ReplyBlockBodiesRLP(query.RequestId, response)
 }
 
+// serveHeavyResponseQuery bounds lookup concurrency and releases the slot
+// before the caller writes its reply. Admission timeout returns an empty
+// response, preserving the worker cap without disconnecting requesting peers.
 func serveHeavyResponseQuery(query func() []rlp.RawValue) []rlp.RawValue {
-	heavyResponseServeSlots <- struct{}{}
-	defer func() { <-heavyResponseServeSlots }()
+	timer := time.NewTimer(heavyResponseQueueTimeout)
+	defer timer.Stop()
+
+	select {
+	case heavyResponseServeSlots <- struct{}{}:
+		defer func() { <-heavyResponseServeSlots }()
+	case <-timer.C:
+		heavyResponseOverflowMeter.Mark(1)
+		return nil
+	}
 
 	return query()
 }

@@ -31,7 +31,6 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/bor/contract"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall" //nolint:typecheck
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/span"
-	"github.com/ethereum/go-ethereum/consensus/bor/heimdallgrpc"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdallws"
 	"github.com/ethereum/go-ethereum/consensus/clique"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
@@ -384,42 +383,9 @@ func CreateConsensusEngine(chainConfig *params.ChainConfig, ethConfig *Config, d
 				httpURLs := parseURLs(ethConfig.HeimdallURL)
 				grpcAddrs := parseURLs(ethConfig.HeimdallgRPCAddress)
 
-				// Build one client per endpoint.
-				// gRPC takes priority where configured; falls back to HTTP.
-				var heimdallClients []heimdall.Endpoint
-
-				n := max(len(httpURLs), len(grpcAddrs))
-				for i := 0; i < n; i++ {
-					if i < len(grpcAddrs) && grpcAddrs[i] != "" {
-						var httpURL string
-						if len(httpURLs) > 0 {
-							httpURL = httpURLs[min(i, len(httpURLs)-1)]
-						}
-
-						grpcClient, err := heimdallgrpc.NewHeimdallGRPCClient(grpcAddrs[i], httpURL, ethConfig.HeimdallTimeout)
-						if err != nil {
-							log.Error("Failed to initialize Heimdall gRPC client; falling back to HTTP",
-								"index", i, "grpc", grpcAddrs[i], "err", err)
-
-							if i < len(httpURLs) {
-								httpClient, httpErr := heimdall.NewHeimdallClientWithError(httpURLs[i], ethConfig.HeimdallTimeout)
-								if httpErr != nil {
-									return nil, fmt.Errorf("failed to initialize Heimdall HTTP client for %q: %w", httpURLs[i], httpErr)
-								}
-								heimdallClients = append(heimdallClients, httpClient)
-							}
-
-							continue
-						}
-
-						heimdallClients = append(heimdallClients, grpcClient)
-					} else if i < len(httpURLs) {
-						httpClient, err := heimdall.NewHeimdallClientWithError(httpURLs[i], ethConfig.HeimdallTimeout)
-						if err != nil {
-							return nil, fmt.Errorf("failed to initialize Heimdall HTTP client for %q: %w", httpURLs[i], err)
-						}
-						heimdallClients = append(heimdallClients, httpClient)
-					}
+				heimdallClients, err := newHeimdallEndpoints(httpURLs, grpcAddrs, ethConfig.HeimdallTimeout)
+				if err != nil {
+					return nil, err
 				}
 
 				if len(heimdallClients) == 0 {

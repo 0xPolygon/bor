@@ -6,6 +6,7 @@ import (
 
 	"math"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -1981,7 +1982,7 @@ func (c *Config) buildNode() (*node.Config, error) {
 		P2P: p2p.Config{
 			MaxPeers:             int(c.P2P.MaxPeers),
 			MaxPendingPeers:      int(c.P2P.MaxPendPeers),
-			ListenAddr:           c.P2P.Bind + ":" + strconv.Itoa(int(c.P2P.Port)),
+			ListenAddr:           net.JoinHostPort(strings.Trim(c.P2P.Bind, "[]"), strconv.FormatUint(c.P2P.Port, 10)),
 			EnableBulkSidecar:    c.P2P.EnableBulkSidecar,
 			DiscoveryV4:          c.P2P.Discovery.DiscoveryV4,
 			DiscoveryV5:          c.P2P.Discovery.DiscoveryV5,
@@ -2016,7 +2017,10 @@ func (c *Config) buildNode() (*node.Config, error) {
 		HTTPJsonRPCExecutionPoolRequestTimeout: c.JsonRPC.Http.ExecutionPoolRequestTimeout,
 	}
 	if c.P2P.EnableBulkSidecar {
-		cfg.P2P.BulkListenAddr = c.P2P.Bind + ":" + strconv.Itoa(int(c.P2P.BulkPort))
+		if c.P2P.BulkPort > 65535 {
+			return nil, fmt.Errorf("bulk port out of range: %d", c.P2P.BulkPort)
+		}
+		cfg.P2P.BulkListenAddr = net.JoinHostPort(strings.Trim(c.P2P.Bind, "[]"), strconv.FormatUint(c.P2P.BulkPort, 10))
 	}
 
 	if c.P2P.NetRestrict != "" {
