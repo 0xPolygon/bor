@@ -48,6 +48,7 @@ func (b *BulkSidecar) adoptConn(peer *Peer, conn *quic.Conn) *bulkSession {
 	session.connClosed = conn.Context().Done()
 	session.channels = make(map[string]MsgReadWriter)
 	session.signalConnLocked()
+	bulkSidecarSessionMeter.Mark(1)
 	bulkSidecarStats.markSessionEstablished()
 	b.log.Debug("Bulk sidecar session established", "peer", remote.ID(), "remote", conn.RemoteAddr())
 	return session
