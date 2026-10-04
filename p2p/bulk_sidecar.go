@@ -375,7 +375,7 @@ func (b *BulkSidecar) dialConn(ctx context.Context, remote *enode.Node) (*quic.C
 	if err != nil {
 		return nil, err
 	}
-	conn, err := quic.DialAddr(dialCtx, endpoint.String(), newBulkSidecarVerifiedTLSConfig(), b.config)
+	conn, err := b.transport.Dial(dialCtx, net.UDPAddrFromAddrPort(endpoint), newBulkSidecarVerifiedTLSConfig(), b.config)
 	if err != nil {
 		releaseWindow()
 		return nil, err
@@ -396,7 +396,7 @@ func (b *BulkSidecar) dialConn(ctx context.Context, remote *enode.Node) (*quic.C
 
 func (rw *bulkStreamMsgRW) ReadMsg() (Msg, error) {
 	// Clear the authentication or previous payload deadline while the lane is
-	// idle. A payload deadline is installed again after the next frame header.
+	// idle. Local buffer admission must not consume the payload read timeout.
 	if err := rw.stream.SetReadDeadline(time.Time{}); err != nil {
 		return Msg{}, err
 	}
@@ -408,13 +408,10 @@ func (rw *bulkStreamMsgRW) ReadMsg() (Msg, error) {
 	if size > bulkMaxMessageSize {
 		return Msg{}, fmt.Errorf("bulk message too large: %d", size)
 	}
-	if err := rw.stream.SetReadDeadline(time.Now().Add(bulkMessageReadTimeout)); err != nil {
-		return Msg{}, err
-	}
 	msg := Msg{
 		Code:    binary.BigEndian.Uint64(header[:8]),
 		Size:    size,
-		Payload: io.LimitReader(rw.stream, int64(size)),
+		Payload: io.LimitReader(&bulkPayloadReader{stream: rw.stream}, int64(size)),
 	}
 	bulkSidecarStats.markChannelRead(rw.channel)
 	rw.log.Trace("Bulk sidecar read message", "code", msg.Code, "size", msg.Size)
