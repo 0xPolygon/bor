@@ -40,7 +40,7 @@ func NewMultiChannelRoutedMsgReadWriter(primary MsgReadWriter, route func(code u
 	rw := &routedMsgReadWriter{
 		primary: primary,
 		route:   route,
-		reads:   make(chan Msg),
+		reads:   make(chan routedRead),
 		closed:  make(chan struct{}),
 		bulks:   make(map[string]*routedBulkLane),
 		buffers: bulkBuffersFor(primary),
@@ -125,7 +125,7 @@ type routedMsgReadWriter struct {
 	route          func(code uint64) string
 
 	start     sync.Once
-	reads     chan Msg
+	reads     chan routedRead
 	closed    chan struct{}
 	closeOnce sync.Once
 	readErr   error
@@ -146,6 +146,12 @@ type routedBulkLane struct {
 	closeErr  error
 }
 
+type routedRead struct {
+	msg        Msg
+	laneClosed <-chan struct{}
+	done       chan<- error
+}
+
 type bulkWriteError struct {
 	err       error
 	committed bool
@@ -162,11 +168,21 @@ func (rw *routedMsgReadWriter) ReadMsg() (Msg, error) {
 		go rw.readPrimaryLoop()
 	})
 
-	select {
-	case msg := <-rw.reads:
-		return msg, rw.terminalError()
-	case <-rw.closed:
-		return Msg{}, rw.readErr
+	for {
+		select {
+		case read := <-rw.reads:
+			// A send can win the forwarder's select even after lane cancellation.
+			// Reject retired deliveries before the handler takes ownership.
+			select {
+			case <-read.laneClosed:
+				read.done <- io.EOF
+				continue
+			default:
+				return read.msg, rw.terminalError()
+			}
+		case <-rw.closed:
+			return Msg{}, rw.readErr
+		}
 	}
 }
 
@@ -405,7 +421,7 @@ func (rw *routedMsgReadWriter) forwardMsg(msg Msg, laneClosed <-chan struct{}) e
 		return rw.readErr
 	case <-laneClosed:
 		return io.EOF
-	case rw.reads <- msg:
+	case rw.reads <- routedRead{msg: msg, laneClosed: laneClosed, done: done}:
 	}
 	if msg.Size == 0 {
 		return nil

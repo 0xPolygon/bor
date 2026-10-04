@@ -105,6 +105,7 @@ func isBulkWitMsg(code uint64) bool {
 	switch code {
 	case NewWitnessMsg,
 		NewWitnessHashesMsg,
+		SignedNewWitnessHashesMsg,
 		GetMsgWitness,
 		MsgWitness,
 		GetWitnessMetadataMsg,

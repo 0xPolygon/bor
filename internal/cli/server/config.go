@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -2191,7 +2192,7 @@ func (c *Config) buildNode(logger log.Logger) (*node.Config, error) {
 			MaxPeers:             int(c.P2P.MaxPeers),
 			PeerIdleEviction:     c.P2P.PeerIdleEviction && c.P2P.PeerReputation,
 			MaxPendingPeers:      int(c.P2P.MaxPendPeers),
-			ListenAddr:           c.P2P.Bind + ":" + strconv.Itoa(int(c.P2P.Port)),
+			ListenAddr:           net.JoinHostPort(strings.Trim(c.P2P.Bind, "[]"), strconv.FormatUint(c.P2P.Port, 10)),
 			EnableBulkSidecar:    c.P2P.EnableBulkSidecar,
 			DiscoveryV4:          c.P2P.Discovery.DiscoveryV4,
 			DiscoveryV5:          c.P2P.Discovery.DiscoveryV5,
@@ -2229,7 +2230,10 @@ func (c *Config) buildNode(logger log.Logger) (*node.Config, error) {
 		return nil, err
 	}
 	if c.P2P.EnableBulkSidecar {
-		cfg.P2P.BulkListenAddr = c.P2P.Bind + ":" + strconv.Itoa(int(c.P2P.BulkPort))
+		if c.P2P.BulkPort > 65535 {
+			return nil, fmt.Errorf("bulk port out of range: %d", c.P2P.BulkPort)
+		}
+		cfg.P2P.BulkListenAddr = net.JoinHostPort(strings.Trim(c.P2P.Bind, "[]"), strconv.FormatUint(c.P2P.BulkPort, 10))
 	}
 
 	if c.P2P.NetRestrict != "" {

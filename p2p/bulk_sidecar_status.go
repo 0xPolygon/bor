@@ -3,6 +3,7 @@ package p2p
 import (
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"github.com/quic-go/quic-go/qlog"
 	"github.com/quic-go/quic-go/qlogwriter"
@@ -62,7 +63,30 @@ type bulkSidecarStatsBook struct {
 	sessionsEstablished uint64
 	channels            map[string]*BulkSidecarChannelCounters
 	socketBuffers       BulkSidecarSocketBuffers
-	wire                BulkSidecarWireCounters
+
+	// Wire counters are touched on every QUIC packet in both directions, so
+	// they stay off the mutex that guards the per-channel bookkeeping.
+	wire bulkSidecarWireBook
+}
+
+type bulkSidecarWireBook struct {
+	packetsSent     atomic.Uint64
+	packetsReceived atomic.Uint64
+	packetsDropped  atomic.Uint64
+	bytesSent       atomic.Uint64
+	bytesReceived   atomic.Uint64
+	bytesDropped    atomic.Uint64
+}
+
+func (w *bulkSidecarWireBook) snapshot() BulkSidecarWireCounters {
+	return BulkSidecarWireCounters{
+		PacketsSent:     w.packetsSent.Load(),
+		PacketsReceived: w.packetsReceived.Load(),
+		PacketsDropped:  w.packetsDropped.Load(),
+		BytesSent:       w.bytesSent.Load(),
+		BytesReceived:   w.bytesReceived.Load(),
+		BytesDropped:    w.bytesDropped.Load(),
+	}
 }
 
 var bulkSidecarStats = &bulkSidecarStatsBook{
@@ -176,27 +200,23 @@ func (s *bulkSidecarStatsBook) setSocketBuffers(status BulkSidecarSocketBuffers)
 }
 
 func (s *bulkSidecarStatsBook) markPacketSent(length int) {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-	s.wire.PacketsSent++
-	s.wire.BytesSent += uint64(length)
+	s.wire.packetsSent.Add(1)
+	s.wire.bytesSent.Add(uint64(max(length, 0)))
 }
 
 func (s *bulkSidecarStatsBook) markPacketReceived(length int) {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-	s.wire.PacketsReceived++
-	s.wire.BytesReceived += uint64(length)
+	s.wire.packetsReceived.Add(1)
+	s.wire.bytesReceived.Add(uint64(max(length, 0)))
 }
 
 func (s *bulkSidecarStatsBook) markPacketDropped(length int) {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-	s.wire.PacketsDropped++
-	s.wire.BytesDropped += uint64(length)
+	s.wire.packetsDropped.Add(1)
+	s.wire.bytesDropped.Add(uint64(max(length, 0)))
 }
 
 func (s *bulkSidecarStatsBook) snapshot() (BulkSidecarCounters, BulkSidecarSocketBuffers, BulkSidecarWireCounters) {
+	wire := s.wire.snapshot()
+
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
@@ -207,7 +227,7 @@ func (s *bulkSidecarStatsBook) snapshot() (BulkSidecarCounters, BulkSidecarSocke
 	for name, counters := range s.channels {
 		out.Channels[name] = *counters
 	}
-	return out, s.socketBuffers, s.wire
+	return out, s.socketBuffers, wire
 }
 
 func (s *bulkSidecarStatsBook) channel(name string) *BulkSidecarChannelCounters {

@@ -222,8 +222,3 @@ func (*GetTrieNodesPacket) Kind() byte   { return GetTrieNodesMsg }
 
 func (*TrieNodesPacket) Name() string { return "TrieNodes" }
 func (*TrieNodesPacket) Kind() byte   { return TrieNodesMsg }
-
-func (p *AccountRangePacket) requestID() uint64  { return p.ID }
-func (p *StorageRangesPacket) requestID() uint64 { return p.ID }
-func (p *ByteCodesPacket) requestID() uint64     { return p.ID }
-func (p *TrieNodesPacket) requestID() uint64     { return p.ID }

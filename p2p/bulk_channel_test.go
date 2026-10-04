@@ -11,6 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/ethereum/go-ethereum/rlp"
 )
 
 type helloTestStream struct {
@@ -36,9 +38,14 @@ func (s *helloTestStream) SetReadDeadline(time.Time) error       { return s.read
 func (s *helloTestStream) CancelRead(code quic.StreamErrorCode)  { s.readCancel = code }
 func (s *helloTestStream) CancelWrite(code quic.StreamErrorCode) { s.writeCancel = code }
 
+// newHelloTestSession builds a session that is a legitimate channel acceptor:
+// authenticated, with every protocol negotiated, and a local ID above the
+// remote so it is the side that accepts rather than opens streams.
 func newHelloTestSession() *bulkSession {
 	return &bulkSession{
-		sidecar:  &BulkSidecar{log: log.New()},
+		sidecar:  &BulkSidecar{log: log.New(), localID: enode.ID{2}},
+		peer:     newTestTrackedPeer(nil),
+		remoteID: enode.ID{1},
 		channels: make(map[string]MsgReadWriter),
 		waiters:  make(map[string][]chan bulkChannelResult),
 	}
@@ -68,7 +75,7 @@ func TestBulkChannelHelloWriteCleanup(t *testing.T) {
 				writeLimit:      test.limit,
 			}
 			session := newHelloTestSession()
-			rw, err := session.openChannelStream(stream, "bodies")
+			rw, err := session.openChannelStream(nil, stream, "bodies")
 			require.Nil(t, rw)
 			require.ErrorIs(t, err, errPartialPayload)
 			require.ErrorIs(t, err, closeErr)
@@ -105,7 +112,7 @@ func TestBulkChannelHelloReadCleanup(t *testing.T) {
 				require.NoError(t, err)
 			}
 			session := newHelloTestSession()
-			require.Error(t, session.acceptChannel(stream))
+			require.Error(t, session.acceptChannel(nil, stream))
 			require.Empty(t, session.channels)
 			assertHelloStreamClosed(t, stream)
 		})
@@ -116,14 +123,41 @@ func TestBulkChannelHelloOwnership(t *testing.T) {
 	sender := newHelloTestSession()
 	receiver := newHelloTestSession()
 	stream := &helloTestStream{writeLimit: 1024}
-	rw, err := sender.openChannelStream(stream, "bodies")
+	rw, err := sender.openChannelStream(nil, stream, "eth-bulk")
 	require.NoError(t, err)
-	require.Same(t, rw, sender.channels["bodies"])
-	require.NoError(t, receiver.acceptChannel(stream))
-	require.Contains(t, receiver.channels, "bodies")
+	require.Same(t, rw, sender.channels["eth-bulk"])
+	require.NoError(t, receiver.acceptChannel(nil, stream))
+	require.Contains(t, receiver.channels, "eth-bulk")
 	require.False(t, stream.closed)
 	require.Zero(t, stream.readCancel)
 	require.Zero(t, stream.writeCancel)
 	require.NoError(t, rw.(io.Closer).Close())
 	assertHelloStreamClosed(t, stream)
+}
+
+func TestBulkControlPayloadValidation(t *testing.T) {
+	for _, msg := range []any{make(chan byte), bytes.Repeat([]byte{1}, bulkAuthControlMaxSize)} {
+		stream := &writeTestStream{}
+		require.Error(t, writeBulkControl(stream, msg))
+		require.Empty(t, stream.Bytes())
+	}
+	hello := bulkChannelHello{Version: bulkSidecarVersion, Channel: "eth-bulk"}
+	payload, err := rlp.EncodeToBytes(hello)
+	require.NoError(t, err)
+	for _, exact := range []bool{false, true} {
+		stream := &helloTestStream{writeLimit: 1024}
+		require.NoError(t, writeBulkControl(stream, hello))
+		limit := uint32(len(payload))
+		if !exact {
+			limit--
+		}
+		var got bulkChannelHello
+		err := readBulkControl(stream, limit, &got)
+		if exact {
+			require.NoError(t, err)
+			require.Equal(t, hello, got)
+		} else {
+			require.ErrorContains(t, err, "invalid size")
+		}
+	}
 }

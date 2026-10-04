@@ -17,20 +17,14 @@
 package p2p
 
 import (
-	"bytes"
 	"context"
 	"crypto/ecdsa"
-	"crypto/elliptic"
-	crand "crypto/rand"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
-	"math/big"
 	"net"
-	"slices"
 	"sync"
 	"syscall"
 	"time"
@@ -38,37 +32,49 @@ import (
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/qlogwriter"
 
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
 const (
-	bulkSidecarNextProto      = "bor-bulk/1"
-	bulkSidecarVersion        = uint64(1)
+	bulkSidecarNextProto      = "bor-bulk/2"
+	bulkSidecarVersion        = uint64(2)
 	bulkAuthControlMaxSize    = 1024
 	bulkChannelControlMaxSize = 256
 	bulkFrameHeaderSize       = 12
-	bulkMaxMessageSize        = 10 * 1024 * 1024
+	// Set to the largest ceiling any routed protocol declares (wit's 16MB —
+	// witnesses are paged at eth.PageSize, 15MB). A lower cap would silently
+	// push every witness page onto the fallback lane. eth and snap cap
+	// themselves at 10MB and still reject oversized frames in their own
+	// handlers; this is the transport bound, and buffering stays limited by
+	// the per-peer and process budgets in bulk_buffer.go.
+	bulkMaxMessageSize        = 16 * 1024 * 1024
 	bulkDialTimeout           = 5 * time.Second
 	bulkAuthTimeout           = 5 * time.Second
 	bulkChannelOpenTimeout    = 5 * time.Second
 	bulkMessageReadTimeout    = 30 * time.Second
 	bulkMessageWriteTimeout   = 20 * time.Second
 	bulkSidecarTLSServerName  = "bor-bulk-sidecar"
-	bulkConnReceiveWindow     = 16 * bulkMaxMessageSize
 	bulkSocketReadBufferSize  = 8 * 1024 * 1024
 	bulkSocketWriteBufferSize = 8 * 1024 * 1024
 	bulkSidecarCloseErrorCode = quic.ApplicationErrorCode(0x424f52)
 	bulkSidecarProtocolError  = quic.ApplicationErrorCode(0x424f53)
 	bulkSidecarCertLifetime   = 365 * 24 * time.Hour
+	bulkAuthBindingLabel      = "bor bulk sidecar auth binding"
+	bulkAuthBindingLength     = 32
 )
+
+// maxBulkChannelsPerSession bounds the channel table a single remote can grow.
+// The allowlist already rejects unknown names, so this is exactly the number of
+// lanes that can legitimately exist.
+var maxBulkChannelsPerSession = len(bulkChannels)
 
 var (
 	errBulkSidecarNoPeer  = errors.New("bulk sidecar peer not connected")
 	errBulkSidecarNoQUIC  = errors.New("peer has no bulk sidecar endpoint")
 	errBulkChannelTimeout = errors.New("bulk channel open timed out")
+	errBulkChannelLimit   = errors.New("bulk channel limit reached")
 )
 
 type BulkSidecar struct {
@@ -91,14 +97,19 @@ type BulkSidecar struct {
 
 type bulkSession struct {
 	sidecar  *BulkSidecar
+	peer     *Peer
 	remote   *enode.Node
 	remoteID enode.ID
 
+	openGate   chan struct{}
 	lock       sync.Mutex
 	conn       *quic.Conn
 	connClosed <-chan struct{}
+	connReady  chan struct{}
 	dialing    bool
 	dialWait   chan struct{}
+	dialCancel context.CancelFunc
+	closed     bool
 	channels   map[string]MsgReadWriter
 	waiters    map[string][]chan bulkChannelResult
 }
@@ -155,14 +166,16 @@ func newBulkSidecar(srv *Server, listenAddr string) (*BulkSidecar, error) {
 		MinVersion:   tls.VersionTLS13,
 	}
 	quicConf := &quic.Config{
-		HandshakeIdleTimeout:           bulkAuthTimeout,
-		MaxIdleTimeout:                 60 * time.Second,
-		KeepAlivePeriod:                15 * time.Second,
-		MaxIncomingStreams:             32,
-		InitialStreamReceiveWindow:     2 * bulkMaxMessageSize,
-		MaxStreamReceiveWindow:         2 * bulkMaxMessageSize,
+		HandshakeIdleTimeout: bulkAuthTimeout,
+		MaxIdleTimeout:       60 * time.Second,
+		KeepAlivePeriod:      15 * time.Second,
+		// One stream per allowlisted lane, plus the authentication stream.
+		MaxIncomingStreams:             int64(len(bulkChannels) + 1),
+		MaxIncomingUniStreams:          -1,
+		InitialStreamReceiveWindow:     bulkStreamReceiveWindow,
+		MaxStreamReceiveWindow:         bulkStreamReceiveWindowMax,
 		InitialConnectionReceiveWindow: bulkConnReceiveWindow,
-		MaxConnectionReceiveWindow:     bulkConnReceiveWindow,
+		MaxConnectionReceiveWindow:     bulkConnReceiveWindowMax,
 		Tracer: func(context.Context, bool, quic.ConnectionID) qlogwriter.Trace {
 			return bulkSidecarStats.newConnectionTrace()
 		},
@@ -181,7 +194,7 @@ func newBulkSidecar(srv *Server, listenAddr string) (*BulkSidecar, error) {
 	transport := &quic.Transport{
 		Conn:        udpConn,
 		Tracer:      bulkSidecarStats.newTransportRecorder(),
-		ConnContext: newBulkConnContext(srv.MaxPeers, srv.MaxPendingPeers),
+		ConnContext: bulkServerConnContext(srv),
 	}
 	listener, err := transport.Listen(tlsConf, quicConf)
 	if err != nil {
@@ -210,7 +223,13 @@ func (b *BulkSidecar) Close() {
 	b.closeOnce.Do(func() {
 		close(b.closeCh)
 		if b.transport != nil {
-			_ = b.transport.Close()
+			if err := b.transport.Close(); err != nil {
+				b.log.Debug("Bulk transport close failed", "err", err)
+			}
+			// Transport does not close a caller-owned UDP socket.
+			if err := b.transport.Conn.Close(); err != nil {
+				b.log.Debug("Bulk socket close failed", "err", err)
+			}
 		} else if b.listener != nil {
 			_ = b.listener.Close()
 		}
@@ -234,7 +253,8 @@ func (b *BulkSidecar) run() {
 			case <-b.closeCh:
 				return
 			default:
-				b.log.Debug("Bulk sidecar accept failed", "err", err)
+				// Accept only fails terminally; the sidecar is off from here.
+				b.log.Warn("Bulk sidecar listener stopped", "err", err)
 				return
 			}
 		}
@@ -253,7 +273,13 @@ func (b *BulkSidecar) OpenChannelContext(ctx context.Context, peer *Peer, channe
 	if peer == nil || peer.Node() == nil {
 		return nil, errBulkSidecarNoPeer
 	}
-	session := b.session(peer.Node())
+	if err := validateBulkChannel(peer, channel); err != nil {
+		return nil, err
+	}
+	session := b.peerSession(peer.Node(), peer)
+	if session == nil {
+		return nil, io.EOF
+	}
 	ctx, cancel := context.WithTimeout(ctx, bulkChannelOpenTimeout)
 	defer cancel()
 	return session.openChannel(ctx, channel)
@@ -270,10 +296,26 @@ func (b *BulkSidecar) DropPeer(id enode.ID) {
 }
 
 func (b *BulkSidecar) session(remote *enode.Node) *bulkSession {
+	return b.peerSession(remote, nil)
+}
+
+func (b *BulkSidecar) peerSession(remote *enode.Node, peer *Peer) *bulkSession {
 	remote = b.peerRecord(remote)
 	remoteID := remote.ID()
 	b.lock.Lock()
 	defer b.lock.Unlock()
+	select {
+	case <-b.closeCh:
+		return nil
+	default:
+	}
+	if peer != nil {
+		select {
+		case <-peer.Done():
+			return nil
+		default:
+		}
+	}
 	if session, ok := b.sessions[remoteID]; ok {
 		session.lock.Lock()
 		if remote.Seq() > session.remote.Seq() {
@@ -284,6 +326,7 @@ func (b *BulkSidecar) session(remote *enode.Node) *bulkSession {
 	}
 	session := &bulkSession{
 		sidecar:  b,
+		peer:     peer,
 		remote:   remote,
 		remoteID: remoteID,
 		channels: make(map[string]MsgReadWriter),
@@ -302,63 +345,18 @@ func (b *BulkSidecar) handleIncomingConn(conn *quic.Conn) {
 		_ = conn.CloseWithError(bulkSidecarProtocolError, "missing auth stream")
 		return
 	}
-	remote, err := b.acceptAuth(stream)
+	remote, err := b.acceptAuth(conn, stream)
 	if err != nil {
 		_ = conn.CloseWithError(bulkSidecarProtocolError, err.Error())
 		return
 	}
-	if !b.adoptConn(remote, conn) {
+	session := b.adoptConn(remote, conn)
+	if session == nil {
 		_ = conn.CloseWithError(bulkSidecarCloseErrorCode, "duplicate bulk connection")
 		return
 	}
 	releaseBulkPendingAuth(conn.Context())
-	b.runConn(remote.ID(), conn)
-}
-
-func (b *BulkSidecar) acceptAuth(stream *quic.Stream) (*enode.Node, error) {
-	var hello bulkAuthHello
-	if err := readBulkControl(stream, bulkAuthControlMaxSize, &hello); err != nil {
-		return nil, err
-	}
-	if hello.Version != bulkSidecarVersion {
-		return nil, fmt.Errorf("unsupported bulk auth version %d", hello.Version)
-	}
-	if hello.To != b.localID {
-		return nil, errors.New("bulk auth remote target mismatch")
-	}
-	peer := b.srv.Peer(hello.From)
-	if peer == nil || peer.Node() == nil {
-		return nil, errBulkSidecarNoPeer
-	}
-	remote := peer.Node()
-	remoteKey := remote.Pubkey()
-	if remoteKey == nil {
-		return nil, errors.New("bulk auth peer missing pubkey")
-	}
-	var challenge bulkAuthChallenge
-	if _, err := io.ReadFull(crand.Reader, challenge.Nonce[:]); err != nil {
-		return nil, err
-	}
-	hash := bulkAuthTranscriptHash(hello.From, hello.To, hello.Nonce, challenge.Nonce)
-	sig, err := crypto.Sign(hash, b.priv)
-	if err != nil {
-		return nil, err
-	}
-	challenge.Signature = slices.Clone(sig[:64])
-	if err := writeBulkControl(stream, challenge); err != nil {
-		return nil, err
-	}
-	var response bulkAuthResponse
-	if err := readBulkControl(stream, bulkAuthControlMaxSize, &response); err != nil {
-		return nil, err
-	}
-	if len(response.Signature) != 64 {
-		return nil, errors.New("bulk auth response signature length invalid")
-	}
-	if !crypto.VerifySignature(crypto.CompressPubkey(remoteKey), hash, response.Signature) {
-		return nil, errors.New("bulk auth response signature invalid")
-	}
-	return remote, nil
+	session.runConn(conn)
 }
 
 func (b *BulkSidecar) dialConn(ctx context.Context, remote *enode.Node) (*quic.Conn, error) {
@@ -367,334 +365,33 @@ func (b *BulkSidecar) dialConn(ctx context.Context, remote *enode.Node) (*quic.C
 		b.log.Debug("Bulk sidecar peer missing QUIC endpoint", "peer", remote.ID(), "node", remote.String(), "ip", remote.IPAddr(), "tcp", remote.TCP(), "udp", remote.UDP())
 		return nil, errBulkSidecarNoQUIC
 	}
+	if b.srv.NetRestrict != nil && !b.srv.NetRestrict.ContainsAddr(endpoint.Addr()) {
+		return nil, errNetRestrict
+	}
 	dialCtx, cancel := context.WithTimeout(ctx, bulkDialTimeout)
 	defer cancel()
 
-	conn, err := quic.DialAddr(dialCtx, endpoint.String(), newBulkSidecarVerifiedTLSConfig(), b.config)
+	releaseWindow, err := reserveBulkQUICWindow()
 	if err != nil {
 		return nil, err
 	}
+	conn, err := quic.DialAddr(dialCtx, endpoint.String(), newBulkSidecarVerifiedTLSConfig(), b.config)
+	if err != nil {
+		releaseWindow()
+		return nil, err
+	}
+	context.AfterFunc(conn.Context(), releaseWindow)
+	stop := context.AfterFunc(ctx, func() {
+		if err := conn.CloseWithError(bulkSidecarCloseErrorCode, "bulk dial cancelled"); err != nil {
+			b.log.Debug("Bulk dial close failed", "err", err)
+		}
+	})
+	defer stop()
 	if err := b.initiateAuth(conn, remote); err != nil {
 		_ = conn.CloseWithError(bulkSidecarProtocolError, err.Error())
 		return nil, err
 	}
 	return conn, nil
-}
-
-func (b *BulkSidecar) initiateAuth(conn *quic.Conn, remote *enode.Node) error {
-	ctx, cancel := context.WithTimeout(context.Background(), bulkAuthTimeout)
-	defer cancel()
-
-	stream, err := conn.OpenStreamSync(ctx)
-	if err != nil {
-		return err
-	}
-	var hello bulkAuthHello
-	hello.Version = bulkSidecarVersion
-	hello.From = b.localID
-	hello.To = remote.ID()
-	if _, err := io.ReadFull(crand.Reader, hello.Nonce[:]); err != nil {
-		return err
-	}
-	if err := writeBulkControl(stream, hello); err != nil {
-		return err
-	}
-	var challenge bulkAuthChallenge
-	if err := readBulkControl(stream, bulkAuthControlMaxSize, &challenge); err != nil {
-		return err
-	}
-	if len(challenge.Signature) != 64 {
-		return errors.New("bulk auth challenge signature length invalid")
-	}
-	remoteKey := remote.Pubkey()
-	if remoteKey == nil {
-		return errors.New("bulk auth remote pubkey missing")
-	}
-	hash := bulkAuthTranscriptHash(hello.From, hello.To, hello.Nonce, challenge.Nonce)
-	if !crypto.VerifySignature(crypto.CompressPubkey(remoteKey), hash, challenge.Signature) {
-		return errors.New("bulk auth challenge signature invalid")
-	}
-	sig, err := crypto.Sign(hash, b.priv)
-	if err != nil {
-		return err
-	}
-	return writeBulkControl(stream, bulkAuthResponse{Signature: slices.Clone(sig[:64])})
-}
-
-func (b *BulkSidecar) adoptConn(remote *enode.Node, conn *quic.Conn) bool {
-	session := b.session(remote)
-	session.lock.Lock()
-	defer session.lock.Unlock()
-	if session.conn != nil {
-		select {
-		case <-session.connClosed:
-		default:
-			return false
-		}
-	}
-	session.conn = conn
-	session.connClosed = conn.Context().Done()
-	session.channels = make(map[string]MsgReadWriter)
-	bulkSidecarStats.markSessionEstablished()
-	b.log.Debug("Bulk sidecar session established", "peer", remote.ID(), "remote", conn.RemoteAddr())
-	return true
-}
-
-func (b *BulkSidecar) runConn(remoteID enode.ID, conn *quic.Conn) {
-	b.lock.Lock()
-	session := b.sessions[remoteID]
-	b.lock.Unlock()
-	if session == nil {
-		_ = conn.CloseWithError(bulkSidecarCloseErrorCode, "bulk session missing")
-		return
-	}
-	defer b.clearConn(remoteID, conn)
-	for {
-		stream, err := conn.AcceptStream(context.Background())
-		if err != nil {
-			return
-		}
-		if err := session.acceptChannel(stream); err != nil {
-			_ = conn.CloseWithError(bulkSidecarProtocolError, err.Error())
-			return
-		}
-	}
-}
-
-func (b *BulkSidecar) clearConn(remoteID enode.ID, conn *quic.Conn) {
-	b.lock.Lock()
-	session := b.sessions[remoteID]
-	b.lock.Unlock()
-	if session == nil {
-		return
-	}
-	session.lock.Lock()
-	defer session.lock.Unlock()
-	if session.conn == conn {
-		session.conn = nil
-		session.connClosed = nil
-		for name, waiters := range session.waiters {
-			for _, waiter := range waiters {
-				waiter <- bulkChannelResult{err: io.EOF}
-				close(waiter)
-			}
-			delete(session.waiters, name)
-		}
-		session.channels = make(map[string]MsgReadWriter)
-	}
-}
-
-func (s *bulkSession) close() {
-	s.lock.Lock()
-	conn := s.conn
-	s.conn = nil
-	s.connClosed = nil
-	for name, waiters := range s.waiters {
-		for _, waiter := range waiters {
-			waiter <- bulkChannelResult{err: io.EOF}
-			close(waiter)
-		}
-		delete(s.waiters, name)
-	}
-	s.lock.Unlock()
-	if conn != nil {
-		_ = conn.CloseWithError(bulkSidecarCloseErrorCode, "bulk peer dropped")
-	}
-}
-
-func (s *bulkSession) ensureConn(ctx context.Context) (*quic.Conn, error) {
-	s.lock.Lock()
-	if s.conn != nil {
-		select {
-		case <-s.connClosed:
-			s.conn = nil
-			s.connClosed = nil
-		default:
-			conn := s.conn
-			s.lock.Unlock()
-			return conn, nil
-		}
-	}
-	if bytes.Compare(s.sidecar.localID[:], s.remoteID[:]) > 0 {
-		s.lock.Unlock()
-		ticker := time.NewTicker(10 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-ticker.C:
-				s.lock.Lock()
-				if s.conn != nil {
-					select {
-					case <-s.connClosed:
-						s.conn = nil
-						s.connClosed = nil
-					default:
-						conn := s.conn
-						s.lock.Unlock()
-						return conn, nil
-					}
-				}
-				s.lock.Unlock()
-			}
-		}
-	}
-	if s.dialing {
-		wait := s.dialWait
-		s.lock.Unlock()
-		select {
-		case <-wait:
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-		s.lock.Lock()
-		defer s.lock.Unlock()
-		if s.conn != nil {
-			return s.conn, nil
-		}
-		return nil, errBulkSidecarNoPeer
-	}
-	s.dialing = true
-	wait := make(chan struct{})
-	s.dialWait = wait
-	remote := s.remote
-	s.lock.Unlock()
-
-	conn, err := s.sidecar.dialConn(ctx, remote)
-
-	s.lock.Lock()
-	defer s.lock.Unlock()
-	s.dialing = false
-	close(wait)
-	s.dialWait = nil
-	if err != nil {
-		return nil, err
-	}
-	if s.conn == nil {
-		s.conn = conn
-		s.connClosed = conn.Context().Done()
-		s.channels = make(map[string]MsgReadWriter)
-		bulkSidecarSessionMeter.Mark(1)
-		bulkSidecarStats.markSessionEstablished()
-		s.sidecar.log.Debug("Bulk sidecar session established", "peer", s.remoteID, "remote", conn.RemoteAddr())
-		go s.sidecar.runConn(s.remoteID, conn)
-		return conn, nil
-	}
-	_ = conn.CloseWithError(bulkSidecarCloseErrorCode, "bulk connection superseded")
-	return s.conn, nil
-}
-
-func (s *bulkSession) openChannel(ctx context.Context, channel string) (MsgReadWriter, error) {
-	if channel == "" || len(channel) > 64 {
-		return nil, errors.New("invalid bulk channel")
-	}
-	if rw, ok := s.getChannel(channel); ok {
-		return rw, nil
-	}
-	conn, err := s.ensureConn(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if bytes.Compare(s.sidecar.localID[:], s.remoteID[:]) < 0 {
-		stream, err := conn.OpenStreamSync(ctx)
-		if err != nil {
-			return nil, err
-		}
-		return s.openChannelStream(stream, channel)
-	}
-	return s.waitChannel(ctx, channel)
-}
-
-func (s *bulkSession) openChannelStream(stream bulkFrameStream, channel string) (MsgReadWriter, error) {
-	rw := &bulkStreamMsgRW{
-		stream: stream, channel: channel,
-		log: log.New("peer", s.remoteID, "channel", channel),
-	}
-	if err := writeBulkControl(stream, bulkChannelHello{Version: bulkSidecarVersion, Channel: channel}); err != nil {
-		return nil, errors.Join(err, rw.Close())
-	}
-	s.storeChannel(channel, rw)
-	return rw, nil
-}
-
-func (s *bulkSession) acceptChannel(stream bulkFrameStream) (err error) {
-	rw := &bulkStreamMsgRW{stream: stream}
-	defer func() {
-		if err != nil {
-			err = errors.Join(err, rw.Close())
-		}
-	}()
-	var hello bulkChannelHello
-	if err := readBulkControl(stream, bulkChannelControlMaxSize, &hello); err != nil {
-		return err
-	}
-	if hello.Version != bulkSidecarVersion {
-		return fmt.Errorf("unsupported bulk channel version %d", hello.Version)
-	}
-	if hello.Channel == "" || len(hello.Channel) > 64 {
-		return errors.New("invalid bulk channel name")
-	}
-	rw.channel = hello.Channel
-	rw.log = log.New("peer", s.remoteID, "channel", hello.Channel)
-	s.storeChannel(hello.Channel, rw)
-	return nil
-}
-
-func (s *bulkSession) getChannel(channel string) (MsgReadWriter, bool) {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-	rw, ok := s.channels[channel]
-	return rw, ok
-}
-
-func (s *bulkSession) waitChannel(ctx context.Context, channel string) (MsgReadWriter, error) {
-	if rw, ok := s.getChannel(channel); ok {
-		return rw, nil
-	}
-	waiter := make(chan bulkChannelResult, 1)
-	s.lock.Lock()
-	if rw, ok := s.channels[channel]; ok {
-		s.lock.Unlock()
-		return rw, nil
-	}
-	s.waiters[channel] = append(s.waiters[channel], waiter)
-	s.lock.Unlock()
-
-	select {
-	case result := <-waiter:
-		return result.rw, result.err
-	case <-ctx.Done():
-		return nil, errBulkChannelTimeout
-	}
-}
-
-func (s *bulkSession) storeChannel(channel string, rw MsgReadWriter) {
-	s.lock.Lock()
-	old, exists := s.channels[channel]
-	s.channels[channel] = rw
-	waiters := s.waiters[channel]
-	delete(s.waiters, channel)
-	s.lock.Unlock()
-
-	if exists {
-		if closer, ok := old.(interface{ Close() error }); ok {
-			if err := closer.Close(); err != nil {
-				s.sidecar.log.Debug("Bulk sidecar replaced channel close failed", "peer", s.remoteID, "channel", channel, "err", err)
-			}
-		}
-		bulkSidecarChannelReplaceMeter.Mark(1)
-		bulkSidecarStats.markChannelReplaced(channel)
-	} else {
-		bulkSidecarChannelOpenMeter.Mark(1)
-		bulkSidecarStats.markChannelOpened(channel)
-	}
-	s.sidecar.log.Debug("Bulk sidecar channel opened", "peer", s.remoteID, "channel", channel)
-
-	for _, waiter := range waiters {
-		waiter <- bulkChannelResult{rw: rw}
-		close(waiter)
-	}
 }
 
 func (rw *bulkStreamMsgRW) ReadMsg() (Msg, error) {
@@ -855,73 +552,4 @@ func readBulkControl(stream bulkFrameStream, maxSize uint32, out interface{}) er
 		return err
 	}
 	return rlp.DecodeBytes(payload, out)
-}
-
-func bulkAuthTranscriptHash(from, to enode.ID, nonceA, nonceB [32]byte) []byte {
-	return crypto.Keccak256(
-		[]byte("bor bulk sidecar auth"),
-		from[:],
-		to[:],
-		nonceA[:],
-		nonceB[:],
-	)
-}
-
-func newBulkSidecarVerifiedTLSConfig() *tls.Config {
-	return &tls.Config{
-		InsecureSkipVerify: true,
-		ServerName:         bulkSidecarTLSServerName,
-		VerifyConnection:   verifyBulkSidecarTLSConnection,
-		NextProtos:         []string{bulkSidecarNextProto},
-		MinVersion:         tls.VersionTLS13,
-	}
-}
-
-func verifyBulkSidecarTLSConnection(state tls.ConnectionState) error {
-	if len(state.PeerCertificates) == 0 {
-		return errors.New("bulk sidecar tls peer certificate missing")
-	}
-	cert := state.PeerCertificates[0]
-	now := time.Now()
-	if now.Before(cert.NotBefore) || now.After(cert.NotAfter) {
-		return errors.New("bulk sidecar tls peer certificate expired or not yet valid")
-	}
-	if err := cert.VerifyHostname(bulkSidecarTLSServerName); err != nil {
-		return fmt.Errorf("bulk sidecar tls peer certificate name invalid: %w", err)
-	}
-	if cert.KeyUsage&x509.KeyUsageDigitalSignature == 0 {
-		return errors.New("bulk sidecar tls peer certificate missing digital signature usage")
-	}
-	if len(cert.ExtKeyUsage) != 0 && !slices.Contains(cert.ExtKeyUsage, x509.ExtKeyUsageServerAuth) {
-		return errors.New("bulk sidecar tls peer certificate missing server auth usage")
-	}
-	if err := cert.CheckSignature(cert.SignatureAlgorithm, cert.RawTBSCertificate, cert.Signature); err != nil {
-		return fmt.Errorf("bulk sidecar tls peer certificate signature invalid: %w", err)
-	}
-	return nil
-}
-
-func generateBulkSidecarCertificate() (tls.Certificate, error) {
-	key, err := ecdsa.GenerateKey(elliptic.P256(), crand.Reader)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-	serialLimit := new(big.Int).Lsh(big.NewInt(1), 128)
-	serial, err := crand.Int(crand.Reader, serialLimit)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-	template := &x509.Certificate{
-		SerialNumber: serial,
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(bulkSidecarCertLifetime),
-		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
-		DNSNames:     []string{bulkSidecarTLSServerName},
-	}
-	der, err := x509.CreateCertificate(crand.Reader, template, template, &key.PublicKey, key)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, nil
 }

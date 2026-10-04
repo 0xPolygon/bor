@@ -223,6 +223,26 @@ func TestRoutedLifecycleLaneCancellation(t *testing.T) {
 	}
 }
 
+func TestRoutedLifecycleRejectsRetiredDelivery(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	rw := NewMultiChannelRoutedMsgReadWriter(newCountedRoutedRW(), func(uint64) string { return "bulk" }).(*routedMsgReadWriter)
+	defer rw.Close()
+	rw.reads = make(chan routedRead, 2)
+	closed := make(chan struct{})
+	close(closed)
+	done := make(chan error, 1)
+	rw.reads <- routedRead{msg: Msg{Code: 2}, laneClosed: closed, done: done}
+	rw.reads <- routedRead{msg: Msg{Code: 3}}
+	msg := readRoutedTestMessage(t, rw)
+	require.Equal(t, uint64(3), msg.Code)
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, io.EOF)
+	default:
+		t.Fatal("retired delivery did not release its forwarder")
+	}
+}
+
 func TestRoutedLifecycleIdlePeerShutdown(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	done := make(chan struct{})
