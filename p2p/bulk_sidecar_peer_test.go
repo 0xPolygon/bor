@@ -1,9 +1,12 @@
 package p2p
 
 import (
+	"bytes"
+	"context"
 	"net"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -86,4 +89,70 @@ func TestBulkSidecarSessionRecordUpdates(t *testing.T) {
 	require.Same(t, session, local.bulk.session(inbound))
 	require.Same(t, session, local.bulk.session(sameSeq))
 	require.Same(t, latest, session.remote)
+}
+
+func TestBulkSidecarResolvesRecordPerConnection(t *testing.T) {
+	left, right := newTestBulkServer(t), newTestBulkServer(t)
+	t.Cleanup(left.close)
+	t.Cleanup(right.close)
+	if bytes.Compare(left.bulk.localID[:], right.bulk.localID[:]) > 0 {
+		left, right = right, left
+	}
+	lp, rp := newTestTrackedPeer(right.localnode.Node()), newTestTrackedPeer(left.localnode.Node())
+	left.setPeer(lp)
+	right.setPeer(rp)
+	session := left.bulk.peerSession(lp.Node(), lp)
+	_, known := session.remote.QUICEndpoint()
+	require.False(t, known)
+	right.setQUICPort()
+	first := right.localnode.Node()
+	require.NoError(t, left.db.UpdateNode(first))
+	_, err := left.bulk.OpenChannel(lp, "eth-bulk")
+	require.NoError(t, err)
+	right.localnode.Set(enr.TCP(30305))
+	latest := right.localnode.Node()
+	require.Greater(t, latest.Seq(), first.Seq())
+	require.NoError(t, left.db.UpdateNode(latest))
+	_, err = left.bulk.OpenChannel(lp, "snap-trie")
+	require.NoError(t, err)
+	require.Equal(t, first.Seq(), session.remote.Seq())
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	remoteSession := right.bulk.peerSession(rp.Node(), rp)
+	remoteConn, err := remoteSession.waitIncomingConn(ctx)
+	require.NoError(t, err)
+	conn, err := session.ensureConn(ctx)
+	require.NoError(t, err)
+	require.NoError(t, conn.CloseWithError(0, "test complete"))
+	select {
+	case <-remoteConn.Context().Done():
+	case <-ctx.Done():
+		t.Fatal("remote connection did not close")
+	}
+	_, err = left.bulk.OpenChannel(lp, "eth-bulk")
+	require.NoError(t, err)
+	require.Equal(t, latest.Seq(), session.remote.Seq())
+}
+
+func TestBulkSidecarSessionAfterClose(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		name := "new session"
+		if existing {
+			name = "existing session"
+		}
+		t.Run(name, func(t *testing.T) {
+			server := newTestBulkServer(t)
+			t.Cleanup(server.close)
+			peer := newTestTrackedPeer(server.localnode.Node())
+			if existing {
+				require.NotNil(t, server.bulk.peerSession(peer.Node(), peer))
+			}
+			server.bulk.Close()
+			require.Nil(t, server.bulk.peerSession(peer.Node(), peer))
+			require.Nil(t, server.bulk.session(peer.Node()))
+			if !existing {
+				require.Empty(t, server.bulk.sessions)
+			}
+		})
+	}
 }

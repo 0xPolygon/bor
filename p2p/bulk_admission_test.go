@@ -13,7 +13,7 @@ import (
 func TestBulkAdmissionPendingLimit(t *testing.T) {
 	for _, limit := range []int{0, -1, 2} {
 		t.Run(strconv.Itoa(limit), func(t *testing.T) {
-			admit := newBulkConnContext(3, limit)
+			admit := newBulkConnContext(3, limit, newBulkQUICWindows(3, limit))
 			if limit <= 0 {
 				limit = defaultMaxPendingPeers
 			}
@@ -32,7 +32,7 @@ func TestBulkAdmissionPendingLimit(t *testing.T) {
 func TestBulkAdmissionConnectionLimit(t *testing.T) {
 	for _, peers := range []int{-1, 0, 2} {
 		t.Run(strconv.Itoa(peers), func(t *testing.T) {
-			admit := newBulkConnContext(peers, 1)
+			admit := newBulkConnContext(peers, 1, newBulkQUICWindows(peers, 1))
 			for range max(0, peers) + 1 {
 				ctx, cancel := context.WithCancel(context.Background())
 				t.Cleanup(cancel)
@@ -52,7 +52,7 @@ func TestBulkAdmissionConnectionLimit(t *testing.T) {
 func TestBulkAdmissionReleasesOnClose(t *testing.T) {
 	for _, authenticated := range []bool{false, true} {
 		t.Run(map[bool]string{false: "pending", true: "authenticated"}[authenticated], func(t *testing.T) {
-			admit := newBulkConnContext(0, 1)
+			admit := newBulkConnContext(0, 1, newBulkQUICWindows(0, 1))
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			ctx, err := admit(ctx, nil)

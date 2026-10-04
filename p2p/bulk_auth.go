@@ -28,11 +28,13 @@ import (
 	"io"
 	"math/big"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/quic-go/quic-go"
 
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 )
 
@@ -188,6 +190,10 @@ func verifyBulkSidecarTLSConnection(state tls.ConnectionState) error {
 }
 
 func generateBulkSidecarCertificate() (tls.Certificate, error) {
+	return generateBulkSidecarCertificateAt(time.Now())
+}
+
+func generateBulkSidecarCertificateAt(now time.Time) (tls.Certificate, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), crand.Reader)
 	if err != nil {
 		return tls.Certificate{}, err
@@ -199,8 +205,8 @@ func generateBulkSidecarCertificate() (tls.Certificate, error) {
 	}
 	template := &x509.Certificate{
 		SerialNumber: serial,
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(bulkSidecarCertLifetime),
+		NotBefore:    now.Add(-time.Hour),
+		NotAfter:     now.Add(bulkSidecarCertLifetime),
 		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 		DNSNames:     []string{bulkSidecarTLSServerName},
@@ -209,5 +215,52 @@ func generateBulkSidecarCertificate() (tls.Certificate, error) {
 	if err != nil {
 		return tls.Certificate{}, err
 	}
-	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, nil
+	// Parse the leaf so the rotator can read the validity window without
+	// re-parsing on every handshake.
+	leaf, err := x509.ParseCertificate(der)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: leaf}, nil
+}
+
+// Handshake-driven rotation needs no background goroutine. Only the listener
+// presents a certificate; the dialer authenticates with the enode transcript.
+type bulkCertRotator struct {
+	lock sync.Mutex
+	cert *tls.Certificate
+
+	// generate is swapped out in tests; nil means generateBulkSidecarCertificateAt.
+	generate func(time.Time) (tls.Certificate, error)
+}
+
+// certificate implements tls.Config.GetCertificate.
+func (r *bulkCertRotator) certificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	return r.currentAt(time.Now())
+}
+
+func (r *bulkCertRotator) currentAt(now time.Time) (*tls.Certificate, error) {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+
+	valid := r.cert != nil && !now.Before(r.cert.Leaf.NotBefore) && now.Before(r.cert.Leaf.NotAfter)
+	if valid && now.Before(r.cert.Leaf.NotAfter.Add(-bulkSidecarCertRefresh)) {
+		return r.cert, nil
+	}
+	generate := r.generate
+	if generate == nil {
+		generate = generateBulkSidecarCertificateAt
+	}
+	cert, err := generate(now)
+	if err != nil {
+		if !valid {
+			return nil, err
+		}
+		// GetCertificate errors abort the handshake, so keep serving a still
+		// valid certificate and retry rotation on the next handshake.
+		log.Warn("Bulk sidecar certificate rotation failed, serving previous", "expires", r.cert.Leaf.NotAfter, "err", err)
+		return r.cert, nil
+	}
+	r.cert = &cert
+	return r.cert, nil
 }
