@@ -519,6 +519,13 @@ func (srv *Server) Start() (err error) {
 	if srv.running {
 		return errors.New("server already running")
 	}
+	listenAddr := srv.ListenAddr
+	defer func() {
+		if err != nil {
+			srv.rollbackStart()
+			srv.ListenAddr = listenAddr
+		}
+	}()
 
 	srv.running = true
 	srv.log = srv.Logger
@@ -536,6 +543,7 @@ func (srv *Server) Start() (err error) {
 	}
 
 	// static fields
+	srv.quit = make(chan struct{})
 	if srv.PrivateKey == nil {
 		return errors.New("Server.PrivateKey must be set to a non-nil key")
 	}
@@ -548,7 +556,6 @@ func (srv *Server) Start() (err error) {
 		srv.listenFunc = net.Listen
 	}
 
-	srv.quit = make(chan struct{})
 	srv.delpeer = make(chan peerDrop)
 	srv.checkpointPostHandshake = make(chan *conn)
 	srv.checkpointAddPeer = make(chan *conn)
@@ -581,9 +588,7 @@ func (srv *Server) Start() (err error) {
 	}
 
 	srv.setupDialScheduler()
-
-	srv.loopWG.Add(1)
-	go srv.run()
+	srv.startLoops()
 
 	return nil
 }
@@ -616,7 +621,7 @@ func (srv *Server) setupLocalNode() error {
 	return nil
 }
 
-func (srv *Server) setupDiscovery() error {
+func (srv *Server) setupDiscovery() (err error) {
 	// Set up the discovery source mixer. Here, we don't care about the
 	// fairness of the mix, it's just for putting the
 	srv.discmix = enode.NewFairMix(0)
@@ -629,6 +634,13 @@ func (srv *Server) setupDiscovery() error {
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if err != nil {
+			if closeErr := conn.Close(); closeErr != nil && !errors.Is(closeErr, net.ErrClosed) {
+				srv.log.Debug("Discovery socket cleanup failed", "err", closeErr)
+			}
+		}
+	}()
 
 	var (
 		sconn     discover.UDPConn = conn
@@ -666,11 +678,6 @@ func (srv *Server) setupDiscovery() error {
 		}
 		srv.discv5, err = discover.ListenV5(sconn, srv.localnode, cfg)
 		if err != nil {
-			// Clean up v4 if v5 setup fails.
-			if srv.discv4 != nil {
-				srv.discv4.Close()
-				srv.discv4 = nil
-			}
 			return err
 		}
 	}
@@ -775,9 +782,6 @@ func (srv *Server) setupListening() error {
 		}
 	}
 
-	srv.loopWG.Add(1)
-	go srv.listenLoop()
-
 	return nil
 }
 
@@ -809,11 +813,6 @@ func (srv *Server) setupBulkSidecar() error {
 		}
 	}
 
-	srv.loopWG.Add(1)
-	go func() {
-		defer srv.loopWG.Done()
-		bulk.run()
-	}()
 	return nil
 }
 
