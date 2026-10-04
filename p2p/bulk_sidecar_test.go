@@ -468,6 +468,7 @@ func newTestBulkServerWithConfig(t *testing.T, config Config) *testBulkServer {
 	config.Logger = log.Root()
 	srv := &Server{
 		Config:     config,
+		running:    true,
 		nodedb:     db,
 		localnode:  localnode,
 		log:        log.Root(),

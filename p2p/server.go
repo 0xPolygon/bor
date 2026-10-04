@@ -897,8 +897,14 @@ func (srv *Server) doPeerOp(fn peerOpFunc) {
 	}
 }
 
-// Peer retrieves a connected peer by ID.
+// Peer retrieves a connected peer by ID, or nil if the server is not running.
 func (srv *Server) Peer(id enode.ID) *Peer {
+	srv.lock.Lock()
+	running := srv.running
+	srv.lock.Unlock()
+	if !running {
+		return nil
+	}
 	var peer *Peer
 	srv.doPeerOp(func(peers map[enode.ID]*Peer) {
 		peer = peers[id]
