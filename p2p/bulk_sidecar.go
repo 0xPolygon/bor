@@ -31,6 +31,7 @@ import (
 
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/qlogwriter"
+	"golang.org/x/sync/semaphore"
 
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/enode"
@@ -61,8 +62,10 @@ const (
 	bulkSidecarCloseErrorCode = quic.ApplicationErrorCode(0x424f52)
 	bulkSidecarProtocolError  = quic.ApplicationErrorCode(0x424f53)
 	bulkSidecarCertLifetime   = 365 * 24 * time.Hour
-	bulkAuthBindingLabel      = "bor bulk sidecar auth binding"
-	bulkAuthBindingLength     = 32
+	// Leave time to retry a failed rotation before the current certificate expires.
+	bulkSidecarCertRefresh = 24 * time.Hour
+	bulkAuthBindingLabel   = "bor bulk sidecar auth binding"
+	bulkAuthBindingLength  = 32
 )
 
 // maxBulkChannelsPerSession bounds the channel table a single remote can grow.
@@ -87,6 +90,7 @@ type BulkSidecar struct {
 
 	localID enode.ID
 	priv    *ecdsa.PrivateKey
+	windows *semaphore.Weighted
 
 	closeOnce sync.Once
 	closeCh   chan struct{}
@@ -156,14 +160,15 @@ type bulkStreamMsgRW struct {
 }
 
 func newBulkSidecar(srv *Server, listenAddr string) (*BulkSidecar, error) {
-	cert, err := generateBulkSidecarCertificate()
-	if err != nil {
+	certs := new(bulkCertRotator)
+	// Fail startup if the first certificate cannot be generated.
+	if _, err := certs.certificate(nil); err != nil {
 		return nil, err
 	}
 	tlsConf := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		NextProtos:   []string{bulkSidecarNextProto},
-		MinVersion:   tls.VersionTLS13,
+		GetCertificate: certs.certificate,
+		NextProtos:     []string{bulkSidecarNextProto},
+		MinVersion:     tls.VersionTLS13,
 	}
 	quicConf := &quic.Config{
 		HandshakeIdleTimeout: bulkAuthTimeout,
@@ -180,6 +185,8 @@ func newBulkSidecar(srv *Server, listenAddr string) (*BulkSidecar, error) {
 			return bulkSidecarStats.newConnectionTrace()
 		},
 	}
+	windows := newBulkQUICWindows(srv.MaxPeers, srv.MaxPendingPeers)
+
 	udpAddr, err := net.ResolveUDPAddr("udp", listenAddr)
 	if err != nil {
 		return nil, err
@@ -194,7 +201,7 @@ func newBulkSidecar(srv *Server, listenAddr string) (*BulkSidecar, error) {
 	transport := &quic.Transport{
 		Conn:        udpConn,
 		Tracer:      bulkSidecarStats.newTransportRecorder(),
-		ConnContext: bulkServerConnContext(srv),
+		ConnContext: bulkServerConnContext(srv, windows),
 	}
 	listener, err := transport.Listen(tlsConf, quicConf)
 	if err != nil {
@@ -210,6 +217,7 @@ func newBulkSidecar(srv *Server, listenAddr string) (*BulkSidecar, error) {
 		log:       srv.log,
 		localID:   srv.localnode.ID(),
 		priv:      srv.PrivateKey,
+		windows:   windows,
 		closeCh:   make(chan struct{}),
 		sessions:  make(map[enode.ID]*bulkSession),
 	}, nil
@@ -300,29 +308,15 @@ func (b *BulkSidecar) session(remote *enode.Node) *bulkSession {
 }
 
 func (b *BulkSidecar) peerSession(remote *enode.Node, peer *Peer) *bulkSession {
-	remote = b.peerRecord(remote)
 	remoteID := remote.ID()
 	b.lock.Lock()
 	defer b.lock.Unlock()
-	select {
-	case <-b.closeCh:
+	if !b.accepting(peer) {
 		return nil
-	default:
 	}
-	if peer != nil {
-		select {
-		case <-peer.Done():
-			return nil
-		default:
-		}
-	}
-	if session, ok := b.sessions[remoteID]; ok {
-		session.lock.Lock()
-		if remote.Seq() > session.remote.Seq() {
-			session.remote = remote
-		}
-		session.lock.Unlock()
-		return session
+	if existing := b.sessions[remoteID]; existing != nil {
+		existing.refreshRecord(remote)
+		return existing
 	}
 	session := &bulkSession{
 		sidecar:  b,
@@ -334,6 +328,22 @@ func (b *BulkSidecar) peerSession(remote *enode.Node, peer *Peer) *bulkSession {
 	}
 	b.sessions[remoteID] = session
 	return session
+}
+
+func (b *BulkSidecar) accepting(peer *Peer) bool {
+	select {
+	case <-b.closeCh:
+		return false
+	default:
+	}
+	if peer != nil {
+		select {
+		case <-peer.Done():
+			return false
+		default:
+		}
+	}
+	return true
 }
 
 func (b *BulkSidecar) handleIncomingConn(conn *quic.Conn) {
@@ -371,7 +381,7 @@ func (b *BulkSidecar) dialConn(ctx context.Context, remote *enode.Node) (*quic.C
 	dialCtx, cancel := context.WithTimeout(ctx, bulkDialTimeout)
 	defer cancel()
 
-	releaseWindow, err := reserveBulkQUICWindow()
+	releaseWindow, err := reserveBulkQUICWindow(b.windows)
 	if err != nil {
 		return nil, err
 	}
@@ -395,18 +405,28 @@ func (b *BulkSidecar) dialConn(ctx context.Context, remote *enode.Node) (*quic.C
 }
 
 func (rw *bulkStreamMsgRW) ReadMsg() (Msg, error) {
-	// Clear the authentication or previous payload deadline while the lane is
-	// idle. Local buffer admission must not consume the payload read timeout.
+	// Idle lanes may wait indefinitely, but a started header must finish within
+	// one read timeout regardless of how many reads it takes.
 	if err := rw.stream.SetReadDeadline(time.Time{}); err != nil {
 		return Msg{}, err
 	}
 	var header [bulkFrameHeaderSize]byte
-	if _, err := io.ReadFull(rw.stream, header[:]); err != nil {
+	if _, err := io.ReadFull(rw.stream, header[:1]); err != nil {
+		return Msg{}, err
+	}
+	if err := rw.stream.SetReadDeadline(time.Now().Add(bulkMessageReadTimeout)); err != nil {
+		return Msg{}, err
+	}
+	if _, err := io.ReadFull(rw.stream, header[1:]); err != nil {
 		return Msg{}, err
 	}
 	size := binary.BigEndian.Uint32(header[8:])
 	if size > bulkMaxMessageSize {
 		return Msg{}, fmt.Errorf("bulk message too large: %d", size)
+	}
+	// Local buffer admission must not consume a network read timeout.
+	if err := rw.stream.SetReadDeadline(time.Time{}); err != nil {
+		return Msg{}, err
 	}
 	msg := Msg{
 		Code:    binary.BigEndian.Uint64(header[:8]),

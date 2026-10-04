@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc"
@@ -32,6 +33,7 @@ const (
 )
 
 type HeimdallGRPCClient struct {
+	closeOnce             sync.Once
 	conn                  *grpc.ClientConn
 	client                *heimdall.HeimdallClient
 	borQueryClient        borTypes.QueryClient
@@ -161,14 +163,20 @@ func NewHeimdallGRPCClient(grpcAddress string, heimdallURL string, timeout time.
 }
 
 func (h *HeimdallGRPCClient) Close() {
-	if h == nil || h.conn == nil {
+	if h == nil {
 		return
 	}
-	log.Debug("Shutdown detected, Closing Heimdall gRPC client")
-	err := h.conn.Close()
-	if err != nil {
-		log.Error("Error closing Heimdall gRPC client connection", "err", err)
-	}
+	h.closeOnce.Do(func() {
+		log.Debug("Shutdown detected, Closing Heimdall gRPC client")
+		if h.client != nil {
+			h.client.Close()
+		}
+		if h.conn != nil {
+			if err := h.conn.Close(); err != nil {
+				log.Error("Error closing Heimdall gRPC client connection", "err", err)
+			}
+		}
+	})
 }
 
 func (h *HeimdallGRPCClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {

@@ -214,6 +214,9 @@ func (s *bulkSession) waitDial(ctx context.Context, wait <-chan struct{}) (*quic
 }
 
 func (s *bulkSession) dial(ctx context.Context, remote *enode.Node, wait chan struct{}) (*quic.Conn, error) {
+	// Resolve once per connection attempt, not once per lane. Reconnects must
+	// still pick up newer endpoints from discovery even if RLPx stays connected.
+	remote = s.refreshRecord(s.sidecar.peerRecord(remote))
 	conn, err := s.sidecar.dialConn(ctx, remote)
 
 	s.lock.Lock()
@@ -241,6 +244,15 @@ func (s *bulkSession) dial(ctx context.Context, remote *enode.Node, wait chan st
 	}
 	_ = conn.CloseWithError(bulkSidecarCloseErrorCode, "bulk connection superseded")
 	return s.conn, nil
+}
+
+func (s *bulkSession) refreshRecord(remote *enode.Node) *enode.Node {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	if remote.Seq() > s.remote.Seq() {
+		s.remote = remote
+	}
+	return s.remote
 }
 
 func (s *bulkSession) openChannel(ctx context.Context, channel string) (MsgReadWriter, error) {

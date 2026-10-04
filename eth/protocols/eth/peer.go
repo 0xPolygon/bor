@@ -147,48 +147,36 @@ func (p *Peer) ID() string {
 	return p.id
 }
 
+// bulkAttacher updates lane state without replacing the protocol's reader.
+type bulkAttacher interface {
+	AttachBulkChannel(string, p2p.MsgReadWriter)
+	AttachBulkChannels([]string, p2p.MsgReadWriter)
+	HasBulk() bool
+}
+
 // AttachBulkRW installs an auxiliary sidecar lane for the negotiated eth
 // protocol. Status stays on the primary devp2p lane because the sidecar is
 // attached after the initial protocol handshake completes.
 func (p *Peer) AttachBulkRW(rw p2p.MsgReadWriter) {
-	channels := []string{ethControlChannel, ethBlocksChannel, ethTxChannel, ethTxFetchChannel, ethBulkChannel}
-	if multi, ok := p.rw.(interface {
-		AttachBulkChannels([]string, p2p.MsgReadWriter)
-	}); ok {
-		multi.AttachBulkChannels(channels, rw)
-		return
+	if routed, ok := p.rw.(bulkAttacher); ok {
+		routed.AttachBulkChannels([]string{
+			ethControlChannel, ethBlocksChannel, ethTxChannel, ethTxFetchChannel, ethBulkChannel,
+		}, rw)
 	}
-	p.rw = p2p.NewChannelRoutedMsgReadWriter(p.rw, rw, ethBulkChannel, func(code uint64) bool {
-		return ethSidecarChannelForMsg(code) != ""
-	})
 }
 
 // AttachBulkChannelRW installs an auxiliary sidecar lane for a specific eth
 // traffic class. Status stays on the primary devp2p lane because the sidecar
 // is attached after the initial protocol handshake completes.
 func (p *Peer) AttachBulkChannelRW(channel string, rw p2p.MsgReadWriter) {
-	if routed, ok := p.rw.(interface{ AttachBulk(p2p.MsgReadWriter) }); ok {
-		if multi, ok := p.rw.(interface {
-			AttachBulkChannel(string, p2p.MsgReadWriter)
-		}); ok {
-			multi.AttachBulkChannel(channel, rw)
-			return
-		}
-		routed.AttachBulk(rw)
-		return
+	if routed, ok := p.rw.(bulkAttacher); ok {
+		routed.AttachBulkChannel(channel, rw)
 	}
-	// NewPeer pre-wraps rw with the routed wrapper, so live sidecar attachment
-	// normally updates lane state in place instead of swapping out p.rw.
-	p.rw = p2p.NewChannelRoutedMsgReadWriter(p.rw, rw, channel, func(code uint64) bool {
-		return ethSidecarChannelForMsg(code) == channel
-	})
 }
 
 func (p *Peer) HasBulkRW() bool {
-	if routed, ok := p.rw.(interface{ HasBulk() bool }); ok {
-		return routed.HasBulk()
-	}
-	return false
+	routed, ok := p.rw.(bulkAttacher)
+	return ok && routed.HasBulk()
 }
 
 func ethSidecarChannelForMsg(code uint64) string {

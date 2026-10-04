@@ -6,18 +6,19 @@ import (
 	"sync"
 
 	"github.com/quic-go/quic-go"
+	"golang.org/x/sync/semaphore"
 )
 
 var errBulkAdmissionLimit = errors.New("bulk sidecar connection limit reached")
 
 type bulkPendingAuthKey struct{}
 
-func newBulkConnContext(maxPeers, maxPendingPeers int) func(context.Context, *quic.ClientInfo) (context.Context, error) {
+func newBulkConnContext(maxPeers, maxPendingPeers int, windows *semaphore.Weighted) func(context.Context, *quic.ClientInfo) (context.Context, error) {
 	if maxPendingPeers <= 0 {
 		maxPendingPeers = defaultMaxPendingPeers
 	}
 	pending := make(chan struct{}, maxPendingPeers)
-	connections := make(chan struct{}, max(0, maxPeers)+maxPendingPeers)
+	connections := make(chan struct{}, bulkQUICWindowSlots(maxPeers, maxPendingPeers))
 	return func(ctx context.Context, _ *quic.ClientInfo) (context.Context, error) {
 		select {
 		case pending <- struct{}{}:
@@ -30,7 +31,7 @@ func newBulkConnContext(maxPeers, maxPendingPeers int) func(context.Context, *qu
 			<-pending
 			return nil, errBulkAdmissionLimit
 		}
-		releaseWindow, err := reserveBulkQUICWindow()
+		releaseWindow, err := reserveBulkQUICWindow(windows)
 		if err != nil {
 			<-connections
 			<-pending

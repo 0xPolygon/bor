@@ -80,46 +80,34 @@ func (p *Peer) Log() log.Logger {
 	return p.logger
 }
 
+// bulkAttacher updates lane state without replacing the protocol's reader.
+type bulkAttacher interface {
+	AttachBulkChannel(string, p2p.MsgReadWriter)
+	AttachBulkChannels([]string, p2p.MsgReadWriter)
+	HasBulk() bool
+}
+
 // AttachBulkRW installs an auxiliary sidecar lane for the negotiated snap
 // protocol. When unavailable, traffic falls back to the primary devp2p lane.
 func (p *Peer) AttachBulkRW(rw p2p.MsgReadWriter) {
-	channels := []string{snapAccountsChannel, snapStorageChannel, snapCodeChannel, snapTrieChannel}
-	if multi, ok := p.rw.(interface {
-		AttachBulkChannels([]string, p2p.MsgReadWriter)
-	}); ok {
-		multi.AttachBulkChannels(channels, rw)
-		return
+	if routed, ok := p.rw.(bulkAttacher); ok {
+		routed.AttachBulkChannels([]string{
+			snapAccountsChannel, snapStorageChannel, snapCodeChannel, snapTrieChannel,
+		}, rw)
 	}
-	p.rw = p2p.NewChannelRoutedMsgReadWriter(p.rw, rw, snapTrieChannel, func(code uint64) bool {
-		return snapSidecarChannelForMsg(code) != ""
-	})
 }
 
 // AttachBulkChannelRW installs an auxiliary sidecar lane for a specific snap
 // traffic class. When unavailable, traffic falls back to the primary devp2p lane.
 func (p *Peer) AttachBulkChannelRW(channel string, rw p2p.MsgReadWriter) {
-	if routed, ok := p.rw.(interface{ AttachBulk(p2p.MsgReadWriter) }); ok {
-		if multi, ok := p.rw.(interface {
-			AttachBulkChannel(string, p2p.MsgReadWriter)
-		}); ok {
-			multi.AttachBulkChannel(channel, rw)
-			return
-		}
-		routed.AttachBulk(rw)
-		return
+	if routed, ok := p.rw.(bulkAttacher); ok {
+		routed.AttachBulkChannel(channel, rw)
 	}
-	// NewPeer and NewFakePeer pre-wrap rw with the routed wrapper, so live
-	// sidecar attachment normally updates lane state in place.
-	p.rw = p2p.NewChannelRoutedMsgReadWriter(p.rw, rw, channel, func(code uint64) bool {
-		return snapSidecarChannelForMsg(code) == channel
-	})
 }
 
 func (p *Peer) HasBulkRW() bool {
-	if routed, ok := p.rw.(interface{ HasBulk() bool }); ok {
-		return routed.HasBulk()
-	}
-	return false
+	routed, ok := p.rw.(bulkAttacher)
+	return ok && routed.HasBulk()
 }
 
 func snapSidecarChannelForMsg(code uint64) string {
