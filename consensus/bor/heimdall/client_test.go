@@ -440,3 +440,82 @@ func TestStateSyncURL(t *testing.T) {
 		t.Fatalf("expected URL %q, got %q", expected, url.String())
 	}
 }
+
+// TestFetchHonorsConfiguredTimeout: a request must be bounded by the timeout
+// the client was constructed with (--bor.heimdalltimeout). The per-request
+// deadline used to be overwritten with a fixed 30s, so a Heimdall that
+// stalled for longer than the operator's setting kept the caller waiting
+// well past it.
+func TestFetchHonorsConfiguredTimeout(t *testing.T) {
+	t.Parallel()
+
+	const (
+		clientTimeout = 50 * time.Millisecond
+		serverDelay   = 500 * time.Millisecond
+	)
+
+	wg := &sync.WaitGroup{}
+	wg.Add(1)
+
+	handler := &HttpHandlerFake{}
+	handler.SetCheckpointHandler(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(serverDelay):
+			w.WriteHeader(http.StatusOK)
+		case <-r.Context().Done():
+		}
+	})
+
+	port, listener, err := network.FindAvailablePort()
+	require.NoError(t, err, "expect no error in finding available port")
+
+	srv, err := CreateMockHeimdallServer(wg, port, listener, handler)
+	require.NoError(t, err, "expect no error in starting mock heimdall server")
+
+	client := NewHeimdallClient(fmt.Sprintf("http://localhost:%d", port), clientTimeout)
+
+	url, err := checkpointURL(client.urlString, -1)
+	require.NoError(t, err)
+
+	start := time.Now()
+	_, err = FetchOnce[checkpoint.CheckpointResponse](t.Context(), client.client, url, client.closeCh)
+	elapsed := time.Since(start)
+
+	require.Error(t, err, "expect the request to fail once the configured timeout elapses")
+	require.Less(t, elapsed, serverDelay, "request took %v, longer than the server delay; the configured %v timeout was not applied", elapsed, clientTimeout)
+
+	require.NoError(t, srv.Shutdown(t.Context()))
+	wg.Wait()
+}
+
+// TestFetchDefaultsTimeoutWhenUnset: a client constructed without a timeout
+// (as the gRPC and app clients do) must still get a usable request deadline
+// rather than an already-expired one.
+func TestFetchDefaultsTimeoutWhenUnset(t *testing.T) {
+	t.Parallel()
+
+	wg := &sync.WaitGroup{}
+	wg.Add(1)
+
+	handler := &HttpHandlerFake{}
+	handler.SetCheckpointHandler(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("{}"))
+	})
+
+	port, listener, err := network.FindAvailablePort()
+	require.NoError(t, err, "expect no error in finding available port")
+
+	srv, err := CreateMockHeimdallServer(wg, port, listener, handler)
+	require.NoError(t, err, "expect no error in starting mock heimdall server")
+
+	client := NewHeimdallClient(fmt.Sprintf("http://localhost:%d", port), 0)
+
+	url, err := checkpointURL(client.urlString, -1)
+	require.NoError(t, err)
+
+	_, err = FetchOnce[checkpoint.CheckpointResponse](t.Context(), client.client, url, client.closeCh)
+	require.NoError(t, err, "a client without a configured timeout must fall back to the default deadline")
+
+	require.NoError(t, srv.Shutdown(t.Context()))
+	wg.Wait()
+}

@@ -15,7 +15,6 @@ syncmode = "full"
 gcmode = "archive"
 # snapshot = true
 # ethstats = ""
-# witnessprotocol = false
 # devfakeauthor = false
 
 # ["eth.requiredblocks"]
@@ -189,6 +188,9 @@ gcmode = "archive"
   # enable = true
   # procs = 8
   # enforce = false
+
+# [witness]
+#   enable = false
 
 # [pprof]
 #   pprof = false

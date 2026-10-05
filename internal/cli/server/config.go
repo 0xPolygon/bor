@@ -902,7 +902,7 @@ func DefaultConfig() *Config {
 		},
 		Heimdall: &HeimdallConfig{
 			URL:         "http://localhost:1317",
-			Timeout:     5 * time.Second,
+			Timeout:     30 * time.Second,
 			Without:     false,
 			GRPCAddress: "",
 			WSAddress:   "",

@@ -12,7 +12,7 @@ The ```bor server``` command runs the Bor client.
 
 - ```bor.heimdallgRPC```: Address of Heimdall gRPC service (comma-separated for failover: "addr1,addr2")
 
-- ```bor.heimdalltimeout```: Timeout period for bor's outgoing requests to heimdall (default: 5s)
+- ```bor.heimdalltimeout```: Timeout period for bor's outgoing requests to heimdall (default: 30s)
 
 - ```bor.logs```: Enables bor log retrieval (default: false)
 
