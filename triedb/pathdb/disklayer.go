@@ -664,13 +664,20 @@ func (dl *diskLayer) terminate(persist bool) error {
 	if err := dl.stopBackground(); err != nil {
 		return err
 	}
-	// Persist outside dl.lock: the save can take a long time for large address
-	// caches, and holding the lock would stall every concurrent node read for
-	// its whole duration. dl.nodes is never reassigned after construction.
-	if persist && dl.nodes != nil {
-		dl.nodes.persist()
+	if persist {
+		dl.persistCaches()
 	}
 	return nil
+}
+
+// persistCaches saves the address caches to the journal directory. Callers
+// run it outside dl.lock: the save can take a long time for large address
+// caches, and holding the lock would stall every concurrent node read for its
+// whole duration. dl.nodes is never reassigned after construction.
+func (dl *diskLayer) persistCaches() {
+	if dl.nodes != nil {
+		dl.nodes.persist()
+	}
 }
 
 // stopBackground waits for the frozen buffer flush and stops the state

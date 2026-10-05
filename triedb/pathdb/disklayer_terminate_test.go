@@ -226,6 +226,58 @@ func TestAddressCachePersistFlag(t *testing.T) {
 	}
 }
 
+// TestDatabaseCloseServesReadsDuringPersist checks that Close saves the
+// address caches outside db.lock, so calls that only need a read lock on the
+// database, like SnapshotCompleted, are not stalled for the whole save.
+func TestDatabaseCloseServesReadsDuringPersist(t *testing.T) {
+	db := New(rawdb.NewMemoryDatabase(), nil, false)
+	disk := db.tree.bottom()
+
+	addr := common.HexToAddress("0x1234567890123456789012345678901234567890")
+	cache, err := NewAddressBiasedCache(rawdb.NewMemoryDatabase(), map[common.Address]int{addr: 32 * 1024}, 16*1024, 0, t.TempDir())
+	if err != nil {
+		t.Fatalf("failed to create address cache: %v", err)
+	}
+	cache.wg.Wait()
+
+	saving := make(chan struct{})
+	release := make(chan struct{})
+	cache.saveSnapshot = func(c *fastcache.Cache, path string) error {
+		close(saving)
+		<-release
+		return saveSnapshotConcurrent(c, path)
+	}
+	disk.nodes = cache
+
+	closed := make(chan error, 1)
+	go func() { closed <- db.Close() }()
+	select {
+	case <-saving:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close never started persisting the address cache")
+	}
+
+	read := make(chan struct{})
+	go func() {
+		db.SnapshotCompleted()
+		close(read)
+	}()
+	select {
+	case <-read:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("SnapshotCompleted blocked while Close was persisting the address cache")
+	}
+
+	close(release)
+	if err := <-closed; err != nil {
+		t.Fatalf("Close returned an unexpected error: %v", err)
+	}
+	if _, err := os.Stat(snapshotPath(cache.journalDir, crypto.Keccak256Hash(addr.Bytes()))); err != nil {
+		t.Fatalf("expected the address cache to be persisted by Close: %v", err)
+	}
+}
+
 // TestCloseDuringStateSyncSkipsPersist checks that Close does not save the
 // address cache while a state sync is pending: Disable already dropped those
 // snapshots and the next startup would delete them again unused.
