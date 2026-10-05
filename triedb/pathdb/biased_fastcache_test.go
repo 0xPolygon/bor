@@ -2064,3 +2064,127 @@ func TestPreloadReadsCachedNodesFromCache(t *testing.T) {
 		t.Fatal("expected preload to load the child of the cached root")
 	}
 }
+
+// TestNewAddressBiasedCacheRemovesUnconfiguredSnapshots checks that startup
+// deletes snapshots of addresses no longer configured, keeps the configured
+// ones, and leaves anything it did not create alone.
+func TestNewAddressBiasedCacheRemovesUnconfiguredSnapshots(t *testing.T) {
+	journalDir := t.TempDir()
+	kept := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	dropped := common.HexToAddress("0x2222222222222222222222222222222222222222")
+
+	first, err := NewAddressBiasedCache(rawdb.NewMemoryDatabase(), map[common.Address]int{kept: 32 * 1024, dropped: 32 * 1024}, 16*1024, 0, journalDir)
+	if err != nil {
+		t.Fatalf("failed to create cache: %v", err)
+	}
+	first.wg.Wait()
+	first.Close(true)
+
+	dir := snapshotDir(journalDir)
+	droppedHash := crypto.Keccak256Hash(dropped.Bytes())
+	unrelated := []string{
+		"notes.txt",
+		"0x1234.cache",
+		"0x" + strings.Repeat("zz", common.HashLength) + ".cache",
+		droppedHash.Hex()[2:] + ".cache",
+		droppedHash.Hex() + ".bak",
+	}
+	for _, name := range unrelated {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatalf("failed to write %s: %v", name, err)
+		}
+	}
+
+	h := installCapturingHandler(t)
+	second, err := NewAddressBiasedCache(rawdb.NewMemoryDatabase(), map[common.Address]int{kept: 32 * 1024}, 16*1024, 0, journalDir)
+	if err != nil {
+		t.Fatalf("failed to reopen cache: %v", err)
+	}
+	second.wg.Wait()
+	defer second.Close(false)
+
+	if !h.contains("Removed unconfigured address cache snapshot") {
+		t.Error("expected the removal to be logged")
+	}
+
+	if _, err := os.Stat(snapshotPath(journalDir, droppedHash)); !os.IsNotExist(err) {
+		t.Fatalf("expected the unconfigured snapshot to be removed, got stat err: %v", err)
+	}
+	if _, err := os.Stat(snapshotPath(journalDir, crypto.Keccak256Hash(kept.Bytes()))); err != nil {
+		t.Fatalf("expected the configured snapshot to be kept: %v", err)
+	}
+	for _, name := range unrelated {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Errorf("expected unrelated entry %s to be kept: %v", name, err)
+		}
+	}
+}
+
+// TestNewAddressBiasedCacheLogsSnapshotListFailure checks that an unreadable
+// snapshot directory is logged and does not fail startup, while a missing
+// one is not reported at all.
+func TestNewAddressBiasedCacheLogsSnapshotListFailure(t *testing.T) {
+	addr := common.HexToAddress("0x1234567890123456789012345678901234567890")
+	sizes := map[common.Address]int{addr: 32 * 1024}
+
+	t.Run("missing directory", func(t *testing.T) {
+		h := installCapturingHandler(t)
+		cache, err := NewAddressBiasedCache(rawdb.NewMemoryDatabase(), sizes, 16*1024, 0, t.TempDir())
+		if err != nil {
+			t.Fatalf("failed to create cache: %v", err)
+		}
+		cache.Close(false)
+		if h.contains("Failed to list address cache snapshots") {
+			t.Fatal("expected a missing snapshot directory not to be reported")
+		}
+	})
+	t.Run("unreadable directory", func(t *testing.T) {
+		journalDir := t.TempDir()
+		if err := os.WriteFile(snapshotDir(journalDir), []byte("x"), 0o644); err != nil {
+			t.Fatalf("failed to write file: %v", err)
+		}
+		h := installCapturingHandler(t)
+		cache, err := NewAddressBiasedCache(rawdb.NewMemoryDatabase(), sizes, 16*1024, 0, journalDir)
+		if err != nil {
+			t.Fatalf("failed to create cache: %v", err)
+		}
+		cache.Close(false)
+		if !h.contains("Failed to list address cache snapshots") {
+			t.Fatal("expected the listing failure to be logged")
+		}
+	})
+}
+
+// TestNewAddressBiasedCacheLogsSnapshotRemovalFailure checks that a stale
+// snapshot that cannot be removed is logged rather than failing startup.
+func TestNewAddressBiasedCacheLogsSnapshotRemovalFailure(t *testing.T) {
+	skipIfRoot(t)
+	journalDir := t.TempDir()
+	dropped := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	first, err := NewAddressBiasedCache(rawdb.NewMemoryDatabase(), map[common.Address]int{dropped: 32 * 1024}, 16*1024, 0, journalDir)
+	if err != nil {
+		t.Fatalf("failed to create cache: %v", err)
+	}
+	first.wg.Wait()
+	first.Close(true)
+
+	dir := snapshotDir(journalDir)
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatalf("failed to chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	h := installCapturingHandler(t)
+	cache, err := NewAddressBiasedCache(rawdb.NewMemoryDatabase(), nil, 16*1024, 0, journalDir)
+	if err != nil {
+		t.Fatalf("failed to create cache: %v", err)
+	}
+	cache.Close(false)
+
+	if !h.contains("Failed to remove unconfigured address cache snapshot") {
+		t.Fatal("expected the removal failure to be logged")
+	}
+	if h.contains("Removed unconfigured address cache snapshot") {
+		t.Fatal("expected no removal to be reported")
+	}
+}

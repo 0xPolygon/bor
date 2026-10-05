@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -78,6 +79,44 @@ func removeSnapshots(journalDir string) error {
 	return os.RemoveAll(snapshotDir(journalDir))
 }
 
+// removeUnconfiguredSnapshots deletes the snapshots of addresses that are no
+// longer configured, so dropping an address does not leave its (possibly
+// multi-GB) snapshot behind forever. Only entries named exactly as
+// snapshotPath names them are considered; failures are logged.
+func removeUnconfiguredSnapshots(journalDir string, addressCacheSizes map[common.Address]int) {
+	dir := snapshotDir(journalDir)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Warn("Failed to list address cache snapshots", "dir", dir, "err", err)
+		}
+		return
+	}
+	configured := make(map[string]struct{}, len(addressCacheSizes))
+	for addr := range addressCacheSizes {
+		configured[filepath.Base(snapshotPath(journalDir, crypto.Keccak256Hash(addr.Bytes())))] = struct{}{}
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if _, ok := configured[name]; ok || !isSnapshotName(name) {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		if err := os.RemoveAll(path); err != nil {
+			log.Warn("Failed to remove unconfigured address cache snapshot", "path", path, "err", err)
+			continue
+		}
+		log.Info("Removed unconfigured address cache snapshot", "path", path)
+	}
+}
+
+// isSnapshotName reports whether name is a snapshot entry as named by
+// snapshotPath: a lowercase 0x-prefixed hash followed by ".cache".
+func isSnapshotName(name string) bool {
+	hexHash, ok := strings.CutSuffix(name, ".cache")
+	return ok && len(hexHash) == 2+2*common.HashLength && common.HexToHash(hexHash).Hex() == hexHash
+}
+
 // warmFillThreshold returns the byte-fill level, out of cacheSize, that a
 // reloaded snapshot must reach to be considered warm. It matches the 66.6%
 // target preloadAddressAsync itself fills toward (see the totalBytesLoaded
@@ -114,6 +153,10 @@ func NewAddressBiasedCache(db ethdb.Database, addressCacheSizes map[common.Addre
 		rateLimitBPS: rateLimitBPS,
 		journalDir:   journalDir,
 		saveSnapshot: saveSnapshotConcurrent,
+	}
+
+	if journalDir != "" {
+		removeUnconfiguredSnapshots(journalDir, addressCacheSizes)
 	}
 
 	// Initialize caches synchronously, but preload asynchronously
