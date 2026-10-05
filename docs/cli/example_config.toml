@@ -80,6 +80,7 @@ bp-rpc-endpoints = [ ] # Comma separated rpc endpoints of all block producers
   accountqueue = 16             # Maximum number of non-executable transaction slots permitted per account
   globalqueue = 32768           # Maximum number of non-executable transaction slots for all accounts
   lifetime = "3h0m0s"           # Maximum amount of time non-executable transaction are queued
+  strandedlifetime = "3h0m0s"   # Maximum amount of time a pending transaction can stay below the base fee before its account's pending transactions are evicted (0 disables)
 
 [miner]
   mine = false                  # Enable mining

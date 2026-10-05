@@ -447,3 +447,5 @@ The ```bor server``` command runs the Bor client.
 - ```txpool.rebroadcast-max-age```: Maximum age for a transaction to be eligible for rebroadcast (default: 10m0s)
 
 - ```txpool.rejournal```: Time interval to regenerate the local transaction journal (default: 1h0m0s)
+
+- ```txpool.strandedlifetime```: Maximum amount of time a pending transaction can stay below the base fee before its account's pending transactions are evicted (0 disables) (default: 3h0m0s)
