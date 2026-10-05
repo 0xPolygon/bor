@@ -15,15 +15,18 @@ func TestWitnessAnnouncementSigningHashStable(t *testing.T) {
 	blockHash := common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111")
 	blockNumber := uint64(0x0102030405060708)
 	witnessHash := common.HexToHash("0x2222222222222222222222222222222222222222222222222222222222222222")
+	witnessSize := uint64(0x1112131415161718)
 
-	got := WitnessAnnouncementSigningHash(blockHash, blockNumber, witnessHash)
+	got := WitnessAnnouncementSigningHash(blockHash, blockNumber, witnessHash, witnessSize)
 
-	// Manual recomposition: domain-tag || blockHash || blockNumber (big-endian u64) || witnessHash
+	// Manual recomposition: domain-tag || blockHash || blockNumber (big-endian
+	// u64) || witnessHash || witnessSize (big-endian u64)
 	want := crypto.Keccak256Hash(
 		witnessAnnounceDomainTag,
 		blockHash.Bytes(),
 		[]byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08},
 		witnessHash.Bytes(),
+		[]byte{0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18},
 	)
 	if got != want {
 		t.Fatalf("signing-hash format drift: got %s want %s", got.Hex(), want.Hex())
@@ -39,7 +42,7 @@ func TestWitnessAnnouncementSigningHashDomainSeparated(t *testing.T) {
 	blockNumber := uint64(7)
 	witnessHash := common.HexToHash("0xbb")
 
-	withTag := WitnessAnnouncementSigningHash(blockHash, blockNumber, witnessHash)
+	withTag := WitnessAnnouncementSigningHash(blockHash, blockNumber, witnessHash, 0)
 	withoutTag := crypto.Keccak256Hash(
 		blockHash.Bytes(),
 		[]byte{0, 0, 0, 0, 0, 0, 0, 7},
@@ -58,20 +61,23 @@ func TestWitnessAnnouncementSigningHashSensitive(t *testing.T) {
 		common.HexToHash("0xaa"),
 		1,
 		common.HexToHash("0xbb"),
+		100,
 	)
 	cases := []struct {
 		name     string
 		blockH   common.Hash
 		num      uint64
 		witnessH common.Hash
+		size     uint64
 	}{
-		{"different blockHash", common.HexToHash("0xab"), 1, common.HexToHash("0xbb")},
-		{"different blockNumber", common.HexToHash("0xaa"), 2, common.HexToHash("0xbb")},
-		{"different witnessHash", common.HexToHash("0xaa"), 1, common.HexToHash("0xbc")},
+		{"different blockHash", common.HexToHash("0xab"), 1, common.HexToHash("0xbb"), 100},
+		{"different blockNumber", common.HexToHash("0xaa"), 2, common.HexToHash("0xbb"), 100},
+		{"different witnessHash", common.HexToHash("0xaa"), 1, common.HexToHash("0xbc"), 100},
+		{"different witnessSize", common.HexToHash("0xaa"), 1, common.HexToHash("0xbb"), 101},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := WitnessAnnouncementSigningHash(tc.blockH, tc.num, tc.witnessH); got == base {
+			if got := WitnessAnnouncementSigningHash(tc.blockH, tc.num, tc.witnessH, tc.size); got == base {
 				t.Fatalf("digest unchanged when %s differed", tc.name)
 			}
 		})

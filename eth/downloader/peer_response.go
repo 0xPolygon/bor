@@ -30,9 +30,9 @@ import (
 )
 
 const (
-	peerJailBackoff = 5 * time.Minute
-	peerSoftBackoff = 30 * time.Second
-	peerDropBackoff = 30 * time.Minute
+	peerJailBackoff = 30 * time.Second
+	peerSoftBackoff = 10 * time.Second
+	peerDropBackoff = 1 * time.Minute
 
 	softFailureWindow        = 10 * time.Minute
 	softFailureJailThreshold = 4
@@ -159,6 +159,10 @@ func isTransientFailure(err error) bool {
 }
 
 func (d *Downloader) respondToPeer(peer *peerConnection, reason peerFailureReason, err error) {
+	if trusted, ok := peer.peer.(interface{ Trusted() bool }); ok && trusted.Trusted() {
+		peer.log.Debug("Downloader: trusted peer hit a sync failure, not penalizing", "reason", reason, "err", err)
+		return
+	}
 	decision := peer.responseDecision(reason)
 
 	switch decision.action {

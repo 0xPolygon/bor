@@ -1223,6 +1223,114 @@ func TestRequestWitnessesWithVerification_DownloadPaused(t *testing.T) {
 	}
 }
 
+// TestRequestWitnessesWithVerification_RefusedPageCountStopsDownload pins the
+// refusal semantics end-to-end at the RequestWitnessesWithVerification level.
+// When the page-count bound refuses a peer's offering, the adapter must:
+//   - request no further page of that witness from the peer (the deferred
+//     retry handler previously rebuilt requests for every remaining page),
+//   - not retry page 0,
+//   - not jail the peer (a refusal is not a protocol violation), and
+//   - resolve the request with an empty response so the witness manager
+//     moves on to another peer.
+func TestRequestWitnessesWithVerification_RefusedPageCountStopsDownload(t *testing.T) {
+	hash := common.Hash{0xab, 0xcd}
+	const claimedPages = 4
+
+	p, mockWitPeer := testPeer(t)
+	mockWitPeer.EXPECT().ID().Return("test-peer").AnyTimes()
+	dlCh := make(chan *eth.Response, 1)
+
+	var jailCalls atomic.Int32
+	jailPeer := func(string) { jailCalls.Add(1) }
+	verifyPageCount := func(common.Hash, uint64, string) bool { return false }
+
+	var (
+		requestedMu sync.Mutex
+		requested   []uint64
+	)
+	// Every page the adapter asks for is answered with TotalPages=claimedPages,
+	// so any request past page 0 means the refused download continued.
+	mockWitPeer.EXPECT().
+		RequestWitness(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(wpr []wit.WitnessPageRequest, ch chan *wit.Response) (*wit.Request, error) {
+			pages := make([]wit.WitnessPageResponse, 0, len(wpr))
+			requestedMu.Lock()
+			for _, r := range wpr {
+				requested = append(requested, r.Page)
+				pages = append(pages, wit.WitnessPageResponse{
+					Page:       r.Page,
+					TotalPages: claimedPages,
+					Hash:       r.Hash,
+					Data:       []byte{0x01, 0x02},
+				})
+			}
+			requestedMu.Unlock()
+			go func() {
+				ch <- &wit.Response{
+					Res:  &wit.WitnessPacketRLPPacket{WitnessPacketResponse: pages},
+					Done: make(chan error, 1),
+				}
+			}()
+			return &wit.Request{}, nil
+		}).
+		AnyTimes()
+
+	req, err := p.RequestWitnessesWithVerification([]common.Hash{hash}, dlCh, verifyPageCount, jailPeer)
+	require.NoError(t, err)
+	require.NotNil(t, req)
+
+	select {
+	case response := <-dlCh:
+		require.NotNil(t, response)
+		witnesses, ok := response.Res.([]*stateless.Witness)
+		require.True(t, ok)
+		assert.Empty(t, witnesses, "a refused offering must resolve as an empty response, never as a reconstructed witness")
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for response")
+	}
+
+	// Let any stray request-building goroutine surface before asserting.
+	time.Sleep(100 * time.Millisecond)
+
+	requestedMu.Lock()
+	defer requestedMu.Unlock()
+	assert.Equal(t, []uint64{0}, requested, "only page 0 may be requested from a peer whose page count was refused")
+	assert.Zero(t, jailCalls.Load(), "a refused page count is not a protocol violation and must not jail the peer")
+}
+
+// TestBuildWitnessRequests_SkipsPausedHash verifies the request builder never
+// issues a request — neither a fresh page nor a retry — for a hash whose
+// download has been paused, even when the bookkeeping says pages remain and a
+// failed page is flagged for retry. The gomock controller fails the test on any
+// unexpected RequestWitness call.
+func TestBuildWitnessRequests_SkipsPausedHash(t *testing.T) {
+	hash := common.Hash{0x01}
+
+	p, mockWitPeer := testPeer(t)
+	mockWitPeer.EXPECT().ID().Return("test-peer").AnyTimes()
+
+	var (
+		witReqs        []*wit.Request
+		witReqsWg      sync.WaitGroup
+		mapsMu         sync.RWMutex
+		buildRequestMu sync.RWMutex
+	)
+	witReqResCh := make(chan *witReqRes, DefaultConcurrentResponsesHandled)
+	witReqSem := make(chan int, DefaultConcurrentRequestsPerPeer)
+	witTotalPages := map[common.Hash]uint64{hash: 4}   // three pages nominally still to fetch
+	witTotalRequest := map[common.Hash]uint64{hash: 1} // page 0 already requested
+	failedRequests := map[common.Hash]map[uint64]witReqRetryCount{
+		hash: {0: {FailCount: 1, ShouldRetryAgain: true}}, // page 0 flagged for retry
+	}
+	downloadPaused := map[common.Hash]bool{hash: true}
+
+	err := p.buildWitnessRequests([]common.Hash{hash}, &witReqs, &witReqsWg, witTotalPages, witTotalRequest,
+		witReqResCh, witReqSem, &mapsMu, &buildRequestMu, failedRequests, downloadPaused, make(chan struct{}))
+	require.NoError(t, err)
+	assert.Empty(t, witReqs, "no request may be built for a paused hash")
+	assert.Equal(t, uint64(1), witTotalRequest[hash], "request bookkeeping must not advance for a paused hash")
+}
+
 // TestBuildWitnessRequests_ConcurrentFailedRequestsAccess verifies that concurrent access
 // to the failedRequests map in buildWitnessRequests is properly synchronized.
 // This test specifically validates the fix for the "concurrent map writes" panic.
@@ -1320,6 +1428,7 @@ func TestBuildWitnessRequests_ConcurrentFailedRequestsAccess(t *testing.T) {
 				&mapsMu,
 				&buildRequestMu,
 				failedRequests,
+				make(map[common.Hash]bool),
 				cancel,
 			)
 			if err != nil {

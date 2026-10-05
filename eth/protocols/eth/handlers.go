@@ -477,6 +477,9 @@ func handleNewBlockhashes(backend Backend, msg Decoder, peer *Peer) error {
 	if err := msg.Decode(ann); err != nil {
 		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
 	}
+	if err := peer.checkAnnouncementRate(len(*ann), time.Now()); err != nil {
+		return err
+	}
 	// Mark the hashes as present at the remote node
 	for _, block := range *ann {
 		peer.markBlock(block.Hash)
@@ -686,13 +689,18 @@ func handleNewPooledTransactionHashes(backend Backend, msg Decoder, peer *Peer) 
 }
 
 func handleGetPooledTransactions(backend Backend, msg Decoder, peer *Peer) error {
+	reservation, err := peer.reservePooledReply()
+	if err != nil {
+		return err
+	}
+	defer reservation.release()
 	// Decode the pooled transactions retrieval message
 	var query GetPooledTransactionsPacket
 	if err := msg.Decode(&query); err != nil {
 		return err
 	}
 	hashes, txs := answerGetPooledTransactions(backend, query.GetPooledTransactionsRequest)
-	return peer.ReplyPooledTransactionsRLP(query.RequestId, hashes, txs)
+	return peer.replyPooledTransactionsRLP(query.RequestId, hashes, txs, reservation)
 }
 
 func answerGetPooledTransactions(backend Backend, query GetPooledTransactionsRequest) ([]common.Hash, []rlp.RawValue) {
@@ -703,8 +711,8 @@ func answerGetPooledTransactions(backend Backend, query GetPooledTransactionsReq
 		txs    []rlp.RawValue
 	)
 
-	for _, hash := range query {
-		if bytes >= softResponseLimit {
+	for lookups, hash := range query {
+		if bytes >= softResponseLimit || lookups >= maxPooledTxsServe {
 			break
 		}
 		// Retrieve the requested transaction, skipping if unknown to us

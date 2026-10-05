@@ -244,6 +244,11 @@ func (p *Peer) StaticDialed() bool {
 	return p.rw.is(staticDialedConn)
 }
 
+// Static reports configured membership, regardless of connection direction.
+func (p *Peer) Static() bool {
+	return p.rw.is(staticConn)
+}
+
 // Lifetime returns the time since peer creation.
 func (p *Peer) Lifetime() mclock.AbsTime {
 	return mclock.Now() - p.created
@@ -622,7 +627,7 @@ func (p *Peer) Info() *PeerInfo {
 	info.Network.RemoteAddress = p.RemoteAddr().String()
 	info.Network.Inbound = p.rw.is(inboundConn)
 	info.Network.Trusted = p.rw.is(trustedConn)
-	info.Network.Static = p.rw.is(staticDialedConn)
+	info.Network.Static = p.Static()
 
 	// Gather all the running protocol infos
 	for _, proto := range p.running {
