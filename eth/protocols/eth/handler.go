@@ -209,6 +209,7 @@ func handleMessage(backend Backend, peer *Peer) error {
 		return err
 	}
 	if msg.Size > maxMessageSize {
+		peer.observeFraming(msg)
 		return fmt.Errorf("%w: %v > %v", errMsgTooLarge, msg.Size, maxMessageSize)
 	}
 	defer msg.Discard()
@@ -235,7 +236,8 @@ func handleMessage(backend Backend, peer *Peer) error {
 		}(time.Now())
 	}
 	if handler := handlers[msg.Code]; handler != nil {
-		return handler(backend, msg, peer)
+		return peer.handleObserved(backend, msg, handler)
 	}
+	peer.observeFraming(msg)
 	return fmt.Errorf("%w: %v", errInvalidMsgCode, msg.Code)
 }

@@ -125,12 +125,13 @@ type txRequest struct {
 // txDelivery is the notification that a batch of transactions have been added
 // to the pool and should be untracked.
 type txDelivery struct {
-	origin    string        // Identifier of the peer originating the notification
-	hashes    []common.Hash // Batch of transaction hashes having been delivered
-	metas     []txMetadata  // Batch of metadata associated with the delivered hashes
-	direct    bool          // Whether this is a direct reply or a broadcast
-	requestID uint64        // Request identifier echoed by direct replies
-	violation error         // Whether we encountered a protocol violation
+	origin      string        // Identifier of the peer originating the notification
+	hashes      []common.Hash // Batch of transaction hashes having been delivered
+	metas       []txMetadata  // Batch of metadata associated with the delivered hashes
+	direct      bool          // Whether this is a direct reply or a broadcast
+	requestID   uint64        // Request identifier echoed by direct replies
+	violation   error         // Whether we encountered a protocol violation
+	observation txObservation
 }
 
 // txDrop is the notification that a peer has disconnected.
@@ -159,6 +160,8 @@ type txDrop struct {
 //     abandoned request is dead on the wire; the request ID echoed in
 //     PooledTransactionsMsg identifies stale replies from abandoned requests.
 type TxFetcher struct {
+	validationObserver func(string, bool, uint64, uint64, bool)
+
 	notify  chan *txAnnounce
 	cleanup chan *txDelivery
 	drop    chan *txDrop
@@ -207,7 +210,8 @@ func NewTxFetcher(hasTx func(common.Hash) bool, addTxs func([]*types.Transaction
 // a simulated version and the internal randomness with a deterministic one.
 func NewTxFetcherForTests(
 	hasTx func(common.Hash) bool, addTxs func([]*types.Transaction) []error, fetchTxs func(string, uint64, []common.Hash) error, dropPeer func(string),
-	clock mclock.Clock, realTime func() time.Time, rand *mrand.Rand) *TxFetcher {
+	clock mclock.Clock, realTime func() time.Time, rand *mrand.Rand,
+) *TxFetcher {
 	var requestIDs *mrand.Rand
 	if rand != nil {
 		requestIDs = mrand.New(mrand.NewSource(reqIDTestSeed))
@@ -302,6 +306,7 @@ func (f *TxFetcher) isKnownUnderpriced(hash common.Hash) bool {
 // direct request replies. The differentiation is important so the fetcher can
 // re-schedule missing transactions as soon as possible.
 func (f *TxFetcher) Enqueue(peer string, txs []*types.Transaction, direct bool, requestID uint64) error {
+	var invalid bool
 	var (
 		inMeter          = txReplyInMeter
 		knownMeter       = txReplyKnownMeter
@@ -341,6 +346,9 @@ func (f *TxFetcher) Enqueue(peer string, txs []*types.Transaction, direct bool, 
 		batch := txs[i:end]
 
 		for j, err := range f.addTxs(batch) {
+			if f.validationObserver != nil {
+				invalid = invalid || invalidTransaction(err)
+			}
 			// Track the transaction hash if the price is too low for us.
 			// Avoid re-request this transaction when we receive another
 			// announcement.
@@ -394,7 +402,7 @@ func (f *TxFetcher) Enqueue(peer string, txs []*types.Transaction, direct bool, 
 		}
 	}
 	select {
-	case f.cleanup <- &txDelivery{origin: peer, hashes: added, metas: metas, direct: direct, requestID: requestID, violation: violation}:
+	case f.cleanup <- &txDelivery{origin: peer, hashes: added, metas: metas, direct: direct, requestID: requestID, violation: violation, observation: f.validationSummary(txs, invalid)}:
 		return nil
 	case <-f.quit:
 		return errTerminated
@@ -632,6 +640,7 @@ func (f *TxFetcher) loop() {
 			f.rescheduleTimeout(timeoutTimer, timeoutTrigger)
 
 		case delivery := <-f.cleanup:
+			f.observeDelivery(delivery)
 			// A direct delivery whose request ID doesn't match the peer's
 			// currently tracked request is a stale reply to an abandoned
 			// request (see txFetchDanglingRetry). The transactions it

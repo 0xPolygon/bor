@@ -3,6 +3,7 @@ package eth
 import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/eth/protocols/wit"
+	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
 )
 
 // This file holds the WIT2-specific handler methods split out of handler.go to
@@ -15,6 +16,7 @@ import (
 // decay window. Single bad announcements are tolerated to allow for stray
 // pre-fork content; sustained misbehavior is not.
 func (h *handler) strikeWit2Peer(peer *wit.Peer) {
+	h.observePeer(peer.ID(), peerpolicy.InvalidWitnessAnnouncement)
 	if h.wit2PeerTracker == nil {
 		return
 	}
@@ -38,6 +40,7 @@ func (h *handler) strikeWit2Peer(peer *wit.Peer) {
 // entry point into the same strike budget strikeWit2Peer uses for bad announces:
 // sustained misbehavior across either surface disconnects the peer.
 func (h *handler) strikeWit2PeerByID(id string) {
+	h.observePeer(id, peerpolicy.InvalidWitnessBody)
 	if h.wit2PeerTracker == nil {
 		return
 	}

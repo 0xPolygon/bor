@@ -80,6 +80,7 @@ var FullNodeGPO = gasprice.Config{
 
 // Defaults contains default settings for use on the Ethereum main net.
 var Defaults = Config{
+	PeerReputation:        true,
 	SyncMode:              downloader.SnapSync,
 	HistoryMode:           history.KeepAll,
 	NetworkId:             0, // enable auto configuration of networkID == chainID
@@ -113,6 +114,7 @@ var Defaults = Config{
 
 // Config contains configuration options for ETH and LES protocols.
 type Config struct {
+	PeerReputation bool // Enable observation-only peer scoring.
 	// The genesis block, which is inserted if the database is empty.
 	// If nil, the Ethereum main net block is used.
 	Genesis *core.Genesis `toml:",omitempty"`

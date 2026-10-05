@@ -125,13 +125,11 @@ func setupMiner(t *testing.T, n int, genesis *core.Genesis) ([]*node.Node, []*et
 }
 
 func buildEthereumInstance(t *testing.T, db ethdb.Database, updateGenesis ...func(gen *core.Genesis)) *initializeData {
-	return buildEthereumInstanceWithVMTrace(t, db, "", updateGenesis...)
+	return buildEthereumInstanceWithConfig(t, db, eth.Config{}, updateGenesis...)
 }
 
-// buildEthereumInstanceWithVMTrace is like buildEthereumInstance but also wires
-// up a live tracer registered under vmTraceName. Pass an empty string to skip.
-// The named tracer must already be registered with tracers.LiveDirectory.
-func buildEthereumInstanceWithVMTrace(t *testing.T, db ethdb.Database, vmTraceName string, updateGenesis ...func(gen *core.Genesis)) *initializeData {
+func buildEthereumInstanceWithConfig(t *testing.T, db ethdb.Database, ethConf eth.Config, updateGenesis ...func(gen *core.Genesis)) *initializeData {
+	t.Helper()
 	genesisData, err := ioutil.ReadFile("./testdata/genesis.json")
 	if err != nil {
 		t.Fatalf("%s", err)
@@ -145,18 +143,12 @@ func buildEthereumInstanceWithVMTrace(t *testing.T, db ethdb.Database, vmTraceNa
 		update(gen)
 	}
 
-	ethConf := &eth.Config{
-		Genesis:     gen,
-		BorLogs:     true,
-		StateScheme: "hash",
-		VMTrace:     vmTraceName,
-	}
+	ethConf.Genesis = gen
+	ethConf.BorLogs = true
+	ethConf.StateScheme = "hash"
 	ethConf.Genesis.MustCommit(db, triedb.NewDatabase(db, triedb.HashDefaults))
 
-	ethereum := utils.CreateBorEthereum(ethConf)
-	if err != nil {
-		t.Fatalf("failed to register Ethereum protocol: %v", err)
-	}
+	ethereum := utils.CreateBorEthereum(&ethConf)
 
 	ethConf.Genesis.MustCommit(ethereum.ChainDb(), triedb.NewDatabase(ethereum.ChainDb(), triedb.HashDefaults))
 
