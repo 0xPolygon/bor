@@ -33,7 +33,6 @@ devfakeauthor = false
   enable-block-tracking = false
 
 [p2p]
-  peer-reputation = true
   maxpeers = 50
   maxpendpeers = 50
   bind = "0.0.0.0"
