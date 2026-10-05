@@ -123,6 +123,7 @@ var pdbExemptMethods = map[string]pdbExemptCategory{
 	"Error":                 catLowLevel,
 	"GetOrNewStateObject":   catLowLevel,
 	"GetTrie":               catLowLevel,
+	"LogCount":              catLowLevel,
 	"Preimages":             catLowLevel,
 	"Reader":                catLowLevel,
 	"SetStorage":            catLowLevel,
