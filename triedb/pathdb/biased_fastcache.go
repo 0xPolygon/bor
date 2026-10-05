@@ -3,6 +3,8 @@ package pathdb
 import (
 	stdcontext "context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -45,6 +47,47 @@ type AddressBiasedCache struct {
 
 	// Rate limiting for preload operations (bytes per second, 0 = unlimited)
 	rateLimitBPS int64
+
+	// Directory used to persist/reload per-address caches across restarts.
+	// Empty string disables persistence (in-memory-only, matches legacy behavior).
+	journalDir string
+}
+
+// snapshotPath returns the on-disk path used to persist/reload the given
+// address's cache. journalDir is expected to already be an absolute,
+// resolved directory (see triedb/pathdb.Config.JournalDirectory).
+func snapshotPath(journalDir string, accountHash common.Hash) string {
+	return filepath.Join(snapshotDir(journalDir), accountHash.Hex()+".cache")
+}
+
+// snapshotDir returns the directory holding all address cache snapshots.
+func snapshotDir(journalDir string) string {
+	return filepath.Join(journalDir, "addresscache")
+}
+
+// removeSnapshots deletes every address cache snapshot under journalDir.
+func removeSnapshots(journalDir string) error {
+	return os.RemoveAll(snapshotDir(journalDir))
+}
+
+// warmFillThreshold returns the byte-fill level, out of cacheSize, that a
+// reloaded snapshot must reach to be considered warm. It matches the 66.6%
+// target preloadAddressAsync itself fills toward (see the totalBytesLoaded
+// check there), so a reload and a from-scratch preload are held to the same
+// bar.
+func warmFillThreshold(cacheSize int) uint64 {
+	return uint64(cacheSize * 2 / 3)
+}
+
+// isWarmReload reports whether a reloaded snapshot of bytesSize is warm
+// enough to skip the top-up preload for cacheSize. Without this check, a
+// snapshot persisted mid-preload (e.g. two restarts in quick succession)
+// would be marked warm and permanently skip the top-up preload — leaving the
+// cache stuck near-empty for addresses that are rarely touched by organic
+// block-processing traffic, which is exactly the profile of the addresses
+// this feature targets.
+func isWarmReload(bytesSize uint64, cacheSize int) bool {
+	return bytesSize >= warmFillThreshold(cacheSize)
 }
 
 // NewAddressBiasedCache creates a new address-biased cache with preloading.
@@ -54,18 +97,22 @@ type AddressBiasedCache struct {
 // of the cache for non-preloaded data. The rateLimitBPS limits preload I/O
 // in bytes per second (0 = unlimited).
 // Preloading happens asynchronously in the background.
-func NewAddressBiasedCache(db ethdb.Database, addressCacheSizes map[common.Address]int, commonCacheSize int, rateLimitBPS int64) (*AddressBiasedCache, error) {
+func NewAddressBiasedCache(db ethdb.Database, addressCacheSizes map[common.Address]int, commonCacheSize int, rateLimitBPS int64, journalDir string) (*AddressBiasedCache, error) {
 	ctx, cancel := stdcontext.WithCancel(stdcontext.Background())
 	cache := &AddressBiasedCache{
 		commonCache:  fastcache.New(commonCacheSize),
 		ctx:          ctx,
 		cancel:       cancel,
 		rateLimitBPS: rateLimitBPS,
+		journalDir:   journalDir,
 	}
 
 	// Initialize caches synchronously, but preload asynchronously
 	for addr, cacheSize := range addressCacheSizes {
-		cache.initAddressCache(addr, cacheSize)
+		warm := cache.initAddressCache(addr, cacheSize)
+		if warm {
+			continue
+		}
 
 		// Start async preloading
 		cache.wg.Add(1)
@@ -75,14 +122,36 @@ func NewAddressBiasedCache(db ethdb.Database, addressCacheSizes map[common.Addre
 	return cache, nil
 }
 
-// initAddressCache initializes the cache structures for an address synchronously
-func (c *AddressBiasedCache) initAddressCache(addr common.Address, cacheSize int) {
+// initAddressCache initializes the cache structure for an address synchronously.
+// If a persisted snapshot exists at the address's snapshot path and matches
+// the configured cache size, it is reloaded and the cache is considered warm
+// (the caller should skip preloadAddressAsync for this address). Otherwise a
+// fresh empty cache is created and the cache is considered cold. Staleness of
+// a reloaded cache is not a correctness concern: reader.Node already hash-
+// verifies every cache hit and evicts+refetches on mismatch, regardless of
+// why the cached blob is stale.
+func (c *AddressBiasedCache) initAddressCache(addr common.Address, cacheSize int) (warm bool) {
 	accountHash := crypto.Keccak256Hash(addr.Bytes())
-	addrCache := fastcache.New(cacheSize)
+
+	var addrCache *fastcache.Cache
+	if c.journalDir != "" {
+		addrCache = fastcache.LoadFromFileOrNew(snapshotPath(c.journalDir, accountHash), cacheSize)
+	} else {
+		addrCache = fastcache.New(cacheSize)
+	}
+
+	var stats fastcache.Stats
+	addrCache.UpdateStats(&stats)
+	warm = isWarmReload(stats.BytesSize, cacheSize)
+	if warm {
+		log.Info("Reloaded address cache snapshot", "address", addr, "entries", stats.EntriesCount, "bytes", stats.BytesSize, "path", snapshotPath(c.journalDir, accountHash))
+	}
 
 	// Mark this address as preloaded
 	c.preloadedAddrs.Store(accountHash, struct{}{})
 	c.addressCaches.Store(accountHash, addrCache)
+
+	return warm
 }
 
 // preloadAddressAsync loads storage trie nodes for the given account hash using
@@ -115,9 +184,13 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 		limiter = rate.NewLimiter(rate.Limit(c.rateLimitBPS), 64*1024)
 	}
 
-	// Local stats for logging progress
+	// Local stats for logging progress. The byte count starts from what the
+	// cache already holds (e.g. a partial snapshot reloaded from disk), so a
+	// reload plus this top-up together respect the 2/3 fill target.
 	var entriesLoaded int
-	var totalBytesLoaded uint64
+	var stats fastcache.Stats
+	addrCache.UpdateStats(&stats)
+	totalBytesLoaded := stats.BytesSize
 
 	rateLimitStr := "unlimited"
 	if c.rateLimitBPS > 0 {
@@ -142,6 +215,18 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 		depth int
 	}
 	queue := []queueItem{{path: nil, depth: 0}} // Start from root
+
+	// Decode actual children from the node and enqueue them.
+	// Only real trie children are returned, keeping queue size proportional
+	// to trie width rather than growing exponentially with depth.
+	enqueueChildren := func(nodeData []byte, item queueItem) {
+		for _, childPath := range decodeChildPaths(nodeData, item.path) {
+			queue = append(queue, queueItem{
+				path:  childPath,
+				depth: item.depth + 1,
+			})
+		}
+	}
 
 	for len(queue) > 0 {
 		// Check for shutdown signal periodically
@@ -193,26 +278,13 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 			}
 		}
 
-		// Check if adding this node would exceed cache size
-		// Key format: owner (32 bytes) + path
-		nodeSize := uint64(common.HashLength + len(item.path) + len(nodeData))
-
-		// Preload 66.6% of the cache size to allow hot paths to be added later
-		if totalBytesLoaded+nodeSize > uint64(cacheSize*2/3) {
-			log.Info("Cache size limit reached, stopping preload",
-				"account hash", accountHash.Hex(),
-				"entries", entriesLoaded,
-				"current depth", item.depth,
-				"max depth reached", maxDepthReached,
-				"size", common.StorageSize(totalBytesLoaded).String())
-			break
-		}
-
 		// Construct the cache key using the same format as nodeCacheKey
 		// Format: owner (32 bytes) + path
 		key := append(accountHash.Bytes(), item.path...)
 
-		// Skip if key already exists to avoid overwriting potentially newer data.
+		// Don't overwrite a key that already exists (e.g. reloaded from a snapshot),
+		// to avoid overwriting potentially newer data. Its children are still
+		// enqueued below, so a top-up can descend past cached ancestors.
 		// Both Has and Set are thread-safe on fastcache (internal sharding), but
 		// the Has → Set sequence is not atomic: a flusher's Set(newer) can land
 		// between our Has(false) and our Set(older), leaving the cache holding
@@ -227,7 +299,23 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 		//      that key — it does not stay poisoned until natural eviction.
 		// Worst case is one extra disk fetch per stale-blob occurrence.
 		if addrCache.Has(key) {
+			enqueueChildren(nodeData, item)
 			continue
+		}
+
+		// Check if adding this node would exceed cache size
+		// Key format: owner (32 bytes) + path
+		nodeSize := uint64(common.HashLength + len(item.path) + len(nodeData))
+
+		// Preload 66.6% of the cache size to allow hot paths to be added later
+		if totalBytesLoaded+nodeSize > warmFillThreshold(cacheSize) {
+			log.Info("Cache size limit reached, stopping preload",
+				"account hash", accountHash.Hex(),
+				"entries", entriesLoaded,
+				"current depth", item.depth,
+				"max depth reached", maxDepthReached,
+				"size", common.StorageSize(totalBytesLoaded).String())
+			break
 		}
 
 		addrCache.Set(key, nodeData)
@@ -247,16 +335,7 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 				"elapsed", time.Since(startTime))
 		}
 
-		// Decode actual children from the node and enqueue them.
-		// Only real trie children are returned, keeping queue size proportional
-		// to trie width rather than growing exponentially with depth.
-		childPaths := decodeChildPaths(nodeData, item.path)
-		for _, childPath := range childPaths {
-			queue = append(queue, queueItem{
-				path:  childPath,
-				depth: item.depth + 1,
-			})
-		}
+		enqueueChildren(nodeData, item)
 	}
 
 	// Log the completion
@@ -425,11 +504,51 @@ func (c *AddressBiasedCache) Reset() {
 	})
 }
 
-// Close cancels all background preload operations and waits for them to finish.
-// This ensures graceful shutdown and prevents goroutines from blocking application termination.
-func (c *AddressBiasedCache) Close() {
+// Close cancels all background preload operations and waits for them to
+// finish. If persist is true and a journal directory is configured, it also
+// persists each address's cache to disk so a future restart can reload it
+// instead of preloading from scratch. commonCache is never persisted (see
+// design spec).
+//
+// persist must be true only for a genuine final database shutdown
+// (Database.Close()). diskLayer.terminate() also calls this method (with
+// persist=false) from Journal() and Disable(), which stop the background
+// preloader for unrelated reasons and are not the node restarting — passing
+// true there would mean a redundant, potentially multi-GB write on those
+// paths for no benefit.
+//
+// A save failure (disk full, permission error, etc.) is logged and does not
+// fail Close(): losing a snapshot only degrades the next startup to a cold
+// preload, identical to today's behavior, and must not block shutdown.
+func (c *AddressBiasedCache) Close(persist bool) {
 	if c.cancel != nil {
 		c.cancel()  // Signal all goroutines to stop
 		c.wg.Wait() // Wait for them to finish
 	}
+
+	if !persist || c.journalDir == "" {
+		return
+	}
+
+	dir := snapshotDir(c.journalDir)
+	if err := ensureDir(dir); err != nil {
+		log.Warn("Failed to create address cache snapshot directory", "dir", dir, "err", err)
+		return
+	}
+
+	c.addressCaches.Range(func(key, value any) bool {
+		accountHash := key.(common.Hash)
+		addrCache := value.(*fastcache.Cache)
+
+		path := snapshotPath(c.journalDir, accountHash)
+		if err := addrCache.SaveToFileConcurrent(path, 4); err != nil {
+			log.Warn("Failed to persist address cache", "account hash", accountHash.Hex(), "path", path, "err", err)
+		}
+		return true
+	})
+}
+
+// ensureDir creates dir (and any missing parents) if it doesn't already exist.
+func ensureDir(dir string) error {
+	return os.MkdirAll(dir, 0o755)
 }
