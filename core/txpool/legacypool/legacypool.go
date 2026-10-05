@@ -194,6 +194,7 @@ type Config struct {
 	GlobalQueue  uint64 // Maximum number of non-executable transaction slots for all accounts
 
 	Lifetime            time.Duration // Maximum amount of time non-executable transaction are queued
+	StrandedLifetime    time.Duration // Maximum amount of time a pending head can stay below the base fee (0 disables)
 	AllowUnprotectedTxs bool          // Allow non-EIP-155 transactions
 
 	// Transaction filtering configuration
@@ -220,6 +221,7 @@ var DefaultConfig = Config{
 	GlobalQueue:  1024,
 
 	Lifetime:            3 * time.Hour,
+	StrandedLifetime:    3 * time.Hour,
 	AllowUnprotectedTxs: false,
 
 	Rebroadcast:          true,
@@ -260,6 +262,10 @@ func (config *Config) sanitize() Config {
 	if conf.Lifetime < 1 {
 		log.Warn("Sanitizing invalid txpool lifetime", "provided", conf.Lifetime, "updated", DefaultConfig.Lifetime)
 		conf.Lifetime = DefaultConfig.Lifetime
+	}
+	if conf.StrandedLifetime < 0 {
+		log.Warn("Sanitizing invalid txpool stranded lifetime", "provided", conf.StrandedLifetime, "updated", DefaultConfig.StrandedLifetime)
+		conf.StrandedLifetime = DefaultConfig.StrandedLifetime
 	}
 	// Sanitize rebroadcast configuration
 	if conf.RebroadcastInterval < 1*time.Second {
@@ -336,6 +342,8 @@ type LegacyPool struct {
 	rebroadcastAckFeed event.Feed
 	lastRebroadcast    map[common.Hash]time.Time // Track last rebroadcast time per tx hash
 	isTxPrivate        func(common.Hash) bool
+
+	stranded strandedState // Pending chains blocked by an unminable head
 }
 
 type txpoolResetRequest struct {
@@ -366,6 +374,7 @@ func New(config Config, chain BlockChain, options ...func(pool *LegacyPool)) *Le
 		initDoneCh:      make(chan struct{}),
 		filteredAddrs:   make(map[common.Address]struct{}),
 		lastRebroadcast: make(map[common.Hash]time.Time),
+		stranded:        newStrandedState(config),
 	}
 	pool.priced = newPricedList(pool.all)
 
@@ -501,6 +510,7 @@ func (pool *LegacyPool) loop() {
 				// Any old enough should be removed
 				pool.removeTx(hash, true, true)
 			}
+			pool.evictStranded(start)
 			evictTimer.Update(time.Since(start))
 			pool.mu.Unlock()
 		}
@@ -990,6 +1000,14 @@ func (pool *LegacyPool) add(tx *types.Transaction, async bool) (replaced bool, e
 	}
 	// already validated by this point
 	from, _ := types.Sender(pool.signer, tx)
+
+	// Refuse evicted stranded transactions that are still unminable
+	if pool.isEvictedStranded(from, tx) {
+		log.Trace("Discarding evicted stranded transaction", "hash", hash, "gasFeeCap", tx.GasFeeCap())
+		underpricedTxMeter.Mark(1)
+		stage0Duration = time.Since(stage0Time)
+		return false, txpool.ErrUnderpriced
+	}
 
 	// If the address is not yet known, request exclusivity to track the account
 	// only by this subpool until all transactions are evicted

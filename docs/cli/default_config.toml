@@ -78,6 +78,7 @@ devfakeauthor = false
   accountqueue = 64
   globalqueue = 131072
   lifetime = "3h0m0s"
+  strandedlifetime = "3h0m0s"
   filtered-addresses = ""
   rebroadcast = true
   rebroadcast-interval = "30s"
