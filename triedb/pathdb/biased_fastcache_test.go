@@ -2031,3 +2031,36 @@ func TestAddressBiasedCachePersistWithoutJournalDir(t *testing.T) {
 		t.Fatalf("expected no snapshot directory without a journal dir, got stat err: %v", err)
 	}
 }
+
+// TestPreloadReadsCachedNodesFromCache checks that the top-up preload takes a
+// node it already holds (e.g. reloaded from a snapshot) from the cache rather
+// than reading it from disk again.
+func TestPreloadReadsCachedNodesFromCache(t *testing.T) {
+	addr := common.HexToAddress("0x1234567890123456789012345678901234567890")
+	accountHash := crypto.Keccak256Hash(addr.Bytes())
+
+	const cacheSize = 16 * 1024 * 1024
+	base := rawdb.NewMemoryDatabase()
+	rootData := encodeBranchNode(t, []byte{0}, bytes.Repeat([]byte{0x55}, 32))
+	rawdb.WriteStorageTrieNode(base, accountHash, nil, rootData)
+	rawdb.WriteStorageTrieNode(base, accountHash, []byte{0}, encodeBranchNode(t, nil, nil))
+
+	addrCache := fastcache.New(cacheSize)
+	addrCache.Set(accountHash.Bytes(), rootData)
+
+	spy := &countingDatabase{Database: base}
+	c, err := NewAddressBiasedCache(spy, nil, 1024, 0, "")
+	if err != nil {
+		t.Fatalf("failed to create cache: %v", err)
+	}
+	c.addressCaches.Store(accountHash, addrCache)
+	c.wg.Add(1)
+	c.preloadAddressAsync(spy, addr, cacheSize)
+
+	if got := spy.gets(); got != 1 {
+		t.Fatalf("expected one disk read (the uncached child), got %d", got)
+	}
+	if !addrCache.Has(append(accountHash.Bytes(), 0)) {
+		t.Fatal("expected preload to load the child of the cached root")
+	}
+}

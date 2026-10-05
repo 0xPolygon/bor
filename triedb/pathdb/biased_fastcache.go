@@ -259,6 +259,20 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 			maxDepthReached = item.depth
 		}
 
+		// Construct the cache key using the same format as nodeCacheKey
+		// Format: owner (32 bytes) + path
+		key := append(accountHash.Bytes(), item.path...)
+
+		// A node already cached (e.g. reloaded from a snapshot) is neither
+		// re-read from disk nor overwritten, to avoid overwriting potentially
+		// newer data. Its children are still enqueued, so a top-up can descend
+		// past cached ancestors. A stale cached node can only misdirect the
+		// walk: children that no longer exist read back empty and are skipped.
+		if nodeData, cached := addrCache.HasGet(nil, key); cached {
+			enqueueChildren(nodeData, item)
+			continue
+		}
+
 		// Read the node from database
 		nodeData := rawdb.ReadStorageTrieNode(db, accountHash, item.path)
 		if len(nodeData) == 0 {
@@ -287,31 +301,6 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 			}
 		}
 
-		// Construct the cache key using the same format as nodeCacheKey
-		// Format: owner (32 bytes) + path
-		key := append(accountHash.Bytes(), item.path...)
-
-		// Don't overwrite a key that already exists (e.g. reloaded from a snapshot),
-		// to avoid overwriting potentially newer data. Its children are still
-		// enqueued below, so a top-up can descend past cached ancestors.
-		// Both Has and Set are thread-safe on fastcache (internal sharding), but
-		// the Has → Set sequence is not atomic: a flusher's Set(newer) can land
-		// between our Has(false) and our Set(older), leaving the cache holding
-		// the stale blob.
-		//
-		// Stale-blob safety has two layers:
-		//   1. reader.Node hash-checks every cache hit. A stale blob produces
-		//      a hash mismatch (Verkle's noHashCheck path is not used by Bor).
-		//   2. On hash mismatch from locCleanCache, reader.Node evicts the
-		//      offending entry and retries from disk (see reader.go's
-		//      evictCachedNode). The cache self-heals on the next read of
-		//      that key — it does not stay poisoned until natural eviction.
-		// Worst case is one extra disk fetch per stale-blob occurrence.
-		if addrCache.Has(key) {
-			enqueueChildren(nodeData, item)
-			continue
-		}
-
 		// Check if adding this node would exceed cache size
 		// Key format: owner (32 bytes) + path
 		nodeSize := uint64(common.HashLength + len(item.path) + len(nodeData))
@@ -327,6 +316,19 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 			break
 		}
 
+		// HasGet and Set are each thread-safe on fastcache (internal
+		// sharding), but the HasGet → Set sequence is not atomic: a flusher's
+		// Set(newer) can land between our miss and our Set(older), leaving the
+		// cache holding the stale blob.
+		//
+		// Stale-blob safety has two layers:
+		//   1. reader.Node hash-checks every cache hit. A stale blob produces
+		//      a hash mismatch (Verkle's noHashCheck path is not used by Bor).
+		//   2. On hash mismatch from locCleanCache, reader.Node evicts the
+		//      offending entry and retries from disk (see reader.go's
+		//      evictCachedNode). The cache self-heals on the next read of
+		//      that key — it does not stay poisoned until natural eviction.
+		// Worst case is one extra disk fetch per stale-blob occurrence.
 		addrCache.Set(key, nodeData)
 
 		entriesLoaded++
