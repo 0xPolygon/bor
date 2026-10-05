@@ -570,8 +570,10 @@ func (db *Database) Close() error {
 	// Block until the background flushing is finished. It must
 	// be done before terminating the potential background snapshot
 	// generator.
+	// Skip saving the address caches while a state sync is pending: Disable
+	// already dropped their snapshots and the next startup would drop them again.
 	dl := db.tree.bottom()
-	if err := dl.terminate(true); err != nil {
+	if err := dl.terminate(!db.waitSync); err != nil {
 		return err
 	}
 	dl.resetCache() // release the memory held by clean cache

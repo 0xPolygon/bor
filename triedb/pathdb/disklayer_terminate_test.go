@@ -226,6 +226,31 @@ func TestAddressCachePersistFlag(t *testing.T) {
 	}
 }
 
+// TestCloseDuringStateSyncSkipsPersist checks that Close does not save the
+// address cache while a state sync is pending: Disable already dropped those
+// snapshots and the next startup would delete them again unused.
+func TestCloseDuringStateSyncSkipsPersist(t *testing.T) {
+	addr := common.HexToAddress("0x1234567890123456789012345678901234567890")
+	accountHash := crypto.Keccak256Hash(addr.Bytes())
+
+	journalDir := t.TempDir()
+	config := *Defaults
+	config.JournalDirectory = journalDir
+	config.AddressCacheSizes = map[common.Address]int{addr: 32 * 1024}
+	config.AddressCachePersist = true
+
+	db := New(rawdb.NewMemoryDatabase(), &config, false)
+	if err := db.Disable(); err != nil {
+		t.Fatalf("Disable returned an unexpected error: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close returned an unexpected error: %v", err)
+	}
+	if _, err := os.Stat(snapshotPath(journalDir, accountHash)); !os.IsNotExist(err) {
+		t.Fatalf("expected no address cache snapshot after closing mid state sync, got stat err: %v", err)
+	}
+}
+
 // writeStaleSnapshot creates a fake address cache snapshot under journalDir
 // and returns its path.
 func writeStaleSnapshot(t *testing.T, journalDir string) string {
