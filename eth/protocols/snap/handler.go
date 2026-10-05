@@ -182,7 +182,6 @@ func HandleMessage(backend Backend, peer *Peer) error {
 			}
 		}
 		requestTracker.Fulfil(peer.id, peer.version, AccountRangeMsg, res.ID)
-
 		return backend.Handle(peer, res)
 
 	case msg.Code == GetStorageRangesMsg:
@@ -217,7 +216,6 @@ func HandleMessage(backend Backend, peer *Peer) error {
 		}
 
 		requestTracker.Fulfil(peer.id, peer.version, StorageRangesMsg, res.ID)
-
 		return backend.Handle(peer, res)
 
 	case msg.Code == GetByteCodesMsg:
@@ -243,7 +241,6 @@ func HandleMessage(backend Backend, peer *Peer) error {
 		}
 
 		requestTracker.Fulfil(peer.id, peer.version, ByteCodesMsg, res.ID)
-
 		return backend.Handle(peer, res)
 
 	case msg.Code == GetTrieNodesMsg:
@@ -271,7 +268,6 @@ func HandleMessage(backend Backend, peer *Peer) error {
 		}
 
 		requestTracker.Fulfil(peer.id, peer.version, TrieNodesMsg, res.ID)
-
 		return backend.Handle(peer, res)
 
 	default:

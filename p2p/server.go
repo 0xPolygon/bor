@@ -85,6 +85,7 @@ type Server struct {
 	running bool
 
 	listener     net.Listener
+	bulk         *BulkSidecar
 	ourHandshake *protoHandshake
 	loopWG       sync.WaitGroup // loop, listenLoop
 	peerFeed     event.Feed
@@ -442,6 +443,11 @@ func (srv *Server) DiscoveryV5() *discover.UDPv5 {
 	return srv.discv5
 }
 
+// BulkSidecar returns the auxiliary QUIC sidecar, if enabled.
+func (srv *Server) BulkSidecar() *BulkSidecar {
+	return srv.bulk
+}
+
 // StopDialing stops the dial scheduler without stopping the server.
 func (srv *Server) StopDialing() {
 	srv.lock.Lock()
@@ -465,6 +471,9 @@ func (srv *Server) Stop() {
 	if srv.listener != nil {
 		// this unblocks listener Accept
 		srv.listener.Close()
+	}
+	if srv.bulk != nil {
+		srv.bulk.Close()
 	}
 
 	close(srv.quit)
@@ -510,6 +519,13 @@ func (srv *Server) Start() (err error) {
 	if srv.running {
 		return errors.New("server already running")
 	}
+	listenAddr := srv.ListenAddr
+	defer func() {
+		if err != nil {
+			srv.rollbackStart()
+			srv.ListenAddr = listenAddr
+		}
+	}()
 
 	srv.running = true
 	srv.log = srv.Logger
@@ -527,6 +543,7 @@ func (srv *Server) Start() (err error) {
 	}
 
 	// static fields
+	srv.quit = make(chan struct{})
 	if srv.PrivateKey == nil {
 		return errors.New("Server.PrivateKey must be set to a non-nil key")
 	}
@@ -539,7 +556,6 @@ func (srv *Server) Start() (err error) {
 		srv.listenFunc = net.Listen
 	}
 
-	srv.quit = make(chan struct{})
 	srv.delpeer = make(chan peerDrop)
 	srv.checkpointPostHandshake = make(chan *conn)
 	srv.checkpointAddPeer = make(chan *conn)
@@ -563,15 +579,16 @@ func (srv *Server) Start() (err error) {
 			return err
 		}
 	}
+	if err := srv.setupBulkSidecar(); err != nil {
+		return err
+	}
 
 	if err := srv.setupDiscovery(); err != nil {
 		return err
 	}
 
 	srv.setupDialScheduler()
-
-	srv.loopWG.Add(1)
-	go srv.run()
+	srv.startLoops()
 
 	return nil
 }
@@ -604,7 +621,7 @@ func (srv *Server) setupLocalNode() error {
 	return nil
 }
 
-func (srv *Server) setupDiscovery() error {
+func (srv *Server) setupDiscovery() (err error) {
 	// Set up the discovery source mixer. Here, we don't care about the
 	// fairness of the mix, it's just for putting the
 	srv.discmix = enode.NewFairMix(0)
@@ -617,6 +634,13 @@ func (srv *Server) setupDiscovery() error {
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if err != nil {
+			if closeErr := conn.Close(); closeErr != nil && !errors.Is(closeErr, net.ErrClosed) {
+				srv.log.Debug("Discovery socket cleanup failed", "err", closeErr)
+			}
+		}
+	}()
 
 	var (
 		sconn     discover.UDPConn = conn
@@ -654,11 +678,6 @@ func (srv *Server) setupDiscovery() error {
 		}
 		srv.discv5, err = discover.ListenV5(sconn, srv.localnode, cfg)
 		if err != nil {
-			// Clean up v4 if v5 setup fails.
-			if srv.discv4 != nil {
-				srv.discv4.Close()
-				srv.discv4 = nil
-			}
 			return err
 		}
 	}
@@ -756,14 +775,84 @@ func (srv *Server) setupListening() error {
 				protocol: "TCP",
 				name:     "ethereum p2p",
 				port:     tcp.Port,
+				update: func(extPort int) {
+					srv.localnode.Set(enr.TCP(extPort))
+				},
 			}
 		}
 	}
 
-	srv.loopWG.Add(1)
-	go srv.listenLoop()
+	return nil
+}
+
+func (srv *Server) setupBulkSidecar() error {
+	if !srv.EnableBulkSidecar {
+		return nil
+	}
+	listenAddr := srv.BulkListenAddr
+	if listenAddr == "" {
+		listenAddr = deriveBulkListenAddr(srv.ListenAddr, srv.DiscAddr)
+	}
+	bulk, err := newBulkSidecar(srv, listenAddr)
+	if err != nil {
+		return err
+	}
+	srv.bulk = bulk
+
+	if udp, ok := bulk.Addr().(*net.UDPAddr); ok {
+		srv.setBulkQUICRecord(udp)
+		if !udp.IP.IsLoopback() && !udp.IP.IsPrivate() {
+			srv.portMappingRegister <- &portMapping{
+				protocol: "UDP",
+				name:     "ethereum bulk sidecar",
+				port:     udp.Port,
+				update: func(extPort int) {
+					srv.setBulkQUICRecord(&net.UDPAddr{IP: udp.IP, Port: extPort})
+				},
+			}
+		}
+	}
 
 	return nil
+}
+
+func deriveBulkListenAddr(listenAddr string, discAddr string) string {
+	base := discAddr
+	if base == "" {
+		base = listenAddr
+	}
+	if base == "" {
+		return ":0"
+	}
+	addr, err := net.ResolveUDPAddr("udp", base)
+	if err != nil {
+		return base
+	}
+	if addr.IP == nil {
+		return ":0"
+	}
+	return net.JoinHostPort(addr.IP.String(), "0")
+}
+
+func (srv *Server) setBulkQUICRecord(udp *net.UDPAddr) {
+	if udp == nil {
+		return
+	}
+	switch {
+	case udp.IP == nil:
+		srv.localnode.Set(enr.QUIC(udp.Port))
+		srv.localnode.Set(enr.QUIC6(udp.Port))
+	case udp.IP.IsUnspecified() && udp.IP.To4() != nil:
+		srv.localnode.Set(enr.QUIC(udp.Port))
+	case udp.IP.IsUnspecified():
+		// IPv6 unspecified listeners may later announce either an IPv4 or IPv6 node IP.
+		srv.localnode.Set(enr.QUIC(udp.Port))
+		srv.localnode.Set(enr.QUIC6(udp.Port))
+	case udp.IP.To4() == nil && udp.IP.To16() != nil:
+		srv.localnode.Set(enr.QUIC6(udp.Port))
+	default:
+		srv.localnode.Set(enr.QUIC(udp.Port))
+	}
 }
 
 func (srv *Server) setupUDPListening() (*net.UDPConn, error) {
@@ -790,6 +879,9 @@ func (srv *Server) setupUDPListening() (*net.UDPConn, error) {
 			protocol: "UDP",
 			name:     "ethereum peer discovery",
 			port:     laddr.Port,
+			update: func(extPort int) {
+				srv.localnode.SetFallbackUDP(extPort)
+			},
 		}
 	}
 
@@ -803,6 +895,21 @@ func (srv *Server) doPeerOp(fn peerOpFunc) {
 		<-srv.peerOpDone
 	case <-srv.quit:
 	}
+}
+
+// Peer retrieves a connected peer by ID, or nil if the server is not running.
+func (srv *Server) Peer(id enode.ID) *Peer {
+	srv.lock.Lock()
+	running := srv.running
+	srv.lock.Unlock()
+	if !running {
+		return nil
+	}
+	var peer *Peer
+	srv.doPeerOp(func(peers map[enode.ID]*Peer) {
+		peer = peers[id]
+	})
+	return peer
 }
 
 // run is the main loop of the server.
@@ -1201,6 +1308,9 @@ func (srv *Server) runPeer(p *Peer) {
 
 	// Run the per-peer main loop.
 	remoteRequested, err := p.run()
+	if srv.bulk != nil {
+		srv.bulk.DropPeer(p.ID())
+	}
 
 	// Announce disconnect on the main loop to update the peer set.
 	// The main loop waits for existing peers to be sent on srv.delpeer

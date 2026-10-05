@@ -26,6 +26,10 @@ const (
 	// each announcement is small (33 bytes per entry, 130 bytes signed) so the memory
 	// footprint stays well under 10KB per peer.
 	maxQueuedWitnessAnns = 64
+
+	// witBulkChannel is the sidecar lane carrying witness traffic. It must match
+	// the allowlist in p2p/bulk_channels.go.
+	witBulkChannel = "wit-bulk"
 )
 
 // Peer is a collection of relevant information we have about a `wit` peer.
@@ -54,10 +58,11 @@ type Peer struct {
 // NewPeer creates a new WIT peer and starts its background processes.
 func NewPeer(version uint, p *p2p.Peer, rw p2p.MsgReadWriter, logger log.Logger) *Peer {
 	id := p.ID().String()
+	routed := p2p.NewChannelRoutedMsgReadWriter(rw, nil, witBulkChannel, isBulkWitMsg)
 	peer := &Peer{
 		id:                id,
 		Peer:              p,
-		rw:                rw,
+		rw:                routed,
 		version:           version,
 		logger:            logger.With("peer", id),
 		knownWitnesses:    newKnownCache(maxKnownWitnesses),
@@ -77,6 +82,40 @@ func NewPeer(version uint, p *p2p.Peer, rw p2p.MsgReadWriter, logger log.Logger)
 	go peer.dispatcher()
 
 	return peer
+}
+
+// bulkAttacher updates lane state without replacing the protocol's reader.
+type bulkAttacher interface {
+	AttachBulkChannel(string, p2p.MsgReadWriter)
+	HasBulk() bool
+}
+
+// AttachBulkRW installs an auxiliary sidecar lane for the negotiated wit
+// protocol. When unavailable, traffic falls back to the primary devp2p lane.
+func (p *Peer) AttachBulkRW(rw p2p.MsgReadWriter) {
+	if routed, ok := p.rw.(bulkAttacher); ok {
+		routed.AttachBulkChannel(witBulkChannel, rw)
+	}
+}
+
+func (p *Peer) HasBulkRW() bool {
+	routed, ok := p.rw.(bulkAttacher)
+	return ok && routed.HasBulk()
+}
+
+func isBulkWitMsg(code uint64) bool {
+	switch code {
+	case NewWitnessMsg,
+		NewWitnessHashesMsg,
+		SignedNewWitnessHashesMsg,
+		GetMsgWitness,
+		MsgWitness,
+		GetWitnessMetadataMsg,
+		WitnessMetadataMsg:
+		return true
+	default:
+		return false
+	}
 }
 
 // sendWitness sends witness to the peer
