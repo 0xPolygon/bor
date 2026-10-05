@@ -28,18 +28,16 @@ type bucket struct {
 	repeatedBytes uint64
 }
 
-type usage struct{ items, bytes uint64 }
-type hashKey struct {
-	family Family
-	hash   common.Hash
-}
-type announcement struct {
-	tick  int64
-	count uint8
-}
+type (
+	usage        struct{ items, bytes uint64 }
+	announcement struct {
+		tick  int64
+		count uint8
+	}
+)
 type peerRecord struct {
 	windows [windowCount]bucket
-	hashes  lru.BasicLRU[hashKey, announcement]
+	hashes  [familyCount]lru.BasicLRU[common.Hash, announcement]
 }
 
 type Tracker struct {
@@ -93,7 +91,11 @@ func (t *Tracker) record(id string) *peerRecord {
 	if p, ok := t.peers.Get(id); ok {
 		return p
 	}
-	p := &peerRecord{hashes: lru.NewBasicLRU[hashKey, announcement](maxHashes)}
+	p := new(peerRecord)
+	// Announcement churn must not evict completed-download history.
+	for _, family := range []Family{BlockAnnouncements, TransactionAnnouncements, BodyReplies} {
+		p.hashes[family] = lru.NewBasicLRU[common.Hash, announcement](maxHashes)
+	}
 	if t.peers.Add(id, p) {
 		t.metrics.evictions.Inc(1)
 	}
@@ -128,8 +130,7 @@ func (p *peerRecord) announcements(b *bucket, tick int64, event Evidence) bool {
 	}
 	// Bound work independently of packet length; total volume still counts every item.
 	for _, hash := range event.Hashes[:min(len(event.Hashes), maxHashes)] {
-		key := hashKey{event.Family, hash}
-		entry, ok := p.hashes.Get(key)
+		entry, ok := p.hashes[event.Family].Get(hash)
 		if !ok || tick-entry.tick >= windowCount {
 			entry = announcement{tick: tick}
 		}
@@ -139,7 +140,7 @@ func (p *peerRecord) announcements(b *bucket, tick int64, event Evidence) bool {
 		if entry.count == 3 {
 			b.repeats = min(b.repeats+1, 33)
 		}
-		p.hashes.Add(key, entry)
+		p.hashes[event.Family].Add(hash, entry)
 	}
 	return b.repeats > 32
 }

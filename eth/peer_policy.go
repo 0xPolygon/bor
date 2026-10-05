@@ -16,9 +16,9 @@ func (h *handler) initPeerPolicy(enabled bool) {
 	}
 	h.peerPolicy = peerpolicy.New(mclock.System{})
 	h.downloader.SetFailureObserver(func(id string) { h.observePeer(id, peerpolicy.DownloaderFailure) })
-	h.txFetcher.SetValidationObserver(func(id string, direct bool, items, bytes uint64, invalid bool) {
+	h.txFetcher.SetValidationObserver(func(id string, solicited bool, items, bytes uint64, invalid bool) {
 		e := peerpolicy.Evidence{Items: items, Bytes: bytes}
-		if !direct {
+		if !solicited {
 			e.Family = peerpolicy.Transactions
 		}
 		if invalid {

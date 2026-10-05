@@ -113,7 +113,7 @@ func TestPeerPolicyBoundedRecords(t *testing.T) {
 		tracker.Observe("a", Evidence{Family: BlockAnnouncements, Hashes: []common.Hash{hash}})
 	}
 	p, _ := tracker.peers.Peek("a")
-	if p.hashes.Len() != maxHashes {
+	if p.hashes[BlockAnnouncements].Len() != maxHashes {
 		t.Fatal("hash bound exceeded")
 	}
 }

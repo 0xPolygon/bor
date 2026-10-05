@@ -12,8 +12,7 @@ func (p *peerRecord) repeatedBodies(b *bucket, tick int64, event Evidence) bool 
 	}
 	count := min(len(event.Hashes), len(event.ObjectBytes), maxHashes)
 	for i, hash := range event.Hashes[:count] {
-		key := hashKey{BodyReplies, hash}
-		entry, ok := p.hashes.Get(key)
+		entry, ok := p.hashes[BodyReplies].Get(hash)
 		if !ok || tick-entry.tick >= windowCount {
 			entry = announcement{tick: tick}
 		}
@@ -23,7 +22,7 @@ func (p *peerRecord) repeatedBodies(b *bucket, tick int64, event Evidence) bool 
 		if entry.count == 3 {
 			b.repeatedBytes = saturatingAdd(b.repeatedBytes, event.ObjectBytes[i], repeatedBodyBytes+1)
 		}
-		p.hashes.Add(key, entry)
+		p.hashes[BodyReplies].Add(hash, entry)
 	}
 	return b.repeatedBytes > repeatedBodyBytes
 }

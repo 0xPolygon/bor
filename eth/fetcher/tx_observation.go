@@ -7,25 +7,62 @@ package fetcher
 import (
 	"errors"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
 // SetValidationObserver installs a synchronous observer before Start. It reuses
-// admission results and must not block or change fetcher state.
+// admission results on the fetcher loop and must not block or change fetcher state.
 func (f *TxFetcher) SetValidationObserver(observer func(string, bool, uint64, uint64, bool)) {
 	f.validationObserver = observer
 }
 
-func (f *TxFetcher) observeValidation(peer string, direct bool, txs []*types.Transaction, invalid bool) {
+type txObservation struct {
+	items, bytes uint64
+	invalid      bool
+}
+
+func (f *TxFetcher) validationSummary(txs []*types.Transaction, invalid bool) txObservation {
+	if f.validationObserver == nil {
+		return txObservation{}
+	}
+	summary := txObservation{items: uint64(len(txs)), invalid: invalid}
+	for _, tx := range txs {
+		summary.bytes += tx.Size()
+	}
+	return summary
+}
+
+func (f *TxFetcher) observeDelivery(delivery *txDelivery) {
 	if f.validationObserver == nil {
 		return
 	}
-	var bytes uint64
-	for _, tx := range txs {
-		bytes += tx.Size()
+	// Request state belongs to this loop. A reply message type alone does not
+	// establish that its peer, request ID and contents match an outstanding request.
+	solicited := requestedDelivery(f.requests[delivery.origin], delivery)
+	summary := delivery.observation
+	f.validationObserver(delivery.origin, solicited, summary.items, summary.bytes, summary.invalid)
+}
+
+func requestedDelivery(request *txRequest, delivery *txDelivery) bool {
+	if !delivery.direct || request == nil || request.hashes == nil || request.requestID != delivery.requestID {
+		return false
 	}
-	f.validationObserver(peer, direct, uint64(len(txs)), bytes, invalid)
+	if len(delivery.hashes) > len(request.hashes) {
+		return false
+	}
+	wanted := make(map[common.Hash]struct{}, len(request.hashes))
+	for _, hash := range request.hashes {
+		wanted[hash] = struct{}{}
+	}
+	for _, hash := range delivery.hashes {
+		if _, ok := wanted[hash]; !ok {
+			return false
+		}
+		delete(wanted, hash)
+	}
+	return true
 }
 
 func invalidTransaction(err error) bool {

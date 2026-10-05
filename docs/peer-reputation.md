@@ -29,7 +29,11 @@ Already-known transactions, nonce/fee/balance-dependent rejections and pool
 capacity or admission policy do not receive correctness penalties. Successful
 admission does not imply immediate executability. Their unsolicited traffic
 still counts towards the transaction observation allowance. Solicited pooled
-transaction replies are excluded from that allowance.
+transaction replies are excluded from that allowance only when the peer and
+request ID match a tracked request and all returned hashes belong to it. The
+fetcher correlates these on its own loop before removing request state. Replayed,
+unmatched and expired-request replies count as incoming transaction traffic;
+being unmatched alone is not a correctness failure.
 
 Old blocks are not invalid merely because of age. Unsolicited block messages
 count towards block traffic allowances regardless of whether the block is old
@@ -67,6 +71,34 @@ Risk below 40 reports `none`. Risk 40–99 reports `throttle`. Risk 100 reports
 these actions. These weights and limits are a fixed experimental profile in
 `p2p/peerpolicy/evidence.go`, not GossipSub constants or production defaults.
 
+## Request-only peers
+
+Requesting data without announcing transactions or blocks adds no penalty. A
+syncing peer can remain at risk zero indefinitely while staying within the traffic
+profile. Announcements and useful deliveries do not cancel resource evidence.
+
+For a request-only peer without invalid-data evidence, the implemented equation is:
+
+```text
+request_only_bucket_risk = max(
+    20 if request volume exceeds its profile else 0,
+    20 if completed body serving exceeds its profile else 0,
+    20 if repeated completed body bytes exceed their profile else 0
+)
+risk = min(100, sum(request_only_bucket_risk over six live buckets))
+```
+
+Each ten-second bucket contributes at most 20 regardless of how many serving
+reasons qualify. One qualifying bucket gives 20, three give 60, and five give 100.
+Scores expire with their buckets. Rotating requested hashes does not reset volume
+accounting. This measures observed traffic, not refused requests or node overload;
+serving-work budgets and congestion-refusal evidence are not implemented here.
+
+The broader design's additive category weights and contribution scheduling are
+not active in this draft. It retains the conservative strongest-reason-per-bucket
+model above, including when correctness evidence is present. `throttle` and `jail`
+remain hypothetical actions; no peer is punished merely for receiving data.
+
 ## Traffic observation profile
 
 All limits below apply to one peer in one ten-second bucket. Either item or
@@ -78,7 +110,7 @@ byte excess raises the corresponding reason once for scoring that bucket.
 | Transaction hash announcements | 163,840 hashes | 16 MiB |
 | Unsolicited transactions | 32,768 transactions | 64 MiB |
 | Unsolicited full blocks | 160 messages | 160 MiB |
-| Header/body/receipt requests | 640 messages | 16 MiB |
+| Header/body/receipt/pooled-transaction requests | 640 messages | 16 MiB |
 | Completed block-body replies | 10,240 bodies | 160 MiB |
 
 Announcement history is keyed by peer identity, family and hash. Two copies
@@ -96,7 +128,9 @@ Announcement volume and repetition select one reason per observation.
 
 ## Bounds and performance
 
-There are at most 1,024 peer records and 128 recent object entries per record.
+There are at most 1,024 peer records. Each record has three separate histories of
+128 objects: block announcements, transaction announcements and completed bodies.
+Churn in one family cannot evict another family's repetition history.
 Only the first 128 hashes per announcement/reply are tracked for repetition;
 all items and bytes count towards volume. Hash churn can evict repetition
 history and identity churn can evict scores. Neither cache is a security cap.

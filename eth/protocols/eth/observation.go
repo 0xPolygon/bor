@@ -52,7 +52,7 @@ func messageFamily(code uint64) peerpolicy.Family {
 		return peerpolicy.BlockAnnouncements
 	case NewPooledTransactionHashesMsg:
 		return peerpolicy.TransactionAnnouncements
-	case GetBlockHeadersMsg, GetBlockBodiesMsg, GetReceiptsMsg:
+	case GetBlockHeadersMsg, GetBlockBodiesMsg, GetReceiptsMsg, GetPooledTransactionsMsg:
 		return peerpolicy.Requests
 	default:
 		return peerpolicy.Other

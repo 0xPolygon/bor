@@ -11,6 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/protocols/wit"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPeerPolicyObservationDoesNotEnforce(t *testing.T) {
@@ -69,9 +70,9 @@ func TestPeerPolicyHandlerIntegration(t *testing.T) {
 	if err := h.handler.txFetcher.Enqueue("sender", []*types.Transaction{tx}, false, 0); err != nil {
 		t.Fatal(err)
 	}
-	if got := h.handler.peerPolicy.Snapshot("sender"); got.Risk != 60 {
-		t.Fatalf("missing validation evidence: %+v", got)
-	}
+	require.Eventually(t, func() bool {
+		return h.handler.peerPolicy.Snapshot("sender").Risk == 60
+	}, time.Second, time.Millisecond)
 	if items.Snapshot().Count()-before != 1 {
 		t.Fatal("unsolicited transaction not counted")
 	}
