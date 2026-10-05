@@ -244,6 +244,12 @@ func (p *Peer) StaticDialed() bool {
 	return p.rw.is(staticDialedConn)
 }
 
+// Static returns true if the peer is in the static node set, whichever side
+// dialed the connection.
+func (p *Peer) Static() bool {
+	return p.rw.is(staticConn)
+}
+
 // Lifetime returns the time since peer creation.
 func (p *Peer) Lifetime() mclock.AbsTime {
 	return mclock.Now() - p.created

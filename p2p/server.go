@@ -104,6 +104,8 @@ type Server struct {
 	quit                    chan struct{}
 	addtrusted              chan *enode.Node
 	removetrusted           chan *enode.Node
+	addstatic               chan *enode.Node
+	removestatic            chan *enode.Node
 	peerOp                  chan peerOpFunc
 	peerOpDone              chan struct{}
 	delpeer                 chan peerDrop
@@ -192,6 +194,7 @@ const (
 	staticDialedConn
 	inboundConn
 	trustedConn
+	staticConn
 )
 
 // conn wraps a network connection with information gathered
@@ -247,6 +250,10 @@ func (f connFlag) String() string {
 
 	if f&inboundConn != 0 {
 		s += "-inbound"
+	}
+
+	if f&staticConn != 0 {
+		s += "-static"
 	}
 
 	if s != "" {
@@ -344,7 +351,10 @@ func (srv *Server) PeerCount() int {
 // the server will connect to the node. If the connection fails for any reason, the server
 // will attempt to reconnect the peer.
 func (srv *Server) AddPeer(node *enode.Node) {
-	srv.dialsched.addStatic(node)
+	select {
+	case srv.addstatic <- node:
+	case <-srv.quit:
+	}
 }
 
 // JailPeer jails a peer for the default jail period, preventing connections
@@ -372,10 +382,13 @@ func (srv *Server) RemovePeer(node *enode.Node) {
 		ch  chan *PeerEvent
 		sub event.Subscription
 	)
+	select {
+	case srv.removestatic <- node:
+	case <-srv.quit:
+		return
+	}
 	// Disconnect the peer on the main loop.
 	srv.doPeerOp(func(peers map[enode.ID]*Peer) {
-		srv.dialsched.removeStatic(node)
-
 		if peer := peers[node.ID()]; peer != nil {
 			ch = make(chan *PeerEvent, 1)
 			sub = srv.peerFeed.Subscribe(ch)
@@ -545,6 +558,8 @@ func (srv *Server) Start() (err error) {
 	srv.checkpointAddPeer = make(chan *conn)
 	srv.addtrusted = make(chan *enode.Node)
 	srv.removetrusted = make(chan *enode.Node)
+	srv.addstatic = make(chan *enode.Node)
+	srv.removestatic = make(chan *enode.Node)
 	srv.peerOp = make(chan peerOpFunc)
 	srv.peerOpDone = make(chan struct{})
 
@@ -805,6 +820,33 @@ func (srv *Server) doPeerOp(fn peerOpFunc) {
 	}
 }
 
+func staticNodeIDs(nodes []*enode.Node) map[enode.ID]bool {
+	ids := make(map[enode.ID]bool, len(nodes))
+	for _, n := range nodes {
+		ids[n.ID()] = true
+	}
+	return ids
+}
+
+// setStatic updates static membership for n on the run loop. Membership is
+// tracked apart from the dial flags because a static node that dials us first is
+// held as an inbound connection. The dial scheduler is updated here too so both
+// copies of the set change together.
+func (srv *Server) setStatic(static map[enode.ID]bool, peers map[enode.ID]*Peer, n *enode.Node, member bool) {
+	// The peer flag goes first so the dropper never sees a stale value while
+	// the dial scheduler call is pending.
+	if p, ok := peers[n.ID()]; ok {
+		p.rw.set(staticConn, member)
+	}
+	if member {
+		static[n.ID()] = true
+		srv.dialsched.addStatic(n)
+	} else {
+		delete(static, n.ID())
+		srv.dialsched.removeStatic(n)
+	}
+}
+
 // run is the main loop of the server.
 func (srv *Server) run() {
 	srv.log.Info("Started P2P networking", "self", srv.localnode.Node().URLv4())
@@ -817,6 +859,7 @@ func (srv *Server) run() {
 		peers        = make(map[enode.ID]*Peer)
 		inboundCount = 0
 		trusted      = make(map[enode.ID]bool, len(srv.TrustedNodes))
+		static       = staticNodeIDs(srv.StaticNodes)
 	)
 	// Put trusted nodes into a map to speed up checks.
 	// Trusted peers are loaded on startup or added via AddTrustedPeer RPC.
@@ -849,6 +892,12 @@ running:
 				p.rw.set(trustedConn, false)
 			}
 
+		case n := <-srv.addstatic:
+			srv.setStatic(static, peers, n, true)
+
+		case n := <-srv.removestatic:
+			srv.setStatic(static, peers, n, false)
+
 		case op := <-srv.peerOp:
 			// This channel is used by Peers and PeerCount.
 			op(peers)
@@ -867,6 +916,9 @@ running:
 		case c := <-srv.checkpointAddPeer:
 			// At this point the connection is past the protocol handshake.
 			// Its capabilities are known and the remote identity is verified.
+			// Static membership can change between the two checkpoints, so
+			// it is applied here, right before the peer is launched.
+			c.set(staticConn, static[c.node.ID()])
 			err := srv.addPeerChecks(peers, inboundCount, c)
 			if err == nil {
 				// The handshakes are done and it passed all checks.
