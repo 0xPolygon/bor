@@ -19,6 +19,7 @@ package legacypool
 
 import (
 	"errors"
+	"fmt"
 	"maps"
 	"math"
 	"math/big"
@@ -75,7 +76,8 @@ var (
 	// one. Future transactions should only be able to replace other future transactions.
 	ErrFutureReplacePending = errors.New("future transaction tries to replace pending")
 
-	// ErrTxFiltered is returned if a transaction is from a filtered address.
+	// ErrTxFiltered is returned if a transaction is sent by, or carries a SetCode
+	// authorization signed by, a filtered address.
 	ErrTxFiltered = errors.New("transaction from filtered address")
 )
 
@@ -795,16 +797,8 @@ func (pool *LegacyPool) ValidateTxBasics(tx *types.Transaction) error {
 // validateTx checks whether a transaction is valid according to the consensus
 // rules and adheres to some heuristic limits of the local node (price and size).
 func (pool *LegacyPool) validateTx(tx *types.Transaction) error {
-	// Check if transaction sender is filtered
-	from, err := types.Sender(pool.signer, tx)
-	if err != nil {
+	if err := pool.checkFiltered(tx); err != nil {
 		return err
-	}
-
-	if pool.isFiltered(from) {
-		filteredTxMeter.Mark(1)
-		log.Warn("Filtered transaction rejected", "hash", tx.Hash(), "from", from)
-		return ErrTxFiltered
 	}
 
 	opts := &txpool.ValidationOptionsWithState{
@@ -2312,6 +2306,46 @@ func (pool *LegacyPool) Clear() {
 // authorizations from the specific address cached in the pool.
 func (pool *LegacyPool) HasPendingAuth(addr common.Address) bool {
 	return pool.all.hasAuth(addr)
+}
+
+// checkFiltered rejects a transaction if its sender, or the signer of any of
+// its SetCode authorizations, is in the filtered list. Authorities are checked
+// because an authorization can be relayed by any sender: without this, a
+// filtered account could attach code to itself through someone else's
+// transaction, after which calls into that code act as the filtered account.
+//
+// Any recoverable signer counts, including revocations and tuples that would
+// be skipped at execution for a wrong chain ID or nonce. Validity at admission
+// is not validity at execution: an earlier tuple in the same list, or code
+// already delegated to the account, can move its nonce so a tuple that looks
+// stale here applies once the block is built.
+func (pool *LegacyPool) checkFiltered(tx *types.Transaction) error {
+	from, err := types.Sender(pool.signer, tx)
+	if err != nil {
+		return err
+	}
+
+	if pool.isFiltered(from) {
+		filteredTxMeter.Mark(1)
+		log.Warn("Filtered transaction rejected", "hash", tx.Hash(), "from", from)
+		return ErrTxFiltered
+	}
+
+	// Skip authority recovery when nothing is filtered, as it costs an
+	// ecrecover per authorization.
+	if len(pool.filteredAddrs) == 0 {
+		return nil
+	}
+
+	for _, authority := range tx.SetCodeAuthorities() {
+		if pool.isFiltered(authority) {
+			filteredTxMeter.Mark(1)
+			log.Warn("Filtered transaction rejected", "hash", tx.Hash(), "from", from, "authority", authority)
+			return fmt.Errorf("%w: authority %s", ErrTxFiltered, authority)
+		}
+	}
+
+	return nil
 }
 
 // isFiltered checks if an address is in the filtered list.
