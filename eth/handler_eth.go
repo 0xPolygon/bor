@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"math/rand"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -35,12 +34,19 @@ import (
 // packets that are sent as replies or broadcasts.
 type ethHandler handler
 
+const peerTrafficBackoff = 2 * time.Minute
+
 func (h *ethHandler) Chain() *core.BlockChain { return h.chain }
 func (h *ethHandler) TxPool() eth.TxPool      { return h.txpool }
 
 // RunPeer is invoked when a peer joins on the `eth` protocol.
 func (h *ethHandler) RunPeer(peer *eth.Peer, hand eth.Handler) error {
-	return (*handler)(h).runEthPeer(peer, hand)
+	err := (*handler)(h).runEthPeer(peer, hand)
+	if errors.Is(err, eth.ErrPeerRateLimit) {
+		peer.Log().Warn("Backing off peer after traffic allowance exceeded", "duration", peerTrafficBackoff, "err", err)
+		(*handler)(h).jailPeerFor(peer.ID(), peerTrafficBackoff)
+	}
+	return err
 }
 
 // PeerInfo retrieves all known `eth` information about a peer.
@@ -147,10 +153,10 @@ func (h *ethHandler) createWitnessRequester() func(hash common.Hash, sink chan *
 }
 
 // resolveWitnessFetchPeer picks a body-fetch target for hash. Marked peers
-// win: getOnePeerWithWitness prefers a proven body-holder and falls back to
-// an announce-known relayer. If neither exists, fall back to the peer that
-// relayed a still-deferred signed announcement for the hash. At the
-// stateless tip the deferred state is structural, not transient: the
+// win: a proven body-holder is preferred, then an announce-known relayer
+// (peersWithWitnessCandidates orders them so). If neither exists, fall back
+// to the peer that relayed a still-deferred signed announcement for the hash.
+// At the stateless tip the deferred state is structural, not transient: the
 // announce cannot be producer-verified before the block imports, the block
 // cannot import without the witness, and the unverified announce marks no
 // peer — so without this fallback a consumer whose witness exceeds the
@@ -160,64 +166,33 @@ func (h *ethHandler) createWitnessRequester() func(hash common.Hash, sink chan *
 // announcement must not be able to veto or bless data — import (stateless
 // execution + state-root check) remains the verifier, as on every WIT1
 // fetch.
+//
+// A peer excluded for this hash (its size-oracle-accepted witness failed
+// import; see excludeWitnessSource) is skipped at every tier, so the
+// fetcher's re-fetch reaches a different source.
 func (h *ethHandler) resolveWitnessFetchPeer(hash common.Hash) *ethPeer {
-	if p := h.peers.getOnePeerWithWitness(hash); p != nil {
-		return p
+	hh := (*handler)(h)
+	usable := func(id string) bool {
+		return hh.witnessSourceExclusions == nil || !hh.witnessSourceExclusions.excluded(hash, id)
 	}
-	if peerID, ok := (*handler)(h).deferredAnnounces.peekPeer(hash, func(id string) bool {
-		return h.peers.peer(id) != nil
+	for _, p := range h.peers.peersWithWitnessCandidates(hash) {
+		if usable(p.ID()) {
+			return p
+		}
+	}
+	if peerID, ok := hh.deferredAnnounces.peekPeer(hash, func(id string) bool {
+		return usable(id) && h.peers.peer(id) != nil
 	}); ok {
 		return h.peers.peer(peerID)
 	}
 	return nil
 }
 
-// verifyPageCount verifies the witness page count for a given block hash by
-// comparing it against random peers' reported page counts.
-// Returns true if the peer is honest (page count matches consensus), false otherwise.
-//
-// Optimization: The functions below (getRandomPeers, getWitnessPageCount) are passed as
-// closures to CheckWitnessPageCount but are only executed if needed:
-// - Not called if pageCount <= threshold (small witnesses)
-// - Not called if cache hit (recently verified witnesses)
-// This avoids unnecessary peer queries and metadata requests in most cases.
+// verifyPageCount bounds the page count a peer reports for a witness against the
+// gas-derived ceiling. Witnesses are non-deterministic, so page counts are not
+// compared across peers and no peer is jailed here — see CheckWitnessPageCount.
 func (h *ethHandler) verifyPageCount(hash common.Hash, pageCount uint64, peer string) bool {
-	// Define function to get random peers for verification
-	// Note: This function is only called if verification is actually needed (cache miss + threshold exceeded)
-	getRandomPeers := func() []string {
-		allPeers := h.peers.getAllPeers()
-		randomPeers := make([]string, 0, len(allPeers))
-		for _, p := range allPeers {
-			// Exclude the reporting peer to avoid double-counting their vote
-			if p.SupportsWitness() && p.ID() != peer {
-				randomPeers = append(randomPeers, p.ID())
-			}
-		}
-		// Shuffle the peers to get random selection
-		for i := len(randomPeers) - 1; i > 0; i-- {
-			j := rand.Intn(i + 1)
-			randomPeers[i], randomPeers[j] = randomPeers[j], randomPeers[i]
-		}
-		log.Info("[wm] Random peers (excluding original)", "randomPeers", randomPeers, "excluded", peer)
-		return randomPeers
-	}
-
-	// Define function to get witness page count from a peer
-	// Note: This function is only called if verification is needed (after cache check)
-	getWitnessPageCount := func(peerID string, hash common.Hash) (uint64, error) {
-		peer := h.peers.peer(peerID)
-		if peer == nil || !peer.SupportsWitness() {
-			log.Info("[wm] Peer not available or doesn't support witness", "peer", peerID)
-			return 0, fmt.Errorf("peer %s not available or doesn't support witness", peerID)
-		}
-
-		// Use the new efficient method that only downloads page 0
-		log.Info("[wm] Getting witness page count from peer", "peer", peerID, "hash", hash)
-		return peer.RequestWitnessPageCount(hash)
-	}
-
-	// Run synchronous verification and return result
-	return h.blockFetcher.GetWitnessManager().CheckWitnessPageCount(hash, pageCount, peer, getRandomPeers, getWitnessPageCount)
+	return h.blockFetcher.GetWitnessManager().CheckWitnessPageCount(hash, pageCount, peer)
 }
 
 // handleBlockBroadcast is invoked from a peer's message handler when it transmits a

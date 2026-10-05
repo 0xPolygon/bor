@@ -423,6 +423,16 @@ func (p *TxPool) SubscribeTransactions(ch chan<- core.NewTxsEvent, reorgs bool) 
 // SubscribeRebroadcastTransactions registers a subscription for stuck transaction
 // rebroadcast events from all subpools.
 func (p *TxPool) SubscribeRebroadcastTransactions(ch chan<- core.StuckTxsEvent) event.Subscription {
+	return p.subscribeRebroadcastTransactions(ch, false)
+}
+
+// SubscribeRebroadcastTransactionsWithAcknowledgement opts into explicit
+// accounting for subpools that support RebroadcastAcknowledgement.
+func (p *TxPool) SubscribeRebroadcastTransactionsWithAcknowledgement(ch chan<- core.StuckTxsEvent) event.Subscription {
+	return p.subscribeRebroadcastTransactions(ch, true)
+}
+
+func (p *TxPool) subscribeRebroadcastTransactions(ch chan<- core.StuckTxsEvent, acknowledge bool) event.Subscription {
 	if p == nil {
 		return event.NewSubscription(func(quit <-chan struct{}) error {
 			<-quit
@@ -431,9 +441,41 @@ func (p *TxPool) SubscribeRebroadcastTransactions(ch chan<- core.StuckTxsEvent) 
 	}
 	subs := make([]event.Subscription, len(p.subpools))
 	for i, subpool := range p.subpools {
+		if pool, ok := subpool.(interface {
+			SubscribeRebroadcastTransactionsWithAcknowledgement(chan<- core.StuckTxsEvent) event.Subscription
+		}); acknowledge && ok {
+			subs[i] = pool.SubscribeRebroadcastTransactionsWithAcknowledgement(ch)
+			continue
+		}
 		subs[i] = subpool.SubscribeRebroadcastTransactions(ch)
 	}
 	return p.subs.Track(event.JoinSubscriptions(subs...))
+}
+
+// RebroadcastAcknowledgement gathers optional batch accounting from subpools
+// without extending SubPool or changing the public rebroadcast event. Existing
+// subpools without this capability retain their own accounting behavior.
+func (p *TxPool) RebroadcastAcknowledgement(txs []*types.Transaction) func([]common.Hash) {
+	if p == nil {
+		return nil
+	}
+	var callbacks []func([]common.Hash)
+	for _, subpool := range p.subpools {
+		pool, ok := subpool.(interface {
+			RebroadcastAcknowledgement([]*types.Transaction) func([]common.Hash)
+		})
+		if !ok {
+			continue
+		}
+		if callback := pool.RebroadcastAcknowledgement(txs); callback != nil {
+			callbacks = append(callbacks, callback)
+		}
+	}
+	return func(hashes []common.Hash) {
+		for _, callback := range callbacks {
+			callback(hashes)
+		}
+	}
 }
 
 // PoolNonce returns the next nonce of an account, with all transactions executable

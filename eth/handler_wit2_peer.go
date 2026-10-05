@@ -32,11 +32,12 @@ func (h *handler) strikeWit2Peer(peer *wit.Peer) {
 	h.removePeer(peer.ID())
 }
 
-// strikeWit2PeerByID records a WIT2 byte-serving strike against the peer with the
+// strikeWit2PeerByID records a WIT2 witness-serving strike (oversized bytes, or a
+// size-oracle-accepted witness that failed import) against the peer with the
 // given id and disconnects+jails it once the threshold is crossed. The witness
-// manager detects byte-mismatches by peer id (not *wit.Peer), so this is its
-// entry point into the same strike budget strikeWit2Peer uses for bad announces:
-// sustained misbehavior across either surface disconnects the peer.
+// manager and block fetcher know servers by peer id (not *wit.Peer), so this is
+// their entry point into the same strike budget strikeWit2Peer uses for bad
+// announces: sustained misbehavior across either surface disconnects the peer.
 func (h *handler) strikeWit2PeerByID(id string) {
 	if h.wit2PeerTracker == nil {
 		return
@@ -109,5 +110,8 @@ func (h *handler) onBlockImported(blockHash common.Hash) {
 	h.flushWitnessWaitersForImported(blockHash)
 	if h.pendingWitnessBodies != nil {
 		h.pendingWitnessBodies.drop(blockHash)
+	}
+	if h.witnessSourceExclusions != nil {
+		h.witnessSourceExclusions.drop(blockHash)
 	}
 }

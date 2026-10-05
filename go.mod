@@ -1,12 +1,13 @@
 module github.com/ethereum/go-ethereum
 
 // Note: Change the go image version in Dockerfile if you change this.
-go 1.26.8
+go 1.26.5
 
 require (
 	github.com/0xPolygon/crand v1.0.3
 	github.com/0xPolygon/heimdall-v2 v0.7.1
 	github.com/0xPolygon/polyproto v0.0.8
+	github.com/0xPolygon/sequence-store-proto v0.0.0-20260719224427-276104d12aff
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.3.2
 	github.com/BurntSushi/toml v1.4.0
 	github.com/JekaMas/go-grpc-net-conn v0.0.0-20220708155319-6aff21f2d13d

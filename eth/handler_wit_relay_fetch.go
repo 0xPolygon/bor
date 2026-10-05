@@ -81,12 +81,18 @@ type namedWitnessPeer struct {
 	peer WitnessPeer
 }
 
-// fetchAndVerifyWitness tries each candidate in order, verifying fetched
-// bytes against the already-verified signed hash before trusting them.
-// Byte mismatch or decode failure on one candidate does not abort the
-// whole attempt — a different candidate might have the real bytes; only a
-// candidate serving bytes that don't match the signed commitment is
-// distrusted, individually, exactly like acceptSignedBroadcast's model.
+// fetchAndVerifyWitness tries each candidate in order, requiring the fetched
+// bytes to be byte-identical to the already-verified signed hash before
+// trusting them. This gate is deliberately stricter than the import paths'
+// size oracle: a relay fetch exists only to SERVE the body to waiters, this
+// node never imports it, and the pre-import serving path carries the BP's own
+// bytes exclusively (see acceptSignedBroadcast). A within-band but
+// non-identical witness — the normal case for any upstream that generated its
+// own witness on import — is therefore skipped here, not distrusted: the
+// relay fetch is only expected to succeed against the producer or a node still
+// holding the producer's bytes in its own pre-import cache, and otherwise the
+// waiters fall back to the pull path. Decode failure on one candidate does not
+// abort the whole attempt either — a different candidate might have the bytes.
 func fetchAndVerifyWitness(candidates []namedWitnessPeer, blockHash, wantHash common.Hash) ([]byte, *stateless.Witness, string, bool) {
 	for _, c := range candidates {
 		log.Info("wit2: relay fetch attempt", "hash", blockHash, "upstream", c.id)
@@ -96,9 +102,9 @@ func fetchAndVerifyWitness(candidates []namedWitnessPeer, blockHash, wantHash co
 			continue // this candidate came up empty/errored; try the next one
 		}
 		if got := stateless.WitnessCommitHash(data); got != wantHash {
-			log.Warn("wit2: relay fetch byte mismatch against signed hash; dropping",
-				"hash", blockHash, "peer", c.id, "expected", wantHash, "actual", got)
-			continue // this peer served bad bytes; a different candidate might not
+			log.Debug("wit2: relay fetch got a witness that is not the BP's bytes; not re-serving it",
+				"hash", blockHash, "peer", c.id, "signed", wantHash, "actual", got)
+			continue // valid-but-different bytes are not re-served pre-import; another candidate may hold the BP's
 		}
 		var witness stateless.Witness
 		if err := rlp.DecodeBytes(data, &witness); err != nil {

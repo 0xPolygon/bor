@@ -90,6 +90,8 @@ github.com/0xPolygon/heimdall-v2 v0.7.1 h1:L50HuFky97OvSF7uHlRXoClujKTFDeMP059GN
 github.com/0xPolygon/heimdall-v2 v0.7.1/go.mod h1:YrGakfr3jRlcXzGrBiJPxkfOfkqodzDZHNhf+2mYG5U=
 github.com/0xPolygon/polyproto v0.0.8 h1:69IQ6V8CwhF9UFoJtDn7Viy6PjyRLwiZw1m5kVDdykg=
 github.com/0xPolygon/polyproto v0.0.8/go.mod h1:2Iw93k2LismvckKKeXQITuhJH9vLbqOa212AMskH6no=
+github.com/0xPolygon/sequence-store-proto v0.0.0-20260719224427-276104d12aff h1:t/QGvpSPb2OMOKiO+BE+ph9Q6dpsk2nLYtjGJJBdRaY=
+github.com/0xPolygon/sequence-store-proto v0.0.0-20260719224427-276104d12aff/go.mod h1:cuEfi/jhoNrbEZ/SHOBfPT3MBlqyzbsvcivwJIOTH00=
 github.com/99designs/go-keychain v0.0.0-20191008050251-8e49817e8af4 h1:/vQbFIOMbk2FiG/kXiLl8BRyzTWDw7gX/Hz7Dd5eDMs=
 github.com/99designs/go-keychain v0.0.0-20191008050251-8e49817e8af4/go.mod h1:hN7oaIRCjzsZ2dE+yG5k+rsdt3qcwykqK6HVGcKwsw4=
 github.com/99designs/keyring v1.2.2 h1:pZd3neh/EmUzWONb35LxQfvuY7kiSXAq3HQd97+XBn0=
