@@ -51,6 +51,14 @@ type AddressBiasedCache struct {
 	// Directory used to persist/reload per-address caches across restarts.
 	// Empty string disables persistence (in-memory-only, matches legacy behavior).
 	journalDir string
+
+	// saveSnapshot writes one address cache to path. Tests replace it to
+	// hold a save in progress.
+	saveSnapshot func(cache *fastcache.Cache, path string) error
+}
+
+func saveSnapshotConcurrent(cache *fastcache.Cache, path string) error {
+	return cache.SaveToFileConcurrent(path, 4)
 }
 
 // snapshotPath returns the on-disk path used to persist/reload the given
@@ -105,6 +113,7 @@ func NewAddressBiasedCache(db ethdb.Database, addressCacheSizes map[common.Addre
 		cancel:       cancel,
 		rateLimitBPS: rateLimitBPS,
 		journalDir:   journalDir,
+		saveSnapshot: saveSnapshotConcurrent,
 	}
 
 	// Initialize caches synchronously, but preload asynchronously
@@ -510,23 +519,34 @@ func (c *AddressBiasedCache) Reset() {
 // instead of preloading from scratch. commonCache is never persisted (see
 // design spec).
 //
-// persist must be true only for a genuine final database shutdown
-// (Database.Close()). diskLayer.terminate() also calls this method (with
-// persist=false) from Journal() and Disable(), which stop the background
-// preloader for unrelated reasons and are not the node restarting — passing
-// true there would mean a redundant, potentially multi-GB write on those
-// paths for no benefit.
+// diskLayer.terminate() runs the same two steps itself, so that the save
+// happens outside the disk layer lock; see its doc comment for when persist
+// applies.
 //
 // A save failure (disk full, permission error, etc.) is logged and does not
 // fail Close(): losing a snapshot only degrades the next startup to a cold
 // preload, identical to today's behavior, and must not block shutdown.
 func (c *AddressBiasedCache) Close(persist bool) {
+	c.stopPreload()
+	if persist {
+		c.persist()
+	}
+}
+
+// stopPreload cancels all background preload operations and waits for them
+// to finish.
+func (c *AddressBiasedCache) stopPreload() {
 	if c.cancel != nil {
 		c.cancel()  // Signal all goroutines to stop
 		c.wg.Wait() // Wait for them to finish
 	}
+}
 
-	if !persist || c.journalDir == "" {
+// persist saves each address's cache to the journal directory, if one is
+// configured. fastcache allows Get/Set while a save is in progress, so the
+// caches stay usable throughout.
+func (c *AddressBiasedCache) persist() {
+	if c.journalDir == "" {
 		return
 	}
 
@@ -541,7 +561,7 @@ func (c *AddressBiasedCache) Close(persist bool) {
 		addrCache := value.(*fastcache.Cache)
 
 		path := snapshotPath(c.journalDir, accountHash)
-		if err := addrCache.SaveToFileConcurrent(path, 4); err != nil {
+		if err := c.saveSnapshot(addrCache, path); err != nil {
 			log.Warn("Failed to persist address cache", "account hash", accountHash.Hex(), "path", path, "err", err)
 		}
 		return true

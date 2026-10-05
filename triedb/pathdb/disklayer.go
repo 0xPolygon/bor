@@ -661,6 +661,21 @@ func (dl *diskLayer) waitFlush() error {
 // otherwise the (potentially multi-GB) save would run redundantly and, in
 // Journal()'s case, ahead of the trie journal write it's meant to protect.
 func (dl *diskLayer) terminate(persist bool) error {
+	if err := dl.stopBackground(); err != nil {
+		return err
+	}
+	// Persist outside dl.lock: the save can take a long time for large address
+	// caches, and holding the lock would stall every concurrent node read for
+	// its whole duration. dl.nodes is never reassigned after construction.
+	if persist && dl.nodes != nil {
+		dl.nodes.persist()
+	}
+	return nil
+}
+
+// stopBackground waits for the frozen buffer flush and stops the state
+// generator and the address cache preloaders.
+func (dl *diskLayer) stopBackground() error {
 	dl.lock.Lock()
 	defer dl.lock.Unlock()
 
@@ -675,7 +690,7 @@ func (dl *diskLayer) terminate(persist bool) error {
 	}
 	// Stop background preload operations in the address-biased cache
 	if dl.nodes != nil {
-		dl.nodes.Close(persist)
+		dl.nodes.stopPreload()
 	}
 	return nil
 }

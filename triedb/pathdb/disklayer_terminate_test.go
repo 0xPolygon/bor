@@ -21,7 +21,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/VictoriaMetrics/fastcache"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -29,9 +31,9 @@ import (
 )
 
 // TestDiskLayerTerminatePersistsAddressCache proves that diskLayer.terminate
-// actually calls through to dl.nodes.Close(persist): with persist=true, the
-// address-biased cache's snapshot file must exist on disk afterwards. If the
-// dl.nodes.Close(persist) call were ever dropped, no snapshot would be
+// actually persists the address-biased cache: with persist=true, the
+// cache's snapshot file must exist on disk afterwards. If the
+// dl.nodes.persist() call were ever dropped, no snapshot would be
 // written and this assertion would fail while terminate() itself would still
 // return nil (no error path involved), so the file check is the only way to
 // observe the call happened at all.
@@ -59,7 +61,7 @@ func TestDiskLayerTerminatePersistsAddressCache(t *testing.T) {
 
 	path := snapshotPath(journalDir, accountHash)
 	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("expected terminate(true) to persist the address cache via nodes.Close(true), got stat err: %v", err)
+		t.Fatalf("expected terminate(true) to persist the address cache, got stat err: %v", err)
 	}
 }
 
@@ -337,5 +339,76 @@ func TestEnableAfterDisableRunsColdPreload(t *testing.T) {
 	}
 	if !h.contains("Starting storage trie preload") {
 		t.Fatal("expected Enable to run a cold preload")
+	}
+}
+
+// TestDiskLayerTerminateServesReadsDuringPersist checks that the address
+// cache save on final shutdown runs outside the disk layer lock, so a
+// concurrent trie node read is not held up for the whole write.
+func TestDiskLayerTerminateServesReadsDuringPersist(t *testing.T) {
+	db := New(rawdb.NewMemoryDatabase(), nil, false)
+	disk := db.tree.bottom()
+
+	addr := common.HexToAddress("0x1234567890123456789012345678901234567890")
+	cache, err := NewAddressBiasedCache(rawdb.NewMemoryDatabase(), map[common.Address]int{addr: 32 * 1024}, 16*1024, 0, t.TempDir())
+	if err != nil {
+		t.Fatalf("failed to create address cache: %v", err)
+	}
+	cache.wg.Wait()
+
+	saving := make(chan struct{})
+	release := make(chan struct{})
+	cache.saveSnapshot = func(c *fastcache.Cache, path string) error {
+		close(saving)
+		<-release
+		return saveSnapshotConcurrent(c, path)
+	}
+	disk.nodes = cache
+
+	terminated := make(chan error, 1)
+	go func() { terminated <- disk.terminate(true) }()
+	select {
+	case <-saving:
+	case <-time.After(5 * time.Second):
+		t.Fatal("terminate(true) never started persisting the address cache")
+	}
+
+	read := make(chan error, 1)
+	go func() {
+		_, _, _, err := disk.node(common.Hash{}, nil, 0)
+		read <- err
+	}()
+	select {
+	case err := <-read:
+		if err != nil {
+			t.Fatalf("trie node read failed during persist: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("trie node read blocked while the address cache was being persisted")
+	}
+
+	close(release)
+	if err := <-terminated; err != nil {
+		t.Fatalf("terminate(true) returned an unexpected error: %v", err)
+	}
+	if _, err := os.Stat(snapshotPath(cache.journalDir, crypto.Keccak256Hash(addr.Bytes()))); err != nil {
+		t.Fatalf("expected the address cache to be persisted after the read: %v", err)
+	}
+}
+
+// TestDiskLayerTerminateStopsPreload checks that terminate waits for the
+// address cache preload to exit before returning.
+func TestDiskLayerTerminateStopsPreload(t *testing.T) {
+	db := New(rawdb.NewMemoryDatabase(), nil, false)
+	disk := db.tree.bottom()
+
+	h := installCapturingHandler(t)
+	disk.nodes = newBlockedPreloadCache(t)
+	if err := disk.terminate(false); err != nil {
+		t.Fatalf("terminate(false) returned an unexpected error: %v", err)
+	}
+	if !h.contains("Preload interrupted") {
+		t.Fatal("expected terminate to wait for the preload to exit")
 	}
 }

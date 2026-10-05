@@ -1980,3 +1980,54 @@ func TestAddressBiasedCache_ClosePersistsEveryAddress(t *testing.T) {
 		}
 	}
 }
+
+// newBlockedPreloadCache returns a cache whose preload is parked in the rate
+// limiter, so stopping it is observable through the interruption log.
+func newBlockedPreloadCache(t *testing.T) *AddressBiasedCache {
+	t.Helper()
+	db := rawdb.NewMemoryDatabase()
+	addr := common.HexToAddress("0x1234567890123456789012345678901234567890")
+	accountHash := crypto.Keccak256Hash(addr.Bytes())
+
+	// 8 leaves of 10KB exceed the 64KB burst at 1KB/s.
+	slots := []byte{0, 1, 2, 3, 4, 5, 6, 7}
+	rawdb.WriteStorageTrieNode(db, accountHash, nil, encodeBranchNode(t, slots, bytes.Repeat([]byte{0xab}, 32)))
+	largeValue := bytes.Repeat([]byte{0xbb}, 10*1024)
+	for _, i := range slots {
+		rawdb.WriteStorageTrieNode(db, accountHash, []byte{i},
+			encodeShortNode(t, nibblesToCompact([]byte{0x0f}, true), largeValue))
+	}
+	cache, err := NewAddressBiasedCache(db, map[common.Address]int{addr: 1024 * 1024}, 512*1024, 1024, "")
+	if err != nil {
+		t.Fatalf("failed to create cache: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	return cache
+}
+
+// TestAddressBiasedCacheCloseWaitsForPreload checks that Close returns only
+// after the background preload has exited.
+func TestAddressBiasedCacheCloseWaitsForPreload(t *testing.T) {
+	h := installCapturingHandler(t)
+	cache := newBlockedPreloadCache(t)
+	cache.Close(false)
+	if !h.contains("Preload interrupted") {
+		t.Fatal("expected Close to wait for the preload to exit")
+	}
+}
+
+// TestAddressBiasedCachePersistWithoutJournalDir checks that persist is a
+// no-op without a journal directory rather than writing relative to the
+// working directory.
+func TestAddressBiasedCachePersistWithoutJournalDir(t *testing.T) {
+	t.Chdir(t.TempDir())
+	addr := common.HexToAddress("0x1234567890123456789012345678901234567890")
+	cache, err := NewAddressBiasedCache(rawdb.NewMemoryDatabase(), map[common.Address]int{addr: 32 * 1024}, 16*1024, 0, "")
+	if err != nil {
+		t.Fatalf("failed to create cache: %v", err)
+	}
+	cache.Close(true)
+	if _, err := os.Stat(snapshotDir("")); !os.IsNotExist(err) {
+		t.Fatalf("expected no snapshot directory without a journal dir, got stat err: %v", err)
+	}
+}
