@@ -12,7 +12,7 @@ The ```bor server``` command runs the Bor client.
 
 - ```bor.heimdallgRPC```: Address of Heimdall gRPC service (comma-separated for failover: "addr1,addr2")
 
-- ```bor.heimdalltimeout```: Timeout period for bor's outgoing requests to heimdall (default: 5s)
+- ```bor.heimdalltimeout```: Timeout period for bor's outgoing requests to heimdall (default: 30s)
 
 - ```bor.logs```: Enables bor log retrieval (default: false)
 
@@ -459,3 +459,5 @@ The ```bor server``` command runs the Bor client.
 - ```txpool.rebroadcast-max-age```: Maximum age for a transaction to be eligible for rebroadcast (default: 10m0s)
 
 - ```txpool.rejournal```: Time interval to regenerate the local transaction journal (default: 1h0m0s)
+
+- ```txpool.strandedlifetime```: Maximum amount of time a pending transaction can stay below the base fee before its account's pending transactions are evicted (0 disables) (default: 3h0m0s)
