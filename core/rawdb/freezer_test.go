@@ -460,13 +460,17 @@ func TestFreezerSuite(t *testing.T) {
 func TestChainFreezerEmptyReceipts(t *testing.T) {
 	t.Parallel()
 
+	stored := []byte{0xc1, 0x80}
 	tests := []struct {
 		name        string
 		receiptHash common.Hash
+		receipts    []byte
+		want        []byte
 		wantErr     bool
 	}{
-		{"empty receipt root", types.EmptyReceiptsHash, false},
-		{"non-empty receipt root", common.HexToHash("0x01"), true},
+		{"stored receipts", common.HexToHash("0x01"), stored, stored, false},
+		{"empty value, empty receipt root", types.EmptyReceiptsHash, nil, rlp.EmptyList, false},
+		{"empty value, non-empty receipt root", common.HexToHash("0x01"), nil, nil, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -481,7 +485,7 @@ func TestChainFreezerEmptyReceipts(t *testing.T) {
 			WriteCanonicalHash(db, block.Hash(), 0)
 			WriteBlock(db, block)
 			WriteTd(db, block.Hash(), 0, big.NewInt(1))
-			WriteRawReceipts(db, block.Hash(), 0, nil)
+			WriteRawReceipts(db, block.Hash(), 0, tt.receipts)
 
 			_, err = f.freezeRange(&nofreezedb{KeyValueStore: db}, 0, 0)
 			if tt.wantErr {
@@ -493,7 +497,7 @@ func TestChainFreezerEmptyReceipts(t *testing.T) {
 			require.NoError(t, err)
 			receipts, err := f.Ancient(ChainFreezerReceiptTable, 0)
 			require.NoError(t, err)
-			require.Equal(t, rlp.EmptyList, receipts)
+			require.Equal(t, tt.want, receipts)
 		})
 	}
 }
