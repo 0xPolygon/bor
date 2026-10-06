@@ -514,17 +514,7 @@ func (p *Publisher) retire(item journalItem, at time.Time) (drain bool) {
 		p.storeSealedTip = item.height
 	}
 
-	// Confirmation is keyed to the gated block's hash, not just its height:
-	// a refused block and its rebuild share a height, and a late ack for
-	// the first attempt's seal must not confirm the second's gate — that
-	// would broadcast content the store's seal does not describe.
-	if item.kind == entrySeal && p.gate.height == item.height &&
-		p.gate.verdict == gatePending {
-		if header, err := decodeSealHeader(item.entry.GetBlockSeal().GetHeader()); err == nil &&
-			header.Hash() == p.gate.hash {
-			p.gate.verdict = gateConfirmed
-		}
-	}
+	p.confirmGateFromSealLocked(item)
 
 	// A build-start hold only orders the new window behind the draining
 	// flush: once the flush's seal is home, lift it so the window streams

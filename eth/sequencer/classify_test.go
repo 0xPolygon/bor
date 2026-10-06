@@ -472,3 +472,32 @@ func TestForeignSealAboveCanonicalRebases(t *testing.T) {
 		t.Fatalf("canonical reorg-past must rebase: anchor=%x", p.anchor)
 	}
 }
+
+// A read served by a gateway that has not applied our latest acked entries
+// lands on an older post of our lineage. It must not pull the frontier back:
+// the resend would STALE on entries the store already holds.
+func TestApplyTailLaggingReadKeepsFrontier(t *testing.T) {
+	p, _ := lineagePublisher(t, &fakeChain{})
+
+	items, _ := p.journal.after(p.ackedSeq)
+	openItem, recordItem := items[0], items[1]
+
+	p.mu.Lock()
+	p.ackedSeq, p.anchor = recordItem.seq, recordItem.post
+	p.mu.Unlock()
+
+	if out := p.applyTail(tailInfo{s: openItem.post}); out != recOK {
+		t.Fatalf("outcome = %v", out)
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.ackedSeq != recordItem.seq || p.anchor != recordItem.post {
+		t.Fatalf("frontier pulled back to the lagging read: acked=%d, want %d", p.ackedSeq, recordItem.seq)
+	}
+
+	if resend, _ := p.journal.after(p.ackedSeq); len(resend) != 0 {
+		t.Fatalf("%d acked entries queued for resend", len(resend))
+	}
+}
