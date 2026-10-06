@@ -27,7 +27,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb/ancienttest"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/rlp"
 )
@@ -453,4 +455,49 @@ func TestFreezerSuite(t *testing.T) {
 		f, _ := newResettableFreezer(t.TempDir(), "", false, 2048, tables)
 		return f
 	})
+}
+
+func TestChainFreezerEmptyReceipts(t *testing.T) {
+	t.Parallel()
+
+	stored := []byte{0xc1, 0x80}
+	tests := []struct {
+		name        string
+		receiptHash common.Hash
+		receipts    []byte
+		want        []byte
+		wantErr     bool
+	}{
+		{"stored receipts", common.HexToHash("0x01"), stored, stored, false},
+		{"empty value, empty receipt root", types.EmptyReceiptsHash, nil, rlp.EmptyList, false},
+		{"empty value, non-empty receipt root", common.HexToHash("0x01"), nil, nil, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			db := NewMemoryDatabase()
+			f, err := newChainFreezer("", "", "", false, 0)
+			require.NoError(t, err)
+			defer f.Close()
+
+			block := types.NewBlockWithHeader(&types.Header{Number: big.NewInt(0), ReceiptHash: tt.receiptHash})
+			WriteCanonicalHash(db, block.Hash(), 0)
+			WriteBlock(db, block)
+			WriteTd(db, block.Hash(), 0, big.NewInt(1))
+			WriteRawReceipts(db, block.Hash(), 0, tt.receipts)
+
+			_, err = f.freezeRange(&nofreezedb{KeyValueStore: db}, 0, 0)
+			if tt.wantErr {
+				require.ErrorContains(t, err, "block receipts missing")
+				frozen, _ := f.Ancients()
+				require.Zero(t, frozen)
+				return
+			}
+			require.NoError(t, err)
+			receipts, err := f.Ancient(ChainFreezerReceiptTable, 0)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, receipts)
+		})
+	}
 }
