@@ -271,7 +271,7 @@ func New(stateDb ethdb.Database, mux *event.TypeMux, chain BlockChain, lightchai
 		ChainValidator:          whitelistService,
 		maxValidationThreshold:  maxValidationThreshold,
 		futureCandidateBlocks:   make([]uint64, 0),
-		fastForwardBlockCh:      make(chan uint64),
+		fastForwardBlockCh:      make(chan uint64, 1),
 		FastForwardThreshold:    fastForwardThreshold,
 		syncAndProduceWitnesses: syncAndProduceWitnesses,
 	}
@@ -2493,18 +2493,20 @@ func (d *Downloader) UpdateFastForwardBlockFromCheckpoint(checkpoint *checkpoint
 func (d *Downloader) GetOrWaitFastForwardBlock(timeout time.Duration) uint64 {
 	localHeight := d.blockchain.CurrentBlock().Number.Uint64()
 
-	var fastForwardBlock uint64
-	if d.fastForwardBlock != 0 {
-		fastForwardBlock = d.fastForwardBlock
-	} else {
+	// fastForwardBlock is published by the milestone/checkpoint handlers under
+	// fastForwardMu; read it the same way.
+	fastForwardBlock := d.currentFastForwardBlock()
+	if fastForwardBlock == 0 {
 		// wait until receive a fast forward block with a timeout
 		// This prevents indefinite blocking when no milestones/checkpoints are available
 		timer := time.NewTimer(timeout)
 		defer timer.Stop()
 
 		select {
-		case fastForwardBlock = <-d.fastForwardBlockCh:
-			// Got a fast forward block
+		case <-d.fastForwardBlockCh:
+			// A block was published; the field holds the latest value, which
+			// may be newer than the one that woke us.
+			fastForwardBlock = d.currentFastForwardBlock()
 		case <-timer.C:
 			// Timeout - use current height + threshold as fallback
 			log.Warn("Timeout waiting for fast forward block, using fallback",
@@ -2522,6 +2524,12 @@ func (d *Downloader) GetOrWaitFastForwardBlock(timeout time.Duration) uint64 {
 	} else {
 		return localHeight
 	}
+}
+
+func (d *Downloader) currentFastForwardBlock() uint64 {
+	d.fastForwardMu.Lock()
+	defer d.fastForwardMu.Unlock()
+	return d.fastForwardBlock
 }
 
 func (d *Downloader) setFastForwardBlock(nextFastForward uint64) {
