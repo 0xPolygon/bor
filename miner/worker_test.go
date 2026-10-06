@@ -3948,3 +3948,31 @@ func TestStateSyncReserveFor(t *testing.T) {
 		})
 	}
 }
+
+// TestPendingWorkCoversHead: an outstanding build only covers a new head when
+// it targets the same next block number AND was started on that head's hash.
+// A depth-1 reorg delivers a head with the same number but a different hash;
+// treating it as covered leaves the producer building on the reorged-out
+// parent.
+func TestPendingWorkCoversHead(t *testing.T) {
+	t.Parallel()
+
+	head := &types.Header{Number: big.NewInt(100), Extra: []byte{1}}
+	sibling := &types.Header{Number: big.NewInt(100), Extra: []byte{2}}
+	if head.Hash() == sibling.Hash() {
+		t.Fatal("test headers must differ")
+	}
+
+	if !pendingWorkCoversHead(101, head.Hash(), head) {
+		t.Fatal("a build for 101 on top of head must cover head")
+	}
+	if pendingWorkCoversHead(101, head.Hash(), sibling) {
+		t.Fatal("a build for 101 on top of head must not cover a same-height sibling head")
+	}
+	if pendingWorkCoversHead(102, head.Hash(), head) {
+		t.Fatal("a build for a different number must not cover head")
+	}
+	if pendingWorkCoversHead(101, common.Hash{}, head) {
+		t.Fatal("a build with no recorded parent must not cover head")
+	}
+}
