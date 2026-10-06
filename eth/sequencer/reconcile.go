@@ -196,3 +196,37 @@ func recordMatchesItems(entry *pb.Entry, items []journalItem) (int, bool) {
 
 	return 0, false
 }
+
+// confirmGateFromSealLocked confirms a pending gate from a store-confirmed
+// seal entry. Confirmation is keyed to the gated block's hash, not just its
+// height: a refused block and its rebuild share a height, and a late ack for
+// the first attempt's seal must not confirm the second's gate — that would
+// broadcast content the store's seal does not describe.
+func (p *Publisher) confirmGateFromSealLocked(item journalItem) {
+	if item.kind != entrySeal || p.gate.height != item.height || p.gate.verdict != gatePending {
+		return
+	}
+
+	if header, err := decodeSealHeader(item.entry.GetBlockSeal().GetHeader()); err == nil &&
+		header.Hash() == p.gate.hash {
+		p.gate.verdict = gateConfirmed
+	}
+}
+
+// confirmGateThroughAckedLocked applies the seal check to every acked
+// journal entry. A reconcile that retires through our own seal is the same
+// proof as that seal's ack, which a STALE queued ahead of it can cost us:
+// the session ends on the STALE before the seal's OK is read.
+func (p *Publisher) confirmGateThroughAckedLocked() {
+	if p.gate.height == 0 || p.gate.verdict != gatePending {
+		return
+	}
+
+	for _, it := range p.journal.items {
+		if it.seq > p.ackedSeq {
+			return
+		}
+
+		p.confirmGateFromSealLocked(it)
+	}
+}

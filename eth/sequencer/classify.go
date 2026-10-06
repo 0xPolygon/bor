@@ -31,8 +31,16 @@ func (p *Publisher) applyTail(info tailInfo) reconcileOutcome {
 	}
 
 	if seq, ok := p.journal.findPost(info.s); ok {
-		p.ackedSeq = seq
-		p.anchor = info.s
+		// A tail behind our acked frontier is a lagging read (a gateway
+		// that has not applied what ingress already acked), not a store
+		// that went back. Rewinding to it would resend entries the store
+		// holds, and their STALE ends the session before the acks queued
+		// behind them are read.
+		if seq > p.ackedSeq {
+			p.ackedSeq = seq
+			p.anchor = info.s
+		}
+
 		p.confirmed = true
 
 		return p.finishRow1Locked()
@@ -42,6 +50,8 @@ func (p *Publisher) applyTail(info tailInfo) reconcileOutcome {
 }
 
 func (p *Publisher) finishRow1Locked() reconcileOutcome {
+	p.confirmGateThroughAckedLocked()
+
 	if items, covered := p.journal.after(p.ackedSeq); covered && p.pendingFrom == 0 {
 		if len(items) > 0 {
 			reconcileGapfill.Inc(1)
