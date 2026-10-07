@@ -2005,6 +2005,15 @@ func (d *Downloader) processSnapSyncContent(processResults bool) error {
 				return errCanceled
 			default:
 			}
+			if oldPivot == nil {
+				// Queue closed before a pivot block was held. A real state-sync
+				// failure closed it via closeOnErr; a bare shutdown is cancellation
+				// so spawnSync can still report the fetcher error.
+				if err := sync.Cancel(); err != nil && !isSyncCancellation(err) {
+					return err
+				}
+				return errCanceled
+			}
 		}
 
 		if d.chainInsertHook != nil {
