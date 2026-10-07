@@ -1560,23 +1560,43 @@ func (c *Bor) commitSprintWork(chain consensus.ChainHeaderReader, header *types.
 // publishing a build's sequence: a block Seal would refuse must produce no
 // store records. Nodes without a signer are not authorized.
 func (c *Bor) IsAuthorizedSigner(chain consensus.ChainHeaderReader, header *types.Header) bool {
-	signer := c.authorizedSigner.Load().signer
-	if signer == (common.Address{}) {
-		return false
+	_, ok := c.signerSuccession(chain, header)
+	return ok
+}
+
+// IsPrimaryProducer reports whether the node's signer is the in-turn producer
+// (succession 0) for the given header: the signer IsAuthorizedSigner accepts
+// and that Seal and Prepare treat as primary. Backups and nodes without a
+// signer are not primary.
+func (c *Bor) IsPrimaryProducer(chain consensus.ChainHeaderReader, header *types.Header) bool {
+	succession, ok := c.signerSuccession(chain, header)
+	return ok && succession == 0
+}
+
+// signerSuccession returns the local signer's succession number for header,
+// applying Seal's authorization checks. ok is false when there is no signer,
+// the snapshot is unavailable, or the signer may not seal the header.
+func (c *Bor) signerSuccession(chain consensus.ChainHeaderReader, header *types.Header) (int, bool) {
+	current := c.authorizedSigner.Load()
+	if current == nil || current.signer == (common.Address{}) {
+		return 0, false
 	}
 
 	snap, err := c.snapshot(chain, header, nil, false)
 	if err != nil {
-		return false
+		return 0, false
 	}
 
-	if !snap.ValidatorSet.HasAddress(signer) && !snap.isAllowedByValidatorSetOverride(signer, header.Number.Uint64()) {
-		return false
+	if !snap.ValidatorSet.HasAddress(current.signer) && !snap.isAllowedByValidatorSetOverride(current.signer, header.Number.Uint64()) {
+		return 0, false
 	}
 
-	_, err = snap.GetSignerSuccessionNumber(signer)
+	succession, err := snap.GetSignerSuccessionNumber(current.signer)
+	if err != nil {
+		return 0, false
+	}
 
-	return err == nil
+	return succession, true
 }
 
 func (c *Bor) Authorize(currentSigner common.Address, signFn SignerFn) {
