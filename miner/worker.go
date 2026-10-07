@@ -595,7 +595,7 @@ type worker struct {
 	// Pipelined SRC: speculative work channel for block N+1 execution
 	speculativeWorkCh chan *speculativeWorkReq
 
-	stallWatch *producerStallWatch // Reports when this node, as primary producer, stops announcing blocks
+	stallWatch *producerStallWatch // Reports when this node, as the span producer, stops announcing blocks
 }
 
 //nolint:staticcheck
@@ -629,7 +629,7 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		speculativeWorkCh:   make(chan *speculativeWorkReq, 1),
 	}
 	worker.noempty.Store(true)
-	worker.stallWatch = newProducerStallWatch(producerStallThreshold, worker.isStalledPrimaryProducer,
+	worker.stallWatch = newProducerStallWatch(producerStallThreshold, worker.isCurrentProducer,
 		func() uint64 { return worker.chain.CurrentBlock().Number.Uint64() },
 		producerStalledGauge, producerStallsCounter)
 	// Production-side pipelined SRC is intentionally disabled and no longer has

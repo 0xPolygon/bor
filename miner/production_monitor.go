@@ -15,8 +15,8 @@ const (
 	buildToAnnounceSlowThreshold     = 2 * time.Second
 	buildToAnnounceVerySlowThreshold = 4 * time.Second
 
-	// producerStallThreshold is how long the primary producer of the next
-	// block may go without announcing it before it reports itself stalled.
+	// producerStallThreshold is how long the producer of the next block may
+	// go without announcing it before it reports itself stalled.
 	producerStallThreshold = 2 * time.Second
 )
 
@@ -27,7 +27,7 @@ var (
 	buildToAnnounceOver4sCounter = metrics.NewRegisteredCounter("worker/build_to_announce/over4s", nil)
 
 	// producerStalledGauge holds the block number this node is stalled on as
-	// its primary producer, or 0 when it is not stalled.
+	// its producer, or 0 when it is not stalled.
 	producerStalledGauge = metrics.NewRegisteredGauge("worker/producer/stalled", nil)
 	// producerStallsCounter counts stall episodes, so a stall that starts and
 	// ends between two scrapes is still visible.
@@ -71,7 +71,7 @@ func (w *worker) recordAnnouncement(block *types.Block, start time.Time) {
 
 // buildToAnnounceStart returns when the producer was first allowed to build
 // header: the later of buildStart and the parent slot boundary. Since
-// Giugliano, Prepare deliberately holds the primary producer until that
+// Giugliano, Prepare deliberately holds the in-turn producer until that
 // boundary, and the wait is not build time.
 func (w *worker) buildToAnnounceStart(header *types.Header, buildStart time.Time) time.Time {
 	if buildStart.IsZero() {
@@ -104,7 +104,7 @@ func (w *worker) parentSlotBoundary(header *types.Header) time.Time {
 }
 
 // watchNextBlock starts the stall clock for the child of head. It runs on
-// every new head; the primary producer check only runs if the clock expires.
+// every new head; the producer check only runs if the clock expires.
 func (w *worker) watchNextBlock(head *types.Header) {
 	if head == nil || head.Number == nil || !w.IsRunning() {
 		return
@@ -117,11 +117,14 @@ func (w *worker) watchNextBlock(head *types.Header) {
 	w.stallWatch.watch(next, w.buildToAnnounceStart(next, time.Now()))
 }
 
-// isStalledPrimaryProducer reports whether this node is the primary producer
-// of next. It reads the producer snapshot, which may need a span lookup, so it
-// runs from the stall timer rather than the block production path.
-func (w *worker) isStalledPrimaryProducer(next *types.Header) bool {
-	if !w.IsRunning() || w.syncing.Load() {
+// isCurrentProducer reports whether this node is the producer of next. After
+// Rio each span has a single producer, so the authorized signer is the
+// producer. Before Rio every validator is authorized, so no node is singled
+// out. The check reads the snapshot, which may need a span lookup, so it runs
+// from the stall timer rather than the block production path.
+func (w *worker) isCurrentProducer(next *types.Header) bool {
+	if !w.IsRunning() || w.syncing.Load() || next == nil || next.Number == nil ||
+		w.chainConfig == nil || w.chainConfig.Bor == nil || !w.chainConfig.Bor.IsRio(next.Number) {
 		return false
 	}
 
@@ -130,12 +133,11 @@ func (w *worker) isStalledPrimaryProducer(next *types.Header) bool {
 		return false
 	}
 
-	return borEngine.IsPrimaryProducer(w.chain, next)
+	return borEngine.IsAuthorizedSigner(w.chain, next)
 }
 
-// producerStallWatch reports when this node, as the primary producer of the
-// next block, has not announced it within threshold of being allowed to build
-// it.
+// producerStallWatch reports when this node, as the producer of the next
+// block, has not announced it within threshold of being allowed to build it.
 //
 // A stall clock runs only between a new head and the announcement of its
 // child. The clock is a time.AfterFunc, so no goroutine exists until it
@@ -143,7 +145,7 @@ func (w *worker) isStalledPrimaryProducer(next *types.Header) bool {
 // returns without reporting once its watch has been replaced or closed.
 type producerStallWatch struct {
 	threshold  time.Duration
-	isPrimary  func(next *types.Header) bool
+	isProducer func(next *types.Header) bool
 	headNumber func() uint64
 	stalled    *metrics.Gauge
 	stalls     *metrics.Counter
@@ -155,11 +157,11 @@ type producerStallWatch struct {
 	closed    bool
 }
 
-func newProducerStallWatch(threshold time.Duration, isPrimary func(*types.Header) bool, headNumber func() uint64,
+func newProducerStallWatch(threshold time.Duration, isProducer func(*types.Header) bool, headNumber func() uint64,
 	stalled *metrics.Gauge, stalls *metrics.Counter) *producerStallWatch {
 	return &producerStallWatch{
 		threshold:  threshold,
-		isPrimary:  isPrimary,
+		isProducer: isProducer,
 		headNumber: headNumber,
 		stalled:    stalled,
 		stalls:     stalls,
@@ -238,7 +240,7 @@ func (s *producerStallWatch) expire(height uint64, next *types.Header) {
 	}
 
 	// Called without the lock: the producer check can block on a span lookup.
-	if s.headNumber() >= height || !s.isPrimary(next) {
+	if s.headNumber() >= height || !s.isProducer(next) {
 		return
 	}
 
