@@ -582,6 +582,46 @@ func TestCheckBodyItemCounts(t *testing.T) {
 	}
 }
 
+func TestCheckReceiptItemCounts(t *testing.T) {
+	// The smallest possible encodings must be accepted.
+	receipts := []*types.Receipt{
+		{Type: types.LegacyTxType, Status: types.ReceiptStatusFailed},
+		{Type: types.DynamicFeeTxType, Status: types.ReceiptStatusSuccessful},
+	}
+	for _, tr := range receipts {
+		r := newReceipt(tr)
+		enc, _ := rlp.EncodeToBytes(&r)
+		if len(enc) != minReceiptEncodedSize {
+			t.Fatalf("minimal receipt has size %d, want %d", len(enc), minReceiptEncodedSize)
+		}
+		var dec Receipt
+		if err := dec.decode69(enc); err != nil {
+			t.Fatalf("minimal receipt is not decodable: %v", err)
+		}
+	}
+	if err := checkReceiptItemCounts([]*ReceiptList69{NewReceiptList69(receipts)}); err != nil {
+		t.Fatalf("valid receipts rejected: %v", err)
+	}
+
+	// Lists of elements too small to be valid must be rejected. The two-byte
+	// element is a list holding a single empty string, which passes the
+	// structural checks in EncodeForStorage.
+	for _, elem := range [][]byte{{0x01}, {0xc1, 0x80}} {
+		var tiny68 ReceiptList68
+		var tiny69 ReceiptList69
+		for range 1000 {
+			tiny68.items.AppendRaw(elem)
+			tiny69.items.AppendRaw(elem)
+		}
+		if err := checkReceiptItemCounts([]*ReceiptList68{&tiny68}); err == nil {
+			t.Fatalf("eth/68 receipt list of %d-byte elements accepted", len(elem))
+		}
+		if err := checkReceiptItemCounts([]*ReceiptList69{&tiny69}); err == nil {
+			t.Fatalf("eth/69 receipt list of %d-byte elements accepted", len(elem))
+		}
+	}
+}
+
 // Tests that the transaction receipts can be retrieved based on hashes.
 func TestGetBlockReceipts70(t *testing.T) { testGetBlockReceipts(t, ETH70) }
 func TestGetBlockReceipts69(t *testing.T) { testGetBlockReceipts(t, ETH69) }

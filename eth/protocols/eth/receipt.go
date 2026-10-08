@@ -366,6 +366,11 @@ func (rl *ReceiptList68) setBuffers(buf *receiptListBuffers) {
 	rl.buf = buf
 }
 
+// rawItems implements ReceiptsList.
+func (rl *ReceiptList68) rawItems() *rlp.RawList[Receipt] {
+	return &rl.items
+}
+
 // EncodeForStorage encodes the receipts for storage into the database.
 func (rl *ReceiptList68) EncodeForStorage() (rlp.RawValue, error) {
 	initBuffers(&rl.buf)
@@ -429,6 +434,11 @@ func NewReceiptList69(trs []*types.Receipt) *ReceiptList69 {
 // setBuffers implements ReceiptsList.
 func (rl *ReceiptList69) setBuffers(buf *receiptListBuffers) {
 	rl.buf = buf
+}
+
+// rawItems implements ReceiptsList.
+func (rl *ReceiptList69) rawItems() *rlp.RawList[Receipt] {
+	return &rl.items
 }
 
 // EncodeForStorage encodes the receipts for storage into the database.

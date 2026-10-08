@@ -674,6 +674,7 @@ func handleBlockBodies(backend Backend, msg Decoder, peer *Peer) error {
 const (
 	minTxEncodedSize         = 1 + 9      // Min size for RLP encoded transaction
 	minWithdrawalEncodedSize = 1 + 3 + 21 // Min size for RLP encoded withdrawal
+	minReceiptEncodedSize    = 1 + 4      // Min size for RLP encoded receipt
 )
 
 // checkBodyItemCounts rejects bodies containing more transactions or withdrawals
@@ -685,6 +686,18 @@ func checkBodyItemCounts(body *BlockBody) error {
 	if body.Withdrawals != nil {
 		if n := body.Withdrawals.Len(); n*minWithdrawalEncodedSize > len(body.Withdrawals.Content()) {
 			return fmt.Errorf("%d withdrawals in %d bytes", n, len(body.Withdrawals.Content()))
+		}
+	}
+	return nil
+}
+
+// checkReceiptItemCounts rejects receipt lists containing more receipts than
+// can fit in their encoded size.
+func checkReceiptItemCounts[L ReceiptsList](lists []L) error {
+	for i, list := range lists {
+		items := list.rawItems()
+		if n := items.Len(); n*minReceiptEncodedSize > len(items.Content()) {
+			return fmt.Errorf("list %d: %d receipts in %d bytes", i, n, len(items.Content()))
 		}
 	}
 	return nil
@@ -794,6 +807,9 @@ func handleReceipts[L ReceiptsList](backend Backend, msg Decoder, peer *Peer) er
 		observeInvalid(msg, peerpolicy.InvalidEncoding)
 		return fmt.Errorf("Receipts: %w", err)
 	}
+	if err := checkReceiptItemCounts(receiptLists); err != nil {
+		return fmt.Errorf("Receipts: %w", err)
+	}
 	buffers := new(receiptListBuffers)
 	for i := range receiptLists {
 		receiptLists[i].setBuffers(buffers)
@@ -832,6 +848,9 @@ func handleReceipts70(backend Backend, msg Decoder, peer *Peer) error {
 	receiptLists, err := res.List.Items()
 	if err != nil {
 		observeInvalid(msg, peerpolicy.InvalidEncoding)
+		return fmt.Errorf("Receipts: %w", err)
+	}
+	if err := checkReceiptItemCounts(receiptLists); err != nil {
 		return fmt.Errorf("Receipts: %w", err)
 	}
 

@@ -301,6 +301,7 @@ type ReceiptsResponse []types.Receipts
 type ReceiptsList interface {
 	*ReceiptList68 | *ReceiptList69
 	setBuffers(*receiptListBuffers)
+	rawItems() *rlp.RawList[Receipt]
 	EncodeForStorage() (rlp.RawValue, error)
 	Derivable() types.DerivableList
 	ExcludeStateSyncReceipt()
