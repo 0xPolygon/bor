@@ -384,6 +384,11 @@ type TxPoolConfig struct {
 	LifeTime    time.Duration `hcl:"-,optional" toml:"-"`
 	LifeTimeRaw string        `hcl:"lifetime,optional" toml:"lifetime,optional"`
 
+	// StrandedLifetime is the maximum amount of time a pending transaction can
+	// stay below the base fee before its account's pending transactions are evicted
+	StrandedLifetime    time.Duration `hcl:"-,optional" toml:"-"`
+	StrandedLifetimeRaw string        `hcl:"strandedlifetime,optional" toml:"strandedlifetime,optional"`
+
 	// FilteredAddressesFile is the path to newline-separated list of addresses whose transactions will be filtered
 	FilteredAddressesFile string `hcl:"filtered-addresses,optional" toml:"filtered-addresses,optional"`
 
@@ -738,6 +743,11 @@ type CacheConfig struct {
 	// Accepts values like "500KB", "1MB", "0" (for unlimited). Default: 1MB/s
 	PreloadRateLimit string `hcl:"preloadratelimit,optional" toml:"preloadratelimit,optional"`
 
+	// AddressCachePersist persists the address-specific caches to the trie
+	// journal directory on shutdown and reloads them on startup, skipping the
+	// preload walk when the snapshot is warm. Default: false
+	AddressCachePersist bool `hcl:"addresscachepersist,optional" toml:"addresscachepersist,optional"`
+
 	// GC settings
 	// GoMemLimit sets the soft memory limit for the runtime
 	GoMemLimit string `hcl:"gomemlimit,optional" toml:"gomemlimit,optional"`
@@ -954,7 +964,7 @@ func DefaultConfig() *Config {
 		},
 		Heimdall: &HeimdallConfig{
 			URL:         "http://localhost:1317",
-			Timeout:     5 * time.Second,
+			Timeout:     30 * time.Second,
 			Without:     false,
 			GRPCAddress: "",
 			WSAddress:   "",
@@ -971,6 +981,7 @@ func DefaultConfig() *Config {
 			AccountQueue:         64,
 			GlobalQueue:          131072,
 			LifeTime:             3 * time.Hour,
+			StrandedLifetime:     3 * time.Hour,
 			Rebroadcast:          true,
 			RebroadcastInterval:  30 * time.Second,
 			RebroadcastMaxAge:    10 * time.Minute,
@@ -1225,6 +1236,7 @@ func (c *Config) fillTimeDurations() error {
 		{"jsonrpc.ws.ep-requesttimeout", &c.JsonRPC.Ws.ExecutionPoolRequestTimeout, &c.JsonRPC.Ws.ExecutionPoolRequestTimeoutRaw},
 		{"jsonrpc.http.ep-requesttimeout", &c.JsonRPC.Http.ExecutionPoolRequestTimeout, &c.JsonRPC.Http.ExecutionPoolRequestTimeoutRaw},
 		{"txpool.lifetime", &c.TxPool.LifeTime, &c.TxPool.LifeTimeRaw},
+		{"txpool.strandedlifetime", &c.TxPool.StrandedLifetime, &c.TxPool.StrandedLifetimeRaw},
 		{"txpool.rejournal", &c.TxPool.Rejournal, &c.TxPool.RejournalRaw},
 		{"txpool.rebroadcast-interval", &c.TxPool.RebroadcastInterval, &c.TxPool.RebroadcastIntervalRaw},
 		{"txpool.rebroadcast-max-age", &c.TxPool.RebroadcastMaxAge, &c.TxPool.RebroadcastMaxAgeRaw},
@@ -1366,6 +1378,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.TxPool.AccountQueue = c.TxPool.AccountQueue
 		n.TxPool.GlobalQueue = c.TxPool.GlobalQueue
 		n.TxPool.Lifetime = c.TxPool.LifeTime
+		n.TxPool.StrandedLifetime = c.TxPool.StrandedLifetime
 
 		// Load filtered addresses during config initialization
 		if filteredAddrs, err := loadFilteredAddresses(c.TxPool.FilteredAddressesFile); err != nil {
@@ -1701,6 +1714,8 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 			// Default to 1MB/s per address if not specified
 			n.PreloadRateLimit = 1024 * 1024
 		}
+
+		n.AddressCachePersist = c.Cache.AddressCachePersist
 	}
 
 	// History

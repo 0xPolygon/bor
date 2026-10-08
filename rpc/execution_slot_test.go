@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -137,6 +138,76 @@ func TestSlotAcquireAfterChangeSize(t *testing.T) {
 	}
 }
 
+func TestSlotAcquireWait(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		timeout   time.Duration
+		cancelled bool
+		unbounded bool
+		frees     bool
+	}{
+		{name: "slot frees up", frees: true},
+		{name: "pool timeout elapses", timeout: 10 * time.Millisecond},
+		{name: "caller gives up", cancelled: true},
+		{name: "pool went unbounded", unbounded: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			pool := NewExecutionPool(1, tt.timeout, "test", false)
+
+			type state struct {
+				held     bool
+				inFlight int64
+			}
+
+			got := make(chan state, 1)
+			pool.SubmitWithSlot(context.Background(), func(slot *Slot) error {
+				slot.Release()
+
+				sem := *pool.sem.Load()
+				sem <- struct{}{}
+
+				if tt.frees {
+					time.AfterFunc(10*time.Millisecond, func() { <-sem })
+				}
+
+				if tt.unbounded {
+					pool.ChangeSize(0)
+				}
+
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+
+				if tt.cancelled {
+					cancel()
+				}
+
+				slot.acquireWait(ctx)
+				got <- state{held: slot.held, inFlight: pool.inFlight.Load()}
+
+				return nil
+			})
+
+			select {
+			case s := <-got:
+				if s.held != tt.frees {
+					t.Fatalf("held = %v, want %v", s.held, tt.frees)
+				}
+				if (s.inFlight == 1) != tt.frees {
+					t.Fatalf("inFlight = %d, frees = %v", s.inFlight, tt.frees)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("acquireWait never returned")
+			}
+		})
+	}
+}
+
 func TestSubmitWithSlotUnboundedPoolHasNoSlot(t *testing.T) {
 	t.Parallel()
 
@@ -189,6 +260,67 @@ func TestHeldSlotStarvesTransport(t *testing.T) {
 
 	if err := callQuick(url, 500*time.Millisecond); err == nil {
 		t.Fatal("quick call succeeded while the only slot was held")
+	}
+}
+
+func TestBatchWaitsForSlotBetweenItems(t *testing.T) {
+	t.Parallel()
+
+	_, url, stop := newParkingServer(t, false)
+	defer stop()
+
+	resp, err := http.Post(url, "application/json", strings.NewReader(
+		`[{"jsonrpc":"2.0","id":1,"method":"test_drop","params":[10]},{"jsonrpc":"2.0","id":2,"method":"test_held"}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"id":2,"result":true`) {
+		t.Fatalf("second item ran without a slot: %s", body)
+	}
+}
+
+func TestBatchTimeoutWhileWaitingForSlot(t *testing.T) {
+	t.Parallel()
+
+	server := NewServer("test", 1, 0)
+	defer server.Stop()
+
+	svc := new(parkingService)
+	if err := server.RegisterName("test", svc); err != nil {
+		t.Fatal(err)
+	}
+
+	httpServer := httptest.NewUnstartedServer(server)
+	httpServer.Config.WriteTimeout = time.Second
+	httpServer.Start()
+	defer httpServer.Close()
+
+	resp, err := http.Post(httpServer.URL, "application/json", strings.NewReader(
+		`[{"jsonrpc":"2.0","id":1,"method":"test_drop","params":[1200]},{"jsonrpc":"2.0","id":2,"method":"test_mark"}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := fmt.Sprintf(`"id":2,"error":{"code":%d`, errcodeTimeout); !strings.Contains(string(body), want) {
+		t.Fatalf("item 2 got no timeout response: %s", body)
+	}
+
+	// The batch must not resume once the pool frees up after the timeout.
+	time.Sleep(500 * time.Millisecond)
+
+	if svc.marked.Load() != 0 {
+		t.Fatal("item 2 ran after the batch timed out")
 	}
 }
 
@@ -265,6 +397,7 @@ type parkingService struct {
 	parked  chan struct{}
 	unblock chan struct{}
 	keep    bool // hold the slot across the park instead of releasing it
+	marked  atomic.Int32
 }
 
 func (s *parkingService) Park(ctx context.Context) (string, error) {
@@ -283,6 +416,28 @@ func (s *parkingService) Park(ctx context.Context) (string, error) {
 
 func (s *parkingService) Quick() (string, error) {
 	return "quick", nil
+}
+
+// Drop hands its slot back to a pool that stays saturated for ms, as a waiter
+// whose Acquire found no room would.
+func (s *parkingService) Drop(ctx context.Context, ms int) {
+	slot := ExecutionSlotFromContext(ctx)
+	slot.Release()
+
+	sem := *slot.pool.sem.Load()
+	sem <- struct{}{}
+
+	time.AfterFunc(time.Duration(ms)*time.Millisecond, func() { <-sem })
+}
+
+func (s *parkingService) Held(ctx context.Context) bool {
+	slot := ExecutionSlotFromContext(ctx)
+
+	return slot != nil && slot.held
+}
+
+func (s *parkingService) Mark() {
+	s.marked.Add(1)
 }
 
 // TestSubmitFallsBackWhenSaturated covers the two escape hatches that keep a
