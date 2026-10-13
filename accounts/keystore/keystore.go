@@ -25,7 +25,6 @@ import (
 	crand "crypto/rand"
 	"errors"
 	"math/big"
-	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -253,10 +252,11 @@ func (ks *KeyStore) Delete(a accounts.Account, passphrase string) error {
 	}
 	// The order is crucial here. The key is dropped from the
 	// cache after the file is gone so that a reload happening in
-	// between won't insert it into the cache again.
-	err = os.Remove(a.URL.Path)
+	// between won't insert it into the cache again. The removal is
+	// synchronized with accountCache scans to avoid a stale scan
+	// resurrecting the account (see accountCache.deleteFile).
+	err = ks.cache.deleteFile(a.URL.Path, a)
 	if err == nil {
-		ks.cache.delete(a)
 		ks.refreshWallets()
 	}
 

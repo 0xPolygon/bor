@@ -372,6 +372,47 @@ func TestWalletNotifications(t *testing.T) {
 	checkEvents(t, wantEvents, events)
 }
 
+// TestDeleteScanRace exercises account deletion while a keystore directory
+// scan is in flight. A scan may observe the directory state from before the
+// key file is removed; once the stale scan results are applied, the deleted
+// account must not be resurrected in the account cache.
+func TestDeleteScanRace(t *testing.T) {
+	t.Parallel()
+	_, ks := tmpKeyStore(t)
+
+	for i := 0; i < 512; i++ {
+		account, err := ks.NewAccount("")
+		if err != nil {
+			t.Fatalf("failed to create test account: %v", err)
+		}
+		// Race the account deletion against directory scans, one of which may
+		// list the directory before the key file is removed.
+		var wg sync.WaitGroup
+		for j := 0; j < 16; j++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				ks.cache.scanAccounts()
+			}()
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := ks.Delete(account, ""); err != nil {
+				t.Errorf("failed to delete test account: %v", err)
+			}
+		}()
+		wg.Wait()
+
+		if ks.HasAddress(account.Address) {
+			t.Errorf("deleted account %x resurrected in cache", account.Address)
+		}
+		// Scan once so a resurrected account is dropped before the next
+		// iteration, keeping each iteration independent.
+		ks.cache.scanAccounts()
+	}
+}
+
 // TestImportECDSA tests the import functionality of a keystore.
 func TestImportECDSA(t *testing.T) {
 	t.Parallel()

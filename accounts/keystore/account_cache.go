@@ -73,6 +73,10 @@ type accountCache struct {
 	throttle *time.Timer
 	notify   chan struct{}
 	fileC    fileCache
+	// scanMu serializes filesystem scans against API-side key file
+	// removal (see deleteFile). It prevents a scan whose directory
+	// listing predates a delete from re-adding the deleted account.
+	scanMu sync.Mutex
 }
 
 func newAccountCache(keydir string) (*accountCache, chan struct{}) {
@@ -118,6 +122,22 @@ func (ac *accountCache) add(newAccount accounts.Account) {
 	copy(ac.all[i+1:], ac.all[i:])
 	ac.all[i] = newAccount
 	ac.byAddr[newAccount.Address] = append(ac.byAddr[newAccount.Address], newAccount)
+}
+
+// deleteFile removes the key file for the given account and drops the
+// account from the cache. The removal is synchronized with scanAccounts: a
+// concurrently running scan may have listed the directory before the file
+// was removed, and must not be able to re-add the account to the cache
+// after the delete has completed.
+func (ac *accountCache) deleteFile(path string, removed accounts.Account) error {
+	ac.scanMu.Lock()
+	defer ac.scanMu.Unlock()
+
+	err := os.Remove(path)
+	if err == nil {
+		ac.delete(removed)
+	}
+	return err
 }
 
 // note: removed needs to be unique here (i.e. both File and Address must be set).
@@ -253,6 +273,12 @@ func (ac *accountCache) close() {
 // scanAccounts checks if any changes have occurred on the filesystem, and
 // updates the account cache accordingly
 func (ac *accountCache) scanAccounts() error {
+	// Serialize with deleteFile: hold the scan lock for the entire read +
+	// apply window, so a delete cannot interleave between listing a key file
+	// and (re-)adding its account to the cache.
+	ac.scanMu.Lock()
+	defer ac.scanMu.Unlock()
+
 	// Scan the entire folder metadata for file changes
 	creates, deletes, updates, err := ac.fileC.scan(ac.keydir)
 	if err != nil {
