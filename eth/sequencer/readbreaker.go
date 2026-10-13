@@ -10,6 +10,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	pb "github.com/0xPolygon/sequence-store-proto/sequencestore/v1"
+
 	"github.com/ethereum/go-ethereum/log"
 )
 
@@ -51,6 +53,15 @@ var readProbeInterval = 5 * time.Second
 // Range in single-digit milliseconds.
 var readProbeTimeout = 150 * time.Millisecond
 
+// staleHoldMax bounds a staleness hold. A frozen tail is only evidence of a
+// broken read path while someone is writing; when this node is the only
+// producer, it holds its own publishes for as long as it cannot read, so
+// nothing can ever advance the tail and the hold would last forever. Past
+// this bound reads resume: a gateway that is still frozen re-trips within
+// staleReadsToTrip cheap answered reads, while a sole writer gets the tail
+// read it needs to resync and publish. Var for tests.
+var staleHoldMax = 3 * readProbeInterval
+
 // errReadPathDown is what a refused read returns. Callers already treat any
 // read error as "the tail is unreadable" and take the safe branch, so a
 // refusal needs no handling of its own — it only has to not look like
@@ -71,6 +82,8 @@ type readBreaker struct {
 	mu       sync.Mutex
 	failures int
 	open     bool
+	// staleSince is when the current staleness hold opened.
+	staleSince time.Time
 	// stale marks the breaker open because the tail answers but does not
 	// advance, as against open on silence. Only an advancing tail clears it;
 	// a bare successful round trip does not, because a frozen tail answers.
@@ -78,6 +91,8 @@ type readBreaker struct {
 	freeze    int
 	lastTail  []byte
 	nextProbe time.Time
+	// recoveringUntil suspends the frozen-tail rule; see recovered.
+	recoveringUntil time.Time
 }
 
 // allow reports whether a read may go out, and whether it is the probe.
@@ -92,6 +107,14 @@ func (b *readBreaker) allow() (allowed, probing bool) {
 	}
 
 	now := time.Now()
+	if b.stale && now.Sub(b.staleSince) > staleHoldMax {
+		b.open, b.stale, b.failures, b.freeze = false, false, 0, 0
+		readBreakerClosed.Inc(1)
+		log.Warn("Sequencer store tail still frozen past the hold bound; resuming reads", "held", now.Sub(b.staleSince))
+
+		return true, false
+	}
+
 	if now.Before(b.nextProbe) {
 		readsSkipped.Inc(1)
 
@@ -173,12 +196,13 @@ func (b *readBreaker) observeLiveTail(tail []byte) {
 
 	if !bytes.Equal(tail, b.lastTail) {
 		b.lastTail = append(b.lastTail[:0], tail...)
+		b.unfreezeLocked()
+
+		return
+	}
+
+	if time.Now().Before(b.recoveringUntil) {
 		b.freeze = 0
-		if b.stale {
-			b.open, b.stale, b.failures = false, false, 0
-			readBreakerClosed.Inc(1)
-			log.Info("Sequencer store tail is advancing again")
-		}
 
 		return
 	}
@@ -189,10 +213,57 @@ func (b *readBreaker) observeLiveTail(tail []byte) {
 	}
 
 	b.open, b.stale = true, true
-	b.nextProbe = time.Now().Add(readProbeInterval)
+	b.staleSince = time.Now()
+	b.nextProbe = b.staleSince.Add(readProbeInterval)
 	readBreakerOpened.Inc(1)
 	log.Warn("Sequencer store tail is frozen (answering but not advancing); keeping it off the block path",
 		"reads", b.freeze, "probeEvery", readProbeInterval)
+}
+
+// staleTail returns the frozen head behind a staleness hold, and whether one
+// is in force.
+func (b *readBreaker) staleTail() ([]byte, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if !b.stale {
+		return nil, false
+	}
+
+	return append([]byte(nil), b.lastTail...), true
+}
+
+// unfreeze lifts a staleness hold: the tail was seen to move.
+func (b *readBreaker) unfreeze() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.unfreezeLocked()
+}
+
+func (b *readBreaker) unfreezeLocked() {
+	b.freeze = 0
+	if !b.stale {
+		return
+	}
+
+	b.open, b.stale, b.failures = false, false, 0
+	readBreakerClosed.Inc(1)
+	log.Info("Sequencer store tail is advancing again")
+}
+
+// recovered suspends the frozen-tail rule while builds recover heights the
+// store sealed ahead of us. A dead sealer is exactly a tail that stops
+// moving, so the rule would otherwise cut a multi-block recovery off after a
+// few heights — yet those reads are not wedging production, they drive it.
+// Resetting the count is not enough: idle catch-up reads between two builds
+// can reach the limit on their own.
+func (b *readBreaker) recovered() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.freeze = 0
+	b.recoveringUntil = time.Now().Add(recoverGrace)
 }
 
 // isSilent reports an error that means the read path did not answer, as
@@ -213,4 +284,52 @@ func isSilent(err error) bool {
 	default:
 		return false
 	}
+}
+
+// admit gates one read on the breaker and reports whether it is the probe.
+//
+// A probe under a staleness hold first asks the one question that can lift
+// it — does anything follow the frozen head? The caller's own read cannot
+// be trusted to: it may be the first page of a walk from a position behind
+// the tip, and the open breaker refuses every page after the probe, so the
+// walk never reaches the live tail and the hold never sees it move. A node
+// whose position had fallen behind stayed blind long after the store
+// resumed advancing.
+func (r *reader) admit(ctx context.Context) (bool, error) {
+	allowed, probing := r.breaker.allow()
+	if !allowed {
+		return false, errReadPathDown
+	}
+
+	if tail, stale := r.breaker.staleTail(); probing && stale && !r.tailMoved(ctx, tail) {
+		return false, errReadPathDown
+	}
+
+	return probing, nil
+}
+
+// tailMoved reports whether the store holds anything after tail, lifting
+// the staleness hold when it does. A store that no longer knows the head
+// at all (wiped, or past its head-index window) has moved too.
+func (r *reader) tailMoved(ctx context.Context, tail []byte) bool {
+	cctx, cancel := context.WithTimeout(ctx, readProbeTimeout)
+	defer cancel()
+
+	resp, err := r.client().Range(cctx, &pb.RangeRequest{
+		After: &pb.RangeRequest_Head{Head: tail},
+		Limit: 1,
+	})
+	r.note(err)
+
+	switch {
+	case status.Code(err) == codes.NotFound:
+	case err != nil:
+		return false
+	case len(resp.GetEntries()) == 0 && bytes.Equal(resp.GetNext(), tail):
+		return false
+	}
+
+	r.breaker.unfreeze()
+
+	return true
 }

@@ -108,6 +108,11 @@ type tailInfo struct {
 	// open.
 	explained bool
 
+	// bridgedParent is our parent when the window's own parent was proven
+	// to be the same block in everything execution reads (see
+	// bridgeEquivalentParent); zero otherwise.
+	bridgedParent common.Hash
+
 	// suffixOurs is set when the anchor rung's matcher absorbed every walked
 	// entry in lockstep with the unconfirmed journal: the store's tail past
 	// our anchor is a prefix of our own in-flight window, so the store's
@@ -369,9 +374,9 @@ func (f *folder) reached(s commitment.Head) {
 }
 
 func (r *reader) rangeOnce(ctx context.Context, req *pb.RangeRequest) (*pb.RangeResponse, error) {
-	allowed, probing := r.breaker.allow()
-	if !allowed {
-		return nil, errReadPathDown
+	probing, err := r.admit(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	cctx, cancel := context.WithTimeout(ctx, readBudget(probing))
@@ -403,9 +408,9 @@ func (r *reader) note(err error) {
 // generation fetches the entries of the newest generation standing at a
 // height — open, records, and seal when one closed it.
 func (r *reader) generation(ctx context.Context, height uint64) ([]*pb.Entry, error) {
-	allowed, probing := r.breaker.allow()
-	if !allowed {
-		return nil, errReadPathDown
+	probing, err := r.admit(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	cctx, cancel := context.WithTimeout(ctx, readBudget(probing))

@@ -24,6 +24,7 @@ var (
 	publishStaleCount      = metrics.NewRegisteredCounter("sequencer/publish/stale", nil)
 	publishMutedCount      = metrics.NewRegisteredCounter("sequencer/publish/muted", nil)
 	publishRecoverCount    = metrics.NewRegisteredCounter("sequencer/publish/recovered", nil)
+	publishBridgeCount     = metrics.NewRegisteredCounter("sequencer/publish/bridged", nil)
 	readHeadMismatch       = metrics.NewRegisteredCounter("sequencer/read/headmismatch", nil)
 	readUnexplained        = metrics.NewRegisteredCounter("sequencer/read/unexplained", nil)
 	barrierDivergedCount   = metrics.NewRegisteredCounter("sequencer/publish/barrierdiverged", nil)

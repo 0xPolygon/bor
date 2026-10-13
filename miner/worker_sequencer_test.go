@@ -2,6 +2,7 @@ package miner
 
 import (
 	"errors"
+	"fmt"
 	"math/big"
 	"sync"
 	"sync/atomic"
@@ -427,6 +428,65 @@ func TestAdoptedWindowSeedsBlock(t *testing.T) {
 		if block.Transactions()[i].Hash() != tx.Hash() {
 			t.Fatalf("tx %d = %s, want adopted %s", i, block.Transactions()[i].Hash(), tx.Hash())
 		}
+	}
+}
+
+// A complete window is a sealed generation being rebuilt: the block is
+// exactly its transactions, even with more waiting in the pool.
+func TestCompleteWindowSkipsPoolFill(t *testing.T) {
+	t.Parallel()
+
+	for _, complete := range []bool{true, false} {
+		t.Run(fmt.Sprintf("complete=%v", complete), func(t *testing.T) {
+			t.Parallel()
+
+			w, b, rec := newSequencerTestWorker(t)
+
+			parent := b.chain.CurrentBlock()
+			adopted := &AdoptedWindow{
+				Number:     parent.Number.Uint64() + 1,
+				Timestamp:  parent.Time + 2,
+				ParentHash: parent.Hash(),
+				GasLimit:   parent.GasLimit,
+				BaseFee:    eip1559.CalcBaseFee(b.chain.Config(), parent),
+				Txs: []*types.Transaction{
+					b.newRandomTxWithNonce(false, 0),
+					b.newRandomTxWithNonce(false, 1),
+				},
+				Complete: complete,
+			}
+
+			for n := uint64(0); n < 4; n++ {
+				b.txPool.Add([]*types.Transaction{b.newRandomTxWithNonce(false, n)}, true)
+			}
+
+			rec.mu.Lock()
+			rec.adoptable = adopted
+			rec.mu.Unlock()
+
+			b.setMilestone(parent.Number.Uint64(), parent.Hash())
+			w.noempty.Store(true)
+
+			w.start()
+			defer w.stop()
+
+			var block *types.Block
+
+			waitFor(t, 10*time.Second, func() bool {
+				block = b.chain.GetBlockByNumber(adopted.Number)
+
+				return block != nil
+			})
+
+			want := 4
+			if complete {
+				want = 2
+			}
+
+			if got := len(block.Transactions()); got != want {
+				t.Fatalf("sealed %d txs, want %d", got, want)
+			}
+		})
 	}
 }
 

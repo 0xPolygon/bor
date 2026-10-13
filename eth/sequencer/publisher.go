@@ -82,6 +82,7 @@ type Publisher struct {
 	// divergence type. Reset with mode: at the build-start classification
 	// and at the seal flush.
 	diverged divergence
+	bridged  bridgedWindow
 
 	// resync is set when the store shows another producer building the
 	// height this node is building: our block must not seal beside their

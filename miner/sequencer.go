@@ -54,6 +54,10 @@ func (w *worker) fillBlock(interrupt *atomic.Int32, work *environment, genParams
 	if genParams.adoption != nil {
 		w.seedAdopted(work, genParams.adoption)
 
+		if genParams.adoption.Complete {
+			return nil
+		}
+
 		// Past the announce time already — a rebuild that inherited a
 		// window late. The sequenced transactions are committed, which is
 		// everything consumers were promised, so close here. Filling from

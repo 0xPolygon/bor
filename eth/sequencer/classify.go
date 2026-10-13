@@ -231,7 +231,7 @@ func (p *Publisher) mayDisplaceWindowLocked(info tailInfo, flushHeight uint64) b
 		return true // the standing seal is our own re-delivery
 	}
 
-	if p.chain == nil {
+	if p.chain == nil || p.carriesBridgedWindowLocked(info, flushHeight) {
 		return true
 	}
 
