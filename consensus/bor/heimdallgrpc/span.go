@@ -16,7 +16,7 @@ func (h *HeimdallGRPCClient) GetSpan(ctx context.Context, spanID uint64) (*types
 
 	var err error
 
-	ctxWithTimeout, cancel := context.WithTimeout(ctx, defaultTimeout)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, h.timeout)
 	defer cancel()
 
 	// Start the timer and set the request type on the context.
@@ -49,7 +49,7 @@ func (h *HeimdallGRPCClient) GetLatestSpan(ctx context.Context) (*types.Span, er
 
 	var err error
 
-	ctxWithTimeout, cancel := context.WithTimeout(ctx, defaultTimeout)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, h.timeout)
 	defer cancel()
 
 	// Start the timer and set the request type on the context.
