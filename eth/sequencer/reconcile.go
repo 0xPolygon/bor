@@ -7,6 +7,9 @@ import (
 	"time"
 
 	pb "github.com/0xPolygon/sequence-store-proto/sequencestore/v1"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/log"
 )
 
 var errRefold = errors.New("refold: unknown entry kind")
@@ -229,4 +232,34 @@ func (p *Publisher) confirmGateThroughAckedLocked() {
 
 		p.confirmGateFromSealLocked(it)
 	}
+}
+
+// laggingRead tracks tail reads that land behind the acked frontier.
+type laggingRead struct {
+	since time.Time
+	acked uint64 // ackedSeq when the first behind read arrived
+}
+
+// storeWentBackLocked reports whether tail reads have sat behind the acked
+// frontier for longer than any gateway lag. Acks follow the log commit, so
+// such a store has lost acked entries (broker loss, restore). Only a rewind
+// resends them: holding the frontier would STALE against it forever, since
+// neither the ack nor the read says where the ingress head is.
+func (p *Publisher) storeWentBackLocked(now time.Time) bool {
+	if p.behind.acked != p.ackedSeq {
+		p.behind = laggingRead{since: now, acked: p.ackedSeq}
+	}
+
+	behindFor := now.Sub(p.behind.since)
+	if behindFor < laggingReadBound {
+		reconcileLaggingRead.Inc(1)
+
+		return false
+	}
+
+	reconcileStoreBehind.Inc(1)
+	log.Warn("Store tail stayed behind acked entries, resending from it",
+		"acked", p.ackedSeq, "behind", common.PrettyDuration(behindFor))
+
+	return true
 }

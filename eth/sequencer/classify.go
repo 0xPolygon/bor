@@ -1,6 +1,8 @@
 package sequencer
 
 import (
+	"time"
+
 	"github.com/0xPolygon/sequence-store-proto/commitment"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -23,6 +25,8 @@ func (p *Publisher) applyTail(info tailInfo) reconcileOutcome {
 	// anchor (the adopt rewound to a prefix): its suffix does not extend
 	// the store head and must re-anchor onto it instead.
 	if info.s == p.anchor {
+		p.behind = laggingRead{}
+
 		if fh, ok := p.pendingFlushLocked(); ok && !p.suffixExtendsLocked(info.s) {
 			return p.refoldLocked(info.s, fh, reconcileSupersede)
 		}
@@ -31,12 +35,14 @@ func (p *Publisher) applyTail(info tailInfo) reconcileOutcome {
 	}
 
 	if seq, ok := p.journal.findPost(info.s); ok {
-		// A tail behind our acked frontier is a lagging read (a gateway
-		// that has not applied what ingress already acked), not a store
-		// that went back. Rewinding to it would resend entries the store
-		// holds, and their STALE ends the session before the acks queued
-		// behind them are read.
-		if seq > p.ackedSeq {
+		// A tail behind our acked frontier is usually a lagging read (a
+		// gateway that has not applied what ingress already acked).
+		// Rewinding to it would resend entries the store holds, and their
+		// STALE ends the session before the acks queued behind them are
+		// read. Only a tail that stays behind is taken as a store that
+		// went back.
+		if seq > p.ackedSeq || p.storeWentBackLocked(time.Now()) {
+			p.behind = laggingRead{}
 			p.ackedSeq = seq
 			p.anchor = info.s
 		}
