@@ -349,7 +349,11 @@ func ApplyTransaction(evm *vm.EVM, gp *GasPool, statedb *state.StateDB, header *
 	defer readattr.Reset()
 	receipt, err := ApplyTransactionWithEVM(msg, gp, statedb, header.Number, header.Hash(), header.Time, tx, usedGas, evm)
 	if cold := readattr.Take(readTag); cold > 0 {
-		log.Info("Tx required cold disk reads", "hash", tx.Hash(), "block", header.Number, "coldReads", cold)
+		// Hex() rather than the common.Hash value: the log terminal
+		// handler abbreviates TerminalStringer values (hash → "abc..def"),
+		// which makes the tx hard to identify. A plain string prints in
+		// full.
+		log.Info("Tx required cold disk reads", "hash", tx.Hash().Hex(), "block", header.Number, "coldReads", cold)
 	}
 	return receipt, err
 }
