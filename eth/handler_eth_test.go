@@ -1010,13 +1010,15 @@ func testPrivateTxNotPropagated(t *testing.T, protocol uint) {
 		tx, _ = types.SignTx(tx, types.HomesteadSigner{}, testKey)
 		txs[nonce] = tx
 	}
-	source.txpool.Add(txs[:5], false)
-
-	// Mark some transactions as private
+	// Mark some transactions as private, before adding them to the pool: the
+	// broadcast and announcement loops run asynchronously, so marking must
+	// precede insertion or private txs can be gossiped before being flagged.
 	privateTxStore.mu.Lock()
 	privateTxStore.store[txs[3].Hash()] = struct{}{}
 	privateTxStore.store[txs[4].Hash()] = struct{}{}
 	privateTxStore.mu.Unlock()
+
+	source.txpool.Add(txs[:5], false)
 
 	sinks := make([]*testHandler, 10)
 	for i := 0; i < len(sinks); i++ {
@@ -1082,14 +1084,14 @@ func testPrivateTxNotPropagated(t *testing.T, protocol uint) {
 	require.Equal(t, txReceivedCount.Load(), uint64(len(sinks)*3), "sinks should have received only public transactions")
 
 	// Transactions are also propagated via broadcast and announcement loops. Ensure that
-	// none of the receive any transactions.
-	source.txpool.Add(txs[5:], false)
-
-	// Mark some transactions as private
+	// none of the receive any transactions. As above, the private marking must
+	// precede pool insertion to avoid racing the asynchronous broadcast loop.
 	privateTxStore.mu.Lock()
 	privateTxStore.store[txs[8].Hash()] = struct{}{}
 	privateTxStore.store[txs[9].Hash()] = struct{}{}
 	privateTxStore.mu.Unlock()
+
+	source.txpool.Add(txs[5:], false)
 
 	txReceivedCount.Store(0)
 	for i := range sinks {
