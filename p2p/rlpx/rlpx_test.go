@@ -531,3 +531,8 @@ func TestMaxFrameSize(t *testing.T) {
 		})
 	}
 }
+
+// This test checks that the frame size limit can only be set after the handshake.
+func TestSetMaxFrameSizeBeforeHandshake(t *testing.T) {
+	assert.PanicsWithValue(t, "can't SetMaxFrameSize before handshake", func() { NewConn(nil, nil).SetMaxFrameSize(1) })
+}

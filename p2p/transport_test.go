@@ -17,6 +17,7 @@
 package p2p
 
 import (
+	"bytes"
 	"errors"
 	"reflect"
 	"sync"
@@ -163,8 +164,11 @@ func TestProtocolHandshakeErrors(t *testing.T) {
 	}
 }
 
-// This test checks that an oversized frame is rejected during the protocol handshake.
-func TestProtocolHandshakeOversizedFrame(t *testing.T) {
+// encHandshakePair returns two transports connected over TCP that completed the encryption
+// handshake, so the protocol handshake is next.
+func encHandshakePair(t *testing.T) (dialer, listener *rlpxTransport) {
+	t.Helper()
+
 	var (
 		prv0, _ = crypto.GenerateKey()
 		prv1, _ = crypto.GenerateKey()
@@ -176,33 +180,101 @@ func TestProtocolHandshakeOversizedFrame(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	t.Cleanup(func() { fd0.Close(); fd1.Close() })
+
+	dialer, listener = newRLPX(fd0, &prv1.PublicKey).(*rlpxTransport), newRLPX(fd1, nil).(*rlpxTransport)
+
 	wg.Add(2)
 
 	go func() {
 		defer wg.Done()
-		defer fd0.Close()
 
-		frame := newRLPX(fd0, &prv1.PublicKey)
-		if _, err := frame.doEncHandshake(prv0); err != nil {
+		if _, err := dialer.doEncHandshake(prv0); err != nil {
 			t.Errorf("dial side enc handshake failed: %v", err)
-			return
 		}
-		frame.(*rlpxTransport).conn.Write(handshakeMsg, make([]byte, baseProtocolMaxMsgSize*2))
 	}()
 	go func() {
 		defer wg.Done()
-		defer fd1.Close()
 
-		rlpx := newRLPX(fd1, nil)
-		if _, err := rlpx.doEncHandshake(prv1); err != nil {
+		if _, err := listener.doEncHandshake(prv1); err != nil {
 			t.Errorf("listen side enc handshake failed: %v", err)
-			return
-		}
-
-		_, err := rlpx.doProtoHandshake(&protoHandshake{Version: 3})
-		if err == nil || err.Error() != "frame size exceeds limit" {
-			t.Errorf("listen side error mismatch: have %v, want frame size exceeds limit", err)
 		}
 	}()
 	wg.Wait()
+
+	return dialer, listener
+}
+
+// This test checks the frame size limit that applies while the protocol handshake is read.
+func TestProtocolHandshakeFrameLimit(t *testing.T) {
+	const frameTooLarge = "frame size exceeds limit"
+
+	// The frame holds the message code (one byte for the handshake) and the payload.
+	maxFrame := baseProtocolMaxMsgSize + 9
+
+	for _, test := range []struct {
+		name    string
+		payload int
+		want    string // the error, empty if only known not to be the frame limit
+	}{
+		{"base message size", baseProtocolMaxMsgSize, ""},
+		{"largest frame", maxFrame - 1, "message too big"},
+		{"frame above the limit", maxFrame, frameTooLarge},
+		{"far above the limit", baseProtocolMaxMsgSize * 2, frameTooLarge},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dialer, listener := encHandshakePair(t)
+
+			go dialer.conn.Write(handshakeMsg, make([]byte, test.payload))
+
+			// The frames within the limit are rejected later, as the payload is not a valid
+			// handshake or exceeds the message size limit.
+			_, err := listener.doProtoHandshake(&protoHandshake{Version: 3})
+			if err == nil {
+				t.Fatal("handshake succeeded")
+			}
+
+			if test.want == "" && err.Error() == frameTooLarge || test.want != "" && err.Error() != test.want {
+				t.Fatalf("error mismatch: have %q, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+// This test checks that the frame size limit is lifted once the protocol handshake is done.
+func TestProtocolHandshakeLiftsFrameLimit(t *testing.T) {
+	var wg sync.WaitGroup
+
+	// Registered first, so it runs after the connections are closed.
+	t.Cleanup(wg.Wait)
+
+	dialer, listener := encHandshakePair(t)
+
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+
+		if _, err := dialer.doProtoHandshake(&protoHandshake{Version: 3, ID: bytes.Repeat([]byte{1}, 64)}); err != nil {
+			t.Errorf("dial side proto handshake error: %v", err)
+			return
+		}
+
+		if err := Send(dialer, 0x10, make([]byte, 4*baseProtocolMaxMsgSize)); err != nil {
+			t.Errorf("dial side send error: %v", err)
+		}
+	}()
+
+	if _, err := listener.doProtoHandshake(&protoHandshake{Version: 3, ID: bytes.Repeat([]byte{2}, 64)}); err != nil {
+		t.Fatalf("listen side proto handshake error: %v", err)
+	}
+
+	msg, err := listener.ReadMsg()
+	if err != nil {
+		t.Fatalf("large message after the handshake rejected: %v", err)
+	}
+
+	if msg.Size < 4*baseProtocolMaxMsgSize {
+		t.Fatalf("message size mismatch: have %d", msg.Size)
+	}
 }
