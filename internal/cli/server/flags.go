@@ -756,6 +756,27 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.JsonRPC.LogQueryLimit,
 		Group:   "JsonRPC",
 	})
+	f.IntFlag(&flagset.IntFlag{
+		Name:    "rpc.maxfilters",
+		Usage:   "Maximum number of installed polling filters (eth_newFilter, eth_newBlockFilter, eth_newPendingTransactionFilter)",
+		Value:   &c.cliConfig.JsonRPC.MaxFilters,
+		Default: c.cliConfig.JsonRPC.MaxFilters,
+		Group:   "JsonRPC",
+	})
+	f.IntFlag(&flagset.IntFlag{
+		Name:    "rpc.maxfilteritems",
+		Usage:   "Maximum number of events a polling filter may buffer before it overflows and is uninstalled",
+		Value:   &c.cliConfig.JsonRPC.MaxFilterItems,
+		Default: c.cliConfig.JsonRPC.MaxFilterItems,
+		Group:   "JsonRPC",
+	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "rpc.maxfilterbuffer",
+		Usage:   "Memory budget in MiB for the events buffered by all polling filters together",
+		Value:   &c.cliConfig.JsonRPC.MaxFilterBuffer,
+		Default: c.cliConfig.JsonRPC.MaxFilterBuffer,
+		Group:   "JsonRPC",
+	})
 	f.Uint64Flag(&flagset.Uint64Flag{
 		Name:    "rpc.rangelimit",
 		Usage:   "Maximum block range allowed for eth_getLogs and bor_getLogs (0 = no limit)",

@@ -330,7 +330,7 @@ func TestPendingTxFilter(t *testing.T) {
 		hashes []common.Hash
 	)
 
-	fid0 := api.NewPendingTransactionFilter(nil)
+	fid0, _ := api.NewPendingTransactionFilter(nil)
 
 	time.Sleep(1 * time.Second)
 	backend.txFeed.Send(core.NewTxsEvent{Txs: transactions})
@@ -390,7 +390,7 @@ func TestPendingTxFilterFullTx(t *testing.T) {
 	)
 
 	fullTx := true
-	fid0 := api.NewPendingTransactionFilter(&fullTx)
+	fid0, _ := api.NewPendingTransactionFilter(&fullTx)
 
 	time.Sleep(1 * time.Second)
 	backend.txFeed.Send(core.NewTxsEvent{Txs: transactions})
@@ -832,7 +832,7 @@ func TestPendingTxFilterDeadlock(t *testing.T) {
 	// timeout either in 100ms or 200ms
 	subs := make([]*Subscription, 20)
 	for i := range subs {
-		fid := api.NewPendingTransactionFilter(nil)
+		fid, _ := api.NewPendingTransactionFilter(nil)
 		api.filtersMu.Lock()
 		f, ok := api.filters[fid]
 		api.filtersMu.Unlock()
@@ -1120,4 +1120,211 @@ func TestRangeLimit(t *testing.T) {
 	// Suppress unused variable warnings.
 	_ = bc
 	_ = bc2
+}
+
+// waitFor polls cond until it holds. It must not use state-changing API calls.
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+
+	for deadline := time.Now().Add(2 * time.Second); !cond(); time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+	}
+}
+
+func (api *FilterAPI) withLock(fn func() bool) bool {
+	api.filtersMu.Lock()
+	defer api.filtersMu.Unlock()
+
+	return fn()
+}
+
+// Tests that the number of installed polling filters is capped, and that uninstalling a
+// filter frees a slot.
+func TestPollingFilterLimit(t *testing.T) {
+	t.Parallel()
+
+	const maxFilters = 3
+
+	var (
+		_, sys = newTestFilterSystem(rawdb.NewMemoryDatabase(), Config{MaxFilters: maxFilters})
+		api    = NewFilterAPI(sys, false)
+
+		creators = map[string]func() (rpc.ID, error){
+			"logs":   func() (rpc.ID, error) { return api.NewFilter(FilterCriteria{}) },
+			"blocks": api.NewBlockFilter,
+			"txs":    func() (rpc.ID, error) { return api.NewPendingTransactionFilter(nil) },
+		}
+		first rpc.ID
+	)
+
+	for i := range maxFilters {
+		id, err := api.NewBlockFilter()
+		if err != nil {
+			t.Fatalf("failed to create filter below the limit: %v", err)
+		}
+
+		if i == 0 {
+			first = id
+		}
+	}
+
+	for name, create := range creators {
+		if _, err := create(); !errors.Is(err, errTooManyFilters) {
+			t.Errorf("%s filter: error mismatch: have %v, want %v", name, err, errTooManyFilters)
+		}
+	}
+
+	if api.reserved != 0 {
+		t.Fatalf("rejected creations left %d slots reserved", api.reserved)
+	}
+
+	if !api.UninstallFilter(first) {
+		t.Fatal("filter not found")
+	}
+
+	if _, err := api.NewFilter(FilterCriteria{}); err != nil {
+		t.Fatalf("failed to create filter after freeing a slot: %v", err)
+	}
+}
+
+// Tests that a polling filter exceeding its item limit releases its buffer, is cancelled
+// and reports the overflow on the next poll, without dropping events below the limit.
+func TestPollingFilterOverflow(t *testing.T) {
+	t.Parallel()
+
+	const maxItems = 3
+
+	var (
+		backend, sys = newTestFilterSystem(rawdb.NewMemoryDatabase(), Config{MaxPendingItems: maxItems})
+		api          = NewFilterAPI(sys, false)
+		tx           = types.NewTransaction(0, common.Address{}, new(big.Int), 0, new(big.Int), nil)
+
+		tests = []struct {
+			name   string
+			create func() (rpc.ID, error)
+			send   func(n int) // delivers n events, as one batch where the feed allows it
+		}{
+			{"logs", func() (rpc.ID, error) { return api.NewFilter(FilterCriteria{}) }, func(n int) {
+				logs := make([]*types.Log, n)
+				for i := range logs {
+					logs[i] = &types.Log{}
+				}
+
+				backend.logsFeed.Send(logs)
+			}},
+			{"blocks", api.NewBlockFilter, func(n int) {
+				for range n {
+					backend.chainFeed.Send(core.ChainEvent{Header: &types.Header{Number: big.NewInt(1)}})
+				}
+			}},
+			{"txs", func() (rpc.ID, error) { return api.NewPendingTransactionFilter(nil) }, func(n int) {
+				txs := make([]*types.Transaction, n)
+				for i := range txs {
+					txs[i] = tx
+				}
+
+				backend.txFeed.Send(core.NewTxsEvent{Txs: txs})
+			}},
+		}
+	)
+
+	for _, test := range tests {
+		id, err := test.create()
+		if err != nil {
+			t.Fatalf("%s: failed to create filter: %v", test.name, err)
+		}
+
+		// Events up to the limit are delivered.
+		test.send(maxItems)
+		waitFor(t, test.name+" buffer", func() bool {
+			return api.withLock(func() bool {
+				f := api.filters[id]
+
+				return len(f.logs)+len(f.hashes)+len(f.txs) == maxItems
+			})
+		})
+
+		if _, err := api.GetFilterChanges(id); err != nil {
+			t.Fatalf("%s: poll at the limit failed: %v", test.name, err)
+		}
+
+		// One event more than the limit overflows the filter, which holds nothing afterwards.
+		test.send(maxItems + 1)
+		waitFor(t, test.name+" overflow", func() bool {
+			return api.withLock(func() bool { return api.filters[id].overflowed })
+		})
+
+		if n := api.withLock(func() bool { return api.bufferedBytes == 0 && api.filters[id].size == 0 }); !n {
+			t.Fatalf("%s: overflowed filter still holds buffered events", test.name)
+		}
+
+		if _, err := api.GetFilterChanges(id); !errors.Is(err, errFilterOverflow) {
+			t.Fatalf("%s: poll error mismatch: have %v, want %v", test.name, err, errFilterOverflow)
+		}
+
+		if _, err := api.GetFilterChanges(id); !errors.Is(err, errFilterNotFound) {
+			t.Fatalf("%s: second poll error mismatch: have %v, want %v", test.name, err, errFilterNotFound)
+		}
+	}
+}
+
+// Tests that polling filters share a memory budget: events beyond it overflow the filter,
+// and creating filters is refused while the budget is used up.
+func TestPollingFilterBufferBudget(t *testing.T) {
+	t.Parallel()
+
+	const events = 3
+
+	var (
+		backend, sys = newTestFilterSystem(rawdb.NewMemoryDatabase(), Config{MaxBufferBytes: events * hashOverhead})
+		api          = NewFilterAPI(sys, false)
+		send         = func() { backend.chainFeed.Send(core.ChainEvent{Header: &types.Header{Number: big.NewInt(1)}}) }
+	)
+
+	id, err := api.NewBlockFilter()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for range events {
+		send()
+	}
+
+	waitFor(t, "budget use", func() bool { return api.withLock(func() bool { return api.bufferedBytes == events*hashOverhead }) })
+
+	if _, err := api.NewBlockFilter(); !errors.Is(err, errTooManyFilters) {
+		t.Fatalf("creation with exhausted budget: error mismatch: have %v, want %v", err, errTooManyFilters)
+	}
+
+	if _, err := api.GetFilterChanges(id); err != nil {
+		t.Fatal(err)
+	}
+
+	if api.bufferedBytes != 0 {
+		t.Fatalf("poll left %d bytes accounted", api.bufferedBytes)
+	}
+
+	other, err := api.NewBlockFilter()
+	if err != nil {
+		t.Fatalf("creation after the budget was freed: %v", err)
+	}
+
+	// The second filter takes the whole budget, so the first one overflows on the next event.
+	for range events + 1 {
+		send()
+	}
+
+	waitFor(t, "overflow", func() bool {
+		return api.withLock(func() bool { return api.filters[id].overflowed || api.filters[other].overflowed })
+	})
+
+	if !api.UninstallFilter(id) || !api.UninstallFilter(other) {
+		t.Fatal("filters not found")
+	}
+
+	if api.bufferedBytes != 0 {
+		t.Fatalf("uninstalling left %d bytes accounted", api.bufferedBytes)
+	}
 }

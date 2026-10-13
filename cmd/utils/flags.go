@@ -2241,6 +2241,10 @@ func RegisterFilterAPI(stack *node.Node, backend ethapi.Backend, ethcfg *ethconf
 		LogCacheSize:  ethcfg.FilterLogCacheSize,
 		LogQueryLimit: ethcfg.LogQueryLimit,
 		RangeLimit:    ethcfg.RPCBlockRangeLimit,
+
+		MaxFilters:      ethcfg.FilterMaxCount,
+		MaxPendingItems: ethcfg.FilterMaxItems,
+		MaxBufferBytes:  ethcfg.FilterMaxBufferBytes,
 	})
 
 	filterAPI := filters.NewFilterAPI(filterSystem, ethcfg.BorLogs)

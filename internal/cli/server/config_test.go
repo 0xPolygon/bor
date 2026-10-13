@@ -1,6 +1,7 @@
 package server
 
 import (
+	"math"
 	"math/big"
 	"testing"
 	"time"
@@ -625,4 +626,39 @@ func TestDeveloperModeGasParameters(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "miner.targetGasPercentage must be between 1-100")
 	})
+}
+
+func TestPollingFilterLimitsConfig(t *testing.T) {
+	config := DefaultConfig()
+	assert.NoError(t, config.loadChain())
+
+	ethConfig, err := config.buildEth(nil, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, ethconfig.Defaults.FilterMaxCount, ethConfig.FilterMaxCount)
+	assert.Equal(t, ethconfig.Defaults.FilterMaxItems, ethConfig.FilterMaxItems)
+	assert.Equal(t, ethconfig.Defaults.FilterMaxBufferBytes, ethConfig.FilterMaxBufferBytes)
+
+	config.JsonRPC.MaxFilters, config.JsonRPC.MaxFilterItems, config.JsonRPC.MaxFilterBuffer = 7, 8, 9
+	ethConfig, err = config.buildEth(nil, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, 7, ethConfig.FilterMaxCount)
+	assert.Equal(t, 8, ethConfig.FilterMaxItems)
+	assert.Equal(t, uint64(9<<20), ethConfig.FilterMaxBufferBytes)
+
+	for name, set := range map[string]func(*Config){
+		"filters":         func(c *Config) { c.JsonRPC.MaxFilters = 0 },
+		"negative":        func(c *Config) { c.JsonRPC.MaxFilterItems = -1 },
+		"items":           func(c *Config) { c.JsonRPC.MaxFilterItems = 0 },
+		"buffer":          func(c *Config) { c.JsonRPC.MaxFilterBuffer = 0 },
+		"buffer overflow": func(c *Config) { c.JsonRPC.MaxFilterBuffer = math.MaxUint64 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			config := DefaultConfig()
+			assert.NoError(t, config.loadChain())
+			set(config)
+
+			_, err := config.buildEth(nil, nil)
+			assert.Error(t, err)
+		})
+	}
 }
