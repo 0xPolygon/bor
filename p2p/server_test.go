@@ -377,6 +377,90 @@ func TestServerAtCap(t *testing.T) {
 	}
 }
 
+// This test checks that connections from static nodes carry the static flag
+// regardless of direction, so a static node that dials us first is still
+// recognized as static.
+func TestServerStaticFlag(t *testing.T) {
+	staticID := randomID()
+
+	srv := &Server{
+		Config: Config{
+			PrivateKey:  newkey(),
+			MaxPeers:    10,
+			NoDial:      true,
+			NoDiscovery: true,
+			StaticNodes: []*enode.Node{newNode(staticID, "")},
+			Logger:      testlog.Logger(t, log.LvlTrace),
+		},
+	}
+	if err := srv.Start(); err != nil {
+		t.Fatalf("could not start: %v", err)
+	}
+	defer srv.Stop()
+
+	newconn := func(id enode.ID) *conn {
+		fd, _ := net.Pipe()
+		tx := newTestTransport(&newkey().PublicKey, fd, nil)
+		node := enode.SignNull(new(enr.Record), id)
+
+		return &conn{fd: fd, transport: tx, flags: inboundConn, node: node, cont: make(chan error)}
+	}
+	addPeer := func(c *conn, want bool) {
+		t.Helper()
+		if err := srv.checkpoint(c, srv.checkpointAddPeer); err != nil {
+			t.Fatalf("could not add conn: %v", err)
+		}
+		if got := c.is(staticConn); got != want {
+			t.Errorf("static flag for %v: got %v, want %v", c.node.ID(), got, want)
+		}
+	}
+
+	addPeer(newconn(staticID), true)
+	addPeer(newconn(randomID()), false)
+
+	// Membership changes between the two handshake checkpoints are picked up
+	// when the peer is launched.
+	addedID := randomID()
+	c := newconn(addedID)
+	if err := srv.checkpoint(c, srv.checkpointPostHandshake); err != nil {
+		t.Fatalf("unexpected error @posthandshake: %v", err)
+	}
+	srv.AddPeer(newNode(addedID, ""))
+	addPeer(c, true)
+
+	srv.RemovePeer(newNode(staticID, ""))
+	addPeer(newconn(staticID), false)
+}
+
+// This test checks that AddPeer and RemovePeer return once the server is stopped.
+func TestServerStaticAfterStop(t *testing.T) {
+	srv := &Server{
+		Config: Config{
+			PrivateKey:  newkey(),
+			MaxPeers:    10,
+			NoDial:      true,
+			NoDiscovery: true,
+			Logger:      testlog.Logger(t, log.LvlTrace),
+		},
+	}
+	if err := srv.Start(); err != nil {
+		t.Fatalf("could not start: %v", err)
+	}
+	srv.Stop()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srv.AddPeer(newNode(randomID(), ""))
+		srv.RemovePeer(newNode(randomID(), ""))
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("AddPeer/RemovePeer blocked on a stopped server")
+	}
+}
+
 func TestServerPeerLimits(t *testing.T) {
 	srvkey := newkey()
 	clientkey := newkey()
