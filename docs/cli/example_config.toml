@@ -18,7 +18,6 @@ gcmode = "full"                 # Blockchain garbage collection mode ("full", "a
 snapshot = true                 # Enables the snapshot-database mode
 "bor.logs" = false              # Enables bor log retrieval
 ethstats = ""                   # Reporting URL of a ethstats service (nodename:secret@host:port)
-witnessprotocol = false         # Enables the wit/0 protocol
 devfakeauthor = false           # Run miner without validator set authorization [dev mode] : Use with '--bor.withoutheimdall' (default: false)
 
 # VM tracing
@@ -212,6 +211,12 @@ bp-rpc-endpoints = [ ] # Comma separated rpc endpoints of all block producers
   enable = true     # Enables parallel execution using Block STM
   procs = 8         # Number of speculative processes (cores) in Block STM
   enforce = false   # Use only Block STM for execution and skip serial execution
+
+[witness]
+  enable = false                  # Enable witness protocol (default: false)
+  syncwithwitnesses = false       # Sync blocks with witnesses (default: false)
+  producewitnesses = false        # Produce witnesses while syncing (default: false)
+  witnessapi = false              # Enable witness API endpoints (default: false)
 
 [pprof]
   pprof = false            # Enable the pprof HTTP server

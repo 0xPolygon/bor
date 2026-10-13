@@ -12,7 +12,7 @@ The ```bor server``` command runs the Bor client.
 
 - ```bor.heimdallgRPC```: Address of Heimdall gRPC service (comma-separated for failover: "addr1,addr2")
 
-- ```bor.heimdalltimeout```: Timeout period for bor's outgoing requests to heimdall (default: 5s)
+- ```bor.heimdalltimeout```: Timeout period for bor's outgoing requests to heimdall (default: 30s)
 
 - ```bor.logs```: Enables bor log retrieval (default: false)
 
@@ -103,6 +103,14 @@ The ```bor server``` command runs the Bor client.
 - ```rpc.batch-response-max-size```: Maximum number of response bytes across all requests in a batch (use 0 for no limits) (default: 25000000)
 
 - ```rpc.returndatalimit```: Maximum size (in bytes) a result of an rpc request could have (use 0 for no limits) (default: 100000)
+
+- ```sequencer.consumer-endpoint```: Sequence store consumer service gRPC endpoint (tail reads during reconciliation)
+
+- ```sequencer.enabled```: Enable the sequence store integration (a mining node publishes the block lifecycle) (default: false)
+
+- ```sequencer.poll```: Producer txpool poll cadence while a block is open (continuous building); 0 keeps the one-shot fill (default: 200ms)
+
+- ```sequencer.publisher-endpoint```: Sequence store publisher service gRPC endpoint (publish stream)
 
 - ```snapshot```: Enables the snapshot-database mode (default: true)
 
@@ -257,6 +265,8 @@ The ```bor server``` command runs the Bor client.
 - ```rpc.txfeecap```: Sets a cap on transaction fee (in ether) that can be sent via the RPC APIs (0 = no cap) (default: 1)
 
 - ```rpc.txsync.defaulttimeout```: Default timeout for eth_sendRawTransactionSync (e.g. 2s, 500ms) (default: 20s)
+
+- ```rpc.txsync.maxconcurrent```: Maximum eth_sendRawTransactionSync calls waiting for a receipt at once (0 = no limit) (default: 4096)
 
 - ```rpc.txsync.maxtimeout```: Maximum allowed timeout for eth_sendRawTransactionSync (e.g. 5m) (default: 1m0s)
 

@@ -20,12 +20,14 @@ import (
 	"crypto/ecdsa"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"io"
 	"math/rand"
 	"net"
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -225,11 +227,20 @@ func TestServerDial(t *testing.T) {
 
 // This test checks that RemovePeer disconnects the peer if it is connected.
 func TestServerRemovePeerDisconnect(t *testing.T) {
+	release := make(chan struct{})
+	protocol := Protocol{
+		Name: "test", Length: 1,
+		Run: func(*Peer, MsgReadWriter) error {
+			<-release
+			return nil
+		},
+	}
 	srv1 := &Server{Config: Config{
 		PrivateKey:  newkey(),
 		MaxPeers:    1,
 		NoDiscovery: true,
 		Logger:      testlog.Logger(t, log.LvlTrace).New("server", "1"),
+		Protocols:   []Protocol{protocol},
 	}}
 	srv2 := &Server{Config: Config{
 		PrivateKey:  newkey(),
@@ -238,6 +249,7 @@ func TestServerRemovePeerDisconnect(t *testing.T) {
 		NoDial:      true,
 		ListenAddr:  "127.0.0.1:0",
 		Logger:      testlog.Logger(t, log.LvlTrace).New("server", "2"),
+		Protocols:   []Protocol{protocol},
 	}}
 
 	srv1.Start()
@@ -246,6 +258,8 @@ func TestServerRemovePeerDisconnect(t *testing.T) {
 	srv2.Start()
 
 	defer srv2.Stop()
+	releaseProtocols := sync.OnceFunc(func() { close(release) })
+	defer releaseProtocols()
 
 	s := strings.Split(srv2.ListenAddr, ":")
 	if len(s) != 2 {
@@ -259,7 +273,29 @@ func TestServerRemovePeerDisconnect(t *testing.T) {
 		t.Fatal("peer not connected")
 	}
 
-	srv1.RemovePeer(srv2.Self())
+	peer := srv1.Peers()[0]
+	if !peer.Static() || !peer.StaticDialed() {
+		t.Fatal("peer lacks static membership before removal")
+	}
+	removed := make(chan struct{})
+	go func() {
+		srv1.RemovePeer(srv2.Self())
+		close(removed)
+	}()
+	select {
+	case <-peer.closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("peer disconnect did not begin")
+	}
+	if peer.Static() || peer.Info().Network.Static || !peer.StaticDialed() {
+		t.Error("removal must clear static membership before protocols exit, preserving dial history")
+	}
+	releaseProtocols()
+	select {
+	case <-removed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("peer removal did not complete")
+	}
 
 	if srv1.PeerCount() > 0 {
 		t.Fatal("removed peer still connected")
@@ -396,15 +432,6 @@ func TestServerStaticFlag(t *testing.T) {
 	addPeer(newconn(staticID), false)
 }
 
-func TestConnFlagStringStatic(t *testing.T) {
-	if got, want := (inboundConn | staticConn).String(), "inbound-static"; got != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
-	if got, want := inboundConn.String(), "inbound"; got != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
-}
-
 // This test checks that AddPeer and RemovePeer return once the server is stopped.
 func TestServerStaticAfterStop(t *testing.T) {
 	srv := &Server{
@@ -431,50 +458,6 @@ func TestServerStaticAfterStop(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("AddPeer/RemovePeer blocked on a stopped server")
-	}
-}
-
-// This test checks that adding a connected peer to the static set marks it as
-// static without reconnecting.
-func TestServerStaticFlagConnectedPeer(t *testing.T) {
-	srv := &Server{
-		Config: Config{
-			PrivateKey:  newkey(),
-			MaxPeers:    10,
-			NoDial:      true,
-			NoDiscovery: true,
-			Logger:      testlog.Logger(t, log.LvlTrace),
-		},
-	}
-	if err := srv.Start(); err != nil {
-		t.Fatalf("could not start: %v", err)
-	}
-	defer srv.Stop()
-
-	id := randomID()
-	fd, _ := net.Pipe()
-	c := &conn{
-		fd:        fd,
-		transport: newTestTransport(&newkey().PublicKey, fd, nil),
-		flags:     inboundConn,
-		node:      enode.SignNull(new(enr.Record), id),
-		cont:      make(chan error),
-	}
-	if err := srv.checkpoint(c, srv.checkpointAddPeer); err != nil {
-		t.Fatalf("could not add conn: %v", err)
-	}
-	peer := srv.Peers()[0]
-	if peer.Static() {
-		t.Fatal("inbound peer is static before AddPeer")
-	}
-
-	srv.AddPeer(newNode(id, ""))
-	// Peers goes through the run loop, so the flag update has been applied.
-	if peer := srv.Peers()[0]; !peer.Static() {
-		t.Error("connected peer is not static after AddPeer")
-	}
-	if !peer.Inbound() {
-		t.Error("peer lost its inbound flag")
 	}
 }
 
@@ -874,4 +857,58 @@ func TestServerStopDialing(t *testing.T) {
 
 	// Full Stop after StopDialing must complete cleanly.
 	srv.Stop()
+}
+
+func TestServerStaticMembership(t *testing.T) {
+	for _, configured := range []bool{false, true} {
+		t.Run(fmt.Sprint("configured=", configured), func(t *testing.T) {
+			remote := newStaticMembershipServer(t, false, nil)
+			var static []*enode.Node
+			if configured {
+				static = []*enode.Node{remote.Self()}
+			}
+			local := newStaticMembershipServer(t, true, static)
+			events := make(chan *PeerEvent, 1)
+			sub := local.SubscribeEvents(events)
+			defer sub.Unsubscribe()
+			if !syncAddPeer(remote, local.Self()) {
+				t.Fatal("peer not connected")
+			}
+			select {
+			case <-events:
+			case <-time.After(5 * time.Second):
+				t.Fatal("inbound peer not connected")
+			}
+			peer := local.Peers()[0]
+			if !peer.Inbound() || peer.StaticDialed() || peer.Trusted() || peer.Static() != configured || peer.Info().Network.Static != configured {
+				t.Fatal("incorrect configured inbound membership")
+			}
+			if !remote.Peers()[0].Static() || !remote.Peers()[0].Info().Network.Static {
+				t.Fatal("dialed static peer lacks membership")
+			}
+			local.AddPeer(remote.Self())
+			if !peer.Static() || !peer.Info().Network.Static || peer.Trusted() || peer.StaticDialed() {
+				t.Fatal("adding an inbound peer must only set static membership")
+			}
+			local.RemovePeer(remote.Self())
+			local.doPeerOp(func(map[enode.ID]*Peer) {
+				if local.staticNodes[remote.Self().ID()] {
+					t.Error("removed peer retains static membership")
+				}
+			})
+		})
+	}
+}
+
+func newStaticMembershipServer(t *testing.T, noDial bool, static []*enode.Node) *Server {
+	t.Helper()
+	srv := &Server{Config: Config{
+		PrivateKey: newkey(), MaxPeers: 1, NoDiscovery: true,
+		NoDial: noDial, ListenAddr: "127.0.0.1:0", StaticNodes: static,
+	}}
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(srv.Stop)
+	return srv
 }

@@ -402,6 +402,26 @@ func (c *deferredAnnounceCache) hasWitnessHash(blockHash common.Hash, witnessHas
 	return false
 }
 
+// hasWitnessSizeWithin reports whether a fresh candidate for blockHash has a
+// signed WitnessSize whose accepted band (ceiling(candidateSize)) admits size.
+// Used by the broadcast path to bind pushed bytes to a pending (deferred, not
+// yet producer-verified) commitment under the non-determinism-tolerant size
+// oracle when no candidate's hash matches the bytes exactly.
+func (c *deferredAnnounceCache) hasWitnessSizeWithin(blockHash common.Hash, size uint64, ceiling func(signedSize uint64) uint64) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	cutoff := time.Now().Add(-wit2AnnounceTTL)
+	for _, e := range c.entries[blockHash] {
+		if e.receivedAt.Before(cutoff) {
+			continue
+		}
+		if size <= ceiling(e.announcement.WitnessSize) {
+			return true
+		}
+	}
+	return false
+}
+
 // has reports whether any fresh candidate exists for blockHash.
 func (c *deferredAnnounceCache) has(blockHash common.Hash) bool {
 	c.mu.RLock()
@@ -482,22 +502,25 @@ func newSignedWitnessCache() *signedWitnessCache {
 // the cache did not already contain a fresh entry for this hash. Callers use
 // the return value to decide whether to relay (false → suppress duplicate).
 //
-// If a fresh entry already exists with a *different* WitnessHash, the new
-// announcement is rejected outright (returns false): the first valid signed
-// commitment wins for the lifetime of the entry. This prevents an attacker
-// who has obtained a second valid signature (e.g. a compromised producer
-// later in the same window) from poisoning the cache mid-fetch and dropping
-// honest serving peers against a different hash.
+// If an entry already exists with a *different* commitment — another
+// WitnessHash, or the same hash with another WitnessSize (the size is signed
+// too and decides the accept band, so a same-hash announce with another size
+// is as much a conflict as another hash) — the new announcement is rejected
+// outright (returns false): the first valid signed commitment wins for the
+// lifetime of the entry. This prevents an attacker who has obtained a second
+// valid signature (e.g. a compromised producer later in the same window) from
+// poisoning the cache mid-fetch — dropping honest serving peers against a
+// different hash, or widening/narrowing the band under an in-flight fetch.
 func (c *signedWitnessCache) putIfNewer(ann wit.SignedWitnessAnnouncement) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.gcLocked()
 	if existing, ok := c.entries[ann.BlockHash]; ok {
-		if existing.announcement.WitnessHash != ann.WitnessHash {
+		if existing.announcement.WitnessHash != ann.WitnessHash || existing.announcement.WitnessSize != ann.WitnessSize {
 			wit2ConflictingWitnessHashMeter.Mark(1)
 			return false
 		}
-		// Same WitnessHash, recent: dedup.
+		// Same commitment, recent: dedup.
 		if time.Since(existing.receivedAt) < wit2RelayWindow {
 			return false
 		}

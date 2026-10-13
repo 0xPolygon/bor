@@ -90,12 +90,13 @@ type Server struct {
 	peerFeed     event.Feed
 	log          log.Logger
 
-	nodedb    *enode.DB
-	localnode *enode.LocalNode
-	discv4    *discover.UDPv4
-	discv5    *discover.UDPv5
-	discmix   *enode.FairMix
-	dialsched *dialScheduler
+	nodedb      *enode.DB
+	localnode   *enode.LocalNode
+	discv4      *discover.UDPv4
+	discv5      *discover.UDPv5
+	discmix     *enode.FairMix
+	dialsched   *dialScheduler
+	staticNodes map[enode.ID]bool // Owned by the server loop.
 
 	// This is read by the NAT port mapping loop.
 	portMappingRegister chan *portMapping
@@ -104,8 +105,6 @@ type Server struct {
 	quit                    chan struct{}
 	addtrusted              chan *enode.Node
 	removetrusted           chan *enode.Node
-	addstatic               chan *enode.Node
-	removestatic            chan *enode.Node
 	peerOp                  chan peerOpFunc
 	peerOpDone              chan struct{}
 	delpeer                 chan peerDrop
@@ -120,6 +119,11 @@ type Server struct {
 }
 
 type peerOpFunc func(map[enode.ID]*Peer)
+
+const (
+	maxPeerJailEntries = 4096
+	noPeerJailExpiry   = mclock.AbsTime(1<<63 - 1)
+)
 
 // peerJail tracks temporarily banned peers to prevent connections
 type peerJail struct {
@@ -140,9 +144,41 @@ func newPeerJail(jailPeriod time.Duration, clock mclock.Clock) *peerJail {
 
 // JailPeer jails a peer for the default jail period
 func (pj *peerJail) JailPeer(id enode.ID) {
+	pj.JailPeerFor(id, pj.jailPeriod)
+}
+
+func (pj *peerJail) JailPeerFor(id enode.ID, period time.Duration) {
+	now := pj.clock.Now()
+	unbanTime := now + mclock.AbsTime(period)
+
 	pj.mu.Lock()
 	defer pj.mu.Unlock()
-	pj.jailed[id] = pj.clock.Now() + mclock.AbsTime(pj.jailPeriod)
+
+	if current, exists := pj.jailed[id]; exists {
+		pj.jailed[id] = max(current, unbanTime)
+		return
+	}
+	if len(pj.jailed) >= maxPeerJailEntries {
+		pj.makeRoom(now)
+	}
+	pj.jailed[id] = unbanTime
+}
+
+func (pj *peerJail) makeRoom(now mclock.AbsTime) {
+	var earliestID enode.ID
+	earliestExpiry := noPeerJailExpiry
+	for id, unbanTime := range pj.jailed {
+		if now > unbanTime {
+			delete(pj.jailed, id)
+			continue
+		}
+		if unbanTime <= earliestExpiry {
+			earliestID, earliestExpiry = id, unbanTime
+		}
+	}
+	if len(pj.jailed) >= maxPeerJailEntries {
+		delete(pj.jailed, earliestID)
+	}
 }
 
 // IsJailed checks if a peer is currently jailed
@@ -252,10 +288,6 @@ func (f connFlag) String() string {
 		s += "-inbound"
 	}
 
-	if f&staticConn != 0 {
-		s += "-static"
-	}
-
 	if s != "" {
 		s = s[1:]
 	}
@@ -351,10 +383,13 @@ func (srv *Server) PeerCount() int {
 // the server will connect to the node. If the connection fails for any reason, the server
 // will attempt to reconnect the peer.
 func (srv *Server) AddPeer(node *enode.Node) {
-	select {
-	case srv.addstatic <- node:
-	case <-srv.quit:
-	}
+	srv.doPeerOp(func(peers map[enode.ID]*Peer) {
+		srv.staticNodes[node.ID()] = true
+		if peer := peers[node.ID()]; peer != nil {
+			peer.rw.set(staticConn, true)
+		}
+		srv.dialsched.addStatic(node)
+	})
 }
 
 // JailPeer jails a peer for the default jail period, preventing connections
@@ -362,14 +397,23 @@ func (srv *Server) AddPeer(node *enode.Node) {
 // it will be disconnected.
 func (srv *Server) JailPeer(nodeID enode.ID) {
 	if srv.peerJail != nil {
-		srv.peerJail.JailPeer(nodeID)
-		// If peer is currently connected, disconnect it
-		srv.doPeerOp(func(peers map[enode.ID]*Peer) {
-			if peer, ok := peers[nodeID]; ok {
-				peer.Disconnect(DiscJailed)
-			}
-		})
+		srv.jailPeerFor(nodeID, srv.peerJail.jailPeriod)
 	}
+}
+
+func (srv *Server) JailPeerFor(nodeID enode.ID, period time.Duration) {
+	if srv.peerJail != nil && period > 0 {
+		srv.jailPeerFor(nodeID, period)
+	}
+}
+
+func (srv *Server) jailPeerFor(nodeID enode.ID, period time.Duration) {
+	srv.peerJail.JailPeerFor(nodeID, period)
+	srv.doPeerOp(func(peers map[enode.ID]*Peer) {
+		if peer, ok := peers[nodeID]; ok {
+			peer.Disconnect(DiscJailed)
+		}
+	})
 }
 
 // RemovePeer removes a node from the static node set. It also disconnects from the given
@@ -382,14 +426,13 @@ func (srv *Server) RemovePeer(node *enode.Node) {
 		ch  chan *PeerEvent
 		sub event.Subscription
 	)
-	select {
-	case srv.removestatic <- node:
-	case <-srv.quit:
-		return
-	}
 	// Disconnect the peer on the main loop.
 	srv.doPeerOp(func(peers map[enode.ID]*Peer) {
+		delete(srv.staticNodes, node.ID())
+		srv.dialsched.removeStatic(node)
+
 		if peer := peers[node.ID()]; peer != nil {
+			peer.rw.set(staticConn, false)
 			ch = make(chan *PeerEvent, 1)
 			sub = srv.peerFeed.Subscribe(ch)
 
@@ -558,8 +601,6 @@ func (srv *Server) Start() (err error) {
 	srv.checkpointAddPeer = make(chan *conn)
 	srv.addtrusted = make(chan *enode.Node)
 	srv.removetrusted = make(chan *enode.Node)
-	srv.addstatic = make(chan *enode.Node)
-	srv.removestatic = make(chan *enode.Node)
 	srv.peerOp = make(chan peerOpFunc)
 	srv.peerOpDone = make(chan struct{})
 
@@ -725,7 +766,9 @@ func (srv *Server) setupDialScheduler() {
 	}
 
 	srv.dialsched = newDialScheduler(config, srv.discmix, srv.SetupConn)
+	srv.staticNodes = make(map[enode.ID]bool, len(srv.StaticNodes))
 	for _, n := range srv.StaticNodes {
+		srv.staticNodes[n.ID()] = true
 		srv.dialsched.addStatic(n)
 	}
 }
@@ -820,33 +863,6 @@ func (srv *Server) doPeerOp(fn peerOpFunc) {
 	}
 }
 
-func staticNodeIDs(nodes []*enode.Node) map[enode.ID]bool {
-	ids := make(map[enode.ID]bool, len(nodes))
-	for _, n := range nodes {
-		ids[n.ID()] = true
-	}
-	return ids
-}
-
-// setStatic updates static membership for n on the run loop. Membership is
-// tracked apart from the dial flags because a static node that dials us first is
-// held as an inbound connection. The dial scheduler is updated here too so both
-// copies of the set change together.
-func (srv *Server) setStatic(static map[enode.ID]bool, peers map[enode.ID]*Peer, n *enode.Node, member bool) {
-	// The peer flag goes first so the dropper never sees a stale value while
-	// the dial scheduler call is pending.
-	if p, ok := peers[n.ID()]; ok {
-		p.rw.set(staticConn, member)
-	}
-	if member {
-		static[n.ID()] = true
-		srv.dialsched.addStatic(n)
-	} else {
-		delete(static, n.ID())
-		srv.dialsched.removeStatic(n)
-	}
-}
-
 // run is the main loop of the server.
 func (srv *Server) run() {
 	srv.log.Info("Started P2P networking", "self", srv.localnode.Node().URLv4())
@@ -859,7 +875,6 @@ func (srv *Server) run() {
 		peers        = make(map[enode.ID]*Peer)
 		inboundCount = 0
 		trusted      = make(map[enode.ID]bool, len(srv.TrustedNodes))
-		static       = staticNodeIDs(srv.StaticNodes)
 	)
 	// Put trusted nodes into a map to speed up checks.
 	// Trusted peers are loaded on startup or added via AddTrustedPeer RPC.
@@ -892,12 +907,6 @@ running:
 				p.rw.set(trustedConn, false)
 			}
 
-		case n := <-srv.addstatic:
-			srv.setStatic(static, peers, n, true)
-
-		case n := <-srv.removestatic:
-			srv.setStatic(static, peers, n, false)
-
 		case op := <-srv.peerOp:
 			// This channel is used by Peers and PeerCount.
 			op(peers)
@@ -916,9 +925,7 @@ running:
 		case c := <-srv.checkpointAddPeer:
 			// At this point the connection is past the protocol handshake.
 			// Its capabilities are known and the remote identity is verified.
-			// Static membership can change between the two checkpoints, so
-			// it is applied here, right before the peer is launched.
-			c.set(staticConn, static[c.node.ID()])
+			c.set(staticConn, srv.staticNodes[c.node.ID()])
 			err := srv.addPeerChecks(peers, inboundCount, c)
 			if err == nil {
 				// The handshakes are done and it passed all checks.
