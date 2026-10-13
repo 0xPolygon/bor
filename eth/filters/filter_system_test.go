@@ -1190,6 +1190,68 @@ func TestPollingFilterLimit(t *testing.T) {
 	}
 }
 
+// pollingCase creates a polling filter of one type and delivers events to it.
+type pollingCase struct {
+	name   string
+	create func() (rpc.ID, error)
+	send   func(n int) // delivers n events, as one batch where the feed allows it
+}
+
+func pollingCases(backend *testBackend, api *FilterAPI) []pollingCase {
+	tx := types.NewTransaction(0, common.Address{}, new(big.Int), 0, new(big.Int), nil)
+
+	return []pollingCase{
+		{"logs", func() (rpc.ID, error) { return api.NewFilter(FilterCriteria{}) }, func(n int) {
+			logs := make([]*types.Log, n)
+			for i := range logs {
+				logs[i] = &types.Log{}
+			}
+
+			backend.logsFeed.Send(logs)
+		}},
+		{"blocks", api.NewBlockFilter, func(n int) {
+			for range n {
+				backend.chainFeed.Send(core.ChainEvent{Header: &types.Header{Number: big.NewInt(1)}})
+			}
+		}},
+		{"txs", func() (rpc.ID, error) { return api.NewPendingTransactionFilter(nil) }, func(n int) {
+			txs := make([]*types.Transaction, n)
+			for i := range txs {
+				txs[i] = tx
+			}
+
+			backend.txFeed.Send(core.NewTxsEvent{Txs: txs})
+		}},
+	}
+}
+
+func (api *FilterAPI) subscription(id rpc.ID) *Subscription {
+	api.filtersMu.Lock()
+	defer api.filtersMu.Unlock()
+
+	return api.filters[id].s
+}
+
+func (api *FilterAPI) buffered() uint64 {
+	api.filtersMu.Lock()
+	defer api.filtersMu.Unlock()
+
+	return api.bufferedBytes
+}
+
+func (api *FilterAPI) hasFilter(id rpc.ID) bool {
+	return api.withLock(func() bool { _, ok := api.filters[id]; return ok })
+}
+
+func subscriptionEnded(sub *Subscription) bool {
+	select {
+	case <-sub.Err():
+		return true
+	default:
+		return false
+	}
+}
+
 // Tests that a polling filter exceeding its item limit releases its buffer, is cancelled
 // and reports the overflow on the next poll, without dropping events below the limit.
 func TestPollingFilterOverflow(t *testing.T) {
@@ -1197,45 +1259,16 @@ func TestPollingFilterOverflow(t *testing.T) {
 
 	const maxItems = 3
 
-	var (
-		backend, sys = newTestFilterSystem(rawdb.NewMemoryDatabase(), Config{MaxPendingItems: maxItems})
-		api          = NewFilterAPI(sys, false)
-		tx           = types.NewTransaction(0, common.Address{}, new(big.Int), 0, new(big.Int), nil)
+	backend, sys := newTestFilterSystem(rawdb.NewMemoryDatabase(), Config{MaxPendingItems: maxItems})
+	api := NewFilterAPI(sys, false)
 
-		tests = []struct {
-			name   string
-			create func() (rpc.ID, error)
-			send   func(n int) // delivers n events, as one batch where the feed allows it
-		}{
-			{"logs", func() (rpc.ID, error) { return api.NewFilter(FilterCriteria{}) }, func(n int) {
-				logs := make([]*types.Log, n)
-				for i := range logs {
-					logs[i] = &types.Log{}
-				}
-
-				backend.logsFeed.Send(logs)
-			}},
-			{"blocks", api.NewBlockFilter, func(n int) {
-				for range n {
-					backend.chainFeed.Send(core.ChainEvent{Header: &types.Header{Number: big.NewInt(1)}})
-				}
-			}},
-			{"txs", func() (rpc.ID, error) { return api.NewPendingTransactionFilter(nil) }, func(n int) {
-				txs := make([]*types.Transaction, n)
-				for i := range txs {
-					txs[i] = tx
-				}
-
-				backend.txFeed.Send(core.NewTxsEvent{Txs: txs})
-			}},
-		}
-	)
-
-	for _, test := range tests {
+	for _, test := range pollingCases(backend, api) {
 		id, err := test.create()
 		if err != nil {
 			t.Fatalf("%s: failed to create filter: %v", test.name, err)
 		}
+
+		sub := api.subscription(id)
 
 		// Events up to the limit are delivered.
 		test.send(maxItems)
@@ -1251,6 +1284,10 @@ func TestPollingFilterOverflow(t *testing.T) {
 			t.Fatalf("%s: poll at the limit failed: %v", test.name, err)
 		}
 
+		if subscriptionEnded(sub) {
+			t.Fatalf("%s: subscription cancelled at the limit", test.name)
+		}
+
 		// One event more than the limit overflows the filter, which holds nothing afterwards.
 		test.send(maxItems + 1)
 		waitFor(t, test.name+" overflow", func() bool {
@@ -1261,6 +1298,12 @@ func TestPollingFilterOverflow(t *testing.T) {
 			t.Fatalf("%s: overflowed filter still holds buffered events", test.name)
 		}
 
+		waitFor(t, test.name+" subscription cancelled", func() bool { return subscriptionEnded(sub) })
+
+		if !api.hasFilter(id) {
+			t.Fatalf("%s: overflowed filter removed before its client was told", test.name)
+		}
+
 		if _, err := api.GetFilterChanges(id); !errors.Is(err, errFilterOverflow) {
 			t.Fatalf("%s: poll error mismatch: have %v, want %v", test.name, err, errFilterOverflow)
 		}
@@ -1268,6 +1311,191 @@ func TestPollingFilterOverflow(t *testing.T) {
 		if _, err := api.GetFilterChanges(id); !errors.Is(err, errFilterNotFound) {
 			t.Fatalf("%s: second poll error mismatch: have %v, want %v", test.name, err, errFilterNotFound)
 		}
+	}
+}
+
+// Tests that slots claimed for filters being created count towards the limit, and that a
+// failed creation gives its slot back.
+func TestPollingFilterReservation(t *testing.T) {
+	t.Parallel()
+
+	_, sys := newTestFilterSystem(rawdb.NewMemoryDatabase(), Config{MaxFilters: 1, LogQueryLimit: 1})
+	api := NewFilterAPI(sys, false)
+
+	if err := api.reserve(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := api.reserve(); !errors.Is(err, errTooManyFilters) {
+		t.Fatalf("reserve beyond the limit: have %v, want %v", err, errTooManyFilters)
+	}
+
+	api.unreserve()
+
+	if api.reserved != 0 {
+		t.Fatalf("reserved mismatch: have %d, want 0", api.reserved)
+	}
+
+	// A creation that fails after reserving gives the slot back.
+	if _, err := api.NewFilter(FilterCriteria{Addresses: make([]common.Address, 2)}); !errors.Is(err, errExceedLogQueryLimit) {
+		t.Fatalf("error mismatch: have %v, want %v", err, errExceedLogQueryLimit)
+	}
+
+	if api.reserved != 0 {
+		t.Fatalf("failed creation left %d slots reserved", api.reserved)
+	}
+
+	id, err := api.NewBlockFilter()
+	if err != nil {
+		t.Fatalf("creation after a failed one: %v", err)
+	}
+
+	api.UninstallFilter(id)
+}
+
+// Tests that filters leave the registry, release their events and cancel their subscription
+// when they are uninstalled, time out or their subscription ends.
+func TestPollingFilterRemoval(t *testing.T) {
+	t.Parallel()
+
+	// The default timeout is long enough that only the removal paths under test can act.
+	backend, sys := newTestFilterSystem(rawdb.NewMemoryDatabase(), Config{})
+	api := NewFilterAPI(sys, false)
+
+	// A short timeout, with the filters filled directly so that no event has to arrive in time.
+	_, shortSys := newTestFilterSystem(rawdb.NewMemoryDatabase(), Config{Timeout: 100 * time.Millisecond})
+	shortAPI := NewFilterAPI(shortSys, false)
+
+	if api.UninstallFilter("unknown") {
+		t.Fatal("uninstalled a filter that does not exist")
+	}
+
+	for i, test := range pollingCases(backend, api) {
+		// Uninstalling cancels the subscription.
+		id, err := test.create()
+		if err != nil {
+			t.Fatalf("%s: failed to create filter: %v", test.name, err)
+		}
+
+		sub := api.subscription(id)
+
+		if !api.UninstallFilter(id) || !subscriptionEnded(sub) {
+			t.Fatalf("%s: uninstalled filter is still subscribed", test.name)
+		}
+
+		// A subscription that ends removes its filter and releases its events.
+		id, err = test.create()
+		if err != nil {
+			t.Fatalf("%s: failed to create filter: %v", test.name, err)
+		}
+
+		test.send(1)
+		waitFor(t, test.name+" buffer", func() bool { return api.buffered() > 0 })
+		api.subscription(id).Unsubscribe()
+		waitFor(t, test.name+" removal", func() bool { return !api.hasFilter(id) })
+
+		if api.buffered() != 0 {
+			t.Fatalf("%s: filter of an ended subscription still holds events", test.name)
+		}
+
+		// An unpolled filter times out and releases its events.
+		id, err = pollingCases(nil, shortAPI)[i].create()
+		if err != nil {
+			t.Fatalf("%s: failed to create filter: %v", test.name, err)
+		}
+
+		if shortAPI.enqueue(id, 1, 7, func(f *filter) { f.hashes = append(f.hashes, common.Hash{}) }) || shortAPI.buffered() != 7 {
+			t.Fatalf("%s: failed to fill the filter", test.name)
+		}
+
+		waitFor(t, test.name+" timeout", func() bool { return !shortAPI.hasFilter(id) })
+
+		if shortAPI.buffered() != 0 {
+			t.Fatalf("%s: timed out filter still holds events", test.name)
+		}
+	}
+}
+
+// Tests the contract of enqueue and removeFailed that the filter goroutines rely on.
+func TestPollingFilterEnqueue(t *testing.T) {
+	t.Parallel()
+
+	_, sys := newTestFilterSystem(rawdb.NewMemoryDatabase(), Config{MaxPendingItems: 2})
+	api := NewFilterAPI(sys, false)
+
+	added := 0
+	add := func(f *filter) { added++; f.hashes = append(f.hashes, common.Hash{}) }
+
+	if api.enqueue("unknown", 1, 1, add) || added != 0 {
+		t.Fatal("events buffered for a filter that does not exist")
+	}
+
+	id, err := api.NewBlockFilter()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for range 2 {
+		if api.enqueue(id, 1, 5, add) {
+			t.Fatal("filter overflowed within its limit")
+		}
+	}
+
+	if added != 2 || api.bufferedBytes != 10 {
+		t.Fatalf("buffered mismatch: have %d events, %d bytes", added, api.bufferedBytes)
+	}
+
+	if !api.enqueue(id, 1, 5, add) {
+		t.Fatal("filter did not report its overflow")
+	}
+
+	if added != 2 || api.bufferedBytes != 0 {
+		t.Fatalf("overflow kept events: have %d events, %d bytes", added, api.bufferedBytes)
+	}
+
+	// Further events of an overflowed filter are ignored, and it outlives its subscription.
+	if api.enqueue(id, 1, 5, add) || added != 2 {
+		t.Fatal("events buffered for an overflowed filter")
+	}
+
+	api.removeFailed(id)
+
+	if !api.hasFilter(id) {
+		t.Fatal("overflowed filter removed with its subscription")
+	}
+
+	api.UninstallFilter(id)
+}
+
+// Tests the memory estimates that the shared budget is charged with.
+func TestPollingFilterSizes(t *testing.T) {
+	t.Parallel()
+
+	for n, want := range map[int]uint64{0: 0, 1: 4, 3: 4, 4: 6, 10: 15} {
+		if have := sliceSlots(n); have != want {
+			t.Errorf("sliceSlots(%d): have %d, want %d", n, have, want)
+		}
+	}
+
+	logs := []*types.Log{{Data: make([]byte, 10), Topics: make([]common.Hash, 2)}, {}}
+	if have, want := logsSize(logs), uint64(2*logOverhead+10+2*common.HashLength); have != want {
+		t.Errorf("logsSize: have %d, want %d", have, want)
+	}
+
+	var (
+		authSize  = uint64(reflect.TypeFor[types.SetCodeAuthorization]().Size())
+		tupleSize = uint64(reflect.TypeFor[types.AccessTuple]().Size())
+	)
+
+	setCode := types.NewTx(&types.SetCodeTx{AuthList: make([]types.SetCodeAuthorization, 10)})
+	if have, want := txSize(setCode), txOverhead+setCode.Size()+15*authSize; have != want {
+		t.Errorf("set code txSize: have %d, want %d", have, want)
+	}
+
+	// Two tuples, without keys and with five, which the decoder gives room for 7.
+	accessList := types.NewTx(&types.AccessListTx{AccessList: types.AccessList{{}, {StorageKeys: make([]common.Hash, 5)}}})
+	if have, want := txSize(accessList), txOverhead+accessList.Size()+4*tupleSize+7*common.HashLength; have != want {
+		t.Errorf("access list txSize: have %d, want %d", have, want)
 	}
 }
 

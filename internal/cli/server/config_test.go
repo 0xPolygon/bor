@@ -701,3 +701,31 @@ func TestPollingFilterLimitsHCL(t *testing.T) {
 		assert.Equal(t, 0, read(t, "  maxfilters = 0\n").MaxFilters)
 	})
 }
+
+func TestPollingFilterBufferBoundary(t *testing.T) {
+	const largest = math.MaxUint64 >> 20 // the largest size in MiB that fits in bytes
+
+	config := DefaultConfig()
+	assert.NoError(t, config.loadChain())
+
+	config.JsonRPC.MaxFilterBuffer = largest
+
+	ethConfig, err := config.buildEth(nil, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(largest)<<20, ethConfig.FilterMaxBufferBytes)
+
+	config.JsonRPC.MaxFilterBuffer = largest + 1
+
+	_, err = config.buildEth(nil, nil)
+	assert.Error(t, err)
+}
+
+func TestPollingFilterLimitFlags(t *testing.T) {
+	c := &Command{}
+	flags := c.Flags(nil)
+
+	assert.NoError(t, flags.Parse([]string{"--rpc.maxfilters", "7", "--rpc.maxfilteritems", "8", "--rpc.maxfilterbuffer", "9"}))
+	assert.Equal(t, 7, c.cliConfig.JsonRPC.MaxFilters)
+	assert.Equal(t, 8, c.cliConfig.JsonRPC.MaxFilterItems)
+	assert.Equal(t, uint64(9), c.cliConfig.JsonRPC.MaxFilterBuffer)
+}
