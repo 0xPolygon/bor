@@ -392,7 +392,9 @@ func TestDeleteScanRace(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				ks.cache.scanAccounts()
+				if err := ks.cache.scanAccounts(); err != nil {
+					t.Errorf("scanAccounts: %v", err)
+				}
 			}()
 		}
 		wg.Add(1)
@@ -409,7 +411,47 @@ func TestDeleteScanRace(t *testing.T) {
 		}
 		// Scan once so a resurrected account is dropped before the next
 		// iteration, keeping each iteration independent.
-		ks.cache.scanAccounts()
+		if err := ks.cache.scanAccounts(); err != nil {
+			t.Errorf("scanAccounts: %v", err)
+		}
+	}
+}
+
+// removeKeyOnReadStore removes the key file as part of the key lookup, so
+// that the removal step at the end of Delete fails deterministically.
+type removeKeyOnReadStore struct {
+	keyStore
+}
+
+func (s *removeKeyOnReadStore) GetKey(addr common.Address, filename, auth string) (*Key, error) {
+	key, err := s.keyStore.GetKey(addr, filename, auth)
+	if err != nil {
+		return key, err
+	}
+	// Remove the key file to force the removal in Delete to fail.
+	if err := os.Remove(filename); err != nil {
+		return nil, err
+	}
+	return key, nil
+}
+
+// TestDeleteUnremovableKeyFile checks that Delete surfaces a failed file
+// removal and keeps the account in the cache in that case.
+func TestDeleteUnremovableKeyFile(t *testing.T) {
+	t.Parallel()
+	_, ks := tmpKeyStore(t)
+
+	account, err := ks.NewAccount("")
+	if err != nil {
+		t.Fatalf("failed to create test account: %v", err)
+	}
+	ks.storage = &removeKeyOnReadStore{keyStore: ks.storage}
+
+	if err := ks.Delete(account, ""); !os.IsNotExist(err) {
+		t.Fatalf("Delete error = %v, want file-not-found", err)
+	}
+	if !ks.HasAddress(account.Address) {
+		t.Error("account dropped from cache after failed deletion")
 	}
 }
 
