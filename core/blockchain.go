@@ -6476,7 +6476,8 @@ func (bc *BlockChain) verifyPendingHeaders() {
 
 	headNumber := currentHead.Number.Uint64()
 	if milestoneEndBlock >= headNumber {
-		return // Still syncing or synced to the milestone end block, nothing to verify.
+		bc.verifyStalledTail(headNumber)
+		return
 	}
 
 	startBlock := milestoneEndBlock + 1
@@ -6532,6 +6533,124 @@ func (bc *BlockChain) verifyPendingHeaders() {
 			lastValidNumber = header.Number.Uint64()
 		}
 	}
+}
+
+// stalledTailMax bounds how many trailing headers verifyStalledTail checks per
+// tick. A longer invalid run is still shed: each tick rewinds below the first
+// unauthorized header it sees, and the next tick looks further back. Var for
+// tests.
+var stalledTailMax uint64 = 256
+
+// verifyStalledTail checks the chain's own trailing headers when the latest
+// milestone is already at or past the head — the case the pending-header
+// check otherwise reads as "still syncing". A rotated-out producer lands here
+// too: its own fork keeps it from importing the canonical chain (on a pruned
+// node an exact rebuild of its block shares the block's state root, which the
+// side-chain import refuses), and milestone handling defers because the node
+// looks out of sync, so nothing else ever moves it.
+//
+// Only a signer the current span does not authorize for its height proves the
+// tail invalid. Any other failure — Heimdall unreachable, a span not known yet —
+// leaves the chain alone, since a node that is merely syncing passes through
+// here on every tick. The check never looks at or below the whitelisted
+// milestone, so the rewind cannot cross finality.
+func (bc *BlockChain) verifyStalledTail(headNumber uint64) {
+	headers := bc.stalledTailHeaders(headNumber)
+	if len(headers) == 0 {
+		return
+	}
+
+	header, err := bc.firstUnauthorizedHeader(headers)
+	if header == nil {
+		return
+	}
+
+	target := header.Number.Uint64() - 1
+	log.Warn("Rewinding a stalled chain off blocks its span does not authorize",
+		"from", headNumber, "to", target, "number", header.Number.Uint64(), "hash", header.Hash(), "err", err)
+
+	if err := bc.SetHead(target); err != nil {
+		log.Error("Failed to rewind a stalled chain", "err", err)
+
+		return
+	}
+
+	blockReorgMeter.Mark(1)
+	blockReorgDropMeter.Mark(int64(headNumber - target))
+}
+
+// stalledTailHeaders returns the trailing headers above the finality floor,
+// at most stalledTailMax of them, or nil when one is missing.
+func (bc *BlockChain) stalledTailHeaders(headNumber uint64) []*types.Header {
+	floor := bc.finalityFloor()
+	if headNumber <= floor {
+		return nil
+	}
+
+	start := floor + 1
+	if headNumber-floor > stalledTailMax {
+		start = headNumber - stalledTailMax + 1
+	}
+
+	var headers []*types.Header
+	for i := start; i <= headNumber; i++ {
+		header := bc.GetHeaderByNumber(i)
+		if header == nil {
+			return nil
+		}
+		headers = append(headers, header)
+	}
+
+	return headers
+}
+
+// firstUnauthorizedHeader verifies headers in order and returns the first one
+// sealed by an unauthorized signer, with its error. A verification failure of
+// any other kind ends the scan with nothing found: it proves nothing about the
+// header, and the headers after it cannot be judged without it.
+func (bc *BlockChain) firstUnauthorizedHeader(headers []*types.Header) (*types.Header, error) {
+	abort, results := bc.engine.VerifyHeaders(bc, headers)
+	defer close(abort)
+
+	for _, header := range headers {
+		var err error
+		select {
+		case <-bc.quit:
+			return nil, nil
+		case err = <-results:
+		}
+
+		switch {
+		case err == nil:
+			continue
+		case errors.Is(err, consensus.ErrUnauthorizedSigner):
+			return header, err
+		default:
+			log.Debug("Stalled tail check inconclusive", "number", header.Number.Uint64(), "err", err)
+
+			return nil, nil
+		}
+	}
+
+	return nil, nil
+}
+
+// finalityFloor is the highest block the stalled-tail check must not touch:
+// the whitelisted milestone, or the finalized block when one is set.
+func (bc *BlockChain) finalityFloor() uint64 {
+	var floor uint64
+
+	if final := bc.CurrentFinalBlock(); final != nil {
+		floor = final.Number.Uint64()
+	}
+
+	if bc.forker != nil && bc.forker.validator != nil {
+		if exists, number, _ := bc.forker.validator.GetWhitelistedMilestone(); exists {
+			floor = max(floor, number)
+		}
+	}
+
+	return floor
 }
 
 // StateSizer returns the state size tracker, or nil if it's not initialized
