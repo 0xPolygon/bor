@@ -812,15 +812,17 @@ func testGetPooledTransaction(t *testing.T, blobTx bool) {
 	}
 }
 
-// countingTxPool is a TxPool that counts GetRLP lookups and knows no transactions.
+// countingTxPool is a TxPool that counts GetRLP lookups and returns enc for every hash.
 type countingTxPool struct {
 	TxPool
 	lookups int
+	enc     []byte
 }
 
 func (p *countingTxPool) GetRLP(common.Hash) []byte {
 	p.lookups++
-	return nil
+
+	return p.enc
 }
 
 type countingPoolBackend struct {
@@ -846,5 +848,25 @@ func TestAnswerGetPooledTransactionsLookupCap(t *testing.T) {
 	}
 	if backend.pool.lookups != maxPooledTxsServe {
 		t.Fatalf("lookups mismatch: have %d, want %d", backend.pool.lookups, maxPooledTxsServe)
+	}
+}
+
+// Tests that GetPooledTransactions stops once the response reaches the soft size limit.
+func TestAnswerGetPooledTransactionsSizeLimit(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		size int
+		want int
+	}{
+		{size: softResponseLimit, want: 1},     // the limit is reached by the first transaction
+		{size: softResponseLimit - 1, want: 2}, // one byte short, a second transaction fits
+	} {
+		backend := &countingPoolBackend{pool: &countingTxPool{enc: make([]byte, test.size)}}
+		query := make(GetPooledTransactionsRequest, 3)
+
+		if hashes, txs := answerGetPooledTransactions(backend, query); len(hashes) != test.want || len(txs) != test.want {
+			t.Errorf("size %d: have %d transactions, want %d", test.size, len(txs), test.want)
+		}
 	}
 }
