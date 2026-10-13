@@ -97,6 +97,10 @@ d7f0013f82e6d7f862cc6cb5c8cdb48eef5f2e239b35baa97e2f1a7466043767  go1.19.6.src.t
 # https://go.dev/dl/
 039c5b04e65279daceee8a6f71e70bd05cf5b801782b6f77c6e19e2ed0511222  go1.23.6.src.tar.gz
 
+# version:ppa-builder-1.24 1.24.13
+# https://go.dev/dl/
+639a6204c2486b137df1eb6e78ee3ed038f9877d0e4b5a465e796a2153f858d7  go1.24.13.src.tar.gz
+
 # version:protoc 27.1
 # https://github.com/protocolbuffers/protobuf/releases/
 # https://github.com/protocolbuffers/protobuf/releases/download/v27.1/
