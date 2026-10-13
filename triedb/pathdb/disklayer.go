@@ -28,6 +28,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/triedb/readattr"
 )
 
 // diskLayer is a low level persistent layer built on top of a key-value store.
@@ -151,10 +152,17 @@ func (dl *diskLayer) node(owner common.Hash, path []byte, depth int) ([]byte, co
 	}
 	// Try to retrieve the trie node from the disk.
 	var blob []byte
+	readStart := time.Now()
 	if owner == (common.Hash{}) {
 		blob = rawdb.ReadAccountTrieNode(dl.db.diskdb, path)
 	} else {
 		blob = rawdb.ReadStorageTrieNode(dl.db.diskdb, owner, path)
+	}
+	if readattr.Enabled() {
+		// A trie-node read is attributed to whoever demanded the walk —
+		// the transaction whose execution is running on this goroutine —
+		// even though the node could serve many accounts elsewhere.
+		readattr.Record("node", owner.Hex()+"/"+common.Bytes2Hex(path), len(blob), time.Since(readStart))
 	}
 	// Store the resolved data in the clean cache. The background buffer flusher
 	// may also write to the clean cache concurrently, but two writers cannot
@@ -223,7 +231,12 @@ func (dl *diskLayer) account(hash common.Hash, depth int) ([]byte, error) {
 		cleanStateMissMeter.Mark(1)
 	}
 	// Try to retrieve the account from the disk.
+	readStart := time.Now()
 	blob := rawdb.ReadAccountSnapshot(dl.db.diskdb, hash)
+	if readattr.Enabled() {
+		// Key is keccak(address), the flat-state account key.
+		readattr.Record("account", hash.Hex(), len(blob), time.Since(readStart))
+	}
 
 	// Store the resolved data in the clean cache. The background buffer flusher
 	// may also write to the clean cache concurrently, but two writers cannot
@@ -301,7 +314,12 @@ func (dl *diskLayer) storage(accountHash, storageHash common.Hash, depth int) ([
 		cleanStateMissMeter.Mark(1)
 	}
 	// Try to retrieve the account from the disk
+	readStart := time.Now()
 	blob := rawdb.ReadStorageSnapshot(dl.db.diskdb, accountHash, storageHash)
+	if readattr.Enabled() {
+		// Key is keccak(address)/keccak(slot), the flat-state storage key.
+		readattr.Record("storage", accountHash.Hex()+"/"+storageHash.Hex(), len(blob), time.Since(readStart))
+	}
 
 	// Store the resolved data in the clean cache. The background buffer flusher
 	// may also write to the clean cache concurrently, but two writers cannot

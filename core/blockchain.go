@@ -60,6 +60,7 @@ import (
 	"github.com/ethereum/go-ethereum/triedb"
 	"github.com/ethereum/go-ethereum/triedb/hashdb"
 	"github.com/ethereum/go-ethereum/triedb/pathdb"
+	"github.com/ethereum/go-ethereum/triedb/readattr"
 )
 
 var (
@@ -5319,6 +5320,12 @@ func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block
 	if bc.srcHoldForTesting != nil {
 		bc.srcHoldForTesting(block.NumberU64())
 	}
+
+	// Attribute all disk reads by this goroutine to the SRC phase so they
+	// don't pollute per-tx counts on the concurrently-executing block
+	// builder goroutine.
+	readattr.Set(fmt.Sprintf("src:%d", block.NumberU64()))
+	defer readattr.Reset()
 
 	// Hard-fail when a caller asked for a witness but did not hand one in.
 	// allowOwnWitness=true is the explicit opt-in for call sites that want

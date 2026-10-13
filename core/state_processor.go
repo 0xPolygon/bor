@@ -30,7 +30,9 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/triedb/readattr"
 )
 
 const maxSystemCallRet = 64 << 20 // 64 MiB
@@ -337,8 +339,19 @@ func ApplyTransaction(evm *vm.EVM, gp *GasPool, statedb *state.StateDB, header *
 	if err != nil {
 		return nil, err
 	}
-	// Create a new context to be used in the EVM environment
-	return ApplyTransactionWithEVM(msg, gp, statedb, header.Number, header.Hash(), header.Time, tx, usedGas, evm)
+	// Attribute every state read that bottoms out on disk during this
+	// transaction's execution to the transaction itself. The tag rides on
+	// goroutine-scoped pprof labels, so the pipelined SRC goroutine and
+	// other concurrent readers stay attributed to their own tags instead
+	// of polluting this transaction's count.
+	readTag := fmt.Sprintf("tx:%d:%s", header.Number, tx.Hash())
+	readattr.Set(readTag)
+	defer readattr.Reset()
+	receipt, err := ApplyTransactionWithEVM(msg, gp, statedb, header.Number, header.Hash(), header.Time, tx, usedGas, evm)
+	if cold := readattr.Take(readTag); cold > 0 {
+		log.Info("Tx required cold disk reads", "hash", tx.Hash(), "block", header.Number, "coldReads", cold)
+	}
+	return receipt, err
 }
 
 // ProcessBeaconBlockRoot applies the EIP-4788 system call to the beacon block root
