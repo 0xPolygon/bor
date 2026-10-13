@@ -162,3 +162,47 @@ func TestProtocolHandshakeErrors(t *testing.T) {
 		}
 	}
 }
+
+// This test checks that an oversized frame is rejected during the protocol handshake.
+func TestProtocolHandshakeOversizedFrame(t *testing.T) {
+	var (
+		prv0, _ = crypto.GenerateKey()
+		prv1, _ = crypto.GenerateKey()
+		wg      sync.WaitGroup
+	)
+
+	fd0, fd1, err := pipes.TCPPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		defer fd0.Close()
+
+		frame := newRLPX(fd0, &prv1.PublicKey)
+		if _, err := frame.doEncHandshake(prv0); err != nil {
+			t.Errorf("dial side enc handshake failed: %v", err)
+			return
+		}
+		frame.(*rlpxTransport).conn.Write(handshakeMsg, make([]byte, baseProtocolMaxMsgSize*2))
+	}()
+	go func() {
+		defer wg.Done()
+		defer fd1.Close()
+
+		rlpx := newRLPX(fd1, nil)
+		if _, err := rlpx.doEncHandshake(prv1); err != nil {
+			t.Errorf("listen side enc handshake failed: %v", err)
+			return
+		}
+
+		_, err := rlpx.doProtoHandshake(&protoHandshake{Version: 3})
+		if err == nil || err.Error() != "frame size exceeds limit" {
+			t.Errorf("listen side error mismatch: have %v, want frame size exceeds limit", err)
+		}
+	}()
+	wg.Wait()
+}

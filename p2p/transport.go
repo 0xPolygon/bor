@@ -151,7 +151,12 @@ func (t *rlpxTransport) doProtoHandshake(our *protoHandshake) (their *protoHands
 	werr := make(chan error, 1)
 	go func() { werr <- Send(t, handshakeMsg, our) }()
 
-	if their, err = readProtocolHandshake(t); err != nil {
+	// Bound the frame size until the remote has proven to speak the protocol. The
+	// extra bytes cover the RLP-encoded message code.
+	t.conn.SetMaxFrameSize(baseProtocolMaxMsgSize + 9)
+	their, err = readProtocolHandshake(t)
+	t.conn.SetMaxFrameSize(0)
+	if err != nil {
 		<-werr // make sure the write terminates too
 		return nil, err
 	}
