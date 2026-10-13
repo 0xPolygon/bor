@@ -503,7 +503,7 @@ func (api *DebugAPI) StateSize(blockHashOrNumber *rpc.BlockNumberOrHash) (interf
 func (api *DebugAPI) ExecutionWitness(bn rpc.BlockNumber) (*stateless.ExtWitness, error) {
 	bc := api.eth.blockchain
 	block, err := api.eth.APIBackend.BlockByNumber(context.Background(), bn)
-	if err != nil {
+	if err != nil || block == nil {
 		return &stateless.ExtWitness{}, fmt.Errorf("block number %v not found", bn)
 	}
 
@@ -511,14 +511,16 @@ func (api *DebugAPI) ExecutionWitness(bn rpc.BlockNumber) (*stateless.ExtWitness
 	if parent == nil {
 		return &stateless.ExtWitness{}, fmt.Errorf("block number %v found, but parent missing", bn)
 	}
-	parentBlock := bc.GetBlockByHash(block.ParentHash())
 
-	_, _, _, statedb, _, err := bc.ProcessBlock(parentBlock, block.Header(), nil, nil, nil)
+	witness, err := stateless.NewWitness(block.Header(), bc)
 	if err != nil {
 		return nil, err
 	}
+	if _, _, _, _, _, err := bc.ProcessBlock(block, parent, witness, nil, nil); err != nil {
+		return nil, err
+	}
 
-	return statedb.Witness().ToExtWitness(), nil
+	return witness.ToExtWitness(), nil
 }
 
 func (api *DebugAPI) ExecutionWitnessByHash(hash common.Hash) (*stateless.ExtWitness, error) {
@@ -532,12 +534,14 @@ func (api *DebugAPI) ExecutionWitnessByHash(hash common.Hash) (*stateless.ExtWit
 	if parent == nil {
 		return &stateless.ExtWitness{}, fmt.Errorf("block number %x found, but parent missing", hash)
 	}
-	parentBlock := bc.GetBlockByHash(block.ParentHash())
 
-	_, _, _, statedb, _, err := bc.ProcessBlock(parentBlock, block.Header(), nil, nil, nil)
+	witness, err := stateless.NewWitness(block.Header(), bc)
 	if err != nil {
 		return nil, err
 	}
+	if _, _, _, _, _, err := bc.ProcessBlock(block, parent, witness, nil, nil); err != nil {
+		return nil, err
+	}
 
-	return statedb.Witness().ToExtWitness(), nil
+	return witness.ToExtWitness(), nil
 }
