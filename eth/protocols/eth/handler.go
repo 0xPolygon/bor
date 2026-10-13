@@ -50,6 +50,10 @@ const (
 	// containing 200+ transactions nowadays, the practical limit will always
 	// be softResponseLimit.
 	maxReceiptsServe = 1024
+
+	// maxBlockAnnounces is the maximum number of hashes accepted in a single
+	// NewBlockHashes message. Honest peers announce a single block at a time.
+	maxBlockAnnounces = 256
 )
 
 // Handler is a callback to invoke from an outside runner after the boilerplate
