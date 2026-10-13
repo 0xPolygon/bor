@@ -811,3 +811,40 @@ func testGetPooledTransaction(t *testing.T, blobTx bool) {
 		t.Errorf("pooled transaction mismatch: %v", err)
 	}
 }
+
+// countingTxPool is a TxPool that counts GetRLP lookups and knows no transactions.
+type countingTxPool struct {
+	TxPool
+	lookups int
+}
+
+func (p *countingTxPool) GetRLP(common.Hash) []byte {
+	p.lookups++
+	return nil
+}
+
+type countingPoolBackend struct {
+	Backend
+	pool *countingTxPool
+}
+
+func (b *countingPoolBackend) TxPool() TxPool { return b.pool }
+
+// Tests that the number of txpool lookups per GetPooledTransactions request is capped.
+func TestAnswerGetPooledTransactionsLookupCap(t *testing.T) {
+	t.Parallel()
+
+	backend := &countingPoolBackend{pool: new(countingTxPool)}
+	query := make(GetPooledTransactionsRequest, 2*maxPooledTxsServe)
+	for i := range query {
+		query[i] = common.BigToHash(big.NewInt(int64(i)))
+	}
+
+	hashes, txs := answerGetPooledTransactions(backend, query)
+	if len(hashes) != 0 || len(txs) != 0 {
+		t.Fatalf("unexpected response: %d hashes, %d txs", len(hashes), len(txs))
+	}
+	if backend.pool.lookups != maxPooledTxsServe {
+		t.Fatalf("lookups mismatch: have %d, want %d", backend.pool.lookups, maxPooledTxsServe)
+	}
+}

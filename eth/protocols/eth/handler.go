@@ -49,7 +49,8 @@ const (
 	// number is mostly there to limit the number of disk lookups. With block
 	// containing 200+ transactions nowadays, the practical limit will always
 	// be softResponseLimit.
-	maxReceiptsServe = 1024
+	maxReceiptsServe  = 1024
+	maxPooledTxsServe = 256
 )
 
 // Handler is a callback to invoke from an outside runner after the boilerplate
