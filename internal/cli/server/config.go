@@ -1214,6 +1214,13 @@ func readConfigFile(path string) (*Config, error) {
 		// with it, and it is inert otherwise. The zero value would silently
 		// put HCL-configured witness nodes on the slower path.
 		Pipeline: &PipelineConfig{WarmSnapshot: true},
+		// The polling filter limits must be positive, so an HCL file that omits them
+		// has to start from the defaults instead of zero.
+		JsonRPC: &JsonRPCConfig{
+			MaxFilters:      ethconfig.Defaults.FilterMaxCount,
+			MaxFilterItems:  ethconfig.Defaults.FilterMaxItems,
+			MaxFilterBuffer: ethconfig.Defaults.FilterMaxBufferBytes >> 20,
+		},
 	}
 
 	if err := hclsimple.DecodeFile(path, nil, config); err != nil {

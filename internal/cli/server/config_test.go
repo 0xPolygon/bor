@@ -3,6 +3,8 @@ package server
 import (
 	"math"
 	"math/big"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -661,4 +663,41 @@ func TestPollingFilterLimitsConfig(t *testing.T) {
 			assert.Error(t, err)
 		})
 	}
+}
+
+func TestPollingFilterLimitsHCL(t *testing.T) {
+	// read loads an HCL file with the given jsonrpc settings. The blocks the loader
+	// dereferences are always present, as in a dumped config.
+	read := func(t *testing.T, rpc string) *JsonRPCConfig {
+		t.Helper()
+
+		content := "gpo {\n}\np2p {\n}\njsonrpc {\n" + rpc + "  timeouts {\n  }\n  ws {\n  }\n  http {\n  }\n}\n"
+		path := filepath.Join(t.TempDir(), "config.hcl")
+		assert.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+		config, err := readConfigFile(path)
+		assert.NoError(t, err)
+
+		return config.JsonRPC
+	}
+
+	defaults := DefaultConfig().JsonRPC
+
+	t.Run("omitted settings keep the defaults", func(t *testing.T) {
+		rpc := read(t, "  logquerylimit = 5\n")
+		assert.Equal(t, defaults.MaxFilters, rpc.MaxFilters)
+		assert.Equal(t, defaults.MaxFilterItems, rpc.MaxFilterItems)
+		assert.Equal(t, defaults.MaxFilterBuffer, rpc.MaxFilterBuffer)
+	})
+
+	t.Run("explicit values are kept", func(t *testing.T) {
+		rpc := read(t, "  maxfilters = 7\n  maxfilteritems = 8\n  maxfilterbuffer = 9\n")
+		assert.Equal(t, 7, rpc.MaxFilters)
+		assert.Equal(t, 8, rpc.MaxFilterItems)
+		assert.Equal(t, uint64(9), rpc.MaxFilterBuffer)
+	})
+
+	t.Run("explicit zero is kept for validation to reject", func(t *testing.T) {
+		assert.Equal(t, 0, read(t, "  maxfilters = 0\n").MaxFilters)
+	})
 }

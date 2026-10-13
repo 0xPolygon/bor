@@ -24,6 +24,7 @@ import (
 	"math/big"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -124,8 +125,11 @@ const (
 	// Estimated memory retained per buffered event on top of its payload, kept
 	// deliberately conservative as events are shared between filters.
 	logOverhead  = 192
-	txOverhead   = 256
 	hashOverhead = common.HashLength
+
+	// A transaction retains its fixed fields, which are allocated separately by the decoder,
+	// plus the slices it builds for authorizations and access tuples.
+	txOverhead = 512
 )
 
 // FilterAPI offers support to create and manage filters. This will allow external clients to retrieve various
@@ -300,7 +304,33 @@ func logsSize(logs []*types.Log) (size uint64) {
 
 func txsSize(txs []*types.Transaction) (size uint64) {
 	for _, tx := range txs {
-		size += txOverhead + tx.Size()
+		size += txSize(tx)
+	}
+
+	return size
+}
+
+// sliceSlots returns the number of elements the decoder may allocate for a slice of n:
+// at least 4, and growth of 1.5x.
+func sliceSlots(n int) uint64 {
+	if n == 0 {
+		return 0
+	}
+
+	return uint64(max(4, n+n/2))
+}
+
+// txSize estimates the memory retained by a transaction: its encoded size plus the in-memory
+// size of the slices decoding allocates, including their spare capacity.
+func txSize(tx *types.Transaction) uint64 {
+	size := txOverhead + tx.Size()
+	size += uint64(unsafe.Sizeof(types.SetCodeAuthorization{})) * sliceSlots(len(tx.SetCodeAuthorizations()))
+
+	accessList := tx.AccessList()
+	size += uint64(unsafe.Sizeof(types.AccessTuple{})) * sliceSlots(len(accessList))
+
+	for _, tuple := range accessList {
+		size += common.HashLength * sliceSlots(len(tuple.StorageKeys))
 	}
 
 	return size

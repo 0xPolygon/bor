@@ -32,6 +32,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
@@ -1326,5 +1327,41 @@ func TestPollingFilterBufferBudget(t *testing.T) {
 
 	if api.bufferedBytes != 0 {
 		t.Fatalf("uninstalling left %d bytes accounted", api.bufferedBytes)
+	}
+}
+
+// Tests that the memory charged for a pending transaction covers the variable-size
+// structures that decoding allocates.
+func TestTxSize(t *testing.T) {
+	t.Parallel()
+
+	const n = 512
+
+	var (
+		authSize   = uint64(reflect.TypeFor[types.SetCodeAuthorization]().Size())
+		tupleSize  = uint64(reflect.TypeFor[types.AccessTuple]().Size())
+		auths      = make([]types.SetCodeAuthorization, n)
+		accessList = make(types.AccessList, n)
+	)
+
+	for i := range accessList {
+		accessList[i].StorageKeys = make([]common.Hash, 2)
+	}
+
+	tests := []struct {
+		name string
+		tx   *types.Transaction
+		want uint64 // lower bound on the retained memory
+	}{
+		{"legacy", types.NewTransaction(0, common.Address{}, new(big.Int), 0, new(big.Int), make([]byte, 100)), 100},
+		{"set code", types.NewTx(&types.SetCodeTx{AuthList: auths, To: common.Address{}}), n * authSize},
+		{"set code, one authorization", types.NewTx(&types.SetCodeTx{AuthList: auths[:1], To: common.Address{}}), 4 * authSize}, // the decoder allocates room for 4
+		{"access list", types.NewTx(&types.AccessListTx{AccessList: accessList}), n * (tupleSize + 2*common.HashLength)},
+		{"blob", types.NewTx(&types.BlobTx{BlobHashes: make([]common.Hash, 6), Sidecar: &types.BlobTxSidecar{Blobs: make([]kzg4844.Blob, 2)}}), 2 * uint64(len(kzg4844.Blob{}))},
+	}
+	for _, test := range tests {
+		if have := txSize(test.tx); have < test.want {
+			t.Errorf("%s: charged %d bytes, retained at least %d", test.name, have, test.want)
+		}
 	}
 }
