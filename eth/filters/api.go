@@ -50,6 +50,7 @@ var (
 	errExceedMaxTxHashes      = errors.New("exceed max number of transaction hashes allowed per transactionReceipts subscription")
 	errExceedBlockRangeLimit  = errors.New("block range exceeds configured limit")
 	errTooManyFilters         = errors.New("too many installed filters")
+	errFilterBudgetExhausted  = errors.New("polling filter buffer budget exhausted")
 	errFilterOverflow         = errors.New("filter buffer overflow, events were dropped and the filter is uninstalled")
 )
 
@@ -124,8 +125,11 @@ type filter struct {
 const (
 	// Estimated memory retained per buffered event on top of its payload, kept
 	// deliberately conservative as events are shared between filters.
-	logOverhead  = 192
-	hashOverhead = common.HashLength
+	logOverhead = 192
+
+	// A hash costs its payload plus the spare capacity of the slice it is appended to,
+	// which stays below twice the elements in use.
+	hashOverhead = 2 * common.HashLength
 
 	// A transaction retains its fixed fields, which are allocated separately by the decoder,
 	// plus the slices it builds for authorizations and access tuples.
@@ -215,8 +219,12 @@ func (api *FilterAPI) reserve() error {
 	api.filtersMu.Lock()
 	defer api.filtersMu.Unlock()
 
-	if len(api.filters)+api.reserved >= api.maxFilters || api.bufferedBytes >= api.maxBufferBytes {
+	if len(api.filters)+api.reserved >= api.maxFilters {
 		return errTooManyFilters
+	}
+
+	if api.bufferedBytes >= api.maxBufferBytes {
+		return errFilterBudgetExhausted
 	}
 
 	api.reserved++

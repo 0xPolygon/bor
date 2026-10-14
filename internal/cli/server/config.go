@@ -1684,8 +1684,12 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	n.LogQueryLimit = c.JsonRPC.LogQueryLimit
 	n.RPCBlockRangeLimit = c.JsonRPC.RangeLimit
 
-	if c.JsonRPC.MaxFilters <= 0 || c.JsonRPC.MaxFilterItems <= 0 || c.JsonRPC.MaxFilterBuffer == 0 || c.JsonRPC.MaxFilterBuffer > math.MaxUint64>>20 {
+	if c.JsonRPC.MaxFilters <= 0 || c.JsonRPC.MaxFilterItems <= 0 || c.JsonRPC.MaxFilterBuffer == 0 {
 		return nil, fmt.Errorf("rpc.maxfilters (%d), rpc.maxfilteritems (%d) and rpc.maxfilterbuffer (%d MiB) must be positive", c.JsonRPC.MaxFilters, c.JsonRPC.MaxFilterItems, c.JsonRPC.MaxFilterBuffer)
+	}
+
+	if c.JsonRPC.MaxFilterBuffer > math.MaxUint64>>20 {
+		return nil, fmt.Errorf("rpc.maxfilterbuffer (%d MiB) is too large, the maximum is %d MiB", c.JsonRPC.MaxFilterBuffer, uint64(math.MaxUint64>>20))
 	}
 
 	n.FilterMaxCount = c.JsonRPC.MaxFilters

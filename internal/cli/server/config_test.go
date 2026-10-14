@@ -665,6 +665,15 @@ func TestPollingFilterLimitsConfig(t *testing.T) {
 	}
 }
 
+func TestPollingFilterBufferTooLarge(t *testing.T) {
+	config := DefaultConfig()
+	assert.NoError(t, config.loadChain())
+	config.JsonRPC.MaxFilterBuffer = math.MaxUint64
+
+	_, err := config.buildEth(nil, nil)
+	assert.ErrorContains(t, err, "too large")
+}
+
 func TestPollingFilterLimitsHCL(t *testing.T) {
 	// read loads an HCL file with the given jsonrpc settings. The blocks the loader
 	// dereferences are always present, as in a dumped config.

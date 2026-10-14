@@ -331,7 +331,10 @@ func TestPendingTxFilter(t *testing.T) {
 		hashes []common.Hash
 	)
 
-	fid0, _ := api.NewPendingTransactionFilter(nil)
+	fid0, err := api.NewPendingTransactionFilter(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	time.Sleep(1 * time.Second)
 	backend.txFeed.Send(core.NewTxsEvent{Txs: transactions})
@@ -391,7 +394,10 @@ func TestPendingTxFilterFullTx(t *testing.T) {
 	)
 
 	fullTx := true
-	fid0, _ := api.NewPendingTransactionFilter(&fullTx)
+	fid0, err := api.NewPendingTransactionFilter(&fullTx)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	time.Sleep(1 * time.Second)
 	backend.txFeed.Send(core.NewTxsEvent{Txs: transactions})
@@ -833,7 +839,10 @@ func TestPendingTxFilterDeadlock(t *testing.T) {
 	// timeout either in 100ms or 200ms
 	subs := make([]*Subscription, 20)
 	for i := range subs {
-		fid, _ := api.NewPendingTransactionFilter(nil)
+		fid, err := api.NewPendingTransactionFilter(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
 		api.filtersMu.Lock()
 		f, ok := api.filters[fid]
 		api.filtersMu.Unlock()
@@ -1523,8 +1532,8 @@ func TestPollingFilterBufferBudget(t *testing.T) {
 
 	waitFor(t, "budget use", func() bool { return api.withLock(func() bool { return api.bufferedBytes == events*hashOverhead }) })
 
-	if _, err := api.NewBlockFilter(); !errors.Is(err, errTooManyFilters) {
-		t.Fatalf("creation with exhausted budget: error mismatch: have %v, want %v", err, errTooManyFilters)
+	if _, err := api.NewBlockFilter(); !errors.Is(err, errFilterBudgetExhausted) {
+		t.Fatalf("creation with exhausted budget: error mismatch: have %v, want %v", err, errFilterBudgetExhausted)
 	}
 
 	if _, err := api.GetFilterChanges(id); err != nil {
@@ -1590,6 +1599,29 @@ func TestTxSize(t *testing.T) {
 	for _, test := range tests {
 		if have := txSize(test.tx); have < test.want {
 			t.Errorf("%s: charged %d bytes, retained at least %d", test.name, have, test.want)
+		}
+	}
+}
+
+// Tests that non-positive limits fall back to the defaults instead of rejecting every filter.
+func TestConfigNonPositiveLimitsUseDefaults(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{MaxFilters: -1, MaxPendingItems: -1}.withDefaults()
+	if want := (Config{}).withDefaults(); cfg.MaxFilters != want.MaxFilters || cfg.MaxPendingItems != want.MaxPendingItems {
+		t.Fatalf("limits mismatch: have %d filters, %d items, want %d, %d", cfg.MaxFilters, cfg.MaxPendingItems, want.MaxFilters, want.MaxPendingItems)
+	}
+}
+
+// Tests that the per-hash overhead covers the spare capacity an appended slice retains.
+func TestHashOverheadCoversSliceGrowth(t *testing.T) {
+	t.Parallel()
+
+	var hashes []common.Hash
+	for i := 1; i <= 100_000; i++ {
+		hashes = append(hashes, common.Hash{})
+		if held, charged := uint64(cap(hashes))*common.HashLength, uint64(i)*hashOverhead; held > charged {
+			t.Fatalf("%d hashes retain %d bytes, charged %d", i, held, charged)
 		}
 	}
 }

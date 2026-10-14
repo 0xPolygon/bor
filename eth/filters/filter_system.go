@@ -60,11 +60,11 @@ func (cfg Config) withDefaults() Config {
 		cfg.LogCacheSize = 32
 	}
 
-	if cfg.MaxFilters == 0 {
+	if cfg.MaxFilters <= 0 {
 		cfg.MaxFilters = 1024
 	}
 
-	if cfg.MaxPendingItems == 0 {
+	if cfg.MaxPendingItems <= 0 {
 		cfg.MaxPendingItems = 100_000
 	}
 
