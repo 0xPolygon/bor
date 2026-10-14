@@ -151,11 +151,7 @@ func (p *Peer) queueReservedReply(code uint64, packet interface{}, reservation *
 
 func (p *Peer) queueReplyWithCompletion(code uint64, packet interface{}, reservation *replyReservation, completed func()) error {
 	if reservation == nil && (p.Trusted() || p.Static()) {
-		err := p2p.Send(p.rw, code, packet)
-		if err == nil && completed != nil {
-			completed()
-		}
-		return err
+		return p.sendReplyWithCompletion(code, packet, completed)
 	}
 	data, err := rlp.EncodeToBytes(packet)
 	if err != nil {
@@ -189,6 +185,14 @@ func (p *Peer) queueReplyWithCompletion(code uint64, packet interface{}, reserva
 	default:
 		return errReplyQueueFull
 	}
+}
+
+func (p *Peer) sendReplyWithCompletion(code uint64, packet interface{}, completed func()) error {
+	err := p2p.Send(p.rw, code, packet)
+	if err == nil && completed != nil {
+		completed()
+	}
+	return err
 }
 
 // Close cancels allowance waits; transport shutdown interrupts an active write.
