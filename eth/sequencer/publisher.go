@@ -19,6 +19,7 @@ import (
 	pb "github.com/0xPolygon/sequence-store-proto/sequencestore/v1"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 )
@@ -43,14 +44,16 @@ var ackStallTimeout = 5 * time.Second
 
 // chainReader is the chain access reconciliation needs: classifying
 // sealed store content against the local chain, locating the store tail
-// on a cold start from the last imported block, and rebuilding collapsed
+// on a cold start from the last imported block, rebuilding collapsed
 // blocks for backfill — the chain database is the archive; the journal
-// holds only the work in flight.
+// holds only the work in flight — and reading our parent's state for the
+// bridge's history check.
 type chainReader interface {
 	GetCanonicalHash(number uint64) common.Hash
 	GetHeaderByHash(hash common.Hash) *types.Header
 	CurrentBlock() *types.Header
 	GetBlockByNumber(number uint64) *types.Block
+	SealingStateAt(root common.Hash) (*state.StateDB, error)
 }
 
 // Publisher streams block-production entries to the sequence store. Enqueue
@@ -83,6 +86,10 @@ type Publisher struct {
 	// and at the seal flush.
 	diverged divergence
 	bridged  bridgedWindow
+
+	// lineage is the store chain the bridge has read. It has its own lock:
+	// the bridge runs before the build-start classification takes mu.
+	lineage storeLineage
 
 	// resync is set when the store shows another producer building the
 	// height this node is building: our block must not seal beside their

@@ -2,6 +2,8 @@ package sequencer
 
 import (
 	"context"
+	"encoding/binary"
+	"sync"
 
 	pb "github.com/0xPolygon/sequence-store-proto/sequencestore/v1"
 
@@ -9,6 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/miner"
+	"github.com/ethereum/go-ethereum/params"
 )
 
 // Following a store window across a parent that differs only in its seal:
@@ -96,16 +99,15 @@ func (p *Publisher) bridgeEquivalentParent(ctx context.Context, info tailInfo, n
 }
 
 // equivalentParent reports whether the store's sealed block at number-1
-// with hash foreign and our block ours agree on transactions, receipts, and
-// the fields a child's open context derives from.
+// with hash foreign and our block ours agree on transactions, receipts, the
+// fields a child's open context derives from, and state.
 //
-// The state root is deliberately not compared: EIP-2935 writes each block's
-// parent hash into the history contract, so past the first rebuilt height
-// the roots differ by that slot alone even when every transaction executed
-// identically. The receipt root is the check that matters — it covers every
-// result a preconfirmation carried — and a transaction that reads the
-// differing hash and diverges shows up in the next height's receipts,
-// ending the bridge there.
+// Matching receipts do not prove matching state: a transaction can store a
+// BLOCKHASH result, which differs under another seal, and leave a receipt
+// identical to the original's, and a later transaction can diverge on that
+// stored value without reading a block hash itself. The state roots are
+// compared with the EIP-2935 history slots accounted for, the one difference
+// a rebuild under another seal cannot avoid; see historyOnlyDiff.
 func (p *Publisher) equivalentParent(ctx context.Context, foreign, ours common.Hash, number uint64) bool {
 	if number < 2 || p.chain == nil {
 		return false
@@ -125,11 +127,128 @@ func (p *Publisher) equivalentParent(ctx context.Context, foreign, ours common.H
 	}
 
 	theirs := generationSealHeader(entries)
-	if theirs == nil || theirs.Hash() != foreign {
+	if theirs == nil || theirs.Hash() != foreign || !sameExecution(theirs, mine) {
 		return false
 	}
 
-	return sameExecution(theirs, mine)
+	p.lineage.add(theirs)
+
+	if !p.historyOnlyDiff(theirs, mine) {
+		log.Info("Not following the store's window: the parents' states differ beyond the history slots",
+			"number", number, "storeParent", foreign, "parent", ours, "storeRoot", theirs.Root, "root", mine.Root)
+
+		return false
+	}
+
+	return true
+}
+
+// historyOnlyDiff reports whether our parent's state and the store's differ
+// only in the history contract's slots for heights the two chains do not
+// share. Every block writes its parent's hash there (EIP-2935), so once a
+// rebuild under another seal diverges in hash, each slot from that height up
+// holds our hash on one side and the store's on the other. Writing the
+// store's hashes into those slots of our state must then give the store's
+// root exactly; any other difference keeps the roots apart.
+//
+// A slot is rewritten only while ours holds a hash the store's chain does
+// not have there: an empty slot was never written (no history before
+// Prague), and a matching one is a height both chains share.
+func (p *Publisher) historyOnlyDiff(theirs, mine *types.Header) bool {
+	if theirs.Root == mine.Root {
+		return true
+	}
+
+	// Not StateAt: a pipelined import still committing is served as an
+	// overlay whose root leaves the block's own writes out.
+	statedb, err := p.chain.SealingStateAt(mine.Root)
+	if err != nil {
+		return false
+	}
+
+	top := theirs.Number.Uint64() - 1
+
+	for i, hash := range p.lineage.hashesBelow(theirs) {
+		slot := historySlot(top - uint64(i))
+
+		recorded := statedb.GetState(params.HistoryStorageAddress, slot)
+		if recorded == (common.Hash{}) || recorded == hash {
+			break
+		}
+
+		statedb.SetState(params.HistoryStorageAddress, slot, hash)
+	}
+
+	return statedb.IntermediateRoot(true) == theirs.Root
+}
+
+// historySlot is the history contract's storage slot for the hash of block
+// number: block number+1 stores its parent hash at
+// (NUMBER-1) % HistoryServeWindow.
+func historySlot(number uint64) common.Hash {
+	var slot common.Hash
+
+	binary.BigEndian.PutUint64(slot[common.HashLength-8:], number%params.HistoryServeWindow)
+
+	return slot
+}
+
+// lineageMax bounds how far back the history check follows a bridged run,
+// and so how many store links it keeps: past it a run stops bridging, and
+// its later heights are rebuilt from the pool. It stays under the EIP-2935
+// window, so no two heights it covers share a slot. Var for tests.
+var lineageMax = 1024
+
+// storeLineage keeps the hash and parent hash of each sealed store header
+// the bridge has read, so the history check can recover the store chain's
+// hashes below a parent without reading every height again.
+type storeLineage struct {
+	mu    sync.Mutex
+	links map[uint64]storeLink
+}
+
+type storeLink struct{ hash, parent common.Hash }
+
+// add records a sealed header, keeping only the links of the lineageMax
+// heights up to it.
+func (l *storeLineage) add(header *types.Header) {
+	number := header.Number.Uint64()
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.links == nil {
+		l.links = make(map[uint64]storeLink)
+	}
+
+	l.links[number] = storeLink{hash: header.Hash(), parent: header.ParentHash}
+
+	for n := range l.links {
+		if n > number || n+uint64(lineageMax) <= number {
+			delete(l.links, n)
+		}
+	}
+}
+
+// hashesBelow returns the store chain's hashes at the heights below header,
+// newest first: its parent's, then each earlier height's as far as the
+// links read so far reach, at most lineageMax of them.
+func (l *storeLineage) hashesBelow(header *types.Header) []common.Hash {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	hashes := []common.Hash{header.ParentHash}
+
+	for n := header.Number.Uint64() - 1; n > 0 && len(hashes) < lineageMax; n-- {
+		link, ok := l.links[n]
+		if !ok || link.hash != hashes[len(hashes)-1] {
+			break
+		}
+
+		hashes = append(hashes, link.parent)
+	}
+
+	return hashes
 }
 
 func generationSealHeader(entries []*pb.Entry) *types.Header {
