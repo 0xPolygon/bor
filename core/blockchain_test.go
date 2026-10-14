@@ -5262,14 +5262,21 @@ func TestHeaderVerificationWithNilFetcher(t *testing.T) {
 	}
 }
 
-// whitelistedValidatorFake reports a whitelisted milestone at a fixed height.
+// whitelistedValidatorFake reports a whitelisted milestone, settable while a
+// test runs; zero reports none.
 type whitelistedValidatorFake struct {
 	*chainValidatorFake
 	milestone uint64
+	moved     atomic.Uint64 // overrides milestone once non-zero
 }
 
 func (w *whitelistedValidatorFake) GetWhitelistedMilestone() (bool, uint64, common.Hash) {
-	return w.milestone != 0, w.milestone, common.Hash{}
+	m := w.milestone
+	if moved := w.moved.Load(); moved != 0 {
+		m = moved
+	}
+
+	return m != 0, m, common.Hash{}
 }
 
 // A node whose head sits at or behind the latest milestone may be syncing, or
@@ -5508,6 +5515,139 @@ func TestStalledForkRecoversWithOneRetainedState(t *testing.T) {
 
 	if head := chain.CurrentBlock(); head.Hash() != canon[len(canon)-1].Hash() {
 		t.Fatalf("head %d %s, want the canonical tip", head.Number, head.Hash())
+	}
+}
+
+// staleVerdictEngine rejects one fork's headers as unauthorized, and runs a
+// hook once, in the middle of the first pass that judges them, standing in
+// for an import or a milestone landing between verification and rewind.
+type staleVerdictEngine struct {
+	*ethash.Ethash
+	rejected  map[common.Hash]bool
+	rejecting atomic.Bool // set once the fork is in place
+	armed     atomic.Bool
+	hook      func()
+}
+
+func (e *staleVerdictEngine) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*types.Header) (chan<- struct{}, <-chan error) {
+	abort := make(chan struct{})
+	results := make(chan error, len(headers))
+
+	rejecting := e.rejecting.Load()
+
+	judging := false
+	for _, header := range headers {
+		judging = judging || (rejecting && e.rejected[header.Hash()])
+	}
+
+	if judging && e.armed.CompareAndSwap(true, false) {
+		e.hook()
+	}
+
+	for _, header := range headers {
+		if rejecting && e.rejected[header.Hash()] {
+			results <- fmt.Errorf("signer not in producer set: %w", consensus.ErrUnauthorizedSigner)
+		} else {
+			results <- nil
+		}
+	}
+
+	close(results)
+
+	return abort, results
+}
+
+// A verdict reached during a verification pass is rechecked under the chain
+// lock before it rewinds anything: a valid chain imported meanwhile, or a
+// milestone whitelisted past the target, makes it stale, and acting on it
+// would drop blocks it never judged — finalized ones included.
+func TestRewindRechecksStaleVerdict(t *testing.T) {
+	cases := []struct {
+		name      string
+		milestone uint64 // network milestone: past the head is the stalled path
+		replace   bool
+		finalize  bool
+		whitelist uint64
+		wantHead  uint64
+	}{
+		{name: "stalled path, chain replaced", milestone: 100, replace: true, wantHead: 9},
+		{name: "stalled path, chain replaced and finalized", milestone: 100, replace: true, finalize: true, wantHead: 9},
+		{name: "stalled path, milestone whitelisted past the target", milestone: 100, whitelist: 7, wantHead: 8},
+		{name: "pending path, chain replaced", milestone: 5, replace: true, wantHead: 9},
+		{name: "pending path, chain replaced and finalized", milestone: 5, replace: true, finalize: true, wantHead: 9},
+		{name: "pending path, milestone whitelisted past the target", milestone: 5, whitelist: 7, wantHead: 8},
+		{name: "a verdict that still stands rewinds", milestone: 100, wantHead: 5},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			engine := &staleVerdictEngine{Ethash: ethash.NewFaker()}
+
+			config := *params.TestChainConfig
+			config.Bor = &params.BorConfig{RioBlock: big.NewInt(0)}
+			genesis := &Genesis{Config: &config, BaseFee: big.NewInt(params.InitialBaseFee)}
+
+			genDB, common5, _ := GenerateChainWithGenesis(genesis, engine.Ethash, 5, nil)
+			fork, _ := GenerateChain(&config, common5[4], engine.Ethash, genDB, 3, func(_ int, gen *BlockGen) { gen.SetExtra([]byte("rejected")) })
+			valid, _ := GenerateChain(&config, common5[4], engine.Ethash, genDB, 4, func(_ int, gen *BlockGen) { gen.SetExtra([]byte("valid")) })
+
+			engine.rejected = map[common.Hash]bool{}
+			for _, b := range fork {
+				engine.rejected[b.Hash()] = true
+			}
+
+			whitelist := &whitelistedValidatorFake{
+				chainValidatorFake: newChainValidatorFake(func(*types.Header, []*types.Header) (bool, error) { return true, nil }),
+			}
+
+			cfg := DefaultConfig()
+			cfg.Checker = whitelist
+			cfg.MilestoneFetcher = func(ctx context.Context) (uint64, error) { return tc.milestone, nil }
+
+			chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), genesis, engine, cfg)
+			if err != nil {
+				t.Fatalf("failed to create blockchain: %v", err)
+			}
+			defer chain.Stop()
+
+			if _, err := chain.InsertChain(append(append([]*types.Block{}, common5...), fork...), false); err != nil {
+				t.Fatalf("insert fork: %v", err)
+			}
+
+			engine.hook = func() {
+				if tc.replace {
+					if _, err := chain.InsertChain(valid, false); err != nil {
+						t.Errorf("import the valid chain mid-verification: %v", err)
+					}
+				}
+
+				if tc.finalize {
+					chain.SetFinalized(valid[len(valid)-1].Header())
+				}
+
+				if tc.whitelist != 0 {
+					whitelist.moved.Store(tc.whitelist)
+				}
+			}
+			engine.rejecting.Store(true)
+			engine.armed.Store(true)
+
+			chain.verifyPendingHeaders()
+
+			if head := chain.CurrentBlock().Number.Uint64(); head != tc.wantHead {
+				t.Fatalf("head %d, want %d", head, tc.wantHead)
+			}
+
+			if tc.replace && chain.CurrentBlock().Hash() != valid[len(valid)-1].Hash() {
+				t.Fatal("the chain imported mid-verification must stay the head")
+			}
+
+			if tc.finalize {
+				if final := chain.CurrentFinalBlock(); final == nil || final.Hash() != valid[len(valid)-1].Hash() {
+					t.Fatalf("the finalized marker must survive, got %v", final)
+				}
+			}
+		})
 	}
 }
 
