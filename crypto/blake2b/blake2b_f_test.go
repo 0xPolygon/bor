@@ -45,6 +45,10 @@ func randomF(r *rand.Rand) (h [8]uint64, m [16]uint64, c [2]uint64, final bool) 
 }
 
 func TestFChunkedMatchesGeneric(t *testing.T) {
+	if !useAVX2 {
+		t.Skip("requires AVX2: other paths run fGeneric on both sides")
+	}
+
 	r := rand.New(rand.NewSource(1))
 	rounds := []uint32{
 		maxAsmRounds - 1, maxAsmRounds, maxAsmRounds + 1,
@@ -101,8 +105,8 @@ func TestFLongRoundsIsPreemptible(t *testing.T) {
 	if testing.Short() || runtime.GOMAXPROCS(0) < 2 {
 		t.Skip("runs millions of rounds, and needs GOMAXPROCS >= 2 to see a stalled GC")
 	}
-	if !useAVX2 && !useAVX && !useSSE4 {
-		t.Skip("no assembly on this machine, so the round loop is already preemptible Go")
+	if !useAVX2 {
+		t.Skip("requires AVX2: other paths are preemptible Go")
 	}
 
 	var h [8]uint64
