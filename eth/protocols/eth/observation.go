@@ -65,6 +65,15 @@ func observeInvalid(msg Decoder, reason peerpolicy.Reason) {
 	}
 }
 
+func observeIgnoredTransactions(msg Decoder) {
+	if d, ok := msg.(*observedDecoder); ok {
+		// Ignored packets have no fetcher correlation. Count their wire bytes
+		// without decoding transactions or claiming a validation outcome.
+		d.evidence.Family = peerpolicy.Transactions
+		d.evidence.Items = 0
+	}
+}
+
 func observeAnnouncements(msg Decoder, hashes []common.Hash) {
 	if d, ok := msg.(*observedDecoder); ok {
 		d.evidence.Hashes = hashes

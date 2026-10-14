@@ -744,6 +744,7 @@ func answerGetPooledTransactions(backend Backend, query GetPooledTransactionsReq
 func handleTransactions(backend Backend, msg Decoder, peer *Peer) error {
 	// Transactions arrived, make sure we have a valid and fresh chain to handle them
 	if !backend.AcceptTxs() {
+		observeIgnoredTransactions(msg)
 		return nil
 	}
 	// Transactions can be processed, parse all of them and deliver to the pool
@@ -775,6 +776,7 @@ func handleTransactions(backend Backend, msg Decoder, peer *Peer) error {
 func handlePooledTransactions(backend Backend, msg Decoder, peer *Peer) error {
 	// Transactions arrived, make sure we have a valid and fresh chain to handle them
 	if !backend.AcceptTxs() {
+		observeIgnoredTransactions(msg)
 		return nil
 	}
 	// Transactions can be processed, parse all of them and deliver to the pool
