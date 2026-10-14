@@ -486,6 +486,7 @@ func handleNewBlockhashes(backend Backend, msg Decoder, peer *Peer) error {
 	}
 	observeBlockAnnouncements(msg, *ann)
 	if err := peer.checkAnnouncementRate(len(*ann), time.Now()); err != nil {
+		observeInvalid(msg, peerpolicy.RateLimited)
 		return err
 	}
 	// Mark the hashes as present at the remote node

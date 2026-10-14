@@ -43,9 +43,9 @@ func TestPeerPolicyTransactionObserver(t *testing.T) {
 	f.observeDelivery(nil)
 	f.requests = map[string]*txRequest{"peer": {requestID: 7, hashes: testTxsHashes[:2]}}
 	calls := 0
-	f.SetValidationObserver(func(id string, solicited bool, count, bytes uint64, invalid bool) {
+	f.SetValidationObserver(func(id string, solicited DeliveryProvenance, count, bytes uint64, invalid bool) {
 		calls++
-		if id != "peer" || !solicited || count != 2 || bytes != testTxs[0].Size()+testTxs[1].Size() || !invalid {
+		if id != "peer" || solicited != RequestedDelivery || count != 2 || bytes != testTxs[0].Size()+testTxs[1].Size() || !invalid {
 			t.Fatal("incorrect transaction observation")
 		}
 	})
@@ -63,18 +63,18 @@ func TestPeerPolicyRequestedTransactionDelivery(t *testing.T) {
 		direct  bool
 		id      uint64
 		hashes  []common.Hash
-		want    bool
+		want    DeliveryProvenance
 	}{
-		{"matching", request, true, 7, testTxsHashes[:2], true},
-		{"partial", request, true, 7, testTxsHashes[1:2], true},
-		{"empty", request, true, 7, nil, true},
-		{"broadcast", request, false, 7, testTxsHashes[:2], false},
-		{"no request", nil, true, 7, testTxsHashes[:2], false},
-		{"stale id", request, true, 8, testTxsHashes[:2], false},
-		{"expired", &txRequest{requestID: 7}, true, 7, testTxsHashes[:2], false},
-		{"extra transaction", request, true, 7, testTxsHashes[:3], false},
-		{"different transaction", request, true, 7, testTxsHashes[2:3], false},
-		{"duplicate", request, true, 7, []common.Hash{testTxsHashes[0], testTxsHashes[0]}, false},
+		{"matching", request, true, 7, testTxsHashes[:2], RequestedDelivery},
+		{"partial", request, true, 7, testTxsHashes[1:2], RequestedDelivery},
+		{"empty", request, true, 7, nil, RequestedDelivery},
+		{"broadcast", request, false, 7, testTxsHashes[:2], UnsolicitedDelivery},
+		{"no request", nil, true, 7, testTxsHashes[:2], UnknownDelivery},
+		{"stale id", request, true, 8, testTxsHashes[:2], UnknownDelivery},
+		{"expired", &txRequest{requestID: 7}, true, 7, testTxsHashes[:2], UnknownDelivery},
+		{"extra transaction", request, true, 7, testTxsHashes[:3], UnsolicitedDelivery},
+		{"different transaction", request, true, 7, testTxsHashes[2:3], UnsolicitedDelivery},
+		{"duplicate", request, true, 7, []common.Hash{testTxsHashes[0], testTxsHashes[0]}, UnsolicitedDelivery},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			delivery := &txDelivery{direct: tc.direct, requestID: tc.id, hashes: tc.hashes}
@@ -96,17 +96,17 @@ func TestPeerPolicyTransactionReplyCorrelation(t *testing.T) {
 				return errs
 			}, func(string, uint64, []common.Hash) error { return nil }, func(string) {})
 			f.requests["peer"] = &txRequest{requestID: 7, hashes: testTxsHashes[:1]}
-			observations := make(chan bool, 2)
-			f.SetValidationObserver(func(id string, solicited bool, items, bytes uint64, bad bool) {
+			observations := make(chan DeliveryProvenance, 2)
+			f.SetValidationObserver(func(id string, solicited DeliveryProvenance, items, bytes uint64, bad bool) {
 				if id != "peer" || items != 1 || bytes != testTxs[0].Size() || bad != invalid {
-					observations <- false
+					observations <- DeliveryProvenance(255)
 					return
 				}
 				observations <- solicited
 			})
 			f.Start()
 			defer f.Stop()
-			for _, want := range []bool{true, false} {
+			for _, want := range []DeliveryProvenance{RequestedDelivery, UnknownDelivery} {
 				if err := f.Enqueue("peer", testTxs[:1], true, 7); err != nil {
 					t.Fatal(err)
 				}

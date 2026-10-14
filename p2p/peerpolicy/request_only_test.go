@@ -25,7 +25,7 @@ func TestPeerPolicyRequestOnlyWithinAllowance(t *testing.T) {
 func TestPeerPolicyRequestOnlyScoreAndExpiry(t *testing.T) {
 	clock := new(mclock.Simulated)
 	tracker := New(clock)
-	body := Evidence{Family: BodyReplies, Items: 1, Bytes: 16 << 20, Hashes: []common.Hash{{1}}, ObjectBytes: []uint64{16 << 20}}
+	body := Evidence{Refused: true, Family: BodyReplies, Items: 1, Bytes: 16 << 20, Hashes: []common.Hash{{1}}, ObjectBytes: []uint64{16 << 20}}
 	for i := uint64(1); i <= 5; i++ {
 		for range 5 {
 			tracker.Observe("reader", body)
@@ -51,7 +51,7 @@ func TestPeerPolicyRequestOnlyScoreAndExpiry(t *testing.T) {
 
 func TestPeerPolicyRepetitionHistoryByFamily(t *testing.T) {
 	tracker := New(new(mclock.Simulated))
-	body := Evidence{Family: BodyReplies, Items: 1, Bytes: 16 << 20, Hashes: []common.Hash{{1}}, ObjectBytes: []uint64{16 << 20}}
+	body := Evidence{Refused: true, Family: BodyReplies, Items: 1, Bytes: 16 << 20, Hashes: []common.Hash{{1}}, ObjectBytes: []uint64{16 << 20}}
 	block := Evidence{Family: BlockAnnouncements, Items: 1, Hashes: []common.Hash{{2}}}
 	for i := 0; i < 35; i++ {
 		if i < 5 {

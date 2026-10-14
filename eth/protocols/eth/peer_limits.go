@@ -99,7 +99,8 @@ type replyReservation struct {
 	active  bool
 }
 
-func (p *Peer) reservePooledReply() (*replyReservation, error) {
+func (p *Peer) reservePooledReply() (reservation *replyReservation, err error) {
+	defer func() { p.observeReplyRefusal(err, nil) }()
 	if p.Trusted() || p.Static() {
 		return nil, nil
 	}
@@ -146,7 +147,9 @@ func (p *Peer) queueReply(code uint64, packet interface{}) error {
 }
 
 func (p *Peer) queueReservedReply(code uint64, packet interface{}, reservation *replyReservation) error {
-	return p.queueReplyWithCompletion(code, packet, reservation, nil)
+	err := p.queueReplyWithCompletion(code, packet, reservation, nil)
+	p.observeReplyRefusal(err, nil)
+	return err
 }
 
 func (p *Peer) queueReplyWithCompletion(code uint64, packet interface{}, reservation *replyReservation, completed func()) error {

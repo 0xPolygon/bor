@@ -4,25 +4,32 @@
 
 package peerpolicy
 
-const repeatedBodyBytes = 32 << 20
-
-func (p *peerRecord) repeatedBodies(b *bucket, tick int64, event Evidence) bool {
-	if event.Family != BodyReplies {
-		return false
-	}
-	count := min(len(event.Hashes), len(event.ObjectBytes), maxHashes)
-	for i, hash := range event.Hashes[:count] {
+// Only peer-specific admission refusals qualify. Successful delivery and global
+// congestion do not establish repeated-download abuse.
+func (p *peerRecord) refused(b *bucket, tick int64, event Evidence) Reason {
+	p.refusalSequence++
+	b.refusals = min(b.refusals+1, 3)
+	repeated := false
+	for _, hash := range event.Hashes {
 		entry, ok := p.hashes[BodyReplies].Get(hash)
 		if !ok || tick-entry.tick >= windowCount {
 			entry = announcement{tick: tick}
 		}
+		if entry.lastRefusal == p.refusalSequence {
+			continue
+		}
+		entry.lastRefusal = p.refusalSequence
 		if entry.count < 3 {
 			entry.count++
 		}
-		if entry.count == 3 {
-			b.repeatedBytes = saturatingAdd(b.repeatedBytes, event.ObjectBytes[i], repeatedBodyBytes+1)
-		}
+		repeated = repeated || entry.count == 3
 		p.hashes[BodyReplies].Add(hash, entry)
 	}
-	return b.repeatedBytes > repeatedBodyBytes
+	if repeated {
+		return ServingRepetition
+	}
+	if b.refusals >= 3 {
+		return ServingVolume
+	}
+	return ServingRefused
 }

@@ -160,7 +160,7 @@ type txDrop struct {
 //     abandoned request is dead on the wire; the request ID echoed in
 //     PooledTransactionsMsg identifies stale replies from abandoned requests.
 type TxFetcher struct {
-	validationObserver func(string, bool, uint64, uint64, bool)
+	validationObserver func(string, DeliveryProvenance, uint64, uint64, bool)
 
 	notify  chan *txAnnounce
 	cleanup chan *txDelivery

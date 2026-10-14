@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/lru"
 	"github.com/ethereum/go-ethereum/common/mclock"
 )
@@ -21,23 +20,27 @@ const (
 )
 
 type bucket struct {
-	tick          int64
-	reasons       uint32
-	usage         [familyCount]usage
-	repeats       uint64
-	repeatedBytes uint64
+	tick     int64
+	reasons  uint32
+	usage    [familyCount]usage
+	repeats  uint64
+	refusals uint64
 }
 
 type (
 	usage        struct{ items, bytes uint64 }
 	announcement struct {
-		tick  int64
-		count uint8
+		tick        int64
+		count       uint8
+		lastRefusal uint64
 	}
 )
+
 type peerRecord struct {
-	windows [windowCount]bucket
-	hashes  [familyCount]lru.BasicLRU[common.Hash, announcement]
+	windows         [windowCount]bucket
+	hashes          [familyCount]hashHistory
+	exempt          bool
+	refusalSequence uint64
 }
 
 type Tracker struct {
@@ -61,16 +64,16 @@ func (t *Tracker) Observe(id string, event Evidence) {
 	defer t.mu.Unlock()
 	tick := int64(t.clock.Now()) / int64(windowWidth)
 	p := t.record(id)
+	if p.exempt {
+		return
+	}
 	previousAction := actionFor(p.risk(tick, nil))
 	b := &p.windows[tick%windowCount]
 	if b.tick != tick {
 		*b = bucket{tick: tick}
 	}
 	t.metrics.traffic(event)
-	reason := event.Reason
-	if reason == None {
-		reason = p.traffic(b, tick, event)
-	}
+	reason := t.evidenceReason(p, b, tick, event)
 	if reason != None {
 		t.metrics.reasons[reason].Inc(1)
 		bit := uint32(1) << reason
@@ -92,9 +95,9 @@ func (t *Tracker) record(id string) *peerRecord {
 		return p
 	}
 	p := new(peerRecord)
-	// Announcement churn must not evict completed-download history.
+	// Announcement churn must not evict refused-download history.
 	for _, family := range []Family{BlockAnnouncements, TransactionAnnouncements, BodyReplies} {
-		p.hashes[family] = lru.NewBasicLRU[common.Hash, announcement](maxHashes)
+		p.hashes[family] = newHashHistory()
 	}
 	if t.peers.Add(id, p) {
 		t.metrics.evictions.Inc(1)
@@ -111,15 +114,11 @@ func (p *peerRecord) traffic(b *bucket, tick int64, event Evidence) Reason {
 	u.items = saturatingAdd(u.items, event.Items, a.items+1)
 	u.bytes = saturatingAdd(u.bytes, event.Bytes, a.bytes+1)
 	repeated := p.announcements(b, tick, event)
-	repeatedBodies := p.repeatedBodies(b, tick, event)
 	if u.items > a.items || u.bytes > a.bytes {
 		return a.reason
 	}
 	if repeated {
 		return AnnouncementRepetition
-	}
-	if repeatedBodies {
-		return ServingRepetition
 	}
 	return None
 }
@@ -128,8 +127,8 @@ func (p *peerRecord) announcements(b *bucket, tick int64, event Evidence) bool {
 	if event.Family != BlockAnnouncements && event.Family != TransactionAnnouncements {
 		return false
 	}
-	// Bound work independently of packet length; total volume still counts every item.
-	for _, hash := range event.Hashes[:min(len(event.Hashes), maxHashes)] {
+	// Packets are already size-bounded; sample across the entire decoded list.
+	for _, hash := range event.Hashes {
 		entry, ok := p.hashes[event.Family].Get(hash)
 		if !ok || tick-entry.tick >= windowCount {
 			entry = announcement{tick: tick}
@@ -198,4 +197,18 @@ func (b bucket) score(counts map[string]uint64) uint64 {
 		}
 	}
 	return strongest
+}
+
+func (t *Tracker) evidenceReason(p *peerRecord, b *bucket, tick int64, event Evidence) Reason {
+	if event.Reason != None {
+		return event.Reason
+	}
+	if !event.Refused {
+		return p.traffic(b, tick, event)
+	}
+	reason := p.refused(b, tick, event)
+	if reason != ServingRefused {
+		t.metrics.reasons[ServingRefused].Inc(1)
+	}
+	return reason
 }

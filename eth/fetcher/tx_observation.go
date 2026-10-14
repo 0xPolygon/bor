@@ -14,7 +14,7 @@ import (
 
 // SetValidationObserver installs a synchronous observer before Start. It reuses
 // admission results on the fetcher loop and must not block or change fetcher state.
-func (f *TxFetcher) SetValidationObserver(observer func(string, bool, uint64, uint64, bool)) {
+func (f *TxFetcher) SetValidationObserver(observer func(string, DeliveryProvenance, uint64, uint64, bool)) {
 	f.validationObserver = observer
 }
 
@@ -45,12 +45,23 @@ func (f *TxFetcher) observeDelivery(delivery *txDelivery) {
 	f.validationObserver(delivery.origin, solicited, summary.items, summary.bytes, summary.invalid)
 }
 
-func requestedDelivery(request *txRequest, delivery *txDelivery) bool {
-	if !delivery.direct || request == nil || request.hashes == nil || request.requestID != delivery.requestID {
-		return false
+type DeliveryProvenance uint8
+
+const (
+	UnknownDelivery DeliveryProvenance = iota
+	UnsolicitedDelivery
+	RequestedDelivery
+)
+
+func requestedDelivery(request *txRequest, delivery *txDelivery) DeliveryProvenance {
+	if !delivery.direct {
+		return UnsolicitedDelivery
+	}
+	if request == nil || request.hashes == nil || request.requestID != delivery.requestID {
+		return UnknownDelivery
 	}
 	if len(delivery.hashes) > len(request.hashes) {
-		return false
+		return UnsolicitedDelivery
 	}
 	wanted := make(map[common.Hash]struct{}, len(request.hashes))
 	for _, hash := range request.hashes {
@@ -58,11 +69,11 @@ func requestedDelivery(request *txRequest, delivery *txDelivery) bool {
 	}
 	for _, hash := range delivery.hashes {
 		if _, ok := wanted[hash]; !ok {
-			return false
+			return UnsolicitedDelivery
 		}
 		delete(wanted, hash)
 	}
-	return true
+	return RequestedDelivery
 }
 
 func invalidTransaction(err error) bool {

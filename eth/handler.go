@@ -641,6 +641,7 @@ func (h *handler) jailPeer(id string) {
 }
 
 func (h *handler) jailPeerFor(id string, period time.Duration) {
+	h.observePeer(id, peerpolicy.LegacyJail)
 	if h.p2pServer == nil {
 		return
 	}

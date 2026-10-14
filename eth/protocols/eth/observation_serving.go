@@ -19,10 +19,8 @@ func observedBodyReply(backend Backend, peer *Peer, query GetBlockBodiesPacket) 
 	response := serviceGetBlockBodiesQuery(backend.Chain(), query.GetBlockBodiesRequest, func(hash common.Hash, size int) {
 		event.Items++
 		event.Bytes += uint64(size)
-		if len(event.Hashes) < 128 {
-			event.Hashes = append(event.Hashes, hash)
-			event.ObjectBytes = append(event.ObjectBytes, uint64(size))
-		}
+		event.Hashes = append(event.Hashes, hash)
+		event.ObjectBytes = append(event.ObjectBytes, uint64(size))
 	})
 	return peer.writeObservedBodies(query.RequestId, response, event)
 }
@@ -30,8 +28,10 @@ func observedBodyReply(backend Backend, peer *Peer, query GetBlockBodiesPacket) 
 func (p *Peer) writeObservedBodies(id uint64, bodies []rlp.RawValue, event peerpolicy.Evidence) error {
 	// Queue admission is not a completed download. Observe only after the
 	// transport write succeeds, including when serving is delayed by a budget.
-	return p.queueReplyWithCompletion(BlockBodiesMsg, &BlockBodiesRLPPacket{
+	err := p.queueReplyWithCompletion(BlockBodiesMsg, &BlockBodiesRLPPacket{
 		RequestId:              id,
 		BlockBodiesRLPResponse: bodies,
 	}, nil, func() { p.observer(event) })
+	p.observeReplyRefusal(err, event.Hashes)
+	return err
 }

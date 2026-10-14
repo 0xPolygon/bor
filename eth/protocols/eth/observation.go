@@ -67,8 +67,13 @@ func observeInvalid(msg Decoder, reason peerpolicy.Reason) {
 
 func observeIgnoredTransactions(msg Decoder) {
 	if d, ok := msg.(*observedDecoder); ok {
-		// Ignored packets have no fetcher correlation. Count their wire bytes
-		// without decoding transactions or claiming a validation outcome.
+		// A reply ignored during sync has no request correlation. Its bytes
+		// remain observable without guessing that it was unsolicited.
+		if d.Code == PooledTransactionsMsg {
+			d.evidence.Reason = peerpolicy.UnknownTransactionDelivery
+			d.evidence.Items = 0
+			return
+		}
 		d.evidence.Family = peerpolicy.Transactions
 		d.evidence.Items = 0
 	}
@@ -87,8 +92,20 @@ func observeBlockAnnouncements(msg Decoder, packet NewBlockHashesPacket) {
 		return
 	}
 	d.evidence.Items = uint64(len(packet))
-	d.evidence.Hashes = make([]common.Hash, min(len(packet), 128))
+	d.evidence.Hashes = make([]common.Hash, len(packet))
 	for i := range d.evidence.Hashes {
 		d.evidence.Hashes[i] = packet[i].Hash
+	}
+}
+
+func (p *Peer) observeRateLimit(msg p2p.Msg) {
+	if p.observer != nil {
+		p.observer(peerpolicy.Evidence{Reason: peerpolicy.RateLimited, Family: messageFamily(msg.Code), Items: 1, Bytes: uint64(msg.Size)})
+	}
+}
+
+func (p *Peer) observeReplyRefusal(err error, hashes []common.Hash) {
+	if err == errReplyQueueFull && p.observer != nil {
+		p.observer(peerpolicy.Evidence{Refused: true, Hashes: hashes})
 	}
 }

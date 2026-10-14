@@ -68,11 +68,29 @@ func TestPeerPolicyEvictionCounter(t *testing.T) {
 
 func TestPeerPolicySaturatingAccounting(t *testing.T) {
 	for _, tc := range []struct{ current, delta, limit, want uint64 }{
-		{0, 1, 10, 1}, {3, 4, 10, 7}, {3, 7, 10, 10},
-		{3, 8, 10, 10}, {10, 1, 10, 10}, {9, math.MaxUint64, 10, 10},
+		{0, 1, 10, 1},
+		{3, 4, 10, 7},
+		{3, 7, 10, 10},
+		{3, 8, 10, 10},
+		{10, 1, 10, 10},
+		{9, math.MaxUint64, 10, 10},
 	} {
 		if got := saturatingAdd(tc.current, tc.delta, tc.limit); got != tc.want {
 			t.Fatalf("%+v: got %d", tc, got)
 		}
 	}
+}
+
+func TestPeerPolicyRefusalCounter(t *testing.T) {
+	metrics.Enable()
+	tracker := New(new(mclock.Simulated))
+	counter := tracker.metrics.reasons[ServingRefused]
+	before := counter.Snapshot().Count()
+	for range 5 {
+		tracker.Observe("peer", Evidence{Refused: true})
+	}
+	if got := counter.Snapshot().Count() - before; got != 5 {
+		t.Fatalf("refusals counted %d times, want 5", got)
+	}
+	assertRisk(t, tracker, "peer", 20, "none")
 }

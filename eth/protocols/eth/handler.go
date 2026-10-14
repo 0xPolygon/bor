@@ -217,6 +217,7 @@ func handleMessage(backend Backend, peer *Peer) error {
 	}
 	if msg.Code == NewBlockHashesMsg {
 		if err := peer.checkMessageRate(msg.Code, msg.Size, time.Now()); err != nil {
+			peer.observeRateLimit(msg)
 			return err
 		}
 	}
@@ -226,6 +227,7 @@ func handleMessage(backend Backend, peer *Peer) error {
 	}
 	if msg.Code != NewBlockHashesMsg {
 		if err := peer.checkMessageRate(msg.Code, msg.Size, time.Now()); err != nil {
+			peer.observeRateLimit(msg)
 			return err
 		}
 	}

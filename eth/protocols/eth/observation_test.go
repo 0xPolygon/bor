@@ -70,8 +70,8 @@ func TestPeerPolicyAnnouncementCapture(t *testing.T) {
 	packet := make(NewBlockHashesPacket, 1024)
 	packet[0].Hash = common.Hash{1}
 	observeBlockAnnouncements(d, packet)
-	if d.evidence.Items != 1024 || len(d.evidence.Hashes) != 128 || d.evidence.Hashes[0] != packet[0].Hash {
-		t.Fatal("block announcement capture was not bounded")
+	if d.evidence.Items != 1024 || len(d.evidence.Hashes) != len(packet) || d.evidence.Hashes[0] != packet[0].Hash {
+		t.Fatal("block announcement capture omitted hashes")
 	}
 	hashes := []common.Hash{{2}, {3}}
 	observeAnnouncements(d, hashes)

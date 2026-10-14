@@ -27,6 +27,11 @@ const (
 	LegacyJail
 	ServingVolume
 	ServingRepetition
+	RateLimited
+	ServingRefused
+	UnknownTransactionDelivery
+	WitnessAnnouncementStrike
+	WitnessBodyStrike
 	reasonCount
 )
 
@@ -35,6 +40,7 @@ var reasonNames = [...]string{
 	"invalid-witness-announcement", "invalid-witness-body", "announcement-volume",
 	"announcement-repetition", "transaction-volume", "block-volume", "request-volume",
 	"downloader-failure", "fetcher-drop", "legacy-jail", "serving-volume", "serving-repetition",
+	"rate-limited", "serving-refused", "unknown-transaction-delivery", "witness-announcement-strike", "witness-body-strike",
 }
 
 func (r Reason) String() string {
@@ -60,6 +66,7 @@ const (
 // Evidence belongs to one delivery. Reason takes precedence over traffic scoring
 // so a malformed delivery is not also scored for exceeding a traffic allowance.
 type Evidence struct {
+	Refused     bool
 	Reason      Reason
 	Family      Family
 	Items       uint64
@@ -95,7 +102,7 @@ func weight(reason Reason) uint64 {
 	switch reason {
 	case InvalidEncoding, InvalidBlock, InvalidTransaction, InvalidWitnessAnnouncement, InvalidWitnessBody:
 		return 60
-	case AnnouncementVolume, AnnouncementRepetition, TransactionVolume, BlockVolume, RequestVolume, ServingVolume, ServingRepetition:
+	case RateLimited, AnnouncementVolume, AnnouncementRepetition, TransactionVolume, BlockVolume, RequestVolume, ServingVolume, ServingRepetition:
 		return 20
 	default:
 		return 0
