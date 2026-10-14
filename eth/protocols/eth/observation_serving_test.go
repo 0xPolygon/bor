@@ -34,7 +34,7 @@ func TestPeerPolicyCompletedBodyReply(t *testing.T) {
 			w.err = errors.New("write failed")
 		}
 		calls := 0
-		p := &Peer{rw: w, observer: func(e peerpolicy.Evidence) {
+		p := &Peer{Peer: configuredLimitsTestPeer(t, "trusted"), rw: w, observer: func(e peerpolicy.Evidence) {
 			calls++
 			if !w.completed || e.Family != peerpolicy.BodyReplies {
 				t.Fatal("recorded before completion")
@@ -76,7 +76,7 @@ func TestPeerPolicyBodyServingAdapter(t *testing.T) {
 	hash := backend.chain.GetBlockByNumber(1).Hash()
 	for _, enabled := range []bool{false, true} {
 		w := &observedWriter{}
-		p := &Peer{rw: w}
+		p := &Peer{Peer: configuredLimitsTestPeer(t, "trusted"), rw: w}
 		var got peerpolicy.Evidence
 		if enabled {
 			p.SetObserver(func(e peerpolicy.Evidence) { got = e })

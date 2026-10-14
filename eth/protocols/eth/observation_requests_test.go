@@ -33,7 +33,7 @@ func TestPeerPolicyRequestOnlyHandlers(t *testing.T) {
 			}
 			clock := new(mclock.Simulated)
 			tracker := peerpolicy.New(clock)
-			peer := &Peer{rw: &observedWriter{}, knownTxs: newKnownCache(maxKnownTxs)}
+			peer := &Peer{Peer: configuredLimitsTestPeer(t, "trusted"), rw: &observedWriter{}, knownTxs: newKnownCache(maxKnownTxs)}
 			peer.SetObserver(func(e peerpolicy.Evidence) { tracker.Observe("reader", e) })
 			for interval := uint64(1); interval <= 5; interval++ {
 				for request := 0; request < 641; request++ {

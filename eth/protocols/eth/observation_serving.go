@@ -28,11 +28,10 @@ func observedBodyReply(backend Backend, peer *Peer, query GetBlockBodiesPacket) 
 }
 
 func (p *Peer) writeObservedBodies(id uint64, bodies []rlp.RawValue, event peerpolicy.Evidence) error {
-	if err := p.ReplyBlockBodiesRLP(id, bodies); err != nil {
-		return err
-	}
-	// Write completion is local, not a remote acknowledgement. The tracker
-	// permits a retry and only scores sustained excess repeated body bytes.
-	p.observer(event)
-	return nil
+	// Queue admission is not a completed download. Observe only after the
+	// transport write succeeds, including when serving is delayed by a budget.
+	return p.queueReplyWithCompletion(BlockBodiesMsg, &BlockBodiesRLPPacket{
+		RequestId:              id,
+		BlockBodiesRLPResponse: bodies,
+	}, nil, func() { p.observer(event) })
 }

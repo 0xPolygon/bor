@@ -76,8 +76,12 @@ func TestUDPv4_LookupIterator(t *testing.T) {
 	test := newUDPTest(t)
 	var wg sync.WaitGroup
 	defer func() {
-		test.close()
+		// Same teardown ordering as TestUDPv4_LookupIteratorClose: stop
+		// serveTestnet and wait for its in-flight replies before closing
+		// the transport, so no injected reply can race cancellation.
+		test.pipe.Close()
 		wg.Wait()
+		test.close()
 	}()
 
 	// Seed table with initial nodes.
@@ -123,8 +127,18 @@ func TestUDPv4_LookupIteratorClose(t *testing.T) {
 	test := newUDPTest(t)
 	var wg sync.WaitGroup
 	defer func() {
-		test.close()
+		// Tear down without racing serveTestnet's reply injection. The fake
+		// peers can answer packets at any time -- e.g. background table
+		// revalidation pings scheduled by fillTable's node inserts -- and an
+		// injected reply that lands after transport cancellation matches no
+		// pending request and fails the test with errUnsolicitedReply.
+		// Closing the pipe stops serveTestnet from dequeuing new packets, so
+		// it exits after its current iteration; waiting for it then lets any
+		// in-flight injection complete while the transport is still open.
+		// Only then is it safe to close the transport.
+		test.pipe.Close()
 		wg.Wait()
+		test.close()
 	}()
 
 	// Seed table with initial nodes.

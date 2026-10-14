@@ -3,11 +3,14 @@ package eth
 import (
 	"bytes"
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/p2p"
+	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
+	"github.com/ethereum/go-ethereum/rlp"
 )
 
 func TestPeerPolicyMessageObservation(t *testing.T) {
@@ -99,10 +102,12 @@ func (r observationReader) WriteMsg(p2p.Msg) error    { return errors.New("not u
 func TestPeerPolicyFraming(t *testing.T) {
 	for _, msg := range []p2p.Msg{
 		{Code: NewBlockMsg, Size: maxMessageSize + 1},
+		{Code: GetPooledTransactionsMsg, Size: uint32(rlp.ListSize(uint64(rlp.IntSize(math.MaxUint64))+rlp.ListSize(maxPooledTxsServe*(common.HashLength+1)))) + 1},
 		{Code: 0xff, Payload: bytes.NewReader(nil)},
 	} {
 		var got peerpolicy.Evidence
-		p := &Peer{rw: observationReader{msg}, version: ETH68}
+		p := NewPeer(ETH68, p2p.NewPeer(enode.ID{1}, "", nil), observationReader{msg}, nil)
+		defer p.Close()
 		p.SetObserver(func(e peerpolicy.Evidence) { got = e })
 		if err := handleMessage(nil, p); err == nil {
 			t.Fatal("expected framing failure")
