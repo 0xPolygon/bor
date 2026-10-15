@@ -129,24 +129,14 @@ func upgradePebbleChaindata(path string) error {
 		return fmt.Errorf("database at %s is %q, not pebble", path, dbType)
 	}
 
-	_, before, err := pebble.PeekFormatVersion(path)
-	if err != nil {
-		return fmt.Errorf("failed to read the database format at %s: %w", path, err)
-	}
-
-	log.Info("Upgrading pebble database", "path", path, "format", before)
-
+	// Upgrade logs the format before and after, and is a no-op on a database
+	// pebble v2 can already open.
 	start := time.Now()
 	if err := pebble.Upgrade(path); err != nil {
 		return err
 	}
 
-	_, after, err := pebble.PeekFormatVersion(path)
-	if err != nil {
-		return fmt.Errorf("failed to read the database format at %s: %w", path, err)
-	}
-
-	log.Info("Pebble database upgraded", "path", path, "from", before, "to", after, "elapsed", common.PrettyDuration(time.Since(start)))
+	log.Info("Pebble database upgrade finished", "path", path, "elapsed", common.PrettyDuration(time.Since(start)))
 
 	return nil
 }

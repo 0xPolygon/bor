@@ -38,6 +38,28 @@ func runPebbleUpgrade(t *testing.T, datadir string) (int, *cli.MockUi) {
 	return cmd.Run([]string{"--datadir", datadir}), ui
 }
 
+func TestDBCommandsRegistered(t *testing.T) {
+	t.Parallel()
+
+	commands := Commands()
+	for name, want := range map[string]MarkDownCommand{
+		"db":                &DBCommand{},
+		"db pebble-upgrade": &PebbleUpgradeCommand{},
+	} {
+		factory, ok := commands[name]
+		require.True(t, ok, name)
+
+		cmd, err := factory()
+		require.NoError(t, err)
+		require.IsType(t, want, cmd)
+		require.NotEmpty(t, cmd.Help())
+		require.NotEmpty(t, cmd.Synopsis())
+		require.NotEmpty(t, cmd.MarkDown())
+	}
+
+	require.Equal(t, cli.RunResultHelp, (&DBCommand{}).Run(nil))
+}
+
 func TestPebbleUpgradeCommand(t *testing.T) {
 	t.Parallel()
 
@@ -93,6 +115,15 @@ func TestPebbleUpgradeCommand(t *testing.T) {
 		code, ui := runPebbleUpgrade(t, datadir)
 		require.Equal(t, 1, code)
 		require.Contains(t, ui.ErrorWriter.String(), "not pebble")
+	})
+
+	t.Run("rejects an unknown flag", func(t *testing.T) {
+		t.Parallel()
+
+		ui := cli.NewMockUi()
+		code := (&PebbleUpgradeCommand{UI: ui}).Run([]string{"--unknown"})
+		require.Equal(t, 1, code)
+		require.NotEmpty(t, ui.ErrorWriter.String())
 	})
 
 	t.Run("refuses a missing database", func(t *testing.T) {
