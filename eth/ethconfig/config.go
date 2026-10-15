@@ -99,6 +99,9 @@ var Defaults = Config{
 	TrieTimeout:             60 * time.Minute,
 	FilterLogCacheSize:      32,
 	LogQueryLimit:           1000,
+	FilterMaxCount:          1024,
+	FilterMaxItems:          100_000,
+	FilterMaxBufferBytes:    256 << 20,
 	Miner:                   miner.DefaultConfig,
 	TxPool:                  legacypool.DefaultConfig,
 	BlobPool:                blobpool.DefaultConfig,
@@ -209,6 +212,13 @@ type Config struct {
 	// This is the maximum number of addresses or topics allowed in filter criteria
 	// for eth_getLogs.
 	LogQueryLimit int
+
+	// Limits of the polling filters (eth_newFilter, eth_newBlockFilter and
+	// eth_newPendingTransactionFilter): the number of installed filters, the number of
+	// events a filter may buffer, and the memory budget for all buffered events.
+	FilterMaxCount       int
+	FilterMaxItems       int
+	FilterMaxBufferBytes uint64
 
 	// Address-specific cache sizes for biased caching (pathdb only)
 	// Maps account address to cache size in bytes

@@ -486,6 +486,15 @@ type JsonRPCConfig struct {
 	// RangeLimit is the maximum block range allowed for eth_getLogs and bor_getLogs (0 = no limit).
 	RangeLimit uint64 `hcl:"rangelimit,optional" toml:"rangelimit,optional"`
 
+	// MaxFilters is the maximum number of installed polling filters (eth_newFilter and friends).
+	MaxFilters int `hcl:"maxfilters,optional" toml:"maxfilters,optional"`
+
+	// MaxFilterItems is the maximum number of events a polling filter may buffer before it overflows.
+	MaxFilterItems int `hcl:"maxfilteritems,optional" toml:"maxfilteritems,optional"`
+
+	// MaxFilterBuffer is the memory budget, in MiB, for the events buffered by all polling filters.
+	MaxFilterBuffer uint64 `hcl:"maxfilterbuffer,optional" toml:"maxfilterbuffer,optional"`
+
 	// Http has the json-rpc http related settings
 	Http *APIConfig `hcl:"http,block" toml:"http,block"`
 
@@ -960,6 +969,9 @@ func DefaultConfig() *Config {
 			GasCap:               ethconfig.Defaults.RPCGasCap,
 			TxFeeCap:             ethconfig.Defaults.RPCTxFeeCap,
 			LogQueryLimit:        ethconfig.Defaults.LogQueryLimit,
+			MaxFilters:           ethconfig.Defaults.FilterMaxCount,
+			MaxFilterItems:       ethconfig.Defaults.FilterMaxItems,
+			MaxFilterBuffer:      ethconfig.Defaults.FilterMaxBufferBytes >> 20,
 			RPCEVMTimeout:        ethconfig.Defaults.RPCEVMTimeout,
 			AllowUnprotectedTxs:  false,
 			EnablePersonal:       false,
@@ -1202,6 +1214,13 @@ func readConfigFile(path string) (*Config, error) {
 		// with it, and it is inert otherwise. The zero value would silently
 		// put HCL-configured witness nodes on the slower path.
 		Pipeline: &PipelineConfig{WarmSnapshot: true},
+		// The polling filter limits must be positive, so an HCL file that omits them
+		// has to start from the defaults instead of zero.
+		JsonRPC: &JsonRPCConfig{
+			MaxFilters:      ethconfig.Defaults.FilterMaxCount,
+			MaxFilterItems:  ethconfig.Defaults.FilterMaxItems,
+			MaxFilterBuffer: ethconfig.Defaults.FilterMaxBufferBytes >> 20,
+		},
 	}
 
 	if err := hclsimple.DecodeFile(path, nil, config); err != nil {
@@ -1664,6 +1683,18 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 
 	n.LogQueryLimit = c.JsonRPC.LogQueryLimit
 	n.RPCBlockRangeLimit = c.JsonRPC.RangeLimit
+
+	if c.JsonRPC.MaxFilters <= 0 || c.JsonRPC.MaxFilterItems <= 0 || c.JsonRPC.MaxFilterBuffer == 0 {
+		return nil, fmt.Errorf("rpc.maxfilters (%d), rpc.maxfilteritems (%d) and rpc.maxfilterbuffer (%d MiB) must be positive", c.JsonRPC.MaxFilters, c.JsonRPC.MaxFilterItems, c.JsonRPC.MaxFilterBuffer)
+	}
+
+	if c.JsonRPC.MaxFilterBuffer > math.MaxUint64>>20 {
+		return nil, fmt.Errorf("rpc.maxfilterbuffer (%d MiB) is too large, the maximum is %d MiB", c.JsonRPC.MaxFilterBuffer, uint64(math.MaxUint64>>20))
+	}
+
+	n.FilterMaxCount = c.JsonRPC.MaxFilters
+	n.FilterMaxItems = c.JsonRPC.MaxFilterItems
+	n.FilterMaxBufferBytes = c.JsonRPC.MaxFilterBuffer << 20
 
 	// Choose the sync mode
 	switch c.SyncMode {

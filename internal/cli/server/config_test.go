@@ -1,7 +1,10 @@
 package server
 
 import (
+	"math"
 	"math/big"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -625,4 +628,113 @@ func TestDeveloperModeGasParameters(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "miner.targetGasPercentage must be between 1-100")
 	})
+}
+
+func TestPollingFilterLimitsConfig(t *testing.T) {
+	config := DefaultConfig()
+	assert.NoError(t, config.loadChain())
+
+	ethConfig, err := config.buildEth(nil, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, ethconfig.Defaults.FilterMaxCount, ethConfig.FilterMaxCount)
+	assert.Equal(t, ethconfig.Defaults.FilterMaxItems, ethConfig.FilterMaxItems)
+	assert.Equal(t, ethconfig.Defaults.FilterMaxBufferBytes, ethConfig.FilterMaxBufferBytes)
+
+	config.JsonRPC.MaxFilters, config.JsonRPC.MaxFilterItems, config.JsonRPC.MaxFilterBuffer = 7, 8, 9
+	ethConfig, err = config.buildEth(nil, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, 7, ethConfig.FilterMaxCount)
+	assert.Equal(t, 8, ethConfig.FilterMaxItems)
+	assert.Equal(t, uint64(9<<20), ethConfig.FilterMaxBufferBytes)
+
+	for name, set := range map[string]func(*Config){
+		"filters":         func(c *Config) { c.JsonRPC.MaxFilters = 0 },
+		"negative":        func(c *Config) { c.JsonRPC.MaxFilterItems = -1 },
+		"items":           func(c *Config) { c.JsonRPC.MaxFilterItems = 0 },
+		"buffer":          func(c *Config) { c.JsonRPC.MaxFilterBuffer = 0 },
+		"buffer overflow": func(c *Config) { c.JsonRPC.MaxFilterBuffer = math.MaxUint64 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			config := DefaultConfig()
+			assert.NoError(t, config.loadChain())
+			set(config)
+
+			_, err := config.buildEth(nil, nil)
+			assert.Error(t, err)
+		})
+	}
+}
+
+func TestPollingFilterBufferTooLarge(t *testing.T) {
+	config := DefaultConfig()
+	assert.NoError(t, config.loadChain())
+	config.JsonRPC.MaxFilterBuffer = math.MaxUint64
+
+	_, err := config.buildEth(nil, nil)
+	assert.ErrorContains(t, err, "too large")
+}
+
+func TestPollingFilterLimitsHCL(t *testing.T) {
+	// read loads an HCL file with the given jsonrpc settings. The blocks the loader
+	// dereferences are always present, as in a dumped config.
+	read := func(t *testing.T, rpc string) *JsonRPCConfig {
+		t.Helper()
+
+		content := "gpo {\n}\np2p {\n}\njsonrpc {\n" + rpc + "  timeouts {\n  }\n  ws {\n  }\n  http {\n  }\n}\n"
+		path := filepath.Join(t.TempDir(), "config.hcl")
+		assert.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+		config, err := readConfigFile(path)
+		assert.NoError(t, err)
+
+		return config.JsonRPC
+	}
+
+	defaults := DefaultConfig().JsonRPC
+
+	t.Run("omitted settings keep the defaults", func(t *testing.T) {
+		rpc := read(t, "  logquerylimit = 5\n")
+		assert.Equal(t, defaults.MaxFilters, rpc.MaxFilters)
+		assert.Equal(t, defaults.MaxFilterItems, rpc.MaxFilterItems)
+		assert.Equal(t, defaults.MaxFilterBuffer, rpc.MaxFilterBuffer)
+	})
+
+	t.Run("explicit values are kept", func(t *testing.T) {
+		rpc := read(t, "  maxfilters = 7\n  maxfilteritems = 8\n  maxfilterbuffer = 9\n")
+		assert.Equal(t, 7, rpc.MaxFilters)
+		assert.Equal(t, 8, rpc.MaxFilterItems)
+		assert.Equal(t, uint64(9), rpc.MaxFilterBuffer)
+	})
+
+	t.Run("explicit zero is kept for validation to reject", func(t *testing.T) {
+		assert.Equal(t, 0, read(t, "  maxfilters = 0\n").MaxFilters)
+	})
+}
+
+func TestPollingFilterBufferBoundary(t *testing.T) {
+	const largest = math.MaxUint64 >> 20 // the largest size in MiB that fits in bytes
+
+	config := DefaultConfig()
+	assert.NoError(t, config.loadChain())
+
+	config.JsonRPC.MaxFilterBuffer = largest
+
+	ethConfig, err := config.buildEth(nil, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(largest)<<20, ethConfig.FilterMaxBufferBytes)
+
+	config.JsonRPC.MaxFilterBuffer = largest + 1
+
+	_, err = config.buildEth(nil, nil)
+	assert.Error(t, err)
+}
+
+func TestPollingFilterLimitFlags(t *testing.T) {
+	c := &Command{}
+	flags := c.Flags(nil)
+
+	assert.NoError(t, flags.Parse([]string{"--rpc.maxfilters", "7", "--rpc.maxfilteritems", "8", "--rpc.maxfilterbuffer", "9"}))
+	assert.Equal(t, 7, c.cliConfig.JsonRPC.MaxFilters)
+	assert.Equal(t, 8, c.cliConfig.JsonRPC.MaxFilterItems)
+	assert.Equal(t, uint64(9), c.cliConfig.JsonRPC.MaxFilterBuffer)
 }

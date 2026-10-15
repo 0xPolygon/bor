@@ -24,6 +24,7 @@ import (
 	"math/big"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -31,6 +32,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/history"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
 )
@@ -47,6 +49,9 @@ var (
 	errExceedLogQueryLimit    = errors.New("exceed max addresses or topics per search position")
 	errExceedMaxTxHashes      = errors.New("exceed max number of transaction hashes allowed per transactionReceipts subscription")
 	errExceedBlockRangeLimit  = errors.New("block range exceeds configured limit")
+	errTooManyFilters         = errors.New("too many installed filters")
+	errFilterBudgetExhausted  = errors.New("polling filter buffer budget exhausted")
+	errFilterOverflow         = errors.New("filter buffer overflow, events were dropped and the filter is uninstalled")
 )
 
 type invalidParamsError struct {
@@ -112,7 +117,24 @@ type filter struct {
 	crit     FilterCriteria
 	logs     []*types.Log
 	s        *Subscription // associated subscription in event system
+
+	size       uint64 // estimated memory held by the buffered events
+	overflowed bool   // buffer limit was exceeded, the next poll reports it
 }
+
+const (
+	// Estimated memory retained per buffered event on top of its payload, kept
+	// deliberately conservative as events are shared between filters.
+	logOverhead = 192
+
+	// A hash costs its payload plus the spare capacity of the slice it is appended to,
+	// which stays below twice the elements in use.
+	hashOverhead = 2 * common.HashLength
+
+	// A transaction retains its fixed fields, which are allocated separately by the decoder,
+	// plus the slices it builds for authorizations and access tuples.
+	txOverhead = 512
+)
 
 // FilterAPI offers support to create and manage filters. This will allow external clients to retrieve various
 // information related to the Ethereum protocol such as blocks, transactions and logs.
@@ -125,6 +147,13 @@ type FilterAPI struct {
 	logQueryLimit int
 	borLogs       bool
 	chainConfig   *params.ChainConfig
+
+	maxFilters      int
+	maxPendingItems int
+	maxBufferBytes  uint64
+
+	reserved      int    // filters being created, counted against maxFilters
+	bufferedBytes uint64 // estimated memory held by all buffered events
 }
 
 // NewFilterAPI returns a new FilterAPI instance.
@@ -136,6 +165,10 @@ func NewFilterAPI(system *FilterSystem, borLogs bool) *FilterAPI {
 		timeout:       system.cfg.Timeout,
 		logQueryLimit: system.cfg.LogQueryLimit,
 		borLogs:       borLogs,
+
+		maxFilters:      system.cfg.MaxFilters,
+		maxPendingItems: system.cfg.MaxPendingItems,
+		maxBufferBytes:  system.cfg.MaxBufferBytes,
 	}
 	go api.timeoutLoop(system.cfg.Timeout)
 
@@ -162,7 +195,7 @@ func (api *FilterAPI) timeoutLoop(timeout time.Duration) {
 			case <-f.deadline.C:
 				toUninstall = append(toUninstall, f.s)
 
-				delete(api.filters, id)
+				api.removeLocked(id)
 			default:
 				continue
 			}
@@ -180,42 +213,171 @@ func (api *FilterAPI) timeoutLoop(timeout time.Duration) {
 	}
 }
 
+// reserve claims a slot for a filter that is about to be created, so concurrent
+// creations cannot exceed the limits.
+func (api *FilterAPI) reserve() error {
+	api.filtersMu.Lock()
+	defer api.filtersMu.Unlock()
+
+	if len(api.filters)+api.reserved >= api.maxFilters {
+		return errTooManyFilters
+	}
+
+	if api.bufferedBytes >= api.maxBufferBytes {
+		return errFilterBudgetExhausted
+	}
+
+	api.reserved++
+
+	return nil
+}
+
+// unreserve gives back a slot claimed by reserve when the filter was not created.
+func (api *FilterAPI) unreserve() {
+	api.filtersMu.Lock()
+	api.reserved--
+	api.filtersMu.Unlock()
+}
+
+// install registers a filter in the slot claimed by reserve.
+func (api *FilterAPI) install(id rpc.ID, f *filter) {
+	api.filtersMu.Lock()
+	api.reserved--
+	api.filters[id] = f
+	api.filtersMu.Unlock()
+}
+
+// removeLocked deletes a filter and releases its buffered events. The caller must
+// hold filtersMu and unsubscribe the filter outside of it.
+func (api *FilterAPI) removeLocked(id rpc.ID) *filter {
+	f, found := api.filters[id]
+	if !found {
+		return nil
+	}
+
+	api.bufferedBytes -= f.size
+	delete(api.filters, id)
+
+	return f
+}
+
+// removeFailed deletes a filter whose subscription ended. A filter that overflowed is
+// kept until its client polls or it times out, so that the client learns what happened.
+func (api *FilterAPI) removeFailed(id rpc.ID) {
+	api.filtersMu.Lock()
+	defer api.filtersMu.Unlock()
+
+	if f, found := api.filters[id]; found && !f.overflowed {
+		api.removeLocked(id)
+	}
+}
+
+// enqueue buffers a batch of events for a polling filter through add. If the batch
+// would exceed the filter's item limit or the shared memory budget, nothing is buffered,
+// the filter's buffer is released and the filter is marked as overflowed. It reports
+// whether the filter just overflowed, in which case the caller must unsubscribe it.
+func (api *FilterAPI) enqueue(id rpc.ID, items int, size uint64, add func(*filter)) bool {
+	api.filtersMu.Lock()
+	defer api.filtersMu.Unlock()
+
+	f, found := api.filters[id]
+	if !found || f.overflowed {
+		return false
+	}
+
+	if len(f.logs)+len(f.hashes)+len(f.txs)+items > api.maxPendingItems || api.bufferedBytes+size > api.maxBufferBytes {
+		log.Debug("Polling filter buffer overflow", "id", id)
+
+		api.bufferedBytes -= f.size
+		f.size, f.logs, f.hashes, f.txs, f.overflowed = 0, nil, nil, nil, true
+
+		return true
+	}
+
+	add(f)
+
+	f.size += size
+	api.bufferedBytes += size
+
+	return false
+}
+
+func logsSize(logs []*types.Log) (size uint64) {
+	for _, l := range logs {
+		size += logOverhead + uint64(len(l.Data)+common.HashLength*len(l.Topics))
+	}
+
+	return size
+}
+
+func txsSize(txs []*types.Transaction) (size uint64) {
+	for _, tx := range txs {
+		size += txSize(tx)
+	}
+
+	return size
+}
+
+// sliceSlots returns the number of elements the decoder may allocate for a slice of n:
+// at least 4, and growth of 1.5x.
+func sliceSlots(n int) uint64 {
+	if n == 0 {
+		return 0
+	}
+
+	return uint64(max(4, n+n/2))
+}
+
+// txSize estimates the memory retained by a transaction: its encoded size plus the in-memory
+// size of the slices decoding allocates, including their spare capacity.
+func txSize(tx *types.Transaction) uint64 {
+	size := txOverhead + tx.Size()
+	size += uint64(unsafe.Sizeof(types.SetCodeAuthorization{})) * sliceSlots(len(tx.SetCodeAuthorizations()))
+
+	accessList := tx.AccessList()
+	size += uint64(unsafe.Sizeof(types.AccessTuple{})) * sliceSlots(len(accessList))
+
+	for _, tuple := range accessList {
+		size += common.HashLength * sliceSlots(len(tuple.StorageKeys))
+	}
+
+	return size
+}
+
 // NewPendingTransactionFilter creates a filter that fetches pending transactions
 // as transactions enter the pending state.
 //
 // It is part of the filter package because this filter can be used through the
 // `eth_getFilterChanges` polling method that is also used for log filters.
-func (api *FilterAPI) NewPendingTransactionFilter(fullTx *bool) rpc.ID {
+func (api *FilterAPI) NewPendingTransactionFilter(fullTx *bool) (rpc.ID, error) {
+	if err := api.reserve(); err != nil {
+		return "", err
+	}
+
 	var (
 		pendingTxs   = make(chan []*types.Transaction)
 		pendingTxSub = api.events.SubscribePendingTxs(pendingTxs)
 	)
 
-	api.filtersMu.Lock()
-	api.filters[pendingTxSub.ID] = &filter{typ: PendingTransactionsSubscription, fullTx: fullTx != nil && *fullTx, deadline: time.NewTimer(api.timeout), txs: make([]*types.Transaction, 0), s: pendingTxSub}
-	api.filtersMu.Unlock()
+	api.install(pendingTxSub.ID, &filter{typ: PendingTransactionsSubscription, fullTx: fullTx != nil && *fullTx, deadline: time.NewTimer(api.timeout), txs: make([]*types.Transaction, 0), s: pendingTxSub})
 
 	go func() {
 		defer pendingTxSub.Unsubscribe()
 		for {
 			select {
 			case pTx := <-pendingTxs:
-				api.filtersMu.Lock()
-				if f, found := api.filters[pendingTxSub.ID]; found {
-					f.txs = append(f.txs, pTx...)
+				if api.enqueue(pendingTxSub.ID, len(pTx), txsSize(pTx), func(f *filter) { f.txs = append(f.txs, pTx...) }) {
+					pendingTxSub.Unsubscribe()
 				}
-				api.filtersMu.Unlock()
 			case <-pendingTxSub.Err():
-				api.filtersMu.Lock()
-				delete(api.filters, pendingTxSub.ID)
-				api.filtersMu.Unlock()
+				api.removeFailed(pendingTxSub.ID)
 
 				return
 			}
 		}
 	}()
 
-	return pendingTxSub.ID
+	return pendingTxSub.ID, nil
 }
 
 // NewPendingTransactions creates a subscription that is triggered each time a
@@ -264,37 +426,35 @@ func (api *FilterAPI) NewPendingTransactions(ctx context.Context, fullTx *bool) 
 
 // NewBlockFilter creates a filter that fetches blocks that are imported into the chain.
 // It is part of the filter package since polling goes with eth_getFilterChanges.
-func (api *FilterAPI) NewBlockFilter() rpc.ID {
+func (api *FilterAPI) NewBlockFilter() (rpc.ID, error) {
+	if err := api.reserve(); err != nil {
+		return "", err
+	}
+
 	var (
 		headers   = make(chan *types.Header)
 		headerSub = api.events.SubscribeNewHeads(headers)
 	)
 
-	api.filtersMu.Lock()
-	api.filters[headerSub.ID] = &filter{typ: BlocksSubscription, deadline: time.NewTimer(api.timeout), hashes: make([]common.Hash, 0), s: headerSub}
-	api.filtersMu.Unlock()
+	api.install(headerSub.ID, &filter{typ: BlocksSubscription, deadline: time.NewTimer(api.timeout), hashes: make([]common.Hash, 0), s: headerSub})
 
 	go func() {
 		defer headerSub.Unsubscribe()
 		for {
 			select {
 			case h := <-headers:
-				api.filtersMu.Lock()
-				if f, found := api.filters[headerSub.ID]; found {
-					f.hashes = append(f.hashes, h.Hash())
+				if api.enqueue(headerSub.ID, 1, hashOverhead, func(f *filter) { f.hashes = append(f.hashes, h.Hash()) }) {
+					headerSub.Unsubscribe()
 				}
-				api.filtersMu.Unlock()
 			case <-headerSub.Err():
-				api.filtersMu.Lock()
-				delete(api.filters, headerSub.ID)
-				api.filtersMu.Unlock()
+				api.removeFailed(headerSub.ID)
 
 				return
 			}
 		}
 	}()
 
-	return headerSub.ID
+	return headerSub.ID, nil
 }
 
 // NewHeads send a notification each time a new (header) block is appended to the chain.
@@ -453,31 +613,31 @@ type FilterCriteria ethereum.FilterQuery
 //
 // In case "fromBlock" > "toBlock" an error is returned.
 func (api *FilterAPI) NewFilter(crit FilterCriteria) (rpc.ID, error) {
+	if err := api.reserve(); err != nil {
+		return "", err
+	}
+
 	logs := make(chan []*types.Log)
 
 	logsSub, err := api.events.SubscribeLogs(ethereum.FilterQuery(crit), logs)
 	if err != nil {
+		api.unreserve()
+
 		return "", err
 	}
 
-	api.filtersMu.Lock()
-	api.filters[logsSub.ID] = &filter{typ: LogsSubscription, crit: crit, deadline: time.NewTimer(api.timeout), logs: make([]*types.Log, 0), s: logsSub}
-	api.filtersMu.Unlock()
+	api.install(logsSub.ID, &filter{typ: LogsSubscription, crit: crit, deadline: time.NewTimer(api.timeout), logs: make([]*types.Log, 0), s: logsSub})
 
 	go func() {
 		defer logsSub.Unsubscribe()
 		for {
 			select {
 			case l := <-logs:
-				api.filtersMu.Lock()
-				if f, found := api.filters[logsSub.ID]; found {
-					f.logs = append(f.logs, l...)
+				if api.enqueue(logsSub.ID, len(l), logsSize(l), func(f *filter) { f.logs = append(f.logs, l...) }) {
+					logsSub.Unsubscribe()
 				}
-				api.filtersMu.Unlock()
 			case <-logsSub.Err():
-				api.filtersMu.Lock()
-				delete(api.filters, logsSub.ID)
-				api.filtersMu.Unlock()
+				api.removeFailed(logsSub.ID)
 
 				return
 			}
@@ -575,17 +735,14 @@ func (api *FilterAPI) GetLogs(ctx context.Context, crit FilterCriteria) ([]*type
 func (api *FilterAPI) UninstallFilter(id rpc.ID) bool {
 	api.filtersMu.Lock()
 
-	f, found := api.filters[id]
-	if found {
-		delete(api.filters, id)
-	}
+	f := api.removeLocked(id)
 	api.filtersMu.Unlock()
 
-	if found {
+	if f != nil {
 		f.s.Unsubscribe()
 	}
 
-	return found
+	return f != nil
 }
 
 // GetFilterLogs returns the logs for the filter with the given id.
@@ -670,6 +827,13 @@ func (api *FilterAPI) GetFilterChanges(id rpc.ID) (interface{}, error) {
 	latest := api.sys.backend.CurrentHeader()
 
 	if f, found := api.filters[id]; found {
+		if f.overflowed {
+			// The subscription is already cancelled, report the overflow once.
+			api.removeLocked(id)
+
+			return []interface{}{}, errFilterOverflow
+		}
+
 		if !f.deadline.Stop() {
 			// timer expired but filter is not yet removed in timeout loop
 			// receive timer value and reset timer
@@ -677,6 +841,10 @@ func (api *FilterAPI) GetFilterChanges(id rpc.ID) (interface{}, error) {
 		}
 
 		f.deadline.Reset(api.timeout)
+
+		// The buffered events are handed out below.
+		api.bufferedBytes -= f.size
+		f.size = 0
 
 		switch f.typ {
 		case BlocksSubscription:
