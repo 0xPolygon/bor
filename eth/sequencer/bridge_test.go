@@ -630,6 +630,42 @@ func TestRecoverySurvivesSlowReads(t *testing.T) {
 	}
 }
 
+// A build start's recovery reads share one deadline, set by the first of them
+// and detached from the build-start read; a read outside a build start gets
+// its own.
+func TestRecoveryReadsShareOneBudget(t *testing.T) {
+	build, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+
+	ctx := withRecoveryBudget(build)
+
+	first, cancelFirst := recoverCtx(ctx)
+	defer cancelFirst()
+
+	time.Sleep(5 * time.Millisecond)
+
+	second, cancelSecond := recoverCtx(ctx)
+	defer cancelSecond()
+
+	d1, _ := first.Deadline()
+	d2, _ := second.Deadline()
+
+	if !d1.Equal(d2) {
+		t.Fatalf("recovery reads must share a deadline: %v then %v", d1, d2)
+	}
+
+	if second.Err() != nil {
+		t.Fatalf("a recovery read must outlive the build-start deadline: %v", second.Err())
+	}
+
+	alone, cancelAlone := recoverCtx(build)
+	defer cancelAlone()
+
+	if d, _ := alone.Deadline(); !d.After(d2) {
+		t.Fatalf("a read without a budget must get its own deadline: %v, shared %v", d, d2)
+	}
+}
+
 // A recovery build is the store's sealed generation, rebuilt exactly; the
 // seal barrier must pass it even when the store's tail shows a newer window
 // at that height, or the rebuild loops until the height goes to the pool.

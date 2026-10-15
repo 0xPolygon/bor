@@ -162,6 +162,8 @@ func (p *Publisher) AdoptWindow(number uint64, parent common.Hash) *miner.Adopte
 	ctx, cancel := context.WithTimeout(context.Background(), checkTailTimeout)
 	defer cancel()
 
+	ctx = withRecoveryBudget(ctx)
+
 	info, state := p.buildStartRead(ctx, number)
 	info = p.bridgeAtBuildStart(ctx, info, state, number, parent)
 

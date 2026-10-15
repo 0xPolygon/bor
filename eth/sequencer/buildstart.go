@@ -2,6 +2,7 @@ package sequencer
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/0xPolygon/sequence-store-proto/commitment"
@@ -159,10 +160,25 @@ const recoverGrace = 4 * time.Second
 // deadline used to classify the height as sealed-past and rebuild it from
 // the pool — losing the dead producer's order at the first height, and with
 // it every height after. The block is already late by then; one bounded
-// read costs less. A store that is down never gets here: the probe and walk
-// in front of it fail first, and the breaker refuses after that. Var for
-// tests.
+// budget costs less. It is one budget for the whole build start, shared by
+// the walk, the sealed generation and the bridged parent: a deadline per read
+// would stack them past the block period. A store that is down never gets
+// here: the probe and walk in front of it fail first, and the breaker refuses
+// after that. Var for tests.
 var recoverReadTimeout = time.Second
+
+type recoveryBudgetKey struct{}
+
+// recoveryBudget is a build start's recovery deadline, set by its first
+// recovery read.
+type recoveryBudget struct {
+	once     sync.Once
+	deadline time.Time
+}
+
+func withRecoveryBudget(ctx context.Context) context.Context {
+	return context.WithValue(ctx, recoveryBudgetKey{}, &recoveryBudget{})
+}
 
 // walkCtx is the build-start walk's deadline. A generation already at our
 // height means another producer got here first — a takeover, already late —
@@ -175,9 +191,19 @@ func walkCtx(ctx context.Context, h, number uint64) (context.Context, context.Ca
 	return context.WithCancel(ctx)
 }
 
-// recoverCtx detaches a recovery read from the build-start deadline.
+// recoverCtx detaches a recovery read from the build-start deadline and puts
+// it on the build start's recovery budget.
 func recoverCtx(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(ctx), recoverReadTimeout)
+	detached := context.WithoutCancel(ctx)
+
+	b, ok := ctx.Value(recoveryBudgetKey{}).(*recoveryBudget)
+	if !ok {
+		return context.WithTimeout(detached, recoverReadTimeout)
+	}
+
+	b.once.Do(func() { b.deadline = time.Now().Add(recoverReadTimeout) })
+
+	return context.WithDeadline(detached, b.deadline)
 }
 
 // recoverSealed reconstructs a sealed generation the chain never received.
