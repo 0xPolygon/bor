@@ -458,6 +458,72 @@ func TestLiveWindowBridgesEquivalentParent(t *testing.T) {
 	}
 }
 
+// A bridged record vouches only for the build that seeded it: a rebuild at its
+// height on a parent that doesn't bridge drops it, while the next height's
+// build leaves it for the flush still pending below.
+func TestBridgedRecordScopedToItsBuild(t *testing.T) {
+	cases := []struct {
+		name string
+		next uint64
+		keep bool
+	}{
+		{name: "rebuild at the bridged height", next: 2},
+		{name: "build at the next height", next: 3, keep: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := startHarness(t)
+			p := newTestPublisher(t, h, nil)
+
+			theirs1 := testHeader(1, common.Hash{0xef})
+			theirs1.ReceiptHash = common.Hash{0x21}
+			theirs1.Extra = []byte("producer-a")
+			publishHeader(t, p, theirs1, 2)
+
+			theirs2 := testHeader(2, theirs1.Hash())
+			p.OpenBlock(2, theirs2.Time, theirs2.ParentHash, theirs2.GasLimit, theirs2.BaseFee)
+			p.PublishTx(testTx(t, 0))
+
+			waitHead(t, h, p, 5*time.Second)
+
+			ours1 := types.CopyHeader(theirs1)
+			ours1.Extra = []byte("producer-b")
+
+			other1 := types.CopyHeader(theirs1)
+			other1.Extra = []byte("producer-c")
+			other1.ReceiptHash = common.Hash{0x02}
+
+			ours2 := testHeader(2, ours1.Hash())
+
+			fc := &fakeChain{
+				canonical: map[uint64]common.Hash{1: ours1.Hash()},
+				known:     map[common.Hash]*types.Header{ours1.Hash(): ours1, other1.Hash(): other1, ours2.Hash(): ours2},
+			}
+
+			fresh := newTestPublisher(t, h, fc)
+			if w := fresh.AdoptWindow(2, ours1.Hash()); w == nil {
+				t.Fatal("setup: the window must bridge")
+			}
+
+			parent := other1.Hash()
+			if tc.next == 3 {
+				parent = ours2.Hash()
+			}
+
+			fresh.AdoptWindow(tc.next, parent)
+
+			fresh.mu.Lock()
+			bridged := fresh.bridged
+			fresh.mu.Unlock()
+
+			if kept := bridged != (bridgedWindow{}); kept != tc.keep {
+				t.Fatalf("bridged record kept = %v, want %v (%+v)", kept, tc.keep, bridged)
+			}
+		})
+	}
+}
+
 // The seal flush may displace a bridged window without the chain's word only
 // when nothing it holds would be dropped: our block carries it in full, in
 // order, at the height and on the store parent the bridge recorded.

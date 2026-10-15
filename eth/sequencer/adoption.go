@@ -184,6 +184,13 @@ func (p *Publisher) AdoptWindow(number uint64, parent common.Hash) *miner.Adopte
 	p.resync = false
 	p.diverged = divergence{}
 
+	// A bridged record vouches only for the build that seeded it, so a new
+	// build at or below its height drops it. It outlives the seal, though:
+	// the flush that relies on it reconciles after the next build starts.
+	if p.bridged.height >= number {
+		p.bridged = bridgedWindow{}
+	}
+
 	p.advanceStoreSealedTipLocked(info, "build-start read")
 
 	// Lost head race, or a reorg rebuilding sealed ground — no phantom open
