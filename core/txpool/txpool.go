@@ -440,6 +440,9 @@ func (p *TxPool) SubscribeRebroadcastTransactions(ch chan<- core.StuckTxsEvent) 
 // PoolNonce returns the next nonce of an account, with all transactions executable
 // by the pool already applied on top.
 func (p *TxPool) PoolNonce(addr common.Address) uint64 {
+	if p == nil {
+		return 0
+	}
 	// Since (for now) accounts are unique to subpools, only one pool will have
 	// (at max) a non-state nonce. To avoid stateful lookups, just return the
 	// highest nonce for now.
@@ -521,6 +524,9 @@ func (p *TxPool) ContentFrom(addr common.Address) ([]*types.Transaction, []*type
 // Status returns the known status (unknown/pending/queued) of a transaction
 // identified by its hash.
 func (p *TxPool) Status(hash common.Hash) TxStatus {
+	if p == nil {
+		return TxStatusUnknown
+	}
 	for _, subpool := range p.subpools {
 		if status := subpool.Status(hash); status != TxStatusUnknown {
 			return status
@@ -537,6 +543,9 @@ func (p *TxPool) Status(hash common.Hash) TxStatus {
 // Note, this method is only used for testing and is susceptible to DoS vectors.
 // In production code, the pool is meant to reset on a separate thread.
 func (p *TxPool) Sync() error {
+	if p == nil {
+		return errors.New("stateless client: txpool disabled")
+	}
 	sync := make(chan error)
 	select {
 	case p.sync <- sync:
@@ -552,6 +561,9 @@ func (p *TxPool) Sync() error {
 // susceptible to DoS vectors. In production code, the pool is meant to reset on
 // a separate thread.
 func (p *TxPool) Clear() {
+	if p == nil {
+		return
+	}
 	// Invoke Sync to ensure that txs pending addition don't get added to the pool after
 	// the subpools are subsequently cleared
 	p.Sync()
@@ -583,6 +595,9 @@ type SpeculativeSetter interface {
 // speculative execution of block N+1 gets correct pending transactions
 // (reflecting block N's post-execution nonces and balances via FlatDiff overlay).
 func (p *TxPool) SetSpeculativeState(newHead *types.Header, statedb *state.StateDB) {
+	if p == nil {
+		return
+	}
 	// Update the aggregator's state
 	p.stateLock.Lock()
 	p.state = statedb
