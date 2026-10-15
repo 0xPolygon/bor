@@ -16,7 +16,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: 1.24
+        go-version-file: go.mod
         cache: false
 
     - name: Install cross toolchain
@@ -57,7 +57,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: 1.24
+        go-version-file: go.mod
         cache: false
 
     - name: Install cross toolchain
@@ -131,7 +131,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: 1.24
+        go-version-file: go.mod
         cache: false
 
     - name: Install cross toolchain
@@ -152,7 +152,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: 1.24
+        go-version-file: go.mod
         cache: false
 
     # Note: gcc.exe only works properly if the corresponding bin/ directory is
@@ -189,7 +189,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: 1.24
+        go-version-file: go.mod
         cache: false
 
     - name: Run docker build

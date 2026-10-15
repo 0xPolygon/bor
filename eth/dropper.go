@@ -134,6 +134,7 @@ func (cm *dropper) dropRandomPeer() bool {
 // dropCandidate is the part of *p2p.Peer the drop decision reads.
 type dropCandidate interface {
 	Trusted() bool
+	StaticDialed() bool
 	Static() bool
 	DynDialed() bool
 	Inbound() bool
@@ -144,7 +145,7 @@ type dropCandidate interface {
 // only dropped if their respective category (dialed/inbound) is close to limit
 // capacity.
 func (cm *dropper) doNotDrop(p dropCandidate, numDialed, numInbound int) bool {
-	return p.Trusted() || p.Static() ||
+	return p.Trusted() || p.StaticDialed() || p.Static() ||
 		p.Lifetime() < mclock.AbsTime(doNotDropBefore) ||
 		(p.DynDialed() && cm.maxDialPeers-numDialed > peerDropThreshold) ||
 		(p.Inbound() && cm.maxInboundPeers-numInbound > peerDropThreshold)
