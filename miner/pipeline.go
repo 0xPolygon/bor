@@ -138,6 +138,7 @@ func (w *worker) commitPipelined(env *environment, start time.Time) error {
 	// The root is computed later in the background, so check here, before
 	// block N enters the pipeline and is announced ahead of its DB write.
 	if dbErr := env.state.Error(); dbErr != nil {
+		log.Error("Pipelined SRC: state read failed, not sealing", "number", env.header.Number, "err", dbErr)
 		return fmt.Errorf("%w: %v", errStateReadFailure, dbErr)
 	}
 
@@ -1030,6 +1031,10 @@ func (w *worker) fallbackToSequential(req *speculativeWorkReq) {
 	}
 
 	root := req.blockNEnv.state.IntermediateRoot(w.chainConfig.Rules(req.blockNEnv.header.Number, false, req.blockNEnv.header.Time))
+	if dbErr := req.blockNEnv.state.Error(); dbErr != nil {
+		log.Error("Pipelined SRC: state read failed during fallback, not sealing", "number", req.blockNEnv.header.Number, "err", dbErr)
+		return
+	}
 
 	block, receipts, err := borEngine.AssembleBlock(w.chain, req.blockNEnv.header, req.blockNEnv.state, &types.Body{
 		Transactions: req.blockNEnv.txs,

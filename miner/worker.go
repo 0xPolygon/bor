@@ -3180,7 +3180,9 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 		if err != nil {
 			return err
 		}
+		// Callers discard commit's error, so log it here.
 		if dbErr := env.state.Error(); dbErr != nil {
+			log.Error("State read failed, not sealing", "number", env.header.Number, "err", dbErr)
 			return fmt.Errorf("%w: %v", errStateReadFailure, dbErr)
 		}
 

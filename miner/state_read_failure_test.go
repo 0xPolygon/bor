@@ -92,6 +92,23 @@ func TestSealingStopsOnStateReadFailure(t *testing.T) {
 		}
 	})
 
+	t.Run("fallbackToSequential", func(t *testing.T) {
+		w, backend, req := newPipelineRequestFixture(t, nil)
+		req.blockNEnv.state = stateWithReadFailure(t, backend.chain, backend.chain.CurrentBlock().Root)
+
+		// The fixture's taskLoop would drain taskCh, so use a bare worker
+		// whose taskCh only this test reads.
+		bare := &worker{
+			chainConfig: w.chainConfig,
+			engine:      w.engine,
+			chain:       w.chain,
+			exitCh:      make(chan struct{}),
+			taskCh:      make(chan *task, 1),
+		}
+		bare.fallbackToSequential(req)
+		require.Empty(t, bare.taskCh, "block was handed to the sealer")
+	})
+
 	t.Run("finalizeCurrent", func(t *testing.T) {
 		_, backend, session := newPipelineSessionFixture(t, nil)
 		<-session.initialFillDone
