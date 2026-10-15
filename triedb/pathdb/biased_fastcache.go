@@ -137,13 +137,12 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 	// that correspond to actual trie nodes and ignores malformed non-growing
 	// short nodes. Valid MPT paths strictly increase in length with each level,
 	// so the traversal is cycle-free by construction.
-	type queueItem struct {
-		path  []byte
-		depth int
-	}
-	queue := []queueItem{{path: nil, depth: 0}} // Start from root
+	// The queue is segmented (see preloadQueue) because the frontier can
+	// reach hundreds of millions of items on large contracts.
+	var queue preloadQueue
+	queue.push(preloadQueueItem{path: nil, depth: 0}) // Start from root
 
-	for len(queue) > 0 {
+	for queue.len() > 0 {
 		// Check for shutdown signal periodically
 		select {
 		case <-c.ctx.Done():
@@ -157,8 +156,7 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 		default:
 		}
 
-		item := queue[0]
-		queue = queue[1:]
+		item, _ := queue.pop()
 
 		// Track maximum depth reached
 		if item.depth > maxDepthReached {
@@ -252,7 +250,7 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 		// to trie width rather than growing exponentially with depth.
 		childPaths := decodeChildPaths(nodeData, item.path)
 		for _, childPath := range childPaths {
-			queue = append(queue, queueItem{
+			queue.push(preloadQueueItem{
 				path:  childPath,
 				depth: item.depth + 1,
 			})
