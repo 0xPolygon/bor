@@ -324,6 +324,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.TxPool.LifeTime,
 		Group:   "Transaction Pool",
 	})
+	f.DurationFlag(&flagset.DurationFlag{
+		Name:    "txpool.strandedlifetime",
+		Usage:   "Maximum amount of time a pending transaction can stay below the base fee before its account's pending transactions are evicted (0 disables)",
+		Value:   &c.cliConfig.TxPool.StrandedLifetime,
+		Default: c.cliConfig.TxPool.StrandedLifetime,
+		Group:   "Transaction Pool",
+	})
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "txpool.filtered-addresses",
 		Usage:   "Path to the file containing a newline-separated list of addresses whose transactions will be filtered",
@@ -624,6 +631,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Usage:   "Rate limit per address for cache preloading (e.g. 500KB, 1MB, 0 for unlimited). Limits I/O during sync. Default: 1MB",
 		Value:   &c.cliConfig.Cache.PreloadRateLimit,
 		Default: c.cliConfig.Cache.PreloadRateLimit,
+		Group:   "Cache",
+	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "cache.addresscachepersist",
+		Usage:   "Persist the address-specific caches to disk on shutdown and reload them on startup, skipping the preload walk",
+		Value:   &c.cliConfig.Cache.AddressCachePersist,
+		Default: c.cliConfig.Cache.AddressCachePersist,
 		Group:   "Cache",
 	})
 	f.Uint64Flag(&flagset.Uint64Flag{

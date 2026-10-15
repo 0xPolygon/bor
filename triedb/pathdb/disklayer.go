@@ -60,7 +60,12 @@ func newDiskLayer(root common.Hash, id uint64, db *Database, nodes *AddressBiase
 	// or reuse the provided caches if they are not nil (inherited from
 	// the original disk layer).
 	if nodes == nil && db.config.TrieCleanSize != 0 {
-		cachedNodes, err := NewAddressBiasedCache(db.diskdb, db.config.AddressCacheSizes, db.config.TrieCleanSize, db.config.PreloadRateLimit)
+		// An empty journal dir keeps the address caches in memory only.
+		var persistDir string
+		if db.config.AddressCachePersist {
+			persistDir = db.config.JournalDirectory
+		}
+		cachedNodes, err := NewAddressBiasedCache(db.diskdb, db.config.AddressCacheSizes, db.config.TrieCleanSize, db.config.PreloadRateLimit, persistDir)
 		if err != nil {
 			panic(err)
 		}
@@ -648,8 +653,36 @@ func (dl *diskLayer) waitFlush() error {
 
 // terminate releases the frozen buffer if it's not nil and terminates the
 // background state generator. It also stops any background preload operations
-// in the address-biased cache.
-func (dl *diskLayer) terminate() error {
+// in the address-biased cache. persist controls whether the address-biased
+// cache's contents are also saved to disk for reuse on a future restart:
+// pass true only from a genuine final Database.Close(); Journal() and
+// Disable() also route through terminate() to stop the background preloader,
+// but neither represents the node restarting, so they must pass false —
+// otherwise the (potentially multi-GB) save would run redundantly and, in
+// Journal()'s case, ahead of the trie journal write it's meant to protect.
+func (dl *diskLayer) terminate(persist bool) error {
+	if err := dl.stopBackground(); err != nil {
+		return err
+	}
+	if persist {
+		dl.persistCaches()
+	}
+	return nil
+}
+
+// persistCaches saves the address caches to the journal directory. Callers
+// run it outside dl.lock: the save can take a long time for large address
+// caches, and holding the lock would stall every concurrent node read for its
+// whole duration. dl.nodes is never reassigned after construction.
+func (dl *diskLayer) persistCaches() {
+	if dl.nodes != nil {
+		dl.nodes.persist()
+	}
+}
+
+// stopBackground waits for the frozen buffer flush and stops the state
+// generator and the address cache preloaders.
+func (dl *diskLayer) stopBackground() error {
 	dl.lock.Lock()
 	defer dl.lock.Unlock()
 
@@ -664,7 +697,7 @@ func (dl *diskLayer) terminate() error {
 	}
 	// Stop background preload operations in the address-biased cache
 	if dl.nodes != nil {
-		dl.nodes.Close()
+		dl.nodes.stopPreload()
 	}
 	return nil
 }

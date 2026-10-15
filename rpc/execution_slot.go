@@ -52,6 +52,24 @@ func (s *Slot) Acquire() {
 	}
 }
 
+// acquireWait takes a slot back like Acquire, but waits for one to free up,
+// giving up on the same terms as SubmitWithSlot.
+func (s *Slot) acquireWait(ctx context.Context) {
+	if s == nil || s.held {
+		return
+	}
+
+	semPtr := s.pool.sem.Load()
+	if s.pool.fastPath.Load() || semPtr == nil {
+		return
+	}
+
+	if sem := *semPtr; s.pool.acquire(ctx, sem) {
+		s.sem = sem
+		s.held = true
+	}
+}
+
 type slotKey struct{}
 
 // withExecutionSlot publishes the task's hold for its handler. A nil slot is

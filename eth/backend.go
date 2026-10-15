@@ -329,7 +329,6 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	eth.APIBackend = &EthAPIBackend{stack.Config().ExtRPCEnabled(), stack.Config().AllowUnprotectedTxs, eth, nil, relayService}
 	if eth.APIBackend.allowUnprotectedTxs {
 		log.Info("Unprotected transactions allowed")
-		config.TxPool.AllowUnprotectedTxs = true
 	}
 
 	// Set transaction getter for relay service to query local database
@@ -413,6 +412,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			TxLookupLimit:            int64(min(config.TransactionHistory, math.MaxInt64)),
 			AddressCacheSizes:        config.AddressCacheSizes,
 			PreloadRateLimit:         config.PreloadRateLimit,
+			AddressCachePersist:      config.AddressCachePersist,
 			VmConfig:                 vmCfg,
 			EnablePipelinedImportSRC: config.EnablePipelinedImportSRC,
 			PipelinedImportSRCLogs:   config.PipelinedImportSRCLogs,
