@@ -1082,7 +1082,7 @@ func (w *worker) sealBlockViaTaskCh(
 	}
 
 	select {
-	case w.taskCh <- &task{receipts: blockReceipts, state: statedb, block: block, createdAt: time.Now(), productionStart: buildStart, pipelined: true, witnessBytes: witnessSpec}:
+	case w.taskCh <- &task{receipts: blockReceipts, state: statedb, block: block, createdAt: time.Now(), announceStart: w.buildToAnnounceStart(finalHeader, buildStart), pipelined: true, witnessBytes: witnessSpec}:
 		if productionPipelineLogs {
 			log.Info("Pipelined SRC: block sealed", "number", block.Number(),
 				"txs", len(block.Transactions()), "root", rootSpec)
@@ -1217,9 +1217,7 @@ func (w *worker) announceInlineSealedBlock(sealedBlock *types.Block, buildStart 
 	earlyMs := sealedBlock.Header().GetActualTime().Sub(announceAt).Milliseconds()
 	pipelineAnnounceEarlinessMs.Update(earlyMs)
 	pipelineSpeculativeCommittedCounter.Inc(1)
-	if !buildStart.IsZero() {
-		workerBuildToAnnounceTimer.UpdateSince(buildStart)
-	}
+	w.recordAnnouncement(sealedBlock, w.buildToAnnounceStart(sealedBlock.Header(), buildStart))
 	w.mux.Post(core.NewMinedBlockEvent{Block: sealedBlock, SealedAt: announceAt})
 	sealedBlocksCounter.Inc(1)
 	if sealedBlock.Transactions().Len() == 0 {

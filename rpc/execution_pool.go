@@ -61,17 +61,50 @@ func NewExecutionPool(initialSize int, timeout time.Duration, service string, re
 // slot, falling back to an unbounded run if ctx is cancelled or the configured
 // timeout elapses, so a saturated pool can't block the caller indefinitely.
 func (s *SafePool) Submit(ctx context.Context, fn func() error) (<-chan error, bool) {
+	s.SubmitWithSlot(ctx, func(*Slot) error {
+		return fn()
+	})
+
+	return nil, true
+}
+
+// SubmitWithSlot is Submit for tasks that manage their own hold on the pool: fn
+// receives the slot acquired for it and may hand it back for the duration of a
+// wait that isn't work of its own. The slot is nil when the task runs unbounded
+// (fast path, or the saturation fallback), and a nil slot's methods are no-ops.
+func (s *SafePool) SubmitWithSlot(ctx context.Context, fn func(*Slot) error) {
+	unbounded := func() {
+		go func() {
+			_ = fn(nil)
+		}()
+	}
+
 	semPtr := s.sem.Load()
 	if s.fastPath.Load() || semPtr == nil {
-		go func() {
-			_ = fn()
-		}()
+		unbounded()
 
-		return nil, true
+		return
 	}
 
 	sem := *semPtr
+	if !s.acquire(ctx, sem) {
+		unbounded()
 
+		return
+	}
+
+	slot := &Slot{pool: s, sem: sem, held: true}
+
+	go func() {
+		defer slot.Release()
+
+		_ = fn(slot)
+	}()
+}
+
+// acquire takes a slot from sem, giving up once ctx is done or the configured
+// timeout elapses.
+func (s *SafePool) acquire(ctx context.Context, sem chan struct{}) bool {
 	var timeout <-chan time.Time
 	if d := s.Timeout(); d > 0 {
 		timer := time.NewTimer(d)
@@ -80,28 +113,15 @@ func (s *SafePool) Submit(ctx context.Context, fn func() error) (<-chan error, b
 	}
 
 	select {
-	case sem <- struct{}{}: // acquired a slot
+	case sem <- struct{}{}:
 		s.inFlight.Add(1)
 
-		go func() {
-			defer func() {
-				<-sem
-				s.inFlight.Add(-1)
-			}()
-
-			_ = fn()
-		}()
+		return true
 	case <-ctx.Done():
-		go func() {
-			_ = fn()
-		}()
 	case <-timeout:
-		go func() {
-			_ = fn()
-		}()
 	}
 
-	return nil, true
+	return false
 }
 
 func (s *SafePool) ChangeSize(n int) {

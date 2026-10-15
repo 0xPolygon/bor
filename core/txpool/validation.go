@@ -43,8 +43,6 @@ var (
 type ValidationOptions struct {
 	Config *params.ChainConfig // Chain configuration to selectively validate based on current fork rules
 
-	AllowUnprotectedTxs bool // Whether to allow unprotected transactions in the pool
-
 	Accept       uint8    // Bitmap of transaction types that should be accepted for the calling pool
 	MaxSize      uint64   // Maximum size of a transaction that the caller can meaningfully handle
 	MaxBlobCount int      // Maximum number of blobs allowed per transaction
@@ -121,7 +119,7 @@ func ValidateTransaction(tx *types.Transaction, head *types.Header, signer types
 	}
 	// Make sure the transaction is signed properly
 	from, err := types.Sender(signer, tx)
-	if err != nil && !opts.AllowUnprotectedTxs {
+	if err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidSender, err)
 	}
 	// Limit nonce to 2^64-1 per EIP-2681

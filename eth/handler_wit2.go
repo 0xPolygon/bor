@@ -2,6 +2,7 @@ package eth
 
 import (
 	"errors"
+	"math"
 
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/common"
@@ -19,24 +20,27 @@ var errInvalidSignatureLength = errors.New("invalid wit2 announce signature leng
 
 // Metrics for WIT2 signed-announce path. Emitted only when metrics are enabled.
 var (
-	wit2RelayInMeter                    = metrics.NewRegisteredMeter("eth/wit2/announce/relay_in", nil)
-	wit2RelayOutMeter                   = metrics.NewRegisteredMeter("eth/wit2/announce/relay_out", nil)
-	wit2InvalidSigMeter                 = metrics.NewRegisteredMeter("eth/wit2/announce/invalid_sig", nil)
-	wit2NotValidatorMeter               = metrics.NewRegisteredMeter("eth/wit2/announce/not_validator", nil)
-	wit2DuplicateMeter                  = metrics.NewRegisteredMeter("eth/wit2/announce/duplicate", nil)
-	wit2BroadcastByteMismatchMeter      = metrics.NewRegisteredMeter("eth/wit2/serve/broadcast_byte_mismatch", nil)
-	wit2BroadcastUnverifiedSkippedMeter = metrics.NewRegisteredMeter("eth/wit2/serve/broadcast_unverified_skipped", nil)
-	wit2DeferredPerPeerDropMeter        = metrics.NewRegisteredMeter("eth/wit2/announce/deferred_per_peer_drop", nil)
-	wit2DeferredPerBlockDropMeter       = metrics.NewRegisteredMeter("eth/wit2/announce/deferred_per_block_drop", nil)
-	wit2HeaderUnknownMeter              = metrics.NewRegisteredMeter("eth/wit2/announce/header_unknown", nil)
-	wit2ConflictingWitnessHashMeter     = metrics.NewRegisteredMeter("eth/wit2/announce/conflicting_witness_hash", nil)
-	wit2RateLimitDropMeter              = metrics.NewRegisteredMeter("eth/wit2/announce/rate_limit_drop", nil)
-	wit2StrikeDisconnectMeter           = metrics.NewRegisteredMeter("eth/wit2/announce/strike_disconnect", nil)
-	wit2WaiterPushMeter                 = metrics.NewRegisteredMeter("eth/wit2/serve/waiter_push", nil)
-	wit2WaiterPushOversizeMeter         = metrics.NewRegisteredMeter("eth/wit2/serve/waiter_push_oversize", nil)
-	wit2BroadcastUnknownHeaderDropMeter = metrics.NewRegisteredMeter("eth/wit2/serve/broadcast_unknown_header_drop", nil)
-	wit2BroadcastDeferredImportMeter    = metrics.NewRegisteredMeter("eth/wit2/serve/broadcast_deferred_import_only", nil)
-	wit2FetchTriggerRateLimitDropMeter  = metrics.NewRegisteredMeter("eth/wit2/serve/fetch_trigger_rate_limit_drop", nil)
+	wit2RelayInMeter                     = metrics.NewRegisteredMeter("eth/wit2/announce/relay_in", nil)
+	wit2RelayOutMeter                    = metrics.NewRegisteredMeter("eth/wit2/announce/relay_out", nil)
+	wit2InvalidSigMeter                  = metrics.NewRegisteredMeter("eth/wit2/announce/invalid_sig", nil)
+	wit2NotValidatorMeter                = metrics.NewRegisteredMeter("eth/wit2/announce/not_validator", nil)
+	wit2DuplicateMeter                   = metrics.NewRegisteredMeter("eth/wit2/announce/duplicate", nil)
+	wit2BroadcastOversizeMeter           = metrics.NewRegisteredMeter("eth/wit2/serve/broadcast_oversize", nil)
+	wit2BroadcastHashDivergenceMeter     = metrics.NewRegisteredMeter("eth/wit2/serve/broadcast_hash_divergence", nil)
+	wit2BroadcastExcludedSourceDropMeter = metrics.NewRegisteredMeter("eth/wit2/serve/broadcast_excluded_source_drop", nil)
+	wit2ImplausibleSizeMeter             = metrics.NewRegisteredMeter("eth/wit2/announce/implausible_size", nil)
+	wit2BroadcastUnverifiedSkippedMeter  = metrics.NewRegisteredMeter("eth/wit2/serve/broadcast_unverified_skipped", nil)
+	wit2DeferredPerPeerDropMeter         = metrics.NewRegisteredMeter("eth/wit2/announce/deferred_per_peer_drop", nil)
+	wit2DeferredPerBlockDropMeter        = metrics.NewRegisteredMeter("eth/wit2/announce/deferred_per_block_drop", nil)
+	wit2HeaderUnknownMeter               = metrics.NewRegisteredMeter("eth/wit2/announce/header_unknown", nil)
+	wit2ConflictingWitnessHashMeter      = metrics.NewRegisteredMeter("eth/wit2/announce/conflicting_witness_hash", nil)
+	wit2RateLimitDropMeter               = metrics.NewRegisteredMeter("eth/wit2/announce/rate_limit_drop", nil)
+	wit2StrikeDisconnectMeter            = metrics.NewRegisteredMeter("eth/wit2/announce/strike_disconnect", nil)
+	wit2WaiterPushMeter                  = metrics.NewRegisteredMeter("eth/wit2/serve/waiter_push", nil)
+	wit2WaiterPushOversizeMeter          = metrics.NewRegisteredMeter("eth/wit2/serve/waiter_push_oversize", nil)
+	wit2BroadcastUnknownHeaderDropMeter  = metrics.NewRegisteredMeter("eth/wit2/serve/broadcast_unknown_header_drop", nil)
+	wit2BroadcastDeferredImportMeter     = metrics.NewRegisteredMeter("eth/wit2/serve/broadcast_deferred_import_only", nil)
+	wit2FetchTriggerRateLimitDropMeter   = metrics.NewRegisteredMeter("eth/wit2/serve/fetch_trigger_rate_limit_drop", nil)
 	// wit2RelayFetchTriggeredMeter is marked synchronously, once per hash,
 	// the moment triggerRelayFetch passes its per-hash dedup gate and
 	// commits to spawning a fetch goroutine — before the goroutine itself
@@ -106,11 +110,12 @@ func (h *handler) flushWitnessWaitersForImported(blockHash common.Hash) {
 	h.pushWitnessBytesToWaiters(blockHash, body)
 }
 
-// pushWitnessBytesToWaiters decodes verified witness bytes (already checked
-// against the BP-signed hash by the caller) and pushes them to waiting peers.
-// The decode — re-encoded canonically on send — round-trips to the same bytes,
-// so downstream byte-correctness checks still pass. Skipped entirely when no
-// peer is waiting, so the common (no-waiter) case pays nothing.
+// pushWitnessBytesToWaiters decodes witness bytes this node holds (the BP's own
+// bytes from the pre-import cache, or the node's own witness from chain storage)
+// and pushes them to waiting peers. The decode — re-encoded canonically on send
+// — round-trips to the same bytes, so the receiver's size-oracle check sees the
+// same size. Skipped entirely when no peer is waiting, so the common
+// (no-waiter) case pays nothing.
 func (h *handler) pushWitnessBytesToWaiters(hash common.Hash, witnessBytes []byte) {
 	if h.witnessWaiters == nil || len(witnessBytes) == 0 || !h.witnessWaiters.has(hash) {
 		return
@@ -138,7 +143,7 @@ func verifySignedAnnouncement(ann wit.SignedWitnessAnnouncement) (common.Address
 	if len(ann.Signature) != wit.SignatureLength {
 		return common.Address{}, errInvalidSignatureLength
 	}
-	digest := wit.WitnessAnnouncementSigningHash(ann.BlockHash, ann.BlockNumber, ann.WitnessHash)
+	digest := wit.WitnessAnnouncementSigningHash(ann.BlockHash, ann.BlockNumber, ann.WitnessHash, ann.WitnessSize)
 	// Normalize the recovery id to 0/1 before recovery. External signers (Clef)
 	// return V in 27/28 form for any mimetype other than Clique — see
 	// accounts/external.SignData, which only de-offsets MimetypeClique — and
@@ -195,25 +200,69 @@ func (h *handler) cosendWitnessAnnouncement(blockHash common.Hash, blockNumber u
 	}
 }
 
-// lookupSignedWitnessHash returns the BP-signed witness hash for a block, if
-// the local cache has a verified announcement. Used by the witness manager
-// on fetch success to verify byte-correctness against the signed commitment.
-func (h *handler) lookupSignedWitnessHash(blockHash common.Hash) (common.Hash, bool) {
+// lookupSignedWitnessHash returns the BP-signed witness commitment (hash and
+// encoded size) for a block, if the local cache has a verified announcement.
+// Used by the witness manager on fetch success as the size oracle: the size
+// bounds what is accepted for import, the hash decides whether the bytes are
+// the BP's own and may be re-served pre-import.
+func (h *handler) lookupSignedWitnessHash(blockHash common.Hash) (common.Hash, uint64, bool) {
 	ann, ok := h.signedWitnesses.get(blockHash)
 	if !ok {
-		return common.Hash{}, false
+		return common.Hash{}, 0, false
 	}
-	return ann.WitnessHash, true
+	return ann.WitnessHash, ann.WitnessSize, true
+}
+
+// witnessSizeCeiling returns the maximum encoded witness size accepted for a
+// block whose BP-signed WitnessSize is signedSize — the fetcher's size oracle
+// (witnessManager.acceptableWitnessSizeCeiling), applied here to bodies that
+// arrive by NewWitness broadcast so both delivery paths judge a witness
+// identically. Without a block fetcher (not expected outside tests) no bound is
+// applied, mirroring handleWitnessBroadcast, which cannot inject either.
+func (h *handler) witnessSizeCeiling(signedSize uint64) uint64 {
+	if h.blockFetcher == nil {
+		return math.MaxUint64
+	}
+	return h.blockFetcher.GetWitnessManager().AcceptableWitnessSizeCeiling(signedSize)
+}
+
+// plausibleSignedWitnessSize reports whether a BP-signed WitnessSize can serve
+// as a size oracle: it must be non-zero (a zero size yields a zero band that
+// rejects every honest server) and no larger than the absolute gas-derived
+// witness cap (a size beyond what the block gas limit can produce is not a
+// witness the BP can have). Announcements failing this are refused at accept
+// time and the sender struck, so a bad size is charged to whoever signed or
+// forwarded it rather than to the servers it would later mis-judge.
+func (h *handler) plausibleSignedWitnessSize(size uint64) bool {
+	if size == 0 {
+		return false
+	}
+	if h.blockFetcher == nil {
+		return true
+	}
+	return size <= h.blockFetcher.GetWitnessManager().MaxWitnessSize()
+}
+
+// excludeWitnessSource records that peer must not be asked again for the
+// witness of blockHash: the witness it served was accepted on the size oracle
+// alone and then failed import (see fetcher.BlockFetcher.importBlocks).
+// Consulted by resolveWitnessFetchPeer so the re-fetch reaches another source.
+func (h *handler) excludeWitnessSource(peer string, blockHash common.Hash) {
+	if h.witnessSourceExclusions == nil {
+		return
+	}
+	h.witnessSourceExclusions.add(blockHash, peer)
 }
 
 // cacheVerifiedWitnessForServing receives canonical-encoded witness bytes from
-// the fetcher after a successful, byte-verified paged download and stores them
-// in the in-flight cache so peers can fetch the body before this node finishes
-// chain-write. Bytes here have already passed verifyAgainstSignedHash (when a
-// signed announcement was on file), or arrived via WIT1 unsigned path; in both
-// cases they're the same bytes the upstream peer agreed upon, so serving them
-// to downstream peers cannot expose this node to byte-mismatch drops beyond
-// the upstream's already-incurred risk.
+// the fetcher after a paged download whose bytes are byte-identical to the
+// BP-signed commitment, and stores them in the in-flight cache so peers can
+// fetch the body before this node finishes chain-write. The fetcher hands over
+// only such bytes (a within-band non-identical variant, or a WIT1 fetch with no
+// commitment on file, arrives here as an empty body and is not cached), so the
+// pre-import serving path carries the BP's own bytes exclusively and serving
+// them early cannot expose this node to a downstream size-band rejection or
+// import-failure strike the BP would not equally incur.
 func (h *handler) cacheVerifiedWitnessForServing(blockHash common.Hash, witnessBytes []byte, witnessHash common.Hash) {
 	if h.pendingWitnessBodies == nil {
 		return
@@ -265,11 +314,11 @@ func (h *handler) signLocalWitnessAnnouncement(blockHash common.Hash, blockNumbe
 		return wit.SignedWitnessAnnouncement{}, false
 	}
 
-	witnessHash, ok := h.canonicalWitnessHash(blockHash)
+	witnessHash, witnessSize, ok := h.canonicalWitnessHash(blockHash)
 	if !ok {
 		return wit.SignedWitnessAnnouncement{}, false
 	}
-	preimage := wit.WitnessAnnouncementSigningPreImage(blockHash, blockNumber, witnessHash)
+	preimage := wit.WitnessAnnouncementSigningPreImage(blockHash, blockNumber, witnessHash, witnessSize)
 	_, sig, err := borEngine.SignBytes(accounts.MimetypeBorWitnessAnnounce, preimage)
 	if err != nil {
 		log.Warn("wit2: failed to sign witness announcement", "blockHash", blockHash, "err", err)
@@ -287,6 +336,7 @@ func (h *handler) signLocalWitnessAnnouncement(blockHash common.Hash, blockNumbe
 		BlockHash:   blockHash,
 		BlockNumber: blockNumber,
 		WitnessHash: witnessHash,
+		WitnessSize: witnessSize,
 		Signature:   sig,
 	}
 	// Honor the cache's conflict decision. We reach here only when the early
@@ -322,12 +372,12 @@ func maySignAnnouncementForBlock(borEngine *bor.Bor, header *types.Header, local
 // written witness blob is canonical at write time and can be hashed directly
 // without a decode/re-encode round-trip — saving roughly the cost of one RLP
 // pass on the announce path. Returns (_, false) when no witness is on file.
-func (h *handler) canonicalWitnessHash(blockHash common.Hash) (common.Hash, bool) {
+func (h *handler) canonicalWitnessHash(blockHash common.Hash) (common.Hash, uint64, bool) {
 	stored := h.chain.GetWitness(blockHash)
 	if len(stored) == 0 {
-		return common.Hash{}, false
+		return common.Hash{}, 0, false
 	}
-	return stateless.WitnessCommitHash(stored), true
+	return stateless.WitnessCommitHash(stored), uint64(len(stored)), true
 }
 
 // isScheduledProducer binds the recovered signer of a wit2 announcement to the

@@ -309,34 +309,40 @@ func TransactionToMessage(tx *types.Transaction, s types.Signer, baseFee *big.In
 	if err != nil {
 		return nil, err
 	}
+	return TransactionToMessageWithVerifiedSender(tx, from, baseFee)
+}
+
+// TransactionToMessageWithVerifiedSender converts a transaction into a Message
+// using a sender the caller has already recovered.
+func TransactionToMessageWithVerifiedSender(tx *types.Transaction, sender common.Address, baseFee *big.Int) (*Message, error) {
 	gasPrice, overflow := uint256.FromBig(tx.GasPrice())
 	if overflow {
 		return nil, fmt.Errorf("%w: address %v, maxFeePerGas bit length: %d", ErrFeeCapVeryHigh,
-			from.Hex(), tx.GasPrice().BitLen())
+			sender.Hex(), tx.GasPrice().BitLen())
 	}
 	txGasFeeCap := tx.GasFeeCap()
 	gasFeeCap, overflow := uint256.FromBig(txGasFeeCap)
 	if overflow {
 		return nil, fmt.Errorf("%w: address %v, maxFeePerGas bit length: %d", ErrFeeCapVeryHigh,
-			from.Hex(), tx.GasFeeCap().BitLen())
+			sender.Hex(), tx.GasFeeCap().BitLen())
 	}
 	txGasTipCap := tx.GasTipCap()
 	gasTipCap, overflow := uint256.FromBig(txGasTipCap)
 	if overflow {
 		return nil, fmt.Errorf("%w: address %v, maxPriorityFeePerGas bit length: %d", ErrTipVeryHigh,
-			from.Hex(), tx.GasTipCap().BitLen())
+			sender.Hex(), tx.GasTipCap().BitLen())
 	}
 	value, overflow := uint256.FromBig(tx.Value())
 	if overflow {
-		return nil, fmt.Errorf("value exceeds 256 bits: address %v", from.Hex())
+		return nil, fmt.Errorf("value exceeds 256 bits: address %v", sender.Hex())
 	}
 	blobGasFeeCap, overflow := uint256.FromBig(tx.BlobGasFeeCap())
 	if overflow {
-		return nil, fmt.Errorf("blobGasFeeCap exceeds 256 bits: address %v", from.Hex())
+		return nil, fmt.Errorf("blobGasFeeCap exceeds 256 bits: address %v", sender.Hex())
 	}
 
 	msg := &Message{
-		From:                  from,
+		From:                  sender,
 		Nonce:                 tx.Nonce(),
 		GasLimit:              tx.Gas(),
 		GasPrice:              gasPrice,
