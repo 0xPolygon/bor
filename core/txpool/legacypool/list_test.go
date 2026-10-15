@@ -277,6 +277,31 @@ func TestFilterTxConditionalBlockNumber(t *testing.T) {
 	require.Equal(t, tx2, drops[0], "Got %x, expected %x", drops[0].Hash(), tx2.Hash())
 }
 
+func TestFilterTxConditionalTotalCost(t *testing.T) {
+	t.Parallel()
+
+	db := state.NewDatabase(triedb.NewDatabase(rawdb.NewMemoryDatabase(), nil), nil)
+	statedb, _ := state.New(common.Hash{}, db)
+	header := &types.Header{Number: big.NewInt(100)}
+	key, _ := crypto.GenerateKey()
+
+	list := newList(true)
+	plain := transaction(0, 1000, key)
+	list.Add(plain, DefaultConfig.PriceBump)
+
+	for nonce := uint64(1); nonce <= 3; nonce++ {
+		tx := transaction(nonce, 1000, key)
+		tx.PutOptions(&types.OptionsPIP15{BlockNumberMin: big.NewInt(90), BlockNumberMax: big.NewInt(110)})
+		list.Add(tx, DefaultConfig.PriceBump)
+	}
+
+	header.Number = big.NewInt(120)
+	drops := list.FilterTxConditional(statedb, header)
+	require.Len(t, drops, 3)
+
+	require.Equal(t, uint256.MustFromBig(plain.Cost()), list.totalcost)
+}
+
 func TestFilterTxConditionalTimestamp(t *testing.T) {
 	t.Parallel()
 
