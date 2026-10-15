@@ -34,11 +34,11 @@ func TestPeerPolicyIgnoredTransactions(t *testing.T) {
 				if enabled {
 					peer.SetObserver(func(e peerpolicy.Evidence) {
 						observations++
-						family, reason := peerpolicy.Transactions, peerpolicy.None
-						if code == PooledTransactionsMsg {
-							family, reason = peerpolicy.Other, peerpolicy.UnknownTransactionDelivery
-						}
-						if e.Family != family || e.Reason != reason || e.Items != 0 || e.Bytes != 8<<20 {
+						if e.Reason == peerpolicy.UnknownTransactionDelivery {
+							if code != PooledTransactionsMsg || e.Bytes != 0 || e.Items != 0 {
+								t.Fatalf("incorrect diagnostic: %+v", e)
+							}
+						} else if e.Family != peerpolicy.Transactions || e.Reason != peerpolicy.None || e.Items != 0 || e.Bytes != 8<<20 {
 							t.Fatalf("unexpected ignored delivery: %+v", e)
 						}
 						tracker.Observe("sync-peer", e)
@@ -54,15 +54,22 @@ func TestPeerPolicyIgnoredTransactions(t *testing.T) {
 						t.Fatal("ignored packet was decoded or forwarded")
 					}
 					want := uint64(0)
-					if enabled && delivery == 9 && code == TransactionsMsg {
+					if enabled && delivery == 9 {
 						want = 20
 					}
 					if got := tracker.Snapshot("sync-peer"); got.Risk != want || got.Windows[peerpolicy.TransactionVolume.String()] != want/20 {
 						t.Fatalf("delivery %d: %+v, want risk %d", delivery, got, want)
 					}
 				}
-				if enabled && observations != 9 {
-					t.Fatalf("observations = %d, want 9", observations)
+				wantObservations := 9
+				if code == PooledTransactionsMsg {
+					wantObservations = 18
+				}
+				if enabled && observations != wantObservations {
+					t.Fatalf("observations=%d want=%d", observations, wantObservations)
+				}
+				if enabled && code == PooledTransactionsMsg && tracker.Snapshot("sync-peer").Windows[peerpolicy.UnknownTransactionDelivery.String()] != 1 {
+					t.Fatal("missing provenance diagnostic")
 				}
 			})
 		}

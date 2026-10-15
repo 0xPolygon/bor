@@ -115,3 +115,21 @@ func TestPeerPolicyHistoryExpiryBoundary(t *testing.T) {
 		t.Fatal("expired slot was not replaced at boundary")
 	}
 }
+
+func TestPeerPolicyHistoryCapacity(t *testing.T) {
+	history := newHashHistory()
+	var occupied [maxHashes]bool
+	for i := uint64(0); i < 1<<20 && history.Len() < maxHashes; i++ {
+		var hash common.Hash
+		binary.BigEndian.PutUint64(hash[:8], i)
+		slot := maphash.Bytes(history.seed, hash[:]) % maxHashes
+		if occupied[slot] {
+			continue
+		}
+		occupied[slot] = true
+		history.Add(hash, announcement{count: 1})
+	}
+	if got := history.Len(); got != maxHashes {
+		t.Fatalf("distinct slots: %d, want %d", got, maxHashes)
+	}
+}

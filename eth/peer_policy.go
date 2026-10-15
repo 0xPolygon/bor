@@ -17,19 +17,7 @@ func (h *handler) initPeerPolicy(enabled bool) {
 	}
 	h.peerPolicy = peerpolicy.New(mclock.System{})
 	h.downloader.SetFailureObserver(func(id string) { h.observePeer(id, peerpolicy.DownloaderFailure) })
-	h.txFetcher.SetValidationObserver(func(id string, provenance fetcher.DeliveryProvenance, items, bytes uint64, invalid bool) {
-		e := peerpolicy.Evidence{Items: items, Bytes: bytes}
-		if provenance == fetcher.UnknownDelivery {
-			h.observePeer(id, peerpolicy.UnknownTransactionDelivery)
-		}
-		if provenance == fetcher.UnsolicitedDelivery {
-			e.Family = peerpolicy.Transactions
-		}
-		if invalid {
-			e.Reason = peerpolicy.InvalidTransaction
-		}
-		h.observePeerEvidence(id, e)
-	})
+	h.txFetcher.SetValidationObserver(h.observeTransactionDelivery)
 }
 
 func (h *handler) observePeer(id string, reason peerpolicy.Reason) {
@@ -61,4 +49,19 @@ func (h *handler) observePeerEvidence(id string, event peerpolicy.Evidence) {
 		}
 	}
 	h.peerPolicy.Observe(id, event)
+}
+
+func (h *handler) observeTransactionDelivery(id string, provenance fetcher.DeliveryProvenance, items, bytes uint64, invalid bool) {
+	e := peerpolicy.Evidence{Items: items, Bytes: bytes}
+	if provenance == fetcher.UnknownDelivery {
+		h.observePeer(id, peerpolicy.UnknownTransactionDelivery)
+	}
+	// Missing provenance is neutral, but the received bytes still consume capacity.
+	if provenance != fetcher.RequestedDelivery {
+		e.Family = peerpolicy.Transactions
+	}
+	if invalid {
+		e.Reason = peerpolicy.InvalidTransaction
+	}
+	h.observePeerEvidence(id, e)
 }

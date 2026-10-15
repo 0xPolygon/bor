@@ -12,7 +12,8 @@ import (
 
 type observedDecoder struct {
 	p2p.Msg
-	evidence peerpolicy.Evidence
+	evidence   peerpolicy.Evidence
+	diagnostic peerpolicy.Reason
 }
 
 func (d *observedDecoder) Decode(value interface{}) error {
@@ -40,6 +41,9 @@ func (p *Peer) handleObserved(backend Backend, msg p2p.Msg, handle msgHandler) e
 	}
 	d := &observedDecoder{Msg: msg, evidence: peerpolicy.Evidence{Family: messageFamily(msg.Code), Items: 1, Bytes: uint64(msg.Size)}}
 	err := handle(backend, d, p)
+	if d.diagnostic != peerpolicy.None {
+		p.observer(peerpolicy.Evidence{Reason: d.diagnostic})
+	}
 	p.observer(d.evidence)
 	return err
 }
@@ -67,12 +71,10 @@ func observeInvalid(msg Decoder, reason peerpolicy.Reason) {
 
 func observeIgnoredTransactions(msg Decoder) {
 	if d, ok := msg.(*observedDecoder); ok {
-		// A reply ignored during sync has no request correlation. Its bytes
-		// remain observable without guessing that it was unsolicited.
+		// Count wire bytes without decoding ignored payloads. Unknown correlation
+		// is a separate diagnostic so it cannot suppress volume accounting.
 		if d.Code == PooledTransactionsMsg {
-			d.evidence.Reason = peerpolicy.UnknownTransactionDelivery
-			d.evidence.Items = 0
-			return
+			d.diagnostic = peerpolicy.UnknownTransactionDelivery
 		}
 		d.evidence.Family = peerpolicy.Transactions
 		d.evidence.Items = 0
