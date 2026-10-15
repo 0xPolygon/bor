@@ -110,6 +110,7 @@ var (
 	errBlockInterruptedByNewHead  = errors.New("new head arrived while building block")
 	errBlockInterruptedByRecommit = errors.New("recommit interrupt while building block")
 	errBlockInterruptedByTimeout  = errors.New("timeout while building block")
+	errStateReadFailure           = errors.New("state read failed while building block")
 
 	// metrics gauge to track total and empty blocks sealed by a miner
 	sealedBlocksCounter      = metrics.NewRegisteredCounter("worker/sealedBlocks", nil)
@@ -2407,6 +2408,11 @@ func (w *worker) generateWork(params *generateParams, witness bool) *newPayloadR
 	if err != nil {
 		return &newPayloadResult{err: err}
 	}
+	// A database or trie-node read failure during execution or IntermediateRoot
+	// leaves the block built over incomplete state, so it must not be sealed.
+	if dbErr := work.state.Error(); dbErr != nil {
+		return &newPayloadResult{err: fmt.Errorf("%w: %v", errStateReadFailure, dbErr)}
+	}
 	return &newPayloadResult{
 		block:    block,
 		fees:     totalFees(block, work.receipts),
@@ -3173,6 +3179,11 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 
 		if err != nil {
 			return err
+		}
+		// Callers discard commit's error, so log it here.
+		if dbErr := env.state.Error(); dbErr != nil {
+			log.Error("State read failed, not sealing", "number", env.header.Number, "err", dbErr)
+			return fmt.Errorf("%w: %v", errStateReadFailure, dbErr)
 		}
 
 		select {
