@@ -468,6 +468,7 @@ func (l *list) FilterTxConditional(state *state.StateDB, header *types.Header) t
 		return nil
 	}
 
+	l.subTotalCost(removed)
 	l.txs.reheap()
 
 	return removed
