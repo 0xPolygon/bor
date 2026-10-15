@@ -249,6 +249,7 @@ type PprofConfig struct {
 }
 
 type P2PConfig struct {
+	PeerReputation bool `hcl:"peer-reputation,optional" toml:"peer-reputation,optional"`
 	// MaxPeers sets the maximum number of connected peers
 	MaxPeers uint64 `hcl:"maxpeers,optional" toml:"maxpeers,optional"`
 
@@ -930,6 +931,7 @@ func DefaultConfig() *Config {
 			EnableBlockTracking: false,
 		},
 		P2P: &P2PConfig{
+			PeerReputation:       true,
 			MaxPeers:             50,
 			MaxPendPeers:         50,
 			Bind:                 "0.0.0.0",
@@ -1264,6 +1266,7 @@ func readConfigFile(path string) (*Config, error) {
 	}
 
 	config := &Config{
+		P2P:    &P2PConfig{PeerReputation: true},
 		TxPool: &TxPoolConfig{},
 		Cache:  &CacheConfig{},
 		Sealer: &SealerConfig{},
@@ -1312,6 +1315,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	}
 
 	n := ethconfig.Defaults
+	n.PeerReputation = c.P2P.PeerReputation
 
 	// only update for non-developer mode as we don't yet
 	// have the chain object for it.

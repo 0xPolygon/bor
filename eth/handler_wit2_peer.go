@@ -3,48 +3,29 @@ package eth
 import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/eth/protocols/wit"
+	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
 )
 
-// This file holds the WIT2-specific handler methods split out of handler.go to
-// keep that file focused on the generic eth-handler wiring. The methods are
-// unchanged relocations; behaviour is identical to their previous inline
-// definitions (Go resolves methods per package, not per file).
-
-// strikeWit2Peer records a wit2 misbehavior strike (bad sig, wrong producer)
-// and disconnects the peer once the strike threshold is exceeded inside the
-// decay window. Single bad announcements are tolerated to allow for stray
-// pre-fork content; sustained misbehavior is not.
+// WIT evidence follows the existing shared strike threshold. Below-threshold
+// observations remain diagnostic and do not bypass the legacy tolerance.
 func (h *handler) strikeWit2Peer(peer *wit.Peer) {
-	if h.wit2PeerTracker == nil {
-		return
-	}
-	if !h.wit2PeerTracker.strike(peer.ID()) {
-		return
-	}
-	wit2StrikeDisconnectMeter.Mark(1)
-	peer.Log().Warn("wit2: disconnecting and jailing peer for repeated invalid signed announcements")
-	// Jail before disconnecting: removePeer's forget() wipes the strike ledger,
-	// so without a jail the peer could re-dial immediately with a clean slate and
-	// resume. Jail (enode-keyed, like the byte-verification violation path) holds
-	// it off for the jail period. Key rotation still bypasses, but this closes the
-	// trivial same-identity reconnect loop.
-	h.jailPeer(peer.ID())
-	h.removePeer(peer.ID())
+	h.strikeWit2Evidence(peer.ID(), peerpolicy.WitnessAnnouncementStrike, peerpolicy.InvalidWitnessAnnouncement)
 }
 
-// strikeWit2PeerByID records a WIT2 witness-serving strike (oversized bytes, or a
-// size-oracle-accepted witness that failed import) against the peer with the
-// given id and disconnects+jails it once the threshold is crossed. The witness
-// manager and block fetcher know servers by peer id (not *wit.Peer), so this is
-// their entry point into the same strike budget strikeWit2Peer uses for bad
-// announces: sustained misbehavior across either surface disconnects the peer.
 func (h *handler) strikeWit2PeerByID(id string) {
-	if h.wit2PeerTracker == nil {
+	h.strikeWit2Evidence(id, peerpolicy.WitnessBodyStrike, peerpolicy.InvalidWitnessBody)
+}
+
+func (h *handler) strikeWit2AnnouncementByID(id string) {
+	h.strikeWit2Evidence(id, peerpolicy.WitnessAnnouncementStrike, peerpolicy.InvalidWitnessAnnouncement)
+}
+
+func (h *handler) strikeWit2Evidence(id string, diagnostic, qualified peerpolicy.Reason) {
+	h.observePeer(id, diagnostic)
+	if h.wit2PeerTracker == nil || !h.wit2PeerTracker.strike(id) {
 		return
 	}
-	if !h.wit2PeerTracker.strike(id) {
-		return
-	}
+	h.observePeer(id, qualified)
 	wit2StrikeDisconnectMeter.Mark(1)
 	h.jailPeer(id)
 	h.removePeer(id)

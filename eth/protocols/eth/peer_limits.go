@@ -75,16 +75,21 @@ func (p *Peer) checkAnnouncementRate(count int, now time.Time) error {
 	return nil
 }
 
+type queuedReply struct {
+	p2p.Msg
+	completed func()
+}
+
 type peerReplies struct {
 	mu       sync.Mutex
-	queue    chan p2p.Msg
+	queue    chan queuedReply
 	bytes    int
 	reserved int
 	limiter  *rate.Limiter
 }
 
 func newPeerReplies() *peerReplies {
-	return &peerReplies{queue: make(chan p2p.Msg, peerRequestBurst), limiter: rate.NewLimiter(peerByteRate, peerByteBurst)}
+	return &peerReplies{queue: make(chan queuedReply, peerRequestBurst), limiter: rate.NewLimiter(peerByteRate, peerByteBurst)}
 }
 
 var errReplyQueueFull = errors.New("peer response queue full")
@@ -94,7 +99,8 @@ type replyReservation struct {
 	active  bool
 }
 
-func (p *Peer) reservePooledReply() (*replyReservation, error) {
+func (p *Peer) reservePooledReply() (reservation *replyReservation, err error) {
+	defer func() { p.observeReplyRefusal(err, nil) }()
 	if p.Trusted() || p.Static() {
 		return nil, nil
 	}
@@ -141,8 +147,14 @@ func (p *Peer) queueReply(code uint64, packet interface{}) error {
 }
 
 func (p *Peer) queueReservedReply(code uint64, packet interface{}, reservation *replyReservation) error {
+	err := p.queueReplyWithCompletion(code, packet, reservation, nil)
+	p.observeReplyRefusal(err, nil)
+	return err
+}
+
+func (p *Peer) queueReplyWithCompletion(code uint64, packet interface{}, reservation *replyReservation, completed func()) error {
 	if reservation == nil && (p.Trusted() || p.Static()) {
-		return p2p.Send(p.rw, code, packet)
+		return p.sendReplyWithCompletion(code, packet, completed)
 	}
 	data, err := rlp.EncodeToBytes(packet)
 	if err != nil {
@@ -170,12 +182,20 @@ func (p *Peer) queueReservedReply(code uint64, packet interface{}, reservation *
 		return errReplyQueueFull
 	}
 	select {
-	case replies.queue <- p2p.Msg{Code: code, Size: uint32(len(data)), Payload: bytes.NewReader(data)}:
+	case replies.queue <- queuedReply{Msg: p2p.Msg{Code: code, Size: uint32(len(data)), Payload: bytes.NewReader(data)}, completed: completed}:
 		replies.bytes += len(data)
 		return nil
 	default:
 		return errReplyQueueFull
 	}
+}
+
+func (p *Peer) sendReplyWithCompletion(code uint64, packet interface{}, completed func()) error {
+	err := p2p.Send(p.rw, code, packet)
+	if err == nil && completed != nil {
+		completed()
+	}
+	return err
 }
 
 // Close cancels allowance waits; transport shutdown interrupts an active write.
@@ -196,10 +216,13 @@ func (p *Peer) sendReplies(replies *peerReplies) {
 			if err := p.waitReplyAllowance(replies.limiter, int(msg.Size)); err != nil {
 				return
 			}
-			if err := p.rw.WriteMsg(msg); err != nil {
+			if err := p.rw.WriteMsg(msg.Msg); err != nil {
 				p.Log().Debug("Failed to send response", "err", err)
 				p.Disconnect(p2p.DiscNetworkError)
 				return
+			}
+			if msg.completed != nil {
+				msg.completed()
 			}
 			replies.mu.Lock()
 			replies.bytes -= int(msg.Size)

@@ -490,7 +490,7 @@ func (h *handler) drainDeferredCandidate(blockHash common.Hash, entry *deferredA
 		// this, timing a forged announce to always arrive before its header is
 		// local lets an attacker repeat it indefinitely without ever accruing
 		// a strike.
-		h.strikeWit2PeerByID(entry.peerID)
+		h.strikeWit2AnnouncementByID(entry.peerID)
 		return false
 	}
 	// Producer match. Promote the first one; any further producer-signed

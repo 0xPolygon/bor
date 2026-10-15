@@ -52,6 +52,7 @@ import (
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
 )
 
 const (
@@ -116,6 +117,7 @@ type txPool interface {
 // handlerConfig is the collection of initialization parameters to create a full
 // node network handler.
 type handlerConfig struct {
+	peerReputation          bool
 	NodeID                  enode.ID            // P2P node ID used for tx propagation topology
 	Database                ethdb.Database      // Database for direct sync insertions
 	Chain                   *core.BlockChain    // Blockchain to serve data from
@@ -140,6 +142,7 @@ type handlerConfig struct {
 }
 
 type handler struct {
+	peerPolicy *peerpolicy.Tracker
 	nodeID     enode.ID
 	networkID  uint64
 	forkFilter forkid.Filter // Fork ID filter, constant across the lifetime of the node
@@ -383,7 +386,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		}
 	}
 
-	h.blockFetcher = fetcher.NewBlockFetcher(false, nil, h.chain.GetBlockByHash, validator, h.BroadcastBlock, heighter, h.chain.CurrentHeader, nil, inserter, h.removePeer, h.enableBlockTracking, h.statelessSync.Load() || h.syncWithWitnesses, config.gasCeil, h.lookupSignedWitnessHash, h.cacheVerifiedWitnessForServing)
+	h.blockFetcher = fetcher.NewBlockFetcher(false, nil, h.chain.GetBlockByHash, validator, h.BroadcastBlock, heighter, h.chain.CurrentHeader, nil, inserter, h.dropFetcherPeer, h.enableBlockTracking, h.statelessSync.Load() || h.syncWithWitnesses, config.gasCeil, h.lookupSignedWitnessHash, h.cacheVerifiedWitnessForServing)
 	// WIT2: penalize a peer that serves a non-empty witness whose bytes mismatch
 	// the BP-signed commitment (strike, not drop — see strikeWit2PeerByID).
 	h.blockFetcher.SetWitnessServerStriker(h.strikeWit2PeerByID)
@@ -406,8 +409,9 @@ func newHandler(config *handlerConfig) (*handler, error) {
 	addTxs := func(txs []*types.Transaction) []error {
 		return h.txpool.Add(txs, false)
 	}
-	h.txFetcher = fetcher.NewTxFetcher(h.txpool.Has, addTxs, fetchTx, h.removePeer)
+	h.txFetcher = fetcher.NewTxFetcher(h.txpool.Has, addTxs, fetchTx, h.dropFetcherPeer)
 	h.chainSync = newChainSyncer(h)
+	h.initPeerPolicy(config.peerReputation)
 
 	return h, nil
 }
@@ -451,6 +455,7 @@ func (h *handler) decHandlers() {
 // runEthPeer registers an eth peer into the joint eth/snap peerset, adds it to
 // various subsystems and starts handling messages.
 func (h *handler) runEthPeer(peer *eth.Peer, handler eth.Handler) error {
+	h.observeProtocolPeer(peer)
 	if !h.incHandlers() {
 		return p2p.DiscQuitting
 	}
@@ -624,6 +629,7 @@ func (h *handler) runWitExtension(peer *wit.Peer, handler wit.Handler) error {
 
 // jailPeer jails a peer to prevent reconnection for a period of time
 func (h *handler) jailPeer(id string) {
+	h.observePeer(id, peerpolicy.LegacyJail)
 	if h.p2pServer == nil {
 		return
 	}
@@ -635,6 +641,7 @@ func (h *handler) jailPeer(id string) {
 }
 
 func (h *handler) jailPeerFor(id string, period time.Duration) {
+	h.observePeer(id, peerpolicy.LegacyJail)
 	if h.p2pServer == nil {
 		return
 	}
@@ -783,6 +790,9 @@ func (h *handler) Start(maxPeers int) {
 }
 
 func (h *handler) Stop() {
+	if h.peerPolicy != nil {
+		h.peerPolicy.UnregisterPeerMetrics()
+	}
 	if h.txsSub != nil {
 		h.txsSub.Unsubscribe() // quits txBroadcastLoop
 	}
