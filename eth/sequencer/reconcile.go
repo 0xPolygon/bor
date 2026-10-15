@@ -7,6 +7,9 @@ import (
 	"time"
 
 	pb "github.com/0xPolygon/sequence-store-proto/sequencestore/v1"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/log"
 )
 
 var errRefold = errors.New("refold: unknown entry kind")
@@ -195,4 +198,68 @@ func recordMatchesItems(entry *pb.Entry, items []journalItem) (int, bool) {
 	}
 
 	return 0, false
+}
+
+// confirmGateFromSealLocked confirms a pending gate from a store-confirmed
+// seal entry. Confirmation is keyed to the gated block's hash, not just its
+// height: a refused block and its rebuild share a height, and a late ack for
+// the first attempt's seal must not confirm the second's gate — that would
+// broadcast content the store's seal does not describe.
+func (p *Publisher) confirmGateFromSealLocked(item journalItem) {
+	if item.kind != entrySeal || p.gate.height != item.height || p.gate.verdict != gatePending {
+		return
+	}
+
+	if header, err := decodeSealHeader(item.entry.GetBlockSeal().GetHeader()); err == nil &&
+		header.Hash() == p.gate.hash {
+		p.gate.verdict = gateConfirmed
+	}
+}
+
+// confirmGateThroughAckedLocked applies the seal check to every acked
+// journal entry. A reconcile that retires through our own seal is the same
+// proof as that seal's ack, which a STALE queued ahead of it can cost us:
+// the session ends on the STALE before the seal's OK is read.
+func (p *Publisher) confirmGateThroughAckedLocked() {
+	if p.gate.height == 0 || p.gate.verdict != gatePending {
+		return
+	}
+
+	for _, it := range p.journal.items {
+		if it.seq > p.ackedSeq {
+			return
+		}
+
+		p.confirmGateFromSealLocked(it)
+	}
+}
+
+// laggingRead tracks tail reads that land behind the acked frontier.
+type laggingRead struct {
+	since time.Time
+	acked uint64 // ackedSeq when the first behind read arrived
+}
+
+// storeWentBackLocked reports whether tail reads have sat behind the acked
+// frontier for longer than any gateway lag. Acks follow the log commit, so
+// such a store has lost acked entries (broker loss, restore). Only a rewind
+// resends them: holding the frontier would STALE against it forever, since
+// neither the ack nor the read says where the ingress head is.
+func (p *Publisher) storeWentBackLocked(now time.Time) bool {
+	if p.behind.acked != p.ackedSeq {
+		p.behind = laggingRead{since: now, acked: p.ackedSeq}
+	}
+
+	behindFor := now.Sub(p.behind.since)
+	if behindFor < laggingReadBound {
+		reconcileLaggingRead.Inc(1)
+
+		return false
+	}
+
+	reconcileStoreBehind.Inc(1)
+	log.Warn("Store tail stayed behind acked entries, resending from it",
+		"acked", p.ackedSeq, "behind", common.PrettyDuration(behindFor))
+
+	return true
 }
