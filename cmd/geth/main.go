@@ -194,6 +194,7 @@ var (
 		utils.HTTPBodyLimitFlag,
 		utils.RPCTxSyncDefaultTimeoutFlag,
 		utils.RPCTxSyncMaxTimeoutFlag,
+		utils.RPCTxSyncMaxConcurrentFlag,
 	}
 
 	metricsFlags = []cli.Flag{

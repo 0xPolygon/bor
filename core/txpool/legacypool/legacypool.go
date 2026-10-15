@@ -19,6 +19,7 @@ package legacypool
 
 import (
 	"errors"
+	"fmt"
 	"maps"
 	"math"
 	"math/big"
@@ -75,7 +76,8 @@ var (
 	// one. Future transactions should only be able to replace other future transactions.
 	ErrFutureReplacePending = errors.New("future transaction tries to replace pending")
 
-	// ErrTxFiltered is returned if a transaction is from a filtered address.
+	// ErrTxFiltered is returned if a transaction is sent by, or carries a SetCode
+	// authorization signed by, a filtered address.
 	ErrTxFiltered = errors.New("transaction from filtered address")
 )
 
@@ -155,7 +157,7 @@ var (
 	evictTimer  = metrics.NewRegisteredTimer("txpool/misc/evict", nil)
 
 	// rebroadcast metrics
-	rebroadcastTxMeter       = metrics.NewRegisteredMeter("txpool/rebroadcast", nil)          // Transactions identified for rebroadcast
+	rebroadcastTxMeter       = metrics.NewRegisteredMeter("txpool/rebroadcast", nil)          // Transactions queued for rebroadcast
 	rebroadcastIdentifyTimer = metrics.NewRegisteredTimer("txpool/rebroadcast/identify", nil) // Time to identify stuck transactions
 	rebroadcastTrackingGauge = metrics.NewRegisteredGauge("txpool/rebroadcast/tracking", nil) // Transactions being tracked for rebroadcast
 )
@@ -196,8 +198,8 @@ type Config struct {
 	AccountQueue uint64 // Maximum number of non-executable transaction slots permitted per account
 	GlobalQueue  uint64 // Maximum number of non-executable transaction slots for all accounts
 
-	Lifetime            time.Duration // Maximum amount of time an account can remain stale in the non-executable pool
-	AllowUnprotectedTxs bool          // Allow non-EIP-155 transactions
+	Lifetime         time.Duration // Maximum amount of time an account can remain stale in the non-executable pool
+	StrandedLifetime time.Duration // Maximum amount of time a pending head can stay below the base fee (0 disables)
 
 	// Transaction filtering configuration
 	FilteredAddresses map[common.Address]struct{} // Pre-loaded filtered addresses (populated by config)
@@ -222,8 +224,8 @@ var DefaultConfig = Config{
 	AccountQueue: 64,
 	GlobalQueue:  1024,
 
-	Lifetime:            3 * time.Hour,
-	AllowUnprotectedTxs: false,
+	Lifetime:         3 * time.Hour,
+	StrandedLifetime: 3 * time.Hour,
 
 	Rebroadcast:          true,
 	RebroadcastInterval:  30 * time.Second,
@@ -263,6 +265,10 @@ func (config *Config) sanitize() Config {
 	if conf.Lifetime < 1 {
 		log.Warn("Sanitizing invalid txpool lifetime", "provided", conf.Lifetime, "updated", DefaultConfig.Lifetime)
 		conf.Lifetime = DefaultConfig.Lifetime
+	}
+	if conf.StrandedLifetime < 0 {
+		log.Warn("Sanitizing invalid txpool stranded lifetime", "provided", conf.StrandedLifetime, "updated", DefaultConfig.StrandedLifetime)
+		conf.StrandedLifetime = DefaultConfig.StrandedLifetime
 	}
 	// Sanitize rebroadcast configuration
 	if conf.RebroadcastInterval < 1*time.Second {
@@ -335,8 +341,12 @@ type LegacyPool struct {
 	filteredAddrs map[common.Address]struct{} // Map of addresses to filter
 
 	// Rebroadcast tracking
-	rebroadcastTxFeed event.Feed                // Feed for stuck transaction events
-	lastRebroadcast   map[common.Hash]time.Time // Track last rebroadcast time per tx hash
+	rebroadcastTxFeed  event.Feed // Feed for stuck transaction events
+	rebroadcastAckFeed event.Feed
+	lastRebroadcast    map[common.Hash]time.Time // Track last rebroadcast time per tx hash
+	isTxPrivate        func(common.Hash) bool
+
+	stranded strandedState // Pending chains blocked by an unminable head
 }
 
 type txpoolResetRequest struct {
@@ -367,6 +377,7 @@ func New(config Config, chain BlockChain, options ...func(pool *LegacyPool)) *Le
 		initDoneCh:      make(chan struct{}),
 		filteredAddrs:   make(map[common.Address]struct{}),
 		lastRebroadcast: make(map[common.Hash]time.Time),
+		stranded:        newStrandedState(config),
 	}
 	pool.priced = newPricedList(pool.all)
 
@@ -495,17 +506,7 @@ func (pool *LegacyPool) loop() {
 			rebroadcastIdentifyTimer.Update(time.Since(identifyStart))
 
 			if len(stuckTxs) > 0 {
-				// Brief Lock only to update lastRebroadcast timestamps
-				now := time.Now()
-				pool.mu.Lock()
-				for _, tx := range stuckTxs {
-					pool.lastRebroadcast[tx.Hash()] = now
-				}
-				rebroadcastTrackingGauge.Update(int64(len(pool.lastRebroadcast)))
-				pool.mu.Unlock()
-
-				pool.rebroadcastTxFeed.Send(core.StuckTxsEvent{Txs: stuckTxs})
-				rebroadcastTxMeter.Mark(int64(len(stuckTxs)))
+				pool.publishRebroadcastTransactions(stuckTxs)
 				log.Debug("Identified stuck transactions for rebroadcast", "count", len(stuckTxs))
 			}
 
@@ -517,6 +518,7 @@ func (pool *LegacyPool) loop() {
 				// Any old enough should be removed
 				pool.removeTx(hash, true, true)
 			}
+			pool.evictStranded(start)
 			evictTimer.Update(time.Since(start))
 			pool.mu.Unlock()
 		}
@@ -610,6 +612,9 @@ func (pool *LegacyPool) identifyStuckTransactions() []*types.Transaction {
 				continue
 			}
 			if tx.GasTipCap().Cmp(minTip) < 0 {
+				continue
+			}
+			if !pool.canRebroadcast(tx) {
 				continue
 			}
 
@@ -785,8 +790,7 @@ func (pool *LegacyPool) Pending(filter txpool.PendingFilter, interrupt *atomic.B
 // and does not require the pool mutex to be held.
 func (pool *LegacyPool) ValidateTxBasics(tx *types.Transaction) error {
 	opts := &txpool.ValidationOptions{
-		Config:              pool.chainconfig,
-		AllowUnprotectedTxs: pool.config.AllowUnprotectedTxs,
+		Config: pool.chainconfig,
 		Accept: 0 |
 			1<<types.LegacyTxType |
 			1<<types.AccessListTxType |
@@ -801,16 +805,8 @@ func (pool *LegacyPool) ValidateTxBasics(tx *types.Transaction) error {
 // validateTx checks whether a transaction is valid according to the consensus
 // rules and adheres to some heuristic limits of the local node (price and size).
 func (pool *LegacyPool) validateTx(tx *types.Transaction) error {
-	// Check if transaction sender is filtered
-	from, err := types.Sender(pool.signer, tx)
-	if err != nil {
+	if err := pool.checkFiltered(tx); err != nil {
 		return err
-	}
-
-	if pool.isFiltered(from) {
-		filteredTxMeter.Mark(1)
-		log.Warn("Filtered transaction rejected", "hash", tx.Hash(), "from", from)
-		return ErrTxFiltered
 	}
 
 	opts := &txpool.ValidationOptionsWithState{
@@ -990,10 +986,6 @@ func (pool *LegacyPool) add(tx *types.Transaction, async bool) (replaced bool, e
 		return false, txpool.ErrAlreadyKnown
 	}
 
-	if pool.config.AllowUnprotectedTxs {
-		pool.signer = types.NewFakeSigner(tx.ChainId())
-	}
-
 	// If the transaction fails basic validation, discard it
 	if err := pool.validateTx(tx); err != nil {
 		log.Trace("Discarding invalid transaction", "hash", hash, "err", err)
@@ -1003,6 +995,14 @@ func (pool *LegacyPool) add(tx *types.Transaction, async bool) (replaced bool, e
 	}
 	// already validated by this point
 	from, _ := types.Sender(pool.signer, tx)
+
+	// Refuse evicted stranded transactions that are still unminable
+	if pool.isEvictedStranded(from, tx) {
+		log.Trace("Discarding evicted stranded transaction", "hash", hash, "gasFeeCap", tx.GasFeeCap())
+		underpricedTxMeter.Mark(1)
+		stage0Duration = time.Since(stage0Time)
+		return false, txpool.ErrUnderpriced
+	}
 
 	// If the address is not yet known, request exclusivity to track the account
 	// only by this subpool until all transactions are evicted
@@ -1311,10 +1311,6 @@ func (pool *LegacyPool) Add(txs []*types.Transaction, sync bool) []error {
 			errs[i] = txpool.ErrAlreadyKnown
 			knownTxMeter.Mark(1)
 			continue
-		}
-
-		if pool.config.AllowUnprotectedTxs {
-			pool.signer = types.NewFakeSigner(tx.ChainId())
 		}
 
 		// Exclude transactions with basic errors, e.g invalid signatures and
@@ -2326,6 +2322,46 @@ func (pool *LegacyPool) Clear() {
 // authorizations from the specific address cached in the pool.
 func (pool *LegacyPool) HasPendingAuth(addr common.Address) bool {
 	return pool.all.hasAuth(addr)
+}
+
+// checkFiltered rejects a transaction if its sender, or the signer of any of
+// its SetCode authorizations, is in the filtered list. Authorities are checked
+// because an authorization can be relayed by any sender: without this, a
+// filtered account could attach code to itself through someone else's
+// transaction, after which calls into that code act as the filtered account.
+//
+// Any recoverable signer counts, including revocations and tuples that would
+// be skipped at execution for a wrong chain ID or nonce. Validity at admission
+// is not validity at execution: an earlier tuple in the same list, or code
+// already delegated to the account, can move its nonce so a tuple that looks
+// stale here applies once the block is built.
+func (pool *LegacyPool) checkFiltered(tx *types.Transaction) error {
+	from, err := types.Sender(pool.signer, tx)
+	if err != nil {
+		return err
+	}
+
+	if pool.isFiltered(from) {
+		filteredTxMeter.Mark(1)
+		log.Warn("Filtered transaction rejected", "hash", tx.Hash(), "from", from)
+		return ErrTxFiltered
+	}
+
+	// Skip authority recovery when nothing is filtered, as it costs an
+	// ecrecover per authorization.
+	if len(pool.filteredAddrs) == 0 {
+		return nil
+	}
+
+	for _, authority := range tx.SetCodeAuthorities() {
+		if pool.isFiltered(authority) {
+			filteredTxMeter.Mark(1)
+			log.Warn("Filtered transaction rejected", "hash", tx.Hash(), "from", from, "authority", authority)
+			return fmt.Errorf("%w: authority %s", ErrTxFiltered, authority)
+		}
+	}
+
+	return nil
 }
 
 // isFiltered checks if an address is in the filtered list.
