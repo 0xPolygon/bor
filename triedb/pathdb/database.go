@@ -386,10 +386,19 @@ func (db *Database) Disable() error {
 	// Terminate the state generator if it's active and mark the disk layer
 	// as stale to prevent access to persistent state.
 	disk := db.tree.bottom()
-	if err := disk.terminate(); err != nil {
+	if err := disk.terminate(false); err != nil {
 		return err
 	}
 	disk.markStale()
+
+	// State sync rebuilds the trie, so a saved address cache snapshot now
+	// describes the old one. Drop it, so the disk layer built by Enable does
+	// a cold preload instead of trusting a stale warm reload.
+	if db.config.AddressCachePersist && db.config.JournalDirectory != "" {
+		if err := removeSnapshots(db.config.JournalDirectory); err != nil {
+			log.Warn("Failed to remove stale address cache snapshots", "err", err)
+		}
+	}
 
 	// Write the initial sync flag to persist it across restarts.
 	rawdb.WriteSnapSyncStatusFlag(db.diskdb, rawdb.StateSyncRunning)
@@ -551,20 +560,20 @@ func (db *Database) Recoverable(root common.Hash) bool {
 
 // Close closes the trie database and the held freezer.
 func (db *Database) Close() error {
+	dl, persist, err := db.stopForClose()
+	if err != nil {
+		return err
+	}
+	// Save the address caches outside db.lock so read-locked calls such as the
+	// iterators and SnapshotCompleted are not stalled for the whole, possibly
+	// multi-GB, write. readOnly is already set, so nothing can mutate the
+	// database meanwhile.
+	if persist {
+		dl.persistCaches()
+	}
 	db.lock.Lock()
 	defer db.lock.Unlock()
 
-	// Set the database to read-only mode to prevent all
-	// following mutations.
-	db.readOnly = true
-
-	// Block until the background flushing is finished. It must
-	// be done before terminating the potential background snapshot
-	// generator.
-	dl := db.tree.bottom()
-	if err := dl.terminate(); err != nil {
-		return err
-	}
 	dl.resetCache() // release the memory held by clean cache
 
 	// Terminate the background state history indexer
@@ -576,6 +585,28 @@ func (db *Database) Close() error {
 		return nil
 	}
 	return db.stateFreezer.Close()
+}
+
+// stopForClose switches the database to read-only and stops the bottom disk
+// layer's background work. It reports whether the address caches should be
+// saved: not while a state sync is pending, since Disable already dropped
+// their snapshots and the next startup would drop them again.
+func (db *Database) stopForClose() (*diskLayer, bool, error) {
+	db.lock.Lock()
+	defer db.lock.Unlock()
+
+	// Set the database to read-only mode to prevent all
+	// following mutations.
+	db.readOnly = true
+
+	// Block until the background flushing is finished. It must
+	// be done before terminating the potential background snapshot
+	// generator.
+	dl := db.tree.bottom()
+	if err := dl.stopBackground(); err != nil {
+		return nil, false, err
+	}
+	return dl, !db.waitSync, nil
 }
 
 // Size returns the current storage size of the memory cache in front of the

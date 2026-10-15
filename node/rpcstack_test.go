@@ -655,18 +655,21 @@ func apis() []rpc.API {
 	}
 }
 
-// TestExecutionPoolWiredFromConfig: enableRPC/enableWS must size the pool from
-// config (regression for the dropped size that left an unbounded fast path).
+// TestExecutionPoolWiredFromConfig: enableRPC/enableWS must size the pool and set
+// its request timeout from config (regression for the dropped size that left an
+// unbounded fast path, and for the request timeout that was never applied).
 func TestExecutionPoolWiredFromConfig(t *testing.T) {
 	srv := newHTTPServer(testlog.Logger(t, log.LvlInfo), rpc.DefaultHTTPTimeouts)
 
 	assert.NoError(t, srv.enableRPC(apis(), httpConfig{
-		executionPoolSize: 40,
-		Modules:           []string{"test"},
+		executionPoolSize:           40,
+		executionPoolRequestTimeout: 3 * time.Second,
+		Modules:                     []string{"test"},
 	}))
 	assert.NoError(t, srv.enableWS(apis(), wsConfig{
-		executionPoolSize: 25,
-		Modules:           []string{"test"},
+		executionPoolSize:           25,
+		executionPoolRequestTimeout: 5 * time.Second,
+		Modules:                     []string{"test"},
 	}))
 
 	assert.NoError(t, srv.setListenAddr("localhost", 0))
@@ -676,11 +679,15 @@ func TestExecutionPoolWiredFromConfig(t *testing.T) {
 	if httpHandler := srv.httpHandler.Load(); assert.NotNil(t, httpHandler) {
 		assert.Equal(t, 40, httpHandler.server.GetExecutionPoolSize(),
 			"HTTP execution pool size must come from config, not a hardcoded 0")
+		assert.Equal(t, 3*time.Second, httpHandler.server.GetExecutionPoolRequestTimeout(),
+			"HTTP execution pool request timeout must come from config, not a hardcoded 0")
 	}
 
 	if wsHandler := srv.wsHandler.Load(); assert.NotNil(t, wsHandler) {
 		assert.Equal(t, 25, wsHandler.server.GetExecutionPoolSize(),
 			"WS execution pool size must come from config, not a hardcoded 0")
+		assert.Equal(t, 5*time.Second, wsHandler.server.GetExecutionPoolRequestTimeout(),
+			"WS execution pool request timeout must come from config, not a hardcoded 0")
 	}
 }
 

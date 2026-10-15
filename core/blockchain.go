@@ -358,6 +358,10 @@ type BlockChainConfig struct {
 	// 0 = unlimited (legacy behavior), default = 1MB/s
 	PreloadRateLimit int64
 
+	// AddressCachePersist persists the address-specific caches to disk on
+	// shutdown and reloads them on startup. Default: false
+	AddressCachePersist bool
+
 	// State snapshot related options
 	SnapshotLimit   int  // Memory allowance (MB) to use for caching snapshot entries in memory
 	SnapshotNoBuild bool // Whether the background generation is allowed
@@ -505,6 +509,8 @@ func (cfg *BlockChainConfig) triedbConfig(isVerkle bool) *triedb.Config {
 			NoAsyncFlush:      cfg.TrieNoAsyncFlush,
 			AddressCacheSizes: cfg.AddressCacheSizes,
 			PreloadRateLimit:  cfg.PreloadRateLimit,
+
+			AddressCachePersist: cfg.AddressCachePersist,
 		}
 	}
 	return config
@@ -1263,15 +1269,15 @@ func reportReaderStats(prefetch, process, parallel state.ReaderWithStats) {
 // prefetcher goroutine and the V2 BlockSTM workers for a single block.
 type sharedBlockCaches struct {
 	jumpDests vm.JumpDestCache
-	keccak    *sync.Map
-	ecrecover *sync.Map
+	keccak    *vm.Keccak256Cache
+	ecrecover *vm.EcrecoverCache
 }
 
 func newSharedBlockCaches() *sharedBlockCaches {
 	return &sharedBlockCaches{
 		jumpDests: vm.NewSyncJumpDestCache(),
-		keccak:    &sync.Map{},
-		ecrecover: &sync.Map{},
+		keccak:    vm.NewKeccak256Cache(),
+		ecrecover: vm.NewEcrecoverCache(),
 	}
 }
 

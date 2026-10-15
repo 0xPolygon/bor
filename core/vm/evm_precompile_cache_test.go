@@ -1,7 +1,6 @@
 package vm
 
 import (
-	"sync"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -16,13 +15,12 @@ func (p *stubPrecompile) RequiredGas(input []byte) uint64  { return p.gasCost }
 func (p *stubPrecompile) Run(input []byte) ([]byte, error) { return []byte{0xab}, nil }
 func (p *stubPrecompile) Name() string                     { return "stub" }
 
-// TestRunEcrecoverWithCache_NilCached covers the cache-hit/nil fast path.
-// When a prior ecrecover call returned nil (invalid signature) and was
-// stored as nil in the cache, a subsequent call with the same input must
-// return nil without attempting a type assertion (which would panic on
-// a nil interface value).
+// TestRunEcrecoverWithCache_NilCached covers the cache-hit/nil fast path:
+// when a prior ecrecover call returned nil (invalid signature) and was
+// cached, a subsequent call with the same input must return nil, with gas
+// still charged for the (skipped) recovery.
 func TestRunEcrecoverWithCache_NilCached(t *testing.T) {
-	cache := &sync.Map{}
+	cache := NewEcrecoverCache()
 	input := []byte{0x01, 0x02, 0x03}
 	var key [128]byte
 	copy(key[:], common.RightPadBytes(input, 128))
@@ -47,7 +45,7 @@ func TestRunEcrecoverWithCache_NilCached(t *testing.T) {
 // TestRunEcrecoverWithCache_BytesCached verifies the complementary path:
 // non-nil cached bytes returned via the fast path.
 func TestRunEcrecoverWithCache_BytesCached(t *testing.T) {
-	cache := &sync.Map{}
+	cache := NewEcrecoverCache()
 	input := []byte{0x0a, 0x0b, 0x0c}
 	var key [128]byte
 	copy(key[:], common.RightPadBytes(input, 128))
@@ -71,7 +69,7 @@ func TestRunEcrecoverWithCache_BytesCached(t *testing.T) {
 
 // TestRunEcrecoverWithCache_OOG verifies OOG on cache hit.
 func TestRunEcrecoverWithCache_OOG(t *testing.T) {
-	cache := &sync.Map{}
+	cache := NewEcrecoverCache()
 	input := []byte{0x11}
 	var key [128]byte
 	copy(key[:], common.RightPadBytes(input, 128))
