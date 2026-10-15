@@ -199,7 +199,7 @@ func opAddmod(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 
 func opMulmod(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 	x, y, z := scope.Stack.pop(), scope.Stack.pop(), scope.Stack.peek()
-	z.MulMod(&x, &y, z)
+	evm.mulmodMemo.mulmod(&x, &y, z)
 
 	return nil, nil
 }
