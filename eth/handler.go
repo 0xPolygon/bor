@@ -790,6 +790,9 @@ func (h *handler) Start(maxPeers int) {
 }
 
 func (h *handler) Stop() {
+	if h.peerPolicy != nil {
+		h.peerPolicy.UnregisterPeerMetrics()
+	}
 	if h.txsSub != nil {
 		h.txsSub.Unsubscribe() // quits txBroadcastLoop
 	}

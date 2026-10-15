@@ -11,14 +11,15 @@ import (
 )
 
 type observationMetrics struct {
-	reasons   [reasonCount]*metrics.Counter
-	windows   [reasonCount]*metrics.Counter
-	items     [familyCount]*metrics.Counter
-	bytes     [familyCount]*metrics.Counter
-	evictions *metrics.Counter
-	throttle  *metrics.Counter
-	jail      *metrics.Counter
-	risk      metrics.Histogram
+	peerRegistry metrics.Registry
+	reasons      [reasonCount]*metrics.Counter
+	windows      [reasonCount]*metrics.Counter
+	items        [familyCount]*metrics.Counter
+	bytes        [familyCount]*metrics.Counter
+	evictions    *metrics.Counter
+	throttle     *metrics.Counter
+	jail         *metrics.Counter
+	risk         metrics.Histogram
 }
 
 func newObservationMetrics() *observationMetrics {

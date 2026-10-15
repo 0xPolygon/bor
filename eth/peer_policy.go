@@ -8,6 +8,8 @@ import (
 	"github.com/ethereum/go-ethereum/common/mclock"
 	"github.com/ethereum/go-ethereum/eth/fetcher"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
+	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
 )
 
@@ -16,6 +18,11 @@ func (h *handler) initPeerPolicy(enabled bool) {
 		return
 	}
 	h.peerPolicy = peerpolicy.New(mclock.System{})
+	if metrics.Enabled() {
+		if err := h.peerPolicy.RegisterPeerMetrics(metrics.DefaultRegistry); err != nil {
+			log.Error("Failed to register peer reputation gauges", "err", err)
+		}
+	}
 	h.downloader.SetFailureObserver(func(id string) { h.observePeer(id, peerpolicy.DownloaderFailure) })
 	h.txFetcher.SetValidationObserver(h.observeTransactionDelivery)
 }
