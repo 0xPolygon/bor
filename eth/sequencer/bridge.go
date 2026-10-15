@@ -133,7 +133,7 @@ func (p *Publisher) equivalentParent(ctx context.Context, foreign, ours common.H
 
 	p.lineage.add(theirs)
 
-	if !p.historyOnlyDiff(theirs, mine) {
+	if !p.historyOnlyDiff(ctx, theirs, mine) {
 		log.Info("Not following the store's window: the parents' states differ beyond the history slots",
 			"number", number, "storeParent", foreign, "parent", ours, "storeRoot", theirs.Root, "root", mine.Root)
 
@@ -154,7 +154,7 @@ func (p *Publisher) equivalentParent(ctx context.Context, foreign, ours common.H
 // A slot is rewritten only while ours holds a hash the store's chain does
 // not have there: an empty slot was never written (no history before
 // Prague), and a matching one is a height both chains share.
-func (p *Publisher) historyOnlyDiff(theirs, mine *types.Header) bool {
+func (p *Publisher) historyOnlyDiff(ctx context.Context, theirs, mine *types.Header) bool {
 	if theirs.Root == mine.Root {
 		return true
 	}
@@ -167,9 +167,10 @@ func (p *Publisher) historyOnlyDiff(theirs, mine *types.Header) bool {
 	}
 
 	top := theirs.Number.Uint64() - 1
+	hash := theirs.ParentHash
 
-	for i, hash := range p.lineage.hashesBelow(theirs) {
-		slot := historySlot(top - uint64(i))
+	for n := top; n > 0 && top-n < uint64(lineageMax); n-- {
+		slot := historySlot(n)
 
 		recorded := statedb.GetState(params.HistoryStorageAddress, slot)
 		if recorded == (common.Hash{}) || recorded == hash {
@@ -177,9 +178,43 @@ func (p *Publisher) historyOnlyDiff(theirs, mine *types.Header) bool {
 		}
 
 		statedb.SetState(params.HistoryStorageAddress, slot, hash)
+
+		parent, ok := p.storeParent(ctx, n, hash)
+		if !ok {
+			break
+		}
+
+		hash = parent
 	}
 
 	return statedb.IntermediateRoot(true) == theirs.Root
+}
+
+// storeParent returns the parent hash of the store chain's block at number,
+// whose hash is hash. The links the bridge has read answer it; one it has
+// not, as after a restart mid-run, is read from the store's sealed
+// generation on the build start's recovery budget.
+func (p *Publisher) storeParent(ctx context.Context, number uint64, hash common.Hash) (common.Hash, bool) {
+	if parent, ok := p.lineage.parentOf(number, hash); ok {
+		return parent, true
+	}
+
+	rctx, cancel := recoverCtx(ctx)
+	defer cancel()
+
+	entries, err := p.read.generation(rctx, number)
+	if err != nil {
+		return common.Hash{}, false
+	}
+
+	header := generationSealHeader(entries)
+	if header == nil || header.Hash() != hash {
+		return common.Hash{}, false
+	}
+
+	p.lineage.backfill(header)
+
+	return header.ParentHash, true
 }
 
 // historySlot is the history contract's storage slot for the hash of block
@@ -230,25 +265,43 @@ func (l *storeLineage) add(header *types.Header) {
 	}
 }
 
-// hashesBelow returns the store chain's hashes at the heights below header,
-// newest first: its parent's, then each earlier height's as far as the
-// links read so far reach, at most lineageMax of them.
-func (l *storeLineage) hashesBelow(header *types.Header) []common.Hash {
+// parentOf returns the parent hash of the link at number, if the link read
+// there has hash hash.
+func (l *storeLineage) parentOf(number uint64, hash common.Hash) (common.Hash, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	hashes := []common.Hash{header.ParentHash}
-
-	for n := header.Number.Uint64() - 1; n > 0 && len(hashes) < lineageMax; n-- {
-		link, ok := l.links[n]
-		if !ok || link.hash != hashes[len(hashes)-1] {
-			break
-		}
-
-		hashes = append(hashes, link.parent)
+	link, ok := l.links[number]
+	if !ok || link.hash != hash {
+		return common.Hash{}, false
 	}
 
-	return hashes
+	return link.parent, true
+}
+
+// backfill records a sealed header below the newest link. Unlike add, it
+// keeps the links above it: it fills in heights read before a restart, not a
+// newer read of the store's tail.
+func (l *storeLineage) backfill(header *types.Header) {
+	number := header.Number.Uint64()
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.links == nil {
+		l.links = make(map[uint64]storeLink)
+	}
+
+	newest := number
+	for n := range l.links {
+		newest = max(newest, n)
+	}
+
+	if number+uint64(lineageMax) <= newest {
+		return
+	}
+
+	l.links[number] = storeLink{hash: header.Hash(), parent: header.ParentHash}
 }
 
 func generationSealHeader(entries []*pb.Entry) *types.Header {

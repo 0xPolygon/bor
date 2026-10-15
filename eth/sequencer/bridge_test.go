@@ -2,8 +2,8 @@ package sequencer
 
 import (
 	"context"
+	"errors"
 	"math/big"
-	"slices"
 	"testing"
 	"time"
 
@@ -232,7 +232,7 @@ func TestHistoryOnlyDiff(t *testing.T) {
 		{name: "same state at the first rebuilt height", parent: 1, noState: true, want: true},
 		{name: "history slots alone differ", parent: 3, links: []uint64{1, 2}, want: true},
 		{name: "a transaction stored a block hash", blockhashAt: 2, parent: 2, links: []uint64{1}},
-		{name: "the store's earlier heights were never read", parent: 3},
+		{name: "the store's earlier heights cannot be read", parent: 3},
 		{name: "a store link from another fork", parent: 3, links: []uint64{1}, fork: true},
 		{name: "history starts inside the run", prague: 3, parent: 3, links: []uint64{1, 2}, want: true},
 		{name: "run longer than the walk", parent: 3, links: []uint64{1, 2}, walk: 1},
@@ -254,6 +254,7 @@ func TestHistoryOnlyDiff(t *testing.T) {
 
 			p := barePublisher()
 			p.chain = run.chain
+			p.read.setClient(unreadableStore{})
 
 			for _, n := range tc.links {
 				p.lineage.add(run.theirs[n])
@@ -265,7 +266,7 @@ func TestHistoryOnlyDiff(t *testing.T) {
 				p.lineage.add(other)
 			}
 
-			if got := p.historyOnlyDiff(run.theirs[tc.parent], run.ours[tc.parent]); got != tc.want {
+			if got := p.historyOnlyDiff(context.Background(), run.theirs[tc.parent], run.ours[tc.parent]); got != tc.want {
 				t.Fatalf("historyOnlyDiff = %v, want %v", got, tc.want)
 			}
 		})
@@ -281,10 +282,12 @@ func TestRecoveryBridgeFollowsTheRunsHistory(t *testing.T) {
 	cases := []struct {
 		name        string
 		blockhashAt uint64
+		restartAt   uint64 // height whose build starts on a fresh publisher
 		bridged     []bool // at heights 2, 3, 4
 	}{
 		{name: "history slots alone differ", bridged: []bool{true, true, true}},
 		{name: "a transaction stored a block hash at 2", blockhashAt: 2, bridged: []bool{true, false}},
+		{name: "a restart mid-run reads the earlier links back", restartAt: 4, bridged: []bool{true, true, true}},
 	}
 
 	for _, tc := range cases {
@@ -307,6 +310,10 @@ func TestRecoveryBridgeFollowsTheRunsHistory(t *testing.T) {
 				number := uint64(i + 2)
 				parent := run.ours[number-1].Hash()
 				run.chain.canonical[number-1] = parent
+
+				if number == tc.restartAt {
+					fresh = classifierPublisher(t, h, run.chain)
+				}
 
 				w := fresh.AdoptWindow(number, parent)
 				if got := w != nil && w.ParentHash == parent && w.Complete; got != want {
@@ -341,13 +348,17 @@ func TestStoreLineage(t *testing.T) {
 		t.Fatalf("links %v, want heights 3..5", l.links)
 	}
 
-	got := l.hashesBelow(chain[6])
-	if want := []common.Hash{chain[5].Hash(), chain[4].Hash(), chain[3].Hash()}; !slices.Equal(got, want) {
-		t.Fatalf("hashesBelow = %v, want %v", got, want)
+	for n := 3; n <= 5; n++ {
+		if got, ok := l.parentOf(uint64(n), chain[n].Hash()); !ok || got != chain[n-1].Hash() {
+			t.Fatalf("parentOf(%d) = %v, %v; want %v", n, got, ok, chain[n-1].Hash())
+		}
 	}
 
-	// A read lower down replaces the store's tail: the links above it go,
-	// and the walk stops at a link that is not the parent it needs.
+	if _, ok := l.parentOf(5, chain[4].Hash()); ok {
+		t.Fatal("a link must answer only for its own hash")
+	}
+
+	// A read lower down replaces the store's tail: the links above it go.
 	other := types.CopyHeader(chain[4])
 	other.Extra = []byte("fork")
 	l.add(other)
@@ -356,9 +367,69 @@ func TestStoreLineage(t *testing.T) {
 		t.Fatalf("links %v, want heights 3..4", l.links)
 	}
 
-	if got := l.hashesBelow(chain[5]); !slices.Equal(got, []common.Hash{chain[4].Hash()}) {
-		t.Fatalf("walk crossed a fork: %v", got)
+	if _, ok := l.parentOf(4, chain[4].Hash()); ok {
+		t.Fatal("a replaced link must not answer for the old fork")
 	}
+
+	// A backfill fills in below the newest link and keeps the links above
+	// it, but not past lineageMax.
+	l.backfill(chain[2])
+	l.backfill(chain[1])
+
+	if _, ok := l.parentOf(2, chain[2].Hash()); !ok {
+		t.Fatal("a backfilled link must answer")
+	}
+
+	if _, ok := l.parentOf(1, chain[1].Hash()); ok {
+		t.Fatal("a backfill past lineageMax must not be kept")
+	}
+
+	if _, ok := l.parentOf(4, other.Hash()); !ok {
+		t.Fatal("a backfill must keep the links above it")
+	}
+}
+
+// A link the lineage lacks is read back from the store, but only a sealed
+// header with the hash the child names as its parent counts: a read from
+// another fork answers nothing and is not kept.
+func TestStoreParentReadsMissingLinks(t *testing.T) {
+	theirs1 := testHeader(1, common.Hash{0xef})
+	theirs2 := testHeader(2, theirs1.Hash())
+
+	h := startHarness(t)
+	p := newTestPublisher(t, h, nil)
+	publishHeader(t, p, theirs1, 1)
+	publishHeader(t, p, theirs2, 1)
+	waitHead(t, h, p, 5*time.Second)
+
+	fresh := classifierPublisher(t, h, nil)
+
+	other2 := types.CopyHeader(theirs2)
+	other2.Extra = []byte("fork")
+
+	if _, ok := fresh.storeParent(context.Background(), 2, other2.Hash()); ok {
+		t.Fatal("a store header with another hash must not answer")
+	}
+
+	if len(fresh.lineage.links) != 0 {
+		t.Fatalf("a mismatched read must not be kept: %v", fresh.lineage.links)
+	}
+
+	parent, ok := fresh.storeParent(context.Background(), 2, theirs2.Hash())
+	if !ok || parent != theirs1.Hash() {
+		t.Fatalf("storeParent = %v, %v; want %v", parent, ok, theirs1.Hash())
+	}
+
+	if got, ok := fresh.lineage.parentOf(2, theirs2.Hash()); !ok || got != theirs1.Hash() {
+		t.Fatal("a read link must be backfilled")
+	}
+}
+
+// unreadableStore fails every read.
+type unreadableStore struct{ pb.ConsumerServiceClient }
+
+func (unreadableStore) GetBlock(context.Context, *pb.GetBlockRequest, ...grpc.CallOption) (*pb.GetBlockResponse, error) {
+	return nil, errors.New("store unreadable")
 }
 
 func TestRecoveryBridgeNeedsTheStoreParent(t *testing.T) {
