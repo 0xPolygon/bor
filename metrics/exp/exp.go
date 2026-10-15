@@ -135,12 +135,31 @@ func (exp *exp) publishGauge(name string, metric metrics.GaugeSnapshot) {
 	v := exp.getInt(name)
 	v.Set(metric.Value())
 }
+
 func (exp *exp) publishGaugeFloat64(name string, metric metrics.GaugeFloat64Snapshot) {
 	exp.getFloat(name).Set(metric.Value())
 }
 
 func (exp *exp) publishGaugeInfo(name string, metric metrics.GaugeInfoSnapshot) {
 	exp.getInfo(name).Set(metric.Value().String())
+}
+
+func (exp *exp) publishGaugeVec(name string, metric *metrics.GaugeVec) {
+	exp.expvarLock.Lock()
+	defer exp.expvarLock.Unlock()
+
+	v, ok := expvar.Get(name).(*expvar.Map)
+	if !ok {
+		v = new(expvar.Map).Init()
+		expvar.Publish(name, v)
+	}
+	// Replace the label set so evicted peers do not accumulate in expvar.
+	v.Init()
+	for label, value := range metric.Snapshot() {
+		n := new(expvar.Int)
+		n.Set(value)
+		v.Set(label, n)
+	}
 }
 
 func (exp *exp) publishHistogram(name string, metric metrics.Histogram) {
@@ -208,6 +227,8 @@ func (exp *exp) syncToExpvar() {
 			exp.publishGauge(name, i.Snapshot())
 		case *metrics.GaugeFloat64:
 			exp.publishGaugeFloat64(name, i.Snapshot())
+		case *metrics.GaugeVec:
+			exp.publishGaugeVec(name, i)
 		case *metrics.GaugeInfo:
 			exp.publishGaugeInfo(name, i.Snapshot())
 		case metrics.Histogram:
