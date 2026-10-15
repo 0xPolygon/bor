@@ -5651,6 +5651,76 @@ func TestRewindRechecksStaleVerdict(t *testing.T) {
 	}
 }
 
+// A hash-scheme rewind keeps walking back past blocks without state, so a
+// stalled-tail verdict whose target has none is refused when the nearest state
+// lies below the finality floor.
+func TestStalledTailRewindStaysAboveFinality(t *testing.T) {
+	cases := []struct {
+		name      string
+		whitelist uint64
+		wantHead  uint64
+	}{
+		{name: "nearest state below the milestone", whitelist: 3, wantHead: 8},
+		{name: "no milestone", wantHead: 0},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			engine := &unauthorizedForkEngine{Ethash: ethash.NewFaker()}
+
+			config := *params.TestChainConfig
+			config.Bor = &params.BorConfig{RioBlock: big.NewInt(0)}
+			genesis := &Genesis{Config: &config, BaseFee: big.NewInt(params.InitialBaseFee)}
+
+			genDB, common5, _ := GenerateChainWithGenesis(genesis, engine.Ethash, 5, nil)
+			ours, _ := GenerateChain(&config, common5[4], engine.Ethash, genDB, 3, func(_ int, gen *BlockGen) { gen.SetExtra([]byte("rotated-out")) })
+
+			engine.hashes = map[common.Hash]bool{}
+			for _, b := range ours {
+				engine.hashes[b.Hash()] = true
+			}
+
+			cfg := DefaultConfig().WithStateScheme(rawdb.HashScheme)
+			cfg.Checker = &whitelistedValidatorFake{
+				chainValidatorFake: newChainValidatorFake(func(*types.Header, []*types.Header) (bool, error) { return true, nil }),
+				milestone:          tc.whitelist,
+			}
+			cfg.MilestoneFetcher = func(ctx context.Context) (uint64, error) { return 100, nil }
+
+			db := rawdb.NewMemoryDatabase()
+
+			chain, err := NewBlockChain(db, genesis, engine, cfg)
+			if err != nil {
+				t.Fatalf("failed to create blockchain: %v", err)
+			}
+
+			if _, err := chain.InsertChain(append(append([]*types.Block{}, common5...), ours...), false); err != nil {
+				t.Fatalf("insert our fork: %v", err)
+			}
+
+			// Shutdown persists only the most recent state.
+			chain.Stop()
+
+			chain, err = NewBlockChain(db, genesis, engine, cfg)
+			if err != nil {
+				t.Fatalf("failed to reopen blockchain: %v", err)
+			}
+			defer chain.Stop()
+
+			if chain.HasState(common5[4].Root()) || !chain.HasState(ours[len(ours)-1].Root()) {
+				t.Fatal("setup: only the fork tip may keep its state")
+			}
+
+			engine.armed.Store(true)
+			chain.verifyPendingHeaders()
+
+			if head := chain.CurrentBlock().Number.Uint64(); head != tc.wantHead {
+				t.Fatalf("head %d, want %d", head, tc.wantHead)
+			}
+		})
+	}
+}
+
 // headerCountingEngine wraps ethash and records how many headers VerifyHeaders receives.
 type headerCountingEngine struct {
 	*ethash.Ethash

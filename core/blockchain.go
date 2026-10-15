@@ -6607,10 +6607,19 @@ func (bc *BlockChain) rewindOff(rejected *types.Header) {
 	number, hash := rejected.Number.Uint64(), rejected.Hash()
 	target := number - 1
 
-	var dropped uint64
+	var (
+		dropped   uint64
+		stateless bool
+	)
 
 	done, err := bc.rewindIf(target, func() bool {
-		if bc.GetCanonicalHash(number) != hash || target < bc.finalityFloor() {
+		floor := bc.finalityFloor()
+		if bc.GetCanonicalHash(number) != hash || target < floor {
+			return false
+		}
+
+		if !bc.stateAtOrAbove(floor, target) {
+			stateless = true
 			return false
 		}
 
@@ -6622,11 +6631,40 @@ func (bc *BlockChain) rewindOff(rejected *types.Header) {
 	switch {
 	case err != nil:
 		log.Error("Failed to rewind off an invalid header", "number", number, "err", err)
+	case stateless:
+		log.Error("Refused a rewind: no state between the finality floor and the target", "number", number, "hash", hash, "target", target)
 	case !done:
 		log.Info("Skipped a stale rewind: the chain changed since verification", "number", number, "hash", hash)
 	default:
 		blockReorgMeter.Mark(1)
 		blockReorgDropMeter.Mark(int64(dropped))
+	}
+}
+
+// stateAtOrAbove reports whether a rewind to target finds the state it needs
+// at or above floor. rewindHead walks back past blocks without state, so a
+// target above the floor does not by itself keep the new head there: on a
+// hash-scheme node with pruned fork-point state, it would land below finality.
+func (bc *BlockChain) stateAtOrAbove(floor, target uint64) bool {
+	if bc.cfg.Stateless {
+		return true
+	}
+
+	path := bc.triedb.Scheme() == rawdb.PathScheme
+
+	for n := target; ; n-- {
+		header := bc.GetHeaderByNumber(n)
+		if header == nil {
+			return false
+		}
+
+		if bc.HasState(header.Root) || (path && bc.stateRecoverable(header.Root)) {
+			return true
+		}
+
+		if n <= floor {
+			return false
+		}
 	}
 }
 
