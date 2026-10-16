@@ -357,10 +357,15 @@ func (evm *EVM) Call(caller common.Address, addr common.Address, input []byte, g
 	if evm.depth > int(params.CallCreateDepth) {
 		return nil, gas, ErrDepth
 	}
-	syscall := isSystemCall(caller)
+	// EIP-7928 keeps the system address out of the block access list, so
+	// Amsterdam skips the balance check and transfer for system calls. Before
+	// Amsterdam, Bor keeps both: the transfer reads the system account, which
+	// puts its proof in the witness that stateless nodes on earlier releases
+	// need to execute.
+	skipTransfer := isSystemCall(caller) && evm.chainRules.IsAmsterdam
 
 	// Fail if we're trying to transfer more than the available balance.
-	if !syscall && !value.IsZero() && !evm.Context.CanTransfer(evm.StateDB, caller, value) {
+	if !skipTransfer && !value.IsZero() && !evm.Context.CanTransfer(evm.StateDB, caller, value) {
 		return nil, gas, ErrInsufficientBalance
 	}
 	snapshot := evm.StateDB.Snapshot()
@@ -388,10 +393,9 @@ func (evm *EVM) Call(caller common.Address, addr common.Address, input []byte, g
 
 		evm.StateDB.CreateAccount(addr)
 	}
-	// Perform the value transfer only in non-syscall mode.
 	// Calling this is required even for zero-value transfers,
 	// to ensure the state clearing mechanism is applied.
-	if !syscall {
+	if !skipTransfer {
 		evm.Context.Transfer(evm.StateDB, caller, addr, value, &evm.chainRules)
 	}
 
