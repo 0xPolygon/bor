@@ -68,6 +68,10 @@ type sessionState struct {
 	ingressMAC hashMAC
 	rbuf       readBuffer
 	wbuf       writeBuffer
+
+	// maxFrameSize limits the frame size accepted by readFrame. Zero means no limit
+	// beyond the 24-bit size of the frame header.
+	maxFrameSize uint32
 }
 
 // hashMAC holds the state of the RLPx v4 MAC contraption.
@@ -112,6 +116,19 @@ func (c *Conn) SetSnappy(snappy bool) {
 		c.snappyReadBuffer = nil
 		c.snappyWriteBuffer = nil
 	}
+}
+
+// SetMaxFrameSize limits the size of frames accepted by Read. Larger frames are rejected
+// before their content is read. A size of zero removes the limit. This is used to bound
+// memory use before the devp2p Hello message exchange has completed. It must be called
+// after the handshake. Rejecting a frame is terminal: the connection cannot be read from
+// afterwards.
+func (c *Conn) SetMaxFrameSize(size uint32) {
+	if c.session == nil {
+		panic("can't SetMaxFrameSize before handshake")
+	}
+
+	c.session.maxFrameSize = size
 }
 
 // SetReadDeadline sets the deadline for all future read operations.
@@ -186,6 +203,9 @@ func (h *sessionState) readFrame(conn io.Reader) ([]byte, error) {
 	// Decrypt the frame header to get the frame size.
 	h.dec.XORKeyStream(header[:16], header[:16])
 	fsize := readUint24(header[:16])
+	if h.maxFrameSize != 0 && fsize > h.maxFrameSize {
+		return nil, errFrameTooLarge
+	}
 	// Frame size rounded up to 16 byte boundary for padding.
 	rsize := fsize
 	if padding := fsize % 16; padding > 0 {
@@ -393,6 +413,9 @@ var (
 	// errPlainMessageTooLarge is returned if a decompressed message length exceeds
 	// the allowed 24 bits (i.e. length >= 16MB).
 	errPlainMessageTooLarge = errors.New("message length >= 16MB")
+
+	// errFrameTooLarge is returned if a frame exceeds the size set by SetMaxFrameSize.
+	errFrameTooLarge = errors.New("frame size exceeds limit")
 )
 
 // Secrets represents the connection secrets which are negotiated during the handshake.
