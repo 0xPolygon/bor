@@ -6599,17 +6599,23 @@ func (bc *BlockChain) verifyStalledTail(headNumber uint64) {
 
 // rewindOff rewinds to the parent of a header verification rejected, if it
 // still stands once the chain mutex is held: the rejected header still
-// canonical, and its parent still at or above the finality floor. Either can
-// change between the verification pass and the rewind — a valid chain
-// imported meanwhile, a milestone whitelisted — and acting on the stale
+// canonical, and the rewind still landing at or above the finality floor.
+// Either can change between the verification pass and the rewind — a valid
+// chain imported meanwhile, a milestone whitelisted — and acting on the stale
 // verdict would drop blocks it never judged, finalized ones included.
+//
+// Milestone whitelisting does not take the chain mutex, so a milestone can
+// still be whitelisted while the rewind runs. It cannot land above the target:
+// whitelisting needs its end block on our canonical chain, every block there
+// above the target descends from the rejected header, and Heimdall only
+// finalizes blocks its spans authorize.
 func (bc *BlockChain) rewindOff(rejected *types.Header) {
 	number, hash := rejected.Number.Uint64(), rejected.Hash()
 	target := number - 1
 
 	var (
-		dropped   uint64
-		stateless bool
+		dropped    uint64
+		belowFloor bool
 	)
 
 	done, err := bc.rewindIf(target, func() bool {
@@ -6618,8 +6624,8 @@ func (bc *BlockChain) rewindOff(rejected *types.Header) {
 			return false
 		}
 
-		if !bc.stateAtOrAbove(floor, target) {
-			stateless = true
+		if !bc.rewindLandsAtOrAbove(floor, target) {
+			belowFloor = true
 			return false
 		}
 
@@ -6631,8 +6637,8 @@ func (bc *BlockChain) rewindOff(rejected *types.Header) {
 	switch {
 	case err != nil:
 		log.Error("Failed to rewind off an invalid header", "number", number, "err", err)
-	case stateless:
-		log.Error("Refused a rewind: no state between the finality floor and the target", "number", number, "hash", hash, "target", target)
+	case belowFloor:
+		log.Error("Refused a rewind: it would land below the finality floor", "number", number, "hash", hash, "target", target)
 	case !done:
 		log.Info("Skipped a stale rewind: the chain changed since verification", "number", number, "hash", hash)
 	default:
@@ -6641,31 +6647,61 @@ func (bc *BlockChain) rewindOff(rejected *types.Header) {
 	}
 }
 
-// stateAtOrAbove reports whether a rewind to target finds the state it needs
-// at or above floor. rewindHead walks back past blocks without state, so a
-// target above the floor does not by itself keep the new head there: on a
-// hash-scheme node with pruned fork-point state, it would land below finality.
-func (bc *BlockChain) stateAtOrAbove(floor, target uint64) bool {
+// rewindLandsAtOrAbove reports whether a rewind to target lands at or above
+// floor. rewindHead walks back past blocks without state and resets to genesis
+// past its search limit, so a target above the floor does not by itself keep
+// the new head there. This replays its search without its side effects: the
+// limit first on hash scheme, the pivot only after a block without state on
+// path scheme. Every way the search gives up lands on genesis.
+func (bc *BlockChain) rewindLandsAtOrAbove(floor, target uint64) bool {
 	if bc.cfg.Stateless {
 		return true
 	}
 
-	path := bc.triedb.Scheme() == rawdb.PathScheme
+	var (
+		path  = bc.triedb.Scheme() == rawdb.PathScheme
+		pivot = rawdb.ReadLastPivotNumber(bc.db)
+		limit = hashRewindLimit(path, pivot, target)
+	)
 
 	for n := target; ; n-- {
-		header := bc.GetHeaderByNumber(n)
-		if header == nil {
-			return false
+		if n < limit {
+			return floor == 0
 		}
 
-		if bc.HasState(header.Root) || (path && bc.stateRecoverable(header.Root)) {
+		if bc.rewindableStateAt(n, path) {
 			return true
 		}
 
-		if n <= floor {
-			return false
+		if n <= floor || (path && pivot != nil && *pivot >= n) {
+			return floor == 0
 		}
 	}
+}
+
+// hashRewindLimit is the lowest block rewindHashHead searches before it
+// resets to genesis. Path scheme has none.
+func hashRewindLimit(path bool, pivot *uint64, target uint64) uint64 {
+	switch {
+	case path:
+		return 0
+	case pivot != nil:
+		return *pivot
+	case target > params.FullImmutabilityThreshold:
+		return target - params.FullImmutabilityThreshold
+	default:
+		return 0
+	}
+}
+
+// rewindableStateAt reports whether rewindHead would stop at canonical block n.
+func (bc *BlockChain) rewindableStateAt(n uint64, path bool) bool {
+	header := bc.GetHeaderByNumber(n)
+	if header == nil {
+		return false
+	}
+
+	return bc.HasState(header.Root) || (path && bc.stateRecoverable(header.Root))
 }
 
 // stalledTailHeaders returns the trailing headers above the finality floor,

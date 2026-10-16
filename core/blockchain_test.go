@@ -5651,17 +5651,21 @@ func TestRewindRechecksStaleVerdict(t *testing.T) {
 	}
 }
 
-// A hash-scheme rewind keeps walking back past blocks without state, so a
-// stalled-tail verdict whose target has none is refused when the nearest state
-// lies below the finality floor.
+// A hash-scheme rewind keeps walking back past blocks without state, and
+// resets to genesis below its search limit, so a stalled-tail verdict is
+// refused when the rewind would land below the finality floor.
 func TestStalledTailRewindStaysAboveFinality(t *testing.T) {
 	cases := []struct {
 		name      string
 		whitelist uint64
+		pivot     uint64
+		keepState bool
 		wantHead  uint64
 	}{
 		{name: "nearest state below the milestone", whitelist: 3, wantHead: 8},
 		{name: "no milestone", wantHead: 0},
+		{name: "target has state, pivot above it", whitelist: 3, pivot: 7, keepState: true, wantHead: 8},
+		{name: "target has state, pivot below it", whitelist: 3, pivot: 2, keepState: true, wantHead: 5},
 	}
 
 	for _, tc := range cases {
@@ -5698,17 +5702,23 @@ func TestStalledTailRewindStaysAboveFinality(t *testing.T) {
 				t.Fatalf("insert our fork: %v", err)
 			}
 
-			// Shutdown persists only the most recent state.
-			chain.Stop()
+			if !tc.keepState {
+				// Shutdown persists only the most recent state.
+				chain.Stop()
 
-			chain, err = NewBlockChain(db, genesis, engine, cfg)
-			if err != nil {
-				t.Fatalf("failed to reopen blockchain: %v", err)
+				chain, err = NewBlockChain(db, genesis, engine, cfg)
+				if err != nil {
+					t.Fatalf("failed to reopen blockchain: %v", err)
+				}
+
+				if chain.HasState(common5[4].Root()) || !chain.HasState(ours[len(ours)-1].Root()) {
+					t.Fatal("setup: only the fork tip may keep its state")
+				}
 			}
 			defer chain.Stop()
 
-			if chain.HasState(common5[4].Root()) || !chain.HasState(ours[len(ours)-1].Root()) {
-				t.Fatal("setup: only the fork tip may keep its state")
+			if tc.pivot != 0 {
+				rawdb.WriteLastPivotNumber(db, tc.pivot)
 			}
 
 			engine.armed.Store(true)
@@ -5718,6 +5728,65 @@ func TestStalledTailRewindStaysAboveFinality(t *testing.T) {
 				t.Fatalf("head %d, want %d", head, tc.wantHead)
 			}
 		})
+	}
+}
+
+// The precheck replays rewindHead's search, so it must agree with where
+// rewindHead lands for every target, floor and pivot.
+func TestRewindPrecheckMatchesRewindHead(t *testing.T) {
+	for _, scheme := range []string{rawdb.HashScheme, rawdb.PathScheme} {
+		for _, pivot := range []uint64{0, 2, 4, 7} {
+			t.Run(fmt.Sprintf("%s/pivot=%d", scheme, pivot), func(t *testing.T) {
+				genesis := &Genesis{Config: params.TestChainConfig, BaseFee: big.NewInt(params.InitialBaseFee)}
+				_, blocks, _ := GenerateChainWithGenesis(genesis, ethash.NewFaker(), 8, nil)
+
+				db := rawdb.NewMemoryDatabase()
+				cfg := DefaultConfig().WithStateScheme(scheme)
+
+				chain, err := NewBlockChain(db, genesis, ethash.NewFaker(), cfg)
+				if err != nil {
+					t.Fatalf("failed to create blockchain: %v", err)
+				}
+
+				if _, err := chain.InsertChain(blocks, false); err != nil {
+					t.Fatalf("insert: %v", err)
+				}
+
+				chain.Stop()
+
+				chain, err = NewBlockChain(db, genesis, ethash.NewFaker(), cfg)
+				if err != nil {
+					t.Fatalf("failed to reopen blockchain: %v", err)
+				}
+				defer chain.Stop()
+
+				if pivot != 0 {
+					rawdb.WriteLastPivotNumber(db, pivot)
+				}
+
+				for target := uint64(1); target <= 8; target++ {
+					for floor := uint64(0); floor <= target; floor++ {
+						want := floor == 0
+						if scheme == rawdb.HashScheme {
+							landed, _ := chain.rewindHashHead(chain.GetHeaderByNumber(target), common.Hash{})
+							want = landed.Number.Uint64() >= floor
+						}
+
+						got := chain.rewindLandsAtOrAbove(floor, target)
+						if scheme == rawdb.HashScheme && got != want {
+							t.Fatalf("target %d floor %d: precheck %v, rewind lands at or above the floor %v", target, floor, got, want)
+						}
+
+						if scheme == rawdb.PathScheme && got {
+							landed, _ := chain.rewindPathHead(chain.GetHeaderByNumber(target), common.Hash{})
+							if landed.Number.Uint64() < floor {
+								t.Fatalf("target %d floor %d: precheck passed, rewind lands at %d", target, floor, landed.Number.Uint64())
+							}
+						}
+					}
+				}
+			})
+		}
 	}
 }
 
