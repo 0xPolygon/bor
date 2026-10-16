@@ -70,67 +70,71 @@ func TestHampiSkippedReads(t *testing.T) {
 		return st
 	}
 
+	sstoreStack := func() *Stack {
+		st := newstack()
+		st.push(uint256.NewInt(1)) // value
+		st.push(new(uint256.Int))  // slot 0
+		return st
+	}
+	selfdestructStack := func() *Stack {
+		st := newstack()
+		st.push(new(uint256.Int).SetBytes(target.Bytes()))
+		return st
+	}
+
 	tests := []struct {
-		name     string
-		readOnly bool
-		gas      uint64
-		reads    common.Address
-		run      func(*EVM, *Contract) error
+		name       string
+		readOnly   bool
+		gas        uint64
+		reads      common.Address
+		stack      func() *Stack
+		memorySize uint64
+		gasFn      gasFunc
+		// op is the opcode body that rejects the frame before Hampi; nil when
+		// the frame fails on the dynamic gas charge instead.
+		op executionFunc
 	}{
 		{
 			name:     "SSTORE in a static context",
 			readOnly: true,
 			gas:      10_000,
 			reads:    self,
-			run: func(evm *EVM, c *Contract) error {
-				st := newstack()
-				st.push(uint256.NewInt(1)) // value
-				st.push(new(uint256.Int))  // slot 0
-				_, err := gasSStorePIP88(evm, c, st, NewMemory(), 0)
-				return err
-			},
+			stack:    sstoreStack,
+			gasFn:    gasSStorePIP88,
+			op:       opSstore,
 		},
 		{
 			name:     "CALL with value in a static context",
 			readOnly: true,
 			gas:      100_000,
 			reads:    target,
-			run: func(evm *EVM, c *Contract) error {
-				_, err := gasCallEIP7702(evm, c, callStack(1, 0), NewMemory(), 0)
-				return err
-			},
+			stack:    func() *Stack { return callStack(1, 0) },
+			gasFn:    gasCallEIP7702,
+			op:       opCall,
 		},
 		{
-			name:  "CALL out of gas on memory expansion",
-			gas:   10_000,
-			reads: target,
-			run: func(evm *EVM, c *Contract) error {
-				_, err := gasCallEIP7702(evm, c, callStack(0, 1<<20), NewMemory(), 1<<20)
-				return err
-			},
+			name:       "CALL out of gas on memory expansion",
+			gas:        10_000,
+			reads:      target,
+			stack:      func() *Stack { return callStack(0, 1<<20) },
+			memorySize: 1 << 20,
+			gasFn:      gasCallEIP7702,
 		},
 		{
 			name:     "SELFDESTRUCT in a static context",
 			readOnly: true,
 			gas:      100_000,
 			reads:    target,
-			run: func(evm *EVM, c *Contract) error {
-				st := newstack()
-				st.push(new(uint256.Int).SetBytes(target.Bytes()))
-				_, err := gasSelfdestructEIP3529(evm, c, st, NewMemory(), 0)
-				return err
-			},
+			stack:    selfdestructStack,
+			gasFn:    gasSelfdestructEIP3529,
+			op:       opSelfdestruct,
 		},
 		{
 			name:  "SELFDESTRUCT to a cold beneficiary without gas for the access",
 			gas:   1_000,
 			reads: target,
-			run: func(evm *EVM, c *Contract) error {
-				st := newstack()
-				st.push(new(uint256.Int).SetBytes(target.Bytes()))
-				_, err := gasSelfdestructEIP3529(evm, c, st, NewMemory(), 0)
-				return err
-			},
+			stack: selfdestructStack,
+			gasFn: gasSelfdestructEIP3529,
 		},
 	}
 
@@ -150,8 +154,10 @@ func TestHampiSkippedReads(t *testing.T) {
 				evm := NewEVM(BlockContext{BlockNumber: big.NewInt(block)}, sdb, hampiTestChainConfig(big.NewInt(forkBlock)), Config{})
 				evm.readOnly = tt.readOnly
 				contract := NewContract(common.Address{}, self, uint256.NewInt(0), NewGasBudget(tt.gas, 0), nil)
+				stack := tt.stack()
+				mem := NewMemory()
 
-				err := tt.run(evm, contract)
+				cost, err := tt.gasFn(evm, contract, stack, mem, tt.memorySize)
 
 				if hampi {
 					if sdb.reads != 0 {
@@ -165,10 +171,79 @@ func TestHampiSkippedReads(t *testing.T) {
 				if sdb.reads == 0 {
 					t.Fatal("before Hampi the target must still be read, or the witness loses it")
 				}
-				// The frame still fails before Hampi, in the opcode body's
-				// write-protection check or on the gas charge, so the read only
-				// changes what the witness carries.
+				// Before Hampi the gas function lets the frame through, so it has
+				// to fail where it did before: on the dynamic gas charge or in the
+				// opcode body.
+				if err == nil {
+					if tt.op == nil {
+						if cost.ExecutionGas <= contract.Gas.ExecutionGas {
+							t.Fatalf("before Hampi the frame must run out of gas, cost %d with %d left", cost.ExecutionGas, contract.Gas.ExecutionGas)
+						}
+						return
+					}
+					var pc uint64
+					_, err = tt.op(&pc, evm, &ScopeContext{Memory: mem, Stack: stack, Contract: contract})
+				}
+				if err == nil {
+					t.Fatal("before Hampi the frame must still fail")
+				}
 			})
 		}
+	}
+}
+
+// TestAmsterdamSkipsCallVariantReads pins the Amsterdam side of
+// skipsDoomedReads with Hampi unscheduled: Amsterdam's CALLCODE, DELEGATECALL
+// and STATICCALL share the EIP-7702 helper, so an intrinsic-cost failure reads
+// the target before Amsterdam and must not read it from Amsterdam on, or the
+// target would leak into the block access list.
+func TestAmsterdamSkipsCallVariantReads(t *testing.T) {
+	const forkBlock = 100
+	var (
+		self   = common.BytesToAddress([]byte("self"))
+		target = common.BytesToAddress([]byte("target"))
+	)
+	cfg := hampiTestChainConfig(nil)
+	cfg.AmsterdamBlock = big.NewInt(forkBlock)
+
+	// DELEGATECALL's operands: gas, addr, then memory args.
+	stack := func() *Stack {
+		st := newstack()
+		st.push(new(uint256.Int))        // retSize
+		st.push(new(uint256.Int))        // retOffset
+		st.push(uint256.NewInt(1 << 20)) // argsSize
+		st.push(new(uint256.Int))        // argsOffset
+		st.push(new(uint256.Int).SetBytes(target.Bytes()))
+		st.push(uint256.NewInt(1_000_000)) // gas
+		return st
+	}
+
+	for _, block := range []int64{forkBlock - 1, forkBlock, forkBlock + 1} {
+		amsterdam := block >= forkBlock
+		gasFn := gasDelegateCallEIP7702
+		if amsterdam {
+			gasFn = gasDelegateCall8038
+		}
+		t.Run(big.NewInt(block).String(), func(t *testing.T) {
+			inner, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+			inner.CreateAccount(self)
+			sdb := &targetReadsStateDB{StateDB: inner, target: target}
+
+			evm := NewEVM(BlockContext{BlockNumber: big.NewInt(block)}, sdb, cfg, Config{})
+			if evm.chainRules.IsHampi || evm.chainRules.IsAmsterdam != amsterdam {
+				t.Fatalf("unexpected rules: hampi=%v amsterdam=%v", evm.chainRules.IsHampi, evm.chainRules.IsAmsterdam)
+			}
+			contract := NewContract(common.Address{}, self, uint256.NewInt(0), NewGasBudget(10_000, 0), nil)
+
+			if _, err := gasFn(evm, contract, stack(), NewMemory(), 1<<20); err == nil {
+				t.Fatal("the intrinsic memory cost must fail the call")
+			}
+			if amsterdam && sdb.reads != 0 {
+				t.Fatalf("from Amsterdam the target must not be read, got %d reads", sdb.reads)
+			}
+			if !amsterdam && sdb.reads == 0 {
+				t.Fatal("before Amsterdam the target must still be read, or the witness loses it")
+			}
+		})
 	}
 }

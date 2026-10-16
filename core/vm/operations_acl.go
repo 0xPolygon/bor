@@ -534,8 +534,10 @@ func makeCallVariantGasCallEIP7702(intrinsicFunc intrinsicGasFunc, coldCost uint
 		// Before Hampi the target's code (and so its account) is read here, ahead
 		// of the intrinsic checks that can now fail first, so the witness keeps it
 		// for stateless nodes on earlier releases.
-		if !evm.skipsDoomedReads() {
-			evm.StateDB.GetCode(addr)
+		var code []byte
+		codeLoaded := !evm.skipsDoomedReads()
+		if codeLoaded {
+			code = evm.StateDB.GetCode(addr)
 		}
 
 		// Perform the intrinsic cost calculation including:
@@ -554,8 +556,11 @@ func makeCallVariantGasCallEIP7702(intrinsicFunc intrinsicGasFunc, coldCost uint
 			return GasCosts{}, ErrOutOfGas
 		}
 
+		if !codeLoaded {
+			code = evm.StateDB.GetCode(addr)
+		}
 		// Check if code is a delegation and if so, charge for resolution.
-		if target, ok := types.ParseDelegation(evm.StateDB.GetCode(addr)); ok {
+		if target, ok := types.ParseDelegation(code); ok {
 			if evm.StateDB.AddressInAccessList(target) {
 				eip7702Cost = params.WarmStorageReadCostEIP2929
 			} else {
