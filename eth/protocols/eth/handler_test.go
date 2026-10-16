@@ -811,3 +811,62 @@ func testGetPooledTransaction(t *testing.T, blobTx bool) {
 		t.Errorf("pooled transaction mismatch: %v", err)
 	}
 }
+
+// countingTxPool is a TxPool that counts GetRLP lookups and returns enc for every hash.
+type countingTxPool struct {
+	TxPool
+	lookups int
+	enc     []byte
+}
+
+func (p *countingTxPool) GetRLP(common.Hash) []byte {
+	p.lookups++
+
+	return p.enc
+}
+
+type countingPoolBackend struct {
+	Backend
+	pool *countingTxPool
+}
+
+func (b *countingPoolBackend) TxPool() TxPool { return b.pool }
+
+// Tests that the number of txpool lookups per GetPooledTransactions request is capped.
+func TestAnswerGetPooledTransactionsLookupCap(t *testing.T) {
+	t.Parallel()
+
+	backend := &countingPoolBackend{pool: new(countingTxPool)}
+	query := make(GetPooledTransactionsRequest, 2*maxPooledTxsServe)
+	for i := range query {
+		query[i] = common.BigToHash(big.NewInt(int64(i)))
+	}
+
+	hashes, txs := answerGetPooledTransactions(backend, query)
+	if len(hashes) != 0 || len(txs) != 0 {
+		t.Fatalf("unexpected response: %d hashes, %d txs", len(hashes), len(txs))
+	}
+	if backend.pool.lookups != maxPooledTxsServe {
+		t.Fatalf("lookups mismatch: have %d, want %d", backend.pool.lookups, maxPooledTxsServe)
+	}
+}
+
+// Tests that GetPooledTransactions stops once the response reaches the soft size limit.
+func TestAnswerGetPooledTransactionsSizeLimit(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		size int
+		want int
+	}{
+		{size: softResponseLimit, want: 1},     // the limit is reached by the first transaction
+		{size: softResponseLimit - 1, want: 2}, // one byte short, a second transaction fits
+	} {
+		backend := &countingPoolBackend{pool: &countingTxPool{enc: make([]byte, test.size)}}
+		query := make(GetPooledTransactionsRequest, 3)
+
+		if hashes, txs := answerGetPooledTransactions(backend, query); len(hashes) != test.want || len(txs) != test.want {
+			t.Errorf("size %d: have %d transactions, want %d", test.size, len(txs), test.want)
+		}
+	}
+}
