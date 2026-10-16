@@ -19,6 +19,7 @@ package eth
 import (
 	"bytes"
 	"crypto/sha256"
+	"errors"
 	"math"
 	"math/big"
 	"math/rand"
@@ -809,5 +810,43 @@ func testGetPooledTransaction(t *testing.T, blobTx bool) {
 		PooledTransactionsResponse: []*types.Transaction{tx},
 	}); err != nil {
 		t.Errorf("pooled transaction mismatch: %v", err)
+	}
+}
+
+// Tests that NewBlockHashes messages above the entry cap are rejected.
+func TestHandleNewBlockHashesLimit(t *testing.T) {
+	t.Parallel()
+
+	backend := &packetCapturingBackend{testBackend: newTestBackend(0)}
+	defer backend.close()
+
+	peer := NewPeer(ETH68, p2p.NewPeer(enode.ID{}, "test", nil), nil, backend.txpool, backend.chain.Config())
+	defer peer.Close()
+
+	encode := func(n int) decoder {
+		msg, err := rlp.EncodeToBytes(make(NewBlockHashesPacket, n))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return decoder{msg: msg}
+	}
+
+	for _, n := range []int{1, maxBlockAnnounces} {
+		backend.packet = nil
+		if err := handleNewBlockhashes(backend, encode(n), peer); err != nil {
+			t.Fatalf("%d entries: unexpected error: %v", n, err)
+		}
+		if backend.packet == nil {
+			t.Fatalf("%d entries: announcement not delivered to backend", n)
+		}
+	}
+	backend.packet = nil
+	err := handleNewBlockhashes(backend, encode(maxBlockAnnounces+1), peer)
+	if !errors.Is(err, errMsgTooLarge) {
+		t.Fatalf("oversized announcement: have error %v, want %v", err, errMsgTooLarge)
+	}
+	if backend.packet != nil {
+		t.Fatal("oversized announcement delivered to backend")
 	}
 }

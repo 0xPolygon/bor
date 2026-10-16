@@ -543,6 +543,9 @@ func handleNewBlockhashes(backend Backend, msg Decoder, peer *Peer) error {
 	if err := msg.Decode(ann); err != nil {
 		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
 	}
+	if len(*ann) > maxBlockAnnounces {
+		return fmt.Errorf("%w: %d > %d", errMsgTooLarge, len(*ann), maxBlockAnnounces)
+	}
 	// Mark the hashes as present at the remote node
 	for _, block := range *ann {
 		peer.markBlock(block.Hash)
