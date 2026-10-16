@@ -26,9 +26,21 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 )
 
+// skipsDoomedReads reports whether gas functions may return before state
+// reads whose result can no longer change the outcome, because the frame fails
+// anyway (write protection, or out of gas ahead of the read). Skipping them
+// shrinks the witness, which stateless nodes on earlier releases cannot
+// execute, so on Bor it waits for Hampi. Amsterdam needs it regardless:
+// EIP-7928 keeps those reads out of the block access list.
+func (evm *EVM) skipsDoomedReads() bool {
+	return evm.chainRules.IsHampi || evm.chainRules.IsAmsterdam
+}
+
 func makeGasSStoreFunc(clearingRefund uint64) gasFunc {
 	return func(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memorySize uint64) (GasCosts, error) {
-		if evm.readOnly {
+		// Before Hampi the slot is read first and opSstore rejects the write, so
+		// the witness keeps the slot for stateless nodes on earlier releases.
+		if evm.skipsDoomedReads() && evm.readOnly {
 			return GasCosts{}, ErrWriteProtection
 		}
 		// If we fail the minimum gas availability invariant, fail (0)
@@ -99,7 +111,9 @@ func makeGasSStoreFunc(clearingRefund uint64) gasFunc {
 
 func makeGasSStoreFuncPIP88(clearingRefund uint64) gasFunc {
 	return func(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memorySize uint64) (GasCosts, error) {
-		if evm.readOnly {
+		// Before Hampi the slot is read first and opSstore rejects the write, so
+		// the witness keeps the slot for stateless nodes on earlier releases.
+		if evm.skipsDoomedReads() && evm.readOnly {
 			return GasCosts{}, ErrWriteProtection
 		}
 		// If we fail the minimum gas availability invariant, fail (0)
@@ -418,7 +432,10 @@ func makeSelfdestructGasFn(refundsEnabled bool) gasFunc {
 			gas     uint64
 			address = common.Address(stack.peek().Bytes20())
 		)
-		if evm.readOnly {
+		// Before Hampi neither early return exists: the beneficiary is read below
+		// and the frame then fails in opSelfdestruct or on the charge, so the
+		// witness keeps it for stateless nodes on earlier releases.
+		if evm.skipsDoomedReads() && evm.readOnly {
 			return GasCosts{}, ErrWriteProtection
 		}
 
@@ -430,7 +447,7 @@ func makeSelfdestructGasFn(refundsEnabled bool) gasFunc {
 
 			// Terminate the gas measurement if the leftover gas is not sufficient,
 			// it can effectively prevent accessing the states in the following steps
-			if contract.Gas.ExecutionGas < gas {
+			if evm.skipsDoomedReads() && contract.Gas.ExecutionGas < gas {
 				return GasCosts{}, ErrOutOfGas
 			}
 		}
@@ -468,7 +485,7 @@ func gasCallEIP7702(evm *EVM, contract *Contract, stack *Stack, mem *Memory, mem
 	// to determine if it is resolving a delegation. This could incorrectly record
 	// the target in the block access list (BAL) if the call later fails.
 	transfersValue := !stack.back(2).IsZero()
-	if evm.readOnly && transfersValue {
+	if evm.skipsDoomedReads() && evm.readOnly && transfersValue {
 		return GasCosts{}, ErrWriteProtection
 	}
 	return innerGasCallEIP7702(evm, contract, stack, mem, memorySize)
@@ -514,6 +531,14 @@ func makeCallVariantGasCallEIP7702(intrinsicFunc intrinsicGasFunc, coldCost uint
 				return GasCosts{}, ErrOutOfGas
 			}
 		}
+		// Before Hampi the target's code (and so its account) is read here, ahead
+		// of the intrinsic checks that can now fail first, so the witness keeps it
+		// for stateless nodes on earlier releases.
+		var code []byte
+		codeLoaded := !evm.skipsDoomedReads()
+		if codeLoaded {
+			code = evm.StateDB.GetCode(addr)
+		}
 
 		// Perform the intrinsic cost calculation including:
 		//
@@ -531,8 +556,11 @@ func makeCallVariantGasCallEIP7702(intrinsicFunc intrinsicGasFunc, coldCost uint
 			return GasCosts{}, ErrOutOfGas
 		}
 
+		if !codeLoaded {
+			code = evm.StateDB.GetCode(addr)
+		}
 		// Check if code is a delegation and if so, charge for resolution.
-		if target, ok := types.ParseDelegation(evm.StateDB.GetCode(addr)); ok {
+		if target, ok := types.ParseDelegation(code); ok {
 			if evm.StateDB.AddressInAccessList(target) {
 				eip7702Cost = params.WarmStorageReadCostEIP2929
 			} else {
