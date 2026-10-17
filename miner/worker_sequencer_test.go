@@ -120,6 +120,7 @@ func TestMutedBuildKeepsSequencerSilent(t *testing.T) {
 
 	w, b, rec := newSequencerTestWorker(t)
 	w.running.Store(true) // the hooks gate on IsRunning; no loops are started
+	w.authorizedSigner = func(*types.Header) bool { return false }
 
 	parent := b.chain.CurrentBlock()
 	number := new(big.Int).Add(parent.Number, big.NewInt(1))
@@ -156,6 +157,46 @@ func TestMutedBuildKeepsSequencerSilent(t *testing.T) {
 
 	if opens != 0 || adopted != 0 {
 		t.Fatalf("muted build touched the store: opens=%d adopted=%d", opens, adopted)
+	}
+}
+
+func TestMutedBuildAuthorizedMidBuildRebuilds(t *testing.T) {
+	cases := []struct {
+		name       string
+		authorized bool
+		want       bool
+	}{
+		{name: "signer still unauthorized", authorized: false, want: true},
+		{name: "signer authorized since build start", authorized: true, want: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w, b, _ := newSequencerTestWorker(t)
+			w.running.Store(true)
+			w.authorizedSigner = func(*types.Header) bool { return tc.authorized }
+
+			parent := b.chain.CurrentBlock()
+			header := &types.Header{
+				Number:     new(big.Int).Add(parent.Number, big.NewInt(1)),
+				ParentHash: parent.Hash(),
+				Time:       parent.Time + 1,
+				GasLimit:   parent.GasLimit,
+				BaseFee:    big.NewInt(1),
+			}
+
+			if got := w.sealBarrier(&environment{header: header, sequencerMuted: true}); got != tc.want {
+				t.Fatalf("sealBarrier = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSignerAuthorizedOutsideBor(t *testing.T) {
+	w, b, _ := newSequencerTestWorker(t)
+
+	if !w.signerAuthorized(b.chain.CurrentBlock()) {
+		t.Fatal("a non-Bor engine never restricts who seals")
 	}
 }
 
