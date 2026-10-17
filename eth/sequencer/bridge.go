@@ -234,9 +234,10 @@ func historySlot(number uint64) common.Hash {
 // window, so no two heights it covers share a slot. Var for tests.
 var lineageMax = 1024
 
-// storeLineage keeps the hash and parent hash of each sealed store header
-// the bridge has read, so the history check can recover the store chain's
-// hashes below a parent without reading every height again.
+// storeLineage keeps the hash and parent hash of sealed headers by height:
+// the store headers the bridge has read, so the history check can recover
+// the store chain's hashes below a parent without reading every height
+// again, and the blocks we sealed ourselves.
 type storeLineage struct {
 	mu    sync.Mutex
 	links map[uint64]storeLink
@@ -277,6 +278,16 @@ func (l *storeLineage) parentOf(number uint64, hash common.Hash) (common.Hash, b
 	}
 
 	return link.parent, true
+}
+
+// at returns the link recorded at number.
+func (l *storeLineage) at(number uint64) (storeLink, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	link, ok := l.links[number]
+
+	return link, ok
 }
 
 // backfill records a sealed header below the newest link. Unlike add, it

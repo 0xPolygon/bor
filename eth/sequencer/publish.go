@@ -8,6 +8,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
@@ -123,6 +124,8 @@ func (p *Publisher) SealBlock(block *types.Block) {
 	if n > p.sealedTip {
 		p.sealedTip = n
 	}
+
+	p.ownRun.add(header)
 
 	recovered := mode.kind == modeRecover && mode.height == n
 	if recovered || mode.kind == modeSealedWait {
@@ -322,4 +325,25 @@ func baseFeeBytes(f *big.Int) []byte {
 	}
 
 	return f.Bytes()
+}
+
+// sealedRunLeftLocked reports whether a build under our sealed tip sits on a
+// different parent than the block we sealed at its height, and if so drops
+// the tip to the build's parent. A producer cut off from the chain keeps
+// sealing its own run; once the chain rewinds that run away (deleting it
+// locally, too) and we are elected again, those heights are another sealed
+// run in the store, recovered like any other. A build on the parent we
+// sealed on is our own seal racing the chain-head update, and stays muted.
+func (p *Publisher) sealedRunLeftLocked(number uint64, parent common.Hash) bool {
+	ours, ok := p.ownRun.at(number)
+	if !ok || ours.parent == parent {
+		return false
+	}
+
+	log.Info("Sequencer sealed run left the chain; rebuilding it from the store",
+		"number", number, "sealedTip", p.sealedTip)
+
+	p.sealedTip = number - 1
+
+	return true
 }

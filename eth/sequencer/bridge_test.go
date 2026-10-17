@@ -766,3 +766,74 @@ func TestBarrierPassesRecoveryBuild(t *testing.T) {
 		t.Fatal("a recovery build must not arm a rebuild")
 	}
 }
+
+// A producer cut off from the chain keeps sealing its own run into the store.
+// Once the chain rewinds that run away and imports another producer's rebuild
+// of it, a build that elects us again is not on our own sealed ground: the
+// height recovers from the store like any dead producer's run. Our sealed tip
+// still mutes a build it sits under, or one whose header the chain has not
+// imported yet — the race with our own chain-head update.
+func TestReelectedProducerRecoversItsOwnRun(t *testing.T) {
+	cases := []struct {
+		name      string
+		tipKnown  bool
+		onOurRun  bool
+		wantBuild bool
+	}{
+		{name: "our run left the chain", tipKnown: true, wantBuild: true},
+		{name: "our run was rewound away", wantBuild: true},
+		{name: "the build races our own seal", onOurRun: true, wantBuild: false},
+		{name: "the build extends our run", tipKnown: true, onOurRun: true, wantBuild: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := startHarness(t)
+			fc := &fakeChain{canonical: map[uint64]common.Hash{}, known: map[common.Hash]*types.Header{}}
+			p := newTestPublisher(t, h, fc)
+
+			mine1 := testHeader(1, common.Hash{0xef})
+			mine1.Extra = []byte("producer-a")
+			publishHeader(t, p, mine1, 2)
+
+			mine2 := testHeader(2, mine1.Hash())
+			publishHeader(t, p, mine2, 3)
+			waitHead(t, h, p, 5*time.Second)
+
+			theirs1 := types.CopyHeader(mine1)
+			theirs1.Extra = []byte("producer-b")
+			theirs1.Difficulty = big.NewInt(3)
+
+			parent := theirs1
+			if tc.onOurRun {
+				parent = mine1
+			}
+
+			fc.canonical[1] = parent.Hash()
+			fc.known[mine1.Hash()] = mine1
+			fc.known[theirs1.Hash()] = theirs1
+
+			if tc.tipKnown {
+				fc.known[mine2.Hash()] = mine2
+			}
+
+			w := p.AdoptWindow(2, parent.Hash())
+
+			if !tc.wantBuild {
+				if w != nil || modeKind(p) == modeRecover {
+					t.Fatalf("a build under our own sealed tip must stay muted: %+v", w)
+				}
+
+				return
+			}
+
+			if w == nil || modeKind(p) != modeRecover {
+				t.Fatal("a re-elected producer must recover its run from the store")
+			}
+
+			if w.Number != 2 || w.ParentHash != theirs1.Hash() || len(w.Txs) != 3 || !w.Complete {
+				t.Fatalf("recovered window must carry our sealed content on the new parent: %+v", w)
+			}
+		})
+	}
+}
