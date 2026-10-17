@@ -3,6 +3,7 @@ package sequencer
 import (
 	"context"
 	"errors"
+	"math"
 	"sync"
 	"time"
 
@@ -54,6 +55,10 @@ type reader struct {
 	// breaker keeps the producer's critical path off a read path that has
 	// gone quiet. Every read below goes through it.
 	breaker readBreaker
+
+	// chainHead is our chain's head height, for the breaker's frozen-tail
+	// rule; nil when the reader has no chain.
+	chainHead func() (uint64, bool)
 }
 
 func newReader(cons pb.ConsumerServiceClient, seed commitment.Head, onRead func()) *reader {
@@ -259,7 +264,7 @@ func (r *reader) walk(ctx context.Context, first *pb.RangeRequest, absorb func(*
 		if resp.GetLive() {
 			info.explained = f.ok
 			if info.s != r.seed {
-				r.breaker.observeLiveTail(resp.GetNext())
+				r.observeLiveTail(resp.GetNext(), info)
 			}
 
 			return info, nil
@@ -270,6 +275,24 @@ func (r *reader) walk(ctx context.Context, first *pb.RangeRequest, absorb func(*
 			Limit: walkLimit,
 		}
 	}
+}
+
+// observeLiveTail feeds the breaker a walk's live tail. An unknown chain head
+// is taken as above every seal, so the frozen-tail rule applies in full.
+func (r *reader) observeLiveTail(tail []byte, info tailInfo) {
+	var seal uint64
+	if info.haveSeal {
+		seal = info.lastSealHeight
+	}
+
+	head := uint64(math.MaxUint64)
+	if r.chainHead != nil {
+		if h, ok := r.chainHead(); ok {
+			head = h
+		}
+	}
+
+	r.breaker.observeLiveTail(tail, seal, head)
 }
 
 // foldPage runs one page's entries through the absorb hook and the folder,

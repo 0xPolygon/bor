@@ -220,6 +220,16 @@ func NewPublisher(publisherEndpoint, consumerEndpoint string, chainID uint64, po
 	p.lastContact.Store(time.Now().UnixNano())
 
 	p.read = newReader(pb.NewConsumerServiceClient(consConn), p.seed, p.markReachable)
+	if chain != nil {
+		p.read.chainHead = func() (uint64, bool) {
+			head := chain.CurrentBlock()
+			if head == nil {
+				return 0, false
+			}
+
+			return head.Number.Uint64(), true
+		}
+	}
 
 	publishStateGauge.Update(gaugeDegraded) // until the startup reconcile anchors
 

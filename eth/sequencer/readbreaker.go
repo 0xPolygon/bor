@@ -87,9 +87,11 @@ type readBreaker struct {
 	// stale marks the breaker open because the tail answers but does not
 	// advance, as against open on silence. Only an advancing tail clears it;
 	// a bare successful round trip does not, because a frozen tail answers.
-	stale     bool
-	freeze    int
-	lastTail  []byte
+	stale    bool
+	freeze   int
+	lastTail []byte
+	// lastSeal is the highest sealed height read up to lastTail, 0 if none.
+	lastSeal  uint64
 	nextProbe time.Time
 	// recoveringUntil suspends the frozen-tail rule; see recovered.
 	recoveringUntil time.Time
@@ -181,12 +183,19 @@ func (b *readBreaker) silent() {
 		"failures", b.failures, "probeEvery", readProbeInterval)
 }
 
-// observeLiveTail feeds the breaker the head a read reached at the live tail.
+// observeLiveTail feeds the breaker the head a read reached at the live tail,
+// with the highest sealed height the read saw (0 if none) and our chain head.
 // A head that does not move across staleReadsToTrip live reads is a store
 // answering with a frozen window -- treated exactly like a silent one, so a
 // broker-partitioned gateway that keeps a green light cannot wedge block
 // production. Advancement clears the hold; a bare answer cannot.
-func (b *readBreaker) observeLiveTail(tail []byte) {
+//
+// A frozen tail sealed above our chain is not that wedge: our own sealed
+// blocks are on the chain, so it is a dead producer's run, and the next
+// producer recovers it. Counting it would close the read path on a node that
+// idles before its takeover, and its first build would rebuild the run from
+// the pool.
+func (b *readBreaker) observeLiveTail(tail []byte, seal, head uint64) {
 	if len(tail) == 0 {
 		return
 	}
@@ -196,12 +205,15 @@ func (b *readBreaker) observeLiveTail(tail []byte) {
 
 	if !bytes.Equal(tail, b.lastTail) {
 		b.lastTail = append(b.lastTail[:0], tail...)
+		if seal != 0 {
+			b.lastSeal = seal
+		}
 		b.unfreezeLocked()
 
 		return
 	}
 
-	if time.Now().Before(b.recoveringUntil) {
+	if time.Now().Before(b.recoveringUntil) || b.lastSeal > head {
 		b.freeze = 0
 
 		return

@@ -20,7 +20,7 @@ func TestReadBreakerTripsOnFrozenTail(t *testing.T) {
 	var b readBreaker
 	frozen := []byte{0xaa, 0xbb, 0xcc}
 	for i := 0; i <= staleReadsToTrip; i++ {
-		b.observeLiveTail(frozen)
+		b.observeLiveTail(frozen, 0, 0)
 	}
 	if !b.isOpen() {
 		t.Fatalf("a tail frozen across %d live reads did not open the breaker", staleReadsToTrip)
@@ -31,7 +31,7 @@ func TestReadBreakerTripsOnFrozenTail(t *testing.T) {
 		t.Fatal("a successful-but-frozen read cleared the staleness hold")
 	}
 
-	b.observeLiveTail([]byte{0x11, 0x22, 0x33})
+	b.observeLiveTail([]byte{0x11, 0x22, 0x33}, 0, 0)
 	if b.isOpen() {
 		t.Fatal("an advancing tail did not clear the staleness hold")
 	}
@@ -41,7 +41,7 @@ func TestReadBreakerTripsOnFrozenTail(t *testing.T) {
 func TestReadBreakerIgnoresAdvancingTail(t *testing.T) {
 	var b readBreaker
 	for i := 0; i < staleReadsToTrip*3; i++ {
-		b.observeLiveTail([]byte{byte(i), 0x01})
+		b.observeLiveTail([]byte{byte(i), 0x01}, 0, 0)
 	}
 	if b.isOpen() {
 		t.Fatal("an advancing tail must never open the staleness breaker")
@@ -56,7 +56,7 @@ func TestReadBreakerRecoveryKeepsFrozenTailClosed(t *testing.T) {
 
 	b.recovered()
 	for i := 0; i < staleReadsToTrip*3; i++ {
-		b.observeLiveTail(frozen)
+		b.observeLiveTail(frozen, 0, 0)
 	}
 	if b.isOpen() {
 		t.Fatal("recovery progress must keep a frozen tail from opening the breaker")
@@ -67,10 +67,108 @@ func TestReadBreakerRecoveryKeepsFrozenTailClosed(t *testing.T) {
 	b.mu.Unlock()
 
 	for i := 0; i < staleReadsToTrip; i++ {
-		b.observeLiveTail(frozen)
+		b.observeLiveTail(frozen, 0, 0)
 	}
 	if !b.isOpen() {
 		t.Fatal("a frozen tail after recovery has ended must still open the breaker")
+	}
+}
+
+// A tail sealed above our chain is a dead producer's run waiting to be
+// recovered, frozen by definition: a node idling before its takeover must not
+// let it trip the rule, or its first build finds the read path closed and
+// rebuilds the run from the pool. A frozen tail at or below our chain is the
+// wedge the rule exists for.
+func TestReadBreakerFrozenRunAboveChain(t *testing.T) {
+	cases := []struct {
+		name     string
+		seal     uint64
+		head     uint64
+		wantOpen bool
+	}{
+		{name: "sealed above our chain", seal: 12, head: 10, wantOpen: false},
+		{name: "sealed at our chain", seal: 10, head: 10, wantOpen: true},
+		{name: "sealed below our chain", seal: 8, head: 10, wantOpen: true},
+		{name: "seal height unknown", seal: 0, head: 10, wantOpen: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var b readBreaker
+			frozen := []byte{0xaa, 0xbb, 0xcc}
+
+			b.observeLiveTail(frozen, tc.seal, tc.head)
+			for i := 0; i < staleReadsToTrip*3; i++ {
+				// Idle reads from a caught-up position walk no entries, so
+				// they carry no seal height of their own.
+				b.observeLiveTail(frozen, 0, tc.head)
+			}
+
+			if b.isOpen() != tc.wantOpen {
+				t.Fatalf("breaker open = %v, want %v", b.isOpen(), tc.wantOpen)
+			}
+		})
+	}
+
+	var b readBreaker
+	frozen := []byte{0xaa, 0xbb, 0xcc}
+
+	b.observeLiveTail(frozen, 12, 10)
+	for i := 0; i < staleReadsToTrip; i++ {
+		b.observeLiveTail(frozen, 0, 12)
+	}
+
+	if !b.isOpen() {
+		t.Fatal("once our chain reaches the frozen run, the tail must trip the rule again")
+	}
+}
+
+// The reader feeds the breaker the seal height its walk reached and our chain
+// head, so a node behind a dead producer's sealed run keeps reading it.
+func TestReaderKeepsReadingARunAboveChain(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		head     uint64
+		wantOpen bool
+	}{
+		{name: "chain below the run", head: 0, wantOpen: false},
+		{name: "chain at the run", head: 2, wantOpen: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := startHarness(t)
+			p := newTestPublisher(t, h, nil)
+
+			sealed := publishBlock(t, p, 1, common.Hash{0xef}, 1)
+			publishBlock(t, p, 2, sealHash(t, sealed), 1)
+			waitHead(t, h, p, 5*time.Second)
+
+			fc := &fakeChain{current: testHeader(tc.head, common.Hash{})}
+			fresh := newTestPublisher(t, h, fc)
+
+			info, err := fresh.read.walk(t.Context(), &pb.RangeRequest{}, nil)
+			if err != nil {
+				t.Fatalf("walk: %v", err)
+			}
+
+			// Idle reads from the tail walk no entries, so they carry no seal
+			// height of their own. The publisher's reconcile reads feed the
+			// breaker too, so a tripped breaker can refuse one before the
+			// loop ends.
+			for i := 0; i < staleReadsToTrip*3; i++ {
+				idle := &pb.RangeRequest{After: &pb.RangeRequest_Head{Head: info.s[:]}}
+				if _, err := fresh.read.walk(t.Context(), idle, nil); err != nil {
+					if !errors.Is(err, errReadPathDown) {
+						t.Fatalf("walk: %v", err)
+					}
+
+					break
+				}
+			}
+
+			if fresh.read.breaker.isOpen() != tc.wantOpen {
+				t.Fatalf("breaker open = %v, want %v", fresh.read.breaker.isOpen(), tc.wantOpen)
+			}
+		})
 	}
 }
 
@@ -125,7 +223,7 @@ func TestStaleHoldIsBounded(t *testing.T) {
 	var b readBreaker
 	frozen := []byte{0xaa, 0xbb, 0xcc}
 	for i := 0; i <= staleReadsToTrip; i++ {
-		b.observeLiveTail(frozen)
+		b.observeLiveTail(frozen, 0, 0)
 	}
 
 	if allowed, _ := b.allow(); allowed {
@@ -145,7 +243,7 @@ func TestStaleHoldIsBounded(t *testing.T) {
 	}
 
 	for i := 0; i <= staleReadsToTrip; i++ {
-		b.observeLiveTail(frozen)
+		b.observeLiveTail(frozen, 0, 0)
 	}
 
 	if !b.isOpen() {
