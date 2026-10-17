@@ -1,6 +1,8 @@
 package bor
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -8,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/bor/clerk"
 	"github.com/ethereum/go-ethereum/consensus/bor/valset"
 )
@@ -97,4 +100,32 @@ func TestInvalidStateReceivedError(t *testing.T) {
 	require.Contains(t, msg, "100")
 	require.Contains(t, msg, "41")
 	require.Contains(t, msg, "invalid event")
+}
+
+// Callers outside this package tell a provably unauthorized header apart
+// from an inconclusive verification failure through the consensus sentinel.
+func TestUnauthorizedErrorsMatchSentinel(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "signer", err: &UnauthorizedSignerError{Number: 5, Signer: common.Address{0x1}.Bytes()}, want: true},
+		{name: "proposer", err: &UnauthorizedProposerError{Number: 5, Proposer: common.Address{0x1}.Bytes()}, want: true},
+		{name: "wrapped signer", err: fmt.Errorf("verify: %w", &UnauthorizedSignerError{Number: 5}), want: true},
+		{name: "wrong difficulty", err: &WrongDifficultyError{Number: 5}, want: false},
+		{name: "unknown ancestor", err: consensus.ErrUnknownAncestor, want: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, errors.Is(tc.err, consensus.ErrUnauthorizedSigner))
+		})
+	}
+
+	var signerErr *UnauthorizedSignerError
+	require.True(t, errors.As(fmt.Errorf("x: %w", &UnauthorizedSignerError{Number: 7}), &signerErr), "errors.As must keep working")
+	require.Equal(t, uint64(7), signerErr.Number)
 }

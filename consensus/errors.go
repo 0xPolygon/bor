@@ -44,4 +44,10 @@ var (
 
 	// ErrUnexpectedRequests is returned if a pre-Shanghai block has requests.
 	ErrUnexpectedRequests = errors.New("unexpected requests")
+
+	// ErrUnauthorizedSigner is matched, via errors.Is, by an engine's error for
+	// a header sealed by a signer the validator set does not authorize at that
+	// height. Unlike a missing ancestor or an unreachable validator source, it
+	// proves the header can never be canonical.
+	ErrUnauthorizedSigner = errors.New("unauthorized signer")
 )

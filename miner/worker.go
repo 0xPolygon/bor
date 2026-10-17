@@ -484,6 +484,9 @@ type worker struct {
 	eth         Backend
 	chain       *core.BlockChain
 
+	// authorizedSigner overrides the engine's signer check (tests only).
+	authorizedSigner func(header *types.Header) bool
+
 	// sequencer, when set, receives block-production progress (open, per-tx,
 	// seal) for the sequence store. Set before the worker starts; nil when
 	// sequencing is disabled. All its methods are non-blocking.

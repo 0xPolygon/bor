@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/bor/clerk"
 	"github.com/ethereum/go-ethereum/consensus/bor/valset"
 )
@@ -66,6 +67,12 @@ func (e *UnauthorizedProposerError) Error() string {
 	)
 }
 
+// Is makes the error match consensus.ErrUnauthorizedSigner for callers that
+// cannot import this package.
+func (e *UnauthorizedProposerError) Is(target error) bool {
+	return target == consensus.ErrUnauthorizedSigner
+}
+
 // UnauthorizedSignerError is returned if a header is [being] signed by an unauthorized entity.
 type UnauthorizedSignerError struct {
 	Number         uint64
@@ -80,6 +87,12 @@ func (e *UnauthorizedSignerError) Error() string {
 		e.Number,
 		e.AllowedSigners,
 	)
+}
+
+// Is makes the error match consensus.ErrUnauthorizedSigner for callers that
+// cannot import this package.
+func (e *UnauthorizedSignerError) Is(target error) bool {
+	return target == consensus.ErrUnauthorizedSigner
 }
 
 // WrongDifficultyError is returned if the difficulty of a block doesn't match the

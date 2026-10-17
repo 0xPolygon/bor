@@ -58,9 +58,14 @@ func (p *Publisher) AwaitSequenced(timeout time.Duration, number uint64, txs []*
 		sticky := p.hold.kind == holdSticky
 		catchingUp := p.pendingFrom != 0
 		muted := p.mode.mutedAt(number)
+		recovering := p.mode.recoveringAt(number)
 		p.mu.Unlock()
 
 		switch {
+		case recovering:
+			coverageSkip(number, "rebuilding the store's sealed generation")
+
+			return true
 		case muted:
 			// The build-start read already resolved this height (sealed
 			// ground, or a window on a displaced parent) and silenced the
