@@ -274,6 +274,15 @@ func (m *SortedMap) flatten() types.Transactions {
 	return m.cache
 }
 
+// firstElement returns the transaction with the lowest nonce, read from the
+// heap index so it doesn't need a sorted copy.
+func (m *SortedMap) firstElement() *types.Transaction {
+	if m.index.Len() == 0 {
+		return nil
+	}
+	return m.items[(*m.index)[0]]
+}
+
 func (m *SortedMap) lastElement() *types.Transaction {
 	cache := m.flatten()
 	return cache[len(cache)-1]

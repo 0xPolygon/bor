@@ -66,6 +66,7 @@ func (c *DumpconfigCommand) Run(args []string) int {
 	userConfig.JsonRPC.TxSyncMaxTimeoutRaw = userConfig.JsonRPC.TxSyncMaxTimeout.String()
 	userConfig.TxPool.RejournalRaw = userConfig.TxPool.Rejournal.String()
 	userConfig.TxPool.LifeTimeRaw = userConfig.TxPool.LifeTime.String()
+	userConfig.TxPool.StrandedLifetimeRaw = userConfig.TxPool.StrandedLifetime.String()
 	userConfig.TxPool.RebroadcastIntervalRaw = userConfig.TxPool.RebroadcastInterval.String()
 	userConfig.TxPool.RebroadcastMaxAgeRaw = userConfig.TxPool.RebroadcastMaxAge.String()
 	userConfig.Sealer.GasPriceRaw = userConfig.Sealer.GasPrice.String()
@@ -75,6 +76,7 @@ func (c *DumpconfigCommand) Run(args []string) int {
 	userConfig.Gpo.IgnorePriceRaw = userConfig.Gpo.IgnorePrice.String()
 	userConfig.Cache.TrieTimeoutRaw = userConfig.Cache.TrieTimeout.String()
 	userConfig.P2P.TxArrivalWaitRaw = userConfig.P2P.TxArrivalWait.String()
+	userConfig.Sequencer.PollRaw = userConfig.Sequencer.Poll.String()
 
 	if err := toml.NewEncoder(os.Stdout).Encode(userConfig); err != nil {
 		c.UI.Error(err.Error())

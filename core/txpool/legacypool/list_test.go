@@ -432,3 +432,21 @@ func TestFilterTxConditionalCascade(t *testing.T) {
 	}
 	require.Equal(t, want, loose.totalcost)
 }
+
+func TestSortedMapFirstElement(t *testing.T) {
+	m := NewSortedMap()
+	if tx := m.firstElement(); tx != nil {
+		t.Fatalf("empty map first element = %v, want nil", tx)
+	}
+	key, _ := crypto.GenerateKey()
+	for _, nonce := range []uint64{5, 3, 9} {
+		m.Put(transaction(nonce, 0, key))
+	}
+	if got := m.firstElement().Nonce(); got != 3 {
+		t.Fatalf("first element nonce = %d, want 3", got)
+	}
+	m.Remove(3)
+	if got := m.firstElement().Nonce(); got != 5 {
+		t.Fatalf("first element nonce after removal = %d, want 5", got)
+	}
+}
