@@ -115,6 +115,8 @@ func TestUnauthorizedErrorsMatchSentinel(t *testing.T) {
 		{name: "signer", err: &UnauthorizedSignerError{Number: 5, Signer: common.Address{0x1}.Bytes()}, want: true},
 		{name: "proposer", err: &UnauthorizedProposerError{Number: 5, Proposer: common.Address{0x1}.Bytes()}, want: true},
 		{name: "wrapped signer", err: fmt.Errorf("verify: %w", &UnauthorizedSignerError{Number: 5}), want: true},
+		{name: "signer on an unsettled span", err: &UnauthorizedSignerError{Number: 5, spanUnsettled: true}, want: false},
+		{name: "proposer on an unsettled span", err: &UnauthorizedProposerError{Number: 5, spanUnsettled: true}, want: false},
 		{name: "wrong difficulty", err: &WrongDifficultyError{Number: 5}, want: false},
 		{name: "unknown ancestor", err: consensus.ErrUnknownAncestor, want: false},
 	}

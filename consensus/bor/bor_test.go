@@ -200,7 +200,7 @@ func newChainAndBorForTestWithConfig(t *testing.T, sp Spanner, cfg *params.Chain
 	b.SetSpanner(sp)
 	// set a default authorized signer to prevent nil deref in snapshot
 	b.authorizedSigner.Store(&signer{signer: common.Address{}, signFn: func(_ accounts.Account, _ string, _ []byte) ([]byte, error) {
-		return nil, &UnauthorizedSignerError{0, common.Address{}.Bytes(), []*valset.Validator{}}
+		return nil, &UnauthorizedSignerError{Number: 0, Signer: common.Address{}.Bytes(), AllowedSigners: []*valset.Validator{}}
 	}})
 
 	if devFake && signerAddr != (common.Address{}) {

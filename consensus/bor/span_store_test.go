@@ -676,7 +676,7 @@ func TestSpanStore_GetFutureSpan(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			span, err := spanStore.getFutureSpan(ctx, tc.startID, tc.blockNumber, tc.latestKnownSpanID)
+			span, _, err := spanStore.getFutureSpan(ctx, tc.startID, tc.blockNumber)
 
 			if tc.expectError {
 				require.Error(t, err)

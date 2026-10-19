@@ -48,6 +48,7 @@ var (
 	// ErrUnauthorizedSigner is matched, via errors.Is, by an engine's error for
 	// a header sealed by a signer the validator set does not authorize at that
 	// height. Unlike a missing ancestor or an unreachable validator source, it
-	// proves the header can never be canonical.
+	// proves the header can never be canonical, so an engine matches it only
+	// when it knows the full validator set for that height.
 	ErrUnauthorizedSigner = errors.New("unauthorized signer")
 )
