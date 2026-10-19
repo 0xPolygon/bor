@@ -837,3 +837,68 @@ func TestReelectedProducerRecoversItsOwnRun(t *testing.T) {
 		})
 	}
 }
+
+// A rewind back onto the parent our run started from leaves every parent
+// matching, so only the build height shows our sealed blocks are gone.
+func TestRewoundOwnRunIsRebuiltFromTheStore(t *testing.T) {
+	cases := []struct {
+		name      string
+		lastBuild uint64 // a build start after our seals, 0 for none
+		number    uint64
+		wantBuild bool
+		wantTxs   int
+	}{
+		{name: "rewound below our latest seal", number: 1, wantBuild: true, wantTxs: 2},
+		{name: "rewound below a later build start", lastBuild: 3, number: 2, wantBuild: true, wantTxs: 3},
+		{name: "a build at our latest seal", number: 2},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := startHarness(t)
+			fc := &fakeChain{canonical: map[uint64]common.Hash{}, known: map[common.Hash]*types.Header{}}
+			p := newTestPublisher(t, h, fc)
+
+			mine1 := testHeader(1, common.Hash{0xef})
+			publishHeader(t, p, mine1, 2)
+
+			mine2 := testHeader(2, mine1.Hash())
+			publishHeader(t, p, mine2, 3)
+			waitHead(t, h, p, 5*time.Second)
+
+			if tc.lastBuild != 0 {
+				// The chain imported our block 2 and built on it, then rewound.
+				fc.canonical[2] = mine2.Hash()
+				fc.known[mine2.Hash()] = mine2
+				p.AdoptWindow(tc.lastBuild, mine2.Hash())
+				delete(fc.canonical, 2)
+				delete(fc.known, mine2.Hash())
+			}
+
+			parent := common.Hash{0xef}
+			if tc.number == 2 {
+				parent = mine1.Hash()
+				fc.canonical[1] = parent
+				fc.known[parent] = mine1
+			}
+
+			w := p.AdoptWindow(tc.number, parent)
+
+			if !tc.wantBuild {
+				if w != nil || modeKind(p) == modeRecover {
+					t.Fatalf("a build at our latest seal must stay muted: %+v", w)
+				}
+
+				return
+			}
+
+			if w == nil || modeKind(p) != modeRecover {
+				t.Fatal("a rewound run must be rebuilt from the store")
+			}
+
+			if w.Number != tc.number || w.ParentHash != parent || len(w.Txs) != tc.wantTxs || !w.Complete {
+				t.Fatalf("recovered window must carry our sealed content: %+v", w)
+			}
+		})
+	}
+}

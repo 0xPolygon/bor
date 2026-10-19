@@ -125,6 +125,7 @@ func (p *Publisher) SealBlock(block *types.Block) {
 		p.sealedTip = n
 	}
 
+	p.buildTop = max(p.buildTop, n)
 	p.ownRun.add(header)
 
 	recovered := mode.kind == modeRecover && mode.height == n
@@ -327,16 +328,18 @@ func baseFeeBytes(f *big.Int) []byte {
 	return f.Bytes()
 }
 
-// sealedRunLeftLocked reports whether a build under our sealed tip sits on a
-// different parent than the block we sealed at its height, and if so drops
-// the tip to the build's parent. A producer cut off from the chain keeps
-// sealing its own run; once the chain rewinds that run away (deleting it
-// locally, too) and we are elected again, those heights are another sealed
-// run in the store, recovered like any other. A build on the parent we
-// sealed on is our own seal racing the chain-head update, and stays muted.
-func (p *Publisher) sealedRunLeftLocked(number uint64, parent common.Hash) bool {
+// sealedRunLeftLocked reports whether a build under our sealed tip no longer
+// has the block we sealed at its height under it, and if so drops the tip to
+// the build's parent. A producer cut off from the chain keeps sealing its own
+// run; once the chain rewinds that run away (deleting it locally, too) and we
+// are elected again, those heights are another sealed run in the store,
+// recovered like any other. The build shows it either by sitting on another
+// parent, or by sitting below an earlier build (rewound). A build at our
+// latest height on the parent we sealed on is our own seal racing the
+// chain-head update, and stays muted.
+func (p *Publisher) sealedRunLeftLocked(number uint64, parent common.Hash, rewound bool) bool {
 	ours, ok := p.ownRun.at(number)
-	if !ok || ours.parent == parent {
+	if !ok || (ours.parent == parent && !rewound) {
 		return false
 	}
 

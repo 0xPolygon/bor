@@ -198,7 +198,10 @@ func (p *Publisher) AdoptWindow(number uint64, parent common.Hash) *miner.Adopte
 	// Lost head race, or a reorg rebuilding sealed ground — no phantom open
 	// on our own sealed tip. If it seals after all, the flush rebuild
 	// publishes the complete window.
-	if number <= p.sealedTip && !p.sealedRunLeftLocked(number, parent) {
+	rewound := number < p.buildTop
+	p.buildTop = number
+
+	if number <= p.sealedTip && !p.sealedRunLeftLocked(number, parent, rewound) {
 		return p.muteLocked(number)
 	}
 

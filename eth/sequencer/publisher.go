@@ -78,6 +78,10 @@ type Publisher struct {
 	adopt     *adoption       // store window being adopted
 	sealedTip uint64          // highest height we sealed-and-flushed
 	ownRun    storeLineage    // the blocks we sealed, by height
+	// buildTop is the latest build start's height, raised by a seal above it.
+	// Sealing a height needs the chain at its parent, so a build below
+	// buildTop follows a rewind.
+	buildTop uint64
 	// mode is the build treatment for the current height, decided once per
 	// build-start classification; see buildMode.
 	mode buildMode
