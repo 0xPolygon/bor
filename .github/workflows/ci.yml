@@ -119,6 +119,14 @@ jobs:
       - name: Test
         run: make test
 
+      # make test passes -short, which skips the preemption test. Both tests skip
+      # without AVX2, so require them to pass on this runner.
+      - name: Test blake2b F on AVX2
+        run: |
+          GOMAXPROCS=2 go test -v ./crypto/blake2b -run 'TestF(ChunkedMatchesGeneric|LongRoundsIsPreemptible)$' -count=1 | tee blake2b.out
+          grep -q -- '--- PASS: TestFChunkedMatchesGeneric' blake2b.out
+          grep -q -- '--- PASS: TestFLongRoundsIsPreemptible' blake2b.out
+
       - uses: PaloAltoNetworks/upload-secure-artifact@main
         with:
           name: unitTest-coverage
