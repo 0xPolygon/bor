@@ -110,6 +110,7 @@ func newTester(light bool) *fetcherTester {
 		drops:   make(map[string]bool),
 	}
 	tester.fetcher = NewBlockFetcher(light, tester.getHeader, tester.getBlock, tester.verifyHeader, tester.broadcastBlock, tester.chainHeight, nil, tester.insertHeaders, tester.insertChain, tester.dropPeer, false, false, 0, nil, nil)
+	tester.fetcher.gatherSlack = time.Millisecond
 	tester.fetcher.Start()
 
 	return tester
