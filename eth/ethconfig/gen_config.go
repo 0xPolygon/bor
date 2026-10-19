@@ -57,6 +57,9 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		TrieJournalDirectory                 string
 		FilterLogCacheSize                   int
 		LogQueryLimit                        int
+		FilterMaxCount                       int
+		FilterMaxItems                       int
+		FilterMaxBufferBytes                 uint64
 		AddressCacheSizes                    map[common.Address]int
 		PreloadRateLimit                     int64
 		AddressCachePersist                  bool
@@ -151,6 +154,9 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.TrieJournalDirectory = c.TrieJournalDirectory
 	enc.FilterLogCacheSize = c.FilterLogCacheSize
 	enc.LogQueryLimit = c.LogQueryLimit
+	enc.FilterMaxCount = c.FilterMaxCount
+	enc.FilterMaxItems = c.FilterMaxItems
+	enc.FilterMaxBufferBytes = c.FilterMaxBufferBytes
 	enc.AddressCacheSizes = c.AddressCacheSizes
 	enc.PreloadRateLimit = c.PreloadRateLimit
 	enc.AddressCachePersist = c.AddressCachePersist
@@ -249,6 +255,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		TrieJournalDirectory                 *string
 		FilterLogCacheSize                   *int
 		LogQueryLimit                        *int
+		FilterMaxCount                       *int
+		FilterMaxItems                       *int
+		FilterMaxBufferBytes                 *uint64
 		AddressCacheSizes                    map[common.Address]int
 		PreloadRateLimit                     *int64
 		AddressCachePersist                  *bool
@@ -419,6 +428,15 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.LogQueryLimit != nil {
 		c.LogQueryLimit = *dec.LogQueryLimit
+	}
+	if dec.FilterMaxCount != nil {
+		c.FilterMaxCount = *dec.FilterMaxCount
+	}
+	if dec.FilterMaxItems != nil {
+		c.FilterMaxItems = *dec.FilterMaxItems
+	}
+	if dec.FilterMaxBufferBytes != nil {
+		c.FilterMaxBufferBytes = *dec.FilterMaxBufferBytes
 	}
 	if dec.AddressCacheSizes != nil {
 		c.AddressCacheSizes = dec.AddressCacheSizes

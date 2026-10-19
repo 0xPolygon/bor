@@ -770,6 +770,7 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.JsonRPC.LogQueryLimit,
 		Group:   "JsonRPC",
 	})
+	c.registerFilterLimitFlags(f)
 	f.Uint64Flag(&flagset.Uint64Flag{
 		Name:    "rpc.rangelimit",
 		Usage:   "Maximum block range allowed for eth_getLogs and bor_getLogs (0 = no limit)",
@@ -1530,5 +1531,29 @@ func (c *Command) registerSequencerFlags(f *flagset.Flagset) {
 		Usage:   "Producer txpool poll cadence while a block is open (continuous building); 0 keeps the one-shot fill",
 		Value:   &c.cliConfig.Sequencer.Poll,
 		Default: c.cliConfig.Sequencer.Poll,
+	})
+}
+
+func (c *Command) registerFilterLimitFlags(f *flagset.Flagset) {
+	f.IntFlag(&flagset.IntFlag{
+		Name:    "rpc.maxfilters",
+		Usage:   "Maximum number of installed polling filters (eth_newFilter, eth_newBlockFilter, eth_newPendingTransactionFilter)",
+		Value:   &c.cliConfig.JsonRPC.MaxFilters,
+		Default: c.cliConfig.JsonRPC.MaxFilters,
+		Group:   "JsonRPC",
+	})
+	f.IntFlag(&flagset.IntFlag{
+		Name:    "rpc.maxfilteritems",
+		Usage:   "Maximum number of events a polling filter may buffer before it overflows and is uninstalled",
+		Value:   &c.cliConfig.JsonRPC.MaxFilterItems,
+		Default: c.cliConfig.JsonRPC.MaxFilterItems,
+		Group:   "JsonRPC",
+	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "rpc.maxfilterbuffer",
+		Usage:   "Memory budget in MiB for the events buffered by all polling filters together",
+		Value:   &c.cliConfig.JsonRPC.MaxFilterBuffer,
+		Default: c.cliConfig.JsonRPC.MaxFilterBuffer,
+		Group:   "JsonRPC",
 	})
 }

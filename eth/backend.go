@@ -647,6 +647,10 @@ func (s *Ethereum) APIs() []rpc.API {
 		LogCacheSize:  s.config.FilterLogCacheSize,
 		LogQueryLimit: s.config.LogQueryLimit,
 		RangeLimit:    s.config.RPCBlockRangeLimit,
+
+		MaxFilters:      s.config.FilterMaxCount,
+		MaxPendingItems: s.config.FilterMaxItems,
+		MaxBufferBytes:  s.config.FilterMaxBufferBytes,
 	})
 	// set genesis to public filter api
 	publicFilterAPI := filters.NewFilterAPI(filterSystem, s.config.BorLogs)
