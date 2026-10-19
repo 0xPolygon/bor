@@ -30,9 +30,7 @@ jobs:
           git submodule update --init --recursive --force
           git fetch --no-tags --prune --depth=1 origin +refs/heads/master:refs/remotes/origin/master
 
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
+      - uses: ./.github/actions/setup-go
 
       - name: Install dependencies on Linux
         if: runner.os == 'Linux'
@@ -40,15 +38,6 @@ jobs:
           sudo find /etc/apt/sources.list.d -maxdepth 1 -type f \( -name 'azure-cli*' -o -name 'microsoft-prod*' \) -delete
           sudo apt-get update
           sudo apt-get install -y build-essential
-
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/Library/Caches/go-build
-            ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: ${{ runner.os }}-go-
 
       - name: Build
         run: make all
@@ -65,9 +54,7 @@ jobs:
           git submodule update --init --recursive --force
           git fetch --no-tags --prune --depth=1 origin +refs/heads/master:refs/remotes/origin/master
 
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
+      - uses: ./.github/actions/setup-go
 
       - name: Install dependencies on Linux
         if: runner.os == 'Linux'
@@ -84,21 +71,24 @@ jobs:
         if: runner.os == 'Linux'
         run: make lint
 
-  unit-tests:
+  unit-tests-shard:
+    name: unit-tests (shard ${{ matrix.shard }})
     if: (github.event.action != 'closed' || github.event.pull_request.merged == true)
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-22.04] # List of OS: https://github.com/actions/virtual-environments
-    runs-on: ${{ matrix.os }}
+        shard: [0, 1, 2, 3] # keep in sync with the test-cache job
+        shards: [4]
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
       - run: |
           git submodule update --init --recursive --force
           git fetch --no-tags --prune --depth=1 origin +refs/heads/master:refs/remotes/origin/master
 
-      - uses: actions/setup-go@v6
+      - uses: ./.github/actions/setup-go
         with:
-          go-version-file: go.mod
+          build-cache: 'true'
 
       - name: Install dependencies on Linux
         if: runner.os == 'Linux'
@@ -107,22 +97,61 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential
 
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/Library/Caches/go-build
-            ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: ${{ runner.os }}-go-
-
       - name: Test
-        run: make test
+        run: make test TEST_SHARDS=${{ matrix.shards }} TEST_SHARD=${{ matrix.shard }}
 
       - uses: PaloAltoNetworks/upload-secure-artifact@main
         with:
-          name: unitTest-coverage
+          name: unitTest-coverage-${{ matrix.shard }}
           path: cover.out
+
+  # Aggregates the shards under the pre-sharding check name.
+  unit-tests:
+    if: always() && (github.event.action != 'closed' || github.event.pull_request.merged == true)
+    needs: unit-tests-shard
+    strategy:
+      matrix:
+        os: [ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - run: test "${{ needs.unit-tests-shard.result }}" = success
+
+  # Saves the module and unit-test build caches from develop/master pushes; PR jobs only restore them.
+  test-cache:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - run: |
+          git submodule update --init --recursive --force
+          git fetch --no-tags --prune --depth=1 origin +refs/heads/master:refs/remotes/origin/master
+
+      - id: go
+        uses: ./.github/actions/setup-go
+        with:
+          build-cache: 'true'
+
+      - name: Install dependencies on Linux
+        run: |
+          sudo find /etc/apt/sources.list.d -maxdepth 1 -type f \( -name 'azure-cli*' -o -name 'microsoft-prod*' \) -delete
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      # Build each shard's package set: a package compiles differently when it is a
+      # covered test target than when it is only a dependency.
+      - name: Build test binaries
+        run: for i in 0 1 2 3; do make test-build TEST_SHARDS=4 TEST_SHARD=$i; done
+
+      - if: steps.go.outputs.gomod-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-gomod-${{ hashFiles('**/go.sum') }}
+
+      - uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/go-build
+          key: ${{ runner.os }}-gotest-${{ github.sha }}
 
   integration-tests:
     if: (github.event.action != 'closed' || github.event.pull_request.merged == true)
@@ -136,9 +165,9 @@ jobs:
           git submodule update --init --recursive --force
           git fetch --no-tags --prune --depth=1 origin +refs/heads/master:refs/remotes/origin/master
 
-      - uses: actions/setup-go@v6
+      - uses: ./.github/actions/setup-go
         with:
-          go-version-file: go.mod
+          build-cache: 'true'
 
       - name: Install dependencies on Linux
         if: runner.os == 'Linux'
@@ -146,15 +175,6 @@ jobs:
           sudo find /etc/apt/sources.list.d -maxdepth 1 -type f \( -name 'azure-cli*' -o -name 'microsoft-prod*' \) -delete
           sudo apt-get update
           sudo apt-get install -y build-essential
-
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/Library/Caches/go-build
-            ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: ${{ runner.os }}-go-
 
       - name: test-integration
         run: make test-integration

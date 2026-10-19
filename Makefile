@@ -20,9 +20,11 @@ PACKAGE = github.com/ethereum/go-ethereum
 GO_FLAGS += -buildvcs=false
 GO_LDFLAGS += -ldflags "-X ${PACKAGE}/params.GitCommit=${GIT_COMMIT}"
 
-TESTALL = $$(go list ./... | grep -v go-ethereum/cmd/)
+TEST_SHARDS ?= 1
+TEST_SHARD ?= 0
+TESTALL = $$(go list ./... | grep -v go-ethereum/cmd/ | awk 'NR % $(TEST_SHARDS) == $(TEST_SHARD)')
 TESTE2E = ./tests/...
-GOTEST = GODEBUG=cgocheck=0 go test $(GO_FLAGS) $(GO_LDFLAGS) -p 1
+GOTEST = GODEBUG=cgocheck=0 go test $(GO_FLAGS) $(GO_LDFLAGS)
 
 bor:
 	mkdir -p $(GOPATH)/bin/
@@ -61,20 +63,25 @@ ios:
 	@echo "Done building."
 	@echo "Import \"$(GOBIN)/Geth.framework\" to use the library."
 
-test:
-	$(GOTEST) --timeout 30m -cover -short -coverprofile=cover.out -covermode=atomic $(TESTALL)
+test: test-build
+	$(GOTEST) -p 1 --timeout 30m -cover -short -coverprofile=cover.out -covermode=atomic $(TESTALL)
+
+# Compile test binaries in parallel so the serial (-p 1) test run hits the build cache.
+test-build:
+	@test "$(TEST_SHARD)" -ge 0 && test "$(TEST_SHARD)" -lt "$(TEST_SHARDS)" || { echo "invalid TEST_SHARD=$(TEST_SHARD) TEST_SHARDS=$(TEST_SHARDS)"; exit 1; }
+	$(GOTEST) -cover -short -covermode=atomic -run '^$$' $(TESTALL)
 
 test-txpool-race:
 	$(GOTEST) -run=TestPoolMiningDataRaces --timeout 600m -race -v ./core/
 
 test-race:
-	$(GOTEST) --timeout 45m -race -shuffle=on $(TESTALL)
+	$(GOTEST) -p 1 --timeout 45m -race -shuffle=on $(TESTALL)
 
 gocovmerge-deps:
 	$(GOBUILD) -o $(GOBIN)/gocovmerge github.com/wadey/gocovmerge
 
 test-integration:
-	$(GOTEST) --timeout 60m -cover -coverprofile=cover.out -covermode=atomic -tags integration $(TESTE2E)
+	$(GOTEST) -p 1 --timeout 60m -cover -coverprofile=cover.out -covermode=atomic -tags integration $(TESTE2E)
 
 escape:
 	cd $(path) && go test -gcflags "-m -m" -run none -bench=BenchmarkJumpdest* -benchmem -memprofile mem.out
