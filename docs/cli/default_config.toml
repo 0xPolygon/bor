@@ -78,6 +78,7 @@ devfakeauthor = false
   accountqueue = 64
   globalqueue = 131072
   lifetime = "3h0m0s"
+  strandedlifetime = "3h0m0s"
   filtered-addresses = ""
   rebroadcast = true
   rebroadcast-interval = "30s"
@@ -124,6 +125,7 @@ devfakeauthor = false
   enabletrace = false
   "txsync.defaulttimeout" = "20s"
   "txsync.maxtimeout" = "1m0s"
+  "txsync.maxconcurrent" = 4096
   accept-preconf-tx = false
   accept-private-tx = false
   [jsonrpc.http]
@@ -206,6 +208,7 @@ devfakeauthor = false
   fdlimit = 0
   addresscachesizes = ""
   preloadratelimit = ""
+  addresscachepersist = false
   gomemlimit = ""
   gogc = 100
   godebug = ""
@@ -275,3 +278,9 @@ devfakeauthor = false
   enable-import-src = false
   import-src-logs = false
   warm-snapshot = true
+
+[sequencer]
+  enabled = false
+  publisher-endpoint = ""
+  consumer-endpoint = ""
+  poll = "200ms"

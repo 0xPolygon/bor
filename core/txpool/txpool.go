@@ -424,6 +424,16 @@ func (p *TxPool) SubscribeTransactions(ch chan<- core.NewTxsEvent, reorgs bool) 
 // SubscribeRebroadcastTransactions registers a subscription for stuck transaction
 // rebroadcast events from all subpools.
 func (p *TxPool) SubscribeRebroadcastTransactions(ch chan<- core.StuckTxsEvent) event.Subscription {
+	return p.subscribeRebroadcastTransactions(ch, false)
+}
+
+// SubscribeRebroadcastTransactionsWithAcknowledgement opts into explicit
+// accounting for subpools that support RebroadcastAcknowledgement.
+func (p *TxPool) SubscribeRebroadcastTransactionsWithAcknowledgement(ch chan<- core.StuckTxsEvent) event.Subscription {
+	return p.subscribeRebroadcastTransactions(ch, true)
+}
+
+func (p *TxPool) subscribeRebroadcastTransactions(ch chan<- core.StuckTxsEvent, acknowledge bool) event.Subscription {
 	if p == nil {
 		return event.NewSubscription(func(quit <-chan struct{}) error {
 			<-quit
@@ -432,14 +442,49 @@ func (p *TxPool) SubscribeRebroadcastTransactions(ch chan<- core.StuckTxsEvent) 
 	}
 	subs := make([]event.Subscription, len(p.subpools))
 	for i, subpool := range p.subpools {
+		if pool, ok := subpool.(interface {
+			SubscribeRebroadcastTransactionsWithAcknowledgement(chan<- core.StuckTxsEvent) event.Subscription
+		}); acknowledge && ok {
+			subs[i] = pool.SubscribeRebroadcastTransactionsWithAcknowledgement(ch)
+			continue
+		}
 		subs[i] = subpool.SubscribeRebroadcastTransactions(ch)
 	}
 	return p.subs.Track(event.JoinSubscriptions(subs...))
 }
 
+// RebroadcastAcknowledgement gathers optional batch accounting from subpools
+// without extending SubPool or changing the public rebroadcast event. Existing
+// subpools without this capability retain their own accounting behavior.
+func (p *TxPool) RebroadcastAcknowledgement(txs []*types.Transaction) func([]common.Hash) {
+	if p == nil {
+		return nil
+	}
+	var callbacks []func([]common.Hash)
+	for _, subpool := range p.subpools {
+		pool, ok := subpool.(interface {
+			RebroadcastAcknowledgement([]*types.Transaction) func([]common.Hash)
+		})
+		if !ok {
+			continue
+		}
+		if callback := pool.RebroadcastAcknowledgement(txs); callback != nil {
+			callbacks = append(callbacks, callback)
+		}
+	}
+	return func(hashes []common.Hash) {
+		for _, callback := range callbacks {
+			callback(hashes)
+		}
+	}
+}
+
 // PoolNonce returns the next nonce of an account, with all transactions executable
 // by the pool already applied on top.
 func (p *TxPool) PoolNonce(addr common.Address) uint64 {
+	if p == nil {
+		return 0
+	}
 	// Since (for now) accounts are unique to subpools, only one pool will have
 	// (at max) a non-state nonce. To avoid stateful lookups, just return the
 	// highest nonce for now.
@@ -521,6 +566,9 @@ func (p *TxPool) ContentFrom(addr common.Address) ([]*types.Transaction, []*type
 // Status returns the known status (unknown/pending/queued) of a transaction
 // identified by its hash.
 func (p *TxPool) Status(hash common.Hash) TxStatus {
+	if p == nil {
+		return TxStatusUnknown
+	}
 	for _, subpool := range p.subpools {
 		if status := subpool.Status(hash); status != TxStatusUnknown {
 			return status
@@ -537,6 +585,9 @@ func (p *TxPool) Status(hash common.Hash) TxStatus {
 // Note, this method is only used for testing and is susceptible to DoS vectors.
 // In production code, the pool is meant to reset on a separate thread.
 func (p *TxPool) Sync() error {
+	if p == nil {
+		return errors.New("stateless client: txpool disabled")
+	}
 	sync := make(chan error)
 	select {
 	case p.sync <- sync:
@@ -552,6 +603,9 @@ func (p *TxPool) Sync() error {
 // susceptible to DoS vectors. In production code, the pool is meant to reset on
 // a separate thread.
 func (p *TxPool) Clear() {
+	if p == nil {
+		return
+	}
 	// Invoke Sync to ensure that txs pending addition don't get added to the pool after
 	// the subpools are subsequently cleared
 	p.Sync()
@@ -583,6 +637,9 @@ type SpeculativeSetter interface {
 // speculative execution of block N+1 gets correct pending transactions
 // (reflecting block N's post-execution nonces and balances via FlatDiff overlay).
 func (p *TxPool) SetSpeculativeState(newHead *types.Header, statedb *state.StateDB) {
+	if p == nil {
+		return
+	}
 	// Update the aggregator's state
 	p.stateLock.Lock()
 	p.state = statedb

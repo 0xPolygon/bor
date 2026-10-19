@@ -22,6 +22,10 @@
 
 - [```chain watch```](./chain_watch.md)
 
+- [```db```](./db.md)
+
+- [```db pebble-upgrade```](./db_pebble-upgrade.md)
+
 - [```debug```](./debug.md)
 
 - [```debug block```](./debug_block.md)

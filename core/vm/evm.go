@@ -19,7 +19,6 @@ package vm
 import (
 	"errors"
 	"math/big"
-	"sync"
 	"sync/atomic"
 
 	"github.com/holiman/uint256"
@@ -74,7 +73,7 @@ func (evm *EVM) runPrecompile(p PrecompiledContract, addr common.Address, input 
 // runEcrecoverWithCache handles the cached fast path for the ecrecover
 // precompile: input ≤ 128 bytes, cache present. Falls back to running the
 // precompile when the cache misses, then stores a successful result.
-func (evm *EVM) runEcrecoverWithCache(stateDB StateDB, p PrecompiledContract, addr common.Address, input []byte, gas GasBudget, cache *sync.Map) ([]byte, GasBudget, error) {
+func (evm *EVM) runEcrecoverWithCache(stateDB StateDB, p PrecompiledContract, addr common.Address, input []byte, gas GasBudget, cache *EcrecoverCache) ([]byte, GasBudget, error) {
 	// key is zero-initialised; copy fills the prefix and leaves the rest
 	// as zeros, which matches RightPadBytes(input, 128) without the
 	// extra heap allocation. Caller already enforced len(input) <= 128.
@@ -92,10 +91,7 @@ func (evm *EVM) runEcrecoverWithCache(stateDB StateDB, p PrecompiledContract, ad
 		if stateDB != nil {
 			stateDB.Touch(addr)
 		}
-		if cached == nil {
-			return nil, gas, nil
-		}
-		return cached.([]byte), gas, nil
+		return cached, gas, nil
 	}
 	ret, remainingGas, err := RunPrecompiledContract(stateDB, p, addr, input, gas, evm.Config.Tracer, evm.chainRules, evm.precompileCache)
 	if err == nil {
@@ -357,10 +353,15 @@ func (evm *EVM) Call(caller common.Address, addr common.Address, input []byte, g
 	if evm.depth > int(params.CallCreateDepth) {
 		return nil, gas, ErrDepth
 	}
-	syscall := isSystemCall(caller)
+	// EIP-7928 keeps the system address out of the block access list, so
+	// Amsterdam skips the balance check and transfer for system calls. Before
+	// Amsterdam, Bor keeps both: the transfer reads the system account, which
+	// puts its proof in the witness that stateless nodes on earlier releases
+	// need to execute.
+	skipTransfer := isSystemCall(caller) && evm.chainRules.IsAmsterdam
 
 	// Fail if we're trying to transfer more than the available balance.
-	if !syscall && !value.IsZero() && !evm.Context.CanTransfer(evm.StateDB, caller, value) {
+	if !skipTransfer && !value.IsZero() && !evm.Context.CanTransfer(evm.StateDB, caller, value) {
 		return nil, gas, ErrInsufficientBalance
 	}
 	snapshot := evm.StateDB.Snapshot()
@@ -388,10 +389,9 @@ func (evm *EVM) Call(caller common.Address, addr common.Address, input []byte, g
 
 		evm.StateDB.CreateAccount(addr)
 	}
-	// Perform the value transfer only in non-syscall mode.
 	// Calling this is required even for zero-value transfers,
 	// to ensure the state clearing mechanism is applied.
-	if !syscall {
+	if !skipTransfer {
 		evm.Context.Transfer(evm.StateDB, caller, addr, value, &evm.chainRules)
 	}
 
