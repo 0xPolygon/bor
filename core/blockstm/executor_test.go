@@ -272,6 +272,10 @@ func testExecutorComb(t *testing.T, totalTxs []int, numReads []int, numWrites []
 	t.Helper()
 	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelDebug, false)))
 
+	if testing.Short() {
+		totalTxs, numReads, numWrites = totalTxs[:min(len(totalTxs), 3)], numReads[:min(len(numReads), 2)], numWrites[:min(len(numWrites), 2)]
+	}
+
 	improved := 0
 	total := 0
 
@@ -314,6 +318,10 @@ func testExecutorComb(t *testing.T, totalTxs []int, numReads []int, numWrites []
 func testExecutorCombWithMetadata(t *testing.T, totalTxs []int, numReads []int, numWrites []int, numNonIOs []int, taskRunner TaskRunnerWithMetadata) {
 	t.Helper()
 	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelDebug, false)))
+
+	if testing.Short() {
+		numReads, numWrites = numReads[:1], numWrites[:1]
+	}
 
 	improved := 0
 	improvedMetadata := 0
