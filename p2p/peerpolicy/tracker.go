@@ -37,6 +37,7 @@ type (
 )
 
 type peerRecord struct {
+	activity        activityRecord
 	windows         [windowCount]bucket
 	hashes          peerHistories
 	exempt          bool
@@ -44,10 +45,16 @@ type peerRecord struct {
 }
 
 type Tracker struct {
-	mu      sync.Mutex
-	clock   mclock.Clock
-	peers   lru.BasicLRU[string, *peerRecord]
-	metrics *observationMetrics
+	mu             sync.Mutex
+	clock          mclock.Clock
+	peers          lru.BasicLRU[string, *peerRecord]
+	metrics        *observationMetrics
+	ready          bool
+	readyStarted   bool
+	readyAt        mclock.AbsTime
+	pausedFor      mclock.AbsTime
+	resetAt        mclock.AbsTime
+	resetPausedFor mclock.AbsTime
 }
 
 func New(clock mclock.Clock) *Tracker {
@@ -79,8 +86,35 @@ func (t *Tracker) ObserveWithClass(id string, exempt bool, event Evidence) {
 	t.observe(p, event)
 }
 
+// ObserveSession prevents a delayed callback from restoring an older connection
+// class. Misconduct still belongs to the identity; contribution belongs to a session.
+// False requires resolving the current connection class after record eviction.
+func (t *Tracker) ObserveSession(id string, exempt bool, startedAt mclock.AbsTime, event Evidence) bool {
+	if id == "" || len(id) > 128 || event.Reason >= reasonCount || event.Family >= familyCount {
+		return true
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	p, ok := t.peers.Peek(id)
+	if !ok || !p.activity.registered {
+		return false
+	}
+	t.peers.Get(id)
+	if p.activity.connectedAt == startedAt {
+		p.setExempt(exempt)
+	}
+	if event.Activity != (ActivityEvent{}) {
+		event.Activity.StartedAt = startedAt
+	}
+	t.observe(p, event)
+	return true
+}
+
 func (t *Tracker) observe(p *peerRecord, event Evidence) {
-	if p.exempt {
+	now := t.clock.Now()
+	t.prepareActivity(&p.activity, now)
+	p.activity.observe(now, event.Activity)
+	if p.exempt || event.activityOnly() {
 		return
 	}
 	tick := int64(t.clock.Now()) / int64(windowWidth)
@@ -193,9 +227,13 @@ func (t *Tracker) Snapshot(id string) Snapshot {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	result := Snapshot{Mode: "observe", Action: "none", Windows: make(map[string]uint64)}
+	result.Contribution = contributionSnapshot()
 	if p, ok := t.peers.Peek(id); ok {
 		result.Risk = p.risk(int64(t.clock.Now())/int64(windowWidth), result.Windows)
 		result.Action = actionFor(result.Risk)
+		now := t.clock.Now()
+		t.prepareActivity(&p.activity, now)
+		result.Contribution = p.activity.snapshot(now, t.ready, p.exempt)
 	}
 	return result
 }

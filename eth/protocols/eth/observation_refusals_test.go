@@ -20,6 +20,9 @@ func TestPeerPolicyQueueRefusals(t *testing.T) {
 			calls := 0
 			p.SetObserver(func(e peerpolicy.Evidence) {
 				calls++
+				if e.Activity != (peerpolicy.ActivityEvent{}) {
+					t.Fatal("refused reply counted completed activity")
+				}
 				if !e.Refused {
 					t.Fatal("missing refusal flag")
 				}

@@ -31,7 +31,7 @@ func (p *Peer) SetObserver(observer func(peerpolicy.Evidence)) {
 
 func (p *Peer) observeFraming(msg p2p.Msg) {
 	if p.observer != nil {
-		p.observer(peerpolicy.Evidence{Reason: peerpolicy.InvalidEncoding, Bytes: uint64(msg.Size)})
+		p.observer(peerpolicy.Evidence{Reason: peerpolicy.InvalidEncoding, Bytes: uint64(msg.Size), Activity: receivedActivity(msg)})
 	}
 }
 
@@ -39,15 +39,23 @@ func (p *Peer) handleObserved(backend Backend, msg p2p.Msg, handle msgHandler) e
 	if p.observer == nil {
 		return handle(backend, msg, p)
 	}
-	d := &observedDecoder{Msg: msg, evidence: peerpolicy.Evidence{Family: messageFamily(msg.Code), Items: 1, Bytes: uint64(msg.Size)}}
+	d := &observedDecoder{Msg: msg, evidence: peerpolicy.Evidence{Family: messageFamily(msg.Code), Items: 1, Bytes: uint64(msg.Size), Activity: receivedActivity(msg)}}
 	err := handle(backend, d, p)
 	if d.diagnostic != peerpolicy.None {
 		p.observer(peerpolicy.Evidence{Reason: d.diagnostic})
 	}
-	if d.evidence.Items != 0 || d.evidence.Bytes != 0 || d.evidence.Reason != peerpolicy.None {
-		p.observer(d.evidence)
-	}
+	p.observer(d.evidence)
 	return err
+}
+
+func receivedActivity(msg p2p.Msg) peerpolicy.ActivityEvent {
+	activity := peerpolicy.ActivityEvent{ReceivedMessages: 1, ReceivedBytes: uint64(msg.Size)}
+	switch msg.Code {
+	case NewBlockMsg, BlockHeadersMsg, BlockBodiesMsg, ReceiptsMsg:
+		// Validation is deferred to consumers outside the message handler.
+		activity.UnclassifiedMessages = 1
+	}
+	return activity
 }
 
 func messageFamily(code uint64) peerpolicy.Family {
@@ -80,6 +88,7 @@ func observeIgnoredTransactions(msg Decoder) {
 		}
 		d.evidence.Family = peerpolicy.Transactions
 		d.evidence.Items = 0
+		d.evidence.Activity.UnclassifiedMessages = 1
 	}
 }
 
@@ -112,7 +121,7 @@ func observeBlockAnnouncements(msg Decoder, packet NewBlockHashesPacket) {
 
 func (p *Peer) observeRateLimit(msg p2p.Msg) {
 	if p.observer != nil {
-		p.observer(peerpolicy.Evidence{Reason: peerpolicy.RateLimited, Family: messageFamily(msg.Code), Items: 1, Bytes: uint64(msg.Size)})
+		p.observer(peerpolicy.Evidence{Reason: peerpolicy.RateLimited, Family: messageFamily(msg.Code), Items: 1, Bytes: uint64(msg.Size), Activity: receivedActivity(msg)})
 	}
 }
 

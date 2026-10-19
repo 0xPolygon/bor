@@ -8,26 +8,33 @@ import (
 	"errors"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/mclock"
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
 // SetValidationObserver installs a synchronous observer before Start. It reuses
 // admission results on the fetcher loop and must not block or change fetcher state.
-func (f *TxFetcher) SetValidationObserver(observer func(string, DeliveryProvenance, uint64, uint64, bool)) {
+// Its final arguments report newly admitted transactions, complete pool outcomes,
+// and the arrival time before admission so reconnects can reject stale credit.
+func (f *TxFetcher) SetValidationObserver(observer func(string, DeliveryProvenance, uint64, uint64, bool, uint64, bool, mclock.AbsTime)) {
 	f.validationObserver = observer
 }
 
 type txObservation struct {
-	items, bytes uint64
-	invalid      bool
+	items, bytes, accepted uint64
+	invalid, complete      bool
+	receivedAt             mclock.AbsTime
 }
 
-func (f *TxFetcher) validationSummary(txs []*types.Transaction, invalid bool) txObservation {
+func (f *TxFetcher) validationSummary(txs []*types.Transaction, invalid bool, accepted uint64, complete bool, receivedAt mclock.AbsTime) txObservation {
 	if f.validationObserver == nil {
 		return txObservation{}
 	}
-	summary := txObservation{items: uint64(len(txs)), invalid: invalid}
+	if !complete {
+		accepted = 0
+	}
+	summary := txObservation{items: uint64(len(txs)), invalid: invalid, accepted: accepted, complete: complete, receivedAt: receivedAt}
 	for _, tx := range txs {
 		summary.bytes += tx.Size()
 	}
@@ -42,7 +49,7 @@ func (f *TxFetcher) observeDelivery(delivery *txDelivery) {
 	// establish that its peer, request ID and contents match an outstanding request.
 	solicited := requestedDelivery(f.requests[delivery.origin], delivery)
 	summary := delivery.observation
-	f.validationObserver(delivery.origin, solicited, summary.items, summary.bytes, summary.invalid)
+	f.validationObserver(delivery.origin, solicited, summary.items, summary.bytes, summary.invalid, summary.accepted, summary.complete, summary.receivedAt)
 }
 
 type DeliveryProvenance uint8

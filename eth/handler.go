@@ -150,6 +150,8 @@ type handler struct {
 	snapSync      atomic.Bool // Flag whether snap sync is enabled (gets disabled if we already have blocks)
 	statelessSync atomic.Bool // Flag whether stateless sync is enabled
 	synced        atomic.Bool // Flag whether we're considered synchronised (enables transaction processing)
+	policyMu      sync.Mutex  // Serializes readiness changes.
+	policySyncing bool        // Protected by policyMu.
 
 	database ethdb.Database
 	txpool   txPool
@@ -1124,6 +1126,7 @@ func (h *handler) enableSyncedFeatures() {
 		log.Info("Snap sync complete, auto disabling")
 		h.snapSync.Store(false)
 	}
+	h.updateContributionReadiness()
 }
 
 // PeerStats represents a short summary of the information known about a connected
@@ -1192,9 +1195,17 @@ func newBlockRangeState(chain *core.BlockChain, typeMux *event.TypeMux) *blockRa
 // about imported blocks.
 func (h *handler) blockRangeLoop(st *blockRangeState) {
 	defer h.wg.Done()
+	var readinessTick <-chan time.Time
+	if h.peerPolicy != nil {
+		tick := time.NewTicker(contributionHeadMaxAge / 2)
+		defer tick.Stop()
+		readinessTick = tick.C
+	}
 
 	for {
 		select {
+		case <-readinessTick:
+			h.updateContributionReadiness()
 		case ev := <-st.syncSub.Chan():
 			if ev == nil {
 				continue
@@ -1203,6 +1214,7 @@ func (h *handler) blockRangeLoop(st *blockRangeState) {
 				h.blockRangeWhileSnapSyncing(st)
 			}
 		case <-st.headCh:
+			h.updateContributionReadiness()
 			st.update(h.chain, h.chain.CurrentBlock())
 			if st.shouldSend() {
 				h.broadcastBlockRange(st)

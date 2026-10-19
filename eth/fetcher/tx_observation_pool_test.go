@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/mclock"
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
 )
@@ -27,8 +28,8 @@ func TestPeerPolicyDisabledPoolCorrelation(t *testing.T) {
 			}, func(string, uint64, []common.Hash) error { return nil }, func(string) {})
 			f.requests["peer"] = &txRequest{requestID: 7, hashes: testTxsHashes[:tc.requested]}
 			observations := make(chan DeliveryProvenance, 2)
-			f.SetValidationObserver(func(_ string, provenance DeliveryProvenance, items, bytes uint64, invalid bool) {
-				if items != uint64(tc.delivered) || bytes == 0 || invalid {
+			f.SetValidationObserver(func(_ string, provenance DeliveryProvenance, items, bytes uint64, invalid bool, accepted uint64, complete bool, receivedAt mclock.AbsTime) {
+				if items != uint64(tc.delivered) || bytes == 0 || invalid || accepted != 0 || complete != (tc.delivered == 1) {
 					provenance = DeliveryProvenance(255)
 				}
 				observations <- provenance

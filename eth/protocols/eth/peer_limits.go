@@ -12,6 +12,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/p2p"
+	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
@@ -77,7 +78,7 @@ func (p *Peer) checkAnnouncementRate(count int, now time.Time) error {
 
 type queuedReply struct {
 	p2p.Msg
-	completed func()
+	completed func(uint64)
 }
 
 type peerReplies struct {
@@ -147,12 +148,12 @@ func (p *Peer) queueReply(code uint64, packet interface{}) error {
 }
 
 func (p *Peer) queueReservedReply(code uint64, packet interface{}, reservation *replyReservation) error {
-	err := p.queueReplyWithCompletion(code, packet, reservation, nil)
+	err := p.queueReplyWithCompletion(code, packet, reservation, p.replyObserver(peerpolicy.Evidence{}))
 	p.observeReplyRefusal(err, nil)
 	return err
 }
 
-func (p *Peer) queueReplyWithCompletion(code uint64, packet interface{}, reservation *replyReservation, completed func()) error {
+func (p *Peer) queueReplyWithCompletion(code uint64, packet interface{}, reservation *replyReservation, completed func(uint64)) error {
 	if reservation == nil && (p.Trusted() || p.Static()) {
 		return p.sendReplyWithCompletion(code, packet, completed)
 	}
@@ -190,10 +191,20 @@ func (p *Peer) queueReplyWithCompletion(code uint64, packet interface{}, reserva
 	}
 }
 
-func (p *Peer) sendReplyWithCompletion(code uint64, packet interface{}, completed func()) error {
-	err := p2p.Send(p.rw, code, packet)
-	if err == nil && completed != nil {
-		completed()
+func (p *Peer) sendReplyWithCompletion(code uint64, packet interface{}, completed func(uint64)) error {
+	if completed == nil {
+		return p2p.Send(p.rw, code, packet)
+	}
+	size, payload, err := rlp.EncodeToReader(packet)
+	if err != nil {
+		return err
+	}
+	if size < 0 || size > maxMessageSize {
+		return errMsgTooLarge
+	}
+	err = p.rw.WriteMsg(p2p.Msg{Code: code, Size: uint32(size), Payload: payload})
+	if err == nil {
+		completed(uint64(size))
 	}
 	return err
 }
@@ -222,7 +233,7 @@ func (p *Peer) sendReplies(replies *peerReplies) {
 				return
 			}
 			if msg.completed != nil {
-				msg.completed()
+				msg.completed(uint64(msg.Size))
 			}
 			replies.mu.Lock()
 			replies.bytes -= int(msg.Size)

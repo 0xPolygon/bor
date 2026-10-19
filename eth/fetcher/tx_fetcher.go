@@ -160,7 +160,7 @@ type txDrop struct {
 //     abandoned request is dead on the wire; the request ID echoed in
 //     PooledTransactionsMsg identifies stale replies from abandoned requests.
 type TxFetcher struct {
-	validationObserver func(string, DeliveryProvenance, uint64, uint64, bool)
+	validationObserver func(string, DeliveryProvenance, uint64, uint64, bool, uint64, bool, mclock.AbsTime)
 
 	notify  chan *txAnnounce
 	cleanup chan *txDelivery
@@ -306,7 +306,10 @@ func (f *TxFetcher) isKnownUnderpriced(hash common.Hash) bool {
 // direct request replies. The differentiation is important so the fetcher can
 // re-schedule missing transactions as soon as possible.
 func (f *TxFetcher) Enqueue(peer string, txs []*types.Transaction, direct bool, requestID uint64) error {
+	receivedAt := f.clock.Now()
 	var invalid bool
+	var accepted uint64
+	complete := true
 	var (
 		inMeter          = txReplyInMeter
 		knownMeter       = txReplyKnownMeter
@@ -332,10 +335,7 @@ func (f *TxFetcher) Enqueue(peer string, txs []*types.Transaction, direct bool, 
 	)
 	// proceed in batches
 	for i := 0; i < len(txs); i += addTxsBatchSize {
-		end := i + addTxsBatchSize
-		if end > len(txs) {
-			end = len(txs)
-		}
+		end := min(i+addTxsBatchSize, len(txs))
 
 		var (
 			duplicate   int64
@@ -345,7 +345,9 @@ func (f *TxFetcher) Enqueue(peer string, txs []*types.Transaction, direct bool, 
 
 		batch := txs[i:end]
 
-		for j, err := range f.addTxs(batch) {
+		results := f.addTxs(batch)
+		complete = complete && len(results) == len(batch)
+		for j, err := range results[:min(len(results), len(batch))] {
 			if f.validationObserver != nil {
 				invalid = invalid || invalidTransaction(err)
 			}
@@ -357,7 +359,8 @@ func (f *TxFetcher) Enqueue(peer string, txs []*types.Transaction, direct bool, 
 			}
 			// Track a few interesting failure types
 			switch {
-			case err == nil: // Noop, but need to handle to not count these
+			case err == nil:
+				accepted++
 
 			case errors.Is(err, txpool.ErrAlreadyKnown):
 				duplicate++
@@ -401,8 +404,10 @@ func (f *TxFetcher) Enqueue(peer string, txs []*types.Transaction, direct bool, 
 			break
 		}
 	}
+	// Partial or aggregate pool outcomes cannot establish per-transaction admission.
+	complete = complete && len(added) == len(txs)
 	select {
-	case f.cleanup <- &txDelivery{origin: peer, hashes: added, metas: metas, direct: direct, requestID: requestID, violation: violation, observation: f.validationSummary(txs, invalid)}:
+	case f.cleanup <- &txDelivery{origin: peer, hashes: added, metas: metas, direct: direct, requestID: requestID, violation: violation, observation: f.validationSummary(txs, invalid, accepted, complete, receivedAt)}:
 		return nil
 	case <-f.quit:
 		return errTerminated

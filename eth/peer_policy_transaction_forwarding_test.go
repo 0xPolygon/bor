@@ -50,8 +50,8 @@ func newPolicyTransactionFetcher(h *handler, delivered chan<- struct{}) *fetcher
 	f := fetcher.NewTxFetcher(func(common.Hash) bool { return false }, func(txs []*types.Transaction) []error {
 		return make([]error, len(txs))
 	}, nil, nil)
-	f.SetValidationObserver(func(id string, provenance fetcher.DeliveryProvenance, items, bytes uint64, invalid bool) {
-		h.observeTransactionDelivery(id, provenance, items, bytes, invalid)
+	f.SetValidationObserver(func(id string, provenance fetcher.DeliveryProvenance, items, bytes uint64, invalid bool, accepted uint64, complete bool, receivedAt mclock.AbsTime) {
+		h.observeTransactionDelivery(id, provenance, items, bytes, invalid, accepted, complete, receivedAt)
 		delivered <- struct{}{}
 	})
 	return f
@@ -134,8 +134,8 @@ func TestPeerPolicyRequestedTransactionTraffic(t *testing.T) {
 		requests <- id
 		return nil
 	}, nil)
-	h.txFetcher.SetValidationObserver(func(id string, provenance fetcher.DeliveryProvenance, items, bytes uint64, invalid bool) {
-		h.observeTransactionDelivery(id, provenance, items, bytes, invalid)
+	h.txFetcher.SetValidationObserver(func(id string, provenance fetcher.DeliveryProvenance, items, bytes uint64, invalid bool, accepted uint64, complete bool, receivedAt mclock.AbsTime) {
+		h.observeTransactionDelivery(id, provenance, items, bytes, invalid, accepted, complete, receivedAt)
 		delivered <- struct{}{}
 	})
 	h.txFetcher.Start()

@@ -21,7 +21,7 @@ func TestPeerPolicyTransactionAllowanceBoundary(t *testing.T) {
 				if items {
 					count, bytes = 32768, 0
 				}
-				h.observeTransactionDelivery("peer", provenance, count, bytes, false)
+				h.observeTransactionDelivery("peer", provenance, count, bytes, false, 0, true, 0)
 				if got := h.peerPolicy.Snapshot("peer"); got.Risk != 0 {
 					t.Fatalf("at allowance: %+v", got)
 				}
@@ -29,7 +29,7 @@ func TestPeerPolicyTransactionAllowanceBoundary(t *testing.T) {
 				if items {
 					count, bytes = 1, 0
 				}
-				h.observeTransactionDelivery("peer", provenance, count, bytes, false)
+				h.observeTransactionDelivery("peer", provenance, count, bytes, false, 0, true, 0)
 				want := uint64(20)
 				if provenance == fetcher.RequestedDelivery {
 					want = 0
@@ -38,7 +38,7 @@ func TestPeerPolicyTransactionAllowanceBoundary(t *testing.T) {
 				if got.Risk != want || got.Windows[peerpolicy.TransactionVolume.String()] != want/20 {
 					t.Fatalf("above allowance: %+v", got)
 				}
-				h.observeTransactionDelivery("invalid", provenance, 32769, 64<<20+1, true)
+				h.observeTransactionDelivery("invalid", provenance, 32769, 64<<20+1, true, 0, true, 0)
 				if got := h.peerPolicy.Snapshot("invalid"); got.Risk != 60 || got.Windows[peerpolicy.TransactionVolume.String()] != 0 {
 					t.Fatalf("invalid-data classification: %+v", got)
 				}
@@ -48,12 +48,13 @@ func TestPeerPolicyTransactionAllowanceBoundary(t *testing.T) {
 }
 
 func TestPeerPolicyTransactionReplyReplay(t *testing.T) {
-	h := &handler{peerPolicy: peerpolicy.New(new(mclock.Simulated))}
+	clock := new(mclock.Simulated)
+	h := &handler{peerPolicy: peerpolicy.New(clock)}
 	requests := make(chan uint64, 1)
 	observed := make(chan fetcher.DeliveryProvenance, 1)
 	f := fetcher.NewTxFetcher(func(common.Hash) bool { return false }, func(txs []*types.Transaction) []error { return make([]error, len(txs)) }, func(_ string, id uint64, _ []common.Hash) error { requests <- id; return nil }, func(string) {})
-	f.SetValidationObserver(func(id string, p fetcher.DeliveryProvenance, items, bytes uint64, invalid bool) {
-		h.observeTransactionDelivery(id, p, items, bytes, invalid)
+	f.SetValidationObserver(func(id string, p fetcher.DeliveryProvenance, items, bytes uint64, invalid bool, accepted uint64, complete bool, receivedAt mclock.AbsTime) {
+		h.observeTransactionDelivery(id, p, items, bytes, invalid, accepted, complete, receivedAt)
 		observed <- p
 	})
 	f.Start()
@@ -85,7 +86,7 @@ func TestPeerPolicyTransactionReplyReplay(t *testing.T) {
 		if got := h.peerPolicy.Snapshot("peer"); got.Risk != 0 {
 			t.Fatalf("at boundary: %+v", got)
 		}
-		h.observeTransactionDelivery("peer", want, 0, 1, false)
+		h.observeTransactionDelivery("peer", want, 0, 1, false, 0, true, 0)
 		expected := uint64(0)
 		if want == fetcher.UnknownDelivery {
 			expected = 20
@@ -93,6 +94,6 @@ func TestPeerPolicyTransactionReplyReplay(t *testing.T) {
 		if got := h.peerPolicy.Snapshot("peer"); got.Risk != expected {
 			t.Fatalf("above boundary: %+v", got)
 		}
-		h.peerPolicy = peerpolicy.New(new(mclock.Simulated))
+		clock.Run(time.Minute)
 	}
 }

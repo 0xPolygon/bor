@@ -55,6 +55,7 @@ func (h *ethHandler) PeerInfo(id enode.ID) interface{} {
 	if p := h.peers.peer(id.String()); p != nil {
 		info := p.info()
 		if h.peerPolicy != nil {
+			(*handler)(h).updateContributionReadiness()
 			snapshot := h.peerPolicy.Snapshot(id.String())
 			info.Reputation = &snapshot
 		}

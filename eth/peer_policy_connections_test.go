@@ -2,6 +2,7 @@ package eth
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 	"time"
 
@@ -88,6 +89,34 @@ func TestPeerPolicyConnectionClasses(t *testing.T) {
 			h.observePeer(peer.ID(), peerpolicy.InvalidBlock)
 			if got := h.peerPolicy.Snapshot(peer.ID()); got.Risk != want {
 				t.Fatalf("async observation: %+v", got)
+			}
+		})
+	}
+}
+
+func TestPeerContributionEvictionPreservesConnectionClass(t *testing.T) {
+	for _, mode := range []string{"ordinary", "trusted", "static"} {
+		t.Run(mode, func(t *testing.T) {
+			h := &handler{peerPolicy: peerpolicy.New(new(mclock.Simulated)), peers: newPeerSet()}
+			peer := ethproto.NewPeer(ethproto.ETH68, policyTestConnection(t, mode), policyFaultRW{}, nil)
+			defer peer.Close()
+			if err := h.peers.registerPeer(peer, nil, nil); err != nil {
+				t.Fatal(err)
+			}
+			h.observeProtocolPeer(peer)
+			for i := range 1024 {
+				h.peerPolicy.Connected(fmt.Sprint(i))
+			}
+			if err := ethproto.Handle(nil, peer); err == nil {
+				t.Fatal("invalid framing accepted")
+			}
+			got := h.peerPolicy.Snapshot(peer.ID())
+			want := uint64(0)
+			if mode == "ordinary" {
+				want = 60
+			}
+			if got.Risk != want || got.Contribution.Protected != (mode != "ordinary") || got.Contribution.Status != "unknown" {
+				t.Fatalf("evicted connection class/coverage: %+v, %+v", got, got.Contribution)
 			}
 		})
 	}

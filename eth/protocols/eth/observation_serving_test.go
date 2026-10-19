@@ -39,6 +39,9 @@ func TestPeerPolicyCompletedBodyReply(t *testing.T) {
 			if !w.completed || e.Family != peerpolicy.BodyReplies {
 				t.Fatal("recorded before completion")
 			}
+			if e.Activity.ServedResponses != 1 || e.Activity.ServedBytes != 4 {
+				t.Fatalf("completed body omitted encoded reply activity: %+v", e)
+			}
 		}}
 		err := p.writeObservedBodies(1, []rlp.RawValue{{0xc0}}, peerpolicy.Evidence{Family: peerpolicy.BodyReplies})
 		if !errors.Is(err, w.err) {

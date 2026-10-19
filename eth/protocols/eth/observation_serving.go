@@ -31,7 +31,20 @@ func (p *Peer) writeObservedBodies(id uint64, bodies []rlp.RawValue, event peerp
 	err := p.queueReplyWithCompletion(BlockBodiesMsg, &BlockBodiesRLPPacket{
 		RequestId:              id,
 		BlockBodiesRLPResponse: bodies,
-	}, nil, func() { p.observer(event) })
+	}, nil, p.replyObserver(event))
 	p.observeReplyRefusal(err, event.Hashes)
 	return err
+}
+
+func (p *Peer) replyObserver(event peerpolicy.Evidence) func(uint64) {
+	observer := p.observer
+	if observer == nil {
+		return nil
+	}
+	// Capture before queueing: response workers start before SetObserver runs.
+	return func(bytes uint64) {
+		event.Activity.ServedResponses = 1
+		event.Activity.ServedBytes = bytes
+		observer(event)
+	}
 }

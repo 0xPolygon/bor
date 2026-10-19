@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/mclock"
 
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/txpool"
@@ -37,19 +38,19 @@ func TestPeerPolicyTransactionClassification(t *testing.T) {
 
 func TestPeerPolicyTransactionObserver(t *testing.T) {
 	f := &TxFetcher{}
-	if got := f.validationSummary(testTxs, true); got != (txObservation{}) {
+	if got := f.validationSummary(testTxs, true, 1, true, 123); got != (txObservation{}) {
 		t.Fatal("disabled observation retained evidence")
 	}
 	f.observeDelivery(nil)
 	f.requests = map[string]*txRequest{"peer": {requestID: 7, hashes: testTxsHashes[:2]}}
 	calls := 0
-	f.SetValidationObserver(func(id string, solicited DeliveryProvenance, count, bytes uint64, invalid bool) {
+	f.SetValidationObserver(func(id string, solicited DeliveryProvenance, count, bytes uint64, invalid bool, accepted uint64, complete bool, receivedAt mclock.AbsTime) {
 		calls++
-		if id != "peer" || solicited != RequestedDelivery || count != 2 || bytes != testTxs[0].Size()+testTxs[1].Size() || !invalid {
+		if id != "peer" || solicited != RequestedDelivery || count != 2 || bytes != testTxs[0].Size()+testTxs[1].Size() || !invalid || accepted != 1 || !complete || receivedAt != 123 {
 			t.Fatal("incorrect transaction observation")
 		}
 	})
-	f.observeDelivery(&txDelivery{origin: "peer", direct: true, requestID: 7, hashes: testTxsHashes[:2], observation: f.validationSummary(testTxs[:2], true)})
+	f.observeDelivery(&txDelivery{origin: "peer", direct: true, requestID: 7, hashes: testTxsHashes[:2], observation: f.validationSummary(testTxs[:2], true, 1, true, 123)})
 	if calls != 1 {
 		t.Fatal("missing observation")
 	}
@@ -88,6 +89,10 @@ func TestPeerPolicyRequestedTransactionDelivery(t *testing.T) {
 func TestPeerPolicyTransactionReplyCorrelation(t *testing.T) {
 	for _, invalid := range []bool{false, true} {
 		t.Run(fmt.Sprint(invalid), func(t *testing.T) {
+			wantAccepted := uint64(1)
+			if invalid {
+				wantAccepted = 0
+			}
 			f := NewTxFetcher(func(common.Hash) bool { return false }, func(txs []*types.Transaction) []error {
 				errs := make([]error, len(txs))
 				if invalid {
@@ -97,8 +102,8 @@ func TestPeerPolicyTransactionReplyCorrelation(t *testing.T) {
 			}, func(string, uint64, []common.Hash) error { return nil }, func(string) {})
 			f.requests["peer"] = &txRequest{requestID: 7, hashes: testTxsHashes[:1]}
 			observations := make(chan DeliveryProvenance, 2)
-			f.SetValidationObserver(func(id string, solicited DeliveryProvenance, items, bytes uint64, bad bool) {
-				if id != "peer" || items != 1 || bytes != testTxs[0].Size() || bad != invalid {
+			f.SetValidationObserver(func(id string, solicited DeliveryProvenance, items, bytes uint64, bad bool, accepted uint64, complete bool, receivedAt mclock.AbsTime) {
+				if id != "peer" || items != 1 || bytes != testTxs[0].Size() || bad != invalid || accepted != wantAccepted || !complete {
 					observations <- DeliveryProvenance(255)
 					return
 				}

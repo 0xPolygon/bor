@@ -96,9 +96,7 @@ func TestPeerPolicyTimedJailEvidence(t *testing.T) {
 
 func TestPeerPolicyWitStrikeThreshold(t *testing.T) {
 	for _, announcement := range []bool{false, true} {
-		h := newTestHandler()
-		defer h.close()
-		h.handler.peerPolicy = peerpolicy.New(new(mclock.Simulated))
+		h := newContributionTestHandler(t, new(mclock.Simulated), false)
 		peer, cleanup := registerEthWitPeer(t, h, wit.WIT2)
 		defer cleanup()
 		strike := h.handler.strikeWit2PeerByID
@@ -138,9 +136,7 @@ func TestPeerPolicyUnknownTransactionEvidence(t *testing.T) {
 }
 
 func TestPeerPolicyDeferredAnnouncementEvidence(t *testing.T) {
-	h := newTestHandler()
-	defer h.close()
-	h.handler.peerPolicy = peerpolicy.New(new(mclock.Simulated))
+	h := newContributionTestHandler(t, new(mclock.Simulated), false)
 	header := &types.Header{Number: big.NewInt(3333)}
 	rawdb.WriteHeader(h.chain.DB(), header)
 	ann := wit.SignedWitnessAnnouncement{BlockHash: header.Hash(), BlockNumber: 3334}

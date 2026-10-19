@@ -66,6 +66,7 @@ const (
 // Evidence belongs to one delivery. Reason takes precedence over traffic scoring
 // so a malformed delivery is not also scored for exceeding a traffic allowance.
 type Evidence struct {
+	Activity    ActivityEvent
 	Refused     bool
 	Reason      Reason
 	Family      Family
@@ -76,10 +77,11 @@ type Evidence struct {
 }
 
 type Snapshot struct {
-	Mode    string            `json:"mode"`
-	Risk    uint64            `json:"risk"`
-	Action  string            `json:"wouldAction"`
-	Windows map[string]uint64 `json:"reasonWindows"`
+	Mode         string                `json:"mode"`
+	Risk         uint64                `json:"risk"`
+	Action       string                `json:"wouldAction"`
+	Windows      map[string]uint64     `json:"reasonWindows"`
+	Contribution *ContributionSnapshot `json:"contribution"`
 }
 
 type allowance struct {
