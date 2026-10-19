@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/checkpoint"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/log"
 )
 
@@ -128,14 +129,29 @@ func (h *ethHandler) handleMilestone(ctx context.Context, eth *Ethereum, milesto
 
 	h.downloader.ProcessMilestone(num, hash)
 
-	// Publish the milestone block as finalized and safe. Re-resolve via the
-	// canonical number→hash mapping so a reorg between verification and this
-	// write can't promote a stale or non-canonical header.
-	if block := eth.blockchain.GetBlockByNumber(num); block != nil && block.Hash() == hash {
-		eth.blockchain.SetFinalized(block.Header())
-	}
+	setMilestoneFinalized(eth.blockchain, num, hash)
 
 	return nil
+}
+
+// setMilestoneFinalized publishes the milestone end block as the finalized block
+// and reports whether finality advanced. The header is re-resolved via the
+// canonical number→hash mapping so a reorg between verification and this write
+// can't promote a stale or non-canonical header, and a milestone that is not
+// ahead of the current finalized block is ignored so finality never moves
+// backward.
+func setMilestoneFinalized(chain *core.BlockChain, num uint64, hash common.Hash) bool {
+	if current := chain.CurrentFinalBlock(); current != nil && num <= current.Number.Uint64() {
+		return false
+	}
+
+	header := chain.GetHeaderByNumber(num)
+	if header == nil || header.Hash() != hash {
+		return false
+	}
+
+	chain.SetFinalized(header)
+	return true
 }
 
 // reportCommonErrors reports common errors which can occur while fetching data from heimdall. It also

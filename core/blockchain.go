@@ -1606,13 +1606,17 @@ func (bc *BlockChain) loadLastState() error {
 
 	// Restore the last known finalized block and safe block
 	// Note: the safe block is not stored on disk and it is set to the last
-	// known finalized block on startup
+	// known finalized block on startup. Bor never tracks a safe block (milestones
+	// only advance finalized), so seeding it here would leave it frozen at the
+	// restart-time block forever.
 	if head := rawdb.ReadFinalizedBlockHash(bc.db); head != (common.Hash{}) {
 		if block := bc.GetBlockByHash(head); block != nil {
 			bc.currentFinalBlock.Store(block.Header())
 			headFinalizedBlockGauge.Update(int64(block.NumberU64()))
-			bc.currentSafeBlock.Store(block.Header())
-			headSafeBlockGauge.Update(int64(block.NumberU64()))
+			if bc.chainConfig.Bor == nil {
+				bc.currentSafeBlock.Store(block.Header())
+				headSafeBlockGauge.Update(int64(block.NumberU64()))
+			}
 		}
 	}
 
