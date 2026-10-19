@@ -24,7 +24,6 @@ import (
 	"math/big"
 	"os"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -647,7 +646,7 @@ func TestOpTstore(t *testing.T) {
 // worker) was silently dropped from preimage recording.
 func TestOpKeccak256_CacheHitRecordsPreimage(t *testing.T) {
 	statedb, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
-	cache := &sync.Map{}
+	cache := NewKeccak256Cache()
 
 	input := make([]byte, 64)
 	for i := range input {

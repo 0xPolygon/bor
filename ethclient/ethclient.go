@@ -557,6 +557,13 @@ func toFilterArg(q ethereum.FilterQuery) (interface{}, error) {
 	if q.Topics != nil {
 		arg["topics"] = q.Topics
 	}
+	if q.Pending {
+		arg["pending"] = true
+		if q.BlockHash != nil || q.FromBlock != nil || q.ToBlock != nil {
+			return nil, errors.New("cannot specify pending with BlockHash or FromBlock/ToBlock")
+		}
+		return arg, nil
+	}
 	if q.BlockHash != nil {
 		arg["blockHash"] = *q.BlockHash
 

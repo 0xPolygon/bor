@@ -33,6 +33,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/tracing"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/bor"
+	"github.com/ethereum/go-ethereum/consensus/misc"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/core"
@@ -109,6 +110,7 @@ const (
 var (
 	errBlockInterruptedByNewHead  = errors.New("new head arrived while building block")
 	errBlockInterruptedByRecommit = errors.New("recommit interrupt while building block")
+	errRebuildForSequence         = errors.New("competing producer holds this height; rebuild on the store's sequence")
 	errBlockInterruptedByTimeout  = errors.New("timeout while building block")
 	errStateReadFailure           = errors.New("state read failed while building block")
 
@@ -214,9 +216,11 @@ var (
 	// gas_used_per_block and txs_per_block are emitted in both modes.
 	workerGasUsedPerBlockHistogram = metrics.NewRegisteredHistogram("worker/chain/gas_used_per_block", nil, metrics.NewExpDecaySample(1028, 0.015))
 	workerTxsPerBlockHistogram     = metrics.NewRegisteredHistogram("worker/chain/txs_per_block", nil, metrics.NewExpDecaySample(1028, 0.015))
-	// End-to-end producer timer: wall clock from build begin to NewMinedBlockEvent broadcast.
-	// Fires in both normal (resultLoop → mux.Post) and pipelined (inlineSealAndBroadcast → mux.Post) modes,
-	// giving a directly comparable apples-to-apples A/B signal.
+	// End-to-end producer timer: wall clock from when the producer was first allowed to build the
+	// block (see buildToAnnounceStart) to NewMinedBlockEvent broadcast, so it covers prepare, fill,
+	// finalize, seal, the sequencer gate and the chain write. Fires in both normal (resultLoop →
+	// mux.Post) and pipelined (inlineSealAndBroadcast → mux.Post) modes, giving a directly
+	// comparable apples-to-apples A/B signal.
 	workerBuildToAnnounceTimer = metrics.NewRegisteredTimer("worker/build_to_announce", nil)
 
 	// Trie commit metrics for block production (populated after WriteBlockAndSetHead → CommitWithUpdate).
@@ -244,6 +248,14 @@ func productionStartFrom(genParams *generateParams) time.Time {
 		return time.Time{}
 	}
 	return genParams.productionStart
+}
+
+// buildStartFrom extracts the commitWork start time from genParams, or zero.
+func buildStartFrom(genParams *generateParams) time.Time {
+	if genParams == nil {
+		return time.Time{}
+	}
+	return genParams.buildStart
 }
 
 func newRegisteredCustomTimer(name string, reservoirSize int) *metrics.Timer {
@@ -278,6 +290,12 @@ type environment struct {
 	blobs    int
 
 	witness *stateless.Witness
+
+	// sequencerMuted keeps this build out of the sequence store: the signer
+	// cannot seal (Seal would refuse the block), so nothing it produces may
+	// be published or adopted. The build itself proceeds for the pending
+	// snapshot.
+	sequencerMuted bool
 
 	// Readers with stats tracking for metrics reporting
 	prefetchReader state.ReaderWithStats
@@ -374,7 +392,7 @@ type task struct {
 	state                *state.StateDB
 	block                *types.Block
 	createdAt            time.Time
-	productionStart      time.Time     // wall clock at build begin — used for worker/build_to_announce (fires from resultLoop at mux.Post)
+	announceStart        time.Time     // when the producer was first allowed to build this block (see buildToAnnounceStart); worker/build_to_announce runs from here to mux.Post
 	productionElapsed    time.Duration // elapsed from after prepareWork to task submission (excludes sealing wait); used for workerMgaspsTimer and workerBlockExecutionTimer
 	intermediateRootTime time.Duration // time spent in IntermediateRoot inside FinalizeAndAssemble; subtracted when computing workerBlockExecutionTimer
 	pipelined            bool          // If true, state was already committed by SRC goroutine — skip CommitWithUpdate in writeBlockWithState
@@ -407,6 +425,11 @@ func stateSyncReserveFor(config *params.ChainConfig, number *big.Int) uint64 {
 func (env *environment) txFitsSize(tx *types.Transaction) bool {
 	return env.size+tx.Size() < params.MaxBlockSize-maxBlockSizeBufferZone-env.stateSyncReserve
 }
+
+// sequenceBarrierTimeout bounds the pre-seal wait for store confirmation.
+// Past it the block seals regardless: a slow or unreachable store must not
+// stall block production.
+const sequenceBarrierTimeout = 120 * time.Millisecond
 
 const (
 	commitInterruptNone int32 = iota
@@ -467,6 +490,11 @@ type worker struct {
 	eth         Backend
 	chain       *core.BlockChain
 
+	// sequencer, when set, receives block-production progress (open, per-tx,
+	// seal) for the sequence store. Set before the worker starts; nil when
+	// sequencing is disabled. All its methods are non-blocking.
+	sequencer BlockSequencer
+
 	prio []common.Address // A list of senders to prioritize
 
 	// Feeds
@@ -521,6 +549,15 @@ type worker struct {
 	newTxs  atomic.Int32 // New arrival transaction count since last sealing work submitting.
 	syncing atomic.Bool  // The indicator whether the node is still syncing.
 
+	// finalityLatched is set once a whitelisted milestone confirms this
+	// node's chain; eligibleSince (UnixNano) anchors the grace before
+	// that. Re-armed whenever sync completes, so the grace measures time
+	// spent eligible to build rather than process uptime — commitWork
+	// returns on syncing before it consults the gate, and a resync that
+	// outlives the grace would otherwise consume it silently.
+	finalityLatched atomic.Bool
+	eligibleSince   atomic.Int64
+
 	// newpayloadTimeout is the maximum timeout allowance for creating payload.
 	// The default value is 2 seconds but node operator can set it to arbitrary
 	// large value. A large timeout allowance may cause Geth to fail creating
@@ -563,6 +600,8 @@ type worker struct {
 
 	// Pipelined SRC: speculative work channel for block N+1 execution
 	speculativeWorkCh chan *speculativeWorkReq
+
+	stallWatch *producerStallWatch // Reports when this node, as the span producer, stops announcing blocks
 }
 
 //nolint:staticcheck
@@ -596,10 +635,14 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		speculativeWorkCh:   make(chan *speculativeWorkReq, 1),
 	}
 	worker.noempty.Store(true)
+	worker.stallWatch = newProducerStallWatch(producerStallThreshold, worker.isCurrentProducer,
+		func() uint64 { return worker.chain.CurrentBlock().Number.Uint64() },
+		producerStalledGauge, producerStallsCounter)
 	// Production-side pipelined SRC is intentionally disabled and no longer has
 	// a miner config knob. Keep the gauge at 0; import-side pipelining has its
 	// own chain/imports/pipelined/enabled gauge.
 	pipelineBuildEnabledGauge.Update(0)
+	worker.rearmFinalityGrace()
 	// Subscribe for transaction insertion events (whether from network or resurrects)
 	worker.txsSub = eth.TxPool().SubscribeTransactions(worker.txsCh, true)
 	// Subscribe events for blockchain
@@ -790,6 +833,7 @@ func (w *worker) start() {
 // stop sets the running status as 0.
 func (w *worker) stop() {
 	w.running.Store(false)
+	w.stallWatch.clear()
 }
 
 // IsRunning returns an indicator whether worker is running or not.
@@ -801,6 +845,7 @@ func (w *worker) IsRunning() bool {
 // Note the worker does not support being closed multiple times.
 func (w *worker) close() {
 	w.running.Store(false)
+	w.stallWatch.close()
 	close(w.exitCh)
 	w.wg.Wait()
 	w.prefetchWg.Wait()
@@ -969,6 +1014,7 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 		select {
 		case <-w.startCh:
 			w.clearPending(w.chain.CurrentBlock().Number.Uint64())
+			w.watchNextBlock(w.chain.CurrentBlock())
 
 			timestamp = time.Now().Unix()
 			w.pendingWorkBlock.Store(w.chain.CurrentBlock().Number.Uint64() + 1)
@@ -977,6 +1023,9 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 
 		case head := <-w.chainHeadCh:
 			w.clearPending(head.Header.Number.Uint64())
+			// Before the skip below: a build already in flight for the next
+			// block still needs its stall clock.
+			w.watchNextBlock(head.Header)
 
 			pendingWorkBlock := w.pendingWorkBlock.Load()
 			if pendingWorkBlock == head.Header.Number.Uint64()+1 {
@@ -1417,6 +1466,20 @@ func (w *worker) resultLoop() {
 				log.Error("Block found but no relative pending task", "number", block.Number(), "sealhash", sealhash, "hash", hash)
 				continue
 			}
+
+			if !w.sealAndGate(block) {
+				// The refused block never reaches the chain, so nothing ever
+				// advances past it to age this task out via clearPending — and
+				// a task left here reads as "sealing in flight" to the veblop
+				// stall fallback (decideVeblopFallback), disabling the only
+				// recovery path while the chain is stalled at this exact height.
+				w.pendingMu.Lock()
+				delete(w.pendingTasks, sealhash)
+				w.pendingMu.Unlock()
+
+				continue
+			}
+
 			// Different block could share same sealhash, deep copy here to prevent write-write conflict.
 			var (
 				receipts = make([]*types.Receipt, len(task.receipts))
@@ -1471,7 +1534,7 @@ func (w *worker) resultLoop() {
 			log.Info("Successfully sealed new block", "number", block.Number(), "sealhash", sealhash, "hash", hash,
 				"elapsed", common.PrettyDuration(time.Since(task.createdAt)))
 
-			announceTaskBlock(w.mux, task, block, witness)
+			w.announceTaskBlock(task, block, witness)
 
 			sealedBlocksCounter.Inc(1)
 
@@ -1557,17 +1620,15 @@ func emitCommitMetrics(task *task, block *types.Block, writeElapsed time.Duratio
 // build-to-announce + PIP-66 earliness + committed metrics for pipelined
 // tasks sealed via taskCh (last-of-pipeline, eligibility-fail, or fallback).
 // inlineSealAndBroadcast emits the same signals on the inline path.
-func announceTaskBlock(mux *event.TypeMux, task *task, block *types.Block, witness *stateless.Witness) {
+func (w *worker) announceTaskBlock(task *task, block *types.Block, witness *stateless.Witness) {
 	announceAt := time.Now()
-	if !task.productionStart.IsZero() {
-		workerBuildToAnnounceTimer.UpdateSince(task.productionStart)
-	}
+	w.recordAnnouncement(block, task.announceStart)
 	if task.pipelined {
 		earlyMs := block.Header().GetActualTime().Sub(announceAt).Milliseconds()
 		pipelineAnnounceEarlinessMs.Update(earlyMs)
 		pipelineSpeculativeCommittedCounter.Inc(1)
 	}
-	mux.Post(core.NewMinedBlockEvent{Block: block, Witness: witness, SealedAt: announceAt})
+	w.mux.Post(core.NewMinedBlockEvent{Block: block, Witness: witness, SealedAt: announceAt})
 }
 
 // resolveStateFor returns the caller-supplied statedb if any (from commitWork's
@@ -1665,6 +1726,14 @@ func (w *worker) commitTransaction(env *environment, tx *types.Transaction) ([]*
 	env.receipts = append(env.receipts, receipt)
 	env.tcount++
 	env.size += tx.Size()
+
+	// Only actual block production is sequenced: the pending-block snapshot
+	// and payload-building paths also commit transactions, but those never
+	// seal, and publishing them would poison the store chain. A muted build
+	// (unauthorized signer) commits locally and publishes nothing.
+	if !env.sequencerMuted && w.sequencingActive(env.header.Number) {
+		w.sequencer.PublishTx(tx)
+	}
 
 	return receipt.Logs, nil
 }
@@ -1970,11 +2039,15 @@ type generateParams struct {
 	prefetchedTxHashes        *sync.Map               // Map of successfully prefetched transaction hashes
 	builderPrefetchedTxHashes *sync.Map               // Subset of prefetchedTxHashes populated only during the builder phase; used to measure builder-phase contribution
 	productionStart           time.Time               // Start of full-block building (after optional empty pre-seal); used for productionElapsed
+	buildStart                time.Time               // Entry to commitWork, before state acquisition and prepareWork; used for worker/build_to_announce
 	preBuildDuration          time.Duration           // Duration of pre block build phase
 	builderStarted            *atomic.Bool            // Set when block building begins; immediately interrupts the idle Prefetch() call and triggers builder-mode prefetching
 	builderPlanCh             chan *types.Transaction // Builder sends each validated tx here before execution; prefetcher reads and warms state concurrently
 	builderGasFreedCh         chan uint64             // Builder sends (declared−actual) gas after each successful tx; prefetcher uses it to predict overflow txs
 	planWg                    sync.WaitGroup          // Tracks sendPlan goroutines; must reach zero before builderPlanCh is closed
+	adoption                  *AdoptedWindow          // Dangling store window this build inherits and seeds
+	production                bool                    // Set only by commitWork: payload-building (generateWork) must never touch the sequencer
+	sequencerMuted            bool                    // Signer cannot seal (Seal would refuse): build locally, publish nothing to the store
 }
 
 // makeHeader creates a new block header for sealing. The caller must hold w.mu
@@ -2074,6 +2147,19 @@ func (w *worker) prepareWork(genParams *generateParams, witness bool) (*environm
 	if err != nil {
 		return nil, err
 	}
+	// A signer Seal would refuse still builds — the pending snapshot must
+	// refresh on every chain head for RPC reads — but the build stays
+	// local: publishing its sequence would preconfirm content that can
+	// never land, and its open would contend the store's height election
+	// against the real producer.
+	genParams.sequencerMuted = w.sequencerMutedBuild(genParams, header)
+	// Only an authorized build reads the store: a dangling window for this
+	// exact header is adopted rather than superseded — fetched at real
+	// build time so the snapshot cannot go stale against a still-streaming
+	// incumbent.
+	w.fetchAdoption(genParams, header)
+	// Before makeEnv: executed transactions must see the adopted context.
+	w.applyAdoption(genParams, header)
 	makeHeaderDuration := time.Since(makeHeaderStart)
 
 	// Could potentially happen if starting to mine in an odd state.
@@ -2087,6 +2173,7 @@ func (w *worker) prepareWork(genParams *generateParams, witness bool) (*environm
 	}
 	env.makeEnvDuration = time.Since(makeEnvStart)
 	env.makeHeaderDuration = makeHeaderDuration
+	env.sequencerMuted = genParams.sequencerMuted
 	if header.ParentBeaconRoot != nil {
 		context := core.NewEVMBlockContext(header, w.chain, nil)
 		vmenv := vm.NewEVM(context, env.state, w.chainConfig, w.vmConfig())
@@ -2404,7 +2491,6 @@ func (w *worker) generateWork(params *generateParams, witness bool) *newPayloadR
 
 	var block *types.Block
 	block, work.receipts, _, err = w.engine.FinalizeAndAssemble(w.chain, work.header, work.state, &body, work.receipts)
-
 	if err != nil {
 		return &newPayloadResult{err: err}
 	}
@@ -2453,6 +2539,32 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 	}
 
 	parent := w.chain.CurrentBlock()
+
+	// A producer whose chain finality has not confirmed must not build: a
+	// restarting node that mines before its milestone view catches up
+	// produces a private fork every peer will refuse — four doomed blocks
+	// on a devnet, reorged away with all their preconfirmations.
+	next := new(big.Int).Add(parent.Number, common.Big1)
+	if w.sequencer != nil && sequencerActive(w.chainConfig.Bor, next) && !w.finalityConfirmed() {
+		log.Warn("Not building: finality has not confirmed this chain",
+			"number", next)
+
+		return
+	}
+
+	// Contention discovered mid-build — a competing producer's window
+	// landing after the build-start read — ends the work cycle rather than
+	// retrying inside it. The outer cycle machinery is the retry: the
+	// winner's imported block triggers a fresh cycle immediately (the
+	// recommit tick covers the rest), its build-start read adopts the
+	// standing window, and the seal gate referees anything that persists.
+	w.buildAttempt(interrupt, noempty, timestamp, abortRecovery, coinbase, parent, buildStart)
+}
+
+// buildAttempt runs one full build cycle on a fresh parent state.
+func (w *worker) buildAttempt(interrupt *atomic.Int32, noempty bool, timestamp int64,
+	abortRecovery bool, coinbase common.Address, parent *types.Header, buildStart time.Time,
+) {
 	// Sealing must build on committed state: the FlatDiff overlay that
 	// StateAtWithReaders serves during the pipelined window is rooted at the
 	// grandparent, and a root computed over it omits the parent's writes —
@@ -2481,7 +2593,9 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 		prefetchReader:     prefetchReader,
 		processReader:      processReader,
 		prefetchedTxHashes: &sync.Map{},
+		buildStart:         buildStart,
 		preBuildDuration:   time.Since(buildStart),
+		production:         true,
 	}
 
 	var interruptPrefetch atomic.Bool
@@ -2518,7 +2632,6 @@ func (w *worker) maybeStartPrefetch(parent *types.Header, throwaway *state.State
 	}()
 }
 
-// buildAndCommitBlock prepares work, fills transactions, and commits the block for sealing.
 // submitForSealing dispatches the built block to either the pipelined path
 // (overlap SRC for N with N+1's execution) or the sequential path. The
 // pendingWorkBlock bump is what de-duplicates ChainHeadEvent-triggered
@@ -2532,6 +2645,35 @@ func (w *worker) submitForSealing(work *environment, start time.Time, genParams 
 	_ = w.commit(work.copy(), w.fullTaskHook, true, start, genParams)
 }
 
+// logBuildStart records the build timing context: how long preparation
+// took and how much of the slot remains before the interrupt.
+func (w *worker) logBuildStart(work *environment, genParams *generateParams,
+	prepareWorkStart time.Time, prepareWorkDuration time.Duration,
+) {
+	timeUntilInterrupt := time.Until(work.header.GetActualTime())
+	if timeUntilInterrupt > time.Second {
+		timeUntilInterrupt -= interruptBuffer
+	}
+
+	parent := w.chain.CurrentBlock()
+	log.Info("Starting to build block", "number", work.header.Number.Uint64(),
+		"buildStart", prepareWorkStart.UTC().Format(time.RFC3339Nano),
+		"preBuild", common.PrettyDuration(genParams.preBuildDuration), // time spent before `buildAndCommitBlock` is called
+		"prepareWork", common.PrettyDuration(prepareWorkDuration), // total time spent in prepare work
+		"makeEnv", common.PrettyDuration(work.makeEnvDuration), // total time spent in `makeEnv` inside prepare work
+		"makeHeader", common.PrettyDuration(work.makeHeaderDuration), // total time spent in `makeHeader` inside prepare work includes bor.Prepare call
+		"parentTime", time.Unix(int64(parent.Time), 0).UTC().Format(time.RFC3339Nano),
+		"parentActualTime", parent.GetActualTime().UTC().Format(time.RFC3339Nano),
+		"headerTime", time.Unix(int64(work.header.Time), 0).UTC().Format(time.RFC3339Nano),
+		"headerActualTime", work.header.GetActualTime().UTC().Format(time.RFC3339Nano),
+		"timeUntilInterrupt", common.PrettyDuration(timeUntilInterrupt), // time left before block building will be interrupted
+	)
+}
+
+// buildAndCommitBlock prepares work, fills transactions, and commits the block
+// for sealing. A build abandoned because another producer holds this height
+// simply ends the work cycle: the next one's build-start read adopts their
+// window.
 func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genParams *generateParams, interruptPrefetch *atomic.Bool) {
 	// Must be the first defer so the prefetcher goroutine is signaled to exit
 	// on every return path — including the early return below when prepareWork
@@ -2546,6 +2688,10 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 	}
 	prepareWorkDuration := time.Since(prepareWorkStart)
 	prepareWorkTimer.Update(prepareWorkDuration)
+
+	// The header context is final here (engine.Prepare included): publish
+	// the block-open record before any transaction commits.
+	w.sequencerOpen(work)
 
 	// Starts accounting time after prepareWork. Slot timing is handled in Seal
 	// for sequential paths and explicitly in the pipeline path.
@@ -2567,23 +2713,7 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 	}()
 
 	if w.IsRunning() {
-		timeUntilInterrupt := time.Until(work.header.GetActualTime())
-		if timeUntilInterrupt > time.Second {
-			timeUntilInterrupt -= interruptBuffer
-		}
-		parent := w.chain.CurrentBlock()
-		log.Info("Starting to build block", "number", work.header.Number.Uint64(),
-			"buildStart", prepareWorkStart.UTC().Format(time.RFC3339Nano),
-			"preBuild", common.PrettyDuration(genParams.preBuildDuration), // time spent before `buildAndCommitBlock` is called
-			"prepareWork", common.PrettyDuration(prepareWorkDuration), // total time spent in prepare work
-			"makeEnv", common.PrettyDuration(work.makeEnvDuration), // total time spent in `makeEnv` inside prepare work
-			"makeHeader", common.PrettyDuration(work.makeHeaderDuration), // total time spent in `makeHeader` inside prepare work includes bor.Prepare call
-			"parentTime", time.Unix(int64(parent.Time), 0).UTC().Format(time.RFC3339Nano),
-			"parentActualTime", parent.GetActualTime().UTC().Format(time.RFC3339Nano),
-			"headerTime", time.Unix(int64(work.header.Time), 0).UTC().Format(time.RFC3339Nano),
-			"headerActualTime", work.header.GetActualTime().UTC().Format(time.RFC3339Nano),
-			"timeUntilInterrupt", common.PrettyDuration(timeUntilInterrupt), // time left before block building will be interrupted
-		)
+		w.logBuildStart(work, genParams, prepareWorkStart, prepareWorkDuration)
 	}
 
 	if !noempty && w.interruptCommitFlag {
@@ -2616,8 +2746,9 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 	// Mark the start of full-block building. Set after the optional empty pre-seal commit so that
 	// productionElapsed for the full block does not include empty-block overhead.
 	genParams.productionStart = time.Now()
-	// Fill pending transactions from the txpool into the block.
-	err = w.fillTransactions(interrupt, work, genParams)
+	// Fill pending transactions from the txpool into the block: a single
+	// snapshot, or repeated ones until announce time when sequencing.
+	err = w.fillBlock(interrupt, work, genParams)
 	// Wait for any sendPlan goroutines to finish before closing the channel.
 	// These goroutines do only non-blocking sends so they complete in microseconds.
 	// Waiting here ensures no goroutine sends to a closed channel.
@@ -2660,7 +2791,23 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 		// which could result in higher uncle rate.
 		work.discard()
 		return
+
+	case errors.Is(err, errRebuildForSequence):
+		// A competing producer owns this height in the store. Committing
+		// this block would seal content that diverges from the sequence
+		// consumers already saw. Discard; the next work cycle's build-start
+		// read adopts their window.
+		log.Warn("Discarding build to follow the store's sequence", "number", work.header.Number)
+		work.discard()
+
+		return
 	}
+	if !w.sealBarrier(work) {
+		work.discard()
+
+		return
+	}
+
 	w.submitForSealing(work, start, genParams)
 
 	// Swap out the old work with the new one, terminating any leftover
@@ -2671,6 +2818,138 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 	}
 	w.current = work
 	w.currentMu.Unlock()
+}
+
+// adoptionSeedBudget is the minimum build time an adopted block gets: its
+// inherited announce time is typically already past (the stall fallback
+// fires at least a block time after the stalled open), so without a floor
+// there is no room left to fill beyond the seeded window.
+const adoptionSeedBudget = 500 * time.Millisecond
+
+// sealMargin is the tail of the block interval reserved for sealing, kept
+// clear of transaction execution.
+const sealMargin = 150 * time.Millisecond
+
+// finalityGrace is how long a starting producer waits for finality to say
+// anything at all before building anyway. The grace is for ambiguity — no
+// milestone yet, Heimdall still connecting — not for contradiction: a
+// milestone that conflicts with the local chain refuses production for as
+// long as the conflict holds. Var for tests.
+var finalityGrace = 10 * time.Second
+
+// sealGateTimeout bounds the wait for an uncontested seal verdict before
+// the block is broadcast regardless. Measured ack latency on a loaded
+// devnet: p50 4.6ms, p99 50ms, p99.9 341ms — so this covers the tail with
+// margin while costing a block period only when the store is genuinely
+// gone. A contested seal is different: there a verdict is provably in
+// progress, and the publisher extends the wait itself rather than
+// broadcasting a block whose refusal is seconds away.
+const sealGateTimeout = 500 * time.Millisecond
+
+// finalityConfirmed reports whether finality has ratified the chain this
+// node holds. It latches on the first confirmation: steady-state milestones
+// always trail the head, so re-checking would stall every producer forever.
+//
+//	no milestone yet     -> wait out the startup grace, then proceed
+//	                        (a Heimdall outage costs a pause, not the chain)
+//	milestone on chain   -> confirmed, latch open
+//	milestone conflicts  -> refuse while the conflict holds: the local
+//	                        chain is provably a fork finality rejected
+func (w *worker) finalityConfirmed() bool {
+	if w.finalityLatched.Load() {
+		return true
+	}
+
+	exists, number, hash := w.eth.WhitelistedMilestone()
+	if !exists {
+		return time.Since(time.Unix(0, w.eligibleSince.Load())) > finalityGrace
+	}
+
+	if w.chain.GetCanonicalHash(number) == hash {
+		w.finalityLatched.Store(true)
+
+		return true
+	}
+
+	return false
+}
+
+// rearmFinalityGrace restarts the finality grace clock: at construction,
+// and again when sync completes — the point the node actually becomes
+// eligible to build, and the point the restart-fork window opens.
+func (w *worker) rearmFinalityGrace() {
+	w.eligibleSince.Store(time.Now().UnixNano())
+}
+
+// applyAdoption rewrites the prepared header with the adopted window's open
+// context — consumers pinned those fields at open and cross-check them
+// against the sealed header, so a block sealed under a different context
+// voids the window. Runs after engine.Prepare (which owns the
+// timestamp otherwise) and before makeEnv builds the EVM context. The
+// announce deadline is synthesized onto the header's local actual-time
+// hint; the adopted announce time is typically already past.
+// adoptionReject names the bound an offered window failed, or "" when the
+// window is adoptable. The reason is worth naming: a rejected window is what
+// turns one producer's height into two competing generations.
+func (w *worker) adoptionReject(a *AdoptedWindow, header *types.Header) string {
+	parent := w.chain.GetHeaderByHash(header.ParentHash)
+
+	switch {
+	case parent == nil:
+		return "parent unknown"
+	case a.ParentHash != header.ParentHash:
+		return "parent mismatch"
+	case a.Number != header.Number.Uint64():
+		return "height mismatch"
+	}
+
+	minTime := adoptionMinTime(w.chainConfig.Bor, parent.Time, a.Number)
+
+	switch {
+	case a.Timestamp < minTime:
+		return "timestamp below parent period"
+	case a.Timestamp > uint64(time.Now().Unix())+maxAdoptedFutureSeconds:
+		return "timestamp too far in the future"
+	case misc.VerifyGaslimit(parent.GasLimit, a.GasLimit) != nil:
+		return "gas limit out of bounds"
+	// Both producers derive the base fee from the same parent with the same
+	// rules; a differing value marks a window this node cannot legally seal.
+	case header.BaseFee == nil || a.BaseFee == nil || header.BaseFee.Cmp(a.BaseFee) != 0:
+		return "base fee mismatch"
+	}
+
+	return ""
+}
+
+// seedAdopted commits the adopted window's transactions in order before any
+// pool fill. The seed ignores the interrupt and runs to completion: these
+// transactions are already published and preconfirmed, so cutting it short
+// seals a block missing content consumers were promised, and the remainder
+// resurfaces at the next height as a displaced preconfirmation. An
+// inapplicable transaction (nonce consumed, balance moved) is skipped — the
+// publisher's expectation matching turns that divergence into a
+// partial-adoption supersede.
+func (w *worker) seedAdopted(work *environment, adoption *AdoptedWindow) {
+	if work.gasPool == nil {
+		work.gasPool = core.NewGasPool(work.header.GasLimit)
+	}
+
+	applied := 0
+
+	for _, tx := range adoption.Txs {
+		work.state.SetTxContext(tx.Hash(), work.tcount, uint32(work.tcount+1))
+
+		if _, err := w.commitTransaction(work, tx); err != nil {
+			log.Debug("Adopted transaction dropped", "hash", tx.Hash(), "err", err)
+
+			continue
+		}
+
+		applied++
+	}
+
+	log.Info("Seeded adopted window", "number", adoption.Number,
+		"applied", applied, "of", len(adoption.Txs))
 }
 
 // runPrefetcher owns the lifecycle of the unified prefetcher stream for one block.
@@ -3186,8 +3465,11 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 			return fmt.Errorf("%w: %v", errStateReadFailure, dbErr)
 		}
 
+		productionStart := firstNonZeroTime(productionStartFrom(genParams), start)
+		announceStart := w.buildToAnnounceStart(block.Header(), firstNonZeroTime(buildStartFrom(genParams), productionStart))
+
 		select {
-		case w.taskCh <- &task{receipts: env.receipts, state: env.state, block: block, createdAt: time.Now(), productionStart: firstNonZeroTime(productionStartFrom(genParams), start), productionElapsed: time.Since(firstNonZeroTime(productionStartFrom(genParams), start)), intermediateRootTime: commitTime}:
+		case w.taskCh <- &task{receipts: env.receipts, state: env.state, block: block, createdAt: time.Now(), announceStart: announceStart, productionElapsed: time.Since(productionStart), intermediateRootTime: commitTime}:
 			fees := totalFees(block, env.receipts)
 			feesInEther := new(big.Float).Quo(new(big.Float).SetInt(fees), big.NewFloat(params.Ether))
 			log.Info("Commit new sealing work",

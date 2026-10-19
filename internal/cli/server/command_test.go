@@ -33,6 +33,7 @@ func TestFlagsWithoutConfig(t *testing.T) {
 		"--http.api", "eth,bor",
 		"--ws.api", "",
 		"--gpo.maxprice", "5000000000000",
+		"--cache.addresscachepersist",
 	}
 
 	err := c.extractFlags(args)
@@ -45,6 +46,7 @@ func TestFlagsWithoutConfig(t *testing.T) {
 	require.Equal(t, c.config.Identity, "")
 	require.Equal(t, c.config.DataDir, "./data")
 	require.Equal(t, c.config.KeyStoreDir, "")
+	require.True(t, c.config.Cache.AddressCachePersist)
 	require.Equal(t, c.config.Verbosity, 3)
 	require.Equal(t, c.config.BatchRequestLimit, 0)
 	require.Equal(t, c.config.Snapshot, true)
