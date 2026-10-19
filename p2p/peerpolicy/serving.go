@@ -11,7 +11,7 @@ func (p *peerRecord) refused(b *bucket, tick int64, event Evidence) Reason {
 	b.refusals = min(b.refusals+1, 3)
 	repeated := false
 	for _, hash := range event.Hashes {
-		entry, ok := p.hashes[BodyReplies].Get(hash)
+		entry, ok := p.hashes.refusedBodies.Get(hash)
 		if !ok || tick-entry.tick >= windowCount {
 			entry = announcement{tick: tick}
 		}
@@ -23,7 +23,7 @@ func (p *peerRecord) refused(b *bucket, tick int64, event Evidence) Reason {
 			entry.count++
 		}
 		repeated = repeated || entry.count == 3
-		p.hashes[BodyReplies].Add(hash, entry)
+		p.hashes.refusedBodies.Add(hash, entry)
 	}
 	if repeated {
 		return ServingRepetition

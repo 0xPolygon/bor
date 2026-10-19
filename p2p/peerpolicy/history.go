@@ -25,6 +25,17 @@ type hashHistory struct {
 	slots [maxHashes]historySlot
 }
 
+// Independent samples prevent announcement churn from evicting refused bodies.
+type peerHistories struct {
+	blocks        hashHistory
+	transactions  hashHistory
+	refusedBodies hashHistory
+}
+
+func newPeerHistories() peerHistories {
+	return peerHistories{blocks: newHashHistory(), transactions: newHashHistory(), refusedBodies: newHashHistory()}
+}
+
 func newHashHistory() hashHistory { return hashHistory{seed: maphash.MakeSeed()} }
 
 func (h *hashHistory) Get(hash common.Hash) (announcement, bool) {
@@ -59,12 +70,14 @@ func (t *Tracker) SetExempt(id string, exempt bool) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	p := t.record(id)
+	t.record(id).setExempt(exempt)
+}
+
+func (p *peerRecord) setExempt(exempt bool) {
 	if p.exempt != exempt {
 		p.windows = [windowCount]bucket{}
-		for _, family := range []Family{BlockAnnouncements, TransactionAnnouncements, BodyReplies} {
-			p.hashes[family] = newHashHistory()
-		}
+		p.hashes = newPeerHistories()
+		p.refusalSequence = 0
 	}
 	p.exempt = exempt
 }

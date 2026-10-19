@@ -72,9 +72,9 @@ func TestPeerPolicyRepetitionHistoryByFamily(t *testing.T) {
 	if !ok {
 		t.Fatal("missing peer")
 	}
-	for _, family := range []Family{BlockAnnouncements, TransactionAnnouncements, BodyReplies} {
-		if record.hashes[family].Len() > maxHashes {
-			t.Fatalf("family %d history exceeds bound", family)
+	for i, history := range []*hashHistory{&record.hashes.blocks, &record.hashes.transactions, &record.hashes.refusedBodies} {
+		if history.Len() > maxHashes {
+			t.Fatalf("history %d exceeds bound", i)
 		}
 	}
 }

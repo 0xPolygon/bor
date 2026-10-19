@@ -97,7 +97,7 @@ func TestPeerPolicyAcceptedTransactionsDeferCorrelation(t *testing.T) {
 			if err := peer.handleObserved(backend, msg, tc.handle); err != nil {
 				t.Fatal(err)
 			}
-			if backend.deliveries != 1 || len(events) != 1 || events[0].Family != peerpolicy.Other || events[0].Reason != peerpolicy.None {
+			if backend.deliveries != 1 || len(events) != 0 {
 				t.Fatalf("accepted delivery bypassed fetcher correlation: deliveries=%d events=%+v", backend.deliveries, events)
 			}
 		})

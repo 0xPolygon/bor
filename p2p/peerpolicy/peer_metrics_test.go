@@ -30,19 +30,25 @@ func TestPeerPolicyGaugeExpiryAndExemption(t *testing.T) {
 	tracker.Observe("ordinary", Evidence{Reason: InvalidBlock})
 	tracker.SetExempt("trusted", true)
 	tracker.Observe("trusted", Evidence{Reason: InvalidBlock})
-	for _, line := range []string{`eth_peerpolicy_peer_risk{peer_id="ordinary"} 60`, `eth_peerpolicy_peer_risk{peer_id="trusted"} 0`} {
-		if !strings.Contains(scrapePeerMetrics(reg), line) {
-			t.Fatalf("missing %s", line)
-		}
+	tracker.Observe("clean", Evidence{Reason: FetcherDrop})
+	got := scrapePeerMetrics(reg)
+	if !strings.Contains(got, `eth_peerpolicy_peer_risk{peer_id="ordinary"} 60`) || strings.Contains(got, `peer_id="trusted"`) || strings.Contains(got, `peer_id="clean"`) {
+		t.Fatalf("expected only positive non-exempt risk: %s", got)
+	}
+	if got := tracker.Snapshot("clean"); got.Risk != 0 || got.Windows[FetcherDrop.String()] != 1 {
+		t.Fatalf("admin snapshot lost neutral evidence: %+v", got)
 	}
 	clock.Run(windowWidth * windowCount)
-	if got := scrapePeerMetrics(reg); !strings.Contains(got, `eth_peerpolicy_peer_risk{peer_id="ordinary"} 0`) {
-		t.Fatalf("idle score did not expire: %s", got)
+	if got := scrapePeerMetrics(reg); strings.Contains(got, "eth_peerpolicy_peer_risk{") {
+		t.Fatalf("expired risk series retained: %s", got)
 	}
 	tracker.Observe("ordinary", Evidence{Reason: InvalidBlock})
+	if got := scrapePeerMetrics(reg); !strings.Contains(got, `peer_id="ordinary"} 60`) {
+		t.Fatalf("new evidence did not restore risk series: %s", got)
+	}
 	tracker.SetExempt("ordinary", true)
-	if got := scrapePeerMetrics(reg); strings.Contains(got, "} 60") {
-		t.Fatalf("exempt peer retains risk: %s", got)
+	if got := scrapePeerMetrics(reg); strings.Contains(got, "eth_peerpolicy_peer_risk{") {
+		t.Fatalf("exempt peer retains risk series: %s", got)
 	}
 }
 

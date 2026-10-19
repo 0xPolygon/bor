@@ -771,7 +771,11 @@ func handleTransactions(backend Backend, msg Decoder, peer *Peer) error {
 		peer.markTransaction(hash)
 	}
 
-	return backend.Handle(peer, &txs)
+	if err := backend.Handle(peer, &txs); err != nil {
+		return err
+	}
+	observeForwardedTransactions(msg)
+	return nil
 }
 
 func handlePooledTransactions(backend Backend, msg Decoder, peer *Peer) error {
@@ -805,7 +809,11 @@ func handlePooledTransactions(backend Backend, msg Decoder, peer *Peer) error {
 
 	requestTracker.Fulfil(peer.id, peer.version, PooledTransactionsMsg, txs.RequestId)
 
-	return backend.Handle(peer, &txs)
+	if err := backend.Handle(peer, &txs); err != nil {
+		return err
+	}
+	observeForwardedTransactions(msg)
+	return nil
 }
 
 func handleBlockRangeUpdate(backend Backend, msg Decoder, peer *Peer) error {

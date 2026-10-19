@@ -3,6 +3,7 @@ package eth
 import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/eth/protocols/wit"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
 )
 
@@ -27,6 +28,7 @@ func (h *handler) strikeWit2Evidence(id string, diagnostic, qualified peerpolicy
 	}
 	h.observePeer(id, qualified)
 	wit2StrikeDisconnectMeter.Mark(1)
+	log.Warn("Disconnecting WIT2 peer after strike threshold", "peer", id, "reason", qualified.String())
 	h.jailPeer(id)
 	h.removePeer(id)
 }

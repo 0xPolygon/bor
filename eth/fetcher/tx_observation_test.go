@@ -77,7 +77,7 @@ func TestPeerPolicyRequestedTransactionDelivery(t *testing.T) {
 		{"duplicate", request, true, 7, []common.Hash{testTxsHashes[0], testTxsHashes[0]}, UnsolicitedDelivery},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			delivery := &txDelivery{direct: tc.direct, requestID: tc.id, hashes: tc.hashes}
+			delivery := &txDelivery{direct: tc.direct, requestID: tc.id, hashes: tc.hashes, observation: txObservation{items: uint64(len(tc.hashes))}}
 			if got := requestedDelivery(tc.request, delivery); got != tc.want {
 				t.Fatalf("solicited = %v, want %v", got, tc.want)
 			}

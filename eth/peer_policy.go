@@ -39,8 +39,7 @@ func (h *handler) observeProtocolPeer(peer *eth.Peer) {
 	}
 	h.peerPolicy.SetExempt(peer.ID(), peer.Trusted() || peer.Static())
 	peer.SetObserver(func(e peerpolicy.Evidence) {
-		h.peerPolicy.SetExempt(peer.ID(), peer.Trusted() || peer.Static())
-		h.peerPolicy.Observe(peer.ID(), e)
+		h.peerPolicy.ObserveWithClass(peer.ID(), peer.Trusted() || peer.Static(), e)
 	})
 }
 
@@ -52,7 +51,8 @@ func (h *handler) dropFetcherPeer(id string) {
 func (h *handler) observePeerEvidence(id string, event peerpolicy.Evidence) {
 	if h.peers != nil {
 		if peer := h.peers.peer(id); peer != nil {
-			h.peerPolicy.SetExempt(id, peer.Trusted() || peer.Static())
+			h.peerPolicy.ObserveWithClass(id, peer.Trusted() || peer.Static(), event)
+			return
 		}
 	}
 	h.peerPolicy.Observe(id, event)

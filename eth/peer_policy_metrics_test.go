@@ -2,13 +2,19 @@ package eth
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
+	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/ethereum/go-ethereum/common/mclock"
 	"github.com/ethereum/go-ethereum/log"
 
 	"github.com/ethereum/go-ethereum/metrics"
+	"github.com/ethereum/go-ethereum/metrics/prometheus"
 	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
 )
 
@@ -34,6 +40,44 @@ func TestPeerPolicyGaugeLifecycle(t *testing.T) {
 		h.close()
 		if metrics.DefaultRegistry.Get("eth/peerpolicy/peer_risk") != nil {
 			t.Fatal("shutdown retained the collector")
+		}
+	}
+}
+
+func TestPeerPolicyGaugeCollectionExpiry(t *testing.T) {
+	clock := new(mclock.Simulated)
+	h := &handler{peerPolicy: peerpolicy.New(clock)}
+	registry := metrics.NewRegistry()
+	if err := h.peerPolicy.RegisterPeerMetrics(registry); err != nil {
+		t.Fatal(err)
+	}
+	defer h.peerPolicy.UnregisterPeerMetrics()
+	h.observePeer("risky-peer", peerpolicy.InvalidBlock)
+	h.observePeer("clean-peer", peerpolicy.FetcherDrop)
+	h.peerPolicy.SetExempt("trusted-peer", true)
+	h.observePeer("trusted-peer", peerpolicy.InvalidBlock)
+	for _, scrape := range []func() string{
+		func() string {
+			recorder := httptest.NewRecorder()
+			prometheus.Handler(registry).ServeHTTP(recorder, httptest.NewRequest("GET", "/metrics", nil))
+			return recorder.Body.String()
+		},
+		func() string {
+			encoded, err := json.Marshal(registry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return string(encoded)
+		},
+	} {
+		h.observePeer("risky-peer", peerpolicy.InvalidBlock)
+		got := scrape()
+		if !strings.Contains(got, "risky-peer") || strings.Contains(got, "clean-peer") || strings.Contains(got, "trusted-peer") {
+			t.Fatalf("unexpected exported identities: %s", got)
+		}
+		clock.Run(time.Minute)
+		if got := scrape(); strings.Contains(got, "risky-peer") {
+			t.Fatalf("expired identity still exported: %s", got)
 		}
 	}
 }

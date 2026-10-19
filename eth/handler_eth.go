@@ -28,6 +28,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
 )
 
 // ethHandler implements the eth.Backend interface to handle the various network
@@ -87,6 +88,7 @@ func (h *ethHandler) Handle(peer *eth.Peer, packet eth.Packet) error {
 	case *eth.TransactionsPacket:
 		for _, tx := range *packet {
 			if tx.Type() == types.BlobTxType {
+				(*handler)(h).observePeer(peer.ID(), peerpolicy.InvalidTransaction)
 				return errors.New("disallowed broadcast blob transaction")
 			}
 		}
@@ -99,9 +101,11 @@ func (h *ethHandler) Handle(peer *eth.Peer, packet eth.Packet) error {
 		for _, tx := range packet.PooledTransactionsResponse {
 			if tx.Type() == types.BlobTxType {
 				if tx.BlobTxSidecar() == nil {
+					(*handler)(h).observePeer(peer.ID(), peerpolicy.InvalidTransaction)
 					return errors.New("received sidecar-less blob transaction")
 				}
 				if err := tx.BlobTxSidecar().ValidateBlobCommitmentHashes(tx.BlobHashes()); err != nil {
+					(*handler)(h).observePeer(peer.ID(), peerpolicy.InvalidTransaction)
 					return err
 				}
 			}

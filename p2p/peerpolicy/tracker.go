@@ -38,7 +38,7 @@ type (
 
 type peerRecord struct {
 	windows         [windowCount]bucket
-	hashes          [familyCount]hashHistory
+	hashes          peerHistories
 	exempt          bool
 	refusalSequence uint64
 }
@@ -62,11 +62,28 @@ func (t *Tracker) Observe(id string, event Evidence) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	tick := int64(t.clock.Now()) / int64(windowWidth)
 	p := t.record(id)
+	t.observe(p, event)
+}
+
+// ObserveWithClass applies the authenticated connection class and its evidence
+// atomically. Observe uses the retained class for outcomes after disconnection.
+func (t *Tracker) ObserveWithClass(id string, exempt bool, event Evidence) {
+	if id == "" || len(id) > 128 || event.Reason >= reasonCount || event.Family >= familyCount {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	p := t.record(id)
+	p.setExempt(exempt)
+	t.observe(p, event)
+}
+
+func (t *Tracker) observe(p *peerRecord, event Evidence) {
 	if p.exempt {
 		return
 	}
+	tick := int64(t.clock.Now()) / int64(windowWidth)
 	previousAction := actionFor(p.risk(tick, nil))
 	b := &p.windows[tick%windowCount]
 	if b.tick != tick {
@@ -94,11 +111,7 @@ func (t *Tracker) record(id string) *peerRecord {
 	if p, ok := t.peers.Get(id); ok {
 		return p
 	}
-	p := new(peerRecord)
-	// Announcement churn must not evict refused-download history.
-	for _, family := range []Family{BlockAnnouncements, TransactionAnnouncements, BodyReplies} {
-		p.hashes[family] = newHashHistory()
-	}
+	p := &peerRecord{hashes: newPeerHistories()}
 	if t.peers.Add(id, p) {
 		t.metrics.evictions.Inc(1)
 	}
@@ -127,9 +140,13 @@ func (p *peerRecord) announcements(b *bucket, tick int64, event Evidence) bool {
 	if event.Family != BlockAnnouncements && event.Family != TransactionAnnouncements {
 		return false
 	}
+	history := &p.hashes.blocks
+	if event.Family == TransactionAnnouncements {
+		history = &p.hashes.transactions
+	}
 	// Packets are already size-bounded; sample across the entire decoded list.
 	for _, hash := range event.Hashes {
-		entry, ok := p.hashes[event.Family].Get(hash)
+		entry, ok := history.Get(hash)
 		if !ok || tick-entry.tick >= windowCount {
 			entry = announcement{tick: tick}
 		}
@@ -139,7 +156,7 @@ func (p *peerRecord) announcements(b *bucket, tick int64, event Evidence) bool {
 		if entry.count == 3 {
 			b.repeats = min(b.repeats+1, 33)
 		}
-		p.hashes[event.Family].Add(hash, entry)
+		history.Add(hash, entry)
 	}
 	return b.repeats > 32
 }

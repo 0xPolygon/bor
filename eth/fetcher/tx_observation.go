@@ -60,6 +60,11 @@ func requestedDelivery(request *txRequest, delivery *txDelivery) DeliveryProvena
 	if request == nil || request.hashes == nil || request.requestID != delivery.requestID {
 		return UnknownDelivery
 	}
+	// Pool admission can return fewer results than received transactions (for
+	// example when the stateless pool is disabled). Do not exempt uncorrelated bytes.
+	if uint64(len(delivery.hashes)) != delivery.observation.items {
+		return UnknownDelivery
+	}
 	if len(delivery.hashes) > len(request.hashes) {
 		return UnsolicitedDelivery
 	}

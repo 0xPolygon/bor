@@ -44,7 +44,9 @@ func (p *Peer) handleObserved(backend Backend, msg p2p.Msg, handle msgHandler) e
 	if d.diagnostic != peerpolicy.None {
 		p.observer(peerpolicy.Evidence{Reason: d.diagnostic})
 	}
-	p.observer(d.evidence)
+	if d.evidence.Items != 0 || d.evidence.Bytes != 0 || d.evidence.Reason != peerpolicy.None {
+		p.observer(d.evidence)
+	}
 	return err
 }
 
@@ -78,6 +80,14 @@ func observeIgnoredTransactions(msg Decoder) {
 		}
 		d.evidence.Family = peerpolicy.Transactions
 		d.evidence.Items = 0
+	}
+}
+
+func observeForwardedTransactions(msg Decoder) {
+	if d, ok := msg.(*observedDecoder); ok {
+		// The fetcher owns traffic accounting once it accepts the delivery.
+		d.evidence.Items = 0
+		d.evidence.Bytes = 0
 	}
 }
 

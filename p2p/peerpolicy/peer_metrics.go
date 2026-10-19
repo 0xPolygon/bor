@@ -8,7 +8,7 @@ import (
 
 const peerRiskMetric = "eth/peerpolicy/peer_risk"
 
-// RegisterPeerMetrics exposes retained identities, not just connected peers.
+// RegisterPeerMetrics exposes retained non-exempt identities with positive risk.
 // Registration belongs to the node lifecycle rather than the evidence hot path.
 func (t *Tracker) RegisterPeerMetrics(registry metrics.Registry) error {
 	t.mu.Lock()
@@ -36,11 +36,13 @@ func (t *Tracker) peerRisks() map[string]int64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	tick := int64(t.clock.Now()) / int64(windowWidth)
-	values := make(map[string]int64, t.peers.Len())
+	values := make(map[string]int64)
 	// Peek avoids treating a scrape as peer activity and changing LRU eviction.
 	for _, id := range t.peers.Keys() {
 		peer, _ := t.peers.Peek(id)
-		values[id] = int64(peer.risk(tick, nil))
+		if risk := peer.risk(tick, nil); !peer.exempt && risk > 0 {
+			values[id] = int64(risk)
+		}
 	}
 	return values
 }
