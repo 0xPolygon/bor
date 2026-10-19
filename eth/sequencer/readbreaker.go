@@ -203,11 +203,14 @@ func (b *readBreaker) observeLiveTail(tail []byte, seal, head uint64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	// A read can reach the tail before it learns the seal under it, so a
+	// later read of the same tail still updates the seal.
+	if seal != 0 {
+		b.lastSeal = seal
+	}
+
 	if !bytes.Equal(tail, b.lastTail) {
 		b.lastTail = append(b.lastTail[:0], tail...)
-		if seal != 0 {
-			b.lastSeal = seal
-		}
 		b.unfreezeLocked()
 
 		return

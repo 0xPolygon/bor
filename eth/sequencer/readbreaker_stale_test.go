@@ -83,10 +83,12 @@ func TestReadBreakerFrozenRunAboveChain(t *testing.T) {
 	cases := []struct {
 		name     string
 		seal     uint64
+		lateSeal uint64
 		head     uint64
 		wantOpen bool
 	}{
 		{name: "sealed above our chain", seal: 12, head: 10, wantOpen: false},
+		{name: "seal learned on a later read of the tail", lateSeal: 12, head: 10, wantOpen: false},
 		{name: "sealed at our chain", seal: 10, head: 10, wantOpen: true},
 		{name: "sealed below our chain", seal: 8, head: 10, wantOpen: true},
 		{name: "seal height unknown", seal: 0, head: 10, wantOpen: true},
@@ -98,6 +100,9 @@ func TestReadBreakerFrozenRunAboveChain(t *testing.T) {
 			frozen := []byte{0xaa, 0xbb, 0xcc}
 
 			b.observeLiveTail(frozen, tc.seal, tc.head)
+			if tc.lateSeal != 0 {
+				b.observeLiveTail(frozen, tc.lateSeal, tc.head)
+			}
 			for i := 0; i < staleReadsToTrip*3; i++ {
 				// Idle reads from a caught-up position walk no entries, so
 				// they carry no seal height of their own.
