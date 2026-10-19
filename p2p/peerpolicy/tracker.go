@@ -55,6 +55,7 @@ type Tracker struct {
 	pausedFor      mclock.AbsTime
 	resetAt        mclock.AbsTime
 	resetPausedFor mclock.AbsTime
+	classResolver  func(string) (bool, bool)
 }
 
 func New(clock mclock.Clock) *Tracker {
@@ -70,6 +71,7 @@ func (t *Tracker) Observe(id string, event Evidence) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	p := t.record(id)
+	p.setExempt(t.connectionClass(id, p.exempt))
 	t.observe(p, event)
 }
 
@@ -82,7 +84,12 @@ func (t *Tracker) ObserveWithClass(id string, exempt bool, event Evidence) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	p := t.record(id)
-	p.setExempt(exempt)
+	// Once a live resolver owns class changes, a captured connection flag must
+	// not overwrite the final retained class after that connection disappears.
+	if t.classResolver != nil {
+		exempt = p.exempt
+	}
+	p.setExempt(t.connectionClass(id, exempt))
 	t.observe(p, event)
 }
 
@@ -100,9 +107,11 @@ func (t *Tracker) ObserveSession(id string, exempt bool, startedAt mclock.AbsTim
 		return false
 	}
 	t.peers.Get(id)
-	if p.activity.connectedAt == startedAt {
-		p.setExempt(exempt)
+	currentClass := p.exempt
+	if t.classResolver == nil && p.activity.connectedAt == startedAt {
+		currentClass = exempt
 	}
+	p.setExempt(t.connectionClass(id, currentClass))
 	if event.Activity != (ActivityEvent{}) {
 		event.Activity.StartedAt = startedAt
 	}
@@ -229,6 +238,7 @@ func (t *Tracker) Snapshot(id string) Snapshot {
 	result := Snapshot{Mode: "observe", Action: "none", Windows: make(map[string]uint64)}
 	result.Contribution = contributionSnapshot()
 	if p, ok := t.peers.Peek(id); ok {
+		p.setExempt(t.connectionClass(id, p.exempt))
 		result.Risk = p.risk(int64(t.clock.Now())/int64(windowWidth), result.Windows)
 		result.Action = actionFor(result.Risk)
 		now := t.clock.Now()

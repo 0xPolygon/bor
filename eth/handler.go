@@ -723,6 +723,9 @@ func (h *handler) unregisterPeer(id string) {
 	h.downloader.UnregisterPeer(id)
 	h.txFetcher.Drop(id)
 
+	if h.peerPolicy != nil {
+		h.peerPolicy.RefreshClass(id)
+	}
 	if err := h.peers.unregisterPeer(id); err != nil {
 		logger.Error("Ethereum peer removal failed", "err", err)
 	}

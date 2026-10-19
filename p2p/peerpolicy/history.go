@@ -70,7 +70,7 @@ func (t *Tracker) SetExempt(id string, exempt bool) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.record(id).setExempt(exempt)
+	t.record(id).setExempt(t.connectionClass(id, exempt))
 }
 
 func (p *peerRecord) setExempt(exempt bool) {

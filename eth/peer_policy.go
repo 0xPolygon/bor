@@ -27,6 +27,7 @@ func (h *handler) initPeerPolicy(enabled bool) {
 		return
 	}
 	h.peerPolicy = peerpolicy.New(mclock.System{})
+	h.peerPolicy.SetClassResolver(h.peerPolicyClass)
 	if metrics.Enabled() {
 		if err := h.peerPolicy.RegisterPeerMetrics(metrics.DefaultRegistry); err != nil {
 			log.Error("Failed to register peer reputation gauges", "err", err)
@@ -35,6 +36,18 @@ func (h *handler) initPeerPolicy(enabled bool) {
 	h.downloader.SetFailureObserver(func(id string) { h.observePeer(id, peerpolicy.DownloaderFailure) })
 	h.txFetcher.SetValidationObserver(h.observeTransactionDelivery)
 	h.updateContributionReadiness()
+}
+
+// The tracker holds its mutex during this lookup, then briefly takes the peerset
+// read lock. Peerset-locked code must not call the tracker. Trusted/Static read
+// atomic connection flags without calling Peer.Info or taking server locks.
+func (h *handler) peerPolicyClass(id string) (exempt, connected bool) {
+	if h.peers != nil {
+		if peer := h.peers.peer(id); peer != nil {
+			return peer.Trusted() || peer.Static(), true
+		}
+	}
+	return false, false
 }
 
 func (h *handler) observePeer(id string, reason peerpolicy.Reason) {

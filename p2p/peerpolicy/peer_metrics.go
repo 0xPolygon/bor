@@ -40,6 +40,7 @@ func (t *Tracker) peerRisks() map[string]int64 {
 	// Peek avoids treating a scrape as peer activity and changing LRU eviction.
 	for _, id := range t.peers.Keys() {
 		peer, _ := t.peers.Peek(id)
+		peer.setExempt(t.connectionClass(id, peer.exempt))
 		if risk := peer.risk(tick, nil); !peer.exempt && risk > 0 {
 			values[id] = int64(risk)
 		}

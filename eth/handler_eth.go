@@ -57,6 +57,8 @@ func (h *ethHandler) PeerInfo(id enode.ID) interface{} {
 		if h.peerPolicy != nil {
 			(*handler)(h).updateContributionReadiness()
 			snapshot := h.peerPolicy.Snapshot(id.String())
+			// Connection flags remain known even when bounded history was evicted.
+			snapshot.Contribution.Protected = p.Trusted() || p.Static()
 			info.Reputation = &snapshot
 		}
 		return info
