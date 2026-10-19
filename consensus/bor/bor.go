@@ -1816,6 +1816,10 @@ func (c *Bor) Close() error {
 }
 
 func (c *Bor) runMilestoneFetcher() {
+	c.runMilestoneFetcherWithTimeout(30 * time.Second)
+}
+
+func (c *Bor) runMilestoneFetcherWithTimeout(timeout time.Duration) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
@@ -1823,7 +1827,7 @@ func (c *Bor) runMilestoneFetcher() {
 		select {
 		case <-ticker.C:
 			if c.HeimdallClient != nil {
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				ctx, cancel := context.WithTimeout(context.Background(), timeout)
 				milestone, err := c.HeimdallClient.FetchMilestone(ctx)
 				cancel()
 				if err != nil {
