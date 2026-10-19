@@ -63,18 +63,21 @@ ios:
 	@echo "Done building."
 	@echo "Import \"$(GOBIN)/Geth.framework\" to use the library."
 
-test: test-build
+test: test-shard-check test-build
 	$(GOTEST) -p 1 --timeout 30m -cover -short -coverprofile=cover.out -covermode=atomic $(TESTALL)
 
-# Compile test binaries in parallel so the serial (-p 1) test run hits the build cache.
-test-build:
+# An invalid shard selects no packages, and go test would then test only the root package.
+test-shard-check:
 	@test "$(TEST_SHARD)" -ge 0 && test "$(TEST_SHARD)" -lt "$(TEST_SHARDS)" || { echo "invalid TEST_SHARD=$(TEST_SHARD) TEST_SHARDS=$(TEST_SHARDS)"; exit 1; }
+
+# Compile test binaries in parallel so the serial (-p 1) test run hits the build cache.
+test-build: test-shard-check
 	$(GOTEST) -cover -short -covermode=atomic -run '^$$' $(TESTALL)
 
 test-txpool-race:
 	$(GOTEST) -run=TestPoolMiningDataRaces --timeout 600m -race -v ./core/
 
-test-race:
+test-race: test-shard-check
 	$(GOTEST) -p 1 --timeout 45m -race -shuffle=on $(TESTALL)
 
 gocovmerge-deps:
