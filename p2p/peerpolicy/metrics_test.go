@@ -23,7 +23,7 @@ func TestPeerPolicyCountersAndTransitions(t *testing.T) {
 	throttle := m.throttle.Snapshot().Count()
 	jail := m.jail.Snapshot().Count()
 	samples := m.risk.Snapshot().Count()
-	e := Evidence{Family: Requests, Items: 641, Bytes: 1024}
+	e := Evidence{Family: Requests, Items: allowances[Requests].items + 1, Bytes: 1024}
 	tracker.Observe("a", e)
 	tracker.Observe("a", e)
 	clock.Run(windowWidth)
@@ -35,7 +35,7 @@ func TestPeerPolicyCountersAndTransitions(t *testing.T) {
 	if m.reasons[RequestVolume].Snapshot().Count()-events != 3 || m.windows[RequestVolume].Snapshot().Count()-windows != 2 {
 		t.Fatal("events and reason windows must be counted separately")
 	}
-	if m.items[Requests].Snapshot().Count()-items != 1923 || m.bytes[Requests].Snapshot().Count()-bytes != 3072 {
+	if m.items[Requests].Snapshot().Count()-items != 3*int64(e.Items) || m.bytes[Requests].Snapshot().Count()-bytes != 3072 {
 		t.Fatal("missing traffic accounting")
 	}
 	if m.throttle.Snapshot().Count()-throttle != 1 || m.jail.Snapshot().Count()-jail != 1 || m.risk.Snapshot().Count()-samples != 4 {

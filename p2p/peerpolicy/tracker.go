@@ -162,15 +162,19 @@ func (t *Tracker) record(id string) *peerRecord {
 }
 
 func (p *peerRecord) traffic(b *bucket, tick int64, event Evidence) Reason {
-	if event.Family == Other {
+	// Completed replies already passed native serving admission. Their volume
+	// remains in traffic metrics, but only peer-specific refusals establish abuse.
+	if event.Family == Other || event.Family == BodyReplies {
 		return None
 	}
 	a := allowances[event.Family]
 	u := &b.usage[event.Family]
 	u.items = saturatingAdd(u.items, event.Items, a.items+1)
-	u.bytes = saturatingAdd(u.bytes, event.Bytes, a.bytes+1)
+	if a.bytes != 0 {
+		u.bytes = saturatingAdd(u.bytes, event.Bytes, a.bytes+1)
+	}
 	repeated := p.announcements(b, tick, event)
-	if u.items > a.items || u.bytes > a.bytes {
+	if u.items > a.items || (a.bytes != 0 && u.bytes > a.bytes) {
 		return a.reason
 	}
 	if repeated {

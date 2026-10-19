@@ -18,10 +18,16 @@ func scrapePeerMetrics(reg metrics.Registry) string {
 	return recorder.Body.String()
 }
 
+func peerMetricsTestTracker(clock mclock.Clock) *Tracker {
+	t := New(clock)
+	t.metrics.peerIDs = new(peerMetricIdentities)
+	return t
+}
+
 func TestPeerPolicyGaugeExpiryAndExemption(t *testing.T) {
 	clock := new(mclock.Simulated)
 	clock.Run(10 * windowWidth)
-	tracker := New(clock)
+	tracker := peerMetricsTestTracker(clock)
 	reg := metrics.NewRegistry()
 	if err := tracker.RegisterPeerMetrics(reg); err != nil {
 		t.Fatal(err)
@@ -34,6 +40,9 @@ func TestPeerPolicyGaugeExpiryAndExemption(t *testing.T) {
 	got := scrapePeerMetrics(reg)
 	if !strings.Contains(got, `eth_peerpolicy_peer_risk{peer_id="ordinary"} 60`) || strings.Contains(got, `peer_id="trusted"`) || strings.Contains(got, `peer_id="clean"`) {
 		t.Fatalf("expected only positive non-exempt risk: %s", got)
+	}
+	if tracker.peerRiskExport()["admitted"] != 1 {
+		t.Fatal("neutral and exempt peers consumed lifetime identity slots")
 	}
 	if got := tracker.Snapshot("clean"); got.Risk != 0 || got.Windows[FetcherDrop.String()] != 1 {
 		t.Fatalf("admin snapshot lost neutral evidence: %+v", got)
@@ -53,7 +62,7 @@ func TestPeerPolicyGaugeExpiryAndExemption(t *testing.T) {
 }
 
 func TestPeerPolicyGaugeEvictionAndCleanup(t *testing.T) {
-	tracker := New(new(mclock.Simulated))
+	tracker := peerMetricsTestTracker(new(mclock.Simulated))
 	reg := metrics.NewRegistry()
 	if err := tracker.RegisterPeerMetrics(reg); err != nil {
 		t.Fatal(err)
@@ -65,8 +74,11 @@ func TestPeerPolicyGaugeEvictionAndCleanup(t *testing.T) {
 	scrapePeerMetrics(reg)
 	tracker.Observe("new", Evidence{Reason: RequestVolume})
 	got := scrapePeerMetrics(reg)
-	if strings.Count(got, "eth_peerpolicy_peer_risk{") != maxPeers || strings.Contains(got, `peer_id="0"`) || !strings.Contains(got, `peer_id="new"} 20`) {
-		t.Fatal("scrape changed eviction order or retained an evicted series")
+	if strings.Count(got, "eth_peerpolicy_peer_risk{") != maxPeers-1 || strings.Contains(got, `peer_id="0"`) || strings.Contains(got, `peer_id="new"`) {
+		t.Fatal("scrape changed eviction order or recycled a lifetime identity slot")
+	}
+	if !strings.Contains(got, `eth_peerpolicy_peer_risk_export{state="omitted"} 1`) || tracker.Snapshot("new").Risk != 20 {
+		t.Fatal("omitted risk must remain visible in coverage and admin snapshots")
 	}
 	tracker.UnregisterPeerMetrics()
 	if got := scrapePeerMetrics(reg); strings.Contains(got, "peer_risk") {
@@ -79,7 +91,7 @@ func TestPeerPolicyGaugeEvictionAndCleanup(t *testing.T) {
 
 func TestPeerPolicyGaugeRegistrationOwnership(t *testing.T) {
 	reg := metrics.NewRegistry()
-	first, second := New(new(mclock.Simulated)), New(new(mclock.Simulated))
+	first, second := peerMetricsTestTracker(new(mclock.Simulated)), peerMetricsTestTracker(new(mclock.Simulated))
 	if err := first.RegisterPeerMetrics(reg); err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +109,7 @@ func TestPeerPolicyGaugeRegistrationOwnership(t *testing.T) {
 }
 
 func TestPeerPolicyGaugeConcurrentScrapes(t *testing.T) {
-	tracker := New(new(mclock.Simulated))
+	tracker := peerMetricsTestTracker(new(mclock.Simulated))
 	reg := metrics.NewRegistry()
 	if err := tracker.RegisterPeerMetrics(reg); err != nil {
 		t.Fatal(err)

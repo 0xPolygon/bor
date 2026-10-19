@@ -6,6 +6,8 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/mclock"
+	"github.com/ethereum/go-ethereum/metrics"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPeerPolicyRepeatedBodyDownloads(t *testing.T) {
@@ -28,14 +30,30 @@ func TestPeerPolicyRepeatedBodyDownloads(t *testing.T) {
 	assertRisk(t, tracker, "a", 0, "none")
 }
 
-func TestPeerPolicyBodyVolumeChangingHashes(t *testing.T) {
-	tracker := New(new(mclock.Simulated))
-	for i := byte(0); i < 11; i++ {
-		tracker.Observe("a", Evidence{Family: BodyReplies, Items: 1, Bytes: 16 << 20, Hashes: []common.Hash{{i}}, ObjectBytes: []uint64{16 << 20}})
-	}
-	got := tracker.Snapshot("a")
-	if got.Risk != 20 || got.Windows[ServingVolume.String()] != 1 {
-		t.Fatalf("missing serving volume: %+v", got)
+func TestPeerPolicyCompletedBodyVolumeStaysNeutral(t *testing.T) {
+	metrics.Enable()
+	for _, repeated := range []bool{false, true} {
+		tracker := New(new(mclock.Simulated))
+		itemsBefore := tracker.metrics.items[BodyReplies].Snapshot().Count()
+		bytesBefore := tracker.metrics.bytes[BodyReplies].Snapshot().Count()
+		reasonsBefore := tracker.metrics.reasons[ServingVolume].Snapshot().Count()
+		for i := byte(0); i < 26; i++ {
+			hash := common.Hash{i}
+			if repeated {
+				hash = common.Hash{1}
+			}
+			tracker.Observe("peer", Evidence{Family: BodyReplies, Items: 1024, Bytes: 8 << 20,
+				Hashes: []common.Hash{hash}, ObjectBytes: []uint64{8 << 20},
+				Activity: ActivityEvent{ServedResponses: 1, ServedBytes: 8 << 20}})
+		}
+		got := tracker.Snapshot("peer")
+		require.Zero(t, got.Risk)
+		require.Empty(t, got.Windows)
+		require.Equal(t, uint64(26), got.Contribution.ServedResponses)
+		require.Equal(t, uint64(208<<20), got.Contribution.ServedBytes)
+		require.Equal(t, int64(26*1024), tracker.metrics.items[BodyReplies].Snapshot().Count()-itemsBefore)
+		require.Equal(t, int64(208<<20), tracker.metrics.bytes[BodyReplies].Snapshot().Count()-bytesBefore)
+		require.Equal(t, reasonsBefore, tracker.metrics.reasons[ServingVolume].Snapshot().Count())
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 
 type observationMetrics struct {
 	peerRegistry metrics.Registry
+	peerIDs      *peerMetricIdentities
 	reasons      [reasonCount]*metrics.Counter
 	windows      [reasonCount]*metrics.Counter
 	items        [familyCount]*metrics.Counter
@@ -23,7 +24,7 @@ type observationMetrics struct {
 }
 
 func newObservationMetrics() *observationMetrics {
-	m := &observationMetrics{}
+	m := &observationMetrics{peerIDs: &processPeerMetricIdentities}
 	for r := InvalidEncoding; r < reasonCount; r++ {
 		m.reasons[r] = metrics.GetOrRegisterCounter("eth/peerpolicy/events/"+strings.ReplaceAll(r.String(), "-", "_"), nil)
 		m.windows[r] = metrics.GetOrRegisterCounter("eth/peerpolicy/windows/"+strings.ReplaceAll(r.String(), "-", "_"), nil)

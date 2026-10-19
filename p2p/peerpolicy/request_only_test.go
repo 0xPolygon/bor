@@ -7,6 +7,8 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/mclock"
+	"github.com/ethereum/go-ethereum/metrics"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPeerPolicyRequestOnlyWithinAllowance(t *testing.T) {
@@ -14,12 +16,25 @@ func TestPeerPolicyRequestOnlyWithinAllowance(t *testing.T) {
 	tracker := New(clock)
 	for range 12 {
 		tracker.Observe("reader", Evidence{Family: Requests, Items: allowances[Requests].items, Bytes: allowances[Requests].bytes})
-		tracker.Observe("reader", Evidence{Family: BodyReplies, Items: allowances[BodyReplies].items, Bytes: allowances[BodyReplies].bytes})
+		tracker.Observe("reader", Evidence{Family: BodyReplies, Items: 20_000, Bytes: 208 << 20})
 		assertRisk(t, tracker, "reader", 0, "none")
 		clock.Run(windowWidth)
 	}
 	clock.Run(time.Minute)
 	assertRisk(t, tracker, "reader", 0, "none")
+}
+
+func TestPeerPolicyRequestBytesRemainDiagnostic(t *testing.T) {
+	metrics.Enable()
+	tracker := New(new(mclock.Simulated))
+	before := tracker.metrics.bytes[Requests].Snapshot().Count()
+	tracker.Observe("reader", Evidence{Family: Requests, Items: allowances[Requests].items, Bytes: 32 << 20})
+	require.Zero(t, tracker.Snapshot("reader").Risk)
+	require.Equal(t, int64(32<<20), tracker.metrics.bytes[Requests].Snapshot().Count()-before)
+	tracker.Observe("large", Evidence{Family: Requests, Bytes: 1 << 30})
+	require.Zero(t, tracker.Snapshot("large").Risk)
+	tracker.Observe("reader", Evidence{Family: Requests, Items: 1})
+	require.Equal(t, uint64(20), tracker.Snapshot("reader").Risk, "byte exemption must preserve the request-count bound")
 }
 
 func TestPeerPolicyRequestOnlyScoreAndExpiry(t *testing.T) {
@@ -31,7 +46,10 @@ func TestPeerPolicyRequestOnlyScoreAndExpiry(t *testing.T) {
 			tracker.Observe("reader", body)
 		}
 		tracker.Observe("reader", Evidence{Family: Requests, Items: allowances[Requests].items + 1})
-		tracker.Observe("reader", Evidence{Family: BodyReplies, Bytes: allowances[BodyReplies].bytes + 1})
+		tracker.Observe("reader", Evidence{Family: BodyReplies, Bytes: 208 << 20})
+		for range 3 {
+			tracker.Observe("reader", Evidence{Refused: true})
+		}
 		tracker.Observe("reader", Evidence{Family: TransactionAnnouncements, Items: 1, Hashes: []common.Hash{{2}}})
 		got := tracker.Snapshot("reader")
 		if got.Risk != i*20 || got.Windows[ServingRepetition.String()] != i || got.Windows[RequestVolume.String()] != i || got.Windows[ServingVolume.String()] != i {

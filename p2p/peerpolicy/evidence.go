@@ -86,7 +86,7 @@ type Snapshot struct {
 
 type allowance struct {
 	items  uint64
-	bytes  uint64
+	bytes  uint64 // Zero leaves bytes diagnostic-only.
 	reason Reason
 }
 
@@ -96,8 +96,9 @@ var allowances = [familyCount]allowance{
 	TransactionAnnouncements: {163840, 16 << 20, AnnouncementVolume},
 	Transactions:             {32768, 64 << 20, TransactionVolume},
 	Blocks:                   {160, 160 << 20, BlockVolume},
-	Requests:                 {640, 16 << 20, RequestVolume},
-	BodyReplies:              {10240, 160 << 20, ServingVolume},
+	// Native block-data requests have a count bucket and per-message size checks, but no
+	// aggregate byte budget that could establish request-byte abuse.
+	Requests: {768, 0, RequestVolume}, // 64 requests/s plus the native 128-request burst.
 }
 
 func weight(reason Reason) uint64 {

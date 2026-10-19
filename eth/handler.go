@@ -457,7 +457,6 @@ func (h *handler) decHandlers() {
 // runEthPeer registers an eth peer into the joint eth/snap peerset, adds it to
 // various subsystems and starts handling messages.
 func (h *handler) runEthPeer(peer *eth.Peer, handler eth.Handler) error {
-	h.observeProtocolPeer(peer)
 	if !h.incHandlers() {
 		return p2p.DiscQuitting
 	}
@@ -525,6 +524,9 @@ func (h *handler) runEthPeer(peer *eth.Peer, handler eth.Handler) error {
 			return err
 		}
 	}
+	// Refused connections must not evict retained evidence or reset a previous
+	// contribution session. Install observation only after admission succeeds.
+	h.observeProtocolPeer(peer)
 	h.chainSync.handlePeerEvent()
 
 	// Bor: skip propagating transactions if flag is set

@@ -35,13 +35,14 @@ func TestPeerPolicyRequestOnlyHandlers(t *testing.T) {
 			tracker := peerpolicy.New(clock)
 			peer := &Peer{Peer: configuredLimitsTestPeer(t, "trusted"), rw: &observedWriter{}, knownTxs: newKnownCache(maxKnownTxs)}
 			peer.SetObserver(func(e peerpolicy.Evidence) { tracker.Observe("reader", e) })
+			const requestAllowance = peerRequestRate*10 + peerRequestBurst
 			for interval := uint64(1); interval <= 5; interval++ {
-				for request := 0; request < 641; request++ {
+				for request := 0; request <= requestAllowance; request++ {
 					msg := p2p.Msg{Code: tc.code, Size: uint32(len(encoded)), Payload: bytes.NewReader(encoded)}
 					if err := peer.handleObserved(backend, msg, tc.handler); err != nil {
 						t.Fatal(err)
 					}
-					if request == 639 && tracker.Snapshot("reader").Risk != (interval-1)*20 {
+					if request == requestAllowance-1 && tracker.Snapshot("reader").Risk != (interval-1)*20 {
 						t.Fatal("requests within allowance were penalized")
 					}
 				}

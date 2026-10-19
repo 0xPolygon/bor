@@ -44,6 +44,9 @@ func TestPeerPolicyTrafficBoundaries(t *testing.T) {
 	for _, family := range []Family{BlockAnnouncements, TransactionAnnouncements, Transactions, Blocks, Requests} {
 		t.Run(fmt.Sprint(family), func(t *testing.T) {
 			for _, bytes := range []bool{false, true} {
+				if bytes && allowances[family].bytes == 0 {
+					continue
+				}
 				tracker := New(new(mclock.Simulated))
 				event := Evidence{Family: family, Items: allowances[family].items}
 				if bytes {
