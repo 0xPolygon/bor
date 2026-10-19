@@ -1,11 +1,13 @@
 package bor
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"errors"
 	"math"
 	"math/big"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -34,6 +36,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -1539,6 +1542,77 @@ func TestValidatorContains_NotFound(t *testing.T) {
 	found, ok := validatorContains(vals, &valset.Validator{Address: common.HexToAddress("0x99")})
 	require.False(t, ok)
 	require.Nil(t, found)
+}
+
+// Not parallel: it swaps the default logger to capture output.
+func TestWarnNotSpanProducer(t *testing.T) {
+	const msg = "Local signer is not a producer in the current span"
+
+	var buf bytes.Buffer
+
+	prev := log.Root()
+	log.SetDefault(log.NewLogger(log.NewTerminalHandler(&buf, false)))
+	t.Cleanup(func() { log.SetDefault(prev) })
+
+	warnings := func() int { return strings.Count(buf.String(), msg) }
+	signer := common.HexToAddress("0x1")
+	number := big.NewInt(42)
+
+	newBor := func(t *testing.T, rio *big.Int) (*core.BlockChain, *Bor) {
+		t.Helper()
+		sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x2"), VotingPower: 1}}}
+		borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}, RioBlock: rio}
+		return newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
+	}
+
+	t.Run("warns once per span", func(t *testing.T) {
+		buf.Reset()
+		_, b := newBor(t, big.NewInt(0))
+
+		b.warnNotSpanProducer(signer, number)
+		b.warnNotSpanProducer(signer, number)
+		require.Equal(t, 1, warnings())
+	})
+
+	t.Run("warns again for a new span", func(t *testing.T) {
+		buf.Reset()
+		_, b := newBor(t, big.NewInt(0))
+		b.notProducerSpan.Store(99)
+
+		b.warnNotSpanProducer(signer, number)
+		require.Equal(t, 1, warnings())
+		require.Equal(t, uint64(1), b.notProducerSpan.Load())
+	})
+
+	// 0x2 is the only producer of the fake span.
+	for _, tc := range []struct {
+		name   string
+		signer common.Address
+		want   int
+	}{
+		{"prepare warns for a signer outside the producer set", common.HexToAddress("0x3"), 1},
+		{"prepare is silent for a producer", common.HexToAddress("0x2"), 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			buf.Reset()
+			chain, b := newBor(t, big.NewInt(0))
+			b.Authorize(tc.signer, nil)
+
+			genesis := chain.HeaderChain().GetHeaderByNumber(0)
+			header := &types.Header{Number: big.NewInt(1), ParentHash: genesis.Hash()}
+
+			require.NoError(t, b.Prepare(chain.HeaderChain(), header, false))
+			require.Equal(t, tc.want, warnings())
+		})
+	}
+
+	t.Run("silent before rio", func(t *testing.T) {
+		buf.Reset()
+		_, b := newBor(t, big.NewInt(1000))
+
+		b.warnNotSpanProducer(signer, number)
+		require.Zero(t, warnings())
+	})
 }
 
 func TestGetUpdatedValidatorSet_AddRemoveUpdate(t *testing.T) {

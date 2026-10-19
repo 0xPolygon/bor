@@ -290,6 +290,9 @@ type Bor struct {
 	spanStore            *SpanStore // Store to save previous span data from heimdall
 	latestMilestoneBlock atomic.Uint64
 
+	// Span ID + 1 of the last span the local signer was reported as not producing in; 0 if none.
+	notProducerSpan atomic.Uint64
+
 	// The fields below are for testing only
 	fakeDiff      bool // Skip difficulty verifications
 	DevFakeAuthor bool
@@ -1168,6 +1171,11 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 			// the miner keeps such a build out of the sequence store (see
 			// IsAuthorizedSigner).
 			succession = 0
+
+			var unauthorized *UnauthorizedSignerError
+			if errors.As(err, &unauthorized) {
+				c.warnNotSpanProducer(currentSigner.signer, header.Number)
+			}
 		}
 	}
 
@@ -1999,6 +2007,26 @@ func (c *Bor) FetchAndCommitSpan(
 	}
 
 	return c.spanner.CommitSpan(ctx, minSpan, validators, producers, state, header, chain, c.systemTxVMConfig(state))
+}
+
+// warnNotSpanProducer logs once per span that the local signer is outside the
+// span's producer set. A signer change only applies once the span carrying it
+// starts, so without this the node stays silent for the rest of the span.
+func (c *Bor) warnNotSpanProducer(signer common.Address, number *big.Int) {
+	if !c.config.IsRio(number) {
+		return
+	}
+
+	span, err := c.spanStore.spanByBlockNumber(c.ctx, number.Uint64())
+	if err != nil {
+		return
+	}
+
+	if c.notProducerSpan.Swap(span.Id+1) == span.Id+1 {
+		return
+	}
+
+	log.Warn("Local signer is not a producer in the current span", "signer", signer, "spanID", span.Id, "startBlock", span.StartBlock, "endBlock", span.EndBlock)
 }
 
 // CommitStates commit states
