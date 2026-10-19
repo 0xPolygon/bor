@@ -290,7 +290,7 @@ type Bor struct {
 	spanStore            *SpanStore // Store to save previous span data from heimdall
 	latestMilestoneBlock atomic.Uint64
 
-	// Span ID + 1 of the last span the local signer was reported as not producing in; 0 if none.
+	// Span ID + 1 of the newest span the local signer was reported as not producing in; 0 if none.
 	notProducerSpan atomic.Uint64
 
 	// The fields below are for testing only
@@ -2022,11 +2022,30 @@ func (c *Bor) warnNotSpanProducer(signer common.Address, number *big.Int) {
 		return
 	}
 
-	if c.notProducerSpan.Swap(span.Id+1) == span.Id+1 {
+	if !c.markNotProducerSpan(span.Id) {
 		return
 	}
 
 	log.Warn("Local signer is not a producer in the current span", "signer", signer, "spanID", span.Id, "startBlock", span.StartBlock, "endBlock", span.EndBlock)
+}
+
+// markNotProducerSpan reports whether spanID is newer than any already reported.
+// Prepare runs concurrently (foreground build, prefetcher, pipeline), so the marker
+// must never move backwards. A rewind to an older span stays silent until ids pass
+// the marker, which is fine as that span was already reported.
+func (c *Bor) markNotProducerSpan(spanID uint64) bool {
+	next := spanID + 1
+
+	for {
+		last := c.notProducerSpan.Load()
+		if next <= last {
+			return false
+		}
+
+		if c.notProducerSpan.CompareAndSwap(last, next) {
+			return true
+		}
+	}
 }
 
 // CommitStates commit states

@@ -8,6 +8,7 @@ import (
 	"math"
 	"math/big"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1558,30 +1559,30 @@ func TestWarnNotSpanProducer(t *testing.T) {
 	signer := common.HexToAddress("0x1")
 	number := big.NewInt(42)
 
-	newBor := func(t *testing.T, rio *big.Int) (*core.BlockChain, *Bor) {
+	producers := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x2"), VotingPower: 1}}}
+
+	newBor := func(t *testing.T, sp *fakeSpanner, rio *big.Int) (*core.BlockChain, *Bor) {
 		t.Helper()
-		sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x2"), VotingPower: 1}}}
 		borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}, RioBlock: rio}
 		return newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
 	}
 
 	t.Run("warns once per span", func(t *testing.T) {
 		buf.Reset()
-		_, b := newBor(t, big.NewInt(0))
+		_, b := newBor(t, producers, big.NewInt(0))
 
 		b.warnNotSpanProducer(signer, number)
 		b.warnNotSpanProducer(signer, number)
 		require.Equal(t, 1, warnings())
 	})
 
-	t.Run("warns again for a new span", func(t *testing.T) {
+	t.Run("silent when the span lookup fails", func(t *testing.T) {
 		buf.Reset()
-		_, b := newBor(t, big.NewInt(0))
-		b.notProducerSpan.Store(99)
+		_, b := newBor(t, &fakeSpanner{}, big.NewInt(0))
 
 		b.warnNotSpanProducer(signer, number)
-		require.Equal(t, 1, warnings())
-		require.Equal(t, uint64(1), b.notProducerSpan.Load())
+		require.Zero(t, warnings())
+		require.Zero(t, b.notProducerSpan.Load())
 	})
 
 	// 0x2 is the only producer of the fake span.
@@ -1595,7 +1596,7 @@ func TestWarnNotSpanProducer(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			buf.Reset()
-			chain, b := newBor(t, big.NewInt(0))
+			chain, b := newBor(t, producers, big.NewInt(0))
 			b.Authorize(tc.signer, nil)
 
 			genesis := chain.HeaderChain().GetHeaderByNumber(0)
@@ -1608,11 +1609,60 @@ func TestWarnNotSpanProducer(t *testing.T) {
 
 	t.Run("silent before rio", func(t *testing.T) {
 		buf.Reset()
-		_, b := newBor(t, big.NewInt(1000))
+		_, b := newBor(t, producers, big.NewInt(1000))
 
 		b.warnNotSpanProducer(signer, number)
 		require.Zero(t, warnings())
 	})
+}
+
+func TestMarkNotProducerSpan(t *testing.T) {
+	t.Parallel()
+
+	var b Bor
+
+	// Interleaved calls for adjacent spans, as from the foreground build and the prefetcher.
+	for i, tc := range []struct {
+		span uint64
+		want bool
+	}{
+		{5, true},
+		{5, false},
+		{6, true},
+		{5, false},
+	} {
+		require.Equal(t, tc.want, b.markNotProducerSpan(tc.span), "step %d span %d", i, tc.span)
+	}
+
+	require.Equal(t, uint64(7), b.notProducerSpan.Load())
+}
+
+func TestMarkNotProducerSpanConcurrent(t *testing.T) {
+	t.Parallel()
+
+	const spans, callers = 50, 8
+
+	var (
+		b    Bor
+		wg   sync.WaitGroup
+		wins [spans]atomic.Int32
+	)
+
+	for range callers {
+		wg.Go(func() {
+			for id := range uint64(spans) {
+				if b.markNotProducerSpan(id) {
+					wins[id].Add(1)
+				}
+			}
+		})
+	}
+
+	wg.Wait()
+
+	for id := range wins {
+		require.LessOrEqual(t, wins[id].Load(), int32(1), "span %d reported more than once", id)
+	}
 }
 
 func TestGetUpdatedValidatorSet_AddRemoveUpdate(t *testing.T) {
