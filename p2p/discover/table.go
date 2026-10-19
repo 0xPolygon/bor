@@ -734,6 +734,9 @@ func (tab *Table) waitForNodes(ctx context.Context, n int) error {
 		sub := tab.nodeFeed.Subscribe(newnode)
 		go func() {
 			defer close(notify)
+			// Unsubscribe here, not only in waitForNodes: the waiter may be blocked on
+			// Table.mutex while a holder of that mutex sends on nodeFeed.
+			defer sub.Unsubscribe()
 			for {
 				select {
 				case <-newnode:
