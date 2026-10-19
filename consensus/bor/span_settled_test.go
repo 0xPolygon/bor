@@ -79,10 +79,24 @@ func TestSettledSpanByBlockNumber(t *testing.T) {
 				spans[4] = makeTestSpan(4, 7100, 13499, "0x0000000000000000000000000000000000000004")
 				return spans
 			},
-			latest:      4,
-			age:         time.Minute,
-			wantSpan:    2,
-			wantSettled: true,
+			latest:   4,
+			age:      time.Millisecond,
+			wantSpan: 2,
+		},
+		{
+			name: "a span after two skipped ones starts earlier",
+			spans: func() map[uint64]*borTypes.Span {
+				return map[uint64]*borTypes.Span{
+					0: makeTestSpan(0, 0, 255, "0x0000000000000000000000000000000000000001"),
+					1: makeTestSpan(1, 256, 6655, "0x0000000000000000000000000000000000000001"),
+					2: makeTestSpan(2, 7000, 13399, "0x0000000000000000000000000000000000000002"),
+					3: makeTestSpan(3, 7100, 13499, "0x0000000000000000000000000000000000000003"),
+					4: makeTestSpan(4, 300, 6699, "0x0000000000000000000000000000000000000004"),
+				}
+			},
+			latest:   4,
+			age:      time.Millisecond,
+			wantSpan: 1,
 		},
 	}
 

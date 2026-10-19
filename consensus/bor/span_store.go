@@ -332,8 +332,8 @@ func (s *SpanStore) knownSpan(ctx context.Context, blockNumber uint64, highestId
 }
 
 // getFutureSpan fetches span for future block number. It is mostly needed during snap sync.
-// It also reports whether the search settled: it ran past the spans that could hold the
-// block without a failed lookup, or reached a latest span fetched within latestSpanFreshness.
+// It also reports whether the search settled: it reached a latest span fetched within
+// latestSpanFreshness with no failed lookup on the way.
 func (s *SpanStore) getFutureSpan(ctx context.Context, id uint64, blockNumber uint64) (*borTypes.Span, bool, error) {
 	latestSpan, err := s.getLatestSpan(ctx)
 	if err != nil || latestSpan == nil {
@@ -356,11 +356,11 @@ func (s *SpanStore) getFutureSpan(ctx context.Context, id uint64, blockNumber ui
 			candidateSpan = span
 			skippedSpans = 0
 		}
-		// Spans start in id order, so two starting past the block rule out every later span.
+		// Stopping early leaves it unsettled: a newer span can start before older ones.
 		if blockNumber < span.StartBlock {
 			skippedSpans++
 			if skippedSpans > 1 {
-				return spanOrNotFound(candidateSpan, true, blockNumber)
+				return spanOrNotFound(candidateSpan, false, blockNumber)
 			}
 		}
 	}
