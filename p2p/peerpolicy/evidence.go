@@ -60,7 +60,6 @@ const (
 	Blocks
 	Requests
 	BodyReplies
-	// Pooled requests do not share the native block-request limiter.
 	TransactionRequests
 	familyCount
 )

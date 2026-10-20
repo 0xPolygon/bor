@@ -147,6 +147,8 @@ func TestPeerPolicyRejectsUnknownEvidence(t *testing.T) {
 	}
 }
 
+// Evidence without hashes: this is the floor, not the announcement cost. See
+// BenchmarkPeerPolicyAnnouncements for packets that carry a hash list.
 func BenchmarkPeerPolicyObserve(b *testing.B) {
 	if !metrics.Enabled() {
 		metrics.Enable()

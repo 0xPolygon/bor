@@ -38,7 +38,7 @@ func TestPeerPolicyObserveWithClassClearsHistory(t *testing.T) {
 	if p.hashes.blocks.Len() != 0 || p.hashes.transactions.Len() != 0 || p.refusalSequence != 1 {
 		t.Fatal("class change retained repetition evidence")
 	}
-	if entry, ok := p.hashes.refusedBodies.Get(hashes[0]); !ok || entry.count != 1 {
+	if entry, ok := p.hashes.refusedBodies.Get(&hashes[0]); !ok || entry.count != 1 {
 		t.Fatal("refused-body history was not reset")
 	}
 }

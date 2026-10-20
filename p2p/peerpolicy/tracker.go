@@ -17,6 +17,8 @@ const (
 	windowCount = 6
 	maxPeers    = 1024
 	maxHashes   = 128
+	// Bound per-packet history work under the shared tracker lock.
+	maxSampledHashes = 4096
 )
 
 type bucket struct {
@@ -191,19 +193,12 @@ func (p *peerRecord) announcements(b *bucket, tick int64, event Evidence) bool {
 	if event.Family == TransactionAnnouncements {
 		history = &p.hashes.transactions
 	}
-	// Packets are already size-bounded; sample across the entire decoded list.
-	for _, hash := range event.Hashes {
-		entry, ok := history.Get(hash)
-		if !ok || tick-entry.tick >= windowCount {
-			entry = announcement{tick: tick}
-		}
-		if entry.count < 3 {
-			entry.count++
-		}
-		if entry.count == 3 {
+	hashes := event.Hashes
+	start, step := history.sample(hashes)
+	for i := start; i < len(hashes); i += step {
+		if history.record(&hashes[i], tick) {
 			b.repeats = min(b.repeats+1, 33)
 		}
-		history.Add(hash, entry)
 	}
 	return b.repeats > 32
 }

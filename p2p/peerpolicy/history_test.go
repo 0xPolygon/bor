@@ -62,21 +62,6 @@ func TestPeerPolicyExemptClass(t *testing.T) {
 	assertRisk(t, tracker, "peer", 20, "none")
 }
 
-func BenchmarkPeerPolicyAnnouncementSample(b *testing.B) {
-	tracker := New(new(mclock.Simulated))
-	hashes := make([]common.Hash, 4096)
-	for i := range hashes {
-		binary.BigEndian.PutUint64(hashes[i][:8], uint64(i))
-	}
-	event := Evidence{Family: TransactionAnnouncements, Hashes: hashes, Items: 4096}
-	tracker.Observe("peer", event)
-	b.ReportAllocs()
-	b.ResetTimer()
-	for b.Loop() {
-		tracker.Observe("peer", event)
-	}
-}
-
 func TestPeerPolicyClassIdentityBounds(t *testing.T) {
 	tracker := New(new(mclock.Simulated))
 	for _, size := range []int{0, 128, 129} {
@@ -105,13 +90,13 @@ func TestPeerPolicyHistoryExpiryBoundary(t *testing.T) {
 		}
 		break
 	}
-	history.Add(low, announcement{tick: 10, count: 3})
-	history.Add(high, announcement{tick: 15, count: 1})
-	if _, ok := history.Get(high); ok {
+	history.Add(&low, announcement{tick: 10, count: 3})
+	history.Add(&high, announcement{tick: 15, count: 1})
+	if _, ok := history.Get(&high); ok {
 		t.Fatal("live lower rank was replaced")
 	}
-	history.Add(high, announcement{tick: 16, count: 1})
-	if entry, ok := history.Get(high); !ok || entry.count != 1 {
+	history.Add(&high, announcement{tick: 16, count: 1})
+	if entry, ok := history.Get(&high); !ok || entry.count != 1 {
 		t.Fatal("expired slot was not replaced at boundary")
 	}
 }
@@ -127,7 +112,7 @@ func TestPeerPolicyHistoryCapacity(t *testing.T) {
 			continue
 		}
 		occupied[slot] = true
-		history.Add(hash, announcement{count: 1})
+		history.Add(&hash, announcement{count: 1})
 	}
 	if got := history.Len(); got != maxHashes {
 		t.Fatalf("distinct slots: %d, want %d", got, maxHashes)

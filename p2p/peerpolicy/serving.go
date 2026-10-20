@@ -10,7 +10,10 @@ func (p *peerRecord) refused(b *bucket, tick int64, event Evidence) Reason {
 	p.refusalSequence++
 	b.refusals = min(b.refusals+1, 3)
 	repeated := false
-	for _, hash := range event.Hashes {
+	hashes := event.Hashes
+	start, step := p.hashes.refusedBodies.sample(hashes)
+	for i := start; i < len(hashes); i += step {
+		hash := &hashes[i]
 		entry, ok := p.hashes.refusedBodies.Get(hash)
 		if !ok || tick-entry.tick >= windowCount {
 			entry = announcement{tick: tick}

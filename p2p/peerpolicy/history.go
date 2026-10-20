@@ -38,18 +38,43 @@ func newPeerHistories() peerHistories {
 
 func newHashHistory() hashHistory { return hashHistory{seed: maphash.MakeSeed()} }
 
-func (h *hashHistory) Get(hash common.Hash) (announcement, bool) {
-	rank := maphash.Bytes(h.seed, hash[:])
-	slot := &h.slots[rank%maxHashes]
-	return slot.entry, slot.used && slot.hash == hash
+// Pointers avoid per-visit hash copies; history slots still own their values.
+func (h *hashHistory) rank(hash *common.Hash) uint64 { return maphash.Bytes(h.seed, hash[:]) }
+
+// sample spreads at most maxSampledHashes visits across the packet.
+// Identical packets keep the same sampled positions for this history.
+func (h *hashHistory) sample(hashes []common.Hash) (start, step int) {
+	if len(hashes) <= maxSampledHashes {
+		return 0, 1
+	}
+	step = (len(hashes) + maxSampledHashes - 1) / maxSampledHashes
+	return int(h.rank(&hashes[0]) % uint64(step)), step
 }
 
-func (h *hashHistory) Add(hash common.Hash, entry announcement) {
-	rank := maphash.Bytes(h.seed, hash[:])
+func (h *hashHistory) Get(hash *common.Hash) (announcement, bool) {
+	slot := &h.slots[h.rank(hash)%maxHashes]
+	return slot.entry, slot.used && slot.hash == *hash
+}
+
+func (h *hashHistory) Add(hash *common.Hash, entry announcement) {
+	rank := h.rank(hash)
 	slot := &h.slots[rank%maxHashes]
-	if !slot.used || slot.hash == hash || entry.tick-slot.entry.tick >= windowCount || rank < slot.rank {
-		*slot = historySlot{hash: hash, entry: entry, rank: rank, used: true}
+	if !slot.used || slot.hash == *hash || entry.tick-slot.entry.tick >= windowCount || rank < slot.rank {
+		*slot = historySlot{hash: *hash, entry: entry, rank: rank, used: true}
 	}
+}
+
+func (h *hashHistory) record(hash *common.Hash, tick int64) bool {
+	entry, ok := h.Get(hash)
+	if !ok || tick-entry.tick >= windowCount {
+		entry = announcement{tick: tick}
+	}
+	if entry.count < 3 {
+		entry.count++
+	}
+	h.Add(hash, entry)
+
+	return entry.count == 3
 }
 
 func (h *hashHistory) Len() int {

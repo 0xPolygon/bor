@@ -135,7 +135,6 @@ func TestPeerPolicyVolumeAllowanceBoundary(t *testing.T) {
 		{"block gossip bytes", peerpolicy.Blocks, nativeAllowance(peerByteBurst, peerByteRate), true, peerpolicy.BlockVolume},
 		{"block announcements", peerpolicy.BlockAnnouncements, nativeAllowance(peerHashBurst, peerHashRate), false, peerpolicy.AnnouncementVolume},
 		{"block data requests", peerpolicy.Requests, nativeAllowance(peerRequestBurst, peerRequestRate), false, peerpolicy.RequestVolume},
-		// Provisional rather than derived: no native bucket limits this code.
 		{"pooled transaction requests", peerpolicy.TransactionRequests, pooledRequestAllowance, false, peerpolicy.RequestVolume},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

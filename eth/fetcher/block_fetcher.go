@@ -257,8 +257,7 @@ type BlockFetcher struct {
 	insertChain    chainInsertFn      // Injects a batch of blocks into the chain
 	dropPeer       peerDropFn         // Drops a peer for misbehaving
 
-	// The observer classifies verification failures attributed to the supplier.
-	invalidHeader func(peer string, err error)
+	invalidHeader func(peer string, err error) // Reports verification failures and their supplier
 
 	// Testing hooks
 	announceChangeHook func(common.Hash, bool)           // Method to call upon adding or deleting a hash from the blockAnnounce list
