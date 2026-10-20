@@ -2,6 +2,7 @@ package sequencer
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -63,6 +64,10 @@ func (p *Publisher) AwaitSequenced(timeout time.Duration, number uint64, txs []*
 
 		switch {
 		case recovering:
+			if !p.recoveredExactly(number, txs) {
+				continue // now the over-sealed fallback, which the muted case passes
+			}
+
 			coverageSkip(number, "rebuilding the store's sealed generation")
 
 			return true
@@ -120,6 +125,35 @@ func (p *Publisher) AwaitSequenced(timeout time.Duration, number uint64, txs []*
 
 		time.Sleep(2 * time.Millisecond)
 	}
+}
+
+// recoveredExactly reports whether a recovery build carries the store's
+// sealed generation exactly. One that does not (a transaction failed to
+// apply, or the worker declined the window and filled from the pool) seals
+// content the store's seal does not describe, so it is no recovery: it
+// becomes the over-sealed fallback, whose seal flush and gate account for
+// that block instead of the recovery's silent broadcast.
+func (p *Publisher) recoveredExactly(number uint64, txs []*types.Transaction) bool {
+	got := txHashes(streamTxs(txs))
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if !p.mode.recoveringAt(number) {
+		return false
+	}
+
+	if slices.Equal(p.mode.txs, got) {
+		return true
+	}
+
+	publishRecoverInexact.Inc(1)
+	log.Warn("Recovery build does not carry the store's sealed generation, sealing it as over-sealed",
+		"number", number, "sealed", len(p.mode.txs), "block", len(got))
+
+	p.mode = buildMode{kind: modeOverSealed, height: number}
+
+	return false
 }
 
 // sealedThroughParent reports the clean-boundary proof: nothing stands in

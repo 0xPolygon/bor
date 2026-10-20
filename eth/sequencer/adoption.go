@@ -25,7 +25,8 @@ const noHold = ^uint64(0)
 // legal combinations were enforced only by discipline.
 type buildMode struct {
 	kind   int
-	height uint64 // the height the treatment was decided for (modeOpen: unused)
+	height uint64        // the height the treatment was decided for (modeOpen: unused)
+	txs    []common.Hash // modeRecover: the sealed generation's transactions
 }
 
 const (
@@ -41,10 +42,11 @@ const (
 )
 
 // recoveringAt reports a build rebuilding the store's sealed generation at
-// this height. Such a block already delivers what the store promised there,
-// so the seal barrier passes it: the tail read behind the mirror check can
-// show a newer window of the dead producer as owed, and refusing on it only
-// loops the rebuild until the height goes to the pool in a new order.
+// this height. Such a block delivers what the store promised there once it
+// carries the generation exactly, so the seal barrier passes it: the tail
+// read behind the mirror check can show a newer window of the dead producer
+// as owed, and refusing on it only loops the rebuild until the height goes to
+// the pool in a new order.
 func (m buildMode) recoveringAt(number uint64) bool {
 	return m.kind == modeRecover && m.height == number
 }

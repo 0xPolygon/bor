@@ -2906,7 +2906,8 @@ func (w *worker) adoptionReject(a *AdoptedWindow, header *types.Header) string {
 // resurfaces at the next height as a displaced preconfirmation. An
 // inapplicable transaction (nonce consumed, balance moved) is skipped — the
 // publisher's expectation matching turns that divergence into a
-// partial-adoption supersede.
+// partial-adoption supersede, and its seal barrier turns a recovery missing
+// one into the over-sealed fallback.
 func (w *worker) seedAdopted(work *environment, adoption *AdoptedWindow) {
 	if work.gasPool == nil {
 		work.gasPool = new(core.GasPool).AddGas(work.header.GasLimit)

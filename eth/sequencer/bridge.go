@@ -68,7 +68,7 @@ func (p *Publisher) recoverWindowLocked(info tailInfo, number uint64, parent com
 		return p.muteLocked(number)
 	}
 
-	p.mode = buildMode{kind: modeRecover, height: number}
+	p.mode = buildMode{kind: modeRecover, height: number, txs: txHashes(a.txs)}
 
 	w := offerLocked(a)
 	w.Complete = true

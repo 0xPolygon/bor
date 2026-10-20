@@ -739,31 +739,69 @@ func TestRecoveryReadsShareOneBudget(t *testing.T) {
 
 // A recovery build is the store's sealed generation, rebuilt exactly; the
 // seal barrier must pass it even when the store's tail shows a newer window
-// at that height, or the rebuild loops until the height goes to the pool.
+// at that height, or the rebuild loops until the height goes to the pool. A
+// build that does not carry the generation exactly seals as the over-sealed
+// fallback instead.
 func TestBarrierPassesRecoveryBuild(t *testing.T) {
-	h := startHarness(t)
-	p := newTestPublisher(t, h, &fakeChain{})
-
-	sealed := publishBlock(t, p, 1, common.Hash{0xef}, 1)
-	waitHead(t, h, p, 5*time.Second)
-	parent := sealHash(t, sealed)
-
-	p.OpenBlock(2, 1700000002, parent, 30_000_000, fee25())
-	p.PublishTx(testTx(t, 0))
-	waitDrained(t, p, 5*time.Second)
-
-	appendForeignRecord(t, h, testTx(t, 7))
-
-	p.mu.Lock()
-	p.mode = buildMode{kind: modeRecover, height: 2}
-	p.mu.Unlock()
-
-	if !p.AwaitSequenced(time.Second, 2, []*types.Transaction{testTx(t, 0)}) {
-		t.Fatal("a recovery build must pass the seal barrier")
+	cases := []struct {
+		name     string
+		block    []int
+		wantMode int
+	}{
+		{name: "exact", block: []int{0, 1}, wantMode: modeRecover},
+		{name: "a transaction dropped", block: []int{0}, wantMode: modeOverSealed},
+		{name: "filled from the pool", block: []int{0, 1, 2}, wantMode: modeOverSealed},
+		{name: "reordered", block: []int{1, 0}, wantMode: modeOverSealed},
 	}
 
-	if p.ResyncNeeded() {
-		t.Fatal("a recovery build must not arm a rebuild")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := startHarness(t)
+			p := newTestPublisher(t, h, &fakeChain{})
+
+			sealed := publishBlock(t, p, 1, common.Hash{0xef}, 1)
+			waitHead(t, h, p, 5*time.Second)
+			parent := sealHash(t, sealed)
+
+			txs := types.Transactions{testTx(t, 0), testTx(t, 1), testTx(t, 2)}
+
+			p.OpenBlock(2, 1700000002, parent, 30_000_000, fee25())
+			p.PublishTx(txs[0])
+			waitDrained(t, p, 5*time.Second)
+
+			appendForeignRecord(t, h, testTx(t, 7))
+
+			p.mu.Lock()
+			p.mode = buildMode{kind: modeRecover, height: 2, txs: txHashes(txs[:2])}
+			p.mu.Unlock()
+
+			block := make([]*types.Transaction, 0, len(tc.block))
+			for _, i := range tc.block {
+				block = append(block, txs[i])
+			}
+
+			if !p.AwaitSequenced(time.Second, 2, block) {
+				t.Fatal("a recovery build must pass the seal barrier")
+			}
+
+			if p.ResyncNeeded() {
+				t.Fatal("a recovery build must not arm a rebuild")
+			}
+
+			if got := modeKind(p); got != tc.wantMode {
+				t.Fatalf("mode %d, want %d", got, tc.wantMode)
+			}
+
+			p.SealBlock(blockFor(testHeader(2, parent), block))
+
+			p.mu.Lock()
+			g := p.gate
+			p.mu.Unlock()
+
+			if fallback := tc.wantMode == modeOverSealed; g.published != fallback || g.tolerateSealed != fallback {
+				t.Fatalf("gate published=%v tolerateSealed=%v, want both %v", g.published, g.tolerateSealed, fallback)
+			}
+		})
 	}
 }
 
