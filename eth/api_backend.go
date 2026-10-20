@@ -415,6 +415,12 @@ func (b *EthAPIBackend) SendTx(ctx context.Context, signedTx *types.Transaction)
 	if b.eth.localTxTracker == nil {
 		return err
 	}
+	if b.relay != nil {
+		if getter := b.relay.GetPrivateTxGetter(); getter != nil && getter.IsTxPrivate(signedTx.Hash()) {
+			// The ordinary retry journal cannot preserve private transaction metadata.
+			return err
+		}
+	}
 	// If the transaction fails with an error indicating it is invalid, or if there is
 	// very little chance it will be accepted later (e.g., the gas price is below the
 	// configured minimum, or the sender has insufficient funds to cover the cost),
@@ -885,6 +891,10 @@ func (b *EthAPIBackend) AcceptPrivateTxs() bool {
 
 func (b *EthAPIBackend) RecordPrivateTx(hash common.Hash) {
 	b.relay.RecordPrivateTx(hash)
+}
+
+func (b *EthAPIBackend) BeginPrivateTx(hash common.Hash) func(bool) {
+	return b.relay.BeginPrivateTx(hash)
 }
 
 func (b *EthAPIBackend) PurgePrivateTx(hash common.Hash) {

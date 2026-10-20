@@ -37,22 +37,24 @@ const (
 
 // syncTransactions starts sending all currently pending transactions to the given peer.
 func (h *handler) syncTransactions(p *eth.Peer) {
+	if hashes := h.pendingTransactionHashes(); len(hashes) > 0 {
+		p.AsyncSendPooledTransactionHashes(hashes)
+	}
+}
+
+func (h *handler) pendingTransactionHashes() []common.Hash {
 	var hashes []common.Hash
 	for _, batch := range h.txpool.Pending(txpool.PendingFilter{BlobTxs: false}, nil) {
 		for _, tx := range batch {
-			if h.privateTxGetter != nil && h.privateTxGetter.IsTxPrivate(tx.Hash) {
-				continue
-			}
-			if resolved := tx.Resolve(); resolved == nil || resolved.GetOptions() != nil {
+			resolved := tx.Resolve()
+			if resolved == nil || resolved.GetOptions() != nil ||
+				(h.privateTxGetter != nil && h.privateTxGetter.IsTxPrivate(tx.Hash)) {
 				continue
 			}
 			hashes = append(hashes, tx.Hash)
 		}
 	}
-	if len(hashes) == 0 {
-		return
-	}
-	p.AsyncSendPooledTransactionHashes(hashes)
+	return hashes
 }
 
 // chainSyncer coordinates blockchain sync components.

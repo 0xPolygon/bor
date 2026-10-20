@@ -76,6 +76,7 @@ type Backend interface {
 	AcceptPreconfTxs() bool
 	AcceptPrivateTxs() bool
 	RecordPrivateTx(hash common.Hash)
+	BeginPrivateTx(hash common.Hash) func(bool)
 	PurgePrivateTx(hash common.Hash)
 
 	// Blockchain API

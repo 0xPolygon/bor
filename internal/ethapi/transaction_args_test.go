@@ -327,6 +327,7 @@ func (b *backendMock) SubmitPrivateTx(tx *types.Transaction) error       { retur
 func (b *backendMock) AcceptPreconfTxs() bool                            { return false }
 func (b *backendMock) AcceptPrivateTxs() bool                            { return false }
 func (b *backendMock) RecordPrivateTx(hash common.Hash)                  {}
+func (b *backendMock) BeginPrivateTx(hash common.Hash) func(bool)        { return func(bool) {} }
 func (b *backendMock) PurgePrivateTx(hash common.Hash)                   {}
 
 func (b *backendMock) SuggestGasTipCap(ctx context.Context) (*big.Int, error) {

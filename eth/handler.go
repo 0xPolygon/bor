@@ -1105,14 +1105,28 @@ func (h *handler) rebroadcastStuckTransactions(txs types.Transactions, onBroadca
 // enableSyncedFeatures enables the post-sync functionalities when the initial
 // sync is finished.
 func (h *handler) enableSyncedFeatures() {
-	// Mark the local node as synced.
-	h.synced.Store(true)
+	wasSynced := h.synced.Swap(true)
 
 	// If we were running snap sync and it finished, disable doing another
 	// round on next sync cycle
 	if h.snapSync.Load() {
 		log.Info("Snap sync complete, auto disabling")
 		h.snapSync.Store(false)
+	}
+	if wasSynced || h.disableTxPropagation {
+		return
+	}
+	peers := h.peers.all()
+	if len(peers) == 0 {
+		return
+	}
+	// Suppressed retries may have expired while these peers remained connected.
+	hashes := h.pendingTransactionHashes()
+	if len(hashes) == 0 {
+		return
+	}
+	for _, peer := range peers {
+		peer.AsyncSendPooledTransactionHashes(hashes)
 	}
 }
 

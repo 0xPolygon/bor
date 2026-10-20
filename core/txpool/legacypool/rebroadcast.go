@@ -42,6 +42,7 @@ func (pool *LegacyPool) canRebroadcast(tx *types.Transaction) bool {
 }
 
 func (pool *LegacyPool) publishRebroadcastTransactions(txs []*types.Transaction) {
+	pool.recordRebroadcastAttempts(txs)
 	explicit := pool.rebroadcastAckFeed.Send(core.StuckTxsEvent{Txs: txs})
 	legacy := pool.rebroadcastTxFeed.Send(core.StuckTxsEvent{Txs: txs})
 	if explicit == 0 || legacy > 0 {
@@ -87,6 +88,23 @@ func (pool *LegacyPool) rebroadcastAcknowledgement(txs []*types.Transaction, cou
 		rebroadcastTrackingGauge.Update(int64(len(pool.lastRebroadcast)))
 		if countMetrics {
 			rebroadcastTxMeter.Mark(count)
+		}
+	}
+}
+
+// Must be called with pool.mu held, alongside removal from the pool.
+func (pool *LegacyPool) forgetRebroadcast(hash common.Hash) {
+	delete(pool.lastRebroadcast, hash)
+	delete(pool.lastRebroadcastAttempt, hash)
+}
+
+func (pool *LegacyPool) recordRebroadcastAttempts(txs []*types.Transaction) {
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+	now := time.Now()
+	for _, tx := range txs {
+		if pool.all.Get(tx.Hash()) == tx {
+			pool.lastRebroadcastAttempt[tx.Hash()] = now
 		}
 	}
 }

@@ -19,7 +19,6 @@ package fetcher
 
 import (
 	"errors"
-	"math/rand"
 	"sync"
 	"time"
 
@@ -39,6 +38,10 @@ const (
 	arriveTimeout = 500 * time.Millisecond // Time allowance before an announced block/transaction is explicitly requested
 	gatherSlack   = 100 * time.Millisecond // Interval used to collate almost-expired announces with fetches
 	fetchTimeout  = 5 * time.Second        // Maximum allotted time to return an explicitly requested block/transaction
+
+	// fetchRetryInterval is how long announcements that admission could not
+	// place wait before being reconsidered.
+	fetchRetryInterval = 20 * time.Millisecond
 )
 
 const (
@@ -225,6 +228,7 @@ type BlockFetcher struct {
 	bodyFilter   chan chan *bodyFilterTask
 
 	done         chan common.Hash
+	fetchRelease chan blockFetchRelease
 	witnessRetry chan *blockOrHeaderInject // Import failed with a size-oracle-accepted witness: forget, then re-fetch the witness
 	quit         chan struct{}
 
@@ -237,6 +241,11 @@ type BlockFetcher struct {
 	fetching   map[common.Hash]*blockAnnounce   // Announced blocks, currently fetching
 	fetched    map[common.Hash][]*blockAnnounce // Blocks with headers fetched, scheduled for body retrieval
 	completing map[common.Hash]*blockAnnounce   // Blocks with headers, currently body-completing
+
+	// Outstanding request accounting, bounding workers that are blocked in
+	// dispatch before their response deadline exists.
+	fetchSlots      map[string]int
+	fetchSlotsTotal int
 
 	// Block cache
 	queue  *prque.Prque[int64, *blockOrHeaderInject] // Queue containing the import operations (block number sorted)
@@ -279,6 +288,7 @@ func NewBlockFetcher(light bool, getHeader HeaderRetrievalFn, getBlock blockRetr
 		headerFilter:        make(chan chan *headerFilterTask),
 		bodyFilter:          make(chan chan *bodyFilterTask),
 		done:                make(chan common.Hash),
+		fetchRelease:        make(chan blockFetchRelease),
 		witnessRetry:        make(chan *blockOrHeaderInject),
 		quit:                make(chan struct{}),
 		announces:           make(map[string]int),
@@ -286,6 +296,7 @@ func NewBlockFetcher(light bool, getHeader HeaderRetrievalFn, getBlock blockRetr
 		fetching:            make(map[common.Hash]*blockAnnounce),
 		fetched:             make(map[common.Hash][]*blockAnnounce),
 		completing:          make(map[common.Hash]*blockAnnounce),
+		fetchSlots:          make(map[string]int),
 		queue:               prque.New[int64, *blockOrHeaderInject](nil),
 		queues:              make(map[string]int),
 		queued:              make(map[common.Hash]*blockOrHeaderInject),
@@ -518,14 +529,7 @@ func (f *BlockFetcher) loop() {
 
 	for {
 		// Clean up any expired block fetches
-		f.mu.RLock()
-		expiredHashes := make([]common.Hash, 0)
-		for hash, announce := range f.fetching {
-			if time.Since(announce.time) > fetchTimeout {
-				expiredHashes = append(expiredHashes, hash)
-			}
-		}
-		f.mu.RUnlock()
+		expiredHashes := f.expiredFetches()
 
 		for _, hash := range expiredHashes {
 			f.forgetHash(hash)
@@ -597,9 +601,10 @@ func (f *BlockFetcher) loop() {
 			// A block was announced, make sure the peer isn't DOSing us
 			blockAnnounceInMeter.Mark(1)
 
-			count := f.announces[notification.origin] + 1
-			if count > hashLimit {
-				log.Debug("Peer exceeded outstanding announces", "peer", notification.origin, "limit", hashLimit)
+			count, ok := f.admitAnnouncement(notification.origin)
+			if !ok {
+				log.Debug("Declined outstanding announce", "peer", notification.origin,
+					"limit", hashLimit, "origins", len(f.announces), "originLimit", maxPendingAnnounceOrigins)
 				blockAnnounceDOSMeter.Mark(1)
 				break
 			}
@@ -633,7 +638,7 @@ func (f *BlockFetcher) loop() {
 			}
 
 			if len(f.announced) == 1 {
-				f.rescheduleFetch(fetchTimer)
+				f.rescheduleFetch(fetchTimer, false)
 			}
 
 		case op := <-f.inject:
@@ -661,6 +666,8 @@ func (f *BlockFetcher) loop() {
 			// A pending import finished, remove all traces of the notification
 			f.forgetHash(hash)  // This calls wm.forget
 			f.forgetBlock(hash) // This calls wm.forget
+		case release := <-f.fetchRelease:
+			f.releaseFetchOwnership(release)
 
 		case op := <-f.witnessRetry:
 			// An import failed with a witness accepted on the WIT2 size oracle
@@ -674,176 +681,15 @@ func (f *BlockFetcher) loop() {
 
 		case <-fetchTimer.C:
 			// At least one block's timer ran out, check for needing retrieval
-			request := make(map[string][]common.Hash)
-
-			for hash, announces := range f.announced {
-				// In current LES protocol(les2/les3), only header announce is
-				// available, no need to wait too much time for header broadcast.
-				timeout := arriveTimeout - gatherSlack
-				if f.light {
-					timeout = 0
-				}
-
-				if time.Since(announces[0].time) > timeout {
-					// Determine if we should proceed to fetch the header for this hash.
-					shouldScheduleFetch := !f.wm.isPending(hash) && // Not handled by witness manager
-						f.queued[hash] == nil && // Not already in the import queue
-						f.fetched[hash] == nil && // Header not already fetched
-						f.completing[hash] == nil && // Body not already being completed
-						((f.light && f.getHeader(hash) == nil) || (!f.light && f.getBlock(hash) == nil)) // Not in DB
-
-					if shouldScheduleFetch {
-						announceToUse := announces[rand.Intn(len(announces))]
-						f.forgetHash(hash) // This also removes from f.announced
-
-						request[announceToUse.origin] = append(request[announceToUse.origin], hash)
-						f.fetching[hash] = announceToUse
-					} else {
-						for _, annItem := range announces { // 'announces' is f.announced[hash]
-							f.announces[annItem.origin]--
-							if f.announces[annItem.origin] <= 0 {
-								delete(f.announces, annItem.origin)
-							}
-						}
-						delete(f.announced, hash)
-						if f.announceChangeHook != nil {
-							f.announceChangeHook(hash, false)
-						}
-					}
-				}
-			}
-			// Send out all block header requests
-			for peer, hashes := range request {
-				log.Debug("Fetching scheduled headers", "peer", peer, "list", hashes)
-				if len(hashes) == 0 {
-					continue
-				}
-
-				// Create a closure of the fetch and schedule in on a new thread
-				announceCopy := *f.fetching[hashes[0]] // Copy announce data for goroutine
-				go func(p string, hs []common.Hash, ann blockAnnounce) {
-					if f.fetchingHook != nil {
-						f.fetchingHook(hs)
-					}
-					fetchHeader := ann.fetchHeader // Use copied data
-					announcedAt := ann.time
-
-					for _, h := range hs {
-						headerFetchMeter.Mark(1)
-						go func(h common.Hash) {
-							resCh := make(chan *eth.Response)
-							if fetchHeader == nil {
-								return
-							} // Check before using
-							req, err := fetchHeader(h, resCh)
-							if err != nil {
-								log.Debug("Failed to request header", "peer", p, "hash", h, "err", err)
-								return
-							}
-							defer req.Close()
-
-							timeout := time.NewTimer(2 * fetchTimeout) // 2x leeway before dropping the peer
-							defer timeout.Stop()
-
-							select {
-							case res := <-resCh:
-								if res == nil {
-									return
-								} // Channel closed
-								res.Done <- nil
-								headersResponse, ok := res.Res.(*eth.BlockHeadersRequest)
-								if !ok || headersResponse == nil {
-									return
-								} // Invalid response type
-								headers := *headersResponse
-								metrics.RecordPerItemDuration(blockHeaderItemDownloadTimer, res.Time, len(headers))
-								f.FilterHeaders(p, headers, time.Now(), announcedAt)
-
-							case <-timeout.C:
-								log.Debug("BlockFetcher: header fetch timed out, dropping peer", "peer", p, "hash", h, "timeout", 2*fetchTimeout)
-								f.dropPeer(p)
-							case <-f.quit:
-								return // Fetcher stopped
-							}
-						}(h)
-					}
-				}(peer, hashes, announceCopy)
-			}
+			deferred := f.scheduleHeaderFetches()
 			// Schedule the next fetch if blocks are still pending
-			f.rescheduleFetch(fetchTimer)
+			f.rescheduleFetch(fetchTimer, deferred)
 
 		case <-completeTimer.C:
 			// At least one header's timer ran out, retrieve everything
-			request := make(map[string][]common.Hash)
-
-			for hash, announces := range f.fetched {
-				// Pick a random peer to retrieve from, reset all others
-				announce := announces[rand.Intn(len(announces))]
-
-				f.forgetHash(hash) // Removes from f.fetched
-
-				// If the block still didn't arrive, queue for completion
-				// Also check if witness manager is already handling it
-				if !f.wm.isPending(hash) && f.getBlock(hash) == nil {
-					request[announce.origin] = append(request[announce.origin], hash)
-					f.completing[hash] = announce
-				}
-			}
-			// Send out all block body requests
-			for peer, hashes := range request {
-				log.Debug("Fetching scheduled bodies", "peer", peer, "list", hashes)
-				if len(hashes) == 0 {
-					continue
-				}
-
-				announceCopy := *f.completing[hashes[0]] // Copy announce data for goroutine
-				go func(p string, hs []common.Hash, ann blockAnnounce) {
-					if f.completingHook != nil {
-						f.completingHook(hs)
-					}
-					fetchBodies := ann.fetchBodies // Use copied data
-					bodyFetchMeter.Mark(int64(len(hs)))
-					announcedAt := ann.time
-
-					resCh := make(chan *eth.Response)
-					if fetchBodies == nil {
-						return
-					} // Check before using
-					req, err := fetchBodies(hs, resCh)
-					if err != nil {
-						log.Debug("Failed to request bodies", "peer", p, "hashes", hs, "err", err)
-						return
-					}
-					defer req.Close()
-
-					timeout := time.NewTimer(2 * fetchTimeout) // 2x leeway before dropping the peer
-					defer timeout.Stop()
-
-					select {
-					case res := <-resCh:
-						if res == nil {
-							return
-						} // Channel closed
-						res.Done <- nil
-						bodyResponse, ok := res.Res.(*eth.BlockBodiesResponse)
-						if !ok || bodyResponse == nil {
-							return
-						} // Invalid response type
-						// Ignoring withdrawals here, since the block fetcher is not used post-merge.
-						txs, uncles, _ := bodyResponse.Unpack()
-						metrics.RecordPerItemDuration(blockBodyItemDownloadTimer, res.Time, len(txs))
-						f.FilterBodies(p, txs, uncles, time.Now(), announcedAt)
-
-					case <-timeout.C:
-						log.Debug("BlockFetcher: body fetch timed out, dropping peer", "peer", p, "hashes", hs, "timeout", 2*fetchTimeout)
-						f.dropPeer(p)
-					case <-f.quit:
-						return // Fetcher stopped
-					}
-				}(peer, hashes, announceCopy)
-			}
+			deferred := f.scheduleBodyFetches()
 			// Schedule the next fetch if blocks are still pending
-			f.rescheduleComplete(completeTimer)
+			f.rescheduleComplete(completeTimer, deferred)
 
 		case filter := <-f.headerFilter:
 			// Headers arrived from a remote peer. Extract those that were explicitly
@@ -940,7 +786,7 @@ func (f *BlockFetcher) loop() {
 				f.fetched[hash] = append(f.fetched[hash], announce)
 				delete(f.fetching, hash)
 				if len(f.fetched) == 1 {
-					f.rescheduleComplete(completeTimer)
+					f.rescheduleComplete(completeTimer, false)
 				}
 			}
 			// Schedule the header for light fetcher import
@@ -1067,7 +913,7 @@ func (f *BlockFetcher) loop() {
 }
 
 // rescheduleFetch resets the specified fetch timer to the next blockAnnounce timeout.
-func (f *BlockFetcher) rescheduleFetch(fetch *time.Timer) {
+func (f *BlockFetcher) rescheduleFetch(fetch *time.Timer, deferred bool) {
 	// Short circuit if no blocks are announced
 	if len(f.announced) == 0 {
 		return
@@ -1086,11 +932,24 @@ func (f *BlockFetcher) rescheduleFetch(fetch *time.Timer) {
 		}
 	}
 
-	fetch.Reset(arriveTimeout - time.Since(earliest))
+	fetch.Reset(retryAfter(arriveTimeout-time.Since(earliest), deferred))
+}
+
+// retryAfter floors a timer delay for a pass that left announcements behind
+// because admission was full. Without the floor the timer would re-fire at once
+// on an announcement that is already past due and spin until capacity frees.
+// Passes that placed everything keep their natural delay, including an
+// immediate one.
+func retryAfter(delay time.Duration, deferred bool) time.Duration {
+	if deferred && delay < fetchRetryInterval {
+		return fetchRetryInterval
+	}
+
+	return delay
 }
 
 // rescheduleComplete resets the specified completion timer to the next fetch timeout.
-func (f *BlockFetcher) rescheduleComplete(complete *time.Timer) {
+func (f *BlockFetcher) rescheduleComplete(complete *time.Timer, deferred bool) {
 	// Short circuit if no headers are fetched
 	if len(f.fetched) == 0 {
 		return
@@ -1103,7 +962,7 @@ func (f *BlockFetcher) rescheduleComplete(complete *time.Timer) {
 		}
 	}
 
-	complete.Reset(gatherSlack - time.Since(earliest))
+	complete.Reset(retryAfter(gatherSlack-time.Since(earliest), deferred))
 }
 
 // enqueue schedules a new header or block import operation, if the component
@@ -1363,32 +1222,12 @@ func (f *BlockFetcher) forgetHash(hash common.Hash) {
 			f.announceChangeHook(hash, false)
 		}
 	}
-	// Remove any pending fetches and decrement the DOS counters
-	if announce := f.fetching[hash]; announce != nil {
-		f.announces[announce.origin]--
-		if f.announces[announce.origin] <= 0 {
-			delete(f.announces, announce.origin)
-		}
-		delete(f.fetching, hash)
-	}
-
-	// Remove any pending completion requests and decrement the DOS counters
-	for _, announce := range f.fetched[hash] {
-		f.announces[announce.origin]--
-		if f.announces[announce.origin] <= 0 {
-			delete(f.announces, announce.origin)
-		}
-	}
+	// Scheduling already released the credit for anything past the announced
+	// stage, so these are metadata removals only. Debiting again would free
+	// quota a peer never gave back and let its pending records grow.
+	delete(f.fetching, hash)
 	delete(f.fetched, hash)
-
-	// Remove any pending completions and decrement the DOS counters
-	if announce := f.completing[hash]; announce != nil {
-		f.announces[announce.origin]--
-		if f.announces[announce.origin] <= 0 {
-			delete(f.announces, announce.origin)
-		}
-		delete(f.completing, hash)
-	}
+	delete(f.completing, hash)
 
 	// Notify witness manager to forget any pending state
 	f.wm.forget(hash)

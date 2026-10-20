@@ -2492,16 +2492,18 @@ func (api *TransactionAPI) SendRawTransactionPrivate(ctx context.Context, input 
 		return common.Hash{}, err
 	}
 
-	// Track the tx hash to ensure it is not gossiped in public
-	api.b.RecordPrivateTx(tx.Hash())
+	// A private duplicate must not temporarily hide an already-public transaction.
+	if api.b.GetPoolTransaction(tx.Hash()) != nil {
+		return common.Hash{}, txpool.ErrAlreadyKnown
+	}
+
+	// Hide the hash before pool admission can emit a transaction event.
+	finish := api.b.BeginPrivateTx(tx.Hash())
+	defer finish(false)
 
 	hash, err := SubmitTransaction(ctx, api.b, tx)
+	finish(err == nil)
 	if err != nil {
-		// Purge tx from private tx tracker if submission failed. Don't purge
-		// if `ErrAlreadyKnown` is being returned.
-		if !errors.Is(err, txpool.ErrAlreadyKnown) {
-			api.b.PurgePrivateTx(tx.Hash())
-		}
 		return hash, err
 	}
 
