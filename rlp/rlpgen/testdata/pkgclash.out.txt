@@ -1,23 +1,26 @@
 package test
 
 import "github.com/ethereum/go-ethereum/common"
-import "github.com/ethereum/go-ethereum/eth"
+import "github.com/ethereum/go-ethereum/core/types"
 import "github.com/ethereum/go-ethereum/rlp"
 import "io"
-import eth1 "github.com/ethereum/go-ethereum/eth/protocols/eth"
+import types1 "github.com/ethereum/go-ethereum/beacon/types"
 
 func (obj *Test) EncodeRLP(_w io.Writer) error {
 	w := rlp.NewEncoderBuffer(_w)
 	_tmp0 := w.List()
 	_tmp1 := w.List()
+	w.WriteUint64(obj.A.Index)
+	w.WriteUint64(obj.A.Validator)
+	w.WriteBytes(obj.A.Address[:])
+	w.WriteUint64(obj.A.Amount)
 	w.ListEnd(_tmp1)
 	_tmp2 := w.List()
-	w.WriteUint64(obj.B.RequestId)
-	_tmp3 := w.List()
-	for _, _tmp4 := range obj.B.GetReceiptsRequest {
-		w.WriteBytes(_tmp4[:])
-	}
-	w.ListEnd(_tmp3)
+	w.WriteUint64(obj.B.Slot)
+	w.WriteUint64(obj.B.ProposerIndex)
+	w.WriteBytes(obj.B.ParentRoot[:])
+	w.WriteBytes(obj.B.StateRoot[:])
+	w.WriteBytes(obj.B.BodyRoot[:])
 	w.ListEnd(_tmp2)
 	w.ListEnd(_tmp0)
 	return w.Flush()
@@ -30,49 +33,81 @@ func (obj *Test) DecodeRLP(dec *rlp.Stream) error {
 			return err
 		}
 		// A:
-		var _tmp1 eth.MinerAPI
+		var _tmp1 types.Withdrawal
 		{
 			if _, err := dec.List(); err != nil {
 				return err
 			}
+			// Index:
+			_tmp2, err := dec.Uint64()
+			if err != nil {
+				return err
+			}
+			_tmp1.Index = _tmp2
+			// Validator:
+			_tmp3, err := dec.Uint64()
+			if err != nil {
+				return err
+			}
+			_tmp1.Validator = _tmp3
+			// Address:
+			var _tmp4 common.Address
+			if err := dec.ReadBytes(_tmp4[:]); err != nil {
+				return err
+			}
+			_tmp1.Address = _tmp4
+			// Amount:
+			_tmp5, err := dec.Uint64()
+			if err != nil {
+				return err
+			}
+			_tmp1.Amount = _tmp5
 			if err := dec.ListEnd(); err != nil {
 				return err
 			}
 		}
 		_tmp0.A = _tmp1
 		// B:
-		var _tmp2 eth1.GetReceiptsPacket
+		var _tmp6 types1.Header
 		{
 			if _, err := dec.List(); err != nil {
 				return err
 			}
-			// RequestId:
-			_tmp3, err := dec.Uint64()
+			// Slot:
+			_tmp7, err := dec.Uint64()
 			if err != nil {
 				return err
 			}
-			_tmp2.RequestId = _tmp3
-			// GetReceiptsRequest:
-			var _tmp4 []common.Hash
-			if _, err := dec.List(); err != nil {
+			_tmp6.Slot = _tmp7
+			// ProposerIndex:
+			_tmp8, err := dec.Uint64()
+			if err != nil {
 				return err
 			}
-			for dec.MoreDataInList() {
-				var _tmp5 common.Hash
-				if err := dec.ReadBytes(_tmp5[:]); err != nil {
-					return err
-				}
-				_tmp4 = append(_tmp4, _tmp5)
-			}
-			if err := dec.ListEnd(); err != nil {
+			_tmp6.ProposerIndex = _tmp8
+			// ParentRoot:
+			var _tmp9 common.Hash
+			if err := dec.ReadBytes(_tmp9[:]); err != nil {
 				return err
 			}
-			_tmp2.GetReceiptsRequest = _tmp4
+			_tmp6.ParentRoot = _tmp9
+			// StateRoot:
+			var _tmp10 common.Hash
+			if err := dec.ReadBytes(_tmp10[:]); err != nil {
+				return err
+			}
+			_tmp6.StateRoot = _tmp10
+			// BodyRoot:
+			var _tmp11 common.Hash
+			if err := dec.ReadBytes(_tmp11[:]); err != nil {
+				return err
+			}
+			_tmp6.BodyRoot = _tmp11
 			if err := dec.ListEnd(); err != nil {
 				return err
 			}
 		}
-		_tmp0.B = _tmp2
+		_tmp0.B = _tmp6
 		if err := dec.ListEnd(); err != nil {
 			return err
 		}

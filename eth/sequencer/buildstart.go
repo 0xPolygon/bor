@@ -162,7 +162,11 @@ const recoverGrace = 4 * time.Second
 // generation, seal included, so the rebuild publishes nothing — the caller
 // mutes it.
 func (p *Publisher) recoverSealed(ctx context.Context, number uint64) (tailInfo, recoverState) {
-	if p.chain == nil || p.chain.GetCanonicalHash(number) != (common.Hash{}) {
+	p.mu.Lock()
+	chain := p.chain
+	p.mu.Unlock()
+
+	if chain == nil || chain.GetCanonicalHash(number) != (common.Hash{}) {
 		return tailInfo{}, recoverNone // the chain has the block: an ordinary loss
 	}
 

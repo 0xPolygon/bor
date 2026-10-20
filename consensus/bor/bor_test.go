@@ -5449,15 +5449,14 @@ func TestRunMilestoneFetcher_BlockingCallRespectsTimeout(t *testing.T) {
 	b := newBorForMilestoneFetcherTest(t)
 	b.HeimdallClient = client
 
-	go b.runMilestoneFetcher()
+	go b.runMilestoneFetcherWithTimeout(500 * time.Millisecond)
 	defer close(b.quit)
 
-	// The context timeout is 30s; the blocked call should eventually return.
-	// We use a generous test timeout but this verifies the call doesn't block forever.
+	// The blocked call must return once the (shortened) context timeout fires.
 	select {
 	case <-callReturned:
 		// Success: the blocking FetchMilestone returned because the context timed out
-	case <-time.After(35 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("FetchMilestone blocked beyond the context timeout; goroutine would leak without the fix")
 	}
 }

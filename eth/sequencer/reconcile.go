@@ -46,7 +46,7 @@ func (p *Publisher) reconcile(ctx context.Context) reconcileOutcome {
 // database rather than any persisted hint.
 func (p *Publisher) readTail(ctx context.Context) (tailInfo, reconcileOutcome) {
 	p.mu.Lock()
-	anchor, confirmed, probeFrom := p.anchor, p.confirmed, p.curHeight
+	anchor, confirmed, probeFrom, chain := p.anchor, p.confirmed, p.curHeight, p.chain
 	p.mu.Unlock()
 
 	if confirmed {
@@ -59,8 +59,8 @@ func (p *Publisher) readTail(ctx context.Context) (tailInfo, reconcileOutcome) {
 		}
 	}
 
-	if probeFrom == 0 && p.chain != nil {
-		if head := p.chain.CurrentBlock(); head != nil {
+	if probeFrom == 0 && chain != nil {
+		if head := chain.CurrentBlock(); head != nil {
 			probeFrom = head.Number.Uint64()
 		}
 	}

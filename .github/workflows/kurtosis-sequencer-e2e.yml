@@ -1,7 +1,7 @@
 name: Kurtosis Sequencer E2E Tests
 
 # Exercises the sequence-store publisher and consumer end to end against a
-# bor built from this checkout: publishers live after Rio, production
+# bor built from this checkout: live publishers, production
 # through a store outage, the recovery backfill, preconf receipts on the RPC
 # node, and the store chaos episodes. The suites and devnet config live in
 # pos-workflows; this workflow only supplies the bor under test.
@@ -89,8 +89,7 @@ jobs:
     # the suite would only fail at the pull; run it for trusted refs only.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    # Three suites share one enclave: functional (~25m, most of it reaching
-    # Rio at 4s blocks), rpc (~5m), chaos (~10m).
+    # Three suites share one enclave: functional, rpc (~5m), chaos (~10m).
     timeout-minutes: 75
     permissions:
       contents: read
@@ -104,7 +103,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: 0xPolygon/kurtosis-pos
-          ref: v1.4.3
+          ref: kamuikatsurgi/rio-at-genesis
           persist-credentials: false
 
       - name: Pre kurtosis run
@@ -118,7 +117,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: 0xPolygon/pos-workflows
-          ref: main
+          ref: kamuikatsurgi/rio-at-genesis
           path: pos-workflows
           persist-credentials: false
 
