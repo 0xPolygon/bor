@@ -36,6 +36,8 @@ type ContributionSnapshot struct {
 	Scope                      string  `json:"scope"`
 	UsefulDataCoverage         string  `json:"usefulDataCoverage"`
 	Status                     string  `json:"status"`
+	Risk                       uint64  `json:"risk"`
+	RiskReason                 string  `json:"riskReason,omitempty"`
 	Protected                  bool    `json:"protected"`
 	ConnectionKnown            bool    `json:"connectionKnown"`
 	ServedMinutes              uint64  `json:"servedMinutes"`
@@ -144,6 +146,7 @@ func (a *activityRecord) snapshot(now mclock.AbsTime, ready, protected bool) *Co
 		result.LastContributionAgeSeconds = &age
 	}
 	result.classify(a.registered && ready)
+	result.score()
 	return result
 }
 

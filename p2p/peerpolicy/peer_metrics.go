@@ -27,16 +27,18 @@ func contributionStatusCode(status string) int64 {
 }
 
 type peerMetricSample struct {
-	risk        map[string]int64
-	connected   map[string]int64
-	protected   map[string]int64
-	status      map[string]int64
-	activity    map[string]ActivityEvent
-	classRisk   map[string]int64
-	classCount  map[string]int64
-	statusCount map[string]int64
-	omitted     int64
-	admitted    int64
+	risk         map[string]int64
+	abuseRisk    map[string]int64
+	behaviorRisk map[string]int64
+	connected    map[string]int64
+	protected    map[string]int64
+	status       map[string]int64
+	activity     map[string]ActivityEvent
+	classRisk    map[string]int64
+	classCount   map[string]int64
+	statusCount  map[string]int64
+	omitted      int64
+	admitted     int64
 }
 
 type peerMetricFamily struct {
@@ -60,6 +62,8 @@ func (t *Tracker) families() []peerMetricFamily {
 
 	return []peerMetricFamily{
 		{peerRiskMetric, "peer_id", t.peerRisks},
+		{"eth/peerpolicy/peer_abuse_risk", "peer_id", func() map[string]int64 { return t.collect().abuseRisk }},
+		{"eth/peerpolicy/peer_behavior_risk", "peer_id", func() map[string]int64 { return t.collect().behaviorRisk }},
 		{"eth/peerpolicy/peer_connected", "peer_id", func() map[string]int64 { return t.collect().connected }},
 		{"eth/peerpolicy/peer_protected", "peer_id", func() map[string]int64 { return t.collect().protected }},
 		{"eth/peerpolicy/peer_contribution_status", "peer_id", func() map[string]int64 { return t.collect().status }},
@@ -132,6 +136,7 @@ func (t *Tracker) collect() peerMetricSample {
 	now := t.clock.Now()
 	sample := peerMetricSample{
 		risk: make(map[string]int64), connected: make(map[string]int64),
+		abuseRisk: make(map[string]int64), behaviorRisk: make(map[string]int64),
 		protected: make(map[string]int64), status: make(map[string]int64),
 		activity:    make(map[string]ActivityEvent),
 		classRisk:   map[string]int64{"ordinary": 0, "protected": 0},
@@ -151,7 +156,7 @@ func (t *Tracker) collect() peerMetricSample {
 
 	// Population totals include identities omitted by the lifetime label budget.
 	sample.omitted, sample.admitted = t.metrics.peerIDs.filter(sample.risk)
-	for _, values := range []map[string]int64{sample.connected, sample.protected, sample.status} {
+	for _, values := range []map[string]int64{sample.abuseRisk, sample.behaviorRisk, sample.connected, sample.protected, sample.status} {
 		retain(values, sample.risk)
 	}
 
@@ -161,33 +166,26 @@ func (t *Tracker) collect() peerMetricSample {
 }
 
 func (t *Tracker) samplePeer(sample *peerMetricSample, id string, peer *peerRecord, now mclock.AbsTime) {
-	connected := peer.activity.registered
-	if t.classResolver != nil {
-		protected, live := t.classResolver(id)
-		connected = connected && live
-		if live {
-			peer.setExempt(protected)
-		}
-	}
-	risk := peer.risk(int64(now)/int64(windowWidth), nil)
-	if !connected && (peer.exempt || risk == 0) {
+	snapshot, connected := t.snapshotPeer(id, peer, now, nil)
+	contribution := snapshot.Contribution
+	if !connected && (contribution.Protected || snapshot.AbuseRisk == 0) {
 		return
 	}
 
-	t.prepareActivity(&peer.activity, now)
-	contribution := peer.activity.snapshot(now, t.ready && connected, peer.exempt)
-	sample.risk[id] = int64(risk)
+	sample.risk[id] = int64(snapshot.Risk)
+	sample.abuseRisk[id] = int64(snapshot.AbuseRisk)
+	sample.behaviorRisk[id] = int64(contribution.Risk)
 	sample.connected[id] = flag(connected)
-	sample.protected[id] = flag(peer.exempt)
+	sample.protected[id] = flag(contribution.Protected)
 	sample.status[id] = contributionStatusCode(contribution.Status)
 	sample.activity[id] = contribution.ActivityEvent
 
 	if connected {
 		class := "ordinary"
-		if peer.exempt {
+		if contribution.Protected {
 			class = "protected"
 		}
-		sample.classRisk[class] += int64(risk)
+		sample.classRisk[class] += int64(snapshot.Risk)
 		sample.classCount[class]++
 		sample.statusCount[contribution.Status]++
 	}

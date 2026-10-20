@@ -38,7 +38,10 @@ func TestPeerContributionAdminSnapshot(t *testing.T) {
 	require.Equal(t, "request-only", got.Contribution.Status)
 	require.Equal(t, uint64(3), got.Contribution.ServedMinutes)
 	require.Positive(t, got.Contribution.ServedBytes)
-	require.Zero(t, got.Risk)
+	require.Equal(t, uint64(20), got.Risk)
+	require.Equal(t, uint64(20), got.Contribution.Risk)
+	require.Equal(t, "request-only", got.Contribution.RiskReason)
+	require.Zero(t, got.AbuseRisk)
 	require.Equal(t, "none", got.Action)
 	h.handler.observePeer(peer.ID(), peerpolicy.InvalidTransaction)
 	h.handler.observeTransactionDelivery(peer.ID(), fetcher.UnsolicitedDelivery, 1, 100, false, 1, true, clock.Now())
@@ -56,12 +59,13 @@ func TestPeerContributionTransactionOutcomes(t *testing.T) {
 		accepted   uint64
 		complete   bool
 		status     string
+		risk       uint64
 	}{
-		{"accepted broadcast", fetcher.UnsolicitedDelivery, 1, true, "contributing"},
-		{"accepted requested reply", fetcher.RequestedDelivery, 1, true, "contributing"},
-		{"pool rejection", fetcher.UnsolicitedDelivery, 0, true, "request-only"},
-		{"unknown provenance", fetcher.UnknownDelivery, 1, true, "unknown"},
-		{"incomplete admission", fetcher.UnsolicitedDelivery, 1, false, "unknown"},
+		{"accepted broadcast", fetcher.UnsolicitedDelivery, 1, true, "contributing", 0},
+		{"accepted requested reply", fetcher.RequestedDelivery, 1, true, "contributing", 0},
+		{"pool rejection", fetcher.UnsolicitedDelivery, 0, true, "request-only", 20},
+		{"unknown provenance", fetcher.UnknownDelivery, 1, true, "unknown", 0},
+		{"incomplete admission", fetcher.UnsolicitedDelivery, 1, false, "unknown", 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			clock := new(mclock.Simulated)
@@ -76,7 +80,9 @@ func TestPeerContributionTransactionOutcomes(t *testing.T) {
 			h.observeTransactionDelivery("peer", test.provenance, 1, 100, false, test.accepted, test.complete, clock.Now())
 			got := h.peerPolicy.Snapshot("peer")
 			require.Equal(t, test.status, got.Contribution.Status)
-			require.Zero(t, got.Risk)
+			require.Equal(t, test.risk, got.Risk)
+			require.Equal(t, test.risk, got.Contribution.Risk)
+			require.Zero(t, got.AbuseRisk)
 		})
 	}
 }

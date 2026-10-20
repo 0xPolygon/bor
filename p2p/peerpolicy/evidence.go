@@ -80,6 +80,7 @@ type Evidence struct {
 type Snapshot struct {
 	Mode         string                `json:"mode"`
 	Risk         uint64                `json:"risk"`
+	AbuseRisk    uint64                `json:"abuseRisk"`
 	Action       string                `json:"wouldAction"`
 	Windows      map[string]uint64     `json:"reasonWindows"`
 	Contribution *ContributionSnapshot `json:"contribution"`

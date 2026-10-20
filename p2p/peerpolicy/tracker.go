@@ -237,12 +237,7 @@ func (t *Tracker) Snapshot(id string) Snapshot {
 	result := Snapshot{Mode: "observe", Action: "none", Windows: make(map[string]uint64)}
 	result.Contribution = contributionSnapshot()
 	if p, ok := t.peers.Peek(id); ok {
-		p.setExempt(t.connectionClass(id, p.exempt))
-		result.Risk = p.risk(int64(t.clock.Now())/int64(windowWidth), result.Windows)
-		result.Action = actionFor(result.Risk)
-		now := t.clock.Now()
-		t.prepareActivity(&p.activity, now)
-		result.Contribution = p.activity.snapshot(now, t.ready, p.exempt)
+		result, _ = t.snapshotPeer(id, p, t.clock.Now(), result.Windows)
 	}
 	return result
 }
