@@ -221,6 +221,22 @@ func (r *StandardRegistry) registered() map[string]interface{} {
 		metrics[key.(string)] = value
 		return true
 	})
+	var groups map[*GaugeVecGroup]*GaugeVecGroup
+	for name, metric := range metrics {
+		gauge, ok := metric.(*GaugeVec)
+		if !ok || gauge.group == nil {
+			continue
+		}
+		if groups == nil {
+			groups = make(map[*GaugeVecGroup]*GaugeVecGroup)
+		}
+		group := groups[gauge.group]
+		if group == nil {
+			group = gauge.group.snapshot()
+			groups[gauge.group] = group
+		}
+		metrics[name] = group.Gauge(gauge.name, gauge.label)
+	}
 	return metrics
 }
 

@@ -363,7 +363,7 @@ func testPeerContributionSyncMode(t *testing.T, mode downloader.SyncMode, status
 	require.Equal(t, restoredStatus, h.peerPolicy.Snapshot(peer.ID()).Contribution.Status)
 }
 
-func TestPeerContributionAdminProtectionAfterEviction(t *testing.T) {
+func TestPeerContributionAdminProtectionAfterChurn(t *testing.T) {
 	for _, mode := range []string{"ordinary", "trusted", "static"} {
 		t.Run(mode, func(t *testing.T) {
 			h := &handler{peerPolicy: peerpolicy.New(new(mclock.Simulated)), peers: newPeerSet()}
@@ -375,18 +375,17 @@ func TestPeerContributionAdminProtectionAfterEviction(t *testing.T) {
 			for i := range 1024 {
 				h.peerPolicy.Connected(fmt.Sprintf("filler-%d", i))
 			}
-			require.False(t, h.peerPolicy.Snapshot(peer.ID()).Contribution.ConnectionKnown)
+			require.True(t, h.peerPolicy.Snapshot(peer.ID()).Contribution.ConnectionKnown)
 
 			for range 3 {
 				info := (*ethHandler)(h).PeerInfo(peer.Peer.ID()).(*ethPeerInfo)
 				require.Equal(t, mode != "ordinary", info.Reputation.Contribution.Protected)
-				require.False(t, info.Reputation.Contribution.ConnectionKnown)
+				require.True(t, info.Reputation.Contribution.ConnectionKnown)
 				require.Equal(t, "unknown", info.Reputation.Contribution.Status)
 				require.Zero(t, info.Reputation.Risk)
 			}
-			// Reading admin metadata must not reinsert the evicted peer and displace history.
-			require.True(t, h.peerPolicy.Snapshot("filler-0").Contribution.ConnectionKnown)
-			require.False(t, h.peerPolicy.Snapshot(peer.ID()).Contribution.Protected)
+			require.False(t, h.peerPolicy.Snapshot("filler-0").Contribution.ConnectionKnown)
+			require.Equal(t, mode != "ordinary", h.peerPolicy.Snapshot(peer.ID()).Contribution.Protected)
 		})
 	}
 }

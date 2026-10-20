@@ -73,6 +73,9 @@ func (t *Tracker) Observe(id string, event Evidence) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	p := t.record(id)
+	if p == nil {
+		return
+	}
 	p.setExempt(t.connectionClass(id, p.exempt))
 	t.observe(p, event)
 }
@@ -86,6 +89,9 @@ func (t *Tracker) ObserveWithClass(id string, exempt bool, event Evidence) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	p := t.record(id)
+	if p == nil {
+		return
+	}
 	// Once a live resolver owns class changes, a captured connection flag must
 	// not overwrite the final retained class after that connection disappears.
 	if t.classResolver != nil {
@@ -156,11 +162,33 @@ func (t *Tracker) record(id string) *peerRecord {
 	if p, ok := t.peers.Get(id); ok {
 		return p
 	}
+	if !t.canAdmit() {
+		return nil
+	}
 	p := &peerRecord{hashes: newPeerHistories()}
 	if t.peers.Add(id, p) {
 		t.metrics.evictions.Inc(1)
 	}
 	return p
+}
+
+func (t *Tracker) canAdmit() bool {
+	if t.classResolver == nil || t.peers.Len() < maxPeers {
+		return true
+	}
+	// Only new identities scan the bounded cache. Live sessions keep their
+	// history even when every slot is occupied; excess identities wait for space.
+	for range t.peers.Len() {
+		id, peer, _ := t.peers.GetOldest()
+		if !peer.activity.registered {
+			return true
+		}
+		if _, connected := t.classResolver(id); !connected {
+			return true
+		}
+		t.peers.Get(id)
+	}
+	return false
 }
 
 func (p *peerRecord) traffic(b *bucket, tick int64, event Evidence) Reason {
@@ -299,7 +327,9 @@ func (t *Tracker) SetExempt(id string, exempt bool) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.record(id).setExempt(t.connectionClass(id, exempt))
+	if p := t.record(id); p != nil {
+		p.setExempt(t.connectionClass(id, exempt))
+	}
 }
 
 func (p *peerRecord) setExempt(exempt bool) {

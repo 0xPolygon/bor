@@ -106,13 +106,16 @@ func TestPeerPolicyConnectionClasses(t *testing.T) {
 func TestPeerContributionEvictionPreservesConnectionClass(t *testing.T) {
 	for _, mode := range []string{"ordinary", "trusted", "static"} {
 		t.Run(mode, func(t *testing.T) {
-			h := &handler{peerPolicy: peerpolicy.New(new(mclock.Simulated)), peers: newPeerSet()}
+			clock := new(mclock.Simulated)
+			h := &handler{peerPolicy: peerpolicy.New(clock), peers: newPeerSet()}
+			h.peerPolicy.SetReady(true)
 			peer := ethproto.NewPeer(ethproto.ETH68, policyTestConnection(t, mode), policyFaultRW{}, nil)
 			defer peer.Close()
 			if err := h.peers.registerPeer(peer, nil, nil); err != nil {
 				t.Fatal(err)
 			}
 			h.observeProtocolPeer(peer)
+			clock.Run(10 * time.Minute)
 			for i := range 1024 {
 				h.peerPolicy.Connected(fmt.Sprint(i))
 			}
@@ -124,11 +127,65 @@ func TestPeerContributionEvictionPreservesConnectionClass(t *testing.T) {
 			if mode == "ordinary" {
 				want = 60
 			}
-			if got.Risk != want || got.Contribution.Protected != (mode != "ordinary") || got.Contribution.Status != "unknown" {
+			if got.Risk != want || got.Contribution.Protected != (mode != "ordinary") || got.Contribution.Status != "warming-up" {
 				t.Fatalf("evicted connection class/coverage: %+v, %+v", got, got.Contribution)
 			}
+			require.True(t, got.Contribution.ConnectionKnown)
+			require.Equal(t, uint64(600), got.Contribution.ConnectionSeconds)
+			require.Zero(t, got.Contribution.ObservedSeconds)
 		})
 	}
+}
+
+func TestPeerContributionEvictedStaleSessionCannotRestore(t *testing.T) {
+	clock := new(mclock.Simulated)
+	h := &handler{peerPolicy: peerpolicy.New(clock), peers: newPeerSet()}
+	h.peerPolicy.SetReady(true)
+	conn := p2p.NewPeer(enode.ID{1}, "", nil)
+	old := ethproto.NewPeer(ethproto.ETH68, conn, policyFaultRW{}, nil)
+	t.Cleanup(old.Close)
+	require.NoError(t, h.peers.registerPeer(old, nil, nil))
+	h.observeProtocolPeer(old)
+	require.NoError(t, h.peers.unregisterPeer(old.ID()))
+	clock.Run(time.Second)
+	current := ethproto.NewPeer(ethproto.ETH68, conn, policyFaultRW{}, nil)
+	t.Cleanup(current.Close)
+	require.NoError(t, h.peers.registerPeer(current, nil, nil))
+	h.observeProtocolPeer(current)
+	for i := range 1024 {
+		h.peerPolicy.Connected(fmt.Sprint(i))
+	}
+	clock.Run(time.Second)
+	require.Error(t, ethproto.Handle(nil, old))
+	got := h.peerPolicy.Snapshot(old.ID())
+	require.False(t, got.Contribution.ConnectionKnown)
+	require.Equal(t, uint64(60), got.AbuseRisk)
+	require.Error(t, ethproto.Handle(nil, current))
+	got = h.peerPolicy.Snapshot(current.ID())
+	require.True(t, got.Contribution.ConnectionKnown)
+	require.Equal(t, uint64(1), got.Contribution.ConnectionSeconds)
+	require.Zero(t, got.Contribution.ObservedSeconds)
+	require.Equal(t, uint64(1), got.Contribution.ReceivedMessages)
+}
+
+func TestPeerContributionMissingPeerSetRetainsEvidence(t *testing.T) {
+	h := &handler{peerPolicy: peerpolicy.New(new(mclock.Simulated))}
+	h.peerPolicy.SetReady(true)
+	peer := ethproto.NewPeer(ethproto.ETH68, p2p.NewPeer(enode.ID{1}, "", nil), policyFaultRW{}, nil)
+	t.Cleanup(peer.Close)
+	h.observeProtocolPeer(peer)
+	for i := range 1024 {
+		h.peerPolicy.Connected(fmt.Sprint(i))
+	}
+	var err error
+	require.NotPanics(t, func() { err = ethproto.Handle(nil, peer) })
+	require.Error(t, err)
+	got := h.peerPolicy.Snapshot(peer.ID())
+	require.False(t, got.Contribution.ConnectionKnown)
+	require.Equal(t, "unknown", got.Contribution.Status)
+	require.Equal(t, uint64(1), got.Contribution.ReceivedMessages)
+	require.Equal(t, uint64(60), got.AbuseRisk)
+	require.Equal(t, uint64(1), got.Windows[peerpolicy.InvalidEncoding.String()])
 }
 
 func newPolicyAdmissionHandler(t *testing.T, clock mclock.Clock, maxPeers int) *testHandler {

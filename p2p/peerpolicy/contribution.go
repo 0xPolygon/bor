@@ -74,9 +74,32 @@ func (t *Tracker) Connected(id string) mclock.AbsTime {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	now := t.clock.Now()
-	t.record(id).activity = activityRecord{registered: true, connectedAt: now, observedAt: now,
-		readyStarted: t.readyStarted, resetAt: t.resetAt, pausedFor: t.pauseTotal(now), acceptAfter: now}
+	if p := t.record(id); p != nil {
+		p.activity = activityRecord{registered: true, connectedAt: now, observedAt: now,
+			readyStarted: t.readyStarted, resetAt: t.resetAt, pausedFor: t.pauseTotal(now), acceptAfter: now}
+	}
 	return now
+}
+
+// RestoreSession recovers connection age after eviction, restarting observation
+// coverage because its history was lost. current runs under the tracker lock and
+// must confirm this exact session without calling back into the tracker.
+func (t *Tracker) RestoreSession(id string, startedAt mclock.AbsTime, current func() bool) {
+	if id == "" || len(id) > 128 || current == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !current() {
+		return
+	}
+	p := t.record(id)
+	if p == nil || p.activity.registered {
+		return
+	}
+	now := t.clock.Now()
+	p.activity = activityRecord{registered: true, connectedAt: startedAt, observedAt: now,
+		readyStarted: t.readyStarted, resetAt: t.resetAt, pausedFor: t.pauseTotal(now), acceptAfter: now}
 }
 
 func (a *activityRecord) observe(now mclock.AbsTime, event ActivityEvent) {
@@ -220,5 +243,5 @@ func (t *Tracker) prepareActivity(a *activityRecord, now mclock.AbsTime) {
 	paused := t.pauseTotal(now)
 	a.observedAt += max(paused-a.pausedFor, 0)
 	a.pausedFor = paused
-	a.acceptAfter = max(a.connectedAt, t.readyAt)
+	a.acceptAfter = max(a.acceptAfter, a.connectedAt, t.readyAt)
 }

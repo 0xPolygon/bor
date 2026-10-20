@@ -94,13 +94,12 @@ type peerMetricSample struct {
 type peerMetricFamily struct {
 	name   string
 	label  string
-	source func() map[string]int64
+	source func(peerMetricSample) map[string]int64
 }
 
 func (t *Tracker) families() []peerMetricFamily {
-	activity := func(pick func(ActivityEvent) uint64) func() map[string]int64 {
-		return func() map[string]int64 {
-			sample := t.collect()
+	activity := func(pick func(ActivityEvent) uint64) func(peerMetricSample) map[string]int64 {
+		return func(sample peerMetricSample) map[string]int64 {
 			values := make(map[string]int64, len(sample.activity))
 			for id, event := range sample.activity {
 				values[id] = saturate(pick(event))
@@ -111,22 +110,22 @@ func (t *Tracker) families() []peerMetricFamily {
 	}
 
 	return []peerMetricFamily{
-		{peerRiskMetric, "peer_id", t.peerRisks},
-		{"eth/peerpolicy/peer_abuse_risk", "peer_id", func() map[string]int64 { return t.collect().abuseRisk }},
-		{"eth/peerpolicy/peer_behavior_risk", "peer_id", func() map[string]int64 { return t.collect().behaviorRisk }},
-		{"eth/peerpolicy/peer_connected", "peer_id", func() map[string]int64 { return t.collect().connected }},
-		{"eth/peerpolicy/peer_protected", "peer_id", func() map[string]int64 { return t.collect().protected }},
-		{"eth/peerpolicy/peer_contribution_status", "peer_id", func() map[string]int64 { return t.collect().status }},
+		{peerRiskMetric, "peer_id", func(s peerMetricSample) map[string]int64 { return s.risk }},
+		{"eth/peerpolicy/peer_abuse_risk", "peer_id", func(s peerMetricSample) map[string]int64 { return s.abuseRisk }},
+		{"eth/peerpolicy/peer_behavior_risk", "peer_id", func(s peerMetricSample) map[string]int64 { return s.behaviorRisk }},
+		{"eth/peerpolicy/peer_connected", "peer_id", func(s peerMetricSample) map[string]int64 { return s.connected }},
+		{"eth/peerpolicy/peer_protected", "peer_id", func(s peerMetricSample) map[string]int64 { return s.protected }},
+		{"eth/peerpolicy/peer_contribution_status", "peer_id", func(s peerMetricSample) map[string]int64 { return s.status }},
 		{"eth/peerpolicy/peer_received_messages", "peer_id", activity(func(e ActivityEvent) uint64 { return e.ReceivedMessages })},
 		{"eth/peerpolicy/peer_received_bytes", "peer_id", activity(func(e ActivityEvent) uint64 { return e.ReceivedBytes })},
 		{"eth/peerpolicy/peer_served_responses", "peer_id", activity(func(e ActivityEvent) uint64 { return e.ServedResponses })},
 		{"eth/peerpolicy/peer_served_bytes", "peer_id", activity(func(e ActivityEvent) uint64 { return e.ServedBytes })},
 		{"eth/peerpolicy/peer_accepted_transactions", "peer_id", activity(func(e ActivityEvent) uint64 { return e.AcceptedTransactions })},
 		{"eth/peerpolicy/peer_unclassified_messages", "peer_id", activity(func(e ActivityEvent) uint64 { return e.UnclassifiedMessages })},
-		{"eth/peerpolicy/connected_risk_sum", "class", func() map[string]int64 { return t.collect().classRisk }},
-		{"eth/peerpolicy/connected_risk_count", "class", func() map[string]int64 { return t.collect().classCount }},
-		{"eth/peerpolicy/connected_contribution_status", "status", func() map[string]int64 { return t.collect().statusCount }},
-		{peerRiskExportMetric, "state", t.peerRiskExport},
+		{"eth/peerpolicy/connected_risk_sum", "class", func(s peerMetricSample) map[string]int64 { return s.classRisk }},
+		{"eth/peerpolicy/connected_risk_count", "class", func(s peerMetricSample) map[string]int64 { return s.classCount }},
+		{"eth/peerpolicy/connected_contribution_status", "status", func(s peerMetricSample) map[string]int64 { return s.statusCount }},
+		{peerRiskExportMetric, "state", peerRiskExport},
 	}
 }
 
@@ -140,8 +139,16 @@ func (t *Tracker) RegisterPeerMetrics(registry metrics.Registry) error {
 	}
 
 	families := t.families()
+	group := metrics.NewGaugeVecGroup(func() map[string]map[string]int64 {
+		sample := t.collect()
+		values := make(map[string]map[string]int64, len(families))
+		for _, family := range families {
+			values[family.name] = family.source(sample)
+		}
+		return values
+	})
 	for i, family := range families {
-		if err := registry.Register(family.name, metrics.NewGaugeVec(family.label, family.source)); err != nil {
+		if err := registry.Register(family.name, group.Gauge(family.name, family.label)); err != nil {
 			for _, registered := range families[:i] {
 				registry.Unregister(registered.name)
 			}
@@ -170,9 +177,9 @@ func (t *Tracker) UnregisterPeerMetrics() {
 
 func (t *Tracker) peerRisks() map[string]int64 { return t.collect().risk }
 
-func (t *Tracker) peerRiskExport() map[string]int64 {
-	sample := t.collect()
+func (t *Tracker) peerRiskExport() map[string]int64 { return peerRiskExport(t.collect()) }
 
+func peerRiskExport(sample peerMetricSample) map[string]int64 {
 	return map[string]int64{
 		"limit": maxPeerMetricIdentities, "admitted": sample.admitted,
 		"exported": int64(len(sample.risk)), "omitted": sample.omitted,

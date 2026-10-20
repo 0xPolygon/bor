@@ -67,6 +67,13 @@ func (h *handler) observeProtocolPeer(peer *eth.Peer) {
 	h.peerPolicy.SetExempt(peer.ID(), peer.Trusted() || peer.Static())
 	peer.SetObserver(func(e peerpolicy.Evidence) {
 		if !h.peerPolicy.ObserveSession(peer.ID(), peer.Trusted() || peer.Static(), startedAt, e) {
+			h.peerPolicy.RestoreSession(peer.ID(), startedAt, func() bool {
+				if h.peers == nil {
+					return false
+				}
+				current := h.peers.peer(peer.ID())
+				return current != nil && current.Peer == peer
+			})
 			e.Activity.StartedAt = startedAt
 			h.observePeerEvidence(peer.ID(), e)
 		}

@@ -58,6 +58,41 @@ func TestGaugeVecEndpoint(t *testing.T) {
 	}
 }
 
+func TestGaugeVecGroupEndpoint(t *testing.T) {
+	registry := metrics.NewRegistry()
+	calls := int64(0)
+	group := metrics.NewGaugeVecGroup(func() map[string]map[string]int64 {
+		calls++
+		return map[string]map[string]int64{"risk": {"peer": calls}, "behavior": {"peer": calls}}
+	})
+	for _, name := range []string{"risk", "behavior"} {
+		if err := registry.Register(t.Name()+"/"+name, group.Gauge(name, "peer_id")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handler := ExpHandler(registry)
+	for want := int64(1); want <= 2; want++ {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest("GET", "/debug/metrics", nil))
+		var document map[string]json.RawMessage
+		if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"risk", "behavior"} {
+			var values map[string]int64
+			if err := json.Unmarshal(document[t.Name()+"/"+name], &values); err != nil {
+				t.Fatal(err)
+			}
+			if values["peer"] != want {
+				t.Fatalf("%s = %v, want peer:%d", name, values, want)
+			}
+		}
+		if calls != want {
+			t.Fatalf("collections = %d, want %d", calls, want)
+		}
+	}
+}
+
 func TestPeerRiskUnregisterRemovesJSONLabels(t *testing.T) {
 	registry := metrics.NewRegistry()
 	tracker := peerpolicy.New(new(mclock.Simulated))
