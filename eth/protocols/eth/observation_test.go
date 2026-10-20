@@ -85,7 +85,7 @@ func TestPeerPolicyMessageFamilies(t *testing.T) {
 		NewBlockMsg: peerpolicy.Blocks, NewBlockHashesMsg: peerpolicy.BlockAnnouncements,
 		NewPooledTransactionHashesMsg: peerpolicy.TransactionAnnouncements,
 		GetBlockHeadersMsg:            peerpolicy.Requests, GetBlockBodiesMsg: peerpolicy.Requests,
-		GetReceiptsMsg: peerpolicy.Requests, GetPooledTransactionsMsg: peerpolicy.Requests, BlockBodiesMsg: peerpolicy.Other,
+		GetReceiptsMsg: peerpolicy.Requests, GetPooledTransactionsMsg: peerpolicy.TransactionRequests, BlockBodiesMsg: peerpolicy.Other,
 		TransactionsMsg: peerpolicy.Other, PooledTransactionsMsg: peerpolicy.Other,
 	} {
 		if got := messageFamily(code); got != want {

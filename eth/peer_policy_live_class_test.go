@@ -61,23 +61,29 @@ func TestPeerPolicyQuietTrustChanges(t *testing.T) {
 			info := func() *peerpolicy.Snapshot {
 				return (*ethHandler)(h).PeerInfo(peer.Peer.ID()).(*ethPeerInfo).Reputation
 			}
+			protectedScrape := func(want string) {
+				t.Helper()
+				got := scrape()
+				require.Contains(t, got, `eth_peerpolicy_peer_risk{peer_id="`+peer.ID()+`"} 0`)
+				require.Contains(t, got, `eth_peerpolicy_peer_protected{peer_id="`+peer.ID()+`"} `+want)
+			}
 			h.observePeer(peer.ID(), peerpolicy.InvalidBlock)
-			require.Contains(t, scrape(), `peer_id="`+peer.ID()+`"} 60`)
+			require.Contains(t, scrape(), `eth_peerpolicy_peer_risk{peer_id="`+peer.ID()+`"} 60`)
 
 			server.AddTrustedPeer(remote)
 			require.Eventually(t, peer.Trusted, time.Second, time.Millisecond)
 			if firstRead == "metrics" {
-				require.NotContains(t, scrape(), peer.ID(), "scrape must update trust without an admin read or ETH message")
+				protectedScrape("1")
 			}
 			got := info()
 			require.True(t, got.Contribution.Protected)
 			require.Zero(t, got.Risk)
-			require.NotContains(t, scrape(), peer.ID())
+			protectedScrape("1")
 
 			server.RemoveTrustedPeer(remote)
 			require.Eventually(t, func() bool { return !peer.Trusted() }, time.Second, time.Millisecond)
 			if firstRead == "metrics" {
-				require.NotContains(t, scrape(), peer.ID())
+				protectedScrape("0")
 			}
 			got = info()
 			require.False(t, got.Contribution.Protected)

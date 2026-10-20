@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common/mclock"
+	"github.com/ethereum/go-ethereum/consensus/bor"
 	"github.com/ethereum/go-ethereum/eth/fetcher"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/log"
@@ -34,6 +35,8 @@ func (h *handler) initPeerPolicy(enabled bool) {
 		}
 	}
 	h.downloader.SetFailureObserver(func(id string) { h.observePeer(id, peerpolicy.DownloaderFailure) })
+	h.downloader.SetInvalidResponseObserver(func(id string) { h.observePeer(id, peerpolicy.InvalidBlock) })
+	h.blockFetcher.SetInvalidHeaderObserver(h.observeInvalidHeader)
 	h.txFetcher.SetValidationObserver(h.observeTransactionDelivery)
 	h.updateContributionReadiness()
 }
@@ -68,6 +71,13 @@ func (h *handler) observeProtocolPeer(peer *eth.Peer) {
 			h.observePeerEvidence(peer.ID(), e)
 		}
 	})
+}
+
+// Local verification difficulties are not evidence against the supplier.
+func (h *handler) observeInvalidHeader(id string, err error) {
+	if bor.IsObjectivelyInvalidHeader(err) {
+		h.observePeer(id, peerpolicy.InvalidBlock)
+	}
 }
 
 func (h *handler) dropFetcherPeer(id string) {

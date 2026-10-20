@@ -22,21 +22,29 @@ func TestPeerPolicyLiveClassRefreshWithoutTraffic(t *testing.T) {
 			registry := metrics.NewRegistry()
 			require.NoError(t, tracker.RegisterPeerMetrics(registry))
 			defer tracker.UnregisterPeerMetrics()
-			require.Contains(t, scrapePeerMetrics(registry), `peer_id="peer"} 60`)
+			require.Contains(t, scrapePeerMetrics(registry), `eth_peerpolicy_peer_risk{peer_id="peer"} 60`)
+			require.Contains(t, scrapePeerMetrics(registry), `eth_peerpolicy_peer_protected{peer_id="peer"} 0`)
 
 			protected.Store(true)
+			protectedScrape := func() {
+				t.Helper()
+				got := scrapePeerMetrics(registry)
+				require.Contains(t, got, `eth_peerpolicy_peer_risk{peer_id="peer"} 0`)
+				require.Contains(t, got, `eth_peerpolicy_peer_protected{peer_id="peer"} 1`)
+				require.Contains(t, got, `eth_peerpolicy_connected_risk_count{class="protected"} 1`)
+			}
 			if firstRead == "metric" {
-				require.NotContains(t, scrapePeerMetrics(registry), `peer_id="peer"`)
+				protectedScrape()
 			}
 			got := tracker.Snapshot("peer")
 			require.True(t, got.Contribution.Protected)
 			require.Zero(t, got.Risk)
 			require.Equal(t, uint64(1), got.Contribution.ReceivedMessages)
-			require.NotContains(t, scrapePeerMetrics(registry), `peer_id="peer"`)
+			protectedScrape()
 
 			protected.Store(false)
 			if firstRead == "metric" {
-				require.NotContains(t, scrapePeerMetrics(registry), `peer_id="peer"`)
+				require.Contains(t, scrapePeerMetrics(registry), `eth_peerpolicy_peer_protected{peer_id="peer"} 0`)
 			}
 			got = tracker.Snapshot("peer")
 			require.False(t, got.Contribution.Protected)
@@ -229,6 +237,6 @@ func TestPeerPolicyLiveClassConcurrentChanges(t *testing.T) {
 	}
 	wg.Wait()
 	protected.Store(true)
-	require.Empty(t, tracker.peerRisks())
+	require.Equal(t, map[string]int64{"peer": 0}, tracker.peerRisks())
 	require.True(t, tracker.Snapshot("peer").Contribution.Protected)
 }

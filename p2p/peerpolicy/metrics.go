@@ -29,7 +29,7 @@ func newObservationMetrics() *observationMetrics {
 		m.reasons[r] = metrics.GetOrRegisterCounter("eth/peerpolicy/events/"+strings.ReplaceAll(r.String(), "-", "_"), nil)
 		m.windows[r] = metrics.GetOrRegisterCounter("eth/peerpolicy/windows/"+strings.ReplaceAll(r.String(), "-", "_"), nil)
 	}
-	for f, name := range []string{"other", "block_announcements", "transaction_announcements", "transactions", "blocks", "requests", "body_replies"} {
+	for f, name := range []string{"other", "block_announcements", "transaction_announcements", "transactions", "blocks", "requests", "body_replies", "transaction_requests"} {
 		m.items[f] = metrics.GetOrRegisterCounter("eth/peerpolicy/items/"+name, nil)
 		m.bytes[f] = metrics.GetOrRegisterCounter("eth/peerpolicy/bytes/"+name, nil)
 	}

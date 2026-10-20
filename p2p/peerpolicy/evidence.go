@@ -60,6 +60,8 @@ const (
 	Blocks
 	Requests
 	BodyReplies
+	// Pooled requests do not share the native block-request limiter.
+	TransactionRequests
 	familyCount
 )
 
@@ -90,15 +92,21 @@ type allowance struct {
 	reason Reason
 }
 
-// These are observation profiles, not production enforcement thresholds.
+// Observation profiles include native burst + rate*window where available.
+// Profiles without a native limiter remain provisional.
 var allowances = [familyCount]allowance{
-	BlockAnnouncements:       {640, 1 << 20, AnnouncementVolume},
+	// 64 hashes/s plus the 256-hash burst.
+	BlockAnnouncements: {896, 1 << 20, AnnouncementVolume},
+	// No native limiter covers pooled transaction announcements or deliveries.
 	TransactionAnnouncements: {163840, 16 << 20, AnnouncementVolume},
 	Transactions:             {32768, 64 << 20, TransactionVolume},
-	Blocks:                   {160, 160 << 20, BlockVolume},
+	// Native 16 message/s and 16 MiB/s rates plus the 64-message and 64-MiB bursts.
+	Blocks: {224, 224 << 20, BlockVolume},
 	// Native block-data requests have a count bucket and per-message size checks, but no
 	// aggregate byte budget that could establish request-byte abuse.
 	Requests: {768, 0, RequestVolume}, // 64 requests/s plus the native 128-request burst.
+	// Separate provisional budget: reply reservations do not bound lookup rate.
+	TransactionRequests: {768, 0, RequestVolume},
 }
 
 func weight(reason Reason) uint64 {

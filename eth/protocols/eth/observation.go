@@ -66,8 +66,11 @@ func messageFamily(code uint64) peerpolicy.Family {
 		return peerpolicy.BlockAnnouncements
 	case NewPooledTransactionHashesMsg:
 		return peerpolicy.TransactionAnnouncements
-	case GetBlockHeadersMsg, GetBlockBodiesMsg, GetReceiptsMsg, GetPooledTransactionsMsg:
+	case GetBlockHeadersMsg, GetBlockBodiesMsg, GetReceiptsMsg:
 		return peerpolicy.Requests
+	case GetPooledTransactionsMsg:
+		// checkMessageRate does not cover this code; reservePooledReply does.
+		return peerpolicy.TransactionRequests
 	default:
 		return peerpolicy.Other
 	}
