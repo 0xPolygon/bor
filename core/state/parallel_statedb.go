@@ -169,6 +169,10 @@ type ParallelStateDB struct {
 	// jumpdest cache). Mirrors balCache/committedCache/destructedCache.
 	codeReadCache map[common.Address]codeKeyRead
 
+	// Per-tx GetCodeHash results. Invalidated wherever localCode[addr]
+	// changes (SetCode and the jkCode/jkCreate reverts).
+	codeHashCache map[common.Address]common.Hash
+
 	// Recorded transfers for log generation during settlement
 	Transfers []TransferRecord
 
@@ -288,6 +292,7 @@ func (s *ParallelStateDB) Reset(txIndex int, base *SafeBase, store *blockstm.MVS
 	s.destructedSeen = nil
 	s.committedCache = nil
 	s.codeReadCache = nil
+	s.codeHashCache = nil
 	s.Transfers = s.Transfers[:0]
 	s.FeeData = nil
 	s.Coinbase = common.Address{}
@@ -853,15 +858,30 @@ func (s *ParallelStateDB) GetCodeSize(addr common.Address) int {
 	return len(s.GetCode(addr))
 }
 
+// cachedCodeHash returns the Keccak256 hash of code for addr, computing it
+// once per tx. Keying by address is safe because every code mutation
+// invalidates the entry, and code read from an earlier tx is fixed for the
+// whole incarnation.
+func (s *ParallelStateDB) cachedCodeHash(addr common.Address, code []byte) common.Hash {
+	if h, ok := s.codeHashCache[addr]; ok {
+		return h
+	}
+	h := types.EmptyCodeHash
+	if len(code) != 0 {
+		h = crypto.Keccak256Hash(code)
+	}
+	if s.codeHashCache == nil {
+		s.codeHashCache = make(map[common.Address]common.Hash, 1)
+	}
+	s.codeHashCache[addr] = h
+	return h
+}
+
 func (s *ParallelStateDB) GetCodeHash(addr common.Address) common.Hash {
 	// For existing accounts, return the stored code hash.
 	// Only recompute for accounts with newly set code.
 	if _, ok := s.localCode[addr]; ok {
-		code := s.GetCode(addr)
-		if len(code) == 0 {
-			return types.EmptyCodeHash
-		}
-		return crypto.Keccak256Hash(code)
+		return s.cachedCodeHash(addr, s.GetCode(addr))
 	}
 	suicideIdx := s.priorDestructedAt(addr)
 	// For code set by prior txs, check MVStore via the same ESTIMATE-aware
@@ -873,11 +893,7 @@ func (s *ParallelStateDB) GetCodeHash(addr common.Address) common.Hash {
 		// Honor the code write only if it happened after the destruction
 		// (otherwise the destruction wiped it).
 		if writerIdx > suicideIdx {
-			code := val.([]byte)
-			if len(code) == 0 {
-				return types.EmptyCodeHash
-			}
-			return crypto.Keccak256Hash(code)
+			return s.cachedCodeHash(addr, val.([]byte))
 		}
 		// Fall through: account may have been recreated without code.
 	} else {
@@ -920,6 +936,7 @@ func (s *ParallelStateDB) SetCode(addr common.Address, code []byte, reason traci
 	}
 	s.journalEntries = append(s.journalEntries, parallelJournalEntry{kind: jkCode, flags: flags, addr: addr, code: prev})
 	s.localCode[addr] = code
+	delete(s.codeHashCache, addr)
 	codeKey := blockstm.NewSubpathKey(addr, CodePath)
 	if !s.DeferMVWrites {
 		s.store.WriteInc(codeKey, s.TxIndex, s.Incarnation, code)

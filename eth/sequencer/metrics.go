@@ -60,6 +60,8 @@ var (
 	reconcileForwardJump = metrics.NewRegisteredCounter("sequencer/reconcile/forwardjump", nil)
 	reconcileYield       = metrics.NewRegisteredCounter("sequencer/reconcile/yield", nil)
 	reconcileResync      = metrics.NewRegisteredCounter("sequencer/reconcile/resync", nil)
+	reconcileLaggingRead = metrics.NewRegisteredCounter("sequencer/reconcile/laggingread", nil)
+	reconcileStoreBehind = metrics.NewRegisteredCounter("sequencer/reconcile/storebehind", nil)
 	reconcileTimer       = metrics.NewRegisteredTimer("sequencer/reconcile/duration", nil)
 
 	// The store audit's verdicts, and the two ways a height gets past it

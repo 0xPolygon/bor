@@ -34,6 +34,11 @@ const (
 	// re-STALEs — losing head races to another publisher.
 	reconcileBackoffMin = 500 * time.Millisecond
 	reconcileBackoffMax = 8 * time.Second
+
+	// How long tail reads may sit behind our acked frontier before we stop
+	// treating them as gateway lag. Above the ~5s lag seen on Amoy after a
+	// partition-leader change; by then the gate has already settled.
+	laggingReadBound = 2 * recoverGrace
 )
 
 // ackStallTimeout bounds how long the send loop waits on an unacked entry before
@@ -73,6 +78,7 @@ type Publisher struct {
 	anchor    commitment.Head // store head confirming everything through ackedSeq
 	anchored  bool            // anchor established by a completed reconcile
 	confirmed bool            // anchor was ever store-confirmed
+	behind    laggingRead     // tail reads behind ackedSeq since the frontier last moved
 	curHeight uint64          // height of the open window being built (0 = none)
 	awaitOpen bool            // drop records until the next OpenBlock (post purge)
 	adopt     *adoption       // store window being adopted

@@ -156,6 +156,8 @@ The ```bor server``` command runs the Bor client.
 
 - ```cache```: Megabytes of memory allocated to internal caching (default: 1024)
 
+- ```cache.addresscachepersist```: Persist the address-specific caches to disk on shutdown and reload them on startup, skipping the preload walk (default: false)
+
 - ```cache.addresscachesizes```: Address-specific cache sizes for biased caching in MB (format: address=sizeMB,address=sizeMB, e.g. 0x1234...=1024,0x5678...=512)
 
 - ```cache.blocklogs```: Size (in number of blocks) of the log cache for filtering (default: 32)
@@ -457,3 +459,5 @@ The ```bor server``` command runs the Bor client.
 - ```txpool.rebroadcast-max-age```: Maximum age for a transaction to be eligible for rebroadcast (default: 10m0s)
 
 - ```txpool.rejournal```: Time interval to regenerate the local transaction journal (default: 1h0m0s)
+
+- ```txpool.strandedlifetime```: Maximum amount of time a pending transaction can stay below the base fee before its account's pending transactions are evicted (0 disables) (default: 3h0m0s)
