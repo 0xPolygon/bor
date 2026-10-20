@@ -212,7 +212,7 @@ func (t *Tracker) collect() peerMetricSample {
 	}
 
 	// Population totals include identities omitted by the lifetime label budget.
-	sample.omitted, sample.admitted = t.metrics.peerIDs.filter(sample.risk)
+	sample.omitted, sample.admitted = t.metrics.peerIDs.filter(sample.risk, sample.abuseRisk)
 	for _, values := range []map[string]int64{sample.abuseRisk, sample.behaviorRisk, sample.connected, sample.protected, sample.status} {
 		retain(values, sample.risk)
 	}
@@ -266,7 +266,10 @@ func flag(value bool) int64 {
 
 func saturate(value uint64) int64 { return int64(min(value, math.MaxInt64)) }
 
-const maxPeerMetricIdentities = 1024
+const (
+	maxPeerMetricIdentities        = 1024
+	maxGeneralPeerMetricIdentities = maxPeerMetricIdentities / 2
+)
 
 // Keep admissions for the process lifetime: expiry, eviction and collector
 // re-registration must not allow remote identity churn to mint new series.
@@ -277,7 +280,7 @@ type peerMetricIdentities struct {
 	ids map[string]struct{}
 }
 
-func (p *peerMetricIdentities) filter(values map[string]int64) (omitted, admitted int64) {
+func (p *peerMetricIdentities) filter(values, abuseRisk map[string]int64) (omitted, admitted int64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.ids == nil {
@@ -287,7 +290,12 @@ func (p *peerMetricIdentities) filter(values map[string]int64) (omitted, admitte
 		if _, exists := p.ids[id]; exists {
 			continue
 		}
-		if len(p.ids) >= maxPeerMetricIdentities {
+		// Reserve half the lifetime budget for abuse evidence, not connection churn.
+		limit := maxGeneralPeerMetricIdentities
+		if abuseRisk[id] > 0 {
+			limit = maxPeerMetricIdentities
+		}
+		if len(p.ids) >= limit {
 			delete(values, id)
 			omitted++
 			continue

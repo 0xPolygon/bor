@@ -242,8 +242,8 @@ func TestPeerPolicyExportAggregatesSurviveIdentityCap(t *testing.T) {
 		tracker.Connected(fmt.Sprintf("b-%d", i))
 	}
 
-	require.Len(t, gauge(t, registry, "peer_risk"), maxPeerMetricIdentities-spent)
-	require.Len(t, gauge(t, registry, "peer_connected"), maxPeerMetricIdentities-spent, "families share one admission set")
+	require.Len(t, gauge(t, registry, "peer_risk"), maxGeneralPeerMetricIdentities-spent)
+	require.Len(t, gauge(t, registry, "peer_connected"), maxGeneralPeerMetricIdentities-spent, "families share one admission set")
 
 	counts := gauge(t, registry, "connected_risk_count")
 	require.Equal(t, int64(maxPeers), counts["ordinary"]+counts["protected"], "aggregates cover the whole connected population")
@@ -257,9 +257,9 @@ func TestPeerPolicyExportAggregatesSurviveIdentityCap(t *testing.T) {
 
 	coverage := gauge(t, registry, "peer_risk_export")
 	require.Equal(t, int64(maxPeerMetricIdentities), coverage["limit"])
-	require.Equal(t, int64(maxPeerMetricIdentities), coverage["admitted"])
-	require.Equal(t, int64(maxPeerMetricIdentities-spent), coverage["exported"])
-	require.Equal(t, int64(spent), coverage["omitted"], "omitted must count connected zero-risk identities too")
+	require.Equal(t, int64(maxGeneralPeerMetricIdentities), coverage["admitted"])
+	require.Equal(t, int64(maxGeneralPeerMetricIdentities-spent), coverage["exported"])
+	require.Equal(t, int64(maxPeers-maxGeneralPeerMetricIdentities+spent), coverage["omitted"], "omitted must count connected zero-risk identities too")
 }
 
 func TestPeerPolicyExportSaturatesActivityCounters(t *testing.T) {
@@ -369,6 +369,7 @@ func TestPeerPolicyExportFamiliesRetainLifetimeBudget(t *testing.T) {
 	first, registry := exportTestTracker(t, clock)
 	for i := range maxPeerMetricIdentities {
 		first.Connected(fmt.Sprint(i))
+		first.Observe(fmt.Sprint(i), Evidence{Reason: InvalidBlock})
 	}
 	require.Len(t, gauge(t, registry, "peer_received_messages"), maxPeerMetricIdentities)
 	clock.Run(activityCount * activityWidth)

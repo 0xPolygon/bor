@@ -167,7 +167,7 @@ func TestPeerPolicyMetricIdentityConcurrentAdmission(t *testing.T) {
 				for i := range 128 {
 					values[fmt.Sprintf("%d-%d-%d", worker, batch, i)] = 60
 				}
-				omitted, admitted := budget.filter(values)
+				omitted, admitted := budget.filter(values, values)
 				require.Equal(t, int64(128), int64(len(values))+omitted)
 				require.LessOrEqual(t, admitted, int64(maxPeerMetricIdentities))
 				mu.Lock()

@@ -347,8 +347,8 @@ func TestPeerPolicyBehaviorMetricsShareIdentityCap(t *testing.T) {
 	for i := range maxPeerMetricIdentities {
 		tracker.Connected(fmt.Sprintf("first-%d", i))
 	}
-	require.Len(t, gauge(t, registry, "peer_behavior_risk"), maxPeerMetricIdentities)
-	require.Len(t, gauge(t, registry, "peer_abuse_risk"), maxPeerMetricIdentities)
+	require.Len(t, gauge(t, registry, "peer_behavior_risk"), maxGeneralPeerMetricIdentities)
+	require.Len(t, gauge(t, registry, "peer_abuse_risk"), maxGeneralPeerMetricIdentities)
 
 	for i := range maxPeers {
 		tracker.Connected(fmt.Sprintf("next-%d", i))
@@ -358,7 +358,7 @@ func TestPeerPolicyBehaviorMetricsShareIdentityCap(t *testing.T) {
 	require.Empty(t, gauge(t, registry, "peer_abuse_risk"))
 	require.Empty(t, gauge(t, registry, "peer_behavior_risk"))
 	require.Equal(t, int64(maxPeers), gauge(t, registry, "peer_risk_export")["omitted"])
-	require.Equal(t, int64(maxPeerMetricIdentities), gauge(t, registry, "peer_risk_export")["admitted"])
+	require.Equal(t, int64(maxGeneralPeerMetricIdentities), gauge(t, registry, "peer_risk_export")["admitted"])
 	require.Equal(t, int64(20*maxPeers), gauge(t, registry, "connected_risk_sum")["ordinary"])
 	require.Equal(t, int64(maxPeers), gauge(t, registry, "connected_risk_count")["ordinary"])
 }
