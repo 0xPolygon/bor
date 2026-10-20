@@ -86,23 +86,3 @@ func (h *hashHistory) Len() int {
 	}
 	return n
 }
-
-// SetExempt is called with the authenticated connection class before observation.
-// Retaining the class also covers asynchronous outcomes after disconnection.
-func (t *Tracker) SetExempt(id string, exempt bool) {
-	if id == "" || len(id) > 128 {
-		return
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.record(id).setExempt(t.connectionClass(id, exempt))
-}
-
-func (p *peerRecord) setExempt(exempt bool) {
-	if p.exempt != exempt {
-		p.windows = [windowCount]bucket{}
-		p.hashes = newPeerHistories()
-		p.refusalSequence = 0
-	}
-	p.exempt = exempt
-}

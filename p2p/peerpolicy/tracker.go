@@ -271,3 +271,105 @@ func (t *Tracker) evidenceReason(p *peerRecord, b *bucket, tick int64, event Evi
 	}
 	return reason
 }
+
+func (t *Tracker) snapshotPeer(id string, p *peerRecord, now mclock.AbsTime, windows map[string]uint64) (Snapshot, bool) {
+	connected := p.activity.registered
+	if t.classResolver != nil {
+		protected, live := t.classResolver(id)
+		connected = connected && live
+		if live {
+			p.setExempt(protected)
+		}
+	}
+	t.prepareActivity(&p.activity, now)
+	contribution := p.activity.snapshot(now, t.ready && connected, p.exempt)
+	abuse := p.risk(int64(now)/int64(windowWidth), windows)
+	risk := max(abuse, contribution.Risk)
+	return Snapshot{
+		Mode: "observe", Risk: risk, AbuseRisk: abuse, Action: actionFor(risk),
+		Windows: windows, Contribution: contribution,
+	}, connected
+}
+
+// SetExempt is called with the authenticated connection class before observation.
+// Retaining the class also covers asynchronous outcomes after disconnection.
+func (t *Tracker) SetExempt(id string, exempt bool) {
+	if id == "" || len(id) > 128 {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.record(id).setExempt(t.connectionClass(id, exempt))
+}
+
+func (p *peerRecord) setExempt(exempt bool) {
+	if p.exempt != exempt {
+		p.windows = [windowCount]bucket{}
+		p.hashes = newPeerHistories()
+		p.refusalSequence = 0
+	}
+	p.exempt = exempt
+}
+
+// SetClassResolver installs the authenticated live-connection lookup. The second
+// result reports whether a connection exists; otherwise the retained class is used.
+// Calls run under the tracker mutex, so the resolver must be bounded, perform no
+// I/O, and never call back into the tracker. Any locks it takes must not be held
+// by callers entering the tracker.
+func (t *Tracker) SetClassResolver(resolve func(string) (exempt, connected bool)) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.classResolver = resolve
+}
+
+// RefreshClass retains the latest connection class before disconnect. It neither
+// creates a record nor treats the administrative update as peer activity.
+func (t *Tracker) RefreshClass(id string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if p, ok := t.peers.Peek(id); ok {
+		p.setExempt(t.connectionClass(id, p.exempt))
+	}
+}
+
+func (t *Tracker) connectionClass(id string, fallback bool) bool {
+	if t.classResolver != nil {
+		if exempt, connected := t.classResolver(id); connected {
+			return exempt
+		}
+	}
+	return fallback
+}
+
+// Only peer-specific admission refusals qualify. Successful delivery and global
+// congestion do not establish repeated-download abuse.
+func (p *peerRecord) refused(b *bucket, tick int64, event Evidence) Reason {
+	p.refusalSequence++
+	b.refusals = min(b.refusals+1, 3)
+	repeated := false
+	hashes := event.Hashes
+	start, step := p.hashes.refusedBodies.sample(hashes)
+	for i := start; i < len(hashes); i += step {
+		hash := &hashes[i]
+		entry, ok := p.hashes.refusedBodies.Get(hash)
+		if !ok || tick-entry.tick >= windowCount {
+			entry = announcement{tick: tick}
+		}
+		if entry.lastRefusal == p.refusalSequence {
+			continue
+		}
+		entry.lastRefusal = p.refusalSequence
+		if entry.count < 3 {
+			entry.count++
+		}
+		repeated = repeated || entry.count == 3
+		p.hashes.refusedBodies.Add(hash, entry)
+	}
+	if repeated {
+		return ServingRepetition
+	}
+	if b.refusals >= 3 {
+		return ServingVolume
+	}
+	return ServingRefused
+}
