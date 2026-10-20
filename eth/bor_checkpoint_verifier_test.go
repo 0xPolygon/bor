@@ -359,7 +359,7 @@ func TestCheckpointMismatch_DoesNotRewind(t *testing.T) {
 
 	require.NoError(t, ethBackend.StartMining(), "failed to start mining")
 
-	targetHead := uint64(20)
+	targetHead := uint64(testMinedHead)
 	waitForHeadAtLeast(t, ethBackend, targetHead, 30*time.Second)
 
 	headBefore := ethBackend.BlockChain().CurrentBlock().Number.Uint64()
@@ -415,9 +415,9 @@ func TestMilestoneMismatch_AttestedRewind_PurgesStaleWhitelist(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	stack, ethBackend, headBefore := startMinedBorNode(t, 20)
+	stack, ethBackend, headBefore := startMinedBorNode(t, testMinedHead)
 	defer stack.Close()
-	require.GreaterOrEqual(t, headBefore, uint64(20))
+	require.GreaterOrEqual(t, headBefore, uint64(testMinedHead))
 
 	anchor := headBefore - 10
 	anchorHash := ethBackend.BlockChain().GetBlockByNumber(anchor).Hash()
@@ -475,7 +475,7 @@ func TestMilestoneMismatch_WhitelistHashDiffersFromLocal_DoesNotRewind(t *testin
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	stack, ethBackend, headBefore := startMinedBorNode(t, 20)
+	stack, ethBackend, headBefore := startMinedBorNode(t, testMinedHead)
 	defer stack.Close()
 
 	anchor := headBefore - 10
@@ -507,7 +507,7 @@ func TestMilestoneMismatch_WhitelistAtMismatchHeight_DoesNotRewind(t *testing.T)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	stack, ethBackend, headBefore := startMinedBorNode(t, 20)
+	stack, ethBackend, headBefore := startMinedBorNode(t, testMinedHead)
 	defer stack.Close()
 
 	sameHeight := headBefore - 5
@@ -540,9 +540,9 @@ func TestMilestoneMismatch_FutureMilestoneFallback_RewindsWhenWhitelistUnatteste
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	stack, ethBackend, headBefore := startMinedBorNode(t, 20)
+	stack, ethBackend, headBefore := startMinedBorNode(t, testMinedHead)
 	defer stack.Close()
-	require.GreaterOrEqual(t, headBefore, uint64(20))
+	require.GreaterOrEqual(t, headBefore, uint64(testMinedHead))
 
 	dl := ethBackend.handler.downloader
 
@@ -578,7 +578,7 @@ func TestMilestoneMismatch_GenesisAnchor_RewindsAndKeepsAttested(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	stack, ethBackend, headBefore := startMinedBorNode(t, 20)
+	stack, ethBackend, headBefore := startMinedBorNode(t, testMinedHead)
 	defer stack.Close()
 	require.Less(t, headBefore, uint64(126)) // within maxRewindLen
 
@@ -615,7 +615,7 @@ func TestMilestoneMismatch_UnknownHash_DoesNotRewind(t *testing.T) {
 
 	require.NoError(t, ethBackend.StartMining(), "failed to start mining")
 
-	targetHead := uint64(20)
+	targetHead := uint64(testMinedHead)
 	waitForHeadAtLeast(t, ethBackend, targetHead, 30*time.Second)
 
 	headBefore := ethBackend.BlockChain().CurrentBlock().Number.Uint64()
@@ -638,6 +638,9 @@ func TestMilestoneMismatch_UnknownHash_DoesNotRewind(t *testing.T) {
 	require.Equal(t, headBefore, headAfter, "head must not rewind if canonical chain cannot be built")
 }
 
+// Smallest head that keeps every test's head-12 offset above genesis.
+const testMinedHead = 14
+
 func loadBorTestGenesis(t *testing.T) *core.Genesis {
 	t.Helper()
 
@@ -651,6 +654,9 @@ func loadBorTestGenesis(t *testing.T) *core.Genesis {
 	if genesis.Config.ChainID == nil {
 		genesis.Config.ChainID = big.NewInt(15001)
 	}
+
+	// Drop the 4s sprint-start delay; block period is already the 1s floor.
+	genesis.Config.Bor.ProducerDelay = map[string]uint64{"0": 1}
 
 	return &genesis
 }

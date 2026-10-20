@@ -264,6 +264,8 @@ type BlockFetcher struct {
 	completingHook     func([]common.Hash)               // Method to call upon starting a block body fetch (eth/62)
 	importedHook       func(*types.Header, *types.Block) // Method to call upon successful header or block import (both eth/61 and eth/62)
 
+	gatherSlack time.Duration // Header-to-body gather delay; tests shorten it
+
 	// Logging
 	enableBlockTracking bool // Whether to log information collected while tracking block lifecycle
 	requireWitness      bool // Whether operating in a mode where witnesses are strictly required for block imports
@@ -300,6 +302,7 @@ func NewBlockFetcher(light bool, getHeader HeaderRetrievalFn, getBlock blockRetr
 		dropPeer:            dropPeer,
 		enableBlockTracking: enableBlockTracking,
 		requireWitness:      requireWitness,
+		gatherSlack:         gatherSlack,
 	}
 
 	// Initialize Witness Manager
@@ -1103,7 +1106,7 @@ func (f *BlockFetcher) rescheduleComplete(complete *time.Timer) {
 		}
 	}
 
-	complete.Reset(gatherSlack - time.Since(earliest))
+	complete.Reset(f.gatherSlack - time.Since(earliest))
 }
 
 // enqueue schedules a new header or block import operation, if the component

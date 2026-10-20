@@ -3,11 +3,11 @@
 package test
 
 import (
-       eth1 "github.com/ethereum/go-ethereum/eth"
-       eth2 "github.com/ethereum/go-ethereum/eth/protocols/eth"
+       types1 "github.com/ethereum/go-ethereum/core/types"
+       types2 "github.com/ethereum/go-ethereum/beacon/types"
 )
 
 type Test struct {
-    A eth1.MinerAPI
-    B eth2.GetReceiptsPacket
+    A types1.Withdrawal
+    B types2.Header
 }

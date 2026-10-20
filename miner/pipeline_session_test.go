@@ -110,7 +110,10 @@ func TestSpecSessionAdvancesPipelinedBlock(t *testing.T) {
 }
 
 func TestPipelineSessionFailureAndExitBranches(t *testing.T) {
+	t.Parallel()
+
 	t.Run("missing parent skips speculative request", func(t *testing.T) {
+		t.Parallel()
 		w, _, session := newPipelineSessionFixture(t, nil)
 		<-session.initialFillDone
 		session.req.blockNEnv.header.ParentHash = common.HexToHash("0xdead")
@@ -120,6 +123,7 @@ func TestPipelineSessionFailureAndExitBranches(t *testing.T) {
 	})
 
 	t.Run("non Bor engine rejects pipeline operations", func(t *testing.T) {
+		t.Parallel()
 		w, _, session := newPipelineSessionFixture(t, nil)
 		<-session.initialFillDone
 		w.close()
@@ -135,6 +139,7 @@ func TestPipelineSessionFailureAndExitBranches(t *testing.T) {
 	})
 
 	t.Run("abort flags stop an iteration", func(t *testing.T) {
+		t.Parallel()
 		session := &specSession{
 			eip2935Abort:      true,
 			blockhashAccessed: new(atomic.Bool),
@@ -143,6 +148,7 @@ func TestPipelineSessionFailureAndExitBranches(t *testing.T) {
 	})
 
 	t.Run("missing SRC fails resolvers and sealing", func(t *testing.T) {
+		t.Parallel()
 		w, _ := newPipelineWorkerFixture(t, nil)
 		session := &specSession{
 			w:               w,
@@ -178,12 +184,14 @@ func TestPipelineSessionFailureAndExitBranches(t *testing.T) {
 	})
 
 	t.Run("invalid speculative roots are soft failures", func(t *testing.T) {
+		t.Parallel()
 		_, _, session := newPipelineSessionFixture(t, nil)
 		<-session.initialFillDone
 		session.resetTxPoolState(session.blockNHeader, common.HexToHash("0xdead"), new(state.FlatDiff))
 	})
 
 	t.Run("chain head mismatch is rejected", func(t *testing.T) {
+		t.Parallel()
 		_, backend, session := newPipelineSessionFixture(t, nil)
 		<-session.initialFillDone
 		require.True(t, session.waitForSRCAndSealBlockN())
@@ -194,6 +202,7 @@ func TestPipelineSessionFailureAndExitBranches(t *testing.T) {
 	})
 
 	t.Run("Prague finalization records parent hash", func(t *testing.T) {
+		t.Parallel()
 		_, _, session := newPipelineSessionFixture(t, func(config *params.ChainConfig) {
 			config.ShanghaiBlock = big.NewInt(0)
 			config.CancunBlock = big.NewInt(0)
@@ -221,13 +230,17 @@ func TestCommitSpeculativeWorkCompletesLastPipelineBlock(t *testing.T) {
 }
 
 func TestPipelineSessionAdditionalRecoveryBranches(t *testing.T) {
+	t.Parallel()
+
 	t.Run("setup falls back when speculative root is unavailable", func(t *testing.T) {
+		t.Parallel()
 		w, _, req := newPipelineRequestFixture(t, nil)
 		req.parentRoot = common.HexToHash("0xdead")
 		require.False(t, newSpecSession(w, req).setupInitial())
 	})
 
 	t.Run("block N fails without pending SRC", func(t *testing.T) {
+		t.Parallel()
 		w, _, req := newPipelineRequestFixture(t, nil)
 		session := newSpecSession(w, req)
 		session.borEngine = w.engine.(*bor.Bor)
@@ -235,6 +248,7 @@ func TestPipelineSessionAdditionalRecoveryBranches(t *testing.T) {
 	})
 
 	t.Run("next environment rejects bad root", func(t *testing.T) {
+		t.Parallel()
 		_, _, session := newPipelineSessionFixture(t, nil)
 		<-session.initialFillDone
 		require.True(t, session.waitForSRCAndSealBlockN())
@@ -254,6 +268,7 @@ func TestPipelineSessionAdditionalRecoveryBranches(t *testing.T) {
 	})
 
 	t.Run("next environment requires grandparent", func(t *testing.T) {
+		t.Parallel()
 		_, _, session := newPipelineSessionFixture(t, nil)
 		<-session.initialFillDone
 		require.True(t, session.waitForSRCAndSealBlockN())
@@ -269,6 +284,7 @@ func TestPipelineSessionAdditionalRecoveryBranches(t *testing.T) {
 	})
 
 	t.Run("Prague next fill detects history access", func(t *testing.T) {
+		t.Parallel()
 		_, _, session := newPipelineSessionFixture(t, func(config *params.ChainConfig) {
 			config.ShanghaiBlock = big.NewInt(0)
 			config.CancunBlock = big.NewInt(0)
@@ -285,6 +301,7 @@ func TestPipelineSessionAdditionalRecoveryBranches(t *testing.T) {
 	})
 
 	t.Run("inline broadcast returns seal error", func(t *testing.T) {
+		t.Parallel()
 		w, _, _ := newPipelineRequestFixture(t, nil)
 		w.close()
 		sealErr := errors.New("seal failed")
@@ -334,7 +351,10 @@ func TestCommitPipelinedAdditionalBranches(t *testing.T) {
 }
 
 func TestSpecSessionMoreFailureBranches(t *testing.T) {
+	t.Parallel()
+
 	t.Run("commit handles setup failure", func(t *testing.T) {
+		t.Parallel()
 		w, _, req := newPipelineRequestFixture(t, nil)
 		req.parentRoot = common.HexToHash("0xdead")
 		retry, recovery := w.commitSpeculativeWork(req)
@@ -344,6 +364,7 @@ func TestSpecSessionMoreFailureBranches(t *testing.T) {
 	})
 
 	t.Run("initial setup requires grandparent", func(t *testing.T) {
+		t.Parallel()
 		w, _, req := newPipelineRequestFixture(t, nil)
 		w.close()
 		req.parentHeader.ParentHash = common.HexToHash("0xdead")
@@ -352,6 +373,7 @@ func TestSpecSessionMoreFailureBranches(t *testing.T) {
 	})
 
 	t.Run("initial fill detects Prague history access", func(t *testing.T) {
+		t.Parallel()
 		_, _, session := newPipelineSessionFixture(t, func(config *params.ChainConfig) {
 			config.ShanghaiBlock = big.NewInt(0)
 			config.CancunBlock = big.NewInt(0)
@@ -368,6 +390,7 @@ func TestSpecSessionMoreFailureBranches(t *testing.T) {
 	})
 
 	t.Run("iteration stops when finalization fails", func(t *testing.T) {
+		t.Parallel()
 		_, _, session := newPipelineSessionFixture(t, nil)
 		<-session.initialFillDone
 		require.True(t, session.waitForSRCAndSealBlockN())
@@ -377,6 +400,7 @@ func TestSpecSessionMoreFailureBranches(t *testing.T) {
 	})
 
 	t.Run("prepare wrapper propagates next state failure", func(t *testing.T) {
+		t.Parallel()
 		_, _, session := newPipelineSessionFixture(t, nil)
 		<-session.initialFillDone
 		require.True(t, session.waitForSRCAndSealBlockN())
@@ -390,6 +414,7 @@ func TestSpecSessionMoreFailureBranches(t *testing.T) {
 	})
 
 	t.Run("prepare failure hands current block to task path", func(t *testing.T) {
+		t.Parallel()
 		w, _, session := newPipelineSessionFixture(t, nil)
 		<-session.initialFillDone
 		require.True(t, session.waitForSRCAndSealBlockN())
@@ -411,6 +436,8 @@ func TestSpecSessionMoreFailureBranches(t *testing.T) {
 }
 
 func TestSealCurrentAndAdvanceExitAndSealFailure(t *testing.T) {
+	t.Parallel()
+
 	newPreparedSession := func(t *testing.T) (*worker, *specSession, *types.Header, []*types.StateSyncData, *specNextIteration) {
 		t.Helper()
 		w, _, session := newPipelineSessionFixture(t, nil)
@@ -424,6 +451,7 @@ func TestSealCurrentAndAdvanceExitAndSealFailure(t *testing.T) {
 	}
 
 	t.Run("worker exit interrupts announce wait", func(t *testing.T) {
+		t.Parallel()
 		w, session, finalHeader, syncData, next := newPreparedSession(t)
 		w.close()
 		finalHeader.ActualTime = time.Now().Add(time.Hour)
@@ -435,6 +463,7 @@ func TestSealCurrentAndAdvanceExitAndSealFailure(t *testing.T) {
 	})
 
 	t.Run("inline seal error stops iteration", func(t *testing.T) {
+		t.Parallel()
 		w, session, finalHeader, syncData, next := newPreparedSession(t)
 		w.close()
 		sealErr := errors.New("seal failed")
