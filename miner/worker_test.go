@@ -481,15 +481,27 @@ func setupBorWorkerWithPrefetch(t *testing.T, gasPercent uint64, recommit time.D
 	return w, b, engine, ctrl
 }
 
-// waitGoroutineDelta polls until at most maxDelta goroutines above before remain, or timeout.
+// waitGoroutineDelta polls until the count has stayed at most maxDelta above before
+// for one second, so late-starting leaks are still seen, or until timeout.
 func waitGoroutineDelta(before, maxDelta int, timeout time.Duration) int {
 	deadline := time.Now().Add(timeout)
+
+	var settledSince time.Time
 
 	for {
 		runtime.GC()
 
 		n := runtime.NumGoroutine()
-		if n-before <= maxDelta || time.Now().After(deadline) {
+		switch {
+		case n-before > maxDelta:
+			settledSince = time.Time{}
+		case settledSince.IsZero():
+			settledSince = time.Now()
+		case time.Since(settledSince) >= time.Second:
+			return n
+		}
+
+		if time.Now().After(deadline) {
 			return n
 		}
 
@@ -1159,7 +1171,7 @@ func TestCommitInterruptPending(t *testing.T) {
 
 	go func() {
 		defer close(testDone)
-		timeout := time.After(3 * time.Second)
+		timeout := time.After(5 * time.Second)
 		for {
 			select {
 			case head := <-chainHeadCh:
@@ -1515,8 +1527,8 @@ func TestVeblopTimerSkipsWhenPendingTasks(t *testing.T) {
 	}
 	w.pendingMu.Unlock()
 
-	// Wait 2 seconds - VeBlop should be blocked, no new tasks
-	time.Sleep(2 * time.Second)
+	// Wait 3 seconds - VeBlop should be blocked, no new tasks
+	time.Sleep(3 * time.Second)
 	blockedCount := atomic.LoadInt32(&taskCount)
 
 	// Clear pending tasks
@@ -2451,11 +2463,7 @@ func TestPrefetchGoroutineLifecycle(t *testing.T) {
 	goroutinesBefore = runtime.NumGoroutine()
 
 	// Trigger multiple commitWork cycles
-	numCycles := 5
-	if testing.Short() {
-		numCycles = 3
-	}
-	for i := 0; i < numCycles; i++ {
+	for i := 0; i < 5; i++ {
 		w.newWorkCh <- &newWorkReq{
 			interrupt: new(atomic.Int32),
 			noempty:   false,
@@ -2695,11 +2703,7 @@ func TestRapidBlockProduction_WithoutWait(t *testing.T) {
 
 	// Rapidly trigger block production - spawn overlapping prefetch goroutines
 	var wg sync.WaitGroup
-	numRequests := 20
-	if testing.Short() {
-		numRequests = 6
-	}
-	for i := 0; i < numRequests; i++ {
+	for i := 0; i < 20; i++ {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
@@ -2766,11 +2770,7 @@ func TestPrefetchE2E(t *testing.T) {
 
 	// Produce multiple blocks to validate consistent behavior
 	blocksProduced := 0
-	numCycles := 5
-	if testing.Short() {
-		numCycles = 3
-	}
-	for i := 0; i < numCycles; i++ {
+	for i := 0; i < 5; i++ {
 		w.newWorkCh <- &newWorkReq{
 			interrupt: new(atomic.Int32),
 			noempty:   false,
@@ -2909,10 +2909,7 @@ func TestPrefetchMultiBlock(t *testing.T) {
 		goroutinesBefore, memStatsBefore.HeapAlloc/(1024*1024))
 
 	// Produce 10 consecutive blocks
-	numBlocks := 10
-	if testing.Short() {
-		numBlocks = 5
-	}
+	const numBlocks = 10
 	for i := 0; i < numBlocks; i++ {
 		w.newWorkCh <- &newWorkReq{
 			interrupt: new(atomic.Int32),
@@ -3221,15 +3218,11 @@ func TestPrefetchFromPool_BuilderModeSwitch(t *testing.T) {
 	// Not parallel: measures goroutine counts and must run without interference.
 
 	const (
+		numBlocks     = 8
 		txCount       = 300
 		blockInterval = 400 * time.Millisecond // time between newWorkCh signals
 		settleTime    = 2 * time.Second        // time allowed for goroutines to exit after stop
 	)
-
-	numBlocks := 8
-	if testing.Short() {
-		numBlocks = 4
-	}
 
 	w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, 100, 1*time.Second)
 	defer engine.Close()

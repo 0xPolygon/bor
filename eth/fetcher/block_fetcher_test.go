@@ -103,6 +103,12 @@ type fetcherTester struct {
 
 // newTester creates a new fetcher test mocker.
 func newTester(light bool) *fetcherTester {
+	return newTesterWithGatherSlack(light, gatherSlack)
+}
+
+// newTesterWithGatherSlack is newTester with a shorter header-to-body gather
+// delay, for tests that import many blocks one at a time.
+func newTesterWithGatherSlack(light bool, slack time.Duration) *fetcherTester {
 	tester := &fetcherTester{
 		hashes:  []common.Hash{genesis.Hash()},
 		headers: map[common.Hash]*types.Header{genesis.Hash(): genesis.Header()},
@@ -110,7 +116,7 @@ func newTester(light bool) *fetcherTester {
 		drops:   make(map[string]bool),
 	}
 	tester.fetcher = NewBlockFetcher(light, tester.getHeader, tester.getBlock, tester.verifyHeader, tester.broadcastBlock, tester.chainHeight, nil, tester.insertHeaders, tester.insertChain, tester.dropPeer, false, false, 0, nil, nil)
-	tester.fetcher.gatherSlack = time.Millisecond
+	tester.fetcher.gatherSlack = slack
 	tester.fetcher.Start()
 
 	return tester
@@ -385,7 +391,7 @@ func testSequentialAnnouncements(t *testing.T, light bool) {
 	targetBlocks := 4 * hashLimit
 	hashes, blocks := makeChain(targetBlocks, 0, genesis)
 
-	tester := newTester(light)
+	tester := newTesterWithGatherSlack(light, time.Millisecond)
 	defer tester.fetcher.Stop()
 	headerFetcher := tester.makeHeaderFetcher("valid", blocks, -gatherSlack)
 	bodyFetcher := tester.makeBodyFetcher("valid", blocks, 0)
@@ -426,7 +432,7 @@ func testConcurrentAnnouncements(t *testing.T, light bool) {
 	hashes, blocks := makeChain(targetBlocks, 0, genesis)
 
 	// Assemble a tester with a built in counter for the requests
-	tester := newTester(light)
+	tester := newTesterWithGatherSlack(light, time.Millisecond)
 	firstHeaderFetcher := tester.makeHeaderFetcher("first", blocks, -gatherSlack)
 	firstBodyFetcher := tester.makeBodyFetcher("first", blocks, 0)
 	secondHeaderFetcher := tester.makeHeaderFetcher("second", blocks, -gatherSlack)
@@ -484,7 +490,7 @@ func testOverlappingAnnouncements(t *testing.T, light bool) {
 	targetBlocks := 4 * hashLimit
 	hashes, blocks := makeChain(targetBlocks, 0, genesis)
 
-	tester := newTester(light)
+	tester := newTesterWithGatherSlack(light, time.Millisecond)
 	headerFetcher := tester.makeHeaderFetcher("valid", blocks, -gatherSlack)
 	bodyFetcher := tester.makeBodyFetcher("valid", blocks, 0)
 	witnessFetcher := tester.makeWitnessFetcher("valid", blocks, 0)
@@ -895,7 +901,7 @@ func TestEmptyBlockShortCircuit(t *testing.T) {
 // the fetcher remains operational.
 func TestHashMemoryExhaustionAttack(t *testing.T) {
 	// Create a tester with instrumented import hooks
-	tester := newTester(false)
+	tester := newTesterWithGatherSlack(false, time.Millisecond)
 
 	imported, announces := make(chan interface{}), atomic.Int32{}
 	tester.fetcher.importedHook = func(header *types.Header, block *types.Block) { imported <- block }
