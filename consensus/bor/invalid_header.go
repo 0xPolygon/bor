@@ -10,15 +10,16 @@ import (
 	"github.com/ethereum/go-ethereum/consensus"
 )
 
-// IsObjectivelyInvalidHeader classifies intrinsic verification failures.
+// IsObjectivelyInvalidHeader classifies intrinsic failures for reputation scoring.
 // The parent must already be locally verified: seal errors can originate there.
 // Clock, Heimdall, local-state and unrecognised failures remain neutral.
+// Non-canonical seals remain neutral because older peers can relay them.
 func IsObjectivelyInvalidHeader(err error) bool {
 	if err == nil {
 		return false
 	}
 	for _, sentinel := range []error{
-		errMissingVanity, errMissingSignature, errNonCanonicalSeal,
+		errMissingVanity, errMissingSignature,
 		errInvalidMixDigest, errInvalidUncleHash, errInvalidDifficulty,
 		consensus.ErrInvalidNumber,
 	} {
