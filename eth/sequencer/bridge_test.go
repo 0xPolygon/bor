@@ -266,7 +266,7 @@ func TestHistoryOnlyDiff(t *testing.T) {
 				p.lineage.add(other)
 			}
 
-			if got := p.historyOnlyDiff(context.Background(), run.theirs[tc.parent], run.ours[tc.parent]); got != tc.want {
+			if got := p.historyOnlyDiff(context.Background(), p.chain, run.theirs[tc.parent], run.ours[tc.parent]); got != tc.want {
 				t.Fatalf("historyOnlyDiff = %v, want %v", got, tc.want)
 			}
 		})

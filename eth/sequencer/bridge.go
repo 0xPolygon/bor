@@ -109,11 +109,15 @@ func (p *Publisher) bridgeEquivalentParent(ctx context.Context, info tailInfo, n
 // compared with the EIP-2935 history slots accounted for, the one difference
 // a rebuild under another seal cannot avoid; see historyOnlyDiff.
 func (p *Publisher) equivalentParent(ctx context.Context, foreign, ours common.Hash, number uint64) bool {
-	if number < 2 || p.chain == nil {
+	p.mu.Lock()
+	chain := p.chain
+	p.mu.Unlock()
+
+	if number < 2 || chain == nil {
 		return false
 	}
 
-	mine := p.chain.GetHeaderByHash(ours)
+	mine := chain.GetHeaderByHash(ours)
 	if mine == nil || mine.Number.Uint64() != number-1 {
 		return false
 	}
@@ -133,7 +137,7 @@ func (p *Publisher) equivalentParent(ctx context.Context, foreign, ours common.H
 
 	p.lineage.add(theirs)
 
-	if !p.historyOnlyDiff(ctx, theirs, mine) {
+	if !p.historyOnlyDiff(ctx, chain, theirs, mine) {
 		log.Info("Not following the store's window: the parents' states differ beyond the history slots",
 			"number", number, "storeParent", foreign, "parent", ours, "storeRoot", theirs.Root, "root", mine.Root)
 
@@ -154,14 +158,14 @@ func (p *Publisher) equivalentParent(ctx context.Context, foreign, ours common.H
 // A slot is rewritten only while ours holds a hash the store's chain does
 // not have there: an empty slot was never written (no history before
 // Prague), and a matching one is a height both chains share.
-func (p *Publisher) historyOnlyDiff(ctx context.Context, theirs, mine *types.Header) bool {
+func (p *Publisher) historyOnlyDiff(ctx context.Context, chain chainReader, theirs, mine *types.Header) bool {
 	if theirs.Root == mine.Root {
 		return true
 	}
 
 	// Not StateAt: a pipelined import still committing is served as an
 	// overlay whose root leaves the block's own writes out.
-	statedb, err := p.chain.SealingStateAt(mine.Root)
+	statedb, err := chain.SealingStateAt(mine.Root)
 	if err != nil {
 		return false
 	}
