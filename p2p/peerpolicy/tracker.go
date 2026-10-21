@@ -5,6 +5,7 @@
 package peerpolicy
 
 import (
+	"math/bits"
 	"sync"
 	"time"
 
@@ -145,10 +146,11 @@ func (t *Tracker) observe(p *peerRecord, event Evidence) {
 		*b = bucket{tick: tick}
 	}
 	t.metrics.traffic(event)
-	reason := t.evidenceReason(p, b, tick, event)
-	if reason != None {
-		t.metrics.reasons[reason].Inc(1)
+	for reasons := t.evidenceReasons(p, b, tick, event); reasons != 0; {
+		reason := Reason(bits.TrailingZeros32(reasons))
 		bit := uint32(1) << reason
+		reasons &^= bit
+		t.metrics.reasons[reason].Inc(1)
 		if b.reasons&bit == 0 {
 			t.metrics.windows[reason].Inc(1)
 		}
@@ -196,11 +198,11 @@ func (t *Tracker) canAdmit() bool {
 	return false
 }
 
-func (p *peerRecord) traffic(b *bucket, tick int64, event Evidence) Reason {
+func (p *peerRecord) traffic(b *bucket, tick int64, event Evidence) uint32 {
 	// Completed replies already passed native serving admission. Their volume
 	// remains in traffic metrics, but only peer-specific refusals establish abuse.
 	if event.Family == Other || event.Family == BodyReplies {
-		return None
+		return 0
 	}
 	a := allowances[event.Family]
 	u := &b.usage[event.Family]
@@ -208,14 +210,14 @@ func (p *peerRecord) traffic(b *bucket, tick int64, event Evidence) Reason {
 	if a.bytes != 0 {
 		u.bytes = saturatingAdd(u.bytes, event.Bytes, a.bytes+1)
 	}
-	repeated := p.announcements(b, tick, event)
+	var reasons uint32
+	if p.announcements(b, tick, event) {
+		reasons |= 1 << AnnouncementRepetition
+	}
 	if u.items > a.items || (a.bytes != 0 && u.bytes > a.bytes) {
-		return a.reason
+		reasons |= 1 << a.reason
 	}
-	if repeated {
-		return AnnouncementRepetition
-	}
-	return None
+	return reasons
 }
 
 func (p *peerRecord) announcements(b *bucket, tick int64, event Evidence) bool {
@@ -291,9 +293,9 @@ func (b bucket) score(counts map[string]uint64) uint64 {
 	return strongest
 }
 
-func (t *Tracker) evidenceReason(p *peerRecord, b *bucket, tick int64, event Evidence) Reason {
+func (t *Tracker) evidenceReasons(p *peerRecord, b *bucket, tick int64, event Evidence) uint32 {
 	if event.Reason != None {
-		return event.Reason
+		return 1 << event.Reason
 	}
 	if !event.Refused {
 		return p.traffic(b, tick, event)
@@ -302,7 +304,7 @@ func (t *Tracker) evidenceReason(p *peerRecord, b *bucket, tick int64, event Evi
 	if reason != ServingRefused {
 		t.metrics.reasons[ServingRefused].Inc(1)
 	}
-	return reason
+	return 1 << reason
 }
 
 func (t *Tracker) snapshotPeer(id string, p *peerRecord, now mclock.AbsTime, windows map[string]uint64) (Snapshot, bool) {

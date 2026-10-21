@@ -124,6 +124,10 @@ func observeBlockAnnouncements(msg Decoder, packet NewBlockHashesPacket) {
 }
 
 func (p *Peer) observeRateLimit(msg p2p.Msg) {
+	if msg.Size > maxMessageSize {
+		p.observeFraming(msg)
+		return
+	}
 	if p.observer != nil {
 		p.observer(peerpolicy.Evidence{Reason: peerpolicy.RateLimited, Family: messageFamily(msg.Code), Items: 1, Bytes: uint64(msg.Size), Activity: receivedActivity(msg)})
 	}

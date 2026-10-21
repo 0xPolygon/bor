@@ -123,6 +123,52 @@ func TestPeerPolicyFraming(t *testing.T) {
 	}
 }
 
+func TestPeerPolicyAnnouncementFramingPrecedence(t *testing.T) {
+	for _, version := range ProtocolVersions {
+		for _, tc := range []struct {
+			name   string
+			size   uint32
+			reason peerpolicy.Reason
+			risk   uint64
+		}{
+			{"at-limit", maxMessageSize, peerpolicy.RateLimited, 20},
+			{"over-limit", maxMessageSize + 1, peerpolicy.InvalidEncoding, 60},
+		} {
+			t.Run(fmt.Sprintf("%d/%s", version, tc.name), func(t *testing.T) {
+				for _, enabled := range []bool{false, true} {
+					payload := bytes.NewReader([]byte{0xff})
+					msg := p2p.Msg{Code: NewBlockHashesMsg, Size: tc.size, Payload: payload}
+					p := NewPeer(version, p2p.NewPeer(enode.ID{1}, "", nil), observationReader{msg}, nil)
+					t.Cleanup(p.Close)
+					tracker := peerpolicy.New(new(mclock.Simulated))
+					var observed []peerpolicy.Evidence
+					if enabled {
+						p.SetObserver(func(e peerpolicy.Evidence) {
+							observed = append(observed, e)
+							tracker.Observe("peer", e)
+						})
+					}
+					backend := new(packetCapturingBackend)
+					if err := handleMessage(backend, p); !errors.Is(err, ErrPeerRateLimit) {
+						t.Fatalf("native announcement rejection changed: %v", err)
+					}
+					if payload.Len() != 1 || backend.packet != nil {
+						t.Fatal("rejected announcement was read or forwarded")
+					}
+					if enabled {
+						if len(observed) != 1 || observed[0].Reason != tc.reason || observed[0].Bytes != uint64(tc.size) {
+							t.Fatalf("wrong announcement evidence: %+v", observed)
+						}
+						if got := tracker.Snapshot("peer"); got.Risk != tc.risk || len(got.Windows) != 1 {
+							t.Fatalf("wrong announcement score: %+v", got)
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestPeerActivityReceivesWithoutContribution(t *testing.T) {
 	for _, code := range []uint64{NewBlockMsg, NewBlockHashesMsg, NewPooledTransactionHashesMsg, GetBlockHeadersMsg, GetBlockBodiesMsg, GetReceiptsMsg, GetPooledTransactionsMsg, BlockHeadersMsg, BlockBodiesMsg, ReceiptsMsg} {
 		t.Run(fmt.Sprint(code), func(t *testing.T) {
