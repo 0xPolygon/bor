@@ -17,6 +17,7 @@ import (
 type observationMetrics struct {
 	peerRegistry metrics.Registry
 	peerIDs      *peerMetricIdentities
+	perPeer      bool
 	reasons      [reasonCount]*metrics.Counter
 	windows      [reasonCount]*metrics.Counter
 	items        [familyCount]*metrics.Counter
@@ -97,7 +98,15 @@ type peerMetricFamily struct {
 	source func(peerMetricSample) map[string]int64
 }
 
-func (t *Tracker) families() []peerMetricFamily {
+func (t *Tracker) families(perPeer bool) []peerMetricFamily {
+	families := []peerMetricFamily{
+		{"eth/peerpolicy/connected_risk_sum", "class", func(s peerMetricSample) map[string]int64 { return s.classRisk }},
+		{"eth/peerpolicy/connected_risk_count", "class", func(s peerMetricSample) map[string]int64 { return s.classCount }},
+		{"eth/peerpolicy/connected_contribution_status", "status", func(s peerMetricSample) map[string]int64 { return s.statusCount }},
+	}
+	if !perPeer {
+		return families
+	}
 	activity := func(pick func(ActivityEvent) uint64) func(peerMetricSample) map[string]int64 {
 		return func(sample peerMetricSample) map[string]int64 {
 			values := make(map[string]int64, len(sample.activity))
@@ -109,7 +118,7 @@ func (t *Tracker) families() []peerMetricFamily {
 		}
 	}
 
-	return []peerMetricFamily{
+	return append(families, []peerMetricFamily{
 		{peerRiskMetric, "peer_id", func(s peerMetricSample) map[string]int64 { return s.risk }},
 		{"eth/peerpolicy/peer_abuse_risk", "peer_id", func(s peerMetricSample) map[string]int64 { return s.abuseRisk }},
 		{"eth/peerpolicy/peer_behavior_risk", "peer_id", func(s peerMetricSample) map[string]int64 { return s.behaviorRisk }},
@@ -122,15 +131,12 @@ func (t *Tracker) families() []peerMetricFamily {
 		{"eth/peerpolicy/peer_served_bytes", "peer_id", activity(func(e ActivityEvent) uint64 { return e.ServedBytes })},
 		{"eth/peerpolicy/peer_accepted_transactions", "peer_id", activity(func(e ActivityEvent) uint64 { return e.AcceptedTransactions })},
 		{"eth/peerpolicy/peer_unclassified_messages", "peer_id", activity(func(e ActivityEvent) uint64 { return e.UnclassifiedMessages })},
-		{"eth/peerpolicy/connected_risk_sum", "class", func(s peerMetricSample) map[string]int64 { return s.classRisk }},
-		{"eth/peerpolicy/connected_risk_count", "class", func(s peerMetricSample) map[string]int64 { return s.classCount }},
-		{"eth/peerpolicy/connected_contribution_status", "status", func(s peerMetricSample) map[string]int64 { return s.statusCount }},
 		{peerRiskExportMetric, "state", peerRiskExport},
-	}
+	}...)
 }
 
 // RegisterPeerMetrics registers collectors for the node's lifetime.
-func (t *Tracker) RegisterPeerMetrics(registry metrics.Registry) error {
+func (t *Tracker) RegisterPeerMetrics(registry metrics.Registry, perPeer bool) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -138,9 +144,9 @@ func (t *Tracker) RegisterPeerMetrics(registry metrics.Registry) error {
 		return fmt.Errorf("peer reputation gauges already registered")
 	}
 
-	families := t.families()
+	families := t.families(perPeer)
 	group := metrics.NewGaugeVecGroup(func() map[string]map[string]int64 {
-		sample := t.collect()
+		sample := t.collect(perPeer)
 		values := make(map[string]map[string]int64, len(families))
 		for _, family := range families {
 			values[family.name] = family.source(sample)
@@ -158,6 +164,7 @@ func (t *Tracker) RegisterPeerMetrics(registry metrics.Registry) error {
 	}
 
 	t.metrics.peerRegistry = registry
+	t.metrics.perPeer = perPeer
 
 	return nil
 }
@@ -167,7 +174,7 @@ func (t *Tracker) UnregisterPeerMetrics() {
 	defer t.mu.Unlock()
 
 	if t.metrics.peerRegistry != nil {
-		for _, family := range t.families() {
+		for _, family := range t.families(t.metrics.perPeer) {
 			t.metrics.peerRegistry.Unregister(family.name)
 		}
 
@@ -175,9 +182,9 @@ func (t *Tracker) UnregisterPeerMetrics() {
 	}
 }
 
-func (t *Tracker) peerRisks() map[string]int64 { return t.collect().risk }
+func (t *Tracker) peerRisks() map[string]int64 { return t.collect(true).risk }
 
-func (t *Tracker) peerRiskExport() map[string]int64 { return peerRiskExport(t.collect()) }
+func (t *Tracker) peerRiskExport() map[string]int64 { return peerRiskExport(t.collect(true)) }
 
 func peerRiskExport(sample peerMetricSample) map[string]int64 {
 	return map[string]int64{
@@ -186,19 +193,21 @@ func peerRiskExport(sample peerMetricSample) map[string]int64 {
 	}
 }
 
-func (t *Tracker) collect() peerMetricSample {
+func (t *Tracker) collect(perPeer bool) peerMetricSample {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	now := t.clock.Now()
 	sample := peerMetricSample{
-		risk: make(map[string]int64), connected: make(map[string]int64),
-		abuseRisk: make(map[string]int64), behaviorRisk: make(map[string]int64),
-		protected: make(map[string]int64), status: make(map[string]int64),
-		activity:    make(map[string]ActivityEvent),
 		classRisk:   map[string]int64{"ordinary": 0, "protected": 0},
 		classCount:  map[string]int64{"ordinary": 0, "protected": 0},
 		statusCount: make(map[string]int64, len(contributionStatuses)),
+	}
+	if perPeer {
+		sample.risk, sample.connected = make(map[string]int64), make(map[string]int64)
+		sample.abuseRisk, sample.behaviorRisk = make(map[string]int64), make(map[string]int64)
+		sample.protected, sample.status = make(map[string]int64), make(map[string]int64)
+		sample.activity = make(map[string]ActivityEvent)
 	}
 
 	for _, status := range contributionStatuses {
@@ -209,6 +218,9 @@ func (t *Tracker) collect() peerMetricSample {
 	for _, id := range t.peers.Keys() {
 		peer, _ := t.peers.Peek(id)
 		t.samplePeer(&sample, id, peer, now)
+	}
+	if !perPeer {
+		return sample
 	}
 
 	// Population totals include identities omitted by the lifetime label budget.
@@ -229,13 +241,15 @@ func (t *Tracker) samplePeer(sample *peerMetricSample, id string, peer *peerReco
 		return
 	}
 
-	sample.risk[id] = int64(snapshot.Risk)
-	sample.abuseRisk[id] = int64(snapshot.AbuseRisk)
-	sample.behaviorRisk[id] = int64(contribution.Risk)
-	sample.connected[id] = flag(connected)
-	sample.protected[id] = flag(contribution.Protected)
-	sample.status[id] = contributionStatusCode(contribution.Status)
-	sample.activity[id] = contribution.ActivityEvent
+	if sample.risk != nil {
+		sample.risk[id] = int64(snapshot.Risk)
+		sample.abuseRisk[id] = int64(snapshot.AbuseRisk)
+		sample.behaviorRisk[id] = int64(contribution.Risk)
+		sample.connected[id] = flag(connected)
+		sample.protected[id] = flag(contribution.Protected)
+		sample.status[id] = contributionStatusCode(contribution.Status)
+		sample.activity[id] = contribution.ActivityEvent
+	}
 
 	if connected {
 		class := "ordinary"

@@ -40,6 +40,7 @@ type (
 
 type peerRecord struct {
 	activity        activityRecord
+	transitions     peerTransitions
 	windows         [windowCount]bucket
 	hashes          peerHistories
 	exempt          bool
@@ -48,6 +49,7 @@ type peerRecord struct {
 
 type Tracker struct {
 	mu             sync.Mutex
+	transitions    transitionBudget
 	clock          mclock.Clock
 	peers          lru.BasicLRU[string, *peerRecord]
 	metrics        *observationMetrics
@@ -134,8 +136,10 @@ func (t *Tracker) observe(p *peerRecord, event Evidence) {
 	if p.exempt || event.activityOnly() {
 		return
 	}
-	tick := int64(t.clock.Now()) / int64(windowWidth)
-	previousAction := actionFor(p.risk(tick, nil))
+	tick := int64(now) / int64(windowWidth)
+	previousRisk := p.risk(tick, nil)
+	p.captureTransition(tick, previousRisk)
+	previousAction := actionFor(previousRisk)
 	b := &p.windows[tick%windowCount]
 	if b.tick != tick {
 		*b = bucket{tick: tick}
@@ -151,6 +155,7 @@ func (t *Tracker) observe(p *peerRecord, event Evidence) {
 		b.reasons |= bit
 	}
 	risk := p.risk(tick, nil)
+	p.captureTransition(tick, risk)
 	action := actionFor(risk)
 	t.metrics.risk.Update(int64(risk))
 	if action != previousAction {

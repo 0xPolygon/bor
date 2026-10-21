@@ -147,7 +147,7 @@ func TestPeerPolicyMetricReservationNeverRecycles(t *testing.T) {
 	first.UnregisterPeerMetrics()
 	second := peerMetricsTestTracker(clock)
 	second.metrics.peerIDs = first.metrics.peerIDs
-	require.NoError(t, second.RegisterPeerMetrics(registry))
+	require.NoError(t, second.RegisterPeerMetrics(registry, true))
 	t.Cleanup(second.UnregisterPeerMetrics)
 	second.Observe("overflow", Evidence{Reason: InvalidEncoding})
 	requireMetricReservationIdentity(t, registry, "overflow", false)

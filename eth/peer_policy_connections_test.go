@@ -367,7 +367,7 @@ func TestPeerPolicyQuietTrustChanges(t *testing.T) {
 			registry := metrics.NewRegistry()
 			// The handler already owns a collector when metrics are globally enabled.
 			h.peerPolicy.UnregisterPeerMetrics()
-			require.NoError(t, h.peerPolicy.RegisterPeerMetrics(registry))
+			require.NoError(t, h.peerPolicy.RegisterPeerMetrics(registry, true))
 			defer h.peerPolicy.UnregisterPeerMetrics()
 			scrape := func() string {
 				response := httptest.NewRecorder()

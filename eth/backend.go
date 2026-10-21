@@ -554,6 +554,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		txAnnouncementOnly:      eth.p2pServer.TxAnnouncementOnly,
 		disableTxPropagation:    eth.p2pServer.DisableTxPropagation,
 		peerReputation:          eth.config.PeerReputation,
+		peerReputationMetrics:   eth.config.PeerReputationPerPeerMetrics,
 		witnessProtocol:         eth.config.WitnessProtocol,
 		syncWithWitnesses:       eth.config.SyncWithWitnesses,
 		syncAndProduceWitnesses: eth.config.SyncAndProduceWitnesses,

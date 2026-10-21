@@ -118,6 +118,7 @@ type txPool interface {
 // node network handler.
 type handlerConfig struct {
 	peerReputation          bool
+	peerReputationMetrics   bool
 	NodeID                  enode.ID            // P2P node ID used for tx propagation topology
 	Database                ethdb.Database      // Database for direct sync insertions
 	Chain                   *core.BlockChain    // Blockchain to serve data from
@@ -413,7 +414,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 	}
 	h.txFetcher = fetcher.NewTxFetcher(h.txpool.Has, addTxs, fetchTx, h.dropFetcherPeer)
 	h.chainSync = newChainSyncer(h)
-	h.initPeerPolicy(config.peerReputation)
+	h.initPeerPolicy(config.peerReputation, config.peerReputationMetrics)
 
 	return h, nil
 }
@@ -740,6 +741,9 @@ func (h *handler) unregisterPeer(id string) {
 
 func (h *handler) Start(maxPeers int) {
 	h.maxPeers = maxPeers
+	if h.peerPolicy != nil {
+		h.wg.Go(func() { h.peerPolicy.RunTransitionLogger(h.quitSync) })
+	}
 
 	if h.disableTxPropagation {
 		log.Info("Disabling transaction propagation completely")

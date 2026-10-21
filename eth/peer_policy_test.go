@@ -46,7 +46,7 @@ func TestPeerPolicyObservationDoesNotEnforce(t *testing.T) {
 
 func TestPeerPolicyDisabled(t *testing.T) {
 	h := &handler{}
-	h.initPeerPolicy(false)
+	h.initPeerPolicy(false, true)
 	h.observeProtocolPeer(nil)
 	h.observePeer("peer", peerpolicy.InvalidBlock)
 	if h.peerPolicy != nil {
@@ -258,27 +258,30 @@ func TestPeerPolicyInvalidHeaderIgnoresLookalikeText(t *testing.T) {
 
 func TestPeerPolicyGaugeLifecycle(t *testing.T) {
 	metrics.Enable()
-	for _, enabled := range []bool{false, true} {
-		h := newTestHandlerWithConfig(func(config *handlerConfig) *handlerConfig {
-			config.peerReputation = enabled
-			return config
-		})
-		gauge, ok := metrics.DefaultRegistry.Get("eth/peerpolicy/peer_risk").(*metrics.GaugeVec)
-		if ok != enabled {
-			h.close()
-			t.Fatalf("enabled=%v registered=%v", enabled, ok)
-		}
-		if enabled {
-			h.handler.observePeer("test-peer", peerpolicy.InvalidBlock)
-			if gauge.Snapshot()["test-peer"] != 60 {
+	for _, tc := range []struct{ enabled, perPeer bool }{{false, false}, {false, true}, {true, false}, {true, true}} {
+		t.Run(fmt.Sprintf("enabled=%t/per-peer=%t", tc.enabled, tc.perPeer), func(t *testing.T) {
+			h := newTestHandlerWithConfig(func(config *handlerConfig) *handlerConfig {
+				config.peerReputation = tc.enabled
+				config.peerReputationMetrics = tc.perPeer
+				return config
+			})
+			t.Cleanup(func() {
 				h.close()
-				t.Fatal("handler evidence not exported")
+				require.Nil(t, metrics.DefaultRegistry.Get("eth/peerpolicy/peer_risk"), "shutdown retained per-peer collector")
+				require.Nil(t, metrics.DefaultRegistry.Get("eth/peerpolicy/connected_risk_count"), "shutdown retained aggregate collector")
+			})
+			gauge, ok := metrics.DefaultRegistry.Get("eth/peerpolicy/peer_risk").(*metrics.GaugeVec)
+			require.Equal(t, tc.enabled && tc.perPeer, ok, "per-peer collector")
+			aggregate := metrics.DefaultRegistry.Get("eth/peerpolicy/connected_risk_count")
+			require.Equal(t, tc.enabled, aggregate != nil, "aggregate collector")
+			if tc.enabled {
+				h.handler.observePeer("test-peer", peerpolicy.InvalidBlock)
+				require.Equal(t, uint64(60), h.handler.peerPolicy.Snapshot("test-peer").Risk)
+				if tc.perPeer {
+					require.Equal(t, int64(60), gauge.Snapshot()["test-peer"])
+				}
 			}
-		}
-		h.close()
-		if metrics.DefaultRegistry.Get("eth/peerpolicy/peer_risk") != nil {
-			t.Fatal("shutdown retained the collector")
-		}
+		})
 	}
 }
 
@@ -286,7 +289,7 @@ func TestPeerPolicyGaugeCollectionExpiry(t *testing.T) {
 	clock := new(mclock.Simulated)
 	h := &handler{peerPolicy: peerpolicy.New(clock)}
 	registry := metrics.NewRegistry()
-	if err := h.peerPolicy.RegisterPeerMetrics(registry); err != nil {
+	if err := h.peerPolicy.RegisterPeerMetrics(registry, true); err != nil {
 		t.Fatal(err)
 	}
 	defer h.peerPolicy.UnregisterPeerMetrics()
@@ -339,7 +342,11 @@ func TestPeerPolicyGaugeRegistrationDiagnostic(t *testing.T) {
 	previous := log.Root()
 	log.SetDefault(log.NewLogger(capture))
 	defer log.SetDefault(previous)
-	config := func(c *handlerConfig) *handlerConfig { c.peerReputation = true; return c }
+	config := func(c *handlerConfig) *handlerConfig {
+		c.peerReputation = true
+		c.peerReputationMetrics = true
+		return c
+	}
 	first := newTestHandlerWithConfig(config)
 	defer first.close()
 	if capture.failures.Load() != 0 {

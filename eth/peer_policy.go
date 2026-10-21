@@ -23,14 +23,14 @@ const (
 	contributionHeadFutureTolerance = 30 * time.Second
 )
 
-func (h *handler) initPeerPolicy(enabled bool) {
+func (h *handler) initPeerPolicy(enabled, perPeerMetrics bool) {
 	if !enabled {
 		return
 	}
 	h.peerPolicy = peerpolicy.New(mclock.System{})
 	h.peerPolicy.SetClassResolver(h.peerPolicyClass)
 	if metrics.Enabled() {
-		if err := h.peerPolicy.RegisterPeerMetrics(metrics.DefaultRegistry); err != nil {
+		if err := h.peerPolicy.RegisterPeerMetrics(metrics.DefaultRegistry, perPeerMetrics); err != nil {
 			log.Error("Failed to register peer reputation gauges", "err", err)
 		}
 	}

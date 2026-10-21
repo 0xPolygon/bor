@@ -115,7 +115,8 @@ var Defaults = Config{
 
 // Config contains configuration options for ETH and LES protocols.
 type Config struct {
-	PeerReputation bool // Enable observation-only peer scoring.
+	PeerReputation               bool // Enable observation-only peer scoring.
+	PeerReputationPerPeerMetrics bool
 	// The genesis block, which is inserted if the database is empty.
 	// If nil, the Ethereum main net block is used.
 	Genesis *core.Genesis `toml:",omitempty"`

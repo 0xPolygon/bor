@@ -93,7 +93,7 @@ func TestPeerPolicyLiveClassRefreshWithoutTraffic(t *testing.T) {
 			tracker.Connected("peer")
 			tracker.Observe("peer", Evidence{Reason: InvalidBlock, Activity: ActivityEvent{ReceivedMessages: 1}})
 			registry := metrics.NewRegistry()
-			require.NoError(t, tracker.RegisterPeerMetrics(registry))
+			require.NoError(t, tracker.RegisterPeerMetrics(registry, true))
 			defer tracker.UnregisterPeerMetrics()
 			require.Contains(t, scrapePeerMetrics(registry), `eth_peerpolicy_peer_risk{peer_id="peer"} 60`)
 			require.Contains(t, scrapePeerMetrics(registry), `eth_peerpolicy_peer_protected{peer_id="peer"} 0`)

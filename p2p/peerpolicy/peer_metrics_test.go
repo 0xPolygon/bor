@@ -33,7 +33,7 @@ func TestPeerPolicyGaugeExpiryAndExemption(t *testing.T) {
 	clock.Run(10 * windowWidth)
 	tracker := peerMetricsTestTracker(clock)
 	reg := metrics.NewRegistry()
-	if err := tracker.RegisterPeerMetrics(reg); err != nil {
+	if err := tracker.RegisterPeerMetrics(reg, true); err != nil {
 		t.Fatal(err)
 	}
 	defer tracker.UnregisterPeerMetrics()
@@ -68,7 +68,7 @@ func TestPeerPolicyGaugeExpiryAndExemption(t *testing.T) {
 func TestPeerPolicyGaugeEvictionAndCleanup(t *testing.T) {
 	tracker := peerMetricsTestTracker(new(mclock.Simulated))
 	reg := metrics.NewRegistry()
-	if err := tracker.RegisterPeerMetrics(reg); err != nil {
+	if err := tracker.RegisterPeerMetrics(reg, true); err != nil {
 		t.Fatal(err)
 	}
 	defer tracker.UnregisterPeerMetrics()
@@ -88,7 +88,7 @@ func TestPeerPolicyGaugeEvictionAndCleanup(t *testing.T) {
 	if got := scrapePeerMetrics(reg); strings.Contains(got, "peer_risk") {
 		t.Fatal("gauges remain after cleanup")
 	}
-	if err := tracker.RegisterPeerMetrics(reg); err != nil {
+	if err := tracker.RegisterPeerMetrics(reg, true); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -96,14 +96,14 @@ func TestPeerPolicyGaugeEvictionAndCleanup(t *testing.T) {
 func TestPeerPolicyGaugeRegistrationOwnership(t *testing.T) {
 	reg := metrics.NewRegistry()
 	first, second := peerMetricsTestTracker(new(mclock.Simulated)), peerMetricsTestTracker(new(mclock.Simulated))
-	if err := first.RegisterPeerMetrics(reg); err != nil {
+	if err := first.RegisterPeerMetrics(reg, true); err != nil {
 		t.Fatal(err)
 	}
 	defer first.UnregisterPeerMetrics()
-	if err := first.RegisterPeerMetrics(metrics.NewRegistry()); err == nil {
+	if err := first.RegisterPeerMetrics(metrics.NewRegistry(), true); err == nil {
 		t.Fatal("duplicate registration accepted")
 	}
-	if err := second.RegisterPeerMetrics(reg); err == nil {
+	if err := second.RegisterPeerMetrics(reg, true); err == nil {
 		t.Fatal("registry collision accepted")
 	}
 	second.UnregisterPeerMetrics()
@@ -115,7 +115,7 @@ func TestPeerPolicyGaugeRegistrationOwnership(t *testing.T) {
 func TestPeerPolicyGaugeConcurrentScrapes(t *testing.T) {
 	tracker := peerMetricsTestTracker(new(mclock.Simulated))
 	reg := metrics.NewRegistry()
-	if err := tracker.RegisterPeerMetrics(reg); err != nil {
+	if err := tracker.RegisterPeerMetrics(reg, true); err != nil {
 		t.Fatal(err)
 	}
 	defer tracker.UnregisterPeerMetrics()
@@ -141,7 +141,7 @@ func exportTestTracker(t *testing.T, clock mclock.Clock) (*Tracker, metrics.Regi
 
 	tracker := peerMetricsTestTracker(clock)
 	registry := metrics.NewRegistry()
-	require.NoError(t, tracker.RegisterPeerMetrics(registry))
+	require.NoError(t, tracker.RegisterPeerMetrics(registry, true))
 	t.Cleanup(tracker.UnregisterPeerMetrics)
 
 	return tracker, registry
@@ -293,20 +293,20 @@ func TestPeerPolicyExportRegistrationIsAllOrNothing(t *testing.T) {
 	require.NoError(t, registry.Register("eth/peerpolicy/connected_risk_sum", other))
 
 	tracker := peerMetricsTestTracker(new(mclock.Simulated))
-	require.ErrorIs(t, tracker.RegisterPeerMetrics(registry), metrics.ErrDuplicateMetric)
+	require.ErrorIs(t, tracker.RegisterPeerMetrics(registry, true), metrics.ErrDuplicateMetric)
 	require.Same(t, other, registry.Get("eth/peerpolicy/connected_risk_sum"), "an unrelated collector was removed")
 
-	for _, family := range tracker.families() {
+	for _, family := range tracker.families(true) {
 		if family.name != "eth/peerpolicy/connected_risk_sum" {
 			require.Nil(t, registry.Get(family.name), family.name)
 		}
 	}
 
 	registry.Unregister("eth/peerpolicy/connected_risk_sum")
-	require.NoError(t, tracker.RegisterPeerMetrics(registry))
+	require.NoError(t, tracker.RegisterPeerMetrics(registry, true))
 	tracker.UnregisterPeerMetrics()
 
-	for _, family := range tracker.families() {
+	for _, family := range tracker.families(true) {
 		require.Nil(t, registry.Get(family.name), family.name)
 	}
 }
@@ -378,12 +378,12 @@ func TestPeerPolicyExportFamiliesRetainLifetimeBudget(t *testing.T) {
 	second := New(clock)
 	require.Same(t, &processPeerMetricIdentities, second.metrics.peerIDs)
 	second.metrics.peerIDs = first.metrics.peerIDs
-	require.NoError(t, second.RegisterPeerMetrics(registry))
+	require.NoError(t, second.RegisterPeerMetrics(registry, true))
 	t.Cleanup(second.UnregisterPeerMetrics)
 	second.Connected("replacement")
 	second.Observe("replacement", Evidence{Reason: InvalidBlock})
 	second.Connected("clean-replacement")
-	for _, family := range second.families() {
+	for _, family := range second.families(true) {
 		if family.label == "peer_id" {
 			require.Empty(t, registry.Get(family.name).(*metrics.GaugeVec).Snapshot(), family.name)
 		}
@@ -413,7 +413,7 @@ func TestPeerPolicyExportDisconnectAndReconnect(t *testing.T) {
 
 	connected = false
 	lookups = 0
-	sample := tracker.collect()
+	sample := tracker.collect(true)
 	require.Equal(t, 1, lookups, "class and connectivity must use the same lookup")
 	require.Equal(t, int64(0), sample.connected["peer"])
 	require.Equal(t, int64(0), sample.status["peer"])
@@ -422,7 +422,7 @@ func TestPeerPolicyExportDisconnectAndReconnect(t *testing.T) {
 
 	connected = true
 	tracker.Connected("peer")
-	sample = tracker.collect()
+	sample = tracker.collect(true)
 	require.Equal(t, int64(1), sample.connected["peer"])
 	require.Equal(t, int64(1), sample.status["peer"])
 	require.Equal(t, int64(60), sample.risk["peer"])
