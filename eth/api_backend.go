@@ -81,6 +81,7 @@ func (b *EthAPIBackend) GetFinalizedBlockNumber(_ context.Context) (uint64, erro
 
 func (b *EthAPIBackend) SetHead(number uint64) {
 	b.eth.handler.downloader.Cancel()
+	b.eth.handler.downloader.PurgeMilestonesAfter(number)
 	b.eth.blockchain.SetHead(number)
 }
 
