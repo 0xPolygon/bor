@@ -32,36 +32,52 @@ func (f *BlockFetcher) scheduleHeaderFetches() bool {
 	deferred := false
 
 	for hash, announces := range f.announced {
-		// In current LES protocol(les2/les3), only header announce is
-		// available, no need to wait too much time for header broadcast.
-		wait := arriveTimeout - gatherSlack
-		if f.light {
-			wait = 0
-		}
-		if time.Since(announces[0].time) <= wait {
-			continue
-		}
-		if !f.readyToFetch(hash) {
-			f.dropAnnouncements(hash, announces)
-			continue
-		}
-		announce := f.acquireAnnouncer(announces, awaitingBodies)
+		announce, retry := f.prepareHeaderFetch(hash, announces, awaitingBodies)
+		deferred = deferred || retry
 		if announce == nil {
-			// No announcer has capacity to spare for a header right now.
-			// rescheduleFetch holds the retry off so this does not spin.
-			deferred = true
-
 			continue
 		}
 		req := f.admitHeaderRequest(hash, announce)
+		deferred = deferred || len(f.announced[hash]) > 0
 		requests[req.announce.origin] = append(requests[req.announce.origin], req)
 	}
 
+	if len(requests) > 0 {
+		f.fetchRetry = 0
+	}
 	for peer, batch := range requests {
 		f.startHeaderRequests(peer, batch)
 	}
 
 	return deferred
+}
+
+func (f *BlockFetcher) prepareHeaderFetch(hash common.Hash, announces []*blockAnnounce, awaitingBodies map[string]bool) (*blockAnnounce, bool) {
+	wait := arriveTimeout - gatherSlack
+	if f.light {
+		wait = 0
+	}
+	if time.Since(announces[0].time) <= wait {
+		return nil, false
+	}
+	if f.fetchInProgress(hash) {
+		return nil, true
+	}
+	announce := f.acquireAnnouncer(announces, awaitingBodies)
+	if announce == nil {
+		return nil, true
+	}
+	// Unknown block lookups may hit disk, so reserve capacity before reading.
+	if !f.readyToFetch(hash) {
+		f.releaseFetchSlot(announce.origin)
+		f.dropAnnouncements(hash, announces)
+		return nil, false
+	}
+	return announce, false
+}
+
+func (f *BlockFetcher) fetchInProgress(hash common.Hash) bool {
+	return f.fetching[hash] != nil || len(f.fetched[hash]) > 0 || f.completing[hash] != nil
 }
 
 // peersAwaitingBodies lists the peers holding headers that still need a body
@@ -104,7 +120,7 @@ func (f *BlockFetcher) expiredFetches() []common.Hash {
 // the request so latency metrics still measure from the announcement.
 func (f *BlockFetcher) admitHeaderRequest(hash common.Hash, announce *blockAnnounce) headerRequest {
 	announcedAt := announce.time
-	f.forgetHash(hash) // This also removes from f.announced
+	f.consumeAnnouncement(hash, announce.origin)
 	announce.time = time.Now()
 	f.fetching[hash] = announce
 
@@ -112,13 +128,10 @@ func (f *BlockFetcher) admitHeaderRequest(hash common.Hash, announce *blockAnnou
 }
 
 // readyToFetch reports whether a hash still needs a header request, rather than
-// already being held by the witness manager, the import queue, a later fetch
-// stage, or the local chain.
+// already being held by the witness manager, the import queue, or the local
+// chain. The caller checks active fetch stages before reserving capacity.
 func (f *BlockFetcher) readyToFetch(hash common.Hash) bool {
 	if f.wm.isPending(hash) || f.queued[hash] != nil {
-		return false
-	}
-	if f.fetched[hash] != nil || f.completing[hash] != nil {
 		return false
 	}
 	if f.light {
@@ -180,17 +193,20 @@ func (f *BlockFetcher) scheduleBodyFetches() bool {
 		}
 		f.groupBodyRequest(requests, hash, announce)
 	}
+	if len(requests) > 0 {
+		f.completeRetry = 0
+	}
 	f.startBodyRequests(requests, admitted)
 
 	return deferred
 }
 
 // groupBodyRequest moves one fetched header into the completion stage and adds
-// it to its peer's batch. The hash is forgotten first so a block that arrived
-// by another route is dropped rather than re-requested.
+// it to its peer's batch. Keep alternative announcements until the body arrives
+// so an unanswered request can restart from another origin.
 func (f *BlockFetcher) groupBodyRequest(requests map[string]*bodyRequest, hash common.Hash, announce *blockAnnounce) {
 	announcedAt := announce.time
-	f.forgetHash(hash) // Removes from f.fetched
+	delete(f.fetched, hash)
 
 	if f.wm.isPending(hash) || f.getBlock(hash) != nil {
 		return

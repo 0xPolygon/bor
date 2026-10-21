@@ -1125,9 +1125,8 @@ func (h *handler) enableSyncedFeatures() {
 	if len(hashes) == 0 {
 		return
 	}
-	for _, peer := range peers {
-		peer.AsyncSendPooledTransactionHashes(hashes)
-	}
+	h.wg.Add(1)
+	go h.recoverPendingAnnouncements(peers, hashes)
 }
 
 // PeerStats represents a short summary of the information known about a connected

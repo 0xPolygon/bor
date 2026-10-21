@@ -37,21 +37,23 @@ func TestHeaderSchedulingWaitsForAnnouncement(t *testing.T) {
 }
 
 func TestHeaderSchedulingKeepsLaterStages(t *testing.T) {
-	for _, stage := range []string{"fetched", "completing"} {
+	for _, stage := range []string{"fetching", "fetched", "completing"} {
 		t.Run(stage, func(t *testing.T) {
 			p := newScheduleProbe(t)
 			f := p.fetcher
 			hash := p.announce("new", time.Second)
 			owned := &blockAnnounce{hash: hash, origin: "existing", time: time.Now()}
-			if stage == "fetched" {
+			if stage == "fetching" {
+				f.fetching[hash] = owned
+			} else if stage == "fetched" {
 				f.fetched[hash] = []*blockAnnounce{owned}
 			} else {
 				f.completing[hash] = owned
 			}
-			if f.scheduleHeaderFetches() {
-				t.Fatal("duplicate announcement deferred")
+			if !f.scheduleHeaderFetches() {
+				t.Fatal("alternative announcement was not deferred")
 			}
-			if f.fetchSlotsTotal != 0 || f.fetching[hash] != nil || len(f.announced[hash]) != 0 {
+			if f.fetchSlotsTotal != 0 || len(f.announced[hash]) != 1 {
 				t.Fatal("duplicate announcement started another header request")
 			}
 			if stage == "fetched" && (len(f.fetched[hash]) != 1 || f.fetched[hash][0] != owned) {

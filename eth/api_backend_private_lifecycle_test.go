@@ -65,6 +65,9 @@ func TestSendTxPrivateRejectedThenPublic(t *testing.T) {
 	if err := b.SendTx(t.Context(), first); err != nil {
 		t.Fatal(err)
 	}
+	if err := b.eth.txPool.Sync(); err != nil {
+		t.Fatal(err)
+	}
 	tx := makeTx(1, nil, nil, key)
 	raw, err := tx.MarshalBinary()
 	if err != nil {

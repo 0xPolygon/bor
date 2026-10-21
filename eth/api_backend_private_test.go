@@ -53,6 +53,7 @@ func TestSendTxPrivateAdmission(t *testing.T) {
 			b := privateSubmissionBackend(t, true)
 			first := pricedSetCodeTx(0, 250000, uint256.NewInt(25*params.GWei), uint256.NewInt(25*params.GWei), key, []unsignedAuth{{nonce: 0, key: key}})
 			require.NoError(t, b.SendTx(t.Context(), first))
+			require.NoError(t, b.eth.txPool.Sync())
 			tx := makeTx(1, nil, nil, key)
 			if private {
 				b.RecordPrivateTx(tx.Hash())

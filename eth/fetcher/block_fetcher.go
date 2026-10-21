@@ -246,6 +246,8 @@ type BlockFetcher struct {
 	// dispatch before their response deadline exists.
 	fetchSlots      map[string]int
 	fetchSlotsTotal int
+	fetchRetry      time.Duration
+	completeRetry   time.Duration
 
 	// Block cache
 	queue  *prque.Prque[int64, *blockOrHeaderInject] // Queue containing the import operations (block number sorted)
@@ -532,7 +534,9 @@ func (f *BlockFetcher) loop() {
 		expiredHashes := f.expiredFetches()
 
 		for _, hash := range expiredHashes {
-			f.forgetHash(hash)
+			f.mu.Lock()
+			delete(f.fetching, hash)
+			f.mu.Unlock()
 		}
 		// Import any queued blocks that could potentially fit
 		height := f.chainHeight()
@@ -619,11 +623,8 @@ func (f *BlockFetcher) loop() {
 				blockAnnounceDropMeter.Mark(1)
 				break
 			}
-			// All is well, schedule the announce if block's not yet downloading or completing or pending witness
-			if _, ok := f.fetching[notification.hash]; ok {
-				break
-			}
-			if _, ok := f.completing[notification.hash]; ok {
+			// Keep distinct alternatives while another peer serves the block.
+			if f.hasAnnouncer(notification.hash, notification.origin) {
 				break
 			}
 			if f.wm.isPending(notification.hash) {
@@ -921,7 +922,7 @@ func (f *BlockFetcher) rescheduleFetch(fetch *time.Timer, deferred bool) {
 	// Schedule announcement retrieval quickly for light mode
 	// since server won't send any headers to client.
 	if f.light {
-		fetch.Reset(lightTimeout)
+		fetch.Reset(nextFetchRetry(lightTimeout, deferred, &f.fetchRetry))
 		return
 	}
 	// Otherwise find the earliest expiring announcement
@@ -932,7 +933,7 @@ func (f *BlockFetcher) rescheduleFetch(fetch *time.Timer, deferred bool) {
 		}
 	}
 
-	fetch.Reset(retryAfter(arriveTimeout-time.Since(earliest), deferred))
+	fetch.Reset(nextFetchRetry(arriveTimeout-time.Since(earliest), deferred, &f.fetchRetry))
 }
 
 // retryAfter floors a timer delay for a pass that left announcements behind
@@ -962,7 +963,7 @@ func (f *BlockFetcher) rescheduleComplete(complete *time.Timer, deferred bool) {
 		}
 	}
 
-	complete.Reset(retryAfter(gatherSlack-time.Since(earliest), deferred))
+	complete.Reset(nextFetchRetry(gatherSlack-time.Since(earliest), deferred, &f.completeRetry))
 }
 
 // enqueue schedules a new header or block import operation, if the component

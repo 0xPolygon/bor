@@ -151,8 +151,8 @@ func TestHeaderSchedulingPrefersPeerWithoutWaitingBodies(t *testing.T) {
 		})
 		f.announces["idle"]++
 	}
-	if f.scheduleHeaderFetches() {
-		t.Fatal("an alternative announcer without waiting bodies was not used")
+	if !f.scheduleHeaderFetches() {
+		t.Fatal("unused alternative announcers were not retained")
 	}
 	for _, hash := range hashes {
 		if f.fetching[hash] == nil || f.fetching[hash].origin != "idle" {
