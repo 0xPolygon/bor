@@ -96,7 +96,7 @@ func TestGaugeVecGroupEndpoint(t *testing.T) {
 func TestPeerRiskUnregisterRemovesJSONLabels(t *testing.T) {
 	registry := metrics.NewRegistry()
 	tracker := peerpolicy.New(new(mclock.Simulated))
-	if err := tracker.RegisterPeerMetrics(registry); err != nil {
+	if err := tracker.RegisterPeerMetrics(registry, true); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(tracker.UnregisterPeerMetrics)
