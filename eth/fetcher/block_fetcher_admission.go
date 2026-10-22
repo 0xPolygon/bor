@@ -16,7 +16,10 @@
 
 package fetcher
 
-import "math/rand"
+import (
+	"math/rand"
+	"time"
+)
 
 // Request dispatch is synchronous and completes only once the message has been
 // written to the peer, which happens before the worker creates its response
@@ -52,6 +55,12 @@ func (f *BlockFetcher) acquireFetchSlotWithin(peer string, limit int) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	if until, ok := f.fetchBackoff.Peek(peer); ok {
+		if time.Now().Before(until) {
+			return false
+		}
+		f.fetchBackoff.Remove(peer)
+	}
 	if f.fetchSlotsTotal >= maxTotalFetchRequests {
 		return false
 	}

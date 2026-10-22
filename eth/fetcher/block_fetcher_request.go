@@ -72,7 +72,8 @@ func (f *BlockFetcher) runHeaderRequest(peer string, req headerRequest) {
 	case res := <-resCh:
 		f.deliverHeaders(peer, req, res)
 	case <-timeout.C:
-		log.Debug("BlockFetcher: header fetch timed out", "peer", peer, "hash", req.hash, "timeout", 2*fetchTimeout)
+		log.Debug("BlockFetcher: header fetch timed out", "peer", peer, "hash", req.hash, "timeout", 2*fetchTimeout, "backoff", fetchPeerBackoff)
+		f.backoffFetchPeer(peer)
 		f.notifyFetchRelease(true, owned)
 	case <-f.quit:
 	}
@@ -127,7 +128,8 @@ func (f *BlockFetcher) runBodyRequest(peer string, req bodyRequest) {
 	case res := <-resCh:
 		f.deliverBodies(peer, req, res)
 	case <-timeout.C:
-		log.Debug("BlockFetcher: body fetch timed out", "peer", peer, "hashes", req.hashes, "timeout", 2*fetchTimeout)
+		log.Debug("BlockFetcher: body fetch timed out", "peer", peer, "hashes", req.hashes, "timeout", 2*fetchTimeout, "backoff", fetchPeerBackoff)
+		f.backoffFetchPeer(peer)
 		f.notifyFetchRelease(false, req.announces)
 	case <-f.quit:
 	}

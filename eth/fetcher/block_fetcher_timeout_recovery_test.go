@@ -2,6 +2,7 @@ package fetcher
 
 import (
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -18,27 +19,30 @@ func TestBlockFetchTimeoutKeepsPeerAndAllowsRetry(t *testing.T) {
 			name = "header"
 		}
 		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			tester := newTester(false)
-			defer tester.fetcher.Stop()
-			imported := make(chan struct{}, 1)
-			tester.fetcher.importedHook = func(*types.Header, *types.Block) { imported <- struct{}{} }
-			request, started := requestDelayedBlock(t, tester, blocks, block, headers)
-			prepareBlockTimeoutState(t, tester.fetcher, block.Hash(), headers)
-			awaitBlockTimeout(t, request, started)
-			assertBlockTimeoutReleased(t, tester.fetcher, block.Hash(), headers)
-			assertBlockPeerRetained(t, tester)
-			err := tester.fetcher.Notify("slow", block.Hash(), block.NumberU64(), time.Now(),
-				tester.makeHeaderFetcher("slow", blocks, 0), tester.makeBodyFetcher("slow", blocks, 0), nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			select {
-			case <-imported:
-			case <-time.After(3 * time.Second):
-				t.Fatal("timed-out block could not be fetched again")
-			}
-			assertBlockPeerRetained(t, tester)
+			synctest.Test(t, func(t *testing.T) {
+				tester := newTester(false)
+				defer tester.fetcher.Stop()
+				defer tester.fetcher.wm.witnessCache.Stop()
+				imported := make(chan struct{}, 1)
+				tester.fetcher.importedHook = func(*types.Header, *types.Block) { imported <- struct{}{} }
+				request, started := requestDelayedBlock(t, tester, blocks, block, headers)
+				prepareBlockTimeoutState(t, tester.fetcher, block.Hash(), headers)
+				awaitBlockTimeout(t, request, started)
+				assertBlockTimeoutReleased(t, tester.fetcher, block.Hash(), headers)
+				assertBlockPeerRetained(t, tester)
+				err := tester.fetcher.Notify("slow", block.Hash(), block.NumberU64(), time.Now(),
+					tester.makeHeaderFetcher("slow", blocks, 0), tester.makeBodyFetcher("slow", blocks, 0), nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertBlockFetchCooldown(t, tester.fetcher, imported)
+				select {
+				case <-imported:
+				case <-time.After(3 * time.Second):
+					t.Fatal("timed-out block could not be fetched again")
+				}
+				assertBlockPeerRetained(t, tester)
+			})
 		})
 	}
 }

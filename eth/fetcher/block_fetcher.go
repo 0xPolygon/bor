@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/lru"
 	"github.com/ethereum/go-ethereum/common/prque"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/stateless"
@@ -246,6 +247,7 @@ type BlockFetcher struct {
 	// dispatch before their response deadline exists.
 	fetchSlots      map[string]int
 	fetchSlotsTotal int
+	fetchBackoff    lru.BasicLRU[string, time.Time] // guarded by mu
 	fetchRetry      time.Duration
 	completeRetry   time.Duration
 
@@ -299,6 +301,7 @@ func NewBlockFetcher(light bool, getHeader HeaderRetrievalFn, getBlock blockRetr
 		fetched:             make(map[common.Hash][]*blockAnnounce),
 		completing:          make(map[common.Hash]*blockAnnounce),
 		fetchSlots:          make(map[string]int),
+		fetchBackoff:        lru.NewBasicLRU[string, time.Time](maxFetchBackoffPeers),
 		queue:               prque.New[int64, *blockOrHeaderInject](nil),
 		queues:              make(map[string]int),
 		queued:              make(map[common.Hash]*blockOrHeaderInject),
