@@ -77,6 +77,18 @@ eth/relay/
 - **Inclusion Detection**: Uses `TxGetter` to check if transaction was included in a block (stops retry)
 - **Already Known Handling**: "already known" errors are treated as successful submissions
 
+**Failure recovery:**
+- A relay error can occur after local pool admission; the RPC error reports that
+  distinction. Exhausted producer retries do not authorize public gossip.
+- Privacy markers stay while the pool retains the transaction. Expiring a marker
+  alone would publish the original private payload through ordinary propagation.
+- The sender can sign a replacement at the same nonce with a sufficient fee bump.
+  Submit it through the private endpoint to retain privacy, or the public endpoint
+  to explicitly publish that replacement. This also permits a cancellation
+  transaction; inclusion still depends on a producer accepting and mining it.
+- The replaced transaction leaves the local pool. Its marker is cleaned up after
+  the grace period; later transactions still require that nonce to be mined.
+
 ### 3. Already Known Error Handling
 
 **Concept:**
