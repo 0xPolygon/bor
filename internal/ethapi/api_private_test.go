@@ -191,3 +191,52 @@ func TestSendRawTransactionPrivateKnownPublicRemainsVisible(t *testing.T) {
 	require.Zero(t, admissions, "known duplicate must not enter admission")
 	require.False(t, store.IsTxPrivate(tx.Hash()))
 }
+
+func TestSendRawTransactionPrivateTemporaryForwarding(t *testing.T) {
+	for _, tc := range []struct {
+		name                      string
+		localErr                  error
+		relay, failRelay, forward bool
+	}{
+		{"temporary relay", txpool.ErrUnderpriced, true, false, true},
+		{"temporary relay failed", txpool.ErrUnderpriced, true, true, true},
+		{"temporary producer", txpool.ErrUnderpriced, false, false, false},
+		{"permanent relay", core.ErrNonceTooLow, true, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+			base := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+			defer base.chain.Stop()
+			base.privateTxEnabled, base.acceptPrivateTxs = tc.relay, true
+			store := relay.NewPrivateTxStore()
+			defer store.Close()
+			base.beginPrivateTxFn = store.Begin
+			calls := 0
+			relayErr := errors.New("relay unavailable")
+			base.submitPrivateTxFn = func(tx *types.Transaction) error {
+				calls++
+				require.False(t, store.IsTxPrivate(tx.Hash()), "rejected local admission was committed")
+				if tc.failRelay {
+					return relayErr
+				}
+				return nil
+			}
+			backend := &privateSubmissionBackend{testBackend: base, send: func(context.Context, *types.Transaction) error { return tc.localErr }}
+			api := NewTransactionAPI(backend, new(AddrLocker))
+			raw, tx := makeSelfSignedRaw(t, api, base.acc.Address)
+			hash, err := api.SendRawTransactionPrivate(t.Context(), raw)
+			require.Equal(t, tc.forward, calls == 1)
+			if tc.forward && !tc.failRelay {
+				require.NoError(t, err)
+				require.Equal(t, tx.Hash(), hash)
+			} else {
+				require.ErrorIs(t, err, tc.localErr)
+				require.Equal(t, common.Hash{}, hash)
+			}
+			if tc.failRelay {
+				require.ErrorIs(t, err, relayErr)
+			}
+			require.False(t, store.IsTxPrivate(tx.Hash()))
+		})
+	}
+}

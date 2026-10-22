@@ -125,10 +125,11 @@ type peerDropFn func(id string)
 // blockAnnounce is the hash notification of the availability of a new block in the
 // network.
 type blockAnnounce struct {
-	hash   common.Hash   // Hash of the block being announced
-	number uint64        // Number of the block being announced (0 = unknown | old protocol)
-	header *types.Header // Header of the block partially reassembled (new protocol)
-	time   time.Time     // Timestamp of the announcement
+	hash     common.Hash   // Hash of the block being announced
+	number   uint64        // Number of the block being announced (0 = unknown | old protocol)
+	header   *types.Header // Header of the block partially reassembled (new protocol)
+	time     time.Time     // Timestamp of the announcement
+	deferred bool          // The gather window elapsed but a request could not start
 
 	origin string // Identifier of the peer originating the notification
 
@@ -248,6 +249,8 @@ type BlockFetcher struct {
 	fetchSlots      map[string]int
 	fetchSlotsTotal int
 	fetchBackoff    lru.BasicLRU[string, time.Time] // guarded by mu
+	fetchTimerAt    time.Time
+	fetchRetryAt    time.Time
 	fetchRetry      time.Duration
 	completeRetry   time.Duration
 
@@ -577,6 +580,7 @@ func (f *BlockFetcher) loop() {
 			// Also check if witness manager is handling it
 			if (number+maxUncleDist < height) || (f.light && f.getHeader(hash) != nil) || (!f.light && f.getBlock(hash) != nil) {
 				// If known, forget about it
+				f.forgetHash(hash)
 				f.forgetBlock(hash)
 				continue
 			}
@@ -641,9 +645,7 @@ func (f *BlockFetcher) loop() {
 				f.announceChangeHook(notification.hash, true)
 			}
 
-			if len(f.announced) == 1 {
-				f.rescheduleFetch(fetchTimer, false)
-			}
+			f.rearmFreshFetch(fetchTimer, notification)
 
 		case op := <-f.inject:
 			// A direct block insertion was requested
@@ -918,25 +920,8 @@ func (f *BlockFetcher) loop() {
 
 // rescheduleFetch resets the specified fetch timer to the next blockAnnounce timeout.
 func (f *BlockFetcher) rescheduleFetch(fetch *time.Timer, deferred bool) {
-	// Short circuit if no blocks are announced
-	if len(f.announced) == 0 {
-		return
-	}
-	// Schedule announcement retrieval quickly for light mode
-	// since server won't send any headers to client.
-	if f.light {
-		fetch.Reset(nextFetchRetry(lightTimeout, deferred, &f.fetchRetry))
-		return
-	}
-	// Otherwise find the earliest expiring announcement
-	earliest := time.Now()
-	for _, announces := range f.announced {
-		if earliest.After(announces[0].time) {
-			earliest = announces[0].time
-		}
-	}
-
-	fetch.Reset(nextFetchRetry(arriveTimeout-time.Since(earliest), deferred, &f.fetchRetry))
+	f.fetchRetryAt = time.Now().Add(nextFetchRetry(0, deferred, &f.fetchRetry))
+	f.resetFetchTimer(fetch)
 }
 
 // retryAfter floors a timer delay for a pass that left announcements behind

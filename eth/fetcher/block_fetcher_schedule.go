@@ -60,6 +60,7 @@ func (f *BlockFetcher) prepareHeaderFetch(hash common.Hash, announces []*blockAn
 	if time.Since(announces[0].time) <= wait {
 		return nil, false
 	}
+	announces[0].deferred = true
 	if f.fetchInProgress(hash) {
 		return nil, true
 	}
