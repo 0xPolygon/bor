@@ -45,6 +45,7 @@ func TestRebroadcastAttemptWithoutQueueAcceptance(t *testing.T) {
 			}
 			pool.publishRebroadcastTransactions(batch)
 			<-ch
+			pool.RebroadcastAttempt(batch)([]common.Hash{tx.Hash()})
 			pool.RebroadcastAcknowledgement(batch)(nil)
 			pool.mu.Lock()
 			defer pool.mu.Unlock()

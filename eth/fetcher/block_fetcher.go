@@ -131,7 +131,8 @@ type blockAnnounce struct {
 	time     time.Time     // Timestamp of the announcement
 	deferred bool          // The gather window elapsed but a request could not start
 
-	origin string // Identifier of the peer originating the notification
+	bodyDeferred bool
+	origin       string // Identifier of the peer originating the notification
 
 	fetchHeader  headerRequesterFn  // Fetcher function to retrieve the header of an announced block
 	fetchBodies  bodyRequesterFn    // Fetcher function to retrieve the body of an announced block
@@ -252,6 +253,8 @@ type BlockFetcher struct {
 	fetchTimerAt    time.Time
 	fetchRetryAt    time.Time
 	fetchRetry      time.Duration
+	completeTimerAt time.Time
+	completeRetryAt time.Time
 	completeRetry   time.Duration
 
 	// Block cache
@@ -696,6 +699,7 @@ func (f *BlockFetcher) loop() {
 			deferred := f.scheduleBodyFetches()
 			// Schedule the next fetch if blocks are still pending
 			f.rescheduleComplete(completeTimer, deferred)
+			f.rescheduleFetch(fetchTimer, f.scheduleHeaderFetches())
 
 		case filter := <-f.headerFilter:
 			// Headers arrived from a remote peer. Extract those that were explicitly
@@ -791,9 +795,7 @@ func (f *BlockFetcher) loop() {
 				// Move announce from fetching to fetched state
 				f.fetched[hash] = append(f.fetched[hash], announce)
 				delete(f.fetching, hash)
-				if len(f.fetched) == 1 {
-					f.rescheduleComplete(completeTimer, false)
-				}
+				f.rearmFreshCompletion(completeTimer, announce)
 			}
 			// Schedule the header for light fetcher import
 			for _, announce := range lightHeaders {
@@ -939,19 +941,8 @@ func retryAfter(delay time.Duration, deferred bool) time.Duration {
 
 // rescheduleComplete resets the specified completion timer to the next fetch timeout.
 func (f *BlockFetcher) rescheduleComplete(complete *time.Timer, deferred bool) {
-	// Short circuit if no headers are fetched
-	if len(f.fetched) == 0 {
-		return
-	}
-	// Otherwise find the earliest expiring announcement
-	earliest := time.Now()
-	for _, announces := range f.fetched {
-		if earliest.After(announces[0].time) {
-			earliest = announces[0].time
-		}
-	}
-
-	complete.Reset(nextFetchRetry(gatherSlack-time.Since(earliest), deferred, &f.completeRetry))
+	f.completeRetryAt = time.Now().Add(nextFetchRetry(0, deferred, &f.completeRetry))
+	f.resetCompletionTimer(complete)
 }
 
 // enqueue schedules a new header or block import operation, if the component

@@ -2501,7 +2501,7 @@ func (api *TransactionAPI) SendRawTransactionPrivate(ctx context.Context, input 
 	finish := api.b.BeginPrivateTx(tx.Hash())
 	defer finish(false)
 
-	_, err := SubmitTransaction(ctx, api.b, tx)
+	_, err := SubmitTransaction(ctx, privateTxBackend{api.b}, tx)
 	finish(err == nil)
 	return api.forwardPrivateTransaction(tx, err)
 }

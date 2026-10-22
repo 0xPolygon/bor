@@ -43,6 +43,15 @@ func (h *handler) rebroadcastAcknowledgement(txs []*types.Transaction) func([]co
 	return nil
 }
 
+func (h *handler) rebroadcastAttempt(txs []*types.Transaction) func([]common.Hash) {
+	if pool, ok := h.txpool.(interface {
+		RebroadcastAttempt([]*types.Transaction) func([]common.Hash)
+	}); ok {
+		return pool.RebroadcastAttempt(txs)
+	}
+	return nil
+}
+
 func assignTransactionPeers(hash common.Hash, peers []*ethPeer, directSet map[*ethPeer]struct{}, txset, annos map[*ethPeer][]common.Hash) {
 	for _, peer := range peers {
 		if peer.KnownTransaction(hash) {
@@ -56,13 +65,14 @@ func assignTransactionPeers(hash common.Hash, peers []*ethPeer, directSet map[*e
 	}
 }
 
-func queueTransactions(peers map[*ethPeer][]common.Hash, announce bool, onBroadcast func([]common.Hash)) int {
+func queueTransactions(peers map[*ethPeer][]common.Hash, announce bool, onBroadcast func([]common.Hash), onAttempt ...func([]common.Hash)) int {
 	count := 0
 	for peer, hashes := range peers {
 		send := peer.QueueTransactions
 		if announce {
 			send = peer.QueuePooledTransactionHashes
 		}
+		reportQueueAttempt(hashes, onAttempt)
 		if retained := send(hashes); len(retained) > 0 {
 			count += len(retained)
 			if onBroadcast != nil {
@@ -106,4 +116,12 @@ func rebroadcastHeadTD(chain *core.BlockChain, hash common.Hash) *big.Int {
 		return chain.GetTd(hash, header.Number.Uint64())
 	}
 	return nil
+}
+
+func reportQueueAttempt(hashes []common.Hash, callbacks []func([]common.Hash)) {
+	for _, report := range callbacks {
+		if report != nil {
+			report(hashes)
+		}
+	}
 }

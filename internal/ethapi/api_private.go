@@ -17,6 +17,7 @@
 package ethapi
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -39,4 +40,16 @@ func (api *TransactionAPI) forwardPrivateTransaction(tx *types.Transaction, loca
 		}
 	}
 	return tx.Hash(), nil
+}
+
+// Keep validation and logging shared while selecting explicit private admission.
+type privateTxBackend struct{ Backend }
+
+func (b privateTxBackend) SendTx(ctx context.Context, tx *types.Transaction) error {
+	if private, ok := b.Backend.(interface {
+		SendPrivateTx(context.Context, *types.Transaction) error
+	}); ok {
+		return private.SendPrivateTx(ctx, tx)
+	}
+	return b.Backend.SendTx(ctx, tx)
 }

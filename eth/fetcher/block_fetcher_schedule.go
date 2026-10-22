@@ -186,6 +186,10 @@ func (f *BlockFetcher) scheduleBodyFetches() bool {
 	deferred := false
 
 	for hash, announces := range f.fetched {
+		if f.rerouteCoolingBody(hash, announces) {
+			continue
+		}
+		announces[0].bodyDeferred = true
 		announce := f.acquireBodyAnnouncer(announces, admitted)
 		if announce == nil {
 			deferred = true

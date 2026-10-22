@@ -121,6 +121,11 @@ func publishRebroadcastFairnessBatch(t *testing.T, pool *LegacyPool, ch <-chan c
 	t.Helper()
 	pool.publishRebroadcastTransactions(batch)
 	delivered := receiveRebroadcastEvent(t, ch)
+	offered := make([]common.Hash, len(delivered.Txs))
+	for i, tx := range delivered.Txs {
+		offered[i] = tx.Hash()
+	}
+	pool.RebroadcastAttempt(delivered.Txs)(offered)
 	var accepted []common.Hash
 	if partial {
 		for _, tx := range delivered.Txs {

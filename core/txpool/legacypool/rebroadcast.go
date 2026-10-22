@@ -42,10 +42,10 @@ func (pool *LegacyPool) canRebroadcast(tx *types.Transaction) bool {
 }
 
 func (pool *LegacyPool) publishRebroadcastTransactions(txs []*types.Transaction) {
-	pool.recordRebroadcastAttempts(txs)
 	explicit := pool.rebroadcastAckFeed.Send(core.StuckTxsEvent{Txs: txs})
 	legacy := pool.rebroadcastTxFeed.Send(core.StuckTxsEvent{Txs: txs})
 	if explicit == 0 || legacy > 0 {
+		pool.recordRebroadcastAttempts(txs)
 		hashes := make([]common.Hash, len(txs))
 		for i, tx := range txs {
 			hashes[i] = tx.Hash()

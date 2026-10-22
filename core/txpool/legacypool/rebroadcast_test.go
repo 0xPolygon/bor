@@ -63,8 +63,8 @@ func TestRebroadcastSelectionDoesNotRecordSend(t *testing.T) {
 	attempted := !pool.lastRebroadcastAttempt[tx.Hash()].IsZero()
 	stillEligible := pool.identifyStuckTransactions()
 	pool.mu.RUnlock()
-	if !attempted || len(stillEligible) != 0 {
-		t.Fatal("an unacknowledged attempt must still be bounded")
+	if attempted || len(stillEligible) != 1 {
+		t.Fatal("an unoffered batch must remain eligible")
 	}
 	pool.RebroadcastAcknowledgement(batch.Txs)([]common.Hash{tx.Hash()})
 	pool.mu.RLock()
