@@ -83,6 +83,7 @@ var allPrecompiles = map[common.Address]PrecompiledContract{
 	common.BytesToAddress([]byte{0x12}): mldsa44Verify,
 	common.BytesToAddress([]byte{0x13}): mldsa65Verify,
 	common.BytesToAddress([]byte{0x14}): mldsa87Verify,
+	common.BytesToAddress([]byte{0x15}): &slhdsaVerify{},
 }
 
 // EIP-152 test vectors

@@ -4,6 +4,7 @@ import (
 	"github.com/cloudflare/circl/sign/mldsa/mldsa44"
 	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
 	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
+	"github.com/cloudflare/circl/sign/slhdsa"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/params"
@@ -93,4 +94,48 @@ func (c *mldsaVerify) Run(input []byte) ([]byte, error) {
 
 func (c *mldsaVerify) Name() string {
 	return c.name
+}
+
+// slhdsaVerify implements SLH-DSA-SHA2-128s (FIPS 205) verification with the
+// same interface as the EIP-8355 ML-DSA precompiles: pubkey || signature ||
+// message in, a 32-byte 0/1 out, pure SLH-DSA with the empty context, and no
+// error on malformed input. There is no EIP for it yet; it exists to compare
+// a hash-based option with ML-DSA. It is not activated in any fork.
+type slhdsaVerify struct{}
+
+const (
+	slhdsaSha2128sPkLen  = 32
+	slhdsaSha2128sSigLen = 7856
+)
+
+// RequiredGas returns BASE + 12 gas per 32-byte word of message, the same
+// per-word price as the SHA256 precompile, since the message is hashed once
+// with SHA-256.
+func (c *slhdsaVerify) RequiredGas(input []byte) uint64 {
+	msgLen := len(input) - slhdsaSha2128sPkLen - slhdsaSha2128sSigLen
+	if msgLen <= 0 {
+		return params.SLHDSASha2128sVerifyBaseGas
+	}
+	return params.SLHDSASha2128sVerifyBaseGas + toWordSize(uint64(msgLen))*params.SLHDSAVerifyPerWordGas
+}
+
+func (c *slhdsaVerify) Run(input []byte) ([]byte, error) {
+	if len(input) < slhdsaSha2128sPkLen+slhdsaSha2128sSigLen {
+		return common.Hash{}.Bytes(), nil
+	}
+	var pk slhdsa.PublicKey
+	pk.ID = slhdsa.SHA2_128s
+	if pk.UnmarshalBinary(input[:slhdsaSha2128sPkLen]) != nil {
+		return common.Hash{}.Bytes(), nil
+	}
+	sig := input[slhdsaSha2128sPkLen : slhdsaSha2128sPkLen+slhdsaSha2128sSigLen]
+	msg := slhdsa.NewMessage(input[slhdsaSha2128sPkLen+slhdsaSha2128sSigLen:])
+	if slhdsa.Verify(&pk, msg, sig, nil) {
+		return true32Byte, nil
+	}
+	return common.Hash{}.Bytes(), nil
+}
+
+func (c *slhdsaVerify) Name() string {
+	return "VERIFY_SLHDSA_SHA2_128S"
 }

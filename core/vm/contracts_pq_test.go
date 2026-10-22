@@ -8,6 +8,7 @@ import (
 	"github.com/cloudflare/circl/sign/mldsa/mldsa44"
 	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
 	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
+	"github.com/cloudflare/circl/sign/slhdsa"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/params"
@@ -22,6 +23,11 @@ func TestPrecompiledMLDSA87(t *testing.T) { testJson("mldsa87", "14", t) }
 func BenchmarkPrecompiledMLDSA44(b *testing.B) { benchJson("mldsa44", "12", b) }
 func BenchmarkPrecompiledMLDSA65(b *testing.B) { benchJson("mldsa65", "13", b) }
 func BenchmarkPrecompiledMLDSA87(b *testing.B) { benchJson("mldsa87", "14", b) }
+
+// Vectors: NIST ACVP SLH-DSA sigVer (SHA2-128s, external, pure) and fresh
+// OpenSSL signatures.
+func TestPrecompiledSLHDSASha2128s(t *testing.T)      { testJson("slhdsaSha2128s", "15", t) }
+func BenchmarkPrecompiledSLHDSASha2128s(b *testing.B) { benchJson("slhdsaSha2128s", "15", b) }
 
 type mldsaSigner func(msg, ctx []byte) (pk, sig []byte)
 
@@ -67,7 +73,7 @@ func newMLDSASigner(t testing.TB, c *mldsaVerify) mldsaSigner {
 	}
 }
 
-func runMLDSA(t *testing.T, c *mldsaVerify, input []byte) bool {
+func runPQ(t *testing.T, c PrecompiledContract, input []byte) bool {
 	t.Helper()
 	gas := c.RequiredGas(input)
 	out, left, err := RunPrecompiledContract(c, input, gas, nil)
@@ -103,27 +109,27 @@ func TestMLDSAVerifyMutations(t *testing.T) {
 			sign := newMLDSASigner(t, c)
 			for _, msg := range [][]byte{nil, {0}, []byte("Hello world"), bytes.Repeat([]byte{0xab}, 4096)} {
 				pk, sig := sign(msg, nil)
-				if !runMLDSA(t, c, concat(pk, sig, msg)) {
+				if !runPQ(t, c, concat(pk, sig, msg)) {
 					t.Fatalf("valid signature rejected (msg len %d)", len(msg))
 				}
 				for _, i := range []int{0, 31, 32, len(pk) - 1} {
 					bad := bytes.Clone(pk)
 					bad[i] ^= 1
-					if runMLDSA(t, c, concat(bad, sig, msg)) {
+					if runPQ(t, c, concat(bad, sig, msg)) {
 						t.Errorf("public key byte %d flipped: accepted", i)
 					}
 				}
 				for _, i := range []int{0, len(sig) / 2, len(sig) - 1} {
 					bad := bytes.Clone(sig)
 					bad[i] ^= 1
-					if runMLDSA(t, c, concat(pk, bad, msg)) {
+					if runPQ(t, c, concat(pk, bad, msg)) {
 						t.Errorf("signature byte %d flipped: accepted", i)
 					}
 				}
-				if runMLDSA(t, c, concat(pk, sig, msg, []byte{0})) {
+				if runPQ(t, c, concat(pk, sig, msg, []byte{0})) {
 					t.Error("extra trailing byte: accepted")
 				}
-				if len(msg) > 0 && runMLDSA(t, c, concat(pk, sig, msg[:len(msg)-1])) {
+				if len(msg) > 0 && runPQ(t, c, concat(pk, sig, msg[:len(msg)-1])) {
 					t.Error("truncated message: accepted")
 				}
 			}
@@ -132,14 +138,14 @@ func TestMLDSAVerifyMutations(t *testing.T) {
 			msg := []byte("Hello world")
 			for _, ctx := range [][]byte{{0}, []byte("polygon"), bytes.Repeat([]byte{0x41}, 255)} {
 				pk, sig := sign(msg, ctx)
-				if runMLDSA(t, c, concat(pk, sig, msg)) {
+				if runPQ(t, c, concat(pk, sig, msg)) {
 					t.Errorf("signature with context %q accepted", ctx)
 				}
 			}
 			// Short inputs never verify and pay only the base cost.
 			pk, sig := sign(msg, nil)
 			for _, in := range [][]byte{nil, pk, concat(pk, sig[:len(sig)-1])} {
-				if runMLDSA(t, c, in) {
+				if runPQ(t, c, in) {
 					t.Errorf("short input (%d bytes) accepted", len(in))
 				}
 				if gas := c.RequiredGas(in); gas != c.baseGas {
@@ -182,6 +188,91 @@ func FuzzMLDSA65Verify(f *testing.F) {
 	f.Fuzz(func(t *testing.T, input []byte) {
 		in := bytes.Clone(input)
 		out, err := mldsa65Verify.Run(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(out) != 32 || (!bytes.Equal(out, true32Byte) && !bytes.Equal(out, common.Hash{}.Bytes())) {
+			t.Fatalf("bad output %x", out)
+		}
+		if !bytes.Equal(in, input) {
+			t.Fatal("input modified")
+		}
+	})
+}
+
+// TestSLHDSAVerifyMutations signs with a fresh key and checks that changes to
+// the key, signature, message or context are rejected.
+func TestSLHDSAVerifyMutations(t *testing.T) {
+	c := &slhdsaVerify{}
+	pub, priv, err := slhdsa.GenerateKey(rand.Reader, slhdsa.SHA2_128s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pk, err := pub.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sign := func(msg, ctx []byte) []byte {
+		sig, err := slhdsa.SignRandomized(&priv, rand.Reader, slhdsa.NewMessage(msg), ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sig
+	}
+	for _, msg := range [][]byte{nil, []byte("Hello world")} {
+		sig := sign(msg, nil)
+		if !runPQ(t, c, concat(pk, sig, msg)) {
+			t.Fatalf("valid signature rejected (msg len %d)", len(msg))
+		}
+		for _, i := range []int{0, 16, len(pk) - 1} {
+			bad := bytes.Clone(pk)
+			bad[i] ^= 1
+			if runPQ(t, c, concat(bad, sig, msg)) {
+				t.Errorf("public key byte %d flipped: accepted", i)
+			}
+		}
+		for _, i := range []int{0, 16, len(sig) / 2, len(sig) - 1} {
+			bad := bytes.Clone(sig)
+			bad[i] ^= 1
+			if runPQ(t, c, concat(pk, bad, msg)) {
+				t.Errorf("signature byte %d flipped: accepted", i)
+			}
+		}
+		if runPQ(t, c, concat(pk, sig, msg, []byte{0})) {
+			t.Error("extra trailing byte: accepted")
+		}
+	}
+	msg := []byte("Hello world")
+	if runPQ(t, c, concat(pk, sign(msg, []byte("polygon")), msg)) {
+		t.Error("signature with non-empty context accepted")
+	}
+	for _, in := range [][]byte{nil, pk, concat(pk, make([]byte, slhdsaSha2128sSigLen-1))} {
+		if runPQ(t, c, in) {
+			t.Errorf("short input (%d bytes) accepted", len(in))
+		}
+		if gas := c.RequiredGas(in); gas != params.SLHDSASha2128sVerifyBaseGas {
+			t.Errorf("short input gas %d, want %d", gas, params.SLHDSASha2128sVerifyBaseGas)
+		}
+	}
+	head := slhdsaSha2128sPkLen + slhdsaSha2128sSigLen
+	if got, want := c.RequiredGas(make([]byte, head+33)), params.SLHDSASha2128sVerifyBaseGas+2*params.SLHDSAVerifyPerWordGas; got != want {
+		t.Errorf("33-byte message gas %d, want %d", got, want)
+	}
+}
+
+// FuzzSLHDSASha2128sVerify checks that arbitrary input never errors, never
+// panics, never changes the input and always returns a 32-byte 0 or 1.
+func FuzzSLHDSASha2128sVerify(f *testing.F) {
+	tests, err := loadJson("slhdsaSha2128s")
+	if err != nil {
+		f.Fatal(err)
+	}
+	for _, test := range tests {
+		f.Add(common.Hex2Bytes(test.Input))
+	}
+	f.Fuzz(func(t *testing.T, input []byte) {
+		in := bytes.Clone(input)
+		out, err := (&slhdsaVerify{}).Run(in)
 		if err != nil {
 			t.Fatal(err)
 		}

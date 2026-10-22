@@ -196,6 +196,11 @@ const (
 	MLDSA87VerifyBaseGas  uint64 = 13500
 	MLDSAVerifyPerWordGas uint64 = 6 // per 32-byte word of message
 
+	// SLH-DSA-SHA2-128s (FIPS 205) verification. No EIP exists; prototype pricing
+	// from a benchmark at the ecrecover gas rate, plus the SHA256 per-word price.
+	SLHDSASha2128sVerifyBaseGas uint64 = 24000
+	SLHDSAVerifyPerWordGas      uint64 = 12
+
 	// PIP-88: precompile gas repricing activated by the Chicago hard fork.
 
 	GFROUNDPIP88 uint64 = 22 // PIP-88 GFROUND for blake2F operation
