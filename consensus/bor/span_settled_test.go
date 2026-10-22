@@ -134,6 +134,39 @@ func TestSettledSpanByBlockNumber(t *testing.T) {
 	}
 }
 
+// A rotation Heimdall commits right after the poll loop's refresh leaves the
+// cache fresh but outdated: the newer span's producer reads as settled-
+// unauthorized. A refresh before acting on that verdict reverses it.
+func TestRefreshAuthorizationAfterRotation(t *testing.T) {
+	t.Parallel()
+
+	newSigner := common.HexToAddress("0x0000000000000000000000000000000000000002")
+
+	spans := rotatedSpans()
+	client := newDynamicHeimdallClient()
+	client.setSpans(map[uint64]*borTypes.Span{0: spans[0], 1: spans[1]}, spans[1])
+
+	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}, RioBlock: big.NewInt(0)}
+	chain, b := newChainAndBorForTest(t, &fakeSpanner{}, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
+	b.spanStore = newSettledTestStore(t, client, time.Millisecond)
+
+	client.setSpans(spans, spans[2])
+
+	verdict := func() error {
+		snap, err := b.getVeBlopSnapshot(chain.HeaderChain(), &types.Header{Number: big.NewInt(400)}, nil, false)
+		require.NoError(t, err)
+
+		_, err = snap.GetSignerSuccessionNumber(newSigner)
+
+		return err
+	}
+
+	require.ErrorIs(t, verdict(), consensus.ErrUnauthorizedSigner)
+
+	require.NoError(t, b.RefreshAuthorization())
+	require.NoError(t, verdict())
+}
+
 func TestVeBlopSnapshotCarriesSpanSettledness(t *testing.T) {
 	t.Parallel()
 

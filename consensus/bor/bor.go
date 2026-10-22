@@ -2201,6 +2201,20 @@ func (c *Bor) SetHeimdallClient(h IHeimdallClient) {
 	c.spanStore.setHeimdallClient(h)
 }
 
+// authorizationRefreshTimeout bounds the latest-span fetch behind
+// RefreshAuthorization.
+const authorizationRefreshTimeout = 5 * time.Second
+
+// RefreshAuthorization fetches the latest span now, so the next verification
+// judges signers against what Heimdall holds rather than the poll loop's last
+// view, which can predate a span committed since.
+func (c *Bor) RefreshAuthorization() error {
+	ctx, cancel := context.WithTimeout(c.ctx, authorizationRefreshTimeout)
+	defer cancel()
+
+	return c.spanStore.updateLatestSpan(ctx)
+}
+
 // PurgeCache clears all cached snapshots and span data. This is useful in tests
 // when the mock heimdall client is changed and old cached data needs to be invalidated.
 func (c *Bor) PurgeCache() {

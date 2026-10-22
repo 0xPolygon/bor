@@ -5408,6 +5408,116 @@ func TestVerifyStalledTail(t *testing.T) {
 	}
 }
 
+// rotatingEngine is a mockFailingEngine with an authorization refresh: the
+// refresh can fail, or reveal a span rotation that authorizes every header.
+type rotatingEngine struct {
+	*mockFailingEngine
+	refreshErr error
+	rotation   bool
+	rotated    atomic.Bool
+	refreshes  atomic.Int64
+}
+
+func (e *rotatingEngine) RefreshAuthorization() error {
+	e.refreshes.Add(1)
+
+	if e.refreshErr != nil {
+		return e.refreshErr
+	}
+
+	e.rotated.Store(e.rotation)
+
+	return nil
+}
+
+func (e *rotatingEngine) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*types.Header) (chan<- struct{}, <-chan error) {
+	if !e.rotated.Load() {
+		return e.mockFailingEngine.VerifyHeaders(chain, headers)
+	}
+
+	results := make(chan error, len(headers))
+	for range headers {
+		results <- nil
+	}
+	close(results)
+
+	return make(chan struct{}), results
+}
+
+// An unauthorized verdict can rest on a cached span that a rotation committed
+// right after the last refresh has overtaken. The rewind waits for the verdict
+// to survive a fresh span fetch.
+func TestVerifyStalledTailConfirmsWithFreshSpan(t *testing.T) {
+	cases := []struct {
+		name        string
+		refreshErr  error
+		rotation    bool
+		wantHead    uint64
+		wantRewinds int64
+	}{
+		{name: "verdict confirmed", wantHead: 7, wantRewinds: 1},
+		{name: "refresh reveals a rotation", rotation: true, wantHead: 10},
+		{name: "refresh fails", refreshErr: errors.New("heimdall unreachable"), wantHead: 10},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			engine := &rotatingEngine{
+				mockFailingEngine: &mockFailingEngine{
+					Ethash:                ethash.NewFaker(),
+					shouldFailHeader:      map[uint64]bool{8: true, 9: true, 10: true},
+					failErr:               fmt.Errorf("verify: %w", consensus.ErrUnauthorizedSigner),
+					allowInitialInsertion: true,
+				},
+				refreshErr: tc.refreshErr,
+				rotation:   tc.rotation,
+			}
+
+			config := *params.TestChainConfig
+			config.Bor = &params.BorConfig{RioBlock: big.NewInt(0)}
+			genesis := &Genesis{Config: &config, BaseFee: big.NewInt(params.InitialBaseFee)}
+
+			_, blocks, _ := GenerateChainWithGenesis(genesis, engine.Ethash, 10, nil)
+
+			cfg := DefaultConfig()
+			cfg.MilestoneFetcher = func(ctx context.Context) (uint64, error) {
+				return 100, nil
+			}
+			cfg.Checker = &whitelistedValidatorFake{
+				chainValidatorFake: newChainValidatorFake(func(*types.Header, []*types.Header) (bool, error) { return true, nil }),
+			}
+
+			chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), genesis, engine, cfg)
+			if err != nil {
+				t.Fatalf("failed to create blockchain: %v", err)
+			}
+			defer chain.Stop()
+
+			if _, err := chain.InsertChain(blocks, false); err != nil {
+				t.Fatalf("failed to insert chain: %v", err)
+			}
+
+			engine.markInsertionComplete()
+
+			rewinds := blockReorgMeter.Snapshot().Count()
+
+			chain.verifyPendingHeaders()
+
+			if head := chain.CurrentBlock().Number.Uint64(); head != tc.wantHead {
+				t.Fatalf("head %d, want %d", head, tc.wantHead)
+			}
+
+			if got := engine.refreshes.Load(); got != 1 {
+				t.Errorf("authorization refreshes %d, want 1", got)
+			}
+
+			if got := blockReorgMeter.Snapshot().Count() - rewinds; got != tc.wantRewinds {
+				t.Errorf("reorgs marked %d, want %d", got, tc.wantRewinds)
+			}
+		})
+	}
+}
+
 // unauthorizedForkEngine fails verification, as an unauthorized signer, for
 // the headers of one fork once armed — standing in for a span that has
 // rotated production away from the producer that sealed them.

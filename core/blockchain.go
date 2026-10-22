@@ -6581,8 +6581,8 @@ var stalledTailMax uint64 = 256
 // side-chain import refuses), and milestone handling defers because the node
 // looks out of sync, so nothing else ever moves it.
 //
-// Only a signer the current span does not authorize for its height proves the
-// tail invalid. Any other failure — Heimdall unreachable, a span not known yet —
+// Only a signer the current span does not authorize for its height, a verdict
+// that survives a fresh span fetch, proves the tail invalid. Any other failure — Heimdall unreachable, a span not known yet —
 // leaves the chain alone, since a node that is merely syncing passes through
 // here on every tick. The check never looks at or below the whitelisted
 // milestone, so the rewind cannot cross finality.
@@ -6593,7 +6593,7 @@ func (bc *BlockChain) verifyStalledTail(headNumber uint64) {
 	}
 
 	header, err := bc.firstUnauthorizedHeader(headers)
-	if header == nil {
+	if header == nil || !bc.confirmUnauthorized(header) {
 		return
 	}
 
@@ -6601,6 +6601,27 @@ func (bc *BlockChain) verifyStalledTail(headNumber uint64) {
 		"from", headNumber, "to", header.Number.Uint64()-1, "number", header.Number.Uint64(), "hash", header.Hash(), "err", err)
 
 	bc.rewindOff(header)
+}
+
+// confirmUnauthorized rejudges a rejected header once the engine has refetched
+// what signer authorization rests on. The first verdict can come from a cached
+// span that a rotation committed right after its last refresh has overtaken,
+// and rewinding on it would drop blocks the new span authorizes.
+func (bc *BlockChain) confirmUnauthorized(header *types.Header) bool {
+	refresher, ok := bc.engine.(interface{ RefreshAuthorization() error })
+	if !ok {
+		return true
+	}
+
+	if err := refresher.RefreshAuthorization(); err != nil {
+		log.Debug("Stalled tail check inconclusive", "number", header.Number.Uint64(), "err", err)
+
+		return false
+	}
+
+	rejected, _ := bc.firstUnauthorizedHeader([]*types.Header{header})
+
+	return rejected != nil
 }
 
 // rewindOff rewinds to the parent of a header verification rejected, if it
