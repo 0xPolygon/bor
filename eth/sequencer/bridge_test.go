@@ -744,14 +744,18 @@ func TestRecoveryReadsShareOneBudget(t *testing.T) {
 // fallback instead.
 func TestBarrierPassesRecoveryBuild(t *testing.T) {
 	cases := []struct {
-		name     string
-		block    []int
-		wantMode int
+		name      string
+		block     []int
+		writeDown bool
+		wantMode  int
+		fallback  bool
 	}{
 		{name: "exact", block: []int{0, 1}, wantMode: modeRecover},
-		{name: "a transaction dropped", block: []int{0}, wantMode: modeOverSealed},
-		{name: "filled from the pool", block: []int{0, 1, 2}, wantMode: modeOverSealed},
-		{name: "reordered", block: []int{1, 0}, wantMode: modeOverSealed},
+		{name: "a transaction dropped", block: []int{0}, wantMode: modeOverSealed, fallback: true},
+		{name: "filled from the pool", block: []int{0, 1, 2}, wantMode: modeOverSealed, fallback: true},
+		{name: "reordered", block: []int{1, 0}, wantMode: modeOverSealed, fallback: true},
+		{name: "exact during a write outage", block: []int{0, 1}, writeDown: true, wantMode: modeRecover},
+		{name: "inexact during a write outage", block: []int{0}, writeDown: true, wantMode: modeRecover, fallback: true},
 	}
 
 	for _, tc := range cases {
@@ -780,6 +784,8 @@ func TestBarrierPassesRecoveryBuild(t *testing.T) {
 				block = append(block, txs[i])
 			}
 
+			p.writeDown.Store(tc.writeDown)
+
 			if !p.AwaitSequenced(time.Second, 2, block) {
 				t.Fatal("a recovery build must pass the seal barrier")
 			}
@@ -798,8 +804,8 @@ func TestBarrierPassesRecoveryBuild(t *testing.T) {
 			g := p.gate
 			p.mu.Unlock()
 
-			if fallback := tc.wantMode == modeOverSealed; g.published != fallback || g.tolerateSealed != fallback {
-				t.Fatalf("gate published=%v tolerateSealed=%v, want both %v", g.published, g.tolerateSealed, fallback)
+			if g.published != tc.fallback || g.tolerateSealed != tc.fallback {
+				t.Fatalf("gate published=%v tolerateSealed=%v, want both %v", g.published, g.tolerateSealed, tc.fallback)
 			}
 		})
 	}

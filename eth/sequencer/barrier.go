@@ -134,10 +134,14 @@ func (p *Publisher) AwaitSequenced(timeout time.Duration, number uint64, txs []*
 // becomes the over-sealed fallback, whose seal flush and gate account for
 // that block instead of the recovery's silent broadcast.
 func (p *Publisher) recoveredExactly(number uint64, txs []*types.Transaction) bool {
-	got := txHashes(streamTxs(txs))
-
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	return p.recoveredExactlyLocked(number, txs)
+}
+
+func (p *Publisher) recoveredExactlyLocked(number uint64, txs []*types.Transaction) bool {
+	got := txHashes(streamTxs(txs))
 
 	if !p.mode.recoveringAt(number) {
 		return false

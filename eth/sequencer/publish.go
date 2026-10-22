@@ -114,11 +114,17 @@ func (p *Publisher) SealBlock(block *types.Block) {
 
 	p.adopt = nil
 
+	n := header.Number.Uint64()
+
+	// The barrier's exactness check is skipped while the write path is down,
+	// so a recovery is held to it here too: an inexact one must leave as the
+	// over-sealed fallback, its flush queued and its gate armed.
+	p.recoveredExactlyLocked(n, block.Transactions())
+
 	mode := p.mode
 	p.mode = buildMode{}
 	p.diverged = divergence{}
 
-	n := header.Number.Uint64()
 	prevTip := p.sealedTip
 
 	if n > p.sealedTip {
