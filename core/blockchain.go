@@ -278,6 +278,7 @@ var (
 
 	errInsertionInterrupted = errors.New("insertion is interrupted")
 	errChainStopped         = errors.New("blockchain is stopped")
+	errRewindRefused        = errors.New("rewind refused by its guard")
 	errInvalidOldChain      = errors.New("invalid old chain")
 	errInvalidNewChain      = errors.New("invalid new chain")
 	// errWitnessTimeout           = errors.New("timeout waiting for witness computation")     // New error
@@ -1795,6 +1796,31 @@ func (bc *BlockChain) SetHead(head uint64) error {
 	if _, err := bc.setHeadBeyondRoot(head, 0, common.Hash{}, false); err != nil {
 		return err
 	}
+
+	return bc.announceHead()
+}
+
+// rewindIf rewinds the chain to head only if guard still holds once the chain
+// mutex is taken, and keeps the mutex until the rewind is done. A decision
+// made from an earlier read — a verification pass, a finality lookup — can be
+// stale by the time it is acted on: an import may have replaced the judged
+// chain meanwhile, and rewinding then drops blocks nobody judged. It reports
+// false when the guard refused.
+func (bc *BlockChain) rewindIf(head uint64, guard func() bool) (bool, error) {
+	_, err := bc.setHeadBeyondRoot(head, 0, common.Hash{}, false, guard)
+	if errors.Is(err, errRewindRefused) {
+		return false, nil
+	}
+
+	if err != nil {
+		return false, err
+	}
+
+	return true, bc.announceHead()
+}
+
+// announceHead checks the head block after a rewind and announces it.
+func (bc *BlockChain) announceHead() error {
 	// Send chain head event to update the transaction pool
 	header := bc.CurrentBlock()
 	if block := bc.GetBlock(header.Hash(), header.Number.Uint64()); block == nil {
@@ -2040,11 +2066,19 @@ func (bc *BlockChain) rewindHead(head *types.Header, root common.Hash) (*types.H
 //
 // The method returns the block number where the requested root cap was found.
 // nolint:gocognit
-func (bc *BlockChain) setHeadBeyondRoot(head uint64, time uint64, root common.Hash, repair bool) (uint64, error) {
+func (bc *BlockChain) setHeadBeyondRoot(head uint64, time uint64, root common.Hash, repair bool, guards ...func() bool) (uint64, error) {
 	if !bc.chainmu.TryLock() {
 		return 0, errChainStopped
 	}
 	defer bc.chainmu.Unlock()
+
+	// Each guard rechecks, under the mutex, a decision its caller reached
+	// without it; see rewindIf.
+	for _, guard := range guards {
+		if !guard() {
+			return 0, errRewindRefused
+		}
+	}
 
 	var (
 		// Track the block number of the requested root hash
@@ -6482,7 +6516,8 @@ func (bc *BlockChain) verifyPendingHeaders() {
 
 	headNumber := currentHead.Number.Uint64()
 	if milestoneEndBlock >= headNumber {
-		return // Still syncing or synced to the milestone end block, nothing to verify.
+		bc.verifyStalledTail(headNumber)
+		return
 	}
 
 	startBlock := milestoneEndBlock + 1
@@ -6520,24 +6555,254 @@ func (bc *BlockChain) verifyPendingHeaders() {
 				log.Warn("Invalid header detected during background verification",
 					"number", header.Number.Uint64(), "hash", header.Hash(), "err", err)
 
-				if lastValidNumber < headNumber {
-					dropCount := int64(headNumber - lastValidNumber)
+				log.Warn("Rewinding chain due to an invalid header",
+					"from", headNumber, "to", lastValidNumber, "drop", int64(headNumber-lastValidNumber))
 
-					log.Warn("Rewinding chain due to an invalid header",
-						"from", headNumber, "to", lastValidNumber, "drop", dropCount)
+				bc.rewindOff(header)
 
-					if err := bc.SetHead(lastValidNumber); err != nil {
-						log.Error("Failed to rewind chain to the last valid header", "err", err)
-					} else {
-						blockReorgMeter.Mark(1)
-						blockReorgDropMeter.Mark(dropCount)
-					}
-				}
 				return
 			}
 			lastValidNumber = header.Number.Uint64()
 		}
 	}
+}
+
+// stalledTailMax bounds how many trailing headers verifyStalledTail checks per
+// tick. A longer invalid run is still shed: each tick rewinds below the first
+// unauthorized header it sees, and the next tick looks further back. Var for
+// tests.
+var stalledTailMax uint64 = 256
+
+// verifyStalledTail checks the chain's own trailing headers when the latest
+// milestone is already at or past the head — the case the pending-header
+// check otherwise reads as "still syncing". A rotated-out producer lands here
+// too: its own fork keeps it from importing the canonical chain (on a pruned
+// node an exact rebuild of its block shares the block's state root, which the
+// side-chain import refuses), and milestone handling defers because the node
+// looks out of sync, so nothing else ever moves it.
+//
+// Only a signer the current span does not authorize for its height, a verdict
+// that survives a fresh span fetch, proves the tail invalid. Any other failure — Heimdall unreachable, a span not known yet —
+// leaves the chain alone, since a node that is merely syncing passes through
+// here on every tick. The check never looks at or below the whitelisted
+// milestone, so the rewind cannot cross finality.
+func (bc *BlockChain) verifyStalledTail(headNumber uint64) {
+	headers := bc.stalledTailHeaders(headNumber)
+	if len(headers) == 0 {
+		return
+	}
+
+	header, err := bc.firstUnauthorizedHeader(headers)
+	if header == nil || !bc.confirmUnauthorized(header) {
+		return
+	}
+
+	log.Warn("Rewinding a stalled chain off blocks its span does not authorize",
+		"from", headNumber, "to", header.Number.Uint64()-1, "number", header.Number.Uint64(), "hash", header.Hash(), "err", err)
+
+	bc.rewindOff(header)
+}
+
+// confirmUnauthorized rejudges a rejected header once the engine has refetched
+// what signer authorization rests on. The first verdict can come from a cached
+// span that a rotation committed right after its last refresh has overtaken,
+// and rewinding on it would drop blocks the new span authorizes.
+func (bc *BlockChain) confirmUnauthorized(header *types.Header) bool {
+	refresher, ok := bc.engine.(interface{ RefreshAuthorization() error })
+	if !ok {
+		return true
+	}
+
+	if err := refresher.RefreshAuthorization(); err != nil {
+		log.Debug("Stalled tail check inconclusive", "number", header.Number.Uint64(), "err", err)
+
+		return false
+	}
+
+	rejected, _ := bc.firstUnauthorizedHeader([]*types.Header{header})
+
+	return rejected != nil
+}
+
+// rewindOff rewinds to the parent of a header verification rejected, if it
+// still stands once the chain mutex is held: the rejected header still
+// canonical, and the rewind still landing at or above the finality floor.
+// Either can change between the verification pass and the rewind — a valid
+// chain imported meanwhile, a milestone whitelisted — and acting on the stale
+// verdict would drop blocks it never judged, finalized ones included.
+//
+// Milestone whitelisting does not take the chain mutex, so a milestone can
+// still be whitelisted while the rewind runs. It cannot land above the target:
+// whitelisting needs its end block on our canonical chain, every block there
+// above the target descends from the rejected header, and Heimdall only
+// finalizes blocks its spans authorize.
+func (bc *BlockChain) rewindOff(rejected *types.Header) {
+	number, hash := rejected.Number.Uint64(), rejected.Hash()
+	target := number - 1
+
+	var (
+		dropped    uint64
+		belowFloor bool
+	)
+
+	done, err := bc.rewindIf(target, func() bool {
+		floor := bc.finalityFloor()
+		if bc.GetCanonicalHash(number) != hash || target < floor {
+			return false
+		}
+
+		if !bc.rewindLandsAtOrAbove(floor, target) {
+			belowFloor = true
+			return false
+		}
+
+		dropped = bc.CurrentBlock().Number.Uint64() - target
+
+		return true
+	})
+
+	switch {
+	case err != nil:
+		log.Error("Failed to rewind off an invalid header", "number", number, "err", err)
+	case belowFloor:
+		log.Error("Refused a rewind: it would land below the finality floor", "number", number, "hash", hash, "target", target)
+	case !done:
+		log.Info("Skipped a stale rewind: the chain changed since verification", "number", number, "hash", hash)
+	default:
+		blockReorgMeter.Mark(1)
+		blockReorgDropMeter.Mark(int64(dropped))
+	}
+}
+
+// rewindLandsAtOrAbove reports whether a rewind to target lands at or above
+// floor. rewindHead walks back past blocks without state and resets to genesis
+// past its search limit, so a target above the floor does not by itself keep
+// the new head there. This replays its search without its side effects: the
+// limit first on hash scheme, the pivot only after a block without state on
+// path scheme. Every way the search gives up lands on genesis.
+func (bc *BlockChain) rewindLandsAtOrAbove(floor, target uint64) bool {
+	if bc.cfg.Stateless {
+		return true
+	}
+
+	var (
+		path  = bc.triedb.Scheme() == rawdb.PathScheme
+		pivot = rawdb.ReadLastPivotNumber(bc.db)
+		limit = hashRewindLimit(path, pivot, target)
+	)
+
+	for n := target; ; n-- {
+		if n < limit {
+			return floor == 0
+		}
+
+		if bc.rewindableStateAt(n, path) {
+			return true
+		}
+
+		if n <= floor || (path && pivot != nil && *pivot >= n) {
+			return floor == 0
+		}
+	}
+}
+
+// hashRewindLimit is the lowest block rewindHashHead searches before it
+// resets to genesis. Path scheme has none.
+func hashRewindLimit(path bool, pivot *uint64, target uint64) uint64 {
+	switch {
+	case path:
+		return 0
+	case pivot != nil:
+		return *pivot
+	case target > params.FullImmutabilityThreshold:
+		return target - params.FullImmutabilityThreshold
+	default:
+		return 0
+	}
+}
+
+// rewindableStateAt reports whether rewindHead would stop at canonical block n.
+func (bc *BlockChain) rewindableStateAt(n uint64, path bool) bool {
+	header := bc.GetHeaderByNumber(n)
+	if header == nil {
+		return false
+	}
+
+	return bc.HasState(header.Root) || (path && bc.stateRecoverable(header.Root))
+}
+
+// stalledTailHeaders returns the trailing headers above the finality floor,
+// at most stalledTailMax of them, or nil when one is missing.
+func (bc *BlockChain) stalledTailHeaders(headNumber uint64) []*types.Header {
+	floor := bc.finalityFloor()
+	if headNumber <= floor {
+		return nil
+	}
+
+	start := floor + 1
+	if headNumber-floor > stalledTailMax {
+		start = headNumber - stalledTailMax + 1
+	}
+
+	var headers []*types.Header
+	for i := start; i <= headNumber; i++ {
+		header := bc.GetHeaderByNumber(i)
+		if header == nil {
+			return nil
+		}
+		headers = append(headers, header)
+	}
+
+	return headers
+}
+
+// firstUnauthorizedHeader verifies headers in order and returns the first one
+// sealed by an unauthorized signer, with its error. A verification failure of
+// any other kind ends the scan with nothing found: it proves nothing about the
+// header, and the headers after it cannot be judged without it.
+func (bc *BlockChain) firstUnauthorizedHeader(headers []*types.Header) (*types.Header, error) {
+	abort, results := bc.engine.VerifyHeaders(bc, headers)
+	defer close(abort)
+
+	for _, header := range headers {
+		var err error
+		select {
+		case <-bc.quit:
+			return nil, nil
+		case err = <-results:
+		}
+
+		switch {
+		case err == nil:
+			continue
+		case errors.Is(err, consensus.ErrUnauthorizedSigner):
+			return header, err
+		default:
+			log.Debug("Stalled tail check inconclusive", "number", header.Number.Uint64(), "err", err)
+
+			return nil, nil
+		}
+	}
+
+	return nil, nil
+}
+
+// finalityFloor is the highest block the stalled-tail check must not touch:
+// the whitelisted milestone, or the finalized block when one is set.
+func (bc *BlockChain) finalityFloor() uint64 {
+	var floor uint64
+
+	if final := bc.CurrentFinalBlock(); final != nil {
+		floor = final.Number.Uint64()
+	}
+
+	if bc.forker != nil && bc.forker.validator != nil {
+		if exists, number, _ := bc.forker.validator.GetWhitelistedMilestone(); exists {
+			floor = max(floor, number)
+		}
+	}
+
+	return floor
 }
 
 // StateSizer returns the state size tracker, or nil if it's not initialized
