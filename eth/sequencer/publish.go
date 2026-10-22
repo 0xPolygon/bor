@@ -141,6 +141,14 @@ func (p *Publisher) SealBlock(block *types.Block) {
 		return
 	}
 
+	p.publishSealLocked(block, raw, prevTip, mode.kind == modeOverSealed && mode.height == n)
+}
+
+// publishSealLocked appends the seal flush for a block whose content the
+// store must come to match, and arms the broadcast gate on it.
+func (p *Publisher) publishSealLocked(block *types.Block, raw []byte, prevTip uint64, overSealed bool) {
+	n := block.NumberU64()
+
 	if !p.windowMirrorsLocked(block) {
 		// The journal's window does not describe the sealed block (a adopt
 		// that raced a straggler seal, a purge, a divergent rebuild):
@@ -159,7 +167,7 @@ func (p *Publisher) SealBlock(block *types.Block) {
 	p.gate = sealGate{
 		height: n, hash: block.Hash(), published: true, prevTip: prevTip,
 		txs:            txHashes(block.Transactions()),
-		tolerateSealed: mode.kind == modeOverSealed && mode.height == n,
+		tolerateSealed: overSealed,
 	}
 
 	p.curHeight = 0
