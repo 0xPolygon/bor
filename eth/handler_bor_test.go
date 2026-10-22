@@ -209,3 +209,98 @@ func createMockMilestones(count int) []*milestone.Milestone {
 
 	return milestones
 }
+
+func TestSetMilestoneFinalized(t *testing.T) {
+	gspec := &core.Genesis{Config: params.TestChainConfig}
+	_, blocks, _ := core.GenerateChainWithGenesis(gspec, ethash.NewFaker(), 10, nil)
+
+	chain, err := core.NewBlockChain(rawdb.NewMemoryDatabase(), gspec, ethash.NewFaker(), nil)
+	require.NoError(t, err)
+	defer chain.Stop()
+
+	_, err = chain.InsertChain(blocks, false)
+	require.NoError(t, err)
+
+	requireFinalized := func(t *testing.T, expected uint64) {
+		t.Helper()
+
+		current := chain.CurrentFinalBlock()
+		require.NotNil(t, current)
+		require.Equal(t, expected, current.Number.Uint64())
+		require.Equal(t, blocks[expected-1].Hash(), rawdb.ReadFinalizedBlockHash(chain.DB()))
+	}
+
+	t.Run("unknown block is ignored", func(t *testing.T) {
+		require.False(t, setMilestoneFinalized(chain, 11, common.HexToHash("0x01")))
+		require.Nil(t, chain.CurrentFinalBlock())
+	})
+
+	t.Run("non canonical hash is ignored", func(t *testing.T) {
+		require.False(t, setMilestoneFinalized(chain, 5, blocks[3].Hash()))
+		require.Nil(t, chain.CurrentFinalBlock())
+	})
+
+	t.Run("canonical block is finalized", func(t *testing.T) {
+		require.True(t, setMilestoneFinalized(chain, 5, blocks[4].Hash()))
+		requireFinalized(t, 5)
+	})
+
+	t.Run("older milestone does not move finality backward", func(t *testing.T) {
+		require.False(t, setMilestoneFinalized(chain, 3, blocks[2].Hash()))
+		requireFinalized(t, 5)
+	})
+
+	t.Run("same milestone is a no-op", func(t *testing.T) {
+		require.False(t, setMilestoneFinalized(chain, 5, blocks[4].Hash()))
+		requireFinalized(t, 5)
+	})
+
+	t.Run("newer milestone advances finality", func(t *testing.T) {
+		require.True(t, setMilestoneFinalized(chain, 8, blocks[7].Hash()))
+		requireFinalized(t, 8)
+	})
+
+	t.Run("safe block is never set", func(t *testing.T) {
+		require.Nil(t, chain.CurrentSafeBlock())
+	})
+}
+
+func TestHandleMilestoneSetsFinalized(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	gspec := &core.Genesis{Config: params.TestChainConfig}
+	_, blocks, _ := core.GenerateChainWithGenesis(gspec, ethash.NewFaker(), 10, nil)
+
+	chain, err := core.NewBlockChain(db, gspec, ethash.NewFaker(), core.DefaultConfig())
+	require.NoError(t, err)
+	defer chain.Stop()
+
+	_, err = chain.InsertChain(blocks, false)
+	require.NoError(t, err)
+
+	mux := new(event.TypeMux)
+	handler := &ethHandler{
+		chain:      chain,
+		downloader: downloader.New(db, mux, chain, nil, func(string) {}, func() {}, whitelist.NewService(db, false, 0), 0, false),
+	}
+
+	var verifyErr error
+	verifier := newBorVerifier()
+	verifier.setVerify(func(context.Context, *Ethereum, *ethHandler, uint64, uint64, string, bool) (string, error) {
+		return "", verifyErr
+	})
+
+	eth := &Ethereum{blockchain: chain}
+	milestoneAt := func(end uint64) *milestone.Milestone {
+		return &milestone.Milestone{StartBlock: end - 2, EndBlock: end, Hash: blocks[end-1].Hash()}
+	}
+
+	verifyErr = errHashMismatch
+	require.ErrorIs(t, handler.handleMilestone(t.Context(), eth, milestoneAt(4), verifier), errHashMismatch)
+	require.Nil(t, chain.CurrentFinalBlock())
+
+	verifyErr = nil
+	require.NoError(t, handler.handleMilestone(t.Context(), eth, milestoneAt(6), verifier))
+	require.NotNil(t, chain.CurrentFinalBlock())
+	require.Equal(t, blocks[5].Hash(), chain.CurrentFinalBlock().Hash())
+	require.Nil(t, chain.CurrentSafeBlock())
+}

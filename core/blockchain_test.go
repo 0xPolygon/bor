@@ -8408,3 +8408,54 @@ func testPipelinedImportSRC_WarmSnapshotStorageTrieParity(t *testing.T, scheme s
 		}
 	})
 }
+
+// TestLoadLastStateSafeBlock checks that the safe block is seeded from the
+// persisted finalized block on startup, except on Bor where no safe block is
+// tracked and seeding it would leave it frozen at the restart-time block.
+func TestLoadLastStateSafeBlock(t *testing.T) {
+	// params.TestChainConfig is itself a Bor config in this repository.
+	ethConfig := *params.TestChainConfig
+	ethConfig.Bor = nil
+
+	for _, tt := range []struct {
+		name       string
+		config     *params.ChainConfig
+		expectSafe bool
+	}{
+		{"ethereum", &ethConfig, true},
+		{"bor", params.TestChainConfig, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			gspec := &Genesis{Config: tt.config, BaseFee: big.NewInt(params.InitialBaseFee)}
+			_, blocks, _ := GenerateChainWithGenesis(gspec, ethash.NewFaker(), 4, nil)
+
+			db := rawdb.NewMemoryDatabase()
+			chain, err := NewBlockChain(db, gspec, ethash.NewFaker(), nil)
+			require.NoError(t, err)
+
+			_, err = chain.InsertChain(blocks, false)
+			require.NoError(t, err)
+
+			finalized := blocks[2].Header()
+			chain.SetFinalized(finalized)
+			chain.Stop()
+			headSafeBlockGauge.Update(0)
+
+			chain, err = NewBlockChain(db, gspec, ethash.NewFaker(), nil)
+			require.NoError(t, err)
+			defer chain.Stop()
+
+			require.NotNil(t, chain.CurrentFinalBlock())
+			require.Equal(t, finalized.Hash(), chain.CurrentFinalBlock().Hash())
+
+			if tt.expectSafe {
+				require.NotNil(t, chain.CurrentSafeBlock())
+				require.Equal(t, finalized.Hash(), chain.CurrentSafeBlock().Hash())
+				require.Equal(t, int64(3), headSafeBlockGauge.Snapshot().Value())
+			} else {
+				require.Nil(t, chain.CurrentSafeBlock())
+				require.Equal(t, int64(0), headSafeBlockGauge.Snapshot().Value())
+			}
+		})
+	}
+}
