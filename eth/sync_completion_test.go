@@ -57,6 +57,13 @@ func TestEnableSyncedFeaturesAnnouncesExpiredPending(t *testing.T) {
 			if h.rebroadcastStuckTransactions(event.Txs, pool.RebroadcastAcknowledgement(event.Txs)) {
 				t.Fatal("initial sync must suppress periodic rebroadcast")
 			}
+			// Model an actual queue offer before its retry window expires during sync.
+			h.txAnnouncementOnly = true
+			h.peers.ForgetTransactions([]common.Hash{tx.Hash()})
+			if !h.broadcastTransactions(event.Txs, pool.RebroadcastAcknowledgement(event.Txs), pool.RebroadcastAttempt(event.Txs)) {
+				t.Fatal("fixture must offer the transaction to a peer queue")
+			}
+			expectSyncCompletionAnnouncement(t, sink, tx)
 		default:
 			t.Fatal("missing first rebroadcast attempt")
 		}
