@@ -189,6 +189,13 @@ const (
 	P256VerifyGas        uint64 = 3450
 	P256VerifyGasEIP7951 uint64 = 6900
 
+	// EIP-8355 (draft): ML-DSA signature verification. The EIP marks these
+	// values as placeholders that still need benchmarking.
+	MLDSA44VerifyBaseGas  uint64 = 6500
+	MLDSA65VerifyBaseGas  uint64 = 9000
+	MLDSA87VerifyBaseGas  uint64 = 13500
+	MLDSAVerifyPerWordGas uint64 = 6 // per 32-byte word of message
+
 	// PIP-88: precompile gas repricing activated by the Chicago hard fork.
 
 	GFROUNDPIP88 uint64 = 22 // PIP-88 GFROUND for blake2F operation
