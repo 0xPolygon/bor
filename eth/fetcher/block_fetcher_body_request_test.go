@@ -184,7 +184,7 @@ func TestFetchSlotBodyResponseReleasesMissing(t *testing.T) {
 				if f.queued[hashes[0]] == nil || f.completing[hashes[0]] != owned[0] {
 					t.Error("partial response lost its delivered body before import")
 				}
-			} else if len(f.completing) != 0 || len(f.queued) != 0 {
+			} else if len(f.completing) != 0 || len(f.queued) != 0 || len(f.fetched) != 0 {
 				t.Error("empty response retained body ownership or queued a block")
 			}
 		})

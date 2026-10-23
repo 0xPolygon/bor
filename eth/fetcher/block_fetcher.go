@@ -676,7 +676,9 @@ func (f *BlockFetcher) loop() {
 			f.forgetHash(hash)  // This calls wm.forget
 			f.forgetBlock(hash) // This calls wm.forget
 		case release := <-f.fetchRelease:
-			f.releaseFetchOwnership(release)
+			if f.releaseFetchOwnership(release) {
+				f.rescheduleComplete(completeTimer, true)
+			}
 
 		case op := <-f.witnessRetry:
 			// An import failed with a witness accepted on the WIT2 size oracle

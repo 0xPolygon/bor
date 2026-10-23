@@ -153,6 +153,8 @@ func (f *BlockFetcher) deliverBodies(peer string, req bodyRequest, res *eth.Resp
 	// Withdrawals are ignored here, since the block fetcher is not used post-merge.
 	txs, uncles, _ := bodies.Unpack()
 	metrics.RecordPerItemDuration(blockBodyItemDownloadTimer, res.Time, len(txs))
-	f.FilterBodies(peer, txs, uncles, time.Now(), req.announcedAt)
-	f.notifyFetchRelease(false, req.announces)
+	remaining, _ := f.FilterBodies(peer, txs, uncles, time.Now(), req.announcedAt)
+	// Retry omissions only when the response made progress; empty or unmatched
+	// responses must not create a perpetual retry loop.
+	f.notifyRequestRelease(blockFetchRelease{announces: req.announces, retryBodies: len(remaining) < len(txs)})
 }

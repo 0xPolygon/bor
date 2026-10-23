@@ -22,8 +22,9 @@ import "github.com/ethereum/go-ethereum/common"
 // block reaching a later stage, covering timeouts as well as dispatch failures
 // and responses that did not carry the requested data.
 type blockFetchRelease struct {
-	headers   bool
-	announces []*blockAnnounce
+	retryBodies bool
+	headers     bool
+	announces   []*blockAnnounce
 }
 
 // fetchAnnouncements snapshots the announcements a scheduled request owns, so
@@ -43,8 +44,12 @@ func (f *BlockFetcher) notifyFetchRelease(headers bool, announces []*blockAnnoun
 	if len(announces) == 0 {
 		return
 	}
+	f.notifyRequestRelease(blockFetchRelease{headers: headers, announces: announces})
+}
+
+func (f *BlockFetcher) notifyRequestRelease(release blockFetchRelease) {
 	select {
-	case f.fetchRelease <- blockFetchRelease{headers: headers, announces: announces}:
+	case f.fetchRelease <- release:
 	case <-f.quit:
 	}
 }
@@ -52,10 +57,11 @@ func (f *BlockFetcher) notifyFetchRelease(headers bool, announces []*blockAnnoun
 // releaseFetchOwnership runs on the fetcher loop so a finished request cannot
 // erase a newer attempt for the same hash, nor a block that has already
 // advanced to the import queue or to witness retrieval.
-func (f *BlockFetcher) releaseFetchOwnership(release blockFetchRelease) {
+func (f *BlockFetcher) releaseFetchOwnership(release blockFetchRelease) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	requeued := false
 	pending := f.completing
 	if release.headers {
 		pending = f.fetching
@@ -70,5 +76,13 @@ func (f *BlockFetcher) releaseFetchOwnership(release blockFetchRelease) {
 		// Scheduling already released this announcement's count; the counts
 		// still held belong to other announcements from the same peer.
 		delete(pending, announce.hash)
+		if release.retryBodies && !release.headers {
+			// A fresh token prevents an old release from clearing the retry.
+			retry := *announce
+			retry.bodyDeferred = true
+			f.fetched[announce.hash] = []*blockAnnounce{&retry}
+			requeued = true
+		}
 	}
+	return requeued
 }
