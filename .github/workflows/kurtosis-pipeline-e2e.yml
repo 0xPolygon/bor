@@ -161,19 +161,21 @@ jobs:
           python3 - <<'PYTHON'
           from pathlib import Path
           import re
-          import yaml
 
           config = Path("kurtosis-pipeline-e2e.yml")
-          data = yaml.safe_load(config.read_text())
-          participants = data["polygon_pos_package"]["participants"]
-          released = {p["el_image"] for p in participants
-                      if re.fullmatch(r"ghcr\.io/0xpolygon/bor:v[0-9]+\.[0-9]+\.[0-9]+", p.get("el_image", ""))}
+          content = config.read_text()
+          released = set(re.findall(
+              r"(?m)^\s*el_image: (ghcr\.io/0xpolygon/bor:v[0-9]+\.[0-9]+\.[0-9]+)\s*$",
+              content,
+          ))
           if len(released) != 1:
               raise SystemExit("Expected one stable GHCR Bor release for the baseline")
-          for participant in participants:
-              if participant.get("el_image") == "0xpolygon/bor:latest":
-                  participant["el_image"] = next(iter(released))
-          config.write_text(yaml.safe_dump(data, sort_keys=False))
+          content = re.sub(
+              r"(?m)^(\s*el_image: )0xpolygon/bor:latest(?=\s*$)",
+              lambda match: match[1] + next(iter(released)),
+              content,
+          )
+          config.write_text(content)
           PYTHON
 
       # Load images
