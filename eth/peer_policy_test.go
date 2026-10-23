@@ -153,6 +153,7 @@ func TestPeerPolicyDeferredAnnouncementEvidence(t *testing.T) {
 	h := newContributionTestHandler(t, new(mclock.Simulated), false)
 	header := &types.Header{Number: big.NewInt(3333)}
 	rawdb.WriteHeader(h.chain.DB(), header)
+	h.handler.peerPolicy.Connected("relayer")
 	ann := wit.SignedWitnessAnnouncement{BlockHash: header.Hash(), BlockNumber: 3334}
 	signTestAnnouncement(t, &ann)
 	for range wit2MisbehaviorStrikeLimit {
@@ -187,6 +188,7 @@ func TestPeerPolicyWitStrikeWarning(t *testing.T) {
 			log.SetDefault(log.NewLogger(capture))
 			defer log.SetDefault(previous)
 			h := &handler{peers: newPeerSet(), wit2PeerTracker: newPeerWit2Tracker(), peerPolicy: peerpolicy.New(new(mclock.Simulated))}
+			h.peerPolicy.Connected("peer")
 			strike := h.strikeWit2PeerByID
 			if reason == peerpolicy.InvalidWitnessAnnouncement {
 				strike = h.strikeWit2AnnouncementByID

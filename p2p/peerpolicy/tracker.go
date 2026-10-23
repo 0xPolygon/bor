@@ -83,6 +83,23 @@ func (t *Tracker) Observe(id string, event Evidence) {
 	t.observe(p, event)
 }
 
+// ObserveAdmitted records delayed outcomes only for retained admitted identities.
+// An extension that runs before ETH admission must not allocate a record.
+func (t *Tracker) ObserveAdmitted(id string, reason Reason) {
+	if id == "" || len(id) > 128 || reason >= reasonCount {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	p, ok := t.peers.Peek(id)
+	if !ok || !p.activity.registered {
+		return
+	}
+	t.peers.Get(id)
+	p.setExempt(t.connectionClass(id, p.exempt))
+	t.observe(p, Evidence{Reason: reason})
+}
+
 // ObserveWithClass applies the authenticated connection class and its evidence
 // atomically. Observe uses the retained class for outcomes after disconnection.
 func (t *Tracker) ObserveWithClass(id string, exempt bool, event Evidence) {

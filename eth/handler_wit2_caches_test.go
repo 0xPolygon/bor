@@ -75,6 +75,8 @@ func registerEthWitPeer(t *testing.T, h *testHandler, version uint) (*wit.Peer, 
 	// goroutine can fire during these tests.
 	ethPeer := ethproto.NewPeer(ethproto.ETH68, p2p.NewPeer(id, "test-eth-peer", nil), ethNet, nil)
 	require.NoError(t, h.handler.peers.registerPeer(ethPeer, nil, witPeer))
+	h.handler.observeProtocolPeer(ethPeer)
+	h.handler.observeWitnessPeer(witPeer)
 
 	cleanup := func() {
 		h.handler.peers.unregisterPeer(ethPeer.ID())

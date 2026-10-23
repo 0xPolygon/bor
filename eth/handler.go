@@ -528,6 +528,7 @@ func (h *handler) runEthPeer(peer *eth.Peer, handler eth.Handler) error {
 	// Refused connections must not evict retained evidence or reset a previous
 	// contribution session. Install observation only after admission succeeds.
 	h.observeProtocolPeer(peer)
+	h.observeWitnessPeer(wit)
 	h.chainSync.handlePeerEvent()
 
 	// Bor: skip propagating transactions if flag is set
@@ -635,6 +636,10 @@ func (h *handler) runWitExtension(peer *wit.Peer, handler wit.Handler) error {
 // jailPeer jails a peer to prevent reconnection for a period of time
 func (h *handler) jailPeer(id string) {
 	h.observePeer(id, peerpolicy.LegacyJail)
+	h.jailPeerNative(id)
+}
+
+func (h *handler) jailPeerNative(id string) {
 	if h.p2pServer == nil {
 		return
 	}

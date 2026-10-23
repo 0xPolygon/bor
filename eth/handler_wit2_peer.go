@@ -10,26 +10,34 @@ import (
 // WIT evidence follows the existing shared strike threshold. Below-threshold
 // observations remain diagnostic and do not bypass the legacy tolerance.
 func (h *handler) strikeWit2Peer(peer *wit.Peer) {
-	h.strikeWit2Evidence(peer.ID(), peerpolicy.WitnessAnnouncementStrike, peerpolicy.InvalidWitnessAnnouncement)
+	h.strikeWit2Evidence(peer.ID(), peerpolicy.WitnessAnnouncementStrike, peerpolicy.InvalidWitnessAnnouncement, peer.Observe)
 }
 
 func (h *handler) strikeWit2PeerByID(id string) {
-	h.strikeWit2Evidence(id, peerpolicy.WitnessBodyStrike, peerpolicy.InvalidWitnessBody)
+	h.strikeWit2Evidence(id, peerpolicy.WitnessBodyStrike, peerpolicy.InvalidWitnessBody, nil)
 }
 
 func (h *handler) strikeWit2AnnouncementByID(id string) {
-	h.strikeWit2Evidence(id, peerpolicy.WitnessAnnouncementStrike, peerpolicy.InvalidWitnessAnnouncement)
+	h.strikeWit2Evidence(id, peerpolicy.WitnessAnnouncementStrike, peerpolicy.InvalidWitnessAnnouncement, nil)
 }
 
-func (h *handler) strikeWit2Evidence(id string, diagnostic, qualified peerpolicy.Reason) {
-	h.observePeer(id, diagnostic)
+func (h *handler) strikeWit2Evidence(id string, diagnostic, qualified peerpolicy.Reason, observe func(peerpolicy.Reason)) {
+	if observe == nil {
+		observe = func(reason peerpolicy.Reason) {
+			if h.peerPolicy != nil {
+				h.peerPolicy.ObserveAdmitted(id, reason)
+			}
+		}
+	}
+	observe(diagnostic)
 	if h.wit2PeerTracker == nil || !h.wit2PeerTracker.strike(id) {
 		return
 	}
-	h.observePeer(id, qualified)
+	observe(qualified)
 	wit2StrikeDisconnectMeter.Mark(1)
 	log.Warn("Disconnecting WIT2 peer after strike threshold", "peer", id, "reason", qualified.String())
-	h.jailPeer(id)
+	observe(peerpolicy.LegacyJail)
+	h.jailPeerNative(id)
 	h.removePeer(id)
 }
 

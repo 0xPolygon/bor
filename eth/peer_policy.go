@@ -11,6 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/bor"
 	"github.com/ethereum/go-ethereum/eth/fetcher"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
+	"github.com/ethereum/go-ethereum/eth/protocols/wit"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
@@ -78,6 +79,12 @@ func (h *handler) observeProtocolPeer(peer *eth.Peer) {
 			h.observePeerEvidence(peer.ID(), e)
 		}
 	})
+}
+
+func (h *handler) observeWitnessPeer(peer *wit.Peer) {
+	if h.peerPolicy != nil && peer != nil {
+		peer.SetObserver(func(reason peerpolicy.Reason) { h.observePeer(peer.ID(), reason) })
+	}
 }
 
 // Local verification difficulties are not evidence against the supplier.
