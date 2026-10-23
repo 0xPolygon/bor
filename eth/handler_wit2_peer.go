@@ -14,20 +14,20 @@ func (h *handler) strikeWit2Peer(peer *wit.Peer) {
 }
 
 func (h *handler) strikeWit2PeerByID(id string) {
-	h.strikeWit2Evidence(id, peerpolicy.WitnessBodyStrike, peerpolicy.InvalidWitnessBody, nil)
+	h.strikeWit2Evidence(id, peerpolicy.WitnessBodyStrike, peerpolicy.InvalidWitnessBody, func(reason peerpolicy.Reason) {
+		if h.peerPolicy != nil {
+			h.peerPolicy.ObserveAdmitted(id, reason)
+		}
+	})
 }
 
-func (h *handler) strikeWit2AnnouncementByID(id string) {
-	h.strikeWit2Evidence(id, peerpolicy.WitnessAnnouncementStrike, peerpolicy.InvalidWitnessAnnouncement, nil)
+func (h *handler) strikeWit2Announcement(id string, observe func(peerpolicy.Reason)) {
+	h.strikeWit2Evidence(id, peerpolicy.WitnessAnnouncementStrike, peerpolicy.InvalidWitnessAnnouncement, observe)
 }
 
 func (h *handler) strikeWit2Evidence(id string, diagnostic, qualified peerpolicy.Reason, observe func(peerpolicy.Reason)) {
 	if observe == nil {
-		observe = func(reason peerpolicy.Reason) {
-			if h.peerPolicy != nil {
-				h.peerPolicy.ObserveAdmitted(id, reason)
-			}
-		}
+		observe = func(peerpolicy.Reason) {}
 	}
 	observe(diagnostic)
 	if h.wit2PeerTracker == nil || !h.wit2PeerTracker.strike(id) {

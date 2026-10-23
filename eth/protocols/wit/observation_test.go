@@ -31,3 +31,16 @@ func TestWitnessObserverConcurrentAdmission(t *testing.T) {
 	workers.Wait()
 	require.Equal(t, uint64(200), calls.Load())
 }
+
+func TestWitnessObserverSnapshot(t *testing.T) {
+	p := new(Peer)
+	require.Nil(t, p.Observer())
+	var first, second int
+	p.SetObserver(func(peerpolicy.Reason) { first++ })
+	captured := p.Observer()
+	p.SetObserver(func(peerpolicy.Reason) { second++ })
+	captured(peerpolicy.WitnessAnnouncementStrike)
+	p.Observe(peerpolicy.WitnessAnnouncementStrike)
+	require.Equal(t, 1, first)
+	require.Equal(t, 1, second)
+}

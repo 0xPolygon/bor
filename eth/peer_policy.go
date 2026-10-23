@@ -83,7 +83,8 @@ func (h *handler) observeProtocolPeer(peer *eth.Peer) {
 
 func (h *handler) observeWitnessPeer(peer *wit.Peer) {
 	if h.peerPolicy != nil && peer != nil {
-		peer.SetObserver(func(reason peerpolicy.Reason) { h.observePeer(peer.ID(), reason) })
+		id := peer.ID()
+		peer.SetObserver(func(reason peerpolicy.Reason) { h.observePeer(id, reason) })
 	}
 }
 

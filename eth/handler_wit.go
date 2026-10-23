@@ -370,7 +370,7 @@ func (h *witHandler) acceptSignedAnnouncement(peer *wit.Peer, ann wit.SignedWitn
 	if !headerAvailable {
 		peer.Log().Debug("wit2: header not yet local for announced block; deferring announce",
 			"blockHash", ann.BlockHash, "blockNumber", ann.BlockNumber)
-		(*handler)(h).deferredAnnounces.put(ann, peer.ID())
+		(*handler)(h).deferredAnnounces.putObserved(ann, peer.ID(), peer.Observer())
 		return false
 	}
 	wit2NotValidatorMeter.Mark(1)

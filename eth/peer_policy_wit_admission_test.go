@@ -136,7 +136,7 @@ func TestPeerPolicyAdmittedWitnessRecordsFault(t *testing.T) {
 }
 
 func TestPeerPolicyWitnessDelayedEvidence(t *testing.T) {
-	for _, path := range []string{"announcement", "body", "deferred-announcement", "evicted-announcement"} {
+	for _, path := range []string{"announcement", "body", "evicted-announcement"} {
 		t.Run(path, func(t *testing.T) {
 			h := newContributionTestHandler(t, new(mclock.Simulated), false)
 			wp, cleanup := registerEthWitPeer(t, h, wit.WIT2)
@@ -153,8 +153,6 @@ func TestPeerPolicyWitnessDelayedEvidence(t *testing.T) {
 				case "body":
 					h.handler.strikeWit2PeerByID(wp.ID())
 					reason = peerpolicy.InvalidWitnessBody
-				case "deferred-announcement":
-					h.handler.strikeWit2AnnouncementByID(wp.ID())
 				default:
 					h.handler.strikeWit2Peer(wp)
 				}
@@ -169,7 +167,7 @@ func TestPeerPolicyWitnessDelayedEvidence(t *testing.T) {
 
 func TestPeerPolicyUnknownWitnessOutcomes(t *testing.T) {
 	h := &handler{peers: newPeerSet(), wit2PeerTracker: newPeerWit2Tracker(), peerPolicy: peerpolicy.New(new(mclock.Simulated))}
-	for _, strike := range []func(string){h.strikeWit2PeerByID, h.strikeWit2AnnouncementByID} {
+	for _, strike := range []func(string){h.strikeWit2PeerByID, func(id string) { h.strikeWit2Announcement(id, nil) }} {
 		for range wit2MisbehaviorStrikeLimit {
 			strike("unknown")
 		}

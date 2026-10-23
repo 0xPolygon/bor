@@ -1286,3 +1286,7 @@ func TestFetcherWitnessPenaltiesAreWiredToHandler(t *testing.T) {
 	require.True(t, h.handler.witnessSourceExclusions.excluded(hash, "fetcher-excluded-peer"),
 		"a fetcher source exclusion must reach the handler's exclusion set")
 }
+
+func (c *deferredAnnounceCache) put(ann wit.SignedWitnessAnnouncement, peerID string) {
+	c.putObserved(ann, peerID, nil)
+}

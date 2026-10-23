@@ -116,7 +116,7 @@ func TestPeerPolicyWitStrikeThreshold(t *testing.T) {
 		strike := h.handler.strikeWit2PeerByID
 		reason := peerpolicy.InvalidWitnessBody
 		if announcement {
-			strike = h.handler.strikeWit2AnnouncementByID
+			strike = func(id string) { h.handler.strikeWit2Announcement(id, peer.Observer()) }
 			reason = peerpolicy.InvalidWitnessAnnouncement
 		}
 		for range 4 {
@@ -153,14 +153,15 @@ func TestPeerPolicyDeferredAnnouncementEvidence(t *testing.T) {
 	h := newContributionTestHandler(t, new(mclock.Simulated), false)
 	header := &types.Header{Number: big.NewInt(3333)}
 	rawdb.WriteHeader(h.chain.DB(), header)
-	h.handler.peerPolicy.Connected("relayer")
+	peer, cleanup := registerEthWitPeer(t, h, wit.WIT2)
+	defer cleanup()
 	ann := wit.SignedWitnessAnnouncement{BlockHash: header.Hash(), BlockNumber: 3334}
 	signTestAnnouncement(t, &ann)
 	for range wit2MisbehaviorStrikeLimit {
-		h.handler.deferredAnnounces.put(ann, "relayer")
+		h.handler.deferredAnnounces.putObserved(ann, peer.ID(), peer.Observer())
 		h.handler.drainDeferredAnnouncesFor(ann.BlockHash)
 	}
-	got := h.handler.peerPolicy.Snapshot("relayer")
+	got := h.handler.peerPolicy.Snapshot(peer.ID())
 	if got.Risk != 60 || got.Windows[peerpolicy.InvalidWitnessAnnouncement.String()] != 1 || got.Windows[peerpolicy.InvalidWitnessBody.String()] != 0 {
 		t.Fatalf("wrong deferred evidence: %+v", got)
 	}
@@ -191,7 +192,9 @@ func TestPeerPolicyWitStrikeWarning(t *testing.T) {
 			h.peerPolicy.Connected("peer")
 			strike := h.strikeWit2PeerByID
 			if reason == peerpolicy.InvalidWitnessAnnouncement {
-				strike = h.strikeWit2AnnouncementByID
+				strike = func(id string) {
+					h.strikeWit2Announcement(id, func(reason peerpolicy.Reason) { h.observePeer(id, reason) })
+				}
 			}
 			for range wit2MisbehaviorStrikeLimit - 1 {
 				strike("peer")
