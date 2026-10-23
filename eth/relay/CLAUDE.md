@@ -79,9 +79,14 @@ eth/relay/
 
 **Failure recovery:**
 - A relay error can occur after local pool admission; the RPC error reports that
-  distinction. Exhausted producer retries do not authorize public gossip.
-- Privacy markers stay while the pool retains the transaction. Expiring a marker
-  alone would publish the original private payload through ordinary propagation.
+  distinction. Exhausting producer retries does not immediately publish the
+  transaction; the private window still applies.
+- Committed privacy markers expire 30 minutes after the last successful private
+  admission, checked every minute, even while the transaction remains in the pool.
+  Expiry makes the original payload eligible for ordinary public propagation;
+  private submission does not promise indefinite confidentiality. An in-flight
+  admission keeps its reservation until completion, and stale sweeps cannot
+  remove a refreshed marker. See [private transaction lifetime](../../docs/private-transactions.md).
 - The sender can sign a replacement at the same nonce with a sufficient fee bump.
   Submit it through the private endpoint to retain privacy, or the public endpoint
   to explicitly publish that replacement. This also permits a cancellation

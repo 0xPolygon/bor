@@ -57,9 +57,6 @@ func TestRebroadcastAttemptWithoutQueueAcceptance(t *testing.T) {
 			}
 			pool.lastRebroadcastAttempt[tx.Hash()] = time.Now().Add(-2 * time.Hour)
 			want := 1
-			if age > pool.config.RebroadcastMaxAge {
-				want = 0
-			}
 			if got := len(pool.identifyStuckTransactions()); got != want {
 				t.Fatalf("after cooldown: got %d candidates, want %d", got, want)
 			}

@@ -72,7 +72,7 @@ func testRebroadcastRetriesAcrossNewBatches(t *testing.T, partial bool) {
 		t.Error("new arrivals prevented every retry of the eligible lowest nonce")
 	}
 	advanceRebroadcastTime(pool, from, interval+interval/2)
-	assertRebroadcastRetryExpiry(t, pool, from, head)
+	assertRebroadcastUnacceptedRetry(t, pool, from, head)
 }
 
 func addRebroadcastArrivals(t *testing.T, pool *LegacyPool, key *ecdsa.PrivateKey, first uint64, count int, age time.Duration) {
@@ -138,22 +138,17 @@ func publishRebroadcastFairnessBatch(t *testing.T, pool *LegacyPool, ch <-chan c
 	pool.RebroadcastAcknowledgement(delivered.Txs)(accepted)
 }
 
-func assertRebroadcastRetryExpiry(t *testing.T, pool *LegacyPool, from common.Address, head *types.Transaction) {
+func assertRebroadcastUnacceptedRetry(t *testing.T, pool *LegacyPool, from common.Address, head *types.Transaction) {
 	t.Helper()
 	pool.mu.RLock()
 	defer pool.mu.RUnlock()
-	if pool.rebroadcastEligible(head, pool.rebroadcastLastActivity(head.Hash()), time.Now(), pool.strandedBaseFee(), pool.gasTip.Load().ToBig()) {
-		t.Error("retried transaction remained eligible beyond maximum age")
+	if !pool.rebroadcastEligible(head, pool.rebroadcastLastActivity(head.Hash()), time.Now(), pool.strandedBaseFee(), pool.gasTip.Load().ToBig()) {
+		t.Error("unaccepted transaction lost eligibility beyond maximum age")
 	}
 	if pool.all.Get(head.Hash()) != head || !pool.pending[from].Contains(head.Nonce()) {
 		t.Error("rebroadcast expiry removed the transaction from pending")
 	}
 	if !pool.lastRebroadcast[head.Hash()].IsZero() {
 		t.Error("unaccepted lowest nonce was recorded as queue-accepted")
-	}
-	for _, tx := range pool.identifyStuckTransactions() {
-		if tx == head {
-			t.Error("expired transaction was selected again")
-		}
 	}
 }

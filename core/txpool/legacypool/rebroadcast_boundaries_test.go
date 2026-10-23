@@ -53,6 +53,7 @@ func TestRebroadcastEligibilityBoundaries(t *testing.T) {
 			if tc.sinceAttempt > 0 {
 				last = now.Add(-tc.sinceAttempt)
 			}
+			pool.lastRebroadcast = map[common.Hash]time.Time{tx.Hash(): last}
 			if got := pool.rebroadcastEligible(tx, last, now, big.NewInt(tc.baseFee), big.NewInt(tc.minTip)); got != tc.want {
 				t.Fatalf("eligible=%t, want %t", got, tc.want)
 			}

@@ -61,9 +61,9 @@ func (pool *LegacyPool) rebroadcastEligible(tx *types.Transaction, last, now tim
 		if now.Sub(last) < pool.config.RebroadcastInterval {
 			return false
 		}
-		// Allow one first attempt after a late fee drop. Further attempts obey
-		// the age limit even when no peer has accepted the transaction.
-		if pool.config.RebroadcastMaxAge > 0 && age > pool.config.RebroadcastMaxAge {
+		// Refused queue offers delay retries but do not consume the late
+		// propagation opportunity after a fee drop or private-marker expiry.
+		if !pool.lastRebroadcast[tx.Hash()].IsZero() && pool.config.RebroadcastMaxAge > 0 && age > pool.config.RebroadcastMaxAge {
 			return false
 		}
 	}

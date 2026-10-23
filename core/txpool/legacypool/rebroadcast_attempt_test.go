@@ -65,3 +65,31 @@ func TestRebroadcastSuppressedOldBatch(t *testing.T) {
 	defer pool.mu.RUnlock()
 	require.Empty(t, pool.lastRebroadcastAttempt)
 }
+
+func TestRebroadcastOldRefusedOffersRetryUntilAccepted(t *testing.T) {
+	pool, _, from, tx := setupRebroadcastTest(t, time.Minute, 10*time.Minute, 200)
+	defer pool.Close()
+	pool.mu.Lock()
+	setTxAge(pool, from, 31*time.Minute)
+	pool.mu.Unlock()
+	for range 3 {
+		pool.mu.RLock()
+		batch := pool.identifyStuckTransactions()
+		pool.mu.RUnlock()
+		require.Equal(t, []*types.Transaction{tx}, batch)
+		pool.RebroadcastAttempt(batch)([]common.Hash{tx.Hash()})
+		pool.RebroadcastAcknowledgement(batch)(nil)
+		pool.mu.RLock()
+		require.Empty(t, pool.identifyStuckTransactions(), "refusal must respect the retry interval")
+		require.Empty(t, pool.lastRebroadcast)
+		pool.mu.RUnlock()
+		advanceRebroadcastTime(pool, from, 2*time.Minute)
+	}
+	pool.RebroadcastAcknowledgement([]*types.Transaction{tx})([]common.Hash{tx.Hash()})
+	advanceRebroadcastTime(pool, from, 2*time.Minute)
+	pool.mu.RLock()
+	defer pool.mu.RUnlock()
+	require.NotZero(t, pool.lastRebroadcast[tx.Hash()])
+	require.Empty(t, pool.identifyStuckTransactions(), "accepted old transactions must obey the maximum age")
+	require.Same(t, tx, pool.all.Get(tx.Hash()))
+}
