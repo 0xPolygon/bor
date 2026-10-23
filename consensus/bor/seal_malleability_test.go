@@ -166,6 +166,8 @@ func TestVerifyHeaderRejectsNonCanonicalSeal(t *testing.T) {
 	mut := types.CopyHeader(orig)
 	malleateSeal(sealOf(mut))
 
-	require.ErrorIs(t, engine.verifyHeader(chain.HeaderChain(), mut, nil), errNonCanonicalSeal,
+	err = engine.verifyHeader(chain.HeaderChain(), mut, nil)
+	require.ErrorIs(t, err, errNonCanonicalSeal,
 		"malleated sibling must be rejected by header verification")
+	require.False(t, IsObjectivelyInvalidHeader(err), "an older peer relaying this seal must not receive invalid-block reputation evidence")
 }

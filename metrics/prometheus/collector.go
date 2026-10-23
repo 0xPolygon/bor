@@ -59,6 +59,8 @@ func (c *collector) Add(name string, i any) error {
 		c.addGauge(name, m.Snapshot())
 	case *metrics.GaugeFloat64:
 		c.addGaugeFloat64(name, m.Snapshot())
+	case *metrics.GaugeVec:
+		c.addGaugeVec(name, m)
 	case *metrics.GaugeInfo:
 		c.addGaugeInfo(name, m.Snapshot())
 	case metrics.Histogram:

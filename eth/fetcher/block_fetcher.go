@@ -257,6 +257,8 @@ type BlockFetcher struct {
 	insertChain    chainInsertFn      // Injects a batch of blocks into the chain
 	dropPeer       peerDropFn         // Drops a peer for misbehaving
 
+	invalidHeader func(peer string, err error) // Reports verification failures and their supplier
+
 	// Testing hooks
 	announceChangeHook func(common.Hash, bool)           // Method to call upon adding or deleting a hash from the blockAnnounce list
 	queueChangeHook    func(common.Hash, bool)           // Method to call upon adding or deleting a block from the import queue
@@ -352,6 +354,18 @@ func (f *BlockFetcher) SetWitnessServerStriker(fn func(id string)) {
 func (f *BlockFetcher) SetWitnessSourceExcluder(fn func(peer string, blockHash common.Hash)) {
 	if f.wm != nil {
 		f.wm.parentExcludeWitnessSource = fn
+	}
+}
+
+// SetInvalidHeaderObserver reports verification failures and their supplier.
+// Install before Start; the callback must not block.
+func (f *BlockFetcher) SetInvalidHeaderObserver(observe func(peer string, err error)) {
+	f.invalidHeader = observe
+}
+
+func (f *BlockFetcher) observeInvalidHeader(peer string, err error) {
+	if f.invalidHeader != nil {
+		f.invalidHeader(peer, err)
 	}
 }
 
@@ -1211,6 +1225,7 @@ func (f *BlockFetcher) importHeaders(peer string, header *types.Header) {
 		// Validate the header and if something went wrong, drop the peer
 		if err := f.verifyHeader(header); err != nil && err != consensus.ErrFutureBlock {
 			log.Debug("Propagated header verification failed", "peer", peer, "number", header.Number, "hash", hash, "err", err)
+			f.observeInvalidHeader(peer, err)
 			f.dropPeer(peer)
 
 			return
@@ -1291,6 +1306,7 @@ func (f *BlockFetcher) runBlockImport(op *blockOrHeaderInject) (retryWitness boo
 	default:
 		// Something went very wrong, drop the peer
 		log.Debug("Propagated block verification failed", "peer", peer, "number", block.Number(), "hash", hash, "err", err)
+		f.observeInvalidHeader(peer, err)
 		f.dropPeer(peer)
 
 		return false
