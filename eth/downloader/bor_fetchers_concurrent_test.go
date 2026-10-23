@@ -207,14 +207,17 @@ func TestConcurrentFetchGradesDepartedStalePeer(t *testing.T) {
 		t.Fatalf("failed to unregister peer: %v", err)
 	}
 
-	if !waitFor(func() bool { return softStrikeTally(d.peers, peer.id) >= 1 }) {
+	if !waitFor(func() bool { return d.peers.persistentBackoff(peer.id) > 0 }) {
 		close(d.cancelCh)
 		<-done
-		t.Fatal("a peer that left with a stale request must be graded, not silently dropped")
+		t.Fatal("a peer that left with a stale request should retain its timeout backoff")
 	}
 
 	close(d.cancelCh)
 	<-done
+	if got := softStrikeTally(d.peers, peer.id); got != 0 {
+		t.Fatalf("a stale timeout should not record soft strikes, have %d", got)
+	}
 }
 
 func TestConcurrentFetchMasterTimeoutAborts(t *testing.T) {

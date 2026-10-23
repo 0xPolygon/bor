@@ -2492,30 +2492,18 @@ func (api *TransactionAPI) SendRawTransactionPrivate(ctx context.Context, input 
 		return common.Hash{}, err
 	}
 
-	// Track the tx hash to ensure it is not gossiped in public
-	api.b.RecordPrivateTx(tx.Hash())
-
-	hash, err := SubmitTransaction(ctx, api.b, tx)
-	if err != nil {
-		// Purge tx from private tx tracker if submission failed. Don't purge
-		// if `ErrAlreadyKnown` is being returned.
-		if !errors.Is(err, txpool.ErrAlreadyKnown) {
-			api.b.PurgePrivateTx(tx.Hash())
-		}
-		return hash, err
+	// A private duplicate must not temporarily hide an already-public transaction.
+	if api.b.GetPoolTransaction(tx.Hash()) != nil {
+		return common.Hash{}, txpool.ErrAlreadyKnown
 	}
 
-	// Submit the private transaction directly to BPs
-	if api.b.PrivateTxEnabled() {
-		// Return an error here to inform user that private tx submission failed as it is critical.
-		// Note that it will be retried in background.
-		if err := api.b.SubmitPrivateTx(tx); err != nil {
-			log.Error("Private tx accepted locally but submission to bp failed", "err", err)
-			return tx.Hash(), fmt.Errorf("private tx accepted locally, submission failed. reason: %w", err)
-		}
-	}
+	// Hide the hash before pool admission can emit a transaction event.
+	finish := api.b.BeginPrivateTx(tx.Hash())
+	defer finish(false)
 
-	return hash, err
+	_, err := SubmitTransaction(ctx, privateTxBackend{api.b}, tx)
+	finish(err == nil)
+	return api.forwardPrivateTransaction(tx, err)
 }
 
 func (api *TransactionAPI) CheckPreconfStatus(ctx context.Context, hash common.Hash) (bool, error) {

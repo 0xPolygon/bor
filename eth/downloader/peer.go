@@ -330,11 +330,12 @@ func evictSoonestJail(m map[string]time.Time) {
 	}
 }
 
-func (ps *peerSet) backoffSoftFailure(peer *peerConnection) (penalized, jailed bool) {
+func (ps *peerSet) backoffSoftFailure(peer *peerConnection, reason peerFailureReason) (penalized, jailed bool) {
 	if !peer.backoffForClaim(peerSoftBackoff) {
 		return false, false
 	}
-	if ps.recordSoftFailure(peer.id, time.Now()) >= softFailureJailThreshold {
+	// Timeouts can reflect local load or network delays, so they don't establish peer misbehavior.
+	if reason != peerFailureTimeout && ps.recordSoftFailure(peer.id, time.Now()) >= softFailureJailThreshold {
 		ps.clearSoftFailures(peer.id)
 		peer.backoffFor(peerJailBackoff)
 		jailed = true

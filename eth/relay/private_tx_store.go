@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	privateTxTTL         = 10 * time.Minute // hard TTL: remove tx from store after this duration regardless
+	privateTxTTL         = 30 * time.Minute // release stalled transactions for public propagation
 	privateTxGracePeriod = 2 * time.Minute  // min age before txpool presence check applies
 	sweepInterval        = 1 * time.Minute  // how often the sweep goroutine runs
 )
@@ -34,8 +34,9 @@ type PrivateTxSetter interface {
 type TxPoolChecker func(hash common.Hash) bool
 
 type PrivateTxStore struct {
-	txs map[common.Hash]time.Time // tx hash to last updated time
-	mu  sync.RWMutex
+	txs     map[common.Hash]time.Time // committed tx hash to last updated time
+	pending map[common.Hash]*privateTxReservation
+	mu      sync.RWMutex
 
 	chainEventSubFn func(ch chan<- core.ChainEvent) event.Subscription
 	txPoolChecker   TxPoolChecker
@@ -44,7 +45,7 @@ type PrivateTxStore struct {
 	txsAdded   atomic.Uint64
 	txsPurged  atomic.Uint64 // deleted by an explicit call
 	txsDeleted atomic.Uint64 // deleted because tx got included
-	txsExpired atomic.Uint64 // deleted by sweep (txpool eviction or TTL)
+	txsExpired atomic.Uint64 // deleted by sweep after expiry or txpool eviction
 
 	closeCh chan struct{}
 }
@@ -52,6 +53,7 @@ type PrivateTxStore struct {
 func NewPrivateTxStore() *PrivateTxStore {
 	store := &PrivateTxStore{
 		txs:     make(map[common.Hash]time.Time),
+		pending: make(map[common.Hash]*privateTxReservation),
 		closeCh: make(chan struct{}),
 	}
 	go store.report()
@@ -72,6 +74,7 @@ func (s *PrivateTxStore) Purge(hash common.Hash) {
 	defer s.mu.Unlock()
 
 	delete(s.txs, hash)
+	delete(s.pending, hash)
 	s.txsPurged.Add(1)
 }
 
@@ -83,7 +86,7 @@ func (s *PrivateTxStore) IsTxPrivate(hash common.Hash) bool {
 		return true
 	}
 
-	return false
+	return s.pending[hash] != nil
 }
 
 func (s *PrivateTxStore) cleanupLoop() {
@@ -115,6 +118,7 @@ func (s *PrivateTxStore) cleanup() error {
 			s.mu.Lock()
 			deleted := uint64(0)
 			for _, tx := range event.Transactions {
+				delete(s.pending, tx.Hash())
 				if _, exists := s.txs[tx.Hash()]; exists {
 					deleted++
 					delete(s.txs, tx.Hash())
@@ -145,11 +149,7 @@ func (s *PrivateTxStore) SetTxPoolChecker(checker TxPoolChecker) {
 	s.txPoolChecker = checker
 }
 
-// sweep periodically removes stale entries from the store. An entry is removed
-// either when it exceeds the hard TTL (10 minutes by default), regardless of
-// txpool state, or when it is older than privateTxGracePeriod and is no longer
-// present in the local txpool, which is treated as the source of truth for
-// eviction.
+// Release stalled private transactions without removing them from the pool.
 func (s *PrivateTxStore) sweep() {
 	ticker := time.NewTicker(sweepInterval)
 	defer ticker.Stop()
@@ -175,22 +175,20 @@ func (s *PrivateTxStore) sweepOnce() {
 
 	// Snapshot under the read lock.
 	s.mu.RLock()
+	checker := s.txPoolChecker
 	entries := make([]entry, 0, len(s.txs))
 	for h, t := range s.txs {
 		entries = append(entries, entry{h, t})
 	}
 	s.mu.RUnlock()
 
-	// Filter transactions without holding lock. An entry is removed only if the
-	// txpool no longer holds it and the grace period has elapsed.
+	// Check pool presence outside the lock. TTL expiry also releases transactions
+	// that remain pending after all producer retries have failed.
 	now := time.Now()
 	toDelete := make([]entry, 0)
 	for _, entry := range entries {
 		age := now.Sub(entry.addedAt)
-		if age > privateTxTTL {
-			// Hard TTL: remove regardless of txpool status
-			toDelete = append(toDelete, entry)
-		} else if age > privateTxGracePeriod && s.txPoolChecker != nil && !s.txPoolChecker(entry.hash) {
+		if privateTxExpired(age, checker, entry.hash) {
 			toDelete = append(toDelete, entry)
 		}
 	}
@@ -198,12 +196,13 @@ func (s *PrivateTxStore) sweepOnce() {
 		return
 	}
 
-	// Delete the entries under write lock. Only delete those whose `addedAt` time
-	// hasn't changed as it's possible that the tx was re-added to the pool after
-	// snapshot was taken.
+	// Pending admissions keep ownership; successful admissions refresh addedAt.
 	expired := uint64(0)
 	s.mu.Lock()
 	for _, entry := range toDelete {
+		if s.pending[entry.hash] != nil {
+			continue
+		}
 		if cur, ok := s.txs[entry.hash]; ok && cur.Equal(entry.addedAt) {
 			delete(s.txs, entry.hash)
 			expired++
@@ -237,4 +236,8 @@ func (s *PrivateTxStore) report() {
 
 func (s *PrivateTxStore) Close() {
 	close(s.closeCh)
+}
+
+func privateTxExpired(age time.Duration, checker TxPoolChecker, hash common.Hash) bool {
+	return age >= privateTxTTL || (age > privateTxGracePeriod && checker != nil && !checker(hash))
 }
