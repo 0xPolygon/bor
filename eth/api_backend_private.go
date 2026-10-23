@@ -20,7 +20,9 @@ import (
 	"context"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/eth/relay"
 )
 
 func (b *EthAPIBackend) isPrivateTx(hash common.Hash) bool {
@@ -34,4 +36,15 @@ func (b *EthAPIBackend) isPrivateTx(hash common.Hash) bool {
 // SendPrivateTx reports actual pool admission and never enters the public journal.
 func (b *EthAPIBackend) SendPrivateTx(ctx context.Context, tx *types.Transaction) error {
 	return b.eth.txPool.Add([]*types.Transaction{tx}, false)[0]
+}
+
+// A duplicate does not re-admit or publicly journal a private transaction.
+func (b *EthAPIBackend) privateTxSubmissionError(hash common.Hash) error {
+	if !b.isPrivateTx(hash) {
+		return nil
+	}
+	if b.eth.txPool.Has(hash) {
+		return txpool.ErrAlreadyKnown
+	}
+	return relay.ErrPrivateTxConflict
 }

@@ -23,6 +23,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/txpool"
+	"github.com/ethereum/go-ethereum/core/txpool/legacypool"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/relay"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
 )
@@ -59,4 +62,55 @@ func TestSendTxPrivatePendingPublicConflict(t *testing.T) {
 	finish(false)
 	require.NoError(t, b.SendTx(t.Context(), tx))
 	require.False(t, b.isPrivateTx(tx.Hash()))
+}
+
+func TestSendTxPrivateResidentPublicDuplicate(t *testing.T) {
+	for _, tracker := range []bool{false, true} {
+		t.Run(map[bool]string{false: "no tracker", true: "tracker"}[tracker], func(t *testing.T) {
+			b := privateSubmissionBackend(t, tracker)
+			tx := makeTx(0, nil, nil, key)
+			raw, err := tx.MarshalBinary()
+			require.NoError(t, err)
+			api := ethapi.NewTransactionAPI(b, new(ethapi.AddrLocker))
+			_, err = api.SendRawTransactionPrivate(t.Context(), raw)
+			require.NoError(t, err)
+			require.NoError(t, b.eth.txPool.Sync())
+			_, err = api.SendRawTransaction(t.Context(), raw)
+			require.ErrorIs(t, err, txpool.ErrAlreadyKnown)
+			require.True(t, b.eth.txPool.Has(tx.Hash()))
+			require.True(t, b.isPrivateTx(tx.Hash()))
+			h := &handler{txpool: b.eth.txPool, privateTxGetter: b.relay.GetPrivateTxGetter()}
+			require.NotContains(t, h.pendingTransactionHashes(), tx.Hash())
+		})
+	}
+}
+
+type privateAdmissionSubPool struct {
+	txpool.SubPool
+	onAdd func()
+}
+
+func (p *privateAdmissionSubPool) Add(txs []*types.Transaction, sync bool) []error {
+	errors := p.SubPool.Add(txs, sync)
+	p.onAdd()
+	return errors
+}
+
+func TestSendTxPrivateAdmissionDuringPublicCall(t *testing.T) {
+	b := privateSubmissionBackend(t, false)
+	require.NoError(t, b.eth.txPool.Close())
+	tx := makeTx(0, nil, nil, key)
+	config := legacypool.DefaultConfig
+	config.Journal = ""
+	subpool := &privateAdmissionSubPool{
+		SubPool: legacypool.New(config, b.eth.blockchain),
+		onAdd:   func() { b.RecordPrivateTx(tx.Hash()) },
+	}
+	pool, err := txpool.New(config.PriceLimit, b.eth.blockchain, []txpool.SubPool{subpool})
+	require.NoError(t, err)
+	b.eth.txPool = pool
+	b.relay.SetTxPoolChecker(pool.Has)
+	require.ErrorIs(t, b.SendTx(t.Context(), tx), txpool.ErrAlreadyKnown)
+	require.True(t, pool.Has(tx.Hash()))
+	require.True(t, b.isPrivateTx(tx.Hash()))
 }

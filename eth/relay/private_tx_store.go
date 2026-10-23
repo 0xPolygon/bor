@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	privateTxGracePeriod = 2 * time.Minute // min age before txpool presence check applies
-	sweepInterval        = 1 * time.Minute // how often the sweep goroutine runs
+	privateTxTTL         = 30 * time.Minute // release stalled transactions for public propagation
+	privateTxGracePeriod = 2 * time.Minute  // min age before txpool presence check applies
+	sweepInterval        = 1 * time.Minute  // how often the sweep goroutine runs
 )
 
 var privateTxStoreSizeGauge = metrics.NewRegisteredGauge("relay/privatetx/store/size", nil)
@@ -44,7 +45,7 @@ type PrivateTxStore struct {
 	txsAdded   atomic.Uint64
 	txsPurged  atomic.Uint64 // deleted by an explicit call
 	txsDeleted atomic.Uint64 // deleted because tx got included
-	txsExpired atomic.Uint64 // deleted by sweep after txpool eviction
+	txsExpired atomic.Uint64 // deleted by sweep after expiry or txpool eviction
 
 	closeCh chan struct{}
 }
@@ -148,7 +149,7 @@ func (s *PrivateTxStore) SetTxPoolChecker(checker TxPoolChecker) {
 	s.txPoolChecker = checker
 }
 
-// Pool residence can exceed any fixed TTL; only absence permits expiration.
+// Release stalled private transactions without removing them from the pool.
 func (s *PrivateTxStore) sweep() {
 	ticker := time.NewTicker(sweepInterval)
 	defer ticker.Stop()
@@ -175,24 +176,19 @@ func (s *PrivateTxStore) sweepOnce() {
 	// Snapshot under the read lock.
 	s.mu.RLock()
 	checker := s.txPoolChecker
-	if checker == nil {
-		// Keep markers until pool ownership can be checked.
-		s.mu.RUnlock()
-		return
-	}
 	entries := make([]entry, 0, len(s.txs))
 	for h, t := range s.txs {
 		entries = append(entries, entry{h, t})
 	}
 	s.mu.RUnlock()
 
-	// Filter transactions without holding lock. An entry is removed only if the
-	// txpool no longer holds it and the grace period has elapsed.
+	// Check pool presence outside the lock. TTL expiry also releases transactions
+	// that remain pending after all producer retries have failed.
 	now := time.Now()
 	toDelete := make([]entry, 0)
 	for _, entry := range entries {
 		age := now.Sub(entry.addedAt)
-		if age > privateTxGracePeriod && !checker(entry.hash) {
+		if privateTxExpired(age, checker, entry.hash) {
 			toDelete = append(toDelete, entry)
 		}
 	}
@@ -240,4 +236,8 @@ func (s *PrivateTxStore) report() {
 
 func (s *PrivateTxStore) Close() {
 	close(s.closeCh)
+}
+
+func privateTxExpired(age time.Duration, checker TxPoolChecker, hash common.Hash) bool {
+	return age >= privateTxTTL || (age > privateTxGracePeriod && checker != nil && !checker(hash))
 }

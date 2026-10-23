@@ -49,7 +49,7 @@ func TestPrivateTxRelayReservation(t *testing.T) {
 	}
 }
 
-func TestPrivateTxRelayFailureStaysPrivate(t *testing.T) {
+func TestPrivateTxRelayFailureExpires(t *testing.T) {
 	store := NewPrivateTxStore()
 	defer store.Close()
 	s := &RelayService{privateTxStore: store}
@@ -59,11 +59,19 @@ func TestPrivateTxRelayFailureStaysPrivate(t *testing.T) {
 		t.Fatal("unconfigured relay unexpectedly accepted the transaction")
 	}
 	store.mu.Lock()
-	store.txs[tx.Hash()] = time.Now().Add(-24 * time.Hour)
+	store.txs[tx.Hash()] = time.Now().Add(-11 * time.Minute)
 	store.mu.Unlock()
 	store.SetTxPoolChecker(func(hash common.Hash) bool { return hash == tx.Hash() })
 	store.sweepOnce()
 	if !store.IsTxPrivate(tx.Hash()) {
-		t.Fatal("relay failure or elapsed time made a retained private transaction public")
+		t.Fatal("relay failure released the transaction before the private window ended")
+	}
+
+	store.mu.Lock()
+	store.txs[tx.Hash()] = time.Now().Add(-privateTxTTL - time.Minute)
+	store.mu.Unlock()
+	store.sweepOnce()
+	if s.GetPrivateTxGetter().IsTxPrivate(tx.Hash()) {
+		t.Fatal("expired pool-resident transaction is still hidden from public propagation")
 	}
 }

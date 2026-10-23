@@ -87,6 +87,7 @@ func TestSendTxPrivateJournal(t *testing.T) {
 	private, public := makeTx(0, nil, nil, key), makeTx(1, nil, nil, key)
 	b.RecordPrivateTx(private.Hash())
 	require.NoError(t, b.SendPrivateTx(t.Context(), private))
+	require.ErrorIs(t, b.SendTx(t.Context(), private), txpool.ErrAlreadyKnown)
 	require.NoError(t, b.SendTx(t.Context(), public))
 	require.True(t, b.eth.txPool.Has(private.Hash()))
 	require.True(t, b.eth.txPool.Has(public.Hash()))

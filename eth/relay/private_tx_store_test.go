@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"fmt"
 	"math/big"
 	"sync"
 	"testing"
@@ -218,7 +219,9 @@ func TestPrivateTxStoreSweepPoolRetention(t *testing.T) {
 		{"absent past grace", 3 * time.Minute, true, false, false},
 		{"absent past former TTL", 11 * time.Minute, true, false, false},
 		{"present past former TTL", 11 * time.Minute, true, true, true},
-		{"present for a day", 24 * time.Hour, true, true, true},
+		{"present before TTL", privateTxTTL - time.Minute, true, true, true},
+		{"present past TTL", privateTxTTL + time.Minute, true, true, false},
+		{"unknown past TTL", privateTxTTL + time.Minute, false, false, false},
 		{"unknown past grace", 3 * time.Minute, false, false, true},
 		{"unknown past former TTL", 11 * time.Minute, false, false, true},
 	} {
@@ -251,7 +254,7 @@ func TestPrivateTxStoreSweepCheckerAvailability(t *testing.T) {
 	hash := common.HexToHash("0x1")
 	store.Add(hash)
 	store.mu.Lock()
-	store.txs[hash] = time.Now().Add(-time.Hour)
+	store.txs[hash] = time.Now().Add(-11 * time.Minute)
 	store.mu.Unlock()
 
 	store.sweepOnce()
@@ -350,4 +353,25 @@ func TestPrivateTxStoreSetTxPoolChecker(t *testing.T) {
 	checker := func(hash common.Hash) bool { return true }
 	store.SetTxPoolChecker(checker)
 	require.NotNil(t, store.txPoolChecker, "txPoolChecker should be set after calling SetTxPoolChecker")
+}
+
+func TestPrivateTxExpiryBoundary(t *testing.T) {
+	for _, age := range []time.Duration{privateTxTTL - time.Nanosecond, privateTxTTL, privateTxTTL + time.Nanosecond} {
+		for _, present := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/present=%t", age, present), func(t *testing.T) {
+				checker := TxPoolChecker(nil)
+				if present {
+					checker = func(common.Hash) bool { return true }
+				}
+				require.Equal(t, age >= privateTxTTL, privateTxExpired(age, checker, common.Hash{1}))
+			})
+		}
+	}
+}
+
+func TestPrivateTxGraceBoundary(t *testing.T) {
+	checker := func(common.Hash) bool { return false }
+	for _, age := range []time.Duration{privateTxGracePeriod - time.Nanosecond, privateTxGracePeriod, privateTxGracePeriod + time.Nanosecond} {
+		require.Equal(t, age > privateTxGracePeriod, privateTxExpired(age, checker, common.Hash{1}))
+	}
 }

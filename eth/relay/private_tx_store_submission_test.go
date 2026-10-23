@@ -168,7 +168,7 @@ func TestPrivateTxStoreSubmissionCommitProtectsStaleSweep(t *testing.T) {
 	defer s.Close()
 	hash := common.Hash{1}
 	s.mu.Lock()
-	s.txs[hash] = time.Now().Add(-time.Hour)
+	s.txs[hash] = time.Now().Add(-11 * time.Minute)
 	s.mu.Unlock()
 	checked, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	defer close(release)

@@ -408,12 +408,12 @@ func (b *EthAPIBackend) SubscribeLogsEvent(ch chan<- []*types.Log) event.Subscri
 }
 
 func (b *EthAPIBackend) SendTx(ctx context.Context, signedTx *types.Transaction) error {
-	if b.isPrivateTx(signedTx.Hash()) {
-		return relay.ErrPrivateTxConflict
+	if err := b.privateTxSubmissionError(signedTx.Hash()); err != nil {
+		return err
 	}
 	err := b.eth.txPool.Add([]*types.Transaction{signedTx}, false)[0]
-	if b.isPrivateTx(signedTx.Hash()) {
-		return relay.ErrPrivateTxConflict
+	if err := b.privateTxSubmissionError(signedTx.Hash()); err != nil {
+		return err
 	}
 
 	// If the local transaction tracker is not configured, returns whatever
