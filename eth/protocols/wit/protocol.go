@@ -16,8 +16,12 @@ const (
 	// WIT2 adds BP-signed witness announcements, allowing peers to fast-validate
 	// announces via signature recovery (microseconds) instead of full block
 	// execution (~500ms). Signed announces are safe to relay transitively
-	// because byte-correctness is verified at fetch time against the signed
-	// witness hash; content-correctness blame attaches to the BP signer.
+	// because the announcement commits to the producer's witness size, which
+	// bounds what a receiver accepts from any server at fetch time (witnesses
+	// are non-deterministic, so the signed hash identifies the BP's own bytes
+	// rather than the only valid ones); content-correctness is arbitrated at
+	// import and blame attaches to the BP signer, or to a server whose
+	// non-identical witness fails import.
 	WIT2 = 3
 )
 
@@ -119,18 +123,26 @@ type NewWitnessHashesPacket struct {
 // SignedWitnessAnnouncement is a BP-authenticated commitment to the existence
 // of a specific witness for a specific block. The signer commits to:
 //
-//	keccak256(BlockHash || BlockNumber || WitnessHash)
+//	keccak256(BlockHash || BlockNumber || WitnessHash || WitnessSize)
 //
 // Receivers verify the signature with ecrecover and check that the recovered
 // address is the validator scheduled for BlockNumber. Once verified, the
 // announcement is safe to relay to other peers without local execution; any
-// downstream receiver re-verifies independently. Bytes returned by a serving
-// peer are checked against WitnessHash, so byte-correctness blame attaches to
-// the server while content-correctness (state-root) blame attaches to the BP.
+// downstream receiver re-verifies independently.
+//
+// WitnessHash and WitnessSize describe the producer's own witness. Because
+// witnesses are NOT deterministic across nodes (BlockSTM speculative reads
+// yield different-but-valid node sets), a serving peer's bytes need not hash
+// to WitnessHash; instead WitnessSize is used as a size oracle — a receiver
+// accepts a witness whose size is within a band of WitnessSize and lets
+// import-time state-root execution arbitrate content-correctness, which is the
+// responsibility of the producer that signed the announcement, not of a
+// relaying or serving peer.
 type SignedWitnessAnnouncement struct {
 	BlockHash   common.Hash
 	BlockNumber uint64
 	WitnessHash common.Hash // WIT2 chunked-aggregate commitment over canonical witness RLP; see core/stateless.WitnessCommitHash
+	WitnessSize uint64      // producer's witness size in bytes; used as a non-deterministic-tolerant size oracle
 	Signature   []byte      // 65-byte secp256k1 signature
 }
 
@@ -187,13 +199,14 @@ func (w *SignedNewWitnessHashesPacket) Kind() byte   { return SignedNewWitnessHa
 // independently computes WitnessAnnouncementSigningHash (= keccak256 of this
 // preimage) and ecrecovers against it. Mismatching hash-vs-preimage between
 // signer and verifier silently breaks every WIT2 signature, hence the split.
-func WitnessAnnouncementSigningPreImage(blockHash common.Hash, blockNumber uint64, witnessHash common.Hash) []byte {
-	const fixedLen = common.HashLength + 8 + common.HashLength
+func WitnessAnnouncementSigningPreImage(blockHash common.Hash, blockNumber uint64, witnessHash common.Hash, witnessSize uint64) []byte {
+	const fixedLen = common.HashLength + 8 + common.HashLength + 8
 	buf := make([]byte, len(witnessAnnounceDomainTag)+fixedLen)
 	n := copy(buf, witnessAnnounceDomainTag)
 	copy(buf[n:], blockHash[:])
 	binary.BigEndian.PutUint64(buf[n+common.HashLength:], blockNumber)
 	copy(buf[n+common.HashLength+8:], witnessHash[:])
+	binary.BigEndian.PutUint64(buf[n+common.HashLength+8+common.HashLength:], witnessSize)
 	return buf
 }
 
@@ -201,8 +214,8 @@ func WitnessAnnouncementSigningPreImage(blockHash common.Hash, blockNumber uint6
 // a witness announcement. Must be byte-identical on both signer and verifier.
 // Used by the verifier; signers must instead feed the preimage into the wallet
 // SignData path, which keccaks once internally.
-func WitnessAnnouncementSigningHash(blockHash common.Hash, blockNumber uint64, witnessHash common.Hash) common.Hash {
-	return crypto.Keccak256Hash(WitnessAnnouncementSigningPreImage(blockHash, blockNumber, witnessHash))
+func WitnessAnnouncementSigningHash(blockHash common.Hash, blockNumber uint64, witnessHash common.Hash, witnessSize uint64) common.Hash {
+	return crypto.Keccak256Hash(WitnessAnnouncementSigningPreImage(blockHash, blockNumber, witnessHash, witnessSize))
 }
 
 func (w *GetWitnessMetadataRequest) Name() string { return "GetWitnessMetadata" }

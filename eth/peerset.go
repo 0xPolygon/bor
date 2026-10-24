@@ -333,9 +333,10 @@ func (ps *peerSet) peersWithWitnessCandidates(hash common.Hash) []*ethPeer {
 // the signed announce arrives long before the body broadcast, and the only
 // peer that could serve us bytes is the one that forwarded the announce.
 //
-// Asking an announce-only peer is safe because byte-blame in
-// witnessManager.verifyAgainstSignedHash only drops on a confirmed hash
-// mismatch — empty/unavailable responses surface as soft failures, not drops.
+// Asking an announce-only peer is safe because witnessManager.verifyAgainstSignedHash
+// only strikes a server for bytes beyond the BP-signed size band (or, later,
+// for a size-oracle-accepted witness that fails import) — empty/unavailable
+// responses surface as soft failures, not strikes or drops.
 func (ps *peerSet) getOnePeerWithWitness(hash common.Hash) *ethPeer {
 	ps.lock.RLock()
 	defer ps.lock.RUnlock()
