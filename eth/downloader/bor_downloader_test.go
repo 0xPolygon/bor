@@ -2568,3 +2568,40 @@ func TestFindAncestorStatelessSearch(t *testing.T) {
 		}
 	})
 }
+
+// TestGetOrWaitFastForwardBlock_ConcurrentUpdate: the sync loop reads the
+// fast-forward block while the milestone handler publishes it from another
+// goroutine. The read must be synchronised (run under -race) and a milestone
+// that lands between the nil-check and the channel wait must not be lost:
+// the waiter has to return the published block, not time out.
+func TestGetOrWaitFastForwardBlock_ConcurrentUpdate(t *testing.T) {
+	tester := newTester(t)
+	defer tester.terminate()
+
+	tester.downloader.mode.Store(uint32(StatelessSync))
+	tester.downloader.FastForwardThreshold = 10
+
+	const target = uint64(500)
+
+	done := make(chan uint64, 1)
+	go func() {
+		done <- tester.downloader.GetOrWaitFastForwardBlock(5 * time.Second)
+	}()
+
+	// Publish from another goroutine while the waiter may be anywhere between
+	// its initial check and the channel receive.
+	go func() {
+		tester.downloader.fastForwardMu.Lock()
+		tester.downloader.setFastForwardBlock(target)
+		tester.downloader.fastForwardMu.Unlock()
+	}()
+
+	select {
+	case got := <-done:
+		if got != target {
+			t.Fatalf("expected fast forward block %d, got %d", target, got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("waiter did not observe the published fast forward block; wakeup was lost")
+	}
+}
