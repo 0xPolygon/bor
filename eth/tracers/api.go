@@ -310,7 +310,7 @@ func (api *API) traceChain(start, end *types.Block, config *TraceConfig, closed 
 						TxIndex:           i,
 						TxHash:            tx.Hash(),
 						CumulativeGasUsed: cumulativeGasUsed,
-						LogIndex:          len(task.statedb.Logs()),
+						LogIndex:          task.statedb.LogCount(),
 					}
 					res, gasUsed, err := api.traceTx(ctx, tx, msg, txctx, blockCtx, task.statedb, config, nil)
 					if err != nil {
@@ -704,7 +704,7 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 			TxIndex:           i,
 			TxHash:            tx.Hash(),
 			CumulativeGasUsed: cumulativeGasUsed,
-			LogIndex:          len(statedb.Logs()),
+			LogIndex:          statedb.LogCount(),
 		}
 		res, gasUsed, err := api.traceTx(ctx, tx, msg, txctx, blockCtx, statedb, config, nil)
 		if err != nil {
@@ -822,7 +822,7 @@ txloop:
 			TxIndex:           len(txs) - 1,
 			TxHash:            tx.Hash(),
 			CumulativeGasUsed: cumulativeGasUsed,
-			LogIndex:          len(statedb.Logs()),
+			LogIndex:          statedb.LogCount(),
 		}
 		res, _, err := api.traceTx(ctx, tx, msg, txctx, blockCtx, statedb, config, nil)
 		if err != nil {
