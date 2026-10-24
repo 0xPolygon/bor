@@ -20,8 +20,10 @@ import (
 	"errors"
 	"math/big"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -34,6 +36,49 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/params"
 )
+
+func TestSyncTransactionsFiltersNonGossipable(t *testing.T) {
+	for _, protocol := range eth.ProtocolVersions {
+		for _, includePublic := range []bool{false, true} {
+			synctest.Test(t, func(t *testing.T) {
+				pool := newTestTxPool()
+				public := types.NewTx(&types.LegacyTx{})
+				conditional := types.NewTx(&types.LegacyTx{Nonce: 1})
+				private := types.NewTx(&types.LegacyTx{Nonce: 2})
+				conditional.PutOptions(new(types.OptionsPIP15))
+				pool.pool[conditional.Hash()], pool.pool[private.Hash()] = conditional, private
+				if includePublic {
+					pool.pool[public.Hash()] = public
+				}
+				h := &handler{txpool: pool, privateTxGetter: &PrivateTxStore{
+					store: map[common.Hash]struct{}{private.Hash(): {}},
+				}}
+				source, sink := p2p.MsgPipe()
+				defer source.Close()
+				defer sink.Close()
+				peer := eth.NewPeer(protocol, p2p.NewPeer(enode.ID{1}, "", nil), source, pool)
+				defer peer.Close()
+				h.syncTransactions(peer)
+				synctest.Wait()
+				if peer.KnownTransaction(conditional.Hash()) || peer.KnownTransaction(private.Hash()) {
+					t.Fatal("initial sync marked a non-gossipable transaction known")
+				}
+				if peer.KnownTransaction(public.Hash()) != includePublic {
+					t.Fatal("initial sync did not track the public transaction correctly")
+				}
+				if includePublic {
+					packet := &eth.NewPooledTransactionHashesPacket{
+						Types: []byte{public.Type()}, Sizes: []uint32{uint32(public.Size())},
+						Hashes: []common.Hash{public.Hash()},
+					}
+					if err := p2p.ExpectMsg(sink, eth.NewPooledTransactionHashesMsg, packet); err != nil {
+						t.Fatal(err)
+					}
+				}
+			})
+		}
+	}
+}
 
 // Tests that snap sync is disabled after a successful sync cycle.
 func TestSnapSyncDisabling69(t *testing.T) { testSnapSyncDisabling(t, eth.ETH69, snap.SNAP1) }

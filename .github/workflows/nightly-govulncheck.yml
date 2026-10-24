@@ -4,22 +4,28 @@ on:
   schedule:
     - cron: '0 2 * * *'
   workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch to scan
+        default: develop
 
 concurrency:
-  group: nightly-govulncheck-${{ github.ref }}
+  group: nightly-govulncheck-${{ inputs.ref || 'develop' }}
   cancel-in-progress: true
 
 jobs:
   govulncheck:
-    name: Run govulncheck on develop
+    name: Run govulncheck on ${{ inputs.ref || 'develop' }}
     runs-on: ubuntu24.04-16core-64GB-600SSD-bor
     permissions:
       contents: read
+    env:
+      HAS_SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK != '' }}
 
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: develop
+          ref: ${{ inputs.ref || 'develop' }}
 
       - uses: actions/setup-go@v6
         with:
@@ -36,3 +42,15 @@ jobs:
 
       - name: Run govulncheck
         run: make vulncheck
+
+      - name: Notify Slack on failure
+        if: failure() && env.HAS_SLACK_WEBHOOK == 'true'
+        continue-on-error: true
+        uses: slackapi/slack-github-action@fcfb566f8b0aab22203f066d80ca1d7e4b5d05b3 # v1
+        with:
+          payload: |
+            {
+              "text": ${{ toJSON(format(':warning: Nightly govulncheck failed on {0} ({1}){2}<{3}/{0}/actions/runs/{4}|View Run>', github.repository, inputs.ref || 'develop', fromJSON('"\n"'), github.server_url, github.run_id)) }}
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
