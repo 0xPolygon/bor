@@ -43,9 +43,14 @@ type StoreReadDesc struct {
 // BalReadDesc tracks a balance delta read for validation.
 // Deduplicated per address, so typically only a handful per tx.
 type BalReadDesc struct {
-	Addr   common.Address
-	BalAdd uint256.Int
-	BalSub uint256.Int
+	Addr common.Address
+	// AfterIdx is the latest prior SELFDESTRUCT tx index observed for Addr
+	// (-1 if none). Deltas at or before it are excluded from BalAdd/BalSub,
+	// so validation must resolve the read across the same destruction
+	// boundary the execution read used.
+	AfterIdx int
+	BalAdd   uint256.Int
+	BalSub   uint256.Int
 }
 
 // ---------------------------------------------------------------------------
@@ -163,6 +168,10 @@ type ParallelStateDB struct {
 	// building a Contract whose Code and CodeHash disagree (poisoning the shared
 	// jumpdest cache). Mirrors balCache/committedCache/destructedCache.
 	codeReadCache map[common.Address]codeKeyRead
+
+	// Per-tx GetCodeHash results. Invalidated wherever localCode[addr]
+	// changes (SetCode and the jkCode/jkCreate reverts).
+	codeHashCache map[common.Address]common.Hash
 
 	// Recorded transfers for log generation during settlement
 	Transfers []TransferRecord
@@ -283,6 +292,7 @@ func (s *ParallelStateDB) Reset(txIndex int, base *SafeBase, store *blockstm.MVS
 	s.destructedSeen = nil
 	s.committedCache = nil
 	s.codeReadCache = nil
+	s.codeHashCache = nil
 	s.Transfers = s.Transfers[:0]
 	s.FeeData = nil
 	s.Coinbase = common.Address{}
@@ -426,7 +436,7 @@ func (s *ParallelStateDB) recordStoreReadEx(key blockstm.Key, writerIdx, writerI
 	s.StoreReads = append(s.StoreReads, StoreReadDesc{Key: key, WriterIdx: writerIdx, WriterInc: writerInc, StoreVal: val, ExactWriter: exact})
 }
 
-func (s *ParallelStateDB) recordBalanceRead(addr common.Address, add, sub uint256.Int) {
+func (s *ParallelStateDB) recordBalanceRead(addr common.Address, afterIdx int, add, sub uint256.Int) {
 	if !s.trackReads {
 		return
 	}
@@ -434,7 +444,7 @@ func (s *ParallelStateDB) recordBalanceRead(addr common.Address, add, sub uint25
 		return
 	}
 	s.balAddrSet[addr] = true
-	s.BalReads = append(s.BalReads, BalReadDesc{Addr: addr, BalAdd: add, BalSub: sub})
+	s.BalReads = append(s.BalReads, BalReadDesc{Addr: addr, AfterIdx: afterIdx, BalAdd: add, BalSub: sub})
 }
 
 func (s *ParallelStateDB) recordWrite(key blockstm.Key) {
@@ -692,12 +702,22 @@ func (s *ParallelStateDB) Empty(addr common.Address) bool {
 // ---------- Balance (commutative) ----------
 
 func (s *ParallelStateDB) GetBalance(addr common.Address) *uint256.Int {
-	add, sub := s.priorBalanceDeltas(addr)
-	s.recordBalanceRead(addr, add, sub)
+	// Resolve the balance relative to any prior-tx SELFDESTRUCT, exactly as
+	// GetNonce resolves the nonce: an account destroyed at suicideIdx is
+	// deleted at that tx's finalisation, so its base balance and every delta
+	// up to and including the destroying tx are gone. Without this a same-tx
+	// create/destruct that receives value after the opcode leaks a phantom
+	// balance to later txs (the value must be burned per EIP-6780).
+	suicideIdx := s.priorDestructedAt(addr)
+	add, sub := s.priorBalanceDeltas(addr, suicideIdx)
+	s.recordBalanceRead(addr, suicideIdx, add, sub)
 
-	baseBal, berr := s.base.GetBalance(addr)
-	s.noteBaseReadErr(berr)
-	result := new(uint256.Int).Set(baseBal)
+	result := new(uint256.Int)
+	if suicideIdx < 0 {
+		baseBal, berr := s.base.GetBalance(addr)
+		s.noteBaseReadErr(berr)
+		result.Set(baseBal)
+	}
 	result.Add(result, &add)
 	result.Sub(result, &sub)
 	if a := s.localBalAdd[addr]; a != nil {
@@ -709,15 +729,17 @@ func (s *ParallelStateDB) GetBalance(addr common.Address) *uint256.Int {
 	return result
 }
 
-// priorBalanceDeltas returns the cumulative (add, sub) deltas for addr
-// from prior txs in the block, cached per-address within this tx.
-func (s *ParallelStateDB) priorBalanceDeltas(addr common.Address) (add, sub uint256.Int) {
+// priorBalanceDeltas returns the cumulative (add, sub) deltas for addr from
+// prior txs after afterIdx (the latest prior SELFDESTRUCT, or -1), cached
+// per-address within this tx. afterIdx is a pure function of addr within the
+// tx (destructedCache), so the per-address cache stays valid.
+func (s *ParallelStateDB) priorBalanceDeltas(addr common.Address, afterIdx int) (add, sub uint256.Int) {
 	if s.balCache != nil {
 		if c, ok := s.balCache[addr]; ok {
 			return c[0], c[1]
 		}
 	}
-	add, sub = s.bals.ReadDelta(addr, s.TxIndex)
+	add, sub = s.bals.ReadDeltaAfter(addr, afterIdx, s.TxIndex)
 	if s.balCache == nil {
 		s.balCache = make(map[common.Address]*[2]uint256.Int)
 	}
@@ -836,15 +858,30 @@ func (s *ParallelStateDB) GetCodeSize(addr common.Address) int {
 	return len(s.GetCode(addr))
 }
 
+// cachedCodeHash returns the Keccak256 hash of code for addr, computing it
+// once per tx. Keying by address is safe because every code mutation
+// invalidates the entry, and code read from an earlier tx is fixed for the
+// whole incarnation.
+func (s *ParallelStateDB) cachedCodeHash(addr common.Address, code []byte) common.Hash {
+	if h, ok := s.codeHashCache[addr]; ok {
+		return h
+	}
+	h := types.EmptyCodeHash
+	if len(code) != 0 {
+		h = crypto.Keccak256Hash(code)
+	}
+	if s.codeHashCache == nil {
+		s.codeHashCache = make(map[common.Address]common.Hash, 1)
+	}
+	s.codeHashCache[addr] = h
+	return h
+}
+
 func (s *ParallelStateDB) GetCodeHash(addr common.Address) common.Hash {
 	// For existing accounts, return the stored code hash.
 	// Only recompute for accounts with newly set code.
 	if _, ok := s.localCode[addr]; ok {
-		code := s.GetCode(addr)
-		if len(code) == 0 {
-			return types.EmptyCodeHash
-		}
-		return crypto.Keccak256Hash(code)
+		return s.cachedCodeHash(addr, s.GetCode(addr))
 	}
 	suicideIdx := s.priorDestructedAt(addr)
 	// For code set by prior txs, check MVStore via the same ESTIMATE-aware
@@ -856,11 +893,7 @@ func (s *ParallelStateDB) GetCodeHash(addr common.Address) common.Hash {
 		// Honor the code write only if it happened after the destruction
 		// (otherwise the destruction wiped it).
 		if writerIdx > suicideIdx {
-			code := val.([]byte)
-			if len(code) == 0 {
-				return types.EmptyCodeHash
-			}
-			return crypto.Keccak256Hash(code)
+			return s.cachedCodeHash(addr, val.([]byte))
 		}
 		// Fall through: account may have been recreated without code.
 	} else {
@@ -903,6 +936,7 @@ func (s *ParallelStateDB) SetCode(addr common.Address, code []byte, reason traci
 	}
 	s.journalEntries = append(s.journalEntries, parallelJournalEntry{kind: jkCode, flags: flags, addr: addr, code: prev})
 	s.localCode[addr] = code
+	delete(s.codeHashCache, addr)
 	codeKey := blockstm.NewSubpathKey(addr, CodePath)
 	if !s.DeferMVWrites {
 		s.store.WriteInc(codeKey, s.TxIndex, s.Incarnation, code)

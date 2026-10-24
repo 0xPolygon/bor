@@ -4238,6 +4238,35 @@ func TestCreateThenDeletePreByzantium(t *testing.T) {
 	})
 }
 
+// A head without state while chainmu is held is mid-SetHead, not stateless.
+func TestHeadStateMissingIgnoresHeldChainLock(t *testing.T) {
+	_, _, chain, err := newCanonical(ethash.NewFaker(), 10, true, rawdb.PathScheme)
+	require.NoError(t, err)
+	defer chain.Stop()
+	head := chain.CurrentBlock()
+	got, missing := chain.HeadStateMissing()
+	require.False(t, missing)
+	require.Equal(t, head.Hash(), got.Hash())
+
+	stateless := types.CopyHeader(head)
+	stateless.Root = common.HexToHash("0xdead")
+
+	chain.chainmu.MustLock()
+	chain.currentBlock.Store(stateless)
+	_, missingWhileLocked := chain.HeadStateMissing()
+	chain.chainmu.Unlock()
+	require.False(t, missingWhileLocked, "reported stateless while chainmu was held")
+
+	got, missing = chain.HeadStateMissing()
+	require.True(t, missing, "missed a head without state")
+	require.Equal(t, stateless.Hash(), got.Hash(), "returned a different head than it checked")
+
+	chain.currentBlock.Store(head)
+	got, missing = chain.HeadStateMissing()
+	require.False(t, missing)
+	require.Equal(t, head.Hash(), got.Hash())
+}
+
 func TestHasRecentPipelinedHeadState(t *testing.T) {
 	block := types.NewBlockWithHeader(&types.Header{
 		Number: big.NewInt(1),

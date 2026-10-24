@@ -178,7 +178,7 @@ func NewServer(config *Config, opts ...serverOption) (*Server, error) {
 	}
 
 	// create the node/stack
-	nodeCfg, err := config.buildNode()
+	nodeCfg, err := config.buildNode(log.Root())
 	if err != nil {
 		return nil, err
 	}
