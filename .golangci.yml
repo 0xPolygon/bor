@@ -1,7 +1,7 @@
 # This file configures github.com/golangci/golangci-lint.
 version: '2'
 run:
-  go: '1.26.10'
+  go: '1.27.3'
   tests: true
 linters:
   default: none
@@ -38,6 +38,7 @@ linters:
     govet:
       disable:
         - buildtag
+        - inline # go1.27 analyzer: refactor suggestions only (like staticcheck QF*)
     staticcheck:
       checks:
         # disable Quickfixes
