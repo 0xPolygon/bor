@@ -116,7 +116,7 @@ func (fi *fastIterator) init() {
 		for {
 			// If the iterator is exhausted, drop it off the end
 			if !it.it.Next() {
-				it.it.Release()
+				fi.releaseStopped(it.it)
 
 				last := len(fi.iterators) - 1
 
@@ -160,9 +160,20 @@ func (fi *fastIterator) init() {
 	fi.initiated = false
 }
 
+// releaseStopped releases a sub-iterator whose Next returned false. A layer
+// that turned stale stops its iterator early; dropping it like an exhausted
+// one would continue on the lower layers and yield a mix of states, so its
+// error fails the whole iterator.
+func (fi *fastIterator) releaseStopped(it Iterator) {
+	if err := it.Error(); err != nil {
+		fi.fail = err
+	}
+	it.Release()
+}
+
 // Next steps the iterator forward one element, returning false if exhausted.
 func (fi *fastIterator) Next() bool {
-	if len(fi.iterators) == 0 {
+	if fi.fail != nil || len(fi.iterators) == 0 {
 		return false
 	}
 
@@ -195,8 +206,8 @@ func (fi *fastIterator) Next() bool {
 	//  - hit an error,
 	//  - or exhaust the iterator
 	for {
-		if !fi.next(0) {
-			return false // exhausted
+		if !fi.next(0) || fi.fail != nil {
+			return false // exhausted or failed
 		}
 
 		if fi.account {
@@ -229,7 +240,7 @@ func (fi *fastIterator) next(idx int) bool {
 	// next one is surely not exhausted yet, otherwise it would have been removed
 	// already).
 	if it := fi.iterators[idx].it; !it.Next() {
-		it.Release()
+		fi.releaseStopped(it)
 
 		fi.iterators = append(fi.iterators[:idx], fi.iterators[idx+1:]...)
 
