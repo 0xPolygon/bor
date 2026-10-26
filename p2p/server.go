@@ -528,12 +528,14 @@ func (srv *Server) Stop() {
 		// this unblocks listener Accept
 		srv.listener.Close()
 	}
-	if srv.bulk != nil {
-		srv.bulk.Close()
-	}
-
-	close(srv.quit)
+	bulk := srv.bulk
 	srv.lock.Unlock()
+	// Authentication can be waiting for srv.lock; drain it before the main
+	// loop closes the node database.
+	if bulk != nil {
+		bulk.Close()
+	}
+	close(srv.quit)
 	srv.loopWG.Wait()
 }
 
