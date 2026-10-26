@@ -1328,25 +1328,12 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	sharedCaches := newSharedBlockCaches()
 	bc.startPrefetchGoroutine(block, throwaway, sharedCaches, followupInterrupt)
 
-	type Result struct {
-		receipts types.Receipts
-		logs     []*types.Log
-		usedGas  uint64
-		err      error
-		statedb  *state.StateDB
-		counter  *metrics.Counter
-		parallel bool
-		vtime    time.Duration
-		execFrom time.Time
-		execTo   time.Time
-	}
-
 	var resultChanLen int = 2
 	if bc.enforceParallelProcessor {
 		log.Debug("Processing block using Block STM only", "number", block.NumberU64())
 		resultChanLen = 1
 	}
-	resultChan := make(chan Result, resultChanLen)
+	resultChan := make(chan processorResult, resultChanLen)
 
 	processorCount := 0
 	execStart := time.Now()
@@ -1380,7 +1367,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 			if res == nil {
 				res = &ProcessResult{}
 			}
-			resultChan <- Result{
+			resultChan <- processorResult{
 				receipts: res.Receipts,
 				logs:     res.Logs,
 				usedGas:  res.GasUsed,
@@ -1399,35 +1386,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		processorCount++
 
 		go func() {
-			pstart := time.Now()
-			statedb.StartPrefetcher("chain", witness, nil)
-			res, err := bc.processor.Process(block, statedb, bc.cfg.VmConfig, nil, ctx)
-			pend := time.Now()
-			blockExecutionSerialTimer.Update(pend.Sub(pstart))
-			var localVtime time.Duration
-			if err == nil {
-				vstart := time.Now()
-				err = validateStateForPipeline(bc.validator, block, statedb, res, pipeOpts)
-				localVtime = time.Since(vstart)
-			}
-			if err != nil || ctx.Err() != nil {
-				statedb.StopPrefetcher()
-			}
-			if res == nil {
-				res = &ProcessResult{}
-			}
-			resultChan <- Result{
-				receipts: res.Receipts,
-				logs:     res.Logs,
-				usedGas:  res.GasUsed,
-				err:      err,
-				statedb:  statedb,
-				counter:  blockExecutionSerialCounter,
-				parallel: false,
-				vtime:    localVtime,
-				execFrom: pstart,
-				execTo:   pend,
-			}
+			resultChan <- bc.runSerialProcessor(ctx, block, statedb, witness, pipeOpts)
 		}()
 	}
 
@@ -1457,6 +1416,11 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 			result = <-resultChan
 			result.statedb.StopPrefetcher()
 			processorCount--
+		} else if errors.Is(result.err, errV2WriteBudgetExhausted) && bc.processor != nil {
+			// Says nothing about the block's validity, so even with the
+			// parallel processor enforced the serial result decides.
+			result = bc.runSerialProcessor(ctx, block, statedb, witness, pipeOpts)
+			result.statedb.StopPrefetcher()
 		}
 	}
 	if result.err == nil {
@@ -1501,6 +1465,56 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	}
 
 	return result.receipts, result.logs, result.usedGas, result.statedb, result.vtime, result.err
+}
+
+// processorResult is one processor's outcome in ProcessBlock's
+// serial/parallel race.
+type processorResult struct {
+	receipts types.Receipts
+	logs     []*types.Log
+	usedGas  uint64
+	err      error
+	statedb  *state.StateDB
+	counter  *metrics.Counter
+	parallel bool
+	vtime    time.Duration
+	execFrom time.Time
+	execTo   time.Time
+}
+
+// runSerialProcessor executes and validates block with the serial processor
+// on statedb.
+func (bc *BlockChain) runSerialProcessor(ctx context.Context, block *types.Block, statedb *state.StateDB,
+	witness *stateless.Witness, pipeOpts *PipelineImportOpts) processorResult {
+	pstart := time.Now()
+	statedb.StartPrefetcher("chain", witness, nil)
+	res, err := bc.processor.Process(block, statedb, bc.cfg.VmConfig, nil, ctx)
+	pend := time.Now()
+	blockExecutionSerialTimer.Update(pend.Sub(pstart))
+	var localVtime time.Duration
+	if err == nil {
+		vstart := time.Now()
+		err = validateStateForPipeline(bc.validator, block, statedb, res, pipeOpts)
+		localVtime = time.Since(vstart)
+	}
+	if err != nil || ctx.Err() != nil {
+		statedb.StopPrefetcher()
+	}
+	if res == nil {
+		res = &ProcessResult{}
+	}
+	return processorResult{
+		receipts: res.Receipts,
+		logs:     res.Logs,
+		usedGas:  res.GasUsed,
+		err:      err,
+		statedb:  statedb,
+		counter:  blockExecutionSerialCounter,
+		parallel: false,
+		vtime:    localVtime,
+		execFrom: pstart,
+		execTo:   pend,
+	}
 }
 
 func (bc *BlockChain) claimPreconf(block *types.Block, requireWitness bool, compatible, allowPrefix bool) (*PreconfExecution, time.Duration, bool) {
