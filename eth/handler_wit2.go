@@ -479,7 +479,7 @@ func (h *handler) drainDeferredCandidate(blockHash common.Hash, entry *deferredA
 		if !headerAvailable {
 			// Header still not local — re-stash with fresh receivedAt so the
 			// next chain-head event can try again before the TTL expires.
-			h.deferredAnnounces.put(entry.announcement, entry.peerID)
+			h.deferredAnnounces.putObserved(entry.announcement, entry.peerID, entry.observe)
 			return false
 		}
 		wit2NotValidatorMeter.Mark(1)
@@ -490,7 +490,7 @@ func (h *handler) drainDeferredCandidate(blockHash common.Hash, entry *deferredA
 		// this, timing a forged announce to always arrive before its header is
 		// local lets an attacker repeat it indefinitely without ever accruing
 		// a strike.
-		h.strikeWit2PeerByID(entry.peerID)
+		h.strikeWit2Announcement(entry.peerID, entry.observe)
 		return false
 	}
 	// Producer match. Promote the first one; any further producer-signed
