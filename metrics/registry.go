@@ -19,7 +19,6 @@ var ErrDuplicateMetric = errors.New("duplicate metric")
 // This is an interface to encourage other structs to implement
 // the Registry API as appropriate.
 type Registry interface {
-
 	// Each call the given function for each registered metric.
 	Each(func(string, interface{}))
 
@@ -144,6 +143,9 @@ func (r *StandardRegistry) GetAll() map[string]map[string]interface{} {
 			values["value"] = metric.Snapshot().Value()
 		case *GaugeFloat64:
 			values["value"] = metric.Snapshot().Value()
+		case *GaugeVec:
+			values["label"] = metric.Label()
+			values["values"] = metric.Snapshot()
 		case *Healthcheck:
 			values["error"] = nil
 
@@ -205,7 +207,7 @@ func (r *StandardRegistry) Unregister(name string) {
 
 func (r *StandardRegistry) loadOrRegister(name string, i interface{}) (interface{}, bool, bool) {
 	switch i.(type) {
-	case *Counter, *CounterFloat64, *Gauge, *GaugeFloat64, *GaugeInfo, *Healthcheck, Histogram, *Meter, *Timer, *ResettingTimer:
+	case *Counter, *CounterFloat64, *Gauge, *GaugeFloat64, *GaugeInfo, *GaugeVec, *Healthcheck, Histogram, *Meter, *Timer, *ResettingTimer:
 	default:
 		return nil, false, false
 	}
@@ -219,6 +221,22 @@ func (r *StandardRegistry) registered() map[string]interface{} {
 		metrics[key.(string)] = value
 		return true
 	})
+	var groups map[*GaugeVecGroup]*GaugeVecGroup
+	for name, metric := range metrics {
+		gauge, ok := metric.(*GaugeVec)
+		if !ok || gauge.group == nil {
+			continue
+		}
+		if groups == nil {
+			groups = make(map[*GaugeVecGroup]*GaugeVecGroup)
+		}
+		group := groups[gauge.group]
+		if group == nil {
+			group = gauge.group.snapshot()
+			groups[gauge.group] = group
+		}
+		metrics[name] = group.Gauge(gauge.name, gauge.label)
+	}
 	return metrics
 }
 
@@ -317,9 +335,7 @@ func (r *PrefixedRegistry) Unregister(name string) {
 	r.underlying.Unregister(realName)
 }
 
-var (
-	DefaultRegistry = NewRegistry()
-)
+var DefaultRegistry = NewRegistry()
 
 // Each call the given function for each registered metric.
 func Each(f func(string, interface{})) {

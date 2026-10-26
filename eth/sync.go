@@ -339,6 +339,11 @@ func (cs *chainSyncer) startSync(op *chainSyncOp) {
 
 // doSync synchronizes the local blockchain with a remote peer.
 func (h *handler) doSync(op *chainSyncOp) error {
+	// Ordinary full-sync catch-up does not suspend transaction relay observations.
+	if op.mode == downloader.SnapSync || op.mode == downloader.StatelessSync {
+		h.setContributionSyncing(true)
+		defer h.setContributionSyncing(false)
+	}
 	if op.mode == downloader.SnapSync {
 		// Before launch the snap sync, we have to ensure user uses the same
 		// txlookup limit.
