@@ -20,6 +20,8 @@ import (
 	"sort"
 	"time"
 
+	"github.com/holiman/uint256"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/txpool"
@@ -153,7 +155,7 @@ func (q *queue) add(tx *types.Transaction) (*common.Hash, error) {
 // - all transactions that were removed from the queue and selected for promotion;
 // - all other transactions that were removed from the queue and dropped;
 // - the list of addresses removed.
-func (q *queue) promoteExecutables(accounts []common.Address, gasLimit uint64, currentState *state.StateDB, nonces *noncer) ([]*types.Transaction, []common.Hash, []common.Address) {
+func (q *queue) promoteExecutables(accounts []common.Address, gasLimit uint64, currentState *state.StateDB, nonces *noncer, pendingCost func(common.Address, uint64) *uint256.Int) ([]*types.Transaction, []common.Hash, []common.Address) {
 	// Track the promotable transactions to broadcast them at once
 	var (
 		promotable       []*types.Transaction
@@ -183,6 +185,11 @@ func (q *queue) promoteExecutables(accounts []common.Address, gasLimit uint64, c
 
 		// Gather all executable transactions and promote them
 		readies := list.Ready(nonces.get(addr))
+		// bor: never promote past the sender's balance (cumulative), so the
+		// pending set of an account can not overdraft. Unaffordable txs stay queued.
+		if len(readies) > 0 {
+			readies = keepAffordable(list, readies, currentState.GetBalance(addr), pendingCost(addr, readies[0].Nonce()))
+		}
 		promotable = append(promotable, readies...)
 		log.Trace("Promoting queued transactions", "count", len(promotable))
 		queuedGauge.Dec(int64(len(readies)))

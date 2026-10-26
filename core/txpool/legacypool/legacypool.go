@@ -825,22 +825,10 @@ func (pool *LegacyPool) validateTx(tx *types.Transaction) error {
 	opts := &txpool.ValidationOptionsWithState{
 		State: pool.currentState,
 
-		FirstNonceGap:    nil, // Pool allows arbitrary arrival order, don't invalidate nonce gaps
-		UsedAndLeftSlots: nil, // Pool has own mechanism to limit the number of transactions
-		ExistingExpenditure: func(addr common.Address) *big.Int {
-			if list := pool.pending[addr]; list != nil {
-				return list.totalcost.ToBig()
-			}
-			return new(big.Int)
-		},
-		ExistingCost: func(addr common.Address, nonce uint64) *big.Int {
-			if list := pool.pending[addr]; list != nil {
-				if tx := list.txs.Get(nonce); tx != nil {
-					return tx.Cost()
-				}
-			}
-			return nil
-		},
+		FirstNonceGap:       nil, // Pool allows arbitrary arrival order, don't invalidate nonce gaps
+		UsedAndLeftSlots:    nil, // Pool has own mechanism to limit the number of transactions
+		ExistingExpenditure: func(addr common.Address) *big.Int { return pool.existingExpenditure(addr, tx.Nonce()) },
+		ExistingCost:        pool.existingCost,
 	}
 	if err := txpool.ValidateTransactionWithState(tx, pool.signer, opts); err != nil {
 		return err
@@ -1106,6 +1094,11 @@ func (pool *LegacyPool) add(tx *types.Transaction, async bool) (replaced bool, e
 			pool.mu.Lock()
 			asyncAddStage2LockWaitTimer.Update(time.Since(lockStart))
 			locked = true
+
+			if err := pool.revalidateAfterRelock(tx, drop, reheapCount); err != nil {
+				stage2Duration = time.Since(stage2Time)
+				return false, err
+			}
 		}
 
 		// If the new transaction is a future transaction it should never churn pending transactions
@@ -1859,7 +1852,7 @@ func (pool *LegacyPool) SetSpeculativeState(newHead *types.Header, statedb *stat
 // invalidated transactions (low nonce, low balance) are deleted.
 func (pool *LegacyPool) promoteExecutables(accounts []common.Address) []*types.Transaction {
 	gasLimit := pool.currentHead.Load().GasLimit
-	promotable, dropped, removedAddresses := pool.queue.promoteExecutables(accounts, gasLimit, pool.currentState, pool.pendingNonces)
+	promotable, dropped, removedAddresses := pool.queue.promoteExecutables(accounts, gasLimit, pool.currentState, pool.pendingNonces, pool.unminedPendingCost)
 
 	// promote all promotable transactions
 	promoted := make([]*types.Transaction, 0, len(promotable))
