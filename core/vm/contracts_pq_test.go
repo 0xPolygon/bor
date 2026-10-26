@@ -524,6 +524,9 @@ func TestPQVerifyNotActivated(t *testing.T) {
 			t.Errorf("unexpected address %v (%s) in PrecompiledContractsPQ", a, p.Name())
 		}
 	}
+	if mldsa65Precompile.Name() != "MLDSA65VERIFY" || slhdsaPrecompile.Name() != "SLHDSASHA2128SVERIFY" {
+		t.Errorf("names %q, %q", mldsa65Precompile.Name(), slhdsaPrecompile.Name())
+	}
 	if len(PrecompiledContractsPQ) != 2 {
 		t.Errorf("PrecompiledContractsPQ has %d entries, want 2", len(PrecompiledContractsPQ))
 	}
