@@ -3387,7 +3387,7 @@ func TestBuildTxPlan(t *testing.T) {
 	}
 	require.Greater(t, len(allHashes), 1, "need at least 2 txs")
 
-	heap := newTransactionsByPriceAndNonce(signer, txsMap, baseFee, new(atomic.Bool))
+	heap := newTransactionsByPriceAndNonce(signer, txsMap, uint256.MustFromBig(baseFee), new(atomic.Bool))
 
 	// Count how many entries the heap exposes before calling buildTxPlan.
 	countHeap := func(h *transactionsByPriceAndNonce) int {

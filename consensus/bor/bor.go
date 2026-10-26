@@ -449,6 +449,10 @@ func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 	if header.Number == nil {
 		return errUnknownBlock
 	}
+	// Every check below works on the uint64 form, which silently truncates.
+	if !header.Number.IsUint64() {
+		return consensus.ErrInvalidNumber
+	}
 
 	number := header.Number.Uint64()
 	now := uint64(time.Now().Unix())
@@ -949,6 +953,10 @@ func (c *Bor) VerifySeal(chain consensus.ChainHeaderReader, header *types.Header
 // headers that aren't yet part of the local blockchain to generate the snapshots
 // from.
 func (c *Bor) verifySeal(chain consensus.ChainHeaderReader, header *types.Header, parents []*types.Header) error {
+	// VerifySeal is also called directly, without verifyHeader's number check.
+	if header.Number == nil || !header.Number.IsUint64() {
+		return consensus.ErrInvalidNumber
+	}
 	// Verifying the genesis block is not supported
 	number := header.Number.Uint64()
 	if number == 0 {

@@ -1266,8 +1266,7 @@ func (w *worker) mainLoop() {
 				}
 
 				timeoutInterrupt, _ := w.interruptStateForEnv(w.current)
-				plainTxs := newTransactionsByPriceAndNonce(w.current.signer, txs, w.current.header.BaseFee, timeoutInterrupt) // Mixed bag of everrything, yolo
-				blobTxs := newTransactionsByPriceAndNonce(w.current.signer, nil, w.current.header.BaseFee, timeoutInterrupt)  // Empty bag, don't bother optimising
+				plainTxs, blobTxs := pendingTxSets(w.current.signer, txs, w.current.header.BaseFee, timeoutInterrupt)
 
 				tcount := w.current.tcount
 
@@ -2095,6 +2094,10 @@ func (w *worker) makeHeader(genParams *generateParams, waitOnPrepare bool) (*typ
 	// Set baseFee and GasLimit if we are on an EIP-1559 chain
 	if w.chainConfig.IsLondon(header.Number) {
 		header.BaseFee = eip1559.CalcBaseFee(w.chainConfig, parent)
+		// Verifiers reject a base fee wider than 256 bits, so don't build on it.
+		if _, err := headerBaseFee(header.BaseFee); err != nil {
+			return nil, common.Address{}, err
+		}
 		if !w.chainConfig.IsLondon(parent.Number) {
 			parentGasLimit := parent.GasLimit * w.chainConfig.ElasticityMultiplier()
 			header.GasLimit = core.CalcGasLimit(parentGasLimit, desiredGasLimit)
@@ -2175,18 +2178,19 @@ func (w *worker) prepareWork(genParams *generateParams, witness bool) (*environm
 
 // buildDefaultFilter creates a pending transaction filter based on chain configuration
 // and current tip/base fee settings.
-func (w *worker) buildDefaultFilter(BaseFee *big.Int, Number *big.Int) txpool.PendingFilter {
+func (w *worker) buildDefaultFilter(BaseFee *big.Int, Number *big.Int) (txpool.PendingFilter, error) {
 	w.mu.RLock()
 	tip := w.tip
 	w.mu.RUnlock()
 
+	baseFee, err := headerBaseFee(BaseFee)
+	if err != nil {
+		return txpool.PendingFilter{}, err
+	}
 	// Retrieve the pending transactions pre-filtered by the 1559/4844 dynamic fees
 	filter := txpool.PendingFilter{
-		MinTip: uint256.MustFromBig(tip.ToBig()),
-	}
-
-	if BaseFee != nil {
-		filter.BaseFee = uint256.MustFromBig(BaseFee)
+		MinTip:  uint256.MustFromBig(tip.ToBig()),
+		BaseFee: baseFee,
 	}
 
 	isOsaka := w.chainConfig.IsOsaka(Number)
@@ -2196,7 +2200,27 @@ func (w *worker) buildDefaultFilter(BaseFee *big.Int, Number *big.Int) txpool.Pe
 		filter.GasLimitCap = params.MaxTxGas
 	}
 
-	return filter
+	return filter, nil
+}
+
+// headerBaseFee converts a header base fee, which is unbounded on the wire.
+func headerBaseFee(baseFee *big.Int) (*uint256.Int, error) {
+	fee, overflow := uint256.FromBig(baseFee)
+	if overflow {
+		return nil, fmt.Errorf("base fee does not fit in 256 bits: bitlen %d", baseFee.BitLen())
+	}
+	return fee, nil
+}
+
+// pendingTxSets orders txs for the pending block. A base fee that doesn't fit
+// in 256 bits yields empty sets, so nothing is added.
+func pendingTxSets(signer types.Signer, txs map[common.Address][]*txpool.LazyTransaction, baseFee *big.Int, interrupt *atomic.Bool) (*transactionsByPriceAndNonce, *transactionsByPriceAndNonce) {
+	fee, err := headerBaseFee(baseFee)
+	if err != nil {
+		log.Error("Skipping pending block transactions", "err", err)
+		txs = nil
+	}
+	return newTransactionsByPriceAndNonce(signer, txs, fee, interrupt), newTransactionsByPriceAndNonce(signer, nil, fee, interrupt)
 }
 
 // buildTxPlan greedily scans h (which is consumed) and returns the ordered list of
@@ -2347,7 +2371,10 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, gen
 
 	pendingStart := time.Now()
 
-	filter := w.buildDefaultFilter(env.header.BaseFee, env.header.Number)
+	filter, err := w.buildDefaultFilter(env.header.BaseFee, env.header.Number)
+	if err != nil {
+		return err
+	}
 	timeoutInterrupt, _ := w.interruptStateForEnv(env)
 
 	filter.BlobTxs = false
@@ -2401,8 +2428,8 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, gen
 
 	// Fill the block with all available pending transactions.
 	if len(prioPlainTxs) > 0 || len(prioBlobTxs) > 0 {
-		plainTxs := newTransactionsByPriceAndNonce(env.signer, prioPlainTxs, env.header.BaseFee, timeoutInterrupt)
-		blobTxs := newTransactionsByPriceAndNonce(env.signer, prioBlobTxs, env.header.BaseFee, timeoutInterrupt)
+		plainTxs := newTransactionsByPriceAndNonce(env.signer, prioPlainTxs, filter.BaseFee, timeoutInterrupt)
+		blobTxs := newTransactionsByPriceAndNonce(env.signer, prioBlobTxs, filter.BaseFee, timeoutInterrupt)
 		sendPlan(builderPlanCh, genParams, plainTxs, remainingGas())
 		if err := w.commitTransactions(env, plainTxs, blobTxs, interrupt, builderGasFreedCh); err != nil {
 			return err
@@ -2410,8 +2437,8 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, gen
 	}
 	if len(normalPlainTxs) > 0 || len(normalBlobTxs) > 0 {
 		heapInitTime := time.Now()
-		plainTxs := newTransactionsByPriceAndNonce(env.signer, normalPlainTxs, env.header.BaseFee, timeoutInterrupt)
-		blobTxs := newTransactionsByPriceAndNonce(env.signer, normalBlobTxs, env.header.BaseFee, timeoutInterrupt)
+		plainTxs := newTransactionsByPriceAndNonce(env.signer, normalPlainTxs, filter.BaseFee, timeoutInterrupt)
+		blobTxs := newTransactionsByPriceAndNonce(env.signer, normalBlobTxs, filter.BaseFee, timeoutInterrupt)
 		txHeapInitTimer.Update(time.Since(heapInitTime))
 		sendPlan(builderPlanCh, genParams, plainTxs, remainingGas())
 		if err := w.commitTransactions(env, plainTxs, blobTxs, interrupt, builderGasFreedCh); err != nil {
@@ -3053,7 +3080,11 @@ func drainTxChan(ch <-chan *types.Transaction) {
 // since the budget only bounds speculative work, not correctness.
 func (w *worker) runIdleTxProvider(txsCh chan<- *types.Transaction, header *types.Header, genParams *generateParams, interrupt *atomic.Bool) {
 	signer := types.MakeSigner(w.chainConfig, header.Number, header.Time)
-	filter := w.buildDefaultFilter(header.BaseFee, header.Number)
+	filter, err := w.buildDefaultFilter(header.BaseFee, header.Number)
+	if err != nil {
+		log.Error("Skipping idle prefetch", "err", err)
+		return
+	}
 	filter.BlobTxs = false
 
 	totalGasPool := new(core.GasPool).AddGas(header.GasLimit * idleGasLimitPercent(w.config) / 100)
@@ -3069,7 +3100,7 @@ func (w *worker) runIdleTxProvider(txsCh chan<- *types.Transaction, header *type
 		loopStart := time.Now()
 
 		pendingTxs := w.eth.TxPool().Pending(filter, interrupt)
-		txs := newTransactionsByPriceAndNonce(signer, pendingTxs, header.BaseFee, interrupt)
+		txs := newTransactionsByPriceAndNonce(signer, pendingTxs, filter.BaseFee, interrupt)
 		w.streamIdleBatch(txsCh, txs, totalGasPool, localPrefetched, header.GasLimit)
 
 		waitUntilNextLoop(loopStart, prefetchIdleLoopInterval, shouldExit)
@@ -3189,7 +3220,11 @@ func (w *worker) runBuilderTxProvider(txsCh chan<- *types.Transaction, header *t
 		return
 	}
 
-	overflowHeap := w.buildOverflowHeap(header, interrupt)
+	overflowHeap, err := w.buildOverflowHeap(header, interrupt)
+	if err != nil {
+		log.Error("Skipping builder prefetch", "err", err)
+		return
+	}
 
 	var extendedBudget uint64
 	var gasFreedCh <-chan uint64 = genParams.builderGasFreedCh
@@ -3248,12 +3283,15 @@ func forwardTxs(ch chan<- *types.Transaction, txs []*types.Transaction, inFlight
 // The prefetcher uses it to warm bonus txs that fit in the block due to freed gas
 // (declared > actual usage). It reuses the same filter as fillTransactions so the
 // view is consistent with what the builder sees.
-func (w *worker) buildOverflowHeap(header *types.Header, interrupt *atomic.Bool) *transactionsByPriceAndNonce {
-	filter := w.buildDefaultFilter(header.BaseFee, header.Number)
+func (w *worker) buildOverflowHeap(header *types.Header, interrupt *atomic.Bool) (*transactionsByPriceAndNonce, error) {
+	filter, err := w.buildDefaultFilter(header.BaseFee, header.Number)
+	if err != nil {
+		return nil, err
+	}
 	filter.BlobTxs = false
 	signer := types.MakeSigner(w.chainConfig, header.Number, header.Time)
 	pending := w.eth.TxPool().Pending(filter, interrupt)
-	return newTransactionsByPriceAndNonce(signer, pending, header.BaseFee, interrupt)
+	return newTransactionsByPriceAndNonce(signer, pending, filter.BaseFee, interrupt), nil
 }
 
 // collectPlanBatch runs a single batch-collection window. It reads from the plan

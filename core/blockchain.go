@@ -4959,6 +4959,13 @@ func (bc *BlockChain) InsertHeaderChainWithoutValidation(chain []*types.Header) 
 	if len(chain) == 0 {
 		return 0, nil
 	}
+	// The headers skip engine verification, so at least keep their fields in
+	// the bounds that WriteHeaders and later readers assume.
+	for i, header := range chain {
+		if err := header.SanityCheck(); err != nil {
+			return i, err
+		}
+	}
 
 	if !bc.chainmu.TryLock() {
 		return 0, errChainStopped
