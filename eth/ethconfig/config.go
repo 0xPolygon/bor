@@ -106,6 +106,7 @@ var Defaults = Config{
 	WitnessAPIEnabled:     false,
 	TxSyncDefaultTimeout:  20 * time.Second,
 	TxSyncMaxTimeout:      1 * time.Minute,
+	TxSyncMaxConcurrent:   4096,
 }
 
 //go:generate go run github.com/fjl/gencodec -type Config -formats toml -out gen_config.go
@@ -200,6 +201,10 @@ type Config struct {
 	// This prevents preloading from overwhelming the disk during sync.
 	// 0 = unlimited (legacy behavior), default = 1MB/s
 	PreloadRateLimit int64
+
+	// AddressCachePersist persists the address-specific caches to disk on
+	// shutdown and reloads them on startup. Default: false
+	AddressCachePersist bool
 
 	// Mining options
 	Miner miner.Config
@@ -339,7 +344,26 @@ type Config struct {
 	TxSyncDefaultTimeout time.Duration `toml:",omitempty"`
 	TxSyncMaxTimeout     time.Duration `toml:",omitempty"`
 
+	// TxSyncMaxConcurrent caps calls waiting for an eth_sendRawTransactionSync
+	// receipt. Waiters don't hold an RPC execution slot, so this is what bounds
+	// them; size it for parked goroutines and chain-event subscribers, not for
+	// worker threads. 0 removes the cap.
+	TxSyncMaxConcurrent int `toml:",omitempty"`
+
+	// Sequence store integration (design docs/sequencer-bor.md). Role is
+	// derived, not configured: "producer" on a mining node (publishes the
+	// block lifecycle), "consumer" on a non-mining node (re-executes the
+	// stream for preconf receipts), empty when disabled. The publisher and
+	// consumer gRPC services have their own endpoints (the publisher reads
+	// the tail through the consumer service when it reconciles); Poll is
+	// the txpool poll cadence while a block is open.
+	SequencerRole              string
+	SequencerPublisherEndpoint string
+	SequencerConsumerEndpoint  string
+	SequencerPoll              time.Duration
+
 	// Preconf / Private transaction relay related settings
+
 	EnablePreconfs            bool
 	EnablePrivateTx           bool
 	BlockProducerRpcEndpoints []string

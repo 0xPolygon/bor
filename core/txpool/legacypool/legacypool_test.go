@@ -4993,6 +4993,129 @@ func TestTxFiltering(t *testing.T) {
 	})
 }
 
+func TestTxFilteringSetCodeAuthorities(t *testing.T) {
+	t.Parallel()
+
+	chainID := uint256.MustFromBig(params.MergedTestChainConfig.ChainID)
+	otherChainID := new(uint256.Int).AddUint64(chainID, 1)
+
+	// Authorizations are matched on any recoverable signer, whether or not the
+	// tuple would be applied at execution, so invalid-at-admission tuples from a
+	// filtered signer are still rejected.
+	type authSpec struct {
+		filtered   bool
+		chainID    *uint256.Int // nil uses the pool's chain ID
+		nonce      uint64
+		stateNonce uint64 // authority's account nonce at admission
+		revoke     bool   // delegate to the zero address
+		badSig     bool   // signature values that fail recovery
+	}
+
+	tests := []struct {
+		name           string
+		filterSender   bool
+		auths          []authSpec
+		wantFiltered   bool
+		disableFilters bool
+	}{
+		{name: "unfiltered sender and authority", auths: []authSpec{{}}},
+		{name: "filtered sender", filterSender: true, auths: []authSpec{{}}, wantFiltered: true},
+		{name: "filtered authority", auths: []authSpec{{filtered: true}}, wantFiltered: true},
+		{name: "filtered authority among several", auths: []authSpec{{}, {filtered: true}, {}}, wantFiltered: true},
+		{name: "filtered authority with any-chain authorization", auths: []authSpec{{filtered: true, chainID: new(uint256.Int)}}, wantFiltered: true},
+		{name: "filtered authority with wrong-chain authorization", auths: []authSpec{{filtered: true, chainID: otherChainID}}, wantFiltered: true},
+		{name: "filtered authority with stale nonce", auths: []authSpec{{filtered: true, nonce: 0, stateNonce: 5}}, wantFiltered: true},
+		{name: "filtered authority with future nonce", auths: []authSpec{{filtered: true, nonce: 10}}, wantFiltered: true},
+		{name: "filtered authority revoking delegation", auths: []authSpec{{filtered: true, revoke: true}}, wantFiltered: true},
+		{name: "unrecoverable authorization from filtered key", auths: []authSpec{{filtered: true, badSig: true}}},
+		{name: "empty filter list", auths: []authSpec{{}}, disableFilters: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			senderKey, _ := crypto.GenerateKey()
+			sender := crypto.PubkeyToAddress(senderKey.PublicKey)
+			// An unrelated filtered address keeps the list non-empty for cases
+			// that filter neither the sender nor any authority.
+			filtered := map[common.Address]struct{}{{0xff}: {}}
+			if tt.disableFilters {
+				filtered = map[common.Address]struct{}{}
+			}
+			if tt.filterSender {
+				filtered[sender] = struct{}{}
+			}
+
+			authList := make([]types.SetCodeAuthorization, 0, len(tt.auths))
+			authorities := make([]common.Address, 0, len(tt.auths))
+			for _, spec := range tt.auths {
+				authKey, _ := crypto.GenerateKey()
+				authority := crypto.PubkeyToAddress(authKey.PublicKey)
+				if spec.filtered {
+					filtered[authority] = struct{}{}
+				}
+				authorities = append(authorities, authority)
+
+				unsigned := types.SetCodeAuthorization{
+					ChainID: *chainID,
+					Address: common.Address{0x42},
+					Nonce:   spec.nonce,
+				}
+				if spec.chainID != nil {
+					unsigned.ChainID = *spec.chainID
+				}
+				if spec.revoke {
+					unsigned.Address = common.Address{}
+				}
+				auth, err := types.SignSetCode(authKey, unsigned)
+				if err != nil {
+					t.Fatalf("failed to sign authorization: %v", err)
+				}
+				if spec.badSig {
+					auth.V = 2
+				}
+				authList = append(authList, auth)
+			}
+
+			config := testTxPoolConfig
+			config.FilteredAddresses = filtered
+
+			statedb, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+			blockchain := newTestBlockChain(params.MergedTestChainConfig, 1000000, statedb, new(event.Feed))
+			pool := New(config, blockchain)
+			pool.Init(config.PriceLimit, blockchain.CurrentBlock(), newReserver())
+			defer pool.Close()
+
+			testAddBalance(pool, sender, big.NewInt(params.Ether))
+			for i, spec := range tt.auths {
+				if spec.stateNonce > 0 {
+					testSetNonce(pool, authorities[i], spec.stateNonce)
+				}
+			}
+
+			tx := pricedSetCodeTxWithAuth(0, 250000, uint256.NewInt(1000), uint256.NewInt(1), senderKey, authList)
+			err := pool.addRemoteSync(tx)
+
+			if tt.wantFiltered {
+				if !errors.Is(err, ErrTxFiltered) {
+					t.Fatalf("expected ErrTxFiltered, got %v", err)
+				}
+				if pool.Has(tx.Hash()) {
+					t.Fatal("filtered transaction should not be in pool")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("transaction should be accepted, got %v", err)
+			}
+			if !pool.Has(tx.Hash()) {
+				t.Fatal("transaction should be in pool")
+			}
+		})
+	}
+}
+
 // setupRebroadcastTest creates a pool with rebroadcast config and adds a transaction.
 // Returns the pool, key, sender address, and the added transaction.
 func setupRebroadcastTest(t *testing.T, interval, maxAge time.Duration, batchSize int) (*LegacyPool, *ecdsa.PrivateKey, common.Address, *types.Transaction) {
@@ -5562,6 +5685,7 @@ func TestRebroadcastLoopIntegration(t *testing.T) {
 		if event.Txs[0].Hash() != tx.Hash() {
 			t.Errorf("wrong transaction hash in rebroadcast event")
 		}
+		pool.RebroadcastAcknowledgement(event.Txs)([]common.Hash{tx.Hash()})
 	case <-time.After(500 * time.Millisecond):
 		t.Error("timeout waiting for rebroadcast event")
 	}

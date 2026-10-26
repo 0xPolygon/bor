@@ -427,12 +427,13 @@ func (n *Node) startRPC() error {
 		}
 
 		if err := server.enableRPC(openAPIs, httpConfig{
-			CorsAllowedOrigins: n.config.HTTPCors,
-			Vhosts:             n.config.HTTPVirtualHosts,
-			Modules:            n.config.HTTPModules,
-			prefix:             n.config.HTTPPathPrefix,
-			executionPoolSize:  n.config.HTTPJsonRPCExecutionPoolSize,
-			rpcEndpointConfig:  rpcConfig,
+			CorsAllowedOrigins:          n.config.HTTPCors,
+			Vhosts:                      n.config.HTTPVirtualHosts,
+			Modules:                     n.config.HTTPModules,
+			prefix:                      n.config.HTTPPathPrefix,
+			executionPoolSize:           n.config.HTTPJsonRPCExecutionPoolSize,
+			executionPoolRequestTimeout: n.config.HTTPJsonRPCExecutionPoolRequestTimeout,
+			rpcEndpointConfig:           rpcConfig,
 		}); err != nil {
 			return err
 		}
@@ -449,11 +450,12 @@ func (n *Node) startRPC() error {
 		}
 
 		if err := server.enableWS(openAPIs, wsConfig{
-			executionPoolSize: n.config.WSJsonRPCExecutionPoolSize,
-			Modules:           n.config.WSModules,
-			Origins:           n.config.WSOrigins,
-			prefix:            n.config.WSPathPrefix,
-			rpcEndpointConfig: rpcConfig,
+			executionPoolSize:           n.config.WSJsonRPCExecutionPoolSize,
+			executionPoolRequestTimeout: n.config.WSJsonRPCExecutionPoolRequestTimeout,
+			Modules:                     n.config.WSModules,
+			Origins:                     n.config.WSOrigins,
+			prefix:                      n.config.WSPathPrefix,
+			rpcEndpointConfig:           rpcConfig,
 		}); err != nil {
 			return err
 		}

@@ -222,27 +222,32 @@ func (h *handler) handleBatch(msgs []*jsonrpcMessage) {
 		// Cancel the request context after timeout and send an error response. Since the
 		// currently-running method might not return immediately on timeout, we must wait
 		// for the timeout concurrently with processing the request.
+		timeoutErr := &internalServerError{errcodeTimeout, errMsgTimeout}
 		if timeout, ok := ContextRequestTimeout(cp.ctx); ok {
 			timer = time.AfterFunc(timeout, func() {
 				cancel()
-				err := &internalServerError{errcodeTimeout, errMsgTimeout}
-				callBuffer.respondWithError(cp.ctx, h.conn, err)
+				callBuffer.respondWithError(cp.ctx, h.conn, timeoutErr)
 			})
 		}
 
+		slot := ExecutionSlotFromContext(cp.ctx)
 		responseBytes := 0
 		for {
-			// No need to handle rest of calls if timed out.
-			if cp.ctx.Err() != nil {
-				break
-			}
-
 			msg := callBuffer.nextCall()
 			if msg == nil {
 				break
 			}
 
-			resp := h.handleCallMsg(cp, msg)
+			// The previous item may have handed the slot back and not got it again.
+			slot.acquireWait(cp.ctx)
+
+			// The timeout callback cancels before it responds; answer here in case we're first.
+			if cp.ctx.Err() != nil {
+				callBuffer.respondWithError(cp.ctx, h.conn, timeoutErr)
+				break
+			}
+
+			resp := h.handleBatchCall(cp, msg)
 			callBuffer.pushResponse(resp)
 			if resp != nil && h.batchResponseMaxSize != 0 {
 				responseBytes += len(resp.Result)
@@ -264,6 +269,17 @@ func (h *handler) handleBatch(msgs []*jsonrpcMessage) {
 			n.activate()
 		}
 	})
+}
+
+func (h *handler) handleBatchCall(cp *callProc, msg *jsonrpcMessage) *jsonrpcMessage {
+	if msg.isSubscribe() {
+		return h.handleCallMsg(cp, msg)
+	}
+	// Give each batch item its own lifetime so resources retained by a handler,
+	// such as a pending-state snapshot, are released before the next item runs.
+	ctx, cancel := context.WithCancel(cp.ctx)
+	defer cancel()
+	return h.handleCallMsg(&callProc{ctx: ctx}, msg)
 }
 
 func (h *handler) respondWithBatchTooLarge(cp *callProc, batch []*jsonrpcMessage) {
@@ -410,11 +426,11 @@ func (h *handler) startCallProc(fn func(*callProc)) {
 
 	ctx, cancel := context.WithCancel(h.rootCtx)
 
-	h.executionPool.Submit(context.Background(), func() error {
+	h.executionPool.SubmitWithSlot(context.Background(), func(slot *Slot) error {
 		defer h.callWG.Done()
 		defer cancel()
 
-		fn(&callProc{ctx: ctx})
+		fn(&callProc{ctx: withExecutionSlot(ctx, slot)})
 
 		h.executionPool.processed.Add(1)
 

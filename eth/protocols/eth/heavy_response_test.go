@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ethereum/go-ethereum/p2p"
+	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
@@ -55,6 +56,8 @@ func TestHeavyResponseHandlersSurviveOverload(t *testing.T) {
 			app, net := p2p.MsgPipe()
 			defer app.Close()
 			defer net.Close()
+			peer := NewPeer(ETH69, p2p.NewPeerPipe(enode.ID{1}, "heavy-response", nil, net), net, nil)
+			defer peer.Close()
 
 			fillHeavyResponseSlots(t)
 			payload, err := rlp.EncodeToBytes(test.packet)
@@ -63,7 +66,7 @@ func TestHeavyResponseHandlersSurviveOverload(t *testing.T) {
 			replied := make(chan error, 1)
 			go func() {
 				// A nil backend ensures the rejected query cannot perform a lookup.
-				replied <- test.handler(nil, decoder{msg: payload}, &Peer{rw: net})
+				replied <- test.handler(nil, decoder{msg: payload}, peer)
 			}()
 
 			require.NoError(t, p2p.ExpectMsg(app, test.want, test.reply))

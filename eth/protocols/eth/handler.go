@@ -18,6 +18,7 @@ package eth
 
 import (
 	"fmt"
+	"math"
 	"math/big"
 	"runtime"
 	"time"
@@ -31,6 +32,7 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/enr"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rlp"
 )
 
 const (
@@ -50,7 +52,8 @@ const (
 	// number is mostly there to limit the number of disk lookups. With block
 	// containing 200+ transactions nowadays, the practical limit will always
 	// be softResponseLimit.
-	maxReceiptsServe = 1024
+	maxReceiptsServe  = 1024
+	maxPooledTxsServe = 256
 
 	// maxHeavyResponseWorkers bounds concurrent large body/receipt lookups so a
 	// burst of expensive requests can't monopolize handler resources.
@@ -235,8 +238,22 @@ func handleMessage(backend Backend, peer *Peer) error {
 	if err != nil {
 		return err
 	}
-	if msg.Size > maxMessageSize {
-		return fmt.Errorf("%w: %v > %v", errMsgTooLarge, msg.Size, maxMessageSize)
+	maxSize := uint64(maxMessageSize)
+	if msg.Code == GetPooledTransactionsMsg {
+		maxSize = rlp.ListSize(uint64(rlp.IntSize(math.MaxUint64)) + rlp.ListSize(maxPooledTxsServe*(common.HashLength+1)))
+	}
+	if msg.Code == NewBlockHashesMsg {
+		if err := peer.checkMessageRate(msg.Code, msg.Size, time.Now()); err != nil {
+			return err
+		}
+	}
+	if uint64(msg.Size) > maxSize {
+		return fmt.Errorf("%w: %v > %v", errMsgTooLarge, msg.Size, maxSize)
+	}
+	if msg.Code != NewBlockHashesMsg {
+		if err := peer.checkMessageRate(msg.Code, msg.Size, time.Now()); err != nil {
+			return err
+		}
 	}
 	defer msg.Discard()
 

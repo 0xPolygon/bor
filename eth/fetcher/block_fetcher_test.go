@@ -114,7 +114,7 @@ func newTesterWithWitnessRequirement(light bool, requireWitness bool) *fetcherTe
 		blocks:  map[common.Hash]*types.Block{genesis.Hash(): genesis},
 		drops:   make(map[string]bool),
 	}
-	tester.fetcher = NewBlockFetcher(light, tester.getHeader, tester.getBlock, tester.verifyHeader, tester.broadcastBlock, tester.chainHeight, nil, tester.insertHeaders, tester.insertChain, tester.dropPeer, nil, false, requireWitness, 0, nil, nil)
+	tester.fetcher = NewBlockFetcher(light, tester.getHeader, tester.getBlock, tester.verifyHeader, tester.broadcastBlock, tester.chainHeight, nil, tester.insertHeaders, tester.insertChain, tester.dropPeer, false, requireWitness, 0, nil, nil)
 	tester.fetcher.Start()
 
 	return tester
@@ -420,7 +420,7 @@ func TestBlockFetcherRequiresWitnessAfterBulkBodyFetch(t *testing.T) {
 	case <-time.After(150 * time.Millisecond):
 	}
 
-	if err := tester.fetcher.InjectWitness("peerA", witness); err != nil {
+	if err := tester.fetcher.InjectWitness("peerA", witness, false); err != nil {
 		t.Fatalf("failed to inject witness: %v", err)
 	}
 
