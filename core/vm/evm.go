@@ -50,11 +50,15 @@ func (evm *EVM) precompile(addr common.Address) (PrecompiledContract, bool) {
 // ecrecoverAddr is the precompile address for ecrecover (0x01).
 var ecrecoverAddr = common.BytesToAddress([]byte{0x01})
 
-// runPrecompile runs a precompiled contract with optional ecrecover caching.
+// runPrecompile runs a precompiled contract with optional ecrecover and
+// post-quantum verify caching.
 // If the precompile is ecrecover and a shared cache is configured, the cache
 // is checked before the CGo call. The prefetcher populates the cache during
 // warm-up so V2 workers typically hit it, saving ~1µs CGo overhead per call.
 func (evm *EVM) runPrecompile(p PrecompiledContract, addr common.Address, input []byte, gas uint64) ([]byte, uint64, error) {
+	if pqCache := evm.Config.PQVerifyCache; pqCache != nil && isPQVerify(p) {
+		return evm.runPQVerifyWithCache(p, addr, input, gas, pqCache)
+	}
 	cache := evm.Config.EcrecoverCache
 	if cache == nil || addr != ecrecoverAddr || len(input) > 128 {
 		return RunPrecompiledContract(p, input, gas, evm.Config.Tracer)

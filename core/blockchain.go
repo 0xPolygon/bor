@@ -1271,6 +1271,7 @@ type sharedBlockCaches struct {
 	jumpDests vm.JumpDestCache
 	keccak    *vm.Keccak256Cache
 	ecrecover *vm.EcrecoverCache
+	pqVerify  *vm.PQVerifyCache
 }
 
 func newSharedBlockCaches() *sharedBlockCaches {
@@ -1278,6 +1279,7 @@ func newSharedBlockCaches() *sharedBlockCaches {
 		jumpDests: vm.NewSyncJumpDestCache(),
 		keccak:    vm.NewKeccak256Cache(),
 		ecrecover: vm.NewEcrecoverCache(),
+		pqVerify:  vm.NewPQVerifyCache(),
 	}
 }
 
@@ -1286,6 +1288,7 @@ func (c *sharedBlockCaches) applyTo(cfg *vm.Config) {
 	cfg.SharedJumpDestCache = c.jumpDests
 	cfg.Keccak256Cache = c.keccak
 	cfg.EcrecoverCache = c.ecrecover
+	cfg.PQVerifyCache = c.pqVerify
 }
 
 // startPrefetchGoroutine launches the throwaway-statedb prefetcher in
