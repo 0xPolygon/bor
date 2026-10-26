@@ -114,20 +114,6 @@ func (mr *MockBackendMockRecorder) BaseFee(ctx any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BaseFee", reflect.TypeOf((*MockBackend)(nil).BaseFee), ctx)
 }
 
-// BeginPrivateTx mocks base method.
-func (m *MockBackend) BeginPrivateTx(hash common.Hash) func(bool) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "BeginPrivateTx", hash)
-	ret0, _ := ret[0].(func(bool))
-	return ret0
-}
-
-// BeginPrivateTx indicates an expected call of BeginPrivateTx.
-func (mr *MockBackendMockRecorder) BeginPrivateTx(hash any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BeginPrivateTx", reflect.TypeOf((*MockBackend)(nil).BeginPrivateTx), hash)
-}
-
 // BlobBaseFee mocks base method.
 func (m *MockBackend) BlobBaseFee(ctx context.Context) *big.Int {
 	m.ctrl.T.Helper()

@@ -1,7 +1,6 @@
 package relay
 
 import (
-	"fmt"
 	"math/big"
 	"sync"
 	"testing"
@@ -206,139 +205,74 @@ func TestPrivateTxStoreCleanup(t *testing.T) {
 	require.Equal(t, uint64(1), store.txsDeleted.Load(), "expected txsDeleted metric to be 1")
 }
 
-func TestPrivateTxStoreSweepPoolRetention(t *testing.T) {
+// TestPrivateTxStoreSweepTxPoolCheck tests that the sweep removes entries
+// that are no longer in the txpool (after the grace period).
+func TestPrivateTxStoreSweepTxPoolCheck(t *testing.T) {
 	t.Parallel()
-	for _, test := range []struct {
-		name        string
-		age         time.Duration
-		checker     bool
-		inPool      bool
-		wantPrivate bool
-	}{
-		{"fresh absent", time.Minute, true, false, true},
-		{"absent past grace", 3 * time.Minute, true, false, false},
-		{"absent past former TTL", 11 * time.Minute, true, false, false},
-		{"present past former TTL", 11 * time.Minute, true, true, true},
-		{"present before TTL", privateTxTTL - time.Minute, true, true, true},
-		{"present past TTL", privateTxTTL + time.Minute, true, true, false},
-		{"unknown past TTL", privateTxTTL + time.Minute, false, false, false},
-		{"unknown past grace", 3 * time.Minute, false, false, true},
-		{"unknown past former TTL", 11 * time.Minute, false, false, true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			store := NewPrivateTxStore()
-			defer store.Close()
-			hash := common.HexToHash("0x1")
-			store.Add(hash)
-			store.mu.Lock()
-			store.txs[hash] = time.Now().Add(-test.age)
-			store.mu.Unlock()
-			if test.checker {
-				store.SetTxPoolChecker(func(common.Hash) bool { return test.inPool })
-			}
-			store.sweepOnce()
-			require.Equal(t, test.wantPrivate, store.IsTxPrivate(hash))
-			if test.wantPrivate {
-				require.Zero(t, store.txsExpired.Load())
-			} else {
-				require.Equal(t, uint64(1), store.txsExpired.Load())
-			}
-		})
-	}
-}
 
-func TestPrivateTxStoreSweepCheckerAvailability(t *testing.T) {
-	t.Parallel()
 	store := NewPrivateTxStore()
 	defer store.Close()
-	hash := common.HexToHash("0x1")
-	store.Add(hash)
+
+	hash1 := common.HexToHash("0x1") // in pool
+	hash2 := common.HexToHash("0x2") // NOT in pool, past grace period
+	hash3 := common.HexToHash("0x3") // NOT in pool, but too fresh (within grace period)
+
+	store.Add(hash1)
+	store.Add(hash2)
+	store.Add(hash3)
+
+	// Backdate hash1 and hash2 past the grace period
 	store.mu.Lock()
-	store.txs[hash] = time.Now().Add(-11 * time.Minute)
+	store.txs[hash1] = time.Now().Add(-(privateTxGracePeriod + time.Minute))
+	store.txs[hash2] = time.Now().Add(-(privateTxGracePeriod + time.Minute))
+	// hash3 stays fresh (within grace period)
 	store.mu.Unlock()
 
+	// Set txpool checker: only hash1 is in the pool
+	poolSet := map[common.Hash]bool{hash1: true}
+	store.SetTxPoolChecker(func(hash common.Hash) bool {
+		return poolSet[hash]
+	})
+
+	// Exercise the actual sweep code path used by the background goroutine
 	store.sweepOnce()
-	require.True(t, store.IsTxPrivate(hash))
-	store.SetTxPoolChecker(func(common.Hash) bool { return true })
-	store.sweepOnce()
-	require.True(t, store.IsTxPrivate(hash))
-	store.SetTxPoolChecker(nil)
-	store.sweepOnce()
-	require.True(t, store.IsTxPrivate(hash))
-	store.SetTxPoolChecker(func(common.Hash) bool { return false })
-	store.sweepOnce()
-	require.False(t, store.IsTxPrivate(hash))
-	require.Equal(t, uint64(1), store.txsExpired.Load())
+
+	require.True(t, store.IsTxPrivate(hash1), "hash1 should remain (still in pool)")
+	require.False(t, store.IsTxPrivate(hash2), "hash2 should be removed (not in pool, past grace)")
+	require.True(t, store.IsTxPrivate(hash3), "hash3 should remain (within grace period)")
+	require.Equal(t, uint64(1), store.txsExpired.Load(), "expected 1 txsExpired")
 }
 
-func TestPrivateTxStoreSweepPreservesRefresh(t *testing.T) {
+// TestPrivateTxStoreSweepTTL tests that the sweep goroutine removes entries
+// older than the TTL.
+func TestPrivateTxStoreSweepTTL(t *testing.T) {
 	t.Parallel()
-	for name, purge := range map[string]bool{"refresh": false, "purge and re-add": true} {
-		t.Run(name, func(t *testing.T) {
-			store := NewPrivateTxStore()
-			defer store.Close()
-			hash := common.HexToHash("0x1")
-			store.Add(hash)
-			store.mu.Lock()
-			store.txs[hash] = time.Now().Add(-3 * time.Minute)
-			store.mu.Unlock()
 
-			checked, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
-			defer close(release)
-			store.SetTxPoolChecker(func(common.Hash) bool {
-				close(checked)
-				<-release
-				return false
-			})
-			go func() {
-				store.sweepOnce()
-				close(done)
-			}()
-			select {
-			case <-checked:
-			case <-time.After(time.Second):
-				t.Fatal("sweep did not check the pool")
-			}
-			if purge {
-				store.Purge(hash)
-			}
-			store.Add(hash)
-			release <- struct{}{}
-			select {
-			case <-done:
-			case <-time.After(time.Second):
-				t.Fatal("sweep did not finish")
-			}
-			require.True(t, store.IsTxPrivate(hash))
-			require.Zero(t, store.txsExpired.Load())
-		})
-	}
-}
-
-func TestPrivateTxStoreSweepConcurrentChecker(t *testing.T) {
-	t.Parallel()
 	store := NewPrivateTxStore()
 	defer store.Close()
-	hash := common.HexToHash("0x1")
-	store.Add(hash)
+
+	hash1 := common.HexToHash("0x1")
+	hash2 := common.HexToHash("0x2")
+	hash3 := common.HexToHash("0x3")
+
+	store.Add(hash1)
+	store.Add(hash2)
+	store.Add(hash3)
+
+	// Manually backdate hash1 and hash2 to be older than TTL
 	store.mu.Lock()
-	store.txs[hash] = time.Now().Add(-3 * time.Minute)
+	store.txs[hash1] = time.Now().Add(-(privateTxTTL + time.Minute))
+	store.txs[hash2] = time.Now().Add(-(privateTxTTL + 2*time.Minute))
+	// hash3 stays fresh
 	store.mu.Unlock()
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for range 1000 {
-			store.SetTxPoolChecker(func(common.Hash) bool { return true })
-			store.SetTxPoolChecker(nil)
-		}
-	}()
-	for range 1000 {
-		store.sweepOnce()
-	}
-	wg.Wait()
-	require.True(t, store.IsTxPrivate(hash))
+	// Exercise the actual sweep code path used by the background goroutine
+	store.sweepOnce()
+
+	require.False(t, store.IsTxPrivate(hash1), "hash1 should be removed after TTL")
+	require.False(t, store.IsTxPrivate(hash2), "hash2 should be removed after TTL")
+	require.True(t, store.IsTxPrivate(hash3), "hash3 should still be present (not expired)")
+	require.Equal(t, uint64(2), store.txsExpired.Load(), "expected 2 txsExpired")
 }
 
 // TestPrivateTxStoreSetTxPoolChecker tests the SetTxPoolChecker method.
@@ -353,25 +287,4 @@ func TestPrivateTxStoreSetTxPoolChecker(t *testing.T) {
 	checker := func(hash common.Hash) bool { return true }
 	store.SetTxPoolChecker(checker)
 	require.NotNil(t, store.txPoolChecker, "txPoolChecker should be set after calling SetTxPoolChecker")
-}
-
-func TestPrivateTxExpiryBoundary(t *testing.T) {
-	for _, age := range []time.Duration{privateTxTTL - time.Nanosecond, privateTxTTL, privateTxTTL + time.Nanosecond} {
-		for _, present := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/present=%t", age, present), func(t *testing.T) {
-				checker := TxPoolChecker(nil)
-				if present {
-					checker = func(common.Hash) bool { return true }
-				}
-				require.Equal(t, age >= privateTxTTL, privateTxExpired(age, checker, common.Hash{1}))
-			})
-		}
-	}
-}
-
-func TestPrivateTxGraceBoundary(t *testing.T) {
-	checker := func(common.Hash) bool { return false }
-	for _, age := range []time.Duration{privateTxGracePeriod - time.Nanosecond, privateTxGracePeriod, privateTxGracePeriod + time.Nanosecond} {
-		require.Equal(t, age > privateTxGracePeriod, privateTxExpired(age, checker, common.Hash{1}))
-	}
 }
