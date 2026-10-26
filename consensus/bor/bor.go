@@ -53,7 +53,6 @@ import (
 )
 
 const (
-	defaultSpanLength  = params.DefaultSpanLength
 	zerothSpanEnd      = 255             // End block of 0th span
 	checkpointInterval = 1024            // Number of blocks after which to save the vote snapshot to the database
 	inmemorySnapshots  = 128             // Number of recent vote snapshots to keep in memory
@@ -352,8 +351,12 @@ func New(
 		ttlcache.WithDisableTouchOnHit[common.Hash, *types.Header](),
 	)
 
-	// Create a new span store
-	spanStore := NewSpanStore(heimdallClient, spanner, chainConfig.ChainID.String())
+	var rioBlock *big.Int
+	if borConfig != nil {
+		rioBlock = borConfig.RioBlock
+	}
+	spanStore := NewSpanStore(heimdallClient, spanner, chainConfig.ChainID.String(), rioBlock)
+	spanStore.startRangeWarmup()
 
 	ctx, ctxCancel := context.WithCancel(context.Background())
 

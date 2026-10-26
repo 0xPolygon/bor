@@ -196,7 +196,7 @@ func newChainAndBorForTestWithConfig(t *testing.T, sp Spanner, cfg *params.Chain
 		ttlcache.WithCapacity[common.Hash, *types.Header](inmemorySignatures),
 		ttlcache.WithDisableTouchOnHit[common.Hash, *types.Header](),
 	)
-	b.spanStore = NewSpanStore(nil, sp, cfg.ChainID.String())
+	b.spanStore = NewSpanStore(nil, sp, cfg.ChainID.String(), nil)
 	b.SetSpanner(sp)
 	// set a default authorized signer to prevent nil deref in snapshot
 	b.authorizedSigner.Store(&signer{signer: common.Address{}, signFn: func(_ accounts.Account, _ string, _ []byte) ([]byte, error) {
@@ -2443,6 +2443,24 @@ func TestNew(t *testing.T) {
 	require.NoError(t, engine.Close())
 }
 
+func TestNew_PassesRioBlockToSpanStore(t *testing.T) {
+	t.Parallel()
+
+	borCfg := &params.BorConfig{
+		Sprint:   map[string]uint64{"0": 64},
+		Period:   map[string]uint64{"0": 2},
+		RioBlock: big.NewInt(1000),
+	}
+	chainCfg := &params.ChainConfig{ChainID: big.NewInt(1), Bor: borCfg}
+	engine := New(chainCfg, rawdb.NewMemoryDatabase(), nil, &fakeSpanner{}, nil, nil, nil, false, 0, vm.Config{})
+	defer func() {
+		require.NoError(t, engine.Close())
+	}()
+
+	require.True(t, engine.spanStore.beforeRio(999))
+	require.False(t, engine.spanStore.beforeRio(1000))
+}
+
 func TestNew_DefaultSprintFallback(t *testing.T) {
 	t.Parallel()
 
@@ -3585,7 +3603,7 @@ func TestSnapshotApply_SprintEndValidatorChange(t *testing.T) {
 	b := &Bor{
 		chainConfig: chainCfg,
 		config:      borCfg,
-		spanStore:   NewSpanStore(nil, sp, "1"),
+		spanStore:   NewSpanStore(nil, sp, "1", nil),
 	}
 	b.SetHeimdallClient(&mockHeimdallClient{
 		span: &borTypes.Span{
