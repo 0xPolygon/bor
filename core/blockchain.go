@@ -3115,7 +3115,27 @@ func (bc *BlockChain) WriteBlockAndSetHead(block *types.Block, receipts []*types
 	}
 	defer bc.chainmu.Unlock()
 
+	if err := bc.ValidateLocalBlock(block); err != nil {
+		return NonStatTy, err
+	}
 	return bc.writeBlockAndSetHead(block, receipts, logs, state, emitHeadEvent, false)
+}
+
+// ValidateLocalBlock runs the milestone/checkpoint check that insertChain
+// applies before writing an imported block. Locally sealed blocks reach the
+// chain through the public write entry points, which skip insertChain, so
+// without it the producer could make a block canonical that every peer rejects.
+// The miner also calls it before publishing a seal; the write entry points
+// repeat it under the chain lock.
+func (bc *BlockChain) ValidateLocalBlock(block *types.Block) error {
+	isValid, err := bc.forker.ValidateReorg(block.Header(), []*types.Header{block.Header()})
+	if err != nil {
+		return err
+	}
+	if !isValid {
+		return whitelist.ErrMismatch
+	}
+	return nil
 }
 
 // writeBlockAndSetHead is the internal implementation of WriteBlockAndSetHead.
@@ -4990,6 +5010,9 @@ func (bc *BlockChain) WriteBlockAndSetHeadPipelined(block *types.Block, receipts
 	}
 	defer bc.chainmu.Unlock()
 
+	if err := bc.ValidateLocalBlock(block); err != nil {
+		return NonStatTy, err
+	}
 	return bc.writeBlockAndSetHeadPipelined(block, receipts, logs, statedb, emitHeadEvent, witnessBytes)
 }
 

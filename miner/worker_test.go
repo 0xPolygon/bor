@@ -311,6 +311,10 @@ type testWorkerBackend struct {
 }
 
 func newTestWorkerBackend(t TensingObject, chainConfig *params.ChainConfig, engine consensus.Engine, db ethdb.Database) *testWorkerBackend {
+	return newTestWorkerBackendWithConfig(t, chainConfig, engine, db, core.DefaultConfig())
+}
+
+func newTestWorkerBackendWithConfig(t TensingObject, chainConfig *params.ChainConfig, engine consensus.Engine, db ethdb.Database, chainCfg *core.BlockChainConfig) *testWorkerBackend {
 	gspec := &core.Genesis{
 		Config: chainConfig,
 		Alloc:  types.GenesisAlloc{testBankAddress: {Balance: testBankFunds}},
@@ -333,7 +337,7 @@ func newTestWorkerBackend(t TensingObject, chainConfig *params.ChainConfig, engi
 		t.Fatalf("unexpected consensus engine type: %T", engine)
 	}
 	// genesis := gspec.MustCommit(db)
-	chain, err := core.NewBlockChain(db, gspec, engine, core.DefaultConfig())
+	chain, err := core.NewBlockChain(db, gspec, engine, chainCfg)
 	if err != nil {
 		t.Fatalf("core.NewBlockChain failed: %v", err)
 	}

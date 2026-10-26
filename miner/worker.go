@@ -43,6 +43,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto/kzg4844"
+	"github.com/ethereum/go-ethereum/eth/downloader/whitelist"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
@@ -1440,6 +1441,13 @@ func (w *worker) resultLoop() {
 				continue
 			}
 
+			// Check before the seal reaches the sequence store, so a block the
+			// chain will refuse is never elected there.
+			if err := w.chain.ValidateLocalBlock(block); err != nil {
+				w.dropUnwrittenTask(block, sealhash, err)
+				continue
+			}
+
 			if !w.sealAndGate(block) {
 				// The refused block never reaches the chain, so nothing ever
 				// advances past it to age this task out via clearPending — and
@@ -1495,10 +1503,7 @@ func (w *worker) resultLoop() {
 			writeElapsed := time.Since(writeStart)
 			writeBlockAndSetHeadTimer.Update(writeElapsed)
 			if err != nil {
-				log.Error("Failed writing block to chain", "err", err)
-				w.pendingMu.Lock()
-				delete(w.pendingTasks, sealhash)
-				w.pendingMu.Unlock()
+				w.dropUnwrittenTask(block, sealhash, err)
 				continue
 			}
 
@@ -1522,6 +1527,24 @@ func (w *worker) resultLoop() {
 		case <-w.exitCh:
 			return
 		}
+	}
+}
+
+// dropUnwrittenTask discards the task of a sealed block the chain refused to
+// write.
+func (w *worker) dropUnwrittenTask(block *types.Block, sealhash common.Hash, err error) {
+	log.Error("Failed writing block to chain", "number", block.Number(), "hash", block.Hash(), "err", err)
+	w.pendingMu.Lock()
+	delete(w.pendingTasks, sealhash)
+	w.pendingMu.Unlock()
+
+	// The task was built on a parent that a whitelisted milestone or checkpoint
+	// has since ruled out. A refused write emits no head event, so rebuild on
+	// the current head now instead of waiting for the stall fallback. If the
+	// head is still that parent, a rebuild would be refused the same way, so
+	// leave recovery to the rate-limited stall fallback.
+	if errors.Is(err, whitelist.ErrMismatch) && w.chain.CurrentBlock().Hash() != block.ParentHash() {
+		w.schedulePipelineRetry()
 	}
 }
 
