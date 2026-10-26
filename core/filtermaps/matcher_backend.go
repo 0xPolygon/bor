@@ -85,7 +85,9 @@ func (fm *FilterMapsMatcherBackend) GetFilterMapRows(ctx context.Context, mapInd
 // valid range is correct.
 // GetBlockLvPointer implements MatcherBackend.
 func (fm *FilterMapsMatcherBackend) GetBlockLvPointer(ctx context.Context, blockNumber uint64) (uint64, error) {
-	fm.f.indexLock.RLock()
+	if err := fm.f.indexLock.RLockCtx(ctx); err != nil {
+		return 0, err
+	}
 	defer fm.f.indexLock.RUnlock()
 
 	if blockNumber >= fm.f.indexedRange.blocks.AfterLast() {
@@ -112,7 +114,9 @@ func (fm *FilterMapsMatcherBackend) GetBlockLvPointer(ctx context.Context, block
 // using SyncLogIndex and re-process certain blocks if necessary.
 // GetLogByLvIndex implements MatcherBackend.
 func (fm *FilterMapsMatcherBackend) GetLogByLvIndex(ctx context.Context, lvIndex uint64) (*types.Log, error) {
-	fm.f.indexLock.RLock()
+	if err := fm.f.indexLock.RLockCtx(ctx); err != nil {
+		return nil, err
+	}
 	defer fm.f.indexLock.RUnlock()
 
 	return fm.f.getLogByLvIndex(lvIndex)
