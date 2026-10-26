@@ -165,3 +165,35 @@ func TestPQVerifyCacheSkipsLongMessages(t *testing.T) {
 		t.Errorf("%d cache entries for a %d-byte message, want 1", n, len(short.msg))
 	}
 }
+
+// TestPQVerifyCacheAddressSeparation sends an input that one precompile
+// accepts to the other one through the same cache: the cached 1 must not
+// leak across addresses.
+func TestPQVerifyCacheAddressSeparation(t *testing.T) {
+	f := newMLDSAFixture(t, []byte("separation"))
+	evm := &EVM{}
+	evm.Config.PQVerifyCache = NewPQVerifyCache()
+	if ret, _, _ := evm.runPrecompile(mldsa65Precompile, mldsa65VerifyAddr, f.input(), 1<<20); !bytes.Equal(ret, true32Byte) {
+		t.Fatal("valid ML-DSA-65 input rejected")
+	}
+	if ret, _, _ := evm.runPrecompile(slhdsaPrecompile, slhdsaSha2128sVerifyAddr, f.input(), 1<<20); !bytes.Equal(ret, false32Byte) {
+		t.Fatalf("SLH-DSA returned %x for an ML-DSA-65 input", ret)
+	}
+}
+
+// TestPQVerifyCacheStoresBoth checks that both precompiles use the cache.
+func TestPQVerifyCacheStoresBoth(t *testing.T) {
+	ml := newMLDSAFixture(t, []byte("both"))
+	slh := newSLHFixture(t, []byte("both"))
+	cache := NewPQVerifyCache()
+	evm := &EVM{}
+	evm.Config.PQVerifyCache = cache
+	evm.runPrecompile(mldsa65Precompile, mldsa65VerifyAddr, ml.input(), 1<<20)
+	if n := cache.count.Load(); n != 1 {
+		t.Fatalf("%d entries after ML-DSA-65, want 1", n)
+	}
+	evm.runPrecompile(slhdsaPrecompile, slhdsaSha2128sVerifyAddr, slh.input(), 1<<20)
+	if n := cache.count.Load(); n != 2 {
+		t.Fatalf("%d entries after SLH-DSA, want 2", n)
+	}
+}
