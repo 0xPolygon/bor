@@ -34,6 +34,8 @@ import (
 // Reviewed implementations: Go's crypto/mldsa (FIPS 204, Go 1.27.3) and
 // cloudflare/circl v1.6.5 sign/slhdsa (FIPS 205). Bumping either needs the
 // verify path re-reviewed and the vector, mutation and differential tests rerun.
+// crypto/mldsa comes from the toolchain that builds bor, so a Go upgrade is a
+// consensus change for ML-DSA: every node must build with a reviewed Go.
 var (
 	mldsa65VerifyAddr        = common.BytesToAddress([]byte{0x01, 0x13})
 	slhdsaSha2128sVerifyAddr = common.BytesToAddress([]byte{0x01, 0x15})

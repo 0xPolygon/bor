@@ -22,10 +22,17 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// pqVerifyCacheCap bounds the post-quantum verify cache. Every call costs at
-// least MLDSA65VerifyBaseGas, so a block's gas limit already bounds the calls;
-// the cap bounds writes from discarded speculative executions.
+// pqVerifyCacheCap bounds the post-quantum verify cache. Inputs come from
+// speculative executions too (BlockSTM retries, the miner prefetching pool
+// transactions that may never be included), so the block gas limit doesn't
+// bound them. Once full, Store is a no-op and calls fall back to verifying:
+// a flood of junk calls only removes the speed-up, never changes results.
 const pqVerifyCacheCap = 8192
+
+// pqVerifyCacheMaxMsg is the largest message that goes through the cache.
+// The key hashes the whole input, which gas doesn't pay for, so long
+// messages skip the cache; wallets sign 32-byte digests.
+const pqVerifyCacheMaxMsg = 1024
 
 // pqVerifyCacheKey identifies a verification by precompile address and the
 // SHA-256 of its whole input. A collision would return a wrong result, so the
@@ -46,11 +53,14 @@ func NewPQVerifyCache() *PQVerifyCache {
 	return newBoundedCache[pqVerifyCacheKey, []byte](pqVerifyCacheCap)
 }
 
-// isPQVerify reports whether p is one of the cached post-quantum precompiles.
-func isPQVerify(p PrecompiledContract) bool {
+// pqVerifyCacheable reports whether a call to p with input goes through the
+// cache: p must be a post-quantum verify precompile and the message short.
+func pqVerifyCacheable(p PrecompiledContract, input []byte) bool {
 	switch p.(type) {
-	case *mldsa65Verify, *slhdsaSha2128sVerify:
-		return true
+	case *mldsa65Verify:
+		return len(input) <= mldsa65InputPrefix+pqVerifyCacheMaxMsg
+	case *slhdsaSha2128sVerify:
+		return len(input) <= slhdsaSha2128sInputPrefix+pqVerifyCacheMaxMsg
 	}
 	return false
 }

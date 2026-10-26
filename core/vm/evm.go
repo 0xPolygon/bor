@@ -56,7 +56,7 @@ var ecrecoverAddr = common.BytesToAddress([]byte{0x01})
 // is checked before the CGo call. The prefetcher populates the cache during
 // warm-up so V2 workers typically hit it, saving ~1µs CGo overhead per call.
 func (evm *EVM) runPrecompile(p PrecompiledContract, addr common.Address, input []byte, gas uint64) ([]byte, uint64, error) {
-	if pqCache := evm.Config.PQVerifyCache; pqCache != nil && isPQVerify(p) {
+	if pqCache := evm.Config.PQVerifyCache; pqCache != nil && pqVerifyCacheable(p, input) {
 		return evm.runPQVerifyWithCache(p, addr, input, gas, pqCache)
 	}
 	cache := evm.Config.EcrecoverCache

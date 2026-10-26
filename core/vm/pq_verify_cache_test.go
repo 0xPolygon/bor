@@ -45,8 +45,10 @@ func TestPQVerifyCacheParity(t *testing.T) {
 		evm.Config.PQVerifyCache = cache
 		distinct := make(map[string]bool)
 		for _, test := range tests {
-			distinct[test.Input] = true
 			input := common.Hex2Bytes(test.Input)
+			if pqVerifyCacheable(p, input) {
+				distinct[test.Input] = true
+			}
 			gas := test.Gas + 1000
 			want, wantGas, wantErr := RunPrecompiledContract(p, input, gas, nil)
 			for round := 0; round < 2; round++ {
@@ -140,5 +142,26 @@ func TestPQVerifyCacheOnlyPQ(t *testing.T) {
 	}
 	if n := cache.count.Load(); n != 0 {
 		t.Errorf("sha256 call stored %d entries in the PQ cache", n)
+	}
+}
+
+// TestPQVerifyCacheSkipsLongMessages checks that inputs whose key hash gas
+// doesn't pay for are verified without the cache.
+func TestPQVerifyCacheSkipsLongMessages(t *testing.T) {
+	f := newMLDSAFixture(t, make([]byte, pqVerifyCacheMaxMsg+1))
+	cache := NewPQVerifyCache()
+	evm := &EVM{}
+	evm.Config.PQVerifyCache = cache
+	ret, _, err := evm.runPrecompile(mldsa65Precompile, mldsa65VerifyAddr, f.input(), 1<<22)
+	if err != nil || !bytes.Equal(ret, true32Byte) {
+		t.Fatalf("got (%x, %v)", ret, err)
+	}
+	if n := cache.count.Load(); n != 0 {
+		t.Errorf("%d cache entries for a %d-byte message, want 0", n, len(f.msg))
+	}
+	short := newMLDSAFixture(t, make([]byte, pqVerifyCacheMaxMsg))
+	evm.runPrecompile(mldsa65Precompile, mldsa65VerifyAddr, short.input(), 1<<22)
+	if n := cache.count.Load(); n != 1 {
+		t.Errorf("%d cache entries for a %d-byte message, want 1", n, len(short.msg))
 	}
 }

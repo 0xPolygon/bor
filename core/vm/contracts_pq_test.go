@@ -32,8 +32,8 @@ import (
 )
 
 // Vectors: Wycheproof, NIST ACVP (ctx=""), Apple Secure Enclave and
-// cross-verified circl/OpenSSL signatures. Built by agent-zero
-// research/pq-signatures/vectors/build_bor_vectors.py.
+// cross-verified circl/OpenSSL/trailofbits signatures; see
+// testdata/precompiles/pqsig/README.md for sources and regeneration.
 func TestPrecompiledMLDSA65Verify(t *testing.T) { testJson("mldsa65Verify", "0113", t) }
 func TestPrecompiledSLHDSASha2128sVerify(t *testing.T) {
 	testJson("slhdsaSha2128sVerify", "0115", t)
@@ -502,6 +502,20 @@ func TestPQVerifyNotActivated(t *testing.T) {
 		for _, a := range addrs {
 			if _, ok := set[a]; ok {
 				t.Errorf("%v is active in %s", a, name)
+			}
+		}
+	}
+	for name, list := range map[string][]common.Address{
+		"Homestead": PrecompiledAddressesHomestead, "Byzantium": PrecompiledAddressesByzantium,
+		"Istanbul": PrecompiledAddressesIstanbul, "Berlin": PrecompiledAddressesBerlin,
+		"Cancun": PrecompiledAddressesCancun, "Prague": PrecompiledAddressesPrague,
+		"Osaka": PrecompiledAddressesOsaka, "Madhugiri": PrecompiledAddressesMadhugiri,
+		"MadhugiriPro": PrecompiledAddressesMadhugiriPro, "Lisovo": PrecompiledAddressesLisovo,
+		"LisovoPro": PrecompiledAddressesLisovoPro, "Chicago": PrecompiledAddressesChicago,
+	} {
+		for _, a := range list {
+			if a == mldsa65VerifyAddr || a == slhdsaSha2128sVerifyAddr {
+				t.Errorf("%v is in PrecompiledAddresses%s", a, name)
 			}
 		}
 	}
