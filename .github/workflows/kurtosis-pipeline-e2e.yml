@@ -155,29 +155,6 @@ jobs:
       - name: Copy kurtosis config
         run: cp ./pos-workflows/configs/kurtosis-pipeline-e2e.yml ./kurtosis-pipeline-e2e.yml
 
-      # Keep the baseline on a released build, independent of bor:local.
-      - name: Use the published release for the baseline node
-        run: |
-          python3 - <<'PYTHON'
-          from pathlib import Path
-          import re
-
-          config = Path("kurtosis-pipeline-e2e.yml")
-          content = config.read_text()
-          released = set(re.findall(
-              r"(?m)^\s*el_image: (ghcr\.io/0xpolygon/bor:v[0-9]+\.[0-9]+\.[0-9]+)\s*$",
-              content,
-          ))
-          if len(released) != 1:
-              raise SystemExit("Expected one stable GHCR Bor release for the baseline")
-          content = re.sub(
-              r"(?m)^(\s*el_image: )0xpolygon/bor:latest(?=\s*$)",
-              lambda match: match[1] + next(iter(released)),
-              content,
-          )
-          config.write_text(content)
-          PYTHON
-
       # Load images
       - name: Download bor docker image
         uses: actions/download-artifact@v4
