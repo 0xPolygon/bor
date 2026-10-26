@@ -16,7 +16,7 @@ Use [manual verification](#manual-verification-and-installation) only if you pre
 - Packages require a Debian-based system, `sudo`, `dpkg`, `dpkg-query`, and `systemctl`.
 - Raw binaries require `sudo`, `install`, `mktemp`, `mv`, and `systemctl`, plus an existing installation and service. Allow space for both the old and new binary.
 - Docker requires a working Docker installation and permission to load images.
-- Package/binary upgrades briefly stop `bor` or `heimdalld` **after verification**. Plan for this downtime. Docker mode only loads an image; it does not replace running containers.
+- Package/binary upgrades briefly stop `bor` or `heimdalld` **after verification**, if it is running. Plan for this downtime. A service that isn't running, such as a standby validator, stays stopped. Docker mode only loads an image; it does not replace running containers.
 - All downloads use HTTPS through `curl`. If access is denied, contact Polygon through your established node-operator support channel.
 
 ## First-time setup
@@ -128,8 +128,8 @@ Files are kept only after verification succeeds, including if installation later
 
 The installer checks that the public key and signer match Polygon's approved fingerprints, then checks that the downloaded file matches the signed checksum list. A checksum is a fingerprint of a file's contents. Successful verification prints `Polygon signature and artifact checksum verified`; installation follows, so wait for the final result too.
 
-- **Package:** stop the service → install → check package and executable versions → restart → confirm the service is active.
-- **Binary:** prepare a temporary copy beside the installed executable and check its checksum and version → stop the service → replace the executable with a single rename → check its version again → restart and confirm it is active. If preparing the copy fails, the old executable and running service are untouched.
+- **Package:** check the package version and the packaged executable's version → stop the service → install → check both again → restart it if it was running → confirm it is active.
+- **Binary:** prepare a temporary copy beside the installed executable and check its checksum and version → stop the service → replace the executable with a single rename → check its version again → restart it if it was running and confirm it is active. If preparing the copy fails, the old executable and running service are untouched.
 - **Docker:** load the verified image only. Update your running container separately using your normal deployment process.
 
 A completed package/binary upgrade prints `The bor service is active` or `The heimdalld service is active`. Docker prints the result of loading the image.
@@ -360,6 +360,25 @@ VERIFY_ONLY=0
     test "$actual" = "$expected"
   }
   test "$(systemctl show --property=LoadState --value "$SERVICE")" = loaded
+  # Pre-releases package with "~" so they sort below the final release;
+  # packages built before that carry the plain tag.
+  PKG_VERSION="${VERSION#v}"
+  if [[ "$PKG_VERSION" == *-* && ! "${PKG_VERSION#*-}" =~ ^priv([.-].*)?$ ]]; then
+    PKG_VERSION="${PKG_VERSION%%-*}~${PKG_VERSION#*-}"
+  fi
+  check_package() {
+    [[ "$1" == "$PKG_VERSION" || "$1" == "${VERSION#v}" ]]
+  }
+  if [[ "$MODE" == package ]]; then
+    check_package "$(dpkg-deb --field "$ARTIFACT" Version)"
+    dpkg-deb --extract "$ARTIFACT" package
+    # Run it from beside the destination: /tmp may be noexec.
+    STAGED_BINARY="$(sudo mktemp "${BINARY}.new.XXXXXX")"
+    sudo install -o root -g root -m 755 "package${BINARY}" "$STAGED_BINARY"
+    check_version "$STAGED_BINARY"
+    sudo rm -f -- "$STAGED_BINARY"
+    STAGED_BINARY=""
+  fi
   if [[ "$MODE" == binary ]]; then
     test -x "$BINARY"
     STAGED_BINARY="$(sudo mktemp "${BINARY}.new.XXXXXX")"
@@ -369,6 +388,13 @@ VERIFY_ONLY=0
     check_version "$STAGED_BINARY"
   fi
 
+  # A service that isn't running (a standby validator) stays stopped. Stop
+  # it either way, which also cancels a pending auto-restart.
+  WAS_ACTIVE=0
+  ACTIVE_STATE="$(systemctl show --property=ActiveState --value "$SERVICE")"
+  case "$ACTIVE_STATE" in
+    active|activating|reloading) WAS_ACTIVE=1 ;;
+  esac
   sudo systemctl stop "$SERVICE"
   if [[ "$MODE" == binary ]]; then
     sudo mv -fT -- "$STAGED_BINARY" "$BINARY"
@@ -376,12 +402,18 @@ VERIFY_ONLY=0
   else
     sudo dpkg --install "$ARTIFACT"
     INSTALLED="$(dpkg-query --show --showformat='${Version}' "$PRODUCT")"
-    test "$INSTALLED" = "${VERSION#v}"
+    check_package "$INSTALLED"
   fi
   check_version "$BINARY"
-  sudo systemctl start "$SERVICE"
-  sudo systemctl is-active --quiet "$SERVICE"
-  echo "$PRODUCT installed and service active"
+  if (( WAS_ACTIVE )); then
+    sudo systemctl start "$SERVICE"
+    sudo systemctl is-active --quiet "$SERVICE"
+    echo "$PRODUCT installed and service active"
+  else
+    echo "$PRODUCT installed; $SERVICE was not running and was left stopped"
+    # A failed unit isn't a deliberate standby: check it and start it manually.
+    test "$ACTIVE_STATE" != failed
+  fi
 )
 ```
 

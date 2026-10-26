@@ -120,7 +120,7 @@ case "$MODE" in
     required_commands+=(sudo install systemctl mktemp mv rm)
     ;;
   package)
-    required_commands+=(sudo dpkg dpkg-query systemctl)
+    required_commands+=(sudo dpkg dpkg-deb dpkg-query systemctl)
     ;;
   docker)
     required_commands+=(docker)
@@ -138,10 +138,16 @@ for command_name in "${required_commands[@]}"; do
   }
 done
 
-if [[ "$MODE" == binary ]]; then
-  if [[ ! -x "$BINARY_PATH" ]] ||
-     [[ "$(systemctl show --property=LoadState --value "$SERVICE_NAME")" != loaded ]]; then
-    echo "Binary mode requires an existing ${BINARY_PATH} and configured ${SERVICE_NAME} service" >&2
+if [[ "$MODE" == package || "$MODE" == binary ]]; then
+  # Without a loaded unit the upgrade can't stop the running node, so refuse
+  # rather than install under it. A failed lookup aborts through set -e.
+  load_state="$(systemctl show --property=LoadState --value "$SERVICE_NAME")"
+  if [[ "$load_state" != loaded ]]; then
+    echo "${MODE} mode requires a configured ${SERVICE_NAME} service (LoadState: ${load_state:-unknown})" >&2
+    exit 1
+  fi
+  if [[ "$MODE" == binary && ! -x "$BINARY_PATH" ]]; then
+    echo "Binary mode requires an existing ${BINARY_PATH}" >&2
     exit 1
   fi
 fi
@@ -295,6 +301,38 @@ check_binary_version() {
   echo "Verified ${PACKAGE_NAME} binary version ${actual}"
 }
 
+# Pre-releases sort below the final release in dpkg: v2.10.3-beta-priv
+# packages as 2.10.3~beta-priv, below 2.10.3-priv. packager_deb.yml maps
+# tags the same way; respins such as -priv.1 keep their hyphen. Packages
+# built before the mapping carry the plain tag, so both forms are accepted.
+plain_package_version="${VERSION#v}"
+expected_package_version="$plain_package_version"
+if [[ "$expected_package_version" == *-* && ! "${expected_package_version#*-}" =~ ^priv([.-].*)?$ ]]; then
+  expected_package_version="${expected_package_version%%-*}~${expected_package_version#*-}"
+fi
+
+check_package_version() {
+  local actual="$1" label="$2"
+  if [[ "$actual" != "$expected_package_version" && "$actual" != "$plain_package_version" ]]; then
+    echo "${label} ${PACKAGE_NAME} package version is incorrect" >&2
+    echo "Expected: $expected_package_version" >&2
+    echo "Actual:   $actual" >&2
+    return 1
+  fi
+}
+
+if [[ "$MODE" == package ]]; then
+  # Check the packaged version and binary before the service is touched. The
+  # binary runs from beside the destination, since /tmp may be noexec.
+  check_package_version "$(dpkg-deb --field "${WORK_DIR}/${ARTIFACT}" Version)" Packaged
+  dpkg-deb --extract "${WORK_DIR}/${ARTIFACT}" "${WORK_DIR}/package"
+  STAGED_BINARY="$(sudo mktemp "${BINARY_PATH}.new.XXXXXX")"
+  sudo install -o root -g root -m 755 "${WORK_DIR}/package${BINARY_PATH}" "$STAGED_BINARY"
+  check_binary_version "$STAGED_BINARY"
+  sudo rm -f -- "$STAGED_BINARY"
+  STAGED_BINARY=""
+fi
+
 if [[ "$MODE" == binary ]]; then
   # Stage beside the destination so mv uses a same-filesystem rename.
   STAGED_BINARY="$(sudo mktemp "${BINARY_PATH}.new.XXXXXX")"
@@ -306,11 +344,24 @@ fi
 
 case "$MODE" in
   package|binary)
-    echo "Stopping ${SERVICE_NAME} after successful artifact verification"
+    # A service that isn't running (a standby validator, for one) stays
+    # stopped, so the upgrade never starts a second signer. The unit is
+    # stopped either way, which also cancels a pending auto-restart.
+    # activating covers a pending auto-restart; deactivating means someone
+    # is already stopping it. A failed lookup aborts through set -e.
+    SERVICE_WAS_ACTIVE=0
+    active_state="$(systemctl show --property=ActiveState --value "$SERVICE_NAME")"
+    case "$active_state" in
+      active|activating|reloading) SERVICE_WAS_ACTIVE=1 ;;
+    esac
+    if (( SERVICE_WAS_ACTIVE )); then
+      echo "Stopping ${SERVICE_NAME} after successful artifact verification"
+      SERVICE_STOPPED=1
+    else
+      echo "${SERVICE_NAME} is not running; it will be left stopped"
+    fi
     sudo systemctl stop "$SERVICE_NAME"
-    SERVICE_STOPPED=1
 
-    expected_package_version="${VERSION#v}"
     if [[ "$MODE" == binary ]]; then
       sudo mv -fT -- "$STAGED_BINARY" "$BINARY_PATH"
       STAGED_BINARY=""
@@ -322,12 +373,7 @@ case "$MODE" in
           "$PACKAGE_NAME"
       )"
 
-      if [[ "$installed_package_version" != "$expected_package_version" ]]; then
-        echo "Installed ${PACKAGE_NAME} version is incorrect" >&2
-        echo "Expected: $expected_package_version" >&2
-        echo "Actual:   $installed_package_version" >&2
-        exit 1
-      fi
+      check_package_version "$installed_package_version" Installed
 
       echo "Installed ${PACKAGE_NAME} package version ${installed_package_version}"
     fi
@@ -338,6 +384,17 @@ case "$MODE" in
     fi
 
     check_binary_version "$BINARY_PATH"
+    if (( ! SERVICE_WAS_ACTIVE )); then
+      echo "Installed ${PACKAGE_NAME}; ${SERVICE_NAME} was not running and was left stopped"
+      # A unit that had failed (a crash loop past its start limit) isn't a
+      # deliberate standby: report it so automation doesn't record success.
+      if [[ "$active_state" == failed ]]; then
+        echo "${SERVICE_NAME} had failed before the upgrade; check it and start it manually" >&2
+        exit 1
+      fi
+      exit 0
+    fi
+
     sudo systemctl start "$SERVICE_NAME"
 
     if ! sudo systemctl is-active --quiet "$SERVICE_NAME"; then

@@ -43,6 +43,13 @@ jobs:
         run: |
           set -euo pipefail
           PACKAGE_VERSION="${GIT_TAG#v}"
+          # Pre-release tags package with "~" so they sort below the final
+          # release (v2.10.3-beta-priv -> 2.10.3~beta-priv < 2.10.3-priv);
+          # respins such as -priv.1 keep their hyphen and sort above it.
+          # polygon-private-install.sh expects the same mapping.
+          if [[ "$PACKAGE_VERSION" == *-* && ! "${PACKAGE_VERSION#*-}" =~ ^priv([.-].*)?$ ]]; then
+            PACKAGE_VERSION="${PACKAGE_VERSION%%-*}~${PACKAGE_VERSION#*-}"
+          fi
           dpkg --validate-version "$PACKAGE_VERSION"
           printf 'VERSION=%s\n' "$PACKAGE_VERSION" >> "$GITHUB_ENV"
 
