@@ -655,10 +655,11 @@ func TestRoutedMsgReadWriterDropsBulkLaneAfterPartialPayloadTimeout(t *testing.T
 	defer primaryApp.Close()
 	defer primaryNet.Close()
 
-	before, _, _ := bulkSidecarStats.snapshot()
+	stats := new(bulkSidecarStatsBook)
+	before, _, _ := stats.snapshot()
 	beforeCounters := before.Channels[routedDefaultBulkChannel]
 	bulk := &scriptedMsgRW{results: make(chan scriptedResult, 1)}
-	routed, ok := NewRoutedMsgReadWriter(primaryNet, bulk, func(code uint64) bool { return code == 2 }).(interface {
+	routed, ok := NewRoutedMsgReadWriter(primaryNet, &statsMsgReadWriter{MsgReadWriter: bulk, stats: stats}, func(code uint64) bool { return code == 2 }).(interface {
 		HasBulk() bool
 		ReadMsg() (Msg, error)
 	})
@@ -674,7 +675,7 @@ func TestRoutedMsgReadWriterDropsBulkLaneAfterPartialPayloadTimeout(t *testing.T
 	if routed.HasBulk() {
 		t.Fatal("expected partially-read bulk lane to be removed")
 	}
-	after, _, _ := bulkSidecarStats.snapshot()
+	after, _, _ := stats.snapshot()
 	afterCounters := after.Channels[routedDefaultBulkChannel]
 	if afterCounters.ReadTimeouts != beforeCounters.ReadTimeouts+1 {
 		t.Fatalf("expected one recorded timeout: before=%d after=%d", beforeCounters.ReadTimeouts, afterCounters.ReadTimeouts)
@@ -690,10 +691,11 @@ func TestRoutedMsgReadWriterDropsBulkLaneAfterPartialPayloadError(t *testing.T) 
 	defer primaryApp.Close()
 	defer primaryNet.Close()
 
-	before, _, _ := bulkSidecarStats.snapshot()
+	stats := new(bulkSidecarStatsBook)
+	before, _, _ := stats.snapshot()
 	beforeCounters := before.Channels[routedDefaultBulkChannel]
 	bulk := &scriptedMsgRW{results: make(chan scriptedResult, 1)}
-	routed, ok := NewRoutedMsgReadWriter(primaryNet, bulk, func(code uint64) bool { return code == 2 }).(interface {
+	routed, ok := NewRoutedMsgReadWriter(primaryNet, &statsMsgReadWriter{MsgReadWriter: bulk, stats: stats}, func(code uint64) bool { return code == 2 }).(interface {
 		HasBulk() bool
 		ReadMsg() (Msg, error)
 	})
@@ -709,7 +711,7 @@ func TestRoutedMsgReadWriterDropsBulkLaneAfterPartialPayloadError(t *testing.T) 
 	if routed.HasBulk() {
 		t.Fatal("expected failed bulk lane to be removed")
 	}
-	after, _, _ := bulkSidecarStats.snapshot()
+	after, _, _ := stats.snapshot()
 	afterCounters := after.Channels[routedDefaultBulkChannel]
 	if afterCounters.ReadErrors != beforeCounters.ReadErrors+1 {
 		t.Fatalf("expected one recorded read error: before=%d after=%d", beforeCounters.ReadErrors, afterCounters.ReadErrors)
