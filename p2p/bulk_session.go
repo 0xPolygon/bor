@@ -239,7 +239,7 @@ func (s *bulkSession) dial(ctx context.Context, remote *enode.Node, wait chan st
 		bulkSidecarSessionMeter.Mark(1)
 		bulkSidecarStats.markSessionEstablished()
 		s.sidecar.log.Debug("Bulk sidecar session established", "peer", s.remoteID, "remote", conn.RemoteAddr())
-		go s.runConn(conn)
+		s.sidecar.startWorker(func() { s.runConn(conn) })
 		return conn, nil
 	}
 	_ = conn.CloseWithError(bulkSidecarCloseErrorCode, "bulk connection superseded")
@@ -262,6 +262,8 @@ func (s *bulkSession) openChannel(ctx context.Context, channel string) (MsgReadW
 		defer func() { <-gate }()
 	case <-ctx.Done():
 		return nil, ctx.Err()
+	case <-s.sidecar.closeCh:
+		return nil, io.EOF
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err

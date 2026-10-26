@@ -94,6 +94,8 @@ type BulkSidecar struct {
 
 	closeOnce sync.Once
 	closeCh   chan struct{}
+	workMu    sync.Mutex
+	workWG    sync.WaitGroup
 
 	lock     sync.Mutex
 	sessions map[enode.ID]*bulkSession
@@ -229,7 +231,9 @@ func (b *BulkSidecar) Addr() net.Addr {
 
 func (b *BulkSidecar) Close() {
 	b.closeOnce.Do(func() {
+		b.workMu.Lock()
 		close(b.closeCh)
+		b.workMu.Unlock()
 		if b.transport != nil {
 			if err := b.transport.Close(); err != nil {
 				b.log.Debug("Bulk transport close failed", "err", err)
@@ -250,6 +254,7 @@ func (b *BulkSidecar) Close() {
 		for _, session := range sessions {
 			session.close()
 		}
+		b.workWG.Wait()
 	})
 }
 
@@ -266,7 +271,7 @@ func (b *BulkSidecar) run() {
 				return
 			}
 		}
-		go b.handleIncomingConn(conn)
+		b.startWorker(func() { b.handleIncomingConn(conn) })
 	}
 }
 
@@ -275,6 +280,10 @@ func (b *BulkSidecar) OpenChannel(peer *Peer, channel string) (MsgReadWriter, er
 }
 
 func (b *BulkSidecar) OpenChannelContext(ctx context.Context, peer *Peer, channel string) (MsgReadWriter, error) {
+	if !b.beginWork() {
+		return nil, io.EOF
+	}
+	defer b.workWG.Done()
 	if ctx == nil {
 		ctx = context.Background()
 	}
