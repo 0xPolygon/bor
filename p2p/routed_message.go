@@ -137,6 +137,7 @@ type routedMsgReadWriter struct {
 }
 
 type routedBulkLane struct {
+	stats     *bulkSidecarStatsBook
 	id        uint64
 	channel   string
 	rw        MsgReadWriter
@@ -196,11 +197,11 @@ func (rw *routedMsgReadWriter) WriteMsg(msg Msg) error {
 		return rw.primary.WriteMsg(msg)
 	}
 	if msg.Size > bulkMaxMessageSize {
-		return rw.writeFallback(msg, channel)
+		return rw.writeFallback(msg, channel, lane.stats)
 	}
 	// Writes can use the primary lane without copying when buffers are busy.
 	if !rw.buffers.tryAcquireWrite(msg.Size) {
-		return rw.writeFallback(msg, channel)
+		return rw.writeFallback(msg, channel, lane.stats)
 	}
 	defer rw.buffers.releaseWrite(msg.Size)
 	payload, err := readRoutedPayload(msg)
@@ -222,12 +223,14 @@ func (rw *routedMsgReadWriter) WriteMsg(msg Msg) error {
 		return err
 	}
 	msg.Payload = bytes.NewReader(payload)
-	return rw.writeFallback(msg, channel)
+	return rw.writeFallback(msg, channel, lane.stats)
 }
 
-func (rw *routedMsgReadWriter) writeFallback(msg Msg, channel string) error {
+func (rw *routedMsgReadWriter) writeFallback(msg Msg, channel string, stats *bulkSidecarStatsBook) error {
 	bulkSidecarWriteFallbackMeter.Mark(1)
-	bulkSidecarStats.markChannelWriteFallback(channel)
+	if stats != nil {
+		stats.markChannelWriteFallback(channel)
+	}
 	return rw.primary.WriteMsg(msg)
 }
 
@@ -312,6 +315,9 @@ func (rw *routedMsgReadWriter) setBulkChannels(channels []string, bulk MsgReadWr
 		closed:  closed,
 		cancel:  cancel,
 	}
+	if source, ok := bulk.(interface{ bulkStats() *bulkSidecarStatsBook }); ok {
+		lane.stats = source.bulkStats()
+	}
 	if !rw.installBulk(unique, lane) {
 		lane.closeReader()
 		return nil
@@ -337,15 +343,19 @@ func (rw *routedMsgReadWriter) clearBulk(id uint64) {
 	}
 }
 
-func (rw *routedMsgReadWriter) failBulkRead(channel string, bulkID uint64, err error) {
+func (rw *routedMsgReadWriter) failBulkRead(lane *routedBulkLane, err error) {
 	if isTimeoutError(err) {
 		bulkSidecarReadTimeoutMeter.Mark(1)
-		bulkSidecarStats.markChannelReadTimeout(channel)
+		if lane.stats != nil {
+			lane.stats.markChannelReadTimeout(lane.channel)
+		}
 	} else {
 		bulkSidecarReadErrorMeter.Mark(1)
-		bulkSidecarStats.markChannelReadError(channel)
+		if lane.stats != nil {
+			lane.stats.markChannelReadError(lane.channel)
+		}
 	}
-	rw.clearBulk(bulkID)
+	rw.clearBulk(lane.id)
 }
 
 func (rw *routedMsgReadWriter) readPrimaryLoop() {
@@ -370,7 +380,7 @@ func (rw *routedMsgReadWriter) readBulkLoop(ctx context.Context, lane *routedBul
 			return
 		}
 		if err != nil {
-			rw.failBulkRead(lane.channel, lane.id, err)
+			rw.failBulkRead(lane, err)
 			return
 		}
 	}

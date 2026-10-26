@@ -89,10 +89,6 @@ func (w *bulkSidecarWireBook) snapshot() BulkSidecarWireCounters {
 	}
 }
 
-var bulkSidecarStats = &bulkSidecarStatsBook{
-	channels: make(map[string]*BulkSidecarChannelCounters),
-}
-
 func (b *BulkSidecar) Status() BulkSidecarStatus {
 	if b == nil {
 		return BulkSidecarStatus{}
@@ -101,7 +97,7 @@ func (b *BulkSidecar) Status() BulkSidecarStatus {
 		Enabled:    true,
 		ListenAddr: b.Addr().String(),
 	}
-	status.Counters, status.SocketBuffers, status.Wire = bulkSidecarStats.snapshot()
+	status.Counters, status.SocketBuffers, status.Wire = b.stats.snapshot()
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
@@ -231,6 +227,9 @@ func (s *bulkSidecarStatsBook) snapshot() (BulkSidecarCounters, BulkSidecarSocke
 }
 
 func (s *bulkSidecarStatsBook) channel(name string) *BulkSidecarChannelCounters {
+	if s.channels == nil {
+		s.channels = make(map[string]*BulkSidecarChannelCounters)
+	}
 	counters := s.channels[name]
 	if counters == nil {
 		counters = new(BulkSidecarChannelCounters)
@@ -273,3 +272,5 @@ func (r *bulkSidecarQlogRecorder) RecordEvent(ev qlogwriter.Event) {
 }
 
 func (r *bulkSidecarQlogRecorder) Close() error { return nil }
+
+func (rw *bulkStreamMsgRW) bulkStats() *bulkSidecarStatsBook { return rw.stats }

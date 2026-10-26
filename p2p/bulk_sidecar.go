@@ -91,6 +91,7 @@ type BulkSidecar struct {
 	localID enode.ID
 	priv    *ecdsa.PrivateKey
 	windows *semaphore.Weighted
+	stats   bulkSidecarStatsBook
 
 	closeOnce sync.Once
 	closeCh   chan struct{}
@@ -159,6 +160,7 @@ type bulkStreamMsgRW struct {
 	log      log.Logger
 	write    sync.Mutex
 	writeErr error
+	stats    *bulkSidecarStatsBook
 }
 
 func newBulkSidecar(srv *Server, listenAddr string) (*BulkSidecar, error) {
@@ -172,6 +174,16 @@ func newBulkSidecar(srv *Server, listenAddr string) (*BulkSidecar, error) {
 		NextProtos:     []string{bulkSidecarNextProto},
 		MinVersion:     tls.VersionTLS13,
 	}
+	b := &BulkSidecar{
+		srv:      srv,
+		tls:      tlsConf,
+		log:      srv.log,
+		localID:  srv.localnode.ID(),
+		priv:     srv.PrivateKey,
+		windows:  newBulkQUICWindows(srv.MaxPeers, srv.MaxPendingPeers),
+		closeCh:  make(chan struct{}),
+		sessions: make(map[enode.ID]*bulkSession),
+	}
 	quicConf := &quic.Config{
 		HandshakeIdleTimeout: bulkAuthTimeout,
 		MaxIdleTimeout:       60 * time.Second,
@@ -184,10 +196,9 @@ func newBulkSidecar(srv *Server, listenAddr string) (*BulkSidecar, error) {
 		InitialConnectionReceiveWindow: bulkConnReceiveWindow,
 		MaxConnectionReceiveWindow:     bulkConnReceiveWindowMax,
 		Tracer: func(context.Context, bool, quic.ConnectionID) qlogwriter.Trace {
-			return bulkSidecarStats.newConnectionTrace()
+			return b.stats.newConnectionTrace()
 		},
 	}
-	windows := newBulkQUICWindows(srv.MaxPeers, srv.MaxPendingPeers)
 
 	udpAddr, err := net.ResolveUDPAddr("udp", listenAddr)
 	if err != nil {
@@ -198,31 +209,20 @@ func newBulkSidecar(srv *Server, listenAddr string) (*BulkSidecar, error) {
 		return nil, err
 	}
 	socketBuffers := configureBulkSidecarSocketBuffers(udpConn)
-	bulkSidecarStats.setSocketBuffers(socketBuffers)
+	b.stats.setSocketBuffers(socketBuffers)
 
 	transport := &quic.Transport{
 		Conn:        udpConn,
-		Tracer:      bulkSidecarStats.newTransportRecorder(),
-		ConnContext: bulkServerConnContext(srv, windows),
+		Tracer:      b.stats.newTransportRecorder(),
+		ConnContext: bulkServerConnContext(srv, b.windows),
 	}
 	listener, err := transport.Listen(tlsConf, quicConf)
 	if err != nil {
 		_ = udpConn.Close()
 		return nil, err
 	}
-	return &BulkSidecar{
-		srv:       srv,
-		listener:  listener,
-		transport: transport,
-		tls:       tlsConf,
-		config:    quicConf,
-		log:       srv.log,
-		localID:   srv.localnode.ID(),
-		priv:      srv.PrivateKey,
-		windows:   windows,
-		closeCh:   make(chan struct{}),
-		sessions:  make(map[enode.ID]*bulkSession),
-	}, nil
+	b.listener, b.transport, b.config = listener, transport, quicConf
+	return b, nil
 }
 
 func (b *BulkSidecar) Addr() net.Addr {
@@ -442,7 +442,9 @@ func (rw *bulkStreamMsgRW) ReadMsg() (Msg, error) {
 		Size:    size,
 		Payload: io.LimitReader(&bulkPayloadReader{stream: rw.stream}, int64(size)),
 	}
-	bulkSidecarStats.markChannelRead(rw.channel)
+	if rw.stats != nil {
+		rw.stats.markChannelRead(rw.channel)
+	}
 	rw.log.Trace("Bulk sidecar read message", "code", msg.Code, "size", msg.Size)
 	return msg, nil
 }
@@ -487,7 +489,9 @@ func (rw *bulkStreamMsgRW) writeFrame(msg Msg) error {
 	if written != int64(msg.Size) {
 		return &bulkWriteError{err: io.ErrUnexpectedEOF, committed: true}
 	}
-	bulkSidecarStats.markChannelWrite(rw.channel)
+	if rw.stats != nil {
+		rw.stats.markChannelWrite(rw.channel)
+	}
 	rw.log.Trace("Bulk sidecar wrote message", "code", msg.Code, "size", msg.Size)
 	return nil
 }

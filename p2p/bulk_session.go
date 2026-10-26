@@ -49,7 +49,7 @@ func (b *BulkSidecar) adoptConn(peer *Peer, conn *quic.Conn) *bulkSession {
 	session.channels = make(map[string]MsgReadWriter)
 	session.signalConnLocked()
 	bulkSidecarSessionMeter.Mark(1)
-	bulkSidecarStats.markSessionEstablished()
+	b.stats.markSessionEstablished()
 	b.log.Debug("Bulk sidecar session established", "peer", remote.ID(), "remote", conn.RemoteAddr())
 	return session
 }
@@ -237,7 +237,7 @@ func (s *bulkSession) dial(ctx context.Context, remote *enode.Node, wait chan st
 		s.channels = make(map[string]MsgReadWriter)
 		s.signalConnLocked()
 		bulkSidecarSessionMeter.Mark(1)
-		bulkSidecarStats.markSessionEstablished()
+		s.sidecar.stats.markSessionEstablished()
 		s.sidecar.log.Debug("Bulk sidecar session established", "peer", s.remoteID, "remote", conn.RemoteAddr())
 		s.sidecar.startWorker(func() { s.runConn(conn) })
 		return conn, nil
@@ -299,7 +299,7 @@ func (s *bulkSession) channelOpenGate() chan struct{} {
 
 func (s *bulkSession) openChannelStream(conn *quic.Conn, stream bulkFrameStream, channel string) (MsgReadWriter, error) {
 	rw := &bulkStreamMsgRW{
-		stream: stream, channel: channel,
+		stream: stream, channel: channel, stats: &s.sidecar.stats,
 		log: log.New("peer", s.remoteID, "channel", channel),
 	}
 	if err := writeBulkControl(stream, bulkChannelHello{Version: bulkSidecarVersion, Channel: channel}); err != nil {
@@ -312,7 +312,7 @@ func (s *bulkSession) openChannelStream(conn *quic.Conn, stream bulkFrameStream,
 }
 
 func (s *bulkSession) acceptChannel(conn *quic.Conn, stream bulkFrameStream) (err error) {
-	rw := &bulkStreamMsgRW{stream: stream}
+	rw := &bulkStreamMsgRW{stream: stream, stats: &s.sidecar.stats}
 	defer func() {
 		if err != nil {
 			err = errors.Join(err, rw.Close())
@@ -418,10 +418,10 @@ func (s *bulkSession) storeChannel(conn *quic.Conn, channel string, rw MsgReadWr
 			}
 		}
 		bulkSidecarChannelReplaceMeter.Mark(1)
-		bulkSidecarStats.markChannelReplaced(channel)
+		s.sidecar.stats.markChannelReplaced(channel)
 	} else {
 		bulkSidecarChannelOpenMeter.Mark(1)
-		bulkSidecarStats.markChannelOpened(channel)
+		s.sidecar.stats.markChannelOpened(channel)
 	}
 	s.sidecar.log.Debug("Bulk sidecar channel opened", "peer", s.remoteID, "channel", channel)
 
