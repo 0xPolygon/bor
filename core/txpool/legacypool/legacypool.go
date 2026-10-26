@@ -198,6 +198,12 @@ type Config struct {
 	Lifetime         time.Duration // Maximum amount of time non-executable transaction are queued
 	StrandedLifetime time.Duration // Maximum amount of time a pending head can stay below the base fee (0 disables)
 
+	// PIP-15 conditional transactions (bor_sendRawTransactionConditional). They are
+	// never gossiped, so only a block producer that received them can include them.
+	ConditionalTxs      bool          // Accept conditional transactions (off by default)
+	ConditionalLifetime time.Duration // Maximum amount of time a conditional transaction can stay in the pool
+	ConditionalSlots    uint64        // Maximum known accounts and slots across all pooled conditional transactions
+
 	// Transaction filtering configuration
 	FilteredAddresses map[common.Address]struct{} // Pre-loaded filtered addresses (populated by config)
 
@@ -223,6 +229,9 @@ var DefaultConfig = Config{
 
 	Lifetime:         3 * time.Hour,
 	StrandedLifetime: 3 * time.Hour,
+
+	ConditionalLifetime: 5 * time.Minute,
+	ConditionalSlots:    10000,
 
 	Rebroadcast:          true,
 	RebroadcastInterval:  30 * time.Second,
@@ -266,6 +275,14 @@ func (config *Config) sanitize() Config {
 	if conf.StrandedLifetime < 0 {
 		log.Warn("Sanitizing invalid txpool stranded lifetime", "provided", conf.StrandedLifetime, "updated", DefaultConfig.StrandedLifetime)
 		conf.StrandedLifetime = DefaultConfig.StrandedLifetime
+	}
+	if conf.ConditionalLifetime < 1 {
+		log.Warn("Sanitizing invalid txpool conditional lifetime", "provided", conf.ConditionalLifetime, "updated", DefaultConfig.ConditionalLifetime)
+		conf.ConditionalLifetime = DefaultConfig.ConditionalLifetime
+	}
+	if conf.ConditionalSlots < 1 {
+		log.Warn("Sanitizing invalid txpool conditional slots", "provided", conf.ConditionalSlots, "updated", DefaultConfig.ConditionalSlots)
+		conf.ConditionalSlots = DefaultConfig.ConditionalSlots
 	}
 	// Sanitize rebroadcast configuration
 	if conf.RebroadcastInterval < 1*time.Second {
@@ -511,6 +528,7 @@ func (pool *LegacyPool) loop() {
 				pool.removeTx(hash, true, true)
 			}
 			pool.evictStranded(start)
+			pool.evictConditional(start)
 			evictTimer.Update(time.Since(start))
 			pool.mu.Unlock()
 		}
@@ -798,6 +816,9 @@ func (pool *LegacyPool) ValidateTxBasics(tx *types.Transaction) error {
 // rules and adheres to some heuristic limits of the local node (price and size).
 func (pool *LegacyPool) validateTx(tx *types.Transaction) error {
 	if err := pool.checkFiltered(tx); err != nil {
+		return err
+	}
+	if err := pool.checkConditional(tx); err != nil {
 		return err
 	}
 
@@ -2010,8 +2031,12 @@ func (pool *LegacyPool) demoteUnexecutables() {
 			// Internal shuffle shouldn't touch the lookup set.
 			pool.enqueueTx(hash, tx, false)
 		}
-		// bor: Drop all transactions that no longer have valid TxOptions
-		txConditionalsRemoved := list.FilterTxConditional(pool.currentState, currentHeader)
+		// bor: Drop all transactions that no longer have valid TxOptions. Skip the
+		// walk when the pool holds no conditional transactions.
+		var txConditionalsRemoved types.Transactions
+		if pool.all.ConditionalSlots() > 0 {
+			txConditionalsRemoved = list.FilterTxConditional(pool.currentState, currentHeader)
+		}
 
 		for _, tx := range txConditionalsRemoved {
 			hash := tx.Hash()
@@ -2107,9 +2132,10 @@ func (as *accountSet) merge(other *accountSet) {
 // peeking into the pool in LegacyPool.Get without having to acquire the widely scoped
 // LegacyPool.mu mutex.
 type lookup struct {
-	slots int
-	lock  sync.RWMutex
-	txs   map[common.Hash]*types.Transaction
+	slots            int
+	conditionalSlots int // bor: known accounts and slots of all PIP-15 conditional txs
+	lock             sync.RWMutex
+	txs              map[common.Hash]*types.Transaction
 
 	auths map[common.Address][]common.Hash // All accounts with a pooled authorization
 }
@@ -2160,6 +2186,15 @@ func (t *lookup) Slots() int {
 	return t.slots
 }
 
+// ConditionalSlots returns the known accounts and slots of all conditional
+// transactions in the lookup.
+func (t *lookup) ConditionalSlots() int {
+	t.lock.RLock()
+	defer t.lock.RUnlock()
+
+	return t.conditionalSlots
+}
+
 // Add adds a transaction to the lookup.
 func (t *lookup) Add(tx *types.Transaction) {
 	t.lock.Lock()
@@ -2167,6 +2202,8 @@ func (t *lookup) Add(tx *types.Transaction) {
 
 	t.slots += numSlots(tx)
 	slotsGauge.Update(int64(t.slots))
+	t.conditionalSlots += conditionalWeight(tx)
+	conditionalSlotsGauge.Update(int64(t.conditionalSlots))
 
 	t.txs[tx.Hash()] = tx
 	t.addAuthorities(tx)
@@ -2185,6 +2222,8 @@ func (t *lookup) Remove(hash common.Hash) {
 	t.removeAuthorities(tx)
 	t.slots -= numSlots(tx)
 	slotsGauge.Update(int64(t.slots))
+	t.conditionalSlots -= conditionalWeight(tx)
+	conditionalSlotsGauge.Update(int64(t.conditionalSlots))
 
 	delete(t.txs, hash)
 }
@@ -2195,6 +2234,7 @@ func (t *lookup) Clear() {
 	defer t.lock.Unlock()
 
 	t.slots = 0
+	t.conditionalSlots = 0
 	t.txs = make(map[common.Hash]*types.Transaction)
 	t.auths = make(map[common.Address][]common.Hash)
 }

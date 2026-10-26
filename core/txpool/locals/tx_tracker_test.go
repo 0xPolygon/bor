@@ -206,3 +206,23 @@ func TestJournal(t *testing.T) {
 		t.Fatalf("Unexpected transactions being tracked, got: %d, want: %d", len(allCopy), len(txs))
 	}
 }
+
+// Conditional txs must not be tracked: resubmitting them would undo the pool's
+// conditional lifetime, and the journal would replay them as plain txs.
+func TestTrackSkipsConditional(t *testing.T) {
+	env := newTestEnv(t, 1, 0, "")
+	defer env.close()
+
+	txs := env.makeTxs(2)
+	txs[1].PutOptions(&types.OptionsPIP15{})
+	env.tracker.TrackAll(txs)
+
+	env.tracker.mu.Lock()
+	defer env.tracker.mu.Unlock()
+	if _, ok := env.tracker.all[txs[0].Hash()]; !ok {
+		t.Fatal("plain tx not tracked")
+	}
+	if _, ok := env.tracker.all[txs[1].Hash()]; ok {
+		t.Fatal("conditional tx tracked")
+	}
+}
