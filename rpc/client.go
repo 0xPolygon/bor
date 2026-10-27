@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"reflect"
@@ -129,7 +130,12 @@ func (cc *clientConn) close(err error, inflightReq *requestOp) {
 	cc.handler.executionPool.Stop()
 	// The connection is gone, so there is no point in finishing calls that are
 	// still being served on it. Cancel them before waiting for them to return.
-	cc.handler.cancelRoot()
+	// A plain EOF can be a half-close of a stream socket (IPC): the peer may
+	// still read the answers, so those calls are left to finish. WebSocket
+	// disconnects never surface as a plain EOF.
+	if !errors.Is(err, io.EOF) {
+		cc.handler.cancelRoot()
+	}
 	cc.handler.close(err, inflightReq)
 	cc.codec.close()
 }
