@@ -109,6 +109,42 @@ func verifyBaseFeeWithinBoundaries(parent, header *types.Header) error {
 
 // CalcBaseFee calculates the basefee of the header.
 func CalcBaseFee(config *params.ChainConfig, parent *types.Header) *big.Int {
+	return applyBaseFeeFloor(config, parent, calcBaseFee(config, parent))
+}
+
+// applyBaseFeeFloor keeps the base fee at or above the producer's floor
+// (miner.targetBaseFee with miner.baseFeeFloor set). At the floor the fee stays
+// exactly equal block after block, which is what nodes without the producer
+// config detect as the floor. Below it, the fee walks up by the largest step
+// validators accept, so switching the floor on or raising it stays valid.
+func applyBaseFeeFloor(config *params.ChainConfig, parent *types.Header, baseFee *big.Int) *big.Int {
+	if config.Bor == nil || parent.BaseFee == nil {
+		return baseFee
+	}
+	floor := config.Bor.GetBaseFeeFloor(parent.Number)
+	if floor == nil || baseFee.Cmp(floor) >= 0 {
+		return baseFee
+	}
+	ceiling := new(big.Int).Add(parent.BaseFee, maxBaseFeeStep(parent.BaseFee))
+	if floor.Cmp(ceiling) < 0 {
+		return floor
+	}
+	return ceiling
+}
+
+// maxBaseFeeStep returns the largest base fee change validators accept after
+// Lisovo: MaxBaseFeeChangePercent of the parent base fee, at least 1 wei.
+func maxBaseFeeStep(parentBaseFee *big.Int) *big.Int {
+	step := new(big.Int).Mul(parentBaseFee, big.NewInt(MaxBaseFeeChangePercent))
+	step.Div(step, big.NewInt(100))
+	if step.Cmp(common.Big1) < 0 {
+		step.Set(common.Big1)
+	}
+	return step
+}
+
+// calcBaseFee calculates the basefee of the header from the parent gas usage.
+func calcBaseFee(config *params.ChainConfig, parent *types.Header) *big.Int {
 	// If the current block is the first EIP-1559 block, return the InitialBaseFee.
 	if !config.IsLondon(parent.Number) || parent.BaseFee == nil {
 		return new(big.Int).SetUint64(params.InitialBaseFee)

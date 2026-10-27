@@ -360,6 +360,8 @@ The ```bor server``` command runs the Bor client.
 
 - ```miner.baseFeeChangeDenominator```: Base fee change rate denominator (must be >0, default 64) for post-Lisovo blocks (default: 0)
 
+- ```miner.baseFeeFloor```: Hold the base fee at or above miner.targetBaseFee (post-Lisovo, producer policy only) (default: false)
+
 - ```miner.blocktime```: The block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time. (default: 0s)
 
 - ```miner.disable-pending-block```: Disable the pending block creation loop on non block producer nodes. When set, 'pending' block will be unavailable for RPC queries. (default: false)
@@ -431,6 +433,8 @@ The ```bor server``` command runs the Bor client.
 - ```txpool.accountqueue```: Maximum number of non-executable transaction slots permitted per account (default: 64)
 
 - ```txpool.accountslots```: Minimum number of executable transaction slots guaranteed per account (default: 16)
+
+- ```txpool.basefeefloor```: Refuse and sweep transactions whose fee cap cannot pay the producers' base fee floor (learned from headers) plus the minimum tip (default: false)
 
 - ```txpool.filtered-addresses```: Path to the file containing a newline-separated list of addresses whose transactions will be filtered
 

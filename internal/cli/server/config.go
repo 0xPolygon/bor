@@ -391,6 +391,10 @@ type TxPoolConfig struct {
 	StrandedLifetime    time.Duration `hcl:"-,optional" toml:"-"`
 	StrandedLifetimeRaw string        `hcl:"strandedlifetime,optional" toml:"strandedlifetime,optional"`
 
+	// BaseFeeFloor refuses and sweeps transactions that cannot pay the producers'
+	// base fee floor, learned from canonical headers
+	BaseFeeFloor bool `hcl:"basefeefloor,optional" toml:"basefeefloor,optional"`
+
 	// FilteredAddressesFile is the path to newline-separated list of addresses whose transactions will be filtered
 	FilteredAddressesFile string `hcl:"filtered-addresses,optional" toml:"filtered-addresses,optional"`
 
@@ -437,6 +441,9 @@ type SealerConfig struct {
 	EnableDynamicTargetGas bool   `hcl:"enableDynamicTargetGas,optional" toml:"enableDynamicTargetGas,optional"`
 	TargetGasMinPercentage uint64 `hcl:"targetGasMinPercentage,optional" toml:"targetGasMinPercentage,optional"`
 	TargetGasMaxPercentage uint64 `hcl:"targetGasMaxPercentage,optional" toml:"targetGasMaxPercentage,optional"`
+
+	// BaseFeeFloor holds the base fee at or above TargetBaseFee (post-Lisovo, producer policy only)
+	BaseFeeFloor bool `hcl:"baseFeeFloor,optional" toml:"baseFeeFloor,optional"`
 
 	// GasPrice is the minimum gas price for mining a transaction
 	GasPrice    *big.Int `hcl:"-,optional" toml:"-"`
@@ -985,6 +992,7 @@ func DefaultConfig() *Config {
 			GlobalQueue:          131072,
 			LifeTime:             3 * time.Hour,
 			StrandedLifetime:     3 * time.Hour,
+			BaseFeeFloor:         false,
 			Rebroadcast:          true,
 			RebroadcastInterval:  30 * time.Second,
 			RebroadcastMaxAge:    10 * time.Minute,
@@ -1001,6 +1009,7 @@ func DefaultConfig() *Config {
 			TargetBaseFee:            miner.DefaultConfig.TargetBaseFee,
 			BaseFeeBuffer:            miner.DefaultConfig.BaseFeeBuffer,
 			EnableDynamicTargetGas:   false,
+			BaseFeeFloor:             false,
 			TargetGasMinPercentage:   50,                                         // 50% floor
 			TargetGasMaxPercentage:   80,                                         // 80% ceiling
 			GasPrice:                 big.NewInt(params.BorDefaultMinerGasPrice), // bor's default
@@ -1385,6 +1394,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.TxPool.GlobalQueue = c.TxPool.GlobalQueue
 		n.TxPool.Lifetime = c.TxPool.LifeTime
 		n.TxPool.StrandedLifetime = c.TxPool.StrandedLifetime
+		n.TxPool.BaseFeeFloor = c.TxPool.BaseFeeFloor
 
 		// Load filtered addresses during config initialization
 		if filteredAddrs, err := loadFilteredAddresses(c.TxPool.FilteredAddressesFile); err != nil {
@@ -1479,6 +1489,10 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 			}
 		}
 
+		if c.Sealer.BaseFeeFloor && c.Sealer.TargetBaseFee == 0 {
+			return nil, fmt.Errorf("miner.targetBaseFee must be greater than 0 when miner.baseFeeFloor is enabled")
+		}
+
 		if etherbase := c.Sealer.Etherbase; etherbase != "" {
 			if !common.IsHexAddress(etherbase) {
 				return nil, fmt.Errorf("etherbase is not an address: %s", etherbase)
@@ -1508,6 +1522,12 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 			n.Genesis.Config.Bor.TargetGasMaxPercentage = &c.Sealer.TargetGasMaxPercentage
 			n.Genesis.Config.Bor.TargetBaseFee = &c.Sealer.TargetBaseFee
 			n.Genesis.Config.Bor.BaseFeeBuffer = &c.Sealer.BaseFeeBuffer
+		}
+
+		// The floor reuses TargetBaseFee so the floor and the gas target can never disagree
+		if c.Sealer.BaseFeeFloor {
+			n.Genesis.Config.Bor.BaseFeeFloor = &c.Sealer.BaseFeeFloor
+			n.Genesis.Config.Bor.TargetBaseFee = &c.Sealer.TargetBaseFee
 		}
 	}
 
