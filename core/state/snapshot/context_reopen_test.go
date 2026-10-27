@@ -17,6 +17,7 @@ package snapshot
 
 import (
 	"bytes"
+	"slices"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -68,7 +69,7 @@ func TestReopenIteratorCopiesKey(t *testing.T) {
 	if !ctx.account.Next() {
 		t.Fatal("reopened iterator is empty")
 	}
-	want := append(rawdb.SnapshotAccountPrefix, hashes[1].Bytes()...)
+	want := slices.Concat(rawdb.SnapshotAccountPrefix, hashes[1].Bytes())
 	if have := ctx.account.Key(); !bytes.Equal(have, want) {
 		t.Fatalf("reopened at %x, want %x", have, want)
 	}
