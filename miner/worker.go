@@ -1668,7 +1668,7 @@ func (w *worker) makeEnv(header *types.Header, coinbase common.Address, witness 
 		buildInterrupt:     newBuildInterruptState(),
 		header:             header,
 		witness:            state.Witness(),
-		evm:                vm.NewEVM(core.NewEVMBlockContext(header, w.chain, &coinbase), state, w.chainConfig, w.vmConfig()),
+		evm:                vm.NewEVM(core.NewEVMBlockContext(header, w.chain, &coinbase), state, w.chainConfig, w.vmConfigWith(genParams)),
 		prefetchReader:     genParams.prefetchReader,
 		processReader:      genParams.processReader,
 		prefetchedTxHashes: genParams.prefetchedTxHashes,
@@ -2029,6 +2029,7 @@ type generateParams struct {
 	processReader             state.ReaderWithStats   // The process reader to use for statistics
 	prefetchedTxHashes        *sync.Map               // Map of successfully prefetched transaction hashes
 	builderPrefetchedTxHashes *sync.Map               // Subset of prefetchedTxHashes populated only during the builder phase; used to measure builder-phase contribution
+	pqVerifyCache             *vm.PQVerifyCache       // Post-quantum verify results shared by the prefetcher and the block's EVM; nil without prefetch
 	productionStart           time.Time               // Start of full-block building (after optional empty pre-seal); used for productionElapsed
 	buildStart                time.Time               // Entry to commitWork, before state acquisition and prepareWork; used for worker/build_to_announce
 	preBuildDuration          time.Duration           // Duration of pre block build phase
@@ -2592,6 +2593,7 @@ func (w *worker) maybeStartPrefetch(parent *types.Header, throwaway *state.State
 	// it nil means zero overhead when prefetch is disabled.
 	genParams.builderStarted = new(atomic.Bool)
 	genParams.builderPrefetchedTxHashes = &sync.Map{}
+	genParams.pqVerifyCache = vm.NewPQVerifyCache()
 	w.prefetchWg.Add(1)
 	go func() {
 		defer w.prefetchWg.Done()
@@ -2982,7 +2984,7 @@ func (w *worker) runPrefetcher(parent *types.Header, throwaway *state.StateDB, g
 		// pebble's block cache, which under realistic clean-cache sizes is already
 		// resident. Upstream go-ethereum's prefetcher does not compute intermediate
 		// roots either.
-		prefetcher.PrefetchStream(header, throwaway, w.vmConfig(), false,
+		prefetcher.PrefetchStream(header, throwaway, w.vmConfigWith(genParams), false,
 			hardKill, evmAbort, txsCh, onSuccess)
 	}()
 
@@ -3556,6 +3558,16 @@ func (w *worker) vmConfig() vm.Config {
 	// conflicting with live tracing.
 	cfg.Tracer = nil
 
+	return cfg
+}
+
+// vmConfigWith returns the VM config with the per-build caches shared between
+// the prefetcher and the block's EVM.
+func (w *worker) vmConfigWith(genParams *generateParams) vm.Config {
+	cfg := w.vmConfig()
+	if genParams != nil {
+		cfg.PQVerifyCache = genParams.pqVerifyCache
+	}
 	return cfg
 }
 
