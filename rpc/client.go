@@ -127,6 +127,9 @@ func (cc *clientConn) close(err error, inflightReq *requestOp) {
 	// The client-side pool is per-connection (created in newClientConn), so it
 	// is owned here and must be stopped to release its metric goroutine.
 	cc.handler.executionPool.Stop()
+	// The connection is gone, so there is no point in finishing calls that are
+	// still being served on it. Cancel them before waiting for them to return.
+	cc.handler.cancelRoot()
 	cc.handler.close(err, inflightReq)
 	cc.codec.close()
 }
