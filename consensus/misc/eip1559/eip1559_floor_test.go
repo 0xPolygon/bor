@@ -170,3 +170,11 @@ func TestBaseFeeFloorDisabled(t *testing.T) {
 	noParentFee.BaseFee = nil
 	require.Equal(t, new(big.Int).SetUint64(params.InitialBaseFee), CalcBaseFee(floorTestConfig(250, true), noParentFee))
 }
+
+// TestMaxBaseFeeStepMinimum checks the 1 wei minimum step at tiny base fees,
+// matching the validator check.
+func TestMaxBaseFeeStepMinimum(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, big.NewInt(1), maxBaseFeeStep(big.NewInt(10)))
+	require.Equal(t, big.NewInt(5), maxBaseFeeStep(big.NewInt(100)))
+}

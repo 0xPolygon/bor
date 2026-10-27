@@ -1528,6 +1528,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		if c.Sealer.BaseFeeFloor {
 			n.Genesis.Config.Bor.BaseFeeFloor = &c.Sealer.BaseFeeFloor
 			n.Genesis.Config.Bor.TargetBaseFee = &c.Sealer.TargetBaseFee
+			log.Info("Base fee floor enabled", "floor", c.Sealer.TargetBaseFee)
 		}
 	}
 

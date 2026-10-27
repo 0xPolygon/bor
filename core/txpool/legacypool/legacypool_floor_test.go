@@ -431,3 +431,47 @@ func TestBaseFeeFloorStrandedDuringRise(t *testing.T) {
 		t.Fatalf("pending %d, want 1: a 300 gwei cap pays the 250 floor once the rise ends", pending)
 	}
 }
+
+// floorTestChain serves real headers to the pool, like core.BlockChain does.
+type floorTestChain struct {
+	*testBlockChain
+	headers *floorChain
+}
+
+func (c *floorTestChain) GetHeader(hash common.Hash, number uint64) *types.Header {
+	return c.headers.header(hash, number)
+}
+
+// TestBaseFeeFloorPoolLearnsFromHeaders drives the pool's own header reads:
+// the floor is learned and a sweep is scheduled.
+func TestBaseFeeFloorPoolLearnsFromHeaders(t *testing.T) {
+	t.Parallel()
+	pool, _ := setupPoolWithConfig(eip1559Config)
+	t.Cleanup(func() { pool.Close() })
+
+	c := newFloorChain()
+	c.extendDrift(5, 240)
+	c.extendN(floorRunLength+1, floorGwei(250))
+
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+	pool.chain = &floorTestChain{testBlockChain: pool.chain.(*testBlockChain), headers: c}
+	pool.updateFloor(c.headers[3])
+	if pool.floor.floor != nil || pool.floorSweepDue {
+		t.Fatalf("floor %v sweep %v before any flat run", pool.floor.floor, pool.floorSweepDue)
+	}
+	pool.updateFloor(c.head())
+	if pool.floor.floor == nil || pool.floor.floor.Cmp(floorGwei(250)) != 0 || !pool.floorSweepDue {
+		t.Fatalf("floor %v sweep %v, want 250 gwei and a sweep", pool.floor.floor, pool.floorSweepDue)
+	}
+}
+
+// TestBaseFeeFloorHeaderFallsBackToBlocks checks chains without GetHeader.
+func TestBaseFeeFloorHeaderFallsBackToBlocks(t *testing.T) {
+	t.Parallel()
+	pool, _ := setupPoolWithConfig(eip1559Config)
+	t.Cleanup(func() { pool.Close() })
+	if h := pool.floorHeader(common.Hash{}, 0); h == nil {
+		t.Fatal("no header from GetBlock")
+	}
+}
