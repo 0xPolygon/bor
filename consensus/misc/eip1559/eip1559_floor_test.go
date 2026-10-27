@@ -127,7 +127,7 @@ func TestBaseFeeFloorLower(t *testing.T) {
 	for parent.BaseFee.Cmp(gwei(200)) > 0 {
 		child := nextHeader(t, cfg, parent, 18)
 		if child.BaseFee.Cmp(gwei(200)) > 0 {
-			require.Equal(t, calcBaseFee(cfg, parent), child.BaseFee, "above the floor the formula is unchanged")
+			require.Equal(t, CalcBaseFee(floorTestConfig(200, false), parent), child.BaseFee, "above the floor the formula is unchanged")
 		}
 		parent = child
 		blocks++
@@ -143,28 +143,30 @@ func TestBaseFeeFloorAllowsRise(t *testing.T) {
 	cfg := floorTestConfig(250, true)
 	parent := floorTestParent(250, 100)
 	child := nextHeader(t, cfg, parent, 100)
-	require.Equal(t, calcBaseFee(cfg, parent), child.BaseFee)
+	require.Equal(t, CalcBaseFee(floorTestConfig(250, false), parent), child.BaseFee)
 	require.Equal(t, 1, child.BaseFee.Cmp(gwei(250)))
 }
 
-// TestBaseFeeFloorDisabled checks every way the floor stays off.
+// TestBaseFeeFloorDisabled checks every way the floor stays off: the result
+// is the plain formula, which at 5% usage drops below the 250 gwei target.
 func TestBaseFeeFloorDisabled(t *testing.T) {
 	t.Parallel()
-	parent := floorTestParent(100, 5)
-
-	off := floorTestConfig(250, false)
-	require.Equal(t, calcBaseFee(off, parent), CalcBaseFee(off, parent))
+	parent := floorTestParent(250, 5)
+	plain := CalcBaseFee(floorTestConfig(250, false), parent)
+	require.Equal(t, -1, plain.Cmp(gwei(250)))
 
 	unset := floorTestConfig(250, true)
 	unset.Bor.BaseFeeFloor = nil
-	require.Equal(t, calcBaseFee(unset, parent), CalcBaseFee(unset, parent))
-
-	noTarget := floorTestConfig(0, true)
-	require.Equal(t, calcBaseFee(noTarget, parent), CalcBaseFee(noTarget, parent))
+	require.Equal(t, plain, CalcBaseFee(unset, parent))
 
 	preLisovo := floorTestConfig(250, true)
 	preLisovo.Bor.LisovoBlock = big.NewInt(1_000)
-	require.Equal(t, calcBaseFee(preLisovo, parent), CalcBaseFee(preLisovo, parent))
+	plainPre := floorTestConfig(250, false)
+	plainPre.Bor.LisovoBlock = big.NewInt(1_000)
+	require.Equal(t, CalcBaseFee(plainPre, parent), CalcBaseFee(preLisovo, parent))
+
+	noTarget := floorTestConfig(0, true)
+	require.Equal(t, CalcBaseFee(floorTestConfig(0, false), parent), CalcBaseFee(noTarget, parent))
 
 	noParentFee := floorTestParent(100, 5)
 	noParentFee.BaseFee = nil

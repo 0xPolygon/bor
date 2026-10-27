@@ -107,11 +107,6 @@ func verifyBaseFeeWithinBoundaries(parent, header *types.Header) error {
 	return nil
 }
 
-// CalcBaseFee calculates the basefee of the header.
-func CalcBaseFee(config *params.ChainConfig, parent *types.Header) *big.Int {
-	return applyBaseFeeFloor(config, parent, calcBaseFee(config, parent))
-}
-
 // applyBaseFeeFloor keeps the base fee at or above the producer's floor
 // (miner.targetBaseFee with miner.baseFeeFloor set). At the floor the fee stays
 // exactly equal block after block, which is what nodes without the producer
@@ -143,8 +138,11 @@ func maxBaseFeeStep(parentBaseFee *big.Int) *big.Int {
 	return step
 }
 
-// calcBaseFee calculates the basefee of the header from the parent gas usage.
-func calcBaseFee(config *params.ChainConfig, parent *types.Header) *big.Int {
+// CalcBaseFee calculates the basefee of the header. With a producer floor
+// configured, the result never goes below it (see applyBaseFeeFloor).
+func CalcBaseFee(config *params.ChainConfig, parent *types.Header) (result *big.Int) {
+	defer func() { result = applyBaseFeeFloor(config, parent, result) }()
+
 	// If the current block is the first EIP-1559 block, return the InitialBaseFee.
 	if !config.IsLondon(parent.Number) || parent.BaseFee == nil {
 		return new(big.Int).SetUint64(params.InitialBaseFee)

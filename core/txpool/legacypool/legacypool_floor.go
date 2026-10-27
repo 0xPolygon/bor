@@ -101,14 +101,26 @@ func (t *floorTracker) update(head *types.Header, getHeader headerFn) bool {
 	if head == nil || head.BaseFee == nil {
 		return false
 	}
-	// Collect the new blocks back to a tracked ancestor, at most one window.
-	var (
-		fresh    []*types.Header
-		ancestor = -1
-	)
+	fresh, ancestor := t.collect(head, getHeader)
+	if ancestor != len(t.recent)-1 {
+		t.rewind(ancestor)
+	}
+	confirmed := false
+	for i := len(fresh) - 1; i >= 0; i-- {
+		confirmed = t.push(newFloorBlock(fresh[i])) || confirmed
+	}
+	t.lowest = lowestBaseFee(t.recent)
+	return confirmed
+}
+
+// collect returns the blocks from head back to the newest tracked ancestor,
+// newest first and at most one window, and the ancestor's position in recent
+// (-1 when none was reached).
+func (t *floorTracker) collect(head *types.Header, getHeader headerFn) ([]*types.Header, int) {
+	var fresh []*types.Header
 	for h := head; h != nil && h.BaseFee != nil && len(fresh) < floorWindow; {
-		if ancestor = t.indexOf(h); ancestor >= 0 {
-			break
+		if ancestor := t.indexOf(h); ancestor >= 0 {
+			return fresh, ancestor
 		}
 		fresh = append(fresh, h)
 		if h.Number.Sign() == 0 {
@@ -116,25 +128,28 @@ func (t *floorTracker) update(head *types.Header, getHeader headerFn) bool {
 		}
 		h = getHeader(h.ParentHash, h.Number.Uint64()-1)
 	}
-	if ancestor != len(t.recent)-1 {
-		// Reorg or gap: keep the common part and rebuild the run state from it.
-		kept := t.recent[:ancestor+1]
-		t.recent, t.run = nil, 0
-		for _, b := range kept {
-			t.push(b)
+	return fresh, -1
+}
+
+// rewind drops the tracked blocks after ancestor, after a reorg or a gap, and
+// recounts the run from the blocks kept.
+func (t *floorTracker) rewind(ancestor int) {
+	kept := t.recent[:ancestor+1]
+	t.recent, t.run = nil, 0
+	for _, b := range kept {
+		t.push(b)
+	}
+}
+
+// lowestBaseFee returns the lowest base fee among blocks, or nil if empty.
+func lowestBaseFee(blocks []floorBlock) *big.Int {
+	var lowest *big.Int
+	for _, b := range blocks {
+		if lowest == nil || b.baseFee.Cmp(lowest) < 0 {
+			lowest = b.baseFee
 		}
 	}
-	confirmed := false
-	for i := len(fresh) - 1; i >= 0; i-- {
-		confirmed = t.push(newFloorBlock(fresh[i])) || confirmed
-	}
-	t.lowest = nil
-	for _, b := range t.recent {
-		if t.lowest == nil || b.baseFee.Cmp(t.lowest) < 0 {
-			t.lowest = b.baseFee
-		}
-	}
-	return confirmed
+	return lowest
 }
 
 // indexOf returns the position of h in recent, or -1 when it is not tracked.

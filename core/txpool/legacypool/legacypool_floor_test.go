@@ -475,3 +475,142 @@ func TestBaseFeeFloorHeaderFallsBackToBlocks(t *testing.T) {
 		t.Fatal("no header from GetBlock")
 	}
 }
+
+// countingHeaders wraps a chain's header reads with a counter.
+func countingHeaders(c *floorChain, reads *int) headerFn {
+	return func(hash common.Hash, number uint64) *types.Header {
+		*reads++
+		return c.header(hash, number)
+	}
+}
+
+// TestFloorTrackerWindowSlides checks the window keeps the newest blocks when
+// heads arrive one by one.
+func TestFloorTrackerWindowSlides(t *testing.T) {
+	t.Parallel()
+	c := newFloorChain()
+	c.extendDrift(floorWindow+25, 200)
+	var tr floorTracker
+	c.follow(&tr, 0)
+	if len(tr.recent) != floorWindow || tr.recent[0].number != 25 || tr.recent[floorWindow-1].hash != c.head().Hash() {
+		t.Fatalf("window holds %d blocks from %d, want %d from 25", len(tr.recent), tr.recent[0].number, floorWindow)
+	}
+}
+
+// TestFloorTrackerHeaderReads checks the header reads stay bounded: one per
+// new head, and one window after a gap.
+func TestFloorTrackerHeaderReads(t *testing.T) {
+	t.Parallel()
+	c := newFloorChain()
+	c.extendDrift(floorWindow+10, 200)
+	var tr floorTracker
+	c.follow(&tr, 0)
+
+	reads := 0
+	c.extend(floorGwei(250))
+	tr.update(c.head(), countingHeaders(c, &reads))
+	if reads != 1 {
+		t.Fatalf("%d header reads for one new head, want 1", reads)
+	}
+
+	reads = 0
+	c.extendDrift(2*floorWindow, 300)
+	tr.update(c.head(), countingHeaders(c, &reads))
+	if reads != floorWindow || len(tr.recent) != floorWindow {
+		t.Fatalf("%d header reads and %d blocks after a gap, want %d and %d", reads, len(tr.recent), floorWindow, floorWindow)
+	}
+}
+
+// TestScanFloorEdges checks the startup scan stops at genesis and at a
+// missing parent without inventing a floor.
+func TestScanFloorEdges(t *testing.T) {
+	t.Parallel()
+	c := newFloorChain()
+	c.extendDrift(10, 200)
+	reads := 0
+	if floor := scanFloor(countingHeaders(c, &reads), c.head(), floorLookback); floor != nil || reads != 9 {
+		t.Fatalf("scan to genesis: floor %v after %d reads, want none after 9", floor, reads)
+	}
+
+	gap := newFloorChain()
+	gap.extendN(5, floorGwei(250))
+	missing := func(hash common.Hash, number uint64) *types.Header {
+		if number < 3 {
+			return nil
+		}
+		return gap.header(hash, number)
+	}
+	if floor := scanFloor(missing, gap.head(), floorLookback); floor != nil {
+		t.Fatalf("scan past a missing parent found floor %v", floor)
+	}
+}
+
+// TestBaseFeeFloorSweepReleasesAccounts checks a sweep releases the account
+// reservation and counts the swept transactions.
+func TestBaseFeeFloorSweepReleasesAccounts(t *testing.T) {
+	pool := setupFloorPool(t, true)
+	key, addr := fundedKey(t, pool)
+
+	pool.mu.Lock()
+	learned := pool.floor.floor
+	pool.floor.floor = nil
+	pool.mu.Unlock()
+	if err := pool.addRemoteSync(dynamicFeeTx(0, 100_000, floorGwei(240), floorGwei(30), key)); err != nil {
+		t.Fatalf("failed to add: %v", err)
+	}
+	// Healthy transactions keep the priced list from reheaping on one removal.
+	otherKey, _ := fundedKey(t, pool)
+	for nonce := uint64(0); nonce < 8; nonce++ {
+		if err := pool.addRemoteSync(dynamicFeeTx(nonce, 100_000, floorGwei(400), floorGwei(30), otherKey)); err != nil {
+			t.Fatalf("failed to add healthy tx: %v", err)
+		}
+	}
+
+	sweptBefore := floorSweptMeter.Snapshot().Count()
+	pool.mu.Lock()
+	pool.floor.floor = learned
+	stalesBefore := pool.priced.stales.Load()
+	pool.sweepBelowFloor()
+	stales := pool.priced.stales.Load() - stalesBefore
+	pool.mu.Unlock()
+
+	if got := floorSweptMeter.Snapshot().Count() - sweptBefore; got != 1 {
+		t.Fatalf("swept meter %d, want 1", got)
+	}
+	if stales != 1 {
+		t.Fatalf("priced list stales grew by %d, want 1 for the swept transaction", stales)
+	}
+	// The account was released: holding it again for a new transaction works.
+	if err := pool.addRemoteSync(dynamicFeeTx(0, 100_000, floorGwei(300), floorGwei(30), key)); err != nil {
+		t.Fatalf("swept account refused a new transaction: %v", err)
+	}
+	if pending, _ := accountCounts(pool, addr); pending != 1 {
+		t.Fatalf("pending %d after re-adding to the swept account, want 1", pending)
+	}
+}
+
+// TestBaseFeeFloorStrandedBelowFloor checks the stranded eviction still drops
+// a head that cannot pay the floor when the floor is enabled.
+func TestBaseFeeFloorStrandedBelowFloor(t *testing.T) {
+	t.Parallel()
+	pool := setupFloorPool(t, true)
+	pool.config.StrandedLifetime = time.Millisecond
+	key, addr := fundedKey(t, pool)
+
+	pool.mu.Lock()
+	pool.floor.floor = nil
+	pool.mu.Unlock()
+	if err := pool.addRemoteSync(dynamicFeeTx(0, 100_000, floorGwei(240), floorGwei(30), key)); err != nil {
+		t.Fatalf("failed to add: %v", err)
+	}
+	pool.mu.Lock()
+	pool.floor.floor = floorGwei(250)
+	now := time.Now()
+	pool.evictStranded(now)
+	pool.evictStranded(now.Add(time.Hour))
+	pool.mu.Unlock()
+
+	if pending, _ := accountCounts(pool, addr); pending != 0 {
+		t.Fatalf("pending %d, want the 240 gwei head evicted below the 250 floor", pending)
+	}
+}
