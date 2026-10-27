@@ -5,7 +5,7 @@ set -u
 O=${OPENSSL:-openssl} # OpenSSL >= 3.5
 D=${1:?usage: slh_selfgen.sh <output-dir>}
 HERE=$(cd "$(dirname "$0")" && pwd)
-rm -rf "$D" && mkdir -p "$D"
+rm -rf "$D" && mkdir -p "$D" && D=$(cd "$D" && pwd) # absolute: the script changes directory below
 cd "$HERE/slhgen" || exit 1
 go run . sign "$D" || exit 1
 spki() { # raw 32-byte pk file -> SPKI DER
