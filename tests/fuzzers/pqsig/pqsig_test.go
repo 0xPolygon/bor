@@ -19,6 +19,8 @@ package pqsig
 import "testing"
 
 func FuzzMLDSA65(f *testing.F) {
+	f.Add([]byte{})                             // too short for a key seed
+	f.Add(append(make([]byte, 32), 0x3f, 0x00)) // message longer than the data
 	f.Add(make([]byte, 40))
 	f.Add(append(make([]byte, 33), 0x0c, 0xae, 0x01)) // hint area
 	f.Fuzz(func(t *testing.T, data []byte) {
@@ -27,6 +29,7 @@ func FuzzMLDSA65(f *testing.F) {
 }
 
 func FuzzSLHDSA(f *testing.F) {
+	f.Add([]byte{}) // no seed index
 	for i := byte(0); i < 4; i++ {
 		f.Add([]byte{i})
 		f.Add([]byte{i, 0x00, 0x10, 0x01}) // R
