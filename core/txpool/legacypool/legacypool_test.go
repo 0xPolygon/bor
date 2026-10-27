@@ -526,6 +526,89 @@ func TestStateChangeDuringReset(t *testing.T) {
 	}
 }
 
+// TestReorgResetWithDirtyAccount checks that a reset run together with a dirty
+// account promotes a queued tx right after the still-pending ones (port of
+// ethereum/go-ethereum#35654).
+func TestReorgResetWithDirtyAccount(t *testing.T) {
+	t.Parallel()
+
+	pool, key := setupPool()
+	defer pool.Close()
+
+	addr := crypto.PubkeyToAddress(key.PublicKey)
+	testAddBalance(pool, addr, big.NewInt(1000000000000000))
+	testSetNonce(pool, addr, 1)
+	<-pool.requestReset(nil, nil)
+
+	// Add two executable transactions to establish a pending nonce ahead of state.
+	for _, tx := range []*types.Transaction{transaction(1, 100000, key), transaction(2, 100000, key)} {
+		if err := pool.addRemoteSync(tx); err != nil {
+			t.Fatalf("failed to add transaction %d: %v", tx.Nonce(), err)
+		}
+	}
+	// Admit the next transaction without scheduling its promotion, reproducing the
+	// state passed to runReorg when a reset and dirty-account request are coalesced.
+	tx := transaction(3, 100000, key)
+	pool.mu.Lock()
+	errs, dirty := pool.addTxs([]*types.Transaction{tx}, false)
+	pool.mu.Unlock()
+	if errs[0] != nil {
+		t.Fatalf("failed to add transaction %d: %v", tx.Nonce(), errs[0])
+	}
+
+	// The new chain head includes transaction 1. Transaction 2 remains pending,
+	// so transaction 3 must be promoted by the combined reorg run.
+	testSetNonce(pool, addr, 2)
+	done := make(chan struct{})
+	pool.runReorg(done, &txpoolResetRequest{}, dirty, make(map[common.Address]*SortedMap))
+	<-done
+
+	if pending, queued := pool.Stats(); pending != 2 || queued != 0 {
+		t.Fatalf("transaction stranded after reorg: pending %d, queued %d", pending, queued)
+	}
+	if err := validatePoolInternals(pool); err != nil {
+		t.Fatalf("pool internals mismatch: %v", err)
+	}
+}
+
+// TestReorgResetKeepsHigherStateNonce checks that restoring the pending nonces
+// after a reset never moves them below the new state nonce, when the new head
+// already includes every pending tx and more.
+func TestReorgResetKeepsHigherStateNonce(t *testing.T) {
+	t.Parallel()
+
+	pool, key := setupPool()
+	defer pool.Close()
+
+	addr := crypto.PubkeyToAddress(key.PublicKey)
+	testAddBalance(pool, addr, big.NewInt(1000000000000000))
+	for _, tx := range []*types.Transaction{transaction(0, 100000, key), transaction(1, 100000, key)} {
+		if err := pool.addRemoteSync(tx); err != nil {
+			t.Fatalf("failed to add transaction %d: %v", tx.Nonce(), err)
+		}
+	}
+	tx := transaction(4, 100000, key)
+	pool.mu.Lock()
+	errs, dirty := pool.addTxs([]*types.Transaction{tx}, false)
+	pool.mu.Unlock()
+	if errs[0] != nil {
+		t.Fatalf("failed to add transaction %d: %v", tx.Nonce(), errs[0])
+	}
+
+	// The new head is at nonce 4: the pending txs 0 and 1 and two more are mined.
+	testSetNonce(pool, addr, 4)
+	done := make(chan struct{})
+	pool.runReorg(done, &txpoolResetRequest{}, dirty, make(map[common.Address]*SortedMap))
+	<-done
+
+	if pending, queued := pool.Stats(); pending != 1 || queued != 0 {
+		t.Fatalf("pending %d, queued %d, want 1 and 0", pending, queued)
+	}
+	if err := validatePoolInternals(pool); err != nil {
+		t.Fatalf("pool internals mismatch: %v", err)
+	}
+}
+
 func testAddBalance(pool *LegacyPool, addr common.Address, amount *big.Int) {
 	pool.mu.Lock()
 	pool.currentState.AddBalance(addr, uint256.MustFromBig(amount), tracing.BalanceChangeUnspecified)
