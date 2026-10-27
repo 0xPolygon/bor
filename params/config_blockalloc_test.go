@@ -84,9 +84,8 @@ func TestUburuBannerAndPresets(t *testing.T) {
 	bor.UburuBlock = nil
 	require.NotContains(t, cfg.Description(), "Uburu")
 
-	// Mainnet and Amoy heights are not scheduled yet.
-	require.Nil(t, BorMainnetChainConfig.Bor.UburuBlock)
-	require.Nil(t, AmoyChainConfig.Bor.UburuBlock)
+	require.Equal(t, big.NewInt(96787900), BorMainnetChainConfig.Bor.UburuBlock)
+	require.Equal(t, big.NewInt(51978200), AmoyChainConfig.Bor.UburuBlock)
 }
 
 // configuredForkBlocks returns every exported *Block height set on cfg and cfg.Bor.
