@@ -109,7 +109,7 @@ func runV2(t testing.TB, tdb *triedb.Database, root common.Hash, txs []*types.Tr
 	store := blockstm.NewMVStore()
 	bals := blockstm.NewMVBalanceStore()
 	res := ExecuteV2BlockSTM(context.Background(), tasks, base, store, bals, blockCtx, common.Hash{}, vm.Config{},
-		fuzzChainConfig, blockCtx.GasLimit, workers, finalDB, nil)
+		fuzzChainConfig, blockCtx.GasLimit, workers, finalDB, nil, nil)
 	if res.PanickedIdx >= 0 {
 		t.Fatalf("V2 executor: tx %d panicked", res.PanickedIdx)
 	}

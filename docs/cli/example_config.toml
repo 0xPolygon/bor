@@ -82,6 +82,9 @@ bp-rpc-endpoints = [ ] # Comma separated rpc endpoints of all block producers
   globalqueue = 32768           # Maximum number of non-executable transaction slots for all accounts
   lifetime = "3h0m0s"           # Maximum amount of time non-executable transaction are queued
   strandedlifetime = "3h0m0s"   # Maximum amount of time a pending transaction can stay below the base fee before its account's pending transactions are evicted (0 disables)
+  conditional = false           # Accept PIP-15 conditional transactions (bor_sendRawTransactionConditional). They are never gossiped, so only a block producer can include them
+  conditionallifetime = "5m0s"  # Maximum amount of time a conditional transaction can stay in the pool
+  conditionalslots = 10000      # Maximum number of known accounts and slots across all pooled conditional transactions
 
 [miner]
   mine = false                  # Enable mining

@@ -46,6 +46,12 @@ profile.cov
 
 tests/spec-tests/
 
+# Private release-signing exports. These belong in 1Password, never Git.
+private-release-signing-subkey.asc
+polygon-private-releases-primary-private-backup.asc
+polygon-private-releases-revocation.asc
+export-files-SHA256SUMS
+
 # Test output
 eth/tracers/data.csv
 
