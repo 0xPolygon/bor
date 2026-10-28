@@ -305,7 +305,7 @@ func (b *BulkSidecar) OpenChannelContext(ctx context.Context, peer *Peer, channe
 	if session == nil {
 		return nil, io.EOF
 	}
-	ctx, cancel := context.WithTimeout(ctx, bulkChannelOpenTimeout)
+	ctx, cancel := context.WithTimeout(ctx, bulkConnectionSetupTimeout+bulkChannelOpenTimeout)
 	defer cancel()
 	return session.openChannel(ctx, channel)
 }

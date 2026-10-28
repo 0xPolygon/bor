@@ -132,7 +132,7 @@ func (s *bulkSession) close() {
 	}
 }
 
-func (s *bulkSession) ensureConn(ctx context.Context) (*quic.Conn, error) {
+func (s *bulkSession) connectOnce(ctx context.Context) (*quic.Conn, error) {
 	s.lock.Lock()
 	if s.closed {
 		s.lock.Unlock()
@@ -154,7 +154,7 @@ func (s *bulkSession) ensureConn(ctx context.Context) (*quic.Conn, error) {
 	s.dialing = true
 	wait := make(chan struct{})
 	s.dialWait = wait
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, cancel := context.WithTimeout(ctx, bulkConnectionAttemptTimeout)
 	s.dialCancel = cancel
 	remote := s.remote
 	s.lock.Unlock()
@@ -298,6 +298,8 @@ func (s *bulkSession) openChannel(ctx context.Context, channel string) (MsgReadW
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel := context.WithTimeout(ctx, bulkChannelOpenTimeout)
+	defer cancel()
 	if bytes.Compare(s.sidecar.localID[:], s.remoteID[:]) < 0 {
 		stream, err := conn.OpenStreamSync(ctx)
 		if err != nil {
