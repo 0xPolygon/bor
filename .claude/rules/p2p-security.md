@@ -67,10 +67,11 @@ txs := make([]*types.Transaction, msg.TxCount)
 
 ### Sidecar transport changes
 
-- Preserve sync reply semantics: an empty bodies or receipts reply means the data is absent. Capacity exhaustion should leave the request unanswered so it can be retried, with tests distinguishing overload from a genuinely empty result.
+- Preserve sync reply semantics: an empty bodies or receipts reply means the data is absent, and an unanswered request can abort the requester's sync. Wait for lookup capacity until the transport or peer closes; release capacity before writing the reply. Test delayed admission, shutdown while waiting, and genuinely empty results.
 - Activate a channel only after its receiver has claimed it. Test both waiter delivery and an already-stored stream, late arrival after timeout, cancellation, and cleanup of unclaimed streams.
 - Sequential channel opens should use the same order on both peers; independent protocols can open concurrently. Different sequential orders cannot complete the acknowledgement rendezvous and fall back after the channel timeout.
 - A failed channel acknowledgement should close that channel while preserving established channels on the shared connection. Once ownership is acknowledged, a concurrent caller timeout should not discard the live channel.
+- Accept channel handshakes concurrently within the session's channel limit, and stop waiting when the opener resets a stream. Test sequential attachment after a late channel, and reject duplicate channel registration atomically.
 - Replay a failed sidecar write on the primary transport only when no frame bytes were committed. Committed or unknown failures should end the peer lifecycle, including through message-event wrappers and when protocol handlers are busy.
 - Validate incoming codes against the receiving lane before allocating payload buffers or calling protocol handlers. Include primary-only codes, unknown codes, wrong-lane codes, and shared-lane aliases in regression coverage.
 - Bound pending authentication globally and per public source IP, independent of UDP port. Verify address validation and slot release after authentication, rejection, and connection cancellation.

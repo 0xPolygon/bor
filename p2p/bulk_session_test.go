@@ -37,7 +37,7 @@ func TestBulkSessionRetiresClosedConnection(t *testing.T) {
 				require.ErrorIs(t, err, io.EOF)
 				require.Nil(t, rw)
 			case "store":
-				require.ErrorIs(t, session.storeChannel(conn, "wit-bulk", &closeTrackingRW{}), io.EOF)
+				require.ErrorIs(t, session.storeChannel(conn, "wit-bulk", &closeTrackingRW{}, true), io.EOF)
 			case "clear":
 				session.clearConn(conn)
 			}

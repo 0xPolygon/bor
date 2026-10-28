@@ -2,6 +2,7 @@ package eth
 
 import (
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
@@ -23,11 +24,34 @@ func TestPeerPolicyBodyServingWorkerLimit(t *testing.T) {
 			query := GetBlockBodiesPacket{RequestId: 7, GetBlockBodiesRequest: GetBlockBodiesRequest{{1}}}
 			payload, err := rlp.EncodeToBytes(query)
 			require.NoError(t, err)
-			// A nil backend ensures an overloaded request never performs a lookup.
-			require.NoError(t, handleGetBlockBodies(nil, decoder{msg: payload}, peer))
+			backend := newTestBackend(0)
+			defer backend.close()
+			done := make(chan error, 1)
+			go func() { done <- handleGetBlockBodies(backend, decoder{msg: payload}, peer) }()
+			select {
+			case <-done:
+				t.Fatal("busy handler dropped the request")
+			case <-time.After(300 * time.Millisecond):
+			}
 			require.Empty(t, rw.sent)
 			require.Len(t, heavyResponseServeSlots, cap(heavyResponseServeSlots))
-			require.Empty(t, events)
+			for range cap(heavyResponseServeSlots) {
+				<-heavyResponseServeSlots
+			}
+			select {
+			case err := <-done:
+				require.NoError(t, err)
+			case <-time.After(time.Second):
+				t.Fatal("handler did not serve the queued request")
+			}
+			require.Len(t, rw.sent, 1)
+			if enabled {
+				require.Len(t, events, 1)
+				require.Equal(t, peerpolicy.BodyReplies, events[0].Family)
+				require.Zero(t, events[0].Items)
+			} else {
+				require.Empty(t, events)
+			}
 		})
 	}
 }

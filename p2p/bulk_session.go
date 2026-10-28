@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"sync"
 
 	"github.com/quic-go/quic-go"
 
@@ -63,18 +64,34 @@ func (s *bulkSession) runConn(conn *quic.Conn) {
 		return
 	}
 	defer s.clearConn(conn)
+	var workers sync.WaitGroup
+	defer workers.Wait()
+	slots := make(chan struct{}, maxBulkChannelsPerSession)
 	for {
+		select {
+		case slots <- struct{}{}:
+		case <-conn.Context().Done():
+			return
+		}
 		stream, err := conn.AcceptStream(context.Background())
 		if err != nil {
 			return
 		}
-		if err := s.acceptChannel(conn, stream); err != nil {
-			if errors.Is(err, errBulkChannelTimeout) || errors.Is(err, errBulkChannelAbandoned) {
-				continue
-			}
-			_ = conn.CloseWithError(bulkSidecarProtocolError, err.Error())
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			defer func() { <-slots }()
+			s.handleChannel(conn, stream)
+		}()
+	}
+}
+
+func (s *bulkSession) handleChannel(conn *quic.Conn, stream *quic.Stream) {
+	if err := s.acceptChannel(conn, stream); err != nil {
+		if errors.Is(err, errBulkChannelTimeout) || errors.Is(err, errBulkChannelAbandoned) {
 			return
 		}
+		_ = conn.CloseWithError(bulkSidecarProtocolError, err.Error())
 	}
 }
 
@@ -324,7 +341,7 @@ func (s *bulkSession) openChannelStream(ctx context.Context, conn *quic.Conn, st
 	if err := ctx.Err(); err != nil {
 		return nil, errors.Join(err, rw.Close())
 	}
-	if err := s.storeChannel(conn, channel, rw); err != nil {
+	if err := s.storeChannel(conn, channel, rw, true); err != nil {
 		return nil, errors.Join(err, rw.Close())
 	}
 	return rw, nil
@@ -363,13 +380,10 @@ func (s *bulkSession) acceptChannel(conn *quic.Conn, stream bulkFrameStream) (er
 	if err := validateBulkChannel(s.peer, hello.Channel); err != nil {
 		return err
 	}
-	if _, exists := s.getChannel(hello.Channel); exists {
-		return errors.New("duplicate bulk channel")
-	}
 	rw.channel = hello.Channel
 	rw.log = log.New("peer", s.remoteID, "channel", hello.Channel)
 	rw.ready = &bulkChannelReady{claimed: make(chan struct{}), done: make(chan struct{})}
-	if err := s.storeChannel(conn, hello.Channel, rw); err != nil {
+	if err := s.storeChannel(conn, hello.Channel, rw, false); err != nil {
 		return err
 	}
 	return s.acknowledgeChannel(conn, rw, hello)
@@ -426,13 +440,17 @@ func (s *bulkSession) removeWaiter(channel string, waiter chan bulkChannelResult
 	}
 }
 
-func (s *bulkSession) storeChannel(conn *quic.Conn, channel string, rw MsgReadWriter) error {
+func (s *bulkSession) storeChannel(conn *quic.Conn, channel string, rw MsgReadWriter, replace bool) error {
 	s.lock.Lock()
 	if s.closed || s.liveConnLocked() != conn {
 		s.lock.Unlock()
 		return io.EOF
 	}
 	old, exists := s.channels[channel]
+	if exists && !replace {
+		s.lock.Unlock()
+		return errors.New("duplicate bulk channel")
+	}
 	if !exists && len(s.channels) >= maxBulkChannelsPerSession {
 		s.lock.Unlock()
 		return errBulkChannelLimit

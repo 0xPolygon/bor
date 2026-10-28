@@ -51,8 +51,8 @@ func TestBulkSessionStoreChannelReplacesExistingLane(t *testing.T) {
 	defer secondApp.Close()
 	defer secondNet.Close()
 
-	session.storeChannel(nil, "eth-bulk", firstNet)
-	session.storeChannel(nil, "eth-bulk", secondNet)
+	session.storeChannel(nil, "eth-bulk", firstNet, true)
+	session.storeChannel(nil, "eth-bulk", secondNet, true)
 
 	got, ok := session.getChannel("eth-bulk")
 	if !ok {
@@ -75,8 +75,8 @@ func TestBulkSessionStoreChannelClosesReplacedLane(t *testing.T) {
 	defer secondApp.Close()
 	defer secondNet.Close()
 
-	session.storeChannel(nil, "eth-bulk", first)
-	session.storeChannel(nil, "eth-bulk", secondNet)
+	session.storeChannel(nil, "eth-bulk", first, true)
+	session.storeChannel(nil, "eth-bulk", secondNet, true)
 
 	select {
 	case <-first.closed:

@@ -61,7 +61,9 @@ func TestBulkChannelAfterReceiverTimeout(t *testing.T) {
 	_, err = right.bulk.OpenChannelContext(ctx, rp, "eth-bulk")
 	require.Error(t, err)
 	receiver := right.bulk.peerSession(rp.Node(), rp)
-	rw, err := left.bulk.OpenChannelContext(t.Context(), lp, "eth-bulk")
+	ctx, cancelLate := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancelLate()
+	rw, err := left.bulk.OpenChannelContext(ctx, lp, "eth-bulk")
 	require.Error(t, err)
 	require.Nil(t, rw, "a late stream without a receiver must never become a live outgoing lane")
 	_, exists := sender.getChannel("eth-bulk")
@@ -211,14 +213,18 @@ func TestBulkChannelAbandonedAckPreservesSession(t *testing.T) {
 		_, exists := receiver.getChannel("snap-trie")
 		return exists
 	}, time.Second, time.Millisecond)
+	pending, exists := receiver.getChannel("snap-trie")
+	require.True(t, exists)
 	stream.CancelRead(quic.StreamErrorCode(bulkSidecarCloseErrorCode))
 	stream.CancelWrite(quic.StreamErrorCode(bulkSidecarCloseErrorCode))
-	require.Eventually(t, func() bool {
-		rw, exists := receiver.getChannel("snap-trie")
-		return exists && rw.(*bulkStreamMsgRW).stream.(*quic.Stream).Context().Err() != nil
-	}, time.Second, time.Millisecond)
-	_, err = right.bulk.OpenChannelContext(t.Context(), rp, "snap-trie")
-	require.ErrorIs(t, err, errBulkChannelAbandoned)
+	select {
+	case <-pending.(*bulkStreamMsgRW).ready.done:
+		require.ErrorIs(t, pending.(*bulkStreamMsgRW).ready.err, errBulkChannelAbandoned)
+	case <-time.After(time.Second):
+		t.Fatal("reset stream kept waiting for a receiver")
+	}
+	_, exists = receiver.getChannel("snap-trie")
+	require.False(t, exists)
 	openTestBulkChannel(t, left, right, lp, rp, "eth-control")
 	require.NoError(t, conn.Context().Err())
 	sent := make(chan error, 1)
@@ -231,7 +237,7 @@ func TestBulkChannelClaimCancelledBeforeOwnership(t *testing.T) {
 	session := newHelloTestSession()
 	stream := &helloTestStream{writeLimit: 1024}
 	rw := &bulkStreamMsgRW{stream: stream, ready: &bulkChannelReady{claimed: make(chan struct{}), done: make(chan struct{})}}
-	require.NoError(t, session.storeChannel(nil, "eth-bulk", rw))
+	require.NoError(t, session.storeChannel(nil, "eth-bulk", rw, true))
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	result, err := session.claimChannel(ctx, "eth-bulk", rw)

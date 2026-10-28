@@ -240,7 +240,7 @@ func TestBulkClosedPeerCannotRecreateSession(t *testing.T) {
 	require.Empty(t, server.bulk.sessions)
 	_, err := session.ensureConn(context.Background())
 	require.ErrorIs(t, err, io.EOF)
-	require.ErrorIs(t, session.storeChannel(nil, "eth-bulk", &closeTrackingRW{}), io.EOF)
+	require.ErrorIs(t, session.storeChannel(nil, "eth-bulk", &closeTrackingRW{}, true), io.EOF)
 }
 
 func TestBulkAuthTranscriptFields(t *testing.T) {
