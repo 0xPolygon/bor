@@ -53,6 +53,13 @@ jobs:
       - name: Build
         run: make all
 
+      - name: Check Windows networking build
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: "0"
+        run: go build ./p2p
+
   lint:
     if: (github.event.action != 'closed' || github.event.pull_request.merged == true)
     strategy:
