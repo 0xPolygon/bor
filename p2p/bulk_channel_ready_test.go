@@ -75,7 +75,7 @@ func TestBulkChannelAfterReceiverTimeout(t *testing.T) {
 	openTestBulkChannel(t, left, right, lp, rp, "eth-control")
 }
 
-func TestBulkChannelOpenCancellation(t *testing.T) {
+func TestBulkChannelOpenResetAfterCancellation(t *testing.T) {
 	session := newHelloTestSession()
 	local, remote := net.Pipe()
 	t.Cleanup(func() { require.NoError(t, local.Close()) })
@@ -91,10 +91,16 @@ func TestBulkChannelOpenCancellation(t *testing.T) {
 	require.NoError(t, readBulkControl(remote, bulkChannelControlMaxSize, &hello))
 	cancel()
 	select {
+	case <-result:
+		t.Fatal("caller cancellation abandoned a hello already received by the peer")
+	case <-time.After(20 * time.Millisecond):
+	}
+	require.NoError(t, remote.Close())
+	select {
 	case err := <-result:
 		require.Error(t, err)
 	case <-time.After(time.Second):
-		t.Fatal("cancelled channel open kept waiting for its acknowledgement")
+		t.Fatal("closed stream kept waiting for its acknowledgement")
 	}
 	require.Empty(t, session.channels)
 }

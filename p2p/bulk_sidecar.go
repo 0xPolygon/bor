@@ -68,6 +68,9 @@ const (
 	bulkAuthBindingLength  = 32
 )
 
+// Allow the receiver to read the hello, wait for a claim, and send its ack.
+const bulkChannelAckTimeout = bulkChannelOpenTimeout + 2*bulkAuthTimeout
+
 // maxBulkChannelsPerSession bounds the channel table a single remote can grow.
 // The allowlist already rejects unknown names, so this is exactly the number of
 // lanes that can legitimately exist.
@@ -282,6 +285,8 @@ func (b *BulkSidecar) OpenChannel(peer *Peer, channel string) (MsgReadWriter, er
 	return b.OpenChannelContext(context.Background(), peer, channel)
 }
 
+// OpenChannelContext uses ctx for setup and admission. Once the hello can reach
+// the receiver, the acknowledgement's own deadline determines channel ownership.
 func (b *BulkSidecar) OpenChannelContext(ctx context.Context, peer *Peer, channel string) (MsgReadWriter, error) {
 	if !b.beginWork() {
 		return nil, io.EOF
@@ -558,7 +563,7 @@ func socketBufferSize(conn *net.UDPConn, opt int) int {
 	}
 	value := 0
 	controlErr := rawConn.Control(func(fd uintptr) {
-		if size, sockErr := syscall.GetsockoptInt(int(fd), syscall.SOL_SOCKET, opt); sockErr == nil {
+		if size, sockErr := socketBufferValue(fd, opt); sockErr == nil {
 			value = size
 		}
 	})
@@ -569,7 +574,11 @@ func socketBufferSize(conn *net.UDPConn, opt int) int {
 }
 
 func readBulkControl(stream bulkFrameStream, maxSize uint32, out interface{}) error {
-	if err := stream.SetReadDeadline(time.Now().Add(bulkAuthTimeout)); err != nil {
+	return readBulkControlWithTimeout(stream, maxSize, out, bulkAuthTimeout)
+}
+
+func readBulkControlWithTimeout(stream bulkFrameStream, maxSize uint32, out interface{}, timeout time.Duration) error {
+	if err := stream.SetReadDeadline(time.Now().Add(timeout)); err != nil {
 		return err
 	}
 	var size [4]byte

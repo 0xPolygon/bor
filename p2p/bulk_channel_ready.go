@@ -19,21 +19,6 @@ type bulkChannelReady struct {
 
 var errBulkChannelAbandoned = errors.New("bulk channel acknowledgement abandoned")
 
-func cancelBulkChannelOnContext(ctx context.Context, rw *bulkStreamMsgRW) func() {
-	done := make(chan struct{})
-	stop := context.AfterFunc(ctx, func() {
-		if err := rw.Close(); err != nil {
-			rw.log.Debug("Bulk channel cancellation close failed", "err", err)
-		}
-		close(done)
-	})
-	return func() {
-		if !stop() {
-			<-done
-		}
-	}
-}
-
 // A stored inbound stream is not ready for traffic until a local caller takes
 // ownership. The opener waits for this acknowledgement before exposing its lane.
 func (s *bulkSession) acknowledgeChannel(conn *quic.Conn, rw *bulkStreamMsgRW, hello bulkChannelHello) error {

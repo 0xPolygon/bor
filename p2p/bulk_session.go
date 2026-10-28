@@ -327,19 +327,20 @@ func (s *bulkSession) openChannelStream(ctx context.Context, conn *quic.Conn, st
 		stream: stream, channel: channel, stats: &s.sidecar.stats,
 		log: log.New("peer", s.remoteID, "channel", channel),
 	}
-	defer cancelBulkChannelOnContext(ctx, rw)()
+	if err := ctx.Err(); err != nil {
+		return nil, errors.Join(err, rw.Close())
+	}
+	// Sending the hello may let the receiver claim ownership. From this point,
+	// its bounded ack-or-reset decides the outcome, even if the caller cancels.
 	if err := writeBulkControl(stream, bulkChannelHello{Version: bulkSidecarVersion, Channel: channel}); err != nil {
 		return nil, errors.Join(err, rw.Close())
 	}
 	var ack bulkChannelHello
-	if err := readBulkControl(stream, bulkChannelControlMaxSize, &ack); err != nil {
+	if err := readBulkControlWithTimeout(stream, bulkChannelControlMaxSize, &ack, bulkChannelAckTimeout); err != nil {
 		return nil, errors.Join(err, rw.Close())
 	}
 	if ack.Version != bulkSidecarVersion || ack.Channel != channel {
 		return nil, errors.Join(errors.New("invalid bulk channel acknowledgement"), rw.Close())
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, errors.Join(err, rw.Close())
 	}
 	if err := s.storeChannel(conn, channel, rw, true); err != nil {
 		return nil, errors.Join(err, rw.Close())
