@@ -1,6 +1,7 @@
 package eth
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -105,4 +106,59 @@ func TestHandlerBulkSidecarAttachment(t *testing.T) {
 	status, err := NewAdminAPI(&Ethereum{p2pServer: &p2p.Server{}}).BulkSidecarStatus()
 	require.NoError(t, err)
 	require.Equal(t, &p2p.BulkSidecarStatus{}, status)
+}
+
+func TestHandlerBulkSidecarMissedLane(t *testing.T) {
+	left, leftPeers := newBulkProtocolServer(t)
+	right, rightPeers := newBulkProtocolServer(t)
+	require.NoError(t, left.LocalNode().Database().UpdateNode(right.Self()))
+	require.NoError(t, right.LocalNode().Database().UpdateNode(left.Self()))
+	left.AddPeer(right.Self())
+	a, b := receiveBulkTestPeers(t, leftPeers), receiveBulkTestPeers(t, rightPeers)
+	if left.Self().ID().String() > right.Self().ID().String() {
+		left, right, a, b = right, left, b, a
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	missed, done := make(chan struct{}), make(chan struct{})
+	open := bulkTestOpener(func(ctx context.Context, peer *p2p.Peer, channel string) (p2p.MsgReadWriter, error) {
+		if channel == "eth-control" {
+			// The receiver has already stopped waiting when this hello arrives.
+			close(missed)
+			return nil, context.DeadlineExceeded
+		}
+		return right.BulkSidecar().OpenChannelContext(ctx, peer, channel)
+	})
+	go func() {
+		defer close(done)
+		attachBulkProtocols(ctx, open, b.eth, b.snap, b.wit)
+	}()
+	t.Cleanup(func() { cancel(); <-done })
+	select {
+	case <-missed:
+	case <-time.After(time.Second):
+		t.Fatal("receiver did not abandon control lane")
+	}
+	(&handler{p2pServer: left}).attachBulkSidecar(a.eth, a.snap, a.wit)
+	require.Eventually(t, func() bool {
+		return left.BulkSidecar().Status().ActiveChannels == 9 && right.BulkSidecar().Status().ActiveChannels == 10 &&
+			a.eth.HasBulkRW() && a.snap.HasBulkRW() && a.wit.HasBulkRW() &&
+			b.eth.HasBulkRW() && b.snap.HasBulkRW() && b.wit.HasBulkRW()
+	}, 3*time.Second, 10*time.Millisecond, "healthy lanes must attach before the unclaimed hello times out")
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("healthy receiver lanes did not finish attaching")
+	}
+	require.Eventually(t, func() bool {
+		return right.BulkSidecar().Status().ActiveChannels == 9
+	}, 6*time.Second, 10*time.Millisecond)
+	want := []string{"eth-blocks", "eth-tx", "eth-tx-fetch", "eth-bulk", "snap-accounts", "snap-storage", "snap-code", "snap-trie", "wit-bulk"}
+	for _, server := range []*p2p.Server{left, right} {
+		status := server.BulkSidecar().Status()
+		require.Equal(t, 1, status.ActiveSessions)
+		require.Len(t, status.Peers, 1)
+		require.ElementsMatch(t, want, status.Peers[0].Channels)
+		require.Equal(t, 1, server.PeerCount())
+	}
 }
