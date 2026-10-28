@@ -244,14 +244,17 @@ func handleMessage(backend Backend, peer *Peer) error {
 	}
 	if msg.Code == NewBlockHashesMsg {
 		if err := peer.checkMessageRate(msg.Code, msg.Size, time.Now()); err != nil {
+			peer.observeRateLimit(msg)
 			return err
 		}
 	}
 	if uint64(msg.Size) > maxSize {
+		peer.observeFraming(msg)
 		return fmt.Errorf("%w: %v > %v", errMsgTooLarge, msg.Size, maxSize)
 	}
 	if msg.Code != NewBlockHashesMsg {
 		if err := peer.checkMessageRate(msg.Code, msg.Size, time.Now()); err != nil {
+			peer.observeRateLimit(msg)
 			return err
 		}
 	}
@@ -279,7 +282,8 @@ func handleMessage(backend Backend, peer *Peer) error {
 		}(time.Now())
 	}
 	if handler := handlers[msg.Code]; handler != nil {
-		return handler(backend, msg, peer)
+		return peer.handleObserved(backend, msg, handler)
 	}
+	peer.observeFraming(msg)
 	return fmt.Errorf("%w: %v", errInvalidMsgCode, msg.Code)
 }

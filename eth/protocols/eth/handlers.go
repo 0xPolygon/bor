@@ -29,6 +29,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
+	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
 	"github.com/ethereum/go-ethereum/p2p/tracker"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -255,11 +256,7 @@ func handleGetBlockBodies(backend Backend, msg Decoder, peer *Peer) error {
 	if err := msg.Decode(&query); err != nil {
 		return err
 	}
-
-	response := serveHeavyResponseQuery(func() []rlp.RawValue {
-		return ServiceGetBlockBodiesQuery(backend.Chain(), query.GetBlockBodiesRequest)
-	})
-	return peer.ReplyBlockBodiesRLP(query.RequestId, response)
+	return observedBodyReply(backend, peer, query)
 }
 
 // serveHeavyResponseQuery bounds lookup concurrency and releases the slot
@@ -283,6 +280,10 @@ func serveHeavyResponseQuery(query func() []rlp.RawValue) []rlp.RawValue {
 // ServiceGetBlockBodiesQuery assembles the response to a body query. It is
 // exposed to allow external packages to test protocol behavior.
 func ServiceGetBlockBodiesQuery(chain *core.BlockChain, query GetBlockBodiesRequest) []rlp.RawValue {
+	return serviceGetBlockBodiesQuery(chain, query, nil)
+}
+
+func serviceGetBlockBodiesQuery(chain *core.BlockChain, query GetBlockBodiesRequest, served func(common.Hash, int)) []rlp.RawValue {
 	// Gather blocks until the fetch or network limits is reached
 	var (
 		bytes  int
@@ -297,6 +298,9 @@ func ServiceGetBlockBodiesQuery(chain *core.BlockChain, query GetBlockBodiesRequ
 
 		if data := chain.GetBodyRLP(hash); len(data) != 0 {
 			bodies = append(bodies, data)
+			if served != nil {
+				served(hash, len(data))
+			}
 			bytes += len(data)
 			continue
 		}
@@ -316,6 +320,9 @@ func ServiceGetBlockBodiesQuery(chain *core.BlockChain, query GetBlockBodiesRequ
 				continue
 			}
 			bodies = append(bodies, data)
+			if served != nil {
+				served(hash, len(data))
+			}
 			bytes += len(data)
 		}
 	}
@@ -523,7 +530,9 @@ func handleNewBlockhashes(backend Backend, msg Decoder, peer *Peer) error {
 	if err := msg.Decode(ann); err != nil {
 		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
 	}
+	observeBlockAnnouncements(msg, *ann)
 	if err := peer.checkAnnouncementRate(len(*ann), time.Now()); err != nil {
+		observeInvalid(msg, peerpolicy.RateLimited)
 		return err
 	}
 	peer.Log().Trace("Observed block announcements", "count", len(*ann))
@@ -543,15 +552,18 @@ func handleNewBlock(backend Backend, msg Decoder, peer *Peer) error {
 	}
 
 	if err := ann.sanityCheck(); err != nil {
+		observeInvalid(msg, peerpolicy.InvalidBlock)
 		return err
 	}
 
 	if hash := types.CalcUncleHash(ann.Block.Uncles()); hash != ann.Block.UncleHash() {
+		observeInvalid(msg, peerpolicy.InvalidBlock)
 		log.Warn("Propagated block has invalid uncles", "have", hash, "exp", ann.Block.UncleHash())
 		return nil // TODO(karalabe): return error eventually, but wait a few releases
 	}
 
 	if hash := types.DeriveSha(ann.Block.Transactions(), trie.NewStackTrie(nil)); hash != ann.Block.TxHash() {
+		observeInvalid(msg, peerpolicy.InvalidBlock)
 		log.Warn("Propagated block has invalid body", "have", hash, "exp", ann.Block.TxHash())
 		return nil // TODO(karalabe): return error eventually, but wait a few releases
 	}
@@ -726,9 +738,11 @@ func handleNewPooledTransactionHashes(backend Backend, msg Decoder, peer *Peer) 
 		return err
 	}
 	if len(ann.Hashes) != len(ann.Types) || len(ann.Hashes) != len(ann.Sizes) {
+		observeInvalid(msg, peerpolicy.InvalidEncoding)
 		return fmt.Errorf("NewPooledTransactionHashes: invalid len of fields in %v %v %v", len(ann.Hashes), len(ann.Types), len(ann.Sizes))
 	}
 	peer.Log().Trace("Observed transaction announcements", "count", len(ann.Hashes))
+	observeAnnouncements(msg, ann.Hashes)
 	// Schedule all the unknown hashes for retrieval
 	for _, hash := range ann.Hashes {
 		peer.markTransaction(hash)
@@ -779,6 +793,7 @@ func answerGetPooledTransactions(backend Backend, query GetPooledTransactionsReq
 func handleTransactions(backend Backend, msg Decoder, peer *Peer) error {
 	// Transactions arrived, make sure we have a valid and fresh chain to handle them
 	if !backend.AcceptTxs() {
+		observeIgnoredTransactions(msg)
 		return nil
 	}
 	// Transactions can be processed, parse all of them and deliver to the pool
@@ -791,23 +806,30 @@ func handleTransactions(backend Backend, msg Decoder, peer *Peer) error {
 	for i, tx := range txs {
 		// Validate and mark the remote transaction
 		if tx == nil {
+			observeInvalid(msg, peerpolicy.InvalidTransaction)
 			return fmt.Errorf("Transactions: transaction %d is nil", i)
 		}
 
 		hash := tx.Hash()
 		if _, exists := seen[hash]; exists {
+			observeInvalid(msg, peerpolicy.InvalidEncoding)
 			return fmt.Errorf("Transactions: multiple copies of the same hash %v", hash)
 		}
 		seen[hash] = struct{}{}
 		peer.markTransaction(hash)
 	}
 
-	return backend.Handle(peer, &txs)
+	if err := backend.Handle(peer, &txs); err != nil {
+		return err
+	}
+	observeForwardedTransactions(msg)
+	return nil
 }
 
 func handlePooledTransactions(backend Backend, msg Decoder, peer *Peer) error {
 	// Transactions arrived, make sure we have a valid and fresh chain to handle them
 	if !backend.AcceptTxs() {
+		observeIgnoredTransactions(msg)
 		return nil
 	}
 	// Transactions can be processed, parse all of them and deliver to the pool
@@ -820,11 +842,13 @@ func handlePooledTransactions(backend Backend, msg Decoder, peer *Peer) error {
 	for i, tx := range txs.PooledTransactionsResponse {
 		// Validate and mark the remote transaction
 		if tx == nil {
+			observeInvalid(msg, peerpolicy.InvalidTransaction)
 			return fmt.Errorf("PooledTransactions: transaction %d is nil", i)
 		}
 
 		hash := tx.Hash()
 		if _, exists := seen[hash]; exists {
+			observeInvalid(msg, peerpolicy.InvalidEncoding)
 			return fmt.Errorf("PooledTransactions: multiple copies of the same hash %v", hash)
 		}
 		seen[hash] = struct{}{}
@@ -833,7 +857,11 @@ func handlePooledTransactions(backend Backend, msg Decoder, peer *Peer) error {
 
 	requestTracker.Fulfil(peer.id, peer.version, PooledTransactionsMsg, txs.RequestId)
 
-	return backend.Handle(peer, &txs)
+	if err := backend.Handle(peer, &txs); err != nil {
+		return err
+	}
+	observeForwardedTransactions(msg)
+	return nil
 }
 
 func handleBlockRangeUpdate(backend Backend, msg Decoder, peer *Peer) error {
@@ -842,6 +870,7 @@ func handleBlockRangeUpdate(backend Backend, msg Decoder, peer *Peer) error {
 		return err
 	}
 	if err := update.Validate(); err != nil {
+		observeInvalid(msg, peerpolicy.InvalidEncoding)
 		return err
 	}
 	// We don't do anything with these messages for now, just store them on the peer.

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 
 	mapset "github.com/deckarep/golang-set/v2"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p"
+	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
 )
 
 const (
@@ -34,6 +36,8 @@ const (
 
 // Peer is a collection of relevant information we have about a `wit` peer.
 type Peer struct {
+	observer atomic.Pointer[func(peerpolicy.Reason)]
+
 	id string // Unique ID for the peer, cached
 
 	*p2p.Peer                   // The embedded P2P package peer

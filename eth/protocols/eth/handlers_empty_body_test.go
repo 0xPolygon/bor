@@ -10,6 +10,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
@@ -48,6 +49,17 @@ func TestServiceGetBlockBodiesQueryEmptyBodyEncoding(t *testing.T) {
 				var body BlockBody
 				require.NoError(t, rlp.DecodeBytes(bodies[0], &body))
 				require.Equal(t, withdrawals, body.Withdrawals != nil)
+				var served peerpolicy.Evidence
+				peer := &Peer{Peer: configuredLimitsTestPeer(t, "trusted"), rw: &observedWriter{}}
+				peer.SetObserver(func(event peerpolicy.Evidence) { served = event })
+				require.NoError(t, observedBodyReply(backend, peer, GetBlockBodiesPacket{
+					RequestId: 7, GetBlockBodiesRequest: GetBlockBodiesRequest{block.Hash()},
+				}))
+				require.Equal(t, peerpolicy.BodyReplies, served.Family)
+				require.Equal(t, uint64(1), served.Items)
+				require.Equal(t, uint64(len(canonical)), served.Bytes)
+				require.Equal(t, []common.Hash{block.Hash()}, served.Hashes)
+				require.Equal(t, []uint64{uint64(len(canonical))}, served.ObjectBytes)
 				var fields []rlp.RawValue
 				require.NoError(t, rlp.DecodeBytes(bodies[0], &fields))
 				if withdrawals {
