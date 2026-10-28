@@ -3,7 +3,6 @@ package p2p
 import (
 	"context"
 	"errors"
-	"sync"
 
 	"github.com/quic-go/quic-go"
 	"golang.org/x/sync/semaphore"
@@ -17,27 +16,25 @@ func newBulkConnContext(maxPeers, maxPendingPeers int, windows *semaphore.Weight
 	if maxPendingPeers <= 0 {
 		maxPendingPeers = defaultMaxPendingPeers
 	}
-	pending := make(chan struct{}, maxPendingPeers)
+	pending := newBulkPendingAdmission(maxPendingPeers)
 	connections := make(chan struct{}, bulkQUICWindowSlots(maxPeers, maxPendingPeers))
-	return func(ctx context.Context, _ *quic.ClientInfo) (context.Context, error) {
-		select {
-		case pending <- struct{}{}:
-		default:
-			return nil, errBulkAdmissionLimit
+	return func(ctx context.Context, info *quic.ClientInfo) (context.Context, error) {
+		releasePending, err := pending.acquire(info)
+		if err != nil {
+			return nil, err
 		}
 		select {
 		case connections <- struct{}{}:
 		default:
-			<-pending
+			releasePending()
 			return nil, errBulkAdmissionLimit
 		}
 		releaseWindow, err := reserveBulkQUICWindow(windows)
 		if err != nil {
 			<-connections
-			<-pending
+			releasePending()
 			return nil, err
 		}
-		releasePending := sync.OnceFunc(func() { <-pending })
 		// QUIC cancels this context on handshake failure as well as connection close.
 		context.AfterFunc(ctx, func() {
 			releasePending()

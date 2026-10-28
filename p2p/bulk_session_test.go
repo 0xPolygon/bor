@@ -95,8 +95,7 @@ func TestBulkSessionClosedConnectionDropsCachedChannels(t *testing.T) {
 	lp, rp := newTestTrackedPeer(right.localnode.Node()), newTestTrackedPeer(left.localnode.Node())
 	left.setPeer(lp)
 	right.setPeer(rp)
-	old, err := left.bulk.OpenChannel(lp, "eth-bulk")
-	require.NoError(t, err)
+	old, _ := openTestBulkChannel(t, left, right, lp, rp, "eth-bulk")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	remoteSession := right.bulk.peerSession(rp.Node(), rp)
@@ -121,7 +120,6 @@ func TestBulkSessionClosedConnectionDropsCachedChannels(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("remote connection did not close")
 	}
-	got, err := session.openChannel(ctx, "eth-bulk")
-	require.NoError(t, err)
+	got, _ := openTestBulkChannel(t, left, right, lp, rp, "eth-bulk")
 	require.NotSame(t, old, got)
 }

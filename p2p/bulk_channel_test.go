@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"net"
 	"testing"
 	"time"
 
@@ -75,7 +76,7 @@ func TestBulkChannelHelloWriteCleanup(t *testing.T) {
 				writeLimit:      test.limit,
 			}
 			session := newHelloTestSession()
-			rw, err := session.openChannelStream(nil, stream, "bodies")
+			rw, err := session.openChannelStream(t.Context(), nil, stream, "bodies")
 			require.Nil(t, rw)
 			require.ErrorIs(t, err, errPartialPayload)
 			require.ErrorIs(t, err, closeErr)
@@ -120,19 +121,26 @@ func TestBulkChannelHelloReadCleanup(t *testing.T) {
 }
 
 func TestBulkChannelHelloOwnership(t *testing.T) {
-	sender := newHelloTestSession()
-	receiver := newHelloTestSession()
-	stream := &helloTestStream{writeLimit: 1024}
-	rw, err := sender.openChannelStream(nil, stream, "eth-bulk")
+	sender, receiver := newHelloTestSession(), newHelloTestSession()
+	local, remote := net.Pipe()
+	t.Cleanup(func() { require.NoError(t, local.Close()) })
+	t.Cleanup(func() { require.NoError(t, remote.Close()) })
+	opened := make(chan bulkChannelResult, 1)
+	accepted := make(chan error, 1)
+	go func() {
+		rw, err := sender.openChannelStream(t.Context(), nil, local, "eth-bulk")
+		opened <- bulkChannelResult{rw: rw, err: err}
+	}()
+	go func() { accepted <- receiver.acceptChannel(nil, remote) }()
+	inbound, err := receiver.waitChannel(t.Context(), nil, "eth-bulk")
 	require.NoError(t, err)
-	require.Same(t, rw, sender.channels["eth-bulk"])
-	require.NoError(t, receiver.acceptChannel(nil, stream))
-	require.Contains(t, receiver.channels, "eth-bulk")
-	require.False(t, stream.closed)
-	require.Zero(t, stream.readCancel)
-	require.Zero(t, stream.writeCancel)
-	require.NoError(t, rw.(io.Closer).Close())
-	assertHelloStreamClosed(t, stream)
+	result := <-opened
+	require.NoError(t, result.err)
+	require.NoError(t, <-accepted)
+	require.Same(t, result.rw, sender.channels["eth-bulk"])
+	require.Same(t, inbound, receiver.channels["eth-bulk"])
+	require.NoError(t, result.rw.(io.Closer).Close())
+	require.NoError(t, inbound.(io.Closer).Close())
 }
 
 func TestBulkControlPayloadValidation(t *testing.T) {

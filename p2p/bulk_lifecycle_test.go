@@ -91,7 +91,7 @@ func TestBulkCloseCancelsQueuedChannelOpen(t *testing.T) {
 		bulk := &BulkSidecar{closeCh: make(chan struct{}), sessions: make(map[enode.ID]*bulkSession)}
 		peer := newTestTrackedPeer(enode.NewV4(&newkey().PublicKey, net.IPv4(127, 0, 0, 1), 30303, 30303))
 		session := bulk.peerSession(peer.Node(), peer)
-		session.channelOpenGate() <- struct{}{}
+		session.channelOpenGate("eth-bulk") <- struct{}{}
 		result := make(chan error, 1)
 		go func() {
 			_, err := bulk.OpenChannelContext(t.Context(), peer, "eth-bulk")

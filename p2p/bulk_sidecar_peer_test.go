@@ -107,14 +107,12 @@ func TestBulkSidecarResolvesRecordPerConnection(t *testing.T) {
 	right.setQUICPort()
 	first := right.localnode.Node()
 	require.NoError(t, left.db.UpdateNode(first))
-	_, err := left.bulk.OpenChannel(lp, "eth-bulk")
-	require.NoError(t, err)
+	openTestBulkChannel(t, left, right, lp, rp, "eth-bulk")
 	right.localnode.Set(enr.TCP(30305))
 	latest := right.localnode.Node()
 	require.Greater(t, latest.Seq(), first.Seq())
 	require.NoError(t, left.db.UpdateNode(latest))
-	_, err = left.bulk.OpenChannel(lp, "snap-trie")
-	require.NoError(t, err)
+	openTestBulkChannel(t, left, right, lp, rp, "snap-trie")
 	require.Equal(t, first.Seq(), session.remote.Seq())
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
@@ -129,8 +127,7 @@ func TestBulkSidecarResolvesRecordPerConnection(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("remote connection did not close")
 	}
-	_, err = left.bulk.OpenChannel(lp, "eth-bulk")
-	require.NoError(t, err)
+	openTestBulkChannel(t, left, right, lp, rp, "eth-bulk")
 	require.Equal(t, latest.Seq(), session.remote.Seq())
 }
 

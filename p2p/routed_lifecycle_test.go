@@ -151,7 +151,12 @@ func TestRoutedLifecycleAttachmentShutdown(t *testing.T) {
 func TestRoutedLifecycleSharedLaneReplacement(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	primary := newCountedRoutedRW()
-	rw := NewMultiChannelRoutedMsgReadWriter(primary, func(uint64) string { return "bulk" }).(*routedMsgReadWriter)
+	rw := NewMultiChannelRoutedMsgReadWriter(primary, func(code uint64) string {
+		if code == 4 {
+			return "control"
+		}
+		return "bulk"
+	}).(*routedMsgReadWriter)
 	defer rw.Close()
 	old, next := newCountedRoutedRW(), newCountedRoutedRW()
 	rw.AttachBulkChannels([]string{"control", "bulk"}, old)
