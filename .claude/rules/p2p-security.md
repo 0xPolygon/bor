@@ -69,7 +69,7 @@ txs := make([]*types.Transaction, msg.TxCount)
 
 - Preserve sync reply semantics: an empty bodies or receipts reply means the data is absent, and an unanswered request can abort the requester's sync. Wait for lookup capacity until the transport or peer closes; release capacity before writing the reply. Test delayed admission, shutdown while waiting, and genuinely empty results.
 - Activate a channel only after its receiver has claimed it. Test both waiter delivery and an already-stored stream, late arrival after timeout, cancellation, and cleanup of unclaimed streams.
-- Sequential channel opens should use the same order on both peers; independent protocols can open concurrently. Different sequential orders cannot complete the acknowledgement rendezvous and fall back after the channel timeout.
+- Open negotiated lanes concurrently across ETH, SNAP, and WIT. One late or unclaimed hello must not delay any other lane, including lanes in later protocols. Keep the fixed lane set bounded, join all attempts, and test progress while a lane is still waiting for acknowledgement.
 - A failed channel acknowledgement should close that channel while preserving established channels on the shared connection. Once ownership is acknowledged, a concurrent caller timeout should not discard the live channel.
 - Accept channel handshakes concurrently within the session's channel limit, and stop waiting when the opener resets a stream. Test sequential attachment after a late channel, and reject duplicate channel registration atomically.
 - Replay a failed sidecar write on the primary transport only when no frame bytes were committed. Committed or unknown failures should end the peer lifecycle, including through message-event wrappers and when protocol handlers are busy.

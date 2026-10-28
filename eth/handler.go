@@ -650,43 +650,8 @@ func (h *handler) attachBulkSidecar(peer *eth.Peer, snapPeer *snap.Peer, witPeer
 			case <-ctx.Done():
 			}
 		}()
-		attachBulkChannels(ctx, sidecar, peer.Peer,
-			[]string{"eth-control", "eth-blocks", "eth-tx", "eth-tx-fetch", "eth-bulk"}, peer.AttachBulkChannelRW)
-		if snapPeer != nil {
-			attachBulkChannels(ctx, sidecar, snapPeer.Peer,
-				[]string{"snap-accounts", "snap-storage", "snap-code", "snap-trie"}, snapPeer.AttachBulkChannelRW)
-		}
-		if witPeer != nil {
-			attachBulkChannels(ctx, sidecar, witPeer.Peer, []string{"wit-bulk"},
-				func(_ string, rw p2p.MsgReadWriter) { witPeer.AttachBulkRW(rw) })
-		}
+		attachBulkProtocols(ctx, sidecar, peer, snapPeer, witPeer)
 	}()
-}
-
-type bulkChannelOpener interface {
-	OpenChannelContext(context.Context, *p2p.Peer, string) (p2p.MsgReadWriter, error)
-}
-
-func attachBulkChannels(ctx context.Context, sidecar bulkChannelOpener, peer *p2p.Peer, channels []string, attach func(string, p2p.MsgReadWriter)) {
-	for _, channel := range channels {
-		if ctx.Err() != nil {
-			return
-		}
-		rw, err := sidecar.OpenChannelContext(ctx, peer, channel)
-		if err != nil {
-			peer.Log().Debug("Bulk sidecar unavailable", "channel", channel, "err", err)
-			continue
-		}
-		if ctx.Err() != nil {
-			if closer, ok := rw.(interface{ Close() error }); ok {
-				if err := closer.Close(); err != nil {
-					peer.Log().Debug("Bulk sidecar channel close failed", "channel", channel, "err", err)
-				}
-			}
-			return
-		}
-		attach(channel, rw)
-	}
 }
 
 // jailPeer jails a peer to prevent reconnection for a period of time
