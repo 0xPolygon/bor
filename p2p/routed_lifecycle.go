@@ -11,6 +11,29 @@ func (rw *routedMsgReadWriter) Done() <-chan struct{} {
 	return rw.closed
 }
 
+func (rw *routedMsgReadWriter) validateBulkMsgCode(lane *routedBulkLane, code uint64) error {
+	rw.bulkMu.RLock()
+	defer rw.bulkMu.RUnlock()
+	if !rw.hasBulkLane(lane.id) {
+		return io.EOF
+	}
+	if current := rw.bulks[rw.route(code)]; current != nil && current.id == lane.id {
+		return nil
+	}
+	return newPeerError(errInvalidMsgCode, "code %d on bulk channel %q", code, lane.channel)
+}
+
+func (rw *routedMsgReadWriter) failWrite(err error) {
+	rw.writeFail.Do(func() {
+		rw.closeWithError(err)
+		// Broadcast loops stop after a write error. End the peer lifecycle too,
+		// even if its protocol handler is busy and cannot read the error yet.
+		if primary, ok := rw.primary.(interface{ reportWriteError(error) }); ok {
+			primary.reportWriteError(err)
+		}
+	})
+}
+
 // Close stops pending forwards and closes the lanes. A primary reader without
 // io.Closer remains owned by the peer and is interrupted by peer shutdown.
 func (rw *routedMsgReadWriter) Close() error {

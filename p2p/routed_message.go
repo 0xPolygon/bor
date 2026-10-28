@@ -128,6 +128,7 @@ type routedMsgReadWriter struct {
 	reads     chan routedRead
 	closed    chan struct{}
 	closeOnce sync.Once
+	writeFail sync.Once
 	readErr   error
 	closeErr  error
 	bulkMu    sync.RWMutex
@@ -220,6 +221,7 @@ func (rw *routedMsgReadWriter) WriteMsg(msg Msg) error {
 	// Only the transport can confirm that replay will not duplicate a frame.
 	var writeErr *bulkWriteError
 	if !errors.As(err, &writeErr) || writeErr.committed {
+		rw.failWrite(err)
 		return err
 	}
 	msg.Payload = bytes.NewReader(payload)
@@ -388,11 +390,17 @@ func (rw *routedMsgReadWriter) readBulkLoop(ctx context.Context, lane *routedBul
 
 func (rw *routedMsgReadWriter) forwardBulkMsg(ctx context.Context, lane *routedBulkLane) error {
 	msg, err := lane.rw.ReadMsg()
-	if err != nil || !rw.isCurrentBulk(lane.id) {
+	if err != nil {
 		return err
 	}
 	if msg.Size > bulkMaxMessageSize {
 		return fmt.Errorf("routed message too large: %d", msg.Size)
+	}
+	if err := rw.validateBulkMsgCode(lane, msg.Code); err != nil {
+		if !errors.Is(err, io.EOF) {
+			rw.closeWithError(err)
+		}
+		return err
 	}
 	if err := rw.buffers.acquire(ctx, msg.Size); err != nil {
 		return err

@@ -29,12 +29,12 @@ func TestBulkQUICWindowBudget(t *testing.T) {
 	admit := newBulkConnContext(0, 1, windows)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	_, err = admit(ctx, nil)
+	_, err = admit(ctx, bulkTestClientInfo(1))
 	require.ErrorIs(t, err, errBulkAdmissionLimit)
 	_, err = server.bulk.dialConn(ctx, server.localnode.Node())
 	require.ErrorIs(t, err, errBulkAdmissionLimit)
 	releases[0]()
-	_, err = admit(ctx, nil)
+	_, err = admit(ctx, bulkTestClientInfo(1))
 	require.NoError(t, err, "failed reservation must release connection and pending-auth slots")
 }
 

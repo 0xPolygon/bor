@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"context"
+	"net"
 	"strconv"
 	"testing"
 	"time"
@@ -17,13 +18,13 @@ func TestBulkAdmissionPendingLimit(t *testing.T) {
 			if limit <= 0 {
 				limit = defaultMaxPendingPeers
 			}
-			for range limit {
+			for i := range limit {
 				ctx, cancel := context.WithCancel(context.Background())
 				t.Cleanup(cancel)
-				_, err := admit(ctx, nil)
+				_, err := admit(ctx, bulkTestClientInfo(byte(i+1)))
 				require.NoError(t, err)
 			}
-			_, err := admit(context.Background(), nil)
+			_, err := admit(context.Background(), bulkTestClientInfo(1))
 			require.ErrorIs(t, err, errBulkAdmissionLimit)
 		})
 	}
@@ -36,13 +37,13 @@ func TestBulkAdmissionConnectionLimit(t *testing.T) {
 			for range max(0, peers) + 1 {
 				ctx, cancel := context.WithCancel(context.Background())
 				t.Cleanup(cancel)
-				ctx, err := admit(ctx, nil)
+				ctx, err := admit(ctx, bulkTestClientInfo(1))
 				require.NoError(t, err)
 				releaseBulkPendingAuth(ctx)
 				releaseBulkPendingAuth(ctx)
 			}
 			for range 2 {
-				_, err := admit(context.Background(), nil)
+				_, err := admit(context.Background(), bulkTestClientInfo(1))
 				require.ErrorIs(t, err, errBulkAdmissionLimit)
 			}
 		})
@@ -55,7 +56,7 @@ func TestBulkAdmissionReleasesOnClose(t *testing.T) {
 			admit := newBulkConnContext(0, 1, newBulkQUICWindows(0, 1))
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			ctx, err := admit(ctx, nil)
+			ctx, err := admit(ctx, bulkTestClientInfo(1))
 			require.NoError(t, err)
 			if authenticated {
 				releaseBulkPendingAuth(ctx)
@@ -64,7 +65,7 @@ func TestBulkAdmissionReleasesOnClose(t *testing.T) {
 			next, nextCancel := context.WithCancel(context.Background())
 			defer nextCancel()
 			require.Eventually(t, func() bool {
-				_, err := admit(next, nil)
+				_, err := admit(next, bulkTestClientInfo(1))
 				return err == nil
 			}, time.Second, time.Millisecond)
 		})
@@ -130,4 +131,8 @@ func TestBulkSidecarAuthenticatedAdmission(t *testing.T) {
 	var transportErr *quic.TransportError
 	require.ErrorAs(t, err, &transportErr)
 	require.Equal(t, quic.ConnectionRefused, transportErr.ErrorCode)
+}
+
+func bulkTestClientInfo(ip byte) *quic.ClientInfo {
+	return &quic.ClientInfo{RemoteAddr: &net.UDPAddr{IP: net.IPv4(192, 0, 2, ip), Port: 30303}}
 }

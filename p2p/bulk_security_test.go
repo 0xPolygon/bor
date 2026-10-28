@@ -45,7 +45,7 @@ func TestBulkChannelCancelledWaiterRemoved(t *testing.T) {
 
 func TestBulkConcurrentOpenCancellation(t *testing.T) {
 	session := newHelloTestSession()
-	gate := session.channelOpenGate()
+	gate := session.channelOpenGate("eth-bulk")
 	gate <- struct{}{}
 	defer func() { <-gate }()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -200,12 +200,15 @@ func TestBulkChannelIncomingAuthorization(t *testing.T) {
 			}
 			stream := &helloTestStream{writeLimit: 1024}
 			require.NoError(t, writeBulkControl(stream, bulkChannelHello{Version: bulkSidecarVersion, Channel: "snap-trie"}))
-			err := session.acceptChannel(nil, stream)
+			accepted := make(chan error, 1)
+			go func() { accepted <- session.acceptChannel(nil, stream) }()
 			if test.wantErr == "" {
+				_, err := session.waitChannel(t.Context(), nil, "snap-trie")
 				require.NoError(t, err)
+				require.NoError(t, <-accepted)
 				require.Contains(t, session.channels, "snap-trie")
 			} else {
-				require.ErrorContains(t, err, test.wantErr)
+				require.ErrorContains(t, <-accepted, test.wantErr)
 				assertHelloStreamClosed(t, stream)
 				require.Empty(t, session.channels)
 			}
@@ -216,7 +219,7 @@ func TestBulkChannelIncomingAuthorization(t *testing.T) {
 func TestBulkChannelDuplicateRetainsOriginal(t *testing.T) {
 	session := newHelloTestSession()
 	first := &helloTestStream{writeLimit: 1024}
-	rw, err := session.openChannelStream(nil, first, "eth-bulk")
+	rw, err := session.openChannelStream(t.Context(), nil, first, "eth-bulk")
 	require.NoError(t, err)
 	second := &helloTestStream{writeLimit: 1024}
 	require.NoError(t, writeBulkControl(second, bulkChannelHello{Version: bulkSidecarVersion, Channel: "eth-bulk"}))
@@ -267,7 +270,7 @@ func TestBulkChannelRejectsStaleConnection(t *testing.T) {
 			require.NoError(t, writeBulkControl(stream, bulkChannelHello{Version: bulkSidecarVersion, Channel: "eth-bulk"}))
 			require.ErrorIs(t, session.acceptChannel(old, stream), io.EOF)
 		} else {
-			_, err := session.openChannelStream(old, stream, "eth-bulk")
+			_, err := session.openChannelStream(t.Context(), old, stream, "eth-bulk")
 			require.ErrorIs(t, err, io.EOF)
 		}
 		assertHelloStreamClosed(t, stream)
@@ -289,10 +292,7 @@ func TestBulkFrameLargerThanReceiveWindow(t *testing.T) {
 	lp, rp := newTestTrackedPeer(right.localnode.Node()), newTestTrackedPeer(left.localnode.Node())
 	left.setPeer(lp)
 	right.setPeer(rp)
-	sender, err := left.bulk.OpenChannel(lp, "eth-bulk")
-	require.NoError(t, err)
-	receiver, err := right.bulk.OpenChannel(rp, "eth-bulk")
-	require.NoError(t, err)
+	sender, receiver := openTestBulkChannel(t, left, right, lp, rp, "eth-bulk")
 	payload := bytes.Repeat([]byte{0xac}, bulkMaxMessageSize)
 	sent := make(chan error, 1)
 	go func() {

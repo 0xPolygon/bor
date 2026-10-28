@@ -355,6 +355,12 @@ func (ev *msgEventer) Done() <-chan struct{} {
 	return nil
 }
 
+func (ev *msgEventer) reportWriteError(err error) {
+	if rw, ok := ev.MsgReadWriter.(interface{ reportWriteError(error) }); ok {
+		rw.reportWriteError(err)
+	}
+}
+
 func (ev *msgEventer) bulkBuffers() *bulkBufferBudget {
 	return bulkBuffersFor(ev.MsgReadWriter)
 }

@@ -260,9 +260,9 @@ func handleGetBlockBodies(backend Backend, msg Decoder, peer *Peer) error {
 }
 
 // serveHeavyResponseQuery bounds lookup concurrency and releases the slot
-// before the caller writes its reply. Admission timeout returns an empty
-// response, preserving the worker cap without disconnecting requesting peers.
-func serveHeavyResponseQuery(query func() []rlp.RawValue) []rlp.RawValue {
+// before the caller writes its reply. An admission timeout skips the reply:
+// an empty reply would tell the downloader that the requested data is missing.
+func serveHeavyResponseQuery(query func() []rlp.RawValue) ([]rlp.RawValue, bool) {
 	timer := time.NewTimer(heavyResponseQueueTimeout)
 	defer timer.Stop()
 
@@ -271,10 +271,10 @@ func serveHeavyResponseQuery(query func() []rlp.RawValue) []rlp.RawValue {
 		defer func() { <-heavyResponseServeSlots }()
 	case <-timer.C:
 		heavyResponseOverflowMeter.Mark(1)
-		return nil
+		return nil, false
 	}
 
-	return query()
+	return query(), true
 }
 
 // ServiceGetBlockBodiesQuery assembles the response to a body query. It is
@@ -337,9 +337,12 @@ func handleGetReceipts68(backend Backend, msg Decoder, peer *Peer) error {
 		return err
 	}
 
-	response := serveHeavyResponseQuery(func() []rlp.RawValue {
+	response, served := serveHeavyResponseQuery(func() []rlp.RawValue {
 		return ServiceGetReceiptsQuery68(backend.Chain(), query.GetReceiptsRequest)
 	})
+	if !served {
+		return nil
+	}
 	return peer.ReplyReceiptsRLP(query.RequestId, response)
 }
 
@@ -350,9 +353,12 @@ func handleGetReceipts69(backend Backend, msg Decoder, peer *Peer) error {
 		return err
 	}
 
-	response := serveHeavyResponseQuery(func() []rlp.RawValue {
+	response, served := serveHeavyResponseQuery(func() []rlp.RawValue {
 		return ServiceGetReceiptsQuery69(backend.Chain(), query.GetReceiptsRequest)
 	})
+	if !served {
+		return nil
+	}
 	return peer.ReplyReceiptsRLP(query.RequestId, response)
 }
 

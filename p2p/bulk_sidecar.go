@@ -39,8 +39,8 @@ import (
 )
 
 const (
-	bulkSidecarNextProto      = "bor-bulk/2"
-	bulkSidecarVersion        = uint64(2)
+	bulkSidecarNextProto      = "bor-bulk/3"
+	bulkSidecarVersion        = uint64(3)
 	bulkAuthControlMaxSize    = 1024
 	bulkChannelControlMaxSize = 256
 	bulkFrameHeaderSize       = 12
@@ -108,7 +108,7 @@ type bulkSession struct {
 	remote   *enode.Node
 	remoteID enode.ID
 
-	openGate   chan struct{}
+	openGates  map[string]chan struct{}
 	lock       sync.Mutex
 	conn       *quic.Conn
 	connClosed <-chan struct{}
@@ -155,6 +155,7 @@ type bulkFrameStream interface {
 }
 
 type bulkStreamMsgRW struct {
+	ready    *bulkChannelReady
 	stream   bulkFrameStream
 	channel  string
 	log      log.Logger
@@ -215,6 +216,8 @@ func newBulkSidecar(srv *Server, listenAddr string) (*BulkSidecar, error) {
 		Conn:        udpConn,
 		Tracer:      b.stats.newTransportRecorder(),
 		ConnContext: bulkServerConnContext(srv, b.windows),
+		// Validate the address before allocating a pending authentication slot.
+		VerifySourceAddress: func(net.Addr) bool { return true },
 	}
 	listener, err := transport.Listen(tlsConf, quicConf)
 	if err != nil {

@@ -65,6 +65,16 @@ txs := make([]*types.Transaction, msg.TxCount)
 - **Peer scoring** — track delivery quality, ban peers that deliver invalid data
 - **Concurrent fetch limits** — bound the number of in-flight requests per peer
 
+### Sidecar transport changes
+
+- Preserve sync reply semantics: an empty bodies or receipts reply means the data is absent. Capacity exhaustion should leave the request unanswered so it can be retried, with tests distinguishing overload from a genuinely empty result.
+- Activate a channel only after its receiver has claimed it. Test both waiter delivery and an already-stored stream, late arrival after timeout, cancellation, and cleanup of unclaimed streams.
+- Sequential channel opens should use the same order on both peers; independent protocols can open concurrently. Different sequential orders cannot complete the acknowledgement rendezvous and fall back after the channel timeout.
+- A failed channel acknowledgement should close that channel while preserving established channels on the shared connection. Once ownership is acknowledged, a concurrent caller timeout should not discard the live channel.
+- Replay a failed sidecar write on the primary transport only when no frame bytes were committed. Committed or unknown failures should end the peer lifecycle, including through message-event wrappers and when protocol handlers are busy.
+- Validate incoming codes against the receiving lane before allocating payload buffers or calling protocol handlers. Include primary-only codes, unknown codes, wrong-lane codes, and shared-lane aliases in regression coverage.
+- Bound pending authentication globally and per public source IP, independent of UDP port. Verify address validation and slot release after authentication, rejection, and connection cancellation.
+
 ## Review Checklist
 
 - [ ] Are all allocations from peer messages bounded?

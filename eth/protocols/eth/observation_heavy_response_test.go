@@ -25,24 +25,9 @@ func TestPeerPolicyBodyServingWorkerLimit(t *testing.T) {
 			require.NoError(t, err)
 			// A nil backend ensures an overloaded request never performs a lookup.
 			require.NoError(t, handleGetBlockBodies(nil, decoder{msg: payload}, peer))
-			require.Len(t, rw.sent, 1)
-			msg := <-rw.sent
-			require.Equal(t, uint64(BlockBodiesMsg), msg.Code)
-			var reply BlockBodiesRLPPacket
-			require.NoError(t, msg.Decode(&reply))
-			require.Equal(t, query.RequestId, reply.RequestId)
-			require.Empty(t, reply.BlockBodiesRLPResponse)
+			require.Empty(t, rw.sent)
 			require.Len(t, heavyResponseServeSlots, cap(heavyResponseServeSlots))
-			if enabled {
-				require.Equal(t, []peerpolicy.Evidence{{
-					Family: peerpolicy.BodyReplies,
-					Activity: peerpolicy.ActivityEvent{
-						ServedResponses: 1, ServedBytes: uint64(msg.Size),
-					},
-				}}, events)
-			} else {
-				require.Empty(t, events)
-			}
+			require.Empty(t, events)
 		})
 	}
 }

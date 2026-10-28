@@ -805,8 +805,8 @@ func TestMultiChannelRoutedMsgReadWriterConcurrentAttachAndTraffic(t *testing.T)
 			routed.AttachBulkChannel("bulk", nextBulk)
 
 			primary.PushMsg(90)
-			nextControl.PushMsg(91)
-			nextBulk.PushMsg(92)
+			nextControl.PushMsg(1)
+			nextBulk.PushMsg(2)
 
 			currentControl.Close()
 			currentBulk.Close()

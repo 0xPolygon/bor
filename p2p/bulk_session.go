@@ -69,6 +69,9 @@ func (s *bulkSession) runConn(conn *quic.Conn) {
 			return
 		}
 		if err := s.acceptChannel(conn, stream); err != nil {
+			if errors.Is(err, errBulkChannelTimeout) || errors.Is(err, errBulkChannelAbandoned) {
+				continue
+			}
 			_ = conn.CloseWithError(bulkSidecarProtocolError, err.Error())
 			return
 		}
@@ -256,7 +259,10 @@ func (s *bulkSession) refreshRecord(remote *enode.Node) *enode.Node {
 }
 
 func (s *bulkSession) openChannel(ctx context.Context, channel string) (MsgReadWriter, error) {
-	gate := s.channelOpenGate()
+	if bulkChannelProtocol(channel) == "" {
+		return nil, errors.New("invalid bulk channel")
+	}
+	gate := s.channelOpenGate(channel)
 	select {
 	case gate <- struct{}{}:
 		defer func() { <-gate }()
@@ -268,11 +274,8 @@ func (s *bulkSession) openChannel(ctx context.Context, channel string) (MsgReadW
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if bulkChannelProtocol(channel) == "" {
-		return nil, errors.New("invalid bulk channel")
-	}
 	if rw, ok := s.getChannel(channel); ok {
-		return rw, nil
+		return s.claimChannel(ctx, channel, rw)
 	}
 	conn, err := s.ensureConn(ctx)
 	if err != nil {
@@ -283,26 +286,42 @@ func (s *bulkSession) openChannel(ctx context.Context, channel string) (MsgReadW
 		if err != nil {
 			return nil, err
 		}
-		return s.openChannelStream(conn, stream, channel)
+		return s.openChannelStream(ctx, conn, stream, channel)
 	}
 	return s.waitChannel(ctx, conn, channel)
 }
 
-func (s *bulkSession) channelOpenGate() chan struct{} {
+// Protocols may attach their lanes in different orders on the two nodes. Only
+// duplicate opens of the same channel should wait behind its acknowledgement.
+func (s *bulkSession) channelOpenGate(channel string) chan struct{} {
 	s.lock.Lock()
 	defer s.lock.Unlock()
-	if s.openGate == nil {
-		s.openGate = make(chan struct{}, 1)
+	if s.openGates == nil {
+		s.openGates = make(map[string]chan struct{})
 	}
-	return s.openGate
+	if s.openGates[channel] == nil {
+		s.openGates[channel] = make(chan struct{}, 1)
+	}
+	return s.openGates[channel]
 }
 
-func (s *bulkSession) openChannelStream(conn *quic.Conn, stream bulkFrameStream, channel string) (MsgReadWriter, error) {
+func (s *bulkSession) openChannelStream(ctx context.Context, conn *quic.Conn, stream bulkFrameStream, channel string) (MsgReadWriter, error) {
 	rw := &bulkStreamMsgRW{
 		stream: stream, channel: channel, stats: &s.sidecar.stats,
 		log: log.New("peer", s.remoteID, "channel", channel),
 	}
+	defer cancelBulkChannelOnContext(ctx, rw)()
 	if err := writeBulkControl(stream, bulkChannelHello{Version: bulkSidecarVersion, Channel: channel}); err != nil {
+		return nil, errors.Join(err, rw.Close())
+	}
+	var ack bulkChannelHello
+	if err := readBulkControl(stream, bulkChannelControlMaxSize, &ack); err != nil {
+		return nil, errors.Join(err, rw.Close())
+	}
+	if ack.Version != bulkSidecarVersion || ack.Channel != channel {
+		return nil, errors.Join(errors.New("invalid bulk channel acknowledgement"), rw.Close())
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, errors.Join(err, rw.Close())
 	}
 	if err := s.storeChannel(conn, channel, rw); err != nil {
@@ -315,7 +334,12 @@ func (s *bulkSession) acceptChannel(conn *quic.Conn, stream bulkFrameStream) (er
 	rw := &bulkStreamMsgRW{stream: stream, stats: &s.sidecar.stats}
 	defer func() {
 		if err != nil {
+			s.removeChannel(rw.channel, rw)
 			err = errors.Join(err, rw.Close())
+		}
+		if rw.ready != nil {
+			rw.ready.err = err
+			close(rw.ready.done)
 		}
 	}()
 	var hello bulkChannelHello
@@ -344,7 +368,11 @@ func (s *bulkSession) acceptChannel(conn *quic.Conn, stream bulkFrameStream) (er
 	}
 	rw.channel = hello.Channel
 	rw.log = log.New("peer", s.remoteID, "channel", hello.Channel)
-	return s.storeChannel(conn, hello.Channel, rw)
+	rw.ready = &bulkChannelReady{claimed: make(chan struct{}), done: make(chan struct{})}
+	if err := s.storeChannel(conn, hello.Channel, rw); err != nil {
+		return err
+	}
+	return s.acknowledgeChannel(conn, rw, hello)
 }
 
 func (s *bulkSession) getChannel(channel string) (MsgReadWriter, bool) {
@@ -367,7 +395,7 @@ func (s *bulkSession) waitChannel(ctx context.Context, conn *quic.Conn, channel 
 	}
 	if rw, ok := s.channels[channel]; ok {
 		s.lock.Unlock()
-		return rw, nil
+		return s.claimChannel(ctx, channel, rw)
 	}
 	s.waiters[channel] = append(s.waiters[channel], waiter)
 	s.lock.Unlock()
@@ -375,7 +403,10 @@ func (s *bulkSession) waitChannel(ctx context.Context, conn *quic.Conn, channel 
 
 	select {
 	case result := <-waiter:
-		return result.rw, result.err
+		if result.err != nil {
+			return nil, result.err
+		}
+		return s.claimChannel(ctx, channel, result.rw)
 	case <-ctx.Done():
 		return nil, errBulkChannelTimeout
 	}

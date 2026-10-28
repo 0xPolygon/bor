@@ -567,6 +567,13 @@ func (rw *protoRW) Done() <-chan struct{} {
 	return rw.closed
 }
 
+func (rw *protoRW) reportWriteError(err error) {
+	select {
+	case rw.werr <- err:
+	case <-rw.closed:
+	}
+}
+
 func (rw *protoRW) WriteMsg(msg Msg) (err error) {
 	if msg.Code >= rw.Length {
 		return newPeerError(errInvalidMsgCode, "not handled")
@@ -583,7 +590,7 @@ func (rw *protoRW) WriteMsg(msg Msg) (err error) {
 		// shutdown if the error is non-nil and unblock the next write
 		// otherwise. The calling protocol code should exit for errors
 		// as well but we don't want to rely on that.
-		rw.werr <- err
+		rw.reportWriteError(err)
 	case <-rw.closed:
 		err = ErrShuttingDown
 	}

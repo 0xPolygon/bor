@@ -113,11 +113,17 @@ func newHeimdallHTTPClient(urlString string, timeout time.Duration, rootCAs *x50
 	client := http.Client{Timeout: timeout}
 
 	u, err := url.Parse(urlString)
-	if err != nil || u.Scheme != "h3" {
-		return urlString, client, nil, err
+	if err != nil {
+		return "", http.Client{}, nil, fmt.Errorf("invalid Heimdall endpoint: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "h3" {
+		return "", http.Client{}, nil, fmt.Errorf("unsupported Heimdall endpoint scheme %q", u.Scheme)
 	}
 	if u.Hostname() == "" {
-		return "", http.Client{}, nil, fmt.Errorf("invalid Heimdall QUIC endpoint %q: empty host", urlString)
+		return "", http.Client{}, nil, errors.New("invalid Heimdall endpoint: empty host")
+	}
+	if u.Scheme != "h3" {
+		return urlString, client, nil, nil
 	}
 
 	tlsConf := &tls.Config{
