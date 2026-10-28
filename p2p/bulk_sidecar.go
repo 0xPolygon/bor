@@ -194,7 +194,7 @@ func newBulkSidecar(srv *Server, listenAddr string) (*BulkSidecar, error) {
 		MaxIncomingUniStreams:          -1,
 		InitialStreamReceiveWindow:     bulkStreamReceiveWindow,
 		MaxStreamReceiveWindow:         bulkStreamReceiveWindowMax,
-		InitialConnectionReceiveWindow: bulkConnReceiveWindow,
+		VerifySourceAddress: func(net.Addr) bool { return false }
 		MaxConnectionReceiveWindow:     bulkConnReceiveWindowMax,
 		Tracer: func(context.Context, bool, quic.ConnectionID) qlogwriter.Trace {
 			return b.stats.newConnectionTrace()
