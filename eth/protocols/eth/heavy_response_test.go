@@ -1,7 +1,9 @@
 package eth
 
 import (
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -12,7 +14,7 @@ import (
 func TestHeavyResponseQueryReleasesSlot(t *testing.T) {
 	want := []rlp.RawValue{rlp.EmptyList}
 	for range cap(heavyResponseServeSlots) + 1 {
-		got, served := serveHeavyResponseQuery(func() []rlp.RawValue {
+		got, served := serveHeavyResponseQuery(&Peer{}, func() []rlp.RawValue {
 			require.Len(t, heavyResponseServeSlots, 1)
 			return want
 		})
@@ -22,25 +24,63 @@ func TestHeavyResponseQueryReleasesSlot(t *testing.T) {
 	}
 }
 
-func TestHeavyResponseQuerySkipsPastDeadline(t *testing.T) {
-	fillHeavyResponseSlots(t)
+type heavyResponseTestRW struct {
+	*replyTestRW
+	done chan struct{}
+}
 
-	want := []rlp.RawValue{rlp.EmptyList}
-	called := false
-	got, served := serveHeavyResponseQuery(func() []rlp.RawValue {
-		called = true
-		return want
-	})
-	require.False(t, served)
+func (rw *heavyResponseTestRW) Done() <-chan struct{} { return rw.done }
 
-	require.False(t, called, "timed-out queries must not execute without a slot")
-	require.Empty(t, got)
-	require.Len(t, heavyResponseServeSlots, cap(heavyResponseServeSlots),
-		"a timed-out query must not release another worker's slot")
+func TestHeavyResponseQueryStopsOnShutdown(t *testing.T) {
+	for _, source := range []string{"peer", "transport"} {
+		for _, busy := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/busy=%v", source, busy), func(t *testing.T) {
+				if busy {
+					fillHeavyResponseSlots(t)
+				}
+				rw := &heavyResponseTestRW{done: make(chan struct{})}
+				peer := &Peer{rw: rw, term: make(chan struct{})}
+				stop := func() { close(peer.term) }
+				if source == "transport" {
+					stop = func() { close(rw.done) }
+				}
+				if !busy {
+					stop()
+				}
+				result := make(chan bool, 1)
+				go func() {
+					_, served := serveHeavyResponseQuery(peer, func() []rlp.RawValue {
+						t.Error("a stopped request must not execute a lookup")
+						return nil
+					})
+					result <- served
+				}()
+				if busy {
+					select {
+					case <-result:
+						t.Fatal("query did not wait for capacity")
+					case <-time.After(20 * time.Millisecond):
+					}
+					stop()
+				}
+				select {
+				case served := <-result:
+					require.False(t, served)
+				case <-time.After(time.Second):
+					t.Fatal("shutdown did not release queued query")
+				}
+				if busy {
+					require.Len(t, heavyResponseServeSlots, cap(heavyResponseServeSlots))
+				} else {
+					require.Empty(t, heavyResponseServeSlots)
+				}
+			})
+		}
+	}
 }
 
 // Overload must neither report missing data nor disconnect the requester.
-func TestHeavyResponseHandlersSurviveOverload(t *testing.T) {
+func TestHeavyResponseHandlersWaitForCapacity(t *testing.T) {
 	for _, test := range []struct {
 		name    string
 		handler msgHandler
@@ -60,16 +100,26 @@ func TestHeavyResponseHandlersSurviveOverload(t *testing.T) {
 			payload, err := rlp.EncodeToBytes(test.packet)
 			require.NoError(t, err)
 
-			// A nil backend ensures the rejected query cannot perform a lookup.
-			require.NoError(t, test.handler(nil, decoder{msg: payload}, peer))
+			backend := newTestBackend(0)
+			defer backend.close()
+			done := make(chan error, 1)
+			go func() { done <- test.handler(backend, decoder{msg: payload}, peer) }()
+			select {
+			case <-done:
+				t.Fatal("busy handler dropped the request")
+			case <-time.After(300 * time.Millisecond):
+			}
 			require.Empty(t, rw.sent)
 			require.Len(t, heavyResponseServeSlots, cap(heavyResponseServeSlots))
 			for range cap(heavyResponseServeSlots) {
 				<-heavyResponseServeSlots
 			}
-			backend := newTestBackend(0)
-			defer backend.close()
-			require.NoError(t, test.handler(backend, decoder{msg: payload}, peer))
+			select {
+			case err := <-done:
+				require.NoError(t, err)
+			case <-time.After(time.Second):
+				t.Fatal("handler did not serve the queued request")
+			}
 			require.Len(t, rw.sent, 1)
 			msg := <-rw.sent
 			require.Equal(t, test.want, msg.Code)

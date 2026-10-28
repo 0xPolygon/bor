@@ -260,24 +260,6 @@ func handleGetBlockBodies(backend Backend, msg Decoder, peer *Peer) error {
 	return observedBodyReply(backend, peer, query)
 }
 
-// serveHeavyResponseQuery bounds lookup concurrency and releases the slot
-// before the caller writes its reply. An admission timeout skips the reply:
-// an empty reply would tell the downloader that the requested data is missing.
-func serveHeavyResponseQuery(query func() []rlp.RawValue) ([]rlp.RawValue, bool) {
-	timer := time.NewTimer(heavyResponseQueueTimeout)
-	defer timer.Stop()
-
-	select {
-	case heavyResponseServeSlots <- struct{}{}:
-		defer func() { <-heavyResponseServeSlots }()
-	case <-timer.C:
-		heavyResponseOverflowMeter.Mark(1)
-		return nil, false
-	}
-
-	return query(), true
-}
-
 // ServiceGetBlockBodiesQuery assembles the response to a body query. It is
 // exposed to allow external packages to test protocol behavior.
 func ServiceGetBlockBodiesQuery(chain *core.BlockChain, query GetBlockBodiesRequest) []rlp.RawValue {
@@ -297,29 +279,7 @@ func serviceGetBlockBodiesQuery(chain *core.BlockChain, query GetBlockBodiesRequ
 			break
 		}
 
-		if data := chain.GetBodyRLP(hash); len(data) != 0 {
-			bodies = append(bodies, data)
-			if served != nil {
-				served(hash, len(data))
-			}
-			bytes += len(data)
-			continue
-		}
-		// Empty-body blocks such as genesis may not have a persisted body RLP entry,
-		// but they should still produce a network response body.
-		if header := chain.GetHeaderByHash(hash); header != nil && header.EmptyBody() {
-			body := &BlockBody{
-				Transactions: []*types.Transaction{},
-				Uncles:       []*types.Header{},
-			}
-			if header.WithdrawalsHash != nil {
-				body.Withdrawals = []*types.Withdrawal{}
-			}
-			data, err := rlp.EncodeToBytes(body)
-			if err != nil {
-				log.Error("Failed to encode empty block body", "hash", hash, "err", err)
-				continue
-			}
+		if data := blockBodyRLP(chain, hash); len(data) != 0 {
 			bodies = append(bodies, data)
 			if served != nil {
 				served(hash, len(data))
@@ -331,6 +291,27 @@ func serviceGetBlockBodiesQuery(chain *core.BlockChain, query GetBlockBodiesRequ
 	return bodies
 }
 
+func blockBodyRLP(chain *core.BlockChain, hash common.Hash) rlp.RawValue {
+	if data := chain.GetBodyRLP(hash); len(data) != 0 {
+		return data
+	}
+	// Empty-body blocks such as genesis may lack a persisted body RLP entry.
+	header := chain.GetHeaderByHash(hash)
+	if header == nil || !header.EmptyBody() {
+		return nil
+	}
+	body := &BlockBody{Transactions: []*types.Transaction{}, Uncles: []*types.Header{}}
+	if header.WithdrawalsHash != nil {
+		body.Withdrawals = []*types.Withdrawal{}
+	}
+	data, err := rlp.EncodeToBytes(body)
+	if err != nil {
+		log.Error("Failed to encode empty block body", "hash", hash, "err", err)
+		return nil
+	}
+	return data
+}
+
 func handleGetReceipts68(backend Backend, msg Decoder, peer *Peer) error {
 	// Decode the block receipts retrieval message
 	var query GetReceiptsPacket
@@ -338,7 +319,7 @@ func handleGetReceipts68(backend Backend, msg Decoder, peer *Peer) error {
 		return err
 	}
 
-	response, served := serveHeavyResponseQuery(func() []rlp.RawValue {
+	response, served := serveHeavyResponseQuery(peer, func() []rlp.RawValue {
 		return ServiceGetReceiptsQuery68(backend.Chain(), query.GetReceiptsRequest)
 	})
 	if !served {
@@ -354,7 +335,7 @@ func handleGetReceipts69(backend Backend, msg Decoder, peer *Peer) error {
 		return err
 	}
 
-	response, served := serveHeavyResponseQuery(func() []rlp.RawValue {
+	response, served := serveHeavyResponseQuery(peer, func() []rlp.RawValue {
 		return ServiceGetReceiptsQuery69(backend.Chain(), query.GetReceiptsRequest)
 	})
 	if !served {
@@ -537,7 +518,6 @@ func handleNewBlockhashes(backend Backend, msg Decoder, peer *Peer) error {
 	if err := msg.Decode(ann); err != nil {
 		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
 	}
-	peer.Log().Trace("Observed block announcements", "count", len(*ann))
 	observeBlockAnnouncements(msg, *ann)
 	if err := peer.checkAnnouncementRate(len(*ann), time.Now()); err != nil {
 		observeInvalid(msg, peerpolicy.RateLimited)
@@ -748,7 +728,6 @@ func handleNewPooledTransactionHashes(backend Backend, msg Decoder, peer *Peer) 
 		observeInvalid(msg, peerpolicy.InvalidEncoding)
 		return fmt.Errorf("NewPooledTransactionHashes: invalid len of fields in %v %v %v", len(ann.Hashes), len(ann.Types), len(ann.Sizes))
 	}
-	peer.Log().Trace("Observed transaction announcements", "count", len(ann.Hashes))
 	observeAnnouncements(msg, ann.Hashes)
 	// Schedule all the unknown hashes for retrieval
 	for _, hash := range ann.Hashes {

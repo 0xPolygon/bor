@@ -71,7 +71,7 @@ func TestBulkSessionChannelWaitersAndLimits(t *testing.T) {
 	session.removeWaiter("eth-bulk", first)
 	require.Equal(t, []chan bulkChannelResult{second}, session.waiters["eth-bulk"])
 	rw := &closeTrackingRW{closed: make(chan struct{})}
-	require.NoError(t, session.storeChannel(nil, "eth-bulk", rw))
+	require.NoError(t, session.storeChannel(nil, "eth-bulk", rw, true))
 	result := <-second
 	require.NoError(t, result.err)
 	require.Same(t, rw, result.rw)
@@ -81,9 +81,9 @@ func TestBulkSessionChannelWaitersAndLimits(t *testing.T) {
 	require.NoError(t, err)
 	require.Same(t, rw, got)
 	for channel := range bulkChannels {
-		require.NoError(t, session.storeChannel(nil, channel, &closeTrackingRW{closed: make(chan struct{})}))
+		require.NoError(t, session.storeChannel(nil, channel, &closeTrackingRW{closed: make(chan struct{})}, true))
 	}
-	require.ErrorIs(t, session.storeChannel(nil, "extra", rw), errBulkChannelLimit)
+	require.ErrorIs(t, session.storeChannel(nil, "extra", rw, true), errBulkChannelLimit)
 	require.Len(t, session.channels, maxBulkChannelsPerSession)
 }
 
@@ -95,7 +95,7 @@ func TestBulkSessionReplacementCloseError(t *testing.T) {
 	session := newHelloTestSession()
 	session.channels["eth-bulk"] = &bulkCloseErrorRW{}
 	next := &closeTrackingRW{}
-	require.NoError(t, session.storeChannel(nil, "eth-bulk", next))
+	require.NoError(t, session.storeChannel(nil, "eth-bulk", next, true))
 	got, ok := session.getChannel("eth-bulk")
 	require.True(t, ok)
 	require.Same(t, next, got)

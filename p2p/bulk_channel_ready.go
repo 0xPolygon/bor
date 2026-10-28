@@ -43,6 +43,10 @@ func (s *bulkSession) acknowledgeChannel(conn *quic.Conn, rw *bulkStreamMsgRW, h
 	if conn != nil {
 		closed = conn.Context().Done()
 	}
+	var abandoned <-chan struct{}
+	if stream, ok := rw.stream.(interface{ Context() context.Context }); ok {
+		abandoned = stream.Context().Done()
+	}
 	select {
 	case <-rw.ready.claimed:
 		if err := writeBulkControl(rw.stream, hello); err != nil {
@@ -51,6 +55,8 @@ func (s *bulkSession) acknowledgeChannel(conn *quic.Conn, rw *bulkStreamMsgRW, h
 		return nil
 	case <-timer.C:
 		return errBulkChannelTimeout
+	case <-abandoned:
+		return errBulkChannelAbandoned
 	case <-closed:
 		return io.EOF
 	case <-s.sidecar.closeCh:
