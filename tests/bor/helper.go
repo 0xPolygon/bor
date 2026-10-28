@@ -146,6 +146,9 @@ func buildEthereumInstanceWithConfig(t *testing.T, db ethdb.Database, ethConf et
 	ethConf.Genesis = gen
 	ethConf.BorLogs = true
 	ethConf.StateScheme = "hash"
+	if ethConf.HeimdallURL == "" {
+		ethConf.HeimdallURL = utils.HeimdallURLFlag.Value
+	}
 	ethConf.Genesis.MustCommit(db, triedb.NewDatabase(db, triedb.HashDefaults))
 
 	ethereum := utils.CreateBorEthereum(&ethConf)

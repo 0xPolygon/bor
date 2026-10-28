@@ -278,7 +278,7 @@ func serviceGetBlockBodiesQuery(chain *core.BlockChain, query GetBlockBodiesRequ
 			break
 		}
 
-		if data := chain.GetBodyRLP(hash); len(data) != 0 {
+		if data := blockBodyRLP(chain, hash); len(data) != 0 {
 			bodies = append(bodies, data)
 			if served != nil {
 				served(hash, len(data))
@@ -290,13 +290,40 @@ func serviceGetBlockBodiesQuery(chain *core.BlockChain, query GetBlockBodiesRequ
 	return bodies
 }
 
+func blockBodyRLP(chain *core.BlockChain, hash common.Hash) rlp.RawValue {
+	if data := chain.GetBodyRLP(hash); len(data) != 0 {
+		return data
+	}
+	// Empty-body blocks such as genesis may lack a persisted body RLP entry.
+	header := chain.GetHeaderByHash(hash)
+	if header == nil || !header.EmptyBody() {
+		return nil
+	}
+	body := &BlockBody{Transactions: []*types.Transaction{}, Uncles: []*types.Header{}}
+	if header.WithdrawalsHash != nil {
+		body.Withdrawals = []*types.Withdrawal{}
+	}
+	data, err := rlp.EncodeToBytes(body)
+	if err != nil {
+		log.Error("Failed to encode empty block body", "hash", hash, "err", err)
+		return nil
+	}
+	return data
+}
+
 func handleGetReceipts68(backend Backend, msg Decoder, peer *Peer) error {
 	// Decode the block receipts retrieval message
 	var query GetReceiptsPacket
 	if err := msg.Decode(&query); err != nil {
 		return err
 	}
-	response := ServiceGetReceiptsQuery68(backend.Chain(), query.GetReceiptsRequest)
+
+	response, served := serveHeavyResponseQuery(peer, func() []rlp.RawValue {
+		return ServiceGetReceiptsQuery68(backend.Chain(), query.GetReceiptsRequest)
+	})
+	if !served {
+		return nil
+	}
 	return peer.ReplyReceiptsRLP(query.RequestId, response)
 }
 
@@ -306,7 +333,13 @@ func handleGetReceipts69(backend Backend, msg Decoder, peer *Peer) error {
 	if err := msg.Decode(&query); err != nil {
 		return err
 	}
-	response := ServiceGetReceiptsQuery69(backend.Chain(), query.GetReceiptsRequest)
+
+	response, served := serveHeavyResponseQuery(peer, func() []rlp.RawValue {
+		return ServiceGetReceiptsQuery69(backend.Chain(), query.GetReceiptsRequest)
+	})
+	if !served {
+		return nil
+	}
 	return peer.ReplyReceiptsRLP(query.RequestId, response)
 }
 
@@ -489,6 +522,7 @@ func handleNewBlockhashes(backend Backend, msg Decoder, peer *Peer) error {
 		observeInvalid(msg, peerpolicy.RateLimited)
 		return err
 	}
+	peer.Log().Trace("Observed block announcements", "count", len(*ann))
 	// Mark the hashes as present at the remote node
 	for _, block := range *ann {
 		peer.markBlock(block.Hash)
@@ -694,6 +728,7 @@ func handleNewPooledTransactionHashes(backend Backend, msg Decoder, peer *Peer) 
 		observeInvalid(msg, peerpolicy.InvalidEncoding)
 		return fmt.Errorf("NewPooledTransactionHashes: invalid len of fields in %v %v %v", len(ann.Hashes), len(ann.Types), len(ann.Sizes))
 	}
+	peer.Log().Trace("Observed transaction announcements", "count", len(ann.Hashes))
 	observeAnnouncements(msg, ann.Hashes)
 	// Schedule all the unknown hashes for retrieval
 	for _, hash := range ann.Hashes {

@@ -34,6 +34,6 @@ WORKDIR ${BOR_DIR}
 
 COPY --from=builder ${BOR_DIR}/build/bin/bor /usr/bin/
 
-EXPOSE 8545 8546 8547 30303 30303/udp
+EXPOSE 8545 8546 8547 30303 30303/udp 30304/udp
 
 ENTRYPOINT ["bor"]

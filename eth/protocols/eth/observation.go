@@ -141,16 +141,26 @@ func (p *Peer) observeReplyRefusal(err error, hashes []common.Hash) {
 
 func observedBodyReply(backend Backend, peer *Peer, query GetBlockBodiesPacket) error {
 	if peer.observer == nil {
-		response := ServiceGetBlockBodiesQuery(backend.Chain(), query.GetBlockBodiesRequest)
+		response, served := serveHeavyResponseQuery(peer, func() []rlp.RawValue {
+			return ServiceGetBlockBodiesQuery(backend.Chain(), query.GetBlockBodiesRequest)
+		})
+		if !served {
+			return nil
+		}
 		return peer.ReplyBlockBodiesRLP(query.RequestId, response)
 	}
 	event := peerpolicy.Evidence{Family: peerpolicy.BodyReplies}
-	response := serviceGetBlockBodiesQuery(backend.Chain(), query.GetBlockBodiesRequest, func(hash common.Hash, size int) {
-		event.Items++
-		event.Bytes += uint64(size)
-		event.Hashes = append(event.Hashes, hash)
-		event.ObjectBytes = append(event.ObjectBytes, uint64(size))
+	response, served := serveHeavyResponseQuery(peer, func() []rlp.RawValue {
+		return serviceGetBlockBodiesQuery(backend.Chain(), query.GetBlockBodiesRequest, func(hash common.Hash, size int) {
+			event.Items++
+			event.Bytes += uint64(size)
+			event.Hashes = append(event.Hashes, hash)
+			event.ObjectBytes = append(event.ObjectBytes, uint64(size))
+		})
 	})
+	if !served {
+		return nil
+	}
 	return peer.writeObservedBodies(query.RequestId, response, event)
 }
 

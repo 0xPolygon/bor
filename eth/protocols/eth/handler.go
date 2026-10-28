@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"runtime"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -53,7 +54,24 @@ const (
 	// be softResponseLimit.
 	maxReceiptsServe  = 1024
 	maxPooledTxsServe = 256
+
+	// maxHeavyResponseWorkers bounds concurrent large body/receipt lookups so a
+	// burst of expensive requests can't monopolize handler resources.
+	maxHeavyResponseWorkers = 4
 )
+
+var heavyResponseServeSlots = make(chan struct{}, heavyResponseWorkerLimit())
+
+func heavyResponseWorkerLimit() int {
+	limit := runtime.GOMAXPROCS(0)
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > maxHeavyResponseWorkers {
+		limit = maxHeavyResponseWorkers
+	}
+	return limit
+}
 
 // Handler is a callback to invoke from an outside runner after the boilerplate
 // exchanges have passed.

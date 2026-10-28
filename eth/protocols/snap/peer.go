@@ -22,6 +22,13 @@ import (
 	"github.com/ethereum/go-ethereum/p2p"
 )
 
+const (
+	snapAccountsChannel = "snap-accounts"
+	snapStorageChannel  = "snap-storage"
+	snapCodeChannel     = "snap-code"
+	snapTrieChannel     = "snap-trie"
+)
+
 // Peer is a collection of relevant information we have about a `snap` peer.
 type Peer struct {
 	id string // Unique ID for the peer, cached
@@ -37,11 +44,12 @@ type Peer struct {
 // version.
 func NewPeer(version uint, p *p2p.Peer, rw p2p.MsgReadWriter) *Peer {
 	id := p.ID().String()
+	routed := p2p.NewMultiChannelRoutedMsgReadWriter(rw, snapSidecarChannelForMsg)
 
 	return &Peer{
 		id:      id,
 		Peer:    p,
-		rw:      rw,
+		rw:      routed,
 		version: version,
 		logger:  log.New("peer", id[:8]),
 	}
@@ -51,7 +59,7 @@ func NewPeer(version uint, p *p2p.Peer, rw p2p.MsgReadWriter) *Peer {
 func NewFakePeer(version uint, id string, rw p2p.MsgReadWriter) *Peer {
 	return &Peer{
 		id:      id,
-		rw:      rw,
+		rw:      p2p.NewMultiChannelRoutedMsgReadWriter(rw, snapSidecarChannelForMsg),
 		version: version,
 		logger:  log.New("peer", id[:8]),
 	}
@@ -70,6 +78,55 @@ func (p *Peer) Version() uint {
 // Log overrides the P2P logger with the higher level one containing only the id.
 func (p *Peer) Log() log.Logger {
 	return p.logger
+}
+
+// bulkAttacher updates lane state without replacing the protocol's reader.
+type bulkAttacher interface {
+	AttachBulkChannel(string, p2p.MsgReadWriter)
+	AttachBulkChannels([]string, p2p.MsgReadWriter)
+	HasBulk() bool
+}
+
+// AttachBulkRW installs an auxiliary sidecar lane for the negotiated snap
+// protocol. When unavailable, traffic falls back to the primary devp2p lane.
+func (p *Peer) AttachBulkRW(rw p2p.MsgReadWriter) {
+	if routed, ok := p.rw.(bulkAttacher); ok {
+		routed.AttachBulkChannels([]string{
+			snapAccountsChannel, snapStorageChannel, snapCodeChannel, snapTrieChannel,
+		}, rw)
+	}
+}
+
+// AttachBulkChannelRW installs an auxiliary sidecar lane for a specific snap
+// traffic class. When unavailable, traffic falls back to the primary devp2p lane.
+func (p *Peer) AttachBulkChannelRW(channel string, rw p2p.MsgReadWriter) {
+	if routed, ok := p.rw.(bulkAttacher); ok {
+		routed.AttachBulkChannel(channel, rw)
+	}
+}
+
+func (p *Peer) HasBulkRW() bool {
+	routed, ok := p.rw.(bulkAttacher)
+	return ok && routed.HasBulk()
+}
+
+func snapSidecarChannelForMsg(code uint64) string {
+	switch code {
+	case GetAccountRangeMsg,
+		AccountRangeMsg:
+		return snapAccountsChannel
+	case GetStorageRangesMsg,
+		StorageRangesMsg:
+		return snapStorageChannel
+	case GetByteCodesMsg,
+		ByteCodesMsg:
+		return snapCodeChannel
+	case GetTrieNodesMsg,
+		TrieNodesMsg:
+		return snapTrieChannel
+	default:
+		return ""
+	}
 }
 
 // RequestAccountRange fetches a batch of accounts rooted in a specific account

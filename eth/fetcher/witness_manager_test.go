@@ -2326,6 +2326,53 @@ func TestFetchWitnessOtherErrorKeepsPending(t *testing.T) {
 	}
 }
 
+func TestFetchWitnessNilRequestKeepsPending(t *testing.T) {
+	quit := make(chan struct{})
+	defer close(quit)
+
+	dropPeer := peerDropFn(func(id string) {})
+	enqueueCh := make(chan *enqueueRequest, 10)
+	getBlock := blockRetrievalFn(func(hash common.Hash) *types.Block { return nil })
+	getHeader := HeaderRetrievalFn(func(hash common.Hash) *types.Header { return nil })
+	chainHeight := chainHeightFn(func() uint64 { return 100 })
+
+	manager := newWitnessManager(
+		quit, dropPeer, enqueueCh,
+		getBlock, getHeader, chainHeight, nil, nil, nil, 0,
+	)
+
+	hash := common.HexToHash("0xcafe")
+	peer := "test-peer"
+
+	manager.mu.Lock()
+	manager.pending[hash] = &witnessRequestState{
+		op: &blockOrHeaderInject{origin: peer},
+		announce: &blockAnnounce{
+			origin: peer,
+			hash:   hash,
+			number: 101,
+			time:   time.Now(),
+		},
+	}
+	manager.mu.Unlock()
+
+	announce := &blockAnnounce{
+		origin: peer,
+		hash:   hash,
+		number: 101,
+		time:   time.Now(),
+		fetchWitness: func(common.Hash, chan *eth.Response) (*eth.Request, error) {
+			return nil, nil
+		},
+	}
+
+	manager.fetchWitness(peer, hash, announce)
+
+	if !manager.isPending(hash) {
+		t.Error("pending entry was removed on nil request; expected it to be retained for retry")
+	}
+}
+
 // newWitnessManagerForTest returns a minimal witness manager wired up for
 // tests that directly invoke individual methods. The returned channel can
 // be read from to observe enqueued ops.

@@ -18,6 +18,7 @@ package eth
 
 import (
 	"cmp"
+	"context"
 	crand "crypto/rand"
 	"errors"
 	"maps"
@@ -529,6 +530,7 @@ func (h *handler) runEthPeer(peer *eth.Peer, handler eth.Handler) error {
 	// contribution session. Install observation only after admission succeeds.
 	h.observeProtocolPeer(peer)
 	h.observeWitnessPeer(wit)
+	h.attachBulkSidecar(peer, snap, wit)
 	h.chainSync.handlePeerEvent()
 
 	// Bor: skip propagating transactions if flag is set
@@ -631,6 +633,25 @@ func (h *handler) runWitExtension(peer *wit.Peer, handler wit.Handler) error {
 	}
 
 	return handler(peer)
+}
+
+func (h *handler) attachBulkSidecar(peer *eth.Peer, snapPeer *snap.Peer, witPeer *wit.Peer) {
+	if h.p2pServer == nil || h.p2pServer.BulkSidecar() == nil {
+		return
+	}
+	sidecar := h.p2pServer.BulkSidecar()
+	go func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go func() {
+			select {
+			case <-peer.Peer.Done():
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+		attachBulkProtocols(ctx, sidecar, peer, snapPeer, witPeer)
+	}()
 }
 
 // jailPeer jails a peer to prevent reconnection for a period of time
