@@ -385,7 +385,7 @@ func TestCollectIdlePeersWithinGraceKeepsWaiting(t *testing.T) {
 	}
 }
 
-func TestGradeStalePeerClearsEntryAndStrikesOnce(t *testing.T) {
+func TestGradeStalePeerClearsEntryWithoutStrikes(t *testing.T) {
 	t.Parallel()
 
 	d := &Downloader{peers: newPeerSet(), dropPeer: func(string) {}}
@@ -402,8 +402,8 @@ func TestGradeStalePeerClearsEntryAndStrikesOnce(t *testing.T) {
 	if _, ok := stales["peer"]; ok {
 		t.Fatal("a graded stale entry must be removed so an expired backoff does not re-grade the same timeout")
 	}
-	if got := softStrikeTally(d.peers, "peer"); got != 1 {
-		t.Fatalf("grading a stale entry once should record exactly one soft strike, have %d", got)
+	if got := softStrikeTally(d.peers, "peer"); got != 0 {
+		t.Fatalf("grading a stale timeout should not record soft strikes, have %d", got)
 	}
 	if !pc.backedOff() {
 		t.Fatal("a graded staller should be benched")
@@ -414,8 +414,8 @@ func TestGradeStalePeerClearsEntryAndStrikesOnce(t *testing.T) {
 	pc.lock.Unlock()
 
 	d.classifyPeer(queue, pc, nil, stales)
-	if got := softStrikeTally(d.peers, "peer"); got != 1 {
-		t.Fatalf("a peer with no outstanding stale entry must not accrue a second strike, have %d", got)
+	if got := softStrikeTally(d.peers, "peer"); got != 0 {
+		t.Fatalf("a peer with no outstanding stale entry must not accrue a strike, have %d", got)
 	}
 }
 

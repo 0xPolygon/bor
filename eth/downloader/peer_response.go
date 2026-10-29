@@ -192,7 +192,7 @@ func (d *Downloader) jailPeer(peer *peerConnection, backoff time.Duration, reaso
 }
 
 func (d *Downloader) backoffPeer(peer *peerConnection, decision peerResponseDecision, err error) {
-	penalized, jailed := d.peers.backoffSoftFailure(peer)
+	penalized, jailed := d.peers.backoffSoftFailure(peer, decision.reason)
 	if !penalized {
 		return
 	}
