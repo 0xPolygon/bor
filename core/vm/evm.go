@@ -19,7 +19,6 @@ package vm
 import (
 	"errors"
 	"math/big"
-	"sync"
 	"sync/atomic"
 
 	"github.com/holiman/uint256"
@@ -66,7 +65,7 @@ func (evm *EVM) runPrecompile(p PrecompiledContract, addr common.Address, input 
 // runEcrecoverWithCache handles the cached fast path for the ecrecover
 // precompile: input ≤ 128 bytes, cache present. Falls back to running the
 // precompile when the cache misses, then stores a successful result.
-func (evm *EVM) runEcrecoverWithCache(p PrecompiledContract, input []byte, gas uint64, cache *sync.Map) ([]byte, uint64, error) {
+func (evm *EVM) runEcrecoverWithCache(p PrecompiledContract, input []byte, gas uint64, cache *EcrecoverCache) ([]byte, uint64, error) {
 	// key is zero-initialised; copy fills the prefix and leaves the rest
 	// as zeros, which matches RightPadBytes(input, 128) without the
 	// extra heap allocation. Caller already enforced len(input) <= 128.
@@ -79,10 +78,7 @@ func (evm *EVM) runEcrecoverWithCache(p PrecompiledContract, input []byte, gas u
 		}
 		evm.traceGasChange(gas, gas-gasCost)
 		gas -= gasCost
-		if cached == nil {
-			return nil, gas, nil
-		}
-		return cached.([]byte), gas, nil
+		return cached, gas, nil
 	}
 	ret, remainingGas, err := RunPrecompiledContract(p, input, gas, evm.Config.Tracer)
 	if err == nil {

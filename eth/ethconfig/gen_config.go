@@ -20,6 +20,8 @@ import (
 // MarshalTOML marshals as TOML.
 func (c Config) MarshalTOML() (interface{}, error) {
 	type Config struct {
+		PeerReputation                       bool
+		PeerReputationPerPeerMetrics         bool
 		Genesis                              *core.Genesis `toml:",omitempty"`
 		NetworkId                            uint64
 		SyncMode                             downloader.SyncMode
@@ -56,6 +58,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		LogQueryLimit                        int
 		AddressCacheSizes                    map[common.Address]int
 		PreloadRateLimit                     int64
+		AddressCachePersist                  bool
 		Miner                                miner.Config
 		TxPool                               legacypool.Config
 		BlobPool                             blobpool.Config
@@ -100,6 +103,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		DisableBlindForkValidation           bool
 		MaxBlindForkValidationLimit          uint64
 		TxSyncDefaultTimeout                 time.Duration `toml:",omitempty"`
+		TxSyncMaxConcurrent                  int           `toml:",omitempty"`
 		TxSyncMaxTimeout                     time.Duration `toml:",omitempty"`
 		EnablePreconfs                       bool
 		EnablePrivateTx                      bool
@@ -108,6 +112,8 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		AcceptPrivateTx                      bool
 	}
 	var enc Config
+	enc.PeerReputation = c.PeerReputation
+	enc.PeerReputationPerPeerMetrics = c.PeerReputationPerPeerMetrics
 	enc.Genesis = c.Genesis
 	enc.NetworkId = c.NetworkId
 	enc.SyncMode = c.SyncMode
@@ -144,6 +150,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.LogQueryLimit = c.LogQueryLimit
 	enc.AddressCacheSizes = c.AddressCacheSizes
 	enc.PreloadRateLimit = c.PreloadRateLimit
+	enc.AddressCachePersist = c.AddressCachePersist
 	enc.Miner = c.Miner
 	enc.TxPool = c.TxPool
 	enc.BlobPool = c.BlobPool
@@ -188,6 +195,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.DisableBlindForkValidation = c.DisableBlindForkValidation
 	enc.MaxBlindForkValidationLimit = c.MaxBlindForkValidationLimit
 	enc.TxSyncDefaultTimeout = c.TxSyncDefaultTimeout
+	enc.TxSyncMaxConcurrent = c.TxSyncMaxConcurrent
 	enc.TxSyncMaxTimeout = c.TxSyncMaxTimeout
 	enc.EnablePreconfs = c.EnablePreconfs
 	enc.EnablePrivateTx = c.EnablePrivateTx
@@ -200,6 +208,8 @@ func (c Config) MarshalTOML() (interface{}, error) {
 // UnmarshalTOML unmarshals from TOML.
 func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	type Config struct {
+		PeerReputation                       *bool
+		PeerReputationPerPeerMetrics         *bool
 		Genesis                              *core.Genesis `toml:",omitempty"`
 		NetworkId                            *uint64
 		SyncMode                             *downloader.SyncMode
@@ -236,6 +246,7 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		LogQueryLimit                        *int
 		AddressCacheSizes                    map[common.Address]int
 		PreloadRateLimit                     *int64
+		AddressCachePersist                  *bool
 		Miner                                *miner.Config
 		TxPool                               *legacypool.Config
 		BlobPool                             *blobpool.Config
@@ -280,6 +291,7 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		DisableBlindForkValidation           *bool
 		MaxBlindForkValidationLimit          *uint64
 		TxSyncDefaultTimeout                 *time.Duration `toml:",omitempty"`
+		TxSyncMaxConcurrent                  *int           `toml:",omitempty"`
 		TxSyncMaxTimeout                     *time.Duration `toml:",omitempty"`
 		EnablePreconfs                       *bool
 		EnablePrivateTx                      *bool
@@ -290,6 +302,12 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	var dec Config
 	if err := unmarshal(&dec); err != nil {
 		return err
+	}
+	if dec.PeerReputation != nil {
+		c.PeerReputation = *dec.PeerReputation
+	}
+	if dec.PeerReputationPerPeerMetrics != nil {
+		c.PeerReputationPerPeerMetrics = *dec.PeerReputationPerPeerMetrics
 	}
 	if dec.Genesis != nil {
 		c.Genesis = dec.Genesis
@@ -398,6 +416,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.PreloadRateLimit != nil {
 		c.PreloadRateLimit = *dec.PreloadRateLimit
+	}
+	if dec.AddressCachePersist != nil {
+		c.AddressCachePersist = *dec.AddressCachePersist
 	}
 	if dec.Miner != nil {
 		c.Miner = *dec.Miner
@@ -530,6 +551,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.TxSyncDefaultTimeout != nil {
 		c.TxSyncDefaultTimeout = *dec.TxSyncDefaultTimeout
+	}
+	if dec.TxSyncMaxConcurrent != nil {
+		c.TxSyncMaxConcurrent = *dec.TxSyncMaxConcurrent
 	}
 	if dec.TxSyncMaxTimeout != nil {
 		c.TxSyncMaxTimeout = *dec.TxSyncMaxTimeout

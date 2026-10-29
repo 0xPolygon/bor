@@ -37,6 +37,16 @@ func (cm *ClosableMutex) TryLock() bool {
 	return ok
 }
 
+// TryLockNow locks cm without blocking. It returns false if cm is held or closed.
+func (cm *ClosableMutex) TryLockNow() bool {
+	select {
+	case _, ok := <-cm.ch:
+		return ok
+	default:
+		return false
+	}
+}
+
 // MustLock locks cm.
 // If the mutex is closed, MustLock panics.
 func (cm *ClosableMutex) MustLock() {

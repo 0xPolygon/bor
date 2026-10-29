@@ -18,6 +18,7 @@
 package downloader
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math/big"
@@ -30,6 +31,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/checkpoint"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/state/snapshot"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -107,6 +109,9 @@ type headerTask struct {
 }
 
 type Downloader struct {
+	failureObserver         func(string)
+	invalidResponseObserver func(string)
+
 	mode atomic.Uint32  // Synchronisation mode defining the strategy used (per sync cycle), use d.getMode() to get the SyncMode
 	mux  *event.TypeMux // Event multiplexer to announce sync operation events
 
@@ -991,6 +996,8 @@ func (d *Downloader) fetchHead(p *peerConnection) (head *types.Header, pivot *ty
 		return nil, nil, err
 	}
 	// Make sure the peer gave us at least one and at most the requested headers
+	d.observeExcessHeaders(p.id, len(headers), fetch)
+
 	if len(headers) == 0 || len(headers) > fetch {
 		return nil, nil, fmt.Errorf("%w: returned headers %d != requested %d", errBadPeer, len(headers), fetch)
 	}
@@ -1011,6 +1018,7 @@ func (d *Downloader) fetchHead(p *peerConnection) (head *types.Header, pivot *ty
 	// validated head of the chain. Check the pivot number and return,
 	pivot = headers[1]
 	if pivot.Number.Uint64() != head.Number.Uint64()-uint64(fsMinFullBlocks) {
+		d.observeInvalidResponse(p.id, "pivot_number")
 		return nil, nil, fmt.Errorf("%w: remote pivot %d != requested %d", errInvalidChain, pivot.Number, head.Number.Uint64()-uint64(fsMinFullBlocks))
 	}
 
@@ -1205,6 +1213,8 @@ func (d *Downloader) findAncestorStatelessSearch(p *peerConnection, remoteHeight
 			expectNumber := from + int64(i)
 			if number := header.Number.Int64(); number != expectNumber {
 				p.log.Warn("Head headers broke chain ordering", "index", i, "requested", expectNumber, "received", number)
+				d.observeInvalidResponse(p.id, "header_ordering")
+
 				return 0, fmt.Errorf("%w: %v", errInvalidChain, errors.New("head headers broke chain ordering"))
 			}
 		}
@@ -1249,6 +1259,8 @@ func (d *Downloader) findAncestorSpanSearch(p *peerConnection, mode SyncMode, re
 		expectNumber := from + int64(i)*int64(skip+1)
 		if number := header.Number.Int64(); number != expectNumber {
 			p.log.Warn("Head headers broke chain ordering", "index", i, "requested", expectNumber, "received", number)
+			d.observeInvalidResponse(p.id, "header_ordering")
+
 			return 0, fmt.Errorf("%w: %v", errInvalidChain, errors.New("head headers broke chain ordering"))
 		}
 	}
@@ -1315,6 +1327,8 @@ func (d *Downloader) findAncestorBinarySearch(p *peerConnection, mode SyncMode, 
 		// Make sure the peer actually gave something valid
 		if len(headers) != 1 {
 			p.log.Warn("Multiple headers for single request", "headers", len(headers))
+			d.observeExcessHeaders(p.id, len(headers), 1)
+
 			return 0, fmt.Errorf("%w: multiple headers (%d) for single request", errBadPeer, len(headers))
 		}
 		// Modify the search interval based on the response
@@ -1340,6 +1354,8 @@ func (d *Downloader) findAncestorBinarySearch(p *peerConnection, mode SyncMode, 
 		header := d.lightchain.GetHeaderByHash(h) // Independent of sync mode, header surely exists
 		if header.Number.Uint64() != check {
 			p.log.Warn("Received non requested header", "number", header.Number, "hash", header.Hash(), "request", check)
+			d.observeInvalidResponse(p.id, "header_number")
+
 			return 0, fmt.Errorf("%w: non-requested header (%d)", errBadPeer, header.Number)
 		}
 
@@ -1374,6 +1390,8 @@ func (d *Downloader) fetchHeaders(p *peerConnection, from uint64, head uint64) e
 		skeleton = true  // Skeleton assembly phase or finishing up
 		pivoting = false // Whether the next request is pivot verification
 		ancestor = from
+		// Keep request-time provenance if the local pivot moves during the fetch.
+		requestPivot uint64
 	)
 
 	for {
@@ -1392,6 +1410,8 @@ func (d *Downloader) fetchHeaders(p *peerConnection, from uint64, head uint64) e
 			d.pivotLock.RLock()
 			pivot := d.pivotHeader.Number.Uint64()
 			d.pivotLock.RUnlock()
+
+			requestPivot = pivot
 
 			p.log.Trace("Fetching next pivot header", "number", pivot+uint64(fsMinFullBlocks))
 			headers, hashes, err = d.fetchHeadersByNumber(p, pivot+uint64(fsMinFullBlocks), 2, fsMinFullBlocks-9, false) // move +64 when it's 2x64-8 deep
@@ -1447,14 +1467,8 @@ func (d *Downloader) fetchHeaders(p *peerConnection, from uint64, head uint64) e
 
 		if pivoting {
 			if len(headers) == 2 {
-				if have, want := headers[0].Number.Uint64(), pivot+uint64(fsMinFullBlocks); have != want {
-					log.Warn("Peer sent invalid next pivot", "have", have, "want", want)
-					return fmt.Errorf("%w: next pivot number %d != requested %d", errInvalidChain, have, want)
-				}
-
-				if have, want := headers[1].Number.Uint64(), pivot+2*uint64(fsMinFullBlocks)-8; have != want {
-					log.Warn("Peer sent invalid pivot confirmer", "have", have, "want", want)
-					return fmt.Errorf("%w: next pivot confirmer number %d != requested %d", errInvalidChain, have, want)
+				if err := d.verifyNextPivot(p, headers, requestPivot, pivot); err != nil {
+					return err
 				}
 
 				log.Warn("Pivot seemingly stale, moving", "old", pivot, "new", headers[0].Number)
@@ -2390,13 +2404,117 @@ func (d *Downloader) importBlockResultsStateless(results []*fetchResult) error {
 	if d.chainInsertHook != nil {
 		d.chainInsertHook(results)
 	}
-	// Import the batch of blocks
-	if index, err := d.blockchain.InsertChainStateless(blocks, witnesses); err != nil {
+	// Import the batch of blocks. A stateless node reads contract code from
+	// local disk (WIT2 witnesses carry no code); if a witness-verified block
+	// referenced a contract whose bytecode was momentarily absent, the import
+	// fails with a recoverable *state.MissingCodeError. Fetch exactly that
+	// content-addressed blob from a peer, persist it, and retry — bounded so a
+	// blob no peer can serve degrades to the existing safe failure rather than
+	// looping. A batch may reference more than one missing code, each surfacing
+	// on a successive attempt.
+	index, err := d.insertStatelessWithHeal(blocks, witnesses)
+	if err != nil {
+		// A cancel/terminate during the (network-bound) self-heal must surface as
+		// the corresponding lifecycle error, not a body error.
+		select {
+		case <-d.quitCh:
+			return errTerminated
+		case <-d.cancelCh:
+			return errCanceled
+		default:
+		}
 		log.Warn("Stateless block import failed", "index", index, "hash", blocks[index].Hash(), "err", err)
 		return errInvalidBody
 	}
 
 	return nil
+}
+
+// insertStatelessWithHeal imports the batch and, on a recoverable missing-code
+// failure, fetches the absent bytecode from a snap peer and retries — bounded by
+// maxStatelessCodeHeals. The heal is abortable through the downloader's
+// quit/cancel channels: stopping() ends the retry loop before the next attempt
+// and cancelOnStop aborts an in-flight fetch, so Cancel()/Terminate() is never
+// blocked for the full span of outstanding network timeouts (up to
+// maxStatelessCodeHeals * statelessCodeHealTimeout) as it would be otherwise.
+func (d *Downloader) insertStatelessWithHeal(blocks []*types.Block, witnesses []*stateless.Witness) (int, error) {
+	index, err := d.blockchain.InsertChainStateless(blocks, witnesses)
+	if err == nil {
+		return index, nil
+	}
+	healCtx, cancelHeal := context.WithCancel(context.Background())
+	defer cancelHeal()
+	go d.cancelOnStop(healCtx, cancelHeal)
+
+	for attempts := 0; attempts < maxStatelessCodeHeals && !d.stopping(); attempts++ {
+		if !d.recoverMissingStatelessCode(healCtx, err) {
+			break
+		}
+		if index, err = d.blockchain.InsertChainStateless(blocks, witnesses); err == nil {
+			break
+		}
+	}
+	return index, err
+}
+
+// stopping reports, without blocking, whether the downloader has been cancelled
+// or terminated.
+func (d *Downloader) stopping() bool {
+	select {
+	case <-d.quitCh:
+		return true
+	case <-d.cancelCh:
+		return true
+	default:
+		return false
+	}
+}
+
+// cancelOnStop cancels ctx as soon as the downloader is cancelled or terminated,
+// and returns once that happens or ctx is done by other means.
+func (d *Downloader) cancelOnStop(ctx context.Context, cancel context.CancelFunc) {
+	select {
+	case <-d.quitCh:
+	case <-d.cancelCh:
+	case <-ctx.Done():
+	}
+	cancel()
+}
+
+// maxStatelessCodeHeals bounds how many missing contract codes a single
+// stateless batch import will fetch-and-retry before giving up, so a blob no
+// peer can serve cannot spin the import forever.
+const maxStatelessCodeHeals = 8
+
+// statelessCodeHealTimeout bounds a single self-heal bytecode fetch.
+const statelessCodeHealTimeout = 30 * time.Second
+
+// recoverMissingStatelessCode attempts to self-heal a stateless import failure
+// caused by a contract whose bytecode is absent from local disk. If err carries
+// a *state.MissingCodeError, it fetches that content-addressed blob from a snap
+// peer, verifies it (FetchByteCodes checks the hash), and persists it to the
+// chain db so a retry can read it. It reports whether a retry is now warranted.
+// Any non-code failure, a missing SnapSyncer, or an unservable blob returns
+// false, leaving the caller's existing (safe) failure path intact. The fetch is
+// bounded by both statelessCodeHealTimeout and ctx, so a cancelled ctx (download
+// cancel/terminate) aborts it promptly instead of waiting out the timeout.
+func (d *Downloader) recoverMissingStatelessCode(ctx context.Context, err error) bool {
+	var mce *state.MissingCodeError
+	if !errors.As(err, &mce) || d.SnapSyncer == nil {
+		return false
+	}
+	fetchCtx, cancel := context.WithTimeout(ctx, statelessCodeHealTimeout)
+	defer cancel()
+
+	codes, ferr := d.SnapSyncer.FetchByteCodes(fetchCtx, []common.Hash{mce.Hash})
+	code, ok := codes[mce.Hash]
+	if !ok {
+		log.Warn("Stateless self-heal: missing bytecode not served by any peer", "hash", mce.Hash, "err", ferr)
+		return false
+	}
+	rawdb.WriteCode(d.stateDB, mce.Hash, code)
+	log.Info("Stateless self-heal: fetched and persisted missing contract code", "hash", mce.Hash, "size", len(code))
+	return true
 }
 
 // fetchWitnesses is a dedicated goroutine responsible for fetching block witnesses.

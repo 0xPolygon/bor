@@ -20,8 +20,8 @@ type exp struct {
 }
 
 func (exp *exp) expHandler(w http.ResponseWriter, r *http.Request) {
-	// load our variables into expvar
-	exp.syncToExpvar()
+	// Dynamic label sets belong to this registry and this scrape.
+	vectors := exp.syncToExpvar()
 
 	// now just run the official expvar handler code (which is not publicly callable, so pasted inline)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -30,6 +30,9 @@ func (exp *exp) expHandler(w http.ResponseWriter, r *http.Request) {
 	first := true
 
 	expvar.Do(func(kv expvar.KeyValue) {
+		if _, exists := vectors[kv.Key]; exists {
+			return
+		}
 		if !first {
 			fmt.Fprintf(w, ",\n")
 		}
@@ -38,6 +41,13 @@ func (exp *exp) expHandler(w http.ResponseWriter, r *http.Request) {
 
 		fmt.Fprintf(w, "%q: %s", kv.Key, kv.Value)
 	})
+	for name, vector := range vectors {
+		if !first {
+			fmt.Fprintf(w, ",\n")
+		}
+		first = false
+		fmt.Fprintf(w, "%q: %s", name, vector)
+	}
 	fmt.Fprintf(w, "\n}\n")
 }
 
@@ -135,12 +145,24 @@ func (exp *exp) publishGauge(name string, metric metrics.GaugeSnapshot) {
 	v := exp.getInt(name)
 	v.Set(metric.Value())
 }
+
 func (exp *exp) publishGaugeFloat64(name string, metric metrics.GaugeFloat64Snapshot) {
 	exp.getFloat(name).Set(metric.Value())
 }
 
 func (exp *exp) publishGaugeInfo(name string, metric metrics.GaugeInfoSnapshot) {
 	exp.getInfo(name).Set(metric.Value().String())
+}
+
+func snapshotGaugeVec(metric *metrics.GaugeVec) *expvar.Map {
+	// expvar cannot unpublish globals, so a vector must remain scrape-local.
+	v := new(expvar.Map).Init()
+	for label, value := range metric.Snapshot() {
+		n := new(expvar.Int)
+		n.Set(value)
+		v.Set(label, n)
+	}
+	return v
 }
 
 func (exp *exp) publishHistogram(name string, metric metrics.Histogram) {
@@ -197,7 +219,8 @@ func (exp *exp) publishResettingTimer(name string, metric *metrics.ResettingTime
 	exp.getFloat(name + ".99-percentile").Set(ps[3])
 }
 
-func (exp *exp) syncToExpvar() {
+func (exp *exp) syncToExpvar() map[string]*expvar.Map {
+	vectors := make(map[string]*expvar.Map)
 	exp.registry.Each(func(name string, i interface{}) {
 		switch i := i.(type) {
 		case *metrics.Counter:
@@ -208,6 +231,8 @@ func (exp *exp) syncToExpvar() {
 			exp.publishGauge(name, i.Snapshot())
 		case *metrics.GaugeFloat64:
 			exp.publishGaugeFloat64(name, i.Snapshot())
+		case *metrics.GaugeVec:
+			vectors[name] = snapshotGaugeVec(i)
 		case *metrics.GaugeInfo:
 			exp.publishGaugeInfo(name, i.Snapshot())
 		case metrics.Histogram:
@@ -222,4 +247,5 @@ func (exp *exp) syncToExpvar() {
 			panic(fmt.Sprintf("unsupported type for '%s': %T", name, i))
 		}
 	})
+	return vectors
 }

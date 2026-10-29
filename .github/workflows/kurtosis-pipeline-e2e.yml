@@ -90,7 +90,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: 0xPolygon/kurtosis-pos
-          ref: v1.4.3
+          ref: kamuikatsurgi/rio-at-genesis
           persist-credentials: false
 
       # The whole point of this leg: every bor node gets the pipeline flag.
@@ -148,12 +148,23 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: 0xPolygon/pos-workflows
-          ref: main
+          ref: kamuikatsurgi/rio-at-genesis
           path: pos-workflows
           persist-credentials: false
 
-      - name: Copy kurtosis config
-        run: cp ./pos-workflows/configs/kurtosis-pipeline-e2e.yml ./kurtosis-pipeline-e2e.yml
+      - name: Prepare kurtosis config with published release images
+        run: |
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          config = Path("pos-workflows/configs/kurtosis-pipeline-e2e.yml").read_text()
+          images = set(re.findall(r"(?m)^\s*el_image: (ghcr\.io/0xpolygon/bor:v\d+\.\d+\.\d+)\s*$", config))
+          if len(images) != 1:
+              raise SystemExit("Expected one pinned Bor release image in the pipeline config")
+          config = config.replace("el_image: 0xpolygon/bor:latest", "el_image: " + images.pop())
+          Path("kurtosis-pipeline-e2e.yml").write_text(config)
+          PY
 
       # Load images
       - name: Download bor docker image

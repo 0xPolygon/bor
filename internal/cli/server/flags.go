@@ -324,6 +324,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.TxPool.LifeTime,
 		Group:   "Transaction Pool",
 	})
+	f.DurationFlag(&flagset.DurationFlag{
+		Name:    "txpool.strandedlifetime",
+		Usage:   "Maximum amount of time a pending transaction can stay below the base fee before its account's pending transactions are evicted (0 disables)",
+		Value:   &c.cliConfig.TxPool.StrandedLifetime,
+		Default: c.cliConfig.TxPool.StrandedLifetime,
+		Group:   "Transaction Pool",
+	})
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "txpool.filtered-addresses",
 		Usage:   "Path to the file containing a newline-separated list of addresses whose transactions will be filtered",
@@ -626,6 +633,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.Cache.PreloadRateLimit,
 		Group:   "Cache",
 	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "cache.addresscachepersist",
+		Usage:   "Persist the address-specific caches to disk on shutdown and reload them on startup, skipping the preload walk",
+		Value:   &c.cliConfig.Cache.AddressCachePersist,
+		Default: c.cliConfig.Cache.AddressCachePersist,
+		Group:   "Cache",
+	})
 	f.Uint64Flag(&flagset.Uint64Flag{
 		Name:    "cache.triesinmemory",
 		Usage:   "Number of block states (tries) to keep in memory",
@@ -796,6 +810,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Usage:   "Maximum allowed timeout for eth_sendRawTransactionSync (e.g. 5m)",
 		Value:   &c.cliConfig.JsonRPC.TxSyncMaxTimeout,
 		Default: c.cliConfig.JsonRPC.TxSyncMaxTimeout,
+		Group:   "JsonRPC",
+	})
+	f.IntFlag(&flagset.IntFlag{
+		Name:    "rpc.txsync.maxconcurrent",
+		Usage:   "Maximum eth_sendRawTransactionSync calls waiting for a receipt at once (0 = no limit)",
+		Value:   &c.cliConfig.JsonRPC.TxSyncMaxConcurrent,
+		Default: c.cliConfig.JsonRPC.TxSyncMaxConcurrent,
 		Group:   "JsonRPC",
 	})
 	f.BoolFlag(&flagset.BoolFlag{
@@ -1002,6 +1023,7 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	})
 
 	// p2p options
+	c.peerReputationFlag(f)
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "bind",
 		Usage:   "Network binding address",
@@ -1473,5 +1495,41 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Group:   "P2P",
 	})
 
+	c.registerSequencerFlags(f)
+
 	return f
+}
+
+func (c *Command) registerSequencerFlags(f *flagset.Flagset) {
+	// An HCL/JSON config without a [sequencer] block decodes the field as
+	// nil (only TOML starts from DefaultConfig); register against the
+	// defaults so startup does not require the block to exist.
+	if c.cliConfig.Sequencer == nil {
+		c.cliConfig.Sequencer = DefaultConfig().Sequencer
+	}
+
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "sequencer.enabled",
+		Usage:   "Enable the sequence store integration (a mining node publishes the block lifecycle)",
+		Value:   &c.cliConfig.Sequencer.Enabled,
+		Default: c.cliConfig.Sequencer.Enabled,
+	})
+	f.StringFlag(&flagset.StringFlag{
+		Name:    "sequencer.publisher-endpoint",
+		Usage:   "Sequence store publisher service gRPC endpoint (publish stream)",
+		Value:   &c.cliConfig.Sequencer.PublisherEndpoint,
+		Default: c.cliConfig.Sequencer.PublisherEndpoint,
+	})
+	f.StringFlag(&flagset.StringFlag{
+		Name:    "sequencer.consumer-endpoint",
+		Usage:   "Sequence store consumer service gRPC endpoint (tail reads during reconciliation)",
+		Value:   &c.cliConfig.Sequencer.ConsumerEndpoint,
+		Default: c.cliConfig.Sequencer.ConsumerEndpoint,
+	})
+	f.DurationFlag(&flagset.DurationFlag{
+		Name:    "sequencer.poll",
+		Usage:   "Producer txpool poll cadence while a block is open (continuous building); 0 keeps the one-shot fill",
+		Value:   &c.cliConfig.Sequencer.Poll,
+		Default: c.cliConfig.Sequencer.Poll,
+	})
 }
