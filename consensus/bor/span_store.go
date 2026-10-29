@@ -32,6 +32,9 @@ type SpanStore struct {
 
 	latestSpanCache atomic.Pointer[borTypes.Span]
 	latestSpanAt    atomic.Int64 // unix nanos of the last latest-span fetch that succeeded
+	// latestSpanFetch serializes latest-span fetches, so a slow response can't
+	// overwrite a newer one fetched after it began.
+	latestSpanFetch chan struct{}
 
 	heimdallClient IHeimdallClient
 	spanner        Spanner
@@ -56,6 +59,7 @@ func NewSpanStore(heimdallClient IHeimdallClient, spanner Spanner, chainId strin
 		spanner:         spanner,
 		chainId:         chainId,
 		latestSpanCache: atomic.Pointer[borTypes.Span]{},
+		latestSpanFetch: make(chan struct{}, 1),
 		lastUsedSpan:    atomic.Pointer[borTypes.Span]{},
 	}
 	store.startPollLoop()
@@ -177,6 +181,13 @@ func (s *SpanStore) waitUntilHeimdallIsSynced(ctx context.Context) {
 func (s *SpanStore) updateLatestSpan(ctx context.Context) error {
 	if s.heimdallClient == nil {
 		return nil
+	}
+
+	select {
+	case s.latestSpanFetch <- struct{}{}:
+		defer func() { <-s.latestSpanFetch }()
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 
 	latestSpan, err := s.heimdallClient.GetLatestSpan(ctx)

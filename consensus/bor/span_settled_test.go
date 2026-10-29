@@ -1,8 +1,10 @@
 package bor
 
 import (
+	"context"
 	"errors"
 	"math/big"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -165,6 +167,99 @@ func TestRefreshAuthorizationAfterRotation(t *testing.T) {
 
 	require.NoError(t, b.RefreshAuthorization())
 	require.NoError(t, verdict())
+}
+
+// stallingLatestClient holds one latest-span answer, read before the call
+// stalls, until released.
+type stallingLatestClient struct {
+	*dynamicHeimdallClient
+	stall   atomic.Bool
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (c *stallingLatestClient) GetLatestSpan(ctx context.Context) (*borTypes.Span, error) {
+	latest, err := c.dynamicHeimdallClient.GetLatestSpan(ctx)
+	if c.stall.CompareAndSwap(true, false) {
+		close(c.entered)
+		<-c.release
+	}
+
+	return latest, err
+}
+
+// A poll that read the latest span before a rotation and answers after a
+// refresh must not put the older span back as fresh.
+func TestRefreshAuthorizationOutlastsSlowPoll(t *testing.T) {
+	t.Parallel()
+
+	newSigner := common.HexToAddress("0x0000000000000000000000000000000000000002")
+
+	spans := rotatedSpans()
+	client := &stallingLatestClient{
+		dynamicHeimdallClient: newDynamicHeimdallClient(),
+		entered:               make(chan struct{}),
+		release:               make(chan struct{}),
+	}
+	client.setSpans(map[uint64]*borTypes.Span{0: spans[0], 1: spans[1]}, spans[1])
+
+	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}, RioBlock: big.NewInt(0)}
+	chain, b := newChainAndBorForTest(t, &fakeSpanner{}, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
+
+	s := NewSpanStore(nil, nil, "1337")
+	s.heimdallClient = client
+	require.NoError(t, s.updateHeimdallStatus(t.Context()))
+	require.NoError(t, s.updateLatestSpan(t.Context()))
+	for id := uint64(0); id <= 1; id++ {
+		_, err := s.spanById(t.Context(), id)
+		require.NoError(t, err)
+	}
+	b.spanStore = s
+
+	client.stall.Store(true)
+	pollDone := make(chan error, 1)
+	go func() { pollDone <- s.updateLatestSpan(t.Context()) }()
+	<-client.entered
+
+	client.setSpans(spans, spans[2])
+
+	refreshDone := make(chan error, 1)
+	go func() { refreshDone <- b.RefreshAuthorization() }()
+	var refreshErr error
+	refreshed := false
+	select {
+	case refreshErr = <-refreshDone:
+		refreshed = true
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(client.release)
+
+	require.NoError(t, <-pollDone)
+	if !refreshed {
+		refreshErr = <-refreshDone
+	}
+	require.NoError(t, refreshErr)
+
+	require.Equal(t, uint64(2), s.latestSpanCache.Load().Id)
+	snap, err := b.getVeBlopSnapshot(chain.HeaderChain(), &types.Header{Number: big.NewInt(400)}, nil, false)
+	require.NoError(t, err)
+	_, err = snap.GetSignerSuccessionNumber(newSigner)
+	require.NoError(t, err)
+}
+
+func TestUpdateLatestSpanGivesUpWaitingOnCancel(t *testing.T) {
+	t.Parallel()
+
+	client := newDynamicHeimdallClient()
+	client.setSpans(rotatedSpans(), rotatedSpans()[2])
+	s := newSettledTestStore(t, client, 0)
+
+	s.latestSpanFetch <- struct{}{}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	require.ErrorIs(t, s.updateLatestSpan(ctx), context.Canceled)
+	require.Nil(t, s.latestSpanCache.Load())
 }
 
 func TestVeBlopSnapshotCarriesSpanSettledness(t *testing.T) {
