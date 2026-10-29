@@ -17,8 +17,6 @@
 package legacypool
 
 import (
-	"time"
-
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -71,7 +69,7 @@ func (pool *LegacyPool) rebroadcastAcknowledgement(txs []*types.Transaction, cou
 		pool.mu.Lock()
 		defer pool.mu.Unlock()
 
-		now := time.Now()
+		now := pool.rebroadcastTime()
 		var count int64
 		for _, hash := range hashes {
 			tx := remaining[hash]
@@ -101,7 +99,7 @@ func (pool *LegacyPool) forgetRebroadcast(hash common.Hash) {
 func (pool *LegacyPool) recordRebroadcastAttempts(txs []*types.Transaction) {
 	pool.mu.Lock()
 	defer pool.mu.Unlock()
-	now := time.Now()
+	now := pool.rebroadcastTime()
 	for _, tx := range txs {
 		if pool.all.Get(tx.Hash()) == tx {
 			pool.lastRebroadcastAttempt[tx.Hash()] = now

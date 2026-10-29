@@ -342,6 +342,7 @@ type LegacyPool struct {
 	rebroadcastAckFeed     event.Feed
 	lastRebroadcast        map[common.Hash]time.Time // Track last queue acceptance per tx hash
 	lastRebroadcastAttempt map[common.Hash]time.Time
+	rebroadcastTick        time.Time
 	isTxPrivate            func(common.Hash) bool
 
 	stranded strandedState // Pending chains blocked by an unminable head
@@ -491,7 +492,8 @@ func (pool *LegacyPool) loop() {
 			}
 
 		// Handle stuck transaction rebroadcast
-		case <-rebroadcastC:
+		case tick := <-rebroadcastC:
+			pool.setRebroadcastTick(tick)
 			// Use RLock for reading to minimize contention with add()/reorg()
 			identifyStart := time.Now()
 			pool.mu.RLock()
