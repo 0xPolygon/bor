@@ -66,10 +66,28 @@ func (v *BlockValidator) ValidateBody(block *types.Block) error {
 		return ErrKnownBlock
 	}
 
-	// Header validity is known at this point. Here we verify that uncles, transactions
-	// and withdrawals given in the block body match the header.
+	if err := validateBodyAgainstHeader(v.bc.engine, v.bc, block); err != nil {
+		return err
+	}
+
+	// Ancestor block must be known.
+	if !v.bc.HasBlockAndState(block.ParentHash(), block.NumberU64()-1) {
+		if !v.bc.HasBlock(block.ParentHash(), block.NumberU64()-1) {
+			return consensus.ErrUnknownAncestor
+		}
+
+		return consensus.ErrPrunedAncestor
+	}
+
+	return nil
+}
+
+// validateBodyAgainstHeader checks that the uncles, transactions, withdrawals and
+// blob usage in the block body match its (already verified) header. It needs no
+// parent state, so stateless import runs it as well.
+func validateBodyAgainstHeader(engine consensus.Engine, chain consensus.ChainReader, block *types.Block) error {
 	header := block.Header()
-	if err := v.bc.engine.VerifyUncles(v.bc, block); err != nil {
+	if err := engine.VerifyUncles(chain, block); err != nil {
 		return err
 	}
 
@@ -96,9 +114,13 @@ func (v *BlockValidator) ValidateBody(block *types.Block) error {
 		return errors.New("withdrawals present in block body")
 	}
 
+	return validateBlobUsage(header, block.Transactions())
+}
+
+func validateBlobUsage(header *types.Header, txs types.Transactions) error {
 	// Blob transactions may be present after the Cancun fork.
 	var blobs int
-	for i, tx := range block.Transactions() {
+	for i, tx := range txs {
 		// Count the number of blobs to validate against the header's blobGasUsed
 		blobs += len(tx.BlobHashes())
 
@@ -120,15 +142,6 @@ func (v *BlockValidator) ValidateBody(block *types.Block) error {
 		if blobs > 0 {
 			return errors.New("data blobs present in block body")
 		}
-	}
-
-	// Ancestor block must be known.
-	if !v.bc.HasBlockAndState(block.ParentHash(), block.NumberU64()-1) {
-		if !v.bc.HasBlock(block.ParentHash(), block.NumberU64()-1) {
-			return consensus.ErrUnknownAncestor
-		}
-
-		return consensus.ErrPrunedAncestor
 	}
 
 	return nil
