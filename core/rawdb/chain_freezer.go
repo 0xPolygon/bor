@@ -27,6 +27,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rlp"
 )
 
 const (
@@ -354,9 +355,9 @@ func (f *chainFreezer) freezeRange(nfdb *nofreezedb, number, limit uint64) (hash
 				return fmt.Errorf("block body missing, can't freeze block %d", number)
 			}
 
-			receipts := ReadReceiptsRLP(nfdb, hash, number)
-			if len(receipts) == 0 {
-				return fmt.Errorf("block receipts missing, can't freeze block %d", number)
+			receipts, err := readFreezerReceipts(nfdb, hash, number)
+			if err != nil {
+				return err
 			}
 			td := ReadTdRLP(nfdb, hash, number)
 			if len(td) == 0 {
@@ -395,6 +396,21 @@ func (f *chainFreezer) freezeRange(nfdb *nofreezedb, number, limit uint64) (hash
 		return nil
 	})
 	return hashes, err
+}
+
+// readFreezerReceipts returns the receipts of a canonical block to be frozen.
+func readFreezerReceipts(db ethdb.Reader, hash common.Hash, number uint64) (rlp.RawValue, error) {
+	receipts := ReadReceiptsRLP(db, hash, number)
+	if len(receipts) > 0 {
+		return receipts, nil
+	}
+	// Older versions could persist an empty value instead of an empty list for
+	// blocks without (non state-sync) receipts during sync. An empty receipt
+	// root proves the list is empty, so freeze that instead.
+	if h := ReadHeader(db, hash, number); h == nil || !h.EmptyReceipts() {
+		return nil, fmt.Errorf("block receipts missing, can't freeze block %d", number)
+	}
+	return rlp.EmptyList, nil
 }
 
 // Ancient retrieves an ancient binary blob from the append-only immutable files.
