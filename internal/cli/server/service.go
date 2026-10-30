@@ -179,7 +179,9 @@ func peerInfoToPeer(info *p2p.PeerInfo) *proto.Peer {
 }
 
 func (s *Server) ChainSetHead(ctx context.Context, req *proto.ChainSetHeadRequest) (*proto.ChainSetHeadResponse, error) {
-	s.backend.APIBackend.SetHead(req.Number)
+	if err := s.backend.APIBackend.SetHead(req.Number); err != nil {
+		return nil, err
+	}
 	return &proto.ChainSetHeadResponse{}, nil
 }
 
