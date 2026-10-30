@@ -146,6 +146,18 @@ func TestValidateBodyBlobConsistency(t *testing.T) {
 	orphan := good.Header()
 	orphan.ParentHash = common.Hash{0xbe, 0xef}
 	require.ErrorIs(t, chain.validator.ValidateBody(good.WithSeal(orphan)), consensus.ErrUnknownAncestor)
+
+	uncle := &types.Header{Number: big.NewInt(0), Difficulty: big.NewInt(1)}
+	withUncles := types.NewBlock(good.Header(), &types.Body{Withdrawals: types.Withdrawals{}, Uncles: []*types.Header{uncle, uncle, uncle}}, nil, trie.NewStackTrie(nil))
+	require.ErrorContains(t, chain.validator.ValidateBody(withUncles), "too many uncles")
+
+	stateless := types.NewBlockWithHeader(&types.Header{
+		ParentHash: parent.Hash(), Number: big.NewInt(1), Root: common.Hash{0xab}, Difficulty: big.NewInt(1),
+	})
+	rawdb.WriteBlock(chain.db, stateless)
+	child := good.Header()
+	child.ParentHash, child.Number = stateless.Hash(), big.NewInt(2)
+	require.ErrorIs(t, chain.validator.ValidateBody(good.WithSeal(child)), consensus.ErrPrunedAncestor)
 }
 
 // TestCheckBlobFeeCap covers the blob fee-cap precheck, including the Bor case
