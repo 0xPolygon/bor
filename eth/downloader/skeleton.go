@@ -1032,14 +1032,9 @@ func (s *skeleton) handleHeaderTimeout(peer *peerConnection, req *headerRequest,
 	}
 	headerTimeoutMeter.Mark(1)
 	s.peers.rates.Update(peer.id, eth.BlockHeadersMsg, 0, 0)
-	if penalized, jailed := s.peers.backoffSoftFailure(peer); penalized {
-		if jailed {
-			peerJailMeter.Mark(1)
-			peer.log.Warn("Skeleton: escalating repeated header timeouts to local jail", "elapsed", ttl, "effective", common.PrettyDuration(peer.backoffRemaining()))
-		} else {
-			peerSoftBackoffMeter.Mark(1)
-			peer.log.Warn("Skeleton: header request timed out, backing off peer", "elapsed", ttl, "effective", common.PrettyDuration(peer.backoffRemaining()))
-		}
+	if penalized, _ := s.peers.backoffSoftFailure(peer, peerFailureTimeout); penalized {
+		peerSoftBackoffMeter.Mark(1)
+		peer.log.Warn("Skeleton: header request timed out, backing off peer", "elapsed", ttl, "effective", common.PrettyDuration(peer.backoffRemaining()))
 	}
 	s.scheduleRevertRequest(req)
 }

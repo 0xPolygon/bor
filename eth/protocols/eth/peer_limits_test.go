@@ -14,6 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
@@ -127,10 +128,15 @@ func TestPeerMessageLimitBeforeDecode(t *testing.T) {
 				rw := &limitTestRW{msg: p2p.Msg{Code: code, Size: 1, Payload: bytes.NewReader([]byte{0xff})}}
 				peer := NewPeer(version, p2p.NewPeer(enode.ID{1}, "", nil), rw, nil, nil)
 				defer peer.Close()
+				var observed peerpolicy.Evidence
+				peer.SetObserver(func(e peerpolicy.Evidence) { observed = e })
 				peer.limits.requests = rate.NewLimiter(0, 0)
 				peer.limits.gossip = rate.NewLimiter(0, 0)
 				if err := handleMessage(nil, peer); !errors.Is(err, ErrPeerRateLimit) {
 					t.Fatalf("expected rate check before malformed packet decoding: %v", err)
+				}
+				if observed.Reason != peerpolicy.RateLimited || observed.Family != messageFamily(code) || observed.Bytes != 1 {
+					t.Fatalf("missing rate evidence: %+v", observed)
 				}
 			})
 		}
@@ -149,11 +155,16 @@ func TestPeerAnnouncementLimitBeforeBackend(t *testing.T) {
 	rw := &limitTestRW{msg: p2p.Msg{Code: NewBlockHashesMsg, Size: uint32(len(encoded)), Payload: bytes.NewReader(encoded)}}
 	peer := NewPeer(ETH68, p2p.NewPeer(enode.ID{1}, "", nil), rw, nil, nil)
 	defer peer.Close()
+	var evidence peerpolicy.Evidence
+	peer.SetObserver(func(e peerpolicy.Evidence) { evidence = e })
 	if err := handleMessage(nil, peer); !errors.Is(err, ErrPeerRateLimit) {
 		t.Fatalf("expected batch rejection before calling backend: %v", err)
 	}
 	if peer.KnownBlock(common.Hash{1}) {
 		t.Fatal("rejected batch updated known blocks")
+	}
+	if evidence.Family != peerpolicy.BlockAnnouncements || evidence.Items != uint64(len(ann)) || len(evidence.Hashes) != len(ann) || evidence.Reason != peerpolicy.RateLimited {
+		t.Fatalf("rate-limited announcement lost traffic evidence: %+v", evidence)
 	}
 }
 

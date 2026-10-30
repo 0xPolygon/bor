@@ -182,8 +182,8 @@ func (d *Downloader) gradeStalePeer(queue typedQueue, peer *peerConnection, stal
 	if peer.backedOff() {
 		return false
 	}
-	peer.log.Warn("Peer stalling, backing off", "waited", common.PrettyDuration(waited), "graceperiod", timeoutGracePeriod, "queueKind", queue.kind())
-	d.respondToPeer(peer, peerFailureStalling, fmt.Errorf("%w: stalled for %s", errStallingPeer, common.PrettyDuration(waited)))
+	peer.log.Warn("Peer request timed out, backing off", "waited", common.PrettyDuration(waited), "graceperiod", timeoutGracePeriod, "queueKind", queue.kind())
+	d.respondToPeer(peer, peerFailureTimeout, fmt.Errorf("%w: no response for %s", errTimeout, common.PrettyDuration(waited)))
 	return true
 }
 
@@ -421,7 +421,7 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 			}
 
 			if req, ok := stales[peerid]; ok {
-				d.respondToPeer(event.peer, peerFailureStalling, fmt.Errorf("%w: peer left with a stale request", errStallingPeer))
+				d.respondToPeer(event.peer, peerFailureTimeout, fmt.Errorf("%w: peer left with a stale request", errTimeout))
 				delete(stales, peerid)
 				req.Close()
 			}

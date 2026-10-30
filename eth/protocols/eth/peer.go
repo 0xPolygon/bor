@@ -29,6 +29,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/p2p"
+	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 )
@@ -88,7 +89,8 @@ type receiptRequest struct {
 
 // Peer is a collection of relevant information we have about a `eth` peer.
 type Peer struct {
-	id string // Unique ID for the peer, cached
+	observer func(peerpolicy.Evidence)
+	id       string // Unique ID for the peer, cached
 
 	*p2p.Peer                   // The embedded P2P package peer
 	rw        p2p.MsgReadWriter // Input/output streams for snap

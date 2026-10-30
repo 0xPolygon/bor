@@ -129,7 +129,7 @@ func (pool *LegacyPool) dropPendingAccount(addr common.Address, list *list) {
 	for _, tx := range drops {
 		hash := tx.Hash()
 		pool.all.Remove(hash)
-		delete(pool.lastRebroadcast, hash)
+		pool.forgetRebroadcast(hash)
 	}
 	delete(pool.pending, addr)
 	pool.pendingNonces.setIfLower(addr, first)
