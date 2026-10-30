@@ -2,6 +2,7 @@ package ethapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"math/big"
@@ -44,13 +45,13 @@ func TestSendRawTransactionSyncWaiterCap(t *testing.T) {
 	go func() {
 		defer close(parked)
 
-		timeout := hexutil.Uint64(800)
+		timeout := TxSyncTimeout(800)
 		_, _ = api.SendRawTransactionSync(context.Background(), raw, &timeout)
 	}()
 
 	waitForTxSyncWaiters(t, api, 1)
 
-	timeout := hexutil.Uint64(100)
+	timeout := TxSyncTimeout(100)
 
 	receipt, err := api.SendRawTransactionSync(context.Background(), raw, &timeout)
 	if receipt != nil {
@@ -173,15 +174,14 @@ func waitForTxSyncWaiters(t *testing.T, api *TransactionAPI, want int) {
 func TestTxSyncTimeout(t *testing.T) {
 	t.Parallel()
 
-	ms := func(v uint64) *hexutil.Uint64 {
-		h := hexutil.Uint64(v)
-
-		return &h
+	ms := func(v uint64) *TxSyncTimeout {
+		t := TxSyncTimeout(v)
+		return &t
 	}
 
 	tests := []struct {
 		name    string
-		request *hexutil.Uint64
+		request *TxSyncTimeout
 		want    time.Duration
 	}{
 		{name: "unset falls back to default", request: nil, want: 2 * time.Second},
@@ -579,7 +579,7 @@ func TestWaitLoopDoesNotPollPerRequest(t *testing.T) {
 	api := NewTransactionAPI(b, new(AddrLocker))
 	raw, _ := makeSelfSignedRaw(t, api, b.acc.Address)
 
-	timeout := hexutil.Uint64(700)
+	timeout := TxSyncTimeout(700)
 
 	if _, err := api.SendRawTransactionSync(context.Background(), raw, &timeout); err == nil {
 		t.Fatal("expected the wait window to elapse")
@@ -587,5 +587,44 @@ func TestWaitLoopDoesNotPollPerRequest(t *testing.T) {
 
 	if got := b.canonicalLookups.Load(); got != 0 {
 		t.Fatalf("%d canonical lookups over a 700ms wait, want 0", got)
+	}
+}
+
+func TestTxSyncTimeoutDecoding(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input   string
+		want    TxSyncTimeout
+		wantErr bool
+	}{
+		{input: `5000`, want: 5000},
+		{input: `"0x1388"`, want: 5000},
+		{input: `0`, want: 0},
+		{input: `"0x0"`, want: 0},
+		{input: `"5000"`, wantErr: true},
+		{input: `-1`, wantErr: true},
+		{input: `1.5`, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			t.Parallel()
+
+			var got TxSyncTimeout
+			err := json.Unmarshal([]byte(tt.input), &got)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("decoded %s as %d, want an error", tt.input, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("decode %s: %v", tt.input, err)
+			}
+			if got != tt.want {
+				t.Fatalf("decode %s = %d, want %d", tt.input, got, tt.want)
+			}
+		})
 	}
 }

@@ -66,23 +66,22 @@ func runSerial(t testing.TB, tdb *triedb.Database, root common.Hash, txs []*type
 	if err != nil {
 		t.Fatal(err)
 	}
-	gp := new(GasPool).AddGas(blockCtx.GasLimit)
-	var usedGas uint64
+	gp := NewGasPool(blockCtx.GasLimit)
 	receipts := make(types.Receipts, 0, len(txs))
 	for i, tx := range txs {
-		sdb.SetTxContext(tx.Hash(), i)
+		sdb.SetTxContext(tx.Hash(), i, uint32(i+1))
 		evm := vm.NewEVM(blockCtx, sdb, fuzzChainConfig, vm.Config{})
 		// The generator only emits consensus-valid txs (tracked nonces,
 		// bounded values against huge balances), so an apply error is a
 		// generator bug, not an accepted outcome. EVM-level failures
 		// (revert, OOG) still produce a status-failed receipt.
-		receipt, err := ApplyTransactionWithEVM(msgs[i], gp, sdb, blockCtx.BlockNumber, common.Hash{}, blockCtx.Time, tx, &usedGas, evm)
+		receipt, err := ApplyTransactionWithEVM(msgs[i], gp, sdb, blockCtx.BlockNumber, common.Hash{}, blockCtx.Time, tx, evm)
 		if err != nil {
 			t.Fatalf("serial apply tx %d: %v", i, err)
 		}
 		receipts = append(receipts, receipt)
 	}
-	return sdb.IntermediateRoot(true), receipts
+	return sdb.IntermediateRoot(params.Rules{IsEIP158: true}), receipts
 }
 
 // runV2 runs txs through ExecuteV2BlockSTM with `workers` parallel
@@ -117,7 +116,7 @@ func runV2(t testing.TB, tdb *triedb.Database, root common.Hash, txs []*types.Tr
 		t.Fatalf("V2 executor: tx %d consensus error: %v", res.ExecErrIdx, res.ExecErr)
 	}
 
-	return finalDB.IntermediateRoot(true), res.Receipts
+	return finalDB.IntermediateRoot(params.Rules{IsEIP158: true}), res.Receipts
 }
 
 // assertReceiptParity compares every consensus field of the two receipt
@@ -511,12 +510,11 @@ func TestMetamorphicHarnessSemantics(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		gp := new(GasPool).AddGas(blockCtx.GasLimit)
-		var usedGas uint64
+		gp := NewGasPool(blockCtx.GasLimit)
 		for i, tx := range txs {
-			sdb.SetTxContext(tx.Hash(), i)
+			sdb.SetTxContext(tx.Hash(), i, uint32(i+1))
 			evm := vm.NewEVM(blockCtx, sdb, fuzzChainConfig, vm.Config{})
-			if _, err := ApplyTransactionWithEVM(msgs[i], gp, sdb, blockCtx.BlockNumber, common.Hash{}, blockCtx.Time, tx, &usedGas, evm); err != nil {
+			if _, err := ApplyTransactionWithEVM(msgs[i], gp, sdb, blockCtx.BlockNumber, common.Hash{}, blockCtx.Time, tx, evm); err != nil {
 				t.Fatalf("tx %d: %v", i, err)
 			}
 		}

@@ -171,7 +171,7 @@ func testPeerSetExtension[T comparable](
 func newPeerSetEthPeer(t *testing.T, id enode.ID, caps []p2p.Cap) *eth.Peer {
 	t.Helper()
 	peer, rw := newPeerSetProtocolPeer(t, id, caps)
-	result := eth.NewPeer(eth.ETH69, peer, rw, nil)
+	result := eth.NewPeer(eth.ETH69, peer, rw, nil, nil)
 	t.Cleanup(result.Close)
 	return result
 }
@@ -236,7 +236,7 @@ func TestPeerSetForgetTransactions(t *testing.T) {
 		var id enode.ID
 		rand.Read(id[:])
 
-		peer := eth.NewPeer(eth.ETH68, p2p.NewPeer(id, "test", nil), net, nil)
+		peer := eth.NewPeer(eth.ETH68, p2p.NewPeer(id, "test", nil), net, nil, nil)
 
 		// Register the peer
 		if err := ps.registerPeer(peer, nil, nil); err != nil {
@@ -333,7 +333,7 @@ func newRegisteredPeerForTest(t *testing.T, ps *peerSet) *ethPeer {
 	t.Cleanup(func() { net.Close() })
 
 	p2pPeer := p2p.NewPeer(id, "fast-path-peer", nil)
-	ethP := eth.NewPeer(eth.ETH68, p2pPeer, net, nil)
+	ethP := eth.NewPeer(eth.ETH68, p2pPeer, net, nil, nil)
 	witP := wit.NewPeer(wit.WIT2, p2pPeer, net, log.New())
 
 	if err := ps.registerPeer(ethP, nil, witP); err != nil {
@@ -390,7 +390,7 @@ func registerPeerWithTD(t *testing.T, ps *peerSet, td int64) *eth.Peer {
 		t.Fatalf("failed to create peer id: %v", err)
 	}
 
-	peer := eth.NewPeer(eth.ETH68, p2p.NewPeer(id, "test", nil), net, nil)
+	peer := eth.NewPeer(eth.ETH68, p2p.NewPeer(id, "test", nil), net, nil, nil)
 	peer.SetHead(common.Hash{byte(td)}, big.NewInt(td))
 	t.Cleanup(peer.Close)
 

@@ -51,7 +51,7 @@ func TestRebroadcastActualQueueAttempts(t *testing.T) {
 				h.privateTxGetter = &PrivateTxStore{store: map[common.Hash]struct{}{txs[0].Hash(): {}, txs[1].Hash(): {}}}
 			case "rejected":
 				app, net := p2p.MsgPipe()
-				peer := ethproto.NewPeer(ethproto.ETH69, p2p.NewPeer(enode.ID{2}, "closed", nil), net, pool)
+				peer := ethproto.NewPeer(ethproto.ETH69, p2p.NewPeer(enode.ID{2}, "closed", nil), net, pool, nil)
 				require.NoError(t, h.peers.registerPeer(peer, nil, nil))
 				peer.Close()
 				t.Cleanup(func() { app.Close(); net.Close() })

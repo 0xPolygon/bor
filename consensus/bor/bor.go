@@ -1433,7 +1433,7 @@ func (c *Bor) finalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 
 	// No block rewards in PoA, so the state remains as it is
 	start := time.Now()
-	header.Root = state.IntermediateRoot(chain.Config().IsEIP158(header.Number))
+	header.Root = state.IntermediateRoot(chain.Config().Rules(header.Number, false, header.Time))
 	commitTime := time.Since(start)
 
 	// Uncles are dropped
@@ -1816,6 +1816,10 @@ func (c *Bor) Close() error {
 }
 
 func (c *Bor) runMilestoneFetcher() {
+	c.runMilestoneFetcherWithTimeout(30 * time.Second)
+}
+
+func (c *Bor) runMilestoneFetcherWithTimeout(timeout time.Duration) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
@@ -1823,7 +1827,7 @@ func (c *Bor) runMilestoneFetcher() {
 		select {
 		case <-ticker.C:
 			if c.HeimdallClient != nil {
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				ctx, cancel := context.WithTimeout(context.Background(), timeout)
 				milestone, err := c.HeimdallClient.FetchMilestone(ctx)
 				cancel()
 				if err != nil {
@@ -1879,14 +1883,14 @@ func (c *Bor) checkAndCommitSpan(
 
 	tempState := state.Inner().Copy()
 	tempState.ResetPrefetcher()
-	tempState.StartPrefetcher("bor", state.Witness(), nil)
+	tempState.StartPrefetcher("bor", state.Witness())
 
 	span, err := c.spanner.GetCurrentSpan(ctx, header.ParentHash, tempState)
 	if err != nil {
 		return err
 	}
 
-	tempState.IntermediateRoot(false)
+	tempState.IntermediateRoot(params.Rules{})
 
 	// Propagate addresses accessed during GetCurrentSpan back to the original
 	// state so they appear in the FlatDiff ReadSet. Without this, the pipelined
@@ -2031,14 +2035,14 @@ func (c *Bor) CommitStates(
 		// Fetch the LastStateId from contract via current state instance
 		tempState := state.Inner().Copy()
 		tempState.ResetPrefetcher()
-		tempState.StartPrefetcher("bor", state.Witness(), nil)
+		tempState.StartPrefetcher("bor", state.Witness())
 
 		lastStateIDBig, err = c.GenesisContractsClient.LastStateId(tempState, number-1, header.ParentHash)
 		if err != nil {
 			return nil, err
 		}
 
-		tempState.IntermediateRoot(false)
+		tempState.IntermediateRoot(params.Rules{})
 
 		// Propagate addresses accessed during LastStateId back to the original
 		// state so they appear in the FlatDiff ReadSet. Without this, the

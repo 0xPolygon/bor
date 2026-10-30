@@ -144,7 +144,7 @@ type testerConfig struct {
 	layers       int    // Number of state transitions to generate for
 	enableIndex  bool   // Enable state history indexing or not
 	journalDir   string // Directory path for persisting journal files
-	isVerkle     bool   // Enables Verkle trie mode if true
+	isUBT        bool   // Enables UBT mode if true
 
 	writeBuffer *int // Optional, the size of memory allocated for write buffer
 	trieCache   *int // Optional, the size of memory allocated for trie cache
@@ -183,7 +183,8 @@ func newTester(t *testing.T, config *testerConfig) *tester {
 			WriteBufferSize:     config.writeBufferSize(),
 			NoAsyncFlush:        true,
 			JournalDirectory:    config.journalDir,
-		}, config.isVerkle)
+			NoHistoryIndexDelay: true,
+		}, config.isUBT)
 
 		obj = &tester{
 			db:           db,
@@ -656,6 +657,38 @@ func TestDatabaseRecoverable(t *testing.T) {
 	}
 }
 
+// TestRecoverableDisabled checks that a database disabled for state sync
+// reports nothing as recoverable, matching Recover which refuses to roll
+// back mid-sync. Regression test for a snap-sync restart crash loop: during
+// chain repair Recoverable returned true while Recover returned
+// errDatabaseWaitSync, so setHeadBeyondRoot tripped a log.Crit.
+func TestRecoverableDisabled(t *testing.T) {
+	maxDiffLayers = 4
+	defer func() { maxDiffLayers = 128 }()
+
+	tester := newTester(t, &testerConfig{layers: 12})
+	defer tester.release()
+
+	// A state below the disk layer is recoverable while the database is active.
+	root := tester.roots[tester.bottomIndex()-1]
+	if !tester.db.Recoverable(root) {
+		t.Fatalf("state below the disk layer should be recoverable while active")
+	}
+	// Disable the database to simulate an interrupted, still-running snap sync.
+	if err := tester.db.Disable(); err != nil {
+		t.Fatalf("failed to disable database: %v", err)
+	}
+	// Recover refuses while the sync is in progress.
+	if err := tester.db.Recover(root); !errors.Is(err, errDatabaseWaitSync) {
+		t.Fatalf("Recover: want errDatabaseWaitSync, got %v", err)
+	}
+	// Recoverable must agree, otherwise chain repair enters a Recover it
+	// believes is safe and crashes on the waitSync error.
+	if tester.db.Recoverable(root) {
+		t.Fatalf("disabled database must not report any state as recoverable")
+	}
+}
+
 func TestExecuteRollback(t *testing.T) {
 	// Redefine the diff layer depth allowance for faster testing.
 	maxDiffLayers = 4
@@ -950,7 +983,7 @@ func TestDatabaseIndexRecovery(t *testing.T) {
 	var (
 		dIndex int
 		roots  = env.roots
-		hr     = newHistoryReader(env.db.diskdb, env.db.stateFreezer)
+		hr     = newStateHistoryReader(env.db.diskdb, env.db.stateFreezer)
 	)
 	for i, root := range roots {
 		if root == dRoot {
@@ -986,7 +1019,7 @@ func TestDatabaseIndexRecovery(t *testing.T) {
 			t.Fatalf("Unexpected state history found, %d", i)
 		}
 	}
-	remain, err := env.db.IndexProgress()
+	remain, _, err := env.db.IndexProgress()
 	if err != nil {
 		t.Fatalf("Failed to obtain the progress, %v", err)
 	}
@@ -1000,7 +1033,7 @@ func TestDatabaseIndexRecovery(t *testing.T) {
 			panic(fmt.Errorf("failed to update state changes, err: %w", err))
 		}
 	}
-	remain, err = env.db.IndexProgress()
+	remain, _, err = env.db.IndexProgress()
 	if err != nil {
 		t.Fatalf("Failed to obtain the progress, %v", err)
 	}
@@ -1011,7 +1044,7 @@ func TestDatabaseIndexRecovery(t *testing.T) {
 
 	// Ensure the truncated state histories become accessible
 	bRoot = env.db.tree.bottom().rootHash()
-	hr = newHistoryReader(env.db.diskdb, env.db.stateFreezer)
+	hr = newStateHistoryReader(env.db.diskdb, env.db.stateFreezer)
 	for i, root := range roots {
 		if root == bRoot {
 			break

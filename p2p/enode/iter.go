@@ -367,6 +367,7 @@ func (m *FairMix) AddSource(it Iterator) {
 	defer m.mu.Unlock()
 
 	if m.closed == nil {
+		it.Close()
 		return
 	}
 

@@ -334,7 +334,7 @@ func TestImportFailureWithDivergedWitnessRefetchesFromAnotherPeer(t *testing.T) 
 	// BP-signed commitment on file: a hash the served witness will NOT match,
 	// with a size it is within band of — so every fetched witness is accepted
 	// as a non-deterministic variant (diverged), never as the BP's own bytes.
-	reference, err := stateless.NewWitness(block.Header(), nil)
+	reference, err := stateless.NewWitness(block.Header(), nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -386,7 +386,7 @@ func TestImportFailureWithDivergedWitnessRefetchesFromAnotherPeer(t *testing.T) 
 		n := fetches.Add(1)
 		req := &eth.Request{Peer: fmt.Sprintf("server-%d", n), Cancel: make(chan struct{})}
 		go func() {
-			w, err := stateless.NewWitness(block.Header(), nil)
+			w, err := stateless.NewWitness(block.Header(), nil, false)
 			if err != nil {
 				return
 			}
@@ -503,7 +503,7 @@ func (hs *divergedBroadcastImportFailureHarness) fetchWitnessFor(block *types.Bl
 			if release != nil {
 				<-release
 			}
-			w, err := stateless.NewWitness(block.Header(), nil)
+			w, err := stateless.NewWitness(block.Header(), nil, false)
 			if err != nil {
 				return
 			}
@@ -557,7 +557,7 @@ func TestImportFailureWithDivergedBroadcastWitnessChargesPusher(t *testing.T) {
 	defer tester.fetcher.Stop()
 	hs := newDivergedBroadcastImportFailureHarness(t, tester, hash)
 
-	pushed, err := stateless.NewWitness(block.Header(), nil)
+	pushed, err := stateless.NewWitness(block.Header(), nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -599,7 +599,7 @@ func TestImportFailureWithDivergedBroadcastWitnessOnPendingBlockChargesPusher(t 
 	// The block must be pending before the push arrives, or the push would
 	// take the before-the-block cache path covered by the previous test.
 	waitForPendingWitness(t, tester.fetcher, hash)
-	pushed, err := stateless.NewWitness(block.Header(), nil)
+	pushed, err := stateless.NewWitness(block.Header(), nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}

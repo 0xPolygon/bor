@@ -528,35 +528,6 @@ func (srv *Server) Stop() {
 	srv.loopWG.Wait()
 }
 
-// sharedUDPConn implements a shared connection. Write sends messages to the underlying connection while read returns
-// messages that were found unprocessable and sent to the unhandled channel by the primary listener.
-type sharedUDPConn struct {
-	*net.UDPConn
-	unhandled chan discover.ReadPacket
-}
-
-// ReadFromUDPAddrPort implements discover.UDPConn
-func (s *sharedUDPConn) ReadFromUDPAddrPort(b []byte) (n int, addr netip.AddrPort, err error) {
-	packet, ok := <-s.unhandled
-	if !ok {
-		return 0, netip.AddrPort{}, errors.New("connection was closed")
-	}
-
-	l := len(packet.Data)
-	if l > len(b) {
-		l = len(b)
-	}
-
-	copy(b[:l], packet.Data[:l])
-
-	return l, packet.Addr, nil
-}
-
-// Close implements discover.UDPConn
-func (s *sharedUDPConn) Close() error {
-	return nil
-}
-
 // Start starts running the server.
 // Servers can not be re-used after stopping.
 func (srv *Server) Start() (err error) {
@@ -682,7 +653,7 @@ func (srv *Server) setupDiscovery() error {
 	// connection, so v5 can read unhandled messages from v4.
 	if srv.Config.DiscoveryV4 && srv.Config.DiscoveryV5 {
 		unhandled = make(chan discover.ReadPacket, 100)
-		sconn = &sharedUDPConn{conn, unhandled}
+		sconn = &discover.SharedUDPConn{UDPConn: conn, Unhandled: unhandled}
 	}
 
 	// Start discovery services.
@@ -919,8 +890,11 @@ running:
 				// Ensure that the trusted flag is set before checking against MaxPeers.
 				c.flags |= trustedConn
 			}
-			// TODO: track in-progress inbound node IDs (pre-Peer) to avoid dialing them.
-			c.cont <- srv.postHandshakeChecks(peers, inboundCount, c)
+			err := srv.postHandshakeChecks(peers, inboundCount, c)
+			if err == nil && c.flags&inboundConn != 0 {
+				srv.dialsched.inboundPending(c.node.ID())
+			}
+			c.cont <- err
 
 		case c := <-srv.checkpointAddPeer:
 			// At this point the connection is past the protocol handshake.
@@ -1123,6 +1097,11 @@ func (srv *Server) checkInboundConn(remoteIP netip.Addr) error {
 // or the handshakes have failed.
 func (srv *Server) SetupConn(fd net.Conn, flags connFlag, dialDest *enode.Node) error {
 	c := &conn{fd: fd, flags: flags, cont: make(chan error)}
+	defer func() {
+		if c.is(inboundConn) && c.node != nil {
+			srv.dialsched.inboundCompleted(c.node.ID())
+		}
+	}()
 	if dialDest == nil {
 		c.transport = srv.newTransport(fd, nil)
 	} else {

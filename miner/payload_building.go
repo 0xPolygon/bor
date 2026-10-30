@@ -43,6 +43,7 @@ type BuildPayloadArgs struct {
 	Random       common.Hash           // The provided randomness value
 	Withdrawals  types.Withdrawals     // The provided withdrawals
 	BeaconRoot   *common.Hash          // The provided beaconRoot (Cancun)
+	SlotNum      *uint64               // The provided slotNumber
 	Version      engine.PayloadVersion // Versioning byte for payload id calculation.
 }
 
@@ -57,6 +58,9 @@ func (args *BuildPayloadArgs) Id() engine.PayloadID {
 	if args.BeaconRoot != nil {
 		hasher.Write(args.BeaconRoot[:])
 	}
+	if args.SlotNum != nil {
+		binary.Write(hasher, binary.BigEndian, args.SlotNum)
+	}
 	var out engine.PayloadID
 
 	copy(out[:], hasher.Sum(nil)[:8])
@@ -70,11 +74,16 @@ func (args *BuildPayloadArgs) Id() engine.PayloadID {
 // the revenue. Therefore, the empty-block here is always available and full-block
 // will be set/updated afterwards.
 type Payload struct {
-	id            engine.PayloadID
-	empty         *types.Block
-	emptyWitness  *stateless.Witness
-	full          *types.Block
-	fullWitness   *stateless.Witness
+	id           engine.PayloadID
+	empty        *types.Block
+	emptyWitness *stateless.Witness
+
+	full            *types.Block
+	fullReceipts    []*types.Receipt
+	fullRevertedTxs []*types.Transaction
+	fullRevertedIdx []uint32
+	fullWitness     *stateless.Witness
+
 	sidecars      []*types.BlobTxSidecar
 	emptyRequests [][]byte
 	requests      [][]byte
@@ -114,13 +123,19 @@ func (payload *Payload) update(r *newPayloadResult, elapsed time.Duration) {
 	// fee(apart from the mev revenue) is the only indicator for comparison.
 	if payload.full == nil || r.fees.Cmp(payload.fullFees) > 0 {
 		payload.full = r.block
+		payload.fullReceipts = r.receipts
+		payload.fullRevertedTxs = r.revertedTxs
+		payload.fullRevertedIdx = r.revertedIdx
 		payload.fullFees = r.fees
 		payload.sidecars = r.sidecars
 		payload.requests = r.requests
 		payload.fullWitness = r.witness
 
-		feesInEther := new(big.Float).Quo(new(big.Float).SetInt(r.fees), big.NewFloat(params.Ether))
-		log.Info("Updated payload",
+		var (
+			attrs       []any
+			feesInEther = new(big.Float).Quo(new(big.Float).SetInt(r.fees), big.NewFloat(params.Ether))
+		)
+		attrs = append(attrs,
 			"id", payload.id,
 			"number", r.block.NumberU64(),
 			"hash", r.block.Hash(),
@@ -131,9 +146,20 @@ func (payload *Payload) update(r *newPayloadResult, elapsed time.Duration) {
 			"root", r.block.Root(),
 			"elapsed", common.PrettyDuration(elapsed),
 		)
+		log.Info("Updated payload", attrs...)
 	}
 
 	payload.cond.Broadcast() // fire signal for notifying full block
+}
+
+// FullBlockAndReceipts returns the latest built full block together with the
+// receipts produced during its construction and the transactions that were
+// tried-and-reverted during building.
+func (payload *Payload) FullBlockAndReceipts() (*types.Block, []*types.Receipt, []*types.Transaction, []uint32) {
+	payload.lock.Lock()
+	defer payload.lock.Unlock()
+
+	return payload.full, payload.fullReceipts, payload.fullRevertedTxs, payload.fullRevertedIdx
 }
 
 // Resolve returns the latest built payload and also terminates the background
@@ -222,6 +248,7 @@ func (w *worker) buildPayload(args *BuildPayloadArgs, witness bool) (*Payload, e
 		random:      args.Random,
 		withdrawals: args.Withdrawals,
 		beaconRoot:  args.BeaconRoot,
+		slotNum:     args.SlotNum,
 		noTxs:       true,
 	}
 	empty := w.generateWork(emptyParams, witness)
@@ -252,12 +279,24 @@ func (w *worker) buildPayload(args *BuildPayloadArgs, witness bool) (*Payload, e
 			random:      args.Random,
 			withdrawals: args.Withdrawals,
 			beaconRoot:  args.BeaconRoot,
+			slotNum:     args.SlotNum,
 			noTxs:       false,
 		}
 
 		for {
 			select {
 			case <-timer.C:
+				// When block building takes close to the full recommit interval,
+				// the timer fires near-instantly on the next iteration. If the
+				// payload was resolved during that build, both timer.C and
+				// payload.stop are ready and Go's select picks one at random.
+				// Check payload.stop first to avoid an unnecessary generateWork.
+				select {
+				case <-payload.stop:
+					log.Info("Stopping work on payload", "id", payload.id, "reason", "delivery")
+					return
+				default:
+				}
 				start := time.Now()
 				r := w.generateWork(fullParams, witness)
 				if r.err == nil {
@@ -265,7 +304,7 @@ func (w *worker) buildPayload(args *BuildPayloadArgs, witness bool) (*Payload, e
 				} else {
 					log.Info("Error while generating work", "id", payload.id, "err", r.err)
 				}
-				timer.Reset(w.config.Recommit)
+				timer.Reset(max(0, w.config.Recommit-time.Since(start)))
 			case <-payload.stop:
 				log.Info("Stopping work on payload", "id", payload.id, "reason", "delivery")
 				return

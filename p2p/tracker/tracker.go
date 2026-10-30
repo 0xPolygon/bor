@@ -127,6 +127,10 @@ func (t *Tracker) clean() {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
+	if t.expire == nil {
+		return // Tracker was stopped.
+	}
+
 	// Expire anything within a certain threshold (might be no items at all if
 	// we raced with the delivery)
 	for t.expire.Len() > 0 {
@@ -153,15 +157,15 @@ func (t *Tracker) clean() {
 	t.schedule()
 }
 
-// schedule starts a timer to trigger on the expiration of the first network
-// packet.
+// schedule starts a timer to trigger on the expiration of the first network packet.
 func (t *Tracker) schedule() {
 	if t.expire.Len() == 0 {
 		t.wake = nil
 		return
 	}
-
-	t.wake = time.AfterFunc(time.Until(t.pending[t.expire.Front().Value.(uint64)].time.Add(t.timeout)), t.clean)
+	nextID := t.expire.Front().Value.(uint64)
+	nextTime := t.pending[nextID].time
+	t.wake = time.AfterFunc(time.Until(nextTime.Add(t.timeout)), t.clean)
 }
 
 // Fulfil fills a pending request, if any is available, reporting on various metrics.
@@ -191,10 +195,10 @@ func (t *Tracker) Fulfil(peer string, version uint, code uint64, id uint64) {
 		return
 	}
 	// Everything matches, mark the request serviced and meter it
+	wasHead := req.expire.Prev() == nil
 	t.expire.Remove(req.expire)
 	delete(t.pending, id)
-
-	if req.expire.Prev() == nil {
+	if wasHead {
 		if t.wake.Stop() {
 			t.schedule()
 		}

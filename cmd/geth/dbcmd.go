@@ -18,7 +18,9 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -28,7 +30,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/olekukonko/tablewriter"
 	"github.com/urfave/cli/v2"
 
 	"github.com/ethereum/go-ethereum/cmd/utils"
@@ -40,6 +41,8 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/ethdb/pebble"
+	"github.com/ethereum/go-ethereum/internal/tablewriter"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
@@ -53,7 +56,24 @@ var (
 	}
 	removeChainDataFlag = &cli.BoolFlag{
 		Name:  "remove.chain",
-		Usage: "If set, selects the state data for removal",
+		Usage: "If set, selects the chain data for removal",
+	}
+	inspectTrieTopFlag = &cli.IntFlag{
+		Name:  "top",
+		Usage: "Print the top N results per ranking category",
+		Value: 10,
+	}
+	inspectTrieDumpPathFlag = &cli.StringFlag{
+		Name:  "dump-path",
+		Usage: "Path for the trie statistics dump file",
+	}
+	inspectTrieSummarizeFlag = &cli.StringFlag{
+		Name:  "summarize",
+		Usage: "Summarize an existing trie dump file (skip trie traversal)",
+	}
+	inspectTrieContractFlag = &cli.StringFlag{
+		Name:  "contract",
+		Usage: "Inspect only the storage of the given contract address (skips full account trie walk)",
 	}
 
 	removedbCommand = &cli.Command{
@@ -76,6 +96,7 @@ Remove blockchain and state databases`,
 			dbCompactCmd,
 			dbGetCmd,
 			dbDeleteCmd,
+			dbInspectTrieCmd,
 			dbPutCmd,
 			dbGetSlotsCmd,
 			dbDumpFreezerIndex,
@@ -84,6 +105,8 @@ Remove blockchain and state databases`,
 			dbMetadataCmd,
 			dbCheckStateContentCmd,
 			dbInspectHistoryCmd,
+			dbPebbleUpgradeCmd,
+			dbImportBadBlocksCmd,
 		},
 	}
 	dbInspectCmd = &cli.Command{
@@ -93,6 +116,22 @@ Remove blockchain and state databases`,
 		Flags:       slices.Concat(utils.NetworkFlags, utils.DatabaseFlags),
 		Usage:       "Inspect the storage size for each type of data in the database",
 		Description: `This commands iterates the entire database. If the optional 'prefix' and 'start' arguments are provided, then the iteration is limited to the given subset of data.`,
+	}
+	dbInspectTrieCmd = &cli.Command{
+		Action:    inspectTrie,
+		Name:      "inspect-trie",
+		ArgsUsage: "<blocknum>",
+		Flags: slices.Concat([]cli.Flag{
+			utils.ExcludeStorageFlag,
+			inspectTrieTopFlag,
+			utils.OutputFileFlag,
+			inspectTrieDumpPathFlag,
+			inspectTrieSummarizeFlag,
+			inspectTrieContractFlag,
+		}, utils.NetworkFlags, utils.DatabaseFlags),
+		Usage: "Print detailed trie information about the structure of account trie and storage tries.",
+		Description: `This commands iterates the entrie trie-backed state. If the 'blocknum' is not specified, 
+the latest block number will be used by default.`,
 	}
 	dbCheckStateContentCmd = &cli.Command{
 		Action:    checkStateContent,
@@ -172,6 +211,17 @@ WARNING: This is a low-level operation which may cause database corruption!`,
 		Flags:       slices.Concat(utils.NetworkFlags, utils.DatabaseFlags),
 		Description: "The import command imports the specific chain data from an RLP encoded stream.",
 	}
+	dbImportBadBlocksCmd = &cli.Command{
+		Action:    importBadBlocks,
+		Name:      "import-badblocks",
+		Usage:     "Imports bad blocks into the local bad-block store from a file",
+		ArgsUsage: "<file>",
+		Flags:     slices.Concat(utils.NetworkFlags, utils.DatabaseFlags),
+		Description: `The import-badblocks command loads bad blocks into the database's bad-block
+store so they can be inspected locally.
+
+The input is what debug_getBadBlocks writes when given a file argument.`,
+	}
 	dbExportCmd = &cli.Command{
 		Action:      exportChaindata,
 		Name:        "export",
@@ -207,6 +257,17 @@ WARNING: This is a low-level operation which may cause database corruption!`,
 			},
 		}, utils.NetworkFlags, utils.DatabaseFlags),
 		Description: "This command queries the history of the account or storage slot within the specified block range",
+	}
+	dbPebbleUpgradeCmd = &cli.Command{
+		Action: dbPebbleUpgrade,
+		Name:   "pebble-upgrade",
+		Usage:  "Upgrade a legacy pebble v1 database to pebble v2 format",
+		Flags:  slices.Concat(utils.NetworkFlags, utils.DatabaseFlags),
+		Description: `This command upgrades a legacy Pebble v1 database so 
+that it becomes compatible with Pebble v2. The upgrade process converts the
+database format to the oldest format supported by Pebble v2. It's not the
+one-way operation, instead, the database can still be opened by older versions
+of geth that use the pebble v1 library.`,
 	}
 )
 
@@ -370,7 +431,7 @@ func checkStateContent(ctx *cli.Context) error {
 		startTime = time.Now()
 		lastLog   = time.Now()
 	)
-
+	defer it.Release()
 	for it.Next() {
 		count++
 
@@ -402,6 +463,88 @@ func checkStateContent(ctx *cli.Context) error {
 	log.Info("Iterated the state content", "errors", errs, "items", count)
 
 	return nil
+}
+
+func inspectTrie(ctx *cli.Context) error {
+	topN := ctx.Int(inspectTrieTopFlag.Name)
+	if topN <= 0 {
+		return fmt.Errorf("invalid --%s value %d (must be > 0)", inspectTrieTopFlag.Name, topN)
+	}
+	config := &trie.InspectConfig{
+		NoStorage: ctx.Bool(utils.ExcludeStorageFlag.Name),
+		TopN:      topN,
+		Path:      ctx.String(utils.OutputFileFlag.Name),
+	}
+
+	if summarizePath := ctx.String(inspectTrieSummarizeFlag.Name); summarizePath != "" {
+		if ctx.NArg() > 0 {
+			return fmt.Errorf("block number argument is not supported with --%s", inspectTrieSummarizeFlag.Name)
+		}
+		config.DumpPath = summarizePath
+		log.Info("Summarizing trie dump", "path", summarizePath, "top", topN)
+		return trie.Summarize(summarizePath, config)
+	}
+	if ctx.NArg() > 1 {
+		return fmt.Errorf("excessive number of arguments: %v", ctx.Command.ArgsUsage)
+	}
+
+	stack, _ := makeConfigNode(ctx)
+	db := utils.MakeChainDatabase(ctx, stack, false, false)
+	defer stack.Close()
+	defer db.Close()
+
+	var (
+		trieRoot common.Hash
+		hash     common.Hash
+		number   uint64
+	)
+	switch {
+	case ctx.NArg() == 0 || ctx.Args().Get(0) == "latest":
+		head := rawdb.ReadHeadHeaderHash(db)
+		n, ok := rawdb.ReadHeaderNumber(db, head)
+		if !ok {
+			return fmt.Errorf("could not load head block hash")
+		}
+		number = n
+	case ctx.Args().Get(0) == "snapshot":
+		trieRoot = rawdb.ReadSnapshotRoot(db)
+		number = math.MaxUint64
+	default:
+		var err error
+		number, err = strconv.ParseUint(ctx.Args().Get(0), 10, 64)
+		if err != nil {
+			return fmt.Errorf("failed to parse blocknum, Args[0]: %v, err: %v", ctx.Args().Get(0), err)
+		}
+	}
+
+	if number != math.MaxUint64 {
+		hash = rawdb.ReadCanonicalHash(db, number)
+		if hash == (common.Hash{}) {
+			return fmt.Errorf("canonical hash for block %d not found", number)
+		}
+		blockHeader := rawdb.ReadHeader(db, hash, number)
+		trieRoot = blockHeader.Root
+	}
+	if trieRoot == (common.Hash{}) {
+		log.Error("Empty root hash")
+	}
+
+	config.DumpPath = ctx.String(inspectTrieDumpPathFlag.Name)
+	if config.DumpPath == "" {
+		config.DumpPath = stack.ResolvePath("trie-dump.bin")
+	}
+
+	triedb := utils.MakeTrieDatabase(ctx, stack, db, false, true, false)
+	defer triedb.Close()
+
+	if contractAddr := ctx.String(inspectTrieContractFlag.Name); contractAddr != "" {
+		address := common.HexToAddress(contractAddr)
+		log.Info("Inspecting contract", "address", address, "root", trieRoot, "block", number)
+		return trie.InspectContract(triedb, db, trieRoot, address)
+	}
+
+	log.Info("Inspecting trie", "root", trieRoot, "block", number, "dump", config.DumpPath, "top", topN)
+	return trie.Inspect(triedb, trieRoot, config)
 }
 
 func showDBStats(db ethdb.KeyValueStater) {
@@ -444,6 +587,21 @@ func dbCompact(ctx *cli.Context) error {
 	log.Info("Stats after compaction")
 	showDBStats(db)
 	return nil
+}
+
+func dbPebbleUpgrade(ctx *cli.Context) error {
+	stack, _ := makeConfigNode(ctx)
+	defer stack.Close()
+
+	path := stack.ResolvePath("chaindata")
+	dbType := rawdb.PreexistingDatabase(path)
+	if dbType == "" {
+		return fmt.Errorf("no database found at %s", path)
+	}
+	if dbType != rawdb.DBPebble {
+		return fmt.Errorf("database at %s is %s, not pebble", path, dbType)
+	}
+	return pebble.Upgrade(path)
 }
 
 // dbGet shows the value of a given database key
@@ -750,6 +908,24 @@ func (iter *snapshotIterator) Release() {
 	iter.storage.Release()
 }
 
+type codeIterator struct {
+	iter ethdb.Iterator
+}
+
+func (iter *codeIterator) Next() (byte, []byte, []byte, bool) {
+	for iter.iter.Next() {
+		key := iter.iter.Key()
+		if bytes.HasPrefix(key, rawdb.CodePrefix) && len(key) == (len(rawdb.CodePrefix)+common.HashLength) {
+			return utils.OpBatchAdd, key, iter.iter.Value(), true
+		}
+	}
+	return 0, nil, nil, false
+}
+
+func (iter *codeIterator) Release() {
+	iter.iter.Release()
+}
+
 // chainExporters defines the export scheme for all exportable chain data.
 var chainExporters = map[string]func(db ethdb.Database) utils.ChainDataIterator{
 	"preimage": func(db ethdb.Database) utils.ChainDataIterator {
@@ -761,6 +937,89 @@ var chainExporters = map[string]func(db ethdb.Database) utils.ChainDataIterator{
 		storage := db.NewIterator(rawdb.SnapshotStoragePrefix, nil)
 		return &snapshotIterator{account: account, storage: storage}
 	},
+	"code": func(db ethdb.Database) utils.ChainDataIterator {
+		iter := db.NewIterator(rawdb.CodePrefix, nil)
+		return &codeIterator{iter: iter}
+	},
+}
+
+type badBlockEntry struct {
+	Hash   common.Hash `json:"hash"`
+	RLP    string      `json:"rlp"`
+	Detail string      `json:"detail,omitempty"`
+}
+
+func parseBadBlockDump(blob []byte) ([]badBlockEntry, error) {
+	var entries []badBlockEntry
+	if err := json.Unmarshal(blob, &entries); err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
+// importBadBlocks loads bad blocks from a file into the local bad-block store so
+// they can later be inspected.
+func importBadBlocks(ctx *cli.Context) error {
+	if ctx.NArg() != 1 {
+		return fmt.Errorf("required arguments: %v", ctx.Command.ArgsUsage)
+	}
+	stack, _ := makeConfigNode(ctx)
+	defer stack.Close()
+
+	db := utils.MakeChainDatabase(ctx, stack, false, false)
+	defer db.Close()
+
+	path := ctx.Args().Get(0)
+	blob, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("failed to read %q: %v", path, err)
+	}
+	entries, err := parseBadBlockDump(blob)
+	if err != nil {
+		return fmt.Errorf("failed to parse %q as bad-block json: %v", path, err)
+	}
+	if len(entries) == 0 {
+		return fmt.Errorf("no bad blocks found in %q", path)
+	}
+
+	var imported int
+	for i, entry := range entries {
+		if entry.RLP == "" {
+			log.Warn("Skipping bad block without rlp", "index", i, "hash", entry.Hash)
+			continue
+		}
+		raw, err := hexutil.Decode(entry.RLP)
+		if err != nil {
+			log.Warn("Skipping bad block with invalid rlp", "index", i, "hash", entry.Hash, "err", err)
+			continue
+		}
+		var block types.Block
+		if err := rlp.DecodeBytes(raw, &block); err != nil {
+			log.Warn("Skipping bad block that failed to decode", "index", i, "hash", entry.Hash, "err", err)
+			continue
+		}
+		if entry.Hash != (common.Hash{}) && block.Hash() != entry.Hash {
+			log.Warn("Bad block hash mismatch, importing decoded block anyway", "index", i, "want", entry.Hash, "have", block.Hash())
+		}
+		var detail *rawdb.ExecutionDetail
+		if entry.Detail != "" {
+			blob, err := hexutil.Decode(entry.Detail)
+			if err != nil {
+				log.Warn("Skipping bad block with invalid detail", "index", i, "hash", entry.Hash, "err", err)
+				continue
+			}
+			detail = new(rawdb.ExecutionDetail)
+			if err := rlp.DecodeBytes(blob, detail); err != nil {
+				log.Warn("Skipping bad block whose detail failed to decode", "index", i, "hash", entry.Hash, "err", err)
+				continue
+			}
+		}
+		rawdb.WriteBadBlockWithDetails(db, &block, detail)
+		imported++
+		log.Info("Imported bad block", "number", block.NumberU64(), "hash", block.Hash(), "detail", detail != nil)
+	}
+	log.Info("Imported bad blocks", "file", path, "count", imported)
+	return nil
 }
 
 func exportChaindata(ctx *cli.Context) error {
@@ -830,7 +1089,6 @@ func showMetaData(ctx *cli.Context) error {
 		data = append(data, []string{"headHeader.Root", fmt.Sprintf("%v", h.Root)})
 		data = append(data, []string{"headHeader.Number", fmt.Sprintf("%d (%#x)", h.Number, h.Number)})
 	}
-
 	table := tablewriter.NewWriter(os.Stdout)
 	table.SetHeader([]string{"Field", "Value"})
 	table.AppendBulk(data)

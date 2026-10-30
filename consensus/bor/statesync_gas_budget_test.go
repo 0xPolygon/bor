@@ -197,7 +197,7 @@ func TestCommitStates_StateSyncContextPreparation(t *testing.T) {
 			chainContext := statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b}
 			genesis := chainContext.GetHeaderByNumber(0)
 			statedb := newStateDBForTest(t, genesis.Root)
-			rootBefore := statedb.IntermediateRoot(false)
+			rootBefore := statedb.IntermediateRoot(params.Rules{})
 			// Seed transaction-scoped values and a prior log. Prepare should clear only
 			// the transaction-scoped values and leave consensus state intact.
 			existingLog := &types.Log{Address: staleAddress, Data: []byte{0x01}}
@@ -220,7 +220,7 @@ func TestCommitStates_StateSyncContextPreparation(t *testing.T) {
 			}
 			// Prepare must not remove existing logs or modify the persistent state root.
 			require.Equal(t, []*types.Log{existingLog}, statedb.Logs())
-			require.Equal(t, rootBefore, statedb.IntermediateRoot(false))
+			require.Equal(t, rootBefore, statedb.IntermediateRoot(params.Rules{}))
 		})
 	}
 }

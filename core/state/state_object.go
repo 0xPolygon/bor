@@ -30,8 +30,9 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
-	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
+	"github.com/ethereum/go-ethereum/trie/bintrie"
+	"github.com/ethereum/go-ethereum/trie/transitiontrie"
 	"github.com/ethereum/go-ethereum/trie/trienode"
 )
 
@@ -48,11 +49,11 @@ func (s Storage) Copy() Storage {
 // - Account values as well as storages can be accessed and modified through the object.
 // - Finally, call commit to return the changes of storage trie and update account data.
 type stateObject struct {
-	db       *StateDB
-	address  common.Address      // address of ethereum account
-	addrHash common.Hash         // hash of ethereum address of the account
-	origin   *types.StateAccount // Account original data without any change applied, nil means it was not existent
-	data     types.StateAccount  // Account data with all mutations applied in the scope of block
+	db          *StateDB
+	address     common.Address      // address of ethereum account
+	addressHash *common.Hash        // hash of ethereum address of the account
+	origin      *types.StateAccount // Account original data without any change applied, nil means it was not existent
+	data        types.StateAccount  // Account data with all mutations applied in the scope of block
 
 	// prefetchRoot holds the storage root from the committed parent state, used
 	// exclusively for prefetcher interactions during pipelined SRC.
@@ -128,7 +129,6 @@ func newObject(db *StateDB, address common.Address, acct *types.StateAccount) *s
 	return &stateObject{
 		db:                 db,
 		address:            address,
-		addrHash:           crypto.Keccak256Hash(address[:]),
 		origin:             origin,
 		data:               *acct,
 		originStorage:      make(Storage),
@@ -136,6 +136,14 @@ func newObject(db *StateDB, address common.Address, acct *types.StateAccount) *s
 		pendingStorage:     make(Storage),
 		uncommittedStorage: make(Storage),
 	}
+}
+
+func (s *stateObject) addrHash() common.Hash {
+	if s.addressHash == nil {
+		h := crypto.Keccak256Hash(s.address[:])
+		s.addressHash = &h
+	}
+	return *s.addressHash
 }
 
 func (s *stateObject) markSelfdestructed() {
@@ -197,19 +205,22 @@ func (s *stateObject) getPrefetchedTrie() Trie {
 	// If there's nothing to meaningfully return, let the user figure it out by
 	// pulling the trie from disk.
 	root := s.getPrefetchRoot()
-	if (root == types.EmptyRootHash && !s.db.db.TrieDB().IsVerkle()) || s.db.prefetcher == nil {
+	if (root == types.EmptyRootHash && s.db.db.Type().Is(TypeMPT)) || s.db.prefetcher == nil {
 		return nil
 	}
 	// Use getPrefetchRoot() so the trieID matches the one used when scheduling
 	// the prefetch. For FlatDiff accounts this is the committed parent's storage
 	// root; for normal accounts it equals data.Root (unchanged behavior).
-	return s.db.prefetcher.trie(s.addrHash, root)
+	return s.db.prefetcher.trie(s.addrHash(), root)
 }
 
 // GetState retrieves a value associated with the given storage key.
 func (s *stateObject) GetState(key common.Hash) common.Hash {
-	value, _ := s.getState(key)
-	return value
+	value, dirty := s.dirtyStorage[key]
+	if dirty {
+		return value
+	}
+	return s.GetCommittedState(key)
 }
 
 // getState retrieves a value associated with the given storage key, along with
@@ -226,8 +237,14 @@ func (s *stateObject) getState(key common.Hash) (common.Hash, common.Hash) {
 // GetCommittedState retrieves the value associated with the specific key
 // without any mutations caused in the current execution.
 func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
+	// Record slot access regardless of whether the storage slot exists.
+	if s.db.stateAccessList != nil {
+		s.db.stateAccessList.StorageRead(s.address, key)
+	}
+
 	s.storageMutex.Lock()
 	defer s.storageMutex.Unlock()
+
 	// If we have a pending write or clean cached, return that
 	if value, pending := s.pendingStorage[key]; pending {
 		return value
@@ -285,8 +302,8 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 	// is consistent with the prefetcher's NodeReader state root. For FlatDiff
 	// accounts, this is the committed parent's storage root (not block N's).
 	if s.db.prefetcher != nil {
-		if root := s.getPrefetchRoot(); root != types.EmptyRootHash || s.db.db.TrieDB().IsVerkle() {
-			if err = s.db.prefetcher.prefetch(s.addrHash, root, s.address, nil, []common.Hash{key}, true); err != nil {
+		if root := s.getPrefetchRoot(); root != types.EmptyRootHash || s.db.db.Type().Is(TypeUBT) {
+			if err = s.db.prefetcher.prefetch(s.addrHash(), root, s.address, nil, []common.Hash{key}, true); err != nil {
 				log.Error("Failed to prefetch storage slot", "addr", s.address, "key", key, "err", err)
 			}
 		}
@@ -347,11 +364,18 @@ func (s *stateObject) finalise() {
 		// map as the dirty slot might have been committed already (before the
 		// byzantium fork) and entry is necessary to modify the value back.
 		s.pendingStorage[key] = value
+
+		// Aggregate storage writes into the block-level access list.
+		// All slots in the dirtyStorage set must have post-transaction
+		// values that differ from their pre-transaction values.
+		if s.db.stateAccessList != nil {
+			s.db.stateAccessList.StorageWrite(s.db.blockAccessIndex, s.address, key, value)
+		}
 	}
 	// Use getPrefetchRoot() for consistency with other prefetcher calls.
 	if s.db.prefetcher != nil && len(slotsToPrefetch) > 0 {
-		if root := s.getPrefetchRoot(); root != types.EmptyRootHash || s.db.db.TrieDB().IsVerkle() {
-			if err := s.db.prefetcher.prefetch(s.addrHash, root, s.address, nil, slotsToPrefetch, false); err != nil {
+		if root := s.getPrefetchRoot(); root != types.EmptyRootHash || s.db.db.Type().Is(TypeUBT) {
+			if err := s.db.prefetcher.prefetch(s.addrHash(), root, s.address, nil, slotsToPrefetch, false); err != nil {
 				log.Error("Failed to prefetch slots", "addr", s.address, "slots", len(slotsToPrefetch), "err", err)
 			}
 		}
@@ -449,8 +473,8 @@ func (s *stateObject) updateTrie() (Trie, error) {
 
 	// Use getPrefetchRoot() so the trieID matches the one used during scheduling.
 	if s.db.prefetcher != nil {
-		if root := s.getPrefetchRoot(); root != types.EmptyRootHash || s.db.db.TrieDB().IsVerkle() {
-			s.db.prefetcher.used(s.addrHash, root, nil, used)
+		if root := s.getPrefetchRoot(); root != types.EmptyRootHash || s.db.db.Type().Is(TypeUBT) {
+			s.db.prefetcher.used(s.addrHash(), root, nil, used)
 		}
 	}
 	// When witness building is enabled without a prefetcher, storage reads
@@ -488,17 +512,8 @@ func (s *stateObject) updateRoot() {
 }
 
 // commitStorage overwrites the clean storage with the storage changes and
-// fulfills the storage diffs into the given accountUpdate struct.
-func (s *stateObject) commitStorage(op *accountUpdate) {
-	var (
-		encode = func(val common.Hash) []byte {
-			if val == (common.Hash{}) {
-				return nil
-			}
-			blob, _ := rlp.EncodeToBytes(common.TrimLeftZeroes(val[:]))
-			return blob
-		}
-	)
+// fulfills the storage diffs into the given AccountUpdate struct.
+func (s *stateObject) commitStorage(op *AccountUpdate) {
 	for key, val := range s.pendingStorage {
 		// Skip the noop storage changes, it might be possible the value
 		// of tracked slot is same in originStorage and pendingStorage
@@ -508,20 +523,20 @@ func (s *stateObject) commitStorage(op *accountUpdate) {
 			continue
 		}
 		hash := crypto.Keccak256Hash(key[:])
-		if op.storages == nil {
-			op.storages = make(map[common.Hash][]byte)
+		if op.Storages == nil {
+			op.Storages = make(map[common.Hash]common.Hash)
 		}
-		op.storages[hash] = encode(val)
+		op.Storages[hash] = val
 
-		if op.storagesOriginByKey == nil {
-			op.storagesOriginByKey = make(map[common.Hash][]byte)
+		if op.StoragesOriginByKey == nil {
+			op.StoragesOriginByKey = make(map[common.Hash]common.Hash)
 		}
-		if op.storagesOriginByHash == nil {
-			op.storagesOriginByHash = make(map[common.Hash][]byte)
+		if op.StoragesOriginByHash == nil {
+			op.StoragesOriginByHash = make(map[common.Hash]common.Hash)
 		}
-		origin := encode(s.originStorage[key])
-		op.storagesOriginByKey[key] = origin
-		op.storagesOriginByHash[hash] = origin
+		origin := s.originStorage[key]
+		op.StoragesOriginByKey[key] = origin
+		op.StoragesOriginByHash[hash] = origin
 
 		// Overwrite the clean value of storage slots
 		s.originStorage[key] = val
@@ -534,32 +549,41 @@ func (s *stateObject) commitStorage(op *accountUpdate) {
 //
 // Note, commit may run concurrently across all the state objects. Do not assume
 // thread-safe access to the statedb.
-func (s *stateObject) commit() (*accountUpdate, *trienode.NodeSet, error) {
-	// commit the account metadata changes
-	op := &accountUpdate{
-		address: s.address,
-		data:    types.SlimAccountRLP(s.data),
-	}
-	if s.origin != nil {
-		op.origin = types.SlimAccountRLP(*s.origin)
+func (s *stateObject) commit() (*AccountUpdate, *trienode.NodeSet, error) {
+	// commit the account metadata changes, the data must be deep-copied
+	// to prevent accidental mutations later on (in practice the stateDB
+	// won't be modified after commit). The origin is safe to use directly.
+	op := &AccountUpdate{
+		Address: s.address,
+		Data:    s.data.Copy(),
+		Origin:  s.origin,
 	}
 	// commit the contract code if it's modified
 	if s.dirtyCode {
-		op.code = &contractCode{
-			hash: common.BytesToHash(s.CodeHash()),
-			blob: s.code,
+		op.Code = &ContractCode{
+			Hash: common.BytesToHash(s.CodeHash()),
+			Blob: s.code,
 		}
 		s.dirtyCode = false // reset the dirty flag
 	}
 	// Commit storage changes and the associated storage trie
 	s.commitStorage(op)
-	if len(op.storages) == 0 {
+	if len(op.Storages) == 0 {
 		// nothing changed, don't bother to commit the trie
 		s.origin = s.data.Copy()
 		return op, nil, nil
 	}
-	root, nodes := s.trie.Commit(false)
-	s.data.Root = root
+	// In Verkle/binary trie mode, all state objects share one unified trie.
+	// The main account trie commit in stateDB.commit() already calls
+	// CollectNodes on this trie, so calling Commit here again would
+	// redundantly traverse and serialize the entire tree per dirty account.
+	if s.db.GetTrie().IsUBT() {
+		s.origin = s.data.Copy()
+		return op, nil, nil
+	}
+	// The storage trie root is omitted, as it has already been updated in the
+	// previous updateRoot step.
+	_, nodes := s.trie.Commit(false)
 	s.origin = s.data.Copy()
 	return op, nodes, nil
 }
@@ -595,7 +619,7 @@ func (s *stateObject) deepCopy(db *StateDB) *stateObject {
 	obj := &stateObject{
 		db:                 db,
 		address:            s.address,
-		addrHash:           s.addrHash,
+		addressHash:        nil,
 		origin:             s.origin,
 		data:               s.data,
 		prefetchRoot:       s.prefetchRoot,
@@ -611,11 +635,11 @@ func (s *stateObject) deepCopy(db *StateDB) *stateObject {
 	}
 
 	switch s.trie.(type) {
-	case *trie.VerkleTrie:
-		// Verkle uses only one tree, and the copy has already been
+	case *bintrie.BinaryTrie:
+		// UBT uses only one tree, and the copy has already been
 		// made in mustCopyTrie.
 		obj.trie = db.trie
-	case *trie.TransitionTrie:
+	case *transitiontrie.TransitionTrie:
 		// Same thing for the transition tree, since the MPT is
 		// read-only.
 		obj.trie = db.trie

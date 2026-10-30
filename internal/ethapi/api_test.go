@@ -142,6 +142,7 @@ func allTransactionTypes(addr common.Address, config *params.ChainConfig) []txDa
 			Want: `{
 				"blockHash": null,
 				"blockNumber": null,
+				"blockTimestamp": null,
 				"from": "0x71562b71999873db5b286df957af199ec94617f7",
 				"gas": "0x7",
 				"gasPrice": "0x6",
@@ -172,6 +173,7 @@ func allTransactionTypes(addr common.Address, config *params.ChainConfig) []txDa
 			Want: `{
 				"blockHash": null,
 				"blockNumber": null,
+				"blockTimestamp": null,
 				"from": "0x71562b71999873db5b286df957af199ec94617f7",
 				"gas": "0x7",
 				"gasPrice": "0x6",
@@ -210,6 +212,7 @@ func allTransactionTypes(addr common.Address, config *params.ChainConfig) []txDa
 			Want: `{
 				"blockHash": null,
 				"blockNumber": null,
+				"blockTimestamp": null,
 				"from": "0x71562b71999873db5b286df957af199ec94617f7",
 				"gas": "0x7",
 				"gasPrice": "0x6",
@@ -256,6 +259,7 @@ func allTransactionTypes(addr common.Address, config *params.ChainConfig) []txDa
 			Want: `{
 				"blockHash": null,
 				"blockNumber": null,
+				"blockTimestamp": null,
 				"from": "0x71562b71999873db5b286df957af199ec94617f7",
 				"gas": "0x7",
 				"gasPrice": "0x6",
@@ -303,6 +307,7 @@ func allTransactionTypes(addr common.Address, config *params.ChainConfig) []txDa
 			Want: `{
 				"blockHash": null,
 				"blockNumber": null,
+				"blockTimestamp": null,
 				"from": "0x71562b71999873db5b286df957af199ec94617f7",
 				"gas": "0x7",
 				"gasPrice": "0x9",
@@ -347,6 +352,7 @@ func allTransactionTypes(addr common.Address, config *params.ChainConfig) []txDa
 			Want: `{
 				"blockHash": null,
 				"blockNumber": null,
+				"blockTimestamp": null,
 				"from": "0x71562b71999873db5b286df957af199ec94617f7",
 				"gas": "0x7",
 				"gasPrice": "0x9",
@@ -389,6 +395,7 @@ func allBlobTxs(addr common.Address, config *params.ChainConfig) []txData {
 			Want: `{
                 "blockHash": null,
                 "blockNumber": null,
+				"blockTimestamp": null,
                 "from": "0x71562b71999873db5b286df957af199ec94617f7",
                 "gas": "0x6",
                 "gasPrice": "0x5",
@@ -491,7 +498,19 @@ func newTestBackend(t *testing.T, n int, gspec *core.Genesis, engine consensus.E
 	options.TxLookupLimit = 0 // index all txs
 
 	accman, acc := newTestAccountManager(t)
+	if gspec.Alloc == nil {
+		gspec.Alloc = types.GenesisAlloc{}
+	}
 	gspec.Alloc[acc.Address] = types.Account{Balance: big.NewInt(params.Ether)}
+
+	// Most of the configs used here are merged up to the latest fork, whose
+	// system calls invalidate every generated block unless the contracts they
+	// target are deployed. Anything the caller allocated explicitly wins.
+	for addr, account := range core.SystemContractAllocs() {
+		if _, ok := gspec.Alloc[addr]; !ok {
+			gspec.Alloc[addr] = account
+		}
+	}
 
 	// Generate blocks for testing
 	db, blocks, receipts := core.GenerateChainWithGenesis(gspec, engine, n+1, generator)
@@ -573,7 +592,7 @@ func (b testBackend) RPCGasCap() uint64                        { return 10000000
 func (b testBackend) RPCEVMTimeout() time.Duration             { return time.Second }
 func (b testBackend) RPCTxFeeCap() float64                     { return 0 }
 func (b testBackend) UnprotectedAllowed() bool                 { return false }
-func (b testBackend) SetHead(number uint64)                    {}
+func (b testBackend) SetHead(number uint64) error              { return nil }
 func (b testBackend) HeaderByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Header, error) {
 	if number == rpc.LatestBlockNumber {
 		return b.chain.CurrentBlock(), nil
@@ -959,6 +978,9 @@ func (b testBackend) HistoryPruningCutoff() uint64 {
 	bn, _ := b.chain.HistoryPruningCutoff()
 	return bn
 }
+func (b testBackend) HistoryRetention() HistoryRetention {
+	return HistoryRetention{StateScheme: b.chain.TrieDB().Scheme()}
+}
 
 func (b testBackend) IsParallelImportActive() bool {
 	return false
@@ -1035,6 +1057,17 @@ func TestEstimateGas(t *testing.T) {
 			},
 			expectErr: core.ErrInsufficientFunds,
 			want:      21000,
+		},
+		// block override gas limit should bound estimation search space.
+		{
+			blockNumber: rpc.LatestBlockNumber,
+			call: TransactionArgs{
+				From:  &accounts[0].addr,
+				Input: hex2Bytes("6080604052348015600f57600080fd5b50483a1015601c57600080fd5b60003a111560315760004811603057600080fd5b5b603f80603e6000396000f3fe6080604052600080fdfea264697066735822122060729c2cee02b10748fae5200f1c9da4661963354973d9154c13a8e9ce9dee1564736f6c63430008130033"),
+				Gas:   func() *hexutil.Uint64 { v := hexutil.Uint64(0); return &v }(),
+			},
+			blockOverrides: override.BlockOverrides{GasLimit: func() *hexutil.Uint64 { v := hexutil.Uint64(50000); return &v }()},
+			expectErr:      errors.New("gas required exceeds allowance (50000)"),
 		},
 		// empty create
 		{
@@ -1116,6 +1149,19 @@ func TestEstimateGas(t *testing.T) {
 				BlobFeeCap: (*hexutil.Big)(big.NewInt(1)),
 			},
 			want: 21000,
+		},
+		// blob base fee block override should be applied during estimation.
+		{
+			blockNumber: rpc.LatestBlockNumber,
+			call: TransactionArgs{
+				From:       &accounts[0].addr,
+				To:         &accounts[1].addr,
+				Value:      (*hexutil.Big)(big.NewInt(1)),
+				BlobHashes: []common.Hash{{0x01, 0x22}},
+				BlobFeeCap: (*hexutil.Big)(big.NewInt(1)),
+			},
+			blockOverrides: override.BlockOverrides{BlobBaseFee: (*hexutil.Big)(big.NewInt(2))},
+			expectErr:      core.ErrBlobFeeCapTooLow,
 		},
 		// // SPDX-License-Identifier: GPL-3.0
 		//pragma solidity >=0.8.2 <0.9.0;
@@ -1573,6 +1619,27 @@ func TestCall(t *testing.T) {
 				Withdrawals: &types.Withdrawals{},
 			},
 			expectErr: errors.New(`block override "withdrawals" is not supported for this RPC method`),
+		},
+		// Verify that an overridden basefee is honored when computing gasPrice
+		// from the 1559 fee fields. Returning GASPRICE opcode; expected value
+		// is min(MaxFeePerGas, MaxPriorityFeePerGas + overridden BaseFee).
+		//
+		// BaseFee override = 0xa (10); MaxFeePerGas = 0x64 (100);
+		// MaxPriorityFeePerGas = 0x2 (2); expected GASPRICE = 12.
+		{
+			name:        "basefee-override-used-in-gasprice",
+			blockNumber: rpc.LatestBlockNumber,
+			call: TransactionArgs{
+				From: &accounts[0].addr,
+				// Contract: GASPRICE; PUSH1 0; MSTORE; PUSH1 32; PUSH1 0; RETURN
+				Input:                hex2Bytes("3a60005260206000f3"),
+				MaxFeePerGas:         (*hexutil.Big)(big.NewInt(100)),
+				MaxPriorityFeePerGas: (*hexutil.Big)(big.NewInt(2)),
+			},
+			blockOverrides: override.BlockOverrides{
+				BaseFeePerGas: (*hexutil.Big)(big.NewInt(10)),
+			},
+			want: "0x000000000000000000000000000000000000000000000000000000000000000c",
 		},
 	}
 	for _, tc := range testSuite {
@@ -3122,6 +3189,77 @@ func TestSimulateV1TxSender(t *testing.T) {
 	require.Equal(t, sender2, summary[1].Transactions[0].From, "sender address mismatch")
 }
 
+// TestSimulateV1WithdrawalsByFork verifies that withdrawals and withdrawalsRoot
+// are only emitted in the simulated block result when the simulated block is
+// post-Shanghai. Pre-Shanghai blocks must omit both fields, otherwise the
+// header hash and size would not match a valid pre-Shanghai block.
+func TestSimulateV1WithdrawalsByFork(t *testing.T) {
+	t.Parallel()
+
+	run := func(t *testing.T, cfg *params.ChainConfig, blockTime *uint64, wantWithdrawals bool) {
+		t.Helper()
+		gspec := &core.Genesis{Config: cfg, Alloc: types.GenesisAlloc{}}
+		// bor's chain maker fills in a proof-of-work difficulty, which the beacon
+		// engine rejects once the config is merged from genesis, so mark the
+		// generated blocks as post-merge in that case. The unmerged test config
+		// carries a max terminal difficulty rather than a nil one, so the zero
+		// check is what separates the two.
+		merged := cfg.TerminalTotalDifficulty != nil && cfg.TerminalTotalDifficulty.Sign() == 0
+		backend := newTestBackend(t, 1, gspec, beacon.New(ethash.NewFaker()), func(i int, b *core.BlockGen) {
+			if merged {
+				b.SetPoS()
+			}
+		})
+
+		ctx := context.Background()
+		stateDB, baseHeader, err := backend.StateAndHeaderByNumberOrHash(ctx, rpc.BlockNumberOrHashWithNumber(rpc.LatestBlockNumber))
+		if err != nil {
+			t.Fatalf("failed to get state and header: %v", err)
+		}
+		sim := &simulator{
+			b:           backend,
+			state:       stateDB,
+			base:        baseHeader,
+			chainConfig: backend.ChainConfig(),
+			budget:      newGasBudget(0),
+		}
+
+		block := simBlock{}
+		if blockTime != nil {
+			t := hexutil.Uint64(*blockTime)
+			block.BlockOverrides = &override.BlockOverrides{Time: &t}
+		}
+		results, err := sim.execute(ctx, []simBlock{block})
+		if err != nil {
+			t.Fatalf("simulation execution failed: %v", err)
+		}
+		require.Len(t, results, 1)
+
+		enc, err := json.Marshal(results[0])
+		if err != nil {
+			t.Fatalf("failed to marshal result: %v", err)
+		}
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(enc, &raw); err != nil {
+			t.Fatalf("failed to unmarshal result: %v", err)
+		}
+		_, hasWithdrawals := raw["withdrawals"]
+		_, hasWithdrawalsRoot := raw["withdrawalsRoot"]
+		if hasWithdrawals != wantWithdrawals || hasWithdrawalsRoot != wantWithdrawals {
+			t.Fatalf("unexpected withdrawals fields: withdrawals=%v withdrawalsRoot=%v want=%v\n%s", hasWithdrawals, hasWithdrawalsRoot, wantWithdrawals, enc)
+		}
+	}
+
+	t.Run("pre-shanghai", func(t *testing.T) {
+		// TestChainConfig has ShanghaiTime=nil, so all simulated blocks are pre-Shanghai.
+		run(t, params.TestChainConfig, nil, false)
+	})
+	t.Run("post-shanghai", func(t *testing.T) {
+		// MergedTestChainConfig has every fork active from genesis.
+		run(t, params.MergedTestChainConfig, nil, true)
+	})
+}
+
 func TestSignTransaction(t *testing.T) {
 	t.Parallel()
 	// Initialize test accounts
@@ -3609,6 +3747,7 @@ func TestRPCMarshalBlock(t *testing.T) {
 					{
 						"blockHash": "0x9b73c83b25d0faf7eab854e3684c7e394336d6e135625aafa5c183f27baa8fee",
 						"blockNumber": "0x64",
+						"blockTimestamp": "0x0",
 						"from": "0x0000000000000000000000000000000000000000",
 						"gas": "0x457",
 						"gasPrice": "0x2b67",
@@ -3629,6 +3768,7 @@ func TestRPCMarshalBlock(t *testing.T) {
 					{
 						"blockHash": "0x9b73c83b25d0faf7eab854e3684c7e394336d6e135625aafa5c183f27baa8fee",
 						"blockNumber": "0x64",
+						"blockTimestamp": "0x0",
 						"from": "0x0000000000000000000000000000000000000000",
 						"gas": "0x457",
 						"gasPrice": "0x2b67",
@@ -3647,6 +3787,7 @@ func TestRPCMarshalBlock(t *testing.T) {
 					{
 						"blockHash": "0x9b73c83b25d0faf7eab854e3684c7e394336d6e135625aafa5c183f27baa8fee",
 						"blockNumber": "0x64",
+						"blockTimestamp": "0x0",
 						"from": "0x0000000000000000000000000000000000000000",
 						"gas": "0x457",
 						"gasPrice": "0x2b67",
@@ -3667,6 +3808,7 @@ func TestRPCMarshalBlock(t *testing.T) {
 					{
 						"blockHash": "0x9b73c83b25d0faf7eab854e3684c7e394336d6e135625aafa5c183f27baa8fee",
 						"blockNumber": "0x64",
+						"blockTimestamp": "0x0",
 						"from": "0x0000000000000000000000000000000000000000",
 						"gas": "0x457",
 						"gasPrice": "0x2b67",
@@ -4419,7 +4561,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 		{
 			txHash: txHashes[0],
 			want: `{
-				"blockHash": "0xcdbefbd0a516759927751ca4c00084f967cef3817ce6e0fd819f0534b271cb4a",
+				"blockHash": "0x8ea5fe3cbcfaf615697bdd5d49a0594b42cb796ef937f07ac43aad4b38e7c2d5",
 				"blockNumber": "0x1",
 				"contractAddress": null,
 				"cumulativeGasUsed": "0x5208",
@@ -4440,7 +4582,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 					"blockTimestamp": "0xa",
 					"transactionHash": "0x644a31c354391520d00e95b9affbbb010fc79ac268144ab8e28207f4cf51097e",
 					"transactionIndex": "0x0",
-					"blockHash": "0xcdbefbd0a516759927751ca4c00084f967cef3817ce6e0fd819f0534b271cb4a",
+					"blockHash": "0x8ea5fe3cbcfaf615697bdd5d49a0594b42cb796ef937f07ac43aad4b38e7c2d5",
 					"logIndex": "0x0",
 					"removed": false
 				  }
@@ -4457,7 +4599,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 		{
 			txHash: txHashes[1],
 			want: `{
-				"blockHash": "0xcdbefbd0a516759927751ca4c00084f967cef3817ce6e0fd819f0534b271cb4a",
+				"blockHash": "0x8ea5fe3cbcfaf615697bdd5d49a0594b42cb796ef937f07ac43aad4b38e7c2d5",
 				"blockNumber": "0x1",
 				"contractAddress": "0xae9bea628c4ce503dcfd7e305cab4e29e7476592",
 				"cumulativeGasUsed": "0x12156",
@@ -4477,7 +4619,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 		{
 			txHash: txHashes[2],
 			want: `{
-				"blockHash": "0xcdbefbd0a516759927751ca4c00084f967cef3817ce6e0fd819f0534b271cb4a",
+				"blockHash": "0x8ea5fe3cbcfaf615697bdd5d49a0594b42cb796ef937f07ac43aad4b38e7c2d5",
 				"blockNumber": "0x1",
 				"contractAddress": null,
 				"cumulativeGasUsed": "0x17f7e",
@@ -4497,7 +4639,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 					"blockTimestamp": "0xa",
 					"transactionHash": "0xa228af0975b99799bd28331085a6966aba2fb5814a8d89aabc342462aa40429a",
 					"transactionIndex": "0x2",
-					"blockHash": "0xcdbefbd0a516759927751ca4c00084f967cef3817ce6e0fd819f0534b271cb4a",
+					"blockHash": "0x8ea5fe3cbcfaf615697bdd5d49a0594b42cb796ef937f07ac43aad4b38e7c2d5",
 					"logIndex": "0x1",
 					"removed": false
 				  }
@@ -4514,7 +4656,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 		{
 			txHash: txHashes[3],
 			want: `{
-				"blockHash": "0xcdbefbd0a516759927751ca4c00084f967cef3817ce6e0fd819f0534b271cb4a",
+				"blockHash": "0x8ea5fe3cbcfaf615697bdd5d49a0594b42cb796ef937f07ac43aad4b38e7c2d5",
 				"blockNumber": "0x1",
 				"contractAddress": null,
 				"cumulativeGasUsed": "0x1d30b",
@@ -4535,7 +4677,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 					"blockTimestamp": "0xa",
 					"transactionHash": "0xc2cc458a65bc96f642d4a2063cce162b0da642613d801271bdbc4aa7e775f3ed",
 					"transactionIndex": "0x3",
-					"blockHash": "0xcdbefbd0a516759927751ca4c00084f967cef3817ce6e0fd819f0534b271cb4a",
+					"blockHash": "0x8ea5fe3cbcfaf615697bdd5d49a0594b42cb796ef937f07ac43aad4b38e7c2d5",
 					"logIndex": "0x2",
 					"removed": false
 				  }
@@ -4552,7 +4694,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 		{
 			txHash: txHashes[4],
 			want: `{
-				"blockHash": "0xcdbefbd0a516759927751ca4c00084f967cef3817ce6e0fd819f0534b271cb4a",
+				"blockHash": "0x8ea5fe3cbcfaf615697bdd5d49a0594b42cb796ef937f07ac43aad4b38e7c2d5",
 				"blockNumber": "0x1",
 				"contractAddress": "0xfdaa97661a584d977b4d3abb5370766ff5b86a18",
 				"cumulativeGasUsed": "0x2b325",
@@ -4572,7 +4714,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 		{
 			txHash: txHashes[5],
 			want: `{
-				"blockHash": "0xcdbefbd0a516759927751ca4c00084f967cef3817ce6e0fd819f0534b271cb4a",
+				"blockHash": "0x8ea5fe3cbcfaf615697bdd5d49a0594b42cb796ef937f07ac43aad4b38e7c2d5",
 				"blockNumber": "0x1",
 				"contractAddress": null,
 				"cumulativeGasUsed": "0x2b325",
@@ -4583,7 +4725,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 				"logsBloom": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
 				"status": "0x1",
 				"to": "0x0000000000000000000000000000000000000000",
-				"transactionHash": "0xcd9b0d3d7c08df38f716a708b13e38cb286af42680feb37e6a34a1b4197231a3",
+				"transactionHash": "0xca0eaa56e8be5c77be4766380f7917187c789d5a29715c0c5dc955265c5b8996",
 				"transactionIndex": "0x5",
 				"type": "0x0"
 			  }`,
@@ -4668,6 +4810,68 @@ func TestCreateAccessListWithStateOverrides(t *testing.T) {
 		StorageKeys: []common.Hash{{}},
 	}}
 	require.Equal(t, expected, result.Accesslist)
+}
+
+func TestEstimateGasAmsterdam(t *testing.T) {
+	t.Skip("bor: a chain with Amsterdam active from genesis fails to start (missing head header), see POS-3738")
+	t.Parallel()
+	var (
+		accounts = newAccounts(2)
+		config   = *params.MergedTestChainConfig
+		genesis  = &core.Genesis{
+			Config:     &config,
+			Difficulty: common.Big0,
+			Alloc: types.GenesisAlloc{
+				accounts[0].addr: {Balance: big.NewInt(params.Ether)},
+				accounts[1].addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+	)
+	config.AmsterdamBlock = big.NewInt(0)
+	api := NewBlockChainAPI(newTestBackend(t, 0, genesis, beacon.New(ethash.NewFaker()), nil))
+
+	var testSuite = []struct {
+		call TransactionArgs
+		want uint64
+	}{
+		// value transfer to an existing account: EIP-2780 intrinsic gas
+		{
+			call: TransactionArgs{
+				From:  &accounts[0].addr,
+				To:    &accounts[1].addr,
+				Value: (*hexutil.Big)(big.NewInt(1000)),
+			},
+			want: 21000,
+		},
+		// zero-value call to an existing account: below the legacy 21000 floor
+		{
+			call: TransactionArgs{
+				From: &accounts[0].addr,
+				To:   &accounts[1].addr,
+			},
+			want: 15000,
+		},
+		// self transfer: base cost only
+		{
+			call: TransactionArgs{
+				From:  &accounts[0].addr,
+				To:    &accounts[0].addr,
+				Value: (*hexutil.Big)(big.NewInt(1000)),
+			},
+			want: 12000,
+		},
+	}
+	latest := rpc.LatestBlockNumber
+	for i, tc := range testSuite {
+		result, err := api.EstimateGas(context.Background(), tc.call, &rpc.BlockNumberOrHash{BlockNumber: &latest}, nil, nil)
+		if err != nil {
+			t.Errorf("test %d: want no error, have %v", i, err)
+			continue
+		}
+		if uint64(result) != tc.want {
+			t.Errorf("test %d: result mismatch, have %v, want %v", i, uint64(result), tc.want)
+		}
+	}
 }
 
 func TestSendRawTransactionForPreconf(t *testing.T) {
@@ -5287,7 +5491,7 @@ func TestSendRawTransactionSync_Timeout(t *testing.T) {
 
 	raw, _ := makeSelfSignedRaw(t, api, b.acc.Address)
 
-	timeout := hexutil.Uint64(200) // 200ms
+	timeout := TxSyncTimeout(200) // 200ms
 	receipt, err := api.SendRawTransactionSync(context.Background(), raw, &timeout)
 
 	if receipt != nil {
@@ -5346,7 +5550,7 @@ func TestSendRawTransactionSync_Preconfirmation(t *testing.T) {
 	}
 	api := NewTransactionAPI(b, new(AddrLocker))
 	raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
-	timeout := hexutil.Uint64(500)
+	timeout := TxSyncTimeout(500)
 	receipt, err := api.SendRawTransactionSync(t.Context(), raw, &timeout)
 	if err != nil {
 		t.Fatalf("preconfirmation: %v", err)
@@ -5390,7 +5594,7 @@ func TestSendRawTransactionSync_RelayIsOptional(t *testing.T) {
 	}
 	api := NewTransactionAPI(b, new(AddrLocker))
 	raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
-	timeout := hexutil.Uint64(500)
+	timeout := TxSyncTimeout(500)
 
 	receipt, err := api.SendRawTransactionSync(t.Context(), raw, &timeout)
 	require.NoError(t, err)
@@ -5837,6 +6041,94 @@ func TestAccountAt(t *testing.T) {
 	})
 }
 
+func TestGetStorageValues(t *testing.T) {
+	t.Parallel()
+
+	var (
+		addr1 = common.HexToAddress("0x1111")
+		addr2 = common.HexToAddress("0x2222")
+		slot0 = common.Hash{}
+		slot1 = common.BigToHash(big.NewInt(1))
+		slot2 = common.BigToHash(big.NewInt(2))
+		val0  = common.BigToHash(big.NewInt(42))
+		val1  = common.BigToHash(big.NewInt(100))
+		val2  = common.BigToHash(big.NewInt(200))
+
+		genesis = &core.Genesis{
+			Config: params.MergedTestChainConfig,
+			Alloc: types.GenesisAlloc{
+				addr1: {
+					Balance: big.NewInt(params.Ether),
+					Storage: map[common.Hash]common.Hash{
+						slot0: val0,
+						slot1: val1,
+					},
+				},
+				addr2: {
+					Balance: big.NewInt(params.Ether),
+					Storage: map[common.Hash]common.Hash{
+						slot2: val2,
+					},
+				},
+			},
+		}
+	)
+	api := NewBlockChainAPI(newTestBackend(t, 1, genesis, beacon.New(ethash.NewFaker()), func(i int, b *core.BlockGen) {
+		b.SetPoS()
+	}))
+	latest := rpc.BlockNumberOrHashWithNumber(rpc.LatestBlockNumber)
+
+	// Happy path: multiple addresses, multiple slots.
+	result, err := api.GetStorageValues(context.Background(), map[common.Address][]common.Hash{
+		addr1: {slot0, slot1},
+		addr2: {slot2},
+	}, &latest)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("expected 2 addresses in result, got %d", len(result))
+	}
+	if got := common.BytesToHash(result[addr1][0]); got != val0 {
+		t.Errorf("addr1 slot0: want %x, got %x", val0, got)
+	}
+	if got := common.BytesToHash(result[addr1][1]); got != val1 {
+		t.Errorf("addr1 slot1: want %x, got %x", val1, got)
+	}
+	if got := common.BytesToHash(result[addr2][0]); got != val2 {
+		t.Errorf("addr2 slot2: want %x, got %x", val2, got)
+	}
+
+	// Missing slot returns zero.
+	result, err = api.GetStorageValues(context.Background(), map[common.Address][]common.Hash{
+		addr1: {common.HexToHash("0xff")},
+	}, &latest)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := common.BytesToHash(result[addr1][0]); got != (common.Hash{}) {
+		t.Errorf("missing slot: want zero, got %x", got)
+	}
+
+	// Empty request returns error.
+	_, err = api.GetStorageValues(context.Background(), map[common.Address][]common.Hash{}, &latest)
+	if err == nil {
+		t.Fatal("expected error for empty request")
+	}
+
+	// Exceeding slot limit returns error.
+	tooMany := make([]common.Hash, maxGetStorageSlots+1)
+	for i := range tooMany {
+		tooMany[i] = common.BigToHash(big.NewInt(int64(i)))
+	}
+	_, err = api.GetStorageValues(context.Background(), map[common.Address][]common.Hash{
+		addr1: tooMany,
+	}, &latest)
+	if err == nil {
+		t.Fatal("expected error for exceeding slot limit")
+	}
+}
+
 func TestCallWithStateMissingHeader(t *testing.T) {
 	t.Parallel()
 
@@ -5894,6 +6186,144 @@ func TestSimulateV1DispatchesSimulationFinalize(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, res, 1)
 	require.True(t, engine.simFinalized, "simulation finalization hook was not used")
+}
+
+// TestStateMethodsDefaultToLatest verifies that the state-reading methods
+// default the optional block parameter to "latest".
+func TestStateMethodsDefaultToLatest(t *testing.T) {
+	t.Parallel()
+	var (
+		accounts = newAccounts(2)
+		slot     = common.HexToHash("0x01")
+		val      = common.HexToHash("0x42")
+		code     = []byte{0x60, 0x00, 0x60, 0x00}
+		genesis  = &core.Genesis{
+			Config: params.MergedTestChainConfig,
+			Alloc: types.GenesisAlloc{
+				accounts[0].addr: {Balance: big.NewInt(params.Ether)},
+				accounts[1].addr: {
+					Balance: big.NewInt(2 * params.Ether),
+					Nonce:   7,
+					Code:    code,
+					Storage: map[common.Hash]common.Hash{slot: val},
+				},
+			},
+		}
+		acc = accounts[1].addr
+		ctx = context.Background()
+	)
+	backend := newTestBackend(t, 1, genesis, beacon.New(ethash.NewFaker()), func(i int, b *core.BlockGen) {
+		b.SetPoS()
+	})
+	srv := rpc.NewServer("", 0, 0)
+	if err := srv.RegisterName("eth", NewBlockChainAPI(backend)); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.RegisterName("eth", NewTransactionAPI(backend, new(AddrLocker))); err != nil {
+		t.Fatal(err)
+	}
+	client := rpc.DialInProc(srv)
+	defer client.Close()
+
+	// call invokes method twice: once omitting the block param and once passing
+	// "latest" explicitly. Both must succeed and return identical results.
+	call := func(name string, dst func() any, explicit []any, omitted []any) {
+		t.Helper()
+		gotOmitted := dst()
+		if err := client.CallContext(ctx, gotOmitted, name, omitted...); err != nil {
+			t.Fatalf("%s with omitted block: unexpected error: %v", name, err)
+		}
+		gotLatest := dst()
+		if err := client.CallContext(ctx, gotLatest, name, explicit...); err != nil {
+			t.Fatalf("%s with explicit latest: unexpected error: %v", name, err)
+		}
+		o, _ := json.Marshal(gotOmitted)
+		l, _ := json.Marshal(gotLatest)
+		if !bytes.Equal(o, l) {
+			t.Errorf("%s: omitted-block result %s != latest result %s", name, o, l)
+		}
+	}
+
+	call("eth_getBalance",
+		func() any { return new(hexutil.Big) },
+		[]any{acc, "latest"}, []any{acc})
+	call("eth_getCode",
+		func() any { return new(hexutil.Bytes) },
+		[]any{acc, "latest"}, []any{acc})
+	call("eth_getTransactionCount",
+		func() any { return new(hexutil.Uint64) },
+		[]any{acc, "latest"}, []any{acc})
+	call("eth_getStorageAt",
+		func() any { return new(hexutil.Bytes) },
+		[]any{acc, slot, "latest"}, []any{acc, slot})
+	call("eth_getProof",
+		func() any { return new(AccountResult) },
+		[]any{acc, []string{slot.Hex()}, "latest"}, []any{acc, []string{slot.Hex()}})
+	call("eth_getStorageValues",
+		func() any { return new(map[common.Address][]hexutil.Bytes) },
+		[]any{map[common.Address][]common.Hash{acc: {slot}}, "latest"},
+		[]any{map[common.Address][]common.Hash{acc: {slot}}})
+}
+
+// TestCreateAccessListAuthorizationGas checks that eth_createAccessList accepts
+// the gas limit returned by eth_estimateGas for a set-code transaction with
+// several authorizations, both before and after Amsterdam.
+func TestCreateAccessListAuthorizationGas(t *testing.T) {
+	t.Parallel()
+
+	const numAuths = 9
+	accounts := newAccounts(numAuths + 1)
+	// accounts[0] is the sender; every other account is already delegated and
+	// re-delegates, so that no account or authorization creation is charged.
+	var authList []types.SetCodeAuthorization
+	for _, acc := range accounts[1:] {
+		auth, err := types.SignSetCode(acc.key, types.SetCodeAuthorization{
+			Address: common.Address{0xaa},
+		})
+		require.NoError(t, err)
+		authList = append(authList, auth)
+	}
+	newAPI := func(amsterdam bool) *BlockChainAPI {
+		alloc := types.GenesisAlloc{accounts[0].addr: {Balance: big.NewInt(params.Ether)}}
+		for _, acc := range accounts[1:] {
+			alloc[acc.addr] = types.Account{
+				Balance: big.NewInt(params.Ether),
+				Code:    types.AddressToDelegation(common.Address{0xbb}),
+			}
+		}
+		config := *params.MergedTestChainConfig
+		if amsterdam {
+			config.AmsterdamBlock = big.NewInt(0)
+		}
+		genesis := &core.Genesis{Config: &config, Difficulty: common.Big0, Alloc: alloc}
+		return NewBlockChainAPI(newTestBackend(t, 0, genesis, beacon.New(ethash.NewFaker()), nil))
+	}
+	for _, tc := range []struct {
+		name      string
+		amsterdam bool
+	}{
+		{"pre-Amsterdam", false},
+		{"Amsterdam", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.amsterdam {
+				t.Skip("bor: a chain with Amsterdam active from genesis fails to start (missing head header), see POS-3738")
+			}
+			api := newAPI(tc.amsterdam)
+			args := TransactionArgs{
+				From:              &accounts[0].addr,
+				To:                &accounts[0].addr,
+				AuthorizationList: authList,
+			}
+			estimated, err := api.EstimateGas(context.Background(), args, nil, nil, nil)
+			require.NoError(t, err)
+
+			args.Gas = &estimated
+			result, err := api.CreateAccessList(context.Background(), args, nil, nil)
+			require.NoError(t, err)
+			require.Empty(t, result.Error)
+		})
+	}
 }
 
 // laggingCanonicalBackend misses the first canonical lookup and, when landed

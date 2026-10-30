@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"math/big"
 	"time"
 
@@ -46,6 +47,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/tracers"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
+	"github.com/ethereum/go-ethereum/internal/ethapi"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/miner"
 	"github.com/ethereum/go-ethereum/params"
@@ -79,9 +81,27 @@ func (b *EthAPIBackend) GetFinalizedBlockNumber(_ context.Context) (uint64, erro
 	return getFinalizedBlockNumber(b.eth)
 }
 
-func (b *EthAPIBackend) SetHead(number uint64) {
+func (b *EthAPIBackend) SetHead(number uint64) error {
+	// Reject rewinding to a point before the snap-sync pivot. The earliest
+	// recoverable state is the pivot block, so a target below it would simply
+	// reset the chain to genesis, which is almost never the intent behind a
+	// manual debug_setHead.
+	if pivot := rawdb.ReadLastPivotNumber(b.eth.ChainDb()); pivot != nil && number < *pivot {
+		return fmt.Errorf("rewind target %d is before the snap-sync pivot %d", number, *pivot)
+	}
+	// In path mode the deepest reachable state is bounded by the amount of state
+	// histories retained. If the reverse diffs for the target have already been
+	// pruned, its state is no longer recoverable.
+	bc := b.eth.blockchain
+	if bc.TrieDB().Scheme() == rawdb.PathScheme {
+		if header := bc.GetHeaderByNumber(number); header != nil {
+			if !bc.HasState(header.Root) && !bc.StateRecoverable(header.Root) {
+				return errors.New("rewind target is not recoverable")
+			}
+		}
+	}
 	b.eth.handler.downloader.Cancel()
-	b.eth.blockchain.SetHead(number)
+	return b.eth.blockchain.SetHead(number)
 }
 
 func (b *EthAPIBackend) HeaderByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Header, error) {
@@ -324,6 +344,19 @@ func (b *EthAPIBackend) HistoryPruningCutoff() uint64 {
 	return bn
 }
 
+func (b *EthAPIBackend) HistoryRetention() ethapi.HistoryRetention {
+	cfg := b.eth.config
+	return ethapi.HistoryRetention{
+		TxIndexHistory:   cfg.TransactionHistory,
+		LogIndexHistory:  cfg.LogHistory,
+		LogIndexDisabled: cfg.LogNoHistory,
+		StateHistory:     cfg.StateHistory,
+		TrienodeHistory:  cfg.TrienodeHistory,
+		StateArchive:     cfg.NoPruning,
+		StateScheme:      b.eth.blockchain.TrieDB().Scheme(),
+	}
+}
+
 func (b *EthAPIBackend) GetReceipts(ctx context.Context, hash common.Hash) (types.Receipts, error) {
 	if header := b.eth.blockchain.GetHeaderByHash(hash); header != nil &&
 		b.eth.blockchain.GetCanonicalHash(header.Number.Uint64()) == hash {
@@ -546,9 +579,10 @@ func (b *EthAPIBackend) SyncProgress(ctx context.Context) ethereum.SyncProgress 
 		prog.TxIndexFinishedBlocks = txProg.Indexed
 		prog.TxIndexRemainingBlocks = txProg.Remaining
 	}
-	remain, err := b.eth.blockchain.StateIndexProgress()
+	stateRemain, trienodeRemain, err := b.eth.blockchain.StateIndexProgress()
 	if err == nil {
-		prog.StateIndexRemaining = remain
+		prog.StateIndexRemaining = stateRemain
+		prog.TrienodeIndexRemaining = trienodeRemain
 	}
 	return prog
 }
@@ -563,7 +597,8 @@ func (b *EthAPIBackend) FeeHistory(ctx context.Context, blockCount uint64, lastB
 
 func (b *EthAPIBackend) BaseFee(ctx context.Context) *big.Int {
 	header := b.CurrentHeader()
-	if b.ChainConfig().IsLondon(new(big.Int).Add(header.Number, common.Big1)) {
+	next := new(big.Int).Add(header.Number, common.Big1)
+	if b.ChainConfig().IsLondon(next) {
 		return eip1559.CalcBaseFee(b.ChainConfig(), header)
 	}
 	return nil
@@ -637,12 +672,12 @@ func (b *EthAPIBackend) StartMining() error {
 	return b.eth.StartMining()
 }
 
-func (b *EthAPIBackend) StateAtBlock(ctx context.Context, block *types.Block, reexec uint64, base *state.StateDB, readOnly bool, preferDisk bool) (*state.StateDB, tracers.StateReleaseFunc, error) {
-	return b.eth.stateAtBlock(ctx, block, reexec, base, readOnly, preferDisk)
+func (b *EthAPIBackend) StateAtBlock(ctx context.Context, block *types.Block, base *state.StateDB, readOnly bool, preferDisk bool) (*state.StateDB, tracers.StateReleaseFunc, error) {
+	return b.eth.stateAtBlock(ctx, block, base, readOnly, preferDisk)
 }
 
-func (b *EthAPIBackend) StateAtTransaction(ctx context.Context, block *types.Block, txIndex int, reexec uint64) (*types.Transaction, vm.BlockContext, *state.StateDB, tracers.StateReleaseFunc, error) {
-	return b.eth.stateAtTransaction(ctx, block, txIndex, reexec)
+func (b *EthAPIBackend) StateAtTransaction(ctx context.Context, block *types.Block, txIndex int) (*types.Transaction, vm.BlockContext, *state.StateDB, tracers.StateReleaseFunc, error) {
+	return b.eth.stateAtTransaction(ctx, block, txIndex)
 }
 
 func (b *EthAPIBackend) GetWhitelistedCheckpoint() (bool, uint64, common.Hash) {

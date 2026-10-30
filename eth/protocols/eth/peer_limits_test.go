@@ -126,7 +126,7 @@ func TestPeerMessageLimitBeforeDecode(t *testing.T) {
 		for _, code := range []uint64{GetBlockHeadersMsg, GetBlockBodiesMsg, GetReceiptsMsg, NewBlockMsg, NewBlockHashesMsg} {
 			t.Run(fmt.Sprintf("%d/%d", version, code), func(t *testing.T) {
 				rw := &limitTestRW{msg: p2p.Msg{Code: code, Size: 1, Payload: bytes.NewReader([]byte{0xff})}}
-				peer := NewPeer(version, p2p.NewPeer(enode.ID{1}, "", nil), rw, nil)
+				peer := NewPeer(version, p2p.NewPeer(enode.ID{1}, "", nil), rw, nil, nil)
 				defer peer.Close()
 				var observed peerpolicy.Evidence
 				peer.SetObserver(func(e peerpolicy.Evidence) { observed = e })
@@ -153,7 +153,7 @@ func TestPeerAnnouncementLimitBeforeBackend(t *testing.T) {
 		t.Fatal(err)
 	}
 	rw := &limitTestRW{msg: p2p.Msg{Code: NewBlockHashesMsg, Size: uint32(len(encoded)), Payload: bytes.NewReader(encoded)}}
-	peer := NewPeer(ETH68, p2p.NewPeer(enode.ID{1}, "", nil), rw, nil)
+	peer := NewPeer(ETH68, p2p.NewPeer(enode.ID{1}, "", nil), rw, nil, nil)
 	defer peer.Close()
 	var evidence peerpolicy.Evidence
 	peer.SetObserver(func(e peerpolicy.Evidence) { evidence = e })
@@ -272,7 +272,7 @@ func TestPeerPooledTransactionRequestBounds(t *testing.T) {
 				}
 				rw := &replyTestRW{sent: make(chan p2p.Msg, 1)}
 				rw.msg = p2p.Msg{Code: GetPooledTransactionsMsg, Size: uint32(len(data)), Payload: bytes.NewReader(data)}
-				peer := NewPeer(version, p2p.NewPeer(enode.ID{1}, "", nil), rw, nil)
+				peer := NewPeer(version, p2p.NewPeer(enode.ID{1}, "", nil), rw, nil, nil)
 				defer peer.Close()
 				peer.limits.requests = rate.NewLimiter(0, 0)
 				pool := new(replyLookupPool)
@@ -306,7 +306,7 @@ func TestPeerPooledTransactionRequestRejectedBeforeDecode(t *testing.T) {
 			t.Run(fmt.Sprintf("%d/%d", version, size), func(t *testing.T) {
 				payload := bytes.NewReader(data)
 				rw := &limitTestRW{msg: p2p.Msg{Code: GetPooledTransactionsMsg, Size: size, Payload: payload}}
-				peer := NewPeer(version, p2p.NewPeer(enode.ID{1}, "", nil), rw, nil)
+				peer := NewPeer(version, p2p.NewPeer(enode.ID{1}, "", nil), rw, nil, nil)
 				defer peer.Close()
 				pool := new(replyLookupPool)
 				err := handleMessage(&replyLookupBackend{pool: pool}, peer)
@@ -335,7 +335,7 @@ func TestPeerAnnouncementSizeBeforeDecode(t *testing.T) {
 			t.Run(fmt.Sprintf("%d/%d", version, size), func(t *testing.T) {
 				payload := bytes.NewReader([]byte{0xff})
 				rw := &limitTestRW{msg: p2p.Msg{Code: NewBlockHashesMsg, Size: size, Payload: payload}}
-				peer := NewPeer(version, p2p.NewPeer(enode.ID{1}, "", nil), rw, nil)
+				peer := NewPeer(version, p2p.NewPeer(enode.ID{1}, "", nil), rw, nil, nil)
 				defer peer.Close()
 				backend := new(packetCapturingBackend)
 				if err := handleMessage(backend, peer); !errors.Is(err, ErrPeerRateLimit) {
@@ -366,7 +366,7 @@ func TestPeerAnnouncementSizeBoundary(t *testing.T) {
 					t.Fatal(err)
 				}
 				rw := &limitTestRW{msg: p2p.Msg{Code: NewBlockHashesMsg, Size: uint32(len(data)), Payload: bytes.NewReader(data)}}
-				peer := NewPeer(version, configuredLimitsTestPeer(t, mode), rw, nil)
+				peer := NewPeer(version, configuredLimitsTestPeer(t, mode), rw, nil, nil)
 				defer peer.Close()
 				backend := new(packetCapturingBackend)
 				if err := handleMessage(backend, peer); err != nil {

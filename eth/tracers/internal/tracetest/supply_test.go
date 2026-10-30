@@ -72,6 +72,10 @@ func TestSupplyOmittedFields(t *testing.T) {
 		config = *params.TestChainConfig
 		gspec  = &core.Genesis{
 			Config: &config,
+			// The config is merged up to the latest fork, so the system contracts
+			// it calls into have to be deployed. They hold no balance, so the
+			// traced supply is unaffected.
+			Alloc: core.SystemContractAllocs(),
 		}
 	)
 
@@ -86,7 +90,7 @@ func TestSupplyOmittedFields(t *testing.T) {
 
 	expected := supplyInfo{
 		Number:     0,
-		Hash:       common.HexToHash("0xadeda0a83e337b6c073e3f0e9a17531a04009b397a9588c093b628f21b8bc5a3"),
+		Hash:       common.HexToHash("0x9992a2abe327fa0093c1c0b45afbc62ef5f6cdd8a148c56e067073e57f5d727a"),
 		ParentHash: common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000000"),
 	}
 	actual := out[expected.Number]
@@ -276,6 +280,10 @@ func TestSupplyWithdrawals(t *testing.T) {
 		config = *params.MergedTestChainConfig
 		gspec  = &core.Genesis{
 			Config: &config,
+			// The config is merged up to the latest fork, so the system contracts
+			// it calls into have to be deployed. They hold no balance, so the
+			// traced supply is unaffected.
+			Alloc: core.SystemContractAllocs(),
 		}
 	)
 

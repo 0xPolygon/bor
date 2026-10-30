@@ -137,10 +137,11 @@ func (journal *journal) setupWriter() error {
 	defer journal.mu.Unlock()
 
 	if journal.writer != nil {
-		if err := journal.writer.Close(); err != nil {
+		err := journal.writer.Close()
+		journal.writer = nil
+		if err != nil {
 			return err
 		}
-		journal.writer = nil
 	}
 
 	// Re-open the journal file for appending
@@ -178,11 +179,11 @@ func (journal *journal) rotate(all map[common.Address]types.Transactions) error 
 
 	// Close the current journal (if any is open)
 	if journal.writer != nil {
-		if err := journal.writer.Close(); err != nil {
+		err := journal.writer.Close()
+		journal.writer = nil
+		if err != nil {
 			return err
 		}
-
-		journal.writer = nil
 	}
 	// Generate a new journal with the contents of the current pool
 	replacement, err := os.OpenFile(journal.path+".new", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
@@ -202,8 +203,9 @@ func (journal *journal) rotate(all map[common.Address]types.Transactions) error 
 
 		journaled += len(txs)
 	}
-
-	replacement.Close()
+	if err := replacement.Close(); err != nil {
+		return err
+	}
 
 	// Replace the live journal with the newly generated one
 	if err = os.Rename(journal.path+".new", journal.path); err != nil {

@@ -35,8 +35,8 @@ import (
 const basefeeWiggleMultiplier = 2
 
 var (
-	errNoEventSignature       = errors.New("no event signature")
-	errEventSignatureMismatch = errors.New("event signature mismatch")
+	ErrNoEventSignature       = errors.New("no event signature")
+	ErrEventSignatureMismatch = errors.New("event signature mismatch")
 )
 
 // SignerFn is a signer function callback when a contract requires a method to
@@ -328,7 +328,7 @@ func (c *BoundContract) createDynamicTx(opts *TransactOpts, contract *common.Add
 		}
 	}
 	// create the transaction
-	nonce, err := c.getNonce(opts)
+	nonce, err := c.GetNonce(opts)
 	if err != nil {
 		return nil, err
 	}
@@ -378,7 +378,7 @@ func (c *BoundContract) createLegacyTx(opts *TransactOpts, contract *common.Addr
 		}
 	}
 	// create the transaction
-	nonce, err := c.getNonce(opts)
+	nonce, err := c.GetNonce(opts)
 	if err != nil {
 		return nil, err
 	}
@@ -419,7 +419,7 @@ func (c *BoundContract) estimateGasLimit(opts *TransactOpts, contract *common.Ad
 	return c.transactor.EstimateGas(ensureContext(opts.Context), msg)
 }
 
-func (c *BoundContract) getNonce(opts *TransactOpts) (uint64, error) {
+func (c *BoundContract) GetNonce(opts *TransactOpts) (uint64, error) {
 	if opts.Nonce == nil {
 		return c.transactor.PendingNonceAt(ensureContext(opts.Context), opts.From)
 	} else {
@@ -562,11 +562,11 @@ func (c *BoundContract) WatchLogs(opts *WatchOpts, name string, query ...[]any) 
 func (c *BoundContract) UnpackLog(out any, event string, log types.Log) error {
 	// Anonymous events are not supported.
 	if len(log.Topics) == 0 {
-		return errNoEventSignature
+		return ErrNoEventSignature
 	}
 
 	if log.Topics[0] != c.abi.Events[event].ID {
-		return errEventSignatureMismatch
+		return ErrEventSignatureMismatch
 	}
 
 	if len(log.Data) > 0 {
@@ -590,11 +590,11 @@ func (c *BoundContract) UnpackLog(out any, event string, log types.Log) error {
 func (c *BoundContract) UnpackLogIntoMap(out map[string]any, event string, log types.Log) error {
 	// Anonymous events are not supported.
 	if len(log.Topics) == 0 {
-		return errNoEventSignature
+		return ErrNoEventSignature
 	}
 
 	if log.Topics[0] != c.abi.Events[event].ID {
-		return errEventSignatureMismatch
+		return ErrEventSignatureMismatch
 	}
 
 	if len(log.Data) > 0 {

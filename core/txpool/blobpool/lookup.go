@@ -21,7 +21,7 @@ import (
 )
 
 type txMetadata struct {
-	id   uint64 // the billy id of transction
+	id   uint64 // the billy id of transaction
 	size uint64 // the RLP encoded size of transaction (blobs are included)
 }
 
@@ -109,14 +109,4 @@ func (l *lookup) untrack(tx *blobTxMeta) {
 			delete(l.blobIndex, vhash)
 		}
 	}
-}
-
-// update updates the transaction index. It should only be used in the conversion.
-func (l *lookup) update(hash common.Hash, id uint64, size uint64) bool {
-	meta, exists := l.txIndex[hash]
-	if !exists {
-		return false
-	}
-	meta.id, meta.size = id, size
-	return true
 }

@@ -134,13 +134,13 @@ func TestPendingStateNotStaleForNonValidator(t *testing.T) {
 		"the validator signer must be authorized")
 }
 
-// nolint : paralleltest
 func TestGenerateBlockAndImportClique(t *testing.T) {
+	t.Parallel()
 	testGenerateBlockAndImport(t, true, false)
 }
 
-// nolint : paralleltest
 func TestGenerateBlockAndImportBor(t *testing.T) {
+	t.Parallel()
 	testGenerateBlockAndImport(t, false, true)
 }
 
@@ -479,6 +479,34 @@ func setupBorWorkerWithPrefetch(t *testing.T, gasPercent uint64, recommit time.D
 	w, b, _ := newTestWorker(t, config, chainConfig, engine, db, false, 0)
 
 	return w, b, engine, ctrl
+}
+
+// waitGoroutineDelta polls until the count has stayed at most maxDelta above before
+// for one second, so late-starting leaks are still seen, or until timeout.
+func waitGoroutineDelta(before, maxDelta int, timeout time.Duration) int {
+	deadline := time.Now().Add(timeout)
+
+	var settledSince time.Time
+
+	for {
+		runtime.GC()
+
+		n := runtime.NumGoroutine()
+		switch {
+		case n-before > maxDelta:
+			settledSince = time.Time{}
+		case settledSince.IsZero():
+			settledSince = time.Now()
+		case time.Since(settledSince) >= time.Second:
+			return n
+		}
+
+		if time.Now().After(deadline) {
+			return n
+		}
+
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // runWorkerAndMine starts the worker, waits for the specified duration, stops the worker,
@@ -895,9 +923,6 @@ func TestCommitInterruptExperimentBor_NormalFlow(t *testing.T) {
 		testCommitInterruptExperimentBor(t, 200, 5)
 	})
 
-	// Ensure proper cleanup between subtests
-	time.Sleep(3 * time.Second)
-
 	// with 1 sec block time and 100 millisec tx delay we should get up to 10 txs per block
 	t.Run("100ms_delay", func(t *testing.T) {
 		testCommitInterruptExperimentBor(t, 100, 10)
@@ -1071,15 +1096,12 @@ func TestCommitInterruptExperimentBor_NewTxFlow(t *testing.T) {
 		}
 	}()
 
-	// Wait for enough time to mine 3 blocks
-	time.Sleep(6 * time.Second)
-
 	// Ensure that the last block was 3 and only 2/3 transactions are mined because
 	// of the 500ms timeout and 1s block time.
 	require.Eventually(t, func() bool {
 		block := w.pendingBlock()
 		return block != nil && block.NumberU64() == 3 && block.Transactions().Len() == 2
-	}, 2*time.Second, 10*time.Millisecond, "expected pending block 3 with 2 transactions")
+	}, 8*time.Second, 10*time.Millisecond, "expected pending block 3 with 2 transactions")
 }
 
 // nolint:paralleltest
@@ -1987,7 +2009,7 @@ func TestCommitWithReaderStats(t *testing.T) {
 	w.start()
 
 	// Wait for worker to process blocks
-	time.Sleep(3 * time.Second)
+	time.Sleep(2 * time.Second)
 
 	w.stop()
 
@@ -2011,6 +2033,8 @@ func TestCommitWithReaderStats(t *testing.T) {
 // TestPrefetchFromPool_BasicExecution validates that the prefetch feature
 // executes without errors when enabled
 func TestPrefetchFromPool_BasicExecution(t *testing.T) {
+	t.Parallel()
+
 	w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, 100, 1*time.Second)
 	defer engine.Close()
 	defer ctrl.Finish()
@@ -2031,6 +2055,8 @@ func TestPrefetchFromPool_BasicExecution(t *testing.T) {
 // TestPrefetchFromPool_GasLimitTracking verifies that gas limit percentage correctly
 // limits the amount of prefetch work performed
 func TestPrefetchFromPool_GasLimitTracking(t *testing.T) {
+	t.Parallel()
+
 	w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, 50, 1*time.Second)
 	defer engine.Close()
 	defer ctrl.Finish()
@@ -2049,6 +2075,8 @@ func TestPrefetchFromPool_GasLimitTracking(t *testing.T) {
 // TestPrefetchFromPool_SkipAlreadyPrefetched ensures that transactions already prefetched
 // in one loop iteration are skipped in subsequent iterations
 func TestPrefetchFromPool_SkipAlreadyPrefetched(t *testing.T) {
+	t.Parallel()
+
 	w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, 100, 1*time.Second)
 	defer engine.Close()
 	defer ctrl.Finish()
@@ -2067,6 +2095,8 @@ func TestPrefetchFromPool_SkipAlreadyPrefetched(t *testing.T) {
 // TestPrefetchFromPool_EarlyInterruption validates that the interruption mechanism
 // stops prefetch promptly when block building starts
 func TestPrefetchFromPool_EarlyInterruption(t *testing.T) {
+	t.Parallel()
+
 	w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, 100, 500*time.Millisecond)
 	defer engine.Close()
 	defer ctrl.Finish()
@@ -2123,6 +2153,8 @@ func TestPrefetchGasLimitPercent_EdgeValues(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, tc.gasPercent, 1*time.Second)
 			defer engine.Close()
 			defer ctrl.Finish()
@@ -2140,6 +2172,8 @@ func TestPrefetchGasLimitPercent_EdgeValues(t *testing.T) {
 // TestEnablePrefetch_DisabledConfig ensures backward compatibility when
 // the prefetch feature is disabled
 func TestEnablePrefetch_DisabledConfig(t *testing.T) {
+	t.Parallel()
+
 	var (
 		engine      consensus.Engine
 		chainConfig = params.BorUnittestChainConfig
@@ -2172,6 +2206,8 @@ func TestEnablePrefetch_DisabledConfig(t *testing.T) {
 // TestPrefetchFromPool_ActuallyProcessesTransactions verifies that prefetch
 // loop actually processes transactions (not just exits early)
 func TestPrefetchFromPool_ActuallyProcessesTransactions(t *testing.T) {
+	t.Parallel()
+
 	w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, 100, 2*time.Second)
 	defer engine.Close()
 	defer ctrl.Finish()
@@ -2207,6 +2243,8 @@ func TestPrefetchFromPool_ActuallyProcessesTransactions(t *testing.T) {
 // TestPrefetchFromPool_TransactionProcessingLoop specifically targets the
 // transaction processing logic to maximize code coverage
 func TestPrefetchFromPool_TransactionProcessingLoop(t *testing.T) {
+	t.Parallel()
+
 	w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, 150, 3*time.Second)
 	defer engine.Close()
 	defer ctrl.Finish()
@@ -2237,6 +2275,8 @@ func TestPrefetchFromPool_TransactionProcessingLoop(t *testing.T) {
 // TestPrefetchFromPool_TxSelectionLogic verifies that prefetch correctly
 // filters and skips transactions based on various conditions
 func TestPrefetchFromPool_TxSelectionLogic(t *testing.T) {
+	t.Parallel()
+
 	w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, 50, 3*time.Second)
 	defer engine.Close()
 	defer ctrl.Finish()
@@ -2264,6 +2304,8 @@ func TestPrefetchFromPool_TxSelectionLogic(t *testing.T) {
 // TestPrefetchFromPool_IterativeLoops validates that prefetch runs
 // multiple loop iterations with proper pacing and gas tracking
 func TestPrefetchFromPool_IterativeLoops(t *testing.T) {
+	t.Parallel()
+
 	w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, 200, 5*time.Second)
 	defer engine.Close()
 	defer ctrl.Finish()
@@ -2437,11 +2479,7 @@ func TestPrefetchGoroutineLifecycle(t *testing.T) {
 	closed = true
 
 	// Force garbage collection to surface any use-after-free issues
-	// Extra wait to ensure all goroutines complete after GC
-	runtime.GC()
-	time.Sleep(2 * time.Second)
-
-	goroutinesAfter = runtime.NumGoroutine()
+	goroutinesAfter = waitGoroutineDelta(goroutinesBefore, 5, 2*time.Second)
 
 	// Goroutine count should be stable (allowing for some variance due to runtime)
 	// If goroutines are leaking, we'd see a significant increase
@@ -2695,10 +2733,7 @@ func TestRapidBlockProduction_WithoutWait(t *testing.T) {
 	}
 
 	// Check for goroutine leaks
-	// Extra wait after GC to ensure all goroutines have fully exited
-	runtime.GC()
-	time.Sleep(2 * time.Second)
-	goroutinesAfter := runtime.NumGoroutine()
+	goroutinesAfter := waitGoroutineDelta(goroutinesBefore, 10, 2*time.Second)
 	goroutineDelta := goroutinesAfter - goroutinesBefore
 
 	t.Logf("Goroutines after test: %d (delta: %d)", goroutinesAfter, goroutineDelta)
@@ -2748,7 +2783,7 @@ func TestPrefetchE2E(t *testing.T) {
 	t.Logf("Triggered %d block production cycles", blocksProduced)
 
 	// Allow prefetch goroutines to complete naturally
-	time.Sleep(2 * time.Second)
+	time.Sleep(1 * time.Second)
 
 	// Check for panics
 	panicCount := prefetchPanicMeter.Snapshot().Count()
@@ -2757,9 +2792,7 @@ func TestPrefetchE2E(t *testing.T) {
 	}
 
 	// Verify no goroutine leaks
-	runtime.GC()
-	time.Sleep(500 * time.Millisecond)
-	goroutinesAfter := runtime.NumGoroutine()
+	goroutinesAfter := waitGoroutineDelta(goroutinesBefore, 10, 2*time.Second)
 	goroutineDelta := goroutinesAfter - goroutinesBefore
 
 	t.Logf("Goroutines after E2E test: %d (delta: %d)", goroutinesAfter, goroutineDelta)
@@ -2893,16 +2926,11 @@ func TestPrefetchMultiBlock(t *testing.T) {
 
 	t.Logf("Produced %d blocks with prefetch enabled", numBlocks)
 
-	// Allow all prefetch goroutines to complete
-	time.Sleep(3 * time.Second)
+	maxAllowedGoroutines := 2*(4*runtime.NumCPU()/5+2) + 10
 
-	// Force GC and measure final state
-	// Extra wait to ensure all goroutines complete after GC
-	runtime.GC()
-	runtime.GC()
-	time.Sleep(2 * time.Second)
-
-	goroutinesAfter := runtime.NumGoroutine()
+	// Allow prefetch goroutines to complete, then wait for the count to settle
+	time.Sleep(1 * time.Second)
+	goroutinesAfter := waitGoroutineDelta(goroutinesBefore, maxAllowedGoroutines, 4*time.Second)
 	runtime.ReadMemStats(&memStatsAfter)
 
 	goroutineDelta := goroutinesAfter - goroutinesBefore
@@ -2921,9 +2949,8 @@ func TestPrefetchMultiBlock(t *testing.T) {
 	// goroutines alive. We allow for two in-flight blocks to be mid-production:
 	// 2 * (N + 2) + 10 (runtime/test noise). A genuine leak scales with block count
 	// and would exceed this easily.
-	maxAllowed := 2*(4*runtime.NumCPU()/5+2) + 10
-	if goroutineDelta > maxAllowed {
-		t.Errorf("Goroutine leak detected: delta=%d (max allowed=%d)", goroutineDelta, maxAllowed)
+	if goroutineDelta > maxAllowedGoroutines {
+		t.Errorf("Goroutine leak detected: delta=%d (max allowed=%d)", goroutineDelta, maxAllowedGoroutines)
 	}
 
 	// Check for excessive memory growth
@@ -3147,17 +3174,10 @@ func TestWriteBlockAndSetHeadTimer(t *testing.T) {
 	countBefore := writeBlockAndSetHeadTimer.Snapshot().Count()
 
 	w.start()
-	time.Sleep(3 * time.Second)
+	require.Eventually(t, func() bool {
+		return w.chain.CurrentBlock().Number.Uint64() > 0 && writeBlockAndSetHeadTimer.Snapshot().Count() > countBefore
+	}, 5*time.Second, 50*time.Millisecond, "writeBlockAndSetHeadTimer should have been updated after mining blocks")
 	w.stop()
-
-	currentBlock := w.chain.CurrentBlock()
-	if currentBlock.Number.Uint64() == 0 {
-		t.Fatal("no blocks were mined")
-	}
-
-	if writeBlockAndSetHeadTimer.Snapshot().Count() <= countBefore {
-		t.Error("writeBlockAndSetHeadTimer should have been updated after mining blocks")
-	}
 }
 
 // TestPipelineBuildGaugeAlwaysDisabled verifies that production-side pipelined
@@ -3234,10 +3254,9 @@ func TestPrefetchFromPool_BuilderModeSwitch(t *testing.T) {
 
 	// Allow all prefetch goroutines to settle after the last block cycle.
 	w.stop()
-	time.Sleep(settleTime)
-	runtime.GC()
+	time.Sleep(200 * time.Millisecond)
 
-	goroutinesAfter := runtime.NumGoroutine()
+	goroutinesAfter := waitGoroutineDelta(goroutinesBefore, 15, settleTime)
 
 	// Goroutine count after settling must not have grown significantly.
 	// Delta ≤15 accounts for race-detector overhead and general test infrastructure noise.
@@ -3857,7 +3876,7 @@ func newSizeTestEnv(t *testing.T, w *worker) *environment {
 	}, false)
 	require.NoError(t, err)
 
-	env.gasPool = new(core.GasPool).AddGas(env.header.GasLimit)
+	env.gasPool = core.NewGasPool(env.header.GasLimit)
 	return env
 }
 

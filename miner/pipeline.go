@@ -135,6 +135,12 @@ func (w *worker) commitPipelined(env *environment, start time.Time) error {
 		log.Error("Pipelined SRC: FinalizeForPipeline failed", "err", err)
 		return err
 	}
+	// The root is computed later in the background, so check here, before
+	// block N enters the pipeline and is announced ahead of its DB write.
+	if dbErr := env.state.Error(); dbErr != nil {
+		log.Error("Pipelined SRC: state read failed, not sealing", "number", env.header.Number, "err", dbErr)
+		return fmt.Errorf("%w: %v", errStateReadFailure, dbErr)
+	}
 
 	// Phase 2: Extract FlatDiff, record mode-visible side-effects, build the
 	// speculative work request. The SRC goroutine is NOT spawned here —
@@ -451,7 +457,7 @@ func (s *specSession) setupInitial() bool {
 		s.w.fallbackToSequential(s.req)
 		return false
 	}
-	specState.StartPrefetcher("miner-speculative", nil, nil)
+	specState.StartPrefetcher("miner-speculative", nil)
 	s.specState = specState
 
 	blockN1Header := s.w.chain.GetHeader(s.blockNHeader.ParentHash, s.blockNNumber-1)
@@ -708,7 +714,8 @@ func (s *specSession) drainPrevDBWrite() {
 
 // finalizeCurrent runs FinalizeForPipeline on the current speculative block,
 // extracts its FlatDiff, and returns the final header + stateSync data.
-// Returns ok=false if FinalizeForPipeline errors (caller should break).
+// Returns ok=false if FinalizeForPipeline errors or the speculative state
+// recorded a read failure (caller should break).
 func (s *specSession) finalizeCurrent() (*types.Header, *state.FlatDiff, []*types.StateSyncData, bool) {
 	finalSpecHeader := types.CopyHeader(s.specHeader)
 	finalSpecHeader.ParentHash = s.realBlockNHash
@@ -722,6 +729,10 @@ func (s *specSession) finalizeCurrent() (*types.Header, *state.FlatDiff, []*type
 	}, s.specEnv.receipts)
 	if err != nil {
 		log.Error("Pipelined SRC: FinalizeForPipeline failed", "block", s.nextBlockNumber, "err", err)
+		return nil, nil, nil, false
+	}
+	if dbErr := s.specState.Error(); dbErr != nil {
+		log.Error("Pipelined SRC: state read failed while building block", "block", s.nextBlockNumber, "err", dbErr)
 		return nil, nil, nil, false
 	}
 	flatDiff := s.specState.CommitSnapshot(s.w.chainConfig.IsEIP158(finalSpecHeader.Number))
@@ -815,7 +826,7 @@ func (s *specSession) openNextSpecEnv(finalSpecHeader *types.Header, flatDiff *s
 		s.w.sealBlockViaTaskCh(s.borEngine, finalSpecHeader, s.specState, s.specEnv.txs, s.specEnv.receipts, stateSyncData, s.rootN, flatDiff, false, s.curBuildStart)
 		return nil, nil, nil, false
 	}
-	specStateNext.StartPrefetcher("miner-speculative", nil, nil)
+	specStateNext.StartPrefetcher("miner-speculative", nil)
 
 	grandparent := s.resolveGrandparent()
 	if grandparent == nil {
@@ -1019,7 +1030,11 @@ func (w *worker) fallbackToSequential(req *speculativeWorkReq) {
 		return
 	}
 
-	root := req.blockNEnv.state.IntermediateRoot(w.chainConfig.IsEIP158(req.blockNEnv.header.Number))
+	root := req.blockNEnv.state.IntermediateRoot(w.chainConfig.Rules(req.blockNEnv.header.Number, false, req.blockNEnv.header.Time))
+	if dbErr := req.blockNEnv.state.Error(); dbErr != nil {
+		log.Error("Pipelined SRC: state read failed during fallback, not sealing", "number", req.blockNEnv.header.Number, "err", dbErr)
+		return
+	}
 
 	block, receipts, err := borEngine.AssembleBlock(w.chain, req.blockNEnv.header, req.blockNEnv.state, &types.Body{
 		Transactions: req.blockNEnv.txs,

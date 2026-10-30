@@ -47,7 +47,7 @@ var statelessIncompleteStateMeter = metrics.NewRegisteredMeter("chain/stateless/
 // need the other side to explicitly check.
 //
 // This method is a bit of a sore thumb here, but:
-//   - It cannot be placed in core/stateless, because state.New prodces a circular dep
+//   - It cannot be placed in core/stateless, because state.New produces a circular dep
 //   - It cannot be placed outside of core, because it needs to construct a dud headerchain
 //
 // TODO(karalabe): Would be nice to resolve both issues above somehow and move it.
@@ -108,6 +108,6 @@ func ExecuteStateless(config *params.ChainConfig, vmconfig vm.Config, block *typ
 	}
 	// Almost everything validated, but receipt and state root needs to be returned
 	receiptRoot := types.DeriveSha(res.Receipts, trie.NewStackTrie(nil))
-	stateRoot := db.IntermediateRoot(config.IsEIP158(block.Number()))
+	stateRoot := db.IntermediateRoot(config.Rules(block.Number(), false, block.Time()))
 	return stateRoot, receiptRoot, db, res, nil
 }

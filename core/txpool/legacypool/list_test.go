@@ -31,6 +31,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/triedb"
 )
 
@@ -75,6 +76,43 @@ func TestListAddVeryExpensive(t *testing.T) {
 		tx, _ := types.SignTx(types.NewTransaction(uint64(i), common.Address{}, value, gaslimit, gasprice, nil), types.HomesteadSigner{}, key)
 		t.Logf("cost: %x bitlen: %d\n", tx.Cost(), tx.Cost().BitLen())
 		list.Add(tx, DefaultConfig.PriceBump)
+	}
+}
+
+// TestPriceHeapCmp tests that the price heap comparison function works as intended.
+// It also tests combinations where the basefee is higher than the gas fee cap, which
+// are useful to sort in the mempool to support basefee changes.
+func TestPriceHeapCmp(t *testing.T) {
+	key, _ := crypto.GenerateKey()
+	txs := []*types.Transaction{
+		// nonce, gaslimit, gasfee, gastip
+		dynamicFeeTx(0, 1000, big.NewInt(2), big.NewInt(1), key),
+		dynamicFeeTx(0, 1000, big.NewInt(1), big.NewInt(2), key),
+		dynamicFeeTx(0, 1000, big.NewInt(1), big.NewInt(1), key),
+		dynamicFeeTx(0, 1000, big.NewInt(1), big.NewInt(0), key),
+	}
+
+	// create priceHeap
+	ph := &priceHeap{}
+
+	// now set the basefee on the heap
+	for _, basefee := range []uint64{0, 1, 2, 3} {
+		ph.baseFee = uint256.NewInt(basefee)
+
+		for i := 0; i < len(txs); i++ {
+			for j := 0; j < len(txs); j++ {
+				switch {
+				case i == j:
+					if c := ph.cmp(txs[i], txs[j]); c != 0 {
+						t.Errorf("tx %d should be equal priority to tx %d with basefee %d (cmp=%d)", i, j, basefee, c)
+					}
+				case i < j:
+					if c := ph.cmp(txs[i], txs[j]); c != 1 {
+						t.Errorf("tx %d vs tx %d comparison inconsistent with basefee %d (cmp=%d)", i, j, basefee, c)
+					}
+				}
+			}
+		}
 	}
 }
 
@@ -148,7 +186,7 @@ func TestFilterTxConditionalKnownAccounts(t *testing.T) {
 
 	state.SetState(common.Address{19: 1}, common.Hash{}, common.Hash{30: 1})
 
-	state.Finalise(true)
+	state.Finalise(params.Rules{IsEIP158: true})
 
 	trie, _ = state.StorageTrie(common.Address{19: 1})
 	_ = trie
@@ -165,7 +203,7 @@ func TestFilterTxConditionalKnownAccounts(t *testing.T) {
 	// Set state that conflicts with tx2's policy
 	state.SetState(common.Address{19: 1}, common.Hash{}, common.Hash{31: 1})
 
-	state.Finalise(true)
+	state.Finalise(params.Rules{IsEIP158: true})
 
 	trie, _ = state.StorageTrie(common.Address{19: 1})
 	_ = trie
@@ -237,6 +275,31 @@ func TestFilterTxConditionalBlockNumber(t *testing.T) {
 	require.Equal(t, 1, count, "got %d filtered by TxOptions when there should be a single one", count)
 
 	require.Equal(t, tx2, drops[0], "Got %x, expected %x", drops[0].Hash(), tx2.Hash())
+}
+
+func TestFilterTxConditionalTotalCost(t *testing.T) {
+	t.Parallel()
+
+	db := state.NewDatabase(triedb.NewDatabase(rawdb.NewMemoryDatabase(), nil), nil)
+	statedb, _ := state.New(common.Hash{}, db)
+	header := &types.Header{Number: big.NewInt(100)}
+	key, _ := crypto.GenerateKey()
+
+	list := newList(true)
+	plain := transaction(0, 1000, key)
+	list.Add(plain, DefaultConfig.PriceBump)
+
+	for nonce := uint64(1); nonce <= 3; nonce++ {
+		tx := transaction(nonce, 1000, key)
+		tx.PutOptions(&types.OptionsPIP15{BlockNumberMin: big.NewInt(90), BlockNumberMax: big.NewInt(110)})
+		list.Add(tx, DefaultConfig.PriceBump)
+	}
+
+	header.Number = big.NewInt(120)
+	drops := list.FilterTxConditional(statedb, header)
+	require.Len(t, drops, 3)
+
+	require.Equal(t, uint256.MustFromBig(plain.Cost()), list.totalcost)
 }
 
 func TestFilterTxConditionalTimestamp(t *testing.T) {

@@ -32,12 +32,12 @@ import (
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/holiman/uint256"
-	"golang.org/x/crypto/sha3"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/crypto/keccak"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/internal/testrand"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -940,6 +940,7 @@ func (b *spongeBatch) ValueSize() int                      { return 100 }
 func (b *spongeBatch) Write() error                        { return nil }
 func (b *spongeBatch) Reset()                              {}
 func (b *spongeBatch) Replay(w ethdb.KeyValueWriter) error { return nil }
+func (b *spongeBatch) Close()                              {}
 
 // TestCommitSequence tests that the trie.Commit operation writes the elements
 // of the trie in the expected order.
@@ -1032,7 +1033,7 @@ func TestCommitSequenceStackTrie(t *testing.T) {
 		prng := rand.New(rand.NewSource(int64(count)))
 		// This spongeDb is used to check the sequence of disk-db-writes
 		s := &spongeDb{
-			sponge: sha3.NewLegacyKeccak256(),
+			sponge: keccak.NewLegacyKeccak256(),
 			id:     "a",
 			values: make(map[string]string),
 		}
@@ -1041,7 +1042,7 @@ func TestCommitSequenceStackTrie(t *testing.T) {
 
 		// Another sponge is used for the stacktrie commits
 		stackTrieSponge := &spongeDb{
-			sponge: sha3.NewLegacyKeccak256(),
+			sponge: keccak.NewLegacyKeccak256(),
 			id:     "b",
 			values: make(map[string]string),
 		}
@@ -1109,7 +1110,7 @@ func TestCommitSequenceStackTrie(t *testing.T) {
 // not fit into 32 bytes, rlp-encoded. However, it's still the correct thing to do.
 func TestCommitSequenceSmallRoot(t *testing.T) {
 	s := &spongeDb{
-		sponge: sha3.NewLegacyKeccak256(),
+		sponge: keccak.NewLegacyKeccak256(),
 		id:     "a",
 		values: make(map[string]string),
 	}
@@ -1118,7 +1119,7 @@ func TestCommitSequenceSmallRoot(t *testing.T) {
 
 	// Another sponge is used for the stacktrie commits
 	stackTrieSponge := &spongeDb{
-		sponge: sha3.NewLegacyKeccak256(),
+		sponge: keccak.NewLegacyKeccak256(),
 		id:     "b",
 		values: make(map[string]string),
 	}
@@ -1658,5 +1659,59 @@ func BenchmarkTrieSeqPrefetch(b *testing.B) {
 		for _, k := range keys {
 			tr.Get(k)
 		}
+	}
+}
+
+func TestUpdateBatch(t *testing.T) {
+	testUpdateBatch(t, []kv{
+		{k: []byte("do"), v: []byte("verb")},
+		{k: []byte("ether"), v: []byte("wookiedoo")},
+		{k: []byte("horse"), v: []byte("stallion")},
+		{k: []byte("shaman"), v: []byte("horse")},
+		{k: []byte("doge"), v: []byte("coin")},
+		{k: []byte("dog"), v: []byte("puppy")},
+	})
+
+	var entries []kv
+	for i := 0; i < 256; i++ {
+		entries = append(entries, kv{k: testrand.Bytes(32), v: testrand.Bytes(32)})
+	}
+	testUpdateBatch(t, entries)
+}
+
+func testUpdateBatch(t *testing.T, entries []kv) {
+	var (
+		base = NewEmpty(nil)
+		keys [][]byte
+		vals [][]byte
+	)
+	for _, entry := range entries {
+		base.Update(entry.k, entry.v)
+		keys = append(keys, entry.k)
+		vals = append(vals, entry.v)
+	}
+	for i := 0; i < 10; i++ {
+		k, v := testrand.Bytes(32), testrand.Bytes(32)
+		base.Update(k, v)
+		keys = append(keys, k)
+		vals = append(vals, v)
+	}
+
+	cmp := NewEmpty(nil)
+	if err := cmp.UpdateBatch(keys, vals); err != nil {
+		t.Fatalf("Failed to update batch, %v", err)
+	}
+
+	// Traverse the original tree, the changes made on the copy one shouldn't
+	// affect the old one
+	for _, key := range keys {
+		v1, _ := base.Get(key)
+		v2, _ := cmp.Get(key)
+		if !bytes.Equal(v1, v2) {
+			t.Errorf("Unexpected data, key: %v, want: %v, got: %v", key, v1, v2)
+		}
+	}
+	if base.Hash() != cmp.Hash() {
+		t.Errorf("Hash mismatch: want %x, got %x", base.Hash(), cmp.Hash())
 	}
 }

@@ -386,7 +386,7 @@ func (f *inconsistentTotalPagesPeer) RequestWitness(reqs []wit.WitnessPageReques
 func buildTestWitnessBytes(t *testing.T) ([]byte, common.Hash) {
 	t.Helper()
 	header := &types.Header{Number: big.NewInt(1)}
-	witness, err := stateless.NewWitness(header, nil)
+	witness, err := stateless.NewWitness(header, nil, false)
 	if err != nil {
 		t.Fatalf("stateless.NewWitness: %v", err)
 	}
@@ -477,7 +477,7 @@ func unregisterFakePeer(ps *peerSet, id string) {
 func newFakeEthPeerWithWitness(id byte, fake WitnessPeer) *ethPeer {
 	p2pPeer := p2p.NewPeer(enode.ID{id}, "test-peer", []p2p.Cap{})
 	return &ethPeer{
-		Peer:    eth.NewPeer(eth.ETH69, p2pPeer, nil, nil),
+		Peer:    eth.NewPeer(eth.ETH69, p2pPeer, nil, nil, nil),
 		witPeer: &witPeer{Peer: fake},
 	}
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/params"
 )
 
 // stateSyncTx builds a bor state-sync system transaction (type 0x7f), the
@@ -101,7 +102,7 @@ func TestBackfillOmitsStateSyncRecord(t *testing.T) {
 func TestSprintSealCrossCheckDefersInsteadOfInvalidating(t *testing.T) {
 	h, env, sealed := finalizableEnv(t)
 	h.chain.Config().Bor.Sprint = map[string]uint64{"0": 4} // block 4 is a boundary
-	sealed.Root = env.statedb.IntermediateRoot(env.evm.ChainConfig().IsEIP158(env.header.Number))
+	sealed.Root = env.statedb.IntermediateRoot(params.Rules{IsEIP158: env.evm.ChainConfig().IsEIP158(env.header.Number)})
 	sealed.Root[0] ^= 0xff // a state-sync tx would change the root the same way
 	s := &session{consumer: &Consumer{chain: h.chain, index: NewIndex()}, env: env}
 
@@ -116,7 +117,7 @@ func TestSprintSealCrossCheckDefersInsteadOfInvalidating(t *testing.T) {
 // A non-sprint seal mismatch is a real divergence and must still hard-skip.
 func TestNonSprintSealMismatchStillSkips(t *testing.T) {
 	h, env, sealed := finalizableEnv(t) // block 4, default sprint 16: not a boundary
-	sealed.Root = env.statedb.IntermediateRoot(env.evm.ChainConfig().IsEIP158(env.header.Number))
+	sealed.Root = env.statedb.IntermediateRoot(params.Rules{IsEIP158: env.evm.ChainConfig().IsEIP158(env.header.Number)})
 	sealed.Root[0] ^= 0xff
 	s := &session{consumer: &Consumer{chain: h.chain, index: NewIndex()}, env: env}
 

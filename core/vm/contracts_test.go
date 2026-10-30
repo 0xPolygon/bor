@@ -110,7 +110,7 @@ func testPrecompiled(addr string, test precompiledTest, t *testing.T) {
 	in := common.Hex2Bytes(test.Input)
 	gas := p.RequiredGas(in)
 	t.Run(fmt.Sprintf("%s-Gas=%d", test.Name, gas), func(t *testing.T) {
-		if res, _, err := RunPrecompiledContract(p, in, gas, nil); err != nil {
+		if res, _, err := RunPrecompiledContract(nil, p, common.HexToAddress(addr), in, NewGasBudget(gas, 0), nil, params.Rules{}, nil); err != nil {
 			t.Error(err)
 		} else if common.Bytes2Hex(res) != test.Expected {
 			t.Errorf("Expected %v, got %v", test.Expected, common.Bytes2Hex(res))
@@ -133,7 +133,7 @@ func testPrecompiledOOG(addr string, test precompiledTest, t *testing.T) {
 	gas := test.Gas - 1
 
 	t.Run(fmt.Sprintf("%s-Gas=%d", test.Name, gas), func(t *testing.T) {
-		_, _, err := RunPrecompiledContract(p, in, gas, nil)
+		_, _, err := RunPrecompiledContract(nil, p, common.HexToAddress(addr), in, NewGasBudget(gas, 0), nil, params.Rules{}, nil)
 		if err.Error() != "out of gas" {
 			t.Errorf("Expected error [out of gas], got [%v]", err)
 		}
@@ -151,7 +151,7 @@ func testPrecompiledFailure(addr string, test precompiledFailureTest, t *testing
 	gas := p.RequiredGas(in)
 
 	t.Run(test.Name, func(t *testing.T) {
-		_, _, err := RunPrecompiledContract(p, in, gas, nil)
+		_, _, err := RunPrecompiledContract(nil, p, common.HexToAddress(addr), in, NewGasBudget(gas, 0), nil, params.Rules{}, nil)
 		if err.Error() != test.ExpectedError {
 			t.Errorf("Expected error [%v], got [%v]", test.ExpectedError, err)
 		}
@@ -184,7 +184,7 @@ func benchmarkPrecompiled(addr string, test precompiledTest, bench *testing.B) {
 		start := time.Now()
 		for bench.Loop() {
 			copy(data, in)
-			res, _, err = RunPrecompiledContract(p, data, reqGas, nil)
+			res, _, err = RunPrecompiledContract(nil, p, common.HexToAddress(addr), data, NewGasBudget(reqGas, 0), nil, params.Rules{}, nil)
 		}
 		elapsed := uint64(time.Since(start))
 		if elapsed < 1 {
@@ -534,6 +534,8 @@ func TestReinforceMultiClientPreCompilesTest(t *testing.T) {
 		"IsCancun",
 		"IsPrague",
 		"IsOsaka",
+		"IsAmsterdam",
+		"IsBogota",
 		"IsVerkle",
 		"IsMadhugiri",
 		"IsMadhugiriPro",
@@ -772,7 +774,7 @@ func TestPIP88SStoreGas(t *testing.T) {
 			// using `true` would drop our account since it has no balance/code.
 			if tc.original != (common.Hash{}) {
 				statedb.SetState(addr, slot, tc.original)
-				statedb.Finalise(false)
+				statedb.Finalise(params.Rules{})
 			}
 			if tc.current != tc.original {
 				statedb.SetState(addr, slot, tc.current)
@@ -785,7 +787,7 @@ func TestPIP88SStoreGas(t *testing.T) {
 				BlockContext{BlockNumber: big.NewInt(1), Time: 1, Random: &common.Hash{}},
 				statedb, params.MergedTestChainConfig, Config{},
 			)
-			contract := NewContract(common.Address{}, addr, uint256.NewInt(0), 1_000_000, nil)
+			contract := NewContract(common.Address{}, addr, uint256.NewInt(0), NewGasBudget(1_000_000, 0), nil)
 
 			stack := newstack()
 			stack.push(new(uint256.Int).SetBytes(tc.value.Bytes())) // Back(1) = value
@@ -798,8 +800,8 @@ func TestPIP88SStoreGas(t *testing.T) {
 			}
 			refundDelta := int64(statedb.GetRefund()) - int64(refundBefore)
 
-			if gas != tc.wantGas {
-				t.Errorf("gas: got %d, want %d", gas, tc.wantGas)
+			if gas.ExecutionGas != tc.wantGas {
+				t.Errorf("gas: got %d, want %d", gas.ExecutionGas, tc.wantGas)
 			}
 			if refundDelta != tc.wantRefundDelta {
 				t.Errorf("refund delta: got %d, want %d", refundDelta, tc.wantRefundDelta)
@@ -872,7 +874,7 @@ func TestPIP88ForkBoundary(t *testing.T) {
 				BlockContext{BlockNumber: big.NewInt(tc.block), Time: 1, Random: &common.Hash{}},
 				statedb, &cfg, Config{},
 			)
-			contract := NewContract(common.Address{}, addr, uint256.NewInt(0), 1_000_000, nil)
+			contract := NewContract(common.Address{}, addr, uint256.NewInt(0), NewGasBudget(1_000_000, 0), nil)
 			stack := newstack()
 			stack.push(new(uint256.Int).SetBytes(slot.Bytes()))
 
@@ -880,8 +882,8 @@ func TestPIP88ForkBoundary(t *testing.T) {
 			if err != nil {
 				t.Fatalf("SLOAD dynamicGas: %v", err)
 			}
-			if gas != tc.wantColdSloadGas {
-				t.Errorf("cold SLOAD gas via LookupInstructionSet: got %d, want %d", gas, tc.wantColdSloadGas)
+			if gas.ExecutionGas != tc.wantColdSloadGas {
+				t.Errorf("cold SLOAD gas via LookupInstructionSet: got %d, want %d", gas.ExecutionGas, tc.wantColdSloadGas)
 			}
 		})
 	}

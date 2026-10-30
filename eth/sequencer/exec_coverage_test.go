@@ -126,7 +126,7 @@ func TestFinalizeSealBuildsReusableExecution(t *testing.T) {
 	if got := h.chain.GetStateSync(); len(got) != 1 || got[0] != stateSync {
 		t.Fatalf("canonical state sync data changed during speculative finalization: %+v", got)
 	}
-	if got := reusable.StateDB.Copy().IntermediateRoot(true); got != sealed.Root {
+	if got := reusable.StateDB.Copy().IntermediateRoot(params.Rules{IsEIP158: true}); got != sealed.Root {
 		t.Fatalf("reusable root = %s, want %s", got, sealed.Root)
 	}
 	if env.header.Hash() != sealed.Hash() || env.evm.StateDB != env.statedb {
@@ -198,7 +198,7 @@ func TestSealResultFallbackAndMismatch(t *testing.T) {
 	t.Run("cache unavailable", func(t *testing.T) {
 		h, env, sealed := finalizableEnv(t)
 		h.chain.Config().Bor.Sprint = map[string]uint64{"0": 4}
-		sealed.Root = env.statedb.IntermediateRoot(env.evm.ChainConfig().IsEIP158(env.header.Number))
+		sealed.Root = env.statedb.IntermediateRoot(params.Rules{IsEIP158: env.evm.ChainConfig().IsEIP158(env.header.Number)})
 		s := &session{consumer: &Consumer{chain: h.chain, index: NewIndex()}, env: env}
 		if err := env.checkSeal(sealed); err != nil {
 			t.Fatalf("fallback seal check: %v", err)
@@ -217,7 +217,7 @@ func TestSealResultFallbackAndMismatch(t *testing.T) {
 	t.Run("cache unavailable with seal mismatch", func(t *testing.T) {
 		h, env, sealed := finalizableEnv(t)
 		h.chain.Config().Bor.Sprint = map[string]uint64{"0": 4}
-		sealed.Root = env.statedb.IntermediateRoot(env.evm.ChainConfig().IsEIP158(env.header.Number))
+		sealed.Root = env.statedb.IntermediateRoot(params.Rules{IsEIP158: env.evm.ChainConfig().IsEIP158(env.header.Number)})
 		sealed.Root[0] ^= 0xff
 		s := &session{consumer: &Consumer{chain: h.chain, index: NewIndex()}, env: env}
 		if _, _, _, ok := s.sealResult(sealed); ok {
@@ -228,7 +228,7 @@ func TestSealResultFallbackAndMismatch(t *testing.T) {
 	t.Run("cache unavailable with body mismatch", func(t *testing.T) {
 		h, env, sealed := finalizableEnv(t)
 		h.chain.Config().Bor.Sprint = map[string]uint64{"0": 4}
-		sealed.Root = env.statedb.IntermediateRoot(env.evm.ChainConfig().IsEIP158(env.header.Number))
+		sealed.Root = env.statedb.IntermediateRoot(params.Rules{IsEIP158: env.evm.ChainConfig().IsEIP158(env.header.Number)})
 		sealed.TxHash[0] ^= 0xff
 		s := &session{consumer: &Consumer{chain: h.chain, index: NewIndex()}, env: env}
 		if _, _, _, ok := s.sealResult(sealed); ok {

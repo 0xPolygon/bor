@@ -341,7 +341,7 @@ func TestHandleWitnessBroadcastSkipsCacheWhenNoSignature(t *testing.T) {
 	defer cleanup()
 
 	header := &types.Header{Number: big.NewInt(7777)}
-	witness, err := stateless.NewWitness(header, nil)
+	witness, err := stateless.NewWitness(header, nil, false)
 	if err != nil {
 		t.Fatalf("new witness: %v", err)
 	}
@@ -466,7 +466,7 @@ func persistedSignedWitness(t *testing.T, h *testHandler, blockNumber int64, pad
 	hash := header.Hash()
 	rawdb.WriteHeader(h.chain.DB(), header)
 
-	witness, err := stateless.NewWitness(header, nil)
+	witness, err := stateless.NewWitness(header, nil, false)
 	require.NoError(t, err)
 	if padBytes > 0 {
 		FillWitnessWithDeterministicRandomState(witness, padBytes)
@@ -721,12 +721,12 @@ func TestCanonicalWitnessHashUsesStoredBytesDirectly(t *testing.T) {
 	hash := header.Hash()
 
 	// Build a synthetic witness, encode canonically once, store the bytes.
-	w, err := stateless.NewWitness(header, nil)
+	w, err := stateless.NewWitness(header, nil, false)
 	require.NoError(t, err)
 	for i := 0; i < 64; i++ {
 		buf := make([]byte, 256)
 		rand.Read(buf)
-		w.AddState(map[string][]byte{string(buf): buf})
+		w.AddState(map[string][]byte{string(buf): buf}, common.Hash{})
 	}
 	canonical := encodeWitnessForTest(t, w)
 	rawdb.WriteWitness(h.chain.DB(), hash, canonical)
@@ -1194,7 +1194,7 @@ func TestHandleWitnessBroadcastDivergentWithinBandImportsWithoutServing(t *testi
 	hash := header.Hash()
 	rawdb.WriteHeader(h.chain.DB(), header)
 
-	witness, err := stateless.NewWitness(header, nil)
+	witness, err := stateless.NewWitness(header, nil, false)
 	require.NoError(t, err)
 	var buf bytes.Buffer
 	require.NoError(t, witness.EncodeRLP(&buf))
@@ -1235,7 +1235,7 @@ func TestHandleWitnessBroadcastOversizeDropped(t *testing.T) {
 	hash := header.Hash()
 	rawdb.WriteHeader(h.chain.DB(), header)
 
-	witness, err := stateless.NewWitness(header, nil)
+	witness, err := stateless.NewWitness(header, nil, false)
 	require.NoError(t, err)
 
 	// A signed size of 1 byte gives a ceiling of a few bytes; any real witness
@@ -1273,7 +1273,7 @@ func TestHandleWitnessBroadcastDropsUnknownHeader(t *testing.T) {
 
 	// Unknown header, no signed announcement → dropped, sender not marked.
 	unknown := &types.Header{Number: big.NewInt(424242)}
-	unknownWitness, err := stateless.NewWitness(unknown, nil)
+	unknownWitness, err := stateless.NewWitness(unknown, nil, false)
 	require.NoError(t, err)
 	require.NoError(t, witH.handleWitnessBroadcast(peer, unknownWitness))
 	if peer.KnownWitnessContainsHash(unknown.Hash()) {
@@ -1283,7 +1283,7 @@ func TestHandleWitnessBroadcastDropsUnknownHeader(t *testing.T) {
 	// Same broadcast for a locally known header → accepted (WIT1 path).
 	known := &types.Header{Number: big.NewInt(7779)}
 	rawdb.WriteHeader(h.chain.DB(), known)
-	knownWitness, err := stateless.NewWitness(known, nil)
+	knownWitness, err := stateless.NewWitness(known, nil, false)
 	require.NoError(t, err)
 	require.NoError(t, witH.handleWitnessBroadcast(peer, knownWitness))
 	if !peer.KnownWitnessContainsHash(known.Hash()) {
@@ -1344,7 +1344,7 @@ func TestHandleWitnessBroadcastAcceptedWhileAnnounceDeferred(t *testing.T) {
 	hash := header.Hash()
 	// Header deliberately NOT written: the consumer has not imported it.
 
-	witness, err := stateless.NewWitness(header, nil)
+	witness, err := stateless.NewWitness(header, nil, false)
 	require.NoError(t, err)
 	var buf bytes.Buffer
 	require.NoError(t, witness.EncodeRLP(&buf))
@@ -1379,7 +1379,7 @@ func TestHandleWitnessBroadcastAcceptedWhileAnnounceDeferred(t *testing.T) {
 	// A body that is not the deferred commitment's bytes but is within its
 	// size band is a valid non-deterministic variant: accepted for import only,
 	// exactly like the verified path.
-	variant, err := stateless.NewWitness(&types.Header{Number: big.NewInt(9002), Extra: []byte{0x1}}, nil)
+	variant, err := stateless.NewWitness(&types.Header{Number: big.NewInt(9002), Extra: []byte{0x1}}, nil, false)
 	require.NoError(t, err)
 	variantHash := variant.Header().Hash()
 	var variantBuf bytes.Buffer
@@ -1400,7 +1400,7 @@ func TestHandleWitnessBroadcastAcceptedWhileAnnounceDeferred(t *testing.T) {
 	}
 
 	// Bytes beyond the size band of every deferred commitment must still drop.
-	oversize, err := stateless.NewWitness(&types.Header{Number: big.NewInt(9003), Extra: []byte{0x2}}, nil)
+	oversize, err := stateless.NewWitness(&types.Header{Number: big.NewInt(9003), Extra: []byte{0x2}}, nil, false)
 	require.NoError(t, err)
 	oversizeHash := oversize.Header().Hash()
 	h.handler.deferredAnnounces.put(wit.SignedWitnessAnnouncement{
@@ -1531,7 +1531,7 @@ func TestAcceptSignedBroadcastReportsDivergence(t *testing.T) {
 	header := &types.Header{Number: big.NewInt(7781)}
 	hash := header.Hash()
 	rawdb.WriteHeader(h.chain.DB(), header)
-	witness, err := stateless.NewWitness(header, nil)
+	witness, err := stateless.NewWitness(header, nil, false)
 	require.NoError(t, err)
 	var buf bytes.Buffer
 	require.NoError(t, witness.EncodeRLP(&buf))
@@ -1571,7 +1571,7 @@ func TestAcceptDeferredBroadcastReportsDivergence(t *testing.T) {
 
 	header := &types.Header{Number: big.NewInt(7783)}
 	hash := header.Hash()
-	witness, err := stateless.NewWitness(header, nil)
+	witness, err := stateless.NewWitness(header, nil, false)
 	require.NoError(t, err)
 	var buf bytes.Buffer
 	require.NoError(t, witness.EncodeRLP(&buf))
@@ -1621,7 +1621,7 @@ func TestHandleWitnessBroadcastDropsExcludedSource(t *testing.T) {
 	header := &types.Header{Number: big.NewInt(7784)}
 	hash := header.Hash()
 	rawdb.WriteHeader(h.chain.DB(), header)
-	witness, err := stateless.NewWitness(header, nil)
+	witness, err := stateless.NewWitness(header, nil, false)
 	require.NoError(t, err)
 	var buf bytes.Buffer
 	require.NoError(t, witness.EncodeRLP(&buf))

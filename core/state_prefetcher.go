@@ -244,18 +244,18 @@ func (p *StatePrefetcher) prefetchOneTx(
 		return 0, false
 	}
 	msg.SkipNonceChecks = true // stream order may diverge from nonce order
-	stateCpy.SetTxContext(tx.Hash(), txIdx)
+	stateCpy.SetTxContext(tx.Hash(), txIdx, uint32(txIdx+1))
 
 	evm := vm.NewEVM(NewEVMBlockContext(header, p.chain, nil), stateCpy, p.config, cfg)
 	evm.SetInterrupt(interrupt)
 
-	result, err := ApplyMessage(evm, msg, new(GasPool).AddGas(header.GasLimit))
+	result, err := ApplyMessage(evm, msg, NewGasPool(header.GasLimit))
 	if err != nil {
 		fails.Add(1)
 		return 0, false
 	}
 	if intermediateRootPrefetch {
-		stateCpy.IntermediateRoot(true)
+		stateCpy.IntermediateRoot(evm.GetRules())
 	}
 	return result.UsedGas, true
 }

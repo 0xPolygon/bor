@@ -30,7 +30,7 @@ func (s *ParallelStateDB) SettleTo(final *StateDB) {
 	// FinaliseFast with prefetcher: moves dirty→pending, sets
 	// uncommittedStorage, then triggers prefetcher for storage tries
 	// (same as serial Finalise).
-	final.FinaliseFastWithPrefetch(true)
+	final.FinaliseFastWithPrefetch(true, s.isAmsterdam)
 }
 
 // settleNonces applies pending nonce writes to final.

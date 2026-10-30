@@ -299,7 +299,7 @@ func buildNextBlock(t *testing.T, _bor consensus.Engine, chain *core.BlockChain,
 	}
 
 	// Write state changes to db
-	root, err := state.Commit(block.NumberU64(), chain.Config().IsEIP158(b.header.Number), false)
+	root, err := state.Commit(params.Rules{IsEIP158: chain.Config().IsEIP158(b.header.Number)}, block.NumberU64())
 	if err != nil {
 		panic(fmt.Sprintf("state write error: %v", err))
 	}
@@ -340,11 +340,11 @@ func (b *blockGen) addTxWithChain(bc *core.BlockChain, statedb *state.StateDB, t
 		b.setCoinbase(coinbase)
 	}
 
-	statedb.SetTxContext(tx.Hash(), len(b.txs))
+	statedb.SetTxContext(tx.Hash(), len(b.txs), uint32(len(b.txs)+1))
 
 	context := core.NewEVMBlockContext(b.header, bc, nil)
 	evm := vm.NewEVM(context, statedb, bc.Config(), vm.Config{})
-	receipt, err := core.ApplyTransaction(evm, b.gasPool, statedb, b.header, tx, &b.header.GasUsed)
+	receipt, err := core.ApplyTransaction(evm, b.gasPool, statedb, b.header, tx)
 	if err != nil {
 		panic(err)
 	}
@@ -363,7 +363,7 @@ func (b *blockGen) setCoinbase(addr common.Address) {
 	}
 
 	b.header.Coinbase = addr
-	b.gasPool = new(core.GasPool).AddGas(b.header.GasLimit)
+	b.gasPool = core.NewGasPool(b.header.GasLimit)
 }
 
 func sign(t *testing.T, header *types.Header, signer []byte, c *params.BorConfig) {

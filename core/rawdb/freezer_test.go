@@ -407,6 +407,148 @@ func checkAncientCount(t *testing.T, f *Freezer, kind string, n uint64) {
 	}
 }
 
+// TestChainFreezerBALAlignment exercises the new-table alignment path: a chain
+// freezer is first opened with the legacy table set (no BAL), populated with a
+// few blocks and closed. It is then re-opened with the full chain freezer
+// table set (which includes the BAL column). The expectation is that the BAL
+// table is fast-forwarded to the existing head without disturbing the body /
+// receipt tables, and that subsequent writes append cleanly across all tables.
+func TestChainFreezerBALAlignment(t *testing.T) {
+	dir := t.TempDir()
+
+	// Build a "legacy" subset of the chain freezer table set, omitting BAL.
+	legacyTables := make(map[string]freezerTableConfig)
+	for name, cfg := range chainFreezerTableConfigs {
+		if name == ChainFreezerBALTable {
+			continue
+		}
+		legacyTables[name] = cfg
+	}
+
+	// First open: legacy config. Fill in `items` blocks of dummy data.
+	const items = uint64(10)
+	payload := bytes.Repeat([]byte{0xab}, 64)
+
+	f, err := NewFreezer(dir, "", false, 0, 2049, legacyTables)
+	if err != nil {
+		t.Fatalf("can't open legacy freezer: %v", err)
+	}
+	// The difficulty and bor-receipt tables share the block-data tail group, so
+	// they must be populated too: repair() takes the maximum tail within a group,
+	// and an empty member would fast-forward the whole group past the data below.
+	if _, err := f.ModifyAncients(func(op ethdb.AncientWriteOp) error {
+		for i := uint64(0); i < items; i++ {
+			if err := op.AppendRaw(ChainFreezerHashTable, i, payload); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(ChainFreezerHeaderTable, i, payload); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(ChainFreezerBodiesTable, i, payload); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(ChainFreezerReceiptTable, i, payload); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(ChainFreezerDifficultyTable, i, payload); err != nil {
+				return err
+			}
+			if err := op.AppendRaw(freezerBorReceiptTable, i, payload); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("legacy write failed: %v", err)
+	}
+	if got, _ := f.Ancients(); got != items {
+		t.Fatalf("legacy head: got %d, want %d", got, items)
+	}
+	require.NoError(t, f.Close())
+
+	// Re-open with the full chain freezer table set, which now includes BAL.
+	// repair() should detect the empty BAL table and fast-forward it to the
+	// existing head rather than truncating everyone down to zero.
+	f, err = NewFreezer(dir, "", false, 0, 2049, chainFreezerTableConfigs)
+	if err != nil {
+		t.Fatalf("can't re-open freezer with BAL added: %v", err)
+	}
+	defer f.Close()
+
+	// The head must be preserved.
+	if got, _ := f.Ancients(); got != items {
+		t.Fatalf("head after re-open: got %d, want %d", got, items)
+	}
+	// Existing data must still be readable in full.
+	for i := uint64(0); i < items; i++ {
+		for _, kind := range []string{
+			ChainFreezerHashTable, ChainFreezerHeaderTable,
+			ChainFreezerBodiesTable, ChainFreezerReceiptTable,
+		} {
+			got, err := f.Ancient(kind, i)
+			if err != nil {
+				t.Fatalf("read %s[%d]: %v", kind, i, err)
+			}
+			if !bytes.Equal(got, payload) {
+				t.Fatalf("read %s[%d]: payload mismatch", kind, i)
+			}
+		}
+	}
+	// The block-data tail must be unchanged (no spurious tail bump).
+	if tail, err := f.Tail(ChainFreezerBlockDataGroup); err != nil || tail != 0 {
+		t.Fatalf("blockdata tail: got %d (err %v), want 0", tail, err)
+	}
+	// The BAL tail should equal the head — the table is empty but aligned.
+	if tail, err := f.Tail(ChainFreezerBALGroup); err != nil || tail != items {
+		t.Fatalf("BAL tail: got %d (err %v), want %d", tail, err, items)
+	}
+	// Reads to BAL for any pre-alignment block must report out-of-bounds.
+	for i := uint64(0); i < items; i++ {
+		if _, err := f.Ancient(ChainFreezerBALTable, i); err == nil {
+			t.Fatalf("reading BAL[%d] succeeded; want error (out of bounds)", i)
+		}
+	}
+	// A subsequent batch must append uniformly to every table, BAL included.
+	balPayload := []byte("real-bal")
+	if _, err := f.ModifyAncients(func(op ethdb.AncientWriteOp) error {
+		i := items
+		if err := op.AppendRaw(ChainFreezerHashTable, i, payload); err != nil {
+			return err
+		}
+		if err := op.AppendRaw(ChainFreezerHeaderTable, i, payload); err != nil {
+			return err
+		}
+		if err := op.AppendRaw(ChainFreezerBodiesTable, i, payload); err != nil {
+			return err
+		}
+		if err := op.AppendRaw(ChainFreezerReceiptTable, i, payload); err != nil {
+			return err
+		}
+		if err := op.AppendRaw(ChainFreezerDifficultyTable, i, payload); err != nil {
+			return err
+		}
+		if err := op.AppendRaw(freezerBorReceiptTable, i, payload); err != nil {
+			return err
+		}
+		if err := op.AppendRaw(ChainFreezerBALTable, i, balPayload); err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("post-alignment write failed: %v", err)
+	}
+	if got, _ := f.Ancients(); got != items+1 {
+		t.Fatalf("head after post-alignment write: got %d, want %d", got, items+1)
+	}
+	got, err := f.Ancient(ChainFreezerBALTable, items)
+	if err != nil {
+		t.Fatalf("BAL[%d]: %v", items, err)
+	}
+	if !bytes.Equal(got, balPayload) {
+		t.Fatalf("BAL[%d]: got %x, want %x", items, got, balPayload)
+	}
+}
+
 func TestFreezerCloseSync(t *testing.T) {
 	t.Parallel()
 	f, _ := newFreezerForTesting(t, map[string]freezerTableConfig{"a": {noSnappy: true}, "b": {noSnappy: true}})
@@ -425,7 +567,7 @@ func TestFreezerCloseSync(t *testing.T) {
 	if err := f.SyncAncient(); err == nil {
 		t.Fatalf("want error, have nil")
 	} else if have, want := err.Error(), "[closed closed]"; have != want {
-		t.Fatalf("want %v, have %v", have, want)
+		t.Fatalf("want %v, have %v", want, have)
 	}
 }
 
@@ -434,8 +576,8 @@ func TestFreezerSuite(t *testing.T) {
 		tables := make(map[string]freezerTableConfig)
 		for _, kind := range kinds {
 			tables[kind] = freezerTableConfig{
-				noSnappy: true,
-				prunable: true,
+				noSnappy:  true,
+				tailGroup: ancienttest.TailGroup,
 			}
 		}
 		f, _ := newFreezerForTesting(t, tables)
@@ -446,11 +588,219 @@ func TestFreezerSuite(t *testing.T) {
 		tables := make(map[string]freezerTableConfig)
 		for _, kind := range kinds {
 			tables[kind] = freezerTableConfig{
-				noSnappy: true,
-				prunable: true,
+				noSnappy:  true,
+				tailGroup: ancienttest.TailGroup,
 			}
 		}
 		f, _ := newResettableFreezer(t.TempDir(), "", false, 2048, tables)
 		return f
 	})
+}
+
+// TestTruncateHeadBelowGroupTail covers rolling the head back past the tail of
+// one tail group but not another. The BAL table is pruned independently of the
+// block-data tables and therefore commonly sits at a higher tail, so a deep
+// enough head truncation lands below it. The table it applies to has nothing
+// left to keep and must end up empty at the new head, with the rest of the
+// freezer truncated consistently rather than left half-applied.
+func TestTruncateHeadBelowGroupTail(t *testing.T) {
+	var (
+		dir     = t.TempDir()
+		payload = bytes.Repeat([]byte{0xab}, 32)
+		tables  = []string{
+			ChainFreezerHashTable, ChainFreezerHeaderTable,
+			ChainFreezerBodiesTable, ChainFreezerReceiptTable, ChainFreezerBALTable,
+			ChainFreezerDifficultyTable, freezerBorReceiptTable,
+		}
+	)
+	f, err := NewFreezer(dir, "", false, 0, 2049, chainFreezerTableConfigs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { f.Close() }()
+
+	const items = uint64(100)
+	if _, err := f.ModifyAncients(func(op ethdb.AncientWriteOp) error {
+		for i := uint64(0); i < items; i++ {
+			for _, tbl := range tables {
+				if err := op.AppendRaw(tbl, i, payload); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Prune the BAL group far harder than the block-data group.
+	if _, err := f.TruncateTail(ChainFreezerBlockDataGroup, 10); err != nil {
+		t.Fatalf("truncating block data tail: %v", err)
+	}
+	if _, err := f.TruncateTail(ChainFreezerBALGroup, 80); err != nil {
+		t.Fatalf("truncating BAL tail: %v", err)
+	}
+	// Cutting below every group's tail would discard data that no group had
+	// pruned, so it must be refused, and refused without touching anything.
+	if _, err := f.TruncateHead(5); err == nil {
+		t.Fatal("truncating head below every group tail succeeded, want refusal")
+	}
+	if head, _ := f.Ancients(); head != items {
+		t.Fatalf("head after refused truncation = %d, want %d", head, items)
+	}
+	for _, name := range tables {
+		if got := f.tables[name].items.Load(); got != items {
+			t.Fatalf("table %s touched by a refused truncation: items = %d, want %d", name, got, items)
+		}
+	}
+	// Roll the head back below the BAL tail, but above the block-data tail.
+	if _, err := f.TruncateHead(50); err != nil {
+		t.Fatalf("truncating head below the BAL tail: %v", err)
+	}
+	if head, _ := f.Ancients(); head != 50 {
+		t.Fatalf("head = %d, want 50", head)
+	}
+	// The BAL group follows the head down; the block-data group is untouched.
+	if tail, _ := f.Tail(ChainFreezerBALGroup); tail != 50 {
+		t.Fatalf("BAL tail = %d, want 50", tail)
+	}
+	if tail, _ := f.Tail(ChainFreezerBlockDataGroup); tail != 10 {
+		t.Fatalf("block data tail = %d, want 10", tail)
+	}
+	// Every table agrees on the head, so nothing was left half-truncated.
+	for _, name := range tables {
+		if got := f.tables[name].items.Load(); got != 50 {
+			t.Fatalf("table %s: items = %d, want 50", name, got)
+		}
+	}
+	// Block data below the new head is still readable, BAL is empty.
+	if _, err := f.Ancient(ChainFreezerBodiesTable, 49); err != nil {
+		t.Fatalf("reading body 49: %v", err)
+	}
+	if _, err := f.Ancient(ChainFreezerBALTable, 49); err == nil {
+		t.Fatal("reading BAL 49 succeeded, want out of bounds")
+	}
+	// Writing must resume cleanly across every table from the new head.
+	balPayload := []byte("post-truncate-bal")
+	if _, err := f.ModifyAncients(func(op ethdb.AncientWriteOp) error {
+		for _, tbl := range tables {
+			data := payload
+			if tbl == ChainFreezerBALTable {
+				data = balPayload
+			}
+			if err := op.AppendRaw(tbl, 50, data); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("appending after truncation: %v", err)
+	}
+	got, err := f.Ancient(ChainFreezerBALTable, 50)
+	if err != nil {
+		t.Fatalf("reading BAL 50: %v", err)
+	}
+	if !bytes.Equal(got, balPayload) {
+		t.Fatalf("BAL 50 = %x, want %x", got, balPayload)
+	}
+	// The layout has to survive a reopen.
+	if err := f.Close(); err != nil {
+		t.Fatalf("closing freezer: %v", err)
+	}
+	f, err = NewFreezer(dir, "", false, 0, 2049, chainFreezerTableConfigs)
+	if err != nil {
+		t.Fatalf("reopening freezer: %v", err)
+	}
+	if head, _ := f.Ancients(); head != 51 {
+		t.Fatalf("head after reopen = %d, want 51", head)
+	}
+	if tail, _ := f.Tail(ChainFreezerBALGroup); tail != 50 {
+		t.Fatalf("BAL tail after reopen = %d, want 50", tail)
+	}
+	if tail, _ := f.Tail(ChainFreezerBlockDataGroup); tail != 10 {
+		t.Fatalf("block data tail after reopen = %d, want 10", tail)
+	}
+}
+
+// TestChainFreezerBALDowngradeRoundTrip covers a node that upgrades, rolls back
+// to a binary without the BAL table, then upgrades again. The rolled-back
+// binary keeps freezing blocks without BAL entries; the upgrade must restore
+// them as empty entries rather than truncate every other table down to BAL,
+// since those blocks are already gone from the key-value store.
+func TestChainFreezerBALDowngradeRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	legacyTables := make(map[string]freezerTableConfig)
+	for name, cfg := range chainFreezerTableConfigs {
+		if name != ChainFreezerBALTable {
+			legacyTables[name] = cfg
+		}
+	}
+	payload := bytes.Repeat([]byte{0xab}, 64)
+	balPayload := []byte("bal")
+	appendBlocks := func(f *Freezer, from, to uint64, withBAL bool) {
+		t.Helper()
+		_, err := f.ModifyAncients(func(op ethdb.AncientWriteOp) error {
+			for i := from; i < to; i++ {
+				for name := range legacyTables {
+					if err := op.AppendRaw(name, i, payload); err != nil {
+						return err
+					}
+				}
+				if withBAL {
+					if err := op.AppendRaw(ChainFreezerBALTable, i, balPayload); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		})
+		require.NoError(t, err)
+	}
+	open := func(tables map[string]freezerTableConfig) *Freezer {
+		t.Helper()
+		f, err := NewFreezer(dir, "", false, 0, 2049, tables)
+		require.NoError(t, err)
+		return f
+	}
+
+	f := open(legacyTables)
+	appendBlocks(f, 0, 10, false)
+	require.NoError(t, f.Close())
+
+	f = open(chainFreezerTableConfigs)
+	appendBlocks(f, 10, 15, true)
+	require.NoError(t, f.Close())
+
+	f = open(legacyTables)
+	appendBlocks(f, 15, 20, false)
+	require.NoError(t, f.Close())
+
+	f = open(chainFreezerTableConfigs)
+	defer f.Close()
+
+	head, err := f.Ancients()
+	require.NoError(t, err)
+	require.Equal(t, uint64(20), head)
+	for i := uint64(0); i < head; i++ {
+		for name := range legacyTables {
+			got, err := f.Ancient(name, i)
+			require.NoError(t, err, "%s[%d]", name, i)
+			require.Equal(t, payload, got, "%s[%d]", name, i)
+		}
+	}
+	tail, err := f.Tail(ChainFreezerBALGroup)
+	require.NoError(t, err)
+	require.Equal(t, uint64(10), tail)
+	for i := uint64(10); i < head; i++ {
+		got, err := f.Ancient(ChainFreezerBALTable, i)
+		require.NoError(t, err, "bals[%d]", i)
+		if i < 15 {
+			require.Equal(t, balPayload, got, "bals[%d]", i)
+		} else {
+			require.Empty(t, got, "bals[%d]", i)
+		}
+	}
+	appendBlocks(f, 20, 21, true)
+	got, err := f.Ancient(ChainFreezerBALTable, 20)
+	require.NoError(t, err)
+	require.Equal(t, balPayload, got)
 }

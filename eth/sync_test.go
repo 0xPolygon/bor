@@ -56,7 +56,7 @@ func TestSyncTransactionsFiltersNonGossipable(t *testing.T) {
 				source, sink := p2p.MsgPipe()
 				defer source.Close()
 				defer sink.Close()
-				peer := eth.NewPeer(protocol, p2p.NewPeer(enode.ID{1}, "", nil), source, pool)
+				peer := eth.NewPeer(protocol, p2p.NewPeer(enode.ID{1}, "", nil), source, pool, nil)
 				defer peer.Close()
 				h.syncTransactions(peer)
 				synctest.Wait()
@@ -565,8 +565,8 @@ func testSnapSyncDisabling(t *testing.T, ethVer uint, snapVer uint) {
 	defer emptyPipeEth.Close()
 	defer fullPipeEth.Close()
 
-	emptyPeerEth := eth.NewPeer(ethVer, p2p.NewPeer(enode.ID{1}, "", caps), emptyPipeEth, empty.txpool)
-	fullPeerEth := eth.NewPeer(ethVer, p2p.NewPeer(enode.ID{2}, "", caps), fullPipeEth, full.txpool)
+	emptyPeerEth := eth.NewPeer(ethVer, p2p.NewPeer(enode.ID{1}, "", caps), emptyPipeEth, empty.txpool, nil)
+	fullPeerEth := eth.NewPeer(ethVer, p2p.NewPeer(enode.ID{2}, "", caps), fullPipeEth, full.txpool, nil)
 
 	defer emptyPeerEth.Close()
 	defer fullPeerEth.Close()

@@ -593,7 +593,7 @@ func TestWitHandlerHandle(t *testing.T) {
 		header := &types.Header{
 			Number: big.NewInt(100),
 		}
-		witness, _ := stateless.NewWitness(header, nil)
+		witness, _ := stateless.NewWitness(header, nil, false)
 
 		packet := &wit.NewWitnessPacket{
 			Witness: witness,
@@ -756,7 +756,7 @@ func TestResolveWitnessFetchPeerFallsBackToDeferredAnnouncer(t *testing.T) {
 
 	var id enode.ID
 	rand.Read(id[:])
-	ethPeer := ethproto.NewPeer(ethproto.ETH68, p2p.NewPeer(id, "test-eth-peer", nil), nil, nil)
+	ethPeer := ethproto.NewPeer(ethproto.ETH68, p2p.NewPeer(id, "test-eth-peer", nil), nil, nil, nil)
 	defer ethPeer.Close()
 	require.NoError(t, h.handler.peers.registerPeer(ethPeer, nil, witPeer))
 

@@ -46,6 +46,12 @@ func newstack() *Stack {
 	return stackPool.Get().(*Stack)
 }
 
+// newStackForTesting is meant to be used solely for testing. It creates a stack
+// outside the pool, so callers need not return it.
+func newStackForTesting() *Stack {
+	return new(Stack)
+}
+
 func returnStack(s *Stack) {
 	s.top = 0
 	stackPool.Put(s)
@@ -62,6 +68,14 @@ func (st *Stack) push(d *uint256.Int) {
 	st.top++
 }
 
+// get returns a pointer to a newly created element on top of the stack, for
+// callers that fill the value in place rather than copying one in.
+func (st *Stack) get() *uint256.Int {
+	elem := &st.data[st.top]
+	st.top++
+	return elem
+}
+
 func (st *Stack) pop() (ret uint256.Int) {
 	st.top--
 	ret = st.data[st.top]
@@ -70,6 +84,55 @@ func (st *Stack) pop() (ret uint256.Int) {
 
 func (st *Stack) len() int {
 	return st.top
+}
+
+// drop removes the top element without reading it.
+func (st *Stack) drop() {
+	st.top--
+}
+
+// pop1 removes the top element and returns a pointer to it. The pointer
+// stays valid only until the next push or sub call.
+func (st *Stack) pop1() *uint256.Int {
+	st.top--
+	return &st.data[st.top]
+}
+
+// pop2 removes the top two elements and returns pointers to them. The
+// pointers stay valid only until the next push or sub call.
+func (st *Stack) pop2() (top, second *uint256.Int) {
+	st.top -= 2
+	return &st.data[st.top+1], &st.data[st.top]
+}
+
+// pop3 removes the top three elements and returns pointers to them. The
+// pointers stay valid only until the next push or sub call.
+func (st *Stack) pop3() (top, second, third *uint256.Int) {
+	st.top -= 3
+	return &st.data[st.top+2], &st.data[st.top+1], &st.data[st.top]
+}
+
+// pop4 removes the top four elements and returns pointers to them. The
+// pointers stay valid only until the next push or sub call.
+func (st *Stack) pop4() (top, second, third, fourth *uint256.Int) {
+	st.top -= 4
+	return &st.data[st.top+3], &st.data[st.top+2], &st.data[st.top+1], &st.data[st.top]
+}
+
+// pop1Peek1 removes the top element and returns pointers to it and to the new
+// top, the usual operand and write target of a binary operation. The first
+// pointer stays valid only until the next push or sub call.
+func (st *Stack) pop1Peek1() (top, rest *uint256.Int) {
+	st.top--
+	return &st.data[st.top], &st.data[st.top-1]
+}
+
+// pop2Peek1 removes the top two elements and returns pointers to them and to
+// the new top, for three operand operations. The first two pointers stay
+// valid only until the next push or sub call.
+func (st *Stack) pop2Peek1() (top, second, rest *uint256.Int) {
+	st.top -= 2
+	return &st.data[st.top+1], &st.data[st.top], &st.data[st.top-1]
 }
 
 func (st *Stack) swap1() {
@@ -130,7 +193,7 @@ func (st *Stack) peek() *uint256.Int {
 	return &st.data[st.top-1]
 }
 
-// Back returns the n'th item in stack
-func (st *Stack) Back(n int) *uint256.Int {
+// back returns the n'th item in stack
+func (st *Stack) back(n int) *uint256.Int {
 	return &st.data[st.top-n-1]
 }

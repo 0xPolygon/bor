@@ -24,28 +24,23 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 )
 
-type tableSize struct {
-	name string
-	size common.StorageSize
+type tableInfo struct {
+	name  string
+	size  common.StorageSize
+	count uint64
 }
 
 // freezerInfo contains the basic information of the freezer.
 type freezerInfo struct {
-	name  string      // The identifier of freezer
-	head  uint64      // The number of last stored item in the freezer
-	tail  uint64      // The number of first stored item in the freezer
-	sizes []tableSize // The storage size per table
-}
-
-// count returns the number of stored items in the freezer.
-func (info *freezerInfo) count() uint64 {
-	return info.head - info.tail + 1
+	name   string      // The identifier of freezer
+	head   uint64      // The number of last stored item in the freezer
+	tables []tableInfo // Per-table storage size and item count
 }
 
 // size returns the storage size of the entire freezer.
 func (info *freezerInfo) size() common.StorageSize {
 	var total common.StorageSize
-	for _, table := range info.sizes {
+	for _, table := range info.tables {
 		total += table.size
 	}
 
@@ -54,26 +49,42 @@ func (info *freezerInfo) size() common.StorageSize {
 
 func inspect(name string, order map[string]freezerTableConfig, reader ethdb.AncientReader) (freezerInfo, error) {
 	info := freezerInfo{name: name}
-	for t := range order {
-		size, err := reader.AncientSize(t)
-		if err != nil {
-			return freezerInfo{}, err
-		}
-		info.sizes = append(info.sizes, tableSize{name: t, size: common.StorageSize(size)})
-	}
-	// Retrieve the number of last stored item
+
+	// Retrieve the number of last stored item.
 	ancients, err := reader.Ancients()
 	if err != nil {
 		return freezerInfo{}, err
 	}
-	info.head = ancients - 1
-
-	// Retrieve the number of first stored item
-	tail, err := reader.Tail()
-	if err != nil {
-		return freezerInfo{}, err
+	if ancients > 0 {
+		info.head = ancients - 1
 	}
-	info.tail = tail
+	// Resolve per-group tails so each table can report its own item count.
+	groupTails := make(map[string]uint64)
+	for _, cfg := range order {
+		if cfg.tailGroup == "" {
+			continue
+		}
+		if _, ok := groupTails[cfg.tailGroup]; ok {
+			continue
+		}
+		t, err := reader.Tail(cfg.tailGroup)
+		if err != nil {
+			return freezerInfo{}, err
+		}
+		groupTails[cfg.tailGroup] = t
+	}
+	for t, cfg := range order {
+		size, err := reader.AncientSize(t)
+		if err != nil {
+			return freezerInfo{}, err
+		}
+		var count uint64
+		if ancients > 0 {
+			tail := groupTails[cfg.tailGroup] // 0 for non-prunable tables
+			count = ancients - tail
+		}
+		info.tables = append(info.tables, tableInfo{name: t, size: common.StorageSize(size), count: count})
+	}
 	return info, nil
 }
 
@@ -147,6 +158,8 @@ func InspectFreezerTable(ancient string, freezerName string, tableName string, s
 		path, tables = resolveChainFreezerDir(ancient), chainFreezerTableConfigs
 	case MerkleStateFreezerName, VerkleStateFreezerName:
 		path, tables = filepath.Join(ancient, freezerName), stateFreezerTableConfigs
+	case MerkleTrienodeFreezerName, VerkleTrienodeFreezerName:
+		path, tables = filepath.Join(ancient, freezerName), trienodeFreezerTableConfigs
 	default:
 		return fmt.Errorf("unknown freezer, supported ones: %v", freezers)
 	}
@@ -165,7 +178,7 @@ func InspectFreezerTable(ancient string, freezerName string, tableName string, s
 	if err != nil {
 		return err
 	}
-
+	defer table.Close()
 	table.dumpIndexStdout(start, end)
 
 	return nil

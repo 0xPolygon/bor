@@ -1,0 +1,18 @@
+# Fork and EIP register: go-ethereum v1.17.6
+
+Every upstream fork or EIP change is merged dormant. `AmsterdamBlock` and `BogotaBlock` are nil on every Bor preset, both `internal/cli/server/chains/*.go` and both `builder/files/genesis-*.json`.
+
+| EIP / fork | Upstream PR | Batch | Touches | Bor gate (value) | Decision | Verified dormant |
+| --- | --- | --- | --- | --- | --- | --- |
+| EIP-2780 / EIP-8038 parameter update | #35454 | 1 | `params/protocol_params.go`, `core/state_transition.go` | `IsAmsterdam` (nil) | adopt-later | `TxValueCost2780` (4244 → 6000) and the Amsterdam access-list costs (3000 → 2900) are read only inside `rules.IsAmsterdam` branches of `IntrinsicGas`; `TransferLogCost2780` removed. |
+| EIP-7997 update (factory no longer inserted at activation) | #35458 | 1 | `core/state_processor.go`, `core/chain_makers.go`, `cmd/evm/internal/t8ntool/execution.go`, `consensus/misc/eip7997.go` (deleted) | `IsAmsterdam` (nil) | adopt-later | The removed insertion was itself Amsterdam-gated, so nothing live changes. |
+| EIP-7708 burn log removed | #35458 | 1 | `params/protocol_params.go` | `IsAmsterdam` (nil) | adopt-later | Constant removed; no Bor user. POS-3738 still tracks the transfer-log interaction. |
+| Regular gas renamed to execution gas | #35457 | 1 | `core/vm/*`, `core/state_transition.go`, `core/gaspool.go` | n/a (rename) | adopted | No behaviour change. `interpreter_dispatch.go` verified rename-only; the PIP-88 SSTORE and SLOAD twins still have the same divergence as before the batch. |
+| EIP-7928 BAL-driven parallel execution | #35264 | 1 | `core/state_processor_parallel.go`, `core/types/bal/bal_lookup.go`, `core/state/statedb_eip_7928.go`, `core/state/reader_eip_7928.go` | `IsAmsterdam` (nil) plus a block carrying a BAL | defer | Declined: depends on the BAL spec updates declined in v1.17.5. See needs-wiring and POS-3737. |
+| EIP-7843 genesis `slotNumber` parsing | #35464 | 1 | `core/genesis.go`, `core/gen_genesis.go` | `IsAmsterdam` (nil) | adopt-later | Parsing only; no Bor genesis sets it. |
+| Precompile result cache (not a fork) | #35388 | 1 | `core/vm/contracts.go`, `core/vm/evm.go`, `core/vm/precompile_cache.go` | n/a | adopted, not wired | The cache stays nil on Bor, so there's no behaviour change. The precompile set per fork is unchanged, and `activePrecompiledContracts` returns a pointer to the same set. |
+| Fork validation in the state transition | #35588 | 5 | `core/state_transition.go` | `IsBerlin` / `IsCancun` / `IsPrague` (all active on mainnet and Amoy) | adopted | Rejects access-list, blob and set-code messages before their fork. Canonical history can't contain them (the signer already rejects them); Bor's state-sync and system calls bypass `preCheck`. Historical `eth_call` with those fields before the fork now errors. |
+| EIP-8037 debt repayment after child frame | #35633 | 5 | `core/vm/gascosts.go` | `IsAmsterdam` (nil) | adopt-later | Inert while `StateGas == 0`. |
+| Gas tracing rework (not a fork) | #35646 | 6 | `core/vm/{operations_acl,gascosts,contract,instructions,evm,interpreter}.go`, `core/state_transition.go`, `core/tracing` | n/a | adopted | Tracing only. `UsedExecutionGas` changes don't reach any gas result; PIP-88 twins unchanged and in lockstep. |
+| bn256 cloudflare `twistPoint.Neg` fix (not a fork) | #35686 | 6 | `crypto/bn256/cloudflare/twist.go` | n/a | adopted | Precompiles use `gnark` on amd64/arm64, and the Miller loop never reads the negated point's `t`. |
+| Amsterdam scheduled on Sepolia | #35734 | 7 | `params/config.go`, `core/forkid/forkid_test.go` | `AmsterdamTime` (Sepolia only) | declined | Bor's Sepolia config carries no time-based forks; every Bor preset keeps `AmsterdamBlock` nil. |

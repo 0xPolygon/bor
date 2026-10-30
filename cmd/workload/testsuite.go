@@ -51,7 +51,9 @@ var (
 			filterQueryFileFlag,
 			historyTestFileFlag,
 			traceTestFileFlag,
+			proofTestFileFlag,
 			traceTestInvalidOutputFlag,
+			proofTestInvalidOutputFlag,
 		},
 	}
 	testPatternFlag = &cli.StringFlag{
@@ -96,6 +98,7 @@ type testConfig struct {
 	historyTestFile   string
 	historyPruneBlock *uint64
 	traceTestFile     string
+	proofTestFile     string
 }
 
 var errPrunedHistory = errors.New("attempt to access pruned history")
@@ -120,7 +123,7 @@ func validateHistoryPruneErr(err error, blockNum uint64, historyPruneBlock *uint
 
 func testConfigFromCLI(ctx *cli.Context) (cfg testConfig) {
 	flags.CheckExclusive(ctx, testMainnetFlag, testSepoliaFlag)
-	if (ctx.IsSet(testMainnetFlag.Name) || ctx.IsSet(testSepoliaFlag.Name)) && ctx.IsSet(filterQueryFileFlag.Name) {
+	if (ctx.Bool(testMainnetFlag.Name) || ctx.Bool(testSepoliaFlag.Name)) && ctx.IsSet(filterQueryFileFlag.Name) {
 		exit(filterQueryFileFlag.Name + " cannot be used with " + testMainnetFlag.Name + " or " + testSepoliaFlag.Name)
 	}
 
@@ -146,6 +149,12 @@ func testConfigFromCLI(ctx *cli.Context) (cfg testConfig) {
 		} else {
 			cfg.traceTestFile = "queries/trace_mainnet.json"
 		}
+		if ctx.IsSet(proofTestFileFlag.Name) {
+			cfg.proofTestFile = ctx.String(proofTestFileFlag.Name)
+		} else {
+			cfg.proofTestFile = "queries/proof_mainnet.json"
+		}
+
 		cfg.historyPruneBlock = new(uint64)
 		*cfg.historyPruneBlock = history.PrunePoints[params.MainnetGenesisHash].BlockNumber
 	case ctx.Bool(testSepoliaFlag.Name):
@@ -165,6 +174,12 @@ func testConfigFromCLI(ctx *cli.Context) (cfg testConfig) {
 		} else {
 			cfg.traceTestFile = "queries/trace_sepolia.json"
 		}
+		if ctx.IsSet(proofTestFileFlag.Name) {
+			cfg.proofTestFile = ctx.String(proofTestFileFlag.Name)
+		} else {
+			cfg.proofTestFile = "queries/proof_sepolia.json"
+		}
+
 		cfg.historyPruneBlock = new(uint64)
 		*cfg.historyPruneBlock = history.PrunePoints[params.SepoliaGenesisHash].BlockNumber
 	default:
@@ -172,6 +187,7 @@ func testConfigFromCLI(ctx *cli.Context) (cfg testConfig) {
 		cfg.filterQueryFile = ctx.String(filterQueryFileFlag.Name)
 		cfg.historyTestFile = ctx.String(historyTestFileFlag.Name)
 		cfg.traceTestFile = ctx.String(traceTestFileFlag.Name)
+		cfg.proofTestFile = ctx.String(proofTestFileFlag.Name)
 	}
 	return cfg
 }
@@ -223,11 +239,13 @@ func runTestCmd(ctx *cli.Context) error {
 	filterSuite := newFilterTestSuite(cfg)
 	historySuite := newHistoryTestSuite(cfg)
 	traceSuite := newTraceTestSuite(cfg, ctx)
+	proofSuite := newProofTestSuite(cfg, ctx)
 
 	// Filter test cases.
 	tests := filterSuite.allTests()
 	tests = append(tests, historySuite.allTests()...)
 	tests = append(tests, traceSuite.allTests()...)
+	tests = append(tests, proofSuite.allTests()...)
 
 	utests := filterTests(tests, ctx.String(testPatternFlag.Name), func(t workloadTest) bool {
 		if t.Slow && !ctx.Bool(testSlowFlag.Name) {

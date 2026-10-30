@@ -55,11 +55,11 @@ func benchSnailtracer(b *testing.B, switchDispatch bool) {
 		db.SetCode(addr, code, tracing.CodeChangeUnspecified)
 		db.CreateAccount(caller)
 		db.AddBalance(caller, uint256.NewInt(1e18), tracing.BalanceChangeUnspecified)
-		db.Finalise(true)
+		db.Finalise(params.Rules{IsEIP158: true})
 
 		bctx := BlockContext{
 			CanTransfer: func(StateDB, common.Address, *uint256.Int) bool { return true },
-			Transfer:    func(StateDB, common.Address, common.Address, *uint256.Int) {},
+			Transfer:    func(StateDB, common.Address, common.Address, *uint256.Int, *params.Rules) {},
 			GetHash:     func(uint64) common.Hash { return common.Hash{} },
 			BlockNumber: big.NewInt(1),
 			Time:        1,
@@ -76,9 +76,9 @@ func benchSnailtracer(b *testing.B, switchDispatch bool) {
 		evm := NewEVM(bctx, db, benchChainConfig, Config{EnableEVMSwitchDispatch: switchDispatch})
 		evm.SetTxContext(TxContext{
 			Origin:   caller,
-			GasPrice: big.NewInt(1),
+			GasPrice: uint256.NewInt(1),
 		})
-		evm.Call(caller, addr, calldata, 1_000_000_000, new(uint256.Int))
+		evm.Call(caller, addr, calldata, NewGasBudget(1_000_000_000, 0), new(uint256.Int))
 	}
 }
 

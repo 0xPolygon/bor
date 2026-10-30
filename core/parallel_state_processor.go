@@ -116,7 +116,7 @@ func (task *ExecutionTask) Execute(mvh *blockstm.MVHashMap, incarnation int) (er
 		return
 	}
 	if mvh2 := task.statedb.GetMVHashmap(); mvh2 == nil || !mvh2.SkipFinalise {
-		task.statedb.Finalise(task.config.IsEIP158(task.blockNumber))
+		task.statedb.Finalise(evm.GetRules())
 	}
 	return
 }
@@ -125,7 +125,7 @@ func (task *ExecutionTask) Execute(mvh *blockstm.MVHashMap, incarnation int) (er
 // message context.
 func (task *ExecutionTask) setupEVM(mvh *blockstm.MVHashMap, incarnation int) *vm.EVM {
 	task.statedb = task.cleanStateDB.Copy()
-	task.statedb.SetTxContext(task.tx.Hash(), task.index)
+	task.statedb.SetTxContext(task.tx.Hash(), task.index, uint32(task.index+1))
 	task.statedb.SetMVHashmap(mvh)
 	task.statedb.SetIncarnation(incarnation)
 	evm := vm.NewEVM(task.blockContext, task.statedb, task.config, task.evmConfig)
@@ -142,11 +142,11 @@ func (task *ExecutionTask) setupEVM(mvh *blockstm.MVHashMap, incarnation int) *v
 func (task *ExecutionTask) runMessage(evm *vm.EVM) error {
 	if !*task.shouldDelayFeeCal {
 		var err error
-		task.result, err = ApplyMessage(evm, &task.msg, new(GasPool).AddGas(task.gasLimit))
+		task.result, err = ApplyMessage(evm, &task.msg, NewGasPool(task.gasLimit))
 		return err
 	}
 	var err error
-	task.result, err = ApplyMessageNoFeeBurnOrTip(evm, task.msg, new(GasPool).AddGas(task.gasLimit))
+	task.result, err = ApplyMessageNoFeeBurnOrTip(evm, task.msg, NewGasPool(task.gasLimit))
 	if task.result == nil || err != nil {
 		return blockstm.ErrExecAbortError{Dependency: task.statedb.DepTxIndex(), OriginError: err}
 	}
@@ -205,7 +205,7 @@ func (task *ExecutionTask) Settle() {
 	mvhm := task.finalStateDB.GetMVHashmap()
 	task.finalStateDB.SetMVHashmap(nil)
 
-	task.finalStateDB.SetTxContext(task.tx.Hash(), task.index)
+	task.finalStateDB.SetTxContext(task.tx.Hash(), task.index, uint32(task.index+1))
 	coinbaseBalance := task.finalStateDB.GetBalance(task.coinbase)
 
 	task.finalStateDB.ApplyMVWriteSet(task.statedb.MVWriteList())
@@ -262,11 +262,12 @@ func (task *ExecutionTask) applyDelayedFee(coinbaseBalance *uint256.Int) {
 // finaliseFinalState commits pending writes on finalStateDB and returns
 // the post-state root for the receipt (empty post-Byzantium).
 func (task *ExecutionTask) finaliseFinalState() []byte {
-	if task.config.IsByzantium(task.blockNumber) {
-		task.finalStateDB.Finalise(true)
+	rules := task.config.Rules(task.blockNumber, task.blockContext.Random != nil, task.blockTime)
+	if rules.IsByzantium {
+		task.finalStateDB.Finalise(rules)
 		return nil
 	}
-	return task.finalStateDB.IntermediateRoot(task.config.IsEIP158(task.blockNumber)).Bytes()
+	return task.finalStateDB.IntermediateRoot(rules).Bytes()
 }
 
 // buildReceipt builds the Receipt for the settled tx with logs, bloom,
@@ -412,6 +413,10 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 	if config.DAOForkSupport && config.DAOForkBlock != nil && config.DAOForkBlock.Cmp(block.Number()) == 0 {
 		misc.ApplyDAOHardFork(statedb)
 	}
+	parent := p.chain.GetHeader(block.ParentHash(), block.NumberU64()-1)
+	if parent == nil {
+		return nil, fmt.Errorf("missing parent %#x", block.ParentHash())
+	}
 
 	tasks := make([]blockstm.ExecTask, 0, len(block.Transactions()))
 	sharedJumpDests := vm.NewSyncJumpDestCache()
@@ -425,13 +430,9 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 
 	vmenv := vm.NewEVM(context, statedb, config, cfg)
 
-	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
-		ProcessBeaconBlockRoot(*beaconRoot, vmenv)
-	}
-	if config.IsPrague(block.Number()) {
-		// EIP-2935
-		ProcessParentBlockHash(block.ParentHash(), vmenv)
-	}
+	// Shared with the serial processor so upstream changes to the
+	// pre-execution system calls reach every executor.
+	PreExecution(interruptCtx, block.BeaconRoot(), parent, config, vmenv, block.Number(), block.Time())
 	signer := types.MakeSigner(config, header.Number, header.Time)
 	prewarmReaderCache(statedb, block, signer)
 
@@ -683,7 +684,7 @@ func (e *v2Env) applyMessage(t *v2Task, evm *vm.EVM, pdb *state.ParallelStateDB)
 			pdb.Panicked = true
 		}
 	}()
-	result, execErr := ApplyMessageNoFeeLog(evm, t.msg, new(GasPool).AddGas(e.gasLimit))
+	result, execErr := ApplyMessageNoFeeLog(evm, t.msg, NewGasPool(e.gasLimit))
 	if result == nil {
 		// Consensus-level error (bad nonce, insufficient upfront gas, intrinsic
 		// gas underflow, blob fork-gating, etc.). Serial returns this as a
@@ -966,7 +967,7 @@ func newV2SettleFn(tasks []V2Task, env *v2Env, finalDB *state.StateDB,
 	receipts *types.Receipts, allLogs *[]*types.Log, totalUsedGas *uint64,
 	panickedIdx *int, execErrIdx *int, execErr *error, readErr *error) blockstm.V2SettleFn {
 	isByzantium := chainConfig.IsByzantium(blockCtx.BlockNumber)
-	isEIP158 := chainConfig.IsEIP158(blockCtx.BlockNumber)
+	rules := chainConfig.Rules(blockCtx.BlockNumber, blockCtx.Random != nil, blockCtx.Time)
 	return func(txIdx int, st blockstm.V2TxState) {
 		if st == nil {
 			return
@@ -1001,13 +1002,13 @@ func newV2SettleFn(tasks []V2Task, env *v2Env, finalDB *state.StateDB,
 			return
 		}
 		tx := tasks[txIdx].Tx
-		finalDB.SetTxContext(tx.Hash(), tasks[txIdx].Index)
+		finalDB.SetTxContext(tx.Hash(), tasks[txIdx].Index, uint32(tasks[txIdx].Index+1))
 		pdb.SettleTo(finalDB)
 
 		*totalUsedGas += pdb.UsedGas
 		var root []byte
 		if !isByzantium {
-			root = finalDB.IntermediateRoot(isEIP158).Bytes()
+			root = finalDB.IntermediateRoot(rules).Bytes()
 		}
 		receipt := buildV2Receipt(tx, pdb, tasks[txIdx].Msg, root, *totalUsedGas, finalDB, blockCtx, blockHash)
 		*receipts = append(*receipts, receipt)
@@ -1102,8 +1103,12 @@ func (p *V2StateProcessor) Process(block *types.Block, statedb *state.StateDB, c
 	if config.DAOForkSupport && config.DAOForkBlock != nil && config.DAOForkBlock.Cmp(block.Number()) == 0 {
 		misc.ApplyDAOHardFork(statedb)
 	}
+	parent := p.chain.GetHeader(block.ParentHash(), block.NumberU64()-1)
+	if parent == nil {
+		return nil, fmt.Errorf("missing parent %#x", block.ParentHash())
+	}
 	blockCtx := NewEVMBlockContext(header, p.chain, author)
-	applyV2PreExecSystemCalls(block, statedb, config, cfg, blockCtx)
+	applyV2PreExecSystemCalls(block, parent, statedb, config, cfg, blockCtx)
 
 	tasks, err := buildV2Tasks(block, config, header, interruptCtx)
 	if err != nil {
@@ -1120,7 +1125,7 @@ func (p *V2StateProcessor) Process(block *types.Block, statedb *state.StateDB, c
 	// execution — the produced witness would land empty.
 	prevWitness := finalDB.Witness()
 	finalDB.StopPrefetcher()
-	finalDB.StartPrefetcher("v2_settle", prevWitness, nil)
+	finalDB.StartPrefetcher("v2_settle", prevWitness)
 	finalDB.SkipTimers()
 	// Copy() deep-copies the witness; re-share so BLOCKHASH writes reach finalDB.
 	readBase := statedb.Copy()
@@ -1179,7 +1184,7 @@ func (p *V2StateProcessor) finalizeV2Block(block *types.Block, statedb *state.St
 	// Prefetch storage tries for accounts dirtied by engine.Finalize
 	// (state sync contract, validator rewards) so IntermediateRoot
 	// doesn't need to load them from pebble synchronously.
-	statedb.FinaliseFastWithPrefetch(true)
+	statedb.FinaliseFastWithPrefetch(true, config.IsAmsterdam(header.Number))
 
 	// V2 worker reads went through pool copies that share `statedb`'s reader
 	// by reference, so the trie tracers on that reader hold every node V2
@@ -1218,10 +1223,11 @@ func (p *V2StateProcessor) finalizeV2Block(block *types.Block, statedb *state.St
 		}
 		blockCtx := NewEVMBlockContext(header, p.chain, nil)
 		evm := vm.NewEVM(blockCtx, statedb, config, vm.Config{})
-		if err := ProcessWithdrawalQueue(&requests, evm); err != nil {
+		blockAccessIndex := uint32(len(block.Transactions()) + 1)
+		if err := ProcessWithdrawalQueue(&requests, evm, blockAccessIndex); err != nil {
 			return nil, fmt.Errorf("failed to process withdrawal queue: %w", err)
 		}
-		if err := ProcessConsolidationQueue(&requests, evm); err != nil {
+		if err := ProcessConsolidationQueue(&requests, evm, blockAccessIndex); err != nil {
 			return nil, fmt.Errorf("failed to process consolidation queue: %w", err)
 		}
 	}
@@ -1234,17 +1240,13 @@ func (p *V2StateProcessor) finalizeV2Block(block *types.Block, statedb *state.St
 	}, nil
 }
 
-// applyV2PreExecSystemCalls runs the EIP-4788 beacon root and EIP-2935
-// parent-hash system contracts when active for this block.
-func applyV2PreExecSystemCalls(block *types.Block, statedb *state.StateDB,
+// applyV2PreExecSystemCalls runs the pre-execution system calls (EIP-7997
+// factory insert, EIP-4788 beacon root, EIP-2935 parent hash) through the
+// serial processor's PreExecution, so upstream changes to them reach V2 as well.
+func applyV2PreExecSystemCalls(block *types.Block, parent *types.Header, statedb *state.StateDB,
 	config *params.ChainConfig, cfg vm.Config, blockCtx vm.BlockContext) {
 	evm := vm.NewEVM(blockCtx, statedb, config, cfg)
-	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
-		ProcessBeaconBlockRoot(*beaconRoot, evm)
-	}
-	if config.IsPrague(block.Number()) || config.IsVerkle(block.Number()) {
-		ProcessParentBlockHash(block.ParentHash(), evm)
-	}
+	PreExecution(context.Background(), block.BeaconRoot(), parent, config, evm, block.Number(), block.Time())
 }
 
 // buildV2Tasks converts non-StateSync transactions in the block into V2Tasks,

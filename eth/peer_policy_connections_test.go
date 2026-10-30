@@ -73,7 +73,7 @@ func TestPeerPolicyConnectionClasses(t *testing.T) {
 	for _, mode := range []string{"ordinary", "trusted", "static"} {
 		t.Run(mode, func(t *testing.T) {
 			h := &handler{peerPolicy: peerpolicy.New(new(mclock.Simulated)), peers: newPeerSet()}
-			peer := ethproto.NewPeer(ethproto.ETH68, policyTestConnection(t, mode), policyFaultRW{}, nil)
+			peer := ethproto.NewPeer(ethproto.ETH68, policyTestConnection(t, mode), policyFaultRW{}, nil, nil)
 			defer peer.Close()
 			if err := h.peers.registerPeer(peer, nil, nil); err != nil {
 				t.Fatal(err)
@@ -109,7 +109,7 @@ func TestPeerContributionEvictionPreservesConnectionClass(t *testing.T) {
 			clock := new(mclock.Simulated)
 			h := &handler{peerPolicy: peerpolicy.New(clock), peers: newPeerSet()}
 			h.peerPolicy.SetReady(true)
-			peer := ethproto.NewPeer(ethproto.ETH68, policyTestConnection(t, mode), policyFaultRW{}, nil)
+			peer := ethproto.NewPeer(ethproto.ETH68, policyTestConnection(t, mode), policyFaultRW{}, nil, nil)
 			defer peer.Close()
 			if err := h.peers.registerPeer(peer, nil, nil); err != nil {
 				t.Fatal(err)
@@ -142,13 +142,13 @@ func TestPeerContributionEvictedStaleSessionCannotRestore(t *testing.T) {
 	h := &handler{peerPolicy: peerpolicy.New(clock), peers: newPeerSet()}
 	h.peerPolicy.SetReady(true)
 	conn := p2p.NewPeer(enode.ID{1}, "", nil)
-	old := ethproto.NewPeer(ethproto.ETH68, conn, policyFaultRW{}, nil)
+	old := ethproto.NewPeer(ethproto.ETH68, conn, policyFaultRW{}, nil, nil)
 	t.Cleanup(old.Close)
 	require.NoError(t, h.peers.registerPeer(old, nil, nil))
 	h.observeProtocolPeer(old)
 	require.NoError(t, h.peers.unregisterPeer(old.ID()))
 	clock.Run(time.Second)
-	current := ethproto.NewPeer(ethproto.ETH68, conn, policyFaultRW{}, nil)
+	current := ethproto.NewPeer(ethproto.ETH68, conn, policyFaultRW{}, nil, nil)
 	t.Cleanup(current.Close)
 	require.NoError(t, h.peers.registerPeer(current, nil, nil))
 	h.observeProtocolPeer(current)
@@ -171,7 +171,7 @@ func TestPeerContributionEvictedStaleSessionCannotRestore(t *testing.T) {
 func TestPeerContributionMissingPeerSetRetainsEvidence(t *testing.T) {
 	h := &handler{peerPolicy: peerpolicy.New(new(mclock.Simulated))}
 	h.peerPolicy.SetReady(true)
-	peer := ethproto.NewPeer(ethproto.ETH68, p2p.NewPeer(enode.ID{1}, "", nil), policyFaultRW{}, nil)
+	peer := ethproto.NewPeer(ethproto.ETH68, p2p.NewPeer(enode.ID{1}, "", nil), policyFaultRW{}, nil, nil)
 	t.Cleanup(peer.Close)
 	h.observeProtocolPeer(peer)
 	for i := range 1024 {
@@ -209,8 +209,8 @@ func policyAdmissionPeers(t *testing.T, h *testHandler, version uint, id enode.I
 	t.Helper()
 	remoteRW, localRW := p2p.MsgPipe()
 	t.Cleanup(func() { require.NoError(t, remoteRW.Close()) })
-	remote := ethproto.NewPeer(version, p2p.NewPeerPipe(enode.ID{255}, "", nil, remoteRW), remoteRW, h.txpool)
-	local := ethproto.NewPeer(version, p2p.NewPeerPipe(id, "", nil, localRW), localRW, h.txpool)
+	remote := ethproto.NewPeer(version, p2p.NewPeerPipe(enode.ID{255}, "", nil, remoteRW), remoteRW, h.txpool, nil)
+	local := ethproto.NewPeer(version, p2p.NewPeerPipe(id, "", nil, localRW), localRW, h.txpool, nil)
 	t.Cleanup(remote.Close)
 	t.Cleanup(local.Close)
 	return remote, local, remoteRW
@@ -233,7 +233,7 @@ func TestPeerPolicyRejectedAdmissionPreservesHistory(t *testing.T) {
 			t.Run(fmt.Sprintf("eth%d/%s", version, rejection), func(t *testing.T) {
 				h := newPolicyAdmissionHandler(t, new(mclock.Simulated), 1)
 				if rejection == "capacity" {
-					occupant := ethproto.NewPeer(version, p2p.NewPeer(enode.ID{254}, "", nil), policyFaultRW{}, nil)
+					occupant := ethproto.NewPeer(version, p2p.NewPeer(enode.ID{254}, "", nil), policyFaultRW{}, nil, nil)
 					t.Cleanup(occupant.Close)
 					require.NoError(t, h.handler.peers.registerPeer(occupant, nil, nil))
 				}
@@ -353,7 +353,7 @@ func liveClassTestPeer(t *testing.T) (*handler, *ethproto.Peer, *p2p.Server, *en
 	case <-time.After(5 * time.Second):
 		t.Fatal("peer connection timed out")
 	}
-	peer := ethproto.NewPeer(ethproto.ETH68, conn, policyFaultRW{}, nil)
+	peer := ethproto.NewPeer(ethproto.ETH68, conn, policyFaultRW{}, nil, nil)
 	t.Cleanup(peer.Close)
 	require.NoError(t, backend.handler.peers.registerPeer(peer, nil, nil))
 	backend.handler.observeProtocolPeer(peer)

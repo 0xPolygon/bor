@@ -19,14 +19,14 @@ import (
 )
 
 // TestV2_SelfDestructSelfBeneficiaryPreservesBalance pins a regression where
-// V2's SelfDestruct6780 double-drained the contract balance whenever
+// V2's selfdestruct path double-drained the contract balance whenever
 // SELFDESTRUCT's beneficiary was the contract itself (e.g. CALLCODE → callee
 // SELFDESTRUCT(caller), which the EVM resolves to selfdestruct(caller) with
 // caller as both subject and beneficiary).
 //
 // The EVM opcode (opSelfdestruct6780) does SubBalance(addr) + AddBalance(beneficiary)
-// itself, then calls SelfDestruct6780. Serial StateDB.SelfDestruct6780 is a
-// pure read on the non-newContract branch. V2's ParallelStateDB.SelfDestruct6780
+// itself, then (post-#32919) calls SelfDestruct only when IsNewContract.
+// SelfDestruct is balance-neutral on both implementations; V2's ParallelStateDB
 // used to do an extra SubBalance, which (a) double-drained the contract on the
 // self-beneficiary case (balance ended at zero instead of being preserved) and
 // (b) would have produced a negative-delta in the cross-beneficiary case.
@@ -75,7 +75,7 @@ func runSelfDestructSelfBeneficiary(t *testing.T, useV2 bool) {
 	sender := crypto.PubkeyToAddress(key.PublicKey)
 	sdb.AddBalance(sender, uint256.NewInt(1e18), tracing.BalanceChangeUnspecified)
 
-	root, _ := sdb.Commit(0, false, false)
+	root, _ := sdb.Commit(params.Rules{}, 0)
 	tdb.Commit(root, false)
 
 	statedb, _ := state.New(root, state.NewDatabase(tdb, nil))
@@ -107,11 +107,11 @@ func runSelfDestructSelfBeneficiary(t *testing.T, useV2 bool) {
 		evm := vm.NewEVM(blockCtx, statedb, &cfg, vm.Config{})
 		msg, _ := TransactionToMessage(tx, signer, blockCtx.BaseFee)
 		evm.SetTxContext(NewEVMTxContext(msg))
-		gp := new(GasPool).AddGas(blockCtx.GasLimit)
+		gp := NewGasPool(blockCtx.GasLimit)
 		if _, err := ApplyMessage(evm, msg, gp); err != nil {
 			t.Fatalf("ApplyMessage: %v", err)
 		}
-		statedb.Finalise(true)
+		statedb.Finalise(params.Rules{IsEIP158: true})
 	} else {
 		msg, _ := TransactionToMessage(tx, signer, blockCtx.BaseFee)
 		tasks := []V2Task{{Index: 0, Tx: tx, Msg: msg}}
@@ -121,7 +121,7 @@ func runSelfDestructSelfBeneficiary(t *testing.T, useV2 bool) {
 		bals := blockstm.NewMVBalanceStore()
 		_ = ExecuteV2BlockSTM(context.Background(), tasks, readBase, store, bals, blockCtx, common.Hash{}, vm.Config{}, &cfg,
 			blockCtx.GasLimit, 1, statedb, nil)
-		statedb.Finalise(true)
+		statedb.Finalise(params.Rules{IsEIP158: true})
 	}
 
 	// Critical assertion: outerB (the SELFDESTRUCT subject WITH self-as-

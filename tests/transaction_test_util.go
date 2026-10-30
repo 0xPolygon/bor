@@ -27,6 +27,7 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/holiman/uint256"
 )
 
 // TransactionTest checks RLP decoding and sender derivation of transactions.
@@ -71,7 +72,7 @@ func (tt *TransactionTest) Run() error {
 	if err := tt.validate(); err != nil {
 		return err
 	}
-	validateTx := func(rlpData hexutil.Bytes, signer types.Signer, rules *params.Rules) (sender common.Address, hash common.Hash, requiredGas uint64, err error) {
+	validateTx := func(rlpData hexutil.Bytes, signer types.Signer, rules params.Rules) (sender common.Address, hash common.Hash, requiredGas uint64, err error) {
 		tx := new(types.Transaction)
 		if err = tx.UnmarshalBinary(rlpData); err != nil {
 			return
@@ -80,18 +81,23 @@ func (tt *TransactionTest) Run() error {
 		if err != nil {
 			return
 		}
-		// Intrinsic gas
-		requiredGas, err = core.IntrinsicGas(tx.Data(), tx.AccessList(), tx.SetCodeAuthorizations(), tx.To() == nil, rules.IsHomestead, rules.IsIstanbul, rules.IsShanghai)
+		// Intrinsic cost
+		value, overflow := uint256.FromBig(tx.Value())
+		if overflow {
+			return sender, hash, 0, errors.New("value exceeds 256 bits")
+		}
+		cost, err := core.IntrinsicGas(tx.Data(), tx.AccessList(), tx.SetCodeAuthorizations(), sender, tx.To(), value, rules)
 		if err != nil {
 			return
 		}
+		requiredGas = cost
 		if requiredGas > tx.Gas() {
 			return sender, hash, 0, fmt.Errorf("insufficient gas ( %d < %d )", tx.Gas(), requiredGas)
 		}
 
 		if rules.IsPrague {
 			var floorDataGas uint64
-			floorDataGas, err = core.FloorDataGas(tx.Data())
+			floorDataGas, err = core.FloorDataGas(rules, sender, tx.To(), value, tx.Data(), tx.AccessList())
 			if err != nil {
 				return
 			}
@@ -119,6 +125,8 @@ func (tt *TransactionTest) Run() error {
 		{"Shanghai", true},
 		{"Cancun", true},
 		{"Prague", true},
+		{"Osaka", true},
+		{"Amsterdam", true},
 	} {
 		expected := tt.Result[testcase.name]
 		if expected == nil {
@@ -132,7 +140,7 @@ func (tt *TransactionTest) Run() error {
 			rules  = config.Rules(new(big.Int), testcase.isMerge, 0)
 			signer = types.MakeSigner(config, new(big.Int), 0)
 		)
-		sender, hash, gas, err := validateTx(tt.Txbytes, signer, &rules)
+		sender, hash, gas, err := validateTx(tt.Txbytes, signer, rules)
 		if err != nil {
 			if expected.Hash != nil {
 				return fmt.Errorf("unexpected error fork %s: %v", testcase.name, err)

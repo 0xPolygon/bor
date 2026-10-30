@@ -71,7 +71,7 @@ func TestV2ParallelPostSelfDestructBalanceMatchesSerial(t *testing.T) {
 	}
 
 	serialDB := pocSDRunSerial(t, tdb, root, txs, msgs, blockCtx, chainConfig)
-	serialRoot := serialDB.IntermediateRoot(true)
+	serialRoot := serialDB.IntermediateRoot(params.Rules{IsEIP158: true})
 	if got := serialDB.GetBalance(c.target); !got.IsZero() {
 		t.Fatalf("serial target balance=%s, want 0", got)
 	}
@@ -88,7 +88,7 @@ func TestV2ParallelPostSelfDestructBalanceMatchesSerial(t *testing.T) {
 			if got := v2DB.GetBalance(c.beneficiary); !got.IsZero() {
 				t.Fatalf("V2 beneficiary balance=%s, want 0", got)
 			}
-			if got := v2DB.IntermediateRoot(true); got != serialRoot {
+			if got := v2DB.IntermediateRoot(params.Rules{IsEIP158: true}); got != serialRoot {
 				t.Fatalf("V2 root %s != serial root %s", got, serialRoot)
 			}
 		})
@@ -165,7 +165,7 @@ func pocSDBaseState(t testing.TB, c pocSDContracts) (*triedb.Database, common.Ha
 	)
 	sdb.SetCode(c.factory, c.factoryCode, tracing.CodeChangeUnspecified)
 	sdb.SetCode(c.controller, c.controlCode, tracing.CodeChangeUnspecified)
-	root, err := sdb.Commit(0, false, false)
+	root, err := sdb.Commit(params.Rules{}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,14 +216,13 @@ func pocSDRunSerial(t testing.TB, tdb *triedb.Database, root common.Hash, txs ty
 	if err != nil {
 		t.Fatal(err)
 	}
-	pool := new(GasPool).AddGas(blockCtx.GasLimit)
-	var usedGas uint64
+	pool := NewGasPool(blockCtx.GasLimit)
 	for i, tx := range txs {
-		sdb.SetTxContext(tx.Hash(), i)
+		sdb.SetTxContext(tx.Hash(), i, uint32(i)+1)
 		evm := vm.NewEVM(blockCtx, sdb, chainConfig, vm.Config{})
 		if _, err := ApplyTransactionWithEVM(
 			msgs[i], pool, sdb, blockCtx.BlockNumber, common.Hash{},
-			blockCtx.Time, tx, &usedGas, evm,
+			blockCtx.Time, tx, evm,
 		); err != nil {
 			t.Fatalf("serial tx %d: %v", i, err)
 		}

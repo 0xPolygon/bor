@@ -108,7 +108,7 @@ func TestHandleWitnessBroadcastDivergentBodyImportFailureChargesPusher(t *testin
 	pusher, cleanup := newTestWit2PeerWithReader()
 	defer cleanup()
 
-	witness, err := stateless.NewWitness(header, nil)
+	witness, err := stateless.NewWitness(header, nil, false)
 	require.NoError(t, err)
 	var buf bytes.Buffer
 	require.NoError(t, witness.EncodeRLP(&buf))
@@ -128,7 +128,7 @@ func TestHandleWitnessBroadcastDivergentBodyImportFailureChargesPusher(t *testin
 		n := fetches.Add(1)
 		req := &ethproto.Request{Peer: fmt.Sprintf("server-%d", n), Cancel: make(chan struct{})}
 		go func() {
-			w, err := stateless.NewWitness(header, nil)
+			w, err := stateless.NewWitness(header, nil, false)
 			if err != nil {
 				return
 			}

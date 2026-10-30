@@ -11,10 +11,7 @@ func getOrRegisterRuntimeHistogram(name string, scale float64, r Registry) *runt
 	if r == nil {
 		r = DefaultRegistry
 	}
-
-	constructor := func() Histogram { return newRuntimeHistogram(scale) }
-
-	return getOrRegister(name, constructor, r).(*runtimeHistogram)
+	return r.GetOrRegister(name, func() any { return newRuntimeHistogram(scale) }).(*runtimeHistogram)
 }
 
 // runtimeHistogram wraps a runtime/metrics histogram.
@@ -104,6 +101,7 @@ func (h *runtimeHistogramSnapshot) calc() {
 		if count == 0 { // Set min only first loop iteration
 			min = int64(math.Floor(h.internal.Buckets[i]))
 		}
+		first := count == 0
 		count += int64(c)
 		sum += h.midpoint(i) * float64(c)
 		// Set max on every iteration
@@ -111,7 +109,7 @@ func (h *runtimeHistogramSnapshot) calc() {
 		if math.IsInf(edge, 1) {
 			edge = h.internal.Buckets[i]
 		}
-		if edge > max {
+		if first || edge > max {
 			max = edge
 		}
 	}

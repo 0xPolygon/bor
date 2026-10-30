@@ -395,9 +395,9 @@ func (f *TxFetcher) Enqueue(peer string, txs []*types.Transaction, direct bool, 
 		otherRejectMeter.Mark(otherreject)
 
 		// If 'other reject' is >25% of the deliveries in any batch, sleep a bit.
-		if otherreject > addTxsBatchSize/4 {
+		if otherreject > int64((len(batch)+3)/4) {
+			log.Debug("Peer delivering stale or invalid transactions", "peer", peer, "rejected", otherreject)
 			time.Sleep(200 * time.Millisecond)
-			log.Debug("Peer delivering stale transactions", "peer", peer, "rejected", otherreject)
 		}
 		// If we encountered a protocol violation, disconnect this peer.
 		if violation != nil {
@@ -675,9 +675,11 @@ func (f *TxFetcher) loop() {
 								if math.Abs(float64(delivery.metas[i].size)-float64(meta.size)) > 8 {
 									log.Warn("Announced transaction size mismatch", "peer", peer, "tx", hash, "size", delivery.metas[i].size, "ann", meta.size, "origin", delivery.origin, "direct", delivery.direct)
 
-									// Normally we should drop a peer considering this is a protocol violation.
-									// However, due to the RLP vs consensus format messyness, allow a few bytes
-									// wiggle-room where we only warn, but don't drop.
+									// Announcing a size that disagrees with the transaction served is a
+									// protocol violation, so the peer is dropped. Due to the RLP vs consensus
+									// format messyness, a few bytes of wiggle-room are tolerated: a difference
+									// of 8 bytes or less is neither warned about nor dropped for, which is why
+									// this branch is guarded above.
 									//
 									// TODO(karalabe): Get rid of this relaxation when clients are proven stable.
 									f.dropPeer(peer)
@@ -703,9 +705,11 @@ func (f *TxFetcher) loop() {
 								if math.Abs(float64(delivery.metas[i].size)-float64(meta.size)) > 8 {
 									log.Warn("Announced transaction size mismatch", "peer", peer, "tx", hash, "size", delivery.metas[i].size, "ann", meta.size, "origin", delivery.origin, "direct", delivery.direct)
 
-									// Normally we should drop a peer considering this is a protocol violation.
-									// However, due to the RLP vs consensus format messyness, allow a few bytes
-									// wiggle-room where we only warn, but don't drop.
+									// Announcing a size that disagrees with the transaction served is a
+									// protocol violation, so the peer is dropped. Due to the RLP vs consensus
+									// format messyness, a few bytes of wiggle-room are tolerated: a difference
+									// of 8 bytes or less is neither warned about nor dropped for, which is why
+									// this branch is guarded above.
 									//
 									// TODO(karalabe): Get rid of this relaxation when clients are proven stable.
 									f.dropPeer(peer)
@@ -1035,7 +1039,7 @@ func (f *TxFetcher) scheduleFetches(timer *mclock.Timer, timeout chan struct{}, 
 			return // continue in the for-each
 		}
 		var (
-			hashes = make([]common.Hash, 0, maxTxRetrievals)
+			hashes []common.Hash
 			bytes  uint64
 		)
 		f.forEachAnnounce(f.announces[peer], func(hash common.Hash, meta *txMetadata) bool {
@@ -1052,6 +1056,9 @@ func (f *TxFetcher) scheduleFetches(timer *mclock.Timer, timeout chan struct{}, 
 			f.alternates[hash] = f.announced[hash]
 			delete(f.announced, hash)
 
+			if hashes == nil {
+				hashes = make([]common.Hash, 0, maxTxRetrievals)
+			}
 			// Accumulate the hash and stop if the limit was reached
 			hashes = append(hashes, hash)
 			if len(hashes) >= maxTxRetrievals {

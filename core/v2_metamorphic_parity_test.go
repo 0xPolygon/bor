@@ -67,7 +67,7 @@ func TestV2SerialParity_MetamorphicCreate2(t *testing.T) {
 		for _, k := range keys {
 			gen.AddBalance(crypto.PubkeyToAddress(k.PublicKey), uint256.NewInt(1e18), tracing.BalanceChangeUnspecified)
 		}
-		root, _ := gen.Commit(0, false, false)
+		root, _ := gen.Commit(params.Rules{}, 0)
 		tdb.Commit(root, false)
 		return root
 	}
@@ -113,13 +113,12 @@ func TestV2SerialParity_MetamorphicCreate2(t *testing.T) {
 
 		// Serial.
 		serialDB, _ := state.New(root, state.NewDatabase(tdb, nil))
-		gp := new(GasPool).AddGas(blockCtx.GasLimit)
-		var usedGas uint64
+		gp := NewGasPool(blockCtx.GasLimit)
 		serialEVM := vm.NewEVM(blockCtx, serialDB, &cfg, vm.Config{})
 		for j, tx := range txs {
-			serialDB.SetTxContext(tx.Hash(), j)
+			serialDB.SetTxContext(tx.Hash(), j, uint32(j+1))
 			if _, err := ApplyTransactionWithEVM(msgs[j], gp, serialDB, blockCtx.BlockNumber,
-				common.Hash{}, blockCtx.Time, tx, &usedGas, serialEVM); err != nil {
+				common.Hash{}, blockCtx.Time, tx, serialEVM); err != nil {
 				t.Fatalf("iter %d serial tx %d: %v", i, j, err)
 			}
 		}
@@ -135,9 +134,9 @@ func TestV2SerialParity_MetamorphicCreate2(t *testing.T) {
 		ExecuteV2BlockSTM(context.Background(), tasks, base,
 			blockstm.NewMVStore(), blockstm.NewMVBalanceStore(),
 			blockCtx, common.Hash{}, vm.Config{}, &cfg, blockCtx.GasLimit, 4, v2DB, nil)
-		v2DB.Finalise(true)
+		v2DB.Finalise(params.Rules{IsEIP158: true})
 
-		if s, v := serialDB.IntermediateRoot(true), v2DB.IntermediateRoot(true); s != v {
+		if s, v := serialDB.IntermediateRoot(params.Rules{IsEIP158: true}), v2DB.IntermediateRoot(params.Rules{IsEIP158: true}); s != v {
 			t.Fatalf("iter %d: V2 state root %s diverges from serial %s for metamorphic CREATE2 block", i, v.Hex(), s.Hex())
 		}
 	}

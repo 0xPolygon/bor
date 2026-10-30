@@ -152,6 +152,13 @@ type Ethereum struct {
 	filterMaps      *filtermaps.FilterMaps
 	closeFilterMaps chan chan struct{}
 
+	// Chain event subscriptions driving updateFilterMapsHeads. The
+	// subscriptions are registered and consumed in Start.
+	fmHeadEventCh  chan core.ChainEvent
+	fmHeadSub      event.Subscription
+	fmBlockProcCh  chan bool
+	fmBlockProcSub event.Subscription
+
 	APIBackend *EthAPIBackend
 
 	miner     *miner.Miner
@@ -320,6 +327,8 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		discmix:         enode.NewFairMix(discmixTimeout),
 		shutdownTracker: shutdowncheck.NewShutdownTracker(chainDb),
 		closeCh:         make(chan struct{}),
+		fmHeadEventCh:   make(chan core.ChainEvent, 10),
+		fmBlockProcCh:   make(chan bool, 10),
 	}
 
 	relayService := relay.Init(config.EnablePreconfs, config.EnablePrivateTx, config.AcceptPreconfTx, config.AcceptPrivateTx, config.BlockProducerRpcEndpoints)
@@ -406,6 +415,9 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			SnapshotLimit:            config.SnapshotCache,
 			Preimages:                config.Preimages,
 			StateHistory:             config.StateHistory,
+			TrienodeHistory:          config.TrienodeHistory,
+			NodeFullValueCheckpoint:  config.NodeFullValueCheckpoint,
+			BinTrieGroupDepth:        config.BinTrieGroupDepth,
 			StateScheme:              scheme,
 			TriesInMemory:            config.TriesInMemory,
 			ChainHistoryMode:         config.HistoryMode,
@@ -423,7 +435,6 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			// - DATADIR/triedb/merkle.journal
 			// - DATADIR/triedb/verkle.journal
 			TrieJournalDirectory: trieJournalDirectory,
-			StateSizeTracking:    config.EnableStateSizeTracking,
 		}
 	)
 
@@ -434,6 +445,10 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	if config.OverrideOsaka != nil {
 		overrides.OverrideOsaka = config.OverrideOsaka
 	}
+	if config.OverrideAmsterdam != nil {
+		overrides.OverrideAmsterdam = config.OverrideAmsterdam
+	}
+
 	if config.OverrideVerkle != nil {
 		overrides.OverrideVerkle = config.OverrideVerkle
 	}
@@ -634,6 +649,10 @@ func (s *Ethereum) APIs() []rpc.API {
 		LogCacheSize:  s.config.FilterLogCacheSize,
 		LogQueryLimit: s.config.LogQueryLimit,
 		RangeLimit:    s.config.RPCBlockRangeLimit,
+
+		MaxFilters:      s.config.FilterMaxCount,
+		MaxPendingItems: s.config.FilterMaxItems,
+		MaxBufferBytes:  s.config.FilterMaxBufferBytes,
 	})
 	// set genesis to public filter api
 	publicFilterAPI := filters.NewFilterAPI(filterSystem, s.config.BorLogs)
@@ -875,6 +894,10 @@ func (s *Ethereum) Start() error {
 	go s.startCheckpointWhitelistService()
 	go s.startMilestoneWhitelistService()
 
+	// Subscribe to chain events for the filterMaps head updater.
+	s.fmHeadSub = s.blockchain.SubscribeChainEvent(s.fmHeadEventCh)
+	s.fmBlockProcSub = s.blockchain.SubscribeBlockProcessingEvent(s.fmBlockProcCh)
+
 	// start log indexer
 	s.filterMaps.Start()
 	go s.updateFilterMapsHeads()
@@ -1059,13 +1082,11 @@ func (s *Ethereum) newChainView(head *types.Header) *filtermaps.ChainView {
 }
 
 func (s *Ethereum) updateFilterMapsHeads() {
-	headEventCh := make(chan core.ChainEvent, 10)
-	blockProcCh := make(chan bool, 10)
-	sub := s.blockchain.SubscribeChainEvent(headEventCh)
-	sub2 := s.blockchain.SubscribeBlockProcessingEvent(blockProcCh)
+	headEventCh := s.fmHeadEventCh
+	blockProcCh := s.fmBlockProcCh
 	defer func() {
-		sub.Unsubscribe()
-		sub2.Unsubscribe()
+		s.fmHeadSub.Unsubscribe()
+		s.fmBlockProcSub.Unsubscribe()
 		for {
 			select {
 			case <-headEventCh:
@@ -1084,6 +1105,9 @@ func (s *Ethereum) updateFilterMapsHeads() {
 		if head == nil || newHead.Hash() != head.Hash() {
 			head = newHead
 			chainView := s.newChainView(head)
+			if chainView == nil {
+				return
+			}
 			historyCutoff, _ := s.blockchain.HistoryPruningCutoff()
 			var finalBlock uint64
 			if fb := s.blockchain.CurrentFinalBlock(); fb != nil {

@@ -166,6 +166,22 @@ func TestSubscribeRebroadcastTransactionsNilPool(t *testing.T) {
 	}
 }
 
+func TestNilPoolMethods(t *testing.T) {
+	var pool *TxPool
+
+	if nonce := pool.PoolNonce(common.Address{1}); nonce != 0 {
+		t.Fatalf("PoolNonce = %d, want 0", nonce)
+	}
+	if status := pool.Status(common.Hash{1}); status != TxStatusUnknown {
+		t.Fatalf("Status = %v, want TxStatusUnknown", status)
+	}
+	if err := pool.Sync(); err == nil {
+		t.Fatal("Sync on a nil pool returned no error")
+	}
+	pool.Clear()
+	pool.SetSpeculativeState(&types.Header{Number: big.NewInt(1)}, new(state.StateDB))
+}
+
 func TestSetSpeculativeState(t *testing.T) {
 	setter := new(speculativeTestSubPool)
 	plain := new(plainTestSubPool)

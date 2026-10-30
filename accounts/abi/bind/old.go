@@ -176,6 +176,13 @@ var (
 	// ErrNoCodeAfterDeploy is returned by WaitDeployed if contract creation leaves
 	// an empty contract behind.
 	ErrNoCodeAfterDeploy = bind2.ErrNoCodeAfterDeploy
+
+	// ErrNoEventSignature is returned when a log entry has no topics.
+	ErrNoEventSignature = bind2.ErrNoEventSignature
+
+	// ErrEventSignatureMismatch is returned when a log's topic[0] does not match
+	// the expected event signature.
+	ErrEventSignatureMismatch = bind2.ErrEventSignatureMismatch
 )
 
 // ContractCaller defines the methods needed to allow operating with a contract on a read
@@ -265,6 +272,12 @@ func (m *MetaData) GetAbi() (*abi.ABI, error) {
 }
 
 // util.go
+
+// WaitAccepted waits for a tx to be accepted into the pool.
+// It stops waiting when the context is canceled.
+func WaitAccepted(ctx context.Context, b ContractBackend, tx *types.Transaction) error {
+	return bind2.WaitAccepted(ctx, b, tx.Hash())
+}
 
 // WaitMined waits for tx to be mined on the blockchain.
 // It stops waiting when the context is canceled.

@@ -47,6 +47,8 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/miner"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/triedb"
+	"github.com/ethereum/go-ethereum/triedb/pathdb"
 )
 
 // parseURLs splits a comma-separated URL string into a trimmed, non-empty slice.
@@ -80,35 +82,41 @@ var FullNodeGPO = gasprice.Config{
 
 // Defaults contains default settings for use on the Ethereum main net.
 var Defaults = Config{
-	PeerReputation:        true,
-	SyncMode:              downloader.SnapSync,
-	HistoryMode:           history.KeepAll,
-	NetworkId:             0, // enable auto configuration of networkID == chainID
-	TxLookupLimit:         2350000,
-	TransactionHistory:    2350000, // Note: used in bor cli
-	LogHistory:            2350000, // Note: used in bor cli
-	StateHistory:          params.FullImmutabilityThreshold,
-	DatabaseCache:         512,
-	TrieCleanCache:        154,
-	TrieDirtyCache:        256,
-	TrieTimeout:           60 * time.Minute,
-	SnapshotCache:         102,
-	FilterLogCacheSize:    32,
-	LogQueryLimit:         1000,
-	Miner:                 miner.DefaultConfig,
-	TxPool:                legacypool.DefaultConfig,
-	BlobPool:              blobpool.DefaultConfig,
-	RPCGasCap:             50000000,
-	RPCEVMTimeout:         5 * time.Second,
-	GPO:                   FullNodeGPO,
-	RPCTxFeeCap:           1, // 1 ether
-	FastForwardThreshold:  6400,
-	WitnessPruneThreshold: 64000,
-	WitnessPruneInterval:  120 * time.Second,
-	WitnessAPIEnabled:     false,
-	TxSyncDefaultTimeout:  20 * time.Second,
-	TxSyncMaxTimeout:      1 * time.Minute,
-	TxSyncMaxConcurrent:   4096,
+	PeerReputation:          true,
+	SyncMode:                downloader.SnapSync,
+	HistoryMode:             history.KeepAll,
+	NetworkId:               0, // enable auto configuration of networkID == chainID
+	TxLookupLimit:           2350000,
+	TransactionHistory:      2350000, // Note: used in bor cli
+	LogHistory:              2350000, // Note: used in bor cli
+	StateHistory:            params.FullImmutabilityThreshold,
+	TrienodeHistory:         -1,
+	NodeFullValueCheckpoint: pathdb.Defaults.FullValueCheckpoint,
+	BinTrieGroupDepth:       triedb.DefaultBinTrieGroupDepth,
+	DatabaseCache:           2048,
+	TrieCleanCache:          614,
+	TrieDirtyCache:          1024,
+	SnapshotCache:           409,
+	TrieTimeout:             60 * time.Minute,
+	FilterLogCacheSize:      32,
+	LogQueryLimit:           1000,
+	FilterMaxCount:          1024,
+	FilterMaxItems:          100_000,
+	FilterMaxBufferBytes:    256 << 20,
+	Miner:                   miner.DefaultConfig,
+	TxPool:                  legacypool.DefaultConfig,
+	BlobPool:                blobpool.DefaultConfig,
+	RPCGasCap:               50000000,
+	RPCEVMTimeout:           5 * time.Second,
+	GPO:                     FullNodeGPO,
+	RPCTxFeeCap:             1, // 1 ether
+	FastForwardThreshold:    6400,
+	WitnessPruneThreshold:   64000,
+	WitnessPruneInterval:    120 * time.Second,
+	WitnessAPIEnabled:       false,
+	TxSyncDefaultTimeout:    20 * time.Second,
+	TxSyncMaxTimeout:        1 * time.Minute,
+	TxSyncMaxConcurrent:     4096,
 }
 
 //go:generate go run github.com/fjl/gencodec -type Config -formats toml -out gen_config.go
@@ -157,11 +165,23 @@ type Config struct {
 	LogNoHistory         bool   `toml:",omitempty"` // No log search index is maintained.
 	LogExportCheckpoints string // export log index checkpoints to file
 	StateHistory         uint64 `toml:",omitempty"` // The maximum number of blocks from head whose state histories are reserved.
+	TrienodeHistory      int64  `toml:",omitempty"` // Number of blocks from the chain head for which trienode histories are retained
+
+	// The frequency of full-value encoding. For example, a value of 16 means
+	// that, on average, for a given trie node across its 16 consecutive historical
+	// versions, only one version is stored in full format, while the others
+	// are stored in diff mode for storage compression.
+	NodeFullValueCheckpoint uint32 `toml:",omitempty"`
 
 	// State scheme represents the scheme used to store ethereum states and trie
 	// nodes on top. It can be 'hash', 'path', or none which means use the scheme
 	// consistent with persistent state.
 	StateScheme string `toml:",omitempty"`
+
+	// BinTrieGroupDepth is the number of levels per serialized group in binary trie.
+	// Valid values are 1-8, with 8 being the default (byte-aligned groups).
+	// Lower values create smaller groups with more nodes.
+	BinTrieGroupDepth int `toml:",omitempty"`
 
 	// RequiredBlocks is a set of block number -> hash mappings which must be in the
 	// canonical chain of all remote peers. Setting the option makes geth verify the
@@ -197,6 +217,13 @@ type Config struct {
 	// for eth_getLogs.
 	LogQueryLimit int
 
+	// Limits of the polling filters (eth_newFilter, eth_newBlockFilter and
+	// eth_newPendingTransactionFilter): the number of installed filters, the number of
+	// events a filter may buffer, and the memory budget for all buffered events.
+	FilterMaxCount       int
+	FilterMaxItems       int
+	FilterMaxBufferBytes uint64
+
 	// Address-specific cache sizes for biased caching (pathdb only)
 	// Maps account address to cache size in bytes
 	AddressCacheSizes map[common.Address]int
@@ -231,9 +258,6 @@ type Config struct {
 
 	// Use switch-based fast path interpreter
 	EnableEVMSwitchDispatch bool
-
-	// Enables tracking of state size
-	EnableStateSizeTracking bool
 
 	// Enables VM tracing
 	VMTrace           string
@@ -308,6 +332,9 @@ type Config struct {
 
 	// OverrideOsaka (TODO: remove after the fork)
 	OverrideOsaka *big.Int `toml:",omitempty"`
+
+	// OverrideAmsterdam (TODO: remove after the fork)
+	OverrideAmsterdam *big.Int `toml:",omitempty"`
 
 	// OverrideVerkle (TODO: remove after the fork)
 	OverrideVerkle *big.Int `toml:",omitempty"`

@@ -24,8 +24,8 @@ import (
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/core/types/bal"
 	"github.com/ethereum/go-ethereum/params"
-	"github.com/ethereum/go-ethereum/trie/utils"
 )
 
 // StateDB is an EVM database for full state querying.
@@ -55,39 +55,38 @@ type StateDB interface {
 	GetStateAndCommittedState(common.Address, common.Hash) (common.Hash, common.Hash)
 	GetState(common.Address, common.Hash) common.Hash
 	SetState(common.Address, common.Hash, common.Hash) common.Hash
-	GetStorageRoot(addr common.Address) common.Hash
 
 	GetTransientState(addr common.Address, key common.Hash) common.Hash
 	SetTransientState(addr common.Address, key, value common.Hash)
 
-	SelfDestruct(common.Address) uint256.Int
+	SelfDestruct(common.Address)
 	HasSelfDestructed(common.Address) bool
-
-	// SelfDestruct6780 is post-EIP6780 selfdestruct, which means that it's a
-	// send-all-to-beneficiary, unless the contract was created in this same
-	// transaction, in which case it will be destructed.
-	// This method returns the prior balance, along with a boolean which is
-	// true iff the object was indeed destructed.
-	SelfDestruct6780(common.Address) (uint256.Int, bool)
 
 	// Exist reports whether the given account exists in state.
 	// Notably this also returns true for self-destructed accounts within the current transaction.
 	Exist(common.Address) bool
+
+	// Touch accesses the state without returning anything.
+	Touch(common.Address)
+
+	// IsNewContract reports whether the contract at the given address was deployed
+	// during the current transaction.
+	IsNewContract(addr common.Address) bool
+
 	// Empty returns whether the given account is empty. Empty
 	// is defined according to EIP161 (balance = nonce = code = 0).
 	Empty(common.Address) bool
 
 	AddressInAccessList(addr common.Address) bool
 	SlotInAccessList(addr common.Address, slot common.Hash) (addressOk bool, slotOk bool)
+
 	// AddAddressToAccessList adds the given address to the access list. This operation is safe to perform
 	// even if the feature/fork is not active yet
 	AddAddressToAccessList(addr common.Address)
+
 	// AddSlotToAccessList adds the given (address,slot) to the access list. This operation is safe to perform
 	// even if the feature/fork is not active yet
 	AddSlotToAccessList(addr common.Address, slot common.Hash)
-
-	// PointCache returns the point cache used in computations
-	PointCache() *utils.PointCache
 
 	Prepare(rules params.Rules, sender, coinbase common.Address, dest *common.Address, precompiles []common.Address, txAccesses types.AccessList)
 
@@ -108,7 +107,8 @@ type StateDB interface {
 	Logs() []*types.Log
 
 	// Finalise must be invoked at the end of a transaction
-	Finalise(bool)
+	Finalise(rules params.Rules) *bal.ConstructionBlockAccessList
+	SetTxContext(thash common.Hash, ti int, blockAccessIndex uint32)
 
 	// Inner returns the underlying state instance. Needed for bor consensus.
 	Inner() *state.StateDB

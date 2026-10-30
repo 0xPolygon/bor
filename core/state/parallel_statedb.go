@@ -12,9 +12,9 @@ import (
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/core/types/bal"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
-	"github.com/ethereum/go-ethereum/trie/utils"
 )
 
 // ---------------------------------------------------------------------------
@@ -87,7 +87,7 @@ type ParallelStateDB struct {
 	TxIndex     int
 	Incarnation int                      // bumped on re-execution for validation
 	base        *SafeBase                // thread-safe pre-block state reads
-	rawBase     *StateDB                 // raw base for PointCache/Witness only
+	rawBase     *StateDB                 // raw base for Witness only
 	store       *blockstm.MVStore        // shared versioned values
 	bals        *blockstm.MVBalanceStore // shared balance deltas
 
@@ -116,6 +116,7 @@ type ParallelStateDB struct {
 	logs             []*types.Log
 	logSize          uint
 	preimages        map[common.Hash][]byte
+	isAmsterdam      bool // from Prepare; selects EIP-8246 self-destruct settlement
 
 	// Snapshot/revert
 	journalEntries []parallelJournalEntry
@@ -271,6 +272,7 @@ func (s *ParallelStateDB) Reset(txIndex int, base *SafeBase, store *blockstm.MVS
 	s.accessList.slots = s.accessList.slots[:0]
 	s.logs = s.logs[:0]
 	s.logSize = 0
+	s.isAmsterdam = false
 	s.journalEntries = s.journalEntries[:0]
 	s.validRevisions = s.validRevisions[:0]
 	s.nextRevisionId = 0
@@ -1141,8 +1143,10 @@ func (s *ParallelStateDB) SetTransientState(addr common.Address, key, value comm
 
 // ---------- Self-destruct ----------
 
-func (s *ParallelStateDB) SelfDestruct(addr common.Address) uint256.Int {
-	bal := *s.GetBalance(addr)
+// SelfDestruct marks the given account as selfdestructed. As with the serial
+// StateDB, the caller owns clearing the balance — see the parity note on
+// StateDB.SelfDestruct, which Exist below depends on.
+func (s *ParallelStateDB) SelfDestruct(addr common.Address) {
 	// Only journal a destruct entry when this call actually flips the flag
 	// — matches StateDB.SelfDestruct, where repeated calls within a tx skip
 	// the journal. Without this guard, reverting a second SelfDestruct
@@ -1161,28 +1165,18 @@ func (s *ParallelStateDB) SelfDestruct(addr common.Address) uint256.Int {
 		// exists.
 		s.recordWrite(blockstm.NewSubpathKey(addr, SuicidePath))
 	}
-	s.SubBalance(addr, &bal, tracing.BalanceDecreaseSelfdestruct)
-	return bal
 }
 
 func (s *ParallelStateDB) HasSelfDestructed(addr common.Address) bool {
 	return s.destructed[addr]
 }
 
-func (s *ParallelStateDB) SelfDestruct6780(addr common.Address) (uint256.Int, bool) {
-	if s.newContract[addr] {
-		return s.SelfDestruct(addr), true
-	}
-	// EIP-6780: SELFDESTRUCT on a non-same-tx-created contract MUST NOT
-	// touch balances here — the EVM opcode handler (opSelfdestruct6780)
-	// already performed SubBalance(addr) + AddBalance(beneficiary) before
-	// invoking us. Serial StateDB.SelfDestruct6780 is a pure read in this
-	// branch for the same reason. Mirroring that contract is the only way
-	// the self-beneficiary case (CALLCODE → callee SELFDESTRUCT(caller))
-	// preserves the contract's balance: SubBalance(addr) + AddBalance(addr)
-	// nets to zero, but a third SubBalance here drains the contract.
-	// Found via spec-tests stCallCodes/...SuicideEnd.
-	return *s.GetBalance(addr), false
+// IsNewContract reports whether the contract at the given address was deployed
+// during the current transaction. newContract is tx-local (cleared per tx), so
+// no MVHashMap read is recorded: EIP-6780's "created in this same transaction"
+// can only ever be satisfied by this tx's own writes.
+func (s *ParallelStateDB) IsNewContract(addr common.Address) bool {
+	return s.newContract[addr]
 }
 
 // ---------- Account creation ----------
@@ -1244,6 +1238,14 @@ func (s *ParallelStateDB) RevertToSnapshot(revid int) {
 
 // ---------- Logs / Preimages ----------
 
+// SetTxContext exists to satisfy vm.StateDB. V2 is handed its transaction index
+// at construction, its logs are attributed during settlement rather than here,
+// and it does not build the block-level access list, so the hash and access
+// index have nothing to bind to.
+func (s *ParallelStateDB) SetTxContext(thash common.Hash, ti int, blockAccessIndex uint32) {
+	s.TxIndex = ti
+}
+
 func (s *ParallelStateDB) AddLog(l *types.Log) {
 	s.journalEntries = append(s.journalEntries, parallelJournalEntry{kind: jkLog, prevU: uint64(len(s.logs))})
 	s.logs = append(s.logs, l)
@@ -1261,6 +1263,7 @@ func (s *ParallelStateDB) Logs() []*types.Log { return s.logs }
 // ---------- Prepare ----------
 
 func (s *ParallelStateDB) Prepare(rules params.Rules, sender, coinbase common.Address, dest *common.Address, precompiles []common.Address, txAccesses types.AccessList) {
+	s.isAmsterdam = rules.IsAmsterdam
 	s.accessList = newAccessList()
 	s.transientStorage = newTransientStorage()
 
@@ -1291,12 +1294,22 @@ func (s *ParallelStateDB) Prepare(rules params.Rules, sender, coinbase common.Ad
 
 // Finalise is called at the end of each tx. In parallel mode, it's a no-op
 // since actual finalisation happens during settlement on the real StateDB.
-func (s *ParallelStateDB) Finalise(deleteEmptyObjects bool) {}
+//
+// The returned access list is always nil: V2 does not build block-level access
+// lists, and the serial StateDB it settles onto is the one that accumulates them.
+func (s *ParallelStateDB) Finalise(_ params.Rules) *bal.ConstructionBlockAccessList {
+	return nil
+}
+
+// Touch accesses the specific account without returning anything. Exist is the
+// V2 equivalent of the serial getStateObject: it registers the account read in
+// the versioned store so the access is tracked like any other.
+func (s *ParallelStateDB) Touch(addr common.Address) {
+	s.Exist(addr)
+}
 
 // Inner returns the underlying StateDB. Required by Bor consensus.
 func (s *ParallelStateDB) Inner() *StateDB { return s.rawBase }
-
-func (s *ParallelStateDB) PointCache() *utils.PointCache { return s.rawBase.PointCache() }
 
 // Witness returns the shared *Witness so BLOCKHASH writes from V2 workers
 // land where finalDB sees them. The share is established by the caller

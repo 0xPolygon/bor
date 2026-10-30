@@ -179,7 +179,9 @@ func peerInfoToPeer(info *p2p.PeerInfo) *proto.Peer {
 }
 
 func (s *Server) ChainSetHead(ctx context.Context, req *proto.ChainSetHeadRequest) (*proto.ChainSetHeadResponse, error) {
-	s.backend.APIBackend.SetHead(req.Number)
+	if err := s.backend.APIBackend.SetHead(req.Number); err != nil {
+		return nil, err
+	}
 	return &proto.ChainSetHeadResponse{}, nil
 }
 
@@ -267,7 +269,7 @@ func gatherForks(configList ...interface{}) []*proto.StatusResponse_Fork {
 
 	for _, config := range configList {
 		kind := reflect.TypeOf(config)
-		for kind.Kind() == reflect.Ptr {
+		for kind.Kind() == reflect.Pointer {
 			kind = kind.Elem()
 		}
 

@@ -59,6 +59,11 @@ var (
 		abi abi.ABI
 	}
 
+	// GetABI returns the ABI associated with this contract binding.
+	func (c *{{.Type}}) GetABI() abi.ABI {
+		return c.abi
+	}
+
 	// New{{.Type}} creates a new instance of {{.Type}}.
 	func New{{.Type}}() *{{.Type}} {
 		parsed, err := {{.Type}}MetaData.ParseABI()
@@ -183,8 +188,11 @@ var (
 		// Solidity: {{.Original.String}}
 		func ({{ decapitalise $contract.Type}} *{{$contract.Type}}) Unpack{{.Normalized.Name}}Event(log *types.Log) (*{{$contract.Type}}{{.Normalized.Name}}, error) {
 			event := "{{.Original.Name}}"
-			if len(log.Topics) == 0 || log.Topics[0] != {{ decapitalise $contract.Type}}.abi.Events[event].ID {
-				return nil, errors.New("event signature mismatch")
+			if len(log.Topics) == 0 {
+				return nil, bind.ErrNoEventSignature
+			}
+			if log.Topics[0] != {{ decapitalise $contract.Type}}.abi.Events[event].ID {
+				return nil, bind.ErrEventSignatureMismatch
 			}
 			out := new({{$contract.Type}}{{.Normalized.Name}})
 			if len(log.Data) > 0 {
@@ -211,7 +219,7 @@ var (
 	// error definitions.
 	func ({{ decapitalise $contract.Type}} *{{$contract.Type}}) UnpackError(raw []byte) (any, error) {
 		{{- range $k, $v := .Errors}}
-		if bytes.Equal(raw[:4], {{ decapitalise $contract.Type}}.abi.Errors["{{.Normalized.Name}}"].ID.Bytes()[:4]) {
+		if bytes.Equal(raw[:4], {{ decapitalise $contract.Type}}.abi.Errors["{{.Original.Name}}"].ID.Bytes()[:4]) {
 			return {{ decapitalise $contract.Type}}.Unpack{{.Normalized.Name}}Error(raw[4:])
 		}
 		{{- end }}
@@ -238,7 +246,7 @@ var (
 		// Solidity: {{.Original.String}}
 		func ({{ decapitalise $contract.Type}} *{{$contract.Type}}) Unpack{{.Normalized.Name}}Error(raw []byte) (*{{$contract.Type}}{{.Normalized.Name}}, error) {
 			out := new({{$contract.Type}}{{.Normalized.Name}})
-			if err := {{ decapitalise $contract.Type}}.abi.UnpackIntoInterface(out, "{{.Normalized.Name}}", raw); err != nil {
+			if err := {{ decapitalise $contract.Type}}.abi.UnpackIntoInterface(out, "{{.Original.Name}}", raw); err != nil {
 				return nil, err
 			}
 			return out, nil

@@ -218,7 +218,7 @@ func loadWitnessFromJSON(path string) (*stateless.Witness, error) {
 	contextHeader.Root = common.Hash{}
 	contextHeader.ReceiptHash = common.Hash{}
 
-	witness, err := stateless.NewWitness(&contextHeader, nil)
+	witness, err := stateless.NewWitness(&contextHeader, nil, false)
 	if err != nil {
 		return nil, fmt.Errorf("creating witness: %w", err)
 	}
@@ -632,7 +632,7 @@ func executeStatelessSerial(config *params.ChainConfig, block *types.Block, witn
 	}
 
 	receiptRoot := types.DeriveSha(res.Receipts, trie.NewStackTrie(nil))
-	stateRoot := db.IntermediateRoot(config.IsEIP158(block.Number()))
+	stateRoot := db.IntermediateRoot(params.Rules{IsEIP158: config.IsEIP158(block.Number())})
 	return stateRoot, receiptRoot, res, nil
 }
 
@@ -694,7 +694,7 @@ func executeStatelessParallel(config *params.ChainConfig, block *types.Block, wi
 	}
 
 	receiptRoot := types.DeriveSha(res.Receipts, trie.NewStackTrie(nil))
-	stateRoot := db.IntermediateRoot(config.IsEIP158(block.Number()))
+	stateRoot := db.IntermediateRoot(params.Rules{IsEIP158: config.IsEIP158(block.Number())})
 	return stateRoot, receiptRoot, res, nil
 }
 
@@ -1317,7 +1317,7 @@ func processV2Parallel(pb *preparedBlock, config *params.ChainConfig, engine con
 							results[taskIdx] = v2TxResult{txIdx: t.idx, pdb: pdb, tx: t.tx, err: fmt.Errorf("panic: %v", r)}
 						}
 					}()
-					_, err := ApplyMessage(evm, t.msg, new(GasPool).AddGas(pb.block.GasLimit()))
+					_, err := ApplyMessage(evm, t.msg, NewGasPool(pb.block.GasLimit()))
 					results[taskIdx] = v2TxResult{txIdx: t.idx, pdb: pdb, tx: t.tx, err: err}
 				}()
 			}
@@ -1330,7 +1330,7 @@ func processV2Parallel(pb *preparedBlock, config *params.ChainConfig, engine con
 		if r.err != nil {
 			continue
 		}
-		finalDB.SetTxContext(r.tx.Hash(), r.txIdx)
+		finalDB.SetTxContext(r.tx.Hash(), r.txIdx, uint32(r.txIdx+1))
 		r.pdb.SettleTo(finalDB)
 	}
 
@@ -1527,7 +1527,7 @@ func TestV2ChainWaitDiagnostic(t *testing.T) {
 			tasks = append(tasks, V2Task{Index: j, Tx: tx, Msg: msg})
 		}
 
-		v2BaseDB.StartPrefetcher("diag", nil, nil)
+		v2BaseDB.StartPrefetcher("diag", nil)
 		result := ExecuteV2BlockSTM(context.Background(), tasks, readBase, store, bals, blockCtx, bd.block.Hash(),
 			vm.Config{}, config, bd.block.GasLimit(), 8, v2BaseDB, nil)
 		v2BaseDB.StopPrefetcher()
@@ -1701,7 +1701,7 @@ func BenchmarkV2AllBlocks(b *testing.B) {
 // safeBase.CollectCodeWitness).
 func processV2BlockSTMWithWitness(pb *preparedBlock, config *params.ChainConfig, engine consensus.Engine, numWorkers int) error {
 	db := pb.baseState.Copy()
-	w, err := stateless.NewWitness(pb.block.Header(), nil)
+	w, err := stateless.NewWitness(pb.block.Header(), nil, false)
 	if err != nil {
 		return err
 	}
@@ -1777,7 +1777,7 @@ func runV2BlockSTMConsistency(t *testing.T, blocks []testBlockData, diskdb ethdb
 			if config.IsPrague(bd.block.Number()) || config.IsVerkle(bd.block.Number()) {
 				ProcessParentBlockHash(bd.block.ParentHash(), sysEvm)
 			}
-			sdb.Finalise(true)
+			sdb.Finalise(params.Rules{IsEIP158: true})
 		}
 
 		var tasks []V2Task
@@ -1804,7 +1804,7 @@ func runV2BlockSTMConsistency(t *testing.T, blocks []testBlockData, diskdb ethdb
 		}
 
 		engine.Finalize(nil, bd.block.Header(), finalDB, bd.block.Body(), nil)
-		v2State := finalDB.IntermediateRoot(config.IsEIP158(bd.block.Number()))
+		v2State := finalDB.IntermediateRoot(params.Rules{IsEIP158: config.IsEIP158(bd.block.Number())})
 		v2ReceiptRoot := types.DeriveSha(result.Receipts, trie.NewStackTrie(nil))
 
 		// Validate V2 matches serial execution

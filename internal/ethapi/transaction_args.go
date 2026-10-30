@@ -145,6 +145,9 @@ func (args *TransactionArgs) setDefaults(ctx context.Context, b Backend, config 
 		if len(args.data()) == 0 {
 			return errors.New(`contract creation without any data provided`)
 		}
+		if args.AuthorizationList != nil {
+			return errors.New(`authorizationList provided for contract creation, but "to" field is missing`)
+		}
 	}
 
 	if args.Gas == nil {
@@ -162,6 +165,7 @@ func (args *TransactionArgs) setDefaults(ctx context.Context, b Backend, config 
 			AccessList:           args.AccessList,
 			BlobFeeCap:           args.BlobFeeCap,
 			BlobHashes:           args.BlobHashes,
+			AuthorizationList:    args.AuthorizationList,
 		}
 
 		latestBlockNr := rpc.BlockNumberOrHashWithNumber(rpc.LatestBlockNumber)
@@ -200,6 +204,12 @@ func (args *TransactionArgs) setFeeDefaults(ctx context.Context, b Backend, head
 	// If both gasPrice and at least one of the EIP-1559 fee parameters are specified, error.
 	if args.GasPrice != nil && (args.MaxFeePerGas != nil || args.MaxPriorityFeePerGas != nil) {
 		return errors.New("both gasPrice and (maxFeePerGas or maxPriorityFeePerGas) specified")
+	}
+	// An EIP-7702 set-code transaction cannot be a legacy transaction, so gasPrice
+	// is incompatible with an authorization list. Reject the combination instead of
+	// silently dropping the authorization list in ToTransaction.
+	if args.GasPrice != nil && args.AuthorizationList != nil {
+		return errors.New("both gasPrice and authorizationList specified")
 	}
 	// If the tx has completely specified a fee mechanism, no default is needed.
 	// This allows users who are not yet synced past London to get defaults for
@@ -343,8 +353,8 @@ func (args *TransactionArgs) setBlobTxSidecar(ctx context.Context, config sideca
 			commitments = make([]kzg4844.Commitment, n)
 			proofs      = make([]kzg4844.Proof, 0, proofLen)
 		)
-		for i, b := range args.Blobs {
-			c, err := kzg4844.BlobToCommitment(&b)
+		for i := range args.Blobs {
+			c, err := kzg4844.BlobToCommitment(&args.Blobs[i])
 			if err != nil {
 				return fmt.Errorf("blobs[%d]: error computing commitment: %v", i, err)
 			}
@@ -352,13 +362,13 @@ func (args *TransactionArgs) setBlobTxSidecar(ctx context.Context, config sideca
 
 			switch config.blobSidecarVersion {
 			case types.BlobSidecarVersion0:
-				p, err := kzg4844.ComputeBlobProof(&b, c)
+				p, err := kzg4844.ComputeBlobProof(&args.Blobs[i], c)
 				if err != nil {
 					return fmt.Errorf("blobs[%d]: error computing proof: %v", i, err)
 				}
 				proofs = append(proofs, p)
 			case types.BlobSidecarVersion1:
-				ps, err := kzg4844.ComputeCellProofs(&b)
+				ps, err := kzg4844.ComputeCellProofs(&args.Blobs[i])
 				if err != nil {
 					return fmt.Errorf("blobs[%d]: error computing proof: %v", i, err)
 				}
@@ -370,8 +380,8 @@ func (args *TransactionArgs) setBlobTxSidecar(ctx context.Context, config sideca
 	} else {
 		switch config.blobSidecarVersion {
 		case types.BlobSidecarVersion0:
-			for i, b := range args.Blobs {
-				if err := kzg4844.VerifyBlobProof(&b, args.Commitments[i], args.Proofs[i]); err != nil {
+			for i := range args.Blobs {
+				if err := kzg4844.VerifyBlobProof(&args.Blobs[i], args.Commitments[i], args.Proofs[i]); err != nil {
 					return fmt.Errorf("failed to verify blob proof: %v", err)
 				}
 			}
@@ -406,6 +416,17 @@ func (args *TransactionArgs) CallDefaults(globalGasCap uint64, baseFee *big.Int,
 	// Reject invalid combinations of pre- and post-1559 fee styles
 	if args.GasPrice != nil && (args.MaxFeePerGas != nil || args.MaxPriorityFeePerGas != nil) {
 		return errors.New("both gasPrice and (maxFeePerGas or maxPriorityFeePerGas) specified")
+	}
+	// Reject blob and setcode transaction types without a recipient. They
+	// cannot be represented as a transaction, so reject them up front with the
+	// same errors that message execution would return for them.
+	if args.To == nil {
+		if args.BlobHashes != nil {
+			return core.ErrBlobTxCreate
+		}
+		if args.AuthorizationList != nil {
+			return core.ErrSetCodeTxCreate
+		}
 	}
 	if args.ChainID == nil {
 		args.ChainID = (*hexutil.Big)(chainID)
@@ -459,29 +480,29 @@ func (args *TransactionArgs) CallDefaults(globalGasCap uint64, baseFee *big.Int,
 // Assumes that fields are not nil, i.e. setDefaults or CallDefaults has been called.
 func (args *TransactionArgs) ToMessage(baseFee *big.Int, skipNonceCheck bool) *core.Message {
 	var (
-		gasPrice  *big.Int
-		gasFeeCap *big.Int
-		gasTipCap *big.Int
+		gasPrice  *uint256.Int
+		gasFeeCap *uint256.Int
+		gasTipCap *uint256.Int
 	)
 
 	if baseFee == nil {
-		gasPrice = args.GasPrice.ToInt()
+		gasPrice, _ = args.GasPrice.ToUint256()
 		gasFeeCap, gasTipCap = gasPrice, gasPrice
 	} else {
 		// A basefee is provided, necessitating 1559-type execution
 		if args.GasPrice != nil {
 			// User specified the legacy gas field, convert to 1559 gas typing
-			gasPrice = args.GasPrice.ToInt()
+			gasPrice, _ = args.GasPrice.ToUint256()
 			gasFeeCap, gasTipCap = gasPrice, gasPrice
 		} else {
 			// User specified 1559 gas fields (or none), use those
-			gasFeeCap = args.MaxFeePerGas.ToInt()
-			gasTipCap = args.MaxPriorityFeePerGas.ToInt()
+			gasFeeCap, _ = args.MaxFeePerGas.ToUint256()
+			gasTipCap, _ = args.MaxPriorityFeePerGas.ToUint256()
 			// Backfill the legacy gasPrice for EVM execution, unless we're all zeroes
-			gasPrice = new(big.Int)
+			gasPrice = uint256.NewInt(0)
 
 			if gasFeeCap.BitLen() > 0 || gasTipCap.BitLen() > 0 {
-				gasPrice = gasPrice.Add(gasTipCap, baseFee)
+				gasPrice = gasPrice.Add(gasTipCap, uint256.MustFromBig(baseFee))
 				if gasPrice.Cmp(gasFeeCap) > 0 {
 					gasPrice = gasFeeCap
 				}
@@ -492,10 +513,12 @@ func (args *TransactionArgs) ToMessage(baseFee *big.Int, skipNonceCheck bool) *c
 	if args.AccessList != nil {
 		accessList = *args.AccessList
 	}
+	value, _ := args.Value.ToUint256()
+	blobFeeCap, _ := args.BlobFeeCap.ToUint256()
 	return &core.Message{
 		From:                  args.from(),
 		To:                    args.To,
-		Value:                 (*big.Int)(args.Value),
+		Value:                 value,
 		Nonce:                 uint64(*args.Nonce),
 		GasLimit:              uint64(*args.Gas),
 		GasPrice:              gasPrice,
@@ -503,7 +526,7 @@ func (args *TransactionArgs) ToMessage(baseFee *big.Int, skipNonceCheck bool) *c
 		GasTipCap:             gasTipCap,
 		Data:                  args.data(),
 		AccessList:            accessList,
-		BlobGasFeeCap:         (*big.Int)(args.BlobFeeCap),
+		BlobGasFeeCap:         blobFeeCap,
 		BlobHashes:            args.BlobHashes,
 		SetCodeAuthorizations: args.AuthorizationList,
 		SkipNonceChecks:       skipNonceCheck,

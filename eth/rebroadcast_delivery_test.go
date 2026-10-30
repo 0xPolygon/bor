@@ -95,7 +95,7 @@ func rebroadcastDeliveryFixture(t *testing.T, withPeer bool) (*handler, types.Tr
 	}
 	if withPeer {
 		app, net := p2p.MsgPipe()
-		peer := eth.NewPeer(eth.ETH69, p2p.NewPeer(enode.ID{1}, "test", nil), net, pool)
+		peer := eth.NewPeer(eth.ETH69, p2p.NewPeer(enode.ID{1}, "test", nil), net, pool, nil)
 		t.Cleanup(func() { peer.Close(); app.Close(); net.Close() })
 		if err := h.peers.registerPeer(peer, nil, nil); err != nil {
 			t.Fatal(err)
@@ -259,7 +259,7 @@ func TestRebroadcastQueueDeliveryMode(t *testing.T) {
 		t.Run(map[bool]string{false: "bodies", true: "announcements"}[announce], func(t *testing.T) {
 			h, txs := rebroadcastDeliveryFixture(t, false)
 			source, sink := p2p.MsgPipe()
-			peer := eth.NewPeer(eth.ETH69, p2p.NewPeer(enode.ID{1}, "", nil), source, h.txpool)
+			peer := eth.NewPeer(eth.ETH69, p2p.NewPeer(enode.ID{1}, "", nil), source, h.txpool, nil)
 			defer peer.Close()
 			defer source.Close()
 			defer sink.Close()

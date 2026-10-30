@@ -82,7 +82,7 @@ func newBlockEnv(chain *core.BlockChain, statedb *state.StateDB, open *pb.BlockO
 		header:    header,
 		statedb:   statedb,
 		evm:       vm.NewEVM(blockCtx, statedb, chain.Config(), vm.Config{}),
-		gasPool:   new(core.GasPool).AddGas(header.GasLimit),
+		gasPool:   core.NewGasPool(header.GasLimit),
 	}
 	env.evm.SetInterrupt(&env.interrupt)
 
@@ -90,7 +90,7 @@ func newBlockEnv(chain *core.BlockChain, statedb *state.StateDB, open *pb.BlockO
 		core.ProcessParentBlockHash(header.ParentHash, env.evm)
 	}
 	if chain.GetVMConfig().StatelessSelfValidation {
-		witness, err := stateless.NewWitness(header, chain)
+		witness, err := stateless.NewWitness(header, chain, false)
 		if err != nil {
 			log.Warn("Failed to create speculative execution witness", "number", header.Number, "err", err)
 		} else {
@@ -126,17 +126,35 @@ func (env *blockEnv) applyPrepared(raw []byte, prepared preparedTransaction) (*t
 }
 
 func (env *blockEnv) applyTransaction(tx *types.Transaction) (*types.Transaction, *types.Receipt, error) {
-	env.statedb.SetTxContext(tx.Hash(), len(env.txs))
+	env.statedb.SetTxContext(tx.Hash(), len(env.txs), uint32(len(env.txs)+1))
 
-	receipt, err := core.ApplyTransaction(env.evm, env.gasPool, env.statedb, env.header, tx, &env.header.GasUsed)
+	gp := env.gasPool.Snapshot()
+	receipt, err := core.ApplyTransaction(env.evm, env.gasPool, env.statedb, env.header, tx)
+	env.settleGas(gp, err)
 	return env.recordAppliedTransaction(tx, receipt, err)
 }
 
 func (env *blockEnv) applyTransactionWithVerifiedSender(tx *types.Transaction, sender common.Address) (*types.Transaction, *types.Receipt, error) {
-	env.statedb.SetTxContext(tx.Hash(), len(env.txs))
-	message := core.TransactionToMessageWithVerifiedSender(tx, sender, env.header.BaseFee)
-	receipt, err := core.ApplyTransactionWithEVM(message, env.gasPool, env.statedb, env.header.Number, env.header.Hash(), env.header.Time, tx, &env.header.GasUsed, env.evm)
+	env.statedb.SetTxContext(tx.Hash(), len(env.txs), uint32(len(env.txs)+1))
+	message, err := core.TransactionToMessageWithVerifiedSender(tx, sender, env.header.BaseFee)
+	if err != nil {
+		return env.recordAppliedTransaction(tx, nil, err)
+	}
+	gp := env.gasPool.Snapshot()
+	receipt, err := core.ApplyTransactionWithEVM(message, env.gasPool, env.statedb, env.header.Number, env.header.Hash(), env.header.Time, tx, env.evm)
+	env.settleGas(gp, err)
 	return env.recordAppliedTransaction(tx, receipt, err)
+}
+
+// settleGas rolls the pool back to gp when the transaction failed, and
+// otherwise carries the pool's usage into the header, which no longer happens
+// inside ApplyTransaction.
+func (env *blockEnv) settleGas(gp *core.GasPool, err error) {
+	if err != nil {
+		env.gasPool.Set(gp)
+		return
+	}
+	env.header.GasUsed = env.gasPool.Used()
 }
 
 func (env *blockEnv) recordAppliedTransaction(tx *types.Transaction, receipt *types.Receipt, err error) (*types.Transaction, *types.Receipt, error) {
@@ -175,8 +193,14 @@ func newBlockEnvFromPrefix(chain *core.BlockChain, block *types.Block, prefix *p
 	}
 	header := block.Header()
 	header.GasUsed = prefix.Result.GasUsed
-	gasPool := new(core.GasPool).AddGas(header.GasLimit)
-	if err := gasPool.SubGas(prefix.Result.GasUsed); err != nil {
+	// Resume the pool where the prefix stopped: the gas it consumed is gone
+	// from the block budget, and later receipts' cumulative gas continues
+	// from it.
+	gasPool := core.NewGasPool(header.GasLimit)
+	if err := gasPool.CheckGasLegacy(prefix.Result.GasUsed); err != nil {
+		return nil, err
+	}
+	if err := gasPool.ChargeGasLegacy(0, prefix.Result.GasUsed); err != nil {
 		return nil, err
 	}
 	statedb := prefix.StateDB
@@ -304,7 +328,7 @@ func (env *blockEnv) checkSeal(sealed *types.Header) error {
 			errSealMismatch, sealed.ReceiptHash, receiptsRoot, sealed.Number)
 	}
 
-	root := env.statedb.IntermediateRoot(env.evm.ChainConfig().IsEIP158(env.header.Number))
+	root := env.statedb.IntermediateRoot(env.evm.ChainConfig().Rules(env.header.Number, false, env.header.Time))
 	if root != sealed.Root {
 		return fmt.Errorf("%w: state root %s != re-executed %s at block %s",
 			errSealMismatch, sealed.Root, root, sealed.Number)

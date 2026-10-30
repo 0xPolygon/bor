@@ -208,9 +208,6 @@ func findTxInBlockBody(blockbody rlp.RawValue, target common.Hash) (*types.Trans
 	}
 	txIndex := uint64(0)
 	for iter.Next() {
-		if iter.Err() != nil {
-			return nil, 0, err
-		}
 		// The preimage for the hash calculation of legacy transactions
 		// is just their RLP encoding. For typed (EIP-2718) transactions,
 		// which are encoded as byte arrays, the preimage is the content of
@@ -231,6 +228,9 @@ func findTxInBlockBody(blockbody rlp.RawValue, target common.Hash) (*types.Trans
 			return &tx, txIndex, nil
 		}
 		txIndex++
+	}
+	if iter.Err() != nil {
+		return nil, 0, iter.Err()
 	}
 	return nil, 0, errors.New("transaction not found")
 }
@@ -628,7 +628,7 @@ func DeleteBlockLvPointers(db ethdb.KeyValueStore, blocks common.Range[uint64], 
 }
 
 // FilterMapsRange is a storage representation of the block range covered by the
-// filter maps structure and the corresponting log value index range.
+// filter maps structure and the corresponding log value index range.
 type FilterMapsRange struct {
 	Version                      uint32
 	HeadIndexed                  bool

@@ -18,6 +18,7 @@ package stateless
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"sort"
 
@@ -68,8 +69,11 @@ func (w *Witness) ToExtWitness() *ExtWitness {
 	return ext
 }
 
-// fromExtWitness converts the ExtWitness format into our internal representation.
-func (w *Witness) fromExtWitness(ext *ExtWitness) error {
+// FromExtWitness converts the ExtWitness format into our internal representation.
+func (w *Witness) FromExtWitness(ext *ExtWitness) error {
+	if len(ext.Headers) == 0 {
+		return errors.New("witness must contain at least one header")
+	}
 	w.context = ext.Context
 	w.Headers = ext.Headers
 
@@ -144,5 +148,5 @@ func (w *Witness) DecodeRLP(s *rlp.Stream) error {
 	if err := rlp.DecodeBytes(raw, &ext); err != nil {
 		return err
 	}
-	return w.fromExtWitness(&ext)
+	return w.FromExtWitness(&ext)
 }

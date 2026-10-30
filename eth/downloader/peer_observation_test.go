@@ -172,7 +172,7 @@ func (p *scriptedHeaderPeer) RequestBodies([]common.Hash, chan *eth.Response) (*
 	return nil, errors.New("not used")
 }
 
-func (p *scriptedHeaderPeer) RequestReceipts([]common.Hash, chan *eth.Response) (*eth.Request, error) {
+func (p *scriptedHeaderPeer) RequestReceipts([]common.Hash, []uint64, []uint64, chan *eth.Response) (*eth.Request, error) {
 	return nil, errors.New("not used")
 }
 
@@ -239,7 +239,8 @@ func TestPeerPolicyBinarySearchInvalidResponses(t *testing.T) {
 	}
 }
 
-// Native serving omits unavailable hashes; positional rejection alone is not evidence.
+// Peers before the stop-at-first-gap serving rule omit unavailable hashes from
+// the middle of a reply; positional rejection alone is not evidence.
 func TestPeerPolicyOmittedBodyAndReceiptsStayNeutral(t *testing.T) {
 	tester := newTester(t)
 	defer tester.terminate()
@@ -278,7 +279,10 @@ func TestPeerPolicyOmittedBodyAndReceiptsStayNeutral(t *testing.T) {
 
 func omittedBodyReply(t *testing.T, tester *downloadTester, hashes []common.Hash, available *types.Header) *eth.Response {
 	t.Helper()
-	encoded := eth.ServiceGetBlockBodiesQuery(tester.chain, hashes)
+	if served := eth.ServiceGetBlockBodiesQuery(tester.chain, hashes); len(served) != 0 {
+		t.Fatalf("native server returned %d bodies past the missing one, want 0", len(served))
+	}
+	encoded := eth.ServiceGetBlockBodiesQuery(tester.chain, hashes[1:])
 	if len(encoded) != 1 {
 		t.Fatalf("native server returned %d bodies, want 1", len(encoded))
 	}
@@ -288,7 +292,7 @@ func omittedBodyReply(t *testing.T, tester *downloadTester, hashes []common.Hash
 	}
 	txRoot := types.DeriveSha(types.Transactions(body.Transactions), trie.NewStackTrie(nil))
 	if txRoot != available.TxHash {
-		t.Fatal("native server did not return the second requested body")
+		t.Fatal("native server did not return the available body")
 	}
 	bodies := eth.BlockBodiesResponse{body}
 	return &eth.Response{Req: &eth.Request{Peer: "honest"}, Res: &bodies, Meta: [][]common.Hash{{txRoot}, {types.CalcUncleHash(body.Uncles)}, {{}}}}
@@ -296,7 +300,10 @@ func omittedBodyReply(t *testing.T, tester *downloadTester, hashes []common.Hash
 
 func omittedReceiptReply(t *testing.T, tester *downloadTester, hashes []common.Hash, available *types.Header) *eth.Response {
 	t.Helper()
-	encoded := eth.ServiceGetReceiptsQuery69(tester.chain, hashes)
+	if served := eth.ServiceGetReceiptsQuery69(tester.chain, hashes); len(served) != 0 {
+		t.Fatalf("native server returned %d receipt lists past the missing one, want 0", len(served))
+	}
+	encoded := eth.ServiceGetReceiptsQuery69(tester.chain, hashes[1:])
 	if len(encoded) != 1 {
 		t.Fatalf("native server returned %d receipt lists, want 1", len(encoded))
 	}
@@ -305,7 +312,7 @@ func omittedReceiptReply(t *testing.T, tester *downloadTester, hashes []common.H
 		t.Fatal(err)
 	}
 	if root := types.DeriveSha(receipts, trie.NewStackTrie(nil)); root != available.ReceiptHash {
-		t.Fatal("native server did not return the second requested receipts")
+		t.Fatal("native server did not return the available receipts")
 	}
 	return &eth.Response{Req: &eth.Request{Peer: "honest"}, Res: []*eth.ReceiptList69{receipts}}
 }

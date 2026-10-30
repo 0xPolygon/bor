@@ -36,7 +36,10 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		LogNoHistory                         bool   `toml:",omitempty"`
 		LogExportCheckpoints                 string
 		StateHistory                         uint64                 `toml:",omitempty"`
+		TrienodeHistory                      int64                  `toml:",omitempty"`
+		NodeFullValueCheckpoint              uint32                 `toml:",omitempty"`
 		StateScheme                          string                 `toml:",omitempty"`
+		BinTrieGroupDepth                    int                    `toml:",omitempty"`
 		RequiredBlocks                       map[uint64]common.Hash `toml:"-"`
 		SkipBcVersionCheck                   bool                   `toml:"-"`
 		DatabaseHandles                      int                    `toml:"-"`
@@ -56,6 +59,9 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		TrieJournalDirectory                 string
 		FilterLogCacheSize                   int
 		LogQueryLimit                        int
+		FilterMaxCount                       int
+		FilterMaxItems                       int
+		FilterMaxBufferBytes                 uint64
 		AddressCacheSizes                    map[common.Address]int
 		PreloadRateLimit                     int64
 		AddressCachePersist                  bool
@@ -67,7 +73,6 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		EnableWitnessStats                   bool
 		StatelessSelfValidation              bool
 		EnableEVMSwitchDispatch              bool
-		EnableStateSizeTracking              bool
 		VMTrace                              string
 		VMTraceJsonConfig                    string
 		RPCGasCap                            uint64
@@ -87,10 +92,12 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		BorLogs                              bool
 		ParallelEVM                          core.ParallelEVMConfig `toml:",omitempty"`
 		WitnessProtocol                      bool
+		NoSnapServing                        bool
 		SyncWithWitnesses                    bool
 		SyncAndProduceWitnesses              bool
 		DevFakeAuthor                        bool     `hcl:"devfakeauthor,optional" toml:"devfakeauthor,optional"`
 		OverrideOsaka                        *big.Int `toml:",omitempty"`
+		OverrideAmsterdam                    *big.Int `toml:",omitempty"`
 		OverrideVerkle                       *big.Int `toml:",omitempty"`
 		EnableBlockTracking                  bool
 		FastForwardThreshold                 uint64
@@ -128,7 +135,10 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.LogNoHistory = c.LogNoHistory
 	enc.LogExportCheckpoints = c.LogExportCheckpoints
 	enc.StateHistory = c.StateHistory
+	enc.TrienodeHistory = c.TrienodeHistory
+	enc.NodeFullValueCheckpoint = c.NodeFullValueCheckpoint
 	enc.StateScheme = c.StateScheme
+	enc.BinTrieGroupDepth = c.BinTrieGroupDepth
 	enc.RequiredBlocks = c.RequiredBlocks
 	enc.SkipBcVersionCheck = c.SkipBcVersionCheck
 	enc.DatabaseHandles = c.DatabaseHandles
@@ -148,6 +158,9 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.TrieJournalDirectory = c.TrieJournalDirectory
 	enc.FilterLogCacheSize = c.FilterLogCacheSize
 	enc.LogQueryLimit = c.LogQueryLimit
+	enc.FilterMaxCount = c.FilterMaxCount
+	enc.FilterMaxItems = c.FilterMaxItems
+	enc.FilterMaxBufferBytes = c.FilterMaxBufferBytes
 	enc.AddressCacheSizes = c.AddressCacheSizes
 	enc.PreloadRateLimit = c.PreloadRateLimit
 	enc.AddressCachePersist = c.AddressCachePersist
@@ -159,7 +172,6 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.EnableWitnessStats = c.EnableWitnessStats
 	enc.StatelessSelfValidation = c.StatelessSelfValidation
 	enc.EnableEVMSwitchDispatch = c.EnableEVMSwitchDispatch
-	enc.EnableStateSizeTracking = c.EnableStateSizeTracking
 	enc.VMTrace = c.VMTrace
 	enc.VMTraceJsonConfig = c.VMTraceJsonConfig
 	enc.RPCGasCap = c.RPCGasCap
@@ -179,10 +191,12 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.BorLogs = c.BorLogs
 	enc.ParallelEVM = c.ParallelEVM
 	enc.WitnessProtocol = c.WitnessProtocol
+	enc.NoSnapServing = c.NoSnapServing
 	enc.SyncWithWitnesses = c.SyncWithWitnesses
 	enc.SyncAndProduceWitnesses = c.SyncAndProduceWitnesses
 	enc.DevFakeAuthor = c.DevFakeAuthor
 	enc.OverrideOsaka = c.OverrideOsaka
+	enc.OverrideAmsterdam = c.OverrideAmsterdam
 	enc.OverrideVerkle = c.OverrideVerkle
 	enc.EnableBlockTracking = c.EnableBlockTracking
 	enc.FastForwardThreshold = c.FastForwardThreshold
@@ -224,7 +238,10 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		LogNoHistory                         *bool   `toml:",omitempty"`
 		LogExportCheckpoints                 *string
 		StateHistory                         *uint64                `toml:",omitempty"`
+		TrienodeHistory                      *int64                 `toml:",omitempty"`
+		NodeFullValueCheckpoint              *uint32                `toml:",omitempty"`
 		StateScheme                          *string                `toml:",omitempty"`
+		BinTrieGroupDepth                    *int                   `toml:",omitempty"`
 		RequiredBlocks                       map[uint64]common.Hash `toml:"-"`
 		SkipBcVersionCheck                   *bool                  `toml:"-"`
 		DatabaseHandles                      *int                   `toml:"-"`
@@ -244,6 +261,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		TrieJournalDirectory                 *string
 		FilterLogCacheSize                   *int
 		LogQueryLimit                        *int
+		FilterMaxCount                       *int
+		FilterMaxItems                       *int
+		FilterMaxBufferBytes                 *uint64
 		AddressCacheSizes                    map[common.Address]int
 		PreloadRateLimit                     *int64
 		AddressCachePersist                  *bool
@@ -255,7 +275,6 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		EnableWitnessStats                   *bool
 		StatelessSelfValidation              *bool
 		EnableEVMSwitchDispatch              *bool
-		EnableStateSizeTracking              *bool
 		VMTrace                              *string
 		VMTraceJsonConfig                    *string
 		RPCGasCap                            *uint64
@@ -275,10 +294,12 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		BorLogs                              *bool
 		ParallelEVM                          *core.ParallelEVMConfig `toml:",omitempty"`
 		WitnessProtocol                      *bool
+		NoSnapServing                        *bool
 		SyncWithWitnesses                    *bool
 		SyncAndProduceWitnesses              *bool
 		DevFakeAuthor                        *bool    `hcl:"devfakeauthor,optional" toml:"devfakeauthor,optional"`
 		OverrideOsaka                        *big.Int `toml:",omitempty"`
+		OverrideAmsterdam                    *big.Int `toml:",omitempty"`
 		OverrideVerkle                       *big.Int `toml:",omitempty"`
 		EnableBlockTracking                  *bool
 		FastForwardThreshold                 *uint64
@@ -351,8 +372,17 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	if dec.StateHistory != nil {
 		c.StateHistory = *dec.StateHistory
 	}
+	if dec.TrienodeHistory != nil {
+		c.TrienodeHistory = *dec.TrienodeHistory
+	}
+	if dec.NodeFullValueCheckpoint != nil {
+		c.NodeFullValueCheckpoint = *dec.NodeFullValueCheckpoint
+	}
 	if dec.StateScheme != nil {
 		c.StateScheme = *dec.StateScheme
+	}
+	if dec.BinTrieGroupDepth != nil {
+		c.BinTrieGroupDepth = *dec.BinTrieGroupDepth
 	}
 	if dec.RequiredBlocks != nil {
 		c.RequiredBlocks = dec.RequiredBlocks
@@ -411,6 +441,15 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	if dec.LogQueryLimit != nil {
 		c.LogQueryLimit = *dec.LogQueryLimit
 	}
+	if dec.FilterMaxCount != nil {
+		c.FilterMaxCount = *dec.FilterMaxCount
+	}
+	if dec.FilterMaxItems != nil {
+		c.FilterMaxItems = *dec.FilterMaxItems
+	}
+	if dec.FilterMaxBufferBytes != nil {
+		c.FilterMaxBufferBytes = *dec.FilterMaxBufferBytes
+	}
 	if dec.AddressCacheSizes != nil {
 		c.AddressCacheSizes = dec.AddressCacheSizes
 	}
@@ -443,9 +482,6 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.EnableEVMSwitchDispatch != nil {
 		c.EnableEVMSwitchDispatch = *dec.EnableEVMSwitchDispatch
-	}
-	if dec.EnableStateSizeTracking != nil {
-		c.EnableStateSizeTracking = *dec.EnableStateSizeTracking
 	}
 	if dec.VMTrace != nil {
 		c.VMTrace = *dec.VMTrace
@@ -504,6 +540,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	if dec.WitnessProtocol != nil {
 		c.WitnessProtocol = *dec.WitnessProtocol
 	}
+	if dec.NoSnapServing != nil {
+		c.NoSnapServing = *dec.NoSnapServing
+	}
 	if dec.SyncWithWitnesses != nil {
 		c.SyncWithWitnesses = *dec.SyncWithWitnesses
 	}
@@ -515,6 +554,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.OverrideOsaka != nil {
 		c.OverrideOsaka = dec.OverrideOsaka
+	}
+	if dec.OverrideAmsterdam != nil {
+		c.OverrideAmsterdam = dec.OverrideAmsterdam
 	}
 	if dec.OverrideVerkle != nil {
 		c.OverrideVerkle = dec.OverrideVerkle
