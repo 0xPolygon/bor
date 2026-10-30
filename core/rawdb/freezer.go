@@ -475,28 +475,25 @@ func (f *Freezer) validate() error {
 }
 
 // repair brings every table into a consistent state. The common head is taken
-// as the minimum item count among non-empty tables; freshly added empty tables
-// are fast-forwarded to that head via tail truncation. Within each tail group
-// the maximum tail wins, and prunable tables are truncated to it.
+// as the minimum item count among non-empty tables other than fillEmpty ones;
+// fillEmpty tables below it are padded with empty entries, and freshly added
+// empty tables are fast-forwarded to that head via tail truncation. Within
+// each tail group the maximum tail wins, and prunable tables are truncated to
+// it.
 func (f *Freezer) repair() error {
 	// Determine the common head from non-empty tables. Empty tables are
 	// excluded so that a freshly added table cannot drag the existing head
-	// down to zero on first cold-start.
-	var (
-		hasNonEmpty bool
-		head        uint64 = math.MaxUint64
-	)
-	for _, table := range f.tables {
-		if table.items.Load() == 0 {
-			continue
-		}
-		if items := table.items.Load(); items < head {
-			head = items
-		}
-		hasNonEmpty = true
+	// down to zero on first cold-start. Tables that can be filled with empty
+	// entries are excluded too, unless nothing else holds data: a binary that
+	// predates such a table keeps freezing without it, and truncating every
+	// other table down to it would drop blocks already removed from the
+	// key-value store.
+	head, ok := f.commonHead(false)
+	if !ok {
+		head, _ = f.commonHead(true)
 	}
-	if !hasNonEmpty {
-		head = 0
+	if err := f.fillLaggingTables(head); err != nil {
+		return err
 	}
 	// Align newly added empty tables to the common head. truncateTail
 	// internally calls resetTo when the requested tail exceeds the current
@@ -545,6 +542,49 @@ func (f *Freezer) repair() error {
 		counter := new(atomic.Uint64)
 		counter.Store(tail)
 		f.tails[group] = counter
+	}
+	return nil
+}
+
+// commonHead returns the smallest item count among non-empty tables, skipping
+// fillEmpty tables unless withFill is set. ok is false if no table counted.
+func (f *Freezer) commonHead(withFill bool) (head uint64, ok bool) {
+	head = math.MaxUint64
+	for _, table := range f.tables {
+		items := table.items.Load()
+		if items == 0 || (table.config.fillEmpty && !withFill) {
+			continue
+		}
+		head = min(head, items)
+		ok = true
+	}
+	if !ok {
+		return 0, false
+	}
+	return head, true
+}
+
+// fillLaggingTables appends empty entries to non-empty fillEmpty tables that
+// end below head, so they line up with the rest of the freezer.
+func (f *Freezer) fillLaggingTables(head uint64) error {
+	for kind, table := range f.tables {
+		items := table.items.Load()
+		if !table.config.fillEmpty || items == 0 || items >= head {
+			continue
+		}
+		log.Warn("Filling lagging freezer table with empty entries", "table", kind, "items", items, "head", head)
+		batch := table.newBatch(f.offset.Load())
+		for item := batch.curItem; item < head+f.offset.Load(); item++ {
+			if err := batch.AppendRaw(item, nil); err != nil {
+				return err
+			}
+		}
+		if err := batch.commit(); err != nil {
+			return err
+		}
+		if err := table.Sync(); err != nil {
+			return err
+		}
 	}
 	return nil
 }

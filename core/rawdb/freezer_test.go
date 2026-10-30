@@ -720,3 +720,87 @@ func TestTruncateHeadBelowGroupTail(t *testing.T) {
 		t.Fatalf("block data tail after reopen = %d, want 10", tail)
 	}
 }
+
+// TestChainFreezerBALDowngradeRoundTrip covers a node that upgrades, rolls back
+// to a binary without the BAL table, then upgrades again. The rolled-back
+// binary keeps freezing blocks without BAL entries; the upgrade must restore
+// them as empty entries rather than truncate every other table down to BAL,
+// since those blocks are already gone from the key-value store.
+func TestChainFreezerBALDowngradeRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	legacyTables := make(map[string]freezerTableConfig)
+	for name, cfg := range chainFreezerTableConfigs {
+		if name != ChainFreezerBALTable {
+			legacyTables[name] = cfg
+		}
+	}
+	payload := bytes.Repeat([]byte{0xab}, 64)
+	balPayload := []byte("bal")
+	appendBlocks := func(f *Freezer, from, to uint64, withBAL bool) {
+		t.Helper()
+		_, err := f.ModifyAncients(func(op ethdb.AncientWriteOp) error {
+			for i := from; i < to; i++ {
+				for name := range legacyTables {
+					if err := op.AppendRaw(name, i, payload); err != nil {
+						return err
+					}
+				}
+				if withBAL {
+					if err := op.AppendRaw(ChainFreezerBALTable, i, balPayload); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		})
+		require.NoError(t, err)
+	}
+	open := func(tables map[string]freezerTableConfig) *Freezer {
+		t.Helper()
+		f, err := NewFreezer(dir, "", false, 0, 2049, tables)
+		require.NoError(t, err)
+		return f
+	}
+
+	f := open(legacyTables)
+	appendBlocks(f, 0, 10, false)
+	require.NoError(t, f.Close())
+
+	f = open(chainFreezerTableConfigs)
+	appendBlocks(f, 10, 15, true)
+	require.NoError(t, f.Close())
+
+	f = open(legacyTables)
+	appendBlocks(f, 15, 20, false)
+	require.NoError(t, f.Close())
+
+	f = open(chainFreezerTableConfigs)
+	defer f.Close()
+
+	head, err := f.Ancients()
+	require.NoError(t, err)
+	require.Equal(t, uint64(20), head)
+	for i := uint64(0); i < head; i++ {
+		for name := range legacyTables {
+			got, err := f.Ancient(name, i)
+			require.NoError(t, err, "%s[%d]", name, i)
+			require.Equal(t, payload, got, "%s[%d]", name, i)
+		}
+	}
+	tail, err := f.Tail(ChainFreezerBALGroup)
+	require.NoError(t, err)
+	require.Equal(t, uint64(10), tail)
+	for i := uint64(10); i < head; i++ {
+		got, err := f.Ancient(ChainFreezerBALTable, i)
+		require.NoError(t, err, "bals[%d]", i)
+		if i < 15 {
+			require.Equal(t, balPayload, got, "bals[%d]", i)
+		} else {
+			require.Empty(t, got, "bals[%d]", i)
+		}
+	}
+	appendBlocks(f, 20, 21, true)
+	got, err := f.Ancient(ChainFreezerBALTable, 20)
+	require.NoError(t, err)
+	require.Equal(t, balPayload, got)
+}

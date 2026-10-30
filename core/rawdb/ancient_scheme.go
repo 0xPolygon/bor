@@ -68,7 +68,10 @@ var chainFreezerTableConfigs = map[string]freezerTableConfig{
 	ChainFreezerReceiptTable:    {noSnappy: false, tailGroup: ChainFreezerBlockDataGroup},
 	ChainFreezerDifficultyTable: {noSnappy: true, tailGroup: ChainFreezerBlockDataGroup},
 	freezerBorReceiptTable:      {noSnappy: false, tailGroup: ChainFreezerBlockDataGroup},
-	ChainFreezerBALTable:        {noSnappy: false, tailGroup: ChainFreezerBALGroup},
+	// Every block before EIP-7928 stores an empty access list, and a binary
+	// that predates this table cannot follow the chain past that fork, so the
+	// blocks it freezes without writing here are restored as empty entries.
+	ChainFreezerBALTable: {noSnappy: false, tailGroup: ChainFreezerBALGroup, fillEmpty: true},
 }
 
 // freezerTableConfig contains the settings for a freezer table.
@@ -81,6 +84,10 @@ type freezerTableConfig struct {
 	// on their tail. An empty value means the table is not prunable; its
 	// tail is always 0.
 	tailGroup string
+
+	// fillEmpty lets repair restore items missing at the head of this table
+	// as empty entries instead of truncating every other table down to it.
+	fillEmpty bool
 }
 
 const (
