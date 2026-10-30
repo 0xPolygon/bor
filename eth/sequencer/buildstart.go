@@ -2,6 +2,7 @@ package sequencer
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/0xPolygon/sequence-store-proto/commitment"
@@ -82,7 +83,10 @@ func (p *Publisher) buildStartRead(ctx context.Context, number uint64) (tailInfo
 
 	// h is our height or our parent's. Walk from its boundary: a live
 	// generation at h is served from its open, so the window is in view.
-	info, out, done := p.tryWalk(ctx, blockReq(h), false)
+	wctx, cancel := walkCtx(ctx, h, number)
+	defer cancel()
+
+	info, out, done := p.tryWalk(wctx, blockReq(h), false)
 	if !done || out != recOK {
 		return tailInfo{}, buildUnknown
 	}
@@ -149,6 +153,59 @@ func boundaryOrHold(info tailInfo) buildStartState {
 // costs one slot rather than the chain.
 const recoverGrace = 4 * time.Second
 
+// recoverReadTimeout bounds the reads a recovery makes once the build-start
+// read has shown our height sealed in the store. They run on their own
+// deadline, not what is left of checkTailTimeout: a takeover producer is
+// typically CPU-starved, and a recovery fetch that missed the shared
+// deadline used to classify the height as sealed-past and rebuild it from
+// the pool — losing the dead producer's order at the first height, and with
+// it every height after. The block is already late by then; one bounded
+// budget costs less. It is one budget for the whole build start, shared by
+// the walk, the sealed generation and the bridged parent: a deadline per read
+// would stack them past the block period. A store that is down never gets
+// here: the probe and walk in front of it fail first, and the breaker refuses
+// after that. Var for tests.
+var recoverReadTimeout = time.Second
+
+type recoveryBudgetKey struct{}
+
+// recoveryBudget is a build start's recovery deadline, set by its first
+// recovery read.
+type recoveryBudget struct {
+	once     sync.Once
+	deadline time.Time
+}
+
+func withRecoveryBudget(ctx context.Context) context.Context {
+	return context.WithValue(ctx, recoveryBudgetKey{}, &recoveryBudget{})
+}
+
+// walkCtx is the build-start walk's deadline. A generation already at our
+// height means another producer got here first — a takeover, already late —
+// so the walk gets the recovery budget too.
+func walkCtx(ctx context.Context, h, number uint64) (context.Context, context.CancelFunc) {
+	if h == number {
+		return recoverCtx(ctx)
+	}
+
+	return context.WithCancel(ctx)
+}
+
+// recoverCtx detaches a recovery read from the build-start deadline and puts
+// it on the build start's recovery budget.
+func recoverCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	detached := context.WithoutCancel(ctx)
+
+	b, ok := ctx.Value(recoveryBudgetKey{}).(*recoveryBudget)
+	if !ok {
+		return context.WithTimeout(detached, recoverReadTimeout)
+	}
+
+	b.once.Do(func() { b.deadline = time.Now().Add(recoverReadTimeout) })
+
+	return context.WithDeadline(detached, b.deadline)
+}
+
 // recoverSealed reconstructs a sealed generation the chain never received.
 //
 // A producer that got its seal acked and then died leaves the height closed
@@ -167,16 +224,19 @@ func (p *Publisher) recoverSealed(ctx context.Context, number uint64) (tailInfo,
 	p.mu.Unlock()
 
 	if chain == nil || chain.GetCanonicalHash(number) != (common.Hash{}) {
-		return tailInfo{}, recoverNone // the chain has the block: an ordinary loss
+		return noRecovery(number, "chain has the height") // an ordinary loss
 	}
 
-	entries, err := p.read.generation(ctx, number)
+	rctx, cancel := recoverCtx(ctx)
+	defer cancel()
+
+	entries, err := p.read.generation(rctx, number)
 	if err != nil {
-		return tailInfo{}, recoverNone
+		return noRecovery(number, "generation unreadable", "err", err)
 	}
 
 	if len(entries) == 0 || entries[0].GetBlockOpen() == nil {
-		return tailInfo{}, recoverNone
+		return noRecovery(number, "generation does not start with an open", "entries", len(entries))
 	}
 
 	// Give the sealer its block period to broadcast before rebuilding on its
@@ -206,7 +266,7 @@ func (p *Publisher) recoverSealed(ctx context.Context, number uint64) (tailInfo,
 	}
 
 	if !sealed {
-		return tailInfo{}, recoverNone
+		return noRecovery(number, "newest generation is unsealed", "entries", len(entries))
 	}
 
 	cur := commitment.Head(window[0].GetBlockOpen().GetPrefixCommitment())
@@ -214,7 +274,7 @@ func (p *Publisher) recoverSealed(ctx context.Context, number uint64) (tailInfo,
 	for _, e := range window {
 		next, err := foldEntry(cur, e)
 		if err != nil {
-			return tailInfo{}, recoverNone
+			return noRecovery(number, "generation does not fold", "err", err)
 		}
 
 		cur = next
@@ -233,6 +293,13 @@ func (p *Publisher) recoverSealed(ctx context.Context, number uint64) (tailInfo,
 		tipOpenParent: common.BytesToHash(open.GetParentHash()),
 		window:        window,
 	}, recoverReady
+}
+
+// noRecovery reports why a store-sealed height will not be recovered.
+func noRecovery(number uint64, reason string, kv ...any) (tailInfo, recoverState) {
+	log.Debug("Sequencer not recovering a sealed height", append([]any{"number", number, "reason", reason}, kv...)...)
+
+	return tailInfo{}, recoverNone
 }
 
 // behindWindowLocked resolves a build start that reads as lacking our parent.

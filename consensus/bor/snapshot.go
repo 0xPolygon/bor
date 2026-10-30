@@ -25,6 +25,8 @@ type Snapshot struct {
 	Hash         common.Hash               `json:"hash"`         // Block hash where the snapshot was created
 	ValidatorSet *valset.ValidatorSet      `json:"validatorSet"` // Validator set at this moment
 	Recents      map[uint64]common.Address `json:"recents"`      // Set of recent signers for spam protections
+
+	spanUnsettled bool // ValidatorSet may come from an older span standing in for a newer one
 }
 
 // newSnapshot creates a new snapshot with the specified startup parameters. This
@@ -94,6 +96,8 @@ func (s *Snapshot) copy() *Snapshot {
 		Hash:         s.Hash,
 		ValidatorSet: s.ValidatorSet.Copy(),
 		Recents:      make(map[uint64]common.Address),
+
+		spanUnsettled: s.spanUnsettled,
 	}
 	for block, signer := range s.Recents {
 		cpy.Recents[block] = signer
@@ -137,7 +141,7 @@ func (s *Snapshot) apply(headers []*types.Header, c *Bor) (*Snapshot, error) {
 
 		// check if signer is in validator set
 		if !snap.ValidatorSet.HasAddress(signer) && !snap.isAllowedByValidatorSetOverride(signer, number) {
-			return nil, &UnauthorizedSignerError{number, signer.Bytes(), snap.ValidatorSet.Validators}
+			return nil, &UnauthorizedSignerError{Number: number, Signer: signer.Bytes(), AllowedSigners: snap.ValidatorSet.Validators}
 		}
 
 		if _, err = snap.GetSignerSuccessionNumber(signer); err != nil {
@@ -186,13 +190,13 @@ func (s *Snapshot) GetSignerSuccessionNumber(signer common.Address) (int, error)
 	proposerIndex, _ := s.ValidatorSet.GetByAddress(proposer)
 
 	if proposerIndex == -1 {
-		return -1, &UnauthorizedProposerError{s.Number, proposer.Bytes()}
+		return -1, &UnauthorizedProposerError{Number: s.Number, Proposer: proposer.Bytes(), spanUnsettled: s.spanUnsettled}
 	}
 
 	signerIndex, _ := s.ValidatorSet.GetByAddress(signer)
 
 	if signerIndex == -1 && !s.isAllowedByValidatorSetOverride(signer, s.Number) {
-		return -1, &UnauthorizedSignerError{s.Number, signer.Bytes(), s.ValidatorSet.Validators}
+		return -1, &UnauthorizedSignerError{Number: s.Number, Signer: signer.Bytes(), AllowedSigners: s.ValidatorSet.Validators, spanUnsettled: s.spanUnsettled}
 	}
 
 	tempIndex := signerIndex

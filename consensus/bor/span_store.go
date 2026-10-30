@@ -31,6 +31,10 @@ type SpanStore struct {
 	store *lru.ARCCache
 
 	latestSpanCache atomic.Pointer[borTypes.Span]
+	latestSpanAt    atomic.Int64 // unix nanos of the last latest-span fetch that succeeded
+	// latestSpanFetch serializes latest-span fetches, so a slow response can't
+	// overwrite a newer one fetched after it began.
+	latestSpanFetch chan struct{}
 
 	heimdallClient IHeimdallClient
 	spanner        Spanner
@@ -55,6 +59,7 @@ func NewSpanStore(heimdallClient IHeimdallClient, spanner Spanner, chainId strin
 		spanner:         spanner,
 		chainId:         chainId,
 		latestSpanCache: atomic.Pointer[borTypes.Span]{},
+		latestSpanFetch: make(chan struct{}, 1),
 		lastUsedSpan:    atomic.Pointer[borTypes.Span]{},
 	}
 	store.startPollLoop()
@@ -63,6 +68,10 @@ func NewSpanStore(heimdallClient IHeimdallClient, spanner Spanner, chainId strin
 
 // startPollLoop spawns the background goroutine that periodically refreshes
 // latestSpanCache and heimdallStatus. No-op when heimdallClient is nil.
+// latestSpanFreshness is how old the latest span may be for a lookup to rule out a
+// newer span. The poll loop refreshes it every 200ms; older means Heimdall stopped answering.
+const latestSpanFreshness = 2 * time.Second
+
 func (s *SpanStore) startPollLoop() {
 	if s.heimdallClient == nil {
 		return
@@ -174,6 +183,13 @@ func (s *SpanStore) updateLatestSpan(ctx context.Context) error {
 		return nil
 	}
 
+	select {
+	case s.latestSpanFetch <- struct{}{}:
+		defer func() { <-s.latestSpanFetch }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
 	latestSpan, err := s.heimdallClient.GetLatestSpan(ctx)
 	if err != nil {
 		return err
@@ -207,6 +223,7 @@ func (s *SpanStore) updateLatestSpan(ctx context.Context) error {
 		ValidatorSet:      span.ConvertBorValSetToHeimdallValSet(valset.NewValidatorSet(validators)),
 		BorChainId:        s.chainId,
 	})
+	s.latestSpanAt.Store(time.Now().UnixNano())
 	return nil
 }
 
@@ -261,7 +278,15 @@ func (s *SpanStore) spanById(ctx context.Context, spanId uint64) (*borTypes.Span
 // assumes that a span has been committed before (i.e. is current or past span) and returns an error if
 // asked for a future span. This is safe to assume as we don't have a way to find out span id for a future block
 // unless we hardcode the span length (which we don't want to).
-func (s *SpanStore) spanByBlockNumber(ctx context.Context, blockNumber uint64) (res *borTypes.Span, err error) {
+func (s *SpanStore) spanByBlockNumber(ctx context.Context, blockNumber uint64) (*borTypes.Span, error) {
+	span, _, err := s.settledSpanByBlockNumber(ctx, blockNumber)
+	return span, err
+}
+
+// settledSpanByBlockNumber is spanByBlockNumber, also reporting whether the search for a
+// newer span holding the block settled (see getFutureSpan). If not, the span may be an
+// older one standing in for a newer span Heimdall failed to return.
+func (s *SpanStore) settledSpanByBlockNumber(ctx context.Context, blockNumber uint64) (res *borTypes.Span, settled bool, err error) {
 	s.waitUntilHeimdallIsSynced(ctx)
 
 	// As we don't persist latest known span to db, we loose the value on restarts. This leads to multiple heimdall calls
@@ -274,78 +299,91 @@ func (s *SpanStore) spanByBlockNumber(ctx context.Context, blockNumber uint64) (
 		}
 	}()
 
-	// Search backwards from the highest known span ID to find the latest span containing the block
-	// Since we iterate from high to low, the first match will be the span with the largest ID among known spans
-	for id := int(estimatedSpanId); id >= 0; id-- {
-		span, err := s.spanById(ctx, uint64(id))
-		if err != nil {
-			return nil, err
-		}
-		if blockNumber >= span.StartBlock && blockNumber <= span.EndBlock {
-			// Found a span that contains the block number in known spans
-			res = span
-			break
-		}
-		// Check if block number given is out of bounds (future block) for the latest known span
-		if id == int(estimatedSpanId) && blockNumber > span.EndBlock {
-			// Block is in the future, search future spans
-			return s.getFutureSpan(ctx, uint64(id)+1, blockNumber, estimatedSpanId)
-		}
+	res, beyond, err := s.knownSpan(ctx, blockNumber, estimatedSpanId)
+	if err != nil {
+		return nil, false, err
+	}
+	if beyond {
+		// Block is in the future, search future spans
+		return s.getFutureSpan(ctx, estimatedSpanId+1, blockNumber)
 	}
 
 	// If we found a candidate in known spans, we still need to check if there are newer spans in future
 	// that also contain this block number due to overlapping spans
 	if res != nil {
-		futureSpan, err := s.getFutureSpan(ctx, estimatedSpanId+1, blockNumber, estimatedSpanId)
+		futureSpan, settled, err := s.getFutureSpan(ctx, estimatedSpanId+1, blockNumber)
 		if err == nil && futureSpan != nil {
 			// Found a future span that also contains the block, return the newer one
-			return futureSpan, nil
+			return futureSpan, settled, nil
 		}
 		// No future span found or error occurred, return the candidate from known spans
-		return res, nil
+		return res, settled, nil
 	}
 
-	return nil, fmt.Errorf("span not found for block %d", blockNumber)
+	return nil, false, fmt.Errorf("span not found for block %d", blockNumber)
+}
+
+// knownSpan searches backwards from the highest known span ID for the latest
+// span containing the block, so the first match has the largest ID among known
+// spans. beyond reports a block past the end of the highest known span.
+func (s *SpanStore) knownSpan(ctx context.Context, blockNumber uint64, highestId uint64) (span *borTypes.Span, beyond bool, err error) {
+	for id := int(highestId); id >= 0; id-- {
+		span, err := s.spanById(ctx, uint64(id))
+		if err != nil {
+			return nil, false, err
+		}
+		if blockNumber >= span.StartBlock && blockNumber <= span.EndBlock {
+			return span, false, nil
+		}
+		if id == int(highestId) && blockNumber > span.EndBlock {
+			return nil, true, nil
+		}
+	}
+	return nil, false, nil
 }
 
 // getFutureSpan fetches span for future block number. It is mostly needed during snap sync.
-func (s *SpanStore) getFutureSpan(ctx context.Context, id uint64, blockNumber uint64, latestKnownSpanId uint64) (*borTypes.Span, error) {
+// It also reports whether the search settled: it reached a latest span fetched within
+// latestSpanFreshness with no failed lookup on the way.
+func (s *SpanStore) getFutureSpan(ctx context.Context, id uint64, blockNumber uint64) (*borTypes.Span, bool, error) {
 	latestSpan, err := s.getLatestSpan(ctx)
 	if err != nil || latestSpan == nil {
-		return nil, err
+		return nil, false, err
 	}
+
+	fresh := time.Since(time.Unix(0, s.latestSpanAt.Load())) < latestSpanFreshness
 
 	var candidateSpan *borTypes.Span
 	skippedSpans := 0
-	for {
-		if id > latestSpan.Id {
-			if candidateSpan == nil {
-				return nil, fmt.Errorf("span not found for block %d", blockNumber)
-			}
-			return candidateSpan, nil
-		}
+	for ; id <= latestSpan.Id; id++ {
 		span, err := s.spanById(ctx, id)
 		if err != nil {
 			if candidateSpan == nil {
-				return nil, err
+				return nil, false, err
 			}
-			return candidateSpan, nil
+			return candidateSpan, false, nil
 		}
 		if blockNumber >= span.StartBlock && blockNumber <= span.EndBlock {
 			candidateSpan = span
 			skippedSpans = 0
 		}
+		// Stopping early leaves it unsettled: a newer span can start before older ones.
 		if blockNumber < span.StartBlock {
 			skippedSpans++
 			if skippedSpans > 1 {
-				if candidateSpan == nil {
-					return nil, fmt.Errorf("span not found for block %d", blockNumber)
-				}
-				return candidateSpan, nil
+				return spanOrNotFound(candidateSpan, false, blockNumber)
 			}
 		}
-		id++
 	}
+
+	return spanOrNotFound(candidateSpan, fresh, blockNumber)
+}
+
+func spanOrNotFound(span *borTypes.Span, settled bool, blockNumber uint64) (*borTypes.Span, bool, error) {
+	if span == nil {
+		return nil, settled, fmt.Errorf("span not found for block %d", blockNumber)
+	}
+	return span, settled, nil
 }
 
 // estimateSpanId returns the corresponding span id for the given block number in a deterministic way.
