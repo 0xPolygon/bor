@@ -84,7 +84,9 @@ lint:
 
 lint-deps:
 	rm -f ./build/bin/golangci-lint
-	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b ./build/bin v2.11.4
+	# go install, not install.sh: since v2.13 the release checksums list .sbom.json
+	# files and install.sh's checksum grep matches two lines and always fails.
+	GOBIN=$(CURDIR)/build/bin go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
 
 .PHONY: vulncheck
 
