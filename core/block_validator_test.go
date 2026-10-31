@@ -29,6 +29,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/clique"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
@@ -83,6 +84,51 @@ func TestValidateStateCheap(t *testing.T) {
 	withRequests.RequestsHash = &requestMismatch
 	require.ErrorIs(t, validator.ValidateStateCheap(types.NewBlockWithHeader(&withRequests), nil, validRequests), ErrRequestsHashMismatch)
 	require.EqualError(t, validator.ValidateStateCheap(newBlock(), nil, validRequests), "block has requests before prague fork")
+}
+
+// ValidateState derives the receipt root while the state root is hashed, but
+// must still report mismatches in the order receipts, requests, state root.
+func TestValidateState(t *testing.T) {
+	validator := NewBlockValidator(params.TestChainConfig, nil)
+	receipts := []*types.Receipt{{Status: types.ReceiptStatusSuccessful, CumulativeGasUsed: 21_000}}
+	receiptHash := types.DeriveSha(types.Receipts(receipts), trie.NewStackTrie(nil))
+	requests := [][]byte{{1, 2, 3}}
+	requestHash := types.CalcRequestsHash(requests)
+
+	header := func() *types.Header {
+		return &types.Header{
+			Number:       big.NewInt(1),
+			GasUsed:      21_000,
+			Bloom:        types.MergeBloom(receipts),
+			ReceiptHash:  receiptHash,
+			RequestsHash: &requestHash,
+			Root:         types.EmptyRootHash,
+		}
+	}
+	validate := func(h *types.Header, stateless bool) error {
+		statedb, err := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+		require.NoError(t, err)
+		res := &ProcessResult{Receipts: receipts, GasUsed: 21_000, Requests: requests}
+		return validator.ValidateState(types.NewBlockWithHeader(h), statedb, res, stateless)
+	}
+	badReceipts := common.HexToHash("0x01")
+	badRequests := common.HexToHash("0x02")
+	badRoot := common.HexToHash("0x03")
+
+	require.NoError(t, validate(header(), false))
+
+	h := header()
+	h.Root = badRoot
+	require.ErrorContains(t, validate(h, false), "invalid merkle root")
+
+	h.RequestsHash = &badRequests
+	require.ErrorIs(t, validate(h, false), ErrRequestsHashMismatch)
+
+	h.ReceiptHash = badReceipts
+	require.ErrorIs(t, validate(h, false), ErrReceiptRootMismatch)
+
+	// Stateless validation stops after the bloom check.
+	require.NoError(t, validate(h, true))
 }
 
 func testHeaderVerification(t *testing.T, scheme string) {
