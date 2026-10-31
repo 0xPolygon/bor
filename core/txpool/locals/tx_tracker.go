@@ -46,14 +46,26 @@ type TxTracker struct {
 	all    map[common.Hash]*types.Transaction       // All tracked transactions
 	byAddr map[common.Address]*legacypool.SortedMap // Transactions by address
 
-	journal   *journal       // Journal of local transaction to back up to disk
-	rejournal time.Duration  // How often to rotate journal
-	pool      *txpool.TxPool // The tx pool to interact with
+	journal   *journal      // Journal of local transaction to back up to disk
+	rejournal time.Duration // How often to rotate journal
+	pool      trackedTxPool // The tx pool to interact with
 	signer    types.Signer
 
 	shutdownCh chan struct{}
 	mu         sync.Mutex
 	wg         sync.WaitGroup
+}
+
+type trackedTxPool interface {
+	Add([]*types.Transaction, bool) []error
+	Has(common.Hash) bool
+	Nonce(common.Address) uint64
+}
+
+type recheckResult struct {
+	nonces  map[common.Address]uint64
+	missing []*types.Transaction
+	numOk   int
 }
 
 // New creates a new TxTracker
@@ -115,28 +127,26 @@ func (tracker *TxTracker) TrackAll(txs []*types.Transaction) {
 
 // recheck checks and returns any transactions that needs to be resubmitted.
 func (tracker *TxTracker) recheck(journalCheck bool) []*types.Transaction {
+	snapshot := tracker.snapshot()
+	result := tracker.inspect(snapshot)
+
 	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
 
-	var (
-		numStales = 0
-		numOk     = 0
-		resubmits []*types.Transaction
-	)
-	for sender, txs := range tracker.byAddr {
-		// Wipe the stales
-		stales := txs.Forward(tracker.pool.Nonce(sender))
+	numStales := 0
+	for sender, nonce := range result.nonces {
+		txs := tracker.byAddr[sender]
+		stales := txs.Forward(nonce)
 		for _, tx := range stales {
 			delete(tracker.all, tx.Hash())
 		}
 		numStales += len(stales)
-
-		// Check the non-stale
-		for _, tx := range txs.Flatten() {
-			if tracker.pool.Has(tx.Hash()) {
-				numOk++
-				continue
-			}
+	}
+	resubmits := make([]*types.Transaction, 0, len(result.missing))
+	for _, tx := range result.missing {
+		// A transaction can be removed and tracked again while the pool reads run.
+		// Only act on the same tracking generation represented by the snapshot.
+		if current, ok := tracker.all[tx.Hash()]; ok && current == tx {
 			resubmits = append(resubmits, tx)
 		}
 	}
@@ -164,8 +174,38 @@ func (tracker *TxTracker) recheck(journalCheck bool) []*types.Transaction {
 		}
 	}
 	localGauge.Update(int64(len(tracker.all)))
-	log.Debug("Tx tracker status", "need-resubmit", len(resubmits), "stale", numStales, "ok", numOk)
+	log.Debug("Tx tracker status", "need-resubmit", len(resubmits), "stale", numStales, "ok", result.numOk)
 	return resubmits
+}
+
+func (tracker *TxTracker) snapshot() map[common.Address]types.Transactions {
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+
+	snapshot := make(map[common.Address]types.Transactions, len(tracker.byAddr))
+	for sender, txs := range tracker.byAddr {
+		snapshot[sender] = txs.Flatten()
+	}
+	return snapshot
+}
+
+func (tracker *TxTracker) inspect(snapshot map[common.Address]types.Transactions) recheckResult {
+	result := recheckResult{nonces: make(map[common.Address]uint64, len(snapshot))}
+	for sender, txs := range snapshot {
+		nonce := tracker.pool.Nonce(sender)
+		result.nonces[sender] = nonce
+		for _, tx := range txs {
+			if tx.Nonce() < nonce {
+				continue
+			}
+			if tracker.pool.Has(tx.Hash()) {
+				result.numOk++
+			} else {
+				result.missing = append(result.missing, tx)
+			}
+		}
+	}
+	return result
 }
 
 // Start implements node.Lifecycle interface
