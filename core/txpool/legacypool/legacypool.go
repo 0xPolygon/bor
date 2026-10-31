@@ -1570,6 +1570,15 @@ func (pool *LegacyPool) runReorg(done chan struct{}, reset *txpoolResetRequest, 
 				delete(events, addr)
 			}
 		}
+		// reset rebuilt the nonces from the new state, which drops the pending
+		// nonces of txs that are still pending. Restore them before promoting,
+		// else a queued tx right after them waits for the next reorg. Pending is
+		// contiguous, so first+len is the next nonce (LastElement would re-sort).
+		for addr, list := range pool.pending {
+			if first := list.txs.firstElement(); first != nil {
+				pool.pendingNonces.set(addr, max(pool.pendingNonces.get(addr), first.Nonce()+uint64(list.Len())))
+			}
+		}
 		// Reset needs promote for all addresses
 		promoteAddrs = pool.queue.addresses()
 	}
@@ -1975,9 +1984,11 @@ func (pool *LegacyPool) demoteUnexecutables() {
 			// Update the latest known pending nonce
 			highestPending := list.LastElement()
 			nonces[addr] = highestPending.Nonce() + 1
-			pool.pendingNonces.setAll(nonces)
 		}
 	}
+	// Set the nonces even when no account is left pending, so an override from
+	// the reset restore never outlives the txs it was taken from.
+	pool.pendingNonces.setAll(nonces)
 }
 
 // accountSet is simply a set of addresses to check for existence, and a signer
