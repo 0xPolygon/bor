@@ -760,3 +760,48 @@ func TestSequencerConfigValidation(t *testing.T) {
 		})
 	}
 }
+
+// TestBaseFeeFloorConfig tests the miner.baseFeeFloor validation and wiring,
+// and the txpool.basefeefloor wiring.
+func TestBaseFeeFloorConfig(t *testing.T) {
+	build := func(t *testing.T, config *Config) (*ethconfig.Config, error) {
+		t.Helper()
+		assert.NoError(t, config.loadChain())
+		_, err := config.buildNode(log.Root())
+		assert.NoError(t, err)
+		return config.buildEth(nil, nil)
+	}
+
+	// buildEth writes into the shared genesis config: check the default first
+	// and clear the floor afterwards so other tests do not inherit it.
+	t.Run("DisabledByDefault", func(t *testing.T) {
+		ethConfig, err := build(t, DefaultConfig())
+		assert.NoError(t, err)
+		assert.Nil(t, ethConfig.Genesis.Config.Bor.BaseFeeFloor)
+		assert.False(t, ethConfig.TxPool.BaseFeeFloor)
+	})
+
+	t.Run("NoTargetBaseFee_ReturnsError", func(t *testing.T) {
+		config := DefaultConfig()
+		config.Sealer.BaseFeeFloor = true
+		config.Sealer.TargetBaseFee = 0
+
+		_, err := build(t, config)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "miner.targetBaseFee must be greater than 0 when miner.baseFeeFloor is enabled")
+	})
+
+	t.Run("FloorIsTargetBaseFee", func(t *testing.T) {
+		config := DefaultConfig()
+		config.Sealer.BaseFeeFloor = true
+		config.Sealer.TargetBaseFee = 250_000_000_000
+		config.TxPool.BaseFeeFloor = true
+
+		ethConfig, err := build(t, config)
+		assert.NoError(t, err)
+		t.Cleanup(func() { ethConfig.Genesis.Config.Bor.BaseFeeFloor = nil })
+		assert.True(t, *ethConfig.Genesis.Config.Bor.BaseFeeFloor)
+		assert.Equal(t, uint64(250_000_000_000), *ethConfig.Genesis.Config.Bor.TargetBaseFee)
+		assert.True(t, ethConfig.TxPool.BaseFeeFloor)
+	})
+}

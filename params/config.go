@@ -954,6 +954,10 @@ type BorConfig struct {
 	TargetBaseFee          *uint64 `json:"-"` // Desired base fee in wei; target gas % adjusts around this value. Set via --miner.targetBaseFee
 	BaseFeeBuffer          *uint64 `json:"-"` // Buffer in wei; no adjustment when parentBaseFee is within ±buffer of TargetBaseFee. Set via --miner.baseFeeBuffer
 
+	// Runtime base fee floor (post-Lisovo, producer policy, not consensus). When enabled the producer never
+	// sets a base fee below TargetBaseFee, so the floor and the target are always the same value.
+	BaseFeeFloor *bool `json:"-"` // Hold the base fee at or above TargetBaseFee. Set via --miner.baseFeeFloor
+
 	JaipurBlock                *big.Int          `json:"jaipurBlock"`                // Jaipur switch block (nil = no fork, 0 = already on jaipur)
 	DelhiBlock                 *big.Int          `json:"delhiBlock"`                 // Delhi switch block (nil = no fork, 0 = already on delhi)
 	IndoreBlock                *big.Int          `json:"indoreBlock"`                // Indore switch block (nil = no fork, 0 = already on indore)
@@ -1154,6 +1158,19 @@ func (c *BorConfig) GetDynamicTargetGasPercentage(parentBaseFee *big.Int, number
 
 	// Within buffer → no change
 	return c.GetTargetGasPercentage(number)
+}
+
+// GetBaseFeeFloor returns the producer's base fee floor for the block after
+// number, or nil when the floor is disabled or before Lisovo. The floor is
+// TargetBaseFee, so the gas target never pushes the fee up from below it.
+func (c *BorConfig) GetBaseFeeFloor(number *big.Int) *big.Int {
+	if !c.IsLisovo(number) || c.BaseFeeFloor == nil || !*c.BaseFeeFloor {
+		return nil
+	}
+	if c.TargetBaseFee == nil || *c.TargetBaseFee == 0 {
+		return nil
+	}
+	return new(big.Int).SetUint64(*c.TargetBaseFee)
 }
 
 func (c *BorConfig) IsSprintStart(number uint64) bool {

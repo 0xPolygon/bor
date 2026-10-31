@@ -197,6 +197,7 @@ type Config struct {
 
 	Lifetime         time.Duration // Maximum amount of time non-executable transaction are queued
 	StrandedLifetime time.Duration // Maximum amount of time a pending head can stay below the base fee (0 disables)
+	BaseFeeFloor     bool          // Refuse and sweep transactions below the producers' base fee floor learned from headers
 
 	// Transaction filtering configuration
 	FilteredAddresses map[common.Address]struct{} // Pre-loaded filtered addresses (populated by config)
@@ -346,6 +347,9 @@ type LegacyPool struct {
 	isTxPrivate            func(common.Hash) bool
 
 	stranded strandedState // Pending chains blocked by an unminable head
+
+	floor         floorTracker // Producers' base fee floor learned from canonical headers
+	floorSweepDue bool         // A floor was confirmed and the pool was not swept yet
 }
 
 type txpoolResetRequest struct {
@@ -431,6 +435,7 @@ func (pool *LegacyPool) Init(gasTip uint64, head *types.Header, reserver txpool.
 	pool.currentHead.Store(head)
 	pool.currentState = statedb
 	pool.pendingNonces = newNoncer(statedb)
+	pool.floor.init(head, pool.floorHeader)
 
 	pool.wg.Add(1)
 	go pool.scheduleReorgLoop()
@@ -926,6 +931,14 @@ func (pool *LegacyPool) add(tx *types.Transaction, async bool) (replaced bool, e
 		underpricedTxMeter.Mark(1)
 		stage0Duration = time.Since(stage0Time)
 		return false, txpool.ErrUnderpriced
+	}
+
+	// Refuse transactions that cannot pay the producers' base fee floor
+	if err := pool.checkBaseFeeFloor(tx); err != nil {
+		log.Trace("Discarding transaction below the base fee floor", "hash", hash, "gasFeeCap", tx.GasFeeCap())
+		underpricedTxMeter.Mark(1)
+		stage0Duration = time.Since(stage0Time)
+		return false, err
 	}
 
 	// If the address is not yet known, request exclusivity to track the account
@@ -1581,6 +1594,10 @@ func (pool *LegacyPool) runReorg(done chan struct{}, reset *txpoolResetRequest, 
 	// because of another transaction (e.g. higher gas price).
 	if reset != nil {
 		pool.demoteUnexecutables()
+		if pool.floorSweepDue {
+			pool.floorSweepDue = false
+			pool.sweepBelowFloor()
+		}
 	}
 
 	// Bor: TxPool in order to maintain strict consistency acquires a lock for
@@ -1722,6 +1739,7 @@ func (pool *LegacyPool) reset(oldHead, newHead *types.Header) {
 	pool.currentHead.Store(newHead)
 	pool.currentState = statedb
 	pool.pendingNonces = newNoncer(statedb)
+	pool.updateFloor(newHead)
 
 	// Inject any transactions discarded due to reorgs
 	log.Debug("Reinjecting stale transactions", "count", len(reinject))
