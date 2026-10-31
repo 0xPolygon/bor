@@ -49,7 +49,7 @@ func (h *HeimdallGRPCClient) StateSyncEvents(ctx context.Context, fromID uint64,
 		}
 
 		var res *types.RecordListWithTimeResponse
-		pageCtx, pageCancel := context.WithTimeout(ctx, defaultTimeout)
+		pageCtx, pageCancel := context.WithTimeout(ctx, h.timeout)
 		res, err = h.clerkQueryClient.GetRecordListWithTime(pageCtx, req)
 		pageCancel()
 		if err != nil {
