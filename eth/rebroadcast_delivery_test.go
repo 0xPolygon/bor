@@ -177,7 +177,7 @@ func TestRebroadcastEventsExcludeNonGossipableTransactions(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		tx.SetTime(time.Now().Add(-time.Hour))
+		tx.SetTime(time.Now().Add(-time.Minute))
 		txs = append(txs, tx)
 	}
 	backend.APIBackend.RecordPrivateTx(txs[0].Hash())

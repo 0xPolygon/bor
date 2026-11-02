@@ -944,7 +944,7 @@ func (h *handler) BroadcastTransactions(txs types.Transactions) {
 	h.broadcastTransactions(txs, nil)
 }
 
-func (h *handler) broadcastTransactions(txs types.Transactions, onBroadcast func([]common.Hash)) bool {
+func (h *handler) broadcastTransactions(txs types.Transactions, onBroadcast func([]common.Hash), onAttempt ...func([]common.Hash)) bool {
 	var (
 		blobTxs        int // Number of blob transactions to announce only
 		largeTxs       int // Number of large transactions to announce only
@@ -988,8 +988,8 @@ func (h *handler) broadcastTransactions(txs types.Transactions, onBroadcast func
 		assignTransactionPeers(tx.Hash(), peers, directSet, txset, annos)
 	}
 
-	directCount := queueTransactions(txset, false, onBroadcast)
-	annCount := queueTransactions(annos, true, onBroadcast)
+	directCount := queueTransactions(txset, false, onBroadcast, onAttempt...)
+	annCount := queueTransactions(annos, true, onBroadcast, onAttempt...)
 	log.Debug("Distributed transactions", "plaintxs", len(txs)-blobTxs-largeTxs-conditionalTxs, "blobtxs", blobTxs, "largetxs", largeTxs,
 		"conditionaltxs", conditionalTxs,
 		"bcastcount", directCount, "anncount", annCount)
@@ -1117,7 +1117,7 @@ func (h *handler) stuckTxBroadcastLoop() {
 }
 
 func (h *handler) rebroadcastStuckTransactions(txs types.Transactions, onBroadcast func([]common.Hash)) bool {
-	if !h.canRebroadcast() {
+	if h.disableTxPropagation || !h.canRebroadcast() {
 		return false
 	}
 	hashes := make([]common.Hash, len(txs))
@@ -1125,7 +1125,7 @@ func (h *handler) rebroadcastStuckTransactions(txs types.Transactions, onBroadca
 		hashes[i] = tx.Hash()
 	}
 	h.peers.ForgetTransactions(hashes)
-	return h.broadcastTransactions(txs, onBroadcast)
+	return h.broadcastTransactions(txs, onBroadcast, h.rebroadcastAttempt(txs))
 }
 
 // enableSyncedFeatures enables the post-sync functionalities when the initial
