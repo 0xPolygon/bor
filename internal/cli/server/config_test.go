@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"math/big"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -759,4 +761,69 @@ func TestSequencerConfigValidation(t *testing.T) {
 			assert.Equal(t, tc.role, ethConfig.SequencerRole)
 		})
 	}
+}
+
+func TestConfigFilteredAddresses(t *testing.T) {
+	dir := t.TempDir()
+	addrFile := filepath.Join(dir, "filtered.txt")
+	assert.NoError(t, os.WriteFile(addrFile, []byte("0x1111111111111111111111111111111111111111\n"), 0o644))
+	emptyFile := filepath.Join(dir, "empty.txt")
+	assert.NoError(t, os.WriteFile(emptyFile, []byte("\n"), 0o644))
+	invalidFile := filepath.Join(dir, "invalid.txt")
+	assert.NoError(t, os.WriteFile(invalidFile, []byte("garbage\n"), 0o644))
+
+	tests := []struct {
+		name   string
+		reload string
+		want   time.Duration
+	}{
+		{"default", "", time.Minute},
+		{"custom", `filter-reload = "30s"`, 30 * time.Second},
+		{"disabled", `filter-reload = "0s"`, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfgFile := filepath.Join(t.TempDir(), "config.toml")
+			body := fmt.Sprintf("[txpool]\n  filtered-addresses = %q\n  %s\n", addrFile, tt.reload)
+			assert.NoError(t, os.WriteFile(cfgFile, []byte(body), 0o644))
+
+			config, err := readConfigFile(cfgFile)
+			assert.NoError(t, err)
+			assert.NoError(t, config.loadChain())
+
+			ethConfig, err := config.buildEth(nil, nil)
+			assert.NoError(t, err)
+			assert.Equal(t, addrFile, ethConfig.TxPool.FilteredAddressesFile)
+			assert.Equal(t, tt.want, ethConfig.TxPool.FilterReload)
+			assert.Len(t, ethConfig.TxPool.FilteredAddresses, 1)
+		})
+	}
+
+	invalid := []struct {
+		name string
+		set  func(*TxPoolConfig)
+		want string
+	}{
+		{"unreadable file", func(c *TxPoolConfig) { c.FilteredAddressesFile = dir }, "failed to load filtered addresses"},
+		{"missing file", func(c *TxPoolConfig) { c.FilteredAddressesFile = filepath.Join(dir, "missing.txt") }, "failed to load filtered addresses"},
+		{"empty file", func(c *TxPoolConfig) { c.FilteredAddressesFile = emptyFile }, "no entries"},
+		{"invalid file", func(c *TxPoolConfig) { c.FilteredAddressesFile = invalidFile }, `invalid address "garbage" on line 1`},
+	}
+	for _, tt := range invalid {
+		t.Run(tt.name, func(t *testing.T) {
+			config := DefaultConfig()
+			assert.NoError(t, config.loadChain())
+			tt.set(config.TxPool)
+
+			_, err := config.buildEth(nil, nil)
+			assert.ErrorContains(t, err, tt.want)
+		})
+	}
+
+	t.Run("flags", func(t *testing.T) {
+		var c Command
+		assert.NoError(t, c.extractFlags([]string{"--txpool.filter-reload", "5s", "--txpool.filtered-addresses", addrFile}))
+		assert.Equal(t, 5*time.Second, c.config.TxPool.FilterReload)
+		assert.Equal(t, addrFile, c.config.TxPool.FilteredAddressesFile)
+	})
 }

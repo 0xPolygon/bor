@@ -80,6 +80,7 @@ devfakeauthor = false
   lifetime = "3h0m0s"
   strandedlifetime = "3h0m0s"
   filtered-addresses = ""
+  filter-reload = "1m0s"
   rebroadcast = true
   rebroadcast-interval = "30s"
   rebroadcast-max-age = "10m0s"
