@@ -257,6 +257,46 @@ func TestReloadFilteredAddresses(t *testing.T) {
 	}
 }
 
+// Not parallel: marks package-level metrics other tests assert on.
+func TestReloadFilteredAddressesKeepsPendingSweep(t *testing.T) {
+	pool, key := setupPool()
+	defer pool.Close()
+
+	from := crypto.PubkeyToAddress(key.PublicKey)
+	testAddBalance(pool, from, big.NewInt(params.Ether))
+
+	path := filepath.Join(t.TempDir(), "filtered.txt")
+	r := &filterReloader{path: path}
+	writeFilterFile(t, path, from)
+	pool.reloadFilteredAddresses(r)
+	if !r.sweepNeeded {
+		t.Fatal("expected a follow-up sweep after the list changed")
+	}
+
+	pool.mu.Lock()
+	pool.filteredAddrs = map[common.Address]struct{}{}
+	pool.mu.Unlock()
+	late := transaction(0, 100000, key)
+	if err := pool.addRemoteSync(late); err != nil {
+		t.Fatalf("failed to add late tx: %v", err)
+	}
+	pool.mu.Lock()
+	pool.filteredAddrs = map[common.Address]struct{}{from: {}}
+	pool.mu.Unlock()
+
+	// The same list in new bytes before the follow-up tick.
+	if err := os.WriteFile(path, []byte(from.Hex()+"\n\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pool.reloadFilteredAddresses(r)
+	if pool.Has(late.Hash()) {
+		t.Fatal("rewriting the same list dropped the pending sweep")
+	}
+	if r.sweepNeeded {
+		t.Fatal("pending sweep should run once")
+	}
+}
+
 // Not parallel: asserts on a package-level gauge.
 func TestFilteredAddressesGaugeAtStartup(t *testing.T) {
 	config := testTxPoolConfig
@@ -302,6 +342,53 @@ func TestReloadFilteredAddressesEvictsAuthorities(t *testing.T) {
 
 	if pool.Has(tx.Hash()) {
 		t.Fatal("transaction carrying a filtered authority should be evicted")
+	}
+}
+
+func TestEvictFilteredSenderAndAuthority(t *testing.T) {
+	t.Parallel()
+
+	statedb, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+	blockchain := newTestBlockChain(params.MergedTestChainConfig, 1000000, statedb, new(event.Feed))
+	pool := New(testTxPoolConfig, blockchain)
+	pool.Init(testTxPoolConfig.PriceLimit, blockchain.CurrentBlock(), newReserver())
+	defer pool.Close()
+
+	senderKey, _ := crypto.GenerateKey()
+	sender := crypto.PubkeyToAddress(senderKey.PublicKey)
+	testAddBalance(pool, sender, big.NewInt(params.Ether))
+	otherKey, _ := crypto.GenerateKey()
+	testAddBalance(pool, crypto.PubkeyToAddress(otherKey.PublicKey), big.NewInt(params.Ether))
+
+	authKey, _ := crypto.GenerateKey()
+	auth, err := types.SignSetCode(authKey, types.SetCodeAuthorization{
+		ChainID: *uint256.MustFromBig(params.MergedTestChainConfig.ChainID),
+		Address: common.Address{0x42},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	both := pricedSetCodeTxWithAuth(0, 250000, uint256.NewInt(1000), uint256.NewInt(1), senderKey, []types.SetCodeAuthorization{auth})
+	other := pricedTransaction(0, 100000, big.NewInt(1000), otherKey)
+	for _, tx := range []*types.Transaction{both, other} {
+		if err := pool.addRemoteSync(tx); err != nil {
+			t.Fatalf("failed to add tx: %v", err)
+		}
+	}
+
+	pool.mu.Lock()
+	pool.filteredAddrs = map[common.Address]struct{}{sender: {}, crypto.PubkeyToAddress(authKey.PublicKey): {}}
+	evicted := pool.evictFiltered()
+	pool.mu.Unlock()
+
+	if evicted != 1 {
+		t.Fatalf("evicted %d transactions, want 1", evicted)
+	}
+	if pool.Has(both.Hash()) || !pool.Has(other.Hash()) {
+		t.Fatal("wrong transaction evicted")
+	}
+	if err := validatePoolInternals(pool); err != nil {
+		t.Fatalf("pool internals: %v", err)
 	}
 }
 

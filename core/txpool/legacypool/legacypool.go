@@ -2191,6 +2191,21 @@ func (t *lookup) removeAuthorities(tx *types.Transaction) {
 	}
 }
 
+// authorizedBy returns the transactions carrying an authorization from an
+// address match accepts.
+func (t *lookup) authorizedBy(match func(common.Address) bool) []common.Hash {
+	t.lock.RLock()
+	defer t.lock.RUnlock()
+
+	var hashes []common.Hash
+	for addr, list := range t.auths {
+		if match(addr) {
+			hashes = append(hashes, list...)
+		}
+	}
+	return hashes
+}
+
 // hasAuth returns a flag indicating whether there are pending authorizations
 // from the specified address.
 func (t *lookup) hasAuth(addr common.Address) bool {

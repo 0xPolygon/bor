@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"slices"
 	"strings"
 	"time"
 
@@ -99,16 +98,14 @@ func (pool *LegacyPool) reloadFilteredAddresses(r *filterReloader) {
 		return
 	}
 
+	// An async add validates against the list, drops the pool lock and
+	// inserts later, so it can land a transaction the new list rejects just
+	// after the sweep that followed the update. Sweep again one interval
+	// later to catch it.
 	if bytes.Equal(data, r.content) {
-		// An async add validates against the list, drops the pool lock and
-		// inserts later, so it can land a transaction the new list rejects
-		// just after the sweep that followed the update. Sweep again one
-		// interval later to catch it.
 		if r.sweepNeeded {
 			r.sweepNeeded = false
-			pool.mu.Lock()
-			pool.evictFiltered()
-			pool.mu.Unlock()
+			pool.sweepFiltered()
 		}
 		return
 	}
@@ -118,7 +115,19 @@ func (pool *LegacyPool) reloadFilteredAddresses(r *filterReloader) {
 		return
 	}
 	r.content = data
-	r.sweepNeeded = pool.setFilteredAddresses(addrs)
+	changed := pool.setFilteredAddresses(addrs)
+	if !changed && r.sweepNeeded {
+		// Same list in new bytes: run the pending sweep rather than drop it.
+		pool.sweepFiltered()
+	}
+	r.sweepNeeded = changed
+}
+
+func (pool *LegacyPool) sweepFiltered() {
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+
+	pool.evictFiltered()
 }
 
 // setFilteredAddresses swaps in a new filtered list and evicts pooled
@@ -149,26 +158,23 @@ func (pool *LegacyPool) evictFiltered() int {
 		return 0
 	}
 
-	var drop types.Transactions
+	// Authorities come from the pool's index: tx.SetCodeAuthorities would
+	// re-run ecrecover for every authorization while pool.mu is held.
+	drop := make(map[common.Hash]struct{})
+	for _, hash := range pool.all.authorizedBy(pool.isFiltered) {
+		drop[hash] = struct{}{}
+	}
 	pool.all.Range(func(hash common.Hash, tx *types.Transaction) bool {
-		if pool.touchesFiltered(tx) {
-			drop = append(drop, tx)
+		if from, err := types.Sender(pool.signer, tx); err == nil && pool.isFiltered(from) {
+			drop[hash] = struct{}{}
 		}
 		return true
 	})
-	for _, tx := range drop {
-		pool.removeTx(tx.Hash(), false, true)
+	for hash := range drop {
+		pool.removeTx(hash, false, true)
 	}
 	pool.priced.Removed(len(drop))
 	filteredEvictMeter.Mark(int64(len(drop)))
 
 	return len(drop)
-}
-
-// touchesFiltered mirrors checkFiltered for transactions already in the pool.
-func (pool *LegacyPool) touchesFiltered(tx *types.Transaction) bool {
-	if from, err := types.Sender(pool.signer, tx); err == nil && pool.isFiltered(from) {
-		return true
-	}
-	return slices.ContainsFunc(tx.SetCodeAuthorities(), pool.isFiltered)
 }

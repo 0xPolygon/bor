@@ -826,4 +826,26 @@ func TestConfigFilteredAddresses(t *testing.T) {
 		assert.Equal(t, 5*time.Second, c.config.TxPool.FilterReload)
 		assert.Equal(t, addrFile, c.config.TxPool.FilteredAddressesFile)
 	})
+
+	hcl := []struct {
+		name   string
+		txpool string
+		want   time.Duration
+	}{
+		{"hcl omitted", fmt.Sprintf("txpool {\n  filtered-addresses = %q\n}\n", addrFile), time.Minute},
+		{"hcl custom", fmt.Sprintf("txpool {\n  filtered-addresses = %q\n  filter-reload = \"30s\"\n}\n", addrFile), 30 * time.Second},
+		{"hcl disabled", fmt.Sprintf("txpool {\n  filtered-addresses = %q\n  filter-reload = \"0s\"\n}\n", addrFile), 0},
+	}
+	for _, tt := range hcl {
+		t.Run(tt.name, func(t *testing.T) {
+			const base = "gpo {}\nminer {}\njsonrpc {\nhttp {}\nws {}\ntimeouts {}\n}\n"
+			cfgFile := filepath.Join(t.TempDir(), "config.hcl")
+			assert.NoError(t, os.WriteFile(cfgFile, []byte(base+tt.txpool), 0o644))
+
+			config, err := readConfigFile(cfgFile)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, config.TxPool.FilterReload)
+			assert.Equal(t, addrFile, config.TxPool.FilteredAddressesFile)
+		})
+	}
 }

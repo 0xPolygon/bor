@@ -1288,9 +1288,11 @@ func readConfigFile(path string) (*Config, error) {
 
 	config := &Config{
 		P2P:    &P2PConfig{PeerReputation: true},
-		TxPool: &TxPoolConfig{},
 		Cache:  &CacheConfig{},
 		Sealer: &SealerConfig{},
+		// HCL configs don't start from DefaultConfig, so an omitted
+		// filter-reload would otherwise disable reloading.
+		TxPool: &TxPoolConfig{FilterReload: time.Minute},
 		// WarmSnapshot defaults on: witness-producing nodes measure faster
 		// with it, and it is inert otherwise. The zero value would silently
 		// put HCL-configured witness nodes on the slower path.
