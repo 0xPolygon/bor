@@ -68,7 +68,8 @@ func parseFilteredAddresses(data []byte) (map[common.Address]struct{}, error) {
 // addresses file, so an unchanged file is neither parsed nor applied again.
 type filterReloader struct {
 	path        string
-	content     []byte
+	content     []byte // last contents applied in full
+	seen        []byte // last contents read and parsed
 	sweepNeeded bool
 }
 
@@ -114,8 +115,15 @@ func (pool *LegacyPool) reloadFilteredAddresses(r *filterReloader) {
 		log.Warn("Invalid filtered addresses file, keeping current list", "file", r.path, "err", err)
 		return
 	}
-	r.content = data
-	changed := pool.setFilteredAddresses(addrs)
+	// A file rewritten in place can be read half-written and still parse.
+	// Apply additions now, and removals only once the next tick reads the
+	// same contents.
+	settled := bytes.Equal(data, r.seen)
+	r.seen = data
+	if settled {
+		r.content = data
+	}
+	changed := pool.setFilteredAddresses(addrs, !settled)
 	if !changed && r.sweepNeeded {
 		// Same list in new bytes: run the pending sweep rather than drop it.
 		pool.sweepFiltered()
@@ -130,12 +138,16 @@ func (pool *LegacyPool) sweepFiltered() {
 	pool.evictFiltered()
 }
 
-// setFilteredAddresses swaps in a new filtered list and evicts pooled
-// transactions it now rejects. It reports whether the list changed.
-func (pool *LegacyPool) setFilteredAddresses(addrs map[common.Address]struct{}) bool {
+// setFilteredAddresses swaps in a new filtered list, kept a superset of the
+// current one when keepCurrent is set, and evicts pooled transactions it now
+// rejects. It reports whether the list changed.
+func (pool *LegacyPool) setFilteredAddresses(addrs map[common.Address]struct{}, keepCurrent bool) bool {
 	pool.mu.Lock()
 	defer pool.mu.Unlock()
 
+	if keepCurrent {
+		maps.Copy(addrs, pool.filteredAddrs)
+	}
 	if maps.Equal(pool.filteredAddrs, addrs) {
 		return false
 	}

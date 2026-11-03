@@ -243,17 +243,49 @@ func TestReloadFilteredAddresses(t *testing.T) {
 		t.Fatal("an invalid entry lifted the filter")
 	}
 
-	// Replacing the list lifts it.
+	// Replacing the list adds the new entries at once, and lifts the old ones
+	// once the next read agrees.
 	writeFilterFile(t, path, common.Address{0x1})
 	pool.reloadFilteredAddresses(r)
+	if !pool.isFiltered(from) || !pool.isFiltered(common.Address{0x1}) {
+		t.Fatal("first read of a replaced list should add entries without lifting any")
+	}
+	pool.reloadFilteredAddresses(r)
 	if pool.isFiltered(from) {
-		t.Fatal("replaced list should lift the filter")
+		t.Fatal("replaced list should lift the filter once read twice")
 	}
 	if got := filteredAddrsGauge.Snapshot().Value(); got != 1 {
 		t.Fatalf("addresses gauge = %d, want 1", got)
 	}
 	if err := pool.addRemoteSync(transaction(0, 100000, key)); err != nil {
 		t.Fatalf("tx should be accepted once unfiltered, got %v", err)
+	}
+}
+
+// Not parallel: marks package-level metrics other tests assert on.
+func TestReloadFilteredAddressesPartialWrite(t *testing.T) {
+	pool, _ := setupPool()
+	defer pool.Close()
+
+	a, b := common.Address{0xa}, common.Address{0xb}
+	path := filepath.Join(t.TempDir(), "filtered.txt")
+	r := &filterReloader{path: path}
+	writeFilterFile(t, path, a, b)
+	pool.reloadFilteredAddresses(r)
+	pool.reloadFilteredAddresses(r)
+
+	// A read in the middle of an in-place rewrite sees only the first line.
+	writeFilterFile(t, path, a)
+	pool.reloadFilteredAddresses(r)
+	if !pool.isFiltered(b) {
+		t.Fatal("a half-written file lifted an address")
+	}
+
+	writeFilterFile(t, path, a, b)
+	pool.reloadFilteredAddresses(r)
+	pool.reloadFilteredAddresses(r)
+	if !pool.isFiltered(a) || !pool.isFiltered(b) {
+		t.Fatal("completed rewrite should keep both addresses")
 	}
 }
 
