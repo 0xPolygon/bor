@@ -287,6 +287,62 @@ func TestReloadFilteredAddressesPartialWrite(t *testing.T) {
 	if !pool.isFiltered(a) || !pool.isFiltered(b) {
 		t.Fatal("completed rewrite should keep both addresses")
 	}
+
+	// The next rewrite is read half-written again, two reads after the last.
+	writeFilterFile(t, path, a)
+	pool.reloadFilteredAddresses(r)
+	if !pool.isFiltered(b) {
+		t.Fatal("a repeated half-written read lifted an address")
+	}
+}
+
+// Not parallel: marks package-level metrics other tests assert on.
+func TestReloadFilteredAddressesSettles(t *testing.T) {
+	a, b := common.Address{0xa}, common.Address{0xb}
+
+	tests := []struct {
+		name    string
+		initial []byte
+		writes  [][]byte
+	}{
+		{"revert before the next read", []byte(a.Hex()), [][]byte{
+			[]byte(a.Hex() + "\n" + b.Hex()),
+			[]byte(a.Hex()),
+			[]byte(a.Hex()),
+		}},
+		{"same list in new bytes each read", []byte(a.Hex() + "\n" + b.Hex()), [][]byte{
+			[]byte(a.Hex()),
+			[]byte(a.Hex() + "\n"),
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pool, _ := setupPool()
+			defer pool.Close()
+
+			path := filepath.Join(t.TempDir(), "filtered.txt")
+			r := &filterReloader{path: path}
+			if err := os.WriteFile(path, tt.initial, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			pool.reloadFilteredAddresses(r)
+			pool.reloadFilteredAddresses(r)
+
+			for i, data := range tt.writes {
+				if err := os.WriteFile(path, data, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				pool.reloadFilteredAddresses(r)
+				want := i < len(tt.writes)-1
+				if got := pool.isFiltered(b); got != want {
+					t.Fatalf("read %d: filtered(b) = %v, want %v", i, got, want)
+				}
+			}
+			if !pool.isFiltered(a) {
+				t.Fatal("a kept address was lifted")
+			}
+		})
+	}
 }
 
 // Not parallel: marks package-level metrics other tests assert on.
