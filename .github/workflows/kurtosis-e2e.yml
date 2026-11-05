@@ -98,18 +98,14 @@ jobs:
 
       # Fork PRs deliberately avoid the authenticated registry setup above.
       # Kurtosis pulls the package's public image references directly instead.
-      # The workspace holds kurtosis-pos, so fetch this repo's local actions on the side.
-      - name: Checkout local actions (fork)
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
-        uses: actions/checkout@v7
-        with:
-          path: local-actions
-          sparse-checkout: .github/actions
-          persist-credentials: false
-
       - name: Free disk space (fork)
         if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
-        uses: ./local-actions/.github/actions/free-disk-space
+        # Removes preinstalled toolchains (Android, .NET, Haskell) and GitHub's preloaded images, ~24 GB.
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+          docker image prune --all --force > /dev/null
+          df -h /
 
       - name: Install Kurtosis and yq (fork)
         if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
