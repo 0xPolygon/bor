@@ -98,8 +98,9 @@ func (oracle *Oracle) processBlock(bf *blockFees, percentiles []float64) {
 	} else {
 		bf.results.nextBaseFee = new(big.Int)
 	}
-	// Fill in blob base fee and next blob base fee.
-	if excessBlobGas := bf.header.ExcessBlobGas; excessBlobGas != nil {
+	// Fill in blob base fee and next blob base fee. A genesis with Cancun at block 0 has
+	// ExcessBlobGas set even without a blob config for the fork (devnets); CalcBlobFee panics there.
+	if excessBlobGas := bf.header.ExcessBlobGas; excessBlobGas != nil && eip4844.MaxBlobsPerBlock(config, bf.header.Time) > 0 {
 		bf.results.blobBaseFee = eip4844.CalcBlobFee(config, bf.header)
 		excess := eip4844.CalcExcessBlobGas(config, bf.header, bf.header.Time)
 		next := &types.Header{Number: bf.header.Number, Time: bf.header.Time, ExcessBlobGas: &excess}
@@ -383,8 +384,12 @@ func (oracle *Oracle) FeeHistory(ctx context.Context, blocks uint64, unresolvedL
 		i := fees.blockNumber - oldestBlock
 
 		if fees.results.baseFee != nil {
-			reward[i], baseFee[i], baseFee[i+1], gasUsedRatio[i] = fees.results.reward, fees.results.baseFee, fees.results.nextBaseFee, fees.results.gasUsedRatio
-			blobGasUsedRatio[i], blobBaseFee[i], blobBaseFee[i+1] = fees.results.blobGasUsedRatio, fees.results.blobBaseFee, fees.results.nextBlobBaseFee
+			reward[i], baseFee[i], gasUsedRatio[i] = fees.results.reward, fees.results.baseFee, fees.results.gasUsedRatio
+			blobGasUsedRatio[i], blobBaseFee[i] = fees.results.blobGasUsedRatio, fees.results.blobBaseFee
+			// The next block's own header wins over this prediction; on Bor they can differ.
+			if baseFee[i+1] == nil {
+				baseFee[i+1], blobBaseFee[i+1] = fees.results.nextBaseFee, fees.results.nextBlobBaseFee
+			}
 		} else {
 			// getting no block and no error means we are requesting into the future (might happen because of a reorg)
 			if i < firstMissing {

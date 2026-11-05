@@ -1443,7 +1443,7 @@ func TestV2BlockSTMWorkerScaling(t *testing.T) {
 		}
 		readBase, _ := state.New(bd.witness.Root(), state.NewDatabase(triedb.NewDatabase(bd.witness.MakeHashDB(diskdb), triedb.HashDefaults), nil))
 		finalDB := v2BaseDB
-		result := ExecuteV2BlockSTM(context.Background(), tasks, readBase, store, bals, blockContext, bd.block.Hash(), vm.Config{}, config, bd.block.GasLimit(), nw, finalDB, nil)
+		result := ExecuteV2BlockSTM(context.Background(), tasks, readBase, store, bals, blockContext, bd.block.Hash(), vm.Config{}, config, bd.block.GasLimit(), nw, finalDB, nil, nil)
 		t.Logf("%dw: %d txs, p1=%v settle=%v, execs=%d vfails=%d",
 			nw, len(tasks), result.Phase1, result.SettleDur, result.ExecCount, result.VFailCount)
 	}
@@ -1529,7 +1529,7 @@ func TestV2ChainWaitDiagnostic(t *testing.T) {
 
 		v2BaseDB.StartPrefetcher("diag", nil, nil)
 		result := ExecuteV2BlockSTM(context.Background(), tasks, readBase, store, bals, blockCtx, bd.block.Hash(),
-			vm.Config{}, config, bd.block.GasLimit(), 8, v2BaseDB, nil)
+			vm.Config{}, config, bd.block.GasLimit(), 8, v2BaseDB, nil, nil)
 		v2BaseDB.StopPrefetcher()
 
 		s := blockStat{
@@ -1792,7 +1792,7 @@ func runV2BlockSTMConsistency(t *testing.T, blocks []testBlockData, diskdb ethdb
 		// Execute
 		store := blockstm.NewMVStore()
 		bals := blockstm.NewMVBalanceStore()
-		result := ExecuteV2BlockSTM(context.Background(), tasks, readBase, store, bals, blockContext, bd.block.Hash(), vm.Config{}, config, bd.block.GasLimit(), numWorkers, finalDB, nil)
+		result := ExecuteV2BlockSTM(context.Background(), tasks, readBase, store, bals, blockContext, bd.block.Hash(), vm.Config{}, config, bd.block.GasLimit(), numWorkers, finalDB, nil, nil)
 		// A base read failure makes V2 drop the tx at settlement, so the root
 		// comparison below would report a misleading mismatch. Surface it as
 		// what it is: incomplete state (usually a code blob missing from the

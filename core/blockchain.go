@@ -1328,25 +1328,12 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	sharedCaches := newSharedBlockCaches()
 	bc.startPrefetchGoroutine(block, throwaway, sharedCaches, followupInterrupt)
 
-	type Result struct {
-		receipts types.Receipts
-		logs     []*types.Log
-		usedGas  uint64
-		err      error
-		statedb  *state.StateDB
-		counter  *metrics.Counter
-		parallel bool
-		vtime    time.Duration
-		execFrom time.Time
-		execTo   time.Time
-	}
-
 	var resultChanLen int = 2
 	if bc.enforceParallelProcessor {
 		log.Debug("Processing block using Block STM only", "number", block.NumberU64())
 		resultChanLen = 1
 	}
-	resultChan := make(chan Result, resultChanLen)
+	resultChan := make(chan processorResult, resultChanLen)
 
 	processorCount := 0
 	execStart := time.Now()
@@ -1380,7 +1367,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 			if res == nil {
 				res = &ProcessResult{}
 			}
-			resultChan <- Result{
+			resultChan <- processorResult{
 				receipts: res.Receipts,
 				logs:     res.Logs,
 				usedGas:  res.GasUsed,
@@ -1399,35 +1386,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		processorCount++
 
 		go func() {
-			pstart := time.Now()
-			statedb.StartPrefetcher("chain", witness, nil)
-			res, err := bc.processor.Process(block, statedb, bc.cfg.VmConfig, nil, ctx)
-			pend := time.Now()
-			blockExecutionSerialTimer.Update(pend.Sub(pstart))
-			var localVtime time.Duration
-			if err == nil {
-				vstart := time.Now()
-				err = validateStateForPipeline(bc.validator, block, statedb, res, pipeOpts)
-				localVtime = time.Since(vstart)
-			}
-			if err != nil || ctx.Err() != nil {
-				statedb.StopPrefetcher()
-			}
-			if res == nil {
-				res = &ProcessResult{}
-			}
-			resultChan <- Result{
-				receipts: res.Receipts,
-				logs:     res.Logs,
-				usedGas:  res.GasUsed,
-				err:      err,
-				statedb:  statedb,
-				counter:  blockExecutionSerialCounter,
-				parallel: false,
-				vtime:    localVtime,
-				execFrom: pstart,
-				execTo:   pend,
-			}
+			resultChan <- bc.runSerialProcessor(ctx, block, statedb, witness, pipeOpts)
 		}()
 	}
 
@@ -1457,6 +1416,11 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 			result = <-resultChan
 			result.statedb.StopPrefetcher()
 			processorCount--
+		} else if errors.Is(result.err, errV2WriteBudgetExhausted) && bc.processor != nil {
+			// Says nothing about the block's validity, so even with the
+			// parallel processor enforced the serial result decides.
+			result = bc.runSerialProcessor(ctx, block, statedb, witness, pipeOpts)
+			result.statedb.StopPrefetcher()
 		}
 	}
 	if result.err == nil {
@@ -1501,6 +1465,56 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	}
 
 	return result.receipts, result.logs, result.usedGas, result.statedb, result.vtime, result.err
+}
+
+// processorResult is one processor's outcome in ProcessBlock's
+// serial/parallel race.
+type processorResult struct {
+	receipts types.Receipts
+	logs     []*types.Log
+	usedGas  uint64
+	err      error
+	statedb  *state.StateDB
+	counter  *metrics.Counter
+	parallel bool
+	vtime    time.Duration
+	execFrom time.Time
+	execTo   time.Time
+}
+
+// runSerialProcessor executes and validates block with the serial processor
+// on statedb.
+func (bc *BlockChain) runSerialProcessor(ctx context.Context, block *types.Block, statedb *state.StateDB,
+	witness *stateless.Witness, pipeOpts *PipelineImportOpts) processorResult {
+	pstart := time.Now()
+	statedb.StartPrefetcher("chain", witness, nil)
+	res, err := bc.processor.Process(block, statedb, bc.cfg.VmConfig, nil, ctx)
+	pend := time.Now()
+	blockExecutionSerialTimer.Update(pend.Sub(pstart))
+	var localVtime time.Duration
+	if err == nil {
+		vstart := time.Now()
+		err = validateStateForPipeline(bc.validator, block, statedb, res, pipeOpts)
+		localVtime = time.Since(vstart)
+	}
+	if err != nil || ctx.Err() != nil {
+		statedb.StopPrefetcher()
+	}
+	if res == nil {
+		res = &ProcessResult{}
+	}
+	return processorResult{
+		receipts: res.Receipts,
+		logs:     res.Logs,
+		usedGas:  res.GasUsed,
+		err:      err,
+		statedb:  statedb,
+		counter:  blockExecutionSerialCounter,
+		parallel: false,
+		vtime:    localVtime,
+		execFrom: pstart,
+		execTo:   pend,
+	}
 }
 
 func (bc *BlockChain) claimPreconf(block *types.Block, requireWitness bool, compatible, allowPrefix bool) (*PreconfExecution, time.Duration, bool) {
@@ -3115,7 +3129,27 @@ func (bc *BlockChain) WriteBlockAndSetHead(block *types.Block, receipts []*types
 	}
 	defer bc.chainmu.Unlock()
 
+	if err := bc.ValidateLocalBlock(block); err != nil {
+		return NonStatTy, err
+	}
 	return bc.writeBlockAndSetHead(block, receipts, logs, state, emitHeadEvent, false)
+}
+
+// ValidateLocalBlock runs the milestone/checkpoint check that insertChain
+// applies before writing an imported block. Locally sealed blocks reach the
+// chain through the public write entry points, which skip insertChain, so
+// without it the producer could make a block canonical that every peer rejects.
+// The miner also calls it before publishing a seal; the write entry points
+// repeat it under the chain lock.
+func (bc *BlockChain) ValidateLocalBlock(block *types.Block) error {
+	isValid, err := bc.forker.ValidateReorg(block.Header(), []*types.Header{block.Header()})
+	if err != nil {
+		return err
+	}
+	if !isValid {
+		return whitelist.ErrMismatch
+	}
+	return nil
 }
 
 // writeBlockAndSetHead is the internal implementation of WriteBlockAndSetHead.
@@ -4939,6 +4973,13 @@ func (bc *BlockChain) InsertHeaderChainWithoutValidation(chain []*types.Header) 
 	if len(chain) == 0 {
 		return 0, nil
 	}
+	// The headers skip engine verification, so at least keep their fields in
+	// the bounds that WriteHeaders and later readers assume.
+	for i, header := range chain {
+		if err := header.SanityCheck(); err != nil {
+			return i, err
+		}
+	}
 
 	if !bc.chainmu.TryLock() {
 		return 0, errChainStopped
@@ -4990,6 +5031,9 @@ func (bc *BlockChain) WriteBlockAndSetHeadPipelined(block *types.Block, receipts
 	}
 	defer bc.chainmu.Unlock()
 
+	if err := bc.ValidateLocalBlock(block); err != nil {
+		return NonStatTy, err
+	}
 	return bc.writeBlockAndSetHeadPipelined(block, receipts, logs, statedb, emitHeadEvent, witnessBytes)
 }
 

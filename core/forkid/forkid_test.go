@@ -22,6 +22,8 @@ import (
 	"hash/crc32"
 	"math"
 	"math/big"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -563,5 +565,36 @@ func TestGatherForksBorZeroBlock(t *testing.T) {
 	}
 	if !found {
 		t.Error("DelhiBlock=100 not found in results")
+	}
+}
+
+// TestGatherForksIncludesEveryBorFork sets every BorConfig *Block field to its
+// own height and requires each one in the gathered forks, so a new Bor fork
+// cannot be left out of bor_forks. Bor forks don't enter the devp2p fork ID.
+func TestGatherForksIncludesEveryBorFork(t *testing.T) {
+	bor := &params.BorConfig{}
+	v := reflect.ValueOf(bor).Elem()
+	want := make(map[string]uint64)
+	for i := 0; i < v.NumField(); i++ {
+		name := v.Type().Field(i).Name
+		if v.Field(i).Type() != reflect.TypeOf((*big.Int)(nil)) || !strings.HasSuffix(name, "Block") {
+			continue
+		}
+		want[name] = uint64(1000 + i)
+		v.Field(i).Set(reflect.ValueOf(new(big.Int).SetUint64(want[name])))
+	}
+	if _, ok := want["UburuBlock"]; !ok {
+		t.Fatal("UburuBlock not picked up as a fork field")
+	}
+
+	heightForks, _ := GatherForks(&params.ChainConfig{Bor: bor}, 0)
+	got := make(map[uint64]bool, len(heightForks))
+	for _, f := range heightForks {
+		got[f] = true
+	}
+	for name, height := range want {
+		if !got[height] {
+			t.Errorf("%s (block %d) missing from GatherForks", name, height)
+		}
 	}
 }
