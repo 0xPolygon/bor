@@ -196,6 +196,36 @@ func TestResubmit(t *testing.T) {
 	}
 }
 
+func TestRecheckPrunesEmptySenders(t *testing.T) {
+	for _, keepPending := range []bool{false, true} {
+		t.Run(fmt.Sprintf("keepPending=%t", keepPending), func(t *testing.T) {
+			env := newTestEnv(t, 2, 0, "")
+			defer env.close()
+			stale := env.makeTx(1, nil)
+			pending := env.makeTx(2, nil)
+			env.tracker.Track(stale)
+			want := 0
+			if keepPending {
+				env.tracker.Track(pending)
+				want = 1
+			}
+			for i := 0; i < 2; i++ {
+				resubmits := env.tracker.recheck(false)
+				if len(env.tracker.all) != want || len(env.tracker.byAddr) != want {
+					t.Fatalf("Tracked transactions: %d, senders: %d, want both %d", len(env.tracker.all), len(env.tracker.byAddr), want)
+				}
+				if len(resubmits) != want || (want == 1 && resubmits[0].Hash() != pending.Hash()) {
+					t.Fatalf("Unexpected resubmissions: %v", resubmits)
+				}
+			}
+			env.tracker.Track(pending)
+			if txs := env.tracker.byAddr[address]; txs == nil || txs.Len() != 1 {
+				t.Fatal("Pending transaction missing after tracking sender again")
+			}
+		})
+	}
+}
+
 func TestRecheckDoesNotBlockTrack(t *testing.T) {
 	pool := &blockingTrackerPool{
 		nonceStarted: make(chan struct{}),

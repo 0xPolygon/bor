@@ -141,12 +141,13 @@ func (tracker *TxTracker) recheck(journalCheck bool) []*types.Transaction {
 			delete(tracker.all, tx.Hash())
 		}
 		numStales += len(stales)
+		if txs.Len() == 0 {
+			delete(tracker.byAddr, sender)
+		}
 	}
 	resubmits := make([]*types.Transaction, 0, len(result.missing))
 	for _, tx := range result.missing {
-		// A transaction can be removed and tracked again while the pool reads run.
-		// Only act on the same tracking generation represented by the snapshot.
-		if current, ok := tracker.all[tx.Hash()]; ok && current == tx {
+		if _, ok := tracker.all[tx.Hash()]; ok {
 			resubmits = append(resubmits, tx)
 		}
 	}
