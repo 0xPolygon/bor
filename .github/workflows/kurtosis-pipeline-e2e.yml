@@ -122,15 +122,12 @@ jobs:
       # Kurtosis pulls the package's public image references directly instead.
       - name: Free disk space (fork)
         if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
-        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
-        with:
-          tool-cache: false
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: false
-          docker-images: true
-          swap-storage: true
+        # Removes preinstalled toolchains (Android, .NET, Haskell) and GitHub's preloaded images, ~24 GB.
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+          docker image prune --all --force > /dev/null
+          df -h /
 
       - name: Install Kurtosis and yq (fork)
         if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
