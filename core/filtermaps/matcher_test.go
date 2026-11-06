@@ -146,7 +146,10 @@ func TestMatcherDuringHeadMapRewrite(t *testing.T) {
 		pausedCh <- struct{}{}
 		<-resumeCh
 	}
-	ts.chain.addBlocks(1, 2, 1, 1, false)
+	// Add a new head block with enough log values (120*4*4 = 1920) to change
+	// more than rowsPerBatch rows of the head map, so the rewrite releases
+	// indexLock while the temporary range is set.
+	ts.chain.addBlocks(1, 120, 4, 3, false)
 
 	select {
 	case <-pausedCh:
