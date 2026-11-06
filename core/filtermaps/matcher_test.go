@@ -19,6 +19,7 @@ package filtermaps
 import (
 	crand "crypto/rand"
 	"math/rand"
+	"sync"
 	"testing"
 	"time"
 
@@ -130,8 +131,12 @@ func TestMatcherDuringHeadMapRewrite(t *testing.T) {
 	}
 
 	// Pause the indexer while the temporary range is set, in the middle of the
-	// head map rewrite.
-	pausedCh, resumeCh := make(chan struct{}), make(chan struct{})
+	// head map rewrite. The hook never blocks after the test returns: pausedCh
+	// is buffered and resumeCh is always closed, so the indexer can shut down
+	// even if the test fails before the pause.
+	pausedCh, resumeCh := make(chan struct{}, 1), make(chan struct{})
+	resume := sync.OnceFunc(func() { close(resumeCh) })
+	defer resume()
 	armed := true
 	ts.fm.testProcessEventsHook = func() {
 		if !armed || !ts.fm.hasTempRange {
@@ -149,7 +154,7 @@ func TestMatcherDuringHeadMapRewrite(t *testing.T) {
 		t.Fatal("indexer did not pause during the head map rewrite")
 	}
 	logs, err := GetPotentialMatches(t.Context(), mb, searchBlock, searchBlock, []common.Address{log.Address}, nil)
-	close(resumeCh)
+	resume()
 	if err != nil {
 		t.Fatalf("Log search error: %v", err)
 	}
