@@ -17,8 +17,6 @@
 package legacypool
 
 import (
-	"time"
-
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -45,6 +43,7 @@ func (pool *LegacyPool) publishRebroadcastTransactions(txs []*types.Transaction)
 	explicit := pool.rebroadcastAckFeed.Send(core.StuckTxsEvent{Txs: txs})
 	legacy := pool.rebroadcastTxFeed.Send(core.StuckTxsEvent{Txs: txs})
 	if explicit == 0 || legacy > 0 {
+		pool.recordRebroadcastAttempts(txs)
 		hashes := make([]common.Hash, len(txs))
 		for i, tx := range txs {
 			hashes[i] = tx.Hash()
@@ -70,7 +69,7 @@ func (pool *LegacyPool) rebroadcastAcknowledgement(txs []*types.Transaction, cou
 		pool.mu.Lock()
 		defer pool.mu.Unlock()
 
-		now := time.Now()
+		now := pool.rebroadcastTime()
 		var count int64
 		for _, hash := range hashes {
 			tx := remaining[hash]
@@ -87,6 +86,23 @@ func (pool *LegacyPool) rebroadcastAcknowledgement(txs []*types.Transaction, cou
 		rebroadcastTrackingGauge.Update(int64(len(pool.lastRebroadcast)))
 		if countMetrics {
 			rebroadcastTxMeter.Mark(count)
+		}
+	}
+}
+
+// Must be called with pool.mu held, alongside removal from the pool.
+func (pool *LegacyPool) forgetRebroadcast(hash common.Hash) {
+	delete(pool.lastRebroadcast, hash)
+	delete(pool.lastRebroadcastAttempt, hash)
+}
+
+func (pool *LegacyPool) recordRebroadcastAttempts(txs []*types.Transaction) {
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+	now := pool.rebroadcastTime()
+	for _, tx := range txs {
+		if pool.all.Get(tx.Hash()) == tx {
+			pool.lastRebroadcastAttempt[tx.Hash()] = now
 		}
 	}
 }

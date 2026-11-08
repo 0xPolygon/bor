@@ -29,6 +29,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/protocols/snap"
 	"github.com/ethereum/go-ethereum/eth/protocols/wit"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
@@ -42,7 +43,8 @@ const (
 // ethPeerInfo represents a short summary of the `eth` sub-protocol metadata known
 // about a connected peer.
 type ethPeerInfo struct {
-	Version uint `json:"version"` // Ethereum protocol version negotiated
+	Reputation *peerpolicy.Snapshot `json:"reputation,omitempty"`
+	Version    uint                 `json:"version"` // Ethereum protocol version negotiated
 	*peerBlockRange
 }
 

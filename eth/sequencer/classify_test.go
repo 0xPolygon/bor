@@ -472,3 +472,116 @@ func TestForeignSealAboveCanonicalRebases(t *testing.T) {
 		t.Fatalf("canonical reorg-past must rebase: anchor=%x", p.anchor)
 	}
 }
+
+// A read served by a gateway that has not applied our latest acked entries
+// lands on an older post of our lineage. It must not pull the frontier back:
+// the resend would STALE on entries the store already holds.
+func TestApplyTailLaggingReadKeepsFrontier(t *testing.T) {
+	p, _ := lineagePublisher(t, &fakeChain{})
+
+	items, _ := p.journal.after(p.ackedSeq)
+	openItem, recordItem := items[0], items[1]
+
+	p.mu.Lock()
+	p.ackedSeq, p.anchor = recordItem.seq, recordItem.post
+	p.mu.Unlock()
+
+	if out := p.applyTail(tailInfo{s: openItem.post}); out != recOK {
+		t.Fatalf("outcome = %v", out)
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.ackedSeq != recordItem.seq || p.anchor != recordItem.post {
+		t.Fatalf("frontier pulled back to the lagging read: acked=%d, want %d", p.ackedSeq, recordItem.seq)
+	}
+
+	if resend, _ := p.journal.after(p.ackedSeq); len(resend) != 0 {
+		t.Fatalf("%d acked entries queued for resend", len(resend))
+	}
+}
+
+func TestApplyTailStuckBehindReadRewinds(t *testing.T) {
+	p, _ := lineagePublisher(t, &fakeChain{})
+
+	items, _ := p.journal.after(p.ackedSeq)
+	openItem, recordItem := items[0], items[1]
+
+	p.mu.Lock()
+	p.ackedSeq, p.anchor = recordItem.seq, recordItem.post
+	p.behind = laggingRead{since: time.Now().Add(-laggingReadBound - time.Second), acked: recordItem.seq}
+	p.mu.Unlock()
+
+	if out := p.applyTail(tailInfo{s: openItem.post}); out != recOK {
+		t.Fatalf("outcome = %v", out)
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.ackedSeq != openItem.seq || p.anchor != openItem.post {
+		t.Fatalf("frontier kept against a store that went back: acked=%d, want %d", p.ackedSeq, openItem.seq)
+	}
+
+	if resend, _ := p.journal.after(p.ackedSeq); len(resend) != 1 || resend[0].seq != recordItem.seq {
+		t.Fatalf("resend = %d entries, want the lost record", len(resend))
+	}
+
+	if p.behind != (laggingRead{}) {
+		t.Fatalf("lagging-read window survived the rewind: %+v", p.behind)
+	}
+}
+
+func TestApplyTailAtFrontierClearsLaggingRead(t *testing.T) {
+	p, anchor := lineagePublisher(t, &fakeChain{})
+
+	p.mu.Lock()
+	p.behind = laggingRead{since: time.Now().Add(-time.Second), acked: p.ackedSeq}
+	p.mu.Unlock()
+
+	if out := p.applyTail(tailInfo{s: anchor}); out != recOK {
+		t.Fatalf("outcome = %v", out)
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.behind != (laggingRead{}) {
+		t.Fatalf("lagging-read window survived a read at the frontier: %+v", p.behind)
+	}
+}
+
+func TestStoreWentBackLocked(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+
+	const acked = 7
+
+	tests := []struct {
+		name      string
+		behind    laggingRead
+		want      bool
+		wantSince time.Time
+	}{
+		{"first behind read opens the window", laggingRead{}, false, now},
+		{"under the bound", laggingRead{since: now.Add(-laggingReadBound + time.Nanosecond), acked: acked}, false, now.Add(-laggingReadBound + time.Nanosecond)},
+		{"at the bound", laggingRead{since: now.Add(-laggingReadBound), acked: acked}, true, now.Add(-laggingReadBound)},
+		{"frontier moved since the window opened", laggingRead{since: now.Add(-2 * laggingReadBound), acked: acked - 1}, false, now},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := barePublisher()
+			p.ackedSeq = acked
+			p.behind = tt.behind
+
+			if got := p.storeWentBackLocked(now); got != tt.want {
+				t.Fatalf("storeWentBackLocked = %v, want %v", got, tt.want)
+			}
+
+			if !p.behind.since.Equal(tt.wantSince) || p.behind.acked != acked {
+				t.Fatalf("window = %+v, want since %v acked %d", p.behind, tt.wantSince, acked)
+			}
+		})
+	}
+}

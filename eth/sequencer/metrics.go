@@ -24,6 +24,8 @@ var (
 	publishStaleCount      = metrics.NewRegisteredCounter("sequencer/publish/stale", nil)
 	publishMutedCount      = metrics.NewRegisteredCounter("sequencer/publish/muted", nil)
 	publishRecoverCount    = metrics.NewRegisteredCounter("sequencer/publish/recovered", nil)
+	publishRecoverInexact  = metrics.NewRegisteredCounter("sequencer/publish/recovered/inexact", nil)
+	publishBridgeCount     = metrics.NewRegisteredCounter("sequencer/publish/bridged", nil)
 	readHeadMismatch       = metrics.NewRegisteredCounter("sequencer/read/headmismatch", nil)
 	readUnexplained        = metrics.NewRegisteredCounter("sequencer/read/unexplained", nil)
 	barrierDivergedCount   = metrics.NewRegisteredCounter("sequencer/publish/barrierdiverged", nil)
@@ -59,6 +61,8 @@ var (
 	reconcileForwardJump = metrics.NewRegisteredCounter("sequencer/reconcile/forwardjump", nil)
 	reconcileYield       = metrics.NewRegisteredCounter("sequencer/reconcile/yield", nil)
 	reconcileResync      = metrics.NewRegisteredCounter("sequencer/reconcile/resync", nil)
+	reconcileLaggingRead = metrics.NewRegisteredCounter("sequencer/reconcile/laggingread", nil)
+	reconcileStoreBehind = metrics.NewRegisteredCounter("sequencer/reconcile/storebehind", nil)
 	reconcileTimer       = metrics.NewRegisteredTimer("sequencer/reconcile/duration", nil)
 
 	// The store audit's verdicts, and the two ways a height gets past it

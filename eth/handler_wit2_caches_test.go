@@ -75,6 +75,8 @@ func registerEthWitPeer(t *testing.T, h *testHandler, version uint) (*wit.Peer, 
 	// goroutine can fire during these tests.
 	ethPeer := ethproto.NewPeer(ethproto.ETH68, p2p.NewPeer(id, "test-eth-peer", nil), ethNet, nil)
 	require.NoError(t, h.handler.peers.registerPeer(ethPeer, nil, witPeer))
+	h.handler.observeProtocolPeer(ethPeer)
+	h.handler.observeWitnessPeer(witPeer)
 
 	cleanup := func() {
 		h.handler.peers.unregisterPeer(ethPeer.ID())
@@ -1283,4 +1285,8 @@ func TestFetcherWitnessPenaltiesAreWiredToHandler(t *testing.T) {
 	wm.ExcludeWitnessSource("fetcher-excluded-peer", hash)
 	require.True(t, h.handler.witnessSourceExclusions.excluded(hash, "fetcher-excluded-peer"),
 		"a fetcher source exclusion must reach the handler's exclusion set")
+}
+
+func (c *deferredAnnounceCache) put(ann wit.SignedWitnessAnnouncement, peerID string) {
+	c.putObserved(ann, peerID, nil)
 }

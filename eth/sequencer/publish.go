@@ -8,6 +8,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
@@ -113,16 +114,25 @@ func (p *Publisher) SealBlock(block *types.Block) {
 
 	p.adopt = nil
 
+	n := header.Number.Uint64()
+
+	// The barrier's exactness check is skipped while the write path is down,
+	// so a recovery is held to it here too: an inexact one must leave as the
+	// over-sealed fallback, its flush queued and its gate armed.
+	p.recoveredExactlyLocked(n, block.Transactions())
+
 	mode := p.mode
 	p.mode = buildMode{}
 	p.diverged = divergence{}
 
-	n := header.Number.Uint64()
 	prevTip := p.sealedTip
 
 	if n > p.sealedTip {
 		p.sealedTip = n
 	}
+
+	p.buildTop = max(p.buildTop, n)
+	p.ownRun.add(header)
 
 	recovered := mode.kind == modeRecover && mode.height == n
 	if recovered || mode.kind == modeSealedWait {
@@ -130,6 +140,14 @@ func (p *Publisher) SealBlock(block *types.Block) {
 
 		return
 	}
+
+	p.publishSealLocked(block, raw, prevTip, mode.kind == modeOverSealed && mode.height == n)
+}
+
+// publishSealLocked appends the seal flush for a block whose content the
+// store must come to match, and arms the broadcast gate on it.
+func (p *Publisher) publishSealLocked(block *types.Block, raw []byte, prevTip uint64, overSealed bool) {
+	n := block.NumberU64()
 
 	if !p.windowMirrorsLocked(block) {
 		// The journal's window does not describe the sealed block (a adopt
@@ -149,7 +167,7 @@ func (p *Publisher) SealBlock(block *types.Block) {
 	p.gate = sealGate{
 		height: n, hash: block.Hash(), published: true, prevTip: prevTip,
 		txs:            txHashes(block.Transactions()),
-		tolerateSealed: mode.kind == modeOverSealed && mode.height == n,
+		tolerateSealed: overSealed,
 	}
 
 	p.curHeight = 0
@@ -322,4 +340,27 @@ func baseFeeBytes(f *big.Int) []byte {
 	}
 
 	return f.Bytes()
+}
+
+// sealedRunLeftLocked reports whether a build under our sealed tip no longer
+// has the block we sealed at its height under it, and if so drops the tip to
+// the build's parent. A producer cut off from the chain keeps sealing its own
+// run; once the chain rewinds that run away (deleting it locally, too) and we
+// are elected again, those heights are another sealed run in the store,
+// recovered like any other. The build shows it either by sitting on another
+// parent, or by sitting below an earlier build (rewound). A build at our
+// latest height on the parent we sealed on is our own seal racing the
+// chain-head update, and stays muted.
+func (p *Publisher) sealedRunLeftLocked(number uint64, parent common.Hash, rewound bool) bool {
+	ours, ok := p.ownRun.at(number)
+	if !ok || (ours.parent == parent && !rewound) {
+		return false
+	}
+
+	log.Info("Sequencer sealed run left the chain; rebuilding it from the store",
+		"number", number, "sealedTip", p.sealedTip)
+
+	p.sealedTip = number - 1
+
+	return true
 }
