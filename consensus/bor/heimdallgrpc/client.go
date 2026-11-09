@@ -3,6 +3,7 @@ package heimdallgrpc
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -31,6 +32,8 @@ const (
 	stateFetchLimit = 50
 	defaultTimeout  = 30 * time.Second
 )
+
+var errNoRESTEndpoint = errors.New("heimdall gRPC client configured without a REST endpoint")
 
 type HeimdallGRPCClient struct {
 	closeOnce             sync.Once
@@ -144,7 +147,7 @@ func NewHeimdallGRPCClient(grpcAddress string, heimdallURL string, timeout time.
 
 	log.Info("Connected to Heimdall gRPC server", "grpcAddress", grpcAddress, "dialAddr", addr)
 
-	restClient, err := heimdall.NewHeimdallClientWithError(heimdallURL, timeout)
+	restClient, err := newOptionalRESTClient(heimdallURL, timeout)
 	if err != nil {
 		if closeErr := conn.Close(); closeErr != nil {
 			log.Error("Error closing Heimdall gRPC client connection", "err", closeErr)
@@ -160,6 +163,14 @@ func NewHeimdallGRPCClient(grpcAddress string, heimdallURL string, timeout time.
 		clerkQueryClient:      clerkTypes.NewQueryClient(conn),
 		milestoneQueryClient:  milestoneTypes.NewQueryClient(conn),
 	}, nil
+}
+
+// gRPC-only configurations do not require a REST endpoint.
+func newOptionalRESTClient(endpoint string, timeout time.Duration) (*heimdall.HeimdallClient, error) {
+	if endpoint == "" {
+		return nil, nil
+	}
+	return heimdall.NewHeimdallClientWithError(endpoint, timeout)
 }
 
 func (h *HeimdallGRPCClient) Close() {
@@ -180,6 +191,9 @@ func (h *HeimdallGRPCClient) Close() {
 }
 
 func (h *HeimdallGRPCClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
+	if h == nil || h.client == nil {
+		return nil, errNoRESTEndpoint
+	}
 	return h.client.FetchStatus(ctx)
 }
 

@@ -85,11 +85,12 @@ func TestPeerPolicyBodyServingAdapter(t *testing.T) {
 	hash := backend.chain.GetBlockByNumber(1).Hash()
 	for _, enabled := range []bool{false, true} {
 		w := &replyTestRW{sent: make(chan p2p.Msg, 1)}
-		p := &Peer{Peer: configuredLimitsTestPeer(t, "trusted"), rw: w, heavyResponseLimited: true}
+		limiter := NewHeavyResponseLimiter()
+		p := &Peer{Peer: configuredLimitsTestPeer(t, "trusted"), rw: w, heavyResponseLimiter: limiter}
 		var got peerpolicy.Evidence
 		if enabled {
 			p.SetObserver(func(e peerpolicy.Evidence) {
-				require.Empty(t, heavyResponseServeSlots, "lookup slot must be released before writing the reply")
+				require.Empty(t, limiter.slots, "lookup slot must be released before writing the reply")
 				got = e
 			})
 		}
@@ -104,7 +105,7 @@ func TestPeerPolicyBodyServingAdapter(t *testing.T) {
 		require.NoError(t, msg.Decode(&reply))
 		require.Equal(t, query.RequestId, reply.RequestId)
 		require.Equal(t, BlockBodiesRLPResponse{backend.chain.GetBodyRLP(hash)}, reply.BlockBodiesRLPResponse)
-		require.Empty(t, heavyResponseServeSlots)
+		require.Empty(t, limiter.slots)
 		if enabled && (got.Items != 1 || got.Bytes == 0 || len(got.Hashes) != 1 || got.Hashes[0] != hash || got.ObjectBytes[0] != got.Bytes) {
 			t.Fatalf("incorrect completed reply observation: %+v", got)
 		}

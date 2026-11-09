@@ -60,8 +60,6 @@ const (
 	maxHeavyResponseWorkers = 4
 )
 
-var heavyResponseServeSlots = make(chan struct{}, heavyResponseWorkerLimit())
-
 func heavyResponseWorkerLimit() int {
 	limit := runtime.GOMAXPROCS(0)
 	if limit < 1 {

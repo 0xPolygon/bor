@@ -22,6 +22,41 @@ func TestNewHeimdallGRPCClientInvalidRESTEndpoint(t *testing.T) {
 	require.Nil(t, client)
 }
 
+func TestNewHeimdallGRPCClientNonEmptyInvalidRESTEndpoint(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+
+	client, err := NewHeimdallGRPCClient("localhost:9090", "ftp://127.0.0.1:1317", time.Second)
+	require.ErrorContains(t, err, "unsupported Heimdall endpoint scheme")
+	require.Nil(t, client)
+}
+
+func TestNewHeimdallGRPCClientNonEmptyValidRESTEndpoint(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+
+	client, err := NewHeimdallGRPCClient("localhost:9090", "http://127.0.0.1:1317", time.Second)
+	require.NoError(t, err)
+	defer client.Close()
+	require.NotNil(t, client.client)
+}
+
+func TestNewHeimdallGRPCClientGRPCOnly(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+
+	client, err := NewHeimdallGRPCClient("localhost:9090", "", time.Second)
+	require.NoError(t, err)
+	require.NotNil(t, client)
+	t.Cleanup(client.Close)
+	require.Nil(t, client.client)
+
+	status, err := client.FetchStatus(t.Context())
+	require.ErrorIs(t, err, errNoRESTEndpoint)
+	require.Nil(t, status)
+
+	client.Close()
+	client.Close()
+	require.Equal(t, connectivity.Shutdown, client.conn.GetState())
+}
+
 func TestHeimdallGRPCClientClose(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	for _, scheme := range []string{"http", "h3"} {

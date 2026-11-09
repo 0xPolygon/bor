@@ -21,6 +21,7 @@ func TestHeimdallEndpoints(t *testing.T) {
 		{name: "http", http: []string{"http://localhost:1317"}, count: 1},
 		{name: "h3 failover", http: []string{"h3://localhost:1317", "http://localhost:1318"}, count: 2},
 		{name: "grpc", http: []string{"h3://localhost:1317"}, grpc: []string{"http://localhost:9090"}, count: 1},
+		{name: "grpc only", grpc: []string{"http://localhost:9090"}, count: 1},
 		{name: "grpc missing", http: []string{"http://localhost:1317"}, grpc: []string{""}, count: 1},
 		{name: "grpc failure", http: []string{"http://localhost:1317"}, grpc: []string{"http://192.0.2.1:9090"}, count: 1},
 		{name: "grpc failure without fallback", grpc: []string{"http://192.0.2.1:9090"}},
@@ -38,7 +39,7 @@ func TestHeimdallEndpoints(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.Len(t, clients, test.count)
-			if test.name == "grpc" {
+			if test.name == "grpc" || test.name == "grpc only" {
 				require.IsType(t, &heimdallgrpc.HeimdallGRPCClient{}, clients[0])
 			} else if test.count > 0 {
 				require.IsType(t, &heimdall.HeimdallClient{}, clients[0])
