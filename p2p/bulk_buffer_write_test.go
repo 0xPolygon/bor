@@ -53,13 +53,20 @@ func TestBulkBufferWriteAdmissionRollback(t *testing.T) {
 }
 
 func TestBulkBufferDefaultWriteLimits(t *testing.T) {
-	first, second := newBulkBufferBudget(), newBulkBufferBudget()
+	// Budgets from one pool share the write aggregate; standalone fallbacks do
+	// not, so draining one node's write allowance leaves another untouched.
+	pool := newBulkBufferPool()
+	first, second := pool.newBudget(), pool.newBudget()
+	standalone := newBulkBufferBudget()
 	require.Same(t, first.writeGlobal, second.writeGlobal)
+	require.NotSame(t, first.writeGlobal, standalone.writeGlobal)
 	require.NotSame(t, first.writePeer, second.writePeer)
 	require.True(t, first.writePeer.TryAcquire(bulkPeerBufferLimit/2))
 	require.False(t, first.writePeer.TryAcquire(1))
 	first.writePeer.Release(bulkPeerBufferLimit / 2)
-	require.True(t, first.writeGlobal.TryAcquire(bulkProcessBufferLimit/2))
+	require.True(t, first.writeGlobal.TryAcquire(bulkNodeBufferLimit/2))
 	require.False(t, second.writeGlobal.TryAcquire(1))
-	first.writeGlobal.Release(bulkProcessBufferLimit / 2)
+	require.True(t, standalone.writeGlobal.TryAcquire(1), "separate pool keeps its own allowance")
+	standalone.writeGlobal.Release(1)
+	first.writeGlobal.Release(bulkNodeBufferLimit / 2)
 }

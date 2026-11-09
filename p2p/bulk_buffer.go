@@ -9,16 +9,32 @@ import (
 )
 
 const (
-	bulkPeerBufferLimit    = 2 * bulkMaxMessageSize
-	bulkProcessBufferLimit = 128 * 1024 * 1024
+	bulkPeerBufferLimit = 2 * bulkMaxMessageSize
+	bulkNodeBufferLimit = 128 * 1024 * 1024
 )
 
-// These limits cover application payload copies, independently of QUIC's
-// receive windows. Every protocol and direction shares the peer's allowance.
-var (
-	bulkProcessBuffers      = semaphore.NewWeighted(bulkProcessBufferLimit)
-	bulkProcessWriteBuffers = semaphore.NewWeighted(bulkProcessBufferLimit / 2)
-)
+// Each node shares one application-copy allowance across its peers, separately
+// from QUIC receive windows.
+type bulkBufferPool struct {
+	global      *semaphore.Weighted
+	writeGlobal *semaphore.Weighted
+}
+
+func newBulkBufferPool() *bulkBufferPool {
+	return &bulkBufferPool{
+		global:      semaphore.NewWeighted(bulkNodeBufferLimit),
+		writeGlobal: semaphore.NewWeighted(bulkNodeBufferLimit / 2),
+	}
+}
+
+func (p *bulkBufferPool) newBudget() *bulkBufferBudget {
+	return &bulkBufferBudget{
+		peer:        semaphore.NewWeighted(bulkPeerBufferLimit),
+		global:      p.global,
+		writePeer:   semaphore.NewWeighted(bulkPeerBufferLimit / 2),
+		writeGlobal: p.writeGlobal,
+	}
+}
 
 type bulkBufferBudget struct {
 	peer        *semaphore.Weighted
@@ -27,13 +43,9 @@ type bulkBufferBudget struct {
 	writeGlobal *semaphore.Weighted
 }
 
+// Standalone peers have no server pool and need a private allowance.
 func newBulkBufferBudget() *bulkBufferBudget {
-	return &bulkBufferBudget{
-		peer:        semaphore.NewWeighted(bulkPeerBufferLimit),
-		global:      bulkProcessBuffers,
-		writePeer:   semaphore.NewWeighted(bulkPeerBufferLimit / 2),
-		writeGlobal: bulkProcessWriteBuffers,
-	}
+	return newBulkBufferPool().newBudget()
 }
 
 func bulkBuffersFor(rw MsgReadWriter) *bulkBufferBudget {
