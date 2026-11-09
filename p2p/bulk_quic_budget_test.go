@@ -2,7 +2,6 @@ package p2p
 
 import (
 	"context"
-	"math"
 	"net"
 	"testing"
 
@@ -11,32 +10,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/p2p/netutil"
 )
-
-func TestBulkQUICWindowBudget(t *testing.T) {
-	server := newTestBulkServer(t)
-	t.Cleanup(server.close)
-	server.setQUICPort()
-	windows := server.bulk.windows
-	var releases []func()
-	for range bulkQUICWindowSlots(server.server.MaxPeers, server.server.MaxPendingPeers) {
-		release, err := reserveBulkQUICWindow(windows)
-		require.NoError(t, err)
-		t.Cleanup(release)
-		releases = append(releases, release)
-	}
-	_, err := reserveBulkQUICWindow(windows)
-	require.ErrorIs(t, err, errBulkAdmissionLimit)
-	admit := newBulkConnContext(0, 1, windows)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	_, err = admit(ctx, bulkTestClientInfo(1))
-	require.ErrorIs(t, err, errBulkAdmissionLimit)
-	_, err = server.bulk.dialConn(ctx, server.localnode.Node())
-	require.ErrorIs(t, err, errBulkAdmissionLimit)
-	releases[0]()
-	_, err = admit(ctx, bulkTestClientInfo(1))
-	require.NoError(t, err, "failed reservation must release connection and pending-auth slots")
-}
 
 func TestBulkQUICReceiveLimits(t *testing.T) {
 	server := newTestBulkServer(t)
@@ -56,52 +29,6 @@ func TestBulkQUICReceiveLimits(t *testing.T) {
 	require.GreaterOrEqual(t, bulkConnReceiveWindowMax, bulkStreamReceiveWindowMax)
 }
 
-// The byte budget must track the operator's configured peer limits. A fixed
-// ceiling would silently stop granting windows — pushing peers back onto RLPx —
-// as soon as MaxPeers was raised past whatever that constant assumed.
-func TestBulkQUICWindowsScaleWithPeerLimits(t *testing.T) {
-	for _, test := range []struct {
-		name                 string
-		maxPeers, maxPending int
-		wantSlots            int
-	}{
-		{"default", 50, 50, 100},
-		{"raised", 200, 50, 250},
-		{"unset", 0, 0, defaultMaxPendingPeers},
-		{"negative", -1, -1, defaultMaxPendingPeers},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			slots := bulkQUICWindowSlots(test.maxPeers, test.maxPending)
-			require.Equal(t, test.wantSlots, slots)
-			windows := newBulkQUICWindows(test.maxPeers, test.maxPending)
-			for range slots {
-				_, err := reserveBulkQUICWindow(windows)
-				require.NoError(t, err)
-			}
-			_, err := reserveBulkQUICWindow(windows)
-			require.ErrorIs(t, err, errBulkAdmissionLimit)
-		})
-	}
-}
-
-func TestBulkQUICWindowCapacityBounds(t *testing.T) {
-	slots := bulkQUICWindowSlots(math.MaxInt, math.MaxInt)
-	require.Positive(t, slots)
-	require.LessOrEqual(t, int64(slots), int64(math.MaxInt64/bulkConnReceiveWindowMax))
-	windows := newBulkQUICWindows(math.MaxInt, math.MaxInt)
-	bytes := int64(slots) * bulkConnReceiveWindowMax
-	require.True(t, windows.TryAcquire(bytes))
-	_, err := reserveBulkQUICWindow(windows)
-	require.ErrorIs(t, err, errBulkAdmissionLimit)
-	windows.Release(bytes)
-	release, err := reserveBulkQUICWindow(windows)
-	require.NoError(t, err)
-	release()
-	release()
-	require.True(t, windows.TryAcquire(bytes))
-	windows.Release(bytes)
-}
-
 func TestBulkNetRestrict(t *testing.T) {
 	list, err := netutil.ParseNetlist("192.0.2.0/24")
 	require.NoError(t, err)
@@ -110,7 +37,7 @@ func TestBulkNetRestrict(t *testing.T) {
 	server.setQUICPort()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	admit := bulkServerConnContext(server.server, server.bulk.windows)
+	admit := bulkServerConnContext(server.server)
 	_, err = admit(ctx, &quic.ClientInfo{RemoteAddr: &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)}})
 	require.ErrorIs(t, err, errNetRestrict)
 	_, err = server.bulk.dialConn(ctx, server.localnode.Node())

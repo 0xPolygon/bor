@@ -31,7 +31,6 @@ import (
 
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/qlogwriter"
-	"golang.org/x/sync/semaphore"
 
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/enode"
@@ -39,8 +38,8 @@ import (
 )
 
 const (
-	bulkSidecarNextProto      = "bor-bulk/3"
-	bulkSidecarVersion        = uint64(3)
+	bulkSidecarNextProto      = "bor-bulk/4"
+	bulkSidecarVersion        = uint64(4)
 	bulkAuthControlMaxSize    = 1024
 	bulkChannelControlMaxSize = 256
 	bulkFrameHeaderSize       = 12
@@ -77,10 +76,11 @@ const bulkChannelAckTimeout = bulkChannelOpenTimeout + 2*bulkAuthTimeout
 var maxBulkChannelsPerSession = len(bulkChannels)
 
 var (
-	errBulkSidecarNoPeer  = errors.New("bulk sidecar peer not connected")
-	errBulkSidecarNoQUIC  = errors.New("peer has no bulk sidecar endpoint")
-	errBulkChannelTimeout = errors.New("bulk channel open timed out")
-	errBulkChannelLimit   = errors.New("bulk channel limit reached")
+	errBulkSidecarNoPeer    = errors.New("bulk sidecar peer not connected")
+	errBulkSidecarNoQUIC    = errors.New("peer has no bulk sidecar endpoint")
+	errBulkChannelTimeout   = errors.New("bulk channel open timed out")
+	errBulkChannelLimit     = errors.New("bulk channel limit reached")
+	errBulkAdmissionRefused = errors.New("bulk connection refused by peer admission")
 )
 
 type BulkSidecar struct {
@@ -91,11 +91,10 @@ type BulkSidecar struct {
 	config    *quic.Config
 	log       log.Logger
 
-	localID           enode.ID
-	priv              *ecdsa.PrivateKey
-	windows           *semaphore.Weighted
-	activeConnections *semaphore.Weighted
-	stats             bulkSidecarStatsBook
+	localID enode.ID
+	priv    *ecdsa.PrivateKey
+	leases  *bulkLeaseBook
+	stats   bulkSidecarStatsBook
 
 	closeOnce sync.Once
 	closeCh   chan struct{}
@@ -118,11 +117,18 @@ type bulkSession struct {
 	connClosed <-chan struct{}
 	connReady  chan struct{}
 	dialing    bool
-	dialWait   chan struct{}
-	dialCancel context.CancelFunc
-	closed     bool
-	channels   map[string]MsgReadWriter
-	waiters    map[string][]chan bulkChannelResult
+	// Refuse fallback commits while the preferred outgoing dial is in flight.
+	preferredDialing bool
+	dialWait         chan struct{}
+	dialCancel       context.CancelFunc
+	closed           bool
+	channels         map[string]MsgReadWriter
+	waiters          map[string][]chan bulkChannelResult
+}
+
+// The dialer waits for this decision before exposing lanes.
+type bulkAdmissionResult struct {
+	Admitted bool
 }
 
 type bulkChannelResult struct {
@@ -180,15 +186,14 @@ func newBulkSidecar(srv *Server, listenAddr string) (*BulkSidecar, error) {
 		MinVersion:     tls.VersionTLS13,
 	}
 	b := &BulkSidecar{
-		srv:               srv,
-		tls:               tlsConf,
-		log:               srv.log,
-		localID:           srv.localnode.ID(),
-		priv:              srv.PrivateKey,
-		windows:           newBulkQUICWindows(srv.MaxPeers, srv.MaxPendingPeers),
-		activeConnections: semaphore.NewWeighted(int64(max(0, srv.MaxPeers))),
-		closeCh:           make(chan struct{}),
-		sessions:          make(map[enode.ID]*bulkSession),
+		srv:      srv,
+		tls:      tlsConf,
+		log:      srv.log,
+		localID:  srv.localnode.ID(),
+		priv:     srv.PrivateKey,
+		leases:   newBulkLeaseBook(),
+		closeCh:  make(chan struct{}),
+		sessions: make(map[enode.ID]*bulkSession),
 	}
 	quicConf := &quic.Config{
 		HandshakeIdleTimeout: bulkAuthTimeout,
@@ -220,7 +225,7 @@ func newBulkSidecar(srv *Server, listenAddr string) (*BulkSidecar, error) {
 	transport := &quic.Transport{
 		Conn:        udpConn,
 		Tracer:      b.stats.newTransportRecorder(),
-		ConnContext: bulkServerConnContext(srv, b.windows),
+		ConnContext: bulkServerConnContext(srv),
 		// Validate the address before allocating a pending authentication slot.
 		VerifySourceAddress: func(net.Addr) bool { return true },
 	}
@@ -376,21 +381,43 @@ func (b *BulkSidecar) handleIncomingConn(conn *quic.Conn) {
 	}
 	remote, err := b.acceptAuth(conn, stream)
 	if err != nil {
+		_ = stream.Close()
 		_ = conn.CloseWithError(bulkSidecarProtocolError, err.Error())
 		return
 	}
-	if err := b.admitAuthenticatedConn(conn.Context()); err != nil {
-		if closeErr := conn.CloseWithError(bulkSidecarCloseErrorCode, err.Error()); closeErr != nil {
-			b.log.Debug("Bulk admission close failed", "err", closeErr)
+	// Arbitrate and commit under the session lock, then tell the dialer the
+	// decision on the auth stream. The dialer exposes lanes only on admission, so
+	// a refused or superseded connection never carries a lane.
+	session := b.adoptConn(remote, conn)
+	admitted := session != nil
+	writeErr := writeBulkControl(stream, bulkAdmissionResult{Admitted: admitted})
+	_ = stream.Close()
+	if writeErr != nil {
+		// The dialer never learned it was admitted, so undo the commit to keep both
+		// ends consistent; the dialer times out and retries.
+		b.log.Debug("Bulk admission result write failed", "peer", remote.ID(), "err", writeErr)
+		if session != nil {
+			session.clearConn(conn)
 		}
+		_ = conn.CloseWithError(bulkSidecarCloseErrorCode, "bulk admission result not delivered")
 		return
 	}
-	session := b.adoptConn(remote, conn)
-	if session == nil {
-		_ = conn.CloseWithError(bulkSidecarCloseErrorCode, "duplicate bulk connection")
+	if !admitted {
+		b.awaitRefusedClose(conn)
 		return
 	}
 	session.runConn(conn)
+}
+
+// Let the dialer read the refusal before closing. The timeout releases pending
+// capacity if the dialer disappears.
+func (b *BulkSidecar) awaitRefusedClose(conn *quic.Conn) {
+	select {
+	case <-conn.Context().Done():
+	case <-b.closeCh:
+	case <-time.After(bulkAuthTimeout):
+	}
+	_ = conn.CloseWithError(bulkSidecarCloseErrorCode, "bulk connection not admitted")
 }
 
 func (b *BulkSidecar) dialConn(ctx context.Context, remote *enode.Node) (*quic.Conn, error) {
@@ -405,28 +432,28 @@ func (b *BulkSidecar) dialConn(ctx context.Context, remote *enode.Node) (*quic.C
 	dialCtx, cancel := context.WithTimeout(ctx, bulkDialTimeout)
 	defer cancel()
 
-	releaseWindow, err := reserveBulkQUICWindow(b.windows)
-	if err != nil {
-		return nil, err
-	}
+	// Outbound dials in flight are bounded by the session set (one dial per
+	// session, one session per live RLPx peer), and the lease taken when the
+	// caller commits the connection bounds the established connection, so no
+	// separate pre-auth byte reservation is needed here.
 	conn, err := b.transport.Dial(dialCtx, net.UDPAddrFromAddrPort(endpoint), newBulkSidecarVerifiedTLSConfig(), b.config)
 	if err != nil {
-		releaseWindow()
 		return nil, err
 	}
-	context.AfterFunc(conn.Context(), releaseWindow)
 	stop := context.AfterFunc(ctx, func() {
 		if err := conn.CloseWithError(bulkSidecarCloseErrorCode, "bulk dial cancelled"); err != nil {
 			b.log.Debug("Bulk dial close failed", "err", err)
 		}
 	})
 	defer stop()
+	// initiateAuth completes the mutual proof and then reads the receiver's
+	// admission result; it returns errBulkAdmissionRefused if the receiver, acting
+	// as the primary authority, declined this (fallback) dial. The caller then
+	// waits for the preferred inbound instead of exposing a connection the
+	// receiver never committed.
 	if err := b.initiateAuth(conn, remote); err != nil {
 		_ = conn.CloseWithError(bulkSidecarProtocolError, err.Error())
 		return nil, err
-	}
-	if err := b.admitAuthenticatedConn(conn.Context()); err != nil {
-		return nil, errors.Join(err, conn.CloseWithError(bulkSidecarCloseErrorCode, err.Error()))
 	}
 	return conn, nil
 }

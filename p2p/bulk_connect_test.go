@@ -19,19 +19,38 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/enr"
 )
 
-func TestBulkConnectionRetryBound(t *testing.T) {
+func TestBulkConnectionMissingEndpointWaitsForFallback(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		session := newHelloTestSession()
-		session.sidecar.localID = enode.ID{}
+		session.sidecar.closeCh = make(chan struct{})
+		session.sidecar.localID = enode.ID{} // lower ID: this node is the primary
 		session.remote = enode.NewV4(&newkey().PublicKey, net.IPv4(127, 0, 0, 1), 30303, 30303)
-		started := time.Now()
-		conn, err := session.ensureConn(t.Context())
-		require.ErrorIs(t, err, errBulkSidecarNoQUIC)
-		require.Nil(t, conn)
-		require.Equal(t, 100*time.Millisecond, time.Since(started), "retry exactly once with a delay")
-		require.False(t, session.dialing)
-		require.Nil(t, session.dialWait)
-		require.Nil(t, session.dialCancel)
+		require.True(t, session.shouldDial(session.peer))
+
+		result := make(chan error, 1)
+		var got *quic.Conn
+		go func() {
+			conn, err := session.ensureConn(t.Context())
+			got = conn
+			result <- err
+		}()
+		// The dial fails immediately (no endpoint), yet setup keeps waiting.
+		synctest.Wait()
+		select {
+		case <-result:
+			t.Fatal("missing-endpoint primary must wait for the fallback, not fail")
+		default:
+		}
+		require.False(t, session.dialing, "the failed dial must not stay in flight")
+
+		// The peer's fallback dial arrives and is committed by the accept worker.
+		want := new(quic.Conn)
+		session.lock.Lock()
+		session.conn, session.connClosed = want, make(chan struct{})
+		session.signalConnLocked()
+		session.lock.Unlock()
+		require.NoError(t, <-result)
+		require.Equal(t, want, got)
 	})
 }
 
@@ -42,7 +61,7 @@ func TestBulkConnectionSetupDeadline(t *testing.T) {
 		conn, err := session.ensureConn(t.Context())
 		require.ErrorIs(t, err, context.DeadlineExceeded)
 		require.Nil(t, conn)
-		require.Equal(t, 20100*time.Millisecond, time.Since(started))
+		require.Equal(t, bulkConnectionSetupTimeout, time.Since(started))
 	})
 }
 
@@ -52,10 +71,10 @@ func TestBulkChannelDeadlineStartsAfterConnection(t *testing.T) {
 		session.remote = enode.SignNull(new(enr.Record), session.remoteID)
 		session.peer = newTestTrackedPeer(session.remote)
 		session.sidecar.sessions = map[enode.ID]*bulkSession{session.remoteID: session}
-		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 50*time.Second)
 		defer cancel()
 		go func() {
-			time.Sleep(18 * time.Second)
+			time.Sleep(38 * time.Second)
 			session.lock.Lock()
 			session.conn, session.connClosed = new(quic.Conn), make(chan struct{})
 			session.signalConnLocked()
@@ -65,7 +84,7 @@ func TestBulkChannelDeadlineStartsAfterConnection(t *testing.T) {
 		rw, err := session.sidecar.OpenChannelContext(ctx, session.peer, "eth-control")
 		require.ErrorIs(t, err, errBulkChannelTimeout)
 		require.Nil(t, rw)
-		require.Equal(t, 23*time.Second, time.Since(started))
+		require.Equal(t, 43*time.Second, time.Since(started))
 		require.Empty(t, session.waiters)
 	})
 }
@@ -205,8 +224,19 @@ func TestBulkConnectionRejectedAttempts(t *testing.T) {
 		return nil, errors.New("unavailable")
 	})
 	require.NoError(t, left.db.UpdateNode(right.localnode.Node()))
-	rw, err := left.bulk.OpenChannelContext(t.Context(), lp, "eth-control")
-	require.Error(t, err)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var rw MsgReadWriter
+	result := make(chan error, 1)
+	go func() {
+		var err error
+		rw, err = left.bulk.OpenChannelContext(ctx, lp, "eth-control")
+		result <- err
+	}()
+	require.Eventually(t, func() bool { return attempts.Load() == 2 }, 2*time.Second, time.Millisecond)
+	require.Never(t, func() bool { return attempts.Load() > 2 }, 2*bulkConnectionRetryDelay, time.Millisecond)
+	cancel()
+	require.ErrorIs(t, <-result, context.Canceled)
 	require.Nil(t, rw)
 	require.Equal(t, int32(2), attempts.Load(), "a caller must stop after its second rejected attempt")
 	require.Zero(t, left.bulk.Status().ActiveSessions)

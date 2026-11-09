@@ -5,6 +5,8 @@ import (
 	"errors"
 	"io"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/quic-go/quic-go"
 	"github.com/stretchr/testify/require"
@@ -43,25 +45,42 @@ func TestBulkSessionDialWaitOutcomes(t *testing.T) {
 }
 
 func TestBulkSessionPendingDialAndClose(t *testing.T) {
-	session := newHelloTestSession()
-	session.sidecar.localID = enode.ID{}
-	session.dialing, session.dialWait = true, make(chan struct{})
-	close(session.dialWait)
-	_, err := session.ensureConn(t.Context())
-	require.ErrorIs(t, err, errBulkSidecarNoPeer)
-	ctx, cancel := context.WithCancel(t.Context())
-	session.dialCancel = cancel
-	session.close()
-	require.ErrorIs(t, ctx.Err(), context.Canceled)
-	_, err = session.waitIncomingConn(t.Context())
-	require.ErrorIs(t, err, io.EOF)
-	_, ok := session.getChannel("eth-bulk")
-	require.False(t, ok)
-	session.closed = false
-	_, err = session.waitIncomingConn(ctx)
-	require.ErrorIs(t, err, context.Canceled)
-	_, err = session.openChannel(t.Context(), "unknown")
-	require.ErrorContains(t, err, "invalid bulk channel")
+	synctest.Test(t, func(t *testing.T) {
+		session := newHelloTestSession()
+		session.sidecar.localID = enode.ID{}
+		session.dialing, session.dialWait = true, make(chan struct{})
+		close(session.dialWait)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		result := make(chan error, 1)
+		go func() { _, err := session.ensureConn(ctx); result <- err }()
+		synctest.Wait()
+		time.Sleep(bulkConnectionRetryDelay)
+		synctest.Wait()
+		select {
+		case err := <-result:
+			t.Fatalf("setup stopped waiting for an incoming connection: %v", err)
+		default:
+		}
+		started := time.Now()
+		cancel()
+		require.ErrorIs(t, <-result, context.Canceled)
+		require.Zero(t, time.Since(started))
+
+		closeCtx, closeCancel := context.WithCancel(t.Context())
+		session.dialCancel = closeCancel
+		session.close()
+		require.ErrorIs(t, closeCtx.Err(), context.Canceled)
+		_, err := session.waitIncomingConn(t.Context())
+		require.ErrorIs(t, err, io.EOF)
+		_, ok := session.getChannel("eth-bulk")
+		require.False(t, ok)
+		session.closed = false
+		_, err = session.waitIncomingConn(closeCtx)
+		require.ErrorIs(t, err, context.Canceled)
+		_, err = session.openChannel(t.Context(), "unknown")
+		require.ErrorContains(t, err, "invalid bulk channel")
+	})
 }
 
 func TestBulkSessionChannelWaitersAndLimits(t *testing.T) {

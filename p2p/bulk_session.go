@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"slices"
 	"sync"
 
@@ -31,28 +32,53 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/enode"
 )
 
+// The auth stream stays open until the dialer receives this admission decision.
 func (b *BulkSidecar) adoptConn(peer *Peer, conn *quic.Conn) *bulkSession {
-	remote := peer.Node()
-	session := b.peerSession(remote, peer)
+	session := b.peerSession(peer.Node(), peer)
 	if session == nil {
 		return nil
 	}
 	session.lock.Lock()
 	defer session.lock.Unlock()
-	if session.closed {
+	if !session.acceptInboundLocked(conn) {
 		return nil
 	}
-	if session.liveConnLocked() != nil {
-		return nil
-	}
-	session.conn = conn
-	session.connClosed = conn.Context().Done()
-	session.channels = make(map[string]MsgReadWriter)
-	session.signalConnLocked()
-	bulkSidecarSessionMeter.Mark(1)
-	b.stats.markSessionEstablished()
-	b.log.Debug("Bulk sidecar session established", "peer", remote.ID(), "remote", conn.RemoteAddr())
 	return session
+}
+
+// The RLPx dialer arbitrates crossed dials: it refuses fallback connections while
+// its preferred dial is in flight. Requires s.lock.
+func (s *bulkSession) acceptInboundLocked(conn *quic.Conn) bool {
+	if s.closed || s.liveConnLocked() != nil {
+		return false
+	}
+	if s.shouldDial(s.peer) {
+		if s.preferredDialing {
+			return false
+		}
+	} else if s.dialing && s.dialCancel != nil {
+		s.dialCancel()
+	}
+	return s.commitLocked(conn)
+}
+
+// Never replace a committed connection: callers may already hold its lanes.
+// Requires s.lock.
+func (s *bulkSession) commitLocked(conn *quic.Conn) bool {
+	if s.closed || s.conn != nil {
+		return false
+	}
+	if err := s.sidecar.admitAuthenticatedConn(conn.Context(), s.remoteID); err != nil {
+		return false
+	}
+	s.conn = conn
+	s.connClosed = conn.Context().Done()
+	s.channels = make(map[string]MsgReadWriter)
+	s.signalConnLocked()
+	bulkSidecarSessionMeter.Mark(1)
+	s.sidecar.stats.markSessionEstablished()
+	s.sidecar.log.Debug("Bulk sidecar session established", "peer", s.remoteID, "remote", conn.RemoteAddr())
+	return true
 }
 
 func (s *bulkSession) runConn(conn *quic.Conn) {
@@ -147,32 +173,119 @@ func (s *bulkSession) connectOnce(ctx context.Context) (*quic.Conn, error) {
 		s.lock.Unlock()
 		return s.waitDial(ctx, wait)
 	}
-	if !s.shouldDial(s.peer) {
+	primary := s.shouldDial(s.peer)
+	s.lock.Unlock()
+	if primary {
+		return s.startDial(ctx)
+	}
+	return s.acceptOrFallback(ctx)
+}
+
+// Concurrent lane opens share one dial and its attempt budget.
+func (s *bulkSession) startDial(ctx context.Context) (*quic.Conn, error) {
+	s.lock.Lock()
+	if s.closed {
 		s.lock.Unlock()
-		return s.waitIncomingConn(ctx)
+		return nil, io.EOF
+	}
+	if conn := s.liveConnLocked(); conn != nil {
+		s.lock.Unlock()
+		return conn, nil
+	}
+	if s.dialing {
+		wait := s.dialWait
+		s.lock.Unlock()
+		return s.waitDial(ctx, wait)
 	}
 	s.dialing = true
+	// As the primary initiator our dial is preferred: flag it so an inbound
+	// fallback dial is refused until this attempt settles (see acceptInboundLocked).
+	s.preferredDialing = s.shouldDial(s.peer)
 	wait := make(chan struct{})
 	s.dialWait = wait
-	ctx, cancel := context.WithTimeout(ctx, bulkConnectionAttemptTimeout)
+	dialCtx, cancel := context.WithTimeout(ctx, bulkConnectionAttemptTimeout)
 	s.dialCancel = cancel
 	remote := s.remote
 	s.lock.Unlock()
 	defer cancel()
-	return s.dial(ctx, remote, wait)
+	return s.dial(dialCtx, remote, wait)
+}
+
+// Give the RLPx dialer time to connect before trying the reverse direction.
+// Admission arbitration, rather than this delay, prevents competing commits.
+func (s *bulkSession) acceptOrFallback(ctx context.Context) (*quic.Conn, error) {
+	graceCtx, cancel := context.WithTimeout(ctx, bulkFallbackGrace)
+	conn, err := s.waitIncomingConn(graceCtx)
+	cancel()
+	if err == nil {
+		return conn, nil
+	}
+	// A real caller cancellation or sidecar/peer shutdown ends setup; only grace
+	// expiry with the parent still live advances to the fallback dial.
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		return nil, err
+	}
+	return s.fallbackDial(ctx)
+}
+
+// A refusal can mean the preferred dial is still in flight. Retry within the
+// setup budget so a stale preferred endpoint does not strand every lane.
+func (s *bulkSession) fallbackDial(ctx context.Context) (*quic.Conn, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		s.lock.Lock()
+		closed := s.closed
+		remote := s.remote
+		s.lock.Unlock()
+		if closed {
+			return nil, io.EOF
+		}
+		if _, ok := bulkRecordQUICEndpoint(s.sidecar.peerRecord(remote)); !ok {
+			return s.waitIncomingConn(ctx)
+		}
+		conn, err := s.startDial(ctx)
+		if err == nil {
+			return conn, nil
+		}
+		if errors.Is(err, errBulkSidecarNoQUIC) {
+			return s.waitIncomingConn(ctx)
+		}
+		if !errors.Is(err, errBulkAdmissionRefused) {
+			return nil, err
+		}
+		if retryErr := s.waitRefusedRetry(ctx); retryErr != nil {
+			return nil, retryErr
+		}
+	}
+}
+
+func bulkRecordQUICEndpoint(remote *enode.Node) (netip.AddrPort, bool) {
+	if remote == nil {
+		return netip.AddrPort{}, false
+	}
+	return remote.QUICEndpoint()
 }
 
 // The RLPx dialer has the remote endpoint; the acceptor may know only its
 // identity. Elect the same connection initiator at both ends, independently
 // of the lower-ID stream opener. Directionless peers retain the ID fallback.
 func (s *bulkSession) shouldDial(peer *Peer) bool {
+	return bulkPrimaryInitiator(s.sidecar.localID, s.remoteID, peer)
+}
+
+func bulkPrimaryInitiator(localID, remoteID enode.ID, peer *Peer) bool {
 	if rlpxDialed(peer) {
 		return true
 	}
 	if rlpxInbound(peer) {
 		return false
 	}
-	return bytes.Compare(s.sidecar.localID[:], s.remoteID[:]) < 0
+	return bytes.Compare(localID[:], remoteID[:]) < 0
 }
 
 func rlpxInbound(peer *Peer) bool {
@@ -213,6 +326,10 @@ func (s *bulkSession) waitIncomingConn(ctx context.Context) (*quic.Conn, error) 
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
+		case <-s.sidecar.closeCh:
+			// Sidecar shutdown must end the wait promptly even before the session is
+			// registered for session.close to reach it.
+			return nil, io.EOF
 		case <-ready:
 		}
 	}
@@ -261,6 +378,7 @@ func (s *bulkSession) dial(ctx context.Context, remote *enode.Node, wait chan st
 	s.lock.Lock()
 	defer s.lock.Unlock()
 	s.dialing = false
+	s.preferredDialing = false
 	close(wait)
 	s.dialWait = nil
 	s.dialCancel = nil
@@ -270,19 +388,19 @@ func (s *bulkSession) dial(ctx context.Context, remote *enode.Node, wait chan st
 	if s.closed || ctx.Err() != nil {
 		return nil, errors.Join(io.EOF, conn.CloseWithError(bulkSidecarCloseErrorCode, "bulk peer dropped"))
 	}
-	if s.liveConnLocked() == nil {
-		s.conn = conn
-		s.connClosed = conn.Context().Done()
-		s.channels = make(map[string]MsgReadWriter)
-		s.signalConnLocked()
-		bulkSidecarSessionMeter.Mark(1)
-		s.sidecar.stats.markSessionEstablished()
-		s.sidecar.log.Debug("Bulk sidecar session established", "peer", s.remoteID, "remote", conn.RemoteAddr())
+	// dialConn only returns once the receiver has committed this connection (its
+	// admission ack), so committing it locally exposes a connection both ends
+	// agree on. A fallback dialer may instead find a preferred inbound already
+	// committed; it then drops this one.
+	if s.commitLocked(conn) {
 		s.sidecar.startWorker(func() { s.runConn(conn) })
 		return conn, nil
 	}
 	_ = conn.CloseWithError(bulkSidecarCloseErrorCode, "bulk connection superseded")
-	return s.conn, nil
+	if existing := s.liveConnLocked(); existing != nil {
+		return existing, nil
+	}
+	return nil, io.EOF
 }
 
 func (s *bulkSession) refreshRecord(remote *enode.Node) *enode.Node {
