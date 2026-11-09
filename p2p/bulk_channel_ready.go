@@ -54,6 +54,15 @@ func (s *bulkSession) claimChannel(ctx context.Context, channel string, channelR
 	if !ok || rw.ready == nil {
 		return channelRW, nil
 	}
+	// A later caller's cancellation must not close a lane already owned by the
+	// first caller.
+	select {
+	case <-rw.ready.done:
+		if rw.ready.err == nil {
+			return rw, nil
+		}
+	default:
+	}
 	err := ctx.Err()
 	if err == nil {
 		rw.ready.once.Do(func() { close(rw.ready.claimed) })
