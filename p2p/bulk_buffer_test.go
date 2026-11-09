@@ -103,9 +103,18 @@ func TestBulkBufferProtocolSharing(t *testing.T) {
 			require.NoError(t, rw.Close())
 		}
 	}
+	// Peers derived from one pool share the aggregate semaphores while keeping
+	// independent per-peer caps.
+	pool := newBulkBufferPool()
+	first, second := pool.newBudget(), pool.newBudget()
+	require.NotSame(t, first.peer, second.peer)
+	require.Same(t, first.global, second.global)
+	require.Same(t, first.writeGlobal, second.writeGlobal)
+
+	// Standalone fallbacks own private aggregates, so separate nodes never
+	// share the global allowance.
 	other := bulkBuffersFor(newStressMsgRW())
-	require.NotSame(t, budget.peer, other.peer)
-	require.Same(t, budget.global, other.global)
+	require.NotSame(t, first.global, other.global)
 }
 
 type observedBufferReader struct {

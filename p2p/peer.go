@@ -119,6 +119,9 @@ type Peer struct {
 	// events receives message send / receive events if set
 	events   *event.Feed
 	testPipe *MsgPipeRW // for testing
+
+	// Set before protocols start; nil for standalone peers.
+	bulkPool *bulkBufferPool
 }
 
 // NewPeer returns a peer for testing purposes.
@@ -512,9 +515,16 @@ outer:
 	return result
 }
 
+func (p *Peer) newBulkBudget() *bulkBufferBudget {
+	if p.bulkPool != nil {
+		return p.bulkPool.newBudget()
+	}
+	return newBulkBufferBudget()
+}
+
 func (p *Peer) startProtocols(writeStart <-chan struct{}, writeErr chan<- error) {
 	p.wg.Add(len(p.running))
-	buffers := newBulkBufferBudget()
+	buffers := p.newBulkBudget()
 	for _, proto := range p.running {
 		proto.buffers = buffers
 		proto.closed = p.closed

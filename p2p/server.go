@@ -86,6 +86,7 @@ type Server struct {
 
 	listener     net.Listener
 	bulk         *BulkSidecar
+	bulkBuffers  *bulkBufferPool
 	ourHandshake *protoHandshake
 	loopWG       sync.WaitGroup // loop, listenLoop
 	peerFeed     event.Feed
@@ -626,6 +627,8 @@ func (srv *Server) Start() (err error) {
 	if srv.peerJail == nil {
 		srv.peerJail = newPeerJail(5*time.Minute, srv.clock)
 	}
+
+	srv.bulkBuffers = newBulkBufferPool()
 
 	if err := srv.setupLocalNode(); err != nil {
 		return err
@@ -1343,6 +1346,7 @@ func (srv *Server) checkpoint(c *conn, stage chan<- *conn) error {
 
 func (srv *Server) launchPeer(c *conn) *Peer {
 	p := newPeer(srv.log, c, srv.Protocols)
+	p.bulkPool = srv.bulkBuffers
 	if srv.EnableMsgEvents {
 		// If message events are enabled, pass the peerFeed
 		// to the peer.
