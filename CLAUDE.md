@@ -7,6 +7,9 @@
 - Open all negotiated sidecar lanes independently across ETH, SNAP, and WIT. Test a missed lane through the production attachment path, including progress in the other protocols before its acknowledgement times out.
 - Connection setup must not consume the per-lane open timeout. Cover transient rejection and a full dial timeout with all ten lanes opening concurrently; bound retries and keep cancellation and shutdown prompt.
 
+- Keep connection initiation tied to RLPx direction and stream opening tied to node ID. Cover both node-ID orderings and one-sided endpoint knowledge.
+- Keep sidecar-dependent policy scoped to the local node's peers; multiple node instances may have different settings in the same process.
+
 ## Rebroadcast scheduling
 
 Queue-offer and acceptance accounting follows the rebroadcast ticker cadence. Test delayed callbacks and skipped ticks through the real pool loop; moving timestamps to callback wall time can silently double the retry interval.

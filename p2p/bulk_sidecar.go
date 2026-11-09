@@ -445,10 +445,13 @@ func (rw *bulkStreamMsgRW) ReadMsg() (Msg, error) {
 	if err := rw.stream.SetReadDeadline(time.Time{}); err != nil {
 		return Msg{}, err
 	}
+	// RLPx stamps ReceivedAt in Peer.readLoop; a framed QUIC read has no such
+	// hook, so stamp arrival here to keep msg.Time() meaningful on bulk lanes.
 	msg := Msg{
-		Code:    binary.BigEndian.Uint64(header[:8]),
-		Size:    size,
-		Payload: io.LimitReader(&bulkPayloadReader{stream: rw.stream}, int64(size)),
+		Code:       binary.BigEndian.Uint64(header[:8]),
+		Size:       size,
+		Payload:    io.LimitReader(&bulkPayloadReader{stream: rw.stream}, int64(size)),
+		ReceivedAt: time.Now(),
 	}
 	if rw.stats != nil {
 		rw.stats.markChannelRead(rw.channel)

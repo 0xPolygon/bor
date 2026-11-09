@@ -85,7 +85,7 @@ func TestPeerPolicyBodyServingAdapter(t *testing.T) {
 	hash := backend.chain.GetBlockByNumber(1).Hash()
 	for _, enabled := range []bool{false, true} {
 		w := &replyTestRW{sent: make(chan p2p.Msg, 1)}
-		p := &Peer{Peer: configuredLimitsTestPeer(t, "trusted"), rw: w}
+		p := &Peer{Peer: configuredLimitsTestPeer(t, "trusted"), rw: w, heavyResponseLimited: true}
 		var got peerpolicy.Evidence
 		if enabled {
 			p.SetObserver(func(e peerpolicy.Evidence) {

@@ -24,6 +24,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/ethereum/go-ethereum/log"
 )
@@ -392,6 +393,12 @@ func (rw *routedMsgReadWriter) forwardBulkMsg(ctx context.Context, lane *routedB
 	msg, err := lane.rw.ReadMsg()
 	if err != nil {
 		return err
+	}
+	// The lane reader stamps ReceivedAt on real QUIC frames; keep that time and
+	// only stamp routed delivery when it is missing, so msg.Time() survives the
+	// handoff to the protocol handler.
+	if msg.ReceivedAt.IsZero() {
+		msg.ReceivedAt = time.Now()
 	}
 	if msg.Size > bulkMaxMessageSize {
 		return fmt.Errorf("routed message too large: %d", msg.Size)

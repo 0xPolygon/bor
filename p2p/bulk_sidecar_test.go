@@ -122,16 +122,19 @@ func testBulkSidecarOpenChannelRoundTrip(t *testing.T, inbound string) {
 	leftPeer := newTestTrackedPeer(right.localnode.Node())
 	rightPeer := newTestTrackedPeer(left.localnode.Node())
 	if inbound != "none" {
-		local, remote, peer := left, right, leftPeer
+		local, remote, inPeer, outPeer := left, right, leftPeer, rightPeer
 		if inbound == "responder" {
-			local, remote, peer = right, left, rightPeer
+			local, remote, inPeer, outPeer = right, left, rightPeer, leftPeer
 		}
 		if err := local.db.UpdateNode(remote.localnode.Node()); err != nil {
 			t.Fatal(err)
 		}
-		peer.rw.node = enode.NewV4(&remote.server.PrivateKey.PublicKey, net.IPv4(127, 0, 0, 1), 40000, 40000)
-		peer.rw.flags = inboundConn
-		if _, ok := peer.Node().QUICEndpoint(); ok {
+		// The inbound side accepted RLPx with only a synthetic record; the other
+		// side dialed RLPx and holds the peer's full ENR, so it dials the sidecar.
+		inPeer.rw.node = enode.NewV4(&remote.server.PrivateKey.PublicKey, net.IPv4(127, 0, 0, 1), 40000, 40000)
+		inPeer.rw.flags = inboundConn
+		outPeer.rw.flags = dynDialedConn
+		if _, ok := inPeer.Node().QUICEndpoint(); ok {
 			t.Fatal("inbound RLPx peer unexpectedly has a QUIC endpoint")
 		}
 	}

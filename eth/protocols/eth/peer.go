@@ -87,6 +87,10 @@ type Peer struct {
 	limits    peerLimits
 	lastRange atomic.Pointer[BlockRangeUpdatePacket]
 
+	// heavyResponseLimited gates the node-wide body/receipt serving limiter for
+	// this peer. Set once before message processing from the local sidecar flag.
+	heavyResponseLimited bool
+
 	head common.Hash // Latest advertised head block hash
 	td   *big.Int    // Latest advertised head block total difficulty
 
@@ -155,6 +159,12 @@ func (p *Peer) Close() {
 // ID retrieves the peer's unique identifier.
 func (p *Peer) ID() string {
 	return p.id
+}
+
+// SetHeavyResponseLimited enables the node-wide body/receipt serving limiter for
+// this peer. Call once before message processing begins.
+func (p *Peer) SetHeavyResponseLimited(limited bool) {
+	p.heavyResponseLimited = limited
 }
 
 // bulkAttacher updates lane state without replacing the protocol's reader.

@@ -530,6 +530,9 @@ func (h *handler) runEthPeer(peer *eth.Peer, handler eth.Handler) error {
 	// contribution session. Install observation only after admission succeeds.
 	h.observeProtocolPeer(peer)
 	h.observeWitnessPeer(wit)
+	// The node-wide body/receipt serving limiter only applies to peers on nodes
+	// running the bulk sidecar locally.
+	peer.SetHeavyResponseLimited(h.p2pServer != nil && h.p2pServer.EnableBulkSidecar)
 	h.attachBulkSidecar(peer, snap, wit)
 	h.chainSync.handlePeerEvent()
 

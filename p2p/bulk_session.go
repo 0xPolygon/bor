@@ -142,14 +142,14 @@ func (s *bulkSession) connectOnce(ctx context.Context) (*quic.Conn, error) {
 		s.lock.Unlock()
 		return conn, nil
 	}
-	if bytes.Compare(s.sidecar.localID[:], s.remoteID[:]) > 0 {
-		s.lock.Unlock()
-		return s.waitIncomingConn(ctx)
-	}
 	if s.dialing {
 		wait := s.dialWait
 		s.lock.Unlock()
 		return s.waitDial(ctx, wait)
+	}
+	if !s.shouldDial(s.peer) {
+		s.lock.Unlock()
+		return s.waitIncomingConn(ctx)
 	}
 	s.dialing = true
 	wait := make(chan struct{})
@@ -160,6 +160,27 @@ func (s *bulkSession) connectOnce(ctx context.Context) (*quic.Conn, error) {
 	s.lock.Unlock()
 	defer cancel()
 	return s.dial(ctx, remote, wait)
+}
+
+// The RLPx dialer has the remote endpoint; the acceptor may know only its
+// identity. Elect the same connection initiator at both ends, independently
+// of the lower-ID stream opener. Directionless peers retain the ID fallback.
+func (s *bulkSession) shouldDial(peer *Peer) bool {
+	if rlpxDialed(peer) {
+		return true
+	}
+	if rlpxInbound(peer) {
+		return false
+	}
+	return bytes.Compare(s.sidecar.localID[:], s.remoteID[:]) < 0
+}
+
+func rlpxInbound(peer *Peer) bool {
+	return peer != nil && peer.rw != nil && peer.rw.is(inboundConn)
+}
+
+func rlpxDialed(peer *Peer) bool {
+	return peer != nil && peer.rw != nil && (peer.rw.is(dynDialedConn) || peer.rw.is(staticDialedConn))
 }
 
 // liveConnLocked requires s.lock. A closed transport must never be reused.
@@ -174,9 +195,7 @@ func (s *bulkSession) liveConnLocked() *quic.Conn {
 	return s.conn
 }
 
-// waitIncomingConn parks until the lower-ID side dials in. The local node never
-// dials in that direction, so there is nothing to poll for — adoptConn and
-// close both wake the waiters directly.
+// adoptConn and close wake connection waiters directly, without polling.
 func (s *bulkSession) waitIncomingConn(ctx context.Context) (*quic.Conn, error) {
 	for {
 		s.lock.Lock()
