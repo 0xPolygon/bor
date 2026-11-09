@@ -1117,7 +1117,7 @@ func TestHandleWitnessFetchSuccess(t *testing.T) {
 
 	// Test successful witness fetch
 	announcedAt := time.Now()
-	manager.handleWitnessFetchSuccess("fetch-peer", block.Hash(), witness, announcedAt, false)
+	manager.handleWitnessFetchSuccess("fetch-peer", block.Hash(), witness, announcedAt, WitnessFromProducer)
 
 	time.Sleep(10 * time.Millisecond) // Give time for async processing
 
@@ -1165,7 +1165,7 @@ func TestHandleWitnessFetchSuccessNoPending(t *testing.T) {
 
 	// Test with no pending state - should handle gracefully
 	announcedAt := time.Now()
-	manager.handleWitnessFetchSuccess("fetch-peer", block.Hash(), witness, announcedAt, false)
+	manager.handleWitnessFetchSuccess("fetch-peer", block.Hash(), witness, announcedAt, WitnessFromProducer)
 
 	// Should not panic or cause issues
 }
@@ -1213,7 +1213,7 @@ func TestHandleWitnessFetchSuccessWitnessAlreadyPresent(t *testing.T) {
 
 	// Test with witness already present - should be ignored
 	announcedAt := time.Now()
-	manager.handleWitnessFetchSuccess("fetch-peer", block.Hash(), witness2, announcedAt, false)
+	manager.handleWitnessFetchSuccess("fetch-peer", block.Hash(), witness2, announcedAt, WitnessFromProducer)
 
 	// Verify original witness is still there
 	if state.op.witness != witness1 {
@@ -2805,7 +2805,7 @@ func TestHandleWitnessFetchSuccessUpdatesBlockTimestamps(t *testing.T) {
 	m.mu.Unlock()
 
 	announcedAt := time.Now().Add(-time.Second)
-	m.handleWitnessFetchSuccess("peer", hash, witness, announcedAt, false)
+	m.handleWitnessFetchSuccess("peer", hash, witness, announcedAt, WitnessFromProducer)
 
 	select {
 	case req := <-enqueueCh:

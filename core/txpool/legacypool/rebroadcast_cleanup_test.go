@@ -57,7 +57,11 @@ func TestRebroadcastRemovalDuringDemotion(t *testing.T) {
 			if mode == "balance" {
 				pool.currentState.SetBalance(from, new(uint256.Int), tracing.BalanceChangeUnspecified)
 			} else {
+				// Re-add it so the lookup counts it as conditional, as it would one that
+				// arrived with options; demotion skips the walk when none are counted.
+				pool.all.Remove(tx.Hash())
 				tx.PutOptions(&types.OptionsPIP15{BlockNumberMax: big.NewInt(-1)})
+				pool.all.Add(tx)
 			}
 			pool.demoteUnexecutables()
 			if pool.all.Get(tx.Hash()) != nil || len(pool.lastRebroadcastAttempt) != 0 {

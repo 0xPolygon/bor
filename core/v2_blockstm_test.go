@@ -171,7 +171,7 @@ func testExecutorBalanceValidation(t *testing.T) {
 	store := blockstm.NewMVStore()
 	bals := blockstm.NewMVBalanceStore()
 
-	result := ExecuteV2BlockSTM(context.Background(), tasks, base, store, bals, blockCtx, common.Hash{}, vm.Config{}, chainConfig, 10000000, 2, nil, nil)
+	result := ExecuteV2BlockSTM(context.Background(), tasks, base, store, bals, blockCtx, common.Hash{}, vm.Config{}, chainConfig, 10000000, 2, nil, nil, nil)
 
 	t.Logf("Execution: execs=%d vfails=%d", result.ExecCount, result.VFailCount)
 
@@ -388,7 +388,7 @@ func TestV2_SelfDestructTransferLog_MispairsWithSerial(t *testing.T) {
 	readBase.EnableConcurrentReads()
 	res := ExecuteV2BlockSTM(context.Background(), []V2Task{{Index: 0, Tx: tx, Msg: msg}},
 		readBase, blockstm.NewMVStore(), blockstm.NewMVBalanceStore(),
-		blockCtx, common.Hash{}, vm.Config{}, &cfg, blockCtx.GasLimit, 1, v2DB, nil)
+		blockCtx, common.Hash{}, vm.Config{}, &cfg, blockCtx.GasLimit, 1, v2DB, nil, nil)
 	v2DB.Finalise(true)
 
 	serialLog := decodeTransferLog(t, serialReceipt)

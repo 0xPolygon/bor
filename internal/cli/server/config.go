@@ -399,6 +399,17 @@ type TxPoolConfig struct {
 	StrandedLifetime    time.Duration `hcl:"-,optional" toml:"-"`
 	StrandedLifetimeRaw string        `hcl:"strandedlifetime,optional" toml:"strandedlifetime,optional"`
 
+	// Conditional enables PIP-15 conditional transactions (bor_sendRawTransactionConditional).
+	// They are never gossiped, so only a block producer can include them
+	Conditional bool `hcl:"conditional,optional" toml:"conditional,optional"`
+
+	// ConditionalLifetime is the maximum amount of time a conditional transaction can stay in the pool
+	ConditionalLifetime    time.Duration `hcl:"-,optional" toml:"-"`
+	ConditionalLifetimeRaw string        `hcl:"conditionallifetime,optional" toml:"conditionallifetime,optional"`
+
+	// ConditionalSlots is the maximum number of known accounts and slots across all pooled conditional transactions
+	ConditionalSlots uint64 `hcl:"conditionalslots,optional" toml:"conditionalslots,optional"`
+
 	// FilteredAddressesFile is the path to newline-separated list of addresses whose transactions will be filtered
 	FilteredAddressesFile string `hcl:"filtered-addresses,optional" toml:"filtered-addresses,optional"`
 
@@ -995,6 +1006,9 @@ func DefaultConfig() *Config {
 			GlobalQueue:          131072,
 			LifeTime:             3 * time.Hour,
 			StrandedLifetime:     3 * time.Hour,
+			Conditional:          false,
+			ConditionalLifetime:  5 * time.Minute,
+			ConditionalSlots:     10000,
 			Rebroadcast:          true,
 			RebroadcastInterval:  30 * time.Second,
 			RebroadcastMaxAge:    10 * time.Minute,
@@ -1250,6 +1264,7 @@ func (c *Config) fillTimeDurations() error {
 		{"jsonrpc.http.ep-requesttimeout", &c.JsonRPC.Http.ExecutionPoolRequestTimeout, &c.JsonRPC.Http.ExecutionPoolRequestTimeoutRaw},
 		{"txpool.lifetime", &c.TxPool.LifeTime, &c.TxPool.LifeTimeRaw},
 		{"txpool.strandedlifetime", &c.TxPool.StrandedLifetime, &c.TxPool.StrandedLifetimeRaw},
+		{"txpool.conditionallifetime", &c.TxPool.ConditionalLifetime, &c.TxPool.ConditionalLifetimeRaw},
 		{"txpool.rejournal", &c.TxPool.Rejournal, &c.TxPool.RejournalRaw},
 		{"txpool.rebroadcast-interval", &c.TxPool.RebroadcastInterval, &c.TxPool.RebroadcastIntervalRaw},
 		{"txpool.rebroadcast-max-age", &c.TxPool.RebroadcastMaxAge, &c.TxPool.RebroadcastMaxAgeRaw},
@@ -1395,6 +1410,9 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.TxPool.GlobalQueue = c.TxPool.GlobalQueue
 		n.TxPool.Lifetime = c.TxPool.LifeTime
 		n.TxPool.StrandedLifetime = c.TxPool.StrandedLifetime
+		n.TxPool.ConditionalTxs = c.TxPool.Conditional
+		n.TxPool.ConditionalLifetime = c.TxPool.ConditionalLifetime
+		n.TxPool.ConditionalSlots = c.TxPool.ConditionalSlots
 
 		// Load filtered addresses during config initialization
 		if filteredAddrs, err := loadFilteredAddresses(c.TxPool.FilteredAddressesFile); err != nil {

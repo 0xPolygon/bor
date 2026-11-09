@@ -420,7 +420,7 @@ func TestBlockFetcherRequiresWitnessAfterBulkBodyFetch(t *testing.T) {
 	case <-time.After(150 * time.Millisecond):
 	}
 
-	if err := tester.fetcher.InjectWitness("peerA", witness, false); err != nil {
+	if err := tester.fetcher.InjectWitness("peerA", witness, WitnessFromProducer); err != nil {
 		t.Fatalf("failed to inject witness: %v", err)
 	}
 

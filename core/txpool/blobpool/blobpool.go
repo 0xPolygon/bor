@@ -452,10 +452,12 @@ func (p *BlobPool) Init(gasTip uint64, head *types.Header, reserver txpool.Reser
 	for addr := range p.index {
 		p.recheck(addr, nil)
 	}
-	var (
-		basefee = uint256.MustFromBig(eip1559.CalcBaseFee(p.chain.Config(), head))
-		blobfee = uint256.NewInt(params.BlobTxMinBlobGasprice)
-	)
+	basefee, err := p.headBaseFee(head)
+	if err != nil {
+		p.Close()
+		return err
+	}
+	blobfee := uint256.NewInt(params.BlobTxMinBlobGasprice)
 	if head.ExcessBlobGas != nil && p.chain.Config().BlobScheduleConfig != nil {
 		blobfee = uint256.MustFromBig(eip4844.CalcBlobFee(p.chain.Config(), head))
 	}
@@ -875,17 +877,19 @@ func (p *BlobPool) Reset(oldHead, newHead *types.Header) {
 		p.limbo.finalize(p.chain.CurrentFinalBlock())
 	}
 	// Reset the price heap for the new set of basefee/blobfee pairs
-	var (
-		basefee = uint256.MustFromBig(eip1559.CalcBaseFee(p.chain.Config(), newHead))
-		blobfee = uint256.MustFromBig(big.NewInt(params.BlobTxMinBlobGasprice))
-	)
-	if newHead.ExcessBlobGas != nil {
-		blobfee = uint256.MustFromBig(eip4844.CalcBlobFee(p.chain.Config(), newHead))
-	}
-	p.evict.reinit(basefee, blobfee, false)
+	basefee, err := p.headBaseFee(newHead)
+	if err != nil {
+		log.Error("Keeping previous blob pool fees", "err", err)
+	} else {
+		blobfee := uint256.MustFromBig(big.NewInt(params.BlobTxMinBlobGasprice))
+		if newHead.ExcessBlobGas != nil {
+			blobfee = uint256.MustFromBig(eip4844.CalcBlobFee(p.chain.Config(), newHead))
+		}
+		p.evict.reinit(basefee, blobfee, false)
 
-	basefeeGauge.Update(int64(basefee.Uint64()))
-	blobfeeGauge.Update(int64(blobfee.Uint64()))
+		basefeeGauge.Update(int64(basefee.Uint64()))
+		blobfeeGauge.Update(int64(blobfee.Uint64()))
+	}
 	p.updateStorageMetrics()
 
 	// Perform the conversion logic at the fork boundary
@@ -2192,9 +2196,21 @@ func (p *BlobPool) Clear() {
 	p.index = make(map[common.Address][]*blobTxMeta)
 	p.spent = make(map[common.Address]*uint256.Int)
 
-	var (
-		basefee = uint256.MustFromBig(eip1559.CalcBaseFee(p.chain.Config(), p.head.Load()))
-		blobfee = uint256.NewInt(params.BlobTxMinBlobGasprice)
-	)
-	p.evict = newPriceHeap(basefee, blobfee, p.index)
+	basefee, err := p.headBaseFee(p.head.Load())
+	if err != nil {
+		// The index is empty, so the heap ordering doesn't depend on the fee.
+		log.Error("Resetting blob pool with zero base fee", "err", err)
+		basefee = new(uint256.Int)
+	}
+	p.evict = newPriceHeap(basefee, uint256.NewInt(params.BlobTxMinBlobGasprice), p.index)
+}
+
+// headBaseFee returns the base fee of the block following head.
+func (p *BlobPool) headBaseFee(head *types.Header) (*uint256.Int, error) {
+	baseFee := eip1559.CalcBaseFee(p.chain.Config(), head)
+	fee, overflow := uint256.FromBig(baseFee)
+	if overflow {
+		return nil, fmt.Errorf("base fee does not fit in 256 bits: bitlen %d", baseFee.BitLen())
+	}
+	return fee, nil
 }
