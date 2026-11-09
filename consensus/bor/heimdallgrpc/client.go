@@ -26,6 +26,7 @@ import (
 	clerkTypes "github.com/0xPolygon/heimdall-v2/x/clerk/types"
 	milestoneTypes "github.com/0xPolygon/heimdall-v2/x/milestone/types"
 	ctypes "github.com/cometbft/cometbft/rpc/core/types"
+	cmtservice "github.com/cosmos/cosmos-sdk/client/grpc/cmtservice"
 )
 
 const (
@@ -39,6 +40,8 @@ type HeimdallGRPCClient struct {
 	closeOnce             sync.Once
 	conn                  *grpc.ClientConn
 	client                *heimdall.HeimdallClient
+	tmServiceClient       cmtservice.ServiceClient
+	statusTimeout         time.Duration
 	borQueryClient        borTypes.QueryClient
 	checkpointQueryClient checkpointTypes.QueryClient
 	clerkQueryClient      clerkTypes.QueryClient
@@ -155,9 +158,16 @@ func NewHeimdallGRPCClient(grpcAddress string, heimdallURL string, timeout time.
 		return nil, err
 	}
 
+	statusTimeout := timeout
+	if statusTimeout <= 0 {
+		statusTimeout = defaultTimeout
+	}
+
 	return &HeimdallGRPCClient{
 		conn:                  conn,
 		client:                restClient,
+		tmServiceClient:       cmtservice.NewServiceClient(conn),
+		statusTimeout:         statusTimeout,
 		borQueryClient:        borTypes.NewQueryClient(conn),
 		checkpointQueryClient: checkpointTypes.NewQueryClient(conn),
 		clerkQueryClient:      clerkTypes.NewQueryClient(conn),
@@ -190,11 +200,31 @@ func (h *HeimdallGRPCClient) Close() {
 	})
 }
 
+// gRPC-only endpoints still need sync status for span waits and health probes.
 func (h *HeimdallGRPCClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
-	if h == nil || h.client == nil {
+	if h == nil {
 		return nil, errNoRESTEndpoint
 	}
-	return h.client.FetchStatus(ctx)
+	if h.client != nil {
+		return h.client.FetchStatus(ctx)
+	}
+	if h.tmServiceClient == nil {
+		return nil, errNoRESTEndpoint
+	}
+	// Bound the call like the REST client's constructor timeout did: a reachable
+	// but unresponsive server must not pin a caller that passed a deadline-less
+	// context. A tighter parent deadline still wins.
+	timeout := h.statusTimeout
+	if timeout <= 0 {
+		timeout = defaultTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	resp, err := h.tmServiceClient.GetSyncing(ctx, &cmtservice.GetSyncingRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("heimdall gRPC sync status: %w", err)
+	}
+	return &ctypes.SyncInfo{CatchingUp: resp.GetSyncing()}, nil
 }
 
 // isLocalhost returns true if host/port refers to localhost/loopback.
