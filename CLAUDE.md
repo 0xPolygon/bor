@@ -21,3 +21,4 @@ Queue-offer and acceptance accounting follows the rebroadcast ticker cadence. Te
 ## Pull request validation
 
 - Test against the latest target-branch merge, including affected test packages. Upstream API changes can break the merge result while the feature branch alone still passes.
+- Go's `-p` limits build commands and test binaries. For Diffguard, `mutation-workers × -p` bounds concurrent package programs; keep this cap explicit when tuning workers or timeouts, and preserve the tests, sampling and thresholds.
