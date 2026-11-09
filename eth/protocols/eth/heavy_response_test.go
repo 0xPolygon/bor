@@ -12,15 +12,16 @@ import (
 )
 
 func TestHeavyResponseQueryReleasesSlot(t *testing.T) {
+	limiter := NewHeavyResponseLimiter()
 	want := []rlp.RawValue{rlp.EmptyList}
-	for range cap(heavyResponseServeSlots) + 1 {
-		got, served := serveHeavyResponseQuery(&Peer{heavyResponseLimited: true}, func() []rlp.RawValue {
-			require.Len(t, heavyResponseServeSlots, 1)
+	for range cap(limiter.slots) + 1 {
+		got, served := serveHeavyResponseQuery(&Peer{heavyResponseLimiter: limiter}, func() []rlp.RawValue {
+			require.Len(t, limiter.slots, 1)
 			return want
 		})
 		require.True(t, served)
 		require.Equal(t, want, got)
-		require.Empty(t, heavyResponseServeSlots)
+		require.Empty(t, limiter.slots)
 	}
 }
 
@@ -35,11 +36,12 @@ func TestHeavyResponseQueryStopsOnShutdown(t *testing.T) {
 	for _, source := range []string{"peer", "transport"} {
 		for _, busy := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/busy=%v", source, busy), func(t *testing.T) {
+				limiter := NewHeavyResponseLimiter()
 				if busy {
-					fillHeavyResponseSlots(t)
+					fillHeavyResponseSlots(t, limiter)
 				}
 				rw := &heavyResponseTestRW{done: make(chan struct{})}
-				peer := &Peer{rw: rw, term: make(chan struct{}), heavyResponseLimited: true}
+				peer := &Peer{rw: rw, term: make(chan struct{}), heavyResponseLimiter: limiter}
 				stop := func() { close(peer.term) }
 				if source == "transport" {
 					stop = func() { close(rw.done) }
@@ -70,9 +72,9 @@ func TestHeavyResponseQueryStopsOnShutdown(t *testing.T) {
 					t.Fatal("shutdown did not release queued query")
 				}
 				if busy {
-					require.Len(t, heavyResponseServeSlots, cap(heavyResponseServeSlots))
+					require.Len(t, limiter.slots, cap(limiter.slots))
 				} else {
-					require.Empty(t, heavyResponseServeSlots)
+					require.Empty(t, limiter.slots)
 				}
 			})
 		}
@@ -96,9 +98,12 @@ func TestHeavyResponseHandlersWaitForCapacity(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/limited=%v", test.name, limited), func(t *testing.T) {
 				rw := &replyTestRW{sent: make(chan p2p.Msg, 1)}
 				peer := &Peer{Peer: configuredLimitsTestPeer(t, "trusted"), rw: rw}
-				peer.SetHeavyResponseLimited(limited)
+				limiter := NewHeavyResponseLimiter()
+				if limited {
+					peer.SetHeavyResponseLimiter(limiter)
+				}
 
-				fillHeavyResponseSlots(t)
+				fillHeavyResponseSlots(t, limiter)
 				payload, err := rlp.EncodeToBytes(test.packet)
 				require.NoError(t, err)
 
@@ -113,9 +118,9 @@ func TestHeavyResponseHandlersWaitForCapacity(t *testing.T) {
 					case <-time.After(300 * time.Millisecond):
 					}
 					require.Empty(t, rw.sent)
-					require.Len(t, heavyResponseServeSlots, cap(heavyResponseServeSlots))
-					for range cap(heavyResponseServeSlots) {
-						<-heavyResponseServeSlots
+					require.Len(t, limiter.slots, cap(limiter.slots))
+					for range cap(limiter.slots) {
+						<-limiter.slots
 					}
 				}
 				select {
@@ -133,7 +138,7 @@ func TestHeavyResponseHandlersWaitForCapacity(t *testing.T) {
 				require.NoError(t, msg.Decode(&got))
 				require.Equal(t, want, []byte(got))
 				if !limited {
-					require.Len(t, heavyResponseServeSlots, cap(heavyResponseServeSlots))
+					require.Len(t, limiter.slots, cap(limiter.slots))
 				}
 			})
 		}
@@ -143,13 +148,14 @@ func TestHeavyResponseHandlersWaitForCapacity(t *testing.T) {
 // A peer on a sidecar-disabled node must not wait on a slot even when every
 // slot is occupied, regardless of limited peers elsewhere in the process.
 func TestHeavyResponseQuerySkipsLimiterWhenDisabled(t *testing.T) {
-	fillHeavyResponseSlots(t)
+	limiter := NewHeavyResponseLimiter()
+	fillHeavyResponseSlots(t, limiter)
 	want := []rlp.RawValue{rlp.EmptyList}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		got, served := serveHeavyResponseQuery(&Peer{}, func() []rlp.RawValue {
-			require.Len(t, heavyResponseServeSlots, cap(heavyResponseServeSlots))
+			require.Len(t, limiter.slots, cap(limiter.slots))
 			return want
 		})
 		require.True(t, served)
@@ -160,13 +166,14 @@ func TestHeavyResponseQuerySkipsLimiterWhenDisabled(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("disabled limiter blocked on a full slot channel")
 	}
-	require.Len(t, heavyResponseServeSlots, cap(heavyResponseServeSlots))
+	require.Len(t, limiter.slots, cap(limiter.slots))
 }
 
 // An unlimited peer serves immediately while a limited peer waits for capacity,
 // in the same process and under the same full slot channel.
 func TestHeavyResponseQueryMixedPeers(t *testing.T) {
-	fillHeavyResponseSlots(t)
+	limiter := NewHeavyResponseLimiter()
+	fillHeavyResponseSlots(t, limiter)
 	want := []rlp.RawValue{rlp.EmptyList}
 
 	free := make(chan struct{})
@@ -181,7 +188,7 @@ func TestHeavyResponseQueryMixedPeers(t *testing.T) {
 		t.Fatal("unlimited peer blocked behind a limited peer's full slots")
 	}
 
-	limited := &Peer{term: make(chan struct{}), heavyResponseLimited: true}
+	limited := &Peer{term: make(chan struct{}), heavyResponseLimiter: limiter}
 	blocked := make(chan bool, 1)
 	go func() {
 		_, served := serveHeavyResponseQuery(limited, func() []rlp.RawValue { return want })
@@ -199,18 +206,61 @@ func TestHeavyResponseQueryMixedPeers(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("limited peer did not stop when its lifetime ended")
 	}
-	require.Len(t, heavyResponseServeSlots, cap(heavyResponseServeSlots))
+	require.Len(t, limiter.slots, cap(limiter.slots))
 }
 
-func fillHeavyResponseSlots(t *testing.T) {
+func fillHeavyResponseSlots(t *testing.T, limiter *HeavyResponseLimiter) {
 	t.Helper()
-	require.Empty(t, heavyResponseServeSlots)
-	for range cap(heavyResponseServeSlots) {
-		heavyResponseServeSlots <- struct{}{}
+	require.Empty(t, limiter.slots)
+	for range cap(limiter.slots) {
+		limiter.slots <- struct{}{}
 	}
 	t.Cleanup(func() {
-		for len(heavyResponseServeSlots) > 0 {
-			<-heavyResponseServeSlots
+		for len(limiter.slots) > 0 {
+			<-limiter.slots
 		}
 	})
+}
+
+func TestHeavyResponseLimiterNodeIsolation(t *testing.T) {
+	busy := NewHeavyResponseLimiter()
+	independent := NewHeavyResponseLimiter()
+	fillHeavyResponseSlots(t, busy)
+	for _, test := range []struct {
+		name    string
+		limiter *HeavyResponseLimiter
+		blocked bool
+	}{
+		{"same node", busy, true},
+		{"other enabled node", independent, false},
+		{"disabled node", nil, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			peer := &Peer{term: make(chan struct{})}
+			peer.SetHeavyResponseLimiter(test.limiter)
+			defer peer.Close()
+			done := make(chan bool, 1)
+			go func() {
+				_, served := serveHeavyResponseQuery(peer, func() []rlp.RawValue { return []rlp.RawValue{rlp.EmptyList} })
+				done <- served
+			}()
+			if test.blocked {
+				select {
+				case <-done:
+					t.Fatal("peer bypassed its node's full limiter")
+				case <-time.After(20 * time.Millisecond):
+				}
+				<-busy.slots
+			}
+			select {
+			case served := <-done:
+				require.True(t, served)
+			case <-time.After(time.Second):
+				t.Fatal("peer could not use its node's available capacity")
+			}
+			if test.blocked {
+				busy.slots <- struct{}{}
+			}
+		})
+	}
 }

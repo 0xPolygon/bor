@@ -50,3 +50,18 @@ func releaseBulkPendingAuth(ctx context.Context) {
 		release()
 	}
 }
+
+// Pending handshakes have their own allowance. Successful authentication must
+// reserve an active slot shared by incoming and outgoing connections before
+// releasing that pending allowance.
+func (b *BulkSidecar) admitAuthenticatedConn(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !b.activeConnections.TryAcquire(1) {
+		return errBulkAdmissionLimit
+	}
+	context.AfterFunc(ctx, func() { b.activeConnections.Release(1) })
+	releaseBulkPendingAuth(ctx)
+	return nil
+}

@@ -91,10 +91,11 @@ type BulkSidecar struct {
 	config    *quic.Config
 	log       log.Logger
 
-	localID enode.ID
-	priv    *ecdsa.PrivateKey
-	windows *semaphore.Weighted
-	stats   bulkSidecarStatsBook
+	localID           enode.ID
+	priv              *ecdsa.PrivateKey
+	windows           *semaphore.Weighted
+	activeConnections *semaphore.Weighted
+	stats             bulkSidecarStatsBook
 
 	closeOnce sync.Once
 	closeCh   chan struct{}
@@ -179,14 +180,15 @@ func newBulkSidecar(srv *Server, listenAddr string) (*BulkSidecar, error) {
 		MinVersion:     tls.VersionTLS13,
 	}
 	b := &BulkSidecar{
-		srv:      srv,
-		tls:      tlsConf,
-		log:      srv.log,
-		localID:  srv.localnode.ID(),
-		priv:     srv.PrivateKey,
-		windows:  newBulkQUICWindows(srv.MaxPeers, srv.MaxPendingPeers),
-		closeCh:  make(chan struct{}),
-		sessions: make(map[enode.ID]*bulkSession),
+		srv:               srv,
+		tls:               tlsConf,
+		log:               srv.log,
+		localID:           srv.localnode.ID(),
+		priv:              srv.PrivateKey,
+		windows:           newBulkQUICWindows(srv.MaxPeers, srv.MaxPendingPeers),
+		activeConnections: semaphore.NewWeighted(int64(max(0, srv.MaxPeers))),
+		closeCh:           make(chan struct{}),
+		sessions:          make(map[enode.ID]*bulkSession),
 	}
 	quicConf := &quic.Config{
 		HandshakeIdleTimeout: bulkAuthTimeout,
@@ -377,12 +379,17 @@ func (b *BulkSidecar) handleIncomingConn(conn *quic.Conn) {
 		_ = conn.CloseWithError(bulkSidecarProtocolError, err.Error())
 		return
 	}
+	if err := b.admitAuthenticatedConn(conn.Context()); err != nil {
+		if closeErr := conn.CloseWithError(bulkSidecarCloseErrorCode, err.Error()); closeErr != nil {
+			b.log.Debug("Bulk admission close failed", "err", closeErr)
+		}
+		return
+	}
 	session := b.adoptConn(remote, conn)
 	if session == nil {
 		_ = conn.CloseWithError(bulkSidecarCloseErrorCode, "duplicate bulk connection")
 		return
 	}
-	releaseBulkPendingAuth(conn.Context())
 	session.runConn(conn)
 }
 
@@ -417,6 +424,9 @@ func (b *BulkSidecar) dialConn(ctx context.Context, remote *enode.Node) (*quic.C
 	if err := b.initiateAuth(conn, remote); err != nil {
 		_ = conn.CloseWithError(bulkSidecarProtocolError, err.Error())
 		return nil, err
+	}
+	if err := b.admitAuthenticatedConn(conn.Context()); err != nil {
+		return nil, errors.Join(err, conn.CloseWithError(bulkSidecarCloseErrorCode, err.Error()))
 	}
 	return conn, nil
 }

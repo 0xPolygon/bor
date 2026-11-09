@@ -14,9 +14,10 @@ func TestPeerPolicyBodyServingWorkerLimit(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		name := map[bool]string{false: "unobserved", true: "observed"}[enabled]
 		t.Run(name, func(t *testing.T) {
-			fillHeavyResponseSlots(t)
+			limiter := NewHeavyResponseLimiter()
+			fillHeavyResponseSlots(t, limiter)
 			rw := &replyTestRW{sent: make(chan p2p.Msg, 1)}
-			peer := &Peer{Peer: configuredLimitsTestPeer(t, "trusted"), rw: rw, heavyResponseLimited: true}
+			peer := &Peer{Peer: configuredLimitsTestPeer(t, "trusted"), rw: rw, heavyResponseLimiter: limiter}
 			var events []peerpolicy.Evidence
 			if enabled {
 				peer.SetObserver(func(event peerpolicy.Evidence) { events = append(events, event) })
@@ -34,9 +35,9 @@ func TestPeerPolicyBodyServingWorkerLimit(t *testing.T) {
 			case <-time.After(300 * time.Millisecond):
 			}
 			require.Empty(t, rw.sent)
-			require.Len(t, heavyResponseServeSlots, cap(heavyResponseServeSlots))
-			for range cap(heavyResponseServeSlots) {
-				<-heavyResponseServeSlots
+			require.Len(t, limiter.slots, cap(limiter.slots))
+			for range cap(limiter.slots) {
+				<-limiter.slots
 			}
 			select {
 			case err := <-done:

@@ -2,6 +2,15 @@ package eth
 
 import "github.com/ethereum/go-ethereum/rlp"
 
+// HeavyResponseLimiter shares lookup capacity among one node's peers.
+type HeavyResponseLimiter struct {
+	slots chan struct{}
+}
+
+func NewHeavyResponseLimiter() *HeavyResponseLimiter {
+	return &HeavyResponseLimiter{slots: make(chan struct{}, heavyResponseWorkerLimit())}
+}
+
 // Wait in the peer's message loop, which bounds queued work without dropping
 // sync requests. Release the lookup slot before writing a potentially slow reply.
 // The slot limiter only applies to peers on sidecar-enabled nodes; others bypass
@@ -11,10 +20,10 @@ func serveHeavyResponseQuery(peer *Peer, query func() []rlp.RawValue) ([]rlp.Raw
 	if source, ok := peer.rw.(interface{ Done() <-chan struct{} }); ok {
 		disconnected = source.Done()
 	}
-	if peer.heavyResponseLimited {
+	if limiter := peer.heavyResponseLimiter; limiter != nil {
 		select {
-		case heavyResponseServeSlots <- struct{}{}:
-			defer func() { <-heavyResponseServeSlots }()
+		case limiter.slots <- struct{}{}:
+			defer func() { <-limiter.slots }()
 		case <-disconnected:
 			return nil, false
 		case <-peer.term:
