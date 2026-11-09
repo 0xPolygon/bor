@@ -13,6 +13,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/forkid"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
@@ -248,6 +249,12 @@ func (api *BorAPI) GetPreconfTransactionReceipt(hash common.Hash) map[string]int
 // SendRawTransactionConditional will add the signed transaction to the transaction pool.
 // The sender/bundler is responsible for signing the transaction
 func (api *BorAPI) SendRawTransactionConditional(ctx context.Context, input hexutil.Bytes, options types.OptionsPIP15) (common.Hash, error) {
+	// Refuse before any state read: conditional txs are never gossiped, so they
+	// only make sense on a block producer that opted in with txpool.conditional.
+	if !api.b.ConditionalTxsEnabled() {
+		return common.Hash{}, txpool.ErrConditionalTxsDisabled
+	}
+
 	tx := new(types.Transaction)
 	if err := tx.UnmarshalBinary(input); err != nil {
 		return common.Hash{}, err

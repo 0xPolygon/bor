@@ -15,9 +15,6 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 )
 
-// TODO(@pratikspatil024) - Once everything is working, check if need to set limits
-// like we do in eth/handler.go
-
 // Handler is a callback to invoke from an outside runner after the boilerplate
 // exchanges have passed.
 type Handler func(peer *Peer) error

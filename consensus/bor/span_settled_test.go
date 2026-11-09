@@ -32,7 +32,7 @@ func rotatedSpans() map[uint64]*borTypes.Span {
 func newSettledTestStore(t *testing.T, client *dynamicHeimdallClient, age time.Duration) *SpanStore {
 	t.Helper()
 
-	s := NewSpanStore(nil, nil, "1337")
+	s := NewSpanStore(nil, nil, "1337", nil)
 	s.heimdallClient = client
 	require.NoError(t, s.updateHeimdallStatus(t.Context()))
 
@@ -53,6 +53,7 @@ func TestSettledSpanByBlockNumber(t *testing.T) {
 		latest      uint64
 		age         time.Duration
 		failLatest  bool
+		wantErr     bool
 		wantSpan    uint64
 		wantSettled bool
 	}{
@@ -61,7 +62,9 @@ func TestSettledSpanByBlockNumber(t *testing.T) {
 		{name: "latest span stale", latest: 1, age: time.Minute, wantSpan: 1},
 		{name: "latest span just inside freshness", latest: 1, age: latestSpanFreshness - time.Second, wantSpan: 1, wantSettled: true},
 		{name: "latest span just past freshness", latest: 1, age: latestSpanFreshness + time.Second, wantSpan: 1},
-		{name: "latest span fetch fails", latest: 2, failLatest: true, wantSpan: 1},
+		// Without the latest span, or with a span between it and the block missing, no newer
+		// span can be ruled out, so the lookup fails instead of falling back to an older one.
+		{name: "latest span fetch fails", latest: 2, failLatest: true, wantErr: true},
 		{
 			name: "newer span lookup fails",
 			spans: func() map[uint64]*borTypes.Span {
@@ -69,9 +72,9 @@ func TestSettledSpanByBlockNumber(t *testing.T) {
 				spans[4] = makeTestSpan(4, 7000, 13399, "0x0000000000000000000000000000000000000004")
 				return spans
 			},
-			latest:   4,
-			age:      time.Millisecond,
-			wantSpan: 2,
+			latest:  4,
+			age:     time.Millisecond,
+			wantErr: true,
 		},
 		{
 			name: "two later spans start past the block",
@@ -81,9 +84,10 @@ func TestSettledSpanByBlockNumber(t *testing.T) {
 				spans[4] = makeTestSpan(4, 7100, 13499, "0x0000000000000000000000000000000000000004")
 				return spans
 			},
-			latest:   4,
-			age:      time.Millisecond,
-			wantSpan: 2,
+			latest:      4,
+			age:         time.Millisecond,
+			wantSpan:    2,
+			wantSettled: true,
 		},
 		{
 			name: "a span after two skipped ones starts earlier",
@@ -96,9 +100,10 @@ func TestSettledSpanByBlockNumber(t *testing.T) {
 					4: makeTestSpan(4, 300, 6699, "0x0000000000000000000000000000000000000004"),
 				}
 			},
-			latest:   4,
-			age:      time.Millisecond,
-			wantSpan: 1,
+			latest:      4,
+			age:         time.Millisecond,
+			wantSpan:    4,
+			wantSettled: true,
 		},
 	}
 
@@ -125,6 +130,12 @@ func TestSettledSpanByBlockNumber(t *testing.T) {
 			}
 
 			span, settled, err := s.settledSpanByBlockNumber(t.Context(), 400)
+			if tc.wantErr {
+				require.Error(t, err)
+				_, err = s.spanByBlockNumber(t.Context(), 400)
+				require.Error(t, err)
+				return
+			}
 			require.NoError(t, err)
 			require.Equal(t, tc.wantSpan, span.Id)
 			require.Equal(t, tc.wantSettled, settled)
@@ -206,7 +217,7 @@ func TestRefreshAuthorizationOutlastsSlowPoll(t *testing.T) {
 	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}, RioBlock: big.NewInt(0)}
 	chain, b := newChainAndBorForTest(t, &fakeSpanner{}, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
 
-	s := NewSpanStore(nil, nil, "1337")
+	s := NewSpanStore(nil, nil, "1337", nil)
 	s.heimdallClient = client
 	require.NoError(t, s.updateHeimdallStatus(t.Context()))
 	require.NoError(t, s.updateLatestSpan(t.Context()))
