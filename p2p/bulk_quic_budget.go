@@ -2,12 +2,9 @@ package p2p
 
 import (
 	"context"
-	"math"
 	"net"
-	"sync"
 
 	"github.com/quic-go/quic-go"
-	"golang.org/x/sync/semaphore"
 )
 
 const (
@@ -22,31 +19,10 @@ const (
 	bulkConnReceiveWindowMax   = 4 * 1024 * 1024
 )
 
-// Reserve full receive windows for both directions, using the same configured
-// connection limit as admission. The budget includes unread transport bytes.
-func newBulkQUICWindows(maxPeers, maxPendingPeers int) *semaphore.Weighted {
-	slots := bulkQUICWindowSlots(maxPeers, maxPendingPeers)
-	return semaphore.NewWeighted(int64(slots) * bulkConnReceiveWindowMax)
-}
-
-func bulkQUICWindowSlots(maxPeers, maxPendingPeers int) int {
-	if maxPendingPeers <= 0 {
-		maxPendingPeers = defaultMaxPendingPeers
-	}
-	// Both the channel capacity and the byte reservation must be representable.
-	slots := uint64(max(0, maxPeers)) + uint64(maxPendingPeers)
-	return int(min(slots, uint64(math.MaxInt), uint64(math.MaxInt64/bulkConnReceiveWindowMax)))
-}
-
-func reserveBulkQUICWindow(windows *semaphore.Weighted) (func(), error) {
-	if !windows.TryAcquire(bulkConnReceiveWindowMax) {
-		return nil, errBulkAdmissionLimit
-	}
-	return sync.OnceFunc(func() { windows.Release(bulkConnReceiveWindowMax) }), nil
-}
-
-func bulkServerConnContext(srv *Server, windows *semaphore.Weighted) func(context.Context, *quic.ClientInfo) (context.Context, error) {
-	admit := newBulkConnContext(srv.MaxPeers, srv.MaxPendingPeers, windows)
+// Pending handshakes are bounded separately from authenticated peers. Each
+// connection retains its receive-window cap as the live peer count changes.
+func bulkServerConnContext(srv *Server) func(context.Context, *quic.ClientInfo) (context.Context, error) {
+	admit := newBulkConnContext(srv.MaxPendingPeers)
 	return func(ctx context.Context, info *quic.ClientInfo) (context.Context, error) {
 		if srv.NetRestrict != nil {
 			addr, ok := info.RemoteAddr.(*net.UDPAddr)

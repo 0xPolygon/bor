@@ -38,8 +38,8 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/enode"
 )
 
+// The caller retains the auth stream to send the admission result.
 func (b *BulkSidecar) acceptAuth(conn *quic.Conn, stream *quic.Stream) (authenticated *Peer, err error) {
-	defer func() { err = errors.Join(err, stream.Close()) }()
 	binding, err := bulkTLSBinding(conn)
 	if err != nil {
 		return nil, err
@@ -133,7 +133,20 @@ func (b *BulkSidecar) initiateAuth(conn *quic.Conn, remote *enode.Node) (err err
 	if err != nil {
 		return err
 	}
-	return writeBulkControl(stream, bulkAuthResponse{Signature: slices.Clone(sig[:64])})
+	if err := writeBulkControl(stream, bulkAuthResponse{Signature: slices.Clone(sig[:64])}); err != nil {
+		return err
+	}
+	// The receiver arbitrates this dial and reports whether it committed the
+	// connection. We must not expose a lane until it has: a refused fallback dial
+	// returns errBulkAdmissionRefused so the caller waits for the preferred inbound.
+	var result bulkAdmissionResult
+	if err := readBulkControl(stream, bulkAuthControlMaxSize, &result); err != nil {
+		return err
+	}
+	if !result.Admitted {
+		return errBulkAdmissionRefused
+	}
+	return nil
 }
 
 func bulkTLSBinding(conn *quic.Conn) ([]byte, error) {

@@ -5,42 +5,29 @@ import (
 	"errors"
 
 	"github.com/quic-go/quic-go"
-	"golang.org/x/sync/semaphore"
+
+	"github.com/ethereum/go-ethereum/p2p/enode"
 )
 
 var errBulkAdmissionLimit = errors.New("bulk sidecar connection limit reached")
 
 type bulkPendingAuthKey struct{}
 
-func newBulkConnContext(maxPeers, maxPendingPeers int, windows *semaphore.Weighted) func(context.Context, *quic.ClientInfo) (context.Context, error) {
+// Pending handshakes have global and per-source limits, independent of live peers.
+func newBulkConnContext(maxPendingPeers int) func(context.Context, *quic.ClientInfo) (context.Context, error) {
 	if maxPendingPeers <= 0 {
 		maxPendingPeers = defaultMaxPendingPeers
 	}
 	pending := newBulkPendingAdmission(maxPendingPeers)
-	connections := make(chan struct{}, bulkQUICWindowSlots(maxPeers, maxPendingPeers))
 	return func(ctx context.Context, info *quic.ClientInfo) (context.Context, error) {
 		releasePending, err := pending.acquire(info)
 		if err != nil {
 			return nil, err
 		}
-		select {
-		case connections <- struct{}{}:
-		default:
-			releasePending()
-			return nil, errBulkAdmissionLimit
-		}
-		releaseWindow, err := reserveBulkQUICWindow(windows)
-		if err != nil {
-			<-connections
-			releasePending()
-			return nil, err
-		}
-		// QUIC cancels this context on handshake failure as well as connection close.
-		context.AfterFunc(ctx, func() {
-			releasePending()
-			<-connections
-			releaseWindow()
-		})
+		// QUIC cancels this context on handshake failure as well as connection
+		// close; releasePending is idempotent, so an early release on
+		// authentication does not double-count here.
+		context.AfterFunc(ctx, releasePending)
 		return context.WithValue(ctx, bulkPendingAuthKey{}, releasePending), nil
 	}
 }
@@ -51,17 +38,17 @@ func releaseBulkPendingAuth(ctx context.Context) {
 	}
 }
 
-// Pending handshakes have their own allowance. Successful authentication must
-// reserve an active slot shared by incoming and outgoing connections before
-// releasing that pending allowance.
-func (b *BulkSidecar) admitAuthenticatedConn(ctx context.Context) error {
+// Acquire the identity lease before releasing pending capacity. RLPx admission
+// remains authoritative for trusted peers and runtime peer-limit changes.
+func (b *BulkSidecar) admitAuthenticatedConn(ctx context.Context, id enode.ID) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if !b.activeConnections.TryAcquire(1) {
+	release, ok := b.leases.acquire(id)
+	if !ok {
 		return errBulkAdmissionLimit
 	}
-	context.AfterFunc(ctx, func() { b.activeConnections.Release(1) })
+	context.AfterFunc(ctx, release)
 	releaseBulkPendingAuth(ctx)
 	return nil
 }

@@ -67,7 +67,7 @@ func TestBulkPendingSourceAddressValidation(t *testing.T) {
 }
 
 func TestBulkPendingSourceReleasedAfterAuthentication(t *testing.T) {
-	admit := newBulkConnContext(10, 4, newBulkQUICWindows(10, 4))
+	admit := newBulkConnContext(4)
 	var pending []context.Context
 	for range bulkPendingPerSource {
 		ctx, cancel := context.WithCancel(t.Context())
