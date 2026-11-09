@@ -453,14 +453,15 @@ func (st *stateTransition) checkBlobFeeCap() error {
 	if !st.evm.ChainConfig().IsCancun(st.evm.Context.BlockNumber) || st.blobGasUsed() == 0 {
 		return nil
 	}
+	// Bor activates Cancun without a blob schedule, so BlobBaseFee is nil and
+	// blob transactions cannot be priced. This runs before the NoBaseFee skip
+	// because buyGas still multiplies by BlobBaseFee.
+	if st.evm.Context.BlobBaseFee == nil {
+		return fmt.Errorf("%w: address %v", ErrNoBlobBaseFee, msg.From.Hex())
+	}
 	// Skip the checks if gas fields are zero and blobBaseFee was explicitly disabled (eth_call)
 	if st.evm.Config.NoBaseFee && msg.BlobGasFeeCap.BitLen() == 0 {
 		return nil
-	}
-	// Bor activates Cancun without a blob schedule, so BlobBaseFee is
-	// nil and blob transactions cannot be priced.
-	if st.evm.Context.BlobBaseFee == nil {
-		return fmt.Errorf("%w: address %v", ErrNoBlobBaseFee, msg.From.Hex())
 	}
 	if msg.BlobGasFeeCap.Cmp(st.evm.Context.BlobBaseFee) < 0 {
 		return fmt.Errorf("%w: address %v blobGasFeeCap: %v, blobBaseFee: %v", ErrBlobFeeCapTooLow,

@@ -194,7 +194,10 @@ func TestCheckBlobFeeCap(t *testing.T) {
 		{name: "nil blob base fee", evm: newEVM(&cancun, nil, false), msg: msg(big.NewInt(1), true), wantErr: ErrNoBlobBaseFee},
 		{name: "fee cap below base", evm: newEVM(&cancun, big.NewInt(10), false), msg: msg(big.NewInt(1), true), wantErr: ErrBlobFeeCapTooLow},
 		{name: "fee cap at base", evm: newEVM(&cancun, big.NewInt(1), false), msg: msg(big.NewInt(1), true)},
-		{name: "no base fee skips nil", evm: newEVM(&cancun, nil, true), msg: msg(big.NewInt(0), true)},
+		{name: "no base fee with nil blob base fee", evm: newEVM(&cancun, nil, true), msg: msg(big.NewInt(0), true), wantErr: ErrNoBlobBaseFee},
+		{name: "no base fee skips zeroed blob base fee", evm: newEVM(&cancun, big.NewInt(0), true), msg: msg(big.NewInt(0), true)},
+		{name: "no base fee skips zero cap", evm: newEVM(&cancun, big.NewInt(10), true), msg: msg(big.NewInt(0), true)},
+		{name: "no base fee still checks nonzero cap", evm: newEVM(&cancun, big.NewInt(10), true), msg: msg(big.NewInt(1), true), wantErr: ErrBlobFeeCapTooLow},
 		{name: "no blob gas", evm: newEVM(&cancun, nil, false), msg: msg(big.NewInt(1), false)},
 		{name: "pre cancun", evm: newEVM(&preCancun, nil, false), msg: msg(big.NewInt(1), true)},
 	}
