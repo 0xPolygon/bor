@@ -258,6 +258,25 @@ func TestBulkChannelClaimCancelledBeforeOwnership(t *testing.T) {
 	assertHelloStreamClosed(t, stream)
 }
 
+func TestBulkChannelClaimKeepsAckedLaneOnCancel(t *testing.T) {
+	session := newHelloTestSession()
+	stream := &helloTestStream{writeLimit: 1024}
+	rw := &bulkStreamMsgRW{stream: stream, channel: "eth-bulk", ready: &bulkChannelReady{claimed: make(chan struct{}), done: make(chan struct{})}}
+	require.NoError(t, session.storeChannel(nil, "eth-bulk", rw, true))
+	rw.ready.once.Do(func() { close(rw.ready.claimed) })
+	close(rw.ready.done)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	result, err := session.claimChannel(ctx, "eth-bulk", rw)
+	require.NoError(t, err)
+	require.Same(t, rw, result)
+	stored, exists := session.getChannel("eth-bulk")
+	require.True(t, exists, "the live lane must stay registered")
+	require.Same(t, rw, stored)
+	require.False(t, stream.closed, "the live lane must not be closed")
+}
+
 func TestBulkChannelAcknowledgementShutdown(t *testing.T) {
 	for _, closeSidecar := range []bool{false, true} {
 		left, _, lp, _ := channelReadyTestServers(t)
