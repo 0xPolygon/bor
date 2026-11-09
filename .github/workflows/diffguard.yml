@@ -14,10 +14,10 @@ jobs:
   diffguard:
     name: Quality metrics
     if: (github.event.action != 'closed' || github.event.pull_request.merged == true)
-    # Bound concurrent test builds on the standard runner so mutation testing
-    # stays within its memory budget even for changes spanning many packages.
+    # Four workers with one package program each bound concurrent builds and
+    # test binaries while allowing independent mutation timeouts to overlap.
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v5
         with:
@@ -44,7 +44,7 @@ jobs:
       - name: Run diffguard
         id: diffguard
         env:
-          GOFLAGS: "-p=2"
+          GOFLAGS: "-p=1"
         shell: bash
         run: |
           # Keep diffguard's exit code when tee writes the step summary.
@@ -61,7 +61,7 @@ jobs:
             --tier1-threshold 80 \
             --tier2-threshold 60 \
             --mutation-sample-rate 20 \
-            --mutation-workers 2 \
+            --mutation-workers 4 \
             --test-timeout 5m \
             --output text \
             --fail-on error \
