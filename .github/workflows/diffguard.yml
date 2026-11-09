@@ -14,10 +14,9 @@ jobs:
   diffguard:
     name: Quality metrics
     if: (github.event.action != 'closed' || github.event.pull_request.merged == true)
-    # Four workers with one package program each bound concurrent builds and
-    # test binaries while allowing independent mutation timeouts to overlap.
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
+    # Limit package concurrency per mutation worker to bound aggregate build
+    # and test processes while independent test deadlines overlap.
+    runs-on: ubuntu24.04-16core-64GB-600SSD-bor
     steps:
       - uses: actions/checkout@v5
         with:
@@ -61,7 +60,7 @@ jobs:
             --tier1-threshold 80 \
             --tier2-threshold 60 \
             --mutation-sample-rate 20 \
-            --mutation-workers 4 \
+            --mutation-workers 8 \
             --test-timeout 5m \
             --output text \
             --fail-on error \
