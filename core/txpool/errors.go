@@ -74,4 +74,20 @@ var (
 
 	// ErrKZGVerificationError is returned when a KZG proof was not verified correctly.
 	ErrKZGVerificationError = errors.New("KZG verification error")
+
+	// ErrConditionalTxsDisabled is returned if a PIP-15 conditional transaction
+	// arrives while the node does not accept them.
+	ErrConditionalTxsDisabled = errors.New("conditional transactions are disabled on this node")
+
+	// ErrConditionalPoolFull is returned if a PIP-15 conditional transaction would
+	// push the pool over its budget of known accounts and slots.
+	ErrConditionalPoolFull = errors.New("conditional transaction budget exceeded")
+
+	// ErrConditionalAccountLimit is returned if a PIP-15 conditional transaction
+	// would push its sender over the per-account share of the conditional budget.
+	ErrConditionalAccountLimit = errors.New("conditional transaction budget per account exceeded")
+
+	// ErrConditionalNonceGap is returned if a PIP-15 conditional transaction is
+	// not executable: a nonce gap would park it in the queue, never mined.
+	ErrConditionalNonceGap = errors.New("conditional transaction nonce is not executable")
 )

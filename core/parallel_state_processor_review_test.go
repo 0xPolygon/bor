@@ -401,7 +401,7 @@ func TestV2StateProcessor_PanickedTxFailsBlock(t *testing.T) {
 	defer finalDB.StopPrefetcher()
 
 	result := ExecuteV2BlockSTM(context.Background(), tasks, base, store, bals, blockCtx, common.Hash{}, cfg, chainConfig,
-		blockCtx.GasLimit, 1, finalDB, nil)
+		blockCtx.GasLimit, 1, finalDB, nil, nil)
 
 	if result.PanickedIdx != 0 {
 		t.Fatalf("expected PanickedIdx=0, got %d", result.PanickedIdx)
@@ -480,7 +480,7 @@ func TestV2ApplyMessage_FirstIncarnationPanicLogsDebug(t *testing.T) {
 
 	_ = ExecuteV2BlockSTM(context.Background(), tasks, base,
 		blockstm.NewMVStore(), blockstm.NewMVBalanceStore(),
-		blockCtx, common.Hash{}, cfg, chainConfig, blockCtx.GasLimit, 1, finalDB, nil)
+		blockCtx, common.Hash{}, cfg, chainConfig, blockCtx.GasLimit, 1, finalDB, nil, nil)
 
 	var debug, errs int
 	for _, r := range h.records {
@@ -566,7 +566,7 @@ func TestV2StateProcessor_ProducesWitness(t *testing.T) {
 	defer finalDB.StopPrefetcher()
 
 	result := ExecuteV2BlockSTM(context.Background(), tasks, base, store, bals, blockCtx, common.Hash{}, vm.Config{}, chainConfig,
-		blockCtx.GasLimit, 1, finalDB, nil)
+		blockCtx.GasLimit, 1, finalDB, nil, nil)
 
 	if result.ExecErrIdx >= 0 {
 		t.Fatalf("V2 returned error: %v", result.ExecErr)
@@ -651,7 +651,7 @@ func TestExecuteV2BlockSTM_MidFlightCancellation(t *testing.T) {
 	go func() {
 		defer close(done)
 		_ = ExecuteV2BlockSTM(ctx, tasks, base, store, bals, blockCtx, common.Hash{}, vm.Config{}, chainConfig,
-			blockCtx.GasLimit, 4, finalDB, nil)
+			blockCtx.GasLimit, 4, finalDB, nil, nil)
 	}()
 
 	select {
@@ -723,7 +723,7 @@ func TestExecuteV2BlockSTM_HonoursCancellation(t *testing.T) {
 	bals := blockstm.NewMVBalanceStore()
 	start := time.Now()
 	result := ExecuteV2BlockSTM(ctx, tasks, base, store, bals, blockCtx, common.Hash{}, vm.Config{}, chainConfig,
-		blockCtx.GasLimit, 1, finalDB, nil)
+		blockCtx.GasLimit, 1, finalDB, nil, nil)
 	elapsed := time.Since(start)
 
 	// We don't assert the result is empty — workers may have started before the
@@ -819,7 +819,7 @@ func TestV2StateProcessor_ReceiptHasBlockHash(t *testing.T) {
 	defer finalDB.StopPrefetcher()
 
 	result := ExecuteV2BlockSTM(context.Background(), tasks, base, store, bals, blockCtx, blockHash, vm.Config{}, chainConfig,
-		blockCtx.GasLimit, 1, finalDB, nil)
+		blockCtx.GasLimit, 1, finalDB, nil, nil)
 
 	if len(result.Receipts) != 1 {
 		t.Fatalf("expected 1 receipt, got %d", len(result.Receipts))
@@ -888,7 +888,7 @@ func TestV2StateProcessor_ApplyMessageErrorFailsBlock(t *testing.T) {
 	defer finalDB.StopPrefetcher()
 
 	result := ExecuteV2BlockSTM(context.Background(), tasks, base, store, bals, blockCtx, common.Hash{}, vm.Config{}, chainConfig,
-		blockCtx.GasLimit, 1, finalDB, nil)
+		blockCtx.GasLimit, 1, finalDB, nil, nil)
 
 	if result.ExecErrIdx != 0 {
 		t.Fatalf("expected ExecErrIdx=0, got %d", result.ExecErrIdx)

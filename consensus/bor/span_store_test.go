@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/0xPolygon/heimdall-v2/x/bor/types"
-	borTypes "github.com/0xPolygon/heimdall-v2/x/bor/types"
 	ctypes "github.com/cometbft/cometbft/rpc/core/types"
 	"github.com/stretchr/testify/require"
 
@@ -78,7 +77,7 @@ func (h *MockHeimdallClient) GetSpan(ctx context.Context, spanID uint64) (*types
 }
 
 func (h *MockHeimdallClient) GetLatestSpan(ctx context.Context) (*types.Span, error) {
-	return h.GetSpan(ctx, 2)
+	return h.GetSpan(ctx, 21)
 }
 
 func (h *MockHeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
@@ -86,7 +85,7 @@ func (h *MockHeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo,
 }
 
 func TestSpanStore_SpanById(t *testing.T) {
-	spanStore := NewSpanStore(&MockHeimdallClient{}, nil, "1337")
+	spanStore := NewSpanStore(&MockHeimdallClient{}, nil, "1337", nil)
 	defer spanStore.Close()
 	ctx := t.Context()
 
@@ -140,7 +139,7 @@ func TestSpanStore_SpanById(t *testing.T) {
 }
 
 func TestSpanStore_SpanByBlockNumber(t *testing.T) {
-	spanStore := NewSpanStore(&MockHeimdallClient{}, nil, "1337")
+	spanStore := NewSpanStore(&MockHeimdallClient{}, nil, "1337", nil)
 	defer spanStore.Close()
 	ctx := t.Context()
 
@@ -399,7 +398,7 @@ func (h *MockOverlappingHeimdallClient) FetchStatus(ctx context.Context) (*ctype
 }
 
 func TestSpanStore_SpanByBlockNumber_OverlappingSpans(t *testing.T) {
-	spanStore := NewSpanStore(&MockOverlappingHeimdallClient{}, nil, "1337")
+	spanStore := NewSpanStore(&MockOverlappingHeimdallClient{}, nil, "1337", nil)
 	defer spanStore.Close()
 	ctx := t.Context()
 
@@ -478,7 +477,7 @@ func TestSpanStore_SpanByBlockNumber_OverlappingSpans(t *testing.T) {
 }
 
 func TestSpanStore_SpanByBlockNumber_OverlappingSpansWithFuture(t *testing.T) {
-	spanStore := NewSpanStore(&MockOverlappingHeimdallClient{}, nil, "1337")
+	spanStore := NewSpanStore(&MockOverlappingHeimdallClient{}, nil, "1337", nil)
 	defer spanStore.Close()
 	ctx := t.Context()
 
@@ -502,7 +501,7 @@ func TestSpanStore_SpanByBlockNumber_OverlappingSpansWithFuture(t *testing.T) {
 }
 
 func TestSpanStore_SpanByBlockNumber_OverlappingSpansMultipleMatches(t *testing.T) {
-	spanStore := NewSpanStore(&MockOverlappingHeimdallClient{}, nil, "1337")
+	spanStore := NewSpanStore(&MockOverlappingHeimdallClient{}, nil, "1337", nil)
 	defer spanStore.Close()
 	ctx := t.Context()
 
@@ -527,285 +526,6 @@ func TestSpanStore_SpanByBlockNumber_OverlappingSpansMultipleMatches(t *testing.
 	span, err = spanStore.spanByBlockNumber(ctx, 190)
 	require.NoError(t, err, "err in spanByBlockNumber for block 190")
 	require.Equal(t, uint64(5), span.Id, "should return span 5 (highest ID) for block 190")
-}
-
-func TestSpanStore_GetFutureSpan(t *testing.T) {
-	ctx := t.Context()
-
-	type testCase struct {
-		name              string
-		startID           uint64
-		blockNumber       uint64
-		latestKnownSpanID uint64 // informational
-		mockClientSetup   func() IHeimdallClient
-		expectedSpanID    uint64
-		expectError       bool
-		expectedErrorMsg  string
-	}
-
-	uintPtr := func(i uint64) *uint64 { return &i }
-
-	testCases := []testCase{
-		{
-			name:              "simple future span found",
-			startID:           3,
-			blockNumber:       275, // in span 4 (250-349)
-			latestKnownSpanID: 2,
-			mockClientSetup: func() IHeimdallClient {
-				return &MockOverlappingHeimdallClient{} // latest is 6
-			},
-			expectedSpanID: 4,
-		},
-		{
-			name:              "overlapping future span, highest ID chosen",
-			startID:           1,
-			blockNumber:       180, // in spans 1(100-199), 3(150-249), 5(175-225)
-			latestKnownSpanID: 0,
-			mockClientSetup: func() IHeimdallClient {
-				return &MockOverlappingHeimdallClient{}
-			},
-			expectedSpanID: 5, // should be 5 because it has the highest ID
-		},
-		{
-			name:              "span not found",
-			startID:           1,
-			blockNumber:       375, // between spans 4 and 6
-			latestKnownSpanID: 0,
-			mockClientSetup: func() IHeimdallClient {
-				return &MockOverlappingHeimdallClient{}
-			},
-			expectError:      true,
-			expectedErrorMsg: "span not found for block 375",
-		},
-		{
-			name:              "stop search after two skipped spans",
-			startID:           2,
-			blockNumber:       120, // not in any span starting from 2, so should fail
-			latestKnownSpanID: 1,
-			mockClientSetup: func() IHeimdallClient {
-				return &MockOverlappingHeimdallClient{}
-			},
-			expectError:      true, // no candidate found
-			expectedErrorMsg: "span not found for block 120",
-		},
-		{
-			name:              "stop search after two skipped spans with candidate",
-			startID:           1,
-			blockNumber:       160, // in span 1 and 3. search should stop after checking span 5 and return span 3
-			latestKnownSpanID: 0,
-			mockClientSetup: func() IHeimdallClient {
-				return &MockOverlappingHeimdallClient{}
-			},
-			expectedSpanID: 3,
-		},
-		{
-			name:              "span found before an erroring span",
-			startID:           6,
-			blockNumber:       450, // in span 6
-			latestKnownSpanID: 5,
-			mockClientSetup: func() IHeimdallClient {
-				return &MockOverlappingHeimdallClient{} // GetSpan(7) will fail by default, but we should return candidate
-			},
-			expectedSpanID: 6,
-		},
-		{
-			name:              "error from spanById with no candidate",
-			startID:           7, // this will fail in the mock
-			blockNumber:       500,
-			latestKnownSpanID: 6,
-			mockClientSetup: func() IHeimdallClient {
-				return &MockOverlappingHeimdallClient{latestSpanID: uintPtr(8)}
-			},
-			expectError:      true,
-			expectedErrorMsg: "span 7 not found",
-		},
-		{
-			name:              "latest span fetch fails",
-			startID:           1,
-			blockNumber:       200,
-			latestKnownSpanID: 0,
-			mockClientSetup: func() IHeimdallClient {
-				return &MockOverlappingHeimdallClient{failGetLatestSpan: true}
-			},
-			expectError:      true,
-			expectedErrorMsg: "latest span fetch error",
-		},
-		{
-			name:              "id greater than latestSpan.ID at start",
-			startID:           7,
-			blockNumber:       200,
-			latestKnownSpanID: 6,
-			mockClientSetup: func() IHeimdallClient {
-				return &MockOverlappingHeimdallClient{} // latest span is 6
-			},
-			expectError:      true,
-			expectedErrorMsg: "span not found for block 200",
-		},
-		{
-			name:              "block number found in first future span",
-			startID:           5,
-			blockNumber:       180, // in span 5
-			latestKnownSpanID: 4,
-			mockClientSetup: func() IHeimdallClient {
-				return &MockOverlappingHeimdallClient{}
-			},
-			expectedSpanID: 5,
-		},
-		{
-			name:              "latest span is 0",
-			startID:           1,
-			blockNumber:       50,
-			latestKnownSpanID: 0,
-			mockClientSetup: func() IHeimdallClient {
-				return &MockOverlappingHeimdallClient{latestSpanID: uintPtr(0)}
-			},
-			expectError:      true,
-			expectedErrorMsg: "span not found for block 50",
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			mockClient := tc.mockClientSetup()
-			spanStore := NewSpanStore(mockClient, nil, "1337")
-			defer spanStore.Close()
-
-			// Pre-load some spans to make the store behave more realistically
-			for i := uint64(0); i <= tc.latestKnownSpanID; i++ {
-				_, err := spanStore.spanById(t.Context(), i)
-				require.NoError(t, err)
-			}
-
-			span, _, err := spanStore.getFutureSpan(ctx, tc.startID, tc.blockNumber)
-
-			if tc.expectError {
-				require.Error(t, err)
-				if tc.expectedErrorMsg != "" {
-					require.Contains(t, err.Error(), tc.expectedErrorMsg)
-				}
-			} else {
-				require.NoError(t, err)
-				require.NotNil(t, span)
-				require.Equal(t, tc.expectedSpanID, span.Id)
-			}
-		})
-	}
-}
-
-func TestSpanStore_EstimateSpanId(t *testing.T) {
-	spanStore := NewSpanStore(nil, nil, "1337") // Heimdall client and spanner not needed for this test
-	defer spanStore.Close()
-
-	// Mock lastUsedSpan for some test cases
-	mockLastUsedSpan := func(id, startBlock, endBlock uint64) {
-		spanStore.lastUsedSpan.Store(&borTypes.Span{
-			Id:         id,
-			StartBlock: startBlock,
-			EndBlock:   endBlock,
-		})
-	}
-
-	testcases := []struct {
-		name              string
-		blockNumber       uint64
-		setupLastUsedSpan func() // Function to set up lastUsedSpan if needed
-		expectedSpanId    uint64
-	}{
-		{
-			name:           "block_in_zeroth_span",
-			blockNumber:    100,
-			expectedSpanId: 0,
-		},
-		{
-			name:           "block_at_zeroth_span_end",
-			blockNumber:    zerothSpanEnd,
-			expectedSpanId: 0,
-		},
-		{
-			name:           "block_after_zeroth_span_no_last_used",
-			blockNumber:    zerothSpanEnd + 1,
-			expectedSpanId: 1,
-		},
-		{
-			name:           "block_far_after_zeroth_span_no_last_used",
-			blockNumber:    zerothSpanEnd + defaultSpanLength,
-			expectedSpanId: 1 + (defaultSpanLength-1)/defaultSpanLength,
-		},
-		{
-			name:        "block_within_last_used_span",
-			blockNumber: 300,
-			setupLastUsedSpan: func() {
-				mockLastUsedSpan(1, zerothSpanEnd+1, zerothSpanEnd+defaultSpanLength)
-			},
-			expectedSpanId: 1,
-		},
-		{
-			name:        "block_after_last_used_span",
-			blockNumber: zerothSpanEnd + defaultSpanLength + 100,
-			setupLastUsedSpan: func() {
-				mockLastUsedSpan(1, zerothSpanEnd+1, zerothSpanEnd+defaultSpanLength)
-			},
-			expectedSpanId: 2,
-		},
-		{
-			name:        "block_much_after_last_used_span",
-			blockNumber: zerothSpanEnd + 3*defaultSpanLength,
-			setupLastUsedSpan: func() {
-				mockLastUsedSpan(1, zerothSpanEnd+1, zerothSpanEnd+defaultSpanLength)
-			},
-			expectedSpanId: 3,
-		},
-		{
-			name:        "block_before_last_used_span",
-			blockNumber: zerothSpanEnd + defaultSpanLength, // This block is for span 1
-			setupLastUsedSpan: func() { // last used is span 5
-				mockLastUsedSpan(5, zerothSpanEnd+4*defaultSpanLength+1, zerothSpanEnd+5*defaultSpanLength)
-			},
-			expectedSpanId: 1,
-		},
-		{
-			name:        "block_much_before_last_used_span",
-			blockNumber: zerothSpanEnd + 1, // This block is for span 1
-			setupLastUsedSpan: func() { // last used is span 10
-				mockLastUsedSpan(10, zerothSpanEnd+9*defaultSpanLength+1, zerothSpanEnd+10*defaultSpanLength)
-			},
-			expectedSpanId: 1,
-		},
-		{
-			name:           "block_very_large_no_last_used",
-			blockNumber:    1000000,
-			expectedSpanId: 1 + (1000000-zerothSpanEnd-1)/defaultSpanLength,
-		},
-		{
-			name:        "block_at_start_of_last_used_span",
-			blockNumber: zerothSpanEnd + defaultSpanLength + 1,
-			setupLastUsedSpan: func() {
-				mockLastUsedSpan(2, zerothSpanEnd+defaultSpanLength+1, zerothSpanEnd+2*defaultSpanLength)
-			},
-			expectedSpanId: 2,
-		},
-		{
-			name:        "block_at_end_of_last_used_span",
-			blockNumber: zerothSpanEnd + 2*defaultSpanLength,
-			setupLastUsedSpan: func() {
-				mockLastUsedSpan(2, zerothSpanEnd+defaultSpanLength+1, zerothSpanEnd+2*defaultSpanLength)
-			},
-			expectedSpanId: 2,
-		},
-	}
-
-	for _, tc := range testcases {
-		t.Run(tc.name, func(t *testing.T) {
-			// Reset lastUsedSpan for each test case if setupLastUsedSpan is not defined
-			if tc.setupLastUsedSpan == nil {
-				spanStore.lastUsedSpan = atomic.Pointer[borTypes.Span]{}
-			} else {
-				tc.setupLastUsedSpan()
-			}
-			estimatedId := spanStore.estimateSpanId(tc.blockNumber)
-			require.Equal(t, tc.expectedSpanId, estimatedId, "Block %d", tc.blockNumber)
-		})
-	}
 }
 
 func TestGetMockSpan0(t *testing.T) {
@@ -842,7 +562,7 @@ func TestGetMockSpan0(t *testing.T) {
 }
 
 func TestSpanStore_SetHeimdallClient(t *testing.T) {
-	spanStore := NewSpanStore(nil, nil, "1337")
+	spanStore := NewSpanStore(nil, nil, "1337", nil)
 	defer spanStore.Close()
 
 	require.Nil(t, spanStore.heimdallClient, "Initial heimdall client should be nil")
@@ -854,7 +574,7 @@ func TestSpanStore_SetHeimdallClient(t *testing.T) {
 }
 
 func TestSpanStore_Close(t *testing.T) {
-	spanStore := NewSpanStore(&MockHeimdallClient{}, nil, "1337")
+	spanStore := NewSpanStore(&MockHeimdallClient{}, nil, "1337", nil)
 	require.NotNil(t, spanStore.cancel, "Cancel function should be set by NewSpanStore")
 
 	spanStore.Close()
@@ -1081,7 +801,7 @@ func TestSpanStore_WaitUntilHeimdallIsSynced(t *testing.T) {
 		mockClient := &MockSyncStatusClient{}
 		mockClient.SetSyncStatus(&ctypes.SyncInfo{CatchingUp: false})
 
-		spanStore := NewSpanStore(mockClient, nil, "1337")
+		spanStore := NewSpanStore(mockClient, nil, "1337", nil)
 		defer spanStore.Close()
 
 		// Wait for the background goroutine to update status
@@ -1104,7 +824,7 @@ func TestSpanStore_WaitUntilHeimdallIsSynced(t *testing.T) {
 		// Start with catching up
 		mockClient.SetSyncStatus(&ctypes.SyncInfo{CatchingUp: true})
 
-		spanStore := NewSpanStore(mockClient, nil, "1337")
+		spanStore := NewSpanStore(mockClient, nil, "1337", nil)
 		defer spanStore.Close()
 
 		// Wait for the background goroutine to set initial status
@@ -1134,7 +854,7 @@ func TestSpanStore_WaitUntilHeimdallIsSynced(t *testing.T) {
 		// Start with nil status (simulating initial state)
 		mockClient.SetSyncStatus(nil)
 
-		spanStore := NewSpanStore(mockClient, nil, "1337")
+		spanStore := NewSpanStore(mockClient, nil, "1337", nil)
 		defer spanStore.Close()
 
 		// Wait for the background goroutine to set initial status
@@ -1164,7 +884,7 @@ func TestSpanStore_WaitUntilHeimdallIsSynced(t *testing.T) {
 		// Keep it in catching up state
 		mockClient.SetSyncStatus(&ctypes.SyncInfo{CatchingUp: true})
 
-		spanStore := NewSpanStore(mockClient, nil, "1337")
+		spanStore := NewSpanStore(mockClient, nil, "1337", nil)
 		defer spanStore.Close()
 
 		// Wait for the background goroutine to set initial status
@@ -1190,7 +910,7 @@ func TestSpanStore_WaitUntilHeimdallIsSynced(t *testing.T) {
 		// Start with catching up
 		mockClient.SetSyncStatus(&ctypes.SyncInfo{CatchingUp: true})
 
-		spanStore := NewSpanStore(mockClient, nil, "1337")
+		spanStore := NewSpanStore(mockClient, nil, "1337", nil)
 		defer spanStore.Close()
 
 		// Wait for the background goroutine to set initial status
@@ -1239,7 +959,7 @@ func TestSpanStore_WaitForNewSpan(t *testing.T) {
 		span1 := makeTestSpan(1, 100, 200, author2)
 		client.setSpans(map[uint64]*types.Span{0: span0, 1: span1}, span1)
 
-		store := NewSpanStore(client, nil, "1337")
+		store := NewSpanStore(client, nil, "1337", nil)
 		defer store.Close()
 
 		found, err := store.waitForNewSpan(150, author1Address, 1*time.Second)
@@ -1252,7 +972,7 @@ func TestSpanStore_WaitForNewSpan(t *testing.T) {
 		span1 := makeTestSpan(1, 100, 200, author1)
 		client.setSpans(map[uint64]*types.Span{0: span0, 1: span1}, span1)
 
-		store := NewSpanStore(client, nil, "1337")
+		store := NewSpanStore(client, nil, "1337", nil)
 		defer store.Close()
 
 		go func() {
@@ -1271,7 +991,7 @@ func TestSpanStore_WaitForNewSpan(t *testing.T) {
 		span1 := makeTestSpan(1, 100, 200, author1)
 		client.setSpans(map[uint64]*types.Span{0: span0, 1: span1}, span1)
 
-		store := NewSpanStore(client, nil, "1337")
+		store := NewSpanStore(client, nil, "1337", nil)
 		defer store.Close()
 
 		// Use a short timeout to ensure the test doesn't run for too long
@@ -1285,7 +1005,7 @@ func TestSpanStore_WaitForNewSpan(t *testing.T) {
 		expectedErr := fmt.Errorf("heimdall connection error")
 		client.setError(expectedErr)
 
-		store := NewSpanStore(client, nil, "1337")
+		store := NewSpanStore(client, nil, "1337", nil)
 		defer store.Close()
 
 		found, err := store.waitForNewSpan(150, author1Address, 1*time.Second)
@@ -1300,14 +1020,8 @@ func TestSpanStore_WaitForNewSpan(t *testing.T) {
 		span1.SelectedProducers = []stakeTypes.Validator{} // Empty producer list
 		client.setSpans(map[uint64]*types.Span{0: span0, 1: span1}, span1)
 
-		store := NewSpanStore(client, nil, "1337")
+		store := NewSpanStore(client, nil, "1337", nil)
 		defer store.Close()
-
-		go func() {
-			time.Sleep(100 * time.Millisecond)
-			span2 := makeTestSpan(2, 150, 250, author2)
-			client.setSpans(map[uint64]*types.Span{0: span0, 1: span1, 2: span2}, span2)
-		}()
 
 		found, err := store.waitForNewSpan(150, author1Address, 1*time.Second)
 		require.Error(t, err)
@@ -1319,7 +1033,7 @@ func TestSpanStore_WaitForNewSpan(t *testing.T) {
 		span1 := makeTestSpan(1, 100, 200, author1) // block 150 is now in this span
 		client.setSpans(map[uint64]*types.Span{0: span0, 1: span1}, span1)
 
-		store := NewSpanStore(client, nil, "1337")
+		store := NewSpanStore(client, nil, "1337", nil)
 		defer store.Close()
 
 		go func() {
@@ -1335,14 +1049,14 @@ func TestSpanStore_WaitForNewSpan(t *testing.T) {
 }
 
 func TestSpanStore_ConcurrentAccess(t *testing.T) {
-	spanStore := NewSpanStore(&MockHeimdallClient{}, nil, "1337")
+	spanStore := NewSpanStore(&MockHeimdallClient{}, nil, "1337", nil)
 	defer spanStore.Close()
 	ctx := t.Context()
 
 	const numGoroutines = 20
 	var wg sync.WaitGroup
 
-	// Test concurrent access to spanById which updates the latestKnownSpanId.
+	// Test concurrent access to spanById.
 	for i := range numGoroutines {
 		wg.Add(1)
 		go func(id int) {
@@ -1355,10 +1069,6 @@ func TestSpanStore_ConcurrentAccess(t *testing.T) {
 	}
 
 	wg.Wait()
-
-	// Verify that the final state is consistent.
-	finalLatestSpanId := spanStore.latestKnownSpanId.Load()
-	require.Equal(t, uint64(numGoroutines), finalLatestSpanId, "Latest span ID should be the highest processed span")
 
 	// Verify that all spans are accessible.
 	for i := range numGoroutines {
@@ -1468,7 +1178,7 @@ func TestSpanStore_HeimdallDownTimeout(t *testing.T) {
 		}
 		mockClient.shouldTimeout.Store(true)
 
-		spanStore := NewSpanStore(mockClient, nil, "1337")
+		spanStore := NewSpanStore(mockClient, nil, "1337", nil)
 		defer spanStore.Close()
 
 		// First set the status to non-nil value
@@ -1495,7 +1205,7 @@ func TestSpanStore_HeimdallDownTimeout(t *testing.T) {
 		}
 		mockClient.shouldTimeout.Store(false)
 
-		spanStore := NewSpanStore(mockClient, nil, "1337")
+		spanStore := NewSpanStore(mockClient, nil, "1337", nil)
 		defer spanStore.Close()
 
 		// Wait for initial successful status update
@@ -1537,15 +1247,14 @@ func TestSpanStore_HeimdallDownTimeout(t *testing.T) {
 // every run, exposing the flake that occasionally hits CI on TestSpanStore_PurgeCache.
 func TestSpanStore_PurgeCache_RaceWithPollLoop(t *testing.T) {
 	t.Parallel()
-	spanStore := NewSpanStore(&MockHeimdallClient{}, nil, "1337")
+	spanStore := NewSpanStore(&MockHeimdallClient{}, nil, "1337", nil)
 	defer spanStore.Close()
 	ctx := t.Context()
 
 	// Prime caches and let the poll loop populate heimdallStatus.
 	span, err := spanStore.spanById(ctx, 2)
 	require.NoError(t, err)
-	spanStore.lastUsedSpan.Store(span)
-	spanStore.latestKnownSpanId.Store(4)
+	spanStore.recordSpanRange(spanStore.rangeGeneration(), span.Id, span)
 	spanStore.latestSpanCache.Store(span)
 	require.Eventually(t, func() bool { return spanStore.heimdallStatus.Load() != nil },
 		500*time.Millisecond, 20*time.Millisecond,
@@ -1560,10 +1269,7 @@ func TestSpanStore_PurgeCache_RaceWithPollLoop(t *testing.T) {
 
 	require.Nil(t, spanStore.latestSpanCache.Load(),
 		"latestSpanCache must stay nil after PurgeCache — background poll loop is racing with the purge")
-	require.Nil(t, spanStore.lastUsedSpan.Load(),
-		"lastUsedSpan must stay nil after PurgeCache")
-	require.Equal(t, uint64(0), spanStore.latestKnownSpanId.Load(),
-		"latestKnownSpanId must stay 0 after PurgeCache")
+	require.Empty(t, spanStore.spanRanges, "spanRanges must stay empty after PurgeCache")
 	require.Nil(t, spanStore.heimdallStatus.Load(),
 		"heimdallStatus must be cleared by PurgeCache — otherwise stale CatchingUp:false "+
 			"lets waitUntilHeimdallIsSynced skip refreshing against a swapped heimdall client")
@@ -1571,7 +1277,7 @@ func TestSpanStore_PurgeCache_RaceWithPollLoop(t *testing.T) {
 
 func TestSpanStore_PurgeCache(t *testing.T) {
 	t.Parallel()
-	spanStore := NewSpanStore(&MockHeimdallClient{}, nil, "1337")
+	spanStore := NewSpanStore(&MockHeimdallClient{}, nil, "1337", nil)
 	defer spanStore.Close()
 	ctx := t.Context()
 
@@ -1586,16 +1292,13 @@ func TestSpanStore_PurgeCache(t *testing.T) {
 	keys := spanStore.store.Keys()
 	require.Len(t, keys, 5, "cache should have 5 spans")
 
-	// Set up lastUsedSpan and latestKnownSpanId
 	span, err := spanStore.spanById(ctx, 2)
 	require.NoError(t, err)
-	spanStore.lastUsedSpan.Store(span)
-	spanStore.latestKnownSpanId.Store(4)
+	spanStore.recordSpanRange(spanStore.rangeGeneration(), span.Id, span)
 	spanStore.latestSpanCache.Store(span)
 
 	// Verify values are set
-	require.NotNil(t, spanStore.lastUsedSpan.Load(), "lastUsedSpan should be set")
-	require.Equal(t, uint64(4), spanStore.latestKnownSpanId.Load(), "latestKnownSpanId should be 4")
+	require.NotEmpty(t, spanStore.spanRanges, "spanRanges should be set")
 	require.NotNil(t, spanStore.latestSpanCache.Load(), "latestSpanCache should be set")
 
 	// Purge the cache
@@ -1606,8 +1309,7 @@ func TestSpanStore_PurgeCache(t *testing.T) {
 	require.Len(t, keys, 0, "cache should be empty after purge")
 
 	// Verify atomic values are reset
-	require.Nil(t, spanStore.lastUsedSpan.Load(), "lastUsedSpan should be nil after purge")
-	require.Equal(t, uint64(0), spanStore.latestKnownSpanId.Load(), "latestKnownSpanId should be 0 after purge")
+	require.Empty(t, spanStore.spanRanges, "spanRanges should be empty after purge")
 	require.Nil(t, spanStore.latestSpanCache.Load(), "latestSpanCache should be nil after purge")
 
 	// Verify we can still fetch spans after purge (cache miss should re-fetch)

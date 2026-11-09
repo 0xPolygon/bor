@@ -161,6 +161,7 @@ func TestRebroadcastEventsExcludeNonGossipableTransactions(t *testing.T) {
 	config.WithoutHeimdall, config.AcceptPrivateTx = true, true
 	config.TxPool.Journal, config.TxPool.NoLocals = "", true
 	config.TxPool.RebroadcastInterval, config.TxPool.RebroadcastBatchSize = time.Second, 2
+	config.TxPool.ConditionalTxs = true
 	backend, err := New(stack, &config)
 	if err != nil {
 		t.Fatal(err)

@@ -532,6 +532,10 @@ func (p *ethPeer) receiveWitnessPage(
 			continue
 		}
 
+		if err := p.checkReceivedWitnessPage(witReqRes.Request, page, downloadPaused, mapsMu, jailPeer); err != nil {
+			return err
+		}
+
 		// A hash whose download is paused (page count refused, or a structural
 		// violation already recorded) takes no further pages from this peer.
 		// Discard rather than accumulate: in-flight pages that land after the
@@ -542,15 +546,6 @@ func (p *ethPeer) receiveWitnessPage(
 		mapsMu.RUnlock()
 		if paused {
 			continue
-		}
-
-		// Validate that current page number is within bounds
-		if page.Page >= page.TotalPages {
-			return p.jailPeerForViolation(jailPeer, "invalid page number", map[string]interface{}{
-				"hash":       page.Hash,
-				"page":       page.Page,
-				"totalPages": page.TotalPages,
-			})
 		}
 
 		// Check and validate TotalPages consistency
