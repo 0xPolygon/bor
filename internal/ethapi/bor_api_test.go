@@ -37,6 +37,7 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/stateless"
+	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/internal/ethapi/override"
@@ -4590,4 +4591,30 @@ func TestSystemTxGasCapBypass(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSendRawTransactionConditionalFlag(t *testing.T) {
+	backend := newTestBackend(t, 1, &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}, ethash.NewFaker(), nil)
+
+	key, _ := crypto.GenerateKey()
+	tx, err := types.SignNewTx(key, types.LatestSigner(params.TestChainConfig), &types.LegacyTx{
+		Gas:      21000,
+		GasPrice: big.NewInt(params.GWei),
+		To:       &common.Address{0x1},
+	})
+	require.NoError(t, err)
+	raw, err := tx.MarshalBinary()
+	require.NoError(t, err)
+	options := types.OptionsPIP15{KnownAccounts: types.KnownAccounts{common.Address{0xaa}: {Storage: map[common.Hash]common.Hash{}}}}
+
+	// Off by default: refused before decoding, nothing reaches the pool.
+	_, err = NewBorAPI(backend).SendRawTransactionConditional(context.Background(), hexutil.Bytes{0xde, 0xad}, options)
+	require.ErrorIs(t, err, txpool.ErrConditionalTxsDisabled)
+	require.Nil(t, backend.sentTx)
+
+	backend.conditionalTxsEnabled = true
+	hash, err := NewBorAPI(backend).SendRawTransactionConditional(context.Background(), raw, options)
+	require.NoError(t, err)
+	require.Equal(t, tx.Hash(), hash)
+	require.NotNil(t, backend.sentTx.GetOptions())
 }

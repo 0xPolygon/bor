@@ -20,6 +20,7 @@ import (
 	ethproto "github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/eth/protocols/wit"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/trie"
 	"github.com/stretchr/testify/require"
 )
 
@@ -74,7 +75,7 @@ func TestHandleWitnessBroadcastDivergentBodyImportFailureChargesPusher(t *testin
 	// second (with the re-fetched witness) succeeds.
 	insertChain := func(blocks types.Blocks, _ []*stateless.Witness) (int, error) {
 		if imports.Add(1) == 1 {
-			return 0, fmt.Errorf("%w (cross: 01 local: 02)", core.ErrStatelessStateRootMismatch)
+			return 0, fmt.Errorf("%w: %w", core.ErrStatelessIncompleteState, &trie.MissingNodeError{NodeHash: common.HexToHash("0x02")}) // incomplete witness: strikes
 		}
 		return len(blocks), nil
 	}

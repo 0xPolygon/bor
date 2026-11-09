@@ -70,6 +70,9 @@ type Backend interface {
 	SubmitTxForPreconf(tx *types.Transaction) error
 	CheckPreconfStatus(hash common.Hash) (bool, error)
 	PrivateTxEnabled() bool
+
+	// ConditionalTxsEnabled reports whether PIP-15 conditional transactions are accepted
+	ConditionalTxsEnabled() bool
 	SubmitPrivateTx(tx *types.Transaction) error
 
 	// Preconf / Private tx related API for block producers

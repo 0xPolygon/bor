@@ -73,6 +73,11 @@ func handleNewWitnessHashes(backend Backend, msg Decoder, peer *Peer) error {
 // limit move together so a packet that fits the queue also fits the wire.
 const MaxSignedAnnouncesPerPacket = 64
 
+// MaxWitnessHashesPerPacket caps the unsigned NewWitnessHashesPacket. Honest
+// peers announce one hash per packet (AsyncSendNewWitnessHash); the cap matches
+// the signed one.
+const MaxWitnessHashesPerPacket = MaxSignedAnnouncesPerPacket
+
 // handleSignedNewWitnessHashes processes a SignedNewWitnessHashesPacket from a
 // peer (WIT2+). The packet is forwarded to the backend, which is responsible
 // for signature verification, validator-set check, relay, and triggering the
@@ -85,9 +90,6 @@ func handleSignedNewWitnessHashes(backend Backend, msg Decoder, peer *Peer) erro
 	}
 	if len(req.Announcements) == 0 {
 		return fmt.Errorf("invalid SignedNewWitnessHashesPacket: Announcements cannot be empty")
-	}
-	if len(req.Announcements) > MaxSignedAnnouncesPerPacket {
-		return fmt.Errorf("SignedNewWitnessHashesPacket exceeds cap: %d > %d", len(req.Announcements), MaxSignedAnnouncesPerPacket)
 	}
 	return backend.Handle(peer, req)
 }

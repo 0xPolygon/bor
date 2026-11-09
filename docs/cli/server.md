@@ -438,6 +438,12 @@ The ```bor server``` command runs the Bor client.
 
 - ```txpool.accountslots```: Minimum number of executable transaction slots guaranteed per account (default: 16)
 
+- ```txpool.conditional```: Accept PIP-15 conditional transactions (bor_sendRawTransactionConditional). They are never gossiped, so only a block producer can include them (default: false)
+
+- ```txpool.conditionallifetime```: Maximum amount of time a conditional transaction can stay in the pool (default: 5m0s)
+
+- ```txpool.conditionalslots```: Maximum number of known accounts and slots across all pooled conditional transactions (default: 10000)
+
 - ```txpool.filtered-addresses```: Path to the file containing a newline-separated list of addresses whose transactions will be filtered
 
 - ```txpool.globalqueue```: Maximum number of non-executable transaction slots for all accounts (default: 131072)

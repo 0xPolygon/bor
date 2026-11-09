@@ -1497,6 +1497,7 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	})
 
 	c.registerSequencerFlags(f)
+	c.registerConditionalTxPoolFlags(f)
 
 	return f
 }
@@ -1556,5 +1557,31 @@ func (c *Command) registerFilterLimitFlags(f *flagset.Flagset) {
 		Value:   &c.cliConfig.JsonRPC.MaxFilterBuffer,
 		Default: c.cliConfig.JsonRPC.MaxFilterBuffer,
 		Group:   "JsonRPC",
+	})
+}
+
+// registerConditionalTxPoolFlags registers the PIP-15 conditional transaction
+// flags of the transaction pool.
+func (c *Command) registerConditionalTxPoolFlags(f *flagset.Flagset) {
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "txpool.conditional",
+		Usage:   "Accept PIP-15 conditional transactions (bor_sendRawTransactionConditional). They are never gossiped, so only a block producer can include them",
+		Value:   &c.cliConfig.TxPool.Conditional,
+		Default: c.cliConfig.TxPool.Conditional,
+		Group:   "Transaction Pool",
+	})
+	f.DurationFlag(&flagset.DurationFlag{
+		Name:    "txpool.conditionallifetime",
+		Usage:   "Maximum amount of time a conditional transaction can stay in the pool",
+		Value:   &c.cliConfig.TxPool.ConditionalLifetime,
+		Default: c.cliConfig.TxPool.ConditionalLifetime,
+		Group:   "Transaction Pool",
+	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "txpool.conditionalslots",
+		Usage:   "Maximum number of known accounts and slots across all pooled conditional transactions",
+		Value:   &c.cliConfig.TxPool.ConditionalSlots,
+		Default: c.cliConfig.TxPool.ConditionalSlots,
+		Group:   "Transaction Pool",
 	})
 }

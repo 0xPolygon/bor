@@ -50,6 +50,11 @@ func newPipelineRequestFixture(t *testing.T, configure func(*params.ChainConfig)
 	t.Helper()
 
 	w, backend := newPipelineWorkerFixture(t, configure)
+	return w, backend, newPipelineRequest(t, w, backend)
+}
+
+func newPipelineRequest(t *testing.T, w *worker, backend *testWorkerBackend) *speculativeWorkReq {
+	t.Helper()
 
 	parent := backend.chain.CurrentBlock()
 	statedb, _, prefetchReader, processReader, err := backend.chain.StateAtWithReaders(parent.Root)
@@ -66,7 +71,7 @@ func newPipelineRequestFixture(t *testing.T, configure func(*params.ChainConfig)
 
 	req, ok := w.buildSpeculativeReq(work, nil)
 	require.True(t, ok)
-	return w, backend, req
+	return req
 }
 
 func newPipelineSessionFixture(t *testing.T, configure func(*params.ChainConfig)) (*worker, *testWorkerBackend, *specSession) {

@@ -452,7 +452,8 @@ func (b *EthAPIBackend) SendTx(ctx context.Context, signedTx *types.Transaction)
 	// very little chance it will be accepted later (e.g., the gas price is below the
 	// configured minimum, or the sender has insufficient funds to cover the cost),
 	// propagate the error to the user.
-	if err != nil && !locals.IsTemporaryReject(err) {
+	// Conditional txs are not tracked, so a temporary reject is final for them.
+	if err != nil && (!locals.IsTemporaryReject(err) || signedTx.GetOptions() != nil) {
 		return err
 	}
 	// No error will be returned to user if the transaction fails with a temporary
@@ -903,6 +904,10 @@ func (b *EthAPIBackend) CheckPreconfStatus(hash common.Hash) (bool, error) {
 
 func (b *EthAPIBackend) PrivateTxEnabled() bool {
 	return b.relay.PrivateTxEnabled()
+}
+
+func (b *EthAPIBackend) ConditionalTxsEnabled() bool {
+	return b.eth.config.TxPool.ConditionalTxs
 }
 
 func (b *EthAPIBackend) SubmitPrivateTx(tx *types.Transaction) error {

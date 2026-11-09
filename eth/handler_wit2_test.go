@@ -1558,9 +1558,10 @@ func TestAcceptSignedBroadcastReportsDivergence(t *testing.T) {
 	require.False(t, diverged)
 }
 
-// TestAcceptDeferredBroadcastReportsDivergence: the deferred accept path flags a
-// body accepted on a candidate's size band alone as diverged, and a body
-// byte-identical to a candidate's commitment as not diverged.
+// TestAcceptDeferredBroadcastReportsDivergence: the deferred accept path flags
+// every accepted body as diverged — on a candidate's size band alone, and also
+// byte-identical to a candidate's commitment, because a deferred signer is not
+// yet bound to the producer and any peer can sign a commitment to its own bytes.
 func TestAcceptDeferredBroadcastReportsDivergence(t *testing.T) {
 	h := newTestHandler()
 	defer h.close()
@@ -1588,7 +1589,7 @@ func TestAcceptDeferredBroadcastReportsDivergence(t *testing.T) {
 	require.True(t, accepted)
 	require.True(t, diverged, "deferred body accepted on the size band alone must be flagged diverged")
 
-	// A candidate whose hash the body matches → not diverged.
+	// A candidate whose hash the body matches: still unproven → diverged.
 	h.handler.deferredAnnounces.put(wit.SignedWitnessAnnouncement{
 		BlockHash:   hash,
 		BlockNumber: header.Number.Uint64(),
@@ -1598,7 +1599,53 @@ func TestAcceptDeferredBroadcastReportsDivergence(t *testing.T) {
 	}, "announcer-2")
 	accepted, diverged = witH.acceptDeferredBroadcast(peer, witness, hash)
 	require.True(t, accepted)
-	require.False(t, diverged, "body byte-identical to a deferred candidate is not diverged")
+	require.True(t, diverged, "a deferred commitment is unverified, so matching it does not make the body the BP's")
+}
+
+// TestAcceptDeferredBroadcastHashMatchSkipsSizeBand: a body byte-identical to a
+// deferred candidate's commitment is accepted even when that candidate's signed
+// size would put it out of band; only a non-matching body is size-checked.
+func TestAcceptDeferredBroadcastHashMatchSkipsSizeBand(t *testing.T) {
+	h := newTestHandler()
+	defer h.close()
+
+	witH := (*witHandler)(h.handler)
+	peer, cleanup := newTestWit2PeerWithReader()
+	defer cleanup()
+
+	header := &types.Header{Number: big.NewInt(7784)}
+	hash := header.Hash()
+	witness, err := stateless.NewWitness(header, nil, false)
+	require.NoError(t, err)
+	var buf bytes.Buffer
+	require.NoError(t, witness.EncodeRLP(&buf))
+
+	// Hash matches, signed size far too small for the body.
+	h.handler.deferredAnnounces.put(wit.SignedWitnessAnnouncement{
+		BlockHash:   hash,
+		BlockNumber: header.Number.Uint64(),
+		WitnessHash: stateless.WitnessCommitHash(buf.Bytes()),
+		WitnessSize: 1,
+		Signature:   make([]byte, wit.SignatureLength),
+	}, "announcer")
+	accepted, diverged := witH.acceptDeferredBroadcast(peer, witness, hash)
+	require.True(t, accepted, "a hash match is accepted without the size band")
+	require.True(t, diverged, "a deferred commitment is unverified")
+
+	// Same size, different hash: out of band and dropped.
+	other := &types.Header{Number: big.NewInt(7785)}
+	otherHash := other.Hash()
+	otherWitness, err := stateless.NewWitness(other, nil, false)
+	require.NoError(t, err)
+	h.handler.deferredAnnounces.put(wit.SignedWitnessAnnouncement{
+		BlockHash:   otherHash,
+		BlockNumber: other.Number.Uint64(),
+		WitnessHash: common.HexToHash("0xdeadbeef"),
+		WitnessSize: 1,
+		Signature:   make([]byte, wit.SignatureLength),
+	}, "announcer")
+	accepted, _ = witH.acceptDeferredBroadcast(peer, otherWitness, otherHash)
+	require.False(t, accepted, "a non-matching body out of every candidate's size band is dropped")
 }
 
 // TestHandleWitnessBroadcastDropsExcludedSource: a peer excluded as a witness

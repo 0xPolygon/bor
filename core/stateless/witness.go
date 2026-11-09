@@ -35,6 +35,24 @@ type HeaderReader interface {
 	GetHeader(hash common.Hash, number uint64) *types.Header
 }
 
+// ErrInvalidWitness matches every ValidateWitnessPreState failure caused by the
+// witness bytes themselves (no headers, a context header that is not the block's,
+// a pre-state root that is not the parent's). Failures that depend on local
+// state (parent header missing, nil witness or expected header) do not match.
+// Callers use it to charge the failure to the peer that served the witness.
+var ErrInvalidWitness = errors.New("invalid witness")
+
+// invalidWitnessError keeps the original message text while matching
+// ErrInvalidWitness under errors.Is.
+type invalidWitnessError struct{ msg string }
+
+func (e *invalidWitnessError) Error() string        { return e.msg }
+func (e *invalidWitnessError) Is(target error) bool { return target == ErrInvalidWitness }
+
+func invalidWitnessf(format string, args ...any) error {
+	return &invalidWitnessError{msg: fmt.Sprintf(format, args...)}
+}
+
 // ValidateWitnessPreState validates that the witness pre-state root matches
 // the parent block's state root. The expectedBlock header is the block being
 // imported — the witness context must match it (ParentHash and Number) to
@@ -46,20 +64,20 @@ func ValidateWitnessPreState(witness *Witness, headerReader HeaderReader, expect
 
 	// Check if witness has any headers.
 	if len(witness.Headers) == 0 {
-		return fmt.Errorf("witness has no headers")
+		return invalidWitnessf("witness has no headers")
 	}
 
 	// Get the witness context header (the block this witness is for).
 	contextHeader := witness.Header()
 	if contextHeader == nil {
-		return fmt.Errorf("witness context header is nil")
+		return invalidWitnessf("witness context header is nil")
 	}
 	// The witness header is peer-supplied: don't rely on the transport
 	// decoder to have rejected a nil or genesis block number — a genesis
 	// block has no parent to validate against, and Uint64()-1 on zero
 	// would probe an unrelated height.
 	if contextHeader.Number == nil || contextHeader.Number.Sign() <= 0 {
-		return fmt.Errorf("witness context header has invalid block number: %v", contextHeader.Number)
+		return invalidWitnessf("witness context header has invalid block number: %v", contextHeader.Number)
 	}
 
 	// Verify the witness is for the expected block — a malicious peer could
@@ -69,11 +87,11 @@ func ValidateWitnessPreState(witness *Witness, headerReader HeaderReader, expect
 			return fmt.Errorf("expected block header has nil number")
 		}
 		if contextHeader.ParentHash != expectedBlock.ParentHash {
-			return fmt.Errorf("witness ParentHash mismatch: witness=%x, expected=%x, blockNumber=%d",
+			return invalidWitnessf("witness ParentHash mismatch: witness=%x, expected=%x, blockNumber=%d",
 				contextHeader.ParentHash, expectedBlock.ParentHash, expectedBlock.Number.Uint64())
 		}
 		if contextHeader.Number.Uint64() != expectedBlock.Number.Uint64() {
-			return fmt.Errorf("witness block number mismatch: witness=%d, expected=%d",
+			return invalidWitnessf("witness block number mismatch: witness=%d, expected=%d",
 				contextHeader.Number.Uint64(), expectedBlock.Number.Uint64())
 		}
 	}
@@ -91,7 +109,7 @@ func ValidateWitnessPreState(witness *Witness, headerReader HeaderReader, expect
 
 	// Compare with actual parent block's state root.
 	if witnessPreStateRoot != parentHeader.Root {
-		return fmt.Errorf("witness pre-state root mismatch: witness=%x, parent=%x, blockNumber=%d",
+		return invalidWitnessf("witness pre-state root mismatch: witness=%x, parent=%x, blockNumber=%d",
 			witnessPreStateRoot, parentHeader.Root, contextHeader.Number.Uint64())
 	}
 

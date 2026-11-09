@@ -133,7 +133,7 @@ func TestV2SerialParity_MetamorphicCreate2(t *testing.T) {
 		}
 		ExecuteV2BlockSTM(context.Background(), tasks, base,
 			blockstm.NewMVStore(), blockstm.NewMVBalanceStore(),
-			blockCtx, common.Hash{}, vm.Config{}, &cfg, blockCtx.GasLimit, 4, v2DB, nil)
+			blockCtx, common.Hash{}, vm.Config{}, &cfg, blockCtx.GasLimit, 4, v2DB, nil, nil)
 		v2DB.Finalise(params.Rules{IsEIP158: true})
 
 		if s, v := serialDB.IntermediateRoot(params.Rules{IsEIP158: true}), v2DB.IntermediateRoot(params.Rules{IsEIP158: true}); s != v {

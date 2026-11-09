@@ -85,7 +85,9 @@ func TestRequestWitnesses_Controlling_Max_Concurrent_Calls(t *testing.T) {
 	concurrentCount := 0
 	maxConcurrentCount := 0
 	var muConcurrentCount sync.Mutex
-	testPageSize := 200                                                   // 200bytes -> ~ 10*1024/200 ~ 54 pages
+	// Split into as many pages as an honest server can report, well above the
+	// 5 concurrent requests allowed per peer.
+	testPageSize := (len(witBuf.Bytes()) + int(maxRelayFetchPages) - 1) / int(maxRelayFetchPages)
 	totalPages := (len(witBuf.Bytes()) + testPageSize - 1) / testPageSize // ceil division len()/pageSize
 
 	randomPageToFailTwice := rand.Intn(totalPages-1) + 1
@@ -2093,4 +2095,139 @@ func TestRequestWitnesses_LeakFixes(t *testing.T) {
 		assert.NoError(t, req.Close())
 		assertNoGoroutineLeak(t, before)
 	})
+}
+
+func TestWitnessPageWithinServeLimits(t *testing.T) {
+	tests := []struct {
+		name       string
+		size       int
+		totalPages uint64
+		want       bool
+	}{
+		{"full page of the largest servable witness", PageSize, maxRelayFetchPages, true},
+		{"page over PageSize", PageSize + 1, 1, false},
+		{"more pages than a server can serve", 1, maxRelayFetchPages + 1, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			page := wit.WitnessPageResponse{Data: make([]byte, tt.size), TotalPages: tt.totalPages}
+			assert.Equal(t, tt.want, witnessPageWithinServeLimits(page))
+		})
+	}
+}
+
+func TestRequestWitnessesWithVerification_PageBeyondServeLimits(t *testing.T) {
+	// A complete, decodable witness one page could carry if it were not cut at
+	// PageSize: accepting it would hand the caller a witness.
+	oversized, err := stateless.NewWitness(&types.Header{Number: big.NewInt(1)}, nil, false)
+	require.NoError(t, err)
+	oversized.AddState(map[string][]byte{"node": make([]byte, PageSize)}, common.Hash{})
+	var oversizedBuf bytes.Buffer
+	require.NoError(t, oversized.EncodeRLP(&oversizedBuf))
+	require.Greater(t, oversizedBuf.Len(), PageSize)
+
+	tests := []struct {
+		name       string
+		data       []byte
+		totalPages uint64
+	}{
+		{"oversized page", make([]byte, PageSize+1), 2},
+		{"oversized single-page witness", oversizedBuf.Bytes(), 1},
+		{"too many pages", []byte{1}, maxRelayFetchPages + 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hash := common.Hash{0xab, 0xcd}
+			var jailed atomic.Bool
+			var requests atomic.Int32
+
+			p, mockWitPeer := testPeer(t)
+			mockWitPeer.EXPECT().ID().Return("test-peer").AnyTimes()
+			dlCh := make(chan *eth.Response, 1)
+
+			mockWitPeer.EXPECT().
+				RequestWitness(gomock.Any(), gomock.Any()).
+				DoAndReturn(func(wpr []wit.WitnessPageRequest, ch chan *wit.Response) (*wit.Request, error) {
+					requests.Add(1)
+					go func() {
+						ch <- &wit.Response{
+							Res: &wit.WitnessPacketRLPPacket{
+								WitnessPacketResponse: []wit.WitnessPageResponse{{
+									Page:       0,
+									TotalPages: tt.totalPages,
+									Hash:       hash,
+									Data:       tt.data,
+								}},
+							},
+							Done: make(chan error, 1),
+						}
+					}()
+					return &wit.Request{}, nil
+				}).
+				AnyTimes()
+
+			req, err := p.RequestWitnessesWithVerification([]common.Hash{hash}, dlCh, nil, func(string) { jailed.Store(true) })
+			require.NoError(t, err)
+			require.NotNil(t, req)
+
+			select {
+			case response := <-dlCh:
+				witnesses, ok := response.Res.([]*stateless.Witness)
+				require.True(t, ok)
+				assert.Empty(t, witnesses)
+				assert.True(t, jailed.Load(), "peer should be jailed")
+				assert.Equal(t, int32(1), requests.Load(), "no page should be requested after the first violation")
+			case <-time.After(2 * time.Second):
+				t.Fatal("timed out waiting for response")
+			}
+		})
+	}
+}
+
+func TestRequestWitnessesWithVerification_UnrequestedPage(t *testing.T) {
+	requested := common.Hash{0x01}
+	unrequested := common.Hash{0x02}
+	encode := func(number int64) []byte {
+		w, err := stateless.NewWitness(&types.Header{Number: big.NewInt(number)}, nil, false)
+		require.NoError(t, err)
+		var buf bytes.Buffer
+		require.NoError(t, w.EncodeRLP(&buf))
+		return buf.Bytes()
+	}
+	requestedData, unrequestedData := encode(1), encode(2)
+
+	p, mockWitPeer := testPeer(t)
+	mockWitPeer.EXPECT().ID().Return("test-peer").AnyTimes()
+	mockWitPeer.EXPECT().
+		RequestWitness(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(wpr []wit.WitnessPageRequest, ch chan *wit.Response) (*wit.Request, error) {
+			go func() {
+				ch <- &wit.Response{
+					Res: &wit.WitnessPacketRLPPacket{WitnessPacketResponse: []wit.WitnessPageResponse{
+						{Hash: unrequested, Page: 0, TotalPages: 1, Data: unrequestedData},
+						{Hash: wpr[0].Hash, Page: wpr[0].Page, TotalPages: 1, Data: requestedData},
+					}},
+					Done: make(chan error, 1),
+				}
+			}()
+			return &wit.Request{}, nil
+		}).
+		AnyTimes()
+
+	var jailed atomic.Bool
+	dlCh := make(chan *eth.Response, 1)
+	_, err := p.RequestWitnessesWithVerification([]common.Hash{requested}, dlCh, nil, func(string) { jailed.Store(true) })
+	require.NoError(t, err)
+
+	select {
+	case response := <-dlCh:
+		witnesses, ok := response.Res.([]*stateless.Witness)
+		require.True(t, ok)
+		for _, w := range witnesses {
+			assert.Equal(t, int64(1), w.Header().Number.Int64(), "witness for an unrequested hash delivered")
+		}
+		assert.True(t, jailed.Load(), "peer should be jailed")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for response")
+	}
 }

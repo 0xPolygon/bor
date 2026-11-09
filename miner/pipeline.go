@@ -17,6 +17,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/eth/downloader/whitelist"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
@@ -314,7 +315,7 @@ const (
 	iterContinue   iterResult = iota // shifted to the next block; keep looping
 	iterBreak                        // normal exit (error, last block sealed via taskCh)
 	iterBreakAbort                   // speculative block was discarded (abortRecovery=true)
-	iterExitEarly                    // w.exitCh fired mid-iteration; caller returns shouldRetry=false
+	iterExitEarly                    // w.exitCh fired or the block was refused on the head; caller returns shouldRetry=false
 )
 
 // runOneIteration finalizes the current speculative block, prepares the next
@@ -929,7 +930,8 @@ func (s *specSession) startNextFillGoroutine(headerNext *types.Header, envNext *
 // sealCurrentAndAdvance waits for SRC of the current speculative block,
 // assembles it, waits for header.Time, inline-seals + broadcasts, and hands
 // back the sealed block. Returns exitEarly=true if w.exitCh fired during the
-// timestamp wait (caller returns false, abortRecovery).
+// timestamp wait, or if the chain refused the block while its parent is still
+// the head (caller returns false, abortRecovery).
 func (s *specSession) sealCurrentAndAdvance(finalSpecHeader *types.Header, stateSyncData []*types.StateSyncData, next *specNextIteration) (*types.Block, bool, bool) {
 	srcWaitStart := time.Now()
 	rootSpec, witnessSpec, err := s.w.chain.WaitForSRC()
@@ -965,7 +967,9 @@ func (s *specSession) sealCurrentAndAdvance(finalSpecHeader *types.Header, state
 	if err != nil {
 		log.Error("Pipelined SRC: inline seal failed", "block", s.nextBlockNumber, "err", err)
 		<-next.fillDone
-		return nil, false, false
+		// A rebuild on an unchanged head would be refused the same way, so end
+		// the session without one and leave recovery to the stall fallback.
+		return nil, s.w.refusedOnCurrentHead(blockSpec, err), false
 	}
 	<-next.fillDone
 	s.prevDBWriteDone = dbWriteDone
@@ -1139,6 +1143,11 @@ func (w *worker) inlineSealAndBroadcast(block *types.Block, receipts []*types.Re
 	if err != nil {
 		return nil, nil, err
 	}
+	// The async write below would refuse a block that conflicts with a
+	// whitelisted milestone or checkpoint, so never announce one.
+	if err := w.chain.ValidateLocalBlock(sealedBlock); err != nil {
+		return nil, nil, err
+	}
 	hash := sealedBlock.Hash()
 	sealedReceipts, logs := rebindReceiptsToSealedBlock(receipts, sealedBlock)
 
@@ -1168,6 +1177,12 @@ func (w *worker) inlineSealAndBroadcast(block *types.Block, receipts []*types.Re
 		}
 	}()
 	return sealedBlock, writeDone, nil
+}
+
+// refusedOnCurrentHead reports whether the chain refused block for conflicting
+// with a whitelisted milestone or checkpoint while its parent is still the head.
+func (w *worker) refusedOnCurrentHead(block *types.Block, err error) bool {
+	return errors.Is(err, whitelist.ErrMismatch) && w.chain.CurrentBlock().Hash() == block.ParentHash()
 }
 
 // sealViaPrivateChannel runs engine.Seal on a private channel (no contention

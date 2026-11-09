@@ -89,6 +89,12 @@ func (tracker *TxTracker) TrackAll(txs []*types.Transaction) {
 		if tx.Type() == types.BlobTxType {
 			continue
 		}
+		// bor: PIP-15 conditional txs are short-lived. Resubmitting them would undo
+		// the pool's conditional lifetime, and the journal would bring them back
+		// without their options as plain txs.
+		if tx.GetOptions() != nil {
+			continue
+		}
 		// If we're already tracking it, it's a no-op
 		if _, ok := tracker.all[tx.Hash()]; ok {
 			continue

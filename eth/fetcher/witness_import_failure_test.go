@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -94,7 +95,8 @@ func TestChargeDivergedWitnessImportFailure(t *testing.T) {
 	block := createTestBlock(501)
 	witness := createTestWitnessForBlock(block)
 	noopFetch := func(common.Hash, chan *eth.Response) (*eth.Request, error) { return nil, errors.New("noop") }
-	importErr := fmt.Errorf("%w (remote: 1 local: 2)", core.ErrGasUsedMismatch) // witness-attributable
+	forged, _ := preStateValidationErrors(t)
+	importErr := fmt.Errorf("witness validation failed: %w", forged) // decided by the witness alone
 
 	// BP-identical witness (not diverged): the BP's fault, nothing charged.
 	identical := &blockOrHeaderInject{origin: "o", block: block, witness: witness, witnessPeer: "srv", fetchWitness: noopFetch}
@@ -111,7 +113,7 @@ func TestChargeDivergedWitnessImportFailure(t *testing.T) {
 	}
 
 	// Diverged, fetched: charged and retried, up to the budget.
-	op := &blockOrHeaderInject{origin: "o", block: block, witness: witness, witnessPeer: "srv-1", witnessDiverged: true, fetchWitness: noopFetch}
+	op := &blockOrHeaderInject{origin: "o", block: block, witness: witness, witnessPeer: "srv-1", witnessDiverged: true, witnessNotProducer: true, fetchWitness: noopFetch}
 	if !tester.fetcher.chargeDivergedWitnessImportFailure(op, importErr) {
 		t.Fatal("first import failure with a diverged fetched witness must trigger a re-fetch")
 	}
@@ -132,7 +134,7 @@ func TestChargeDivergedWitnessImportFailure(t *testing.T) {
 	}
 	// A witness without a fetch closure is still charged but can never be
 	// re-fetched.
-	orphan := &blockOrHeaderInject{origin: "o", block: block, witness: witness, witnessPeer: "srv-9", witnessDiverged: true}
+	orphan := &blockOrHeaderInject{origin: "o", block: block, witness: witness, witnessPeer: "srv-9", witnessDiverged: true, witnessNotProducer: true}
 	if tester.fetcher.chargeDivergedWitnessImportFailure(orphan, importErr) {
 		t.Fatal("without a fetch closure there is no way to re-fetch; must return false")
 	}
@@ -145,6 +147,56 @@ func TestChargeDivergedWitnessImportFailure(t *testing.T) {
 	}
 	if len(excluded) != len(strikes) {
 		t.Fatalf("every charged failure must exclude its server for the block: %v", excluded)
+	}
+}
+
+// TestChargeDivergedWitnessImportFailureExecutionMismatchDoesNotStrike: an
+// execution mismatch is what every honest witness yields for an invalid block,
+// so it excludes the server and re-fetches, but never strikes it — otherwise a
+// producer of invalid blocks could get honest witness servers jailed. Failures
+// the witness alone decides (forged pre-state, missing trie node) strike only
+// when the bytes contradict the verified BP commitment: unproven bytes may be
+// the BP's own, relayed by an honest peer.
+func TestChargeDivergedWitnessImportFailureExecutionMismatchDoesNotStrike(t *testing.T) {
+	tester := newTester(false)
+	defer tester.fetcher.Stop()
+
+	var strikes, excluded atomic.Int32
+	tester.fetcher.SetWitnessServerStriker(func(string) { strikes.Add(1) })
+	tester.fetcher.SetWitnessSourceExcluder(func(string, common.Hash) { excluded.Add(1) })
+
+	block := createTestBlock(502)
+	witness := createTestWitnessForBlock(block)
+	fetch := func(common.Hash, chan *eth.Response) (*eth.Request, error) { return nil, errors.New("noop") }
+	forged, _ := preStateValidationErrors(t)
+
+	missingNode := fmt.Errorf("%w: %w", core.ErrStatelessIncompleteState, &trie.MissingNodeError{NodeHash: common.HexToHash("0x02")})
+	for _, tc := range []struct {
+		err         error
+		notProducer bool
+		strike      bool
+	}{
+		{core.ErrStatelessStateRootMismatch, true, false},
+		{fmt.Errorf("%w (remote: 1 local: 2)", core.ErrGasUsedMismatch), true, false},
+		{fmt.Errorf("%w (remote: 0a local: 0b)", core.ErrReceiptRootMismatch), true, false},
+		{errors.New("invalid merkle root (remote: 0a local: 0b) dberr: <nil>"), true, false},
+		{fmt.Errorf("witness validation failed: %w", forged), true, true},
+		{missingNode, true, true},
+		{fmt.Errorf("witness validation failed: %w", forged), false, false}, // unproven bytes
+		{missingNode, false, false},                                         // unproven bytes
+	} {
+		strikes.Store(0)
+		excluded.Store(0)
+		op := &blockOrHeaderInject{origin: "o", block: block, witness: witness, witnessPeer: "srv", witnessDiverged: true, witnessNotProducer: tc.notProducer, fetchWitness: fetch}
+		if !tester.fetcher.chargeDivergedWitnessImportFailure(op, tc.err) {
+			t.Fatalf("%v: an attributable failure must trigger a re-fetch", tc.err)
+		}
+		if excluded.Load() != 1 {
+			t.Fatalf("%v: the server must be excluded for the block", tc.err)
+		}
+		if got := strikes.Load() == 1; got != tc.strike {
+			t.Fatalf("%v (notProducer=%v): strike = %v, want %v", tc.err, tc.notProducer, got, tc.strike)
+		}
 	}
 }
 
@@ -212,7 +264,9 @@ func TestChargeDivergedWitnessImportFailureIgnoresNonWitnessErrors(t *testing.T)
 // and execution-mismatch failures are attributable, everything else — notably
 // errors that wrap nothing the witness carries — is not.
 func TestIsWitnessAttributableImportError(t *testing.T) {
+	forgedPreState, parentMissing := preStateValidationErrors(t)
 	attributable := []error{
+		fmt.Errorf("witness validation failed: %w", forgedPreState), // forged parent root, as core.ProcessBlockWithWitnesses wraps it
 		&trie.MissingNodeError{NodeHash: common.HexToHash("0x01"), Path: []byte{0x1}},
 		fmt.Errorf("%w: %w", core.ErrStatelessIncompleteState, &trie.MissingNodeError{NodeHash: common.HexToHash("0x02")}), // incomplete witness
 		core.ErrStatelessStateRootMismatch,
@@ -238,12 +292,36 @@ func TestIsWitnessAttributableImportError(t *testing.T) {
 		fmt.Errorf("%w: %w", core.ErrStatelessIncompleteState, &state.MissingCodeError{Addr: common.HexToAddress("0x01"), Hash: common.HexToHash("0x02")}), // #2401: missing code, not the witness
 		core.ErrStatelessIncompleteState, // sentinel alone: cause unknown, not charged
 		errors.New("leveldb: closed"),
+		fmt.Errorf("witness validation failed: %w", parentMissing), // local parent header missing
 	}
 	for _, err := range notAttributable {
 		if isWitnessAttributableImportError(err) {
 			t.Fatalf("%v must not be attributable to the witness server", err)
 		}
 	}
+}
+
+// preStateValidationErrors returns two real ValidateWitnessPreState failures:
+// one caused by the witness (a forged parent root) and one by local state (the
+// parent header is not in the local chain).
+func preStateValidationErrors(t *testing.T) (forged, parentMissing error) {
+	t.Helper()
+	parent := &types.Header{Number: big.NewInt(99), Root: common.HexToHash("0x11")}
+	block := &types.Header{Number: big.NewInt(100), ParentHash: parent.Hash()}
+	witness, err := stateless.NewWitness(block, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	witness.Headers = []*types.Header{{Number: big.NewInt(99), Root: common.HexToHash("0xdeadbeef")}}
+
+	reader := stateless.NewMockHeaderReader()
+	reader.AddHeader(parent)
+	forged = stateless.ValidateWitnessPreState(witness, reader, block)
+	parentMissing = stateless.ValidateWitnessPreState(witness, stateless.NewMockHeaderReader(), block)
+	if forged == nil || parentMissing == nil {
+		t.Fatalf("expected both pre-state checks to fail: forged=%v parentMissing=%v", forged, parentMissing)
+	}
+	return forged, parentMissing
 }
 
 // TestRetryAfterImportFailureReRegistersPending pins the witness manager side of
@@ -373,7 +451,7 @@ func TestImportFailureWithDivergedWitnessRefetchesFromAnotherPeer(t *testing.T) 
 	// First import fails (an unusable witness), the second succeeds.
 	tester.fetcher.insertChain = func(blocks types.Blocks, witnesses []*stateless.Witness) (int, error) {
 		if imports.Add(1) == 1 {
-			return 0, fmt.Errorf("%w (cross: 01 local: 02)", core.ErrStatelessStateRootMismatch)
+			return 0, fmt.Errorf("%w: %w", core.ErrStatelessIncompleteState, &trie.MissingNodeError{NodeHash: common.HexToHash("0x02")}) // incomplete witness: strikes
 		}
 		return tester.insertChain(blocks, witnesses)
 	}
@@ -485,7 +563,7 @@ func newDivergedBroadcastImportFailureHarness(t *testing.T, tester *fetcherTeste
 	// First import fails (an unusable witness), the second succeeds.
 	tester.fetcher.insertChain = func(blocks types.Blocks, witnesses []*stateless.Witness) (int, error) {
 		if hs.imports.Add(1) == 1 {
-			return 0, fmt.Errorf("%w (cross: 01 local: 02)", core.ErrStatelessStateRootMismatch)
+			return 0, fmt.Errorf("%w: %w", core.ErrStatelessIncompleteState, &trie.MissingNodeError{NodeHash: common.HexToHash("0x02")}) // incomplete witness: strikes
 		}
 		return tester.insertChain(blocks, witnesses)
 	}
@@ -562,7 +640,7 @@ func TestImportFailureWithDivergedBroadcastWitnessChargesPusher(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The body arrives first, accepted on the size oracle alone (diverged).
-	if err := tester.fetcher.InjectWitness("pusher", pushed, true); err != nil {
+	if err := tester.fetcher.InjectWitness("pusher", pushed, WitnessNotProducer); err != nil {
 		t.Fatal(err)
 	}
 	waitForCachedWitness(t, tester.fetcher, hash)
@@ -603,7 +681,7 @@ func TestImportFailureWithDivergedBroadcastWitnessOnPendingBlockChargesPusher(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := tester.fetcher.InjectWitness("pusher", pushed, true); err != nil {
+	if err := tester.fetcher.InjectWitness("pusher", pushed, WitnessNotProducer); err != nil {
 		t.Fatal(err)
 	}
 	// The pushed body imports (and fails) first; once the pusher has been
@@ -625,5 +703,104 @@ func TestImportFailureWithDivergedBroadcastWitnessOnPendingBlockChargesPusher(t 
 	hs.assertPusherCharged(t, hash)
 	if n := hs.fetches.Load(); n < 1 {
 		t.Fatalf("witness fetch count = %d, want at least the re-fetch", n)
+	}
+}
+
+// TestImportFailureRetryKeepsSignedHashQuarantine: a block whose signed size was
+// quarantined (distinct servers all "oversized" against it) is fetched on the
+// WIT1 path. Queuing it for import forgets its witness-manager state, which
+// clears the quarantine; a re-fetch after an import failure must restore it.
+// Otherwise the re-fetch is judged against the bad signed size again and the
+// honest servers are struck as oversized a second time.
+func TestImportFailureRetryKeepsSignedHashQuarantine(t *testing.T) {
+	tw := newTestWitnessManager()
+	defer tw.Close()
+	m := tw.manager
+
+	block := createTestBlock(505)
+	hash := block.Hash()
+	m.recordSignedHashMismatch(hash, "s1")
+	if quarantined, _ := m.recordSignedHashMismatch(hash, "s2"); !quarantined {
+		t.Fatal("precondition: two distinct mismatches must quarantine the hash")
+	}
+
+	// The witness arrives on the quarantined WIT1 path: the op records it.
+	fetch := func(common.Hash, chan *eth.Response) (*eth.Request, error) {
+		return &eth.Request{Peer: "srv-2", Cancel: make(chan struct{})}, nil
+	}
+	m.mu.Lock()
+	m.pending[hash] = &witnessRequestState{
+		op:       &blockOrHeaderInject{origin: "o", block: block, fetchWitness: fetch},
+		announce: &blockAnnounce{origin: "o", hash: hash, number: block.NumberU64(), time: time.Now(), fetchWitness: fetch},
+	}
+	m.mu.Unlock()
+	m.handleWitnessFetchSuccess("srv-1", hash, createTestWitnessForBlock(block), time.Now(), WitnessUnproven)
+
+	// handleWitnessFetchSuccess hands the op to import; grab it from the parent.
+	var op *blockOrHeaderInject
+	select {
+	case req := <-tw.enqueueCh:
+		op = req.op
+	case <-time.After(2 * time.Second):
+		t.Fatal("the fetched witness must be handed to import")
+	}
+	if !op.witnessQuarantined {
+		t.Fatal("a witness fetched on the quarantined WIT1 path must be flagged on the op")
+	}
+
+	// Queuing for import forgets the state (as BlockFetcher.enqueueOp does),
+	// then the import fails and the block is re-fetched.
+	m.forget(hash)
+	if m.isSignedHashQuarantined(hash) {
+		t.Fatal("precondition: forget clears the quarantine")
+	}
+	op.witnessImportFailures = 1
+	m.retryAfterImportFailure(op)
+	if !m.isPending(hash) {
+		t.Fatal("the block must be re-registered for a witness re-fetch")
+	}
+	if !m.isSignedHashQuarantined(hash) {
+		t.Fatal("the re-fetch after an import failure must stay on the WIT1 path")
+	}
+
+	// Without the flag nothing is restored.
+	m.forget(hash)
+	op.witnessQuarantined = false
+	m.retryAfterImportFailure(op)
+	if m.isSignedHashQuarantined(hash) {
+		t.Fatal("a block that was not quarantined must not be quarantined by a retry")
+	}
+}
+
+// TestPushedWitnessCarriesSignedHashQuarantine: a witness pushed for a block
+// whose signed size is quarantined reaches import through the same hand-off as
+// a fetched one, so it must carry the quarantine on the op too.
+func TestPushedWitnessCarriesSignedHashQuarantine(t *testing.T) {
+	tw := newTestWitnessManager()
+	defer tw.Close()
+	m := tw.manager
+
+	block := createTestBlock(506)
+	hash := block.Hash()
+	m.recordSignedHashMismatch(hash, "s1")
+	m.recordSignedHashMismatch(hash, "s2")
+	if !m.isSignedHashQuarantined(hash) {
+		t.Fatal("precondition: the hash must be quarantined")
+	}
+	fetch := func(common.Hash, chan *eth.Response) (*eth.Request, error) {
+		return &eth.Request{Peer: "srv", Cancel: make(chan struct{})}, nil
+	}
+	m.mu.Lock()
+	m.pending[hash] = &witnessRequestState{op: &blockOrHeaderInject{origin: "o", block: block, fetchWitness: fetch}}
+	m.mu.Unlock()
+
+	m.handleBroadcast(&injectedWitnessMsg{peer: "pusher", witness: createTestWitnessForBlock(block), provenance: WitnessUnproven, time: time.Now()})
+	select {
+	case req := <-tw.enqueueCh:
+		if !req.op.witnessQuarantined {
+			t.Fatal("a pushed witness for a quarantined block must carry the quarantine on the op")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the pushed witness must be handed to import")
 	}
 }

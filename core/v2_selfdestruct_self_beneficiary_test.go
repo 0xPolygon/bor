@@ -120,7 +120,7 @@ func runSelfDestructSelfBeneficiary(t *testing.T, useV2 bool) {
 		store := blockstm.NewMVStore()
 		bals := blockstm.NewMVBalanceStore()
 		_ = ExecuteV2BlockSTM(context.Background(), tasks, readBase, store, bals, blockCtx, common.Hash{}, vm.Config{}, &cfg,
-			blockCtx.GasLimit, 1, statedb, nil)
+			blockCtx.GasLimit, 1, statedb, nil, nil)
 		statedb.Finalise(params.Rules{IsEIP158: true})
 	}
 

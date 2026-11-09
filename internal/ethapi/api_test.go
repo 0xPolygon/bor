@@ -471,6 +471,8 @@ type testBackend struct {
 	acceptPreconfTxs bool
 	acceptPrivateTxs bool
 
+	conditionalTxsEnabled bool
+
 	// Callback overrides (nil = use default)
 	txStatusFn           func(common.Hash) txpool.TxStatus
 	submitTxForPreconfFn func(*types.Transaction) error
@@ -539,6 +541,9 @@ func newTestBackend(t *testing.T, n int, gspec *core.Genesis, engine consensus.E
 
 func (b testBackend) PreconfEnabled() bool   { return b.preconfEnabled }
 func (b testBackend) PrivateTxEnabled() bool { return b.privateTxEnabled }
+func (b testBackend) ConditionalTxsEnabled() bool {
+	return b.conditionalTxsEnabled
+}
 func (b testBackend) AcceptPreconfTxs() bool { return b.acceptPreconfTxs }
 func (b testBackend) AcceptPrivateTxs() bool { return b.acceptPrivateTxs }
 

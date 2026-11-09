@@ -452,11 +452,7 @@ func (l *list) FilterTxConditional(state *state.StateDB, header *types.Header) t
 
 	removed := l.txs.filter(func(tx *types.Transaction) bool {
 		if options := tx.GetOptions(); options != nil {
-			if err := state.ValidateKnownAccounts(options.KnownAccounts); err != nil {
-				log.Debug("Error while Filtering Tx Conditional's known accounts", "err", err)
-				return true
-			}
-
+			// The header checks are cheap, so run them before the state reads.
 			if err := header.ValidateBlockNumberOptionsPIP15(options.BlockNumberMin, options.BlockNumberMax); err != nil {
 				log.Debug("Error while Filtering Tx Conditional's block number options", "err", err)
 				return true
@@ -464,6 +460,11 @@ func (l *list) FilterTxConditional(state *state.StateDB, header *types.Header) t
 
 			if err := header.ValidateTimestampOptionsPIP15(options.TimestampMin, options.TimestampMax); err != nil {
 				log.Debug("Error while Filtering Tx Conditional's timestamp options", "err", err)
+				return true
+			}
+
+			if err := state.ValidateKnownAccounts(options.KnownAccounts); err != nil {
+				log.Debug("Error while Filtering Tx Conditional's known accounts", "err", err)
 				return true
 			}
 

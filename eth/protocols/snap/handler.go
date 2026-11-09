@@ -26,13 +26,11 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state/snapshot"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/enr"
 	"github.com/ethereum/go-ethereum/trie"
-	"github.com/ethereum/go-ethereum/trie/trienode"
 	"github.com/ethereum/go-ethereum/triedb/database"
 )
 
@@ -302,50 +300,7 @@ func ServiceGetAccountRangeQuery(chain *core.BlockChain, req *GetAccountRangePac
 	if err != nil {
 		return nil, nil
 	}
-	// Iterate over the requested range and pile accounts up
-	var (
-		accounts []*AccountData
-		size     uint64
-		last     common.Hash
-	)
-
-	for it.Next() {
-		hash, account := it.Hash(), common.CopyBytes(it.Account())
-
-		// Track the returned interval for the Merkle proofs
-		last = hash
-
-		// Assemble the reply item
-		size += uint64(common.HashLength + len(account))
-		accounts = append(accounts, &AccountData{
-			Hash: hash,
-			Body: account,
-		})
-		// If we've exceeded the request threshold, abort
-		if bytes.Compare(hash[:], req.Limit[:]) >= 0 {
-			break
-		}
-
-		if size > req.Bytes {
-			break
-		}
-	}
-	it.Release()
-
-	// Generate the Merkle proofs for the first and last account
-	proof := trienode.NewProofSet()
-	if err := tr.Prove(req.Origin[:], proof); err != nil {
-		log.Warn("Failed to prove account range", "origin", req.Origin, "err", err)
-		return nil, nil
-	}
-
-	if last != (common.Hash{}) {
-		if err := tr.Prove(last[:], proof); err != nil {
-			log.Warn("Failed to prove account range", "last", last, "err", err)
-			return nil, nil
-		}
-	}
-	return accounts, proof.List()
+	return serveAccountRange(tr, it, req)
 }
 
 func ServiceGetStorageRangesQuery(chain *core.BlockChain, req *GetStorageRangesPacket) ([][]*StorageData, [][]byte) {
@@ -356,128 +311,17 @@ func ServiceGetStorageRangesQuery(chain *core.BlockChain, req *GetStorageRangesP
 	// TODO(karalabe):   - Logging locally is not ideal as remote faults annoy the local user
 	// TODO(karalabe):   - Dropping the remote peer is less flexible wrt client bugs (slow is better than non-functional)
 
-	// Calculate the hard limit at which to abort, even if mid storage trie
-	hardLimit := uint64(float64(req.Bytes) * (1 + stateLookupSlack))
-
-	// Retrieve storage ranges until the packet limit is reached
-	var (
-		slots  [][]*StorageData
-		proofs [][]byte
-		size   uint64
-	)
-
-	for _, account := range req.Accounts {
-		// If we've exceeded the requested data limit, abort without opening
-		// a new storage range (that we'd need to prove due to exceeded size)
-		if size >= req.Bytes {
-			break
-		}
-		// The first account might start from a different origin and end sooner
-		var origin common.Hash
-		if len(req.Origin) > 0 {
-			origin, req.Origin = common.BytesToHash(req.Origin), nil
-		}
-		var limit = common.MaxHash
-		if len(req.Limit) > 0 {
-			limit, req.Limit = common.BytesToHash(req.Limit), nil
-		}
-		// Retrieve the requested state and bail out if non existent
-		var (
-			err error
-			it  snapshot.StorageIterator
-		)
+	open := func(account, origin common.Hash) (snapshot.StorageIterator, error) {
 		// Temporary solution: using the snapshot interface for both cases.
 		// This can be removed once the hash scheme is deprecated.
 		if chain.TrieDB().Scheme() == rawdb.HashScheme {
 			// The snapshot is assumed to be available in hash mode if
 			// the SNAP protocol is enabled.
-			it, err = chain.Snapshots().StorageIterator(req.Root, account, origin)
-		} else {
-			it, err = chain.TrieDB().StorageIterator(req.Root, account, origin)
+			return chain.Snapshots().StorageIterator(req.Root, account, origin)
 		}
-		if err != nil {
-			return nil, nil
-		}
-		// Iterate over the requested range and pile slots up
-		var (
-			storage []*StorageData
-			last    common.Hash
-			abort   bool
-		)
-
-		for it.Next() {
-			if size >= hardLimit {
-				abort = true
-				break
-			}
-
-			hash, slot := it.Hash(), common.CopyBytes(it.Slot())
-
-			// Track the returned interval for the Merkle proofs
-			last = hash
-
-			// Assemble the reply item
-			size += uint64(common.HashLength + len(slot))
-			storage = append(storage, &StorageData{
-				Hash: hash,
-				Body: slot,
-			})
-			// If we've exceeded the request threshold, abort
-			if bytes.Compare(hash[:], limit[:]) >= 0 {
-				abort = true
-				break
-			}
-		}
-
-		if len(storage) > 0 {
-			slots = append(slots, storage)
-		}
-
-		it.Release()
-
-		// Generate the Merkle proofs for the first and last storage slot, but
-		// only if the response was capped. If the entire storage trie included
-		// in the response, no need for any proofs.
-		// nolint:nestif
-		if origin != (common.Hash{}) || (abort && len(storage) > 0) {
-			// Request started at a non-zero hash or was capped prematurely, add
-			// the endpoint Merkle proofs
-			accTrie, err := trie.NewStateTrie(trie.StateTrieID(req.Root), chain.TrieDB())
-			if err != nil {
-				return nil, nil
-			}
-
-			acc, err := accTrie.GetAccountByHash(account)
-			if err != nil || acc == nil {
-				return nil, nil
-			}
-
-			id := trie.StorageTrieID(req.Root, account, acc.Root)
-			stTrie, err := trie.NewStateTrie(id, chain.TrieDB())
-			if err != nil {
-				return nil, nil
-			}
-			proof := trienode.NewProofSet()
-			if err := stTrie.Prove(origin[:], proof); err != nil {
-				log.Warn("Failed to prove storage range", "origin", req.Origin, "err", err)
-				return nil, nil
-			}
-
-			if last != (common.Hash{}) {
-				if err := stTrie.Prove(last[:], proof); err != nil {
-					log.Warn("Failed to prove storage range", "last", last, "err", err)
-					return nil, nil
-				}
-			}
-			proofs = append(proofs, proof.List()...)
-			// Proof terminates the reply as proofs are only added if a node
-			// refuses to serve more data (exception when a contract fetch is
-			// finishing, but that's that).
-			break
-		}
+		return chain.TrieDB().StorageIterator(req.Root, account, origin)
 	}
-
-	return slots, proofs
+	return serveStorageRanges(chain.TrieDB(), req, open)
 }
 
 // ServiceGetByteCodesQuery assembles the response to a byte codes query.

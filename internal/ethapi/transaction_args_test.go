@@ -416,6 +416,7 @@ func (b *backendMock) PreconfEnabled() bool                              { retur
 func (b *backendMock) SubmitTxForPreconf(tx *types.Transaction) error    { return nil }
 func (b *backendMock) CheckPreconfStatus(hash common.Hash) (bool, error) { return false, nil }
 func (b *backendMock) PrivateTxEnabled() bool                            { return false }
+func (b *backendMock) ConditionalTxsEnabled() bool                       { return false }
 func (b *backendMock) SubmitPrivateTx(tx *types.Transaction) error       { return nil }
 func (b *backendMock) AcceptPreconfTxs() bool                            { return false }
 func (b *backendMock) AcceptPrivateTxs() bool                            { return false }
