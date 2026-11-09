@@ -16,7 +16,7 @@ func TestPeerPolicyBodyServingWorkerLimit(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			fillHeavyResponseSlots(t)
 			rw := &replyTestRW{sent: make(chan p2p.Msg, 1)}
-			peer := &Peer{Peer: configuredLimitsTestPeer(t, "trusted"), rw: rw}
+			peer := &Peer{Peer: configuredLimitsTestPeer(t, "trusted"), rw: rw, heavyResponseLimited: true}
 			var events []peerpolicy.Evidence
 			if enabled {
 				peer.SetObserver(func(event peerpolicy.Evidence) { events = append(events, event) })
