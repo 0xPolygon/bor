@@ -361,6 +361,10 @@ func ImportHistory(chain *core.BlockChain, db ethdb.Database, dir string, networ
 					reported = time.Now()
 				}
 			}
+			// Next stops on a read error as well as at the end of the file.
+			if err := it.Error(); err != nil {
+				return fmt.Errorf("error reading era %s: %w", filename, err)
+			}
 			return nil
 		}()
 		if err != nil {

@@ -19,6 +19,7 @@ package utils
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"io"
 	"math/big"
 	"os"
@@ -176,4 +177,71 @@ func TestHistoryImportAndExport(t *testing.T) {
 	if have, want := imported.CurrentHeader(), chain.CurrentHeader(); have.Hash() != want.Hash() {
 		t.Fatalf("imported chain does not match expected, have (%d, %s) want (%d, %s)", have.Number, have.Hash(), want.Number, want.Hash())
 	}
+}
+
+// TestHistoryImportReadError checks that a read failure in the middle of an
+// Era file fails the import instead of ending it early as a success.
+func TestHistoryImportReadError(t *testing.T) {
+	genesis := &core.Genesis{Config: params.TestChainConfig}
+	db, blocks, _ := core.GenerateChainWithGenesis(genesis, ethash.NewFaker(), 15, nil)
+	chain, err := core.NewBlockChain(db, genesis, ethash.NewFaker(), nil)
+	if err != nil {
+		t.Fatalf("unable to initialize chain: %v", err)
+	}
+	if _, err := chain.InsertChain(blocks, false); err != nil {
+		t.Fatalf("error inserting chain: %v", err)
+	}
+	dir := t.TempDir()
+	if err := ExportHistory(chain, dir, 0, 16, 16); err != nil {
+		t.Fatalf("error exporting history: %v", err)
+	}
+
+	// Point the first file's index entry for block 1 at the version record at
+	// the start of the file, a record of the wrong type, then refresh the
+	// checksum so only the read itself fails.
+	entries, err := era.ReadDir(dir, "mainnet")
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("no era files: %v", err)
+	}
+	path := filepath.Join(dir, entries[0])
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const blocksPerFile, block = 16, 1
+	indexRecord := int64(len(data)) - 24 - blocksPerFile*8
+	entry := len(data) - 8 - (blocksPerFile-block)*8
+	binary.LittleEndian.PutUint64(data[entry:], uint64(-indexRecord))
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sums, err := os.ReadFile(filepath.Join(dir, "checksums.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(string(sums), "\n")
+	lines[0] = common.BytesToHash(sha256Sum(data)).Hex()
+	if err := os.WriteFile(filepath.Join(dir, "checksums.txt"), []byte(strings.Join(lines, "\n")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	db2, err := rawdb.Open(rawdb.NewMemoryDatabase(), rawdb.OpenOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db2.Close() })
+	genesis.MustCommit(db2, triedb.NewDatabase(db2, triedb.HashDefaults))
+	imported, err := core.NewBlockChain(db2, genesis, ethash.NewFaker(), nil)
+	if err != nil {
+		t.Fatalf("unable to initialize chain: %v", err)
+	}
+	err = ImportHistory(imported, db2, dir, "mainnet")
+	if err == nil || !strings.Contains(err.Error(), entries[0]) {
+		t.Fatalf("want a read error for %s, got %v (head %d)", entries[0], err, imported.CurrentHeader().Number)
+	}
+}
+
+func sha256Sum(data []byte) []byte {
+	sum := sha256.Sum256(data)
+	return sum[:]
 }
