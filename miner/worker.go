@@ -1256,7 +1256,7 @@ func (w *worker) mainLoop() {
 			// nolint : nestif
 			if !w.IsRunning() && !w.config.DisablePendingBlock && w.current != nil {
 				// If block is already full, abort
-				if gp := w.current.gasPool; gp != nil && gp.Gas() < params.TxGas {
+				if gp := w.current.gasPool; gp != nil && gp.Available(w.chainConfig.IsAmsterdam(w.current.header.Number)) < params.TxGas {
 					continue
 				}
 				// If we don't have time to execute (i.e. we're past header timestamp), abort
@@ -1786,6 +1786,15 @@ func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transac
 	)
 	lastTxIndex = -1
 
+	isAmsterdam := w.chainConfig.IsAmsterdam(env.header.Number)
+
+	// The smallest gas limit a transaction may carry, EIP-2780 lowers
+	// the intrinsic floor after Amsterdam.
+	minTxGas := params.TxGas
+	if isAmsterdam {
+		minTxGas = params.TxBaseCost2780
+	}
+
 mainloop:
 	for {
 		// Check interruption signal and abort building if it's fired.
@@ -1833,8 +1842,8 @@ mainloop:
 		}
 
 		// If we don't have enough gas for any further transactions then we're done.
-		if env.gasPool.Gas() < params.TxGas {
-			log.Trace("Not enough gas for further transactions", "have", env.gasPool, "want", params.TxGas)
+		if env.gasPool.Available(isAmsterdam) < minTxGas {
+			log.Trace("Not enough gas for further transactions", "have", env.gasPool, "want", minTxGas)
 			break
 		}
 		// If we don't have enough blob space for any further blob transactions,
@@ -1869,8 +1878,8 @@ mainloop:
 			break
 		}
 		// If we don't have enough space for the next transaction, skip the account.
-		if env.gasPool.Gas() < ltx.Gas {
-			log.Trace("Not enough gas left for transaction", "hash", ltx.Hash, "left", env.gasPool.Gas(), "needed", ltx.Gas)
+		if env.gasPool.Available(isAmsterdam) < ltx.Gas {
+			log.Trace("Not enough gas left for transaction", "hash", ltx.Hash, "have", env.gasPool, "needed", ltx.Gas)
 			txs.Pop()
 			continue
 		}
@@ -1948,7 +1957,7 @@ mainloop:
 		env.state.SetTxContext(tx.Hash(), env.tcount, uint32(env.tcount+1))
 
 		// Capture gas pool before execution so we can compute freed gas afterwards.
-		gasPoolBefore := env.gasPool.Gas()
+		gasPoolBefore := env.gasPool.Available(isAmsterdam)
 		logs, err := w.commitTransaction(env, tx)
 		txDuration := time.Since(lastCommitStart)
 
@@ -1995,7 +2004,7 @@ mainloop:
 			// freed = declared gas limit − actual gas used; non-zero means the block
 			// has more capacity than the plan assumed, enabling extra txs to fit.
 			if builderGasFreedCh != nil && ltx.Gas > 0 {
-				actualUsed := gasPoolBefore - env.gasPool.Gas()
+				actualUsed := gasPoolBefore - env.gasPool.Available(isAmsterdam)
 				if freed := ltx.Gas - actualUsed; freed > 0 {
 					select {
 					case builderGasFreedCh <- freed:
@@ -2465,7 +2474,7 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, gen
 		if env.gasPool == nil {
 			return env.header.GasLimit
 		}
-		return env.gasPool.Gas()
+		return env.gasPool.Available(w.chainConfig.IsAmsterdam(env.header.Number))
 	}
 
 	// Fill the block with all available pending transactions.
@@ -2828,7 +2837,7 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 		// interruption is due to frequent commits.
 		gaslimit := work.header.GasLimit
 
-		ratio := float64(gaslimit-work.gasPool.Gas()) / float64(gaslimit)
+		ratio := float64(gaslimit-work.gasPool.Available(w.chainConfig.IsAmsterdam(work.header.Number))) / float64(gaslimit)
 		if ratio < 0.1 {
 			ratio = 0.1
 		}
@@ -3143,7 +3152,7 @@ func (w *worker) runIdleTxProvider(txsCh chan<- *types.Transaction, header *type
 	shouldExit := func() bool {
 		return interrupt.Load() ||
 			(genParams.builderStarted != nil && genParams.builderStarted.Load()) ||
-			totalGasPool.Gas() == 0
+			totalGasPool.Available(false) == 0
 	}
 
 	for !shouldExit() {
@@ -3186,7 +3195,7 @@ func (w *worker) streamIdleBatch(
 	localPrefetched map[common.Hash]struct{},
 	headerGasLimit uint64,
 ) {
-	loopGasLimit := totalGasPool.Gas()
+	loopGasLimit := totalGasPool.Available(false)
 	if loopGasLimit > headerGasLimit {
 		loopGasLimit = headerGasLimit
 	}
@@ -3224,7 +3233,7 @@ func nextViableIdleTx(
 		if ltx == nil {
 			return nil, nil
 		}
-		if gaspool.Gas() < ltx.Gas {
+		if gaspool.Available(false) < ltx.Gas {
 			txs.Pop()
 			continue
 		}
