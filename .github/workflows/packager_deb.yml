@@ -3,13 +3,17 @@ name: packager_deb
 on:
   push:
     paths:
-      - '**'
+      - "**"
     tags:
-      - 'v*.*.*'
-      - 'v*.*.*-*'
+      - "v*.*.*"
+      - "v*.*.*-*"
+
+env:
+  GIT_TAG: ${{ github.ref_name }}
 
 jobs:
   build:
+    environment: private-release
     permissions:
       id-token: write
       contents: write
@@ -23,18 +27,43 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      # Variables
-      - name: Adding TAG to ENV
-        run: echo "GIT_TAG=`echo $(git describe --tags --abbrev=0)`" >> $GITHUB_ENV
-      - name: adding version
+
+      - name: Validate release tag
+        shell: bash
         run: |
-          NUMERIC_VERSION=$( echo ${{ env.GIT_TAG }} | sed 's/[^0-9.]//g' ) 
-          echo "VERSION=$NUMERIC_VERSION" >> $GITHUB_ENV
+          set -euo pipefail
+
+          if [[ ! "$GIT_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
+            echo "Invalid release tag"
+            exit 1
+          fi
+
+      - name: Add package version to environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          PACKAGE_VERSION="${GIT_TAG#v}"
+          # Pre-release tags package with "~" so they sort below the final
+          # release (v2.10.3-beta-priv -> 2.10.3~beta-priv < 2.10.3-priv);
+          # respins such as -priv.1 keep their hyphen and sort above it.
+          # polygon-private-install.sh expects the same mapping.
+          if [[ "$PACKAGE_VERSION" == *-* && ! "${PACKAGE_VERSION#*-}" =~ ^priv([.-].*)?$ ]]; then
+            PACKAGE_VERSION="${PACKAGE_VERSION%%-*}~${PACKAGE_VERSION#*-}"
+          fi
+          dpkg --validate-version "$PACKAGE_VERSION"
+          printf 'VERSION=%s\n' "$PACKAGE_VERSION" >> "$GITHUB_ENV"
 
       - name: Cleaning repo
         run: make clean
       - name: Building for amd64
         run: make bor
+
+      - name: Preserve amd64 release binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p packaging/binaries
+          install -m 755 build/bin/bor "packaging/binaries/bor-${GIT_TAG}-amd64"
 
       - name: Making directory structure
         run: mkdir -p packaging/deb/bor/usr/bin
@@ -48,7 +77,7 @@ jobs:
         run: |
           touch packaging/deb/bor/DEBIAN/control
           echo "Package: bor" >> packaging/deb/bor/DEBIAN/control
-          echo "Version: ${{ env.VERSION }}" >> packaging/deb/bor/DEBIAN/control
+          echo "Version: $VERSION" >> packaging/deb/bor/DEBIAN/control
           echo "Section: base" >> packaging/deb/bor/DEBIAN/control
           echo "Priority: optional" >> packaging/deb/bor/DEBIAN/control
           echo "Architecture: amd64" >> packaging/deb/bor/DEBIAN/control
@@ -56,12 +85,12 @@ jobs:
           echo "Description: bor binary package" >> packaging/deb/bor/DEBIAN/control
 
       - name: Creating package for binary for bor ${{ env.ARCH }}
-        run: cp -rp packaging/deb/bor packaging/deb/bor-${{ env.GIT_TAG }}-${{ env.ARCH }}
+        run: cp -rp packaging/deb/bor "packaging/deb/bor-${GIT_TAG}-${ARCH}"
         env:
           ARCH: amd64
 
       - name: Running package build
-        run: dpkg-deb --build --root-owner-group packaging/deb/bor-${{ env.GIT_TAG }}-${{ env.ARCH }}
+        run: dpkg-deb --build --root-owner-group "packaging/deb/bor-${GIT_TAG}-${ARCH}"
         env:
           ARCH: amd64
 
@@ -80,6 +109,12 @@ jobs:
       - name: Building bor for arm64
         run: GOARCH=arm64 GOOS=linux CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++ CGO_ENABLED=1 go build -o build/bin/bor -pgo=prod.pprof ./cmd/cli/main.go
 
+      - name: Preserve arm64 release binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 755 build/bin/bor "packaging/binaries/bor-${GIT_TAG}-arm64"
+
       - name: Copying necessary binary post arm64 build
         run: cp -rp build/bin/bor packaging/deb/bor/usr/bin/
 
@@ -88,7 +123,7 @@ jobs:
         run: |
           touch packaging/deb/bor/DEBIAN/control
           echo "Package: bor" >> packaging/deb/bor/DEBIAN/control
-          echo "Version: ${{ env.VERSION }}" >> packaging/deb/bor/DEBIAN/control
+          echo "Version: $VERSION" >> packaging/deb/bor/DEBIAN/control
           echo "Section: base" >> packaging/deb/bor/DEBIAN/control
           echo "Priority: optional" >> packaging/deb/bor/DEBIAN/control
           echo "Architecture: arm64" >> packaging/deb/bor/DEBIAN/control
@@ -96,41 +131,163 @@ jobs:
           echo "Description: bor binary package" >> packaging/deb/bor/DEBIAN/control
 
       - name: Creating package for binary for bor ${{ env.ARCH }}
-        run: cp -rp packaging/deb/bor packaging/deb/bor-${{ env.GIT_TAG }}-${{ env.ARCH }}
+        run: cp -rp packaging/deb/bor "packaging/deb/bor-${GIT_TAG}-${ARCH}"
         env:
           ARCH: arm64
 
       - name: Running package build
-        run: dpkg-deb --build --root-owner-group packaging/deb/bor-${{ env.GIT_TAG }}-${{ env.ARCH }}
+        run: dpkg-deb --build --root-owner-group "packaging/deb/bor-${GIT_TAG}-${ARCH}"
         env:
           ARCH: arm64
 
       # Shasum
       - name: shasum the bor debian package
-        run: cd packaging/deb/ && sha256sum bor-${{ env.GIT_TAG }}-${{ env.ARCH }}.deb > bor-${{ env.GIT_TAG }}-${{ env.ARCH }}.deb.checksum
+        run: cd packaging/deb/ && sha256sum "bor-${GIT_TAG}-${ARCH}.deb" > "bor-${GIT_TAG}-${ARCH}.deb.checksum"
         env:
           ARCH: amd64
 
       - name: shasum the bor debian package
-        run: cd packaging/deb/ && sha256sum bor-${{ env.GIT_TAG }}-${{ env.ARCH }}.deb > bor-${{ env.GIT_TAG }}-${{ env.ARCH }}.deb.checksum
+        run: cd packaging/deb/ && sha256sum "bor-${GIT_TAG}-${ARCH}.deb" > "bor-${GIT_TAG}-${ARCH}.deb.checksum"
         env:
           ARCH: arm64
+
+      - name: Check release binaries against packaged binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          for arch in amd64 arm64; do
+            extracted="$(mktemp -d)"
+            dpkg-deb --extract "packaging/deb/bor-${GIT_TAG}-${arch}.deb" "$extracted"
+            cmp "packaging/binaries/bor-${GIT_TAG}-${arch}" "$extracted/usr/bin/bor"
+            rm -rf -- "$extracted"
+          done
+          cd packaging/binaries
+          for arch in amd64 arm64; do
+            file="bor-${GIT_TAG}-${arch}"
+            sha256sum "$file" > "${file}.checksum"
+          done
 
       - name: Install cosign
         uses: sigstore/cosign-installer@d7d6bc7722e3daa8354c50bcb52f4837da5e9b6a # v3.7.0
 
       - name: Sign release artifacts with cosign
+        shell: bash
         run: |
-          shopt -s nullglob
-          artifacts=(packaging/deb/bor-${{ env.GIT_TAG }}-*.deb)
-          if [ ${#artifacts[@]} -eq 0 ]; then
-            echo "No artifacts found to sign"
-            exit 1
-          fi
+          set -euo pipefail
+
+          artifacts=(
+            "packaging/deb/bor-${GIT_TAG}-amd64.deb"
+            "packaging/deb/bor-${GIT_TAG}-arm64.deb"
+          )
+
           for artifact in "${artifacts[@]}"; do
+            if [[ ! -f "$artifact" ]]; then
+              echo "Missing artifact: $artifact"
+              exit 1
+            fi
+
             cosign sign-blob --yes --oidc-provider=github-actions "$artifact" \
               --output-signature "${artifact}.sig" \
               --output-certificate "${artifact}.pem"
+          done
+
+      - name: Create and sign package and binary checksum manifests
+        shell: bash
+        env:
+          GPG_PRIVATE_KEY_B64: ${{ secrets.PRIVATE_RELEASE_GPG_KEY_B64 }}
+          GPG_PASSPHRASE: ${{ secrets.PRIVATE_RELEASE_GPG_PASSPHRASE }}
+          EXPECTED_PRIMARY_FINGERPRINT: ${{ vars.PRIVATE_RELEASE_GPG_FINGERPRINT }}
+          EXPECTED_SIGNING_FINGERPRINT: ${{ vars.PRIVATE_RELEASE_SIGNING_SUBKEY_FINGERPRINT }}
+        run: |
+          set -euo pipefail
+          umask 077
+
+          export GNUPGHOME="$(mktemp -d)"
+
+          cleanup() {
+            gpgconf --kill all >/dev/null 2>&1 || true
+            rm -rf -- "$GNUPGHOME"
+          }
+          trap cleanup EXIT
+
+          printf '%s' "$GPG_PRIVATE_KEY_B64" |
+            base64 --decode |
+            gpg --batch --import
+
+          actual_primary="$(
+            gpg --batch --with-colons \
+              --list-secret-keys "$EXPECTED_PRIMARY_FINGERPRINT" |
+            awk -F: '$1 == "fpr" && !found { print $10; found = 1 }'
+          )"
+
+          if [[ "$actual_primary" != "$EXPECTED_PRIMARY_FINGERPRINT" ]]; then
+            echo "Imported primary-key fingerprint is incorrect"
+            exit 1
+          fi
+
+          if ! gpg --batch --with-colons \
+              --list-secret-keys "$EXPECTED_PRIMARY_FINGERPRINT" |
+              awk -F: '$1 == "fpr" { print $10 }' |
+              grep -Fx "$EXPECTED_SIGNING_FINGERPRINT" >/dev/null
+          then
+            echo "Expected signing subkey was not imported"
+            exit 1
+          fi
+
+          (
+            cd packaging/deb
+            sha256sum "bor-${GIT_TAG}-amd64.deb" "bor-${GIT_TAG}-arm64.deb" \
+              > "bor-${GIT_TAG}-PACKAGES-SHA256SUMS"
+          )
+          (
+            cd packaging/binaries
+            sha256sum "bor-${GIT_TAG}-amd64" "bor-${GIT_TAG}-arm64" \
+              > "bor-${GIT_TAG}-BINARIES-SHA256SUMS"
+          )
+
+          for manifest in \
+            "packaging/deb/bor-${GIT_TAG}-PACKAGES-SHA256SUMS" \
+            "packaging/binaries/bor-${GIT_TAG}-BINARIES-SHA256SUMS"
+          do
+            printf '%s' "$GPG_PASSPHRASE" |
+              gpg --batch --yes \
+                --pinentry-mode loopback \
+                --passphrase-fd 0 \
+                --local-user "${EXPECTED_SIGNING_FINGERPRINT}!" \
+                --armor \
+                --detach-sign \
+                --output "${manifest}.asc" \
+                "$manifest"
+
+            verify_status="${GNUPGHOME}/release-verify-status"
+            gpg --batch --status-fd 1 \
+              --verify "${manifest}.asc" "$manifest" 2>/dev/null \
+              > "$verify_status"
+
+            if ! awk '
+              $1 == "[GNUPG:]" && $2 == "GOODSIG" { good++ }
+              $1 == "[GNUPG:]" &&
+                ($2 == "REVKEYSIG" || $2 == "EXPKEYSIG" || $2 == "EXPSIG" ||
+                 $2 == "BADSIG" || $2 == "ERRSIG") { rejected = 1 }
+              END { exit !(good == 1 && !rejected) }
+            ' "$verify_status"
+            then
+              echo "Release manifest signature is not from one currently valid signing key"
+              exit 1
+            fi
+
+            mapfile -t valid_signers < <(
+              awk '$1 == "[GNUPG:]" && $2 == "VALIDSIG" { print $3 }' \
+                "$verify_status"
+            )
+
+            if (( ${#valid_signers[@]} != 1 )) ||
+               [[ "${valid_signers[0]}" != "$EXPECTED_SIGNING_FINGERPRINT" ]]; then
+              echo "Release manifest was signed by an unexpected key"
+              exit 1
+            fi
+
+            echo "Release manifest signed successfully"
           done
 
       - name: Release bor Packages
@@ -143,26 +300,68 @@ jobs:
             packaging/deb/bor**.deb.checksum
             packaging/deb/bor**.deb.sig
             packaging/deb/bor**.deb.pem
+            packaging/deb/bor-${{ env.GIT_TAG }}-PACKAGES-SHA256SUMS
+            packaging/deb/bor-${{ env.GIT_TAG }}-PACKAGES-SHA256SUMS.asc
 
       - name: Authenticate with GCP via OIDC
         uses: google-github-actions/auth@71f986410dfbc7added4569d411d040a91dc6935 # v2.1.5
         with:
           token_format: access_token
           workload_identity_provider: ${{ secrets.GCP_OIDC_PROVIDER }}
-          service_account: ${{ secrets.GCP_OIDC_SERVICE_ACCOUNT }}
-          project_id: ${{ secrets.GCP_OIDC_PROJECT_ID }}
+          service_account: ${{ secrets.OIDC_SERVICE_ACCOUNT }}
+          project_id: ${{ secrets.OIDC_PROJECT_ID }}
 
       - name: Set up gcloud CLI
         uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2.2.1
 
-      - name: Upload to GCP (shared buckets)
+      - name: Upload packages and signed manifest to GCP
+        shell: bash
         env:
           BUCKET_PRIMARY: ${{ secrets.GCP_BUCKET_PRIMARY }}
           BUCKET_SECONDARY: ${{ secrets.GCP_BUCKET_SECONDARY }}
         run: |
+          set -euo pipefail
+
+          manifest="packaging/deb/bor-${GIT_TAG}-PACKAGES-SHA256SUMS"
+
           for bucket in "$BUCKET_PRIMARY" "$BUCKET_SECONDARY"; do
-            gcloud storage cp packaging/deb/bor-**.deb "$bucket"
-            gcloud storage cp packaging/deb/bor-**.deb.checksum "$bucket"
-            gcloud storage cp packaging/deb/bor-**.deb.sig "$bucket"
-            gcloud storage cp packaging/deb/bor-**.deb.pem "$bucket"
+            for arch in amd64 arm64; do
+              artifact="packaging/deb/bor-${GIT_TAG}-${arch}.deb"
+
+              gcloud storage cp \
+                "$artifact" \
+                "${artifact}.checksum" \
+                "${artifact}.sig" \
+                "${artifact}.pem" \
+                "$bucket"
+            done
+
+            gcloud storage cp \
+              "$manifest" \
+              "${manifest}.asc" \
+              "$bucket"
+          done
+
+      - name: Upload binaries and signed manifest to GCP
+        shell: bash
+        env:
+          BUCKET_PRIMARY: ${{ secrets.GCP_BUCKET_PRIMARY }}
+          BUCKET_SECONDARY: ${{ secrets.GCP_BUCKET_SECONDARY }}
+        run: |
+          set -euo pipefail
+          manifest="packaging/binaries/bor-${GIT_TAG}-BINARIES-SHA256SUMS"
+
+          for bucket in "$BUCKET_PRIMARY" "$BUCKET_SECONDARY"; do
+            if [[ "$bucket" != gs://?* ]]; then
+              echo "Binary upload destination must be a non-empty gs:// URI"
+              exit 1
+            fi
+          done
+
+          for bucket in "$BUCKET_PRIMARY" "$BUCKET_SECONDARY"; do
+            for arch in amd64 arm64; do
+              file="packaging/binaries/bor-${GIT_TAG}-${arch}"
+              gcloud storage cp "$file" "${file}.checksum" "${bucket%/}/"
+            done
+            gcloud storage cp "$manifest" "${manifest}.asc" "${bucket%/}/"
           done
