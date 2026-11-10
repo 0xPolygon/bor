@@ -3194,6 +3194,95 @@ func TestSimulateV1TxSender(t *testing.T) {
 	require.Equal(t, sender2, summary[1].Transactions[0].From, "sender address mismatch")
 }
 
+// TestSimulateV1LogIndex checks that logs which are dropped because their call or call frame
+// failed do not use a log index, so the indices match the ones in receipts.
+func TestSimulateV1LogIndex(t *testing.T) {
+	t.Parallel()
+
+	var (
+		sender   = newAccounts(1)[0].addr
+		reverter = common.HexToAddress("0xc0de000000000000000000000000000000000001")
+		emitter  = common.HexToAddress("0xc0de000000000000000000000000000000000002")
+		outer    = common.HexToAddress("0xc0de000000000000000000000000000000000003")
+		invalid  = common.HexToAddress("0xc0de000000000000000000000000000000000004")
+		// PUSH0 PUSH0 LOG0 PUSH0 PUSH0 REVERT
+		reverterCode = hex2Bytes("5f5fa05f5ffd")
+		// PUSH0 PUSH0 LOG0 STOP
+		emitterCode = hex2Bytes("5f5fa000")
+		// LOG0, CALL(gas, reverter, 0, 0, 0, 0, 0) POP, LOG0, STOP
+		outerCode = hex2Bytes("5f5fa05f5f5f5f5f73" + strings.TrimPrefix(reverter.Hex(), "0x") + "5af1505f5fa000")
+		// PUSH0 PUSH0 LOG0 INVALID
+		invalidCode = hex2Bytes("5f5fa0fe")
+		// INVALID uses all the gas of its call.
+		invalidGas = hexutil.Uint64(100_000)
+	)
+	gspec := &core.Genesis{
+		Config: params.MergedTestChainConfig,
+		Alloc:  types.GenesisAlloc{sender: {Balance: big.NewInt(params.Ether)}},
+	}
+	for _, tc := range []struct {
+		name  string
+		calls []TransactionArgs
+		want  []uint
+	}{
+		{
+			name:  "failed call before a successful one",
+			calls: []TransactionArgs{{From: &sender, To: &reverter}, {From: &sender, To: &emitter}},
+			want:  []uint{0},
+		},
+		{
+			name:  "failed call without revert",
+			calls: []TransactionArgs{{From: &sender, To: &invalid, Gas: &invalidGas}, {From: &sender, To: &emitter}},
+			want:  []uint{0},
+		},
+		{
+			name:  "reverted inner frame",
+			calls: []TransactionArgs{{From: &sender, To: &outer}},
+			want:  []uint{0, 1},
+		},
+		{
+			name:  "indices continue across calls",
+			calls: []TransactionArgs{{From: &sender, To: &emitter}, {From: &sender, To: &reverter}, {From: &sender, To: &emitter}},
+			want:  []uint{0, 1},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := newTestBackend(t, 1, gspec, beacon.New(ethash.NewFaker()), func(i int, b *core.BlockGen) { b.SetPoS() })
+			stateDB, baseHeader, err := backend.StateAndHeaderByNumberOrHash(context.Background(), rpc.BlockNumberOrHashWithNumber(rpc.LatestBlockNumber))
+			if err != nil {
+				t.Fatalf("failed to get state and header: %v", err)
+			}
+			sim := &simulator{
+				b:           backend,
+				state:       stateDB,
+				base:        baseHeader,
+				chainConfig: backend.ChainConfig(),
+				budget:      newGasBudget(0),
+			}
+			results, err := sim.execute(context.Background(), []simBlock{{
+				StateOverrides: &override.StateOverride{
+					reverter: override.OverrideAccount{Code: reverterCode},
+					emitter:  override.OverrideAccount{Code: emitterCode},
+					outer:    override.OverrideAccount{Code: outerCode},
+					invalid:  override.OverrideAccount{Code: invalidCode},
+				},
+				Calls: tc.calls,
+			}})
+			if err != nil {
+				t.Fatalf("simulation execution failed: %v", err)
+			}
+			require.Len(t, results, 1)
+			var have []uint
+			for _, call := range results[0].Calls {
+				for _, log := range call.Logs {
+					have = append(have, log.Index)
+				}
+			}
+			require.Equal(t, tc.want, have)
+		})
+	}
+}
+
 // TestSimulateV1WithdrawalsByFork verifies that withdrawals and withdrawalsRoot
 // are only emitted in the simulated block result when the simulated block is
 // post-Shanghai. Pre-Shanghai blocks must omit both fields, otherwise the
@@ -3349,6 +3438,45 @@ func TestSimulateV1TransferLogs(t *testing.T) {
 		cfg.AmsterdamBlock = big.NewInt(0)
 		run(t, &cfg, params.SystemAddress)
 	})
+}
+
+// TestSimulateV1NonceLimit checks that a call from a sender whose nonce is 2^64-1 fails in
+// both validation modes (EIP-2681), instead of wrapping the nonce when validation is off.
+func TestSimulateV1NonceLimit(t *testing.T) {
+	t.Parallel()
+
+	var (
+		accounts  = newAccounts(2)
+		sender    = accounts[0].addr
+		recipient = accounts[1].addr
+		maxNonce  = hexutil.Uint64(^uint64(0))
+	)
+	gspec := &core.Genesis{
+		Config: params.MergedTestChainConfig,
+		Alloc:  types.GenesisAlloc{sender: {Balance: big.NewInt(params.Ether)}},
+	}
+	for _, validate := range []bool{false, true} {
+		t.Run(fmt.Sprintf("validation=%v", validate), func(t *testing.T) {
+			backend := newTestBackend(t, 1, gspec, beacon.New(ethash.NewFaker()), func(i int, b *core.BlockGen) { b.SetPoS() })
+			stateDB, baseHeader, err := backend.StateAndHeaderByNumberOrHash(context.Background(), rpc.BlockNumberOrHashWithNumber(rpc.LatestBlockNumber))
+			if err != nil {
+				t.Fatalf("failed to get state and header: %v", err)
+			}
+			sim := &simulator{
+				b:           backend,
+				state:       stateDB,
+				base:        baseHeader,
+				chainConfig: backend.ChainConfig(),
+				budget:      newGasBudget(0),
+				validate:    validate,
+			}
+			_, err = sim.execute(context.Background(), []simBlock{{
+				StateOverrides: &override.StateOverride{sender: override.OverrideAccount{Nonce: &maxNonce}},
+				Calls:          []TransactionArgs{{From: &sender, To: &recipient}},
+			}})
+			require.ErrorContains(t, err, core.ErrNonceMax.Error())
+		})
+	}
 }
 
 func TestSignTransaction(t *testing.T) {

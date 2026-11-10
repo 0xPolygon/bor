@@ -1407,7 +1407,6 @@ func (api *API) traceTx(ctx context.Context, tx *types.Transaction, message *cor
 	if precompiles != nil {
 		evm.SetPrecompiles(precompiles)
 	}
-
 	// Define a meaningful timeout of a single transaction trace
 	if config.Timeout != nil {
 		if timeout, err = time.ParseDuration(*config.Timeout); err != nil {
