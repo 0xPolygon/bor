@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/rlp"
 )
 
 func TestStateSyncHashing_Sensitivity_UsingTxDataCopy(t *testing.T) {
@@ -167,6 +168,37 @@ func TestStateSyncTx_EncodeDecode_RoundTrip(t *testing.T) {
 	}
 	if !bytes.Equal(enc, buf2.Bytes()) {
 		t.Fatalf("encode not deterministic: first=%x second=%x", enc, buf2.Bytes())
+	}
+}
+
+func TestStateSyncTx_TransactionDecode(t *testing.T) {
+	tx := NewTx(makeBase())
+
+	bin, err := tx.MarshalBinary()
+	if err != nil {
+		t.Fatalf("MarshalBinary failed: %v", err)
+	}
+	var fromBinary Transaction
+	if err := fromBinary.UnmarshalBinary(bin); err != nil {
+		t.Fatalf("UnmarshalBinary failed: %v", err)
+	}
+
+	enc, err := rlp.EncodeToBytes(tx)
+	if err != nil {
+		t.Fatalf("rlp encode failed: %v", err)
+	}
+	var fromRLP Transaction
+	if err := rlp.DecodeBytes(enc, &fromRLP); err != nil {
+		t.Fatalf("rlp decode failed: %v", err)
+	}
+
+	for name, got := range map[string]*Transaction{"binary": &fromBinary, "rlp": &fromRLP} {
+		if got.Type() != StateSyncTxType {
+			t.Fatalf("%s: type %d, want %d", name, got.Type(), StateSyncTxType)
+		}
+		if got.Hash() != tx.Hash() {
+			t.Fatalf("%s: hash %x, want %x", name, got.Hash(), tx.Hash())
+		}
 	}
 }
 
