@@ -456,7 +456,7 @@ func (s EIP155Signer) Sender(tx *Transaction) (common.Address, error) {
 		return HomesteadSigner{}.Sender(tx)
 	}
 	if tx.ChainId().Cmp(s.chainId) != 0 {
-		return common.Address{}, fmt.Errorf("%w: have %d want %d", ErrInvalidChainId, tx.ChainId(), s.chainId)
+		return common.Address{}, errInvalidChainID(tx.ChainId(), s.chainId)
 	}
 	V, R, S := tx.RawSignatureValues()
 	V = new(big.Int).Sub(V, s.chainId)
@@ -592,6 +592,13 @@ func recoverPlain(sighash common.Hash, R, S, Vb *big.Int, homestead bool) (commo
 	var addr common.Address
 	copy(addr[:], crypto.Keccak256(pub[1:])[12:])
 	return addr, nil
+}
+
+func errInvalidChainID(have, want *big.Int) error {
+	if have.BitLen() > 256 {
+		return fmt.Errorf("%w: have %d-bit value want %d", ErrInvalidChainId, have.BitLen(), want)
+	}
+	return fmt.Errorf("%w: have %d want %d", ErrInvalidChainId, have, want)
 }
 
 // deriveChainId derives the chain id from the given v parameter
