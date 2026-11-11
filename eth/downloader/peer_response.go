@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/eth/downloader/whitelist"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/eth/protocols/snap"
@@ -106,6 +107,10 @@ func (d *Downloader) handleSyncFailure(peer *peerConnection, id string, err erro
 
 func classifySyncFailure(err error) (peerFailureReason, bool) {
 	switch {
+	case errors.Is(err, core.ErrStateSyncProcessing):
+		// Import wraps local Heimdall failures as invalid-chain errors too.
+		// Neither that wrapper nor a nested deadline implicates the serving peer.
+		return "", false
 	case isPrunedSidechainMismatch(err):
 		return peerFailurePrunedSidechain, true
 	case isTransientFailure(err):

@@ -1257,7 +1257,7 @@ func (p *V2StateProcessor) finalizeV2Block(block *types.Block, statedb *state.St
 	allLogs := result.Logs
 	if config.Bor != nil && config.Bor.IsMadhugiri(block.Number()) {
 		if len(block.Transactions()) != len(receipts) {
-			return nil, fmt.Errorf("err in bor.Finalize: %w", ErrStateSyncProcessing)
+			return nil, fmt.Errorf("%w: receipt count mismatch, txs=%d receipts=%d", ErrStateSyncMismatch, len(block.Transactions()), len(receipts))
 		}
 		if receiptsCountBeforeFinalize+1 == len(receipts) {
 			allLogs = append(allLogs, receipts[len(receipts)-1].Logs...)

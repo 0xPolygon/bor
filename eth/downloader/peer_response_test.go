@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/downloader/whitelist"
@@ -41,6 +42,9 @@ func TestClassifySyncFailureReasons(t *testing.T) {
 		reason peerFailureReason
 		ok     bool
 	}{
+		{name: "local state sync failure", err: core.ErrStateSyncProcessing},
+		{name: "wrapped local state sync failure", err: fmt.Errorf("%w: %w", errInvalidChain, core.ErrStateSyncProcessing)},
+		{name: "local state sync deadline", err: fmt.Errorf("%w: %w: %w", errInvalidChain, core.ErrStateSyncProcessing, context.DeadlineExceeded)},
 		{name: "invalid chain", err: errInvalidChain, reason: peerFailureInvalidChain, ok: true},
 		{name: "pruned sidechain", err: fmt.Errorf("%w: %w", errInvalidChain, errors.New(sidechainGhostStateMsg)), reason: peerFailurePrunedSidechain, ok: true},
 		{name: "bad peer", err: errBadPeer, reason: peerFailureBadPeer, ok: true},
