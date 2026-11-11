@@ -83,6 +83,7 @@ devfakeauthor = false
   conditionallifetime = "5m0s"
   conditionalslots = 10000
   filtered-addresses = ""
+  filter-reload = "1m0s"
   rebroadcast = true
   rebroadcast-interval = "30s"
   rebroadcast-max-age = "10m0s"

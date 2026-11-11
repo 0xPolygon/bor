@@ -205,7 +205,9 @@ type Config struct {
 	ConditionalSlots    uint64        // Maximum known accounts and slots across all pooled conditional transactions
 
 	// Transaction filtering configuration
-	FilteredAddresses map[common.Address]struct{} // Pre-loaded filtered addresses (populated by config)
+	FilteredAddresses     map[common.Address]struct{} // Pre-loaded filtered addresses (populated by config)
+	FilteredAddressesFile string                      // File the filtered addresses are re-read from
+	FilterReload          time.Duration               // Interval between re-reads of FilteredAddressesFile (0 disables)
 
 	// Rebroadcast configuration for stuck transactions
 	Rebroadcast          bool          // Enable stuck transaction rebroadcast
@@ -230,6 +232,7 @@ var DefaultConfig = Config{
 	Lifetime:         3 * time.Hour,
 	StrandedLifetime: 3 * time.Hour,
 
+	FilterReload:        time.Minute,
 	ConditionalLifetime: 5 * time.Minute,
 	ConditionalSlots:    10000,
 
@@ -405,6 +408,7 @@ func New(config Config, chain BlockChain, options ...func(pool *LegacyPool)) *Le
 		}
 		log.Info("Loaded filtered addresses", "count", len(pool.filteredAddrs))
 	}
+	filteredAddrsGauge.Update(int64(len(pool.filteredAddrs)))
 
 	// apply options
 	for _, fn := range options {
@@ -454,6 +458,11 @@ func (pool *LegacyPool) Init(gasTip uint64, head *types.Header, reserver txpool.
 
 	pool.wg.Add(1)
 	go pool.loop()
+
+	if path := pool.config.FilteredAddressesFile; path != "" && pool.config.FilterReload > 0 {
+		pool.wg.Add(1)
+		go pool.filterReloadLoop(&filterReloader{path: path}, pool.config.FilterReload)
+	}
 	return nil
 }
 
@@ -2212,6 +2221,21 @@ func (t *lookup) removeAuthorities(tx *types.Transaction) {
 		}
 		t.auths[addr] = list
 	}
+}
+
+// authorizedBy returns the transactions carrying an authorization from an
+// address match accepts.
+func (t *lookup) authorizedBy(match func(common.Address) bool) []common.Hash {
+	t.lock.RLock()
+	defer t.lock.RUnlock()
+
+	var hashes []common.Hash
+	for addr, list := range t.auths {
+		if match(addr) {
+			hashes = append(hashes, list...)
+		}
+	}
+	return hashes
 }
 
 // hasAuth returns a flag indicating whether there are pending authorizations
