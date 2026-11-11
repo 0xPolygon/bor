@@ -256,3 +256,34 @@ pre-Cancun check, which no real block can reach.
 
 Bor wiring candidates: none new. #35638 is the one deferred item, recorded in
 needs-wiring together with #35959 (v1.17.10).
+
+## Batch 7: `9dffe6e97..1df30b18d` (v1.17.10, 9 commits; completes the sync)
+
+22 conflicted paths, almost all from the two declined commits. Hardfork
+surfaces: none changed. One live change in transaction decoding (#36003),
+with a Bor fix.
+
+| Path | Class | Upstream PR | Decision | Why |
+| ---- | ----- | ----------- | -------- | --- |
+| `core/types/transaction.go` | 3 (consensus: block and transaction decoding) | #36003 | **Adopted, with a Bor fix.** `validateDecoded` skips the chain ID size check when a transaction type has no chain ID. | Upstream rejects decoded transactions whose V, R, S or chain ID exceed 256 bits. Bor's `StateSyncTx.chainID()` returns nil, and calling `BitLen()` on it panics, so as merged, decoding any block body that carries state-sync transactions (every state-sync sprint since Madhugiri) would crash the node. Confirmed with a throwaway probe test, then fixed. State-sync signature values are zero, so they still pass the remaining checks. No valid transaction on mainnet or Amoy can exceed 256 bits in these fields (sender recovery and the chain ID check already reject them), so nothing on chain is newly rejected. |
+| `core/types/transaction_signing.go` | 2 | #36003 | Kept Bor's signer types; upstream's `errInvalidChainID` helper is used by `EIP155Signer`, which merged cleanly. | Bor never adopted upstream's `modernSigner`; the conflict was only the error wording inside it. |
+| `cmd/evm/testdata/17/exp.json` | 1 | #36004 | Taken. | The t8n expectation now reports the oversized values at decode time. |
+| `core/vm/stack.go`; `core/vm/gen/*`, `core/vm/interpreter_gen{,_test}.go`, `cmd/geth/default.pgo` (modify/delete) | 3 (EVM) | #35959 | **Deferred (kept Bor).** | Follow-up to #35638, deferred in batch 6 (needs-wiring). |
+| `cmd/utils/flags.go`, `eth/{backend,handler}.go`, `eth/ethconfig/{config,gen_config}.go`, `eth/downloader/statesync.go`, `eth/protocols/snap/{handler,protocol}.go`, `cmd/devp2p/internal/ethtest/suite_test.go`; `eth/downloader/downloader.go`, `eth/protocols/snap/syncer.go` (modify/delete) | 3 | #35989, #35998 | **Declined (kept Bor).** | Auto-enables snap/2 an hour after Amsterdam and decouples snap/2 serving from the syncer choice. Bor doesn't carry snap/2 (decision C, v1.17.6). Also keyed on `AmsterdamTime`, which Bor doesn't use. |
+| `core/forkid/forkid_test.go`, `params/chainspecs/hoodi.json` (modify/delete) | 1 | #36001 | Kept Bor. | Reverts #35974, which wasn't taken. |
+| `build/checksums.txt` | 1 | #35985 | Kept Bor (Go 1.26.10). | Bor's toolchain. |
+| `version/version.go` | 2 | #35991, #36002 | Taken. | 1.17.10 stable. |
+
+## Milestone v1.17.10 triage (7 upstream PRs, plus 2 version commits)
+
+| PR | Title | Outcome | Class |
+| -- | ----- | ------- | ----- |
+| #35989 | auto-enable snap/2 with Amsterdam | declined (snap/2 not carried) | inert |
+| #35959 | fold DUP/SWAP into shared cases | deferred with #35638 | would be live (EVM dispatch) |
+| #35985 | `-dlgo` Go 1.27.3 | kept Bor | inert |
+| #35998 | snap.v2 help text | declined | inert |
+| #36001 | revert Amsterdam on Hoodi | kept Bor | inert |
+| #36003 | stricter transaction field validation | adopted with the nil chain ID guard | **live (block and transaction decoding)** |
+| #36004 | t8n test fixture | taken | inert |
+
+Bor wiring candidates: none new.
