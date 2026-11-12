@@ -2,6 +2,7 @@ package downloader
 
 import (
 	"errors"
+	"fmt"
 	"math/big"
 	"sync/atomic"
 	"testing"
@@ -266,7 +267,7 @@ func registerOperationalWitnessPeer(t *testing.T, d *Downloader, id string, fetc
 }
 
 func TestConcurrentFetchWitnessRecovery(t *testing.T) {
-	for _, name := range []string{"empty", "send failure", "timeout", "master timeout", "late response", "alternate source", "cancel", "persistent unavailability"} {
+	for _, name := range []string{"empty", "send failure", "timeout", "master timeout", "late response", "alternate source", "cancel", "persistent unavailability", "persistent send failure", "persistent timeout", "persistent master timeout"} {
 		t.Run(name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				d := newTestDownloader()
@@ -287,7 +288,8 @@ func TestConcurrentFetchWitnessRecovery(t *testing.T) {
 					attempts = append(attempts, time.Now())
 					requested = append(requested, hashes...)
 					req := &eth.Request{Peer: "server", Sent: time.Now(), Cancel: make(chan struct{})}
-					failed := calls <= 4 || name == "persistent unavailability"
+					persistent := name == "persistent unavailability" || name == "persistent send failure" || name == "persistent timeout" || name == "persistent master timeout"
+					failed := calls <= 4 || persistent
 					if name == "late response" {
 						if calls == 1 {
 							stale = req
@@ -297,9 +299,9 @@ func TestConcurrentFetchWitnessRecovery(t *testing.T) {
 					}
 					if failed {
 						switch name {
-						case "send failure":
+						case "send failure", "persistent send failure":
 							return nil, errors.New("send failed")
-						case "timeout", "master timeout":
+						case "timeout", "master timeout", "persistent timeout", "persistent master timeout":
 							return req, nil
 						}
 					}
@@ -320,7 +322,7 @@ func TestConcurrentFetchWitnessRecovery(t *testing.T) {
 					}()
 					return req, nil
 				})
-				if name == "master timeout" {
+				if name == "master timeout" || name == "persistent master timeout" {
 					d.cancelPeer = server.id
 				}
 				done := make(chan error, 1)
@@ -337,15 +339,12 @@ func TestConcurrentFetchWitnessRecovery(t *testing.T) {
 				}()
 				start := time.Now()
 				go func() { done <- d.concurrentFetch((*witnessQueue)(d), false) }()
-				canceled := name == "cancel" || name == "persistent unavailability"
+				canceled := name == "cancel"
+				unavailable := name == "persistent unavailability" || name == "persistent send failure" || name == "persistent timeout" || name == "persistent master timeout"
 				if name == "alternate source" || canceled {
 					synctest.Wait()
 					if calls != 1 || d.queue.PendingWitnesses() != 2 {
 						t.Fatalf("empty response did not requeue work: calls=%d pending=%d", calls, d.queue.PendingWitnesses())
-					}
-					if name == "persistent unavailability" {
-						time.Sleep(time.Minute - time.Millisecond)
-						synctest.Wait()
 					}
 					if canceled {
 						close(d.cancelCh)
@@ -365,10 +364,13 @@ func TestConcurrentFetchWitnessRecovery(t *testing.T) {
 				select {
 				case err := <-done:
 					finished = true
-					if (canceled && err != errCanceled) || (!canceled && err != nil) {
+					switch {
+					case canceled && err != errCanceled,
+						unavailable && !errors.Is(err, ErrWitnessUnavailable),
+						!canceled && !unavailable && err != nil:
 						t.Fatalf("fetch stopped: %v", err)
 					}
-				case <-time.After(20 * time.Second):
+				case <-time.After(5 * time.Minute):
 					t.Fatal("witness fetch did not recover")
 				}
 				if drops != 0 || server.backedOff() || d.peers.persistentBackoff(server.id) > 0 || softStrikeTally(d.peers, server.id) != 0 {
@@ -380,9 +382,9 @@ func TestConcurrentFetchWitnessRecovery(t *testing.T) {
 					}
 				}
 				switch name {
-				case "persistent unavailability":
-					if calls != 60 || time.Since(start) != time.Minute-time.Millisecond {
-						t.Fatalf("unavailable witnesses were not paced or cancellation stalled: calls=%d elapsed=%v", calls, time.Since(start))
+				case "persistent unavailability", "persistent send failure", "persistent timeout", "persistent master timeout":
+					if elapsed := time.Since(start); elapsed < 30*time.Second || elapsed > 30*time.Second+d.peers.rates.TargetTimeout() {
+						t.Fatalf("unavailable witnesses were not paced or bounded: calls=%d elapsed=%v", calls, elapsed)
 					}
 				case "alternate source", "cancel":
 					if calls != 1 || time.Since(start) >= time.Second {
@@ -402,12 +404,181 @@ func TestConcurrentFetchWitnessRecovery(t *testing.T) {
 						}
 					}
 				}
-				if !canceled && len(d.queue.witnessTaskPool) != 0 {
+				if !canceled && !unavailable && len(d.queue.witnessTaskPool) != 0 {
 					t.Fatal("fetch finished without delivering every witness")
 				}
 			})
 		})
 	}
+}
+
+func scheduleWitnessTasks(d *Downloader, count int) {
+	var (
+		headers []*types.Header
+		hashes  []common.Hash
+		parent  common.Hash
+	)
+	for i := 1; i <= count; i++ {
+		header := &types.Header{Number: big.NewInt(int64(i)), ParentHash: parent}
+		parent = header.Hash()
+		headers = append(headers, header)
+		hashes = append(hashes, parent)
+	}
+	d.queue.Schedule(headers, hashes, 1)
+}
+
+func runWitnessFetch(t *testing.T, d *Downloader, probe func(wait func() error)) {
+	t.Helper()
+
+	done := make(chan error, 1)
+	go func() { done <- d.concurrentFetch((*witnessQueue)(d), false) }()
+	defer func() {
+		select {
+		case <-d.cancelCh:
+		default:
+			close(d.cancelCh)
+		}
+		<-done
+	}()
+
+	probe(func() error {
+		select {
+		case err := <-done:
+			done <- err
+			return err
+		case <-time.After(5 * time.Minute):
+			t.Fatal("witness fetch never finished")
+			return nil
+		}
+	})
+}
+
+func TestConcurrentFetchWitnessBudget(t *testing.T) {
+	t.Run("ongoing progress", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			d := newTestDownloader()
+			d.queue.Prepare(1, StatelessSync)
+			scheduleWitnessTasks(d, 3)
+			d.queue.witnessWakeCh <- false
+			var calls int
+			server := registerOperationalWitnessPeer(t, d, "server", func(_ []common.Hash, sink chan *eth.Response) (*eth.Request, error) {
+				calls++
+				req := &eth.Request{Peer: "server", Cancel: make(chan struct{})}
+				var witnesses []*stateless.Witness
+				if calls%20 == 0 {
+					witnesses = []*stateless.Witness{{}}
+				}
+				go func() {
+					select {
+					case sink <- &eth.Response{Req: req, Res: witnesses, Done: make(chan error, 1)}:
+					case <-req.Cancel:
+					}
+				}()
+				return req, nil
+			})
+			start := time.Now()
+			runWitnessFetch(t, d, func(wait func() error) {
+				if err := wait(); err != nil {
+					t.Fatalf("a cycle still accepting witnesses ended: %v", err)
+				}
+				if elapsed := time.Since(start); elapsed <= witnessNoProgressBudget || calls != 60 {
+					t.Fatalf("accepted witnesses did not extend the budget: calls=%d elapsed=%v", calls, elapsed)
+				}
+				if d.peers.persistentBackoff(server.id) > 0 || softStrikeTally(d.peers, server.id) != 0 {
+					t.Fatal("paced retries penalized the peer")
+				}
+			})
+		})
+	})
+
+	t.Run("starved headers", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			d := newTestDownloader()
+			d.queue.Prepare(1, StatelessSync)
+			var calls int
+			registerOperationalWitnessPeer(t, d, "server", func(_ []common.Hash, sink chan *eth.Response) (*eth.Request, error) {
+				calls++
+				req := &eth.Request{Peer: "server", Cancel: make(chan struct{})}
+				go func() {
+					select {
+					case sink <- &eth.Response{Req: req, Res: []*stateless.Witness{{}}, Done: make(chan error, 1)}:
+					case <-req.Cancel:
+					}
+				}()
+				return req, nil
+			})
+			runWitnessFetch(t, d, func(wait func() error) {
+				time.Sleep(3 * witnessNoProgressBudget)
+				synctest.Wait()
+				if calls != 0 {
+					t.Fatalf("witnesses were requested without scheduled work: calls=%d", calls)
+				}
+				scheduleWitnessTasks(d, 2)
+				d.queue.witnessWakeCh <- false
+				if err := wait(); err != nil {
+					t.Fatalf("a cycle waiting for headers ended: %v", err)
+				}
+				if calls != 2 {
+					t.Fatalf("got %d requests, want 2", calls)
+				}
+			})
+		})
+	})
+
+	t.Run("throttled consumer", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			d := newTestDownloader()
+			d.queue.Prepare(1, StatelessSync)
+			d.queue.resultCache.SetThrottleThreshold(1)
+			scheduleWitnessTasks(d, 2)
+			d.queue.witnessWakeCh <- false
+			var calls int
+			registerOperationalWitnessPeer(t, d, "server", func(_ []common.Hash, sink chan *eth.Response) (*eth.Request, error) {
+				calls++
+				req := &eth.Request{Peer: "server", Cancel: make(chan struct{})}
+				go func() {
+					select {
+					case sink <- &eth.Response{Req: req, Res: []*stateless.Witness{{}}, Done: make(chan error, 1)}:
+					case <-req.Cancel:
+					}
+				}()
+				return req, nil
+			})
+			runWitnessFetch(t, d, func(wait func() error) {
+				time.Sleep(3 * witnessNoProgressBudget)
+				synctest.Wait()
+				if calls != 1 || d.queue.PendingWitnesses() != 1 {
+					t.Fatalf("throttled queue kept fetching: calls=%d pending=%d", calls, d.queue.PendingWitnesses())
+				}
+				d.queue.resultCache.SetThrottleThreshold(2)
+				d.queue.witnessWakeCh <- true
+				if err := wait(); err != nil {
+					t.Fatalf("a cycle throttled by the importer ended: %v", err)
+				}
+				if calls != 2 {
+					t.Fatalf("got %d requests, want 2", calls)
+				}
+			})
+		})
+	})
+}
+
+func TestConcurrentFetchReceiptsOutlastWitnessBudget(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		d := newTestDownloader()
+		d.peers.rates.OverrideTTLLimit = 50 * time.Millisecond
+		scheduleReceiptTask(d)
+
+		peer := &mockPeer{id: "peer-eth69", protocol: eth.ETH69}
+		if err := d.peers.Register(newPeerConnection(peer.id, peer.protocol, peer, log.New())); err != nil {
+			t.Fatal(err)
+		}
+		start := time.Now()
+		err := d.concurrentFetch((*receiptQueue)(d), false)
+		if elapsed := time.Since(start); err != ErrPeerBackedOff || elapsed <= witnessNoProgressBudget {
+			t.Fatalf("receipt stalling changed: err=%v elapsed=%v", err, elapsed)
+		}
+	})
 }
 
 func TestDeliverWitnessFailureLabels(t *testing.T) {
@@ -430,5 +601,78 @@ func TestDeliverWitnessFailureLabels(t *testing.T) {
 		if peer.Lacks(header.Hash()) != invalid || d.queue.PendingWitnesses() != 1 {
 			t.Fatalf("wrong treatment for invalid=%v", invalid)
 		}
+	}
+}
+
+func TestConcurrentFetchWitnessStaggeredTimeoutBudget(t *testing.T) {
+	for _, throttled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("throttled=%t", throttled), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				d := newTestDownloader()
+				d.peers.rates.OverrideTTLLimit = 10 * time.Second
+				d.queue.Prepare(1, StatelessSync)
+				first := &types.Header{Number: big.NewInt(1)}
+				second := &types.Header{Number: big.NewInt(2), ParentHash: first.Hash()}
+				hashes := []common.Hash{first.Hash(), second.Hash()}
+				d.queue.Schedule([]*types.Header{first, second}, hashes, 1)
+				if throttled {
+					d.queue.resultCache.SetThrottleThreshold(2)
+					third := &types.Header{Number: big.NewInt(3), ParentHash: second.Hash()}
+					d.queue.Schedule([]*types.Header{third}, []common.Hash{third.Hash()}, 3)
+				}
+				d.queue.witnessWakeCh <- false
+				var peers []*peerConnection
+				var requests []*eth.Request
+				register := func(id string) {
+					peers = append(peers, registerOperationalWitnessPeer(t, d, id, func(_ []common.Hash, _ chan *eth.Response) (*eth.Request, error) {
+						req := &eth.Request{Peer: id, Sent: time.Now(), Cancel: make(chan struct{})}
+						requests = append(requests, req)
+						return req, nil
+					}))
+				}
+				register("first")
+				ttl := d.peers.rates.TargetTimeout()
+				done := make(chan error, 1)
+				go func() { done <- d.concurrentFetch((*witnessQueue)(d), false) }()
+				finished := false
+				defer func() {
+					if !finished {
+						close(d.cancelCh)
+						<-done
+					}
+				}()
+				time.Sleep(ttl / 2)
+				register("second")
+				if throttled {
+					register("idle")
+				}
+				select {
+				case err := <-done:
+					finished = true
+					if !errors.Is(err, ErrWitnessUnavailable) {
+						t.Fatalf("wrong cycle failure: %v", err)
+					}
+				case <-time.After(witnessNoProgressBudget + 3*ttl):
+					t.Fatal("staggered in-flight requests kept the witness cycle alive beyond its budget")
+				}
+				for _, peer := range peers {
+					if peer.backedOff() || d.peers.persistentBackoff(peer.id) > 0 || softStrikeTally(d.peers, peer.id) != 0 {
+						t.Fatal("cycle budget penalized a peer")
+					}
+					for _, hash := range hashes {
+						if peer.Lacks(hash) {
+							t.Fatal("cycle budget marked a witness source lacking")
+						}
+					}
+				}
+				for _, req := range requests {
+					select {
+					case <-req.Cancel:
+					default:
+						t.Fatal("cycle left a witness request active")
+					}
+				}
+			})
+		})
 	}
 }

@@ -67,7 +67,7 @@ type chainSyncer struct {
 
 	peersUnavailableUntil time.Time
 	observedPeerRevision  uint64
-	stateSyncRetryUntil   time.Time
+	operationalRetryUntil time.Time
 }
 
 // chainSyncOp is a scheduled sync operation.
@@ -147,10 +147,10 @@ func (cs *chainSyncer) onSyncDone(err error) {
 	cs.force.Reset(forceSyncCycle)
 	cs.forced = false
 
-	if errors.Is(err, core.ErrStateSyncProcessing) {
-		cs.stateSyncRetryUntil = time.Now().Add(forceSyncCycle)
+	if errors.Is(err, core.ErrStateSyncProcessing) || errors.Is(err, downloader.ErrWitnessUnavailable) {
+		cs.operationalRetryUntil = time.Now().Add(forceSyncCycle)
 	} else {
-		cs.stateSyncRetryUntil = time.Time{}
+		cs.operationalRetryUntil = time.Time{}
 	}
 
 	if errors.Is(err, downloader.ErrPeersUnavailable) || errors.Is(err, downloader.ErrPeerBackedOff) || errors.Is(err, whitelist.ErrNoRemote) {
@@ -236,7 +236,7 @@ func (cs *chainSyncer) nextSyncOp() (*chainSyncOp, time.Duration) {
 	if cs.doneCh != nil {
 		return nil, 0 // Sync already running
 	}
-	if remaining := time.Until(cs.stateSyncRetryUntil); remaining > 0 {
+	if remaining := time.Until(cs.operationalRetryUntil); remaining > 0 {
 		return nil, remaining
 	}
 	if remaining := time.Until(cs.peersUnavailableUntil); remaining > 0 {

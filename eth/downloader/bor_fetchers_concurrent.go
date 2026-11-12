@@ -262,7 +262,7 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 		}
 	}()
 
-	witnessRetry := make(witnessRetries)
+	witnessRetry := newWitnessRetries()
 
 	// Prepare the queue and fetch block parts until the block header fetcher's done
 	finished := false
@@ -272,7 +272,10 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 		if d.peers.Len() == 0 && !beaconMode {
 			return errNoPeers
 		}
-		var wakeBackoff time.Time
+		var (
+			wakeBackoff time.Time
+			throttled   bool
+		)
 		// If there's nothing more to fetch, wait or terminate
 		if queue.pending() == 0 {
 			if len(pending) == 0 && finished {
@@ -289,14 +292,13 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 
 			var (
 				progressed bool
-				throttled  bool
 				queued     = queue.pending()
 			)
 
 			for _, peer := range idles {
 				// Short circuit if throttling activated or there are no more
 				// queued tasks to be retrieved
-				if throttled {
+				if throttled || witnessRetry.exhausted(time.Now()) {
 					break
 				}
 
@@ -304,7 +306,7 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 					break
 				}
 
-				if _, delayed := witnessRetry[peer.id]; delayed {
+				if witnessRetry.delayed(peer.id) {
 					continue
 				}
 				// Reserve a chunk of fetches for a peer. A nil can mean either that
@@ -356,12 +358,16 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 
 			wakeBackoff = earlierBackoff(wakeBackoff, retryWake)
 
-			stalledNoProgress := !progressed && !throttled && len(pending) == 0 && queued > 0 && !beaconMode && retryWake.IsZero()
+			stalledNoProgress := !progressed && !throttled && len(pending) == 0 && queued > 0 && !beaconMode && retryWake.IsZero() && !witnessRetry.exhausted(time.Now())
 			if err := fetchStallError(stalledNoProgress, len(idles), capablePeers, awaitingStale, hasBackedOffPeer); err != nil {
 				return err
 			}
 		}
-		backoffTimer, backoffCh = armBackoffTimer(backoffTimer, wakeBackoff)
+		budgetWake, err := witnessRetry.guard(queue, queue.pending(), len(pending), throttled, time.Now())
+		if err != nil {
+			return err
+		}
+		backoffTimer, backoffCh = armBackoffTimer(backoffTimer, earlierBackoff(wakeBackoff, budgetWake))
 		// Wait for something to happen
 		select {
 		case <-d.cancelCh:
@@ -389,7 +395,7 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 			}
 			// A peer left, any existing requests need to be untracked, pending
 			// tasks returned and possible reassignment checked
-			delete(witnessRetry, peerid)
+			witnessRetry.forget(peerid)
 
 			if req, ok := pending[peerid]; ok {
 				queue.unreserve(peerid) // TODO(karalabe): This needs a non-expiration method
@@ -533,19 +539,9 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 			// If the peer was previously banned and failed to deliver its pack
 			// in a reasonable time frame, ignore its message.
 			if peer := d.peers.Peer(res.Req.Peer); peer != nil {
-				// Deliver the received chunk of data and check chain validity
-				accepted, err := queue.deliver(peer, res)
-				if err == nil && accepted > 0 {
-					metrics.RecordPerItemDuration(queueItemTimer(queue), res.Time, accepted)
-				}
+				accepted, err := deliverFetchResponse(queue, peer, res)
 				if errors.Is(err, errInvalidChain) {
 					return err
-				}
-				// Unless a peer delivered something completely else than requested (usually
-				// caused by a timed out request which came through in the end), set it to
-				// idle. If the delivery's stale, the peer should have already been idled.
-				if !errors.Is(err, errStaleDelivery) {
-					queue.updateCapacity(peer, accepted, res.Time)
 				}
 				witnessRetry.delivered(queue, peer.id, accepted, err)
 			}
@@ -569,4 +565,15 @@ func (d *Downloader) capablePeers(queue typedQueue) int {
 		}
 	}
 	return count
+}
+
+func deliverFetchResponse(queue typedQueue, peer *peerConnection, res *eth.Response) (int, error) {
+	accepted, err := queue.deliver(peer, res)
+	if err == nil && accepted > 0 {
+		metrics.RecordPerItemDuration(queueItemTimer(queue), res.Time, accepted)
+	}
+	if !errors.Is(err, errInvalidChain) && !errors.Is(err, errStaleDelivery) {
+		queue.updateCapacity(peer, accepted, res.Time)
+	}
+	return accepted, err
 }

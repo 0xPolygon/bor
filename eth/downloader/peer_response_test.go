@@ -43,6 +43,7 @@ func TestClassifySyncFailureReasons(t *testing.T) {
 		ok     bool
 	}{
 		{name: "local state sync failure", err: core.ErrStateSyncProcessing},
+		{name: "unavailable witnesses", err: fmt.Errorf("fetch: %w", ErrWitnessUnavailable)},
 		{name: "wrapped local state sync failure", err: fmt.Errorf("%w: %w", errInvalidChain, core.ErrStateSyncProcessing)},
 		{name: "local state sync deadline", err: fmt.Errorf("%w: %w: %w", errInvalidChain, core.ErrStateSyncProcessing, context.DeadlineExceeded)},
 		{name: "state sync mismatch", err: fmt.Errorf("%w: %w", errInvalidChain, core.ErrStateSyncMismatch), reason: peerFailureInvalidChain, ok: true},
