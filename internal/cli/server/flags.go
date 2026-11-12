@@ -508,6 +508,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.Sealer.EnableDynamicTargetGas,
 		Group:   "Sealer",
 	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "miner.baseFeeFloor",
+		Usage:   "Hold the base fee at or above miner.targetBaseFee (post-Lisovo, producer policy only)",
+		Value:   &c.cliConfig.Sealer.BaseFeeFloor,
+		Default: c.cliConfig.Sealer.BaseFeeFloor,
+		Group:   "Sealer",
+	})
 	f.Uint64Flag(&flagset.Uint64Flag{
 		Name:    "miner.targetGasMinPercentage",
 		Usage:   "Minimum target gas percentage (1-100) when dynamic target gas is enabled",
