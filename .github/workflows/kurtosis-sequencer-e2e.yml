@@ -64,7 +64,9 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: 0xPolygon/heimdall-v2
-          ref: develop
+          # develop runs Rio from genesis on local chains (heimdall-v2#673), which the
+          # v2.10.x devnet configs here don't; pin the release this tree pairs with.
+          ref: v0.12.2
           persist-credentials: false
 
       - name: Build heimdall-v2 docker image
@@ -118,7 +120,8 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: 0xPolygon/pos-workflows
-          ref: main
+          # main follows bor develop; pinned so the suite matches this release line.
+          ref: 8674f9288b2ad402496f499342b10e1f85a143ad
           path: pos-workflows
           persist-credentials: false
 

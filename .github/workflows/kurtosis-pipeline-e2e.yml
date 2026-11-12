@@ -57,7 +57,9 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: 0xPolygon/heimdall-v2
-          ref: develop
+          # develop runs Rio from genesis on local chains (heimdall-v2#673), which the
+          # v2.10.x devnet configs here don't; pin the release this tree pairs with.
+          ref: v0.12.2
           persist-credentials: false
 
       - name: Build heimdall-v2 docker image
@@ -148,12 +150,19 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: 0xPolygon/pos-workflows
-          ref: main
+          # main follows bor develop; pinned so the suite matches this release line.
+          ref: 8674f9288b2ad402496f499342b10e1f85a143ad
           path: pos-workflows
           persist-credentials: false
 
       - name: Copy kurtosis config
-        run: cp ./pos-workflows/configs/kurtosis-pipeline-e2e.yml ./kurtosis-pipeline-e2e.yml
+        # The config's baseline still points at Docker Hub, where the bor repository was removed.
+        # v2.10.1 is the last release that doesn't parse [pipeline], so the baseline stays
+        # pipeline-off; it is also the release Docker Hub's stale latest tag served.
+        run: |
+          cp ./pos-workflows/configs/kurtosis-pipeline-e2e.yml ./kurtosis-pipeline-e2e.yml
+          sed -i 's|el_image: 0xpolygon/bor:latest|el_image: ghcr.io/0xpolygon/bor:v2.10.1|' ./kurtosis-pipeline-e2e.yml
+          ! grep -n 'el_image: 0xpolygon/' ./kurtosis-pipeline-e2e.yml
 
       # Load images
       - name: Download bor docker image
