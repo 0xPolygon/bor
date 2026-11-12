@@ -62,11 +62,18 @@ func unminable(tx *types.Transaction, baseFee *big.Int) bool {
 }
 
 // strandedBaseFee returns the base fee of the next block, the same one the
-// priced list and producers use, or nil before London.
+// priced list and producers use, or nil before London. With the base fee floor
+// enabled it is the floor threshold instead, so a fee rise above the floor does
+// not strand transactions that will be included once it falls back.
 func (pool *LegacyPool) strandedBaseFee() *big.Int {
 	head := pool.currentHead.Load()
 	if head == nil || head.BaseFee == nil || !pool.chainconfig.IsLondon(head.Number) {
 		return nil
+	}
+	if pool.config.BaseFeeFloor {
+		if threshold := pool.floor.threshold(head); threshold != nil {
+			return threshold
+		}
 	}
 	return eip1559.CalcBaseFee(pool.chainconfig, head)
 }

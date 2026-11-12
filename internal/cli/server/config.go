@@ -402,6 +402,9 @@ type TxPoolConfig struct {
 
 	// ConditionalSlots is the maximum number of known accounts and slots across all pooled conditional transactions
 	ConditionalSlots uint64 `hcl:"conditionalslots,optional" toml:"conditionalslots,optional"`
+	// BaseFeeFloor refuses and sweeps transactions that cannot pay the producers'
+	// base fee floor, learned from canonical headers
+	BaseFeeFloor bool `hcl:"basefeefloor,optional" toml:"basefeefloor,optional"`
 
 	// FilteredAddressesFile is the path to newline-separated list of addresses whose transactions will be filtered
 	FilteredAddressesFile string `hcl:"filtered-addresses,optional" toml:"filtered-addresses,optional"`
@@ -1007,6 +1010,7 @@ func DefaultConfig() *Config {
 			Conditional:          false,
 			ConditionalLifetime:  5 * time.Minute,
 			ConditionalSlots:     10000,
+			BaseFeeFloor:         false,
 			Rebroadcast:          true,
 			RebroadcastInterval:  30 * time.Second,
 			RebroadcastMaxAge:    10 * time.Minute,
@@ -1417,6 +1421,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.TxPool.ConditionalTxs = c.TxPool.Conditional
 		n.TxPool.ConditionalLifetime = c.TxPool.ConditionalLifetime
 		n.TxPool.ConditionalSlots = c.TxPool.ConditionalSlots
+		n.TxPool.BaseFeeFloor = c.TxPool.BaseFeeFloor
 
 		filteredAddrs, err := legacypool.LoadFilteredAddresses(c.TxPool.FilteredAddressesFile)
 		if err != nil {

@@ -442,6 +442,8 @@ The ```bor server``` command runs the Bor client.
 
 - ```txpool.filter-reload```: Interval at which the filtered addresses file is re-read and applied without a restart (0 disables) (default: 1m0s)
 
+- ```txpool.basefeefloor```: Refuse and sweep transactions whose fee cap cannot pay the producers' base fee floor (learned from headers) plus the minimum tip (default: false)
+
 - ```txpool.filtered-addresses```: Path to the file containing a newline-separated list of addresses whose transactions will be filtered
 
 - ```txpool.globalqueue```: Maximum number of non-executable transaction slots for all accounts (default: 131072)

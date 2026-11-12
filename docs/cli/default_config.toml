@@ -82,6 +82,7 @@ devfakeauthor = false
   conditional = false
   conditionallifetime = "5m0s"
   conditionalslots = 10000
+  basefeefloor = false
   filtered-addresses = ""
   filter-reload = "1m0s"
   rebroadcast = true
