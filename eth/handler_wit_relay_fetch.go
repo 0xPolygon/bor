@@ -116,17 +116,10 @@ func fetchAndVerifyWitness(candidates []namedWitnessPeer, blockHash, wantHash co
 	return nil, nil, "", false
 }
 
-// maxRelayFetchPages bounds how many pages fetchWitnessPages will believe a
-// candidate's page-0 response claiming, before any cross-page consistency
-// check can happen. TotalPages is taken from the peer's own response and
-// used directly to size an allocation below — left unbounded, a single
-// malicious candidate reporting a huge TotalPages (or one whose value
-// overflows int, going negative) turns one crafted response into either an
-// out-of-memory allocation or an immediate "makeslice: cap out of range"
-// panic, and the goroutine running this has no recover — crashing the whole
-// node. Ties to the same overall per-witness memory budget the server side
-// already enforces (MaximumCachedWitnessOnARequest / PageSize), rounded up
-// by one so a witness landing exactly on the boundary isn't rejected.
+// maxRelayFetchPages bounds the TotalPages requestWitnessPage accepts from a
+// candidate. It ties to the per-witness memory budget the server side enforces
+// (MaximumCachedWitnessOnARequest / PageSize), rounded up by one so a witness
+// landing exactly on the boundary isn't rejected.
 var maxRelayFetchPages = uint64(MaximumCachedWitnessOnARequest/PageSize) + 1
 
 // fetchWitnessPages pulls every page of hash's witness from peer and returns
@@ -145,13 +138,9 @@ func fetchWitnessPages(peer WitnessPeer, hash common.Hash) ([]byte, bool) {
 	if totalPages == 1 {
 		return firstPage, true
 	}
-	if totalPages > maxRelayFetchPages {
-		log.Warn("wit2: relay fetch candidate claimed an implausible page count; rejecting",
-			"hash", hash, "totalPages", totalPages, "max", maxRelayFetchPages)
-		return nil, false
-	}
-	all := make([]byte, 0, len(firstPage)*int(totalPages))
-	all = append(all, firstPage...)
+	// Grow as pages arrive rather than sizing from the claimed TotalPages: the
+	// bytes are unverified until the commit-hash check in fetchAndVerifyWitness.
+	all := append([]byte(nil), firstPage...)
 	for page := uint64(1); page < totalPages; page++ {
 		data, pages, ok := requestWitnessPage(peer, hash, page)
 		if !ok || pages != totalPages {
@@ -175,8 +164,9 @@ var relayFetchPageTimeout = 5 * time.Second
 // the TotalPages the server reported for this hash (so the caller can detect
 // a server that changes its story mid-fetch).
 func requestWitnessPage(peer WitnessPeer, hash common.Hash, page uint64) ([]byte, uint64, bool) {
+	want := []wit.WitnessPageRequest{{Hash: hash, Page: page}}
 	resCh := make(chan *wit.Response, 1)
-	req, err := peer.RequestWitness([]wit.WitnessPageRequest{{Hash: hash, Page: page}}, resCh)
+	req, err := peer.RequestWitness(want, resCh)
 	if err != nil {
 		return nil, 0, false
 	}
@@ -203,6 +193,12 @@ func requestWitnessPage(peer WitnessPeer, hash common.Hash, page uint64) ([]byte
 			return nil, 0, false
 		}
 		entry := packet.WitnessPacketResponse[0]
+		if !witnessPageRequested(want, entry) || !witnessPageWithinServeLimits(entry) {
+			log.Warn("wit2: relay fetch candidate sent a page that does not answer the request or exceeds serve limits; rejecting",
+				"hash", hash, "page", page, "gotHash", entry.Hash, "gotPage", entry.Page,
+				"totalPages", entry.TotalPages, "size", len(entry.Data))
+			return nil, 0, false
+		}
 		if len(entry.Data) == 0 {
 			return nil, 0, false // upstream doesn't have it either
 		}

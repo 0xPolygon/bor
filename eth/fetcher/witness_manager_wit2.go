@@ -61,31 +61,37 @@ func (m *witnessManager) cacheVerifiedWitnessForServing(blockHash common.Hash, b
 // bytes, keyed by the signed hash, so a downstream byte check against that hash
 // stays meaningful.
 //
-// diverged is true when the witness was accepted on the size oracle alone
-// (signed announcement on file, size within band, hash differs). The fetcher
-// uses it at import time: an import failure of such a witness is charged to the
-// serving peer (strike + re-fetch from another source), because with hash
-// identity gone the server, not the BP, is the party that chose these bytes.
+// provenance records who chose the bytes, for charging an import failure
+// (chargeDivergedWitnessImportFailure): WitnessFromProducer for the BP's own
+// bytes; WitnessNotProducer for a within-band body whose hash differs from the
+// verified signed one, so the server chose it; WitnessUnproven on the WIT1 path
+// (no verified signed announcement on file, or the signed size quarantined),
+// where body is also nil. WIT1 is the normal case on a stateless node at the
+// tip, where the announcement stays deferred until the block's header is local:
+// nothing binds the bytes to the producer, but they may still be the
+// producer's, relayed by an honest peer.
 //
-// body is also nil on the WIT1 path (no signed announcement). ok is false only
-// when the witness is oversized or a local EncodeRLP failure occurs; the latter
-// is the local node's own error, not a peer fault, so it does not strike.
-func (m *witnessManager) verifyAgainstSignedHash(peer string, hash common.Hash, witness *stateless.Witness) (body []byte, witnessHash common.Hash, diverged bool, ok bool) {
+// ok is false only when the witness is oversized or a local EncodeRLP failure
+// occurs; the latter is the local node's own error, not a peer fault, so it
+// does not strike.
+func (m *witnessManager) verifyAgainstSignedHash(peer string, hash common.Hash, witness *stateless.Witness) (body []byte, witnessHash common.Hash, provenance WitnessProvenance, ok bool) {
 	if m.parentSignedWitnessHash == nil {
-		return nil, common.Hash{}, false, true
+		return nil, common.Hash{}, WitnessFromProducer, true
 	}
 	expected, expectedSize, has := m.parentSignedWitnessHash(hash)
 	if !has || m.isSignedHashQuarantined(hash) {
-		// No signed announcement on file, or it has been quarantined after
-		// distinct servers repeatedly served oversized bytes: fall back to the
-		// WIT1 path so import-time execution arbitrates the bytes.
-		return nil, common.Hash{}, false, true
+		// No verified signed announcement on file, or it has been quarantined
+		// after distinct servers repeatedly served oversized bytes: fall back
+		// to the WIT1 path so import-time execution arbitrates the bytes.
+		// Nothing binds them to the producer: an import failure they caused
+		// excludes the server and re-fetches.
+		return nil, common.Hash{}, WitnessUnproven, true
 	}
 	var buf bytes.Buffer
 	if err := witness.EncodeRLP(&buf); err != nil {
 		log.Warn("[wm] Failed to encode received witness for size check", "peer", peer, "hash", hash, "err", err)
 		m.handleWitnessFetchFailureExt(hash, "", fmt.Errorf("witness encode failed: %w", err), false)
-		return nil, common.Hash{}, false, false
+		return nil, common.Hash{}, WitnessFromProducer, false
 	}
 	encoded := buf.Bytes()
 	actualSize := uint64(len(encoded))
@@ -129,7 +135,7 @@ func (m *witnessManager) verifyAgainstSignedHash(peer string, hash common.Hash, 
 			m.parentStrikeWitnessServer(peer)
 		}
 		m.handleWitnessFetchFailureExt(hash, "", errors.New("witness exceeds signed size band"), false)
-		return nil, common.Hash{}, false, false
+		return nil, common.Hash{}, WitnessFromProducer, false
 	}
 
 	if actual != expected {
@@ -137,10 +143,10 @@ func (m *witnessManager) verifyAgainstSignedHash(peer string, hash common.Hash, 
 		// import (state-root execution validates), but return body=nil so it is
 		// NOT cached for pre-import serving or relayed — those fast-paths carry
 		// only the BP's own bytes so a downstream check against the signed hash
-		// stays meaningful. Flagged diverged so an import failure is charged to
-		// the server (see importBlocks) rather than silently forgotten.
+		// stays meaningful. Flagged WitnessNotProducer so an import failure is
+		// charged to the server (see importBlocks) rather than silently forgotten.
 		witnessHashDivergenceMeter.Mark(1)
-		return nil, common.Hash{}, true, true
+		return nil, common.Hash{}, WitnessNotProducer, true
 	}
 	// Byte-identical to the BP's witness: safe to serve/relay under the signed
 	// hash. Only this proves the signed commitment good, so only this forgets
@@ -149,7 +155,7 @@ func (m *witnessManager) verifyAgainstSignedHash(peer string, hash common.Hash, 
 	// oversized and in-band bodies reset the distinct-server count and keep the
 	// block out of quarantine indefinitely.
 	m.clearSignedHashMismatch(hash)
-	return encoded, expected, false, true
+	return encoded, expected, WitnessFromProducer, true
 }
 
 // wit2SizeBandMultiplier bounds how many times the BP-signed witness size a
@@ -230,6 +236,18 @@ const signedHashMismatchQuarantineThreshold = 2
 // seconds-scale window a block normally resolves in, so it never interferes
 // with legitimate in-flight quarantine tracking.
 const wit2QuarantineStateTTL = 2 * time.Minute
+
+// quarantineSignedHash marks the signed hash for a block as quarantined, so its
+// witness is fetched on the WIT1 path. Used to keep a block that was quarantined
+// there when it is re-fetched after an import failure: forgetting the failed
+// attempt clears the quarantine, and without it the re-fetch would be judged
+// against the bad signed size again, striking honest servers a second time.
+func (m *witnessManager) quarantineSignedHash(hash common.Hash) {
+	m.wit2QuarantineMu.Lock()
+	defer m.wit2QuarantineMu.Unlock()
+	m.wit2Quarantined[hash] = struct{}{}
+	m.wit2StateExpiry[hash] = time.Now().Add(wit2QuarantineStateTTL)
+}
 
 // isSignedHashQuarantined reports whether the signed hash for a block has been
 // quarantined (distinct servers repeatedly mismatched it).

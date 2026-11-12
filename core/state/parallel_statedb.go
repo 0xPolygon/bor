@@ -122,6 +122,13 @@ type ParallelStateDB struct {
 	validRevisions []parallelRevision
 	nextRevisionId int
 
+	// WriteBudget, when set, is charged for every journal entry, tracked store
+	// read, snapshot and recorded preimage in batches of journalChargeBatch
+	// (unchargedEntries holds the pending remainder), and for log data and
+	// preimage bytes by size.
+	WriteBudget      *blockstm.WriteBudget
+	unchargedEntries int64
+
 	// Read/write tracking for BlockSTM validation
 	trackReads  bool
 	StoreReads  []StoreReadDesc
@@ -272,6 +279,8 @@ func (s *ParallelStateDB) Reset(txIndex int, base *SafeBase, store *blockstm.MVS
 	s.logs = s.logs[:0]
 	s.logSize = 0
 	s.journalEntries = s.journalEntries[:0]
+	s.WriteBudget = nil
+	s.unchargedEntries = 0
 	s.validRevisions = s.validRevisions[:0]
 	s.nextRevisionId = 0
 	s.trackReads = false
@@ -434,6 +443,7 @@ func (s *ParallelStateDB) recordStoreReadEx(key blockstm.Key, writerIdx, writerI
 		return
 	}
 	s.StoreReads = append(s.StoreReads, StoreReadDesc{Key: key, WriterIdx: writerIdx, WriterInc: writerInc, StoreVal: val, ExactWriter: exact})
+	s.chargeEntry()
 }
 
 func (s *ParallelStateDB) recordBalanceRead(addr common.Address, afterIdx int, add, sub uint256.Int) {
@@ -748,7 +758,7 @@ func (s *ParallelStateDB) priorBalanceDeltas(addr common.Address, afterIdx int) 
 }
 
 func (s *ParallelStateDB) AddBalance(addr common.Address, amount *uint256.Int, reason tracing.BalanceChangeReason) uint256.Int {
-	s.journalEntries = append(s.journalEntries, parallelJournalEntry{kind: jkBalance, flags: 1, addr: addr, amt: *amount})
+	s.appendJournal(parallelJournalEntry{kind: jkBalance, flags: 1, addr: addr, amt: *amount})
 	// Track the address in BalAddrs (for later MarkEstimate / cleanup).
 	// FlushToMVStore commits the accumulated delta in a single WriteDelta.
 	s.recordBalWrite(addr)
@@ -761,7 +771,7 @@ func (s *ParallelStateDB) AddBalance(addr common.Address, amount *uint256.Int, r
 }
 
 func (s *ParallelStateDB) SubBalance(addr common.Address, amount *uint256.Int, reason tracing.BalanceChangeReason) uint256.Int {
-	s.journalEntries = append(s.journalEntries, parallelJournalEntry{kind: jkBalance, addr: addr, amt: *amount})
+	s.appendJournal(parallelJournalEntry{kind: jkBalance, addr: addr, amt: *amount})
 	s.recordBalWrite(addr)
 	if s.localBalSub[addr] == nil {
 		s.localBalSub[addr] = new(uint256.Int)
@@ -819,7 +829,7 @@ func (s *ParallelStateDB) SetNonce(addr common.Address, nonce uint64, reason tra
 	if had {
 		flags = 1
 	}
-	s.journalEntries = append(s.journalEntries, parallelJournalEntry{kind: jkNonce, flags: flags, addr: addr, prevU: prev})
+	s.appendJournal(parallelJournalEntry{kind: jkNonce, flags: flags, addr: addr, prevU: prev})
 	s.localNonces[addr] = nonce
 	nonceKey := blockstm.NewSubpathKey(addr, NoncePath)
 	// Nonces are always deferred to FlushToMVStore regardless of DeferMVWrites:
@@ -934,7 +944,7 @@ func (s *ParallelStateDB) SetCode(addr common.Address, code []byte, reason traci
 	if hadCode {
 		flags = 1
 	}
-	s.journalEntries = append(s.journalEntries, parallelJournalEntry{kind: jkCode, flags: flags, addr: addr, code: prev})
+	s.appendJournal(parallelJournalEntry{kind: jkCode, flags: flags, addr: addr, code: prev})
 	s.localCode[addr] = code
 	delete(s.codeHashCache, addr)
 	codeKey := blockstm.NewSubpathKey(addr, CodePath)
@@ -1034,7 +1044,7 @@ func (s *ParallelStateDB) SetState(addr common.Address, key, value common.Hash) 
 	if had {
 		flags = 1
 	}
-	s.journalEntries = append(s.journalEntries, parallelJournalEntry{kind: jkStorage, flags: flags, addr: addr, key: key, prev: prev})
+	s.appendJournal(parallelJournalEntry{kind: jkStorage, flags: flags, addr: addr, key: key, prev: prev})
 	if s.localStorage[addr] == nil {
 		s.localStorage[addr] = make(map[common.Hash]common.Hash)
 	}
@@ -1086,14 +1096,14 @@ func (s *ParallelStateDB) GetStorageRoot(addr common.Address) common.Hash {
 // ---------- Refund ----------
 
 func (s *ParallelStateDB) AddRefund(gas uint64) {
-	s.journalEntries = append(s.journalEntries, parallelJournalEntry{kind: jkRefund, prevU: s.refund})
+	s.appendJournal(parallelJournalEntry{kind: jkRefund, prevU: s.refund})
 	s.refund += gas
 }
 func (s *ParallelStateDB) SubRefund(gas uint64) {
 	if gas > s.refund {
 		panic("refund counter below zero")
 	}
-	s.journalEntries = append(s.journalEntries, parallelJournalEntry{kind: jkRefund, prevU: s.refund})
+	s.appendJournal(parallelJournalEntry{kind: jkRefund, prevU: s.refund})
 	s.refund -= gas
 }
 func (s *ParallelStateDB) GetRefund() uint64 { return s.refund }
@@ -1110,17 +1120,17 @@ func (s *ParallelStateDB) SlotInAccessList(addr common.Address, slot common.Hash
 
 func (s *ParallelStateDB) AddAddressToAccessList(addr common.Address) {
 	if s.accessList.AddAddress(addr) {
-		s.journalEntries = append(s.journalEntries, parallelJournalEntry{kind: jkAccessAddr, addr: addr})
+		s.appendJournal(parallelJournalEntry{kind: jkAccessAddr, addr: addr})
 	}
 }
 
 func (s *ParallelStateDB) AddSlotToAccessList(addr common.Address, slot common.Hash) {
 	addrAdded, slotAdded := s.accessList.AddSlot(addr, slot)
 	if addrAdded {
-		s.journalEntries = append(s.journalEntries, parallelJournalEntry{kind: jkAccessAddr, addr: addr})
+		s.appendJournal(parallelJournalEntry{kind: jkAccessAddr, addr: addr})
 	}
 	if slotAdded {
-		s.journalEntries = append(s.journalEntries, parallelJournalEntry{kind: jkAccessSlot, addr: addr, key: slot})
+		s.appendJournal(parallelJournalEntry{kind: jkAccessSlot, addr: addr, key: slot})
 	}
 }
 
@@ -1135,7 +1145,7 @@ func (s *ParallelStateDB) SetTransientState(addr common.Address, key, value comm
 	if prev == value {
 		return
 	}
-	s.journalEntries = append(s.journalEntries, parallelJournalEntry{kind: jkTransient, addr: addr, key: key, prev: prev})
+	s.appendJournal(parallelJournalEntry{kind: jkTransient, addr: addr, key: key, prev: prev})
 	s.transientStorage.Set(addr, key, value)
 }
 
@@ -1148,7 +1158,7 @@ func (s *ParallelStateDB) SelfDestruct(addr common.Address) uint256.Int {
 	// the journal. Without this guard, reverting a second SelfDestruct
 	// un-destructs an account that was already destructed pre-snapshot.
 	if !s.destructed[addr] {
-		s.journalEntries = append(s.journalEntries, parallelJournalEntry{kind: jkDestruct, addr: addr})
+		s.appendJournal(parallelJournalEntry{kind: jkDestruct, addr: addr})
 		s.destructed[addr] = true
 		// FlushToMVStore writes (SuicidePath_addr, txIdx, inc, true) for
 		// every entry in s.destructed; record the matching key so that
@@ -1188,7 +1198,7 @@ func (s *ParallelStateDB) SelfDestruct6780(addr common.Address) (uint256.Int, bo
 // ---------- Account creation ----------
 
 func (s *ParallelStateDB) CreateAccount(addr common.Address) {
-	s.journalEntries = append(s.journalEntries, parallelJournalEntry{kind: jkCreate, addr: addr})
+	s.appendJournal(parallelJournalEntry{kind: jkCreate, addr: addr})
 	s.created[addr] = true
 	createKey := blockstm.NewSubpathKey(addr, CreatePath)
 	if !s.DeferMVWrites {
@@ -1214,6 +1224,7 @@ func (s *ParallelStateDB) Snapshot() int {
 		logsIdx:       len(s.logs),
 		transfersIdx:  len(s.Transfers),
 	})
+	s.chargeEntry()
 	return id
 }
 
@@ -1245,7 +1256,8 @@ func (s *ParallelStateDB) RevertToSnapshot(revid int) {
 // ---------- Logs / Preimages ----------
 
 func (s *ParallelStateDB) AddLog(l *types.Log) {
-	s.journalEntries = append(s.journalEntries, parallelJournalEntry{kind: jkLog, prevU: uint64(len(s.logs))})
+	s.appendJournal(parallelJournalEntry{kind: jkLog, prevU: uint64(len(s.logs))})
+	s.chargeBytes(len(l.Data))
 	s.logs = append(s.logs, l)
 	s.logSize++
 }
@@ -1253,6 +1265,8 @@ func (s *ParallelStateDB) AddLog(l *types.Log) {
 func (s *ParallelStateDB) AddPreimage(hash common.Hash, preimage []byte) {
 	if _, ok := s.preimages[hash]; !ok {
 		s.preimages[hash] = slices.Clone(preimage)
+		s.chargeEntry()
+		s.chargeBytes(len(preimage))
 	}
 }
 

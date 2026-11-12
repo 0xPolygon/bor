@@ -248,7 +248,7 @@ func pocSDRunV2(t testing.TB, tdb *triedb.Database, root common.Hash, txs types.
 	result := ExecuteV2BlockSTM(
 		context.Background(), tasks, base, blockstm.NewMVStore(),
 		blockstm.NewMVBalanceStore(), blockCtx, common.Hash{}, vm.Config{},
-		chainConfig, blockCtx.GasLimit, workers, finalDB, nil,
+		chainConfig, blockCtx.GasLimit, workers, finalDB, nil, nil,
 	)
 	if result.PanickedIdx >= 0 {
 		t.Fatalf("V2 tx %d panicked", result.PanickedIdx)

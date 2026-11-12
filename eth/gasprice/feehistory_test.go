@@ -17,11 +17,15 @@
 package gasprice
 
 import (
+	"context"
 	"errors"
 	"math/big"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
+	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
@@ -176,6 +180,103 @@ func TestFeeHistory(t *testing.T) {
 		}
 		if err != c.expErr && !errors.Is(err, c.expErr) {
 			t.Fatalf("Test case %d: error mismatch, want %v, got %v", i, c.expErr, err)
+		}
+	}
+}
+
+// headerEditBackend serves the test chain with every header passed through edit,
+// to model Bor headers that the generated chain does not produce.
+type headerEditBackend struct {
+	*testBackend
+	edit func(*types.Header)
+}
+
+func (b *headerEditBackend) HeaderByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Header, error) {
+	header, err := b.testBackend.HeaderByNumber(ctx, number)
+	if header == nil || err != nil {
+		return header, err
+	}
+	header = types.CopyHeader(header)
+	b.edit(header)
+	return header, nil
+}
+
+type chainConfigBackend struct {
+	OracleBackend
+	config *params.ChainConfig
+}
+
+func (b chainConfigBackend) ChainConfig() *params.ChainConfig {
+	return b.config
+}
+
+// A genesis with Cancun at block 0 has ExcessBlobGas set even without a blob
+// config for the fork: processing it must report zero blob fees, not panic.
+func TestProcessBlockBlobFieldsWithoutBlobSchedule(t *testing.T) {
+	config := *params.TestChainConfig
+	config.CancunBlock = big.NewInt(0)
+	oracle := &Oracle{backend: chainConfigBackend{config: &config}}
+
+	fees := &blockFees{header: &types.Header{
+		Number:        big.NewInt(0),
+		GasLimit:      30_000_000,
+		BaseFee:       big.NewInt(params.InitialBaseFee),
+		ExcessBlobGas: new(uint64),
+		BlobGasUsed:   new(uint64),
+	}}
+	// No schedule, and a schedule without an entry for the active fork (Cancun).
+	for _, schedule := range []*params.BlobScheduleConfig{nil, {Prague: params.DefaultPragueBlobConfig}} {
+		config.BlobScheduleConfig = schedule
+		oracle.processBlock(fees, nil)
+		if fees.results.blobBaseFee.Sign() != 0 || fees.results.nextBlobBaseFee.Sign() != 0 {
+			t.Fatalf("schedule %v: blob base fees = (%v, %v), want zero", schedule, fees.results.blobBaseFee, fees.results.nextBlobBaseFee)
+		}
+	}
+
+	config.BlobScheduleConfig = &params.BlobScheduleConfig{Cancun: params.DefaultCancunBlobConfig}
+	excess := uint64(10 * params.BlobTxBlobGasPerBlob)
+	fees.header.ExcessBlobGas = &excess
+	oracle.processBlock(fees, nil)
+	if want := eip4844.CalcBlobFee(&config, fees.header); fees.results.blobBaseFee == nil || fees.results.blobBaseFee.Cmp(want) != 0 {
+		t.Fatalf("with a blob schedule: blob base fee = %v, want %v", fees.results.blobBaseFee, want)
+	}
+}
+
+// Post-Lisovo a header's base fee can differ from its parent's prediction. Fee
+// history must return each header's base fee whatever order the blocks are
+// processed in, and the prediction only after the last block.
+func TestFeeHistoryBaseFeeFromHeaders(t *testing.T) {
+	backend := newTestBackend(t, big.NewInt(0), nil, false)
+	defer backend.teardown()
+
+	edited := &headerEditBackend{backend, func(h *types.Header) {
+		h.BaseFee = new(big.Int).Add(h.BaseFee, big.NewInt(params.GWei))
+	}}
+	const count = 20
+	var (
+		want []*big.Int
+		last *types.Header
+	)
+	for n := testHead - count + 1; n <= testHead; n++ {
+		header, err := edited.HeaderByNumber(t.Context(), rpc.BlockNumber(n))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, last = append(want, header.BaseFee), header
+	}
+	want = append(want, eip1559.CalcBaseFee(backend.ChainConfig(), last))
+	oracle := NewOracle(edited, Config{MaxHeaderHistory: 1000}, nil)
+
+	// Blocks are fetched concurrently; repeat to cover different arrival orders.
+	for range 50 {
+		_, _, baseFee, _, _, _, err := oracle.FeeHistory(t.Context(), count, testHead, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range want {
+			if baseFee[i].Cmp(want[i]) != 0 {
+				t.Fatalf("baseFee[%d] = %v, want %v", i, baseFee[i], want[i])
+			}
 		}
 	}
 }

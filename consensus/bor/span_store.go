@@ -3,11 +3,13 @@ package bor
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	lru "github.com/hashicorp/golang-lru"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/span"
@@ -20,25 +22,41 @@ import (
 	borTypes "github.com/0xPolygon/heimdall-v2/x/bor/types"
 )
 
-// maxSpanFetchLimit denotes maximum number of future spans to fetch. During snap sync,
-// we verify very large batch of headers. The maximum range is not known as of now and
-// hence we set a very high limit. It can be reduced later.
-// const maxSpanFetchLimit = 10_000
-
 // SpanStore acts as a simple middleware to cache span data populated from heimdall. It is used
 // in multiple places of bor consensus for verification.
 type SpanStore struct {
 	store *lru.ARCCache
 
 	latestSpanCache atomic.Pointer[borTypes.Span]
+	latestSpanAt    atomic.Int64 // unix nanos of the last latest-span fetch that succeeded
+	// latestSpanFetch serializes latest-span fetches, so a slow response can't
+	// overwrite a newer one fetched after it began.
+	latestSpanFetch chan struct{}
 
 	heimdallClient IHeimdallClient
 	spanner        Spanner
 
-	chainId           string
-	lastUsedSpan      atomic.Pointer[borTypes.Span]
-	latestKnownSpanId atomic.Uint64
-	heimdallStatus    atomic.Pointer[ctypes.SyncInfo]
+	chainId        string
+	rioBlock       *big.Int
+	heimdallStatus atomic.Pointer[ctypes.SyncInfo]
+
+	// spanRanges holds the block range of every span fetched so far. Heimdall never rewrites a stored
+	// span, so a range stays valid for the life of the store; keeping only the ranges lets lookups
+	// for old blocks walk thousands of span ids without refetching them. spanRangesMu also guards
+	// rangeGen and the swap of store, so a fetch started before PurgeCache can't write into the
+	// caches that replace the purged ones.
+	spanRangesMu sync.Mutex
+	spanRanges   map[uint64]spanRange
+	rangeGen     uint64
+	rangeFetches singleflight.Group
+
+	// lifetime bounds the span fetches shared by concurrent lookups; Close cancels it.
+	lifetime      context.Context
+	closeLifetime context.CancelFunc
+
+	// warmCancel and warmWg stop and track the background walk started by startRangeWarmup.
+	warmCancel context.CancelFunc
+	warmWg     sync.WaitGroup
 
 	// cancel function to stop the background routine
 	cancel context.CancelFunc
@@ -47,19 +65,25 @@ type SpanStore struct {
 	pollWg sync.WaitGroup
 }
 
-func NewSpanStore(heimdallClient IHeimdallClient, spanner Spanner, chainId string) *SpanStore {
+func NewSpanStore(heimdallClient IHeimdallClient, spanner Spanner, chainId string, rioBlock *big.Int) *SpanStore {
 	cache, _ := lru.NewARC(10)
 	store := &SpanStore{
 		store:           cache,
 		heimdallClient:  heimdallClient,
 		spanner:         spanner,
 		chainId:         chainId,
+		rioBlock:        rioBlock,
 		latestSpanCache: atomic.Pointer[borTypes.Span]{},
-		lastUsedSpan:    atomic.Pointer[borTypes.Span]{},
+		latestSpanFetch: make(chan struct{}, 1),
 	}
+	store.lifetime, store.closeLifetime = context.WithCancel(context.Background())
 	store.startPollLoop()
 	return store
 }
+
+// latestSpanFreshness is how old the latest span may be for a lookup to rule out a
+// newer span. The poll loop refreshes it every 200ms; older means Heimdall stopped answering.
+const latestSpanFreshness = 2 * time.Second
 
 // startPollLoop spawns the background goroutine that periodically refreshes
 // latestSpanCache and heimdallStatus. No-op when heimdallClient is nil.
@@ -174,6 +198,13 @@ func (s *SpanStore) updateLatestSpan(ctx context.Context) error {
 		return nil
 	}
 
+	select {
+	case s.latestSpanFetch <- struct{}{}:
+		defer func() { <-s.latestSpanFetch }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
 	latestSpan, err := s.heimdallClient.GetLatestSpan(ctx)
 	if err != nil {
 		return err
@@ -199,7 +230,7 @@ func (s *SpanStore) updateLatestSpan(ctx context.Context) error {
 		}
 	}
 
-	s.latestSpanCache.Store(&borTypes.Span{
+	s.storeLatestSpan(&borTypes.Span{
 		Id:                latestSpan.Id,
 		StartBlock:        latestSpan.StartBlock,
 		EndBlock:          latestSpan.EndBlock,
@@ -207,172 +238,125 @@ func (s *SpanStore) updateLatestSpan(ctx context.Context) error {
 		ValidatorSet:      span.ConvertBorValSetToHeimdallValSet(valset.NewValidatorSet(validators)),
 		BorChainId:        s.chainId,
 	})
+	s.latestSpanAt.Store(time.Now().UnixNano())
 	return nil
+}
+
+// storeLatestSpan keeps latestSpanCache from going back to a lower span id. Heimdall never
+// removes a span, so a lower latest id only comes from a lagging endpoint (e.g. a failover
+// secondary one span behind), and walking from it would resolve blocks of the newer span to an
+// older one. PurgeCache resets the cache to nil, so any id is accepted after it.
+func (s *SpanStore) storeLatestSpan(latest *borTypes.Span) {
+	for {
+		cur := s.latestSpanCache.Load()
+		if cur != nil && cur.Id > latest.Id {
+			log.Debug("Ignoring stale latest span", "cached", cur.Id, "received", latest.Id)
+			return
+		}
+		if s.latestSpanCache.CompareAndSwap(cur, latest) {
+			return
+		}
+	}
 }
 
 // spanById returns a span given its id. It fetches span from heimdall if not found in cache.
 func (s *SpanStore) spanById(ctx context.Context, spanId uint64) (*borTypes.Span, error) {
+	return s.spanByIdAt(ctx, s.rangeGeneration(), spanId)
+}
+
+// spanByIdAt is spanById for a lookup started in cache generation gen: the fetched span is only
+// cached if no PurgeCache happened since.
+func (s *SpanStore) spanByIdAt(ctx context.Context, gen uint64, spanId uint64) (*borTypes.Span, error) {
+	if cached := s.cachedSpan(spanId); cached != nil {
+		return cached, nil
+	}
+
 	var currentSpan *borTypes.Span
-	if value, ok := s.store.Get(spanId); ok {
-		currentSpan, _ = value.(*borTypes.Span)
-	}
-
-	if currentSpan != nil {
-		return currentSpan, nil
-	}
-
 	var err error
 	if s.heimdallClient == nil {
-		if spanId == 0 {
-			currentSpan, err = getMockSpan0(ctx, s.spanner, s.chainId)
-			if err != nil {
-				log.Warn("Unable to fetch span from heimdall", "id", spanId, "err", err)
-				return nil, err
-			}
-		} else {
-			return nil, fmt.Errorf("unable to create test span without heimdall client for id %d", spanId)
-		}
+		currentSpan, err = s.mockSpan(ctx, spanId)
 	} else {
-		currentSpan, err = s.heimdallClient.GetSpan(ctx, spanId)
-		if err != nil {
-			log.Warn("Unable to fetch span from heimdall", "id", spanId, "err", err)
-			return nil, err
-		}
-
-		if len(currentSpan.SelectedProducers) == 0 {
-			log.Warn("Span from Heimdall has empty SelectedProducers", "spanId", spanId, "selectedProducers", currentSpan.SelectedProducers, "validators", currentSpan.ValidatorSet.Validators, "startBlock", currentSpan.StartBlock, "endBlock", currentSpan.EndBlock)
-			return nil, fmt.Errorf("span %d has empty SelectedProducers, possibly incomplete", spanId)
-		}
+		currentSpan, err = s.fetchSpan(ctx, spanId)
+	}
+	if err != nil {
+		return nil, err
 	}
 
-	if currentSpan == nil {
-		return nil, fmt.Errorf("span not found for id %d", spanId)
-	}
-
-	s.store.Add(spanId, currentSpan)
-	if currentSpan.Id > s.latestKnownSpanId.Load() {
-		s.latestKnownSpanId.Store(currentSpan.Id)
-	}
+	s.cacheSpan(gen, spanId, currentSpan)
 
 	return currentSpan, nil
 }
 
-// spanByBlockNumber returns a span given a block number. It fetches span from heimdall if not found in cache. It
-// assumes that a span has been committed before (i.e. is current or past span) and returns an error if
-// asked for a future span. This is safe to assume as we don't have a way to find out span id for a future block
-// unless we hardcode the span length (which we don't want to).
-func (s *SpanStore) spanByBlockNumber(ctx context.Context, blockNumber uint64) (res *borTypes.Span, err error) {
-	s.waitUntilHeimdallIsSynced(ctx)
-
-	// As we don't persist latest known span to db, we loose the value on restarts. This leads to multiple heimdall calls
-	// which can be avoided. Hence we estimate the span id from block number which updates the latest known span id. Note
-	// that we still check if the block number lies in the range of span before returning it.
-	estimatedSpanId := s.estimateSpanId(blockNumber)
-	defer func() {
-		if res != nil && len(res.SelectedProducers) > 0 && err == nil {
-			s.lastUsedSpan.Store(res)
-		}
-	}()
-
-	// Search backwards from the highest known span ID to find the latest span containing the block
-	// Since we iterate from high to low, the first match will be the span with the largest ID among known spans
-	for id := int(estimatedSpanId); id >= 0; id-- {
-		span, err := s.spanById(ctx, uint64(id))
-		if err != nil {
-			return nil, err
-		}
-		if blockNumber >= span.StartBlock && blockNumber <= span.EndBlock {
-			// Found a span that contains the block number in known spans
-			res = span
-			break
-		}
-		// Check if block number given is out of bounds (future block) for the latest known span
-		if id == int(estimatedSpanId) && blockNumber > span.EndBlock {
-			// Block is in the future, search future spans
-			return s.getFutureSpan(ctx, uint64(id)+1, blockNumber, estimatedSpanId)
-		}
+// mockSpan returns span 0 built from the genesis validators, the only span a store without a
+// heimdall client has.
+func (s *SpanStore) mockSpan(ctx context.Context, spanId uint64) (*borTypes.Span, error) {
+	if spanId != 0 {
+		return nil, fmt.Errorf("unable to create test span without heimdall client for id %d", spanId)
 	}
-
-	// If we found a candidate in known spans, we still need to check if there are newer spans in future
-	// that also contain this block number due to overlapping spans
-	if res != nil {
-		futureSpan, err := s.getFutureSpan(ctx, estimatedSpanId+1, blockNumber, estimatedSpanId)
-		if err == nil && futureSpan != nil {
-			// Found a future span that also contains the block, return the newer one
-			return futureSpan, nil
-		}
-		// No future span found or error occurred, return the candidate from known spans
-		return res, nil
-	}
-
-	return nil, fmt.Errorf("span not found for block %d", blockNumber)
-}
-
-// getFutureSpan fetches span for future block number. It is mostly needed during snap sync.
-func (s *SpanStore) getFutureSpan(ctx context.Context, id uint64, blockNumber uint64, latestKnownSpanId uint64) (*borTypes.Span, error) {
-	latestSpan, err := s.getLatestSpan(ctx)
-	if err != nil || latestSpan == nil {
+	currentSpan, err := getMockSpan0(ctx, s.spanner, s.chainId)
+	if err != nil {
+		log.Warn("Unable to fetch span from heimdall", "id", spanId, "err", err)
 		return nil, err
 	}
-
-	var candidateSpan *borTypes.Span
-	skippedSpans := 0
-	for {
-		if id > latestSpan.Id {
-			if candidateSpan == nil {
-				return nil, fmt.Errorf("span not found for block %d", blockNumber)
-			}
-			return candidateSpan, nil
-		}
-		span, err := s.spanById(ctx, id)
-		if err != nil {
-			if candidateSpan == nil {
-				return nil, err
-			}
-			return candidateSpan, nil
-		}
-		if blockNumber >= span.StartBlock && blockNumber <= span.EndBlock {
-			candidateSpan = span
-			skippedSpans = 0
-		}
-		if blockNumber < span.StartBlock {
-			skippedSpans++
-			if skippedSpans > 1 {
-				if candidateSpan == nil {
-					return nil, fmt.Errorf("span not found for block %d", blockNumber)
-				}
-				return candidateSpan, nil
-			}
-		}
-		id++
-	}
+	return currentSpan, nil
 }
 
-// estimateSpanId returns the corresponding span id for the given block number in a deterministic way.
-func (s *SpanStore) estimateSpanId(blockNumber uint64) uint64 {
-	if blockNumber > zerothSpanEnd && blockNumber > 0 {
-		if s.lastUsedSpan.Load() != nil {
-			lastUsedSpan := s.lastUsedSpan.Load()
-			startBlock := lastUsedSpan.StartBlock
-			endBlock := lastUsedSpan.EndBlock
-			if blockNumber > endBlock {
-				return lastUsedSpan.Id + 1 + (blockNumber-endBlock-1)/defaultSpanLength
-			} else if blockNumber < startBlock {
-				// Calculate how many spans to go back. (startBlock - blockNumber + defaultSpanLength - 1) / defaultSpanLength is ceil((startBlock - blockNumber)/defaultSpanLength)
-				spansToDecrement := 1 + (startBlock-blockNumber-1)/defaultSpanLength
-				if lastUsedSpan.Id >= spansToDecrement { // Prevent underflow for uint64
-					return lastUsedSpan.Id - spansToDecrement
-				} else {
-					return 1 + (blockNumber-zerothSpanEnd-1)/defaultSpanLength
-				}
-			} else {
-				return lastUsedSpan.Id
-			}
-		}
-		return 1 + (blockNumber-zerothSpanEnd-1)/defaultSpanLength
+func (s *SpanStore) fetchSpan(ctx context.Context, spanId uint64) (*borTypes.Span, error) {
+	currentSpan, err := s.fetchSpanRecord(ctx, spanId)
+	if err != nil {
+		return nil, err
 	}
+	if len(currentSpan.SelectedProducers) == 0 {
+		log.Warn("Span from Heimdall has empty SelectedProducers", "spanId", spanId, "selectedProducers", currentSpan.SelectedProducers, "validators", currentSpan.ValidatorSet.Validators, "startBlock", currentSpan.StartBlock, "endBlock", currentSpan.EndBlock)
+		return nil, fmt.Errorf("span %d has empty SelectedProducers, possibly incomplete", spanId)
+	}
+	return currentSpan, nil
+}
 
-	return 0
+// fetchSpanRecord fetches span id from heimdall without checking that it is complete.
+func (s *SpanStore) fetchSpanRecord(ctx context.Context, spanId uint64) (*borTypes.Span, error) {
+	currentSpan, err := s.heimdallClient.GetSpan(ctx, spanId)
+	if err != nil {
+		log.Warn("Unable to fetch span from heimdall", "id", spanId, "err", err)
+		return nil, err
+	}
+	if currentSpan == nil {
+		return nil, fmt.Errorf("span not found for id %d", spanId)
+	}
+	return currentSpan, nil
+}
+
+// spanByBlockNumber returns the span that governs blockNumber: the highest-id span containing it,
+// among the spans up to Heimdall's latest. This is the rule Heimdall applies (x/bor
+// SpanByBlockNumber). Rotation and planned-downtime spans can start before spans created earlier,
+// so no span below the latest id can be ruled out by its position; every id down to the first
+// match is checked. Blocks before Rio are the exception, see preRioSpanIdContaining.
+func (s *SpanStore) spanByBlockNumber(ctx context.Context, blockNumber uint64) (*borTypes.Span, error) {
+	span, _, err := s.settledSpanByBlockNumber(ctx, blockNumber)
+	return span, err
+}
+
+// settledSpanByBlockNumber is spanByBlockNumber, also reporting whether the lookup settled: the
+// latest span it walked down from was fetched within latestSpanFreshness. If not, Heimdall may
+// hold a newer span containing the block that this node hasn't seen.
+func (s *SpanStore) settledSpanByBlockNumber(ctx context.Context, blockNumber uint64) (*borTypes.Span, bool, error) {
+	s.waitUntilHeimdallIsSynced(ctx)
+
+	latestSpan, err := s.getLatestSpan(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	settled := time.Since(time.Unix(0, s.latestSpanAt.Load())) < latestSpanFreshness
+
+	id, err := s.spanIdContainingRefreshed(ctx, blockNumber, latestSpan)
+	if err != nil {
+		return nil, false, err
+	}
+	span, err := s.spanById(ctx, id)
+	if err != nil {
+		return nil, false, err
+	}
+	return span, settled, nil
 }
 
 // setHeimdallClient sets the underlying heimdall client to be used. It is useful in
@@ -390,16 +374,18 @@ func (s *SpanStore) setHeimdallClient(client IHeimdallClient) {
 // fall back to updateLatestSpan inline when the cache is empty.
 func (s *SpanStore) PurgeCache() {
 	s.stopPollLoop()
+	s.stopRangeWarmup()
 
-	// Create a new cache to replace the old one
+	// Create a new cache to replace the old one. Bumping the generation keeps fetches still in
+	// flight from the purged state out of the new caches, and out of lookups started from now on.
 	newCache, _ := lru.NewARC(10)
+	s.spanRangesMu.Lock()
 	s.store = newCache
+	s.spanRanges = nil
+	s.rangeGen++
+	s.spanRangesMu.Unlock()
 	// Clear the latest span cache
 	s.latestSpanCache.Store(nil)
-	// Clear the last used span
-	s.lastUsedSpan.Store(nil)
-	// Reset the latest known span ID
-	s.latestKnownSpanId.Store(0)
 	// Clear cached heimdall status. With the poll loop stopped, a stale
 	// CatchingUp:false would otherwise let waitUntilHeimdallIsSynced skip
 	// refreshing status against a newly-swapped heimdall client.
@@ -436,9 +422,11 @@ func getMockSpan0(ctx context.Context, spanner Spanner, chainId string) (*borTyp
 	}, nil
 }
 
-// Close cancels the background routine and cleans up resources
+// Close cancels the background routine and the span fetches still in flight.
 func (s *SpanStore) Close() {
 	s.stopPollLoop()
+	s.stopRangeWarmup()
+	s.closeLifetime()
 }
 
 // Wait for a new span whose selected producers are different from the current header author
