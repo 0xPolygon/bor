@@ -1062,11 +1062,7 @@ func (q *queue) DeliverWitnesses(id string, witnesses []*stateless.Witness, meta
 	defer log.Debug("DeliverWitnesses: Exiting", "peer", id)
 
 	q.lock.Lock()
-	log.Trace("DeliverWitnesses: Acquired lock", "peer", id)
-	defer func() {
-		log.Trace("DeliverWitnesses: Releasing lock", "peer", id)
-		q.lock.Unlock()
-	}()
+	defer q.lock.Unlock()
 
 	// Ensure the peer has a pending request
 	request := q.witnessPendPool[id]
@@ -1081,6 +1077,14 @@ func (q *queue) DeliverWitnesses(id string, witnesses []*stateless.Witness, meta
 	// Mark incoming data and time
 	witnessInMeter.Mark(int64(len(witnesses)))
 	witnessReqTimer.UpdateSince(request.Time)
+
+	witnessErr, _ := meta.(error)
+	if len(witnesses) == 0 && !errors.Is(witnessErr, stateless.ErrInvalidWitness) {
+		log.Warn("DeliverWitnesses: Zero results received, requeueing", "peer", id, "headers", len(request.Headers))
+		q.expire(id, q.witnessPendPool, q.witnessTaskQueue)
+
+		return 0, nil
+	}
 
 	// Define validation logic (placeholder)
 	validateWitness := func(index int, header *types.Header) error {

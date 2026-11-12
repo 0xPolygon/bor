@@ -144,3 +144,58 @@ func (q *witnessQueue) deliver(peer *peerConnection, packet *eth.Response) (int,
 
 	return accepted, err
 }
+
+const witnessRetryDelay = time.Second
+
+type witnessRetries map[string]time.Time
+
+func (r witnessRetries) wake(now time.Time) time.Time {
+	var earliest time.Time
+	for id, at := range r {
+		if !at.After(now) {
+			delete(r, id)
+			continue
+		}
+		earliest = earlierBackoff(earliest, at)
+	}
+	return earliest
+}
+
+func (r witnessRetries) schedule(queue typedQueue, id string) time.Time {
+	if queue.kind() != witnessQueueKind {
+		return time.Time{}
+	}
+	at := time.Now().Add(witnessRetryDelay)
+	r[id] = at
+	return at
+}
+
+func (r witnessRetries) expire(queue typedQueue, req *eth.Request) bool {
+	if queue.kind() != witnessQueueKind {
+		return false
+	}
+	log.Debug("Downloader: witness request timed out, scheduling retry", "peer", req.Peer)
+	if err := req.Close(); err != nil {
+		log.Debug("Failed to cancel witness request", "peer", req.Peer, "err", err)
+	}
+	queue.unreserve(req.Peer)
+	r.schedule(queue, req.Peer)
+	return true
+}
+
+func (r witnessRetries) discardStale(queue typedQueue, pending map[string]*eth.Request, res *eth.Response) bool {
+	if queue.kind() != witnessQueueKind || pending[res.Req.Peer] == res.Req {
+		return false
+	}
+	res.Done <- nil
+	if err := res.Req.Close(); err != nil {
+		log.Debug("Failed to close stale witness request", "peer", res.Req.Peer, "err", err)
+	}
+	return true
+}
+
+func (r witnessRetries) delivered(queue typedQueue, id string, accepted int, err error) {
+	if err == nil && accepted == 0 {
+		r.schedule(queue, id)
+	}
+}

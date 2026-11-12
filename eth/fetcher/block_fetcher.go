@@ -18,8 +18,8 @@
 package fetcher
 
 import (
-	"context"
 	"errors"
+	"fmt"
 	"math/rand"
 	"sync"
 	"time"
@@ -1459,7 +1459,7 @@ func (f *BlockFetcher) insertBlockWithRetry(op *blockOrHeaderInject) error {
 		case <-timer.C:
 		case <-f.quit:
 			timer.Stop()
-			return context.Canceled
+			return fmt.Errorf("%w: %w", errTerminated, err)
 		}
 	}
 }
