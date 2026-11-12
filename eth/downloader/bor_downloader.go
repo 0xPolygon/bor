@@ -30,6 +30,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/checkpoint"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/state/snapshot"
@@ -2424,6 +2425,9 @@ func (d *Downloader) importBlockResultsStateless(results []*fetchResult) error {
 		default:
 		}
 		log.Warn("Stateless block import failed", "index", index, "hash", blocks[index].Hash(), "err", err)
+		if errors.Is(err, core.ErrStateSyncProcessing) {
+			return err
+		}
 		return errInvalidBody
 	}
 

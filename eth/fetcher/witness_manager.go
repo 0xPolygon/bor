@@ -32,6 +32,8 @@ const (
 	witnessCacheSize = 10
 	witnessCacheTTL  = 2 * time.Minute
 
+	witnessFetchRetryDelay = time.Second
+
 	// Witness size estimation constants
 	// Assuming 1M gas results in 1MB witness, and max page size is 15MB
 	gasPerMB             = 1_000_000 // 1M gas per MB of witness
@@ -39,12 +41,15 @@ const (
 	witnessPageThreshold = 10        // Default threshold if gas ceil not available
 )
 
+var errInvalidWitnessResponse = errors.New("invalid witness response type")
+
 // witnessRequestState tracks the state of a pending witness request.
 type witnessRequestState struct {
 	op           *blockOrHeaderInject // The original block/header injection operation.
 	announce     *blockAnnounce       // Announcement details, non-nil if a fetch is in flight.
 	retries      int                  // Number of fetch attempts already made
 	emptyRetries int                  // Consecutive "body not ready yet" (empty) responses, for backoff
+	fetching     bool
 }
 
 // cachedWitness represents a witness that arrived before its corresponding block
@@ -546,7 +551,7 @@ func (m *witnessManager) collectReadyHashesLocked(now time.Time) (readyToFetch, 
 		}
 
 		// Not ready yet (announce time still in the future).
-		if !now.After(state.announce.time) {
+		if state.fetching || !now.After(state.announce.time) {
 			continue
 		}
 
@@ -597,6 +602,7 @@ func (m *witnessManager) buildPeerRequestsLocked(readyToFetch []common.Hash, now
 		// Update announce time for backoff — prevents immediate retry and
 		// effectively marks the request as "in-flight".
 		announce.time = now.Add(fetchTimeout)
+		state.fetching = true
 	}
 	return requests
 }
@@ -693,7 +699,7 @@ func (m *witnessManager) initiateWitnessFetch(hash common.Hash, announce *blockA
 // awaitWitnessResponse waits for the fetch response, delegating to success
 // or failure handlers depending on the outcome.
 func (m *witnessManager) awaitWitnessResponse(peer string, hash common.Hash, resCh chan *eth.Response, announcedAt time.Time) {
-	timeout := time.NewTimer(2 * fetchTimeout) // 2x leeway before dropping the peer
+	timeout := time.NewTimer(2 * fetchTimeout)
 	defer timeout.Stop()
 
 	select {
@@ -721,7 +727,7 @@ func (m *witnessManager) processWitnessResponse(peer string, hash common.Hash, r
 	witness, ok := res.Res.([]*stateless.Witness)
 	if !ok {
 		log.Debug("[wm] Invalid witness response type received", "peer", peer, "hash", hash, "type", fmt.Sprintf("%T", res.Res))
-		m.handleWitnessFetchFailureExt(hash, peer, errors.New("invalid response type"), false)
+		m.handleWitnessFetchFailureExt(hash, peer, errInvalidWitnessResponse, false)
 		return
 	}
 	if len(witness) == 0 {
@@ -838,7 +844,7 @@ func (m *witnessManager) rescheduleWitness() {
 func (m *witnessManager) earliestPendingAnnounceLocked() time.Time {
 	var earliest time.Time
 	for _, state := range m.pending {
-		if state.announce == nil || state.op == nil || state.op.witness != nil {
+		if state.fetching || state.announce == nil || state.op == nil || state.op.witness != nil {
 			continue
 		}
 		if earliest.IsZero() || state.announce.time.Before(earliest) {
@@ -859,14 +865,14 @@ func (m *witnessManager) handleWitnessFetchFailureExt(hash common.Hash, peer str
 		delete(m.pending, hash)
 		m.clearSignedHashMismatch(hash)
 	} else {
-		if state := m.pending[hash]; state != nil {
-			// back-off before next retry
-			state.announce.time = time.Now()
+		if state := m.pending[hash]; state != nil && state.announce != nil {
+			state.fetching = false
+			state.announce.time = time.Now().Add(witnessFetchRetryDelay)
 		}
 	}
 	m.mu.Unlock()
 
-	if peer != "" {
+	if peer != "" && errors.Is(fetchErr, errInvalidWitnessResponse) {
 		m.parentDropPeer(peer)
 	}
 

@@ -1275,7 +1275,10 @@ func (f *BlockFetcher) importBlocks(op *blockOrHeaderInject) {
 			}
 			return
 		}
-		f.done <- hash
+		select {
+		case f.done <- hash:
+		case <-f.quit:
+		}
 	}()
 }
 
@@ -1314,9 +1317,7 @@ func (f *BlockFetcher) runBlockImport(op *blockOrHeaderInject) (retryWitness boo
 		return false
 	}
 	// Run the actual import and log any issues
-	// Pass the witness along with the block to the insertion function.
-	// Create slices even for a single block/witness to match the expected signature.
-	if _, err := f.insertChain(types.Blocks{block}, []*stateless.Witness{witness}); err != nil {
+	if err := f.insertBlockWithRetry(op); err != nil {
 		log.Debug("Propagated block import failed", "peer", peer, "number", block.Number(), "hash", hash, "err", err)
 		return f.chargeDivergedWitnessImportFailure(op, err)
 	}

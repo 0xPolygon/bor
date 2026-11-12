@@ -108,8 +108,6 @@ func (d *Downloader) handleSyncFailure(peer *peerConnection, id string, err erro
 func classifySyncFailure(err error) (peerFailureReason, bool) {
 	switch {
 	case errors.Is(err, core.ErrStateSyncProcessing):
-		// Import wraps local Heimdall failures as invalid-chain errors too.
-		// Neither that wrapper nor a nested deadline implicates the serving peer.
 		return "", false
 	case isPrunedSidechainMismatch(err):
 		return peerFailurePrunedSidechain, true

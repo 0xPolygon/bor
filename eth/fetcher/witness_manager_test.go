@@ -579,17 +579,14 @@ func TestWitnessFetchFailure(t *testing.T) {
 	peer := "test-peer"
 	err := errors.New("fetch failed")
 
-	// Test soft failure (keep pending for retry) - peer should still be dropped
 	manager.handleWitnessFetchFailureExt(hash, peer, err, false)
 
-	if droppedPeer != peer {
-		t.Errorf("Expected peer to be dropped on soft failure, got %s", droppedPeer)
+	if droppedPeer != "" {
+		t.Errorf("Operational failure dropped peer %s", droppedPeer)
 	}
 }
 
-// TestWitnessFetchFailureAlwaysDropsPeer tests that handleWitnessFetchFailureExt
-// always drops the peer regardless of removePending flag
-func TestWitnessFetchFailureAlwaysDropsPeer(t *testing.T) {
+func TestWitnessFetchFailureAttribution(t *testing.T) {
 	tw := newTestWitnessManager()
 	defer tw.Close()
 
@@ -621,12 +618,11 @@ func TestWitnessFetchFailureAlwaysDropsPeer(t *testing.T) {
 	tw.manager.pending[hash] = state
 	tw.manager.mu.Unlock()
 
-	// Test soft failure (removePending = false) - peer should be dropped
 	tw.manager.handleWitnessFetchFailureExt(hash, peer1, err, false)
 
 	droppedPeers := tw.DroppedPeers()
-	if len(droppedPeers) != 1 || droppedPeers[0] != peer1 {
-		t.Errorf("Expected peer1 to be dropped on soft failure, got %v", droppedPeers)
+	if len(droppedPeers) != 0 {
+		t.Errorf("Operational failure dropped peers %v", droppedPeers)
 	}
 
 	// Verify pending request was NOT removed (soft failure)
@@ -634,11 +630,10 @@ func TestWitnessFetchFailureAlwaysDropsPeer(t *testing.T) {
 		t.Error("Expected pending request to remain after soft failure")
 	}
 
-	// Test hard failure (removePending = true) - peer should also be dropped
-	tw.manager.handleWitnessFetchFailureExt(hash, peer2, err, true)
+	tw.manager.handleWitnessFetchFailureExt(hash, peer2, errInvalidWitnessResponse, true)
 
 	droppedPeers = tw.DroppedPeers()
-	if len(droppedPeers) != 2 || droppedPeers[1] != peer2 {
+	if len(droppedPeers) != 1 || droppedPeers[0] != peer2 {
 		t.Errorf("Expected peer2 to be dropped on hard failure, got %v", droppedPeers)
 	}
 

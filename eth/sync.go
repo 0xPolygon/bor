@@ -67,7 +67,7 @@ type chainSyncer struct {
 
 	peersUnavailableUntil time.Time
 	observedPeerRevision  uint64
-	stateSyncRetryUntil   time.Time // Peer-set changes cannot resolve a local Heimdall failure.
+	stateSyncRetryUntil   time.Time
 }
 
 // chainSyncOp is a scheduled sync operation.
