@@ -193,6 +193,9 @@ func (r *witnessRetries) guard(queue typedQueue, queued, inflight int, throttled
 		return time.Time{}, nil
 	}
 	if r.deadline.IsZero() {
+		if inflight > 0 {
+			return time.Time{}, nil
+		}
 		r.deadline = now.Add(witnessNoProgressBudget)
 	}
 	if now.Before(r.deadline) {
@@ -205,11 +208,19 @@ func (r *witnessRetries) guard(queue typedQueue, queued, inflight int, throttled
 	return time.Time{}, fmt.Errorf("%w: none accepted in %s", ErrWitnessUnavailable, common.PrettyDuration(witnessNoProgressBudget))
 }
 
+func (r *witnessRetries) startBudget(queue typedQueue, now time.Time) {
+	if queue.kind() == witnessQueueKind && r.deadline.IsZero() {
+		r.deadline = now.Add(witnessNoProgressBudget)
+	}
+}
+
 func (r *witnessRetries) schedule(queue typedQueue, id string) time.Time {
 	if queue.kind() != witnessQueueKind {
 		return time.Time{}
 	}
-	at := time.Now().Add(witnessRetryDelay)
+	now := time.Now()
+	r.startBudget(queue, now)
+	at := now.Add(witnessRetryDelay)
 	r.paced[id] = at
 	return at
 }

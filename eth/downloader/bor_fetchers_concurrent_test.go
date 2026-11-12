@@ -383,7 +383,7 @@ func TestConcurrentFetchWitnessRecovery(t *testing.T) {
 				}
 				switch name {
 				case "persistent unavailability", "persistent send failure", "persistent timeout", "persistent master timeout":
-					if elapsed := time.Since(start); elapsed < 30*time.Second || elapsed > 30*time.Second+d.peers.rates.TargetTimeout() {
+					if elapsed := time.Since(start); elapsed < witnessNoProgressBudget || elapsed > witnessNoProgressBudget+2*d.peers.rates.TargetTimeout() {
 						t.Fatalf("unavailable witnesses were not paced or bounded: calls=%d elapsed=%v", calls, elapsed)
 					}
 				case "alternate source", "cancel":
@@ -605,17 +605,27 @@ func TestDeliverWitnessFailureLabels(t *testing.T) {
 }
 
 func TestConcurrentFetchWitnessStaggeredTimeoutBudget(t *testing.T) {
-	for _, throttled := range []bool{false, true} {
-		t.Run(fmt.Sprintf("throttled=%t", throttled), func(t *testing.T) {
+	for _, tc := range []struct {
+		ttl        time.Duration
+		throttled  bool
+		disconnect bool
+	}{
+		{10 * time.Second, false, false},
+		{10 * time.Second, true, false},
+		{60 * time.Second, false, false},
+		{60 * time.Second, true, false},
+		{60 * time.Second, false, true},
+	} {
+		t.Run(fmt.Sprintf("ttl=%s/throttled=%t/disconnect=%t", tc.ttl, tc.throttled, tc.disconnect), func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				d := newTestDownloader()
-				d.peers.rates.OverrideTTLLimit = 10 * time.Second
+				d.peers.rates.OverrideTTLLimit = tc.ttl
 				d.queue.Prepare(1, StatelessSync)
 				first := &types.Header{Number: big.NewInt(1)}
 				second := &types.Header{Number: big.NewInt(2), ParentHash: first.Hash()}
 				hashes := []common.Hash{first.Hash(), second.Hash()}
 				d.queue.Schedule([]*types.Header{first, second}, hashes, 1)
-				if throttled {
+				if tc.throttled {
 					d.queue.resultCache.SetThrottleThreshold(2)
 					third := &types.Header{Number: big.NewInt(3), ParentHash: second.Hash()}
 					d.queue.Schedule([]*types.Header{third}, []common.Hash{third.Hash()}, 3)
@@ -632,6 +642,7 @@ func TestConcurrentFetchWitnessStaggeredTimeoutBudget(t *testing.T) {
 				}
 				register("first")
 				ttl := d.peers.rates.TargetTimeout()
+				start := time.Now()
 				done := make(chan error, 1)
 				go func() { done <- d.concurrentFetch((*witnessQueue)(d), false) }()
 				finished := false
@@ -643,7 +654,16 @@ func TestConcurrentFetchWitnessStaggeredTimeoutBudget(t *testing.T) {
 				}()
 				time.Sleep(ttl / 2)
 				register("second")
-				if throttled {
+				firstFailure := ttl
+				if tc.disconnect {
+					synctest.Wait()
+					if err := d.peers.Unregister("first"); err != nil {
+						t.Fatal(err)
+					}
+					register("replacement")
+					firstFailure = ttl / 2
+				}
+				if tc.throttled {
 					register("idle")
 				}
 				select {
@@ -654,6 +674,9 @@ func TestConcurrentFetchWitnessStaggeredTimeoutBudget(t *testing.T) {
 					}
 				case <-time.After(witnessNoProgressBudget + 3*ttl):
 					t.Fatal("staggered in-flight requests kept the witness cycle alive beyond its budget")
+				}
+				if elapsed := time.Since(start); elapsed > firstFailure+witnessNoProgressBudget+ttl {
+					t.Fatalf("cycle exceeded its failure budget: %s", elapsed)
 				}
 				for _, peer := range peers {
 					if peer.backedOff() || d.peers.persistentBackoff(peer.id) > 0 || softStrikeTally(d.peers, peer.id) != 0 {
@@ -675,4 +698,67 @@ func TestConcurrentFetchWitnessStaggeredTimeoutBudget(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestConcurrentFetchWitnessTimeoutRecovery(t *testing.T) {
+	for _, ttl := range []time.Duration{20 * time.Second, 30 * time.Second, 60 * time.Second} {
+		t.Run(ttl.String(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				d := newTestDownloader()
+				d.peers.rates.OverrideTTLLimit = ttl
+				d.queue.Prepare(1, StatelessSync)
+				scheduleWitnessTasks(d, 1)
+				d.queue.witnessWakeCh <- false
+				var slowCalls, healthyCalls, drops int
+				d.dropPeer = func(string) { drops++ }
+				slow := registerOperationalWitnessPeer(t, d, "slow", func(_ []common.Hash, _ chan *eth.Response) (*eth.Request, error) {
+					slowCalls++
+					return &eth.Request{Peer: "slow", Sent: time.Now(), Cancel: make(chan struct{})}, nil
+				})
+				if actual := d.peers.rates.TargetTimeout(); actual != ttl {
+					t.Fatalf("request timeout = %s, want %s", actual, ttl)
+				}
+				start := time.Now()
+				runWitnessFetch(t, d, func(wait func() error) {
+					synctest.Wait()
+					if slowCalls != 1 {
+						t.Fatalf("first peer calls = %d, want 1", slowCalls)
+					}
+					registerOperationalWitnessPeer(t, d, "healthy", func(_ []common.Hash, sink chan *eth.Response) (*eth.Request, error) {
+						healthyCalls++
+						req := &eth.Request{Peer: "healthy", Sent: time.Now(), Cancel: make(chan struct{})}
+						go func() {
+							select {
+							case sink <- &eth.Response{Req: req, Res: []*stateless.Witness{{}}, Done: make(chan error, 1)}:
+							case <-req.Cancel:
+							}
+						}()
+						return req, nil
+					})
+					err := wait()
+					t.Logf("elapsed=%s slow requests=%d healthy requests=%d result=%v", time.Since(start), slowCalls, healthyCalls, err)
+					if err != nil || healthyCalls == 0 {
+						t.Fatalf("healthy peer was not used: err=%v slow=%d healthy=%d", err, slowCalls, healthyCalls)
+					}
+					if drops != 0 || slow.backedOff() || d.peers.persistentBackoff(slow.id) > 0 || softStrikeTally(d.peers, slow.id) != 0 || len(slow.lacking) != 0 {
+						t.Fatal("timeout recovery penalized the original source")
+					}
+				})
+			})
+		})
+	}
+}
+
+func TestConcurrentFetchWitnessWaitsForSource(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		d := newTestDownloader()
+		d.queue.Prepare(1, StatelessSync)
+		scheduleWitnessTasks(d, 1)
+		d.queue.witnessWakeCh <- false
+		start := time.Now()
+		err := d.concurrentFetch((*witnessQueue)(d), true)
+		if !errors.Is(err, ErrWitnessUnavailable) || time.Since(start) != witnessNoProgressBudget {
+			t.Fatalf("queued witnesses did not wait for a source: err=%v elapsed=%s", err, time.Since(start))
+		}
+	})
 }

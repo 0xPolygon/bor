@@ -398,6 +398,7 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 			witnessRetry.forget(peerid)
 
 			if req, ok := pending[peerid]; ok {
+				witnessRetry.startBudget(queue, time.Now())
 				queue.unreserve(peerid) // TODO(karalabe): This needs a non-expiration method
 				delete(pending, peerid)
 				req.Close()
