@@ -108,7 +108,7 @@ func TestV2_DelegatedSenderNonceParity(t *testing.T) {
 	}
 
 	res := ExecuteV2BlockSTM(context.Background(), tasks, base, blockstm.NewMVStore(),
-		blockstm.NewMVBalanceStore(), blockCtx, common.Hash{}, vm.Config{}, cfg, gspec.GasLimit, 4, finalDB, nil)
+		blockstm.NewMVBalanceStore(), blockCtx, common.Hash{}, vm.Config{}, cfg, gspec.GasLimit, 4, finalDB, nil, nil)
 
 	// tx2 declares nonce 1, but A's real nonce is 2 after tx1's CREATE. V2 must
 	// reject it — matching the serial processor — rather than accept a stale

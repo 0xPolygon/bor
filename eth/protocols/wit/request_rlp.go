@@ -90,3 +90,120 @@ func (r *GetWitnessMetadataRequest) DecodeRLP(s *rlp.Stream) error {
 	}
 	return s.ListEnd()
 }
+
+// DecodeRLP decodes a witness response, capping the page count at what a
+// request may ask for: an honest server answers one entry per requested page.
+func (p *WitnessPacketRLPPacket) DecodeRLP(s *rlp.Stream) error {
+	if _, err := s.List(); err != nil {
+		return err
+	}
+	if err := s.Decode(&p.RequestId); err != nil {
+		return err
+	}
+	pages, err := decodeCappedList[WitnessPageResponse](s, MaxWitnessServe, "witness response pages")
+	if err != nil {
+		return err
+	}
+	p.WitnessPacketResponse = pages
+	return s.ListEnd()
+}
+
+// DecodeRLP decodes a witness metadata response, capping the entry count at
+// what a request may ask for: an honest server answers one entry per hash.
+func (p *WitnessMetadataPacket) DecodeRLP(s *rlp.Stream) error {
+	if _, err := s.List(); err != nil {
+		return err
+	}
+	if err := s.Decode(&p.RequestId); err != nil {
+		return err
+	}
+	metadata, err := decodeCappedList[WitnessMetadataResponse](s, MaxWitnessMetadataServe, "witness metadata response")
+	if err != nil {
+		return err
+	}
+	p.Metadata = metadata
+	return s.ListEnd()
+}
+
+// DecodeRLP decodes an unsigned witness announcement with capped list lengths.
+func (p *NewWitnessHashesPacket) DecodeRLP(s *rlp.Stream) error {
+	if _, err := s.List(); err != nil {
+		return err
+	}
+	hashes, err := decodeCappedList[common.Hash](s, MaxWitnessHashesPerPacket, "witness announcement hashes")
+	if err != nil {
+		return err
+	}
+	numbers, err := decodeCappedList[uint64](s, MaxWitnessHashesPerPacket, "witness announcement numbers")
+	if err != nil {
+		return err
+	}
+	p.Hashes, p.Numbers = hashes, numbers
+	return s.ListEnd()
+}
+
+// decodeCappedList decodes an RLP list of T, failing before decoding the
+// element that would take it past limit.
+func decodeCappedList[T any](s *rlp.Stream, limit int, what string) ([]T, error) {
+	if _, err := s.List(); err != nil {
+		return nil, err
+	}
+	items := make([]T, 0)
+	for s.MoreDataInList() {
+		if len(items) == limit {
+			return nil, fmt.Errorf("%s exceed %d item limit", what, limit)
+		}
+		var item T
+		if err := s.Decode(&item); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, s.ListEnd()
+}
+
+// DecodeRLP decodes signed witness announcements, capping their count before
+// any of them is decoded or verified.
+func (p *SignedNewWitnessHashesPacket) DecodeRLP(s *rlp.Stream) error {
+	if _, err := s.List(); err != nil {
+		return err
+	}
+	announcements, err := decodeCappedList[SignedWitnessAnnouncement](s, MaxSignedAnnouncesPerPacket, "signed witness announcements")
+	if err != nil {
+		return err
+	}
+	p.Announcements = announcements
+	return s.ListEnd()
+}
+
+// DecodeRLP decodes a signed witness announcement, refusing a signature longer
+// than SignatureLength before reading it. Shorter signatures are left to
+// signature verification, which penalizes the sender without disconnecting.
+func (a *SignedWitnessAnnouncement) DecodeRLP(s *rlp.Stream) error {
+	if _, err := s.List(); err != nil {
+		return err
+	}
+	if err := s.Decode(&a.BlockHash); err != nil {
+		return err
+	}
+	if err := s.Decode(&a.BlockNumber); err != nil {
+		return err
+	}
+	if err := s.Decode(&a.WitnessHash); err != nil {
+		return err
+	}
+	if err := s.Decode(&a.WitnessSize); err != nil {
+		return err
+	}
+	if _, size, err := s.Kind(); err != nil {
+		return err
+	} else if size > SignatureLength {
+		return fmt.Errorf("witness announcement signature exceeds %d bytes", SignatureLength)
+	}
+	signature, err := s.Bytes()
+	if err != nil {
+		return err
+	}
+	a.Signature = signature
+	return s.ListEnd()
+}

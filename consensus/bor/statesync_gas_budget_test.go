@@ -1,7 +1,11 @@
 package bor
 
 import (
+	"context"
+	"errors"
+	"log/slog"
 	"math/big"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +18,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 
 	borTypes "github.com/0xPolygon/heimdall-v2/x/bor/types"
@@ -97,6 +102,241 @@ func TestCommitStates_StateSyncGasBudget(t *testing.T) {
 			require.Len(t, result, tc.want)
 		})
 	}
+}
+
+// TestCommitStates_FetchesPagesOnlyWhileAdmitting verifies that Heimdall is
+// asked for the next page only while every record so far was admitted.
+func TestCommitStates_FetchesPagesOnlyWhileAdmitting(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name          string
+		gasBoundBlock *big.Int
+		numEvents     int
+		gasUsed       uint64
+		failFromID    uint64
+		dropID        uint64
+		override      map[string]int
+		rangeOverride int
+		pageSize      int
+		wantRecords   int
+		wantFetches   int
+	}{
+		{"budget fills on first page", big.NewInt(0), 1000, 5_000_000, 0, 0, nil, -1, 50, 6, 1},
+		{"budget fills on second page", big.NewInt(0), 1000, 400_000, 0, 0, nil, -1, 50, 75, 2},
+		{"no budget drains the backlog", big.NewInt(1000), 120, 5_000_000, 0, 0, nil, -1, 50, 120, 4},
+		{"empty backlog", big.NewInt(0), 0, 5_000_000, 0, 0, nil, -1, 50, 0, 1},
+		{"id gap stops fetching", big.NewInt(1000), 120, 5_000_000, 0, 30, nil, -1, 50, 29, 1},
+		{"budget fills on the last record of a page", big.NewInt(0), 1000, 5_000_000, 0, 0, nil, -1, 6, 6, 1},
+		{"fetch error fails the block", big.NewInt(1000), 120, 5_000_000, 1, 0, nil, -1, 50, 0, 1},
+		{"fetch error after a page fails the block", big.NewInt(1000), 120, 5_000_000, 51, 0, nil, -1, 50, 0, 2},
+		{"override spans pages", big.NewInt(1000), 120, 5_000_000, 0, 0, map[string]int{"16": 70}, -1, 50, 70, 2},
+		{"override zero fetches nothing", big.NewInt(1000), 120, 5_000_000, 0, 0, map[string]int{"16": 0}, -1, 50, 0, 0},
+		{"range override spans pages", big.NewInt(1000), 120, 5_000_000, 0, 0, nil, 70, 50, 70, 2},
+		{"range override wins over a smaller map override", big.NewInt(1000), 120, 5_000_000, 0, 0, map[string]int{"16": 0}, 70, 50, 70, 2},
+		{"single-record pages keep paging", big.NewInt(1000), 3, 5_000_000, 0, 0, nil, -1, 1, 3, 4},
+		{"range override wins over a larger map override", big.NewInt(1000), 120, 5_000_000, 0, 0, map[string]int{"16": 70}, 30, 50, 30, 1},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			addr := common.HexToAddress("0x1")
+			sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr, VotingPower: 1}}}
+			cfg := gasBoundBorConfig(tc.gasBoundBlock)
+			cfg.ValenciaBlock = tc.gasBoundBlock
+			cfg.OverrideStateSyncRecords = tc.override
+			if tc.rangeOverride >= 0 {
+				cfg.OverrideStateSyncRecordsInRange = []params.BlockRangeOverride{{StartBlock: 16, EndBlock: 16, Value: tc.rangeOverride}}
+			}
+			chain, b := newChainAndBorForTest(t, sp, cfg, true, addr, uint64(time.Now().Unix())-200)
+			b.GenesisContractsClient = &mockGenesisContractForCommitStatesIndore{lastStateID: 0, gasUsed: tc.gasUsed}
+
+			now := time.Now()
+			events := gasBoundEvents(tc.numEvents, now.Add(-60*time.Second))
+			if tc.dropID != 0 {
+				events = append(events[:tc.dropID-1], events[tc.dropID:]...)
+			}
+			fetches := 0
+			b.SetHeimdallClient(&mockHeimdallClient{
+				span: &borTypes.Span{
+					Id: 0, StartBlock: 0, EndBlock: 255, BorChainId: "1",
+					ValidatorSet:      stakeTypes.ValidatorSet{Validators: []*stakeTypes.Validator{{ValId: 1, Signer: addr.Hex(), VotingPower: 1}}},
+					SelectedProducers: []stakeTypes.Validator{{ValId: 1, Signer: addr.Hex(), VotingPower: 1}},
+				},
+				stateSyncEventFn: func(ctx context.Context, fromID uint64, _ int64) ([]*clerk.EventRecordWithTime, error) {
+					fetches++
+
+					if tc.failFromID != 0 && fromID >= tc.failFromID {
+						return nil, errors.New("heimdall unavailable")
+					}
+
+					page := make([]*clerk.EventRecordWithTime, 0, tc.pageSize)
+					for _, e := range events {
+						if e.ID >= fromID && len(page) < tc.pageSize {
+							page = append(page, e)
+						}
+					}
+
+					return page, nil
+				},
+			})
+
+			hc := chain.HeaderChain()
+			genesis := hc.GetHeaderByNumber(0)
+			statedb := newStateDBForTest(t, genesis.Root)
+			h := &types.Header{Number: big.NewInt(16), ParentHash: genesis.Hash(), Time: uint64(now.Unix())}
+
+			result, err := b.CommitStates(statedb, h, statefull.ChainContext{Chain: hc, Bor: b})
+			require.Equal(t, tc.failFromID != 0, err != nil, "err: %v", err)
+			require.Len(t, result, tc.wantRecords)
+			require.Equal(t, tc.wantFetches, fetches)
+		})
+	}
+}
+
+// logCapture records the first occurrence of each log message and its attributes.
+type logCapture struct {
+	mu      sync.Mutex
+	records map[string]map[string]any
+}
+
+func (l *logCapture) Enabled(context.Context, slog.Level) bool { return true }
+func (l *logCapture) WithAttrs([]slog.Attr) slog.Handler       { return l }
+func (l *logCapture) WithGroup(string) slog.Handler            { return l }
+
+func (l *logCapture) Handle(_ context.Context, r slog.Record) error {
+	attrs := map[string]any{}
+	r.Attrs(func(a slog.Attr) bool {
+		attrs[a.Key] = a.Value.Any()
+		return true
+	})
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if _, seen := l.records[r.Message]; !seen {
+		l.records[r.Message] = attrs
+	}
+
+	return nil
+}
+
+// TestCommitStates_LogsWhyItStopped swaps the global logger, so it must not run in parallel.
+func TestCommitStates_LogsWhyItStopped(t *testing.T) {
+	big30k := make([]byte, params.MaxStateSyncRecordBytes+1)
+	atCap := make([]byte, params.MaxStateSyncRecordBytes)
+
+	cases := []struct {
+		name      string
+		gasUsed   uint64
+		data      []byte
+		failFrom  uint64
+		dropID    uint64
+		wantMsg   string
+		wantAttrs map[string]any // nil means the message must not be logged
+	}{
+		{"fetch error", 1, nil, 51, 0, "Error occurred when fetching state sync events", map[string]any{"fromID": uint64(51)}},
+		{"invalid record", 1, nil, 0, 30, "while validating event record", map[string]any{"lastStateID": uint64(29)}},
+		{"gas budget", 5_000_000, nil, 0, 0, "state-sync gas budget reached, deferring remaining records", map[string]any{"deferredFromID": uint64(7)}},
+		{"byte budget", 1, big30k, 0, 0, "state-sync byte budget reached, deferring remaining records", map[string]any{"deferredFromID": uint64(35)}},
+		{"oversized record", 1, big30k, 0, 0, "state-sync record exceeds expected per-record cap", map[string]any{"id": uint64(1)}},
+		{"record at the cap", 1, atCap, 0, 0, "state-sync record exceeds expected per-record cap", nil},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			capture := &logCapture{records: map[string]map[string]any{}}
+			prev := log.Root()
+			log.SetDefault(log.NewLogger(capture))
+			t.Cleanup(func() { log.SetDefault(prev) })
+
+			addr := common.HexToAddress("0x1")
+			sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr, VotingPower: 1}}}
+			chain, b := newChainAndBorForTest(t, sp, gasBoundBorConfig(big.NewInt(0)), true, addr, uint64(time.Now().Unix())-200)
+			b.GenesisContractsClient = &mockGenesisContractForCommitStatesIndore{gasUsed: tc.gasUsed}
+
+			now := time.Now()
+			events := gasBoundEvents(120, now.Add(-60*time.Second))
+			for _, e := range events {
+				if tc.data != nil {
+					e.Data = tc.data
+				}
+			}
+
+			if tc.dropID != 0 {
+				events = append(events[:tc.dropID-1], events[tc.dropID:]...)
+			}
+
+			b.SetHeimdallClient(&mockHeimdallClient{
+				span: &borTypes.Span{
+					Id: 0, StartBlock: 0, EndBlock: 255, BorChainId: "1",
+					ValidatorSet:      stakeTypes.ValidatorSet{Validators: []*stakeTypes.Validator{{ValId: 1, Signer: addr.Hex(), VotingPower: 1}}},
+					SelectedProducers: []stakeTypes.Validator{{ValId: 1, Signer: addr.Hex(), VotingPower: 1}},
+				},
+				stateSyncEventFn: func(_ context.Context, fromID uint64, _ int64) ([]*clerk.EventRecordWithTime, error) {
+					if tc.failFrom != 0 && fromID >= tc.failFrom {
+						return nil, errors.New("heimdall unavailable")
+					}
+
+					page := make([]*clerk.EventRecordWithTime, 0, 50)
+					for _, e := range events {
+						if e.ID >= fromID && len(page) < 50 {
+							page = append(page, e)
+						}
+					}
+
+					return page, nil
+				},
+			})
+
+			hc := chain.HeaderChain()
+			genesis := hc.GetHeaderByNumber(0)
+			h := &types.Header{Number: big.NewInt(16), ParentHash: genesis.Hash(), Time: uint64(now.Unix())}
+
+			_, err := b.CommitStates(newStateDBForTest(t, genesis.Root), h, statefull.ChainContext{Chain: hc, Bor: b})
+			require.Equal(t, tc.failFrom != 0, err != nil, "err: %v", err)
+
+			capture.mu.Lock()
+			defer capture.mu.Unlock()
+
+			_, summarized := capture.records["StateSyncData"]
+			require.Equal(t, tc.failFrom == 0, summarized, "StateSyncData log")
+
+			attrs, ok := capture.records[tc.wantMsg]
+			require.Equal(t, tc.wantAttrs != nil, ok, "log %q", tc.wantMsg)
+
+			for k, v := range tc.wantAttrs {
+				require.Equal(t, v, attrs[k], k)
+			}
+		})
+	}
+}
+
+func TestCommitStates_CommitErrorFailsBlock(t *testing.T) {
+	t.Parallel()
+	addr := common.HexToAddress("0x1")
+	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr, VotingPower: 1}}}
+	chain, b := newChainAndBorForTest(t, sp, gasBoundBorConfig(big.NewInt(0)), true, addr, uint64(time.Now().Unix())-200)
+	b.GenesisContractsClient = &mockGenesisContractForCommitStatesIndore{commitErr: errors.New("commit failed")}
+
+	now := time.Now()
+	b.SetHeimdallClient(&mockHeimdallClient{
+		span: &borTypes.Span{
+			Id: 0, StartBlock: 0, EndBlock: 255, BorChainId: "1",
+			ValidatorSet:      stakeTypes.ValidatorSet{Validators: []*stakeTypes.Validator{{ValId: 1, Signer: addr.Hex(), VotingPower: 1}}},
+			SelectedProducers: []stakeTypes.Validator{{ValId: 1, Signer: addr.Hex(), VotingPower: 1}},
+		},
+		events: gasBoundEvents(3, now.Add(-60*time.Second)),
+	})
+
+	hc := chain.HeaderChain()
+	genesis := hc.GetHeaderByNumber(0)
+	h := &types.Header{Number: big.NewInt(16), ParentHash: genesis.Hash(), Time: uint64(now.Unix())}
+
+	result, err := b.CommitStates(newStateDBForTest(t, genesis.Root), h, statefull.ChainContext{Chain: hc, Bor: b})
+	require.Error(t, err)
+	require.Nil(t, result)
 }
 
 // stateSyncContextContract observes the transaction-scoped state presented to

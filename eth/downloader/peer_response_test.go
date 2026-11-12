@@ -506,14 +506,14 @@ func TestBackoffEscalatesToJailAfterRepeatStrikes(t *testing.T) {
 	}
 
 	for i := 0; i < softFailureJailThreshold-1; i++ {
-		d.respondToPeer(peer, peerFailureTimeout, errTimeout)
+		d.respondToPeer(peer, peerFailureStalling, errStallingPeer)
 		if remaining := peer.backoffRemaining(); remaining > peerSoftBackoff {
 			t.Fatalf("soft strike %d should stay within soft backoff: have %v, want <= %v", i+1, remaining, peerSoftBackoff)
 		}
 		clearPeerBackoff(peer)
 	}
 
-	d.respondToPeer(peer, peerFailureTimeout, errTimeout)
+	d.respondToPeer(peer, peerFailureStalling, errStallingPeer)
 	if remaining := peer.backoffRemaining(); remaining <= peerSoftBackoff {
 		t.Fatalf("the escalating strike should jail the peer: have %v, want > %v", remaining, peerSoftBackoff)
 	}
@@ -560,10 +560,10 @@ func TestBackoffSoftFailureDedupsWhileBenched(t *testing.T) {
 		t.Fatalf("failed to register peer: %v", err)
 	}
 
-	if penalized, _ := ps.backoffSoftFailure(peer); !penalized {
+	if penalized, _ := ps.backoffSoftFailure(peer, peerFailureStalling); !penalized {
 		t.Fatal("the first soft failure should penalize the peer")
 	}
-	if penalized, _ := ps.backoffSoftFailure(peer); penalized {
+	if penalized, _ := ps.backoffSoftFailure(peer, peerFailureStalling); penalized {
 		t.Fatal("a peer already benched must not be penalized again for a concurrent failure")
 	}
 	if got := ps.softStrikes[peer.id].count; got != 1 {

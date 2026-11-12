@@ -54,6 +54,10 @@ func (w *worker) fillBlock(interrupt *atomic.Int32, work *environment, genParams
 	if genParams.adoption != nil {
 		w.seedAdopted(work, genParams.adoption)
 
+		if genParams.adoption.Complete {
+			return nil
+		}
+
 		// Past the announce time already — a rebuild that inherited a
 		// window late. The sequenced transactions are committed, which is
 		// everything consumers were promised, so close here. Filling from
@@ -105,11 +109,27 @@ func sequencerActive(bor *params.BorConfig, number *big.Int) bool {
 // confirmed there. Two blocks at one height is precisely what leaves
 // consumers holding revoked preconfirmations.
 func (w *worker) sealBarrier(work *environment) bool {
+	if !w.sequencingActive(work.header.Number) {
+		return true
+	}
+
 	// A muted build published nothing, so the store holds no window of ours
-	// to confirm — and Seal refuses its block regardless.
-	if work.sequencerMuted || !w.sequencingActive(work.header.Number) ||
-		w.sequencer.AwaitSequenced(sequenceBarrierTimeout,
-			work.header.Number.Uint64(), work.txs) {
+	// to confirm, and Seal refuses its block while the signer stays
+	// unauthorized. A span update can authorize it mid-build, though; the
+	// block then never read the store, so rebuild and let the next
+	// build-start read follow it.
+	if work.sequencerMuted {
+		if !w.signerAuthorized(work.header) {
+			return true
+		}
+
+		log.Warn("Not sealing: the signer was authorized after this build started",
+			"number", work.header.Number)
+
+		return false
+	}
+
+	if w.sequencer.AwaitSequenced(sequenceBarrierTimeout, work.header.Number.Uint64(), work.txs) {
 		return true
 	}
 
@@ -147,12 +167,19 @@ func (w *worker) sequencerMutedBuild(genParams *generateParams, header *types.He
 		return false
 	}
 
-	engine, ok := w.engine.(*bor.Bor)
-	if !ok {
-		return false
+	return !w.signerAuthorized(header)
+}
+
+// signerAuthorized reports whether our signer may seal header. Only Bor
+// restricts who seals a height.
+func (w *worker) signerAuthorized(header *types.Header) bool {
+	if w.authorizedSigner != nil {
+		return w.authorizedSigner(header)
 	}
 
-	return !engine.IsAuthorizedSigner(w.chain, header)
+	engine, ok := w.engine.(*bor.Bor)
+
+	return !ok || engine.IsAuthorizedSigner(w.chain, header)
 }
 
 func (w *worker) applyAdoption(genParams *generateParams, header *types.Header) {

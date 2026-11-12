@@ -18,6 +18,7 @@ package filters
 
 import (
 	"context"
+	"fmt"
 	big "math/big"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -94,30 +95,70 @@ func (f *BorBlockLogsFilter) Logs(ctx context.Context) ([]*types.Log, error) {
 
 	head := header.Number.Uint64()
 
-	if f.begin == -1 {
-		f.begin = int64(head)
+	// Resolve the rpc.BlockNumber sentinels before doing any arithmetic on the
+	// bounds: the API hands us rpc.LatestBlockNumber (-2, not -1) when the
+	// caller omits fromBlock/toBlock, and uint64(-2) would otherwise end the
+	// range scan before its first iteration.
+	begin, err := f.resolveBlockNumber(ctx, f.begin, head)
+	if err != nil {
+		return nil, err
 	}
 
-	// adjust begin for sprint
-	f.begin = currentSprintEnd(f.borConfig.CalculateSprint(uint64(f.begin)), f.begin)
+	end, err := f.resolveBlockNumber(ctx, f.end, head)
+	if err != nil {
+		return nil, err
+	}
+
+	// adjust begin for sprint. Bor receipts only exist on blocks that are a
+	// multiple of the sprint length, so begin is rounded up to the next one;
+	// a begin of latest taken mid-sprint therefore lands past the head and
+	// returns no logs until the head reaches that block.
+	f.begin = currentSprintEnd(f.borConfig.CalculateSprint(uint64(begin)), begin)
 
 	// begin already on PIP-74, no more need for bor logs
 	if f.borConfig != nil && f.borConfig.IsMadhugiri(big.NewInt(f.begin)) {
 		return nil, nil
 	}
 
-	end := f.end
-	if f.end == -1 {
-		end = int64(head)
-	}
-
 	// end on PIP-74, reduce to fit just on preHF blocks
-	if f.borConfig != nil && f.borConfig.IsMadhugiri(big.NewInt(f.end)) {
+	if f.borConfig != nil && f.borConfig.IsMadhugiri(big.NewInt(end)) {
 		end = f.borConfig.MadhugiriBlock.Int64() - 1
 	}
 
 	// Gather all indexed logs, and finish with non indexed ones
 	return f.unindexedLogs(ctx, uint64(end))
+}
+
+// resolveBlockNumber maps the negative rpc.BlockNumber sentinels onto concrete
+// block numbers, mirroring resolveSpecial in filter.go: latest and pending
+// resolve to the current head, finalized and safe to the corresponding
+// headers, and earliest to the first block kept after history pruning.
+func (f *BorBlockLogsFilter) resolveBlockNumber(ctx context.Context, number int64, head uint64) (int64, error) {
+	switch number {
+	case rpc.LatestBlockNumber.Int64(), rpc.PendingBlockNumber.Int64():
+		return int64(head), nil
+	case rpc.FinalizedBlockNumber.Int64(), rpc.SafeBlockNumber.Int64():
+		return f.resolveHeader(ctx, rpc.BlockNumber(number), rpc.BlockNumber(number).String())
+	case rpc.EarliestBlockNumber.Int64():
+		return f.resolveHeader(ctx, rpc.BlockNumber(f.backend.HistoryPruningCutoff()), "earliest")
+	default:
+		if number < 0 {
+			return 0, fmt.Errorf("invalid block number %d", number)
+		}
+		return number, nil
+	}
+}
+
+// resolveHeader looks up the header for number and returns its height.
+func (f *BorBlockLogsFilter) resolveHeader(ctx context.Context, number rpc.BlockNumber, name string) (int64, error) {
+	hdr, err := f.backend.HeaderByNumber(ctx, number)
+	if err != nil {
+		return 0, err
+	}
+	if hdr == nil {
+		return 0, fmt.Errorf("%s header not found", name)
+	}
+	return hdr.Number.Int64(), nil
 }
 
 // unindexedLogs returns the logs matching the filter criteria based on raw block

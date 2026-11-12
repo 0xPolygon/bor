@@ -488,6 +488,8 @@ func TestFetchStateSyncEvents_PreMadhugiriHF(t *testing.T) {
 	eventRecords := generateFakeStateSyncEvents(sample, eventCount)
 
 	h.EXPECT().StateSyncEvents(gomock.Any(), fromID, to).Return(eventRecords, nil).AnyTimes()
+	// Every record was admitted, so CommitStates asks for the next page and finds it empty.
+	h.EXPECT().StateSyncEvents(gomock.Any(), fromID+uint64(eventCount), to).Return(nil, nil).AnyTimes()
 	h.EXPECT().GetLatestSpan(gomock.Any()).Return(nil, fmt.Errorf("span not found")).AnyTimes()
 	_bor.SetHeimdallClient(h)
 
@@ -574,6 +576,8 @@ func TestFetchStateSyncEvents_PostMadhugiriHF(t *testing.T) {
 	eventRecords := generateFakeStateSyncEvents(sample, eventCount)
 
 	h.EXPECT().StateSyncEvents(gomock.Any(), fromID, to).Return(eventRecords, nil).AnyTimes()
+	// Every record was admitted, so CommitStates asks for the next page and finds it empty.
+	h.EXPECT().StateSyncEvents(gomock.Any(), fromID+uint64(eventCount), to).Return(nil, nil).AnyTimes()
 	h.EXPECT().GetLatestSpan(gomock.Any()).Return(nil, fmt.Errorf("span not found")).AnyTimes()
 	_bor.SetHeimdallClient(h)
 
@@ -784,6 +788,8 @@ func TestStateSyncTracing_LiveTracerDoesNotPanic(t *testing.T) {
 	eventRecords := generateFakeStateSyncEvents(sample, eventCount)
 
 	h.EXPECT().StateSyncEvents(gomock.Any(), fromID, to).Return(eventRecords, nil).AnyTimes()
+	// Every record was admitted, so CommitStates asks for the next page and finds it empty.
+	h.EXPECT().StateSyncEvents(gomock.Any(), fromID+uint64(eventCount), to).Return(nil, nil).AnyTimes()
 	h.EXPECT().GetLatestSpan(gomock.Any()).Return(nil, fmt.Errorf("span not found")).AnyTimes()
 	_bor.SetHeimdallClient(h)
 
@@ -959,6 +965,8 @@ func TestFetchStateSyncEvents_2(t *testing.T) {
 		buildStateEvent(sample, 6, 4),
 	}
 	h.EXPECT().StateSyncEvents(gomock.Any(), fromID, to).Return(eventRecords, nil).AnyTimes()
+	// Both records were admitted, so CommitStates asks for the next page and finds it empty.
+	h.EXPECT().StateSyncEvents(gomock.Any(), uint64(7), to).Return(nil, nil).AnyTimes()
 
 	for i := sprintSize + 1; i <= spanSize; i++ {
 		// Update the validator set at the end of span and update the respective mocks

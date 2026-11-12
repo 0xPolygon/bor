@@ -49,25 +49,33 @@ type witnessRequestState struct {
 
 // cachedWitness represents a witness that arrived before its corresponding block
 type cachedWitness struct {
-	witness   *stateless.Witness
-	peer      string
-	diverged  bool // Accepted on the WIT2 size oracle alone (see InjectWitness).
-	timestamp time.Time
+	witness    *stateless.Witness
+	peer       string
+	provenance WitnessProvenance // Who chose the bytes (see InjectWitness).
+	timestamp  time.Time
 }
 
 // injectFor builds the import op for block from a witness that arrived by
-// broadcast before the block did, carrying the pusher and the size-oracle
-// divergence bit as the op's provenance (see blockOrHeaderInject) and the fetch
+// broadcast before the block did, carrying the pusher and who chose the bytes
+// as the op's provenance (see blockOrHeaderInject) and the fetch
 // closure a re-fetch after an import failure needs (retryAfterImportFailure).
 func (c *cachedWitness) injectFor(origin string, block *types.Block, fetchWitness witnessRequesterFn) *blockOrHeaderInject {
-	return &blockOrHeaderInject{
-		origin:          origin,
-		block:           block,
-		witness:         c.witness,
-		witnessPeer:     c.peer,
-		witnessDiverged: c.diverged,
-		fetchWitness:    fetchWitness,
+	op := &blockOrHeaderInject{
+		origin:       origin,
+		block:        block,
+		witness:      c.witness,
+		witnessPeer:  c.peer,
+		fetchWitness: fetchWitness,
 	}
+	op.setWitnessProvenance(c.provenance)
+	return op
+}
+
+// setWitnessProvenance records who chose the op's witness bytes, which decides
+// how an import failure is charged (chargeDivergedWitnessImportFailure).
+func (op *blockOrHeaderInject) setWitnessProvenance(p WitnessProvenance) {
+	op.witnessDiverged = p.diverged()
+	op.witnessNotProducer = p == WitnessNotProducer
 }
 
 // signedWitnessHashFn returns the BP-signed witness commitment for a block —
@@ -429,10 +437,10 @@ func (m *witnessManager) handleBroadcast(msg *injectedWitnessMsg) {
 			state.op.witness = msg.witness
 			// Provenance, exactly as handleWitnessFetchSuccess records it for a
 			// fetched witness: the pusher chose these bytes, so an import failure
-			// of a size-oracle-accepted (diverged) body is charged to it and the
+			// of a body not proven to be the BP's is charged to it and the
 			// witness re-fetched from someone else via the announce's closure.
 			state.op.witnessPeer = msg.peer
-			state.op.witnessDiverged = msg.diverged
+			state.op.setWitnessProvenance(msg.provenance)
 			if state.op.fetchWitness == nil && state.announce != nil {
 				state.op.fetchWitness = state.announce.fetchWitness
 			}
@@ -453,10 +461,10 @@ func (m *witnessManager) handleBroadcast(msg *injectedWitnessMsg) {
 	} else {
 		// Cache the witness for later use when the block arrives
 		m.witnessCache.Set(hash, &cachedWitness{
-			witness:   msg.witness,
-			peer:      msg.peer,
-			diverged:  msg.diverged,
-			timestamp: msg.time,
+			witness:    msg.witness,
+			peer:       msg.peer,
+			provenance: msg.provenance,
+			timestamp:  msg.time,
 		}, ttlcache.DefaultTTL)
 		log.Debug("[wm] No matching pending block for injected witness, caching for later", "hash", hash, "peer", msg.peer)
 	}
@@ -733,10 +741,11 @@ func (m *witnessManager) processWitnessResponse(peer string, hash common.Hash, r
 	// signed-size band — hash divergence from non-deterministic witness
 	// content is expected and is not rejected here. Only an oversized witness
 	// is rejected. Content-correctness is arbitrated by import-time execution;
-	// when a witness accepted on the size oracle alone (diverged) then fails
-	// import, the fetcher strikes this server and re-fetches from another
-	// source (see BlockFetcher.importBlocks).
-	body, witnessHash, diverged, ok := m.verifyAgainstSignedHash(peer, hash, witness[0])
+	// when a witness not proven to be the BP's then fails import in a way it
+	// could have caused, the fetcher excludes this server and re-fetches from
+	// another source, striking it only per chargeDivergedWitnessImportFailure
+	// (see BlockFetcher.importBlocks).
+	body, witnessHash, provenance, ok := m.verifyAgainstSignedHash(peer, hash, witness[0])
 	if !ok {
 		return
 	}
@@ -750,16 +759,15 @@ func (m *witnessManager) processWitnessResponse(peer string, hash common.Hash, r
 	m.cacheVerifiedWitnessForServing(hash, body, witnessHash)
 
 	metrics.RecordPerItemDuration(blockWitnessItemDownloadTimer, res.Time, 1)
-	m.handleWitnessFetchSuccess(peer, hash, witness[0], announcedAt, diverged)
+	m.handleWitnessFetchSuccess(peer, hash, witness[0], announcedAt, provenance)
 }
 
 // handleWitnessFetchSuccess processes a successfully fetched witness.
 // It needs the original origin from the op state for consistency checks.
-// diverged records that the witness was accepted on the size oracle alone (hash
-// differs from the BP-signed one); together with the serving peer and the
-// fetch closure it is carried on the import op so an import failure can be
-// charged to the server and re-fetched from another source.
-func (m *witnessManager) handleWitnessFetchSuccess(fetchPeer string, hash common.Hash, witness *stateless.Witness, announcedAt time.Time, diverged bool) {
+// provenance records who chose the witness bytes; together with the serving
+// peer and the fetch closure it is carried on the import op so an import
+// failure can be charged to the server and re-fetched from another source.
+func (m *witnessManager) handleWitnessFetchSuccess(fetchPeer string, hash common.Hash, witness *stateless.Witness, announcedAt time.Time, provenance WitnessProvenance) {
 	m.mu.Lock()
 	state, exists := m.pending[hash]
 	if !exists {
@@ -775,12 +783,12 @@ func (m *witnessManager) handleWitnessFetchSuccess(fetchPeer string, hash common
 		return // Already handled
 	}
 
-	log.Debug("[wm] Witness received via fetch, queuing block for import", "peer", fetchPeer, "origin", state.op.origin, "number", state.op.number(), "hash", hash, "diverged", diverged)
+	log.Debug("[wm] Witness received via fetch, queuing block for import", "peer", fetchPeer, "origin", state.op.origin, "number", state.op.number(), "hash", hash, "provenance", provenance)
 
 	// Attach witness and its provenance (under lock)
 	state.op.witness = witness
 	state.op.witnessPeer = fetchPeer
-	state.op.witnessDiverged = diverged
+	state.op.setWitnessProvenance(provenance)
 	if state.announce != nil {
 		state.op.fetchWitness = state.announce.fetchWitness
 	}
@@ -883,6 +891,10 @@ func (m *witnessManager) safeEnqueue(op *blockOrHeaderInject) {
 	// Remove the pending state while holding the lock, ensuring any concurrent
 	// isPending checks will see the updated state.
 	delete(m.pending, hash)
+	// Every witness, fetched, pushed or cached, reaches import through here.
+	// Carry the signed-size quarantine on the op before clearing it, so a
+	// re-fetch after an import failure stays on the WIT1 path.
+	op.witnessQuarantined = m.isSignedHashQuarantined(hash)
 	m.clearSignedHashMismatch(hash)
 	m.mu.Unlock()
 
@@ -919,9 +931,9 @@ func (m *witnessManager) ExcludeWitnessSource(peer string, hash common.Hash) {
 }
 
 // retryAfterImportFailure re-registers a block whose import failed with a
-// witness accepted on the WIT2 size oracle alone, so its witness is fetched
-// again — from a different source, the failed one having been excluded by the
-// fetcher. Called from the BlockFetcher loop right after the failed attempt has
+// witness not proven to be the BP's (WitnessProvenance.diverged), so its
+// witness is fetched again — from a different source, the failed one having
+// been excluded by the fetcher. Called from the BlockFetcher loop right after the failed attempt has
 // been forgotten, so the pending map is free for the hash. The carried
 // witnessImportFailures count bounds the cycle (see maxWitnessImportRetries).
 func (m *witnessManager) retryAfterImportFailure(op *blockOrHeaderInject) {
@@ -944,12 +956,19 @@ func (m *witnessManager) retryAfterImportFailure(op *blockOrHeaderInject) {
 		log.Debug("[wm] Not re-fetching witness after import failure: already pending", "hash", hash)
 		return
 	}
+	if op.witnessQuarantined {
+		// Forgetting the failed attempt cleared the quarantine: restore it so
+		// the re-fetch stays on the WIT1 path instead of being judged against
+		// the bad signed size again, which would strike honest servers twice.
+		m.quarantineSignedHash(hash)
+	}
 	m.pending[hash] = &witnessRequestState{
 		op: &blockOrHeaderInject{
 			origin:                op.origin,
 			block:                 op.block,
 			fetchWitness:          op.fetchWitness,
 			witnessImportFailures: op.witnessImportFailures,
+			witnessQuarantined:    op.witnessQuarantined,
 		},
 		announce: &blockAnnounce{
 			origin:       op.origin,

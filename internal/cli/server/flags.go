@@ -338,6 +338,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.TxPool.FilteredAddressesFile,
 		Group:   "Transaction Pool",
 	})
+	f.DurationFlag(&flagset.DurationFlag{
+		Name:    "txpool.filter-reload",
+		Usage:   "Interval at which the filtered addresses file is re-read and applied without a restart (0 disables)",
+		Value:   &c.cliConfig.TxPool.FilterReload,
+		Default: c.cliConfig.TxPool.FilterReload,
+		Group:   "Transaction Pool",
+	})
 	f.BoolFlag(&flagset.BoolFlag{
 		Name:    "txpool.rebroadcast",
 		Usage:   "Enable stuck transaction rebroadcast mechanism",
@@ -1496,6 +1503,7 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	})
 
 	c.registerSequencerFlags(f)
+	c.registerConditionalTxPoolFlags(f)
 
 	return f
 }
@@ -1531,5 +1539,31 @@ func (c *Command) registerSequencerFlags(f *flagset.Flagset) {
 		Usage:   "Producer txpool poll cadence while a block is open (continuous building); 0 keeps the one-shot fill",
 		Value:   &c.cliConfig.Sequencer.Poll,
 		Default: c.cliConfig.Sequencer.Poll,
+	})
+}
+
+// registerConditionalTxPoolFlags registers the PIP-15 conditional transaction
+// flags of the transaction pool.
+func (c *Command) registerConditionalTxPoolFlags(f *flagset.Flagset) {
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "txpool.conditional",
+		Usage:   "Accept PIP-15 conditional transactions (bor_sendRawTransactionConditional). They are never gossiped, so only a block producer can include them",
+		Value:   &c.cliConfig.TxPool.Conditional,
+		Default: c.cliConfig.TxPool.Conditional,
+		Group:   "Transaction Pool",
+	})
+	f.DurationFlag(&flagset.DurationFlag{
+		Name:    "txpool.conditionallifetime",
+		Usage:   "Maximum amount of time a conditional transaction can stay in the pool",
+		Value:   &c.cliConfig.TxPool.ConditionalLifetime,
+		Default: c.cliConfig.TxPool.ConditionalLifetime,
+		Group:   "Transaction Pool",
+	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "txpool.conditionalslots",
+		Usage:   "Maximum number of known accounts and slots across all pooled conditional transactions",
+		Value:   &c.cliConfig.TxPool.ConditionalSlots,
+		Default: c.cliConfig.TxPool.ConditionalSlots,
+		Group:   "Transaction Pool",
 	})
 }

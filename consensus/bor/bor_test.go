@@ -196,11 +196,11 @@ func newChainAndBorForTestWithConfig(t *testing.T, sp Spanner, cfg *params.Chain
 		ttlcache.WithCapacity[common.Hash, *types.Header](inmemorySignatures),
 		ttlcache.WithDisableTouchOnHit[common.Hash, *types.Header](),
 	)
-	b.spanStore = NewSpanStore(nil, sp, cfg.ChainID.String())
+	b.spanStore = NewSpanStore(nil, sp, cfg.ChainID.String(), nil)
 	b.SetSpanner(sp)
 	// set a default authorized signer to prevent nil deref in snapshot
 	b.authorizedSigner.Store(&signer{signer: common.Address{}, signFn: func(_ accounts.Account, _ string, _ []byte) ([]byte, error) {
-		return nil, &UnauthorizedSignerError{0, common.Address{}.Bytes(), []*valset.Validator{}}
+		return nil, &UnauthorizedSignerError{Number: 0, Signer: common.Address{}.Bytes(), AllowedSigners: []*valset.Validator{}}
 	}})
 
 	if devFake && signerAddr != (common.Address{}) {
@@ -2443,6 +2443,24 @@ func TestNew(t *testing.T) {
 	require.NoError(t, engine.Close())
 }
 
+func TestNew_PassesRioBlockToSpanStore(t *testing.T) {
+	t.Parallel()
+
+	borCfg := &params.BorConfig{
+		Sprint:   map[string]uint64{"0": 64},
+		Period:   map[string]uint64{"0": 2},
+		RioBlock: big.NewInt(1000),
+	}
+	chainCfg := &params.ChainConfig{ChainID: big.NewInt(1), Bor: borCfg}
+	engine := New(chainCfg, rawdb.NewMemoryDatabase(), nil, &fakeSpanner{}, nil, nil, nil, false, 0, vm.Config{})
+	defer func() {
+		require.NoError(t, engine.Close())
+	}()
+
+	require.True(t, engine.spanStore.beforeRio(999))
+	require.False(t, engine.spanStore.beforeRio(1000))
+}
+
 func TestNew_DefaultSprintFallback(t *testing.T) {
 	t.Parallel()
 
@@ -3585,7 +3603,7 @@ func TestSnapshotApply_SprintEndValidatorChange(t *testing.T) {
 	b := &Bor{
 		chainConfig: chainCfg,
 		config:      borCfg,
-		spanStore:   NewSpanStore(nil, sp, "1"),
+		spanStore:   NewSpanStore(nil, sp, "1", nil),
 	}
 	b.SetHeimdallClient(&mockHeimdallClient{
 		span: &borTypes.Span{
@@ -3606,10 +3624,11 @@ func TestSnapshotApply_SprintEndValidatorChange(t *testing.T) {
 type mockGenesisContractForCommitStatesIndore struct {
 	lastStateID uint64
 	gasUsed     uint64
+	commitErr   error
 }
 
 func (m *mockGenesisContractForCommitStatesIndore) CommitState(event *clerk.EventRecordWithTime, state vm.StateDB, header *types.Header, chCtx statefull.ChainContext, vmCfg vm.Config) (uint64, error) {
-	return m.gasUsed, nil
+	return m.gasUsed, m.commitErr
 }
 
 func (m *mockGenesisContractForCommitStatesIndore) LastStateId(st *state.StateDB, number uint64, hash common.Hash) (*big.Int, error) {
@@ -4338,25 +4357,49 @@ func TestFinalize_ValidStateSyncTx(t *testing.T) {
 	require.Len(t, receipts, 1, "expected one state-sync receipt")
 }
 
-// TestFinalize_StateSyncProcessingError tests that when CommitStates fails (e.g. LastStateId
-// returns an error), Finalize returns ErrStateSyncProcessing. Note: CommitStates swallows
-// StateSyncEvents fetch errors and returns empty data, so ErrStateSyncProcessing is only
-// reachable through genesis contract failures like LastStateId.
+// TestFinalize_StateSyncProcessingError tests that when CommitStates fails, either on a
+// genesis contract call like LastStateId or on a Heimdall fetch, Finalize returns
+// ErrStateSyncProcessing.
 func TestFinalize_StateSyncProcessingError(t *testing.T) {
 	t.Parallel()
 
-	chain, b, h, genesis := setupMadhugiriStateSyncTest(t, defaultStateSyncEvents(), nil)
-	// Override genesis contract with one that fails, triggering CommitStates error
-	b.GenesisContractsClient = &failingGenesisContract{}
-	statedb := newStateDBForTest(t, genesis.Root)
+	addr1 := common.HexToAddress("0x1")
+	failingFetch := &mockHeimdallClient{
+		span: &borTypes.Span{
+			Id: 0, StartBlock: 0, EndBlock: 255, BorChainId: "1",
+			ValidatorSet:      stakeTypes.ValidatorSet{Validators: []*stakeTypes.Validator{{ValId: 1, Signer: addr1.Hex(), VotingPower: 1}}},
+			SelectedProducers: []stakeTypes.Validator{{ValId: 1, Signer: addr1.Hex(), VotingPower: 1}},
+		},
+		stateSyncEventFn: func(_ context.Context, _ uint64, _ int64) ([]*clerk.EventRecordWithTime, error) {
+			return nil, errors.New("state sync fetch failed")
+		},
+	}
 
-	body := &types.Body{}
-	receipts := make([]*types.Receipt, 0)
+	cases := []struct {
+		name     string
+		heimdall IHeimdallClient
+		genesis  GenesisContract
+	}{
+		{"last state id", nil, &failingGenesisContract{}},
+		{"heimdall fetch", failingFetch, nil},
+	}
 
-	result, err := b.Finalize(chain.HeaderChain(), h, statedb, body, receipts)
-	require.ErrorIs(t, err, core.ErrStateSyncProcessing)
-	require.ErrorContains(t, err, "error while committing states")
-	require.Nil(t, result)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			chain, b, h, genesis := setupMadhugiriStateSyncTest(t, defaultStateSyncEvents(), tc.heimdall)
+			if tc.genesis != nil {
+				b.GenesisContractsClient = tc.genesis
+			}
+			statedb := newStateDBForTest(t, genesis.Root)
+
+			result, err := b.Finalize(chain.HeaderChain(), h, statedb, &types.Body{}, make([]*types.Receipt, 0))
+			require.ErrorIs(t, err, core.ErrStateSyncProcessing)
+			require.ErrorContains(t, err, "error while committing states")
+			require.Nil(t, result)
+		})
+	}
 }
 
 // TestFinalize_NoStateSyncEvents_EmptyBodyOK tests that when Heimdall returns no state-sync
@@ -4971,8 +5014,8 @@ func TestCommitStates_StateSyncEventsError(t *testing.T) {
 	}
 
 	data, err := b.CommitStates(statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b})
-	require.NoError(t, err) // error is logged but returns empty data
-	require.Empty(t, data)
+	require.ErrorContains(t, err, "state sync fetch failed")
+	require.Nil(t, data)
 }
 func TestCommitStates_EventIdLessThanLastStateId(t *testing.T) {
 	t.Parallel()

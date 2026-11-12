@@ -6,6 +6,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/trie"
 )
@@ -20,6 +21,10 @@ var witnessAttributableMismatchErrors = []error{
 	core.ErrReceiptRootMismatch,
 	core.ErrBloomMismatch,
 	core.ErrRequestsHashMismatch,
+	// The witness is not for this block or does not start from the parent's
+	// state root (core/stateless.ValidateWitnessPreState). Checked before
+	// execution, so a forged pre-state never reaches the mismatches above.
+	stateless.ErrInvalidWitness,
 }
 
 // witnessAttributableMessageFragments cover the mismatch errors that are built
@@ -33,8 +38,10 @@ var witnessAttributableMessageFragments = []string{
 // isWitnessAttributableImportError reports whether an insertChain failure is
 // one the delivered witness could have caused, and so may be charged to the
 // peer that served it. It is a positive allowlist: an incomplete witness
-// (missing trie node), or execution against the witness disagreeing with the
-// header (state root, receipt root, gas used, bloom, requests hash). Every other
+// (missing trie node), a witness that fails the pre-state check (wrong context
+// header or a pre-state root that is not the parent's), or execution against
+// the witness disagreeing with the header (state root, receipt root, gas used,
+// bloom, requests hash). Every other
 // failure — a contract bytecode missing from the local disk (fetchable and
 // healed by the downloader; not something the witness carries), an interrupted
 // or stopped chain, a whitelist/milestone mismatch, a header or DB error — is
@@ -74,6 +81,51 @@ func isWitnessAttributableImportError(err error) bool {
 	return false
 }
 
+// isWitnessFaultImportError reports whether an attributable insertChain failure
+// is decided by the witness bytes alone, whatever the block: a witness that
+// fails the pre-state check, or one missing a trie node the block reads. Only
+// these strike the serving peer. An execution mismatch (state root, receipt
+// root, gas used, bloom, requests hash) is attributable — the witness may be at
+// fault — but it is also what every honest witness yields for an invalid block,
+// so striking on it would let a producer of invalid blocks get honest witness
+// servers jailed.
+func isWitnessFaultImportError(err error) bool {
+	if errors.Is(err, stateless.ErrInvalidWitness) {
+		return true
+	}
+	var missingCode *state.MissingCodeError
+	if errors.As(err, &missingCode) {
+		return false
+	}
+	var missingNode *trie.MissingNodeError
+	return errors.As(err, &missingNode)
+}
+
+// WitnessProvenance records what is known about who chose a witness's bytes. It
+// decides how an import failure the witness could have caused is charged.
+type WitnessProvenance uint8
+
+const (
+	// WitnessFromProducer: byte-identical to the verified BP-signed commitment,
+	// or no WIT2 commitment lookup is configured. A failure is the producer's
+	// fault; the serving peer is not charged.
+	WitnessFromProducer WitnessProvenance = iota
+	// WitnessUnproven: not bound to the producer. Its commitment is only
+	// deferred (the block's header is not local yet, the normal case at the
+	// tip) or there is none (WIT1). The bytes may still be the producer's,
+	// relayed by an honest peer, so a failure excludes the source and re-fetches
+	// but never strikes it.
+	WitnessUnproven
+	// WitnessNotProducer: within the size band of the verified BP-signed
+	// commitment but not its bytes, so the serving peer chose them. A failure
+	// the witness alone decides also strikes it.
+	WitnessNotProducer
+)
+
+// diverged reports whether the bytes are not proven to be the producer's, so an
+// attributable import failure excludes the source and re-fetches the witness.
+func (p WitnessProvenance) diverged() bool { return p != WitnessFromProducer }
+
 // maxWitnessImportRetries bounds how many times a block whose import failed with
 // a witness accepted on the WIT2 size oracle alone is re-fetched from another
 // source before the fetcher gives it up as it would any other failed import. A
@@ -83,12 +135,15 @@ func isWitnessAttributableImportError(err error) bool {
 const maxWitnessImportRetries = 2
 
 // chargeDivergedWitnessImportFailure applies the WIT2 consequence of an import
-// failure to the peer that served the block's witness, when that witness was
-// accepted on the size oracle alone AND the failure is one the witness could
-// have caused (isWitnessAttributableImportError). It strikes the peer, excludes
-// it as a witness source for this block, and reports whether the block should
-// be handed back to the witness manager for a re-fetch (false once the retry
-// budget is spent, or when the witness was not a fetched, diverged one).
+// failure to the peer that served the block's witness, when that witness's
+// bytes are not proven to be the BP's (diverged) AND the failure is one the
+// witness could have caused (isWitnessAttributableImportError). It excludes the
+// peer as a witness source for this block, strikes it only when its bytes
+// contradict the verified BP commitment (WitnessNotProducer) and the witness
+// alone decides the failure (isWitnessFaultImportError), and reports whether
+// the block should be handed back to the witness manager for a re-fetch (false
+// once the retry budget is spent, or when the witness was not a fetched,
+// diverged one).
 //
 // The error gate matters because "diverged" is the normal case — every node
 // persists its own generated witness, so nearly every witness fetched from
@@ -107,12 +162,15 @@ func (f *BlockFetcher) chargeDivergedWitnessImportFailure(op *blockOrHeaderInjec
 		return false
 	}
 	witnessImportFailureMeter.Mark(1)
-	log.Warn("Import failed with a witness accepted on the WIT2 size oracle; striking its server",
-		"server", op.witnessPeer, "number", op.number(), "hash", hash, "attempt", op.witnessImportFailures+1, "err", importErr)
-	f.wm.StrikeWitnessServer(op.witnessPeer)
+	op.witnessImportFailures++
+	strike := op.witnessNotProducer && isWitnessFaultImportError(importErr)
+	log.Warn("Import failed with a witness not proven to be the BP's; re-fetching from another source",
+		"server", op.witnessPeer, "strike", strike, "number", op.number(), "hash", hash, "attempt", op.witnessImportFailures, "err", importErr)
+	if strike {
+		f.wm.StrikeWitnessServer(op.witnessPeer)
+	}
 	f.wm.ExcludeWitnessSource(op.witnessPeer, hash)
 
-	op.witnessImportFailures++
 	if op.fetchWitness == nil || op.witnessImportFailures >= maxWitnessImportRetries {
 		log.Warn("Giving up witness re-fetch for block after repeated import failures",
 			"number", op.number(), "hash", hash, "failures", op.witnessImportFailures)

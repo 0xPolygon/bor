@@ -526,9 +526,96 @@ func TestStateChangeDuringReset(t *testing.T) {
 	}
 }
 
+// TestReorgResetWithDirtyAccount checks that a reset run together with a dirty
+// account promotes a queued tx right after the still-pending ones (port of
+// ethereum/go-ethereum#35654).
+func TestReorgResetWithDirtyAccount(t *testing.T) {
+	t.Parallel()
+
+	pool, key := setupPool()
+	defer pool.Close()
+
+	addr := crypto.PubkeyToAddress(key.PublicKey)
+	testAddBalance(pool, addr, big.NewInt(1000000000000000))
+	testSetNonce(pool, addr, 1)
+	<-pool.requestReset(nil, nil)
+
+	// Add two executable transactions to establish a pending nonce ahead of state.
+	for _, tx := range []*types.Transaction{transaction(1, 100000, key), transaction(2, 100000, key)} {
+		if err := pool.addRemoteSync(tx); err != nil {
+			t.Fatalf("failed to add transaction %d: %v", tx.Nonce(), err)
+		}
+	}
+	// Admit the next transaction without scheduling its promotion, reproducing the
+	// state passed to runReorg when a reset and dirty-account request are coalesced.
+	tx := transaction(3, 100000, key)
+	pool.mu.Lock()
+	errs, dirty := pool.addTxs([]*types.Transaction{tx}, false)
+	pool.mu.Unlock()
+	if errs[0] != nil {
+		t.Fatalf("failed to add transaction %d: %v", tx.Nonce(), errs[0])
+	}
+
+	// The new chain head includes transaction 1. Transaction 2 remains pending,
+	// so transaction 3 must be promoted by the combined reorg run.
+	testSetNonce(pool, addr, 2)
+	done := make(chan struct{})
+	pool.runReorg(done, &txpoolResetRequest{}, dirty, make(map[common.Address]*SortedMap))
+	<-done
+
+	if pending, queued := pool.Stats(); pending != 2 || queued != 0 {
+		t.Fatalf("transaction stranded after reorg: pending %d, queued %d", pending, queued)
+	}
+	if err := validatePoolInternals(pool); err != nil {
+		t.Fatalf("pool internals mismatch: %v", err)
+	}
+}
+
+// TestReorgResetKeepsHigherStateNonce checks that restoring the pending nonces
+// after a reset never moves them below the new state nonce, when the new head
+// already includes every pending tx and more.
+func TestReorgResetKeepsHigherStateNonce(t *testing.T) {
+	t.Parallel()
+
+	pool, key := setupPool()
+	defer pool.Close()
+
+	addr := crypto.PubkeyToAddress(key.PublicKey)
+	testAddBalance(pool, addr, big.NewInt(1000000000000000))
+	for _, tx := range []*types.Transaction{transaction(0, 100000, key), transaction(1, 100000, key)} {
+		if err := pool.addRemoteSync(tx); err != nil {
+			t.Fatalf("failed to add transaction %d: %v", tx.Nonce(), err)
+		}
+	}
+	tx := transaction(4, 100000, key)
+	pool.mu.Lock()
+	errs, dirty := pool.addTxs([]*types.Transaction{tx}, false)
+	pool.mu.Unlock()
+	if errs[0] != nil {
+		t.Fatalf("failed to add transaction %d: %v", tx.Nonce(), errs[0])
+	}
+
+	// The new head is at nonce 4: the pending txs 0 and 1 and two more are mined.
+	testSetNonce(pool, addr, 4)
+	done := make(chan struct{})
+	pool.runReorg(done, &txpoolResetRequest{}, dirty, make(map[common.Address]*SortedMap))
+	<-done
+
+	if pending, queued := pool.Stats(); pending != 1 || queued != 0 {
+		t.Fatalf("pending %d, queued %d, want 1 and 0", pending, queued)
+	}
+	if err := validatePoolInternals(pool); err != nil {
+		t.Fatalf("pool internals mismatch: %v", err)
+	}
+}
+
 func testAddBalance(pool *LegacyPool, addr common.Address, amount *big.Int) {
 	pool.mu.Lock()
-	pool.currentState.AddBalance(addr, uint256.MustFromBig(amount), tracing.BalanceChangeUnspecified)
+	if amount.Sign() < 0 {
+		pool.currentState.SubBalance(addr, uint256.MustFromBig(new(big.Int).Neg(amount)), tracing.BalanceChangeUnspecified)
+	} else {
+		pool.currentState.AddBalance(addr, uint256.MustFromBig(amount), tracing.BalanceChangeUnspecified)
+	}
 	pool.mu.Unlock()
 }
 
@@ -972,13 +1059,11 @@ func TestPostponing(t *testing.T) {
 	for i := 0; i < len(keys); i++ {
 		keys[i], _ = crypto.GenerateKey()
 		accs[i] = crypto.PubkeyToAddress(keys[i].PublicKey)
-
-		testAddBalance(pool, crypto.PubkeyToAddress(keys[i].PublicKey), big.NewInt(50100))
 	}
-	// Add a batch consecutive pending transactions for validation
 	txs := []*types.Transaction{}
-
+	initialBalances := make([]*big.Int, len(keys))
 	for i, key := range keys {
+		initialBalances[i] = new(big.Int)
 		for j := 0; j < 100; j++ {
 			var tx *types.Transaction
 			if (i+j)%2 == 0 {
@@ -988,7 +1073,11 @@ func TestPostponing(t *testing.T) {
 			}
 
 			txs = append(txs, tx)
+			initialBalances[i].Add(initialBalances[i], tx.Cost())
 		}
+	}
+	for i, addr := range accs {
+		testAddBalance(pool, addr, initialBalances[i])
 	}
 	for i, err := range pool.addRemotesSync(txs) {
 		if err != nil {
@@ -1020,8 +1109,9 @@ func TestPostponing(t *testing.T) {
 		t.Errorf("total transaction mismatch: have %d, want %d", pool.all.Count(), len(txs))
 	}
 	// Reduce the balance of the account, and check that transactions are reorganised
-	for _, addr := range accs {
-		testAddBalance(pool, addr, big.NewInt(-1))
+	reducedBalance := new(big.Int).Sub(txs[1].Cost(), big.NewInt(1))
+	for i, addr := range accs {
+		testAddBalance(pool, addr, new(big.Int).Sub(reducedBalance, initialBalances[i]))
 	}
 
 	<-pool.requestReset(nil, nil)
@@ -1587,7 +1677,7 @@ func TestPendingMinimumAllowance(t *testing.T) {
 	keys := make([]*ecdsa.PrivateKey, 5)
 	for i := 0; i < len(keys); i++ {
 		keys[i], _ = crypto.GenerateKey()
-		testAddBalance(pool, crypto.PubkeyToAddress(keys[i].PublicKey), big.NewInt(1000000))
+		testAddBalance(pool, crypto.PubkeyToAddress(keys[i].PublicKey), big.NewInt(10000000))
 	}
 	// Generate and queue a batch of transactions
 	nonces := make(map[common.Address]uint64)
@@ -2022,7 +2112,7 @@ func TestStableUnderpricing(t *testing.T) {
 	keys := make([]*ecdsa.PrivateKey, 2)
 	for i := 0; i < len(keys); i++ {
 		keys[i], _ = crypto.GenerateKey()
-		testAddBalance(pool, crypto.PubkeyToAddress(keys[i].PublicKey), big.NewInt(1000000))
+		testAddBalance(pool, crypto.PubkeyToAddress(keys[i].PublicKey), big.NewInt(100000000))
 	}
 	// Fill up the entire queue with the same transaction price points
 	txs := types.Transactions{}
