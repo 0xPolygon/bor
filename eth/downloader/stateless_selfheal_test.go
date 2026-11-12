@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"math/big"
 	"sync"
 	"sync/atomic"
@@ -27,6 +28,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/stateless"
@@ -425,6 +427,22 @@ func TestImportBlockResultsStateless(t *testing.T) {
 		}
 		if got := rawdb.ReadCode(d.stateDB, hash); !bytes.Equal(got, healTestCode) {
 			t.Fatalf("healed code not persisted: got %x", got)
+		}
+	})
+
+	t.Run("operational state sync", func(t *testing.T) {
+		failure := fmt.Errorf("%w: %w", core.ErrStateSyncProcessing, context.DeadlineExceeded)
+		chain := &fakeStatelessChain{results: []error{failure}}
+		d, _ := newHealDownloader(t, chain, true)
+		err := d.importBlockResultsStateless(results)
+		if !errors.Is(err, core.ErrStateSyncProcessing) || !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("stateless import lost operational cause: %v", err)
+		}
+		if _, penalize := classifySyncFailure(err); penalize {
+			t.Fatal("operational import failure penalizes the peer")
+		}
+		if err := d.importBlockResultsStateless(results); err != nil {
+			t.Fatalf("retry after recovery failed: %v", err)
 		}
 	})
 

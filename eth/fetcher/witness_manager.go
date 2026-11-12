@@ -49,7 +49,6 @@ type witnessRequestState struct {
 	announce     *blockAnnounce       // Announcement details, non-nil if a fetch is in flight.
 	retries      int                  // Number of fetch attempts already made
 	emptyRetries int                  // Consecutive "body not ready yet" (empty) responses, for backoff
-	fetching     bool
 }
 
 // cachedWitness represents a witness that arrived before its corresponding block
@@ -551,7 +550,7 @@ func (m *witnessManager) collectReadyHashesLocked(now time.Time) (readyToFetch, 
 		}
 
 		// Not ready yet (announce time still in the future).
-		if state.fetching || !now.After(state.announce.time) {
+		if !now.After(state.announce.time) {
 			continue
 		}
 
@@ -602,7 +601,6 @@ func (m *witnessManager) buildPeerRequestsLocked(readyToFetch []common.Hash, now
 		// Update announce time for backoff — prevents immediate retry and
 		// effectively marks the request as "in-flight".
 		announce.time = now.Add(fetchTimeout)
-		state.fetching = true
 	}
 	return requests
 }
@@ -844,7 +842,7 @@ func (m *witnessManager) rescheduleWitness() {
 func (m *witnessManager) earliestPendingAnnounceLocked() time.Time {
 	var earliest time.Time
 	for _, state := range m.pending {
-		if state.fetching || state.announce == nil || state.op == nil || state.op.witness != nil {
+		if state.announce == nil || state.op == nil || state.op.witness != nil {
 			continue
 		}
 		if earliest.IsZero() || state.announce.time.Before(earliest) {
@@ -866,7 +864,6 @@ func (m *witnessManager) handleWitnessFetchFailureExt(hash common.Hash, peer str
 		m.clearSignedHashMismatch(hash)
 	} else {
 		if state := m.pending[hash]; state != nil && state.announce != nil {
-			state.fetching = false
 			state.announce.time = time.Now().Add(witnessFetchRetryDelay)
 		}
 	}

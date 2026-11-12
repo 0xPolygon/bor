@@ -1,15 +1,18 @@
 package fetcher
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math/big"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
@@ -2388,10 +2391,15 @@ func TestProcessWitnessResponseErrorBranches(t *testing.T) {
 
 	t.Run("invalid response type", func(t *testing.T) {
 		m, _ := newWitnessManagerForTest(t)
+		dropped := ""
+		m.parentDropPeer = func(id string) { dropped = id }
 		hash := addPendingEntry(m, "0xa2", peer, time.Now())
 		done := make(chan error, 1)
 		res := &eth.Response{Res: "not-a-witness-slice", Done: done}
 		m.processWitnessResponse(peer, hash, res, time.Now())
+		if dropped != peer {
+			t.Fatal("malformed response did not drop the serving peer")
+		}
 		if !m.isPending(hash) {
 			t.Error("pending entry should be retained on invalid response type")
 		}
@@ -2872,5 +2880,101 @@ func TestCheckWitnessPageCountRefusesAboveThresholdWithoutDrop(t *testing.T) {
 	}
 	if dropped {
 		t.Fatal("refusing an above-threshold page count must NOT drop or jail the peer")
+	}
+}
+
+func TestWitnessOperationalFetchRetry(t *testing.T) {
+	for _, name := range []string{"timeout", "closed response", "request failure"} {
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				tw := newTestWitnessManager()
+				defer tw.Close()
+				m := tw.manager
+				block := createTestBlock(101)
+				hash := block.Hash()
+				announce := createTestBlockAnnounce("server", block, nil)
+				m.pending[hash] = &witnessRequestState{op: &blockOrHeaderInject{block: block}, announce: announce}
+				for range 6 {
+					switch name {
+					case "timeout":
+						start := time.Now()
+						m.awaitWitnessResponse("server", hash, make(chan *eth.Response), time.Now())
+						if time.Since(start) != 10*time.Second {
+							t.Fatal("witness request did not retain its response timeout")
+						}
+					case "closed response":
+						m.processWitnessResponse("server", hash, nil, time.Now())
+					case "request failure":
+						announce.fetchWitness = func(common.Hash, chan *eth.Response) (*eth.Request, error) {
+							return &eth.Request{Peer: "server"}, context.DeadlineExceeded
+						}
+						m.initiateWitnessFetch(hash, announce, nil)
+					}
+					if len(tw.DroppedPeers()) != 0 || !m.isPending(hash) {
+						t.Fatal("operational failure dropped a peer or discarded pending work")
+					}
+					if delay := time.Until(announce.time); delay <= 0 || delay > time.Second {
+						t.Fatalf("retry delay = %v, want (0, 1s]", delay)
+					}
+				}
+				witness := createTestWitnessForBlock(block)
+				m.processWitnessResponse("server", hash, &eth.Response{Res: []*stateless.Witness{witness}, Done: make(chan error, 1)}, time.Now())
+				if got := <-tw.enqueueCh; got.op.witness != witness || m.isPending(hash) {
+					t.Fatal("witness was not queued after recovery")
+				}
+			})
+		})
+	}
+}
+
+func TestLiveImportStateSyncRetry(t *testing.T) {
+	failure := fmt.Errorf("%w: %w", core.ErrStateSyncProcessing, context.DeadlineExceeded)
+	for _, tc := range []struct {
+		name     string
+		failures []error
+		calls    int
+		delay    time.Duration
+		stop     bool
+	}{
+		{"recovery", []error{failure}, 2, 10 * time.Second, false},
+		{"retry limit", []error{failure, failure, failure}, 3, 20 * time.Second, false},
+		{"shutdown", []error{failure}, 1, 0, true},
+		{"invalid data", []error{core.ErrStateSyncMismatch}, 1, 0, false},
+	} {
+		for _, provenance := range []WitnessProvenance{WitnessFromProducer, WitnessUnproven, WitnessNotProducer} {
+			t.Run(fmt.Sprintf("%s/%d", tc.name, provenance), func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					f, _ := invalidHeaderFetcher(func(*types.Header) error { return nil }, nil)
+					f.quit = make(chan struct{})
+					f.wm, _ = newWitnessManagerForTest(t)
+					f.wm.parentStrikeWitnessServer = func(string) { t.Error("innocent witness supplier struck") }
+					f.wm.parentExcludeWitnessSource = func(string, common.Hash) { t.Error("innocent witness supplier excluded") }
+					f.dropPeer = func(string) { t.Error("innocent witness supplier dropped") }
+					block := createTestBlock(101)
+					op := &blockOrHeaderInject{block: block, witness: createTestWitnessForBlock(block), witnessPeer: "server"}
+					op.setWitnessProvenance(provenance)
+					imported := false
+					f.importedHook = func(*types.Header, *types.Block) { imported = true }
+					calls := 0
+					f.insertChain = func(blocks types.Blocks, witnesses []*stateless.Witness) (int, error) {
+						if blocks[0] != block || witnesses[0] != op.witness {
+							t.Fatal("retry replaced block or witness")
+						}
+						calls++
+						if tc.stop {
+							close(f.quit)
+						}
+						if calls <= len(tc.failures) {
+							return 0, tc.failures[calls-1]
+						}
+						return 0, nil
+					}
+					start := time.Now()
+					if f.runBlockImport(op) || calls != tc.calls || time.Since(start) != tc.delay || op.witnessImportFailures != 0 || imported != (calls > len(tc.failures)) {
+						t.Fatalf("unexpected retry: calls=%d delay=%v witnessFailures=%d", calls, time.Since(start), op.witnessImportFailures)
+					}
+				})
+			})
+		}
 	}
 }

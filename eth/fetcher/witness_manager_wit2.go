@@ -341,7 +341,6 @@ func (m *witnessManager) cleanupWit2QuarantineState() {
 func (m *witnessManager) handleWitnessBodyNotReady(hash common.Hash) {
 	m.mu.Lock()
 	if state := m.pending[hash]; state != nil && state.announce != nil {
-		state.fetching = false
 		state.emptyRetries++
 		state.announce.time = time.Now().Add(emptyResponseBackoff(state.emptyRetries))
 	}

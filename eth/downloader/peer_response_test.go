@@ -45,6 +45,7 @@ func TestClassifySyncFailureReasons(t *testing.T) {
 		{name: "local state sync failure", err: core.ErrStateSyncProcessing},
 		{name: "wrapped local state sync failure", err: fmt.Errorf("%w: %w", errInvalidChain, core.ErrStateSyncProcessing)},
 		{name: "local state sync deadline", err: fmt.Errorf("%w: %w: %w", errInvalidChain, core.ErrStateSyncProcessing, context.DeadlineExceeded)},
+		{name: "state sync mismatch", err: fmt.Errorf("%w: %w", errInvalidChain, core.ErrStateSyncMismatch), reason: peerFailureInvalidChain, ok: true},
 		{name: "invalid chain", err: errInvalidChain, reason: peerFailureInvalidChain, ok: true},
 		{name: "pruned sidechain", err: fmt.Errorf("%w: %w", errInvalidChain, errors.New(sidechainGhostStateMsg)), reason: peerFailurePrunedSidechain, ok: true},
 		{name: "bad peer", err: errBadPeer, reason: peerFailureBadPeer, ok: true},
