@@ -6,15 +6,14 @@ name: Kurtosis Sequencer E2E Tests
 # node, and the store chaos episodes. The suites and devnet config live in
 # pos-workflows; this workflow only supplies the bor under test.
 #
-# Scoped to the sequencing branch: pos-workflows runs the same suites, but
-# builds bor from a fixed ref, so it cannot gate a bor PR.
+# pos-workflows runs the same suites, but builds bor from a fixed ref, so it
+# cannot gate a bor PR.
 on:
   push:
     branches:
-      - 'cffls/sequence-publisher'
+      - 'master'
+      - 'develop'
   pull_request:
-    branches:
-      - 'cffls/sequence-publisher'
     types: [opened, synchronize, reopened]
   workflow_dispatch:
 
@@ -31,6 +30,9 @@ env:
 
 jobs:
   build-bor:
+    # Fork pull_request runs cannot pull the store image (see e2e-tests), so
+    # the images built here would go unused.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -55,6 +57,7 @@ jobs:
           retention-days: 1
 
   build-heimdall-v2:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     permissions:
       contents: read
     runs-on: ubuntu-latest
