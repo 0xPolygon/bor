@@ -1266,28 +1266,21 @@ func reportReaderStats(prefetch, process, parallel state.ReaderWithStats) {
 	accountHitFromPrefetchUniqueMeter.Mark(procPF.AccountHitFromPrefetchUnique + parPF.AccountHitFromPrefetchUnique)
 }
 
-// sharedBlockCaches holds VM-level caches that are shared between the
-// prefetcher goroutine and the V2 BlockSTM workers for a single block.
-type sharedBlockCaches struct {
-	jumpDests vm.JumpDestCache
-	keccak    *vm.Keccak256Cache
-	ecrecover *vm.EcrecoverCache
-}
+// sharedBlockCaches wraps the exported vm.SharedResultCaches owner so
+// existing call sites (startPrefetchGoroutine, ProcessBlock) keep working
+// unchanged. The legacy caches it wires are always on; the widened keccak
+// store and EnablePrecompileCache flag are gated by bc.cfg.VmConfig.
+type sharedBlockCaches struct{ *vm.SharedResultCaches }
 
-func newSharedBlockCaches() *sharedBlockCaches {
-	return &sharedBlockCaches{
-		jumpDests: vm.NewSyncJumpDestCache(),
-		keccak:    vm.NewKeccak256Cache(),
-		ecrecover: vm.NewEcrecoverCache(),
-	}
+// newSharedBlockCaches constructs the owner, reading the extended-cache flag
+// from the chain's VM config so the flag can be toggled without touching
+// call sites.
+func (bc *BlockChain) newSharedBlockCaches() *sharedBlockCaches {
+	return &sharedBlockCaches{vm.NewSharedResultCaches(bc.cfg.VmConfig.EnablePrecompileCache)}
 }
 
 // applyTo populates a vm.Config with the shared caches.
-func (c *sharedBlockCaches) applyTo(cfg *vm.Config) {
-	cfg.SharedJumpDestCache = c.jumpDests
-	cfg.Keccak256Cache = c.keccak
-	cfg.EcrecoverCache = c.ecrecover
-}
+func (c *sharedBlockCaches) applyTo(cfg *vm.Config) { c.SharedResultCaches.ApplyTo(cfg) }
 
 // startPrefetchGoroutine launches the throwaway-statedb prefetcher in
 // the background. It runs the block with tracing disabled to warm caches
@@ -1326,7 +1319,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	defer reportReaderStats(prefetch, process, parallel)
 
 	// Shared caches for this block — used by both prefetcher and V2 workers.
-	sharedCaches := newSharedBlockCaches()
+	sharedCaches := bc.newSharedBlockCaches()
 	bc.startPrefetchGoroutine(block, throwaway, sharedCaches, followupInterrupt)
 
 	var resultChanLen int = 2
@@ -1387,7 +1380,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		processorCount++
 
 		go func() {
-			resultChan <- bc.runSerialProcessor(ctx, block, statedb, witness, pipeOpts)
+			resultChan <- bc.runSerialProcessor(ctx, block, statedb, witness, pipeOpts, sharedCaches)
 		}()
 	}
 
@@ -1420,7 +1413,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		} else if errors.Is(result.err, errV2WriteBudgetExhausted) && bc.processor != nil {
 			// Says nothing about the block's validity, so even with the
 			// parallel processor enforced the serial result decides.
-			result = bc.runSerialProcessor(ctx, block, statedb, witness, pipeOpts)
+			result = bc.runSerialProcessor(ctx, block, statedb, witness, pipeOpts, sharedCaches)
 			result.statedb.StopPrefetcher()
 		}
 	}
@@ -1486,10 +1479,16 @@ type processorResult struct {
 // runSerialProcessor executes and validates block with the serial processor
 // on statedb.
 func (bc *BlockChain) runSerialProcessor(ctx context.Context, block *types.Block, statedb *state.StateDB,
-	witness *stateless.Witness, pipeOpts *PipelineImportOpts) processorResult {
+	witness *stateless.Witness, pipeOpts *PipelineImportOpts, caches *sharedBlockCaches) processorResult {
 	pstart := time.Now()
 	statedb.StartPrefetcher("chain", witness, nil)
-	res, err := bc.processor.Process(block, statedb, bc.cfg.VmConfig, nil, ctx)
+	// With EnablePrecompileCache, the serial processor shares the per-block
+	// VM result caches the prefetcher warmed. Off by default: no change.
+	vmCfg := bc.cfg.VmConfig
+	if vmCfg.EnablePrecompileCache && caches != nil {
+		caches.applyTo(&vmCfg)
+	}
+	res, err := bc.processor.Process(block, statedb, vmCfg, nil, ctx)
 	pend := time.Now()
 	blockExecutionSerialTimer.Update(pend.Sub(pstart))
 	var localVtime time.Duration
