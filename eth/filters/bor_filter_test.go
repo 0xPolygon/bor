@@ -318,3 +318,223 @@ func TestBorFilters_TrimEndAtStateSync(t *testing.T) {
 		t.Fatalf("expected log topic %x, got %x", hash3, logs[0].Topics[0])
 	}
 }
+
+// TestBorFilters_TrimLatestEndAtStateSync covers the default `toBlock`. The
+// API encodes an omitted bound as rpc.LatestBlockNumber (-2), which the range
+// filter has to resolve to the head before clamping the end at Madhugiri;
+// comparing the raw sentinel against -1 (rpc.PendingBlockNumber) instead left
+// uint64(-2) as the loop bound, so the scan never ran and the call returned
+// no logs at all.
+func TestBorFilters_TrimLatestEndAtStateSync(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	var (
+		hash1 = common.BytesToHash([]byte("topic1"))
+		hash3 = common.BytesToHash([]byte("topic3"))
+		db    = NewMockDatabase(ctrl)
+	)
+
+	backend := NewMockBackend(ctrl)
+
+	testBorConfig := params.TestChainConfig.Bor
+	cfgCopy := *testBorConfig
+	cfgCopy.MadhugiriBlock = big.NewInt(1000)
+
+	backend.EXPECT().ChainDb().Return(db).AnyTimes()
+	// Head is well past the fork, so an untrimmed scan would keep reading
+	// receipts until block 1500.
+	backend.EXPECT().HeaderByNumber(gomock.Any(), gomock.Any()).Return(newTestHeader(1500), nil).AnyTimes()
+
+	// Same range as TestBorFilters_TrimEndAtStateSync, but with end = latest.
+	// Exactly two receipt reads are allowed: gomock fails the test on any
+	// additional GetBorBlockReceipt call.
+	backend.expectBorReceiptsFromMock([]*common.Hash{&hash1, &hash3})
+
+	filter := NewBorBlockLogsRangeFilter(backend, &cfgCopy, 990, rpc.LatestBlockNumber.Int64(), []common.Address{addr}, [][]common.Hash{{hash3}})
+	logs, err := filter.Logs(t.Context())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(logs) != 1 {
+		t.Fatalf("expected 1 log (trimmed to pre-fork, matched hash3), got %d", len(logs))
+	}
+	if logs[0].Topics[0] != hash3 {
+		t.Fatalf("expected log topic %x, got %x", hash3, logs[0].Topics[0])
+	}
+}
+
+// TestBorFilters_DefaultRangeScansHead covers a call with neither fromBlock
+// nor toBlock: both bounds arrive as rpc.LatestBlockNumber and must resolve
+// to the head, so exactly the head sprint's bor receipt is read.
+func TestBorFilters_DefaultRangeScansHead(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	var (
+		hash1 = common.BytesToHash([]byte("topic1"))
+		db    = NewMockDatabase(ctrl)
+	)
+
+	backend := NewMockBackend(ctrl)
+
+	testBorConfig := params.TestChainConfig.Bor
+	cfgCopy := *testBorConfig
+	cfgCopy.MadhugiriBlock = nil
+
+	// Head sits on a sprint boundary so no alignment moves begin past it.
+	backend.EXPECT().ChainDb().Return(db).AnyTimes()
+	backend.EXPECT().HeaderByNumber(gomock.Any(), gomock.Any()).Return(newTestHeader(1500), nil).AnyTimes()
+	backend.expectBorReceiptsFromMock([]*common.Hash{&hash1})
+
+	latest := rpc.LatestBlockNumber.Int64()
+	filter := NewBorBlockLogsRangeFilter(backend, &cfgCopy, latest, latest, []common.Address{addr}, [][]common.Hash{{hash1}})
+	logs, err := filter.Logs(t.Context())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(logs) != 1 {
+		t.Fatalf("expected 1 log from the head block, got %d", len(logs))
+	}
+}
+
+// TestBorFilters_UnresolvableBoundIsAnError: finalized/safe bounds resolve
+// through the backend; when it has no such header the filter must surface an
+// error for either bound instead of scanning from a zero value.
+func TestBorFilters_UnresolvableBoundIsAnError(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name       string
+		begin, end int64
+	}{
+		{"begin", rpc.FinalizedBlockNumber.Int64(), 1000},
+		{"end", 990, rpc.SafeBlockNumber.Int64()},
+		{"unknown sentinel", -10, 1000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			db := NewMockDatabase(ctrl)
+			backend := NewMockBackend(ctrl)
+
+			backend.EXPECT().ChainDb().Return(db).AnyTimes()
+			backend.EXPECT().HeaderByNumber(gomock.Any(), rpc.LatestBlockNumber).Return(newTestHeader(1500), nil).AnyTimes()
+			backend.EXPECT().HeaderByNumber(gomock.Any(), gomock.Not(rpc.LatestBlockNumber)).Return(nil, nil).AnyTimes()
+
+			filter := NewBorBlockLogsRangeFilter(backend, params.TestChainConfig.Bor, tc.begin, tc.end, nil, nil)
+			logs, err := filter.Logs(t.Context())
+			if err == nil {
+				t.Fatalf("expected an error for an unresolvable %s bound, got %d logs", tc.name, len(logs))
+			}
+		})
+	}
+}
+
+// TestBorFilters_BoundLookupErrorIsPropagated: a backend error while resolving
+// a finalized/safe/earliest bound must reach the caller as is rather than be
+// reported as a missing header.
+func TestBorFilters_BoundLookupErrorIsPropagated(t *testing.T) {
+	t.Parallel()
+
+	errLookup := errors.New("lookup failed")
+
+	for _, tc := range []struct {
+		name  string
+		bound rpc.BlockNumber
+	}{
+		{"finalized", rpc.FinalizedBlockNumber},
+		{"safe", rpc.SafeBlockNumber},
+		{"earliest", rpc.EarliestBlockNumber},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			db := NewMockDatabase(ctrl)
+			backend := NewMockBackend(ctrl)
+
+			backend.EXPECT().ChainDb().Return(db).AnyTimes()
+			backend.EXPECT().HistoryPruningCutoff().Return(uint64(0)).AnyTimes()
+			backend.EXPECT().HeaderByNumber(gomock.Any(), rpc.LatestBlockNumber).Return(newTestHeader(1500), nil).AnyTimes()
+			backend.EXPECT().HeaderByNumber(gomock.Any(), gomock.Not(rpc.LatestBlockNumber)).Return(nil, errLookup).AnyTimes()
+
+			filter := NewBorBlockLogsRangeFilter(backend, params.TestChainConfig.Bor, tc.bound.Int64(), 1500, nil, nil)
+			_, err := filter.Logs(t.Context())
+			if !errors.Is(err, errLookup) {
+				t.Fatalf("expected the backend error, got %v", err)
+			}
+		})
+	}
+}
+
+// TestBorFilters_EarliestStartsAtPruningCutoff: earliest resolves to the
+// history pruning cutoff like the regular log filter, so a pruned node scans
+// from the first block it still has instead of from genesis.
+func TestBorFilters_EarliestStartsAtPruningCutoff(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	var (
+		hash1 = common.BytesToHash([]byte("topic1"))
+		db    = NewMockDatabase(ctrl)
+	)
+
+	backend := NewMockBackend(ctrl)
+
+	cfgCopy := *params.TestChainConfig.Bor
+	cfgCopy.MadhugiriBlock = nil
+
+	backend.EXPECT().ChainDb().Return(db).AnyTimes()
+	backend.EXPECT().HistoryPruningCutoff().Return(uint64(1492)).AnyTimes()
+	backend.EXPECT().HeaderByNumber(gomock.Any(), rpc.BlockNumber(1492)).Return(newTestHeader(1492), nil).AnyTimes()
+	backend.EXPECT().HeaderByNumber(gomock.Any(), gomock.Any()).Return(newTestHeader(1500), nil).AnyTimes()
+
+	// Sprint length is 4: blocks 1492, 1496 and 1500. A scan from genesis
+	// would read far more receipts and fail on the fourth call.
+	backend.expectBorReceiptsFromMock([]*common.Hash{&hash1, &hash1, &hash1})
+
+	filter := NewBorBlockLogsRangeFilter(backend, &cfgCopy, rpc.EarliestBlockNumber.Int64(), rpc.LatestBlockNumber.Int64(), []common.Address{addr}, [][]common.Hash{{hash1}})
+	logs, err := filter.Logs(t.Context())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(logs) != 3 {
+		t.Fatalf("expected 3 logs from the unpruned sprints, got %d", len(logs))
+	}
+}
+
+// TestBorFilters_EarliestHeaderMissing: a pruning cutoff whose header cannot be
+// found is an error, as in the regular log filter.
+func TestBorFilters_EarliestHeaderMissing(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	db := NewMockDatabase(ctrl)
+	backend := NewMockBackend(ctrl)
+
+	backend.EXPECT().ChainDb().Return(db).AnyTimes()
+	backend.EXPECT().HistoryPruningCutoff().Return(uint64(1492)).AnyTimes()
+	backend.EXPECT().HeaderByNumber(gomock.Any(), rpc.BlockNumber(1492)).Return(nil, nil).AnyTimes()
+	backend.EXPECT().HeaderByNumber(gomock.Any(), gomock.Any()).Return(newTestHeader(1500), nil).AnyTimes()
+
+	filter := NewBorBlockLogsRangeFilter(backend, params.TestChainConfig.Bor, rpc.EarliestBlockNumber.Int64(), 1500, nil, nil)
+	if _, err := filter.Logs(t.Context()); err == nil {
+		t.Fatal("expected an error when the earliest header is missing")
+	}
+}

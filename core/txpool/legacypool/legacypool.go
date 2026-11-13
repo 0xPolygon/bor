@@ -208,7 +208,9 @@ type Config struct {
 	ConditionalSlots    uint64        // Maximum known accounts and slots across all pooled conditional transactions
 
 	// Transaction filtering configuration
-	FilteredAddresses map[common.Address]struct{} // Pre-loaded filtered addresses (populated by config)
+	FilteredAddresses     map[common.Address]struct{} // Pre-loaded filtered addresses (populated by config)
+	FilteredAddressesFile string                      // File the filtered addresses are re-read from
+	FilterReload          time.Duration               // Interval between re-reads of FilteredAddressesFile (0 disables)
 
 	// Rebroadcast configuration for stuck transactions
 	Rebroadcast          bool          // Enable stuck transaction rebroadcast
@@ -233,6 +235,7 @@ var DefaultConfig = Config{
 	Lifetime:         3 * time.Hour,
 	StrandedLifetime: 3 * time.Hour,
 
+	FilterReload:        time.Minute,
 	ConditionalLifetime: 5 * time.Minute,
 	ConditionalSlots:    10000,
 
@@ -408,6 +411,7 @@ func New(config Config, chain BlockChain, options ...func(pool *LegacyPool)) *Le
 		}
 		log.Info("Loaded filtered addresses", "count", len(pool.filteredAddrs))
 	}
+	filteredAddrsGauge.Update(int64(len(pool.filteredAddrs)))
 
 	// apply options
 	for _, fn := range options {
@@ -462,6 +466,11 @@ func (pool *LegacyPool) Init(gasTip uint64, head *types.Header, reserver txpool.
 
 	pool.wg.Add(1)
 	go pool.loop()
+
+	if path := pool.config.FilteredAddressesFile; path != "" && pool.config.FilterReload > 0 {
+		pool.wg.Add(1)
+		go pool.filterReloadLoop(&filterReloader{path: path}, pool.config.FilterReload)
+	}
 	return nil
 }
 
@@ -1590,6 +1599,15 @@ func (pool *LegacyPool) runReorg(done chan struct{}, reset *txpoolResetRequest, 
 				delete(events, addr)
 			}
 		}
+		// reset rebuilt the nonces from the new state, which drops the pending
+		// nonces of txs that are still pending. Restore them before promoting,
+		// else a queued tx right after them waits for the next reorg. Pending is
+		// contiguous, so first+len is the next nonce (LastElement would re-sort).
+		for addr, list := range pool.pending {
+			if first := list.txs.firstElement(); first != nil {
+				pool.pendingNonces.set(addr, max(pool.pendingNonces.get(addr), first.Nonce()+uint64(list.Len())))
+			}
+		}
 		// Reset needs promote for all addresses
 		promoteAddrs = pool.queue.addresses()
 	}
@@ -1966,9 +1984,9 @@ func (pool *LegacyPool) demoteUnexecutables() {
 
 		// bor: Drop all transactions that no longer have valid TxOptions. Skip the
 		// walk when the pool holds no conditional transactions.
-		var txConditionalsRemoved types.Transactions
+		var txConditionalsRemoved, txConditionalInvalids types.Transactions
 		if pool.all.ConditionalSlots() > 0 {
-			txConditionalsRemoved = list.FilterTxConditional(pool.currentState, currentHeader)
+			txConditionalsRemoved, txConditionalInvalids = list.FilterTxConditional(pool.currentState, currentHeader)
 		}
 
 		for _, tx := range txConditionalsRemoved {
@@ -1977,8 +1995,15 @@ func (pool *LegacyPool) demoteUnexecutables() {
 			pool.forgetRebroadcast(hash)
 			log.Trace("Removed invalid conditional transaction", "hash", hash)
 		}
+		for _, tx := range txConditionalInvalids {
+			hash := tx.Hash()
+			log.Trace("Demoting pending transaction behind dropped conditional transaction", "hash", hash)
 
-		pendingGauge.Dec(int64(len(olds) + len(drops) + len(invalids) + len(txConditionalsRemoved)))
+			// Internal shuffle shouldn't touch the lookup set.
+			pool.enqueueTx(hash, tx, false)
+		}
+
+		pendingGauge.Dec(int64(len(olds) + len(drops) + len(invalids) + len(txConditionalsRemoved) + len(txConditionalInvalids)))
 		// If there's a gap in front, alert (should never happen) and postpone all transactions
 		if list.Len() > 0 && list.txs.Get(nonce) == nil {
 			gapped := list.Cap(0)
@@ -2002,9 +2027,11 @@ func (pool *LegacyPool) demoteUnexecutables() {
 			// Update the latest known pending nonce
 			highestPending := list.LastElement()
 			nonces[addr] = highestPending.Nonce() + 1
-			pool.pendingNonces.setAll(nonces)
 		}
 	}
+	// Set the nonces even when no account is left pending, so an override from
+	// the reset restore never outlives the txs it was taken from.
+	pool.pendingNonces.setAll(nonces)
 }
 
 // accountSet is simply a set of addresses to check for existence, and a signer
@@ -2221,6 +2248,21 @@ func (t *lookup) removeAuthorities(tx *types.Transaction) {
 		}
 		t.auths[addr] = list
 	}
+}
+
+// authorizedBy returns the transactions carrying an authorization from an
+// address match accepts.
+func (t *lookup) authorizedBy(match func(common.Address) bool) []common.Hash {
+	t.lock.RLock()
+	defer t.lock.RUnlock()
+
+	var hashes []common.Hash
+	for addr, list := range t.auths {
+		if match(addr) {
+			hashes = append(hashes, list...)
+		}
+	}
+	return hashes
 }
 
 // hasAuth returns a flag indicating whether there are pending authorizations

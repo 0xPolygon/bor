@@ -1163,34 +1163,117 @@ func TestResolveWitnessFetchPeerSkipsExcludedSource(t *testing.T) {
 	peerA.AddKnownWitness(other)
 
 	// Both hold the body: either may be picked.
-	require.NotNil(t, ethH.resolveWitnessFetchPeer(hash))
+	require.NotNil(t, ethH.resolveWitnessFetchPeer(hash, nil))
 
 	// Exclude A for this block: over many resolutions B must always win.
 	h.handler.excludeWitnessSource(peerA.ID(), hash)
 	for i := 0; i < 32; i++ {
-		got := ethH.resolveWitnessFetchPeer(hash)
+		got := ethH.resolveWitnessFetchPeer(hash, nil)
 		require.NotNil(t, got, "B still holds the body and must be offered")
 		require.Equal(t, peerB.ID(), got.ID(), "excluded peer A must never be resolved for the block")
 	}
 	// The exclusion is per block: A is still a valid source for another hash.
-	got := ethH.resolveWitnessFetchPeer(other)
+	got := ethH.resolveWitnessFetchPeer(other, nil)
 	require.NotNil(t, got)
 	require.Equal(t, peerA.ID(), got.ID())
 
 	// Exclude B too: no source remains, rather than falling back to A.
 	h.handler.excludeWitnessSource(peerB.ID(), hash)
-	require.Nil(t, ethH.resolveWitnessFetchPeer(hash))
+	require.Nil(t, ethH.resolveWitnessFetchPeer(hash, nil))
 
 	// The deferred-relayer tier honours the exclusion as well.
 	h.handler.deferredAnnounces.put(wit.SignedWitnessAnnouncement{
 		BlockHash: hash, BlockNumber: 1, WitnessHash: common.HexToHash("0x01"), WitnessSize: 10,
 		Signature: make([]byte, wit.SignatureLength),
 	}, peerA.ID())
-	require.Nil(t, ethH.resolveWitnessFetchPeer(hash), "an excluded deferred relayer must not be offered either")
+	require.Nil(t, ethH.resolveWitnessFetchPeer(hash, nil), "an excluded deferred relayer must not be offered either")
 
 	// Block imports: exclusions for it are released.
 	h.handler.onBlockImported(hash)
-	require.NotNil(t, ethH.resolveWitnessFetchPeer(hash))
+	require.NotNil(t, ethH.resolveWitnessFetchPeer(hash, nil))
+}
+
+func TestWitnessRequesterRotatesSources(t *testing.T) {
+	h := newTestHandler()
+	defer h.close()
+	ethH := (*ethHandler)(h.handler)
+
+	newPeer := func() *wit.Peer {
+		p, cleanup := registerEthWitPeer(t, h, wit.WIT2)
+		t.Cleanup(cleanup)
+		return p
+	}
+
+	var (
+		bodyHash     = common.HexToHash("0xf00d")
+		deferredHash = common.HexToHash("0xf00e")
+		soleHash     = common.HexToHash("0xf00f")
+
+		bodySources     []string
+		deferredSources []string
+	)
+	for i := 0; i < 3; i++ {
+		p := newPeer()
+		p.AddKnownWitness(bodyHash)
+		bodySources = append(bodySources, p.ID())
+
+		relayer := newPeer()
+		h.handler.deferredAnnounces.put(wit.SignedWitnessAnnouncement{
+			BlockHash: deferredHash, BlockNumber: 1, WitnessHash: common.HexToHash("0x01"), WitnessSize: 10,
+			Signature: make([]byte, wit.SignatureLength),
+		}, relayer.ID())
+		deferredSources = append(deferredSources, relayer.ID())
+	}
+	soleSource := newPeer()
+	soleSource.AddKnownWitness(soleHash)
+
+	requester := ethH.createWitnessRequester()
+	target := func(hash common.Hash) string {
+		t.Helper()
+		req, err := requester(hash, make(chan *ethproto.Response, 1))
+		require.NoError(t, err)
+		defer req.Close()
+
+		return req.Peer
+	}
+
+	for _, tc := range []struct {
+		name       string
+		hash       common.Hash
+		interleave common.Hash
+		want       []string
+	}{
+		{"body known sources", bodyHash, deferredHash, bodySources},
+		{"deferred only sources", deferredHash, bodyHash, deferredSources},
+		{"sole source", soleHash, bodyHash, []string{soleSource.ID()}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for cycle := 0; cycle < 2; cycle++ {
+				seen := make(map[string]struct{}, len(tc.want))
+				for range tc.want {
+					seen[target(tc.hash)] = struct{}{}
+					target(tc.interleave)
+				}
+				for _, id := range tc.want {
+					require.Contains(t, seen, id, "cycle %d repeated a source before reaching every eligible one", cycle)
+				}
+			}
+		})
+	}
+
+	for _, id := range append(append([]string{}, bodySources...), deferredSources...) {
+		require.False(t, h.handler.witnessSourceExclusions.excluded(bodyHash, id))
+		require.False(t, h.handler.witnessSourceExclusions.excluded(deferredHash, id))
+	}
+
+	h.handler.excludeWitnessSource(bodySources[0], bodyHash)
+	remaining := make(map[string]struct{}, len(bodySources)-1)
+	for i := 0; i < 2*len(bodySources); i++ {
+		got := target(bodyHash)
+		require.NotEqual(t, bodySources[0], got, "rotation must not reach an excluded source")
+		remaining[got] = struct{}{}
+	}
+	require.Len(t, remaining, len(bodySources)-1)
 }
 
 // TestWitnessSourceExclusionSetLifecycle pins add/excluded/drop and the TTL

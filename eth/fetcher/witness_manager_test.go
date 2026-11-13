@@ -1,15 +1,18 @@
 package fetcher
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math/big"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
@@ -579,17 +582,14 @@ func TestWitnessFetchFailure(t *testing.T) {
 	peer := "test-peer"
 	err := errors.New("fetch failed")
 
-	// Test soft failure (keep pending for retry) - peer should still be dropped
 	manager.handleWitnessFetchFailureExt(hash, peer, err, false)
 
-	if droppedPeer != peer {
-		t.Errorf("Expected peer to be dropped on soft failure, got %s", droppedPeer)
+	if droppedPeer != "" {
+		t.Errorf("Operational failure dropped peer %s", droppedPeer)
 	}
 }
 
-// TestWitnessFetchFailureAlwaysDropsPeer tests that handleWitnessFetchFailureExt
-// always drops the peer regardless of removePending flag
-func TestWitnessFetchFailureAlwaysDropsPeer(t *testing.T) {
+func TestWitnessFetchFailureAttribution(t *testing.T) {
 	tw := newTestWitnessManager()
 	defer tw.Close()
 
@@ -621,12 +621,11 @@ func TestWitnessFetchFailureAlwaysDropsPeer(t *testing.T) {
 	tw.manager.pending[hash] = state
 	tw.manager.mu.Unlock()
 
-	// Test soft failure (removePending = false) - peer should be dropped
 	tw.manager.handleWitnessFetchFailureExt(hash, peer1, err, false)
 
 	droppedPeers := tw.DroppedPeers()
-	if len(droppedPeers) != 1 || droppedPeers[0] != peer1 {
-		t.Errorf("Expected peer1 to be dropped on soft failure, got %v", droppedPeers)
+	if len(droppedPeers) != 0 {
+		t.Errorf("Operational failure dropped peers %v", droppedPeers)
 	}
 
 	// Verify pending request was NOT removed (soft failure)
@@ -634,11 +633,10 @@ func TestWitnessFetchFailureAlwaysDropsPeer(t *testing.T) {
 		t.Error("Expected pending request to remain after soft failure")
 	}
 
-	// Test hard failure (removePending = true) - peer should also be dropped
-	tw.manager.handleWitnessFetchFailureExt(hash, peer2, err, true)
+	tw.manager.handleWitnessFetchFailureExt(hash, peer2, errInvalidWitnessResponse, true)
 
 	droppedPeers = tw.DroppedPeers()
-	if len(droppedPeers) != 2 || droppedPeers[1] != peer2 {
+	if len(droppedPeers) != 1 || droppedPeers[0] != peer2 {
 		t.Errorf("Expected peer2 to be dropped on hard failure, got %v", droppedPeers)
 	}
 
@@ -2393,10 +2391,15 @@ func TestProcessWitnessResponseErrorBranches(t *testing.T) {
 
 	t.Run("invalid response type", func(t *testing.T) {
 		m, _ := newWitnessManagerForTest(t)
+		dropped := ""
+		m.parentDropPeer = func(id string) { dropped = id }
 		hash := addPendingEntry(m, "0xa2", peer, time.Now())
 		done := make(chan error, 1)
 		res := &eth.Response{Res: "not-a-witness-slice", Done: done}
 		m.processWitnessResponse(peer, hash, res, time.Now())
+		if dropped != peer {
+			t.Fatal("malformed response did not drop the serving peer")
+		}
 		if !m.isPending(hash) {
 			t.Error("pending entry should be retained on invalid response type")
 		}
@@ -2878,4 +2881,226 @@ func TestCheckWitnessPageCountRefusesAboveThresholdWithoutDrop(t *testing.T) {
 	if dropped {
 		t.Fatal("refusing an above-threshold page count must NOT drop or jail the peer")
 	}
+}
+
+func TestWitnessOperationalFetchRetry(t *testing.T) {
+	for _, name := range []string{"timeout", "closed response", "request failure"} {
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				tw := newTestWitnessManager()
+				defer tw.Close()
+				m := tw.manager
+				block := createTestBlock(101)
+				hash := block.Hash()
+				announce := createTestBlockAnnounce("server", block, nil)
+				m.pending[hash] = &witnessRequestState{op: &blockOrHeaderInject{block: block}, announce: announce}
+				for range 6 {
+					switch name {
+					case "timeout":
+						start := time.Now()
+						m.awaitWitnessResponse("server", hash, make(chan *eth.Response), time.Now())
+						if time.Since(start) != 10*time.Second {
+							t.Fatal("witness request did not retain its response timeout")
+						}
+					case "closed response":
+						m.processWitnessResponse("server", hash, nil, time.Now())
+					case "request failure":
+						announce.fetchWitness = func(common.Hash, chan *eth.Response) (*eth.Request, error) {
+							return &eth.Request{Peer: "server"}, context.DeadlineExceeded
+						}
+						m.initiateWitnessFetch(hash, announce, nil)
+					}
+					if len(tw.DroppedPeers()) != 0 || !m.isPending(hash) {
+						t.Fatal("operational failure dropped a peer or discarded pending work")
+					}
+					if delay := time.Until(announce.time); delay <= 0 || delay > time.Second {
+						t.Fatalf("retry delay = %v, want (0, 1s]", delay)
+					}
+				}
+				witness := createTestWitnessForBlock(block)
+				m.processWitnessResponse("server", hash, &eth.Response{Res: []*stateless.Witness{witness}, Done: make(chan error, 1)}, time.Now())
+				if got := <-tw.enqueueCh; got.op.witness != witness || m.isPending(hash) {
+					t.Fatal("witness was not queued after recovery")
+				}
+			})
+		})
+	}
+}
+
+func TestWitnessFetchInitiationRescheduling(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		req       *eth.Request
+		err       error
+		wantDelay time.Duration
+		wantSpent int
+	}{
+		{
+			name:      "no source yet stays on the poll cadence",
+			err:       errors.New("no peer with witness for hash 0xabc is available"),
+			wantDelay: 0,
+		},
+		{
+			name:      "transport failure without a request backs off",
+			err:       errors.New("witness peer not found"),
+			wantDelay: witnessFetchRetryDelay,
+			wantSpent: int(witnessFetchRetryDelay / gatherSlack),
+		},
+		{
+			name: "content rejection",
+			err:  errors.New("witness exceeds signed size band"),
+		},
+		{
+			name:      "transport failure with a request backs off",
+			req:       &eth.Request{Peer: "server"},
+			err:       context.DeadlineExceeded,
+			wantDelay: witnessFetchRetryDelay,
+			wantSpent: int(witnessFetchRetryDelay / gatherSlack),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				tw := newTestWitnessManager()
+				defer tw.Close()
+				m := tw.manager
+				block := createTestBlock(101)
+				hash := block.Hash()
+				announce := createTestBlockAnnounce("server", block, func(common.Hash, chan *eth.Response) (*eth.Request, error) {
+					return tc.req, tc.err
+				})
+				m.pending[hash] = &witnessRequestState{op: &blockOrHeaderInject{block: block}, announce: announce}
+
+				announce.time = time.Now().Add(5 * time.Second)
+				if tc.name == "content rejection" {
+					m.handleWitnessFetchFailureExt(hash, "", tc.err, false)
+				} else {
+					m.initiateWitnessFetch(hash, announce, nil)
+				}
+
+				m.mu.Lock()
+				state := m.pending[hash]
+				delay, spent := time.Until(state.announce.time), state.retries
+				m.mu.Unlock()
+
+				if delay != tc.wantDelay {
+					t.Fatalf("retry delay = %v, want %v", delay, tc.wantDelay)
+				}
+				if spent != tc.wantSpent {
+					t.Fatalf("retry budget spent = %d, want %d", spent, tc.wantSpent)
+				}
+				if len(tw.DroppedPeers()) != 0 {
+					t.Fatalf("initiation failure dropped peers %v", tw.DroppedPeers())
+				}
+				if !m.isPending(hash) {
+					t.Fatal("initiation failure discarded the pending work")
+				}
+				select {
+				case <-m.witnessTimer.C:
+				case <-time.After(tc.wantDelay + gatherSlack + time.Millisecond):
+					t.Fatal("witness retry timer was not armed")
+				}
+			})
+		})
+	}
+}
+
+func TestWitnessOperationalRetryHorizon(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		tw := newTestWitnessManager()
+		defer tw.Close()
+		m := tw.manager
+		block := createTestBlock(101)
+		hash := block.Hash()
+		announce := createTestBlockAnnounce("server", block, nil)
+		m.pending[hash] = &witnessRequestState{op: &blockOrHeaderInject{block: block}, announce: announce}
+
+		start := time.Now()
+		for cycles := 0; m.isPending(hash); cycles++ {
+			if cycles > maxWitnessFetchRetries {
+				t.Fatal("operational retries never gave the request up")
+			}
+			time.Sleep(time.Until(announce.time.Add(gatherSlack)))
+			m.mu.Lock()
+			_, giveUp := m.collectReadyHashesLocked(time.Now())
+			m.mu.Unlock()
+			for _, h := range giveUp {
+				m.markWitnessUnavailable(h)
+			}
+			if m.isPending(hash) {
+				m.handleWitnessFetchFailureExt(hash, "server", errWitnessFetchUnavailable, false)
+			}
+		}
+		if elapsed := time.Since(start); elapsed < 30*time.Second || elapsed > 32*time.Second {
+			t.Fatalf("operational retries ran for %v, want the documented ~30s horizon", elapsed)
+		}
+		if len(tw.DroppedPeers()) != 0 {
+			t.Fatalf("operational retries dropped peers %v", tw.DroppedPeers())
+		}
+	})
+}
+
+func TestLiveImportStateSyncRetry(t *testing.T) {
+	failure := fmt.Errorf("%w: %w", core.ErrStateSyncProcessing, context.DeadlineExceeded)
+	for _, tc := range []struct {
+		name     string
+		failures []error
+		calls    int
+		delay    time.Duration
+		stop     bool
+	}{
+		{"recovery", []error{failure}, 2, 10 * time.Second, false},
+		{"retry limit", []error{failure, failure, failure}, 3, 20 * time.Second, false},
+		{"shutdown", []error{failure}, 1, 0, true},
+		{"invalid data", []error{core.ErrStateSyncMismatch}, 1, 0, false},
+	} {
+		for _, provenance := range []WitnessProvenance{WitnessFromProducer, WitnessUnproven, WitnessNotProducer} {
+			t.Run(fmt.Sprintf("%s/%d", tc.name, provenance), func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					f, _ := invalidHeaderFetcher(func(*types.Header) error { return nil }, nil)
+					f.quit = make(chan struct{})
+					f.wm, _ = newWitnessManagerForTest(t)
+					f.wm.parentStrikeWitnessServer = func(string) { t.Error("innocent witness supplier struck") }
+					f.wm.parentExcludeWitnessSource = func(string, common.Hash) { t.Error("innocent witness supplier excluded") }
+					f.dropPeer = func(string) { t.Error("innocent witness supplier dropped") }
+					block := createTestBlock(101)
+					op := &blockOrHeaderInject{block: block, witness: createTestWitnessForBlock(block), witnessPeer: "server"}
+					op.setWitnessProvenance(provenance)
+					imported := false
+					f.importedHook = func(*types.Header, *types.Block) { imported = true }
+					calls := 0
+					f.insertChain = func(blocks types.Blocks, witnesses []*stateless.Witness) (int, error) {
+						if blocks[0] != block || witnesses[0] != op.witness {
+							t.Fatal("retry replaced block or witness")
+						}
+						calls++
+						if tc.stop {
+							close(f.quit)
+						}
+						if calls <= len(tc.failures) {
+							return 0, tc.failures[calls-1]
+						}
+						return 0, nil
+					}
+					start := time.Now()
+					if f.runBlockImport(op) || calls != tc.calls || time.Since(start) != tc.delay || op.witnessImportFailures != 0 || imported != (calls > len(tc.failures)) {
+						t.Fatalf("unexpected retry: calls=%d delay=%v witnessFailures=%d", calls, time.Since(start), op.witnessImportFailures)
+					}
+				})
+			})
+		}
+	}
+
+	t.Run("shutdown reports the cause", func(t *testing.T) {
+		f, _ := invalidHeaderFetcher(func(*types.Header) error { return nil }, nil)
+		f.quit = make(chan struct{})
+		block := createTestBlock(101)
+		f.insertChain = func(types.Blocks, []*stateless.Witness) (int, error) {
+			close(f.quit)
+			return 0, failure
+		}
+		err := f.insertBlockWithRetry(&blockOrHeaderInject{block: block})
+		if !errors.Is(err, errTerminated) || !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("shutdown discarded the retry cause: %v", err)
+		}
+	})
 }

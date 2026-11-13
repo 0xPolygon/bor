@@ -147,7 +147,8 @@ func (ctx *generatorContext) reopenIterator(kind string) {
 		ctx.storage = internal.NewHoldableIterator(memorydb.New().NewIterator(nil, nil))
 		return
 	}
-	next := iter.Key()
+	// Copy the key: the iterator may reuse its buffer once released.
+	next := common.CopyBytes(iter.Key())
 	iter.Release()
 	ctx.openIterator(kind, next[1:])
 }
