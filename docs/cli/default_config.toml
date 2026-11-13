@@ -103,6 +103,7 @@ devfakeauthor = false
   enableDynamicTargetGas = false
   targetGasMinPercentage = 50
   targetGasMaxPercentage = 80
+  baseFeeFloor = 0
   gasprice = "25000000000"
   recommit = "2m5s"
   commitinterrupt = true
