@@ -3,10 +3,12 @@ package heimdallgrpc
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc"
@@ -24,6 +26,7 @@ import (
 	clerkTypes "github.com/0xPolygon/heimdall-v2/x/clerk/types"
 	milestoneTypes "github.com/0xPolygon/heimdall-v2/x/milestone/types"
 	ctypes "github.com/cometbft/cometbft/rpc/core/types"
+	cmtservice "github.com/cosmos/cosmos-sdk/client/grpc/cmtservice"
 )
 
 const (
@@ -31,9 +34,14 @@ const (
 	defaultTimeout  = 30 * time.Second
 )
 
+var errNoRESTEndpoint = errors.New("heimdall gRPC client configured without a REST endpoint")
+
 type HeimdallGRPCClient struct {
+	closeOnce             sync.Once
 	conn                  *grpc.ClientConn
 	client                *heimdall.HeimdallClient
+	tmServiceClient       cmtservice.ServiceClient
+	statusTimeout         time.Duration
 	borQueryClient        borTypes.QueryClient
 	checkpointQueryClient checkpointTypes.QueryClient
 	clerkQueryClient      clerkTypes.QueryClient
@@ -142,9 +150,24 @@ func NewHeimdallGRPCClient(grpcAddress string, heimdallURL string, timeout time.
 
 	log.Info("Connected to Heimdall gRPC server", "grpcAddress", grpcAddress, "dialAddr", addr)
 
+	restClient, err := newOptionalRESTClient(heimdallURL, timeout)
+	if err != nil {
+		if closeErr := conn.Close(); closeErr != nil {
+			log.Error("Error closing Heimdall gRPC client connection", "err", closeErr)
+		}
+		return nil, err
+	}
+
+	statusTimeout := timeout
+	if statusTimeout <= 0 {
+		statusTimeout = defaultTimeout
+	}
+
 	return &HeimdallGRPCClient{
 		conn:                  conn,
-		client:                heimdall.NewHeimdallClient(heimdallURL, timeout),
+		client:                restClient,
+		tmServiceClient:       cmtservice.NewServiceClient(conn),
+		statusTimeout:         statusTimeout,
 		borQueryClient:        borTypes.NewQueryClient(conn),
 		checkpointQueryClient: checkpointTypes.NewQueryClient(conn),
 		clerkQueryClient:      clerkTypes.NewQueryClient(conn),
@@ -152,19 +175,56 @@ func NewHeimdallGRPCClient(grpcAddress string, heimdallURL string, timeout time.
 	}, nil
 }
 
-func (h *HeimdallGRPCClient) Close() {
-	if h == nil || h.conn == nil {
-		return
+// gRPC-only configurations do not require a REST endpoint.
+func newOptionalRESTClient(endpoint string, timeout time.Duration) (*heimdall.HeimdallClient, error) {
+	if endpoint == "" {
+		return nil, nil
 	}
-	log.Debug("Shutdown detected, Closing Heimdall gRPC client")
-	err := h.conn.Close()
-	if err != nil {
-		log.Error("Error closing Heimdall gRPC client connection", "err", err)
-	}
+	return heimdall.NewHeimdallClientWithError(endpoint, timeout)
 }
 
+func (h *HeimdallGRPCClient) Close() {
+	if h == nil {
+		return
+	}
+	h.closeOnce.Do(func() {
+		log.Debug("Shutdown detected, Closing Heimdall gRPC client")
+		if h.client != nil {
+			h.client.Close()
+		}
+		if h.conn != nil {
+			if err := h.conn.Close(); err != nil {
+				log.Error("Error closing Heimdall gRPC client connection", "err", err)
+			}
+		}
+	})
+}
+
+// gRPC-only endpoints still need sync status for span waits and health probes.
 func (h *HeimdallGRPCClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
-	return h.client.FetchStatus(ctx)
+	if h == nil {
+		return nil, errNoRESTEndpoint
+	}
+	if h.client != nil {
+		return h.client.FetchStatus(ctx)
+	}
+	if h.tmServiceClient == nil {
+		return nil, errNoRESTEndpoint
+	}
+	// Bound the call like the REST client's constructor timeout did: a reachable
+	// but unresponsive server must not pin a caller that passed a deadline-less
+	// context. A tighter parent deadline still wins.
+	timeout := h.statusTimeout
+	if timeout <= 0 {
+		timeout = defaultTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	resp, err := h.tmServiceClient.GetSyncing(ctx, &cmtservice.GetSyncingRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("heimdall gRPC sync status: %w", err)
+	}
+	return &ctypes.SyncInfo{CatchingUp: resp.GetSyncing()}, nil
 }
 
 // isLocalhost returns true if host/port refers to localhost/loopback.

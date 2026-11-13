@@ -22,7 +22,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common/mclock"
 	"github.com/ethereum/go-ethereum/log"
-	"github.com/ethereum/go-ethereum/p2p/enr"
 	"github.com/ethereum/go-ethereum/p2p/nat"
 )
 
@@ -38,6 +37,7 @@ type portMapping struct {
 	protocol string
 	name     string
 	port     int
+	update   func(int)
 	retries  int // number of failed attempts to refresh the mapping
 
 	// for use by the portMappingLoop goroutine:
@@ -48,11 +48,10 @@ type portMapping struct {
 // setupPortMapping starts the port mapping loop if necessary.
 // Note: this needs to be called after the LocalNode instance has been set on the server.
 func (srv *Server) setupPortMapping() {
-	// portMappingRegister will receive up to two values: one for the TCP port if
-	// listening is enabled, and one more for enabling UDP port mapping if discovery is
-	// enabled. We make it buffered to avoid blocking setup while a mapping request is in
-	// progress.
-	srv.portMappingRegister = make(chan *portMapping, 2)
+	// portMappingRegister receives setup-time TCP, discovery UDP, and bulk
+	// sidecar UDP mapping requests. Keep it buffered so setup cannot block while
+	// a mapping request is in progress.
+	srv.portMappingRegister = make(chan *portMapping, 3)
 
 	switch srv.NAT.(type) {
 	case nil:
@@ -84,6 +83,18 @@ func (srv *Server) consumePortMappingRequests() {
 	}
 }
 
+func nextMappingRefresh(mappings map[string]*portMapping) (mclock.AbsTime, bool) {
+	var next mclock.AbsTime
+	found := false
+	for _, mapping := range mappings {
+		if !found || mapping.nextTime < next {
+			next = mapping.nextTime
+			found = true
+		}
+	}
+	return next, found
+}
+
 // portMappingLoop manages port mappings for UDP and TCP.
 func (srv *Server) portMappingLoop() {
 	defer srv.loopWG.Done()
@@ -93,7 +104,7 @@ func (srv *Server) portMappingLoop() {
 	}
 
 	var (
-		mappings  = make(map[string]*portMapping, 2)
+		mappings  = make(map[string]*portMapping, 3)
 		refresh   = mclock.NewAlarm(srv.clock)
 		extip     = mclock.NewAlarm(srv.clock)
 		lastExtIP net.IP
@@ -113,8 +124,8 @@ func (srv *Server) portMappingLoop() {
 
 	for {
 		// Schedule refresh of existing mappings.
-		for _, m := range mappings {
-			refresh.Schedule(m.nextTime)
+		if nextTime, ok := nextMappingRefresh(mappings); ok {
+			refresh.Schedule(nextTime)
 		}
 
 		select {
@@ -143,7 +154,7 @@ func (srv *Server) portMappingLoop() {
 			if m.protocol != "TCP" && m.protocol != "UDP" {
 				panic("unknown NAT protocol name: " + m.protocol)
 			}
-			mappings[m.protocol] = m
+			mappings[m.name] = m
 			m.nextTime = srv.clock.Now()
 
 		case <-refresh.C():
@@ -190,12 +201,8 @@ func (srv *Server) portMappingLoop() {
 						log.Info("NAT mapped port")
 					}
 
-					// Update port in local ENR.
-					switch m.protocol {
-					case "TCP":
-						srv.localnode.Set(enr.TCP(m.extPort))
-					case "UDP":
-						srv.localnode.SetFallbackUDP(m.extPort)
+					if m.update != nil {
+						m.update(m.extPort)
 					}
 				}
 				m.nextTime = srv.clock.Now().Add(portMapRefreshInterval)

@@ -19,8 +19,20 @@ import (
 
 type replyTestRW struct {
 	limitTestRW
-	sent chan p2p.Msg
-	err  error
+	inbound chan p2p.Msg
+	sent    chan p2p.Msg
+	err     error
+}
+
+func (rw *replyTestRW) ReadMsg() (p2p.Msg, error) {
+	if rw.inbound == nil {
+		return rw.limitTestRW.ReadMsg()
+	}
+	msg, ok := <-rw.inbound
+	if !ok {
+		return p2p.Msg{}, io.EOF
+	}
+	return msg, nil
 }
 
 func (rw *replyTestRW) WriteMsg(msg p2p.Msg) error {
@@ -134,14 +146,16 @@ func TestPeerReplyThrottleKeepsReaderRunning(t *testing.T) {
 		if !p.blockReplies.limiter.AllowN(time.Now(), peerByteBurst) {
 			t.Fatal("could not exhaust reply allowance")
 		}
+		rw.inbound = make(chan p2p.Msg, 2)
+		defer close(rw.inbound)
 		backend := &packetCapturingBackend{testBackend: new(testBackend)}
-		rw.msg = p2p.Msg{Code: GetBlockBodiesMsg, Size: 3, Payload: bytes.NewReader([]byte{0xc2, 0x01, 0xc0})}
+		rw.inbound <- p2p.Msg{Code: GetBlockBodiesMsg, Size: 3, Payload: bytes.NewReader([]byte{0xc2, 0x01, 0xc0})}
 		start := time.Now()
 		if err := handleMessage(backend, p); err != nil {
 			t.Fatal(err)
 		}
 		synctest.Wait()
-		rw.msg = p2p.Msg{Code: NewBlockHashesMsg, Size: 1, Payload: bytes.NewReader([]byte{0xc0})}
+		rw.inbound <- p2p.Msg{Code: NewBlockHashesMsg, Size: 1, Payload: bytes.NewReader([]byte{0xc0})}
 		if err := handleMessage(backend, p); err != nil {
 			t.Fatal(err)
 		}

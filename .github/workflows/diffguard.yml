@@ -14,9 +14,8 @@ jobs:
   diffguard:
     name: Quality metrics
     if: (github.event.action != 'closed' || github.event.pull_request.merged == true)
-    # Mutation testing is CPU-heavy (one `go test` invocation per mutant,
-    # parallelized across cores). The 16-core runner matches the one used
-    # by govulncheck and keeps PR turnaround under ~10 min on typical diffs.
+    # Limit package concurrency per mutation worker to bound aggregate build
+    # and test processes while independent test deadlines overlap.
     runs-on: ubuntu24.04-16core-64GB-600SSD-bor
     steps:
       - uses: actions/checkout@v5
@@ -43,6 +42,8 @@ jobs:
 
       - name: Run diffguard
         id: diffguard
+        env:
+          GOFLAGS: "-p=1"
         shell: bash
         run: |
           # Keep diffguard's exit code when tee writes the step summary.
@@ -59,15 +60,15 @@ jobs:
             --tier1-threshold 80 \
             --tier2-threshold 60 \
             --mutation-sample-rate 20 \
+            --mutation-workers 8 \
             --test-timeout 5m \
             --output text \
             --fail-on error \
             . | tee "$GITHUB_STEP_SUMMARY"
 
       - name: Upload JSON report
-        # Run even on failure so the survivor list is available for
-        # triage. Skip mutation here to keep the second run cheap — the
-        # text report above already contains the full mutation results.
+        # Preserve structural metrics even on failure. Mutation results remain
+        # in the text report above; do not repeat the expensive test run here.
         if: always()
         run: |
           diffguard \

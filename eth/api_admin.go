@@ -26,6 +26,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
@@ -140,4 +141,18 @@ func (api *AdminAPI) ImportChain(file string) (bool, error) {
 		blocks = blocks[:0]
 	}
 	return true, nil
+}
+
+// BulkSidecarStatus returns a live snapshot of bulk-sidecar sessions, channels,
+// and per-channel counters for operator verification.
+func (api *AdminAPI) BulkSidecarStatus() (*p2p.BulkSidecarStatus, error) {
+	if api.eth == nil || api.eth.p2pServer == nil {
+		return &p2p.BulkSidecarStatus{}, nil
+	}
+	sidecar := api.eth.p2pServer.BulkSidecar()
+	if sidecar == nil {
+		return &p2p.BulkSidecarStatus{}, nil
+	}
+	status := sidecar.Status()
+	return &status, nil
 }

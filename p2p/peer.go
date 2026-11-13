@@ -119,6 +119,9 @@ type Peer struct {
 	// events receives message send / receive events if set
 	events   *event.Feed
 	testPipe *MsgPipeRW // for testing
+
+	// Set before protocols start; nil for standalone peers.
+	bulkPool *bulkBufferPool
 }
 
 // NewPeer returns a peer for testing purposes.
@@ -212,6 +215,11 @@ func (p *Peer) Disconnect(reason DiscReason) {
 	case p.disc <- reason:
 	case <-p.closed:
 	}
+}
+
+// Done is closed when the peer connection is shutting down.
+func (p *Peer) Done() <-chan struct{} {
+	return p.closed
 }
 
 // String implements fmt.Stringer.
@@ -507,9 +515,18 @@ outer:
 	return result
 }
 
+func (p *Peer) newBulkBudget() *bulkBufferBudget {
+	if p.bulkPool != nil {
+		return p.bulkPool.newBudget()
+	}
+	return newBulkBufferBudget()
+}
+
 func (p *Peer) startProtocols(writeStart <-chan struct{}, writeErr chan<- error) {
 	p.wg.Add(len(p.running))
+	buffers := p.newBulkBudget()
 	for _, proto := range p.running {
+		proto.buffers = buffers
 		proto.closed = p.closed
 		proto.wstart = writeStart
 		proto.werr = writeErr
@@ -545,12 +562,26 @@ func (p *Peer) getProto(code uint64) (*protoRW, error) {
 
 type protoRW struct {
 	Protocol
-	in     chan Msg        // receives read messages
-	closed <-chan struct{} // receives when peer is shutting down
-	wstart <-chan struct{} // receives when write may start
-	werr   chan<- error    // for write results
-	offset uint64
-	w      MsgWriter
+	in      chan Msg        // receives read messages
+	closed  <-chan struct{} // receives when peer is shutting down
+	wstart  <-chan struct{} // receives when write may start
+	werr    chan<- error    // for write results
+	offset  uint64
+	w       MsgWriter
+	buffers *bulkBufferBudget
+}
+
+func (rw *protoRW) bulkBuffers() *bulkBufferBudget { return rw.buffers }
+
+func (rw *protoRW) Done() <-chan struct{} {
+	return rw.closed
+}
+
+func (rw *protoRW) reportWriteError(err error) {
+	select {
+	case rw.werr <- err:
+	case <-rw.closed:
+	}
 }
 
 func (rw *protoRW) WriteMsg(msg Msg) (err error) {
@@ -569,7 +600,7 @@ func (rw *protoRW) WriteMsg(msg Msg) (err error) {
 		// shutdown if the error is non-nil and unblock the next write
 		// otherwise. The calling protocol code should exit for errors
 		// as well but we don't want to rely on that.
-		rw.werr <- err
+		rw.reportWriteError(err)
 	case <-rw.closed:
 		err = ErrShuttingDown
 	}
