@@ -3248,6 +3248,20 @@ func (bc *BlockChain) prepareHeaderVerification(headers []*types.Header) (stop f
 	return stop, errChans
 }
 
+// awaitHeaderResults waits for every header verification result and returns
+// them with the index of the first failure (len(errChans) if none failed).
+func awaitHeaderResults(errChans []chan error) ([]error, int) {
+	errs := make([]error, len(errChans))
+	firstBad := len(errChans)
+	for i, ch := range errChans {
+		errs[i] = <-ch
+		if errs[i] != nil && firstBad == len(errChans) {
+			firstBad = i
+		}
+	}
+	return errs, firstBad
+}
+
 func (bc *BlockChain) handleHeaderVerificationError(block *types.Block, index int, hErr error) error {
 	if hErr == consensus.ErrUnknownAncestor {
 		parentNum := block.NumberU64() - 1
@@ -3306,6 +3320,11 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 		}
 	}()
 
+	// Execution must not start on a block before its header has been verified,
+	// so collect all verification results up front and leave every block from
+	// the first failure onward to the sequential writer below.
+	hdrErrs, firstBad := awaitHeaderResults(errChans)
+
 	workCh := make(chan int, len(chain))
 	var snapDiffItems, snapBufItems common.StorageSize
 	var wg sync.WaitGroup
@@ -3326,6 +3345,10 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 				}
 				if bc.insertStopped() {
 					results[idx].err = errInsertionInterrupted
+					continue
+				}
+				if idx >= firstBad {
+					results[idx].needsRetry = true
 					continue
 				}
 				var witness *stateless.Witness
@@ -3370,11 +3393,9 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 		if bc.HasBlock(block.Hash(), block.NumberU64()) {
 			processed.Add(1)
 			log.Trace("Skipping known block in InsertChainStateless", "number", block.NumberU64(), "hash", block.Hash())
-			if i < len(errChans) {
-				if err := <-errChans[i]; err != nil {
-					stopHeaders()
-					return int(processed.Load() - 1), fmt.Errorf("header verification failed for known block %d (%s): %w", block.NumberU64(), block.Hash(), err)
-				}
+			if err := hdrErrs[i]; err != nil {
+				stopHeaders()
+				return int(processed.Load() - 1), fmt.Errorf("header verification failed for known block %d (%s): %w", block.NumberU64(), block.Hash(), err)
 			}
 			stats.processed = int(processed.Load())
 			stats.usedGas += block.GasUsed()
@@ -3392,11 +3413,7 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 			return int(processed.Load()), resErr
 		}
 
-		var hErr error
-		if i < len(errChans) {
-			hErr = <-errChans[i]
-		}
-		if hErr != nil {
+		if hErr := hdrErrs[i]; hErr != nil {
 			if err := bc.handleHeaderVerificationError(block, i, hErr); err != nil {
 				stopHeaders()
 				return int(processed.Load()), err
@@ -3537,6 +3554,11 @@ func (bc *BlockChain) insertChainStatelessSequential(chain types.Blocks, witness
 		if bc.insertStopped() {
 			return int(processed.Load()), errInsertionInterrupted
 		}
+		if hErr := <-errChans[i]; hErr != nil {
+			if err := bc.handleHeaderVerificationError(block, i, hErr); err != nil {
+				return int(processed.Load()), err
+			}
+		}
 		var witness *stateless.Witness
 		if i < len(witnesses) {
 			witness = witnesses[i]
@@ -3546,12 +3568,6 @@ func (bc *BlockChain) insertChainStatelessSequential(chain types.Blocks, witness
 			return int(processed.Load()), perr
 		}
 		statedb.SetWitness(witness)
-		hErr := <-errChans[i]
-		if hErr != nil {
-			if err := bc.handleHeaderVerificationError(block, i, hErr); err != nil {
-				return int(processed.Load()), err
-			}
-		}
 
 		if _, werr := bc.writeBlockAndSetHead(block, nil, nil, statedb, true, true); werr != nil {
 			return int(processed.Load()), werr
@@ -6428,6 +6444,9 @@ func (bc *BlockChain) StateAtWithFlatDiff(baseRoot common.Hash, flatDiff *state.
 func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *stateless.Witness) (*state.StateDB, *ProcessResult, error) {
 	if witness == nil {
 		return nil, nil, errors.New("nil witness")
+	}
+	if err := validateBodyAgainstHeader(bc.engine, bc, block); err != nil {
+		return nil, nil, fmt.Errorf("invalid block body: %w", err)
 	}
 
 	// Validate witness.

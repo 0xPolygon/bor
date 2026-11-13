@@ -160,6 +160,10 @@ var (
 	// ErrBlobTxCreate is returned if a blob transaction has no explicit to field.
 	ErrBlobTxCreate = errors.New("blob transaction of type create")
 
+	// ErrNoBlobBaseFee is returned if a blob transaction is executed in a block
+	// context that has no blob base fee (no blob schedule configured).
+	ErrNoBlobBaseFee = errors.New("blob base fee unavailable")
+
 	// -- EIP-7702 errors --
 
 	// Message validation errors:
