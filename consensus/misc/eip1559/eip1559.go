@@ -137,8 +137,9 @@ func applyBaseFeeFloor(config *params.ChainConfig, parent *types.Header, baseFee
 func maxBaseFeeStep(parentBaseFee *big.Int) *big.Int {
 	step := new(big.Int).Mul(parentBaseFee, big.NewInt(MaxBaseFeeChangePercent))
 	step.Div(step, big.NewInt(100))
-	if step.Cmp(common.Big1) < 0 {
-		step.Set(common.Big1)
+	// The step is never negative, so only a zero step needs the 1 wei minimum.
+	if step.Sign() == 0 {
+		step.SetUint64(1)
 	}
 	return step
 }
