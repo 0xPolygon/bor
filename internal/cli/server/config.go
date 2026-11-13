@@ -24,6 +24,7 @@ import (
 	"github.com/ethereum/go-ethereum/cmd/utils"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/fdlimit"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/txpool/legacypool"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/eth/downloader"
@@ -454,8 +455,11 @@ type SealerConfig struct {
 	TargetGasMinPercentage uint64 `hcl:"targetGasMinPercentage,optional" toml:"targetGasMinPercentage,optional"`
 	TargetGasMaxPercentage uint64 `hcl:"targetGasMaxPercentage,optional" toml:"targetGasMaxPercentage,optional"`
 
-	// BaseFeeFloor holds the base fee at or above TargetBaseFee (post-Lisovo, producer policy only)
-	BaseFeeFloor bool `hcl:"baseFeeFloor,optional" toml:"baseFeeFloor,optional"`
+	// BaseFeeFloor is the base fee floor in wei this producer holds (post-Lisovo, producer
+	// policy only). 0 disables it. When set it is also the target base fee, so the floor
+	// and the gas target can never disagree. It has no default on purpose: the floor
+	// must always be set explicitly.
+	BaseFeeFloor uint64 `hcl:"baseFeeFloor,optional" toml:"baseFeeFloor,optional"`
 
 	// GasPrice is the minimum gas price for mining a transaction
 	GasPrice    *big.Int `hcl:"-,optional" toml:"-"`
@@ -1025,7 +1029,7 @@ func DefaultConfig() *Config {
 			TargetBaseFee:            miner.DefaultConfig.TargetBaseFee,
 			BaseFeeBuffer:            miner.DefaultConfig.BaseFeeBuffer,
 			EnableDynamicTargetGas:   false,
-			BaseFeeFloor:             false,
+			BaseFeeFloor:             0,
 			TargetGasMinPercentage:   50,                                         // 50% floor
 			TargetGasMaxPercentage:   80,                                         // 80% ceiling
 			GasPrice:                 big.NewInt(params.BorDefaultMinerGasPrice), // bor's default
@@ -1333,6 +1337,28 @@ func readConfigFile(path string) (*Config, error) {
 	return config, nil
 }
 
+// copyGenesisForRuntime returns a copy of the genesis whose chain config and
+// Bor config can be changed without touching the shared chain preset.
+// buildEth writes runtime producer settings (target gas, base fee floor) into
+// them, and chains.GetChain returns the same preset to every caller, so
+// writing into it would leak one configuration into the next one built in
+// the same process.
+func copyGenesisForRuntime(genesis *core.Genesis) *core.Genesis {
+	if genesis == nil {
+		return nil
+	}
+	g := *genesis
+	if g.Config != nil {
+		cfg := *g.Config
+		if cfg.Bor != nil {
+			bor := *cfg.Bor
+			cfg.Bor = &bor
+		}
+		g.Config = &cfg
+	}
+	return &g
+}
+
 func (c *Config) loadChain() error {
 	chain, err := chains.GetChain(c.Chain)
 	if err != nil {
@@ -1364,7 +1390,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	// have the chain object for it.
 	if !c.Developer.Enabled {
 		n.NetworkId = c.chain.NetworkId
-		n.Genesis = c.chain.Genesis
+		n.Genesis = copyGenesisForRuntime(c.chain.Genesis)
 	}
 
 	n.HeimdallURL = c.Heimdall.URL
@@ -1512,10 +1538,6 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 			}
 		}
 
-		if c.Sealer.BaseFeeFloor && c.Sealer.TargetBaseFee == 0 {
-			return nil, fmt.Errorf("miner.targetBaseFee must be greater than 0 when miner.baseFeeFloor is enabled")
-		}
-
 		if etherbase := c.Sealer.Etherbase; etherbase != "" {
 			if !common.IsHexAddress(etherbase) {
 				return nil, fmt.Errorf("etherbase is not an address: %s", etherbase)
@@ -1547,11 +1569,15 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 			n.Genesis.Config.Bor.BaseFeeBuffer = &c.Sealer.BaseFeeBuffer
 		}
 
-		// The floor reuses TargetBaseFee so the floor and the gas target can never disagree
-		if c.Sealer.BaseFeeFloor {
-			n.Genesis.Config.Bor.BaseFeeFloor = &c.Sealer.BaseFeeFloor
-			n.Genesis.Config.Bor.TargetBaseFee = &c.Sealer.TargetBaseFee
-			log.Info("Base fee floor enabled", "floor", c.Sealer.TargetBaseFee)
+		// The floor is also the target base fee, so the floor and the gas target can never disagree
+		if floor := c.Sealer.BaseFeeFloor; floor > 0 {
+			if c.Sealer.EnableDynamicTargetGas && c.Sealer.TargetBaseFee != floor {
+				log.Warn("miner.baseFeeFloor replaces miner.targetBaseFee", "targetBaseFee", c.Sealer.TargetBaseFee, "floor", floor)
+			}
+			enabled := true
+			n.Genesis.Config.Bor.BaseFeeFloor = &enabled
+			n.Genesis.Config.Bor.TargetBaseFee = &floor
+			log.Info("Base fee floor enabled", "floor", floor)
 		}
 	}
 
@@ -1619,7 +1645,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 
 		// update the parameters
 		n.NetworkId = c.chain.NetworkId
-		n.Genesis = c.chain.Genesis
+		n.Genesis = copyGenesisForRuntime(c.chain.Genesis)
 
 		// Set runtime miner gas parameters in BorConfig for developer mode
 		if n.Genesis != nil && n.Genesis.Config != nil && n.Genesis.Config.Bor != nil {

@@ -173,6 +173,51 @@ func TestBaseFeeFloorDisabled(t *testing.T) {
 	require.Equal(t, new(big.Int).SetUint64(params.InitialBaseFee), CalcBaseFee(floorTestConfig(250, true), noParentFee))
 }
 
+// TestBaseFeeFloorLisovoBoundary checks the floor around the Lisovo activation
+// at the test, Amoy and mainnet heights. The floor is keyed on the parent, so
+// the first clamped header is Lisovo+1, which validators already check with
+// the 5% boundary rule. Each produced header is verified by a validator that
+// has no floor configured: strict before Lisovo, boundary after.
+func TestBaseFeeFloorLisovoBoundary(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		lisovo *big.Int
+	}{
+		{"test", big.NewInt(20)},
+		{"amoy", params.AmoyChainConfig.Bor.LisovoBlock},
+		{"mainnet", params.BorMainnetChainConfig.Bor.LisovoBlock},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			producer := floorTestConfig(250, true)
+			producer.Bor.LisovoBlock = new(big.Int).Set(tc.lisovo)
+			validator := floorTestConfig(250, false)
+			validator.Bor.LisovoBlock = new(big.Int).Set(tc.lisovo)
+
+			for _, offset := range []int64{-2, -1, 0} {
+				parent := floorTestParent(100, 5)
+				parent.Number = new(big.Int).Add(tc.lisovo, big.NewInt(offset))
+
+				plain := CalcBaseFee(validator, parent)
+				got := CalcBaseFee(producer, parent)
+				if offset < 0 {
+					require.Equal(t, plain, got, "parent L%+d: floor must be off before Lisovo", offset)
+				} else {
+					// Below the floor the producer walks up by the full 5% step.
+					require.Equal(t, gwei(105), got, "parent L%+d: floor must clamp", offset)
+				}
+				child := &types.Header{
+					Number:   new(big.Int).Add(parent.Number, common.Big1),
+					GasLimit: floorTestGasLimit,
+					GasUsed:  floorTestGasLimit * 5 / 100,
+					BaseFee:  got,
+				}
+				require.NoError(t, VerifyEIP1559Header(validator, parent, child), "parent L%+d", offset)
+			}
+		})
+	}
+}
+
 // TestMaxBaseFeeStepMinimum checks the 1 wei minimum step at tiny base fees,
 // matching the validator check.
 func TestMaxBaseFeeStepMinimum(t *testing.T) {

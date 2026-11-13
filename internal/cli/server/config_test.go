@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
+	"github.com/ethereum/go-ethereum/internal/cli/server/chains"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 )
@@ -850,43 +851,61 @@ func TestConfigFilteredAddresses(t *testing.T) {
 	}
 }
 
-// TestBaseFeeFloorConfig tests the miner.baseFeeFloor validation and wiring.
+// TestBaseFeeFloorConfig tests the miner.baseFeeFloor wiring.
 func TestBaseFeeFloorConfig(t *testing.T) {
-	build := func(t *testing.T, config *Config) (*ethconfig.Config, error) {
+	build := func(t *testing.T, config *Config) *ethconfig.Config {
 		t.Helper()
 		assert.NoError(t, config.loadChain())
 		_, err := config.buildNode(log.Root())
 		assert.NoError(t, err)
-		return config.buildEth(nil, nil)
+		ethConfig, err := config.buildEth(nil, nil)
+		assert.NoError(t, err)
+		return ethConfig
 	}
 
-	// buildEth writes into the shared genesis config: check the default first
-	// and clear the floor afterwards so other tests do not inherit it.
 	t.Run("DisabledByDefault", func(t *testing.T) {
-		ethConfig, err := build(t, DefaultConfig())
-		assert.NoError(t, err)
+		config := DefaultConfig()
+		assert.Equal(t, uint64(0), config.Sealer.BaseFeeFloor)
+		ethConfig := build(t, config)
 		assert.Nil(t, ethConfig.Genesis.Config.Bor.BaseFeeFloor)
 	})
 
-	t.Run("NoTargetBaseFee_ReturnsError", func(t *testing.T) {
-		config := DefaultConfig()
-		config.Sealer.BaseFeeFloor = true
-		config.Sealer.TargetBaseFee = 0
-
-		_, err := build(t, config)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "miner.targetBaseFee must be greater than 0 when miner.baseFeeFloor is enabled")
-	})
-
+	// The floor is also the target base fee, even when miner.targetBaseFee
+	// keeps its 500 gwei default.
 	t.Run("FloorIsTargetBaseFee", func(t *testing.T) {
 		config := DefaultConfig()
-		config.Sealer.BaseFeeFloor = true
-		config.Sealer.TargetBaseFee = 250_000_000_000
-
-		ethConfig, err := build(t, config)
-		assert.NoError(t, err)
-		t.Cleanup(func() { ethConfig.Genesis.Config.Bor.BaseFeeFloor = nil })
+		config.Sealer.BaseFeeFloor = 250_000_000_000
+		ethConfig := build(t, config)
 		assert.True(t, *ethConfig.Genesis.Config.Bor.BaseFeeFloor)
 		assert.Equal(t, uint64(250_000_000_000), *ethConfig.Genesis.Config.Bor.TargetBaseFee)
+	})
+
+	t.Run("Flag", func(t *testing.T) {
+		var c Command
+		assert.NoError(t, c.extractFlags([]string{"--miner.baseFeeFloor", "300000000000"}))
+		assert.Equal(t, uint64(300_000_000_000), c.config.Sealer.BaseFeeFloor)
+	})
+
+	// chains.GetChain returns a shared preset: a floor-enabled configuration
+	// must not leak its floor or target into a later one in the same process,
+	// and two enabled configurations must keep their own floor.
+	t.Run("NoLeakBetweenConfigs", func(t *testing.T) {
+		enabled := DefaultConfig()
+		enabled.Sealer.BaseFeeFloor = 250_000_000_000
+		first := build(t, enabled)
+
+		disabled := build(t, DefaultConfig())
+		assert.Nil(t, disabled.Genesis.Config.Bor.BaseFeeFloor)
+		assert.Nil(t, disabled.Genesis.Config.Bor.TargetBaseFee)
+
+		other := DefaultConfig()
+		other.Sealer.BaseFeeFloor = 300_000_000_000
+		second := build(t, other)
+		assert.Equal(t, uint64(300_000_000_000), *second.Genesis.Config.Bor.TargetBaseFee)
+		assert.Equal(t, uint64(250_000_000_000), *first.Genesis.Config.Bor.TargetBaseFee)
+
+		preset, err := chains.GetChain(DefaultConfig().Chain)
+		assert.NoError(t, err)
+		assert.Nil(t, preset.Genesis.Config.Bor.BaseFeeFloor)
 	})
 }
