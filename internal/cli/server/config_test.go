@@ -852,7 +852,7 @@ func TestConfigFilteredAddresses(t *testing.T) {
 	}
 }
 
-// TestBaseFeeFloorConfig tests the miner.baseFeeFloor wiring.
+// TestBaseFeeFloorConfig tests the miner.baseFeeFloor and txpool.basefeefloor wiring.
 func TestBaseFeeFloorConfig(t *testing.T) {
 	build := func(t *testing.T, config *Config) *ethconfig.Config {
 		t.Helper()
@@ -869,6 +869,7 @@ func TestBaseFeeFloorConfig(t *testing.T) {
 		assert.Equal(t, uint64(0), config.Sealer.BaseFeeFloor)
 		ethConfig := build(t, config)
 		assert.Nil(t, ethConfig.Genesis.Config.Bor.BaseFeeFloor)
+		assert.False(t, ethConfig.TxPool.BaseFeeFloor)
 		assert.Equal(t, miner.DefaultConfig.TargetBaseFee, ethConfig.Miner.TargetBaseFee)
 	})
 
@@ -877,9 +878,11 @@ func TestBaseFeeFloorConfig(t *testing.T) {
 	t.Run("FloorIsTargetBaseFee", func(t *testing.T) {
 		config := DefaultConfig()
 		config.Sealer.BaseFeeFloor = 250_000_000_000
+		config.TxPool.BaseFeeFloor = true
 		ethConfig := build(t, config)
 		assert.True(t, *ethConfig.Genesis.Config.Bor.BaseFeeFloor)
 		assert.Equal(t, uint64(250_000_000_000), *ethConfig.Genesis.Config.Bor.TargetBaseFee)
+		assert.True(t, ethConfig.TxPool.BaseFeeFloor)
 		// The miner (dynamic gas limit) must use the same target as the Bor config.
 		assert.Equal(t, uint64(250_000_000_000), ethConfig.Miner.TargetBaseFee)
 	})

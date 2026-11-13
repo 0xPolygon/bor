@@ -331,6 +331,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.TxPool.StrandedLifetime,
 		Group:   "Transaction Pool",
 	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "txpool.basefeefloor",
+		Usage:   "Refuse and sweep transactions whose fee cap cannot pay the producers' base fee floor (learned from headers) plus the minimum tip",
+		Value:   &c.cliConfig.TxPool.BaseFeeFloor,
+		Default: c.cliConfig.TxPool.BaseFeeFloor,
+		Group:   "Transaction Pool",
+	})
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "txpool.filtered-addresses",
 		Usage:   "Path to the file containing a newline-separated list of addresses whose transactions will be filtered",
