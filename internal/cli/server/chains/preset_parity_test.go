@@ -77,6 +77,7 @@ func TestBorForkPresetParity(t *testing.T) {
 
 			want := borForkBlocks(p.params.Bor)
 			require.Contains(t, want, "UburuBlock")
+			require.Contains(t, want, "SalvadorBlock")
 			for surface, cfg := range map[string]*params.ChainConfig{"runtime": p.runtime, "genesis": packaged} {
 				got := borForkBlocks(cfg.Bor)
 				for name, block := range want {
