@@ -489,6 +489,7 @@ func TestDiskLayerCommitForceFlushDoesNotCarryStates(t *testing.T) {
 			NoAsyncFlush:     true,
 		},
 		diskdb: diskdb,
+		writer: newAsyncWriter(),
 	}
 
 	addrHash := common.HexToHash("0x01")
@@ -541,6 +542,7 @@ func TestDiskLayerCommitHistoryFlushDoesNotCarryStates(t *testing.T) {
 		},
 		diskdb:       diskdb,
 		stateFreezer: freezer,
+		writer:       newAsyncWriter(),
 	}
 
 	addrHash1 := common.HexToHash("0x01")
@@ -611,6 +613,7 @@ func TestDiskLayerCommitCarryOverIsolation(t *testing.T) {
 		},
 		diskdb:       diskdb,
 		stateFreezer: freezer,
+		writer:       newAsyncWriter(),
 	}
 
 	addrHash := common.HexToHash("0x01")

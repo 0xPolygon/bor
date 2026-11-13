@@ -410,6 +410,15 @@ func (args *TransactionArgs) setBlobTxSidecar(ctx context.Context, config sideca
 	return nil
 }
 
+// checkBlobFeeCap rejects a blob fee cap without blob hashes. It is not part of
+// CallDefaults, because eth_simulateV1 and the tracers accept a lone cap from Cancun.
+func (args *TransactionArgs) checkBlobFeeCap() error {
+	if args.BlobFeeCap != nil && len(args.BlobHashes) == 0 {
+		return errors.New("maxFeePerBlobGas specified without blobVersionedHashes")
+	}
+	return nil
+}
+
 // CallDefaults sanitizes the transaction arguments, often filling in zero values,
 // for the purpose of eth_call class of RPC methods.
 func (args *TransactionArgs) CallDefaults(globalGasCap uint64, baseFee *big.Int, chainID *big.Int) error {
@@ -455,6 +464,9 @@ func (args *TransactionArgs) CallDefaults(globalGasCap uint64, baseFee *big.Int,
 	}
 	if baseFee == nil {
 		// If there's no basefee, then it must be a non-1559 execution
+		if args.MaxFeePerGas != nil || args.MaxPriorityFeePerGas != nil {
+			return errors.New("maxFeePerGas and maxPriorityFeePerGas are not valid before London is active")
+		}
 		if args.GasPrice == nil {
 			args.GasPrice = new(hexutil.Big)
 		}
@@ -550,9 +562,13 @@ func (args *TransactionArgs) ToTransaction(defaultType int) *types.Transaction {
 	case args.AccessList != nil || defaultType == types.AccessListTxType:
 		usedType = types.AccessListTxType
 	}
-	// Make it possible to default to newer tx, but use legacy if gasprice is provided
+	// Make it possible to default to newer tx, but use legacy if gasprice is provided.
+	// A gasprice together with an access list is an EIP-2930 transaction.
 	if args.GasPrice != nil {
 		usedType = types.LegacyTxType
+		if args.AccessList != nil {
+			usedType = types.AccessListTxType
+		}
 	}
 	var data types.TxData
 	switch usedType {
