@@ -438,3 +438,50 @@ func TestDefaultParametersWithinBoundary(t *testing.T) {
 	assert.Less(t, maxChangePercent, float64(MaxBaseFeeChangePercent)*0.5,
 		"Default parameters should use less than 50%% of the %d%% boundary", MaxBaseFeeChangePercent)
 }
+
+func TestVerifyEIP1559HeaderBaseFeeBitLen(t *testing.T) {
+	t.Parallel()
+
+	testConfig := copyConfig(config())
+	testConfig.Bor.LisovoBlock = big.NewInt(15)
+	testConfig.Bor.DandeliBlock = big.NewInt(10)
+	testConfig.Bor.BhilaiBlock = big.NewInt(5)
+
+	two256 := new(big.Int).Lsh(big.NewInt(1), 256)
+	maxUint256 := new(big.Int).Sub(two256, big.NewInt(1))
+	// 2^256 is within 5% of this parent, so only the magnitude decides.
+	parentBaseFee := new(big.Int).Div(new(big.Int).Mul(two256, big.NewInt(100)), big.NewInt(104))
+
+	tests := []struct {
+		name    string
+		number  int64
+		parent  *big.Int
+		baseFee *big.Int
+		wantErr bool
+	}{
+		{"post-Lisovo 256 bits", 20, parentBaseFee, maxUint256, false},
+		{"post-Lisovo 257 bits", 20, parentBaseFee, two256, true},
+		{"pre-Lisovo 257 bits", 12, two256, two256, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parent := &types.Header{
+				Number:   big.NewInt(tt.number - 1),
+				GasLimit: 30_000_000,
+				GasUsed:  15_000_000,
+				BaseFee:  tt.parent,
+			}
+			header := &types.Header{
+				Number:   big.NewInt(tt.number),
+				GasLimit: 30_000_000,
+				BaseFee:  tt.baseFee,
+			}
+			err := VerifyEIP1559Header(testConfig, parent, header)
+			if tt.wantErr {
+				require.ErrorContains(t, err, "bitlen 257 exceeds 256")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}

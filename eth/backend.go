@@ -554,6 +554,8 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		enableBlockTracking:     eth.config.EnableBlockTracking,
 		txAnnouncementOnly:      eth.p2pServer.TxAnnouncementOnly,
 		disableTxPropagation:    eth.p2pServer.DisableTxPropagation,
+		peerReputation:          eth.config.PeerReputation,
+		peerReputationMetrics:   eth.config.PeerReputationPerPeerMetrics,
 		witnessProtocol:         eth.config.WitnessProtocol,
 		syncWithWitnesses:       eth.config.SyncWithWitnesses,
 		syncAndProduceWitnesses: eth.config.SyncAndProduceWitnesses,
@@ -1082,6 +1084,9 @@ func (s *Ethereum) updateFilterMapsHeads() {
 		if head == nil || newHead.Hash() != head.Hash() {
 			head = newHead
 			chainView := s.newChainView(head)
+			if chainView == nil {
+				return
+			}
 			historyCutoff, _ := s.blockchain.HistoryPruningCutoff()
 			var finalBlock uint64
 			if fb := s.blockchain.CurrentFinalBlock(); fb != nil {

@@ -122,23 +122,28 @@ type OptionsPIP15 struct {
 
 var ErrKnownAccounts = errors.New("an incorrect list of knownAccounts")
 
+// Length returns the number of slots/accounts in KnownAccounts. Every account
+// counts at least once, so an empty or null entry still costs a map entry.
+func (ka KnownAccounts) Length() int {
+	length := 0
+
+	for _, v := range ka {
+		if v.IsStorage() {
+			length += max(1, len(v.Storage))
+		} else {
+			length++
+		}
+	}
+
+	return length
+}
+
 func (ka KnownAccounts) ValidateLength() error {
 	if ka == nil {
 		return nil
 	}
 
-	length := 0
-
-	for _, v := range ka {
-		// check if the value is hex string or an object
-		if v.IsSingle() {
-			length += 1
-		} else {
-			length += len(v.Storage)
-		}
-	}
-
-	if length >= 1000 {
+	if length := ka.Length(); length >= 1000 {
 		return fmt.Errorf("number of slots/accounts in KnownAccounts %v exceeds the limit of 1000", length)
 	}
 

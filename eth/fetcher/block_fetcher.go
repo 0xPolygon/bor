@@ -19,6 +19,7 @@ package fetcher
 
 import (
 	"errors"
+	"fmt"
 	"math/rand"
 	"sync"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/prque"
 	"github.com/ethereum/go-ethereum/consensus"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
@@ -165,7 +167,9 @@ type blockOrHeaderInject struct {
 	// from another source when the witness was accepted on the size oracle
 	// alone (hash differs from the BP-signed one).
 	witnessPeer           string             // Peer that served or pushed the witness; empty when local.
-	witnessDiverged       bool               // Witness accepted on size alone: hash differs from the BP-signed hash.
+	witnessDiverged       bool               // Bytes not proven to be the BP's (WitnessProvenance.diverged).
+	witnessNotProducer    bool               // Bytes contradict the verified BP commitment (WitnessNotProducer).
+	witnessQuarantined    bool               // The block's signed size was quarantined when it was handed to import.
 	witnessImportFailures int                // Import attempts of this block that already failed with a diverged witness.
 	fetchWitness          witnessRequesterFn // Fetch closure to re-request the witness after an import failure.
 }
@@ -199,10 +203,10 @@ type injectBlockNeedWitnessMsg struct {
 
 // injectedWitnessMsg is used to inject a witness received externally via broadcast.
 type injectedWitnessMsg struct {
-	peer     string
-	witness  *stateless.Witness
-	diverged bool      // Accepted on the WIT2 size oracle alone: hash differs from the BP-signed one.
-	time     time.Time // Arrival time
+	peer       string
+	witness    *stateless.Witness
+	provenance WitnessProvenance // Who chose the pushed bytes (see InjectWitness).
+	time       time.Time         // Arrival time
 }
 
 // enqueueRequest is used to shuttle fully assembled blocks (with witness)
@@ -256,6 +260,8 @@ type BlockFetcher struct {
 	insertHeaders  headersInsertFn    // Injects a batch of headers into the chain
 	insertChain    chainInsertFn      // Injects a batch of blocks into the chain
 	dropPeer       peerDropFn         // Drops a peer for misbehaving
+
+	invalidHeader func(peer string, err error) // Reports verification failures and their supplier
 
 	// Testing hooks
 	announceChangeHook func(common.Hash, bool)           // Method to call upon adding or deleting a hash from the blockAnnounce list
@@ -355,6 +361,18 @@ func (f *BlockFetcher) SetWitnessSourceExcluder(fn func(peer string, blockHash c
 	}
 }
 
+// SetInvalidHeaderObserver reports verification failures and their supplier.
+// Install before Start; the callback must not block.
+func (f *BlockFetcher) SetInvalidHeaderObserver(observe func(peer string, err error)) {
+	f.invalidHeader = observe
+}
+
+func (f *BlockFetcher) observeInvalidHeader(peer string, err error) {
+	if f.invalidHeader != nil {
+		f.invalidHeader(peer, err)
+	}
+}
+
 // Notify announces the fetcher of the potential availability of a new block in
 // the network.
 func (f *BlockFetcher) Notify(peer string, hash common.Hash, number uint64, time time.Time,
@@ -422,18 +440,17 @@ func (f *BlockFetcher) InjectBlockWithWitnessRequirement(origin string, block *t
 }
 
 // InjectWitness injects a witness received via broadcast into the fetcher.
-// diverged reports that the pushed bytes were accepted on the WIT2 size oracle
-// alone (their hash differs from the BP-signed one). The witness manager records
-// it, with peer, as the witness's provenance, so an import failure is charged to
-// the pusher exactly as it is to a serving peer on the paged-fetch path
+// provenance records who chose the pushed bytes. The witness manager records
+// it, with peer, on the import op, so an import failure is charged to the pusher
+// exactly as it is to a serving peer on the paged-fetch path
 // (chargeDivergedWitnessImportFailure) — a push must not be the free way to
-// deliver unusable within-band bytes.
-func (f *BlockFetcher) InjectWitness(peer string, witness *stateless.Witness, diverged bool) error {
+// deliver unusable bytes.
+func (f *BlockFetcher) InjectWitness(peer string, witness *stateless.Witness, provenance WitnessProvenance) error {
 	msg := &injectedWitnessMsg{
-		peer:     peer,
-		witness:  witness,
-		diverged: diverged,
-		time:     time.Now(),
+		peer:       peer,
+		witness:    witness,
+		provenance: provenance,
+		time:       time.Now(),
 	}
 	log.Debug("Injecting witness from broadcast", "peer", peer, "hash", witness.Header().Hash())
 	// Send to witness manager's channel
@@ -663,10 +680,10 @@ func (f *BlockFetcher) loop() {
 			f.forgetBlock(hash) // This calls wm.forget
 
 		case op := <-f.witnessRetry:
-			// An import failed with a witness accepted on the WIT2 size oracle
-			// alone. Forget the attempt exactly as `done` does, THEN hand the
-			// block back to the witness manager for a fresh fetch — sequenced
-			// on this loop so the forget cannot race the re-registration.
+			// An import failed with a witness not proven to be the BP's.
+			// Forget the attempt exactly as `done` does, THEN hand the block
+			// back to the witness manager for a fresh fetch — sequenced on
+			// this loop so the forget cannot race the re-registration.
 			hash := op.hash()
 			f.forgetHash(hash)
 			f.forgetBlock(hash)
@@ -1211,6 +1228,7 @@ func (f *BlockFetcher) importHeaders(peer string, header *types.Header) {
 		// Validate the header and if something went wrong, drop the peer
 		if err := f.verifyHeader(header); err != nil && err != consensus.ErrFutureBlock {
 			log.Debug("Propagated header verification failed", "peer", peer, "number", header.Number, "hash", hash, "err", err)
+			f.observeInvalidHeader(peer, err)
 			f.dropPeer(peer)
 
 			return
@@ -1231,16 +1249,17 @@ func (f *BlockFetcher) importHeaders(peer string, header *types.Header) {
 // block's number is at the same height as the current import phase, it updates
 // the phase states accordingly.
 //
-// WIT2: when the block's witness was fetched and accepted on the size oracle
-// alone (op.witnessDiverged — its hash differs from the BP-signed one, so the
-// serving peer, not the BP, chose these bytes) and the import fails, the
-// failure is charged to that peer: it is struck and excluded as a source for
+// WIT2: when the block's witness is not proven to be the BP's (op.witnessDiverged:
+// it differs from the verified BP commitment, or there is no verified one) and
+// the import fails in a way the witness could have caused, the failure is
+// charged to the peer that served or pushed it: it is excluded as a source for
 // this block, and the block is handed back to the witness manager to fetch the
-// witness again from someone else (bounded by maxWitnessImportRetries). Without
-// this, a peer that relays the valid BP announce could serve up to the size
-// band in unusable bytes per block at no cost, and the block would simply be
-// forgotten. A BP-identical witness (hash match) that fails import is the BP's
-// fault and is handled as before: logged and forgotten.
+// witness again from someone else (bounded by maxWitnessImportRetries). The
+// peer is also struck only when its bytes contradict the verified BP commitment
+// and the witness alone decides the failure (chargeDivergedWitnessImportFailure).
+// Without this, one peer could make the node drop a valid block at no cost. A
+// BP-identical witness (hash match) that fails import is the BP's fault and is
+// handled as before: logged and forgotten.
 func (f *BlockFetcher) importBlocks(op *blockOrHeaderInject) {
 	block := op.block
 	hash := block.Hash()
@@ -1258,7 +1277,10 @@ func (f *BlockFetcher) importBlocks(op *blockOrHeaderInject) {
 			}
 			return
 		}
-		f.done <- hash
+		select {
+		case f.done <- hash:
+		case <-f.quit:
+		}
 	}()
 }
 
@@ -1291,14 +1313,13 @@ func (f *BlockFetcher) runBlockImport(op *blockOrHeaderInject) (retryWitness boo
 	default:
 		// Something went very wrong, drop the peer
 		log.Debug("Propagated block verification failed", "peer", peer, "number", block.Number(), "hash", hash, "err", err)
+		f.observeInvalidHeader(peer, err)
 		f.dropPeer(peer)
 
 		return false
 	}
 	// Run the actual import and log any issues
-	// Pass the witness along with the block to the insertion function.
-	// Create slices even for a single block/witness to match the expected signature.
-	if _, err := f.insertChain(types.Blocks{block}, []*stateless.Witness{witness}); err != nil {
+	if err := f.insertBlockWithRetry(op); err != nil {
 		log.Debug("Propagated block import failed", "peer", peer, "number", block.Number(), "hash", hash, "err", err)
 		return f.chargeDivergedWitnessImportFailure(op, err)
 	}
@@ -1419,4 +1440,26 @@ func (f *BlockFetcher) forgetBlock(hash common.Hash) {
 // GetWitnessManager returns the witness manager for external access
 func (f *BlockFetcher) GetWitnessManager() *witnessManager {
 	return f.wm
+}
+
+const (
+	stateSyncImportRetryDelay = 10 * time.Second
+	maxStateSyncImportRetries = 2
+)
+
+func (f *BlockFetcher) insertBlockWithRetry(op *blockOrHeaderInject) error {
+	for attempt := 0; ; attempt++ {
+		_, err := f.insertChain(types.Blocks{op.block}, []*stateless.Witness{op.witness})
+		if !errors.Is(err, core.ErrStateSyncProcessing) || isWitnessAttributableImportError(err) || attempt >= maxStateSyncImportRetries {
+			return err
+		}
+		log.Warn("Retrying block import after state-sync processing failure", "number", op.number(), "hash", op.hash(), "delay", stateSyncImportRetryDelay, "err", err)
+		timer := time.NewTimer(stateSyncImportRetryDelay)
+		select {
+		case <-timer.C:
+		case <-f.quit:
+			timer.Stop()
+			return fmt.Errorf("%w: %w", errTerminated, err)
+		}
+	}
 }

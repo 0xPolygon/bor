@@ -31,9 +31,11 @@ func Handler(reg metrics.Registry) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Gather and pre-sort the metrics to avoid random listings
 		var names []string
+		samples := make(map[string]interface{})
 
 		reg.Each(func(name string, i interface{}) {
 			names = append(names, name)
+			samples[name] = i
 		})
 		sort.Strings(names)
 
@@ -41,7 +43,7 @@ func Handler(reg metrics.Registry) http.Handler {
 		c := newCollector()
 
 		for _, name := range names {
-			i := reg.Get(name)
+			i := samples[name]
 			if err := c.Add(name, i); err != nil {
 				log.Warn("Unknown Prometheus metric type", "type", fmt.Sprintf("%T", i))
 			}

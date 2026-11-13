@@ -531,6 +531,24 @@ func TestVerifyAgainstSignedHashDoesNotStrikeOnWit1Path(t *testing.T) {
 	}
 }
 
+// TestVerifyAgainstSignedHashWit1PathIsUnproven: with no verified signed hash
+// on file (the tip case, where the announcement is still deferred) nothing binds
+// the bytes to the producer, so they are marked unproven: an import failure
+// they cause excludes the server and re-fetches, without striking it.
+func TestVerifyAgainstSignedHashWit1PathIsUnproven(t *testing.T) {
+	tw := newTestWitnessManager()
+	defer tw.Close()
+
+	block := createTestBlock(307)
+	tw.manager.parentSignedWitnessHash = func(common.Hash) (common.Hash, uint64, bool) {
+		return common.Hash{}, 0, false
+	}
+	body, _, provenance, ok := tw.manager.verifyAgainstSignedHash("wit1-peer", block.Hash(), createTestWitnessForBlock(block))
+	if !ok || body != nil || provenance != WitnessUnproven {
+		t.Fatalf("WIT1 path must accept for import, not serve, and mark the bytes unproven; got ok=%v body=%v provenance=%v", ok, body != nil, provenance)
+	}
+}
+
 // TestSignedHashSingleServerDoesNotQuarantine guards the asymmetry: many
 // mismatches from the SAME single server must never quarantine a signed hash —
 // otherwise one malicious byte-server could force every block it touches down
@@ -676,12 +694,12 @@ func TestVerifyAgainstSignedHashAcceptsDivergentHashWithinBand(t *testing.T) {
 	struck := 0
 	tw.manager.parentStrikeWitnessServer = func(string) { struck++ }
 
-	body, _, diverged, ok := tw.manager.verifyAgainstSignedHash("honest-diverging", hash, witness)
+	body, _, provenance, ok := tw.manager.verifyAgainstSignedHash("honest-diverging", hash, witness)
 	if !ok {
 		t.Fatal("a witness within the signed size band must be accepted for import despite a differing hash")
 	}
-	if !diverged {
-		t.Fatal("a within-band witness with a differing hash must be flagged diverged so an import failure is charged to the server")
+	if provenance != WitnessNotProducer {
+		t.Fatal("a within-band witness with a differing hash must be marked WitnessNotProducer so an import failure is charged to the server")
 	}
 	if body != nil {
 		t.Fatal("a non-identical within-band witness must import but NOT be cached for serving (body=nil), so the fast-path carries only the BP's bytes")
@@ -714,12 +732,12 @@ func TestVerifyAgainstSignedHashServesOnExactMatch(t *testing.T) {
 		return common.Hash{}, 0, false
 	}
 
-	body, gotHash, diverged, ok := tw.manager.verifyAgainstSignedHash("honest-matching", hash, witness)
+	body, gotHash, provenance, ok := tw.manager.verifyAgainstSignedHash("honest-matching", hash, witness)
 	if !ok {
 		t.Fatal("a byte-identical within-band witness must be accepted")
 	}
-	if diverged {
-		t.Fatal("a byte-identical witness must not be flagged diverged: an import failure of the BP's own bytes is the BP's fault, not the server's")
+	if provenance != WitnessFromProducer {
+		t.Fatal("a byte-identical witness must be marked WitnessFromProducer: an import failure of the BP's own bytes is the BP's fault, not the server's")
 	}
 	if body == nil {
 		t.Fatal("a byte-identical witness must return canonical bytes for the serving cache")
@@ -778,9 +796,9 @@ func TestVerifyAgainstSignedHashWithoutLookupIsWit1(t *testing.T) {
 	tw.manager.parentSignedWitnessHash = nil
 
 	block := createTestBlock(310)
-	body, gotHash, diverged, ok := tw.manager.verifyAgainstSignedHash("peer", block.Hash(), createTestWitnessForBlock(block))
-	if !ok || body != nil || gotHash != (common.Hash{}) || diverged {
-		t.Fatalf("WIT1-only path must return (nil, zero, false, true); got body=%v hash=%s diverged=%v ok=%v", body != nil, gotHash.Hex(), diverged, ok)
+	body, gotHash, provenance, ok := tw.manager.verifyAgainstSignedHash("peer", block.Hash(), createTestWitnessForBlock(block))
+	if !ok || body != nil || gotHash != (common.Hash{}) || provenance != WitnessFromProducer {
+		t.Fatalf("WIT1-only path must return (nil, zero, WitnessFromProducer, true); got body=%v hash=%s provenance=%v ok=%v", body != nil, gotHash.Hex(), provenance, ok)
 	}
 }
 
@@ -816,9 +834,9 @@ func TestVerifyAgainstSignedHashDivergentInBandKeepsMismatchState(t *testing.T) 
 	if q, _ := tw.manager.recordSignedHashMismatch(hash, "oversizer-A"); q {
 		t.Fatal("one oversizing server must not quarantine")
 	}
-	body, _, diverged, ok := tw.manager.verifyAgainstSignedHash("peerX", hash, witness)
-	if !ok || !diverged || body != nil {
-		t.Fatalf("in-band divergent body: ok=%v diverged=%v body=%v, want accepted, diverged, no serving bytes", ok, diverged, body != nil)
+	body, _, provenance, ok := tw.manager.verifyAgainstSignedHash("peerX", hash, witness)
+	if !ok || provenance != WitnessNotProducer || body != nil {
+		t.Fatalf("in-band divergent body: ok=%v provenance=%v body=%v, want accepted, WitnessNotProducer, no serving bytes", ok, provenance, body != nil)
 	}
 	if q, _ := tw.manager.recordSignedHashMismatch(hash, "oversizer-B"); !q {
 		t.Fatal("a divergent in-band acceptance reset the distinct-server oversize count; only BP-identical bytes may clear it")
@@ -830,9 +848,9 @@ func TestVerifyAgainstSignedHashDivergentInBandKeepsMismatchState(t *testing.T) 
 	if q, _ := tw.manager.recordSignedHashMismatch(hash, "oversizer-A"); q {
 		t.Fatal("one oversizing server must not quarantine")
 	}
-	body, got, diverged, ok := tw.manager.verifyAgainstSignedHash("peerY", hash, witness)
-	if !ok || diverged || body == nil || got != actual {
-		t.Fatalf("BP-identical body: ok=%v diverged=%v body=%v hash=%s, want accepted, not diverged, serving bytes", ok, diverged, body != nil, got)
+	body, got, provenance, ok := tw.manager.verifyAgainstSignedHash("peerY", hash, witness)
+	if !ok || provenance != WitnessFromProducer || body == nil || got != actual {
+		t.Fatalf("BP-identical body: ok=%v provenance=%v body=%v hash=%s, want accepted, WitnessFromProducer, serving bytes", ok, provenance, body != nil, got)
 	}
 	if q, _ := tw.manager.recordSignedHashMismatch(hash, "oversizer-B"); q {
 		t.Fatal("BP-identical bytes must clear earlier oversize noise; second server must start a fresh count")

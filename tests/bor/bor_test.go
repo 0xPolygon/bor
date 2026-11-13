@@ -488,6 +488,8 @@ func TestFetchStateSyncEvents_PreMadhugiriHF(t *testing.T) {
 	eventRecords := generateFakeStateSyncEvents(sample, eventCount)
 
 	h.EXPECT().StateSyncEvents(gomock.Any(), fromID, to).Return(eventRecords, nil).AnyTimes()
+	// Every record was admitted, so CommitStates asks for the next page and finds it empty.
+	h.EXPECT().StateSyncEvents(gomock.Any(), fromID+uint64(eventCount), to).Return(nil, nil).AnyTimes()
 	h.EXPECT().GetLatestSpan(gomock.Any()).Return(nil, fmt.Errorf("span not found")).AnyTimes()
 	_bor.SetHeimdallClient(h)
 
@@ -574,6 +576,8 @@ func TestFetchStateSyncEvents_PostMadhugiriHF(t *testing.T) {
 	eventRecords := generateFakeStateSyncEvents(sample, eventCount)
 
 	h.EXPECT().StateSyncEvents(gomock.Any(), fromID, to).Return(eventRecords, nil).AnyTimes()
+	// Every record was admitted, so CommitStates asks for the next page and finds it empty.
+	h.EXPECT().StateSyncEvents(gomock.Any(), fromID+uint64(eventCount), to).Return(nil, nil).AnyTimes()
 	h.EXPECT().GetLatestSpan(gomock.Any()).Return(nil, fmt.Errorf("span not found")).AnyTimes()
 	_bor.SetHeimdallClient(h)
 
@@ -756,7 +760,7 @@ func TestStateSyncTracing_LiveTracerDoesNotPanic(t *testing.T) {
 		gen.Config.Bor.Sprint = map[string]uint64{"0": sprintSize}
 		gen.Config.Bor.MadhugiriBlock = big.NewInt(0) // Madhugiri from genesis.
 	}
-	init := buildEthereumInstanceWithVMTrace(t, rawdb.NewMemoryDatabase(), tracerName, updateGenesis)
+	init := buildEthereumInstanceWithConfig(t, rawdb.NewMemoryDatabase(), eth.Config{VMTrace: tracerName}, updateGenesis)
 	chain := init.ethereum.BlockChain()
 	engine := init.ethereum.Engine()
 	_bor := engine.(*bor.Bor)
@@ -784,6 +788,8 @@ func TestStateSyncTracing_LiveTracerDoesNotPanic(t *testing.T) {
 	eventRecords := generateFakeStateSyncEvents(sample, eventCount)
 
 	h.EXPECT().StateSyncEvents(gomock.Any(), fromID, to).Return(eventRecords, nil).AnyTimes()
+	// Every record was admitted, so CommitStates asks for the next page and finds it empty.
+	h.EXPECT().StateSyncEvents(gomock.Any(), fromID+uint64(eventCount), to).Return(nil, nil).AnyTimes()
 	h.EXPECT().GetLatestSpan(gomock.Any()).Return(nil, fmt.Errorf("span not found")).AnyTimes()
 	_bor.SetHeimdallClient(h)
 
@@ -959,6 +965,8 @@ func TestFetchStateSyncEvents_2(t *testing.T) {
 		buildStateEvent(sample, 6, 4),
 	}
 	h.EXPECT().StateSyncEvents(gomock.Any(), fromID, to).Return(eventRecords, nil).AnyTimes()
+	// Both records were admitted, so CommitStates asks for the next page and finds it empty.
+	h.EXPECT().StateSyncEvents(gomock.Any(), uint64(7), to).Return(nil, nil).AnyTimes()
 
 	for i := sprintSize + 1; i <= spanSize; i++ {
 		// Update the validator set at the end of span and update the respective mocks
@@ -2089,32 +2097,27 @@ func TestEarlyBlockAnnouncementPostBhilai_NonPrimary(t *testing.T) {
 		gen.Config.Bor.IndoreBlock = common.Big0
 		gen.Config.Bor.BhilaiBlock = common.Big0
 	}
-	init := buildEthereumInstance(t, rawdb.NewMemoryDatabase(), updateGenesis)
+	// Supply Heimdall before node construction: the miner prepares pending work
+	// during startup and can otherwise wait on the unconfigured HTTP client.
+	res1 := loadSpanFromFile(t)
+	res1.StartBlock = 0
+	res1.EndBlock = 255
+	res2 := loadSpanFromFile(t)
+	ctrl := gomock.NewController(t)
+	h := createMockHeimdall(ctrl, res1, res2)
+	h.EXPECT().StateSyncEvents(gomock.Any(), gomock.Any(), gomock.Any()).
+		Return([]*clerk.EventRecordWithTime{getSampleEventRecord(t)}, nil).AnyTimes()
+	init := buildEthereumInstanceWithConfig(t, rawdb.NewMemoryDatabase(), eth.Config{OverrideHeimdallClient: h}, updateGenesis)
 
 	chain := init.ethereum.BlockChain()
 	engine := init.ethereum.Engine()
 	_bor := engine.(*bor.Bor)
 	defer _bor.Close()
 
-	// Use 3 validators from the start to allow out-of-turn block production
-	res1 := loadSpanFromFile(t)
-	res1.StartBlock = 0
-	res1.EndBlock = 255
-	res2 := loadSpanFromFile(t)
-
-	// key2 and addr2 belong to the primary validator, authorize consensus to sign messages
-	engine.(*bor.Bor).Authorize(addr2, func(account accounts.Account, s string, data []byte) ([]byte, error) {
+	// key2 and addr2 belong to the primary validator.
+	_bor.Authorize(addr2, func(account accounts.Account, s string, data []byte) ([]byte, error) {
 		return crypto.Sign(crypto.Keccak256(data), key2)
 	})
-
-	// Create mock heimdall client
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	h := createMockHeimdall(ctrl, res1, res2)
-	h.EXPECT().StateSyncEvents(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return([]*clerk.EventRecordWithTime{getSampleEventRecord(t)}, nil).AnyTimes()
-	_bor.SetHeimdallClient(h)
 
 	block := init.genesis.ToBlock()
 	currentValidators := res1.ValidatorSet.Validators

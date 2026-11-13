@@ -1,6 +1,8 @@
 package stateless
 
 import (
+	"errors"
+	"fmt"
 	"math/big"
 	"sync"
 	"testing"
@@ -1109,4 +1111,56 @@ func containsSubstring(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// TestValidateWitnessPreState_ErrInvalidWitness pins which failures are tagged
+// ErrInvalidWitness: those the witness bytes caused are, so the fetcher can
+// charge the serving peer; those that depend on local state are not, so an
+// honest peer is never struck for them. Messages stay unchanged.
+func TestValidateWitnessPreState_ErrInvalidWitness(t *testing.T) {
+	mutations := map[string]func(w *Witness, expected *types.Header){
+		"NoHeaders":          func(w *Witness, _ *types.Header) { w.Headers = nil },
+		"InvalidNumber":      func(w *Witness, _ *types.Header) { w.context.Number = big.NewInt(0) },
+		"ParentHashMismatch": func(_ *Witness, e *types.Header) { e.ParentHash = common.HexToHash("0xdead") },
+		"NumberMismatch":     func(_ *Witness, e *types.Header) { e.Number = big.NewInt(999) },
+		"PreStateRootMismatch": func(w *Witness, _ *types.Header) {
+			forged := types.CopyHeader(w.Headers[0])
+			forged.Root = common.HexToHash("0xdeadbeef")
+			w.Headers[0] = forged
+		},
+	}
+	for name, mutate := range mutations {
+		t.Run(name, func(t *testing.T) {
+			witness, reader, expected := makeValidatePreStateFixture()
+			mutate(witness, expected)
+			err := ValidateWitnessPreState(witness, reader, expected)
+			if !errors.Is(err, ErrInvalidWitness) {
+				t.Fatalf("expected ErrInvalidWitness, got %v", err)
+			}
+			if wrapped := fmt.Errorf("witness validation failed: %w", err); !errors.Is(wrapped, ErrInvalidWitness) {
+				t.Fatalf("ErrInvalidWitness lost through wrapping: %v", wrapped)
+			}
+		})
+	}
+	t.Run("PreStateRootMismatchKeepsMessage", func(t *testing.T) {
+		witness, reader, expected := makeValidatePreStateFixture()
+		witness.Headers[0] = &types.Header{Number: big.NewInt(99), Root: common.HexToHash("0xdeadbeef")}
+		err := ValidateWitnessPreState(witness, reader, expected)
+		if err == nil || !containsSubstring(err.Error(), "witness pre-state root mismatch") {
+			t.Fatalf("expected pre-state root mismatch message, got %v", err)
+		}
+	})
+
+	// Local-state failures must not match.
+	if err := ValidateWitnessPreState(nil, NewMockHeaderReader(), nil); errors.Is(err, ErrInvalidWitness) {
+		t.Fatalf("nil witness is a local error, got %v", err)
+	}
+	witness, _, expected := makeValidatePreStateFixture()
+	if err := ValidateWitnessPreState(witness, NewMockHeaderReader(), expected); err == nil || errors.Is(err, ErrInvalidWitness) {
+		t.Fatalf("missing local parent header is a local error, got %v", err)
+	}
+	witness, reader, _ := makeValidatePreStateFixture()
+	if err := ValidateWitnessPreState(witness, reader, &types.Header{}); err == nil || errors.Is(err, ErrInvalidWitness) {
+		t.Fatalf("nil expected block number is a local error, got %v", err)
+	}
 }

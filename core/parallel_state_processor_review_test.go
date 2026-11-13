@@ -13,6 +13,8 @@ import (
 	"github.com/holiman/uint256"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus"
+	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core/blockstm"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
@@ -401,7 +403,7 @@ func TestV2StateProcessor_PanickedTxFailsBlock(t *testing.T) {
 	defer finalDB.StopPrefetcher()
 
 	result := ExecuteV2BlockSTM(context.Background(), tasks, base, store, bals, blockCtx, common.Hash{}, cfg, chainConfig,
-		blockCtx.GasLimit, 1, finalDB, nil)
+		blockCtx.GasLimit, 1, finalDB, nil, nil)
 
 	if result.PanickedIdx != 0 {
 		t.Fatalf("expected PanickedIdx=0, got %d", result.PanickedIdx)
@@ -480,7 +482,7 @@ func TestV2ApplyMessage_FirstIncarnationPanicLogsDebug(t *testing.T) {
 
 	_ = ExecuteV2BlockSTM(context.Background(), tasks, base,
 		blockstm.NewMVStore(), blockstm.NewMVBalanceStore(),
-		blockCtx, common.Hash{}, cfg, chainConfig, blockCtx.GasLimit, 1, finalDB, nil)
+		blockCtx, common.Hash{}, cfg, chainConfig, blockCtx.GasLimit, 1, finalDB, nil, nil)
 
 	var debug, errs int
 	for _, r := range h.records {
@@ -566,7 +568,7 @@ func TestV2StateProcessor_ProducesWitness(t *testing.T) {
 	defer finalDB.StopPrefetcher()
 
 	result := ExecuteV2BlockSTM(context.Background(), tasks, base, store, bals, blockCtx, common.Hash{}, vm.Config{}, chainConfig,
-		blockCtx.GasLimit, 1, finalDB, nil)
+		blockCtx.GasLimit, 1, finalDB, nil, nil)
 
 	if result.ExecErrIdx >= 0 {
 		t.Fatalf("V2 returned error: %v", result.ExecErr)
@@ -651,7 +653,7 @@ func TestExecuteV2BlockSTM_MidFlightCancellation(t *testing.T) {
 	go func() {
 		defer close(done)
 		_ = ExecuteV2BlockSTM(ctx, tasks, base, store, bals, blockCtx, common.Hash{}, vm.Config{}, chainConfig,
-			blockCtx.GasLimit, 4, finalDB, nil)
+			blockCtx.GasLimit, 4, finalDB, nil, nil)
 	}()
 
 	select {
@@ -723,7 +725,7 @@ func TestExecuteV2BlockSTM_HonoursCancellation(t *testing.T) {
 	bals := blockstm.NewMVBalanceStore()
 	start := time.Now()
 	result := ExecuteV2BlockSTM(ctx, tasks, base, store, bals, blockCtx, common.Hash{}, vm.Config{}, chainConfig,
-		blockCtx.GasLimit, 1, finalDB, nil)
+		blockCtx.GasLimit, 1, finalDB, nil, nil)
 	elapsed := time.Since(start)
 
 	// We don't assert the result is empty — workers may have started before the
@@ -819,7 +821,7 @@ func TestV2StateProcessor_ReceiptHasBlockHash(t *testing.T) {
 	defer finalDB.StopPrefetcher()
 
 	result := ExecuteV2BlockSTM(context.Background(), tasks, base, store, bals, blockCtx, blockHash, vm.Config{}, chainConfig,
-		blockCtx.GasLimit, 1, finalDB, nil)
+		blockCtx.GasLimit, 1, finalDB, nil, nil)
 
 	if len(result.Receipts) != 1 {
 		t.Fatalf("expected 1 receipt, got %d", len(result.Receipts))
@@ -888,7 +890,7 @@ func TestV2StateProcessor_ApplyMessageErrorFailsBlock(t *testing.T) {
 	defer finalDB.StopPrefetcher()
 
 	result := ExecuteV2BlockSTM(context.Background(), tasks, base, store, bals, blockCtx, common.Hash{}, vm.Config{}, chainConfig,
-		blockCtx.GasLimit, 1, finalDB, nil)
+		blockCtx.GasLimit, 1, finalDB, nil, nil)
 
 	if result.ExecErrIdx != 0 {
 		t.Fatalf("expected ExecErrIdx=0, got %d", result.ExecErrIdx)
@@ -904,5 +906,27 @@ func TestV2StateProcessor_ApplyMessageErrorFailsBlock(t *testing.T) {
 	}
 	if result.GasUsed != 0 {
 		t.Fatalf("expected 0 gas used after consensus error, got %d", result.GasUsed)
+	}
+}
+
+type receiptMismatchFinalizer struct{ consensus.Engine }
+
+func (*receiptMismatchFinalizer) Finalize(consensus.ChainHeaderReader, *types.Header, vm.StateDB, *types.Body, []*types.Receipt) ([]*types.Receipt, error) {
+	return []*types.Receipt{{}}, nil
+}
+
+func TestV2ReceiptCountMismatch(t *testing.T) {
+	config := *params.TestChainConfig
+	config.Bor = &params.BorConfig{MadhugiriBlock: big.NewInt(0)}
+	chain := &HeaderChain{config: &config, engine: &receiptMismatchFinalizer{ethash.NewFaker()}}
+	statedb, err := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer statedb.StopPrefetcher()
+	block := types.NewBlockWithHeader(&types.Header{Number: big.NewInt(1), Difficulty: big.NewInt(1), BaseFee: big.NewInt(1), GasLimit: 30_000_000})
+	result, err := NewV2StateProcessor(chain, nil, 1).Process(block, statedb, vm.Config{}, nil, t.Context())
+	if result != nil || !errors.Is(err, ErrStateSyncMismatch) || errors.Is(err, ErrStateSyncProcessing) {
+		t.Fatalf("receipt mismatch was not rejected as invalid data: result=%v err=%v", result, err)
 	}
 }

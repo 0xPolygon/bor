@@ -23,6 +23,7 @@ import (
 	"math/big"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/holiman/uint256"
@@ -586,6 +587,11 @@ type v2Env struct {
 	jumpDests vm.JumpDestCache
 	safeBase  *state.SafeBase             // shared across all workers (with read cache)
 	recycleCh chan *state.ParallelStateDB // pool of reusable PDBs
+	// interrupt stops every in-flight EVM at its next opcode once the
+	// executor's context is done; the executor alone only notices
+	// cancellation between transactions.
+	interrupt   atomic.Bool
+	writeBudget *blockstm.WriteBudget // nil means unbounded
 }
 
 func (e *v2Env) BaseNonce(addr common.Address) uint64 {
@@ -627,8 +633,10 @@ func (e *v2Env) Execute(task blockstm.V2Task, workerID int, incarnation int,
 		evm.SetJumpDestCache(e.jumpDests)
 	}
 	evm.SetTxContext(NewEVMTxContext(t.msg))
+	evm.SetInterrupt(&e.interrupt)
 
 	e.applyMessage(t, evm, pdb)
+	pdb.ChargePendingWrites()
 	return pdb
 }
 
@@ -662,6 +670,7 @@ func (e *v2Env) preparePDB(t *v2Task, incarnation int, senderNonces map[common.A
 		pdb.FeeLogFn = nil
 	}
 	pdb.DeferMVWrites = deferWrites
+	pdb.WriteBudget = e.writeBudget
 	pdb.EnableReadTracking()
 	return pdb
 }
@@ -741,6 +750,9 @@ type V2ExecutionResult struct {
 //
 // If tasks[i].Msg is nil, TransactionToMessage is called in parallel
 // (signature recovery across all txs concurrently).
+//
+// writeBudget, if non-nil, is shared by every incarnation. Once ctx is done,
+// in-flight EVMs are interrupted and the result must be discarded.
 func ExecuteV2BlockSTM(
 	ctx context.Context,
 	tasks []V2Task,
@@ -755,6 +767,7 @@ func ExecuteV2BlockSTM(
 	numWorkers int,
 	finalDB *state.StateDB,
 	conflictAddrs map[common.Address]bool,
+	writeBudget *blockstm.WriteBudget,
 ) *V2ExecutionResult {
 	if idx, err := recoverTaskMessages(tasks, chainConfig, blockCtx); err != nil {
 		return &V2ExecutionResult{
@@ -791,6 +804,9 @@ func ExecuteV2BlockSTM(
 	}
 
 	env := newV2Env(base, store, bals, blockCtx, vmConfig, chainConfig, gasLimit, numWorkers)
+	env.writeBudget = writeBudget
+	stopInterrupt := context.AfterFunc(ctx, func() { env.interrupt.Store(true) })
+	defer stopInterrupt()
 
 	var receipts types.Receipts
 	var allLogs []*types.Log
@@ -1048,6 +1064,48 @@ func buildV2Receipt(tx *types.Transaction, pdb *state.ParallelStateDB, msg *Mess
 // V2StateProcessor implements the Processor interface for production use.
 // ---------------------------------------------------------------------------
 
+// errV2WriteBudgetExhausted reports that speculative incarnations journaled
+// more writes than v2WriteLimit allows. The block may still be valid; the
+// caller must re-run it serially.
+var errV2WriteBudgetExhausted = errors.New("v2: speculative write budget exhausted")
+
+// v2WriteLimit bounds the entries all V2 incarnations of a block may charge
+// (see ParallelStateDB.WriteBudget). The densest canonical execution repeats a
+// warm call that runs no code, e.g. a STATICCALL to an absent account or a
+// CALL to a contract that stops: about 115 gas for 8 entries, one per 15 gas
+// (TestV2WriteDensityStaysUnderLimit). Refunds don't raise that per unit of
+// header gas, since every refunded unit was first spent on SSTOREs that charge
+// almost nothing. gasUsed/4 thus leaves canonical execution at least 3.5x
+// headroom for re-executions, and bounds what V2 retains, about 128 bytes per
+// entry, by the block's gas. Running past it only costs a serial re-run.
+func v2WriteLimit(gasUsed uint64) int64 {
+	return int64(gasUsed / 4)
+}
+
+// executeWithWriteBudget runs the block's tasks with a write budget sized from
+// the block's gas used. It returns an error, and the result must be discarded,
+// when execution was cut short: some incarnations were then interrupted mid-tx
+// and finalDB may hold their partial effects.
+func (p *V2StateProcessor) executeWithWriteBudget(ctx context.Context, block *types.Block, tasks []V2Task,
+	readBase *state.StateDB, store *blockstm.MVStore, bals *blockstm.MVBalanceStore, blockCtx vm.BlockContext,
+	cfg vm.Config, config *params.ChainConfig, finalDB *state.StateDB) (*V2ExecutionResult, error) {
+	execCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	budget := blockstm.NewWriteBudget(p.writeLimit(block.GasUsed()), cancel)
+	result := ExecuteV2BlockSTM(execCtx, tasks, readBase, store, bals, blockCtx, block.Hash(), cfg, config,
+		block.GasLimit(), p.numWorkers, finalDB, p.conflictAddrs, budget)
+	p.conflictAddrs = collectVFailToAddrs(tasks, result.VFailIdxs)
+
+	if budget.Exhausted() {
+		return nil, errV2WriteBudgetExhausted
+	}
+	if err := execCtx.Err(); err != nil {
+		return nil, fmt.Errorf("v2: execution interrupted: %w", err)
+	}
+	return result, nil
+}
+
 // V2StateProcessor processes blocks using V2 BlockSTM parallel execution.
 type V2StateProcessor struct {
 	chain      ChainContext
@@ -1056,6 +1114,7 @@ type V2StateProcessor struct {
 	// conflictAddrs tracks To addresses that caused validation failures in
 	// recent blocks. Used to chain cross-contract txs that share indirect state.
 	conflictAddrs map[common.Address]bool
+	writeLimit    func(gasUsed uint64) int64
 }
 
 // NewV2StateProcessor creates a new V2 parallel state processor.
@@ -1073,6 +1132,7 @@ func NewV2StateProcessor(chain ChainContext, bc *BlockChain, numWorkers int) *V2
 		chain:      chain,
 		bc:         bc,
 		numWorkers: numWorkers,
+		writeLimit: v2WriteLimit,
 	}
 }
 
@@ -1130,11 +1190,11 @@ func (p *V2StateProcessor) Process(block *types.Block, statedb *state.StateDB, c
 
 	tCopy := time.Now()
 
-	result := ExecuteV2BlockSTM(interruptCtx, tasks, readBase, store, bals, blockCtx, block.Hash(), cfg, config,
-		block.GasLimit(), p.numWorkers, finalDB, p.conflictAddrs)
-
+	result, err := p.executeWithWriteBudget(interruptCtx, block, tasks, readBase, store, bals, blockCtx, cfg, config, finalDB)
+	if err != nil {
+		return nil, err
+	}
 	tExec := time.Now()
-	p.conflictAddrs = collectVFailToAddrs(tasks, result.VFailIdxs)
 
 	// Refuse to commit a partially-applied block: a panicked PDB had its
 	// settle skipped, so finalDB is missing that tx's effects. Returning an
@@ -1197,7 +1257,7 @@ func (p *V2StateProcessor) finalizeV2Block(block *types.Block, statedb *state.St
 	allLogs := result.Logs
 	if config.Bor != nil && config.Bor.IsMadhugiri(block.Number()) {
 		if len(block.Transactions()) != len(receipts) {
-			return nil, fmt.Errorf("err in bor.Finalize: %w", ErrStateSyncProcessing)
+			return nil, fmt.Errorf("%w: receipt count mismatch, txs=%d receipts=%d", ErrStateSyncMismatch, len(block.Transactions()), len(receipts))
 		}
 		if receiptsCountBeforeFinalize+1 == len(receipts) {
 			allLogs = append(allLogs, receipts[len(receipts)-1].Logs...)

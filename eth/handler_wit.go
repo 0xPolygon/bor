@@ -10,6 +10,7 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/stateless"
+	"github.com/ethereum/go-ethereum/eth/fetcher"
 	"github.com/ethereum/go-ethereum/eth/protocols/wit"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/enode"
@@ -107,14 +108,22 @@ func (h *witHandler) handleWitnessBroadcast(peer *wit.Peer, witness *stateless.W
 		return nil
 	}
 
-	// diverged: accepted on the size oracle alone (hash differs from the
-	// BP-signed one); carried into the fetcher so an import failure is charged
-	// to this pusher, as it is to a serving peer on the paged-fetch path.
-	var accepted, diverged bool
+	// provenance: who chose the pushed bytes, carried into the fetcher so an
+	// import failure is charged to this pusher as it is to a serving peer on
+	// the paged-fetch path. Only bytes that contradict a verified BP-signed
+	// commitment are WitnessNotProducer; a deferred or missing commitment
+	// leaves them unproven (they may be the BP's, relayed by an honest peer).
+	var accepted bool
+	provenance := fetcher.WitnessUnproven
 	if signed, hasSigned := hh.signedWitnesses.get(hash); hasSigned {
+		var diverged bool
 		accepted, diverged = h.acceptSignedBroadcast(peer, witness, hash, signed)
+		provenance = fetcher.WitnessFromProducer
+		if diverged {
+			provenance = fetcher.WitnessNotProducer
+		}
 	} else if hh.deferredAnnounces.has(hash) {
-		accepted, diverged = h.acceptDeferredBroadcast(peer, witness, hash)
+		accepted, _ = h.acceptDeferredBroadcast(peer, witness, hash)
 	} else {
 		accepted = h.acceptUnsignedBroadcast(peer, hash)
 	}
@@ -125,9 +134,9 @@ func (h *witHandler) handleWitnessBroadcast(peer *wit.Peer, witness *stateless.W
 
 	// Inject the witness into the block fetcher's cache
 	if h.blockFetcher != nil {
-		log.Debug("Injecting witness into block fetcher", "hash", hash, "peer", peer.ID(), "number", witness.Header().Number, "diverged", diverged)
+		log.Debug("Injecting witness into block fetcher", "hash", hash, "peer", peer.ID(), "number", witness.Header().Number, "provenance", provenance)
 
-		if err := h.blockFetcher.InjectWitness(peer.ID(), witness, diverged); err != nil {
+		if err := h.blockFetcher.InjectWitness(peer.ID(), witness, provenance); err != nil {
 			peer.Log().Warn("Failed to inject broadcast witness into fetcher", "hash", hash, "err", err)
 			// Don't return error, just log, as block might still be importable via other means
 		}
@@ -217,8 +226,12 @@ func (h *witHandler) acceptSignedBroadcast(peer *wit.Peer, witness *stateless.Wi
 // against the header embedded in the pushed witness instead would let a peer
 // self-seal a fabricated header and pass its own announce as the producer's.
 //
-// diverged reports a body accepted on the size band alone (no candidate's hash
-// matched), so the fetcher can charge an import failure to the pusher.
+// diverged is always true here: a deferred candidate's signer is not yet bound
+// to the scheduled producer, so a hash match only shows the body matches some
+// signed commitment, which any peer can create with its own key. The bytes are
+// the pusher's choice, and the fetcher must be able to charge an import failure
+// to the pusher (chargeDivergedWitnessImportFailure) whether or not the hash
+// matched.
 func (h *witHandler) acceptDeferredBroadcast(peer *wit.Peer, witness *stateless.Witness, hash common.Hash) (accepted bool, diverged bool) {
 	bodyBytes, ok := encodedBroadcastBytes(peer, witness, hash)
 	if !ok {
@@ -242,7 +255,7 @@ func (h *witHandler) acceptDeferredBroadcast(peer *wit.Peer, witness *stateless.
 	}
 	peer.AddKnownWitness(hash)
 	wit2BroadcastDeferredImportMeter.Mark(1)
-	return true, !hashMatch
+	return true, true
 }
 
 // acceptUnsignedBroadcast is the WIT1 fallback with no signed announcement on
@@ -370,7 +383,7 @@ func (h *witHandler) acceptSignedAnnouncement(peer *wit.Peer, ann wit.SignedWitn
 	if !headerAvailable {
 		peer.Log().Debug("wit2: header not yet local for announced block; deferring announce",
 			"blockHash", ann.BlockHash, "blockNumber", ann.BlockNumber)
-		(*handler)(h).deferredAnnounces.put(ann, peer.ID())
+		(*handler)(h).deferredAnnounces.putObserved(ann, peer.ID(), peer.Observer())
 		return false
 	}
 	wit2NotValidatorMeter.Mark(1)

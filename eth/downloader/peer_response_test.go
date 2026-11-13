@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/downloader/whitelist"
@@ -41,6 +42,11 @@ func TestClassifySyncFailureReasons(t *testing.T) {
 		reason peerFailureReason
 		ok     bool
 	}{
+		{name: "local state sync failure", err: core.ErrStateSyncProcessing},
+		{name: "unavailable witnesses", err: fmt.Errorf("fetch: %w", ErrWitnessUnavailable)},
+		{name: "wrapped local state sync failure", err: fmt.Errorf("%w: %w", errInvalidChain, core.ErrStateSyncProcessing)},
+		{name: "local state sync deadline", err: fmt.Errorf("%w: %w: %w", errInvalidChain, core.ErrStateSyncProcessing, context.DeadlineExceeded)},
+		{name: "state sync mismatch", err: fmt.Errorf("%w: %w", errInvalidChain, core.ErrStateSyncMismatch), reason: peerFailureInvalidChain, ok: true},
 		{name: "invalid chain", err: errInvalidChain, reason: peerFailureInvalidChain, ok: true},
 		{name: "pruned sidechain", err: fmt.Errorf("%w: %w", errInvalidChain, errors.New(sidechainGhostStateMsg)), reason: peerFailurePrunedSidechain, ok: true},
 		{name: "bad peer", err: errBadPeer, reason: peerFailureBadPeer, ok: true},
@@ -506,14 +512,14 @@ func TestBackoffEscalatesToJailAfterRepeatStrikes(t *testing.T) {
 	}
 
 	for i := 0; i < softFailureJailThreshold-1; i++ {
-		d.respondToPeer(peer, peerFailureTimeout, errTimeout)
+		d.respondToPeer(peer, peerFailureStalling, errStallingPeer)
 		if remaining := peer.backoffRemaining(); remaining > peerSoftBackoff {
 			t.Fatalf("soft strike %d should stay within soft backoff: have %v, want <= %v", i+1, remaining, peerSoftBackoff)
 		}
 		clearPeerBackoff(peer)
 	}
 
-	d.respondToPeer(peer, peerFailureTimeout, errTimeout)
+	d.respondToPeer(peer, peerFailureStalling, errStallingPeer)
 	if remaining := peer.backoffRemaining(); remaining <= peerSoftBackoff {
 		t.Fatalf("the escalating strike should jail the peer: have %v, want > %v", remaining, peerSoftBackoff)
 	}
@@ -560,10 +566,10 @@ func TestBackoffSoftFailureDedupsWhileBenched(t *testing.T) {
 		t.Fatalf("failed to register peer: %v", err)
 	}
 
-	if penalized, _ := ps.backoffSoftFailure(peer); !penalized {
+	if penalized, _ := ps.backoffSoftFailure(peer, peerFailureStalling); !penalized {
 		t.Fatal("the first soft failure should penalize the peer")
 	}
-	if penalized, _ := ps.backoffSoftFailure(peer); penalized {
+	if penalized, _ := ps.backoffSoftFailure(peer, peerFailureStalling); penalized {
 		t.Fatal("a peer already benched must not be penalized again for a concurrent failure")
 	}
 	if got := ps.softStrikes[peer.id].count; got != 1 {
