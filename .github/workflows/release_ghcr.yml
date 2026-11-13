@@ -3,19 +3,17 @@ name: Release GHCR
 on:
   push:
     branches-ignore:
-      - "**"
+      - '**'
     tags:
-      - "v*.*.*"
-      - "v*.*.*-*"
+      - 'v*.*.*'
+      - 'v*.*.*-*'
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: 0xpolygon/bor-private
-  RELEASE_TAG: ${{ github.ref_name }}
+  IMAGE_NAME: 0xpolygon/bor
 
 jobs:
   build-and-push-image:
-    environment: private-release
     runs-on: ubuntu24.04-16core-64GB-600SSD-bor
     permissions:
       contents: read
@@ -32,16 +30,6 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Validate release tag
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
-            echo "Invalid release tag"
-            exit 1
-          fi
 
       - name: Log in to the Container registry
         uses: docker/login-action@v3
@@ -76,159 +64,61 @@ jobs:
           push-to-registry: true
 
       - name: Export amd64 Docker image as tar.gz
-        shell: bash
         run: |
-          set -euo pipefail
-
-          docker pull --platform linux/amd64 "${REGISTRY}/${IMAGE_NAME}:${RELEASE_TAG}"
-          docker tag "${REGISTRY}/${IMAGE_NAME}:${RELEASE_TAG}" "bor:${RELEASE_TAG}"
-          docker save "bor:${RELEASE_TAG}" | gzip > "bor-${RELEASE_TAG}-amd64.tar.gz"
+          docker pull --platform linux/amd64 ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+          docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }} bor:${{ github.ref_name }}
+          docker save bor:${{ github.ref_name }} | gzip > bor-${{ github.ref_name }}-amd64.tar.gz
 
       - name: Export arm64 Docker image as tar.gz
-        shell: bash
         run: |
-          set -euo pipefail
-
-          docker pull --platform linux/arm64 "${REGISTRY}/${IMAGE_NAME}:${RELEASE_TAG}"
-          docker tag "${REGISTRY}/${IMAGE_NAME}:${RELEASE_TAG}" "bor:${RELEASE_TAG}"
-          docker save "bor:${RELEASE_TAG}" | gzip > "bor-${RELEASE_TAG}-arm64.tar.gz"
+          docker pull --platform linux/arm64 ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+          docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }} bor:${{ github.ref_name }}
+          docker save bor:${{ github.ref_name }} | gzip > bor-${{ github.ref_name }}-arm64.tar.gz
 
       - name: Checksum exported Docker images
-        shell: bash
         run: |
-          set -euo pipefail
-
-          for file in \
-            "bor-${RELEASE_TAG}-amd64.tar.gz" \
-            "bor-${RELEASE_TAG}-arm64.tar.gz"
-          do
+          for file in bor-${{ github.ref_name }}-*.tar.gz; do
             sha256sum "$file" > "$file.checksum"
           done
 
-      - name: Create and sign Docker checksum manifest
-        shell: bash
-        env:
-          GPG_PRIVATE_KEY_B64: ${{ secrets.PRIVATE_RELEASE_GPG_KEY_B64 }}
-          GPG_PASSPHRASE: ${{ secrets.PRIVATE_RELEASE_GPG_PASSPHRASE }}
-          EXPECTED_PRIMARY_FINGERPRINT: ${{ vars.PRIVATE_RELEASE_GPG_FINGERPRINT }}
-          EXPECTED_SIGNING_FINGERPRINT: ${{ vars.PRIVATE_RELEASE_SIGNING_SUBKEY_FINGERPRINT }}
+      - name: Install cosign
+        uses: sigstore/cosign-installer@d7d6bc7722e3daa8354c50bcb52f4837da5e9b6a # v3.7.0
+
+      - name: Sign Docker image tarballs with cosign
         run: |
-          set -euo pipefail
-          umask 077
-
-          export GNUPGHOME="$(mktemp -d)"
-
-          cleanup() {
-            gpgconf --kill all >/dev/null 2>&1 || true
-            rm -rf -- "$GNUPGHOME"
-          }
-          trap cleanup EXIT
-
-          printf '%s' "$GPG_PRIVATE_KEY_B64" |
-            base64 --decode |
-            gpg --batch --import
-
-          actual_primary="$(
-            gpg --batch --with-colons \
-              --list-secret-keys "$EXPECTED_PRIMARY_FINGERPRINT" |
-            awk -F: '$1 == "fpr" && !found { print $10; found = 1 }'
-          )"
-
-          if [[ "$actual_primary" != "$EXPECTED_PRIMARY_FINGERPRINT" ]]; then
-            echo "Imported primary-key fingerprint is incorrect"
+          shopt -s nullglob
+          artifacts=(bor-${{ github.ref_name }}-*.tar.gz)
+          if [ ${#artifacts[@]} -eq 0 ]; then
+            echo "No artifacts found to sign"
             exit 1
           fi
-
-          if ! gpg --batch --with-colons \
-              --list-secret-keys "$EXPECTED_PRIMARY_FINGERPRINT" |
-              awk -F: '$1 == "fpr" { print $10 }' |
-              grep -Fx "$EXPECTED_SIGNING_FINGERPRINT" >/dev/null
-          then
-            echo "Expected signing subkey was not imported"
-            exit 1
-          fi
-
-          manifest="bor-${RELEASE_TAG}-DOCKER-SHA256SUMS"
-
-          sha256sum \
-            "bor-${RELEASE_TAG}-amd64.tar.gz" \
-            "bor-${RELEASE_TAG}-arm64.tar.gz" \
-            > "$manifest"
-
-          printf '%s' "$GPG_PASSPHRASE" |
-            gpg --batch --yes \
-              --pinentry-mode loopback \
-              --passphrase-fd 0 \
-              --local-user "${EXPECTED_SIGNING_FINGERPRINT}!" \
-              --armor \
-              --detach-sign \
-              --output "${manifest}.asc" \
-              "$manifest"
-
-          verify_status="${GNUPGHOME}/docker-verify-status"
-          gpg --batch --status-fd 1 \
-            --verify "${manifest}.asc" "$manifest" 2>/dev/null \
-            > "$verify_status"
-
-          if ! awk '
-            $1 == "[GNUPG:]" && $2 == "GOODSIG" { good++ }
-            $1 == "[GNUPG:]" &&
-              ($2 == "REVKEYSIG" || $2 == "EXPKEYSIG" || $2 == "EXPSIG" ||
-               $2 == "BADSIG" || $2 == "ERRSIG") { rejected = 1 }
-            END { exit !(good == 1 && !rejected) }
-          ' "$verify_status"
-          then
-            echo "Docker manifest signature is not from one currently valid signing key"
-            exit 1
-          fi
-
-          mapfile -t valid_signers < <(
-            awk '$1 == "[GNUPG:]" && $2 == "VALIDSIG" { print $3 }' \
-              "$verify_status"
-          )
-
-          if (( ${#valid_signers[@]} != 1 )) ||
-             [[ "${valid_signers[0]}" != "$EXPECTED_SIGNING_FINGERPRINT" ]]; then
-            echo "Docker manifest was signed by an unexpected key"
-            exit 1
-          fi
-
-          echo "Docker manifest signed successfully"
+          for artifact in "${artifacts[@]}"; do
+            cosign sign-blob --yes --oidc-provider=github-actions "$artifact" \
+              --output-signature "${artifact}.sig" \
+              --output-certificate "${artifact}.pem"
+          done
 
       - name: Authenticate with GCP via OIDC
         uses: google-github-actions/auth@71f986410dfbc7added4569d411d040a91dc6935 # v2.1.5
         with:
           token_format: access_token
           workload_identity_provider: ${{ secrets.GCP_OIDC_PROVIDER }}
-          service_account: ${{ secrets.OIDC_SERVICE_ACCOUNT }}
-          project_id: ${{ secrets.OIDC_PROJECT_ID }}
+          service_account: ${{ secrets.GCP_OIDC_SERVICE_ACCOUNT }}
+          project_id: ${{ secrets.GCP_OIDC_PROJECT_ID }}
 
       - name: Set up gcloud CLI
         uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2.2.1
 
-      - name: Upload Docker images and signed manifest to GCP
-        shell: bash
+      - name: Upload Docker images to GCP buckets
         env:
           BUCKET_PRIMARY: ${{ secrets.GCP_BUCKET_PRIMARY }}
           BUCKET_SECONDARY: ${{ secrets.GCP_BUCKET_SECONDARY }}
         run: |
-          set -euo pipefail
-
-          manifest="bor-${RELEASE_TAG}-DOCKER-SHA256SUMS"
-
           for bucket in "$BUCKET_PRIMARY" "$BUCKET_SECONDARY"; do
-            for file in \
-              "bor-${RELEASE_TAG}-amd64.tar.gz" \
-              "bor-${RELEASE_TAG}-arm64.tar.gz"
-            do
-              gcloud storage cp \
-                "$file" \
-                "${file}.checksum" \
-                "$bucket"
+            for file in bor-${{ github.ref_name }}-*.tar.gz; do
+              gcloud storage cp "$file" "$bucket"
+              gcloud storage cp "$file.checksum" "$bucket"
+              gcloud storage cp "$file.sig" "$bucket"
+              gcloud storage cp "$file.pem" "$bucket"
             done
-
-            gcloud storage cp \
-              "$manifest" \
-              "${manifest}.asc" \
-              "$bucket"
           done
