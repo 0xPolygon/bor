@@ -200,7 +200,7 @@ func newChainAndBorForTestWithConfig(t *testing.T, sp Spanner, cfg *params.Chain
 	b.SetSpanner(sp)
 	// set a default authorized signer to prevent nil deref in snapshot
 	b.authorizedSigner.Store(&signer{signer: common.Address{}, signFn: func(_ accounts.Account, _ string, _ []byte) ([]byte, error) {
-		return nil, &UnauthorizedSignerError{0, common.Address{}.Bytes(), []*valset.Validator{}}
+		return nil, &UnauthorizedSignerError{Number: 0, Signer: common.Address{}.Bytes(), AllowedSigners: []*valset.Validator{}}
 	}})
 
 	if devFake && signerAddr != (common.Address{}) {
@@ -4718,6 +4718,73 @@ func TestCommitStates_WithOverrideStateSyncRecords(t *testing.T) {
 	// With OverrideStateSyncRecords truncating to 0, should get empty data
 	require.Empty(t, data)
 }
+
+// TestCommitStates_OverrideAboveFetchedRecords: an override larger than the
+// number of records Heimdall actually returned must not slice past the end of
+// the response. The override caps how many records the block may commit; when
+// fewer are available, all of them are committed. Both override forms are
+// covered.
+func TestCommitStates_OverrideAboveFetchedRecords(t *testing.T) {
+	t.Parallel()
+
+	t.Run("per block", func(t *testing.T) {
+		t.Parallel()
+		borCfg := indoreBorConfig()
+		borCfg.OverrideStateSyncRecords = map[string]int{"16": 3}
+		testCommitStatesOverrideAboveFetched(t, borCfg)
+	})
+	t.Run("in range", func(t *testing.T) {
+		t.Parallel()
+		borCfg := indoreBorConfig()
+		borCfg.OverrideStateSyncRecordsInRange = []params.BlockRangeOverride{{StartBlock: 10, EndBlock: 20, Value: 3}}
+		testCommitStatesOverrideAboveFetched(t, borCfg)
+	})
+}
+
+func testCommitStatesOverrideAboveFetched(t *testing.T, borCfg *params.BorConfig) {
+	t.Helper()
+	addr1 := common.HexToAddress("0x1")
+	chain, b := newChainAndBorForTest(t, &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}, borCfg, true, addr1, uint64(time.Now().Unix())-200)
+
+	genesis := chain.HeaderChain().GetHeaderByNumber(0)
+	require.NotNil(t, genesis)
+
+	mockGC := &mockGenesisContractForCommitStatesIndore{lastStateID: 0, gasUsed: 100}
+	b.GenesisContractsClient = mockGC
+
+	// Event time must be before header.Time - stateSyncDelay (see TestCommitStates_EventIdLessThanLastStateId).
+	eventTime := time.Now().Add(-250 * time.Second)
+	b.SetHeimdallClient(&mockHeimdallClient{
+		span: &borTypes.Span{
+			Id: 0, StartBlock: 0, EndBlock: 255, BorChainId: "1",
+			ValidatorSet: stakeTypes.ValidatorSet{
+				Validators: []*stakeTypes.Validator{{ValId: 1, Signer: addr1.Hex(), VotingPower: 1}},
+			},
+			SelectedProducers: []stakeTypes.Validator{{ValId: 1, Signer: addr1.Hex(), VotingPower: 1}},
+		},
+		events: []*clerk.EventRecordWithTime{
+			{
+				EventRecord: clerk.EventRecord{ID: 1, ChainID: "1", Contract: common.HexToAddress("0x1001"), Data: []byte{0x01}},
+				Time:        eventTime,
+			},
+		},
+	})
+
+	statedb := newStateDBForTest(t, genesis.Root)
+
+	h := &types.Header{
+		Number:     big.NewInt(16),
+		ParentHash: genesis.Hash(),
+		Time:       genesis.Time + 16*borCfg.Period["0"],
+		GasLimit:   genesis.GasLimit,
+	}
+
+	data, err := b.CommitStates(statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b})
+	require.NoError(t, err)
+	require.Len(t, data, 1)
+	require.Equal(t, uint64(1), data[0].ID)
+}
+
 func TestPrepare_UnknownParent(t *testing.T) {
 	t.Parallel()
 	setup := newSignedChainSetup(t)

@@ -19,7 +19,9 @@ package filtermaps
 import (
 	crand "crypto/rand"
 	"math/rand"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 )
@@ -82,5 +84,100 @@ func TestMatcher(t *testing.T) {
 		if !found {
 			t.Fatalf("Log search did not return expected log (addresses: %v, topics: %v, expected log: %v)", addresses, topics, *log)
 		}
+	}
+}
+
+// TestMatcherDuringHeadMapRewrite checks that a search for the last fully
+// indexed block returns its logs while the head map is being re-rendered.
+//
+// When the block after the last fully indexed one starts in an already rendered
+// map and continues in the head map, adding a new head block makes the renderer
+// rewrite the head map. While it does that, the indexed range temporarily ends
+// at the last block of the previous map, and writeFinishedMaps releases
+// indexLock between row batches. A search that runs in this window must still
+// find the logs of the last indexed block, because that block stays in the
+// valid range reported to the matcher, so an empty result would be accepted.
+func TestMatcherDuringHeadMapRewrite(t *testing.T) {
+	ts := newTestSetup(t)
+	// More rows per map than rowsPerBatch, so that writeFinishedMaps releases
+	// indexLock in the middle of writing a map.
+	ts.params.logMapHeight = 11
+	ts.params.logValuesPerMap = 12
+	ts.params.deriveFields()
+	defer ts.close()
+
+	ts.chain.addBlocks(20, 10, 3, 2, false)
+	ts.setHistory(0, false)
+	ts.fm.WaitIdle()
+
+	// Add a block with more log values (400*4*4 = 6400) than a single map can
+	// hold (4096), so it crosses a map boundary and becomes the head block.
+	ts.chain.addBlocks(1, 400, 4, 3, false)
+	ts.fm.WaitIdle()
+
+	head := ts.chain.CurrentBlock().Number.Uint64()
+	searchBlock := head - 1
+	receipts := ts.chain.receipts[ts.chain.canonical[searchBlock]]
+	if len(receipts) == 0 || len(receipts[0].Logs) == 0 {
+		t.Fatalf("no logs in block %d", searchBlock)
+	}
+	log := receipts[0].Logs[0]
+
+	mb := ts.fm.NewMatcherBackend()
+	defer mb.Close()
+
+	if _, err := mb.SyncLogIndex(t.Context()); err != nil {
+		t.Fatalf("SyncLogIndex error: %v", err)
+	}
+
+	// Pause the indexer while the temporary range is set, in the middle of the
+	// head map rewrite. The hook never blocks after the test returns: pausedCh
+	// is buffered and resumeCh is always closed, so the indexer can shut down
+	// even if the test fails before the pause.
+	pausedCh, resumeCh := make(chan struct{}, 1), make(chan struct{})
+	resume := sync.OnceFunc(func() { close(resumeCh) })
+	defer resume()
+	armed := true
+	ts.fm.testProcessEventsHook = func() {
+		if !armed || !ts.fm.hasTempRange {
+			return
+		}
+		armed = false
+		pausedCh <- struct{}{}
+		<-resumeCh
+	}
+	// Add a new head block with enough log values (120*4*4 = 1920) to change
+	// more than rowsPerBatch rows of the head map, so the rewrite releases
+	// indexLock while the temporary range is set.
+	ts.chain.addBlocks(1, 120, 4, 3, false)
+
+	select {
+	case <-pausedCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("indexer did not pause during the head map rewrite")
+	}
+	logs, err := GetPotentialMatches(t.Context(), mb, searchBlock, searchBlock, []common.Address{log.Address}, nil)
+	resume()
+	if err != nil {
+		t.Fatalf("Log search error: %v", err)
+	}
+
+	sr, err := mb.SyncLogIndex(t.Context())
+	if err != nil {
+		t.Fatalf("SyncLogIndex error: %v", err)
+	}
+	if !sr.ValidBlocks.Includes(searchBlock) {
+		t.Fatalf("block %d not in valid range %v, the search result would be discarded", searchBlock, sr.ValidBlocks)
+	}
+
+	var found bool
+	for _, l := range logs {
+		if l == log {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("search for block %d returned %d logs, expected log not found: %v", searchBlock, len(logs), *log)
 	}
 }

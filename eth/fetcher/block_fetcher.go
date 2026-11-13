@@ -19,6 +19,7 @@ package fetcher
 
 import (
 	"errors"
+	"fmt"
 	"math/rand"
 	"sync"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/prque"
 	"github.com/ethereum/go-ethereum/consensus"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
@@ -259,6 +261,8 @@ type BlockFetcher struct {
 	insertChain    chainInsertFn      // Injects a batch of blocks into the chain
 	dropPeer       peerDropFn         // Drops a peer for misbehaving
 
+	invalidHeader func(peer string, err error) // Reports verification failures and their supplier
+
 	// Testing hooks
 	announceChangeHook func(common.Hash, bool)           // Method to call upon adding or deleting a hash from the blockAnnounce list
 	queueChangeHook    func(common.Hash, bool)           // Method to call upon adding or deleting a block from the import queue
@@ -354,6 +358,18 @@ func (f *BlockFetcher) SetWitnessServerStriker(fn func(id string)) {
 func (f *BlockFetcher) SetWitnessSourceExcluder(fn func(peer string, blockHash common.Hash)) {
 	if f.wm != nil {
 		f.wm.parentExcludeWitnessSource = fn
+	}
+}
+
+// SetInvalidHeaderObserver reports verification failures and their supplier.
+// Install before Start; the callback must not block.
+func (f *BlockFetcher) SetInvalidHeaderObserver(observe func(peer string, err error)) {
+	f.invalidHeader = observe
+}
+
+func (f *BlockFetcher) observeInvalidHeader(peer string, err error) {
+	if f.invalidHeader != nil {
+		f.invalidHeader(peer, err)
 	}
 }
 
@@ -1212,6 +1228,7 @@ func (f *BlockFetcher) importHeaders(peer string, header *types.Header) {
 		// Validate the header and if something went wrong, drop the peer
 		if err := f.verifyHeader(header); err != nil && err != consensus.ErrFutureBlock {
 			log.Debug("Propagated header verification failed", "peer", peer, "number", header.Number, "hash", hash, "err", err)
+			f.observeInvalidHeader(peer, err)
 			f.dropPeer(peer)
 
 			return
@@ -1260,7 +1277,10 @@ func (f *BlockFetcher) importBlocks(op *blockOrHeaderInject) {
 			}
 			return
 		}
-		f.done <- hash
+		select {
+		case f.done <- hash:
+		case <-f.quit:
+		}
 	}()
 }
 
@@ -1293,14 +1313,13 @@ func (f *BlockFetcher) runBlockImport(op *blockOrHeaderInject) (retryWitness boo
 	default:
 		// Something went very wrong, drop the peer
 		log.Debug("Propagated block verification failed", "peer", peer, "number", block.Number(), "hash", hash, "err", err)
+		f.observeInvalidHeader(peer, err)
 		f.dropPeer(peer)
 
 		return false
 	}
 	// Run the actual import and log any issues
-	// Pass the witness along with the block to the insertion function.
-	// Create slices even for a single block/witness to match the expected signature.
-	if _, err := f.insertChain(types.Blocks{block}, []*stateless.Witness{witness}); err != nil {
+	if err := f.insertBlockWithRetry(op); err != nil {
 		log.Debug("Propagated block import failed", "peer", peer, "number", block.Number(), "hash", hash, "err", err)
 		return f.chargeDivergedWitnessImportFailure(op, err)
 	}
@@ -1421,4 +1440,26 @@ func (f *BlockFetcher) forgetBlock(hash common.Hash) {
 // GetWitnessManager returns the witness manager for external access
 func (f *BlockFetcher) GetWitnessManager() *witnessManager {
 	return f.wm
+}
+
+const (
+	stateSyncImportRetryDelay = 10 * time.Second
+	maxStateSyncImportRetries = 2
+)
+
+func (f *BlockFetcher) insertBlockWithRetry(op *blockOrHeaderInject) error {
+	for attempt := 0; ; attempt++ {
+		_, err := f.insertChain(types.Blocks{op.block}, []*stateless.Witness{op.witness})
+		if !errors.Is(err, core.ErrStateSyncProcessing) || isWitnessAttributableImportError(err) || attempt >= maxStateSyncImportRetries {
+			return err
+		}
+		log.Warn("Retrying block import after state-sync processing failure", "number", op.number(), "hash", op.hash(), "delay", stateSyncImportRetryDelay, "err", err)
+		timer := time.NewTimer(stateSyncImportRetryDelay)
+		select {
+		case <-timer.C:
+		case <-f.quit:
+			timer.Stop()
+			return fmt.Errorf("%w: %w", errTerminated, err)
+		}
+	}
 }

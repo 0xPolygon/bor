@@ -205,7 +205,9 @@ type Config struct {
 	ConditionalSlots    uint64        // Maximum known accounts and slots across all pooled conditional transactions
 
 	// Transaction filtering configuration
-	FilteredAddresses map[common.Address]struct{} // Pre-loaded filtered addresses (populated by config)
+	FilteredAddresses     map[common.Address]struct{} // Pre-loaded filtered addresses (populated by config)
+	FilteredAddressesFile string                      // File the filtered addresses are re-read from
+	FilterReload          time.Duration               // Interval between re-reads of FilteredAddressesFile (0 disables)
 
 	// Rebroadcast configuration for stuck transactions
 	Rebroadcast          bool          // Enable stuck transaction rebroadcast
@@ -230,6 +232,7 @@ var DefaultConfig = Config{
 	Lifetime:         3 * time.Hour,
 	StrandedLifetime: 3 * time.Hour,
 
+	FilterReload:        time.Minute,
 	ConditionalLifetime: 5 * time.Minute,
 	ConditionalSlots:    10000,
 
@@ -355,10 +358,12 @@ type LegacyPool struct {
 	filteredAddrs map[common.Address]struct{} // Map of addresses to filter
 
 	// Rebroadcast tracking
-	rebroadcastTxFeed  event.Feed // Feed for stuck transaction events
-	rebroadcastAckFeed event.Feed
-	lastRebroadcast    map[common.Hash]time.Time // Track last rebroadcast time per tx hash
-	isTxPrivate        func(common.Hash) bool
+	rebroadcastTxFeed      event.Feed // Feed for stuck transaction events
+	rebroadcastAckFeed     event.Feed
+	lastRebroadcast        map[common.Hash]time.Time // Track last queue acceptance per tx hash
+	lastRebroadcastAttempt map[common.Hash]time.Time
+	rebroadcastTick        time.Time
+	isTxPrivate            func(common.Hash) bool
 
 	stranded strandedState // Pending chains blocked by an unminable head
 }
@@ -376,22 +381,23 @@ func New(config Config, chain BlockChain, options ...func(pool *LegacyPool)) *Le
 	// Create the transaction pool with its initial settings
 	signer := types.LatestSigner(chain.Config())
 	pool := &LegacyPool{
-		config:          config,
-		chain:           chain,
-		chainconfig:     chain.Config(),
-		signer:          signer,
-		pending:         make(map[common.Address]*list),
-		queue:           newQueue(config, signer),
-		all:             newLookup(),
-		reqResetCh:      make(chan *txpoolResetRequest),
-		reqPromoteCh:    make(chan *accountSet),
-		queueTxEventCh:  make(chan *types.Transaction),
-		reorgDoneCh:     make(chan chan struct{}),
-		reorgShutdownCh: make(chan struct{}),
-		initDoneCh:      make(chan struct{}),
-		filteredAddrs:   make(map[common.Address]struct{}),
-		lastRebroadcast: make(map[common.Hash]time.Time),
-		stranded:        newStrandedState(config),
+		config:                 config,
+		chain:                  chain,
+		chainconfig:            chain.Config(),
+		signer:                 signer,
+		pending:                make(map[common.Address]*list),
+		queue:                  newQueue(config, signer),
+		all:                    newLookup(),
+		reqResetCh:             make(chan *txpoolResetRequest),
+		reqPromoteCh:           make(chan *accountSet),
+		queueTxEventCh:         make(chan *types.Transaction),
+		reorgDoneCh:            make(chan chan struct{}),
+		reorgShutdownCh:        make(chan struct{}),
+		initDoneCh:             make(chan struct{}),
+		filteredAddrs:          make(map[common.Address]struct{}),
+		lastRebroadcast:        make(map[common.Hash]time.Time),
+		lastRebroadcastAttempt: make(map[common.Hash]time.Time),
+		stranded:               newStrandedState(config),
 	}
 	pool.priced = newPricedList(pool.all)
 
@@ -402,6 +408,7 @@ func New(config Config, chain BlockChain, options ...func(pool *LegacyPool)) *Le
 		}
 		log.Info("Loaded filtered addresses", "count", len(pool.filteredAddrs))
 	}
+	filteredAddrsGauge.Update(int64(len(pool.filteredAddrs)))
 
 	// apply options
 	for _, fn := range options {
@@ -451,6 +458,11 @@ func (pool *LegacyPool) Init(gasTip uint64, head *types.Header, reserver txpool.
 
 	pool.wg.Add(1)
 	go pool.loop()
+
+	if path := pool.config.FilteredAddressesFile; path != "" && pool.config.FilterReload > 0 {
+		pool.wg.Add(1)
+		go pool.filterReloadLoop(&filterReloader{path: path}, pool.config.FilterReload)
+	}
 	return nil
 }
 
@@ -506,7 +518,8 @@ func (pool *LegacyPool) loop() {
 			}
 
 		// Handle stuck transaction rebroadcast
-		case <-rebroadcastC:
+		case tick := <-rebroadcastC:
+			pool.setRebroadcastTick(tick)
 			// Use RLock for reading to minimize contention with add()/reorg()
 			identifyStart := time.Now()
 			pool.mu.RLock()
@@ -566,78 +579,6 @@ func (pool *LegacyPool) SubscribeTransactions(ch chan<- core.NewTxsEvent, reorgs
 // rebroadcast events.
 func (pool *LegacyPool) SubscribeRebroadcastTransactions(ch chan<- core.StuckTxsEvent) event.Subscription {
 	return pool.rebroadcastTxFeed.Subscribe(ch)
-}
-
-// identifyStuckTransactions identifies pending transactions that may be stuck
-// and need rebroadcasting. It returns transactions that:
-// - Have been pending longer than RebroadcastInterval but less than RebroadcastMaxAge
-// - Have not been rebroadcast recently (within RebroadcastInterval)
-// - Are immediately executable (gas price meets current requirements)
-//
-// Must be called with pool.mu.RLock held (read lock only - does not modify pool state).
-func (pool *LegacyPool) identifyStuckTransactions() []*types.Transaction {
-	now := time.Now()
-	head := pool.currentHead.Load()
-	if head == nil {
-		return nil
-	}
-
-	// Calculate base fee only if London is enabled and header has base fee
-	var baseFee *big.Int
-	if pool.chainconfig.IsLondon(head.Number) && head.BaseFee != nil {
-		baseFee = eip1559.CalcBaseFee(pool.chainconfig, head)
-	}
-	minTip := pool.gasTip.Load().ToBig()
-
-	var stuckTxs []*types.Transaction
-
-	for _, list := range pool.pending {
-		for _, tx := range list.Flatten() {
-			hash := tx.Hash()
-			age := now.Sub(tx.Time())
-
-			// Skip if too young (hasn't had time to propagate yet)
-			if age < pool.config.RebroadcastInterval {
-				continue
-			}
-
-			// Check rebroadcast history
-			lastTime, wasRebroadcast := pool.lastRebroadcast[hash]
-			if wasRebroadcast {
-				// Skip if recently rebroadcast
-				if now.Sub(lastTime) < pool.config.RebroadcastInterval {
-					continue
-				}
-				// Skip if we've been rebroadcasting this tx for too long (max age applies
-				// only to previously rebroadcast txs - new txs that just became executable
-				// after a base fee drop should still be considered)
-				if pool.config.RebroadcastMaxAge > 0 && age > pool.config.RebroadcastMaxAge {
-					continue
-				}
-			}
-
-			// Skip if not immediately executable (gas price too low for current conditions)
-			// For EIP-1559 transactions, check gas fee cap against base fee
-			if baseFee != nil && tx.GasFeeCap().Cmp(baseFee) < 0 {
-				continue
-			}
-			if tx.GasTipCap().Cmp(minTip) < 0 {
-				continue
-			}
-			if !pool.canRebroadcast(tx) {
-				continue
-			}
-
-			stuckTxs = append(stuckTxs, tx)
-
-			// Enforce batch limit
-			if len(stuckTxs) >= pool.config.RebroadcastBatchSize {
-				return stuckTxs
-			}
-		}
-	}
-
-	return stuckTxs
 }
 
 // SetGasTip updates the minimum gas tip required by the transaction pool for a
@@ -1159,7 +1100,7 @@ func (pool *LegacyPool) add(tx *types.Transaction, async bool) (replaced bool, e
 				pool.priced.Removed(1)
 			}
 			pendingReplaceMeter.Mark(1)
-			delete(pool.lastRebroadcast, old.Hash())
+			pool.forgetRebroadcast(old.Hash())
 		}
 		pool.all.Add(tx)
 		reheapCount := pool.priced.reheaps.Load()
@@ -1254,7 +1195,7 @@ func (pool *LegacyPool) promoteTx(addr common.Address, hash common.Hash, tx *typ
 		pool.all.Remove(hash)
 		pool.priced.Removed(1)
 		pendingDiscardMeter.Mark(1)
-		delete(pool.lastRebroadcast, hash)
+		pool.forgetRebroadcast(hash)
 		return false
 	}
 	// Otherwise discard any previous transaction and mark this
@@ -1262,7 +1203,7 @@ func (pool *LegacyPool) promoteTx(addr common.Address, hash common.Hash, tx *typ
 		pool.all.Remove(old.Hash())
 		pool.priced.Removed(1)
 		pendingReplaceMeter.Mark(1)
-		delete(pool.lastRebroadcast, old.Hash())
+		pool.forgetRebroadcast(old.Hash())
 	} else {
 		// Nothing was replaced, bump the pending counter
 		pendingGauge.Inc(1)
@@ -1480,7 +1421,7 @@ func (pool *LegacyPool) removeTx(hash common.Hash, outofbound bool, unreserve bo
 		pool.priced.Removed(1)
 	}
 	// Clean up rebroadcast tracking
-	delete(pool.lastRebroadcast, hash)
+	pool.forgetRebroadcast(hash)
 	// Remove the transaction from the pending lists and reset the account nonce
 	if pending := pool.pending[addr]; pending != nil {
 		if removed, invalids := pending.Remove(tx); removed {
@@ -1650,6 +1591,15 @@ func (pool *LegacyPool) runReorg(done chan struct{}, reset *txpoolResetRequest, 
 			events[addr].Forward(pool.pendingNonces.get(addr))
 			if events[addr].Len() == 0 {
 				delete(events, addr)
+			}
+		}
+		// reset rebuilt the nonces from the new state, which drops the pending
+		// nonces of txs that are still pending. Restore them before promoting,
+		// else a queued tx right after them waits for the next reorg. Pending is
+		// contiguous, so first+len is the next nonce (LastElement would re-sort).
+		for addr, list := range pool.pending {
+			if first := list.txs.firstElement(); first != nil {
+				pool.pendingNonces.set(addr, max(pool.pendingNonces.get(addr), first.Nonce()+uint64(list.Len())))
 			}
 		}
 		// Reset needs promote for all addresses
@@ -1866,7 +1816,7 @@ func (pool *LegacyPool) promoteExecutables(accounts []common.Address) []*types.T
 	// remove all removable transactions
 	for _, hash := range dropped {
 		pool.all.Remove(hash)
-		delete(pool.lastRebroadcast, hash)
+		pool.forgetRebroadcast(hash)
 	}
 	pool.priced.Removed(len(dropped))
 
@@ -1923,7 +1873,7 @@ func (pool *LegacyPool) truncatePending() {
 						// Drop the transaction from the global pools too
 						hash := tx.Hash()
 						pool.all.Remove(hash)
-						delete(pool.lastRebroadcast, hash)
+						pool.forgetRebroadcast(hash)
 
 						// Update the account nonce to the dropped transaction
 						pool.pendingNonces.setIfLower(offenders[i], tx.Nonce())
@@ -1949,7 +1899,7 @@ func (pool *LegacyPool) truncatePending() {
 					// Drop the transaction from the global pools too
 					hash := tx.Hash()
 					pool.all.Remove(hash)
-					delete(pool.lastRebroadcast, hash)
+					pool.forgetRebroadcast(hash)
 
 					// Update the account nonce to the dropped transaction
 					pool.pendingNonces.setIfLower(addr, tx.Nonce())
@@ -1971,7 +1921,7 @@ func (pool *LegacyPool) truncateQueue() {
 	// Remove all removable transactions from the lookup and global price list
 	for _, hash := range removed {
 		pool.all.Remove(hash)
-		delete(pool.lastRebroadcast, hash)
+		pool.forgetRebroadcast(hash)
 	}
 	pool.priced.Removed(len(removed))
 
@@ -2004,7 +1954,7 @@ func (pool *LegacyPool) demoteUnexecutables() {
 		for _, tx := range olds {
 			hash := tx.Hash()
 			pool.all.Remove(hash)
-			delete(pool.lastRebroadcast, hash)
+			pool.forgetRebroadcast(hash)
 			log.Trace("Removed old pending transaction", "hash", hash)
 		}
 		// Drop all transactions that are too costly (low balance or out of gas), and queue any invalids back for later
@@ -2012,7 +1962,7 @@ func (pool *LegacyPool) demoteUnexecutables() {
 		for _, tx := range drops {
 			hash := tx.Hash()
 			pool.all.Remove(hash)
-			delete(pool.lastRebroadcast, hash)
+			pool.forgetRebroadcast(hash)
 			log.Trace("Removed unpayable pending transaction", "hash", hash)
 		}
 		pendingNofundsMeter.Mark(int64(len(drops)))
@@ -2026,19 +1976,26 @@ func (pool *LegacyPool) demoteUnexecutables() {
 		}
 		// bor: Drop all transactions that no longer have valid TxOptions. Skip the
 		// walk when the pool holds no conditional transactions.
-		var txConditionalsRemoved types.Transactions
+		var txConditionalsRemoved, txConditionalInvalids types.Transactions
 		if pool.all.ConditionalSlots() > 0 {
-			txConditionalsRemoved = list.FilterTxConditional(pool.currentState, currentHeader)
+			txConditionalsRemoved, txConditionalInvalids = list.FilterTxConditional(pool.currentState, currentHeader)
 		}
 
 		for _, tx := range txConditionalsRemoved {
 			hash := tx.Hash()
 			pool.all.Remove(hash)
-			delete(pool.lastRebroadcast, hash)
+			pool.forgetRebroadcast(hash)
 			log.Trace("Removed invalid conditional transaction", "hash", hash)
 		}
+		for _, tx := range txConditionalInvalids {
+			hash := tx.Hash()
+			log.Trace("Demoting pending transaction behind dropped conditional transaction", "hash", hash)
 
-		pendingGauge.Dec(int64(len(olds) + len(drops) + len(invalids) + len(txConditionalsRemoved)))
+			// Internal shuffle shouldn't touch the lookup set.
+			pool.enqueueTx(hash, tx, false)
+		}
+
+		pendingGauge.Dec(int64(len(olds) + len(drops) + len(invalids) + len(txConditionalsRemoved) + len(txConditionalInvalids)))
 		// If there's a gap in front, alert (should never happen) and postpone all transactions
 		if list.Len() > 0 && list.txs.Get(nonce) == nil {
 			gapped := list.Cap(0)
@@ -2061,9 +2018,11 @@ func (pool *LegacyPool) demoteUnexecutables() {
 			// Update the latest known pending nonce
 			highestPending := list.LastElement()
 			nonces[addr] = highestPending.Nonce() + 1
-			pool.pendingNonces.setAll(nonces)
 		}
 	}
+	// Set the nonces even when no account is left pending, so an override from
+	// the reset restore never outlives the txs it was taken from.
+	pool.pendingNonces.setAll(nonces)
 }
 
 // accountSet is simply a set of addresses to check for existence, and a signer
@@ -2280,6 +2239,21 @@ func (t *lookup) removeAuthorities(tx *types.Transaction) {
 		}
 		t.auths[addr] = list
 	}
+}
+
+// authorizedBy returns the transactions carrying an authorization from an
+// address match accepts.
+func (t *lookup) authorizedBy(match func(common.Address) bool) []common.Hash {
+	t.lock.RLock()
+	defer t.lock.RUnlock()
+
+	var hashes []common.Hash
+	for addr, list := range t.auths {
+		if match(addr) {
+			hashes = append(hashes, list...)
+		}
+	}
+	return hashes
 }
 
 // hasAuth returns a flag indicating whether there are pending authorizations

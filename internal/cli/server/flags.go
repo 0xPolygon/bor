@@ -338,6 +338,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.TxPool.FilteredAddressesFile,
 		Group:   "Transaction Pool",
 	})
+	f.DurationFlag(&flagset.DurationFlag{
+		Name:    "txpool.filter-reload",
+		Usage:   "Interval at which the filtered addresses file is re-read and applied without a restart (0 disables)",
+		Value:   &c.cliConfig.TxPool.FilterReload,
+		Default: c.cliConfig.TxPool.FilterReload,
+		Group:   "Transaction Pool",
+	})
 	f.BoolFlag(&flagset.BoolFlag{
 		Name:    "txpool.rebroadcast",
 		Usage:   "Enable stuck transaction rebroadcast mechanism",
@@ -1023,6 +1030,7 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	})
 
 	// p2p options
+	c.peerReputationFlag(f)
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "bind",
 		Usage:   "Network binding address",

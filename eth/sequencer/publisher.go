@@ -19,6 +19,7 @@ import (
 	pb "github.com/0xPolygon/sequence-store-proto/sequencestore/v1"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 )
@@ -33,6 +34,11 @@ const (
 	// re-STALEs — losing head races to another publisher.
 	reconcileBackoffMin = 500 * time.Millisecond
 	reconcileBackoffMax = 8 * time.Second
+
+	// How long tail reads may sit behind our acked frontier before we stop
+	// treating them as gateway lag. Above the ~5s lag seen on Amoy after a
+	// partition-leader change; by then the gate has already settled.
+	laggingReadBound = 2 * recoverGrace
 )
 
 // ackStallTimeout bounds how long the send loop waits on an unacked entry before
@@ -43,14 +49,16 @@ var ackStallTimeout = 5 * time.Second
 
 // chainReader is the chain access reconciliation needs: classifying
 // sealed store content against the local chain, locating the store tail
-// on a cold start from the last imported block, and rebuilding collapsed
+// on a cold start from the last imported block, rebuilding collapsed
 // blocks for backfill — the chain database is the archive; the journal
-// holds only the work in flight.
+// holds only the work in flight — and reading our parent's state for the
+// bridge's history check.
 type chainReader interface {
 	GetCanonicalHash(number uint64) common.Hash
 	GetHeaderByHash(hash common.Hash) *types.Header
 	CurrentBlock() *types.Header
 	GetBlockByNumber(number uint64) *types.Block
+	SealingStateAt(root common.Hash) (*state.StateDB, error)
 }
 
 // Publisher streams block-production entries to the sequence store. Enqueue
@@ -70,10 +78,16 @@ type Publisher struct {
 	anchor    commitment.Head // store head confirming everything through ackedSeq
 	anchored  bool            // anchor established by a completed reconcile
 	confirmed bool            // anchor was ever store-confirmed
+	behind    laggingRead     // tail reads behind ackedSeq since the frontier last moved
 	curHeight uint64          // height of the open window being built (0 = none)
 	awaitOpen bool            // drop records until the next OpenBlock (post purge)
 	adopt     *adoption       // store window being adopted
 	sealedTip uint64          // highest height we sealed-and-flushed
+	ownRun    storeLineage    // the blocks we sealed, by height
+	// buildTop is the latest build start's height, raised by a seal above it.
+	// Sealing a height needs the chain at its parent, so a build below
+	// buildTop follows a rewind.
+	buildTop uint64
 	// mode is the build treatment for the current height, decided once per
 	// build-start classification; see buildMode.
 	mode buildMode
@@ -82,6 +96,11 @@ type Publisher struct {
 	// divergence type. Reset with mode: at the build-start classification
 	// and at the seal flush.
 	diverged divergence
+	bridged  bridgedWindow
+
+	// lineage is the store chain the bridge has read. It has its own lock:
+	// the bridge runs before the build-start classification takes mu.
+	lineage storeLineage
 
 	// resync is set when the store shows another producer building the
 	// height this node is building: our block must not seal beside their
@@ -212,6 +231,16 @@ func NewPublisher(publisherEndpoint, consumerEndpoint string, chainID uint64, po
 	p.lastContact.Store(time.Now().UnixNano())
 
 	p.read = newReader(pb.NewConsumerServiceClient(consConn), p.seed, p.markReachable)
+	if chain != nil {
+		p.read.chainHead = func() (uint64, bool) {
+			head := chain.CurrentBlock()
+			if head == nil {
+				return 0, false
+			}
+
+			return head.Number.Uint64(), true
+		}
+	}
 
 	publishStateGauge.Update(gaugeDegraded) // until the startup reconcile anchors
 

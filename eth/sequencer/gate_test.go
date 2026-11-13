@@ -1129,3 +1129,62 @@ func TestSealGateBoundsBlockedSealVerifier(t *testing.T) {
 		t.Fatalf("gate took %v against a blocked verifier: the result loop would freeze", elapsed)
 	}
 }
+
+// A STALE queued ahead of our seal ends the session before the seal's OK is
+// read, leaving the gate contested. The reconcile that finds the store head
+// on our own seal is the same proof as that ack and must settle the gate,
+// not leave it to wait out the contested budget.
+func TestReconcileThroughOwnSealConfirmsContestedGate(t *testing.T) {
+	p, _ := lineagePublisher(t, &fakeChain{})
+
+	h1 := testHeader(1, common.Hash{0xef})
+	p.SealBlock(blockFor(testHeader(2, h1.Hash()), nil))
+
+	p.markGateLost(journalItem{kind: entryRecord, height: 2})
+
+	p.mu.Lock()
+	sealItem := p.journal.items[len(p.journal.items)-1]
+	p.mu.Unlock()
+
+	if sealItem.kind != entrySeal {
+		t.Fatalf("last journal item kind = %v, want the seal", sealItem.kind)
+	}
+
+	if out := p.applyTail(tailInfo{s: sealItem.post}); out != recOK {
+		t.Fatalf("outcome = %v", out)
+	}
+
+	start := time.Now()
+	if v := p.ConfirmSeal(30 * time.Millisecond); v != miner.SealConfirmed {
+		t.Fatalf("verdict = %v, want confirmed", v)
+	}
+
+	if waited := time.Since(start); waited > time.Second {
+		t.Fatalf("gate waited %v after the reconcile proved our seal", waited)
+	}
+}
+
+// The reconcile path keeps the ack path's hash check: a store head on a
+// seal for a different block at the gated height confirms nothing.
+func TestReconcileThroughOtherSealLeavesGatePending(t *testing.T) {
+	p, _ := lineagePublisher(t, &fakeChain{})
+
+	h1 := testHeader(1, common.Hash{0xef})
+	p.SealBlock(blockFor(testHeader(2, h1.Hash()), nil))
+
+	p.mu.Lock()
+	sealItem := p.journal.items[len(p.journal.items)-1]
+	p.gate.hash = common.Hash{0x01}
+	p.mu.Unlock()
+
+	if out := p.applyTail(tailInfo{s: sealItem.post}); out != recOK {
+		t.Fatalf("outcome = %v", out)
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.gate.verdict != gatePending {
+		t.Fatalf("verdict = %d, want pending", p.gate.verdict)
+	}
+}

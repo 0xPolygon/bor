@@ -216,9 +216,11 @@ var (
 	// gas_used_per_block and txs_per_block are emitted in both modes.
 	workerGasUsedPerBlockHistogram = metrics.NewRegisteredHistogram("worker/chain/gas_used_per_block", nil, metrics.NewExpDecaySample(1028, 0.015))
 	workerTxsPerBlockHistogram     = metrics.NewRegisteredHistogram("worker/chain/txs_per_block", nil, metrics.NewExpDecaySample(1028, 0.015))
-	// End-to-end producer timer: wall clock from build begin to NewMinedBlockEvent broadcast.
-	// Fires in both normal (resultLoop → mux.Post) and pipelined (inlineSealAndBroadcast → mux.Post) modes,
-	// giving a directly comparable apples-to-apples A/B signal.
+	// End-to-end producer timer: wall clock from when the producer was first allowed to build the
+	// block (see buildToAnnounceStart) to NewMinedBlockEvent broadcast, so it covers prepare, fill,
+	// finalize, seal, the sequencer gate and the chain write. Fires in both normal (resultLoop →
+	// mux.Post) and pipelined (inlineSealAndBroadcast → mux.Post) modes, giving a directly
+	// comparable apples-to-apples A/B signal.
 	workerBuildToAnnounceTimer = metrics.NewRegisteredTimer("worker/build_to_announce", nil)
 
 	// Trie commit metrics for block production (populated after WriteBlockAndSetHead → CommitWithUpdate).
@@ -246,6 +248,14 @@ func productionStartFrom(genParams *generateParams) time.Time {
 		return time.Time{}
 	}
 	return genParams.productionStart
+}
+
+// buildStartFrom extracts the commitWork start time from genParams, or zero.
+func buildStartFrom(genParams *generateParams) time.Time {
+	if genParams == nil {
+		return time.Time{}
+	}
+	return genParams.buildStart
 }
 
 func newRegisteredCustomTimer(name string, reservoirSize int) *metrics.Timer {
@@ -382,7 +392,7 @@ type task struct {
 	state                *state.StateDB
 	block                *types.Block
 	createdAt            time.Time
-	productionStart      time.Time     // wall clock at build begin — used for worker/build_to_announce (fires from resultLoop at mux.Post)
+	announceStart        time.Time     // when the producer was first allowed to build this block (see buildToAnnounceStart); worker/build_to_announce runs from here to mux.Post
 	productionElapsed    time.Duration // elapsed from after prepareWork to task submission (excludes sealing wait); used for workerMgaspsTimer and workerBlockExecutionTimer
 	intermediateRootTime time.Duration // time spent in IntermediateRoot inside FinalizeAndAssemble; subtracted when computing workerBlockExecutionTimer
 	pipelined            bool          // If true, state was already committed by SRC goroutine — skip CommitWithUpdate in writeBlockWithState
@@ -474,6 +484,9 @@ type worker struct {
 	engine      consensus.Engine
 	eth         Backend
 	chain       *core.BlockChain
+
+	// authorizedSigner overrides the engine's signer check (tests only).
+	authorizedSigner func(header *types.Header) bool
 
 	// sequencer, when set, receives block-production progress (open, per-tx,
 	// seal) for the sequence store. Set before the worker starts; nil when
@@ -585,6 +598,8 @@ type worker struct {
 
 	// Pipelined SRC: speculative work channel for block N+1 execution
 	speculativeWorkCh chan *speculativeWorkReq
+
+	stallWatch *producerStallWatch // Reports when this node, as the span producer, stops announcing blocks
 }
 
 //nolint:staticcheck
@@ -618,6 +633,9 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		speculativeWorkCh:   make(chan *speculativeWorkReq, 1),
 	}
 	worker.noempty.Store(true)
+	worker.stallWatch = newProducerStallWatch(producerStallThreshold, worker.isCurrentProducer,
+		func() uint64 { return worker.chain.CurrentBlock().Number.Uint64() },
+		producerStalledGauge, producerStallsCounter)
 	// Production-side pipelined SRC is intentionally disabled and no longer has
 	// a miner config knob. Keep the gauge at 0; import-side pipelining has its
 	// own chain/imports/pipelined/enabled gauge.
@@ -813,6 +831,7 @@ func (w *worker) start() {
 // stop sets the running status as 0.
 func (w *worker) stop() {
 	w.running.Store(false)
+	w.stallWatch.clear()
 }
 
 // IsRunning returns an indicator whether worker is running or not.
@@ -824,6 +843,7 @@ func (w *worker) IsRunning() bool {
 // Note the worker does not support being closed multiple times.
 func (w *worker) close() {
 	w.running.Store(false)
+	w.stallWatch.close()
 	close(w.exitCh)
 	w.wg.Wait()
 	w.prefetchWg.Wait()
@@ -992,6 +1012,7 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 		select {
 		case <-w.startCh:
 			w.clearPending(w.chain.CurrentBlock().Number.Uint64())
+			w.watchNextBlock(w.chain.CurrentBlock())
 
 			timestamp = time.Now().Unix()
 			w.pendingWorkBlock.Store(w.chain.CurrentBlock().Number.Uint64() + 1)
@@ -1000,6 +1021,9 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 
 		case head := <-w.chainHeadCh:
 			w.clearPending(head.Header.Number.Uint64())
+			// Before the skip below: a build already in flight for the next
+			// block still needs its stall clock.
+			w.watchNextBlock(head.Header)
 
 			pendingWorkBlock := w.pendingWorkBlock.Load()
 			if pendingWorkBlock == head.Header.Number.Uint64()+1 {
@@ -1511,7 +1535,7 @@ func (w *worker) resultLoop() {
 			log.Info("Successfully sealed new block", "number", block.Number(), "sealhash", sealhash, "hash", hash,
 				"elapsed", common.PrettyDuration(time.Since(task.createdAt)))
 
-			announceTaskBlock(w.mux, task, block, witness)
+			w.announceTaskBlock(task, block, witness)
 
 			sealedBlocksCounter.Inc(1)
 
@@ -1615,17 +1639,15 @@ func emitCommitMetrics(task *task, block *types.Block, writeElapsed time.Duratio
 // build-to-announce + PIP-66 earliness + committed metrics for pipelined
 // tasks sealed via taskCh (last-of-pipeline, eligibility-fail, or fallback).
 // inlineSealAndBroadcast emits the same signals on the inline path.
-func announceTaskBlock(mux *event.TypeMux, task *task, block *types.Block, witness *stateless.Witness) {
+func (w *worker) announceTaskBlock(task *task, block *types.Block, witness *stateless.Witness) {
 	announceAt := time.Now()
-	if !task.productionStart.IsZero() {
-		workerBuildToAnnounceTimer.UpdateSince(task.productionStart)
-	}
+	w.recordAnnouncement(block, task.announceStart)
 	if task.pipelined {
 		earlyMs := block.Header().GetActualTime().Sub(announceAt).Milliseconds()
 		pipelineAnnounceEarlinessMs.Update(earlyMs)
 		pipelineSpeculativeCommittedCounter.Inc(1)
 	}
-	mux.Post(core.NewMinedBlockEvent{Block: block, Witness: witness, SealedAt: announceAt})
+	w.mux.Post(core.NewMinedBlockEvent{Block: block, Witness: witness, SealedAt: announceAt})
 }
 
 // resolveStateFor returns the caller-supplied statedb if any (from commitWork's
@@ -2033,6 +2055,7 @@ type generateParams struct {
 	prefetchedTxHashes        *sync.Map               // Map of successfully prefetched transaction hashes
 	builderPrefetchedTxHashes *sync.Map               // Subset of prefetchedTxHashes populated only during the builder phase; used to measure builder-phase contribution
 	productionStart           time.Time               // Start of full-block building (after optional empty pre-seal); used for productionElapsed
+	buildStart                time.Time               // Entry to commitWork, before state acquisition and prepareWork; used for worker/build_to_announce
 	preBuildDuration          time.Duration           // Duration of pre block build phase
 	builderStarted            *atomic.Bool            // Set when block building begins; immediately interrupts the idle Prefetch() call and triggers builder-mode prefetching
 	builderPlanCh             chan *types.Transaction // Builder sends each validated tx here before execution; prefetcher reads and warms state concurrently
@@ -2598,6 +2621,7 @@ func (w *worker) buildAttempt(interrupt *atomic.Int32, noempty bool, timestamp i
 		prefetchReader:     prefetchReader,
 		processReader:      processReader,
 		prefetchedTxHashes: &sync.Map{},
+		buildStart:         buildStart,
 		preBuildDuration:   time.Since(buildStart),
 		production:         true,
 	}
@@ -2932,7 +2956,8 @@ func (w *worker) adoptionReject(a *AdoptedWindow, header *types.Header) string {
 // resurfaces at the next height as a displaced preconfirmation. An
 // inapplicable transaction (nonce consumed, balance moved) is skipped — the
 // publisher's expectation matching turns that divergence into a
-// partial-adoption supersede.
+// partial-adoption supersede, and its seal barrier turns a recovery missing
+// one into the over-sealed fallback.
 func (w *worker) seedAdopted(work *environment, adoption *AdoptedWindow) {
 	if work.gasPool == nil {
 		work.gasPool = new(core.GasPool).AddGas(work.header.GasLimit)
@@ -3475,8 +3500,11 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 			return err
 		}
 
+		productionStart := firstNonZeroTime(productionStartFrom(genParams), start)
+		announceStart := w.buildToAnnounceStart(block.Header(), firstNonZeroTime(buildStartFrom(genParams), productionStart))
+
 		select {
-		case w.taskCh <- &task{receipts: env.receipts, state: env.state, block: block, createdAt: time.Now(), productionStart: firstNonZeroTime(productionStartFrom(genParams), start), productionElapsed: time.Since(firstNonZeroTime(productionStartFrom(genParams), start)), intermediateRootTime: commitTime}:
+		case w.taskCh <- &task{receipts: env.receipts, state: env.state, block: block, createdAt: time.Now(), announceStart: announceStart, productionElapsed: time.Since(productionStart), intermediateRootTime: commitTime}:
 			fees := totalFees(block, env.receipts)
 			feesInEther := new(big.Float).Quo(new(big.Float).SetInt(fees), big.NewFloat(params.Ether))
 			log.Info("Commit new sealing work",

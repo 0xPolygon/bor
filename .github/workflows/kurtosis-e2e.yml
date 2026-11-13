@@ -1,5 +1,7 @@
 name: Kurtosis E2E Tests
 
+# Builds the bor and heimdall-v2 images once. Every leg below loads them from
+# this run's artifacts, so the legs live in one workflow rather than one each.
 on:
   push:
     branches:
@@ -7,14 +9,17 @@ on:
       - 'develop'
   pull_request:
     types: [opened, synchronize, reopened]
+  workflow_dispatch:
 
 concurrency:
   group: kurtosis-e2e-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
-  ENCLAVE_NAME: kurtosis-e2e
   POLYCLI_VERSION: v0.1.103
+  # sequence-store publishes `dev` on every push to its default branch and
+  # version tags on `v*` releases; pin a vX.Y.Z once one is cut.
+  SEQUENCE_STORE_TAG: dev
 
 jobs:
   build-bor:
@@ -51,9 +56,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: 0xPolygon/heimdall-v2
-          # develop runs Rio from genesis on local chains (heimdall-v2#673), which the
-          # v2.10.x devnet configs here don't; pin the release this tree pairs with.
-          ref: v0.12.2
+          ref: develop
           persist-credentials: false
 
       - name: Build heimdall-v2 docker image
@@ -70,15 +73,12 @@ jobs:
           retention-days: 1
 
   e2e-tests:
+    env:
+      ENCLAVE_NAME: kurtosis-e2e
     needs:
       - build-bor
       - build-heimdall-v2
-    # kurtosis-pos's Ethereum L1 stack requests up to 3 cores for its execution
-    # client (src/config/input_parser.star el_max_cpu); ubuntu-latest is 2 vCPU
-    # on private repos (4 on public, which is why the same file works upstream)
-    # and rejects that outright ("range of CPUs is from 0.01 to 2.00"). Use the
-    # self-hosted runner DevOps provisions for this repo instead.
-    runs-on: ubuntu24.04-16core-64GB-600SSD-bor
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     # GitHub withholds OIDC and repository secrets from fork pull_request runs.
     # Trusted runs use OIDC only while preparing public dependency images.
@@ -91,7 +91,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: 0xPolygon/kurtosis-pos
-          ref: v1.4.8
+          ref: kamuikatsurgi/rio-at-genesis
           persist-credentials: false
 
       # This step will free disk space and thus remove any docker images previously built
@@ -137,8 +137,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: 0xPolygon/pos-workflows
-          # main follows bor develop; pinned so the suite matches this release line.
-          ref: 8674f9288b2ad402496f499342b10e1f85a143ad
+          ref: kamuikatsurgi/rio-at-genesis
           path: pos-workflows
           persist-credentials: false
 
@@ -208,6 +207,440 @@ jobs:
           always() && (
           steps.smoke-tests.outcome == 'failure' ||
           steps.rpc-tests.outcome == 'failure')
+        uses: ./pos-workflows/.github/actions/network-diagnostics-and-state-dump
+        with:
+          enclave_name: ${{ env.ENCLAVE_NAME }}
+
+      # Clean up
+      - name: Post kurtosis run
+        if: always()
+        uses: ./.github/actions/kurtosis/cleanup
+        with:
+          main_branch: develop
+          enclave_name: ${{ env.ENCLAVE_NAME }}
+
+  stateless-e2e-tests:
+    env:
+      ENCLAVE_NAME: kurtosis-stateless-e2e
+    needs:
+      - build-bor
+      - build-heimdall-v2
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # GitHub withholds OIDC and repository secrets from fork pull_request runs.
+    # Trusted runs use OIDC only while preparing public dependency images.
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # Set up kurtosis
+      - name: Checkout kurtosis-pos
+        uses: actions/checkout@v7
+        with:
+          repository: 0xPolygon/kurtosis-pos
+          ref: kamuikatsurgi/rio-at-genesis
+          persist-credentials: false
+
+      # This step will free disk space and thus remove any docker images previously built
+      - name: Pre kurtosis run (trusted)
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: ./.github/actions/kurtosis/setup
+        with:
+          main_branch: develop
+          docker_username: ${{ secrets.DOCKERHUB }}
+          docker_token: ${{ secrets.DOCKERHUB_KEY }}
+
+      # Fork PRs deliberately avoid the authenticated registry setup above.
+      # Kurtosis pulls the package's public image references directly instead.
+      - name: Free disk space (fork)
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        # Removes preinstalled toolchains (Android, .NET, Haskell) and GitHub's preloaded images, ~24 GB.
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+          docker image prune --all --force > /dev/null
+          df -h /
+
+      - name: Install Kurtosis and yq (fork)
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          KURTOSIS_DEB=/tmp/kurtosis-cli_1.18.2_linux_amd64.deb
+          curl --proto '=https' --tlsv1.2 -fsSL \
+            https://github.com/kurtosis-tech/kurtosis-cli-release-artifacts/releases/download/1.18.2/kurtosis-cli_1.18.2_linux_amd64.deb \
+            -o "$KURTOSIS_DEB"
+          echo "6522717e33ede4e08b5fd3f2a47689c016c045075777c938f43d4b94e17c760d  $KURTOSIS_DEB" | sha256sum --check -
+          sudo apt-get install -y "$KURTOSIS_DEB"
+          kurtosis analytics disable
+          python3 -m pip install --disable-pip-version-check yq==4.1.2
+
+      - name: Install Foundry (fork)
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
+        with:
+          version: v1.5.1
+          cache: false
+
+      - name: Checkout pos-workflows
+        uses: actions/checkout@v7
+        with:
+          repository: 0xPolygon/pos-workflows
+          ref: kamuikatsurgi/rio-at-genesis
+          path: pos-workflows
+          persist-credentials: false
+
+      - name: Copy kurtosis config
+        run: cp ./pos-workflows/configs/kurtosis-stateless-e2e.yml ./kurtosis-stateless-e2e.yml
+
+      # Load images
+      - name: Download bor docker image
+        uses: actions/download-artifact@v8
+        with:
+          name: bor-image
+
+      - name: Download heimdall-v2 docker image
+        uses: actions/download-artifact@v8
+        with:
+          name: heimdall-v2-image
+
+      - name: Load bor docker image
+        run: |
+          gunzip -c bor-image.tar.gz | docker load
+          echo "Loaded bor docker image:"
+          docker images bor:local --format "{{.ID}} {{.CreatedAt}}"
+
+      - name: Load heimdall-v2 docker image
+        run: |
+          gunzip -c heimdall-v2-image.tar.gz | docker load
+          echo "Loaded heimdall-v2 docker image:"
+          docker images heimdall-v2:local --format "{{.ID}} {{.CreatedAt}}"
+
+      # Deploy kurtosis enclave
+      - name: Kurtosis run
+        run: kurtosis run --args-file=kurtosis-stateless-e2e.yml --enclave ${{ env.ENCLAVE_NAME }} .
+
+      - name: Inspect enclave
+        run: kurtosis enclave inspect ${{ env.ENCLAVE_NAME }}
+
+      # Run e2e tests
+      - name: Install polycli
+        run: |
+          tmp_dir=$(mktemp -d)
+          curl -L https://github.com/0xPolygon/polygon-cli/releases/download/${{ env.POLYCLI_VERSION }}/polycli_${{ env.POLYCLI_VERSION }}_linux_amd64.tar.gz | tar -xz -C "$tmp_dir"
+          mv "$tmp_dir"/* /usr/local/bin/polycli
+          rm -rf "$tmp_dir"
+          sudo chmod +x /usr/local/bin/polycli
+          polycli version
+
+      - name: Run stateless e2e tests
+        id: stateless-tests
+        working-directory: pos-workflows/tests/stateless_tests
+        run: bash kurtosis_stateless_test.sh
+
+      # Collect diagnostics on failure
+      - name: Collect network diagnostics and state dump
+        if: always() && steps.stateless-tests.outcome == 'failure'
+        uses: ./pos-workflows/.github/actions/network-diagnostics-and-state-dump
+        with:
+          enclave_name: ${{ env.ENCLAVE_NAME }}
+
+      # Clean up
+      - name: Post kurtosis run
+        if: always()
+        uses: ./.github/actions/kurtosis/cleanup
+        with:
+          main_branch: develop
+          enclave_name: ${{ env.ENCLAVE_NAME }}
+
+  # Runs the stateless-sync topology with `pipeline.enable-import-src = true`
+  # injected into every bor node's config template (POS-3697). The flag ships
+  # default-off, so without this leg no CI job exercises the pipelined import
+  # path on a real network. Adds a released-image baseline validator that
+  # ignores the injected section — a pipeline-off cross-check on every block.
+  pipeline-e2e-tests:
+    env:
+      ENCLAVE_NAME: kurtosis-pipeline-e2e
+    needs:
+      - build-bor
+      - build-heimdall-v2
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # GitHub withholds OIDC and repository secrets from fork pull_request runs.
+    # Trusted runs use OIDC only while preparing public dependency images.
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # Set up kurtosis
+      - name: Checkout kurtosis-pos
+        uses: actions/checkout@v5
+        with:
+          repository: 0xPolygon/kurtosis-pos
+          ref: kamuikatsurgi/rio-at-genesis
+          persist-credentials: false
+
+      # The whole point of this leg: every bor node gets the pipeline flag.
+      # bor:local nodes enable pipelined import (stateless-sync nodes
+      # self-gate it off); the released-image baseline ignores the unknown
+      # section and stays pipeline-off.
+      - name: Enable pipelined import in the bor config template
+        run: |
+          printf '\n[pipeline]\n  enable-import-src = true\n  import-src-logs = true\n' >> static_files/el/bor/config.toml
+          tail -4 static_files/el/bor/config.toml
+
+      # This step will free disk space and thus remove any docker images previously built
+      - name: Pre kurtosis run (trusted)
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: ./.github/actions/kurtosis/setup
+        with:
+          main_branch: develop
+          docker_username: ${{ secrets.DOCKERHUB }}
+          docker_token: ${{ secrets.DOCKERHUB_KEY }}
+
+      # Fork PRs deliberately avoid the authenticated registry setup above.
+      # Kurtosis pulls the package's public image references directly instead.
+      - name: Free disk space (fork)
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        # Removes preinstalled toolchains (Android, .NET, Haskell) and GitHub's preloaded images, ~24 GB.
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+          docker image prune --all --force > /dev/null
+          df -h /
+
+      - name: Install Kurtosis and yq (fork)
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          KURTOSIS_DEB=/tmp/kurtosis-cli_1.18.2_linux_amd64.deb
+          curl --proto '=https' --tlsv1.2 -fsSL \
+            https://github.com/kurtosis-tech/kurtosis-cli-release-artifacts/releases/download/1.18.2/kurtosis-cli_1.18.2_linux_amd64.deb \
+            -o "$KURTOSIS_DEB"
+          echo "6522717e33ede4e08b5fd3f2a47689c016c045075777c938f43d4b94e17c760d  $KURTOSIS_DEB" | sha256sum --check -
+          sudo apt-get install -y "$KURTOSIS_DEB"
+          kurtosis analytics disable
+          python3 -m pip install --disable-pip-version-check yq==4.1.2
+
+      - name: Install Foundry (fork)
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
+        with:
+          version: v1.5.1
+          cache: false
+
+      - name: Checkout pos-workflows
+        uses: actions/checkout@v5
+        with:
+          repository: 0xPolygon/pos-workflows
+          ref: kamuikatsurgi/rio-at-genesis
+          path: pos-workflows
+          persist-credentials: false
+
+      - name: Prepare kurtosis config with published release images
+        run: |
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          config = Path("pos-workflows/configs/kurtosis-pipeline-e2e.yml").read_text()
+          images = set(re.findall(r"(?m)^\s*el_image: (ghcr\.io/0xpolygon/bor:v\d+\.\d+\.\d+)\s*$", config))
+          if len(images) != 1:
+              raise SystemExit("Expected one pinned Bor release image in the pipeline config")
+          config = config.replace("el_image: 0xpolygon/bor:latest", "el_image: " + images.pop())
+          Path("kurtosis-pipeline-e2e.yml").write_text(config)
+          PY
+
+      # Load images
+      - name: Download bor docker image
+        uses: actions/download-artifact@v8
+        with:
+          name: bor-image
+
+      - name: Download heimdall-v2 docker image
+        uses: actions/download-artifact@v8
+        with:
+          name: heimdall-v2-image
+
+      - name: Load bor docker image
+        run: |
+          gunzip -c bor-image.tar.gz | docker load
+          echo "Loaded bor docker image:"
+          docker images bor:local --format "{{.ID}} {{.CreatedAt}}"
+
+      - name: Load heimdall-v2 docker image
+        run: |
+          gunzip -c heimdall-v2-image.tar.gz | docker load
+          echo "Loaded heimdall-v2 docker image:"
+          docker images heimdall-v2:local --format "{{.ID}} {{.CreatedAt}}"
+
+      # Deploy kurtosis enclave
+      - name: Kurtosis run
+        run: kurtosis run --args-file=kurtosis-pipeline-e2e.yml --enclave ${{ env.ENCLAVE_NAME }} .
+
+      - name: Inspect enclave
+        run: kurtosis enclave inspect ${{ env.ENCLAVE_NAME }}
+
+      # Run e2e tests
+      - name: Install polycli
+        run: |
+          tmp_dir=$(mktemp -d)
+          curl -L https://github.com/0xPolygon/polygon-cli/releases/download/${{ env.POLYCLI_VERSION }}/polycli_${{ env.POLYCLI_VERSION }}_linux_amd64.tar.gz | tar -xz -C "$tmp_dir"
+          mv "$tmp_dir"/* /usr/local/bin/polycli
+          rm -rf "$tmp_dir"
+          sudo chmod +x /usr/local/bin/polycli
+          polycli version
+
+      - name: Run stateless e2e tests (pipelined producers)
+        id: stateless-tests
+        working-directory: pos-workflows/tests/stateless_tests
+        run: bash kurtosis_stateless_test.sh
+
+      - name: Run pipeline checks
+        id: pipeline-checks
+        working-directory: pos-workflows/tests/pipeline_tests
+        run: bash kurtosis_pipeline_test.sh
+
+      # Collect diagnostics on failure
+      - name: Collect network diagnostics and state dump
+        if: always() && (steps.stateless-tests.outcome == 'failure' || steps.pipeline-checks.outcome == 'failure')
+        uses: ./pos-workflows/.github/actions/network-diagnostics-and-state-dump
+        with:
+          enclave_name: ${{ env.ENCLAVE_NAME }}
+
+      # Clean up
+      - name: Post kurtosis run
+        if: always()
+        uses: ./.github/actions/kurtosis/cleanup
+        with:
+          main_branch: develop
+          enclave_name: ${{ env.ENCLAVE_NAME }}
+
+  # Exercises the sequence-store publisher and consumer end to end against a
+  # bor built from this checkout: live publishers, production
+  # through a store outage, the recovery backfill, preconf receipts on the RPC
+  # node, and the store chaos episodes. The suites and devnet config live in
+  # pos-workflows; this job only supplies the bor under test.
+  #
+  # pos-workflows runs the same suites, but builds bor from a fixed ref, so it
+  # cannot gate a bor PR.
+  sequencer-e2e-tests:
+    env:
+      ENCLAVE_NAME: kurtosis-sequencer-e2e
+    needs:
+      - build-bor
+      - build-heimdall-v2
+    # The sequence-store image is a private ghcr package. Fork pull_request
+    # runs get neither repository secrets nor a token that can read it, so
+    # the suite would only fail at the pull; run it for trusted refs only.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    # Three suites share one enclave: functional, rpc (~5m), chaos (~10m).
+    timeout-minutes: 75
+    permissions:
+      contents: read
+      id-token: write
+      # Lets the default GITHUB_TOKEN pull the sequence-store package, which
+      # this repository is granted read access on.
+      packages: read
+    steps:
+      # v1.4.2 is the first release tag carrying the sequence-store launcher.
+      - name: Checkout kurtosis-pos
+        uses: actions/checkout@v7
+        with:
+          repository: 0xPolygon/kurtosis-pos
+          ref: kamuikatsurgi/rio-at-genesis
+          persist-credentials: false
+
+      - name: Pre kurtosis run
+        uses: ./.github/actions/kurtosis/setup
+        with:
+          main_branch: develop
+          docker_username: ${{ secrets.DOCKERHUB }}
+          docker_token: ${{ secrets.DOCKERHUB_KEY }}
+
+      - name: Checkout pos-workflows
+        uses: actions/checkout@v7
+        with:
+          repository: 0xPolygon/pos-workflows
+          ref: kamuikatsurgi/rio-at-genesis
+          path: pos-workflows
+          persist-credentials: false
+
+      - name: Copy kurtosis config
+        run: cp ./pos-workflows/configs/kurtosis-sequencer-e2e.yml ./kurtosis-sequencer-e2e.yml
+
+      # Load images
+      - name: Download bor docker image
+        uses: actions/download-artifact@v8
+        with:
+          name: bor-image
+
+      - name: Download heimdall-v2 docker image
+        uses: actions/download-artifact@v8
+        with:
+          name: heimdall-v2-image
+
+      - name: Load bor docker image
+        run: |
+          gunzip -c bor-image.tar.gz | docker load
+          echo "Loaded bor docker image:"
+          docker images bor:local --format "{{.ID}} {{.CreatedAt}}"
+
+      - name: Load heimdall-v2 docker image
+        run: |
+          gunzip -c heimdall-v2-image.tar.gz | docker load
+          echo "Loaded heimdall-v2 docker image:"
+          docker images heimdall-v2:local --format "{{.ID}} {{.CreatedAt}}"
+
+      # The package grant covers the default token; SEQUENCE_STORE_GHCR_TOKEN
+      # is an optional fine-grained PAT (read:packages) override.
+      - name: Pull sequence-store image
+        env:
+          GHCR_TOKEN: ${{ secrets.SEQUENCE_STORE_GHCR_TOKEN != '' && secrets.SEQUENCE_STORE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          docker pull ghcr.io/0xpolygon/sequence-store:${{ env.SEQUENCE_STORE_TAG }}
+          docker tag ghcr.io/0xpolygon/sequence-store:${{ env.SEQUENCE_STORE_TAG }} seqstore:local
+          docker images seqstore:local --format "{{.ID}} {{.CreatedAt}}"
+
+      # Deploy kurtosis enclave
+      - name: Kurtosis run
+        run: kurtosis run --args-file=kurtosis-sequencer-e2e.yml --enclave=${{ env.ENCLAVE_NAME }} .
+
+      - name: Inspect enclave
+        run: kurtosis enclave inspect ${{ env.ENCLAVE_NAME }}
+
+      - name: Install polycli
+        run: |
+          tmp_dir=$(mktemp -d)
+          curl -L https://github.com/0xPolygon/polygon-cli/releases/download/${{ env.POLYCLI_VERSION }}/polycli_${{ env.POLYCLI_VERSION }}_linux_amd64.tar.gz | tar -xz -C "$tmp_dir"
+          mv "$tmp_dir"/* /usr/local/bin/polycli
+          rm -rf "$tmp_dir"
+          sudo chmod +x /usr/local/bin/polycli
+          polycli version
+
+      - name: Run sequencer e2e tests
+        id: sequencer-tests
+        working-directory: pos-workflows/tests/sequencer_tests
+        run: bash kurtosis_sequencer_test.sh
+
+      - name: Run sequencer rpc tests
+        id: sequencer-rpc-tests
+        working-directory: pos-workflows/tests/sequencer_tests
+        run: bash sequencer_rpc_test.sh
+
+      # Last: every episode breaks a store component, so the enclave is left
+      # perturbed even when all of them repair cleanly.
+      - name: Run sequencer chaos tests
+        id: sequencer-chaos-tests
+        working-directory: pos-workflows/tests/sequencer_tests
+        run: bash sequencer_chaos_test.sh
+
+      # Collect diagnostics on failure
+      - name: Collect network diagnostics and state dump
+        if: >-
+          always() && (
+          steps.sequencer-tests.outcome == 'failure' ||
+          steps.sequencer-rpc-tests.outcome == 'failure' ||
+          steps.sequencer-chaos-tests.outcome == 'failure')
         uses: ./pos-workflows/.github/actions/network-diagnostics-and-state-dump
         with:
           enclave_name: ${{ env.ENCLAVE_NAME }}

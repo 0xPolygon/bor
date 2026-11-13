@@ -29,6 +29,8 @@ The transaction pool receives transactions from both RPC and peers. It is the pr
 
 5. **Replacement fee bump must be enforced** — replacement transactions must pay a minimum percentage increase in gas price to prevent replacement spam.
 
+6. **Keep rebroadcast accounting aligned with its timer** — record only real queue offers or acceptance, but use the current scheduled round for retry timing. Cover delayed callbacks, skipped ticks, and legacy subscribers so callback latency cannot double the configured interval or cause immediate catch-up retries.
+
 ## Patterns to Flag
 
 | Pattern | Severity | Why |
