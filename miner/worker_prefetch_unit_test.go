@@ -517,3 +517,38 @@ func TestStreamIdleBatch_LocalBudgetEnforced(t *testing.T) {
 	require.Equal(t, 10_000_000-perTxGas, totalGasPool.Available(false),
 		"totalGasPool must decrement by exactly the forwarded tx's gas")
 }
+
+func TestFreedGas(t *testing.T) {
+	const blockGas = 60_000_000
+
+	tests := []struct {
+		name                  string
+		amsterdam             bool
+		priorExec, priorState uint64
+		gasLimit              uint64
+		txExec, txState       uint64
+		want                  uint64
+	}{
+		{name: "legacy", gasLimit: 100_000, txExec: 21_000, want: 79_000},
+		{name: "amsterdam, execution stays above MaxTxGas", amsterdam: true, gasLimit: 100_000, txExec: 21_000, want: 79_000},
+		{name: "amsterdam, execution crosses MaxTxGas", amsterdam: true, priorExec: blockGas - params.MaxTxGas - 10_000, gasLimit: 21_000, txExec: 21_000, want: 0},
+		{name: "amsterdam, state dimension binds", amsterdam: true, gasLimit: 100_000, txExec: 30_000, txState: 50_000, want: 50_000},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gp := core.NewGasPool(blockGas)
+			if tt.amsterdam {
+				require.NoError(t, gp.ChargeGasAmsterdam(tt.priorExec, tt.priorState, 0))
+			}
+			usedBefore := gp.Used()
+
+			if tt.amsterdam {
+				require.NoError(t, gp.ChargeGasAmsterdam(tt.txExec, tt.txState, max(tt.txExec, tt.txState)))
+			} else {
+				require.NoError(t, gp.CheckGasLegacy(tt.gasLimit))
+				require.NoError(t, gp.ChargeGasLegacy(tt.gasLimit-tt.txExec, tt.txExec))
+			}
+			require.Equal(t, tt.want, freedGas(tt.gasLimit, gp.Used()-usedBefore))
+		})
+	}
+}
