@@ -1337,17 +1337,27 @@ func readConfigFile(path string) (*Config, error) {
 	return config, nil
 }
 
-// applyBaseFeeFloor wires miner.baseFeeFloor into the Bor config. The floor is
-// also the target base fee, so the floor and the gas target can never disagree.
-func (s *SealerConfig) applyBaseFeeFloor(bor *params.BorConfig) {
-	floor := s.BaseFeeFloor
-	if floor == 0 {
+// useBaseFeeFloorAsTarget makes miner.baseFeeFloor the target base fee
+// everywhere it is read (miner config, validations, Bor config), so the floor
+// and the dynamic gas limit / gas target can never disagree. It must run
+// before any of them reads TargetBaseFee.
+func (s *SealerConfig) useBaseFeeFloorAsTarget() {
+	if s.BaseFeeFloor == 0 {
 		return
 	}
-	enabled := true
+	log.Info("Base fee floor enabled, it replaces miner.targetBaseFee", "floor", s.BaseFeeFloor, "targetBaseFee", s.TargetBaseFee)
+	s.TargetBaseFee = s.BaseFeeFloor
+}
+
+// applyBaseFeeFloor wires miner.baseFeeFloor into the Bor config. TargetBaseFee
+// already equals the floor (see useBaseFeeFloorAsTarget).
+func (s *SealerConfig) applyBaseFeeFloor(bor *params.BorConfig) {
+	if s.BaseFeeFloor == 0 {
+		return
+	}
+	enabled, floor := true, s.BaseFeeFloor
 	bor.BaseFeeFloor = &enabled
 	bor.TargetBaseFee = &floor
-	log.Info("Base fee floor enabled, it replaces miner.targetBaseFee", "floor", floor, "targetBaseFee", s.TargetBaseFee)
 }
 
 // copyGenesisForRuntime returns a copy of the genesis whose chain config and
@@ -1492,6 +1502,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		}
 
 		// Dynamic gas limit configuration
+		c.Sealer.useBaseFeeFloorAsTarget()
 		n.Miner.EnableDynamicGasLimit = c.Sealer.EnableDynamicGasLimit
 		n.Miner.GasLimitMin = c.Sealer.GasLimitMin
 		n.Miner.GasLimitMax = c.Sealer.GasLimitMax

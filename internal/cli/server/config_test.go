@@ -15,6 +15,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
 	"github.com/ethereum/go-ethereum/internal/cli/server/chains"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/miner"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -868,6 +869,7 @@ func TestBaseFeeFloorConfig(t *testing.T) {
 		assert.Equal(t, uint64(0), config.Sealer.BaseFeeFloor)
 		ethConfig := build(t, config)
 		assert.Nil(t, ethConfig.Genesis.Config.Bor.BaseFeeFloor)
+		assert.Equal(t, miner.DefaultConfig.TargetBaseFee, ethConfig.Miner.TargetBaseFee)
 	})
 
 	// The floor is also the target base fee, even when miner.targetBaseFee
@@ -878,6 +880,20 @@ func TestBaseFeeFloorConfig(t *testing.T) {
 		ethConfig := build(t, config)
 		assert.True(t, *ethConfig.Genesis.Config.Bor.BaseFeeFloor)
 		assert.Equal(t, uint64(250_000_000_000), *ethConfig.Genesis.Config.Bor.TargetBaseFee)
+		// The miner (dynamic gas limit) must use the same target as the Bor config.
+		assert.Equal(t, uint64(250_000_000_000), ethConfig.Miner.TargetBaseFee)
+	})
+
+	// With the dynamic gas limit on and a floor below targetBaseFee - buffer,
+	// the miner must still target the floor, or the gas limit stays pinned at
+	// GasLimitMin while the fee rests at the floor.
+	t.Run("DynamicGasLimitUsesFloor", func(t *testing.T) {
+		config := DefaultConfig()
+		config.Sealer.EnableDynamicGasLimit = true
+		config.Sealer.BaseFeeFloor = 100_000_000_000
+		ethConfig := build(t, config)
+		assert.Equal(t, uint64(100_000_000_000), ethConfig.Miner.TargetBaseFee)
+		assert.Equal(t, *ethConfig.Genesis.Config.Bor.TargetBaseFee, ethConfig.Miner.TargetBaseFee)
 	})
 
 	t.Run("Flag", func(t *testing.T) {
