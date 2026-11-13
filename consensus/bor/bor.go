@@ -53,7 +53,6 @@ import (
 )
 
 const (
-	defaultSpanLength  = params.DefaultSpanLength
 	zerothSpanEnd      = 255             // End block of 0th span
 	checkpointInterval = 1024            // Number of blocks after which to save the vote snapshot to the database
 	inmemorySnapshots  = 128             // Number of recent vote snapshots to keep in memory
@@ -352,8 +351,12 @@ func New(
 		ttlcache.WithDisableTouchOnHit[common.Hash, *types.Header](),
 	)
 
-	// Create a new span store
-	spanStore := NewSpanStore(heimdallClient, spanner, chainConfig.ChainID.String())
+	var rioBlock *big.Int
+	if borConfig != nil {
+		rioBlock = borConfig.RioBlock
+	}
+	spanStore := NewSpanStore(heimdallClient, spanner, chainConfig.ChainID.String(), rioBlock)
+	spanStore.startRangeWarmup()
 
 	ctx, ctxCancel := context.WithCancel(context.Background())
 
@@ -382,7 +385,7 @@ func New(
 		common.Address{},
 		func(_ accounts.Account, _ string, i []byte) ([]byte, error) {
 			// return an error to prevent panics
-			return nil, &UnauthorizedSignerError{0, common.Address{}.Bytes(), []*valset.Validator{}}
+			return nil, &UnauthorizedSignerError{Number: 0, Signer: common.Address{}.Bytes(), AllowedSigners: []*valset.Validator{}}
 		},
 	})
 
@@ -448,6 +451,10 @@ func (c *Bor) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*types.
 func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Header, parents []*types.Header) error {
 	if header.Number == nil {
 		return errUnknownBlock
+	}
+	// Every check below works on the uint64 form, which silently truncates.
+	if !header.Number.IsUint64() {
+		return consensus.ErrInvalidNumber
 	}
 
 	number := header.Number.Uint64()
@@ -849,7 +856,7 @@ func (c *Bor) getVeBlopSnapshot(chain consensus.ChainHeaderReader, targetHeader 
 		}
 	}
 
-	span, err := c.spanStore.spanByBlockNumber(c.ctx, number)
+	span, settled, err := c.spanStore.settledSpanByBlockNumber(c.ctx, number)
 	if err != nil {
 		return nil, err
 	}
@@ -866,6 +873,7 @@ func (c *Bor) getVeBlopSnapshot(chain consensus.ChainHeaderReader, targetHeader 
 	sort.Sort(sortedProducers)
 
 	snap := newSnapshot(c.chainConfig, c.signatures, number, targetHeader.Hash(), sortedProducers)
+	snap.spanUnsettled = !settled
 
 	c.recents.Set(snap.Hash, snap, ttlcache.DefaultTTL)
 	return snap, nil
@@ -949,6 +957,10 @@ func (c *Bor) VerifySeal(chain consensus.ChainHeaderReader, header *types.Header
 // headers that aren't yet part of the local blockchain to generate the snapshots
 // from.
 func (c *Bor) verifySeal(chain consensus.ChainHeaderReader, header *types.Header, parents []*types.Header) error {
+	// VerifySeal is also called directly, without verifyHeader's number check.
+	if header.Number == nil || !header.Number.IsUint64() {
+		return consensus.ErrInvalidNumber
+	}
 	// Verifying the genesis block is not supported
 	number := header.Number.Uint64()
 	if number == 0 {
@@ -968,7 +980,7 @@ func (c *Bor) verifySeal(chain consensus.ChainHeaderReader, header *types.Header
 
 	if !snap.ValidatorSet.HasAddress(signer) && !snap.isAllowedByValidatorSetOverride(signer, header.Number.Uint64()) {
 		// Check the UnauthorizedSignerError.Error() msg to see why we pass number-1
-		return &UnauthorizedSignerError{number, signer.Bytes(), snap.ValidatorSet.Validators}
+		return &UnauthorizedSignerError{Number: number, Signer: signer.Bytes(), AllowedSigners: snap.ValidatorSet.Validators, spanUnsettled: snap.spanUnsettled}
 	}
 
 	succession, err := snap.GetSignerSuccessionNumber(signer)
@@ -1619,7 +1631,7 @@ func (c *Bor) SealWithStopHook(chain consensus.ChainHeaderReader, block *types.B
 	// Bail out if we're unauthorized to sign a block
 	if !snap.ValidatorSet.HasAddress(currentSigner.signer) && !snap.isAllowedByValidatorSetOverride(currentSigner.signer, header.Number.Uint64()) {
 		// Check the UnauthorizedSignerError.Error() msg to see why we pass number-1
-		return &UnauthorizedSignerError{number, currentSigner.signer.Bytes(), snap.ValidatorSet.Validators}
+		return &UnauthorizedSignerError{Number: number, Signer: currentSigner.signer.Bytes(), AllowedSigners: snap.ValidatorSet.Validators}
 	}
 
 	successionNumber, err := snap.GetSignerSuccessionNumber(currentSigner.signer)
@@ -2001,15 +2013,6 @@ func (c *Bor) FetchAndCommitSpan(
 	return c.spanner.CommitSpan(ctx, minSpan, validators, producers, state, header, chain, c.systemTxVMConfig(state))
 }
 
-// truncateEventRecords caps the records committed in a block at an override
-// count. The override is an upper bound on the block's records, so when
-// Heimdall returned fewer than that every fetched record is kept instead of
-// slicing past the end of the response. A negative override is treated like
-// zero and keeps no records.
-func truncateEventRecords(records []*clerk.EventRecordWithTime, limit int) []*clerk.EventRecordWithTime {
-	return records[:min(max(limit, 0), len(records))]
-}
-
 // CommitStates commit states
 func (c *Bor) CommitStates(
 	state vm.StateDB,
@@ -2074,112 +2077,186 @@ func (c *Bor) CommitStates(
 		"fromID", from,
 		"to", to.Format(time.RFC3339))
 
-	var eventRecords []*clerk.EventRecordWithTime
-
 	// Wait for heimdall to be synced before fetching state sync events
 	c.spanStore.waitUntilHeimdallIsSynced(c.ctx)
 
-	eventRecords, err = c.HeimdallClient.StateSyncEvents(c.ctx, from, to.Unix())
-	if err != nil {
-		log.Error("Error occurred when fetching state sync events", "fromID", from, "to", to.Unix(), "err", err)
-
-		stateSyncs := make([]*types.StateSyncData, 0)
-		return stateSyncs, nil
+	// The OverrideStateSyncRecords* configs cap how many fetched records this block
+	// considers. When both match, the range value wins: the old code truncated the
+	// fetched list by the map value and then by the range value, and reslicing up
+	// to capacity let a larger range value take effect.
+	remaining := math.MaxInt
+	if val, ok := c.config.OverrideStateSyncRecords[strconv.FormatUint(number, 10)]; ok {
+		remaining = val
 	}
 
-	// This if statement checks if there are any state sync record overrides configured for the current block number.
-	// If there are, it truncates the eventRecords array to the specified number of records.
-	if c.config.OverrideStateSyncRecords != nil {
-		if val, ok := c.config.OverrideStateSyncRecords[strconv.FormatUint(number, 10)]; ok {
-			eventRecords = truncateEventRecords(eventRecords, val)
-		}
+	if val, ok := c.config.GetOverrideStateSyncRecord(number); ok {
+		remaining = val
 	}
 
-	// This if statement checks if there are any state sync record overrides configured for the current block number.
-	// If there are, it truncates the eventRecords array to the specified number of records.
-	if c.config.OverrideStateSyncRecordsInRange != nil {
-		overrideStateSyncRecord, ok := c.config.GetOverrideStateSyncRecord(number)
-		if ok {
-			eventRecords = truncateEventRecords(eventRecords, overrideStateSyncRecord)
-		}
+	batch := &stateSyncBatch{
+		state:         state,
+		header:        header,
+		chain:         chain,
+		vmConfig:      c.systemTxVMConfig(state),
+		to:            to,
+		chainID:       c.chainConfig.ChainID.String(),
+		stateReceiver: common.HexToAddress(c.config.StateReceiverContract),
+		enforceBytes:  c.config.IsValencia(header.Number),
+		enforceGas:    c.config.IsAustin(header.Number),
+		lastStateID:   lastStateID,
+		stateSyncs:    make([]*types.StateSyncData, 0),
 	}
+
+	var (
+		fetched     int
+		processTime time.Duration
+	)
 
 	fetchTime := time.Since(fetchStart)
-	processStart := time.Now()
 
-	var totalGas uint64
-	chainID := c.chainConfig.ChainID.String()
-	stateSyncs := make([]*types.StateSyncData, 0, len(eventRecords))
+	// Fetch one Heimdall page at a time and only fetch the next one while every
+	// record so far was admitted and the gas budget can still take one. The
+	// admitted set is the same as fetching the whole backlog first, but a backlog
+	// the budget can't drain now costs one page per sprint instead of all of it.
+	for remaining > 0 && !batch.stopped && !gasBudgetFull(batch, batch.lastStateID+1) {
+		fromID := batch.lastStateID + 1
+		pageStart := time.Now()
+		eventRecords, err := c.HeimdallClient.StateSyncEvents(c.ctx, fromID, to.Unix())
+		fetchTime += time.Since(pageStart)
 
-	enforceStateSyncBudget := c.config.IsValencia(header.Number)
-	enforceStateSyncGasBudget := c.config.IsAustin(header.Number)
-	stateReceiver := common.HexToAddress(c.config.StateReceiverContract)
-	var stateSyncBytes uint64
-
-	var gasUsed uint64
-
-	vmConfig := c.systemTxVMConfig(state)
-
-	for _, eventRecord := range eventRecords {
-		if eventRecord.ID <= lastStateID {
-			continue
+		// Committing only the records fetched so far would give a different block
+		// from nodes whose fetch succeeded, so fail the block and let it be retried.
+		if err != nil {
+			log.Error("Error occurred when fetching state sync events", "fromID", fromID, "to", to.Unix(), "err", err)
+			return nil, fmt.Errorf("fetching state sync events from id %d: %w", fromID, err)
 		}
 
-		if err = validateEventRecord(eventRecord, number, to, lastStateID, chainID); err != nil {
-			log.Error("while validating event record", "block", number, "to", to, "stateID", lastStateID+1, "error", err.Error())
-			break
-		}
+		eventRecords = eventRecords[:min(len(eventRecords), remaining)]
+		remaining -= len(eventRecords)
+		fetched += len(eventRecords)
 
-		// From Valencia on, cap the state-sync bytes committed per block; records over
-		// the budget wait for a later sprint (lastStateID only advances for the ones we
-		// include). The first record always goes in, so a single over-budget record
-		// can't stall state sync forever.
-		recordSize := uint64(len(eventRecord.Data))
-		if len(stateSyncs) > 0 && stateSyncBudgetExceeded(enforceStateSyncBudget, stateSyncBytes, recordSize) {
-			log.Info("state-sync byte budget reached, deferring remaining records", "number", number, "includedBytes", stateSyncBytes, "deferredFromID", eventRecord.ID)
-			break
-		}
+		commitStart := time.Now()
+		err = c.commitStateSyncPage(batch, eventRecords)
+		processTime += time.Since(commitStart)
 
-		// totalGas starts at zero, so the first pending record is always admitted.
-		if enforceStateSyncGasBudget && totalGas >= params.MaxStateSyncGasPerBlock {
-			log.Info("state-sync gas budget reached, deferring remaining records", "number", number, "includedGas", totalGas, "deferredFromID", eventRecord.ID)
-			break
-		}
-
-		// A record over Heimdall's per-record cap shouldn't happen; log it if one does.
-		if enforceStateSyncBudget && recordSize > params.MaxStateSyncRecordBytes {
-			log.Error("state-sync record exceeds expected per-record cap", "number", number, "id", eventRecord.ID, "size", recordSize, "cap", params.MaxStateSyncRecordBytes)
-		}
-
-		stateSyncBytes += recordSize
-
-		stateData := types.StateSyncData{
-			ID:       eventRecord.ID,
-			Contract: eventRecord.Contract,
-			Data:     eventRecord.Data,
-			TxHash:   eventRecord.TxHash,
-		}
-
-		stateSyncs = append(stateSyncs, &stateData)
-		statefull.PrepareStateSyncContext(state, c.chainConfig, header.Number, header.Time, header.Coinbase, stateReceiver)
-
-		// Receipt construction expects the receiver call to emit at least one log.
-		// A receiver without code can complete without producing one.
-		gasUsed, err = c.GenesisContractsClient.CommitState(eventRecord, state, header, chain, vmConfig)
 		if err != nil {
 			return nil, err
 		}
 
-		totalGas += gasUsed
-
-		lastStateID++
+		// An empty page, or one that added nothing new, means the backlog is drained.
+		if batch.lastStateID < fromID {
+			break
+		}
 	}
 
-	processTime := time.Since(processStart)
+	log.Info("StateSyncData", "gas", batch.totalGas, "number", number, "lastStateID", batch.lastStateID, "total records", fetched, "fetch time", int(fetchTime.Milliseconds()), "process time", int(processTime.Milliseconds()))
 
-	log.Info("StateSyncData", "gas", totalGas, "number", number, "lastStateID", lastStateID, "total records", len(eventRecords), "fetch time", int(fetchTime.Milliseconds()), "process time", int(processTime.Milliseconds()))
+	return batch.stateSyncs, nil
+}
 
-	return stateSyncs, nil
+// stateSyncBatch carries one block's state-sync commit across Heimdall pages.
+type stateSyncBatch struct {
+	state         vm.StateDB
+	header        *types.Header
+	chain         statefull.ChainContext
+	vmConfig      vm.Config
+	to            time.Time
+	chainID       string
+	stateReceiver common.Address
+	enforceBytes  bool
+	enforceGas    bool
+
+	lastStateID uint64
+	totalGas    uint64
+	totalBytes  uint64
+	stateSyncs  []*types.StateSyncData
+	// stopped is set once the block refuses a record, on an invalid record or a
+	// full budget; nothing after it can be committed in this block.
+	stopped bool
+}
+
+// commitStateSyncPage commits records in order until the block stops admitting them.
+func (c *Bor) commitStateSyncPage(batch *stateSyncBatch, eventRecords []*clerk.EventRecordWithTime) error {
+	number := batch.header.Number.Uint64()
+
+	for _, eventRecord := range eventRecords {
+		if eventRecord.ID <= batch.lastStateID {
+			continue
+		}
+
+		if err := validateEventRecord(eventRecord, number, batch.to, batch.lastStateID, batch.chainID); err != nil {
+			log.Error("while validating event record", "block", number, "to", batch.to, "lastStateID", batch.lastStateID, "error", err.Error())
+			batch.stopped = true
+
+			return nil
+		}
+
+		if !admitStateSync(batch, eventRecord) {
+			batch.stopped = true
+
+			return nil
+		}
+
+		batch.stateSyncs = append(batch.stateSyncs, &types.StateSyncData{
+			ID:       eventRecord.ID,
+			Contract: eventRecord.Contract,
+			Data:     eventRecord.Data,
+			TxHash:   eventRecord.TxHash,
+		})
+		statefull.PrepareStateSyncContext(batch.state, c.chainConfig, batch.header.Number, batch.header.Time, batch.header.Coinbase, batch.stateReceiver)
+
+		// Receipt construction expects the receiver call to emit at least one log.
+		// A receiver without code can complete without producing one.
+		gasUsed, err := c.GenesisContractsClient.CommitState(eventRecord, batch.state, batch.header, batch.chain, batch.vmConfig)
+		if err != nil {
+			return err
+		}
+
+		batch.totalGas += gasUsed
+		batch.lastStateID++
+	}
+
+	return nil
+}
+
+// admitStateSync applies the per-block byte (Valencia) and gas (Austin) budgets.
+// Records over the budget wait for a later sprint (lastStateID only advances for
+// the ones included). The first record always goes in, so a single over-budget
+// record can't stall state sync forever.
+func admitStateSync(batch *stateSyncBatch, eventRecord *clerk.EventRecordWithTime) bool {
+	number := batch.header.Number.Uint64()
+	recordSize := uint64(len(eventRecord.Data))
+
+	if len(batch.stateSyncs) > 0 && stateSyncBudgetExceeded(batch.enforceBytes, batch.totalBytes, recordSize) {
+		log.Info("state-sync byte budget reached, deferring remaining records", "number", number, "includedBytes", batch.totalBytes, "deferredFromID", eventRecord.ID)
+		return false
+	}
+
+	// totalGas starts at zero, so the first pending record is always admitted.
+	if gasBudgetFull(batch, eventRecord.ID) {
+		return false
+	}
+
+	// A record over Heimdall's per-record cap shouldn't happen; log it if one does.
+	if batch.enforceBytes && recordSize > params.MaxStateSyncRecordBytes {
+		log.Error("state-sync record exceeds expected per-record cap", "number", number, "id", eventRecord.ID, "size", recordSize, "cap", params.MaxStateSyncRecordBytes)
+	}
+
+	batch.totalBytes += recordSize
+
+	return true
+}
+
+// gasBudgetFull reports, and logs, that the gas budget (Austin) is used up, so
+// the record starting at nextID and everything after it wait for a later sprint.
+func gasBudgetFull(batch *stateSyncBatch, nextID uint64) bool {
+	if !batch.enforceGas || batch.totalGas < params.MaxStateSyncGasPerBlock {
+		return false
+	}
+
+	log.Info("state-sync gas budget reached, deferring remaining records", "number", batch.header.Number.Uint64(), "includedGas", batch.totalGas, "deferredFromID", nextID)
+
+	return true
 }
 
 func validateEventRecord(eventRecord *clerk.EventRecordWithTime, number uint64, to time.Time, lastStateID uint64, chainID string) error {
@@ -2207,6 +2284,20 @@ func (c *Bor) SetHeimdallClient(h IHeimdallClient) {
 	c.HeimdallClient = h
 	// Update the heimdall client in span store
 	c.spanStore.setHeimdallClient(h)
+}
+
+// authorizationRefreshTimeout bounds the latest-span fetch behind
+// RefreshAuthorization.
+const authorizationRefreshTimeout = 5 * time.Second
+
+// RefreshAuthorization fetches the latest span now, so the next verification
+// judges signers against what Heimdall holds rather than the poll loop's last
+// view, which can predate a span committed since.
+func (c *Bor) RefreshAuthorization() error {
+	ctx, cancel := context.WithTimeout(c.ctx, authorizationRefreshTimeout)
+	defer cancel()
+
+	return c.spanStore.updateLatestSpan(ctx)
 }
 
 // PurgeCache clears all cached snapshots and span data. This is useful in tests
