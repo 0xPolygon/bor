@@ -1073,7 +1073,7 @@ func (api *API) TraceCall(ctx context.Context, args ethapi.TransactionArgs, bloc
 		return nil, err
 	}
 	var (
-		msg         = args.ToMessage(blockContext.BaseFee, true)
+		msg         = args.ToMessage(blockContext.BaseFee, true).SkipExecutionGasCapCheck()
 		tx          = args.ToTransaction(types.DynamicFeeTxType)
 		traceConfig *TraceConfig
 	)

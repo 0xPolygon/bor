@@ -75,7 +75,7 @@ require (
 	github.com/naoina/toml v0.1.2-0.20170918210437-9fafd6967416
 	github.com/pelletier/go-toml v1.9.5
 	github.com/peterh/liner v1.2.2
-	github.com/pion/stun/v3 v3.1.5
+	github.com/pion/stun/v3 v3.1.7
 	github.com/protolambda/bls12-381-util v0.1.0
 	github.com/protolambda/zrnt v0.34.1
 	github.com/protolambda/ztyp v0.2.2
@@ -122,8 +122,8 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0 // indirect
 	github.com/klauspost/compress v1.20.2 // indirect
 	github.com/minio/minlz v1.0.1-0.20250507153514-87eb42fe8882 // indirect
-	github.com/pion/dtls/v3 v3.1.4 // indirect
-	github.com/pion/transport/v4 v4.0.2 // indirect
+	github.com/pion/dtls/v3 v3.1.5 // indirect
+	github.com/pion/transport/v4 v4.1.0 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel/metric v1.46.0 // indirect

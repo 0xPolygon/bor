@@ -718,18 +718,17 @@ func (b *SimulatedBackend) callContract(ctx context.Context, call ethereum.CallM
 	from.SetBalance(math.BigIntToUint256Int(math.MaxBig256))
 
 	// Execute the call.
-	msg := &core.Message{
-		From:            call.From,
-		To:              call.To,
-		Value:           math.BigIntToUint256Int(call.Value),
-		GasLimit:        call.Gas,
-		GasPrice:        math.BigIntToUint256Int(call.GasPrice),
-		GasFeeCap:       math.BigIntToUint256Int(call.GasFeeCap),
-		GasTipCap:       math.BigIntToUint256Int(call.GasTipCap),
-		Data:            call.Data,
-		AccessList:      call.AccessList,
-		SkipNonceChecks: true,
-	}
+	msg := (&core.Message{
+		From:       call.From,
+		To:         call.To,
+		Value:      math.BigIntToUint256Int(call.Value),
+		GasLimit:   call.Gas,
+		GasPrice:   math.BigIntToUint256Int(call.GasPrice),
+		GasFeeCap:  math.BigIntToUint256Int(call.GasFeeCap),
+		GasTipCap:  math.BigIntToUint256Int(call.GasTipCap),
+		Data:       call.Data,
+		AccessList: call.AccessList,
+	}).SkipNonceCheck()
 
 	// Create a new environment which holds all relevant information
 	// about the transaction and calling mechanisms.
