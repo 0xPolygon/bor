@@ -30,6 +30,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/checkpoint"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/state/snapshot"
@@ -42,6 +43,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/triedb"
 )
 
@@ -2433,10 +2435,23 @@ func (d *Downloader) importBlockResultsStateless(results []*fetchResult) error {
 		default:
 		}
 		log.Warn("Stateless block import failed", "index", index, "hash", blocks[index].Hash(), "err", err)
+		if errors.Is(err, core.ErrStateSyncProcessing) && !witnessCausedStatelessFailure(err) {
+			return err
+		}
 		return errInvalidBody
 	}
 
 	return nil
+}
+
+func witnessCausedStatelessFailure(err error) bool {
+	var missingCode *state.MissingCodeError
+	if errors.As(err, &missingCode) {
+		return false
+	}
+	var missingNode *trie.MissingNodeError
+
+	return errors.As(err, &missingNode) || errors.Is(err, stateless.ErrInvalidWitness)
 }
 
 // insertStatelessWithHeal imports the batch and, on a recoverable missing-code

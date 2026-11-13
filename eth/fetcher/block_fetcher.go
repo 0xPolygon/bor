@@ -19,6 +19,7 @@ package fetcher
 
 import (
 	"errors"
+	"fmt"
 	"math/rand"
 	"sync"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/prque"
 	"github.com/ethereum/go-ethereum/consensus"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
@@ -1275,7 +1277,10 @@ func (f *BlockFetcher) importBlocks(op *blockOrHeaderInject) {
 			}
 			return
 		}
-		f.done <- hash
+		select {
+		case f.done <- hash:
+		case <-f.quit:
+		}
 	}()
 }
 
@@ -1314,9 +1319,7 @@ func (f *BlockFetcher) runBlockImport(op *blockOrHeaderInject) (retryWitness boo
 		return false
 	}
 	// Run the actual import and log any issues
-	// Pass the witness along with the block to the insertion function.
-	// Create slices even for a single block/witness to match the expected signature.
-	if _, err := f.insertChain(types.Blocks{block}, []*stateless.Witness{witness}); err != nil {
+	if err := f.insertBlockWithRetry(op); err != nil {
 		log.Debug("Propagated block import failed", "peer", peer, "number", block.Number(), "hash", hash, "err", err)
 		return f.chargeDivergedWitnessImportFailure(op, err)
 	}
@@ -1437,4 +1440,26 @@ func (f *BlockFetcher) forgetBlock(hash common.Hash) {
 // GetWitnessManager returns the witness manager for external access
 func (f *BlockFetcher) GetWitnessManager() *witnessManager {
 	return f.wm
+}
+
+const (
+	stateSyncImportRetryDelay = 10 * time.Second
+	maxStateSyncImportRetries = 2
+)
+
+func (f *BlockFetcher) insertBlockWithRetry(op *blockOrHeaderInject) error {
+	for attempt := 0; ; attempt++ {
+		_, err := f.insertChain(types.Blocks{op.block}, []*stateless.Witness{op.witness})
+		if !errors.Is(err, core.ErrStateSyncProcessing) || isWitnessAttributableImportError(err) || attempt >= maxStateSyncImportRetries {
+			return err
+		}
+		log.Warn("Retrying block import after state-sync processing failure", "number", op.number(), "hash", op.hash(), "delay", stateSyncImportRetryDelay, "err", err)
+		timer := time.NewTimer(stateSyncImportRetryDelay)
+		select {
+		case <-timer.C:
+		case <-f.quit:
+			timer.Stop()
+			return fmt.Errorf("%w: %w", errTerminated, err)
+		}
+	}
 }

@@ -32,11 +32,18 @@ const (
 	witnessCacheSize = 10
 	witnessCacheTTL  = 2 * time.Minute
 
+	witnessFetchRetryDelay = time.Second
+
 	// Witness size estimation constants
 	// Assuming 1M gas results in 1MB witness, and max page size is 15MB
 	gasPerMB             = 1_000_000 // 1M gas per MB of witness
 	maxPageSizeMB        = 15        // Maximum page size in MB
 	witnessPageThreshold = 10        // Default threshold if gas ceil not available
+)
+
+var (
+	errInvalidWitnessResponse  = errors.New("invalid witness response type")
+	errWitnessFetchUnavailable = errors.New("witness fetch unavailable")
 )
 
 // witnessRequestState tracks the state of a pending witness request.
@@ -663,11 +670,15 @@ func (m *witnessManager) initiateWitnessFetch(hash common.Hash, announce *blockA
 
 	if err != nil {
 		log.Debug("[wm] Failed to initiate witness fetch request", "peer", peer, "hash", hash, "err", err)
-		wrappedErr := fmt.Errorf("request initiation failed: %w", err)
+		wrappedErr := fmt.Errorf("%w: request initiation failed: %w", errWitnessFetchUnavailable, err)
 
 		// "No peer with witness" is a soft failure with no peer to penalize.
 		if strings.Contains(err.Error(), "no peer with witness for hash") {
-			m.handleWitnessFetchFailureExt(hash, "", wrappedErr, false)
+			log.Debug("[wm] Witness fetch found no source", "hash", hash, "err", wrappedErr)
+
+			m.setWitnessRetry(hash, 0)
+			m.rescheduleWitness()
+
 			return nil, "", false
 		}
 
@@ -693,7 +704,7 @@ func (m *witnessManager) initiateWitnessFetch(hash common.Hash, announce *blockA
 // awaitWitnessResponse waits for the fetch response, delegating to success
 // or failure handlers depending on the outcome.
 func (m *witnessManager) awaitWitnessResponse(peer string, hash common.Hash, resCh chan *eth.Response, announcedAt time.Time) {
-	timeout := time.NewTimer(2 * fetchTimeout) // 2x leeway before dropping the peer
+	timeout := time.NewTimer(2 * fetchTimeout)
 	defer timeout.Stop()
 
 	select {
@@ -701,7 +712,7 @@ func (m *witnessManager) awaitWitnessResponse(peer string, hash common.Hash, res
 		m.processWitnessResponse(peer, hash, res, announcedAt)
 	case <-timeout.C:
 		log.Info("[wm] Witness fetch timed out for peer", "peer", peer, "hash", hash)
-		m.handleWitnessFetchFailureExt(hash, peer, errors.New("fetch timeout"), false)
+		m.handleWitnessFetchFailureExt(hash, peer, fmt.Errorf("%w: fetch timeout", errWitnessFetchUnavailable), false)
 	case <-m.parentQuit:
 		log.Debug("[wm] Witness fetch cancelled due to shutdown", "peer", peer, "hash", hash)
 	}
@@ -712,7 +723,7 @@ func (m *witnessManager) awaitWitnessResponse(peer string, hash common.Hash, res
 func (m *witnessManager) processWitnessResponse(peer string, hash common.Hash, res *eth.Response, announcedAt time.Time) {
 	if res == nil {
 		log.Debug("[wm] Witness response channel closed unexpectedly", "peer", peer, "hash", hash)
-		m.handleWitnessFetchFailureExt(hash, peer, errors.New("response channel closed"), false)
+		m.handleWitnessFetchFailureExt(hash, peer, fmt.Errorf("%w: response channel closed", errWitnessFetchUnavailable), false)
 		return
 	}
 	res.Done <- nil // Signal consumption
@@ -721,7 +732,7 @@ func (m *witnessManager) processWitnessResponse(peer string, hash common.Hash, r
 	witness, ok := res.Res.([]*stateless.Witness)
 	if !ok {
 		log.Debug("[wm] Invalid witness response type received", "peer", peer, "hash", hash, "type", fmt.Sprintf("%T", res.Res))
-		m.handleWitnessFetchFailureExt(hash, peer, errors.New("invalid response type"), false)
+		m.handleWitnessFetchFailureExt(hash, peer, errInvalidWitnessResponse, false)
 		return
 	}
 	if len(witness) == 0 {
@@ -854,19 +865,20 @@ func (m *witnessManager) earliestPendingAnnounceLocked() time.Time {
 func (m *witnessManager) handleWitnessFetchFailureExt(hash common.Hash, peer string, fetchErr error, removePending bool) {
 	log.Debug("[wm] Witness fetch failed", "hash", hash, "peer", peer, "err", fetchErr, "removePending", removePending)
 
-	m.mu.Lock()
 	if removePending {
+		m.mu.Lock()
 		delete(m.pending, hash)
 		m.clearSignedHashMismatch(hash)
+		m.mu.Unlock()
 	} else {
-		if state := m.pending[hash]; state != nil {
-			// back-off before next retry
-			state.announce.time = time.Now()
+		var delay time.Duration
+		if errors.Is(fetchErr, errWitnessFetchUnavailable) {
+			delay = witnessFetchRetryDelay
 		}
+		m.setWitnessRetry(hash, delay)
 	}
-	m.mu.Unlock()
 
-	if peer != "" {
+	if peer != "" && errors.Is(fetchErr, errInvalidWitnessResponse) {
 		m.parentDropPeer(peer)
 	}
 
@@ -1254,4 +1266,13 @@ func (m *witnessManager) CheckWitnessPageCount(hash common.Hash, pageCount uint6
 	witnessPageCountAboveThresholdMeter.Mark(1)
 	witnessVerifyFailureMeter.Mark(1)
 	return false
+}
+
+func (m *witnessManager) setWitnessRetry(hash common.Hash, delay time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if state := m.pending[hash]; state != nil && state.announce != nil {
+		state.announce.time = time.Now().Add(delay)
+		state.retries += int(delay / gatherSlack)
+	}
 }
