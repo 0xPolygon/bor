@@ -1341,6 +1341,19 @@ func readConfigFile(path string) (*Config, error) {
 	return config, nil
 }
 
+// applyBaseFeeFloor wires miner.baseFeeFloor into the Bor config. The floor is
+// also the target base fee, so the floor and the gas target can never disagree.
+func (s *SealerConfig) applyBaseFeeFloor(bor *params.BorConfig) {
+	floor := s.BaseFeeFloor
+	if floor == 0 {
+		return
+	}
+	enabled := true
+	bor.BaseFeeFloor = &enabled
+	bor.TargetBaseFee = &floor
+	log.Info("Base fee floor enabled, it replaces miner.targetBaseFee", "floor", floor, "targetBaseFee", s.TargetBaseFee)
+}
+
 // copyGenesisForRuntime returns a copy of the genesis whose chain config and
 // Bor config can be changed without touching the shared chain preset.
 // buildEth writes runtime producer settings (target gas, base fee floor) into
@@ -1574,16 +1587,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 			n.Genesis.Config.Bor.BaseFeeBuffer = &c.Sealer.BaseFeeBuffer
 		}
 
-		// The floor is also the target base fee, so the floor and the gas target can never disagree
-		if floor := c.Sealer.BaseFeeFloor; floor > 0 {
-			if c.Sealer.EnableDynamicTargetGas && c.Sealer.TargetBaseFee != floor {
-				log.Warn("miner.baseFeeFloor replaces miner.targetBaseFee", "targetBaseFee", c.Sealer.TargetBaseFee, "floor", floor)
-			}
-			enabled := true
-			n.Genesis.Config.Bor.BaseFeeFloor = &enabled
-			n.Genesis.Config.Bor.TargetBaseFee = &floor
-			log.Info("Base fee floor enabled", "floor", floor)
-		}
+		c.Sealer.applyBaseFeeFloor(n.Genesis.Config.Bor)
 	}
 
 	// unlock accounts
