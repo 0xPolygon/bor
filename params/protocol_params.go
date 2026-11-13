@@ -189,6 +189,14 @@ const (
 	P256VerifyGas        uint64 = 3450
 	P256VerifyGasEIP7951 uint64 = 6900
 
+	// Post-quantum signature verification. Provisional: priced at ecrecover's
+	// gas-per-second on an Apple M4 Pro with no margin. Must be re-measured on
+	// block-producer hardware before any fork activates them.
+	MLDSA65VerifyBaseGas        uint64 = 17000 // Base price for an ML-DSA-65 verification
+	MLDSAVerifyPerWordGas       uint64 = 6     // Per-word message price for ML-DSA (SHAKE256, as KECCAK256)
+	SLHDSASha2128sVerifyBaseGas uint64 = 41000 // Base price for an SLH-DSA-SHA2-128s verification, at the worst-case hash count
+	SLHDSAVerifyPerWordGas      uint64 = 12    // Per-word message price for SLH-DSA (SHA-256, as the SHA256 precompile)
+
 	// PIP-88: precompile gas repricing activated by the Chicago hard fork.
 
 	GFROUNDPIP88 uint64 = 22 // PIP-88 GFROUND for blake2F operation

@@ -164,6 +164,14 @@ compile_fuzzer github.com/ethereum/go-ethereum/tests/fuzzers/txfetcher \
   Fuzz fuzzTxfetcher \
   $repo/tests/fuzzers/txfetcher/txfetcher_test.go
 
+compile_fuzzer github.com/ethereum/go-ethereum/tests/fuzzers/pqsig \
+  FuzzMLDSA65 fuzzPqsigMLDSA65 \
+  $repo/tests/fuzzers/pqsig/pqsig_test.go
+
+compile_fuzzer github.com/ethereum/go-ethereum/tests/fuzzers/pqsig \
+  FuzzSLHDSA fuzzPqsigSLHDSA \
+  $repo/tests/fuzzers/pqsig/pqsig_test.go
+
 compile_fuzzer github.com/ethereum/go-ethereum/tests/fuzzers/bls12381 \
   FuzzG1Add fuzz_g1_add\
   $repo/tests/fuzzers/bls12381/bls12381_test.go

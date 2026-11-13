@@ -56,6 +56,9 @@ type Config struct {
 	// results. The prefetcher populates it during warm-up; V2 workers hit
 	// it to avoid redundant CGo secp256k1 calls.
 	EcrecoverCache *EcrecoverCache
+	// PQVerifyCache is a shared, size-capped cache for the post-quantum
+	// signature verify precompiles, filled by the prefetcher.
+	PQVerifyCache *PQVerifyCache
 }
 
 // ScopeContext contains the things that are per-call, such as stack and memory,
