@@ -65,8 +65,13 @@ For every new or changed fork, verify all of these surfaces before approving:
   copy/equality handling, config validation, and config compatibility logic.
 - `ChainConfig.Rules` exposes the fork state where EVM, tx, block, or
   precompile code needs it.
-- Fork ID calculation includes the fork only when configured and at the correct
-  height, so peer compatibility matches the rollout plan.
+- Fork ID: a new `BorConfig` fork enters the eth fork ID on its own
+  (`borForkIDForks` in `core/forkid/forkid.go` reads every `*Block` field), so
+  the hash changes at the activation block and peers that missed the fork are
+  rejected. Never add a fork to `preForkIDBorForks`: the set is frozen to the
+  forks released binaries knew before Bor forks entered the fork ID, and adding
+  one changes the fork ID on chains where it's active, splitting upgraded nodes
+  from the rest.
 - Startup banner or config logging prints the new fork. For mainnet and Amoy,
   a normal server startup path should show the expected `#<block>` value.
 
@@ -90,11 +95,11 @@ For every new or changed fork, verify all of these surfaces before approving:
   re-enable KZG after LisovoPro, and must not remove KZG from historical
   Madhugiri/MadhugiriPro/Lisovo replay unless the PR explicitly documents and
   tests that consensus change.
-- Any change that affects block validity, transaction validity, receipt roots,
-  state roots, logs bloom, RLP encoding, or fork ID must have cross-client
-  parity tracked for Polygon Erigon before the rollout is considered complete.
 - Release branches and private security branches must carry the same fork
-  constants and activation logic as the public branch they are meant to ship.
+  constants and activation logic as the public branch they are meant to ship,
+  including the fork ID logic in `core/forkid/forkid.go`. A release that
+  schedules a new Bor fork from a branch without it splits from upgraded nodes
+  at activation.
 
 ## Review Checks
 
@@ -111,8 +116,9 @@ For every new or changed fork, verify all of these surfaces before approving:
       pre-activation behavior?
 - [ ] Does the startup banner, config dump, or equivalent smoke test prove that
       the runtime-loaded chain config contains the new fork value?
-- [ ] If the fork changes EVM behavior or protocol encoding, is there a
-      matching Erigon compatibility note, issue, or implementation?
+- [ ] Does a fork ID test show `Next` set to the activation block before it
+      and the hash changing at it, for mainnet and Amoy? Is
+      `preForkIDBorForks` untouched?
 - [ ] If `core/vm/contracts.go`, `core/vm/jump_table.go`, `params.Rules`, or
       a VM hardfork block changed, does the PR update or explicitly preserve
       the precompile continuity matrix?

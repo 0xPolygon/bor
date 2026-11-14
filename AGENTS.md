@@ -191,9 +191,15 @@ copying the old precompile map is a review finding unless the PR documents why
 every special-case precompile is retained.
 
 Fork-gated EVM, precompile, consensus, and miner behavior must be tested at
-`N-1`, `N`, and `N+1` for each network activation block. If the fork changes
-consensus output, track Polygon Erigon parity before treating the rollout as
-complete.
+`N-1`, `N`, and `N+1` for each network activation block.
+
+A new `BorConfig` fork enters the eth fork ID on its own, so the hash changes
+at the activation block and peers that missed the fork are rejected. Never add
+a fork to `preForkIDBorForks` in `core/forkid/forkid.go`: it's frozen to the
+forks released binaries already knew, and growing it splits upgraded nodes from
+the rest on chains where that fork is active. Any branch that schedules a new
+Bor fork, private security and hotfix branches included, must carry that fork
+ID logic.
 
 ### Before Making Changes
 
