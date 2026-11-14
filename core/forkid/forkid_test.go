@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"fmt"
 	"hash/crc32"
+	"maps"
 	"math"
 	"math/big"
 	"reflect"
@@ -159,6 +160,7 @@ func TestCreation(t *testing.T) {
 				{5423600, 0, ID{Hash: checksumToBytes(0xb4f6ec4f), Next: 22765056}},  // First Napoli block
 				{22765055, 0, ID{Hash: checksumToBytes(0xb4f6ec4f), Next: 22765056}}, // Last block before Bhilai
 				{22765056, 0, ID{Hash: checksumToBytes(0x8b7e4175), Next: 0}},        // First Bhilai block
+				{51978200, 0, ID{Hash: checksumToBytes(0x8b7e4175), Next: 0}},        // First Uburu block, unchanged
 			},
 		},
 		{
@@ -178,6 +180,7 @@ func TestCreation(t *testing.T) {
 				{54876000, 0, ID{Hash: checksumToBytes(0xf097bc13), Next: 73440256}}, // First Napoli block
 				{73440255, 0, ID{Hash: checksumToBytes(0xf097bc13), Next: 73440256}}, // Last Napoli block
 				{73440256, 0, ID{Hash: checksumToBytes(0x22d523b2), Next: 0}},        // First Bhilai block
+				{96787900, 0, ID{Hash: checksumToBytes(0x22d523b2), Next: 0}},        // First Uburu block, unchanged
 			},
 		},
 	}
@@ -570,7 +573,7 @@ func TestGatherForksBorZeroBlock(t *testing.T) {
 
 // TestGatherForksIncludesEveryBorFork sets every BorConfig *Block field to its
 // own height and requires each one in the gathered forks, so a new Bor fork
-// cannot be left out of bor_forks. Bor forks don't enter the devp2p fork ID.
+// cannot be left out of bor_forks.
 func TestGatherForksIncludesEveryBorFork(t *testing.T) {
 	bor := &params.BorConfig{}
 	v := reflect.ValueOf(bor).Elem()
@@ -595,6 +598,102 @@ func TestGatherForksIncludesEveryBorFork(t *testing.T) {
 	for name, height := range want {
 		if !got[height] {
 			t.Errorf("%s (block %d) missing from GatherForks", name, height)
+		}
+	}
+}
+
+// TestForkIDNewBorFork schedules a Bor fork that isn't in preForkIDBorForks on
+// mainnet: it must enter the fork ID, and a peer that missed it must fail
+// validation. Every current BorConfig fork predates the fork ID change, so
+// Hampi stands in for the next one.
+func TestForkIDNewBorFork(t *testing.T) {
+	const fork = 100_000_000
+
+	skipped := preForkIDBorForks["HampiBlock"]
+	delete(preForkIDBorForks, "HampiBlock")
+	t.Cleanup(func() { preForkIDBorForks["HampiBlock"] = skipped })
+
+	if forks := borForkIDForks(nil); forks != nil {
+		t.Fatalf("nil Bor config: have %v, want none", forks)
+	}
+
+	config := *params.BorMainnetChainConfig
+	bor := *config.Bor
+	bor.HampiBlock = big.NewInt(fork)
+	config.Bor = &bor
+	genesis := core.DefaultBorMainnetGenesisBlock().ToBlock()
+
+	stale := NewID(params.BorMainnetChainConfig, genesis, fork, 0)
+
+	if have, want := NewID(&config, genesis, fork-1, 0), (ID{Hash: stale.Hash, Next: fork}); have != want {
+		t.Fatalf("before fork: have %x, want %x", have, want)
+	}
+	upgraded := NewID(&config, genesis, fork, 0)
+	if upgraded.Hash == stale.Hash || upgraded.Next != 0 {
+		t.Fatalf("after fork: have %x, want a new hash with no next fork", upgraded)
+	}
+
+	tests := []struct {
+		name string
+		head uint64
+		id   ID
+		err  error
+	}{
+		{"stale peer before fork", fork - 1, stale, nil},
+		{"stale peer after fork", fork, stale, ErrRemoteStale},
+		{"upgraded peer after fork", fork, upgraded, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			filter := newFilter(&config, genesis, func() (uint64, uint64) { return tt.head, 0 })
+			if err := filter(tt.id); err != tt.err {
+				t.Errorf("have %v, want %v", err, tt.err)
+			}
+		})
+	}
+}
+
+// TestForkIDBorForkSet requires every Bor fork known before the fork ID change
+// to leave the fork ID alone, matching what released binaries announce, and
+// every later BorConfig fork to enter it, so a new Bor fork can't be left out
+// of the handshake.
+func TestForkIDBorForkSet(t *testing.T) {
+	legacy := map[string]bool{
+		"JaipurBlock": true, "DelhiBlock": true, "IndoreBlock": true, "AhmedabadBlock": true,
+		"BhilaiBlock": true, "RioBlock": true, "MadhugiriBlock": true, "MadhugiriProBlock": true,
+		"DandeliBlock": true, "LisovoBlock": true, "LisovoProBlock": true, "GiuglianoBlock": true,
+		"ChicagoBlock": true, "ValenciaBlock": true, "AustinBlock": true, "HampiBlock": true,
+		"UburuBlock": true,
+	}
+
+	if !maps.Equal(preForkIDBorForks, legacy) {
+		t.Fatalf("preForkIDBorForks changed: have %v, want %v", preForkIDBorForks, legacy)
+	}
+	kind := reflect.TypeFor[params.BorConfig]()
+	for name := range legacy {
+		if field, ok := kind.FieldByName(name); !ok || field.Type != reflect.TypeFor[*big.Int]() {
+			t.Errorf("frozen fork %s is no longer a *big.Int field on BorConfig", name)
+		}
+	}
+
+	genesis := core.DefaultBorMainnetGenesisBlock().ToBlock()
+	base := NewID(&params.ChainConfig{Bor: &params.BorConfig{}}, genesis, 0, 0)
+
+	for i := 0; i < kind.NumField(); i++ {
+		name := kind.Field(i).Name
+		if kind.Field(i).Type != reflect.TypeFor[*big.Int]() || !strings.HasSuffix(name, "Block") {
+			continue
+		}
+		bor := &params.BorConfig{}
+		reflect.ValueOf(bor).Elem().Field(i).Set(reflect.ValueOf(big.NewInt(1000)))
+
+		have := NewID(&params.ChainConfig{Bor: bor}, genesis, 0, 0)
+		if legacy[name] {
+			if have != base {
+				t.Errorf("%s changed the fork ID: have %x, want %x", name, have, base)
+			}
+		} else if have.Next != 1000 {
+			t.Errorf("%s missing from the fork ID: have %x", name, have)
 		}
 	}
 }
