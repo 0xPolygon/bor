@@ -1,5 +1,5 @@
 # Bor Overview
-Bor is the official Golang implementation of the Polygon PoS blockchain. It is a fork of [geth](https://github.com/ethereum/go-ethereum) and is EVM compatible (upto London fork).
+Bor is the official Golang implementation of the Polygon PoS blockchain. It is a fork of [geth](https://github.com/ethereum/go-ethereum) and is EVM compatible (up to Prague fork).
 
 [![API Reference](https://pkg.go.dev/badge/github.com/0xPolygon/bor)](https://pkg.go.dev/github.com/0xPolygon/bor)
 [![Go Report Card](https://goreportcard.com/badge/github.com/0xPolygon/bor)](https://goreportcard.com/report/github.com/0xPolygon/bor)
@@ -23,7 +23,7 @@ The releases supports both the networks i.e. Polygon Mainnet, and Amoy (Testnet)
 
 ### Building from source
 
-- Install Go (version 1.19 or later) and a C compiler.
+- Install Go (version 1.26 or later) and a C compiler.
 - Clone the repository and build the binary using the following commands:
     ```shell
     make bor
@@ -92,9 +92,9 @@ For the latest canonical TOML config options, refer to:
 
 ### Documentation
 
-- The official documentation for the Polygon PoS chain can be found [here](https://wiki.polygon.technology/docs/pos/getting-started/). It contains all the conceptual and architectural details of the chain along with an operational guide for users running the nodes.
+- The official documentation for the Polygon PoS chain can be found [here](https://docs.polygon.technology/pos/). It contains all the conceptual and architectural details of the chain along with an operational guide for users running the nodes.
 - New release announcements and discussions can be found on our [forum page](https://forum.polygon.technology/).
-- Polygon improvement proposals can be found [here](https://github.com/maticnetwork/Polygon-Improvement-Proposals/)
+- Polygon improvement proposals can be found [here](https://github.com/0xPolygon/Polygon-Improvement-Proposals)
 
 ### Contribution guidelines
 
