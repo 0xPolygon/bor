@@ -78,7 +78,7 @@ func TestPeerStaticAnnouncementCapacity(t *testing.T) {
 	defer source.Close()
 	defer sink.Close()
 	pool := &broadcastTestPool{tx: types.NewTx(&types.LegacyTx{})}
-	peer := NewPeer(ETH68, connection, source, pool)
+	peer := NewPeer(ETH68, connection, source, pool, nil)
 	defer peer.Close()
 	if len(peer.QueuePooledTransactionHashes([]common.Hash{pool.tx.Hash()})) != 1 {
 		t.Fatal("initial announcement was not retained")
@@ -104,7 +104,7 @@ func TestTxPropagationRejectsFailedWriter(t *testing.T) {
 	for _, announce := range []bool{false, true} {
 		synctest.Test(t, func(t *testing.T) {
 			pool := &broadcastTestPool{tx: types.NewTx(&types.LegacyTx{})}
-			peer := NewPeer(ETH68, p2p.NewPeer(enode.ID{1}, "", nil), &replyTestRW{err: io.ErrClosedPipe}, pool)
+			peer := NewPeer(ETH68, p2p.NewPeer(enode.ID{1}, "", nil), &replyTestRW{err: io.ErrClosedPipe}, pool, nil)
 			defer peer.Close()
 			send := peer.QueueTransactions
 			if announce {

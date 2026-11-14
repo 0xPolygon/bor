@@ -36,6 +36,11 @@ type C struct {
 	abi abi.ABI
 }
 
+// GetABI returns the ABI associated with this contract binding.
+func (c *C) GetABI() abi.ABI {
+	return c.abi
+}
+
 // NewC creates a new instance of C.
 func NewC() *C {
 	parsed, err := CMetaData.ParseABI()
@@ -115,8 +120,11 @@ func (CBasic1) ContractEventName() string {
 // Solidity: event basic1(uint256 indexed id, uint256 data)
 func (c *C) UnpackBasic1Event(log *types.Log) (*CBasic1, error) {
 	event := "basic1"
-	if len(log.Topics) == 0 || log.Topics[0] != c.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
+	if log.Topics[0] != c.abi.Events[event].ID {
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(CBasic1)
 	if len(log.Data) > 0 {
@@ -157,8 +165,11 @@ func (CBasic2) ContractEventName() string {
 // Solidity: event basic2(bool indexed flag, uint256 data)
 func (c *C) UnpackBasic2Event(log *types.Log) (*CBasic2, error) {
 	event := "basic2"
-	if len(log.Topics) == 0 || log.Topics[0] != c.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
+	if log.Topics[0] != c.abi.Events[event].ID {
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(CBasic2)
 	if len(log.Data) > 0 {

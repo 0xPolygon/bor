@@ -225,6 +225,7 @@ func collectStorage(it snapshot.StorageIterator, limit common.Hash, size *uint64
 		})
 		// If we've exceeded the request threshold, abort
 		if bytes.Compare(hash[:], limit[:]) >= 0 {
+			abort = true
 			break
 		}
 	}

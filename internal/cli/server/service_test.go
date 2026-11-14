@@ -1,11 +1,14 @@
 package server
 
 import (
+	"context"
 	"math/big"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/internal/cli/server/proto"
 )
 
@@ -43,4 +46,23 @@ func TestGatherBlocks(t *testing.T) {
 
 	res := gatherForks(val, val2)
 	assert.Equal(t, res, expect)
+}
+
+func TestChainSetHeadReturnsRefusal(t *testing.T) {
+	t.Parallel()
+
+	config := DefaultConfig()
+	config.Developer.Enabled = true
+	config.Developer.Period = 2
+
+	srv, err := CreateMockServer(config)
+	require.NoError(t, err)
+	defer CloseMockServer(srv)
+
+	_, err = srv.ChainSetHead(context.Background(), &proto.ChainSetHeadRequest{Number: 0})
+	require.NoError(t, err)
+
+	rawdb.WriteLastPivotNumber(srv.backend.ChainDb(), 10)
+	_, err = srv.ChainSetHead(context.Background(), &proto.ChainSetHeadRequest{Number: 5})
+	require.ErrorContains(t, err, "snap-sync pivot")
 }

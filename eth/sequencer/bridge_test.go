@@ -154,7 +154,7 @@ func newHistoryRun(t *testing.T, n, prague, blockhashAt uint64) *historyRun {
 	genesis.SetCode(params.HistoryStorageAddress, params.HistoryStorageCode, tracing.CodeChangeGenesis)
 	genesis.SetCode(app, []byte{0x00}, tracing.CodeChangeGenesis)
 
-	root, err := genesis.Commit(0, true, false)
+	root, err := genesis.Commit(params.Rules{IsEIP158: true}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func newHistoryRun(t *testing.T, n, prague, blockhashAt uint64) *historyRun {
 			s.SetState(app, common.Hash{}, parent)
 		}
 
-		root, err := s.Commit(number, true, false)
+		root, err := s.Commit(params.Rules{IsEIP158: true}, number)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -374,18 +374,18 @@ func (mr *MockDatabaseMockRecorder) SyncKeyValue() *gomock.Call {
 }
 
 // Tail mocks base method.
-func (m *MockDatabase) Tail() (uint64, error) {
+func (m *MockDatabase) Tail(group string) (uint64, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Tail")
+	ret := m.ctrl.Call(m, "Tail", group)
 	ret0, _ := ret[0].(uint64)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Tail indicates an expected call of Tail.
-func (mr *MockDatabaseMockRecorder) Tail() *gomock.Call {
+func (mr *MockDatabaseMockRecorder) Tail(group any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Tail", reflect.TypeOf((*MockDatabase)(nil).Tail))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Tail", reflect.TypeOf((*MockDatabase)(nil).Tail), group)
 }
 
 // TruncateHead mocks base method.
@@ -404,16 +404,16 @@ func (mr *MockDatabaseMockRecorder) TruncateHead(n any) *gomock.Call {
 }
 
 // TruncateTail mocks base method.
-func (m *MockDatabase) TruncateTail(n uint64) (uint64, error) {
+func (m *MockDatabase) TruncateTail(group string, n uint64) (uint64, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "TruncateTail", n)
+	ret := m.ctrl.Call(m, "TruncateTail", group, n)
 	ret0, _ := ret[0].(uint64)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // TruncateTail indicates an expected call of TruncateTail.
-func (mr *MockDatabaseMockRecorder) TruncateTail(n any) *gomock.Call {
+func (mr *MockDatabaseMockRecorder) TruncateTail(group, n any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TruncateTail", reflect.TypeOf((*MockDatabase)(nil).TruncateTail), n)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TruncateTail", reflect.TypeOf((*MockDatabase)(nil).TruncateTail), group, n)
 }

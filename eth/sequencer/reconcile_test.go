@@ -14,6 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
@@ -24,6 +25,8 @@ type fakeChain struct {
 	blocks    map[uint64]*types.Block
 	states    state.Database // nil: no state is available
 }
+
+func (f *fakeChain) Config() *params.ChainConfig { return params.TestChainConfig }
 
 func (f *fakeChain) SealingStateAt(root common.Hash) (*state.StateDB, error) {
 	if f.states == nil {

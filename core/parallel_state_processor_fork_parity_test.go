@@ -73,13 +73,27 @@ var forkExpectations = map[string]forkExpect{
 	"IsVerkleGenesis":    {inV1: false, inV2: false},
 	"IsEIP4762":          {inV1: false, inV2: false},
 	"IsOsaka":            {inV1: false, inV2: false},
+	"IsBogota":           {inV1: false, inV2: false}, // Stub fork: selects bogotaInstructionSet in vm/ only; no state-processor branch.
+	"IsAmsterdam": {inV1: true, inV2: true, rationale: "" +
+		"EIP-7843 SLOTNUM / EIP-8024 / BAL precompile-touch are EVM/consensus-gated. " +
+		"The one state-processor branch is EIP-8037's systemCallGasBudget, which gives " +
+		"system calls a state-gas allowance once Amsterdam is live. It reads IsAmsterdam " +
+		"in the V1 file only because that is where it is defined: every system call goes " +
+		"through the shared ProcessBeaconBlockRoot / ProcessParentBlockHash / " +
+		"ProcessWithdrawalQueue / ProcessConsolidationQueue helpers, and V2 calls all four " +
+		"itself, so both paths get an identical budget. V2 also reads it in finalizeV2Block: " +
+		"FinaliseFast needs the fork to settle a self-destruct as serial finaliseAmsterdam does " +
+		"(EIP-8246), since V2's StateDB builds no access list. Dormant while AmsterdamBlock is nil."},
 
 	// State-processor-level forks that BOTH paths must gate.
-	"IsByzantium": {inV1: true, inV2: true}, // selects intermediate root vs receipt status
-	"IsEIP158":    {inV1: true, inV2: true}, // empty-account deletion at finalise
-	"IsLondon":    {inV1: true, inV2: true}, // EIP-1559 fee burn + receipt fields
-	"IsPrague":    {inV1: true, inV2: true}, // EIP-2935 history storage system call
-	"IsVerkle":    {inV1: true, inV2: true}, // EIP-2935 also fires under Verkle
+	"IsByzantium": {inV1: true, inV2: true},   // selects intermediate root vs receipt status
+	"IsEIP158":    {inV1: false, inV2: false}, // empty-account deletion follows the params.Rules both paths pass to Finalise/IntermediateRoot (#35498).
+	"IsLondon":    {inV1: true, inV2: true},   // EIP-1559 fee burn + receipt fields
+	"IsPrague":    {inV1: true, inV2: true},   // EIP-2935 history storage system call
+	"IsVerkle": {inV1: true, inV2: false, rationale: "" +
+		"EIP-2935 also fires under Verkle. The gate lives in PreExecution in the V1 file, " +
+		"and both BlockSTM processors call PreExecution for their pre-execution system " +
+		"calls, so every path gets it without naming the fork."},
 }
 
 // pathsForV1 / pathsForV2 are the files whose source the test scans

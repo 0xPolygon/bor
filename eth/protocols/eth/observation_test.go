@@ -111,7 +111,7 @@ func TestPeerPolicyFraming(t *testing.T) {
 		{Code: 0xff, Payload: bytes.NewReader(nil)},
 	} {
 		var got peerpolicy.Evidence
-		p := NewPeer(ETH68, p2p.NewPeer(enode.ID{1}, "", nil), observationReader{msg}, nil)
+		p := NewPeer(ETH68, p2p.NewPeer(enode.ID{1}, "", nil), observationReader{msg}, nil, nil)
 		defer p.Close()
 		p.SetObserver(func(e peerpolicy.Evidence) { got = e })
 		if err := handleMessage(nil, p); err == nil {
@@ -138,7 +138,7 @@ func TestPeerPolicyAnnouncementFramingPrecedence(t *testing.T) {
 				for _, enabled := range []bool{false, true} {
 					payload := bytes.NewReader([]byte{0xff})
 					msg := p2p.Msg{Code: NewBlockHashesMsg, Size: tc.size, Payload: payload}
-					p := NewPeer(version, p2p.NewPeer(enode.ID{1}, "", nil), observationReader{msg}, nil)
+					p := NewPeer(version, p2p.NewPeer(enode.ID{1}, "", nil), observationReader{msg}, nil, nil)
 					t.Cleanup(p.Close)
 					tracker := peerpolicy.New(new(mclock.Simulated))
 					var observed []peerpolicy.Evidence
@@ -197,7 +197,7 @@ func TestPeerActivityCompletedResponses(t *testing.T) {
 			if mode != "ordinary" {
 				base = configuredLimitsTestPeer(t, mode)
 			}
-			p := NewPeer(ETH69, base, local, nil)
+			p := NewPeer(ETH69, base, local, nil, nil)
 			t.Cleanup(func() { p.Close(); local.Close(); remote.Close() })
 			events := make(chan peerpolicy.Evidence, 4)
 			p.SetObserver(func(e peerpolicy.Evidence) { events <- e })
@@ -257,7 +257,7 @@ func TestPeerActivityUnsentResponses(t *testing.T) {
 		t.Run(failure, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				rw := &replyTestRW{sent: make(chan p2p.Msg, 4)}
-				p := NewPeer(ETH69, p2p.NewPeer(enode.ID{1}, "", nil), rw, nil)
+				p := NewPeer(ETH69, p2p.NewPeer(enode.ID{1}, "", nil), rw, nil, nil)
 				events := make(chan peerpolicy.Evidence, 4)
 				p.SetObserver(func(e peerpolicy.Evidence) { events <- e })
 				if failure == "write" {

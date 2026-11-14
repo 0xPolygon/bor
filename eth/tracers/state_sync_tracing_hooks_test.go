@@ -137,8 +137,8 @@ func makeRegularTx() *types.Transaction {
 // fireRealEvent simulates one real commitState invocation as the EVM would
 // produce it (single CALL at depth=0 → matching OnExit at depth=0).
 func fireRealEvent(hooks *tracing.Hooks, from, to common.Address) {
-	hooks.OnEnter(0, byte(vm.CALL), from, to, nil, 100000, big.NewInt(0))
-	hooks.OnExit(0, nil, 50000, nil, false)
+	hooks.EmitEnter(0, byte(vm.CALL), from, to, nil, tracing.Gas{Execution: 100000}, big.NewInt(0))
+	hooks.EmitExit(0, nil, tracing.Gas{Execution: 100000}, tracing.Gas{Execution: 50000}, nil, false)
 }
 
 // TestWrapStateSyncHooks_StateSyncTx_MultipleEvents verifies the wrapper's main
@@ -190,8 +190,8 @@ func TestWrapStateSyncHooks_RegularTx_Passthrough(t *testing.T) {
 	callee := common.HexToAddress("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 
 	wrapped.OnTxStart(nil, makeRegularTx(), caller)
-	wrapped.OnEnter(0, byte(vm.CALL), caller, callee, nil, 100000, big.NewInt(0))
-	wrapped.OnExit(0, nil, 50000, nil, false)
+	wrapped.EmitEnter(0, byte(vm.CALL), caller, callee, nil, tracing.Gas{Execution: 100000}, big.NewInt(0))
+	wrapped.EmitExit(0, nil, tracing.Gas{Execution: 100000}, tracing.Gas{Execution: 50000}, nil, false)
 	wrapped.OnTxEnd(&types.Receipt{}, nil)
 
 	expected := []string{
@@ -290,8 +290,8 @@ func TestWrapStateSyncHooks_ResetBetweenTxs(t *testing.T) {
 	caller := common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	callee := common.HexToAddress("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 	wrapped.OnTxStart(nil, makeRegularTx(), caller)
-	wrapped.OnEnter(0, byte(vm.CALL), caller, callee, nil, 100000, big.NewInt(0))
-	wrapped.OnExit(0, nil, 50000, nil, false)
+	wrapped.EmitEnter(0, byte(vm.CALL), caller, callee, nil, tracing.Gas{Execution: 100000}, big.NewInt(0))
+	wrapped.EmitExit(0, nil, tracing.Gas{Execution: 100000}, tracing.Gas{Execution: 50000}, nil, false)
 	wrapped.OnTxEnd(&types.Receipt{}, nil)
 
 	expected := []string{
@@ -324,12 +324,12 @@ func TestWrapStateSyncHooks_NestedCalls(t *testing.T) {
 
 	wrapped.OnTxStart(nil, makeStateSyncTx(), params.BorSystemAddress)
 	// Simulate: top-level commitState call that internally CALLs another contract.
-	wrapped.OnEnter(0, byte(vm.CALL), params.BorSystemAddress, receiverAddr, nil, 100000, big.NewInt(0))
-	wrapped.OnEnter(1, byte(vm.CALL), receiverAddr, nested, nil, 50000, big.NewInt(0))
-	wrapped.OnOpcode(0, byte(vm.STOP), 50000, 0, nil, nil, 1, nil)
-	wrapped.OnFault(0, byte(vm.STOP), 50000, 0, nil, 1, errors.New("oops"))
-	wrapped.OnExit(1, nil, 25000, nil, false)
-	wrapped.OnExit(0, nil, 50000, nil, false)
+	wrapped.EmitEnter(0, byte(vm.CALL), params.BorSystemAddress, receiverAddr, nil, tracing.Gas{Execution: 100000}, big.NewInt(0))
+	wrapped.EmitEnter(1, byte(vm.CALL), receiverAddr, nested, nil, tracing.Gas{Execution: 50000}, big.NewInt(0))
+	wrapped.EmitOpcode(0, byte(vm.STOP), tracing.Gas{Execution: 50000}, tracing.Gas{Execution: 0}, nil, nil, 1, nil)
+	wrapped.EmitFault(0, byte(vm.STOP), tracing.Gas{Execution: 50000}, tracing.Gas{Execution: 0}, nil, 1, errors.New("oops"))
+	wrapped.EmitExit(1, nil, tracing.Gas{Execution: 50000}, tracing.Gas{Execution: 25000}, nil, false)
+	wrapped.EmitExit(0, nil, tracing.Gas{Execution: 100000}, tracing.Gas{Execution: 50000}, nil, false)
 	wrapped.OnTxEnd(&types.Receipt{}, nil)
 
 	expected := []string{
@@ -406,10 +406,10 @@ func TestWrapStateSyncHooks_NilInnerHooks(t *testing.T) {
 
 	// Overridden hooks: must not panic even when every inner hook is nil.
 	wrapped.OnTxStart(nil, makeStateSyncTx(), params.BorSystemAddress)
-	wrapped.OnEnter(0, byte(vm.CALL), common.Address{}, common.Address{}, nil, 0, big.NewInt(0))
-	wrapped.OnExit(0, nil, 0, nil, false)
-	wrapped.OnOpcode(0, byte(vm.STOP), 0, 0, nil, nil, 0, nil)
-	wrapped.OnFault(0, byte(vm.STOP), 0, 0, nil, 0, nil)
+	wrapped.EmitEnter(0, byte(vm.CALL), common.Address{}, common.Address{}, nil, tracing.Gas{Execution: 0}, big.NewInt(0))
+	wrapped.EmitExit(0, nil, tracing.Gas{}, tracing.Gas{}, nil, false)
+	wrapped.EmitOpcode(0, byte(vm.STOP), tracing.Gas{Execution: 0}, tracing.Gas{Execution: 0}, nil, nil, 0, nil)
+	wrapped.EmitFault(0, byte(vm.STOP), tracing.Gas{Execution: 0}, tracing.Gas{Execution: 0}, nil, 0, nil)
 	wrapped.OnTxEnd(&types.Receipt{}, nil)
 
 	// Pass-through hooks: must mirror inner's nil-ness. The wrapper does not

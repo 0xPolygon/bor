@@ -484,3 +484,55 @@ func newkey() *ecdsa.PrivateKey {
 
 	return key
 }
+
+// This test checks that frames above the configured limit are rejected before their
+// content is read or buffered.
+func TestMaxFrameSize(t *testing.T) {
+	newConn := func(nc net.Conn) *Conn {
+		hash := fakeHash(bytes.Repeat([]byte{1}, 32))
+		c := NewConn(nc, nil)
+		c.InitWithSecrets(Secrets{AES: crypto.Keccak256(), MAC: crypto.Keccak256(), IngressMAC: hash, EgressMAC: hash})
+
+		return c
+	}
+
+	tests := []struct {
+		name    string
+		limit   uint32
+		size    int
+		wantErr error
+	}{
+		{name: "no limit", limit: 0, size: 4096},
+		{name: "below limit", limit: 100, size: 50},
+		{name: "at limit", limit: 100, size: 99}, // plus one byte for the message code
+		{name: "above limit", limit: 100, size: 200, wantErr: errFrameTooLarge},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			c1, c2 := net.Pipe()
+			defer c1.Close()
+			defer c2.Close()
+
+			writer, reader := newConn(c1), newConn(c2)
+			reader.SetMaxFrameSize(test.limit)
+
+			go func() { _, _ = writer.Write(1, make([]byte, test.size)) }()
+
+			_, data, _, err := reader.Read()
+			if err != test.wantErr {
+				t.Fatalf("error mismatch: have %v, want %v", err, test.wantErr)
+			}
+			if err == nil && len(data) != test.size {
+				t.Fatalf("data size mismatch: have %d, want %d", len(data), test.size)
+			}
+			if err != nil && cap(reader.session.rbuf.data) > 512 {
+				t.Fatalf("read buffer grew to %d bytes", cap(reader.session.rbuf.data))
+			}
+		})
+	}
+}
+
+// This test checks that the frame size limit can only be set after the handshake.
+func TestSetMaxFrameSizeBeforeHandshake(t *testing.T) {
+	assert.PanicsWithValue(t, "can't SetMaxFrameSize before handshake", func() { NewConn(nil, nil).SetMaxFrameSize(1) })
+}

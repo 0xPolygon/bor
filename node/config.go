@@ -89,10 +89,6 @@ type Config struct {
 	// InsecureUnlockAllowed is a deprecated option to  allow users to accounts in unsafe http environment.
 	InsecureUnlockAllowed bool `toml:",omitempty"`
 
-	// NoUSB disables hardware wallet monitoring and connectivity.
-	// Deprecated: USB monitoring is disabled by default and must be enabled explicitly.
-	NoUSB bool `toml:",omitempty"`
-
 	// USB enables hardware wallet monitoring and connectivity.
 	USB bool `toml:",omitempty"`
 
@@ -208,6 +204,9 @@ type Config struct {
 
 	// BatchResponseMaxSize is the maximum number of bytes returned from a batched rpc call.
 	BatchResponseMaxSize int `toml:",omitempty"`
+
+	// HTTPBodyLimit is the maximum size (in bytes) of an HTTP request body.
+	HTTPBodyLimit int `toml:",omitempty"`
 
 	// JWTSecret is the path to the hex-encoded jwt secret.
 	JWTSecret string `toml:",omitempty"`

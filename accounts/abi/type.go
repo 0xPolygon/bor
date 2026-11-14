@@ -241,6 +241,7 @@ func NewType(t string, internalType string, components []ArgumentMarshaling) (ty
 		if strings.HasPrefix(internalType, "contract ") {
 			typ.Size = 20
 			typ.T = AddressTy
+			typ.stringKind = "address"
 		} else {
 			return Type{}, fmt.Errorf("unsupported arg type: %s", t)
 		}

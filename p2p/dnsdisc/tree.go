@@ -27,9 +27,8 @@ import (
 	"slices"
 	"strings"
 
-	"golang.org/x/crypto/sha3"
-
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/crypto/keccak"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/enr"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -178,6 +177,9 @@ func MakeTree(seq uint, nodes []*enode.Node, links []string) (*Tree, error) {
 		if len(n.Record().Signature()) == 0 {
 			return nil, fmt.Errorf("can't add node %v: unsigned node record", n.ID())
 		}
+		if err := checkRecordPorts(n.Record()); err != nil {
+			return nil, fmt.Errorf("can't add node %v: %v", n.ID(), err)
+		}
 	}
 
 	// Create the leaf list.
@@ -290,7 +292,7 @@ const (
 )
 
 func subdomain(e entry) string {
-	h := sha3.NewLegacyKeccak256()
+	h := keccak.NewLegacyKeccak256()
 	io.WriteString(h, e.String())
 
 	return b32format.EncodeToString(h.Sum(nil)[:16])
@@ -301,7 +303,7 @@ func (e *rootEntry) String() string {
 }
 
 func (e *rootEntry) sigHash() []byte {
-	h := sha3.NewLegacyKeccak256()
+	h := keccak.NewLegacyKeccak256()
 	fmt.Fprintf(h, rootPrefix+" e=%s l=%s seq=%d", e.eroot, e.lroot, e.seq)
 
 	return h.Sum(nil)
@@ -440,6 +442,30 @@ func parseENR(e string, validSchemes enr.IdentityScheme) (entry, error) {
 	}
 
 	return &enrEntry{n}, nil
+}
+
+var portKeys = []string{
+	enr.TCP(0).ENRKey(), enr.TCP6(0).ENRKey(),
+	enr.UDP(0).ENRKey(), enr.UDP6(0).ENRKey(),
+	enr.QUIC(0).ENRKey(), enr.QUIC6(0).ENRKey(),
+}
+
+// checkRecordPorts verifies that port entries, if present, decode as a uint16.
+// enr.Record keeps undecodable pairs as raw RLP, so an out-of-range port in a record
+// from an external source would otherwise round-trip into a signed tree and fail to
+// decode for consumers that read the port strictly.
+func checkRecordPorts(r *enr.Record) error {
+	for _, key := range portKeys {
+		var port uint16
+		err := r.Load(enr.WithEntry(key, &port))
+		if enr.IsNotFound(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func isValidHash(s string) bool {

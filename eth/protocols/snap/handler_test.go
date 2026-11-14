@@ -141,7 +141,7 @@ func TestCollectStorage(t *testing.T) {
 		wantAbort bool
 	}{
 		{"complete", 0, nil, common.MaxHash, 0, softResponseLimit, 3, false},
-		{"key limit", 0, nil, rangeKeys[1], 0, softResponseLimit, 2, false},
+		{"key limit", 0, nil, rangeKeys[1], 0, softResponseLimit, 2, true},
 		{"hard limit", 0, nil, common.MaxHash, 0, 2 * itemSize, 2, true},
 		{"hard limit already reached", 0, nil, common.MaxHash, 10, 10, 0, true},
 		{"iterator failed midway", 2, errIteration, common.MaxHash, 0, softResponseLimit, 2, true},

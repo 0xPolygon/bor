@@ -975,7 +975,7 @@ func TestUnpackTuple(t *testing.T) {
 			},
 		},
 		FieldT: T{
-			big.NewInt(0), big.NewInt(1),
+			big.NewInt(0).SetBits([]big.Word{}), big.NewInt(1),
 		},
 		A: big.NewInt(1),
 	}
@@ -985,7 +985,7 @@ func TestUnpackTuple(t *testing.T) {
 		t.Error(err)
 	}
 
-	if reflect.DeepEqual(ret, expected) {
+	if !reflect.DeepEqual(ret, expected) {
 		t.Error("unexpected unpack value")
 	}
 }

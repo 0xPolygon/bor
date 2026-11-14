@@ -693,11 +693,11 @@ func (bc *BlockChain) HasBlockAndState(hash common.Hash, number uint64) bool {
 	return bc.HasState(block.Root())
 }
 
-// stateRecoverable checks if the specified state is recoverable.
+// StateRecoverable checks if the specified state is recoverable.
 // Note, this function assumes the state is not present, because
 // state is not treated as recoverable if it's available, thus
 // false will be returned in this case.
-func (bc *BlockChain) stateRecoverable(root common.Hash) bool {
+func (bc *BlockChain) StateRecoverable(root common.Hash) bool {
 	if bc.triedb.Scheme() == rawdb.HashScheme {
 		return false
 	}
@@ -903,7 +903,7 @@ func (bc *BlockChain) TxIndexProgress() (TxIndexProgress, error) {
 }
 
 // StateIndexProgress returns the historical state indexing progress.
-func (bc *BlockChain) StateIndexProgress() (uint64, error) {
+func (bc *BlockChain) StateIndexProgress() (uint64, uint64, error) {
 	return bc.triedb.IndexProgress()
 }
 

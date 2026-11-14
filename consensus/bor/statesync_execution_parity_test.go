@@ -42,18 +42,18 @@ func (*recordingGenesisContract) LastStateId(*state.StateDB, uint64, common.Hash
 	return new(big.Int), nil
 }
 
-func commitStateDatabase(t *testing.T, code map[common.Address][]byte, funded common.Address) (*state.CachingDB, common.Hash) {
+func commitStateDatabase(t *testing.T, code map[common.Address][]byte, funded common.Address) (*state.MPTDatabase, common.Hash) {
 	t.Helper()
 	memoryDB := rawdb.NewMemoryDatabase()
 	trieDB := triedb.NewDatabase(memoryDB, triedb.HashDefaults)
-	stateDatabase := state.NewDatabase(trieDB, nil)
+	stateDatabase := state.NewMPTDatabase(trieDB, nil)
 	statedb, err := state.New(common.Hash{}, stateDatabase)
 	require.NoError(t, err)
 	for address, bytecode := range code {
 		statedb.SetCode(address, bytecode, tracing.CodeChangeUnspecified)
 	}
 	statedb.AddBalance(funded, uint256.NewInt(params.Ether), tracing.BalanceChangeUnspecified)
-	root, err := statedb.Commit(0, false, false)
+	root, err := statedb.Commit(params.Rules{}, 0)
 	require.NoError(t, err)
 	require.NoError(t, trieDB.Commit(root, false))
 	return stateDatabase, root
@@ -111,7 +111,7 @@ func runTransientStorageParity(t *testing.T, gasBoundBlock *big.Int) common.Hash
 	message, err := core.TransactionToMessage(stateSyncTx, types.MakeSigner(chainConfig, header.Number, header.Time), header.BaseFee)
 	require.NoError(t, err)
 	traceState := newState()
-	traceState.SetTxContext(stateSyncTx.Hash(), 0)
+	traceState.SetTxContext(stateSyncTx.Hash(), 0, 1)
 	traceEVM := vm.NewEVM(core.NewEVMBlockContext(header, chainContext, &header.Coinbase), traceState, chainConfig, vm.Config{})
 	traceResult, err := statefull.ApplyStateSyncEvents(t.Context(), traceEVM, stateSyncTx, message, receiver)
 	require.NoError(t, err)
@@ -120,7 +120,7 @@ func runTransientStorageParity(t *testing.T, gasBoundBlock *big.Int) common.Hash
 	observedSlot := common.BigToHash(big.NewInt(1))
 	require.Equal(t, common.BigToHash(big.NewInt(1)), liveState.GetState(receiver, common.Hash{}))
 	require.Equal(t, liveState.GetState(receiver, observedSlot), traceState.GetState(receiver, observedSlot))
-	require.Equal(t, liveState.Copy().IntermediateRoot(true), traceState.Copy().IntermediateRoot(true))
+	require.Equal(t, liveState.Copy().IntermediateRoot(params.Rules{IsEIP158: true}), traceState.Copy().IntermediateRoot(params.Rules{IsEIP158: true}))
 	return liveState.GetState(receiver, observedSlot)
 }
 

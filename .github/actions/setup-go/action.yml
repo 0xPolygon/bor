@@ -1,0 +1,34 @@
+name: Setup Go
+description: Install Go and restore the module cache and, optionally, the unit-test build cache saved by the test-cache job.
+
+inputs:
+  build-cache:
+    description: Also restore the unit-test build cache.
+    default: 'false'
+
+outputs:
+  gomod-hit:
+    description: Whether the module cache matched go.sum exactly.
+    value: ${{ steps.gomod.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v6
+      with:
+        go-version-file: go.mod
+        cache: false
+
+    - id: gomod
+      uses: actions/cache/restore@v4
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-gomod-${{ hashFiles('**/go.sum') }}
+        restore-keys: ${{ runner.os }}-gomod-
+
+    - if: inputs.build-cache == 'true'
+      uses: actions/cache/restore@v4
+      with:
+        path: ~/.cache/go-build
+        key: ${{ runner.os }}-gotest-${{ github.sha }}
+        restore-keys: ${{ runner.os }}-gotest-

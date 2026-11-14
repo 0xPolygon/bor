@@ -133,7 +133,7 @@ func TestProcessBlockFallsBackToSerialOnWriteBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("serial ProcessBlock: %v", err)
 	}
-	wantRoot := wantState.IntermediateRoot(true)
+	wantRoot := wantState.IntermediateRoot(params.Rules{IsEIP158: true})
 
 	for _, enforce := range []bool{false, true} {
 		chain := newV2Chain(t, genesis, enforce, func(uint64) int64 { return 1 })
@@ -144,7 +144,7 @@ func TestProcessBlockFallsBackToSerialOnWriteBudget(t *testing.T) {
 		if gas != wantGas {
 			t.Errorf("enforce=%v: gas = %d, want %d", enforce, gas, wantGas)
 		}
-		if root := statedb.IntermediateRoot(true); root != wantRoot {
+		if root := statedb.IntermediateRoot(params.Rules{IsEIP158: true}); root != wantRoot {
 			t.Errorf("enforce=%v: state root = %x, want %x", enforce, root, wantRoot)
 		}
 		if got, want := types.DeriveSha(receipts, trie.NewStackTrie(nil)), types.DeriveSha(wantReceipts, trie.NewStackTrie(nil)); got != want {

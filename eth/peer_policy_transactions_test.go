@@ -128,7 +128,7 @@ func handlePolicyTransaction(t *testing.T, h *handler, packet eth.Packet) (strin
 		t.Fatal(err)
 	}
 	rw := &policyTransactionReader{message: &p2p.Msg{Code: uint64(packet.Kind()), Size: uint32(len(encoded)), Payload: bytes.NewReader(encoded)}}
-	peer := eth.NewPeer(eth.ETH69, p2p.NewPeer(enode.ID{1}, "", nil), rw, nil)
+	peer := eth.NewPeer(eth.ETH69, p2p.NewPeer(enode.ID{1}, "", nil), rw, nil, nil)
 	defer peer.Close()
 	h.observeProtocolPeer(peer)
 	h.synced.Store(true)

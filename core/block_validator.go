@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -191,18 +190,31 @@ func (v *BlockValidator) ValidateState(block *types.Block, statedb *state.StateD
 	if stateless {
 		return nil
 	}
-	// The receipt Trie's root (R = (Tr [[H1, R1], ... [Hn, Rn]])) does not
-	// depend on the state, so derive it while the state root is being hashed.
-	receiptShaCh := make(chan common.Hash, 1)
+	resultCh := make(chan error, 1)
 	go func() {
-		receiptShaCh <- types.DeriveSha(res.Receipts, trie.NewStackTrie(nil))
+		resultCh <- v.validateResult(header, res)
 	}()
+	// Validate the state root against the received state root and throw
+	// an error if they don't match.
+	var rootErr error
 	irStart := time.Now()
-	root := statedb.IntermediateRoot(v.config.IsEIP158(header.Number))
+	root := statedb.IntermediateRoot(v.config.Rules(header.Number, false, header.Time))
 	intermediateRootTimer.UpdateSince(irStart)
+	if header.Root != root {
+		rootErr = fmt.Errorf("invalid merkle root (remote: %x local: %x) dberr: %w", header.Root, root, statedb.Error())
+	}
+	if err := <-resultCh; err != nil {
+		return err
+	}
+	return rootErr
+}
 
-	// Check in the same order as before: receipts, requests, state root.
-	if receiptSha := <-receiptShaCh; receiptSha != header.ReceiptHash {
+// validateResult validates the derivable fields of the block header (receipt
+// root and requests hash) against the provided process result.
+func (v *BlockValidator) validateResult(header *types.Header, res *ProcessResult) error {
+	// The receipt Trie's root (R = (Tr [[H1, R1], ... [Hn, Rn]]))
+	receiptSha := types.DeriveSha(res.Receipts, trie.NewStackTrie(nil))
+	if receiptSha != header.ReceiptHash {
 		return fmt.Errorf("%w (remote: %x local: %x)", ErrReceiptRootMismatch, header.ReceiptHash, receiptSha)
 	}
 	// Validate the parsed requests match the expected header value.
@@ -214,12 +226,6 @@ func (v *BlockValidator) ValidateState(block *types.Block, statedb *state.StateD
 	} else if res.Requests != nil {
 		return errors.New("block has requests before prague fork")
 	}
-	// Validate the state root against the received state root and throw
-	// an error if they don't match.
-	if header.Root != root {
-		return fmt.Errorf("invalid merkle root (remote: %x local: %x) dberr: %w", header.Root, root, statedb.Error())
-	}
-
 	return nil
 }
 

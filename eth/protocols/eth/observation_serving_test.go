@@ -67,7 +67,7 @@ func TestPeerPolicyBodyManifestSkipsMissingObjects(t *testing.T) {
 	backend := newTestBackend(2)
 	defer backend.close()
 	hash := backend.chain.GetBlockByNumber(1).Hash()
-	query := GetBlockBodiesRequest{{}, hash, {}}
+	query := GetBlockBodiesRequest{hash, {}}
 	var recorded []common.Hash
 	var bytes int
 	response := serviceGetBlockBodiesQuery(backend.chain, query, func(hash common.Hash, size int) {
@@ -90,7 +90,7 @@ func TestPeerPolicyBodyServingAdapter(t *testing.T) {
 		if enabled {
 			p.SetObserver(func(e peerpolicy.Evidence) { got = e })
 		}
-		query := GetBlockBodiesPacket{RequestId: 7, GetBlockBodiesRequest: GetBlockBodiesRequest{{}, hash}}
+		query := GetBlockBodiesPacket{RequestId: 7, GetBlockBodiesRequest: GetBlockBodiesRequest{hash, {}}}
 		if err := observedBodyReply(backend, p, query); err != nil {
 			t.Fatal(err)
 		}

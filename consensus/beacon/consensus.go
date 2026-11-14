@@ -277,11 +277,11 @@ func (beacon *Beacon) verifyHeader(chain consensus.ChainHeaderReader, header, pa
 	if !cancun {
 		switch {
 		case header.ExcessBlobGas != nil:
-			return fmt.Errorf("invalid excessBlobGas: have %d, expected nil", header.ExcessBlobGas)
+			return fmt.Errorf("invalid excessBlobGas: have %d, expected nil", *header.ExcessBlobGas)
 		case header.BlobGasUsed != nil:
-			return fmt.Errorf("invalid blobGasUsed: have %d, expected nil", header.BlobGasUsed)
+			return fmt.Errorf("invalid blobGasUsed: have %d, expected nil", *header.BlobGasUsed)
 		case header.ParentBeaconRoot != nil:
-			return fmt.Errorf("invalid parentBeaconRoot, have %#x, expected nil", header.ParentBeaconRoot)
+			return fmt.Errorf("invalid parentBeaconRoot, have %#x, expected nil", *header.ParentBeaconRoot)
 		}
 	} else {
 		if header.ParentBeaconRoot == nil {
@@ -289,6 +289,27 @@ func (beacon *Beacon) verifyHeader(chain consensus.ChainHeaderReader, header, pa
 		}
 		if err := eip4844.VerifyEIP4844Header(chain.Config(), parent, header); err != nil {
 			return err
+		}
+	}
+
+	// Verify the existence / non-existence of Amsterdam-specific header fields.
+	// EIP-7843 SLOTNUM and the EIP-7928 block access list hash both key off
+	// Amsterdam, which is dormant on Bor (AmsterdamBlock nil), so IsAmsterdam is
+	// false and headers must carry neither field.
+	amsterdam := chain.Config().IsAmsterdam(header.Number)
+	if amsterdam {
+		if header.BlockAccessListHash == nil {
+			return errors.New("header is missing block access list hash")
+		}
+		if header.SlotNumber == nil {
+			return errors.New("header is missing slotNumber")
+		}
+	} else {
+		if header.BlockAccessListHash != nil {
+			return fmt.Errorf("invalid block access list hash: have %x, expected nil", *header.BlockAccessListHash)
+		}
+		if header.SlotNumber != nil {
+			return fmt.Errorf("invalid slotNumber: have %d, expected nil", *header.SlotNumber)
 		}
 	}
 	return nil
@@ -391,7 +412,7 @@ func (beacon *Beacon) FinalizeAndAssemble(chain consensus.ChainHeaderReader, hea
 
 	// Assign the final state root to header.
 	start := time.Now()
-	header.Root = state.IntermediateRoot(true)
+	header.Root = state.IntermediateRoot(chain.Config().Rules(header.Number, true, header.Time))
 	commitTime := time.Since(start)
 
 	// Assemble the final block.

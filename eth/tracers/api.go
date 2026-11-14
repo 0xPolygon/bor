@@ -53,11 +53,6 @@ const (
 	// by default before being forcefully aborted.
 	defaultTraceTimeout = 5 * time.Second
 
-	// defaultTraceReexec is the number of blocks the tracer is willing to go back
-	// and reexecute to produce missing historical state necessary to run a specific
-	// trace.
-	defaultTraceReexec = uint64(128)
-
 	// defaultTracechainMemLimit is the size of the triedb, at which traceChain
 	// switches over and tries to use a disk-backed database instead of building
 	// on top of memory.
@@ -98,8 +93,8 @@ type Backend interface {
 	ChainConfig() *params.ChainConfig
 	Engine() consensus.Engine
 	ChainDb() ethdb.Database
-	StateAtBlock(ctx context.Context, block *types.Block, reexec uint64, base *state.StateDB, readOnly bool, preferDisk bool) (*state.StateDB, StateReleaseFunc, error)
-	StateAtTransaction(ctx context.Context, block *types.Block, txIndex int, reexec uint64) (*types.Transaction, vm.BlockContext, *state.StateDB, StateReleaseFunc, error)
+	StateAtBlock(ctx context.Context, block *types.Block, base *state.StateDB, readOnly bool, preferDisk bool) (*state.StateDB, StateReleaseFunc, error)
+	StateAtTransaction(ctx context.Context, block *types.Block, txIndex int) (*types.Transaction, vm.BlockContext, *state.StateDB, StateReleaseFunc, error)
 }
 
 // API is the collection of tracing APIs exposed over the private debugging endpoint.
@@ -171,7 +166,6 @@ type TraceConfig struct {
 	*logger.Config
 	Tracer  *string
 	Timeout *string
-	Reexec  *uint64
 	// gasBailout suppresses the synthetic upfront gas debit/refund used by
 	// trace_call while retaining the normal balance validation.
 	gasBailout bool
@@ -192,7 +186,6 @@ type TraceCallConfig struct {
 // StdTraceConfig holds extra parameters to standard-json trace functions.
 type StdTraceConfig struct {
 	logger.Config
-	Reexec *uint64
 	TxHash common.Hash
 }
 
@@ -270,11 +263,6 @@ func (api *API) TraceChain(ctx context.Context, start, end rpc.BlockNumber, conf
 // The tracing procedure should be aborted in case the closed signal is received.
 // nolint:gocognit
 func (api *API) traceChain(start, end *types.Block, config *TraceConfig, closed <-chan error) chan *blockTraceResult {
-	reexec := defaultTraceReexec
-	if config != nil && config.Reexec != nil {
-		reexec = *config.Reexec
-	}
-
 	blocks := int(end.NumberU64() - start.NumberU64())
 	threads := runtime.NumCPU()
 	if threads > blocks {
@@ -409,8 +397,7 @@ func (api *API) traceChain(start, end *types.Block, config *TraceConfig, closed 
 				s1, s2, s3 := statedb.Database().TrieDB().Size()
 				preferDisk = s1+s2+s3 > defaultTracechainMemLimit
 			}
-
-			statedb, release, err = api.backend.StateAtBlock(ctx, block, reexec, statedb, false, preferDisk)
+			statedb, release, err = api.backend.StateAtBlock(ctx, block, statedb, false, preferDisk)
 			if err != nil {
 				failed = err
 				break
@@ -419,14 +406,8 @@ func (api *API) traceChain(start, end *types.Block, config *TraceConfig, closed 
 			// as per EIP-4788.
 			context := core.NewEVMBlockContext(next.Header(), api.chainContext(ctx), nil)
 			evm := vm.NewEVM(context, statedb, api.backend.ChainConfig(), vm.Config{})
-			if beaconRoot := next.BeaconRoot(); beaconRoot != nil {
-				core.ProcessBeaconBlockRoot(*beaconRoot, evm)
-			}
-			// Insert parent hash in history contract.
-			// EIP-2935
-			if api.backend.ChainConfig().IsPrague(next.Number()) {
-				core.ProcessParentBlockHash(next.ParentHash(), evm)
-			}
+
+			core.PreExecution(ctx, next.BeaconRoot(), block.Header(), api.backend.ChainConfig(), evm, next.Number(), next.Time())
 			// Clean out any pending release functions of trace state. Note this
 			// step must be done after constructing tracing state, because the
 			// tracing state of block next depends on the parent state and construction
@@ -553,8 +534,8 @@ func (api *API) StandardTraceBlockToFile(ctx context.Context, hash common.Hash, 
 	return api.standardTraceBlockToFile(ctx, block, config)
 }
 
-// IntermediateRoots executes a block (bad- or canon- or side-), and returns a list
-// of intermediate roots: the stateroot after each transaction.
+// IntermediateRoots executes a block, and returns a list of intermediate roots:
+// the stateroot after each transaction.
 func (api *API) IntermediateRoots(ctx context.Context, hash common.Hash, config *TraceConfig) ([]common.Hash, error) {
 	block, _ := api.blockByHash(ctx, hash)
 	if block == nil {
@@ -574,46 +555,37 @@ func (api *API) IntermediateRoots(ctx context.Context, hash common.Hash, config 
 	if err != nil {
 		return nil, err
 	}
-
-	reexec := defaultTraceReexec
-	if config != nil && config.Reexec != nil {
-		reexec = *config.Reexec
-	}
-
-	statedb, release, err := api.backend.StateAtBlock(ctx, parent, reexec, nil, true, false)
+	statedb, release, err := api.backend.StateAtBlock(ctx, parent, nil, true, false)
 	if err != nil {
 		return nil, err
 	}
 
 	defer release()
+
 	var (
-		roots              []common.Hash
-		signer             = types.MakeSigner(api.backend.ChainConfig(), block.Number(), block.Time())
-		chainConfig        = api.backend.ChainConfig()
-		vmctx              = core.NewEVMBlockContext(block.Header(), api.chainContext(ctx), nil)
-		deleteEmptyObjects = chainConfig.IsEIP158(block.Number())
+		roots       []common.Hash
+		signer      = types.MakeSigner(api.backend.ChainConfig(), block.Number(), block.Time())
+		chainConfig = api.backend.ChainConfig()
+		rules       = chainConfig.Rules(block.Number(), block.Difficulty().Sign() == 0, block.Time())
+		vmctx       = core.NewEVMBlockContext(block.Header(), api.chainContext(ctx), nil)
+		evm         = vm.NewEVM(vmctx, statedb, chainConfig, vm.Config{})
 	)
-	evm := vm.NewEVM(vmctx, statedb, chainConfig, vm.Config{})
-	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
-		core.ProcessBeaconBlockRoot(*beaconRoot, evm)
-	}
-	if chainConfig.IsPrague(block.Number()) {
-		core.ProcessParentBlockHash(block.ParentHash(), evm)
-	}
+	// Run pre-execution system calls
+	core.PreExecution(ctx, block.BeaconRoot(), parent.Header(), chainConfig, evm, block.Number(), block.Time())
 
 	for i, tx := range block.Transactions() {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		msg, _ := core.TransactionToMessage(tx, signer, block.BaseFee())
-		statedb.SetTxContext(tx.Hash(), i)
+		statedb.SetTxContext(tx.Hash(), i, uint32(i+1))
 		var err error
 		if tx.Type() == types.StateSyncTxType && api.backend.ChainConfig().Bor != nil && api.backend.ChainConfig().Bor.IsMadhugiri(block.Number()) {
 			// State sync transactions are processed differently than normal transactions
 			stateReceiverAddress := api.backend.ChainConfig().Bor.StateReceiverContract
 			_, err = statefull.ApplyStateSyncEvents(ctx, evm, tx, msg, common.HexToAddress(stateReceiverAddress))
 		} else {
-			_, err = core.ApplyMessage(evm, msg, new(core.GasPool).AddGas(msg.GasLimit))
+			_, err = core.ApplyMessage(evm, msg, nil)
 		}
 
 		if err != nil {
@@ -626,9 +598,9 @@ func (api *API) IntermediateRoots(ctx context.Context, hash common.Hash, config 
 			// N.B: This should never happen while tracing canon blocks, only when tracing bad blocks.
 			return roots, nil
 		}
-		// calling IntermediateRoot will internally call Finalize on the state
+		// Calling IntermediateRoot will internally call Finalize on the state
 		// so any modifications are written to the trie
-		roots = append(roots, statedb.IntermediateRoot(deleteEmptyObjects))
+		roots = append(roots, statedb.IntermediateRoot(rules))
 	}
 	return roots, nil
 }
@@ -657,11 +629,7 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 	if err != nil {
 		return nil, err
 	}
-	reexec := defaultTraceReexec
-	if config != nil && config.Reexec != nil {
-		reexec = *config.Reexec
-	}
-	statedb, release, err := api.backend.StateAtBlock(ctx, parent, reexec, nil, true, false)
+	statedb, release, err := api.backend.StateAtBlock(ctx, parent, nil, true, false)
 	if err != nil {
 		return nil, err
 	}
@@ -669,12 +637,9 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 
 	blockCtx := core.NewEVMBlockContext(block.Header(), api.chainContext(ctx), nil)
 	evm := vm.NewEVM(blockCtx, statedb, api.backend.ChainConfig(), vm.Config{})
-	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
-		core.ProcessBeaconBlockRoot(*beaconRoot, evm)
-	}
-	if api.backend.ChainConfig().IsPrague(block.Number()) {
-		core.ProcessParentBlockHash(block.ParentHash(), evm)
-	}
+
+	// Run pre-execution system calls
+	core.PreExecution(ctx, block.BeaconRoot(), parent.Header(), api.backend.ChainConfig(), evm, block.Number(), block.Time())
 
 	// JS tracers have high overhead. In this case run a parallel
 	// process that generates states in one thread and traces txes
@@ -745,7 +710,13 @@ func (api *API) traceBlockParallel(ctx context.Context, block *types.Block, stat
 			defer pend.Done()
 			// Fetch and execute the next transaction trace tasks
 			for task := range jobs {
-				msg, _ := core.TransactionToMessage(txs[task.index], signer, block.BaseFee())
+				// This runs off the RPC handler's goroutine, so a nil message
+				// would not be recovered: report it as this transaction's result.
+				msg, err := core.TransactionToMessage(txs[task.index], signer, block.BaseFee())
+				if err != nil {
+					results[task.index] = &txTraceResult{TxHash: txs[task.index].Hash(), Error: err.Error()}
+					continue
+				}
 				txctx := &Context{
 					BlockHash:   blockHash,
 					BlockNumber: block.Number(),
@@ -792,17 +763,20 @@ txloop:
 		}
 
 		// Generate the next state snapshot fast without tracing
-		msg, _ := core.TransactionToMessage(tx, signer, block.BaseFee())
-		statedb.SetTxContext(tx.Hash(), i)
-		res, err := core.ApplyMessage(evm, msg, new(core.GasPool).AddGas(msg.GasLimit))
+		msg, err := core.TransactionToMessage(tx, signer, block.BaseFee())
+		if err != nil {
+			failed = err
+			break txloop
+		}
+		statedb.SetTxContext(tx.Hash(), i, uint32(i+1))
+		res, err := core.ApplyMessage(evm, msg, nil)
 		if err != nil {
 			failed = err
 			break txloop
 		}
 		cumulativeGasUsed += res.UsedGas
 		// Finalize the state so any modifications are written to the trie
-		// Only delete empty objects if EIP158/161 (a.k.a Spurious Dragon) is in effect
-		statedb.Finalise(evm.ChainConfig().IsEIP158(block.Number()))
+		statedb.Finalise(evm.GetRules())
 	}
 
 	close(jobs)
@@ -854,13 +828,7 @@ func (api *API) standardTraceBlockToFile(ctx context.Context, block *types.Block
 	if err != nil {
 		return nil, err
 	}
-
-	reexec := defaultTraceReexec
-	if config != nil && config.Reexec != nil {
-		reexec = *config.Reexec
-	}
-
-	statedb, release, err := api.backend.StateAtBlock(ctx, parent, reexec, nil, true, false)
+	statedb, release, err := api.backend.StateAtBlock(ctx, parent, nil, true, false)
 	if err != nil {
 		return nil, err
 	}
@@ -894,14 +862,11 @@ func (api *API) standardTraceBlockToFile(ctx context.Context, block *types.Block
 		// Note: This copies the config, to not screw up the main config
 		chainConfig, canon = overrideConfig(chainConfig, config.Overrides)
 	}
-
 	evm := vm.NewEVM(vmctx, statedb, chainConfig, vm.Config{})
-	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
-		core.ProcessBeaconBlockRoot(*beaconRoot, evm)
-	}
-	if chainConfig.IsPrague(block.Number()) {
-		core.ProcessParentBlockHash(block.ParentHash(), evm)
-	}
+
+	// Run pre-execution system calls
+	core.PreExecution(ctx, block.BeaconRoot(), parent.Header(), chainConfig, evm, block.Number(), block.Time())
+
 	for i, tx := range block.Transactions() {
 		// Prepare the transaction for un-traced execution
 		msg, _ := core.TransactionToMessage(tx, signer, block.BaseFee())
@@ -912,14 +877,13 @@ func (api *API) standardTraceBlockToFile(ctx context.Context, block *types.Block
 				stateReceiverAddress := chainConfig.Bor.StateReceiverContract
 				_, err = statefull.ApplyStateSyncEvents(ctx, evm, tx, msg, common.HexToAddress(stateReceiverAddress))
 			} else {
-				_, err = core.ApplyMessage(evm, msg, new(core.GasPool).AddGas(msg.GasLimit))
+				_, err = core.ApplyMessage(evm, msg, nil)
 			}
 			if err != nil {
 				return dumps, err
 			}
 			// Finalize the state so any modifications are written to the trie
-			// Only delete empty objects if EIP158/161 (a.k.a Spurious Dragon) is in effect
-			statedb.Finalise(evm.ChainConfig().IsEIP158(block.Number()))
+			statedb.Finalise(evm.GetRules())
 			continue
 		}
 		// The transaction should be traced.
@@ -934,6 +898,7 @@ func (api *API) standardTraceBlockToFile(ctx context.Context, block *types.Block
 			return nil, err
 		}
 		dumps = append(dumps, dump.Name())
+
 		// Set up the tracer and EVM for the transaction.
 		var (
 			writer = bufio.NewWriter(dump)
@@ -955,7 +920,7 @@ func (api *API) standardTraceBlockToFile(ctx context.Context, block *types.Block
 			NoBaseFee: true,
 		})
 		// Execute the transaction and flush any traces to disk
-		statedb.SetTxContext(tx.Hash(), i)
+		statedb.SetTxContext(tx.Hash(), i, uint32(i+1))
 		from := msg.From
 		if isStateSync {
 			from = params.BorSystemAddress
@@ -967,7 +932,7 @@ func (api *API) standardTraceBlockToFile(ctx context.Context, block *types.Block
 		if isStateSync {
 			vmResult, err = statefull.ApplyStateSyncEvents(ctx, evm, tx, msg, stateReceiverAddress)
 		} else {
-			vmResult, err = core.ApplyMessage(evm, msg, new(core.GasPool).AddGas(msg.GasLimit))
+			vmResult, err = core.ApplyMessage(evm, msg, nil)
 		}
 		if hooks.OnTxEnd != nil {
 			var receipt *types.Receipt
@@ -988,8 +953,7 @@ func (api *API) standardTraceBlockToFile(ctx context.Context, block *types.Block
 			return dumps, err
 		}
 		// Finalize the state so any modifications are written to the trie
-		// Only delete empty objects if EIP158/161 (a.k.a Spurious Dragon) is in effect
-		statedb.Finalise(evm.ChainConfig().IsEIP158(block.Number()))
+		statedb.Finalise(evm.GetRules())
 
 		// If we've traced the transaction we were looking for, abort
 		if tx.Hash() == txHash {
@@ -1031,7 +995,12 @@ func (api *API) TraceTransaction(ctx context.Context, hash common.Hash, config *
 // after executing the specified block. However, if a transaction index is provided,
 // the trace will be conducted on the state after executing the specified transaction
 // within the specified block.
-func (api *API) TraceCall(ctx context.Context, args ethapi.TransactionArgs, blockNrOrHash rpc.BlockNumberOrHash, config *TraceCallConfig) (interface{}, error) {
+// If no block is specified, the latest block is used.
+func (api *API) TraceCall(ctx context.Context, args ethapi.TransactionArgs, blockNrOrHash *rpc.BlockNumberOrHash, config *TraceCallConfig) (interface{}, error) {
+	if blockNrOrHash == nil {
+		latest := rpc.BlockNumberOrHashWithNumber(rpc.LatestBlockNumber)
+		blockNrOrHash = &latest
+	}
 	// Try to retrieve the specified block
 	var (
 		err         error
@@ -1062,15 +1031,10 @@ func (api *API) TraceCall(ctx context.Context, args ethapi.TransactionArgs, bloc
 		return nil, err
 	}
 	// try to recompute the state
-	reexec := defaultTraceReexec
-	if config != nil && config.Reexec != nil {
-		reexec = *config.Reexec
-	}
-
 	if config != nil && config.TxIndex != nil {
-		_, _, statedb, release, err = api.backend.StateAtTransaction(ctx, block, int(*config.TxIndex), reexec)
+		_, _, statedb, release, err = api.backend.StateAtTransaction(ctx, block, int(*config.TxIndex))
 	} else {
-		statedb, release, err = api.backend.StateAtBlock(ctx, block, reexec, nil, true, false)
+		statedb, release, err = api.backend.StateAtBlock(ctx, block, nil, true, false)
 	}
 	if err != nil {
 		return nil, err
@@ -1110,7 +1074,7 @@ func (api *API) TraceCall(ctx context.Context, args ethapi.TransactionArgs, bloc
 	}
 	var (
 		msg         = args.ToMessage(blockContext.BaseFee, true)
-		tx          = args.ToTransaction(types.LegacyTxType)
+		tx          = args.ToTransaction(types.DynamicFeeTxType)
 		traceConfig *TraceConfig
 	)
 	// Lower the basefee to 0 to avoid breaking EVM
@@ -1196,12 +1160,6 @@ func (api *API) TraceCallMany(ctx context.Context, bundles []Bundle, simulateCon
 	if err != nil {
 		return nil, err
 	}
-	// try to recompute the state
-	reexec := defaultTraceReexec
-	if config != nil && config.Reexec != nil {
-		reexec = *config.Reexec
-	}
-
 	// Default tx index is "-1" which means full block
 	var txIndex = -1
 	if simulateContext.TransactionIndex != nil {
@@ -1218,9 +1176,9 @@ func (api *API) TraceCallMany(ctx context.Context, bundles []Bundle, simulateCon
 	}
 
 	if txIndex == -1 {
-		statedb, release, err = api.backend.StateAtBlock(ctx, block, reexec, nil, true, false)
+		statedb, release, err = api.backend.StateAtBlock(ctx, block, nil, true, false)
 	} else {
-		_, _, statedb, release, err = api.backend.StateAtTransaction(ctx, block, txIndex, reexec)
+		_, _, statedb, release, err = api.backend.StateAtTransaction(ctx, block, txIndex)
 	}
 	if err != nil {
 		return nil, err
@@ -1407,7 +1365,6 @@ func (api *API) traceTx(ctx context.Context, tx *types.Transaction, message *cor
 		tracer  *Tracer
 		err     error
 		timeout = defaultTraceTimeout
-		usedGas uint64
 	)
 	if config == nil {
 		config = &TraceConfig{}
@@ -1469,7 +1426,7 @@ func (api *API) traceTx(ctx context.Context, tx *types.Transaction, message *cor
 	defer cancel()
 
 	// Call Prepare to clear out the statedb access list
-	statedb.SetTxContext(txctx.TxHash, txctx.TxIndex)
+	statedb.SetTxContext(txctx.TxHash, txctx.TxIndex, uint32(txctx.TxIndex+1))
 
 	// Handle state-sync transactions separately. They're part of block body post Madhugiri
 	// so we can replay them and gather traces.
@@ -1522,12 +1479,14 @@ func (api *API) traceTx(ctx context.Context, tx *types.Transaction, message *cor
 	}
 
 	// Handle normal transactions
-	_, err = core.ApplyTransactionWithEVM(message, new(core.GasPool).AddGas(message.GasLimit), statedb, vmctx.BlockNumber, txctx.BlockHash, vmctx.Time, tx, &usedGas, evm)
+	gp := core.NewGasPool(message.GasLimit)
+
+	_, err = core.ApplyTransactionWithEVM(message, gp, statedb, vmctx.BlockNumber, txctx.BlockHash, vmctx.Time, tx, evm)
 	if err != nil {
 		return nil, 0, fmt.Errorf("tracing failed: %w", err)
 	}
 	result, err := tracer.GetResult()
-	return result, usedGas, err
+	return result, gp.Used(), err
 }
 
 // APIs return the collection of RPC services the tracer package offers.

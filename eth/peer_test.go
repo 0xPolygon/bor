@@ -74,13 +74,13 @@ func TestRequestWitnesses_Controlling_Max_Concurrent_Calls(t *testing.T) {
 	defer ctrl.Finish()
 
 	hashToRequest := common.Hash{123}
-	witness, _ := stateless.NewWitness(&types.Header{}, nil)
+	witness, _ := stateless.NewWitness(&types.Header{}, nil, false)
 	FillWitnessWithDeterministicRandomState(witness, 10*1024)
 	var witBuf bytes.Buffer
 	witness.EncodeRLP(&witBuf)
 
 	mockWitPeer := NewMockWitnessPeer(ctrl)
-	p := &ethPeer{Peer: eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01, 0x02}, "test-peer", []p2p.Cap{}), nil, nil), witPeer: &witPeer{Peer: mockWitPeer}}
+	p := &ethPeer{Peer: eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01, 0x02}, "test-peer", []p2p.Cap{}), nil, nil, nil), witPeer: &witPeer{Peer: mockWitPeer}}
 	dlCh := make(chan *eth.Response)
 	concurrentCount := 0
 	maxConcurrentCount := 0
@@ -187,7 +187,7 @@ func FillWitnessWithDeterministicRandomState(w *stateless.Witness, targetSize in
 		states := map[string][]byte{
 			string(buf): buf,
 		}
-		w.AddState(states)
+		w.AddState(states, common.Hash{})
 		total += chunkSize
 	}
 }
@@ -549,7 +549,7 @@ func TestSupportsWitness(t *testing.T) {
 
 		mockWitPeer := NewMockWitnessPeer(ctrl)
 		p := &ethPeer{
-			Peer:    eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01}, "test", []p2p.Cap{}), nil, nil),
+			Peer:    eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01}, "test", []p2p.Cap{}), nil, nil, nil),
 			witPeer: &witPeer{Peer: mockWitPeer},
 		}
 
@@ -558,7 +558,7 @@ func TestSupportsWitness(t *testing.T) {
 
 	t.Run("WithoutWitPeer", func(t *testing.T) {
 		p := &ethPeer{
-			Peer: eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01}, "test", []p2p.Cap{}), nil, nil),
+			Peer: eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01}, "test", []p2p.Cap{}), nil, nil, nil),
 		}
 
 		assert.False(t, p.SupportsWitness())
@@ -569,7 +569,7 @@ func TestSupportsWitness(t *testing.T) {
 func TestReconstructWitness(t *testing.T) {
 	t.Run("SuccessfulReconstruction", func(t *testing.T) {
 		// Create a test witness and encode it
-		witness, _ := stateless.NewWitness(&types.Header{Number: big.NewInt(100)}, nil)
+		witness, _ := stateless.NewWitness(&types.Header{Number: big.NewInt(100)}, nil, false)
 		FillWitnessWithDeterministicRandomState(witness, 5*1024)
 		var buf bytes.Buffer
 		witness.EncodeRLP(&buf)
@@ -592,7 +592,7 @@ func TestReconstructWitness(t *testing.T) {
 		}
 
 		// Reconstruct
-		p := &ethPeer{Peer: eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01}, "test", []p2p.Cap{}), nil, nil)}
+		p := &ethPeer{Peer: eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01}, "test", []p2p.Cap{}), nil, nil, nil)}
 		reconstructed, err := p.reconstructWitness(pages)
 
 		assert.NoError(t, err)
@@ -602,7 +602,7 @@ func TestReconstructWitness(t *testing.T) {
 
 	t.Run("OutOfOrderPages", func(t *testing.T) {
 		// Create pages out of order
-		witness, _ := stateless.NewWitness(&types.Header{Number: big.NewInt(100)}, nil)
+		witness, _ := stateless.NewWitness(&types.Header{Number: big.NewInt(100)}, nil, false)
 		FillWitnessWithDeterministicRandomState(witness, 3*1024)
 		var buf bytes.Buffer
 		witness.EncodeRLP(&buf)
@@ -627,7 +627,7 @@ func TestReconstructWitness(t *testing.T) {
 		pages[0], pages[2] = pages[2], pages[0]
 
 		// Reconstruct - should still work due to sorting
-		p := &ethPeer{Peer: eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01}, "test", []p2p.Cap{}), nil, nil)}
+		p := &ethPeer{Peer: eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01}, "test", []p2p.Cap{}), nil, nil, nil)}
 		reconstructed, err := p.reconstructWitness(pages)
 
 		assert.NoError(t, err)
@@ -665,7 +665,7 @@ func TestReconstructWitness(t *testing.T) {
 	// mis-reconstruction so a future dedup fix can be verified; it is not fixed
 	// here (out of scope for this PR).
 	t.Run("DuplicatePageMisreconstructs", func(t *testing.T) {
-		witness, _ := stateless.NewWitness(&types.Header{Number: big.NewInt(100)}, nil)
+		witness, _ := stateless.NewWitness(&types.Header{Number: big.NewInt(100)}, nil, false)
 		FillWitnessWithDeterministicRandomState(witness, 4*1024)
 		var buf bytes.Buffer
 		require.NoError(t, witness.EncodeRLP(&buf))
@@ -676,7 +676,7 @@ func TestReconstructWitness(t *testing.T) {
 		p0 := wit.WitnessPageResponse{Page: 0, TotalPages: 2, Hash: common.Hash{0x01}, Data: witnessBytes[:half]}
 		p1 := wit.WitnessPageResponse{Page: 1, TotalPages: 2, Hash: common.Hash{0x01}, Data: witnessBytes[half:]}
 
-		p := &ethPeer{Peer: eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01}, "test", []p2p.Cap{}), nil, nil)}
+		p := &ethPeer{Peer: eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01}, "test", []p2p.Cap{}), nil, nil, nil)}
 
 		// Sanity: the correct page set reconstructs the original witness.
 		correct, err := p.reconstructWitness([]wit.WitnessPageResponse{p0, p1})
@@ -1346,7 +1346,7 @@ func TestBuildWitnessRequests_ConcurrentFailedRequestsAccess(t *testing.T) {
 	mockWitPeer.EXPECT().ID().Return("test-peer").AnyTimes()
 
 	p := &ethPeer{
-		Peer:    eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01}, "test-peer", []p2p.Cap{}), nil, nil),
+		Peer:    eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01}, "test-peer", []p2p.Cap{}), nil, nil, nil),
 		witPeer: &witPeer{Peer: mockWitPeer},
 	}
 
@@ -1609,7 +1609,7 @@ func TestDoWitnessRequest_RaceCondition_WitTotalRequest(t *testing.T) {
 	mockWitPeer.EXPECT().ID().Return("test-peer").AnyTimes()
 
 	p := &ethPeer{
-		Peer:    eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01}, "test-peer", []p2p.Cap{}), nil, nil),
+		Peer:    eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01}, "test-peer", []p2p.Cap{}), nil, nil, nil),
 		witPeer: &witPeer{Peer: mockWitPeer},
 	}
 
@@ -1727,7 +1727,7 @@ func testPeer(t *testing.T) (*ethPeer, *MockWitnessPeer) {
 	mock := NewMockWitnessPeer(ctrl)
 	mock.EXPECT().Log().Return(log.New()).AnyTimes()
 	p := &ethPeer{
-		Peer:    eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01, 0x02}, "test-peer", []p2p.Cap{}), nil, nil),
+		Peer:    eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01, 0x02}, "test-peer", []p2p.Cap{}), nil, nil, nil),
 		witPeer: &witPeer{Peer: mock},
 	}
 	return p, mock
@@ -1736,7 +1736,7 @@ func testPeer(t *testing.T) (*ethPeer, *MockWitnessPeer) {
 // testWitnessData returns RLP-encoded witness bytes for use in mock responses.
 func testWitnessData(t *testing.T) []byte {
 	t.Helper()
-	w, _ := stateless.NewWitness(&types.Header{}, nil)
+	w, _ := stateless.NewWitness(&types.Header{}, nil, false)
 	FillWitnessWithDeterministicRandomState(w, 10*1024)
 	var buf bytes.Buffer
 	w.EncodeRLP(&buf)
@@ -2119,9 +2119,9 @@ func TestWitnessPageWithinServeLimits(t *testing.T) {
 func TestRequestWitnessesWithVerification_PageBeyondServeLimits(t *testing.T) {
 	// A complete, decodable witness one page could carry if it were not cut at
 	// PageSize: accepting it would hand the caller a witness.
-	oversized, err := stateless.NewWitness(&types.Header{Number: big.NewInt(1)}, nil)
+	oversized, err := stateless.NewWitness(&types.Header{Number: big.NewInt(1)}, nil, false)
 	require.NoError(t, err)
-	oversized.AddState(map[string][]byte{"node": make([]byte, PageSize)})
+	oversized.AddState(map[string][]byte{"node": make([]byte, PageSize)}, common.Hash{})
 	var oversizedBuf bytes.Buffer
 	require.NoError(t, oversized.EncodeRLP(&oversizedBuf))
 	require.Greater(t, oversizedBuf.Len(), PageSize)
@@ -2188,7 +2188,7 @@ func TestRequestWitnessesWithVerification_UnrequestedPage(t *testing.T) {
 	requested := common.Hash{0x01}
 	unrequested := common.Hash{0x02}
 	encode := func(number int64) []byte {
-		w, err := stateless.NewWitness(&types.Header{Number: big.NewInt(number)}, nil)
+		w, err := stateless.NewWitness(&types.Header{Number: big.NewInt(number)}, nil, false)
 		require.NoError(t, err)
 		var buf bytes.Buffer
 		require.NoError(t, w.EncodeRLP(&buf))

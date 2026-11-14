@@ -22,6 +22,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/params"
 )
 
 const (
@@ -59,6 +60,7 @@ type chainReader interface {
 	CurrentBlock() *types.Header
 	GetBlockByNumber(number uint64) *types.Block
 	SealingStateAt(root common.Hash) (*state.StateDB, error)
+	Config() *params.ChainConfig
 }
 
 // Publisher streams block-production entries to the sequence store. Enqueue

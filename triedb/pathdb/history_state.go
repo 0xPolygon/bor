@@ -283,11 +283,11 @@ func (h *stateHistory) typ() historyType {
 
 // forEach implements the history interface, returning an iterator to traverse the
 // state entries in the history.
-func (h *stateHistory) forEach() iter.Seq[stateIdent] {
-	return func(yield func(stateIdent) bool) {
+func (h *stateHistory) forEach() iter.Seq[indexElem] {
+	return func(yield func(indexElem) bool) {
 		for _, addr := range h.accountList {
 			addrHash := crypto.Keccak256Hash(addr.Bytes())
-			if !yield(newAccountIdent(addrHash)) {
+			if !yield(accountIndexElem{addrHash}) {
 				return
 			}
 			for _, slotKey := range h.storageList[addr] {
@@ -298,7 +298,7 @@ func (h *stateHistory) forEach() iter.Seq[stateIdent] {
 				if h.meta.version != stateHistoryV0 {
 					slotHash = crypto.Keccak256Hash(slotKey.Bytes())
 				}
-				if !yield(newStorageIdent(addrHash, slotHash)) {
+				if !yield(storageIndexElem{addrHash, slotHash}) {
 					return
 				}
 			}
@@ -610,32 +610,5 @@ func writeStateHistory(writer ethdb.AncientWriter, dl *diffLayer) error {
 	stateHistoryBuildTimeMeter.UpdateSince(start)
 	log.Debug("Stored state history", "id", dl.stateID(), "block", dl.block, "data", dataSize, "index", indexSize, "elapsed", common.PrettyDuration(time.Since(start)))
 
-	return nil
-}
-
-// checkStateHistories retrieves a batch of metadata objects with the specified
-// range and performs the callback on each item.
-func checkStateHistories(reader ethdb.AncientReader, start, count uint64, check func(*meta) error) error {
-	for count > 0 {
-		number := count
-		if number > 10000 {
-			number = 10000 // split the big read into small chunks
-		}
-		blobs, err := rawdb.ReadStateHistoryMetaList(reader, start, number)
-		if err != nil {
-			return err
-		}
-		for _, blob := range blobs {
-			var dec meta
-			if err := dec.decode(blob); err != nil {
-				return err
-			}
-			if err := check(&dec); err != nil {
-				return err
-			}
-		}
-		count -= uint64(len(blobs))
-		start += uint64(len(blobs))
-	}
 	return nil
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/holiman/uint256"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/lru"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core/blockstm"
@@ -358,7 +359,7 @@ func TestV2StateProcessor_PanickedTxFailsBlock(t *testing.T) {
 	sender := crypto.PubkeyToAddress(key.PublicKey)
 	sdb.AddBalance(sender, uint256.NewInt(1e18), 0)
 	sdb.SetNonce(sender, 0, 0)
-	root, _ := sdb.Commit(0, false, false)
+	root, _ := sdb.Commit(params.Rules{}, 0)
 	tdb.Commit(root, false)
 	base, _ := state.New(root, state.NewDatabase(tdb, nil))
 
@@ -399,7 +400,7 @@ func TestV2StateProcessor_PanickedTxFailsBlock(t *testing.T) {
 	}}
 
 	finalDB := base.Copy()
-	finalDB.StartPrefetcher("test", nil, nil)
+	finalDB.StartPrefetcher("test", nil)
 	defer finalDB.StopPrefetcher()
 
 	result := ExecuteV2BlockSTM(context.Background(), tasks, base, store, bals, blockCtx, common.Hash{}, cfg, chainConfig,
@@ -446,7 +447,7 @@ func TestV2ApplyMessage_FirstIncarnationPanicLogsDebug(t *testing.T) {
 	sender := crypto.PubkeyToAddress(key.PublicKey)
 	sdb.AddBalance(sender, uint256.NewInt(1e18), 0)
 	sdb.SetNonce(sender, 0, 0)
-	root, _ := sdb.Commit(0, false, false)
+	root, _ := sdb.Commit(params.Rules{}, 0)
 	tdb.Commit(root, false)
 	base, _ := state.New(root, state.NewDatabase(tdb, nil))
 
@@ -477,7 +478,7 @@ func TestV2ApplyMessage_FirstIncarnationPanicLogsDebug(t *testing.T) {
 	}}
 
 	finalDB := base.Copy()
-	finalDB.StartPrefetcher("test", nil, nil)
+	finalDB.StartPrefetcher("test", nil)
 	defer finalDB.StopPrefetcher()
 
 	_ = ExecuteV2BlockSTM(context.Background(), tasks, base,
@@ -521,7 +522,7 @@ func TestV2StateProcessor_ProducesWitness(t *testing.T) {
 	sender := crypto.PubkeyToAddress(key.PublicKey)
 	sdb.AddBalance(sender, uint256.NewInt(1e18), 0)
 	sdb.SetNonce(sender, 0, 0)
-	root, _ := sdb.Commit(0, false, false)
+	root, _ := sdb.Commit(params.Rules{}, 0)
 	tdb.Commit(root, false)
 	base, _ := state.New(root, state.NewDatabase(tdb, nil))
 
@@ -564,7 +565,7 @@ func TestV2StateProcessor_ProducesWitness(t *testing.T) {
 	bals := blockstm.NewMVBalanceStore()
 
 	finalDB := base
-	finalDB.StartPrefetcher("test", w, nil)
+	finalDB.StartPrefetcher("test", w)
 	defer finalDB.StopPrefetcher()
 
 	result := ExecuteV2BlockSTM(context.Background(), tasks, base, store, bals, blockCtx, common.Hash{}, vm.Config{}, chainConfig,
@@ -581,7 +582,7 @@ func TestV2StateProcessor_ProducesWitness(t *testing.T) {
 	// invokes after settle), addresses that were only-read by workers
 	// would be missing from the witness.
 	finalDB.CollectStateWitness()
-	finalDB.IntermediateRoot(true)
+	finalDB.IntermediateRoot(params.Rules{IsEIP158: true})
 
 	if len(w.State) == 0 {
 		t.Error("witness.State is empty — V2 worker reads did not populate the prevalue tracer")
@@ -602,7 +603,7 @@ func TestExecuteV2BlockSTM_MidFlightCancellation(t *testing.T) {
 	sender := crypto.PubkeyToAddress(key.PublicKey)
 	sdb.AddBalance(sender, uint256.NewInt(1e18), 0)
 	sdb.SetNonce(sender, 0, 0)
-	root, _ := sdb.Commit(0, false, false)
+	root, _ := sdb.Commit(params.Rules{}, 0)
 	tdb.Commit(root, false)
 	base, _ := state.New(root, state.NewDatabase(tdb, nil))
 
@@ -637,7 +638,7 @@ func TestExecuteV2BlockSTM_MidFlightCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	finalDB := base.Copy()
-	finalDB.StartPrefetcher("test", nil, nil)
+	finalDB.StartPrefetcher("test", nil)
 	defer finalDB.StopPrefetcher()
 	store := blockstm.NewMVStore()
 	bals := blockstm.NewMVBalanceStore()
@@ -681,7 +682,7 @@ func TestExecuteV2BlockSTM_HonoursCancellation(t *testing.T) {
 	sender := crypto.PubkeyToAddress(key.PublicKey)
 	sdb.AddBalance(sender, uint256.NewInt(1e18), 0)
 	sdb.SetNonce(sender, 0, 0)
-	root, _ := sdb.Commit(0, false, false)
+	root, _ := sdb.Commit(params.Rules{}, 0)
 	tdb.Commit(root, false)
 	base, _ := state.New(root, state.NewDatabase(tdb, nil))
 
@@ -718,7 +719,7 @@ func TestExecuteV2BlockSTM_HonoursCancellation(t *testing.T) {
 	cancel()
 
 	finalDB := base.Copy()
-	finalDB.StartPrefetcher("test", nil, nil)
+	finalDB.StartPrefetcher("test", nil)
 	defer finalDB.StopPrefetcher()
 
 	store := blockstm.NewMVStore()
@@ -784,7 +785,7 @@ func TestV2StateProcessor_ReceiptHasBlockHash(t *testing.T) {
 	sender := crypto.PubkeyToAddress(key.PublicKey)
 	sdb.AddBalance(sender, uint256.NewInt(1e18), 0)
 	sdb.SetNonce(sender, 0, 0)
-	root, _ := sdb.Commit(0, false, false)
+	root, _ := sdb.Commit(params.Rules{}, 0)
 	tdb.Commit(root, false)
 	base, _ := state.New(root, state.NewDatabase(tdb, nil))
 
@@ -817,7 +818,7 @@ func TestV2StateProcessor_ReceiptHasBlockHash(t *testing.T) {
 	bals := blockstm.NewMVBalanceStore()
 
 	finalDB := base.Copy()
-	finalDB.StartPrefetcher("test", nil, nil)
+	finalDB.StartPrefetcher("test", nil)
 	defer finalDB.StopPrefetcher()
 
 	result := ExecuteV2BlockSTM(context.Background(), tasks, base, store, bals, blockCtx, blockHash, vm.Config{}, chainConfig,
@@ -852,7 +853,7 @@ func TestV2StateProcessor_ApplyMessageErrorFailsBlock(t *testing.T) {
 	// Real account nonce is 0 — sign a tx with nonce=5 so ApplyMessage
 	// returns ErrNonceTooHigh.
 	sdb.SetNonce(sender, 0, 0)
-	root, _ := sdb.Commit(0, false, false)
+	root, _ := sdb.Commit(params.Rules{}, 0)
 	tdb.Commit(root, false)
 	base, _ := state.New(root, state.NewDatabase(tdb, nil))
 
@@ -886,7 +887,7 @@ func TestV2StateProcessor_ApplyMessageErrorFailsBlock(t *testing.T) {
 	bals := blockstm.NewMVBalanceStore()
 
 	finalDB := base.Copy()
-	finalDB.StartPrefetcher("test", nil, nil)
+	finalDB.StartPrefetcher("test", nil)
 	defer finalDB.StopPrefetcher()
 
 	result := ExecuteV2BlockSTM(context.Background(), tasks, base, store, bals, blockCtx, common.Hash{}, vm.Config{}, chainConfig,
@@ -918,13 +919,22 @@ func (*receiptMismatchFinalizer) Finalize(consensus.ChainHeaderReader, *types.He
 func TestV2ReceiptCountMismatch(t *testing.T) {
 	config := *params.TestChainConfig
 	config.Bor = &params.BorConfig{MadhugiriBlock: big.NewInt(0)}
-	chain := &HeaderChain{config: &config, engine: &receiptMismatchFinalizer{ethash.NewFaker()}}
+	// The V2 processor reads the parent header before executing the block.
+	db := rawdb.NewMemoryDatabase()
+	parent := &types.Header{Number: big.NewInt(0), Difficulty: big.NewInt(1), GasLimit: 30_000_000}
+	rawdb.WriteHeader(db, parent)
+	chain := &HeaderChain{
+		config:      &config,
+		chainDb:     db,
+		headerCache: lru.NewCache[common.Hash, *types.Header](8),
+		engine:      &receiptMismatchFinalizer{ethash.NewFaker()},
+	}
 	statedb, err := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer statedb.StopPrefetcher()
-	block := types.NewBlockWithHeader(&types.Header{Number: big.NewInt(1), Difficulty: big.NewInt(1), BaseFee: big.NewInt(1), GasLimit: 30_000_000})
+	block := types.NewBlockWithHeader(&types.Header{ParentHash: parent.Hash(), Number: big.NewInt(1), Difficulty: big.NewInt(1), BaseFee: big.NewInt(1), GasLimit: 30_000_000})
 	result, err := NewV2StateProcessor(chain, nil, 1).Process(block, statedb, vm.Config{}, nil, t.Context())
 	if result != nil || !errors.Is(err, ErrStateSyncMismatch) || errors.Is(err, ErrStateSyncProcessing) {
 		t.Fatalf("receipt mismatch was not rejected as invalid data: result=%v err=%v", result, err)

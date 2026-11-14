@@ -262,6 +262,12 @@ The ```bor server``` command runs the Bor client.
 
 - ```rpc.logquerylimit```: Maximum number of alternative addresses or topics allowed per search position in eth_getLogs filter criteria (0 = no cap) (default: 1000)
 
+- ```rpc.maxfilterbuffer```: Memory budget in MiB for the events buffered by all polling filters together (default: 256)
+
+- ```rpc.maxfilteritems```: Maximum number of events a polling filter may buffer before it overflows and is uninstalled (default: 100000)
+
+- ```rpc.maxfilters```: Maximum number of installed polling filters (eth_newFilter, eth_newBlockFilter, eth_newPendingTransactionFilter) (default: 1024)
+
 - ```rpc.rangelimit```: Maximum block range allowed for eth_getLogs and bor_getLogs (0 = no limit) (default: 0)
 
 - ```rpc.txfeecap```: Sets a cap on transaction fee (in ether) that can be sent via the RPC APIs (0 = no cap) (default: 1)

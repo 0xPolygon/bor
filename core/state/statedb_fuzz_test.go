@@ -37,6 +37,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/triedb"
@@ -183,11 +184,12 @@ func (test *stateTest) run() bool {
 		accountOrigin []map[common.Address][]byte
 		storages      []map[common.Hash]map[common.Hash][]byte
 		storageOrigin []map[common.Address]map[common.Hash][]byte
-		copyUpdate    = func(update *stateUpdate) {
-			accounts = append(accounts, maps.Clone(update.accounts))
-			accountOrigin = append(accountOrigin, maps.Clone(update.accountsOrigin))
-			storages = append(storages, maps.Clone(update.storages))
-			storageOrigin = append(storageOrigin, maps.Clone(update.storagesOrigin))
+		copyUpdate    = func(update *StateUpdate) {
+			accts, acctOrigin, slots, slotOrigin := update.EncodeMPTState()
+			accounts = append(accounts, maps.Clone(accts))
+			accountOrigin = append(accountOrigin, maps.Clone(acctOrigin))
+			storages = append(storages, maps.Clone(slots))
+			storageOrigin = append(storageOrigin, maps.Clone(slotOrigin))
 		}
 		disk      = rawdb.NewMemoryDatabase()
 		tdb       = triedb.NewDatabase(disk, &triedb.Config{PathDB: pathdb.Defaults})
@@ -217,27 +219,27 @@ func (test *stateTest) run() bool {
 		for i, action := range actions {
 			if i%test.chunk == 0 && i != 0 {
 				if byzantium {
-					state.Finalise(true) // call finalise at the transaction boundary
+					state.Finalise(params.Rules{IsEIP158: true}) // call finalise at the transaction boundary
 				} else {
-					state.IntermediateRoot(true) // call intermediateRoot at the transaction boundary
+					state.IntermediateRoot(params.Rules{IsEIP158: true}) // call intermediateRoot at the transaction boundary
 				}
 			}
 			action.fn(action, state)
 		}
 		if byzantium {
-			state.Finalise(true) // call finalise at the transaction boundary
+			state.Finalise(params.Rules{IsEIP158: true}) // call finalise at the transaction boundary
 		} else {
-			state.IntermediateRoot(true) // call intermediateRoot at the transaction boundary
+			state.IntermediateRoot(params.Rules{IsEIP158: true}) // call intermediateRoot at the transaction boundary
 		}
-		ret, err := state.commitAndFlush(0, true, false) // call commit at the block boundary
+		ret, err := state.commitAndFlush(params.Rules{IsEIP158: true}, 0) // call commit at the block boundary
 		if err != nil {
 			panic(err)
 		}
-		if ret.empty() {
+		if ret.Empty() {
 			return true
 		}
 		copyUpdate(ret)
-		roots = append(roots, ret.root)
+		roots = append(roots, ret.Root)
 	}
 	for i := 0; i < len(test.actions); i++ {
 		root := types.EmptyRootHash

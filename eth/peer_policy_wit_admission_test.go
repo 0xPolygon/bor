@@ -40,9 +40,9 @@ func newPolicyWitnessSession(t *testing.T, h *testHandler, id enode.ID) *policyW
 	witRemote, witLocal := p2p.MsgPipe()
 	caps := []p2p.Cap{{Name: "eth", Version: ethproto.ETH69}, {Name: "wit", Version: wit.WIT2}}
 	connection := p2p.NewPeerPipe(id, "pending", caps, ethLocal)
-	ep := ethproto.NewPeer(ethproto.ETH69, connection, ethLocal, h.txpool)
+	ep := ethproto.NewPeer(ethproto.ETH69, connection, ethLocal, h.txpool, nil)
 	wp := wit.NewPeer(wit.WIT2, connection, witLocal, log.New())
-	remote := ethproto.NewPeer(ethproto.ETH69, p2p.NewPeerPipe(enode.ID{255}, "remote", nil, ethRemote), ethRemote, h.txpool)
+	remote := ethproto.NewPeer(ethproto.ETH69, p2p.NewPeerPipe(enode.ID{255}, "remote", nil, ethRemote), ethRemote, h.txpool, nil)
 	backend := &policyWitnessBackend{witHandler: (*witHandler)(h.handler), handled: make(chan error, 1)}
 	session := &policyWitnessSession{wp, remote, ethRemote, witRemote, backend.handled, make(chan struct{})}
 	witResult, ethResult := make(chan error, 1), make(chan error, 1)

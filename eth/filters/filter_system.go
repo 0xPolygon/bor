@@ -45,6 +45,10 @@ type Config struct {
 	Timeout       time.Duration // how long filters stay active (default: 5min)
 	LogQueryLimit int           // maximum number of addresses allowed in filter criteria (default: 1000)
 	RangeLimit    uint64        // maximum block range for eth_getLogs / bor_getLogs (0 = unlimited)
+
+	MaxFilters      int    // maximum number of installed polling filters (default: 1024)
+	MaxPendingItems int    // maximum number of events buffered by a polling filter before it overflows (default: 100000)
+	MaxBufferBytes  uint64 // budget for the events buffered by all polling filters together (default: 256 MiB)
 }
 
 func (cfg Config) withDefaults() Config {
@@ -54,6 +58,18 @@ func (cfg Config) withDefaults() Config {
 
 	if cfg.LogCacheSize == 0 {
 		cfg.LogCacheSize = 32
+	}
+
+	if cfg.MaxFilters <= 0 {
+		cfg.MaxFilters = 1024
+	}
+
+	if cfg.MaxPendingItems <= 0 {
+		cfg.MaxPendingItems = 100_000
+	}
+
+	if cfg.MaxBufferBytes == 0 {
+		cfg.MaxBufferBytes = 256 << 20
 	}
 
 	return cfg
@@ -210,7 +226,7 @@ type subscription struct {
 	txs           chan []*types.Transaction
 	headers       chan *types.Header
 	receipts      chan []*ReceiptWithTx
-	txHashes      map[common.Hash]bool      // contains transaction hashes for transactionReceipts subscription filtering
+	txHashes      map[common.Hash]struct{}  // contains transaction hashes for transactionReceipts subscription filtering
 	installed     chan struct{}             // closed when the filter is installed
 	err           chan error                // closed when the filter is uninstalled
 	stateSyncData chan *types.StateSyncData // channel for state sync data
@@ -434,9 +450,9 @@ func (es *EventSystem) SubscribePendingTxs(txs chan []*types.Transaction) *Subsc
 // transactions when they are included in blocks. If txHashes is provided, only receipts
 // for those specific transaction hashes will be delivered.
 func (es *EventSystem) SubscribeTransactionReceipts(txHashes []common.Hash, receipts chan []*ReceiptWithTx) *Subscription {
-	hashSet := make(map[common.Hash]bool)
+	hashSet := make(map[common.Hash]struct{}, len(txHashes))
 	for _, h := range txHashes {
-		hashSet[h] = true
+		hashSet[h] = struct{}{}
 	}
 	sub := &subscription{
 		id:        rpc.NewID(),

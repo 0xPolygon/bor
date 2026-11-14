@@ -331,7 +331,7 @@ same request ID. The node should handle the request by responding to both reques
 }
 
 // collectResponses waits for n messages of type T on the given connection.
-// The messsages are collected according to the 'identity' function.
+// The messages are collected according to the 'identity' function.
 func collectResponses[T any, P msgTypePtr[T]](conn *Conn, n int, identity func(P) uint64) (map[uint64]P, error) {
 	resp := make(map[uint64]P, n)
 	for range n {
@@ -406,7 +406,7 @@ func (s *Suite) TestGetBlockBodies(t *utesting.T) {
 		t.Fatalf("error reading block bodies msg: %v", err)
 	}
 	if got, want := resp.RequestId, req.RequestId; got != want {
-		t.Fatalf("unexpected request id in respond", got, want)
+		t.Fatalf("unexpected request id in response: got %d, want %d", got, want)
 	}
 	bodies := resp.BlockBodiesResponse
 	if len(bodies) != len(req.GetBlockBodiesRequest) {
@@ -448,7 +448,7 @@ func (s *Suite) TestGetReceipts(t *utesting.T) {
 		t.Fatalf("error reading block bodies msg: %v", err)
 	}
 	if got, want := resp.RequestId, req.RequestId; got != want {
-		t.Fatalf("unexpected request id in respond", got, want)
+		t.Fatalf("unexpected request id in response: got %d, want %d", got, want)
 	}
 	if len(resp.List) != len(req.GetReceiptsRequest) {
 		t.Fatalf("wrong bodies in response: expected %d bodies, got %d", len(req.GetReceiptsRequest), len(resp.List))
@@ -597,7 +597,7 @@ func (s *Suite) TestBlockRangeUpdateInvalid(t *utesting.T) {
 
 func (s *Suite) TestBlockRangeUpdateFuture(t *utesting.T) {
 	t.Log(`This test sends a BlockRangeUpdate that is beyond the chain head.
-The node should accept the update and should not disonnect.`)
+The node should accept the update and should not disconnect.`)
 	conn, err := s.dialAndPeer(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -633,7 +633,7 @@ The node should accept the update and should not disonnect.`)
 
 func (s *Suite) TestBlockRangeUpdateHistoryExp(t *utesting.T) {
 	t.Log(`This test sends a BlockRangeUpdate announcing incomplete (expired) history.
-The node should accept the update and should not disonnect.`)
+The node should accept the update and should not disconnect.`)
 	conn, err := s.dialAndPeer(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -936,11 +936,11 @@ func makeSidecar(data ...byte) *types.BlobTxSidecar {
 	for i := range blobs {
 		blobs[i][0] = data[i]
 		c, _ := kzg4844.BlobToCommitment(&blobs[i])
-		p, _ := kzg4844.ComputeBlobProof(&blobs[i], c)
+		cellProofs, _ := kzg4844.ComputeCellProofs(&blobs[i])
 		commitments = append(commitments, c)
-		proofs = append(proofs, p)
+		proofs = append(proofs, cellProofs...)
 	}
-	return types.NewBlobTxSidecar(types.BlobSidecarVersion0, blobs, commitments, proofs)
+	return types.NewBlobTxSidecar(types.BlobSidecarVersion1, blobs, commitments, proofs)
 }
 
 func (s *Suite) makeBlobTxs(count, blobs int, discriminator byte) (txs types.Transactions) {

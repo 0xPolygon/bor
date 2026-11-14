@@ -207,6 +207,16 @@ func Commands() map[string]MarkDownCommandFactory {
 				Meta: meta,
 			}, nil
 		},
+		"db": func() (MarkDownCommand, error) {
+			return &DBCommand{
+				UI: ui,
+			}, nil
+		},
+		"db pebble-upgrade": func() (MarkDownCommand, error) {
+			return &PebbleUpgradeCommand{
+				UI: ui,
+			}, nil
+		},
 		"purge-whitelisted-entries": func() (MarkDownCommand, error) {
 			return &PurgeWhitelistedEntriesCommand{
 				Meta: meta,

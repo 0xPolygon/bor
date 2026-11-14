@@ -30,7 +30,7 @@ func createTestBlock(number uint64) *types.Block {
 }
 
 func createTestWitnessForBlock(block *types.Block) *stateless.Witness {
-	witness, err := stateless.NewWitness(block.Header(), nil)
+	witness, err := stateless.NewWitness(block.Header(), nil, false)
 	if err != nil {
 		panic(err)
 	}

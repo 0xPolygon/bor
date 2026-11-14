@@ -179,7 +179,7 @@ func sealedFromEnv(t *testing.T, s *session) *types.Header {
 
 func executionSealFromEnv(env *blockEnv) *types.Header {
 	header := types.CopyHeader(env.header)
-	header.Root = env.statedb.Copy().IntermediateRoot(true)
+	header.Root = env.statedb.Copy().IntermediateRoot(params.Rules{IsEIP158: true})
 	block := types.NewBlock(
 		header,
 		&types.Body{Transactions: append(types.Transactions(nil), env.txs...)},

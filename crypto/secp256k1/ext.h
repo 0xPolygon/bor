@@ -109,11 +109,8 @@ int secp256k1_ext_scalar_mul(const secp256k1_context* ctx, unsigned char *point,
 	ARG_CHECK(scalar != NULL);
 	(void)ctx;
 
-	// Reject non-canonical field elements by ensuring coordinates are < P
-	if (!secp256k1_fe_set_b32_limit(&feX, point)) {
-		return 0;
-	}
-	if (!secp256k1_fe_set_b32_limit(&feY, point+32)) {
+	if (!secp256k1_fe_set_b32_limit(&feX, point) ||
+		!secp256k1_fe_set_b32_limit(&feY, point+32)) {
 		return 0;
 	}
 	secp256k1_ge_set_xy(&ge, &feX, &feY);

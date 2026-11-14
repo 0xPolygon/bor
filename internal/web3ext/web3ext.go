@@ -160,6 +160,11 @@ web3._extend({
 			call: 'admin_stopWS'
 		}),
 		new web3._extend.Method({
+			name: 'clearTxpool',
+			call: 'debug_clearTxpool',
+			params: 0
+		}),
+		new web3._extend.Method({
 			name: 'getMaxPeers',
 			call: 'admin_getMaxPeers'
 		}),
@@ -445,7 +450,8 @@ web3._extend({
 		new web3._extend.Method({
 			name: 'getBadBlocks',
 			call: 'debug_getBadBlocks',
-			params: 0,
+			params: 1,
+			inputFormatter: [null]
 		}),
 		new web3._extend.Method({
 			name: 'storageRangeAt',
@@ -534,12 +540,6 @@ web3._extend({
 			name: 'sync',
 			call: 'debug_sync',
 			params: 1
-		}),
-		new web3._extend.Method({
-			name: 'stateSize',
-			call: 'debug_stateSize',
-			params: 1,
-			inputFormatter: [null],
 		}),
 	],
 	properties: []
@@ -637,7 +637,13 @@ web3._extend({
 			name: 'getProof',
 			call: 'eth_getProof',
 			params: 3,
-			inputFormatter: [web3._extend.formatters.inputAddressFormatter, null, web3._extend.formatters.inputBlockNumberFormatter]
+			inputFormatter: [web3._extend.formatters.inputAddressFormatter, null, web3._extend.formatters.inputDefaultBlockNumberFormatter]
+		}),
+		new web3._extend.Method({
+			name: 'getStorageValues',
+			call: 'eth_getStorageValues',
+			params: 2,
+			inputFormatter: [null, web3._extend.formatters.inputDefaultBlockNumberFormatter]
 		}),
 		new web3._extend.Method({
 			name: 'createAccessList',
@@ -676,6 +682,11 @@ web3._extend({
 		new web3._extend.Method({
 			name: 'config',
 			call: 'eth_config',
+			params: 0,
+		}),
+		new web3._extend.Method({
+			name: 'capabilities',
+			call: 'eth_capabilities',
 			params: 0,
 		})
 	],

@@ -124,7 +124,7 @@ func measureWriteDensity(t *testing.T, code []byte, preimages bool) (int64, uint
 	gen.SetState(densityLoop, common.BigToHash(common.Big1), common.BigToHash(common.Big1))
 	gen.SetCode(densityStop, []byte{byte(vm.STOP)}, tracing.CodeChangeUnspecified)
 	gen.SetCode(densityDelegate, types.AddressToDelegation(densityStop), tracing.CodeChangeUnspecified)
-	root, _ := gen.Commit(0, false, false)
+	root, _ := gen.Commit(params.Rules{}, 0)
 	tdb.Commit(root, false)
 
 	signer := types.NewLondonSigner(cfg.ChainID)

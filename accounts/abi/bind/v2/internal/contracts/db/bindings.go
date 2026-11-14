@@ -43,6 +43,11 @@ type DB struct {
 	abi abi.ABI
 }
 
+// GetABI returns the ABI associated with this contract binding.
+func (c *DB) GetABI() abi.ABI {
+	return c.abi
+}
+
 // NewDB creates a new instance of DB.
 func NewDB() *DB {
 	parsed, err := DBMetaData.ParseABI()
@@ -276,8 +281,11 @@ func (DBInsert) ContractEventName() string {
 // Solidity: event Insert(uint256 key, uint256 value, uint256 length)
 func (dB *DB) UnpackInsertEvent(log *types.Log) (*DBInsert, error) {
 	event := "Insert"
-	if len(log.Topics) == 0 || log.Topics[0] != dB.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
+	if log.Topics[0] != dB.abi.Events[event].ID {
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(DBInsert)
 	if len(log.Data) > 0 {
@@ -318,8 +326,11 @@ func (DBKeyedInsert) ContractEventName() string {
 // Solidity: event KeyedInsert(uint256 indexed key, uint256 value)
 func (dB *DB) UnpackKeyedInsertEvent(log *types.Log) (*DBKeyedInsert, error) {
 	event := "KeyedInsert"
-	if len(log.Topics) == 0 || log.Topics[0] != dB.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
+	if log.Topics[0] != dB.abi.Events[event].ID {
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(DBKeyedInsert)
 	if len(log.Data) > 0 {

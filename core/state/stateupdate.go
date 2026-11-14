@@ -20,135 +20,141 @@ import (
 	"maps"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie/trienode"
-	"github.com/ethereum/go-ethereum/triedb"
 )
 
-// contractCode represents a contract code with associated metadata.
-type contractCode struct {
-	hash common.Hash // hash is the cryptographic hash of the contract code.
-	blob []byte      // blob is the binary representation of the contract code.
+// ContractCode represents contract bytecode mutation along with its
+// associated metadata.
+type ContractCode struct {
+	Hash common.Hash // Hash is the cryptographic hash of the current contract code.
+	Blob []byte      // Blob is the binary representation of the current contract code.
 }
 
-// accountDelete represents an operation for deleting an Ethereum account.
-type accountDelete struct {
-	address common.Address // address is the unique account identifier
-	origin  []byte         // origin is the original value of account data in slim-RLP encoding.
-
-	// storages stores mutated slots, the value should be nil.
-	storages map[common.Hash][]byte
-
-	// storagesOrigin stores the original values of mutated slots in
-	// prefix-zero-trimmed RLP format. The map key refers to the **HASH**
-	// of the raw storage slot key.
-	storagesOrigin map[common.Hash][]byte
+// AccountDelete represents a deletion operation for an Ethereum account.
+type AccountDelete struct {
+	Address        common.Address              // Address uniquely identifies the account.
+	Origin         *types.StateAccount         // Origin is the account state prior to deletion (never be null).
+	Storages       map[common.Hash]common.Hash // Storages contains mutated storage slots.
+	StoragesOrigin map[common.Hash]common.Hash // StoragesOrigin holds original values of mutated slots; keys are hashes of raw storage slot keys.
 }
 
-// accountUpdate represents an operation for updating an Ethereum account.
-type accountUpdate struct {
-	address  common.Address         // address is the unique account identifier
-	data     []byte                 // data is the slim-RLP encoded account data.
-	origin   []byte                 // origin is the original value of account data in slim-RLP encoding.
-	code     *contractCode          // code represents mutated contract code; nil means it's not modified.
-	storages map[common.Hash][]byte // storages stores mutated slots in prefix-zero-trimmed RLP format.
+// AccountUpdate represents an update operation for an Ethereum account.
+type AccountUpdate struct {
+	Address  common.Address              // Address uniquely identifies the account.
+	Data     *types.StateAccount         // Data is the updated account state; nil indicates deletion.
+	Origin   *types.StateAccount         // Origin is the previous account state; nil indicates non-existence.
+	Code     *ContractCode               // Code contains updated contract code; nil if unchanged.
+	Storages map[common.Hash]common.Hash // Storages contains updated storage slots.
 
-	// storagesOriginByKey and storagesOriginByHash both store the original values
-	// of mutated slots in prefix-zero-trimmed RLP format. The difference is that
-	// storagesOriginByKey uses the **raw** storage slot key as the map ID, while
-	// storagesOriginByHash uses the **hash** of the storage slot key instead.
-	storagesOriginByKey  map[common.Hash][]byte
-	storagesOriginByHash map[common.Hash][]byte
+	// StoragesOriginByKey and StoragesOriginByHash both record original values
+	// of mutated storage slots:
+	// - StoragesOriginByKey uses raw storage slot keys.
+	// - StoragesOriginByHash uses hashed storage slot keys.
+	StoragesOriginByKey  map[common.Hash]common.Hash
+	StoragesOriginByHash map[common.Hash]common.Hash
 }
 
-// stateUpdate represents the difference between two states resulting from state
+// StorageKeyEncoding specifies the encoding scheme of a storage key.
+type StorageKeyEncoding int
+
+const (
+	// StorageKeyHashed represents a hashed key (e.g. Keccak256).
+	StorageKeyHashed StorageKeyEncoding = iota
+
+	// StorageKeyPlain represents a raw (unhashed) key.
+	StorageKeyPlain
+)
+
+// StateUpdate represents the difference between two states resulting from state
 // execution. It contains information about mutated contract codes, accounts,
 // and storage slots, along with their original values.
-type stateUpdate struct {
-	originRoot  common.Hash // hash of the state before applying mutation
-	root        common.Hash // hash of the state after applying mutation
-	blockNumber uint64      // Associated block number
+type StateUpdate struct {
+	OriginRoot  common.Hash // Hash of the state before applying mutation
+	Root        common.Hash // Hash of the state after applying mutation
+	BlockNumber uint64      // Associated block number
 
-	accounts       map[common.Hash][]byte    // accounts stores mutated accounts in 'slim RLP' encoding
-	accountsOrigin map[common.Address][]byte // accountsOrigin stores the original values of mutated accounts in 'slim RLP' encoding
+	// Accounts contains mutated accounts, keyed by address hash.
+	Accounts map[common.Hash]*types.StateAccount
 
-	// storages stores mutated slots in 'prefix-zero-trimmed' RLP format.
-	// The value is keyed by account hash and **storage slot key hash**.
-	storages map[common.Hash]map[common.Hash][]byte
+	// Storages contains mutated storage slots, keyed by address
+	// hash and storage slot key hash.
+	Storages map[common.Hash]map[common.Hash]common.Hash
 
-	// storagesOrigin stores the original values of mutated slots in
-	// 'prefix-zero-trimmed' RLP format.
-	// (a) the value is keyed by account hash and **storage slot key** if rawStorageKey is true;
-	// (b) the value is keyed by account hash and **storage slot key hash** if rawStorageKey is false;
-	storagesOrigin map[common.Address]map[common.Hash][]byte
-	rawStorageKey  bool
+	// AccountsOrigin holds the original values of mutated accounts, keyed by address.
+	AccountsOrigin map[common.Address]*types.StateAccount
 
-	codes map[common.Address]contractCode // codes contains the set of dirty codes
-	nodes *trienode.MergedNodeSet         // Aggregated dirty nodes caused by state changes
+	// StoragesOrigin holds the original values of mutated storage slots.
+	// The key format depends on StorageKeyType:
+	// - if StorageKeyType is plain:  keyed by account address and plain storage slot key.
+	// - if StorageKeyType is hashed: keyed by account address and storage slot key hash.
+	StoragesOrigin map[common.Address]map[common.Hash]common.Hash
+	StorageKeyType StorageKeyEncoding
+
+	Codes map[common.Address]*ContractCode // Codes contains the set of dirty codes
+	Nodes *trienode.MergedNodeSet          // Aggregated dirty nodes caused by state changes
 }
 
-// empty returns a flag indicating the state transition is empty or not.
-func (sc *stateUpdate) empty() bool {
-	return sc.originRoot == sc.root
+// Empty returns a flag indicating the state transition is empty or not.
+func (sc *StateUpdate) Empty() bool {
+	return sc.OriginRoot == sc.Root
 }
 
-// newStateUpdate constructs a state update object by identifying the differences
+// NewStateUpdate constructs a state update object by identifying the differences
 // between two states through state execution. It combines the specified account
 // deletions and account updates to create a complete state update.
-//
-// rawStorageKey is a flag indicating whether to use the raw storage slot key or
-// the hash of the slot key for constructing state update object.
-func newStateUpdate(rawStorageKey bool, originRoot common.Hash, root common.Hash, blockNumber uint64, deletes map[common.Hash]*accountDelete, updates map[common.Hash]*accountUpdate, nodes *trienode.MergedNodeSet) *stateUpdate {
+func NewStateUpdate(typ StorageKeyEncoding, originRoot common.Hash, root common.Hash, blockNumber uint64, deletes map[common.Hash]*AccountDelete, updates map[common.Hash]*AccountUpdate, nodes *trienode.MergedNodeSet) *StateUpdate {
 	var (
-		accounts       = make(map[common.Hash][]byte)
-		accountsOrigin = make(map[common.Address][]byte)
-		storages       = make(map[common.Hash]map[common.Hash][]byte)
-		storagesOrigin = make(map[common.Address]map[common.Hash][]byte)
-		codes          = make(map[common.Address]contractCode)
+		accounts       = make(map[common.Hash]*types.StateAccount)
+		accountsOrigin = make(map[common.Address]*types.StateAccount)
+		storages       = make(map[common.Hash]map[common.Hash]common.Hash)
+		storagesOrigin = make(map[common.Address]map[common.Hash]common.Hash)
+		codes          = make(map[common.Address]*ContractCode)
 	)
-	// Since some accounts might be destroyed and recreated within the same
+	// Since some accounts might be deleted and recreated within the same
 	// block, deletions must be aggregated first.
 	for addrHash, op := range deletes {
-		addr := op.address
+		addr := op.Address
 		accounts[addrHash] = nil
-		accountsOrigin[addr] = op.origin
+		accountsOrigin[addr] = op.Origin
 
-		// If storage wiping exists, the hash of the storage slot key must be used
-		if len(op.storages) > 0 {
-			storages[addrHash] = op.storages
+		if len(op.Storages) > 0 {
+			storages[addrHash] = op.Storages
 		}
-		if len(op.storagesOrigin) > 0 {
-			storagesOrigin[addr] = op.storagesOrigin
+		if len(op.StoragesOrigin) > 0 {
+			storagesOrigin[addr] = op.StoragesOrigin
 		}
 	}
 	// Aggregate account updates then.
 	for addrHash, op := range updates {
 		// Aggregate dirty contract codes if they are available.
-		addr := op.address
-		if op.code != nil {
-			codes[addr] = *op.code
+		addr := op.Address
+		if op.Code != nil {
+			codes[addr] = op.Code
 		}
-		accounts[addrHash] = op.data
+		accounts[addrHash] = op.Data
 
 		// Aggregate the account original value. If the account is already
-		// present in the aggregated accountsOrigin set, skip it.
+		// present in the aggregated AccountsOrigin set, skip it.
 		if _, found := accountsOrigin[addr]; !found {
-			accountsOrigin[addr] = op.origin
+			accountsOrigin[addr] = op.Origin
 		}
 		// Aggregate the storage mutation list. If a slot in op.storages is
 		// already present in aggregated storages set, the value will be
 		// overwritten.
-		if len(op.storages) > 0 {
+		if len(op.Storages) > 0 {
 			if _, exist := storages[addrHash]; !exist {
-				storages[addrHash] = op.storages
+				storages[addrHash] = op.Storages
 			} else {
-				maps.Copy(storages[addrHash], op.storages)
+				maps.Copy(storages[addrHash], op.Storages)
 			}
 		}
 		// Aggregate the storage original values. If the slot is already present
-		// in aggregated storagesOrigin set, skip it.
-		storageOriginSet := op.storagesOriginByHash
-		if rawStorageKey {
-			storageOriginSet = op.storagesOriginByKey
+		// in aggregated StoragesOrigin set, skip it.
+		storageOriginSet := op.StoragesOriginByHash
+		if typ == StorageKeyPlain {
+			storageOriginSet = op.StoragesOriginByKey
 		}
 		if len(storageOriginSet) > 0 {
 			origin, exist := storagesOrigin[addr]
@@ -163,30 +169,86 @@ func newStateUpdate(rawStorageKey bool, originRoot common.Hash, root common.Hash
 			}
 		}
 	}
-	return &stateUpdate{
-		originRoot:     originRoot,
-		root:           root,
-		blockNumber:    blockNumber,
-		accounts:       accounts,
-		accountsOrigin: accountsOrigin,
-		storages:       storages,
-		storagesOrigin: storagesOrigin,
-		rawStorageKey:  rawStorageKey,
-		codes:          codes,
-		nodes:          nodes,
+	return &StateUpdate{
+		OriginRoot:     originRoot,
+		Root:           root,
+		BlockNumber:    blockNumber,
+		Accounts:       accounts,
+		AccountsOrigin: accountsOrigin,
+		Storages:       storages,
+		StoragesOrigin: storagesOrigin,
+		StorageKeyType: typ,
+		Codes:          codes,
+		Nodes:          nodes,
 	}
 }
 
-// stateSet converts the current stateUpdate object into a triedb.StateSet
-// object. This function extracts the necessary data from the stateUpdate
-// struct and formats it into the StateSet structure consumed by the triedb
-// package.
-func (sc *stateUpdate) stateSet() *triedb.StateSet {
-	return &triedb.StateSet{
-		Accounts:       sc.accounts,
-		AccountsOrigin: sc.accountsOrigin,
-		Storages:       sc.storages,
-		StoragesOrigin: sc.storagesOrigin,
-		RawStorageKey:  sc.rawStorageKey,
+// encodeSlot encodes the storage slot value by trimming all leading zeros
+// and then RLP-encoding the result.
+func encodeSlot(value common.Hash) []byte {
+	if value == (common.Hash{}) {
+		return nil
 	}
+	// The trimmed value is between 1 and 32 bytes, so its RLP is always a short
+	// string. Writing it directly saves a trip through the encoder, which this
+	// is called a few thousand times per block.
+	trimmed := common.TrimLeftZeroes(value[:])
+	if len(trimmed) == 1 && trimmed[0] < 0x80 {
+		return []byte{trimmed[0]}
+	}
+	blob := make([]byte, 1+len(trimmed))
+	blob[0] = 0x80 + byte(len(trimmed))
+	copy(blob[1:], trimmed)
+	return blob
+}
+
+// encodeAccounts encodes the given accounts into their slim RLP form, reusing a
+// single encoder across all of them.
+func encodeAccounts[K comparable](src map[K]*types.StateAccount) map[K][]byte {
+	out := make(map[K][]byte, len(src))
+	if len(src) == 0 {
+		return out
+	}
+	buf := rlp.NewEncoderBuffer(nil)
+	defer buf.Flush()
+
+	for key, account := range src {
+		if account == nil {
+			out[key] = nil
+			continue
+		}
+		out[key] = types.SlimAccountRLPInto(&buf, *account)
+	}
+	return out
+}
+
+// encodeStorages encodes the given storage slots into their trie form.
+func encodeStorages[K comparable](src map[K]map[common.Hash]common.Hash) map[K]map[common.Hash][]byte {
+	out := make(map[K]map[common.Hash][]byte, len(src))
+	for key, slots := range src {
+		subset := make(map[common.Hash][]byte, len(slots))
+		for slot, value := range slots {
+			subset[slot] = encodeSlot(value)
+		}
+		out[key] = subset
+	}
+	return out
+}
+
+// EncodeMPTState encodes all state mutations alongside their original value
+// into the Merkle-Patricia-Trie representation.
+//
+// It transforms account and storage updates into their corresponding MPT-encoded
+// key-value mappings, using the same encoding rules as the Ethereum state trie.
+func (sc *StateUpdate) EncodeMPTState() (map[common.Hash][]byte, map[common.Address][]byte, map[common.Hash]map[common.Hash][]byte, map[common.Address]map[common.Hash][]byte) {
+	return encodeAccounts(sc.Accounts), encodeAccounts(sc.AccountsOrigin), encodeStorages(sc.Storages), encodeStorages(sc.StoragesOrigin)
+}
+
+// EncodeUBTState encodes all state mutations alongside their original value
+// into the Unified-Binary-Trie representation.
+//
+// It transforms account and storage updates into their corresponding UBT-encoded
+// key-value mappings, using the same encoding rules as the Ethereum state trie.
+func (sc *StateUpdate) EncodeUBTState() (map[common.Hash][]byte, map[common.Address][]byte, map[common.Hash]map[common.Hash][]byte, map[common.Address]map[common.Hash][]byte) {
+	return encodeAccounts(sc.Accounts), encodeAccounts(sc.AccountsOrigin), encodeStorages(sc.Storages), encodeStorages(sc.StoragesOrigin)
 }

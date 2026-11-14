@@ -94,18 +94,13 @@ var (
 	// by a transaction is higher than what's left in the block.
 	ErrGasLimitReached = errors.New("gas limit reached")
 
+	// ErrGasLimitOverflow is returned by the gas pool if the remaining gas
+	// exceeds the maximum value of uint64.
+	ErrGasLimitOverflow = errors.New("gas limit overflow")
+
 	// ErrInsufficientFundsForTransfer is returned if the transaction sender doesn't
 	// have enough funds for transfer(topmost call only).
 	ErrInsufficientFundsForTransfer = errors.New("insufficient funds for transfer")
-
-	// ErrMaxInitCodeSizeExceeded is returned if creation transaction provides the init code bigger
-	// than init code size limit.
-	ErrMaxInitCodeSizeExceeded = errors.New("max initcode size exceeded")
-
-	// ErrInsufficientBalanceWitness is returned if the transaction sender has enough
-	// funds to cover the transfer, but not enough to pay for witness access/modification
-	// costs for the transaction
-	ErrInsufficientBalanceWitness = errors.New("insufficient funds to cover witness access costs for transaction")
 
 	// ErrInsufficientFunds is returned if the total cost of executing a transaction
 	// is higher than the balance of the user's account.
@@ -178,6 +173,11 @@ var (
 	ErrAuthorizationInvalidSignature   = errors.New("EIP-7702 authorization has invalid signature")
 	ErrAuthorizationDestinationHasCode = errors.New("EIP-7702 authorization destination is a contract")
 	ErrAuthorizationNonceMismatch      = errors.New("EIP-7702 authorization nonce does not match current account nonce")
+
+	// ErrOutOfGasRuntime is returned when the transaction's gas budget cannot
+	// cover an EIP-2780 runtime charge. The transaction remains valid: the top
+	// frame halts out of gas and its state changes are reverted.
+	ErrOutOfGasRuntime = errors.New("out of gas covering EIP-2780 runtime charge")
 )
 
 // Bor related errors

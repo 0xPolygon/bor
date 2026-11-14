@@ -19,7 +19,6 @@ package blobpool
 import (
 	"github.com/holiman/billy"
 
-	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -56,30 +55,9 @@ func tryMigrate(config *params.ChainConfig, slotter billy.SlotSizeFn, datadir st
 			store.Close()
 		}
 		// Set the slotter to the format now that the Osaka is active.
-		slotter = newSlotterEIP7594(eip4844.LatestMaxBlobsPerBlock(config))
+		slotter = newSlotterEIP7594(params.BlobTxMaxBlobs)
 	}
 	return slotter, nil
-}
-
-// newSlotter creates a helper method for the Billy datastore that returns the
-// individual shelf sizes used to store transactions in.
-//
-// The slotter will create shelves for each possible blob count + some tx metadata
-// wiggle room, up to the max permitted limits.
-//
-// The slotter also creates a shelf for 0-blob transactions. Whilst those are not
-// allowed in the current protocol, having an empty shelf is not a relevant use
-// of resources, but it makes stress testing with junk transactions simpler.
-func newSlotter(maxBlobsPerTransaction int) billy.SlotSizeFn {
-	slotsize := uint32(txAvgSize)
-	slotsize -= uint32(blobSize) // underflows, it's ok, will overflow back in the first return
-
-	return func() (size uint32, done bool) {
-		slotsize += blobSize
-		finished := slotsize > uint32(maxBlobsPerTransaction)*blobSize+txMaxSize
-
-		return slotsize, finished
-	}
 }
 
 // newSlotterEIP7594 creates a different slotter for EIP-7594 transactions.

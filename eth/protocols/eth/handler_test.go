@@ -422,16 +422,20 @@ func testGetBlockBodies(t *testing.T, protocol uint) {
 		{0, []common.Hash{backend.chain.CurrentBlock().Hash()}, []bool{true}, 1}, // The chains head block should be retrievable
 		{0, []common.Hash{{}}, []bool{false}, 0},                                 // A non existent block should not be returned
 
-		// Existing and non-existing blocks interleaved should not cause problems
+		// Existing blocks followed by a non-existing one should stop at the gap
+		{0, []common.Hash{
+			backend.chain.GetBlockByNumber(1).Hash(),
+			backend.chain.GetBlockByNumber(10).Hash(),
+			backend.chain.GetBlockByNumber(100).Hash(),
+			{},
+		}, []bool{true, true, true, false}, 3},
+
+		// A non-existing block at the start should return nothing
 		{0, []common.Hash{
 			{},
 			backend.chain.GetBlockByNumber(1).Hash(),
-			{},
 			backend.chain.GetBlockByNumber(10).Hash(),
-			{},
-			backend.chain.GetBlockByNumber(100).Hash(),
-			{},
-		}, []bool{false, true, false, true, false, true, false}, 3},
+		}, []bool{false, true, true}, 0},
 	}
 	// Run each of the tests and verify the results against the chain
 	for i, tt := range tests {
@@ -485,6 +489,7 @@ func testGetBlockBodies(t *testing.T, protocol uint) {
 }
 
 // Tests that the transaction receipts can be retrieved based on hashes.
+func TestGetBlockReceipts70(t *testing.T) { testGetBlockReceipts(t, ETH70) }
 func TestGetBlockReceipts69(t *testing.T) { testGetBlockReceipts(t, ETH69) }
 func TestGetBlockReceipts68(t *testing.T) { testGetBlockReceipts(t, ETH68) }
 
@@ -537,6 +542,50 @@ func testGetBlockReceipts(t *testing.T, protocol uint) {
 	var hashes []common.Hash
 
 	switch protocol {
+	case ETH70:
+		var receipts []*ReceiptList69
+		for i := uint64(0); i <= backend.chain.CurrentBlock().Number.Uint64(); i++ {
+			block := backend.chain.GetBlockByNumber(i)
+			hashes = append(hashes, block.Hash())
+			trs := backend.chain.GetReceiptsByHash(block.Hash())
+			receipts = append(receipts, NewReceiptList69(trs))
+		}
+
+		// The whole request fits well inside the packet limit, so the response must
+		// arrive in one piece with the truncation flag clear.
+		p2p.Send(peer.app, GetReceiptsMsg, &GetReceiptsPacket70{
+			RequestId:              123,
+			FirstBlockReceiptIndex: 0,
+			GetReceiptsRequest:     hashes,
+		})
+		if err := p2p.ExpectMsg(peer.app, ReceiptsMsg, &ReceiptsPacket70{
+			RequestId:           123,
+			LastBlockIncomplete: false,
+			List:                receipts,
+		}); err != nil {
+			t.Errorf("receipts mismatch (ETH70): %v", err)
+		}
+
+		// Resuming a block part way through must drop exactly the receipts already
+		// delivered. Block 2 is the only one with more than a single receipt.
+		block := backend.chain.GetBlockByNumber(2)
+		trs := backend.chain.GetReceiptsByHash(block.Hash())
+		if len(trs) < 2 {
+			t.Fatalf("expected block 2 to hold several receipts, got %d", len(trs))
+		}
+		p2p.Send(peer.app, GetReceiptsMsg, &GetReceiptsPacket70{
+			RequestId:              124,
+			FirstBlockReceiptIndex: 1,
+			GetReceiptsRequest:     []common.Hash{block.Hash()},
+		})
+		if err := p2p.ExpectMsg(peer.app, ReceiptsMsg, &ReceiptsPacket70{
+			RequestId:           124,
+			LastBlockIncomplete: false,
+			List:                []*ReceiptList69{NewReceiptList69(trs[1:])},
+		}); err != nil {
+			t.Errorf("resumed receipts mismatch (ETH70): %v", err)
+		}
+
 	case ETH69:
 		var receipts []*ReceiptList69
 		for i := uint64(0); i <= backend.chain.CurrentBlock().Number.Uint64(); i++ {
@@ -704,7 +753,7 @@ func testGetPooledTransaction(t *testing.T, blobTx bool) {
 		emptyBlob          = kzg4844.Blob{}
 		emptyBlobs         = []kzg4844.Blob{emptyBlob}
 		emptyBlobCommit, _ = kzg4844.BlobToCommitment(&emptyBlob)
-		emptyBlobProof, _  = kzg4844.ComputeBlobProof(&emptyBlob, emptyBlobCommit)
+		emptyCellProof, _  = kzg4844.ComputeCellProofs(&emptyBlob)
 		emptyBlobHash      = kzg4844.CalcBlobHashV1(sha256.New(), &emptyBlobCommit)
 	)
 	backend := newTestBackendWithGenerator(0, true, true, nil)
@@ -728,7 +777,7 @@ func testGetPooledTransaction(t *testing.T, blobTx bool) {
 			To:         testAddr,
 			BlobHashes: []common.Hash{emptyBlobHash},
 			BlobFeeCap: uint256.MustFromBig(common.Big1),
-			Sidecar:    types.NewBlobTxSidecar(types.BlobSidecarVersion0, emptyBlobs, []kzg4844.Commitment{emptyBlobCommit}, []kzg4844.Proof{emptyBlobProof}),
+			Sidecar:    types.NewBlobTxSidecar(types.BlobSidecarVersion1, emptyBlobs, []kzg4844.Commitment{emptyBlobCommit}, emptyCellProof),
 		})
 		if err != nil {
 			t.Fatal(err)

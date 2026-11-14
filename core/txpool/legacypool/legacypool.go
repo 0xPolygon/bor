@@ -125,6 +125,9 @@ var (
 	queuedGauge  = metrics.NewRegisteredGauge("txpool/queued", nil)
 	slotsGauge   = metrics.NewRegisteredGauge("txpool/slots", nil)
 
+	pendingAddrsGauge = metrics.NewRegisteredGauge("txpool/pending/accounts", nil)
+	queuedAddrsGauge  = metrics.NewRegisteredGauge("txpool/queued/accounts", nil)
+
 	resetCacheGauge       = metrics.NewRegisteredGauge("txpool/resetcache", nil)
 	reheapTimer           = metrics.NewRegisteredTimer("txpool/reheap", nil)
 	urgentHeapInitTimer   = metrics.NewRegisteredTimer("txpool/heapinit/urgent", nil)
@@ -195,7 +198,7 @@ type Config struct {
 	AccountQueue uint64 // Maximum number of non-executable transaction slots permitted per account
 	GlobalQueue  uint64 // Maximum number of non-executable transaction slots for all accounts
 
-	Lifetime         time.Duration // Maximum amount of time non-executable transaction are queued
+	Lifetime         time.Duration // Maximum amount of time an account can remain stale in the non-executable pool
 	StrandedLifetime time.Duration // Maximum amount of time a pending head can stay below the base fee (0 disables)
 
 	// PIP-15 conditional transactions (bor_sendRawTransactionConditional). They are
@@ -421,7 +424,12 @@ func New(config Config, chain BlockChain, options ...func(pool *LegacyPool)) *Le
 // Filter returns whether the given transaction can be consumed by the legacy
 // pool, specifically, whether it is a Legacy, AccessList or Dynamic transaction.
 func (pool *LegacyPool) Filter(tx *types.Transaction) bool {
-	switch tx.Type() {
+	return pool.FilterType(tx.Type())
+}
+
+// FilterType returns whether the legacy pool supports the given transaction type.
+func (pool *LegacyPool) FilterType(kind byte) bool {
+	switch kind {
 	case types.LegacyTxType, types.AccessListTxType, types.DynamicFeeTxType, types.SetCodeTxType:
 		return true
 	default:
@@ -635,8 +643,8 @@ func (pool *LegacyPool) stats() (int, int) {
 // Content retrieves the data content of the transaction pool, returning all the
 // pending as well as queued transactions, grouped by account and sorted by nonce.
 func (pool *LegacyPool) Content() (map[common.Address][]*types.Transaction, map[common.Address][]*types.Transaction) {
-	pool.mu.Lock()
-	defer pool.mu.Unlock()
+	pool.mu.RLock()
+	defer pool.mu.RUnlock()
 
 	pending := make(map[common.Address][]*types.Transaction, len(pool.pending))
 	for addr, list := range pool.pending {
@@ -679,9 +687,9 @@ func (pool *LegacyPool) Pending(filter txpool.PendingFilter, interrupt *atomic.B
 
 	// Capture the time taken to acquire the lock
 	lockWait := time.Now()
-	pool.mu.Lock()
+	pool.mu.RLock()
 	pendingLockWaitTimer.Update(time.Since(lockWait))
-	defer pool.mu.Unlock()
+	defer pool.mu.RUnlock()
 
 	if interrupt == nil {
 		interrupt = new(atomic.Bool)
@@ -1114,7 +1122,7 @@ func (pool *LegacyPool) add(tx *types.Transaction, async bool) (replaced bool, e
 		pool.queueTxEvent(tx)
 		log.Trace("Pooled new executable transaction", "hash", hash, "from", from, "to", tx.To())
 
-		// Successful promotion, bump the heartbeat
+		// Successful replacement. If needed, bump the heartbeat giving more time to queued txs.
 		pool.queue.bump(from)
 		stage2Duration = time.Since(stage2Time)
 		return old != nil, nil
@@ -1186,6 +1194,7 @@ func (pool *LegacyPool) promoteTx(addr common.Address, hash common.Hash, tx *typ
 	// Try to insert the transaction into the pending queue
 	if pool.pending[addr] == nil {
 		pool.pending[addr] = newList(true)
+		pendingAddrsGauge.Inc(1)
 	}
 	list := pool.pending[addr]
 
@@ -1211,7 +1220,7 @@ func (pool *LegacyPool) promoteTx(addr common.Address, hash common.Hash, tx *typ
 	// Set the potentially new pending nonce and notify any subsystems of the new tx
 	pool.pendingNonces.set(addr, tx.Nonce()+1)
 
-	// Successful promotion, bump the heartbeat
+	// Successful promotion, bump the heartbeat, giving more time to queued txs.
 	pool.queue.bump(addr)
 	return true
 }
@@ -1339,11 +1348,7 @@ func (pool *LegacyPool) Status(hash common.Hash) txpool.TxStatus {
 
 // Get returns a transaction if it is contained in the pool and nil otherwise.
 func (pool *LegacyPool) Get(hash common.Hash) *types.Transaction {
-	tx := pool.get(hash)
-	if tx == nil {
-		return nil
-	}
-	return tx
+	return pool.get(hash)
 }
 
 // get returns a transaction if it is contained in the pool and nil otherwise.
@@ -1428,6 +1433,7 @@ func (pool *LegacyPool) removeTx(hash common.Hash, outofbound bool, unreserve bo
 			// If no more pending transactions are left, remove the list
 			if pending.Empty() {
 				delete(pool.pending, addr)
+				pendingAddrsGauge.Dec(1)
 			}
 			// Postpone any invalidated transactions
 			for _, tx := range invalids {
@@ -1807,7 +1813,7 @@ func (pool *LegacyPool) promoteExecutables(accounts []common.Address) []*types.T
 	// promote all promotable transactions
 	promoted := make([]*types.Transaction, 0, len(promotable))
 	for _, tx := range promotable {
-		from, _ := pool.signer.Sender(tx)
+		from, _ := types.Sender(pool.signer, tx) // already validated
 		if pool.promoteTx(from, tx.Hash(), tx) {
 			promoted = append(promoted, tx)
 		}
@@ -1974,6 +1980,8 @@ func (pool *LegacyPool) demoteUnexecutables() {
 			// Internal shuffle shouldn't touch the lookup set.
 			pool.enqueueTx(hash, tx, false)
 		}
+		pool.priced.Removed(len(olds) + len(drops))
+
 		// bor: Drop all transactions that no longer have valid TxOptions. Skip the
 		// walk when the pool holds no conditional transactions.
 		var txConditionalsRemoved, txConditionalInvalids types.Transactions
@@ -2011,6 +2019,7 @@ func (pool *LegacyPool) demoteUnexecutables() {
 		if list.Empty() {
 			// Delete the entire pending entry if it became empty.
 			delete(pool.pending, addr)
+			pendingAddrsGauge.Dec(1)
 			if _, ok := pool.queue.get(addr); !ok {
 				pool.reserver.Release(addr)
 			}
@@ -2307,6 +2316,13 @@ func (pool *LegacyPool) Clear() {
 	pool.pending = make(map[common.Address]*list)
 	pool.queue = newQueue(pool.config, pool.signer)
 	pool.pendingNonces = newNoncer(pool.currentState)
+
+	// Reset gauges
+	pendingGauge.Update(0)
+	queuedGauge.Update(0)
+	slotsGauge.Update(0)
+	pendingAddrsGauge.Update(0)
+	queuedAddrsGauge.Update(0)
 }
 
 // HasPendingAuth returns a flag indicating whether there are pending

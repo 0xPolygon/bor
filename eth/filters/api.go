@@ -36,18 +36,33 @@ import (
 )
 
 var (
-	errInvalidTopic           = errors.New("invalid topic(s)")
-	errFilterNotFound         = errors.New("filter not found")
-	errInvalidBlockRange      = errors.New("invalid block range params")
+	errInvalidTopic           = invalidParamsErr("invalid topic(s)")
+	errInvalidBlockRange      = invalidParamsErr("invalid block range params")
+	errBlockRangeIntoFuture   = invalidParamsErr("block range extends beyond current head block")
+	errBlockHashWithRange     = invalidParamsErr("can't specify fromBlock/toBlock with blockHash")
+	errPendingLogsUnsupported = invalidParamsErr("pending logs are not supported")
 	errUnknownBlock           = errors.New("unknown block")
-	errBlockHashWithRange     = errors.New("can't specify fromBlock/toBlock with blockHash")
-	errPendingLogsUnsupported = errors.New("pending logs are not supported")
+	errFilterNotFound         = errors.New("filter not found")
 	errPendingLogsIncomplete  = errors.New("pending logs are not fully available yet")
 	errExceedMaxTopics        = errors.New("exceed max topics")
 	errExceedLogQueryLimit    = errors.New("exceed max addresses or topics per search position")
 	errExceedMaxTxHashes      = errors.New("exceed max number of transaction hashes allowed per transactionReceipts subscription")
 	errExceedBlockRangeLimit  = errors.New("block range exceeds configured limit")
+	errTooManyFilters         = errors.New("too many installed filters")
+	errFilterBudgetExhausted  = errors.New("polling filter buffer budget exhausted")
+	errFilterOverflow         = errors.New("filter buffer overflow, events were dropped and the filter is uninstalled")
 )
+
+type invalidParamsError struct {
+	err error
+}
+
+func (e invalidParamsError) Error() string  { return e.err.Error() }
+func (e invalidParamsError) ErrorCode() int { return -32602 }
+
+func invalidParamsErr(format string, args ...any) error {
+	return invalidParamsError{fmt.Errorf(format, args...)}
+}
 
 const (
 	// The maximum number of topic criteria allowed, vm.LOG4 - vm.LOG0
@@ -101,6 +116,9 @@ type filter struct {
 	crit     FilterCriteria
 	logs     []*types.Log
 	s        *Subscription // associated subscription in event system
+
+	size       uint64 // estimated memory held by the buffered events
+	overflowed bool   // buffer limit was exceeded, the next poll reports it
 }
 
 // FilterAPI offers support to create and manage filters. This will allow external clients to retrieve various
@@ -114,6 +132,13 @@ type FilterAPI struct {
 	logQueryLimit int
 	borLogs       bool
 	chainConfig   *params.ChainConfig
+
+	maxFilters      int
+	maxPendingItems int
+	maxBufferBytes  uint64
+
+	reserved      int    // filters being created, counted against maxFilters
+	bufferedBytes uint64 // estimated memory held by all buffered events
 }
 
 // NewFilterAPI returns a new FilterAPI instance.
@@ -125,6 +150,10 @@ func NewFilterAPI(system *FilterSystem, borLogs bool) *FilterAPI {
 		timeout:       system.cfg.Timeout,
 		logQueryLimit: system.cfg.LogQueryLimit,
 		borLogs:       borLogs,
+
+		maxFilters:      system.cfg.MaxFilters,
+		maxPendingItems: system.cfg.MaxPendingItems,
+		maxBufferBytes:  system.cfg.MaxBufferBytes,
 	}
 	go api.timeoutLoop(system.cfg.Timeout)
 
@@ -151,7 +180,7 @@ func (api *FilterAPI) timeoutLoop(timeout time.Duration) {
 			case <-f.deadline.C:
 				toUninstall = append(toUninstall, f.s)
 
-				delete(api.filters, id)
+				api.removeLocked(id)
 			default:
 				continue
 			}
@@ -174,37 +203,35 @@ func (api *FilterAPI) timeoutLoop(timeout time.Duration) {
 //
 // It is part of the filter package because this filter can be used through the
 // `eth_getFilterChanges` polling method that is also used for log filters.
-func (api *FilterAPI) NewPendingTransactionFilter(fullTx *bool) rpc.ID {
+func (api *FilterAPI) NewPendingTransactionFilter(fullTx *bool) (rpc.ID, error) {
+	if err := api.reserve(); err != nil {
+		return "", err
+	}
+
 	var (
 		pendingTxs   = make(chan []*types.Transaction)
 		pendingTxSub = api.events.SubscribePendingTxs(pendingTxs)
 	)
 
-	api.filtersMu.Lock()
-	api.filters[pendingTxSub.ID] = &filter{typ: PendingTransactionsSubscription, fullTx: fullTx != nil && *fullTx, deadline: time.NewTimer(api.timeout), txs: make([]*types.Transaction, 0), s: pendingTxSub}
-	api.filtersMu.Unlock()
+	api.install(pendingTxSub.ID, &filter{typ: PendingTransactionsSubscription, fullTx: fullTx != nil && *fullTx, deadline: time.NewTimer(api.timeout), txs: make([]*types.Transaction, 0), s: pendingTxSub})
 
 	go func() {
 		defer pendingTxSub.Unsubscribe()
 		for {
 			select {
 			case pTx := <-pendingTxs:
-				api.filtersMu.Lock()
-				if f, found := api.filters[pendingTxSub.ID]; found {
-					f.txs = append(f.txs, pTx...)
+				if api.enqueue(pendingTxSub.ID, len(pTx), txsSize(pTx), func(f *filter) { f.txs = append(f.txs, pTx...) }) {
+					pendingTxSub.Unsubscribe()
 				}
-				api.filtersMu.Unlock()
 			case <-pendingTxSub.Err():
-				api.filtersMu.Lock()
-				delete(api.filters, pendingTxSub.ID)
-				api.filtersMu.Unlock()
+				api.removeFailed(pendingTxSub.ID)
 
 				return
 			}
 		}
 	}()
 
-	return pendingTxSub.ID
+	return pendingTxSub.ID, nil
 }
 
 // NewPendingTransactions creates a subscription that is triggered each time a
@@ -216,11 +243,13 @@ func (api *FilterAPI) NewPendingTransactions(ctx context.Context, fullTx *bool) 
 		return &rpc.Subscription{}, rpc.ErrNotificationsUnsupported
 	}
 
-	rpcSub := notifier.CreateSubscription()
+	var (
+		rpcSub       = notifier.CreateSubscription()
+		txs          = make(chan []*types.Transaction, 128)
+		pendingTxSub = api.events.SubscribePendingTxs(txs)
+	)
 
 	go func() {
-		txs := make(chan []*types.Transaction, 128)
-		pendingTxSub := api.events.SubscribePendingTxs(txs)
 		defer pendingTxSub.Unsubscribe()
 
 		chainConfig := api.sys.backend.ChainConfig()
@@ -251,37 +280,35 @@ func (api *FilterAPI) NewPendingTransactions(ctx context.Context, fullTx *bool) 
 
 // NewBlockFilter creates a filter that fetches blocks that are imported into the chain.
 // It is part of the filter package since polling goes with eth_getFilterChanges.
-func (api *FilterAPI) NewBlockFilter() rpc.ID {
+func (api *FilterAPI) NewBlockFilter() (rpc.ID, error) {
+	if err := api.reserve(); err != nil {
+		return "", err
+	}
+
 	var (
 		headers   = make(chan *types.Header)
 		headerSub = api.events.SubscribeNewHeads(headers)
 	)
 
-	api.filtersMu.Lock()
-	api.filters[headerSub.ID] = &filter{typ: BlocksSubscription, deadline: time.NewTimer(api.timeout), hashes: make([]common.Hash, 0), s: headerSub}
-	api.filtersMu.Unlock()
+	api.install(headerSub.ID, &filter{typ: BlocksSubscription, deadline: time.NewTimer(api.timeout), hashes: make([]common.Hash, 0), s: headerSub})
 
 	go func() {
 		defer headerSub.Unsubscribe()
 		for {
 			select {
 			case h := <-headers:
-				api.filtersMu.Lock()
-				if f, found := api.filters[headerSub.ID]; found {
-					f.hashes = append(f.hashes, h.Hash())
+				if api.enqueue(headerSub.ID, 1, hashOverhead, func(f *filter) { f.hashes = append(f.hashes, h.Hash()) }) {
+					headerSub.Unsubscribe()
 				}
-				api.filtersMu.Unlock()
 			case <-headerSub.Err():
-				api.filtersMu.Lock()
-				delete(api.filters, headerSub.ID)
-				api.filtersMu.Unlock()
+				api.removeFailed(headerSub.ID)
 
 				return
 			}
 		}
 	}()
 
-	return headerSub.ID
+	return headerSub.ID, nil
 }
 
 // NewHeads send a notification each time a new (header) block is appended to the chain.
@@ -291,11 +318,13 @@ func (api *FilterAPI) NewHeads(ctx context.Context) (*rpc.Subscription, error) {
 		return &rpc.Subscription{}, rpc.ErrNotificationsUnsupported
 	}
 
-	rpcSub := notifier.CreateSubscription()
+	var (
+		rpcSub     = notifier.CreateSubscription()
+		headers    = make(chan *types.Header)
+		headersSub = api.events.SubscribeNewHeads(headers)
+	)
 
 	go func() {
-		headers := make(chan *types.Header)
-		headersSub := api.events.SubscribeNewHeads(headers)
 		defer headersSub.Unsubscribe()
 
 		for {
@@ -434,31 +463,31 @@ func (api *FilterAPI) TransactionReceipts(ctx context.Context, filter *Transacti
 //
 // In case "fromBlock" > "toBlock" an error is returned.
 func (api *FilterAPI) NewFilter(crit FilterCriteria) (rpc.ID, error) {
+	if err := api.reserve(); err != nil {
+		return "", err
+	}
+
 	logs := make(chan []*types.Log)
 
 	logsSub, err := api.subscribeLogs(crit, logs)
 	if err != nil {
+		api.unreserve()
+
 		return "", err
 	}
 
-	api.filtersMu.Lock()
-	api.filters[logsSub.ID] = &filter{typ: LogsSubscription, crit: crit, deadline: time.NewTimer(api.timeout), logs: make([]*types.Log, 0), s: logsSub}
-	api.filtersMu.Unlock()
+	api.install(logsSub.ID, &filter{typ: LogsSubscription, crit: crit, deadline: time.NewTimer(api.timeout), logs: make([]*types.Log, 0), s: logsSub})
 
 	go func() {
 		defer logsSub.Unsubscribe()
 		for {
 			select {
 			case l := <-logs:
-				api.filtersMu.Lock()
-				if f, found := api.filters[logsSub.ID]; found {
-					f.logs = append(f.logs, l...)
+				if api.enqueue(logsSub.ID, len(l), logsSize(l), func(f *filter) { f.logs = append(f.logs, l...) }) {
+					logsSub.Unsubscribe()
 				}
-				api.filtersMu.Unlock()
 			case <-logsSub.Err():
-				api.filtersMu.Lock()
-				delete(api.filters, logsSub.ID)
-				api.filtersMu.Unlock()
+				api.removeFailed(logsSub.ID)
 
 				return
 			}
@@ -521,7 +550,7 @@ func (api *FilterAPI) GetLogs(ctx context.Context, crit FilterCriteria) ([]*type
 			end = crit.ToBlock.Int64()
 		}
 		// Block numbers below 0 are special cases.
-		if begin > 0 && end > 0 && begin > end {
+		if begin >= 0 && end >= 0 && begin > end {
 			return nil, errInvalidBlockRange
 		}
 		if begin >= 0 && begin < int64(api.events.backend.HistoryPruningCutoff()) {
@@ -563,17 +592,14 @@ func (api *FilterAPI) GetLogs(ctx context.Context, crit FilterCriteria) ([]*type
 func (api *FilterAPI) UninstallFilter(id rpc.ID) bool {
 	api.filtersMu.Lock()
 
-	f, found := api.filters[id]
-	if found {
-		delete(api.filters, id)
-	}
+	f := api.removeLocked(id)
 	api.filtersMu.Unlock()
 
-	if found {
+	if f != nil {
 		f.s.Unsubscribe()
 	}
 
-	return found
+	return f != nil
 }
 
 // GetFilterLogs returns the logs for the filter with the given id.
@@ -614,6 +640,9 @@ func (api *FilterAPI) GetFilterLogs(ctx context.Context, id rpc.ID) ([]*types.Lo
 		end := rpc.LatestBlockNumber.Int64()
 		if f.crit.ToBlock != nil {
 			end = f.crit.ToBlock.Int64()
+		}
+		if begin >= 0 && begin < int64(api.events.backend.HistoryPruningCutoff()) {
+			return nil, &history.PrunedHistoryError{}
 		}
 		head := api.sys.backend.CurrentHeader().Number.Uint64()
 		if err := checkBlockRangeLimit(begin, end, head, api.sys.cfg.RangeLimit); err != nil {
@@ -658,6 +687,13 @@ func (api *FilterAPI) GetFilterChanges(id rpc.ID) (interface{}, error) {
 	latest := api.sys.backend.CurrentHeader()
 
 	if f, found := api.filters[id]; found {
+		if f.overflowed {
+			// The subscription is already cancelled, report the overflow once.
+			api.removeLocked(id)
+
+			return []interface{}{}, errFilterOverflow
+		}
+
 		if !f.deadline.Stop() {
 			// timer expired but filter is not yet removed in timeout loop
 			// receive timer value and reset timer
@@ -665,6 +701,10 @@ func (api *FilterAPI) GetFilterChanges(id rpc.ID) (interface{}, error) {
 		}
 
 		f.deadline.Reset(api.timeout)
+
+		// The buffered events are handed out below.
+		api.bufferedBytes -= f.size
+		f.size = 0
 
 		switch f.typ {
 		case BlocksSubscription:

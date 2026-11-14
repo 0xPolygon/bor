@@ -72,8 +72,8 @@ func backoffTestPeers(t *testing.T, setup *jailPeerTestSetup) (*eth.Peer, *eth.P
 			t.Error(err)
 		}
 	})
-	src := eth.NewPeer(eth.ETH68, p2p.NewPeerPipe(enode.ID{1}, "", nil, app), app, setup.txpool)
-	sink := eth.NewPeer(eth.ETH68, p2p.NewPeerPipe(enode.ID{2}, "", nil, net), net, setup.txpool)
+	src := eth.NewPeer(eth.ETH68, p2p.NewPeerPipe(enode.ID{1}, "", nil, app), app, setup.txpool, nil)
+	sink := eth.NewPeer(eth.ETH68, p2p.NewPeerPipe(enode.ID{2}, "", nil, net), net, setup.txpool, nil)
 	t.Cleanup(src.Close)
 	t.Cleanup(sink.Close)
 	return src, sink

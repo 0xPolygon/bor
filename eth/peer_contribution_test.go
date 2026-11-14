@@ -321,7 +321,7 @@ func testPeerContributionSyncMode(t *testing.T, mode downloader.SyncMode, status
 	clock := new(mclock.Simulated)
 	h := newContributionTestHandler(t, clock, true).handler
 	rw := &contributionSyncRW{requests: make(chan uint64, 1)}
-	peer := ethproto.NewPeer(ethproto.ETH69, p2p.NewPeer(enode.ID{1}, "sync-peer", nil), rw, nil)
+	peer := ethproto.NewPeer(ethproto.ETH69, p2p.NewPeer(enode.ID{1}, "sync-peer", nil), rw, nil, nil)
 	defer peer.Close()
 	require.NoError(t, h.downloader.RegisterPeer(peer.ID(), peer.Version(), &ethPeer{Peer: peer}))
 	defer func() { require.NoError(t, h.downloader.UnregisterPeer(peer.ID())) }()
@@ -368,7 +368,7 @@ func TestPeerContributionAdminProtectionAfterChurn(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			h := &handler{peerPolicy: peerpolicy.New(new(mclock.Simulated)), peers: newPeerSet()}
 			h.peerPolicy.SetClassResolver(h.peerPolicyClass)
-			peer := ethproto.NewPeer(ethproto.ETH68, policyTestConnection(t, mode), policyFaultRW{}, nil)
+			peer := ethproto.NewPeer(ethproto.ETH68, policyTestConnection(t, mode), policyFaultRW{}, nil, nil)
 			t.Cleanup(peer.Close)
 			require.NoError(t, h.peers.registerPeer(peer, nil, nil))
 			h.observeProtocolPeer(peer)

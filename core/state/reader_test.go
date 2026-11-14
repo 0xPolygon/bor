@@ -25,6 +25,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/triedb"
 	"github.com/holiman/uint256"
 )
@@ -35,7 +36,7 @@ func TestCacheAttribution_PrefetchToProcess(t *testing.T) {
 	// Setup: Create a state database with some accounts
 	db := rawdb.NewMemoryDatabase()
 	triedb := triedb.NewDatabase(db, nil)
-	statedb := NewDatabase(triedb, nil)
+	statedb := NewMPTDatabase(triedb, nil)
 
 	// Create initial state with some accounts
 	state, err := New(types.EmptyRootHash, statedb)
@@ -61,7 +62,7 @@ func TestCacheAttribution_PrefetchToProcess(t *testing.T) {
 	state.SetState(addr1, storageKey, common.HexToHash("0xabcd"))
 
 	// Commit state to database
-	root, err := state.Commit(0, false, false)
+	root, err := state.Commit(params.Rules{}, 0)
 	if err != nil {
 		t.Fatalf("Failed to commit state: %v", err)
 	}
@@ -180,7 +181,7 @@ func TestCacheAttribution_UniqueUsageTracking(t *testing.T) {
 	// Setup: Create a state database with an account
 	db := rawdb.NewMemoryDatabase()
 	triedb := triedb.NewDatabase(db, nil)
-	statedb := NewDatabase(triedb, nil)
+	statedb := NewMPTDatabase(triedb, nil)
 
 	// Create initial state
 	state, err := New(types.EmptyRootHash, statedb)
@@ -194,7 +195,7 @@ func TestCacheAttribution_UniqueUsageTracking(t *testing.T) {
 	obj.SetBalance(uint256.NewInt(1000))
 
 	// Commit state
-	root, err := state.Commit(0, false, false)
+	root, err := state.Commit(params.Rules{}, 0)
 	if err != nil {
 		t.Fatalf("Failed to commit state: %v", err)
 	}
@@ -285,7 +286,7 @@ func TestReaderWithCache_ConcurrentAccess(t *testing.T) {
 	// Setup: Create a state database with many accounts
 	db := rawdb.NewMemoryDatabase()
 	triedb := triedb.NewDatabase(db, nil)
-	statedb := NewDatabase(triedb, nil)
+	statedb := NewMPTDatabase(triedb, nil)
 
 	// Create initial state with 100 accounts
 	state, err := New(types.EmptyRootHash, statedb)
@@ -307,7 +308,7 @@ func TestReaderWithCache_ConcurrentAccess(t *testing.T) {
 	}
 
 	// Commit state
-	root, err := state.Commit(0, false, false)
+	root, err := state.Commit(params.Rules{}, 0)
 	if err != nil {
 		t.Fatalf("Failed to commit state: %v", err)
 	}

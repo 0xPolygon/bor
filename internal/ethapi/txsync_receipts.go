@@ -2,9 +2,11 @@ package ethapi
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/event"
@@ -253,4 +255,27 @@ func (h *txSyncReceiptHub) fail(run *txSyncReceiptRun, err error) {
 			target <- txSyncReceiptResult{err: err}
 		}
 	}
+}
+
+// TxSyncTimeout is the eth_sendRawTransactionSync wait window in milliseconds.
+// The spec makes it a JSON integer, which upstream clients send; Bor up to
+// v2.10.x took a hex string, so both decode.
+type TxSyncTimeout uint64
+
+// UnmarshalJSON accepts a JSON integer or a hex-encoded string.
+func (t *TxSyncTimeout) UnmarshalJSON(input []byte) error {
+	if len(input) > 0 && input[0] == '"' {
+		var v hexutil.Uint64
+		if err := v.UnmarshalJSON(input); err != nil {
+			return err
+		}
+		*t = TxSyncTimeout(v)
+		return nil
+	}
+	var v uint64
+	if err := json.Unmarshal(input, &v); err != nil {
+		return err
+	}
+	*t = TxSyncTimeout(v)
+	return nil
 }

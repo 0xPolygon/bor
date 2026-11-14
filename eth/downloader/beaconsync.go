@@ -219,12 +219,17 @@ func (d *Downloader) findBeaconAncestor() (uint64, error) {
 		return 0, err
 	}
 
-	var linked bool
+	// Require the canonical mapping, not just presence by hash, so orphans and
+	// side chains are re-delivered instead of left in place.
+	var (
+		linked bool
+		num    = beaconTail.Number.Uint64() - 1
+	)
 	switch d.getMode() {
 	case FullSync:
-		linked = d.blockchain.HasBlock(beaconTail.ParentHash, beaconTail.Number.Uint64()-1)
+		linked = d.blockchain.GetCanonicalHash(num) == beaconTail.ParentHash && d.blockchain.HasBlock(beaconTail.ParentHash, num)
 	case SnapSync:
-		linked = d.blockchain.HasFastBlock(beaconTail.ParentHash, beaconTail.Number.Uint64()-1)
+		linked = d.blockchain.GetCanonicalHash(num) == beaconTail.ParentHash && d.blockchain.HasFastBlock(beaconTail.ParentHash, num)
 	default:
 		linked = d.blockchain.HasHeader(beaconTail.ParentHash, beaconTail.Number.Uint64()-1)
 	}
@@ -259,13 +264,15 @@ func (d *Downloader) findBeaconAncestor() (uint64, error) {
 		}
 		n := h.Number.Uint64()
 
+		// Require the canonical mapping, not just presence by hash, so orphans
+		// and side chains are re-synced instead of treated as already owned.
 		var known bool
 
 		switch d.getMode() {
 		case FullSync:
-			known = d.blockchain.HasBlock(h.Hash(), n)
+			known = d.blockchain.GetCanonicalHash(n) == h.Hash() && d.blockchain.HasBlock(h.Hash(), n)
 		case SnapSync:
-			known = d.blockchain.HasFastBlock(h.Hash(), n)
+			known = d.blockchain.GetCanonicalHash(n) == h.Hash() && d.blockchain.HasFastBlock(h.Hash(), n)
 		default:
 			known = d.lightchain.HasHeader(h.Hash(), n)
 		}
@@ -337,11 +344,14 @@ func (d *Downloader) fetchBeaconHeaders(from uint64) error {
 			return err
 		}
 		// If the pivot became stale (older than 2*64-8 (bit of wiggle room)),
-		// move it ahead to HEAD-64
+		// move it ahead to HEAD-64.
+		//
+		// The pivot is only moved before its commitment: once committed, the
+		// chain has a stateful head and the pivot must not advance further.
 		d.pivotLock.Lock()
 
 		// nolint:nestif
-		if d.pivotHeader != nil {
+		if d.pivotHeader != nil && !d.committed.Load() {
 			if head.Number.Uint64() > d.pivotHeader.Number.Uint64()+2*uint64(fsMinFullBlocks)-8 {
 				// Retrieve the next pivot header, either from skeleton chain
 				// or the filled chain
@@ -368,8 +378,8 @@ func (d *Downloader) fetchBeaconHeaders(from uint64) error {
 					return errNoPivotHeader
 				}
 				// Write out the pivot into the database so a rollback beyond
-				// it will reenable snap sync and update the state root that
-				// the state syncer will be downloading
+				// it can be detected, and update the state root that the
+				// state syncer will be downloading
 				rawdb.WriteLastPivotNumber(d.stateDB, d.pivotHeader.Number.Uint64())
 			}
 		}

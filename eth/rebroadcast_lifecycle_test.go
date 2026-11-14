@@ -38,7 +38,7 @@ func reconnectRebroadcastPeer(t *testing.T, h *handler, previous *eth.Peer) *eth
 		app.Close()
 		net.Close()
 	})
-	peer := eth.NewPeer(eth.ETH68, p2p.NewPeer(previous.Node().ID(), "reconnected", nil), net, nil)
+	peer := eth.NewPeer(eth.ETH68, p2p.NewPeer(previous.Node().ID(), "reconnected", nil), net, nil, nil)
 	t.Cleanup(peer.Close)
 	peer.SetHead(head, td)
 	if err := h.peers.registerPeer(peer, nil, nil); err != nil {

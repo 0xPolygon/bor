@@ -61,6 +61,11 @@ type Tuple struct {
 	abi abi.ABI
 }
 
+// GetABI returns the ABI associated with this contract binding.
+func (c *Tuple) GetABI() abi.ABI {
+	return c.abi
+}
+
 // NewTuple creates a new instance of Tuple.
 func NewTuple() *Tuple {
 	parsed, err := TupleMetaData.ParseABI()
@@ -193,8 +198,11 @@ func (TupleTupleEvent) ContractEventName() string {
 // Solidity: event TupleEvent((uint256,uint256[],(uint256,uint256)[]) a, (uint256,uint256)[2][] b, (uint256,uint256)[][2] c, (uint256,uint256[],(uint256,uint256)[])[] d, uint256[] e)
 func (tuple *Tuple) UnpackTupleEventEvent(log *types.Log) (*TupleTupleEvent, error) {
 	event := "TupleEvent"
-	if len(log.Topics) == 0 || log.Topics[0] != tuple.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
+	if log.Topics[0] != tuple.abi.Events[event].ID {
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(TupleTupleEvent)
 	if len(log.Data) > 0 {
@@ -234,8 +242,11 @@ func (TupleTupleEvent2) ContractEventName() string {
 // Solidity: event TupleEvent2((uint8,uint8)[] arg0)
 func (tuple *Tuple) UnpackTupleEvent2Event(log *types.Log) (*TupleTupleEvent2, error) {
 	event := "TupleEvent2"
-	if len(log.Topics) == 0 || log.Topics[0] != tuple.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
+	if log.Topics[0] != tuple.abi.Events[event].ID {
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(TupleTupleEvent2)
 	if len(log.Data) > 0 {

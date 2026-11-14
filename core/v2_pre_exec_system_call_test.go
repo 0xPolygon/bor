@@ -58,7 +58,7 @@ func runEIP4788Roundtrip(t *testing.T, useV2 bool) {
 	key, _ := crypto.GenerateKey()
 	sender := crypto.PubkeyToAddress(key.PublicKey)
 	sdb.AddBalance(sender, uint256.NewInt(1e18), tracing.BalanceChangeUnspecified)
-	root, _ := sdb.Commit(0, false, false)
+	root, _ := sdb.Commit(params.Rules{}, 0)
 	tdb.Commit(root, false)
 
 	statedb, _ := state.New(root, state.NewDatabase(tdb, nil))
@@ -96,7 +96,7 @@ func runEIP4788Roundtrip(t *testing.T, useV2 bool) {
 		ProcessBeaconBlockRoot(beaconRoot, evm)
 		msg, _ := TransactionToMessage(tx, signer, blockCtx.BaseFee)
 		evm.SetTxContext(NewEVMTxContext(msg))
-		gp := new(GasPool).AddGas(blockCtx.GasLimit)
+		gp := NewGasPool(blockCtx.GasLimit)
 		if _, err := ApplyMessage(evm, msg, gp); err != nil {
 			t.Fatalf("ApplyMessage: %v", err)
 		}
@@ -107,7 +107,9 @@ func runEIP4788Roundtrip(t *testing.T, useV2 bool) {
 		// pending storage, not the earlier committed-state read.
 		_ = statedb.GetState(params.BeaconRootsAddress, common.BigToHash(new(big.Int).SetUint64(timestamp%8191)))
 		body := &types.Body{Transactions: types.Transactions{tx}}
+		parent := &types.Header{Number: big.NewInt(0)}
 		header := &types.Header{
+			ParentHash:       parent.Hash(),
 			Number:           big.NewInt(1),
 			Time:             timestamp,
 			GasLimit:         blockCtx.GasLimit,
@@ -115,7 +117,7 @@ func runEIP4788Roundtrip(t *testing.T, useV2 bool) {
 			BaseFee:          blockCtx.BaseFee,
 		}
 		block := types.NewBlockWithHeader(header).WithBody(*body)
-		applyV2PreExecSystemCalls(block, statedb, &cfg, vm.Config{}, blockCtx)
+		applyV2PreExecSystemCalls(block, parent, statedb, &cfg, vm.Config{}, blockCtx)
 
 		msg, _ := TransactionToMessage(tx, signer, blockCtx.BaseFee)
 		tasks := []V2Task{{Index: 0, Tx: tx, Msg: msg}}

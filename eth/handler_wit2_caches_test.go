@@ -73,7 +73,7 @@ func registerEthWitPeer(t *testing.T, h *testHandler, version uint) (*wit.Peer, 
 	// plain eth path (AsyncSendNewBlockHash) once a block's witness is
 	// cached, not only once HasBlock is true, so ethPeer's broadcast
 	// goroutine can fire during these tests.
-	ethPeer := ethproto.NewPeer(ethproto.ETH68, p2p.NewPeer(id, "test-eth-peer", nil), ethNet, nil)
+	ethPeer := ethproto.NewPeer(ethproto.ETH68, p2p.NewPeer(id, "test-eth-peer", nil), ethNet, nil, nil)
 	require.NoError(t, h.handler.peers.registerPeer(ethPeer, nil, witPeer))
 	h.handler.observeProtocolPeer(ethPeer)
 	h.handler.observeWitnessPeer(witPeer)
@@ -251,7 +251,7 @@ func TestWaiterPushGuards(t *testing.T) {
 
 	// Oversized witness: push is skipped, waiters stay on the pull path
 	// (entry is NOT consumed by the size guard).
-	witness, err := stateless.NewWitness(header, nil)
+	witness, err := stateless.NewWitness(header, nil, false)
 	require.NoError(t, err)
 	h.handler.pushWitnessToWaiters(hash, witness, witnessPushMaxSize+1)
 	require.True(t, h.handler.witnessWaiters.has(hash), "oversize guard must not consume waiters")

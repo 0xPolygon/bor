@@ -208,20 +208,19 @@ func runIRTrial(t testing.TB, chain *BlockChain, txs []*types.Transaction, flag 
 	// --- Process phase: real ApplyTransactionWithEVM on the main statedb. ---
 	evmCtx := NewEVMBlockContext(header, chain, nil)
 	evm := vm.NewEVM(evmCtx, statedb, chain.Config(), cfg)
-	gp := new(GasPool).AddGas(header.GasLimit * uint64(len(txs)))
-	var usedGas uint64
+	gp := NewGasPool(header.GasLimit * uint64(len(txs)))
 	procFails := 0
 
 	processStart := time.Now()
 	for i, tx := range txs {
-		statedb.SetTxContext(tx.Hash(), i)
+		statedb.SetTxContext(tx.Hash(), i, uint32(i+1))
 		msg, err := TransactionToMessage(tx, signer, header.BaseFee)
 		if err != nil {
 			procFails++
 			continue
 		}
 		if _, err := ApplyTransactionWithEVM(
-			msg, gp, statedb, header.Number, header.Hash(), header.Time, tx, &usedGas, evm,
+			msg, gp, statedb, header.Number, header.Hash(), header.Time, tx, evm,
 		); err != nil {
 			procFails++
 		}
@@ -560,29 +559,24 @@ func runIRPebbleTrial(
 	// --- Process phase ---
 	evmCtx := NewEVMBlockContext(header, chain, nil)
 	evm := vm.NewEVM(evmCtx, statedb, chain.Config(), cfg)
-	gp := new(GasPool).AddGas(header.GasLimit * uint64(len(txs)))
-	var usedGas uint64
+	gp := NewGasPool(header.GasLimit * uint64(len(txs)))
 
 	processStart := time.Now()
 	for i, tx := range txs {
-		statedb.SetTxContext(tx.Hash(), i)
+		statedb.SetTxContext(tx.Hash(), i, uint32(i+1))
 		msg, err := TransactionToMessage(tx, signer, header.BaseFee)
 		if err != nil {
 			continue
 		}
 		_, _ = ApplyTransactionWithEVM(
-			msg, gp, statedb, header.Number, header.Hash(), header.Time, tx, &usedGas, evm,
+			msg, gp, statedb, header.Number, header.Hash(), header.Time, tx, evm,
 		)
 	}
 	processDur := time.Since(processStart)
 
 	// --- Commit phase: where pebble/clean-cache warming would actually pay. ---
 	commitStart := time.Now()
-	_, err = statedb.Commit(
-		header.Number.Uint64(),
-		chain.Config().IsEIP158(header.Number),
-		chain.Config().IsCancun(header.Number),
-	)
+	_, err = statedb.Commit(chain.Config().Rules(header.Number, false, header.Time), header.Number.Uint64())
 	commitDur := time.Since(commitStart)
 	if err != nil {
 		t.Fatalf("statedb.Commit: %v", err)

@@ -721,11 +721,11 @@ func (b *SimulatedBackend) callContract(ctx context.Context, call ethereum.CallM
 	msg := &core.Message{
 		From:            call.From,
 		To:              call.To,
-		Value:           call.Value,
+		Value:           math.BigIntToUint256Int(call.Value),
 		GasLimit:        call.Gas,
-		GasPrice:        call.GasPrice,
-		GasFeeCap:       call.GasFeeCap,
-		GasTipCap:       call.GasTipCap,
+		GasPrice:        math.BigIntToUint256Int(call.GasPrice),
+		GasFeeCap:       math.BigIntToUint256Int(call.GasFeeCap),
+		GasTipCap:       math.BigIntToUint256Int(call.GasTipCap),
 		Data:            call.Data,
 		AccessList:      call.AccessList,
 		SkipNonceChecks: true,
@@ -735,7 +735,7 @@ func (b *SimulatedBackend) callContract(ctx context.Context, call ethereum.CallM
 	// about the transaction and calling mechanisms.
 	evmContext := core.NewEVMBlockContext(header, b.blockchain, nil)
 	vmEnv := vm.NewEVM(evmContext, stateDB, b.config, vm.Config{NoBaseFee: true})
-	gasPool := new(core.GasPool).AddGas(gomath.MaxUint64)
+	gasPool := core.NewGasPool(gomath.MaxUint64)
 
 	return core.ApplyMessage(vmEnv, msg, gasPool)
 }

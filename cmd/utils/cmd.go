@@ -262,11 +262,21 @@ func ImportChain(chain *core.BlockChain, fn string) error {
 }
 
 func readList(filename string) ([]string, error) {
-	b, err := os.ReadFile(filename)
+	f, err := os.Open(filename)
 	if err != nil {
 		return nil, err
 	}
-	return strings.Split(string(b), "\n"), nil
+	defer f.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return lines, nil
 }
 
 // ImportHistory imports Era1 files containing historical block information,
@@ -350,6 +360,10 @@ func ImportHistory(chain *core.BlockChain, db ethdb.Database, dir string, networ
 					imported = 0
 					reported = time.Now()
 				}
+			}
+			// Next stops on a read error as well as at the end of the file.
+			if err := it.Error(); err != nil {
+				return fmt.Errorf("error reading era %s: %w", filename, err)
 			}
 			return nil
 		}()

@@ -25,16 +25,17 @@ import (
 	mrand "math/rand"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/holiman/uint256"
-	"golang.org/x/crypto/sha3"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/crypto/keccak"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/internal/testrand"
 	"github.com/ethereum/go-ethereum/log"
@@ -58,7 +59,7 @@ func TestHashing(t *testing.T) {
 	var want, got string
 
 	var old = func() {
-		hasher := sha3.NewLegacyKeccak256()
+		hasher := keccak.NewLegacyKeccak256()
 		for i := 0; i < len(bytecodes); i++ {
 			hasher.Reset()
 			hasher.Write(bytecodes[i])
@@ -95,7 +96,7 @@ func BenchmarkHashing(b *testing.B) {
 	}
 
 	var old = func() {
-		hasher := sha3.NewLegacyKeccak256()
+		hasher := keccak.NewLegacyKeccak256()
 		for i := 0; i < len(bytecodes); i++ {
 			hasher.Reset()
 			hasher.Write(bytecodes[i])
@@ -151,10 +152,10 @@ type testPeer struct {
 	term                  func()
 
 	// counters
-	nAccountRequests  int
-	nStorageRequests  int
-	nBytecodeRequests int
-	nTrienodeRequests int
+	nAccountRequests  atomic.Int64
+	nStorageRequests  atomic.Int64
+	nBytecodeRequests atomic.Int64
+	nTrienodeRequests atomic.Int64
 }
 
 func newTestPeer(id string, t *testing.T, term func()) *testPeer {
@@ -188,13 +189,13 @@ func (t *testPeer) Stats() string {
 Storage requests: %d
 Bytecode requests: %d
 Trienode requests: %d
-`, t.nAccountRequests, t.nStorageRequests, t.nBytecodeRequests, t.nTrienodeRequests)
+`, t.nAccountRequests.Load(), t.nStorageRequests.Load(), t.nBytecodeRequests.Load(), t.nTrienodeRequests.Load())
 }
 
 func (t *testPeer) RequestAccountRange(id uint64, root, origin, limit common.Hash, bytes uint64) error {
 	t.logger.Trace("Fetching range of accounts", "reqid", id, "root", root, "origin", origin, "limit", limit, "bytes", common.StorageSize(bytes))
 
-	t.nAccountRequests++
+	t.nAccountRequests.Add(1)
 	go t.accountRequestHandler(t, id, root, origin, limit, bytes)
 
 	return nil
@@ -203,14 +204,14 @@ func (t *testPeer) RequestAccountRange(id uint64, root, origin, limit common.Has
 func (t *testPeer) RequestTrieNodes(id uint64, root common.Hash, paths []TrieNodePathSet, bytes uint64) error {
 	t.logger.Trace("Fetching set of trie nodes", "reqid", id, "root", root, "pathsets", len(paths), "bytes", common.StorageSize(bytes))
 
-	t.nTrienodeRequests++
+	t.nTrienodeRequests.Add(1)
 	go t.trieRequestHandler(t, id, root, paths, bytes)
 
 	return nil
 }
 
 func (t *testPeer) RequestStorageRanges(id uint64, root common.Hash, accounts []common.Hash, origin, limit []byte, bytes uint64) error {
-	t.nStorageRequests++
+	t.nStorageRequests.Add(1)
 	if len(accounts) == 1 && origin != nil {
 		t.logger.Trace("Fetching range of large storage slots", "reqid", id, "root", root, "account", accounts[0], "origin", common.BytesToHash(origin), "limit", common.BytesToHash(limit), "bytes", common.StorageSize(bytes))
 	} else {
@@ -223,7 +224,7 @@ func (t *testPeer) RequestStorageRanges(id uint64, root common.Hash, accounts []
 }
 
 func (t *testPeer) RequestByteCodes(id uint64, hashes []common.Hash, bytes uint64) error {
-	t.nBytecodeRequests++
+	t.nBytecodeRequests.Add(1)
 	t.logger.Trace("Fetching set of byte codes", "reqid", id, "hashes", len(hashes), "bytes", common.StorageSize(bytes))
 
 	go t.codeRequestHandler(t, id, hashes, bytes)
@@ -300,9 +301,6 @@ func createAccountRequestResponse(t *testPeer, root common.Hash, origin common.H
 			break
 		}
 	}
-	// Unless we send the entire trie, we need to supply proofs
-	// Actually, we need to supply proofs either way! This seems to be an implementation
-	// quirk in go-ethereum
 	proof := trienode.NewProofSet()
 	if err := t.accountTrie.Prove(origin[:], proof); err != nil {
 		t.logger.Error("Could not prove inexistence of origin", "origin", origin, "error", err)
@@ -315,6 +313,42 @@ func createAccountRequestResponse(t *testPeer, root common.Hash, origin common.H
 		}
 	}
 	return keys, vals, proof.List()
+}
+
+// createFullAccountRangeResponse is like createAccountRequestResponse, but never attaches a proof.
+func createFullAccountRangeResponse(t *testPeer, root common.Hash, origin common.Hash, limit common.Hash) (keys []common.Hash, vals [][]byte) {
+	if limit == (common.Hash{}) {
+		limit = common.MaxHash
+	}
+	for _, entry := range t.accountValues {
+		if bytes.Compare(origin[:], entry.k) <= 0 {
+			keys = append(keys, common.BytesToHash(entry.k))
+			vals = append(vals, entry.v)
+		}
+		if bytes.Compare(entry.k, limit[:]) >= 0 {
+			break
+		}
+	}
+	return keys, vals
+}
+
+// fullAccountRangeRequestHandler answers the origin-zero request without a proof, and every other chunk normally.
+func fullAccountRangeRequestHandler(t *testPeer, id uint64, root common.Hash, origin common.Hash, limit common.Hash, cap uint64) error {
+	if origin != (common.Hash{}) {
+		return defaultAccountRequestHandler(t, id, root, origin, limit, cap)
+	}
+	keys, vals := createFullAccountRangeResponse(t, root, origin, limit)
+	if len(keys) != len(t.accountValues) {
+		t.test.Errorf("proof-less range must cover the whole state, got %d of %d accounts", len(keys), len(t.accountValues))
+		t.term()
+		return nil
+	}
+	if err := t.remote.OnAccounts(t, id, keys, vals, nil); err != nil {
+		t.test.Errorf("Remote side rejected our delivery: %v", err)
+		t.term()
+		return err
+	}
+	return nil
 }
 
 // defaultStorageRequestHandler is a well-behaving storage request handler
@@ -1568,6 +1602,92 @@ func testSyncWithUnevenStorage(t *testing.T, scheme string) {
 	verifyTrie(scheme, syncer.db, accountTrie.Hash(), t)
 }
 
+// TestSyncFullAccountRangeNoProof tests sync against a peer that omits the proof for the
+// origin-zero request, which the spec permits when the whole state fits in one response.
+func TestSyncFullAccountRangeNoProof(t *testing.T) {
+	t.Parallel()
+
+	testSyncFullAccountRangeNoProof(t, rawdb.HashScheme)
+	testSyncFullAccountRangeNoProof(t, rawdb.PathScheme)
+}
+
+func testSyncFullAccountRangeNoProof(t *testing.T, scheme string) {
+	var (
+		once   sync.Once
+		cancel = make(chan struct{})
+		term   = func() {
+			once.Do(func() {
+				close(cancel)
+			})
+		}
+	)
+	// key32(i) puts i in the top key byte, so keys 1..15 sit below the first chunk.
+	nodeScheme, sourceAccountTrie, elems := makeAccountTrieNoStorage(15, scheme)
+
+	mkSource := func(name string) *testPeer {
+		source := newTestPeer(name, t, term)
+		source.accountTrie = sourceAccountTrie.Copy()
+		source.accountValues = elems
+		source.accountRequestHandler = fullAccountRangeRequestHandler
+		return source
+	}
+	syncer := setupSyncer(nodeScheme, mkSource("source"))
+	if err := syncer.Sync(sourceAccountTrie.Hash(), cancel); err != nil {
+		t.Fatalf("sync failed: %v", err)
+	}
+	verifyTrie(scheme, syncer.db, sourceAccountTrie.Hash(), t)
+}
+
+// TestSyncAccountRangeNoProofNonZeroOrigin tests sync against a peer that omits the proof
+// for a non-zero origin, which the spec does not permit, so it must be refused.
+func TestSyncAccountRangeNoProofNonZeroOrigin(t *testing.T) {
+	t.Parallel()
+
+	testSyncAccountRangeNoProofNonZeroOrigin(t, rawdb.HashScheme)
+	testSyncAccountRangeNoProofNonZeroOrigin(t, rawdb.PathScheme)
+}
+
+func testSyncAccountRangeNoProofNonZeroOrigin(t *testing.T, scheme string) {
+	var (
+		once   sync.Once
+		cancel = make(chan struct{})
+		term   = func() {
+			once.Do(func() {
+				close(cancel)
+			})
+		}
+	)
+	nodeScheme, sourceAccountTrie, elems := makeAccountTrieNoStorage(100, scheme)
+
+	var delivered, rejected atomic.Bool
+
+	source := newTestPeer("source", t, term)
+	source.accountTrie = sourceAccountTrie.Copy()
+	source.accountValues = elems
+	source.accountRequestHandler = func(t *testPeer, id uint64, root, origin, limit common.Hash, cap uint64) error {
+		if origin == (common.Hash{}) || !delivered.CompareAndSwap(false, true) {
+			return defaultAccountRequestHandler(t, id, root, origin, limit, cap)
+		}
+		keys, vals := createFullAccountRangeResponse(t, root, common.Hash{}, common.MaxHash)
+		rejected.Store(t.remote.OnAccounts(t, id, keys, vals, nil) != nil)
+		return nil
+	}
+	syncer := setupSyncer(nodeScheme, source)
+	done := checkStall(t, term)
+	if err := syncer.Sync(sourceAccountTrie.Hash(), cancel); err != nil {
+		t.Fatalf("sync failed: %v", err)
+	}
+	close(done)
+
+	if !delivered.Load() {
+		t.Fatal("no account range request with a non-zero origin was issued")
+	}
+	if !rejected.Load() {
+		t.Fatal("proof-less account range with a non-zero origin was accepted")
+	}
+	verifyTrie(scheme, syncer.db, sourceAccountTrie.Hash(), t)
+}
+
 type kv struct {
 	k, v []byte
 }
@@ -2055,7 +2175,7 @@ func testSyncAccountPerformance(t *testing.T, scheme string) {
 	// sync cycle starts. When popping the queue, we do not look it up again.
 	// Doing so would bring this number down to zero in this artificial testcase,
 	// but only add extra IO for no reason in practice.
-	if have, want := src.nTrienodeRequests, 1; have != want {
+	if have, want := src.nTrienodeRequests.Load(), int64(1); have != want {
 		fmt.Print(src.Stats())
 		t.Errorf("trie node heal requests wrong, want %d, have %d", want, have)
 	}

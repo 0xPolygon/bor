@@ -259,7 +259,7 @@ func TestCanonicalImportWithSuppliedWitnessSkipsPreconf(t *testing.T) {
 
 	_, blocks := makeBlockChainWithGenesis(genesis, 1, engine, canonicalSeed)
 	block := blocks[0]
-	witness, err := stateless.NewWitness(block.Header(), blockchain)
+	witness, err := stateless.NewWitness(block.Header(), blockchain, false)
 	if err != nil {
 		t.Fatalf("witness: %v", err)
 	}

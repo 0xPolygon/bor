@@ -39,7 +39,7 @@ func (rw *replyTestRW) WriteMsg(msg p2p.Msg) error {
 func newReplyTestPeer(t *testing.T) (*Peer, *replyTestRW) {
 	t.Helper()
 	rw := &replyTestRW{sent: make(chan p2p.Msg, peerRequestBurst)}
-	p := NewPeer(ETH68, p2p.NewPeer(enode.ID{1}, "", nil), rw, nil)
+	p := NewPeer(ETH68, p2p.NewPeer(enode.ID{1}, "", nil), rw, nil, nil)
 	t.Cleanup(p.Close)
 	return p, rw
 }
@@ -190,7 +190,7 @@ func TestPeerReplyQueueBounds(t *testing.T) {
 func TestPeerReplyQueueShutdown(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		rw := &replyTestRW{sent: make(chan p2p.Msg, 4)}
-		p := NewPeer(ETH68, p2p.NewPeer(enode.ID{1}, "", nil), rw, nil)
+		p := NewPeer(ETH68, p2p.NewPeer(enode.ID{1}, "", nil), rw, nil, nil)
 		p.blockReplies.limiter.SetLimit(1)
 		if !p.blockReplies.limiter.AllowN(time.Now(), peerByteBurst) {
 			t.Fatal("could not exhaust reply allowance")
@@ -247,7 +247,7 @@ func TestPeerReplyConfiguredExemptions(t *testing.T) {
 	for _, mode := range []string{"trusted", "static", "static inbound", "added inbound"} {
 		t.Run(mode, func(t *testing.T) {
 			rw := &replyTestRW{sent: make(chan p2p.Msg, 4)}
-			p := NewPeer(ETH68, configuredLimitsTestPeer(t, mode), rw, nil)
+			p := NewPeer(ETH68, configuredLimitsTestPeer(t, mode), rw, nil, nil)
 			defer p.Close()
 			p.blockReplies.limiter = rate.NewLimiter(0, 0)
 			p.txReplies.limiter = rate.NewLimiter(0, 0)
@@ -398,7 +398,7 @@ func TestPeerPooledRequestWithStalledWriter(t *testing.T) {
 					source, sink := p2p.MsgPipe()
 					defer source.Close()
 					defer sink.Close()
-					peer := NewPeer(version, p2p.NewPeer(enode.ID{1}, "", nil), source, nil)
+					peer := NewPeer(version, p2p.NewPeer(enode.ID{1}, "", nil), source, nil, nil)
 					defer peer.Close()
 					var txs []rlp.RawValue
 					if limit == "bytes" {
@@ -542,7 +542,7 @@ func TestPeerPooledReplyReservations(t *testing.T) {
 
 func TestPeerPooledReservationShutdown(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		p := NewPeer(ETH68, p2p.NewPeer(enode.ID{1}, "", nil), new(replyTestRW), nil)
+		p := NewPeer(ETH68, p2p.NewPeer(enode.ID{1}, "", nil), new(replyTestRW), nil, nil)
 		reservation, err := p.reservePooledReply()
 		if err != nil {
 			p.Close()

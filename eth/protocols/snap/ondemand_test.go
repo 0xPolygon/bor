@@ -90,8 +90,8 @@ func TestFetchByteCodesOnDemand(t *testing.T) {
 	if !bytes.Equal(got[hashA], codeA) || !bytes.Equal(got[hashB], codeB) {
 		t.Fatalf("wrong codes: got[A]=%x got[B]=%x", got[hashA], got[hashB])
 	}
-	if peer.nBytecodeRequests != 1 {
-		t.Fatalf("expected a single request for two servable hashes, got %d", peer.nBytecodeRequests)
+	if peer.nBytecodeRequests.Load() != 1 {
+		t.Fatalf("expected a single request for two servable hashes, got %d", peer.nBytecodeRequests.Load())
 	}
 	assertNoInflightCodeReqs(t, syncer)
 
@@ -137,8 +137,8 @@ func TestFetchByteCodesEmpty(t *testing.T) {
 	if len(got) != 0 {
 		t.Fatalf("empty request should return no codes, got %d", len(got))
 	}
-	if peer.nBytecodeRequests != 0 {
-		t.Fatalf("empty request must not touch a peer, got %d request(s)", peer.nBytecodeRequests)
+	if peer.nBytecodeRequests.Load() != 0 {
+		t.Fatalf("empty request must not touch a peer, got %d request(s)", peer.nBytecodeRequests.Load())
 	}
 }
 
@@ -334,7 +334,7 @@ func TestFetchByteCodesStopsWhenComplete(t *testing.T) {
 	if !bytes.Equal(got[hash], code) {
 		t.Fatalf("wrong code: got %x want %x", got[hash], code)
 	}
-	if n := p1.nBytecodeRequests + p2.nBytecodeRequests; n != 1 {
+	if n := p1.nBytecodeRequests.Load() + p2.nBytecodeRequests.Load(); n != 1 {
 		t.Fatalf("expected exactly one request once the code was served, got %d", n)
 	}
 	assertNoInflightCodeReqs(t, syncer)
@@ -363,8 +363,8 @@ func TestFetchByteCodesSkipsStatelessPeers(t *testing.T) {
 	if _, ok := got[hash]; ok {
 		t.Fatal("code was served by a peer flagged stateless")
 	}
-	if flagged.nBytecodeRequests != 0 {
-		t.Fatalf("stateless-flagged peer was asked %d time(s)", flagged.nBytecodeRequests)
+	if flagged.nBytecodeRequests.Load() != 0 {
+		t.Fatalf("stateless-flagged peer was asked %d time(s)", flagged.nBytecodeRequests.Load())
 	}
 }
 
@@ -415,8 +415,8 @@ func TestFetchByteCodesHonorsCancel(t *testing.T) {
 	if len(got) != 0 {
 		t.Fatalf("cancelled fetch returned codes: %v", got)
 	}
-	if silent.nBytecodeRequests != 1 {
-		t.Fatalf("expected the single peer to be asked once, got %d", silent.nBytecodeRequests)
+	if silent.nBytecodeRequests.Load() != 1 {
+		t.Fatalf("expected the single peer to be asked once, got %d", silent.nBytecodeRequests.Load())
 	}
 	assertNoInflightCodeReqs(t, syncer)
 }
@@ -490,8 +490,8 @@ func TestFetchByteCodesTimesOut(t *testing.T) {
 	if len(got) != 0 {
 		t.Fatalf("timed-out fetch returned codes: %v", got)
 	}
-	if silent.nBytecodeRequests != 1 {
-		t.Fatalf("expected the silent peer to be asked once, got %d", silent.nBytecodeRequests)
+	if silent.nBytecodeRequests.Load() != 1 {
+		t.Fatalf("expected the silent peer to be asked once, got %d", silent.nBytecodeRequests.Load())
 	}
 	assertNoInflightCodeReqs(t, syncer)
 

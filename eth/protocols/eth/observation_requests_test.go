@@ -167,7 +167,7 @@ func TestPeerPolicyQueuedBodyDelay(t *testing.T) {
 func newObservedReplyTestPeer(t *testing.T) (*Peer, *replyTestRW) {
 	t.Helper()
 	rw := &replyTestRW{sent: make(chan p2p.Msg, peerRequestBurst)}
-	p := NewPeer(ETH68, p2p.NewPeer(enode.ID{1}, "", nil), rw, nil)
+	p := NewPeer(ETH68, p2p.NewPeer(enode.ID{1}, "", nil), rw, nil, nil)
 	t.Cleanup(func() {
 		select {
 		case <-p.term:

@@ -24,12 +24,15 @@ import (
 	"os"
 	"strings"
 
+	"github.com/holiman/uint256"
 	"github.com/urfave/cli/v2"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core"
+
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/tests"
@@ -126,10 +129,6 @@ func Transaction(ctx *cli.Context) error {
 	var results []result
 
 	for it.Next() {
-		if err := it.Err(); err != nil {
-			return NewError(ErrorIO, err)
-		}
-
 		var tx types.Transaction
 
 		err := rlp.DecodeBytes(it.Value(), &tx)
@@ -148,24 +147,30 @@ func Transaction(ctx *cli.Context) error {
 			r.Address = sender
 		}
 		// Check intrinsic gas
+		value, overflow := uint256.FromBig(tx.Value())
+		if overflow {
+			// A 256-bit overflow is reported by the field validation below; use a
+			// non-zero placeholder so intrinsic gas is still computed and reported.
+			value = uint256.NewInt(1)
+		}
 		rules := chainConfig.Rules(common.Big0, true, 0)
-		gas, err := core.IntrinsicGas(tx.Data(), tx.AccessList(), tx.SetCodeAuthorizations(), tx.To() == nil, rules.IsHomestead, rules.IsIstanbul, rules.IsShanghai)
+		cost, err := core.IntrinsicGas(tx.Data(), tx.AccessList(), tx.SetCodeAuthorizations(), r.Address, tx.To(), value, rules)
 		if err != nil {
 			r.Error = err
 			results = append(results, r)
 
 			continue
 		}
-		r.IntrinsicGas = gas
-		if tx.Gas() < gas {
-			r.Error = fmt.Errorf("%w: have %d, want %d", core.ErrIntrinsicGas, tx.Gas(), gas)
+		r.IntrinsicGas = cost
+		if tx.Gas() < cost {
+			r.Error = fmt.Errorf("%w: have %d, want %d", core.ErrIntrinsicGas, tx.Gas(), cost)
 			results = append(results, r)
 			continue
 		}
 		// For Prague txs, validate the floor data gas.
 		// EIP-7623
 		if rules.IsPrague {
-			floorDataGas, err := core.FloorDataGas(tx.Data())
+			floorDataGas, err := core.FloorDataGas(rules, r.Address, tx.To(), value, tx.Data(), tx.AccessList())
 			if err != nil {
 				r.Error = err
 				results = append(results, r)
@@ -198,20 +203,26 @@ func Transaction(ctx *cli.Context) error {
 			r.Error = errors.New("gas * maxFeePerGas exceeds 256 bits")
 		}
 		// Check whether the init code size has been exceeded.
-		if chainConfig.IsShanghai(new(big.Int)) && tx.To() == nil && len(tx.Data()) > params.MaxInitCodeSize {
-			r.Error = errors.New("max initcode size exceeded")
+		if tx.To() == nil {
+			if err := vm.CheckMaxInitCodeSize(&rules, uint64(len(tx.Data()))); err != nil {
+				r.Error = err
+			}
 		}
 
-		// Bor: EIP-7825 at Madhugiri HF block
+		// Bor: EIP-7825 at Madhugiri HF block, lifted again at Amsterdam
 		isOsaka := chainConfig.IsOsaka(new(big.Int))
 		isMadhugiri := chainConfig.Bor != nil && chainConfig.Bor.IsMadhugiri(new(big.Int))
+		isAmsterdam := chainConfig.IsAmsterdam(new(big.Int))
 
 		// Verify tx gas limit does not exceed EIP-7825 cap.
-		if (isOsaka || isMadhugiri) && tx.Gas() > params.MaxTxGas {
+		if (isOsaka || isMadhugiri) && !isAmsterdam && tx.Gas() > params.MaxTxGas {
 			r.Error = errors.New("gas limit exceeds maximum")
 		}
 
 		results = append(results, r)
+	}
+	if err := it.Err(); err != nil {
+		return NewError(ErrorIO, err)
 	}
 
 	out, err := json.MarshalIndent(results, "", "  ")

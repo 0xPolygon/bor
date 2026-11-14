@@ -17,9 +17,12 @@
 package discover
 
 import (
+	"container/list"
 	"crypto/ecdsa"
 	crand "crypto/rand"
 	"encoding/binary"
+	"errors"
+	"iter"
 	"math/rand"
 	"net"
 	"net/netip"
@@ -106,6 +109,30 @@ type ReadPacket struct {
 	Addr netip.AddrPort
 }
 
+// SharedUDPConn implements a shared connection. Write sends messages to the underlying
+// connection while read returns messages that were found unprocessable and sent to the
+// Unhandled channel by the primary listener.
+type SharedUDPConn struct {
+	*net.UDPConn
+	Unhandled chan ReadPacket
+}
+
+// ReadFromUDPAddrPort implements UDPConn.
+func (s *SharedUDPConn) ReadFromUDPAddrPort(b []byte) (n int, addr netip.AddrPort, err error) {
+	packet, ok := <-s.Unhandled
+	if !ok {
+		return 0, netip.AddrPort{}, errors.New("connection was closed")
+	}
+	l := min(len(packet.Data), len(b))
+	copy(b[:l], packet.Data[:l])
+	return l, packet.Addr, nil
+}
+
+// Close implements UDPConn. It does not close the underlying connection.
+func (s *SharedUDPConn) Close() error {
+	return nil
+}
+
 type randomSource interface {
 	Intn(int) int
 	Int63n(int64) int64
@@ -145,4 +172,17 @@ func (r *reseedingRandom) Shuffle(n int, swap func(i, j int)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.cur.Shuffle(n, swap)
+}
+
+// iterList iterates over the elements of the given list.
+func iterList[T any](l *list.List) iter.Seq2[T, *list.Element] {
+	return func(yield func(T, *list.Element) bool) {
+		for el := l.Front(); el != nil; {
+			next := el.Next()
+			if !yield(el.Value.(T), el) {
+				return
+			}
+			el = next
+		}
+	}
 }

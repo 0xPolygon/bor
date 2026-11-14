@@ -64,7 +64,7 @@ func callLastStateID(cfg *params.ChainConfig, statedb *state.StateDB, number uin
 		GasLimit:    30_000_000,
 	}
 	evm := vm.NewEVM(blockCtx, statedb, cfg, vm.Config{})
-	ret, _, err := evm.StaticCall(common.Address{}, stateReceiverAddr, common.FromHex("0x5407ca67"), 100_000)
+	ret, _, err := evm.StaticCall(common.Address{}, stateReceiverAddr, common.FromHex("0x5407ca67"), vm.NewGasBudget(100_000, 0))
 	if err != nil {
 		return nil, err
 	}

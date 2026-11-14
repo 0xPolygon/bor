@@ -21,11 +21,11 @@ import (
 	"math/big"
 	"testing"
 
-	"github.com/holiman/uint256"
-
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/params"
+	"github.com/holiman/uint256"
 )
 
 // This method tests that the 'burn' from sending-to-selfdestructed accounts
@@ -50,6 +50,8 @@ func TestBurn(t *testing.T) {
 	createAndDestroy := func(addr common.Address) {
 		hooked.AddBalance(addr, uint256.NewInt(100), tracing.BalanceChangeUnspecified)
 		hooked.CreateContract(addr)
+		// Simulate what the opcode handler does: clear balance before selfdestruct
+		hooked.SubBalance(addr, hooked.GetBalance(addr), tracing.BalanceDecreaseSelfdestruct)
 		hooked.SelfDestruct(addr)
 		// sanity-check that balance is now 0
 		if have, want := hooked.GetBalance(addr), new(uint256.Int); !have.Eq(want) {
@@ -65,14 +67,14 @@ func TestBurn(t *testing.T) {
 	createAndDestroy(addB)
 	hooked.AddBalance(addA, uint256.NewInt(200), tracing.BalanceChangeUnspecified)
 	hooked.AddBalance(addB, uint256.NewInt(200), tracing.BalanceChangeUnspecified)
-	hooked.Finalise(true)
+	hooked.Finalise(params.Rules{IsEIP158: true})
 
 	// Tx 2: create and destroy address C, then commit
 	createAndDestroy(addC)
 	hooked.AddBalance(addC, uint256.NewInt(200), tracing.BalanceChangeUnspecified)
-	hooked.Finalise(true)
+	hooked.Finalise(params.Rules{IsEIP158: true})
 
-	s.Commit(0, false, false)
+	s.Commit(params.Rules{}, 0)
 	if have, want := burned, uint256.NewInt(600); !have.Eq(want) {
 		t.Fatalf("burn-count wrong, have %v want %v", have, want)
 	}
@@ -81,7 +83,7 @@ func TestBurn(t *testing.T) {
 // TestHooks is a basic sanity-check of all hooks
 func TestHooks(t *testing.T) {
 	inner, _ := New(types.EmptyRootHash, NewDatabaseForTesting())
-	inner.SetTxContext(common.Hash{0x11}, 100) // For the log
+	inner.SetTxContext(common.Hash{0x11}, 100, 101) // For the log
 	var result []string
 	var wants = []string{
 		"0xaa00000000000000000000000000000000000000.balance: 0->100 (Unspecified)",
@@ -123,9 +125,51 @@ func TestHooks(t *testing.T) {
 	sdb.AddLog(&types.Log{
 		Address: common.Address{0xbb},
 	})
+
+	if len(result) != len(wants) {
+		t.Fatalf("number of tracing events wrong, have %d want %d", len(result), len(wants))
+	}
+
 	for i, want := range wants {
 		if have := result[i]; have != want {
-			t.Fatalf("error event %d, have\n%v\nwant%v\n", i, have, want)
+			t.Fatalf("error event %d\nhave: %v\nwant: %v", i, have, want)
+		}
+	}
+}
+
+func TestHooks_OnCodeChangeV2(t *testing.T) {
+	inner, _ := New(types.EmptyRootHash, NewDatabaseForTesting())
+
+	var result []string
+	var wants = []string{
+		"0xaa00000000000000000000000000000000000000.code:  (0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470) ->0x1325 (0xa12ae05590de0c93a00bc7ac773c2fdb621e44f814985e72194f921c0050f728) ContractCreation",
+		"0xbb00000000000000000000000000000000000000.code:  (0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470) ->0x1326 (0x3c54516221d604e623f358bc95996ca3242aaa109bddabcebda13db9b3f90dcb) ContractCreation",
+		"0xaa00000000000000000000000000000000000000.code: 0x1325 (0xa12ae05590de0c93a00bc7ac773c2fdb621e44f814985e72194f921c0050f728) -> (0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470) SelfDestruct",
+		"0xbb00000000000000000000000000000000000000.code: 0x1326 (0x3c54516221d604e623f358bc95996ca3242aaa109bddabcebda13db9b3f90dcb) -> (0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470) SelfDestruct",
+	}
+	emitF := func(format string, a ...any) {
+		result = append(result, fmt.Sprintf(format, a...))
+	}
+	sdb := NewHookedState(inner, &tracing.Hooks{
+		OnCodeChangeV2: func(addr common.Address, prevCodeHash common.Hash, prevCode []byte, codeHash common.Hash, code []byte, reason tracing.CodeChangeReason) {
+			emitF("%v.code: %#x (%v) ->%#x (%v) %s", addr, prevCode, prevCodeHash, code, codeHash, reason)
+		},
+	})
+	sdb.SetCode(common.Address{0xaa}, []byte{0x13, 37}, tracing.CodeChangeContractCreation)
+	sdb.SelfDestruct(common.Address{0xaa})
+
+	sdb.SetCode(common.Address{0xbb}, []byte{0x13, 38}, tracing.CodeChangeContractCreation)
+	sdb.CreateContract(common.Address{0xbb})
+	sdb.SelfDestruct(common.Address{0xbb})
+	sdb.Finalise(params.Rules{IsEIP158: true})
+
+	if len(result) != len(wants) {
+		t.Fatalf("number of tracing events wrong, have %d want %d", len(result), len(wants))
+	}
+
+	for i, want := range wants {
+		if have := result[i]; have != want {
+			t.Fatalf("error event %d\nhave: %v\nwant: %v", i, have, want)
 		}
 	}
 }

@@ -191,7 +191,7 @@ func (p *Publisher) historyOnlyDiff(ctx context.Context, chain chainReader, thei
 		hash = parent
 	}
 
-	return statedb.IntermediateRoot(true) == theirs.Root
+	return statedb.IntermediateRoot(chain.Config().Rules(theirs.Number, false, theirs.Time)) == theirs.Root
 }
 
 // storeParent returns the parent hash of the store chain's block at number,
