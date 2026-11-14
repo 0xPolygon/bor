@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"fmt"
 	"hash/crc32"
+	"maps"
 	"math"
 	"math/big"
 	"reflect"
@@ -665,10 +666,19 @@ func TestForkIDBorForkSet(t *testing.T) {
 		"UburuBlock": true,
 	}
 
+	if !maps.Equal(preForkIDBorForks, legacy) {
+		t.Fatalf("preForkIDBorForks changed: have %v, want %v", preForkIDBorForks, legacy)
+	}
+	kind := reflect.TypeFor[params.BorConfig]()
+	for name := range legacy {
+		if field, ok := kind.FieldByName(name); !ok || field.Type != reflect.TypeFor[*big.Int]() {
+			t.Errorf("frozen fork %s is no longer a *big.Int field on BorConfig", name)
+		}
+	}
+
 	genesis := core.DefaultBorMainnetGenesisBlock().ToBlock()
 	base := NewID(&params.ChainConfig{Bor: &params.BorConfig{}}, genesis, 0, 0)
 
-	kind := reflect.TypeFor[params.BorConfig]()
 	for i := 0; i < kind.NumField(); i++ {
 		name := kind.Field(i).Name
 		if kind.Field(i).Type != reflect.TypeFor[*big.Int]() || !strings.HasSuffix(name, "Block") {

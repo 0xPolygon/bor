@@ -197,7 +197,9 @@ A new `BorConfig` fork enters the eth fork ID on its own, so the hash changes
 at the activation block and peers that missed the fork are rejected. Never add
 a fork to `preForkIDBorForks` in `core/forkid/forkid.go`: it's frozen to the
 forks released binaries already knew, and growing it splits upgraded nodes from
-the rest on chains where that fork is active. Any branch that schedules a new
+the rest on chains where that fork is active. Hampi is the exception: it's
+frozen because released binaries already knew it and devnets already run it,
+so scheduling it doesn't change the fork ID. Any branch that schedules a new
 Bor fork, private security and hotfix branches included, must carry that fork
 ID logic.
 

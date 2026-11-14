@@ -71,7 +71,10 @@ For every new or changed fork, verify all of these surfaces before approving:
   rejected. Never add a fork to `preForkIDBorForks`: the set is frozen to the
   forks released binaries knew before Bor forks entered the fork ID, and adding
   one changes the fork ID on chains where it's active, splitting upgraded nodes
-  from the rest.
+  from the rest. Hampi is the exception: released binaries already knew it and
+  devnets already run it, so it's frozen and gets no fork ID protection when
+  it's scheduled. Only `BorConfig` fork fields added after Uburu enter the fork
+  ID.
 - Startup banner or config logging prints the new fork. For mainnet and Amoy,
   a normal server startup path should show the expected `#<block>` value.
 
@@ -116,9 +119,10 @@ For every new or changed fork, verify all of these surfaces before approving:
       pre-activation behavior?
 - [ ] Does the startup banner, config dump, or equivalent smoke test prove that
       the runtime-loaded chain config contains the new fork value?
-- [ ] Does a fork ID test show `Next` set to the activation block before it
-      and the hash changing at it, for mainnet and Amoy? Is
-      `preForkIDBorForks` untouched?
+- [ ] For a new `BorConfig` fork field (not Hampi, which is frozen), does a
+      fork ID test show `Next` set to the activation block before it and the
+      hash changing at it, for mainnet and Amoy? Is `preForkIDBorForks`
+      untouched?
 - [ ] If `core/vm/contracts.go`, `core/vm/jump_table.go`, `params.Rules`, or
       a VM hardfork block changed, does the PR update or explicitly preserve
       the precompile continuity matrix?
