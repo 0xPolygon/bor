@@ -14,7 +14,7 @@ import (
 )
 
 // salvadorRecoveryGroups lists the addresses that get the Sweeper runtime;
-// addresses in one group share one recovery address.
+// group i sweeps to salvadorRecoveries[i].
 var salvadorRecoveryGroups = [][]common.Address{
 	{
 		common.HexToAddress("0xe4C4C39C1733e1C7c06B79f97ED442B68Df41EC6"),
@@ -27,10 +27,9 @@ var salvadorRecoveryGroups = [][]common.Address{
 	},
 }
 
-// Recovery addresses the unscheduled presets carry until the real ones are known.
-var salvadorPlaceholderRecoveries = []common.Address{
-	common.HexToAddress("0x1111111111111111111111111111111111111111"),
-	common.HexToAddress("0x2222222222222222222222222222222222222222"),
+var salvadorRecoveries = []common.Address{
+	common.HexToAddress("0x3dcE0a29139A851Da1dFCa56Af8e8a6440b4D952"),
+	common.HexToAddress("0xd9fD39103674CB061D64D9C3b73B878Dbe610b80"),
 }
 
 // RECOVERY immutable offsets in the Sweeper runtime built from
@@ -108,18 +107,15 @@ func salvadorRecovery(code []byte) (common.Address, error) {
 	return recovery, nil
 }
 
-// checkSalvadorAlloc requires the Sweeper at every listed address, one recovery
-// address per group and distinct across groups. Unscheduled presets keep the
-// entries at "0"; a scheduled fork needs them at its own height with real
-// recovery addresses.
+// checkSalvadorAlloc requires the reviewed Sweeper build at every listed
+// address, sweeping to its group's recovery address, at the SalvadorBlock key
+// (or "0" while unscheduled).
 func checkSalvadorAlloc(cfg *BorConfig) error {
 	key := "0"
 	if cfg.SalvadorBlock != nil {
 		key = cfg.SalvadorBlock.String()
 	}
-	seen := make(map[common.Address]bool)
 	for i, group := range salvadorRecoveryGroups {
-		var recovery common.Address
 		for _, addr := range group {
 			code, ok := allocCode(cfg.BlockAlloc[key], addr)
 			if !ok {
@@ -129,18 +125,9 @@ func checkSalvadorAlloc(cfg *BorConfig) error {
 			if err != nil {
 				return fmt.Errorf("%s: %w", addr, err)
 			}
-			if recovery == (common.Address{}) {
-				recovery = got
-			} else if got != recovery {
-				return fmt.Errorf("%s recovers to %s, rest of group %d to %s", addr, got, i, recovery)
+			if got != salvadorRecoveries[i] {
+				return fmt.Errorf("%s recovers to %s, want %s", addr, got, salvadorRecoveries[i])
 			}
-		}
-		if seen[recovery] {
-			return fmt.Errorf("group %d shares recovery address %s with another group", i, recovery)
-		}
-		seen[recovery] = true
-		if cfg.SalvadorBlock != nil && slices.Contains(salvadorPlaceholderRecoveries, recovery) {
-			return fmt.Errorf("salvadorBlock %s is scheduled with placeholder recovery %s", cfg.SalvadorBlock, recovery)
 		}
 	}
 	return nil
@@ -155,7 +142,7 @@ func TestSalvadorBlockAlloc(t *testing.T) {
 	}
 	first := codeAt(salvadorRecoveryGroups[0][0])
 	second := codeAt(salvadorRecoveryGroups[1][0])
-	real1, real2 := common.HexToAddress("0xa11ce"), common.HexToAddress("0xb0b")
+	other := common.HexToAddress("0xa11ce")
 
 	allocWith := func(key string, codes map[common.Address]string) *BorConfig {
 		accounts := make(map[string]interface{}, len(codes))
@@ -182,9 +169,8 @@ func TestSalvadorBlockAlloc(t *testing.T) {
 		}
 		return code
 	}
-	realCodes := codes(withRecovery(first, real1), withRecovery(first, real2))
-	split := codes(withRecovery(first, real1), withRecovery(first, real2))
-	split[salvadorRecoveryGroups[0][3]] = withRecovery(first, real2)
+	split := codes(first, second)
+	split[salvadorRecoveryGroups[0][3]] = second
 	missing := codes(first, second)
 	delete(missing, salvadorRecoveryGroups[0][2])
 
@@ -195,13 +181,13 @@ func TestSalvadorBlockAlloc(t *testing.T) {
 	}{
 		{"mainnet preset", BorMainnetChainConfig.Bor, ""},
 		{"amoy preset", AmoyChainConfig.Bor, ""},
-		{"scheduled with real recoveries", scheduled(allocWith("100", realCodes)), ""},
-		{"scheduled with placeholders", scheduled(allocWith("100", codes(first, second))), "placeholder recovery"},
-		{"scheduled but entries left at 0", scheduled(allocWith("0", realCodes)), "blockAlloc 100 has no entry"},
+		{"scheduled at fork key", scheduled(allocWith("100", codes(first, second))), ""},
+		{"scheduled but entries left at 0", scheduled(allocWith("0", codes(first, second))), "blockAlloc 100 has no entry"},
 		{"missing address", allocWith("0", missing), "has no entry for " + salvadorRecoveryGroups[0][2].Hex()},
-		{"group split across recoveries", allocWith("0", split), "rest of group 0"},
-		{"groups share a recovery", allocWith("0", codes(first, first)), "shares recovery address"},
-		{"one slot patched", allocWith("0", codes(patchImmutable(first, salvadorRecoveryOffsets[1], real1), second)), "RECOVERY at 148"},
+		{"group member to other group's recovery", allocWith("0", split), salvadorRecoveryGroups[0][3].Hex() + " recovers to " + salvadorRecoveries[1].Hex()},
+		{"groups swapped", allocWith("0", codes(second, first)), "want " + salvadorRecoveries[0].Hex()},
+		{"unknown recovery", allocWith("0", codes(withRecovery(first, other), second)), "want " + salvadorRecoveries[0].Hex()},
+		{"one slot patched", allocWith("0", codes(patchImmutable(first, salvadorRecoveryOffsets[1], other), second)), "RECOVERY at 148"},
 		{"zero recovery", allocWith("0", codes(withRecovery(first, common.Address{}), second)), "RECOVERY is zero"},
 		{"other code", allocWith("0", codes(flipByte(first, 10), second)), "does not match the reviewed build"},
 	}
