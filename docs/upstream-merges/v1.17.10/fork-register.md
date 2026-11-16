@@ -19,3 +19,4 @@ the PoS team decides otherwise in its own change.
 | BPO forks after Amsterdam (fork-order check) | #35975 | 6 | `params/config.go` | n/a (time-based) | never-enable | Not merged; Bor's fork-order check is block-based. |
 | Amsterdam on Hoodi | #35974 (reverted by #36001) | 6 | `params/chainspecs/hoodi.json` | n/a | never-enable | Not merged (chainspecs declined). |
 | Cancun (live on Bor): blob fee cap rejected before Cancun in `preCheck` | #35928 | 6 | `core/state_transition.go` | Cancun active | already-ours (spec alignment) | Not dormant, but unreachable for real blocks: only blob transactions carry a blob fee cap, and they were already rejected before Cancun. |
+| snap/2 auto-enable after Amsterdam | #35989 | 7 | `eth/`, `cmd/utils` | `AmsterdamTime` (unused on Bor) | defer (decision C) | Not merged. |
