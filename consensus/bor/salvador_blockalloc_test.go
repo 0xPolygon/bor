@@ -35,7 +35,8 @@ type salvadorAccount struct {
 // salvadorPresetCode returns the Sweeper runtime the mainnet preset installs at addr.
 func salvadorPresetCode(t *testing.T, addr string) string {
 	t.Helper()
-	alloc, ok := params.BorMainnetChainConfig.Bor.BlockAlloc["0"].(map[string]interface{})
+	mainnet := params.BorMainnetChainConfig.Bor
+	alloc, ok := mainnet.BlockAlloc[mainnet.SalvadorBlock.String()].(map[string]interface{})
 	require.True(t, ok)
 	account, ok := alloc[addr].(map[string]interface{})
 	require.True(t, ok, "no Salvador entry for %s", addr)
@@ -108,9 +109,10 @@ func newSalvadorChain(t *testing.T, fork uint64, accounts []*salvadorAccount) (*
 func TestFinalize_SalvadorInstallsSweeper(t *testing.T) {
 	t.Parallel()
 
-	// sprint is 16: 20 is mid-sprint, 32 is a sprint start.
+	// sprint is 16: 20 is mid-sprint, 32 is a sprint start; then the scheduled heights.
+	forks := []uint64{20, 32, params.AmoyChainConfig.Bor.SalvadorBlock.Uint64(), params.BorMainnetChainConfig.Bor.SalvadorBlock.Uint64()}
 	for name, finalize := range uburuFinalizers() {
-		for _, fork := range []uint64{20, 32} {
+		for _, fork := range forks {
 			t.Run(name+"/"+new(big.Int).SetUint64(fork).String(), func(t *testing.T) {
 				t.Parallel()
 				testSalvadorInstall(t, finalize, fork)

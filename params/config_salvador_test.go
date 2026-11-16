@@ -79,8 +79,14 @@ func TestSalvadorBannerAndPresets(t *testing.T) {
 	bor.SalvadorBlock = nil
 	require.NotContains(t, cfg.Description(), "Salvador")
 
-	require.Nil(t, BorMainnetChainConfig.Bor.SalvadorBlock)
-	require.Nil(t, AmoyChainConfig.Bor.SalvadorBlock)
+	require.Equal(t, big.NewInt(98350200), BorMainnetChainConfig.Bor.SalvadorBlock)
+	require.Equal(t, big.NewInt(53803400), AmoyChainConfig.Bor.SalvadorBlock)
+	require.Contains(t, BorMainnetChainConfig.Description(), " - Salvador:                    #98350200")
+
+	// Live tracers attribute BlockAlloc code changes at a sprint start to the state-sync tx.
+	for _, c := range []*BorConfig{BorMainnetChainConfig.Bor, AmoyChainConfig.Bor} {
+		require.False(t, c.IsSprintStart(c.SalvadorBlock.Uint64()), "salvadorBlock %s starts a sprint", c.SalvadorBlock)
+	}
 }
 
 // salvadorRecovery returns the recovery address built into code, or an error
@@ -108,13 +114,12 @@ func salvadorRecovery(code []byte) (common.Address, error) {
 }
 
 // checkSalvadorAlloc requires the reviewed Sweeper build at every listed
-// address, sweeping to its group's recovery address, at the SalvadorBlock key
-// (or "0" while unscheduled).
+// address, sweeping to its group's recovery address, at the SalvadorBlock key.
 func checkSalvadorAlloc(cfg *BorConfig) error {
-	key := "0"
-	if cfg.SalvadorBlock != nil {
-		key = cfg.SalvadorBlock.String()
+	if cfg.SalvadorBlock == nil {
+		return fmt.Errorf("salvadorBlock is not set")
 	}
+	key := cfg.SalvadorBlock.String()
 	for i, group := range salvadorRecoveryGroups {
 		for _, addr := range group {
 			code, ok := allocCode(cfg.BlockAlloc[key], addr)
@@ -136,7 +141,7 @@ func checkSalvadorAlloc(cfg *BorConfig) error {
 func TestSalvadorBlockAlloc(t *testing.T) {
 	t.Parallel()
 
-	preset := BorMainnetChainConfig.Bor.BlockAlloc["0"].(map[string]interface{})
+	preset := BorMainnetChainConfig.Bor.BlockAlloc[BorMainnetChainConfig.Bor.SalvadorBlock.String()].(map[string]interface{})
 	codeAt := func(addr common.Address) string {
 		return preset[addr.Hex()[2:]].(map[string]interface{})["code"].(string)
 	}
@@ -182,14 +187,15 @@ func TestSalvadorBlockAlloc(t *testing.T) {
 		{"mainnet preset", BorMainnetChainConfig.Bor, ""},
 		{"amoy preset", AmoyChainConfig.Bor, ""},
 		{"scheduled at fork key", scheduled(allocWith("100", codes(first, second))), ""},
+		{"unscheduled", allocWith("0", codes(first, second)), "salvadorBlock is not set"},
 		{"scheduled but entries left at 0", scheduled(allocWith("0", codes(first, second))), "blockAlloc 100 has no entry"},
-		{"missing address", allocWith("0", missing), "has no entry for " + salvadorRecoveryGroups[0][2].Hex()},
-		{"group member to other group's recovery", allocWith("0", split), salvadorRecoveryGroups[0][3].Hex() + " recovers to " + salvadorRecoveries[1].Hex()},
-		{"groups swapped", allocWith("0", codes(second, first)), "want " + salvadorRecoveries[0].Hex()},
-		{"unknown recovery", allocWith("0", codes(withRecovery(first, other), second)), "want " + salvadorRecoveries[0].Hex()},
-		{"one slot patched", allocWith("0", codes(patchImmutable(first, salvadorRecoveryOffsets[1], other), second)), "RECOVERY at 148"},
-		{"zero recovery", allocWith("0", codes(withRecovery(first, common.Address{}), second)), "RECOVERY is zero"},
-		{"other code", allocWith("0", codes(flipByte(first, 10), second)), "does not match the reviewed build"},
+		{"missing address", scheduled(allocWith("100", missing)), "has no entry for " + salvadorRecoveryGroups[0][2].Hex()},
+		{"group member to other group's recovery", scheduled(allocWith("100", split)), salvadorRecoveryGroups[0][3].Hex() + " recovers to " + salvadorRecoveries[1].Hex()},
+		{"groups swapped", scheduled(allocWith("100", codes(second, first))), "want " + salvadorRecoveries[0].Hex()},
+		{"unknown recovery", scheduled(allocWith("100", codes(withRecovery(first, other), second))), "want " + salvadorRecoveries[0].Hex()},
+		{"one slot patched", scheduled(allocWith("100", codes(patchImmutable(first, salvadorRecoveryOffsets[1], other), second))), "RECOVERY at 148"},
+		{"zero recovery", scheduled(allocWith("100", codes(withRecovery(first, common.Address{}), second))), "RECOVERY is zero"},
+		{"other code", scheduled(allocWith("100", codes(flipByte(first, 10), second))), "does not match the reviewed build"},
 	}
 
 	for _, tt := range tests {
