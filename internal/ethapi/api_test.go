@@ -5901,6 +5901,55 @@ func TestSimulateV1DispatchesSimulationFinalize(t *testing.T) {
 	require.True(t, engine.simFinalized, "simulation finalization hook was not used")
 }
 
+// Bor activates Cancun without a blob schedule, so the simulated block has no
+// blob base fee unless it is overridden.
+func TestSimulateV1BlobCallWithoutBlobSchedule(t *testing.T) {
+	t.Parallel()
+
+	cfg := *params.TestChainConfig
+	cfg.ShanghaiBlock = big.NewInt(0)
+	cfg.CancunBlock = big.NewInt(0)
+	cfg.BlobScheduleConfig = nil
+
+	accounts := newAccounts(2)
+	genesis := &core.Genesis{
+		Config: &cfg,
+		Alloc:  types.GenesisAlloc{accounts[0].addr: {Balance: big.NewInt(params.Ether)}},
+	}
+	api := NewBlockChainAPI(newTestBackend(t, 0, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {}))
+	latest := rpc.BlockNumberOrHashWithNumber(rpc.LatestBlockNumber)
+
+	tests := []struct {
+		name       string
+		validation bool
+		overrides  *override.BlockOverrides
+		wantErr    string
+	}{
+		{name: "validation off", wantErr: core.ErrNoBlobBaseFee.Error()},
+		{name: "validation on", validation: true, wantErr: core.ErrNoBlobBaseFee.Error()},
+		{name: "blob base fee overridden", overrides: &override.BlockOverrides{BlobBaseFee: (*hexutil.Big)(big.NewInt(0))}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := simOpts{Validation: tt.validation, BlockStateCalls: []simBlock{{
+				BlockOverrides: tt.overrides,
+				Calls: []TransactionArgs{{
+					From:         &accounts[0].addr,
+					To:           &accounts[1].addr,
+					BlobHashes:   []common.Hash{{0x01}},
+					MaxFeePerGas: (*hexutil.Big)(big.NewInt(params.GWei)),
+				}},
+			}}}
+			_, err := api.SimulateV1(context.Background(), opts, &latest)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
 // laggingCanonicalBackend misses the first canonical lookup and, when landed
 // is set, reports a new head after it: a block that became canonical between
 // a receipt read's two lookups.
