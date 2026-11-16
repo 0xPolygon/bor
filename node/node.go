@@ -838,6 +838,7 @@ func (n *Node) OpenDatabaseWithFreezer(name string, cache, handles int, ancient,
 			directory: n.ResolvePath(name),
 			dbEngine:  n.config.DBEngine,
 			DatabaseOptions: DatabaseOptions{
+				AncientsDirectory:   n.ResolveAncient(name, ancient),
 				MetricsNamespace:    namespace,
 				Cache:               cache,
 				Handles:             handles,

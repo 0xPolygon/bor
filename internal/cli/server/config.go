@@ -24,6 +24,7 @@ import (
 	"github.com/ethereum/go-ethereum/cmd/utils"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/fdlimit"
+	"github.com/ethereum/go-ethereum/core/txpool/legacypool"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/eth/downloader/whitelist"
@@ -405,6 +406,10 @@ type TxPoolConfig struct {
 
 	// FilteredAddressesFile is the path to newline-separated list of addresses whose transactions will be filtered
 	FilteredAddressesFile string `hcl:"filtered-addresses,optional" toml:"filtered-addresses,optional"`
+
+	// FilterReload is how often the filtered addresses file is re-read (0 disables)
+	FilterReload    time.Duration `hcl:"-,optional" toml:"-"`
+	FilterReloadRaw string        `hcl:"filter-reload,optional" toml:"filter-reload,optional"`
 
 	// Rebroadcast enables the stuck transaction rebroadcast mechanism
 	Rebroadcast bool `hcl:"rebroadcast,optional" toml:"rebroadcast,optional"`
@@ -1012,6 +1017,8 @@ func DefaultConfig() *Config {
 			RebroadcastInterval:  30 * time.Second,
 			RebroadcastMaxAge:    10 * time.Minute,
 			RebroadcastBatchSize: 200,
+
+			FilterReload: time.Minute,
 		},
 		Sealer: &SealerConfig{
 			Enabled:                  false,
@@ -1266,6 +1273,7 @@ func (c *Config) fillTimeDurations() error {
 		{"jsonrpc.http.ep-requesttimeout", &c.JsonRPC.Http.ExecutionPoolRequestTimeout, &c.JsonRPC.Http.ExecutionPoolRequestTimeoutRaw},
 		{"txpool.lifetime", &c.TxPool.LifeTime, &c.TxPool.LifeTimeRaw},
 		{"txpool.strandedlifetime", &c.TxPool.StrandedLifetime, &c.TxPool.StrandedLifetimeRaw},
+		{"txpool.filter-reload", &c.TxPool.FilterReload, &c.TxPool.FilterReloadRaw},
 		{"txpool.conditionallifetime", &c.TxPool.ConditionalLifetime, &c.TxPool.ConditionalLifetimeRaw},
 		{"txpool.rejournal", &c.TxPool.Rejournal, &c.TxPool.RejournalRaw},
 		{"txpool.rebroadcast-interval", &c.TxPool.RebroadcastInterval, &c.TxPool.RebroadcastIntervalRaw},
@@ -1307,9 +1315,11 @@ func readConfigFile(path string) (*Config, error) {
 
 	config := &Config{
 		P2P:    &P2PConfig{PeerReputation: true},
-		TxPool: &TxPoolConfig{},
 		Cache:  &CacheConfig{},
 		Sealer: &SealerConfig{},
+		// HCL configs don't start from DefaultConfig, so an omitted
+		// filter-reload would otherwise disable reloading.
+		TxPool: &TxPoolConfig{FilterReload: time.Minute},
 		// WarmSnapshot defaults on: witness-producing nodes measure faster
 		// with it, and it is inert otherwise. The zero value would silently
 		// put HCL-configured witness nodes on the slower path.
@@ -1422,12 +1432,13 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.TxPool.ConditionalLifetime = c.TxPool.ConditionalLifetime
 		n.TxPool.ConditionalSlots = c.TxPool.ConditionalSlots
 
-		// Load filtered addresses during config initialization
-		if filteredAddrs, err := loadFilteredAddresses(c.TxPool.FilteredAddressesFile); err != nil {
-			return nil, fmt.Errorf("failed to load filtered addresses: %v", err)
-		} else {
-			n.TxPool.FilteredAddresses = filteredAddrs
+		filteredAddrs, err := legacypool.LoadFilteredAddresses(c.TxPool.FilteredAddressesFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load filtered addresses: %w", err)
 		}
+		n.TxPool.FilteredAddresses = filteredAddrs
+		n.TxPool.FilteredAddressesFile = c.TxPool.FilteredAddressesFile
+		n.TxPool.FilterReload = c.TxPool.FilterReload
 
 		// Rebroadcast options
 		n.TxPool.Rebroadcast = c.TxPool.Rebroadcast
@@ -2488,44 +2499,4 @@ func validateGoDebug(value string) error {
 	}
 
 	return nil
-}
-
-// loadFilteredAddresses loads newline-separated addresses to filter from the specified file.
-func loadFilteredAddresses(filePath string) (map[common.Address]struct{}, error) {
-	if filePath == "" {
-		return make(map[common.Address]struct{}), nil
-	}
-
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			log.Warn("Filtered addresses file not found", "file", filePath)
-			return make(map[common.Address]struct{}), nil
-		}
-		return nil, fmt.Errorf("failed to read filtered addresses file: %v", err)
-	}
-
-	filteredAddrs := make(map[common.Address]struct{})
-	content := strings.TrimSpace(string(data))
-	if content == "" {
-		log.Info("Empty filtered addresses file", "file", filePath)
-		return filteredAddrs, nil
-	}
-
-	addresses := strings.Split(content, "\n")
-	for i, addrStr := range addresses {
-		addrStr = strings.TrimSpace(addrStr)
-		if addrStr == "" {
-			continue
-		}
-		if !common.IsHexAddress(addrStr) {
-			log.Warn("Invalid address in filtered addresses file", "file", filePath, "position", i+1, "address", addrStr)
-			continue
-		}
-		addr := common.HexToAddress(addrStr)
-		filteredAddrs[addr] = struct{}{}
-	}
-
-	log.Info("Loaded filtered addresses", "count", len(filteredAddrs), "file", filePath)
-	return filteredAddrs, nil
 }

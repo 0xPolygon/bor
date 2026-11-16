@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/eth/downloader"
@@ -66,6 +67,7 @@ type chainSyncer struct {
 
 	peersUnavailableUntil time.Time
 	observedPeerRevision  uint64
+	operationalRetryUntil time.Time
 }
 
 // chainSyncOp is a scheduled sync operation.
@@ -144,6 +146,12 @@ func (cs *chainSyncer) onSyncDone(err error) {
 	cs.doneCh = nil
 	cs.force.Reset(forceSyncCycle)
 	cs.forced = false
+
+	if errors.Is(err, core.ErrStateSyncProcessing) || errors.Is(err, downloader.ErrWitnessUnavailable) {
+		cs.operationalRetryUntil = time.Now().Add(forceSyncCycle)
+	} else {
+		cs.operationalRetryUntil = time.Time{}
+	}
 
 	if errors.Is(err, downloader.ErrPeersUnavailable) || errors.Is(err, downloader.ErrPeerBackedOff) || errors.Is(err, whitelist.ErrNoRemote) {
 		cs.peersUnavailableUntil = time.Now().Add(forceSyncCycle)
@@ -227,6 +235,9 @@ func (r *resettableTimer) reset(wait time.Duration) {
 func (cs *chainSyncer) nextSyncOp() (*chainSyncOp, time.Duration) {
 	if cs.doneCh != nil {
 		return nil, 0 // Sync already running
+	}
+	if remaining := time.Until(cs.operationalRetryUntil); remaining > 0 {
+		return nil, remaining
 	}
 	if remaining := time.Until(cs.peersUnavailableUntil); remaining > 0 {
 		return nil, remaining

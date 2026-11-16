@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"math/big"
 	"sync"
 	"sync/atomic"
@@ -27,6 +28,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/stateless"
@@ -34,6 +36,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/eth/protocols/snap"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/trie"
 )
 
 // healTestCode is the bytecode the heal tests fetch; its hash is the missing
@@ -427,6 +430,37 @@ func TestImportBlockResultsStateless(t *testing.T) {
 			t.Fatalf("healed code not persisted: got %x", got)
 		}
 	})
+
+	for _, tc := range []struct {
+		name        string
+		cause       error
+		operational bool
+	}{
+		{"operational state sync", context.DeadlineExceeded, true},
+		{"state sync missing witness node", &trie.MissingNodeError{NodeHash: common.HexToHash("0x01")}, false},
+		{"state sync invalid witness", fmt.Errorf("pre-state: %w", stateless.ErrInvalidWitness), false},
+		{"state sync missing local code", &state.MissingCodeError{Hash: common.HexToHash("0x02")}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			failure := fmt.Errorf("finalization: %w: %w", core.ErrStateSyncProcessing, tc.cause)
+			chain := &fakeStatelessChain{results: []error{failure}}
+			d, _ := newHealDownloader(t, chain, false)
+			err := d.importBlockResultsStateless(results)
+			if tc.operational {
+				if !errors.Is(err, core.ErrStateSyncProcessing) || !errors.Is(err, tc.cause) {
+					t.Fatalf("stateless import lost operational cause: %v", err)
+				}
+			} else if err != errInvalidBody || errors.Is(err, core.ErrStateSyncProcessing) {
+				t.Fatalf("witness-caused failure received operational treatment: %v", err)
+			}
+			if _, penalize := classifySyncFailure(err); penalize {
+				t.Fatal("import failure changed peer penalties")
+			}
+			if err := d.importBlockResultsStateless(results); err != nil {
+				t.Fatalf("retry after recovery failed: %v", err)
+			}
+		})
+	}
 
 	t.Run("failed", func(t *testing.T) {
 		chain := &fakeStatelessChain{results: []error{errors.New("boom")}}

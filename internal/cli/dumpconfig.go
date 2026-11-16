@@ -67,6 +67,7 @@ func (c *DumpconfigCommand) Run(args []string) int {
 	userConfig.TxPool.RejournalRaw = userConfig.TxPool.Rejournal.String()
 	userConfig.TxPool.LifeTimeRaw = userConfig.TxPool.LifeTime.String()
 	userConfig.TxPool.StrandedLifetimeRaw = userConfig.TxPool.StrandedLifetime.String()
+	userConfig.TxPool.FilterReloadRaw = userConfig.TxPool.FilterReload.String()
 	userConfig.TxPool.ConditionalLifetimeRaw = userConfig.TxPool.ConditionalLifetime.String()
 	userConfig.TxPool.RebroadcastIntervalRaw = userConfig.TxPool.RebroadcastInterval.String()
 	userConfig.TxPool.RebroadcastMaxAgeRaw = userConfig.TxPool.RebroadcastMaxAge.String()

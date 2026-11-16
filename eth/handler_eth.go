@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -152,9 +153,28 @@ func (h *ethHandler) handleBlockAnnounces(peer *eth.Peer, hashes []common.Hash, 
 // createWitnessRequester creates a witness requester closure that can be used
 // by the block fetcher to request witnesses with verification.
 func (h *ethHandler) createWitnessRequester() func(hash common.Hash, sink chan *eth.Response) (*eth.Request, error) {
+	var (
+		mu    sync.Mutex
+		tried = make(map[common.Hash]map[string]struct{})
+	)
 	return func(hash common.Hash, sink chan *eth.Response) (*eth.Request, error) {
+		mu.Lock()
+		attempted := tried[hash]
+		if attempted == nil {
+			attempted = make(map[string]struct{})
+			tried[hash] = attempted
+		}
 		// Get the ethPeer from the peerSet
-		ethPeer := h.resolveWitnessFetchPeer(hash)
+		ethPeer := h.resolveWitnessFetchPeer(hash, attempted)
+		if ethPeer == nil {
+			clear(attempted)
+			ethPeer = h.resolveWitnessFetchPeer(hash, attempted)
+		}
+		if ethPeer != nil {
+			attempted[ethPeer.ID()] = struct{}{}
+		}
+		mu.Unlock()
+
 		if ethPeer == nil {
 			return nil, fmt.Errorf("no peer with witness for hash %s is available", hash)
 		}
@@ -182,9 +202,12 @@ func (h *ethHandler) createWitnessRequester() func(hash common.Hash, sink chan *
 // A peer excluded for this hash (its size-oracle-accepted witness failed
 // import; see excludeWitnessSource) is skipped at every tier, so the
 // fetcher's re-fetch reaches a different source.
-func (h *ethHandler) resolveWitnessFetchPeer(hash common.Hash) *ethPeer {
+func (h *ethHandler) resolveWitnessFetchPeer(hash common.Hash, tried map[string]struct{}) *ethPeer {
 	hh := (*handler)(h)
 	usable := func(id string) bool {
+		if _, done := tried[id]; done {
+			return false
+		}
 		return hh.witnessSourceExclusions == nil || !hh.witnessSourceExclusions.excluded(hash, id)
 	}
 	for _, p := range h.peers.peersWithWitnessCandidates(hash) {
