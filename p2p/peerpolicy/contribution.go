@@ -51,6 +51,8 @@ func (a *ConnectionActivity) Last() (mclock.AbsTime, bool) {
 	return mclock.AbsTime(last), last >= 0
 }
 
+func (a *ConnectionActivity) Closing() bool { return a.last.Load() < 0 }
+
 func (a *ConnectionActivity) Close() { a.last.Store(-1) }
 
 func (a *ConnectionActivity) MarkIdleDisconnect() { a.idleDisconnected.Store(true) }

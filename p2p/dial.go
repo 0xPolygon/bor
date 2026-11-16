@@ -716,12 +716,13 @@ func nodeEndpointForLog(n *enode.Node) string {
 func (srv *Server) idlePeer(peers map[enode.ID]*Peer, count, inbound int, policy *peerpolicy.Tracker) (*Peer, mclock.AbsTime) {
 	var candidate *Peer
 	var oldest mclock.AbsTime
+	inboundFull, outboundFull := srv.peerPressure(count, inbound)
 	for _, peer := range peers {
 		if !peer.isLive() || peer.Trusted() || peer.Static() {
 			continue
 		}
 		last, idle := policy.IdleSince(peer.ID().String(), peer.activity)
-		if !idle || !srv.needsPeerSlot(peer, count, inbound) {
+		if !idle || (peer.Inbound() && !inboundFull) || (!peer.Inbound() && !outboundFull) {
 			continue
 		}
 		if candidate == nil || last < oldest {
@@ -729,17 +730,4 @@ func (srv *Server) idlePeer(peers map[enode.ID]*Peer, count, inbound int, policy
 		}
 	}
 	return candidate, oldest
-}
-
-func livePeerCounts(peers map[enode.ID]*Peer) (count, inbound int) {
-	for _, peer := range peers {
-		if !peer.isLive() {
-			continue
-		}
-		count++
-		if peer.Inbound() {
-			inbound++
-		}
-	}
-	return count, inbound
 }

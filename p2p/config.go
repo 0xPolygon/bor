@@ -164,3 +164,31 @@ func (w *configNAT) UnmarshalText(input []byte) error {
 	w.Interface = n
 	return nil
 }
+
+func (srv *Server) GetMaxPeers() int {
+	srv.limitsMu.RLock()
+	defer srv.limitsMu.RUnlock()
+	return srv.MaxPeers
+}
+
+func (srv *Server) MaxInboundConns() int {
+	total, dialed := srv.peerLimits()
+	return total - dialed
+}
+
+func (srv *Server) MaxDialedConns() int {
+	_, dialed := srv.peerLimits()
+	return dialed
+}
+
+func (srv *Server) peerLimits() (total, dialed int) {
+	total = srv.GetMaxPeers()
+	if srv.NoDial || total == 0 {
+		return total, 0
+	}
+	ratio := srv.DialRatio
+	if ratio == 0 {
+		ratio = defaultDialRatio
+	}
+	return total, max(1, total/ratio)
+}

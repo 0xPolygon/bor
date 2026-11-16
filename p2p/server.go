@@ -76,6 +76,7 @@ type Server struct {
 	// Config fields may not be modified while the server is running.
 	Config
 	peerPolicy atomic.Pointer[peerpolicy.Tracker]
+	limitsMu   sync.RWMutex // protects the runtime MaxPeers limit
 
 	// Hooks for testing. These are useful because we can inhibit
 	// the whole protocol stack.
@@ -363,7 +364,9 @@ func (srv *Server) SetMaxPeers(maxPeers int) {
 		}
 	}
 
+	srv.limitsMu.Lock()
 	srv.MaxPeers = maxPeers
+	srv.limitsMu.Unlock()
 }
 
 // PeerCount returns the number of connected peers.
@@ -469,7 +472,7 @@ func (srv *Server) RemoveTrustedPeer(node *enode.Node) {
 	case <-srv.quit:
 	}
 	// Disconnect the peer if maxPeers is breached.
-	srv.SetMaxPeers(srv.MaxPeers)
+	srv.SetMaxPeers(srv.GetMaxPeers())
 }
 
 // SubscribeEvents subscribes the given channel to peer events
@@ -779,36 +782,13 @@ func peerSlotsScarce(count, limit int) bool {
 	return limit > 0 && count >= limit-limit/10
 }
 
-func (srv *Server) needsPeerSlot(peer *Peer, count, inbound int) bool {
-	if peerSlotsScarce(count, srv.MaxPeers) {
-		return true
+func (srv *Server) peerPressure(count, inbound int) (bool, bool) {
+	total, dialed := srv.peerLimits()
+	inboundFull := peerSlotsScarce(count, total) || peerSlotsScarce(inbound, total-dialed)
+	if srv.dialsched != nil {
+		dialed = min(dialed, srv.dialsched.maxDialPeers)
 	}
-	if peer.Inbound() {
-		return peerSlotsScarce(inbound, srv.MaxInboundConns())
-	}
-	return peerSlotsScarce(count-inbound, srv.MaxDialedConns())
-}
-
-func (srv *Server) MaxInboundConns() int {
-	return srv.MaxPeers - srv.MaxDialedConns()
-}
-
-func (srv *Server) MaxDialedConns() (limit int) {
-	if srv.NoDial || srv.MaxPeers == 0 {
-		return 0
-	}
-
-	if srv.DialRatio == 0 {
-		limit = srv.MaxPeers / defaultDialRatio
-	} else {
-		limit = srv.MaxPeers / srv.DialRatio
-	}
-
-	if limit == 0 {
-		limit = 1
-	}
-
-	return limit
+	return inboundFull, peerSlotsScarce(count, total) || peerSlotsScarce(count-inbound, dialed)
 }
 
 func (srv *Server) setupListening() error {
@@ -1012,12 +992,13 @@ func (srv *Server) postHandshakeChecks(peers map[enode.ID]*Peer, inboundCount in
 		return DiscJailed
 	}
 
+	total, dialed := srv.peerLimits()
 	switch {
-	case !c.is(trustedConn) && len(peers) >= srv.MaxPeers:
-		srv.log.Debug("Rejecting peer: too many peers", "id", c.node.ID(), "peercount", len(peers), "maxpeers", srv.MaxPeers)
+	case !c.is(trustedConn) && len(peers) >= total:
+		srv.log.Debug("Rejecting peer: too many peers", "id", c.node.ID(), "peercount", len(peers), "maxpeers", total)
 		return DiscTooManyPeers
-	case !c.is(trustedConn) && c.is(inboundConn) && inboundCount >= srv.MaxInboundConns():
-		srv.log.Debug("Rejecting peer: too many inbound", "id", c.node.ID(), "inboundCount", inboundCount, "maxinbound", srv.MaxInboundConns())
+	case !c.is(trustedConn) && c.is(inboundConn) && inboundCount >= total-dialed:
+		srv.log.Debug("Rejecting peer: too many inbound", "id", c.node.ID(), "inboundCount", inboundCount, "maxinbound", total-dialed)
 		return DiscTooManyPeers
 	case peers[c.node.ID()] != nil:
 		return DiscAlreadyConnected
@@ -1381,8 +1362,8 @@ func (srv *Server) expireIdlePeer(peers map[enode.ID]*Peer) {
 	if !srv.PeerIdleEviction || srv.peerJail == nil || policy == nil {
 		return
 	}
-	count, inbound := livePeerCounts(peers)
-	if count <= peerIdleMinimumPeers {
+	count, inbound, live := peerCounts(peers)
+	if live <= peerIdleMinimumPeers {
 		return
 	}
 	now := srv.clock.Now()
@@ -1401,4 +1382,24 @@ func (srv *Server) expireIdlePeer(peers map[enode.ID]*Peer) {
 	peer.Log().Info("Disconnecting inactive peer to free a connection slot",
 		"inactive", now.Sub(last), "cooldown", peerIdleCooldown)
 	idlePeerDisconnects.Inc(1)
+}
+func peerCounts(peers map[enode.ID]*Peer) (count, inbound, live int) {
+	for _, peer := range peers {
+		if peer.activity.Closing() {
+			continue
+		}
+		select {
+		case <-peer.closed:
+			continue
+		default:
+		}
+		count++
+		if peer.Inbound() {
+			inbound++
+		}
+		if peer.isLive() {
+			live++
+		}
+	}
+	return count, inbound, live
 }
