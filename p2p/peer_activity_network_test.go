@@ -12,10 +12,12 @@ import (
 	"github.com/ethereum/go-ethereum/common/mclock"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
 )
 
-func activityProtocol(version uint, received chan<- enode.ID) Protocol {
+func activityProtocol(version uint, received chan<- enode.ID, policy *peerpolicy.Tracker) Protocol {
 	return Protocol{Name: "eth", Version: version, Length: 17, Run: func(p *Peer, rw MsgReadWriter) error {
+		policy.BindConnection(p.ID().String(), policy.Connected(p.ID().String()), p.ConnectionActivity())
 		for {
 			msg, err := rw.ReadMsg()
 			if err != nil {
@@ -54,7 +56,7 @@ func waitActivityPeers(t *testing.T, srv *Server, want int) {
 		peers := srv.Peers()
 		started := 0
 		for _, p := range peers {
-			if p.protocolStarted.Load() {
+			if _, live := p.activity.Last(); live && srv.peerPolicy.Load().Snapshot(p.ID().String()).Contribution.ConnectionKnown {
 				started++
 			}
 		}
@@ -89,14 +91,17 @@ func TestPeerIdleEvictionRLPX(t *testing.T) {
 
 func TestPeerIdleStartupGrace(t *testing.T) {
 	clock := new(mclock.Simulated)
+	policy := peerpolicy.New(clock)
+	policy.SetReady(true)
 	ready := make(chan *Peer, 1)
 	release := make(chan struct{})
 	unblock := sync.OnceFunc(func() { close(release) })
 	srv := &Server{Config: Config{
 		PrivateKey: newkey(), MaxPeers: 9, NoDial: true, NoDiscovery: true,
 		ListenAddr: "127.0.0.1:0", PeerIdleEviction: true, clock: clock,
-		Protocols: []Protocol{activityProtocol(68, make(chan enode.ID, 1))},
+		Protocols: []Protocol{activityProtocol(68, make(chan enode.ID, 1), policy)},
 	}, newPeerHook: func(p *Peer) { ready <- p; <-release }}
+	srv.SetPeerPolicy(policy)
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -112,24 +117,27 @@ func TestPeerIdleStartupGrace(t *testing.T) {
 		t.Fatal("peer did not reach startup hook")
 	}
 	advanceActivityClock(t, clock, 20*time.Minute)
-	if _, idle := peer.idleSince(clock.Now()); idle {
+	if _, live := peer.activity.Last(); live {
 		t.Fatal("peer was considered idle before protocols started")
 	}
 	unblock()
 	waitActivityPeers(t, srv, 1)
-	if _, idle := peer.idleSince(clock.Now().Add(10*time.Minute - time.Nanosecond)); idle {
+	if last, live := peer.activity.Last(); !live || clock.Now().Add(10*time.Minute-time.Nanosecond).Sub(last) >= peerIdleTimeout {
 		t.Fatal("peer lost its grace period during local startup delay")
 	}
 }
 
 func testPeerIdleEvictionRLPX(t *testing.T, enabled bool) {
 	clock := new(mclock.Simulated)
+	policy := peerpolicy.New(clock)
+	policy.SetReady(true)
 	received := make(chan enode.ID, 10)
 	srv := &Server{Config: Config{
 		PrivateKey: newkey(), MaxPeers: 9, NoDial: true, NoDiscovery: true,
 		ListenAddr: "127.0.0.1:0", PeerIdleEviction: enabled, clock: clock,
-		Protocols: []Protocol{activityProtocol(68, received), activityProtocol(69, received)},
+		Protocols: []Protocol{activityProtocol(68, received, policy), activityProtocol(69, received, policy)},
 	}}
+	srv.SetPeerPolicy(policy)
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}

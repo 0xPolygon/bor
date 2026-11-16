@@ -40,6 +40,7 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/enr"
 	"github.com/ethereum/go-ethereum/p2p/netutil"
+	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
 )
 
 const (
@@ -74,6 +75,7 @@ func (e *protoHandshakeError) Unwrap() error { return e.err }
 type Server struct {
 	// Config fields may not be modified while the server is running.
 	Config
+	peerPolicy atomic.Pointer[peerpolicy.Tracker]
 
 	// Hooks for testing. These are useful because we can inhibit
 	// the whole protocol stack.
@@ -773,6 +775,20 @@ func (srv *Server) setupDialScheduler() {
 	}
 }
 
+func peerSlotsScarce(count, limit int) bool {
+	return limit > 0 && count >= limit-limit/10
+}
+
+func (srv *Server) needsPeerSlot(peer *Peer, count, inbound int) bool {
+	if peerSlotsScarce(count, srv.MaxPeers) {
+		return true
+	}
+	if peer.Inbound() {
+		return peerSlotsScarce(inbound, srv.MaxInboundConns())
+	}
+	return peerSlotsScarce(count-inbound, srv.MaxDialedConns())
+}
+
 func (srv *Server) MaxInboundConns() int {
 	return srv.MaxPeers - srv.MaxDialedConns()
 }
@@ -1240,7 +1256,6 @@ func (srv *Server) checkpoint(c *conn, stage chan<- *conn) error {
 func (srv *Server) launchPeer(c *conn) *Peer {
 	p := newPeer(srv.log, c, srv.Protocols)
 	p.clock = srv.clock
-	p.lastProtocolActivity.Store(int64(srv.clock.Now()))
 	if srv.EnableMsgEvents {
 		// If message events are enabled, pass the peerFeed
 		// to the peer.
@@ -1348,4 +1363,42 @@ func (srv *Server) PeersInfo() []*PeerInfo {
 	})
 
 	return infos
+}
+
+const (
+	peerIdleCheckInterval = time.Minute
+	peerIdleCooldown      = 5 * time.Minute
+	peerIdleMinimumPeers  = 5
+)
+
+func (srv *Server) SetPeerPolicy(policy *peerpolicy.Tracker) {
+	srv.peerPolicy.Store(policy)
+}
+
+// Called on the server loop, which also serializes peer and trust changes.
+func (srv *Server) expireIdlePeer(peers map[enode.ID]*Peer) {
+	policy := srv.peerPolicy.Load()
+	if !srv.PeerIdleEviction || srv.peerJail == nil || policy == nil {
+		return
+	}
+	count, inbound := livePeerCounts(peers)
+	if count <= peerIdleMinimumPeers {
+		return
+	}
+	now := srv.clock.Now()
+	peer, last := srv.idlePeer(peers, count, inbound, policy)
+	if peer == nil || !policy.RetireIdle(peer.ID().String(), peer.activity, last) {
+		return
+	}
+	select {
+	case peer.disc <- DiscJailed:
+	default:
+		// Another disconnect is already queued; keep this session closing.
+		return
+	}
+	peer.activity.MarkIdleDisconnect()
+	srv.peerJail.JailPeerFor(peer.ID(), peerIdleCooldown)
+	peer.Log().Info("Disconnecting inactive peer to free a connection slot",
+		"inactive", now.Sub(last), "cooldown", peerIdleCooldown)
+	idlePeerDisconnects.Inc(1)
 }

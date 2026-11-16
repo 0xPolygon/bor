@@ -2,11 +2,177 @@ package peerpolicy
 
 import (
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common/mclock"
 )
+
+func TestContributionConnectionLifecycle(t *testing.T) {
+	tracker, clock := newContributionTracker()
+	var connection ConnectionActivity
+	tracker.BindConnection("peer", 0, &connection)
+	clock.Run(time.Hour)
+	if _, live := connection.Last(); live {
+		t.Fatal("protocols have not started")
+	}
+	contributionStatus(t, tracker, "unknown")
+	connection.Start(clock.Now())
+	clock.Run(3*time.Second + time.Nanosecond)
+	got := contributionStatus(t, tracker, "unknown")
+	if got.ProtocolIdleSeconds == nil || *got.ProtocolIdleSeconds != 3 {
+		t.Fatalf("incorrect protocol idle age: %+v", got)
+	}
+	connection.Close()
+	connection.Observe(clock.Now(), true)
+	if _, live := connection.Last(); live {
+		t.Fatal("closed connection was reopened")
+	}
+	if _, idle := tracker.IdleSince("peer", &connection); idle {
+		t.Fatal("closed connection can be retired")
+	}
+}
+
+func TestContributionAuxiliaryActivityBoundary(t *testing.T) {
+	tracker, clock := newContributionTracker()
+	var connection ConnectionActivity
+	connection.Start(clock.Now())
+	tracker.BindConnection("peer", 0, &connection)
+	connection.Observe(clock.Now(), true)
+	clock.Run(activityGrace)
+	connection.Observe(clock.Now(), false)
+	for range 3 {
+		tracker.Observe("peer", Evidence{Activity: ActivityEvent{ServedResponses: 1}})
+		clock.Run(time.Minute)
+	}
+	contributionStatus(t, tracker, "unknown")
+	clock.Run(activityCount*activityWidth - 13*time.Minute)
+	connection.Observe(clock.Now(), false)
+	contributionStatus(t, tracker, "request-only")
+}
+
+func TestContributionIdleRechecksActivityAndReadiness(t *testing.T) {
+	tracker, clock := newContributionTracker()
+	var connection ConnectionActivity
+	connection.Start(clock.Now())
+	tracker.BindConnection("peer", 0, &connection)
+	clock.Run(activityGrace)
+	last, idle := tracker.IdleSince("peer", &connection)
+	if !idle || tracker.Snapshot("peer").Risk != 20 {
+		t.Fatal("idle score and eligibility disagree")
+	}
+	connection.Observe(clock.Now(), true)
+	if tracker.RetireIdle("peer", &connection, last) {
+		t.Fatal("new protocol traffic was ignored")
+	}
+	clock.Run(activityGrace)
+	last, _ = tracker.IdleSince("peer", &connection)
+	tracker.SetReady(false)
+	if tracker.RetireIdle("peer", &connection, last) {
+		t.Fatal("local sync did not stop retirement")
+	}
+	contributionStatus(t, tracker, "unknown")
+	clock.Run(time.Minute)
+	tracker.SetReady(true)
+	clock.Run(activityGrace - time.Nanosecond)
+	if tracker.RetireIdle("peer", &connection, last) {
+		t.Fatal("readiness grace was skipped")
+	}
+	clock.Run(time.Nanosecond)
+	if !tracker.RetireIdle("peer", &connection, last) {
+		t.Fatal("idle peer was not eligible after renewed grace")
+	}
+	connection.MarkIdleDisconnect()
+	if got := tracker.Snapshot("peer").Contribution; got.DisconnectReason != "idle" || got.Risk != 0 {
+		t.Fatalf("retired session did not retain the reason: %+v", got)
+	}
+	connection.Observe(clock.Now(), false)
+	if _, live := connection.Last(); live {
+		t.Fatal("activity reopened a retired connection")
+	}
+}
+
+func TestContributionIdleSessionIsolation(t *testing.T) {
+	tracker, clock := newContributionTracker()
+	var old, current ConnectionActivity
+	old.Start(clock.Now())
+	tracker.BindConnection("peer", 0, &old)
+	clock.Run(activityGrace)
+	last, _ := tracker.IdleSince("peer", &old)
+	started := tracker.Connected("peer")
+	current.Start(clock.Now())
+	tracker.BindConnection("peer", started, &current)
+	tracker.BindConnection("peer", 0, &old)
+	old.MarkIdleDisconnect()
+	if tracker.RetireIdle("peer", &old, last) {
+		t.Fatal("stale session retired the new connection")
+	}
+	if got := contributionStatus(t, tracker, "warming-up"); got.DisconnectReason != "" {
+		t.Fatal("stale disconnect overwrote the new session")
+	}
+	clock.Run(activityGrace)
+	if _, idle := tracker.IdleSince("peer", &current); !idle {
+		t.Fatal("current session lost its shared activity")
+	}
+}
+
+func TestContributionIdleDoesNotWaitForObservation(t *testing.T) {
+	tracker, clock := newContributionTracker()
+	var connection ConnectionActivity
+	connection.Start(clock.Now())
+	tracker.BindConnection("peer", 0, &connection)
+	var resolved atomic.Bool
+	tracker.SetClassResolver(func(string) (bool, bool) { resolved.Store(true); return false, false })
+	clock.Run(activityGrace)
+	last, idle := tracker.IdleSince("peer", &connection)
+	if !idle {
+		t.Fatal("idle connection was excluded")
+	}
+	tracker.mu.Lock()
+	done := make(chan bool, 1)
+	go func() {
+		_, idle := tracker.IdleSince("peer", &connection)
+		done <- idle || tracker.RetireIdle("peer", &connection, last)
+	}()
+	select {
+	case allowed := <-done:
+		tracker.mu.Unlock()
+		if allowed {
+			t.Fatal("busy observation allowed retirement")
+		}
+	case <-time.After(time.Second):
+		tracker.mu.Unlock()
+		<-done
+		t.Fatal("connection management blocked on observation")
+	}
+	if resolved.Load() {
+		t.Fatal("server consulted the class resolver")
+	}
+}
+
+func TestContributionIdleMissingCoverage(t *testing.T) {
+	tracker, clock := newContributionTracker()
+	var connection ConnectionActivity
+	connection.Start(clock.Now())
+	tracker.BindConnection("peer", 0, &connection)
+	clock.Run(activityGrace)
+	for i := range maxPeers {
+		tracker.Connected(string(rune(i + 1)))
+	}
+	if _, idle := tracker.IdleSince("peer", &connection); idle {
+		t.Fatal("missing record allowed retirement")
+	}
+	tracker.RestoreSession("peer", 0, func() bool { return true })
+	tracker.BindConnection("peer", 0, &connection)
+	if _, idle := tracker.IdleSince("peer", &connection); idle {
+		t.Fatal("restored coverage skipped grace")
+	}
+	clock.Run(activityGrace)
+	if _, idle := tracker.IdleSince("peer", &connection); !idle {
+		t.Fatal("restored session did not become eligible")
+	}
+}
 
 func TestContributionShortPausesPreserveEstablishedPeers(t *testing.T) {
 	for _, useful := range []bool{false, true} {

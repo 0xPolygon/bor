@@ -23,7 +23,6 @@ import (
 	"net"
 	"slices"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common/mclock"
@@ -32,6 +31,7 @@ import (
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/enr"
+	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
@@ -105,13 +105,13 @@ type PeerEvent struct {
 
 // Peer represents a connected remote node.
 type Peer struct {
-	rw                   *conn
-	running              map[string]*protoRW
-	log                  log.Logger
-	created              mclock.AbsTime
-	clock                mclock.Clock
-	lastProtocolActivity atomic.Int64
-	protocolStarted      atomic.Bool
+	rw      *conn
+	running map[string]*protoRW
+	log     log.Logger
+	created mclock.AbsTime
+	clock   mclock.Clock
+	// Retained reputation must not keep the peer and transport buffers alive.
+	activity *peerpolicy.ConnectionActivity
 
 	wg       sync.WaitGroup
 	protoErr chan error
@@ -265,6 +265,7 @@ func newPeer(log log.Logger, conn *conn, protocols []Protocol) *Peer {
 		running:  protomap,
 		created:  mclock.Now(),
 		clock:    mclock.System{},
+		activity: new(peerpolicy.ConnectionActivity),
 		disc:     make(chan DiscReason, 1),
 		protoErr: make(chan error, len(protomap)+1), // protocols + pingLoop
 		closed:   make(chan struct{}),
@@ -272,7 +273,6 @@ func newPeer(log log.Logger, conn *conn, protocols []Protocol) *Peer {
 		pongRecv: make(chan struct{}, 1),
 		log:      log.New("id", conn.node.ID(), "conn", conn.flags),
 	}
-	p.lastProtocolActivity.Store(int64(p.created))
 	return p
 }
 
@@ -281,8 +281,7 @@ func (p *Peer) Log() log.Logger {
 }
 
 func (p *Peer) run() (remoteRequested bool, err error) {
-	p.lastProtocolActivity.Store(int64(p.clock.Now()))
-	p.protocolStarted.Store(true)
+	p.activity.Start(p.clock.Now())
 	var (
 		writeStart = make(chan struct{}, 1)
 		writeErr   = make(chan error, 1)
@@ -334,7 +333,7 @@ loop:
 		}
 	}
 
-	p.lastProtocolActivity.Store(peerActivityClosing)
+	p.activity.Close()
 	p.log.Debug("Peer disconnected", "remoteRequested", remoteRequested, "reason", reason, "err", err)
 
 	close(p.closed)
@@ -443,7 +442,7 @@ func (p *Peer) handle(msg Msg) error {
 		if err != nil {
 			return fmt.Errorf("msg code out of range: %v", msg.Code)
 		}
-		p.recordProtocolActivity()
+		p.activity.Observe(p.clock.Now(), proto.Name != "eth")
 		if metrics.Enabled() {
 			m := fmt.Sprintf("%s/%s/%d/%#02x", ingressMeterName, proto.Name, proto.Version, msg.Code-proto.offset)
 			metrics.GetOrRegisterMeter(m, nil).Mark(int64(msg.meterSize))
@@ -652,4 +651,24 @@ func (p *Peer) Info() *PeerInfo {
 		info.Protocols[proto.Name] = protoInfo
 	}
 	return info
+}
+
+// ConnectionActivity returns the transport state used by peer reputation.
+func (p *Peer) ConnectionActivity() *peerpolicy.ConnectionActivity {
+	if _, live := p.activity.Last(); !live {
+		return nil
+	}
+	return p.activity
+}
+
+func (p *Peer) isLive() bool {
+	if _, live := p.activity.Last(); !live {
+		return false
+	}
+	select {
+	case <-p.closed:
+		return false
+	default:
+		return true
+	}
 }

@@ -3,20 +3,59 @@ package p2p
 import (
 	"bytes"
 	"fmt"
+	"runtime"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common/mclock"
 	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
 )
+
+const peerIdleTimeout = peerpolicy.IdleTimeout
+
+func TestPeerActivityDoesNotRetainConnection(t *testing.T) {
+	tracker, released := retainedActivityRecord(t)
+	deadline := time.After(3 * time.Second)
+	for {
+		runtime.GC()
+		select {
+		case <-released:
+			if tracker.Snapshot("peer").Contribution.DisconnectReason != "idle" {
+				t.Fatal("connection collection lost the retained activity")
+			}
+			return
+		case <-deadline:
+			t.Fatal("retained activity keeps the disconnected peer alive")
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+}
+
+func retainedActivityRecord(t *testing.T) (*peerpolicy.Tracker, <-chan struct{}) {
+	t.Helper()
+	clock := new(mclock.Simulated)
+	tracker := peerpolicy.New(clock)
+	peer := NewPeer(uintID(1), "fixture", nil)
+	if err := peer.rw.fd.Close(); err != nil {
+		t.Fatal(err)
+	}
+	peer.activity.Start(clock.Now())
+	tracker.BindConnection("peer", tracker.Connected("peer"), peer.ConnectionActivity())
+	peer.activity.Close()
+	peer.activity.MarkIdleDisconnect()
+	released := make(chan struct{})
+	runtime.SetFinalizer(peer, func(*Peer) { close(released) })
+	return tracker, released
+}
 
 func activityTestPeer(t *testing.T, id uint16, clock mclock.Clock) *Peer {
 	t.Helper()
 	p := NewPeer(uintID(id), "fixture", nil)
 	t.Cleanup(func() { p.rw.fd.Close() })
 	p.clock = clock
-	p.lastProtocolActivity.Store(int64(clock.Now()))
-	p.protocolStarted.Store(true)
+	p.activity.Start(clock.Now())
 	p.disc = make(chan DiscReason, 1)
 	p.closed = make(chan struct{})
 	return p
@@ -27,11 +66,15 @@ func activityTestServer(t *testing.T, count, inbound int) (*Server, map[enode.ID
 	clock := new(mclock.Simulated)
 	srv := &Server{Config: Config{MaxPeers: 20, PeerIdleEviction: true, clock: clock}}
 	srv.peerJail = newPeerJail(peerIdleCooldown, clock)
+	policy := peerpolicy.New(clock)
+	policy.SetReady(true)
+	srv.SetPeerPolicy(policy)
 	peers := make(map[enode.ID]*Peer)
 	for i := range count {
 		p := activityTestPeer(t, uint16(i+1), clock)
 		p.rw.set(inboundConn, i < inbound)
 		p.rw.set(trustedConn, true)
+		policy.BindConnection(p.ID().String(), policy.Connected(p.ID().String()), p.activity)
 		peers[p.ID()] = p
 	}
 	return srv, peers, clock
@@ -56,10 +99,12 @@ func TestPeerIdleEvictionEligibility(t *testing.T) {
 		{"disabled", 20, 14, peerIdleTimeout, func(s *Server, _ *Peer) { s.PeerIdleEviction = false }, false},
 		{"trusted", 20, 14, peerIdleTimeout, func(_ *Server, p *Peer) { p.rw.set(trustedConn, true) }, false},
 		{"static", 20, 14, peerIdleTimeout, func(_ *Server, p *Peer) { p.rw.set(staticConn, true) }, false},
-		{"recent-activity", 20, 14, peerIdleTimeout, func(_ *Server, p *Peer) { p.recordProtocolActivity() }, false},
-		{"already-closing", 20, 14, peerIdleTimeout, func(_ *Server, p *Peer) { p.lastProtocolActivity.Store(peerActivityClosing) }, false},
-		{"protocol-not-started", 20, 14, peerIdleTimeout, func(_ *Server, p *Peer) { p.protocolStarted.Store(false) }, false},
+		{"recent-activity", 20, 14, peerIdleTimeout, func(_ *Server, p *Peer) { p.activity.Observe(p.clock.Now(), false) }, false},
+		{"already-closing", 20, 14, peerIdleTimeout, func(_ *Server, p *Peer) { p.activity.Close() }, false},
+		{"protocol-not-started", 20, 14, peerIdleTimeout, func(_ *Server, p *Peer) { p.activity = new(peerpolicy.ConnectionActivity) }, false},
 		{"already-disconnected", 20, 14, peerIdleTimeout, func(_ *Server, p *Peer) { close(p.closed) }, false},
+		{"syncing", 20, 14, peerIdleTimeout, func(s *Server, _ *Peer) { s.peerPolicy.Load().SetReady(false) }, false},
+		{"reputation-disabled", 20, 14, peerIdleTimeout, func(s *Server, _ *Peer) { s.SetPeerPolicy(nil) }, false},
 		{"no-jail", 20, 14, peerIdleTimeout, func(s *Server, _ *Peer) { s.peerJail = nil }, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -95,7 +140,7 @@ func TestPeerIdleEvictionLiveFloor(t *testing.T) {
 					if closed {
 						close(p.closed)
 					} else {
-						p.lastProtocolActivity.Store(peerActivityClosing)
+						p.activity.Close()
 					}
 				}
 				p := peers[uintID(20)]
@@ -130,9 +175,13 @@ func TestPeerIdleEvictionSelectsOneOldest(t *testing.T) {
 	oldest.rw.set(trustedConn, false)
 	newer.rw.set(trustedConn, false)
 	clock.Run(time.Minute)
-	newer.recordProtocolActivity()
+	newer.activity.Observe(newer.clock.Now(), false)
 	clock.Run(peerIdleTimeout)
 	before := idlePeerDisconnects.Snapshot().Count()
+	policy := srv.peerPolicy.Load()
+	if got := policy.Snapshot(oldest.ID().String()); got.Risk != 20 || got.Contribution.Status != "idle" {
+		t.Fatalf("eviction candidate disagrees with reputation: %+v", got)
+	}
 	srv.expireIdlePeer(peers)
 	if idlePeerDisconnects.Snapshot().Count() != before+1 {
 		t.Fatal("disconnect metric did not increase")
@@ -140,8 +189,11 @@ func TestPeerIdleEvictionSelectsOneOldest(t *testing.T) {
 	if len(oldest.disc) != 1 || len(newer.disc) != 0 {
 		t.Fatal("expected only the oldest idle peer to be removed")
 	}
-	oldest.recordProtocolActivity()
-	if oldest.lastProtocolActivity.Load() != peerActivityClosing {
+	if got := policy.Snapshot(oldest.ID().String()).Contribution; got.DisconnectReason != "idle" {
+		t.Fatalf("eviction missing from activity record: %+v", got)
+	}
+	oldest.activity.Observe(oldest.clock.Now(), false)
+	if _, live := oldest.activity.Last(); live {
 		t.Fatal("activity reopened a closing session")
 	}
 	clock.Run(5*time.Minute - time.Nanosecond)
@@ -157,9 +209,9 @@ func TestPeerIdleEvictionSelectsOneOldest(t *testing.T) {
 func TestPeerIdleGraceStartsAtConnection(t *testing.T) {
 	p := NewPeer(uintID(1), "fixture", nil)
 	p.closed = make(chan struct{})
-	p.protocolStarted.Store(true)
+	p.activity.Start(p.created)
 	t.Cleanup(func() { p.rw.fd.Close() })
-	if _, idle := p.idleSince(p.created.Add(10*time.Minute - time.Nanosecond)); idle {
+	if last, live := p.activity.Last(); !live || p.created.Add(10*time.Minute-time.Nanosecond).Sub(last) >= peerIdleTimeout {
 		t.Fatal("new connection did not receive a grace period")
 	}
 }
@@ -189,7 +241,8 @@ func TestPeerProtocolActivity(t *testing.T) {
 			if err := p.handle(Msg{Code: tc.code, Payload: bytes.NewReader(nil)}); err != nil {
 				t.Fatal(err)
 			}
-			if got := p.lastProtocolActivity.Load() == int64(clock.Now()); got != tc.active {
+			last, live := p.activity.Last()
+			if got := live && last == clock.Now(); got != tc.active {
 				t.Fatalf("protocol activity = %v, want %v", got, tc.active)
 			}
 		})
@@ -233,6 +286,12 @@ func TestPeerIdleEvictionPendingDisconnect(t *testing.T) {
 	if srv.peerJail.IsJailed(p.ID()) {
 		t.Fatal("peer already leaving was jailed")
 	}
+	if p.isLive() {
+		t.Fatal("pending disconnect still counted as a live connection")
+	}
+	if got := srv.peerPolicy.Load().Snapshot(p.ID().String()).Contribution; got.DisconnectReason != "" {
+		t.Fatal("pending disconnect attributed to idle policy")
+	}
 }
 
 func TestPeerIdleDisconnectBeforeRun(t *testing.T) {
@@ -272,17 +331,12 @@ func TestPeerActivityConcurrentEviction(t *testing.T) {
 	go func() {
 		defer close(done)
 		for range 1000 {
-			p.recordProtocolActivity()
+			p.activity.Observe(p.clock.Now(), false)
 		}
 	}()
-	for {
-		last := p.lastProtocolActivity.Load()
-		if p.lastProtocolActivity.CompareAndSwap(last, peerActivityClosing) {
-			break
-		}
-	}
+	p.activity.Close()
 	<-done
-	if p.lastProtocolActivity.Load() != peerActivityClosing {
+	if _, live := p.activity.Last(); live {
 		t.Fatal("closing session was reopened")
 	}
 }

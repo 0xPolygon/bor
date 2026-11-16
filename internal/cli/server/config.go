@@ -2103,7 +2103,7 @@ func (c *Config) buildNode(logger log.Logger) (*node.Config, error) {
 		EnablePersonal:        c.JsonRPC.EnablePersonal,
 		P2P: p2p.Config{
 			MaxPeers:             int(c.P2P.MaxPeers),
-			PeerIdleEviction:     c.P2P.PeerIdleEviction,
+			PeerIdleEviction:     c.P2P.PeerIdleEviction && c.P2P.PeerReputation,
 			MaxPendingPeers:      int(c.P2P.MaxPendPeers),
 			ListenAddr:           c.P2P.Bind + ":" + strconv.Itoa(int(c.P2P.Port)),
 			DiscoveryV4:          c.P2P.Discovery.DiscoveryV4,

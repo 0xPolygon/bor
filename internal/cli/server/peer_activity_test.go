@@ -19,7 +19,7 @@ func TestPeerIdleEvictionConfig(t *testing.T) {
 		{"disabled-config", "[p2p]\npeer-idle-eviction = false\n", nil, false},
 		{"flag-override", "[p2p]\npeer-idle-eviction = false\n", []string{"--peer-idle-eviction"}, true},
 		{"disable-configured-policy", "[p2p]\npeer-idle-eviction = true\n", []string{"--peer-idle-eviction=false"}, false},
-		{"independent-of-scoring", "", []string{"--peer-reputation=false"}, true},
+		{"reputation-disabled", "", []string{"--peer-reputation=false"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			args := tc.args

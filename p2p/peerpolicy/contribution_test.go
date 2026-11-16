@@ -21,6 +21,57 @@ func newContributionTracker() (*Tracker, *mclock.Simulated) {
 	return tracker, clock
 }
 
+func TestContributionConnectionActivity(t *testing.T) {
+	for _, tc := range []struct {
+		name, status                                              string
+		active, auxiliary, requests, accepted, protected, syncing bool
+		risk                                                      uint64
+		idle                                                      bool
+	}{
+		{name: "silent", status: "idle", risk: 20, idle: true},
+		{name: "eth-active", active: true, status: "unknown"},
+		{name: "snap-active", active: true, auxiliary: true, status: "unknown"},
+		{name: "wit-active", active: true, auxiliary: true, status: "unknown"},
+		{name: "request-only", active: true, requests: true, status: "request-only", risk: 20},
+		{name: "requests-and-witnesses", active: true, requests: true, auxiliary: true, status: "unknown"},
+		{name: "contributing", active: true, accepted: true, status: "contributing"},
+		{name: "past-contribution-now-silent", accepted: true, status: "idle", risk: 20, idle: true},
+		{name: "trusted", protected: true, status: "idle", idle: true},
+		{name: "local-sync", syncing: true, status: "unknown"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tracker, clock := newContributionTracker()
+			var connection ConnectionActivity
+			connection.Start(clock.Now())
+			tracker.BindConnection("peer", 0, &connection)
+			tracker.SetExempt("peer", tc.protected)
+			if tc.accepted {
+				tracker.Observe("peer", Evidence{Activity: ActivityEvent{AcceptedTransactions: 1}})
+			}
+			for range 3 {
+				if tc.requests {
+					tracker.Observe("peer", Evidence{Activity: ActivityEvent{ServedResponses: 1}})
+				}
+				clock.Run(time.Minute)
+			}
+			clock.Run(activityGrace - 3*time.Minute)
+			if tc.active {
+				connection.Observe(clock.Now(), tc.auxiliary)
+			}
+			if tc.syncing {
+				tracker.SetReady(false)
+			}
+			got := contributionStatus(t, tracker, tc.status)
+			if got.Risk != tc.risk || got.ProtocolIdleSeconds == nil || got.ProtocolActivityScope != "all-subprotocols" {
+				t.Fatalf("unexpected shared activity snapshot: %+v", got)
+			}
+			if _, idle := tracker.IdleSince("peer", &connection); idle != tc.idle {
+				t.Fatalf("idle eligibility = %v, want %v", idle, tc.idle)
+			}
+		})
+	}
+}
+
 func contributionStatus(t *testing.T, tracker *Tracker, want string) *ContributionSnapshot {
 	t.Helper()
 	snapshot := tracker.Snapshot("peer")
