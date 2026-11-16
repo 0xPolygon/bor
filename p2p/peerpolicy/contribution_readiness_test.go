@@ -465,6 +465,7 @@ func TestContributionConnectionKnowledge(t *testing.T) {
 
 func TestContributionSeparateIdleGrace(t *testing.T) {
 	tracker, clock := newContributionTracker()
+	tracker.SetIdleGrace(2 * time.Minute)
 	var connection ConnectionActivity
 	connection.Start(clock.Now())
 	tracker.BindConnection("peer", 0, &connection)

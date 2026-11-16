@@ -15,8 +15,8 @@ func TestPeerIdleDumpConfig(t *testing.T) {
 		grace, cooldown     string
 		removals, occupancy int
 	}{
-		{"default", nil, "2m0s", "5m0s", 1, 75},
-		{"configured", []string{"--peer-idle-grace-period=10m", "--peer-idle-max-removals=5", "--peer-idle-reconnect-cooldown=7m", "--peer-idle-occupancy-threshold=85"}, "10m0s", "7m0s", 5, 85},
+		{"default", nil, "10m0s", "5m0s", 1, 75},
+		{"configured", []string{"--peer-idle-grace-period=2m", "--peer-idle-max-removals=5", "--peer-idle-reconnect-cooldown=7m", "--peer-idle-occupancy-threshold=85"}, "2m0s", "7m0s", 5, 85},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.toml")

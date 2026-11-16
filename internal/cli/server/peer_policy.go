@@ -10,7 +10,7 @@ import (
 
 func (c *Command) peerReputationFlag(f *flagset.Flagset) {
 	f.DurationFlag(&flagset.DurationFlag{
-		Name: "peer-idle-grace-period", Usage: "Grace period before a silent peer becomes eligible for rotation",
+		Name: "peer-idle-grace-period", Usage: "Grace period before a silent peer becomes eligible for rotation (minimum 2m)",
 		Value: &c.cliConfig.P2P.PeerIdleGracePeriod, Default: c.cliConfig.P2P.PeerIdleGracePeriod, Group: "P2P",
 	})
 	f.DurationFlag(&flagset.DurationFlag{
@@ -49,8 +49,8 @@ func (c *Command) peerReputationFlag(f *flagset.Flagset) {
 }
 
 func (c *P2PConfig) applyPeerIdle(cfg *p2p.Config) error {
-	if c.PeerIdleGracePeriod < time.Second {
-		return fmt.Errorf("peer-idle-grace-period must be at least 1s")
+	if c.PeerIdleGracePeriod < 2*time.Minute {
+		return fmt.Errorf("peer-idle-grace-period must be at least 2m")
 	}
 	if c.PeerIdleMaxRemovals < 1 || c.PeerIdleMaxRemovals > p2p.MaxPeerIdleRemovals {
 		return fmt.Errorf("peer-idle-max-removals must be between 1 and %d", p2p.MaxPeerIdleRemovals)

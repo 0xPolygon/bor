@@ -90,8 +90,8 @@ func TestPeerIdleEvictionEligibility(t *testing.T) {
 		change         func(*Server, *Peer)
 		want           bool
 	}{
-		{"grace", 20, 14, 2*time.Minute - time.Nanosecond, nil, false},
-		{"idle-at-boundary", 20, 14, 2 * time.Minute, nil, true},
+		{"grace", 20, 14, 10*time.Minute - time.Nanosecond, nil, false},
+		{"idle-at-boundary", 20, 14, 10 * time.Minute, nil, true},
 		{"spare-slots", 8, 4, peerIdleTimeout, nil, false},
 		{"inbound-full", 13, 13, peerIdleTimeout, nil, true},
 		{"outbound-full", 6, 0, peerIdleTimeout, nil, true},
@@ -349,14 +349,19 @@ func TestPeerIdleSparseTraffic(t *testing.T) {
 	peer := peers[uintID(20)]
 	peer.rw.set(trustedConn, false)
 	for interval := range 20 {
-		clock.Run(90 * time.Second)
+		clock.Run(3 * time.Minute)
 		srv.expireIdlePeer(peers)
 		if len(peer.disc) != 0 || srv.peerJail.IsJailed(peer.ID()) {
 			t.Fatalf("active peer retired at interval %d", interval+1)
 		}
 		peer.activity.Observe(clock.Now(), false)
 	}
-	clock.Run(2 * time.Minute)
+	clock.Run(10*time.Minute - time.Nanosecond)
+	srv.expireIdlePeer(peers)
+	if len(peer.disc) != 0 || srv.peerJail.IsJailed(peer.ID()) {
+		t.Fatal("peer retired before the renewed grace expired")
+	}
+	clock.Run(time.Nanosecond)
 	srv.expireIdlePeer(peers)
 	if len(peer.disc) != 1 {
 		t.Fatal("peer was not eligible after becoming silent")

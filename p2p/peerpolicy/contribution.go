@@ -18,7 +18,7 @@ const (
 	activityGrace = 10 * time.Minute
 )
 
-const IdleTimeout = 2 * time.Minute
+const IdleTimeout = 10 * time.Minute
 
 type ConnectionActivity struct {
 	last             atomic.Int64

@@ -70,17 +70,20 @@ func waitActivityPeers(t *testing.T, srv *Server, want int) {
 
 func advanceActivityClock(t *testing.T, srv *Server, clock *mclock.Simulated, elapsed time.Duration) {
 	t.Helper()
-	deadline := time.Now().Add(time.Second)
-	// This fixture disables discovery and dialing, leaving only the policy timer.
-	for clock.ActiveTimers() != 1 {
-		if time.Now().After(deadline) {
-			t.Fatal("policy timer was not rearmed")
+	waitForTimer := func() {
+		deadline := time.Now().Add(time.Second)
+		// This fixture disables discovery and dialing, leaving only the policy timer.
+		for clock.ActiveTimers() != 1 {
+			if time.Now().After(deadline) {
+				t.Fatal("policy timer was not rearmed")
+			}
+			time.Sleep(time.Millisecond)
 		}
-		time.Sleep(time.Millisecond)
+		srv.doPeerOp(func(map[enode.ID]*Peer) {})
 	}
-	// Finish the previous timer callback before advancing simulated time.
-	srv.doPeerOp(func(map[enode.ID]*Peer) {})
+	waitForTimer()
 	clock.Run(elapsed)
+	waitForTimer()
 }
 
 func TestPeerIdleEvictionRLPX(t *testing.T) {

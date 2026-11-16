@@ -26,8 +26,8 @@ func TestContributionConfiguredIdleGrace(t *testing.T) {
 		name                 string
 		configured, boundary time.Duration
 	}{
-		{"default", 0, 2 * time.Minute},
-		{"negative-native-default", -time.Second, 2 * time.Minute},
+		{"default", 0, 10 * time.Minute},
+		{"negative-native-default", -time.Second, 10 * time.Minute},
 		{"fractional", 1500 * time.Millisecond, 2 * time.Second},
 		{"subsecond-native", time.Nanosecond, time.Second},
 	} {

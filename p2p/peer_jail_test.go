@@ -184,7 +184,7 @@ func TestPeerIdleOperatorOverride(t *testing.T) {
 			t.Cleanup(srv.Stop)
 			peer := peers[uintID(1)]
 			peer.rw.set(trustedConn, false)
-			clock.Run(2 * time.Minute)
+			clock.Run(peerIdleTimeout)
 			srv.doPeerOp(func(map[enode.ID]*Peer) { srv.expireIdlePeer(peers) })
 			if !srv.peerJail.IsJailed(peer.ID()) {
 				t.Fatal("silent peer was not placed in cooldown")
