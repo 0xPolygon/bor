@@ -101,7 +101,7 @@ func TestPeerIdleConfiguredRLPX(t *testing.T) {
 	srv := &Server{Config: Config{
 		PrivateKey: newkey(), MaxPeers: 9, NoDial: true, NoDiscovery: true,
 		ListenAddr: "127.0.0.1:0", PeerIdleEviction: true, clock: clock,
-		PeerIdleGracePeriod: 3 * time.Minute, PeerIdleMaxRemovals: 2,
+		PeerIdleGracePeriod: 3 * time.Minute, PeerIdleMaxRemovals: 2, PeerIdleOccupancyThreshold: 80,
 		Protocols: []Protocol{activityProtocol(68, make(chan enode.ID, 1), policy), activityProtocol(69, make(chan enode.ID, 1), policy)},
 	}}
 	srv.SetPeerPolicy(policy)
@@ -121,10 +121,10 @@ func TestPeerIdleConfiguredRLPX(t *testing.T) {
 	advanceActivityClock(t, srv, clock, time.Minute)
 	waitActivityPeers(t, srv, 7)
 	advanceActivityClock(t, srv, clock, time.Minute)
-	waitActivityPeers(t, srv, 6)
+	waitActivityPeers(t, srv, 7)
 	advanceActivityClock(t, srv, clock, time.Hour)
 	srv.doPeerOp(func(map[enode.ID]*Peer) {})
-	waitActivityPeers(t, srv, 6)
+	waitActivityPeers(t, srv, 7)
 }
 
 func TestPeerIdleStartupGrace(t *testing.T) {

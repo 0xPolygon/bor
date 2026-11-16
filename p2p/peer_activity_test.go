@@ -256,13 +256,13 @@ func TestPeerIdlePressureBoundaries(t *testing.T) {
 		count, limit int
 		want         bool
 	}{{15, 20, true}, {14, 20, false}, {8, 10, true}, {7, 10, false}, {1, 0, false}, {1, -1, false}} {
-		if got := peerSlotsScarce(tc.count, tc.limit); got != tc.want {
+		if got := peerSlotsScarce(tc.count, tc.limit, 75); got != tc.want {
 			t.Fatalf("pressure(%d, %d) = %v", tc.count, tc.limit, got)
 		}
 	}
 	for limit := 1; limit < 10; limit++ {
 		threshold := (3*limit + 3) / 4
-		if peerSlotsScarce(threshold-1, limit) || !peerSlotsScarce(threshold, limit) {
+		if peerSlotsScarce(threshold-1, limit, 75) || !peerSlotsScarce(threshold, limit, 75) {
 			t.Fatalf("incorrect rounding of 75%% for limit %d", limit)
 		}
 	}
@@ -432,7 +432,7 @@ func TestPeerIdleConfiguredGrace(t *testing.T) {
 }
 
 func TestPeerIdleConfigRoundTrip(t *testing.T) {
-	original := Config{PeerIdleEviction: true, PeerIdleGracePeriod: 3 * time.Minute, PeerIdleMaxRemovals: 5, PeerIdleReconnectCooldown: 7 * time.Minute}
+	original := Config{PeerIdleEviction: true, PeerIdleGracePeriod: 3 * time.Minute, PeerIdleMaxRemovals: 5, PeerIdleReconnectCooldown: 7 * time.Minute, PeerIdleOccupancyThreshold: 85}
 	encoded, err := toml.Marshal(struct{ P2P Config }{original})
 	if err != nil {
 		t.Fatal(err)
@@ -441,7 +441,7 @@ func TestPeerIdleConfigRoundTrip(t *testing.T) {
 	if err := toml.Unmarshal(encoded, &restored); err != nil {
 		t.Fatal(err)
 	}
-	if restored.P2P.PeerIdleGracePeriod != original.PeerIdleGracePeriod || restored.P2P.PeerIdleMaxRemovals != original.PeerIdleMaxRemovals || restored.P2P.PeerIdleReconnectCooldown != original.PeerIdleReconnectCooldown {
+	if restored.P2P.PeerIdleGracePeriod != original.PeerIdleGracePeriod || restored.P2P.PeerIdleMaxRemovals != original.PeerIdleMaxRemovals || restored.P2P.PeerIdleReconnectCooldown != original.PeerIdleReconnectCooldown || restored.P2P.PeerIdleOccupancyThreshold != original.PeerIdleOccupancyThreshold {
 		t.Fatal("native TOML lost idle policy settings")
 	}
 }

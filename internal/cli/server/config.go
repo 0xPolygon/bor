@@ -259,6 +259,7 @@ type P2PConfig struct {
 	PeerIdleMaxRemovals          int           `hcl:"peer-idle-max-removals,optional" toml:"peer-idle-max-removals,optional"`
 	PeerIdleReconnectCooldown    time.Duration `hcl:"-,optional" toml:"-"`
 	PeerIdleReconnectCooldownRaw string        `hcl:"peer-idle-reconnect-cooldown,optional" toml:"peer-idle-reconnect-cooldown,optional"`
+	PeerIdleOccupancyThreshold   int           `hcl:"peer-idle-occupancy-threshold,optional" toml:"peer-idle-occupancy-threshold,optional"`
 	// MaxPeers sets the maximum number of connected peers
 	MaxPeers uint64 `hcl:"maxpeers,optional" toml:"maxpeers,optional"`
 
@@ -990,7 +991,8 @@ func DefaultConfig() *Config {
 				TrustedNodes: []string{},
 				DNS:          []string{},
 			},
-			PeerIdleReconnectCooldown: p2p.DefaultPeerIdleReconnectCooldown,
+			PeerIdleReconnectCooldown:  p2p.DefaultPeerIdleReconnectCooldown,
+			PeerIdleOccupancyThreshold: p2p.DefaultPeerIdleOccupancyThreshold,
 		},
 		Heimdall: &HeimdallConfig{
 			URL:         "http://localhost:1317",
@@ -1315,7 +1317,7 @@ func readConfigFile(path string) (*Config, error) {
 	}
 
 	config := &Config{
-		P2P:    &P2PConfig{PeerReputation: true, PeerIdleEviction: true, PeerIdleGracePeriod: peerpolicy.IdleTimeout, PeerIdleMaxRemovals: 1, PeerIdleReconnectCooldown: p2p.DefaultPeerIdleReconnectCooldown},
+		P2P:    &P2PConfig{PeerReputation: true, PeerIdleEviction: true, PeerIdleGracePeriod: peerpolicy.IdleTimeout, PeerIdleMaxRemovals: 1, PeerIdleReconnectCooldown: p2p.DefaultPeerIdleReconnectCooldown, PeerIdleOccupancyThreshold: p2p.DefaultPeerIdleOccupancyThreshold},
 		Cache:  &CacheConfig{},
 		Sealer: &SealerConfig{},
 		// HCL configs don't start from DefaultConfig, so an omitted

@@ -18,6 +18,10 @@ func (c *Command) peerReputationFlag(f *flagset.Flagset) {
 		Value: &c.cliConfig.P2P.PeerIdleReconnectCooldown, Default: c.cliConfig.P2P.PeerIdleReconnectCooldown, Group: "P2P",
 	})
 	f.IntFlag(&flagset.IntFlag{
+		Name: "peer-idle-occupancy-threshold", Usage: "Peer slot occupancy percentage required for silent-peer rotation (1-100)",
+		Value: &c.cliConfig.P2P.PeerIdleOccupancyThreshold, Default: c.cliConfig.P2P.PeerIdleOccupancyThreshold, Group: "P2P",
+	})
+	f.IntFlag(&flagset.IntFlag{
 		Name: "peer-idle-max-removals", Usage: "Maximum idle peers removed per one-minute check (1-64)",
 		Value: &c.cliConfig.P2P.PeerIdleMaxRemovals, Default: c.cliConfig.P2P.PeerIdleMaxRemovals, Group: "P2P",
 	})
@@ -54,6 +58,10 @@ func (c *P2PConfig) applyPeerIdle(cfg *p2p.Config) error {
 	if c.PeerIdleReconnectCooldown < time.Second || c.PeerIdleReconnectCooldown > p2p.MaxPeerIdleReconnectCooldown {
 		return fmt.Errorf("peer-idle-reconnect-cooldown must be between 1s and %s", p2p.MaxPeerIdleReconnectCooldown)
 	}
+	if c.PeerIdleOccupancyThreshold < 1 || c.PeerIdleOccupancyThreshold > 100 {
+		return fmt.Errorf("peer-idle-occupancy-threshold must be between 1 and 100")
+	}
+	cfg.PeerIdleOccupancyThreshold = c.PeerIdleOccupancyThreshold
 	cfg.PeerIdleReconnectCooldown = c.PeerIdleReconnectCooldown
 	cfg.PeerIdleGracePeriod = c.PeerIdleGracePeriod
 	cfg.PeerIdleMaxRemovals = c.PeerIdleMaxRemovals

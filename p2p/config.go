@@ -32,8 +32,9 @@ import (
 //go:generate go run github.com/fjl/gencodec -type Config -field-override configMarshaling -formats toml -out config_toml.go
 
 const (
-	DefaultPeerIdleReconnectCooldown = 5 * time.Minute
-	MaxPeerIdleReconnectCooldown     = 24 * time.Hour
+	DefaultPeerIdleOccupancyThreshold = 75
+	DefaultPeerIdleReconnectCooldown  = 5 * time.Minute
+	MaxPeerIdleReconnectCooldown      = 24 * time.Hour
 )
 
 // Config holds Server options.
@@ -44,10 +45,11 @@ type Config struct {
 	// MaxPeers is the maximum number of peers that can be connected.
 	MaxPeers int
 
-	PeerIdleEviction          bool
-	PeerIdleGracePeriod       time.Duration
-	PeerIdleMaxRemovals       int
-	PeerIdleReconnectCooldown time.Duration
+	PeerIdleEviction           bool
+	PeerIdleGracePeriod        time.Duration
+	PeerIdleMaxRemovals        int
+	PeerIdleReconnectCooldown  time.Duration
+	PeerIdleOccupancyThreshold int
 
 	// MaxPendingPeers is the maximum number of peers that can be pending in the
 	// handshake phase, counted separately for inbound and outbound connections.
@@ -200,7 +202,30 @@ func (srv *Server) peerLimits() (total, dialed int) {
 	return total, max(1, total/ratio)
 }
 
-func (c Config) peerIdleCooldown() time.Duration {
+func peerSlotsScarce(count, limit, percent int) bool {
+	if limit <= 0 {
+		return false
+	}
+	// Split before multiplying to avoid overflowing large peer limits.
+	threshold := limit/100*percent + (limit%100*percent+99)/100
+	return count >= threshold
+}
+
+func (srv *Server) peerPressure(count, inbound int) (bool, bool) {
+	percent := srv.PeerIdleOccupancyThreshold
+	if percent <= 0 {
+		percent = DefaultPeerIdleOccupancyThreshold
+	}
+	percent = min(percent, 100)
+	total, dialed := srv.peerLimits()
+	inboundFull := peerSlotsScarce(count, total, percent) || peerSlotsScarce(inbound, total-dialed, percent)
+	if srv.dialsched != nil {
+		dialed = min(dialed, srv.dialsched.maxDialPeers)
+	}
+	return inboundFull, peerSlotsScarce(count, total, percent) || peerSlotsScarce(count-inbound, dialed, percent)
+}
+
+func (c *Config) peerIdleCooldown() time.Duration {
 	if c.PeerIdleReconnectCooldown <= 0 {
 		return DefaultPeerIdleReconnectCooldown
 	}

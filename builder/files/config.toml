@@ -36,6 +36,7 @@ syncmode = "full"
 
 [p2p]
   peer-idle-eviction = true
+  peer-idle-occupancy-threshold = 75
   peer-idle-grace-period = "2m"
   peer-idle-max-removals = 1
   peer-idle-reconnect-cooldown = "5m"

@@ -778,19 +778,6 @@ func (srv *Server) setupDialScheduler() {
 	}
 }
 
-func peerSlotsScarce(count, limit int) bool {
-	return limit > 0 && count >= limit-limit/4
-}
-
-func (srv *Server) peerPressure(count, inbound int) (bool, bool) {
-	total, dialed := srv.peerLimits()
-	inboundFull := peerSlotsScarce(count, total) || peerSlotsScarce(inbound, total-dialed)
-	if srv.dialsched != nil {
-		dialed = min(dialed, srv.dialsched.maxDialPeers)
-	}
-	return inboundFull, peerSlotsScarce(count, total) || peerSlotsScarce(count-inbound, dialed)
-}
-
 func (srv *Server) setupListening() error {
 	// Launch the listener.
 	listener, err := srv.listenFunc("tcp", srv.ListenAddr)

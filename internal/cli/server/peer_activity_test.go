@@ -51,16 +51,16 @@ func TestPeerIdleEvictionConfig(t *testing.T) {
 
 func TestPeerIdlePolicySettings(t *testing.T) {
 	for _, tc := range []struct {
-		name, config    string
-		args            []string
-		grace, cooldown time.Duration
-		removals        int
+		name, config        string
+		args                []string
+		grace, cooldown     time.Duration
+		removals, occupancy int
 	}{
-		{"defaults", "", nil, 2 * time.Minute, 5 * time.Minute, 1},
-		{"flags", "", []string{"--peer-idle-grace-period=45s", "--peer-idle-max-removals=5", "--peer-idle-reconnect-cooldown=90s"}, 45 * time.Second, 90 * time.Second, 5},
-		{"limits", "", []string{"--peer-idle-grace-period=1s", "--peer-idle-max-removals=64", "--peer-idle-reconnect-cooldown=1s"}, time.Second, time.Second, 64},
-		{"config", "[p2p]\npeer-idle-grace-period = '3m'\npeer-idle-max-removals = 7\npeer-idle-reconnect-cooldown = '7m'\n", nil, 3 * time.Minute, 7 * time.Minute, 7},
-		{"override", "[p2p]\npeer-idle-grace-period = '3m'\npeer-idle-max-removals = 7\npeer-idle-reconnect-cooldown = '7m'\n", []string{"--peer-idle-grace-period=90s", "--peer-idle-max-removals=2", "--peer-idle-reconnect-cooldown=24h"}, 90 * time.Second, 24 * time.Hour, 2},
+		{"defaults", "", nil, 2 * time.Minute, 5 * time.Minute, 1, 75},
+		{"flags", "", []string{"--peer-idle-grace-period=45s", "--peer-idle-max-removals=5", "--peer-idle-reconnect-cooldown=90s", "--peer-idle-occupancy-threshold=80"}, 45 * time.Second, 90 * time.Second, 5, 80},
+		{"limits", "", []string{"--peer-idle-grace-period=1s", "--peer-idle-max-removals=64", "--peer-idle-reconnect-cooldown=1s", "--peer-idle-occupancy-threshold=1"}, time.Second, time.Second, 64, 1},
+		{"config", "[p2p]\npeer-idle-grace-period = '3m'\npeer-idle-max-removals = 7\npeer-idle-reconnect-cooldown = '7m'\npeer-idle-occupancy-threshold = 85\n", nil, 3 * time.Minute, 7 * time.Minute, 7, 85},
+		{"override", "[p2p]\npeer-idle-grace-period = '3m'\npeer-idle-max-removals = 7\npeer-idle-reconnect-cooldown = '7m'\npeer-idle-occupancy-threshold = 85\n", []string{"--peer-idle-grace-period=90s", "--peer-idle-max-removals=2", "--peer-idle-reconnect-cooldown=24h", "--peer-idle-occupancy-threshold=100"}, 90 * time.Second, 24 * time.Hour, 2, 100},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			args := tc.args
@@ -79,8 +79,8 @@ func TestPeerIdlePolicySettings(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if node.P2P.PeerIdleGracePeriod != tc.grace || node.P2P.PeerIdleMaxRemovals != tc.removals || node.P2P.PeerIdleReconnectCooldown != tc.cooldown {
-				t.Fatalf("grace=%v removals=%d cooldown=%v", node.P2P.PeerIdleGracePeriod, node.P2P.PeerIdleMaxRemovals, node.P2P.PeerIdleReconnectCooldown)
+			if node.P2P.PeerIdleGracePeriod != tc.grace || node.P2P.PeerIdleMaxRemovals != tc.removals || node.P2P.PeerIdleReconnectCooldown != tc.cooldown || node.P2P.PeerIdleOccupancyThreshold != tc.occupancy {
+				t.Fatalf("grace=%v removals=%d cooldown=%v occupancy=%d", node.P2P.PeerIdleGracePeriod, node.P2P.PeerIdleMaxRemovals, node.P2P.PeerIdleReconnectCooldown, node.P2P.PeerIdleOccupancyThreshold)
 			}
 		})
 	}
@@ -118,14 +118,14 @@ func TestPeerIdleEvictionHCL(t *testing.T) {
 		if config.P2P.PeerIdleEviction != tc.want {
 			t.Fatalf("PeerIdleEviction = %v, want %v", config.P2P.PeerIdleEviction, tc.want)
 		}
-		if config.P2P.PeerIdleGracePeriod != 2*time.Minute || config.P2P.PeerIdleMaxRemovals != 1 || config.P2P.PeerIdleReconnectCooldown != 5*time.Minute {
+		if config.P2P.PeerIdleGracePeriod != 2*time.Minute || config.P2P.PeerIdleMaxRemovals != 1 || config.P2P.PeerIdleReconnectCooldown != 5*time.Minute || config.P2P.PeerIdleOccupancyThreshold != 75 {
 			t.Fatal("HCL omitted fields lost idle policy defaults")
 		}
 	}
 }
 
 func TestPeerIdleSettingsHCL(t *testing.T) {
-	config := "gpo {}\nminer {}\njsonrpc {\nhttp {}\nws {}\ntimeouts {}\n}\np2p {\npeer-idle-grace-period = \"3m\"\npeer-idle-max-removals = 5\npeer-idle-reconnect-cooldown = \"7m\"\n}\n"
+	config := "gpo {}\nminer {}\njsonrpc {\nhttp {}\nws {}\ntimeouts {}\n}\np2p {\npeer-idle-grace-period = \"3m\"\npeer-idle-max-removals = 5\npeer-idle-reconnect-cooldown = \"7m\"\npeer-idle-occupancy-threshold = 85\n}\n"
 	path := filepath.Join(t.TempDir(), "config.hcl")
 	if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
 		t.Fatal(err)
@@ -134,7 +134,7 @@ func TestPeerIdleSettingsHCL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.P2P.PeerIdleGracePeriod != 3*time.Minute || got.P2P.PeerIdleMaxRemovals != 5 || got.P2P.PeerIdleReconnectCooldown != 7*time.Minute {
+	if got.P2P.PeerIdleGracePeriod != 3*time.Minute || got.P2P.PeerIdleMaxRemovals != 5 || got.P2P.PeerIdleReconnectCooldown != 7*time.Minute || got.P2P.PeerIdleOccupancyThreshold != 85 {
 		t.Fatal("HCL idle policy settings were not decoded")
 	}
 }
@@ -149,6 +149,21 @@ func TestPeerIdleCooldownValidation(t *testing.T) {
 			}
 			if err == nil {
 				t.Fatal("invalid cooldown was accepted")
+			}
+		})
+	}
+}
+
+func TestPeerIdleOccupancyValidation(t *testing.T) {
+	for _, value := range []string{"0", "-1", "101", "75.5", "invalid"} {
+		t.Run(value, func(t *testing.T) {
+			cmd := &Command{UI: &cli.BasicUi{Writer: io.Discard, ErrorWriter: io.Discard}}
+			err := cmd.extractFlags([]string{"--peer-idle-occupancy-threshold=" + value})
+			if err == nil {
+				_, err = cmd.cliConfig.buildNode(log.Root())
+			}
+			if err == nil {
+				t.Fatal("invalid occupancy threshold was accepted")
 			}
 		})
 	}
