@@ -34,6 +34,7 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/enr"
 	"github.com/ethereum/go-ethereum/p2p/netutil"
+	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
 )
 
 const (
@@ -710,4 +711,23 @@ func nodeEndpointForLog(n *enode.Node) string {
 		return n.Hostname()
 	}
 	return n.IPAddr().String()
+}
+
+func (srv *Server) idlePeer(peers map[enode.ID]*Peer, count, inbound int, policy *peerpolicy.Tracker) (*Peer, mclock.AbsTime) {
+	var candidate *Peer
+	var oldest mclock.AbsTime
+	inboundFull, outboundFull := srv.peerPressure(count, inbound)
+	for _, peer := range peers {
+		if !peer.isLive() || peer.Trusted() || peer.Static() {
+			continue
+		}
+		last, idle := policy.IdleSince(peer.ID().String(), peer.activity)
+		if !idle || (peer.Inbound() && !inboundFull) || (!peer.Inbound() && !outboundFull) {
+			continue
+		}
+		if candidate == nil || last < oldest {
+			candidate, oldest = peer, last
+		}
+	}
+	return candidate, oldest
 }

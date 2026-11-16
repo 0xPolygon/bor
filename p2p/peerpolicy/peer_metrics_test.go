@@ -190,6 +190,28 @@ func TestPeerPolicyExportsConnectedZeroRisk(t *testing.T) {
 	require.Contains(t, gauge(t, registry, "peer_risk"), "quiet", "a connected zero must persist")
 }
 
+func TestPeerPolicyExportsSharedActivity(t *testing.T) {
+	clock := new(mclock.Simulated)
+	tracker, registry := exportTestTracker(t, clock)
+	tracker.SetReady(true)
+	var connection ConnectionActivity
+	connection.Start(clock.Now())
+	tracker.BindConnection("peer", tracker.Connected("peer"), &connection)
+	clock.Run(activityGrace)
+	require.Equal(t, int64(20), gauge(t, registry, "peer_risk")["peer"])
+	require.Equal(t, int64(20), gauge(t, registry, "connected_risk_sum")["ordinary"])
+	require.Equal(t, int64(1), gauge(t, registry, "connected_contribution_status")["idle"])
+	connection.Observe(clock.Now(), true)
+	require.Zero(t, gauge(t, registry, "peer_risk")["peer"])
+	require.Zero(t, gauge(t, registry, "connected_risk_sum")["ordinary"])
+	require.Zero(t, gauge(t, registry, "connected_contribution_status")["idle"])
+	clock.Run(activityGrace)
+	require.Equal(t, int64(20), gauge(t, registry, "peer_risk")["peer"])
+	tracker.SetReady(false)
+	require.Zero(t, gauge(t, registry, "peer_risk")["peer"])
+	require.Equal(t, int64(1), gauge(t, registry, "connected_contribution_status")["unknown"])
+}
+
 func TestPeerPolicyExportSkipsDiagnosticRecords(t *testing.T) {
 	tracker, registry := exportTestTracker(t, new(mclock.Simulated))
 	tracker.Observe("diagnostic-only", Evidence{Reason: FetcherDrop})
