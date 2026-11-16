@@ -30,6 +30,9 @@ func (h *handler) initPeerPolicy(enabled, perPeerMetrics bool) {
 	}
 	h.peerPolicy = peerpolicy.New(mclock.System{})
 	h.peerPolicy.SetClassResolver(h.peerPolicyClass)
+	if h.p2pServer != nil {
+		h.p2pServer.SetPeerPolicy(h.peerPolicy)
+	}
 	if metrics.Enabled() {
 		if err := h.peerPolicy.RegisterPeerMetrics(metrics.DefaultRegistry, perPeerMetrics); err != nil {
 			log.Error("Failed to register peer reputation gauges", "err", err)
@@ -65,6 +68,7 @@ func (h *handler) observeProtocolPeer(peer *eth.Peer) {
 		return
 	}
 	startedAt := h.peerPolicy.Connected(peer.ID())
+	h.peerPolicy.BindConnection(peer.ID(), startedAt, peer.ConnectionActivity())
 	h.peerPolicy.SetExempt(peer.ID(), peer.Trusted() || peer.Static())
 	peer.SetObserver(func(e peerpolicy.Evidence) {
 		if !h.peerPolicy.ObserveSession(peer.ID(), peer.Trusted() || peer.Static(), startedAt, e) {
@@ -75,6 +79,7 @@ func (h *handler) observeProtocolPeer(peer *eth.Peer) {
 				current := h.peers.peer(peer.ID())
 				return current != nil && current.Peer == peer
 			})
+			h.peerPolicy.BindConnection(peer.ID(), startedAt, peer.ConnectionActivity())
 			e.Activity.StartedAt = startedAt
 			h.observePeerEvidence(peer.ID(), e)
 		}

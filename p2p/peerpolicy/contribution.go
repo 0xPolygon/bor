@@ -6,17 +6,53 @@ package peerpolicy
 
 import (
 	"math"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common/mclock"
 )
 
-// These are provisional observation profiles, not serving or eviction limits.
 const (
 	activityWidth = time.Minute
 	activityCount = 30
 	activityGrace = 10 * time.Minute
 )
+
+const IdleTimeout = 10 * time.Minute
+
+type ConnectionActivity struct {
+	last             atomic.Int64
+	auxiliary        atomic.Int64
+	started          atomic.Bool
+	idleDisconnected atomic.Bool
+}
+
+func (a *ConnectionActivity) Start(now mclock.AbsTime) {
+	a.last.Store(int64(now))
+	a.auxiliary.Store(-1)
+	a.started.Store(true)
+}
+
+func (a *ConnectionActivity) Observe(now mclock.AbsTime, auxiliary bool) {
+	last := a.last.Load()
+	if last >= 0 && a.last.CompareAndSwap(last, int64(now)) && auxiliary {
+		a.auxiliary.Store(int64(now))
+	}
+}
+
+func (a *ConnectionActivity) Last() (mclock.AbsTime, bool) {
+	if !a.started.Load() {
+		return 0, false
+	}
+	last := a.last.Load()
+	return mclock.AbsTime(last), last >= 0
+}
+
+func (a *ConnectionActivity) Closing() bool { return a.last.Load() < 0 }
+
+func (a *ConnectionActivity) Close() { a.last.Store(-1) }
+
+func (a *ConnectionActivity) MarkIdleDisconnect() { a.idleDisconnected.Store(true) }
 
 type ActivityEvent struct {
 	ReceivedMessages     uint64         `json:"receivedMessages"`
@@ -45,7 +81,12 @@ type ContributionSnapshot struct {
 	ObservedSeconds            uint64  `json:"observedSeconds"`
 	WindowSeconds              uint64  `json:"windowSeconds"`
 	GraceSeconds               uint64  `json:"graceSeconds"`
+	IdleGraceSeconds           uint64  `json:"idleGraceSeconds,omitempty"`
 	LastContributionAgeSeconds *uint64 `json:"lastContributionAgeSeconds,omitempty"`
+	ProtocolIdleSeconds        *uint64 `json:"protocolIdleSeconds,omitempty"`
+	ProtocolActivityScope      string  `json:"protocolActivityScope,omitempty"`
+	DisconnectReason           string  `json:"disconnectReason,omitempty"`
+	auxiliaryActive            bool
 }
 
 type activityBucket struct {
@@ -64,6 +105,59 @@ type activityRecord struct {
 	acceptAfter     mclock.AbsTime
 	lastUseful      mclock.AbsTime
 	hasContribution bool
+	connection      *ConnectionActivity
+}
+
+func (t *Tracker) SetIdleGrace(grace time.Duration) {
+	if grace <= 0 {
+		grace = IdleTimeout
+	}
+	seconds := uint64(grace / time.Second)
+	if grace%time.Second != 0 {
+		seconds++
+	}
+	t.mu.Lock()
+	t.idleGraceSeconds = seconds
+	t.mu.Unlock()
+}
+
+func (t *Tracker) BindConnection(id string, startedAt mclock.AbsTime, connection *ConnectionActivity) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if p, ok := t.peers.Peek(id); ok && p.activity.registered && p.activity.connectedAt == startedAt {
+		p.activity.connection = connection
+	}
+}
+
+func (t *Tracker) IdleSince(id string, connection *ConnectionActivity) (mclock.AbsTime, bool) {
+	if !t.mu.TryLock() {
+		return 0, false
+	}
+	defer t.mu.Unlock()
+	return t.idleSince(id, connection)
+}
+
+func (t *Tracker) idleSince(id string, connection *ConnectionActivity) (mclock.AbsTime, bool) {
+	p, ok := t.peers.Peek(id)
+	if !ok || connection == nil || p.activity.connection != connection {
+		return 0, false
+	}
+	now := t.clock.Now()
+	t.prepareActivity(&p.activity, now)
+	last, live := connection.Last()
+	contribution := p.activity.snapshot(now, t.ready, p.exempt, t.idleGraceSeconds)
+	return last, live && contribution.Status == "idle"
+}
+
+// The server checks current connection flags. Never wait for observation or
+// invoke its class resolver from the server's connection-management loop.
+func (t *Tracker) RetireIdle(id string, connection *ConnectionActivity, last mclock.AbsTime) bool {
+	if !t.mu.TryLock() {
+		return false
+	}
+	defer t.mu.Unlock()
+	current, idle := t.idleSince(id, connection)
+	return idle && current == last && connection.last.CompareAndSwap(int64(last), -1)
 }
 
 // Connected begins a fresh connection observation without erasing misconduct.
@@ -144,7 +238,7 @@ func contributionSnapshot() *ContributionSnapshot {
 		WindowSeconds: uint64(activityCount * activityWidth / time.Second), GraceSeconds: uint64(activityGrace / time.Second)}
 }
 
-func (a *activityRecord) snapshot(now mclock.AbsTime, ready, protected bool) *ContributionSnapshot {
+func (a *activityRecord) snapshot(now mclock.AbsTime, ready, protected bool, idleGraceSeconds uint64) *ContributionSnapshot {
 	result := contributionSnapshot()
 	result.Protected = protected
 	result.ConnectionKnown = a.registered
@@ -168,24 +262,47 @@ func (a *activityRecord) snapshot(now mclock.AbsTime, ready, protected bool) *Co
 		age := uint64(max(now-a.lastUseful, 0) / mclock.AbsTime(time.Second))
 		result.LastContributionAgeSeconds = &age
 	}
+	ready = a.connectionSnapshot(now, ready, result, idleGraceSeconds)
 	result.classify(a.registered && ready)
 	result.score()
 	return result
+}
+
+func (a *activityRecord) connectionSnapshot(now mclock.AbsTime, ready bool, result *ContributionSnapshot, idleGraceSeconds uint64) bool {
+	if a.connection == nil {
+		return ready
+	}
+	result.ProtocolActivityScope = "all-subprotocols"
+	result.IdleGraceSeconds = idleGraceSeconds
+	if a.connection.idleDisconnected.Load() {
+		result.DisconnectReason = "idle"
+	}
+	last, live := a.connection.Last()
+	if !live {
+		return false
+	}
+	age := uint64(max(now-last, 0) / mclock.AbsTime(time.Second))
+	result.ProtocolIdleSeconds = &age
+	auxiliary := a.connection.auxiliary.Load()
+	result.auxiliaryActive = auxiliary >= 0 && now.Sub(mclock.AbsTime(auxiliary)) < activityCount*activityWidth
+	return ready
 }
 
 func (s *ContributionSnapshot) classify(ready bool) {
 	switch {
 	case !ready:
 		s.Status = "unknown"
+	case s.ProtocolIdleSeconds != nil && s.ObservedSeconds >= s.IdleGraceSeconds && *s.ProtocolIdleSeconds >= s.IdleGraceSeconds:
+		s.Status = "idle"
 	case s.ObservedSeconds < s.GraceSeconds:
 		s.Status = "warming-up"
 	case s.AcceptedTransactions > 0:
 		s.Status = "contributing"
-	case s.UnclassifiedMessages > 0:
+	case s.UnclassifiedMessages > 0 || s.auxiliaryActive:
 		s.Status = "unknown"
 	case s.ServedMinutes >= 3:
 		s.Status = "request-only"
-	case s.ActivityEvent == (ActivityEvent{}):
+	case s.ActivityEvent == (ActivityEvent{}) && s.ProtocolIdleSeconds == nil:
 		s.Status = "idle"
 	default:
 		s.Status = "unknown"

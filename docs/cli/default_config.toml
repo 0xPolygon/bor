@@ -33,6 +33,11 @@ devfakeauthor = false
   enable-block-tracking = false
 
 [p2p]
+  peer-idle-eviction = true
+  peer-idle-occupancy-threshold = 75
+  peer-idle-grace-period = "10m"
+  peer-idle-max-removals = 1
+  peer-idle-reconnect-cooldown = "5m"
   maxpeers = 50
   maxpendpeers = 50
   bind = "0.0.0.0"

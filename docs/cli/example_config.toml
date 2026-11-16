@@ -42,6 +42,11 @@ bp-rpc-endpoints = [ ] # Comma separated rpc endpoints of all block producers
   enable-block-tracking = false              # Enables additional logging of information collected while tracking block lifecycle
 
 [p2p]
+  peer-idle-eviction = true
+  peer-idle-occupancy-threshold = 75
+  peer-idle-grace-period = "10m"
+  peer-idle-max-removals = 1
+  peer-idle-reconnect-cooldown = "5m"
   maxpeers = 50                  # Maximum number of network peers (network disabled if set to 0)
   maxpendpeers = 50              # Maximum number of pending connection attempts
   bind = "0.0.0.0"               # Network binding address

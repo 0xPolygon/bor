@@ -78,7 +78,7 @@ func (api *adminAPI) GetMaxPeers() (int, error) {
 		return 0, ErrNodeStopped
 	}
 
-	return server.MaxPeers, nil
+	return server.GetMaxPeers(), nil
 }
 
 // AddPeer requests connecting to a remote node, and also maintaining the new
