@@ -123,103 +123,6 @@ type Server struct {
 
 type peerOpFunc func(map[enode.ID]*Peer)
 
-const (
-	maxPeerJailEntries = 4096
-	noPeerJailExpiry   = mclock.AbsTime(1<<63 - 1)
-)
-
-// peerJail tracks temporarily banned peers to prevent connections
-type peerJail struct {
-	mu         sync.RWMutex
-	jailed     map[enode.ID]mclock.AbsTime // peer ID -> unban time
-	jailPeriod time.Duration               // default jail period
-	clock      mclock.Clock
-}
-
-// newPeerJail creates a new peer jail with the given jail period
-func newPeerJail(jailPeriod time.Duration, clock mclock.Clock) *peerJail {
-	return &peerJail{
-		jailed:     make(map[enode.ID]mclock.AbsTime),
-		jailPeriod: jailPeriod,
-		clock:      clock,
-	}
-}
-
-// JailPeer jails a peer for the default jail period
-func (pj *peerJail) JailPeer(id enode.ID) {
-	pj.JailPeerFor(id, pj.jailPeriod)
-}
-
-func (pj *peerJail) JailPeerFor(id enode.ID, period time.Duration) {
-	now := pj.clock.Now()
-	unbanTime := now + mclock.AbsTime(period)
-
-	pj.mu.Lock()
-	defer pj.mu.Unlock()
-
-	if current, exists := pj.jailed[id]; exists {
-		pj.jailed[id] = max(current, unbanTime)
-		return
-	}
-	if len(pj.jailed) >= maxPeerJailEntries {
-		pj.makeRoom(now)
-	}
-	pj.jailed[id] = unbanTime
-}
-
-func (pj *peerJail) makeRoom(now mclock.AbsTime) {
-	var earliestID enode.ID
-	earliestExpiry := noPeerJailExpiry
-	for id, unbanTime := range pj.jailed {
-		if now > unbanTime {
-			delete(pj.jailed, id)
-			continue
-		}
-		if unbanTime <= earliestExpiry {
-			earliestID, earliestExpiry = id, unbanTime
-		}
-	}
-	if len(pj.jailed) >= maxPeerJailEntries {
-		delete(pj.jailed, earliestID)
-	}
-}
-
-// IsJailed checks if a peer is currently jailed
-func (pj *peerJail) IsJailed(id enode.ID) bool {
-	now := pj.clock.Now()
-
-	pj.mu.RLock()
-	unbanTime, exists := pj.jailed[id]
-	pj.mu.RUnlock()
-	if !exists {
-		return false
-	}
-	if now <= unbanTime {
-		return true
-	}
-
-	// expired: clean up under write lock
-	pj.mu.Lock()
-	// re-check because map may have changed
-	if unbanTime, exists := pj.jailed[id]; exists && now > unbanTime {
-		delete(pj.jailed, id)
-	}
-	pj.mu.Unlock()
-	return false
-}
-
-// JailedUntil returns the unban time of a peer if it is currently jailed.
-func (pj *peerJail) JailedUntil(id enode.ID) (mclock.AbsTime, bool) {
-	if !pj.IsJailed(id) {
-		return 0, false
-	}
-
-	pj.mu.RLock()
-	defer pj.mu.RUnlock()
-	unbanTime, exists := pj.jailed[id]
-	return unbanTime, exists
-}
-
 type peerDrop struct {
 	*Peer
 	err       error
@@ -389,6 +292,7 @@ func (srv *Server) PeerCount() int {
 // will attempt to reconnect the peer.
 func (srv *Server) AddPeer(node *enode.Node) {
 	srv.doPeerOp(func(peers map[enode.ID]*Peer) {
+		srv.peerJail.clearIdleCooldown(node.ID())
 		srv.staticNodes[node.ID()] = true
 		if peer := peers[node.ID()]; peer != nil {
 			peer.rw.set(staticConn, true)
@@ -461,6 +365,7 @@ func (srv *Server) RemovePeer(node *enode.Node) {
 func (srv *Server) AddTrustedPeer(node *enode.Node) {
 	select {
 	case srv.addtrusted <- node:
+		srv.peerJail.clearIdleCooldown(node.ID())
 	case <-srv.quit:
 	}
 }
@@ -1370,7 +1275,7 @@ func (srv *Server) expireIdlePeer(peers map[enode.ID]*Peer) {
 			return
 		}
 		peer.activity.MarkIdleDisconnect()
-		srv.peerJail.JailPeerFor(peer.ID(), cooldown)
+		srv.peerJail.cooldownPeer(peer.ID(), cooldown)
 		peer.Log().Info("Disconnecting inactive peer to free a connection slot",
 			"inactive", now.Sub(last), "cooldown", cooldown)
 		idlePeerDisconnects.Inc(1)

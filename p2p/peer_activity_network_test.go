@@ -248,3 +248,84 @@ func checkActivityCooldown(t *testing.T, srv *Server, keys []*ecdsa.PrivateKey, 
 		t.Fatalf("reconnect after cooldown: %v", err)
 	}
 }
+
+func TestPeerIdleManualReconnectRLPX(t *testing.T) {
+	for _, trusted := range []bool{false, true} {
+		for _, penalty := range []bool{false, true} {
+			for _, version := range []uint{68, 69} {
+				t.Run(fmt.Sprintf("trusted=%v/penalty=%v/eth%d", trusted, penalty, version), func(t *testing.T) {
+					testPeerIdleManualReconnectRLPX(t, trusted, penalty, version)
+				})
+			}
+		}
+	}
+}
+
+func testPeerIdleManualReconnectRLPX(t *testing.T, trusted, penalty bool, version uint) {
+	t.Helper()
+	clock := new(mclock.Simulated)
+	policy := peerpolicy.New(clock)
+	srv := &Server{Config: Config{
+		PrivateKey: newkey(), MaxPeers: 10, NoDial: true, NoDiscovery: true,
+		ListenAddr: "127.0.0.1:0", clock: clock,
+		Protocols: []Protocol{activityProtocol(version, make(chan enode.ID, 1), policy)},
+	}}
+	srv.SetPeerPolicy(policy)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(srv.Stop)
+	key := newkey()
+	node := enode.NewV4(&key.PublicKey, nil, 0, 0)
+	srv.peerJail.cooldownPeer(node.ID(), 24*time.Hour)
+	if _, err := connectActivityPeer(t, srv, key, version); !errors.Is(err, DiscJailed) {
+		t.Fatalf("connection during cooldown: %v", err)
+	}
+	if penalty {
+		srv.JailPeerFor(node.ID(), time.Hour)
+	}
+	if trusted {
+		srv.AddTrustedPeer(node)
+	} else {
+		srv.AddPeer(node)
+	}
+	srv.doPeerOp(func(map[enode.ID]*Peer) {})
+	_, err := connectActivityPeer(t, srv, key, version)
+	if penalty {
+		until, jailed := srv.peerJail.JailedUntil(node.ID())
+		if !errors.Is(err, DiscJailed) || !jailed || until != mclock.AbsTime(time.Hour) {
+			t.Fatalf("misconduct jail changed: err=%v until=%v jailed=%v", err, until, jailed)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("operator reconnect: %v", err)
+	}
+	waitActivityPeers(t, srv, 1)
+	info := srv.Peers()[0].Info().Network
+	if info.Trusted != trusted || info.Static != !trusted {
+		t.Fatalf("incorrect operator protection: %+v", info)
+	}
+}
+
+func TestPeerIdleManualOutboundRLPX(t *testing.T) {
+	servers := make([]*Server, 2)
+	for i := range servers {
+		servers[i] = &Server{Config: Config{
+			PrivateKey: newkey(), MaxPeers: 10, NoDiscovery: true, ListenAddr: "127.0.0.1:0",
+		}}
+		if err := servers[i].Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(servers[i].Stop)
+	}
+	srv, remote := servers[0], servers[1]
+	srv.peerJail.cooldownPeer(remote.Self().ID(), 24*time.Hour)
+	if !syncAddPeer(srv, remote.Self()) {
+		t.Fatal("adding a static peer did not restore the outbound connection")
+	}
+	peer := srv.Peers()[0]
+	if peer.ID() != remote.Self().ID() || peer.Inbound() || !peer.Info().Network.Static {
+		t.Fatalf("incorrect outbound peer: %+v", peer.Info())
+	}
+}
