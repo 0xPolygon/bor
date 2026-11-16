@@ -257,6 +257,8 @@ type P2PConfig struct {
 	PeerIdleGracePeriod          time.Duration `hcl:"-,optional" toml:"-"`
 	PeerIdleGracePeriodRaw       string        `hcl:"peer-idle-grace-period,optional" toml:"peer-idle-grace-period,optional"`
 	PeerIdleMaxRemovals          int           `hcl:"peer-idle-max-removals,optional" toml:"peer-idle-max-removals,optional"`
+	PeerIdleReconnectCooldown    time.Duration `hcl:"-,optional" toml:"-"`
+	PeerIdleReconnectCooldownRaw string        `hcl:"peer-idle-reconnect-cooldown,optional" toml:"peer-idle-reconnect-cooldown,optional"`
 	// MaxPeers sets the maximum number of connected peers
 	MaxPeers uint64 `hcl:"maxpeers,optional" toml:"maxpeers,optional"`
 
@@ -988,6 +990,7 @@ func DefaultConfig() *Config {
 				TrustedNodes: []string{},
 				DNS:          []string{},
 			},
+			PeerIdleReconnectCooldown: p2p.DefaultPeerIdleReconnectCooldown,
 		},
 		Heimdall: &HeimdallConfig{
 			URL:         "http://localhost:1317",
@@ -1277,6 +1280,7 @@ func (c *Config) fillTimeDurations() error {
 		{"cache.timeout", &c.Cache.TrieTimeout, &c.Cache.TrieTimeoutRaw},
 		{"p2p.txarrivalwait", &c.P2P.TxArrivalWait, &c.P2P.TxArrivalWaitRaw},
 		{"p2p.peer-idle-grace-period", &c.P2P.PeerIdleGracePeriod, &c.P2P.PeerIdleGracePeriodRaw},
+		{"p2p.peer-idle-reconnect-cooldown", &c.P2P.PeerIdleReconnectCooldown, &c.P2P.PeerIdleReconnectCooldownRaw},
 		{"rpc.txsync.defaulttimeout", &c.JsonRPC.TxSyncDefaultTimeout, &c.JsonRPC.TxSyncDefaultTimeoutRaw},
 		{"rpc.txsync.maxtimeout", &c.JsonRPC.TxSyncMaxTimeout, &c.JsonRPC.TxSyncMaxTimeoutRaw},
 	}
@@ -1311,7 +1315,7 @@ func readConfigFile(path string) (*Config, error) {
 	}
 
 	config := &Config{
-		P2P:    &P2PConfig{PeerReputation: true, PeerIdleEviction: true, PeerIdleGracePeriod: peerpolicy.IdleTimeout, PeerIdleMaxRemovals: 1},
+		P2P:    &P2PConfig{PeerReputation: true, PeerIdleEviction: true, PeerIdleGracePeriod: peerpolicy.IdleTimeout, PeerIdleMaxRemovals: 1, PeerIdleReconnectCooldown: p2p.DefaultPeerIdleReconnectCooldown},
 		Cache:  &CacheConfig{},
 		Sealer: &SealerConfig{},
 		// HCL configs don't start from DefaultConfig, so an omitted

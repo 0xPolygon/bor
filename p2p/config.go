@@ -31,6 +31,11 @@ import (
 
 //go:generate go run github.com/fjl/gencodec -type Config -field-override configMarshaling -formats toml -out config_toml.go
 
+const (
+	DefaultPeerIdleReconnectCooldown = 5 * time.Minute
+	MaxPeerIdleReconnectCooldown     = 24 * time.Hour
+)
+
 // Config holds Server options.
 type Config struct {
 	// This field must be set to a valid secp256k1 private key.
@@ -39,9 +44,10 @@ type Config struct {
 	// MaxPeers is the maximum number of peers that can be connected.
 	MaxPeers int
 
-	PeerIdleEviction    bool
-	PeerIdleGracePeriod time.Duration
-	PeerIdleMaxRemovals int
+	PeerIdleEviction          bool
+	PeerIdleGracePeriod       time.Duration
+	PeerIdleMaxRemovals       int
+	PeerIdleReconnectCooldown time.Duration
 
 	// MaxPendingPeers is the maximum number of peers that can be pending in the
 	// handshake phase, counted separately for inbound and outbound connections.
@@ -192,4 +198,11 @@ func (srv *Server) peerLimits() (total, dialed int) {
 		ratio = defaultDialRatio
 	}
 	return total, max(1, total/ratio)
+}
+
+func (c Config) peerIdleCooldown() time.Duration {
+	if c.PeerIdleReconnectCooldown <= 0 {
+		return DefaultPeerIdleReconnectCooldown
+	}
+	return min(c.PeerIdleReconnectCooldown, MaxPeerIdleReconnectCooldown)
 }

@@ -1348,7 +1348,6 @@ func (srv *Server) PeersInfo() []*PeerInfo {
 
 const (
 	peerIdleCheckInterval = time.Minute
-	peerIdleCooldown      = 5 * time.Minute
 	peerIdleMinimumPeers  = 5
 	MaxPeerIdleRemovals   = 64
 )
@@ -1366,6 +1365,7 @@ func (srv *Server) expireIdlePeer(peers map[enode.ID]*Peer) {
 	if !srv.PeerIdleEviction || srv.peerJail == nil || policy == nil {
 		return
 	}
+	cooldown := srv.peerIdleCooldown()
 	for range min(max(srv.PeerIdleMaxRemovals, 1), MaxPeerIdleRemovals, len(peers)) {
 		count, inbound, live := peerCounts(peers)
 		if live <= peerIdleMinimumPeers {
@@ -1383,9 +1383,9 @@ func (srv *Server) expireIdlePeer(peers map[enode.ID]*Peer) {
 			return
 		}
 		peer.activity.MarkIdleDisconnect()
-		srv.peerJail.JailPeerFor(peer.ID(), peerIdleCooldown)
+		srv.peerJail.JailPeerFor(peer.ID(), cooldown)
 		peer.Log().Info("Disconnecting inactive peer to free a connection slot",
-			"inactive", now.Sub(last), "cooldown", peerIdleCooldown)
+			"inactive", now.Sub(last), "cooldown", cooldown)
 		idlePeerDisconnects.Inc(1)
 	}
 }

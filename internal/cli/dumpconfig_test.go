@@ -10,13 +10,13 @@ import (
 
 func TestPeerIdleDumpConfig(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		args     []string
-		grace    string
-		removals int
+		name            string
+		args            []string
+		grace, cooldown string
+		removals        int
 	}{
-		{"default", nil, "2m0s", 1},
-		{"configured", []string{"--peer-idle-grace-period=10m", "--peer-idle-max-removals=5"}, "10m0s", 5},
+		{"default", nil, "2m0s", "5m0s", 1},
+		{"configured", []string{"--peer-idle-grace-period=10m", "--peer-idle-max-removals=5", "--peer-idle-reconnect-cooldown=7m"}, "10m0s", "7m0s", 5},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.toml")
@@ -40,12 +40,13 @@ func TestPeerIdleDumpConfig(t *testing.T) {
 				P2P struct {
 					Grace    string `toml:"peer-idle-grace-period"`
 					Removals int    `toml:"peer-idle-max-removals"`
+					Cooldown string `toml:"peer-idle-reconnect-cooldown"`
 				}
 			}
 			if _, err := toml.DecodeFile(path, &config); err != nil {
 				t.Fatal(err)
 			}
-			if config.P2P.Grace != tc.grace || config.P2P.Removals != tc.removals {
+			if config.P2P.Grace != tc.grace || config.P2P.Removals != tc.removals || config.P2P.Cooldown != tc.cooldown {
 				t.Fatalf("exported %+v", config.P2P)
 			}
 		})

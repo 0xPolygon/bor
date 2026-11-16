@@ -67,7 +67,7 @@ func activityTestServer(t *testing.T, count, inbound int) (*Server, map[enode.ID
 	t.Helper()
 	clock := new(mclock.Simulated)
 	srv := &Server{Config: Config{MaxPeers: 20, PeerIdleEviction: true, clock: clock}}
-	srv.peerJail = newPeerJail(peerIdleCooldown, clock)
+	srv.peerJail = newPeerJail(DefaultPeerIdleReconnectCooldown, clock)
 	policy := peerpolicy.New(clock)
 	policy.SetReady(true)
 	srv.SetPeerPolicy(policy)
@@ -432,7 +432,7 @@ func TestPeerIdleConfiguredGrace(t *testing.T) {
 }
 
 func TestPeerIdleConfigRoundTrip(t *testing.T) {
-	original := Config{PeerIdleEviction: true, PeerIdleGracePeriod: 3 * time.Minute, PeerIdleMaxRemovals: 5}
+	original := Config{PeerIdleEviction: true, PeerIdleGracePeriod: 3 * time.Minute, PeerIdleMaxRemovals: 5, PeerIdleReconnectCooldown: 7 * time.Minute}
 	encoded, err := toml.Marshal(struct{ P2P Config }{original})
 	if err != nil {
 		t.Fatal(err)
@@ -441,7 +441,43 @@ func TestPeerIdleConfigRoundTrip(t *testing.T) {
 	if err := toml.Unmarshal(encoded, &restored); err != nil {
 		t.Fatal(err)
 	}
-	if restored.P2P.PeerIdleGracePeriod != original.PeerIdleGracePeriod || restored.P2P.PeerIdleMaxRemovals != original.PeerIdleMaxRemovals {
+	if restored.P2P.PeerIdleGracePeriod != original.PeerIdleGracePeriod || restored.P2P.PeerIdleMaxRemovals != original.PeerIdleMaxRemovals || restored.P2P.PeerIdleReconnectCooldown != original.PeerIdleReconnectCooldown {
 		t.Fatal("native TOML lost idle policy settings")
+	}
+}
+
+func TestPeerIdleConfiguredCooldown(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		configured, want time.Duration
+	}{
+		{"default", 0, 5 * time.Minute},
+		{"negative-native", -time.Second, 5 * time.Minute},
+		{"minimum", time.Second, time.Second},
+		{"shorter", 90 * time.Second, 90 * time.Second},
+		{"longer", 7 * time.Minute, 7 * time.Minute},
+		{"maximum", 24 * time.Hour, 24 * time.Hour},
+		{"bounded-native", 48 * time.Hour, 24 * time.Hour},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, peers, clock := activityTestServer(t, 20, 20)
+			srv.PeerIdleReconnectCooldown = tc.configured
+			peer := peers[uintID(1)]
+			peer.rw.set(trustedConn, false)
+			clock.Run(peerIdleTimeout)
+			srv.expireIdlePeer(peers)
+			until, jailed := srv.peerJail.JailedUntil(peer.ID())
+			if !jailed || until.Sub(clock.Now()) != tc.want {
+				t.Fatalf("cooldown=%v jailed=%v want=%v", until.Sub(clock.Now()), jailed, tc.want)
+			}
+			clock.Run(tc.want - time.Nanosecond)
+			if !srv.peerJail.IsJailed(peer.ID()) {
+				t.Fatal("reconnect cooldown expired early")
+			}
+			clock.Run(2 * time.Nanosecond)
+			if srv.peerJail.IsJailed(peer.ID()) {
+				t.Fatal("reconnect cooldown did not expire")
+			}
+		})
 	}
 }

@@ -43,8 +43,9 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		TxArrivalWait      time.Duration
 		TxAnnouncementOnly bool
 
-		PeerIdleGracePeriod time.Duration
-		PeerIdleMaxRemovals int
+		PeerIdleGracePeriod       time.Duration
+		PeerIdleMaxRemovals       int
+		PeerIdleReconnectCooldown time.Duration
 	}
 	var enc Config
 	enc.PrivateKey = c.PrivateKey
@@ -52,6 +53,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.PeerIdleEviction = c.PeerIdleEviction
 	enc.PeerIdleGracePeriod = c.PeerIdleGracePeriod
 	enc.PeerIdleMaxRemovals = c.PeerIdleMaxRemovals
+	enc.PeerIdleReconnectCooldown = c.PeerIdleReconnectCooldown
 	enc.MaxPendingPeers = c.MaxPendingPeers
 	enc.DialRatio = c.DialRatio
 	enc.NoDiscovery = c.NoDiscovery
@@ -106,8 +108,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		TxArrivalWait      *time.Duration
 		TxAnnouncementOnly *bool
 
-		PeerIdleGracePeriod *time.Duration
-		PeerIdleMaxRemovals *int
+		PeerIdleGracePeriod       *time.Duration
+		PeerIdleMaxRemovals       *int
+		PeerIdleReconnectCooldown *time.Duration
 	}
 	var dec Config
 	if err := unmarshal(&dec); err != nil {
@@ -127,6 +130,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.PeerIdleMaxRemovals != nil {
 		c.PeerIdleMaxRemovals = *dec.PeerIdleMaxRemovals
+	}
+	if dec.PeerIdleReconnectCooldown != nil {
+		c.PeerIdleReconnectCooldown = *dec.PeerIdleReconnectCooldown
 	}
 	if dec.MaxPendingPeers != nil {
 		c.MaxPendingPeers = *dec.MaxPendingPeers

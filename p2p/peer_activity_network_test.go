@@ -84,9 +84,12 @@ func advanceActivityClock(t *testing.T, srv *Server, clock *mclock.Simulated, el
 }
 
 func TestPeerIdleEvictionRLPX(t *testing.T) {
-	for _, enabled := range []bool{false, true} {
-		t.Run(fmt.Sprintf("enabled=%v", enabled), func(t *testing.T) {
-			testPeerIdleEvictionRLPX(t, enabled)
+	for _, tc := range []struct {
+		enabled  bool
+		cooldown time.Duration
+	}{{false, 0}, {true, 0}, {true, 90 * time.Second}, {true, 7 * time.Minute}} {
+		t.Run(fmt.Sprintf("enabled=%v/cooldown=%v", tc.enabled, tc.cooldown), func(t *testing.T) {
+			testPeerIdleEvictionRLPX(t, tc.enabled, tc.cooldown)
 		})
 	}
 }
@@ -162,7 +165,7 @@ func TestPeerIdleStartupGrace(t *testing.T) {
 	}
 }
 
-func testPeerIdleEvictionRLPX(t *testing.T, enabled bool) {
+func testPeerIdleEvictionRLPX(t *testing.T, enabled bool, cooldown time.Duration) {
 	clock := new(mclock.Simulated)
 	policy := peerpolicy.New(clock)
 	policy.SetReady(true)
@@ -170,7 +173,8 @@ func testPeerIdleEvictionRLPX(t *testing.T, enabled bool) {
 	srv := &Server{Config: Config{
 		PrivateKey: newkey(), MaxPeers: 9, NoDial: true, NoDiscovery: true,
 		ListenAddr: "127.0.0.1:0", PeerIdleEviction: enabled, clock: clock,
-		Protocols: []Protocol{activityProtocol(68, received, policy), activityProtocol(69, received, policy)},
+		PeerIdleReconnectCooldown: cooldown,
+		Protocols:                 []Protocol{activityProtocol(68, received, policy), activityProtocol(69, received, policy)},
 	}}
 	srv.SetPeerPolicy(policy)
 	if err := srv.Start(); err != nil {
@@ -199,7 +203,10 @@ func testPeerIdleEvictionRLPX(t *testing.T, enabled bool) {
 	advanceActivityClock(t, srv, clock, peerIdleCheckInterval)
 	waitActivityPeers(t, srv, 8)
 	srv.SetMaxPeers(20)
-	checkActivityCooldown(t, srv, keys, clock)
+	if cooldown == 0 {
+		cooldown = 5 * time.Minute
+	}
+	checkActivityCooldown(t, srv, keys, clock, cooldown)
 	waitActivityPeers(t, srv, 9)
 	srv.SetMaxPeers(9)
 	advanceActivityClock(t, srv, clock, time.Minute)
@@ -218,7 +225,7 @@ func keepActivityPeer(t *testing.T, client transport, received <-chan enode.ID) 
 	}
 }
 
-func checkActivityCooldown(t *testing.T, srv *Server, keys []*ecdsa.PrivateKey, clock *mclock.Simulated) {
+func checkActivityCooldown(t *testing.T, srv *Server, keys []*ecdsa.PrivateKey, clock *mclock.Simulated, cooldown time.Duration) {
 	t.Helper()
 	var jailed *ecdsa.PrivateKey
 	for i, key := range keys {
@@ -236,7 +243,7 @@ func checkActivityCooldown(t *testing.T, srv *Server, keys []*ecdsa.PrivateKey, 
 	if _, err := connectActivityPeer(t, srv, jailed, 68); !errors.Is(err, DiscJailed) {
 		t.Fatalf("reconnect error = %v, want DiscJailed", err)
 	}
-	advanceActivityClock(t, srv, clock, peerIdleCooldown+time.Nanosecond)
+	advanceActivityClock(t, srv, clock, cooldown+time.Nanosecond)
 	if _, err := connectActivityPeer(t, srv, jailed, 68); err != nil {
 		t.Fatalf("reconnect after cooldown: %v", err)
 	}
