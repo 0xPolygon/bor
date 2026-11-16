@@ -332,7 +332,7 @@ var (
 	}
 	TransactionHistoryFlag = &cli.Uint64Flag{
 		Name:     "history.transactions",
-		Usage:    "Number of recent blocks to maintain transactions index for (default = about one year, 0 = entire chain)",
+		Usage:    "Number of recent blocks to maintain transactions index for (default = about one year, entire chain for archive nodes, 0 = entire chain)",
 		Value:    ethconfig.Defaults.TransactionHistory,
 		Category: flags.StateCategory,
 	}
@@ -1122,6 +1122,24 @@ var (
 		StateSchemeFlag,
 		HttpHeaderFlag,
 	}
+
+	// MetricsFlags is the flag group of all metrics flags.
+	MetricsFlags = []cli.Flag{
+		MetricsEnabledFlag,
+		MetricsHTTPFlag,
+		MetricsPortFlag,
+		MetricsEnableInfluxDBFlag,
+		MetricsInfluxDBEndpointFlag,
+		MetricsInfluxDBDatabaseFlag,
+		MetricsInfluxDBUsernameFlag,
+		MetricsInfluxDBPasswordFlag,
+		MetricsInfluxDBTagsFlag,
+		MetricsInfluxDBIntervalFlag,
+		MetricsEnableInfluxDBV2Flag,
+		MetricsInfluxDBTokenFlag,
+		MetricsInfluxDBBucketFlag,
+		MetricsInfluxDBOrganizationFlag,
+	}
 )
 
 // default account to prefund when running Geth in dev mode
@@ -1750,6 +1768,33 @@ func setRequiredBlocks(ctx *cli.Context, cfg *ethconfig.Config) {
 	}
 }
 
+// setTransactionHistory configures the number of recent blocks whose
+// transactions are indexed.
+//
+// Archive nodes index the entire chain by default. An explicitly configured
+// range, either via the command line or the config file, is honored though,
+// as the transaction index is maintained independently of the retained state.
+func setTransactionHistory(ctx *cli.Context, cfg *ethconfig.Config) {
+	// If user is still using legacy config file with 'TxLookupLimit' configured,
+	// copy the value to 'TransactionHistory'.
+	if cfg.TransactionHistory == ethconfig.Defaults.TransactionHistory && cfg.TxLookupLimit != ethconfig.Defaults.TxLookupLimit {
+		log.Warn("The config option 'TxLookupLimit' is deprecated and will be removed, please use 'TransactionHistory'")
+		cfg.TransactionHistory = cfg.TxLookupLimit
+	}
+	// A value other than the default can only originate from the config file.
+	// Note that configuring the default value in the config file can't be told
+	// apart from omitting it.
+	explicit := cfg.TransactionHistory != ethconfig.Defaults.TransactionHistory
+	if ctx.IsSet(TransactionHistoryFlag.Name) {
+		cfg.TransactionHistory = ctx.Uint64(TransactionHistoryFlag.Name)
+		explicit = true
+	}
+	if cfg.NoPruning && !explicit {
+		cfg.TransactionHistory = 0
+		log.Warn("Disabled transaction unindexing for archive node")
+	}
+}
+
 // SetEthConfig applies eth-related command line flags to the config.
 func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 	// Avoid conflicting network flags
@@ -1852,21 +1897,7 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 	if ctx.IsSet(StateSchemeFlag.Name) {
 		cfg.StateScheme = ctx.String(StateSchemeFlag.Name)
 	}
-	// Parse transaction history flag, if user is still using legacy config
-	// file with 'TxLookupLimit' configured, copy the value to 'TransactionHistory'.
-	if cfg.TransactionHistory == ethconfig.Defaults.TransactionHistory && cfg.TxLookupLimit != ethconfig.Defaults.TxLookupLimit {
-		log.Warn("The config option 'TxLookupLimit' is deprecated and will be removed, please use 'TransactionHistory'")
-		cfg.TransactionHistory = cfg.TxLookupLimit
-	}
-	if ctx.IsSet(TransactionHistoryFlag.Name) {
-		cfg.TransactionHistory = ctx.Uint64(TransactionHistoryFlag.Name)
-	}
-	if cfg.NoPruning {
-		if cfg.TransactionHistory != 0 {
-			cfg.TransactionHistory = 0
-			log.Warn("Disabled transaction unindexing for archive node")
-		}
-	}
+	setTransactionHistory(ctx, cfg)
 	if ctx.IsSet(LogHistoryFlag.Name) {
 		cfg.LogHistory = ctx.Uint64(LogHistoryFlag.Name)
 	}
@@ -2277,6 +2308,73 @@ func RegisterSyncOverrideService(stack *node.Node, eth *eth.Ethereum, target com
 		log.Info("Registered sync override service")
 	}
 	syncer.Register(stack, eth, target, exitWhenSynced)
+}
+
+// SetMetricsConfig applies metrics-related command line flags to the config.
+func SetMetricsConfig(ctx *cli.Context, cfg *metrics.Config) {
+	if ctx.IsSet(MetricsEnabledFlag.Name) {
+		cfg.Enabled = ctx.Bool(MetricsEnabledFlag.Name)
+	}
+	if ctx.IsSet(MetricsHTTPFlag.Name) {
+		cfg.HTTP = ctx.String(MetricsHTTPFlag.Name)
+	}
+	if ctx.IsSet(MetricsPortFlag.Name) {
+		cfg.Port = ctx.Int(MetricsPortFlag.Name)
+	}
+	if ctx.IsSet(MetricsEnableInfluxDBFlag.Name) {
+		cfg.EnableInfluxDB = ctx.Bool(MetricsEnableInfluxDBFlag.Name)
+	}
+	if ctx.IsSet(MetricsInfluxDBEndpointFlag.Name) {
+		cfg.InfluxDBEndpoint = ctx.String(MetricsInfluxDBEndpointFlag.Name)
+	}
+	if ctx.IsSet(MetricsInfluxDBDatabaseFlag.Name) {
+		cfg.InfluxDBDatabase = ctx.String(MetricsInfluxDBDatabaseFlag.Name)
+	}
+	if ctx.IsSet(MetricsInfluxDBUsernameFlag.Name) {
+		cfg.InfluxDBUsername = ctx.String(MetricsInfluxDBUsernameFlag.Name)
+	}
+	if ctx.IsSet(MetricsInfluxDBPasswordFlag.Name) {
+		cfg.InfluxDBPassword = ctx.String(MetricsInfluxDBPasswordFlag.Name)
+	}
+	if ctx.IsSet(MetricsInfluxDBTagsFlag.Name) {
+		cfg.InfluxDBTags = ctx.String(MetricsInfluxDBTagsFlag.Name)
+	}
+	if ctx.IsSet(MetricsInfluxDBIntervalFlag.Name) {
+		cfg.InfluxDBInterval = ctx.Duration(MetricsInfluxDBIntervalFlag.Name)
+	}
+	if ctx.IsSet(MetricsEnableInfluxDBV2Flag.Name) {
+		cfg.EnableInfluxDBV2 = ctx.Bool(MetricsEnableInfluxDBV2Flag.Name)
+	}
+	if ctx.IsSet(MetricsInfluxDBTokenFlag.Name) {
+		cfg.InfluxDBToken = ctx.String(MetricsInfluxDBTokenFlag.Name)
+	}
+	if ctx.IsSet(MetricsInfluxDBBucketFlag.Name) {
+		cfg.InfluxDBBucket = ctx.String(MetricsInfluxDBBucketFlag.Name)
+	}
+	if ctx.IsSet(MetricsInfluxDBOrganizationFlag.Name) {
+		cfg.InfluxDBOrganization = ctx.String(MetricsInfluxDBOrganizationFlag.Name)
+	}
+	// Sanity-check the commandline flags. It is fine if some unused fields is part
+	// of the toml-config, but we expect the commandline to only contain relevant
+	// arguments, otherwise it indicates an error.
+	var (
+		enableExport   = ctx.Bool(MetricsEnableInfluxDBFlag.Name)
+		enableExportV2 = ctx.Bool(MetricsEnableInfluxDBV2Flag.Name)
+	)
+	if enableExport || enableExportV2 {
+		v1FlagIsSet := ctx.IsSet(MetricsInfluxDBUsernameFlag.Name) ||
+			ctx.IsSet(MetricsInfluxDBPasswordFlag.Name)
+
+		v2FlagIsSet := ctx.IsSet(MetricsInfluxDBTokenFlag.Name) ||
+			ctx.IsSet(MetricsInfluxDBOrganizationFlag.Name) ||
+			ctx.IsSet(MetricsInfluxDBBucketFlag.Name)
+
+		if enableExport && v2FlagIsSet {
+			Fatalf("Flags --%s, --%s, --%s are only available for influxdb-v2", MetricsInfluxDBOrganizationFlag.Name, MetricsInfluxDBTokenFlag.Name, MetricsInfluxDBBucketFlag.Name)
+		} else if enableExportV2 && v1FlagIsSet {
+			Fatalf("Flags --%s, --%s are only available for influxdb-v1", MetricsInfluxDBUsernameFlag.Name, MetricsInfluxDBPasswordFlag.Name)
+		}
+	}
 }
 
 // SetupMetrics configures the metrics system.

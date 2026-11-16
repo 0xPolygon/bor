@@ -331,6 +331,33 @@ func TestCallDefaults(t *testing.T) {
 	}
 }
 
+// TestCallDefaultsPreLondon tests that CallDefaults rejects EIP-1559 fee
+// fields when the block has no base fee, instead of silently dropping them.
+func TestCallDefaultsPreLondon(t *testing.T) {
+	t.Parallel()
+
+	zero := new(hexutil.Big)
+	tests := []struct {
+		name string
+		args TransactionArgs
+		fail bool
+	}{
+		{name: "no fee fields"},
+		{name: "gasPrice", args: TransactionArgs{GasPrice: zero}},
+		{name: "maxFeePerGas", args: TransactionArgs{MaxFeePerGas: zero}, fail: true},
+		{name: "maxPriorityFeePerGas", args: TransactionArgs{MaxPriorityFeePerGas: zero}, fail: true},
+		{name: "both fee fields", args: TransactionArgs{MaxFeePerGas: zero, MaxPriorityFeePerGas: zero}, fail: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.args.CallDefaults(0, nil, big.NewInt(1))
+			if (err != nil) != tt.fail {
+				t.Fatalf("error mismatch, want fail=%v, have %v", tt.fail, err)
+			}
+		})
+	}
+}
+
 // TestSetDefaultsEmptyAuthList tests that setDefaults rejects an authorization
 // list on a contract creation even when the list is empty, as ToTransaction
 // cannot represent it.
@@ -352,6 +379,23 @@ func TestSetDefaultsEmptyAuthList(t *testing.T) {
 	want := `authorizationList provided for contract creation, but "to" field is missing`
 	if err := args.setDefaults(context.Background(), b, sidecarConfig{}); err == nil || err.Error() != want {
 		t.Fatalf("error mismatch, want %q, have %v", want, err)
+	}
+}
+
+func TestToTransactionGasPriceAccessList(t *testing.T) {
+	gas, nonce := hexutil.Uint64(50000), hexutil.Uint64(0)
+	al := types.AccessList{{Address: common.Address{0xaa}}}
+	args := &TransactionArgs{
+		Gas:        &gas,
+		Nonce:      &nonce,
+		Value:      new(hexutil.Big),
+		GasPrice:   (*hexutil.Big)(big.NewInt(1)),
+		ChainID:    (*hexutil.Big)(big.NewInt(1)),
+		AccessList: &al,
+	}
+	tx := args.ToTransaction(types.DynamicFeeTxType)
+	if tx.Type() != types.AccessListTxType || len(tx.AccessList()) != 1 {
+		t.Fatalf("want access list tx, have type %d with access list %v", tx.Type(), tx.AccessList())
 	}
 }
 

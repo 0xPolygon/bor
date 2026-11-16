@@ -160,3 +160,99 @@ flags; behaviour change only behind Amsterdam).
 v1.17.8 adds no CLI flag, config field, RPC method or metric that the merged
 code exposes. Every fork/EIP-bearing PR has a fork-register row, and none
 sets a fork value on a Bor network.
+
+## Batch 5: `a57907700..365bf9706` (v1.17.9, 19 commits)
+
+25 conflicted paths. No hardfork surface is touched. The live-path changes are
+the pebble L0 file size (#35691), the fixed-size freezer metadata (#35939),
+background history writes in pathdb (#35949, #35936) and the tracer state view
+(#35905).
+
+| Path | Class | Upstream PR | Decision | Why |
+| ---- | ----- | ----------- | -------- | --- |
+| `ethdb/pebble/pebble.go`, `ethdb/pebble/pebble_v1.go` | 2 (clean) | #35691 | **Adopted on both paths.** The L0 target file size goes from 2 MB to 16 MB; the base level stays at 4 MB. | Bor's tuning (#2170, kept on the v1 path in `0166dcc9db`) is in the write path (`BytesPerSync`, WAL, listeners, gauges) and uses the same L0 thresholds as upstream, so the change applies unchanged. It reaches every existing node, since they all open through `pebble_v1.go`. Upstream measured faster flushes and fewer memtable stalls, but read amplification rises from about 6 to 16; check import time and read amplification on the dev node and Amoy before release. |
+| `core/rawdb/freezer_meta.go`, `freezer_table.go` (+ tests) | 2 (clean) | #35939 | **Adopted.** One upstream test call adapted to Bor's `newBatch(offset)`. | Metadata files are now padded to 32 bytes and rewritten in place, so a power loss can't leave a truncated file. Older binaries decode the RLP prefix and ignore the padding; the round trip new → v2.10.3 → new was rerun with real binaries (batch report). Independent of Bor's `bals` fill (`8ea7bf721`), which is in `freezer.go`. |
+| `triedb/pathdb/buffer.go` | 3 | #35949 | **Merged both.** Upstream's `syncHistory func() error` replaces the freezer list; Bor's `nodesCache *AddressBiasedCache` is kept. | Upstream writes histories and root→id lookups on a background writer; the buffer flush waits for it before persisting. Bor's address-biased node cache is orthogonal. |
+| `triedb/pathdb/database.go` (`Disable`) | 3 | #35949 | **Merged both:** Bor's removal of stale address-cache snapshots, then upstream's wait for scheduled writes. | Both are needed when a state sync starts. |
+| `triedb/pathdb/database.go` (`Enable`, two hunks) | 3 | #35936, #35949 | **Took upstream.** | Stops the history indexers and removes the layer journal before the histories are purged, and waits for scheduled writes; fixes reactivation after a state sync. Bor's text there was a comment only. |
+| `triedb/pathdb/history_reader.go` | 3 | #35949 | **Merged both:** Bor's `mu sync.RWMutex` and upstream's `wait`. | Bor's lock protects its reader map; upstream's `wait` makes history reads wait for background writes. |
+| `triedb/pathdb/database_test.go` | 1 | #35936 | Took upstream's `TestReactivationCrash` and its helpers; `TestAdoptSyncedState` stays out. | `AdoptSyncedState` (#34874) was declined in v1.17.4 with snap/2. |
+| `triedb/pathdb/{async_writer,disklayer,reader,journal,history}.go` (+ tests) | 2 (clean) | #35949, #35936 | Taken. | Checked against Bor: there is one `Database` constructor (it creates the writer), every root→id reader in the tree waits for scheduled writes, and Bor's `Close` saves its address caches before the writer is closed. Witness generation reads trie nodes from layers, not histories, so it isn't affected; the witness regeneration tests were rerun non-short. |
+| `core/state/statedb_tracer.go` (new), `core/vm/evm.go`, `core/state/statedb_hooked.go`, `core/tracing/hooks.go` | 2 (clean) | #35905 | **Adopted.** | `GetVMContext` now hands tracers a read-only view that suspends block-level access list recording (EIP-7928, Amsterdam). The wrapping is live for every tracer, but no Bor code type-asserts the tracer's `StateDB`, and the view only clears `stateAccessList`, so witness recording is unchanged. |
+| `eth/tracers/api.go` | 1 | #35905 | Kept Bor. | Upstream only moved blank lines around `defer evm.Release()`; Bor's EVM has no `Release` (declined in v1.17.4). |
+| `beacon/**` (`block_sync_test.go`, `beacon_block.go`, `exec_header.go`, `exec_payload.go` conflicted; `header.go` taken from upstream) | 1 | #35385, #35956 | **Took upstream.** | Gloas support for the beacon light client, which moves from `protolambda/zrnt` to `attestantio/go-eth2-client`. Bor doesn't run the beacon light client; its only divergence in these files was import grouping, which left an unused import in `header.go`. |
+| `go.mod`, `go.sum`, `cmd/keeper/go.{mod,sum}` | 1 | #35385, #35927 | Union, higher version on each clash, then `go mod tidy`. | New: `attestantio/go-eth2-client` v0.30.1 (with `pk910/dynamic-ssz`, `pk910/hashtree-bindings`, `OffchainLabs/go-bitfield`, `goccy/go-yaml`) for `beacon/`; `klauspost/cpuid/v2` v2.3.0. `protolambda/ztyp` becomes indirect. |
+| `cmd/geth/{main,config,chaincmd}.go`, `cmd/utils/flags.go` | 2 | #35673 | **Took upstream** (`utils.MetricsFlags`, `utils.SetMetricsConfig`), keeping `utils.BorFlags`. Dropped the `utils.SnapV2Flag` reference upstream moved into the node flags. | `SetMetricsConfig` is Bor's `applyMetricConfig` moved to `cmd/utils`, with the same checks. snap/2 was declined (decision C). |
+| `p2p/discover/{v4_udp,v5_udp,metrics}.go` | 2 | #35673 | Took upstream. | Discovery listener metrics. |
+| `triedb/pathdb/buffer_test.go` | 1 | #35949 | Bor's three carry-over tests (#2170) build a `Database` by hand; they now set `writer: newAsyncWriter()` too. | The disk layer now submits history writes to the background writer, which upstream's constructor creates. |
+| `internal/ethapi/api_test.go` | 1 | #35842, #35841 | `TestSimulateV1NonceLimit` and `TestSimulateV1LogIndex` adopted; their generators mark blocks post-merge (`SetPoS`), as in batch 4. | Without it, block 0 fails Bor's difficulty check. The log-index test passes with Bor's fee-contract log unchanged. |
+| `eth/protocols/snap/{bal_apply,syncv2}*.go` (modify/delete) | 3 | #35890, #35930 | Kept Bor's deletion. | Both fixes are in snap/2, which Bor doesn't carry. |
+| `.github/workflows/go.yml` (modify/delete), `build/checksums.txt` | 1 | #35927, #35924 | Kept Bor. | Bor's CI and spec-test pin (`v5.1.0`) are its own. |
+| `cmd/devp2p/internal/ethtest/suite.go` | 1 | #35902, #35901 | Kept Bor. | eth/72 tests. |
+| `internal/ethapi/{transaction_args,simulate,logtracer}.go` (+ tests), `core/blockchain.go`, `version/version.go` | 2 (clean) | #35914, #35842, #35841, #35952 | Taken. | #35914 is live: `eth_call` and friends now reject EIP-1559 fee fields for blocks before London (mainnet 23,850,000). `eth_simulateV1` enforces the nonce limit and numbers logs like receipts. `version` is 1.17.9 unstable. |
+
+## Batch 6: `365bf9706..9dffe6e97` (v1.17.9, 19 commits; completes v1.17.9)
+
+13 conflicted paths. **#35638 is deferred** (operator decision, 2026-11-11;
+see needs-wiring). Hardfork surfaces: `params/config.go` conflicted and is
+byte-identical to before; `core/state_transition.go` gains #35928's
+pre-Cancun check, which no real block can reach.
+
+| Path | Class | Upstream PR | Decision | Why |
+| ---- | ----- | ----------- | -------- | --- |
+| `core/vm/{evm,interpreter,instructions,instructions_test,jump_table}.go`, `go.mod`, `oss-fuzz.sh` (Bor's side kept); `core/vm/gen/`, `core/vm/genspec.go`, `core/vm/interpreter_gen{,_test}.go`, `cmd/geth/default.pgo`, `tests/fuzzers/evm/` (dropped) | 3 (EVM) | #35638 | **Deferred (kept Bor).** No other commit in the batch touches these files, so they are byte-identical to before. | Performance only, and it would make the generated switch the always-on interpreter, generated from fork tables whose Amsterdam ordering is still open (POS-3738). Bor's `bor` binary builds with `-pgo=prod.pprof`, so upstream's `default.pgo` wouldn't apply. Port plan in needs-wiring. |
+| `params/config.go` | 3 (hardfork surface) | #35975 | **Kept Bor.** | Upstream reorders the time-based BPO forks after Amsterdam in the fork-order check. Bor's check is block-based and lists no BPO forks. |
+| `params/chainspecs/hoodi.json` (modify/delete), `core/forkid/forkid_test.go` | 1 | #35974 | Kept Bor (chainspecs stay out; Bor's forkid cases kept). | Schedules Amsterdam on Hoodi, an Ethereum testnet; chainspecs were declined in batch 4 (#35585). Upstream reverts it in batch 7 (#36001). |
+| `core/types/transaction.go` (+ tests), `core/txpool/legacypool/legacypool_test.go` | 2 (clean) | #35988 | **Adopted (live).** | When the fee cap is below the base fee, `EffectiveGasTipIntCmp` now returns -1 instead of comparing the full tip cap. Bor's only live caller is the legacy pool's `Pending` filter (`MinTip`), which stops returning such transactions to the miner; they couldn't be included anyway. `EffectiveGasTipCmp` already fell back to big-int on error. `totalFees` and the gas price oracle only read included transactions, which always cover the base fee. |
+| `core/state_transition.go`, `internal/ethapi/{api,transaction_args}.go` | 2/3 | #35928 | **Adopted.** In `api.go`, Bor's `Call` → `CallWithState` split is kept, and upstream's `checkBlobFeeCap` runs first in `Call`. | `preCheck` now rejects a blob fee cap before Cancun. Only blob transactions carry one, and they were already rejected before Cancun because they always have blob hashes, so no block is affected. The RPC check rejects `maxFeePerBlobGas` without blob hashes. |
+| `miner/miner.go` | 1 | #35968 | **Kept Bor (not applicable).** | Upstream's `getPending` doesn't exist in Bor; Bor's pending block comes from `worker.pendingBlock()`. |
+| `eth/downloader/downloader{,_test}.go` (modify/delete) | 1 | #35982 | Kept Bor's deletion. | Frozen-pivot validation for snap/2 trie generation; Bor syncs through `bor_downloader.go` and doesn't carry snap/2. |
+| `eth/filters/filter_system_test.go` | 1 | #35933 | Merged both: Bor's pending-logs case stays `10`, upstream's earliest..earliest case is `11`. | Different cases with the same index. |
+| `build/checksums.txt` | 1 | #35935 | Kept Bor (Go 1.26.10). | Bor keeps its toolchain until its CI moves. |
+| `triedb/pathdb/reader.go` (+ tests) | 2 (clean) | #35978 | Taken. | Historical state reads retry when the disk layer turns stale mid-read. No Bor change in the file. |
+| `core/txpool/legacypool/legacypool_test.go` | 1 | #35988 | Upstream's new pending-filter test calls Bor's `Pending(filter, nil)`, which takes an interrupt flag and returns one value. | It passes against Bor's pool, confirming the live change. |
+| `params/config_test.go` | 1 | #35975 | Dropped `TestCheckConfigForkOrderBPO`. | It tests the time-based fork-order change Bor declined. |
+| `eth/tracers/logger/logger_test.go` | 1 | #35961 | `TestHaltedStoreCapture` runs with Hampi active (`AllEthashProtocolChanges` with `HampiBlock` 0, as Bor's gas tests do). | Before Hampi, Bor's SSTORE gas function deliberately reads the slot and leaves write protection to `opSstore`, for stateless nodes' witnesses, so the halted step reaches the tracer without an error and the logger still records its storage. Bor's witness behaviour is unchanged; until Hampi activates, the struct logger shows storage on an SSTORE refused in a static call, as it did before. |
+| `internal/ethapi/api_test.go` | 1 | #35928, #35953 | `TestCreateAccessListBlobFeeDefault` skipped: its contract uses `BLOBBASEFEE`, which Bor never enabled (EIP-7516 is commented out in Bor's Cancun table). `TestSimulateV1DifficultyOverride` marks blocks post-merge (`SetPoS`) for the merged config, as in batches 4 and 5. | Coverage gap only for the default blob fee in `eth_createAccessList`; the check itself is adopted. |
+| `core/filtermaps/*`, `core/rawdb/accessors_indexes.go`, `core/types/{tx_setcode,gen_authorization}.go`, `eth/filters/filter_system.go`, `eth/tracers/logger/logger.go`, `internal/ethapi/{simulate,override/override}.go`, `beacon/light/request/server.go`, `cmd/utils/flags.go`, `version/version.go` (+ tests) | 2 (clean) | #35875, #35761, #35933, #35961, #35953, #35969, #35957, #35907, #35958, #35990 | Taken. | Upstream-owned. #35761 (yParity validation) only applies to authorizations decoded from JSON. #35907 is `cmd/geth` flag wiring; Bor configures through `internal/cli`. `version` is 1.17.9 stable. |
+
+## Milestone v1.17.9 triage (36 upstream PRs, plus 2 version commits)
+
+| PR | Title | Outcome | Class |
+| -- | ----- | ------- | ----- |
+| #35890 | snap: verify raw BAL before decode | kept Bor (snap/2 not carried) | inert |
+| #35691 | pebble: 16 MB L0 files | adopted, both paths | **live (storage performance)**: measure import time and read amplification during the dev-node and Amoy soak |
+| #35927 | golang lint update | kept Bor's CI | inert |
+| #35924 | spec-test fixtures v21.0.1 | kept Bor's pin | inert |
+| #35930 | snap: pivot ancestry check | kept Bor (snap/2 only) | inert |
+| #35901, #35902 | devp2p cell tests | kept Bor (eth/72) | inert |
+| #35939 | freezer metadata at a fixed size | adopted | **live (storage)**: real-binary round trip new → v2.10.3 → new passed |
+| #35936 | pathdb reactivation after state sync | adopted | live (state sync only) |
+| #35842, #35841 | `eth_simulateV1` nonce limit, log numbering | taken | live (RPC) |
+| #35905 | tracer state view without BAL recording | adopted | live wrapper, dormant effect (EIP-7928) |
+| #35385, #35956 | Gloas beacon light client | taken | inert (Bor doesn't run the beacon light client); adds `attestantio/go-eth2-client` |
+| #35673 | discovery listener metrics | taken | live (metrics only) |
+| #35914 | reject EIP-1559 fields in calls before London | taken | live (RPC) |
+| #35952 | bad-block report formatting | taken | inert |
+| #35949 | pathdb histories written in background | adopted, merged with Bor's address-biased cache | **live (state storage)**: witness regeneration and BlockSTM replays unchanged |
+| #35953 | `eth_simulateV1` override validation | taken | live (RPC) |
+| #35933 | earliest `toBlock` in log filters | taken | live (RPC) |
+| #35907 | transaction history decoupled from archive mode | taken (`cmd/geth` flags only) | inert for `bor` (`internal/cli` config) |
+| #35935 | `-dlgo` Go 1.27.2 | kept Bor (Go 1.26.10) | inert |
+| #35957 | beacon light request timeout | taken | inert |
+| #35961 | struct logger omits storage on halted steps | adopted | live (tracing); before Hampi, SSTORE in a static call still shows storage |
+| #35958 | doc comment | taken | inert |
+| #35968 | miner pending timestamp | kept Bor (no `getPending`) | inert |
+| #35974 | Amsterdam on Hoodi | kept Bor (no chainspecs) | inert |
+| #35978 | pathdb historical reads retry on stale layer | taken | live (historical state reads) |
+| #35875 | log index starts past the history cutoff | taken | live (log index) |
+| #35761 | yParity validation for JSON authorizations | taken | live (RPC decoding) |
+| #35928 | blob fee cap without blob hashes | adopted | consensus path, unreachable for real blocks; live (RPC) |
+| #35982 | snap/2 frozen pivot validation | kept Bor (deleted `downloader.go`) | inert |
+| #35988 | effective tip below the base fee | adopted | **live (txpool → miner)**: no change to block contents |
+| #35975 | BPO forks after Amsterdam | kept Bor (block-based fork order) | inert |
+| #35969 | access list kept with `gasPrice` | taken | live (RPC) |
+| #35638 | generated switch interpreter with PGO | **deferred** (needs-wiring) | would be live (EVM dispatch); performance only |
+
+Bor wiring candidates: none new. #35638 is the one deferred item, recorded in
+needs-wiring together with #35959 (v1.17.10).
