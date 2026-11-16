@@ -652,7 +652,6 @@ func (p *Peer) Info() *PeerInfo {
 	return info
 }
 
-// ConnectionActivity returns the transport state used by peer reputation.
 func (p *Peer) ConnectionActivity() *peerpolicy.ConnectionActivity {
 	if _, live := p.activity.Last(); !live {
 		return nil

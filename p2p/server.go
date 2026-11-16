@@ -76,7 +76,7 @@ type Server struct {
 	// Config fields may not be modified while the server is running.
 	Config
 	peerPolicy atomic.Pointer[peerpolicy.Tracker]
-	limitsMu   sync.RWMutex // protects the runtime MaxPeers limit
+	limitsMu   sync.RWMutex
 
 	// Hooks for testing. These are useful because we can inhibit
 	// the whole protocol stack.
@@ -779,7 +779,7 @@ func (srv *Server) setupDialScheduler() {
 }
 
 func peerSlotsScarce(count, limit int) bool {
-	return limit > 0 && count >= limit-limit/10
+	return limit > 0 && count >= limit-limit/4
 }
 
 func (srv *Server) peerPressure(count, inbound int) (bool, bool) {

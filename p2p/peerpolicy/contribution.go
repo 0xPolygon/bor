@@ -12,17 +12,14 @@ import (
 	"github.com/ethereum/go-ethereum/common/mclock"
 )
 
-// Contribution uses a rolling window and a readiness-gated grace period.
 const (
 	activityWidth = time.Minute
 	activityCount = 30
-	activityGrace = IdleTimeout
+	activityGrace = 10 * time.Minute
 )
 
-const IdleTimeout = 10 * time.Minute
+const IdleTimeout = 5 * time.Minute
 
-// ConnectionActivity is shared by transport liveness and contribution scoring.
-// Protocol reads update it without acquiring the tracker mutex.
 type ConnectionActivity struct {
 	last             atomic.Int64
 	auxiliary        atomic.Int64
@@ -84,6 +81,7 @@ type ContributionSnapshot struct {
 	ObservedSeconds            uint64  `json:"observedSeconds"`
 	WindowSeconds              uint64  `json:"windowSeconds"`
 	GraceSeconds               uint64  `json:"graceSeconds"`
+	IdleGraceSeconds           uint64  `json:"idleGraceSeconds,omitempty"`
 	LastContributionAgeSeconds *uint64 `json:"lastContributionAgeSeconds,omitempty"`
 	ProtocolIdleSeconds        *uint64 `json:"protocolIdleSeconds,omitempty"`
 	ProtocolActivityScope      string  `json:"protocolActivityScope,omitempty"`
@@ -262,6 +260,7 @@ func (a *activityRecord) connectionSnapshot(now mclock.AbsTime, ready bool, resu
 		return ready
 	}
 	result.ProtocolActivityScope = "all-subprotocols"
+	result.IdleGraceSeconds = uint64(IdleTimeout / time.Second)
 	if a.connection.idleDisconnected.Load() {
 		result.DisconnectReason = "idle"
 	}
@@ -280,10 +279,10 @@ func (s *ContributionSnapshot) classify(ready bool) {
 	switch {
 	case !ready:
 		s.Status = "unknown"
+	case s.ProtocolIdleSeconds != nil && s.ObservedSeconds >= s.IdleGraceSeconds && *s.ProtocolIdleSeconds >= s.IdleGraceSeconds:
+		s.Status = "idle"
 	case s.ObservedSeconds < s.GraceSeconds:
 		s.Status = "warming-up"
-	case s.ProtocolIdleSeconds != nil && *s.ProtocolIdleSeconds >= s.GraceSeconds:
-		s.Status = "idle"
 	case s.AcceptedTransactions > 0:
 		s.Status = "contributing"
 	case s.UnclassifiedMessages > 0 || s.auxiliaryActive:

@@ -57,7 +57,7 @@ func TestContributionIdleRechecksActivityAndReadiness(t *testing.T) {
 	var connection ConnectionActivity
 	connection.Start(clock.Now())
 	tracker.BindConnection("peer", 0, &connection)
-	clock.Run(activityGrace)
+	clock.Run(IdleTimeout)
 	last, idle := tracker.IdleSince("peer", &connection)
 	if !idle || tracker.Snapshot("peer").Risk != 20 {
 		t.Fatal("idle score and eligibility disagree")
@@ -66,7 +66,7 @@ func TestContributionIdleRechecksActivityAndReadiness(t *testing.T) {
 	if tracker.RetireIdle("peer", &connection, last) {
 		t.Fatal("new protocol traffic was ignored")
 	}
-	clock.Run(activityGrace)
+	clock.Run(IdleTimeout)
 	last, _ = tracker.IdleSince("peer", &connection)
 	tracker.SetReady(false)
 	if tracker.RetireIdle("peer", &connection, last) {
@@ -75,7 +75,7 @@ func TestContributionIdleRechecksActivityAndReadiness(t *testing.T) {
 	contributionStatus(t, tracker, "unknown")
 	clock.Run(time.Minute)
 	tracker.SetReady(true)
-	clock.Run(activityGrace - time.Nanosecond)
+	clock.Run(IdleTimeout - time.Nanosecond)
 	if tracker.RetireIdle("peer", &connection, last) {
 		t.Fatal("readiness grace was skipped")
 	}
@@ -98,7 +98,7 @@ func TestContributionIdleSessionIsolation(t *testing.T) {
 	var old, current ConnectionActivity
 	old.Start(clock.Now())
 	tracker.BindConnection("peer", 0, &old)
-	clock.Run(activityGrace)
+	clock.Run(IdleTimeout)
 	last, _ := tracker.IdleSince("peer", &old)
 	started := tracker.Connected("peer")
 	current.Start(clock.Now())
@@ -111,7 +111,7 @@ func TestContributionIdleSessionIsolation(t *testing.T) {
 	if got := contributionStatus(t, tracker, "warming-up"); got.DisconnectReason != "" {
 		t.Fatal("stale disconnect overwrote the new session")
 	}
-	clock.Run(activityGrace)
+	clock.Run(IdleTimeout)
 	if _, idle := tracker.IdleSince("peer", &current); !idle {
 		t.Fatal("current session lost its shared activity")
 	}
@@ -124,7 +124,7 @@ func TestContributionIdleDoesNotWaitForObservation(t *testing.T) {
 	tracker.BindConnection("peer", 0, &connection)
 	var resolved atomic.Bool
 	tracker.SetClassResolver(func(string) (bool, bool) { resolved.Store(true); return false, false })
-	clock.Run(activityGrace)
+	clock.Run(IdleTimeout)
 	last, idle := tracker.IdleSince("peer", &connection)
 	if !idle {
 		t.Fatal("idle connection was excluded")
@@ -156,7 +156,7 @@ func TestContributionIdleMissingCoverage(t *testing.T) {
 	var connection ConnectionActivity
 	connection.Start(clock.Now())
 	tracker.BindConnection("peer", 0, &connection)
-	clock.Run(activityGrace)
+	clock.Run(IdleTimeout)
 	for i := range maxPeers {
 		tracker.Connected(string(rune(i + 1)))
 	}
@@ -168,7 +168,7 @@ func TestContributionIdleMissingCoverage(t *testing.T) {
 	if _, idle := tracker.IdleSince("peer", &connection); idle {
 		t.Fatal("restored coverage skipped grace")
 	}
-	clock.Run(activityGrace)
+	clock.Run(IdleTimeout)
 	if _, idle := tracker.IdleSince("peer", &connection); !idle {
 		t.Fatal("restored session did not become eligible")
 	}
@@ -459,5 +459,31 @@ func TestContributionConnectionKnowledge(t *testing.T) {
 	got = tracker.Snapshot("peer").Contribution
 	if !got.ConnectionKnown || got.ConnectionSeconds != 60 {
 		t.Fatalf("registered connection age lost: %+v", got)
+	}
+}
+
+func TestContributionSeparateIdleGrace(t *testing.T) {
+	tracker, clock := newContributionTracker()
+	var connection ConnectionActivity
+	connection.Start(clock.Now())
+	tracker.BindConnection("peer", 0, &connection)
+	clock.Run(5*time.Minute - time.Nanosecond)
+	contributionStatus(t, tracker, "warming-up")
+	clock.Run(time.Nanosecond)
+	got := contributionStatus(t, tracker, "idle")
+	if got.Risk != 20 || got.IdleGraceSeconds != 300 || got.GraceSeconds != 600 {
+		t.Fatalf("unexpected grace profile: %+v", got)
+	}
+	for range 3 {
+		connection.Observe(clock.Now(), false)
+		tracker.Observe("peer", Evidence{Activity: ActivityEvent{ServedResponses: 1}})
+		clock.Run(time.Minute)
+	}
+	contributionStatus(t, tracker, "warming-up")
+	clock.Run(2 * time.Minute)
+	connection.Observe(clock.Now(), false)
+	got = contributionStatus(t, tracker, "request-only")
+	if got.Risk != 20 {
+		t.Fatalf("request-only risk = %d", got.Risk)
 	}
 }

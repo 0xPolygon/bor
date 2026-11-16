@@ -68,7 +68,7 @@ func waitActivityPeers(t *testing.T, srv *Server, want int) {
 	t.Fatalf("connected peers = %d, want %d", srv.PeerCount(), want)
 }
 
-func advanceActivityClock(t *testing.T, clock *mclock.Simulated, elapsed time.Duration) {
+func advanceActivityClock(t *testing.T, srv *Server, clock *mclock.Simulated, elapsed time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	// This fixture disables discovery and dialing, leaving only the policy timer.
@@ -78,6 +78,8 @@ func advanceActivityClock(t *testing.T, clock *mclock.Simulated, elapsed time.Du
 		}
 		time.Sleep(time.Millisecond)
 	}
+	// Finish the previous timer callback before advancing simulated time.
+	srv.doPeerOp(func(map[enode.ID]*Peer) {})
 	clock.Run(elapsed)
 }
 
@@ -116,13 +118,13 @@ func TestPeerIdleStartupGrace(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("peer did not reach startup hook")
 	}
-	advanceActivityClock(t, clock, 20*time.Minute)
+	advanceActivityClock(t, srv, clock, 20*time.Minute)
 	if _, live := peer.activity.Last(); live {
 		t.Fatal("peer was considered idle before protocols started")
 	}
 	unblock()
 	waitActivityPeers(t, srv, 1)
-	if last, live := peer.activity.Last(); !live || clock.Now().Add(10*time.Minute-time.Nanosecond).Sub(last) >= peerIdleTimeout {
+	if last, live := peer.activity.Last(); !live || clock.Now().Add(peerIdleTimeout-time.Nanosecond).Sub(last) >= peerIdleTimeout {
 		t.Fatal("peer lost its grace period during local startup delay")
 	}
 }
@@ -153,19 +155,21 @@ func testPeerIdleEvictionRLPX(t *testing.T, enabled bool) {
 		}
 	}
 	waitActivityPeers(t, srv, 9)
-	advanceActivityClock(t, clock, peerIdleTimeout-time.Second)
+	advanceActivityClock(t, srv, clock, peerIdleTimeout-time.Second)
 	keepActivityPeer(t, clients[0], received)
-	advanceActivityClock(t, clock, time.Second)
+	advanceActivityClock(t, srv, clock, time.Second)
 	if !enabled {
-		advanceActivityClock(t, clock, time.Hour)
+		advanceActivityClock(t, srv, clock, time.Hour)
 		waitActivityPeers(t, srv, 9)
 		return
 	}
-	advanceActivityClock(t, clock, peerIdleCheckInterval)
+	advanceActivityClock(t, srv, clock, peerIdleCheckInterval)
 	waitActivityPeers(t, srv, 8)
+	srv.SetMaxPeers(20)
 	checkActivityCooldown(t, srv, keys, clock)
 	waitActivityPeers(t, srv, 9)
-	advanceActivityClock(t, clock, time.Minute)
+	srv.SetMaxPeers(9)
+	advanceActivityClock(t, srv, clock, time.Minute)
 	waitActivityPeers(t, srv, 8)
 }
 
@@ -199,7 +203,7 @@ func checkActivityCooldown(t *testing.T, srv *Server, keys []*ecdsa.PrivateKey, 
 	if _, err := connectActivityPeer(t, srv, jailed, 68); !errors.Is(err, DiscJailed) {
 		t.Fatalf("reconnect error = %v, want DiscJailed", err)
 	}
-	advanceActivityClock(t, clock, peerIdleCooldown+time.Nanosecond)
+	advanceActivityClock(t, srv, clock, peerIdleCooldown+time.Nanosecond)
 	if _, err := connectActivityPeer(t, srv, jailed, 68); err != nil {
 		t.Fatalf("reconnect after cooldown: %v", err)
 	}

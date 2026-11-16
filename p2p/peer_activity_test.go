@@ -88,9 +88,9 @@ func TestPeerIdleEvictionEligibility(t *testing.T) {
 		change         func(*Server, *Peer)
 		want           bool
 	}{
-		{"grace", 20, 14, peerIdleTimeout - 1, nil, false},
-		{"idle-at-boundary", 20, 14, peerIdleTimeout, nil, true},
-		{"spare-slots", 10, 5, peerIdleTimeout, nil, false},
+		{"grace", 20, 14, 5*time.Minute - time.Nanosecond, nil, false},
+		{"idle-at-boundary", 20, 14, 5 * time.Minute, nil, true},
+		{"spare-slots", 8, 4, peerIdleTimeout, nil, false},
 		{"inbound-full", 13, 13, peerIdleTimeout, nil, true},
 		{"outbound-full", 6, 0, peerIdleTimeout, nil, true},
 		{"total-full", 18, 17, peerIdleTimeout, nil, true},
@@ -211,7 +211,7 @@ func TestPeerIdleGraceStartsAtConnection(t *testing.T) {
 	p.closed = make(chan struct{})
 	p.activity.Start(p.created)
 	t.Cleanup(func() { p.rw.fd.Close() })
-	if last, live := p.activity.Last(); !live || p.created.Add(10*time.Minute-time.Nanosecond).Sub(last) >= peerIdleTimeout {
+	if last, live := p.activity.Last(); !live || p.created.Add(peerIdleTimeout-time.Nanosecond).Sub(last) >= peerIdleTimeout {
 		t.Fatal("new connection did not receive a grace period")
 	}
 }
@@ -253,14 +253,15 @@ func TestPeerIdlePressureBoundaries(t *testing.T) {
 	for _, tc := range []struct {
 		count, limit int
 		want         bool
-	}{{18, 20, true}, {17, 20, false}, {9, 10, true}, {8, 10, false}, {1, 0, false}, {1, -1, false}} {
+	}{{15, 20, true}, {14, 20, false}, {8, 10, true}, {7, 10, false}, {1, 0, false}, {1, -1, false}} {
 		if got := peerSlotsScarce(tc.count, tc.limit); got != tc.want {
 			t.Fatalf("pressure(%d, %d) = %v", tc.count, tc.limit, got)
 		}
 	}
 	for limit := 1; limit < 10; limit++ {
-		if peerSlotsScarce(limit-1, limit) || !peerSlotsScarce(limit, limit) {
-			t.Fatalf("incorrect rounding of 90%% for limit %d", limit)
+		threshold := (3*limit + 3) / 4
+		if peerSlotsScarce(threshold-1, limit) || !peerSlotsScarce(threshold, limit) {
+			t.Fatalf("incorrect rounding of 75%% for limit %d", limit)
 		}
 	}
 }
@@ -338,5 +339,26 @@ func TestPeerActivityConcurrentEviction(t *testing.T) {
 	<-done
 	if _, live := p.activity.Last(); live {
 		t.Fatal("closing session was reopened")
+	}
+}
+
+func TestPeerIdleSparseTraffic(t *testing.T) {
+	srv, peers, clock := activityTestServer(t, 20, 14)
+	peer := peers[uintID(20)]
+	peer.rw.set(trustedConn, false)
+	for minute := range 25 {
+		clock.Run(time.Minute)
+		if minute%4 == 3 {
+			peer.activity.Observe(clock.Now(), false)
+		}
+		srv.expireIdlePeer(peers)
+		if len(peer.disc) != 0 || srv.peerJail.IsJailed(peer.ID()) {
+			t.Fatalf("active peer retired at minute %d", minute+1)
+		}
+	}
+	clock.Run(5 * time.Minute)
+	srv.expireIdlePeer(peers)
+	if len(peer.disc) != 1 {
+		t.Fatal("peer was not eligible after becoming silent")
 	}
 }
