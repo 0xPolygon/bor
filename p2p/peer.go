@@ -105,12 +105,11 @@ type PeerEvent struct {
 
 // Peer represents a connected remote node.
 type Peer struct {
-	rw      *conn
-	running map[string]*protoRW
-	log     log.Logger
-	created mclock.AbsTime
-	clock   mclock.Clock
-	// Retained reputation must not keep the peer and transport buffers alive.
+	rw       *conn
+	running  map[string]*protoRW
+	log      log.Logger
+	created  mclock.AbsTime
+	clock    mclock.Clock
 	activity *peerpolicy.ConnectionActivity
 
 	wg       sync.WaitGroup
