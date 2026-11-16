@@ -426,6 +426,8 @@ func ProcessBeaconBlockRoot(beaconRoot common.Hash, evm *vm.EVM) {
 	evm.SetTxContext(NewEVMTxContext(msg))
 	evm.StateDB.SetTxContext(common.Hash{}, 0, 0)
 	evm.StateDB.AddAddressToAccessList(params.BeaconRootsAddress)
+
+	// Unchecked system call (EIP-4788), failures are ignored as spec
 	_, _, _ = evm.Call(msg.From, *msg.To, msg.Data, gasBudget, common.U2560)
 	if evm.StateDB.AccessEvents() != nil {
 		evm.StateDB.AccessEvents().Merge(evm.AccessEvents)
@@ -455,10 +457,9 @@ func ProcessParentBlockHash(prevHash common.Hash, evm *vm.EVM) {
 	evm.SetTxContext(NewEVMTxContext(msg))
 	evm.StateDB.SetTxContext(common.Hash{}, 0, 0)
 	evm.StateDB.AddAddressToAccessList(params.HistoryStorageAddress)
-	_, _, err := evm.Call(msg.From, *msg.To, msg.Data, gasBudget, common.U2560)
-	if err != nil {
-		panic(err)
-	}
+
+	// Unchecked system call (EIP-2935), failures are ignored as spec
+	_, _, _ = evm.Call(msg.From, *msg.To, msg.Data, gasBudget, common.U2560)
 	if evm.StateDB.AccessEvents() != nil {
 		evm.StateDB.AccessEvents().Merge(evm.AccessEvents)
 	}

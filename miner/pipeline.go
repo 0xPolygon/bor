@@ -208,7 +208,7 @@ func (w *worker) spawnSRCForFinalBlock(finalHeader *types.Header, rootN common.H
 
 // shouldLateRefillSpeculativeBlock reports whether a speculative block should
 // take one more txpool snapshot shortly before the slot boundary.
-func shouldLateRefillSpeculativeBlock(env *environment) bool {
+func shouldLateRefillSpeculativeBlock(env *environment, amsterdam bool) bool {
 	if len(env.txs) == 0 {
 		return true
 	}
@@ -218,7 +218,7 @@ func shouldLateRefillSpeculativeBlock(env *environment) bool {
 
 	// Skip the top-up when the block is already mostly full. Otherwise, give it
 	// one late snapshot to catch txs that arrived after the initial early fill.
-	return env.gasPool.Gas() > env.header.GasLimit/speculativeLowFillRemainingGasDivisor
+	return env.gasPool.Available(amsterdam) > env.header.GasLimit/speculativeLowFillRemainingGasDivisor
 }
 
 // fillSpeculativeTransactions snapshots the txpool once immediately, and if
@@ -230,7 +230,7 @@ func (w *worker) fillSpeculativeTransactions(env *environment, interrupt *atomic
 	err := w.fillTransactions(interrupt, env, nil)
 	totalFill := time.Since(fillStart)
 
-	if err != nil || !shouldLateRefillSpeculativeBlock(env) {
+	if err != nil || !shouldLateRefillSpeculativeBlock(env, w.chainConfig.IsAmsterdam(env.header.Number)) {
 		return totalFill
 	}
 

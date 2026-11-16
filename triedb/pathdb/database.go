@@ -361,6 +361,7 @@ func (db *Database) Disable() error {
 	if err := disk.terminate(false); err != nil {
 		return err
 	}
+	disk.resetCache() // a stale layer can no longer release its caches
 	disk.markStale()
 
 	// State sync rebuilds the trie, so a saved address cache snapshot now

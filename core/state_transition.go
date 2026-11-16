@@ -599,7 +599,10 @@ func (st *stateTransition) preCheck(rules params.Rules) error {
 	// applies from whichever of the two activates first.
 	isMadhugiri := st.evm.ChainConfig().Bor != nil && st.evm.ChainConfig().Bor.IsMadhugiri(st.evm.Context.BlockNumber)
 	if !msg.SkipTransactionChecks {
-		// Verify tx gas limit does not exceed EIP-7825 cap.
+		// Verify tx gas limit does not exceed the EIP-8037 total cap, or the EIP-7825 cap before it.
+		if rules.IsAmsterdam && msg.GasLimit > params.MaxTxTotalGas {
+			return fmt.Errorf("%w (cap: %d, tx: %d)", ErrGasLimitTooHigh, params.MaxTxTotalGas, msg.GasLimit)
+		}
 		if !rules.IsAmsterdam && (rules.IsOsaka || isMadhugiri) && msg.GasLimit > params.MaxTxGas {
 			return fmt.Errorf("%w (cap: %d, tx: %d)", ErrGasLimitTooHigh, params.MaxTxGas, msg.GasLimit)
 		}

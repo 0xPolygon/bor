@@ -56,10 +56,10 @@ func TestShouldLateRefillSpeculativeBlock(t *testing.T) {
 		return env
 	}
 
-	require.True(t, shouldLateRefillSpeculativeBlock(newEnv(0, 1000, 0, false)))
-	require.True(t, shouldLateRefillSpeculativeBlock(newEnv(1, 1000, 600, true)))
-	require.True(t, shouldLateRefillSpeculativeBlock(newEnv(2, 1000, 0, false)))
-	require.False(t, shouldLateRefillSpeculativeBlock(newEnv(1, 1000, 200, true)))
+	require.True(t, shouldLateRefillSpeculativeBlock(newEnv(0, 1000, 0, false), false))
+	require.True(t, shouldLateRefillSpeculativeBlock(newEnv(1, 1000, 600, true), false))
+	require.True(t, shouldLateRefillSpeculativeBlock(newEnv(2, 1000, 0, false), false))
+	require.False(t, shouldLateRefillSpeculativeBlock(newEnv(1, 1000, 200, true), false))
 }
 
 func TestPipelineLocalHelpers(t *testing.T) {

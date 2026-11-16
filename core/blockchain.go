@@ -654,6 +654,9 @@ type BlockChain struct {
 	stopping      atomic.Bool   // false if chain is running, true when stopped
 	procInterrupt atomic.Bool   // interrupt signaler for block processing
 
+	prefetchLock sync.Mutex     // Orders prefetcher launches against shutdown
+	prefetchWg   sync.WaitGroup // Tracks running block prefetchers
+
 	engine                         consensus.Engine
 	validator                      Validator // Block and state validator interface
 	prefetcher                     Prefetcher
@@ -1305,7 +1308,12 @@ func (c *sharedBlockCaches) applyTo(cfg *vm.Config) {
 // for the real processors.
 func (bc *BlockChain) startPrefetchGoroutine(block *types.Block, throwaway *state.StateDB,
 	caches *sharedBlockCaches, followupInterrupt *atomic.Bool) {
+	if !bc.trackPrefetch() {
+		return
+	}
 	go func(start time.Time) {
+		defer bc.prefetchWg.Done()
+
 		vmCfg := bc.cfg.VmConfig
 		vmCfg.Tracer = nil
 		caches.applyTo(&vmCfg)
@@ -1315,6 +1323,19 @@ func (bc *BlockChain) startPrefetchGoroutine(block *types.Block, throwaway *stat
 			blockPrefetchInterruptMeter.Mark(1)
 		}
 	}(time.Now())
+}
+
+// trackPrefetch registers a block prefetcher, or returns false if the
+// chain is stopping.
+func (bc *BlockChain) trackPrefetch() bool {
+	bc.prefetchLock.Lock()
+	defer bc.prefetchLock.Unlock()
+
+	if bc.stopping.Load() {
+		return false
+	}
+	bc.prefetchWg.Add(1)
+	return true
 }
 
 func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, witness *stateless.Witness, followupInterrupt *atomic.Bool, pipeOpts *PipelineImportOpts) (_ types.Receipts, _ []*types.Log, _ uint64, _ *state.StateDB, vtime time.Duration, blockEndErr error) {
@@ -2497,6 +2518,11 @@ func (bc *BlockChain) stopWithoutSaving() {
 	// returned.
 	bc.chainmu.Close()
 	bc.wg.Wait()
+
+	// Wait for the block prefetchers
+	bc.prefetchLock.Lock()
+	bc.prefetchWg.Wait()
+	bc.prefetchLock.Unlock()
 }
 
 // Stop stops the blockchain service. If any imports are currently in progress
