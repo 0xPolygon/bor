@@ -19,6 +19,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	type Config struct {
 		PrivateKey         *ecdsa.PrivateKey `toml:"-"`
 		MaxPeers           int
+		PeerIdleEviction   bool
 		MaxPendingPeers    int `toml:",omitempty"`
 		DialRatio          int `toml:",omitempty"`
 		NoDiscovery        bool
@@ -41,10 +42,20 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		Logger             log.Logger `toml:"-"`
 		TxArrivalWait      time.Duration
 		TxAnnouncementOnly bool
+
+		PeerIdleGracePeriod        time.Duration
+		PeerIdleMaxRemovals        int
+		PeerIdleReconnectCooldown  time.Duration
+		PeerIdleOccupancyThreshold int
 	}
 	var enc Config
 	enc.PrivateKey = c.PrivateKey
 	enc.MaxPeers = c.MaxPeers
+	enc.PeerIdleEviction = c.PeerIdleEviction
+	enc.PeerIdleGracePeriod = c.PeerIdleGracePeriod
+	enc.PeerIdleMaxRemovals = c.PeerIdleMaxRemovals
+	enc.PeerIdleReconnectCooldown = c.PeerIdleReconnectCooldown
+	enc.PeerIdleOccupancyThreshold = c.PeerIdleOccupancyThreshold
 	enc.MaxPendingPeers = c.MaxPendingPeers
 	enc.DialRatio = c.DialRatio
 	enc.NoDiscovery = c.NoDiscovery
@@ -75,6 +86,7 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	type Config struct {
 		PrivateKey         *ecdsa.PrivateKey `toml:"-"`
 		MaxPeers           *int
+		PeerIdleEviction   *bool
 		MaxPendingPeers    *int `toml:",omitempty"`
 		DialRatio          *int `toml:",omitempty"`
 		NoDiscovery        *bool
@@ -97,6 +109,11 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		Logger             log.Logger `toml:"-"`
 		TxArrivalWait      *time.Duration
 		TxAnnouncementOnly *bool
+
+		PeerIdleGracePeriod        *time.Duration
+		PeerIdleMaxRemovals        *int
+		PeerIdleReconnectCooldown  *time.Duration
+		PeerIdleOccupancyThreshold *int
 	}
 	var dec Config
 	if err := unmarshal(&dec); err != nil {
@@ -107,6 +124,21 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.MaxPeers != nil {
 		c.MaxPeers = *dec.MaxPeers
+	}
+	if dec.PeerIdleEviction != nil {
+		c.PeerIdleEviction = *dec.PeerIdleEviction
+	}
+	if dec.PeerIdleGracePeriod != nil {
+		c.PeerIdleGracePeriod = *dec.PeerIdleGracePeriod
+	}
+	if dec.PeerIdleMaxRemovals != nil {
+		c.PeerIdleMaxRemovals = *dec.PeerIdleMaxRemovals
+	}
+	if dec.PeerIdleReconnectCooldown != nil {
+		c.PeerIdleReconnectCooldown = *dec.PeerIdleReconnectCooldown
+	}
+	if dec.PeerIdleOccupancyThreshold != nil {
+		c.PeerIdleOccupancyThreshold = *dec.PeerIdleOccupancyThreshold
 	}
 	if dec.MaxPendingPeers != nil {
 		c.MaxPendingPeers = *dec.MaxPendingPeers

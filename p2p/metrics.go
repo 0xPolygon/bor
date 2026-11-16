@@ -37,6 +37,7 @@ const (
 )
 
 var (
+	idlePeerDisconnects     = metrics.NewRegisteredCounter("p2p/peers/idle/disconnects", nil)
 	activePeerGauge         = metrics.NewRegisteredGauge("p2p/peers", nil)
 	activeInboundPeerGauge  = metrics.NewRegisteredGauge("p2p/peers/inbound", nil)
 	activeOutboundPeerGauge = metrics.NewRegisteredGauge("p2p/peers/outbound", nil)

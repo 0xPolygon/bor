@@ -50,7 +50,7 @@ func TestPeerTrafficJailing(t *testing.T) {
 				t.Fatalf("peer jailed: got %v, want %v", got, tc.jail)
 			}
 			if tc.jail {
-				remaining := mclock.AbsTime(entry.Int()).Sub(mclock.Now())
+				remaining := mclock.AbsTime(entry.FieldByName("penaltyUntil").Int()).Sub(mclock.Now())
 				if remaining < peerTrafficBackoff-time.Second || remaining > peerTrafficBackoff+time.Second {
 					t.Fatalf("backoff period: got %v, want %v", remaining, peerTrafficBackoff)
 				}

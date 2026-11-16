@@ -49,22 +49,24 @@ type peerRecord struct {
 }
 
 type Tracker struct {
-	mu             sync.Mutex
-	transitions    transitionBudget
-	clock          mclock.Clock
-	peers          lru.BasicLRU[string, *peerRecord]
-	metrics        *observationMetrics
-	ready          bool
-	readyStarted   bool
-	readyAt        mclock.AbsTime
-	pausedFor      mclock.AbsTime
-	resetAt        mclock.AbsTime
-	resetPausedFor mclock.AbsTime
-	classResolver  func(string) (bool, bool)
+	mu               sync.Mutex
+	transitions      transitionBudget
+	clock            mclock.Clock
+	peers            lru.BasicLRU[string, *peerRecord]
+	metrics          *observationMetrics
+	ready            bool
+	readyStarted     bool
+	readyAt          mclock.AbsTime
+	pausedFor        mclock.AbsTime
+	resetAt          mclock.AbsTime
+	resetPausedFor   mclock.AbsTime
+	classResolver    func(string) (bool, bool)
+	idleGraceSeconds uint64
 }
 
 func New(clock mclock.Clock) *Tracker {
-	return &Tracker{clock: clock, peers: lru.NewBasicLRU[string, *peerRecord](maxPeers), metrics: newObservationMetrics()}
+	return &Tracker{clock: clock, peers: lru.NewBasicLRU[string, *peerRecord](maxPeers), metrics: newObservationMetrics(),
+		idleGraceSeconds: uint64(IdleTimeout / time.Second)}
 }
 
 // Observe retains no payloads and performs no I/O. Records survive reconnects
@@ -334,7 +336,7 @@ func (t *Tracker) snapshotPeer(id string, p *peerRecord, now mclock.AbsTime, win
 		}
 	}
 	t.prepareActivity(&p.activity, now)
-	contribution := p.activity.snapshot(now, t.ready && connected, p.exempt)
+	contribution := p.activity.snapshot(now, t.ready && connected, p.exempt, t.idleGraceSeconds)
 	abuse := p.risk(int64(now)/int64(windowWidth), windows)
 	risk := max(abuse, contribution.Risk)
 	return Snapshot{

@@ -38,6 +38,7 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/nat"
 	"github.com/ethereum/go-ethereum/p2p/netutil"
+	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
 )
@@ -250,8 +251,15 @@ type PprofConfig struct {
 }
 
 type P2PConfig struct {
-	PeerReputation               bool `hcl:"peer-reputation,optional" toml:"peer-reputation,optional"`
-	PeerReputationPerPeerMetrics bool `hcl:"peer-reputation-per-peer-metrics,optional" toml:"peer-reputation-per-peer-metrics,optional"`
+	PeerReputation               bool          `hcl:"peer-reputation,optional" toml:"peer-reputation,optional"`
+	PeerReputationPerPeerMetrics bool          `hcl:"peer-reputation-per-peer-metrics,optional" toml:"peer-reputation-per-peer-metrics,optional"`
+	PeerIdleEviction             bool          `hcl:"peer-idle-eviction,optional" toml:"peer-idle-eviction,optional"`
+	PeerIdleGracePeriod          time.Duration `hcl:"-,optional" toml:"-"`
+	PeerIdleGracePeriodRaw       string        `hcl:"peer-idle-grace-period,optional" toml:"peer-idle-grace-period,optional"`
+	PeerIdleMaxRemovals          int           `hcl:"peer-idle-max-removals,optional" toml:"peer-idle-max-removals,optional"`
+	PeerIdleReconnectCooldown    time.Duration `hcl:"-,optional" toml:"-"`
+	PeerIdleReconnectCooldownRaw string        `hcl:"peer-idle-reconnect-cooldown,optional" toml:"peer-idle-reconnect-cooldown,optional"`
+	PeerIdleOccupancyThreshold   int           `hcl:"peer-idle-occupancy-threshold,optional" toml:"peer-idle-occupancy-threshold,optional"`
 	// MaxPeers sets the maximum number of connected peers
 	MaxPeers uint64 `hcl:"maxpeers,optional" toml:"maxpeers,optional"`
 
@@ -959,6 +967,9 @@ func DefaultConfig() *Config {
 		},
 		P2P: &P2PConfig{
 			PeerReputation:       true,
+			PeerIdleEviction:     true,
+			PeerIdleGracePeriod:  peerpolicy.IdleTimeout,
+			PeerIdleMaxRemovals:  1,
 			MaxPeers:             50,
 			MaxPendPeers:         50,
 			Bind:                 "0.0.0.0",
@@ -980,6 +991,8 @@ func DefaultConfig() *Config {
 				TrustedNodes: []string{},
 				DNS:          []string{},
 			},
+			PeerIdleReconnectCooldown:  p2p.DefaultPeerIdleReconnectCooldown,
+			PeerIdleOccupancyThreshold: p2p.DefaultPeerIdleOccupancyThreshold,
 		},
 		Heimdall: &HeimdallConfig{
 			URL:         "http://localhost:1317",
@@ -1268,6 +1281,8 @@ func (c *Config) fillTimeDurations() error {
 		{"txpool.rebroadcast-max-age", &c.TxPool.RebroadcastMaxAge, &c.TxPool.RebroadcastMaxAgeRaw},
 		{"cache.timeout", &c.Cache.TrieTimeout, &c.Cache.TrieTimeoutRaw},
 		{"p2p.txarrivalwait", &c.P2P.TxArrivalWait, &c.P2P.TxArrivalWaitRaw},
+		{"p2p.peer-idle-grace-period", &c.P2P.PeerIdleGracePeriod, &c.P2P.PeerIdleGracePeriodRaw},
+		{"p2p.peer-idle-reconnect-cooldown", &c.P2P.PeerIdleReconnectCooldown, &c.P2P.PeerIdleReconnectCooldownRaw},
 		{"rpc.txsync.defaulttimeout", &c.JsonRPC.TxSyncDefaultTimeout, &c.JsonRPC.TxSyncDefaultTimeoutRaw},
 		{"rpc.txsync.maxtimeout", &c.JsonRPC.TxSyncMaxTimeout, &c.JsonRPC.TxSyncMaxTimeoutRaw},
 	}
@@ -1302,7 +1317,7 @@ func readConfigFile(path string) (*Config, error) {
 	}
 
 	config := &Config{
-		P2P:    &P2PConfig{PeerReputation: true},
+		P2P:    &P2PConfig{PeerReputation: true, PeerIdleEviction: true, PeerIdleGracePeriod: peerpolicy.IdleTimeout, PeerIdleMaxRemovals: 1, PeerIdleReconnectCooldown: p2p.DefaultPeerIdleReconnectCooldown, PeerIdleOccupancyThreshold: p2p.DefaultPeerIdleOccupancyThreshold},
 		Cache:  &CacheConfig{},
 		Sealer: &SealerConfig{},
 		// HCL configs don't start from DefaultConfig, so an omitted
@@ -2101,6 +2116,7 @@ func (c *Config) buildNode(logger log.Logger) (*node.Config, error) {
 		EnablePersonal:        c.JsonRPC.EnablePersonal,
 		P2P: p2p.Config{
 			MaxPeers:             int(c.P2P.MaxPeers),
+			PeerIdleEviction:     c.P2P.PeerIdleEviction && c.P2P.PeerReputation,
 			MaxPendingPeers:      int(c.P2P.MaxPendPeers),
 			ListenAddr:           c.P2P.Bind + ":" + strconv.Itoa(int(c.P2P.Port)),
 			DiscoveryV4:          c.P2P.Discovery.DiscoveryV4,
@@ -2134,6 +2150,9 @@ func (c *Config) buildNode(logger log.Logger) (*node.Config, error) {
 		WSJsonRPCExecutionPoolRequestTimeout:   c.JsonRPC.Ws.ExecutionPoolRequestTimeout,
 		HTTPJsonRPCExecutionPoolSize:           c.JsonRPC.Http.ExecutionPoolSize,
 		HTTPJsonRPCExecutionPoolRequestTimeout: c.JsonRPC.Http.ExecutionPoolRequestTimeout,
+	}
+	if err := c.P2P.applyPeerIdle(&cfg.P2P); err != nil {
+		return nil, err
 	}
 
 	if c.P2P.NetRestrict != "" {
