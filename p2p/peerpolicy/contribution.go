@@ -18,7 +18,7 @@ const (
 	activityGrace = 10 * time.Minute
 )
 
-const IdleTimeout = 5 * time.Minute
+const IdleTimeout = 2 * time.Minute
 
 type ConnectionActivity struct {
 	last             atomic.Int64
@@ -108,6 +108,19 @@ type activityRecord struct {
 	connection      *ConnectionActivity
 }
 
+func (t *Tracker) SetIdleGrace(grace time.Duration) {
+	if grace <= 0 {
+		grace = IdleTimeout
+	}
+	seconds := uint64(grace / time.Second)
+	if grace%time.Second != 0 {
+		seconds++
+	}
+	t.mu.Lock()
+	t.idleGraceSeconds = seconds
+	t.mu.Unlock()
+}
+
 func (t *Tracker) BindConnection(id string, startedAt mclock.AbsTime, connection *ConnectionActivity) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -132,7 +145,7 @@ func (t *Tracker) idleSince(id string, connection *ConnectionActivity) (mclock.A
 	now := t.clock.Now()
 	t.prepareActivity(&p.activity, now)
 	last, live := connection.Last()
-	contribution := p.activity.snapshot(now, t.ready, p.exempt)
+	contribution := p.activity.snapshot(now, t.ready, p.exempt, t.idleGraceSeconds)
 	return last, live && contribution.Status == "idle"
 }
 
@@ -225,7 +238,7 @@ func contributionSnapshot() *ContributionSnapshot {
 		WindowSeconds: uint64(activityCount * activityWidth / time.Second), GraceSeconds: uint64(activityGrace / time.Second)}
 }
 
-func (a *activityRecord) snapshot(now mclock.AbsTime, ready, protected bool) *ContributionSnapshot {
+func (a *activityRecord) snapshot(now mclock.AbsTime, ready, protected bool, idleGraceSeconds uint64) *ContributionSnapshot {
 	result := contributionSnapshot()
 	result.Protected = protected
 	result.ConnectionKnown = a.registered
@@ -249,18 +262,18 @@ func (a *activityRecord) snapshot(now mclock.AbsTime, ready, protected bool) *Co
 		age := uint64(max(now-a.lastUseful, 0) / mclock.AbsTime(time.Second))
 		result.LastContributionAgeSeconds = &age
 	}
-	ready = a.connectionSnapshot(now, ready, result)
+	ready = a.connectionSnapshot(now, ready, result, idleGraceSeconds)
 	result.classify(a.registered && ready)
 	result.score()
 	return result
 }
 
-func (a *activityRecord) connectionSnapshot(now mclock.AbsTime, ready bool, result *ContributionSnapshot) bool {
+func (a *activityRecord) connectionSnapshot(now mclock.AbsTime, ready bool, result *ContributionSnapshot, idleGraceSeconds uint64) bool {
 	if a.connection == nil {
 		return ready
 	}
 	result.ProtocolActivityScope = "all-subprotocols"
-	result.IdleGraceSeconds = uint64(IdleTimeout / time.Second)
+	result.IdleGraceSeconds = idleGraceSeconds
 	if a.connection.idleDisconnected.Load() {
 		result.DisconnectReason = "idle"
 	}

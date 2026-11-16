@@ -42,11 +42,16 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		Logger             log.Logger `toml:"-"`
 		TxArrivalWait      time.Duration
 		TxAnnouncementOnly bool
+
+		PeerIdleGracePeriod time.Duration
+		PeerIdleMaxRemovals int
 	}
 	var enc Config
 	enc.PrivateKey = c.PrivateKey
 	enc.MaxPeers = c.MaxPeers
 	enc.PeerIdleEviction = c.PeerIdleEviction
+	enc.PeerIdleGracePeriod = c.PeerIdleGracePeriod
+	enc.PeerIdleMaxRemovals = c.PeerIdleMaxRemovals
 	enc.MaxPendingPeers = c.MaxPendingPeers
 	enc.DialRatio = c.DialRatio
 	enc.NoDiscovery = c.NoDiscovery
@@ -100,6 +105,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		Logger             log.Logger `toml:"-"`
 		TxArrivalWait      *time.Duration
 		TxAnnouncementOnly *bool
+
+		PeerIdleGracePeriod *time.Duration
+		PeerIdleMaxRemovals *int
 	}
 	var dec Config
 	if err := unmarshal(&dec); err != nil {
@@ -113,6 +121,12 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.PeerIdleEviction != nil {
 		c.PeerIdleEviction = *dec.PeerIdleEviction
+	}
+	if dec.PeerIdleGracePeriod != nil {
+		c.PeerIdleGracePeriod = *dec.PeerIdleGracePeriod
+	}
+	if dec.PeerIdleMaxRemovals != nil {
+		c.PeerIdleMaxRemovals = *dec.PeerIdleMaxRemovals
 	}
 	if dec.MaxPendingPeers != nil {
 		c.MaxPendingPeers = *dec.MaxPendingPeers

@@ -91,6 +91,39 @@ func TestPeerIdleEvictionRLPX(t *testing.T) {
 	}
 }
 
+func TestPeerIdleConfiguredRLPX(t *testing.T) {
+	clock := new(mclock.Simulated)
+	policy := peerpolicy.New(clock)
+	policy.SetReady(true)
+	srv := &Server{Config: Config{
+		PrivateKey: newkey(), MaxPeers: 9, NoDial: true, NoDiscovery: true,
+		ListenAddr: "127.0.0.1:0", PeerIdleEviction: true, clock: clock,
+		PeerIdleGracePeriod: 3 * time.Minute, PeerIdleMaxRemovals: 2,
+		Protocols: []Protocol{activityProtocol(68, make(chan enode.ID, 1), policy), activityProtocol(69, make(chan enode.ID, 1), policy)},
+	}}
+	srv.SetPeerPolicy(policy)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(srv.Stop)
+	for i := range 9 {
+		if _, err := connectActivityPeer(t, srv, newkey(), 68+uint(i%2)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitActivityPeers(t, srv, 9)
+	advanceActivityClock(t, srv, clock, 3*time.Minute-time.Second)
+	srv.doPeerOp(func(map[enode.ID]*Peer) {})
+	waitActivityPeers(t, srv, 9)
+	advanceActivityClock(t, srv, clock, time.Minute)
+	waitActivityPeers(t, srv, 7)
+	advanceActivityClock(t, srv, clock, time.Minute)
+	waitActivityPeers(t, srv, 6)
+	advanceActivityClock(t, srv, clock, time.Hour)
+	srv.doPeerOp(func(map[enode.ID]*Peer) {})
+	waitActivityPeers(t, srv, 6)
+}
+
 func TestPeerIdleStartupGrace(t *testing.T) {
 	clock := new(mclock.Simulated)
 	policy := peerpolicy.New(clock)

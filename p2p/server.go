@@ -1350,9 +1350,13 @@ const (
 	peerIdleCheckInterval = time.Minute
 	peerIdleCooldown      = 5 * time.Minute
 	peerIdleMinimumPeers  = 5
+	MaxPeerIdleRemovals   = 64
 )
 
 func (srv *Server) SetPeerPolicy(policy *peerpolicy.Tracker) {
+	if policy != nil {
+		policy.SetIdleGrace(srv.PeerIdleGracePeriod)
+	}
 	srv.peerPolicy.Store(policy)
 }
 
@@ -1362,26 +1366,28 @@ func (srv *Server) expireIdlePeer(peers map[enode.ID]*Peer) {
 	if !srv.PeerIdleEviction || srv.peerJail == nil || policy == nil {
 		return
 	}
-	count, inbound, live := peerCounts(peers)
-	if live <= peerIdleMinimumPeers {
-		return
+	for range min(max(srv.PeerIdleMaxRemovals, 1), MaxPeerIdleRemovals, len(peers)) {
+		count, inbound, live := peerCounts(peers)
+		if live <= peerIdleMinimumPeers {
+			return
+		}
+		now := srv.clock.Now()
+		peer, last := srv.idlePeer(peers, count, inbound, policy)
+		if peer == nil || !policy.RetireIdle(peer.ID().String(), peer.activity, last) {
+			return
+		}
+		select {
+		case peer.disc <- DiscJailed:
+		default:
+			// Another disconnect is already queued; keep this session closing.
+			return
+		}
+		peer.activity.MarkIdleDisconnect()
+		srv.peerJail.JailPeerFor(peer.ID(), peerIdleCooldown)
+		peer.Log().Info("Disconnecting inactive peer to free a connection slot",
+			"inactive", now.Sub(last), "cooldown", peerIdleCooldown)
+		idlePeerDisconnects.Inc(1)
 	}
-	now := srv.clock.Now()
-	peer, last := srv.idlePeer(peers, count, inbound, policy)
-	if peer == nil || !policy.RetireIdle(peer.ID().String(), peer.activity, last) {
-		return
-	}
-	select {
-	case peer.disc <- DiscJailed:
-	default:
-		// Another disconnect is already queued; keep this session closing.
-		return
-	}
-	peer.activity.MarkIdleDisconnect()
-	srv.peerJail.JailPeerFor(peer.ID(), peerIdleCooldown)
-	peer.Log().Info("Disconnecting inactive peer to free a connection slot",
-		"inactive", now.Sub(last), "cooldown", peerIdleCooldown)
-	idlePeerDisconnects.Inc(1)
 }
 func peerCounts(peers map[enode.ID]*Peer) (count, inbound, live int) {
 	for _, peer := range peers {

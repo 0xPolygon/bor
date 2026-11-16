@@ -1,8 +1,22 @@
 package server
 
-import "github.com/ethereum/go-ethereum/internal/cli/flagset"
+import (
+	"fmt"
+	"time"
+
+	"github.com/ethereum/go-ethereum/internal/cli/flagset"
+	"github.com/ethereum/go-ethereum/p2p"
+)
 
 func (c *Command) peerReputationFlag(f *flagset.Flagset) {
+	f.DurationFlag(&flagset.DurationFlag{
+		Name: "peer-idle-grace-period", Usage: "Grace period before a silent peer becomes eligible for rotation",
+		Value: &c.cliConfig.P2P.PeerIdleGracePeriod, Default: c.cliConfig.P2P.PeerIdleGracePeriod, Group: "P2P",
+	})
+	f.IntFlag(&flagset.IntFlag{
+		Name: "peer-idle-max-removals", Usage: "Maximum idle peers removed per one-minute check (1-64)",
+		Value: &c.cliConfig.P2P.PeerIdleMaxRemovals, Default: c.cliConfig.P2P.PeerIdleMaxRemovals, Group: "P2P",
+	})
 	f.BoolFlag(&flagset.BoolFlag{
 		Name:    "peer-idle-eviction",
 		Usage:   "Rotate inactive peers when slots are nearly full (requires peer reputation; disable with --peer-idle-eviction=false)",
@@ -24,4 +38,16 @@ func (c *Command) peerReputationFlag(f *flagset.Flagset) {
 		Default: c.cliConfig.P2P.PeerReputationPerPeerMetrics,
 		Group:   "P2P",
 	})
+}
+
+func (c *P2PConfig) applyPeerIdle(cfg *p2p.Config) error {
+	if c.PeerIdleGracePeriod < time.Second {
+		return fmt.Errorf("peer-idle-grace-period must be at least 1s")
+	}
+	if c.PeerIdleMaxRemovals < 1 || c.PeerIdleMaxRemovals > p2p.MaxPeerIdleRemovals {
+		return fmt.Errorf("peer-idle-max-removals must be between 1 and %d", p2p.MaxPeerIdleRemovals)
+	}
+	cfg.PeerIdleGracePeriod = c.PeerIdleGracePeriod
+	cfg.PeerIdleMaxRemovals = c.PeerIdleMaxRemovals
+	return nil
 }

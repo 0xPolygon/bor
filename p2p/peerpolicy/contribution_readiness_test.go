@@ -43,6 +43,7 @@ func TestContributionAuxiliaryActivityBoundary(t *testing.T) {
 	clock.Run(activityGrace)
 	connection.Observe(clock.Now(), false)
 	for range 3 {
+		connection.Observe(clock.Now(), false)
 		tracker.Observe("peer", Evidence{Activity: ActivityEvent{ServedResponses: 1}})
 		clock.Run(time.Minute)
 	}
@@ -467,14 +468,14 @@ func TestContributionSeparateIdleGrace(t *testing.T) {
 	var connection ConnectionActivity
 	connection.Start(clock.Now())
 	tracker.BindConnection("peer", 0, &connection)
-	clock.Run(5*time.Minute - time.Nanosecond)
+	clock.Run(2*time.Minute - time.Nanosecond)
 	contributionStatus(t, tracker, "warming-up")
 	clock.Run(time.Nanosecond)
 	got := contributionStatus(t, tracker, "idle")
-	if got.Risk != 20 || got.IdleGraceSeconds != 300 || got.GraceSeconds != 600 {
+	if got.Risk != 20 || got.IdleGraceSeconds != 120 || got.GraceSeconds != 600 {
 		t.Fatalf("unexpected grace profile: %+v", got)
 	}
-	for range 3 {
+	for range 6 {
 		connection.Observe(clock.Now(), false)
 		tracker.Observe("peer", Evidence{Activity: ActivityEvent{ServedResponses: 1}})
 		clock.Run(time.Minute)

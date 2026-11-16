@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/log"
 )
@@ -45,6 +46,58 @@ func TestPeerIdleEvictionConfig(t *testing.T) {
 	}
 }
 
+func TestPeerIdlePolicySettings(t *testing.T) {
+	for _, tc := range []struct {
+		name, config string
+		args         []string
+		grace        time.Duration
+		removals     int
+	}{
+		{"defaults", "", nil, 2 * time.Minute, 1},
+		{"flags", "", []string{"--peer-idle-grace-period=45s", "--peer-idle-max-removals=5"}, 45 * time.Second, 5},
+		{"limits", "", []string{"--peer-idle-grace-period=1s", "--peer-idle-max-removals=64"}, time.Second, 64},
+		{"config", "[p2p]\npeer-idle-grace-period = '3m'\npeer-idle-max-removals = 7\n", nil, 3 * time.Minute, 7},
+		{"override", "[p2p]\npeer-idle-grace-period = '3m'\npeer-idle-max-removals = 7\n", []string{"--peer-idle-grace-period=90s", "--peer-idle-max-removals=2"}, 90 * time.Second, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := tc.args
+			if tc.config != "" {
+				path := filepath.Join(t.TempDir(), "config.toml")
+				if err := os.WriteFile(path, []byte(tc.config), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				args = append([]string{"--config", path}, args...)
+			}
+			cmd := &Command{}
+			if err := cmd.extractFlags(args); err != nil {
+				t.Fatal(err)
+			}
+			node, err := cmd.cliConfig.buildNode(log.Root())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if node.P2P.PeerIdleGracePeriod != tc.grace || node.P2P.PeerIdleMaxRemovals != tc.removals {
+				t.Fatalf("grace=%v removals=%d", node.P2P.PeerIdleGracePeriod, node.P2P.PeerIdleMaxRemovals)
+			}
+		})
+	}
+}
+
+func TestPeerIdleSettingsValidation(t *testing.T) {
+	for _, tc := range []struct {
+		grace    time.Duration
+		removals int
+	}{
+		{0, 1}, {-time.Minute, 1}, {time.Millisecond, 1}, {time.Minute, 0}, {time.Minute, -1}, {time.Minute, 65},
+	} {
+		config := DefaultConfig()
+		config.P2P.PeerIdleGracePeriod, config.P2P.PeerIdleMaxRemovals = tc.grace, tc.removals
+		if _, err := config.buildNode(log.Root()); err == nil {
+			t.Fatalf("accepted grace=%v removals=%d", tc.grace, tc.removals)
+		}
+	}
+}
+
 func TestPeerIdleEvictionHCL(t *testing.T) {
 	const base = "gpo {}\nminer {}\njsonrpc {\nhttp {}\nws {}\ntimeouts {}\n}\n"
 	for _, tc := range []struct {
@@ -62,5 +115,23 @@ func TestPeerIdleEvictionHCL(t *testing.T) {
 		if config.P2P.PeerIdleEviction != tc.want {
 			t.Fatalf("PeerIdleEviction = %v, want %v", config.P2P.PeerIdleEviction, tc.want)
 		}
+		if config.P2P.PeerIdleGracePeriod != 2*time.Minute || config.P2P.PeerIdleMaxRemovals != 1 {
+			t.Fatal("HCL omitted fields lost idle policy defaults")
+		}
+	}
+}
+
+func TestPeerIdleSettingsHCL(t *testing.T) {
+	config := "gpo {}\nminer {}\njsonrpc {\nhttp {}\nws {}\ntimeouts {}\n}\np2p {\npeer-idle-grace-period = \"3m\"\npeer-idle-max-removals = 5\n}\n"
+	path := filepath.Join(t.TempDir(), "config.hcl")
+	if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readConfigFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.P2P.PeerIdleGracePeriod != 3*time.Minute || got.P2P.PeerIdleMaxRemovals != 5 {
+		t.Fatal("HCL idle policy settings were not decoded")
 	}
 }

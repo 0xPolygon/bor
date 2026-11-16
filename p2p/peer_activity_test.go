@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/naoina/toml"
+
 	"github.com/ethereum/go-ethereum/common/mclock"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
@@ -88,8 +90,8 @@ func TestPeerIdleEvictionEligibility(t *testing.T) {
 		change         func(*Server, *Peer)
 		want           bool
 	}{
-		{"grace", 20, 14, 5*time.Minute - time.Nanosecond, nil, false},
-		{"idle-at-boundary", 20, 14, 5 * time.Minute, nil, true},
+		{"grace", 20, 14, 2*time.Minute - time.Nanosecond, nil, false},
+		{"idle-at-boundary", 20, 14, 2 * time.Minute, nil, true},
 		{"spare-slots", 8, 4, peerIdleTimeout, nil, false},
 		{"inbound-full", 13, 13, peerIdleTimeout, nil, true},
 		{"outbound-full", 6, 0, peerIdleTimeout, nil, true},
@@ -346,19 +348,100 @@ func TestPeerIdleSparseTraffic(t *testing.T) {
 	srv, peers, clock := activityTestServer(t, 20, 14)
 	peer := peers[uintID(20)]
 	peer.rw.set(trustedConn, false)
-	for minute := range 25 {
-		clock.Run(time.Minute)
-		if minute%4 == 3 {
-			peer.activity.Observe(clock.Now(), false)
-		}
+	for interval := range 20 {
+		clock.Run(90 * time.Second)
 		srv.expireIdlePeer(peers)
 		if len(peer.disc) != 0 || srv.peerJail.IsJailed(peer.ID()) {
-			t.Fatalf("active peer retired at minute %d", minute+1)
+			t.Fatalf("active peer retired at interval %d", interval+1)
 		}
+		peer.activity.Observe(clock.Now(), false)
 	}
-	clock.Run(5 * time.Minute)
+	clock.Run(2 * time.Minute)
 	srv.expireIdlePeer(peers)
 	if len(peer.disc) != 1 {
 		t.Fatal("peer was not eligible after becoming silent")
+	}
+}
+
+func TestPeerIdleRemovalBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name                       string
+		count, limit, budget, want int
+	}{
+		{"default", 20, 20, 0, 1},
+		{"batch", 20, 20, 3, 3},
+		{"pressure-clears", 20, 20, 64, 10},
+		{"live-floor", 6, 6, 5, 1},
+		{"bounded-native-config", 200, 200, 1000, 64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, peers, clock := activityTestServer(t, tc.count, tc.count)
+			srv.MaxPeers, srv.PeerIdleMaxRemovals = tc.limit, tc.budget
+			for _, peer := range peers {
+				peer.rw.set(trustedConn, false)
+			}
+			clock.Run(peerIdleTimeout)
+			srv.expireIdlePeer(peers)
+			removed := 0
+			for _, peer := range peers {
+				removed += len(peer.disc)
+			}
+			if removed != tc.want {
+				t.Fatalf("removed %d peers, want %d", removed, tc.want)
+			}
+		})
+	}
+}
+
+func TestPeerIdleBatchPreservesProtectedPeers(t *testing.T) {
+	srv, peers, clock := activityTestServer(t, 20, 20)
+	srv.PeerIdleMaxRemovals = 5
+	peers[uintID(1)].rw.set(trustedConn, false)
+	peers[uintID(2)].rw.set(trustedConn, false)
+	peers[uintID(2)].rw.set(staticConn, true)
+	clock.Run(peerIdleTimeout)
+	srv.expireIdlePeer(peers)
+	for id, peer := range peers {
+		if got, want := len(peer.disc) != 0, id == uintID(1); got != want {
+			t.Fatalf("peer %s disconnected=%t want=%t", id, got, want)
+		}
+	}
+}
+
+func TestPeerIdleConfiguredGrace(t *testing.T) {
+	srv, peers, clock := activityTestServer(t, 20, 20)
+	srv.PeerIdleGracePeriod = 4 * time.Minute
+	policy := srv.peerPolicy.Load()
+	srv.SetPeerPolicy(policy)
+	peer := peers[uintID(1)]
+	peer.rw.set(trustedConn, false)
+	clock.Run(4*time.Minute - time.Nanosecond)
+	srv.expireIdlePeer(peers)
+	before := policy.Snapshot(peer.ID().String()).Contribution
+	if len(peer.disc) != 0 || before.Risk != 0 || before.IdleGraceSeconds != 240 {
+		t.Fatalf("configured grace was not respected: %+v", before)
+	}
+	clock.Run(time.Nanosecond)
+	if got := policy.Snapshot(peer.ID().String()).Contribution; got.Status != "idle" || got.Risk != 20 {
+		t.Fatalf("configured score boundary was not respected: %+v", got)
+	}
+	srv.expireIdlePeer(peers)
+	if len(peer.disc) != 1 {
+		t.Fatal("peer was not removed at configured grace boundary")
+	}
+}
+
+func TestPeerIdleConfigRoundTrip(t *testing.T) {
+	original := Config{PeerIdleEviction: true, PeerIdleGracePeriod: 3 * time.Minute, PeerIdleMaxRemovals: 5}
+	encoded, err := toml.Marshal(struct{ P2P Config }{original})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored struct{ P2P Config }
+	if err := toml.Unmarshal(encoded, &restored); err != nil {
+		t.Fatal(err)
+	}
+	if restored.P2P.PeerIdleGracePeriod != original.PeerIdleGracePeriod || restored.P2P.PeerIdleMaxRemovals != original.PeerIdleMaxRemovals {
+		t.Fatal("native TOML lost idle policy settings")
 	}
 }

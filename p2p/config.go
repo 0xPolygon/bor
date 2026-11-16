@@ -39,7 +39,9 @@ type Config struct {
 	// MaxPeers is the maximum number of peers that can be connected.
 	MaxPeers int
 
-	PeerIdleEviction bool
+	PeerIdleEviction    bool
+	PeerIdleGracePeriod time.Duration
+	PeerIdleMaxRemovals int
 
 	// MaxPendingPeers is the maximum number of peers that can be pending in the
 	// handshake phase, counted separately for inbound and outbound connections.

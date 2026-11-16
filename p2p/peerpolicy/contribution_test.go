@@ -21,6 +21,35 @@ func newContributionTracker() (*Tracker, *mclock.Simulated) {
 	return tracker, clock
 }
 
+func TestContributionConfiguredIdleGrace(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		configured, boundary time.Duration
+	}{
+		{"default", 0, 2 * time.Minute},
+		{"negative-native-default", -time.Second, 2 * time.Minute},
+		{"fractional", 1500 * time.Millisecond, 2 * time.Second},
+		{"subsecond-native", time.Nanosecond, time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tracker, clock := newContributionTracker()
+			tracker.SetIdleGrace(tc.configured)
+			var connection ConnectionActivity
+			connection.Start(clock.Now())
+			tracker.BindConnection("peer", 0, &connection)
+			clock.Run(tc.boundary - time.Nanosecond)
+			if got := tracker.Snapshot("peer").Contribution; got.Risk != 0 {
+				t.Fatalf("peer scored before grace: %+v", got)
+			}
+			clock.Run(time.Nanosecond)
+			got := contributionStatus(t, tracker, "idle")
+			if _, eligible := tracker.IdleSince("peer", &connection); !eligible || got.Risk != 20 {
+				t.Fatal("configured grace did not govern score and retirement")
+			}
+		})
+	}
+}
+
 func TestContributionConnectionActivity(t *testing.T) {
 	for _, tc := range []struct {
 		name, status                                              string
