@@ -45,9 +45,10 @@ import (
 // testEthHandler is a mock event handler to listen for inbound network requests
 // on the `eth` protocol and convert them into a more easily testable form.
 type testEthHandler struct {
-	blockBroadcasts event.Feed
-	txAnnounces     event.Feed
-	txBroadcasts    event.Feed
+	blockBroadcasts    event.Feed
+	blockAnnouncements event.Feed
+	txAnnounces        event.Feed
+	txBroadcasts       event.Feed
 }
 
 func (h *testEthHandler) Chain() *core.BlockChain              { panic("no backing chain") }
@@ -62,6 +63,11 @@ func (h *testEthHandler) Handle(peer *eth.Peer, packet eth.Packet) error {
 		h.blockBroadcasts.Send(packet.Block)
 		return nil
 
+	case *eth.NewBlockHashesPacket:
+		hashes, _ := packet.Unpack()
+		h.blockAnnouncements.Send(hashes)
+		return nil
+
 	case *eth.NewPooledTransactionHashesPacket:
 		h.txAnnounces.Send(packet.Hashes)
 		return nil
@@ -70,8 +76,8 @@ func (h *testEthHandler) Handle(peer *eth.Peer, packet eth.Packet) error {
 		h.txBroadcasts.Send(([]*types.Transaction)(*packet))
 		return nil
 
-	case *eth.PooledTransactionsResponse:
-		h.txBroadcasts.Send(([]*types.Transaction)(*packet))
+	case *eth.PooledTransactionsPacket:
+		h.txBroadcasts.Send(([]*types.Transaction)(packet.PooledTransactionsResponse))
 		return nil
 
 	default:
@@ -705,6 +711,70 @@ func testBroadcastBlock(t *testing.T, peers, bcasts int) {
 	}
 }
 
+func TestMinedBroadcastAnnouncesWithCachedWitnessBeforeWrite(t *testing.T) {
+	t.Parallel()
+
+	source := newTestHandlerWithBlocks(1)
+	defer source.close()
+
+	sinks := make([]*testEthHandler, 2)
+	for i := range sinks {
+		sinks[i] = new(testEthHandler)
+	}
+
+	for i, sink := range sinks {
+		sourcePipe, sinkPipe := p2p.MsgPipe()
+		defer sourcePipe.Close()
+		defer sinkPipe.Close()
+
+		sourcePeer := eth.NewPeer(eth.ETH68, p2p.NewPeerPipe(enode.ID{byte(i)}, "", nil, sourcePipe), sourcePipe, nil)
+		sinkPeer := eth.NewPeer(eth.ETH68, p2p.NewPeerPipe(enode.ID{0}, "", nil, sinkPipe), sinkPipe, nil)
+		defer sourcePeer.Close()
+		defer sinkPeer.Close()
+
+		go source.handler.runEthPeer(sourcePeer, func(peer *eth.Peer) error {
+			return eth.Handle((*ethHandler)(source.handler), peer)
+		})
+		if err := sinkPeer.Handshake(1, source.chain, eth.BlockRangeUpdatePacket{}); err != nil {
+			t.Fatalf("failed to run protocol handshake: %v", err)
+		}
+		go eth.Handle(sink, sinkPeer)
+	}
+
+	announceCh := make(chan []common.Hash, len(sinks))
+	for i := range sinks {
+		sub := sinks[i].blockAnnouncements.Subscribe(announceCh)
+		defer sub.Unsubscribe()
+	}
+
+	parent := source.chain.CurrentBlock()
+	block := types.NewBlockWithHeader(&types.Header{
+		ParentHash: parent.Hash(),
+		Number:     new(big.Int).Add(parent.Number, common.Big1),
+		Time:       parent.Time + 1,
+		Difficulty: big.NewInt(1),
+		GasLimit:   parent.GasLimit,
+	})
+	require.False(t, source.chain.HasBlock(block.Hash(), block.NumberU64()))
+
+	source.chain.CacheWitness(block.Hash(), []byte{0x1})
+
+	time.Sleep(100 * time.Millisecond)
+	source.handler.eventMux.Post(core.NewMinedBlockEvent{Block: block})
+
+	timeout := time.After(2 * time.Second)
+	for {
+		select {
+		case hashes := <-announceCh:
+			if len(hashes) == 1 && hashes[0] == block.Hash() {
+				return
+			}
+		case <-timeout:
+			t.Fatalf("timed out waiting for block hash announcement for block %s", block.Hash())
+		}
+	}
+}
+
 // Tests that a propagated malformed block (uncles or transactions don't match
 // with the hashes in the header) gets discarded and not broadcast forward.
 func TestBroadcastMalformedBlock69(t *testing.T) {
@@ -940,13 +1010,15 @@ func testPrivateTxNotPropagated(t *testing.T, protocol uint) {
 		tx, _ = types.SignTx(tx, types.HomesteadSigner{}, testKey)
 		txs[nonce] = tx
 	}
-	source.txpool.Add(txs[:5], false)
-
-	// Mark some transactions as private
+	// Mark some transactions as private, before adding them to the pool: the
+	// broadcast and announcement loops run asynchronously, so marking must
+	// precede insertion or private txs can be gossiped before being flagged.
 	privateTxStore.mu.Lock()
 	privateTxStore.store[txs[3].Hash()] = struct{}{}
 	privateTxStore.store[txs[4].Hash()] = struct{}{}
 	privateTxStore.mu.Unlock()
+
+	source.txpool.Add(txs[:5], false)
 
 	sinks := make([]*testHandler, 10)
 	for i := 0; i < len(sinks); i++ {
@@ -986,9 +1058,9 @@ func testPrivateTxNotPropagated(t *testing.T, protocol uint) {
 
 	var wg sync.WaitGroup
 
-	// Transactions are propagated during initial sync via `runEthPeer`. As the
-	// source has disabled tx propagation, ensure that none of the sinks receive
-	// any transactions.
+	// Transactions are propagated to the sinks during the initial sync via
+	// `runEthPeer`. Ensure that sinks receive only the public transactions
+	// and that private transactions are excluded from propagation.
 	var txReceivedCount atomic.Uint64
 	for i := range sinks {
 		wg.Add(1)
@@ -1011,15 +1083,17 @@ func testPrivateTxNotPropagated(t *testing.T, protocol uint) {
 	wg.Wait()
 	require.Equal(t, txReceivedCount.Load(), uint64(len(sinks)*3), "sinks should have received only public transactions")
 
-	// Transactions are also propagated via broadcast and announcement loops. Ensure that
-	// none of the receive any transactions.
-	source.txpool.Add(txs[5:], false)
-
-	// Mark some transactions as private
+	// Transactions are also propagated via the broadcast and announcement
+	// loops. Ensure that sinks receive only the public transactions and that
+	// private transactions are excluded from propagation. As above, the
+	// private marking must precede pool insertion to avoid racing the
+	// asynchronous broadcast loop.
 	privateTxStore.mu.Lock()
 	privateTxStore.store[txs[8].Hash()] = struct{}{}
 	privateTxStore.store[txs[9].Hash()] = struct{}{}
 	privateTxStore.mu.Unlock()
+
+	source.txpool.Add(txs[5:], false)
 
 	txReceivedCount.Store(0)
 	for i := range sinks {

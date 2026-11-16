@@ -173,6 +173,10 @@ func testSendTx(t *testing.T, withLocal bool) {
 		},
 	})
 	b.SendTx(t.Context(), txA)
+	// Promotion to pending is async: txB must see txA pending to hit the in-flight limit.
+	require.Eventually(t, func() bool {
+		return b.eth.txPool.Status(txA.Hash()) == txpool.TxStatusPending
+	}, 5*time.Second, 10*time.Millisecond)
 
 	txB := makeTx(1, nil, nil, key)
 	err := b.SendTx(t.Context(), txB)
@@ -319,8 +323,6 @@ func TestRelayMethodWiring(t *testing.T) {
 
 	t.Run("submit and check methods reach relay", func(t *testing.T) {
 		t.Parallel()
-		// Init with enablePreconf=true, enablePrivateTx=true but no URLs
-		// → txRelay created with nil multiclient → methods return errors, proving wiring works
 		rs := relay.Init(true, true, false, false, nil)
 		defer rs.Close()
 		b := &EthAPIBackend{relay: rs}
@@ -328,7 +330,7 @@ func TestRelayMethodWiring(t *testing.T) {
 		tx := types.NewTransaction(0, common.Address{}, nil, 0, nil, nil)
 
 		err := b.SubmitTxForPreconf(tx)
-		require.Error(t, err, "SubmitTxForPreconf should return error with nil multiclient")
+		require.NoError(t, err, "SubmitTxForPreconf should be optional without producer endpoints")
 
 		_, err = b.CheckPreconfStatus(common.Hash{})
 		require.Error(t, err, "CheckPreconfStatus should return error with nil multiclient")

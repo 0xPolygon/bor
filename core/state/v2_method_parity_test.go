@@ -40,6 +40,7 @@ const (
 	catLifecycle      pdbExemptCategory = "block lifecycle (commit / prefetcher / copy)"
 	catLowLevel       pdbExemptCategory = "low-level / utility"
 	catDebug          pdbExemptCategory = "debug / introspection"
+	catPipelinedSRC   pdbExemptCategory = "pipelined SRC import"
 )
 
 var pdbExemptMethods = map[string]pdbExemptCategory{
@@ -83,6 +84,10 @@ var pdbExemptMethods = map[string]pdbExemptCategory{
 	// statedb.CollectStateWitness on the underlying *StateDB after settle
 	// to pull in worker-side trie reads. PDB doesn't need a counterpart.
 	"CollectStateWitness": catV2SettleHelper,
+	// Started once per block on finalDB before workers run; walks the shared
+	// read cache into the witness concurrently with execution. Per-tx PDBs
+	// never orchestrate block-level witness recording.
+	"StartWitnessReadSetPrewalk": catV2SettleHelper,
 	// V2 calls this on the underlying *StateDB at SafeBase construction
 	// to flush pre-block dirty/pending storage (system calls, DAO fork)
 	// into the shared trieReader storage cache. PDB never needs to do
@@ -91,19 +96,34 @@ var pdbExemptMethods = map[string]pdbExemptCategory{
 
 	// Block lifecycle — the final commit / copy / prefetcher always run on
 	// the underlying StateDB; PDB is per-tx and recycled, not committed.
-	"Commit":           catLifecycle,
-	"CommitWithUpdate": catLifecycle,
-	"IntermediateRoot": catLifecycle,
-	"StartPrefetcher":  catLifecycle,
-	"StopPrefetcher":   catLifecycle,
-	"ResetPrefetcher":  catLifecycle,
-	"Copy":             catLifecycle,
+	"Commit":                catLifecycle,
+	"CommitWithUpdate":      catLifecycle,
+	"IntermediateRoot":      catLifecycle,
+	"StartPrefetcher":       catLifecycle,
+	"StopPrefetcher":        catLifecycle,
+	"ResetPrefetcher":       catLifecycle,
+	"Copy":                  catLifecycle,
+	"CopyWithoutLogHistory": catLifecycle,
+
+	// Pipelined SRC import — FlatDiff capture/replay, read propagation,
+	// and detached prefetcher handoff are block-level StateDB operations.
+	// ParallelStateDB instances are per-transaction workers; V2 settles
+	// into the underlying StateDB before these methods run.
+	"ApplyFlatDiff":              catPipelinedSRC,
+	"ApplyFlatDiffForCommit":     catPipelinedSRC,
+	"ApplyFlatDiffForCommitFast": catPipelinedSRC,
+	"CommitSnapshot":             catPipelinedSRC,
+	"DetachPrefetcher":           catPipelinedSRC,
+	"PropagateReadsTo":           catPipelinedSRC,
+	"SetFlatDiffRef":             catPipelinedSRC,
+	"WasStorageSlotRead":         catPipelinedSRC,
 
 	// Low-level / utility — not part of the EVM-facing surface.
 	"Database":              catLowLevel,
 	"Error":                 catLowLevel,
 	"GetOrNewStateObject":   catLowLevel,
 	"GetTrie":               catLowLevel,
+	"LogCount":              catLowLevel,
 	"Preimages":             catLowLevel,
 	"Reader":                catLowLevel,
 	"SetStorage":            catLowLevel,

@@ -91,9 +91,12 @@ func (j *parallelJournalEntry) revertBalance(s *ParallelStateDB) {
 }
 
 func (j *parallelJournalEntry) revertCreate(s *ParallelStateDB) {
+	// Keeps codeHashCache consistent with localCode even if a future caller
+	// reverts a CreateAccount without a matching jkCode entry.
 	delete(s.created, j.addr)
 	delete(s.newContract, j.addr)
 	delete(s.localCode, j.addr)
+	delete(s.codeHashCache, j.addr)
 	if s.DeferMVWrites {
 		return
 	}
@@ -108,6 +111,7 @@ func (j *parallelJournalEntry) revertCode(s *ParallelStateDB) {
 	} else {
 		delete(s.localCode, j.addr)
 	}
+	delete(s.codeHashCache, j.addr)
 	if s.DeferMVWrites {
 		return
 	}
@@ -123,5 +127,46 @@ func (j *parallelJournalEntry) revertAccessSlot(s *ParallelStateDB) {
 	idx, ok := s.accessList.addresses[j.addr]
 	if ok && idx >= 0 && idx < len(s.accessList.slots) {
 		delete(s.accessList.slots[idx], j.key)
+	}
+}
+
+// journalChargeBatch keeps the shared WriteBudget counter off the per-opcode
+// path; in-flight incarnations can each overshoot the bound by less than a batch.
+const journalChargeBatch = 256
+
+func (s *ParallelStateDB) appendJournal(e parallelJournalEntry) {
+	s.journalEntries = append(s.journalEntries, e)
+	s.chargeEntry()
+}
+
+func (s *ParallelStateDB) chargeEntry() {
+	if s.WriteBudget == nil {
+		return
+	}
+	s.unchargedEntries++
+	if s.unchargedEntries == journalChargeBatch {
+		s.WriteBudget.Charge(journalChargeBatch)
+		s.unchargedEntries = 0
+	}
+}
+
+// ChargePendingWrites charges the entries of a partial batch, so an
+// incarnation's whole journal is accounted once it finishes.
+func (s *ParallelStateDB) ChargePendingWrites() {
+	if s.WriteBudget == nil {
+		return
+	}
+	s.WriteBudget.Charge(s.unchargedEntries)
+	s.unchargedEntries = 0
+}
+
+// budgetBytesPerEntry charges log data and preimages, which a tx can make
+// large for little gas, at one entry per this many bytes: about the size of
+// a journal entry, and far fewer entries per gas than the densest ops.
+const budgetBytesPerEntry = 128
+
+func (s *ParallelStateDB) chargeBytes(n int) {
+	if s.WriteBudget != nil && n >= budgetBytesPerEntry {
+		s.WriteBudget.Charge(int64(n / budgetBytesPerEntry))
 	}
 }

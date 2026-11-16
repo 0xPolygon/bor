@@ -216,6 +216,20 @@ func (mr *MockBackendMockRecorder) CheckPreconfStatus(hash any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CheckPreconfStatus", reflect.TypeOf((*MockBackend)(nil).CheckPreconfStatus), hash)
 }
 
+// ConditionalTxsEnabled mocks base method.
+func (m *MockBackend) ConditionalTxsEnabled() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ConditionalTxsEnabled")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// ConditionalTxsEnabled indicates an expected call of ConditionalTxsEnabled.
+func (mr *MockBackendMockRecorder) ConditionalTxsEnabled() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ConditionalTxsEnabled", reflect.TypeOf((*MockBackend)(nil).ConditionalTxsEnabled))
+}
+
 // CurrentBlock mocks base method.
 func (m *MockBackend) CurrentBlock() *types.Header {
 	m.ctrl.T.Helper()
@@ -965,6 +979,20 @@ func (m *MockBackend) RPCTxSyncDefaultTimeout() time.Duration {
 func (mr *MockBackendMockRecorder) RPCTxSyncDefaultTimeout() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RPCTxSyncDefaultTimeout", reflect.TypeOf((*MockBackend)(nil).RPCTxSyncDefaultTimeout))
+}
+
+// RPCTxSyncMaxConcurrent mocks base method.
+func (m *MockBackend) RPCTxSyncMaxConcurrent() int {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RPCTxSyncMaxConcurrent")
+	ret0, _ := ret[0].(int)
+	return ret0
+}
+
+// RPCTxSyncMaxConcurrent indicates an expected call of RPCTxSyncMaxConcurrent.
+func (mr *MockBackendMockRecorder) RPCTxSyncMaxConcurrent() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RPCTxSyncMaxConcurrent", reflect.TypeOf((*MockBackend)(nil).RPCTxSyncMaxConcurrent))
 }
 
 // RPCTxSyncMaxTimeout mocks base method.

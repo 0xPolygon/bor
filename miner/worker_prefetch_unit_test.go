@@ -87,7 +87,7 @@ func newScanHeap(signer types.Signer, txsByAcct map[common.Address][]*txpool.Laz
 		copy(cp, v)
 		cloned[k] = cp
 	}
-	return newTransactionsByPriceAndNonce(signer, cloned, big.NewInt(0), new(atomic.Bool))
+	return newTransactionsByPriceAndNonce(signer, cloned, uint256.NewInt(0), new(atomic.Bool))
 }
 
 // TestScanOverflow_ZeroBudget: budget=0 leaves everything untouched. The first

@@ -56,6 +56,11 @@ type BlockChain interface {
 
 	// StateAt returns a state database for a given root hash (generally the head).
 	StateAt(root common.Hash) (*state.StateDB, error)
+
+	// PostExecState returns a StateDB representing the post-execution
+	// state of the given block header. Under pipelined SRC, uses a non-blocking
+	// FlatDiff overlay when available; otherwise falls back to StateAt.
+	PostExecState(header *types.Header) (*state.StateDB, error)
 }
 
 // TxPool is an aggregator for various transaction specific pools, collectively
@@ -88,7 +93,7 @@ func New(gasTip uint64, chain BlockChain, subpools []SubPool) (*TxPool, error) {
 	// Initialize the state with head block, or fallback to empty one in
 	// case the head state is not available (might occur when node is not
 	// fully synced).
-	statedb, err := chain.StateAt(head.Root)
+	statedb, err := chain.PostExecState(head)
 	if err != nil {
 		statedb, err = chain.StateAt(types.EmptyRootHash)
 	}
@@ -193,7 +198,7 @@ func (p *TxPool) loop(head *types.Header) {
 			case resetBusy <- struct{}{}:
 				// Updates the statedb with the new chain head. The head state may be
 				// unavailable if the initial state sync has not yet completed.
-				if statedb, err := p.chain.StateAt(newHead.Root); err != nil {
+				if statedb, err := p.chain.PostExecState(newHead); err != nil {
 					log.Error("Failed to reset txpool state", "err", err)
 				} else {
 					p.stateLock.Lock()
@@ -418,6 +423,16 @@ func (p *TxPool) SubscribeTransactions(ch chan<- core.NewTxsEvent, reorgs bool) 
 // SubscribeRebroadcastTransactions registers a subscription for stuck transaction
 // rebroadcast events from all subpools.
 func (p *TxPool) SubscribeRebroadcastTransactions(ch chan<- core.StuckTxsEvent) event.Subscription {
+	return p.subscribeRebroadcastTransactions(ch, false)
+}
+
+// SubscribeRebroadcastTransactionsWithAcknowledgement opts into explicit
+// accounting for subpools that support RebroadcastAcknowledgement.
+func (p *TxPool) SubscribeRebroadcastTransactionsWithAcknowledgement(ch chan<- core.StuckTxsEvent) event.Subscription {
+	return p.subscribeRebroadcastTransactions(ch, true)
+}
+
+func (p *TxPool) subscribeRebroadcastTransactions(ch chan<- core.StuckTxsEvent, acknowledge bool) event.Subscription {
 	if p == nil {
 		return event.NewSubscription(func(quit <-chan struct{}) error {
 			<-quit
@@ -426,9 +441,41 @@ func (p *TxPool) SubscribeRebroadcastTransactions(ch chan<- core.StuckTxsEvent) 
 	}
 	subs := make([]event.Subscription, len(p.subpools))
 	for i, subpool := range p.subpools {
+		if pool, ok := subpool.(interface {
+			SubscribeRebroadcastTransactionsWithAcknowledgement(chan<- core.StuckTxsEvent) event.Subscription
+		}); acknowledge && ok {
+			subs[i] = pool.SubscribeRebroadcastTransactionsWithAcknowledgement(ch)
+			continue
+		}
 		subs[i] = subpool.SubscribeRebroadcastTransactions(ch)
 	}
 	return p.subs.Track(event.JoinSubscriptions(subs...))
+}
+
+// RebroadcastAcknowledgement gathers optional batch accounting from subpools
+// without extending SubPool or changing the public rebroadcast event. Existing
+// subpools without this capability retain their own accounting behavior.
+func (p *TxPool) RebroadcastAcknowledgement(txs []*types.Transaction) func([]common.Hash) {
+	if p == nil {
+		return nil
+	}
+	var callbacks []func([]common.Hash)
+	for _, subpool := range p.subpools {
+		pool, ok := subpool.(interface {
+			RebroadcastAcknowledgement([]*types.Transaction) func([]common.Hash)
+		})
+		if !ok {
+			continue
+		}
+		if callback := pool.RebroadcastAcknowledgement(txs); callback != nil {
+			callbacks = append(callbacks, callback)
+		}
+	}
+	return func(hashes []common.Hash) {
+		for _, callback := range callbacks {
+			callback(hashes)
+		}
+	}
 }
 
 // PoolNonce returns the next nonce of an account, with all transactions executable
@@ -551,5 +598,30 @@ func (p *TxPool) Clear() {
 	p.Sync()
 	for _, subpool := range p.subpools {
 		subpool.Clear()
+	}
+}
+
+// SpeculativeSetter is implemented by subpools that support speculative
+// state updates for pipelined SRC. This avoids import cycles between txpool
+// and legacypool packages.
+type SpeculativeSetter interface {
+	SetSpeculativeState(newHead *types.Header, statedb *state.StateDB)
+}
+
+// SetSpeculativeState updates the txpool's state to reflect a block that
+// hasn't been written to the chain yet. This is used by pipelined SRC so that
+// speculative execution of block N+1 gets correct pending transactions
+// (reflecting block N's post-execution nonces and balances via FlatDiff overlay).
+func (p *TxPool) SetSpeculativeState(newHead *types.Header, statedb *state.StateDB) {
+	// Update the aggregator's state
+	p.stateLock.Lock()
+	p.state = statedb
+	p.stateLock.Unlock()
+
+	// Update subpools that support speculative state
+	for _, subpool := range p.subpools {
+		if ss, ok := subpool.(SpeculativeSetter); ok {
+			ss.SetSpeculativeState(newHead, statedb)
+		}
 	}
 }

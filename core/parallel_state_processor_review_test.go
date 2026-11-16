@@ -13,6 +13,8 @@ import (
 	"github.com/holiman/uint256"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus"
+	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core/blockstm"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
@@ -127,7 +129,7 @@ func TestV2SettleFn_SkipsPanickedPDB(t *testing.T) {
 
 	var execErrIdx int = -1
 	var execErr error
-	settleFn := newV2SettleFn(tasks, env, finalDB, blockCtx, common.Hash{}, cc, receipts, logs, totalUsedGas, panickedIdx, &execErrIdx, &execErr)
+	settleFn := newV2SettleFn(tasks, env, finalDB, blockCtx, common.Hash{}, cc, receipts, logs, totalUsedGas, panickedIdx, &execErrIdx, &execErr, new(error))
 
 	settleFn(0, pdb)
 
@@ -164,7 +166,7 @@ func TestV2SettleFn_NilStateIsNoOp(t *testing.T) {
 	tasks := []V2Task{{Index: 0, Tx: tx, Msg: msg}}
 	var execErrIdx int = -1
 	var execErr error
-	settleFn := newV2SettleFn(tasks, env, finalDB, blockCtx, common.Hash{}, cc, receipts, logs, totalUsedGas, panickedIdx, &execErrIdx, &execErr)
+	settleFn := newV2SettleFn(tasks, env, finalDB, blockCtx, common.Hash{}, cc, receipts, logs, totalUsedGas, panickedIdx, &execErrIdx, &execErr, new(error))
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -207,7 +209,7 @@ func TestV2SettleFn_RecordsFirstPanickedIdx(t *testing.T) {
 
 	var execErrIdx int = -1
 	var execErr error
-	settleFn := newV2SettleFn(tasks, env, finalDB, blockCtx, common.Hash{}, cc, receipts, logs, totalUsedGas, panickedIdx, &execErrIdx, &execErr)
+	settleFn := newV2SettleFn(tasks, env, finalDB, blockCtx, common.Hash{}, cc, receipts, logs, totalUsedGas, panickedIdx, &execErrIdx, &execErr, new(error))
 	settleFn(0, mkPanicked(0))
 	settleFn(1, mkPanicked(1))
 
@@ -248,7 +250,7 @@ func TestV2SettleFn_NormalPDBSettlesAfterSkip(t *testing.T) {
 
 	var execErrIdx int = -1
 	var execErr error
-	settleFn := newV2SettleFn(tasks, env, finalDB, blockCtx, common.Hash{}, cc, receipts, logs, totalUsedGas, panickedIdx, &execErrIdx, &execErr)
+	settleFn := newV2SettleFn(tasks, env, finalDB, blockCtx, common.Hash{}, cc, receipts, logs, totalUsedGas, panickedIdx, &execErrIdx, &execErr, new(error))
 	settleFn(0, pdb0)
 	settleFn(1, pdb1)
 
@@ -263,6 +265,77 @@ func TestV2SettleFn_NormalPDBSettlesAfterSkip(t *testing.T) {
 	}
 	if got := finalDB.GetBalance(addr); got.Uint64() != 7 {
 		t.Fatalf("finalDB.Balance(%x)=%s, want 7 — tx1 must still settle", addr, got)
+	}
+}
+
+// TestV2SettleFn_RecordsBaseReadErr verifies the settle-time base-read gate:
+// a settled incarnation carrying BaseReadErr must record the error for the
+// caller (first error wins), skip settlement so its zero-ish-read state never
+// reaches finalDB, and not disturb later healthy txs. The check lives in the
+// settle callback and NOT in a post-hoc scan of the executor's states array:
+// settlement recycles each pdb into the pool where a later tx's Reset reuses
+// it, so states[i] can alias a different (speculative, later-invalidated)
+// incarnation by the time a post-hoc scan runs — the scan both fabricates
+// errors that never settled and loses errors that did.
+func TestV2SettleFn_RecordsBaseReadErr(t *testing.T) {
+	coinbase := common.HexToAddress("0xCB")
+	env, finalDB, _, _, receipts, logs, totalUsedGas, panickedIdx, blockCtx, cc := newV2SettleTestEnv(t, coinbase)
+
+	tx0, msg0 := makeDummyTx(t, 0)
+	tx1, msg1 := makeDummyTx(t, 1)
+	tx2, msg2 := makeDummyTx(t, 2)
+	tasks := []V2Task{
+		{Index: 0, Tx: tx0, Msg: msg0},
+		{Index: 1, Tx: tx1, Msg: msg1},
+		{Index: 2, Tx: tx2, Msg: msg2},
+	}
+
+	firstErr := errors.New("missing trie node aa (first)")
+	pdb0 := state.NewParallelStateDB(0, env.safeBase, env.store, env.bals)
+	pdb0.SetDeferMVWrites(true)
+	pdb0.Coinbase = coinbase
+	addr := common.HexToAddress("0xdeadbeef")
+	pdb0.AddBalance(addr, uint256.NewInt(123), tracing.BalanceChangeUnspecified)
+	pdb0.UsedGas = 21000
+	pdb0.BaseReadErr = firstErr
+
+	pdb1 := state.NewParallelStateDB(1, env.safeBase, env.store, env.bals)
+	pdb1.SetDeferMVWrites(true)
+	pdb1.Coinbase = coinbase
+	pdb1.BaseReadErr = errors.New("missing trie node bb (second)")
+
+	healthy := common.HexToAddress("0xfeed")
+	pdb2 := state.NewParallelStateDB(2, env.safeBase, env.store, env.bals)
+	pdb2.SetDeferMVWrites(true)
+	pdb2.Coinbase = coinbase
+	pdb2.AddBalance(healthy, uint256.NewInt(7), tracing.BalanceChangeUnspecified)
+	pdb2.UsedGas = 21000
+
+	var execErrIdx int = -1
+	var execErr error
+	var readErr error
+	settleFn := newV2SettleFn(tasks, env, finalDB, blockCtx, common.Hash{}, cc, receipts, logs, totalUsedGas, panickedIdx, &execErrIdx, &execErr, &readErr)
+	settleFn(0, pdb0)
+	settleFn(1, pdb1)
+	settleFn(2, pdb2)
+
+	if readErr != firstErr {
+		t.Fatalf("readErr=%v, want the first error to win", readErr)
+	}
+	if got := finalDB.GetBalance(addr); !got.IsZero() {
+		t.Fatalf("finalDB.Balance(%x)=%s, want 0 — bad-read tx must not settle", addr, got)
+	}
+	if got := finalDB.GetBalance(healthy); got.Uint64() != 7 {
+		t.Fatalf("finalDB.Balance(%x)=%s, want 7 — healthy tx must still settle", healthy, got)
+	}
+	if len(*receipts) != 1 {
+		t.Fatalf("receipts=%d, want 1 (only the healthy tx settled)", len(*receipts))
+	}
+	if *totalUsedGas != 21000 {
+		t.Fatalf("totalUsedGas=%d, want 21000 (bad-read txs contribute nothing)", *totalUsedGas)
+	}
+	if *panickedIdx != -1 || execErrIdx != -1 {
+		t.Fatalf("base read error must not masquerade as panic/exec error: panickedIdx=%d execErrIdx=%d", *panickedIdx, execErrIdx)
 	}
 }
 
@@ -330,7 +403,7 @@ func TestV2StateProcessor_PanickedTxFailsBlock(t *testing.T) {
 	defer finalDB.StopPrefetcher()
 
 	result := ExecuteV2BlockSTM(context.Background(), tasks, base, store, bals, blockCtx, common.Hash{}, cfg, chainConfig,
-		blockCtx.GasLimit, 1, finalDB, nil)
+		blockCtx.GasLimit, 1, finalDB, nil, nil)
 
 	if result.PanickedIdx != 0 {
 		t.Fatalf("expected PanickedIdx=0, got %d", result.PanickedIdx)
@@ -409,7 +482,7 @@ func TestV2ApplyMessage_FirstIncarnationPanicLogsDebug(t *testing.T) {
 
 	_ = ExecuteV2BlockSTM(context.Background(), tasks, base,
 		blockstm.NewMVStore(), blockstm.NewMVBalanceStore(),
-		blockCtx, common.Hash{}, cfg, chainConfig, blockCtx.GasLimit, 1, finalDB, nil)
+		blockCtx, common.Hash{}, cfg, chainConfig, blockCtx.GasLimit, 1, finalDB, nil, nil)
 
 	var debug, errs int
 	for _, r := range h.records {
@@ -495,7 +568,7 @@ func TestV2StateProcessor_ProducesWitness(t *testing.T) {
 	defer finalDB.StopPrefetcher()
 
 	result := ExecuteV2BlockSTM(context.Background(), tasks, base, store, bals, blockCtx, common.Hash{}, vm.Config{}, chainConfig,
-		blockCtx.GasLimit, 1, finalDB, nil)
+		blockCtx.GasLimit, 1, finalDB, nil, nil)
 
 	if result.ExecErrIdx >= 0 {
 		t.Fatalf("V2 returned error: %v", result.ExecErr)
@@ -580,7 +653,7 @@ func TestExecuteV2BlockSTM_MidFlightCancellation(t *testing.T) {
 	go func() {
 		defer close(done)
 		_ = ExecuteV2BlockSTM(ctx, tasks, base, store, bals, blockCtx, common.Hash{}, vm.Config{}, chainConfig,
-			blockCtx.GasLimit, 4, finalDB, nil)
+			blockCtx.GasLimit, 4, finalDB, nil, nil)
 	}()
 
 	select {
@@ -652,7 +725,7 @@ func TestExecuteV2BlockSTM_HonoursCancellation(t *testing.T) {
 	bals := blockstm.NewMVBalanceStore()
 	start := time.Now()
 	result := ExecuteV2BlockSTM(ctx, tasks, base, store, bals, blockCtx, common.Hash{}, vm.Config{}, chainConfig,
-		blockCtx.GasLimit, 1, finalDB, nil)
+		blockCtx.GasLimit, 1, finalDB, nil, nil)
 	elapsed := time.Since(start)
 
 	// We don't assert the result is empty — workers may have started before the
@@ -748,7 +821,7 @@ func TestV2StateProcessor_ReceiptHasBlockHash(t *testing.T) {
 	defer finalDB.StopPrefetcher()
 
 	result := ExecuteV2BlockSTM(context.Background(), tasks, base, store, bals, blockCtx, blockHash, vm.Config{}, chainConfig,
-		blockCtx.GasLimit, 1, finalDB, nil)
+		blockCtx.GasLimit, 1, finalDB, nil, nil)
 
 	if len(result.Receipts) != 1 {
 		t.Fatalf("expected 1 receipt, got %d", len(result.Receipts))
@@ -817,7 +890,7 @@ func TestV2StateProcessor_ApplyMessageErrorFailsBlock(t *testing.T) {
 	defer finalDB.StopPrefetcher()
 
 	result := ExecuteV2BlockSTM(context.Background(), tasks, base, store, bals, blockCtx, common.Hash{}, vm.Config{}, chainConfig,
-		blockCtx.GasLimit, 1, finalDB, nil)
+		blockCtx.GasLimit, 1, finalDB, nil, nil)
 
 	if result.ExecErrIdx != 0 {
 		t.Fatalf("expected ExecErrIdx=0, got %d", result.ExecErrIdx)
@@ -833,5 +906,27 @@ func TestV2StateProcessor_ApplyMessageErrorFailsBlock(t *testing.T) {
 	}
 	if result.GasUsed != 0 {
 		t.Fatalf("expected 0 gas used after consensus error, got %d", result.GasUsed)
+	}
+}
+
+type receiptMismatchFinalizer struct{ consensus.Engine }
+
+func (*receiptMismatchFinalizer) Finalize(consensus.ChainHeaderReader, *types.Header, vm.StateDB, *types.Body, []*types.Receipt) ([]*types.Receipt, error) {
+	return []*types.Receipt{{}}, nil
+}
+
+func TestV2ReceiptCountMismatch(t *testing.T) {
+	config := *params.TestChainConfig
+	config.Bor = &params.BorConfig{MadhugiriBlock: big.NewInt(0)}
+	chain := &HeaderChain{config: &config, engine: &receiptMismatchFinalizer{ethash.NewFaker()}}
+	statedb, err := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer statedb.StopPrefetcher()
+	block := types.NewBlockWithHeader(&types.Header{Number: big.NewInt(1), Difficulty: big.NewInt(1), BaseFee: big.NewInt(1), GasLimit: 30_000_000})
+	result, err := NewV2StateProcessor(chain, nil, 1).Process(block, statedb, vm.Config{}, nil, t.Context())
+	if result != nil || !errors.Is(err, ErrStateSyncMismatch) || errors.Is(err, ErrStateSyncProcessing) {
+		t.Fatalf("receipt mismatch was not rejected as invalid data: result=%v err=%v", result, err)
 	}
 }

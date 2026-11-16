@@ -19,6 +19,8 @@ package rpc
 import (
 	"bufio"
 	"bytes"
+	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -301,5 +303,94 @@ func TestServerWebsocketReadLimit(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+type waitService struct {
+	started chan struct{}
+	done    chan struct{}
+}
+
+func (s *waitService) Wait(ctx context.Context) error {
+	close(s.started)
+	<-ctx.Done()
+	close(s.done)
+	return ctx.Err()
+}
+
+// Slow returns "done" after d, or the context error if the call is canceled
+// before that.
+func (s *waitService) Slow(ctx context.Context, d time.Duration) (string, error) {
+	select {
+	case <-time.After(d):
+		return "done", nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+// This test checks that calls in progress on a persistent connection are
+// canceled when the connection is closed.
+func TestServerCancelCallsOnDisconnect(t *testing.T) {
+	t.Parallel()
+
+	svc := &waitService{started: make(chan struct{}), done: make(chan struct{})}
+	server := NewServer("", 40, 0) // bor defaults: ep-size 40, no request timeout
+	defer server.Stop()
+	if err := server.RegisterName("test", svc); err != nil {
+		t.Fatal(err)
+	}
+	httpsrv := httptest.NewServer(server.WebsocketHandler([]string{"*"}))
+	defer httpsrv.Close()
+	client, err := DialOptions(t.Context(), "ws:"+strings.TrimPrefix(httpsrv.URL, "http:"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	go client.Call(nil, "test_wait")
+	<-svc.started
+	client.Close()
+
+	select {
+	case <-svc.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("call context not canceled after the client disconnected")
+	}
+}
+
+// This test checks that a client which half-closes a stream connection after
+// sending its request still gets the answer.
+func TestServerHalfCloseKeepsCalls(t *testing.T) {
+	t.Parallel()
+
+	server := NewServer("", 40, 0)
+	defer server.Stop()
+	if err := server.RegisterName("test", new(waitService)); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go server.ServeListener(listener)
+
+	conn, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	request := `{"jsonrpc":"2.0","id":1,"method":"test_slow","params":[200000000]}`
+	if _, err := conn.Write([]byte(request)); err != nil {
+		t.Fatal(err)
+	}
+	conn.(*net.TCPConn).CloseWrite()
+
+	var resp jsonrpcMessage
+	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		t.Fatalf("no response after half-close: %v", err)
+	}
+	if resp.Error != nil || string(resp.Result) != `"done"` {
+		t.Fatalf("call not finished after half-close: result %s, error %v", resp.Result, resp.Error)
 	}
 }

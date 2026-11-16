@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -66,10 +67,28 @@ func (v *BlockValidator) ValidateBody(block *types.Block) error {
 		return ErrKnownBlock
 	}
 
-	// Header validity is known at this point. Here we verify that uncles, transactions
-	// and withdrawals given in the block body match the header.
+	if err := validateBodyAgainstHeader(v.bc.engine, v.bc, block); err != nil {
+		return err
+	}
+
+	// Ancestor block must be known.
+	if !v.bc.HasBlockAndState(block.ParentHash(), block.NumberU64()-1) {
+		if !v.bc.HasBlock(block.ParentHash(), block.NumberU64()-1) {
+			return consensus.ErrUnknownAncestor
+		}
+
+		return consensus.ErrPrunedAncestor
+	}
+
+	return nil
+}
+
+// validateBodyAgainstHeader checks that the uncles, transactions, withdrawals and
+// blob usage in the block body match its (already verified) header. It needs no
+// parent state, so stateless import runs it as well.
+func validateBodyAgainstHeader(engine consensus.Engine, chain consensus.ChainReader, block *types.Block) error {
 	header := block.Header()
-	if err := v.bc.engine.VerifyUncles(v.bc, block); err != nil {
+	if err := engine.VerifyUncles(chain, block); err != nil {
 		return err
 	}
 
@@ -96,9 +115,13 @@ func (v *BlockValidator) ValidateBody(block *types.Block) error {
 		return errors.New("withdrawals present in block body")
 	}
 
+	return validateBlobUsage(header, block.Transactions())
+}
+
+func validateBlobUsage(header *types.Header, txs types.Transactions) error {
 	// Blob transactions may be present after the Cancun fork.
 	var blobs int
-	for i, tx := range block.Transactions() {
+	for i, tx := range txs {
 		// Count the number of blobs to validate against the header's blobGasUsed
 		blobs += len(tx.BlobHashes())
 
@@ -122,15 +145,37 @@ func (v *BlockValidator) ValidateBody(block *types.Block) error {
 		}
 	}
 
-	// Ancestor block must be known.
-	if !v.bc.HasBlockAndState(block.ParentHash(), block.NumberU64()-1) {
-		if !v.bc.HasBlock(block.ParentHash(), block.NumberU64()-1) {
-			return consensus.ErrUnknownAncestor
-		}
+	return nil
+}
 
-		return consensus.ErrPrunedAncestor
+// ValidateStateCheap validates the cheap (non-trie) post-state checks: gas used,
+// bloom filter, receipt root, and requests hash. It does NOT compute the state
+// root (IntermediateRoot), which is the expensive operation. Used by the pipelined
+// import path where IntermediateRoot is deferred to a background SRC goroutine.
+func (v *BlockValidator) ValidateStateCheap(block *types.Block, statedb *state.StateDB, res *ProcessResult) error {
+	if res == nil {
+		return errors.New("nil ProcessResult value")
 	}
-
+	header := block.Header()
+	if block.GasUsed() != res.GasUsed {
+		return fmt.Errorf("%w (remote: %d local: %d)", ErrGasUsedMismatch, block.GasUsed(), res.GasUsed)
+	}
+	rbloom := types.MergeBloom(res.Receipts)
+	if rbloom != header.Bloom {
+		return fmt.Errorf("%w (remote: %x  local: %x)", ErrBloomMismatch, header.Bloom, rbloom)
+	}
+	receiptSha := types.DeriveSha(res.Receipts, trie.NewStackTrie(nil))
+	if receiptSha != header.ReceiptHash {
+		return fmt.Errorf("%w (remote: %x local: %x)", ErrReceiptRootMismatch, header.ReceiptHash, receiptSha)
+	}
+	if header.RequestsHash != nil {
+		reqhash := types.CalcRequestsHash(res.Requests)
+		if reqhash != *header.RequestsHash {
+			return fmt.Errorf("%w (remote: %x local: %x)", ErrRequestsHashMismatch, *header.RequestsHash, reqhash)
+		}
+	} else if res.Requests != nil {
+		return errors.New("block has requests before prague fork")
+	}
 	return nil
 }
 
@@ -159,9 +204,18 @@ func (v *BlockValidator) ValidateState(block *types.Block, statedb *state.StateD
 	if stateless {
 		return nil
 	}
-	// The receipt Trie's root (R = (Tr [[H1, R1], ... [Hn, Rn]]))
-	receiptSha := types.DeriveSha(res.Receipts, trie.NewStackTrie(nil))
-	if receiptSha != header.ReceiptHash {
+	// The receipt Trie's root (R = (Tr [[H1, R1], ... [Hn, Rn]])) does not
+	// depend on the state, so derive it while the state root is being hashed.
+	receiptShaCh := make(chan common.Hash, 1)
+	go func() {
+		receiptShaCh <- types.DeriveSha(res.Receipts, trie.NewStackTrie(nil))
+	}()
+	irStart := time.Now()
+	root := statedb.IntermediateRoot(v.config.IsEIP158(header.Number))
+	intermediateRootTimer.UpdateSince(irStart)
+
+	// Check in the same order as before: receipts, requests, state root.
+	if receiptSha := <-receiptShaCh; receiptSha != header.ReceiptHash {
 		return fmt.Errorf("%w (remote: %x local: %x)", ErrReceiptRootMismatch, header.ReceiptHash, receiptSha)
 	}
 	// Validate the parsed requests match the expected header value.
@@ -175,9 +229,6 @@ func (v *BlockValidator) ValidateState(block *types.Block, statedb *state.StateD
 	}
 	// Validate the state root against the received state root and throw
 	// an error if they don't match.
-	irStart := time.Now()
-	root := statedb.IntermediateRoot(v.config.IsEIP158(header.Number))
-	intermediateRootTimer.UpdateSince(irStart)
 	if header.Root != root {
 		return fmt.Errorf("invalid merkle root (remote: %x local: %x) dberr: %w", header.Root, root, statedb.Error())
 	}

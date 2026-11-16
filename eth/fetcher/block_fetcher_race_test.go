@@ -51,10 +51,11 @@ func TestBlockFetcherConcurrentMapAccess(t *testing.T) {
 		insertHeaders,
 		insertChain,
 		dropPeer,
-		nil,   // no peer jailing
 		false, // no block tracking
 		false, // no witness requirement
 		0,     // no gas ceiling
+		nil,   // no signed-witness lookup
+		nil,   // no cache-witness-for-serving
 	)
 
 	// Start the fetcher
@@ -248,11 +249,12 @@ func TestWitnessManagerConcurrentAccess(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
-		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
+		nil,
 		nil,
 		0,
 	)
@@ -485,10 +487,11 @@ func TestBlockFetcherMapStateConsistency(t *testing.T) {
 		insertHeaders,
 		insertChain,
 		dropPeer,
-		nil,
 		false,
 		false,
 		0,
+		nil,
+		nil,
 	)
 
 	fetcher.Start()
@@ -543,11 +546,12 @@ func TestWitnessManagerStateConsistency(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
-		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
+		nil,
 		nil,
 		0,
 	)
@@ -607,10 +611,11 @@ func TestBlockFetcherMemoryLeaks(t *testing.T) {
 		insertHeaders,
 		insertChain,
 		dropPeer,
-		nil,
 		false,
 		false,
 		0,
+		nil,
+		nil,
 	)
 
 	fetcher.Start()
@@ -663,11 +668,12 @@ func TestWitnessManagerMemoryLeaks(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
-		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
+		nil,
 		nil,
 		0,
 	)

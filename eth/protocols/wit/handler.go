@@ -15,9 +15,6 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 )
 
-// TODO(@pratikspatil024) - Once everything is working, check if need to set limits
-// like we do in eth/handler.go
-
 // Handler is a callback to invoke from an outside runner after the boilerplate
 // exchanges have passed.
 type Handler func(peer *Peer) error
@@ -133,6 +130,16 @@ var wit1 = map[uint64]msgHandler{
 	WitnessMetadataMsg:    handleWitnessMetadata,
 }
 
+var wit2 = map[uint64]msgHandler{
+	GetMsgWitness:             handleGetWitness,
+	MsgWitness:                handleWitness,
+	NewWitnessMsg:             handleNewWitness,
+	NewWitnessHashesMsg:       handleNewWitnessHashes,
+	GetWitnessMetadataMsg:     handleGetWitnessMetadata,
+	WitnessMetadataMsg:        handleWitnessMetadata,
+	SignedNewWitnessHashesMsg: handleSignedNewWitnessHashes,
+}
+
 // HandleMessage is invoked whenever an inbound message is received from a
 // remote peer on the `wit` protocol. The remote connection is torn down upon
 // returning any error.
@@ -167,6 +174,8 @@ func handleMessage(backend Backend, peer *Peer) error {
 	// Select the appropriate handler map based on protocol version
 	var handlers map[uint64]msgHandler
 	switch peer.Version() {
+	case WIT2:
+		handlers = wit2
 	case WIT1:
 		handlers = wit1
 	case WIT0:

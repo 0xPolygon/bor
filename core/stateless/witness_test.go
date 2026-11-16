@@ -1,6 +1,8 @@
 package stateless
 
 import (
+	"errors"
+	"fmt"
 	"math/big"
 	"sync"
 	"testing"
@@ -42,7 +44,7 @@ func TestValidateWitnessPreState_Success(t *testing.T) {
 	}
 
 	// Test validation - should succeed.
-	err := ValidateWitnessPreState(witness, mockReader)
+	err := ValidateWitnessPreState(witness, mockReader, nil)
 	if err != nil {
 		t.Errorf("Expected validation to succeed, but got error: %v", err)
 	}
@@ -88,7 +90,7 @@ func TestValidateWitnessPreState_StateMismatch(t *testing.T) {
 	}
 
 	// Test validation - should fail.
-	err := ValidateWitnessPreState(witness, mockReader)
+	err := ValidateWitnessPreState(witness, mockReader, nil)
 	if err == nil {
 		t.Error("Expected validation to fail due to state root mismatch, but it succeeded")
 	}
@@ -106,7 +108,7 @@ func TestValidateWitnessPreState_EdgeCases(t *testing.T) {
 
 	// Test case 1: Nil witness.
 	t.Run("NilWitness", func(t *testing.T) {
-		err := ValidateWitnessPreState(nil, mockReader)
+		err := ValidateWitnessPreState(nil, mockReader, nil)
 		if err == nil {
 			t.Error("Expected validation to fail for nil witness")
 		}
@@ -124,7 +126,7 @@ func TestValidateWitnessPreState_EdgeCases(t *testing.T) {
 			State:   make(map[string]struct{}),
 		}
 
-		err := ValidateWitnessPreState(witness, mockReader)
+		err := ValidateWitnessPreState(witness, mockReader, nil)
 		if err == nil {
 			t.Error("Expected validation to fail for witness with no headers")
 		}
@@ -147,7 +149,7 @@ func TestValidateWitnessPreState_EdgeCases(t *testing.T) {
 			State: make(map[string]struct{}),
 		}
 
-		err := ValidateWitnessPreState(witness, mockReader)
+		err := ValidateWitnessPreState(witness, mockReader, nil)
 		if err == nil {
 			t.Error("Expected validation to fail for witness with nil context header")
 		}
@@ -177,7 +179,7 @@ func TestValidateWitnessPreState_EdgeCases(t *testing.T) {
 		}
 
 		// Don't add parent header to mock reader - it won't be found.
-		err := ValidateWitnessPreState(witness, mockReader)
+		err := ValidateWitnessPreState(witness, mockReader, nil)
 		if err == nil {
 			t.Error("Expected validation to fail when parent header is not found")
 		}
@@ -187,6 +189,52 @@ func TestValidateWitnessPreState_EdgeCases(t *testing.T) {
 			if err.Error()[:len(expectedError)] != expectedError {
 				t.Errorf("Expected error message to start with '%s', but got: %v", expectedError, err)
 			}
+		}
+	})
+
+	// Test case 5: peer-supplied context header with nil or genesis number
+	// must be rejected, not panic (nil) or probe height MaxUint64 (zero).
+	makeWitness := func(number *big.Int) *Witness {
+		return &Witness{
+			context: &types.Header{
+				Number:     number,
+				ParentHash: common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111"),
+			},
+			Headers: []*types.Header{
+				{
+					Number: big.NewInt(99),
+					Root:   common.HexToHash("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"),
+				},
+			},
+			Codes: make(map[string]struct{}),
+			State: make(map[string]struct{}),
+		}
+	}
+	for name, number := range map[string]*big.Int{
+		"NilContextNumber":  nil,
+		"ZeroContextNumber": big.NewInt(0),
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := ValidateWitnessPreState(makeWitness(number), mockReader, nil)
+			if err == nil {
+				t.Fatal("Expected validation to fail for invalid context number")
+			}
+			expectedError := "witness context header has invalid block number"
+			if err.Error()[:len(expectedError)] != expectedError {
+				t.Errorf("Expected error message to start with '%s', but got: %v", expectedError, err)
+			}
+		})
+	}
+
+	// Test case 6: expected block with nil number must be rejected before
+	// the number comparison dereferences it.
+	t.Run("NilExpectedBlockNumber", func(t *testing.T) {
+		err := ValidateWitnessPreState(makeWitness(big.NewInt(100)), mockReader, &types.Header{})
+		if err == nil {
+			t.Fatal("Expected validation to fail for nil expected block number")
+		}
+		if err.Error() != "expected block header has nil number" {
+			t.Errorf("Expected nil-number error, got: %v", err)
 		}
 	})
 }
@@ -234,7 +282,7 @@ func TestValidateWitnessPreState_MultipleHeaders(t *testing.T) {
 	}
 
 	// Test validation - should succeed (only first header matters for validation).
-	err := ValidateWitnessPreState(witness, mockReader)
+	err := ValidateWitnessPreState(witness, mockReader, nil)
 	if err != nil {
 		t.Errorf("Expected validation to succeed with multiple headers, but got error: %v", err)
 	}
@@ -973,4 +1021,146 @@ func TestCalculatePageThreshold(t *testing.T) {
 			t.Errorf("Expected threshold %d for 150M gas ceil, got %d", expectedThreshold, threshold)
 		}
 	})
+}
+
+// makeValidatePreStateFixture builds a consistent witness + mockReader + context
+// header where the witness pre-state matches the chain's parent block. Callers
+// can mutate the returned expectedBlock to test the anti-malicious-peer guards.
+func makeValidatePreStateFixture() (*Witness, HeaderReader, *types.Header) {
+	parentStateRoot := common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111")
+
+	parentHeader := &types.Header{
+		Number:     big.NewInt(99),
+		ParentHash: common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000000"),
+		Root:       parentStateRoot,
+	}
+	parentHash := parentHeader.Hash()
+
+	contextHeader := &types.Header{
+		Number:     big.NewInt(100),
+		ParentHash: parentHash,
+		Root:       common.HexToHash("0x2222222222222222222222222222222222222222222222222222222222222222"),
+	}
+
+	mockReader := NewMockHeaderReader()
+	mockReader.AddHeader(parentHeader)
+
+	witness := &Witness{
+		context: contextHeader,
+		Headers: []*types.Header{parentHeader},
+		Codes:   make(map[string]struct{}),
+		State:   make(map[string]struct{}),
+	}
+
+	// expectedBlock mirrors the context header — tests mutate individual fields
+	// (ParentHash / Number) to exercise the ValidateWitnessPreState guards.
+	expectedBlock := &types.Header{
+		Number:     big.NewInt(100),
+		ParentHash: parentHash,
+	}
+	return witness, mockReader, expectedBlock
+}
+
+// TestValidateWitnessPreState_ExpectedBlockMatches exercises the non-nil
+// expectedBlock branch with matching ParentHash and Number so the full
+// function runs to completion.
+func TestValidateWitnessPreState_ExpectedBlockMatches(t *testing.T) {
+	witness, reader, expectedBlock := makeValidatePreStateFixture()
+	if err := ValidateWitnessPreState(witness, reader, expectedBlock); err != nil {
+		t.Errorf("expected validation to succeed, got %v", err)
+	}
+}
+
+// TestValidateWitnessPreState_ExpectedBlockParentHashMismatch rejects a witness
+// whose context ParentHash disagrees with the expected block — defends against
+// a malicious peer substituting a witness for a different fork.
+func TestValidateWitnessPreState_ExpectedBlockParentHashMismatch(t *testing.T) {
+	witness, reader, expectedBlock := makeValidatePreStateFixture()
+	expectedBlock.ParentHash = common.HexToHash("0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+
+	err := ValidateWitnessPreState(witness, reader, expectedBlock)
+	if err == nil {
+		t.Fatal("expected ParentHash mismatch error, got nil")
+	}
+	if !containsSubstring(err.Error(), "witness ParentHash mismatch") {
+		t.Errorf("expected ParentHash mismatch error, got: %v", err)
+	}
+}
+
+// TestValidateWitnessPreState_ExpectedBlockNumberMismatch rejects a witness
+// whose context Number disagrees with the expected block — defends against a
+// malicious peer substituting a witness for a different block at the same
+// ParentHash (e.g., after a reorg).
+func TestValidateWitnessPreState_ExpectedBlockNumberMismatch(t *testing.T) {
+	witness, reader, expectedBlock := makeValidatePreStateFixture()
+	expectedBlock.Number = big.NewInt(999) // ParentHash still matches
+
+	err := ValidateWitnessPreState(witness, reader, expectedBlock)
+	if err == nil {
+		t.Fatal("expected Number mismatch error, got nil")
+	}
+	if !containsSubstring(err.Error(), "witness block number mismatch") {
+		t.Errorf("expected Number mismatch error, got: %v", err)
+	}
+}
+
+func containsSubstring(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}
+
+// TestValidateWitnessPreState_ErrInvalidWitness pins which failures are tagged
+// ErrInvalidWitness: those the witness bytes caused are, so the fetcher can
+// charge the serving peer; those that depend on local state are not, so an
+// honest peer is never struck for them. Messages stay unchanged.
+func TestValidateWitnessPreState_ErrInvalidWitness(t *testing.T) {
+	mutations := map[string]func(w *Witness, expected *types.Header){
+		"NoHeaders":          func(w *Witness, _ *types.Header) { w.Headers = nil },
+		"InvalidNumber":      func(w *Witness, _ *types.Header) { w.context.Number = big.NewInt(0) },
+		"ParentHashMismatch": func(_ *Witness, e *types.Header) { e.ParentHash = common.HexToHash("0xdead") },
+		"NumberMismatch":     func(_ *Witness, e *types.Header) { e.Number = big.NewInt(999) },
+		"PreStateRootMismatch": func(w *Witness, _ *types.Header) {
+			forged := types.CopyHeader(w.Headers[0])
+			forged.Root = common.HexToHash("0xdeadbeef")
+			w.Headers[0] = forged
+		},
+	}
+	for name, mutate := range mutations {
+		t.Run(name, func(t *testing.T) {
+			witness, reader, expected := makeValidatePreStateFixture()
+			mutate(witness, expected)
+			err := ValidateWitnessPreState(witness, reader, expected)
+			if !errors.Is(err, ErrInvalidWitness) {
+				t.Fatalf("expected ErrInvalidWitness, got %v", err)
+			}
+			if wrapped := fmt.Errorf("witness validation failed: %w", err); !errors.Is(wrapped, ErrInvalidWitness) {
+				t.Fatalf("ErrInvalidWitness lost through wrapping: %v", wrapped)
+			}
+		})
+	}
+	t.Run("PreStateRootMismatchKeepsMessage", func(t *testing.T) {
+		witness, reader, expected := makeValidatePreStateFixture()
+		witness.Headers[0] = &types.Header{Number: big.NewInt(99), Root: common.HexToHash("0xdeadbeef")}
+		err := ValidateWitnessPreState(witness, reader, expected)
+		if err == nil || !containsSubstring(err.Error(), "witness pre-state root mismatch") {
+			t.Fatalf("expected pre-state root mismatch message, got %v", err)
+		}
+	})
+
+	// Local-state failures must not match.
+	if err := ValidateWitnessPreState(nil, NewMockHeaderReader(), nil); errors.Is(err, ErrInvalidWitness) {
+		t.Fatalf("nil witness is a local error, got %v", err)
+	}
+	witness, _, expected := makeValidatePreStateFixture()
+	if err := ValidateWitnessPreState(witness, NewMockHeaderReader(), expected); err == nil || errors.Is(err, ErrInvalidWitness) {
+		t.Fatalf("missing local parent header is a local error, got %v", err)
+	}
+	witness, reader, _ := makeValidatePreStateFixture()
+	if err := ValidateWitnessPreState(witness, reader, &types.Header{}); err == nil || errors.Is(err, ErrInvalidWitness) {
+		t.Fatalf("nil expected block number is a local error, got %v", err)
+	}
 }

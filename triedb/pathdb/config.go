@@ -105,6 +105,10 @@ type Config struct {
 	// 0 = unlimited (legacy behavior), default = 1MB/s
 	PreloadRateLimit int64
 
+	// AddressCachePersist persists the address-specific caches to disk on
+	// shutdown and reloads them on startup. Default: false
+	AddressCachePersist bool
+
 	// Testing configurations
 	SnapshotNoBuild   bool   // Flag Whether the state generation is disabled
 	NoAsyncFlush      bool   // Flag whether the background buffer flushing is disabled
@@ -153,6 +157,9 @@ func (c *Config) fields() []interface{} {
 		list = append(list, "preload-rate-limit", fmt.Sprintf("%s/s", common.StorageSize(c.PreloadRateLimit)))
 	} else {
 		list = append(list, "preload-rate-limit", "unlimited")
+	}
+	if c.AddressCachePersist {
+		list = append(list, "address-cache-persist", true)
 	}
 	return list
 }

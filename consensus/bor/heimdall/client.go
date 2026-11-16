@@ -57,6 +57,9 @@ const (
 	heimdallAPIBodyLimit = 128 * 1024 * 1024 // 128 MB
 	stateFetchLimit      = 50
 	retryCall            = 5 * time.Second
+	// defaultFetchTimeout bounds a single request when the client has no
+	// timeout configured.
+	defaultFetchTimeout = 30 * time.Second
 )
 
 type HeimdallClient struct {
@@ -97,50 +100,42 @@ const (
 	fetchStatus = "/status"
 )
 
-// StateSyncEvents fetches the state sync events from heimdall
+// StateSyncEvents fetches one page of state sync events from heimdall.
 func (h *HeimdallClient) StateSyncEvents(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
 	eventRecords := make([]*clerk.EventRecordWithTime, 0)
 
-	for {
-		url, err := stateSyncURL(h.urlString, fromID, to)
-		if err != nil {
-			return nil, err
-		}
+	url, err := stateSyncURL(h.urlString, fromID, to)
+	if err != nil {
+		return nil, err
+	}
 
-		log.Info("Fetching state sync events", "queryParams", url.RawQuery)
+	log.Info("Fetching state sync events", "queryParams", url.RawQuery)
 
-		ctx = WithRequestType(ctx, StateSyncRequest)
+	ctx = WithRequestType(ctx, StateSyncRequest)
 
-		request := &Request{client: h.client, url: url, start: time.Now()}
-		response, err := Fetch[clerkTypes.RecordListResponse](ctx, request)
-		if err != nil {
-			return nil, err
-		}
+	request := &Request{client: h.client, url: url, start: time.Now()}
+	response, err := Fetch[clerkTypes.RecordListResponse](ctx, request)
+	if err != nil {
+		return nil, err
+	}
 
-		var record *clerk.EventRecordWithTime
+	var record *clerk.EventRecordWithTime
 
-		for _, e := range response.EventRecords {
-			if e.Id >= fromID && e.RecordTime.Before(time.Unix(to, 0)) {
-				record = &clerk.EventRecordWithTime{
-					EventRecord: clerk.EventRecord{
-						ID:       e.Id,
-						ChainID:  e.BorChainId,
-						Contract: common.HexToAddress(e.Contract),
-						Data:     e.Data,
-						LogIndex: e.LogIndex,
-						TxHash:   common.HexToHash(e.TxHash),
-					},
-					Time: e.RecordTime,
-				}
-				eventRecords = append(eventRecords, record)
+	for _, e := range response.EventRecords {
+		if e.Id >= fromID && e.RecordTime.Before(time.Unix(to, 0)) {
+			record = &clerk.EventRecordWithTime{
+				EventRecord: clerk.EventRecord{
+					ID:       e.Id,
+					ChainID:  e.BorChainId,
+					Contract: common.HexToAddress(e.Contract),
+					Data:     e.Data,
+					LogIndex: e.LogIndex,
+					TxHash:   common.HexToHash(e.TxHash),
+				},
+				Time: e.RecordTime,
 			}
+			eventRecords = append(eventRecords, record)
 		}
-
-		if len(response.EventRecords) < stateFetchLimit {
-			break
-		}
-
-		fromID += uint64(stateFetchLimit)
 	}
 
 	sort.SliceStable(eventRecords, func(i, j int) bool {
@@ -490,11 +485,11 @@ func internalFetch(ctx context.Context, client http.Client, u *url.URL) ([]byte,
 }
 
 func internalFetchWithTimeout(ctx context.Context, client http.Client, url *url.URL) ([]byte, error) {
+	// Honor the configured timeout (--bor.heimdalltimeout); only fall back to
+	// the default when the caller left it unset.
 	if client.Timeout == 0 {
-		// If no timeout is set, use a default timeout
-		client.Timeout = 1 * time.Second
+		client.Timeout = defaultFetchTimeout
 	}
-	client.Timeout = 30 * time.Second
 	ctx, cancel := context.WithTimeout(ctx, client.Timeout)
 	defer cancel()
 

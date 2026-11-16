@@ -32,9 +32,7 @@ const (
 	witnessCacheSize = 10
 	witnessCacheTTL  = 2 * time.Minute
 
-	// Witness verification constants
-	witnessVerificationPeers   = 2               // Number of random peers to query for verification
-	witnessVerificationTimeout = 5 * time.Second // Timeout for verification queries
+	witnessFetchRetryDelay = time.Second
 
 	// Witness size estimation constants
 	// Assuming 1M gas results in 1MB witness, and max page size is 15MB
@@ -43,37 +41,128 @@ const (
 	witnessPageThreshold = 10        // Default threshold if gas ceil not available
 )
 
+var (
+	errInvalidWitnessResponse  = errors.New("invalid witness response type")
+	errWitnessFetchUnavailable = errors.New("witness fetch unavailable")
+)
+
 // witnessRequestState tracks the state of a pending witness request.
 type witnessRequestState struct {
-	op       *blockOrHeaderInject // The original block/header injection operation.
-	announce *blockAnnounce       // Announcement details, non-nil if a fetch is in flight.
-	retries  int                  // Number of fetch attempts already made
+	op           *blockOrHeaderInject // The original block/header injection operation.
+	announce     *blockAnnounce       // Announcement details, non-nil if a fetch is in flight.
+	retries      int                  // Number of fetch attempts already made
+	emptyRetries int                  // Consecutive "body not ready yet" (empty) responses, for backoff
 }
 
 // cachedWitness represents a witness that arrived before its corresponding block
 type cachedWitness struct {
-	witness   *stateless.Witness
-	peer      string
-	timestamp time.Time
+	witness    *stateless.Witness
+	peer       string
+	provenance WitnessProvenance // Who chose the bytes (see InjectWitness).
+	timestamp  time.Time
 }
+
+// injectFor builds the import op for block from a witness that arrived by
+// broadcast before the block did, carrying the pusher and who chose the bytes
+// as the op's provenance (see blockOrHeaderInject) and the fetch
+// closure a re-fetch after an import failure needs (retryAfterImportFailure).
+func (c *cachedWitness) injectFor(origin string, block *types.Block, fetchWitness witnessRequesterFn) *blockOrHeaderInject {
+	op := &blockOrHeaderInject{
+		origin:       origin,
+		block:        block,
+		witness:      c.witness,
+		witnessPeer:  c.peer,
+		fetchWitness: fetchWitness,
+	}
+	op.setWitnessProvenance(c.provenance)
+	return op
+}
+
+// setWitnessProvenance records who chose the op's witness bytes, which decides
+// how an import failure is charged (chargeDivergedWitnessImportFailure).
+func (op *blockOrHeaderInject) setWitnessProvenance(p WitnessProvenance) {
+	op.witnessDiverged = p.diverged()
+	op.witnessNotProducer = p == WitnessNotProducer
+}
+
+// signedWitnessHashFn returns the BP-signed witness commitment for a block —
+// the producer's own witness hash and encoded size — if a WIT2 signed
+// announcement has been received and verified locally. The witness manager uses
+// it on fetch success as a size oracle (see verifyAgainstSignedHash): a served
+// witness is accepted for import when its encoded size is within a band of the
+// signed size; its hash is compared only to decide whether the bytes are the
+// BP's own and therefore eligible for pre-import re-serving. If no signed
+// announcement is on file (e.g., WIT1-only fetch), the check is skipped.
+type signedWitnessHashFn func(blockHash common.Hash) (witnessHash common.Hash, witnessSize uint64, ok bool)
+
+// cacheWitnessForServingFn hands successfully-fetched witness bytes to the
+// network handler so peers can serve them pre-import. Called only for bytes that
+// are byte-identical to the BP's own witness (hash match against the signed
+// commitment), so the pre-import serving cache never carries a variant the BP
+// did not produce. The witnessHash is the WIT2 commitment over the canonical
+// encoding, identical to what the BP signed.
+type cacheWitnessForServingFn func(blockHash common.Hash, witnessBytes []byte, witnessHash common.Hash)
+
+// peerStrikeFn records a WIT2 misbehavior strike against a peer (by id) that
+// served a witness we could not use: one beyond the BP-signed size band, or
+// one accepted on the size oracle alone whose import then failed. Unlike
+// peerDropFn it does not immediately disconnect: a single strike is tolerated
+// (a faulty BP, or a bad block, makes honest servers look wrong too), but
+// sustained misbehavior accrues toward the same disconnect threshold as bad
+// announces. Optional; nil disables the penalty.
+type peerStrikeFn func(id string)
+
+// witnessSourceExcludeFn tells the network handler that peer's copy of the
+// witness for blockHash must not be fetched again: it was accepted on the size
+// oracle and failed import. The handler skips that peer when resolving the
+// fetch target for blockHash so the re-fetch reaches a different source.
+// Optional; nil means the re-fetch may land on the same peer.
+type witnessSourceExcludeFn func(peer string, blockHash common.Hash)
 
 // witnessManager handles the logic specific to fetching and managing witnesses
 // for blocks, isolating it from the main BlockFetcher loop.
 type witnessManager struct {
 	// Parent fetcher fields/methods required
-	parentQuit          <-chan struct{}        // Parent fetcher's quit channel
-	parentDropPeer      peerDropFn             // Function to drop a misbehaving peer
-	parentJailPeer      peerJailFn             // Function to jail a peer to prevent reconnection (optional)
-	parentEnqueueCh     chan<- *enqueueRequest // Channel to send completed blocks+witnesses back
-	parentGetBlock      blockRetrievalFn       // Function to check if block is known locally
-	parentGetHeader     HeaderRetrievalFn      // Function to check if header is known locally (needed for checks)
-	parentChainHeight   chainHeightFn          // Retrieve chain height for distance checks
-	parentCurrentHeader currentHeaderFn        // Retrieve current block header for gas limit
+	parentQuit                   <-chan struct{}          // Parent fetcher's quit channel
+	parentDropPeer               peerDropFn               // Function to drop a misbehaving peer
+	parentEnqueueCh              chan<- *enqueueRequest   // Channel to send completed blocks+witnesses back
+	parentGetBlock               blockRetrievalFn         // Function to check if block is known locally
+	parentGetHeader              HeaderRetrievalFn        // Function to check if header is known locally (needed for checks)
+	parentChainHeight            chainHeightFn            // Retrieve chain height for distance checks
+	parentCurrentHeader          currentHeaderFn          // Retrieve current block header for gas limit
+	parentSignedWitnessHash      signedWitnessHashFn      // WIT2: lookup the BP-signed witness commitment (hash + size) for the size oracle
+	parentCacheWitnessForServing cacheWitnessForServingFn // WIT2: hand BP-identical bytes to the handler for pre-import serving by peers
+	parentStrikeWitnessServer    peerStrikeFn             // WIT2: strike a peer that served an oversized or import-failing witness (optional)
+	parentExcludeWitnessSource   witnessSourceExcludeFn   // WIT2: exclude a peer as fetch source for a block after its witness failed import (optional)
 
 	// Witness-specific state
 	pending            map[common.Hash]*witnessRequestState         // Blocks waiting for witness or actively fetching.
 	witnessUnavailable map[common.Hash]time.Time                    // Tracks hashes whose witnesses are known to be unavailable, with expiry times.
 	witnessCache       *ttlcache.Cache[common.Hash, *cachedWitness] // TTL cache of witnesses that arrived before their blocks
+
+	// WIT2 signed-hash mismatch tracking. A bad or stale BP-signed witness hash
+	// makes every honest server's canonical bytes mismatch, which would stall
+	// the block until the signed announcement's TTL expires. We track the
+	// distinct servers that mismatch a given block's signed hash and, past
+	// signedHashMismatchQuarantineThreshold, quarantine that hash so subsequent
+	// fetches skip the signed-hash gate and fall back to WIT1 (import-time
+	// execution arbitrates the bytes) immediately instead of waiting out the TTL.
+	// Guarded by its own mutex (inner to m.mu in the rare paths that hold both).
+	//
+	// Unlike witnessUnavailable, entries here are cleared only by the 4
+	// pending-removal exits (forget/safeEnqueue/markWitnessUnavailable/
+	// handleWitnessFetchFailureExt) or a matching success — none of which fire
+	// again once a hash has already left m.pending. A response that mismatches
+	// AFTER that point (e.g. the block imported via broadcast, or forget()
+	// already ran) still runs verifyAgainstSignedHash and creates a fresh
+	// entry nothing will ever remove. wit2StateExpiry gives every entry a TTL,
+	// refreshed on each touch, swept by the same cleanupTicker that expires
+	// witnessUnavailable, so a late/adversarial mismatch can no longer leak
+	// state for the process lifetime.
+	wit2QuarantineMu  sync.Mutex
+	wit2MismatchPeers map[common.Hash]map[string]struct{}
+	wit2Quarantined   map[common.Hash]struct{}
+	wit2StateExpiry   map[common.Hash]time.Time
 
 	// Witness verification state
 	gasCeil uint64 // Gas ceiling for calculating dynamic page threshold
@@ -102,12 +191,13 @@ type witnessManager struct {
 func newWitnessManager(
 	parentQuit <-chan struct{},
 	parentDropPeer peerDropFn,
-	parentJailPeer peerJailFn,
 	parentEnqueueCh chan<- *enqueueRequest,
 	parentGetBlock blockRetrievalFn,
 	parentGetHeader HeaderRetrievalFn,
 	parentChainHeight chainHeightFn,
 	parentCurrentHeader currentHeaderFn,
+	parentSignedWitnessHash signedWitnessHashFn,
+	parentCacheWitnessForServing cacheWitnessForServingFn,
 	gasCeil uint64,
 ) *witnessManager {
 	// Create TTL cache with 1 minute expiration for witnesses
@@ -117,22 +207,26 @@ func newWitnessManager(
 	)
 
 	m := &witnessManager{
-		parentQuit:          parentQuit,
-		parentDropPeer:      parentDropPeer,
-		parentJailPeer:      parentJailPeer,
-		parentEnqueueCh:     parentEnqueueCh,
-		parentGetBlock:      parentGetBlock,
-		parentGetHeader:     parentGetHeader,
-		parentChainHeight:   parentChainHeight,
-		parentCurrentHeader: parentCurrentHeader,
-		pending:             make(map[common.Hash]*witnessRequestState),
-		witnessUnavailable:  make(map[common.Hash]time.Time),
-		witnessCache:        witnessCache,
-		gasCeil:             gasCeil,
-		injectNeedWitnessCh: make(chan *injectBlockNeedWitnessMsg, 10),
-		injectWitnessCh:     make(chan *injectedWitnessMsg, 10),
-		witnessTimer:        time.NewTimer(0),
-		pokeCh:              make(chan struct{}, 1),
+		parentQuit:                   parentQuit,
+		parentDropPeer:               parentDropPeer,
+		parentEnqueueCh:              parentEnqueueCh,
+		parentGetBlock:               parentGetBlock,
+		parentGetHeader:              parentGetHeader,
+		parentChainHeight:            parentChainHeight,
+		parentCurrentHeader:          parentCurrentHeader,
+		parentSignedWitnessHash:      parentSignedWitnessHash,
+		parentCacheWitnessForServing: parentCacheWitnessForServing,
+		pending:                      make(map[common.Hash]*witnessRequestState),
+		witnessUnavailable:           make(map[common.Hash]time.Time),
+		witnessCache:                 witnessCache,
+		wit2MismatchPeers:            make(map[common.Hash]map[string]struct{}),
+		wit2Quarantined:              make(map[common.Hash]struct{}),
+		wit2StateExpiry:              make(map[common.Hash]time.Time),
+		gasCeil:                      gasCeil,
+		injectNeedWitnessCh:          make(chan *injectBlockNeedWitnessMsg, 10),
+		injectWitnessCh:              make(chan *injectedWitnessMsg, 10),
+		witnessTimer:                 time.NewTimer(0),
+		pokeCh:                       make(chan struct{}, 1),
 	}
 	m.stopAndDrainTimer()
 	return m
@@ -205,6 +299,7 @@ func (m *witnessManager) loop() {
 		case <-cleanupTicker.C:
 			log.Debug("[wm] Cleanup ticker triggered")
 			m.cleanupUnavailableCache()
+			m.cleanupWit2QuarantineState()
 
 		// A poke indicates the timer was rescheduled by another goroutine. We
 		// simply loop around so that the timer channel is re-evaluated with the
@@ -297,12 +392,8 @@ func (m *witnessManager) handleNeed(msg *injectBlockNeedWitnessMsg) {
 	// Check if we have a cached witness for this block
 	if item := m.witnessCache.Get(hash); item != nil {
 		cached := item.Value()
-		// Use the cached witness
-		op := &blockOrHeaderInject{
-			origin:  msg.origin,
-			block:   msg.block,
-			witness: cached.witness,
-		}
+		// Use the cached witness, with the pusher's provenance
+		op := cached.injectFor(msg.origin, msg.block, msg.fetchWitness)
 		m.witnessCache.Delete(hash)
 		m.mu.Unlock()
 
@@ -351,6 +442,15 @@ func (m *witnessManager) handleBroadcast(msg *injectedWitnessMsg) {
 		// Ensure witness isn't already set
 		if state.op.witness == nil {
 			state.op.witness = msg.witness
+			// Provenance, exactly as handleWitnessFetchSuccess records it for a
+			// fetched witness: the pusher chose these bytes, so an import failure
+			// of a body not proven to be the BP's is charged to it and the
+			// witness re-fetched from someone else via the announce's closure.
+			state.op.witnessPeer = msg.peer
+			state.op.setWitnessProvenance(msg.provenance)
+			if state.op.fetchWitness == nil && state.announce != nil {
+				state.op.fetchWitness = state.announce.fetchWitness
+			}
 			// Update block timestamps if needed
 			if state.op.block != nil && msg.time.After(state.op.block.ReceivedAt) {
 				state.op.block.ReceivedAt = msg.time
@@ -368,9 +468,10 @@ func (m *witnessManager) handleBroadcast(msg *injectedWitnessMsg) {
 	} else {
 		// Cache the witness for later use when the block arrives
 		m.witnessCache.Set(hash, &cachedWitness{
-			witness:   msg.witness,
-			peer:      msg.peer,
-			timestamp: msg.time,
+			witness:    msg.witness,
+			peer:       msg.peer,
+			provenance: msg.provenance,
+			timestamp:  msg.time,
 		}, ttlcache.DefaultTTL)
 		log.Debug("[wm] No matching pending block for injected witness, caching for later", "hash", hash, "peer", msg.peer)
 	}
@@ -569,11 +670,15 @@ func (m *witnessManager) initiateWitnessFetch(hash common.Hash, announce *blockA
 
 	if err != nil {
 		log.Debug("[wm] Failed to initiate witness fetch request", "peer", peer, "hash", hash, "err", err)
-		wrappedErr := fmt.Errorf("request initiation failed: %w", err)
+		wrappedErr := fmt.Errorf("%w: request initiation failed: %w", errWitnessFetchUnavailable, err)
 
 		// "No peer with witness" is a soft failure with no peer to penalize.
 		if strings.Contains(err.Error(), "no peer with witness for hash") {
-			m.handleWitnessFetchFailureExt(hash, "", wrappedErr, false)
+			log.Debug("[wm] Witness fetch found no source", "hash", hash, "err", wrappedErr)
+
+			m.setWitnessRetry(hash, 0)
+			m.rescheduleWitness()
+
 			return nil, "", false
 		}
 
@@ -599,7 +704,7 @@ func (m *witnessManager) initiateWitnessFetch(hash common.Hash, announce *blockA
 // awaitWitnessResponse waits for the fetch response, delegating to success
 // or failure handlers depending on the outcome.
 func (m *witnessManager) awaitWitnessResponse(peer string, hash common.Hash, resCh chan *eth.Response, announcedAt time.Time) {
-	timeout := time.NewTimer(2 * fetchTimeout) // 2x leeway before dropping the peer
+	timeout := time.NewTimer(2 * fetchTimeout)
 	defer timeout.Stop()
 
 	select {
@@ -607,7 +712,7 @@ func (m *witnessManager) awaitWitnessResponse(peer string, hash common.Hash, res
 		m.processWitnessResponse(peer, hash, res, announcedAt)
 	case <-timeout.C:
 		log.Info("[wm] Witness fetch timed out for peer", "peer", peer, "hash", hash)
-		m.handleWitnessFetchFailureExt(hash, peer, errors.New("fetch timeout"), false)
+		m.handleWitnessFetchFailureExt(hash, peer, fmt.Errorf("%w: fetch timeout", errWitnessFetchUnavailable), false)
 	case <-m.parentQuit:
 		log.Debug("[wm] Witness fetch cancelled due to shutdown", "peer", peer, "hash", hash)
 	}
@@ -618,7 +723,7 @@ func (m *witnessManager) awaitWitnessResponse(peer string, hash common.Hash, res
 func (m *witnessManager) processWitnessResponse(peer string, hash common.Hash, res *eth.Response, announcedAt time.Time) {
 	if res == nil {
 		log.Debug("[wm] Witness response channel closed unexpectedly", "peer", peer, "hash", hash)
-		m.handleWitnessFetchFailureExt(hash, peer, errors.New("response channel closed"), false)
+		m.handleWitnessFetchFailureExt(hash, peer, fmt.Errorf("%w: response channel closed", errWitnessFetchUnavailable), false)
 		return
 	}
 	res.Done <- nil // Signal consumption
@@ -627,22 +732,53 @@ func (m *witnessManager) processWitnessResponse(peer string, hash common.Hash, r
 	witness, ok := res.Res.([]*stateless.Witness)
 	if !ok {
 		log.Debug("[wm] Invalid witness response type received", "peer", peer, "hash", hash, "type", fmt.Sprintf("%T", res.Res))
-		m.handleWitnessFetchFailureExt(hash, peer, errors.New("invalid response type"), false)
+		m.handleWitnessFetchFailureExt(hash, peer, errInvalidWitnessResponse, false)
 		return
 	}
 	if len(witness) == 0 {
+		// Empty/unavailable response: the peer doesn't have the body yet
+		// (e.g. WIT2 announce-only relayer that has not finished importing).
+		// This is the expected steady state on the WIT2 fast path, not a
+		// failure — back off the request (keeping the responder; dropping on
+		// "no body" is what makes announce-only fallback peers unsafe to ask,
+		// which would erase the WIT2 multi-hop latency win at hop>=2).
 		log.Debug("[wm] Received empty witness response from peer", "peer", peer, "hash", hash)
-		m.handleWitnessFetchFailureExt(hash, peer, errors.New("empty witness response"), false)
+		m.handleWitnessBodyNotReady(hash)
 		return
 	}
 
+	// WIT2: size-oracle check. If we have a BP-signed announcement on file
+	// for this block, the encoded witness only needs to fall within the
+	// signed-size band — hash divergence from non-deterministic witness
+	// content is expected and is not rejected here. Only an oversized witness
+	// is rejected. Content-correctness is arbitrated by import-time execution;
+	// when a witness not proven to be the BP's then fails import in a way it
+	// could have caused, the fetcher excludes this server and re-fetches from
+	// another source, striking it only per chargeDivergedWitnessImportFailure
+	// (see BlockFetcher.importBlocks).
+	body, witnessHash, provenance, ok := m.verifyAgainstSignedHash(peer, hash, witness[0])
+	if !ok {
+		return
+	}
+
+	// WIT2: hand BP-identical bytes to the handler for pre-import serving.
+	// Done before import-side enqueue so a peer asking us for the body
+	// during the chain-write window gets bytes from the in-flight cache
+	// rather than empty results. body is nil on the WIT1 path (no signed
+	// hash on file) and for a within-band non-identical variant —
+	// cacheVerifiedWitnessForServing no-ops in both cases.
+	m.cacheVerifiedWitnessForServing(hash, body, witnessHash)
+
 	metrics.RecordPerItemDuration(blockWitnessItemDownloadTimer, res.Time, 1)
-	m.handleWitnessFetchSuccess(peer, hash, witness[0], announcedAt)
+	m.handleWitnessFetchSuccess(peer, hash, witness[0], announcedAt, provenance)
 }
 
 // handleWitnessFetchSuccess processes a successfully fetched witness.
 // It needs the original origin from the op state for consistency checks.
-func (m *witnessManager) handleWitnessFetchSuccess(fetchPeer string, hash common.Hash, witness *stateless.Witness, announcedAt time.Time) {
+// provenance records who chose the witness bytes; together with the serving
+// peer and the fetch closure it is carried on the import op so an import
+// failure can be charged to the server and re-fetched from another source.
+func (m *witnessManager) handleWitnessFetchSuccess(fetchPeer string, hash common.Hash, witness *stateless.Witness, announcedAt time.Time, provenance WitnessProvenance) {
 	m.mu.Lock()
 	state, exists := m.pending[hash]
 	if !exists {
@@ -658,10 +794,15 @@ func (m *witnessManager) handleWitnessFetchSuccess(fetchPeer string, hash common
 		return // Already handled
 	}
 
-	log.Debug("[wm] Witness received via fetch, queuing block for import", "peer", fetchPeer, "origin", state.op.origin, "number", state.op.number(), "hash", hash)
+	log.Debug("[wm] Witness received via fetch, queuing block for import", "peer", fetchPeer, "origin", state.op.origin, "number", state.op.number(), "hash", hash, "provenance", provenance)
 
-	// Attach witness (under lock)
+	// Attach witness and its provenance (under lock)
 	state.op.witness = witness
+	state.op.witnessPeer = fetchPeer
+	state.op.setWitnessProvenance(provenance)
+	if state.announce != nil {
+		state.op.fetchWitness = state.announce.fetchWitness
+	}
 	m.mu.Unlock()
 
 	// Update timestamps on the block
@@ -724,18 +865,20 @@ func (m *witnessManager) earliestPendingAnnounceLocked() time.Time {
 func (m *witnessManager) handleWitnessFetchFailureExt(hash common.Hash, peer string, fetchErr error, removePending bool) {
 	log.Debug("[wm] Witness fetch failed", "hash", hash, "peer", peer, "err", fetchErr, "removePending", removePending)
 
-	m.mu.Lock()
 	if removePending {
+		m.mu.Lock()
 		delete(m.pending, hash)
+		m.clearSignedHashMismatch(hash)
+		m.mu.Unlock()
 	} else {
-		if state := m.pending[hash]; state != nil {
-			// back-off before next retry
-			state.announce.time = time.Now()
+		var delay time.Duration
+		if errors.Is(fetchErr, errWitnessFetchUnavailable) {
+			delay = witnessFetchRetryDelay
 		}
+		m.setWitnessRetry(hash, delay)
 	}
-	m.mu.Unlock()
 
-	if peer != "" {
+	if peer != "" && errors.Is(fetchErr, errInvalidWitnessResponse) {
 		m.parentDropPeer(peer)
 	}
 
@@ -760,6 +903,11 @@ func (m *witnessManager) safeEnqueue(op *blockOrHeaderInject) {
 	// Remove the pending state while holding the lock, ensuring any concurrent
 	// isPending checks will see the updated state.
 	delete(m.pending, hash)
+	// Every witness, fetched, pushed or cached, reaches import through here.
+	// Carry the signed-size quarantine on the op before clearing it, so a
+	// re-fetch after an import failure stays on the WIT1 path.
+	op.witnessQuarantined = m.isSignedHashQuarantined(hash)
+	m.clearSignedHashMismatch(hash)
 	m.mu.Unlock()
 
 	// Now with lock released, attempt to send the request to parent fetcher
@@ -776,6 +924,79 @@ func (m *witnessManager) safeEnqueue(op *blockOrHeaderInject) {
 	m.rescheduleWitness()
 }
 
+// StrikeWitnessServer records a WIT2 strike against peer via the parent
+// callback, if one is wired. Exported so the network handler can pin that its
+// striker is wired to this manager.
+func (m *witnessManager) StrikeWitnessServer(peer string) {
+	if peer != "" && m.parentStrikeWitnessServer != nil {
+		m.parentStrikeWitnessServer(peer)
+	}
+}
+
+// ExcludeWitnessSource asks the parent to stop offering peer as a witness
+// source for hash, if a callback is wired. Exported so the network handler can
+// pin that its excluder is wired to this manager.
+func (m *witnessManager) ExcludeWitnessSource(peer string, hash common.Hash) {
+	if peer != "" && m.parentExcludeWitnessSource != nil {
+		m.parentExcludeWitnessSource(peer, hash)
+	}
+}
+
+// retryAfterImportFailure re-registers a block whose import failed with a
+// witness not proven to be the BP's (WitnessProvenance.diverged), so its
+// witness is fetched again — from a different source, the failed one having
+// been excluded by the fetcher. Called from the BlockFetcher loop right after the failed attempt has
+// been forgotten, so the pending map is free for the hash. The carried
+// witnessImportFailures count bounds the cycle (see maxWitnessImportRetries).
+func (m *witnessManager) retryAfterImportFailure(op *blockOrHeaderInject) {
+	if op == nil || op.block == nil || op.fetchWitness == nil {
+		return
+	}
+	hash := op.block.Hash()
+	if m.isWitnessUnavailable(hash) {
+		log.Debug("[wm] Not re-fetching witness after import failure: marked unavailable", "hash", hash)
+		return
+	}
+	if m.parentGetBlock(hash) != nil {
+		log.Debug("[wm] Not re-fetching witness after import failure: block now known locally", "hash", hash)
+		return
+	}
+
+	m.mu.Lock()
+	if _, exists := m.pending[hash]; exists {
+		m.mu.Unlock()
+		log.Debug("[wm] Not re-fetching witness after import failure: already pending", "hash", hash)
+		return
+	}
+	if op.witnessQuarantined {
+		// Forgetting the failed attempt cleared the quarantine: restore it so
+		// the re-fetch stays on the WIT1 path instead of being judged against
+		// the bad signed size again, which would strike honest servers twice.
+		m.quarantineSignedHash(hash)
+	}
+	m.pending[hash] = &witnessRequestState{
+		op: &blockOrHeaderInject{
+			origin:                op.origin,
+			block:                 op.block,
+			fetchWitness:          op.fetchWitness,
+			witnessImportFailures: op.witnessImportFailures,
+			witnessQuarantined:    op.witnessQuarantined,
+		},
+		announce: &blockAnnounce{
+			origin:       op.origin,
+			hash:         hash,
+			number:       op.block.NumberU64(),
+			time:         time.Now(),
+			fetchWitness: op.fetchWitness,
+		},
+	}
+	m.mu.Unlock()
+
+	log.Info("[wm] Re-fetching witness from another peer after import failure",
+		"number", op.block.NumberU64(), "hash", hash, "failedServer", op.witnessPeer, "failures", op.witnessImportFailures)
+	m.rescheduleWitness()
+}
+
 // forget cleans up any pending state for a given hash. Called when a block is
 // imported or discarded by the main fetcher *before* witness handling completed.
 func (m *witnessManager) forget(hash common.Hash) {
@@ -784,6 +1005,7 @@ func (m *witnessManager) forget(hash common.Hash) {
 		log.Debug("[wm] Forgetting pending witness state", "hash", hash)
 		delete(m.pending, hash)
 	}
+	m.clearSignedHashMismatch(hash)
 	m.mu.Unlock()
 	// Ensure timer reflects potential state change
 	m.rescheduleWitness()
@@ -821,6 +1043,12 @@ func (m *witnessManager) markWitnessUnavailable(hash common.Hash) {
 	m.witnessUnavailable[hash] = expiry
 	// Remove from pending state if it exists, as we won't fetch it now
 	delete(m.pending, hash)
+	// Clear any signed-hash mismatch/quarantine state for this block too. This is
+	// the fourth pending-removal exit (alongside the soft-fail removePending,
+	// safeEnqueue, and forget paths); without it a quarantined hash that then
+	// exhausts its fetch retries leaks its quarantine entry for the process
+	// lifetime (the quarantine maps have no TTL or periodic GC).
+	m.clearSignedHashMismatch(hash)
 	m.mu.Unlock()
 
 	m.rescheduleWitness() // Recalculate timer based on remaining pending items
@@ -878,12 +1106,8 @@ func (m *witnessManager) handleFilterResult(announce *blockAnnounce, block *type
 	// Check if we have a cached witness for this block
 	if item := m.witnessCache.Get(hash); item != nil {
 		cached := item.Value()
-		// Use the cached witness
-		op := &blockOrHeaderInject{
-			origin:  announce.origin,
-			block:   block,
-			witness: cached.witness,
-		}
+		// Use the cached witness, with the pusher's provenance
+		op := cached.injectFor(announce.origin, block, announce.fetchWitness)
 		m.witnessCache.Delete(hash)
 		log.Debug("[wm] Found cached witness for filter result block, using it", "hash", hash, "cachedPeer", cached.peer)
 		m.safeEnqueue(op)
@@ -1013,107 +1237,42 @@ func (m *witnessManager) calculatePageThreshold() uint64 {
 	return threshold
 }
 
-// getConsensusPageCountWithOriginal gets consensus page count including the original peer
-func (m *witnessManager) getConsensusPageCountWithOriginal(peers []string, hash common.Hash, originalPageCount uint64, getWitnessPageCount func(peer string, hash common.Hash) (uint64, error)) uint64 {
-	// Start with the original peer's count
-	countMap := make(map[uint64]int)
-	countMap[originalPageCount] = 1
-
-	// Query random peers and add their counts
-	for _, peer := range peers {
-		pageCount, err := getWitnessPageCount(peer, hash)
-		if err == nil {
-			countMap[pageCount]++
-		}
-	}
-
-	// Find the most common page count (majority vote)
-	var maxCount int
-	var consensusCount uint64
-	for count, freq := range countMap {
-		if freq > maxCount {
-			maxCount = freq
-			consensusCount = count
-		}
-	}
-
-	// Log the consensus result
-	log.Debug("[wm] Consensus calculation", "counts", countMap, "consensus", consensusCount, "maxVotes", maxCount)
-
-	// Only return consensus if we have majority (at least 2 out of 3)
-	if maxCount >= 2 {
-		return consensusCount
-	}
-
-	// No clear majority, return 0 (will be treated as no consensus)
-	return 0
-}
-
-// CheckWitnessPageCount checks if a witness page count should trigger verification
-// Returns true if peer is honest (or under threshold), false if peer should be dropped
-func (m *witnessManager) CheckWitnessPageCount(hash common.Hash, pageCount uint64, peer string, getRandomPeers func() []string, getWitnessPageCount func(peer string, hash common.Hash) (uint64, error)) bool {
-	// Track that a verification check is being performed
+// CheckWitnessPageCount bounds the page count a peer may report for a witness.
+//
+// Page counts are non-deterministic across honest nodes: a valid witness can be
+// one page larger on one node than on another (the trie-node set collected
+// during execution varies). We therefore do NOT compare page counts across
+// peers and do NOT jail. The previous cross-peer "consensus" vote both
+// false-positively disconnected honest peers whose witness rounded to an extra
+// page and failed open when the sampled peers did not have the witness.
+//
+// Instead the count is bounded by the gas-derived page threshold, which already
+// carries large headroom over the real per-block witness size. A report within
+// the threshold is accepted; a report above it is larger than the block gas
+// limit can plausibly produce, so it is refused for this peer — the fetch simply
+// tries another peer — without disconnecting or jailing.
+func (m *witnessManager) CheckWitnessPageCount(hash common.Hash, pageCount uint64, peer string) bool {
 	witnessVerifyCheckMeter.Mark(1)
 
-	// Calculate dynamic threshold based on gas ceiling
 	threshold := m.calculatePageThreshold()
-
-	// If page count is within threshold, no verification needed
-	// No peer queries are made in this case
 	if pageCount <= threshold {
-		log.Debug("[wm] Witness page count within threshold, no verification needed", "peer", peer, "pageCount", pageCount, "threshold", threshold)
+		log.Debug("[wm] Witness page count within threshold", "peer", peer, "pageCount", pageCount, "threshold", threshold)
 		witnessPageCountBelowThresholdMeter.Mark(1)
 		return true
 	}
 
-	// Page count exceeds threshold - verify synchronously
-	log.Debug("[wm] Witness page count exceeds threshold, running synchronous verification", "peer", peer, "hash", hash, "pageCount", pageCount, "threshold", threshold)
+	log.Warn("[wm] Witness page count exceeds gas-derived ceiling; refusing this peer's offering for the block (no jail)",
+		"peer", peer, "hash", hash, "pageCount", pageCount, "threshold", threshold)
 	witnessPageCountAboveThresholdMeter.Mark(1)
-	return m.verifyWitnessPageCountSync(hash, pageCount, peer, getRandomPeers, getWitnessPageCount)
+	witnessVerifyFailureMeter.Mark(1)
+	return false
 }
 
-// verifyWitnessPageCountSync verifies a witness page count synchronously and returns result
-func (m *witnessManager) verifyWitnessPageCountSync(hash common.Hash, reportedPageCount uint64, reportingPeer string, getRandomPeers func() []string, getWitnessPageCount func(peer string, hash common.Hash) (uint64, error)) bool {
-	// Get random peers for verification
-	randomPeers := getRandomPeers()
-	if len(randomPeers) < witnessVerificationPeers {
-		// Not enough peers for verification, assume honest (conservative approach)
-		log.Debug("[wm] Not enough peers for verification, assuming honest", "peer", reportingPeer, "availablePeers", len(randomPeers))
-		witnessVerifyPeersInsuffMeter.Mark(1)
-		return true
+func (m *witnessManager) setWitnessRetry(hash common.Hash, delay time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if state := m.pending[hash]; state != nil && state.announce != nil {
+		state.announce.time = time.Now().Add(delay)
+		state.retries += int(delay / gatherSlack)
 	}
-
-	// Select random peers for verification
-	selectedPeers := randomPeers[:witnessVerificationPeers]
-
-	// Query selected peers for page count and include original peer's count in consensus
-	consensusPageCount := m.getConsensusPageCountWithOriginal(selectedPeers, hash, reportedPageCount, getWitnessPageCount)
-
-	// Determine if original peer is honest based on majority consensus
-	if consensusPageCount != reportedPageCount && consensusPageCount != 0 {
-		// Peer is dishonest - drop and jail immediately
-		log.Warn("Dropping dishonest peer - consensus verification failed", "peer", reportingPeer, "reported", reportedPageCount, "consensus", consensusPageCount)
-		witnessVerifyFailureMeter.Mark(1)
-
-		m.parentDropPeer(reportingPeer)
-		witnessVerifyDropMeter.Mark(1)
-
-		// Also jail the peer to prevent reconnection
-		if m.parentJailPeer != nil {
-			log.Warn("Jailing dishonest peer", "peer", reportingPeer)
-			m.parentJailPeer(reportingPeer)
-			witnessVerifyJailMeter.Mark(1)
-		}
-		return false
-	}
-
-	// Track no consensus case
-	if consensusPageCount == 0 {
-		witnessVerifyNoConsensusMeter.Mark(1)
-	}
-
-	// Peer is honest or no consensus (assume honest to avoid false positives)
-	log.Debug("[wm] Peer verification successful", "peer", reportingPeer, "pageCount", reportedPageCount, "hash", hash)
-	witnessVerifySuccessMeter.Mark(1)
-	return true
 }

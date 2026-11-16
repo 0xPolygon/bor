@@ -52,6 +52,7 @@ import (
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
 )
 
 const (
@@ -116,6 +117,8 @@ type txPool interface {
 // handlerConfig is the collection of initialization parameters to create a full
 // node network handler.
 type handlerConfig struct {
+	peerReputation          bool
+	peerReputationMetrics   bool
 	NodeID                  enode.ID            // P2P node ID used for tx propagation topology
 	Database                ethdb.Database      // Database for direct sync insertions
 	Chain                   *core.BlockChain    // Blockchain to serve data from
@@ -140,6 +143,7 @@ type handlerConfig struct {
 }
 
 type handler struct {
+	peerPolicy *peerpolicy.Tracker
 	nodeID     enode.ID
 	networkID  uint64
 	forkFilter forkid.Filter // Fork ID filter, constant across the lifetime of the node
@@ -147,6 +151,8 @@ type handler struct {
 	snapSync      atomic.Bool // Flag whether snap sync is enabled (gets disabled if we already have blocks)
 	statelessSync atomic.Bool // Flag whether stateless sync is enabled
 	synced        atomic.Bool // Flag whether we're considered synchronised (enables transaction processing)
+	policyMu      sync.Mutex  // Serializes readiness changes.
+	policySyncing bool        // Protected by policyMu.
 
 	database ethdb.Database
 	txpool   txPool
@@ -164,13 +170,15 @@ type handler struct {
 	// privateTxGetter to check if a transaction needs to be treated as private or not
 	privateTxGetter relay.PrivateTxGetter
 
-	eventMux      *event.TypeMux
-	txsCh         chan core.NewTxsEvent
-	txsSub        event.Subscription
-	stuckTxsCh    chan core.StuckTxsEvent
-	stuckTxsSub   event.Subscription
-	minedBlockSub *event.TypeMuxSubscription
-	blockRange    *blockRangeState
+	eventMux        *event.TypeMux
+	txsCh           chan core.NewTxsEvent
+	txsSub          event.Subscription
+	stuckTxsCh      chan core.StuckTxsEvent
+	stuckTxsSub     event.Subscription
+	minedBlockSub   *event.TypeMuxSubscription
+	witnessReadyCh  chan core.WitnessReadyEvent
+	witnessReadySub event.Subscription
+	blockRange      *blockRangeState
 
 	requiredBlocks map[uint64]common.Hash
 
@@ -183,6 +191,73 @@ type handler struct {
 	// Witness protocol related fields
 	syncWithWitnesses       bool
 	syncAndProduceWitnesses bool // Whether to sync blocks and produce witnesses simultaneously
+
+	// WIT2: cache of BP-signed witness announcements, keyed by block hash.
+	// Populated by both produced (signed locally) and received-and-verified
+	// announcements. Consulted by the relay path to dedup, by the body
+	// broadcast path to re-emit signed announces, and by the fetch and
+	// broadcast-accept paths to supply the size oracle (signed WitnessSize)
+	// and the BP's WitnessHash that gates pre-import re-serving.
+	signedWitnesses *signedWitnessCache
+
+	// WIT2: in-flight witness bodies received via NewWitness broadcast but
+	// not yet written to chain storage. Lets serving peers answer GetWitness
+	// requests during the import gap, which is what unlocks fast multi-hop
+	// propagation — without it, only the producer/post-import nodes can
+	// serve and stateless nodes more than 1 hop away wait per-hop on full
+	// validation before they can pull from anyone.
+	pendingWitnessBodies *pendingWitnessBodyCache
+	wit2PeerTracker      *peerWit2Tracker
+
+	// WIT2: separate, much tighter per-peer budget gating how often a peer's
+	// GetWitness request for a body we don't have can trigger a NEW
+	// triggerRelayFetch goroutine (see recordWitnessWaiter). Deliberately
+	// distinct from wit2PeerTracker, which only rate-limits cheap inbound
+	// announce ingestion — a fetch trigger costs a real round trip against
+	// another peer, so it needs its own, smaller budget.
+	wit2FetchTriggerTracker *peerWit2Tracker
+
+	// WIT2: signed announcements whose producer-binding could not be checked
+	// at receive time because the matching block header wasn't local yet.
+	// Drained from the chain-head subscription on each new block so the race
+	// between block and announce gossip streams self-heals once the chain
+	// catches up.
+	deferredAnnounces *deferredAnnounceCache
+
+	// WIT2: peers that asked us for a witness body we did not yet hold (we
+	// answered GetWitness empty for a hash with a BP-signed announcement on
+	// file). When we obtain the body we push it straight to them, restoring
+	// the WIT1-style hand-off the fast announce removed.
+	witnessWaiters *witnessWaiterRegistry
+
+	// WIT2: per-block set of peers whose served witness was accepted on the
+	// size oracle alone and then failed import. Skipped when resolving a
+	// witness fetch source so the fetcher's re-fetch reaches another peer.
+	witnessSourceExclusions *witnessSourceExclusionSet
+
+	// WIT2: dedup guard for relayFetchOnDemand — a pure relay node (no
+	// produce_witness, no sync_with_witness) has no reason of its own to
+	// ever fetch witness bytes, so without this it can register waiters via
+	// recordWitnessWaiter forever without any path to satisfy them. Ensures
+	// at most one outstanding upstream fetch per hash.
+	relayFetchInFlight sync.Map
+
+	// WIT2: global concurrency cap on triggerRelayFetch, independent of the
+	// per-peer wit2FetchTriggerTracker budget above. That tracker only
+	// bounds a single requesting peer's trigger rate — it does nothing to
+	// stop several distinct peers from each independently bursting their
+	// own budget at once. On a relay node with multiple downstream peers
+	// (the exact multi-hop topology this fetch mechanism serves), enough
+	// simultaneous triggers can transiently exhaust file descriptors —
+	// confirmed on a real devnet run, where a burst of concurrent fetches
+	// produced "too many open files" and permanently dropped peer
+	// connections and the heimdall HTTP client. Sized well above any single
+	// relay hop's realistic concurrent demand while bounding the total
+	// number of simultaneous outbound fetch attempts network-wide.
+	relayFetchSem chan struct{}
+
+	wit2HeadCh  chan core.ChainHeadEvent
+	wit2HeadSub event.Subscription
 
 	// channels for fetcher, syncer, txsyncLoop
 	quitSync chan struct{}
@@ -223,6 +298,14 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		syncWithWitnesses:       config.syncWithWitnesses,
 		syncAndProduceWitnesses: config.syncAndProduceWitnesses,
 		privateTxGetter:         config.privateTxGetter,
+		signedWitnesses:         newSignedWitnessCache(),
+		pendingWitnessBodies:    newPendingWitnessBodyCache(witnessBodyCacheCapacity),
+		wit2PeerTracker:         newPeerWit2Tracker(),
+		wit2FetchTriggerTracker: newPeerWit2TrackerWithBudget(wit2FetchTriggerBurstCap, wit2FetchTriggerRefillPerSecond),
+		relayFetchSem:           make(chan struct{}, wit2RelayFetchGlobalConcurrencyCap),
+		deferredAnnounces:       newDeferredAnnounceCache(deferredAnnounceCapacity),
+		witnessWaiters:          newWitnessWaiterRegistry(),
+		witnessSourceExclusions: newWitnessSourceExclusionSet(),
 	}
 
 	log.Info("Sync with witnesses", "enabled", config.syncWithWitnesses)
@@ -306,21 +389,32 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		}
 	}
 
-	h.blockFetcher = fetcher.NewBlockFetcher(false, nil, h.chain.GetBlockByHash, validator, h.BroadcastBlock, heighter, h.chain.CurrentHeader, nil, inserter, h.removePeer, h.jailPeer, h.enableBlockTracking, h.statelessSync.Load() || h.syncWithWitnesses, config.gasCeil)
+	h.blockFetcher = fetcher.NewBlockFetcher(false, nil, h.chain.GetBlockByHash, validator, h.BroadcastBlock, heighter, h.chain.CurrentHeader, nil, inserter, h.dropFetcherPeer, h.enableBlockTracking, h.statelessSync.Load() || h.syncWithWitnesses, config.gasCeil, h.lookupSignedWitnessHash, h.cacheVerifiedWitnessForServing)
+	// WIT2: penalize a peer that serves a non-empty witness whose bytes mismatch
+	// the BP-signed commitment (strike, not drop — see strikeWit2PeerByID).
+	h.blockFetcher.SetWitnessServerStriker(h.strikeWit2PeerByID)
 
-	fetchTx := func(peer string, hashes []common.Hash) error {
+	// WIT2 size oracle: the striker above fires for a witness beyond the
+	// BP-signed size band, and for one accepted on the size oracle alone that
+	// then fails import. In the latter case the fetcher also asks us to stop
+	// offering that peer as a witness source for the block, so its re-fetch
+	// lands on a different peer (see resolveWitnessFetchPeer).
+	h.blockFetcher.SetWitnessSourceExcluder(h.excludeWitnessSource)
+
+	fetchTx := func(peer string, requestID uint64, hashes []common.Hash) error {
 		p := h.peers.peer(peer)
 		if p == nil {
 			return errors.New("unknown peer")
 		}
 
-		return p.RequestTxs(hashes)
+		return p.RequestTxs(requestID, hashes)
 	}
 	addTxs := func(txs []*types.Transaction) []error {
 		return h.txpool.Add(txs, false)
 	}
-	h.txFetcher = fetcher.NewTxFetcher(h.txpool.Has, addTxs, fetchTx, h.removePeer)
+	h.txFetcher = fetcher.NewTxFetcher(h.txpool.Has, addTxs, fetchTx, h.dropFetcherPeer)
 	h.chainSync = newChainSyncer(h)
+	h.initPeerPolicy(config.peerReputation, config.peerReputationMetrics)
 
 	return h, nil
 }
@@ -431,6 +525,10 @@ func (h *handler) runEthPeer(peer *eth.Peer, handler eth.Handler) error {
 			return err
 		}
 	}
+	// Refused connections must not evict retained evidence or reset a previous
+	// contribution session. Install observation only after admission succeeds.
+	h.observeProtocolPeer(peer)
+	h.observeWitnessPeer(wit)
 	h.chainSync.handlePeerEvent()
 
 	// Bor: skip propagating transactions if flag is set
@@ -537,16 +635,40 @@ func (h *handler) runWitExtension(peer *wit.Peer, handler wit.Handler) error {
 
 // jailPeer jails a peer to prevent reconnection for a period of time
 func (h *handler) jailPeer(id string) {
+	h.observePeer(id, peerpolicy.LegacyJail)
+	h.jailPeerNative(id)
+}
+
+func (h *handler) jailPeerNative(id string) {
 	if h.p2pServer == nil {
 		return
 	}
-	// Convert peer ID (string) to enode.ID
-	nodeID, err := enode.ParseID(id)
-	if err != nil {
-		log.Warn("Failed to parse peer ID for jailing", "peer", id, "err", err)
+	nodeID, ok := parsePeerIDForJail(id)
+	if !ok {
 		return
 	}
 	h.p2pServer.JailPeer(nodeID)
+}
+
+func (h *handler) jailPeerFor(id string, period time.Duration) {
+	h.observePeer(id, peerpolicy.LegacyJail)
+	if h.p2pServer == nil {
+		return
+	}
+	nodeID, ok := parsePeerIDForJail(id)
+	if !ok {
+		return
+	}
+	h.p2pServer.JailPeerFor(nodeID, period)
+}
+
+func parsePeerIDForJail(id string) (enode.ID, bool) {
+	nodeID, err := enode.ParseID(id)
+	if err != nil {
+		log.Warn("Failed to parse peer ID for jailing", "peer", id, "err", err)
+		return enode.ID{}, false
+	}
+	return nodeID, true
 }
 
 // removePeer requests disconnection of a peer.
@@ -555,6 +677,12 @@ func (h *handler) removePeer(id string) {
 	if peer != nil {
 		log.Debug("Handler: removing peer", "peer", peer.ID(), "inbound", peer.Peer.Inbound(), "duration", common.PrettyDuration(peer.Peer.Lifetime()))
 		peer.Peer.Disconnect(p2p.DiscUselessPeer)
+	}
+	if h.wit2PeerTracker != nil {
+		h.wit2PeerTracker.forget(id)
+	}
+	if h.wit2FetchTriggerTracker != nil {
+		h.wit2FetchTriggerTracker.forget(id)
 	}
 }
 
@@ -567,6 +695,24 @@ func (h *handler) unregisterPeer(id string) {
 		logger = log.New("peer", id)
 	} else {
 		logger = log.New("peer", id[:8])
+	}
+	// Forget any WIT2 per-peer tracker state on the guaranteed teardown path.
+	// This runs for every disconnect (clean/remote-initiated or our own drop),
+	// unlike removePeer which only fires on proactive drops — so the per-peer
+	// announce-budget/strike map cannot leak one entry per disconnecting peer.
+	// Done before the registration check below: tracker state is independent of
+	// peer-set membership and must be cleared even for a half-registered peer.
+	if h.wit2PeerTracker != nil {
+		h.wit2PeerTracker.forget(id)
+	}
+	if h.wit2FetchTriggerTracker != nil {
+		h.wit2FetchTriggerTracker.forget(id)
+	}
+	// Likewise drop any witness-waiter entries this peer holds, on the same
+	// guaranteed teardown path. Otherwise a peer that asked for a not-yet-held
+	// witness and then disconnected leaves its *wit.Peer recorded until the TTL.
+	if h.witnessWaiters != nil {
+		h.witnessWaiters.forget(id)
 	}
 	// Abort if the peer does not exist
 	peer := h.peers.peer(id)
@@ -585,13 +731,24 @@ func (h *handler) unregisterPeer(id string) {
 	h.downloader.UnregisterPeer(id)
 	h.txFetcher.Drop(id)
 
+	if h.peerPolicy != nil {
+		h.peerPolicy.RefreshClass(id)
+	}
 	if err := h.peers.unregisterPeer(id); err != nil {
 		logger.Error("Ethereum peer removal failed", "err", err)
+	}
+	// Coalesce removals without blocking teardown while the syncer is busy.
+	select {
+	case h.chainSync.peerEventCh <- struct{}{}:
+	default:
 	}
 }
 
 func (h *handler) Start(maxPeers int) {
 	h.maxPeers = maxPeers
+	if h.peerPolicy != nil {
+		h.wg.Go(func() { h.peerPolicy.RunTransitionLogger(h.quitSync) })
+	}
 
 	if h.disableTxPropagation {
 		log.Info("Disabling transaction propagation completely")
@@ -611,7 +768,7 @@ func (h *handler) Start(maxPeers int) {
 	if !h.disableTxPropagation {
 		h.wg.Add(1)
 		h.stuckTxsCh = make(chan core.StuckTxsEvent, txChanSize)
-		h.stuckTxsSub = h.txpool.SubscribeRebroadcastTransactions(h.stuckTxsCh)
+		h.stuckTxsSub = h.subscribeRebroadcastTransactions(h.stuckTxsCh)
 		go h.stuckTxBroadcastLoop()
 	}
 
@@ -619,6 +776,12 @@ func (h *handler) Start(maxPeers int) {
 	h.wg.Add(1)
 	h.minedBlockSub = h.eventMux.Subscribe(core.NewMinedBlockEvent{})
 	go h.minedBroadcastLoop()
+
+	// announce witnesses from pipelined import SRC
+	h.witnessReadyCh = make(chan core.WitnessReadyEvent, 10)
+	h.witnessReadySub = h.chain.SubscribeWitnessReadyEvent(h.witnessReadyCh)
+	h.wg.Add(1)
+	go h.witnessReadyBroadcastLoop()
 
 	h.wg.Add(1)
 	go h.chainSync.loop()
@@ -631,9 +794,21 @@ func (h *handler) Start(maxPeers int) {
 	// start peer handler tracker
 	h.wg.Add(1)
 	go h.protoTracker()
+
+	// WIT2: drain deferred signed announces on each new chain head. This
+	// closes the cosend race: when a signed announcement arrives ahead of
+	// its block, we hold it in deferredAnnounces and re-evaluate as soon as
+	// the matching header lands.
+	h.wit2HeadCh = make(chan core.ChainHeadEvent, chainHeadChanSize)
+	h.wit2HeadSub = h.chain.SubscribeChainHeadEvent(h.wit2HeadCh)
+	h.wg.Add(1)
+	go h.deferredAnnouncesLoop()
 }
 
 func (h *handler) Stop() {
+	if h.peerPolicy != nil {
+		h.peerPolicy.UnregisterPeerMetrics()
+	}
 	if h.txsSub != nil {
 		h.txsSub.Unsubscribe() // quits txBroadcastLoop
 	}
@@ -641,6 +816,9 @@ func (h *handler) Stop() {
 		h.stuckTxsSub.Unsubscribe() // quits stuckTxBroadcastLoop
 	}
 	h.minedBlockSub.Unsubscribe()
+	if h.witnessReadySub != nil {
+		h.witnessReadySub.Unsubscribe()
+	}
 	h.blockRange.stop()
 
 	// Quit chainSync and txsync64.
@@ -715,20 +893,35 @@ func (h *handler) BroadcastBlock(block *types.Block, witness *stateless.Witness,
 			peer.AsyncSendNewBlock(block, td)
 		}
 
+		// WIT2: co-send the witness announcement to every direct block
+		// recipient that doesn't yet have the witness. Closes the gap where
+		// blocks fan out at sqrt(N) but witnesses didn't.
+		h.cosendWitnessAnnouncement(hash, block.NumberU64(), transfer, staticAndTrustedPeers)
+
 		log.Debug("Propagated block", "hash", hash, "recipients", len(transfer), "static and trusted recipients", len(staticAndTrustedPeers), "duration", common.PrettyDuration(time.Since(block.ReceivedAt)))
 
 		return
 	}
-	// Otherwise if the block is indeed in out own chain, announce it
-	if h.chain.HasBlock(hash, block.NumberU64()) {
+	// Otherwise, announce the block if it is already written locally or if the
+	// witness is cached and the block is in-flight on the local write path.
+	if h.chain.HasBlock(hash, block.NumberU64()) || h.chain.HasWitness(hash) {
 		for _, peer := range peers {
 			peer.AsyncSendNewBlockHash(block)
 		}
 	}
 
 	if h.chain.HasWitness(hash) {
+		// Try to attach a BP signature so WIT2 peers can fast-validate and
+		// transitively relay. Falls through to unsigned WIT1 announces for
+		// peers below WIT2 (and for any peer if signing is unavailable, e.g.,
+		// non-producer nodes that didn't receive a signed announce upstream).
+		signedAnn, hasSigned := h.signLocalWitnessAnnouncement(hash, block.NumberU64())
 		for _, peer := range peersWithoutWitness {
-			peer.Peer.AsyncSendNewWitnessHash(block.Header().Hash(), block.NumberU64())
+			if hasSigned && peer.Peer.Version() >= wit.WIT2 {
+				peer.Peer.AsyncSendSignedWitnessAnnouncement(signedAnn)
+			} else {
+				peer.Peer.AsyncSendNewWitnessHash(block.Header().Hash(), block.NumberU64())
+			}
 		}
 		log.Debug("Announced witness", "hash", hash, "recipients", len(peers), "duration", common.PrettyDuration(time.Since(block.ReceivedAt)))
 	}
@@ -748,12 +941,14 @@ func EthPeersContainsID(ethPeers []*ethPeer, id string) bool {
 // - And, separately, as announcements to all peers which are not known to
 // already have the given transaction.
 func (h *handler) BroadcastTransactions(txs types.Transactions) {
-	var (
-		blobTxs  int // Number of blob transactions to announce only
-		largeTxs int // Number of large transactions to announce only
+	h.broadcastTransactions(txs, nil)
+}
 
-		directCount int // Number of transactions sent directly to peers (duplicates included)
-		annCount    int // Number of transactions announced across all peers (duplicates included)
+func (h *handler) broadcastTransactions(txs types.Transactions, onBroadcast func([]common.Hash), onAttempt ...func([]common.Hash)) bool {
+	var (
+		blobTxs        int // Number of blob transactions to announce only
+		largeTxs       int // Number of large transactions to announce only
+		conditionalTxs int
 
 		txset = make(map[*ethPeer][]common.Hash) // Set peer->hash to transfer directly
 		annos = make(map[*ethPeer][]common.Hash) // Set peer->hash to announce
@@ -764,6 +959,10 @@ func (h *handler) BroadcastTransactions(txs types.Transactions) {
 	)
 
 	for _, tx := range txs {
+		if tx.GetOptions() != nil {
+			conditionalTxs++
+			continue
+		}
 		// Skip gossip if transaction is marked as private
 		if h.privateTxGetter != nil && h.privateTxGetter.IsTxPrivate(tx.Hash()) {
 			log.Debug("[tx-relay] skip tx broadcast for private tx", "hash", tx.Hash())
@@ -786,31 +985,15 @@ func (h *handler) BroadcastTransactions(txs types.Transactions) {
 			}
 		}
 
-		for _, peer := range peers {
-			if peer.KnownTransaction(tx.Hash()) {
-				continue
-			}
-			if _, ok := directSet[peer]; ok {
-				// Send direct.
-				txset[peer] = append(txset[peer], tx.Hash())
-			} else {
-				// Send announcement.
-				annos[peer] = append(annos[peer], tx.Hash())
-			}
-		}
+		assignTransactionPeers(tx.Hash(), peers, directSet, txset, annos)
 	}
 
-	for peer, hashes := range txset {
-		directCount += len(hashes)
-		peer.AsyncSendTransactions(hashes)
-	}
-
-	for peer, hashes := range annos {
-		annCount += len(hashes)
-		peer.AsyncSendPooledTransactionHashes(hashes)
-	}
-	log.Debug("Distributed transactions", "plaintxs", len(txs)-blobTxs-largeTxs, "blobtxs", blobTxs, "largetxs", largeTxs,
+	directCount := queueTransactions(txset, false, onBroadcast, onAttempt...)
+	annCount := queueTransactions(annos, true, onBroadcast, onAttempt...)
+	log.Debug("Distributed transactions", "plaintxs", len(txs)-blobTxs-largeTxs-conditionalTxs, "blobtxs", blobTxs, "largetxs", largeTxs,
+		"conditionaltxs", conditionalTxs,
 		"bcastcount", directCount, "anncount", annCount)
+	return directCount+annCount > 0
 }
 
 // minedBroadcastLoop sends mined blocks to connected peers.
@@ -831,9 +1014,72 @@ func (h *handler) minedBroadcastLoop() {
 				log.Info("[block tracker] Broadcasting mined block", "number", ev.Block.NumberU64(), "hash", ev.Block.Hash(), "blockTime", ev.Block.Time(), "now", now.Unix(), "delay", delay, "delayInMs", delayInMs, "sealToBroadcast", common.PrettyDuration(sealToBcast))
 			}
 			loopStart := time.Now()
-			h.BroadcastBlock(ev.Block, ev.Witness, true)  // First propagate block to peers
-			h.BroadcastBlock(ev.Block, ev.Witness, false) // Only then announce to the rest
+			h.BroadcastBlock(ev.Block, ev.Witness, true) // First propagate block to peers
+			// Tracked on h.wg so Stop waits it out (bounded by the 500ms
+			// visibility poll) instead of racing peer shutdown.
+			h.wg.Add(1)
+			go func(block *types.Block, witness *stateless.Witness) {
+				defer h.wg.Done()
+				h.announceMinedBlock(block, witness)
+			}(ev.Block, ev.Witness)
 			broadcastLoopTimer.Update(time.Since(loopStart))
+		}
+	}
+}
+
+// announceMinedBlock announces a locally mined block after it becomes visible
+// through the local chain reader.
+//
+// The pipelined inline path broadcasts before its async DB write completes, so
+// announcing immediately can race with HasBlock() and silently skip the hash
+// announcement to non-propagation peers. Wait briefly for the write to land,
+// then announce. If the block still isn't visible but the witness is cached,
+// fall back to the witness-gated path so stateless peers can still progress.
+func (h *handler) announceMinedBlock(block *types.Block, witness *stateless.Witness) {
+	const (
+		pollInterval = 10 * time.Millisecond
+		maxWait      = 500 * time.Millisecond
+	)
+
+	hash := block.Hash()
+	number := block.NumberU64()
+	deadline := time.NewTimer(maxWait)
+	defer deadline.Stop()
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
+		if h.chain.HasBlock(hash, number) {
+			h.BroadcastBlock(block, witness, false)
+			return
+		}
+		select {
+		case <-ticker.C:
+		case <-deadline.C:
+			if h.chain.HasWitness(hash) {
+				h.BroadcastBlock(block, witness, false)
+			} else {
+				log.Debug("Skipping mined block announce before local write became visible", "hash", hash, "number", number)
+			}
+			return
+		}
+	}
+}
+
+// witnessReadyBroadcastLoop announces witness availability from the pipelined
+// import SRC goroutine. Without this, the stateless node would have to poll
+// for witnesses with 10-second retry intervals.
+func (h *handler) witnessReadyBroadcastLoop() {
+	defer h.wg.Done()
+
+	for {
+		select {
+		case ev := <-h.witnessReadyCh:
+			for _, peer := range h.peers.peersWithoutWitness(ev.BlockHash) {
+				peer.Peer.AsyncSendNewWitnessHash(ev.BlockHash, ev.BlockNumber)
+			}
+		case <-h.witnessReadySub.Err():
+			return
 		}
 	}
 }
@@ -861,29 +1107,25 @@ func (h *handler) stuckTxBroadcastLoop() {
 	for {
 		select {
 		case event := <-h.stuckTxsCh:
-			// Only rebroadcast when synced
-			if !h.synced.Load() {
-				continue
+			if h.rebroadcastStuckTransactions(event.Txs, h.rebroadcastAcknowledgement(event.Txs)) {
+				log.Debug("Rebroadcast stuck transactions", "count", len(event.Txs))
 			}
-
-			// Collect hashes to clear from knownTxs
-			hashes := make([]common.Hash, len(event.Txs))
-			for i, tx := range event.Txs {
-				hashes[i] = tx.Hash()
-			}
-
-			// Clear from all peers' knownTxs
-			h.peers.ForgetTransactions(hashes)
-
-			// Rebroadcast
-			h.BroadcastTransactions(event.Txs)
-
-			log.Debug("Rebroadcast stuck transactions", "count", len(event.Txs))
-
 		case <-h.stuckTxsSub.Err():
 			return
 		}
 	}
+}
+
+func (h *handler) rebroadcastStuckTransactions(txs types.Transactions, onBroadcast func([]common.Hash)) bool {
+	if h.disableTxPropagation || !h.canRebroadcast() {
+		return false
+	}
+	hashes := make([]common.Hash, len(txs))
+	for i, tx := range txs {
+		hashes[i] = tx.Hash()
+	}
+	h.peers.ForgetTransactions(hashes)
+	return h.broadcastTransactions(txs, onBroadcast, h.rebroadcastAttempt(txs))
 }
 
 // enableSyncedFeatures enables the post-sync functionalities when the initial
@@ -898,6 +1140,7 @@ func (h *handler) enableSyncedFeatures() {
 		log.Info("Snap sync complete, auto disabling")
 		h.snapSync.Store(false)
 	}
+	h.updateContributionReadiness()
 }
 
 // PeerStats represents a short summary of the information known about a connected
@@ -966,9 +1209,17 @@ func newBlockRangeState(chain *core.BlockChain, typeMux *event.TypeMux) *blockRa
 // about imported blocks.
 func (h *handler) blockRangeLoop(st *blockRangeState) {
 	defer h.wg.Done()
+	var readinessTick <-chan time.Time
+	if h.peerPolicy != nil {
+		tick := time.NewTicker(contributionHeadMaxAge / 2)
+		defer tick.Stop()
+		readinessTick = tick.C
+	}
 
 	for {
 		select {
+		case <-readinessTick:
+			h.updateContributionReadiness()
 		case ev := <-st.syncSub.Chan():
 			if ev == nil {
 				continue
@@ -977,6 +1228,7 @@ func (h *handler) blockRangeLoop(st *blockRangeState) {
 				h.blockRangeWhileSnapSyncing(st)
 			}
 		case <-st.headCh:
+			h.updateContributionReadiness()
 			st.update(h.chain, h.chain.CurrentBlock())
 			if st.shouldSend() {
 				h.broadcastBlockRange(st)

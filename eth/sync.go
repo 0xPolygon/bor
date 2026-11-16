@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/eth/downloader"
@@ -43,6 +44,9 @@ func (h *handler) syncTransactions(p *eth.Peer) {
 			if h.privateTxGetter != nil && h.privateTxGetter.IsTxPrivate(tx.Hash) {
 				continue
 			}
+			if resolved := tx.Resolve(); resolved == nil || resolved.GetOptions() != nil {
+				continue
+			}
 			hashes = append(hashes, tx.Hash)
 		}
 	}
@@ -61,8 +65,9 @@ type chainSyncer struct {
 	peerEventCh chan struct{}
 	doneCh      chan error // non-nil when sync is running
 
-	peersUnavailableUntil   time.Time
-	peersUnavailableAtCount int
+	peersUnavailableUntil time.Time
+	observedPeerRevision  uint64
+	operationalRetryUntil time.Time
 }
 
 // chainSyncOp is a scheduled sync operation.
@@ -77,7 +82,7 @@ type chainSyncOp struct {
 func newChainSyncer(handler *handler) *chainSyncer {
 	return &chainSyncer{
 		handler:     handler,
-		peerEventCh: make(chan struct{}),
+		peerEventCh: make(chan struct{}, 1),
 	}
 }
 
@@ -112,6 +117,7 @@ func (cs *chainSyncer) loop() {
 	retry := newResettableTimer()
 	defer retry.stop()
 
+	cs.observedPeerRevision = cs.handler.peers.currentRevision()
 	for {
 		if op, wait := cs.nextSyncOp(); op != nil {
 			retry.stop()
@@ -141,9 +147,14 @@ func (cs *chainSyncer) onSyncDone(err error) {
 	cs.force.Reset(forceSyncCycle)
 	cs.forced = false
 
+	if errors.Is(err, core.ErrStateSyncProcessing) || errors.Is(err, downloader.ErrWitnessUnavailable) {
+		cs.operationalRetryUntil = time.Now().Add(forceSyncCycle)
+	} else {
+		cs.operationalRetryUntil = time.Time{}
+	}
+
 	if errors.Is(err, downloader.ErrPeersUnavailable) || errors.Is(err, downloader.ErrPeerBackedOff) || errors.Is(err, whitelist.ErrNoRemote) {
 		cs.peersUnavailableUntil = time.Now().Add(forceSyncCycle)
-		cs.peersUnavailableAtCount = cs.handler.peers.len()
 	} else {
 		cs.peersUnavailableUntil = time.Time{}
 	}
@@ -159,9 +170,11 @@ func (cs *chainSyncer) onSyncDone(err error) {
 }
 
 func (cs *chainSyncer) onPeerEvent() {
-	if !cs.peersUnavailableUntil.IsZero() && cs.handler.peers.len() != cs.peersUnavailableAtCount {
+	revision := cs.handler.peers.currentRevision()
+	if !cs.peersUnavailableUntil.IsZero() && revision != cs.observedPeerRevision {
 		cs.peersUnavailableUntil = time.Time{}
 	}
+	cs.observedPeerRevision = revision
 }
 
 func (cs *chainSyncer) shutdown() {
@@ -223,6 +236,9 @@ func (cs *chainSyncer) nextSyncOp() (*chainSyncOp, time.Duration) {
 	if cs.doneCh != nil {
 		return nil, 0 // Sync already running
 	}
+	if remaining := time.Until(cs.operationalRetryUntil); remaining > 0 {
+		return nil, remaining
+	}
 	if remaining := time.Until(cs.peersUnavailableUntil); remaining > 0 {
 		return nil, remaining
 	}
@@ -282,10 +298,9 @@ func (cs *chainSyncer) modeAndLocalHead() (downloader.SyncMode, *big.Int) {
 	}
 
 	// If we're in stateless sync mode, return that directly
-	head := cs.handler.chain.CurrentBlock()
-	td := cs.handler.chain.GetTd(head.Hash(), head.Number.Uint64())
 	if cs.handler.statelessSync.Load() {
-		return downloader.StatelessSync, td
+		head := cs.handler.chain.CurrentBlock()
+		return downloader.StatelessSync, cs.handler.chain.GetTd(head.Hash(), head.Number.Uint64())
 	}
 
 	// The check below switches to snap sync if current block is before the last
@@ -307,7 +322,16 @@ func (cs *chainSyncer) modeAndLocalHead() (downloader.SyncMode, *big.Int) {
 	// We are in a full sync, but the associated head state is missing. To complete
 	// the head state, forcefully rerun the snap sync. Note it doesn't mean the
 	// persistent state is corrupted, just mismatch with the head block.
-	if !cs.handler.chain.HasState(head.Root) {
+	head, missing := cs.handler.chain.HeadStateMissing()
+	td := cs.handler.chain.GetTd(head.Hash(), head.Number.Uint64())
+	if missing {
+		// Pipelined import may have already advanced the canonical head while
+		// the matching SRC commit is still in flight. Stay in full sync for
+		// that bounded handoff only; otherwise the snap recovery path below
+		// still handles genuinely missing head state.
+		if hasPendingPipelinedHeadState(cs.handler.chain, head) {
+			return downloader.FullSync, td
+		}
 		block := cs.handler.chain.CurrentSnapBlock()
 		td := cs.handler.chain.GetTd(block.Hash(), block.Number.Uint64())
 		log.Info("Reenabled snap sync as chain is stateless")
@@ -326,6 +350,11 @@ func (cs *chainSyncer) startSync(op *chainSyncOp) {
 
 // doSync synchronizes the local blockchain with a remote peer.
 func (h *handler) doSync(op *chainSyncOp) error {
+	// Ordinary full-sync catch-up does not suspend transaction relay observations.
+	if op.mode == downloader.SnapSync || op.mode == downloader.StatelessSync {
+		h.setContributionSyncing(true)
+		defer h.setContributionSyncing(false)
+	}
 	if op.mode == downloader.SnapSync {
 		// Before launch the snap sync, we have to ensure user uses the same
 		// txlookup limit.

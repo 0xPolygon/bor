@@ -92,6 +92,9 @@ func TestBorHardforkPrecompileContinuityProfiles(t *testing.T) {
 		{name: "Lisovo", rules: params.Rules{IsLisovo: true}, profile: borPrecompileProfileLisovo},
 		{name: "LisovoPro", rules: params.Rules{IsLisovoPro: true}, profile: borPrecompileProfileLisovoPro},
 		{name: "Chicago", rules: params.Rules{IsChicago: true}, profile: borPrecompileProfileChicago},
+		// Hampi gates only the SSTORE committed-state read ordering, so it carries
+		// Chicago's profile unchanged. At a post-Hampi block IsChicago is also set.
+		{name: "Hampi", rules: params.Rules{IsChicago: true, IsHampi: true}, profile: borPrecompileProfileChicago},
 	}
 
 	for _, tc := range cases {

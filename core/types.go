@@ -35,6 +35,11 @@ type Validator interface {
 
 	// ValidateState validates the given statedb and optionally the process result.
 	ValidateState(block *types.Block, state *state.StateDB, res *ProcessResult, stateless bool) error
+
+	// ValidateStateCheap validates cheap post-state checks (gas, bloom, receipt root,
+	// requests) without computing the expensive IntermediateRoot. Used by the
+	// pipelined import path where IntermediateRoot is deferred to an SRC goroutine.
+	ValidateStateCheap(block *types.Block, state *state.StateDB, res *ProcessResult) error
 }
 
 // Prefetcher is an interface for pre-caching transaction signatures and state.
@@ -59,4 +64,36 @@ type ProcessResult struct {
 	Requests [][]byte
 	Logs     []*types.Log
 	GasUsed  uint64
+}
+
+type PreconfExecution struct {
+	StateDB *state.StateDB
+	Result  *ProcessResult
+}
+
+// PreconfProvider coordinates speculative executions with canonical import.
+type PreconfProvider interface {
+	// ClaimPreconf reserves a fully executed result matching block.
+	ClaimPreconf(block *types.Block) (*PreconfExecution, bool)
+	// RejectClaimedPreconf discards a claimed result that failed validation.
+	RejectClaimedPreconf(block *types.Block)
+	// CompletePreconf resolves a claim and reports a committed-view mismatch.
+	CompletePreconf(block *types.Block, receipts types.Receipts, committed bool) string
+}
+
+// PreconfPrefixProvider completes a partially executed preconfirmation against
+// the canonical block without waiting for the stream to finish the block.
+type PreconfPrefixProvider interface {
+	ClaimPreconfPrefix(block *types.Block) (*PreconfExecution, bool)
+}
+
+type PreconfImportObserver interface {
+	BeginPreconfImport(block *types.Block)
+}
+
+// PreconfHeadObserver learns when a block CompletePreconf committed has become
+// the canonical head, so the provider can drop what it served for that block
+// only once canonical reads can answer for it.
+type PreconfHeadObserver interface {
+	PreconfHeadWritten(block *types.Block)
 }

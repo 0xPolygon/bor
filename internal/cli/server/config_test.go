@@ -1,13 +1,19 @@
 package server
 
 import (
+	"bytes"
+	"fmt"
 	"math/big"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -16,12 +22,15 @@ func TestConfigDefault(t *testing.T) {
 	config := DefaultConfig()
 	assert.NoError(t, config.loadChain())
 
-	_, err := config.buildNode()
+	_, err := config.buildNode(log.Root())
 	assert.NoError(t, err)
 
 	ethConfig, err := config.buildEth(nil, nil)
 	assert.NoError(t, err)
 	assertBorDefaultGasPrice(t, ethConfig)
+	// The default must match the deadline HTTP requests to Heimdall effectively
+	// had while the configured value was being overridden (docs/cli/server.md).
+	assert.Equal(t, 30*time.Second, ethConfig.HeimdallTimeout)
 }
 
 // assertBorDefaultGasPrice asserts the bor default gas price is set correctly.
@@ -113,13 +122,63 @@ func TestDefaultDatatypeOverride(t *testing.T) {
 
 var dummyEnodeAddr = "enode://0cb82b395094ee4a2915e9714894627de9ed8498fb881cec6db7c65e8b9a5bd7f2f25cc84e71e89d0947e51c76e85d0847de848c7782b13c0255247a6758178c@44.232.55.71:30303"
 
+func TestConfigStaticPeerWarning(t *testing.T) {
+	t.Parallel()
+	const otherEnodeAddr = "enode://d860a01f9722d78051619d1e2351aba3f43f943f6f00718d1b9baa4101932a1f5011f16bb2b1bb35db20d6fe28fa0bf09636d26a87d31de9ec6203eeedb1f666@127.0.0.1:30303"
+	samePeerDifferentAddress := strings.Replace(dummyEnodeAddr, "44.232.55.71:30303", "127.0.0.1:30304", 1)
+
+	for _, tc := range []struct {
+		name          string
+		static        []string
+		trusted       []string
+		developer     bool
+		wantUntrusted int
+	}{
+		{name: "no peers"},
+		{name: "trusted only", trusted: []string{dummyEnodeAddr}},
+		{name: "static only", static: []string{dummyEnodeAddr}, wantUntrusted: 1},
+		{name: "multiple untrusted static peers", static: []string{dummyEnodeAddr, otherEnodeAddr}, wantUntrusted: 2},
+		{name: "static and trusted", static: []string{dummyEnodeAddr}, trusted: []string{dummyEnodeAddr}},
+		{name: "unrelated trusted peer", static: []string{dummyEnodeAddr}, trusted: []string{otherEnodeAddr}, wantUntrusted: 1},
+		{name: "partial overlap", static: []string{dummyEnodeAddr, otherEnodeAddr}, trusted: []string{dummyEnodeAddr}, wantUntrusted: 1},
+		{name: "all static peers trusted", static: []string{dummyEnodeAddr, otherEnodeAddr}, trusted: []string{otherEnodeAddr, dummyEnodeAddr}},
+		{name: "additional trusted peer", static: []string{dummyEnodeAddr}, trusted: []string{dummyEnodeAddr, otherEnodeAddr}},
+		{name: "same peer different address", static: []string{dummyEnodeAddr}, trusted: []string{samePeerDifferentAddress}},
+		{name: "developer mode", static: []string{dummyEnodeAddr}, developer: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var output bytes.Buffer
+			logger := log.NewLogger(log.LogfmtHandlerWithLevel(&output, log.LevelWarn))
+
+			config := DefaultConfig()
+			config.DataDir = t.TempDir()
+			config.Developer.Enabled = tc.developer
+			config.P2P.Discovery.StaticNodes = tc.static
+			config.P2P.Discovery.TrustedNodes = tc.trusted
+			if _, err := config.buildNode(logger); err != nil {
+				t.Fatalf("build node: %v", err)
+			}
+
+			logs := output.String()
+			warned := strings.Contains(logs, "benched or dropped by sync peer-response")
+			if wantWarn := tc.wantUntrusted > 0; warned != wantWarn {
+				t.Fatalf("static peer warning = %t, want %t; logs: %s", warned, wantWarn, logs)
+			}
+			if warned && !strings.Contains(logs, fmt.Sprintf("untrusted=%d\n", tc.wantUntrusted)) {
+				t.Fatalf("missing untrusted peer count %d; logs: %s", tc.wantUntrusted, logs)
+			}
+		})
+	}
+}
+
 func TestConfigBootnodesDefault(t *testing.T) {
 	t.Run("EmptyBootnodes", func(t *testing.T) {
 		// if no bootnodes are specific, we use the ones from the genesis chain
 		config := DefaultConfig()
 		assert.NoError(t, config.loadChain())
 
-		cfg, err := config.buildNode()
+		cfg, err := config.buildNode(log.Root())
 		assert.NoError(t, err)
 		assert.NotEmpty(t, cfg.P2P.BootstrapNodes)
 	})
@@ -128,7 +187,7 @@ func TestConfigBootnodesDefault(t *testing.T) {
 		config := DefaultConfig()
 		config.P2P.Discovery.Bootnodes = []string{dummyEnodeAddr}
 
-		cfg, err := config.buildNode()
+		cfg, err := config.buildNode(log.Root())
 		assert.NoError(t, err)
 		assert.Len(t, cfg.P2P.BootstrapNodes, 1)
 	})
@@ -152,7 +211,7 @@ func TestConfigStateScheme(t *testing.T) {
 
 	assert.NoError(t, config.loadChain())
 
-	_, err := config.buildNode()
+	_, err := config.buildNode(log.Root())
 	assert.NoError(t, err)
 
 	_, err = config.buildEth(nil, nil)
@@ -169,7 +228,7 @@ func TestSealerTargetGasPercentageConfig(t *testing.T) {
 
 			assert.NoError(t, config.loadChain())
 
-			_, err := config.buildNode()
+			_, err := config.buildNode(log.Root())
 			assert.NoError(t, err)
 
 			ethConfig, err := config.buildEth(nil, nil)
@@ -189,7 +248,7 @@ func TestSealerTargetGasPercentageConfig(t *testing.T) {
 
 			assert.NoError(t, config.loadChain())
 
-			_, err := config.buildNode()
+			_, err := config.buildNode(log.Root())
 			assert.NoError(t, err)
 
 			_, err = config.buildEth(nil, nil)
@@ -209,7 +268,7 @@ func TestSealerBaseFeeChangeDenominatorConfig(t *testing.T) {
 
 			assert.NoError(t, config.loadChain())
 
-			_, err := config.buildNode()
+			_, err := config.buildNode(log.Root())
 			assert.NoError(t, err)
 
 			ethConfig, err := config.buildEth(nil, nil)
@@ -229,7 +288,7 @@ func TestSealerBothGasParametersConfig(t *testing.T) {
 
 		assert.NoError(t, config.loadChain())
 
-		_, err := config.buildNode()
+		_, err := config.buildNode(log.Root())
 		assert.NoError(t, err)
 
 		ethConfig, err := config.buildEth(nil, nil)
@@ -249,7 +308,7 @@ func TestSealerBothGasParametersConfig(t *testing.T) {
 
 		assert.NoError(t, config.loadChain())
 
-		_, err := config.buildNode()
+		_, err := config.buildNode(log.Root())
 		assert.NoError(t, err)
 
 		ethConfig, err := config.buildEth(nil, nil)
@@ -266,7 +325,7 @@ func TestSealerBothGasParametersConfig(t *testing.T) {
 
 		assert.NoError(t, config.loadChain())
 
-		_, err := config.buildNode()
+		_, err := config.buildNode(log.Root())
 		assert.NoError(t, err)
 
 		ethConfig, err := config.buildEth(nil, nil)
@@ -283,7 +342,7 @@ func TestSealerBothGasParametersConfig(t *testing.T) {
 
 		assert.NoError(t, config.loadChain())
 
-		_, err := config.buildNode()
+		_, err := config.buildNode(log.Root())
 		assert.NoError(t, err)
 
 		_, err = config.buildEth(nil, nil)
@@ -397,7 +456,7 @@ func TestSealerDynamicTargetGasConfig(t *testing.T) {
 	buildConfig := func(t *testing.T, config *Config) (*ethconfig.Config, error) {
 		t.Helper()
 		assert.NoError(t, config.loadChain())
-		_, err := config.buildNode()
+		_, err := config.buildNode(log.Root())
 		assert.NoError(t, err)
 		return config.buildEth(nil, nil)
 	}
@@ -408,7 +467,7 @@ func TestSealerDynamicTargetGasConfig(t *testing.T) {
 		config.Sealer.EnableDynamicTargetGas = true
 
 		assert.NoError(t, config.loadChain())
-		_, err := config.buildNode()
+		_, err := config.buildNode(log.Root())
 		assert.NoError(t, err)
 		_, err = config.buildEth(nil, nil)
 		assert.Error(t, err)
@@ -625,4 +684,168 @@ func TestDeveloperModeGasParameters(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "miner.targetGasPercentage must be between 1-100")
 	})
+}
+
+func TestSequencerConfigValidation(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr bool
+		role    string
+	}{
+		{
+			name:   "disabled sequencer builds",
+			mutate: func(c *Config) {},
+		},
+		// Per-field endpoint validation is the sequencerSettings table's
+		// job (sequencer_flags_test.go); this case pins that a settings
+		// error fails the whole build.
+		{
+			name: "producer without publisher endpoint fails the build",
+			mutate: func(c *Config) {
+				c.Sealer.Enabled = true
+				c.Sequencer = &SequencerConfig{Enabled: true, ConsumerEndpoint: "localhost:9550"}
+			},
+			wantErr: true,
+		},
+		{
+			name: "consumer needs only the consumer endpoint",
+			mutate: func(c *Config) {
+				c.Sequencer = &SequencerConfig{Enabled: true, ConsumerEndpoint: "localhost:9550"}
+			},
+			role: "consumer",
+		},
+		{
+			name: "enabled on a sealing node publishes",
+			mutate: func(c *Config) {
+				c.Sealer.Enabled = true
+				c.Sequencer = &SequencerConfig{
+					Enabled:           true,
+					PublisherEndpoint: "localhost:9550",
+					ConsumerEndpoint:  "localhost:9551",
+					Poll:              time.Second,
+				}
+			},
+			role: "producer",
+		},
+		{
+			name: "enabled on a non-sealing node consumes",
+			mutate: func(c *Config) {
+				c.Sequencer = &SequencerConfig{
+					Enabled:           true,
+					PublisherEndpoint: "localhost:9550",
+					ConsumerEndpoint:  "localhost:9551",
+					Poll:              time.Second,
+				}
+			},
+			role: "consumer",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			config := DefaultConfig()
+			tc.mutate(config)
+
+			assert.NoError(t, config.loadChain())
+
+			ethConfig, err := config.buildEth(nil, nil)
+			if tc.wantErr {
+				assert.Error(t, err)
+				assert.Nil(t, ethConfig)
+
+				return
+			}
+
+			assert.NoError(t, err)
+			assert.Equal(t, tc.role, ethConfig.SequencerRole)
+		})
+	}
+}
+
+func TestConfigFilteredAddresses(t *testing.T) {
+	dir := t.TempDir()
+	addrFile := filepath.Join(dir, "filtered.txt")
+	assert.NoError(t, os.WriteFile(addrFile, []byte("0x1111111111111111111111111111111111111111\n"), 0o644))
+	emptyFile := filepath.Join(dir, "empty.txt")
+	assert.NoError(t, os.WriteFile(emptyFile, []byte("\n"), 0o644))
+	invalidFile := filepath.Join(dir, "invalid.txt")
+	assert.NoError(t, os.WriteFile(invalidFile, []byte("garbage\n"), 0o644))
+
+	tests := []struct {
+		name   string
+		reload string
+		want   time.Duration
+	}{
+		{"default", "", time.Minute},
+		{"custom", `filter-reload = "30s"`, 30 * time.Second},
+		{"disabled", `filter-reload = "0s"`, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfgFile := filepath.Join(t.TempDir(), "config.toml")
+			body := fmt.Sprintf("[txpool]\n  filtered-addresses = %q\n  %s\n", addrFile, tt.reload)
+			assert.NoError(t, os.WriteFile(cfgFile, []byte(body), 0o644))
+
+			config, err := readConfigFile(cfgFile)
+			assert.NoError(t, err)
+			assert.NoError(t, config.loadChain())
+
+			ethConfig, err := config.buildEth(nil, nil)
+			assert.NoError(t, err)
+			assert.Equal(t, addrFile, ethConfig.TxPool.FilteredAddressesFile)
+			assert.Equal(t, tt.want, ethConfig.TxPool.FilterReload)
+			assert.Len(t, ethConfig.TxPool.FilteredAddresses, 1)
+		})
+	}
+
+	invalid := []struct {
+		name string
+		set  func(*TxPoolConfig)
+		want string
+	}{
+		{"unreadable file", func(c *TxPoolConfig) { c.FilteredAddressesFile = dir }, "failed to load filtered addresses"},
+		{"missing file", func(c *TxPoolConfig) { c.FilteredAddressesFile = filepath.Join(dir, "missing.txt") }, "failed to load filtered addresses"},
+		{"empty file", func(c *TxPoolConfig) { c.FilteredAddressesFile = emptyFile }, "no entries"},
+		{"invalid file", func(c *TxPoolConfig) { c.FilteredAddressesFile = invalidFile }, `invalid address "garbage" on line 1`},
+	}
+	for _, tt := range invalid {
+		t.Run(tt.name, func(t *testing.T) {
+			config := DefaultConfig()
+			assert.NoError(t, config.loadChain())
+			tt.set(config.TxPool)
+
+			_, err := config.buildEth(nil, nil)
+			assert.ErrorContains(t, err, tt.want)
+		})
+	}
+
+	t.Run("flags", func(t *testing.T) {
+		var c Command
+		assert.NoError(t, c.extractFlags([]string{"--txpool.filter-reload", "5s", "--txpool.filtered-addresses", addrFile}))
+		assert.Equal(t, 5*time.Second, c.config.TxPool.FilterReload)
+		assert.Equal(t, addrFile, c.config.TxPool.FilteredAddressesFile)
+	})
+
+	hcl := []struct {
+		name   string
+		txpool string
+		want   time.Duration
+	}{
+		{"hcl omitted", fmt.Sprintf("txpool {\n  filtered-addresses = %q\n}\n", addrFile), time.Minute},
+		{"hcl custom", fmt.Sprintf("txpool {\n  filtered-addresses = %q\n  filter-reload = \"30s\"\n}\n", addrFile), 30 * time.Second},
+		{"hcl disabled", fmt.Sprintf("txpool {\n  filtered-addresses = %q\n  filter-reload = \"0s\"\n}\n", addrFile), 0},
+	}
+	for _, tt := range hcl {
+		t.Run(tt.name, func(t *testing.T) {
+			const base = "gpo {}\nminer {}\njsonrpc {\nhttp {}\nws {}\ntimeouts {}\n}\n"
+			cfgFile := filepath.Join(t.TempDir(), "config.hcl")
+			assert.NoError(t, os.WriteFile(cfgFile, []byte(base+tt.txpool), 0o644))
+
+			config, err := readConfigFile(cfgFile)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, config.TxPool.FilterReload)
+			assert.Equal(t, addrFile, config.TxPool.FilteredAddressesFile)
+		})
+	}
 }

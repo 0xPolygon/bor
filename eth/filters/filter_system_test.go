@@ -50,6 +50,7 @@ type testBackend struct {
 	chainFeed       event.Feed
 	pendingBlock    *types.Block
 	pendingReceipts types.Receipts
+	pendingError    error
 
 	stateSyncFeed event.Feed
 }
@@ -118,6 +119,11 @@ func (b *testBackend) HeaderByNumber(ctx context.Context, blockNr rpc.BlockNumbe
 		num = number
 	case rpc.SafeBlockNumber:
 		return nil, errors.New("safe block not found")
+	case rpc.PendingBlockNumber:
+		if b.pendingBlock == nil {
+			return nil, nil
+		}
+		return b.pendingBlock.Header(), nil
 	default:
 		num = uint64(blockNr)
 		hash = rawdb.ReadCanonicalHash(b.db, num)
@@ -144,6 +150,12 @@ func (b *testBackend) GetBody(ctx context.Context, hash common.Hash, number rpc.
 }
 
 func (b *testBackend) GetReceipts(_ context.Context, hash common.Hash) (types.Receipts, error) {
+	if b.pendingError != nil {
+		return nil, b.pendingError
+	}
+	if b.pendingBlock != nil && b.pendingBlock.Hash() == hash {
+		return b.pendingReceipts, nil
+	}
 	if number, ok := rawdb.ReadHeaderNumber(b.db, hash); ok {
 		if header := rawdb.ReadHeader(b.db, hash, number); header != nil {
 			return rawdb.ReadReceipts(b.db, hash, number, header.Time, params.TestChainConfig), nil
@@ -589,6 +601,14 @@ func TestInvalidGetRangeLogsRequest(t *testing.T) {
 	if _, err := api.GetLogs(t.Context(), FilterCriteria{FromBlock: big.NewInt(2), ToBlock: big.NewInt(1)}); err != errInvalidBlockRange {
 		t.Errorf("Expected Logs for invalid range return error, but got: %v", err)
 	}
+
+	// GetBorBlockLogs has the same range guard (fromBlock > toBlock → error) and
+	// must reject it independently — the previous branch only covered GetLogs.
+	// This is reached before the backend.CurrentHeader() call, so the empty-DB
+	// fixture above is sufficient.
+	if _, err := api.GetBorBlockLogs(t.Context(), FilterCriteria{FromBlock: big.NewInt(2), ToBlock: big.NewInt(1)}); err != errInvalidBlockRange {
+		t.Errorf("Expected GetBorBlockLogs for invalid range to return errInvalidBlockRange, but got: %v", err)
+	}
 }
 
 // TestExceedLogQueryLimit tests getLogs with too many addresses or topics
@@ -694,7 +714,6 @@ func TestLogFilter(t *testing.T) {
 		secondTopic    = common.HexToHash("0x2222222222222222222222222222222222222222222222222222222222222222")
 		notUsedTopic   = common.HexToHash("0x9999999999999999999999999999999999999999999999999999999999999999")
 
-		// posted twice, once as regular logs and once as pending logs.
 		allLogs = []*types.Log{
 			{Address: firstAddr},
 			{Address: firstAddr, Topics: []common.Hash{firstTopic}, BlockNumber: 1},
@@ -702,6 +721,7 @@ func TestLogFilter(t *testing.T) {
 			{Address: thirdAddress, Topics: []common.Hash{secondTopic}, BlockNumber: 2},
 			{Address: thirdAddress, Topics: []common.Hash{secondTopic}, BlockNumber: 3},
 		}
+		pendingLogs = []*types.Log{{Address: secondAddr, Topics: []common.Hash{secondTopic}}}
 
 		testCases = []struct {
 			crit     FilterCriteria
@@ -727,7 +747,8 @@ func TestLogFilter(t *testing.T) {
 			// all "mined" logs with 1>= block num <=2 and topic secondTopic
 			8: {FilterCriteria{FromBlock: big.NewInt(1), ToBlock: big.NewInt(2), Topics: [][]common.Hash{{secondTopic}}}, allLogs[3:4], ""},
 			// match all logs due to wildcard topic
-			9: {FilterCriteria{Topics: [][]common.Hash{nil}}, allLogs[1:], ""},
+			9:  {FilterCriteria{Topics: [][]common.Hash{nil}}, allLogs[1:], ""},
+			10: {FilterCriteria{Pending: true}, pendingLogs, ""},
 		}
 	)
 
@@ -743,7 +764,7 @@ func TestLogFilter(t *testing.T) {
 		t.Fatal("Logs event not delivered")
 	}
 
-	if nsend := backend.pendingLogsFeed.Send(allLogs); nsend == 0 {
+	if nsend := backend.pendingLogsFeed.Send(pendingLogs); nsend == 0 {
 		t.Fatal("Pending logs event not delivered")
 	}
 

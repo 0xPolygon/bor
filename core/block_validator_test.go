@@ -21,21 +21,114 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/beacon"
 	"github.com/ethereum/go-ethereum/consensus/clique"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/trie"
 )
 
 // Tests that simple header verification works, for both good and bad blocks.
 func TestHeaderVerification(t *testing.T) {
 	testHeaderVerification(t, rawdb.HashScheme)
 	testHeaderVerification(t, rawdb.PathScheme)
+}
+
+func TestValidateStateCheap(t *testing.T) {
+	validator := NewBlockValidator(params.TestChainConfig, nil)
+	receipts := []*types.Receipt{{Status: types.ReceiptStatusSuccessful, CumulativeGasUsed: 21_000}}
+	receiptHash := types.DeriveSha(types.Receipts(receipts), trie.NewStackTrie(nil))
+	bloom := types.MergeBloom(receipts)
+
+	newBlock := func() *types.Block {
+		return types.NewBlockWithHeader(&types.Header{
+			Number:      big.NewInt(1),
+			GasUsed:     21_000,
+			Bloom:       bloom,
+			ReceiptHash: receiptHash,
+		})
+	}
+	valid := &ProcessResult{Receipts: receipts, GasUsed: 21_000}
+	require.NoError(t, validator.ValidateStateCheap(newBlock(), nil, valid))
+	require.Error(t, validator.ValidateStateCheap(newBlock(), nil, nil))
+
+	gasMismatch := *valid
+	gasMismatch.GasUsed++
+	require.ErrorIs(t, validator.ValidateStateCheap(newBlock(), nil, &gasMismatch), ErrGasUsedMismatch)
+
+	bloomMismatch := *newBlock().Header()
+	bloomMismatch.Bloom[0] = 1
+	require.ErrorIs(t, validator.ValidateStateCheap(types.NewBlockWithHeader(&bloomMismatch), nil, valid), ErrBloomMismatch)
+
+	receiptMismatch := *newBlock().Header()
+	receiptMismatch.ReceiptHash = common.HexToHash("0x01")
+	require.ErrorIs(t, validator.ValidateStateCheap(types.NewBlockWithHeader(&receiptMismatch), nil, valid), ErrReceiptRootMismatch)
+
+	requests := [][]byte{{1, 2, 3}}
+	requestHash := types.CalcRequestsHash(requests)
+	withRequests := *newBlock().Header()
+	withRequests.RequestsHash = &requestHash
+	validRequests := &ProcessResult{Receipts: receipts, GasUsed: 21_000, Requests: requests}
+	require.NoError(t, validator.ValidateStateCheap(types.NewBlockWithHeader(&withRequests), nil, validRequests))
+
+	requestMismatch := requestHash
+	requestMismatch[0] ^= 1
+	withRequests.RequestsHash = &requestMismatch
+	require.ErrorIs(t, validator.ValidateStateCheap(types.NewBlockWithHeader(&withRequests), nil, validRequests), ErrRequestsHashMismatch)
+	require.EqualError(t, validator.ValidateStateCheap(newBlock(), nil, validRequests), "block has requests before prague fork")
+}
+
+// ValidateState derives the receipt root while the state root is hashed, but
+// must still report mismatches in the order receipts, requests, state root.
+func TestValidateState(t *testing.T) {
+	validator := NewBlockValidator(params.TestChainConfig, nil)
+	receipts := []*types.Receipt{{Status: types.ReceiptStatusSuccessful, CumulativeGasUsed: 21_000}}
+	receiptHash := types.DeriveSha(types.Receipts(receipts), trie.NewStackTrie(nil))
+	requests := [][]byte{{1, 2, 3}}
+	requestHash := types.CalcRequestsHash(requests)
+
+	header := func() *types.Header {
+		return &types.Header{
+			Number:       big.NewInt(1),
+			GasUsed:      21_000,
+			Bloom:        types.MergeBloom(receipts),
+			ReceiptHash:  receiptHash,
+			RequestsHash: &requestHash,
+			Root:         types.EmptyRootHash,
+		}
+	}
+	validate := func(h *types.Header, stateless bool) error {
+		statedb, err := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+		require.NoError(t, err)
+		res := &ProcessResult{Receipts: receipts, GasUsed: 21_000, Requests: requests}
+		return validator.ValidateState(types.NewBlockWithHeader(h), statedb, res, stateless)
+	}
+	badReceipts := common.HexToHash("0x01")
+	badRequests := common.HexToHash("0x02")
+	badRoot := common.HexToHash("0x03")
+
+	require.NoError(t, validate(header(), false))
+
+	h := header()
+	h.Root = badRoot
+	require.ErrorContains(t, validate(h, false), "invalid merkle root")
+
+	h.RequestsHash = &badRequests
+	require.ErrorIs(t, validate(h, false), ErrRequestsHashMismatch)
+
+	h.ReceiptHash = badReceipts
+	require.ErrorIs(t, validate(h, false), ErrReceiptRootMismatch)
+
+	// Stateless validation stops after the bloom check.
+	require.NoError(t, validate(h, true))
 }
 
 func testHeaderVerification(t *testing.T, scheme string) {

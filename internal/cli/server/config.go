@@ -3,7 +3,6 @@ package server
 import (
 	"crypto/ecdsa"
 	"fmt"
-
 	"math"
 	"math/big"
 	"os"
@@ -25,6 +24,7 @@ import (
 	"github.com/ethereum/go-ethereum/cmd/utils"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/fdlimit"
+	"github.com/ethereum/go-ethereum/core/txpool/legacypool"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/eth/downloader/whitelist"
@@ -175,6 +175,11 @@ type Config struct {
 
 	// Relay has transaction relay related settings
 	Relay *RelayConfig `hcl:"relay,block" toml:"relay,block"`
+
+	// Pipeline has pipelined SRC settings for block import
+	Pipeline *PipelineConfig `hcl:"pipeline,block" toml:"pipeline,block"`
+
+	Sequencer *SequencerConfig `hcl:"sequencer,block" toml:"sequencer,block"`
 }
 
 type HistoryConfig struct {
@@ -245,6 +250,8 @@ type PprofConfig struct {
 }
 
 type P2PConfig struct {
+	PeerReputation               bool `hcl:"peer-reputation,optional" toml:"peer-reputation,optional"`
+	PeerReputationPerPeerMetrics bool `hcl:"peer-reputation-per-peer-metrics,optional" toml:"peer-reputation-per-peer-metrics,optional"`
 	// MaxPeers sets the maximum number of connected peers
 	MaxPeers uint64 `hcl:"maxpeers,optional" toml:"maxpeers,optional"`
 
@@ -380,8 +387,28 @@ type TxPoolConfig struct {
 	LifeTime    time.Duration `hcl:"-,optional" toml:"-"`
 	LifeTimeRaw string        `hcl:"lifetime,optional" toml:"lifetime,optional"`
 
+	// StrandedLifetime is the maximum amount of time a pending transaction can
+	// stay below the base fee before its account's pending transactions are evicted
+	StrandedLifetime    time.Duration `hcl:"-,optional" toml:"-"`
+	StrandedLifetimeRaw string        `hcl:"strandedlifetime,optional" toml:"strandedlifetime,optional"`
+
+	// Conditional enables PIP-15 conditional transactions (bor_sendRawTransactionConditional).
+	// They are never gossiped, so only a block producer can include them
+	Conditional bool `hcl:"conditional,optional" toml:"conditional,optional"`
+
+	// ConditionalLifetime is the maximum amount of time a conditional transaction can stay in the pool
+	ConditionalLifetime    time.Duration `hcl:"-,optional" toml:"-"`
+	ConditionalLifetimeRaw string        `hcl:"conditionallifetime,optional" toml:"conditionallifetime,optional"`
+
+	// ConditionalSlots is the maximum number of known accounts and slots across all pooled conditional transactions
+	ConditionalSlots uint64 `hcl:"conditionalslots,optional" toml:"conditionalslots,optional"`
+
 	// FilteredAddressesFile is the path to newline-separated list of addresses whose transactions will be filtered
 	FilteredAddressesFile string `hcl:"filtered-addresses,optional" toml:"filtered-addresses,optional"`
+
+	// FilterReload is how often the filtered addresses file is re-read (0 disables)
+	FilterReload    time.Duration `hcl:"-,optional" toml:"-"`
+	FilterReloadRaw string        `hcl:"filter-reload,optional" toml:"filter-reload,optional"`
 
 	// Rebroadcast enables the stuck transaction rebroadcast mechanism
 	Rebroadcast bool `hcl:"rebroadcast,optional" toml:"rebroadcast,optional"`
@@ -513,6 +540,9 @@ type JsonRPCConfig struct {
 	// Maximum allowed timeout for eth_sendRawTransactionSync (e.g. 5m)
 	TxSyncMaxTimeout    time.Duration `hcl:"-,optional" toml:"-"`
 	TxSyncMaxTimeoutRaw string        `hcl:"txsync.maxtimeout,optional" toml:"txsync.maxtimeout,optional"`
+
+	// Maximum eth_sendRawTransactionSync calls waiting for a receipt at once (0 = no limit)
+	TxSyncMaxConcurrent int `hcl:"txsync.maxconcurrent,optional" toml:"txsync.maxconcurrent,optional"`
 
 	// AcceptPreconfTx allows the RPC server to accept preconf transactions
 	AcceptPreconfTx bool `hcl:"accept-preconf-tx,optional" toml:"accept-preconf-tx,optional"`
@@ -731,6 +761,11 @@ type CacheConfig struct {
 	// Accepts values like "500KB", "1MB", "0" (for unlimited). Default: 1MB/s
 	PreloadRateLimit string `hcl:"preloadratelimit,optional" toml:"preloadratelimit,optional"`
 
+	// AddressCachePersist persists the address-specific caches to the trie
+	// journal directory on shutdown and reloads them on startup, skipping the
+	// preload walk when the snapshot is warm. Default: false
+	AddressCachePersist bool `hcl:"addresscachepersist,optional" toml:"addresscachepersist,optional"`
+
 	// GC settings
 	// GoMemLimit sets the soft memory limit for the runtime
 	GoMemLimit string `hcl:"gomemlimit,optional" toml:"gomemlimit,optional"`
@@ -822,6 +857,72 @@ type RelayConfig struct {
 	BlockProducerRpcEndpoints []string `hcl:"bp-rpc-endpoints,optional" toml:"bp-rpc-endpoints,optional"`
 }
 
+// PipelineConfig has settings for pipelined state root computation during block import.
+type PipelineConfig struct {
+	// EnableImportSRC enables pipelined state root computation during block import:
+	// overlap SRC(N) with tx execution of block N+1
+	EnableImportSRC bool `hcl:"enable-import-src,optional" toml:"enable-import-src,optional"`
+
+	// ImportSRCLogs enables verbose logging for pipelined import SRC
+	ImportSRCLogs bool `hcl:"import-src-logs,optional" toml:"import-src-logs,optional"`
+
+	// WarmSnapshot enables warm-cache handoff from the execution-side trie
+	// prefetcher to the pipelined SRC goroutine when witnesses are produced.
+	// Targets cold-cache restart/catch-up CPU; no effect on correctness or
+	// witness completeness. Witness-off import ignores it.
+	WarmSnapshot bool `hcl:"warm-snapshot,optional" toml:"warm-snapshot,optional"`
+}
+
+// sequencerSettings derives the ethconfig sequencer fields: a mining node
+// publishes, a non-mining node consumes the stream for preconf receipts.
+// Enabling requires both service endpoints (the publisher also reads the
+// tail through the consumer service when it reconciles).
+func (c *Config) sequencerSettings() (string, string, string, time.Duration, error) {
+	if c.Sequencer == nil || !c.Sequencer.Enabled {
+		return "", "", "", 0, nil
+	}
+
+	role := "consumer"
+	if c.Sealer.Enabled {
+		role = "producer"
+	}
+
+	// Both roles read the tail through the consumer service; only a producer
+	// publishes, so the publisher endpoint is required for producers only —
+	// a consumer (RPC node) never uses it.
+	if c.Sequencer.ConsumerEndpoint == "" {
+		return "", "", "", 0, fmt.Errorf("sequencer.enabled requires sequencer.consumer-endpoint")
+	}
+
+	if role == "producer" && c.Sequencer.PublisherEndpoint == "" {
+		return "", "", "", 0, fmt.Errorf("a producing sequencer node requires sequencer.publisher-endpoint")
+	}
+
+	return role, c.Sequencer.PublisherEndpoint, c.Sequencer.ConsumerEndpoint, c.Sequencer.Poll, nil
+}
+
+// SequencerConfig configures the sequence store integration. Role is
+// derived, not configured: a mining node publishes the block lifecycle;
+// a non-mining node consumes the stream for preconf receipts.
+type SequencerConfig struct {
+	// Enabled turns the sequence store integration on.
+	Enabled bool `hcl:"enabled,optional" toml:"enabled,optional"`
+
+	// PublisherEndpoint is the gRPC address of the store's publisher
+	// service (the publish stream).
+	PublisherEndpoint string `hcl:"publisher-endpoint,optional" toml:"publisher-endpoint,optional"`
+
+	// ConsumerEndpoint is the gRPC address of the store's consumer
+	// service (tail reads during reconciliation; consumers in a future
+	// phase).
+	ConsumerEndpoint string `hcl:"consumer-endpoint,optional" toml:"consumer-endpoint,optional"`
+
+	// Poll is the producer's txpool poll cadence while a block is open
+	// (continuous building); zero keeps the one-shot fill at slot start.
+	Poll    time.Duration `hcl:"-,optional" toml:"-"`
+	PollRaw string        `hcl:"poll,optional" toml:"poll,optional"`
+}
+
 func DefaultConfig() *Config {
 	return &Config{
 		Chain:                       "mainnet",
@@ -857,6 +958,7 @@ func DefaultConfig() *Config {
 			EnableBlockTracking: false,
 		},
 		P2P: &P2PConfig{
+			PeerReputation:       true,
 			MaxPeers:             50,
 			MaxPendPeers:         50,
 			Bind:                 "0.0.0.0",
@@ -881,7 +983,7 @@ func DefaultConfig() *Config {
 		},
 		Heimdall: &HeimdallConfig{
 			URL:         "http://localhost:1317",
-			Timeout:     5 * time.Second,
+			Timeout:     30 * time.Second,
 			Without:     false,
 			GRPCAddress: "",
 			WSAddress:   "",
@@ -898,10 +1000,16 @@ func DefaultConfig() *Config {
 			AccountQueue:         64,
 			GlobalQueue:          131072,
 			LifeTime:             3 * time.Hour,
+			StrandedLifetime:     3 * time.Hour,
+			Conditional:          false,
+			ConditionalLifetime:  5 * time.Minute,
+			ConditionalSlots:     10000,
 			Rebroadcast:          true,
 			RebroadcastInterval:  30 * time.Second,
 			RebroadcastMaxAge:    10 * time.Minute,
 			RebroadcastBatchSize: 200,
+
+			FilterReload: time.Minute,
 		},
 		Sealer: &SealerConfig{
 			Enabled:                  false,
@@ -947,6 +1055,7 @@ func DefaultConfig() *Config {
 			EnableTrace:          false,
 			TxSyncDefaultTimeout: ethconfig.Defaults.TxSyncDefaultTimeout,
 			TxSyncMaxTimeout:     ethconfig.Defaults.TxSyncMaxTimeout,
+			TxSyncMaxConcurrent:  ethconfig.Defaults.TxSyncMaxConcurrent,
 			AcceptPreconfTx:      false,
 			AcceptPrivateTx:      false,
 			Http: &APIConfig{
@@ -1086,6 +1195,17 @@ func DefaultConfig() *Config {
 			EnablePrivateTx:           false,
 			BlockProducerRpcEndpoints: []string{},
 		},
+		Pipeline: &PipelineConfig{
+			EnableImportSRC: false,
+			ImportSRCLogs:   false,
+			WarmSnapshot:    true,
+		},
+		Sequencer: &SequencerConfig{
+			Enabled:           false,
+			PublisherEndpoint: "",
+			ConsumerEndpoint:  "",
+			Poll:              200 * time.Millisecond,
+		},
 	}
 }
 
@@ -1140,6 +1260,9 @@ func (c *Config) fillTimeDurations() error {
 		{"jsonrpc.ws.ep-requesttimeout", &c.JsonRPC.Ws.ExecutionPoolRequestTimeout, &c.JsonRPC.Ws.ExecutionPoolRequestTimeoutRaw},
 		{"jsonrpc.http.ep-requesttimeout", &c.JsonRPC.Http.ExecutionPoolRequestTimeout, &c.JsonRPC.Http.ExecutionPoolRequestTimeoutRaw},
 		{"txpool.lifetime", &c.TxPool.LifeTime, &c.TxPool.LifeTimeRaw},
+		{"txpool.strandedlifetime", &c.TxPool.StrandedLifetime, &c.TxPool.StrandedLifetimeRaw},
+		{"txpool.filter-reload", &c.TxPool.FilterReload, &c.TxPool.FilterReloadRaw},
+		{"txpool.conditionallifetime", &c.TxPool.ConditionalLifetime, &c.TxPool.ConditionalLifetimeRaw},
 		{"txpool.rejournal", &c.TxPool.Rejournal, &c.TxPool.RejournalRaw},
 		{"txpool.rebroadcast-interval", &c.TxPool.RebroadcastInterval, &c.TxPool.RebroadcastIntervalRaw},
 		{"txpool.rebroadcast-max-age", &c.TxPool.RebroadcastMaxAge, &c.TxPool.RebroadcastMaxAgeRaw},
@@ -1147,6 +1270,14 @@ func (c *Config) fillTimeDurations() error {
 		{"p2p.txarrivalwait", &c.P2P.TxArrivalWait, &c.P2P.TxArrivalWaitRaw},
 		{"rpc.txsync.defaulttimeout", &c.JsonRPC.TxSyncDefaultTimeout, &c.JsonRPC.TxSyncDefaultTimeoutRaw},
 		{"rpc.txsync.maxtimeout", &c.JsonRPC.TxSyncMaxTimeout, &c.JsonRPC.TxSyncMaxTimeoutRaw},
+	}
+
+	if c.Sequencer != nil {
+		tds = append(tds, struct {
+			path string
+			td   *time.Duration
+			str  *string
+		}{"sequencer.poll", &c.Sequencer.Poll, &c.Sequencer.PollRaw})
 	}
 
 	for _, x := range tds {
@@ -1171,9 +1302,16 @@ func readConfigFile(path string) (*Config, error) {
 	}
 
 	config := &Config{
-		TxPool: &TxPoolConfig{},
+		P2P:    &P2PConfig{PeerReputation: true},
 		Cache:  &CacheConfig{},
 		Sealer: &SealerConfig{},
+		// HCL configs don't start from DefaultConfig, so an omitted
+		// filter-reload would otherwise disable reloading.
+		TxPool: &TxPoolConfig{FilterReload: time.Minute},
+		// WarmSnapshot defaults on: witness-producing nodes measure faster
+		// with it, and it is inert otherwise. The zero value would silently
+		// put HCL-configured witness nodes on the slower path.
+		Pipeline: &PipelineConfig{WarmSnapshot: true},
 	}
 
 	if err := hclsimple.DecodeFile(path, nil, config); err != nil {
@@ -1215,6 +1353,8 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	}
 
 	n := ethconfig.Defaults
+	n.PeerReputation = c.P2P.PeerReputation
+	n.PeerReputationPerPeerMetrics = c.P2P.PeerReputationPerPeerMetrics
 
 	// only update for non-developer mode as we don't yet
 	// have the chain object for it.
@@ -1269,13 +1409,18 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.TxPool.AccountQueue = c.TxPool.AccountQueue
 		n.TxPool.GlobalQueue = c.TxPool.GlobalQueue
 		n.TxPool.Lifetime = c.TxPool.LifeTime
+		n.TxPool.StrandedLifetime = c.TxPool.StrandedLifetime
+		n.TxPool.ConditionalTxs = c.TxPool.Conditional
+		n.TxPool.ConditionalLifetime = c.TxPool.ConditionalLifetime
+		n.TxPool.ConditionalSlots = c.TxPool.ConditionalSlots
 
-		// Load filtered addresses during config initialization
-		if filteredAddrs, err := loadFilteredAddresses(c.TxPool.FilteredAddressesFile); err != nil {
-			return nil, fmt.Errorf("failed to load filtered addresses: %v", err)
-		} else {
-			n.TxPool.FilteredAddresses = filteredAddrs
+		filteredAddrs, err := legacypool.LoadFilteredAddresses(c.TxPool.FilteredAddressesFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load filtered addresses: %w", err)
 		}
+		n.TxPool.FilteredAddresses = filteredAddrs
+		n.TxPool.FilteredAddressesFile = c.TxPool.FilteredAddressesFile
+		n.TxPool.FilterReload = c.TxPool.FilterReload
 
 		// Rebroadcast options
 		n.TxPool.Rebroadcast = c.TxPool.Rebroadcast
@@ -1568,6 +1713,9 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.TrieDirtyCache = calcPerc(c.Cache.PercGc)
 		n.NoPrefetch = c.Cache.NoPrefetch
 		n.Preimages = c.Cache.Preimages
+		n.EnablePipelinedImportSRC = c.Pipeline.EnableImportSRC
+		n.PipelinedImportSRCLogs = c.Pipeline.ImportSRCLogs
+		n.PipelinedSRCWarmSnapshot = c.Pipeline.WarmSnapshot
 		// Note that even the values set by `history.transactions` will be written in the old flag until it's removed.
 		n.TransactionHistory = c.Cache.TxLookupLimit
 		n.TrieTimeout = c.Cache.TrieTimeout
@@ -1601,6 +1749,8 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 			// Default to 1MB/s per address if not specified
 			n.PreloadRateLimit = 1024 * 1024
 		}
+
+		n.AddressCachePersist = c.Cache.AddressCachePersist
 	}
 
 	// History
@@ -1631,6 +1781,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	n.RPCTxFeeCap = c.JsonRPC.TxFeeCap
 	n.TxSyncDefaultTimeout = c.JsonRPC.TxSyncDefaultTimeout
 	n.TxSyncMaxTimeout = c.JsonRPC.TxSyncMaxTimeout
+	n.TxSyncMaxConcurrent = c.JsonRPC.TxSyncMaxConcurrent
 
 	n.LogQueryLimit = c.JsonRPC.LogQueryLimit
 	n.RPCBlockRangeLimit = c.JsonRPC.RangeLimit
@@ -1716,7 +1867,18 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	n.DisableBlindForkValidation = c.DisableBlindForkValidation
 	n.MaxBlindForkValidationLimit = c.MaxBlindForkValidationLimit
 
-	// Set preconf / private transaction flags for relay
+	// Sequence store: role is derived — a mining node publishes, a
+	// non-mining node consumes the stream for preconf receipts.
+	seqRole, seqPubEndpoint, seqConsEndpoint, seqPoll, err := c.sequencerSettings()
+	if err != nil {
+		return nil, err
+	}
+
+	n.SequencerRole = seqRole
+	n.SequencerPublisherEndpoint = seqPubEndpoint
+	n.SequencerConsumerEndpoint = seqConsEndpoint
+	n.SequencerPoll = seqPoll
+
 	n.EnablePreconfs = c.Relay.EnablePreconfs
 	n.EnablePrivateTx = c.Relay.EnablePrivateTx
 	n.BlockProducerRpcEndpoints = c.Relay.BlockProducerRpcEndpoints
@@ -1822,7 +1984,6 @@ var (
 // tries unlocking the specified account a few times.
 func unlockAccount(ks *keystore.KeyStore, address string, i int, passwords []string) (accounts.Account, string) {
 	account, err := utils.MakeAddress(ks, address)
-
 	if err != nil {
 		utils.Fatalf("Could not list accounts: %v", err)
 	}
@@ -1917,7 +2078,7 @@ func getNodeKey(hex string, file string) *ecdsa.PrivateKey {
 	return nil
 }
 
-func (c *Config) buildNode() (*node.Config, error) {
+func (c *Config) buildNode(logger log.Logger) (*node.Config, error) {
 	ipcPath := ""
 	if !c.JsonRPC.IPCDisable {
 		ipcPath = clientIdentifier + ".ipc"
@@ -2052,6 +2213,8 @@ func (c *Config) buildNode() (*node.Config, error) {
 		if len(cfg.P2P.TrustedNodes) == 0 {
 			cfg.P2P.TrustedNodes = cfg.TrustedNodes()
 		}
+
+		warnUntrustedStaticNodes(logger, cfg.P2P.StaticNodes, cfg.P2P.TrustedNodes)
 	}
 
 	if c.P2P.NoDiscover {
@@ -2060,6 +2223,23 @@ func (c *Config) buildNode() (*node.Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func warnUntrustedStaticNodes(logger log.Logger, staticNodes, trustedNodes []*enode.Node) {
+	trusted := make(map[enode.ID]struct{}, len(trustedNodes))
+	for _, node := range trustedNodes {
+		trusted[node.ID()] = struct{}{}
+	}
+
+	untrusted := 0
+	for _, node := range staticNodes {
+		if _, ok := trusted[node.ID()]; !ok {
+			untrusted++
+		}
+	}
+	if untrusted > 0 {
+		logger.Warn("static-nodes without matching trusted-nodes: these peers can still be benched or dropped by sync peer-response", "static", len(staticNodes), "untrusted", untrusted)
+	}
 }
 
 func (c *Config) Merge(cc ...*Config) error {
@@ -2289,44 +2469,4 @@ func validateGoDebug(value string) error {
 	}
 
 	return nil
-}
-
-// loadFilteredAddresses loads newline-separated addresses to filter from the specified file.
-func loadFilteredAddresses(filePath string) (map[common.Address]struct{}, error) {
-	if filePath == "" {
-		return make(map[common.Address]struct{}), nil
-	}
-
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			log.Warn("Filtered addresses file not found", "file", filePath)
-			return make(map[common.Address]struct{}), nil
-		}
-		return nil, fmt.Errorf("failed to read filtered addresses file: %v", err)
-	}
-
-	filteredAddrs := make(map[common.Address]struct{})
-	content := strings.TrimSpace(string(data))
-	if content == "" {
-		log.Info("Empty filtered addresses file", "file", filePath)
-		return filteredAddrs, nil
-	}
-
-	addresses := strings.Split(content, "\n")
-	for i, addrStr := range addresses {
-		addrStr = strings.TrimSpace(addrStr)
-		if addrStr == "" {
-			continue
-		}
-		if !common.IsHexAddress(addrStr) {
-			log.Warn("Invalid address in filtered addresses file", "file", filePath, "position", i+1, "address", addrStr)
-			continue
-		}
-		addr := common.HexToAddress(addrStr)
-		filteredAddrs[addr] = struct{}{}
-	}
-
-	log.Info("Loaded filtered addresses", "count", len(filteredAddrs), "file", filePath)
-	return filteredAddrs, nil
 }

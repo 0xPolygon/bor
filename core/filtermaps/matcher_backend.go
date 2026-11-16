@@ -85,7 +85,9 @@ func (fm *FilterMapsMatcherBackend) GetFilterMapRows(ctx context.Context, mapInd
 // valid range is correct.
 // GetBlockLvPointer implements MatcherBackend.
 func (fm *FilterMapsMatcherBackend) GetBlockLvPointer(ctx context.Context, blockNumber uint64) (uint64, error) {
-	fm.f.indexLock.RLock()
+	if err := fm.f.indexLock.RLockCtx(ctx); err != nil {
+		return 0, err
+	}
 	defer fm.f.indexLock.RUnlock()
 
 	if blockNumber >= fm.f.indexedRange.blocks.AfterLast() {
@@ -94,9 +96,13 @@ func (fm *FilterMapsMatcherBackend) GetBlockLvPointer(ctx context.Context, block
 			return fm.f.indexedRange.headDelimiter + 1, nil
 		}
 		if fm.f.indexedRange.blocks.Count() > 0 {
-			// return index at the beginning of the last, partially indexed
-			// block (after the last fully indexed one)
-			blockNumber = fm.f.indexedRange.blocks.Last()
+			// return index at the beginning of the first block that is not
+			// fully indexed. The renderer excludes a partially rendered block
+			// from the indexed range, so that block is AfterLast(), not Last().
+			// Its start pointer is available because it starts in an already
+			// rendered map. Using Last() here would give an empty log value
+			// range for the last fully indexed block.
+			blockNumber = fm.f.indexedRange.blocks.AfterLast()
 		}
 	}
 	return fm.f.getBlockLvPointer(blockNumber)
@@ -112,7 +118,9 @@ func (fm *FilterMapsMatcherBackend) GetBlockLvPointer(ctx context.Context, block
 // using SyncLogIndex and re-process certain blocks if necessary.
 // GetLogByLvIndex implements MatcherBackend.
 func (fm *FilterMapsMatcherBackend) GetLogByLvIndex(ctx context.Context, lvIndex uint64) (*types.Log, error) {
-	fm.f.indexLock.RLock()
+	if err := fm.f.indexLock.RLockCtx(ctx); err != nil {
+		return nil, err
+	}
 	defer fm.f.indexLock.RUnlock()
 
 	return fm.f.getLogByLvIndex(lvIndex)

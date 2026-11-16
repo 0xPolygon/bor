@@ -63,12 +63,16 @@ type Backend interface {
 	UnprotectedAllowed() bool      // allows only for EIP155 transactions.
 	RPCTxSyncDefaultTimeout() time.Duration
 	RPCTxSyncMaxTimeout() time.Duration
+	RPCTxSyncMaxConcurrent() int
 
 	// Preconf / Private tx related API for relay
 	PreconfEnabled() bool
 	SubmitTxForPreconf(tx *types.Transaction) error
 	CheckPreconfStatus(hash common.Hash) (bool, error)
 	PrivateTxEnabled() bool
+
+	// ConditionalTxsEnabled reports whether PIP-15 conditional transactions are accepted
+	ConditionalTxsEnabled() bool
 	SubmitPrivateTx(tx *types.Transaction) error
 
 	// Preconf / Private tx related API for block producers
@@ -91,6 +95,11 @@ type Backend interface {
 	BlockByNumberOrHash(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (*types.Block, error)
 	StateAndHeaderByNumber(ctx context.Context, number rpc.BlockNumber) (*state.StateDB, *types.Header, error)
 	StateAndHeaderByNumberOrHash(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (*state.StateDB, *types.Header, error)
+	// WaitForStateCommit blocks until the state root is committed to the trie
+	// database when it belongs to a pipelined import still in flight; it is a
+	// no-op for any other root. Handlers that open tries directly by root
+	// call this so queries at the chain head don't fail transiently.
+	WaitForStateCommit(ctx context.Context, root common.Hash) error
 	Pending() (*types.Block, types.Receipts, *state.StateDB)
 	GetReceipts(ctx context.Context, hash common.Hash) (types.Receipts, error)
 	GetCanonicalReceipt(tx *types.Transaction, blockHash common.Hash, blockNumber, blockIndex uint64) (*types.Receipt, error)
@@ -164,6 +173,42 @@ type Backend interface {
 	GetWork() ([4]string, error)
 	SubmitWork(nonce types.BlockNonce, hash, digest common.Hash) (bool, error)
 	SubmitHashrate(rate hexutil.Uint64, id common.Hash) (bool, error)
+}
+
+type pendingMetadataBackend interface {
+	PendingBlock() *types.Block
+	PendingBlockAndReceipts() (*types.Block, types.Receipts)
+}
+
+type pendingSnapshotBackend interface {
+	PendingSnapshot(context.Context) (*types.Block, types.Receipts, *state.StateDB, error)
+}
+
+func pendingBlock(backend Backend) *types.Block {
+	if metadata, ok := backend.(pendingMetadataBackend); ok {
+		return metadata.PendingBlock()
+	}
+	block, _, _ := backend.Pending()
+	return block
+}
+
+func pendingBlockAndReceipts(backend Backend) (*types.Block, types.Receipts) {
+	if metadata, ok := backend.(pendingMetadataBackend); ok {
+		return metadata.PendingBlockAndReceipts()
+	}
+	block, receipts, _ := backend.Pending()
+	return block, receipts
+}
+
+func pendingSnapshot(ctx context.Context, backend Backend) (*types.Block, types.Receipts, *state.StateDB, error) {
+	if snapshot, ok := backend.(pendingSnapshotBackend); ok {
+		return snapshot.PendingSnapshot(ctx)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, nil, err
+	}
+	block, receipts, statedb := backend.Pending()
+	return block, receipts, statedb, nil
 }
 
 func GetAPIs(apiBackend Backend) []rpc.API {

@@ -19,6 +19,7 @@ package pathdb
 import (
 	"bytes"
 	"cmp"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -76,16 +77,10 @@ func newFastIterator(db *Database, root common.Hash, account common.Hash, seek c
 		if accountIterator {
 			switch dl := current.(type) {
 			case *diskLayer:
-				// Ensure no active background buffer flush is in progress, otherwise,
-				// part of the state data may become invisible.
-				if err := dl.waitFlush(); err != nil {
+				accountList, diskIt, err := dl.accountSources(seek)
+				if err != nil {
 					return nil, err
 				}
-				// The state set in the disk layer is mutable, hold the lock before obtaining
-				// the account list to prevent concurrent map iteration and write.
-				dl.lock.RLock()
-				accountList := dl.buffer.states.accountList()
-				dl.lock.RUnlock()
 
 				fi.iterators = append(fi.iterators, &weightedIterator{
 					// The state set in the disk layer is mutable, and the entire state becomes stale
@@ -103,7 +98,7 @@ func newFastIterator(db *Database, root common.Hash, account common.Hash, seek c
 					priority: depth,
 				})
 				fi.iterators = append(fi.iterators, &weightedIterator{
-					it:       newDiskAccountIterator(dl.db.diskdb, seek),
+					it:       diskIt,
 					priority: depth + 1,
 				})
 			case *diffLayer:
@@ -118,16 +113,10 @@ func newFastIterator(db *Database, root common.Hash, account common.Hash, seek c
 		} else {
 			switch dl := current.(type) {
 			case *diskLayer:
-				// Ensure no active background buffer flush is in progress, otherwise,
-				// part of the state data may become invisible.
-				if err := dl.waitFlush(); err != nil {
+				storageList, diskIt, err := dl.storageSources(account, seek)
+				if err != nil {
 					return nil, err
 				}
-				// The state set in the disk layer is mutable, hold the lock before obtaining
-				// the storage list to prevent concurrent map iteration and write.
-				dl.lock.RLock()
-				storageList := dl.buffer.states.storageList(account)
-				dl.lock.RUnlock()
 
 				fi.iterators = append(fi.iterators, &weightedIterator{
 					// The state set in the disk layer is mutable, and the entire state becomes stale
@@ -145,7 +134,7 @@ func newFastIterator(db *Database, root common.Hash, account common.Hash, seek c
 					priority: depth,
 				})
 				fi.iterators = append(fi.iterators, &weightedIterator{
-					it:       newDiskStorageIterator(dl.db.diskdb, account, seek),
+					it:       diskIt,
 					priority: depth + 1,
 				})
 			case *diffLayer:
@@ -165,6 +154,44 @@ func newFastIterator(db *Database, root common.Hash, account common.Hash, seek c
 	}
 	fi.init()
 	return fi, nil
+}
+
+// accountSources returns the sorted account list of the disk layer's buffer,
+// and an iterator over the persistent accounts from seek.
+//
+// Once the disk layer turns stale, its buffer is handed over to the successor
+// disk layer and mutated under the successor's lock, and the successor may flush
+// newer state to disk. Both sources are therefore taken under the lock that the
+// staleness is checked with, so they match the state of this layer.
+func (dl *diskLayer) accountSources(seek common.Hash) ([]common.Hash, AccountIterator, error) {
+	// Ensure no active background buffer flush is in progress, otherwise,
+	// part of the state data may become invisible.
+	if err := dl.waitFlush(); err != nil {
+		return nil, nil, err
+	}
+	dl.lock.RLock()
+	defer dl.lock.RUnlock()
+
+	if dl.stale {
+		return nil, nil, errSnapshotStale
+	}
+	return dl.buffer.states.accountList(), newDiskAccountIterator(dl.db.diskdb, seek), nil
+}
+
+// storageSources returns the sorted storage slot list of the given account in
+// the disk layer's buffer, and an iterator over its persistent slots from seek,
+// with the same staleness rule as accountSources.
+func (dl *diskLayer) storageSources(account common.Hash, seek common.Hash) ([]common.Hash, StorageIterator, error) {
+	if err := dl.waitFlush(); err != nil {
+		return nil, nil, err
+	}
+	dl.lock.RLock()
+	defer dl.lock.RUnlock()
+
+	if dl.stale {
+		return nil, nil, errSnapshotStale
+	}
+	return dl.buffer.states.storageList(account), newDiskStorageIterator(dl.db.diskdb, account, seek), nil
 }
 
 // init walks over all the iterators and resolves any clashes between them, after
@@ -391,12 +418,25 @@ func (fi *fastIterator) Debug() {
 // element per diff layer. The returned combo iterator can be used to walk over
 // the entire snapshot diff stack simultaneously.
 func newFastAccountIterator(db *Database, root common.Hash, seek common.Hash) (AccountIterator, error) {
-	return newFastIterator(db, root, common.Hash{}, seek, true)
+	return openFastIterator(db, root, common.Hash{}, seek, true)
 }
 
 // newFastStorageIterator creates a new hierarchical storage iterator with one
 // element per diff layer. The returned combo iterator can be used to walk over
 // the entire snapshot diff stack simultaneously.
 func newFastStorageIterator(db *Database, root common.Hash, account common.Hash, seek common.Hash) (StorageIterator, error) {
-	return newFastIterator(db, root, account, seek, false)
+	return openFastIterator(db, root, account, seek, false)
+}
+
+// openFastIterator creates a fast iterator, walking the layers from root once
+// more if the disk layer it reached turned stale meanwhile. A cap marks the disk
+// layer stale while it holds the layer tree lock, and links the successor before
+// releasing it, so the second walk reaches the successor, or fails if root has
+// been flattened away.
+func openFastIterator(db *Database, root common.Hash, account common.Hash, seek common.Hash, accountIterator bool) (*fastIterator, error) {
+	fi, err := newFastIterator(db, root, account, seek, accountIterator)
+	if errors.Is(err, errSnapshotStale) {
+		return newFastIterator(db, root, account, seek, accountIterator)
+	}
+	return fi, err
 }

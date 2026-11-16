@@ -80,6 +80,7 @@ var FullNodeGPO = gasprice.Config{
 
 // Defaults contains default settings for use on the Ethereum main net.
 var Defaults = Config{
+	PeerReputation:        true,
 	SyncMode:              downloader.SnapSync,
 	HistoryMode:           history.KeepAll,
 	NetworkId:             0, // enable auto configuration of networkID == chainID
@@ -107,12 +108,15 @@ var Defaults = Config{
 	WitnessAPIEnabled:     false,
 	TxSyncDefaultTimeout:  20 * time.Second,
 	TxSyncMaxTimeout:      1 * time.Minute,
+	TxSyncMaxConcurrent:   4096,
 }
 
 //go:generate go run github.com/fjl/gencodec -type Config -formats toml -out gen_config.go
 
 // Config contains configuration options for ETH and LES protocols.
 type Config struct {
+	PeerReputation               bool // Enable observation-only peer scoring.
+	PeerReputationPerPeerMetrics bool
 	// The genesis block, which is inserted if the database is empty.
 	// If nil, the Ethereum main net block is used.
 	Genesis *core.Genesis `toml:",omitempty"`
@@ -133,6 +137,17 @@ type Config struct {
 	// State options.
 	NoPruning  bool // Whether to disable pruning and flush everything to disk
 	NoPrefetch bool // Whether to disable prefetching and only load state on demand
+
+	// Pipelined import SRC: overlap SRC(N) with tx execution of block N+1 during import
+	EnablePipelinedImportSRC bool
+	PipelinedImportSRCLogs   bool
+
+	// PipelinedSRCWarmSnapshot enables warm-cache handoff from the
+	// execution-side trie prefetcher to the pipelined SRC goroutine. Trie
+	// reads in SRC consult a hash-verified snapshot before falling through
+	// to pathdb. Targets cold-cache restart/catch-up CPU. NewTrieOnly
+	// semantics, witness completeness, and root determinism are unaffected.
+	PipelinedSRCWarmSnapshot bool
 
 	// Deprecated: use 'TransactionHistory' instead.
 	TxLookupLimit uint64 `toml:",omitempty"` // The maximum number of blocks from head whose tx indices are reserved.
@@ -190,6 +205,10 @@ type Config struct {
 	// This prevents preloading from overwhelming the disk during sync.
 	// 0 = unlimited (legacy behavior), default = 1MB/s
 	PreloadRateLimit int64
+
+	// AddressCachePersist persists the address-specific caches to disk on
+	// shutdown and reloads them on startup. Default: false
+	AddressCachePersist bool
 
 	// Mining options
 	Miner miner.Config
@@ -329,7 +348,26 @@ type Config struct {
 	TxSyncDefaultTimeout time.Duration `toml:",omitempty"`
 	TxSyncMaxTimeout     time.Duration `toml:",omitempty"`
 
+	// TxSyncMaxConcurrent caps calls waiting for an eth_sendRawTransactionSync
+	// receipt. Waiters don't hold an RPC execution slot, so this is what bounds
+	// them; size it for parked goroutines and chain-event subscribers, not for
+	// worker threads. 0 removes the cap.
+	TxSyncMaxConcurrent int `toml:",omitempty"`
+
+	// Sequence store integration (design docs/sequencer-bor.md). Role is
+	// derived, not configured: "producer" on a mining node (publishes the
+	// block lifecycle), "consumer" on a non-mining node (re-executes the
+	// stream for preconf receipts), empty when disabled. The publisher and
+	// consumer gRPC services have their own endpoints (the publisher reads
+	// the tail through the consumer service when it reconciles); Poll is
+	// the txpool poll cadence while a block is open.
+	SequencerRole              string
+	SequencerPublisherEndpoint string
+	SequencerConsumerEndpoint  string
+	SequencerPoll              time.Duration
+
 	// Preconf / Private transaction relay related settings
+
 	EnablePreconfs            bool
 	EnablePrivateTx           bool
 	BlockProducerRpcEndpoints []string

@@ -53,6 +53,11 @@ func VerifyEIP1559Header(config *params.ChainConfig, parent, header *types.Heade
 	if header.BaseFee == nil {
 		return errors.New("header is missing baseFee")
 	}
+	// Post-Lisovo bounds only the per-block change, so the magnitude is checked
+	// here for every import path, matching Header.SanityCheck.
+	if bitLen := header.BaseFee.BitLen(); bitLen > 256 {
+		return fmt.Errorf("invalid baseFee: bitlen %d exceeds 256", bitLen)
+	}
 	// Verify the parent header is not malformed
 	if config.IsLondon(parent.Number) && parent.BaseFee == nil {
 		return errors.New("parent header is missing baseFee")

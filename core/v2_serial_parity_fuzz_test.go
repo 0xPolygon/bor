@@ -109,7 +109,7 @@ func runV2(t testing.TB, tdb *triedb.Database, root common.Hash, txs []*types.Tr
 	store := blockstm.NewMVStore()
 	bals := blockstm.NewMVBalanceStore()
 	res := ExecuteV2BlockSTM(context.Background(), tasks, base, store, bals, blockCtx, common.Hash{}, vm.Config{},
-		fuzzChainConfig, blockCtx.GasLimit, workers, finalDB, nil)
+		fuzzChainConfig, blockCtx.GasLimit, workers, finalDB, nil, nil)
 	if res.PanickedIdx >= 0 {
 		t.Fatalf("V2 executor: tx %d panicked", res.PanickedIdx)
 	}
@@ -380,6 +380,15 @@ func TestV2ExecutorVsSerial_SeedCorpus(t *testing.T) {
 		"FreshAddrTransfer": {
 			{kind: kindTransferToFresh, senderIdx: 0, freshNonce: 0xab, valueGwei: 5},
 			{kind: kindTransferToFresh, senderIdx: 1, freshNonce: 0xcd, valueGwei: 7},
+		},
+		// Snippet 3: revert rollback inside a nested self-call, SLOAD gas
+		// against committed state, TLOAD/TSTORE, SELFBALANCE, EXTCODEHASH,
+		// and a slot cleared for refund — repeated calls hit warm/dirty paths.
+		"RichRuntimeCreateThenCalls": {
+			{kind: kindContractCreate, senderIdx: 0, createKind: 3},
+			{kind: kindContractCall, senderIdx: 1, valueGwei: 11},
+			{kind: kindContractCall, senderIdx: 2},
+			{kind: kindContractCall, senderIdx: 1, valueGwei: 5},
 		},
 		// The PR #2268 settlement mispairing shape — state roots equal,
 		// receipts diverge without the BalanceOpsIdx pairing fix.

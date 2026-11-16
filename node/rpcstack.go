@@ -45,17 +45,19 @@ type httpConfig struct {
 	prefix             string // path prefix on which to mount http handler
 
 	// Execution pool config
-	executionPoolSize uint64
+	executionPoolSize           uint64
+	executionPoolRequestTimeout time.Duration
 	rpcEndpointConfig
 }
 
 // wsConfig is the JSON-RPC/Websocket configuration
 type wsConfig struct {
 	// Execution pool config
-	executionPoolSize uint64
-	Origins           []string
-	Modules           []string
-	prefix            string // path prefix on which to mount ws handler
+	executionPoolSize           uint64
+	executionPoolRequestTimeout time.Duration
+	Origins                     []string
+	Modules                     []string
+	prefix                      string // path prefix on which to mount ws handler
 	rpcEndpointConfig
 }
 
@@ -328,8 +330,8 @@ func (h *httpServer) enableRPC(apis []rpc.API, config httpConfig) error {
 	}
 
 	// Pool size from config bounds request concurrency (0 = unbounded fast path).
-	// The pool has no per-task timeout; request wall-time is bounded by WriteTimeout.
-	srv := rpc.NewServer("http", config.executionPoolSize, 0)
+	// A request that waits longer than the pool request timeout (0 = never) runs unbounded.
+	srv := rpc.NewServer("http", config.executionPoolSize, config.executionPoolRequestTimeout)
 	srv.SetBatchLimits(config.batchItemLimit, config.batchResponseSizeLimit)
 	if config.httpBodyLimit > 0 {
 		srv.SetHTTPBodyLimit(config.httpBodyLimit)
@@ -368,7 +370,7 @@ func (h *httpServer) enableWS(apis []rpc.API, config wsConfig) error {
 		return errors.New("JSON-RPC over WebSocket is already enabled")
 	}
 	// See enableRPC for the size/timeout semantics.
-	srv := rpc.NewServer("ws", config.executionPoolSize, 0)
+	srv := rpc.NewServer("ws", config.executionPoolSize, config.executionPoolRequestTimeout)
 	srv.SetBatchLimits(config.batchItemLimit, config.batchResponseSizeLimit)
 	if config.httpBodyLimit > 0 {
 		srv.SetHTTPBodyLimit(config.httpBodyLimit)

@@ -18,7 +18,6 @@ package miner
 
 import (
 	"container/heap"
-	"math/big"
 	"sync/atomic"
 
 	"github.com/holiman/uint256"
@@ -102,12 +101,7 @@ type transactionsByPriceAndNonce struct {
 // if after providing it to the constructor.
 //
 // The construction is halted if interrupt is set (during block building timeout).
-func newTransactionsByPriceAndNonce(signer types.Signer, txs map[common.Address][]*txpool.LazyTransaction, baseFee *big.Int, interrupt *atomic.Bool) *transactionsByPriceAndNonce {
-	// Convert the basefee from header format to uint256 format
-	var baseFeeUint *uint256.Int
-	if baseFee != nil {
-		baseFeeUint = uint256.MustFromBig(baseFee)
-	}
+func newTransactionsByPriceAndNonce(signer types.Signer, txs map[common.Address][]*txpool.LazyTransaction, baseFee *uint256.Int, interrupt *atomic.Bool) *transactionsByPriceAndNonce {
 	if interrupt == nil {
 		interrupt = new(atomic.Bool)
 	}
@@ -118,9 +112,9 @@ func newTransactionsByPriceAndNonce(signer types.Signer, txs map[common.Address]
 		if interrupt.Load() {
 			// We could send partial set of sorted transactions but they'll anyways
 			// be rejected during commit transactions. Instead send an empty list.
-			return emptyTransactionsByPriceAndNonce(signer, baseFeeUint)
+			return emptyTransactionsByPriceAndNonce(signer, baseFee)
 		}
-		wrapped, err := newTxWithMinerFee(accTxs[0], from, baseFeeUint)
+		wrapped, err := newTxWithMinerFee(accTxs[0], from, baseFee)
 		if err != nil {
 			delete(txs, from)
 			continue
@@ -135,7 +129,7 @@ func newTransactionsByPriceAndNonce(signer types.Signer, txs map[common.Address]
 		txs:     txs,
 		heads:   heads,
 		signer:  signer,
-		baseFee: baseFeeUint,
+		baseFee: baseFee,
 	}
 }
 

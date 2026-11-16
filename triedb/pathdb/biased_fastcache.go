@@ -45,6 +45,14 @@ type AddressBiasedCache struct {
 
 	// Rate limiting for preload operations (bytes per second, 0 = unlimited)
 	rateLimitBPS int64
+
+	// Directory used to persist/reload per-address caches across restarts.
+	// Empty string disables persistence (in-memory-only, matches legacy behavior).
+	journalDir string
+
+	// saveSnapshot writes one address cache to path. Tests replace it to
+	// hold a save in progress.
+	saveSnapshot func(cache *fastcache.Cache, path string) error
 }
 
 // NewAddressBiasedCache creates a new address-biased cache with preloading.
@@ -54,18 +62,27 @@ type AddressBiasedCache struct {
 // of the cache for non-preloaded data. The rateLimitBPS limits preload I/O
 // in bytes per second (0 = unlimited).
 // Preloading happens asynchronously in the background.
-func NewAddressBiasedCache(db ethdb.Database, addressCacheSizes map[common.Address]int, commonCacheSize int, rateLimitBPS int64) (*AddressBiasedCache, error) {
+func NewAddressBiasedCache(db ethdb.Database, addressCacheSizes map[common.Address]int, commonCacheSize int, rateLimitBPS int64, journalDir string) (*AddressBiasedCache, error) {
 	ctx, cancel := stdcontext.WithCancel(stdcontext.Background())
 	cache := &AddressBiasedCache{
 		commonCache:  fastcache.New(commonCacheSize),
 		ctx:          ctx,
 		cancel:       cancel,
 		rateLimitBPS: rateLimitBPS,
+		journalDir:   journalDir,
+		saveSnapshot: saveSnapshotConcurrent,
+	}
+
+	if journalDir != "" {
+		removeUnconfiguredSnapshots(journalDir, addressCacheSizes)
 	}
 
 	// Initialize caches synchronously, but preload asynchronously
 	for addr, cacheSize := range addressCacheSizes {
-		cache.initAddressCache(addr, cacheSize)
+		warm := cache.initAddressCache(addr, cacheSize)
+		if warm {
+			continue
+		}
 
 		// Start async preloading
 		cache.wg.Add(1)
@@ -75,14 +92,36 @@ func NewAddressBiasedCache(db ethdb.Database, addressCacheSizes map[common.Addre
 	return cache, nil
 }
 
-// initAddressCache initializes the cache structures for an address synchronously
-func (c *AddressBiasedCache) initAddressCache(addr common.Address, cacheSize int) {
+// initAddressCache initializes the cache structure for an address synchronously.
+// If a persisted snapshot exists at the address's snapshot path and matches
+// the configured cache size, it is reloaded and the cache is considered warm
+// (the caller should skip preloadAddressAsync for this address). Otherwise a
+// fresh empty cache is created and the cache is considered cold. Staleness of
+// a reloaded cache is not a correctness concern: reader.Node already hash-
+// verifies every cache hit and evicts+refetches on mismatch, regardless of
+// why the cached blob is stale.
+func (c *AddressBiasedCache) initAddressCache(addr common.Address, cacheSize int) (warm bool) {
 	accountHash := crypto.Keccak256Hash(addr.Bytes())
-	addrCache := fastcache.New(cacheSize)
+
+	var addrCache *fastcache.Cache
+	if c.journalDir != "" {
+		addrCache = fastcache.LoadFromFileOrNew(snapshotPath(c.journalDir, accountHash), cacheSize)
+	} else {
+		addrCache = fastcache.New(cacheSize)
+	}
+
+	var stats fastcache.Stats
+	addrCache.UpdateStats(&stats)
+	warm = isWarmReload(stats.BytesSize, cacheSize)
+	if warm {
+		log.Info("Reloaded address cache snapshot", "address", addr, "entries", stats.EntriesCount, "bytes", stats.BytesSize, "path", snapshotPath(c.journalDir, accountHash))
+	}
 
 	// Mark this address as preloaded
 	c.preloadedAddrs.Store(accountHash, struct{}{})
 	c.addressCaches.Store(accountHash, addrCache)
+
+	return warm
 }
 
 // preloadAddressAsync loads storage trie nodes for the given account hash using
@@ -115,9 +154,13 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 		limiter = rate.NewLimiter(rate.Limit(c.rateLimitBPS), 64*1024)
 	}
 
-	// Local stats for logging progress
+	// Local stats for logging progress. The byte count starts from what the
+	// cache already holds (e.g. a partial snapshot reloaded from disk), so a
+	// reload plus this top-up together respect the 2/3 fill target.
 	var entriesLoaded int
-	var totalBytesLoaded uint64
+	var stats fastcache.Stats
+	addrCache.UpdateStats(&stats)
+	totalBytesLoaded := stats.BytesSize
 
 	rateLimitStr := "unlimited"
 	if c.rateLimitBPS > 0 {
@@ -137,13 +180,24 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 	// that correspond to actual trie nodes and ignores malformed non-growing
 	// short nodes. Valid MPT paths strictly increase in length with each level,
 	// so the traversal is cycle-free by construction.
-	type queueItem struct {
-		path  []byte
-		depth int
-	}
-	queue := []queueItem{{path: nil, depth: 0}} // Start from root
+	// The queue is segmented (see preloadQueue) because the frontier can
+	// reach hundreds of millions of items on large contracts.
+	var queue preloadQueue
+	queue.push(preloadQueueItem{path: nil, depth: 0}) // Start from root
 
-	for len(queue) > 0 {
+	// Decode actual children from the node and enqueue them.
+	// Only real trie children are returned, keeping queue size proportional
+	// to trie width rather than growing exponentially with depth.
+	enqueueChildren := func(nodeData []byte, item preloadQueueItem) {
+		for _, childPath := range decodeChildPaths(nodeData, item.path) {
+			queue.push(preloadQueueItem{
+				path:  childPath,
+				depth: item.depth + 1,
+			})
+		}
+	}
+
+	for queue.len() > 0 {
 		// Check for shutdown signal periodically
 		select {
 		case <-c.ctx.Done():
@@ -157,12 +211,25 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 		default:
 		}
 
-		item := queue[0]
-		queue = queue[1:]
+		item, _ := queue.pop()
 
 		// Track maximum depth reached
 		if item.depth > maxDepthReached {
 			maxDepthReached = item.depth
+		}
+
+		// Construct the cache key using the same format as nodeCacheKey
+		// Format: owner (32 bytes) + path
+		key := append(accountHash.Bytes(), item.path...)
+
+		// A node already cached (e.g. reloaded from a snapshot) is neither
+		// re-read from disk nor overwritten, to avoid overwriting potentially
+		// newer data. Its children are still enqueued, so a top-up can descend
+		// past cached ancestors. A stale cached node can only misdirect the
+		// walk: children that no longer exist read back empty and are skipped.
+		if nodeData, cached := addrCache.HasGet(nil, key); cached {
+			enqueueChildren(nodeData, item)
+			continue
 		}
 
 		// Read the node from database
@@ -198,7 +265,7 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 		nodeSize := uint64(common.HashLength + len(item.path) + len(nodeData))
 
 		// Preload 66.6% of the cache size to allow hot paths to be added later
-		if totalBytesLoaded+nodeSize > uint64(cacheSize*2/3) {
+		if totalBytesLoaded+nodeSize > warmFillThreshold(cacheSize) {
 			log.Info("Cache size limit reached, stopping preload",
 				"account hash", accountHash.Hex(),
 				"entries", entriesLoaded,
@@ -208,15 +275,10 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 			break
 		}
 
-		// Construct the cache key using the same format as nodeCacheKey
-		// Format: owner (32 bytes) + path
-		key := append(accountHash.Bytes(), item.path...)
-
-		// Skip if key already exists to avoid overwriting potentially newer data.
-		// Both Has and Set are thread-safe on fastcache (internal sharding), but
-		// the Has → Set sequence is not atomic: a flusher's Set(newer) can land
-		// between our Has(false) and our Set(older), leaving the cache holding
-		// the stale blob.
+		// HasGet and Set are each thread-safe on fastcache (internal
+		// sharding), but the HasGet → Set sequence is not atomic: a flusher's
+		// Set(newer) can land between our miss and our Set(older), leaving the
+		// cache holding the stale blob.
 		//
 		// Stale-blob safety has two layers:
 		//   1. reader.Node hash-checks every cache hit. A stale blob produces
@@ -226,10 +288,6 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 		//      evictCachedNode). The cache self-heals on the next read of
 		//      that key — it does not stay poisoned until natural eviction.
 		// Worst case is one extra disk fetch per stale-blob occurrence.
-		if addrCache.Has(key) {
-			continue
-		}
-
 		addrCache.Set(key, nodeData)
 
 		entriesLoaded++
@@ -247,16 +305,7 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 				"elapsed", time.Since(startTime))
 		}
 
-		// Decode actual children from the node and enqueue them.
-		// Only real trie children are returned, keeping queue size proportional
-		// to trie width rather than growing exponentially with depth.
-		childPaths := decodeChildPaths(nodeData, item.path)
-		for _, childPath := range childPaths {
-			queue = append(queue, queueItem{
-				path:  childPath,
-				depth: item.depth + 1,
-			})
-		}
+		enqueueChildren(nodeData, item)
 	}
 
 	// Log the completion
@@ -423,13 +472,4 @@ func (c *AddressBiasedCache) Reset() {
 		cache.Reset()
 		return true
 	})
-}
-
-// Close cancels all background preload operations and waits for them to finish.
-// This ensures graceful shutdown and prevents goroutines from blocking application termination.
-func (c *AddressBiasedCache) Close() {
-	if c.cancel != nil {
-		c.cancel()  // Signal all goroutines to stop
-		c.wg.Wait() // Wait for them to finish
-	}
 }

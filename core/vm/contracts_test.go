@@ -540,6 +540,7 @@ func TestReinforceMultiClientPreCompilesTest(t *testing.T) {
 		"IsLisovo",
 		"IsLisovoPro",
 		"IsChicago",
+		"IsHampi",
 	}
 
 	if len(actual) != len(expected) {
@@ -619,6 +620,8 @@ func TestKZGPointEvaluationPrecompileRemoval(t *testing.T) {
 		{name: "Lisovo", rules: params.Rules{IsLisovo: true}, shouldHaveKzg: true},
 		{name: "LisovoPro", rules: params.Rules{IsLisovoPro: true}, shouldHaveKzg: false},
 		{name: "Chicago", rules: params.Rules{IsChicago: true}, shouldHaveKzg: false},
+		// At a post-Hampi block IsChicago is also set, so the fixture carries both.
+		{name: "Hampi", rules: params.Rules{IsChicago: true, IsHampi: true}, shouldHaveKzg: false},
 	}
 	for _, tc := range cases {
 		precompiles := ActivePrecompiledContracts(tc.rules)

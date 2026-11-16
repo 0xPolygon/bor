@@ -17,7 +17,11 @@
 package stateless
 
 import (
+	"bytes"
+	"errors"
+	"fmt"
 	"io"
+	"sort"
 
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -25,8 +29,9 @@ import (
 )
 
 // BorWitness is the canonical 3-field RLP encoding used for network
-// transmission in Bor. The State field carries all proof data — both
-// contract bytecodes and MPT state trie nodes — as a flat list of byte slices.
+// transmission in Bor. The State field carries MPT trie proof nodes as a flat
+// list of byte slices. Contract bytecodes are not part of the BorWitness wire
+// format; verifiers read bytecode from local storage via CodeRoutingDB.
 type BorWitness struct {
 	Context *types.Header
 	Headers []*types.Header
@@ -84,19 +89,29 @@ func (w *Witness) fromExtWitness(ext *ExtWitness) error {
 // EncodeRLP serializes a witness as RLP using the canonical BorWitness 3-field
 // format. Only state trie nodes are encoded; contract bytecodes are not
 // included in the wire format.
+//
+// State entries are sorted lexicographically before encoding so the output is
+// byte-identical for any two witnesses with the same logical contents. Without
+// this, Go's randomized map iteration would produce different bytes per call,
+// breaking any code that hashes the encoded witness for content addressing —
+// notably the WIT2 BP-signed witness hash, which is computed by both producer
+// and verifiers and must match exactly.
 func (w *Witness) EncodeRLP(wr io.Writer) error {
 	w.lock.RLock()
 	defer w.lock.RUnlock()
 
-	bw := &BorWitness{
+	state := make([][]byte, 0, len(w.State))
+	for node := range w.State {
+		state = append(state, []byte(node))
+	}
+	sort.Slice(state, func(i, j int) bool {
+		return bytes.Compare(state[i], state[j]) < 0
+	})
+	return rlp.Encode(wr, &BorWitness{
 		Context: w.context,
 		Headers: w.Headers,
-		State:   make([][]byte, 0, len(w.State)),
-	}
-	for node := range w.State {
-		bw.State = append(bw.State, []byte(node))
-	}
-	return rlp.Encode(wr, bw)
+		State:   state,
+	})
 }
 
 // DecodeRLP decodes a witness from RLP. It first attempts the canonical
@@ -109,6 +124,9 @@ func (w *Witness) EncodeRLP(wr io.Writer) error {
 func (w *Witness) DecodeRLP(s *rlp.Stream) error {
 	raw, err := s.Raw()
 	if err != nil {
+		return err
+	}
+	if err := checkWitnessListBounds(raw); err != nil {
 		return err
 	}
 
@@ -132,4 +150,84 @@ func (w *Witness) DecodeRLP(s *rlp.Stream) error {
 		return err
 	}
 	return w.fromExtWitness(&ext)
+}
+
+const (
+	// maxWitnessHeaders is the BLOCKHASH window: AddBlockHash only pulls in
+	// ancestors up to 256 blocks back, so an honest witness never carries more.
+	maxWitnessHeaders = 256
+
+	// minWitnessNodeSize is the smallest average encoded size of a witness
+	// list element. State entries are trie nodes resolved by hash, and nodes
+	// under 32 bytes are embedded in their parent instead, so honest witnesses
+	// stay above it. The bound keeps decoded slices and maps proportional to
+	// the encoded size.
+	minWitnessNodeSize = 32
+
+	// witnessElementAllowance is a fixed number of elements accepted on top of
+	// the size-derived bound, so small witnesses (and legacy ExtWitness code
+	// blobs, which can be short) always decode. It caps the extra decode cost
+	// at a few hundred KiB.
+	witnessElementAllowance = 1024
+)
+
+var (
+	errWitnessTooManyHeaders  = errors.New("witness has too many headers")
+	errWitnessTooManyElements = errors.New("witness has too many elements for its size")
+)
+
+// checkWitnessListBounds walks the encoded witness without allocating and
+// rejects element counts no honest witness has, before the decoder sizes slices
+// and maps from them. Fields that are not lists are left for the decoder to
+// reject.
+func checkWitnessListBounds(raw []byte) error {
+	fields, _, err := rlp.SplitList(raw)
+	if err != nil {
+		return err
+	}
+	// The first field is the context header, a fixed-shape struct.
+	if _, _, fields, err = rlp.Split(fields); err != nil {
+		return fmt.Errorf("witness context: %w", err)
+	}
+	headers, fields, err := countListValues(fields)
+	if err != nil {
+		return fmt.Errorf("witness headers: %w", err)
+	}
+	if headers.count > maxWitnessHeaders {
+		return fmt.Errorf("%w: %d > %d", errWitnessTooManyHeaders, headers.count, maxWitnessHeaders)
+	}
+	// The remaining fields are byte-string lists: State for BorWitness, and
+	// Codes, State, Keys for the legacy ExtWitness.
+	var elements listCount
+	for len(fields) > 0 {
+		var list listCount
+		if list, fields, err = countListValues(fields); err != nil {
+			return fmt.Errorf("witness state: %w", err)
+		}
+		elements.count += list.count
+		elements.size += list.size
+	}
+	if elements.count > elements.size/minWitnessNodeSize+witnessElementAllowance {
+		return fmt.Errorf("%w: %d elements in %d bytes", errWitnessTooManyElements, elements.count, elements.size)
+	}
+	return nil
+}
+
+type listCount struct {
+	count int
+	size  int
+}
+
+// countListValues counts the values of the list at the start of b. A non-list
+// value counts as empty.
+func countListValues(b []byte) (listCount, []byte, error) {
+	kind, content, rest, err := rlp.Split(b)
+	if err != nil || kind != rlp.List {
+		return listCount{}, rest, err
+	}
+	n, err := rlp.CountValues(content)
+	if err != nil {
+		return listCount{}, rest, err
+	}
+	return listCount{count: n, size: len(content)}, rest, nil
 }

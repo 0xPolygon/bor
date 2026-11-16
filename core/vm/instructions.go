@@ -265,8 +265,7 @@ func opKeccak256(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 	if len(data) == 64 && evm.Config.Keccak256Cache != nil {
 		var key [64]byte
 		copy(key[:], data)
-		if cached, ok := evm.Config.Keccak256Cache.Load(key); ok {
-			h := cached.(common.Hash)
+		if h, ok := evm.Config.Keccak256Cache.Load(key); ok {
 			if evm.Config.EnablePreimageRecording {
 				evm.StateDB.AddPreimage(h, data)
 			}

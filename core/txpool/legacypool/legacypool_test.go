@@ -117,6 +117,10 @@ func (bc *testBlockChain) StateAt(common.Hash) (*state.StateDB, error) {
 	return bc.statedb, nil
 }
 
+func (bc *testBlockChain) PostExecState(header *types.Header) (*state.StateDB, error) {
+	return bc.statedb, nil
+}
+
 func (bc *testBlockChain) SubscribeChainHeadEvent(ch chan<- core.ChainHeadEvent) event.Subscription {
 	return bc.chainHeadFeed.Subscribe(ch)
 }
@@ -215,6 +219,31 @@ func pricedSetCodeTxWithAuth(nonce uint64, gaslimit uint64, gasFee, tip *uint256
 
 func setupPool() (*LegacyPool, *ecdsa.PrivateKey) {
 	return setupPoolWithConfig(params.TestChainConfig)
+}
+
+func TestSetSpeculativeState(t *testing.T) {
+	pool, _ := setupPool()
+	defer pool.Close()
+
+	statedb, err := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+	if err != nil {
+		t.Fatalf("failed to create speculative state: %v", err)
+	}
+	account := common.HexToAddress("0x1234")
+	statedb.SetNonce(account, 7, tracing.NonceChangeUnspecified)
+	header := &types.Header{Number: big.NewInt(42), GasLimit: 10_000_000}
+
+	pool.SetSpeculativeState(header, statedb)
+
+	if got := pool.currentHead.Load(); got != header {
+		t.Fatal("speculative head was not installed")
+	}
+	if pool.currentState != statedb {
+		t.Fatal("speculative state was not installed")
+	}
+	if got := pool.pendingNonces.get(account); got != 7 {
+		t.Fatalf("speculative nonce = %d, want 7", got)
+	}
 }
 
 // reserver is a utility struct to sanity check that accounts are
@@ -497,9 +526,96 @@ func TestStateChangeDuringReset(t *testing.T) {
 	}
 }
 
+// TestReorgResetWithDirtyAccount checks that a reset run together with a dirty
+// account promotes a queued tx right after the still-pending ones (port of
+// ethereum/go-ethereum#35654).
+func TestReorgResetWithDirtyAccount(t *testing.T) {
+	t.Parallel()
+
+	pool, key := setupPool()
+	defer pool.Close()
+
+	addr := crypto.PubkeyToAddress(key.PublicKey)
+	testAddBalance(pool, addr, big.NewInt(1000000000000000))
+	testSetNonce(pool, addr, 1)
+	<-pool.requestReset(nil, nil)
+
+	// Add two executable transactions to establish a pending nonce ahead of state.
+	for _, tx := range []*types.Transaction{transaction(1, 100000, key), transaction(2, 100000, key)} {
+		if err := pool.addRemoteSync(tx); err != nil {
+			t.Fatalf("failed to add transaction %d: %v", tx.Nonce(), err)
+		}
+	}
+	// Admit the next transaction without scheduling its promotion, reproducing the
+	// state passed to runReorg when a reset and dirty-account request are coalesced.
+	tx := transaction(3, 100000, key)
+	pool.mu.Lock()
+	errs, dirty := pool.addTxs([]*types.Transaction{tx}, false)
+	pool.mu.Unlock()
+	if errs[0] != nil {
+		t.Fatalf("failed to add transaction %d: %v", tx.Nonce(), errs[0])
+	}
+
+	// The new chain head includes transaction 1. Transaction 2 remains pending,
+	// so transaction 3 must be promoted by the combined reorg run.
+	testSetNonce(pool, addr, 2)
+	done := make(chan struct{})
+	pool.runReorg(done, &txpoolResetRequest{}, dirty, make(map[common.Address]*SortedMap))
+	<-done
+
+	if pending, queued := pool.Stats(); pending != 2 || queued != 0 {
+		t.Fatalf("transaction stranded after reorg: pending %d, queued %d", pending, queued)
+	}
+	if err := validatePoolInternals(pool); err != nil {
+		t.Fatalf("pool internals mismatch: %v", err)
+	}
+}
+
+// TestReorgResetKeepsHigherStateNonce checks that restoring the pending nonces
+// after a reset never moves them below the new state nonce, when the new head
+// already includes every pending tx and more.
+func TestReorgResetKeepsHigherStateNonce(t *testing.T) {
+	t.Parallel()
+
+	pool, key := setupPool()
+	defer pool.Close()
+
+	addr := crypto.PubkeyToAddress(key.PublicKey)
+	testAddBalance(pool, addr, big.NewInt(1000000000000000))
+	for _, tx := range []*types.Transaction{transaction(0, 100000, key), transaction(1, 100000, key)} {
+		if err := pool.addRemoteSync(tx); err != nil {
+			t.Fatalf("failed to add transaction %d: %v", tx.Nonce(), err)
+		}
+	}
+	tx := transaction(4, 100000, key)
+	pool.mu.Lock()
+	errs, dirty := pool.addTxs([]*types.Transaction{tx}, false)
+	pool.mu.Unlock()
+	if errs[0] != nil {
+		t.Fatalf("failed to add transaction %d: %v", tx.Nonce(), errs[0])
+	}
+
+	// The new head is at nonce 4: the pending txs 0 and 1 and two more are mined.
+	testSetNonce(pool, addr, 4)
+	done := make(chan struct{})
+	pool.runReorg(done, &txpoolResetRequest{}, dirty, make(map[common.Address]*SortedMap))
+	<-done
+
+	if pending, queued := pool.Stats(); pending != 1 || queued != 0 {
+		t.Fatalf("pending %d, queued %d, want 1 and 0", pending, queued)
+	}
+	if err := validatePoolInternals(pool); err != nil {
+		t.Fatalf("pool internals mismatch: %v", err)
+	}
+}
+
 func testAddBalance(pool *LegacyPool, addr common.Address, amount *big.Int) {
 	pool.mu.Lock()
-	pool.currentState.AddBalance(addr, uint256.MustFromBig(amount), tracing.BalanceChangeUnspecified)
+	if amount.Sign() < 0 {
+		pool.currentState.SubBalance(addr, uint256.MustFromBig(new(big.Int).Neg(amount)), tracing.BalanceChangeUnspecified)
+	} else {
+		pool.currentState.AddBalance(addr, uint256.MustFromBig(amount), tracing.BalanceChangeUnspecified)
+	}
 	pool.mu.Unlock()
 }
 
@@ -943,13 +1059,11 @@ func TestPostponing(t *testing.T) {
 	for i := 0; i < len(keys); i++ {
 		keys[i], _ = crypto.GenerateKey()
 		accs[i] = crypto.PubkeyToAddress(keys[i].PublicKey)
-
-		testAddBalance(pool, crypto.PubkeyToAddress(keys[i].PublicKey), big.NewInt(50100))
 	}
-	// Add a batch consecutive pending transactions for validation
 	txs := []*types.Transaction{}
-
+	initialBalances := make([]*big.Int, len(keys))
 	for i, key := range keys {
+		initialBalances[i] = new(big.Int)
 		for j := 0; j < 100; j++ {
 			var tx *types.Transaction
 			if (i+j)%2 == 0 {
@@ -959,7 +1073,11 @@ func TestPostponing(t *testing.T) {
 			}
 
 			txs = append(txs, tx)
+			initialBalances[i].Add(initialBalances[i], tx.Cost())
 		}
+	}
+	for i, addr := range accs {
+		testAddBalance(pool, addr, initialBalances[i])
 	}
 	for i, err := range pool.addRemotesSync(txs) {
 		if err != nil {
@@ -991,8 +1109,9 @@ func TestPostponing(t *testing.T) {
 		t.Errorf("total transaction mismatch: have %d, want %d", pool.all.Count(), len(txs))
 	}
 	// Reduce the balance of the account, and check that transactions are reorganised
-	for _, addr := range accs {
-		testAddBalance(pool, addr, big.NewInt(-1))
+	reducedBalance := new(big.Int).Sub(txs[1].Cost(), big.NewInt(1))
+	for i, addr := range accs {
+		testAddBalance(pool, addr, new(big.Int).Sub(reducedBalance, initialBalances[i]))
 	}
 
 	<-pool.requestReset(nil, nil)
@@ -1153,50 +1272,23 @@ func TestQueueAccountLimiting(t *testing.T) {
 	}
 }
 
-// Test that txpool rejects unprotected txs by default
-// FIXME: The below test causes some tests to fail randomly (probably due to parallel execution)
-//
-//nolint:paralleltest
-func TestRejectUnprotectedTransaction(t *testing.T) {
-	//nolint:paralleltest
-	t.Skip()
+// Tests that the pool accepts unprotected txs but rejects txs signed for another chain.
+func TestUnprotectedAndOtherChainTransactions(t *testing.T) {
+	t.Parallel()
 
 	pool, key := setupPool()
 	defer pool.Close()
 
-	tx := dynamicFeeTx(0, 22000, big.NewInt(5), big.NewInt(2), key)
-	from := crypto.PubkeyToAddress(key.PublicKey)
+	testAddBalance(pool, crypto.PubkeyToAddress(key.PublicKey), big.NewInt(0xffffffffffffff))
 
-	pool.chainconfig.ChainID = big.NewInt(5)
-	pool.signer = types.LatestSignerForChainID(pool.chainconfig.ChainID)
-	testAddBalance(pool, from, big.NewInt(0xffffffffffffff))
-
-	if err := pool.addRemote(tx); !errors.Is(err, types.ErrInvalidChainId) {
-		t.Error("expected", types.ErrInvalidChainId, "got", err)
+	if err := pool.addRemoteSync(transaction(0, 100000, key)); err != nil {
+		t.Fatalf("unprotected tx rejected: %v", err)
 	}
-}
-
-// Test that txpool allows unprotected txs when AllowUnprotectedTxs flag is set
-// FIXME: The below test causes some tests to fail randomly (probably due to parallel execution)
-//
-//nolint:paralleltest
-func TestAllowUnprotectedTransactionWhenSet(t *testing.T) {
-	t.Skip()
-
-	pool, key := setupPool()
-	defer pool.Close()
-
-	tx := dynamicFeeTx(0, 22000, big.NewInt(5), big.NewInt(2), key)
-	from := crypto.PubkeyToAddress(key.PublicKey)
-
-	// Allow unprotected txs
-	pool.config.AllowUnprotectedTxs = true
-	pool.chainconfig.ChainID = big.NewInt(5)
-	pool.signer = types.LatestSignerForChainID(pool.chainconfig.ChainID)
-	testAddBalance(pool, from, big.NewInt(0xffffffffffffff))
-
-	if err := pool.addRemote(tx); err != nil {
-		t.Error("expected", nil, "got", err)
+	tx, _ := types.SignNewTx(key, types.LatestSignerForChainID(big.NewInt(999)), &types.DynamicFeeTx{
+		ChainID: big.NewInt(999), Nonce: 1, GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(1), Gas: 100000, To: &common.Address{0x01}, Value: big.NewInt(1),
+	})
+	if err := pool.addRemoteSync(tx); !errors.Is(err, txpool.ErrInvalidSender) {
+		t.Fatalf("tx for another chain: got %v, want %v", err, txpool.ErrInvalidSender)
 	}
 }
 
@@ -1585,7 +1677,7 @@ func TestPendingMinimumAllowance(t *testing.T) {
 	keys := make([]*ecdsa.PrivateKey, 5)
 	for i := 0; i < len(keys); i++ {
 		keys[i], _ = crypto.GenerateKey()
-		testAddBalance(pool, crypto.PubkeyToAddress(keys[i].PublicKey), big.NewInt(1000000))
+		testAddBalance(pool, crypto.PubkeyToAddress(keys[i].PublicKey), big.NewInt(10000000))
 	}
 	// Generate and queue a batch of transactions
 	nonces := make(map[common.Address]uint64)
@@ -2020,7 +2112,7 @@ func TestStableUnderpricing(t *testing.T) {
 	keys := make([]*ecdsa.PrivateKey, 2)
 	for i := 0; i < len(keys); i++ {
 		keys[i], _ = crypto.GenerateKey()
-		testAddBalance(pool, crypto.PubkeyToAddress(keys[i].PublicKey), big.NewInt(1000000))
+		testAddBalance(pool, crypto.PubkeyToAddress(keys[i].PublicKey), big.NewInt(100000000))
 	}
 	// Fill up the entire queue with the same transaction price points
 	txs := types.Transactions{}
@@ -4991,6 +5083,129 @@ func TestTxFiltering(t *testing.T) {
 	})
 }
 
+func TestTxFilteringSetCodeAuthorities(t *testing.T) {
+	t.Parallel()
+
+	chainID := uint256.MustFromBig(params.MergedTestChainConfig.ChainID)
+	otherChainID := new(uint256.Int).AddUint64(chainID, 1)
+
+	// Authorizations are matched on any recoverable signer, whether or not the
+	// tuple would be applied at execution, so invalid-at-admission tuples from a
+	// filtered signer are still rejected.
+	type authSpec struct {
+		filtered   bool
+		chainID    *uint256.Int // nil uses the pool's chain ID
+		nonce      uint64
+		stateNonce uint64 // authority's account nonce at admission
+		revoke     bool   // delegate to the zero address
+		badSig     bool   // signature values that fail recovery
+	}
+
+	tests := []struct {
+		name           string
+		filterSender   bool
+		auths          []authSpec
+		wantFiltered   bool
+		disableFilters bool
+	}{
+		{name: "unfiltered sender and authority", auths: []authSpec{{}}},
+		{name: "filtered sender", filterSender: true, auths: []authSpec{{}}, wantFiltered: true},
+		{name: "filtered authority", auths: []authSpec{{filtered: true}}, wantFiltered: true},
+		{name: "filtered authority among several", auths: []authSpec{{}, {filtered: true}, {}}, wantFiltered: true},
+		{name: "filtered authority with any-chain authorization", auths: []authSpec{{filtered: true, chainID: new(uint256.Int)}}, wantFiltered: true},
+		{name: "filtered authority with wrong-chain authorization", auths: []authSpec{{filtered: true, chainID: otherChainID}}, wantFiltered: true},
+		{name: "filtered authority with stale nonce", auths: []authSpec{{filtered: true, nonce: 0, stateNonce: 5}}, wantFiltered: true},
+		{name: "filtered authority with future nonce", auths: []authSpec{{filtered: true, nonce: 10}}, wantFiltered: true},
+		{name: "filtered authority revoking delegation", auths: []authSpec{{filtered: true, revoke: true}}, wantFiltered: true},
+		{name: "unrecoverable authorization from filtered key", auths: []authSpec{{filtered: true, badSig: true}}},
+		{name: "empty filter list", auths: []authSpec{{}}, disableFilters: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			senderKey, _ := crypto.GenerateKey()
+			sender := crypto.PubkeyToAddress(senderKey.PublicKey)
+			// An unrelated filtered address keeps the list non-empty for cases
+			// that filter neither the sender nor any authority.
+			filtered := map[common.Address]struct{}{{0xff}: {}}
+			if tt.disableFilters {
+				filtered = map[common.Address]struct{}{}
+			}
+			if tt.filterSender {
+				filtered[sender] = struct{}{}
+			}
+
+			authList := make([]types.SetCodeAuthorization, 0, len(tt.auths))
+			authorities := make([]common.Address, 0, len(tt.auths))
+			for _, spec := range tt.auths {
+				authKey, _ := crypto.GenerateKey()
+				authority := crypto.PubkeyToAddress(authKey.PublicKey)
+				if spec.filtered {
+					filtered[authority] = struct{}{}
+				}
+				authorities = append(authorities, authority)
+
+				unsigned := types.SetCodeAuthorization{
+					ChainID: *chainID,
+					Address: common.Address{0x42},
+					Nonce:   spec.nonce,
+				}
+				if spec.chainID != nil {
+					unsigned.ChainID = *spec.chainID
+				}
+				if spec.revoke {
+					unsigned.Address = common.Address{}
+				}
+				auth, err := types.SignSetCode(authKey, unsigned)
+				if err != nil {
+					t.Fatalf("failed to sign authorization: %v", err)
+				}
+				if spec.badSig {
+					auth.V = 2
+				}
+				authList = append(authList, auth)
+			}
+
+			config := testTxPoolConfig
+			config.FilteredAddresses = filtered
+
+			statedb, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+			blockchain := newTestBlockChain(params.MergedTestChainConfig, 1000000, statedb, new(event.Feed))
+			pool := New(config, blockchain)
+			pool.Init(config.PriceLimit, blockchain.CurrentBlock(), newReserver())
+			defer pool.Close()
+
+			testAddBalance(pool, sender, big.NewInt(params.Ether))
+			for i, spec := range tt.auths {
+				if spec.stateNonce > 0 {
+					testSetNonce(pool, authorities[i], spec.stateNonce)
+				}
+			}
+
+			tx := pricedSetCodeTxWithAuth(0, 250000, uint256.NewInt(1000), uint256.NewInt(1), senderKey, authList)
+			err := pool.addRemoteSync(tx)
+
+			if tt.wantFiltered {
+				if !errors.Is(err, ErrTxFiltered) {
+					t.Fatalf("expected ErrTxFiltered, got %v", err)
+				}
+				if pool.Has(tx.Hash()) {
+					t.Fatal("filtered transaction should not be in pool")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("transaction should be accepted, got %v", err)
+			}
+			if !pool.Has(tx.Hash()) {
+				t.Fatal("transaction should be in pool")
+			}
+		})
+	}
+}
+
 // setupRebroadcastTest creates a pool with rebroadcast config and adds a transaction.
 // Returns the pool, key, sender address, and the added transaction.
 func setupRebroadcastTest(t *testing.T, interval, maxAge time.Duration, batchSize int) (*LegacyPool, *ecdsa.PrivateKey, common.Address, *types.Transaction) {
@@ -5560,6 +5775,7 @@ func TestRebroadcastLoopIntegration(t *testing.T) {
 		if event.Txs[0].Hash() != tx.Hash() {
 			t.Errorf("wrong transaction hash in rebroadcast event")
 		}
+		pool.RebroadcastAcknowledgement(event.Txs)([]common.Hash{tx.Hash()})
 	case <-time.After(500 * time.Millisecond):
 		t.Error("timeout waiting for rebroadcast event")
 	}
@@ -5571,5 +5787,47 @@ func TestRebroadcastLoopIntegration(t *testing.T) {
 
 	if !tracked {
 		t.Error("transaction should be tracked in lastRebroadcast after rebroadcast")
+	}
+}
+
+// TestDroppedConditionalTxDemotesFollowers: when a conditional (PIP-15) tx is
+// dropped from the middle of the pending list because its options no longer
+// hold, the account's higher-nonce transactions behind it are no longer
+// executable and must be moved back to the queue, exactly as Filter does for
+// unpayable transactions. Leaving them in pending strands them behind a nonce
+// gap that only the front-of-list check would catch.
+func TestDroppedConditionalTxDemotesFollowers(t *testing.T) {
+	t.Parallel()
+
+	pool, key := setupConditionalPool(t, true, DefaultConfig.ConditionalSlots)
+
+	// The test chain's head has Time == 0, so a TimestampMin of 1 is a
+	// condition that never holds once the pool re-validates the options.
+	first := transaction(0, 100000, key)
+	conditional := transaction(1, 100000, key)
+	minTs := uint64(1)
+	conditional.PutOptions(&types.OptionsPIP15{TimestampMin: &minTs})
+	follower := transaction(2, 100000, key)
+
+	if errs := pool.addRemotesSync([]*types.Transaction{first, conditional, follower}); errs[0] != nil || errs[1] != nil || errs[2] != nil {
+		t.Fatalf("failed to add transactions: %v", errs)
+	}
+	if pending, queued := pool.Stats(); pending != 3 || queued != 0 {
+		t.Fatalf("before reset: pending %d, queued %d, want 3 pending", pending, queued)
+	}
+
+	<-pool.requestReset(nil, nil)
+
+	if pool.all.Get(conditional.Hash()) != nil {
+		t.Fatalf("conditional transaction with an unsatisfiable option should have been dropped")
+	}
+	if pool.all.Get(follower.Hash()) == nil {
+		t.Fatalf("follower transaction should still be in the pool")
+	}
+	if pending, queued := pool.Stats(); pending != 1 || queued != 1 {
+		t.Fatalf("after reset: pending %d, queued %d, want nonce 0 pending and the follower demoted to the queue", pending, queued)
+	}
+	if err := validatePoolInternals(pool); err != nil {
+		t.Fatalf("pool internal state corrupted: %v", err)
 	}
 }

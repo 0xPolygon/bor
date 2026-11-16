@@ -189,6 +189,13 @@ type Message struct {
 
 // TransactionToMessage converts a transaction into a Message.
 func TransactionToMessage(tx *types.Transaction, s types.Signer, baseFee *big.Int) (*Message, error) {
+	msg := TransactionToMessageWithVerifiedSender(tx, common.Address{}, baseFee)
+	sender, err := types.Sender(s, tx)
+	msg.From = sender
+	return msg, err
+}
+
+func TransactionToMessageWithVerifiedSender(tx *types.Transaction, sender common.Address, baseFee *big.Int) *Message {
 	msg := &Message{
 		Nonce:                 tx.Nonce(),
 		GasLimit:              tx.Gas(),
@@ -204,6 +211,7 @@ func TransactionToMessage(tx *types.Transaction, s types.Signer, baseFee *big.In
 		SkipTransactionChecks: false,
 		BlobHashes:            tx.BlobHashes(),
 		BlobGasFeeCap:         tx.BlobGasFeeCap(),
+		From:                  sender,
 	}
 	// If baseFee provided, set gasPrice to effectiveGasPrice.
 	if baseFee != nil {
@@ -213,10 +221,7 @@ func TransactionToMessage(tx *types.Transaction, s types.Signer, baseFee *big.In
 		}
 	}
 
-	var err error
-	msg.From, err = types.Sender(s, tx)
-
-	return msg, err
+	return msg
 }
 
 // ApplyMessage computes the new state by applying the given message
@@ -428,19 +433,8 @@ func (st *stateTransition) preCheck() error {
 		}
 	}
 
-	if st.evm.ChainConfig().IsCancun(st.evm.Context.BlockNumber) {
-		if st.blobGasUsed() > 0 {
-			// Skip the checks if gas fields are zero and blobBaseFee was explicitly disabled (eth_call)
-			skipCheck := st.evm.Config.NoBaseFee && msg.BlobGasFeeCap.BitLen() == 0
-			if !skipCheck {
-				// This will panic if blobBaseFee is nil, but blobBaseFee presence
-				// is verified as part of header validation.
-				if msg.BlobGasFeeCap.Cmp(st.evm.Context.BlobBaseFee) < 0 {
-					return fmt.Errorf("%w: address %v blobGasFeeCap: %v, blobBaseFee: %v", ErrBlobFeeCapTooLow,
-						msg.From.Hex(), msg.BlobGasFeeCap, st.evm.Context.BlobBaseFee)
-				}
-			}
-		}
+	if err := st.checkBlobFeeCap(); err != nil {
+		return err
 	}
 	// Check that EIP-7702 authorization list signatures are well formed.
 	if msg.SetCodeAuthorizations != nil {
@@ -452,6 +446,28 @@ func (st *stateTransition) preCheck() error {
 		}
 	}
 	return st.buyGas()
+}
+
+func (st *stateTransition) checkBlobFeeCap() error {
+	msg := st.msg
+	if !st.evm.ChainConfig().IsCancun(st.evm.Context.BlockNumber) || st.blobGasUsed() == 0 {
+		return nil
+	}
+	// Bor activates Cancun without a blob schedule, so BlobBaseFee is nil and
+	// blob transactions cannot be priced. This runs before the NoBaseFee skip
+	// because buyGas still multiplies by BlobBaseFee.
+	if st.evm.Context.BlobBaseFee == nil {
+		return fmt.Errorf("%w: address %v", ErrNoBlobBaseFee, msg.From.Hex())
+	}
+	// Skip the checks if gas fields are zero and blobBaseFee was explicitly disabled (eth_call)
+	if st.evm.Config.NoBaseFee && msg.BlobGasFeeCap.BitLen() == 0 {
+		return nil
+	}
+	if msg.BlobGasFeeCap.Cmp(st.evm.Context.BlobBaseFee) < 0 {
+		return fmt.Errorf("%w: address %v blobGasFeeCap: %v, blobBaseFee: %v", ErrBlobFeeCapTooLow,
+			msg.From.Hex(), msg.BlobGasFeeCap, st.evm.Context.BlobBaseFee)
+	}
+	return nil
 }
 
 // execute will transition the state by applying the current message and

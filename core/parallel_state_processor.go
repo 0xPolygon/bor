@@ -23,6 +23,7 @@ import (
 	"math/big"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/holiman/uint256"
@@ -92,15 +93,9 @@ type ExecutionTask struct {
 	totalUsedGas               *uint64
 	receipts                   *types.Receipts
 	allLogs                    *[]*types.Log
-
-	// length of dependencies          -> 2 + k (k = a whole number)
-	// first 2 element in dependencies -> transaction index, and flag representing if delay is allowed or not
-	//                                       (0 -> delay is not allowed, 1 -> delay is allowed)
-	// next k elements in dependencies -> transaction indexes on which transaction i is dependent on
-	dependencies []int
-	coinbase     common.Address
-	blockContext vm.BlockContext
-	jumpDests    vm.JumpDestCache
+	coinbase                   common.Address
+	blockContext               vm.BlockContext
+	jumpDests                  vm.JumpDestCache
 }
 
 func (task *ExecutionTask) Execute(mvh *blockstm.MVHashMap, incarnation int) (err error) {
@@ -196,7 +191,7 @@ func (task *ExecutionTask) Hash() common.Hash {
 }
 
 func (task *ExecutionTask) Dependencies() []int {
-	return task.dependencies
+	return nil
 }
 
 func (task *ExecutionTask) Settle() {
@@ -326,7 +321,7 @@ func (p *ParallelStateProcessor) chainConfig() *params.ChainConfig {
 func (p *ParallelStateProcessor) maybeRerunWithoutFeeDelay(tasks []blockstm.ExecTask,
 	statedb, backupStateDB *state.StateDB, shouldDelayFeeCal *bool,
 	allLogs *[]*types.Log, receipts *types.Receipts, usedGas **uint64,
-	metadata bool, interruptCtx context.Context) (error, bool) {
+	interruptCtx context.Context) (error, bool) {
 	needsRerun := false
 	for _, task := range tasks {
 		if task.(*ExecutionTask).shouldRerunWithoutFeeDelay {
@@ -349,7 +344,7 @@ func (p *ParallelStateProcessor) maybeRerunWithoutFeeDelay(tasks []blockstm.Exec
 		et.receipts = receipts
 		et.totalUsedGas = *usedGas
 	}
-	_, err := blockstm.ExecuteParallel(tasks, false, metadata, p.bc.parallelSpeculativeProcesses, interruptCtx)
+	_, err := blockstm.ExecuteParallel(tasks, false, false, p.bc.parallelSpeculativeProcesses, interruptCtx)
 	return err, true
 }
 
@@ -407,7 +402,6 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 		blockTime   = block.Time()
 		allLogs     []*types.Log
 		usedGas     = new(uint64)
-		metadata    bool
 	)
 
 	// Set an empty context if nil
@@ -424,19 +418,6 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 	sharedJumpDests := vm.NewSyncJumpDestCache()
 
 	shouldDelayFeeCal := true
-
-	blockTxDependency := block.GetTxDependency()
-
-	deps := GetDeps(blockTxDependency)
-
-	if !VerifyDeps(deps) || len(blockTxDependency) != len(block.Transactions()) {
-		blockTxDependency = nil
-		deps = make(map[int][]int)
-	}
-
-	if blockTxDependency != nil {
-		metadata = true
-	}
 
 	blockContext := NewEVMBlockContext(header, p.bc, author)
 	coinbase := blockContext.Coinbase
@@ -492,7 +473,6 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 			totalUsedGas:      usedGas,
 			receipts:          &receipts,
 			allLogs:           &allLogs,
-			dependencies:      deps[i],
 			coinbase:          coinbase,
 			blockContext:      blockContext,
 			jumpDests:         sharedJumpDests,
@@ -504,10 +484,7 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 	backupStateDB := statedb.Copy()
 
 	profile := false
-
-	var result blockstm.ParallelExecutionResult
-
-	result, err = blockstm.ExecuteParallel(tasks, profile, metadata, p.bc.parallelSpeculativeProcesses, interruptCtx)
+	result, err := blockstm.ExecuteParallel(tasks, profile, false, p.bc.parallelSpeculativeProcesses, interruptCtx)
 
 	if err == nil && profile && result.Deps != nil {
 		_, weight := result.Deps.LongestPath(*result.Stats)
@@ -522,7 +499,7 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 	}
 
 	if rerunErr, rerun := p.maybeRerunWithoutFeeDelay(tasks, statedb, backupStateDB,
-		&shouldDelayFeeCal, &allLogs, &receipts, &usedGas, metadata, interruptCtx); rerun {
+		&shouldDelayFeeCal, &allLogs, &receipts, &usedGas, interruptCtx); rerun {
 		err = rerunErr
 	}
 
@@ -561,38 +538,6 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 		Logs:     allLogs,
 		GasUsed:  *usedGas,
 	}, nil
-}
-
-func GetDeps(txDependency [][]uint64) map[int][]int {
-	deps := make(map[int][]int)
-
-	for i := 0; i <= len(txDependency)-1; i++ {
-		deps[i] = []int{}
-
-		for j := 0; j <= len(txDependency[i])-1; j++ {
-			deps[i] = append(deps[i], int(txDependency[i][j]))
-		}
-	}
-
-	return deps
-}
-
-// returns true if dependencies are correct
-func VerifyDeps(deps map[int][]int) bool {
-	// number of transactions in the block
-	n := len(deps)
-
-	// Handle out-of-range and circular dependency problem
-	for i := 0; i <= n-1; i++ {
-		val := deps[i]
-		for _, depTx := range val {
-			if depTx < 0 || depTx >= n || depTx >= i {
-				return false
-			}
-		}
-	}
-
-	return true
 }
 
 // ---------------------------------------------------------------------------
@@ -642,10 +587,19 @@ type v2Env struct {
 	jumpDests vm.JumpDestCache
 	safeBase  *state.SafeBase             // shared across all workers (with read cache)
 	recycleCh chan *state.ParallelStateDB // pool of reusable PDBs
+	// interrupt stops every in-flight EVM at its next opcode once the
+	// executor's context is done; the executor alone only notices
+	// cancellation between transactions.
+	interrupt   atomic.Bool
+	writeBudget *blockstm.WriteBudget // nil means unbounded
 }
 
 func (e *v2Env) BaseNonce(addr common.Address) uint64 {
 	return e.base.GetNonce(addr)
+}
+
+func (e *v2Env) BaseCodeSize(addr common.Address) int {
+	return e.base.GetCodeSize(addr)
 }
 
 // Shared closures — allocated once, reused across all workers.
@@ -679,8 +633,10 @@ func (e *v2Env) Execute(task blockstm.V2Task, workerID int, incarnation int,
 		evm.SetJumpDestCache(e.jumpDests)
 	}
 	evm.SetTxContext(NewEVMTxContext(t.msg))
+	evm.SetInterrupt(&e.interrupt)
 
 	e.applyMessage(t, evm, pdb)
+	pdb.ChargePendingWrites()
 	return pdb
 }
 
@@ -714,6 +670,7 @@ func (e *v2Env) preparePDB(t *v2Task, incarnation int, senderNonces map[common.A
 		pdb.FeeLogFn = nil
 	}
 	pdb.DeferMVWrites = deferWrites
+	pdb.WriteBudget = e.writeBudget
 	pdb.EnableReadTracking()
 	return pdb
 }
@@ -778,6 +735,13 @@ type V2ExecutionResult struct {
 	// behaviour at core/state_processor.go:222.
 	ExecErrIdx int
 	ExecErr    error
+	// ReadErr is the first database read failure observed either by the
+	// settle-path statedb or by a SETTLED incarnation of some tx (speculative
+	// incarnations that read outside the canonical state and were invalidated
+	// don't count — see ParallelStateDB.BaseReadErr). The caller must discard
+	// the result because StateDB getters return zero-ish values after
+	// recording read errors.
+	ReadErr error
 	*blockstm.V2ExecutionResult
 }
 
@@ -786,6 +750,9 @@ type V2ExecutionResult struct {
 //
 // If tasks[i].Msg is nil, TransactionToMessage is called in parallel
 // (signature recovery across all txs concurrently).
+//
+// writeBudget, if non-nil, is shared by every incarnation. Once ctx is done,
+// in-flight EVMs are interrupted and the result must be discarded.
 func ExecuteV2BlockSTM(
 	ctx context.Context,
 	tasks []V2Task,
@@ -800,6 +767,7 @@ func ExecuteV2BlockSTM(
 	numWorkers int,
 	finalDB *state.StateDB,
 	conflictAddrs map[common.Address]bool,
+	writeBudget *blockstm.WriteBudget,
 ) *V2ExecutionResult {
 	if idx, err := recoverTaskMessages(tasks, chainConfig, blockCtx); err != nil {
 		return &V2ExecutionResult{
@@ -819,12 +787,26 @@ func ExecuteV2BlockSTM(
 	// missing this setup, so make the wrapper defensive and idempotent.
 	base.EnableConcurrentReads()
 
+	// Start the witness read-set prewalker only after concurrent reads are
+	// enabled: it shares the trie reader with the workers, and starting it
+	// before the enable write above would be an unsynchronized read/write
+	// on the same reader. It walks cached keys into the witness while the
+	// workers execute, keeping the settle drain in CollectStateWitness off
+	// the block's critical path. No-op when no witness is being recorded.
+	if finalDB != nil {
+		stopPrewalk := finalDB.StartWitnessReadSetPrewalk()
+		defer stopPrewalk()
+	}
+
 	itasks := make([]blockstm.V2Task, len(tasks))
 	for i := range tasks {
 		itasks[i] = &v2Task{index: tasks[i].Index, tx: tasks[i].Tx, msg: tasks[i].Msg}
 	}
 
 	env := newV2Env(base, store, bals, blockCtx, vmConfig, chainConfig, gasLimit, numWorkers)
+	env.writeBudget = writeBudget
+	stopInterrupt := context.AfterFunc(ctx, func() { env.interrupt.Store(true) })
+	defer stopInterrupt()
 
 	var receipts types.Receipts
 	var allLogs []*types.Log
@@ -832,12 +814,20 @@ func ExecuteV2BlockSTM(
 	panickedIdx := -1
 	execErrIdx := -1
 	var execErr error
+	var settleReadErr error
 	var settleFn blockstm.V2SettleFn
 	if finalDB != nil {
-		settleFn = newV2SettleFn(tasks, env, finalDB, blockCtx, blockHash, chainConfig, &receipts, &allLogs, &totalUsedGas, &panickedIdx, &execErrIdx, &execErr)
+		settleFn = newV2SettleFn(tasks, env, finalDB, blockCtx, blockHash, chainConfig, &receipts, &allLogs, &totalUsedGas, &panickedIdx, &execErrIdx, &execErr, &settleReadErr)
 	}
 
 	raw := blockstm.ExecuteV2BlockSTM(ctx, itasks, env, blockCtx.Coinbase, numWorkers, conflictAddrs, settleFn)
+	// Reads by the settle/finalize path go directly through base; its error
+	// is unconditionally fatal. Per-worker base read failures are judged per
+	// settled incarnation below — a speculative incarnation chasing stale
+	// values may legitimately read outside the canonical state (on
+	// witness-backed replay such nodes simply don't exist) and is then
+	// invalidated, so env.safeBase.Error() would over-trigger here.
+	readErr := base.Error()
 
 	// V2 worker code reads land in env.safeBase.codeCache (each blob loaded
 	// once, deduplicated by sync.Map). When witness collection is on, dump
@@ -856,9 +846,19 @@ func ExecuteV2BlockSTM(
 			pdbs[i] = s.(*state.ParallelStateDB)
 		}
 	}
-	// If settle never ran (finalDB nil), still surface a panic / exec error
-	// from the PDBs so the caller can fail the block rather than commit
-	// partial state.
+	// Worker base-read failures are checked inside the settle callback, the
+	// only point where a pdb is provably the settled incarnation. Scanning
+	// raw.States here instead would read recycled pool objects: settlement
+	// returns each pdb to the pool, a later tx's execution Resets and reuses
+	// it, and the old raw.States slot keeps pointing at the mutated object —
+	// so a speculative error from a LATER tx shows up under an earlier index.
+	if readErr == nil {
+		readErr = settleReadErr
+	}
+	// If settle never ran (finalDB nil), surface panics / exec errors / base
+	// read failures from the PDBs so the caller can fail the block rather
+	// than commit partial state. Safe in this mode only: without settlement
+	// nothing recycles a pdb that raw.States still references.
 	if finalDB == nil {
 		for i, p := range pdbs {
 			if p == nil {
@@ -871,6 +871,9 @@ func ExecuteV2BlockSTM(
 				execErrIdx = i
 				execErr = p.ExecErr
 			}
+			if p.BaseReadErr != nil && readErr == nil {
+				readErr = p.BaseReadErr
+			}
 		}
 	}
 
@@ -882,6 +885,7 @@ func ExecuteV2BlockSTM(
 		PanickedIdx:       panickedIdx,
 		ExecErrIdx:        execErrIdx,
 		ExecErr:           execErr,
+		ReadErr:           readErr,
 		V2ExecutionResult: raw,
 	}
 }
@@ -932,19 +936,6 @@ func recoverTaskMessages(tasks []V2Task, chainConfig *params.ChainConfig, blockC
 	return firstIdx, firstErr
 }
 
-// wireStorageCaches gives SafeBase the prefetcher's trie cache (fast path)
-// and a separate V2-owned overlay for pre-block system-call writes. The
-// overlay can't live in the trie cache: trieReader.Storage's non-atomic
-// Load→read→Store can land after the overlay and clobber it with a zero.
-func wireStorageCaches(base *state.StateDB, sb *state.SafeBase) {
-	if sc := base.StorageCache(); sc != nil {
-		sb.SharedStorageCache = sc
-	}
-	overlay := new(sync.Map)
-	base.OverlayPendingStorageInto(overlay)
-	sb.OverlayStorageCache = overlay
-}
-
 // newV2Env builds a v2Env wired up with the shared SafeBase, jumpDest cache,
 // and PDB recycle pool.
 func newV2Env(base *state.StateDB, store *blockstm.MVStore, bals *blockstm.MVBalanceStore,
@@ -955,7 +946,6 @@ func newV2Env(base *state.StateDB, store *blockstm.MVStore, bals *blockstm.MVBal
 		poolSize = 2
 	}
 	sharedSafeBase := state.NewSafeBase(base, poolSize)
-	wireStorageCaches(base, sharedSafeBase)
 	// Allocate the per-v2Env fallback only when the caller didn't supply a
 	// shared cache. Production (blockchain.go) sets vmConfig.SharedJumpDestCache
 	// on the prefetcher-warmed cache, so allocating here would just be dead
@@ -990,7 +980,7 @@ func newV2Env(base *state.StateDB, store *blockstm.MVStore, bals *blockstm.MVBal
 func newV2SettleFn(tasks []V2Task, env *v2Env, finalDB *state.StateDB,
 	blockCtx vm.BlockContext, blockHash common.Hash, chainConfig *params.ChainConfig,
 	receipts *types.Receipts, allLogs *[]*types.Log, totalUsedGas *uint64,
-	panickedIdx *int, execErrIdx *int, execErr *error) blockstm.V2SettleFn {
+	panickedIdx *int, execErrIdx *int, execErr *error, readErr *error) blockstm.V2SettleFn {
 	isByzantium := chainConfig.IsByzantium(blockCtx.BlockNumber)
 	isEIP158 := chainConfig.IsEIP158(blockCtx.BlockNumber)
 	return func(txIdx int, st blockstm.V2TxState) {
@@ -1009,6 +999,19 @@ func newV2SettleFn(tasks []V2Task, env *v2Env, finalDB *state.StateDB,
 			if *execErrIdx < 0 {
 				*execErrIdx = txIdx
 				*execErr = pdb.ExecErr
+			}
+			env.Recycle(st)
+			return
+		}
+		// This is the settled incarnation — a base read failure here means a
+		// zero-ish read reached consensus state, which must abort the block.
+		// Checked at settle time (not post-hoc over raw.States) because
+		// Recycle below hands the pdb to later txs for reuse; see the readErr
+		// note in ExecuteV2BlockSTM's caller. Speculative incarnations that
+		// failed a base read and were invalidated never reach this callback.
+		if pdb.BaseReadErr != nil {
+			if *readErr == nil {
+				*readErr = pdb.BaseReadErr
 			}
 			env.Recycle(st)
 			return
@@ -1061,6 +1064,48 @@ func buildV2Receipt(tx *types.Transaction, pdb *state.ParallelStateDB, msg *Mess
 // V2StateProcessor implements the Processor interface for production use.
 // ---------------------------------------------------------------------------
 
+// errV2WriteBudgetExhausted reports that speculative incarnations journaled
+// more writes than v2WriteLimit allows. The block may still be valid; the
+// caller must re-run it serially.
+var errV2WriteBudgetExhausted = errors.New("v2: speculative write budget exhausted")
+
+// v2WriteLimit bounds the entries all V2 incarnations of a block may charge
+// (see ParallelStateDB.WriteBudget). The densest canonical execution repeats a
+// warm call that runs no code, e.g. a STATICCALL to an absent account or a
+// CALL to a contract that stops: about 115 gas for 8 entries, one per 15 gas
+// (TestV2WriteDensityStaysUnderLimit). Refunds don't raise that per unit of
+// header gas, since every refunded unit was first spent on SSTOREs that charge
+// almost nothing. gasUsed/4 thus leaves canonical execution at least 3.5x
+// headroom for re-executions, and bounds what V2 retains, about 128 bytes per
+// entry, by the block's gas. Running past it only costs a serial re-run.
+func v2WriteLimit(gasUsed uint64) int64 {
+	return int64(gasUsed / 4)
+}
+
+// executeWithWriteBudget runs the block's tasks with a write budget sized from
+// the block's gas used. It returns an error, and the result must be discarded,
+// when execution was cut short: some incarnations were then interrupted mid-tx
+// and finalDB may hold their partial effects.
+func (p *V2StateProcessor) executeWithWriteBudget(ctx context.Context, block *types.Block, tasks []V2Task,
+	readBase *state.StateDB, store *blockstm.MVStore, bals *blockstm.MVBalanceStore, blockCtx vm.BlockContext,
+	cfg vm.Config, config *params.ChainConfig, finalDB *state.StateDB) (*V2ExecutionResult, error) {
+	execCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	budget := blockstm.NewWriteBudget(p.writeLimit(block.GasUsed()), cancel)
+	result := ExecuteV2BlockSTM(execCtx, tasks, readBase, store, bals, blockCtx, block.Hash(), cfg, config,
+		block.GasLimit(), p.numWorkers, finalDB, p.conflictAddrs, budget)
+	p.conflictAddrs = collectVFailToAddrs(tasks, result.VFailIdxs)
+
+	if budget.Exhausted() {
+		return nil, errV2WriteBudgetExhausted
+	}
+	if err := execCtx.Err(); err != nil {
+		return nil, fmt.Errorf("v2: execution interrupted: %w", err)
+	}
+	return result, nil
+}
+
 // V2StateProcessor processes blocks using V2 BlockSTM parallel execution.
 type V2StateProcessor struct {
 	chain      ChainContext
@@ -1069,6 +1114,7 @@ type V2StateProcessor struct {
 	// conflictAddrs tracks To addresses that caused validation failures in
 	// recent blocks. Used to chain cross-contract txs that share indirect state.
 	conflictAddrs map[common.Address]bool
+	writeLimit    func(gasUsed uint64) int64
 }
 
 // NewV2StateProcessor creates a new V2 parallel state processor.
@@ -1086,6 +1132,7 @@ func NewV2StateProcessor(chain ChainContext, bc *BlockChain, numWorkers int) *V2
 		chain:      chain,
 		bc:         bc,
 		numWorkers: numWorkers,
+		writeLimit: v2WriteLimit,
 	}
 }
 
@@ -1133,7 +1180,7 @@ func (p *V2StateProcessor) Process(block *types.Block, statedb *state.StateDB, c
 	// execution — the produced witness would land empty.
 	prevWitness := finalDB.Witness()
 	finalDB.StopPrefetcher()
-	finalDB.StartPrefetcher("v2-settle", prevWitness, nil)
+	finalDB.StartPrefetcher("v2_settle", prevWitness, nil)
 	finalDB.SkipTimers()
 	// Copy() deep-copies the witness; re-share so BLOCKHASH writes reach finalDB.
 	readBase := statedb.Copy()
@@ -1143,11 +1190,11 @@ func (p *V2StateProcessor) Process(block *types.Block, statedb *state.StateDB, c
 
 	tCopy := time.Now()
 
-	result := ExecuteV2BlockSTM(interruptCtx, tasks, readBase, store, bals, blockCtx, block.Hash(), cfg, config,
-		block.GasLimit(), p.numWorkers, finalDB, p.conflictAddrs)
-
+	result, err := p.executeWithWriteBudget(interruptCtx, block, tasks, readBase, store, bals, blockCtx, cfg, config, finalDB)
+	if err != nil {
+		return nil, err
+	}
 	tExec := time.Now()
-	p.conflictAddrs = collectVFailToAddrs(tasks, result.VFailIdxs)
 
 	// Refuse to commit a partially-applied block: a panicked PDB had its
 	// settle skipped, so finalDB is missing that tx's effects. Returning an
@@ -1159,6 +1206,9 @@ func (p *V2StateProcessor) Process(block *types.Block, statedb *state.StateDB, c
 	if result.ValidationPanic != nil {
 		return nil, fmt.Errorf("v2: validation panic: %v", result.ValidationPanic)
 	}
+	if result.ReadErr != nil {
+		return nil, fmt.Errorf("v2: base read: %w", result.ReadErr)
+	}
 	// Same logic for ApplyMessage consensus-level errors (bad nonce,
 	// insufficient upfront gas, intrinsic gas underflow, etc.). Serial returns
 	// the underlying error from state_processor.go:222 and aborts the block;
@@ -1167,14 +1217,6 @@ func (p *V2StateProcessor) Process(block *types.Block, statedb *state.StateDB, c
 	if result.ExecErrIdx >= 0 {
 		return nil, fmt.Errorf("v2: tx %d apply message: %w", result.ExecErrIdx, result.ExecErr)
 	}
-
-	// V2 worker reads went through pool copies that share `statedb`'s reader
-	// by reference, so the trie tracers on that reader hold every node V2
-	// touched. finalDB.IntermediateRoot only iterates finalDB.stateObjects
-	// for witness collection, missing addresses that were ONLY read (never
-	// settled). Pull the read-side witness directly from the shared reader
-	// here so the produced witness is complete.
-	statedb.CollectStateWitness()
 
 	return p.finalizeV2Block(block, statedb, header, config, tasks, result,
 		tProcess, tSetup, tCopy, tExec)
@@ -1198,6 +1240,16 @@ func (p *V2StateProcessor) finalizeV2Block(block *types.Block, statedb *state.St
 	// (state sync contract, validator rewards) so IntermediateRoot
 	// doesn't need to load them from pebble synchronously.
 	statedb.FinaliseFastWithPrefetch(true)
+
+	// V2 worker reads went through pool copies that share `statedb`'s reader
+	// by reference, so the trie tracers on that reader hold every node V2
+	// touched. finalDB.IntermediateRoot only iterates finalDB.stateObjects
+	// for witness collection, missing addresses that were ONLY read (never
+	// settled). Pull the read-side witness directly from the shared reader.
+	// This must run after engine.Finalize: its state reads (state sync at
+	// sprint boundaries) are part of the witness contract too, and on nodes
+	// with a flat reader they are served without ever reaching a trie tracer.
+	statedb.CollectStateWitness()
 	tFinalize := time.Now()
 
 	logV2BlockStats(block, tasks, result, tProcess, tSetup, tCopy, tExec, tFinalize)
@@ -1205,7 +1257,7 @@ func (p *V2StateProcessor) finalizeV2Block(block *types.Block, statedb *state.St
 	allLogs := result.Logs
 	if config.Bor != nil && config.Bor.IsMadhugiri(block.Number()) {
 		if len(block.Transactions()) != len(receipts) {
-			return nil, fmt.Errorf("err in bor.Finalize: %w", ErrStateSyncProcessing)
+			return nil, fmt.Errorf("%w: receipt count mismatch, txs=%d receipts=%d", ErrStateSyncMismatch, len(block.Transactions()), len(receipts))
 		}
 		if receiptsCountBeforeFinalize+1 == len(receipts) {
 			allLogs = append(allLogs, receipts[len(receipts)-1].Logs...)

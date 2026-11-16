@@ -324,11 +324,25 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.TxPool.LifeTime,
 		Group:   "Transaction Pool",
 	})
+	f.DurationFlag(&flagset.DurationFlag{
+		Name:    "txpool.strandedlifetime",
+		Usage:   "Maximum amount of time a pending transaction can stay below the base fee before its account's pending transactions are evicted (0 disables)",
+		Value:   &c.cliConfig.TxPool.StrandedLifetime,
+		Default: c.cliConfig.TxPool.StrandedLifetime,
+		Group:   "Transaction Pool",
+	})
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "txpool.filtered-addresses",
 		Usage:   "Path to the file containing a newline-separated list of addresses whose transactions will be filtered",
 		Value:   &c.cliConfig.TxPool.FilteredAddressesFile,
 		Default: c.cliConfig.TxPool.FilteredAddressesFile,
+		Group:   "Transaction Pool",
+	})
+	f.DurationFlag(&flagset.DurationFlag{
+		Name:    "txpool.filter-reload",
+		Usage:   "Interval at which the filtered addresses file is re-read and applied without a restart (0 disables)",
+		Value:   &c.cliConfig.TxPool.FilterReload,
+		Default: c.cliConfig.TxPool.FilterReload,
 		Group:   "Transaction Pool",
 	})
 	f.BoolFlag(&flagset.BoolFlag{
@@ -626,6 +640,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.Cache.PreloadRateLimit,
 		Group:   "Cache",
 	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "cache.addresscachepersist",
+		Usage:   "Persist the address-specific caches to disk on shutdown and reload them on startup, skipping the preload walk",
+		Value:   &c.cliConfig.Cache.AddressCachePersist,
+		Default: c.cliConfig.Cache.AddressCachePersist,
+		Group:   "Cache",
+	})
 	f.Uint64Flag(&flagset.Uint64Flag{
 		Name:    "cache.triesinmemory",
 		Usage:   "Number of block states (tries) to keep in memory",
@@ -646,6 +667,27 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Value:   &c.cliConfig.Cache.TxLookupLimit,
 		Default: c.cliConfig.Cache.TxLookupLimit,
 		Group:   "Cache",
+	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "pipeline.enable-import-src",
+		Usage:   "Enable pipelined state root computation during block import: overlap SRC(N) with block N+1 tx execution",
+		Value:   &c.cliConfig.Pipeline.EnableImportSRC,
+		Default: c.cliConfig.Pipeline.EnableImportSRC,
+		Group:   "Pipeline",
+	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "pipeline.import-src-logs",
+		Usage:   "Enable verbose logging for pipelined import SRC",
+		Value:   &c.cliConfig.Pipeline.ImportSRCLogs,
+		Default: c.cliConfig.Pipeline.ImportSRCLogs,
+		Group:   "Pipeline",
+	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "pipeline.warm-snapshot",
+		Usage:   "Enable warm-node handoff from the execution-side trie prefetcher to the pipelined SRC when witnesses are produced; no effect when import SRC is disabled or witnesses are off",
+		Value:   &c.cliConfig.Pipeline.WarmSnapshot,
+		Default: c.cliConfig.Pipeline.WarmSnapshot,
+		Group:   "Pipeline",
 	})
 	f.IntFlag(&flagset.IntFlag{
 		Name:    "fdlimit",
@@ -775,6 +817,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Usage:   "Maximum allowed timeout for eth_sendRawTransactionSync (e.g. 5m)",
 		Value:   &c.cliConfig.JsonRPC.TxSyncMaxTimeout,
 		Default: c.cliConfig.JsonRPC.TxSyncMaxTimeout,
+		Group:   "JsonRPC",
+	})
+	f.IntFlag(&flagset.IntFlag{
+		Name:    "rpc.txsync.maxconcurrent",
+		Usage:   "Maximum eth_sendRawTransactionSync calls waiting for a receipt at once (0 = no limit)",
+		Value:   &c.cliConfig.JsonRPC.TxSyncMaxConcurrent,
+		Default: c.cliConfig.JsonRPC.TxSyncMaxConcurrent,
 		Group:   "JsonRPC",
 	})
 	f.BoolFlag(&flagset.BoolFlag{
@@ -981,6 +1030,7 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	})
 
 	// p2p options
+	c.peerReputationFlag(f)
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "bind",
 		Usage:   "Network binding address",
@@ -1452,5 +1502,68 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Group:   "P2P",
 	})
 
+	c.registerSequencerFlags(f)
+	c.registerConditionalTxPoolFlags(f)
+
 	return f
+}
+
+func (c *Command) registerSequencerFlags(f *flagset.Flagset) {
+	// An HCL/JSON config without a [sequencer] block decodes the field as
+	// nil (only TOML starts from DefaultConfig); register against the
+	// defaults so startup does not require the block to exist.
+	if c.cliConfig.Sequencer == nil {
+		c.cliConfig.Sequencer = DefaultConfig().Sequencer
+	}
+
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "sequencer.enabled",
+		Usage:   "Enable the sequence store integration (a mining node publishes the block lifecycle)",
+		Value:   &c.cliConfig.Sequencer.Enabled,
+		Default: c.cliConfig.Sequencer.Enabled,
+	})
+	f.StringFlag(&flagset.StringFlag{
+		Name:    "sequencer.publisher-endpoint",
+		Usage:   "Sequence store publisher service gRPC endpoint (publish stream)",
+		Value:   &c.cliConfig.Sequencer.PublisherEndpoint,
+		Default: c.cliConfig.Sequencer.PublisherEndpoint,
+	})
+	f.StringFlag(&flagset.StringFlag{
+		Name:    "sequencer.consumer-endpoint",
+		Usage:   "Sequence store consumer service gRPC endpoint (tail reads during reconciliation)",
+		Value:   &c.cliConfig.Sequencer.ConsumerEndpoint,
+		Default: c.cliConfig.Sequencer.ConsumerEndpoint,
+	})
+	f.DurationFlag(&flagset.DurationFlag{
+		Name:    "sequencer.poll",
+		Usage:   "Producer txpool poll cadence while a block is open (continuous building); 0 keeps the one-shot fill",
+		Value:   &c.cliConfig.Sequencer.Poll,
+		Default: c.cliConfig.Sequencer.Poll,
+	})
+}
+
+// registerConditionalTxPoolFlags registers the PIP-15 conditional transaction
+// flags of the transaction pool.
+func (c *Command) registerConditionalTxPoolFlags(f *flagset.Flagset) {
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "txpool.conditional",
+		Usage:   "Accept PIP-15 conditional transactions (bor_sendRawTransactionConditional). They are never gossiped, so only a block producer can include them",
+		Value:   &c.cliConfig.TxPool.Conditional,
+		Default: c.cliConfig.TxPool.Conditional,
+		Group:   "Transaction Pool",
+	})
+	f.DurationFlag(&flagset.DurationFlag{
+		Name:    "txpool.conditionallifetime",
+		Usage:   "Maximum amount of time a conditional transaction can stay in the pool",
+		Value:   &c.cliConfig.TxPool.ConditionalLifetime,
+		Default: c.cliConfig.TxPool.ConditionalLifetime,
+		Group:   "Transaction Pool",
+	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "txpool.conditionalslots",
+		Usage:   "Maximum number of known accounts and slots across all pooled conditional transactions",
+		Value:   &c.cliConfig.TxPool.ConditionalSlots,
+		Default: c.cliConfig.TxPool.ConditionalSlots,
+		Group:   "Transaction Pool",
+	})
 }

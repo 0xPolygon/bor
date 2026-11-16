@@ -85,12 +85,8 @@ func (b *EthAPIBackend) SetHead(number uint64) {
 }
 
 func (b *EthAPIBackend) HeaderByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Header, error) {
-	// Pending block is only known by the miner
 	if number == rpc.PendingBlockNumber {
-		if b.eth.miner == nil {
-			return nil, errors.New("pending block is not available")
-		}
-		block := b.eth.miner.PendingBlock()
+		block := b.PendingBlock()
 		if block == nil {
 			return nil, errors.New("pending block is not available")
 		}
@@ -158,12 +154,8 @@ func (b *EthAPIBackend) HeaderByHash(ctx context.Context, hash common.Hash) (*ty
 }
 
 func (b *EthAPIBackend) BlockByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Block, error) {
-	// Pending block is only known by the miner
 	if number == rpc.PendingBlockNumber {
-		if b.eth.miner == nil {
-			return nil, errors.New("pending block is not available")
-		}
-		block := b.eth.miner.PendingBlock()
+		block := b.PendingBlock()
 		if block == nil {
 			return nil, errors.New("pending block is not available")
 		}
@@ -268,16 +260,8 @@ func (b *EthAPIBackend) Pending() (*types.Block, types.Receipts, *state.StateDB)
 }
 
 func (b *EthAPIBackend) StateAndHeaderByNumber(ctx context.Context, number rpc.BlockNumber) (*state.StateDB, *types.Header, error) {
-	// Pending state is only known by the miner
 	if number == rpc.PendingBlockNumber {
-		if b.eth.miner == nil {
-			return nil, nil, errors.New("pending state is not available")
-		}
-		block, _, state := b.eth.miner.Pending()
-		if block == nil || state == nil {
-			return nil, nil, errors.New("pending state is not available")
-		}
-		return state, block.Header(), nil
+		return b.pendingStateAndHeader(ctx)
 	}
 	// Otherwise resolve the block number and return its state
 	header, err := b.HeaderByNumber(ctx, number)
@@ -297,6 +281,10 @@ func (b *EthAPIBackend) StateAndHeaderByNumber(ctx context.Context, number rpc.B
 		}
 	}
 	return stateDb, header, nil
+}
+
+func (b *EthAPIBackend) WaitForStateCommit(ctx context.Context, root common.Hash) error {
+	return b.eth.BlockChain().WaitForPipelinedStateCommit(ctx, root)
 }
 
 func (b *EthAPIBackend) StateAndHeaderByNumberOrHash(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (*state.StateDB, *types.Header, error) {
@@ -337,6 +325,20 @@ func (b *EthAPIBackend) HistoryPruningCutoff() uint64 {
 }
 
 func (b *EthAPIBackend) GetReceipts(ctx context.Context, hash common.Hash) (types.Receipts, error) {
+	if header := b.eth.blockchain.GetHeaderByHash(hash); header != nil &&
+		b.eth.blockchain.GetCanonicalHash(header.Number.Uint64()) == hash {
+		return b.eth.blockchain.GetReceiptsByHash(hash), nil
+	}
+	if block, receipts := b.sequencerPendingBlockAndReceipts(); block != nil && block.Hash() == hash {
+		return receipts, nil
+	}
+	if b.eth.miner != nil {
+		if block := b.eth.miner.PendingBlock(); block != nil && block.Hash() == hash {
+			if snapshot, receipts, _ := b.eth.miner.Pending(); snapshot != nil && snapshot.Hash() == hash {
+				return receipts, nil
+			}
+		}
+	}
 	return b.eth.blockchain.GetReceiptsByHash(hash), nil
 }
 
@@ -380,6 +382,9 @@ func (b *EthAPIBackend) SubscribeRemovedLogsEvent(ch chan<- core.RemovedLogsEven
 }
 
 func (b *EthAPIBackend) SubscribePendingLogsEvent(ch chan<- []*types.Log) event.Subscription {
+	if b.eth.seqConsumer != nil {
+		return b.eth.seqConsumer.SubscribePendingLogs(ch)
+	}
 	if b.eth.miner != nil {
 		return b.eth.miner.SubscribePendingLogs(ch)
 	} else {
@@ -414,7 +419,8 @@ func (b *EthAPIBackend) SendTx(ctx context.Context, signedTx *types.Transaction)
 	// very little chance it will be accepted later (e.g., the gas price is below the
 	// configured minimum, or the sender has insufficient funds to cover the cost),
 	// propagate the error to the user.
-	if err != nil && !locals.IsTemporaryReject(err) {
+	// Conditional txs are not tracked, so a temporary reject is final for them.
+	if err != nil && (!locals.IsTemporaryReject(err) || signedTx.GetOptions() != nil) {
 		return err
 	}
 	// No error will be returned to user if the transaction fails with a temporary
@@ -474,13 +480,41 @@ func (b *EthAPIBackend) GetCanonicalTransaction(txHash common.Hash) (bool, *type
 	return true, tx, lookup.BlockHash, lookup.BlockIndex, lookup.Index
 }
 
+func (b *EthAPIBackend) GetPreconfTransaction(txHash common.Hash) (*types.Transaction, *types.Receipt, bool) {
+	if b.eth.seqConsumer != nil {
+		return b.eth.seqConsumer.LookupPreconf(txHash)
+	}
+	return nil, nil, false
+}
+
+func (b *EthAPIBackend) SubscribePreconfReceipts(ch chan<- core.PreconfReceiptsEvent) event.Subscription {
+	if b.eth.seqConsumer != nil {
+		return b.eth.seqConsumer.SubscribePreconfReceipts(ch)
+	}
+	return event.NewSubscription(func(quit <-chan struct{}) error {
+		<-quit
+		return nil
+	})
+}
+
 // TxIndexDone returns true if the transaction indexer has finished indexing.
 func (b *EthAPIBackend) TxIndexDone() bool {
 	return b.eth.blockchain.TxIndexDone()
 }
 
 func (b *EthAPIBackend) GetPoolNonce(ctx context.Context, addr common.Address) (uint64, error) {
-	return b.eth.txPool.PoolNonce(addr), nil
+	poolNonce := b.eth.txPool.PoolNonce(addr)
+	if b.eth.seqConsumer == nil {
+		return poolNonce, nil
+	}
+	pendingNonce, ok, err := b.eth.seqConsumer.PendingNonce(addr)
+	if err != nil {
+		return 0, err
+	}
+	if !ok {
+		return poolNonce, nil
+	}
+	return max(poolNonce, pendingNonce), nil
 }
 
 func (b *EthAPIBackend) Stats() (runnable int, blocked int) {
@@ -748,6 +782,10 @@ func (b *EthAPIBackend) RPCTxSyncMaxTimeout() time.Duration {
 	return b.eth.config.TxSyncMaxTimeout
 }
 
+func (b *EthAPIBackend) RPCTxSyncMaxConcurrent() int {
+	return b.eth.config.TxSyncMaxConcurrent
+}
+
 // Etherbase returns the address that mining rewards will be sent to.
 func (b *EthAPIBackend) Etherbase() (common.Address, error) {
 	return b.eth.Etherbase()
@@ -799,7 +837,30 @@ func (b *EthAPIBackend) PreconfEnabled() bool {
 	return b.relay.PreconfEnabled()
 }
 func (b *EthAPIBackend) SubmitTxForPreconf(tx *types.Transaction) error {
+	if b.eth != nil {
+		if consumer, ok := b.eth.seqConsumer.(interface {
+			CachePreconfTransaction(*types.Transaction) error
+		}); ok {
+			if err := consumer.CachePreconfTransaction(tx); err != nil {
+				return err
+			}
+		}
+	}
+	if !b.relay.PreconfRelayAvailable() {
+		return nil
+	}
 	return b.relay.SubmitPreconfTransaction(tx)
+}
+
+func (b *EthAPIBackend) SubmitTxForPreconfSync(ctx context.Context, tx *types.Transaction) error {
+	if consumer, ok := b.eth.seqConsumer.(interface {
+		CachePreconfTransaction(*types.Transaction) error
+	}); ok {
+		if err := consumer.CachePreconfTransaction(tx); err != nil {
+			return err
+		}
+	}
+	return b.relay.SubmitPreconfTransactionSync(ctx, tx)
 }
 
 func (b *EthAPIBackend) CheckPreconfStatus(hash common.Hash) (bool, error) {
@@ -808,6 +869,10 @@ func (b *EthAPIBackend) CheckPreconfStatus(hash common.Hash) (bool, error) {
 
 func (b *EthAPIBackend) PrivateTxEnabled() bool {
 	return b.relay.PrivateTxEnabled()
+}
+
+func (b *EthAPIBackend) ConditionalTxsEnabled() bool {
+	return b.eth.config.TxPool.ConditionalTxs
 }
 
 func (b *EthAPIBackend) SubmitPrivateTx(tx *types.Transaction) error {
