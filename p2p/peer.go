@@ -23,6 +23,7 @@ import (
 	"net"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common/mclock"
@@ -104,10 +105,13 @@ type PeerEvent struct {
 
 // Peer represents a connected remote node.
 type Peer struct {
-	rw      *conn
-	running map[string]*protoRW
-	log     log.Logger
-	created mclock.AbsTime
+	rw                   *conn
+	running              map[string]*protoRW
+	log                  log.Logger
+	created              mclock.AbsTime
+	clock                mclock.Clock
+	lastProtocolActivity atomic.Int64
+	protocolStarted      atomic.Bool
 
 	wg       sync.WaitGroup
 	protoErr chan error
@@ -260,13 +264,15 @@ func newPeer(log log.Logger, conn *conn, protocols []Protocol) *Peer {
 		rw:       conn,
 		running:  protomap,
 		created:  mclock.Now(),
-		disc:     make(chan DiscReason),
+		clock:    mclock.System{},
+		disc:     make(chan DiscReason, 1),
 		protoErr: make(chan error, len(protomap)+1), // protocols + pingLoop
 		closed:   make(chan struct{}),
 		pingRecv: make(chan struct{}, 16),
 		pongRecv: make(chan struct{}, 1),
 		log:      log.New("id", conn.node.ID(), "conn", conn.flags),
 	}
+	p.lastProtocolActivity.Store(int64(p.created))
 	return p
 }
 
@@ -275,6 +281,8 @@ func (p *Peer) Log() log.Logger {
 }
 
 func (p *Peer) run() (remoteRequested bool, err error) {
+	p.lastProtocolActivity.Store(int64(p.clock.Now()))
+	p.protocolStarted.Store(true)
 	var (
 		writeStart = make(chan struct{}, 1)
 		writeErr   = make(chan error, 1)
@@ -326,6 +334,7 @@ loop:
 		}
 	}
 
+	p.lastProtocolActivity.Store(peerActivityClosing)
 	p.log.Debug("Peer disconnected", "remoteRequested", remoteRequested, "reason", reason, "err", err)
 
 	close(p.closed)
@@ -434,6 +443,7 @@ func (p *Peer) handle(msg Msg) error {
 		if err != nil {
 			return fmt.Errorf("msg code out of range: %v", msg.Code)
 		}
+		p.recordProtocolActivity()
 		if metrics.Enabled() {
 			m := fmt.Sprintf("%s/%s/%d/%#02x", ingressMeterName, proto.Name, proto.Version, msg.Code-proto.offset)
 			metrics.GetOrRegisterMeter(m, nil).Mark(int64(msg.meterSize))

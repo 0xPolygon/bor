@@ -19,6 +19,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	type Config struct {
 		PrivateKey         *ecdsa.PrivateKey `toml:"-"`
 		MaxPeers           int
+		PeerIdleEviction   bool
 		MaxPendingPeers    int `toml:",omitempty"`
 		DialRatio          int `toml:",omitempty"`
 		NoDiscovery        bool
@@ -45,6 +46,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	var enc Config
 	enc.PrivateKey = c.PrivateKey
 	enc.MaxPeers = c.MaxPeers
+	enc.PeerIdleEviction = c.PeerIdleEviction
 	enc.MaxPendingPeers = c.MaxPendingPeers
 	enc.DialRatio = c.DialRatio
 	enc.NoDiscovery = c.NoDiscovery
@@ -75,6 +77,7 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	type Config struct {
 		PrivateKey         *ecdsa.PrivateKey `toml:"-"`
 		MaxPeers           *int
+		PeerIdleEviction   *bool
 		MaxPendingPeers    *int `toml:",omitempty"`
 		DialRatio          *int `toml:",omitempty"`
 		NoDiscovery        *bool
@@ -107,6 +110,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.MaxPeers != nil {
 		c.MaxPeers = *dec.MaxPeers
+	}
+	if dec.PeerIdleEviction != nil {
+		c.PeerIdleEviction = *dec.PeerIdleEviction
 	}
 	if dec.MaxPendingPeers != nil {
 		c.MaxPendingPeers = *dec.MaxPendingPeers

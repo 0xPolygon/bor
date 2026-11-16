@@ -875,7 +875,9 @@ func (srv *Server) run() {
 		peers        = make(map[enode.ID]*Peer)
 		inboundCount = 0
 		trusted      = make(map[enode.ID]bool, len(srv.TrustedNodes))
+		idleTimer    = srv.clock.NewTimer(peerIdleCheckInterval)
 	)
+	defer idleTimer.Stop()
 	// Put trusted nodes into a map to speed up checks.
 	// Trusted peers are loaded on startup or added via AddTrustedPeer RPC.
 	for _, n := range srv.TrustedNodes {
@@ -888,6 +890,9 @@ running:
 		case <-srv.quit:
 			// The server was stopped. Run the cleanup logic.
 			break running
+		case <-idleTimer.C():
+			idleTimer.Reset(peerIdleCheckInterval)
+			srv.expireIdlePeer(peers)
 
 		case n := <-srv.addtrusted:
 			// This channel is used by AddTrustedPeer to add a node
@@ -1234,6 +1239,8 @@ func (srv *Server) checkpoint(c *conn, stage chan<- *conn) error {
 
 func (srv *Server) launchPeer(c *conn) *Peer {
 	p := newPeer(srv.log, c, srv.Protocols)
+	p.clock = srv.clock
+	p.lastProtocolActivity.Store(int64(srv.clock.Now()))
 	if srv.EnableMsgEvents {
 		// If message events are enabled, pass the peerFeed
 		// to the peer.
