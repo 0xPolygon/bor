@@ -2247,6 +2247,7 @@ func (bc *BlockChain) setHeadBeyondRoot(head uint64, time uint64, root common.Ha
 			rawdb.DeleteReceipts(db, hash, num)
 			rawdb.DeleteBorReceipt(db, hash, num)
 			rawdb.DeleteBorTxLookupEntry(db, hash, num)
+			rawdb.DeleteAccessList(db, hash, num)
 		}
 		// Todo(rjl493456442) txlookup, log index, etc
 	}

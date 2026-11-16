@@ -81,3 +81,82 @@ the merged code exposes. The ones that would have (#35792's
 `--history.chain` values, #35723's `peers/outofrange` gauge) were declined.
 Every fork/EIP-bearing PR has a fork-register row, and none sets a fork
 value on a Bor network.
+
+## Batch 3: `v1.17.7..8fe53204a` (v1.17.8, 16 commits)
+
+16 conflicted paths. No hardfork-surface file changed.
+
+| Path | Class | Upstream PR | Decision | Why |
+| ---- | ----- | ----------- | -------- | --- |
+| `eth/protocols/eth/{handler,handlers,handler_test}.go` | 1 | #35857 | **Kept Bor (already bounded).** | Bor already caps `GetPooledTransactions` lookups per request at `maxPooledTxsServe = 256`, tighter than upstream's new 4096, and tests it (`peer_replies_test.go`, `peer_limits_test.go`). Upstream's test targets its own constant and wasn't taken. |
+| `eth/protocols/eth/{receipt,receipt_test}.go` | 1 | #35859 | **Kept Bor (not applicable).** | Upstream's fix is in `ReceiptList.Derivable`, from the delayed-decode refactor (#33835) Bor deferred in v1.17.4. Bor's `ReceiptList68/69.DecodeRLP` decodes every receipt as the message arrives and rejects the whole response if one fails, so an undecodable receipt never reaches root derivation. |
+| `eth/protocols/snap/handler.go` (`snap/handlers.go` kept deleted) | 1 | #35856 | **Ported.** `loads += max(resolved, 1)` at both `GetNode` sites in Bor's `ServiceGetTrieNodesQuery`. | Bor's snap serving lives in `handler.go`, after develop's rewrite. It had the same accounting, where a node served from the cache counted 0 toward `maxTrieNodeLookups`. |
+| `core/blockchain.go` (rewind) | 2 | #35288 | Merged both: Bor's `DeleteBorReceipt` / `DeleteBorTxLookupEntry` plus upstream's `DeleteAccessList`. | Bor stores access lists through `rawdb.WriteAccessList` for blocks that carry one (Amsterdam), so a rewind should remove them too. A no-op on today's chains. |
+| `core/txpool/blobpool/blobpool.go` (+ test) | 2 | #35836 | **Adopted.** The promotion loop is placed after Bor's checked-base-fee block. | Bor has the same `gapped` reorder buffer. Without this, gapped blob transactions whose missing nonce is included on chain stay stuck until they expire. |
+| `go.mod`, `go.sum` | 2 | #35863 | `pion/stun/v3` v3.1.5 → v3.1.7, `pion/dtls/v3` v3.1.5, `pion/transport/v4` v4.1.0 (upstream's). Bor's newer `golang.org/x/*` kept. `go mod tidy`. | Higher version per module. |
+| `core/types/bal/bal_lookup.go` (kept deleted), `core/state/reader_eip_7928.go` | 3 | #35865 | Kept Bor. | Part of the #35264 parallel-execution cluster declined in v1.17.6. |
+| `cmd/devp2p/internal/ethtest/{conn,suite,suite_test}.go` | 3 | #35826, #35869 | Kept Bor, including code that merged clean. | eth/71 and eth/72 test plumbing; Bor carries neither protocol (decision D). |
+| `README.md` | 1 | #35711 | Kept Bor. | Bor's README is its own. |
+| `p2p/discover/v4_udp.go` | — | #35861 | Unchanged. | Already in the base, identical (`6848e4008`). |
+| `p2p/dial.go` (+ `dial_dns_test.go`), `internal/ethapi/capabilities.go` (+ test), `beacon/params/networks.go`, `build/ci.go`, `version/version.go` | 2 | #35880, #35878, #35876, #35854, #35848 | Taken (clean). | Upstream-owned. |
+
+## Batch 4: `8fe53204a..a57907700` (v1.17.8, 16 commits; completes v1.17.8)
+
+15 conflicted paths. Hardfork surfaces: `params/config.go` (conflicted,
+resolved to Bor, unchanged) and `core/state_transition.go` (`preCheck`
+flags; behaviour change only behind Amsterdam).
+
+| Path | Class | Upstream PR | Decision | Why |
+| ---- | ----- | ----------- | -------- | --- |
+| `params/config.go`; new `params/chainspecs.go` and `params/chainspecs/*.json` dropped | 3 (hardfork surface) | #35585 | **Declined (kept Bor).** `params/config.go` is byte-identical to before. | Upstream replaces the hand-written Ethereum chain configs with JSON chainspecs that carry the time-based forks. Bor's Ethereum presets deliberately drop the post-merge time-based forks, because Bor's fork model is block-based. Bor networks don't use these presets. |
+| `core/state_transition.go`, `core/state_prefetcher.go`, `accounts/abi/bind/backends/simulated.go`, `internal/ethapi/{api,transaction_args}.go`, `eth/tracers/api.go` | 3 | #35845 | **Adopted.** `Message.SkipNonceChecks` / `SkipTransactionChecks` become the `SkipNonceCheck()` / `SkipEOACheck()` / `SkipGasLimitCapCheck()` setters, plus `SkipExecutionGasCapCheck()`. Bor's three remaining users were ported. `preCheck` keeps Bor's Madhugiri arm under `skipGasLimitCapCheck`, with the EOA check now its own block, as upstream. | The new behaviour (`eth_call`, `debug_traceCall` and non-strict `eth_simulateV1` get the whole gas limit for execution) is only reached when `IsAmsterdam`. Before Amsterdam, every check runs exactly as before; RPC messages still skip the EOA and cap checks together. |
+| `core/state_transition.go` (fee payment, witness access) | 1 | #35668 | **Kept Bor.** | Bor's fee payment is its own consensus code (burnt-contract redirect, `noFeeBurnAndTip`). Upstream's change only concerns `NoBaseFee` simulation. |
+| `internal/ethapi/simulate.go` | 3 | #35617, #35668, #35845 | **Adopted** on Bor's `IsAmsterdam(number)`: no synthesized transfer logs after Amsterdam (EIP-7708 emits them); the uncapped execution reservation in non-strict mode; the slot number carried forward only when the parent has one. | All dormant: Amsterdam is nil and Bor headers carry no slot number. |
+| `internal/ethapi/api_test.go` | 1 | #35617, #35845 | `TestSimulateV1TransferLogs` (#35617) adopted with three Bor changes: the generator marks blocks post-merge (`SetPoS`, as the neighbouring test does); Bor's `0x…1010` fee-contract transfer log is excluded from the count; the post-Amsterdam case is skipped under POS-3738, like `TestEstimateGasAmsterdam`. Upstream's `TestExecutionGasCapAmsterdam` was not taken (coverage gap, see needs-wiring). | Bor's chain can't start with Amsterdam from genesis yet (POS-3738). The test exposed that, before Amsterdam, `eth_simulateV1` with `traceTransfers` already reports a Bor value transfer twice: the synthesized log and Bor's fee-contract log. Pre-existing, recorded in needs-wiring. |
+| `eth/tracers/api_test.go` | 1 | #35845 | Kept Bor. | Upstream's new test is an Amsterdam test on a time-based config (coverage gap, with the above). |
+| `core/jumpdest.go` (kept deleted), `core/vm/jumpdests.go`, `core/vm/evm.go` (a cleanly merged wrapper removed) | 3 | #35881 | **Declined (kept Bor).** | Upstream puts a per-transaction layer in front of its bounded, evicting shared cache, so eviction can't force re-analysis within a transaction. Bor's shared cache is an unbounded per-block `syncMapJumpDests` that never evicts, so that can't happen. Same reason as #35681 in v1.17.6. |
+| `eth/protocols/eth/{handlers,handler,handler_test}.go` (a cleanly merged receipt check removed), `eth/handler_eth.go` | 1 | #35862, #35904, #35860, #35883 | **Kept Bor (not applicable).** | #35862 and #35904 bound item counts in `rlp.RawList` bodies and receipts, from the delayed-decode refactor (#33835) Bor deferred. Bor's `BlockBody` and receipt lists are decoded into typed slices as the message arrives, so a body can't claim more items than its bytes. #35860 / #35883 are eth/72 cells, which Bor doesn't carry. |
+| `eth/catalyst/{api,api_test}.go` | 1 | #35804 | Kept Bor. | `eth/catalyst` is inherited and unused in Bor's consensus, and Bor's file has an older shape. |
+| `cmd/devp2p/internal/ethtest/suite.go` | 3 | #35860 | Kept Bor. | eth/72 test. |
+| `core/tracing/journal.go` (+ test), `beacon/light/request/*`, `accounts/abi/abigen/source.go.tpl`, `node/node_auth_test.go`, `internal/ethapi/api.go` (`eth_createAccessList` fee defaults, #35397), `version/version.go` | 2 | #35896, #35872, #35888, #35889, #35397 | Taken (clean). | Upstream-owned; `version` is now 1.17.8 stable. |
+
+## Milestone v1.17.8 triage (32 upstream PRs)
+
+| PR | Title | Outcome | Class |
+| -- | ----- | ------- | ----- |
+| #35848 | version: start v1.17.8 cycle | taken | inert |
+| #35826 | devp2p: advertise eth/71 | kept Bor | inert (Bor carries no eth/71) |
+| #35857 | getPooledTransactions lookup limit | kept Bor (already capped at 256) | inert |
+| #35859 | don't skip invalid receipts | kept Bor (eager receipt decoding) | inert |
+| #35836 | blobpool: promote gapped txs on reset | adopted | inert |
+| #35856 | snap: charge trie-node lookups per request | ported to Bor's `snap/handler.go` | inert |
+| #35869 | devp2p: negotiated eth version in tests | kept Bor | inert |
+| #35876 | Hoodi beacon genesis time | taken | inert |
+| #35861 | discovery: bonded peer for address prediction | already in base | inert |
+| #35854 | PPA for Ubuntu 26.04 | taken (`gofmt` alignment fixed in the milestone commit) | inert |
+| #35880 | p2p: stale addresses after DNS resolution | taken | inert |
+| #35878 | `eth_capabilities` receipts bounded by the tx index | taken | inert |
+| #35865 | BAL lookup codeHash cache | kept Bor (#35264 cluster) | consensus-relevant (EIP-7928, deferred) |
+| #35863 | pion/stun v3.1.7 | taken | inert |
+| #35711 | README | kept Bor | inert |
+| #35288 | delete the access list on rewind | adopted | inert (no-op before Amsterdam) |
+| #35585 | chainspecs | declined | consensus-relevant (never-enable, fork register) |
+| #35872 | beacon light: EvCanRequestAgain | taken | inert |
+| #35845 | skip the execution gas cap on `eth_call` | adopted; Bor callers ported | consensus-relevant (dormant), needs-wiring (tests) |
+| #35881 | JUMPDEST per-transaction cache | declined | needs-wiring (wontfix) |
+| #35617 | `eth_simulateV1` transfer logs post-Amsterdam | adopted; test adapted | consensus-relevant (dormant), needs-wiring (pre-existing double log) |
+| #35397 | `eth_createAccessList` fee defaults | taken | inert |
+| #35668 | `eth_simulateV1` Amsterdam blocks | simulate part adopted; fee hunk kept Bor | consensus-relevant (dormant) |
+| #35860 | cells response index major | kept Bor (eth/72) | inert |
+| #35883 | getCells lookup limit | kept Bor (eth/72) | inert |
+| #35862 | verify block shape before hashing | kept Bor (eager body decoding) | inert |
+| #35896 | tracing: creator nonce change without a frame | taken | inert |
+| #35888 | abigen: chained library nonces | taken | inert |
+| #35889 | node: flaky JWT test | taken | inert |
+| #35804 | catalyst: forward canonical update | kept Bor (catalyst unused) | inert |
+| #35904 | receipt size checks | kept Bor (eager receipt decoding) | inert |
+| (version) | go-ethereum v1.17.8 stable | taken | inert |
+
+v1.17.8 adds no CLI flag, config field, RPC method or metric that the merged
+code exposes. Every fork/EIP-bearing PR has a fork-register row, and none
+sets a fork value on a Bor network.

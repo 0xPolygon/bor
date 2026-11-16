@@ -323,8 +323,12 @@ func (sim *simulator) processBlock(ctx context.Context, block *simBlock, header,
 		txes        = make([]*types.Transaction, len(block.Calls))
 		callResults = make([]simCallResult, len(block.Calls))
 		receipts    = make([]*types.Receipt, len(block.Calls))
+
+		// Post-Amsterdam the protocol emits an EIP-7708 transfer log for every
+		// ether transfer, so synthesizing them would report each transfer twice.
+		traceTransfers = sim.traceTransfers && !sim.chainConfig.IsAmsterdam(header.Number)
 		// Block hash will be repaired after execution.
-		tracer   = newTracer(sim.traceTransfers, blockContext.BlockNumber.Uint64(), blockContext.Time, common.Hash{}, common.Hash{}, 0)
+		tracer   = newTracer(traceTransfers, blockContext.BlockNumber.Uint64(), blockContext.Time, common.Hash{}, common.Hash{}, 0)
 		vmConfig = &vm.Config{
 			NoBaseFee: !sim.validate,
 			Tracer:    tracer.Hooks(),
@@ -368,6 +372,9 @@ func (sim *simulator) processBlock(ctx context.Context, block *simBlock, header,
 		// EoA check is always skipped, even in validation mode.
 		sim.state.SetTxContext(txHash, i, uint32(i+1))
 		msg := call.ToMessage(header.BaseFee, !sim.validate)
+		if !sim.validate {
+			msg.SkipExecutionGasCapCheck()
+		}
 		result, err := applyMessageWithEVM(ctx, evm, msg, timeout, gp)
 		if err != nil {
 			txErr := txValidationError(err)
@@ -480,7 +487,13 @@ func (sim *simulator) sanitizeCall(call *TransactionArgs, state vm.StateDB, head
 		call.Nonce = (*hexutil.Uint64)(&nonce)
 	}
 	// Let the call run wild unless explicitly specified.
-	remaining := gp.Available(sim.chainConfig.IsAmsterdam(header.Number))
+	amsterdam := sim.chainConfig.IsAmsterdam(header.Number)
+	remaining := gp.Available(amsterdam)
+	if amsterdam && !sim.validate {
+		// The execution gas is not capped in non-strict mode (see processBlock),
+		// so the whole gas limit is reserved in the execution dimension too.
+		remaining = min(remaining, header.GasLimit-gp.CumulativeExecution())
+	}
 	if call.Gas == nil {
 		call.Gas = (*hexutil.Uint64)(&remaining)
 	}
@@ -609,6 +622,12 @@ func (sim *simulator) makeHeaders(blocks []simBlock) ([]*types.Header, error) {
 		if sim.chainConfig.IsPostMerge(number.Uint64(), 0) {
 			difficulty = big.NewInt(0)
 		}
+		// The slot number is unknown when the parent has none, so it is omitted then.
+		var slotNumber *uint64
+		if header.SlotNumber != nil {
+			slot := *header.SlotNumber + 1
+			slotNumber = &slot
+		}
 		header = overrides.MakeHeader(&types.Header{
 			UncleHash:        types.EmptyUncleHash,
 			ReceiptHash:      types.EmptyReceiptsHash,
@@ -618,6 +637,7 @@ func (sim *simulator) makeHeaders(blocks []simBlock) ([]*types.Header, error) {
 			GasLimit:         header.GasLimit,
 			WithdrawalsHash:  withdrawalsHash,
 			ParentBeaconRoot: parentBeaconRoot,
+			SlotNumber:       slotNumber,
 		})
 		res[bi] = header
 	}
