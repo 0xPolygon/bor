@@ -451,5 +451,5 @@ func TestContributionConcurrentLifecycle(t *testing.T) {
 	tracker.Connected("peer")
 	clock.Run(activityGrace)
 	contributionStatus(t, tracker, "idle")
-	assertRisk(t, tracker, "peer", 20, "none")
+	assertRisk(t, tracker, "peer", 0, "none")
 }

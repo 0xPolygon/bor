@@ -337,10 +337,9 @@ func (t *Tracker) snapshotPeer(id string, p *peerRecord, now mclock.AbsTime, win
 	}
 	t.prepareActivity(&p.activity, now)
 	contribution := p.activity.snapshot(now, t.ready && connected, p.exempt, t.idleGraceSeconds)
-	abuse := p.risk(int64(now)/int64(windowWidth), windows)
-	risk := max(abuse, contribution.Risk)
+	risk := p.risk(int64(now)/int64(windowWidth), windows)
 	return Snapshot{
-		Mode: "observe", Risk: risk, AbuseRisk: abuse, Action: actionFor(risk),
+		Mode: "observe", Risk: risk, AbuseRisk: risk, Action: actionFor(risk),
 		Windows: windows, Contribution: contribution,
 	}, connected
 }

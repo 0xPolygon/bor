@@ -181,7 +181,7 @@ func TestPeerIdleEvictionSelectsOneOldest(t *testing.T) {
 	clock.Run(peerIdleTimeout)
 	before := idlePeerDisconnects.Snapshot().Count()
 	policy := srv.peerPolicy.Load()
-	if got := policy.Snapshot(oldest.ID().String()); got.Risk != 20 || got.Contribution.Status != "idle" {
+	if got := policy.Snapshot(oldest.ID().String()); got.Risk != 0 || got.Contribution.Risk != 20 || got.Contribution.Status != "idle" {
 		t.Fatalf("eviction candidate disagrees with reputation: %+v", got)
 	}
 	srv.expireIdlePeer(peers)

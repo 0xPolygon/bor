@@ -47,9 +47,9 @@ func TestPeerPolicyMetricSampleConsistency(t *testing.T) {
 	registry.Each(func(name string, metric interface{}) {
 		values := metric.(*metrics.GaugeVec).Snapshot()
 		switch name {
-		case peerRiskMetric, "eth/peerpolicy/peer_behavior_risk":
+		case "eth/peerpolicy/peer_behavior_risk":
 			require.Equal(t, int64(20), values["peer"])
-		case "eth/peerpolicy/peer_abuse_risk":
+		case peerRiskMetric, "eth/peerpolicy/peer_abuse_risk":
 			require.Zero(t, values["peer"])
 		}
 		tracker.Observe("peer", Evidence{Reason: InvalidBlock})
