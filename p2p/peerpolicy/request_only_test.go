@@ -119,3 +119,19 @@ func TestRequestOnlyResumedObservation(t *testing.T) {
 		t.Fatal("did not restart grace after a long sync gap")
 	}
 }
+
+func TestRequestOnlyContributionWindow(t *testing.T) {
+	tracker, connection, clock := requestOnlyFixture()
+	connection.Observe(clock.Now(), false)
+	tracker.Observe("peer", Evidence{Activity: ActivityEvent{ReceivedMessages: 1, MessageAt: clock.Now()}})
+	for minute := 0; minute <= activityCount; minute++ {
+		connection.Observe(clock.Now(), false)
+		tracker.Observe("peer", Evidence{Activity: ActivityEvent{
+			ReceivedMessages: 1, ReceivedRequests: 1, ServedResponses: 1, MessageAt: clock.Now(),
+		}})
+		if _, eligible := tracker.RequestOnlySince("peer", connection); eligible != (minute == activityCount) {
+			t.Fatalf("eligibility at minute %d = %v", minute, eligible)
+		}
+		clock.Run(time.Minute)
+	}
+}

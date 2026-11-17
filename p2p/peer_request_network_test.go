@@ -1,0 +1,113 @@
+package p2p
+
+import (
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/ethereum/go-ethereum/common/mclock"
+	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
+)
+
+func requestActivityProtocol(version uint, received chan<- enode.ID, policy *peerpolicy.Tracker) Protocol {
+	return Protocol{Name: "eth", Version: version, Length: 18, Run: func(peer *Peer, rw MsgReadWriter) error {
+		policy.BindConnection(peer.ID().String(), policy.Connected(peer.ID().String()), peer.activity)
+		for {
+			msg, err := rw.ReadMsg()
+			if err != nil {
+				return err
+			}
+			if err := msg.Discard(); err != nil {
+				return err
+			}
+			if err := Send(rw, 4, []uint64{}); err != nil {
+				return err
+			}
+			policy.Observe(peer.ID().String(), peerpolicy.Evidence{Activity: peerpolicy.ActivityEvent{
+				ReceivedMessages: 1, ReceivedRequests: 1, ServedResponses: 1, MessageAt: msg.ReceivedAtMonotonic,
+			}})
+			received <- peer.ID()
+		}
+	}}
+}
+
+func exchangeActivityRequest(t *testing.T, client transport, received <-chan enode.ID) {
+	t.Helper()
+	if err := Send(client, baseProtocolLength+3, []uint64{}); err != nil {
+		t.Fatal(err)
+	}
+	msg, err := client.ReadMsg()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := msg.Discard(); err != nil {
+		t.Fatal(err)
+	}
+	if msg.Code != baseProtocolLength+4 {
+		t.Fatalf("unexpected reply: %d", msg.Code)
+	}
+	select {
+	case <-received:
+	case <-time.After(time.Second):
+		t.Fatal("request was not observed")
+	}
+}
+
+func TestRequestOnlyCapacityRLPX(t *testing.T) {
+	clock := new(mclock.Simulated)
+	policy := peerpolicy.New(clock)
+	policy.SetReady(true)
+	received := make(chan enode.ID, 9)
+	srv := &Server{Config: Config{
+		PrivateKey: newkey(), MaxPeers: 9, NoDial: true, NoDiscovery: true,
+		ListenAddr: "127.0.0.1:0", PeerIdleEviction: true, PeerIdleMaxRemovals: 64, clock: clock,
+		Protocols: []Protocol{requestActivityProtocol(68, received, policy), requestActivityProtocol(69, received, policy)},
+	}}
+	srv.SetPeerPolicy(policy)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(srv.Stop)
+	clients := make([]transport, 9)
+	for i := range clients {
+		var err error
+		clients[i], err = connectActivityPeer(t, srv, newkey(), 68+uint(i%2))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitActivityPeers(t, srv, 9)
+	for range 44 {
+		advanceActivityClock(t, srv, clock, 15*time.Second)
+		for _, client := range clients {
+			exchangeActivityRequest(t, client, received)
+		}
+	}
+	waitActivityPeers(t, srv, 9)
+	checkRequestOnlyCapacityRLPX(t, srv, clock)
+}
+
+func checkRequestOnlyCapacityRLPX(t *testing.T, srv *Server, clock *mclock.Simulated) {
+	t.Helper()
+	advanceActivityClock(t, srv, clock, time.Second)
+	if _, err := connectActivityPeer(t, srv, newkey(), 69); !errors.Is(err, DiscTooManyPeers) {
+		t.Fatalf("expected refusal, got %v", err)
+	}
+	advanceActivityClock(t, srv, clock, time.Minute-time.Second)
+	waitActivityPeers(t, srv, 8)
+	if _, err := connectActivityPeer(t, srv, newkey(), 68); err != nil {
+		t.Fatal(err)
+	}
+	waitActivityPeers(t, srv, 9)
+	before := requestOnlyPeerDisconnects.Snapshot().Count()
+	advanceActivityClock(t, srv, clock, time.Second)
+	if _, err := connectActivityPeer(t, srv, newkey(), 69); !errors.Is(err, DiscTooManyPeers) {
+		t.Fatalf("expected second refusal, got %v", err)
+	}
+	advanceActivityClock(t, srv, clock, time.Minute-time.Second)
+	if requestOnlyPeerDisconnects.Snapshot().Count() != before {
+		t.Fatal("repeated refusal bypassed the rotation interval")
+	}
+	waitActivityPeers(t, srv, 9)
+}

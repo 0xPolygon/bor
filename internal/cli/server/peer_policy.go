@@ -10,11 +10,11 @@ import (
 
 func (c *Command) peerReputationFlag(f *flagset.Flagset) {
 	f.DurationFlag(&flagset.DurationFlag{
-		Name: "peer-idle-grace-period", Usage: "Grace period before a silent peer becomes eligible for rotation (minimum 2m)",
+		Name: "peer-idle-grace-period", Usage: "Grace period for peer rotation (minimum 2m; request-only peers require at least 10m)",
 		Value: &c.cliConfig.P2P.PeerIdleGracePeriod, Default: c.cliConfig.P2P.PeerIdleGracePeriod, Group: "P2P",
 	})
 	f.DurationFlag(&flagset.DurationFlag{
-		Name: "peer-idle-reconnect-cooldown", Usage: "Reconnect cooldown after silent-peer removal (1s-24h)",
+		Name: "peer-idle-reconnect-cooldown", Usage: "Reconnect cooldown after activity-based peer removal (1s-24h)",
 		Value: &c.cliConfig.P2P.PeerIdleReconnectCooldown, Default: c.cliConfig.P2P.PeerIdleReconnectCooldown, Group: "P2P",
 	})
 	f.IntFlag(&flagset.IntFlag{
@@ -22,19 +22,19 @@ func (c *Command) peerReputationFlag(f *flagset.Flagset) {
 		Value: &c.cliConfig.P2P.PeerIdleOccupancyThreshold, Default: c.cliConfig.P2P.PeerIdleOccupancyThreshold, Group: "P2P",
 	})
 	f.IntFlag(&flagset.IntFlag{
-		Name: "peer-idle-max-removals", Usage: "Maximum idle peers removed per one-minute check (1-64)",
+		Name: "peer-idle-max-removals", Usage: "Maximum peers rotated per one-minute check (1-64); request-only rotation is limited to one per grace period, at least 10m",
 		Value: &c.cliConfig.P2P.PeerIdleMaxRemovals, Default: c.cliConfig.P2P.PeerIdleMaxRemovals, Group: "P2P",
 	})
 	f.BoolFlag(&flagset.BoolFlag{
 		Name:    "peer-idle-eviction",
-		Usage:   "Rotate inactive peers when slots are nearly full (requires peer reputation; disable with --peer-idle-eviction=false)",
+		Usage:   "Rotate silent peers under slot pressure and request-only inbound peers after capacity refusals at full slots (requires peer reputation; disable with --peer-idle-eviction=false)",
 		Value:   &c.cliConfig.P2P.PeerIdleEviction,
 		Default: c.cliConfig.P2P.PeerIdleEviction,
 		Group:   "P2P",
 	})
 	f.BoolFlag(&flagset.BoolFlag{
 		Name:    "peer-reputation",
-		Usage:   "Track peer activity and observe reputation scores (disable to also stop idle-peer eviction)",
+		Usage:   "Track peer activity and observe reputation scores (disable to also stop activity-based peer rotation)",
 		Value:   &c.cliConfig.P2P.PeerReputation,
 		Default: c.cliConfig.P2P.PeerReputation,
 		Group:   "P2P",

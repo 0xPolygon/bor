@@ -101,6 +101,9 @@ type Server struct {
 	dialsched   *dialScheduler
 	staticNodes map[enode.ID]bool // Owned by the server loop.
 
+	inboundCapacityRefusedUntil mclock.AbsTime
+	requestOnlyRotatedUntil     mclock.AbsTime
+
 	// This is read by the NAT port mapping loop.
 	portMappingRegister chan *portMapping
 
@@ -828,6 +831,7 @@ running:
 				srv.dialsched.peerAdded(c)
 				if p.Inbound() {
 					inboundCount++
+					srv.inboundCapacityRefusedUntil = 0
 					serveSuccessMeter.Mark(1)
 					activeInboundPeerGauge.Inc(1)
 				} else {
@@ -888,9 +892,11 @@ func (srv *Server) postHandshakeChecks(peers map[enode.ID]*Peer, inboundCount in
 	switch {
 	case !c.is(trustedConn) && len(peers) >= total:
 		srv.log.Debug("Rejecting peer: too many peers", "id", c.node.ID(), "peercount", len(peers), "maxpeers", total)
+		srv.recordInboundCapacityRefusal(peers, c)
 		return DiscTooManyPeers
 	case !c.is(trustedConn) && c.is(inboundConn) && inboundCount >= total-dialed:
 		srv.log.Debug("Rejecting peer: too many inbound", "id", c.node.ID(), "inboundCount", inboundCount, "maxinbound", total-dialed)
+		srv.recordInboundCapacityRefusal(peers, c)
 		return DiscTooManyPeers
 	case peers[c.node.ID()] != nil:
 		return DiscAlreadyConnected
@@ -909,6 +915,13 @@ func (srv *Server) addPeerChecks(peers map[enode.ID]*Peer, inboundCount int, c *
 	// Repeat the post-handshake checks because the
 	// peer set might have changed since those checks were performed.
 	return srv.postHandshakeChecks(peers, inboundCount, c)
+}
+
+func (srv *Server) recordInboundCapacityRefusal(peers map[enode.ID]*Peer, c *conn) {
+	if !c.is(inboundConn) || peers[c.node.ID()] != nil || (srv.localnode != nil && c.node.ID() == srv.localnode.ID()) {
+		return
+	}
+	srv.inboundCapacityRefusedUntil = srv.clock.Now().Add(peerIdleCheckInterval)
 }
 
 // listenLoop runs in its own goroutine and accepts
@@ -1239,9 +1252,10 @@ func (srv *Server) PeersInfo() []*PeerInfo {
 }
 
 const (
-	peerIdleCheckInterval = time.Minute
-	peerIdleMinimumPeers  = 5
-	MaxPeerIdleRemovals   = 64
+	peerIdleCheckInterval       = time.Minute
+	peerIdleMinimumPeers        = 5
+	MaxPeerIdleRemovals         = 64
+	requestOnlyRotationInterval = 10 * time.Minute
 )
 
 func (srv *Server) SetPeerPolicy(policy *peerpolicy.Tracker) {
@@ -1271,6 +1285,9 @@ func (srv *Server) expireIdlePeer(peers map[enode.ID]*Peer) {
 }
 
 func (srv *Server) retireActivityPeer(peer *Peer, last mclock.AbsTime, requestOnly bool, policy *peerpolicy.Tracker, cooldown time.Duration) bool {
+	if requestOnly && srv.clock.Now() < srv.requestOnlyRotatedUntil {
+		return false
+	}
 	retire := policy.RetireIdle
 	if requestOnly {
 		retire = policy.RetireRequestOnly
@@ -1282,10 +1299,13 @@ func (srv *Server) retireActivityPeer(peer *Peer, last mclock.AbsTime, requestOn
 	case peer.disc <- DiscJailed:
 	default:
 		// Another disconnect is already queued; keep this session closing.
+		peer.Log().Debug("Skipping peer rotation because a disconnect is already queued", "requestOnly", requestOnly)
 		return false
 	}
 	srv.peerJail.cooldownPeer(peer.ID(), cooldown)
 	if requestOnly {
+		srv.inboundCapacityRefusedUntil = 0
+		srv.requestOnlyRotatedUntil = srv.clock.Now().Add(max(requestOnlyRotationInterval, srv.PeerIdleGracePeriod))
 		peer.activity.MarkRequestOnlyDisconnect()
 		peer.Log().Info("Disconnecting request-only peer to free a connection slot", "cooldown", cooldown)
 		requestOnlyPeerDisconnects.Inc(1)

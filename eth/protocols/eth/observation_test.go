@@ -170,15 +170,15 @@ func TestPeerPolicyAnnouncementFramingPrecedence(t *testing.T) {
 }
 
 func TestPeerActivityReceivesWithoutContribution(t *testing.T) {
-	for _, code := range []uint64{NewBlockMsg, NewBlockHashesMsg, NewPooledTransactionHashesMsg, GetBlockHeadersMsg, GetBlockBodiesMsg, GetReceiptsMsg, GetPooledTransactionsMsg, BlockHeadersMsg, BlockBodiesMsg, ReceiptsMsg} {
+	for _, code := range []uint64{NewBlockMsg, NewBlockHashesMsg, NewPooledTransactionHashesMsg, BlockRangeUpdateMsg, GetBlockHeadersMsg, GetBlockBodiesMsg, GetReceiptsMsg, GetPooledTransactionsMsg, BlockHeadersMsg, BlockBodiesMsg, ReceiptsMsg} {
 		t.Run(fmt.Sprint(code), func(t *testing.T) {
 			tracker := peerpolicy.New(new(mclock.Simulated))
 			var got peerpolicy.Evidence
 			p := &Peer{observer: func(e peerpolicy.Evidence) { got = e; tracker.Observe("peer", e) }}
-			if err := p.handleObserved(nil, p2p.Msg{Code: code, Size: 50}, func(Backend, Decoder, *Peer) error { return nil }); err != nil {
+			if err := p.handleObserved(nil, p2p.Msg{Code: code, Size: 50, ReceivedAtMonotonic: 123}, func(Backend, Decoder, *Peer) error { return nil }); err != nil {
 				t.Fatal(err)
 			}
-			want := peerpolicy.ActivityEvent{ReceivedMessages: 1, ReceivedBytes: 50}
+			want := peerpolicy.ActivityEvent{ReceivedMessages: 1, ReceivedBytes: 50, MessageAt: 123}
 			if code == GetBlockHeadersMsg || code == GetBlockBodiesMsg || code == GetReceiptsMsg || code == GetPooledTransactionsMsg {
 				want.ReceivedRequests = 1
 			}
