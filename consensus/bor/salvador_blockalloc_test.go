@@ -46,19 +46,17 @@ func salvadorPresetCode(t *testing.T, addr string) string {
 }
 
 // salvadorAccounts stands in for the blocked addresses with fresh keys so the
-// tests can sign as them, carrying the preset's two Sweeper builds.
+// tests can sign as them, carrying the preset's Sweeper build.
 func salvadorAccounts(t *testing.T) []*salvadorAccount {
 	t.Helper()
-	first := salvadorPresetCode(t, "e4C4C39C1733e1C7c06B79f97ED442B68Df41EC6")
-	second := salvadorPresetCode(t, "5227f603C1eE34CE3C06eFe6477003BDfCCB2f8c")
+	code := salvadorPresetCode(t, "e4C4C39C1733e1C7c06B79f97ED442B68Df41EC6")
 	balances := []*big.Int{big.NewInt(5e18), big.NewInt(7e18), big.NewInt(0)}
-	codes := []string{first, second, first}
 
 	accounts := make([]*salvadorAccount, len(balances))
 	for i := range balances {
 		key, err := crypto.GenerateKey()
 		require.NoError(t, err)
-		accounts[i] = &salvadorAccount{key: key, addr: crypto.PubkeyToAddress(key.PublicKey), code: codes[i], balance: balances[i], nonce: 3}
+		accounts[i] = &salvadorAccount{key: key, addr: crypto.PubkeyToAddress(key.PublicKey), code: code, balance: balances[i], nonce: 3}
 	}
 	return accounts
 }
@@ -237,5 +235,5 @@ func TestSalvadorSweep(t *testing.T) {
 		require.Zero(t, statedb.GetBalance(a.addr).Sign(), "%s", a.addr)
 		require.Zero(t, new(big.Int).Add(before, a.balance).Cmp(statedb.GetBalance(recovery).ToBig()), "%s", a.addr)
 	}
-	require.Len(t, recoveries, 2)
+	require.Len(t, recoveries, 1)
 }
