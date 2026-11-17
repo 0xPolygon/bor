@@ -1428,10 +1428,11 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 			result.statedb.StopPrefetcher()
 		}
 	}
-	// With EnablePrecompileCache the serial run read the same shared caches as
-	// V2 and the prefetcher, so its failure is not an independent check. Before
-	// rejecting the block, run the serial processor once more without them.
-	if result.err != nil && !result.parallel && bc.cfg.VmConfig.EnablePrecompileCache && bc.processor != nil && ctx.Err() == nil {
+	// With EnablePrecompileCache, the failed run (serial, or V2 when the
+	// parallel processor is enforced) read the shared caches, so its failure
+	// is not an independent check. Before rejecting the block, run the serial
+	// processor once more without them.
+	if result.err != nil && bc.cfg.VmConfig.EnablePrecompileCache && bc.processor != nil && ctx.Err() == nil {
 		result = bc.retrySerialWithoutSharedCaches(ctx, block, parent, witness, pipeOpts, result)
 	}
 	if result.err == nil {
@@ -1494,8 +1495,8 @@ type processorResult struct {
 }
 
 // retrySerialWithoutSharedCaches re-executes block with the serial processor
-// on a fresh statedb and no shared VM result caches. It is used only when the
-// precompile cache flag is on and the cached serial run failed. If the retry
+// on a fresh statedb, with no shared VM result caches and no tracer. It is
+// used only when the precompile cache flag is on and the cached run failed. If the retry
 // succeeds, a shared cache entry was wrong: the block is accepted and the
 // event is logged and counted. If it fails too, the block is invalid and the
 // retry's error is returned. On a setup error the original result is kept.
@@ -1508,11 +1509,19 @@ func (bc *BlockChain) retrySerialWithoutSharedCaches(ctx context.Context, block 
 		return failed
 	}
 	applyFlatDiffOverlayToAll(pipeOpts, statedb)
-	retry := bc.runSerialProcessor(ctx, block, statedb, witness, pipeOpts, nil)
+	// No tracer on the retry: the failed run already sent this block's
+	// transactions to the tracer inside the same OnBlockStart/OnBlockEnd, and
+	// sending them again would duplicate them.
+	vmCfg := bc.cfg.VmConfig
+	vmCfg.Tracer = nil
+	retry := bc.runSerialProcessorWithConfig(ctx, block, statedb, witness, pipeOpts, nil, vmCfg)
 	if retry.err == nil {
 		blockSerialNoCacheRetryAcceptedCounter.Inc(1)
 		log.Error("Block valid only without shared VM result caches, a cache entry was wrong",
 			"number", block.NumberU64(), "hash", block.Hash(), "cachedErr", failed.err)
+		if bc.cfg.VmConfig.Tracer != nil {
+			log.Warn("Tracer output for this block comes from the failed cached run", "number", block.NumberU64(), "hash", block.Hash())
+		}
 	}
 	return retry
 }
@@ -1521,12 +1530,18 @@ func (bc *BlockChain) retrySerialWithoutSharedCaches(ctx context.Context, block 
 // on statedb.
 func (bc *BlockChain) runSerialProcessor(ctx context.Context, block *types.Block, statedb *state.StateDB,
 	witness *stateless.Witness, pipeOpts *PipelineImportOpts, caches *vm.SharedResultCaches) processorResult {
+	return bc.runSerialProcessorWithConfig(ctx, block, statedb, witness, pipeOpts, caches, bc.cfg.VmConfig)
+}
+
+// runSerialProcessorWithConfig is runSerialProcessor with an explicit VM
+// config.
+func (bc *BlockChain) runSerialProcessorWithConfig(ctx context.Context, block *types.Block, statedb *state.StateDB,
+	witness *stateless.Witness, pipeOpts *PipelineImportOpts, caches *vm.SharedResultCaches, vmCfg vm.Config) processorResult {
 	pstart := time.Now()
 	statedb.StartPrefetcher("chain", witness, nil)
 	// With EnablePrecompileCache, the serial processor reads the per-block VM
 	// result caches that the prefetcher and V2 workers fill. Without the flag
 	// (the default), or with caches == nil, it computes every result itself.
-	vmCfg := bc.cfg.VmConfig
 	if vmCfg.EnablePrecompileCache && caches != nil {
 		caches.ApplyTo(&vmCfg, vm.CacheConsumerImportSerial)
 	}

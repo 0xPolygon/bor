@@ -332,6 +332,7 @@ func TestBuild_SharedCacheRaceFree(t *testing.T) {
 	sub := w.mux.Subscribe(core.NewMinedBlockEvent{})
 	defer sub.Unsubscribe()
 
+	initNonce := backend.txPool.Nonce(testBankAddress)
 	w.start()
 
 	const wantBlocks = 3
@@ -339,7 +340,8 @@ func TestBuild_SharedCacheRaceFree(t *testing.T) {
 	for i := 0; i < wantBlocks; i++ {
 		// Alternate a contract creation (keccak-heavy) and a transfer (ecrecover)
 		// so both the widened-keccak and ecrecover caches are shared concurrently.
-		tx := backend.newRandomTxWithNonce(i%2 == 0, uint64(i))
+		// Nonces follow the pool: pendingTxs already use 0 and 1.
+		tx := backend.newRandomTxWithNonce(i%2 == 0, initNonce+uint64(i))
 		if errs := backend.txPool.Add([]*types.Transaction{tx}, false); errs[0] != nil {
 			t.Fatalf("add tx %d: %v", i, errs[0])
 		}

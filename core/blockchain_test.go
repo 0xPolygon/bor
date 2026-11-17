@@ -47,6 +47,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/stateless"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/core/vm/program"
@@ -9465,8 +9466,12 @@ func TestProcessBlock_SerialRetryWithoutSharedCaches(t *testing.T) {
 	}
 
 	for _, flag := range []bool{false, true} {
+		// A live tracer must see each transaction once, even when the block
+		// is re-executed by the retry.
+		var txStarts int
+		hooks := &tracing.Hooks{OnTxStart: func(*tracing.VMContext, *types.Transaction, common.Address) { txStarts++ }}
 		cfg := DefaultConfig()
-		cfg.VmConfig = vm.Config{EnablePrecompileCache: flag}
+		cfg.VmConfig = vm.Config{EnablePrecompileCache: flag, Tracer: hooks}
 		bc, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, ethash.NewFaker(), cfg)
 		if err != nil {
 			t.Fatalf("NewBlockChain(flag=%v): %v", flag, err)
@@ -9488,6 +9493,11 @@ func TestProcessBlock_SerialRetryWithoutSharedCaches(t *testing.T) {
 		if got, want := st.GetState(contractAddr, common.Hash{}), crypto.Keccak256Hash(input[:]); got != want {
 			bc.Stop()
 			t.Fatalf("flag=%v: slot 0 = %x, want %x", flag, got, want)
+		}
+
+		if txStarts != 2 {
+			bc.Stop()
+			t.Fatalf("flag=%v: tracer saw %d tx starts, want 2 (one per transaction, no duplicates from the retry)", flag, txStarts)
 		}
 
 		gotRetries := blockSerialNoCacheRetryCounter.Snapshot().Count() - retries
