@@ -268,7 +268,8 @@ func TestRequestOnlyRotationRate(t *testing.T) {
 		if !ok {
 			t.Fatal("second peer lost eligibility")
 		}
-		if srv.requestOnlyPressure(20, 14) || srv.retireActivityPeer(second, last, true, policy, time.Minute) {
+		count, inbound, _ := peerCounts(peers)
+		if srv.requestOnlyPressure(count, inbound) || srv.retireActivityPeer(second, last, true, policy, time.Minute) {
 			t.Fatal("repeated refusals bypassed the rotation interval")
 		}
 	}
@@ -345,18 +346,20 @@ func TestRequestOnlyWireActivity(t *testing.T) {
 
 func TestRequestOnlyBatchLimit(t *testing.T) {
 	for _, tc := range []struct {
-		name                            string
-		count, inbound, limit, removals int
+		name                                      string
+		count, inbound, capacity, limit, removals int
 	}{
-		{"default", 100, 67, 0, 1},
-		{"sixteen", 100, 67, 16, 16},
-		{"pressure-cleared", 100, 67, 64, 26},
-		{"hard-limit", 500, 334, 1000, 64},
+		{"default", 100, 67, 100, 0, 1},
+		{"sixteen", 100, 67, 100, 16, 16},
+		{"below-full", 100, 67, 120, 16, 0},
+		{"pressure-cleared", 100, 67, 100, 64, 26},
+		{"hard-limit", 500, 334, 500, 1000, 64},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, peers, clock := activityTestServer(t, tc.count, tc.inbound)
 			srv.MaxPeers, srv.PeerIdleMaxRemovals = tc.count, tc.limit
 			prepareRequestOnlyPeers(t, srv, peers, clock)
+			srv.MaxPeers = tc.capacity
 			for _, peer := range peers {
 				peer.rw.set(trustedConn, false)
 			}
@@ -390,5 +393,30 @@ func TestRequestOnlyPartialBatchRate(t *testing.T) {
 	}
 	if srv.requestOnlyRotatedUntil != clock.Now().Add(requestOnlyRotationInterval) {
 		t.Fatal("partial batch did not start the rotation interval")
+	}
+}
+
+func TestRequestOnlyMixedBatch(t *testing.T) {
+	srv, peers, clock := activityTestServer(t, 20, 14)
+	srv.PeerIdleMaxRemovals = 3
+	for id := uint16(1); id <= 4; id++ {
+		peers[uintID(id)].rw.set(trustedConn, false)
+	}
+	for range 11 {
+		clock.Run(time.Minute)
+		observePeerRequest(srv, peers[uintID(3)], clock)
+		observePeerRequest(srv, peers[uintID(4)], clock)
+	}
+	srv.inboundCapacityRefusedUntil = clock.Now().Add(time.Minute)
+	before := requestOnlyPeerDisconnects.Snapshot().Count()
+	srv.expireIdlePeer(peers)
+	if len(peers[uintID(1)].disc) != 1 || len(peers[uintID(2)].disc) != 1 {
+		t.Fatal("mixed batch did not prioritize idle peers")
+	}
+	if requestOnlyPeerDisconnects.Snapshot().Count()-before != 1 {
+		t.Fatal("mixed batch did not share its removal budget")
+	}
+	if srv.requestOnlyRotatedUntil != clock.Now().Add(requestOnlyRotationInterval) {
+		t.Fatal("mixed batch did not start the rotation interval")
 	}
 }
