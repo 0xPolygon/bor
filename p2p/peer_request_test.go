@@ -117,6 +117,24 @@ func TestRequestOnlyPendingDisconnect(t *testing.T) {
 	}
 }
 
+func TestRequestOnlyChangedAfterSelection(t *testing.T) {
+	srv, peers, clock := activityTestServer(t, 20, 14)
+	peer := peers[uintID(1)]
+	serveRequestOnly(srv, peers, clock)
+	last, ok := srv.peerPolicy.Load().RequestOnlySince(peer.ID().String(), peer.activity)
+	if !ok {
+		t.Fatal("fixture is not eligible")
+	}
+	clock.Run(time.Second)
+	peer.activity.Observe(clock.Now(), false)
+	if srv.retireActivityPeer(peer, last, true, srv.peerPolicy.Load(), time.Minute) {
+		t.Fatal("reported a removal after new traffic arrived")
+	}
+	if len(peer.disc) != 0 || srv.peerJail.IsJailed(peer.ID()) {
+		t.Fatal("disconnected or jailed a peer after its eligibility changed")
+	}
+}
+
 func TestRequestOnlyWireActivity(t *testing.T) {
 	for _, protocol := range []string{"eth", "snap", "wit"} {
 		t.Run(protocol, func(t *testing.T) {
