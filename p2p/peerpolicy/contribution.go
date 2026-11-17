@@ -21,10 +21,11 @@ const (
 const IdleTimeout = 10 * time.Minute
 
 type ConnectionActivity struct {
-	last             atomic.Int64
-	auxiliary        atomic.Int64
-	started          atomic.Bool
-	idleDisconnected atomic.Bool
+	last                    atomic.Int64
+	auxiliary               atomic.Int64
+	started                 atomic.Bool
+	idleDisconnected        atomic.Bool
+	requestOnlyDisconnected atomic.Bool
 }
 
 func (a *ConnectionActivity) Start(now mclock.AbsTime) {
@@ -54,14 +55,18 @@ func (a *ConnectionActivity) Close() { a.last.Store(-1) }
 
 func (a *ConnectionActivity) MarkIdleDisconnect() { a.idleDisconnected.Store(true) }
 
+func (a *ConnectionActivity) MarkRequestOnlyDisconnect() { a.requestOnlyDisconnected.Store(true) }
+
 type ActivityEvent struct {
 	ReceivedMessages     uint64         `json:"receivedMessages"`
+	ReceivedRequests     uint64         `json:"receivedRequests"`
 	ReceivedBytes        uint64         `json:"receivedBytes"`
 	ServedResponses      uint64         `json:"servedResponses"`
 	ServedBytes          uint64         `json:"servedBytes"`
 	AcceptedTransactions uint64         `json:"acceptedTransactions"`
 	UnclassifiedMessages uint64         `json:"unclassifiedMessages"`
 	StartedAt            mclock.AbsTime `json:"-"`
+	MessageAt            mclock.AbsTime `json:"-"`
 }
 
 // Scope is ETH only: neither remote forwarding nor SNAP/WIT usefulness is known.
@@ -104,6 +109,7 @@ type activityRecord struct {
 	pausedFor       mclock.AbsTime
 	acceptAfter     mclock.AbsTime
 	lastUseful      mclock.AbsTime
+	lastHandled     mclock.AbsTime
 	hasContribution bool
 	connection      *ConnectionActivity
 }
@@ -160,6 +166,39 @@ func (t *Tracker) RetireIdle(id string, connection *ConnectionActivity, last mcl
 	return idle && current == last && connection.last.CompareAndSwap(int64(last), -1)
 }
 
+func (t *Tracker) RequestOnlySince(id string, connection *ConnectionActivity) (mclock.AbsTime, bool) {
+	if !t.mu.TryLock() {
+		return 0, false
+	}
+	defer t.mu.Unlock()
+	return t.requestOnlySince(id, connection)
+}
+
+func (t *Tracker) requestOnlySince(id string, connection *ConnectionActivity) (mclock.AbsTime, bool) {
+	p, ok := t.peers.Peek(id)
+	if !ok || connection == nil || p.activity.connection != connection {
+		return 0, false
+	}
+	now := t.clock.Now()
+	t.prepareActivity(&p.activity, now)
+	last, live := connection.Last()
+	s := p.activity.snapshot(now, t.ready, p.exempt, t.idleGraceSeconds)
+	// Any non-request traffic is outside this narrow retention policy.
+	eligible := s.Status == "request-only" && !s.Protected && s.ObservedSeconds >= s.IdleGraceSeconds &&
+		s.ServedMinutes >= uint64(activityGrace/activityWidth) && s.ReceivedRequests > 0 && s.ReceivedMessages == s.ReceivedRequests
+	// Do not rotate while the latest wire message is still awaiting observation.
+	return last, live && eligible && last == p.activity.lastHandled
+}
+
+func (t *Tracker) RetireRequestOnly(id string, connection *ConnectionActivity, last mclock.AbsTime) bool {
+	if !t.mu.TryLock() {
+		return false
+	}
+	defer t.mu.Unlock()
+	current, eligible := t.requestOnlySince(id, connection)
+	return eligible && current == last && connection.last.CompareAndSwap(int64(last), -1)
+}
+
 // Connected begins a fresh connection observation without erasing misconduct.
 func (t *Tracker) Connected(id string) mclock.AbsTime {
 	if id == "" || len(id) > 128 {
@@ -203,6 +242,9 @@ func (a *activityRecord) observe(now mclock.AbsTime, event ActivityEvent) {
 	if a.registered && event.StartedAt < a.connectedAt {
 		return
 	}
+	if event.ReceivedMessages > 0 {
+		a.lastHandled = max(a.lastHandled, event.MessageAt)
+	}
 	// Delayed admissions from incomplete coverage cannot establish contribution.
 	if event.AcceptedTransactions > 0 && event.StartedAt < a.acceptAfter {
 		event.AcceptedTransactions = 0
@@ -221,6 +263,7 @@ func (a *activityRecord) observe(now mclock.AbsTime, event ActivityEvent) {
 
 func (a *ActivityEvent) add(event ActivityEvent) {
 	a.ReceivedMessages = saturatingAdd(a.ReceivedMessages, event.ReceivedMessages, math.MaxUint64)
+	a.ReceivedRequests = saturatingAdd(a.ReceivedRequests, event.ReceivedRequests, math.MaxUint64)
 	a.ReceivedBytes = saturatingAdd(a.ReceivedBytes, event.ReceivedBytes, math.MaxUint64)
 	a.ServedResponses = saturatingAdd(a.ServedResponses, event.ServedResponses, math.MaxUint64)
 	a.ServedBytes = saturatingAdd(a.ServedBytes, event.ServedBytes, math.MaxUint64)
@@ -276,6 +319,9 @@ func (a *activityRecord) connectionSnapshot(now mclock.AbsTime, ready bool, resu
 	result.IdleGraceSeconds = idleGraceSeconds
 	if a.connection.idleDisconnected.Load() {
 		result.DisconnectReason = "idle"
+	}
+	if a.connection.requestOnlyDisconnected.Load() {
+		result.DisconnectReason = "request-only"
 	}
 	last, live := a.connection.Last()
 	if !live {

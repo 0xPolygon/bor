@@ -179,6 +179,9 @@ func TestPeerActivityReceivesWithoutContribution(t *testing.T) {
 				t.Fatal(err)
 			}
 			want := peerpolicy.ActivityEvent{ReceivedMessages: 1, ReceivedBytes: 50}
+			if code == GetBlockHeadersMsg || code == GetBlockBodiesMsg || code == GetReceiptsMsg || code == GetPooledTransactionsMsg {
+				want.ReceivedRequests = 1
+			}
 			if code == NewBlockMsg || code == BlockHeadersMsg || code == BlockBodiesMsg || code == ReceiptsMsg {
 				want.UnclassifiedMessages = 1
 			}

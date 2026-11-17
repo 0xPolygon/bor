@@ -713,21 +713,27 @@ func nodeEndpointForLog(n *enode.Node) string {
 	return n.IPAddr().String()
 }
 
-func (srv *Server) idlePeer(peers map[enode.ID]*Peer, count, inbound int, policy *peerpolicy.Tracker) (*Peer, mclock.AbsTime) {
+func (srv *Server) idlePeer(peers map[enode.ID]*Peer, count, inbound int, policy *peerpolicy.Tracker) (*Peer, mclock.AbsTime, bool) {
 	var candidate *Peer
 	var oldest mclock.AbsTime
+	var requestOnlyCandidate bool
 	inboundFull, outboundFull := srv.peerPressure(count, inbound)
 	for _, peer := range peers {
 		if !peer.isLive() || peer.Trusted() || peer.Static() {
 			continue
 		}
 		last, idle := policy.IdleSince(peer.ID().String(), peer.activity)
-		if !idle || (peer.Inbound() && !inboundFull) || (!peer.Inbound() && !outboundFull) {
+		requestOnly := false
+		if !idle && peer.Inbound() {
+			last, requestOnly = policy.RequestOnlySince(peer.ID().String(), peer.activity)
+		}
+		if (!idle && !requestOnly) || (peer.Inbound() && !inboundFull) || (!peer.Inbound() && !outboundFull) {
 			continue
 		}
 		if candidate == nil || last < oldest {
 			candidate, oldest = peer, last
+			requestOnlyCandidate = requestOnly
 		}
 	}
-	return candidate, oldest
+	return candidate, oldest, requestOnlyCandidate
 }

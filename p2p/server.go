@@ -1263,24 +1263,40 @@ func (srv *Server) expireIdlePeer(peers map[enode.ID]*Peer) {
 		if live <= peerIdleMinimumPeers {
 			return
 		}
-		now := srv.clock.Now()
-		peer, last := srv.idlePeer(peers, count, inbound, policy)
-		if peer == nil || !policy.RetireIdle(peer.ID().String(), peer.activity, last) {
+		peer, last, requestOnly := srv.idlePeer(peers, count, inbound, policy)
+		if peer == nil || !srv.retireActivityPeer(peer, last, requestOnly, policy, cooldown) {
 			return
 		}
-		select {
-		case peer.disc <- DiscJailed:
-		default:
-			// Another disconnect is already queued; keep this session closing.
-			return
-		}
-		peer.activity.MarkIdleDisconnect()
-		srv.peerJail.cooldownPeer(peer.ID(), cooldown)
-		peer.Log().Info("Disconnecting inactive peer to free a connection slot",
-			"inactive", now.Sub(last), "cooldown", cooldown)
-		idlePeerDisconnects.Inc(1)
 	}
 }
+
+func (srv *Server) retireActivityPeer(peer *Peer, last mclock.AbsTime, requestOnly bool, policy *peerpolicy.Tracker, cooldown time.Duration) bool {
+	retire := policy.RetireIdle
+	if requestOnly {
+		retire = policy.RetireRequestOnly
+	}
+	if !retire(peer.ID().String(), peer.activity, last) {
+		return false
+	}
+	select {
+	case peer.disc <- DiscJailed:
+	default:
+		// Another disconnect is already queued; keep this session closing.
+		return false
+	}
+	srv.peerJail.cooldownPeer(peer.ID(), cooldown)
+	if requestOnly {
+		peer.activity.MarkRequestOnlyDisconnect()
+		peer.Log().Info("Disconnecting request-only peer to free a connection slot", "cooldown", cooldown)
+		requestOnlyPeerDisconnects.Inc(1)
+	} else {
+		peer.activity.MarkIdleDisconnect()
+		peer.Log().Info("Disconnecting inactive peer to free a connection slot", "inactive", srv.clock.Now().Sub(last), "cooldown", cooldown)
+		idlePeerDisconnects.Inc(1)
+	}
+	return true
+}
+
 func peerCounts(peers map[enode.ID]*Peer) (count, inbound, live int) {
 	for _, peer := range peers {
 		if peer.activity.Closing() {

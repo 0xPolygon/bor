@@ -441,7 +441,8 @@ func (p *Peer) handle(msg Msg) error {
 		if err != nil {
 			return fmt.Errorf("msg code out of range: %v", msg.Code)
 		}
-		p.activity.Observe(p.clock.Now(), proto.Name != "eth")
+		msg.ReceivedAtMonotonic = p.clock.Now()
+		p.activity.Observe(msg.ReceivedAtMonotonic, proto.Name != "eth")
 		if metrics.Enabled() {
 			m := fmt.Sprintf("%s/%s/%d/%#02x", ingressMeterName, proto.Name, proto.Version, msg.Code-proto.offset)
 			metrics.GetOrRegisterMeter(m, nil).Mark(int64(msg.meterSize))

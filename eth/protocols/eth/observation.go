@@ -50,8 +50,10 @@ func (p *Peer) handleObserved(backend Backend, msg p2p.Msg, handle msgHandler) e
 }
 
 func receivedActivity(msg p2p.Msg) peerpolicy.ActivityEvent {
-	activity := peerpolicy.ActivityEvent{ReceivedMessages: 1, ReceivedBytes: uint64(msg.Size)}
+	activity := peerpolicy.ActivityEvent{ReceivedMessages: 1, ReceivedBytes: uint64(msg.Size), MessageAt: msg.ReceivedAtMonotonic}
 	switch msg.Code {
+	case GetBlockHeadersMsg, GetBlockBodiesMsg, GetReceiptsMsg, GetPooledTransactionsMsg:
+		activity.ReceivedRequests = 1
 	case NewBlockMsg, BlockHeadersMsg, BlockBodiesMsg, ReceiptsMsg:
 		// Validation is deferred to consumers outside the message handler.
 		activity.UnclassifiedMessages = 1
