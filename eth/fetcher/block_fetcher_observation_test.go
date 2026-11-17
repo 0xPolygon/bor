@@ -14,11 +14,51 @@ import (
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/eth/protocols/eth"
+	"github.com/ethereum/go-ethereum/p2p"
+	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
 )
 
 type observedImport struct {
 	peer string
 	err  error
+}
+
+func TestBlockContributionRequiresNewImport(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		known, stored, want bool
+	}{
+		{"imported", false, true, true},
+		{"already known", true, true, false},
+		{"skipped", false, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, _ := invalidHeaderFetcher(func(*types.Header) error { return nil }, nil)
+			peer := eth.NewPeer(eth.ETH69, p2p.NewPeer(enode.ID{1}, "", nil), nil, nil)
+			t.Cleanup(peer.Close)
+			var useful bool
+			peer.SetObserver(func(event peerpolicy.Evidence) { useful = event.Activity.UsefulBlock })
+			block := types.NewBlockWithHeader(&types.Header{Number: big.NewInt(2), ParentHash: common.Hash{1}})
+			block.ReceivedFrom = peer
+			hasBlock := tc.known
+			f.getBlock = func(hash common.Hash) *types.Block {
+				if hash == block.Hash() && !hasBlock {
+					return nil
+				}
+				return block
+			}
+			f.insertChain = func(types.Blocks, []*stateless.Witness) (int, error) {
+				hasBlock = tc.stored
+				return 0, nil
+			}
+			f.runBlockImport(&blockOrHeaderInject{origin: peer.ID(), block: block})
+			if useful != tc.want {
+				t.Fatalf("useful = %v, want %v", useful, tc.want)
+			}
+		})
+	}
 }
 
 func invalidHeaderFetcher(verify func(*types.Header) error, insert error) (*BlockFetcher, *[]observedImport) {

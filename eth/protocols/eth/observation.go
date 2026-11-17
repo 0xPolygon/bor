@@ -30,6 +30,18 @@ func (p *Peer) SetObserver(observer func(peerpolicy.Evidence)) {
 	p.observer = observer
 }
 
+func (p *Peer) ObserveUsefulBlock() {
+	if p.observer != nil {
+		p.observer(peerpolicy.Evidence{Activity: peerpolicy.ActivityEvent{UsefulBlock: true}})
+	}
+}
+
+func (r *Response) ObserveUsefulBody() {
+	if r.Req != nil && r.Req.peer != nil {
+		r.Req.peer.ObserveUsefulBlock()
+	}
+}
+
 func (p *Peer) observeFraming(msg p2p.Msg) {
 	if p.observer != nil {
 		p.observer(peerpolicy.Evidence{Reason: peerpolicy.InvalidEncoding, Bytes: uint64(msg.Size), Activity: receivedActivity(msg)})

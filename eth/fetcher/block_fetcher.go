@@ -1319,9 +1319,14 @@ func (f *BlockFetcher) runBlockImport(op *blockOrHeaderInject) (retryWitness boo
 		return false
 	}
 	// Run the actual import and log any issues
+	supplier, _ := block.ReceivedFrom.(*eth.Peer)
+	credit := supplier != nil && supplier.ID() == peer && f.getBlock(hash) == nil
 	if err := f.insertBlockWithRetry(op); err != nil {
 		log.Debug("Propagated block import failed", "peer", peer, "number", block.Number(), "hash", hash, "err", err)
 		return f.chargeDivergedWitnessImportFailure(op, err)
+	}
+	if credit && f.getBlock(hash) != nil {
+		supplier.ObserveUsefulBlock()
 	}
 
 	if f.enableBlockTracking {

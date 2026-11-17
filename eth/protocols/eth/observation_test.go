@@ -70,6 +70,21 @@ func TestPeerPolicyDisabledPreservesDecoder(t *testing.T) {
 	}
 }
 
+func TestUsefulBodyCreditFollowsOriginalRequest(t *testing.T) {
+	peer := new(Peer)
+	(&Response{}).ObserveUsefulBody()
+	(&Response{Req: new(Request)}).ObserveUsefulBody()
+	reply := &Response{Req: &Request{peer: peer}}
+	reply.ObserveUsefulBody()
+
+	var got peerpolicy.Evidence
+	peer.SetObserver(func(event peerpolicy.Evidence) { got = event })
+	reply.ObserveUsefulBody()
+	if !got.Activity.UsefulBlock || got.Reason != peerpolicy.None {
+		t.Fatalf("missing or incorrect contribution evidence: %+v", got)
+	}
+}
+
 func TestPeerPolicyAnnouncementCapture(t *testing.T) {
 	d := &observedDecoder{}
 	packet := make(NewBlockHashesPacket, 1024)

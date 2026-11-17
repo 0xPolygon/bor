@@ -288,7 +288,7 @@ func actionFor(risk uint64) string {
 func (t *Tracker) Snapshot(id string) Snapshot {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	result := Snapshot{Mode: "observe", Action: "none", Windows: make(map[string]uint64)}
+	result := Snapshot{Mode: "observe", Action: "none", RetentionScore: 50, Windows: make(map[string]uint64)}
 	result.Contribution = contributionSnapshot()
 	if p, ok := t.peers.Peek(id); ok {
 		result, _ = t.snapshotPeer(id, p, t.clock.Now(), result.Windows)
@@ -340,8 +340,32 @@ func (t *Tracker) snapshotPeer(id string, p *peerRecord, now mclock.AbsTime, win
 	risk := p.risk(int64(now)/int64(windowWidth), windows)
 	return Snapshot{
 		Mode: "observe", Risk: risk, AbuseRisk: risk, Action: actionFor(risk),
-		Windows: windows, Contribution: contribution,
+		Windows: windows, Contribution: contribution, RetentionScore: retentionScore(risk, contribution),
 	}, connected
+}
+
+func retentionScore(abuse uint64, contribution *ContributionSnapshot) uint64 {
+	score := 50
+	if contribution.recentlyContributed() {
+		score += 30
+	}
+	return uint64(max(0, score-int(abuse)-int(contribution.Risk)))
+}
+
+func (t *Tracker) RotationScore(id string, connection *ConnectionActivity) (uint64, bool) {
+	if !t.mu.TryLock() {
+		return 0, false
+	}
+	defer t.mu.Unlock()
+	p, ok := t.peers.Peek(id)
+	if !ok || connection == nil || p.activity.connection != connection {
+		return 0, false
+	}
+	now := t.clock.Now()
+	t.prepareActivity(&p.activity, now)
+	contribution := p.activity.snapshot(now, t.ready, p.exempt, t.idleGraceSeconds)
+	risk := p.risk(int64(now)/int64(windowWidth), nil)
+	return retentionScore(risk, contribution), true
 }
 
 // SetExempt is called with the authenticated connection class before observation.

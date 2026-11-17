@@ -67,6 +67,7 @@ type ActivityEvent struct {
 	UnclassifiedMessages uint64         `json:"unclassifiedMessages"`
 	StartedAt            mclock.AbsTime `json:"-"`
 	MessageAt            mclock.AbsTime `json:"-"`
+	UsefulBlock          bool           `json:"-"`
 }
 
 // Scope is ETH only: neither remote forwarding nor SNAP/WIT usefulness is known.
@@ -256,7 +257,7 @@ func (a *activityRecord) observe(now mclock.AbsTime, event ActivityEvent) {
 		*b = activityBucket{tick: tick}
 	}
 	b.ActivityEvent.add(event)
-	if event.AcceptedTransactions > 0 {
+	if event.AcceptedTransactions > 0 || event.UsefulBlock {
 		a.lastUseful, a.hasContribution = now, true
 	}
 }
@@ -277,7 +278,7 @@ func (e Evidence) activityOnly() bool {
 }
 
 func contributionSnapshot() *ContributionSnapshot {
-	return &ContributionSnapshot{Mode: "observe", Scope: "eth", UsefulDataCoverage: "transaction-admission", Status: "unknown",
+	return &ContributionSnapshot{Mode: "observe", Scope: "eth", UsefulDataCoverage: "transaction-admission,block-import,sync-body-validation", Status: "unknown",
 		WindowSeconds: uint64(activityCount * activityWidth / time.Second), GraceSeconds: uint64(activityGrace / time.Second)}
 }
 
@@ -338,11 +339,11 @@ func (s *ContributionSnapshot) classify(ready bool) {
 	switch {
 	case !ready:
 		s.Status = "unknown"
-	case s.ProtocolIdleSeconds != nil && s.ObservedSeconds >= s.IdleGraceSeconds && *s.ProtocolIdleSeconds >= s.IdleGraceSeconds:
+	case s.ProtocolIdleSeconds != nil && s.ObservedSeconds >= s.IdleGraceSeconds && *s.ProtocolIdleSeconds >= s.IdleGraceSeconds && !s.recentlyContributed():
 		s.Status = "idle"
 	case s.ObservedSeconds < s.GraceSeconds:
 		s.Status = "warming-up"
-	case s.AcceptedTransactions > 0:
+	case s.recentlyContributed():
 		s.Status = "contributing"
 	case s.UnclassifiedMessages > 0 || s.auxiliaryActive:
 		s.Status = "unknown"
@@ -353,6 +354,10 @@ func (s *ContributionSnapshot) classify(ready bool) {
 	default:
 		s.Status = "unknown"
 	}
+}
+
+func (s *ContributionSnapshot) recentlyContributed() bool {
+	return s.LastContributionAgeSeconds != nil && *s.LastContributionAgeSeconds < s.WindowSeconds
 }
 
 // Limited contribution is weaker evidence than a protocol fault. Its score

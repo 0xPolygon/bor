@@ -218,6 +218,36 @@ func TestPeerIdleGraceStartsAtConnection(t *testing.T) {
 	}
 }
 
+func TestPeerIdleRotationKeepsRecentContributor(t *testing.T) {
+	srv, peers, clock := activityTestServer(t, 20, 14)
+	contributor, quiet := peers[uintID(1)], peers[uintID(2)]
+	contributor.rw.set(trustedConn, false)
+	quiet.rw.set(trustedConn, false)
+	policy := srv.peerPolicy.Load()
+	policy.Observe(contributor.ID().String(), peerpolicy.Evidence{Activity: peerpolicy.ActivityEvent{UsefulBlock: true}})
+	clock.Run(peerIdleTimeout)
+	srv.expireIdlePeer(peers)
+	if len(contributor.disc) != 0 || len(quiet.disc) != 1 {
+		t.Fatal("expected only the idle peer with no useful deliveries to be removed")
+	}
+}
+
+func TestPeerIdleRotationPrefersLowerScore(t *testing.T) {
+	srv, peers, clock := activityTestServer(t, 20, 14)
+	older, lowerScore := peers[uintID(1)], peers[uintID(2)]
+	older.rw.set(trustedConn, false)
+	lowerScore.rw.set(trustedConn, false)
+	clock.Run(time.Minute)
+	lowerScore.activity.Observe(clock.Now(), false)
+	clock.Run(peerIdleTimeout)
+	policy := srv.peerPolicy.Load()
+	policy.Observe(lowerScore.ID().String(), peerpolicy.Evidence{Reason: peerpolicy.InvalidBlock})
+	srv.expireIdlePeer(peers)
+	if len(older.disc) != 0 || len(lowerScore.disc) != 1 {
+		t.Fatal("expected rotation to prefer the lower score despite its newer activity")
+	}
+}
+
 func TestPeerProtocolActivity(t *testing.T) {
 	for _, tc := range []struct {
 		name, protocol string

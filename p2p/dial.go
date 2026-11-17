@@ -716,6 +716,7 @@ func nodeEndpointForLog(n *enode.Node) string {
 func (srv *Server) idlePeer(peers map[enode.ID]*Peer, count, inbound int, policy *peerpolicy.Tracker, requestOnlyBatch bool) (*Peer, mclock.AbsTime, bool) {
 	var candidate *Peer
 	var oldest mclock.AbsTime
+	var lowestScore uint64
 	var requestOnlyCandidate bool
 	inboundFull, outboundFull := srv.peerPressure(count, inbound)
 	for _, peer := range peers {
@@ -730,8 +731,9 @@ func (srv *Server) idlePeer(peers map[enode.ID]*Peer, count, inbound int, policy
 		if (!idle && !requestOnly) || (peer.Inbound() && !inboundFull) || (!peer.Inbound() && !outboundFull) {
 			continue
 		}
-		if candidate == nil || last < oldest {
-			candidate, oldest = peer, last
+		score, ok := policy.RotationScore(peer.ID().String(), peer.activity)
+		if ok && (candidate == nil || score < lowestScore || (score == lowestScore && last < oldest)) {
+			candidate, oldest, lowestScore = peer, last, score
 			requestOnlyCandidate = requestOnly
 		}
 	}
