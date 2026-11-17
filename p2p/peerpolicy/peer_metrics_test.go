@@ -222,7 +222,7 @@ func TestPeerPolicyExportSkipsDiagnosticRecords(t *testing.T) {
 }
 
 func TestPeerPolicyExportsContributionStatus(t *testing.T) {
-	require.Equal(t, []string{"unknown", "warming-up", "contributing", "request-only", "idle"}, contributionStatuses)
+	require.Equal(t, []string{"unknown", "warming-up", "contributing", "request-only", "idle"}, contributionStatuses[:])
 
 	clock := new(mclock.Simulated)
 	tracker, registry := exportTestTracker(t, clock)

@@ -42,6 +42,13 @@ func (r *Response) ObserveUsefulBody() {
 	}
 }
 
+func (r *Response) SupplyingPeer() *Peer {
+	if r.Req == nil {
+		return nil
+	}
+	return r.Req.peer
+}
+
 func (p *Peer) observeFraming(msg p2p.Msg) {
 	if p.observer != nil {
 		p.observer(peerpolicy.Evidence{Reason: peerpolicy.InvalidEncoding, Bytes: uint64(msg.Size), Activity: receivedActivity(msg)})

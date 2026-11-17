@@ -13,12 +13,33 @@ import (
 )
 
 const (
-	activityWidth = time.Minute
-	activityCount = 30
-	activityGrace = 10 * time.Minute
+	activityWidth               = time.Minute
+	activityCount               = 30
+	activityGrace               = 10 * time.Minute
+	requestOnlyMinServedMinutes = 3
+	behaviorRisk                = 20
 )
 
 const IdleTimeout = 10 * time.Minute
+
+type contributionStatusKind uint8
+
+// These values are exported as metric codes.
+const (
+	contributionUnknown contributionStatusKind = iota
+	contributionWarmingUp
+	contributionUseful
+	contributionRequestOnly
+	contributionIdle
+)
+
+var contributionStatuses = [...]string{
+	contributionUnknown:     "unknown",
+	contributionWarmingUp:   "warming-up",
+	contributionUseful:      "contributing",
+	contributionRequestOnly: "request-only",
+	contributionIdle:        "idle",
+}
 
 type ConnectionActivity struct {
 	last                    atomic.Int64
@@ -93,6 +114,7 @@ type ContributionSnapshot struct {
 	ProtocolActivityScope      string  `json:"protocolActivityScope,omitempty"`
 	DisconnectReason           string  `json:"disconnectReason,omitempty"`
 	auxiliaryActive            bool
+	status                     contributionStatusKind
 }
 
 type activityBucket struct {
@@ -153,7 +175,7 @@ func (t *Tracker) idleSince(id string, connection *ConnectionActivity) (mclock.A
 	t.prepareActivity(&p.activity, now)
 	last, live := connection.Last()
 	contribution := p.activity.snapshot(now, t.ready, p.exempt, t.idleGraceSeconds)
-	return last, live && contribution.Status == "idle"
+	return last, live && contribution.status == contributionIdle
 }
 
 // The server checks current connection flags. Never wait for observation or
@@ -185,7 +207,7 @@ func (t *Tracker) requestOnlySince(id string, connection *ConnectionActivity) (m
 	last, live := connection.Last()
 	s := p.activity.snapshot(now, t.ready, p.exempt, t.idleGraceSeconds)
 	// Any non-request traffic is outside this narrow retention policy.
-	eligible := s.Status == "request-only" && !s.Protected && s.ObservedSeconds >= s.IdleGraceSeconds &&
+	eligible := s.status == contributionRequestOnly && !s.Protected && s.ObservedSeconds >= s.IdleGraceSeconds &&
 		s.ServedMinutes >= uint64(activityGrace/activityWidth) && s.ReceivedRequests > 0 && s.ReceivedMessages == s.ReceivedRequests
 	// Do not rotate while the latest wire message is still awaiting observation.
 	return last, live && eligible && last == p.activity.lastHandled
@@ -278,7 +300,7 @@ func (e Evidence) activityOnly() bool {
 }
 
 func contributionSnapshot() *ContributionSnapshot {
-	return &ContributionSnapshot{Mode: "observe", Scope: "eth", UsefulDataCoverage: "transaction-admission,block-import,sync-body-validation", Status: "unknown",
+	return &ContributionSnapshot{Mode: "observe", Scope: "eth", UsefulDataCoverage: "transaction-admission,block-import,sync-body-validation", Status: contributionStatuses[contributionUnknown],
 		WindowSeconds: uint64(activityCount * activityWidth / time.Second), GraceSeconds: uint64(activityGrace / time.Second)}
 }
 
@@ -307,7 +329,8 @@ func (a *activityRecord) snapshot(now mclock.AbsTime, ready, protected bool, idl
 		result.LastContributionAgeSeconds = &age
 	}
 	ready = a.connectionSnapshot(now, ready, result, idleGraceSeconds)
-	result.classify(a.registered && ready)
+	result.status = result.classify(a.registered && ready)
+	result.Status = contributionStatuses[result.status]
 	result.score()
 	return result
 }
@@ -335,24 +358,24 @@ func (a *activityRecord) connectionSnapshot(now mclock.AbsTime, ready bool, resu
 	return ready
 }
 
-func (s *ContributionSnapshot) classify(ready bool) {
+func (s *ContributionSnapshot) classify(ready bool) contributionStatusKind {
 	switch {
 	case !ready:
-		s.Status = "unknown"
+		return contributionUnknown
 	case s.ProtocolIdleSeconds != nil && s.ObservedSeconds >= s.IdleGraceSeconds && *s.ProtocolIdleSeconds >= s.IdleGraceSeconds && !s.recentlyContributed():
-		s.Status = "idle"
+		return contributionIdle
 	case s.ObservedSeconds < s.GraceSeconds:
-		s.Status = "warming-up"
+		return contributionWarmingUp
 	case s.recentlyContributed():
-		s.Status = "contributing"
+		return contributionUseful
 	case s.UnclassifiedMessages > 0 || s.auxiliaryActive:
-		s.Status = "unknown"
-	case s.ServedMinutes >= 3:
-		s.Status = "request-only"
+		return contributionUnknown
+	case s.ServedMinutes >= requestOnlyMinServedMinutes:
+		return contributionRequestOnly
 	case s.ActivityEvent == (ActivityEvent{}) && s.ProtocolIdleSeconds == nil:
-		s.Status = "idle"
+		return contributionIdle
 	default:
-		s.Status = "unknown"
+		return contributionUnknown
 	}
 }
 
@@ -360,12 +383,8 @@ func (s *ContributionSnapshot) recentlyContributed() bool {
 	return s.LastContributionAgeSeconds != nil && *s.LastContributionAgeSeconds < s.WindowSeconds
 }
 
-// Limited contribution is weaker evidence than a protocol fault. Its score
-// stays bounded rather than accumulating with elapsed time or scrape frequency.
-const behaviorRisk = 20
-
 func (s *ContributionSnapshot) score() {
-	if !s.Protected && (s.Status == "idle" || s.Status == "request-only") {
+	if !s.Protected && (s.status == contributionIdle || s.status == contributionRequestOnly) {
 		s.Risk = behaviorRisk
 		s.RiskReason = s.Status
 	}

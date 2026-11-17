@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math/big"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
@@ -58,6 +59,80 @@ func TestBlockContributionRequiresNewImport(t *testing.T) {
 				t.Fatalf("useful = %v, want %v", useful, tc.want)
 			}
 		})
+	}
+}
+
+func TestFetchedBlockCreditsSupplier(t *testing.T) {
+	hashes, blocks := makeChain(2, 0, genesis)
+	tester := newTester(false)
+	t.Cleanup(tester.fetcher.Stop)
+	local, remote := p2p.MsgPipe()
+	t.Cleanup(func() { local.Close(); remote.Close() })
+	peer := eth.NewPeer(eth.ETH69, p2p.NewPeer(enode.ID{1}, "", nil), local, nil)
+	t.Cleanup(peer.Close)
+	credited := make(chan struct{}, 2)
+	peer.SetObserver(func(event peerpolicy.Evidence) {
+		if event.Activity.UsefulBlock {
+			credited <- struct{}{}
+		}
+	})
+	done := make(chan error, 1)
+	go func() { done <- eth.Handle(nil, peer) }()
+	serve := func() error {
+		msg, err := remote.ReadMsg()
+		if err != nil {
+			return err
+		}
+		switch msg.Code {
+		case eth.GetBlockHeadersMsg:
+			var req eth.GetBlockHeadersPacket
+			if err := msg.Decode(&req); err != nil {
+				return err
+			}
+			return p2p.Send(remote, eth.BlockHeadersMsg, &eth.BlockHeadersPacket{
+				RequestId: req.RequestId, BlockHeadersRequest: eth.BlockHeadersRequest{blocks[req.Origin.Hash].Header()},
+			})
+		case eth.GetBlockBodiesMsg:
+			var req eth.GetBlockBodiesPacket
+			if err := msg.Decode(&req); err != nil {
+				return err
+			}
+			body := blocks[req.GetBlockBodiesRequest[0]].Body()
+			return p2p.Send(remote, eth.BlockBodiesMsg, &eth.BlockBodiesPacket{
+				RequestId: req.RequestId, BlockBodiesResponse: eth.BlockBodiesResponse{{Transactions: body.Transactions, Uncles: body.Uncles}},
+			})
+		default:
+			return fmt.Errorf("unexpected request code %d", msg.Code)
+		}
+	}
+	serveDone := make(chan error, 1)
+	go func() {
+		for range 3 {
+			if err := serve(); err != nil {
+				serveDone <- err
+				return
+			}
+		}
+		serveDone <- nil
+	}()
+	for _, hash := range []common.Hash{hashes[1], hashes[0]} {
+		block := blocks[hash]
+		if err := tester.fetcher.Notify(peer.ID(), hash, block.NumberU64(), time.Now().Add(-arriveTimeout), peer.RequestOneHeader, peer.RequestBodies, nil); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-credited:
+			if tester.getBlock(hash) == nil {
+				t.Fatal("credited before block import")
+			}
+		case err := <-done:
+			t.Fatalf("ETH handler stopped: %v", err)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("no contribution credit for fetched block %d", block.NumberU64())
+		}
+	}
+	if err := <-serveDone; err != nil {
+		t.Fatal(err)
 	}
 }
 

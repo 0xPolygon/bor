@@ -732,7 +732,10 @@ func (srv *Server) idlePeer(peers map[enode.ID]*Peer, count, inbound int, policy
 			continue
 		}
 		score, ok := policy.RotationScore(peer.ID().String(), peer.activity)
-		if ok && (candidate == nil || score < lowestScore || (score == lowestScore && last < oldest)) {
+		switch {
+		case !ok || (requestOnly && candidate != nil && !requestOnlyCandidate):
+			continue
+		case candidate == nil || (requestOnlyCandidate && !requestOnly) || score < lowestScore || (score == lowestScore && last < oldest):
 			candidate, oldest, lowestScore = peer, last, score
 			requestOnlyCandidate = requestOnly
 		}

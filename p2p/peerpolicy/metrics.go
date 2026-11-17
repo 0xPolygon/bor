@@ -64,19 +64,6 @@ const (
 	peerRiskExportMetric = "eth/peerpolicy/peer_risk_export"
 )
 
-// Status codes are stable: append new statuses without renumbering existing ones.
-var contributionStatuses = []string{"unknown", "warming-up", "contributing", "request-only", "idle"}
-
-func contributionStatusCode(status string) int64 {
-	for code, name := range contributionStatuses {
-		if name == status {
-			return int64(code)
-		}
-	}
-
-	return 0
-}
-
 type peerMetricSample struct {
 	risk         map[string]int64
 	abuseRisk    map[string]int64
@@ -247,7 +234,7 @@ func (t *Tracker) samplePeer(sample *peerMetricSample, id string, peer *peerReco
 		sample.behaviorRisk[id] = int64(contribution.Risk)
 		sample.connected[id] = flag(connected)
 		sample.protected[id] = flag(contribution.Protected)
-		sample.status[id] = contributionStatusCode(contribution.Status)
+		sample.status[id] = int64(contribution.status)
 		sample.activity[id] = contribution.ActivityEvent
 	}
 

@@ -310,6 +310,7 @@ func TestRequestOnlyPreservesIdlePriority(t *testing.T) {
 		observePeerRequest(srv, requester, clock)
 	}
 	srv.inboundCapacityRefusedUntil = clock.Now().Add(time.Minute)
+	srv.peerPolicy.Load().Observe(requester.ID().String(), peerpolicy.Evidence{Reason: peerpolicy.ServingVolume})
 	srv.expireIdlePeer(peers)
 	if len(idle.disc) != 1 || len(requester.disc) != 0 {
 		t.Fatal("request-only rotation displaced idle cleanup")

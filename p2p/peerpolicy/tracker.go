@@ -14,10 +14,12 @@ import (
 )
 
 const (
-	windowWidth = 10 * time.Second
-	windowCount = 6
-	maxPeers    = 1024
-	maxHashes   = 128
+	windowWidth                 = 10 * time.Second
+	windowCount                 = 6
+	maxPeers                    = 1024
+	maxHashes                   = 128
+	retentionBaseScore          = 50
+	retentionContributionCredit = 30
 	// Bound per-packet history work under the shared tracker lock.
 	maxSampledHashes = 4096
 )
@@ -288,7 +290,7 @@ func actionFor(risk uint64) string {
 func (t *Tracker) Snapshot(id string) Snapshot {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	result := Snapshot{Mode: "observe", Action: "none", RetentionScore: 50, Windows: make(map[string]uint64)}
+	result := Snapshot{Mode: "observe", Action: "none", RetentionScore: retentionBaseScore, Windows: make(map[string]uint64)}
 	result.Contribution = contributionSnapshot()
 	if p, ok := t.peers.Peek(id); ok {
 		result, _ = t.snapshotPeer(id, p, t.clock.Now(), result.Windows)
@@ -345,9 +347,9 @@ func (t *Tracker) snapshotPeer(id string, p *peerRecord, now mclock.AbsTime, win
 }
 
 func retentionScore(abuse uint64, contribution *ContributionSnapshot) uint64 {
-	score := 50
+	score := retentionBaseScore
 	if contribution.recentlyContributed() {
-		score += 30
+		score += retentionContributionCredit
 	}
 	return uint64(max(0, score-int(abuse)-int(contribution.Risk)))
 }
