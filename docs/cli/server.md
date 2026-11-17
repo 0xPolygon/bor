@@ -360,6 +360,8 @@ The ```bor server``` command runs the Bor client.
 
 - ```miner.baseFeeChangeDenominator```: Base fee change rate denominator (must be >0, default 64) for post-Lisovo blocks (default: 0)
 
+- ```miner.baseFeeFloor```: Base fee floor in wei held by this block producer, also used as the target base fee (post-Lisovo, producer policy only, 0 = disabled) (default: 0)
+
 - ```miner.blocktime```: The block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time. (default: 0s)
 
 - ```miner.disable-pending-block```: Disable the pending block creation loop on non block producer nodes. When set, 'pending' block will be unavailable for RPC queries. (default: false)
