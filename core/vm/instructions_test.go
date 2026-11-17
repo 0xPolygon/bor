@@ -697,7 +697,7 @@ func TestKeccakWidenedOpcode(t *testing.T) {
 	evm := NewEVM(BlockContext{}, statedb, params.TestChainConfig, Config{
 		EnablePreimageRecording: true,
 		EnablePrecompileCache:   true,
-		KeccakStore:             store,
+		keccakCache:             store,
 	})
 
 	// First call: widened miss (computes + stores).
@@ -713,7 +713,7 @@ func TestKeccakWidenedOpcode(t *testing.T) {
 	evm = NewEVM(BlockContext{}, statedb, params.TestChainConfig, Config{
 		EnablePreimageRecording: true,
 		EnablePrecompileCache:   true,
-		KeccakStore:             store, // same warm store → forces a hit
+		keccakCache:             store, // same warm store → forces a hit
 	})
 	// Second call: widened hit.
 	if got := run(evm); got != want {

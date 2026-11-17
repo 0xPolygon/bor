@@ -10,7 +10,7 @@ import (
 )
 
 // TestKeccakCacheMetrics drives opKeccak256 twice over the same widened
-// (non-64B) input under a flag-on EVM with a wired KeccakStore: the first
+// (non-64B) input under a flag-on EVM with a wired keccak cache: the first
 // call is a miss (computes + stores), the second is a hit. It asserts the
 // keccak hit/miss meters each increment by exactly 1. Meters are
 // process-global (shared across the whole test binary), so the test
@@ -46,7 +46,7 @@ func TestKeccakCacheMetrics(t *testing.T) {
 	store := newKeccakStoreForTest()
 	evm := NewEVM(BlockContext{}, statedb, params.TestChainConfig, Config{
 		EnablePrecompileCache: true,
-		KeccakStore:           store,
+		keccakCache:           store,
 		ResultCacheConsumer:   CacheConsumerImportSerial,
 	})
 

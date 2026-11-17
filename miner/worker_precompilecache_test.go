@@ -46,7 +46,7 @@ var exerciserAddr = common.HexToAddress("0x000000000000000000000000000000000000E
 
 // buildExerciserRuntime returns EVM runtime bytecode that, on every CALL:
 //   - hashes seven distinct-length memory regions (32..200 bytes) with
-//     KECCAK256 — exercising the widened KeccakStore path (variable-length
+//     KECCAK256 — exercising the widened keccak cache path (variable-length
 //     keccak) added in Tasks 1/3, not just the legacy 64B fast path;
 //   - STATICCALLs the ECRECOVER precompile (0x01) over a *valid* signature
 //     (signed here in Go over a fixed message hash with the given key), so the
@@ -157,7 +157,7 @@ func newExerciserWorker(t *testing.T, enableCache bool) (*worker, *testWorkerBac
 // Because both calls carry identical calldata, the exerciser's CALLDATACOPY
 // produces an identical memory tail on both invocations, so the SECOND call's
 // seven KECCAK256 hashes are all cache HITS against entries the FIRST call's
-// KeccakStore.Store wrote — including sizes other than the legacy 64B fast
+// widened keccak cache wrote — including sizes other than the legacy 64B fast
 // path, so the widened-length store path is actually read back, not just
 // written. The ECRECOVER input is independent of calldata (it's a fixed,
 // pre-signed message baked into the bytecode by buildExerciserRuntime), so it
@@ -280,8 +280,9 @@ func TestBuild_FlagDifferential(t *testing.T) {
 // the build path gets the EXTENDED cache set — i.e. the widened keccak store,
 // not just the legacy 64B/ecrecover caches. The extended-ness is load-bearing:
 // constructing a non-extended set with the flag on would leave the widened
-// keccak path a silent no-op, so this asserts ApplyTo wires KeccakStore (and
-// flips EnablePrecompileCache) rather than merely returning a non-nil set.
+// keccak path a silent no-op. ApplyTo sets EnablePrecompileCache only when it
+// wires the widened keccak cache, so asserting the flag checks that the set is
+// extended rather than merely non-nil.
 func TestNewBuildVMCaches(t *testing.T) {
 	wOff, _ := newExerciserWorker(t, false)
 	require.Nil(t, wOff.newBuildVMCaches(), "flag off: build path must get no shared caches")
@@ -292,7 +293,6 @@ func TestNewBuildVMCaches(t *testing.T) {
 
 	var cfg vm.Config
 	caches.ApplyTo(&cfg, vm.CacheConsumerBuildSeal)
-	require.NotNil(t, cfg.KeccakStore, "flag on: caches must be extended (widened keccak store wired)")
 	require.True(t, cfg.EnablePrecompileCache, "flag on: extended caches must set EnablePrecompileCache")
 }
 

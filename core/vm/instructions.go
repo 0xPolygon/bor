@@ -281,9 +281,9 @@ func opKeccak256(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 		evm.hasher.Write(data)
 		evm.hasher.Read(evm.hasherBuf[:])
 		evm.Config.Keccak256Cache.Store(key, evm.hasherBuf)
-	} else if evm.Config.KeccakStore != nil && cacheableKeccakLen(len(data)) {
+	} else if evm.Config.keccakCache != nil && cacheableKeccakLen(len(data)) {
 		// Widened path for variable-length inputs (every cacheable size except
-		// the legacy 64-byte case above). KeccakStore is only set when
+		// the legacy 64-byte case above). keccakCache is only set when
 		// EnablePrecompileCache is on. On a hit the helper writes the result
 		// into size and returns true. On a miss it computes into hasherBuf,
 		// stores it and returns false, so we fall through below.
@@ -312,7 +312,7 @@ func opKeccak256(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 // as the 64-byte miss path.
 func (evm *EVM) keccakLoadOrCompute(data []byte, size *uint256.Int) bool {
 	meters := evm.Config.ResultCacheConsumer.keccakMeters()
-	if h, ok := evm.Config.KeccakStore.Load(data); ok {
+	if h, ok := evm.Config.keccakCache.Load(data); ok {
 		meters.hit.Mark(1)
 		if evm.Config.EnablePreimageRecording {
 			evm.StateDB.AddPreimage(h, data)
@@ -324,7 +324,7 @@ func (evm *EVM) keccakLoadOrCompute(data []byte, size *uint256.Int) bool {
 	evm.hasher.Reset()
 	evm.hasher.Write(data)
 	evm.hasher.Read(evm.hasherBuf[:])
-	evm.Config.KeccakStore.Store(data, evm.hasherBuf)
+	evm.Config.keccakCache.Store(data, evm.hasherBuf)
 	return false
 }
 

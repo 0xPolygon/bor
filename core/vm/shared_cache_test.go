@@ -9,8 +9,8 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
-func newKeccakStoreForTest() keccakResultStore {
-	return newKeccakStore(defaultKeccakMaxEntries, defaultKeccakMaxBytes, CacheScopeImport)
+func newKeccakStoreForTest() *keccakResultCache {
+	return newKeccakResultCache(defaultKeccakMaxEntries, defaultKeccakMaxBytes, CacheScopeImport)
 }
 
 func TestSharedResultCaches_ApplyTo(t *testing.T) {
@@ -21,7 +21,7 @@ func TestSharedResultCaches_ApplyTo(t *testing.T) {
 	if cfg.Keccak256Cache == nil || cfg.EcrecoverCache == nil || cfg.SharedJumpDestCache == nil {
 		t.Fatal("legacy caches must always be wired by ApplyTo")
 	}
-	if cfg.KeccakStore != nil {
+	if cfg.keccakCache != nil {
 		t.Fatal("widened store must be nil when extended is off")
 	}
 	if cfg.EnablePrecompileCache {
@@ -34,7 +34,7 @@ func TestSharedResultCaches_ApplyTo(t *testing.T) {
 	ext := NewSharedResultCaches(true, CacheScopeBuild)
 	var cfg2 Config
 	ext.ApplyTo(&cfg2, CacheConsumerBuildSeal)
-	if cfg2.KeccakStore == nil {
+	if cfg2.keccakCache == nil {
 		t.Fatal("widened store must be wired when extended is on")
 	}
 	if !cfg2.EnablePrecompileCache {
@@ -65,16 +65,16 @@ func TestKeccakStore_LengthAwareNoCollision(t *testing.T) {
 }
 
 func TestKeccakStore_MemoryCapBounded(t *testing.T) {
-	s := newKeccakStore(1024, defaultKeccakMaxBytes, CacheScopeImport)
+	s := newKeccakResultCache(1024, defaultKeccakMaxBytes, CacheScopeImport)
 	for i := 0; i < 100_000; i++ {
 		in := make([]byte, 64)
 		binary.PutUvarint(in, uint64(i)) // unique
 		s.Store(in, crypto.Keccak256Hash(in))
 	}
-	if n := s.(*shardedKeccakStore).entries.Load(); n > 1024 {
+	if n := s.entries.Load(); n > 1024 {
 		t.Fatalf("entry cap breached: %d entries", n)
 	}
-	if !s.(*shardedKeccakStore).full.Load() {
+	if !s.full.Load() {
 		t.Fatal("store must be marked full once the entry cap is reached")
 	}
 }
@@ -84,7 +84,7 @@ func TestKeccakStore_MemoryCapBounded(t *testing.T) {
 // large input which does not fit does not block smaller ones that still do.
 func TestKeccakStore_ByteBudgetBounded(t *testing.T) {
 	const budget = 1 << 20 // 1 MiB
-	s := newKeccakStore(1<<30, budget, CacheScopeImport).(*shardedKeccakStore)
+	s := newKeccakResultCache(1<<30, budget, CacheScopeImport)
 	for i := 0; i < 1000; i++ {
 		in := make([]byte, 8192)
 		binary.PutUvarint(in, uint64(i)) // unique
@@ -98,7 +98,7 @@ func TestKeccakStore_ByteBudgetBounded(t *testing.T) {
 	}
 
 	// Leave room for one small input but not for a large one.
-	s2 := newKeccakStore(1<<30, 8192+100, CacheScopeImport).(*shardedKeccakStore)
+	s2 := newKeccakResultCache(1<<30, 8192+100, CacheScopeImport)
 	big1, big2 := make([]byte, 8192), make([]byte, 8192)
 	big2[0] = 1
 	s2.Store(big1, crypto.Keccak256Hash(big1))
@@ -119,7 +119,7 @@ func TestKeccakStore_ByteBudgetBounded(t *testing.T) {
 // TestKeccakStore_DuplicateStoreCountsOnce checks that storing the same input
 // twice counts its entry and bytes once.
 func TestKeccakStore_DuplicateStoreCountsOnce(t *testing.T) {
-	s := newKeccakStoreForTest().(*shardedKeccakStore)
+	s := newKeccakStoreForTest()
 	in := bytes.Repeat([]byte{7}, 100)
 	s.Store(in, crypto.Keccak256Hash(in))
 	s.Store(in, crypto.Keccak256Hash(in))
@@ -138,7 +138,7 @@ func TestKeccakStore_MemoryCapBounded_Concurrent(t *testing.T) {
 	const cap = 1024
 	const goroutines = 8
 	const perGoroutine = 5_000
-	s := newKeccakStore(cap, defaultKeccakMaxBytes, CacheScopeImport)
+	s := newKeccakResultCache(cap, defaultKeccakMaxBytes, CacheScopeImport)
 
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
@@ -155,13 +155,13 @@ func TestKeccakStore_MemoryCapBounded_Concurrent(t *testing.T) {
 	}
 	wg.Wait()
 
-	if n := s.(*shardedKeccakStore).entries.Load(); n > cap {
+	if n := s.entries.Load(); n > cap {
 		t.Fatalf("cap breached under concurrency: %d entries (cap %d)", n, cap)
 	}
 
 	// Same check for the byte budget.
 	const budget = 64 * 1024
-	sb := newKeccakStore(1<<30, budget, CacheScopeImport)
+	sb := newKeccakResultCache(1<<30, budget, CacheScopeImport)
 	wg.Add(goroutines)
 	for g := 0; g < goroutines; g++ {
 		go func(g int) {
@@ -175,7 +175,7 @@ func TestKeccakStore_MemoryCapBounded_Concurrent(t *testing.T) {
 		}(g)
 	}
 	wg.Wait()
-	if b := sb.(*shardedKeccakStore).bytes.Load(); b > budget {
+	if b := sb.bytes.Load(); b > budget {
 		t.Fatalf("byte budget breached under concurrency: %d bytes (budget %d)", b, budget)
 	}
 }

@@ -113,25 +113,21 @@ const (
 	defaultKeccakMaxEntries = 1 << 16
 
 	// defaultKeccakMaxBytes bounds the preimage bytes kept per block. Keccak
-	// gas grows linearly with input size (6 gas per 32-byte word), so an
-	// entry count alone does not bound memory: a block of unique large inputs
-	// keeps about 5 bytes per gas at any input size. This budget caps that.
+	// gas is 30 + 6 per 32-byte word, so it grows with input size and an
+	// entry count alone does not bound memory. A block of unique inputs keeps
+	// about 5.2 bytes per gas at 8192 bytes, 4.1 at 512 and 3.6 at 349
+	// (before loop and memory costs). This budget caps the total. Map
+	// overhead and the 32-byte hashes come on top of it.
 	defaultKeccakMaxBytes = 32 << 20
 )
 
-// keccakResultStore caches keccak256(data) -> hash results for one block.
-// Implementations key on the exact bytes (and so the length) of data, so two
-// inputs of different sizes can never share an entry.
-type keccakResultStore interface {
-	Load(data []byte) (common.Hash, bool)
-	Store(data []byte, h common.Hash)
-}
-
-// shardedKeccakStore is a map[string]common.Hash guarded by a sync.RWMutex.
-// The map key is string(data), so it is length-aware. It stops inserting once
-// the entry or byte budget is reached and never returns a wrong hash. It is
-// discarded at the end of the block, so it needs no eviction.
-type shardedKeccakStore struct {
+// keccakResultCache caches keccak256(data) -> hash results for one block. It
+// is a map[string]common.Hash behind one sync.RWMutex. The map key is
+// string(data), so it is length-aware: inputs of different sizes never share
+// an entry. It stops inserting once the entry or byte budget is reached and
+// never returns a wrong hash. It is discarded at the end of the block, so it
+// needs no eviction.
+type keccakResultCache struct {
 	mu         sync.RWMutex
 	m          map[string]common.Hash
 	maxEntries int64
@@ -142,11 +138,11 @@ type shardedKeccakStore struct {
 	meters     keccakStoreMeters
 }
 
-func newKeccakStore(maxEntries, maxBytes int64, scope CacheScope) keccakResultStore {
+func newKeccakResultCache(maxEntries, maxBytes int64, scope CacheScope) *keccakResultCache {
 	if scope >= numCacheScopes {
 		scope = CacheScopeImport
 	}
-	return &shardedKeccakStore{
+	return &keccakResultCache{
 		m:          make(map[string]common.Hash),
 		maxEntries: maxEntries,
 		maxBytes:   maxBytes,
@@ -154,7 +150,7 @@ func newKeccakStore(maxEntries, maxBytes int64, scope CacheScope) keccakResultSt
 	}
 }
 
-func (s *shardedKeccakStore) Load(data []byte) (common.Hash, bool) {
+func (s *keccakResultCache) Load(data []byte) (common.Hash, bool) {
 	s.mu.RLock()
 	h, ok := s.m[string(data)] // no []byte->string allocation on map lookup
 	s.mu.RUnlock()
@@ -164,11 +160,11 @@ func (s *shardedKeccakStore) Load(data []byte) (common.Hash, bool) {
 // fits reports whether one more entry of size n stays within both budgets.
 // Callers check it once without the lock (to skip a full store cheaply) and
 // again under the lock (where it is exact).
-func (s *shardedKeccakStore) fits(n int) bool {
+func (s *keccakResultCache) fits(n int) bool {
 	return s.entries.Load() < s.maxEntries && s.bytes.Load()+int64(n) <= s.maxBytes
 }
 
-func (s *shardedKeccakStore) Store(data []byte, h common.Hash) {
+func (s *keccakResultCache) Store(data []byte, h common.Hash) {
 	// Once the store is full, misses return here without touching the lock.
 	if s.full.Load() || !s.fits(len(data)) {
 		s.markFullIfExhausted()
@@ -204,7 +200,7 @@ func (s *shardedKeccakStore) Store(data []byte, h common.Hash) {
 // entry budget is used, or the remaining byte budget is below the smallest
 // cacheable input. A large input that does not fit while smaller ones still
 // do leaves the store open.
-func (s *shardedKeccakStore) markFullIfExhausted() {
+func (s *keccakResultCache) markFullIfExhausted() {
 	if s.full.Load() {
 		return
 	}
@@ -223,7 +219,7 @@ type SharedResultCaches struct {
 	jumpDests JumpDestCache
 	keccak    *Keccak256Cache
 	ecrecover *EcrecoverCache
-	keccakEx  keccakResultStore // nil unless the flag is on
+	keccakEx  *keccakResultCache // nil unless the flag is on
 }
 
 // NewSharedResultCaches constructs the caches for one block. enableExtended
@@ -236,7 +232,7 @@ func NewSharedResultCaches(enableExtended bool, scope CacheScope) *SharedResultC
 		ecrecover: NewEcrecoverCache(),
 	}
 	if enableExtended {
-		c.keccakEx = newKeccakStore(defaultKeccakMaxEntries, defaultKeccakMaxBytes, scope)
+		c.keccakEx = newKeccakResultCache(defaultKeccakMaxEntries, defaultKeccakMaxBytes, scope)
 	}
 	return c
 }
@@ -250,7 +246,7 @@ func (c *SharedResultCaches) ApplyTo(cfg *Config, consumer CacheConsumer) {
 	cfg.EcrecoverCache = c.ecrecover
 	cfg.ResultCacheConsumer = consumer
 	if c.keccakEx != nil {
-		cfg.KeccakStore = c.keccakEx
+		cfg.keccakCache = c.keccakEx
 		cfg.EnablePrecompileCache = true
 	}
 }
