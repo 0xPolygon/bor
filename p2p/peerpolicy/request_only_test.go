@@ -94,6 +94,28 @@ func TestRequestOnlyMinimumObservationAndServing(t *testing.T) {
 	}
 }
 
+func TestRequestOnlyServedMinutesAfterGrace(t *testing.T) {
+	tracker, clock := newContributionTracker()
+	var connection ConnectionActivity
+	connection.Start(clock.Now())
+	tracker.BindConnection("peer", 0, &connection)
+	clock.Run(10 * time.Minute)
+
+	for minute := 1; minute <= 10; minute++ {
+		for range 2 {
+			connection.Observe(clock.Now(), false)
+			tracker.Observe("peer", Evidence{Activity: ActivityEvent{
+				ReceivedMessages: 1, ReceivedRequests: 1, ServedResponses: 1, MessageAt: clock.Now(),
+			}})
+		}
+		_, eligible := tracker.RequestOnlySince("peer", &connection)
+		if want := minute == 10; eligible != want {
+			t.Fatalf("eligible after %d served minute buckets = %v, want %v", minute, eligible, want)
+		}
+		clock.Run(time.Minute)
+	}
+}
+
 func TestRequestOnlyBusyTracker(t *testing.T) {
 	tracker, connection, _ := requestOnlyFixture()
 	last, eligible := tracker.RequestOnlySince("peer", connection)
