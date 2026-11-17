@@ -9232,6 +9232,8 @@ func processPrecompileCacheChain(t *testing.T, enablePrecompileCache bool) (root
 		t.Fatalf("test invariant broken: expected no parallel processor so only the serial ProcessBlock branch runs")
 	}
 
+	prevSampling := vm.SetKeccakMeterSampling(1) // exact counts for the hit check
+	defer vm.SetKeccakMeterSampling(prevSampling)
 	serialHit := metrics.GetOrRegisterMeter("vm/cache/keccak/import_serial/hit", nil)
 	hitBefore := serialHit.Snapshot().Count()
 

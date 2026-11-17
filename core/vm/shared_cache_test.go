@@ -241,3 +241,55 @@ func TestKeccakStore_AllSizesHitEqualsMiss(t *testing.T) {
 		}
 	}
 }
+
+// TestKeccakStore_ConcurrentDuplicatesExact stores the same inputs from many
+// goroutines while others read them. Each input must be counted once, so the
+// entry and byte counters end exactly at the unique totals.
+func TestKeccakStore_ConcurrentDuplicatesExact(t *testing.T) {
+	const (
+		goroutines = 8
+		unique     = 2000
+	)
+	inputs := make([][]byte, unique)
+	var wantBytes int64
+	for i := range inputs {
+		in := make([]byte, 40+i%300)
+		binary.PutUvarint(in, uint64(i))
+		inputs[i] = in
+		wantBytes += int64(len(in))
+	}
+	s := newKeccakStoreForTest()
+
+	var wg sync.WaitGroup
+	wg.Add(2 * goroutines)
+	for g := 0; g < goroutines; g++ {
+		go func() {
+			defer wg.Done()
+			for _, in := range inputs {
+				s.Store(in, crypto.Keccak256Hash(in))
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for _, in := range inputs {
+				if h, ok := s.Load(in); ok && h != crypto.Keccak256Hash(in) {
+					t.Errorf("wrong hash for input of %d bytes", len(in))
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	if n := s.entries.Load(); n != unique {
+		t.Fatalf("entries = %d, want %d", n, unique)
+	}
+	if b := s.bytes.Load(); b != wantBytes {
+		t.Fatalf("bytes = %d, want %d", b, wantBytes)
+	}
+	for _, in := range inputs {
+		if h, ok := s.Load(in); !ok || h != crypto.Keccak256Hash(in) {
+			t.Fatalf("input of %d bytes: ok=%v", len(in), ok)
+		}
+	}
+}

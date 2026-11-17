@@ -313,14 +313,14 @@ func opKeccak256(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 func (evm *EVM) keccakLoadOrCompute(data []byte, size *uint256.Int) bool {
 	meters := evm.Config.ResultCacheConsumer.keccakMeters()
 	if h, ok := evm.Config.keccakCache.Load(data); ok {
-		meters.hit.Mark(1)
+		markSampled(meters.hit)
 		if evm.Config.EnablePreimageRecording {
 			evm.StateDB.AddPreimage(h, data)
 		}
 		size.SetBytes32(h[:])
 		return true
 	}
-	meters.miss.Mark(1)
+	markSampled(meters.miss)
 	evm.hasher.Reset()
 	evm.hasher.Write(data)
 	evm.hasher.Read(evm.hasherBuf[:])

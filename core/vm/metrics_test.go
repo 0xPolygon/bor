@@ -3,6 +3,8 @@ package vm
 import (
 	"testing"
 
+	"github.com/ethereum/go-ethereum/metrics"
+
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/params"
@@ -35,6 +37,9 @@ func TestKeccakCacheMetrics(t *testing.T) {
 			t.Fatalf("opKeccak256: %v", err)
 		}
 	}
+
+	prev := SetKeccakMeterSampling(1) // exact counts for this test
+	t.Cleanup(func() { SetKeccakMeterSampling(prev) })
 
 	meters := CacheConsumerImportSerial.keccakMeters()
 	other := CacheConsumerImportParallel.keccakMeters()
@@ -104,5 +109,34 @@ func TestEcrecoverCacheMetrics(t *testing.T) {
 	}
 	if got := meters.miss.Snapshot().Count() - missBefore; got != 1 {
 		t.Fatalf("miss delta after hit = %d, want 1 (unchanged)", got)
+	}
+}
+
+// TestKeccakMeterSampling checks that sampled marking stays close to the true
+// count: 64,000 events at 1-in-64 should give 64,000 on average. The bound is
+// about 5 standard deviations, so the test does not flake.
+func TestKeccakMeterSampling(t *testing.T) {
+	prev := SetKeccakMeterSampling(64)
+	t.Cleanup(func() { SetKeccakMeterSampling(prev) })
+
+	m := metrics.NewMeter()
+	defer m.Stop()
+	const events = 64_000
+	for i := 0; i < events; i++ {
+		markSampled(m)
+	}
+	got := m.Snapshot().Count()
+	if got%64 != 0 {
+		t.Fatalf("count %d is not a multiple of the sampling rate", got)
+	}
+	if got < events-10_000 || got > events+10_000 {
+		t.Fatalf("sampled count %d too far from %d", got, events)
+	}
+
+	SetKeccakMeterSampling(1)
+	before := m.Snapshot().Count()
+	markSampled(m)
+	if d := m.Snapshot().Count() - before; d != 1 {
+		t.Fatalf("rate 1: delta %d, want 1", d)
 	}
 }
