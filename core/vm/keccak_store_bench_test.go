@@ -154,8 +154,7 @@ func benchKeccakStore(b *testing.B, s keccakResultStore) {
 	}
 }
 
-// BenchmarkKeccakStore_*_LargeUniqueMix models the adversarial-block shape
-// from spec §3.4: a stream of unique 8192B inputs (each Store'd exactly once,
+// BenchmarkKeccakStore_*_LargeUniqueMix models an adversarial block: a stream of unique 8192B inputs (each Store'd exactly once,
 // never re-read) interleaved with repeated lookups of the hot small sizes.
 // This exercises Store-path allocation behavior, not just Load.
 func BenchmarkKeccakStore_SyncMapString_LargeUniqueMix(b *testing.B) {

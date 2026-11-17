@@ -693,7 +693,7 @@ func TestKeccakWidenedOpcode(t *testing.T) {
 	}
 
 	statedb, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
-	store := newKeccakStore(defaultKeccakCap)
+	store := newKeccakStoreForTest()
 	evm := NewEVM(BlockContext{}, statedb, params.TestChainConfig, Config{
 		EnablePreimageRecording: true,
 		EnablePrecompileCache:   true,

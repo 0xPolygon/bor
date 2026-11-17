@@ -36,30 +36,37 @@ func TestKeccakCacheMetrics(t *testing.T) {
 		}
 	}
 
-	hitBefore := keccakCacheHit.Snapshot().Count()
-	missBefore := keccakCacheMiss.Snapshot().Count()
+	meters := CacheConsumerImportSerial.keccakMeters()
+	other := CacheConsumerImportParallel.keccakMeters()
+	hitBefore := meters.hit.Snapshot().Count()
+	missBefore := meters.miss.Snapshot().Count()
+	otherBefore := other.hit.Snapshot().Count() + other.miss.Snapshot().Count()
 
 	statedb, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
-	store := newKeccakStore(defaultKeccakCap)
+	store := newKeccakStoreForTest()
 	evm := NewEVM(BlockContext{}, statedb, params.TestChainConfig, Config{
 		EnablePrecompileCache: true,
 		KeccakStore:           store,
+		ResultCacheConsumer:   CacheConsumerImportSerial,
 	})
 
 	run(evm) // miss: computes + stores
-	if got := keccakCacheMiss.Snapshot().Count() - missBefore; got != 1 {
+	if got := meters.miss.Snapshot().Count() - missBefore; got != 1 {
 		t.Fatalf("miss delta = %d, want 1", got)
 	}
-	if got := keccakCacheHit.Snapshot().Count() - hitBefore; got != 0 {
+	if got := meters.hit.Snapshot().Count() - hitBefore; got != 0 {
 		t.Fatalf("hit delta after miss = %d, want 0", got)
 	}
 
 	run(evm) // hit: same store, same input
-	if got := keccakCacheHit.Snapshot().Count() - hitBefore; got != 1 {
+	if got := meters.hit.Snapshot().Count() - hitBefore; got != 1 {
 		t.Fatalf("hit delta = %d, want 1", got)
 	}
-	if got := keccakCacheMiss.Snapshot().Count() - missBefore; got != 1 {
+	if got := meters.miss.Snapshot().Count() - missBefore; got != 1 {
 		t.Fatalf("miss delta after hit = %d, want 1 (unchanged)", got)
+	}
+	if got := other.hit.Snapshot().Count() + other.miss.Snapshot().Count() - otherBefore; got != 0 {
+		t.Fatalf("another consumer's meters moved by %d, want 0", got)
 	}
 }
 
@@ -68,32 +75,34 @@ func TestKeccakCacheMetrics(t *testing.T) {
 // + store) followed by a hit on the same input increments the ecrecover
 // miss and hit meters by exactly 1 each.
 func TestEcrecoverCacheMetrics(t *testing.T) {
-	hitBefore := ecrecoverCacheHit.Snapshot().Count()
-	missBefore := ecrecoverCacheMiss.Snapshot().Count()
+	meters := CacheConsumerImportParallel.ecrecoverMeters()
+	hitBefore := meters.hit.Snapshot().Count()
+	missBefore := meters.miss.Snapshot().Count()
 
 	cache := NewEcrecoverCache()
 	evm := &EVM{}
 	evm.Config.EcrecoverCache = cache
+	evm.Config.ResultCacheConsumer = CacheConsumerImportParallel
 	p := &stubPrecompile{gasCost: 3000}
 	input := []byte{0x01, 0x02, 0x03}
 
 	if _, _, err := evm.runPrecompile(p, ecrecoverAddr, input, 100000); err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
-	if got := ecrecoverCacheMiss.Snapshot().Count() - missBefore; got != 1 {
+	if got := meters.miss.Snapshot().Count() - missBefore; got != 1 {
 		t.Fatalf("miss delta = %d, want 1", got)
 	}
-	if got := ecrecoverCacheHit.Snapshot().Count() - hitBefore; got != 0 {
+	if got := meters.hit.Snapshot().Count() - hitBefore; got != 0 {
 		t.Fatalf("hit delta after miss = %d, want 0", got)
 	}
 
 	if _, _, err := evm.runPrecompile(p, ecrecoverAddr, input, 100000); err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
-	if got := ecrecoverCacheHit.Snapshot().Count() - hitBefore; got != 1 {
+	if got := meters.hit.Snapshot().Count() - hitBefore; got != 1 {
 		t.Fatalf("hit delta = %d, want 1", got)
 	}
-	if got := ecrecoverCacheMiss.Snapshot().Count() - missBefore; got != 1 {
+	if got := meters.miss.Snapshot().Count() - missBefore; got != 1 {
 		t.Fatalf("miss delta after hit = %d, want 1 (unchanged)", got)
 	}
 }

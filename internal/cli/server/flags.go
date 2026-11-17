@@ -53,7 +53,7 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	})
 	f.BoolFlag(&flagset.BoolFlag{
 		Name:    "precompile-cache",
-		Usage:   "Enable widened per-block VM result caches (keccak/ecrecover) shared across the prefetcher and V2 BlockSTM workers",
+		Usage:   "Share the per-block VM result caches (keccak/ecrecover) with the serial import processor and the block builder, and cache keccak for variable-length inputs (the prefetcher and parallel workers share these caches either way)",
 		Value:   &c.cliConfig.EnablePrecompileCache,
 		Default: c.cliConfig.EnablePrecompileCache,
 	})

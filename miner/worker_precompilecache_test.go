@@ -164,7 +164,7 @@ func newExerciserWorker(t *testing.T, enableCache bool) (*worker, *testWorkerBac
 // is byte-identical across every call regardless of calldata; the second
 // call's STATICCALL to 0x01 is therefore also a cache HIT against the
 // EcrecoverCache entry the first call populated. Both hits occur within the
-// SAME sealed block because makeEnv calls vmCaches.ApplyTo(&vmCfg) exactly
+// same sealed block because makeEnv calls vmCaches.ApplyTo exactly
 // once per block build and every included transaction's EVM shares that one
 // vm.Config (see miner/worker.go's makeEnv and the mirrored wiring in the
 // build prefetcher). A wrong hit (bad keying/aliasing/stale reuse) would
@@ -220,7 +220,7 @@ func sealExerciserBlock(t *testing.T, w *worker, backend *testWorkerBackend, vmC
 }
 
 // TestBuild_FlagDifferential proves that wiring the per-building-cycle shared VM
-// result caches into the sealing EVM (miner.makeEnv, Task 6) behind
+// result caches into the sealing EVM (miner.makeEnv) behind
 // EnablePrecompileCache is consensus-safe: sealing a block that includes TWO
 // byte-identical exerciser calls — so the second call's ECRECOVER and
 // widened-length KECCAK256 results are served from the cache the first call
@@ -240,7 +240,7 @@ func TestBuild_FlagDifferential(t *testing.T) {
 	// Flag ON: chain carries EnablePrecompileCache and the generateParams carries
 	// a shared cache set, exactly as commitWork constructs it.
 	wOn, backendOn := newExerciserWorker(t, true)
-	blockOn, receiptsOn := sealExerciserBlock(t, wOn, backendOn, vm.NewSharedResultCaches(true))
+	blockOn, receiptsOn := sealExerciserBlock(t, wOn, backendOn, vm.NewSharedResultCaches(true, vm.CacheScopeBuild))
 
 	// Guard against a vacuous pass: both exerciser calls must actually be in the
 	// block and must have succeeded, otherwise the caches were never populated
@@ -291,7 +291,7 @@ func TestNewBuildVMCaches(t *testing.T) {
 	require.NotNil(t, caches, "flag on: build path must get shared caches")
 
 	var cfg vm.Config
-	caches.ApplyTo(&cfg)
+	caches.ApplyTo(&cfg, vm.CacheConsumerBuildSeal)
 	require.NotNil(t, cfg.KeccakStore, "flag on: caches must be extended (widened keccak store wired)")
 	require.True(t, cfg.EnablePrecompileCache, "flag on: extended caches must set EnablePrecompileCache")
 }

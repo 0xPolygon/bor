@@ -3,171 +3,253 @@ package vm
 import (
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/metrics"
 )
 
-// Result-cache observability meters. Distinct namespace from the
-// state-reader caches at core/blockchain.go:84-99 / miner/worker.go
-// ("chain/cache/*", "worker/chain/*") — those track a different cache
-// (state-read results), not these VM opcode/precompile result caches.
-//
-// keccakCacheHit/Miss and keccakCacheEntries/Bytes track the widened
-// (Task 3) keccak store only — the legacy 64B path is unmetered by design
-// (kept out of scope; see task-7 brief). ecrecoverCacheHit/Miss track the
-// always-on legacy ecrecover cache in runEcrecoverWithCache. All increments
-// are cheap atomic ops and only occur on paths that already run when the
-// corresponding cache is wired, so they add ~zero overhead when unused.
-var (
-	keccakCacheHit     = metrics.GetOrRegisterMeter("vm/cache/keccak/hit", nil)
-	keccakCacheMiss    = metrics.GetOrRegisterMeter("vm/cache/keccak/miss", nil)
-	keccakCacheEntries = metrics.GetOrRegisterGauge("vm/cache/keccak/entries", nil)
-	// keccakCacheBytesTotal is a cumulative counter: cumulative bytes
-	// inserted (lifetime), not current retained. It is never decremented
-	// when a per-block store is discarded, so it must not be read as
-	// "current retained bytes" on a dashboard.
-	keccakCacheBytesTotal = metrics.GetOrRegisterCounter("vm/cache/keccak/bytes_total", nil)
-	keccakCacheLockWait   = metrics.GetOrRegisterTimer("vm/cache/keccak/lock_wait", nil)
+// CacheConsumer identifies which executor reads the shared VM result caches,
+// so hit/miss metrics can be split per consumer. When several executors run
+// the same block, the first one to reach an input misses and the others hit,
+// so a single global hit rate says little about real reuse. The zero value
+// is CacheConsumerUnknown.
+type CacheConsumer uint8
 
-	ecrecoverCacheHit  = metrics.GetOrRegisterMeter("vm/cache/ecrecover/hit", nil)
-	ecrecoverCacheMiss = metrics.GetOrRegisterMeter("vm/cache/ecrecover/miss", nil)
+const (
+	CacheConsumerUnknown CacheConsumer = iota
+	CacheConsumerImportPrefetch
+	CacheConsumerImportParallel
+	CacheConsumerImportSerial
+	CacheConsumerBuildPrefetch
+	CacheConsumerBuildSeal
+	numCacheConsumers
 )
 
-// Keccak backing-store microbenchmark (BenchmarkKeccakStore_*, 3 runs,
-// -benchmem, Apple M4 Pro) compared three candidates over the measured hot
-// sizes {64, 88, 128, 349} plus a large-unique-8192 adversarial mix:
-//
-//	sync.Map (string key)  ~38 ns/op   160 B/op   1 allocs/op  (Load)
-//	sharded map+RWMutex    ~12.5 ns/op   0 B/op   0 allocs/op  (Load)
-//	fixed-array buckets    ~16.3 ns/op   0 B/op   0 allocs/op  (Load)
-//
-// All three converge on the large-unique-8192 mix (Store-dominated, ~3.8-3.9
-// us/op) since that path is bound by the one-time map insert + Keccak256,
-// not the backing structure. The sharded map is both the fastest and the
-// only zero-allocation candidate on the hot Load path (fixed-buckets is also
-// zero-alloc but ~30% slower due to its per-size type switch), so it wins
-// outright per the decision rule (lowest allocation; not decisively beaten
-// on speed by anything with equal or lower allocations). sync.Map is
-// disqualified: >0 B/op on Load.
-//
-// See core/vm/keccak_store_bench_test.go for the benchmark source and
-// candidate implementations (the two runners-up live only in that file).
+var cacheConsumerNames = [numCacheConsumers]string{
+	"unknown", "import_prefetch", "import_parallel", "import_serial", "build_prefetch", "build_seal",
+}
 
-// defaultKeccakCap bounds retained widened-keccak entries per block so an
-// adversarial block of unique large inputs (<=8192B) cannot amplify retained
-// memory beyond what is otherwise transient. Chosen to cover the measured hot
-// working set (~60k widened calls/block) with margin; tune via the memory test.
-const defaultKeccakCap = 1 << 16
+func (c CacheConsumer) String() string {
+	if c >= numCacheConsumers {
+		return cacheConsumerNames[CacheConsumerUnknown]
+	}
+	return cacheConsumerNames[c]
+}
+
+// CacheScope names the owner of a per-block result cache set: block import or
+// block building. Each scope has its own widened keccak store, so their size
+// gauges are reported separately.
+type CacheScope uint8
+
+const (
+	CacheScopeImport CacheScope = iota
+	CacheScopeBuild
+	numCacheScopes
+)
+
+var cacheScopeNames = [numCacheScopes]string{"import", "build"}
+
+type hitMissMeters struct {
+	hit, miss *metrics.Meter
+}
+
+func newHitMissMeters(kind string) [numCacheConsumers]hitMissMeters {
+	var m [numCacheConsumers]hitMissMeters
+	for i := range m {
+		prefix := "vm/cache/" + kind + "/" + cacheConsumerNames[i]
+		m[i] = hitMissMeters{
+			hit:  metrics.GetOrRegisterMeter(prefix+"/hit", nil),
+			miss: metrics.GetOrRegisterMeter(prefix+"/miss", nil),
+		}
+	}
+	return m
+}
+
+type keccakStoreMeters struct {
+	entries *metrics.Gauge
+	bytes   *metrics.Gauge
+	full    *metrics.Meter
+}
+
+// Result-cache meters. The widened keccak meters cover the variable-length
+// store only. The legacy 64-byte keccak path is not counted. The ecrecover
+// meters cover runEcrecoverWithCache.
+var (
+	keccakCacheMeters    = newHitMissMeters("keccak")
+	ecrecoverCacheMeters = newHitMissMeters("ecrecover")
+
+	keccakStoreScopeMeters = func() [numCacheScopes]keccakStoreMeters {
+		var m [numCacheScopes]keccakStoreMeters
+		for i := range m {
+			prefix := "vm/cache/keccak/store/" + cacheScopeNames[i]
+			m[i] = keccakStoreMeters{
+				entries: metrics.GetOrRegisterGauge(prefix+"/entries", nil),
+				bytes:   metrics.GetOrRegisterGauge(prefix+"/bytes", nil),
+				full:    metrics.GetOrRegisterMeter(prefix+"/full", nil),
+			}
+		}
+		return m
+	}()
+)
+
+func (c CacheConsumer) keccakMeters() hitMissMeters {
+	if c >= numCacheConsumers {
+		c = CacheConsumerUnknown
+	}
+	return keccakCacheMeters[c]
+}
+
+func (c CacheConsumer) ecrecoverMeters() hitMissMeters {
+	if c >= numCacheConsumers {
+		c = CacheConsumerUnknown
+	}
+	return ecrecoverCacheMeters[c]
+}
+
+const (
+	// defaultKeccakMaxEntries bounds the number of widened keccak entries kept
+	// per block. It covers the measured working set (about 60k widened calls
+	// per block) with margin.
+	defaultKeccakMaxEntries = 1 << 16
+
+	// defaultKeccakMaxBytes bounds the preimage bytes kept per block. Keccak
+	// gas grows linearly with input size (6 gas per 32-byte word), so an
+	// entry count alone does not bound memory: a block of unique large inputs
+	// keeps about 5 bytes per gas at any input size. This budget caps that.
+	defaultKeccakMaxBytes = 32 << 20
+)
 
 // keccakResultStore caches keccak256(data) -> hash results for one block.
-// Implementations MUST be length-aware: they key on the exact bytes (and thus
-// length) of data, so no two differently-sized inputs can ever alias the same
-// entry.
+// Implementations key on the exact bytes (and so the length) of data, so two
+// inputs of different sizes can never share an entry.
 type keccakResultStore interface {
 	Load(data []byte) (common.Hash, bool)
 	Store(data []byte, h common.Hash)
 }
 
-// shardedKeccakStore is the benchmark winner from Task 1: a single
-// map[string]common.Hash guarded by a sync.RWMutex. Length-aware by
-// construction (the map key is string(data), which encodes length). Stops
-// inserting once the entry cap is hit; never returns a wrong/aliased hash.
-// It is a per-block, throwaway store: no eviction churn is needed because the
-// whole store is discarded at the end of the block.
+// shardedKeccakStore is a map[string]common.Hash guarded by a sync.RWMutex.
+// The map key is string(data), so it is length-aware. It stops inserting once
+// the entry or byte budget is reached and never returns a wrong hash. It is
+// discarded at the end of the block, so it needs no eviction.
 type shardedKeccakStore struct {
-	mu      sync.RWMutex
-	m       map[string]common.Hash
-	cap     int
-	entries atomic.Int64
+	mu         sync.RWMutex
+	m          map[string]common.Hash
+	maxEntries int64
+	maxBytes   int64
+	entries    atomic.Int64
+	bytes      atomic.Int64
+	full       atomic.Bool
+	meters     keccakStoreMeters
 }
 
-func newKeccakStore(cap int) keccakResultStore {
-	return &shardedKeccakStore{m: make(map[string]common.Hash), cap: cap}
+func newKeccakStore(maxEntries, maxBytes int64, scope CacheScope) keccakResultStore {
+	if scope >= numCacheScopes {
+		scope = CacheScopeImport
+	}
+	return &shardedKeccakStore{
+		m:          make(map[string]common.Hash),
+		maxEntries: maxEntries,
+		maxBytes:   maxBytes,
+		meters:     keccakStoreScopeMeters[scope],
+	}
 }
 
 func (s *shardedKeccakStore) Load(data []byte) (common.Hash, bool) {
 	s.mu.RLock()
-	h, ok := s.m[string(data)] // compiler avoids the []byte->string alloc on map lookup
+	h, ok := s.m[string(data)] // no []byte->string allocation on map lookup
 	s.mu.RUnlock()
 	return h, ok
 }
 
+// fits reports whether one more entry of size n stays within both budgets.
+// Callers check it once without the lock (to skip a full store cheaply) and
+// again under the lock (where it is exact).
+func (s *shardedKeccakStore) fits(n int) bool {
+	return s.entries.Load() < s.maxEntries && s.bytes.Load()+int64(n) <= s.maxBytes
+}
+
 func (s *shardedKeccakStore) Store(data []byte, h common.Hash) {
-	start := time.Now()
-	s.mu.Lock()
-	// waited measures lock acquisition wait; captured under the lock (right
-	// after acquiring it) so it reflects only the wait, not the work below.
-	waited := time.Since(start)
-	if int(s.entries.Load()) >= s.cap {
-		s.mu.Unlock()
-		keccakCacheLockWait.Update(waited)
-		return // stop inserting; per-block store, discarded after the block
+	// Once the store is full, misses return here without touching the lock.
+	if s.full.Load() || !s.fits(len(data)) {
+		s.markFullIfExhausted()
+		return
 	}
-	var inserted bool
-	var n int64
-	if _, exists := s.m[string(data)]; !exists {
-		s.m[string(data)] = h
-		n = s.entries.Add(1)
-		inserted = true
+	s.mu.Lock()
+	if !s.fits(len(data)) {
+		s.mu.Unlock()
+		s.markFullIfExhausted()
+		return
+	}
+	// One map write. Overwriting an existing key is harmless: the value is
+	// keccak256 of the key, so it is the same hash.
+	before := len(s.m)
+	s.m[string(data)] = h
+	inserted := len(s.m) > before
+	var entries, bytes int64
+	if inserted {
+		entries = s.entries.Add(1)
+		bytes = s.bytes.Add(int64(len(data)))
 	}
 	s.mu.Unlock()
 
-	// Meter updates run after unlocking: they are not part of the mutual
-	// exclusion this lock protects (the map/entries state), and keeping them
-	// out of the critical section avoids widening what lock_wait measures
-	// and keeps this hot path (~60k calls/block) from paying meter overhead
-	// while holding the lock.
-	keccakCacheLockWait.Update(waited)
 	if inserted {
-		// Best-effort process-wide sample: with one store per in-flight
-		// block, concurrent blocks' updates race harmlessly (last write
-		// wins), giving an approximate current size rather than an exact
-		// global total. Cheap and race-free per the entries counter itself.
-		keccakCacheEntries.Update(n)
-		keccakCacheBytesTotal.Inc(int64(len(data)))
+		// Approximate when two blocks of the same scope overlap (last write
+		// wins). Good enough for a size gauge.
+		s.meters.entries.Update(entries)
+		s.meters.bytes.Update(bytes)
 	}
 }
 
-// SharedResultCaches owns the VM-level result caches shared across the
-// prefetcher goroutine and the V2 BlockSTM workers for a single block. The
-// legacy caches (jumpDests, keccak, ecrecover) are always populated — this
-// preserves today's import prefetch↔parallel sharing regardless of the
-// EnablePrecompileCache flag. The widened keccak store is populated only
-// when constructed with enableExtended == true.
-type SharedResultCaches struct {
-	jumpDests JumpDestCache
-	keccak    *Keccak256Cache   // legacy 64B cache (size-capped), always present
-	ecrecover *EcrecoverCache   // size-capped, always present
-	keccakEx  keccakResultStore // widened store; nil unless extended
-	extended  bool
+// markFullIfExhausted sets the full flag once no further entry can fit: the
+// entry budget is used, or the remaining byte budget is below the smallest
+// cacheable input. A large input that does not fit while smaller ones still
+// do leaves the store open.
+func (s *shardedKeccakStore) markFullIfExhausted() {
+	if s.full.Load() {
+		return
+	}
+	if s.entries.Load() >= s.maxEntries || s.bytes.Load() >= s.maxBytes {
+		if s.full.CompareAndSwap(false, true) {
+			s.meters.full.Mark(1)
+		}
+	}
 }
 
-// NewSharedResultCaches constructs the owner. enableExtended gates the
-// widened keccak store and cfg.EnablePrecompileCache in ApplyTo; the legacy
-// caches are always constructed and wired regardless.
-func NewSharedResultCaches(enableExtended bool) *SharedResultCaches {
+// SharedResultCaches owns the VM-level result caches shared by the executors
+// of one block. The legacy caches (jumpDests, 64-byte keccak, ecrecover) are
+// always present and always wired, as before this flag existed. The widened
+// keccak store exists only when the precompile cache flag is on.
+type SharedResultCaches struct {
+	jumpDests JumpDestCache
+	keccak    *Keccak256Cache
+	ecrecover *EcrecoverCache
+	keccakEx  keccakResultStore // nil unless the flag is on
+}
+
+// NewSharedResultCaches constructs the caches for one block. enableExtended
+// creates the widened keccak store, which ApplyTo then wires together with
+// EnablePrecompileCache. scope selects the size gauges for that store.
+func NewSharedResultCaches(enableExtended bool, scope CacheScope) *SharedResultCaches {
 	c := &SharedResultCaches{
 		jumpDests: NewSyncJumpDestCache(),
 		keccak:    NewKeccak256Cache(),
 		ecrecover: NewEcrecoverCache(),
-		extended:  enableExtended,
 	}
 	if enableExtended {
-		c.keccakEx = newKeccakStore(defaultKeccakCap)
+		c.keccakEx = newKeccakStore(defaultKeccakMaxEntries, defaultKeccakMaxBytes, scope)
 	}
 	return c
 }
 
-// ApplyTo wires the caches into cfg. The legacy caches are always wired (this
-// preserves today's import prefetch↔parallel behavior regardless of the
-// flag). The widened keccak store and the flag are wired only when extended.
-func (c *SharedResultCaches) ApplyTo(cfg *Config) {
+// ApplyTo wires the caches into cfg and tags cfg with the consumer, for the
+// per-consumer metrics. The legacy caches are always wired. The widened
+// keccak store and EnablePrecompileCache are wired only when it exists.
+func (c *SharedResultCaches) ApplyTo(cfg *Config, consumer CacheConsumer) {
 	cfg.SharedJumpDestCache = c.jumpDests
 	cfg.Keccak256Cache = c.keccak
 	cfg.EcrecoverCache = c.ecrecover
-	if c.extended {
+	cfg.ResultCacheConsumer = consumer
+	if c.keccakEx != nil {
 		cfg.KeccakStore = c.keccakEx
 		cfg.EnablePrecompileCache = true
 	}

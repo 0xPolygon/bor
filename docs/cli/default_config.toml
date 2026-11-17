@@ -5,6 +5,7 @@ vmdebug = false
 vmtrace = ""
 "vmtrace.jsonconfig" = "{}"
 evm-switch-dispatch = false
+precompile-cache = false
 "state.size-tracking" = false
 datadir = "/var/lib/bor"
 ancient = ""

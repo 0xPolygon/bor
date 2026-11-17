@@ -9,13 +9,15 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
-func newKeccakStoreForTest() keccakResultStore { return newKeccakStore(defaultKeccakCap) }
+func newKeccakStoreForTest() keccakResultStore {
+	return newKeccakStore(defaultKeccakMaxEntries, defaultKeccakMaxBytes, CacheScopeImport)
+}
 
 func TestSharedResultCaches_ApplyTo(t *testing.T) {
 	// Extended off: legacy caches wired, no widened store.
-	base := NewSharedResultCaches(false)
+	base := NewSharedResultCaches(false, CacheScopeImport)
 	var cfg Config
-	base.ApplyTo(&cfg)
+	base.ApplyTo(&cfg, CacheConsumerImportSerial)
 	if cfg.Keccak256Cache == nil || cfg.EcrecoverCache == nil || cfg.SharedJumpDestCache == nil {
 		t.Fatal("legacy caches must always be wired by ApplyTo")
 	}
@@ -25,10 +27,13 @@ func TestSharedResultCaches_ApplyTo(t *testing.T) {
 	if cfg.EnablePrecompileCache {
 		t.Fatal("EnablePrecompileCache must be false when extended is off")
 	}
+	if cfg.ResultCacheConsumer != CacheConsumerImportSerial {
+		t.Fatalf("consumer = %v, want %v", cfg.ResultCacheConsumer, CacheConsumerImportSerial)
+	}
 	// Extended on: widened store present too.
-	ext := NewSharedResultCaches(true)
+	ext := NewSharedResultCaches(true, CacheScopeBuild)
 	var cfg2 Config
-	ext.ApplyTo(&cfg2)
+	ext.ApplyTo(&cfg2, CacheConsumerBuildSeal)
 	if cfg2.KeccakStore == nil {
 		t.Fatal("widened store must be wired when extended is on")
 	}
@@ -45,7 +50,7 @@ func TestKeccakStore_LengthAwareNoCollision(t *testing.T) {
 		t.Fatalf("setup: want 64, got %d", len(padded))
 	}
 	s.Store(short, crypto.Keccak256Hash(short))
-	// A different-length input that shares a prefix MUST NOT read the short entry.
+	// A different-length input that shares a prefix must not read the short entry.
 	if got, ok := s.Load(padded); ok && got == crypto.Keccak256Hash(short) {
 		t.Fatal("length collision: padded input aliased the shorter entry")
 	}
@@ -60,14 +65,66 @@ func TestKeccakStore_LengthAwareNoCollision(t *testing.T) {
 }
 
 func TestKeccakStore_MemoryCapBounded(t *testing.T) {
-	s := newKeccakStore(1024)
+	s := newKeccakStore(1024, defaultKeccakMaxBytes, CacheScopeImport)
 	for i := 0; i < 100_000; i++ {
-		in := make([]byte, 8192)
+		in := make([]byte, 64)
 		binary.PutUvarint(in, uint64(i)) // unique
 		s.Store(in, crypto.Keccak256Hash(in))
 	}
 	if n := s.(*shardedKeccakStore).entries.Load(); n > 1024 {
-		t.Fatalf("cap breached: %d entries", n)
+		t.Fatalf("entry cap breached: %d entries", n)
+	}
+	if !s.(*shardedKeccakStore).full.Load() {
+		t.Fatal("store must be marked full once the entry cap is reached")
+	}
+}
+
+// TestKeccakStore_ByteBudgetBounded checks that retained preimage bytes stay
+// within the byte budget even when the entry cap is far away, and that a
+// large input which does not fit does not block smaller ones that still do.
+func TestKeccakStore_ByteBudgetBounded(t *testing.T) {
+	const budget = 1 << 20 // 1 MiB
+	s := newKeccakStore(1<<30, budget, CacheScopeImport).(*shardedKeccakStore)
+	for i := 0; i < 1000; i++ {
+		in := make([]byte, 8192)
+		binary.PutUvarint(in, uint64(i)) // unique
+		s.Store(in, crypto.Keccak256Hash(in))
+	}
+	if b := s.bytes.Load(); b > budget {
+		t.Fatalf("byte budget breached: %d bytes (budget %d)", b, budget)
+	}
+	if n := s.entries.Load(); n != budget/8192 {
+		t.Fatalf("entries = %d, want %d (budget filled exactly by 8 KiB inputs)", n, budget/8192)
+	}
+
+	// Leave room for one small input but not for a large one.
+	s2 := newKeccakStore(1<<30, 8192+100, CacheScopeImport).(*shardedKeccakStore)
+	big1, big2 := make([]byte, 8192), make([]byte, 8192)
+	big2[0] = 1
+	s2.Store(big1, crypto.Keccak256Hash(big1))
+	s2.Store(big2, crypto.Keccak256Hash(big2)) // does not fit
+	if _, ok := s2.Load(big2); ok {
+		t.Fatal("input over the remaining byte budget must not be stored")
+	}
+	if s2.full.Load() {
+		t.Fatal("store must stay open while smaller inputs still fit")
+	}
+	small := []byte{1, 2, 3}
+	s2.Store(small, crypto.Keccak256Hash(small))
+	if got, ok := s2.Load(small); !ok || got != crypto.Keccak256Hash(small) {
+		t.Fatal("small input that fits the remaining budget must be stored")
+	}
+}
+
+// TestKeccakStore_DuplicateStoreCountsOnce checks that storing the same input
+// twice counts its entry and bytes once.
+func TestKeccakStore_DuplicateStoreCountsOnce(t *testing.T) {
+	s := newKeccakStoreForTest().(*shardedKeccakStore)
+	in := bytes.Repeat([]byte{7}, 100)
+	s.Store(in, crypto.Keccak256Hash(in))
+	s.Store(in, crypto.Keccak256Hash(in))
+	if n, b := s.entries.Load(), s.bytes.Load(); n != 1 || b != 100 {
+		t.Fatalf("entries=%d bytes=%d, want 1 and 100", n, b)
 	}
 }
 
@@ -81,7 +138,7 @@ func TestKeccakStore_MemoryCapBounded_Concurrent(t *testing.T) {
 	const cap = 1024
 	const goroutines = 8
 	const perGoroutine = 5_000
-	s := newKeccakStore(cap)
+	s := newKeccakStore(cap, defaultKeccakMaxBytes, CacheScopeImport)
 
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
@@ -89,9 +146,9 @@ func TestKeccakStore_MemoryCapBounded_Concurrent(t *testing.T) {
 		go func(g int) {
 			defer wg.Done()
 			for i := 0; i < perGoroutine; i++ {
-				in := make([]byte, 8192)
+				in := make([]byte, 64)
 				binary.PutUvarint(in, uint64(g))
-				binary.PutUvarint(in[8192/2:], uint64(i)) // unique per (g, i) across all goroutines
+				binary.PutUvarint(in[32:], uint64(i)) // unique per (g, i) across all goroutines
 				s.Store(in, crypto.Keccak256Hash(in))
 			}
 		}(g)
@@ -100,6 +157,26 @@ func TestKeccakStore_MemoryCapBounded_Concurrent(t *testing.T) {
 
 	if n := s.(*shardedKeccakStore).entries.Load(); n > cap {
 		t.Fatalf("cap breached under concurrency: %d entries (cap %d)", n, cap)
+	}
+
+	// Same check for the byte budget.
+	const budget = 64 * 1024
+	sb := newKeccakStore(1<<30, budget, CacheScopeImport)
+	wg.Add(goroutines)
+	for g := 0; g < goroutines; g++ {
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < 500; i++ {
+				in := make([]byte, 1000)
+				binary.PutUvarint(in, uint64(g))
+				binary.PutUvarint(in[500:], uint64(i))
+				sb.Store(in, crypto.Keccak256Hash(in))
+			}
+		}(g)
+	}
+	wg.Wait()
+	if b := sb.(*shardedKeccakStore).bytes.Load(); b > budget {
+		t.Fatalf("byte budget breached under concurrency: %d bytes (budget %d)", b, budget)
 	}
 }
 
@@ -114,10 +191,10 @@ func FuzzKeccakWidened(f *testing.F) {
 		want := crypto.Keccak256Hash(data)
 		// Simulate opKeccak256's widened miss→store→hit for cacheable sizes.
 		// A fresh store per execution mirrors a single opcode's cycle and keeps
-		// each input independent of the per-block cap (defaultKeccakCap), which
-		// a shared store would exhaust across fuzz executions.
+		// each input independent of the per-block budgets, which a shared
+		// store would exhaust across fuzz executions.
 		if cacheableKeccakLen(len(data)) {
-			store := newKeccakStore(defaultKeccakCap)
+			store := newKeccakStoreForTest()
 			if _, ok := store.Load(data); !ok {
 				store.Store(data, want)
 			}

@@ -17,6 +17,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/naoina/toml"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -285,5 +286,18 @@ func TestParseURLs(t *testing.T) {
 			result := parseURLs(tt.input)
 			assert.Equal(t, tt.expected, result)
 		})
+	}
+}
+
+// TestConfigTOMLDecodePrecompileCache checks that the generated TOML decoder
+// (gen_config.go) knows EnablePrecompileCache. Without the generated entry the
+// decoder rejects the key as an unknown field.
+func TestConfigTOMLDecodePrecompileCache(t *testing.T) {
+	var out Config
+	if err := toml.Unmarshal([]byte("enable_precompile_cache = true\n"), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !out.EnablePrecompileCache {
+		t.Fatal("EnablePrecompileCache not decoded")
 	}
 }

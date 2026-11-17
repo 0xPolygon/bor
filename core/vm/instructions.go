@@ -281,12 +281,13 @@ func opKeccak256(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 		evm.hasher.Write(data)
 		evm.hasher.Read(evm.hasherBuf[:])
 		evm.Config.Keccak256Cache.Store(key, evm.hasherBuf)
-	} else if evm.Config.EnablePrecompileCache && evm.Config.KeccakStore != nil && cacheableKeccakLen(len(data)) {
-		// Widened fast path: variable-length inputs (all cacheable sizes
-		// except the legacy 64B slot above). On a hit the helper writes the
-		// result into size and returns true; on a miss it computes into
-		// hasherBuf and stores, returning false so we fall through below.
-		if evm.keccakWidenedHit(data, size) {
+	} else if evm.Config.KeccakStore != nil && cacheableKeccakLen(len(data)) {
+		// Widened path for variable-length inputs (every cacheable size except
+		// the legacy 64-byte case above). KeccakStore is only set when
+		// EnablePrecompileCache is on. On a hit the helper writes the result
+		// into size and returns true. On a miss it computes into hasherBuf,
+		// stores it and returns false, so we fall through below.
+		if evm.keccakLoadOrCompute(data, size) {
 			return nil, nil
 		}
 	} else {
@@ -302,23 +303,24 @@ func opKeccak256(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 	return nil, nil
 }
 
-// keccakWidenedHit serves opKeccak256's variable-length cache path. On a cache
-// hit it records the preimage (when enabled), writes the cached hash into size,
-// and returns true so the caller returns immediately. On a miss it computes the
-// hash into evm.hasherBuf and stores it (length-aware, stored by value as
-// common.Hash so it never aliases hasherBuf), returning false so the caller
-// falls through to the shared preimage-record + size write — mirroring the 64B
-// miss path exactly.
-func (evm *EVM) keccakWidenedHit(data []byte, size *uint256.Int) bool {
+// keccakLoadOrCompute serves opKeccak256's variable-length cache path. On a
+// hit it records the preimage (when enabled), writes the cached hash into
+// size, and returns true so the caller returns immediately. On a miss it
+// computes the hash into evm.hasherBuf and stores it (by value, as a
+// common.Hash, so the entry never aliases hasherBuf), then returns false so
+// the caller does the shared preimage record and size write. This is the same
+// as the 64-byte miss path.
+func (evm *EVM) keccakLoadOrCompute(data []byte, size *uint256.Int) bool {
+	meters := evm.Config.ResultCacheConsumer.keccakMeters()
 	if h, ok := evm.Config.KeccakStore.Load(data); ok {
-		keccakCacheHit.Mark(1)
+		meters.hit.Mark(1)
 		if evm.Config.EnablePreimageRecording {
 			evm.StateDB.AddPreimage(h, data)
 		}
 		size.SetBytes32(h[:])
 		return true
 	}
-	keccakCacheMiss.Mark(1)
+	meters.miss.Mark(1)
 	evm.hasher.Reset()
 	evm.hasher.Write(data)
 	evm.hasher.Read(evm.hasherBuf[:])

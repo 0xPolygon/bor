@@ -80,8 +80,9 @@ func (evm *EVM) runEcrecoverWithCache(p PrecompiledContract, input []byte, gas u
 	// extra heap allocation. Caller already enforced len(input) <= 128.
 	var key [128]byte
 	copy(key[:], input)
+	meters := evm.Config.ResultCacheConsumer.ecrecoverMeters()
 	if cached, ok := cache.Load(key); ok {
-		ecrecoverCacheHit.Mark(1)
+		meters.hit.Mark(1)
 		gasCost := p.RequiredGas(input)
 		if gas < gasCost {
 			return nil, 0, ErrOutOfGas
@@ -100,7 +101,7 @@ func (evm *EVM) runEcrecoverWithCache(p PrecompiledContract, input []byte, gas u
 		out := append([]byte(nil), cached...)
 		return out, gas, nil
 	}
-	ecrecoverCacheMiss.Mark(1)
+	meters.miss.Mark(1)
 	ret, remainingGas, err := RunPrecompiledContract(p, input, gas, evm.Config.Tracer)
 	if err == nil {
 		// Clone before storing: ret is also handed back to this (miss) caller

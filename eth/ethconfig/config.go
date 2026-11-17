@@ -232,8 +232,10 @@ type Config struct {
 	// Use switch-based fast path interpreter
 	EnableEVMSwitchDispatch bool
 
-	// Enables the widened per-block VM result caches (keccak/ecrecover)
-	// shared across the prefetcher and V2 BlockSTM workers.
+	// Shares the per-block VM result caches with the serial import processor
+	// and the block builder, and widens keccak caching to variable-length
+	// inputs. The prefetcher and the parallel (V2) workers share the result
+	// caches whether or not this is set.
 	EnablePrecompileCache bool
 
 	// Enables tracking of state size

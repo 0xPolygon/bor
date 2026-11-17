@@ -56,14 +56,19 @@ type Config struct {
 	// results. The prefetcher populates it during warm-up; V2 workers hit
 	// it to avoid redundant CGo secp256k1 calls.
 	EcrecoverCache *EcrecoverCache
-	// KeccakStore is the widened, length-aware keccak result cache used when
-	// EnablePrecompileCache is set. When nil, opKeccak256 uses the legacy 64B
-	// Keccak256Cache path only. Populated by SharedResultCaches.ApplyTo.
+	// KeccakStore is the widened, length-aware keccak result cache. When nil,
+	// opKeccak256 uses only the legacy 64-byte Keccak256Cache path. Set by
+	// SharedResultCaches.ApplyTo, only when EnablePrecompileCache is on.
 	KeccakStore keccakResultStore
-	// EnablePrecompileCache gates the extended result-cache behavior: serial-
-	// import and build-path cache sharing, and keccak widening. Default false.
-	// It NEVER disables the always-on import prefetch↔parallel sharing.
+	// EnablePrecompileCache turns on the extended result-cache behavior: the
+	// serial import processor and the block builder share the per-block
+	// caches, and keccak caching is widened to variable-length inputs.
+	// Default false. Turning it off does not disable the result caches that
+	// the import prefetcher and the parallel (V2) workers always share.
 	EnablePrecompileCache bool
+	// ResultCacheConsumer tags this EVM's executor for the per-consumer
+	// cache hit/miss metrics. Set by SharedResultCaches.ApplyTo.
+	ResultCacheConsumer CacheConsumer
 }
 
 // ScopeContext contains the things that are per-call, such as stack and memory,

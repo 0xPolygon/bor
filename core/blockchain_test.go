@@ -9123,7 +9123,7 @@ func TestLoadLastStateSafeBlock(t *testing.T) {
 //   - KECCAK256 over several distinct sizes {32, 64, 88, 100, 128, 150, 200}.
 //     64 hits the legacy Keccak256Cache fast path; all the others (including
 //     128, the widened-store upper edge used elsewhere in these bytes) hit
-//     the widened KeccakStore path added in Task 1/3.
+//     the widened KeccakStore path.
 //   - A STATICCALL to the ECRECOVER precompile (0x01) over a *valid*
 //     signature (computed once, in Go, over a fixed message hash with the
 //     deploying key) so the call actually recovers an address rather than
@@ -9169,11 +9169,10 @@ func buildPrecompileCacheExerciserInitCode(key *ecdsa.PrivateKey) (initCode []by
 // deploy of buildPrecompileCacheExerciserInitCode, then a call into it. Because
 // the constructed BlockChain has no parallel processor (bc.parallelProcessor
 // is nil, since it is built with plain NewBlockChain rather than
-// NewParallelBlockChain), bc.ProcessBlock's serial branch is the ONLY
-// processing path exercised - the parallel/BlockSTM goroutine at
-// blockchain.go:~865 is skipped entirely (guarded by
-// `if bc.parallelProcessor != nil`). This isolates the serial-processor wiring
-// added in Task 5 from the already-wired parallel/prefetch call sites.
+// NewParallelBlockChain), the serial branch of bc.ProcessBlock is the only
+// processing path exercised. The parallel (V2) goroutine is skipped (it is
+// guarded by `if bc.parallelProcessor != nil`). This isolates the serial
+// processor wiring from the parallel and prefetch call sites.
 func processPrecompileCacheChain(t *testing.T, enablePrecompileCache bool) (root common.Hash, receipts types.Receipts, gasUsed []uint64) {
 	t.Helper()
 
@@ -9207,12 +9206,17 @@ func processPrecompileCacheChain(t *testing.T, enablePrecompileCache bool) (root
 			}
 			b.AddTx(tx)
 		case 1:
+			// Two identical calls: the serial processor runs them in order,
+			// so with the flag on the second call always hits the entries the
+			// first call stored, whatever the prefetcher did.
 			contractAddr := crypto.CreateAddress(address, 0)
-			tx, err := types.SignTx(types.NewTransaction(b.TxNonce(address), contractAddr, big.NewInt(0), 3_000_000, b.header.BaseFee, callData), signer, key)
-			if err != nil {
-				t.Fatalf("sign call tx: %v", err)
+			for j := 0; j < 2; j++ {
+				tx, err := types.SignTx(types.NewTransaction(b.TxNonce(address), contractAddr, big.NewInt(0), 3_000_000, b.header.BaseFee, callData), signer, key)
+				if err != nil {
+					t.Fatalf("sign call tx: %v", err)
+				}
+				b.AddTx(tx)
 			}
-			b.AddTx(tx)
 		}
 	})
 
@@ -9228,8 +9232,19 @@ func processPrecompileCacheChain(t *testing.T, enablePrecompileCache bool) (root
 		t.Fatalf("test invariant broken: expected no parallel processor so only the serial ProcessBlock branch runs")
 	}
 
+	serialHit := metrics.GetOrRegisterMeter("vm/cache/keccak/import_serial/hit", nil)
+	hitBefore := serialHit.Snapshot().Count()
+
 	if n, err := bc.InsertChain(blocks, false); err != nil {
 		t.Fatalf("InsertChain(cache=%v) block %d: %v", enablePrecompileCache, n, err)
+	}
+
+	hitDelta := serialHit.Snapshot().Count() - hitBefore
+	if enablePrecompileCache && hitDelta < 1 {
+		t.Fatalf("cache=true: serial keccak hit delta = %d, want >=1 (the second call must hit the widened store)", hitDelta)
+	}
+	if !enablePrecompileCache && hitDelta != 0 {
+		t.Fatalf("cache=false: serial keccak hit delta = %d, want 0 (the serial processor must not use the widened store)", hitDelta)
 	}
 
 	head := bc.CurrentBlock()
@@ -9251,11 +9266,13 @@ func processPrecompileCacheChain(t *testing.T, enablePrecompileCache bool) (root
 
 	last := blocks[len(blocks)-1]
 	receipts = bc.GetReceiptsByHash(last.Hash())
-	if len(receipts) != 1 {
-		t.Fatalf("cache=%v: expected 1 receipt for the call block, got %d", enablePrecompileCache, len(receipts))
+	if len(receipts) != 2 {
+		t.Fatalf("cache=%v: expected 2 receipts for the call block, got %d", enablePrecompileCache, len(receipts))
 	}
-	if receipts[0].Status != types.ReceiptStatusSuccessful {
-		t.Fatalf("cache=%v: call tx failed (status=%d) - the exerciser contract must succeed to actually hit both caches", enablePrecompileCache, receipts[0].Status)
+	for i, r := range receipts {
+		if r.Status != types.ReceiptStatusSuccessful {
+			t.Fatalf("cache=%v: call tx %d failed (status=%d) - the exerciser contract must succeed to actually hit both caches", enablePrecompileCache, i, r.Status)
+		}
 	}
 
 	for _, blk := range blocks {
@@ -9265,8 +9282,8 @@ func processPrecompileCacheChain(t *testing.T, enablePrecompileCache bool) (root
 }
 
 // TestProcessBlock_FlagDifferential proves that wiring the per-block shared
-// VM result caches into the serial import processor (core/blockchain.go,
-// Task 5) behind EnablePrecompileCache is consensus-safe: importing the same
+// VM result caches into the serial import processor behind
+// EnablePrecompileCache is consensus-safe: importing the same
 // two-block chain (a contract deploy + a call that exercises both ECRECOVER
 // and widened-length KECCAK256) through the serial-only BlockChain produces
 // byte-identical state root, receipts, and gas-used whether the flag is off
@@ -9318,28 +9335,11 @@ func TestProcessBlock_FlagDifferential(t *testing.T) {
 	}
 }
 
-// TestProcessBlock_FlagOff_LegacyEcrecoverCacheMetered is the Task 5 deferred
-// belt-and-suspenders check, now that Task 7 adds vm/cache/ecrecover/{hit,miss}
-// meters. SharedResultCaches always wires the legacy ecrecover cache
-// regardless of EnablePrecompileCache (see shared_cache.go's ApplyTo), and
-// bc.startPrefetchGoroutine wires it into the throwaway prefetch EVM
-// unconditionally too (core/blockchain.go's startPrefetchGoroutine, not
-// gated on the flag) — unlike the serial processor's real result path, which
-// only wires the caches when the flag is on (see the `if
-// serialVmCfg.EnablePrecompileCache` gate in ProcessBlock). So with the flag
-// OFF, importing a block containing an ECRECOVER call must still produce at
-// least one ecrecover/miss (the always-on prefetch goroutine populating the
-// cache), pinning that today's flag-off prefetch↔legacy-cache behavior is
-// unaffected by Task 7's changes.
-//
-// This intentionally asserts population (>=1 miss), not a guaranteed hit:
-// PrefetchStream runs a block's transactions across a worker pool in
-// parallel, so two identical ECRECOVER calls in one block can race each
-// other into a double-miss depending on scheduling — a hit is possible but
-// not deterministic, and forcing determinism there is out of scope for this
-// task (no cache-algorithm changes). The widened keccak store and its
-// meters are NOT exercised here since they are gated by the flag (nil when
-// off) and therefore correctly out of scope for a flag-off regression check.
+// TestProcessBlock_FlagOff_LegacyEcrecoverCacheMetered checks that with the
+// precompile cache flag off, the import prefetcher still fills the legacy
+// ecrecover cache, as it did before the flag existed. It calls prefetchBlock
+// directly (the same function the prefetch goroutine runs) and waits for it,
+// so the result does not depend on goroutine timing.
 func TestProcessBlock_FlagOff_LegacyEcrecoverCacheMetered(t *testing.T) {
 	key, err := crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
 	if err != nil {
@@ -9388,21 +9388,116 @@ func TestProcessBlock_FlagOff_LegacyEcrecoverCacheMetered(t *testing.T) {
 	}
 	defer bc.Stop()
 
-	missBefore := metrics.GetOrRegisterMeter("vm/cache/ecrecover/miss", nil).Snapshot().Count()
-
-	if n, err := bc.InsertChain(blocks, false); err != nil {
+	// Import the deploy block only, then prefetch the call block on its state.
+	if n, err := bc.InsertChain(blocks[:1], false); err != nil {
 		t.Fatalf("InsertChain block %d: %v", n, err)
 	}
-
-	last := blocks[len(blocks)-1]
-	receipts := bc.GetReceiptsByHash(last.Hash())
-	if len(receipts) != 1 || receipts[0].Status != types.ReceiptStatusSuccessful {
-		t.Fatalf("call tx did not succeed: %+v", receipts)
+	throwaway, err := bc.StateAt(blocks[0].Root())
+	if err != nil {
+		t.Fatalf("StateAt: %v", err)
 	}
 
-	missDelta := metrics.GetOrRegisterMeter("vm/cache/ecrecover/miss", nil).Snapshot().Count() - missBefore
-	if missDelta < 1 {
-		t.Fatalf("ecrecover miss delta = %d, want >=1 (the always-on prefetch goroutine must still populate the legacy cache with the flag off)", missDelta)
+	miss := metrics.GetOrRegisterMeter("vm/cache/ecrecover/import_prefetch/miss", nil)
+	missBefore := miss.Snapshot().Count()
+
+	caches := bc.newSharedBlockCaches()
+	bc.prefetchBlock(blocks[1], throwaway, caches, new(atomic.Bool))
+
+	if missDelta := miss.Snapshot().Count() - missBefore; missDelta < 1 {
+		t.Fatalf("import_prefetch ecrecover miss delta = %d, want >=1 (the prefetcher must use the legacy ecrecover cache with the flag off)", missDelta)
+	}
+}
+
+// TestProcessBlock_SerialRetryWithoutSharedCaches checks the safety net for
+// the precompile cache flag: if the serial processor fails while reading the
+// shared caches, it runs once more without them before the block is rejected.
+// The test poisons the legacy 64-byte keccak cache with a wrong hash for an
+// input whose hash the contract writes to storage.
+func TestProcessBlock_SerialRetryWithoutSharedCaches(t *testing.T) {
+	key, err := crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+	if err != nil {
+		t.Fatalf("HexToECDSA: %v", err)
+	}
+	address := crypto.PubkeyToAddress(key.PublicKey)
+
+	var input [64]byte
+	for i := range input {
+		input[i] = byte(i + 1)
+	}
+	// runtime: mem[0:64) = input; sstore(0, keccak256(mem[0:64)))
+	runtime := program.New().
+		Mstore(input[:], 0).
+		Push(64).Push(0).Op(vm.KECCAK256).
+		Push(0).Op(vm.SSTORE).
+		Op(vm.STOP)
+	initCode := program.New().ReturnViaCodeCopy(runtime.Bytes()).Bytes()
+
+	gspec := &Genesis{
+		Config:   params.TestChainConfig,
+		Alloc:    types.GenesisAlloc{address: {Balance: big.NewInt(1_000_000_000_000_000_000)}},
+		BaseFee:  big.NewInt(params.InitialBaseFee),
+		GasLimit: 8_000_000,
+	}
+	signer := types.LatestSigner(gspec.Config)
+	contractAddr := crypto.CreateAddress(address, 0)
+
+	_, blocks, _ := GenerateChainWithGenesis(gspec, ethash.NewFaker(), 2, func(i int, b *BlockGen) {
+		b.SetCoinbase(common.Address{0x01})
+		var tx *types.Transaction
+		var err error
+		if i == 0 {
+			tx, err = types.SignTx(types.NewContractCreation(b.TxNonce(address), big.NewInt(0), 1_000_000, b.header.BaseFee, initCode), signer, key)
+		} else {
+			tx, err = types.SignTx(types.NewTransaction(b.TxNonce(address), contractAddr, big.NewInt(0), 1_000_000, b.header.BaseFee, nil), signer, key)
+		}
+		if err != nil {
+			t.Fatalf("sign tx: %v", err)
+		}
+		b.AddTx(tx)
+	})
+
+	poison := func(caches *vm.SharedResultCaches) {
+		var cfg vm.Config
+		caches.ApplyTo(&cfg, vm.CacheConsumerUnknown)
+		cfg.Keccak256Cache.Store(input, common.Hash{0xde, 0xad})
+	}
+
+	for _, flag := range []bool{false, true} {
+		cfg := DefaultConfig()
+		cfg.VmConfig = vm.Config{EnablePrecompileCache: flag}
+		bc, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, ethash.NewFaker(), cfg)
+		if err != nil {
+			t.Fatalf("NewBlockChain(flag=%v): %v", flag, err)
+		}
+		bc.resultCachesHook = poison
+
+		retries := blockSerialNoCacheRetryCounter.Snapshot().Count()
+		accepted := blockSerialNoCacheRetryAcceptedCounter.Snapshot().Count()
+
+		if n, err := bc.InsertChain(blocks, false); err != nil {
+			bc.Stop()
+			t.Fatalf("flag=%v: InsertChain block %d: %v (the valid block must be accepted)", flag, n, err)
+		}
+		st, err := bc.StateAt(bc.CurrentBlock().Root)
+		if err != nil {
+			bc.Stop()
+			t.Fatalf("flag=%v: StateAt: %v", flag, err)
+		}
+		if got, want := st.GetState(contractAddr, common.Hash{}), crypto.Keccak256Hash(input[:]); got != want {
+			bc.Stop()
+			t.Fatalf("flag=%v: slot 0 = %x, want %x", flag, got, want)
+		}
+
+		gotRetries := blockSerialNoCacheRetryCounter.Snapshot().Count() - retries
+		gotAccepted := blockSerialNoCacheRetryAcceptedCounter.Snapshot().Count() - accepted
+		bc.Stop()
+
+		if flag && (gotRetries != 1 || gotAccepted != 1) {
+			t.Fatalf("flag on: retries=%d accepted=%d, want 1 and 1", gotRetries, gotAccepted)
+		}
+		if !flag && (gotRetries != 0 || gotAccepted != 0) {
+			t.Fatalf("flag off: retries=%d accepted=%d, want 0 (serial does not read the shared caches)", gotRetries, gotAccepted)
+		}
 	}
 }
 
