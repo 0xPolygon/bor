@@ -18,11 +18,11 @@ func (c *Command) peerReputationFlag(f *flagset.Flagset) {
 		Value: &c.cliConfig.P2P.PeerIdleReconnectCooldown, Default: c.cliConfig.P2P.PeerIdleReconnectCooldown, Group: "P2P",
 	})
 	f.IntFlag(&flagset.IntFlag{
-		Name: "peer-idle-occupancy-threshold", Usage: "Peer slot occupancy percentage required for silent-peer rotation (1-100)",
+		Name: "peer-idle-occupancy-threshold", Usage: "Peer slot occupancy percentage required to continue rotation (1-100; request-only batches must start at full capacity after a refusal)",
 		Value: &c.cliConfig.P2P.PeerIdleOccupancyThreshold, Default: c.cliConfig.P2P.PeerIdleOccupancyThreshold, Group: "P2P",
 	})
 	f.IntFlag(&flagset.IntFlag{
-		Name: "peer-idle-max-removals", Usage: "Maximum peers rotated per one-minute check (1-64); request-only rotation is limited to one per grace period, at least 10m",
+		Name: "peer-idle-max-removals", Usage: "Maximum peers rotated per check (1-64); request-only batches are separated by at least the grace period or 10m, whichever is longer",
 		Value: &c.cliConfig.P2P.PeerIdleMaxRemovals, Default: c.cliConfig.P2P.PeerIdleMaxRemovals, Group: "P2P",
 	})
 	f.BoolFlag(&flagset.BoolFlag{

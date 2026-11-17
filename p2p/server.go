@@ -1272,15 +1272,24 @@ func (srv *Server) expireIdlePeer(peers map[enode.ID]*Peer) {
 		return
 	}
 	cooldown := srv.peerIdleCooldown()
+	count, inbound, _ := peerCounts(peers)
+	requestOnlyBatch := srv.requestOnlyPressure(count, inbound)
+	requestOnlyRemoved := false
+	defer func() {
+		if requestOnlyRemoved {
+			srv.requestOnlyRotatedUntil = srv.clock.Now().Add(max(requestOnlyRotationInterval, srv.PeerIdleGracePeriod))
+		}
+	}()
 	for range min(max(srv.PeerIdleMaxRemovals, 1), MaxPeerIdleRemovals, len(peers)) {
 		count, inbound, live := peerCounts(peers)
 		if live <= peerIdleMinimumPeers {
 			return
 		}
-		peer, last, requestOnly := srv.idlePeer(peers, count, inbound, policy)
+		peer, last, requestOnly := srv.idlePeer(peers, count, inbound, policy, requestOnlyBatch)
 		if peer == nil || !srv.retireActivityPeer(peer, last, requestOnly, policy, cooldown) {
 			return
 		}
+		requestOnlyRemoved = requestOnlyRemoved || requestOnly
 	}
 }
 
@@ -1305,7 +1314,6 @@ func (srv *Server) retireActivityPeer(peer *Peer, last mclock.AbsTime, requestOn
 	srv.peerJail.cooldownPeer(peer.ID(), cooldown)
 	if requestOnly {
 		srv.inboundCapacityRefusedUntil = 0
-		srv.requestOnlyRotatedUntil = srv.clock.Now().Add(max(requestOnlyRotationInterval, srv.PeerIdleGracePeriod))
 		peer.activity.MarkRequestOnlyDisconnect()
 		peer.Log().Info("Disconnecting request-only peer to free a connection slot", "cooldown", cooldown)
 		requestOnlyPeerDisconnects.Inc(1)
