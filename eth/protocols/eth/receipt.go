@@ -379,9 +379,12 @@ func (rl *ReceiptList68) Derivable() types.DerivableList {
 	initBuffers(&rl.buf)
 	return newDerivableRawList(&rl.items, func(data []byte, outbuf *bytes.Buffer) {
 		var r Receipt
-		if r.decode68(data) == nil {
-			r.encodeForHash(rl.buf, outbuf)
+		if r.decode68(data) != nil {
+			// Write invalid data to corrupt the receipt root
+			outbuf.WriteByte(0x00)
+			return
 		}
+		r.encodeForHash(rl.buf, outbuf)
 	})
 }
 
@@ -441,9 +444,12 @@ func (rl *ReceiptList69) Derivable() types.DerivableList {
 	initBuffers(&rl.buf)
 	return newDerivableRawList(&rl.items, func(data []byte, outbuf *bytes.Buffer) {
 		var r Receipt
-		if r.decode69(data) == nil {
-			r.encodeForHash(rl.buf, outbuf)
+		if r.decode69(data) != nil {
+			// Write invalid data to corrupt the receipt root
+			outbuf.WriteByte(0x00)
+			return
 		}
+		r.encodeForHash(rl.buf, outbuf)
 	})
 }
 

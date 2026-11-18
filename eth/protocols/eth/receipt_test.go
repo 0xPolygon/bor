@@ -529,5 +529,45 @@ func TestBlockReceiptsToNetwork69_MoreReceiptsThanTxs(t *testing.T) {
 	lastIsStateSync := func(i int) bool { return i == 1 }
 	if _, _, err := blockReceiptsToNetwork69(receipts, body, lastIsStateSync, receiptQueryParams{}); err != nil {
 		t.Fatalf("state-sync receipt without a body transaction must still be served: %v", err)
+
+	}
+}
+
+// TestReceiptListInvalidTrailing checks that an undecodable receipt changes the
+// derived root, so it can't sneak into the database via EncodeForStorage.
+func TestReceiptListInvalidTrailing(t *testing.T) {
+	test := receiptsTests[len(receiptsTests)-1]
+	canonDB, _ := rlp.EncodeToBytes(test.input)
+	canonBody, _ := rlp.EncodeToBytes(types.Body{Transactions: test.txs})
+	bad, _ := rlp.EncodeToBytes([]byte{0x01})
+
+	network68, err := blockReceiptsToNetwork68(canonDB, canonBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rl68 ReceiptList68
+	if err := rlp.DecodeBytes(network68, &rl68); err != nil {
+		t.Fatal(err)
+	}
+	if err := rl68.items.AppendRaw(bad); err != nil {
+		t.Fatal(err)
+	}
+	if hash := types.DeriveSha(rl68.Derivable(), trie.NewStackTrie(nil)); hash == test.root {
+		t.Fatal("eth/68: invalid trailing receipt did not change the derived root")
+	}
+
+	network69, _, err := blockReceiptsToNetwork69(canonDB, canonBody, func(int) bool { return false }, receiptQueryParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rl69 ReceiptList69
+	if err := rlp.DecodeBytes(network69, &rl69); err != nil {
+		t.Fatal(err)
+	}
+	if err := rl69.items.AppendRaw(bad); err != nil {
+		t.Fatal(err)
+	}
+	if hash := types.DeriveSha(rl69.Derivable(), trie.NewStackTrie(nil)); hash == test.root {
+		t.Fatal("eth/69: invalid trailing receipt did not change the derived root")
 	}
 }
