@@ -50,6 +50,29 @@ func (f *TxFetcher) observeDelivery(delivery *txDelivery) {
 	solicited := requestedDelivery(f.requests[delivery.origin], delivery)
 	summary := delivery.observation
 	f.validationObserver(delivery.origin, solicited, summary.items, summary.bytes, summary.invalid, summary.accepted, summary.complete, summary.receivedAt)
+	if delivery.observed != nil {
+		close(delivery.observed)
+	}
+}
+
+func (f *TxFetcher) enqueueDelivery(delivery *txDelivery) error {
+	if f.validationObserver != nil {
+		delivery.observed = make(chan struct{})
+	}
+	select {
+	case f.cleanup <- delivery:
+	case <-f.quit:
+		return errTerminated
+	}
+	if delivery.observed == nil {
+		return nil
+	}
+	select {
+	case <-delivery.observed:
+		return nil
+	case <-f.quit:
+		return errTerminated
+	}
 }
 
 type DeliveryProvenance uint8

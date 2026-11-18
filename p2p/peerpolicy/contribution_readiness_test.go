@@ -60,7 +60,7 @@ func TestContributionIdleRechecksActivityAndReadiness(t *testing.T) {
 	tracker.BindConnection("peer", 0, &connection)
 	clock.Run(IdleTimeout)
 	last, idle := tracker.IdleSince("peer", &connection)
-	if !idle || tracker.Snapshot("peer").Risk != 20 {
+	if !idle || tracker.Snapshot("peer").Contribution.Risk != 20 {
 		t.Fatal("idle score and eligibility disagree")
 	}
 	connection.Observe(clock.Now(), true)

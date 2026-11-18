@@ -30,6 +30,25 @@ func (p *Peer) SetObserver(observer func(peerpolicy.Evidence)) {
 	p.observer = observer
 }
 
+func (p *Peer) ObserveUsefulBlock() {
+	if p.observer != nil {
+		p.observer(peerpolicy.Evidence{Activity: peerpolicy.ActivityEvent{UsefulBlock: true}})
+	}
+}
+
+func (r *Response) ObserveUsefulBody() {
+	if r.Req != nil && r.Req.peer != nil {
+		r.Req.peer.ObserveUsefulBlock()
+	}
+}
+
+func (r *Response) SupplyingPeer() *Peer {
+	if r.Req == nil {
+		return nil
+	}
+	return r.Req.peer
+}
+
 func (p *Peer) observeFraming(msg p2p.Msg) {
 	if p.observer != nil {
 		p.observer(peerpolicy.Evidence{Reason: peerpolicy.InvalidEncoding, Bytes: uint64(msg.Size), Activity: receivedActivity(msg)})
@@ -49,8 +68,29 @@ func (p *Peer) handleObserved(backend Backend, msg p2p.Msg, handle msgHandler) e
 	return err
 }
 
+func isRequest(code uint64) bool {
+	switch code {
+	case GetBlockHeadersMsg, GetBlockBodiesMsg, GetReceiptsMsg, GetPooledTransactionsMsg:
+		return true
+	default:
+		return false
+	}
+}
+
+func canContribute(code uint64) bool {
+	switch code {
+	case TransactionsMsg, PooledTransactionsMsg, NewBlockMsg, BlockBodiesMsg, BlockHeadersMsg:
+		return true
+	default:
+		return false
+	}
+}
+
 func receivedActivity(msg p2p.Msg) peerpolicy.ActivityEvent {
-	activity := peerpolicy.ActivityEvent{ReceivedMessages: 1, ReceivedBytes: uint64(msg.Size)}
+	activity := peerpolicy.ActivityEvent{ReceivedMessages: 1, ReceivedBytes: uint64(msg.Size), MessageSequence: msg.ReceivedSequence}
+	if isRequest(msg.Code) {
+		activity.ReceivedRequests = 1
+	}
 	switch msg.Code {
 	case NewBlockMsg, BlockHeadersMsg, BlockBodiesMsg, ReceiptsMsg:
 		// Validation is deferred to consumers outside the message handler.
@@ -133,12 +173,6 @@ func (p *Peer) observeRateLimit(msg p2p.Msg) {
 	}
 }
 
-func (p *Peer) observeReplyRefusal(err error, hashes []common.Hash) {
-	if err == errReplyQueueFull && p.observer != nil {
-		p.observer(peerpolicy.Evidence{Refused: true, Hashes: hashes})
-	}
-}
-
 func observedBodyReply(backend Backend, peer *Peer, query GetBlockBodiesPacket) error {
 	if peer.observer == nil {
 		response := ServiceGetBlockBodiesQuery(backend.Chain(), query.GetBlockBodiesRequest)
@@ -157,12 +191,10 @@ func observedBodyReply(backend Backend, peer *Peer, query GetBlockBodiesPacket) 
 func (p *Peer) writeObservedBodies(id uint64, bodies []rlp.RawValue, event peerpolicy.Evidence) error {
 	// Queue admission is not a completed download. Observe only after the
 	// transport write succeeds, including when serving is delayed by a budget.
-	err := p.queueReplyWithCompletion(BlockBodiesMsg, &BlockBodiesRLPPacket{
+	return p.queueReplyWithCompletion(BlockBodiesMsg, &BlockBodiesRLPPacket{
 		RequestId:              id,
 		BlockBodiesRLPResponse: bodies,
-	}, nil, p.replyObserver(event))
-	p.observeReplyRefusal(err, event.Hashes)
-	return err
+	}, nil, event)
 }
 
 func (p *Peer) replyObserver(event peerpolicy.Evidence) func(uint64) {

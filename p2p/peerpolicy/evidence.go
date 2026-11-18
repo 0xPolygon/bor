@@ -78,12 +78,13 @@ type Evidence struct {
 }
 
 type Snapshot struct {
-	Mode         string                `json:"mode"`
-	Risk         uint64                `json:"risk"`
-	AbuseRisk    uint64                `json:"abuseRisk"`
-	Action       string                `json:"wouldAction"`
-	Windows      map[string]uint64     `json:"reasonWindows"`
-	Contribution *ContributionSnapshot `json:"contribution"`
+	Mode           string                `json:"mode"`
+	Risk           uint64                `json:"risk"`
+	AbuseRisk      uint64                `json:"abuseRisk"`
+	RetentionScore uint64                `json:"retentionScore"`
+	Action         string                `json:"wouldAction"`
+	Windows        map[string]uint64     `json:"reasonWindows"`
+	Contribution   *ContributionSnapshot `json:"contribution"`
 }
 
 type allowance struct {

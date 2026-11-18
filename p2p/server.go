@@ -101,6 +101,9 @@ type Server struct {
 	dialsched   *dialScheduler
 	staticNodes map[enode.ID]bool // Owned by the server loop.
 
+	inboundCapacityRefusedUntil mclock.AbsTime
+	requestOnlyRotatedUntil     mclock.AbsTime
+
 	// This is read by the NAT port mapping loop.
 	portMappingRegister chan *portMapping
 
@@ -828,6 +831,7 @@ running:
 				srv.dialsched.peerAdded(c)
 				if p.Inbound() {
 					inboundCount++
+					srv.inboundCapacityRefusedUntil = 0
 					serveSuccessMeter.Mark(1)
 					activeInboundPeerGauge.Inc(1)
 				} else {
@@ -888,9 +892,11 @@ func (srv *Server) postHandshakeChecks(peers map[enode.ID]*Peer, inboundCount in
 	switch {
 	case !c.is(trustedConn) && len(peers) >= total:
 		srv.log.Debug("Rejecting peer: too many peers", "id", c.node.ID(), "peercount", len(peers), "maxpeers", total)
+		srv.recordInboundCapacityRefusal(peers, c)
 		return DiscTooManyPeers
 	case !c.is(trustedConn) && c.is(inboundConn) && inboundCount >= total-dialed:
 		srv.log.Debug("Rejecting peer: too many inbound", "id", c.node.ID(), "inboundCount", inboundCount, "maxinbound", total-dialed)
+		srv.recordInboundCapacityRefusal(peers, c)
 		return DiscTooManyPeers
 	case peers[c.node.ID()] != nil:
 		return DiscAlreadyConnected
@@ -909,6 +915,13 @@ func (srv *Server) addPeerChecks(peers map[enode.ID]*Peer, inboundCount int, c *
 	// Repeat the post-handshake checks because the
 	// peer set might have changed since those checks were performed.
 	return srv.postHandshakeChecks(peers, inboundCount, c)
+}
+
+func (srv *Server) recordInboundCapacityRefusal(peers map[enode.ID]*Peer, c *conn) {
+	if !c.is(inboundConn) || peers[c.node.ID()] != nil || (srv.localnode != nil && c.node.ID() == srv.localnode.ID()) {
+		return
+	}
+	srv.inboundCapacityRefusedUntil = srv.clock.Now().Add(peerIdleCheckInterval)
 }
 
 // listenLoop runs in its own goroutine and accepts
@@ -1239,9 +1252,10 @@ func (srv *Server) PeersInfo() []*PeerInfo {
 }
 
 const (
-	peerIdleCheckInterval = time.Minute
-	peerIdleMinimumPeers  = 5
-	MaxPeerIdleRemovals   = 64
+	peerIdleCheckInterval       = time.Minute
+	peerIdleMinimumPeers        = 5
+	MaxPeerIdleRemovals         = 64
+	requestOnlyRotationInterval = 10 * time.Minute
 )
 
 func (srv *Server) SetPeerPolicy(policy *peerpolicy.Tracker) {
@@ -1258,29 +1272,58 @@ func (srv *Server) expireIdlePeer(peers map[enode.ID]*Peer) {
 		return
 	}
 	cooldown := srv.peerIdleCooldown()
+	count, inbound, _ := peerCounts(peers)
+	requestOnlyBatch := srv.requestOnlyPressure(count, inbound)
+	requestOnlyRemoved := false
+	defer func() {
+		if requestOnlyRemoved {
+			srv.requestOnlyRotatedUntil = srv.clock.Now().Add(max(requestOnlyRotationInterval, srv.PeerIdleGracePeriod))
+		}
+	}()
 	for range min(max(srv.PeerIdleMaxRemovals, 1), MaxPeerIdleRemovals, len(peers)) {
 		count, inbound, live := peerCounts(peers)
 		if live <= peerIdleMinimumPeers {
 			return
 		}
-		now := srv.clock.Now()
-		peer, last := srv.idlePeer(peers, count, inbound, policy)
-		if peer == nil || !policy.RetireIdle(peer.ID().String(), peer.activity, last) {
+		peer, last, requestOnly := srv.idlePeer(peers, count, inbound, policy, requestOnlyBatch)
+		if peer == nil || !srv.retireActivityPeer(peer, last, requestOnly, policy, cooldown) {
 			return
 		}
-		select {
-		case peer.disc <- DiscJailed:
-		default:
-			// Another disconnect is already queued; keep this session closing.
-			return
-		}
-		peer.activity.MarkIdleDisconnect()
-		srv.peerJail.cooldownPeer(peer.ID(), cooldown)
-		peer.Log().Info("Disconnecting inactive peer to free a connection slot",
-			"inactive", now.Sub(last), "cooldown", cooldown)
-		idlePeerDisconnects.Inc(1)
+		requestOnlyRemoved = requestOnlyRemoved || requestOnly
 	}
 }
+
+func (srv *Server) retireActivityPeer(peer *Peer, last mclock.AbsTime, requestOnly bool, policy *peerpolicy.Tracker, cooldown time.Duration) bool {
+	if requestOnly && srv.clock.Now() < srv.requestOnlyRotatedUntil {
+		return false
+	}
+	retire := policy.RetireIdle
+	if requestOnly {
+		retire = policy.RetireRequestOnly
+	}
+	if !retire(peer.ID().String(), peer.activity, last) {
+		return false
+	}
+	select {
+	case peer.disc <- DiscJailed:
+	default:
+		peer.Log().Debug("Skipping peer rotation because a disconnect is already queued", "requestOnly", requestOnly)
+		return false
+	}
+	srv.peerJail.cooldownPeer(peer.ID(), cooldown)
+	if requestOnly {
+		srv.inboundCapacityRefusedUntil = 0
+		peer.activity.MarkRequestOnlyDisconnect()
+		peer.Log().Info("Disconnecting request-only peer to free a connection slot", "cooldown", cooldown)
+		requestOnlyPeerDisconnects.Inc(1)
+	} else {
+		peer.activity.MarkIdleDisconnect()
+		peer.Log().Info("Disconnecting inactive peer to free a connection slot", "inactive", srv.clock.Now().Sub(last), "cooldown", cooldown)
+		idlePeerDisconnects.Inc(1)
+	}
+	return true
+}
+
 func peerCounts(peers map[enode.ID]*Peer) (count, inbound, live int) {
 	for _, peer := range peers {
 		if peer.activity.Closing() {

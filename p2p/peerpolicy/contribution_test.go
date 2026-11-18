@@ -64,7 +64,7 @@ func TestContributionConnectionActivity(t *testing.T) {
 		{name: "request-only", active: true, requests: true, status: "request-only", risk: 20},
 		{name: "requests-and-witnesses", active: true, requests: true, auxiliary: true, status: "unknown"},
 		{name: "contributing", active: true, accepted: true, status: "contributing"},
-		{name: "past-contribution-now-silent", accepted: true, status: "idle", risk: 20, idle: true},
+		{name: "past-contribution-now-silent", accepted: true, status: "contributing"},
 		{name: "trusted", protected: true, status: "idle", idle: true},
 		{name: "local-sync", syncing: true, status: "unknown"},
 	} {
@@ -107,7 +107,7 @@ func contributionStatus(t *testing.T, tracker *Tracker, want string) *Contributi
 	if snapshot.Contribution == nil || snapshot.Contribution.Status != want {
 		t.Fatalf("contribution = %+v, want status %s", snapshot.Contribution, want)
 	}
-	if snapshot.Contribution.Scope != "eth" || snapshot.Contribution.Mode != "observe" || snapshot.Contribution.UsefulDataCoverage != "transaction-admission" {
+	if snapshot.Contribution.Scope != "eth" || snapshot.Contribution.Mode != "observe" || snapshot.Contribution.UsefulDataCoverage != "transaction-admission,block-import,sync-body-validation" {
 		t.Fatalf("missing observation scope: %+v", snapshot.Contribution)
 	}
 	if want != "unknown" && !snapshot.Contribution.ConnectionKnown {
@@ -207,9 +207,60 @@ func TestContributionWindowExpiry(t *testing.T) {
 	clock.Run(19 * time.Minute)
 	contributionStatus(t, tracker, "contributing")
 	clock.Run(time.Second)
-	got = contributionStatus(t, tracker, "idle")
+	got = contributionStatus(t, tracker, "contributing")
 	if got.AcceptedTransactions != 0 || got.LastContributionAgeSeconds == nil || *got.LastContributionAgeSeconds != 1741 {
 		t.Fatalf("expired contribution: %+v", got)
+	}
+	clock.Run(59 * time.Second)
+	contributionStatus(t, tracker, "idle")
+}
+
+func TestUsefulBlockProtectsIdlePeerUntilCreditExpires(t *testing.T) {
+	tracker, clock := newContributionTracker()
+	var connection ConnectionActivity
+	connection.Start(clock.Now())
+	tracker.BindConnection("peer", 0, &connection)
+	tracker.SetReady(false)
+	tracker.Observe("peer", Evidence{Activity: ActivityEvent{UsefulBlock: true}})
+	tracker.SetReady(true)
+	clock.Run(IdleTimeout)
+	if got := tracker.Snapshot("peer"); got.RetentionScore != 80 || got.Risk != 0 || got.Contribution.Status != "contributing" {
+		t.Fatalf("unexpected recent contributor score: %+v", got)
+	}
+	if _, eligible := tracker.IdleSince("peer", &connection); eligible {
+		t.Fatal("recent contributor was eligible for rotation")
+	}
+	clock.Run(activityCount*activityWidth - IdleTimeout)
+	last, eligible := tracker.IdleSince("peer", &connection)
+	if got := tracker.Snapshot("peer"); !eligible || got.RetentionScore != 30 || got.Risk != 0 {
+		t.Fatalf("expired contribution still protected peer: %+v", got)
+	}
+	tracker.Observe("peer", Evidence{Activity: ActivityEvent{UsefulBlock: true}})
+	if tracker.RetireIdle("peer", &connection, last) {
+		t.Fatal("retired peer after new contribution")
+	}
+}
+
+func TestRotationScoreUsesCurrentSessionAndRisk(t *testing.T) {
+	tracker, clock := newContributionTracker()
+	var connection, replaced ConnectionActivity
+	connection.Start(clock.Now())
+	tracker.BindConnection("peer", 0, &connection)
+	clock.Run(IdleTimeout)
+	tracker.Observe("peer", Evidence{Reason: RateLimited})
+	if score, ok := tracker.RotationScore("peer", &connection); !ok || score != 10 {
+		t.Fatalf("expected idle risk and abuse to lower score to 10, got %d (valid %v)", score, ok)
+	}
+	if _, ok := tracker.RotationScore("peer", &replaced); ok {
+		t.Fatal("returned score for the wrong connection")
+	}
+	if _, ok := tracker.RotationScore("peer", nil); ok {
+		t.Fatal("returned score with no connection")
+	}
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	if _, ok := tracker.RotationScore("peer", &connection); ok {
+		t.Fatal("returned a score while observation holds the lock")
 	}
 }
 
@@ -451,5 +502,5 @@ func TestContributionConcurrentLifecycle(t *testing.T) {
 	tracker.Connected("peer")
 	clock.Run(activityGrace)
 	contributionStatus(t, tracker, "idle")
-	assertRisk(t, tracker, "peer", 20, "none")
+	assertRisk(t, tracker, "peer", 0, "none")
 }
