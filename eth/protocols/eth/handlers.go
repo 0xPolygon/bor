@@ -660,6 +660,7 @@ func handleBlockBodies(backend Backend, msg Decoder, peer *Peer) error {
 	}
 	for i := range items {
 		if err := checkBodyItemCounts(&items[i]); err != nil {
+			observeInvalid(msg, peerpolicy.InvalidEncoding)
 			return fmt.Errorf("BlockBodies: body %d: %w", i, err)
 		}
 	}
@@ -808,6 +809,7 @@ func handleReceipts[L ReceiptsList](backend Backend, msg Decoder, peer *Peer) er
 		return fmt.Errorf("Receipts: %w", err)
 	}
 	if err := checkReceiptItemCounts(receiptLists); err != nil {
+		observeInvalid(msg, peerpolicy.InvalidEncoding)
 		return fmt.Errorf("Receipts: %w", err)
 	}
 	buffers := new(receiptListBuffers)
@@ -851,6 +853,7 @@ func handleReceipts70(backend Backend, msg Decoder, peer *Peer) error {
 		return fmt.Errorf("Receipts: %w", err)
 	}
 	if err := checkReceiptItemCounts(receiptLists); err != nil {
+		observeInvalid(msg, peerpolicy.InvalidEncoding)
 		return fmt.Errorf("Receipts: %w", err)
 	}
 
