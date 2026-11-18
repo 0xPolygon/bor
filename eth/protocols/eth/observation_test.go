@@ -433,7 +433,7 @@ func TestPeerPolicyContributionClassification(t *testing.T) {
 			t.Fatalf("eth/%d has no contribution classifier", protocol.Version)
 		}
 		for code := uint64(0); code <= protocol.Length; code++ {
-			want := code == TransactionsMsg || code == PooledTransactionsMsg || code == NewBlockMsg || code == BlockBodiesMsg
+			want := code == TransactionsMsg || code == PooledTransactionsMsg || code == NewBlockMsg || code == BlockBodiesMsg || code == BlockHeadersMsg
 			if got := protocol.CanContribute(code); got != want {
 				t.Errorf("eth/%d code %#x: can contribute = %v, want %v", protocol.Version, code, got, want)
 			}

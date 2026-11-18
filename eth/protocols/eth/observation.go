@@ -79,7 +79,7 @@ func isRequest(code uint64) bool {
 
 func canContribute(code uint64) bool {
 	switch code {
-	case TransactionsMsg, PooledTransactionsMsg, NewBlockMsg, BlockBodiesMsg:
+	case TransactionsMsg, PooledTransactionsMsg, NewBlockMsg, BlockBodiesMsg, BlockHeadersMsg:
 		return true
 	default:
 		return false

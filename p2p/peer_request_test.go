@@ -335,7 +335,7 @@ func TestRequestOnlyWireActivity(t *testing.T) {
 			srv, peers, clock := activityTestServer(t, 20, 14)
 			peer := peers[uintID(1)]
 			prepareRequestOnlyPeers(t, srv, peers, clock)
-			peer.running[protocol] = &protoRW{Protocol: Protocol{Name: protocol, Length: 17, CanContribute: func(code uint64) bool { return code == 2 || code == 6 || code == 7 || code == 10 }}, offset: 16, in: make(chan Msg, 1)}
+			peer.running[protocol] = &protoRW{Protocol: Protocol{Name: protocol, Length: 17, CanContribute: func(code uint64) bool { return code == 2 || code == 4 || code == 6 || code == 7 || code == 10 }}, offset: 16, in: make(chan Msg, 1)}
 			clock.Run(time.Second)
 			if err := peer.handle(Msg{Code: 16 + tc.code, Payload: bytes.NewReader(nil)}); err != nil {
 				t.Fatal(err)
@@ -450,6 +450,9 @@ func TestRequestOnlyPendingWireMessages(t *testing.T) {
 		{"transactions", []uint64{2}, false},
 		{"pooled-transactions", []uint64{10}, false},
 		{"bodies", []uint64{6}, false},
+		{"headers", []uint64{4}, false},
+		{"request-then-headers", []uint64{3, 4}, false},
+		{"headers-then-request", []uint64{4, 3}, false},
 		{"block-then-request", []uint64{7, 3}, false},
 		{"request-then-block", []uint64{3, 7}, false},
 	} {
@@ -459,7 +462,7 @@ func TestRequestOnlyPendingWireMessages(t *testing.T) {
 				peer := peers[uintID(1)]
 				prepareRequestOnlyPeers(t, srv, peers, clock)
 				peer.rw.set(trustedConn, false)
-				wire := &protoRW{Protocol: Protocol{Name: "eth", Length: 18, CanContribute: func(code uint64) bool { return code == 2 || code == 6 || code == 7 || code == 10 }}, offset: 16, in: make(chan Msg)}
+				wire := &protoRW{Protocol: Protocol{Name: "eth", Length: 18, CanContribute: func(code uint64) bool { return code == 2 || code == 4 || code == 6 || code == 7 || code == 10 }}, offset: 16, in: make(chan Msg)}
 				peer.running["eth"] = wire
 				for i, code := range tc.codes {
 					clock.Run(time.Nanosecond)
