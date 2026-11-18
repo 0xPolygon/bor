@@ -115,6 +115,11 @@ type tailInfo struct {
 	// exactly here — the walk starts past the window's open, so tipOpen and
 	// window stay unset even though the store holds nothing but our sequence.
 	suffixOurs bool
+
+	// anchored is set when the walk started at our acked head: the read path
+	// had applied every entry the store acked to us, so whatever it shows
+	// past that head is not something it has yet to catch up to.
+	anchored bool
 }
 
 // tryWalk runs one ladder rung; done=false falls through to the next rung:

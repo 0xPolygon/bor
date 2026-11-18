@@ -247,6 +247,10 @@ func (p *Publisher) sealMirror(height uint64, txs []*types.Transaction) bool {
 		return true
 	}
 
+	if ours, behind := p.behindOurOpen(info, height); behind {
+		return p.mirrorVerdict(height, ours, txs, len(ours))
+	}
+
 	// The store holds content this block does not — a record extension of
 	// our window, or a generation we have not absorbed. Either way the
 	// answer is the same: adopt the store's sequence and rebuild on it.
@@ -262,6 +266,37 @@ func (p *Publisher) sealMirror(height uint64, txs []*types.Transaction) bool {
 		"number", height, "ours", ours, "storeWindow", len(info.window))
 
 	return false
+}
+
+// behindOurOpen returns the journal's window at this height when the read
+// never reached our acked head and the store has acked our open here. A
+// gateway applies an entry a little after the ingress acks it, so such a
+// read shows the store's past, and what it could not explain may be our own
+// open, applied midway through it: refusing on that cost a producer close
+// to the store, sealing as soon as its open acked, a rebuild and a late
+// block. An acked open landed on the store's head, so nothing short of it
+// is content we have not folded, and the window at this height is the
+// journal's.
+func (p *Publisher) behindOurOpen(info tailInfo, height uint64) ([]common.Hash, bool) {
+	if info.anchored {
+		return nil, false
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	start := p.journal.openStart()
+	if start < 0 {
+		return nil, false
+	}
+
+	if open := p.journal.items[start]; open.height != height || open.seq > p.ackedSeq {
+		return nil, false
+	}
+
+	publishLaggingRead.Inc(1)
+
+	return p.journalWindowLocked(height), true
 }
 
 // journalMirror compares the block against this publisher's own published
