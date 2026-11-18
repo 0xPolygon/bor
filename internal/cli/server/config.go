@@ -71,6 +71,12 @@ type Config struct {
 	// Use switch-based fast path EVM interpreter
 	EnableEVMSwitchDispatch bool `hcl:"evm-switch-dispatch,optional" toml:"evm-switch-dispatch,optional"`
 
+	// EnablePrecompileCache shares the per-block VM result caches with the
+	// serial import processor and the block builder, and widens keccak caching
+	// to variable-length inputs. The prefetcher and the parallel (V2) workers
+	// share the result caches whether or not this is set.
+	EnablePrecompileCache bool `hcl:"precompile-cache,optional" toml:"precompile-cache,optional"`
+
 	// Enable state size tracking
 	StateSizeTracking bool `hcl:"state.size-tracking,optional" toml:"state.size-tracking,optional"`
 
@@ -947,6 +953,7 @@ func DefaultConfig() *Config {
 		Verbosity:                   3,
 		EnablePreimageRecording:     false,
 		EnableEVMSwitchDispatch:     false,
+		EnablePrecompileCache:       false,
 		StateSizeTracking:           ethconfig.Defaults.EnableStateSizeTracking,
 		DataDir:                     DefaultDataDir(),
 		Ancient:                     "",
@@ -1458,6 +1465,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 
 	n.EnablePreimageRecording = c.EnablePreimageRecording
 	n.EnableEVMSwitchDispatch = c.EnableEVMSwitchDispatch
+	n.EnablePrecompileCache = c.EnablePrecompileCache
 	n.EnableStateSizeTracking = c.StateSizeTracking
 	n.VMTrace = c.VMTrace
 	n.VMTraceJsonConfig = c.VMTraceJsonConfig

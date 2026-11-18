@@ -132,6 +132,11 @@ var (
 	blockExecutionSerialTimer          = metrics.NewRegisteredTimer("chain/execution/serial/timer", nil)
 	blockMgaspsMeter                   = metrics.NewRegisteredHistogram("chain/execution/mgasps", nil, metrics.NewUniformSample(10240))
 
+	// Serial re-executions without shared VM result caches (precompile cache
+	// flag on, cached serial run failed), and how many of them then passed.
+	blockSerialNoCacheRetryCounter         = metrics.NewRegisteredCounter("chain/execution/serial/nocache_retry", nil)
+	blockSerialNoCacheRetryAcceptedCounter = metrics.NewRegisteredCounter("chain/execution/serial/nocache_retry/accepted", nil)
+
 	statelessParallelImportTimer           = metrics.NewRegisteredTimer("chain/imports/stateless/parallel", nil)
 	statelessSequentialImportTimer         = metrics.NewRegisteredTimer("chain/imports/stateless/sequential", nil)
 	statelessParallelImportBlocksCounter   = metrics.NewRegisteredCounter("chain/imports/stateless/parallel/blocks", nil)
@@ -696,6 +701,10 @@ type BlockChain struct {
 	lastFlatDiffParentRoot common.Hash // committed root that the FlatDiff is based on
 	lastFlatDiffBlockRoot  common.Hash // the block's own state root (from header)
 	lastFlatDiffMu         sync.RWMutex
+
+	// resultCachesHook, if set, is called on each block's shared VM result
+	// caches right after they are created. Tests only.
+	resultCachesHook func(*vm.SharedResultCaches)
 }
 
 // NewBlockChain returns a fully initialised block chain using information
@@ -1266,44 +1275,39 @@ func reportReaderStats(prefetch, process, parallel state.ReaderWithStats) {
 	accountHitFromPrefetchUniqueMeter.Mark(procPF.AccountHitFromPrefetchUnique + parPF.AccountHitFromPrefetchUnique)
 }
 
-// sharedBlockCaches holds VM-level caches that are shared between the
-// prefetcher goroutine and the V2 BlockSTM workers for a single block.
-type sharedBlockCaches struct {
-	jumpDests vm.JumpDestCache
-	keccak    *vm.Keccak256Cache
-	ecrecover *vm.EcrecoverCache
-}
-
-func newSharedBlockCaches() *sharedBlockCaches {
-	return &sharedBlockCaches{
-		jumpDests: vm.NewSyncJumpDestCache(),
-		keccak:    vm.NewKeccak256Cache(),
-		ecrecover: vm.NewEcrecoverCache(),
+// newSharedBlockCaches returns the VM result caches for one imported block.
+// The legacy caches are always on. The widened keccak store exists only when
+// EnablePrecompileCache is set in the chain's VM config.
+func (bc *BlockChain) newSharedBlockCaches() *vm.SharedResultCaches {
+	caches := vm.NewSharedResultCaches(bc.cfg.VmConfig.EnablePrecompileCache, vm.CacheScopeImport)
+	if bc.resultCachesHook != nil {
+		bc.resultCachesHook(caches)
 	}
-}
-
-// applyTo populates a vm.Config with the shared caches.
-func (c *sharedBlockCaches) applyTo(cfg *vm.Config) {
-	cfg.SharedJumpDestCache = c.jumpDests
-	cfg.Keccak256Cache = c.keccak
-	cfg.EcrecoverCache = c.ecrecover
+	return caches
 }
 
 // startPrefetchGoroutine launches the throwaway-statedb prefetcher in
 // the background. It runs the block with tracing disabled to warm caches
 // for the real processors.
 func (bc *BlockChain) startPrefetchGoroutine(block *types.Block, throwaway *state.StateDB,
-	caches *sharedBlockCaches, followupInterrupt *atomic.Bool) {
-	go func(start time.Time) {
-		vmCfg := bc.cfg.VmConfig
-		vmCfg.Tracer = nil
-		caches.applyTo(&vmCfg)
-		bc.prefetcher.Prefetch(block, throwaway, vmCfg, false, followupInterrupt)
-		blockPrefetchExecuteTimer.Update(time.Since(start))
-		if followupInterrupt.Load() {
-			blockPrefetchInterruptMeter.Mark(1)
-		}
-	}(time.Now())
+	caches *vm.SharedResultCaches, followupInterrupt *atomic.Bool) {
+	go bc.prefetchBlock(block, throwaway, caches, followupInterrupt)
+}
+
+// prefetchBlock runs the block on the throwaway statedb with tracing disabled,
+// filling the shared VM result caches and the state caches. It returns when
+// the block is done or followupInterrupt is set.
+func (bc *BlockChain) prefetchBlock(block *types.Block, throwaway *state.StateDB,
+	caches *vm.SharedResultCaches, followupInterrupt *atomic.Bool) {
+	start := time.Now()
+	vmCfg := bc.cfg.VmConfig
+	vmCfg.Tracer = nil
+	caches.ApplyTo(&vmCfg, vm.CacheConsumerImportPrefetch)
+	bc.prefetcher.Prefetch(block, throwaway, vmCfg, false, followupInterrupt)
+	blockPrefetchExecuteTimer.Update(time.Since(start))
+	if followupInterrupt.Load() {
+		blockPrefetchInterruptMeter.Mark(1)
+	}
 }
 
 func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, witness *stateless.Witness, followupInterrupt *atomic.Bool, pipeOpts *PipelineImportOpts) (_ types.Receipts, _ []*types.Log, _ uint64, _ *state.StateDB, vtime time.Duration, blockEndErr error) {
@@ -1326,7 +1330,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	defer reportReaderStats(prefetch, process, parallel)
 
 	// Shared caches for this block — used by both prefetcher and V2 workers.
-	sharedCaches := newSharedBlockCaches()
+	sharedCaches := bc.newSharedBlockCaches()
 	bc.startPrefetchGoroutine(block, throwaway, sharedCaches, followupInterrupt)
 
 	var resultChanLen int = 2
@@ -1346,7 +1350,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 			pstart := time.Now()
 			parallelStatedb.StartPrefetcher("chain", witness, nil)
 			v2VmCfg := bc.cfg.VmConfig
-			sharedCaches.applyTo(&v2VmCfg)
+			sharedCaches.ApplyTo(&v2VmCfg, vm.CacheConsumerImportParallel)
 			res, err := bc.parallelProcessor.Process(block, parallelStatedb, v2VmCfg, nil, ctx)
 			pend := time.Now()
 			blockExecutionParallelTimer.Update(pend.Sub(pstart))
@@ -1387,7 +1391,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		processorCount++
 
 		go func() {
-			resultChan <- bc.runSerialProcessor(ctx, block, statedb, witness, pipeOpts)
+			resultChan <- bc.runSerialProcessor(ctx, block, statedb, witness, pipeOpts, sharedCaches)
 		}()
 	}
 
@@ -1420,9 +1424,16 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		} else if errors.Is(result.err, errV2WriteBudgetExhausted) && bc.processor != nil {
 			// Says nothing about the block's validity, so even with the
 			// parallel processor enforced the serial result decides.
-			result = bc.runSerialProcessor(ctx, block, statedb, witness, pipeOpts)
+			result = bc.runSerialProcessor(ctx, block, statedb, witness, pipeOpts, sharedCaches)
 			result.statedb.StopPrefetcher()
 		}
+	}
+	// With EnablePrecompileCache, the failed run (serial, or V2 when the
+	// parallel processor is enforced) read the shared caches, so its failure
+	// is not an independent check. Before rejecting the block, run the serial
+	// processor once more without them.
+	if result.err != nil && bc.cfg.VmConfig.EnablePrecompileCache && bc.processor != nil && ctx.Err() == nil {
+		result = bc.retrySerialWithoutSharedCaches(ctx, block, parent, witness, pipeOpts, result)
 	}
 	if result.err == nil {
 		recordPipelinedImportExecutionMetrics(pipeOpts, result.execFrom, result.execTo)
@@ -1483,13 +1494,58 @@ type processorResult struct {
 	execTo   time.Time
 }
 
+// retrySerialWithoutSharedCaches re-executes block with the serial processor
+// on a fresh statedb, with no shared VM result caches and no tracer. It is
+// used only when the precompile cache flag is on and the cached run failed. If the retry
+// succeeds, a shared cache entry was wrong: the block is accepted and the
+// event is logged and counted. If it fails too, the block is invalid and the
+// retry's error is returned. On a setup error the original result is kept.
+func (bc *BlockChain) retrySerialWithoutSharedCaches(ctx context.Context, block *types.Block, parent *types.Header,
+	witness *stateless.Witness, pipeOpts *PipelineImportOpts, failed processorResult) processorResult {
+	blockSerialNoCacheRetryCounter.Inc(1)
+	statedb, err := state.New(pipelineReaderRoot(parent, pipeOpts), bc.statedb)
+	if err != nil {
+		log.Error("Failed to open state for serial retry without shared caches", "number", block.NumberU64(), "hash", block.Hash(), "err", err)
+		return failed
+	}
+	applyFlatDiffOverlayToAll(pipeOpts, statedb)
+	// No tracer on the retry: the failed run already sent this block's
+	// transactions to the tracer inside the same OnBlockStart/OnBlockEnd, and
+	// sending them again would duplicate them.
+	vmCfg := bc.cfg.VmConfig
+	vmCfg.Tracer = nil
+	retry := bc.runSerialProcessorWithConfig(ctx, block, statedb, witness, pipeOpts, nil, vmCfg)
+	if retry.err == nil {
+		blockSerialNoCacheRetryAcceptedCounter.Inc(1)
+		log.Error("Block valid only without shared VM result caches, a cache entry was wrong",
+			"number", block.NumberU64(), "hash", block.Hash(), "cachedErr", failed.err)
+		if bc.cfg.VmConfig.Tracer != nil {
+			log.Warn("Tracer output for this block comes from the failed cached run", "number", block.NumberU64(), "hash", block.Hash())
+		}
+	}
+	return retry
+}
+
 // runSerialProcessor executes and validates block with the serial processor
 // on statedb.
 func (bc *BlockChain) runSerialProcessor(ctx context.Context, block *types.Block, statedb *state.StateDB,
-	witness *stateless.Witness, pipeOpts *PipelineImportOpts) processorResult {
+	witness *stateless.Witness, pipeOpts *PipelineImportOpts, caches *vm.SharedResultCaches) processorResult {
+	return bc.runSerialProcessorWithConfig(ctx, block, statedb, witness, pipeOpts, caches, bc.cfg.VmConfig)
+}
+
+// runSerialProcessorWithConfig is runSerialProcessor with an explicit VM
+// config.
+func (bc *BlockChain) runSerialProcessorWithConfig(ctx context.Context, block *types.Block, statedb *state.StateDB,
+	witness *stateless.Witness, pipeOpts *PipelineImportOpts, caches *vm.SharedResultCaches, vmCfg vm.Config) processorResult {
 	pstart := time.Now()
 	statedb.StartPrefetcher("chain", witness, nil)
-	res, err := bc.processor.Process(block, statedb, bc.cfg.VmConfig, nil, ctx)
+	// With EnablePrecompileCache, the serial processor reads the per-block VM
+	// result caches that the prefetcher and V2 workers fill. Without the flag
+	// (the default), or with caches == nil, it computes every result itself.
+	if vmCfg.EnablePrecompileCache && caches != nil {
+		caches.ApplyTo(&vmCfg, vm.CacheConsumerImportSerial)
+	}
+	res, err := bc.processor.Process(block, statedb, vmCfg, nil, ctx)
 	pend := time.Now()
 	blockExecutionSerialTimer.Update(pend.Sub(pstart))
 	var localVtime time.Duration
