@@ -65,6 +65,18 @@ var receiptsTests = []struct {
 		input: []types.ReceiptForStorage{{CumulativeGasUsed: 555, Status: 1, Logs: receiptsTestLogs2}},
 		txs:   []*types.Transaction{types.NewTx(&types.AccessListTx{})},
 	},
+	{
+		input: []types.ReceiptForStorage{
+			{CumulativeGasUsed: 111, PostState: common.HexToHash("0x1111").Bytes(), Logs: receiptsTestLogs1},
+			{CumulativeGasUsed: 222, Status: 0, Logs: receiptsTestLogs2},
+			{CumulativeGasUsed: 333, Status: 1, Logs: nil},
+		},
+		txs: []*types.Transaction{
+			types.NewTx(&types.LegacyTx{}),
+			types.NewTx(&types.AccessListTx{}),
+			types.NewTx(&types.DynamicFeeTx{}),
+		},
+	},
 }
 
 var stateSyncReceiptsTests = []struct {
@@ -167,7 +179,10 @@ func TestReceiptList69(t *testing.T) {
 		if err := rlp.DecodeBytes(network, &rl); err != nil {
 			t.Fatalf("test[%d]: can't decode network receipts: %v", i, err)
 		}
-		rlStorageEnc := rl.EncodeForStorage()
+		rlStorageEnc, err := rl.EncodeForStorage()
+		if err != nil {
+			t.Fatalf("test[%d]: error from EncodeForStorage: %v", i, err)
+		}
 		if !bytes.Equal(rlStorageEnc, canonDB) {
 			t.Fatalf("test[%d]: re-encoded receipts not equal\nhave: %x\nwant: %x", i, rlStorageEnc, canonDB)
 		}
@@ -177,7 +192,7 @@ func TestReceiptList69(t *testing.T) {
 		}
 
 		// compute root hash from ReceiptList69 and compare.
-		responseHash := types.DeriveSha(&rl, trie.NewStackTrie(nil))
+		responseHash := types.DeriveSha(rl.Derivable(), trie.NewStackTrie(nil))
 		if responseHash != test.root {
 			t.Fatalf("test[%d]: wrong root hash from ReceiptList69\nhave: %v\nwant: %v", i, responseHash, test.root)
 		}
@@ -235,7 +250,10 @@ func TestReceiptList69_WithStateSync(t *testing.T) {
 		if err := rlp.DecodeBytes(network, &rl); err != nil {
 			t.Fatalf("test[%d]: can't decode network receipts: %v", i, err)
 		}
-		rlStorageEnc := rl.EncodeForStorage()
+		rlStorageEnc, err := rl.EncodeForStorage()
+		if err != nil {
+			t.Fatalf("test[%d]: can't encode for storage: %v", i, err)
+		}
 		if !bytes.Equal(rlStorageEnc, canonDB) {
 			t.Fatalf("test[%d]: re-encoded receipts not equal\nhave: %x\nwant: %x", i, rlStorageEnc, canonDB)
 		}
@@ -248,7 +266,7 @@ func TestReceiptList69_WithStateSync(t *testing.T) {
 		rl.ExcludeStateSyncReceipt()
 
 		// compute root hash from ReceiptList69 and compare.
-		responseHash := types.DeriveSha(&rl, trie.NewStackTrie(nil))
+		responseHash := types.DeriveSha(rl.Derivable(), trie.NewStackTrie(nil))
 		if responseHash != test.rootWithoutStateSync {
 			t.Fatalf("test[%d]: wrong root hash from ReceiptList69\nhave: %v\nwant: %v", i, responseHash, test.rootWithoutStateSync)
 		}
@@ -323,9 +341,13 @@ func TestReceiptList69_WithStateSync_e2e(t *testing.T) {
 	// Borrowed from `handleReceipts`
 	// Assign temporary hashing buffer to each list item, the same buffer is shared
 	// between all receipt list instances.
+	receiptLists, err := res.List.Items()
+	if err != nil {
+		t.Fatalf("can't decode receipt lists: %v", err)
+	}
 	buffers := new(receiptListBuffers)
-	for i := range res.List {
-		res.List[i].setBuffers(buffers)
+	for i := range receiptLists {
+		receiptLists[i].setBuffers(buffers)
 	}
 
 	// For 8 cases, test 4 pre hardfork and 4 post hardfork scenarios
@@ -333,11 +355,10 @@ func TestReceiptList69_WithStateSync_e2e(t *testing.T) {
 		MadhugiriBlock: big.NewInt(4),
 	}
 	// Simulating the way packet is delivered to the receipt queue
-	deliver := func(packet interface{}) (ReceiptsRLPResponse, func(int, *big.Int) common.Hash) {
-		return EncodeReceiptsAndPrepareHasher(packet, borCfg)
+	receipts, getReceiptListHashes, err := EncodeReceiptsAndPrepareHasher(&receiptLists, borCfg)
+	if err != nil {
+		t.Fatalf("EncodeReceiptsAndPrepareHasher failed: %v", err)
 	}
-
-	receipts, getReceiptListHashes := deliver(res.List)
 	if receipts == nil || getReceiptListHashes == nil {
 		t.Fatalf("EncodeReceiptsAndPrepareHasher failed, invalid packet")
 	}
@@ -382,7 +403,10 @@ func TestReceiptList68(t *testing.T) {
 		if err := rlp.DecodeBytes(network, &rl); err != nil {
 			t.Fatalf("test[%d]: can't decode network receipts: %v", i, err)
 		}
-		rlStorageEnc := rl.EncodeForStorage()
+		rlStorageEnc, err := rl.EncodeForStorage()
+		if err != nil {
+			t.Fatalf("test[%d]: error from EncodeForStorage: %v", i, err)
+		}
 		if !bytes.Equal(rlStorageEnc, canonDB) {
 			t.Fatalf("test[%d]: re-encoded receipts not equal\nhave: %x\nwant: %x", i, rlStorageEnc, canonDB)
 		}
@@ -392,7 +416,7 @@ func TestReceiptList68(t *testing.T) {
 		}
 
 		// compute root hash from ReceiptList68 and compare.
-		responseHash := types.DeriveSha(&rl, trie.NewStackTrie(nil))
+		responseHash := types.DeriveSha(rl.Derivable(), trie.NewStackTrie(nil))
 		if responseHash != test.root {
 			t.Fatalf("test[%d]: wrong root hash from ReceiptList68\nhave: %v\nwant: %v", i, responseHash, test.root)
 		}

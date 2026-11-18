@@ -41,6 +41,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb/pebble"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rlp"
 )
 
 func TestFakeEthPeerPrunedSidechainIsLocallyJailed(t *testing.T) {
@@ -296,9 +297,13 @@ func serveGetBlockHeaders(fixture *prunedSidechainP2PFixture, rw p2p.MsgReadWrit
 		return err
 	}
 	msg.Discard()
+	headers, err := rlp.EncodeToRawList(fixture.remote.headers(req.GetBlockHeadersRequest))
+	if err != nil {
+		return err
+	}
 	return p2p.Send(rw, ethproto.BlockHeadersMsg, &ethproto.BlockHeadersPacket{
-		RequestId:           req.RequestId,
-		BlockHeadersRequest: fixture.remote.headers(req.GetBlockHeadersRequest),
+		RequestId: req.RequestId,
+		List:      headers,
 	})
 }
 
@@ -309,9 +314,13 @@ func serveGetBlockBodies(fixture *prunedSidechainP2PFixture, rw p2p.MsgReadWrite
 		return err
 	}
 	msg.Discard()
+	bodies, err := rlp.EncodeToRawList(fixture.remote.bodies(req.GetBlockBodiesRequest))
+	if err != nil {
+		return err
+	}
 	return p2p.Send(rw, ethproto.BlockBodiesMsg, &ethproto.BlockBodiesPacket{
-		RequestId:           req.RequestId,
-		BlockBodiesResponse: fixture.remote.bodies(req.GetBlockBodiesRequest),
+		RequestId: req.RequestId,
+		List:      bodies,
 	})
 }
 
@@ -449,11 +458,15 @@ func (c *fakeEthChain) bodies(hashes ethproto.GetBlockBodiesRequest) ethproto.Bl
 		if block == nil {
 			continue
 		}
-		bodies = append(bodies, &ethproto.BlockBody{
-			Transactions: block.Transactions(),
-			Uncles:       block.Uncles(),
-			Withdrawals:  block.Withdrawals(),
-		})
+		enc, err := rlp.EncodeToBytes(block.Body())
+		if err != nil {
+			panic(err)
+		}
+		var body ethproto.BlockBody
+		if err := rlp.DecodeBytes(enc, &body); err != nil {
+			panic(err)
+		}
+		bodies = append(bodies, body)
 	}
 	return bodies
 }

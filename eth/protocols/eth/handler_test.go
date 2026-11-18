@@ -23,9 +23,11 @@ import (
 	"math/big"
 	"math/rand"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/beacon"
@@ -43,7 +45,7 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
-
+	"github.com/ethereum/go-ethereum/trie"
 	"github.com/holiman/uint256"
 )
 
@@ -366,8 +368,8 @@ func testGetBlockHeaders(t *testing.T, protocol uint) {
 			GetBlockHeadersRequest: tt.query,
 		})
 		if err := p2p.ExpectMsg(peer.app, BlockHeadersMsg, &BlockHeadersPacket{
-			RequestId:           123,
-			BlockHeadersRequest: headers,
+			RequestId: 123,
+			List:      encodeRL(headers),
 		}); err != nil {
 			t.Errorf("test %d: headers mismatch: %v", i, err)
 		}
@@ -380,7 +382,7 @@ func testGetBlockHeaders(t *testing.T, protocol uint) {
 					RequestId:              456,
 					GetBlockHeadersRequest: tt.query,
 				})
-				expected := &BlockHeadersPacket{RequestId: 456, BlockHeadersRequest: headers}
+				expected := &BlockHeadersPacket{RequestId: 456, List: encodeRL(headers)}
 				if err := p2p.ExpectMsg(peer.app, BlockHeadersMsg, expected); err != nil {
 					t.Errorf("test %d by hash: headers mismatch: %v", i, err)
 				}
@@ -442,7 +444,7 @@ func testGetBlockBodies(t *testing.T, protocol uint) {
 		// Collect the hashes to request, and the response to expect
 		var (
 			hashes []common.Hash
-			bodies []*BlockBody
+			bodies []BlockBody
 			seen   = make(map[int64]bool)
 		)
 
@@ -456,7 +458,7 @@ func testGetBlockBodies(t *testing.T, protocol uint) {
 					hashes = append(hashes, block.Hash())
 
 					if len(bodies) < tt.expected {
-						bodies = append(bodies, &BlockBody{Transactions: block.Transactions(), Uncles: block.Uncles(), Withdrawals: block.Withdrawals()})
+						bodies = append(bodies, encodeBody(block))
 					}
 
 					break
@@ -469,8 +471,7 @@ func testGetBlockBodies(t *testing.T, protocol uint) {
 
 			if tt.available[j] && len(bodies) < tt.expected {
 				block := backend.chain.GetBlockByHash(hash)
-
-				bodies = append(bodies, &BlockBody{Transactions: block.Transactions(), Uncles: block.Uncles(), Withdrawals: block.Withdrawals()})
+				bodies = append(bodies, encodeBody(block))
 			}
 		}
 
@@ -480,11 +481,66 @@ func testGetBlockBodies(t *testing.T, protocol uint) {
 			GetBlockBodiesRequest: hashes,
 		})
 		if err := p2p.ExpectMsg(peer.app, BlockBodiesMsg, &BlockBodiesPacket{
-			RequestId:           123,
-			BlockBodiesResponse: bodies,
+			RequestId: 123,
+			List:      encodeRL(bodies),
 		}); err != nil {
 			t.Fatalf("test %d: bodies mismatch: %v", i, err)
 		}
+	}
+}
+
+func encodeBody(b *types.Block) BlockBody {
+	body := BlockBody{
+		Transactions: encodeRL([]*types.Transaction(b.Transactions())),
+		Uncles:       encodeRL(b.Uncles()),
+	}
+	if b.Withdrawals() != nil {
+		wd := encodeRL([]*types.Withdrawal(b.Withdrawals()))
+		body.Withdrawals = &wd
+	}
+	return body
+}
+
+func TestHashBody(t *testing.T) {
+	key, _ := crypto.HexToECDSA("8a1f9a8f95be41cd7ccb6168179afb4504aefe388d1e14474d32c45c72ce7b7a")
+	signer := types.NewCancunSigner(big.NewInt(1))
+
+	// create block 1
+	header := &types.Header{Number: big.NewInt(11)}
+	txs := []*types.Transaction{
+		types.MustSignNewTx(key, signer, &types.DynamicFeeTx{
+			ChainID: big.NewInt(1),
+			Nonce:   1,
+			Data:    []byte("testing"),
+		}),
+		types.MustSignNewTx(key, signer, &types.LegacyTx{
+			Nonce: 2,
+			Data:  []byte("testing"),
+		}),
+	}
+	uncles := []*types.Header{{Number: big.NewInt(10)}}
+	body1 := &types.Body{Transactions: txs, Uncles: uncles}
+	block1 := types.NewBlock(header, body1, nil, trie.NewStackTrie(nil))
+
+	// create block 2 (has withdrawals)
+	header2 := &types.Header{Number: big.NewInt(12)}
+	body2 := &types.Body{
+		Withdrawals: []*types.Withdrawal{{Index: 10}, {Index: 11}},
+	}
+	block2 := types.NewBlock(header2, body2, nil, trie.NewStackTrie(nil))
+
+	expectedHashes := BlockBodyHashes{
+		TransactionRoots: []common.Hash{block1.TxHash(), block2.TxHash()},
+		WithdrawalRoots:  []common.Hash{common.Hash{}, *block2.Header().WithdrawalsHash},
+		UncleHashes:      []common.Hash{block1.UncleHash(), block2.UncleHash()},
+	}
+
+	// compute hash like protocol handler does
+	protocolBodies := []BlockBody{encodeBody(block1), encodeBody(block2)}
+	hashes := hashBodyParts(protocolBodies)
+	if !reflect.DeepEqual(hashes, expectedHashes) {
+		t.Errorf("wrong hashes: %s", spew.Sdump(hashes))
+		t.Logf("expected: %s", spew.Sdump(expectedHashes))
 	}
 }
 
@@ -543,12 +599,12 @@ func testGetBlockReceipts(t *testing.T, protocol uint) {
 
 	switch protocol {
 	case ETH70:
-		var receipts []*ReceiptList69
+		var receipts rlp.RawList[*ReceiptList69]
 		for i := uint64(0); i <= backend.chain.CurrentBlock().Number.Uint64(); i++ {
 			block := backend.chain.GetBlockByNumber(i)
 			hashes = append(hashes, block.Hash())
 			trs := backend.chain.GetReceiptsByHash(block.Hash())
-			receipts = append(receipts, NewReceiptList69(trs))
+			receipts.Append(NewReceiptList69(trs))
 		}
 
 		// The whole request fits well inside the packet limit, so the response must
@@ -573,6 +629,8 @@ func testGetBlockReceipts(t *testing.T, protocol uint) {
 		if len(trs) < 2 {
 			t.Fatalf("expected block 2 to hold several receipts, got %d", len(trs))
 		}
+		var resumed rlp.RawList[*ReceiptList69]
+		resumed.Append(NewReceiptList69(trs[1:]))
 		p2p.Send(peer.app, GetReceiptsMsg, &GetReceiptsPacket70{
 			RequestId:              124,
 			FirstBlockReceiptIndex: 1,
@@ -581,18 +639,18 @@ func testGetBlockReceipts(t *testing.T, protocol uint) {
 		if err := p2p.ExpectMsg(peer.app, ReceiptsMsg, &ReceiptsPacket70{
 			RequestId:           124,
 			LastBlockIncomplete: false,
-			List:                []*ReceiptList69{NewReceiptList69(trs[1:])},
+			List:                resumed,
 		}); err != nil {
 			t.Errorf("resumed receipts mismatch (ETH70): %v", err)
 		}
 
 	case ETH69:
-		var receipts []*ReceiptList69
+		var receipts rlp.RawList[*ReceiptList69]
 		for i := uint64(0); i <= backend.chain.CurrentBlock().Number.Uint64(); i++ {
 			block := backend.chain.GetBlockByNumber(i)
 			hashes = append(hashes, block.Hash())
 			trs := backend.chain.GetReceiptsByHash(block.Hash())
-			receipts = append(receipts, NewReceiptList69(trs))
+			receipts.Append(NewReceiptList69(trs))
 		}
 
 		// Send request and verify ETH69 response
@@ -608,12 +666,12 @@ func testGetBlockReceipts(t *testing.T, protocol uint) {
 		}
 
 	case ETH68:
-		var receipts []*ReceiptList68
+		var receipts rlp.RawList[*ReceiptList68]
 		for i := uint64(0); i <= backend.chain.CurrentBlock().Number.Uint64(); i++ {
 			block := backend.chain.GetBlockByNumber(i)
 			hashes = append(hashes, block.Hash())
 			trs := backend.chain.GetReceiptsByHash(block.Hash())
-			receipts = append(receipts, NewReceiptList68(trs))
+			receipts.Append(NewReceiptList68(trs))
 		}
 
 		// Send request and verify ETH68 response
@@ -725,9 +783,13 @@ func TestHandlePooledTransactionsForwardsRequestID(t *testing.T) {
 	defer peer.close()
 
 	tx := types.NewTransaction(0, testAddr, big.NewInt(10_000), params.TxGas, big.NewInt(25_000_000_000), nil)
+	list, err := rlp.EncodeToRawList([]*types.Transaction{tx})
+	if err != nil {
+		t.Fatal(err)
+	}
 	packet := PooledTransactionsPacket{
-		RequestId:                  777,
-		PooledTransactionsResponse: []*types.Transaction{tx},
+		RequestId: 777,
+		List:      list,
 	}
 	encoded, err := rlp.EncodeToBytes(&packet)
 	if err != nil {
@@ -743,8 +805,12 @@ func TestHandlePooledTransactionsForwardsRequestID(t *testing.T) {
 	if delivered.RequestId != packet.RequestId {
 		t.Fatalf("wrong request ID: have %d, want %d", delivered.RequestId, packet.RequestId)
 	}
-	if len(delivered.PooledTransactionsResponse) != 1 || delivered.PooledTransactionsResponse[0].Hash() != tx.Hash() {
-		t.Fatalf("wrong pooled transaction response: %v", delivered.PooledTransactionsResponse)
+	txs, err := delivered.Transactions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(txs) != 1 || txs[0].Hash() != tx.Hash() {
+		t.Fatalf("wrong pooled transaction response: %v", txs)
 	}
 }
 
@@ -804,10 +870,18 @@ func testGetPooledTransaction(t *testing.T, blobTx bool) {
 		RequestId:                    123,
 		GetPooledTransactionsRequest: []common.Hash{tx.Hash()},
 	})
-	if err := p2p.ExpectMsg(peer.app, PooledTransactionsMsg, PooledTransactionsPacket{
-		RequestId:                  123,
-		PooledTransactionsResponse: []*types.Transaction{tx},
+	if err := p2p.ExpectMsg(peer.app, PooledTransactionsMsg, &PooledTransactionsPacket{
+		RequestId: 123,
+		List:      encodeRL([]*types.Transaction{tx}),
 	}); err != nil {
 		t.Errorf("pooled transaction mismatch: %v", err)
 	}
+}
+
+func encodeRL[T any](slice []T) rlp.RawList[T] {
+	rl, err := rlp.EncodeToRawList(slice)
+	if err != nil {
+		panic(err)
+	}
+	return rl
 }

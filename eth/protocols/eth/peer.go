@@ -23,6 +23,7 @@ import (
 	"math/rand"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	mapset "github.com/deckarep/golang-set/v2"
 
@@ -30,6 +31,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
+	"github.com/ethereum/go-ethereum/p2p/tracker"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 )
@@ -110,6 +112,7 @@ type Peer struct {
 	txBroadcast chan *txPropagation // Channel used to queue transaction propagation requests
 	txAnnounce  chan *txPropagation // Channel used to queue transaction announcement requests
 
+	tracker      *tracker.Tracker
 	reqDispatch  chan *request  // Dispatch channel to send requests and track then until fulfillment
 	reqCancel    chan *cancel   // Dispatch channel to cancel pending requests and untrack them
 	reqResend    chan *resend   // Dispatch channel to send follow-ups for still-pending requests
@@ -129,8 +132,10 @@ type Peer struct {
 // NewPeer create a wrapper for a network connection and negotiated  protocol
 // version.
 func NewPeer(version uint, p *p2p.Peer, rw p2p.MsgReadWriter, txpool TxPool, chainConfig *params.ChainConfig) *Peer {
+	cap := p2p.Cap{Name: ProtocolName, Version: version}
+	id := p.ID().String()
 	peer := &Peer{
-		id:              p.ID().String(),
+		id:              id,
 		Peer:            p,
 		rw:              rw,
 		version:         version,
@@ -142,6 +147,7 @@ func NewPeer(version uint, p *p2p.Peer, rw p2p.MsgReadWriter, txpool TxPool, cha
 		queuedBlockAnns: make(chan *types.Block, maxQueuedBlockAnns),
 		txBroadcast:     make(chan *txPropagation),
 		txAnnounce:      make(chan *txPropagation),
+		tracker:         tracker.New(cap, id, 5*time.Minute),
 		reqDispatch:     make(chan *request),
 		reqCancel:       make(chan *cancel),
 		reqResend:       make(chan *resend),
@@ -396,10 +402,11 @@ func (p *Peer) RequestOneHeader(hash common.Hash, sink chan *Response) (*Request
 	id := rand.Uint64()
 
 	req := &Request{
-		id:   id,
-		sink: sink,
-		code: GetBlockHeadersMsg,
-		want: BlockHeadersMsg,
+		id:       id,
+		sink:     sink,
+		code:     GetBlockHeadersMsg,
+		want:     BlockHeadersMsg,
+		numItems: 1,
 		data: &GetBlockHeadersPacket{
 			RequestId: id,
 			GetBlockHeadersRequest: &GetBlockHeadersRequest{
@@ -423,10 +430,11 @@ func (p *Peer) RequestHeadersByHash(origin common.Hash, amount int, skip int, re
 	id := rand.Uint64()
 
 	req := &Request{
-		id:   id,
-		sink: sink,
-		code: GetBlockHeadersMsg,
-		want: BlockHeadersMsg,
+		id:       id,
+		sink:     sink,
+		code:     GetBlockHeadersMsg,
+		want:     BlockHeadersMsg,
+		numItems: amount,
 		data: &GetBlockHeadersPacket{
 			RequestId: id,
 			GetBlockHeadersRequest: &GetBlockHeadersRequest{
@@ -450,10 +458,11 @@ func (p *Peer) RequestHeadersByNumber(origin uint64, amount int, skip int, rever
 	id := rand.Uint64()
 
 	req := &Request{
-		id:   id,
-		sink: sink,
-		code: GetBlockHeadersMsg,
-		want: BlockHeadersMsg,
+		id:       id,
+		sink:     sink,
+		code:     GetBlockHeadersMsg,
+		want:     BlockHeadersMsg,
+		numItems: amount,
 		data: &GetBlockHeadersPacket{
 			RequestId: id,
 			GetBlockHeadersRequest: &GetBlockHeadersRequest{
@@ -477,10 +486,11 @@ func (p *Peer) RequestBodies(hashes []common.Hash, sink chan *Response) (*Reques
 	id := rand.Uint64()
 
 	req := &Request{
-		id:   id,
-		sink: sink,
-		code: GetBlockBodiesMsg,
-		want: BlockBodiesMsg,
+		id:       id,
+		sink:     sink,
+		code:     GetBlockBodiesMsg,
+		want:     BlockBodiesMsg,
+		numItems: len(hashes),
 		data: &GetBlockBodiesPacket{
 			RequestId:             id,
 			GetBlockBodiesRequest: hashes,
@@ -501,10 +511,11 @@ func (p *Peer) RequestReceipts(hashes []common.Hash, gasUsed []uint64, numbers [
 
 	if p.version >= ETH70 {
 		req := &Request{
-			id:   id,
-			sink: sink,
-			code: GetReceiptsMsg,
-			want: ReceiptsMsg,
+			id:       id,
+			sink:     sink,
+			code:     GetReceiptsMsg,
+			want:     ReceiptsMsg,
+			numItems: len(hashes),
 			data: &GetReceiptsPacket70{
 				RequestId:              id,
 				FirstBlockReceiptIndex: 0,
@@ -538,10 +549,11 @@ func (p *Peer) RequestReceipts(hashes []common.Hash, gasUsed []uint64, numbers [
 	}
 
 	req := &Request{
-		id:   id,
-		sink: sink,
-		code: GetReceiptsMsg,
-		want: ReceiptsMsg,
+		id:       id,
+		sink:     sink,
+		code:     GetReceiptsMsg,
+		want:     ReceiptsMsg,
+		numItems: len(hashes),
 		data: &GetReceiptsPacket{
 			RequestId:          id,
 			GetReceiptsRequest: hashes,
@@ -565,7 +577,7 @@ func (p *Peer) requestPartialReceipts(id uint64) error {
 		return nil
 	}
 	lastBlock := len(buffer.list) - 1
-	lastReceipt := buffer.list[lastBlock].Len()
+	lastReceipt := buffer.list[lastBlock].items.Len()
 
 	hashes := buffer.request[lastBlock:]
 	p.receiptBufferLock.Unlock()
@@ -574,7 +586,7 @@ func (p *Peer) requestPartialReceipts(id uint64) error {
 	// hand it to the dispatcher as a resend operation. The dispatcher only
 	// sends it if the original request is still pending, or silently drop
 	// the request if the original one is cancelled (with no error returned).
-	return p.dispatchResend(id, GetReceiptsMsg, &GetReceiptsPacket70{
+	return p.dispatchResend(id, GetReceiptsMsg, len(hashes), &GetReceiptsPacket70{
 		RequestId:              id,
 		FirstBlockReceiptIndex: uint64(lastReceipt),
 		GetReceiptsRequest:     hashes,
@@ -606,7 +618,7 @@ func (p *Peer) bufferReceipts(requestId uint64, receiptLists []*ReceiptList69, l
 	}
 	if lastBlockIncomplete {
 		// Prevent sending a single empty receipt.
-		if len(receiptLists) == 1 && receiptLists[0].Len() == 0 {
+		if len(receiptLists) == 1 && receiptLists[0].items.Len() == 0 {
 			delete(p.receiptBuffer, requestId)
 			return errors.New("no receipt delivered in incomplete receipt response")
 		}
@@ -681,7 +693,7 @@ func (p *Peer) validateLastBlockReceipt(receiptLists []*ReceiptList69, id uint64
 		previousLog uint64
 	)
 	if buffer, ok := p.receiptBuffer[id]; ok && len(buffer.list) > 0 && len(receiptLists) == 1 {
-		previousTxs = buffer.list[len(buffer.list)-1].Len()
+		previousTxs = buffer.list[len(buffer.list)-1].items.Len()
 		previousLog = buffer.lastLogSize
 	}
 
@@ -692,7 +704,7 @@ func (p *Peer) validateLastBlockReceipt(receiptLists []*ReceiptList69, id uint64
 	}
 	// A Bor block carries one extra receipt for the state-sync transaction, which burns
 	// no gas and so is not accounted for by the gas-derived bound.
-	if uint64(previousTxs+lastReceipts.Len()) > gasUsed/minTxGas+1 {
+	if uint64(previousTxs+lastReceipts.items.Len()) > gasUsed/minTxGas+1 {
 		// bufferReceipts drops the buffer entry for any error returned here.
 		return 0, errors.New("total number of tx exceeded limit")
 	}
@@ -711,7 +723,15 @@ func (p *Peer) validateLastBlockReceipt(receiptLists []*ReceiptList69, id uint64
 func (p *Peer) RequestTxs(id uint64, hashes []common.Hash) error {
 	p.Log().Debug("Fetching batch of transactions", "count", len(hashes))
 
-	requestTracker.Track(p.id, p.version, GetPooledTransactionsMsg, PooledTransactionsMsg, id)
+	err := p.tracker.Track(tracker.Request{
+		ID:       id,
+		ReqCode:  GetPooledTransactionsMsg,
+		RespCode: PooledTransactionsMsg,
+		Size:     len(hashes),
+	})
+	if err != nil {
+		return err
+	}
 	return p2p.Send(p.rw, GetPooledTransactionsMsg, &GetPooledTransactionsPacket{
 		RequestId:                    id,
 		GetPooledTransactionsRequest: hashes,

@@ -15,6 +15,7 @@ import (
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
+	"github.com/ethereum/go-ethereum/p2p/tracker"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
@@ -391,7 +392,7 @@ func TestPeerPolicyAcceptedTransactionsDeferCorrelation(t *testing.T) {
 			}
 			backend := &transactionObservationBackend{accept: true}
 			var events []peerpolicy.Evidence
-			peer := &Peer{observer: func(e peerpolicy.Evidence) { events = append(events, e) }}
+			peer := &Peer{observer: func(e peerpolicy.Evidence) { events = append(events, e) }, tracker: tracker.New(p2p.Cap{Name: ProtocolName, Version: ETH69}, "test", time.Minute)}
 			msg := p2p.Msg{Code: tc.code, Size: uint32(len(encoded)), Payload: bytes.NewReader(encoded)}
 			if err := peer.handleObserved(backend, msg, tc.handle); err != nil {
 				t.Fatal(err)

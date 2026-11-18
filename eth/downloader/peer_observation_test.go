@@ -286,16 +286,25 @@ func omittedBodyReply(t *testing.T, tester *downloadTester, hashes []common.Hash
 	if len(encoded) != 1 {
 		t.Fatalf("native server returned %d bodies, want 1", len(encoded))
 	}
-	body := new(eth.BlockBody)
+	body := new(types.Body)
 	if err := rlp.DecodeBytes(encoded[0], body); err != nil {
+		t.Fatal(err)
+	}
+	var wire eth.BlockBody
+	if err := rlp.DecodeBytes(encoded[0], &wire); err != nil {
 		t.Fatal(err)
 	}
 	txRoot := types.DeriveSha(types.Transactions(body.Transactions), trie.NewStackTrie(nil))
 	if txRoot != available.TxHash {
 		t.Fatal("native server did not return the available body")
 	}
-	bodies := eth.BlockBodiesResponse{body}
-	return &eth.Response{Req: &eth.Request{Peer: "honest"}, Res: &bodies, Meta: [][]common.Hash{{txRoot}, {types.CalcUncleHash(body.Uncles)}, {{}}}}
+	bodies := eth.BlockBodiesResponse{wire}
+	meta := eth.BlockBodyHashes{
+		TransactionRoots: []common.Hash{txRoot},
+		UncleHashes:      []common.Hash{types.CalcUncleHash(body.Uncles)},
+		WithdrawalRoots:  []common.Hash{{}},
+	}
+	return &eth.Response{Req: &eth.Request{Peer: "honest"}, Res: &bodies, Meta: meta}
 }
 
 func omittedReceiptReply(t *testing.T, tester *downloadTester, hashes []common.Hash, available *types.Header) *eth.Response {
@@ -311,7 +320,7 @@ func omittedReceiptReply(t *testing.T, tester *downloadTester, hashes []common.H
 	if err := rlp.DecodeBytes(encoded[0], receipts); err != nil {
 		t.Fatal(err)
 	}
-	if root := types.DeriveSha(receipts, trie.NewStackTrie(nil)); root != available.ReceiptHash {
+	if root := types.DeriveSha(receipts.Derivable(), trie.NewStackTrie(nil)); root != available.ReceiptHash {
 		t.Fatal("native server did not return the available receipts")
 	}
 	return &eth.Response{Req: &eth.Request{Peer: "honest"}, Res: []*eth.ReceiptList69{receipts}}

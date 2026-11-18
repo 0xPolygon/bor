@@ -850,7 +850,12 @@ func (f *BlockFetcher) loop() {
 							return
 						} // Invalid response type
 						// Ignoring withdrawals here, since the block fetcher is not used post-merge.
-						txs, uncles, _ := bodyResponse.Unpack()
+						txs, uncles, err := unpackBodies(*bodyResponse)
+						if err != nil {
+							log.Debug("BlockFetcher: invalid body response, dropping peer", "peer", p, "err", err)
+							f.dropPeer(p)
+							return
+						}
 						metrics.RecordPerItemDuration(blockBodyItemDownloadTimer, res.Time, len(txs))
 						f.FilterBodies(p, txs, uncles, time.Now(), announcedAt)
 
@@ -1465,4 +1470,22 @@ func (f *BlockFetcher) insertBlockWithRetry(op *blockOrHeaderInject) error {
 			return fmt.Errorf("%w: %w", errTerminated, err)
 		}
 	}
+}
+
+// unpackBodies decodes the transactions and uncles of a block bodies response.
+func unpackBodies(bodies eth.BlockBodiesResponse) ([][]*types.Transaction, [][]*types.Header, error) {
+	txset := make([][]*types.Transaction, len(bodies))
+	uncleset := make([][]*types.Header, len(bodies))
+	for i := range bodies {
+		txs, err := bodies[i].Transactions.Items()
+		if err != nil {
+			return nil, nil, fmt.Errorf("bad transactions in body %d: %w", i, err)
+		}
+		uncles, err := bodies[i].Uncles.Items()
+		if err != nil {
+			return nil, nil, fmt.Errorf("bad uncles in body %d: %w", i, err)
+		}
+		txset[i], uncleset[i] = txs, uncles
+	}
+	return txset, uncleset, nil
 }

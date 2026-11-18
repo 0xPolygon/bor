@@ -148,7 +148,7 @@ func newPolicyTransactionFetcher(h *handler, delivered chan<- struct{}) *fetcher
 
 func TestPeerPolicyForwardedTransactionTraffic(t *testing.T) {
 	txs := []*types.Transaction{types.NewTx(&types.LegacyTx{Nonce: 1}), types.NewTx(&types.LegacyTx{Nonce: 2})}
-	for _, packet := range []eth.Packet{(*eth.TransactionsPacket)(&txs), &eth.PooledTransactionsPacket{RequestId: 42, PooledTransactionsResponse: txs}} {
+	for _, packet := range []eth.Packet{testTxsPacket(t, txs), testPooledTxsPacket(t, 42, txs)} {
 		t.Run(packet.Name(), func(t *testing.T) {
 			h := &handler{peerPolicy: peerpolicy.New(new(mclock.Simulated))}
 			delivered := make(chan struct{}, 1)
@@ -189,7 +189,7 @@ func policyTrafficCounters() [4]int64 {
 
 func TestPeerPolicyTransactionLocalFailure(t *testing.T) {
 	txs := []*types.Transaction{types.NewTx(&types.LegacyTx{})}
-	for _, packet := range []eth.Packet{(*eth.TransactionsPacket)(&txs), &eth.PooledTransactionsPacket{RequestId: 42, PooledTransactionsResponse: txs}} {
+	for _, packet := range []eth.Packet{testTxsPacket(t, txs), testPooledTxsPacket(t, 42, txs)} {
 		t.Run(packet.Name(), func(t *testing.T) {
 			h := &handler{peerPolicy: peerpolicy.New(new(mclock.Simulated))}
 			h.txFetcher = newPolicyTransactionFetcher(h, nil)
@@ -240,7 +240,7 @@ func TestPeerPolicyRequestedTransactionTraffic(t *testing.T) {
 		t.Fatal("fetcher did not request the announcement")
 	}
 	before := policyTrafficCounters()
-	packet := &eth.PooledTransactionsPacket{RequestId: requestID, PooledTransactionsResponse: []*types.Transaction{tx}}
+	packet := testPooledTxsPacket(t, requestID, []*types.Transaction{tx})
 	if _, err := handlePolicyTransaction(t, h, packet); !errors.Is(err, io.EOF) {
 		t.Fatal(err)
 	}
@@ -270,9 +270,9 @@ func TestPeerPolicyBlobValidationEvidence(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h := &handler{peerPolicy: peerpolicy.New(new(mclock.Simulated))}
 			txs := []*types.Transaction{types.NewTx(&tc.blob)}
-			var packet eth.Packet = (*eth.TransactionsPacket)(&txs)
+			var packet eth.Packet = testTxsPacket(t, txs)
 			if tc.pooled {
-				packet = &eth.PooledTransactionsPacket{RequestId: 42, PooledTransactionsResponse: txs}
+				packet = testPooledTxsPacket(t, 42, txs)
 			}
 			id, err := handlePolicyTransaction(t, h, packet)
 			if err == nil || errors.Is(err, io.EOF) || !strings.Contains(err.Error(), tc.wantErr) {
@@ -284,4 +284,22 @@ func TestPeerPolicyBlobValidationEvidence(t *testing.T) {
 			}
 		})
 	}
+}
+
+func testTxsPacket(t testing.TB, txs []*types.Transaction) *eth.TransactionsPacket {
+	t.Helper()
+	list, err := rlp.EncodeToRawList(txs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &eth.TransactionsPacket{RawList: list}
+}
+
+func testPooledTxsPacket(t testing.TB, id uint64, txs []*types.Transaction) *eth.PooledTransactionsPacket {
+	t.Helper()
+	list, err := rlp.EncodeToRawList(txs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &eth.PooledTransactionsPacket{RequestId: id, List: list}
 }

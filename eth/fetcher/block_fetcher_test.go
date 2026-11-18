@@ -36,6 +36,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/triedb"
 )
@@ -263,11 +264,19 @@ func (f *fetcherTester) makeBodyFetcher(peer string, blocks map[common.Hash]*typ
 			}
 		}
 		// Return on a new thread
-		bodies := make([]*eth.BlockBody, len(transactions))
+		bodies := make(eth.BlockBodiesResponse, len(transactions))
 		for i, txs := range transactions {
-			bodies[i] = &eth.BlockBody{
-				Transactions: txs,
-				Uncles:       uncles[i],
+			txList, err := rlp.EncodeToRawList(txs)
+			if err != nil {
+				panic(err)
+			}
+			uncleList, err := rlp.EncodeToRawList(uncles[i])
+			if err != nil {
+				panic(err)
+			}
+			bodies[i] = eth.BlockBody{
+				Transactions: txList,
+				Uncles:       uncleList,
 			}
 		}
 
@@ -276,7 +285,7 @@ func (f *fetcherTester) makeBodyFetcher(peer string, blocks map[common.Hash]*typ
 		}
 		res := &eth.Response{
 			Req:  req,
-			Res:  (*eth.BlockBodiesResponse)(&bodies),
+			Res:  &bodies,
 			Time: drift,
 			Done: make(chan error, 1), // Ignore the returned status
 		}

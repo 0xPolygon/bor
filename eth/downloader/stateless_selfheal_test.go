@@ -61,19 +61,19 @@ type fakeCodePeer struct {
 func (p *fakeCodePeer) ID() string      { return p.id }
 func (p *fakeCodePeer) Log() log.Logger { return log.New("id", p.id) }
 
-func (p *fakeCodePeer) RequestAccountRange(id uint64, root, origin, limit common.Hash, bytes uint64) error {
+func (p *fakeCodePeer) RequestAccountRange(id uint64, root, origin, limit common.Hash, bytes int) error {
 	return nil
 }
 
-func (p *fakeCodePeer) RequestStorageRanges(id uint64, root common.Hash, accounts []common.Hash, origin, limit []byte, bytes uint64) error {
+func (p *fakeCodePeer) RequestStorageRanges(id uint64, root common.Hash, accounts []common.Hash, origin, limit []byte, bytes int) error {
 	return nil
 }
 
-func (p *fakeCodePeer) RequestTrieNodes(id uint64, root common.Hash, paths []snap.TrieNodePathSet, bytes uint64) error {
+func (p *fakeCodePeer) RequestTrieNodes(id uint64, root common.Hash, count int, paths []snap.TrieNodePathSet, bytes int) error {
 	return nil
 }
 
-func (p *fakeCodePeer) RequestByteCodes(id uint64, hashes []common.Hash, bytes uint64) error {
+func (p *fakeCodePeer) RequestByteCodes(id uint64, hashes []common.Hash, bytes int) error {
 	p.requests.Add(1)
 	if p.onRequest != nil {
 		p.onRequest()

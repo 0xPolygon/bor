@@ -26,6 +26,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/internal/utesting"
+	"github.com/ethereum/go-ethereum/rlp"
 )
 
 // sendTxs sends the given transactions to the node and
@@ -52,7 +53,8 @@ func (s *Suite) sendTxs(t *utesting.T, txs []*types.Transaction) error {
 		return fmt.Errorf("peering failed: %v", err)
 	}
 
-	if err = sendConn.Write(ethProto, eth.TransactionsMsg, eth.TransactionsPacket(txs)); err != nil {
+	encTxs, _ := rlp.EncodeToRawList(txs)
+	if err = sendConn.Write(ethProto, eth.TransactionsMsg, eth.TransactionsPacket{RawList: encTxs}); err != nil {
 		return fmt.Errorf("failed to write message to connection: %v", err)
 	}
 
@@ -69,7 +71,8 @@ func (s *Suite) sendTxs(t *utesting.T, txs []*types.Transaction) error {
 		}
 		switch msg := msg.(type) {
 		case *eth.TransactionsPacket:
-			for _, tx := range *msg {
+			txs, _ := msg.Items()
+			for _, tx := range txs {
 				got[tx.Hash()] = true
 			}
 		case *eth.NewPooledTransactionHashesPacket:
@@ -81,9 +84,10 @@ func (s *Suite) sendTxs(t *utesting.T, txs []*types.Transaction) error {
 			if err != nil {
 				t.Logf("invalid GetBlockHeaders request: %v", err)
 			}
+			encHeaders, _ := rlp.EncodeToRawList(headers)
 			recvConn.Write(ethProto, eth.BlockHeadersMsg, &eth.BlockHeadersPacket{
-				RequestId:           msg.RequestId,
-				BlockHeadersRequest: headers,
+				RequestId: msg.RequestId,
+				List:      encHeaders,
 			})
 		default:
 			return fmt.Errorf("unexpected eth wire msg: %s", pretty.Sdump(msg))
@@ -155,7 +159,11 @@ func (s *Suite) sendInvalidTxs(t *utesting.T, txs []*types.Transaction) error {
 			// Iterate what the peer actually sent, not the locally-sent txs:
 			// every one of those is in invalids by construction, so the check
 			// used to fire on the first packet regardless of its contents.
-			for _, tx := range *msg {
+			received, err := msg.Items()
+			if err != nil {
+				return fmt.Errorf("failed to decode received transactions: %w", err)
+			}
+			for _, tx := range received {
 				if _, ok := invalids[tx.Hash()]; ok {
 					return fmt.Errorf("received bad tx: %s", tx.Hash())
 				}
@@ -171,9 +179,10 @@ func (s *Suite) sendInvalidTxs(t *utesting.T, txs []*types.Transaction) error {
 			if err != nil {
 				t.Logf("invalid GetBlockHeaders request: %v", err)
 			}
+			encHeaders, _ := rlp.EncodeToRawList(headers)
 			recvConn.Write(ethProto, eth.BlockHeadersMsg, &eth.BlockHeadersPacket{
-				RequestId:           msg.RequestId,
-				BlockHeadersRequest: headers,
+				RequestId: msg.RequestId,
+				List:      encHeaders,
 			})
 		default:
 			return fmt.Errorf("unexpected eth message: %v", pretty.Sdump(msg))
