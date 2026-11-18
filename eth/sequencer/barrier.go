@@ -181,31 +181,6 @@ func (p *Publisher) sealedThroughParent(height uint64) bool {
 	return done && out == recOK && !info.tipOpen && !info.haveSeal && len(info.window) == 0
 }
 
-// readLagGrace bounds how long the mirror re-reads a store whose read path
-// is behind our acked head before it stops waiting for a read that is not.
-// Sized above the few milliseconds a gateway trails its ingress, and small
-// enough that the barrier's ack budget plus this still fits inside the seal
-// margin.
-const readLagGrace = 25 * time.Millisecond
-
-// ackedWindow returns the transactions published at this height and whether
-// the store acked the open they follow.
-func (p *Publisher) ackedWindow(height uint64) ([]common.Hash, bool) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	start := p.journal.openStart()
-	if start < 0 {
-		return nil, false
-	}
-
-	if open := p.journal.items[start]; open.height != height || open.seq > p.ackedSeq {
-		return nil, false
-	}
-
-	return p.journalWindowLocked(height), true
-}
-
 // maxBarrierRefusals bounds consecutive pre-seal refusals at one height —
 // the barrier's analog of the gate's maxGateRefusals. Sized past every
 // legitimate convergence (adoption is one rebuild; recovery's grace is a
@@ -267,35 +242,55 @@ func (p *Publisher) armResync() {
 // content — position agreement says nothing about the transactions we are
 // about to broadcast, and those are what the store promised.
 func (p *Publisher) sealMirror(height uint64, txs []*types.Transaction) bool {
-	deadline := time.Now().Add(readLagGrace)
-	info, ok, settled := p.mirrorRead(height, txs)
+	ctx, cancel := context.WithTimeout(context.Background(), tailReadTimeout)
+	defer cancel()
 
-	// A gateway applies an entry a little after the ingress acks it, so a
-	// read that did not start at our acked head shows the store's past: what
-	// it could not explain may be our own open, applied midway through the
-	// read. Refusing on it cost a producer close to the store, sealing as
-	// soon as its open acked, a rebuild and a late block. Only a read from
-	// our acked head can say the content is not ours.
-	if !settled && !info.anchored {
-		publishLaggingRead.Inc(1)
+	info, out := p.readTail(ctx)
+	if out != recOK {
+		// A window we cannot read is not a window we can prove divergent,
+		// and production never waits on the store.
+		coverageSkip(height, "tail unreadable", "outcome", int(out))
+
+		return true
 	}
 
-	for !settled && !info.anchored && time.Now().Before(deadline) {
-		time.Sleep(2 * time.Millisecond)
+	if info.haveSeal && info.lastSealHeight >= height {
+		coverageSkip(height, "height already sealed in the store")
 
-		info, ok, settled = p.mirrorRead(height, txs)
+		return true // the height moved on without us: the next build mutes
 	}
 
-	if settled {
+	// The store's live window at our height is the sequence this block owes
+	// its consumers. It must appear in the block, in order, from the front:
+	// anything else means transactions were promised at this height that
+	// the block does not deliver there.
+	if info.tipOpen && info.tipOpenHeight == height {
+		if storeTxs, ok := windowTxHashes(info.window); ok {
+			return p.mirrorVerdict(height, storeTxs, txs, len(storeTxs))
+		}
+	}
+
+	if ok, decided := p.journalMirror(info, height, txs); decided {
 		return ok
 	}
 
-	// Still behind after the grace. Our open was acked, so it landed on the
-	// store's head and everything a read short of it can show is history we
-	// already folded: the window at this height is the journal's.
-	if ours, acked := p.ackedWindow(height); acked && !info.anchored {
-		coverageSkip(height, "read path behind our acked open")
+	// A tail ending in a decoded seal exactly at this block's parent, with
+	// nothing live past it, proves the store owes nothing at this height —
+	// a broadcast can revoke nothing, whatever our anchor thinks. This is
+	// the takeover shape: this publisher idled muted while another
+	// produced, its anchor is behind on sealed history it already imported
+	// as blocks, and the seal flush's STALE rebases it right after.
+	// Refusing here wedged a fresh producer for 17 seconds on a devnet —
+	// the reconcile held every rebuild's open awaiting a seal flush this
+	// refusal was preventing — until heimdall rotated production away as
+	// ineffective.
+	if p.sealedThroughParent(height) {
+		coverageSkip(height, "store sealed through parent, nothing owed here")
 
+		return true
+	}
+
+	if ours, behind := p.behindOurOpen(info, height); behind {
 		return p.mirrorVerdict(height, ours, txs, len(ours))
 	}
 
@@ -316,57 +311,35 @@ func (p *Publisher) sealMirror(height uint64, txs []*types.Transaction) bool {
 	return false
 }
 
-// mirrorRead judges the block against one read of the store. settled is
-// false when the read found content it could not attribute.
-func (p *Publisher) mirrorRead(height uint64, txs []*types.Transaction) (info tailInfo, ok, settled bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), tailReadTimeout)
-	defer cancel()
-
-	info, out := p.readTail(ctx)
-	if out != recOK {
-		// A window we cannot read is not a window we can prove divergent,
-		// and production never waits on the store.
-		coverageSkip(height, "tail unreadable", "outcome", int(out))
-
-		return info, true, true
+// behindOurOpen returns the journal's window at this height when the read
+// never reached our acked head and the store has acked our open here. A
+// gateway applies an entry a little after the ingress acks it, so such a
+// read shows the store's past, and what it could not explain may be our own
+// open, applied midway through it: refusing on that cost a producer close
+// to the store, sealing as soon as its open acked, a rebuild and a late
+// block. An acked open landed on the store's head, so nothing short of it
+// is content we have not folded, and the window at this height is the
+// journal's.
+func (p *Publisher) behindOurOpen(info tailInfo, height uint64) ([]common.Hash, bool) {
+	if info.anchored {
+		return nil, false
 	}
 
-	if info.haveSeal && info.lastSealHeight >= height {
-		coverageSkip(height, "height already sealed in the store")
+	p.mu.Lock()
+	defer p.mu.Unlock()
 
-		return info, true, true // the height moved on without us: the next build mutes
+	start := p.journal.openStart()
+	if start < 0 {
+		return nil, false
 	}
 
-	// The store's live window at our height is the sequence this block owes
-	// its consumers. It must appear in the block, in order, from the front:
-	// anything else means transactions were promised at this height that
-	// the block does not deliver there.
-	if info.tipOpen && info.tipOpenHeight == height {
-		if storeTxs, ok := windowTxHashes(info.window); ok {
-			return info, p.mirrorVerdict(height, storeTxs, txs, len(storeTxs)), true
-		}
+	if open := p.journal.items[start]; open.height != height || open.seq > p.ackedSeq {
+		return nil, false
 	}
 
-	if ok, decided := p.journalMirror(info, height, txs); decided {
-		return info, ok, true
-	}
+	publishLaggingRead.Inc(1)
 
-	// A tail ending in a decoded seal exactly at this block's parent, with
-	// nothing live past it, proves the store owes nothing at this height —
-	// a broadcast can revoke nothing, whatever our anchor thinks. This is
-	// the takeover shape: this publisher idled muted while another
-	// produced, its anchor is behind on sealed history it already imported
-	// as blocks, and the seal flush's STALE rebases it right after.
-	// Refusing here wedged a fresh producer for 17 seconds on a devnet —
-	// the reconcile held every rebuild's open awaiting a seal flush this
-	// refusal was preventing — until heimdall rotated production away as
-	// ineffective.
-	clean := p.sealedThroughParent(height)
-	if clean {
-		coverageSkip(height, "store sealed through parent, nothing owed here")
-	}
-
-	return info, clean, clean
+	return p.journalWindowLocked(height), true
 }
 
 // journalMirror compares the block against this publisher's own published
