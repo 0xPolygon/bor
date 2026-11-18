@@ -154,12 +154,6 @@ func (p *Peer) observeRateLimit(msg p2p.Msg) {
 	}
 }
 
-func (p *Peer) observeReplyRefusal(err error, hashes []common.Hash) {
-	if err == errReplyQueueFull && p.observer != nil {
-		p.observer(peerpolicy.Evidence{Refused: true, Hashes: hashes})
-	}
-}
-
 func observedBodyReply(backend Backend, peer *Peer, query GetBlockBodiesPacket) error {
 	if peer.observer == nil {
 		response := ServiceGetBlockBodiesQuery(backend.Chain(), query.GetBlockBodiesRequest)
@@ -178,12 +172,10 @@ func observedBodyReply(backend Backend, peer *Peer, query GetBlockBodiesPacket) 
 func (p *Peer) writeObservedBodies(id uint64, bodies []rlp.RawValue, event peerpolicy.Evidence) error {
 	// Queue admission is not a completed download. Observe only after the
 	// transport write succeeds, including when serving is delayed by a budget.
-	err := p.queueReplyWithCompletion(BlockBodiesMsg, &BlockBodiesRLPPacket{
+	return p.queueReplyWithCompletion(BlockBodiesMsg, &BlockBodiesRLPPacket{
 		RequestId:              id,
 		BlockBodiesRLPResponse: bodies,
-	}, nil, p.replyObserver(event))
-	p.observeReplyRefusal(err, event.Hashes)
-	return err
+	}, nil, event)
 }
 
 func (p *Peer) replyObserver(event peerpolicy.Evidence) func(uint64) {

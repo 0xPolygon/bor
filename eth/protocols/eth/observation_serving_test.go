@@ -193,16 +193,6 @@ func TestPeerPolicyPermittedBodyRequestsStayNeutral(t *testing.T) {
 		require.Empty(t, got.Windows)
 		require.Equal(t, uint64(successfulRequests), got.Contribution.ServedResponses)
 		require.Positive(t, got.Contribution.ServedBytes)
-		peer.blockReplies.mu.Lock()
-		peer.blockReplies.bytes = peerByteBurst / 2
-		peer.blockReplies.mu.Unlock()
-		for range 3 {
-			require.ErrorIs(t, request(), errReplyQueueFull)
-		}
-		got = tracker.Snapshot(peer.ID())
-		require.Equal(t, uint64(20), got.Risk)
-		require.Equal(t, uint64(1), got.Windows[peerpolicy.ServingRepetition.String()])
-		require.Equal(t, uint64(successfulRequests), got.Contribution.ServedResponses)
 	})
 }
 
@@ -262,4 +252,151 @@ func TestPeerPolicyNativeRequestBurstStaysNeutral(t *testing.T) {
 	require.Equal(t, uint64(20), got.Risk)
 	require.Equal(t, uint64(1), got.Windows[peerpolicy.RateLimited.String()])
 	require.Zero(t, got.Windows[peerpolicy.RequestVolume.String()])
+}
+
+func TestHandleTemporaryReplyPressure(t *testing.T) {
+	backend := newTestBackend(2)
+	defer backend.close()
+	hash := backend.chain.GetBlockByNumber(1).Hash()
+	for _, tc := range []struct {
+		name           string
+		request, reply uint64
+		reason         peerpolicy.Reason
+	}{
+		{"block bodies", GetBlockBodiesMsg, BlockBodiesMsg, peerpolicy.ServingRepetition},
+		{"pooled transactions", GetPooledTransactionsMsg, PooledTransactionsMsg, peerpolicy.ServingVolume},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				local, remote := p2p.MsgPipe()
+				peer := NewPeer(ETH69, p2p.NewPeer(enode.ID{1}, "", nil), local, nil)
+				defer peer.Close()
+				defer remote.Close()
+				tracker := peerpolicy.New(new(mclock.Simulated))
+				tracker.Connected(peer.ID())
+				peer.SetObserver(func(e peerpolicy.Evidence) { tracker.Observe(peer.ID(), e) })
+				done := make(chan error, 1)
+				go func() { done <- Handle(backend, peer) }()
+				send := func(id int) error {
+					if tc.request == GetPooledTransactionsMsg {
+						return p2p.Send(remote, tc.request, GetPooledTransactionsPacket{RequestId: uint64(id), GetPooledTransactionsRequest: GetPooledTransactionsRequest{hash}})
+					}
+					return p2p.Send(remote, tc.request, GetBlockBodiesPacket{RequestId: uint64(id), GetBlockBodiesRequest: GetBlockBodiesRequest{hash}})
+				}
+				read := func(id int) {
+					msg, err := remote.ReadMsg()
+					require.NoError(t, err)
+					require.Equal(t, tc.reply, msg.Code)
+					var reply struct {
+						ID    uint64
+						Items []rlp.RawValue
+					}
+					require.NoError(t, msg.Decode(&reply))
+					require.Equal(t, uint64(id), reply.ID)
+				}
+				const queued = peerRequestBurst + 1 // one write in progress and one full queue
+				for id := range queued {
+					time.Sleep(time.Second / peerRequestRate)
+					require.NoError(t, send(id))
+					synctest.Wait()
+				}
+				for i := range 3 {
+					sent := make(chan error, 1)
+					go func() { sent <- send(queued + i) }()
+					synctest.Wait()
+					select {
+					case err := <-done:
+						t.Fatalf("temporary queue pressure terminated the ETH session: %v", err)
+					default:
+					}
+					read(i)
+					require.NoError(t, <-sent)
+					synctest.Wait()
+				}
+				for id := 3; id < queued+3; id++ {
+					read(id)
+				}
+				synctest.Wait()
+				got := tracker.Snapshot(peer.ID())
+				require.Equal(t, uint64(1), got.Windows[tc.reason.String()])
+				require.EqualValues(t, queued+3, got.Contribution.ServedResponses)
+				require.NoError(t, remote.Close())
+				require.ErrorIs(t, <-done, p2p.ErrPipeClosed)
+			})
+		})
+	}
+}
+
+func TestHandlePersistentReplyPressure(t *testing.T) {
+	for _, shutdown := range []bool{false, true} {
+		synctest.Test(t, func(t *testing.T) {
+			local, remote := p2p.MsgPipe()
+			peer := NewPeer(ETH68, p2p.NewPeer(enode.ID{1}, "", nil), local, nil)
+			defer remote.Close()
+			if !shutdown {
+				defer peer.Close()
+			}
+			peer.txReplies.mu.Lock()
+			peer.txReplies.bytes = peerByteBurst / 2
+			peer.txReplies.mu.Unlock()
+			done := make(chan error, 1)
+			go func() { done <- Handle(nil, peer) }()
+			sent := make(chan error, 1)
+			go func() {
+				// The handler reserves capacity before touching the pool.
+				sent <- p2p.Send(remote, GetPooledTransactionsMsg, GetPooledTransactionsPacket{RequestId: 1})
+			}()
+			synctest.Wait()
+			start := time.Now()
+			if shutdown {
+				peer.Close()
+				require.ErrorIs(t, <-done, ErrDisconnected)
+				require.Zero(t, time.Since(start))
+			} else {
+				require.ErrorIs(t, <-done, errReplyQueueFull)
+				require.Equal(t, maxReplyQueueWait, time.Since(start))
+			}
+			require.NoError(t, <-sent)
+		})
+	}
+}
+
+func TestPeerReplyWaiterReleased(t *testing.T) {
+	for _, writeFails := range []bool{false, true} {
+		synctest.Test(t, func(t *testing.T) {
+			local, remote := p2p.MsgPipe()
+			peer := NewPeer(ETH69, p2p.NewPeer(enode.ID{1}, "", nil), local, nil)
+			defer peer.Close()
+			defer remote.Close()
+			require.NoError(t, peer.ReplyPooledTransactionsRLP(1, nil, nil))
+			synctest.Wait()
+
+			var held []*replyReservation
+			for range (peerByteBurst / 2) / maxMessageSize {
+				r, err := peer.reservePooledReply()
+				require.NoError(t, err)
+				held = append(held, r)
+				defer r.release()
+			}
+			start := time.Now()
+			done := make(chan error, 1)
+			go func() {
+				r, err := peer.reservePooledReply()
+				r.release()
+				done <- err
+			}()
+			synctest.Wait()
+			r, err := peer.reservePooledReply()
+			require.Nil(t, r)
+			require.ErrorIs(t, err, errReplyQueueFull)
+			if writeFails {
+				require.NoError(t, remote.Close())
+				require.ErrorIs(t, <-done, ErrDisconnected)
+			} else {
+				held[0].release()
+				require.NoError(t, <-done)
+			}
+			require.Zero(t, time.Since(start))
+		})
+	}
 }
