@@ -211,7 +211,7 @@ func handleMessage(backend Backend, peer *Peer) error {
 	if err != nil {
 		return err
 	}
-	maxSize := uint64(maxMessageSize)
+	maxSize := maxMessageSizeFor(msg.Code)
 	if msg.Code == GetPooledTransactionsMsg {
 		maxSize = rlp.ListSize(uint64(rlp.IntSize(math.MaxUint64)) + rlp.ListSize(maxPooledTxsServe*(common.HashLength+1)))
 	}
