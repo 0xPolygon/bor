@@ -206,11 +206,22 @@ func (t *Tracker) requestOnlySince(id string, connection *ConnectionActivity) (m
 	t.prepareActivity(&p.activity, now)
 	last, live := connection.Last()
 	s := p.activity.snapshot(now, t.ready, p.exempt, t.idleGraceSeconds)
-	// Any non-request traffic is outside this narrow retention policy.
+	// A full node can spend the entire observation window serving an honest syncer.
 	eligible := s.status == contributionRequestOnly && !s.Protected && s.ObservedSeconds >= s.IdleGraceSeconds &&
-		s.ServedMinutes >= uint64(activityGrace/activityWidth) && s.ReceivedRequests > 0 && s.ReceivedMessages == s.ReceivedRequests
+		s.ServedMinutes >= uint64(activityGrace/activityWidth) && s.ReceivedRequests > 0 && p.exceededServingLimits(now)
 	// Do not rotate while the latest wire message is still awaiting observation.
 	return last, live && eligible && last == p.activity.lastHandled
+}
+
+func (p *peerRecord) exceededServingLimits(now mclock.AbsTime) bool {
+	tick := int64(now) / int64(windowWidth)
+	const servingReasons = 1<<RequestVolume | 1<<ServingVolume | 1<<ServingRepetition
+	for _, b := range p.windows {
+		if b.tick <= tick && tick-b.tick < windowCount && b.reasons&servingReasons != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (t *Tracker) RetireRequestOnly(id string, connection *ConnectionActivity, last mclock.AbsTime) bool {

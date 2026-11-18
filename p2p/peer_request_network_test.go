@@ -104,8 +104,20 @@ func checkRequestOnlyCapacityRLPX(t *testing.T, srv *Server, clock *mclock.Simul
 	if _, err := connectActivityPeer(t, srv, newkey(), 69); !errors.Is(err, DiscTooManyPeers) {
 		t.Fatalf("expected refusal, got %v", err)
 	}
-	advanceActivityClock(t, srv, clock, time.Minute-time.Second)
+	advanceActivityClock(t, srv, clock, 50*time.Second)
+	original := srv.Peers()
+	for _, peer := range original[:batch] {
+		for range 3 {
+			srv.peerPolicy.Load().Observe(peer.ID().String(), peerpolicy.Evidence{Refused: true})
+		}
+	}
+	advanceActivityClock(t, srv, clock, 9*time.Second)
 	waitActivityPeers(t, srv, count-batch)
+	for i, peer := range original {
+		if srv.peerJail.IsJailed(peer.ID()) != (i < batch) {
+			t.Fatalf("unexpected rotation decision for peer %s", peer.ID())
+		}
+	}
 	for range batch {
 		if _, err := connectActivityPeer(t, srv, newkey(), 68); err != nil {
 			t.Fatal(err)
@@ -117,7 +129,9 @@ func checkRequestOnlyCapacityRLPX(t *testing.T, srv *Server, clock *mclock.Simul
 	if _, err := connectActivityPeer(t, srv, newkey(), 69); !errors.Is(err, DiscTooManyPeers) {
 		t.Fatalf("expected second refusal, got %v", err)
 	}
-	advanceActivityClock(t, srv, clock, time.Minute-time.Second)
+	advanceActivityClock(t, srv, clock, 50*time.Second)
+	srv.peerPolicy.Load().Observe(original[batch].ID().String(), peerpolicy.Evidence{Reason: peerpolicy.ServingVolume})
+	advanceActivityClock(t, srv, clock, 9*time.Second)
 	if requestOnlyPeerDisconnects.Snapshot().Count() != before {
 		t.Fatal("repeated refusal bypassed the rotation interval")
 	}

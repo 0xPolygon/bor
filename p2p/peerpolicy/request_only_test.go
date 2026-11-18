@@ -17,6 +17,7 @@ func requestOnlyFixture() (*Tracker, *ConnectionActivity, *mclock.Simulated) {
 		tracker.Observe("peer", Evidence{Activity: ActivityEvent{ReceivedMessages: 1, ReceivedRequests: 1, ServedResponses: 1, MessageAt: clock.Now()}})
 		clock.Run(time.Minute)
 	}
+	tracker.Observe("peer", Evidence{Reason: ServingVolume})
 	return tracker, connection, clock
 }
 
@@ -38,7 +39,7 @@ func TestRequestOnlyGraceAndFreshEvidence(t *testing.T) {
 	if !eligible {
 		t.Fatal("a new request reset contribution eligibility")
 	}
-	tracker.Observe("peer", Evidence{Activity: ActivityEvent{ReceivedMessages: 1}})
+	tracker.Observe("peer", Evidence{Activity: ActivityEvent{ReceivedMessages: 1, UsefulBlock: true}})
 	if tracker.RetireRequestOnly("peer", connection, last) {
 		t.Fatal("ignored data arriving after selection")
 	}
@@ -88,6 +89,7 @@ func TestRequestOnlyMinimumObservationAndServing(t *testing.T) {
 		tracker.Observe("peer", Evidence{Activity: ActivityEvent{ReceivedMessages: 1, ReceivedRequests: 1, ServedResponses: 1, MessageAt: clock.Now()}})
 		clock.Run(time.Minute)
 	}
+	tracker.Observe("peer", Evidence{Reason: ServingVolume})
 	last, ok := tracker.RequestOnlySince("peer", &connection)
 	if !ok || !tracker.RetireRequestOnly("peer", &connection, last) {
 		t.Fatal("eligible peer could not be retired")
@@ -108,6 +110,7 @@ func TestRequestOnlyServedMinutesAfterGrace(t *testing.T) {
 				ReceivedMessages: 1, ReceivedRequests: 1, ServedResponses: 1, MessageAt: clock.Now(),
 			}})
 		}
+		tracker.Observe("peer", Evidence{Reason: ServingVolume})
 		_, eligible := tracker.RequestOnlySince("peer", &connection)
 		if want := minute == 10; eligible != want {
 			t.Fatalf("eligible after %d served minute buckets = %v, want %v", minute, eligible, want)
@@ -142,13 +145,72 @@ func TestRequestOnlyResumedObservation(t *testing.T) {
 	}
 }
 
-func TestRequestOnlyContributionWindow(t *testing.T) {
+func TestRequestOnlyNeedsLiveServingEvidence(t *testing.T) {
 	tracker, connection, clock := requestOnlyFixture()
+	clock.Run(windowCount * windowWidth)
 	connection.Observe(clock.Now(), false)
 	tracker.Observe("peer", Evidence{Activity: ActivityEvent{ReceivedMessages: 1, MessageAt: clock.Now()}})
-	for minute := 0; minute <= activityCount; minute++ {
+	for _, reason := range []Reason{None, ServingRefused, DownloaderFailure, AnnouncementVolume} {
+		tracker.Observe("peer", Evidence{Reason: reason})
+		if _, ok := tracker.RequestOnlySince("peer", connection); ok {
+			t.Fatalf("selected a syncing peer with only %v evidence", reason)
+		}
+	}
+	for range 3 {
+		tracker.Observe("peer", Evidence{Refused: true})
+	}
+	last, ok := tracker.RequestOnlySince("peer", connection)
+	if !ok {
+		t.Fatal("an announcement masked repeated serving refusals")
+	}
+	tracker.Observe("peer", Evidence{Activity: ActivityEvent{UsefulBlock: true}})
+	if tracker.RetireRequestOnly("peer", connection, last) {
+		t.Fatal("retired a peer that supplied a useful block after selection")
+	}
+}
+
+func TestRequestOnlyNeedsObservedRequest(t *testing.T) {
+	tracker, clock := newContributionTracker()
+	var connection ConnectionActivity
+	connection.Start(clock.Now())
+	tracker.BindConnection("peer", 0, &connection)
+	for range 10 {
+		clock.Run(time.Minute)
 		connection.Observe(clock.Now(), false)
 		tracker.Observe("peer", Evidence{Activity: ActivityEvent{
+			ReceivedMessages: 1, ServedResponses: 1, MessageAt: clock.Now(),
+		}})
+	}
+	tracker.Observe("peer", Evidence{Reason: ServingVolume})
+	if _, eligible := tracker.RequestOnlySince("peer", &connection); eligible {
+		t.Fatal("selected a peer without observing a request")
+	}
+}
+
+func TestRequestOnlyRechecksServingLimits(t *testing.T) {
+	for _, reason := range []Reason{RequestVolume, ServingVolume, ServingRepetition} {
+		t.Run(reason.String(), func(t *testing.T) {
+			tracker, connection, clock := requestOnlyFixture()
+			clock.Run(windowCount * windowWidth)
+			tracker.Observe("peer", Evidence{Reason: reason})
+			last, eligible := tracker.RequestOnlySince("peer", connection)
+			if !eligible {
+				t.Fatal("missed recent serving evidence")
+			}
+			clock.Run(windowCount * windowWidth)
+			if tracker.RetireRequestOnly("peer", connection, last) {
+				t.Fatal("retired a peer using expired serving evidence")
+			}
+		})
+	}
+}
+
+func TestRequestOnlyContributionWindow(t *testing.T) {
+	tracker, connection, clock := requestOnlyFixture()
+	tracker.Observe("peer", Evidence{Activity: ActivityEvent{UsefulBlock: true}})
+	for minute := 0; minute <= activityCount; minute++ {
+		connection.Observe(clock.Now(), false)
+		tracker.Observe("peer", Evidence{Reason: ServingVolume, Activity: ActivityEvent{
 			ReceivedMessages: 1, ReceivedRequests: 1, ServedResponses: 1, MessageAt: clock.Now(),
 		}})
 		if _, eligible := tracker.RequestOnlySince("peer", connection); eligible != (minute == activityCount) {

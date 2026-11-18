@@ -23,6 +23,9 @@ func prepareRequestOnlyPeers(t *testing.T, srv *Server, peers map[enode.ID]*Peer
 			}})
 		}
 	}
+	for _, peer := range peers {
+		srv.peerPolicy.Load().Observe(peer.ID().String(), peerpolicy.Evidence{Reason: peerpolicy.ServingVolume})
+	}
 	srv.log = log.Root()
 	_, inbound, _ := peerCounts(peers)
 	c := &conn{node: enode.SignNull(new(enr.Record), uintID(1000)), flags: inboundConn}
@@ -137,7 +140,7 @@ func TestRequestOnlyEvictionEligibility(t *testing.T) {
 		}, false},
 		{"announcement", func(s *Server, p *Peer) {
 			s.peerPolicy.Load().Observe(p.ID().String(), peerpolicy.Evidence{Activity: peerpolicy.ActivityEvent{ReceivedMessages: 1}})
-		}, false},
+		}, true},
 		{"block-delivery", func(s *Server, p *Peer) {
 			s.peerPolicy.Load().Observe(p.ID().String(), peerpolicy.Evidence{Activity: peerpolicy.ActivityEvent{UnclassifiedMessages: 1}})
 		}, false},
@@ -241,7 +244,7 @@ func TestRequestOnlyChangedAfterSelection(t *testing.T) {
 
 func observePeerRequest(srv *Server, peer *Peer, clock *mclock.Simulated) {
 	peer.activity.Observe(clock.Now(), false)
-	srv.peerPolicy.Load().Observe(peer.ID().String(), peerpolicy.Evidence{Activity: peerpolicy.ActivityEvent{
+	srv.peerPolicy.Load().Observe(peer.ID().String(), peerpolicy.Evidence{Reason: peerpolicy.ServingVolume, Activity: peerpolicy.ActivityEvent{
 		ReceivedMessages: 1, ReceivedRequests: 1, ServedResponses: 1, MessageAt: clock.Now(),
 	}})
 }
