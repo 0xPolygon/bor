@@ -535,6 +535,7 @@ func handleNewBlock(backend Backend, msg Decoder, peer *Peer) error {
 
 	// Mark the peer as owning the block
 	peer.markBlock(ann.Block.Hash())
+	observeData(msg, 1)
 
 	return backend.Handle(peer, ann)
 }
@@ -547,6 +548,7 @@ func handleBlockHeaders(backend Backend, msg Decoder, peer *Peer) error {
 	}
 
 	metadata := func() interface{} {
+		observeData(msg, len(res.BlockHeadersRequest))
 		hashes := make([]common.Hash, len(res.BlockHeadersRequest))
 		for i, header := range res.BlockHeadersRequest {
 			hashes[i] = header.Hash()
@@ -570,6 +572,7 @@ func handleBlockBodies(backend Backend, msg Decoder, peer *Peer) error {
 	}
 
 	metadata := func() interface{} {
+		observeData(msg, len(res.BlockBodiesResponse))
 		var (
 			txsHashes        = make([]common.Hash, len(res.BlockBodiesResponse))
 			uncleHashes      = make([]common.Hash, len(res.BlockBodiesResponse))
@@ -617,6 +620,7 @@ func handleReceipts[L ReceiptsList](backend Backend, msg Decoder, peer *Peer) er
 	// ignore the `metadata` function and pass on the whole receipt list as is. The receipt queue
 	// handler which has access to block number will take care of the exclusion if needed.
 	metadata := func() interface{} {
+		observeData(msg, len(res.List))
 		return nil
 	}
 

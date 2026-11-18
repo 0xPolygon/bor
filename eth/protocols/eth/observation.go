@@ -79,7 +79,7 @@ func isRequest(code uint64) bool {
 
 func canContribute(code uint64) bool {
 	switch code {
-	case TransactionsMsg, PooledTransactionsMsg, NewBlockMsg, BlockBodiesMsg, BlockHeadersMsg:
+	case TransactionsMsg, PooledTransactionsMsg, NewBlockMsg, BlockBodiesMsg, BlockHeadersMsg, ReceiptsMsg:
 		return true
 	default:
 		return false
@@ -90,11 +90,6 @@ func receivedActivity(msg p2p.Msg) peerpolicy.ActivityEvent {
 	activity := peerpolicy.ActivityEvent{ReceivedMessages: 1, ReceivedBytes: uint64(msg.Size), MessageSequence: msg.ReceivedSequence}
 	if isRequest(msg.Code) {
 		activity.ReceivedRequests = 1
-	}
-	switch msg.Code {
-	case NewBlockMsg, BlockHeadersMsg, BlockBodiesMsg, ReceiptsMsg:
-		// Validation is deferred to consumers outside the message handler.
-		activity.UnclassifiedMessages = 1
 	}
 	return activity
 }
@@ -120,6 +115,12 @@ func messageFamily(code uint64) peerpolicy.Family {
 func observeInvalid(msg Decoder, reason peerpolicy.Reason) {
 	if d, ok := msg.(*observedDecoder); ok {
 		d.evidence.Reason = reason
+	}
+}
+
+func observeData(msg Decoder, items int) {
+	if d, ok := msg.(*observedDecoder); ok && items > 0 {
+		d.evidence.Activity.UnclassifiedMessages = 1
 	}
 }
 

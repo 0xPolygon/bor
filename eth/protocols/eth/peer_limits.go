@@ -118,7 +118,14 @@ func (p *Peer) replyCapacity(replies *peerReplies, size int) error {
 	return nil
 }
 
-func (p *Peer) waitReplyCapacityLocked(replies *peerReplies, size int, hashes []common.Hash) error {
+func (p *Peer) waitReplyCapacityLocked(replies *peerReplies, size int, hashes []common.Hash) (err error) {
+	defer func() {
+		if err == errReplyQueueFull && p.observer != nil {
+			replies.mu.Unlock()
+			p.observer(peerpolicy.Evidence{Refused: true, Hashes: hashes})
+			replies.mu.Lock()
+		}
+	}()
 	if err := p.replyCapacity(replies, size); err != errReplyQueueFull {
 		return err
 	}
@@ -127,11 +134,6 @@ func (p *Peer) waitReplyCapacityLocked(replies *peerReplies, size int, hashes []
 		replies.waiter = make(chan struct{}, 1)
 		defer func() { replies.waiter = nil }()
 	}
-	replies.mu.Unlock()
-	if p.observer != nil {
-		p.observer(peerpolicy.Evidence{Refused: true, Hashes: hashes})
-	}
-	replies.mu.Lock()
 	if !wait {
 		return errReplyQueueFull
 	}

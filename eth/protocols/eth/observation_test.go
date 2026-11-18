@@ -197,9 +197,6 @@ func TestPeerActivityReceivesWithoutContribution(t *testing.T) {
 			if code == GetBlockHeadersMsg || code == GetBlockBodiesMsg || code == GetReceiptsMsg || code == GetPooledTransactionsMsg {
 				want.ReceivedRequests = 1
 			}
-			if code == NewBlockMsg || code == BlockHeadersMsg || code == BlockBodiesMsg || code == ReceiptsMsg {
-				want.UnclassifiedMessages = 1
-			}
 			if got.Activity != want || tracker.Snapshot("peer").Risk != 0 {
 				t.Fatalf("ordinary message produced contribution or risk: %+v", got)
 			}
@@ -433,7 +430,7 @@ func TestPeerPolicyContributionClassification(t *testing.T) {
 			t.Fatalf("eth/%d has no contribution classifier", protocol.Version)
 		}
 		for code := uint64(0); code <= protocol.Length; code++ {
-			want := code == TransactionsMsg || code == PooledTransactionsMsg || code == NewBlockMsg || code == BlockBodiesMsg || code == BlockHeadersMsg
+			want := code == TransactionsMsg || code == PooledTransactionsMsg || code == NewBlockMsg || code == BlockBodiesMsg || code == BlockHeadersMsg || code == ReceiptsMsg
 			if got := protocol.CanContribute(code); got != want {
 				t.Errorf("eth/%d code %#x: can contribute = %v, want %v", protocol.Version, code, got, want)
 			}

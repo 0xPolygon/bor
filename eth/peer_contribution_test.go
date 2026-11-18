@@ -69,16 +69,20 @@ func TestPeerContributionTransactionOutcomes(t *testing.T) {
 	for _, test := range []struct {
 		name       string
 		provenance fetcher.DeliveryProvenance
+		items      uint64
 		accepted   uint64
 		complete   bool
 		status     string
 		risk       uint64
 	}{
-		{"accepted broadcast", fetcher.UnsolicitedDelivery, 1, true, "contributing", 0},
-		{"accepted requested reply", fetcher.RequestedDelivery, 1, true, "contributing", 0},
-		{"pool rejection", fetcher.UnsolicitedDelivery, 0, true, "request-only", 20},
-		{"unknown provenance", fetcher.UnknownDelivery, 1, true, "unknown", 0},
-		{"incomplete admission", fetcher.UnsolicitedDelivery, 1, false, "unknown", 0},
+		{"accepted broadcast", fetcher.UnsolicitedDelivery, 1, 1, true, "contributing", 0},
+		{"accepted requested reply", fetcher.RequestedDelivery, 1, 1, true, "contributing", 0},
+		{"pool rejection", fetcher.UnsolicitedDelivery, 1, 0, true, "request-only", 20},
+		{"accepted uncorrelated reply", fetcher.UnknownDelivery, 1, 1, true, "contributing", 0},
+		{"rejected uncorrelated reply", fetcher.UnknownDelivery, 1, 0, true, "request-only", 20},
+		{"incomplete admission", fetcher.UnsolicitedDelivery, 1, 1, false, "unknown", 0},
+		{"empty unknown reply", fetcher.UnknownDelivery, 0, 0, true, "request-only", 20},
+		{"empty incomplete delivery", fetcher.UnknownDelivery, 0, 0, false, "request-only", 20},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			clock := new(mclock.Simulated)
@@ -90,7 +94,7 @@ func TestPeerContributionTransactionOutcomes(t *testing.T) {
 				h.peerPolicy.Observe("peer", peerpolicy.Evidence{Activity: peerpolicy.ActivityEvent{ServedResponses: 1}})
 				clock.Run(time.Minute)
 			}
-			h.observeTransactionDelivery("peer", test.provenance, 1, 100, false, test.accepted, test.complete, clock.Now())
+			h.observeTransactionDelivery("peer", test.provenance, test.items, 100, false, test.accepted, test.complete, clock.Now())
 			got := h.peerPolicy.Snapshot("peer")
 			require.Equal(t, test.status, got.Contribution.Status)
 			require.Zero(t, got.Risk)

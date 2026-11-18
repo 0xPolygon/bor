@@ -318,7 +318,9 @@ func TestHandleTemporaryReplyPressure(t *testing.T) {
 				}
 				synctest.Wait()
 				got := tracker.Snapshot(peer.ID())
-				require.Equal(t, uint64(1), got.Windows[tc.reason.String()])
+				require.Zero(t, got.Windows[tc.reason.String()])
+				require.Zero(t, got.Windows[peerpolicy.ServingRefused.String()])
+				require.Zero(t, got.AbuseRisk)
 				require.EqualValues(t, queued+3, got.Contribution.ServedResponses)
 				require.NoError(t, remote.Close())
 				require.ErrorIs(t, <-done, p2p.ErrPipeClosed)
@@ -367,6 +369,8 @@ func TestPeerReplyWaiterReleased(t *testing.T) {
 			peer := NewPeer(ETH69, p2p.NewPeer(enode.ID{1}, "", nil), local, nil)
 			defer peer.Close()
 			defer remote.Close()
+			tracker := peerpolicy.New(new(mclock.Simulated))
+			peer.SetObserver(func(e peerpolicy.Evidence) { tracker.Observe(peer.ID(), e) })
 			require.NoError(t, peer.ReplyPooledTransactionsRLP(1, nil, nil))
 			synctest.Wait()
 
@@ -388,6 +392,7 @@ func TestPeerReplyWaiterReleased(t *testing.T) {
 			r, err := peer.reservePooledReply()
 			require.Nil(t, r)
 			require.ErrorIs(t, err, errReplyQueueFull)
+			require.EqualValues(t, 1, tracker.Snapshot(peer.ID()).Windows[peerpolicy.ServingRefused.String()])
 			if writeFails {
 				require.NoError(t, remote.Close())
 				require.ErrorIs(t, <-done, ErrDisconnected)
@@ -396,6 +401,8 @@ func TestPeerReplyWaiterReleased(t *testing.T) {
 				require.NoError(t, <-done)
 			}
 			require.Zero(t, time.Since(start))
+			require.EqualValues(t, 1, tracker.Snapshot(peer.ID()).Windows[peerpolicy.ServingRefused.String()])
+			require.Zero(t, tracker.Snapshot(peer.ID()).AbuseRisk)
 		})
 	}
 }

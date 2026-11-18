@@ -118,9 +118,9 @@ func (h *handler) observePeerEvidence(id string, event peerpolicy.Evidence) {
 func (h *handler) observeTransactionDelivery(id string, provenance fetcher.DeliveryProvenance, items, bytes uint64, invalid bool, accepted uint64, complete bool, receivedAt mclock.AbsTime) {
 	e := peerpolicy.Evidence{Items: items, Bytes: bytes}
 	e.Activity.StartedAt = receivedAt
-	if complete && provenance != fetcher.UnknownDelivery {
+	if complete {
 		e.Activity.AcceptedTransactions = accepted
-	} else {
+	} else if items > 0 {
 		e.Activity.UnclassifiedMessages = 1
 	}
 	if provenance == fetcher.UnknownDelivery {
