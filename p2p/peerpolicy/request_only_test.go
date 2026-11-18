@@ -13,8 +13,8 @@ func requestOnlyFixture() (*Tracker, *ConnectionActivity, *mclock.Simulated) {
 	connection.Start(clock.Now())
 	tracker.BindConnection("peer", 0, connection)
 	for range 10 {
-		connection.ObserveRequest(clock.Now())
-		tracker.Observe("peer", Evidence{Activity: ActivityEvent{ReceivedMessages: 1, ReceivedRequests: 1, ServedResponses: 1, MessageAt: clock.Now()}})
+		connection.Observe(clock.Now(), false)
+		tracker.Observe("peer", Evidence{Activity: ActivityEvent{ReceivedMessages: 1, ReceivedRequests: 1, ServedResponses: 1}})
 		clock.Run(time.Minute)
 	}
 	tracker.Observe("peer", Evidence{Reason: ServingVolume})
@@ -27,19 +27,17 @@ func TestRequestOnlyGraceAndFreshEvidence(t *testing.T) {
 	if !eligible {
 		t.Fatal("request-only peer did not qualify")
 	}
-	connection.Observe(clock.Now(), false)
+	sequence := connection.ObserveData(clock.Now())
 	if tracker.RetireRequestOnly("peer", connection, last) {
 		t.Fatal("ignored traffic arriving after selection")
 	}
 	if _, eligible := tracker.RequestOnlySince("peer", connection); eligible {
 		t.Fatal("peer was eligible while a wire message was still unclassified")
 	}
-	clock.Run(time.Nanosecond)
-	connection.ObserveRequest(clock.Now())
-	tracker.Observe("peer", Evidence{Activity: ActivityEvent{ReceivedMessages: 1, ReceivedRequests: 1, MessageAt: clock.Now()}})
+	tracker.Observe("peer", Evidence{Activity: ActivityEvent{ReceivedMessages: 1, MessageSequence: sequence}})
 	last, eligible = tracker.RequestOnlySince("peer", connection)
 	if !eligible {
-		t.Fatal("a new request reset contribution eligibility")
+		t.Fatal("handled data kept the peer ineligible without contribution")
 	}
 	tracker.Observe("peer", Evidence{Activity: ActivityEvent{ReceivedMessages: 1, UsefulBlock: true}})
 	if tracker.RetireRequestOnly("peer", connection, last) {
@@ -87,8 +85,8 @@ func TestRequestOnlyMinimumObservationAndServing(t *testing.T) {
 		if _, ok := tracker.RequestOnlySince("peer", &connection); ok {
 			t.Fatal("removed before grace")
 		}
-		connection.ObserveRequest(clock.Now())
-		tracker.Observe("peer", Evidence{Activity: ActivityEvent{ReceivedMessages: 1, ReceivedRequests: 1, ServedResponses: 1, MessageAt: clock.Now()}})
+		connection.Observe(clock.Now(), false)
+		tracker.Observe("peer", Evidence{Activity: ActivityEvent{ReceivedMessages: 1, ReceivedRequests: 1, ServedResponses: 1}})
 		clock.Run(time.Minute)
 	}
 	tracker.Observe("peer", Evidence{Reason: ServingVolume})
@@ -107,9 +105,9 @@ func TestRequestOnlyServedMinutesAfterGrace(t *testing.T) {
 
 	for minute := 1; minute <= 10; minute++ {
 		for range 2 {
-			connection.ObserveRequest(clock.Now())
+			connection.Observe(clock.Now(), false)
 			tracker.Observe("peer", Evidence{Activity: ActivityEvent{
-				ReceivedMessages: 1, ReceivedRequests: 1, ServedResponses: 1, MessageAt: clock.Now(),
+				ReceivedMessages: 1, ReceivedRequests: 1, ServedResponses: 1,
 			}})
 		}
 		tracker.Observe("peer", Evidence{Reason: ServingVolume})
@@ -150,8 +148,8 @@ func TestRequestOnlyResumedObservation(t *testing.T) {
 func TestRequestOnlyNeedsLiveServingEvidence(t *testing.T) {
 	tracker, connection, clock := requestOnlyFixture()
 	clock.Run(windowCount * windowWidth)
-	connection.ObserveRequest(clock.Now())
-	tracker.Observe("peer", Evidence{Activity: ActivityEvent{ReceivedMessages: 1, MessageAt: clock.Now()}})
+	connection.Observe(clock.Now(), false)
+	tracker.Observe("peer", Evidence{Activity: ActivityEvent{ReceivedMessages: 1}})
 	for _, reason := range []Reason{None, ServingRefused, DownloaderFailure, AnnouncementVolume} {
 		tracker.Observe("peer", Evidence{Reason: reason})
 		if _, ok := tracker.RequestOnlySince("peer", connection); ok {
@@ -178,9 +176,9 @@ func TestRequestOnlyNeedsObservedRequest(t *testing.T) {
 	tracker.BindConnection("peer", 0, &connection)
 	for range 10 {
 		clock.Run(time.Minute)
-		connection.ObserveRequest(clock.Now())
+		connection.Observe(clock.Now(), false)
 		tracker.Observe("peer", Evidence{Activity: ActivityEvent{
-			ReceivedMessages: 1, ServedResponses: 1, MessageAt: clock.Now(),
+			ReceivedMessages: 1, ServedResponses: 1,
 		}})
 	}
 	tracker.Observe("peer", Evidence{Reason: ServingVolume})
@@ -211,9 +209,9 @@ func TestRequestOnlyContributionWindow(t *testing.T) {
 	tracker, connection, clock := requestOnlyFixture()
 	tracker.Observe("peer", Evidence{Activity: ActivityEvent{UsefulBlock: true}})
 	for minute := 0; minute <= activityCount; minute++ {
-		connection.ObserveRequest(clock.Now())
+		connection.Observe(clock.Now(), false)
 		tracker.Observe("peer", Evidence{Reason: ServingVolume, Activity: ActivityEvent{
-			ReceivedMessages: 1, ReceivedRequests: 1, ServedResponses: 1, MessageAt: clock.Now(),
+			ReceivedMessages: 1, ReceivedRequests: 1, ServedResponses: 1,
 		}})
 		if _, eligible := tracker.RequestOnlySince("peer", connection); eligible != (minute == activityCount) {
 			t.Fatalf("eligibility at minute %d = %v", minute, eligible)
@@ -229,22 +227,71 @@ func TestRequestOnlyRetireWithPendingRequest(t *testing.T) {
 		t.Fatal("fixture is not eligible")
 	}
 	clock.Run(time.Second)
-	connection.ObserveRequest(clock.Now())
+	connection.Observe(clock.Now(), false)
 	if !tracker.RetireRequestOnly("peer", connection, last) {
 		t.Fatal("a pending request prevented rotation")
 	}
 }
 
-func TestRequestOnlyPendingDataAtHandledTimestamp(t *testing.T) {
+func TestRequestOnlyPendingDataAtSameClockTick(t *testing.T) {
 	tracker, connection, clock := requestOnlyFixture()
-	connection.ObserveRequest(clock.Now())
-	tracker.Observe("peer", Evidence{Activity: ActivityEvent{ReceivedMessages: 1, ReceivedRequests: 1, MessageAt: clock.Now()}})
+	connection.Observe(clock.Now(), false)
+	tracker.Observe("peer", Evidence{Activity: ActivityEvent{ReceivedMessages: 1, ReceivedRequests: 1}})
 	last, eligible := tracker.RequestOnlySince("peer", connection)
 	if !eligible {
 		t.Fatal("fixture is not eligible")
 	}
-	connection.Observe(clock.Now(), false)
+	connection.ObserveData(clock.Now())
 	if tracker.RetireRequestOnly("peer", connection, last) {
 		t.Fatal("retired a peer with pending data at the same clock tick")
+	}
+}
+
+func TestRequestOnlyDataCompletionOrder(t *testing.T) {
+	for _, useful := range []bool{false, true} {
+		tracker, connection, clock := requestOnlyFixture()
+		first := connection.ObserveData(clock.Now())
+		second := connection.ObserveData(clock.Now())
+		tracker.Observe("peer", Evidence{Activity: ActivityEvent{ReceivedMessages: 1, MessageSequence: first}})
+		if _, eligible := tracker.RequestOnlySince("peer", connection); eligible {
+			t.Fatal("handling the first delivery cleared a newer pending delivery")
+		}
+		tracker.Observe("peer", Evidence{Activity: ActivityEvent{ReceivedMessages: 1, MessageSequence: second, UsefulBlock: useful}})
+		tracker.Observe("peer", Evidence{Activity: ActivityEvent{ReceivedMessages: 1, MessageSequence: first}})
+		last, eligible := tracker.RequestOnlySince("peer", connection)
+		if eligible == useful {
+			t.Fatalf("eligibility after completion = %v, useful = %v", eligible, useful)
+		}
+		if tracker.RetireRequestOnly("peer", connection, last) == useful {
+			t.Fatal("retirement ignored the completed validation result")
+		}
+	}
+}
+
+func TestRequestOnlyIgnoresPreviousSessionCompletion(t *testing.T) {
+	tracker, _, clock := requestOnlyFixture()
+	clock.Run(time.Nanosecond)
+	startedAt := tracker.Connected("peer")
+	var connection ConnectionActivity
+	connection.Start(clock.Now())
+	tracker.BindConnection("peer", startedAt, &connection)
+	for range 10 {
+		sequence := connection.Observe(clock.Now(), false)
+		tracker.ObserveSession("peer", false, startedAt, Evidence{Activity: ActivityEvent{
+			ReceivedMessages: 1, ReceivedRequests: 1, ServedResponses: 1, MessageSequence: sequence,
+		}})
+		clock.Run(time.Minute)
+	}
+	tracker.Observe("peer", Evidence{Reason: ServingVolume})
+	sequence := connection.ObserveData(clock.Now())
+	tracker.ObserveSession("peer", false, 0, Evidence{Activity: ActivityEvent{ReceivedMessages: 1, MessageSequence: sequence + 1}})
+	if _, eligible := tracker.RequestOnlySince("peer", &connection); eligible {
+		t.Fatal("a stale completion cleared the new session's pending data")
+	}
+	if !tracker.ObserveSession("peer", false, startedAt, Evidence{Activity: ActivityEvent{ReceivedMessages: 1, MessageSequence: sequence}}) {
+		t.Fatal("rejected completion from the current session")
+	}
+	if _, eligible := tracker.RequestOnlySince("peer", &connection); !eligible {
+		t.Fatal("current completion did not release the pending data guard")
 	}
 }

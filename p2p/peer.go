@@ -441,11 +441,11 @@ func (p *Peer) handle(msg Msg) error {
 		if err != nil {
 			return fmt.Errorf("msg code out of range: %v", msg.Code)
 		}
-		msg.ReceivedAtMonotonic = p.clock.Now()
-		if proto.isRequest(msg.Code) {
-			p.activity.ObserveRequest(msg.ReceivedAtMonotonic)
+		now := p.clock.Now()
+		if proto.canContribute(msg.Code) {
+			msg.ReceivedSequence = p.activity.ObserveData(now)
 		} else {
-			p.activity.Observe(msg.ReceivedAtMonotonic, proto.Name != "eth")
+			msg.ReceivedSequence = p.activity.Observe(now, proto.Name != "eth")
 		}
 		if metrics.Enabled() {
 			m := fmt.Sprintf("%s/%s/%d/%#02x", ingressMeterName, proto.Name, proto.Version, msg.Code-proto.offset)
@@ -566,8 +566,8 @@ type protoRW struct {
 	w      MsgWriter
 }
 
-func (rw *protoRW) isRequest(code uint64) bool {
-	return rw.Name == "eth" && rw.IsRequest != nil && rw.IsRequest(code-rw.offset)
+func (rw *protoRW) canContribute(code uint64) bool {
+	return rw.Name == "eth" && rw.CanContribute != nil && rw.CanContribute(code-rw.offset)
 }
 
 func (rw *protoRW) WriteMsg(msg Msg) (err error) {

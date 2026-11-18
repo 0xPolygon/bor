@@ -190,10 +190,10 @@ func TestPeerActivityReceivesWithoutContribution(t *testing.T) {
 			tracker := peerpolicy.New(new(mclock.Simulated))
 			var got peerpolicy.Evidence
 			p := &Peer{observer: func(e peerpolicy.Evidence) { got = e; tracker.Observe("peer", e) }}
-			if err := p.handleObserved(nil, p2p.Msg{Code: code, Size: 50, ReceivedAtMonotonic: 123}, func(Backend, Decoder, *Peer) error { return nil }); err != nil {
+			if err := p.handleObserved(nil, p2p.Msg{Code: code, Size: 50, ReceivedSequence: 123}, func(Backend, Decoder, *Peer) error { return nil }); err != nil {
 				t.Fatal(err)
 			}
-			want := peerpolicy.ActivityEvent{ReceivedMessages: 1, ReceivedBytes: 50, MessageAt: 123}
+			want := peerpolicy.ActivityEvent{ReceivedMessages: 1, ReceivedBytes: 50, MessageSequence: 123}
 			if code == GetBlockHeadersMsg || code == GetBlockBodiesMsg || code == GetReceiptsMsg || code == GetPooledTransactionsMsg {
 				want.ReceivedRequests = 1
 			}
@@ -425,18 +425,58 @@ func TestPeerPolicyAcceptedTransactionsDeferCorrelation(t *testing.T) {
 	}
 }
 
-func TestPeerPolicyRequestClassification(t *testing.T) {
+func TestPeerPolicyContributionClassification(t *testing.T) {
 	backend := newTestBackend(0)
 	defer backend.close()
 	for _, protocol := range MakeProtocols(backend, 1, nil) {
-		if protocol.IsRequest == nil {
-			t.Fatalf("eth/%d has no request classifier", protocol.Version)
+		if protocol.CanContribute == nil {
+			t.Fatalf("eth/%d has no contribution classifier", protocol.Version)
 		}
 		for code := uint64(0); code <= protocol.Length; code++ {
-			want := code == GetBlockHeadersMsg || code == GetBlockBodiesMsg || code == GetReceiptsMsg || code == GetPooledTransactionsMsg
-			if got := protocol.IsRequest(code); got != want {
-				t.Errorf("eth/%d code %#x: request = %v, want %v", protocol.Version, code, got, want)
+			want := code == TransactionsMsg || code == PooledTransactionsMsg || code == NewBlockMsg || code == BlockBodiesMsg
+			if got := protocol.CanContribute(code); got != want {
+				t.Errorf("eth/%d code %#x: can contribute = %v, want %v", protocol.Version, code, got, want)
 			}
 		}
+	}
+}
+
+func TestEmptyAnnouncementsKeepRequestOnlyEligibility(t *testing.T) {
+	backend := newTestBackend(0)
+	defer backend.close()
+	clock := new(mclock.Simulated)
+	tracker := peerpolicy.New(clock)
+	tracker.SetReady(true)
+	var connection peerpolicy.ConnectionActivity
+	connection.Start(clock.Now())
+	tracker.BindConnection("peer", tracker.Connected("peer"), &connection)
+	for range 10 {
+		sequence := connection.Observe(clock.Now(), false)
+		tracker.Observe("peer", peerpolicy.Evidence{Activity: peerpolicy.ActivityEvent{
+			ReceivedMessages: 1, ReceivedRequests: 1, ServedResponses: 1, MessageSequence: sequence,
+		}})
+		clock.Run(time.Minute)
+	}
+	tracker.Observe("peer", peerpolicy.Evidence{Reason: peerpolicy.ServingVolume})
+	peer := &Peer{observer: func(e peerpolicy.Evidence) { tracker.Observe("peer", e) }}
+	payload, err := rlp.EncodeToBytes(NewPooledTransactionHashesPacket{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 5 {
+		sequence := connection.Observe(clock.Now(), false)
+		msg := p2p.Msg{Code: NewPooledTransactionHashesMsg, Size: uint32(len(payload)), Payload: bytes.NewReader(payload), ReceivedSequence: sequence}
+		if err := peer.handleObserved(backend, msg, handleNewPooledTransactionHashes); err != nil {
+			t.Fatal(err)
+		}
+		if _, eligible := tracker.RequestOnlySince("peer", &connection); !eligible {
+			t.Fatal("an empty announcement deferred request-only rotation")
+		}
+		sequence = connection.Observe(clock.Now(), false)
+		tracker.Observe("peer", peerpolicy.Evidence{Activity: peerpolicy.ActivityEvent{ReceivedMessages: 1, ReceivedRequests: 1, MessageSequence: sequence}})
+	}
+	last, eligible := tracker.RequestOnlySince("peer", &connection)
+	if !eligible || !tracker.RetireRequestOnly("peer", &connection, last) {
+		t.Fatal("alternating requests and announcements prevented retirement")
 	}
 }

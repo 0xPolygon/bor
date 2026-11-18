@@ -19,9 +19,9 @@ func prepareRequestOnlyPeers(t *testing.T, srv *Server, peers map[enode.ID]*Peer
 	for range 44 {
 		clock.Run(15 * time.Second)
 		for _, peer := range peers {
-			peer.activity.ObserveRequest(clock.Now())
+			peer.activity.Observe(clock.Now(), false)
 			srv.peerPolicy.Load().Observe(peer.ID().String(), peerpolicy.Evidence{Activity: peerpolicy.ActivityEvent{
-				ReceivedMessages: 1, ReceivedRequests: 1, ServedResponses: 1, ServedBytes: 1024, MessageAt: clock.Now(),
+				ReceivedMessages: 1, ReceivedRequests: 1, ServedResponses: 1, ServedBytes: 1024,
 			}})
 		}
 	}
@@ -235,7 +235,7 @@ func TestRequestOnlyChangedAfterSelection(t *testing.T) {
 		t.Fatal("fixture is not eligible")
 	}
 	clock.Run(time.Second)
-	peer.activity.Observe(clock.Now(), false)
+	peer.activity.ObserveData(clock.Now())
 	if srv.retireActivityPeer(peer, last, true, srv.peerPolicy.Load(), time.Minute) {
 		t.Fatal("reported a removal after new traffic arrived")
 	}
@@ -245,9 +245,9 @@ func TestRequestOnlyChangedAfterSelection(t *testing.T) {
 }
 
 func observePeerRequest(srv *Server, peer *Peer, clock *mclock.Simulated) {
-	peer.activity.ObserveRequest(clock.Now())
+	peer.activity.Observe(clock.Now(), false)
 	srv.peerPolicy.Load().Observe(peer.ID().String(), peerpolicy.Evidence{Reason: peerpolicy.ServingVolume, Activity: peerpolicy.ActivityEvent{
-		ReceivedMessages: 1, ReceivedRequests: 1, ServedResponses: 1, MessageAt: clock.Now(),
+		ReceivedMessages: 1, ReceivedRequests: 1, ServedResponses: 1,
 	}})
 }
 
@@ -329,23 +329,23 @@ func TestRequestOnlyWireActivity(t *testing.T) {
 	for _, tc := range []struct {
 		protocol string
 		code     uint64
-	}{{"eth", 3}, {"eth", 1}, {"snap", 3}, {"wit", 3}} {
+	}{{"eth", 3}, {"eth", 1}, {"snap", 7}, {"wit", 7}} {
 		t.Run(fmt.Sprintf("%s/%d", tc.protocol, tc.code), func(t *testing.T) {
 			protocol := tc.protocol
 			srv, peers, clock := activityTestServer(t, 20, 14)
 			peer := peers[uintID(1)]
 			prepareRequestOnlyPeers(t, srv, peers, clock)
-			peer.running[protocol] = &protoRW{Protocol: Protocol{Name: protocol, Length: 17, IsRequest: func(code uint64) bool { return code == 3 }}, offset: 16, in: make(chan Msg, 1)}
+			peer.running[protocol] = &protoRW{Protocol: Protocol{Name: protocol, Length: 17, CanContribute: func(code uint64) bool { return code == 2 || code == 6 || code == 7 || code == 10 }}, offset: 16, in: make(chan Msg, 1)}
 			clock.Run(time.Second)
 			if err := peer.handle(Msg{Code: 16 + tc.code, Payload: bytes.NewReader(nil)}); err != nil {
 				t.Fatal(err)
 			}
 			msg := <-peer.running[protocol].in
-			if msg.ReceivedAtMonotonic != clock.Now() {
-				t.Fatal("missing wire receipt timestamp")
+			if msg.ReceivedSequence == 0 {
+				t.Fatal("missing wire receipt sequence")
 			}
 			policy := srv.peerPolicy.Load()
-			policy.Observe(peer.ID().String(), peerpolicy.Evidence{Activity: peerpolicy.ActivityEvent{ReceivedMessages: 1, MessageAt: msg.ReceivedAtMonotonic}})
+			policy.Observe(peer.ID().String(), peerpolicy.Evidence{Activity: peerpolicy.ActivityEvent{ReceivedMessages: 1, MessageSequence: msg.ReceivedSequence}})
 			clock.Run(time.Nanosecond)
 			observePeerRequest(srv, peer, clock)
 			_, eligible := policy.RequestOnlySince(peer.ID().String(), peer.activity)
@@ -441,8 +441,15 @@ func TestRequestOnlyPendingWireMessages(t *testing.T) {
 	}{
 		{"request", []uint64{3}, true},
 		{"queued-requests", []uint64{3, 3}, true},
-		{"announcement", []uint64{1}, false},
+		{"block-announcement", []uint64{1}, true},
+		{"tx-announcement", []uint64{8}, true},
+		{"range-update", []uint64{17}, true},
+		{"request-then-announcement", []uint64{3, 8}, true},
+		{"announcement-then-request", []uint64{8, 3}, true},
 		{"block", []uint64{7}, false},
+		{"transactions", []uint64{2}, false},
+		{"pooled-transactions", []uint64{10}, false},
+		{"bodies", []uint64{6}, false},
 		{"block-then-request", []uint64{7, 3}, false},
 		{"request-then-block", []uint64{3, 7}, false},
 	} {
@@ -452,7 +459,7 @@ func TestRequestOnlyPendingWireMessages(t *testing.T) {
 				peer := peers[uintID(1)]
 				prepareRequestOnlyPeers(t, srv, peers, clock)
 				peer.rw.set(trustedConn, false)
-				wire := &protoRW{Protocol: Protocol{Name: "eth", Length: 18, IsRequest: func(code uint64) bool { return code == 3 }}, offset: 16, in: make(chan Msg)}
+				wire := &protoRW{Protocol: Protocol{Name: "eth", Length: 18, CanContribute: func(code uint64) bool { return code == 2 || code == 6 || code == 7 || code == 10 }}, offset: 16, in: make(chan Msg)}
 				peer.running["eth"] = wire
 				for i, code := range tc.codes {
 					clock.Run(time.Nanosecond)

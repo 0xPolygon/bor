@@ -294,7 +294,7 @@ func TestHandleTemporaryReplyPressure(t *testing.T) {
 					require.NoError(t, msg.Decode(&reply))
 					require.Equal(t, uint64(id), reply.ID)
 				}
-				const queued = peerRequestBurst + 1 // one write in progress and one full queue
+				const queued = peerRequestBurst + 1
 				for id := range queued {
 					time.Sleep(time.Second / peerRequestRate)
 					require.NoError(t, send(id))

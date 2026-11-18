@@ -77,8 +77,17 @@ func isRequest(code uint64) bool {
 	}
 }
 
+func canContribute(code uint64) bool {
+	switch code {
+	case TransactionsMsg, PooledTransactionsMsg, NewBlockMsg, BlockBodiesMsg:
+		return true
+	default:
+		return false
+	}
+}
+
 func receivedActivity(msg p2p.Msg) peerpolicy.ActivityEvent {
-	activity := peerpolicy.ActivityEvent{ReceivedMessages: 1, ReceivedBytes: uint64(msg.Size), MessageAt: msg.ReceivedAtMonotonic}
+	activity := peerpolicy.ActivityEvent{ReceivedMessages: 1, ReceivedBytes: uint64(msg.Size), MessageSequence: msg.ReceivedSequence}
 	if isRequest(msg.Code) {
 		activity.ReceivedRequests = 1
 	}

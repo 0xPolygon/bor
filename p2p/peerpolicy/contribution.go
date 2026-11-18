@@ -42,7 +42,8 @@ var contributionStatuses = [...]string{
 
 type ConnectionActivity struct {
 	last                    atomic.Int64
-	lastNonRequest          atomic.Int64
+	sequence                atomic.Uint64
+	lastContributing        atomic.Uint64
 	auxiliary               atomic.Int64
 	started                 atomic.Bool
 	idleDisconnected        atomic.Bool
@@ -52,24 +53,29 @@ type ConnectionActivity struct {
 func (a *ConnectionActivity) Start(now mclock.AbsTime) {
 	a.last.Store(int64(now))
 	a.auxiliary.Store(-1)
-	a.lastNonRequest.Store(-1)
+	a.sequence.Store(0)
+	a.lastContributing.Store(0)
 	a.started.Store(true)
 }
 
-func (a *ConnectionActivity) Observe(now mclock.AbsTime, auxiliary bool) {
-	a.lastNonRequest.Store(int64(now))
-	a.observe(now, auxiliary)
+func (a *ConnectionActivity) Observe(now mclock.AbsTime, auxiliary bool) uint64 {
+	return a.observe(now, auxiliary, false)
 }
 
-func (a *ConnectionActivity) ObserveRequest(now mclock.AbsTime) {
-	a.observe(now, false)
+func (a *ConnectionActivity) ObserveData(now mclock.AbsTime) uint64 {
+	return a.observe(now, false, true)
 }
 
-func (a *ConnectionActivity) observe(now mclock.AbsTime, auxiliary bool) {
+func (a *ConnectionActivity) observe(now mclock.AbsTime, auxiliary, canContribute bool) uint64 {
+	sequence := a.sequence.Add(1)
+	if canContribute {
+		a.lastContributing.Store(sequence)
+	}
 	last := a.last.Load()
 	if last >= 0 && a.last.CompareAndSwap(last, int64(now)) && auxiliary {
 		a.auxiliary.Store(int64(now))
 	}
+	return sequence
 }
 
 func (a *ConnectionActivity) Last() (mclock.AbsTime, bool) {
@@ -97,7 +103,7 @@ type ActivityEvent struct {
 	AcceptedTransactions uint64         `json:"acceptedTransactions"`
 	UnclassifiedMessages uint64         `json:"unclassifiedMessages"`
 	StartedAt            mclock.AbsTime `json:"-"`
-	MessageAt            mclock.AbsTime `json:"-"`
+	MessageSequence      uint64         `json:"-"`
 	UsefulBlock          bool           `json:"-"`
 }
 
@@ -142,7 +148,7 @@ type activityRecord struct {
 	pausedFor       mclock.AbsTime
 	acceptAfter     mclock.AbsTime
 	lastUseful      mclock.AbsTime
-	lastHandled     mclock.AbsTime
+	lastHandled     uint64
 	hasContribution bool
 	connection      *ConnectionActivity
 }
@@ -218,7 +224,7 @@ func (t *Tracker) requestOnlySince(id string, connection *ConnectionActivity) (m
 	s := p.activity.snapshot(now, t.ready, p.exempt, t.idleGraceSeconds)
 	eligible := s.status == contributionRequestOnly && !s.Protected && s.ObservedSeconds >= s.IdleGraceSeconds &&
 		s.ServedMinutes >= uint64(activityGrace/activityWidth) && s.ReceivedRequests > 0 && p.exceededServingLimits(now)
-	return last, live && eligible && connection.lastNonRequest.Load() < int64(p.activity.lastHandled)
+	return last, live && eligible && connection.lastContributing.Load() <= p.activity.lastHandled
 }
 
 func (p *peerRecord) exceededServingLimits(now mclock.AbsTime) bool {
@@ -285,7 +291,7 @@ func (a *activityRecord) observe(now mclock.AbsTime, event ActivityEvent) {
 		return
 	}
 	if event.ReceivedMessages > 0 {
-		a.lastHandled = max(a.lastHandled, event.MessageAt)
+		a.lastHandled = max(a.lastHandled, event.MessageSequence)
 	}
 	// Delayed admissions from incomplete coverage cannot establish contribution.
 	if event.AcceptedTransactions > 0 && event.StartedAt < a.acceptAfter {
