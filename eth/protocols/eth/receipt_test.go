@@ -529,7 +529,6 @@ func TestBlockReceiptsToNetwork69_MoreReceiptsThanTxs(t *testing.T) {
 	lastIsStateSync := func(i int) bool { return i == 1 }
 	if _, _, err := blockReceiptsToNetwork69(receipts, body, lastIsStateSync, receiptQueryParams{}); err != nil {
 		t.Fatalf("state-sync receipt without a body transaction must still be served: %v", err)
-
 	}
 }
 
