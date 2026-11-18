@@ -1,6 +1,7 @@
 package sequencer
 
 import (
+	"bytes"
 	"context"
 	"sync"
 	"testing"
@@ -96,6 +97,68 @@ func (c *blockableConsumer) block(v bool) {
 	defer c.mu.Unlock()
 
 	c.blocked = v
+}
+
+// laggingConsumer answers from the store as it stood at a sealed block (or
+// empty, with the seed head and sealed 0) until it has been asked for a set
+// number of block-anchored walks, then reads through: a gateway that has not
+// yet applied entries the ingress already acked, and catches up partway
+// through a check.
+type laggingConsumer struct {
+	pb.ConsumerServiceClient
+
+	mu     sync.Mutex
+	head   []byte
+	sealed uint64
+	walks  int
+	calls  int
+}
+
+func (c *laggingConsumer) served() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.calls
+}
+
+func lagReads(p *Publisher, head []byte, sealed uint64, walks int) *laggingConsumer {
+	c := &laggingConsumer{head: head, sealed: sealed, walks: walks}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	c.ConsumerServiceClient = p.read.cons
+	p.read.cons = c
+
+	return c
+}
+
+func (c *laggingConsumer) Range(ctx context.Context, req *pb.RangeRequest, opts ...grpc.CallOption) (*pb.RangeResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.calls++
+
+	if c.walks <= 0 {
+		return c.ConsumerServiceClient.Range(ctx, req, opts...)
+	}
+
+	switch after := req.GetAfter().(type) {
+	case *pb.RangeRequest_Head:
+		if !bytes.Equal(after.Head, c.head) {
+			return nil, status.Error(codes.NotFound, "unknown resume head")
+		}
+	case *pb.RangeRequest_Block:
+		if req.GetLimit() != 1 {
+			c.walks--
+		}
+
+		if after.Block > c.sealed {
+			return nil, status.Error(codes.NotFound, "unknown block")
+		}
+	}
+
+	return &pb.RangeResponse{Next: c.head, Live: true}, nil
 }
 
 // A contested height refuses without needing a read at all: the STALE that
