@@ -171,7 +171,7 @@ var opcodes = []opDef{
 	{name: "ADDMOD", gas: "GasMidStep", mode: modeAccumulate, shape: shapeTernaryOp, funcName: "opAddmod",
 		body: "x := stack.data[stack.top+1]\ny := stack.data[stack.top]\nz := &stack.data[stack.top-1]\nz.AddMod(&x, &y, z)"},
 	{name: "MULMOD", gas: "GasMidStep", mode: modeAccumulate, shape: shapeTernaryOp, funcName: "opMulmod",
-		body: "x := stack.data[stack.top+1]\ny := stack.data[stack.top]\nz := &stack.data[stack.top-1]\nz.MulMod(&x, &y, z)"},
+		body: "x := stack.data[stack.top+1]\ny := stack.data[stack.top]\nz := &stack.data[stack.top-1]\nevm.mulmodMemo.mulmod(&x, &y, z)"},
 	{name: "SIGNEXTEND", gas: "GasFastStep", mode: modeAccumulate, shape: shapeBinaryOp, funcName: "opSignextend",
 		body: "back := stack.data[stack.top]\nnum := &stack.data[stack.top-1]\nnum.ExtendSign(num, &back)"},
 
