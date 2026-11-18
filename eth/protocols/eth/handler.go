@@ -106,9 +106,10 @@ func MakeProtocols(backend Backend, network uint64, disc enode.Iterator) []p2p.P
 	protocols := make([]p2p.Protocol, 0, len(ProtocolVersions))
 	for _, version := range ProtocolVersions {
 		protocols = append(protocols, p2p.Protocol{
-			Name:    ProtocolName,
-			Version: version,
-			Length:  protocolLengths[version],
+			Name:      ProtocolName,
+			Version:   version,
+			Length:    protocolLengths[version],
+			IsRequest: isRequest,
 			Run: func(p *p2p.Peer, rw p2p.MsgReadWriter) error {
 				peer := NewPeer(version, p, rw, backend.TxPool())
 				defer peer.Close()

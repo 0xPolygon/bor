@@ -1307,7 +1307,6 @@ func (srv *Server) retireActivityPeer(peer *Peer, last mclock.AbsTime, requestOn
 	select {
 	case peer.disc <- DiscJailed:
 	default:
-		// Another disconnect is already queued; keep this session closing.
 		peer.Log().Debug("Skipping peer rotation because a disconnect is already queued", "requestOnly", requestOnly)
 		return false
 	}

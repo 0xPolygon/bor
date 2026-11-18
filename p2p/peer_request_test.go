@@ -2,7 +2,9 @@ package p2p
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common/mclock"
@@ -17,7 +19,7 @@ func prepareRequestOnlyPeers(t *testing.T, srv *Server, peers map[enode.ID]*Peer
 	for range 44 {
 		clock.Run(15 * time.Second)
 		for _, peer := range peers {
-			peer.activity.Observe(clock.Now(), false)
+			peer.activity.ObserveRequest(clock.Now())
 			srv.peerPolicy.Load().Observe(peer.ID().String(), peerpolicy.Evidence{Activity: peerpolicy.ActivityEvent{
 				ReceivedMessages: 1, ReceivedRequests: 1, ServedResponses: 1, ServedBytes: 1024, MessageAt: clock.Now(),
 			}})
@@ -243,7 +245,7 @@ func TestRequestOnlyChangedAfterSelection(t *testing.T) {
 }
 
 func observePeerRequest(srv *Server, peer *Peer, clock *mclock.Simulated) {
-	peer.activity.Observe(clock.Now(), false)
+	peer.activity.ObserveRequest(clock.Now())
 	srv.peerPolicy.Load().Observe(peer.ID().String(), peerpolicy.Evidence{Reason: peerpolicy.ServingVolume, Activity: peerpolicy.ActivityEvent{
 		ReceivedMessages: 1, ReceivedRequests: 1, ServedResponses: 1, MessageAt: clock.Now(),
 	}})
@@ -324,14 +326,18 @@ func TestRequestOnlyPreservesIdlePriority(t *testing.T) {
 }
 
 func TestRequestOnlyWireActivity(t *testing.T) {
-	for _, protocol := range []string{"eth", "snap", "wit"} {
-		t.Run(protocol, func(t *testing.T) {
+	for _, tc := range []struct {
+		protocol string
+		code     uint64
+	}{{"eth", 3}, {"eth", 1}, {"snap", 3}, {"wit", 3}} {
+		t.Run(fmt.Sprintf("%s/%d", tc.protocol, tc.code), func(t *testing.T) {
+			protocol := tc.protocol
 			srv, peers, clock := activityTestServer(t, 20, 14)
 			peer := peers[uintID(1)]
 			prepareRequestOnlyPeers(t, srv, peers, clock)
-			peer.running[protocol] = &protoRW{Protocol: Protocol{Name: protocol, Length: 17}, offset: 16, in: make(chan Msg, 1)}
+			peer.running[protocol] = &protoRW{Protocol: Protocol{Name: protocol, Length: 17, IsRequest: func(code uint64) bool { return code == 3 }}, offset: 16, in: make(chan Msg, 1)}
 			clock.Run(time.Second)
-			if err := peer.handle(Msg{Code: 19, Payload: bytes.NewReader(nil)}); err != nil {
+			if err := peer.handle(Msg{Code: 16 + tc.code, Payload: bytes.NewReader(nil)}); err != nil {
 				t.Fatal(err)
 			}
 			msg := <-peer.running[protocol].in
@@ -339,7 +345,9 @@ func TestRequestOnlyWireActivity(t *testing.T) {
 				t.Fatal("missing wire receipt timestamp")
 			}
 			policy := srv.peerPolicy.Load()
-			policy.Observe(peer.ID().String(), peerpolicy.Evidence{Activity: peerpolicy.ActivityEvent{ReceivedMessages: 1, ReceivedRequests: 1, MessageAt: msg.ReceivedAtMonotonic}})
+			policy.Observe(peer.ID().String(), peerpolicy.Evidence{Activity: peerpolicy.ActivityEvent{ReceivedMessages: 1, MessageAt: msg.ReceivedAtMonotonic}})
+			clock.Run(time.Nanosecond)
+			observePeerRequest(srv, peer, clock)
 			_, eligible := policy.RequestOnlySince(peer.ID().String(), peer.activity)
 			if eligible != (protocol == "eth") {
 				t.Fatalf("%s eligibility = %v", protocol, eligible)
@@ -422,5 +430,52 @@ func TestRequestOnlyMixedBatch(t *testing.T) {
 	}
 	if srv.requestOnlyRotatedUntil != clock.Now().Add(requestOnlyRotationInterval) {
 		t.Fatal("mixed batch did not start the rotation interval")
+	}
+}
+
+func TestRequestOnlyPendingWireMessages(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		codes  []uint64
+		remove bool
+	}{
+		{"request", []uint64{3}, true},
+		{"queued-requests", []uint64{3, 3}, true},
+		{"announcement", []uint64{1}, false},
+		{"block", []uint64{7}, false},
+		{"block-then-request", []uint64{7, 3}, false},
+		{"request-then-block", []uint64{3, 7}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				srv, peers, clock := activityTestServer(t, 20, 14)
+				peer := peers[uintID(1)]
+				prepareRequestOnlyPeers(t, srv, peers, clock)
+				peer.rw.set(trustedConn, false)
+				wire := &protoRW{Protocol: Protocol{Name: "eth", Length: 18, IsRequest: func(code uint64) bool { return code == 3 }}, offset: 16, in: make(chan Msg)}
+				peer.running["eth"] = wire
+				for i, code := range tc.codes {
+					clock.Run(time.Nanosecond)
+					done := make(chan error, 1)
+					go func() { done <- peer.handle(Msg{Code: 16 + code, Payload: bytes.NewReader(nil)}) }()
+					synctest.Wait()
+					if i < len(tc.codes)-1 {
+						<-wire.in
+						if err := <-done; err != nil {
+							t.Fatal(err)
+						}
+						continue
+					}
+					srv.expireIdlePeer(peers)
+					if got := srv.peerJail.IsJailed(peer.ID()); got != tc.remove {
+						t.Errorf("peer entered cooldown = %v, want %v", got, tc.remove)
+					}
+					<-wire.in
+					if err := <-done; err != nil {
+						t.Fatal(err)
+					}
+				}
+			})
+		})
 	}
 }

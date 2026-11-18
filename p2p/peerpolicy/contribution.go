@@ -24,7 +24,6 @@ const IdleTimeout = 10 * time.Minute
 
 type contributionStatusKind uint8
 
-// These values are exported as metric codes.
 const (
 	contributionUnknown contributionStatusKind = iota
 	contributionWarmingUp
@@ -43,6 +42,7 @@ var contributionStatuses = [...]string{
 
 type ConnectionActivity struct {
 	last                    atomic.Int64
+	lastNonRequest          atomic.Int64
 	auxiliary               atomic.Int64
 	started                 atomic.Bool
 	idleDisconnected        atomic.Bool
@@ -52,10 +52,20 @@ type ConnectionActivity struct {
 func (a *ConnectionActivity) Start(now mclock.AbsTime) {
 	a.last.Store(int64(now))
 	a.auxiliary.Store(-1)
+	a.lastNonRequest.Store(-1)
 	a.started.Store(true)
 }
 
 func (a *ConnectionActivity) Observe(now mclock.AbsTime, auxiliary bool) {
+	a.lastNonRequest.Store(int64(now))
+	a.observe(now, auxiliary)
+}
+
+func (a *ConnectionActivity) ObserveRequest(now mclock.AbsTime) {
+	a.observe(now, false)
+}
+
+func (a *ConnectionActivity) observe(now mclock.AbsTime, auxiliary bool) {
 	last := a.last.Load()
 	if last >= 0 && a.last.CompareAndSwap(last, int64(now)) && auxiliary {
 		a.auxiliary.Store(int64(now))
@@ -206,11 +216,9 @@ func (t *Tracker) requestOnlySince(id string, connection *ConnectionActivity) (m
 	t.prepareActivity(&p.activity, now)
 	last, live := connection.Last()
 	s := p.activity.snapshot(now, t.ready, p.exempt, t.idleGraceSeconds)
-	// A full node can spend the entire observation window serving an honest syncer.
 	eligible := s.status == contributionRequestOnly && !s.Protected && s.ObservedSeconds >= s.IdleGraceSeconds &&
 		s.ServedMinutes >= uint64(activityGrace/activityWidth) && s.ReceivedRequests > 0 && p.exceededServingLimits(now)
-	// Do not rotate while the latest wire message is still awaiting observation.
-	return last, live && eligible && last == p.activity.lastHandled
+	return last, live && eligible && connection.lastNonRequest.Load() < int64(p.activity.lastHandled)
 }
 
 func (p *peerRecord) exceededServingLimits(now mclock.AbsTime) bool {
@@ -224,13 +232,13 @@ func (p *peerRecord) exceededServingLimits(now mclock.AbsTime) bool {
 	return false
 }
 
-func (t *Tracker) RetireRequestOnly(id string, connection *ConnectionActivity, last mclock.AbsTime) bool {
+func (t *Tracker) RetireRequestOnly(id string, connection *ConnectionActivity, _ mclock.AbsTime) bool {
 	if !t.mu.TryLock() {
 		return false
 	}
 	defer t.mu.Unlock()
 	current, eligible := t.requestOnlySince(id, connection)
-	return eligible && current == last && connection.last.CompareAndSwap(int64(last), -1)
+	return eligible && connection.last.CompareAndSwap(int64(current), -1)
 }
 
 // Connected begins a fresh connection observation without erasing misconduct.

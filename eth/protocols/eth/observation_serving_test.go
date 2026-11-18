@@ -343,7 +343,6 @@ func TestHandlePersistentReplyPressure(t *testing.T) {
 			go func() { done <- Handle(nil, peer) }()
 			sent := make(chan error, 1)
 			go func() {
-				// The handler reserves capacity before touching the pool.
 				sent <- p2p.Send(remote, GetPooledTransactionsMsg, GetPooledTransactionsPacket{RequestId: 1})
 			}()
 			synctest.Wait()

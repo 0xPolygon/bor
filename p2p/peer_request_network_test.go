@@ -11,7 +11,7 @@ import (
 )
 
 func requestActivityProtocol(version uint, received chan<- enode.ID, policy *peerpolicy.Tracker) Protocol {
-	return Protocol{Name: "eth", Version: version, Length: 18, Run: func(peer *Peer, rw MsgReadWriter) error {
+	return Protocol{Name: "eth", Version: version, Length: 18, IsRequest: func(code uint64) bool { return code == 3 }, Run: func(peer *Peer, rw MsgReadWriter) error {
 		policy.BindConnection(peer.ID().String(), policy.Connected(peer.ID().String()), peer.activity)
 		for {
 			msg, err := rw.ReadMsg()

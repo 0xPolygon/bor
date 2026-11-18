@@ -424,3 +424,19 @@ func TestPeerPolicyAcceptedTransactionsDeferCorrelation(t *testing.T) {
 		})
 	}
 }
+
+func TestPeerPolicyRequestClassification(t *testing.T) {
+	backend := newTestBackend(0)
+	defer backend.close()
+	for _, protocol := range MakeProtocols(backend, 1, nil) {
+		if protocol.IsRequest == nil {
+			t.Fatalf("eth/%d has no request classifier", protocol.Version)
+		}
+		for code := uint64(0); code <= protocol.Length; code++ {
+			want := code == GetBlockHeadersMsg || code == GetBlockBodiesMsg || code == GetReceiptsMsg || code == GetPooledTransactionsMsg
+			if got := protocol.IsRequest(code); got != want {
+				t.Errorf("eth/%d code %#x: request = %v, want %v", protocol.Version, code, got, want)
+			}
+		}
+	}
+}

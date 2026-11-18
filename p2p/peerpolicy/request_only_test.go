@@ -13,7 +13,7 @@ func requestOnlyFixture() (*Tracker, *ConnectionActivity, *mclock.Simulated) {
 	connection.Start(clock.Now())
 	tracker.BindConnection("peer", 0, connection)
 	for range 10 {
-		connection.Observe(clock.Now(), false)
+		connection.ObserveRequest(clock.Now())
 		tracker.Observe("peer", Evidence{Activity: ActivityEvent{ReceivedMessages: 1, ReceivedRequests: 1, ServedResponses: 1, MessageAt: clock.Now()}})
 		clock.Run(time.Minute)
 	}
@@ -34,6 +34,8 @@ func TestRequestOnlyGraceAndFreshEvidence(t *testing.T) {
 	if _, eligible := tracker.RequestOnlySince("peer", connection); eligible {
 		t.Fatal("peer was eligible while a wire message was still unclassified")
 	}
+	clock.Run(time.Nanosecond)
+	connection.ObserveRequest(clock.Now())
 	tracker.Observe("peer", Evidence{Activity: ActivityEvent{ReceivedMessages: 1, ReceivedRequests: 1, MessageAt: clock.Now()}})
 	last, eligible = tracker.RequestOnlySince("peer", connection)
 	if !eligible {
@@ -85,7 +87,7 @@ func TestRequestOnlyMinimumObservationAndServing(t *testing.T) {
 		if _, ok := tracker.RequestOnlySince("peer", &connection); ok {
 			t.Fatal("removed before grace")
 		}
-		connection.Observe(clock.Now(), false)
+		connection.ObserveRequest(clock.Now())
 		tracker.Observe("peer", Evidence{Activity: ActivityEvent{ReceivedMessages: 1, ReceivedRequests: 1, ServedResponses: 1, MessageAt: clock.Now()}})
 		clock.Run(time.Minute)
 	}
@@ -105,7 +107,7 @@ func TestRequestOnlyServedMinutesAfterGrace(t *testing.T) {
 
 	for minute := 1; minute <= 10; minute++ {
 		for range 2 {
-			connection.Observe(clock.Now(), false)
+			connection.ObserveRequest(clock.Now())
 			tracker.Observe("peer", Evidence{Activity: ActivityEvent{
 				ReceivedMessages: 1, ReceivedRequests: 1, ServedResponses: 1, MessageAt: clock.Now(),
 			}})
@@ -148,7 +150,7 @@ func TestRequestOnlyResumedObservation(t *testing.T) {
 func TestRequestOnlyNeedsLiveServingEvidence(t *testing.T) {
 	tracker, connection, clock := requestOnlyFixture()
 	clock.Run(windowCount * windowWidth)
-	connection.Observe(clock.Now(), false)
+	connection.ObserveRequest(clock.Now())
 	tracker.Observe("peer", Evidence{Activity: ActivityEvent{ReceivedMessages: 1, MessageAt: clock.Now()}})
 	for _, reason := range []Reason{None, ServingRefused, DownloaderFailure, AnnouncementVolume} {
 		tracker.Observe("peer", Evidence{Reason: reason})
@@ -176,7 +178,7 @@ func TestRequestOnlyNeedsObservedRequest(t *testing.T) {
 	tracker.BindConnection("peer", 0, &connection)
 	for range 10 {
 		clock.Run(time.Minute)
-		connection.Observe(clock.Now(), false)
+		connection.ObserveRequest(clock.Now())
 		tracker.Observe("peer", Evidence{Activity: ActivityEvent{
 			ReceivedMessages: 1, ServedResponses: 1, MessageAt: clock.Now(),
 		}})
@@ -209,7 +211,7 @@ func TestRequestOnlyContributionWindow(t *testing.T) {
 	tracker, connection, clock := requestOnlyFixture()
 	tracker.Observe("peer", Evidence{Activity: ActivityEvent{UsefulBlock: true}})
 	for minute := 0; minute <= activityCount; minute++ {
-		connection.Observe(clock.Now(), false)
+		connection.ObserveRequest(clock.Now())
 		tracker.Observe("peer", Evidence{Reason: ServingVolume, Activity: ActivityEvent{
 			ReceivedMessages: 1, ReceivedRequests: 1, ServedResponses: 1, MessageAt: clock.Now(),
 		}})
@@ -217,5 +219,32 @@ func TestRequestOnlyContributionWindow(t *testing.T) {
 			t.Fatalf("eligibility at minute %d = %v", minute, eligible)
 		}
 		clock.Run(time.Minute)
+	}
+}
+
+func TestRequestOnlyRetireWithPendingRequest(t *testing.T) {
+	tracker, connection, clock := requestOnlyFixture()
+	last, eligible := tracker.RequestOnlySince("peer", connection)
+	if !eligible {
+		t.Fatal("fixture is not eligible")
+	}
+	clock.Run(time.Second)
+	connection.ObserveRequest(clock.Now())
+	if !tracker.RetireRequestOnly("peer", connection, last) {
+		t.Fatal("a pending request prevented rotation")
+	}
+}
+
+func TestRequestOnlyPendingDataAtHandledTimestamp(t *testing.T) {
+	tracker, connection, clock := requestOnlyFixture()
+	connection.ObserveRequest(clock.Now())
+	tracker.Observe("peer", Evidence{Activity: ActivityEvent{ReceivedMessages: 1, ReceivedRequests: 1, MessageAt: clock.Now()}})
+	last, eligible := tracker.RequestOnlySince("peer", connection)
+	if !eligible {
+		t.Fatal("fixture is not eligible")
+	}
+	connection.Observe(clock.Now(), false)
+	if tracker.RetireRequestOnly("peer", connection, last) {
+		t.Fatal("retired a peer with pending data at the same clock tick")
 	}
 }

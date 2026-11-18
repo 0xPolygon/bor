@@ -118,7 +118,6 @@ func (p *Peer) replyCapacity(replies *peerReplies, size int) error {
 	return nil
 }
 
-// The caller holds replies.mu. Only one request per queue can wait for room.
 func (p *Peer) waitReplyCapacityLocked(replies *peerReplies, size int, hashes []common.Hash) error {
 	if err := p.replyCapacity(replies, size); err != errReplyQueueFull {
 		return err
