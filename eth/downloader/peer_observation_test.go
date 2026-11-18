@@ -15,6 +15,8 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/p2p"
+	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
@@ -80,6 +82,53 @@ func TestPeerPolicyInvalidResponseObservation(t *testing.T) {
 	}
 	// An unset observer must stay harmless on the sync path.
 	(&Downloader{}).observeInvalidResponse("peer", "header_ordering")
+}
+
+func TestBodyQueueReportsAcceptedBodies(t *testing.T) {
+	local, remote := p2p.MsgPipe()
+	t.Cleanup(func() { local.Close(); remote.Close() })
+	wire := eth.NewPeer(eth.ETH69, p2p.NewPeer(enode.ID{1}, "", nil), local, nil)
+	t.Cleanup(wire.Close)
+	var observed int
+	wire.SetObserver(func(event peerpolicy.Evidence) {
+		if event.Activity.UsefulBlock {
+			observed++
+		}
+	})
+	requestRead := make(chan error, 1)
+	go func() {
+		msg, err := remote.ReadMsg()
+		if err == nil {
+			err = msg.Discard()
+		}
+		requestRead <- err
+	}()
+
+	block := chain.blocks[0]
+	header := block.Header()
+	req, err := wire.RequestBodies([]common.Hash{header.Hash()}, make(chan *eth.Response))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-requestRead; err != nil {
+		t.Fatal(err)
+	}
+	peer := newPeerConnection(wire.ID(), eth.ETH69, nil, log.New())
+	d := &Downloader{queue: newQueue(10, 10, nil)}
+	d.queue.Prepare(block.NumberU64(), FullSync)
+	d.queue.Schedule([]*types.Header{header}, []common.Hash{header.Hash()}, block.NumberU64())
+	if reserved, _, _ := d.queue.ReserveBodies(peer, 1); reserved == nil {
+		t.Fatal("body request was not reserved")
+	}
+	bodies := eth.BlockBodiesResponse{{Transactions: block.Transactions(), Uncles: block.Uncles()}}
+	response := &eth.Response{Req: req, Res: &bodies, Meta: [][]common.Hash{{header.TxHash}, {header.UncleHash}, {{}}}}
+	accepted, err := (*bodyQueue)(d).deliver(peer, response)
+	if err != nil || accepted != 1 || observed != 1 {
+		t.Fatalf("accepted=%d observed=%d err=%v", accepted, observed, err)
+	}
+	if _, err := (*bodyQueue)(d).deliver(peer, response); !errors.Is(err, errNoFetchesPending) || observed != 1 {
+		t.Fatalf("late reply credited again: observed=%d err=%v", observed, err)
+	}
 }
 
 // A local pivot move makes the existing rejection ambiguous for peer scoring.

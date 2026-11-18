@@ -713,21 +713,41 @@ func nodeEndpointForLog(n *enode.Node) string {
 	return n.IPAddr().String()
 }
 
-func (srv *Server) idlePeer(peers map[enode.ID]*Peer, count, inbound int, policy *peerpolicy.Tracker) (*Peer, mclock.AbsTime) {
+func (srv *Server) idlePeer(peers map[enode.ID]*Peer, count, inbound int, policy *peerpolicy.Tracker, requestOnlyBatch bool) (*Peer, mclock.AbsTime, bool) {
 	var candidate *Peer
 	var oldest mclock.AbsTime
+	var lowestScore uint64
+	var requestOnlyCandidate bool
 	inboundFull, outboundFull := srv.peerPressure(count, inbound)
 	for _, peer := range peers {
 		if !peer.isLive() || peer.Trusted() || peer.Static() {
 			continue
 		}
 		last, idle := policy.IdleSince(peer.ID().String(), peer.activity)
-		if !idle || (peer.Inbound() && !inboundFull) || (!peer.Inbound() && !outboundFull) {
+		requestOnly := false
+		if !idle && peer.Inbound() && requestOnlyBatch {
+			last, requestOnly = policy.RequestOnlySince(peer.ID().String(), peer.activity)
+		}
+		if (!idle && !requestOnly) || (peer.Inbound() && !inboundFull) || (!peer.Inbound() && !outboundFull) {
 			continue
 		}
-		if candidate == nil || last < oldest {
-			candidate, oldest = peer, last
+		score, ok := policy.RotationScore(peer.ID().String(), peer.activity)
+		switch {
+		case !ok || (requestOnly && candidate != nil && !requestOnlyCandidate):
+			continue
+		case candidate == nil || (requestOnlyCandidate && !requestOnly) || score < lowestScore || (score == lowestScore && last < oldest):
+			candidate, oldest, lowestScore = peer, last, score
+			requestOnlyCandidate = requestOnly
 		}
 	}
-	return candidate, oldest
+	return candidate, oldest, requestOnlyCandidate
+}
+
+func (srv *Server) requestOnlyPressure(count, inbound int) bool {
+	now := srv.clock.Now()
+	if now >= srv.inboundCapacityRefusedUntil || now < srv.requestOnlyRotatedUntil {
+		return false
+	}
+	total, dialed := srv.peerLimits()
+	return total > 0 && (count >= total || inbound >= total-dialed)
 }

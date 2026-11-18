@@ -28,7 +28,7 @@ func TestBehaviorScoreGraceBoundary(t *testing.T) {
 	clock.Run(activityGrace - time.Nanosecond)
 	assertBehaviorRisk(t, tracker, 0, 0, 0, "")
 	clock.Run(time.Nanosecond)
-	got := assertBehaviorRisk(t, tracker, 20, 0, 20, "idle")
+	got := assertBehaviorRisk(t, tracker, 0, 0, 20, "idle")
 	require.Equal(t, "idle", got.Contribution.Status)
 	require.Equal(t, "none", got.Action)
 	require.Empty(t, got.Windows)
@@ -56,7 +56,7 @@ func TestBehaviorScoreRequestOnlyMinutes(t *testing.T) {
 			}
 			assertBehaviorRisk(t, tracker, 0, 0, 0, "")
 			clock.Run(activityGrace - time.Duration(test.minutes)*time.Minute)
-			got := assertBehaviorRisk(t, tracker, test.want, 0, test.want, test.reason)
+			got := assertBehaviorRisk(t, tracker, 0, 0, test.want, test.reason)
 			require.Equal(t, uint64(test.minutes), got.Contribution.ServedMinutes)
 			require.Empty(t, got.Windows)
 		})
@@ -77,7 +77,7 @@ func TestBehaviorScoreNeutralActivity(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			tracker, clock := newContributionTracker()
 			clock.Run(activityGrace)
-			assertBehaviorRisk(t, tracker, 20, 0, 20, "idle")
+			assertBehaviorRisk(t, tracker, 0, 0, 20, "idle")
 			tracker.Observe("peer", Evidence{Activity: test.event})
 			got := assertBehaviorRisk(t, tracker, 0, 0, 0, "")
 			require.Equal(t, test.status, got.Contribution.Status)
@@ -93,7 +93,7 @@ func TestBehaviorScoreProtectedConnection(t *testing.T) {
 	got := assertBehaviorRisk(t, tracker, 0, 0, 0, "")
 	require.True(t, got.Contribution.Protected)
 	protected = false
-	assertBehaviorRisk(t, tracker, 20, 0, 20, "idle")
+	assertBehaviorRisk(t, tracker, 0, 0, 20, "idle")
 	protected = true
 	assertBehaviorRisk(t, tracker, 0, 0, 0, "")
 }
@@ -101,7 +101,7 @@ func TestBehaviorScoreProtectedConnection(t *testing.T) {
 func TestBehaviorScoreReadinessRestart(t *testing.T) {
 	tracker, clock := newContributionTracker()
 	clock.Run(activityGrace)
-	assertBehaviorRisk(t, tracker, 20, 0, 20, "idle")
+	assertBehaviorRisk(t, tracker, 0, 0, 20, "idle")
 	tracker.SetReady(false)
 	assertBehaviorRisk(t, tracker, 0, 0, 0, "")
 	clock.Run(time.Minute)
@@ -110,7 +110,7 @@ func TestBehaviorScoreReadinessRestart(t *testing.T) {
 	clock.Run(activityGrace - time.Second)
 	assertBehaviorRisk(t, tracker, 0, 0, 0, "")
 	clock.Run(time.Second)
-	assertBehaviorRisk(t, tracker, 20, 0, 20, "idle")
+	assertBehaviorRisk(t, tracker, 0, 0, 20, "idle")
 }
 
 func TestBehaviorScoreShortPauseDelaysGrace(t *testing.T) {
@@ -123,7 +123,7 @@ func TestBehaviorScoreShortPauseDelaysGrace(t *testing.T) {
 	clock.Run(9 * time.Second)
 	assertBehaviorRisk(t, tracker, 0, 0, 0, "")
 	clock.Run(time.Second)
-	assertBehaviorRisk(t, tracker, 20, 0, 20, "idle")
+	assertBehaviorRisk(t, tracker, 0, 0, 20, "idle")
 }
 
 func TestBehaviorScoreRequiresConnection(t *testing.T) {
@@ -144,9 +144,9 @@ func TestBehaviorScoreDisconnectedMetricsAgree(t *testing.T) {
 	tracker.SetReady(true)
 	tracker.Connected("peer")
 	clock.Run(activityGrace)
-	assertBehaviorRisk(t, tracker, 20, 0, 20, "idle")
-	require.Equal(t, int64(20), gauge(t, registry, "peer_risk")["peer"])
-	require.Equal(t, int64(20), gauge(t, registry, "connected_risk_sum")["ordinary"])
+	assertBehaviorRisk(t, tracker, 0, 0, 20, "idle")
+	require.Equal(t, int64(0), gauge(t, registry, "peer_risk")["peer"])
+	require.Equal(t, int64(0), gauge(t, registry, "connected_risk_sum")["ordinary"])
 	connected = false
 	assertBehaviorRisk(t, tracker, 0, 0, 0, "")
 	require.NotContains(t, gauge(t, registry, "peer_risk"), "peer")
@@ -162,7 +162,7 @@ func TestBehaviorScoreDisconnectedMetricsAgree(t *testing.T) {
 	require.NotContains(t, gauge(t, registry, "peer_risk"), "peer")
 }
 
-func TestBehaviorScoreTakesMaximum(t *testing.T) {
+func TestBehaviorScoreDoesNotRaiseAbuseRisk(t *testing.T) {
 	tracker, clock := newContributionTracker()
 	clock.Run(activityGrace)
 	tracker.Observe("peer", Evidence{Reason: InvalidBlock})
@@ -170,7 +170,7 @@ func TestBehaviorScoreTakesMaximum(t *testing.T) {
 	require.Equal(t, "throttle", got.Action)
 	require.Equal(t, map[string]uint64{"invalid-block": 1}, got.Windows)
 	clock.Run(windowCount * windowWidth)
-	got = assertBehaviorRisk(t, tracker, 20, 0, 20, "idle")
+	got = assertBehaviorRisk(t, tracker, 0, 0, 20, "idle")
 	require.Equal(t, "none", got.Action)
 	require.Empty(t, got.Windows)
 }
@@ -195,14 +195,14 @@ func TestBehaviorScoreReadFrequencyDoesNotAccumulate(t *testing.T) {
 	samplesBefore := tracker.metrics.risk.Snapshot().Count()
 	for range 12 {
 		for range 10 {
-			got := assertBehaviorRisk(t, tracker, 20, 0, 20, "idle")
+			got := assertBehaviorRisk(t, tracker, 0, 0, 20, "idle")
 			require.Empty(t, got.Windows)
-			require.Equal(t, int64(20), gauge(t, registry, "peer_risk")["peer"])
+			require.Equal(t, int64(0), gauge(t, registry, "peer_risk")["peer"])
 		}
 		clock.Run(windowWidth)
 	}
 	clock.Run(2 * time.Hour)
-	got := assertBehaviorRisk(t, tracker, 20, 0, 20, "idle")
+	got := assertBehaviorRisk(t, tracker, 0, 0, 20, "idle")
 	require.Equal(t, "none", got.Action)
 	require.Empty(t, got.Windows)
 	require.Equal(t, samplesBefore, tracker.metrics.risk.Snapshot().Count())
@@ -225,7 +225,7 @@ func TestBehaviorScoreReconnectRestartsGrace(t *testing.T) {
 	clock.Run(windowCount * windowWidth)
 	assertBehaviorRisk(t, tracker, 0, 0, 0, "")
 	clock.Run(activityGrace - windowCount*windowWidth)
-	assertBehaviorRisk(t, tracker, 20, 0, 20, "idle")
+	assertBehaviorRisk(t, tracker, 0, 0, 20, "idle")
 }
 
 func requirePeerRiskMetrics(t *testing.T, registry metrics.Registry, total, abuse, behavior int64) {
@@ -243,15 +243,15 @@ func TestPeerPolicyExportsIdleRiskAfterGrace(t *testing.T) {
 	requirePeerRiskMetrics(t, registry, 0, 0, 0)
 
 	clock.Run(activityGrace)
-	requirePeerRiskMetrics(t, registry, 20, 0, 20)
-	require.Equal(t, int64(20), gauge(t, registry, "connected_risk_sum")["ordinary"])
+	requirePeerRiskMetrics(t, registry, 0, 0, 20)
+	require.Equal(t, int64(0), gauge(t, registry, "connected_risk_sum")["ordinary"])
 	require.Equal(t, int64(1), gauge(t, registry, "connected_risk_count")["ordinary"])
 	require.Contains(t, scrapePeerMetrics(registry), `eth_peerpolicy_peer_behavior_risk{peer_id="peer"} 20`)
 	require.Contains(t, scrapePeerMetrics(registry), `eth_peerpolicy_peer_abuse_risk{peer_id="peer"} 0`)
 
 	for range 3 {
 		clock.Run(activityWidth)
-		requirePeerRiskMetrics(t, registry, 20, 0, 20)
+		requirePeerRiskMetrics(t, registry, 0, 0, 20)
 	}
 	require.Equal(t, tracker.Snapshot("peer").Risk, uint64(gauge(t, registry, "peer_risk")["peer"]))
 }
@@ -266,7 +266,7 @@ func TestPeerPolicyExportsRequestOnlyRiskAndRecovery(t *testing.T) {
 		clock.Run(activityWidth)
 	}
 	clock.Run(activityGrace - 3*activityWidth)
-	requirePeerRiskMetrics(t, registry, 20, 0, 20)
+	requirePeerRiskMetrics(t, registry, 0, 0, 20)
 	require.Equal(t, int64(3), gauge(t, registry, "peer_contribution_status")["peer"])
 
 	tracker.Observe("peer", Evidence{Activity: ActivityEvent{AcceptedTransactions: 1}})
@@ -274,7 +274,7 @@ func TestPeerPolicyExportsRequestOnlyRiskAndRecovery(t *testing.T) {
 	require.Zero(t, gauge(t, registry, "connected_risk_sum")["ordinary"])
 }
 
-func TestPeerPolicyExportsMaximumOfBehaviorAndAbuse(t *testing.T) {
+func TestPeerPolicyExportsAbuseSeparatelyFromBehavior(t *testing.T) {
 	clock := new(mclock.Simulated)
 	tracker, registry := exportTestTracker(t, clock)
 	tracker.SetReady(true)
@@ -286,7 +286,7 @@ func TestPeerPolicyExportsMaximumOfBehaviorAndAbuse(t *testing.T) {
 	require.Equal(t, int64(60), gauge(t, registry, "connected_risk_sum")["ordinary"])
 
 	clock.Run(windowWidth * windowCount)
-	requirePeerRiskMetrics(t, registry, 20, 0, 20)
+	requirePeerRiskMetrics(t, registry, 0, 0, 20)
 }
 
 func TestPeerPolicyExportBehaviorFollowsLiveState(t *testing.T) {
@@ -299,7 +299,7 @@ func TestPeerPolicyExportBehaviorFollowsLiveState(t *testing.T) {
 			tracker.SetClassResolver(func(string) (bool, bool) { return protected, live })
 			tracker.Connected("peer")
 			clock.Run(activityGrace)
-			requirePeerRiskMetrics(t, registry, 20, 0, 20)
+			requirePeerRiskMetrics(t, registry, 0, 0, 20)
 
 			switch state {
 			case "not-ready":
@@ -359,6 +359,29 @@ func TestPeerPolicyBehaviorMetricsShareIdentityCap(t *testing.T) {
 	require.Empty(t, gauge(t, registry, "peer_behavior_risk"))
 	require.Equal(t, int64(maxPeers), gauge(t, registry, "peer_risk_export")["omitted"])
 	require.Equal(t, int64(maxGeneralPeerMetricIdentities), gauge(t, registry, "peer_risk_export")["admitted"])
-	require.Equal(t, int64(20*maxPeers), gauge(t, registry, "connected_risk_sum")["ordinary"])
+	require.Equal(t, int64(0), gauge(t, registry, "connected_risk_sum")["ordinary"])
 	require.Equal(t, int64(maxPeers), gauge(t, registry, "connected_risk_count")["ordinary"])
+}
+
+func TestAbuseRiskAccumulatesAndExpiresIndependently(t *testing.T) {
+	tracker, clock := newContributionTracker()
+	clock.Run(activityGrace)
+	for _, want := range []uint64{20, 40, 60} {
+		tracker.Observe("peer", Evidence{Reason: ServingVolume})
+		assertBehaviorRisk(t, tracker, want, want, 20, "idle")
+		clock.Run(windowWidth)
+	}
+	tracker.Observe("peer", Evidence{Reason: InvalidBlock})
+	got := assertBehaviorRisk(t, tracker, 100, 100, 20, "idle")
+	require.Equal(t, "jail", got.Action)
+	tracker.Observe("peer", Evidence{Activity: ActivityEvent{AcceptedTransactions: 1}})
+	assertBehaviorRisk(t, tracker, 100, 100, 0, "")
+	clock.Run(3 * windowWidth)
+	assertBehaviorRisk(t, tracker, 100, 100, 0, "")
+	clock.Run(windowWidth)
+	assertBehaviorRisk(t, tracker, 80, 80, 0, "")
+	clock.Run(windowWidth)
+	assertBehaviorRisk(t, tracker, 60, 60, 0, "")
+	clock.Run(windowWidth)
+	assertBehaviorRisk(t, tracker, 0, 0, 0, "")
 }

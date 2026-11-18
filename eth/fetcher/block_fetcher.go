@@ -137,6 +137,7 @@ type blockAnnounce struct {
 
 // headerFilterTask represents a batch of headers needing fetcher filtering.
 type headerFilterTask struct {
+	supplier      *eth.Peer
 	peer          string          // The source peer of block headers
 	headers       []*types.Header // Collection of headers to filter
 	time          time.Time       // Arrival time of the headers
@@ -146,6 +147,7 @@ type headerFilterTask struct {
 // bodyFilterTask represents a batch of block bodies (transactions and uncles)
 // needing fetcher filtering.
 type bodyFilterTask struct {
+	supplier      *eth.Peer
 	peer          string                 // The source peer of block bodies
 	transactions  [][]*types.Transaction // Collection of transactions per block bodies
 	uncles        [][]*types.Header      // Collection of uncles per block bodies
@@ -459,7 +461,7 @@ func (f *BlockFetcher) InjectWitness(peer string, witness *stateless.Witness, pr
 
 // FilterHeaders extracts all the headers that were explicitly requested by the fetcher,
 // returning those that should be handled differently.
-func (f *BlockFetcher) FilterHeaders(peer string, headers []*types.Header, time time.Time, announcedAt time.Time) []*types.Header {
+func (f *BlockFetcher) FilterHeaders(peer string, headers []*types.Header, time time.Time, announcedAt time.Time, supplier *eth.Peer) []*types.Header {
 	log.Debug("Filtering headers", "peer", peer, "headers", len(headers))
 
 	// Send the filter channel to the fetcher
@@ -472,7 +474,7 @@ func (f *BlockFetcher) FilterHeaders(peer string, headers []*types.Header, time 
 	}
 	// Request the filtering of the header list
 	select {
-	case filter <- &headerFilterTask{peer: peer, headers: headers, time: time, announcedTime: announcedAt}:
+	case filter <- &headerFilterTask{peer: peer, headers: headers, time: time, announcedTime: announcedAt, supplier: supplier}:
 	case <-f.quit:
 		return nil
 	}
@@ -487,7 +489,7 @@ func (f *BlockFetcher) FilterHeaders(peer string, headers []*types.Header, time 
 
 // FilterBodies extracts all the block bodies that were explicitly requested by
 // the fetcher, returning those that should be handled differently.
-func (f *BlockFetcher) FilterBodies(peer string, transactions [][]*types.Transaction, uncles [][]*types.Header, time time.Time, announcedAt time.Time) ([][]*types.Transaction, [][]*types.Header) {
+func (f *BlockFetcher) FilterBodies(peer string, transactions [][]*types.Transaction, uncles [][]*types.Header, time time.Time, announcedAt time.Time, supplier *eth.Peer) ([][]*types.Transaction, [][]*types.Header) {
 	log.Debug("Filtering bodies", "peer", peer, "txs", len(transactions), "uncles", len(uncles))
 
 	// Send the filter channel to the fetcher
@@ -500,7 +502,7 @@ func (f *BlockFetcher) FilterBodies(peer string, transactions [][]*types.Transac
 	}
 	// Request the filtering of the body list
 	select {
-	case filter <- &bodyFilterTask{peer: peer, transactions: transactions, uncles: uncles, time: time, announcedTime: announcedAt}:
+	case filter <- &bodyFilterTask{peer: peer, transactions: transactions, uncles: uncles, time: time, announcedTime: announcedAt, supplier: supplier}:
 	case <-f.quit:
 		return nil, nil
 	}
@@ -774,7 +776,7 @@ func (f *BlockFetcher) loop() {
 								} // Invalid response type
 								headers := *headersResponse
 								metrics.RecordPerItemDuration(blockHeaderItemDownloadTimer, res.Time, len(headers))
-								f.FilterHeaders(p, headers, time.Now(), announcedAt)
+								f.FilterHeaders(p, headers, time.Now(), announcedAt, res.SupplyingPeer())
 
 							case <-timeout.C:
 								log.Debug("BlockFetcher: header fetch timed out, dropping peer", "peer", p, "hash", h, "timeout", 2*fetchTimeout)
@@ -849,7 +851,7 @@ func (f *BlockFetcher) loop() {
 						// Ignoring withdrawals here, since the block fetcher is not used post-merge.
 						txs, uncles, _ := bodyResponse.Unpack()
 						metrics.RecordPerItemDuration(blockBodyItemDownloadTimer, res.Time, len(txs))
-						f.FilterBodies(p, txs, uncles, time.Now(), announcedAt)
+						f.FilterBodies(p, txs, uncles, time.Now(), announcedAt, res.SupplyingPeer())
 
 					case <-timeout.C:
 						log.Debug("BlockFetcher: body fetch timed out, dropping peer", "peer", p, "hashes", hs, "timeout", 2*fetchTimeout)
@@ -911,6 +913,7 @@ func (f *BlockFetcher) loop() {
 
 							block := types.NewBlockWithHeader(header)
 							block.ReceivedAt = task.time
+							block.ReceivedFrom = task.supplier
 							block.AnnouncedAt = &task.announcedTime
 
 							// Check if a witness is required for this empty block
@@ -1038,6 +1041,7 @@ func (f *BlockFetcher) loop() {
 								Uncles:       task.uncles[i],
 							})
 							block.ReceivedAt = task.time
+							block.ReceivedFrom = task.supplier
 							block.AnnouncedAt = &task.announcedTime
 
 							// If witness is needed, delegate to witness manager, otherwise add to enqueue list
@@ -1319,9 +1323,14 @@ func (f *BlockFetcher) runBlockImport(op *blockOrHeaderInject) (retryWitness boo
 		return false
 	}
 	// Run the actual import and log any issues
+	supplier, _ := block.ReceivedFrom.(*eth.Peer)
+	credit := supplier != nil && supplier.ID() == peer && f.getBlock(hash) == nil
 	if err := f.insertBlockWithRetry(op); err != nil {
 		log.Debug("Propagated block import failed", "peer", peer, "number", block.Number(), "hash", hash, "err", err)
 		return f.chargeDivergedWitnessImportFailure(op, err)
+	}
+	if credit && f.getBlock(hash) != nil {
+		supplier.ObserveUsefulBlock()
 	}
 
 	if f.enableBlockTracking {

@@ -14,10 +14,12 @@ import (
 )
 
 const (
-	windowWidth = 10 * time.Second
-	windowCount = 6
-	maxPeers    = 1024
-	maxHashes   = 128
+	windowWidth                 = 10 * time.Second
+	windowCount                 = 6
+	maxPeers                    = 1024
+	maxHashes                   = 128
+	retentionBaseScore          = 50
+	retentionContributionCredit = 30
 	// Bound per-packet history work under the shared tracker lock.
 	maxSampledHashes = 4096
 )
@@ -288,7 +290,7 @@ func actionFor(risk uint64) string {
 func (t *Tracker) Snapshot(id string) Snapshot {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	result := Snapshot{Mode: "observe", Action: "none", Windows: make(map[string]uint64)}
+	result := Snapshot{Mode: "observe", Action: "none", RetentionScore: retentionBaseScore, Windows: make(map[string]uint64)}
 	result.Contribution = contributionSnapshot()
 	if p, ok := t.peers.Peek(id); ok {
 		result, _ = t.snapshotPeer(id, p, t.clock.Now(), result.Windows)
@@ -337,12 +339,35 @@ func (t *Tracker) snapshotPeer(id string, p *peerRecord, now mclock.AbsTime, win
 	}
 	t.prepareActivity(&p.activity, now)
 	contribution := p.activity.snapshot(now, t.ready && connected, p.exempt, t.idleGraceSeconds)
-	abuse := p.risk(int64(now)/int64(windowWidth), windows)
-	risk := max(abuse, contribution.Risk)
+	risk := p.risk(int64(now)/int64(windowWidth), windows)
 	return Snapshot{
-		Mode: "observe", Risk: risk, AbuseRisk: abuse, Action: actionFor(risk),
-		Windows: windows, Contribution: contribution,
+		Mode: "observe", Risk: risk, AbuseRisk: risk, Action: actionFor(risk),
+		Windows: windows, Contribution: contribution, RetentionScore: retentionScore(risk, contribution),
 	}, connected
+}
+
+func retentionScore(abuse uint64, contribution *ContributionSnapshot) uint64 {
+	score := retentionBaseScore
+	if contribution.recentlyContributed() {
+		score += retentionContributionCredit
+	}
+	return uint64(max(0, score-int(abuse)-int(contribution.Risk)))
+}
+
+func (t *Tracker) RotationScore(id string, connection *ConnectionActivity) (uint64, bool) {
+	if !t.mu.TryLock() {
+		return 0, false
+	}
+	defer t.mu.Unlock()
+	p, ok := t.peers.Peek(id)
+	if !ok || connection == nil || p.activity.connection != connection {
+		return 0, false
+	}
+	now := t.clock.Now()
+	t.prepareActivity(&p.activity, now)
+	contribution := p.activity.snapshot(now, t.ready, p.exempt, t.idleGraceSeconds)
+	risk := p.risk(int64(now)/int64(windowWidth), nil)
+	return retentionScore(risk, contribution), true
 }
 
 // SetExempt is called with the authenticated connection class before observation.

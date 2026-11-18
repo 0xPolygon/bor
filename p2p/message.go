@@ -37,10 +37,11 @@ import (
 // structure, encode the payload into a byte array and create a
 // separate Msg with a bytes.Reader as Payload for each send.
 type Msg struct {
-	Code       uint64
-	Size       uint32 // Size of the raw payload
-	Payload    io.Reader
-	ReceivedAt time.Time
+	Code             uint64
+	Size             uint32 // Size of the raw payload
+	Payload          io.Reader
+	ReceivedAt       time.Time
+	ReceivedSequence uint64
 
 	meterCap  Cap    // Protocol name and version for egress metering
 	meterCode uint64 // Message within protocol for egress metering

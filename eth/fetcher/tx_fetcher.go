@@ -132,6 +132,7 @@ type txDelivery struct {
 	requestID   uint64        // Request identifier echoed by direct replies
 	violation   error         // Whether we encountered a protocol violation
 	observation txObservation
+	observed    chan struct{}
 }
 
 // txDrop is the notification that a peer has disconnected.
@@ -406,12 +407,7 @@ func (f *TxFetcher) Enqueue(peer string, txs []*types.Transaction, direct bool, 
 	}
 	// Partial or aggregate pool outcomes cannot establish per-transaction admission.
 	complete = complete && len(added) == len(txs)
-	select {
-	case f.cleanup <- &txDelivery{origin: peer, hashes: added, metas: metas, direct: direct, requestID: requestID, violation: violation, observation: f.validationSummary(txs, invalid, accepted, complete, receivedAt)}:
-		return nil
-	case <-f.quit:
-		return errTerminated
-	}
+	return f.enqueueDelivery(&txDelivery{origin: peer, hashes: added, metas: metas, direct: direct, requestID: requestID, violation: violation, observation: f.validationSummary(txs, invalid, accepted, complete, receivedAt)})
 }
 
 // Drop should be called when a peer disconnects. It cleans up all the internal

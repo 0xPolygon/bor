@@ -198,15 +198,15 @@ func TestPeerPolicyExportsSharedActivity(t *testing.T) {
 	connection.Start(clock.Now())
 	tracker.BindConnection("peer", tracker.Connected("peer"), &connection)
 	clock.Run(activityGrace)
-	require.Equal(t, int64(20), gauge(t, registry, "peer_risk")["peer"])
-	require.Equal(t, int64(20), gauge(t, registry, "connected_risk_sum")["ordinary"])
+	require.Equal(t, int64(0), gauge(t, registry, "peer_risk")["peer"])
+	require.Equal(t, int64(0), gauge(t, registry, "connected_risk_sum")["ordinary"])
 	require.Equal(t, int64(1), gauge(t, registry, "connected_contribution_status")["idle"])
 	connection.Observe(clock.Now(), true)
 	require.Zero(t, gauge(t, registry, "peer_risk")["peer"])
 	require.Zero(t, gauge(t, registry, "connected_risk_sum")["ordinary"])
 	require.Zero(t, gauge(t, registry, "connected_contribution_status")["idle"])
 	clock.Run(activityGrace)
-	require.Equal(t, int64(20), gauge(t, registry, "peer_risk")["peer"])
+	require.Equal(t, int64(0), gauge(t, registry, "peer_risk")["peer"])
 	tracker.SetReady(false)
 	require.Zero(t, gauge(t, registry, "peer_risk")["peer"])
 	require.Equal(t, int64(1), gauge(t, registry, "connected_contribution_status")["unknown"])
@@ -222,7 +222,7 @@ func TestPeerPolicyExportSkipsDiagnosticRecords(t *testing.T) {
 }
 
 func TestPeerPolicyExportsContributionStatus(t *testing.T) {
-	require.Equal(t, []string{"unknown", "warming-up", "contributing", "request-only", "idle"}, contributionStatuses)
+	require.Equal(t, []string{"unknown", "warming-up", "contributing", "request-only", "idle"}, contributionStatuses[:])
 
 	clock := new(mclock.Simulated)
 	tracker, registry := exportTestTracker(t, clock)

@@ -78,7 +78,8 @@ func TestPeerPolicyMetricReservationRejectsNonAbuse(t *testing.T) {
 			require.Zero(t, snapshot.AbuseRisk)
 			if status != "protected" {
 				require.Equal(t, status, snapshot.Contribution.Status)
-				require.Equal(t, uint64(20), snapshot.Risk)
+				require.Zero(t, snapshot.Risk)
+				require.Equal(t, uint64(20), snapshot.Contribution.Risk)
 			}
 			requireMetricReservationIdentity(t, registry, "candidate", false)
 			require.Equal(t, int64(maxPeerMetricIdentities/2), gauge(t, registry, "peer_risk_export")["admitted"])

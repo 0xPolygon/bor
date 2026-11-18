@@ -191,12 +191,16 @@ func TestTransactionContributionAdmission(t *testing.T) {
 			f := NewTxFetcher(func(common.Hash) bool { return false }, func([]*types.Transaction) []error {
 				return tc.results
 			}, func(string, uint64, []common.Hash) error { return nil }, func(string) {})
-			f.validationObserver = func(string, DeliveryProvenance, uint64, uint64, bool, uint64, bool, mclock.AbsTime) {}
-			f.cleanup = make(chan *txDelivery, 1)
+			observations := make(chan txObservation, 1)
+			f.SetValidationObserver(func(_ string, _ DeliveryProvenance, _, _ uint64, _ bool, accepted uint64, complete bool, _ mclock.AbsTime) {
+				observations <- txObservation{accepted: accepted, complete: complete}
+			})
+			f.Start()
+			defer f.Stop()
 			if err := f.Enqueue("peer", testTxs[:2], false, 0); err != nil {
 				t.Fatal(err)
 			}
-			if got := (<-f.cleanup).observation; got.accepted != tc.accepted || got.complete != tc.complete {
+			if got := <-observations; got.accepted != tc.accepted || got.complete != tc.complete {
 				t.Fatalf("admission = %+v, want accepted=%d complete=%v", got, tc.accepted, tc.complete)
 			}
 		})
@@ -250,12 +254,16 @@ func TestTransactionContributionIncompleteBatch(t *testing.T) {
 		}
 		return make([]error, len(batch))
 	}, func(string, uint64, []common.Hash) error { return nil }, func(string) {})
-	f.validationObserver = func(string, DeliveryProvenance, uint64, uint64, bool, uint64, bool, mclock.AbsTime) {}
-	f.cleanup = make(chan *txDelivery, 1)
+	observations := make(chan txObservation, 1)
+	f.SetValidationObserver(func(_ string, _ DeliveryProvenance, _, _ uint64, _ bool, accepted uint64, complete bool, _ mclock.AbsTime) {
+		observations <- txObservation{accepted: accepted, complete: complete}
+	})
+	f.Start()
+	defer f.Stop()
 	if err := f.Enqueue("peer", txs, false, 0); err != nil {
 		t.Fatal(err)
 	}
-	if got := (<-f.cleanup).observation; got.accepted != 0 || got.complete {
+	if got := <-observations; got.accepted != 0 || got.complete {
 		t.Fatalf("incomplete batch admission = %+v", got)
 	}
 }

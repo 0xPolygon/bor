@@ -441,7 +441,12 @@ func (p *Peer) handle(msg Msg) error {
 		if err != nil {
 			return fmt.Errorf("msg code out of range: %v", msg.Code)
 		}
-		p.activity.Observe(p.clock.Now(), proto.Name != "eth")
+		now := p.clock.Now()
+		if proto.canContribute(msg.Code) {
+			msg.ReceivedSequence = p.activity.ObserveData(now)
+		} else {
+			msg.ReceivedSequence = p.activity.Observe(now, proto.Name != "eth")
+		}
 		if metrics.Enabled() {
 			m := fmt.Sprintf("%s/%s/%d/%#02x", ingressMeterName, proto.Name, proto.Version, msg.Code-proto.offset)
 			metrics.GetOrRegisterMeter(m, nil).Mark(int64(msg.meterSize))
@@ -559,6 +564,10 @@ type protoRW struct {
 	werr   chan<- error    // for write results
 	offset uint64
 	w      MsgWriter
+}
+
+func (rw *protoRW) canContribute(code uint64) bool {
+	return rw.Name == "eth" && rw.CanContribute != nil && rw.CanContribute(code-rw.offset)
 }
 
 func (rw *protoRW) WriteMsg(msg Msg) (err error) {
