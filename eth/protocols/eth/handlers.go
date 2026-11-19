@@ -678,13 +678,18 @@ const (
 	minTxEncodedSize         = 1 + 9      // Min size for RLP encoded transaction
 	minWithdrawalEncodedSize = 1 + 3 + 21 // Min size for RLP encoded withdrawal
 	minReceiptEncodedSize    = 1 + 4      // Min size for RLP encoded receipt
+	minHeaderEncodedSize     = 496        // Min size for RLP encoded header (pre-London fields only)
 )
 
-// checkBodyItemCounts rejects bodies containing more transactions or withdrawals
-// than can fit in their encoded size.
+// checkBodyItemCounts rejects bodies containing more transactions, uncles or
+// withdrawals than can fit in their encoded size. The block fetcher decodes
+// uncles before matching their hash, so they are bounded here too.
 func checkBodyItemCounts(body *BlockBody) error {
 	if n := body.Transactions.Len(); n*minTxEncodedSize > len(body.Transactions.Content()) {
 		return fmt.Errorf("%d transactions in %d bytes", n, len(body.Transactions.Content()))
+	}
+	if n := body.Uncles.Len(); n*minHeaderEncodedSize > len(body.Uncles.Content()) {
+		return fmt.Errorf("%d uncles in %d bytes", n, len(body.Uncles.Content()))
 	}
 	if body.Withdrawals != nil {
 		if n := body.Withdrawals.Len(); n*minWithdrawalEncodedSize > len(body.Withdrawals.Content()) {
