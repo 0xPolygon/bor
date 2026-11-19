@@ -9,11 +9,14 @@ import (
 	"fmt"
 	"math/big"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/eth/protocols/eth"
+	"github.com/ethereum/go-ethereum/rlp"
 )
 
 type observedImport struct {
@@ -113,5 +116,37 @@ func TestBlockFetcherInvalidHeaderObserverOptional(t *testing.T) {
 
 	if dropped != "supplier" {
 		t.Fatalf("existing drop changed: %q", dropped)
+	}
+}
+
+func TestBlockFetcherUndecodableBodyObservation(t *testing.T) {
+	hashes, blocks := makeChain(1, 0, genesis)
+	if len(blocks[hashes[0]].Transactions()) == 0 {
+		t.Fatal("test block needs a body to fetch")
+	}
+	tester := newTester(false)
+	defer tester.fetcher.Stop()
+	observed := make(chan string, 1)
+	tester.fetcher.SetInvalidBodyObserver(func(peer string) { observed <- peer })
+
+	undecodableBodies := func(_ []common.Hash, sink chan *eth.Response) (*eth.Request, error) {
+		var body eth.BlockBody
+		if err := rlp.DecodeBytes([]byte{0xc3, 0xc1, 0x80, 0xc0}, &body); err != nil {
+			return nil, err
+		}
+		bodies := eth.BlockBodiesResponse{body}
+		req := &eth.Request{Peer: "bad"}
+		go func() { sink <- &eth.Response{Req: req, Res: &bodies, Done: make(chan error, 1)} }()
+		return req, nil
+	}
+	tester.fetcher.Notify("bad", hashes[0], 1, time.Now().Add(-arriveTimeout), tester.makeHeaderFetcher("bad", blocks, -gatherSlack), undecodableBodies, tester.makeWitnessFetcher("bad", blocks, 0))
+
+	select {
+	case peer := <-observed:
+		if peer != "bad" {
+			t.Fatalf("observed %q, want the body supplier", peer)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("undecodable body was not observed")
 	}
 }

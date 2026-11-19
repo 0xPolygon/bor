@@ -614,6 +614,7 @@ func handleBlockHeaders(backend Backend, msg Decoder, peer *Peer) error {
 	}
 	tresp := tracker.Response{ID: res.RequestId, MsgCode: BlockHeadersMsg, Size: res.List.Len()}
 	if err := peer.tracker.Fulfil(tresp); err != nil {
+		observeUnmatchedResponse(msg, err)
 		return fmt.Errorf("BlockHeaders: %w", err)
 	}
 	headers, err := res.List.Items()
@@ -649,6 +650,7 @@ func handleBlockBodies(backend Backend, msg Decoder, peer *Peer) error {
 	length := res.List.Len()
 	tresp := tracker.Response{ID: res.RequestId, MsgCode: BlockBodiesMsg, Size: length}
 	if err := peer.tracker.Fulfil(tresp); err != nil {
+		observeUnmatchedResponse(msg, err)
 		return fmt.Errorf("BlockBodies: %w", err)
 	}
 
@@ -798,6 +800,7 @@ func handleReceipts[L ReceiptsList](backend Backend, msg Decoder, peer *Peer) er
 
 	tresp := tracker.Response{ID: res.RequestId, MsgCode: ReceiptsMsg, Size: res.List.Len()}
 	if err := peer.tracker.Fulfil(tresp); err != nil {
+		observeUnmatchedResponse(msg, err)
 		return fmt.Errorf("Receipts: %w", err)
 	}
 
@@ -845,6 +848,7 @@ func handleReceipts70(backend Backend, msg Decoder, peer *Peer) error {
 
 	tresp := tracker.Response{ID: res.RequestId, MsgCode: ReceiptsMsg, Size: res.List.Len()}
 	if err := peer.tracker.Fulfil(tresp); err != nil {
+		observeUnmatchedResponse(msg, err)
 		return fmt.Errorf("Receipts: %w", err)
 	}
 	receiptLists, err := res.List.Items()
@@ -1064,6 +1068,12 @@ func handlePooledTransactions(backend Backend, msg Decoder, peer *Peer) error {
 		observeInvalid(msg, peerpolicy.InvalidEncoding)
 		return fmt.Errorf("PooledTransactions: %w", err)
 	}
+	// Unmatched replies skip the tracker's size check, so bound them by the
+	// largest request we send before decoding.
+	if resp.List.Len() > maxPooledTxsServe {
+		observeInvalid(msg, peerpolicy.InvalidEncoding)
+		return fmt.Errorf("PooledTransactions: too many transactions")
+	}
 	list, err := resp.List.Items()
 	if err != nil {
 		observeInvalid(msg, peerpolicy.InvalidEncoding)
@@ -1079,6 +1089,15 @@ func handlePooledTransactions(backend Backend, msg Decoder, peer *Peer) error {
 	}
 	observeForwardedTransactions(msg)
 	return nil
+}
+
+// observeUnmatchedResponse records evidence for a response that contradicts
+// its request. A response to an expired request is not evidence, since honest
+// peers can be slow.
+func observeUnmatchedResponse(msg Decoder, err error) {
+	if !errors.Is(err, tracker.ErrNoMatchingRequest) {
+		observeInvalid(msg, peerpolicy.InvalidEncoding)
+	}
 }
 
 // checkTransactions rejects nil and duplicate transactions and marks the rest

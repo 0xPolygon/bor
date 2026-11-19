@@ -984,18 +984,18 @@ func (q *queue) DeliverBodies(id string, hashes eth.BlockBodyHashes, bodies []et
 		// decode
 		txs, err := bodies[index].Transactions.Items()
 		if err != nil {
-			return fmt.Errorf("%w: bad transactions: %v", errInvalidBody, err)
+			return fmt.Errorf("%w: %w: bad transactions: %v", errInvalidBody, errUndecodableResponse, err)
 		}
 		txLists = append(txLists, txs)
 		uncles, err := bodies[index].Uncles.Items()
 		if err != nil {
-			return fmt.Errorf("%w: bad uncles: %v", errInvalidBody, err)
+			return fmt.Errorf("%w: %w: bad uncles: %v", errInvalidBody, errUndecodableResponse, err)
 		}
 		uncleLists = append(uncleLists, uncles)
 		if bodies[index].Withdrawals != nil {
 			withdrawals, err := bodies[index].Withdrawals.Items()
 			if err != nil {
-				return fmt.Errorf("%w: bad withdrawals: %v", errInvalidBody, err)
+				return fmt.Errorf("%w: %w: bad withdrawals: %v", errInvalidBody, errUndecodableResponse, err)
 			}
 			withdrawalLists = append(withdrawalLists, withdrawals)
 		} else {

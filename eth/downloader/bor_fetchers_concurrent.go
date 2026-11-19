@@ -542,6 +542,9 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 			}
 			// Deliver the received chunk of data and check chain validity
 			accepted, err := deliverFetchResponse(queue, peer, res)
+			if errors.Is(err, errUndecodableResponse) {
+				d.observeInvalidResponse(peer.id, "encoding")
+			}
 			res.Done <- validityErrorOfRequest(err)
 			res.Req.Close()
 			witnessRetry.delivered(queue, peer.id, accepted, err)

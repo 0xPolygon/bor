@@ -325,3 +325,51 @@ func omittedReceiptReply(t *testing.T, tester *downloadTester, hashes []common.H
 	}
 	return &eth.Response{Req: &eth.Request{Peer: "honest"}, Res: []*eth.ReceiptList69{receipts}}
 }
+
+// Replies whose items fail to decode are evidence against the supplier, and
+// their reservations go back to the task queue so other peers can serve them.
+func TestPeerPolicyUndecodableBodyAndReceipts(t *testing.T) {
+	header := &types.Header{Number: big.NewInt(1), Difficulty: big.NewInt(1), TxHash: common.Hash{1}, UncleHash: types.EmptyUncleHash}
+	for _, kind := range []string{"bodies", "receipts"} {
+		t.Run(kind, func(t *testing.T) {
+			d := &Downloader{queue: newQueue(10, 10, nil)}
+			peer := newPeerConnection("bad", eth.ETH69, nil, log.New("case", kind))
+			request := &fetchRequest{Peer: peer, Headers: []*types.Header{header}}
+			var (
+				err      error
+				want     error
+				pendPool map[string]*fetchRequest
+				pending  func() int
+			)
+			if kind == "bodies" {
+				var body eth.BlockBody
+				if err := rlp.DecodeBytes([]byte{0xc3, 0xc1, 0x80, 0xc0}, &body); err != nil {
+					t.Fatal(err)
+				}
+				bodies := eth.BlockBodiesResponse{body}
+				meta := eth.BlockBodyHashes{
+					TransactionRoots: []common.Hash{header.TxHash},
+					UncleHashes:      []common.Hash{types.EmptyUncleHash},
+					WithdrawalRoots:  []common.Hash{{}},
+				}
+				pendPool, pending, want = d.queue.blockPendPool, d.queue.blockTaskQueue.Size, errInvalidBody
+				pendPool[peer.id] = request
+				_, err = (*bodyQueue)(d).deliver(peer, &eth.Response{Req: &eth.Request{Peer: peer.id}, Res: &bodies, Meta: meta})
+			} else {
+				receipts := new(eth.ReceiptList69)
+				if err := rlp.DecodeBytes([]byte{0xc5, 0xc4, 0x80, 0x80, 0x80, 0x80}, receipts); err != nil {
+					t.Fatal(err)
+				}
+				pendPool, pending, want = d.queue.receiptPendPool, d.queue.receiptTaskQueue.Size, errInvalidReceipt
+				pendPool[peer.id] = request
+				_, err = (*receiptQueue)(d).deliver(peer, &eth.Response{Req: &eth.Request{Peer: peer.id}, Res: []*eth.ReceiptList69{receipts}})
+			}
+			if !errors.Is(err, want) || !errors.Is(err, errUndecodableResponse) {
+				t.Fatalf("got %v, want %v and %v", err, want, errUndecodableResponse)
+			}
+			if _, ok := pendPool[peer.id]; ok || pending() != 1 {
+				t.Fatalf("reservation not returned: pending=%t tasks=%d", ok, pending())
+			}
+		})
+	}
+}

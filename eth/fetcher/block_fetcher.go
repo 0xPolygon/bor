@@ -262,6 +262,7 @@ type BlockFetcher struct {
 	dropPeer       peerDropFn         // Drops a peer for misbehaving
 
 	invalidHeader func(peer string, err error) // Reports verification failures and their supplier
+	invalidBody   func(peer string)            // Reports body replies that fail to decode
 
 	// Testing hooks
 	announceChangeHook func(common.Hash, bool)           // Method to call upon adding or deleting a hash from the blockAnnounce list
@@ -368,6 +369,12 @@ func (f *BlockFetcher) SetWitnessSourceExcluder(fn func(peer string, blockHash c
 // Install before Start; the callback must not block.
 func (f *BlockFetcher) SetInvalidHeaderObserver(observe func(peer string, err error)) {
 	f.invalidHeader = observe
+}
+
+// SetInvalidBodyObserver reports body replies that fail to decode.
+// Install before Start; the callback must not block.
+func (f *BlockFetcher) SetInvalidBodyObserver(observe func(peer string)) {
+	f.invalidBody = observe
 }
 
 func (f *BlockFetcher) observeInvalidHeader(peer string, err error) {
@@ -853,6 +860,9 @@ func (f *BlockFetcher) loop() {
 						txs, uncles, err := unpackBodies(*bodyResponse)
 						if err != nil {
 							log.Debug("BlockFetcher: invalid body response, dropping peer", "peer", p, "err", err)
+							if f.invalidBody != nil {
+								f.invalidBody(p)
+							}
 							f.dropPeer(p)
 							return
 						}

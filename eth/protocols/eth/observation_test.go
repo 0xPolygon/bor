@@ -407,3 +407,93 @@ func TestPeerPolicyAcceptedTransactionsDeferCorrelation(t *testing.T) {
 		})
 	}
 }
+
+func TestPeerPolicyTrackerRejections(t *testing.T) {
+	handlers := map[uint64]msgHandler{
+		BlockHeadersMsg: handleBlockHeaders,
+		BlockBodiesMsg:  handleBlockBodies,
+		ReceiptsMsg:     handleReceipts[*ReceiptList69],
+	}
+	for code, handle := range handlers {
+		for _, tc := range []struct {
+			name     string
+			tracked  *tracker.Request
+			want     error
+			evidence peerpolicy.Reason
+		}{
+			{"too many items", &tracker.Request{ID: 1, Size: 1, ReqCode: code - 1, RespCode: code}, tracker.ErrTooManyItems, peerpolicy.InvalidEncoding},
+			{"code mismatch", &tracker.Request{ID: 1, Size: 2, ReqCode: GetPooledTransactionsMsg, RespCode: PooledTransactionsMsg}, tracker.ErrCodeMismatch, peerpolicy.InvalidEncoding},
+			{"expired", nil, tracker.ErrNoMatchingRequest, peerpolicy.None},
+		} {
+			t.Run(fmt.Sprintf("%d/%s", code, tc.name), func(t *testing.T) {
+				var got []peerpolicy.Evidence
+				peer := &Peer{
+					observer: func(e peerpolicy.Evidence) { got = append(got, e) },
+					tracker:  tracker.New(p2p.Cap{Name: ProtocolName, Version: ETH69}, "test", time.Minute),
+				}
+				defer peer.tracker.Stop()
+				if tc.tracked != nil {
+					if err := peer.tracker.Track(*tc.tracked); err != nil {
+						t.Fatal(err)
+					}
+				}
+				msg := encodedResponse(t, code, 1, 2)
+				if err := peer.handleObserved(nil, msg, handle); !errors.Is(err, tc.want) {
+					t.Fatalf("err = %v, want %v", err, tc.want)
+				}
+				if len(got) != 1 || got[0].Reason != tc.evidence {
+					t.Fatalf("evidence = %+v, want %v", got, tc.evidence)
+				}
+			})
+		}
+	}
+}
+
+func TestPeerPolicyUnmatchedPooledTransactionsLimit(t *testing.T) {
+	for _, tc := range []struct {
+		items    int
+		evidence peerpolicy.Reason
+		wantErr  bool
+	}{
+		{0, peerpolicy.None, false},
+		{maxPooledTxsServe + 1, peerpolicy.InvalidEncoding, true},
+	} {
+		t.Run(fmt.Sprint(tc.items), func(t *testing.T) {
+			backend := &transactionObservationBackend{accept: true}
+			var got []peerpolicy.Evidence
+			peer := &Peer{
+				observer: func(e peerpolicy.Evidence) { got = append(got, e) },
+				tracker:  tracker.New(p2p.Cap{Name: ProtocolName, Version: ETH69}, "test", time.Minute),
+			}
+			defer peer.tracker.Stop()
+			err := peer.handleObserved(backend, encodedResponse(t, PooledTransactionsMsg, 42, tc.items), handlePooledTransactions)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, want error %t", err, tc.wantErr)
+			}
+			if len(got) != 1 || got[0].Reason != tc.evidence {
+				t.Fatalf("evidence = %+v, want %v", got, tc.evidence)
+			}
+			if tc.wantErr && backend.deliveries != 0 {
+				t.Fatal("oversized reply was delivered")
+			}
+		})
+	}
+}
+
+// encodedResponse builds a response message whose items are placeholders; the
+// checks under test run before any item is decoded.
+func encodedResponse(t *testing.T, code, id uint64, items int) p2p.Msg {
+	t.Helper()
+	list := make([]rlp.RawValue, items)
+	for i := range list {
+		list[i] = rlp.RawValue{0xc0}
+	}
+	enc, err := rlp.EncodeToBytes(struct {
+		ID   uint64
+		List []rlp.RawValue
+	}{id, list})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p2p.Msg{Code: code, Size: uint32(len(enc)), Payload: bytes.NewReader(enc)}
+}
