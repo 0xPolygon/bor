@@ -28,6 +28,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
 )
 
 // ethHandler implements the eth.Backend interface to handle the various network
@@ -52,7 +53,15 @@ func (h *ethHandler) RunPeer(peer *eth.Peer, hand eth.Handler) error {
 // PeerInfo retrieves all known `eth` information about a peer.
 func (h *ethHandler) PeerInfo(id enode.ID) interface{} {
 	if p := h.peers.peer(id.String()); p != nil {
-		return p.info()
+		info := p.info()
+		if h.peerPolicy != nil {
+			(*handler)(h).updateContributionReadiness()
+			snapshot := h.peerPolicy.Snapshot(id.String())
+			// Connection flags remain known even when bounded history was evicted.
+			snapshot.Contribution.Protected = p.Trusted() || p.Static()
+			info.Reputation = &snapshot
+		}
+		return info
 	}
 
 	return nil
@@ -82,6 +91,7 @@ func (h *ethHandler) Handle(peer *eth.Peer, packet eth.Packet) error {
 	case *eth.TransactionsPacket:
 		for _, tx := range *packet {
 			if tx.Type() == types.BlobTxType {
+				(*handler)(h).observePeer(peer.ID(), peerpolicy.InvalidTransaction)
 				return errors.New("disallowed broadcast blob transaction")
 			}
 		}
@@ -94,9 +104,11 @@ func (h *ethHandler) Handle(peer *eth.Peer, packet eth.Packet) error {
 		for _, tx := range packet.PooledTransactionsResponse {
 			if tx.Type() == types.BlobTxType {
 				if tx.BlobTxSidecar() == nil {
+					(*handler)(h).observePeer(peer.ID(), peerpolicy.InvalidTransaction)
 					return errors.New("received sidecar-less blob transaction")
 				}
 				if err := tx.BlobTxSidecar().ValidateBlobCommitmentHashes(tx.BlobHashes()); err != nil {
+					(*handler)(h).observePeer(peer.ID(), peerpolicy.InvalidTransaction)
 					return err
 				}
 			}

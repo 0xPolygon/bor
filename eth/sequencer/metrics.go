@@ -32,6 +32,7 @@ var (
 	windowDisplacedRecords = metrics.NewRegisteredCounter("sequencer/reconcile/displacedrecords", nil)
 	publishBarrierTimeout  = metrics.NewRegisteredCounter("sequencer/publish/barriertimeout", nil)
 	publishMidDrainMirror  = metrics.NewRegisteredCounter("sequencer/publish/middrainmirror", nil)
+	publishLaggingRead     = metrics.NewRegisteredCounter("sequencer/publish/laggingread", nil)
 	publishRedialCount     = metrics.NewRegisteredCounter("sequencer/publish/redial", nil)
 
 	// The seal gate's verdicts: confirmed seals broadcast, refused ones are

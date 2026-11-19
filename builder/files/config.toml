@@ -35,6 +35,11 @@ syncmode = "full"
   # enable-block-tracking = false
 
 [p2p]
+  peer-idle-eviction = true
+  peer-idle-occupancy-threshold = 75
+  peer-idle-grace-period = "10m"
+  peer-idle-max-removals = 1
+  peer-idle-reconnect-cooldown = "5m"
   # maxpeers = 1
   # nodiscover = true
   # maxpendpeers = 50

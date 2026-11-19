@@ -37,11 +37,13 @@ const (
 )
 
 var (
-	activePeerGauge         = metrics.NewRegisteredGauge("p2p/peers", nil)
-	activeInboundPeerGauge  = metrics.NewRegisteredGauge("p2p/peers/inbound", nil)
-	activeOutboundPeerGauge = metrics.NewRegisteredGauge("p2p/peers/outbound", nil)
-	peerDropMeter           = metrics.NewRegisteredMeter("p2p/peers/drops", nil)
-	peerPingLatencyTimer    = metrics.NewRegisteredTimer("p2p/peers/ping/latency", nil)
+	idlePeerDisconnects        = metrics.NewRegisteredCounter("p2p/peers/idle/disconnects", nil)
+	requestOnlyPeerDisconnects = metrics.NewRegisteredCounter("p2p/peers/requestonly/disconnects", nil)
+	activePeerGauge            = metrics.NewRegisteredGauge("p2p/peers", nil)
+	activeInboundPeerGauge     = metrics.NewRegisteredGauge("p2p/peers/inbound", nil)
+	activeOutboundPeerGauge    = metrics.NewRegisteredGauge("p2p/peers/outbound", nil)
+	peerDropMeter              = metrics.NewRegisteredMeter("p2p/peers/drops", nil)
+	peerPingLatencyTimer       = metrics.NewRegisteredTimer("p2p/peers/ping/latency", nil)
 
 	ingressTrafficMeter = metrics.NewRegisteredMeter("p2p/ingress", nil)
 	egressTrafficMeter  = metrics.NewRegisteredMeter("p2p/egress", nil)

@@ -40,6 +40,7 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/enr"
 	"github.com/ethereum/go-ethereum/p2p/netutil"
+	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
 )
 
 const (
@@ -74,6 +75,8 @@ func (e *protoHandshakeError) Unwrap() error { return e.err }
 type Server struct {
 	// Config fields may not be modified while the server is running.
 	Config
+	peerPolicy atomic.Pointer[peerpolicy.Tracker]
+	limitsMu   sync.RWMutex
 
 	// Hooks for testing. These are useful because we can inhibit
 	// the whole protocol stack.
@@ -98,6 +101,9 @@ type Server struct {
 	dialsched   *dialScheduler
 	staticNodes map[enode.ID]bool // Owned by the server loop.
 
+	inboundCapacityRefusedUntil mclock.AbsTime
+	requestOnlyRotatedUntil     mclock.AbsTime
+
 	// This is read by the NAT port mapping loop.
 	portMappingRegister chan *portMapping
 
@@ -119,103 +125,6 @@ type Server struct {
 }
 
 type peerOpFunc func(map[enode.ID]*Peer)
-
-const (
-	maxPeerJailEntries = 4096
-	noPeerJailExpiry   = mclock.AbsTime(1<<63 - 1)
-)
-
-// peerJail tracks temporarily banned peers to prevent connections
-type peerJail struct {
-	mu         sync.RWMutex
-	jailed     map[enode.ID]mclock.AbsTime // peer ID -> unban time
-	jailPeriod time.Duration               // default jail period
-	clock      mclock.Clock
-}
-
-// newPeerJail creates a new peer jail with the given jail period
-func newPeerJail(jailPeriod time.Duration, clock mclock.Clock) *peerJail {
-	return &peerJail{
-		jailed:     make(map[enode.ID]mclock.AbsTime),
-		jailPeriod: jailPeriod,
-		clock:      clock,
-	}
-}
-
-// JailPeer jails a peer for the default jail period
-func (pj *peerJail) JailPeer(id enode.ID) {
-	pj.JailPeerFor(id, pj.jailPeriod)
-}
-
-func (pj *peerJail) JailPeerFor(id enode.ID, period time.Duration) {
-	now := pj.clock.Now()
-	unbanTime := now + mclock.AbsTime(period)
-
-	pj.mu.Lock()
-	defer pj.mu.Unlock()
-
-	if current, exists := pj.jailed[id]; exists {
-		pj.jailed[id] = max(current, unbanTime)
-		return
-	}
-	if len(pj.jailed) >= maxPeerJailEntries {
-		pj.makeRoom(now)
-	}
-	pj.jailed[id] = unbanTime
-}
-
-func (pj *peerJail) makeRoom(now mclock.AbsTime) {
-	var earliestID enode.ID
-	earliestExpiry := noPeerJailExpiry
-	for id, unbanTime := range pj.jailed {
-		if now > unbanTime {
-			delete(pj.jailed, id)
-			continue
-		}
-		if unbanTime <= earliestExpiry {
-			earliestID, earliestExpiry = id, unbanTime
-		}
-	}
-	if len(pj.jailed) >= maxPeerJailEntries {
-		delete(pj.jailed, earliestID)
-	}
-}
-
-// IsJailed checks if a peer is currently jailed
-func (pj *peerJail) IsJailed(id enode.ID) bool {
-	now := pj.clock.Now()
-
-	pj.mu.RLock()
-	unbanTime, exists := pj.jailed[id]
-	pj.mu.RUnlock()
-	if !exists {
-		return false
-	}
-	if now <= unbanTime {
-		return true
-	}
-
-	// expired: clean up under write lock
-	pj.mu.Lock()
-	// re-check because map may have changed
-	if unbanTime, exists := pj.jailed[id]; exists && now > unbanTime {
-		delete(pj.jailed, id)
-	}
-	pj.mu.Unlock()
-	return false
-}
-
-// JailedUntil returns the unban time of a peer if it is currently jailed.
-func (pj *peerJail) JailedUntil(id enode.ID) (mclock.AbsTime, bool) {
-	if !pj.IsJailed(id) {
-		return 0, false
-	}
-
-	pj.mu.RLock()
-	defer pj.mu.RUnlock()
-	unbanTime, exists := pj.jailed[id]
-	return unbanTime, exists
-}
 
 type peerDrop struct {
 	*Peer
@@ -361,7 +270,9 @@ func (srv *Server) SetMaxPeers(maxPeers int) {
 		}
 	}
 
+	srv.limitsMu.Lock()
 	srv.MaxPeers = maxPeers
+	srv.limitsMu.Unlock()
 }
 
 // PeerCount returns the number of connected peers.
@@ -384,6 +295,7 @@ func (srv *Server) PeerCount() int {
 // will attempt to reconnect the peer.
 func (srv *Server) AddPeer(node *enode.Node) {
 	srv.doPeerOp(func(peers map[enode.ID]*Peer) {
+		srv.peerJail.clearIdleCooldown(node.ID())
 		srv.staticNodes[node.ID()] = true
 		if peer := peers[node.ID()]; peer != nil {
 			peer.rw.set(staticConn, true)
@@ -456,6 +368,7 @@ func (srv *Server) RemovePeer(node *enode.Node) {
 func (srv *Server) AddTrustedPeer(node *enode.Node) {
 	select {
 	case srv.addtrusted <- node:
+		srv.peerJail.clearIdleCooldown(node.ID())
 	case <-srv.quit:
 	}
 }
@@ -467,7 +380,7 @@ func (srv *Server) RemoveTrustedPeer(node *enode.Node) {
 	case <-srv.quit:
 	}
 	// Disconnect the peer if maxPeers is breached.
-	srv.SetMaxPeers(srv.MaxPeers)
+	srv.SetMaxPeers(srv.GetMaxPeers())
 }
 
 // SubscribeEvents subscribes the given channel to peer events
@@ -773,28 +686,6 @@ func (srv *Server) setupDialScheduler() {
 	}
 }
 
-func (srv *Server) MaxInboundConns() int {
-	return srv.MaxPeers - srv.MaxDialedConns()
-}
-
-func (srv *Server) MaxDialedConns() (limit int) {
-	if srv.NoDial || srv.MaxPeers == 0 {
-		return 0
-	}
-
-	if srv.DialRatio == 0 {
-		limit = srv.MaxPeers / defaultDialRatio
-	} else {
-		limit = srv.MaxPeers / srv.DialRatio
-	}
-
-	if limit == 0 {
-		limit = 1
-	}
-
-	return limit
-}
-
 func (srv *Server) setupListening() error {
 	// Launch the listener.
 	listener, err := srv.listenFunc("tcp", srv.ListenAddr)
@@ -875,7 +766,9 @@ func (srv *Server) run() {
 		peers        = make(map[enode.ID]*Peer)
 		inboundCount = 0
 		trusted      = make(map[enode.ID]bool, len(srv.TrustedNodes))
+		idleTimer    = srv.clock.NewTimer(peerIdleCheckInterval)
 	)
+	defer idleTimer.Stop()
 	// Put trusted nodes into a map to speed up checks.
 	// Trusted peers are loaded on startup or added via AddTrustedPeer RPC.
 	for _, n := range srv.TrustedNodes {
@@ -888,6 +781,9 @@ running:
 		case <-srv.quit:
 			// The server was stopped. Run the cleanup logic.
 			break running
+		case <-idleTimer.C():
+			idleTimer.Reset(peerIdleCheckInterval)
+			srv.expireIdlePeer(peers)
 
 		case n := <-srv.addtrusted:
 			// This channel is used by AddTrustedPeer to add a node
@@ -935,6 +831,7 @@ running:
 				srv.dialsched.peerAdded(c)
 				if p.Inbound() {
 					inboundCount++
+					srv.inboundCapacityRefusedUntil = 0
 					serveSuccessMeter.Mark(1)
 					activeInboundPeerGauge.Inc(1)
 				} else {
@@ -991,12 +888,15 @@ func (srv *Server) postHandshakeChecks(peers map[enode.ID]*Peer, inboundCount in
 		return DiscJailed
 	}
 
+	total, dialed := srv.peerLimits()
 	switch {
-	case !c.is(trustedConn) && len(peers) >= srv.MaxPeers:
-		srv.log.Debug("Rejecting peer: too many peers", "id", c.node.ID(), "peercount", len(peers), "maxpeers", srv.MaxPeers)
+	case !c.is(trustedConn) && len(peers) >= total:
+		srv.log.Debug("Rejecting peer: too many peers", "id", c.node.ID(), "peercount", len(peers), "maxpeers", total)
+		srv.recordInboundCapacityRefusal(peers, c)
 		return DiscTooManyPeers
-	case !c.is(trustedConn) && c.is(inboundConn) && inboundCount >= srv.MaxInboundConns():
-		srv.log.Debug("Rejecting peer: too many inbound", "id", c.node.ID(), "inboundCount", inboundCount, "maxinbound", srv.MaxInboundConns())
+	case !c.is(trustedConn) && c.is(inboundConn) && inboundCount >= total-dialed:
+		srv.log.Debug("Rejecting peer: too many inbound", "id", c.node.ID(), "inboundCount", inboundCount, "maxinbound", total-dialed)
+		srv.recordInboundCapacityRefusal(peers, c)
 		return DiscTooManyPeers
 	case peers[c.node.ID()] != nil:
 		return DiscAlreadyConnected
@@ -1015,6 +915,13 @@ func (srv *Server) addPeerChecks(peers map[enode.ID]*Peer, inboundCount int, c *
 	// Repeat the post-handshake checks because the
 	// peer set might have changed since those checks were performed.
 	return srv.postHandshakeChecks(peers, inboundCount, c)
+}
+
+func (srv *Server) recordInboundCapacityRefusal(peers map[enode.ID]*Peer, c *conn) {
+	if !c.is(inboundConn) || peers[c.node.ID()] != nil || (srv.localnode != nil && c.node.ID() == srv.localnode.ID()) {
+		return
+	}
+	srv.inboundCapacityRefusedUntil = srv.clock.Now().Add(peerIdleCheckInterval)
 }
 
 // listenLoop runs in its own goroutine and accepts
@@ -1234,6 +1141,7 @@ func (srv *Server) checkpoint(c *conn, stage chan<- *conn) error {
 
 func (srv *Server) launchPeer(c *conn) *Peer {
 	p := newPeer(srv.log, c, srv.Protocols)
+	p.clock = srv.clock
 	if srv.EnableMsgEvents {
 		// If message events are enabled, pass the peerFeed
 		// to the peer.
@@ -1341,4 +1249,98 @@ func (srv *Server) PeersInfo() []*PeerInfo {
 	})
 
 	return infos
+}
+
+const (
+	peerIdleCheckInterval       = time.Minute
+	peerIdleMinimumPeers        = 5
+	MaxPeerIdleRemovals         = 64
+	requestOnlyRotationInterval = 10 * time.Minute
+)
+
+func (srv *Server) SetPeerPolicy(policy *peerpolicy.Tracker) {
+	if policy != nil {
+		policy.SetIdleGrace(srv.PeerIdleGracePeriod)
+	}
+	srv.peerPolicy.Store(policy)
+}
+
+// Called on the server loop, which also serializes peer and trust changes.
+func (srv *Server) expireIdlePeer(peers map[enode.ID]*Peer) {
+	policy := srv.peerPolicy.Load()
+	if !srv.PeerIdleEviction || srv.peerJail == nil || policy == nil {
+		return
+	}
+	cooldown := srv.peerIdleCooldown()
+	count, inbound, _ := peerCounts(peers)
+	requestOnlyBatch := srv.requestOnlyPressure(count, inbound)
+	requestOnlyRemoved := false
+	defer func() {
+		if requestOnlyRemoved {
+			srv.requestOnlyRotatedUntil = srv.clock.Now().Add(max(requestOnlyRotationInterval, srv.PeerIdleGracePeriod))
+		}
+	}()
+	for range min(max(srv.PeerIdleMaxRemovals, 1), MaxPeerIdleRemovals, len(peers)) {
+		count, inbound, live := peerCounts(peers)
+		if live <= peerIdleMinimumPeers {
+			return
+		}
+		peer, last, requestOnly := srv.idlePeer(peers, count, inbound, policy, requestOnlyBatch)
+		if peer == nil || !srv.retireActivityPeer(peer, last, requestOnly, policy, cooldown) {
+			return
+		}
+		requestOnlyRemoved = requestOnlyRemoved || requestOnly
+	}
+}
+
+func (srv *Server) retireActivityPeer(peer *Peer, last mclock.AbsTime, requestOnly bool, policy *peerpolicy.Tracker, cooldown time.Duration) bool {
+	if requestOnly && srv.clock.Now() < srv.requestOnlyRotatedUntil {
+		return false
+	}
+	retire := policy.RetireIdle
+	if requestOnly {
+		retire = policy.RetireRequestOnly
+	}
+	if !retire(peer.ID().String(), peer.activity, last) {
+		return false
+	}
+	select {
+	case peer.disc <- DiscJailed:
+	default:
+		peer.Log().Debug("Skipping peer rotation because a disconnect is already queued", "requestOnly", requestOnly)
+		return false
+	}
+	srv.peerJail.cooldownPeer(peer.ID(), cooldown)
+	if requestOnly {
+		srv.inboundCapacityRefusedUntil = 0
+		peer.activity.MarkRequestOnlyDisconnect()
+		peer.Log().Info("Disconnecting request-only peer to free a connection slot", "cooldown", cooldown)
+		requestOnlyPeerDisconnects.Inc(1)
+	} else {
+		peer.activity.MarkIdleDisconnect()
+		peer.Log().Info("Disconnecting inactive peer to free a connection slot", "inactive", srv.clock.Now().Sub(last), "cooldown", cooldown)
+		idlePeerDisconnects.Inc(1)
+	}
+	return true
+}
+
+func peerCounts(peers map[enode.ID]*Peer) (count, inbound, live int) {
+	for _, peer := range peers {
+		if peer.activity.Closing() {
+			continue
+		}
+		select {
+		case <-peer.closed:
+			continue
+		default:
+		}
+		count++
+		if peer.Inbound() {
+			inbound++
+		}
+		if peer.isLive() {
+			live++
+		}
+	}
+	return count, inbound, live
 }

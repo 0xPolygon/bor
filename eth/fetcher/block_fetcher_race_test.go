@@ -163,7 +163,7 @@ func TestBlockFetcherConcurrentMapAccess(t *testing.T) {
 			peer := "peer-filter-" + randomString(5)
 
 			headers := []*types.Header{block.Header()}
-			filtered := fetcher.FilterHeaders(peer, headers, time.Now(), time.Now())
+			filtered := fetcher.FilterHeaders(peer, headers, time.Now(), time.Now(), nil)
 			_ = filtered // Ignore result
 
 			time.Sleep(time.Microsecond * time.Duration(rand.Intn(100)))
@@ -185,7 +185,7 @@ func TestBlockFetcherConcurrentMapAccess(t *testing.T) {
 
 			transactions := [][]*types.Transaction{{}}
 			uncles := [][]*types.Header{{}}
-			filteredTxs, filteredUncles := fetcher.FilterBodies(peer, transactions, uncles, time.Now(), time.Now())
+			filteredTxs, filteredUncles := fetcher.FilterBodies(peer, transactions, uncles, time.Now(), time.Now(), nil)
 			_, _ = filteredTxs, filteredUncles // Ignore results
 
 			time.Sleep(time.Microsecond * time.Duration(rand.Intn(100)))

@@ -135,6 +135,7 @@ type blockAnnounce struct {
 
 // headerFilterTask represents a batch of headers needing fetcher filtering.
 type headerFilterTask struct {
+	supplier      *eth.Peer
 	peer          string          // The source peer of block headers
 	headers       []*types.Header // Collection of headers to filter
 	time          time.Time       // Arrival time of the headers
@@ -144,6 +145,7 @@ type headerFilterTask struct {
 // bodyFilterTask represents a batch of block bodies (transactions and uncles)
 // needing fetcher filtering.
 type bodyFilterTask struct {
+	supplier      *eth.Peer
 	peer          string                 // The source peer of block bodies
 	transactions  [][]*types.Transaction // Collection of transactions per block bodies
 	uncles        [][]*types.Header      // Collection of uncles per block bodies
@@ -259,6 +261,8 @@ type BlockFetcher struct {
 	insertChain    chainInsertFn      // Injects a batch of blocks into the chain
 	dropPeer       peerDropFn         // Drops a peer for misbehaving
 
+	invalidHeader func(peer string, err error) // Reports verification failures and their supplier
+
 	// Testing hooks
 	announceChangeHook func(common.Hash, bool)           // Method to call upon adding or deleting a hash from the blockAnnounce list
 	queueChangeHook    func(common.Hash, bool)           // Method to call upon adding or deleting a block from the import queue
@@ -357,6 +361,18 @@ func (f *BlockFetcher) SetWitnessSourceExcluder(fn func(peer string, blockHash c
 	}
 }
 
+// SetInvalidHeaderObserver reports verification failures and their supplier.
+// Install before Start; the callback must not block.
+func (f *BlockFetcher) SetInvalidHeaderObserver(observe func(peer string, err error)) {
+	f.invalidHeader = observe
+}
+
+func (f *BlockFetcher) observeInvalidHeader(peer string, err error) {
+	if f.invalidHeader != nil {
+		f.invalidHeader(peer, err)
+	}
+}
+
 // Notify announces the fetcher of the potential availability of a new block in
 // the network.
 func (f *BlockFetcher) Notify(peer string, hash common.Hash, number uint64, time time.Time,
@@ -443,7 +459,7 @@ func (f *BlockFetcher) InjectWitness(peer string, witness *stateless.Witness, pr
 
 // FilterHeaders extracts all the headers that were explicitly requested by the fetcher,
 // returning those that should be handled differently.
-func (f *BlockFetcher) FilterHeaders(peer string, headers []*types.Header, time time.Time, announcedAt time.Time) []*types.Header {
+func (f *BlockFetcher) FilterHeaders(peer string, headers []*types.Header, time time.Time, announcedAt time.Time, supplier *eth.Peer) []*types.Header {
 	log.Debug("Filtering headers", "peer", peer, "headers", len(headers))
 
 	// Send the filter channel to the fetcher
@@ -456,7 +472,7 @@ func (f *BlockFetcher) FilterHeaders(peer string, headers []*types.Header, time 
 	}
 	// Request the filtering of the header list
 	select {
-	case filter <- &headerFilterTask{peer: peer, headers: headers, time: time, announcedTime: announcedAt}:
+	case filter <- &headerFilterTask{peer: peer, headers: headers, time: time, announcedTime: announcedAt, supplier: supplier}:
 	case <-f.quit:
 		return nil
 	}
@@ -471,7 +487,7 @@ func (f *BlockFetcher) FilterHeaders(peer string, headers []*types.Header, time 
 
 // FilterBodies extracts all the block bodies that were explicitly requested by
 // the fetcher, returning those that should be handled differently.
-func (f *BlockFetcher) FilterBodies(peer string, transactions [][]*types.Transaction, uncles [][]*types.Header, time time.Time, announcedAt time.Time) ([][]*types.Transaction, [][]*types.Header) {
+func (f *BlockFetcher) FilterBodies(peer string, transactions [][]*types.Transaction, uncles [][]*types.Header, time time.Time, announcedAt time.Time, supplier *eth.Peer) ([][]*types.Transaction, [][]*types.Header) {
 	log.Debug("Filtering bodies", "peer", peer, "txs", len(transactions), "uncles", len(uncles))
 
 	// Send the filter channel to the fetcher
@@ -484,7 +500,7 @@ func (f *BlockFetcher) FilterBodies(peer string, transactions [][]*types.Transac
 	}
 	// Request the filtering of the body list
 	select {
-	case filter <- &bodyFilterTask{peer: peer, transactions: transactions, uncles: uncles, time: time, announcedTime: announcedAt}:
+	case filter <- &bodyFilterTask{peer: peer, transactions: transactions, uncles: uncles, time: time, announcedTime: announcedAt, supplier: supplier}:
 	case <-f.quit:
 		return nil, nil
 	}
@@ -758,7 +774,7 @@ func (f *BlockFetcher) loop() {
 								} // Invalid response type
 								headers := *headersResponse
 								metrics.RecordPerItemDuration(blockHeaderItemDownloadTimer, res.Time, len(headers))
-								f.FilterHeaders(p, headers, time.Now(), announcedAt)
+								f.FilterHeaders(p, headers, time.Now(), announcedAt, res.SupplyingPeer())
 
 							case <-timeout.C:
 								log.Debug("BlockFetcher: header fetch timed out, dropping peer", "peer", p, "hash", h, "timeout", 2*fetchTimeout)
@@ -833,7 +849,7 @@ func (f *BlockFetcher) loop() {
 						// Ignoring withdrawals here, since the block fetcher is not used post-merge.
 						txs, uncles, _ := bodyResponse.Unpack()
 						metrics.RecordPerItemDuration(blockBodyItemDownloadTimer, res.Time, len(txs))
-						f.FilterBodies(p, txs, uncles, time.Now(), announcedAt)
+						f.FilterBodies(p, txs, uncles, time.Now(), announcedAt, res.SupplyingPeer())
 
 					case <-timeout.C:
 						log.Debug("BlockFetcher: body fetch timed out, dropping peer", "peer", p, "hashes", hs, "timeout", 2*fetchTimeout)
@@ -895,6 +911,7 @@ func (f *BlockFetcher) loop() {
 
 							block := types.NewBlockWithHeader(header)
 							block.ReceivedAt = task.time
+							block.ReceivedFrom = task.supplier
 							block.AnnouncedAt = &task.announcedTime
 
 							// Check if a witness is required for this empty block
@@ -1022,6 +1039,7 @@ func (f *BlockFetcher) loop() {
 								Uncles:       task.uncles[i],
 							})
 							block.ReceivedAt = task.time
+							block.ReceivedFrom = task.supplier
 							block.AnnouncedAt = &task.announcedTime
 
 							// If witness is needed, delegate to witness manager, otherwise add to enqueue list
@@ -1212,6 +1230,7 @@ func (f *BlockFetcher) importHeaders(peer string, header *types.Header) {
 		// Validate the header and if something went wrong, drop the peer
 		if err := f.verifyHeader(header); err != nil && err != consensus.ErrFutureBlock {
 			log.Debug("Propagated header verification failed", "peer", peer, "number", header.Number, "hash", hash, "err", err)
+			f.observeInvalidHeader(peer, err)
 			f.dropPeer(peer)
 
 			return
@@ -1293,16 +1312,22 @@ func (f *BlockFetcher) runBlockImport(op *blockOrHeaderInject) (retryWitness boo
 	default:
 		// Something went very wrong, drop the peer
 		log.Debug("Propagated block verification failed", "peer", peer, "number", block.Number(), "hash", hash, "err", err)
+		f.observeInvalidHeader(peer, err)
 		f.dropPeer(peer)
 
 		return false
 	}
 	// Run the actual import and log any issues
+	supplier, _ := block.ReceivedFrom.(*eth.Peer)
+	credit := supplier != nil && supplier.ID() == peer && f.getBlock(hash) == nil
 	// Pass the witness along with the block to the insertion function.
 	// Create slices even for a single block/witness to match the expected signature.
 	if _, err := f.insertChain(types.Blocks{block}, []*stateless.Witness{witness}); err != nil {
 		log.Debug("Propagated block import failed", "peer", peer, "number", block.Number(), "hash", hash, "err", err)
 		return f.chargeDivergedWitnessImportFailure(op, err)
+	}
+	if credit && f.getBlock(hash) != nil {
+		supplier.ObserveUsefulBlock()
 	}
 
 	if f.enableBlockTracking {

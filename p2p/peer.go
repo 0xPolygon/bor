@@ -31,6 +31,7 @@ import (
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/enr"
+	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
@@ -104,10 +105,12 @@ type PeerEvent struct {
 
 // Peer represents a connected remote node.
 type Peer struct {
-	rw      *conn
-	running map[string]*protoRW
-	log     log.Logger
-	created mclock.AbsTime
+	rw       *conn
+	running  map[string]*protoRW
+	log      log.Logger
+	created  mclock.AbsTime
+	clock    mclock.Clock
+	activity *peerpolicy.ConnectionActivity
 
 	wg       sync.WaitGroup
 	protoErr chan error
@@ -260,7 +263,9 @@ func newPeer(log log.Logger, conn *conn, protocols []Protocol) *Peer {
 		rw:       conn,
 		running:  protomap,
 		created:  mclock.Now(),
-		disc:     make(chan DiscReason),
+		clock:    mclock.System{},
+		activity: new(peerpolicy.ConnectionActivity),
+		disc:     make(chan DiscReason, 1),
 		protoErr: make(chan error, len(protomap)+1), // protocols + pingLoop
 		closed:   make(chan struct{}),
 		pingRecv: make(chan struct{}, 16),
@@ -275,6 +280,7 @@ func (p *Peer) Log() log.Logger {
 }
 
 func (p *Peer) run() (remoteRequested bool, err error) {
+	p.activity.Start(p.clock.Now())
 	var (
 		writeStart = make(chan struct{}, 1)
 		writeErr   = make(chan error, 1)
@@ -326,6 +332,7 @@ loop:
 		}
 	}
 
+	p.activity.Close()
 	p.log.Debug("Peer disconnected", "remoteRequested", remoteRequested, "reason", reason, "err", err)
 
 	close(p.closed)
@@ -433,6 +440,12 @@ func (p *Peer) handle(msg Msg) error {
 		proto, err := p.getProto(msg.Code)
 		if err != nil {
 			return fmt.Errorf("msg code out of range: %v", msg.Code)
+		}
+		now := p.clock.Now()
+		if proto.canContribute(msg.Code) {
+			msg.ReceivedSequence = p.activity.ObserveData(now)
+		} else {
+			msg.ReceivedSequence = p.activity.Observe(now, proto.Name != "eth")
 		}
 		if metrics.Enabled() {
 			m := fmt.Sprintf("%s/%s/%d/%#02x", ingressMeterName, proto.Name, proto.Version, msg.Code-proto.offset)
@@ -553,6 +566,10 @@ type protoRW struct {
 	w      MsgWriter
 }
 
+func (rw *protoRW) canContribute(code uint64) bool {
+	return rw.Name == "eth" && rw.CanContribute != nil && rw.CanContribute(code-rw.offset)
+}
+
 func (rw *protoRW) WriteMsg(msg Msg) (err error) {
 	if msg.Code >= rw.Length {
 		return newPeerError(errInvalidMsgCode, "not handled")
@@ -642,4 +659,23 @@ func (p *Peer) Info() *PeerInfo {
 		info.Protocols[proto.Name] = protoInfo
 	}
 	return info
+}
+
+func (p *Peer) ConnectionActivity() *peerpolicy.ConnectionActivity {
+	if _, live := p.activity.Last(); !live {
+		return nil
+	}
+	return p.activity
+}
+
+func (p *Peer) isLive() bool {
+	if _, live := p.activity.Last(); !live {
+		return false
+	}
+	select {
+	case <-p.closed:
+		return false
+	default:
+		return true
+	}
 }

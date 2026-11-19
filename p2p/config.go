@@ -31,6 +31,12 @@ import (
 
 //go:generate go run github.com/fjl/gencodec -type Config -field-override configMarshaling -formats toml -out config_toml.go
 
+const (
+	DefaultPeerIdleOccupancyThreshold = 75
+	DefaultPeerIdleReconnectCooldown  = 5 * time.Minute
+	MaxPeerIdleReconnectCooldown      = 24 * time.Hour
+)
+
 // Config holds Server options.
 type Config struct {
 	// This field must be set to a valid secp256k1 private key.
@@ -38,6 +44,12 @@ type Config struct {
 
 	// MaxPeers is the maximum number of peers that can be connected.
 	MaxPeers int
+
+	PeerIdleEviction           bool
+	PeerIdleGracePeriod        time.Duration
+	PeerIdleMaxRemovals        int
+	PeerIdleReconnectCooldown  time.Duration
+	PeerIdleOccupancyThreshold int
 
 	// MaxPendingPeers is the maximum number of peers that can be pending in the
 	// handshake phase, counted separately for inbound and outbound connections.
@@ -160,4 +172,62 @@ func (w *configNAT) UnmarshalText(input []byte) error {
 	}
 	w.Interface = n
 	return nil
+}
+
+func (srv *Server) GetMaxPeers() int {
+	srv.limitsMu.RLock()
+	defer srv.limitsMu.RUnlock()
+	return srv.MaxPeers
+}
+
+func (srv *Server) MaxInboundConns() int {
+	total, dialed := srv.peerLimits()
+	return total - dialed
+}
+
+func (srv *Server) MaxDialedConns() int {
+	_, dialed := srv.peerLimits()
+	return dialed
+}
+
+func (srv *Server) peerLimits() (total, dialed int) {
+	total = srv.GetMaxPeers()
+	if srv.NoDial || total == 0 {
+		return total, 0
+	}
+	ratio := srv.DialRatio
+	if ratio == 0 {
+		ratio = defaultDialRatio
+	}
+	return total, max(1, total/ratio)
+}
+
+func peerSlotsScarce(count, limit, percent int) bool {
+	if limit <= 0 {
+		return false
+	}
+	// Split before multiplying to avoid overflowing large peer limits.
+	threshold := limit/100*percent + (limit%100*percent+99)/100
+	return count >= threshold
+}
+
+func (srv *Server) peerPressure(count, inbound int) (bool, bool) {
+	percent := srv.PeerIdleOccupancyThreshold
+	if percent <= 0 {
+		percent = DefaultPeerIdleOccupancyThreshold
+	}
+	percent = min(percent, 100)
+	total, dialed := srv.peerLimits()
+	inboundFull := peerSlotsScarce(count, total, percent) || peerSlotsScarce(inbound, total-dialed, percent)
+	if srv.dialsched != nil {
+		dialed = min(dialed, srv.dialsched.maxDialPeers)
+	}
+	return inboundFull, peerSlotsScarce(count, total, percent) || peerSlotsScarce(count-inbound, dialed, percent)
+}
+
+func (c *Config) peerIdleCooldown() time.Duration {
+	if c.PeerIdleReconnectCooldown <= 0 {
+		return DefaultPeerIdleReconnectCooldown
+	}
+	return min(c.PeerIdleReconnectCooldown, MaxPeerIdleReconnectCooldown)
 }

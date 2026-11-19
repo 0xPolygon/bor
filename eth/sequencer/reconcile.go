@@ -52,6 +52,8 @@ func (p *Publisher) readTail(ctx context.Context) (tailInfo, reconcileOutcome) {
 		cancel()
 
 		if done {
+			info.anchored = out == recOK
+
 			return info, out
 		}
 	}
