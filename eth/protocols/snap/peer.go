@@ -119,12 +119,15 @@ func (p *Peer) RequestStorageRanges(id uint64, root common.Hash, accounts []comm
 		p.logger.Trace("Fetching ranges of small storage slots", "reqid", id, "root", root, "accounts", len(accounts), "first", accounts[0], "bytes", common.StorageSize(bytes))
 	}
 
-	p.tracker.Track(tracker.Request{
+	err := p.tracker.Track(tracker.Request{
 		ReqCode:  GetStorageRangesMsg,
 		RespCode: StorageRangesMsg,
 		ID:       id,
 		Size:     2 * bytes,
 	})
+	if err != nil {
+		return err
+	}
 	return p2p.Send(p.rw, GetStorageRangesMsg, &GetStorageRangesPacket{
 		ID:       id,
 		Root:     root,
@@ -160,7 +163,11 @@ func (p *Peer) RequestByteCodes(id uint64, hashes []common.Hash, bytes int) erro
 func (p *Peer) RequestTrieNodes(id uint64, root common.Hash, count int, paths []TrieNodePathSet, bytes int) error {
 	p.logger.Trace("Fetching set of trie nodes", "reqid", id, "root", root, "pathsets", len(paths), "bytes", common.StorageSize(bytes))
 
-	err := p.tracker.Track(tracker.Request{
+	encPaths, err := rlp.EncodeToRawList(paths)
+	if err != nil {
+		return err
+	}
+	err = p.tracker.Track(tracker.Request{
 		ReqCode:  GetTrieNodesMsg,
 		RespCode: TrieNodesMsg,
 		ID:       id,
@@ -169,7 +176,6 @@ func (p *Peer) RequestTrieNodes(id uint64, root common.Hash, count int, paths []
 	if err != nil {
 		return err
 	}
-	encPaths, _ := rlp.EncodeToRawList(paths)
 	return p2p.Send(p.rw, GetTrieNodesMsg, &GetTrieNodesPacket{
 		ID:    id,
 		Root:  root,
