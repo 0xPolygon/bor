@@ -127,8 +127,9 @@ func (msg *jsonrpcMessage) response(result interface{}) *jsonrpcMessage {
 	)
 	// Call MarshalJSON directly for types that implement it. This avoids the
 	// expensive validation/compaction pass that json.Marshal performs on
-	// encoder output.
-	if m, ok := result.(json.Marshaler); ok {
+	// encoder output. A nil pointer goes through json.Marshal, which encodes
+	// it as null instead of calling a value-receiver MarshalJSON on it.
+	if m, ok := result.(json.Marshaler); ok && !isNilPointer(result) {
 		enc, err = m.MarshalJSON()
 	} else {
 		enc, err = json.Marshal(result)
@@ -138,6 +139,11 @@ func (msg *jsonrpcMessage) response(result interface{}) *jsonrpcMessage {
 	}
 
 	return &jsonrpcMessage{Version: vsn, ID: msg.ID, Result: enc}
+}
+
+func isNilPointer(v interface{}) bool {
+	rv := reflect.ValueOf(v)
+	return rv.Kind() == reflect.Pointer && rv.IsNil()
 }
 
 func errorMessage(err error) *jsonrpcMessage {

@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -82,7 +83,19 @@ func (o *MarshalErrObj) MarshalText() ([]byte, error) {
 	return nil, errors.New("marshal error")
 }
 
+type valueMarshaler struct {
+	N int
+}
+
+func (v valueMarshaler) MarshalJSON() ([]byte, error) {
+	return []byte(`{"n":` + strconv.Itoa(v.N) + `}`), nil
+}
+
 func (s *testService) NoArgsRets() {}
+
+func (s *testService) NilMarshaler() *valueMarshaler {
+	return nil
+}
 
 func (s *testService) Null() any {
 	return nil
