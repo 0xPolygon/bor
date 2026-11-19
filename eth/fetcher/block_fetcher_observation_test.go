@@ -121,7 +121,8 @@ func TestBlockFetcherInvalidHeaderObserverOptional(t *testing.T) {
 
 func TestBlockFetcherUndecodableBodyObservation(t *testing.T) {
 	hashes, blocks := makeChain(1, 0, genesis)
-	if len(blocks[hashes[0]].Transactions()) == 0 {
+	header := blocks[hashes[0]].Header()
+	if header.TxHash == types.EmptyTxsHash {
 		t.Fatal("test block needs a body to fetch")
 	}
 	tester := newTester(false)
@@ -136,7 +137,9 @@ func TestBlockFetcherUndecodableBodyObservation(t *testing.T) {
 		}
 		bodies := eth.BlockBodiesResponse{body}
 		req := &eth.Request{Peer: "bad"}
-		go func() { sink <- &eth.Response{Req: req, Res: &bodies, Done: make(chan error, 1)} }()
+		// The roots match the requested header, so the body is decoded.
+		meta := eth.BlockBodyHashes{TransactionRoots: []common.Hash{header.TxHash}, UncleHashes: []common.Hash{header.UncleHash}, WithdrawalRoots: []common.Hash{{}}}
+		go func() { sink <- &eth.Response{Req: req, Res: &bodies, Meta: meta, Done: make(chan error, 1)} }()
 		return req, nil
 	}
 	tester.fetcher.Notify("bad", hashes[0], 1, time.Now().Add(-arriveTimeout), tester.makeHeaderFetcher("bad", blocks, -gatherSlack), undecodableBodies, tester.makeWitnessFetcher("bad", blocks, 0))
@@ -148,5 +151,21 @@ func TestBlockFetcherUndecodableBodyObservation(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("undecodable body was not observed")
+	}
+}
+
+func TestRequestedBodies(t *testing.T) {
+	requested := &types.Header{TxHash: common.Hash{1}, UncleHash: common.Hash{2}}
+	bodies := eth.BlockBodiesResponse{{}, {}, {}}
+	hashes := eth.BlockBodyHashes{
+		TransactionRoots: []common.Hash{{1}, {1}, {3}},
+		UncleHashes:      []common.Hash{{2}, {3}, {2}},
+	}
+	got := requestedBodies(bodies, hashes, []*types.Header{requested})
+	if len(got) != 1 {
+		t.Fatalf("kept %d bodies, want only the one matching both roots", len(got))
+	}
+	if got := requestedBodies(bodies, eth.BlockBodyHashes{}, []*types.Header{requested}); len(got) != 0 {
+		t.Fatalf("kept %d bodies without hashes", len(got))
 	}
 }

@@ -824,7 +824,11 @@ func (f *BlockFetcher) loop() {
 				}
 
 				announceCopy := *f.completing[hashes[0]] // Copy announce data for goroutine
-				go func(p string, hs []common.Hash, ann blockAnnounce) {
+				headers := make([]*types.Header, 0, len(hashes))
+				for _, hash := range hashes {
+					headers = append(headers, f.completing[hash].header)
+				}
+				go func(p string, hs []common.Hash, headers []*types.Header, ann blockAnnounce) {
 					if f.completingHook != nil {
 						f.completingHook(hs)
 					}
@@ -856,8 +860,12 @@ func (f *BlockFetcher) loop() {
 						if !ok || bodyResponse == nil {
 							return
 						} // Invalid response type
+						bodyHashes, ok := res.Meta.(eth.BlockBodyHashes)
+						if !ok {
+							return
+						}
 						// Ignoring withdrawals here, since the block fetcher is not used post-merge.
-						txs, uncles, err := unpackBodies(*bodyResponse)
+						txs, uncles, err := unpackBodies(requestedBodies(*bodyResponse, bodyHashes, headers))
 						if err != nil {
 							log.Debug("BlockFetcher: invalid body response, dropping peer", "peer", p, "err", err)
 							if f.invalidBody != nil {
@@ -875,7 +883,7 @@ func (f *BlockFetcher) loop() {
 					case <-f.quit:
 						return // Fetcher stopped
 					}
-				}(peer, hashes, announceCopy)
+				}(peer, hashes, headers, announceCopy)
 			}
 			// Schedule the next fetch if blocks are still pending
 			f.rescheduleComplete(completeTimer)
@@ -1480,6 +1488,24 @@ func (f *BlockFetcher) insertBlockWithRetry(op *blockOrHeaderInject) error {
 			return fmt.Errorf("%w: %w", errTerminated, err)
 		}
 	}
+}
+
+// requestedBodies keeps the bodies whose transaction root and uncle hash match
+// a requested header, so bodies that were not asked for are never decoded.
+func requestedBodies(bodies eth.BlockBodiesResponse, hashes eth.BlockBodyHashes, headers []*types.Header) eth.BlockBodiesResponse {
+	var matched eth.BlockBodiesResponse
+	for i := range bodies {
+		if i >= len(hashes.TransactionRoots) || i >= len(hashes.UncleHashes) {
+			break
+		}
+		for _, header := range headers {
+			if hashes.TransactionRoots[i] == header.TxHash && hashes.UncleHashes[i] == header.UncleHash {
+				matched = append(matched, bodies[i])
+				break
+			}
+		}
+	}
+	return matched
 }
 
 // unpackBodies decodes the transactions and uncles of a block bodies response.

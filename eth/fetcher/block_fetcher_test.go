@@ -256,11 +256,15 @@ func (f *fetcherTester) makeBodyFetcher(peer string, blocks map[common.Hash]*typ
 		// Gather the block bodies to return
 		transactions := make([][]*types.Transaction, 0, len(hashes))
 		uncles := make([][]*types.Header, 0, len(hashes))
+		var meta eth.BlockBodyHashes
 
 		for _, hash := range hashes {
 			if block, ok := closure[hash]; ok {
 				transactions = append(transactions, block.Transactions())
 				uncles = append(uncles, block.Uncles())
+				meta.TransactionRoots = append(meta.TransactionRoots, block.TxHash())
+				meta.UncleHashes = append(meta.UncleHashes, block.UncleHash())
+				meta.WithdrawalRoots = append(meta.WithdrawalRoots, common.Hash{})
 			}
 		}
 		// Return on a new thread
@@ -286,6 +290,7 @@ func (f *fetcherTester) makeBodyFetcher(peer string, blocks map[common.Hash]*typ
 		res := &eth.Response{
 			Req:  req,
 			Res:  &bodies,
+			Meta: meta,
 			Time: drift,
 			Done: make(chan error, 1), // Ignore the returned status
 		}
