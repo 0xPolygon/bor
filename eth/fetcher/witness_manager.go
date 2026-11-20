@@ -244,13 +244,13 @@ func (m *witnessManager) stopAndDrainTimer() {
 	}
 }
 
-// start begins the witness manager's internal loop and cache cleanup. Both
-// terminate after the parent quit channel closes and stop is called.
+// start begins the witness manager's internal loop and owned cache cleanup.
+// Both terminate when the parent quit channel closes.
 func (m *witnessManager) start() {
 	m.workerWg.Add(2)
 	go func() {
 		defer m.workerWg.Done()
-		m.witnessCache.Start()
+		m.runWitnessCache()
 	}()
 	go func() {
 		defer m.workerWg.Done()
@@ -258,10 +258,25 @@ func (m *witnessManager) start() {
 	}()
 }
 
-// stop cleanly shuts down the witness manager's timer and loop.
+// runWitnessCache expires entries without the start/stop race in ttlcache's
+// automatic cleanup goroutine. The parent quit channel is its sole stop signal.
+func (m *witnessManager) runWitnessCache() {
+	ticker := time.NewTicker(witnessCacheTTL)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-m.parentQuit:
+			return
+		case <-ticker.C:
+			m.witnessCache.DeleteExpired()
+		}
+	}
+}
+
+// stop cleanly shuts down the witness manager's timer. The parent quit channel
+// terminates its loop and cache cleanup, joined by BlockFetcher.Stop.
 func (m *witnessManager) stop() {
 	m.witnessTimer.Stop()
-	m.witnessCache.Stop()
 }
 
 // loop is the main event loop for the witness manager.

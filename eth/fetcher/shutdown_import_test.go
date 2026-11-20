@@ -276,6 +276,18 @@ func TestBlockFetcherStopDrainsRootChainReaders(t *testing.T) {
 	}
 }
 
+func TestBlockFetcherStopImmediatelyAfterStart(t *testing.T) {
+	for range 100 {
+		f := newShutdownTestFetcher(
+			func(types.Blocks, []*stateless.Witness) (int, error) { return 0, nil },
+			func(*types.Header) error { return nil },
+			func(string) {},
+		)
+		f.Start()
+		f.Stop()
+	}
+}
+
 func TestBlockImportBroadcastsBeforeAndAfterInsertion(t *testing.T) {
 	broadcasts := make(chan bool, 2)
 	f := newShutdownTestFetcher(
