@@ -14,6 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
+	ethproto "github.com/ethereum/go-ethereum/eth/protocols/eth"
 )
 
 func newShutdownTestFetcher(insert chainInsertFn, verify headerVerifierFn, drop peerDropFn) *BlockFetcher {
@@ -188,6 +189,88 @@ func TestBlockFetcherStopDrainsImportBroadcasts(t *testing.T) {
 			}
 			if returnedEarly {
 				t.Fatal("fetcher stop returned while an import-owned broadcast was running")
+			}
+		})
+	}
+}
+
+func TestBlockFetcherStopDrainsRootChainReaders(t *testing.T) {
+	for _, kind := range []string{"fetcher-loop", "witness-manager-loop"} {
+		t.Run(kind, func(t *testing.T) {
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			callbackDone := make(chan struct{})
+			var once sync.Once
+			var resourcesClosed atomic.Bool
+			var readAfterClose atomic.Bool
+			parent := types.NewBlockWithHeader(&types.Header{Number: big.NewInt(0)})
+			block := types.NewBlockWithHeader(&types.Header{Number: big.NewInt(1), ParentHash: parent.Hash()})
+			f := newShutdownTestFetcher(
+				func(types.Blocks, []*stateless.Witness) (int, error) { return 0, nil },
+				func(*types.Header) error { return nil },
+				func(string) {},
+			)
+			heldRead := func(common.Hash) *types.Block {
+				once.Do(func() {
+					close(entered)
+					<-release
+					readAfterClose.Store(resourcesClosed.Load())
+					close(callbackDone)
+				})
+				return parent
+			}
+			if kind == "fetcher-loop" {
+				f.getBlock = heldRead
+			} else {
+				f.wm.parentGetBlock = heldRead
+			}
+			var releaseOnce sync.Once
+			defer func() {
+				releaseOnce.Do(func() { close(release) })
+				f.Stop()
+			}()
+			f.Start()
+			var err error
+			if kind == "fetcher-loop" {
+				err = f.Enqueue("peer", block)
+			} else {
+				err = f.InjectBlockWithWitnessRequirement("peer", block,
+					func(common.Hash, chan *ethproto.Response) (*ethproto.Request, error) {
+						return nil, errors.New("unused witness fetch")
+					})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-entered:
+			case <-time.After(time.Second):
+				t.Fatal("real event loop did not enter chain reader")
+			}
+			stopped := make(chan struct{})
+			go func() { f.Stop(); close(stopped) }()
+			early := false
+			select {
+			case <-stopped:
+				early = true
+				resourcesClosed.Store(true)
+			case <-time.After(100 * time.Millisecond):
+			}
+			releaseOnce.Do(func() { close(release) })
+			select {
+			case <-callbackDone:
+			case <-time.After(time.Second):
+				t.Fatal("chain read did not finish")
+			}
+			if !early {
+				select {
+				case <-stopped:
+				case <-time.After(time.Second):
+					t.Fatal("Stop did not drain after read release")
+				}
+			}
+			if early || readAfterClose.Load() {
+				t.Fatalf("Stop returned while %s owned a chain read; callback crossed resource-close boundary = %t", kind, readAfterClose.Load())
 			}
 		})
 	}

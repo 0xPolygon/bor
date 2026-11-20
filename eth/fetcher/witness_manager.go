@@ -177,8 +177,9 @@ type witnessManager struct {
 	// freshly-reset timer would never be observed.
 	pokeCh chan struct{}
 
-	// Internal timer
+	// Internal timer and owned goroutines
 	witnessTimer *time.Timer // Timer to trigger witness fetches for pending blocks
+	workerWg     sync.WaitGroup
 
 	// mutex protects access to mutable maps and timer manipulation so that
 	// goroutines launched by the manager (e.g. fetchWitness) cannot race with
@@ -243,11 +244,18 @@ func (m *witnessManager) stopAndDrainTimer() {
 	}
 }
 
-// start begins the witness manager's internal loop in a new goroutine.
+// start begins the witness manager's internal loop and cache cleanup. Both
+// terminate after the parent quit channel closes and stop is called.
 func (m *witnessManager) start() {
-	// Start the TTL cache's automatic expiration
-	go m.witnessCache.Start()
-	go m.loop()
+	m.workerWg.Add(2)
+	go func() {
+		defer m.workerWg.Done()
+		m.witnessCache.Start()
+	}()
+	go func() {
+		defer m.workerWg.Done()
+		m.loop()
+	}()
 }
 
 // stop cleanly shuts down the witness manager's timer and loop.

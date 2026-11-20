@@ -238,6 +238,7 @@ type BlockFetcher struct {
 	mu sync.RWMutex
 
 	stopOnce sync.Once
+	loopWg   sync.WaitGroup
 	importWg sync.WaitGroup
 	stopping bool
 
@@ -334,18 +335,25 @@ func NewBlockFetcher(light bool, getHeader HeaderRetrievalFn, getBlock blockRetr
 // Start boots up the announcement based synchroniser, accepting and processing
 // hash notifications and block fetches until termination requested.
 func (f *BlockFetcher) Start() {
-	go f.loop()
+	f.loopWg.Add(1)
+	go func() {
+		defer f.loopWg.Done()
+		f.loop()
+	}()
 	f.wm.start() // Start the witness manager loop
 }
 
 // Stop terminates the announcement based synchroniser, canceling all pending
-// operations and waiting for in-flight imports before chain resources close.
+// operations and waiting for its loops and in-flight imports before chain resources close.
 func (f *BlockFetcher) Stop() {
 	f.stopOnce.Do(func() {
 		f.mu.Lock()
 		f.stopping = true
 		f.mu.Unlock()
 		close(f.quit)
+		f.loopWg.Wait()
+		f.wm.stop()
+		f.wm.workerWg.Wait()
 		f.importWg.Wait()
 	})
 }
