@@ -114,7 +114,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 			return nil, interruptCtx.Err()
 		default:
 		}
-		if tx.Type() == types.StateSyncTxType {
+		if tx.IsBorSystemTx() {
 			continue
 		}
 
@@ -159,12 +159,13 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	// tracing. Because state-sync events are applied to state as independent EVM calls, the
 	// wrapped hooks inserts a synthetic root frame to wrap all those calls.
 	var (
-		hasStateSyncTx   = len(txs) > 0 && txs[len(txs)-1].Type() == types.StateSyncTxType
+		stateSyncTxIndex = types.StateSyncTxIndex(txs)
+		hasStateSyncTx   = stateSyncTxIndex >= 0
 		stateSyncReceipt *types.Receipt
 		stateSyncEndErr  error
 	)
 	if hooks := cfg.Tracer; hooks != nil && hasStateSyncTx && hooks.OnTxStart != nil && hooks.OnTxEnd != nil {
-		hooks.OnTxStart(evm.GetVMContext(), txs[len(txs)-1], params.BorSystemAddress)
+		hooks.OnTxStart(evm.GetVMContext(), txs[stateSyncTxIndex], params.BorSystemAddress)
 		defer func() {
 			hooks.OnTxEnd(stateSyncReceipt, stateSyncEndErr)
 		}()
@@ -187,11 +188,13 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 			stateSyncEndErr = fmt.Errorf("%w: receipt count mismatch, txs=%d receipts=%d", ErrStateSyncMismatch, len(block.Transactions()), len(receipts))
 			return nil, stateSyncEndErr
 		}
-		appliedNewStateSyncReceipt := receiptsCountBeforeFinalize+1 == len(receipts)
+		// Finalize appends one receipt per system transaction, in body order.
+		for _, receipt := range receipts[receiptsCountBeforeFinalize:] {
+			allLogs = append(allLogs, receipt.Logs...)
+		}
 
-		if appliedNewStateSyncReceipt {
-			allLogs = append(allLogs, receipts[len(receipts)-1].Logs...)
-			stateSyncReceipt = receipts[len(receipts)-1]
+		if hasStateSyncTx && receiptsCountBeforeFinalize < len(receipts) {
+			stateSyncReceipt = receipts[stateSyncTxIndex]
 		}
 	}
 

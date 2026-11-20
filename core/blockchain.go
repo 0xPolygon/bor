@@ -1457,7 +1457,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	// (Heimdall state sync ~164ms) distorts the execution throughput metric.
 	hasStateSync := false
 	if txs := block.Transactions(); len(txs) > 0 {
-		hasStateSync = txs[len(txs)-1].Type() == types.StateSyncTxType
+		hasStateSync = txs[len(txs)-1].IsBorSystemTx()
 	}
 	if elapsed := time.Since(execStart); elapsed > 0 && result.usedGas > 0 && !hasStateSync && result.err == nil {
 		mgasps := int64(float64(result.usedGas) * 1e6 / float64(elapsed)) // µgasps (mgasps * 1000)

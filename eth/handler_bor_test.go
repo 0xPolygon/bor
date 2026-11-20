@@ -15,6 +15,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/bor/clerk"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/checkpoint"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
+	"github.com/ethereum/go-ethereum/consensus/bor/staking"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -303,4 +304,12 @@ func TestHandleMilestoneSetsFinalized(t *testing.T) {
 	require.NotNil(t, chain.CurrentFinalBlock())
 	require.Equal(t, blocks[5].Hash(), chain.CurrentFinalBlock().Hash())
 	require.Nil(t, chain.CurrentSafeBlock())
+}
+
+func (*mockHeimdall) ParticipationReports(context.Context, uint64, int64) ([]*staking.ParticipationReport, error) {
+	return nil, nil
+}
+
+func (*mockHeimdall) ValidatorStatusRecords(context.Context, uint64, int64) ([]*staking.ValidatorStatusRecord, error) {
+	return nil, nil
 }

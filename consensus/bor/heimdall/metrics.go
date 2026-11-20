@@ -29,6 +29,9 @@ const (
 	MilestoneLastNoAckRequest requestType = "milestone-last-no-ack"
 	MilestoneIDRequest        requestType = "milestone-id"
 	StatusRequest             requestType = "status"
+
+	ParticipationReportsRequest requestType = "participation-reports"
+	ValidatorStatusRequest      requestType = "validator-status"
 )
 
 func WithRequestType(ctx context.Context, reqType requestType) context.Context {
@@ -111,6 +114,20 @@ var (
 				false: metrics.NewRegisteredMeter("client/requests/milestoneid/invalid", nil),
 			},
 			timer: metrics.NewRegisteredTimer("client/requests/milestoneid/duration", nil),
+		},
+		ParticipationReportsRequest: {
+			request: map[bool]*metrics.Meter{
+				true:  metrics.NewRegisteredMeter("client/requests/participationreports/valid", nil),
+				false: metrics.NewRegisteredMeter("client/requests/participationreports/invalid", nil),
+			},
+			timer: metrics.NewRegisteredTimer("client/requests/participationreports/duration", nil),
+		},
+		ValidatorStatusRequest: {
+			request: map[bool]*metrics.Meter{
+				true:  metrics.NewRegisteredMeter("client/requests/validatorstatus/valid", nil),
+				false: metrics.NewRegisteredMeter("client/requests/validatorstatus/invalid", nil),
+			},
+			timer: metrics.NewRegisteredTimer("client/requests/validatorstatus/duration", nil),
 		},
 	}
 )

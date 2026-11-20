@@ -60,11 +60,11 @@ const speculativeLowFillRemainingGasDivisor = 4
 // speculativeWorkReq is sent to mainLoop's speculative work channel
 // when block N's execution is done and we want to speculatively start N+1.
 type speculativeWorkReq struct {
-	parentHeader  *types.Header          // block N's header (complete except Root)
-	flatDiff      *state.FlatDiff        // block N's state mutations
-	parentRoot    common.Hash            // root_{N-1} (last committed trie root)
-	blockNEnv     *environment           // block N's execution environment (for assembly later)
-	stateSyncData []*types.StateSyncData // from FinalizeForPipeline
+	parentHeader  *types.Header   // block N's header (complete except Root)
+	flatDiff      *state.FlatDiff // block N's state mutations
+	parentRoot    common.Hash     // root_{N-1} (last committed trie root)
+	blockNEnv     *environment    // block N's execution environment (for assembly later)
+	stateSyncData *bor.SystemWork // from FinalizeForPipeline
 }
 
 // placeholderParentHash generates a deterministic placeholder hash for use
@@ -158,7 +158,7 @@ func (w *worker) commitPipelined(env *environment, start time.Time) error {
 // Returns ok=false only when the parent header cannot be located (treated as
 // a soft failure — the caller skips pipelining rather than returning an error,
 // matching the pre-refactor behavior).
-func (w *worker) buildSpeculativeReq(env *environment, stateSyncData []*types.StateSyncData) (*speculativeWorkReq, bool) {
+func (w *worker) buildSpeculativeReq(env *environment, stateSyncData *bor.SystemWork) (*speculativeWorkReq, bool) {
 	flatDiffStart := time.Now()
 	flatDiff := env.state.CommitSnapshot(w.chainConfig.IsEIP158(env.header.Number))
 	pipelineFlatDiffExtractTimer.Update(time.Since(flatDiffStart))
@@ -710,7 +710,7 @@ func (s *specSession) drainPrevDBWrite() {
 // finalizeCurrent runs FinalizeForPipeline on the current speculative block,
 // extracts its FlatDiff, and returns the final header + stateSync data.
 // Returns ok=false if FinalizeForPipeline errors (caller should break).
-func (s *specSession) finalizeCurrent() (*types.Header, *state.FlatDiff, []*types.StateSyncData, bool) {
+func (s *specSession) finalizeCurrent() (*types.Header, *state.FlatDiff, *bor.SystemWork, bool) {
 	finalSpecHeader := types.CopyHeader(s.specHeader)
 	finalSpecHeader.ParentHash = s.realBlockNHash
 	if s.w.chainConfig.IsPrague(finalSpecHeader.Number) {
@@ -733,7 +733,7 @@ func (s *specSession) finalizeCurrent() (*types.Header, *state.FlatDiff, []*type
 // Prepare (may seal current via taskCh on failure), SRC spawn for current
 // block, state open, EVM+srcDone for next, fill goroutine. cont=false means
 // the main loop should break (we already handed off the current block).
-func (s *specSession) prepareNextIteration(finalSpecHeader *types.Header, flatDiff *state.FlatDiff, stateSyncData []*types.StateSyncData) (*specNextIteration, bool) {
+func (s *specSession) prepareNextIteration(finalSpecHeader *types.Header, flatDiff *state.FlatDiff, stateSyncData *bor.SystemWork) (*specNextIteration, bool) {
 	specHeaderNext, specContextNext, coinbaseNext, ok := s.buildAndPrepareNextHeader(finalSpecHeader, flatDiff, stateSyncData)
 	if !ok {
 		return nil, false
@@ -763,7 +763,7 @@ func (s *specSession) prepareNextIteration(finalSpecHeader *types.Header, flatDi
 // runs Prepare via the speculative chain reader, and on Prepare failure
 // hands off the CURRENT speculative block via taskCh (spawnSRC=true) before
 // returning ok=false so the caller can break out of the loop.
-func (s *specSession) buildAndPrepareNextHeader(finalSpecHeader *types.Header, flatDiff *state.FlatDiff, stateSyncData []*types.StateSyncData) (*types.Header, *speculativeChainContext, common.Address, bool) {
+func (s *specSession) buildAndPrepareNextHeader(finalSpecHeader *types.Header, flatDiff *state.FlatDiff, stateSyncData *bor.SystemWork) (*types.Header, *speculativeChainContext, common.Address, bool) {
 	nextNextBlockNumber := s.nextBlockNumber + 1
 	specReaderNext := newSpeculativeChainReader(s.w.chain, finalSpecHeader, placeholderParentHash(s.nextBlockNumber))
 	specContextNext := newSpeculativeChainContext(specReaderNext, s.w.engine)
@@ -809,7 +809,7 @@ func (s *specSession) spawnSRCForCurrent(finalSpecHeader *types.Header, flatDiff
 // block (N+2). On failure (state open error or grandparent not found), hands
 // off the CURRENT speculative block via taskCh with spawnSRC=false (SRC for
 // the current block is already in flight from spawnSRCForCurrent).
-func (s *specSession) openNextSpecEnv(finalSpecHeader *types.Header, flatDiff *state.FlatDiff, stateSyncData []*types.StateSyncData, specHeaderNext *types.Header, specContextNext *speculativeChainContext, coinbaseNext common.Address) (*state.StateDB, *environment, *atomic.Bool, bool) {
+func (s *specSession) openNextSpecEnv(finalSpecHeader *types.Header, flatDiff *state.FlatDiff, stateSyncData *bor.SystemWork, specHeaderNext *types.Header, specContextNext *speculativeChainContext, coinbaseNext common.Address) (*state.StateDB, *environment, *atomic.Bool, bool) {
 	specStateNext, err := s.w.chain.StateAtWithFlatDiff(s.rootN, flatDiff)
 	if err != nil {
 		log.Error("Pipelined SRC: failed to open speculative state for next block", "block", s.nextBlockNumber+1, "err", err)
@@ -921,7 +921,7 @@ func (s *specSession) startNextFillGoroutine(headerNext *types.Header, envNext *
 // back the sealed block. Returns exitEarly=true if w.exitCh fired during the
 // timestamp wait, or if the chain refused the block while its parent is still
 // the head (caller returns false, abortRecovery).
-func (s *specSession) sealCurrentAndAdvance(finalSpecHeader *types.Header, stateSyncData []*types.StateSyncData, next *specNextIteration) (*types.Block, bool, bool) {
+func (s *specSession) sealCurrentAndAdvance(finalSpecHeader *types.Header, stateSyncData *bor.SystemWork, next *specNextIteration) (*types.Block, bool, bool) {
 	srcWaitStart := time.Now()
 	rootSpec, witnessSpec, err := s.w.chain.WaitForSRC()
 	srcWaitElapsed := time.Since(srcWaitStart)
@@ -1052,7 +1052,7 @@ func (w *worker) sealBlockViaTaskCh(
 	statedb *state.StateDB,
 	txs []*types.Transaction,
 	receipts []*types.Receipt,
-	stateSyncData []*types.StateSyncData,
+	stateSyncData *bor.SystemWork,
 	rootN common.Hash,
 	flatDiff *state.FlatDiff,
 	spawnSRC bool, // false if SRC goroutine is already running

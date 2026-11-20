@@ -1488,7 +1488,7 @@ func newRPCTransaction(tx *types.Transaction, blockHash common.Hash, blockNumber
 		}
 		result.AuthorizationList = tx.SetCodeAuthorizations()
 
-	case types.StateSyncTxType:
+	case types.StateSyncTxType, types.StakingTxType:
 		yparity := hexutil.Uint64(v.Sign())
 		result.YParity = &yparity
 		result.GasFeeCap = (*hexutil.Big)(tx.GasFeeCap())
@@ -2940,8 +2940,8 @@ func (api *DebugAPI) AccountAt(ctx context.Context, blockHash common.Hash, txInd
 		}
 
 		tx := block.Transactions()[idx]
-		// Skip state-sync transactions
-		if tx.Type() == types.StateSyncTxType {
+		// Skip state-sync and staking transactions
+		if tx.IsBorSystemTx() {
 			continue
 		}
 		msg, err := core.TransactionToMessage(tx, signer, block.BaseFee())

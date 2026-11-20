@@ -174,6 +174,8 @@ func (tx *Transaction) MarshalJSON() ([]byte, error) {
 	case *StateSyncTx:
 		// Nothing to marshal for state-sync transactions as all fields are empty.
 		// This is just a placeholder.
+	case *StakingTx:
+		// As for state-sync transactions, the common fields are all empty.
 	}
 	return json.Marshal(&enc)
 }
@@ -515,6 +517,10 @@ func (tx *Transaction) UnmarshalJSON(input []byte) error {
 		var itx StateSyncTx
 		inner = &itx
 		// Nothing to decode for state-sync transaction as all fields are empty.
+
+	case StakingTxType:
+		var itx StakingTx
+		inner = &itx
 
 	default:
 		return ErrTxTypeNotSupported

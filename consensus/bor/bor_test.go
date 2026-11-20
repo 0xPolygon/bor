@@ -24,6 +24,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/bor/clerk"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/checkpoint"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
+	"github.com/ethereum/go-ethereum/consensus/bor/staking"
 	"github.com/ethereum/go-ethereum/consensus/bor/statefull"
 	"github.com/ethereum/go-ethereum/consensus/bor/valset"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
@@ -5369,7 +5370,7 @@ func TestPipelineFinalizeAndAssembleInputPaths(t *testing.T) {
 		Data:     []byte{0x1},
 	}}
 	body = &types.Body{}
-	block, receipts, err = b.AssembleBlock(chain, types.CopyHeader(header), statedb, body, nil, root, stateSyncData)
+	block, receipts, err = b.AssembleBlock(chain, types.CopyHeader(header), statedb, body, nil, root, newSystemWork(stateSyncData, nil))
 	require.NoError(t, err)
 	require.Len(t, block.Transactions(), 1)
 	require.Equal(t, uint8(types.StateSyncTxType), block.Transactions()[0].Type())
@@ -6139,4 +6140,20 @@ func TestFinalizeAndAssembleForSimulationSkipsSprintCommits(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, block)
 	require.Equal(t, uint64(16), block.NumberU64())
+}
+
+func (*failingHeimdallClient) ParticipationReports(context.Context, uint64, int64) ([]*staking.ParticipationReport, error) {
+	return nil, nil
+}
+
+func (*failingHeimdallClient) ValidatorStatusRecords(context.Context, uint64, int64) ([]*staking.ValidatorStatusRecord, error) {
+	return nil, nil
+}
+
+func (*mockHeimdallClient) ParticipationReports(context.Context, uint64, int64) ([]*staking.ParticipationReport, error) {
+	return nil, nil
+}
+
+func (*mockHeimdallClient) ValidatorStatusRecords(context.Context, uint64, int64) ([]*staking.ValidatorStatusRecord, error) {
+	return nil, nil
 }

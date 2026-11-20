@@ -20,6 +20,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/bor/clerk"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/checkpoint"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
+	"github.com/ethereum/go-ethereum/consensus/bor/staking"
 )
 
 // mockHeimdallClient is a configurable mock implementing the Endpoint interface.
@@ -1230,4 +1231,12 @@ func TestRegistry_InformedCascade_RespectsCooldown(t *testing.T) {
 
 	// Should prefer tertiary (cooled) over primary (uncooled)
 	assert.Equal(t, 2, fc.registry.Active(), "should prefer cooled tertiary over uncooled primary")
+}
+
+func (*mockHeimdallClient) ParticipationReports(context.Context, uint64, int64) ([]*staking.ParticipationReport, error) {
+	return nil, nil
+}
+
+func (*mockHeimdallClient) ValidatorStatusRecords(context.Context, uint64, int64) ([]*staking.ValidatorStatusRecord, error) {
+	return nil, nil
 }

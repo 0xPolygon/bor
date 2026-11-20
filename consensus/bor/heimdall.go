@@ -6,6 +6,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/bor/clerk"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/checkpoint"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
+	"github.com/ethereum/go-ethereum/consensus/bor/staking"
 
 	"github.com/0xPolygon/heimdall-v2/x/bor/types"
 	ctypes "github.com/cometbft/cometbft/rpc/core/types"
@@ -21,6 +22,8 @@ type IHeimdallClient interface {
 	FetchMilestone(ctx context.Context) (*milestone.Milestone, error)
 	FetchMilestoneCount(ctx context.Context) (int64, error)
 	FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error)
+	ParticipationReports(ctx context.Context, fromID uint64, to int64) ([]*staking.ParticipationReport, error)
+	ValidatorStatusRecords(ctx context.Context, fromID uint64, to int64) ([]*staking.ValidatorStatusRecord, error)
 	Close()
 }
 

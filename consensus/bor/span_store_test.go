@@ -16,6 +16,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/bor/clerk"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/checkpoint"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
+	"github.com/ethereum/go-ethereum/consensus/bor/staking"
 	"github.com/ethereum/go-ethereum/consensus/bor/valset"
 	"github.com/ethereum/go-ethereum/rpc"
 
@@ -1320,4 +1321,44 @@ func TestSpanStore_PurgeCache(t *testing.T) {
 	// Verify cache is being populated again
 	keys = spanStore.store.Keys()
 	require.Len(t, keys, 1, "cache should have 1 span after re-fetch")
+}
+
+func (*MockHeimdallClient) ParticipationReports(context.Context, uint64, int64) ([]*staking.ParticipationReport, error) {
+	return nil, nil
+}
+
+func (*MockHeimdallClient) ValidatorStatusRecords(context.Context, uint64, int64) ([]*staking.ValidatorStatusRecord, error) {
+	return nil, nil
+}
+
+func (*MockOverlappingHeimdallClient) ParticipationReports(context.Context, uint64, int64) ([]*staking.ParticipationReport, error) {
+	return nil, nil
+}
+
+func (*MockOverlappingHeimdallClient) ValidatorStatusRecords(context.Context, uint64, int64) ([]*staking.ValidatorStatusRecord, error) {
+	return nil, nil
+}
+
+func (*dynamicHeimdallClient) ParticipationReports(context.Context, uint64, int64) ([]*staking.ParticipationReport, error) {
+	return nil, nil
+}
+
+func (*dynamicHeimdallClient) ValidatorStatusRecords(context.Context, uint64, int64) ([]*staking.ValidatorStatusRecord, error) {
+	return nil, nil
+}
+
+func (*MockSyncStatusClient) ParticipationReports(context.Context, uint64, int64) ([]*staking.ParticipationReport, error) {
+	return nil, nil
+}
+
+func (*MockSyncStatusClient) ValidatorStatusRecords(context.Context, uint64, int64) ([]*staking.ValidatorStatusRecord, error) {
+	return nil, nil
+}
+
+func (*TimeoutHeimdallClient) ParticipationReports(context.Context, uint64, int64) ([]*staking.ParticipationReport, error) {
+	return nil, nil
+}
+
+func (*TimeoutHeimdallClient) ValidatorStatusRecords(context.Context, uint64, int64) ([]*staking.ValidatorStatusRecord, error) {
+	return nil, nil
 }

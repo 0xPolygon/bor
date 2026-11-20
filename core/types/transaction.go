@@ -51,6 +51,7 @@ const (
 	DynamicFeeTxType = 0x02
 	BlobTxType       = 0x03
 	SetCodeTxType    = 0x04
+	StakingTxType    = 0x7e
 	StateSyncTxType  = 0x7f
 )
 
@@ -230,6 +231,8 @@ func (tx *Transaction) decodeTyped(b []byte) (TxData, error) {
 		inner = new(SetCodeTx)
 	case StateSyncTxType:
 		inner = new(StateSyncTx)
+	case StakingTxType:
+		inner = new(StakingTx)
 	default:
 		return nil, ErrTxTypeNotSupported
 	}
@@ -375,7 +378,7 @@ func (tx *Transaction) GasTipCapIntCmp(other *big.Int) int {
 // returns ErrGasFeeCapTooLow, and value is undefined.
 func (tx *Transaction) EffectiveGasTip(baseFee *big.Int) (*big.Int, error) {
 	dst := new(uint256.Int)
-	if tx.Type() == StateSyncTxType {
+	if tx.IsBorSystemTx() {
 		dst = uint256.NewInt(0)
 		return dst.ToBig(), nil
 	}
@@ -634,6 +637,36 @@ func (tx *Transaction) WithSignature(signer Signer, sig []byte) (*Transaction, e
 	cpy := tx.inner.copy()
 	cpy.setSignatureValues(signer.ChainID(), v, r, s)
 	return &Transaction{inner: cpy, time: tx.time}, nil
+}
+
+// IsBorSystemTx reports whether the transaction is one of Bor's system
+// transactions: unsigned, executed by the consensus engine when it finalizes
+// the block, and placed after every other transaction.
+func (tx *Transaction) IsBorSystemTx() bool {
+	return tx.Type() == StateSyncTxType || tx.Type() == StakingTxType
+}
+
+// StateSyncTxIndex returns the position of the state-sync transaction in a
+// block's transactions, or -1 if the block has none. It is the last
+// transaction, or the one before a staking transaction.
+func StateSyncTxIndex(txs []*Transaction) int {
+	i := len(txs) - 1
+	if i >= 0 && txs[i].Type() == StakingTxType {
+		i--
+	}
+
+	if i >= 0 && txs[i].Type() == StateSyncTxType {
+		return i
+	}
+
+	return -1
+}
+
+// GetStakingTx returns the contents of a staking transaction, or nil for any
+// other type.
+func (tx *Transaction) GetStakingTx() *StakingTx {
+	stakingTx, _ := tx.inner.(*StakingTx)
+	return stakingTx
 }
 
 // GetStateSyncData returns the underlying bridge event data used for state-sync

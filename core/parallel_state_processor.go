@@ -355,7 +355,7 @@ func prewarmReaderCache(statedb *state.StateDB, block *types.Block, signer types
 	reader := statedb.Reader()
 	seen := make(map[common.Address]struct{}, len(block.Transactions())*2)
 	for _, tx := range block.Transactions() {
-		if tx.Type() == types.StateSyncTxType {
+		if tx.IsBorSystemTx() {
 			continue
 		}
 		warmTxAccounts(reader, signer, tx, seen)
@@ -439,7 +439,7 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 	// Iterate over and process the individual transactions
 	txs := block.Transactions()
 	for i, tx := range txs {
-		if tx.Type() == types.StateSyncTxType {
+		if tx.IsBorSystemTx() {
 			continue
 		}
 		msg, err := TransactionToMessage(tx, signer, header.BaseFee)
@@ -525,10 +525,9 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 		if len(block.Transactions()) != len(receipts) {
 			return nil, fmt.Errorf("%w: receipt count mismatch, txs=%d receipts=%d", ErrStateSyncMismatch, len(block.Transactions()), len(receipts))
 		}
-		appliedNewStateSyncReceipt := receiptsCountBeforeFinalize+1 == len(receipts)
-
-		if appliedNewStateSyncReceipt {
-			allLogs = append(allLogs, receipts[len(receipts)-1].Logs...)
+		// Finalize appends one receipt per system transaction, in body order.
+		for _, receipt := range receipts[receiptsCountBeforeFinalize:] {
+			allLogs = append(allLogs, receipt.Logs...)
 		}
 	}
 
@@ -1259,8 +1258,8 @@ func (p *V2StateProcessor) finalizeV2Block(block *types.Block, statedb *state.St
 		if len(block.Transactions()) != len(receipts) {
 			return nil, fmt.Errorf("%w: receipt count mismatch, txs=%d receipts=%d", ErrStateSyncMismatch, len(block.Transactions()), len(receipts))
 		}
-		if receiptsCountBeforeFinalize+1 == len(receipts) {
-			allLogs = append(allLogs, receipts[len(receipts)-1].Logs...)
+		for _, receipt := range receipts[receiptsCountBeforeFinalize:] {
+			allLogs = append(allLogs, receipt.Logs...)
 		}
 	}
 
@@ -1319,7 +1318,7 @@ func buildV2Tasks(block *types.Block, config *params.ChainConfig, header *types.
 			return nil, interruptCtx.Err()
 		default:
 		}
-		if tx.Type() == types.StateSyncTxType {
+		if tx.IsBorSystemTx() {
 			continue
 		}
 		msg, err := TransactionToMessage(tx, signer, header.BaseFee)

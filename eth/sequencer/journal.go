@@ -430,10 +430,11 @@ func windowLeadsHashes(window, txs []common.Hash) bool {
 // PublishTx, and the consumer can't re-execute it (maxFeePerGas 0 < baseFee),
 // so streaming it voids the block.
 func streamTxs(txs types.Transactions) types.Transactions {
-	if n := len(txs); n > 0 && txs[n-1].Type() == types.StateSyncTxType {
-		return txs[:n-1]
+	n := len(txs)
+	for n > 0 && txs[n-1].IsBorSystemTx() {
+		n--
 	}
-	return txs
+	return txs[:n]
 }
 
 // txHashes projects transactions onto their hashes.

@@ -1425,3 +1425,65 @@ func TestGetDynamicTargetGasPercentage_InvalidMinMax(t *testing.T) {
 		}
 	})
 }
+
+func TestIsNativeStaking(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		fork   *big.Int
+		number int64
+		want   bool
+	}{
+		{"unset fork never active", nil, 0, false},
+		{"unset fork never active at height", nil, 1_000_000, false},
+		{"genesis activation at 0", big.NewInt(0), 0, true},
+		{"scheduled fork before activation", big.NewInt(100), 99, false},
+		{"scheduled fork at activation", big.NewInt(100), 100, true},
+		{"scheduled fork after activation", big.NewInt(100), 101, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c := &BorConfig{NativeStakingBlock: tt.fork}
+			assert.Equal(t, tt.want, c.IsNativeStaking(big.NewInt(tt.number)))
+		})
+	}
+}
+
+func TestNativeStakingUnscheduledOnPublicNetworks(t *testing.T) {
+	t.Parallel()
+
+	assert.Assert(t, BorMainnetChainConfig.Bor.NativeStakingBlock == nil)
+	assert.Assert(t, AmoyChainConfig.Bor.NativeStakingBlock == nil)
+}
+
+func TestCalculateCoinbase_NativeStaking(t *testing.T) {
+	t.Parallel()
+
+	const (
+		feeSafe     = "0x7Ee41D8A25641000661B1EF5E6AE8A00400466B0"
+		distributor = "0x42C7e1476115f1A4Bb65a4ccf8e27f65299c1486"
+	)
+
+	tests := []struct {
+		name   string
+		config *BorConfig
+		number uint64
+		want   string
+	}{
+		{"fork unset", &BorConfig{Coinbase: map[string]string{"0": feeSafe}, DistributorContract: distributor}, 100, feeSafe},
+		{"before the fork", &BorConfig{Coinbase: map[string]string{"0": feeSafe}, DistributorContract: distributor, NativeStakingBlock: big.NewInt(100)}, 99, feeSafe},
+		{"at the fork", &BorConfig{Coinbase: map[string]string{"0": feeSafe}, DistributorContract: distributor, NativeStakingBlock: big.NewInt(100)}, 100, distributor},
+		{"after the fork", &BorConfig{Coinbase: map[string]string{"0": feeSafe}, DistributorContract: distributor, NativeStakingBlock: big.NewInt(100)}, 101, distributor},
+		{"fork set without a distributor", &BorConfig{Coinbase: map[string]string{"0": feeSafe}, NativeStakingBlock: big.NewInt(100)}, 100, feeSafe},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, tt.config.CalculateCoinbase(tt.number))
+		})
+	}
+}

@@ -202,4 +202,9 @@ var (
 	// producer and the local node's view of Heimdall state — the block was produced
 	// with different state-sync data than what this node computed.
 	ErrStateSyncMismatch = errors.New("state-sync mismatch")
+
+	// ErrStakingTxMismatch is returned when the staking transaction in a block
+	// body differs from the one this node built from its own Heimdall, or is
+	// missing. Like ErrStateSyncMismatch it is a disagreement with the block.
+	ErrStakingTxMismatch = errors.New("staking transaction mismatch")
 )

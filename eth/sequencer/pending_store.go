@@ -49,7 +49,7 @@ func (c *Consumer) ClaimPreconfPrefix(block *types.Block) (*core.PreconfExecutio
 		return nil, false
 	}
 	for _, tx := range block.Transactions() {
-		if tx.Type() == types.StateSyncTxType {
+		if tx.IsBorSystemTx() {
 			return nil, false
 		}
 	}
@@ -483,7 +483,7 @@ func prefixEntryMatches(entry *pendingEntry, block *types.Block) bool {
 		return false
 	}
 	for _, tx := range txs {
-		if tx.Type() == types.StateSyncTxType {
+		if tx.IsBorSystemTx() {
 			return false
 		}
 	}

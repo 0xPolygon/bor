@@ -416,7 +416,7 @@ func TestSpecSessionMoreFailureBranches(t *testing.T) {
 }
 
 func TestSealCurrentAndAdvanceExitAndSealFailure(t *testing.T) {
-	newPreparedSession := func(t *testing.T) (*worker, *specSession, *types.Header, []*types.StateSyncData, *specNextIteration) {
+	newPreparedSession := func(t *testing.T) (*worker, *specSession, *types.Header, *bor.SystemWork, *specNextIteration) {
 		t.Helper()
 		w, _, session := newPipelineSessionFixture(t, nil)
 		<-session.initialFillDone

@@ -31,6 +31,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/bor/api"
 	"github.com/ethereum/go-ethereum/consensus/bor/clerk"
+	"github.com/ethereum/go-ethereum/consensus/bor/contract"
 	borSpan "github.com/ethereum/go-ethereum/consensus/bor/heimdall/span"
 	"github.com/ethereum/go-ethereum/consensus/bor/statefull"
 	"github.com/ethereum/go-ethereum/consensus/bor/valset"
@@ -283,6 +284,7 @@ type Bor struct {
 	ethAPI                 api.Caller
 	spanner                Spanner
 	GenesisContractsClient GenesisContract
+	StakingContractsClient StakingContract
 	HeimdallClient         IHeimdallClient
 	HeimdallWSClient       IHeimdallWSClient
 
@@ -390,6 +392,14 @@ func New(
 	})
 
 	c.parentActualTimeCache, _ = lru.New(10)
+
+	if borConfig.NativeStakingBlock != nil {
+		if !common.IsHexAddress(borConfig.StakingContract) || !common.IsHexAddress(borConfig.DistributorContract) {
+			panic(fmt.Sprintf("BUG: nativeStakingBlock is set but stakingContract %q or distributorContract %q is not an address", borConfig.StakingContract, borConfig.DistributorContract))
+		}
+
+		c.StakingContractsClient = contract.NewStakingContractsClient(chainConfig)
+	}
 
 	// make sure we can decode all the GenesisAlloc in the BorConfig.
 	for key, genesisAlloc := range c.config.BlockAlloc {
@@ -1257,6 +1267,12 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 		stateSyncData []*types.StateSyncData
 		err           error
 	)
+
+	producer := func() (common.Address, error) { return c.Author(header) }
+	if err = c.payProducerFeeShare(wrappedState, header, body, receipts, producer); err != nil {
+		return nil, fmt.Errorf("error while paying the producer fee share: %w", err)
+	}
+
 	if IsSprintStart(headerNumber, c.config.CalculateSprint(headerNumber)) {
 		start := time.Now()
 		cx := statefull.ChainContext{Chain: chain, Bor: c}
@@ -1279,6 +1295,11 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 		state.BorConsensusTime = time.Since(start)
 	}
 
+	staking, err := c.commitStaking(wrappedState, header, statefull.ChainContext{Chain: chain, Bor: c})
+	if err != nil {
+		return nil, fmt.Errorf("%w: error while committing staking calls: %w", core.ErrStateSyncProcessing, err)
+	}
+
 	// Check if any hardfork needs change in genesis contract code. Note that we use
 	// the wrapped state here as it may have a hooked state db instance which can help
 	// in tracing if it's enabled. Note: when live tracing of state-sync is active,
@@ -1295,47 +1316,84 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 		hc.SetStateSync(stateSyncData)
 	}
 
-	if len(stateSyncData) == 0 {
+	return c.verifySystemTxs(header, body, wrappedState, receipts, stateSyncData, staking)
+}
+
+// verifySystemTxs checks the system transactions at the end of the block body
+// against the ones this node built from its own Heimdall, and appends their
+// receipts. The state-sync transaction comes first and the staking transaction
+// last, each only if this block has one.
+func (c *Bor) verifySystemTxs(header *types.Header, body *types.Body, state vm.StateDB, receipts []*types.Receipt, stateSyncData []*types.StateSyncData, staking *stakingWork) ([]*types.Receipt, error) {
+	// Pre-Madhugiri, state-sync transactions were not included in block body.
+	hasStateSync := len(stateSyncData) > 0 && c.config != nil && c.config.IsMadhugiri(header.Number)
+	if !hasStateSync && staking == nil {
 		return receipts, nil
 	}
 
 	txs := body.Transactions
-	isMadhugiri := c.config != nil && c.config.IsMadhugiri(header.Number)
+	end := len(txs)
 
-	// Pre-Madhugiri, state-sync transactions were not included in block body so we can safely return
-	if !isMadhugiri {
-		return receipts, nil
+	var stakingTx *types.Transaction
+
+	if staking != nil {
+		if end == 0 || txs[end-1].Type() != types.StakingTxType {
+			return nil, fmt.Errorf("%w: block body missing staking transaction", core.ErrStakingTxMismatch)
+		}
+
+		stakingTx = txs[end-1]
+		if want := types.NewTx(staking.tx).Hash(); want != stakingTx.Hash() {
+			return nil, fmt.Errorf("%w: hash mismatch, got %s want %s", core.ErrStakingTxMismatch, stakingTx.Hash(), want)
+		}
+
+		end--
 	}
 
-	// Reject the block as heimdall suggests presence of state-sync event(s) but state-sync
-	// transaction is missing from block body.
-	if len(txs) == 0 || txs[len(txs)-1].Type() != types.StateSyncTxType {
-		return nil, fmt.Errorf("%w: block body missing state-sync transaction, heimdall reported %d event(s)", core.ErrStateSyncMismatch, len(stateSyncData))
+	var lastStateSyncTx *types.Transaction
+
+	if hasStateSync {
+		// Reject the block as heimdall suggests presence of state-sync event(s) but state-sync
+		// transaction is missing from block body.
+		if end == 0 || txs[end-1].Type() != types.StateSyncTxType {
+			return nil, fmt.Errorf("%w: block body missing state-sync transaction, heimdall reported %d event(s)", core.ErrStateSyncMismatch, len(stateSyncData))
+		}
+
+		// Craft a state-sync tx to validate it against the tx in block body
+		stateSyncTx := types.NewTx(&types.StateSyncTx{
+			StateSyncData: stateSyncData,
+		})
+
+		lastStateSyncTx = txs[end-1]
+		if stateSyncTx.Hash() != lastStateSyncTx.Hash() {
+			return nil, fmt.Errorf("%w: hash mismatch, got %s want %s", core.ErrStateSyncMismatch, lastStateSyncTx.Hash(), stateSyncTx.Hash())
+		}
 	}
 
-	// Craft a state-sync tx to validate it against the tx in block body
-	stateSyncTx := types.NewTx(&types.StateSyncTx{
-		StateSyncData: stateSyncData,
-	})
-	lastTx := txs[len(txs)-1]
-	if stateSyncTx.Hash() != lastTx.Hash() {
-		return nil, fmt.Errorf("%w: hash mismatch, got %s want %s", core.ErrStateSyncMismatch, lastTx.Hash(), stateSyncTx.Hash())
-	}
-	receipts = insertStateSyncTransactionAndCalculateReceipt(lastTx, header, body, wrappedState, receipts)
-	return receipts, nil
+	return insertSystemReceipts(lastStateSyncTx, stakingTx, staking, header, body, state, receipts), nil
 }
 
 func insertStateSyncTransactionAndCalculateReceipt(stateSyncTx *types.Transaction, header *types.Header, body *types.Body, state vm.StateDB, receipts []*types.Receipt) []*types.Receipt {
+	return insertSystemReceipts(stateSyncTx, nil, nil, header, body, state, receipts)
+}
+
+// insertSystemReceipts appends the receipts of the system transactions at the
+// end of the body: the state-sync transaction, then the staking transaction,
+// either of which may be nil. Their logs are the ones emitted after the last
+// user transaction. Without a staking transaction the state-sync receipt takes
+// all of them. With one, the logs from staking.logStart on belong to it.
+func insertSystemReceipts(stateSyncTx, stakingTx *types.Transaction, staking *stakingWork, header *types.Header, body *types.Body, state vm.StateDB, receipts []*types.Receipt) []*types.Receipt {
 	allLogs := state.Logs()
 	sort.SliceStable(allLogs, func(i, j int) bool {
 		return allLogs[i].Index < allLogs[j].Index
 	})
+
 	logsFromReceiptCount := countLogsFromReceipts(receipts)
 	stateSyncLogs := allLogs[logsFromReceiptCount:]
 
-	txIndex := uint(len(body.Transactions) - 1)
-	for _, l := range stateSyncLogs {
-		l.TxIndex = txIndex
+	var stakingLogs []*types.Log
+
+	if stakingTx != nil {
+		split := min(max(staking.logStart, logsFromReceiptCount), len(allLogs))
+		stateSyncLogs, stakingLogs = allLogs[logsFromReceiptCount:split], allLogs[split:]
 	}
 
 	var cumulativeGasUsed uint64
@@ -1343,24 +1401,74 @@ func insertStateSyncTransactionAndCalculateReceipt(stateSyncTx *types.Transactio
 		cumulativeGasUsed = receipts[len(receipts)-1].CumulativeGasUsed
 	}
 
-	stateSyncReceipt := &types.Receipt{
+	txIndex := uint(len(body.Transactions) - 1)
+	if stakingTx != nil && stateSyncTx != nil {
+		txIndex--
+	}
+
+	if stateSyncTx != nil {
+		receipts = append(receipts, systemTxReceipt(stateSyncTx, txIndex, stateSyncLogs, cumulativeGasUsed, header))
+		txIndex++
+	}
+
+	if stakingTx != nil {
+		receipts = append(receipts, systemTxReceipt(stakingTx, txIndex, stakingLogs, cumulativeGasUsed, header))
+	}
+
+	return receipts
+}
+
+// systemTxReceipt builds the receipt of a system transaction. It uses no gas,
+// so the cumulative gas is that of the last user transaction.
+func systemTxReceipt(tx *types.Transaction, txIndex uint, logs []*types.Log, cumulativeGasUsed uint64, header *types.Header) *types.Receipt {
+	for _, l := range logs {
+		l.TxIndex = txIndex
+	}
+
+	receipt := &types.Receipt{
 		// Consensus fields
-		Type:              types.StateSyncTxType,
+		Type:              tx.Type(),
 		Status:            types.ReceiptStatusSuccessful,
 		CumulativeGasUsed: cumulativeGasUsed,
-		Logs:              stateSyncLogs,
+		Logs:              logs,
 		// Implementation fields
-		TxHash:  stateSyncTx.Hash(),
+		TxHash:  tx.Hash(),
 		GasUsed: 0,
 		// Inclusion information
 		BlockNumber:      header.Number,
 		TransactionIndex: txIndex,
 	}
+	receipt.Bloom = types.CreateBloom(receipt)
 
-	stateSyncReceipt.Bloom = types.CreateBloom(stateSyncReceipt)
-	receipts = append(receipts, stateSyncReceipt)
+	return receipt
+}
 
-	return receipts
+// appendSystemTxs appends this block's system transactions and their receipts
+// while assembling it: the state-sync transaction, then the staking one.
+func (c *Bor) appendSystemTxs(chain consensus.ChainHeaderReader, header *types.Header, state vm.StateDB, body *types.Body, receipts []*types.Receipt, stateSyncData []*types.StateSyncData, staking *stakingWork) []*types.Receipt {
+	var stateSyncTx, stakingTx *types.Transaction
+
+	if len(stateSyncData) > 0 && c.config != nil && c.config.IsMadhugiri(header.Number) {
+		stateSyncTx = types.NewTx(&types.StateSyncTx{
+			StateSyncData: stateSyncData,
+		})
+		body.Transactions = append(body.Transactions, stateSyncTx)
+	} else {
+		// set state sync
+		bc := chain.(core.BorStateSyncer)
+		bc.SetStateSync(stateSyncData)
+	}
+
+	if staking != nil {
+		stakingTx = types.NewTx(staking.tx)
+		body.Transactions = append(body.Transactions, stakingTx)
+	}
+
+	if stateSyncTx == nil && stakingTx == nil {
+		return receipts
+	}
+
+	return insertSystemReceipts(stateSyncTx, stakingTx, staking, header, body, state, receipts)
 }
 
 func decodeGenesisAlloc(i interface{}) (types.GenesisAlloc, error) {
@@ -1431,9 +1539,26 @@ func (c *Bor) finalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 		err           error
 	)
 
+	if !simulated {
+		if err = c.payProducerFeeShare(state, header, body, receipts, c.localProducer); err != nil {
+			log.Error("Error while paying the producer fee share", "error", err)
+			return nil, nil, 0, err
+		}
+	}
+
 	if !simulated && IsSprintStart(headerNumber, c.config.CalculateSprint(headerNumber)) {
 		stateSyncData, err = c.commitSprintWork(chain, header, state)
 		if err != nil {
+			return nil, nil, 0, err
+		}
+	}
+
+	var staking *stakingWork
+
+	if !simulated {
+		staking, err = c.commitStaking(state, header, statefull.ChainContext{Chain: chain, Bor: c})
+		if err != nil {
+			log.Error("Error while committing staking calls", "error", err)
 			return nil, nil, 0, err
 		}
 	}
@@ -1451,17 +1576,7 @@ func (c *Bor) finalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 	// Uncles are dropped
 	header.UncleHash = types.CalcUncleHash(nil)
 
-	if len(stateSyncData) > 0 && c.config != nil && c.config.IsMadhugiri(big.NewInt(int64(headerNumber))) {
-		stateSyncTx := types.NewTx(&types.StateSyncTx{
-			StateSyncData: stateSyncData,
-		})
-		body.Transactions = append(body.Transactions, stateSyncTx)
-		receipts = insertStateSyncTransactionAndCalculateReceipt(stateSyncTx, header, body, state, receipts)
-	} else {
-		// set state sync
-		bc := chain.(core.BorStateSyncer)
-		bc.SetStateSync(stateSyncData)
-	}
+	receipts = c.appendSystemTxs(chain, header, state, body, receipts, stateSyncData, staking)
 
 	// Assemble block
 	block := types.NewBlock(header, body, receipts, trie.NewStackTrie(nil))
@@ -1477,7 +1592,7 @@ func (c *Bor) finalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 // background SRC goroutine has computed the state root.
 //
 // This is the pipelined SRC equivalent of the first half of FinalizeAndAssemble.
-func (c *Bor) FinalizeForPipeline(chain consensus.ChainHeaderReader, header *types.Header, statedb *state.StateDB, body *types.Body, receipts []*types.Receipt) ([]*types.StateSyncData, error) {
+func (c *Bor) FinalizeForPipeline(chain consensus.ChainHeaderReader, header *types.Header, statedb *state.StateDB, body *types.Body, receipts []*types.Receipt) (*SystemWork, error) {
 	headerNumber := header.Number.Uint64()
 	if body.Withdrawals != nil || header.WithdrawalsHash != nil {
 		return nil, consensus.ErrUnexpectedWithdrawals
@@ -1491,6 +1606,11 @@ func (c *Bor) FinalizeForPipeline(chain consensus.ChainHeaderReader, header *typ
 		err           error
 	)
 
+	if err = c.payProducerFeeShare(statedb, header, body, receipts, c.localProducer); err != nil {
+		log.Error("Error while paying the producer fee share", "error", err)
+		return nil, err
+	}
+
 	if IsSprintStart(headerNumber, c.config.CalculateSprint(headerNumber)) {
 		stateSyncData, err = c.commitSprintWork(chain, header, statedb)
 		if err != nil {
@@ -1498,36 +1618,32 @@ func (c *Bor) FinalizeForPipeline(chain consensus.ChainHeaderReader, header *typ
 		}
 	}
 
+	staking, err := c.commitStaking(statedb, header, statefull.ChainContext{Chain: chain, Bor: c})
+	if err != nil {
+		log.Error("Error while committing staking calls", "error", err)
+		return nil, err
+	}
+
 	if err = c.changeContractCodeIfNeeded(headerNumber, statedb); err != nil {
 		log.Error("Error changing contract code", "error", err)
 		return nil, err
 	}
 
-	return stateSyncData, nil
+	return newSystemWork(stateSyncData, staking), nil
 }
 
 // AssembleBlock constructs the final block from a pre-computed state root,
 // without calling IntermediateRoot. This is used by pipelined SRC where the
 // state root is computed by a background goroutine.
 //
-// stateSyncData is the state sync data collected during Finalize(). If non-nil
-// and the Madhugiri fork is active, a StateSyncTx is appended to the body.
-func (c *Bor) AssembleBlock(chain consensus.ChainHeaderReader, header *types.Header, statedb *state.StateDB, body *types.Body, receipts []*types.Receipt, stateRoot common.Hash, stateSyncData []*types.StateSyncData) (*types.Block, []*types.Receipt, error) {
-	headerNumber := header.Number.Uint64()
-
+// work is what FinalizeForPipeline returned for this block. Its state-sync
+// data, if any and the Madhugiri fork is active, becomes a StateSyncTx appended
+// to the body, followed by the staking transaction if the block has one.
+func (c *Bor) AssembleBlock(chain consensus.ChainHeaderReader, header *types.Header, statedb *state.StateDB, body *types.Body, receipts []*types.Receipt, stateRoot common.Hash, work *SystemWork) (*types.Block, []*types.Receipt, error) {
 	header.Root = stateRoot
 	header.UncleHash = types.CalcUncleHash(nil)
 
-	if len(stateSyncData) > 0 && c.config != nil && c.config.IsMadhugiri(big.NewInt(int64(headerNumber))) {
-		stateSyncTx := types.NewTx(&types.StateSyncTx{
-			StateSyncData: stateSyncData,
-		})
-		body.Transactions = append(body.Transactions, stateSyncTx)
-		receipts = insertStateSyncTransactionAndCalculateReceipt(stateSyncTx, header, body, statedb, receipts)
-	} else {
-		bc := chain.(core.BorStateSyncer)
-		bc.SetStateSync(stateSyncData)
-	}
+	receipts = c.appendSystemTxs(chain, header, statedb, body, receipts, work.stateSyncData(), work.stakingWork())
 
 	block := types.NewBlock(header, body, receipts, trie.NewStackTrie(nil))
 	return block, receipts, nil

@@ -48,6 +48,11 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
+// errStakingTxNotTraceable is returned for Bor's staking transaction. Its
+// system calls are not replayed by the tracers yet, so it is skipped: a block
+// trace reports this error for that transaction alone.
+var errStakingTxNotTraceable = errors.New("tracing staking transactions is not supported")
+
 const (
 	// defaultTraceTimeout is the amount of time a single transaction can execute
 	// by default before being forcefully aborted.
@@ -605,6 +610,10 @@ func (api *API) IntermediateRoots(ctx context.Context, hash common.Hash, config 
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+		// The staking transaction is last and is not replayed, so it gets no root.
+		if tx.Type() == types.StakingTxType {
+			continue
+		}
 		msg, _ := core.TransactionToMessage(tx, signer, block.BaseFee())
 		statedb.SetTxContext(tx.Hash(), i)
 		var err error
@@ -697,6 +706,11 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 		cumulativeGasUsed uint64
 	)
 	for i, tx := range txs {
+		if tx.Type() == types.StakingTxType {
+			results[i] = &txTraceResult{TxHash: tx.Hash(), Error: errStakingTxNotTraceable.Error()}
+			continue
+		}
+
 		msg, _ := core.TransactionToMessage(tx, signer, block.BaseFee())
 		txctx := &Context{
 			BlockHash:         blockHash,
@@ -782,6 +796,11 @@ txloop:
 			isStateSyncPresent = true
 			continue
 		}
+
+		if tx.Type() == types.StakingTxType {
+			results[i] = &txTraceResult{TxHash: tx.Hash(), Error: errStakingTxNotTraceable.Error()}
+			continue
+		}
 		// Send the trace task over for execution
 		task := &txTraceTask{statedb: statedb.Copy(), index: i}
 		select {
@@ -814,12 +833,13 @@ txloop:
 	}
 
 	if isStateSyncPresent {
-		tx := txs[len(txs)-1]
+		stateSyncTxIndex := types.StateSyncTxIndex(txs)
+		tx := txs[stateSyncTxIndex]
 		msg, _ := core.TransactionToMessage(tx, signer, block.BaseFee())
 		txctx := &Context{
 			BlockHash:         blockHash,
 			BlockNumber:       block.Number(),
-			TxIndex:           len(txs) - 1,
+			TxIndex:           stateSyncTxIndex,
 			TxHash:            tx.Hash(),
 			CumulativeGasUsed: cumulativeGasUsed,
 			LogIndex:          statedb.LogCount(),
@@ -903,6 +923,11 @@ func (api *API) standardTraceBlockToFile(ctx context.Context, block *types.Block
 		core.ProcessParentBlockHash(block.ParentHash(), evm)
 	}
 	for i, tx := range block.Transactions() {
+		// The staking transaction is last and is not replayed, so nothing after it needs its state.
+		if tx.Type() == types.StakingTxType {
+			continue
+		}
+
 		// Prepare the transaction for un-traced execution
 		msg, _ := core.TransactionToMessage(tx, signer, block.BaseFee())
 		if txHash != (common.Hash{}) && tx.Hash() != txHash {
@@ -1403,6 +1428,10 @@ func (api *API) traceBundle(ctx context.Context, txs []ethapi.TransactionArgs, b
 // be tracer dependent. For state-sync transactions, it only supports transactions
 // which are post Madhugiri HF.
 func (api *API) traceTx(ctx context.Context, tx *types.Transaction, message *core.Message, txctx *Context, vmctx vm.BlockContext, statedb *state.StateDB, config *TraceConfig, precompiles vm.PrecompiledContracts) (interface{}, uint64, error) {
+	if tx.Type() == types.StakingTxType {
+		return nil, 0, errStakingTxNotTraceable
+	}
+
 	var (
 		tracer  *Tracer
 		err     error

@@ -991,6 +991,11 @@ type BorConfig struct {
 	AustinBlock                *big.Int          `json:"austinBlock"`                // Austin switch block (nil = no fork, 0 = already on austin)
 	HampiBlock                 *big.Int          `json:"hampiBlock"`                 // Hampi switch block (nil = no fork, 0 = already on hampi)
 	UburuBlock                 *big.Int          `json:"uburuBlock"`                 // Uburu switch block (nil = no fork, 0 = already on uburu)
+	NativeStakingBlock         *big.Int          `json:"nativeStakingBlock"`         // NativeStaking switch block (nil = no fork, 0 = already on nativeStaking)
+
+	// Polygon staking contracts Bor calls from NativeStakingBlock on.
+	StakingContract     string `json:"stakingContract,omitempty"`     // Staking contract: takes validator status, logs stake updates
+	DistributorContract string `json:"distributorContract,omitempty"` // Distributor contract: takes participation reports
 }
 
 // String implements the stringer interface, returning the consensus engine details.
@@ -1085,6 +1090,10 @@ func (c *BorConfig) IsHampi(number *big.Int) bool {
 
 func (c *BorConfig) IsUburu(number *big.Int) bool {
 	return isBlockForked(c.UburuBlock, number)
+}
+
+func (c *BorConfig) IsNativeStaking(number *big.Int) bool {
+	return isBlockForked(c.NativeStakingBlock, number)
 }
 
 // GetTargetGasPercentage returns the target gas percentage for gas limit calculation.
@@ -1227,7 +1236,14 @@ func (c *BorConfig) CalculateBurntContract(number uint64) string {
 	return borKeyValueConfigHelper(c.BurntContract, number)
 }
 
+// CalculateCoinbase returns the address that is credited the block's priority
+// fees. From the NativeStaking fork on it is the distributor contract, whatever
+// the coinbase map says.
 func (c *BorConfig) CalculateCoinbase(number uint64) string {
+	if c.DistributorContract != "" && c.IsNativeStaking(new(big.Int).SetUint64(number)) {
+		return c.DistributorContract
+	}
+
 	if c.Coinbase != nil {
 		return borKeyValueConfigHelper(c.Coinbase, number)
 	} else {
@@ -1322,6 +1338,9 @@ func (c *ChainConfig) Description() string {
 		}
 		if c.Bor.UburuBlock != nil {
 			banner += fmt.Sprintf(" - Uburu:                       #%-8v\n", c.Bor.UburuBlock)
+		}
+		if c.Bor.NativeStakingBlock != nil {
+			banner += fmt.Sprintf(" - NativeStaking:               #%-8v\n", c.Bor.NativeStakingBlock)
 		}
 		return banner
 	}

@@ -209,8 +209,8 @@ func (c *Consumer) completePreconfPrefix(block *types.Block, prefix *pendingPref
 		return nil, err
 	}
 	for _, tx := range block.Transactions()[len(prefix.Transactions):] {
-		if tx.Type() == types.StateSyncTxType {
-			return nil, errors.New("state-sync transaction cannot use a preconfirmation prefix")
+		if tx.IsBorSystemTx() {
+			return nil, errors.New("system transaction cannot use a preconfirmation prefix")
 		}
 		if _, _, err := env.applyTransaction(tx); err != nil {
 			return nil, err

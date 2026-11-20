@@ -18,6 +18,7 @@ import (
 	clerk "github.com/ethereum/go-ethereum/consensus/bor/clerk"
 	checkpoint "github.com/ethereum/go-ethereum/consensus/bor/heimdall/checkpoint"
 	milestone "github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
+	staking "github.com/ethereum/go-ethereum/consensus/bor/staking"
 	gomock "go.uber.org/mock/gomock"
 )
 
@@ -162,6 +163,21 @@ func (mr *MockIHeimdallClientMockRecorder) GetSpan(ctx, spanID any) *gomock.Call
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSpan", reflect.TypeOf((*MockIHeimdallClient)(nil).GetSpan), ctx, spanID)
 }
 
+// ParticipationReports mocks base method.
+func (m *MockIHeimdallClient) ParticipationReports(ctx context.Context, fromID uint64, to int64) ([]*staking.ParticipationReport, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ParticipationReports", ctx, fromID, to)
+	ret0, _ := ret[0].([]*staking.ParticipationReport)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ParticipationReports indicates an expected call of ParticipationReports.
+func (mr *MockIHeimdallClientMockRecorder) ParticipationReports(ctx, fromID, to any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ParticipationReports", reflect.TypeOf((*MockIHeimdallClient)(nil).ParticipationReports), ctx, fromID, to)
+}
+
 // StateSyncEvents mocks base method.
 func (m *MockIHeimdallClient) StateSyncEvents(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
 	m.ctrl.T.Helper()
@@ -175,6 +191,21 @@ func (m *MockIHeimdallClient) StateSyncEvents(ctx context.Context, fromID uint64
 func (mr *MockIHeimdallClientMockRecorder) StateSyncEvents(ctx, fromID, to any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StateSyncEvents", reflect.TypeOf((*MockIHeimdallClient)(nil).StateSyncEvents), ctx, fromID, to)
+}
+
+// ValidatorStatusRecords mocks base method.
+func (m *MockIHeimdallClient) ValidatorStatusRecords(ctx context.Context, fromID uint64, to int64) ([]*staking.ValidatorStatusRecord, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ValidatorStatusRecords", ctx, fromID, to)
+	ret0, _ := ret[0].([]*staking.ValidatorStatusRecord)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ValidatorStatusRecords indicates an expected call of ValidatorStatusRecords.
+func (mr *MockIHeimdallClientMockRecorder) ValidatorStatusRecords(ctx, fromID, to any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ValidatorStatusRecords", reflect.TypeOf((*MockIHeimdallClient)(nil).ValidatorStatusRecords), ctx, fromID, to)
 }
 
 // MockIHeimdallWSClient is a mock of IHeimdallWSClient interface.

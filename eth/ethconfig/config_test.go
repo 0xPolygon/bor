@@ -14,6 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/checkpoint"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdallws"
+	"github.com/ethereum/go-ethereum/consensus/bor/staking"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/params"
@@ -300,4 +301,12 @@ func TestConfigTOMLDecodePrecompileCache(t *testing.T) {
 	if !out.EnablePrecompileCache {
 		t.Fatal("EnablePrecompileCache not decoded")
 	}
+}
+
+func (*mockHeimdallClient) ParticipationReports(context.Context, uint64, int64) ([]*staking.ParticipationReport, error) {
+	return nil, nil
+}
+
+func (*mockHeimdallClient) ValidatorStatusRecords(context.Context, uint64, int64) ([]*staking.ValidatorStatusRecord, error) {
+	return nil, nil
 }

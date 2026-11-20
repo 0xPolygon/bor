@@ -13,6 +13,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/bor/clerk"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/checkpoint"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
+	"github.com/ethereum/go-ethereum/consensus/bor/staking"
 	"github.com/ethereum/go-ethereum/log"
 )
 
@@ -36,6 +37,8 @@ type Endpoint interface {
 	FetchMilestone(ctx context.Context) (*milestone.Milestone, error)
 	FetchMilestoneCount(ctx context.Context) (int64, error)
 	FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error)
+	ParticipationReports(ctx context.Context, fromID uint64, to int64) ([]*staking.ParticipationReport, error)
+	ValidatorStatusRecords(ctx context.Context, fromID uint64, to int64) ([]*staking.ValidatorStatusRecord, error)
 	Close()
 }
 
@@ -106,6 +109,18 @@ func (f *MultiHeimdallClient) ensureHealthRegistry() {
 func (f *MultiHeimdallClient) StateSyncEvents(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
 	return callWithFailover(f, ctx, func(ctx context.Context, c Endpoint) ([]*clerk.EventRecordWithTime, error) {
 		return c.StateSyncEvents(ctx, fromID, to)
+	})
+}
+
+func (f *MultiHeimdallClient) ParticipationReports(ctx context.Context, fromID uint64, to int64) ([]*staking.ParticipationReport, error) {
+	return callWithFailover(f, ctx, func(ctx context.Context, c Endpoint) ([]*staking.ParticipationReport, error) {
+		return c.ParticipationReports(ctx, fromID, to)
+	})
+}
+
+func (f *MultiHeimdallClient) ValidatorStatusRecords(ctx context.Context, fromID uint64, to int64) ([]*staking.ValidatorStatusRecord, error) {
+	return callWithFailover(f, ctx, func(ctx context.Context, c Endpoint) ([]*staking.ValidatorStatusRecord, error) {
+		return c.ValidatorStatusRecords(ctx, fromID, to)
 	})
 }
 
