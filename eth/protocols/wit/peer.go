@@ -5,6 +5,7 @@ import (
 	"math/rand"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	mapset "github.com/deckarep/golang-set/v2"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
+	"github.com/ethereum/go-ethereum/p2p/tracker"
 )
 
 const (
@@ -48,9 +50,10 @@ type Peer struct {
 	queuedWitnessAnns chan *NewWitnessHashesPacket       // Queue of unsigned witness announcements to this peer (WIT1)
 	queuedSignedAnns  chan *SignedNewWitnessHashesPacket // Queue of signed witness announcements to this peer (WIT2)
 
-	reqDispatch chan *request  // Dispatch channel to send witness requests and track them until fulfillment
-	reqCancel   chan *cancel   // Dispatch channel to cancel pending witness requests
-	resDispatch chan *response // Dispatch channel to fulfill witness requests
+	tracker     *tracker.Tracker // Request metrics; never affects request handling
+	reqDispatch chan *request    // Dispatch channel to send witness requests and track them until fulfillment
+	reqCancel   chan *cancel     // Dispatch channel to cancel pending witness requests
+	resDispatch chan *response   // Dispatch channel to fulfill witness requests
 
 	term chan struct{} // Termination channel to stop the broadcaster
 }
@@ -69,6 +72,7 @@ func NewPeer(version uint, p *p2p.Peer, rw p2p.MsgReadWriter, logger log.Logger)
 		queuedWitness:     make(chan *stateless.Witness, maxQueuedWitnesses),
 		queuedWitnessAnns: make(chan *NewWitnessHashesPacket, maxQueuedWitnessAnns),
 		queuedSignedAnns:  make(chan *SignedNewWitnessHashesPacket, maxQueuedWitnessAnns),
+		tracker:           tracker.New(p2p.Cap{Name: ProtocolName, Version: version}, id, 5*time.Minute),
 		reqDispatch:       make(chan *request),
 		reqCancel:         make(chan *cancel),
 		resDispatch:       make(chan *response),

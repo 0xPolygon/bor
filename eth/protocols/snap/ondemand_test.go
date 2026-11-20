@@ -33,7 +33,7 @@ import (
 // requested blobs it has in corpus, in request order, omitting any it lacks —
 // the well-behaving snap-server behaviour.
 func serveCodesFromCorpus(corpus map[common.Hash][]byte) codeHandlerFunc {
-	return func(tp *testPeer, id uint64, hashes []common.Hash, _ uint64) error {
+	return func(tp *testPeer, id uint64, hashes []common.Hash, _ int) error {
 		var out [][]byte
 		for _, h := range hashes {
 			if code, ok := corpus[h]; ok {
@@ -46,7 +46,7 @@ func serveCodesFromCorpus(corpus map[common.Hash][]byte) codeHandlerFunc {
 
 // neverAnswer is a codeRequestHandler for a peer that accepts a request and
 // never replies, so a fetch against it ends only via timeout or cancellation.
-func neverAnswer(*testPeer, uint64, []common.Hash, uint64) error { return nil }
+func neverAnswer(*testPeer, uint64, []common.Hash, int) error { return nil }
 
 // newCodePeer registers a testPeer on syncer with the given bytecode handler.
 func newCodePeer(t *testing.T, syncer *Syncer, id string, handler codeHandlerFunc) *testPeer {
@@ -318,7 +318,7 @@ func TestFetchByteCodesStopsWhenComplete(t *testing.T) {
 	corpus := map[common.Hash][]byte{hash: code}
 
 	syncer := NewSyncer(rawdb.NewMemoryDatabase(), rawdb.HashScheme)
-	strict := func(tp *testPeer, id uint64, hashes []common.Hash, max uint64) error {
+	strict := func(tp *testPeer, id uint64, hashes []common.Hash, max int) error {
 		if len(hashes) == 0 {
 			tp.test.Errorf("peer %s was sent an empty bytecode request", tp.id)
 		}
@@ -376,7 +376,7 @@ func TestFetchByteCodesFailsOverAndVerifies(t *testing.T) {
 	hash := crypto.Keccak256Hash(code)
 
 	syncer := NewSyncer(rawdb.NewMemoryDatabase(), rawdb.HashScheme)
-	newCodePeer(t, syncer, "liar", func(tp *testPeer, id uint64, hashes []common.Hash, _ uint64) error {
+	newCodePeer(t, syncer, "liar", func(tp *testPeer, id uint64, hashes []common.Hash, _ int) error {
 		// Serve the wrong bytes for every requested hash.
 		out := make([][]byte, len(hashes))
 		for i := range out {
@@ -437,7 +437,7 @@ func TestFetchByteCodesPartialSurvivesCancel(t *testing.T) {
 	defer cancel()
 
 	stalled := make(chan struct{}, 2)
-	serveAOrStall := func(tp *testPeer, id uint64, hashes []common.Hash, _ uint64) error {
+	serveAOrStall := func(tp *testPeer, id uint64, hashes []common.Hash, _ int) error {
 		for _, h := range hashes {
 			if h == hashA {
 				return tp.remote.OnByteCodes(tp, id, [][]byte{codeA})
@@ -519,19 +519,19 @@ type sendFailPeer struct {
 func (p *sendFailPeer) ID() string      { return p.id }
 func (p *sendFailPeer) Log() log.Logger { return log.New("id", p.id) }
 
-func (p *sendFailPeer) RequestAccountRange(id uint64, root, origin, limit common.Hash, bytes uint64) error {
+func (p *sendFailPeer) RequestAccountRange(id uint64, root, origin, limit common.Hash, bytes int) error {
 	return nil
 }
 
-func (p *sendFailPeer) RequestStorageRanges(id uint64, root common.Hash, accounts []common.Hash, origin, limit []byte, bytes uint64) error {
+func (p *sendFailPeer) RequestStorageRanges(id uint64, root common.Hash, accounts []common.Hash, origin, limit []byte, bytes int) error {
 	return nil
 }
 
-func (p *sendFailPeer) RequestTrieNodes(id uint64, root common.Hash, paths []TrieNodePathSet, bytes uint64) error {
+func (p *sendFailPeer) RequestTrieNodes(id uint64, root common.Hash, count int, paths []TrieNodePathSet, bytes int) error {
 	return nil
 }
 
-func (p *sendFailPeer) RequestByteCodes(id uint64, hashes []common.Hash, bytes uint64) error {
+func (p *sendFailPeer) RequestByteCodes(id uint64, hashes []common.Hash, bytes int) error {
 	p.requests++
 	return errors.New("connection closed")
 }

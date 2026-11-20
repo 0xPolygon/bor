@@ -129,10 +129,10 @@ func BenchmarkHashing(b *testing.B) {
 }
 
 type (
-	accountHandlerFunc func(t *testPeer, requestId uint64, root common.Hash, origin common.Hash, limit common.Hash, cap uint64) error
-	storageHandlerFunc func(t *testPeer, requestId uint64, root common.Hash, accounts []common.Hash, origin, limit []byte, max uint64) error
-	trieHandlerFunc    func(t *testPeer, requestId uint64, root common.Hash, paths []TrieNodePathSet, cap uint64) error
-	codeHandlerFunc    func(t *testPeer, id uint64, hashes []common.Hash, max uint64) error
+	accountHandlerFunc func(t *testPeer, requestId uint64, root common.Hash, origin common.Hash, limit common.Hash, cap int) error
+	storageHandlerFunc func(t *testPeer, requestId uint64, root common.Hash, accounts []common.Hash, origin, limit []byte, max int) error
+	trieHandlerFunc    func(t *testPeer, requestId uint64, root common.Hash, paths []TrieNodePathSet, cap int) error
+	codeHandlerFunc    func(t *testPeer, id uint64, hashes []common.Hash, max int) error
 )
 
 type testPeer struct {
@@ -192,7 +192,7 @@ Trienode requests: %d
 `, t.nAccountRequests.Load(), t.nStorageRequests.Load(), t.nBytecodeRequests.Load(), t.nTrienodeRequests.Load())
 }
 
-func (t *testPeer) RequestAccountRange(id uint64, root, origin, limit common.Hash, bytes uint64) error {
+func (t *testPeer) RequestAccountRange(id uint64, root, origin, limit common.Hash, bytes int) error {
 	t.logger.Trace("Fetching range of accounts", "reqid", id, "root", root, "origin", origin, "limit", limit, "bytes", common.StorageSize(bytes))
 
 	t.nAccountRequests.Add(1)
@@ -201,7 +201,7 @@ func (t *testPeer) RequestAccountRange(id uint64, root, origin, limit common.Has
 	return nil
 }
 
-func (t *testPeer) RequestTrieNodes(id uint64, root common.Hash, paths []TrieNodePathSet, bytes uint64) error {
+func (t *testPeer) RequestTrieNodes(id uint64, root common.Hash, count int, paths []TrieNodePathSet, bytes int) error {
 	t.logger.Trace("Fetching set of trie nodes", "reqid", id, "root", root, "pathsets", len(paths), "bytes", common.StorageSize(bytes))
 
 	t.nTrienodeRequests.Add(1)
@@ -210,7 +210,7 @@ func (t *testPeer) RequestTrieNodes(id uint64, root common.Hash, paths []TrieNod
 	return nil
 }
 
-func (t *testPeer) RequestStorageRanges(id uint64, root common.Hash, accounts []common.Hash, origin, limit []byte, bytes uint64) error {
+func (t *testPeer) RequestStorageRanges(id uint64, root common.Hash, accounts []common.Hash, origin, limit []byte, bytes int) error {
 	t.nStorageRequests.Add(1)
 	if len(accounts) == 1 && origin != nil {
 		t.logger.Trace("Fetching range of large storage slots", "reqid", id, "root", root, "account", accounts[0], "origin", common.BytesToHash(origin), "limit", common.BytesToHash(limit), "bytes", common.StorageSize(bytes))
@@ -223,7 +223,7 @@ func (t *testPeer) RequestStorageRanges(id uint64, root common.Hash, accounts []
 	return nil
 }
 
-func (t *testPeer) RequestByteCodes(id uint64, hashes []common.Hash, bytes uint64) error {
+func (t *testPeer) RequestByteCodes(id uint64, hashes []common.Hash, bytes int) error {
 	t.nBytecodeRequests.Add(1)
 	t.logger.Trace("Fetching set of byte codes", "reqid", id, "hashes", len(hashes), "bytes", common.StorageSize(bytes))
 
@@ -233,7 +233,7 @@ func (t *testPeer) RequestByteCodes(id uint64, hashes []common.Hash, bytes uint6
 }
 
 // defaultTrieRequestHandler is a well-behaving handler for trie healing requests
-func defaultTrieRequestHandler(t *testPeer, requestId uint64, root common.Hash, paths []TrieNodePathSet, cap uint64) error {
+func defaultTrieRequestHandler(t *testPeer, requestId uint64, root common.Hash, paths []TrieNodePathSet, cap int) error {
 	// Pass the response
 	var nodes [][]byte
 
@@ -267,7 +267,7 @@ func defaultTrieRequestHandler(t *testPeer, requestId uint64, root common.Hash, 
 }
 
 // defaultAccountRequestHandler is a well-behaving handler for AccountRangeRequests
-func defaultAccountRequestHandler(t *testPeer, id uint64, root common.Hash, origin common.Hash, limit common.Hash, cap uint64) error {
+func defaultAccountRequestHandler(t *testPeer, id uint64, root common.Hash, origin common.Hash, limit common.Hash, cap int) error {
 	keys, vals, proofs := createAccountRequestResponse(t, root, origin, limit, cap)
 	if err := t.remote.OnAccounts(t, id, keys, vals, proofs); err != nil {
 		t.test.Errorf("Remote side rejected our delivery: %v", err)
@@ -279,9 +279,8 @@ func defaultAccountRequestHandler(t *testPeer, id uint64, root common.Hash, orig
 	return nil
 }
 
-func createAccountRequestResponse(t *testPeer, root common.Hash, origin common.Hash, limit common.Hash, cap uint64) (keys []common.Hash, vals [][]byte, proofs [][]byte) {
-	var size uint64
-
+func createAccountRequestResponse(t *testPeer, root common.Hash, origin common.Hash, limit common.Hash, cap int) (keys []common.Hash, vals [][]byte, proofs [][]byte) {
+	var size int
 	if limit == (common.Hash{}) {
 		limit = common.MaxHash
 	}
@@ -294,7 +293,7 @@ func createAccountRequestResponse(t *testPeer, root common.Hash, origin common.H
 		if bytes.Compare(origin[:], entry.k) <= 0 {
 			keys = append(keys, common.BytesToHash(entry.k))
 			vals = append(vals, entry.v)
-			size += uint64(32 + len(entry.v))
+			size += 32 + len(entry.v)
 		}
 		// If we've exceeded the request threshold, abort
 		if bytes.Compare(entry.k, limit[:]) >= 0 {
@@ -333,7 +332,7 @@ func createFullAccountRangeResponse(t *testPeer, root common.Hash, origin common
 }
 
 // fullAccountRangeRequestHandler answers the origin-zero request without a proof, and every other chunk normally.
-func fullAccountRangeRequestHandler(t *testPeer, id uint64, root common.Hash, origin common.Hash, limit common.Hash, cap uint64) error {
+func fullAccountRangeRequestHandler(t *testPeer, id uint64, root common.Hash, origin common.Hash, limit common.Hash, cap int) error {
 	if origin != (common.Hash{}) {
 		return defaultAccountRequestHandler(t, id, root, origin, limit, cap)
 	}
@@ -352,7 +351,7 @@ func fullAccountRangeRequestHandler(t *testPeer, id uint64, root common.Hash, or
 }
 
 // defaultStorageRequestHandler is a well-behaving storage request handler
-func defaultStorageRequestHandler(t *testPeer, requestId uint64, root common.Hash, accounts []common.Hash, bOrigin, bLimit []byte, max uint64) error {
+func defaultStorageRequestHandler(t *testPeer, requestId uint64, root common.Hash, accounts []common.Hash, bOrigin, bLimit []byte, max int) error {
 	hashes, slots, proofs := createStorageRequestResponse(t, root, accounts, bOrigin, bLimit, max)
 	if err := t.remote.OnStorage(t, requestId, hashes, slots, proofs); err != nil {
 		t.test.Errorf("Remote side rejected our delivery: %v", err)
@@ -362,7 +361,7 @@ func defaultStorageRequestHandler(t *testPeer, requestId uint64, root common.Has
 	return nil
 }
 
-func defaultCodeRequestHandler(t *testPeer, id uint64, hashes []common.Hash, max uint64) error {
+func defaultCodeRequestHandler(t *testPeer, id uint64, hashes []common.Hash, max int) error {
 	var bytecodes [][]byte
 	for _, h := range hashes {
 		bytecodes = append(bytecodes, getCodeByHash(h))
@@ -376,9 +375,8 @@ func defaultCodeRequestHandler(t *testPeer, id uint64, hashes []common.Hash, max
 	return nil
 }
 
-func createStorageRequestResponse(t *testPeer, root common.Hash, accounts []common.Hash, origin, limit []byte, max uint64) (hashes [][]common.Hash, slots [][][]byte, proofs [][]byte) {
-	var size uint64
-
+func createStorageRequestResponse(t *testPeer, root common.Hash, accounts []common.Hash, origin, limit []byte, max int) (hashes [][]common.Hash, slots [][][]byte, proofs [][]byte) {
+	var size int
 	for _, account := range accounts {
 		// The first account might start from a different origin and end sooner
 		var originHash common.Hash
@@ -408,8 +406,7 @@ func createStorageRequestResponse(t *testPeer, root common.Hash, accounts []comm
 
 			keys = append(keys, common.BytesToHash(entry.k))
 			vals = append(vals, entry.v)
-			size += uint64(32 + len(entry.v))
-
+			size += 32 + len(entry.v)
 			if bytes.Compare(entry.k, limitHash[:]) >= 0 {
 				break
 			}
@@ -451,9 +448,8 @@ func createStorageRequestResponse(t *testPeer, root common.Hash, accounts []comm
 
 // createStorageRequestResponseAlwaysProve tests a cornercase, where the peer always
 // supplies the proof for the last account, even if it is 'complete'.
-func createStorageRequestResponseAlwaysProve(t *testPeer, root common.Hash, accounts []common.Hash, bOrigin, bLimit []byte, max uint64) (hashes [][]common.Hash, slots [][][]byte, proofs [][]byte) {
-	var size uint64
-
+func createStorageRequestResponseAlwaysProve(t *testPeer, root common.Hash, accounts []common.Hash, bOrigin, bLimit []byte, max int) (hashes [][]common.Hash, slots [][][]byte, proofs [][]byte) {
+	var size int
 	max = max * 3 / 4
 
 	var origin common.Hash
@@ -475,8 +471,7 @@ func createStorageRequestResponseAlwaysProve(t *testPeer, root common.Hash, acco
 
 			keys = append(keys, common.BytesToHash(entry.k))
 			vals = append(vals, entry.v)
-
-			size += uint64(32 + len(entry.v))
+			size += 32 + len(entry.v)
 			if size > max {
 				exit = true
 			}
@@ -518,34 +513,34 @@ func createStorageRequestResponseAlwaysProve(t *testPeer, root common.Hash, acco
 }
 
 // emptyRequestAccountRangeFn is a rejects AccountRangeRequests
-func emptyRequestAccountRangeFn(t *testPeer, requestId uint64, root common.Hash, origin common.Hash, limit common.Hash, cap uint64) error {
+func emptyRequestAccountRangeFn(t *testPeer, requestId uint64, root common.Hash, origin common.Hash, limit common.Hash, cap int) error {
 	t.remote.OnAccounts(t, requestId, nil, nil, nil)
 	return nil
 }
 
-func nonResponsiveRequestAccountRangeFn(t *testPeer, requestId uint64, root common.Hash, origin common.Hash, limit common.Hash, cap uint64) error {
+func nonResponsiveRequestAccountRangeFn(t *testPeer, requestId uint64, root common.Hash, origin common.Hash, limit common.Hash, cap int) error {
 	return nil
 }
 
-func emptyTrieRequestHandler(t *testPeer, requestId uint64, root common.Hash, paths []TrieNodePathSet, cap uint64) error {
+func emptyTrieRequestHandler(t *testPeer, requestId uint64, root common.Hash, paths []TrieNodePathSet, cap int) error {
 	t.remote.OnTrieNodes(t, requestId, nil)
 	return nil
 }
 
-func nonResponsiveTrieRequestHandler(t *testPeer, requestId uint64, root common.Hash, paths []TrieNodePathSet, cap uint64) error {
+func nonResponsiveTrieRequestHandler(t *testPeer, requestId uint64, root common.Hash, paths []TrieNodePathSet, cap int) error {
 	return nil
 }
 
-func emptyStorageRequestHandler(t *testPeer, requestId uint64, root common.Hash, accounts []common.Hash, origin, limit []byte, max uint64) error {
+func emptyStorageRequestHandler(t *testPeer, requestId uint64, root common.Hash, accounts []common.Hash, origin, limit []byte, max int) error {
 	t.remote.OnStorage(t, requestId, nil, nil, nil)
 	return nil
 }
 
-func nonResponsiveStorageRequestHandler(t *testPeer, requestId uint64, root common.Hash, accounts []common.Hash, origin, limit []byte, max uint64) error {
+func nonResponsiveStorageRequestHandler(t *testPeer, requestId uint64, root common.Hash, accounts []common.Hash, origin, limit []byte, max int) error {
 	return nil
 }
 
-func proofHappyStorageRequestHandler(t *testPeer, requestId uint64, root common.Hash, accounts []common.Hash, origin, limit []byte, max uint64) error {
+func proofHappyStorageRequestHandler(t *testPeer, requestId uint64, root common.Hash, accounts []common.Hash, origin, limit []byte, max int) error {
 	hashes, slots, proofs := createStorageRequestResponseAlwaysProve(t, root, accounts, origin, limit, max)
 	if err := t.remote.OnStorage(t, requestId, hashes, slots, proofs); err != nil {
 		t.test.Errorf("Remote side rejected our delivery: %v", err)
@@ -561,7 +556,7 @@ func proofHappyStorageRequestHandler(t *testPeer, requestId uint64, root common.
 //	return nil
 //}
 
-func corruptCodeRequestHandler(t *testPeer, id uint64, hashes []common.Hash, max uint64) error {
+func corruptCodeRequestHandler(t *testPeer, id uint64, hashes []common.Hash, max int) error {
 	var bytecodes [][]byte
 	for _, h := range hashes {
 		// Send back the hashes
@@ -577,7 +572,7 @@ func corruptCodeRequestHandler(t *testPeer, id uint64, hashes []common.Hash, max
 	return nil
 }
 
-func cappedCodeRequestHandler(t *testPeer, id uint64, hashes []common.Hash, max uint64) error {
+func cappedCodeRequestHandler(t *testPeer, id uint64, hashes []common.Hash, max int) error {
 	var bytecodes [][]byte
 	for _, h := range hashes[:1] {
 		bytecodes = append(bytecodes, getCodeByHash(h))
@@ -592,11 +587,11 @@ func cappedCodeRequestHandler(t *testPeer, id uint64, hashes []common.Hash, max 
 }
 
 // starvingStorageRequestHandler is somewhat well-behaving storage handler, but it caps the returned results to be very small
-func starvingStorageRequestHandler(t *testPeer, requestId uint64, root common.Hash, accounts []common.Hash, origin, limit []byte, max uint64) error {
+func starvingStorageRequestHandler(t *testPeer, requestId uint64, root common.Hash, accounts []common.Hash, origin, limit []byte, max int) error {
 	return defaultStorageRequestHandler(t, requestId, root, accounts, origin, limit, 500)
 }
 
-func starvingAccountRequestHandler(t *testPeer, requestId uint64, root common.Hash, origin common.Hash, limit common.Hash, cap uint64) error {
+func starvingAccountRequestHandler(t *testPeer, requestId uint64, root common.Hash, origin common.Hash, limit common.Hash, cap int) error {
 	return defaultAccountRequestHandler(t, requestId, root, origin, limit, 500)
 }
 
@@ -604,7 +599,7 @@ func starvingAccountRequestHandler(t *testPeer, requestId uint64, root common.Ha
 //	return defaultAccountRequestHandler(t, requestId-1, root, origin, 500)
 //}
 
-func corruptAccountRequestHandler(t *testPeer, requestId uint64, root common.Hash, origin common.Hash, limit common.Hash, cap uint64) error {
+func corruptAccountRequestHandler(t *testPeer, requestId uint64, root common.Hash, origin common.Hash, limit common.Hash, cap int) error {
 	hashes, accounts, proofs := createAccountRequestResponse(t, root, origin, limit, cap)
 	if len(proofs) > 0 {
 		proofs = proofs[1:]
@@ -620,7 +615,7 @@ func corruptAccountRequestHandler(t *testPeer, requestId uint64, root common.Has
 }
 
 // corruptStorageRequestHandler doesn't provide good proofs
-func corruptStorageRequestHandler(t *testPeer, requestId uint64, root common.Hash, accounts []common.Hash, origin, limit []byte, max uint64) error {
+func corruptStorageRequestHandler(t *testPeer, requestId uint64, root common.Hash, accounts []common.Hash, origin, limit []byte, max int) error {
 	hashes, slots, proofs := createStorageRequestResponse(t, root, accounts, origin, limit, max)
 	if len(proofs) > 0 {
 		proofs = proofs[1:]
@@ -635,7 +630,7 @@ func corruptStorageRequestHandler(t *testPeer, requestId uint64, root common.Has
 	return nil
 }
 
-func noProofStorageRequestHandler(t *testPeer, requestId uint64, root common.Hash, accounts []common.Hash, origin, limit []byte, max uint64) error {
+func noProofStorageRequestHandler(t *testPeer, requestId uint64, root common.Hash, accounts []common.Hash, origin, limit []byte, max int) error {
 	hashes, slots, _ := createStorageRequestResponse(t, root, accounts, origin, limit, max)
 	if err := t.remote.OnStorage(t, requestId, hashes, slots, nil); err != nil {
 		t.logger.Info("remote error on delivery (as expected)", "error", err)
@@ -671,7 +666,7 @@ func testSyncBloatedProof(t *testing.T, scheme string) {
 	source.accountTrie = sourceAccountTrie.Copy()
 	source.accountValues = elems
 
-	source.accountRequestHandler = func(t *testPeer, requestId uint64, root common.Hash, origin common.Hash, limit common.Hash, cap uint64) error {
+	source.accountRequestHandler = func(t *testPeer, requestId uint64, root common.Hash, origin common.Hash, limit common.Hash, cap int) error {
 		var (
 			keys []common.Hash
 			vals [][]byte
@@ -1307,7 +1302,7 @@ func testSyncNoStorageAndOneCodeCappedPeer(t *testing.T, scheme string) {
 
 	syncer := setupSyncer(
 		nodeScheme,
-		mkSource("capped", func(t *testPeer, id uint64, hashes []common.Hash, max uint64) error {
+		mkSource("capped", func(t *testPeer, id uint64, hashes []common.Hash, max int) error {
 			counter++
 			return cappedCodeRequestHandler(t, id, hashes, max)
 		}),
@@ -1590,7 +1585,7 @@ func testSyncWithUnevenStorage(t *testing.T, scheme string) {
 		source.accountValues = accounts
 		source.setStorageTries(storageTries)
 		source.storageValues = storageElems
-		source.storageRequestHandler = func(t *testPeer, reqId uint64, root common.Hash, accounts []common.Hash, origin, limit []byte, max uint64) error {
+		source.storageRequestHandler = func(t *testPeer, reqId uint64, root common.Hash, accounts []common.Hash, origin, limit []byte, max int) error {
 			return defaultStorageRequestHandler(t, reqId, root, accounts, origin, limit, 128) // retrieve storage in large mode
 		}
 		return source
@@ -1664,7 +1659,7 @@ func testSyncAccountRangeNoProofNonZeroOrigin(t *testing.T, scheme string) {
 	source := newTestPeer("source", t, term)
 	source.accountTrie = sourceAccountTrie.Copy()
 	source.accountValues = elems
-	source.accountRequestHandler = func(t *testPeer, id uint64, root, origin, limit common.Hash, cap uint64) error {
+	source.accountRequestHandler = func(t *testPeer, id uint64, root, origin, limit common.Hash, cap int) error {
 		if origin == (common.Hash{}) || !delivered.CompareAndSwap(false, true) {
 			return defaultAccountRequestHandler(t, id, root, origin, limit, cap)
 		}
@@ -2351,19 +2346,19 @@ func TestBytecodeOnlyModeFiltering(t *testing.T) {
 		source.storageValues = storageElems
 
 		// Wrap handlers to count requests
-		source.accountRequestHandler = func(peer *testPeer, id uint64, root common.Hash, origin common.Hash, limit common.Hash, cap uint64) error {
+		source.accountRequestHandler = func(peer *testPeer, id uint64, root common.Hash, origin common.Hash, limit common.Hash, cap int) error {
 			accountRangeRequests++
 			return defaultAccountRequestHandler(peer, id, root, origin, limit, cap)
 		}
-		source.storageRequestHandler = func(peer *testPeer, id uint64, root common.Hash, accounts []common.Hash, origin []byte, limit []byte, cap uint64) error {
+		source.storageRequestHandler = func(peer *testPeer, id uint64, root common.Hash, accounts []common.Hash, origin []byte, limit []byte, cap int) error {
 			storageRangeRequests++
 			return defaultStorageRequestHandler(peer, id, root, accounts, origin, limit, cap)
 		}
-		source.codeRequestHandler = func(peer *testPeer, id uint64, hashes []common.Hash, cap uint64) error {
+		source.codeRequestHandler = func(peer *testPeer, id uint64, hashes []common.Hash, cap int) error {
 			bytecodeRequests++
 			return defaultCodeRequestHandler(peer, id, hashes, cap)
 		}
-		source.trieRequestHandler = func(peer *testPeer, id uint64, root common.Hash, paths []TrieNodePathSet, cap uint64) error {
+		source.trieRequestHandler = func(peer *testPeer, id uint64, root common.Hash, paths []TrieNodePathSet, cap int) error {
 			trienodeRequests++
 			return defaultTrieRequestHandler(peer, id, root, paths, cap)
 		}

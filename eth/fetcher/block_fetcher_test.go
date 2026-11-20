@@ -36,6 +36,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/triedb"
 )
@@ -255,19 +256,31 @@ func (f *fetcherTester) makeBodyFetcher(peer string, blocks map[common.Hash]*typ
 		// Gather the block bodies to return
 		transactions := make([][]*types.Transaction, 0, len(hashes))
 		uncles := make([][]*types.Header, 0, len(hashes))
+		var meta eth.BlockBodyHashes
 
 		for _, hash := range hashes {
 			if block, ok := closure[hash]; ok {
 				transactions = append(transactions, block.Transactions())
 				uncles = append(uncles, block.Uncles())
+				meta.TransactionRoots = append(meta.TransactionRoots, block.TxHash())
+				meta.UncleHashes = append(meta.UncleHashes, block.UncleHash())
+				meta.WithdrawalRoots = append(meta.WithdrawalRoots, common.Hash{})
 			}
 		}
 		// Return on a new thread
-		bodies := make([]*eth.BlockBody, len(transactions))
+		bodies := make(eth.BlockBodiesResponse, len(transactions))
 		for i, txs := range transactions {
-			bodies[i] = &eth.BlockBody{
-				Transactions: txs,
-				Uncles:       uncles[i],
+			txList, err := rlp.EncodeToRawList(txs)
+			if err != nil {
+				panic(err)
+			}
+			uncleList, err := rlp.EncodeToRawList(uncles[i])
+			if err != nil {
+				panic(err)
+			}
+			bodies[i] = eth.BlockBody{
+				Transactions: txList,
+				Uncles:       uncleList,
 			}
 		}
 
@@ -276,7 +289,8 @@ func (f *fetcherTester) makeBodyFetcher(peer string, blocks map[common.Hash]*typ
 		}
 		res := &eth.Response{
 			Req:  req,
-			Res:  (*eth.BlockBodiesResponse)(&bodies),
+			Res:  &bodies,
+			Meta: meta,
 			Time: drift,
 			Done: make(chan error, 1), // Ignore the returned status
 		}

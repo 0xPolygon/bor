@@ -55,7 +55,13 @@ func TestResendAfterCancelIsDropped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := p.bufferReceipts(req.id, []*ReceiptList69{{items: []Receipt{{Logs: rlp.EmptyList}}}}, true); err != nil {
+	partial := new(ReceiptList69)
+	enc := rlp.NewEncoderBuffer(nil)
+	(&Receipt{Logs: rlp.EmptyList}).encodeForNetwork69(&enc)
+	if err := partial.items.AppendRaw(enc.ToBytes()); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.bufferReceipts(req.id, []*ReceiptList69{partial}, true); err != nil {
 		t.Fatal(err)
 	}
 	p.receiptBufferLock.Lock()
@@ -64,7 +70,7 @@ func TestResendAfterCancelIsDropped(t *testing.T) {
 
 	req.Close()
 
-	if err := p.dispatchResend(req.id, GetReceiptsMsg, &GetReceiptsPacket70{
+	if err := p.dispatchResend(req.id, GetReceiptsMsg, len(hashes), &GetReceiptsPacket70{
 		RequestId: req.id, FirstBlockReceiptIndex: 1, GetReceiptsRequest: hashes,
 	}); err != nil {
 		t.Fatal(err)

@@ -95,7 +95,7 @@ func serveInChunks(t *testing.T, canonDB, canonBody rlp.RawValue, isStateSyncRec
 		if !incomplete {
 			return chunks, true
 		}
-		first += uint64(rl.Len())
+		first += uint64(rl.items.Len())
 	}
 }
 
@@ -150,7 +150,11 @@ func TestPartialReceipts_ChunkedReassembly(t *testing.T) {
 			if !bytes.Equal(encoded, whole) {
 				t.Fatalf("test[%d] limit %d: reassembled list differs\nhave: %x\nwant: %x", i, limit, encoded, whole)
 			}
-			if !bytes.Equal(merged.EncodeForStorage(), canonDB) {
+			storage, err := merged.EncodeForStorage()
+			if err != nil {
+				t.Fatalf("test[%d] limit %d: can't encode for storage: %v", i, limit, err)
+			}
+			if !bytes.Equal(storage, canonDB) {
 				t.Fatalf("test[%d] limit %d: reassembled storage encoding differs", i, limit)
 			}
 		}
@@ -181,13 +185,13 @@ func TestPartialReceipts_StateSyncAcrossChunkBoundary(t *testing.T) {
 			merged := reassemble(chunks)
 
 			// Post-Madhugiri: the state-sync receipt takes part in the receipt root.
-			if root := types.DeriveSha(merged, trie.NewStackTrie(nil)); root != test.rootWithStateSync {
+			if root := types.DeriveSha(merged.Derivable(), trie.NewStackTrie(nil)); root != test.rootWithStateSync {
 				t.Fatalf("test[%d] limit %d: post-Madhugiri root mismatch\nhave: %v\nwant: %v", i, limit, root, test.rootWithStateSync)
 			}
 			// Pre-Madhugiri: it is excluded, which is a positional decision over the
 			// reassembled list and would break if a chunk boundary displaced it.
 			merged.ExcludeStateSyncReceipt()
-			if root := types.DeriveSha(merged, trie.NewStackTrie(nil)); root != test.rootWithoutStateSync {
+			if root := types.DeriveSha(merged.Derivable(), trie.NewStackTrie(nil)); root != test.rootWithoutStateSync {
 				t.Fatalf("test[%d] limit %d: pre-Madhugiri root mismatch\nhave: %v\nwant: %v", i, limit, root, test.rootWithoutStateSync)
 			}
 		}
@@ -229,7 +233,7 @@ func TestPartialReceipts_FirstIndexSkips(t *testing.T) {
 		t.Fatalf("can't decode full list: %v", err)
 	}
 
-	for skip := 0; skip <= full.Len(); skip++ {
+	for skip := 0; skip <= full.items.Len(); skip++ {
 		out, incomplete, err := blockReceiptsToNetwork69(canonDB, canonBody, isStateSyncReceipt, receiptQueryParams{firstIndex: uint64(skip)})
 		if err != nil {
 			t.Fatalf("skip %d: conversion failed: %v", skip, err)
@@ -241,8 +245,8 @@ func TestPartialReceipts_FirstIndexSkips(t *testing.T) {
 		if err := rlp.DecodeBytes(out, &tail); err != nil {
 			t.Fatalf("skip %d: can't decode tail: %v", skip, err)
 		}
-		if want := full.Len() - skip; tail.Len() != want {
-			t.Fatalf("skip %d: got %d receipts, want %d", skip, tail.Len(), want)
+		if want := full.items.Len() - skip; tail.items.Len() != want {
+			t.Fatalf("skip %d: got %d receipts, want %d", skip, tail.items.Len(), want)
 		}
 	}
 }
@@ -258,10 +262,18 @@ func TestReceiptList69_Append(t *testing.T) {
 	head := NewReceiptList69(receipts[:1])
 	head.Append(NewReceiptList69(receipts[1:]))
 
-	if head.Len() != whole.Len() {
-		t.Fatalf("appended list has %d receipts, want %d", head.Len(), whole.Len())
+	if head.items.Len() != whole.items.Len() {
+		t.Fatalf("appended list has %d receipts, want %d", head.items.Len(), whole.items.Len())
 	}
-	if !bytes.Equal(head.EncodeForStorage(), whole.EncodeForStorage()) {
+	headEnc, err := head.EncodeForStorage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wholeEnc, err := whole.EncodeForStorage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(headEnc, wholeEnc) {
 		t.Fatal("appended list does not match the whole list")
 	}
 }

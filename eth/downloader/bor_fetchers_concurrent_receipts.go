@@ -17,6 +17,7 @@
 package downloader
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -102,7 +103,14 @@ func (q *receiptQueue) request(peer *peerConnection, req *fetchRequest, resCh ch
 func (q *receiptQueue) deliver(peer *peerConnection, packet *eth.Response) (int, error) {
 	// We're expecting a full decoded receipt list instead of encoded receipts for storage
 	// we used to have earlier.
-	receipts, getReceiptListHashes := eth.EncodeReceiptsAndPrepareHasher(packet.Res, q.queue.borConfig)
+	receipts, getReceiptListHashes, err := eth.EncodeReceiptsAndPrepareHasher(packet.Res, q.queue.borConfig)
+	if err != nil {
+		peer.log.Debug("Failed to deliver retrieved receipts", "err", err)
+		// The queue never saw this delivery, so hand the reserved headers back
+		// before the peer is dropped.
+		q.unreserve(peer.id)
+		return 0, fmt.Errorf("%w: %w: %v", errInvalidReceipt, errUndecodableResponse, err)
+	}
 	if receipts == nil || getReceiptListHashes == nil {
 		peer.log.Warn("Unknown receipt list type, discarding packet")
 		return 0, nil

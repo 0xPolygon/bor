@@ -262,6 +262,7 @@ type BlockFetcher struct {
 	dropPeer       peerDropFn         // Drops a peer for misbehaving
 
 	invalidHeader func(peer string, err error) // Reports verification failures and their supplier
+	invalidBody   func(peer string)            // Reports body replies that fail to decode
 
 	// Testing hooks
 	announceChangeHook func(common.Hash, bool)           // Method to call upon adding or deleting a hash from the blockAnnounce list
@@ -368,6 +369,12 @@ func (f *BlockFetcher) SetWitnessSourceExcluder(fn func(peer string, blockHash c
 // Install before Start; the callback must not block.
 func (f *BlockFetcher) SetInvalidHeaderObserver(observe func(peer string, err error)) {
 	f.invalidHeader = observe
+}
+
+// SetInvalidBodyObserver reports body replies that fail to decode.
+// Install before Start; the callback must not block.
+func (f *BlockFetcher) SetInvalidBodyObserver(observe func(peer string)) {
+	f.invalidBody = observe
 }
 
 func (f *BlockFetcher) observeInvalidHeader(peer string, err error) {
@@ -817,7 +824,11 @@ func (f *BlockFetcher) loop() {
 				}
 
 				announceCopy := *f.completing[hashes[0]] // Copy announce data for goroutine
-				go func(p string, hs []common.Hash, ann blockAnnounce) {
+				headers := make([]*types.Header, 0, len(hashes))
+				for _, hash := range hashes {
+					headers = append(headers, f.completing[hash].header)
+				}
+				go func(p string, hs []common.Hash, headers []*types.Header, ann blockAnnounce) {
 					if f.completingHook != nil {
 						f.completingHook(hs)
 					}
@@ -849,8 +860,20 @@ func (f *BlockFetcher) loop() {
 						if !ok || bodyResponse == nil {
 							return
 						} // Invalid response type
+						bodyHashes, ok := res.Meta.(eth.BlockBodyHashes)
+						if !ok {
+							return
+						}
 						// Ignoring withdrawals here, since the block fetcher is not used post-merge.
-						txs, uncles, _ := bodyResponse.Unpack()
+						txs, uncles, err := unpackBodies(requestedBodies(*bodyResponse, bodyHashes, headers))
+						if err != nil {
+							log.Debug("BlockFetcher: invalid body response, dropping peer", "peer", p, "err", err)
+							if f.invalidBody != nil {
+								f.invalidBody(p)
+							}
+							f.dropPeer(p)
+							return
+						}
 						metrics.RecordPerItemDuration(blockBodyItemDownloadTimer, res.Time, len(txs))
 						f.FilterBodies(p, txs, uncles, time.Now(), announcedAt)
 
@@ -860,7 +883,7 @@ func (f *BlockFetcher) loop() {
 					case <-f.quit:
 						return // Fetcher stopped
 					}
-				}(peer, hashes, announceCopy)
+				}(peer, hashes, headers, announceCopy)
 			}
 			// Schedule the next fetch if blocks are still pending
 			f.rescheduleComplete(completeTimer)
@@ -1465,4 +1488,40 @@ func (f *BlockFetcher) insertBlockWithRetry(op *blockOrHeaderInject) error {
 			return fmt.Errorf("%w: %w", errTerminated, err)
 		}
 	}
+}
+
+// requestedBodies keeps the bodies whose transaction root and uncle hash match
+// a requested header, so bodies that were not asked for are never decoded.
+func requestedBodies(bodies eth.BlockBodiesResponse, hashes eth.BlockBodyHashes, headers []*types.Header) eth.BlockBodiesResponse {
+	var matched eth.BlockBodiesResponse
+	for i := range bodies {
+		if i >= len(hashes.TransactionRoots) || i >= len(hashes.UncleHashes) {
+			break
+		}
+		for _, header := range headers {
+			if hashes.TransactionRoots[i] == header.TxHash && hashes.UncleHashes[i] == header.UncleHash {
+				matched = append(matched, bodies[i])
+				break
+			}
+		}
+	}
+	return matched
+}
+
+// unpackBodies decodes the transactions and uncles of a block bodies response.
+func unpackBodies(bodies eth.BlockBodiesResponse) ([][]*types.Transaction, [][]*types.Header, error) {
+	txset := make([][]*types.Transaction, len(bodies))
+	uncleset := make([][]*types.Header, len(bodies))
+	for i := range bodies {
+		txs, err := bodies[i].Transactions.Items()
+		if err != nil {
+			return nil, nil, fmt.Errorf("bad transactions in body %d: %w", i, err)
+		}
+		uncles, err := bodies[i].Uncles.Items()
+		if err != nil {
+			return nil, nil, fmt.Errorf("bad uncles in body %d: %w", i, err)
+		}
+		txset[i], uncleset[i] = txs, uncles
+	}
+	return txset, uncleset, nil
 }

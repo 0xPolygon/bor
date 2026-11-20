@@ -17,8 +17,11 @@
 package eth
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"sync/atomic"
 	"time"
@@ -27,6 +30,7 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
@@ -36,10 +40,7 @@ import (
 	"github.com/ethereum/go-ethereum/trie"
 )
 
-// requestTracker is a singleton tracker for eth/66 and newer request times.
 var (
-	requestTracker = tracker.New(ProtocolName, 5*time.Minute)
-
 	// newBlockPushIntervalTimer tracks time deltas between consecutive inbound NewBlock pushes.
 	newBlockPushIntervalTimer = metrics.NewRegisteredTimer("eth/protocols/eth/newblock/push_interval", nil)
 
@@ -611,10 +612,20 @@ func handleBlockHeaders(backend Backend, msg Decoder, peer *Peer) error {
 	if err := msg.Decode(res); err != nil {
 		return err
 	}
+	tresp := tracker.Response{ID: res.RequestId, MsgCode: BlockHeadersMsg, Size: res.List.Len()}
+	if err := peer.tracker.Fulfil(tresp); err != nil {
+		observeUnmatchedResponse(msg, err)
+		return fmt.Errorf("BlockHeaders: %w", err)
+	}
+	headers, err := res.List.Items()
+	if err != nil {
+		observeInvalid(msg, peerpolicy.InvalidEncoding)
+		return fmt.Errorf("BlockHeaders: %w", err)
+	}
 
 	metadata := func() interface{} {
-		hashes := make([]common.Hash, len(res.BlockHeadersRequest))
-		for i, header := range res.BlockHeadersRequest {
+		hashes := make([]common.Hash, len(headers))
+		for i, header := range headers {
 			hashes[i] = header.Hash()
 		}
 
@@ -624,7 +635,7 @@ func handleBlockHeaders(backend Backend, msg Decoder, peer *Peer) error {
 	return peer.dispatchResponse(&Response{
 		id:   res.RequestId,
 		code: BlockHeadersMsg,
-		Res:  &res.BlockHeadersRequest,
+		Res:  (*BlockHeadersRequest)(&headers),
 	}, metadata)
 }
 
@@ -635,30 +646,154 @@ func handleBlockBodies(backend Backend, msg Decoder, peer *Peer) error {
 		return err
 	}
 
-	metadata := func() interface{} {
-		var (
-			txsHashes        = make([]common.Hash, len(res.BlockBodiesResponse))
-			uncleHashes      = make([]common.Hash, len(res.BlockBodiesResponse))
-			withdrawalHashes = make([]common.Hash, len(res.BlockBodiesResponse))
-		)
-
-		hasher := trie.NewStackTrie(nil)
-		for i, body := range res.BlockBodiesResponse {
-			txsHashes[i] = types.DeriveSha(types.Transactions(body.Transactions), hasher)
-			uncleHashes[i] = types.CalcUncleHash(body.Uncles)
-
-			if body.Withdrawals != nil {
-				withdrawalHashes[i] = types.DeriveSha(types.Withdrawals(body.Withdrawals), hasher)
-			}
-		}
-		return [][]common.Hash{txsHashes, uncleHashes, withdrawalHashes}
+	// Check against the request.
+	length := res.List.Len()
+	tresp := tracker.Response{ID: res.RequestId, MsgCode: BlockBodiesMsg, Size: length}
+	if err := peer.tracker.Fulfil(tresp); err != nil {
+		observeUnmatchedResponse(msg, err)
+		return fmt.Errorf("BlockBodies: %w", err)
 	}
 
+	// Collect items and dispatch.
+	items, err := res.List.Items()
+	if err != nil {
+		observeInvalid(msg, peerpolicy.InvalidEncoding)
+		return fmt.Errorf("BlockBodies: %w", err)
+	}
+	for i := range items {
+		if err := checkBodyItemCounts(&items[i]); err != nil {
+			observeInvalid(msg, peerpolicy.InvalidEncoding)
+			return fmt.Errorf("BlockBodies: body %d: %w", i, err)
+		}
+	}
+	metadata := func() any { return hashBodyParts(items) }
 	return peer.dispatchResponse(&Response{
 		id:   res.RequestId,
 		code: BlockBodiesMsg,
-		Res:  &res.BlockBodiesResponse,
+		Res:  (*BlockBodiesResponse)(&items),
 	}, metadata)
+}
+
+const (
+	minTxEncodedSize         = 1 + 9      // Min size for RLP encoded transaction
+	minWithdrawalEncodedSize = 1 + 3 + 21 // Min size for RLP encoded withdrawal
+	minReceiptEncodedSize    = 1 + 4      // Min size for RLP encoded receipt
+	minHeaderEncodedSize     = 496        // Min size for RLP encoded header (pre-London fields only)
+)
+
+// checkBodyItemCounts rejects bodies containing more transactions, uncles or
+// withdrawals than can fit in their encoded size. The block fetcher decodes
+// uncles before matching their hash, so they are bounded here too.
+func checkBodyItemCounts(body *BlockBody) error {
+	if n := body.Transactions.Len(); n*minTxEncodedSize > len(body.Transactions.Content()) {
+		return fmt.Errorf("%d transactions in %d bytes", n, len(body.Transactions.Content()))
+	}
+	if n := body.Uncles.Len(); n*minHeaderEncodedSize > len(body.Uncles.Content()) {
+		return fmt.Errorf("%d uncles in %d bytes", n, len(body.Uncles.Content()))
+	}
+	if body.Withdrawals != nil {
+		if n := body.Withdrawals.Len(); n*minWithdrawalEncodedSize > len(body.Withdrawals.Content()) {
+			return fmt.Errorf("%d withdrawals in %d bytes", n, len(body.Withdrawals.Content()))
+		}
+	}
+	return nil
+}
+
+// checkReceiptItemCounts rejects receipt lists containing more receipts than
+// can fit in their encoded size.
+func checkReceiptItemCounts[L ReceiptsList](lists []L) error {
+	for i, list := range lists {
+		items := list.rawItems()
+		if n := items.Len(); n*minReceiptEncodedSize > len(items.Content()) {
+			return fmt.Errorf("list %d: %d receipts in %d bytes", i, n, len(items.Content()))
+		}
+	}
+	return nil
+}
+
+// BlockBodyHashes contains the lists of block body part roots for a list of block bodies.
+type BlockBodyHashes struct {
+	TransactionRoots []common.Hash
+	WithdrawalRoots  []common.Hash
+	UncleHashes      []common.Hash
+}
+
+func hashBodyParts(items []BlockBody) BlockBodyHashes {
+	h := BlockBodyHashes{
+		TransactionRoots: make([]common.Hash, len(items)),
+		WithdrawalRoots:  make([]common.Hash, len(items)),
+		UncleHashes:      make([]common.Hash, len(items)),
+	}
+	hasher := trie.NewStackTrie(nil)
+	for i, body := range items {
+		// txs
+		txsList := newDerivableRawList(&body.Transactions, writeTxForHash)
+		h.TransactionRoots[i] = types.DeriveSha(txsList, hasher)
+		// uncles
+		if body.Uncles.Len() == 0 {
+			h.UncleHashes[i] = types.EmptyUncleHash
+		} else {
+			h.UncleHashes[i] = crypto.Keccak256Hash(body.Uncles.Bytes())
+		}
+		// withdrawals
+		if body.Withdrawals != nil {
+			wdlist := newDerivableRawList(body.Withdrawals, nil)
+			h.WithdrawalRoots[i] = types.DeriveSha(wdlist, hasher)
+		}
+	}
+	return h
+}
+
+// derivableRawList implements types.DerivableList for a serialized RLP list.
+type derivableRawList struct {
+	data    []byte
+	offsets []uint32
+	write   func([]byte, *bytes.Buffer)
+}
+
+func newDerivableRawList[T any](list *rlp.RawList[T], write func([]byte, *bytes.Buffer)) *derivableRawList {
+	dl := derivableRawList{data: list.Content(), write: write}
+	if dl.write == nil {
+		// default transform is identity
+		dl.write = func(b []byte, buf *bytes.Buffer) { buf.Write(b) }
+	}
+	// Assert to ensure 32-bit offsets are valid. This can never trigger
+	// unless a block body component or p2p receipt list is larger than 4GB.
+	if uint(len(dl.data)) > math.MaxUint32 {
+		panic("list data too big for derivableRawList")
+	}
+	it := list.ContentIterator()
+	dl.offsets = make([]uint32, list.Len())
+	for i := 0; it.Next(); i++ {
+		dl.offsets[i] = uint32(it.Offset())
+	}
+	return &dl
+}
+
+// Len returns the number of items in the list.
+func (dl *derivableRawList) Len() int {
+	return len(dl.offsets)
+}
+
+// EncodeIndex writes the i'th item to the buffer.
+func (dl *derivableRawList) EncodeIndex(i int, buf *bytes.Buffer) {
+	start := dl.offsets[i]
+	end := uint32(len(dl.data))
+	if i != len(dl.offsets)-1 {
+		end = dl.offsets[i+1]
+	}
+	dl.write(dl.data[start:end], buf)
+}
+
+// writeTxForHash changes a transaction in 'network encoding' into the format used for
+// the transactions MPT.
+func writeTxForHash(tx []byte, buf *bytes.Buffer) {
+	k, content, _, _ := rlp.Split(tx)
+	if k == rlp.List {
+		buf.Write(tx) // legacy tx
+	} else {
+		buf.Write(content) // typed tx
+	}
 }
 
 func handleReceipts[L ReceiptsList](backend Backend, msg Decoder, peer *Peer) error {
@@ -668,11 +803,26 @@ func handleReceipts[L ReceiptsList](backend Backend, msg Decoder, peer *Peer) er
 		return err
 	}
 
+	tresp := tracker.Response{ID: res.RequestId, MsgCode: ReceiptsMsg, Size: res.List.Len()}
+	if err := peer.tracker.Fulfil(tresp); err != nil {
+		observeUnmatchedResponse(msg, err)
+		return fmt.Errorf("Receipts: %w", err)
+	}
+
 	// Assign temporary hashing buffer to each list item, the same buffer is shared
 	// between all receipt list instances.
+	receiptLists, err := res.List.Items()
+	if err != nil {
+		observeInvalid(msg, peerpolicy.InvalidEncoding)
+		return fmt.Errorf("Receipts: %w", err)
+	}
+	if err := checkReceiptItemCounts(receiptLists); err != nil {
+		observeInvalid(msg, peerpolicy.InvalidEncoding)
+		return fmt.Errorf("Receipts: %w", err)
+	}
 	buffers := new(receiptListBuffers)
-	for i := range res.List {
-		res.List[i].setBuffers(buffers)
+	for i := range receiptLists {
+		receiptLists[i].setBuffers(buffers)
 	}
 
 	// The `metadata` function below was used earlier to calculate `ReceiptHash` which is further
@@ -690,7 +840,7 @@ func handleReceipts[L ReceiptsList](backend Backend, msg Decoder, peer *Peer) er
 	return peer.dispatchResponse(&Response{
 		id:   res.RequestId,
 		code: ReceiptsMsg,
-		Res:  &res.List,
+		Res:  &receiptLists,
 	}, metadata)
 }
 
@@ -701,14 +851,29 @@ func handleReceipts70(backend Backend, msg Decoder, peer *Peer) error {
 		return err
 	}
 
+	tresp := tracker.Response{ID: res.RequestId, MsgCode: ReceiptsMsg, Size: res.List.Len()}
+	if err := peer.tracker.Fulfil(tresp); err != nil {
+		observeUnmatchedResponse(msg, err)
+		return fmt.Errorf("Receipts: %w", err)
+	}
+	receiptLists, err := res.List.Items()
+	if err != nil {
+		observeInvalid(msg, peerpolicy.InvalidEncoding)
+		return fmt.Errorf("Receipts: %w", err)
+	}
+	if err := checkReceiptItemCounts(receiptLists); err != nil {
+		observeInvalid(msg, peerpolicy.InvalidEncoding)
+		return fmt.Errorf("Receipts: %w", err)
+	}
+
 	// Assign temporary hashing buffer to each list item, the same buffer is shared
 	// between all receipt list instances.
 	buffers := new(receiptListBuffers)
-	for i := range res.List {
-		res.List[i].setBuffers(buffers)
+	for i := range receiptLists {
+		receiptLists[i].setBuffers(buffers)
 	}
 
-	if err := peer.bufferReceipts(res.RequestId, res.List, res.LastBlockIncomplete); err != nil {
+	if err := peer.bufferReceipts(res.RequestId, receiptLists, res.LastBlockIncomplete); err != nil {
 		return err
 	}
 	if res.LastBlockIncomplete {
@@ -716,7 +881,6 @@ func handleReceipts70(backend Backend, msg Decoder, peer *Peer) error {
 		// it. Nothing is handed to the downloader until the block is whole.
 		return peer.requestPartialReceipts(res.RequestId)
 	}
-	receiptLists := res.List
 	if complete := peer.flushReceipts(res.RequestId); complete != nil {
 		receiptLists = complete
 	}
@@ -738,53 +902,58 @@ func handleReceipts70(backend Backend, msg Decoder, peer *Peer) error {
 // EncodeReceiptsAndPrepareHasher encodes a list of receipts to the storage format (does not
 // include TxType field). It also returns a function which calculates `ReceiptHash` of a receipt list
 // based on the whether we've crossed the Madhugiri hardfork or not.
-func EncodeReceiptsAndPrepareHasher(packet interface{}, borCfg *params.BorConfig) (ReceiptsRLPResponse, func(int, *big.Int) common.Hash) {
+func EncodeReceiptsAndPrepareHasher(packet interface{}, borCfg *params.BorConfig) (ReceiptsRLPResponse, func(int, *big.Int) common.Hash, error) {
 	// Extract receipts based on type. Add/remove support for new types here as needed.
 	var (
 		receipts             ReceiptsRLPResponse
 		getReceiptListHashes func(int, *big.Int) common.Hash
+		err                  error
 	)
 	switch packet := packet.(type) {
 	case []*ReceiptList68:
 		receiptList := packet
-		receipts, getReceiptListHashes = encodeReceiptsAndPrepareHasher(receiptList, borCfg)
+		receipts, getReceiptListHashes, err = encodeReceiptsAndPrepareHasher(receiptList, borCfg)
 	case *[]*ReceiptList68:
 		receiptList := packet
-		receipts, getReceiptListHashes = encodeReceiptsAndPrepareHasher(*receiptList, borCfg)
+		receipts, getReceiptListHashes, err = encodeReceiptsAndPrepareHasher(*receiptList, borCfg)
 	case []*ReceiptList69:
 		receiptList := packet
-		receipts, getReceiptListHashes = encodeReceiptsAndPrepareHasher(receiptList, borCfg)
+		receipts, getReceiptListHashes, err = encodeReceiptsAndPrepareHasher(receiptList, borCfg)
 	case *[]*ReceiptList69:
 		receiptList := packet
-		receipts, getReceiptListHashes = encodeReceiptsAndPrepareHasher(*receiptList, borCfg)
+		receipts, getReceiptListHashes, err = encodeReceiptsAndPrepareHasher(*receiptList, borCfg)
 	default:
 		// This shouldn't happen unless there's a bug in identifying type of receipt list
 		// or there's a new type which isn't handled here.
 		log.Debug("EncodeReceiptsAndPrepareHasher: unsupported receipt list type", "type", fmt.Sprintf("%T", packet))
-		return nil, nil
+		return nil, nil, nil
 	}
-	return receipts, getReceiptListHashes
+	return receipts, getReceiptListHashes, err
 }
 
 // encodeReceiptsAndPrepareHasher is an internal generic function for all receipt types
-func encodeReceiptsAndPrepareHasher[L ReceiptsList](receipts []L, borCfg *params.BorConfig) (ReceiptsRLPResponse, func(int, *big.Int) common.Hash) {
+func encodeReceiptsAndPrepareHasher[L ReceiptsList](receipts []L, borCfg *params.BorConfig) (ReceiptsRLPResponse, func(int, *big.Int) common.Hash, error) {
 	var encodedReceipts ReceiptsRLPResponse = make(ReceiptsRLPResponse, len(receipts))
 	for i := range receipts {
-		encodedReceipts[i] = receipts[i].EncodeForStorage()
+		enc, err := receipts[i].EncodeForStorage()
+		if err != nil {
+			return nil, nil, fmt.Errorf("invalid receipt list %d: %w", i, err)
+		}
+		encodedReceipts[i] = enc
 	}
 
 	hasher := trie.NewStackTrie(nil)
 	calculateReceiptHashes := func(index int, number *big.Int) common.Hash {
 		// For non-bor chains or post-Madhugiri blocks, include all receipts in hash
 		if borCfg == nil || borCfg.IsMadhugiri(number) {
-			return types.DeriveSha(receipts[index], hasher)
+			return types.DeriveSha(receipts[index].Derivable(), hasher)
 		}
 		// Pre-Madhugiri bor blocks: exclude state-sync receipt from hash calculation
 		receipts[index].ExcludeStateSyncReceipt()
-		return types.DeriveSha(receipts[index], hasher)
+		return types.DeriveSha(receipts[index].Derivable(), hasher)
 	}
 
-	return encodedReceipts, calculateReceiptHashes
+	return encodedReceipts, calculateReceiptHashes, nil
 }
 
 func handleNewPooledTransactionHashes(backend Backend, msg Decoder, peer *Peer) error {
@@ -860,23 +1029,19 @@ func handleTransactions(backend Backend, msg Decoder, peer *Peer) error {
 	if err := msg.Decode(&txs); err != nil {
 		return err
 	}
-	// Duplicate transactions are not allowed
-	seen := make(map[common.Hash]struct{})
-	for i, tx := range txs {
-		// Validate and mark the remote transaction
-		if tx == nil {
-			observeInvalid(msg, peerpolicy.InvalidTransaction)
-			return fmt.Errorf("Transactions: transaction %d is nil", i)
-		}
-
-		hash := tx.Hash()
-		if _, exists := seen[hash]; exists {
-			observeInvalid(msg, peerpolicy.InvalidEncoding)
-			return fmt.Errorf("Transactions: multiple copies of the same hash %v", hash)
-		}
-		seen[hash] = struct{}{}
-		peer.markTransaction(hash)
+	if txs.Len() > maxTransactionAnnouncements {
+		observeInvalid(msg, peerpolicy.InvalidEncoding)
+		return fmt.Errorf("Transactions: too many transactions")
 	}
+	list, err := txs.Items()
+	if err != nil {
+		observeInvalid(msg, peerpolicy.InvalidEncoding)
+		return fmt.Errorf("Transactions: %w", err)
+	}
+	if err := checkTransactions(msg, peer, list, "Transactions"); err != nil {
+		return err
+	}
+	txs.decoded = list
 
 	if err := backend.Handle(peer, &txs); err != nil {
 		return err
@@ -891,35 +1056,73 @@ func handlePooledTransactions(backend Backend, msg Decoder, peer *Peer) error {
 		observeIgnoredTransactions(msg)
 		return nil
 	}
-	// Transactions can be processed, parse all of them and deliver to the pool
-	var txs PooledTransactionsPacket
-	if err := msg.Decode(&txs); err != nil {
+
+	// Check against request and decode.
+	var resp PooledTransactionsPacket
+	if err := msg.Decode(&resp); err != nil {
 		return err
 	}
-	// Duplicate transactions are not allowed
+	// A reply that matches no pending request is not fatal: the fetcher
+	// correlates deliveries itself and treats unknown ones as neutral.
+	tresp := tracker.Response{
+		ID:      resp.RequestId,
+		MsgCode: PooledTransactionsMsg,
+		Size:    resp.List.Len(),
+	}
+	if err := peer.tracker.Fulfil(tresp); err != nil && !errors.Is(err, tracker.ErrNoMatchingRequest) {
+		observeInvalid(msg, peerpolicy.InvalidEncoding)
+		return fmt.Errorf("PooledTransactions: %w", err)
+	}
+	// Unmatched replies skip the tracker's size check, so bound them by the
+	// largest request we send before decoding.
+	if resp.List.Len() > maxPooledTxsServe {
+		observeInvalid(msg, peerpolicy.InvalidEncoding)
+		return fmt.Errorf("PooledTransactions: too many transactions")
+	}
+	list, err := resp.List.Items()
+	if err != nil {
+		observeInvalid(msg, peerpolicy.InvalidEncoding)
+		return fmt.Errorf("PooledTransactions: %w", err)
+	}
+	if err := checkTransactions(msg, peer, list, "PooledTransactions"); err != nil {
+		return err
+	}
+	resp.decoded = list
+
+	if err := backend.Handle(peer, &resp); err != nil {
+		return err
+	}
+	observeForwardedTransactions(msg)
+	return nil
+}
+
+// observeUnmatchedResponse records evidence for a response that contradicts
+// its request. A response to an expired request is not evidence, since honest
+// peers can be slow.
+func observeUnmatchedResponse(msg Decoder, err error) {
+	if !errors.Is(err, tracker.ErrNoMatchingRequest) {
+		observeInvalid(msg, peerpolicy.InvalidEncoding)
+	}
+}
+
+// checkTransactions rejects nil and duplicate transactions and marks the rest
+// as known to the peer.
+func checkTransactions(msg Decoder, peer *Peer, txs []*types.Transaction, kind string) error {
 	seen := make(map[common.Hash]struct{})
-	for i, tx := range txs.PooledTransactionsResponse {
-		// Validate and mark the remote transaction
+	for i, tx := range txs {
 		if tx == nil {
 			observeInvalid(msg, peerpolicy.InvalidTransaction)
-			return fmt.Errorf("PooledTransactions: transaction %d is nil", i)
+			return fmt.Errorf("%s: transaction %d is nil", kind, i)
 		}
 
 		hash := tx.Hash()
 		if _, exists := seen[hash]; exists {
 			observeInvalid(msg, peerpolicy.InvalidEncoding)
-			return fmt.Errorf("PooledTransactions: multiple copies of the same hash %v", hash)
+			return fmt.Errorf("%s: multiple copies of the same hash %v", kind, hash)
 		}
 		seen[hash] = struct{}{}
 		peer.markTransaction(hash)
 	}
-
-	requestTracker.Fulfil(peer.id, peer.version, PooledTransactionsMsg, txs.RequestId)
-
-	if err := backend.Handle(peer, &txs); err != nil {
-		return err
-	}
-	observeForwardedTransactions(msg)
 	return nil
 }
 

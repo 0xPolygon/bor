@@ -38,6 +38,7 @@ func (h *handler) initPeerPolicy(enabled, perPeerMetrics bool) {
 	h.downloader.SetFailureObserver(func(id string) { h.observePeer(id, peerpolicy.DownloaderFailure) })
 	h.downloader.SetInvalidResponseObserver(func(id string) { h.observePeer(id, peerpolicy.InvalidBlock) })
 	h.blockFetcher.SetInvalidHeaderObserver(h.observeInvalidHeader)
+	h.blockFetcher.SetInvalidBodyObserver(func(id string) { h.observePeer(id, peerpolicy.InvalidEncoding) })
 	h.txFetcher.SetValidationObserver(h.observeTransactionDelivery)
 	h.updateContributionReadiness()
 }

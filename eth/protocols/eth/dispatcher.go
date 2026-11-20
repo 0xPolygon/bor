@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/p2p"
+	"github.com/ethereum/go-ethereum/p2p/tracker"
 )
 
 var (
@@ -47,10 +48,11 @@ type Request struct {
 	sink   chan *Response // Channel to deliver the response on
 	Cancel chan struct{}  // Channel to cancel requests ahead of time
 
-	code    uint64      // Message code of the request packet
-	want    uint64      // Message code of the response packet
-	data    interface{} // Data content of the request packet
-	cleanup func()      // Optional callback to release protocol-specific state if the request dies unfulfilled
+	code     uint64      // Message code of the request packet
+	want     uint64      // Message code of the response packet
+	numItems int         // Number of requested items
+	data     interface{} // Data content of the request packet
+	cleanup  func()      // Optional callback to release protocol-specific state if the request dies unfulfilled
 
 	Peer string    // Demultiplexer if cross-peer requests are batched together
 	Sent time.Time // Timestamp when the request was sent
@@ -113,6 +115,7 @@ type cancel struct {
 type resend struct {
 	id   uint64      // Request ID to continue
 	code uint64      // Message code of the follow-up packet
+	size int         // Number of items requested by the follow-up
 	data interface{} // Data content of the follow-up packet
 	fail chan error
 }
@@ -171,10 +174,11 @@ func (p *Peer) dispatchRequest(req *Request) error {
 // dispatchResend schedules a follow-up packet continuing a pending request,
 // blocking until it's sent. The follow-up is silently dropped if the original
 // request has already been cancelled or fulfilled.
-func (p *Peer) dispatchResend(id uint64, code uint64, data interface{}) error {
+func (p *Peer) dispatchResend(id uint64, code uint64, size int, data interface{}) error {
 	resendOp := &resend{
 		id:   id,
 		code: code,
+		size: size,
 		data: data,
 		fail: make(chan error),
 	}
@@ -240,23 +244,36 @@ func (p *Peer) dispatchResponse(res *Response, metadata func() interface{}) erro
 func (p *Peer) dispatcher() {
 	pending := make(map[uint64]*Request)
 
+loop:
 	for {
 		select {
 		case reqOp := <-p.reqDispatch:
 			req := reqOp.req
 			req.Sent = time.Now()
 
-			requestTracker.Track(p.id, p.version, req.code, req.want, req.id)
-			err := p2p.Send(p.rw, req.code, req.data)
-			if err != nil && req.cleanup != nil {
-				req.cleanup()
+			treq := tracker.Request{
+				ID:       req.id,
+				ReqCode:  req.code,
+				RespCode: req.want,
+				Size:     req.numItems,
 			}
-			reqOp.fail <- err
-
-			if err == nil {
-				req.roundtrips = 1
-				pending[req.id] = req
+			if err := p.tracker.Track(treq); err != nil {
+				if req.cleanup != nil {
+					req.cleanup()
+				}
+				reqOp.fail <- err
+				continue loop
 			}
+			if err := p2p.Send(p.rw, req.code, req.data); err != nil {
+				if req.cleanup != nil {
+					req.cleanup()
+				}
+				reqOp.fail <- err
+				continue loop
+			}
+			req.roundtrips = 1
+			pending[req.id] = req
+			reqOp.fail <- nil
 
 		case resendOp := <-p.reqResend:
 			// Only continue a request that is still pending: if it has been
@@ -265,14 +282,24 @@ func (p *Peer) dispatcher() {
 			req := pending[resendOp.id]
 			if req == nil {
 				resendOp.fail <- nil
-				continue
+				continue loop
 			}
-			requestTracker.Track(p.id, p.version, resendOp.code, req.want, req.id)
-			err := p2p.Send(p.rw, resendOp.code, resendOp.data)
-			if err == nil {
-				req.roundtrips++
+			treq := tracker.Request{
+				ID:       req.id,
+				ReqCode:  req.code,
+				RespCode: req.want,
+				Size:     resendOp.size,
 			}
-			resendOp.fail <- err
+			if err := p.tracker.Track(treq); err != nil {
+				resendOp.fail <- err
+				continue loop
+			}
+			if err := p2p.Send(p.rw, resendOp.code, resendOp.data); err != nil {
+				resendOp.fail <- err
+				continue loop
+			}
+			req.roundtrips++
+			resendOp.fail <- nil
 
 		case cancelOp := <-p.reqCancel:
 			// Retrieve the pending request to cancel and short circuit if it
@@ -285,7 +312,6 @@ func (p *Peer) dispatcher() {
 			// Stop tracking the request and release any protocol-specific
 			// state tied to it.
 			delete(pending, cancelOp.id)
-			requestTracker.Fulfil(p.id, p.version, req.code, cancelOp.id)
 
 			if req.cleanup != nil {
 				req.cleanup()
@@ -295,9 +321,6 @@ func (p *Peer) dispatcher() {
 		case resOp := <-p.resDispatch:
 			res := resOp.res
 			res.Req = pending[res.id]
-
-			// Independent if the request exists or not, track this packet
-			requestTracker.Fulfil(p.id, p.version, res.code, res.id)
 
 			switch {
 			case res.Req == nil:
@@ -326,6 +349,7 @@ func (p *Peer) dispatcher() {
 			}
 
 		case <-p.term:
+			p.tracker.Stop()
 			return
 		}
 	}

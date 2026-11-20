@@ -50,8 +50,8 @@ func newReceipt(tr *types.Receipt) Receipt {
 }
 
 // decode68 parses a receipt in the eth/68 network encoding.
-func (r *Receipt) decode68(buf *receiptListBuffers, s *rlp.Stream) error {
-	k, size, err := s.Kind()
+func (r *Receipt) decode68(b []byte) error {
+	k, content, _, err := rlp.Split(b)
 	if err != nil {
 		return err
 	}
@@ -59,65 +59,84 @@ func (r *Receipt) decode68(buf *receiptListBuffers, s *rlp.Stream) error {
 	*r = Receipt{}
 	if k == rlp.List {
 		// Legacy receipt.
-		return r.decodeInnerList(s, false, true)
+		return r.decodeInnerList(b, false, true)
 	}
 	// Typed receipt.
-	if size < 2 || size > maxReceiptSize {
-		return fmt.Errorf("invalid receipt size %d", size)
+	if len(content) < 2 || len(content) > maxReceiptSize {
+		return fmt.Errorf("invalid receipt size %d", len(content))
 	}
-	buf.tmp.Reset()
-	buf.tmp.Grow(int(size))
-	payload := buf.tmp.Bytes()[:int(size)]
-	if err := s.ReadBytes(payload); err != nil {
-		return err
-	}
-	r.TxType = payload[0]
-	s2 := rlp.NewStream(bytes.NewReader(payload[1:]), 0)
-	return r.decodeInnerList(s2, false, true)
+	r.TxType = content[0]
+	return r.decodeInnerList(content[1:], false, true)
 }
 
 // decode69 parses a receipt in the eth/69 network encoding.
-func (r *Receipt) decode69(s *rlp.Stream) error {
+func (r *Receipt) decode69(b []byte) error {
 	*r = Receipt{}
-	return r.decodeInnerList(s, true, false)
+	return r.decodeInnerList(b, true, false)
 }
 
 // decodeDatabase parses a receipt in the basic database encoding.
-func (r *Receipt) decodeDatabase(txType byte, s *rlp.Stream) error {
+func (r *Receipt) decodeDatabase(txType byte, b []byte) error {
 	*r = Receipt{TxType: txType}
-	return r.decodeInnerList(s, false, false)
+	return r.decodeInnerList(b, false, false)
 }
 
-func (r *Receipt) decodeInnerList(s *rlp.Stream, readTxType, readBloom bool) error {
-	_, err := s.List()
+func (r *Receipt) decodeInnerList(input []byte, readTxType, readBloom bool) error {
+	input, _, err := rlp.SplitList(input)
 	if err != nil {
-		return err
+		return fmt.Errorf("inner list: %v", err)
 	}
+
+	// txType
 	if readTxType {
-		r.TxType, err = s.Uint8()
+		var txType uint64
+		txType, input, err = rlp.SplitUint64(input)
 		if err != nil {
 			return fmt.Errorf("invalid txType: %w", err)
 		}
+		if txType > 0x7f {
+			return fmt.Errorf("invalid txType: too large")
+		}
+		r.TxType = byte(txType)
 	}
-	r.PostStateOrStatus, err = s.Bytes()
+
+	// status
+	r.PostStateOrStatus, input, err = rlp.SplitString(input)
 	if err != nil {
 		return fmt.Errorf("invalid postStateOrStatus: %w", err)
 	}
-	r.GasUsed, err = s.Uint64()
+	if len(r.PostStateOrStatus) > 1 && len(r.PostStateOrStatus) != 32 {
+		return fmt.Errorf("invalid postStateOrStatus length %d", len(r.PostStateOrStatus))
+	}
+
+	// gas
+	r.GasUsed, input, err = rlp.SplitUint64(input)
 	if err != nil {
 		return fmt.Errorf("invalid gasUsed: %w", err)
 	}
+
+	// bloom
 	if readBloom {
-		var b types.Bloom
-		if err := s.ReadBytes(b[:]); err != nil {
+		var bloomBytes []byte
+		bloomBytes, input, err = rlp.SplitString(input)
+		if err != nil {
 			return fmt.Errorf("invalid bloom: %v", err)
 		}
+		if len(bloomBytes) != types.BloomByteLength {
+			return fmt.Errorf("invalid bloom length %d", len(bloomBytes))
+		}
 	}
-	r.Logs, err = s.Raw()
+
+	// logs
+	_, rest, err := rlp.SplitList(input)
 	if err != nil {
 		return fmt.Errorf("invalid logs: %w", err)
 	}
-	return s.ListEnd()
+	if len(rest) != 0 {
+		return fmt.Errorf("junk at end of receipt")
+	}
+	r.Logs = input
+	return nil
 }
 
 // encodeForStorage produces the storage encoding, i.e. the result matches
@@ -223,54 +242,85 @@ func initBuffers(buf **receiptListBuffers) {
 }
 
 // encodeForStorage encodes a list of receipts for the database.
-func (buf *receiptListBuffers) encodeForStorage(rs []Receipt) rlp.RawValue {
+func (buf *receiptListBuffers) encodeForStorage(rs rlp.RawList[Receipt], decode func([]byte, *Receipt) error) (rlp.RawValue, error) {
 	var out bytes.Buffer
 	w := &buf.enc
 	w.Reset(&out)
 	outer := w.List()
-	for _, receipts := range rs {
-		receipts.encodeForStorage(w)
+	it := rs.ContentIterator()
+	for it.Next() {
+		var receipt Receipt
+		if err := decode(it.Value(), &receipt); err != nil {
+			return nil, err
+		}
+		receipt.encodeForStorage(w)
+	}
+	if it.Err() != nil {
+		return nil, fmt.Errorf("bad list: %v", it.Err())
 	}
 	w.ListEnd(outer)
 	w.Flush()
-	return out.Bytes()
+	return out.Bytes(), nil
 }
 
-// excludeStateSyncReceipt excludes the state sync receipt from the list if present
-// and returns the modified list.
-func excludeStateSyncReceipt(items []Receipt) []Receipt {
-	if len(items) == 0 {
-		return items
+// excludeStateSyncReceipt drops the state sync receipt from the end of the list
+// if present. A receipt that fails to decode leaves the list unchanged, so the
+// receipt root check rejects it later.
+func excludeStateSyncReceipt(items *rlp.RawList[Receipt], decode func([]byte, *Receipt) error) {
+	n := items.Len()
+	if n == 0 {
+		return
 	}
-
+	raw := make([][]byte, 0, n)
+	it := items.ContentIterator()
+	for it.Next() {
+		raw = append(raw, it.Value())
+	}
+	if len(raw) != n {
+		return
+	}
+	var last Receipt
+	if decode(raw[n-1], &last) != nil {
+		return
+	}
 	// The state-sync receipt can either have a 0 cumulative gas used (this depends on the remote peer) or
 	// have the same cumulative gas used as the previous receipt as state-sync transactions uses 0 gas and
 	// hence they don't contribute to the cumulative gas used value.
-	if items[len(items)-1].GasUsed == 0 {
-		return items[:len(items)-1]
+	drop := last.GasUsed == 0
+	if !drop && n >= 2 {
+		var prev Receipt
+		drop = decode(raw[n-2], &prev) == nil && prev.GasUsed == last.GasUsed
 	}
-
-	// If not found, compare with a receipt before
-	if len(items) >= 2 && items[len(items)-1].GasUsed == items[len(items)-2].GasUsed {
-		return items[:len(items)-1]
+	if !drop {
+		return
 	}
-
-	return items
+	var trimmed rlp.RawList[Receipt]
+	for _, r := range raw[:n-1] {
+		if err := trimmed.AppendRaw(r); err != nil {
+			return
+		}
+	}
+	*items = trimmed
 }
 
 // ReceiptList68 is a block receipt list as downloaded by eth/68.
 // This also implements types.DerivableList for validation purposes.
 type ReceiptList68 struct {
 	buf   *receiptListBuffers
-	items []Receipt
+	items rlp.RawList[Receipt]
 }
 
 // NewReceiptList68 creates a receipt list.
 // This is slow, and exists for testing purposes.
 func NewReceiptList68(trs []*types.Receipt) *ReceiptList68 {
-	rl := &ReceiptList68{items: make([]Receipt, len(trs))}
-	for i, tr := range trs {
-		rl.items[i] = newReceipt(tr)
+	rl := new(ReceiptList68)
+	initBuffers(&rl.buf)
+	enc := rlp.NewEncoderBuffer(nil)
+	for _, tr := range trs {
+		r := newReceipt(tr)
+		r.encodeForNetwork68(rl.buf, &enc)
+		rl.items.AppendRaw(enc.ToBytes())
+		enc.Reset(nil)
 	}
 	return rl
 }
@@ -296,17 +346,12 @@ func blockReceiptsToNetwork68(blockReceipts, blockBody rlp.RawValue) ([]byte, er
 			return nil, fmt.Errorf("invalid block receipts: %w", err)
 		}
 	}
-	innerReader := bytes.NewReader(nil)
-	innerStream := rlp.NewStream(innerReader, 0)
 	w := rlp.NewEncoderBuffer(&out)
 	outer := w.List()
 	for i := 0; blockReceiptIter.Next(); i++ {
-		content := blockReceiptIter.Value()
-		innerReader.Reset(content)
-		innerStream.Reset(innerReader, uint64(len(content)))
-		var r Receipt
 		txType, _ := nextTxType()
-		if err := r.decodeDatabase(txType, innerStream); err != nil {
+		var r Receipt
+		if err := r.decodeDatabase(txType, blockReceiptIter.Value()); err != nil {
 			return nil, fmt.Errorf("invalid database receipt %d: %v", i, err)
 		}
 		r.encodeForNetwork68(&buf, &w)
@@ -321,70 +366,67 @@ func (rl *ReceiptList68) setBuffers(buf *receiptListBuffers) {
 	rl.buf = buf
 }
 
+// rawItems implements ReceiptsList.
+func (rl *ReceiptList68) rawItems() *rlp.RawList[Receipt] {
+	return &rl.items
+}
+
 // EncodeForStorage encodes the receipts for storage into the database.
-func (rl *ReceiptList68) EncodeForStorage() rlp.RawValue {
+func (rl *ReceiptList68) EncodeForStorage() (rlp.RawValue, error) {
 	initBuffers(&rl.buf)
-	return rl.buf.encodeForStorage(rl.items)
+	return rl.buf.encodeForStorage(rl.items, func(data []byte, r *Receipt) error {
+		return r.decode68(data)
+	})
 }
 
-// Len implements types.DerivableList.
-func (rl *ReceiptList68) Len() int {
-	return len(rl.items)
-}
-
-// EncodeIndex implements types.DerivableList.
-func (rl *ReceiptList68) EncodeIndex(i int, out *bytes.Buffer) {
+// Derivable turns the receipts into a list that can derive the root hash.
+func (rl *ReceiptList68) Derivable() types.DerivableList {
 	initBuffers(&rl.buf)
-	rl.items[i].encodeForHash(rl.buf, out)
+	return newDerivableRawList(&rl.items, func(data []byte, outbuf *bytes.Buffer) {
+		var r Receipt
+		if r.decode68(data) != nil {
+			// Write invalid data to corrupt the receipt root
+			outbuf.WriteByte(0x00)
+			return
+		}
+		r.encodeForHash(rl.buf, outbuf)
+	})
 }
 
 // DecodeRLP decodes a list of receipts from the network format.
 func (rl *ReceiptList68) DecodeRLP(s *rlp.Stream) error {
-	initBuffers(&rl.buf)
-	if _, err := s.List(); err != nil {
-		return err
-	}
-	for i := 0; s.MoreDataInList(); i++ {
-		var item Receipt
-		err := item.decode68(rl.buf, s)
-		if err != nil {
-			return fmt.Errorf("receipt %d: %v", i, err)
-		}
-		rl.items = append(rl.items, item)
-	}
-	return s.ListEnd()
+	return rl.items.DecodeRLP(s)
 }
 
 // EncodeRLP encodes the list into the network format of eth/68.
-func (rl *ReceiptList68) EncodeRLP(_w io.Writer) error {
-	initBuffers(&rl.buf)
-	w := rlp.NewEncoderBuffer(_w)
-	outer := w.List()
-	for i := range rl.items {
-		rl.items[i].encodeForNetwork68(rl.buf, &w)
-	}
-	w.ListEnd(outer)
-	return w.Flush()
+func (rl *ReceiptList68) EncodeRLP(w io.Writer) error {
+	return rl.items.EncodeRLP(w)
 }
 
 // ExcludeStateSync removes the state sync transaction receipt from the list.
 func (rl *ReceiptList68) ExcludeStateSyncReceipt() {
-	rl.items = excludeStateSyncReceipt(rl.items)
+	excludeStateSyncReceipt(&rl.items, func(data []byte, r *Receipt) error {
+		return r.decode68(data)
+	})
 }
 
 // ReceiptList69 is the block receipt list as downloaded by eth/69.
 // This implements types.DerivableList for validation purposes.
 type ReceiptList69 struct {
 	buf   *receiptListBuffers
-	items []Receipt
+	items rlp.RawList[Receipt]
 }
 
 // NewReceiptList69 creates a receipt list.
 // This is slow, and exists for testing purposes.
 func NewReceiptList69(trs []*types.Receipt) *ReceiptList69 {
-	rl := &ReceiptList69{items: make([]Receipt, len(trs))}
-	for i, tr := range trs {
-		rl.items[i] = newReceipt(tr)
+	rl := new(ReceiptList69)
+	enc := rlp.NewEncoderBuffer(nil)
+	for _, tr := range trs {
+		r := newReceipt(tr)
+		r.encodeForNetwork69(&enc)
+		rl.items.AppendRaw(enc.ToBytes())
+		enc.Reset(nil)
 	}
 	return rl
 }
@@ -394,70 +436,85 @@ func (rl *ReceiptList69) setBuffers(buf *receiptListBuffers) {
 	rl.buf = buf
 }
 
+// rawItems implements ReceiptsList.
+func (rl *ReceiptList69) rawItems() *rlp.RawList[Receipt] {
+	return &rl.items
+}
+
 // EncodeForStorage encodes the receipts for storage into the database.
-func (rl *ReceiptList69) EncodeForStorage() rlp.RawValue {
+func (rl *ReceiptList69) EncodeForStorage() (rlp.RawValue, error) {
 	initBuffers(&rl.buf)
-	return rl.buf.encodeForStorage(rl.items)
+	return rl.buf.encodeForStorage(rl.items, func(data []byte, r *Receipt) error {
+		return r.decode69(data)
+	})
 }
 
-// Len implements types.DerivableList.
-func (rl *ReceiptList69) Len() int {
-	return len(rl.items)
-}
-
-// EncodeIndex implements types.DerivableList.
-func (rl *ReceiptList69) EncodeIndex(i int, out *bytes.Buffer) {
+// Derivable turns the receipts into a list that can derive the root hash.
+func (rl *ReceiptList69) Derivable() types.DerivableList {
 	initBuffers(&rl.buf)
-	rl.items[i].encodeForHash(rl.buf, out)
+	return newDerivableRawList(&rl.items, func(data []byte, outbuf *bytes.Buffer) {
+		var r Receipt
+		if r.decode69(data) != nil {
+			// Write invalid data to corrupt the receipt root
+			outbuf.WriteByte(0x00)
+			return
+		}
+		r.encodeForHash(rl.buf, outbuf)
+	})
 }
 
 // DecodeRLP decodes a list receipts from the network format.
 func (rl *ReceiptList69) DecodeRLP(s *rlp.Stream) error {
-	if _, err := s.List(); err != nil {
-		return err
-	}
-	for i := 0; s.MoreDataInList(); i++ {
-		var item Receipt
-		err := item.decode69(s)
-		if err != nil {
-			return fmt.Errorf("receipt %d: %v", i, err)
-		}
-		rl.items = append(rl.items, item)
-	}
-	return s.ListEnd()
+	return rl.items.DecodeRLP(s)
 }
 
 // EncodeRLP encodes the list into the network format of eth/69.
-func (rl *ReceiptList69) EncodeRLP(_w io.Writer) error {
-	w := rlp.NewEncoderBuffer(_w)
-	outer := w.List()
-	for i := range rl.items {
-		rl.items[i].encodeForNetwork69(&w)
-	}
-	w.ListEnd(outer)
-	return w.Flush()
+func (rl *ReceiptList69) EncodeRLP(w io.Writer) error {
+	return rl.items.EncodeRLP(w)
 }
 
 // ExcludeStateSync removes the state sync transaction receipt from the list.
 func (rl *ReceiptList69) ExcludeStateSyncReceipt() {
-	rl.items = excludeStateSyncReceipt(rl.items)
+	excludeStateSyncReceipt(&rl.items, func(data []byte, r *Receipt) error {
+		return r.decode69(data)
+	})
 }
 
 // Append appends all items from another receipt list to this list. It is used by
 // eth/70 to reassemble a block whose receipts were split across several packets.
 func (rl *ReceiptList69) Append(other *ReceiptList69) {
-	rl.items = append(rl.items, other.items...)
+	rl.items.AppendList(&other.items)
 }
 
 // LogsSize returns the total size of log data across all receipts of the list.
 func (rl *ReceiptList69) LogsSize() (uint64, error) {
 	var size uint64
-	for i := range rl.items {
-		logsContent, _, err := rlp.SplitList(rl.items[i].Logs)
+	it := rl.items.ContentIterator()
+	for it.Next() {
+		// The encoded receipts are of the form:
+		//
+		//   [txType, status, cumulativeGasUsed, [logs...]]
+		//
+		// Skip the first three fields and count the inner size of the logs list.
+		content, _, err := rlp.SplitList(it.Value())
+		if err != nil {
+			return 0, fmt.Errorf("invalid receipt structure: %v", err)
+		}
+		rest := content
+		for range 3 {
+			_, _, rest, err = rlp.Split(rest)
+			if err != nil {
+				return 0, fmt.Errorf("invalid receipt structure: %v", err)
+			}
+		}
+		logsContent, _, err := rlp.SplitList(rest)
 		if err != nil {
 			return 0, fmt.Errorf("invalid receipt logs: %v", err)
 		}
 		size += uint64(len(logsContent))
+	}
+	if it.Err() != nil {
+		return 0, fmt.Errorf("bad list: %v", it.Err())
 	}
 	return size, nil
 }

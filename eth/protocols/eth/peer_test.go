@@ -24,9 +24,9 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/enode"
-	"github.com/ethereum/go-ethereum/rlp"
 )
 
 // testPeer is a simulated peer to allow testing direct network calls.
@@ -200,7 +200,7 @@ func TestBufferReceiptsNoProgress(t *testing.T) {
 	// An empty list preceded by other lists advances the request and is valid.
 	newRequest(2, 2)
 	lists := []*ReceiptList69{
-		{items: []Receipt{{Logs: rlp.EmptyList}}},
+		NewReceiptList69([]*types.Receipt{{}}),
 		{},
 	}
 	if err := p.bufferReceipts(2, lists, true); err != nil {

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/p2p"
+	"github.com/ethereum/go-ethereum/p2p/tracker"
 )
 
 var (
@@ -185,7 +186,8 @@ func (p *Peer) dispatcher() {
 			req := reqOp.req
 			req.Sent = time.Now()
 
-			requestTracker.Track(p.id, p.version, req.code, req.want, req.id)
+			// The tracker only feeds metrics here; its errors don't affect requests.
+			_ = p.tracker.Track(tracker.Request{ID: req.id, ReqCode: req.code, RespCode: req.want, Size: 1})
 			err := p2p.Send(p.rw, req.code, req.data)
 			reqOp.fail <- err
 
@@ -203,7 +205,7 @@ func (p *Peer) dispatcher() {
 			}
 			// Stop tracking the request
 			delete(pending, cancelOp.id)
-			requestTracker.Fulfil(p.id, p.version, req.code, cancelOp.id)
+			_ = p.tracker.Fulfil(tracker.Response{ID: cancelOp.id, MsgCode: req.want})
 			cancelOp.fail <- nil
 
 		case resOp := <-p.resDispatch:
@@ -211,7 +213,7 @@ func (p *Peer) dispatcher() {
 			res.Req = pending[res.id]
 
 			// Independent if the request exists or not, track this packet
-			requestTracker.Fulfil(p.id, p.version, res.code, res.id)
+			_ = p.tracker.Fulfil(tracker.Response{ID: res.id, MsgCode: res.code, Size: 1})
 
 			switch {
 			case res.Req == nil:
@@ -239,6 +241,7 @@ func (p *Peer) dispatcher() {
 			}
 
 		case <-p.term:
+			p.tracker.Stop()
 			return
 		}
 	}
