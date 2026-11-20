@@ -204,3 +204,41 @@ func TestVerifyHeaderRejectsInvalidBlockNumber(t *testing.T) {
 		t.Fatalf("expected ErrInvalidNumber for overflow, got %v", err)
 	}
 }
+
+// cliqueConfigReader serves only the chain config, all verifyHeader needs
+// before the cascading checks.
+type cliqueConfigReader struct {
+	consensus.ChainHeaderReader
+	config *params.ChainConfig
+}
+
+func (r cliqueConfigReader) Config() *params.ChainConfig { return r.config }
+
+// TestVerifyHeaderRejectsBlobFields checks that pre-Cancun headers carrying
+// blob gas fields are rejected, and that the error prints the value.
+func TestVerifyHeaderRejectsBlobFields(t *testing.T) {
+	engine := New(params.AllCliqueProtocolChanges.Clique, rawdb.NewMemoryDatabase())
+	chain := cliqueConfigReader{config: params.AllCliqueProtocolChanges}
+	value := uint64(7)
+
+	for _, tt := range []struct {
+		name string
+		set  func(*types.Header)
+		want string
+	}{
+		{"excessBlobGas", func(h *types.Header) { h.ExcessBlobGas = &value }, "invalid excessBlobGas: have 7, expected nil"},
+		{"blobGasUsed", func(h *types.Header) { h.BlobGasUsed = &value }, "invalid blobGasUsed: have 7, expected nil"},
+	} {
+		header := &types.Header{
+			Number:     big.NewInt(1),
+			Difficulty: diffInTurn,
+			Extra:      make([]byte, extraVanity+extraSeal),
+			UncleHash:  types.EmptyUncleHash,
+			GasLimit:   params.GenesisGasLimit,
+		}
+		tt.set(header)
+		if err := engine.verifyHeader(chain, header, nil); err == nil || err.Error() != tt.want {
+			t.Errorf("%s: got %v, want %q", tt.name, err, tt.want)
+		}
+	}
+}
