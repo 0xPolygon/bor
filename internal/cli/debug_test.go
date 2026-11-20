@@ -2,7 +2,7 @@ package cli
 
 import (
 	"os"
-	"path"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -12,8 +12,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/internal/cli/server"
 )
-
-var currentDir string
 
 func TestCommand_DebugBlock(t *testing.T) {
 	t.Parallel()
@@ -46,17 +44,17 @@ func TestCommand_DebugBlock(t *testing.T) {
 	prefix := "bor-block-trace-"
 
 	// output dir
-	output := "debug_block_test"
-
-	// set current directory
-	currentDir, _ = os.Getwd()
+	output := t.TempDir()
 
 	// trace 1st block
 	start := time.Now()
-	dst1 := path.Join(output, prefix+time.Now().UTC().Format("2006-01-02-150405Z"), "block.json")
 	res := traceBlock(grpcAddr, 1, output)
 	require.Equal(t, 0, res)
-	t.Logf("Completed trace of block %d in %d ms at %s", 1, time.Since(start).Milliseconds(), dst1)
+	t.Logf("Completed trace of block %d in %d ms", 1, time.Since(start).Milliseconds())
+
+	traces, err := filepath.Glob(filepath.Join(output, prefix+"*", "block.json"))
+	require.NoError(t, err)
+	require.Len(t, traces, 1)
 
 	// adding this to avoid debug directory name conflicts
 	time.Sleep(time.Second)
@@ -64,19 +62,18 @@ func TestCommand_DebugBlock(t *testing.T) {
 	// trace last/recent block
 	start = time.Now()
 	latestBlock := srv.GetLatestBlockNumber().Int64()
-	dst2 := path.Join(output, prefix+time.Now().UTC().Format("2006-01-02-150405Z"), "block.json")
 	res = traceBlock(grpcAddr, latestBlock, output)
 	require.Equal(t, 0, res)
-	t.Logf("Completed trace of block %d in %d ms at %s", latestBlock, time.Since(start).Milliseconds(), dst2)
+	t.Logf("Completed trace of block %d in %d ms", latestBlock, time.Since(start).Milliseconds())
+
+	traces, err = filepath.Glob(filepath.Join(output, prefix+"*", "block.json"))
+	require.NoError(t, err)
+	require.Len(t, traces, 2)
 
 	// verify if the trace files are created
-	done := verify(dst1)
-	require.Equal(t, true, done)
-	done = verify(dst2)
-	require.Equal(t, true, done)
-
-	// delete the traces
-	deleteTraces(output)
+	for _, dst := range traces {
+		require.True(t, verify(dst), dst)
+	}
 }
 
 // traceBlock calls the cli command to trace a block
@@ -96,7 +93,6 @@ func traceBlock(addr string, number int64, output string) int {
 // verify checks if the trace file is created at the destination
 // directory or not
 func verify(dst string) bool {
-	dst = path.Join(currentDir, dst)
 	if file, err := os.Stat(dst); err == nil {
 		// check if the file has content
 		if file.Size() > 0 {
@@ -105,10 +101,4 @@ func verify(dst string) bool {
 	}
 
 	return false
-}
-
-// deleteTraces removes the traces created during the test
-func deleteTraces(dst string) {
-	dst = path.Join(currentDir, dst)
-	os.RemoveAll(dst)
 }
