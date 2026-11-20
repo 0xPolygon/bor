@@ -28,6 +28,7 @@ import (
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/checkpoint"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
 	"github.com/ethereum/go-ethereum/core"
@@ -424,7 +425,7 @@ func (d *Downloader) LegacySync(id string, head common.Hash, td, ttd *big.Int, m
 		return err
 	}
 
-	if errors.Is(err, ErrPeerBackedOff) || isSyncCancellation(err) {
+	if errors.Is(err, ErrPeerBackedOff) || isSyncCancellation(err) || errors.Is(err, consensus.ErrEngineStopped) {
 		return err
 	}
 
@@ -1666,6 +1667,13 @@ func (d *Downloader) fetchReceipts(from uint64, beaconMode bool) error {
 	return err
 }
 
+func invalidHeaderChainError(headers []*types.Header, hashes []common.Hash, index int, err error) error {
+	if !errors.Is(err, consensus.ErrEngineStopped) {
+		log.Warn("Invalid header encountered", "number", headers[index].Number, "hash", hashes[index], "parent", headers[index].ParentHash, "err", err)
+	}
+	return fmt.Errorf("%w: %w", errInvalidChain, err)
+}
+
 // processHeaders takes batches of retrieved headers from an input channel and
 // keeps processing and scheduling them into the header chain and downloader's
 // queue until the stream ends or a failure occurs.
@@ -1781,9 +1789,7 @@ func (d *Downloader) processHeaders(origin uint64, td, ttd *big.Int, beaconMode 
 
 					if len(chunkHeaders) > 0 {
 						if n, err := d.lightchain.InsertHeaderChain(chunkHeaders); err != nil {
-							log.Warn("Invalid header encountered", "number", chunkHeaders[n].Number, "hash", chunkHashes[n], "parent", chunkHeaders[n].ParentHash, "err", err)
-
-							return fmt.Errorf("%w: %v", errInvalidChain, err)
+							return invalidHeaderChainError(chunkHeaders, chunkHashes, n, err)
 						}
 					}
 
@@ -1939,8 +1945,11 @@ func (d *Downloader) importBlockResults(results []*fetchResult) error {
 		if index >= 0 && index < len(results) {
 			log.Debug("Downloaded item processing failed", "number", results[index].Header.Number, "hash", results[index].Header.Hash(), "firstnum", first.Number, "firsthash", first.Hash(), "lastnum", last.Number, "lasthash", last.Hash(), "err", err)
 
-			// In post-merge, notify the engine API of encountered bad chains
-			d.reportBadBlock(blocks[index])
+			// In post-merge, notify the engine API of encountered bad chains.
+			// A proven engine shutdown abort carries no evidence of invalid peer data.
+			if !errors.Is(err, consensus.ErrEngineStopped) {
+				d.reportBadBlock(blocks[index])
+			}
 		} else {
 			// The InsertChain method in blockchain.go will sometimes return an out-of-bounds index,
 			// when it needs to preprocess blocks to import a sidechain.

@@ -31,6 +31,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/bor/api"
 	"github.com/ethereum/go-ethereum/consensus/bor/clerk"
+	"github.com/ethereum/go-ethereum/consensus/bor/heimdall"
 	borSpan "github.com/ethereum/go-ethereum/consensus/bor/heimdall/span"
 	"github.com/ethereum/go-ethereum/consensus/bor/statefull"
 	"github.com/ethereum/go-ethereum/consensus/bor/valset"
@@ -301,6 +302,7 @@ type Bor struct {
 
 	quit      chan struct{}
 	closeOnce sync.Once
+	closed    atomic.Bool
 
 	// ctx is cancelled when Close() is called, allowing in-flight operations to abort promptly.
 	ctx       context.Context
@@ -411,7 +413,7 @@ func (c *Bor) Author(header *types.Header) (common.Address, error) {
 
 // VerifyHeader checks whether a header conforms to the consensus rules.
 func (c *Bor) VerifyHeader(chain consensus.ChainHeaderReader, header *types.Header) error {
-	return c.verifyHeader(chain, header, nil)
+	return c.shutdownError(c.verifyHeader(chain, header, nil))
 }
 
 func (c *Bor) GetSpanner() Spanner {
@@ -431,7 +433,7 @@ func (c *Bor) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*types.
 
 	go func() {
 		for i, header := range headers {
-			err := c.verifyHeader(chain, header, headers[:i])
+			err := c.shutdownError(c.verifyHeader(chain, header, headers[:i]))
 
 			select {
 			case <-abort:
@@ -1263,7 +1265,7 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 		// check and commit span
 		if !c.config.IsRio(header.Number) {
 			if err := c.checkAndCommitSpan(wrappedState, header, cx); err != nil {
-				return nil, fmt.Errorf("error while committing span: %w", err)
+				return nil, c.shutdownError(fmt.Errorf("error while committing span: %w", err))
 			}
 		}
 
@@ -1271,7 +1273,7 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 			// commit states
 			stateSyncData, err = c.CommitStates(wrappedState, header, cx)
 			if err != nil {
-				return nil, fmt.Errorf("%w: error while committing states: %w", core.ErrStateSyncProcessing, err)
+				return nil, fmt.Errorf("%w: error while committing states: %w", core.ErrStateSyncProcessing, c.shutdownError(err))
 			}
 		}
 		// Get the underlying state for updating consensus time
@@ -1542,6 +1544,7 @@ func (c *Bor) commitSprintWork(chain consensus.ChainHeaderReader, header *types.
 	// check and commit span
 	if !c.config.IsRio(header.Number) {
 		if err := c.checkAndCommitSpan(state, header, cx); err != nil {
+			err = c.shutdownError(err)
 			log.Error("Error while committing span", "error", err)
 			return nil, err
 		}
@@ -1554,6 +1557,7 @@ func (c *Bor) commitSprintWork(chain consensus.ChainHeaderReader, header *types.
 		var err error
 		stateSyncData, err = c.CommitStates(state, header, cx)
 		if err != nil {
+			err = c.shutdownError(err)
 			log.Error("Error while committing states", "error", err)
 			return nil, err
 		}
@@ -1810,9 +1814,23 @@ func (c *Bor) APIs(chain consensus.ChainHeaderReader) []rpc.API {
 	}}
 }
 
+// shutdownError marks only dependency cancellations proven to follow this
+// engine's Close. Other failures retain their original validation semantics,
+// even when they happen to race the node's global shutdown.
+func (c *Bor) shutdownError(err error) error {
+	if err == nil || !c.closed.Load() || errors.Is(err, consensus.ErrEngineStopped) {
+		return err
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, heimdall.ErrShutdownDetected) {
+		return consensus.NewEngineStoppedError(err)
+	}
+	return err
+}
+
 // Close implements consensus.Engine.
 func (c *Bor) Close() error {
 	c.closeOnce.Do(func() {
+		c.closed.Store(true)
 		c.ctxCancel()
 		close(c.quit)
 		if c.HeimdallClient != nil {
@@ -2127,8 +2145,11 @@ func (c *Bor) CommitStates(
 		// Committing only the records fetched so far would give a different block
 		// from nodes whose fetch succeeded, so fail the block and let it be retried.
 		if err != nil {
-			log.Error("Error occurred when fetching state sync events", "fromID", fromID, "to", to.Unix(), "err", err)
-			return nil, fmt.Errorf("fetching state sync events from id %d: %w", fromID, err)
+			err = c.shutdownError(fmt.Errorf("fetching state sync events from id %d: %w", fromID, err))
+			if !errors.Is(err, consensus.ErrEngineStopped) {
+				log.Error("Error occurred when fetching state sync events", "fromID", fromID, "to", to.Unix(), "err", err)
+			}
+			return nil, err
 		}
 
 		eventRecords = eventRecords[:min(len(eventRecords), remaining)]

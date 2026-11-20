@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/txpool"
@@ -147,7 +148,9 @@ func (cs *chainSyncer) onSyncDone(err error) {
 	cs.force.Reset(forceSyncCycle)
 	cs.forced = false
 
-	if errors.Is(err, core.ErrStateSyncProcessing) || errors.Is(err, downloader.ErrWitnessUnavailable) {
+	if errors.Is(err, consensus.ErrEngineStopped) {
+		cs.operationalRetryUntil = time.Time{}
+	} else if errors.Is(err, core.ErrStateSyncProcessing) || errors.Is(err, downloader.ErrWitnessUnavailable) {
 		cs.operationalRetryUntil = time.Now().Add(forceSyncCycle)
 	} else {
 		cs.operationalRetryUntil = time.Time{}

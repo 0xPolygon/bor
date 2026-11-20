@@ -237,6 +237,11 @@ type BlockFetcher struct {
 	// Protect concurrent map access from goroutines
 	mu sync.RWMutex
 
+	stopOnce sync.Once
+	loopWg   sync.WaitGroup
+	importWg sync.WaitGroup
+	stopping bool
+
 	// Announce states
 	announces  map[string]int                   // Per peer blockAnnounce counts to prevent memory exhaustion
 	announced  map[common.Hash][]*blockAnnounce // Announced blocks, scheduled for fetching
@@ -330,14 +335,59 @@ func NewBlockFetcher(light bool, getHeader HeaderRetrievalFn, getBlock blockRetr
 // Start boots up the announcement based synchroniser, accepting and processing
 // hash notifications and block fetches until termination requested.
 func (f *BlockFetcher) Start() {
-	go f.loop()
+	f.loopWg.Add(1)
+	go func() {
+		defer f.loopWg.Done()
+		f.loop()
+	}()
 	f.wm.start() // Start the witness manager loop
 }
 
 // Stop terminates the announcement based synchroniser, canceling all pending
-// operations.
+// operations and waiting for its loops and in-flight imports before chain resources close.
 func (f *BlockFetcher) Stop() {
-	close(f.quit)
+	f.stopOnce.Do(func() {
+		f.mu.Lock()
+		f.stopping = true
+		f.mu.Unlock()
+		close(f.quit)
+		f.loopWg.Wait()
+		f.wm.stop()
+		f.wm.workerWg.Wait()
+		f.importWg.Wait()
+	})
+}
+
+// beginImport admits one import-owned goroutine unless shutdown has started.
+// The matching Done is deferred by the caller's goroutine.
+func (f *BlockFetcher) beginImport() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.stopping {
+		return false
+	}
+	f.importWg.Add(1)
+	return true
+}
+
+// startBroadcast keeps early propagation asynchronous while giving Stop
+// ownership of the callback's chain reads.
+func (f *BlockFetcher) startBroadcast(block *types.Block, witness *stateless.Witness, propagate bool) {
+	if !f.beginImport() {
+		return
+	}
+	go func() {
+		defer f.importWg.Done()
+		f.broadcastBlock(block, witness, propagate)
+	}()
+}
+
+func (f *BlockFetcher) penalizeInvalidHeader(peer string, err error) {
+	if errors.Is(err, consensus.ErrEngineStopped) {
+		return
+	}
+	f.observeInvalidHeader(peer, err)
+	f.dropPeer(peer)
 }
 
 // SetWitnessServerStriker wires the callback used to penalize a peer that serves
@@ -1218,35 +1268,46 @@ func (f *BlockFetcher) enqueueOp(op *blockOrHeaderInject) {
 // If the header's number is at the same height as the current import phase, it
 // updates the phase states accordingly.
 func (f *BlockFetcher) importHeaders(peer string, header *types.Header) {
-	hash := header.Hash()
-	log.Debug("Importing propagated header", "peer", peer, "number", header.Number, "hash", hash)
+	log.Debug("Importing propagated header", "peer", peer, "number", header.Number, "hash", header.Hash())
+	if !f.beginImport() {
+		return
+	}
+	go f.runHeaderImport(peer, header)
+}
 
-	go func() {
-		defer func() { f.done <- hash }()
-		// If the parent's unknown, abort insertion
-		parent := f.getHeader(header.ParentHash)
-		if parent == nil {
-			log.Debug("Unknown parent of propagated header", "peer", peer, "number", header.Number, "hash", hash, "parent", header.ParentHash)
-			return
-		}
-		// Validate the header and if something went wrong, drop the peer
-		if err := f.verifyHeader(header); err != nil && err != consensus.ErrFutureBlock {
-			log.Debug("Propagated header verification failed", "peer", peer, "number", header.Number, "hash", hash, "err", err)
-			f.observeInvalidHeader(peer, err)
-			f.dropPeer(peer)
+func (f *BlockFetcher) runHeaderImport(peer string, header *types.Header) {
+	defer f.importWg.Done()
+	defer f.finishHeaderImport(header.Hash())
 
-			return
-		}
-		// Run the actual import and log any issues
-		if _, err := f.insertHeaders([]*types.Header{header}); err != nil {
-			log.Debug("Propagated header import failed", "peer", peer, "number", header.Number, "hash", hash, "err", err)
-			return
-		}
-		// Invoke the testing hook if needed
-		if f.importedHook != nil {
-			f.importedHook(header, nil)
-		}
-	}()
+	// If the parent's unknown, abort insertion
+	parent := f.getHeader(header.ParentHash)
+	if parent == nil {
+		log.Debug("Unknown parent of propagated header", "peer", peer, "number", header.Number, "hash", header.Hash(), "parent", header.ParentHash)
+		return
+	}
+	// Validate the header and if something went wrong, drop the peer
+	if err := f.verifyHeader(header); err != nil && err != consensus.ErrFutureBlock {
+		log.Debug("Propagated header verification failed", "peer", peer, "number", header.Number, "hash", header.Hash(), "err", err)
+		f.penalizeInvalidHeader(peer, err)
+
+		return
+	}
+	// Run the actual import and log any issues
+	if _, err := f.insertHeaders([]*types.Header{header}); err != nil {
+		log.Debug("Propagated header import failed", "peer", peer, "number", header.Number, "hash", header.Hash(), "err", err)
+		return
+	}
+	// Invoke the testing hook if needed
+	if f.importedHook != nil {
+		f.importedHook(header, nil)
+	}
+}
+
+func (f *BlockFetcher) finishHeaderImport(hash common.Hash) {
+	select {
+	case f.done <- hash:
+	case <-f.quit:
+	}
 }
 
 // importBlocks spawns a new goroutine to run a block insertion into the chain. If the
@@ -1271,7 +1332,11 @@ func (f *BlockFetcher) importBlocks(op *blockOrHeaderInject) {
 	// Run the import on a new thread
 	log.Debug("Importing propagated block", "peer", op.origin, "number", block.Number(), "hash", hash)
 
+	if !f.beginImport() {
+		return
+	}
 	go func() {
+		defer f.importWg.Done()
 		if f.runBlockImport(op) {
 			// Hand the block back to the fetcher loop for a witness re-fetch
 			// (the witnessRetry case) instead of marking it done.
@@ -1309,16 +1374,15 @@ func (f *BlockFetcher) runBlockImport(op *blockOrHeaderInject) (retryWitness boo
 		// All ok, quickly propagate to our peers
 		blockBroadcastOutTimer.UpdateSince(block.ReceivedAt)
 
-		go f.broadcastBlock(block, witness, true)
+		f.startBroadcast(block, witness, true)
 
 	case consensus.ErrFutureBlock:
 		// Weird future block, don't fail, but neither propagate
 
 	default:
-		// Something went very wrong, drop the peer
+		// Invalid peer data is actionable; a local engine shutdown is not.
 		log.Debug("Propagated block verification failed", "peer", peer, "number", block.Number(), "hash", hash, "err", err)
-		f.observeInvalidHeader(peer, err)
-		f.dropPeer(peer)
+		f.penalizeInvalidHeader(peer, err)
 
 		return false
 	}
@@ -1327,6 +1391,9 @@ func (f *BlockFetcher) runBlockImport(op *blockOrHeaderInject) (retryWitness boo
 	credit := supplier != nil && supplier.ID() == peer && f.getBlock(hash) == nil
 	if err := f.insertBlockWithRetry(op); err != nil {
 		log.Debug("Propagated block import failed", "peer", peer, "number", block.Number(), "hash", hash, "err", err)
+		if errors.Is(err, consensus.ErrEngineStopped) {
+			return false
+		}
 		return f.chargeDivergedWitnessImportFailure(op, err)
 	}
 	if credit && f.getBlock(hash) != nil {
@@ -1339,7 +1406,7 @@ func (f *BlockFetcher) runBlockImport(op *blockOrHeaderInject) (retryWitness boo
 
 	// If import succeeded, broadcast the block
 	blockAnnounceOutTimer.UpdateSince(block.ReceivedAt)
-	go f.broadcastBlock(block, witness, false)
+	f.startBroadcast(block, witness, false)
 
 	// Invoke the testing hook if needed
 	if f.importedHook != nil {
@@ -1459,6 +1526,9 @@ const (
 func (f *BlockFetcher) insertBlockWithRetry(op *blockOrHeaderInject) error {
 	for attempt := 0; ; attempt++ {
 		_, err := f.insertChain(types.Blocks{op.block}, []*stateless.Witness{op.witness})
+		if errors.Is(err, consensus.ErrEngineStopped) {
+			return err
+		}
 		if !errors.Is(err, core.ErrStateSyncProcessing) || isWitnessAttributableImportError(err) || attempt >= maxStateSyncImportRetries {
 			return err
 		}

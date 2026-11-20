@@ -3368,6 +3368,9 @@ func (bc *BlockChain) handleHeaderVerificationError(block *types.Block, index in
 				"expectedParent", block.ParentHash())
 			existingHeader := existingBlock.Header()
 			verifyErr := bc.engine.VerifyHeader(bc, existingHeader)
+			if errors.Is(verifyErr, consensus.ErrEngineStopped) {
+				return verifyErr
+			}
 			if verifyErr == nil {
 				log.Info("Existing parent block is valid, rejecting new fork",
 					"existingParent", existingBlock.Hash(),
@@ -4997,6 +5000,10 @@ func isLocalStateUnavailable(err error) bool {
 }
 
 func (bc *BlockChain) reportBlock(block *types.Block, res *ProcessResult, err error) {
+	if errors.Is(err, consensus.ErrEngineStopped) {
+		log.Debug("Block import aborted by consensus engine shutdown", "number", block.Number(), "hash", block.Hash())
+		return
+	}
 	var receipts types.Receipts
 	if res != nil {
 		receipts = res.Receipts
@@ -6674,6 +6681,9 @@ func (bc *BlockChain) verifyPendingHeaders() {
 		case <-bc.quit:
 			return
 		case err := <-results:
+			if errors.Is(err, consensus.ErrEngineStopped) {
+				return
+			}
 			if err != nil {
 				log.Warn("Invalid header detected during background verification",
 					"number", header.Number.Uint64(), "hash", header.Hash(), "err", err)
