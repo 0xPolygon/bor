@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -53,10 +54,13 @@ func TestCommand_DebugBlock(t *testing.T) {
 
 	// trace 1st block
 	start := time.Now()
-	dst1 := path.Join(output, prefix+time.Now().UTC().Format("2006-01-02-150405Z"), "block.json")
 	res := traceBlock(grpcAddr, 1, output)
 	require.Equal(t, 0, res)
-	t.Logf("Completed trace of block %d in %d ms at %s", 1, time.Since(start).Milliseconds(), dst1)
+	t.Logf("Completed trace of block %d in %d ms", 1, time.Since(start).Milliseconds())
+
+	traces, err := filepath.Glob(path.Join(output, prefix+"*", "block.json"))
+	require.NoError(t, err)
+	require.Len(t, traces, 1)
 
 	// adding this to avoid debug directory name conflicts
 	time.Sleep(time.Second)
@@ -64,16 +68,18 @@ func TestCommand_DebugBlock(t *testing.T) {
 	// trace last/recent block
 	start = time.Now()
 	latestBlock := srv.GetLatestBlockNumber().Int64()
-	dst2 := path.Join(output, prefix+time.Now().UTC().Format("2006-01-02-150405Z"), "block.json")
 	res = traceBlock(grpcAddr, latestBlock, output)
 	require.Equal(t, 0, res)
-	t.Logf("Completed trace of block %d in %d ms at %s", latestBlock, time.Since(start).Milliseconds(), dst2)
+	t.Logf("Completed trace of block %d in %d ms", latestBlock, time.Since(start).Milliseconds())
+
+	traces, err = filepath.Glob(path.Join(output, prefix+"*", "block.json"))
+	require.NoError(t, err)
+	require.Len(t, traces, 2)
 
 	// verify if the trace files are created
-	done := verify(dst1)
-	require.Equal(t, true, done)
-	done = verify(dst2)
-	require.Equal(t, true, done)
+	for _, dst := range traces {
+		require.True(t, verify(dst), dst)
+	}
 
 	// delete the traces
 	deleteTraces(output)
