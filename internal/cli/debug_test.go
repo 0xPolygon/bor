@@ -2,7 +2,6 @@ package cli
 
 import (
 	"os"
-	"path"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -13,8 +12,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/internal/cli/server"
 )
-
-var currentDir string
 
 func TestCommand_DebugBlock(t *testing.T) {
 	t.Parallel()
@@ -47,10 +44,7 @@ func TestCommand_DebugBlock(t *testing.T) {
 	prefix := "bor-block-trace-"
 
 	// output dir
-	output := "debug_block_test"
-
-	// set current directory
-	currentDir, _ = os.Getwd()
+	output := t.TempDir()
 
 	// trace 1st block
 	start := time.Now()
@@ -58,7 +52,7 @@ func TestCommand_DebugBlock(t *testing.T) {
 	require.Equal(t, 0, res)
 	t.Logf("Completed trace of block %d in %d ms", 1, time.Since(start).Milliseconds())
 
-	traces, err := filepath.Glob(path.Join(output, prefix+"*", "block.json"))
+	traces, err := filepath.Glob(filepath.Join(output, prefix+"*", "block.json"))
 	require.NoError(t, err)
 	require.Len(t, traces, 1)
 
@@ -72,7 +66,7 @@ func TestCommand_DebugBlock(t *testing.T) {
 	require.Equal(t, 0, res)
 	t.Logf("Completed trace of block %d in %d ms", latestBlock, time.Since(start).Milliseconds())
 
-	traces, err = filepath.Glob(path.Join(output, prefix+"*", "block.json"))
+	traces, err = filepath.Glob(filepath.Join(output, prefix+"*", "block.json"))
 	require.NoError(t, err)
 	require.Len(t, traces, 2)
 
@@ -80,9 +74,6 @@ func TestCommand_DebugBlock(t *testing.T) {
 	for _, dst := range traces {
 		require.True(t, verify(dst), dst)
 	}
-
-	// delete the traces
-	deleteTraces(output)
 }
 
 // traceBlock calls the cli command to trace a block
@@ -102,7 +93,6 @@ func traceBlock(addr string, number int64, output string) int {
 // verify checks if the trace file is created at the destination
 // directory or not
 func verify(dst string) bool {
-	dst = path.Join(currentDir, dst)
 	if file, err := os.Stat(dst); err == nil {
 		// check if the file has content
 		if file.Size() > 0 {
@@ -111,10 +101,4 @@ func verify(dst string) bool {
 	}
 
 	return false
-}
-
-// deleteTraces removes the traces created during the test
-func deleteTraces(dst string) {
-	dst = path.Join(currentDir, dst)
-	os.RemoveAll(dst)
 }
