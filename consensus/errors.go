@@ -51,4 +51,41 @@ var (
 	// proves the header can never be canonical, so an engine matches it only
 	// when it knows the full validator set for that height.
 	ErrUnauthorizedSigner = errors.New("unauthorized signer")
+
+	// ErrEngineStopped identifies an import aborted by the consensus engine's
+	// own shutdown. It is matched only by EngineStoppedError, never by a bare
+	// context cancellation or by the node's global stop state.
+	ErrEngineStopped = errors.New("consensus engine stopped")
 )
+
+// EngineStoppedError marks a dependency cancellation caused by the consensus
+// engine's Close method. The original cancellation remains available through
+// errors.Is/errors.As so callers can retain diagnostic provenance.
+type EngineStoppedError struct {
+	Cause error
+}
+
+func NewEngineStoppedError(cause error) error {
+	if cause == nil {
+		cause = ErrEngineStopped
+	}
+	return &EngineStoppedError{Cause: cause}
+}
+
+func (e *EngineStoppedError) Error() string {
+	if e == nil || e.Cause == nil {
+		return ErrEngineStopped.Error()
+	}
+	return ErrEngineStopped.Error() + ": " + e.Cause.Error()
+}
+
+func (e *EngineStoppedError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
+func (e *EngineStoppedError) Is(target error) bool {
+	return target == ErrEngineStopped
+}

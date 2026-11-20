@@ -4997,6 +4997,10 @@ func isLocalStateUnavailable(err error) bool {
 }
 
 func (bc *BlockChain) reportBlock(block *types.Block, res *ProcessResult, err error) {
+	if errors.Is(err, consensus.ErrEngineStopped) {
+		log.Debug("Block import aborted by consensus engine shutdown", "number", block.Number(), "hash", block.Hash())
+		return
+	}
 	var receipts types.Receipts
 	if res != nil {
 		receipts = res.Receipts

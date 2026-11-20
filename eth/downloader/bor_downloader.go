@@ -28,6 +28,7 @@ import (
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/checkpoint"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
 	"github.com/ethereum/go-ethereum/core"
@@ -424,7 +425,7 @@ func (d *Downloader) LegacySync(id string, head common.Hash, td, ttd *big.Int, m
 		return err
 	}
 
-	if errors.Is(err, ErrPeerBackedOff) || isSyncCancellation(err) {
+	if errors.Is(err, ErrPeerBackedOff) || isSyncCancellation(err) || errors.Is(err, consensus.ErrEngineStopped) {
 		return err
 	}
 
@@ -1939,8 +1940,11 @@ func (d *Downloader) importBlockResults(results []*fetchResult) error {
 		if index >= 0 && index < len(results) {
 			log.Debug("Downloaded item processing failed", "number", results[index].Header.Number, "hash", results[index].Header.Hash(), "firstnum", first.Number, "firsthash", first.Hash(), "lastnum", last.Number, "lasthash", last.Hash(), "err", err)
 
-			// In post-merge, notify the engine API of encountered bad chains
-			d.reportBadBlock(blocks[index])
+			// In post-merge, notify the engine API of encountered bad chains.
+			// A proven engine shutdown abort carries no evidence of invalid peer data.
+			if !errors.Is(err, consensus.ErrEngineStopped) {
+				d.reportBadBlock(blocks[index])
+			}
 		} else {
 			// The InsertChain method in blockchain.go will sometimes return an out-of-bounds index,
 			// when it needs to preprocess blocks to import a sidechain.
