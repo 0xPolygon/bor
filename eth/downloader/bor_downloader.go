@@ -1667,6 +1667,13 @@ func (d *Downloader) fetchReceipts(from uint64, beaconMode bool) error {
 	return err
 }
 
+func invalidHeaderChainError(headers []*types.Header, hashes []common.Hash, index int, err error) error {
+	if !errors.Is(err, consensus.ErrEngineStopped) {
+		log.Warn("Invalid header encountered", "number", headers[index].Number, "hash", hashes[index], "parent", headers[index].ParentHash, "err", err)
+	}
+	return fmt.Errorf("%w: %w", errInvalidChain, err)
+}
+
 // processHeaders takes batches of retrieved headers from an input channel and
 // keeps processing and scheduling them into the header chain and downloader's
 // queue until the stream ends or a failure occurs.
@@ -1782,9 +1789,7 @@ func (d *Downloader) processHeaders(origin uint64, td, ttd *big.Int, beaconMode 
 
 					if len(chunkHeaders) > 0 {
 						if n, err := d.lightchain.InsertHeaderChain(chunkHeaders); err != nil {
-							log.Warn("Invalid header encountered", "number", chunkHeaders[n].Number, "hash", chunkHashes[n], "parent", chunkHeaders[n].ParentHash, "err", err)
-
-							return fmt.Errorf("%w: %v", errInvalidChain, err)
+							return invalidHeaderChainError(chunkHeaders, chunkHashes, n, err)
 						}
 					}
 

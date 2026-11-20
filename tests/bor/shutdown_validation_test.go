@@ -4,6 +4,8 @@ package bor
 
 import (
 	"bytes"
+	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -133,6 +135,79 @@ func TestValidationFailuresRemainBadBlocksAcrossShutdown(t *testing.T) {
 				f.closed = true
 			case <-time.After(15 * time.Second):
 				t.Fatal("shutdown did not finish after invalid import")
+			}
+			require.Contains(t, f.output.String(), "BAD BLOCK")
+			db := reopenValidationDatabase(t, f.stack)
+			defer db.Close()
+			require.NotNil(t, rawdb.ReadBadBlock(db, invalid.Hash()))
+		})
+	}
+}
+
+type shutdownCompletionHeimdall struct {
+	bor.IHeimdallClient
+	entered chan struct{}
+	once    sync.Once
+	records []*clerk.EventRecordWithTime
+}
+
+func (c *shutdownCompletionHeimdall) StateSyncEvents(ctx context.Context, _ uint64, _ int64) ([]*clerk.EventRecordWithTime, error) {
+	c.once.Do(func() { close(c.entered) })
+	<-ctx.Done()
+	return c.records, nil
+}
+
+func TestRootValidationFailuresRemainBadBlocksAfterEngineCancellation(t *testing.T) {
+	for _, name := range []string{"state", "receipt"} {
+		t.Run(name, func(t *testing.T) {
+			f := newValidationShutdownFixture(t)
+			header := types.CopyHeader(f.block.Header())
+			if name == "state" {
+				header.Root = common.Hash{0x01}
+			} else {
+				header.ReceiptHash = common.Hash{0x02}
+			}
+			sign(t, header, crypto.FromECDSA(key), f.chain.Config().Bor)
+			invalid := f.block.WithSeal(header)
+			gate := &shutdownCompletionHeimdall{
+				IHeimdallClient: f.heimdallClient,
+				entered:         make(chan struct{}),
+				records:         []*clerk.EventRecordWithTime{getSampleEventRecord(t)},
+			}
+			f.engine.SetHeimdallClient(gate)
+
+			importDone := make(chan error, 1)
+			go func() {
+				_, err := f.chain.InsertChain([]*types.Block{invalid}, false)
+				importDone <- err
+			}()
+			select {
+			case <-gate.entered:
+			case <-time.After(10 * time.Second):
+				t.Fatal("import did not reach StateSyncEvents")
+			}
+			shutdownDone := make(chan error, 1)
+			go func() { shutdownDone <- f.stack.Close() }()
+
+			var importErr error
+			select {
+			case importErr = <-importDone:
+			case <-time.After(15 * time.Second):
+				t.Fatal("invalid import did not complete after engine cancellation")
+			}
+			require.Error(t, importErr)
+			require.NotErrorIs(t, importErr, consensus.ErrEngineStopped)
+			if name == "state" {
+				require.ErrorContains(t, importErr, "invalid merkle root")
+			} else {
+				require.ErrorIs(t, importErr, core.ErrReceiptRootMismatch)
+			}
+			select {
+			case err := <-shutdownDone:
+				require.NoError(t, err)
+				f.closed = true
+			case <-time.After(15 * time.Second):
+				t.Fatal("shutdown did not join invalid import")
 			}
 			require.Contains(t, f.output.String(), "BAD BLOCK")
 			db := reopenValidationDatabase(t, f.stack)

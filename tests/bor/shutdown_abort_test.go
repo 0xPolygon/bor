@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	gomock "go.uber.org/mock/gomock"
 
+	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/bor"
 	"github.com/ethereum/go-ethereum/consensus/bor/clerk"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall"
@@ -182,9 +183,12 @@ func TestShutdownAbortDoesNotReportBadBlock(t *testing.T) {
 		t.Fatal("node shutdown remained blocked behind StateSyncEvents")
 	}
 
+	var importErr error
 	select {
-	case err := <-importDone:
-		require.Error(t, err)
+	case importErr = <-importDone:
+		require.Error(t, importErr)
+		require.ErrorIs(t, importErr, consensus.ErrEngineStopped)
+		require.ErrorIs(t, importErr, context.Canceled)
 	case <-time.After(15 * time.Second):
 		t.Fatal("aborted import did not return")
 	}

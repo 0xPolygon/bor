@@ -350,8 +350,8 @@ func (f *BlockFetcher) Stop() {
 	})
 }
 
-// beginImport admits one import goroutine unless shutdown has started. The
-// matching Done is deferred by the caller's goroutine.
+// beginImport admits one import-owned goroutine unless shutdown has started.
+// The matching Done is deferred by the caller's goroutine.
 func (f *BlockFetcher) beginImport() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -360,6 +360,18 @@ func (f *BlockFetcher) beginImport() bool {
 	}
 	f.importWg.Add(1)
 	return true
+}
+
+// startBroadcast keeps early propagation asynchronous while giving Stop
+// ownership of the callback's chain reads.
+func (f *BlockFetcher) startBroadcast(block *types.Block, witness *stateless.Witness, propagate bool) {
+	if !f.beginImport() {
+		return
+	}
+	go func() {
+		defer f.importWg.Done()
+		f.broadcastBlock(block, witness, propagate)
+	}()
 }
 
 func (f *BlockFetcher) penalizeInvalidHeader(peer string, err error) {
@@ -1354,7 +1366,7 @@ func (f *BlockFetcher) runBlockImport(op *blockOrHeaderInject) (retryWitness boo
 		// All ok, quickly propagate to our peers
 		blockBroadcastOutTimer.UpdateSince(block.ReceivedAt)
 
-		go f.broadcastBlock(block, witness, true)
+		f.startBroadcast(block, witness, true)
 
 	case consensus.ErrFutureBlock:
 		// Weird future block, don't fail, but neither propagate
@@ -1386,7 +1398,7 @@ func (f *BlockFetcher) runBlockImport(op *blockOrHeaderInject) (retryWitness boo
 
 	// If import succeeded, broadcast the block
 	blockAnnounceOutTimer.UpdateSince(block.ReceivedAt)
-	go f.broadcastBlock(block, witness, false)
+	f.startBroadcast(block, witness, false)
 
 	// Invoke the testing hook if needed
 	if f.importedHook != nil {
