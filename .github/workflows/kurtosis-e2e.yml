@@ -351,11 +351,12 @@ jobs:
           main_branch: develop
           enclave_name: ${{ env.ENCLAVE_NAME }}
 
-  # Runs the stateless-sync topology with `pipeline.enable-import-src = true`
-  # injected into every bor node's config template (POS-3697). The flag ships
-  # default-off, so without this leg no CI job exercises the pipelined import
-  # path on a real network. Adds a released-image baseline validator that
-  # ignores the injected section — a pipeline-off cross-check on every block.
+  # Runs the stateless-sync topology with pipelined import enabled on every
+  # bor node but one (`el_bor_enable_import_src` in pos-workflows' pipeline
+  # config, POS-3697). The flag ships default-off, so without this leg no CI
+  # job exercises the pipelined import path on a real network. Adds a baseline
+  # node on the same image that leaves it off — a pipeline-off cross-check on
+  # every block.
   pipeline-e2e-tests:
     env:
       ENCLAVE_NAME: kurtosis-pipeline-e2e
@@ -377,15 +378,6 @@ jobs:
           repository: 0xPolygon/kurtosis-pos
           ref: kamuikatsurgi/rio-at-genesis
           persist-credentials: false
-
-      # The whole point of this leg: every bor node gets the pipeline flag.
-      # bor:local nodes enable pipelined import (stateless-sync nodes
-      # self-gate it off); the released-image baseline ignores the unknown
-      # section and stays pipeline-off.
-      - name: Enable pipelined import in the bor config template
-        run: |
-          printf '\n[pipeline]\n  enable-import-src = true\n  import-src-logs = true\n' >> static_files/el/bor/config.toml
-          tail -4 static_files/el/bor/config.toml
 
       # This step will free disk space and thus remove any docker images previously built
       - name: Pre kurtosis run (trusted)
