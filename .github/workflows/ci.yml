@@ -25,12 +25,12 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - run: |
           git submodule update --init --recursive --force
           git fetch --no-tags --prune --depth=1 origin +refs/heads/master:refs/remotes/origin/master
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
@@ -51,12 +51,12 @@ jobs:
         os: [ubuntu-22.04] # List of OS: https://github.com/actions/virtual-environments
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - run: |
           git submodule update --init --recursive --force
           git fetch --no-tags --prune --depth=1 origin +refs/heads/master:refs/remotes/origin/master
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
@@ -82,12 +82,12 @@ jobs:
         os: [ubuntu-22.04] # List of OS: https://github.com/actions/virtual-environments
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - run: |
           git submodule update --init --recursive --force
           git fetch --no-tags --prune --depth=1 origin +refs/heads/master:refs/remotes/origin/master
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
@@ -101,7 +101,7 @@ jobs:
       - name: Test
         run: make test
 
-      - uses: PaloAltoNetworks/upload-secure-artifact@main
+      - uses: PaloAltoNetworks/upload-secure-artifact@adc32ae37ec2b85e75fd45de1e889af803102e4b # v2.0.0
         with:
           name: unitTest-coverage
           path: cover.out
@@ -113,12 +113,12 @@ jobs:
         os: [ubuntu-22.04] # List of OS: https://github.com/actions/virtual-environments
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - run: |
           git submodule update --init --recursive --force
           git fetch --no-tags --prune --depth=1 origin +refs/heads/master:refs/remotes/origin/master
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
@@ -132,7 +132,7 @@ jobs:
       - name: test-integration
         run: make test-integration
 
-      - uses: PaloAltoNetworks/upload-secure-artifact@main
+      - uses: PaloAltoNetworks/upload-secure-artifact@adc32ae37ec2b85e75fd45de1e889af803102e4b # v2.0.0
         with:
           name: integrationTest-coverage
           path: cover.out
@@ -146,9 +146,9 @@ jobs:
     needs: [unit-tests, integration-tests]
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
       - name: Download artifacts
-        uses: actions/download-artifact@v6.0.0
+        uses: actions/download-artifact@v8.0.2
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v3
         with:
