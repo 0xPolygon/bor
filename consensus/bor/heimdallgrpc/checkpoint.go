@@ -17,9 +17,12 @@ func (h *HeimdallGRPCClient) FetchCheckpointCount(ctx context.Context) (int64, e
 
 	var err error
 
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, h.timeout)
+	defer cancel()
+
 	// Start the timer and set the request type on the context.
 	start := time.Now()
-	ctx = heimdall.WithRequestType(ctx, heimdall.CheckpointCountRequest)
+	ctx = heimdall.WithRequestType(ctxWithTimeout, heimdall.CheckpointCountRequest)
 
 	// Defer the metrics call.
 	defer func() {
@@ -42,9 +45,12 @@ func (h *HeimdallGRPCClient) FetchCheckpoint(ctx context.Context, number int64) 
 	var fetchedCheckpoint checkpointTypes.Checkpoint
 	var err error
 
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, h.timeout)
+	defer cancel()
+
 	// Start the timer and set the request type on the context.
 	start := time.Now()
-	ctx = heimdall.WithRequestType(ctx, heimdall.CheckpointRequest)
+	ctx = heimdall.WithRequestType(ctxWithTimeout, heimdall.CheckpointRequest)
 
 	// Defer the metrics call.
 	defer func() {
