@@ -49,7 +49,7 @@ func (h *HeimdallGRPCClient) FetchMilestone(ctx context.Context) (*milestone.Mil
 
 	// Start the timer and set the request type on the context.
 	start := time.Now()
-	ctx = heimdall.WithRequestType(ctxWithTimeout, heimdall.StateSyncRequest)
+	ctx = heimdall.WithRequestType(ctxWithTimeout, heimdall.MilestoneRequest)
 
 	// Defer the metrics call.
 	defer func() {
