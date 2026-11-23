@@ -218,13 +218,13 @@ func TestConfigBuildNodeBulkSidecar(t *testing.T) {
 	config.P2P.BulkPort = 30304
 	config.P2P.Bind = "0.0.0.0"
 
-	cfg, err := config.buildNode()
+	cfg, err := config.buildNode(log.Root())
 	assert.NoError(t, err)
 	assert.True(t, cfg.P2P.EnableBulkSidecar)
 	assert.Equal(t, "0.0.0.0:30304", cfg.P2P.BulkListenAddr)
 	for _, bind := range []string{"::1", "[::1]"} {
 		config.P2P.Bind = bind
-		cfg, err := config.buildNode()
+		cfg, err := config.buildNode(log.Root())
 		if assert.NoError(t, err) {
 			assert.Equal(t, "[::1]:30304", cfg.P2P.BulkListenAddr)
 			assert.Equal(t, "[::1]:30303", cfg.P2P.ListenAddr)
@@ -232,7 +232,7 @@ func TestConfigBuildNodeBulkSidecar(t *testing.T) {
 	}
 	for _, port := range []uint64{0, 65535, 65536, ^uint64(0)} {
 		config.P2P.BulkPort = port
-		_, err := config.buildNode()
+		_, err := config.buildNode(log.Root())
 		if port <= 65535 {
 			assert.NoError(t, err)
 		} else {
