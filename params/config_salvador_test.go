@@ -22,10 +22,14 @@ var salvadorRecoveryGroups = [][]common.Address{
 		common.HexToAddress("0xc91ee0574a14446DE200923729c349B9CAE19b60"),
 		common.HexToAddress("0x3f7019221a925537dC20767C38e80A7127fb1Ffa"),
 	},
+	{
+		common.HexToAddress("0x5227f603C1eE34CE3C06eFe6477003BDfCCB2f8c"),
+	},
 }
 
 var salvadorRecoveries = []common.Address{
 	common.HexToAddress("0x4dF687032B087e3e922d7cbBA38aF4FbB026EEDC"),
+	common.HexToAddress("0xd9fD39103674CB061D64D9C3b73B878Dbe610b80"),
 }
 
 // RECOVERY immutable offsets in the Sweeper runtime built from
@@ -75,9 +79,9 @@ func TestSalvadorBannerAndPresets(t *testing.T) {
 	bor.SalvadorBlock = nil
 	require.NotContains(t, cfg.Description(), "Salvador")
 
-	require.Equal(t, big.NewInt(98350200), BorMainnetChainConfig.Bor.SalvadorBlock)
-	require.Equal(t, big.NewInt(53803400), AmoyChainConfig.Bor.SalvadorBlock)
-	require.Contains(t, BorMainnetChainConfig.Description(), " - Salvador:                    #98350200")
+	require.Equal(t, big.NewInt(98688600), BorMainnetChainConfig.Bor.SalvadorBlock)
+	require.Equal(t, big.NewInt(54310900), AmoyChainConfig.Bor.SalvadorBlock)
+	require.Contains(t, BorMainnetChainConfig.Description(), " - Salvador:                    #98688600")
 
 	// Live tracers attribute BlockAlloc code changes at a sprint start to the state-sync tx.
 	for _, c := range []*BorConfig{BorMainnetChainConfig.Bor, AmoyChainConfig.Bor} {
@@ -142,6 +146,7 @@ func TestSalvadorBlockAlloc(t *testing.T) {
 		return preset[addr.Hex()[2:]].(map[string]interface{})["code"].(string)
 	}
 	first := codeAt(salvadorRecoveryGroups[0][0])
+	second := codeAt(salvadorRecoveryGroups[1][0])
 	other := common.HexToAddress("0xa11ce")
 
 	allocWith := func(key string, codes map[common.Address]string) *BorConfig {
@@ -151,11 +156,12 @@ func TestSalvadorBlockAlloc(t *testing.T) {
 		}
 		return &BorConfig{BlockAlloc: map[string]interface{}{key: accounts}}
 	}
-	codes := func(code string) map[common.Address]string {
+	codes := func(c1, c2 string) map[common.Address]string {
 		out := make(map[common.Address]string)
 		for _, addr := range salvadorRecoveryGroups[0] {
-			out[addr] = code
+			out[addr] = c1
 		}
+		out[salvadorRecoveryGroups[1][0]] = c2
 		return out
 	}
 	scheduled := func(cfg *BorConfig) *BorConfig {
@@ -168,9 +174,9 @@ func TestSalvadorBlockAlloc(t *testing.T) {
 		}
 		return code
 	}
-	split := codes(first)
-	split[salvadorRecoveryGroups[0][3]] = withRecovery(first, other)
-	missing := codes(first)
+	split := codes(first, second)
+	split[salvadorRecoveryGroups[0][3]] = second
+	missing := codes(first, second)
 	delete(missing, salvadorRecoveryGroups[0][2])
 
 	tests := []struct {
@@ -180,15 +186,16 @@ func TestSalvadorBlockAlloc(t *testing.T) {
 	}{
 		{"mainnet preset", BorMainnetChainConfig.Bor, ""},
 		{"amoy preset", AmoyChainConfig.Bor, ""},
-		{"scheduled at fork key", scheduled(allocWith("100", codes(first))), ""},
-		{"unscheduled", allocWith("0", codes(first)), "salvadorBlock is not set"},
-		{"scheduled but entries left at 0", scheduled(allocWith("0", codes(first))), "blockAlloc 100 has no entry"},
+		{"scheduled at fork key", scheduled(allocWith("100", codes(first, second))), ""},
+		{"unscheduled", allocWith("0", codes(first, second)), "salvadorBlock is not set"},
+		{"scheduled but entries left at 0", scheduled(allocWith("0", codes(first, second))), "blockAlloc 100 has no entry"},
 		{"missing address", scheduled(allocWith("100", missing)), "has no entry for " + salvadorRecoveryGroups[0][2].Hex()},
-		{"one member to another recovery", scheduled(allocWith("100", split)), salvadorRecoveryGroups[0][3].Hex() + " recovers to " + other.Hex()},
-		{"unknown recovery", scheduled(allocWith("100", codes(withRecovery(first, other)))), "want " + salvadorRecoveries[0].Hex()},
-		{"one slot patched", scheduled(allocWith("100", codes(patchImmutable(first, salvadorRecoveryOffsets[1], other)))), "RECOVERY at 148"},
-		{"zero recovery", scheduled(allocWith("100", codes(withRecovery(first, common.Address{})))), "RECOVERY is zero"},
-		{"other code", scheduled(allocWith("100", codes(flipByte(first, 10)))), "does not match the reviewed build"},
+		{"group member to other group's recovery", scheduled(allocWith("100", split)), salvadorRecoveryGroups[0][3].Hex() + " recovers to " + salvadorRecoveries[1].Hex()},
+		{"groups swapped", scheduled(allocWith("100", codes(second, first))), "want " + salvadorRecoveries[0].Hex()},
+		{"unknown recovery", scheduled(allocWith("100", codes(withRecovery(first, other), second))), "want " + salvadorRecoveries[0].Hex()},
+		{"one slot patched", scheduled(allocWith("100", codes(patchImmutable(first, salvadorRecoveryOffsets[1], other), second))), "RECOVERY at 148"},
+		{"zero recovery", scheduled(allocWith("100", codes(withRecovery(first, common.Address{}), second))), "RECOVERY is zero"},
+		{"other code", scheduled(allocWith("100", codes(flipByte(first, 10), second))), "does not match the reviewed build"},
 	}
 
 	for _, tt := range tests {
@@ -203,6 +210,6 @@ func TestSalvadorBlockAlloc(t *testing.T) {
 		})
 	}
 	for _, c := range []*BorConfig{BorMainnetChainConfig.Bor, AmoyChainConfig.Bor} {
-		require.Len(t, slices.Collect(maps.Keys(c.BlockAlloc[c.SalvadorBlock.String()].(map[string]interface{}))), 4)
+		require.Len(t, slices.Collect(maps.Keys(c.BlockAlloc[c.SalvadorBlock.String()].(map[string]interface{}))), 5)
 	}
 }
