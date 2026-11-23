@@ -562,7 +562,11 @@ func (s *bulkSession) waitChannel(ctx context.Context, conn *quic.Conn, channel 
 		}
 		return s.claimChannel(ctx, channel, result.rw)
 	case <-ctx.Done():
-		return nil, errBulkChannelTimeout
+		err := ctx.Err()
+		if errors.Is(err, context.DeadlineExceeded) {
+			err = errBulkChannelTimeout
+		}
+		return nil, err
 	}
 }
 

@@ -241,6 +241,27 @@ func TestConfigBuildNodeBulkSidecar(t *testing.T) {
 	}
 }
 
+func TestServerQUICDocumentation(t *testing.T) {
+	document, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "cli", "server.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	generated := new(Command).MarkDown()
+	for _, name := range []string{"bulk-sidecar", "bulk-port", "bor.heimdall"} {
+		t.Run(name, func(t *testing.T) {
+			prefix := "- ```" + name + "```:"
+			for _, line := range strings.Split(generated, "\n") {
+				if strings.HasPrefix(line, prefix) {
+					assert.Contains(t, string(document), line)
+					return
+				}
+			}
+			t.Fatalf("missing generated option %s", name)
+		})
+	}
+	assert.Contains(t, string(document), "h3://host:port")
+}
+
 func TestMakePasswordListFromFile(t *testing.T) {
 	t.Parallel()
 

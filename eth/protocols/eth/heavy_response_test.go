@@ -15,7 +15,7 @@ func TestHeavyResponseQueryReleasesSlot(t *testing.T) {
 	limiter := NewHeavyResponseLimiter()
 	want := []rlp.RawValue{rlp.EmptyList}
 	for range cap(limiter.slots) + 1 {
-		got, served := serveHeavyResponseQuery(&Peer{heavyResponseLimiter: limiter}, func() []rlp.RawValue {
+		got, served := serveHeavyResponseQuery(&Peer{heavyResponseLimiter: limiter}, 17, func() []rlp.RawValue {
 			require.Len(t, limiter.slots, 1)
 			return want
 		})
@@ -51,7 +51,7 @@ func TestHeavyResponseQueryStopsOnShutdown(t *testing.T) {
 				}
 				result := make(chan bool, 1)
 				go func() {
-					_, served := serveHeavyResponseQuery(peer, func() []rlp.RawValue {
+					_, served := serveHeavyResponseQuery(peer, 17, func() []rlp.RawValue {
 						t.Error("a stopped request must not execute a lookup")
 						return nil
 					})
@@ -90,9 +90,9 @@ func TestHeavyResponseHandlersWaitForCapacity(t *testing.T) {
 		want    uint64
 		reply   any
 	}{
-		{"bodies", handleGetBlockBodies, GetBlockBodiesPacket{RequestId: 1, GetBlockBodiesRequest: GetBlockBodiesRequest{{1}}}, BlockBodiesMsg, BlockBodiesRLPPacket{RequestId: 1}},
-		{"receipts68", handleGetReceipts68, GetReceiptsPacket{RequestId: 2, GetReceiptsRequest: GetReceiptsRequest{{1}}}, ReceiptsMsg, ReceiptsRLPPacket{RequestId: 2}},
-		{"receipts69", handleGetReceipts69, GetReceiptsPacket{RequestId: 3, GetReceiptsRequest: GetReceiptsRequest{{1}}}, ReceiptsMsg, ReceiptsRLPPacket{RequestId: 3}},
+		{"bodies", handleGetBlockBodies, GetBlockBodiesPacket{RequestId: 1, GetBlockBodiesRequest: make(GetBlockBodiesRequest, 17)}, BlockBodiesMsg, BlockBodiesRLPPacket{RequestId: 1}},
+		{"receipts68", handleGetReceipts68, GetReceiptsPacket{RequestId: 2, GetReceiptsRequest: make(GetReceiptsRequest, 17)}, ReceiptsMsg, ReceiptsRLPPacket{RequestId: 2}},
+		{"receipts69", handleGetReceipts69, GetReceiptsPacket{RequestId: 3, GetReceiptsRequest: make(GetReceiptsRequest, 17)}, ReceiptsMsg, ReceiptsRLPPacket{RequestId: 3}},
 	} {
 		for _, limited := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/limited=%v", test.name, limited), func(t *testing.T) {
@@ -154,7 +154,7 @@ func TestHeavyResponseQuerySkipsLimiterWhenDisabled(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		got, served := serveHeavyResponseQuery(&Peer{}, func() []rlp.RawValue {
+		got, served := serveHeavyResponseQuery(&Peer{}, 17, func() []rlp.RawValue {
 			require.Len(t, limiter.slots, cap(limiter.slots))
 			return want
 		})
@@ -179,7 +179,7 @@ func TestHeavyResponseQueryMixedPeers(t *testing.T) {
 	free := make(chan struct{})
 	go func() {
 		defer close(free)
-		_, served := serveHeavyResponseQuery(&Peer{}, func() []rlp.RawValue { return want })
+		_, served := serveHeavyResponseQuery(&Peer{}, 17, func() []rlp.RawValue { return want })
 		require.True(t, served)
 	}()
 	select {
@@ -191,7 +191,7 @@ func TestHeavyResponseQueryMixedPeers(t *testing.T) {
 	limited := &Peer{term: make(chan struct{}), heavyResponseLimiter: limiter}
 	blocked := make(chan bool, 1)
 	go func() {
-		_, served := serveHeavyResponseQuery(limited, func() []rlp.RawValue { return want })
+		_, served := serveHeavyResponseQuery(limited, 17, func() []rlp.RawValue { return want })
 		blocked <- served
 	}()
 	select {
@@ -241,7 +241,7 @@ func TestHeavyResponseLimiterNodeIsolation(t *testing.T) {
 			defer peer.Close()
 			done := make(chan bool, 1)
 			go func() {
-				_, served := serveHeavyResponseQuery(peer, func() []rlp.RawValue { return []rlp.RawValue{rlp.EmptyList} })
+				_, served := serveHeavyResponseQuery(peer, 17, func() []rlp.RawValue { return []rlp.RawValue{rlp.EmptyList} })
 				done <- served
 			}()
 			if test.blocked {

@@ -38,7 +38,7 @@ func TestBulkChannelCancelledWaiterRemoved(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		_, err := session.waitChannel(ctx, nil, "eth-bulk")
-		require.Error(t, err)
+		require.ErrorIs(t, err, context.Canceled)
 		require.Empty(t, session.waiters)
 	}
 }

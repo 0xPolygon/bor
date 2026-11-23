@@ -22,7 +22,7 @@ func TestPeerPolicyBodyServingWorkerLimit(t *testing.T) {
 			if enabled {
 				peer.SetObserver(func(event peerpolicy.Evidence) { events = append(events, event) })
 			}
-			query := GetBlockBodiesPacket{RequestId: 7, GetBlockBodiesRequest: GetBlockBodiesRequest{{1}}}
+			query := GetBlockBodiesPacket{RequestId: 7, GetBlockBodiesRequest: make(GetBlockBodiesRequest, 17)}
 			payload, err := rlp.EncodeToBytes(query)
 			require.NoError(t, err)
 			backend := newTestBackend(0)

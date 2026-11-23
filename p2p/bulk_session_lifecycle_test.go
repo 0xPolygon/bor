@@ -106,6 +106,44 @@ func TestBulkSessionChannelWaitersAndLimits(t *testing.T) {
 	require.Len(t, session.channels, maxBulkChannelsPerSession)
 }
 
+func TestBulkChannelWaitContextOutcomes(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		want error
+	}{
+		{"cancelled", context.Canceled},
+		{"deadline", errBulkChannelTimeout},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				session := newHelloTestSession()
+				ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+				defer cancel()
+				result := make(chan bulkChannelResult, 1)
+				go func() {
+					rw, err := session.waitChannel(ctx, nil, "eth-bulk")
+					result <- bulkChannelResult{rw: rw, err: err}
+				}()
+				synctest.Wait()
+				session.lock.Lock()
+				waiting := len(session.waiters["eth-bulk"])
+				session.lock.Unlock()
+				require.Equal(t, 1, waiting)
+				if test.want == context.Canceled {
+					cancel()
+				} else {
+					time.Sleep(time.Second)
+				}
+				got := <-result
+				require.Nil(t, got.rw)
+				require.ErrorIs(t, got.err, test.want)
+				require.Empty(t, session.waiters)
+				require.Empty(t, session.channels)
+			})
+		})
+	}
+}
+
 type bulkCloseErrorRW struct{ closeTrackingRW }
 
 func (*bulkCloseErrorRW) Close() error { return errors.New("close failed") }

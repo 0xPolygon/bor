@@ -319,7 +319,7 @@ func handleGetReceipts68(backend Backend, msg Decoder, peer *Peer) error {
 		return err
 	}
 
-	response, served := serveHeavyResponseQuery(peer, func() []rlp.RawValue {
+	response, served := serveHeavyResponseQuery(peer, len(query.GetReceiptsRequest), func() []rlp.RawValue {
 		return ServiceGetReceiptsQuery68(backend.Chain(), query.GetReceiptsRequest)
 	})
 	if !served {
@@ -335,7 +335,7 @@ func handleGetReceipts69(backend Backend, msg Decoder, peer *Peer) error {
 		return err
 	}
 
-	response, served := serveHeavyResponseQuery(peer, func() []rlp.RawValue {
+	response, served := serveHeavyResponseQuery(peer, len(query.GetReceiptsRequest), func() []rlp.RawValue {
 		return ServiceGetReceiptsQuery69(backend.Chain(), query.GetReceiptsRequest)
 	})
 	if !served {

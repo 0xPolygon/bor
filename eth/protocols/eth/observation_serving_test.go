@@ -94,7 +94,9 @@ func TestPeerPolicyBodyServingAdapter(t *testing.T) {
 				got = e
 			})
 		}
-		query := GetBlockBodiesPacket{RequestId: 7, GetBlockBodiesRequest: GetBlockBodiesRequest{{}, hash}}
+		hashes := make(GetBlockBodiesRequest, 17)
+		hashes[len(hashes)-1] = hash
+		query := GetBlockBodiesPacket{RequestId: 7, GetBlockBodiesRequest: hashes}
 		if err := observedBodyReply(backend, p, query); err != nil {
 			t.Fatal(err)
 		}
