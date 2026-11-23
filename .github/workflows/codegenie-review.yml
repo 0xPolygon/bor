@@ -50,11 +50,11 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: 0xPolygon/codegenie@1f79ecd5a7bc849a7b72b72a238773900355cb5a # v0.7.0
+      - uses: 0xPolygon/codegenie@286f3c6645a423b3ab0cdd66f2713d68ed195928  # v0.8.0
         with:
           model: "anthropic/claude-opus-5:high"
           llm-api-key: ${{ secrets.CLAUDE_API_KEY }}
