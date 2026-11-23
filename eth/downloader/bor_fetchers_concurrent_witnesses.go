@@ -144,3 +144,117 @@ func (q *witnessQueue) deliver(peer *peerConnection, packet *eth.Response) (int,
 
 	return accepted, err
 }
+
+const (
+	witnessRetryDelay = time.Second
+
+	witnessNoProgressBudget = 30 * time.Second
+)
+
+var ErrWitnessUnavailable = errors.New("no witness source available")
+
+type witnessRetries struct {
+	paced    map[string]time.Time
+	deadline time.Time
+}
+
+func newWitnessRetries() *witnessRetries {
+	return &witnessRetries{paced: make(map[string]time.Time)}
+}
+
+func (r *witnessRetries) wake(now time.Time) time.Time {
+	var earliest time.Time
+	for id, at := range r.paced {
+		if !at.After(now) {
+			delete(r.paced, id)
+			continue
+		}
+		earliest = earlierBackoff(earliest, at)
+	}
+	return earliest
+}
+
+func (r *witnessRetries) exhausted(now time.Time) bool {
+	return !r.deadline.IsZero() && !now.Before(r.deadline)
+}
+
+func (r *witnessRetries) delayed(id string) bool {
+	_, pending := r.paced[id]
+	return pending
+}
+
+func (r *witnessRetries) forget(id string) {
+	delete(r.paced, id)
+}
+
+func (r *witnessRetries) guard(queue typedQueue, queued, inflight int, throttled bool, now time.Time) (time.Time, error) {
+	if queue.kind() != witnessQueueKind || (throttled && inflight == 0) || queued+inflight == 0 {
+		r.deadline = time.Time{}
+		return time.Time{}, nil
+	}
+	if r.deadline.IsZero() {
+		if inflight > 0 {
+			return time.Time{}, nil
+		}
+		r.deadline = now.Add(witnessNoProgressBudget)
+	}
+	if now.Before(r.deadline) {
+		return r.deadline, nil
+	}
+	if inflight > 0 {
+		return time.Time{}, nil
+	}
+
+	return time.Time{}, fmt.Errorf("%w: none accepted in %s", ErrWitnessUnavailable, common.PrettyDuration(witnessNoProgressBudget))
+}
+
+func (r *witnessRetries) startBudget(queue typedQueue, now time.Time) {
+	if queue.kind() == witnessQueueKind && r.deadline.IsZero() {
+		r.deadline = now.Add(witnessNoProgressBudget)
+	}
+}
+
+func (r *witnessRetries) schedule(queue typedQueue, id string) time.Time {
+	if queue.kind() != witnessQueueKind {
+		return time.Time{}
+	}
+	now := time.Now()
+	r.startBudget(queue, now)
+	at := now.Add(witnessRetryDelay)
+	r.paced[id] = at
+	return at
+}
+
+func (r *witnessRetries) expire(queue typedQueue, req *eth.Request) bool {
+	if queue.kind() != witnessQueueKind {
+		return false
+	}
+	log.Debug("Downloader: witness request timed out, scheduling retry", "peer", req.Peer)
+	if err := req.Close(); err != nil {
+		log.Debug("Failed to cancel witness request", "peer", req.Peer, "err", err)
+	}
+	queue.unreserve(req.Peer)
+	r.schedule(queue, req.Peer)
+	return true
+}
+
+func (r *witnessRetries) discardStale(queue typedQueue, pending map[string]*eth.Request, res *eth.Response) bool {
+	if queue.kind() != witnessQueueKind || pending[res.Req.Peer] == res.Req {
+		return false
+	}
+	res.Done <- nil
+	if err := res.Req.Close(); err != nil {
+		log.Debug("Failed to close stale witness request", "peer", res.Req.Peer, "err", err)
+	}
+	return true
+}
+
+func (r *witnessRetries) delivered(queue typedQueue, id string, accepted int, err error) {
+	if accepted > 0 {
+		r.deadline = time.Time{}
+		return
+	}
+	if err == nil {
+		r.schedule(queue, id)
+	}
+}

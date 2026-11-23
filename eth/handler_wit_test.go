@@ -2,8 +2,10 @@ package eth
 
 import (
 	"crypto/rand"
+	"errors"
 	"math/big"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -16,6 +18,7 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 )
 
 // newTestWitPeer creates a wit.Peer for testing
@@ -764,7 +767,7 @@ func TestResolveWitnessFetchPeerFallsBackToDeferredAnnouncer(t *testing.T) {
 	hash := header.Hash()
 
 	// No marked peer, no deferred entry → no fetch target.
-	if p := ethH.resolveWitnessFetchPeer(hash); p != nil {
+	if p := ethH.resolveWitnessFetchPeer(hash, nil); p != nil {
 		t.Fatal("no peer should resolve without marks or deferred entries")
 	}
 
@@ -777,11 +780,46 @@ func TestResolveWitnessFetchPeerFallsBackToDeferredAnnouncer(t *testing.T) {
 		Signature:   make([]byte, wit.SignatureLength),
 	}, ethPeer.ID())
 
-	p := ethH.resolveWitnessFetchPeer(hash)
+	p := ethH.resolveWitnessFetchPeer(hash, nil)
 	if p == nil {
 		t.Fatal("deferred-announce relayer was not resolved as the fetch fallback; stateless tip consumer has no body source for oversized witnesses")
 	}
 	if p.ID() != ethPeer.ID() {
 		t.Fatalf("resolved wrong peer: got %s want %s", p.ID(), ethPeer.ID())
+	}
+}
+
+func TestWitnessAdapterFailureLabels(t *testing.T) {
+	for _, name := range []string{"empty", "invalid encoding", "invalid page"} {
+		t.Run(name, func(t *testing.T) {
+			p, mock := testPeer(t)
+			hash := common.Hash{1}
+			mock.EXPECT().ID().Return("server").AnyTimes()
+			mock.EXPECT().RequestWitness(gomock.Any(), gomock.Any()).DoAndReturn(func(_ []wit.WitnessPageRequest, sink chan *wit.Response) (*wit.Request, error) {
+				page := wit.WitnessPageResponse{Hash: hash, TotalPages: 1}
+				if name != "empty" {
+					page.Data = []byte{1}
+				}
+				if name == "invalid page" {
+					page.Page = 1
+				}
+				go func() {
+					sink <- &wit.Response{Res: &wit.WitnessPacketRLPPacket{WitnessPacketResponse: []wit.WitnessPageResponse{page}}, Done: make(chan error, 1)}
+				}()
+				return &wit.Request{}, nil
+			}).AnyTimes()
+			sink := make(chan *ethproto.Response, 1)
+			req, err := p.RequestWitnesses([]common.Hash{hash}, sink)
+			require.NoError(t, err)
+			defer func() { assert.NoError(t, req.Close()) }()
+			select {
+			case res := <-sink:
+				require.Empty(t, res.Res)
+				cause, _ := res.Meta.(error)
+				require.Equal(t, name != "empty", errors.Is(cause, stateless.ErrInvalidWitness))
+			case <-time.After(2 * time.Second):
+				t.Fatal("witness adapter did not complete")
+			}
+		})
 	}
 }

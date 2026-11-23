@@ -51,6 +51,12 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Value:   &c.cliConfig.EnableEVMSwitchDispatch,
 		Default: c.cliConfig.EnableEVMSwitchDispatch,
 	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "precompile-cache",
+		Usage:   "Share the per-block VM result caches (keccak/ecrecover) with the serial import processor and the block builder, and cache keccak for variable-length inputs (the prefetcher and parallel workers share these caches either way)",
+		Value:   &c.cliConfig.EnablePrecompileCache,
+		Default: c.cliConfig.EnablePrecompileCache,
+	})
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "vmtrace",
 		Usage:   "Name of a tracer to record internal VM operations during blockchain synchronization (costly) (e.g. 'json')",
@@ -338,6 +344,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.TxPool.FilteredAddressesFile,
 		Group:   "Transaction Pool",
 	})
+	f.DurationFlag(&flagset.DurationFlag{
+		Name:    "txpool.filter-reload",
+		Usage:   "Interval at which the filtered addresses file is re-read and applied without a restart (0 disables)",
+		Value:   &c.cliConfig.TxPool.FilterReload,
+		Default: c.cliConfig.TxPool.FilterReload,
+		Group:   "Transaction Pool",
+	})
 	f.BoolFlag(&flagset.BoolFlag{
 		Name:    "txpool.rebroadcast",
 		Usage:   "Enable stuck transaction rebroadcast mechanism",
@@ -499,6 +512,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Usage:   "Enable dynamic EIP-1559 target gas percentage adjustment based on base fee (post-Lisovo, mutually exclusive with enableDynamicGasLimit)",
 		Value:   &c.cliConfig.Sealer.EnableDynamicTargetGas,
 		Default: c.cliConfig.Sealer.EnableDynamicTargetGas,
+		Group:   "Sealer",
+	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "miner.baseFeeFloor",
+		Usage:   "Base fee floor in wei held by this block producer, also used as the target base fee (post-Lisovo, producer policy only, 0 = disabled)",
+		Value:   &c.cliConfig.Sealer.BaseFeeFloor,
+		Default: c.cliConfig.Sealer.BaseFeeFloor,
 		Group:   "Sealer",
 	})
 	f.Uint64Flag(&flagset.Uint64Flag{
@@ -1023,6 +1043,7 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	})
 
 	// p2p options
+	c.peerReputationFlag(f)
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "bind",
 		Usage:   "Network binding address",

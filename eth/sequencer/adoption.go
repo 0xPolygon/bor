@@ -25,7 +25,8 @@ const noHold = ^uint64(0)
 // legal combinations were enforced only by discipline.
 type buildMode struct {
 	kind   int
-	height uint64 // the height the treatment was decided for (modeOpen: unused)
+	height uint64        // the height the treatment was decided for (modeOpen: unused)
+	txs    []common.Hash // modeRecover: the sealed generation's transactions
 }
 
 const (
@@ -39,6 +40,16 @@ const (
 	// at this block forever.
 	modeOverSealed
 )
+
+// recoveringAt reports a build rebuilding the store's sealed generation at
+// this height. Such a block delivers what the store promised there once it
+// carries the generation exactly, so the seal barrier passes it: the tail
+// read behind the mirror check can show a newer window of the dead producer
+// as owed, and refusing on it only loops the rebuild until the height goes to
+// the pool in a new order.
+func (m buildMode) recoveringAt(number uint64) bool {
+	return m.kind == modeRecover && m.height == number
+}
 
 // mutedAt reports whether the classification muted the build at this height.
 // A muted build publishes nothing, so the seal barrier has no window to
@@ -153,7 +164,10 @@ func (p *Publisher) AdoptWindow(number uint64, parent common.Hash) *miner.Adopte
 	ctx, cancel := context.WithTimeout(context.Background(), checkTailTimeout)
 	defer cancel()
 
+	ctx = withRecoveryBudget(ctx)
+
 	info, state := p.buildStartRead(ctx, number)
+	info = p.bridgeAtBuildStart(ctx, info, state, number, parent)
 
 	// An armed offer the previous work cycle never consumed (its build died
 	// before opening) stays servable — without it this read would mistake
@@ -174,12 +188,22 @@ func (p *Publisher) AdoptWindow(number uint64, parent common.Hash) *miner.Adopte
 	p.resync = false
 	p.diverged = divergence{}
 
+	// A bridged record vouches only for the build that seeded it, so a new
+	// build at or below its height drops it. It outlives the seal, though:
+	// the flush that relies on it reconciles after the next build starts.
+	if p.bridged.height >= number {
+		p.bridged = bridgedWindow{}
+	}
+
 	p.advanceStoreSealedTipLocked(info, "build-start read")
 
 	// Lost head race, or a reorg rebuilding sealed ground — no phantom open
 	// on our own sealed tip. If it seals after all, the flush rebuild
 	// publishes the complete window.
-	if number <= p.sealedTip {
+	rewound := number < p.buildTop
+	p.buildTop = number
+
+	if number <= p.sealedTip && !p.sealedRunLeftLocked(number, parent, rewound) {
 		return p.muteLocked(number)
 	}
 
@@ -234,18 +258,7 @@ func (p *Publisher) stateWindowLocked(info tailInfo, state buildStartState,
 		return w, true
 
 	case buildRecover:
-		// Rebuild the dead producer's block exactly: its transactions were
-		// acked, so they are promised at this height. The store already
-		// holds the whole generation, so publish nothing — mute — and hand
-		// the content to the worker to seal and broadcast.
-		a, _, ok := parseWindow(info)
-		if !ok || a.number != number || a.parent != parent {
-			return p.muteLocked(number), true
-		}
-
-		p.mode = buildMode{kind: modeRecover, height: number}
-
-		return offerLocked(a), true
+		return p.recoverWindowLocked(info, number, parent), true
 
 	case buildBehind:
 		p.behindWindowLocked(info, number, parent)
@@ -287,7 +300,20 @@ func (p *Publisher) boundaryWindowLocked(info tailInfo, number uint64, parent co
 	// re-reads the same dead window — so mute instead: build locally,
 	// publish nothing, and the seal flush supersedes the window with
 	// sealed truth.
-	return p.muteLocked(number)
+	w := p.muteLocked(number)
+
+	// A parent that differs only in its seal is not a displaced branch:
+	// the window executed on what we are building on, so its order is
+	// still the one consumers were served. Seed it; the seal flush then
+	// supersedes the window with a block that carries it as a prefix.
+	if ok && a.number == number && info.bridgedParent == parent {
+		p.bridged = bridgedWindow{height: number, storeParent: a.parent}
+		a.parent = parent
+
+		return offerLocked(a)
+	}
+
+	return w
 }
 
 // primeBackfillLocked registers the store's gap [edge+1, parent] as owed

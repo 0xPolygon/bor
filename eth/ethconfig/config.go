@@ -80,6 +80,7 @@ var FullNodeGPO = gasprice.Config{
 
 // Defaults contains default settings for use on the Ethereum main net.
 var Defaults = Config{
+	PeerReputation:        true,
 	SyncMode:              downloader.SnapSync,
 	HistoryMode:           history.KeepAll,
 	NetworkId:             0, // enable auto configuration of networkID == chainID
@@ -114,6 +115,8 @@ var Defaults = Config{
 
 // Config contains configuration options for ETH and LES protocols.
 type Config struct {
+	PeerReputation               bool // Enable observation-only peer scoring.
+	PeerReputationPerPeerMetrics bool
 	// The genesis block, which is inserted if the database is empty.
 	// If nil, the Ethereum main net block is used.
 	Genesis *core.Genesis `toml:",omitempty"`
@@ -228,6 +231,12 @@ type Config struct {
 
 	// Use switch-based fast path interpreter
 	EnableEVMSwitchDispatch bool
+
+	// Shares the per-block VM result caches with the serial import processor
+	// and the block builder, and widens keccak caching to variable-length
+	// inputs. The prefetcher and the parallel (V2) workers share the result
+	// caches whether or not this is set.
+	EnablePrecompileCache bool
 
 	// Enables tracking of state size
 	EnableStateSizeTracking bool

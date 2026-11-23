@@ -2568,3 +2568,71 @@ func TestFindAncestorStatelessSearch(t *testing.T) {
 		}
 	})
 }
+
+// TestProcessSnapSyncContentEmptyQueue verifies that processSnapSyncContent handles empty
+// result queues correctly across bare shutdown, real state sync failure, and committed exit.
+func TestProcessSnapSyncContentEmptyQueue(t *testing.T) {
+	// 1. Bare shutdown: queue closed while state sync is healthy returns errCanceled.
+	t.Run("BareQueueShutdown", func(t *testing.T) {
+		tester := newTester(t)
+		defer tester.terminate()
+
+		tester.downloader.pivotHeader = tester.chain.CurrentHeader()
+		tester.downloader.queue.Close()
+
+		err := tester.downloader.processSnapSyncContent(true)
+		if !errors.Is(err, errCanceled) {
+			t.Fatalf("expected errCanceled, got %v", err)
+		}
+	})
+
+	// 2. Real state-sync failure: queue closed by closeOnErr returns the real error.
+	t.Run("StateSyncFailure", func(t *testing.T) {
+		tester := newTester(t)
+		defer tester.terminate()
+
+		testErr := errors.New("state sync failed")
+		mockSyncStart := make(chan *stateSync)
+
+		// Create an isolated downloader without a background stateFetcher to prevent race conditions.
+		dl := &Downloader{
+			stateDB:        tester.downloader.stateDB,
+			blockchain:     tester.downloader.blockchain,
+			queue:          newQueue(blockCacheMaxItems, blockCacheInitialItems, nil),
+			stateSyncStart: mockSyncStart,
+			quitCh:         make(chan struct{}),
+			cancelCh:       make(chan struct{}),
+			pivotHeader:    tester.chain.CurrentHeader(),
+		}
+
+		go func() {
+			s := <-mockSyncStart
+			close(s.started)
+			s.err = testErr
+			close(s.done)
+		}()
+
+		err := dl.processSnapSyncContent(true)
+		if !errors.Is(err, testErr) {
+			t.Fatalf("expected testErr, got %v", err)
+		}
+		if errors.Is(err, errCanceled) {
+			t.Fatalf("did not expect errCanceled for a real failure")
+		}
+	})
+
+	// 3. Committed exit: committed is true on empty queue returns sync.Cancel()'s result.
+	t.Run("CommittedWithEmptyQueue", func(t *testing.T) {
+		tester := newTester(t)
+		defer tester.terminate()
+
+		tester.downloader.pivotHeader = tester.chain.CurrentHeader()
+		tester.downloader.committed.Store(true)
+		tester.downloader.queue.Close()
+
+		err := tester.downloader.processSnapSyncContent(true)
+		if err != nil && !isSyncCancellation(err) {
+			t.Fatalf("expected nil or sync cancellation when committed, got %v", err)
+		}
+	})
+}

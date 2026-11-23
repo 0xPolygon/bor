@@ -526,6 +526,89 @@ func TestStateChangeDuringReset(t *testing.T) {
 	}
 }
 
+// TestReorgResetWithDirtyAccount checks that a reset run together with a dirty
+// account promotes a queued tx right after the still-pending ones (port of
+// ethereum/go-ethereum#35654).
+func TestReorgResetWithDirtyAccount(t *testing.T) {
+	t.Parallel()
+
+	pool, key := setupPool()
+	defer pool.Close()
+
+	addr := crypto.PubkeyToAddress(key.PublicKey)
+	testAddBalance(pool, addr, big.NewInt(1000000000000000))
+	testSetNonce(pool, addr, 1)
+	<-pool.requestReset(nil, nil)
+
+	// Add two executable transactions to establish a pending nonce ahead of state.
+	for _, tx := range []*types.Transaction{transaction(1, 100000, key), transaction(2, 100000, key)} {
+		if err := pool.addRemoteSync(tx); err != nil {
+			t.Fatalf("failed to add transaction %d: %v", tx.Nonce(), err)
+		}
+	}
+	// Admit the next transaction without scheduling its promotion, reproducing the
+	// state passed to runReorg when a reset and dirty-account request are coalesced.
+	tx := transaction(3, 100000, key)
+	pool.mu.Lock()
+	errs, dirty := pool.addTxs([]*types.Transaction{tx}, false)
+	pool.mu.Unlock()
+	if errs[0] != nil {
+		t.Fatalf("failed to add transaction %d: %v", tx.Nonce(), errs[0])
+	}
+
+	// The new chain head includes transaction 1. Transaction 2 remains pending,
+	// so transaction 3 must be promoted by the combined reorg run.
+	testSetNonce(pool, addr, 2)
+	done := make(chan struct{})
+	pool.runReorg(done, &txpoolResetRequest{}, dirty, make(map[common.Address]*SortedMap))
+	<-done
+
+	if pending, queued := pool.Stats(); pending != 2 || queued != 0 {
+		t.Fatalf("transaction stranded after reorg: pending %d, queued %d", pending, queued)
+	}
+	if err := validatePoolInternals(pool); err != nil {
+		t.Fatalf("pool internals mismatch: %v", err)
+	}
+}
+
+// TestReorgResetKeepsHigherStateNonce checks that restoring the pending nonces
+// after a reset never moves them below the new state nonce, when the new head
+// already includes every pending tx and more.
+func TestReorgResetKeepsHigherStateNonce(t *testing.T) {
+	t.Parallel()
+
+	pool, key := setupPool()
+	defer pool.Close()
+
+	addr := crypto.PubkeyToAddress(key.PublicKey)
+	testAddBalance(pool, addr, big.NewInt(1000000000000000))
+	for _, tx := range []*types.Transaction{transaction(0, 100000, key), transaction(1, 100000, key)} {
+		if err := pool.addRemoteSync(tx); err != nil {
+			t.Fatalf("failed to add transaction %d: %v", tx.Nonce(), err)
+		}
+	}
+	tx := transaction(4, 100000, key)
+	pool.mu.Lock()
+	errs, dirty := pool.addTxs([]*types.Transaction{tx}, false)
+	pool.mu.Unlock()
+	if errs[0] != nil {
+		t.Fatalf("failed to add transaction %d: %v", tx.Nonce(), errs[0])
+	}
+
+	// The new head is at nonce 4: the pending txs 0 and 1 and two more are mined.
+	testSetNonce(pool, addr, 4)
+	done := make(chan struct{})
+	pool.runReorg(done, &txpoolResetRequest{}, dirty, make(map[common.Address]*SortedMap))
+	<-done
+
+	if pending, queued := pool.Stats(); pending != 1 || queued != 0 {
+		t.Fatalf("pending %d, queued %d, want 1 and 0", pending, queued)
+	}
+	if err := validatePoolInternals(pool); err != nil {
+		t.Fatalf("pool internals mismatch: %v", err)
+	}
+}
+
 func testAddBalance(pool *LegacyPool, addr common.Address, amount *big.Int) {
 	pool.mu.Lock()
 	if amount.Sign() < 0 {
@@ -5704,5 +5787,47 @@ func TestRebroadcastLoopIntegration(t *testing.T) {
 
 	if !tracked {
 		t.Error("transaction should be tracked in lastRebroadcast after rebroadcast")
+	}
+}
+
+// TestDroppedConditionalTxDemotesFollowers: when a conditional (PIP-15) tx is
+// dropped from the middle of the pending list because its options no longer
+// hold, the account's higher-nonce transactions behind it are no longer
+// executable and must be moved back to the queue, exactly as Filter does for
+// unpayable transactions. Leaving them in pending strands them behind a nonce
+// gap that only the front-of-list check would catch.
+func TestDroppedConditionalTxDemotesFollowers(t *testing.T) {
+	t.Parallel()
+
+	pool, key := setupConditionalPool(t, true, DefaultConfig.ConditionalSlots)
+
+	// The test chain's head has Time == 0, so a TimestampMin of 1 is a
+	// condition that never holds once the pool re-validates the options.
+	first := transaction(0, 100000, key)
+	conditional := transaction(1, 100000, key)
+	minTs := uint64(1)
+	conditional.PutOptions(&types.OptionsPIP15{TimestampMin: &minTs})
+	follower := transaction(2, 100000, key)
+
+	if errs := pool.addRemotesSync([]*types.Transaction{first, conditional, follower}); errs[0] != nil || errs[1] != nil || errs[2] != nil {
+		t.Fatalf("failed to add transactions: %v", errs)
+	}
+	if pending, queued := pool.Stats(); pending != 3 || queued != 0 {
+		t.Fatalf("before reset: pending %d, queued %d, want 3 pending", pending, queued)
+	}
+
+	<-pool.requestReset(nil, nil)
+
+	if pool.all.Get(conditional.Hash()) != nil {
+		t.Fatalf("conditional transaction with an unsatisfiable option should have been dropped")
+	}
+	if pool.all.Get(follower.Hash()) == nil {
+		t.Fatalf("follower transaction should still be in the pool")
+	}
+	if pending, queued := pool.Stats(); pending != 1 || queued != 1 {
+		t.Fatalf("after reset: pending %d, queued %d, want nonce 0 pending and the follower demoted to the queue", pending, queued)
+	}
+	if err := validatePoolInternals(pool); err != nil {
+		t.Fatalf("pool internal state corrupted: %v", err)
 	}
 }

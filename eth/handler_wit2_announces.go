@@ -6,6 +6,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/eth/protocols/wit"
+	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
 )
 
 // Per-peer rate-limit + strike tracker for wit2 announces. We size the bucket
@@ -189,6 +190,7 @@ const deferredAnnounceMaxCandidatesPerBlock = 8
 // could not be checked yet because the corresponding block header wasn't
 // local. The drain path re-runs verification once the chain catches up.
 type deferredAnnounceEntry struct {
+	observe      func(peerpolicy.Reason)
 	announcement wit.SignedWitnessAnnouncement
 	peerID       string
 	receivedAt   time.Time
@@ -253,14 +255,14 @@ func (c *deferredAnnounceCache) removeAtLocked(blockHash common.Hash, idx int) {
 	c.total--
 }
 
-// put stores the announcement as a candidate for its block hash. A re-put from
+// putObserved stores the announcement as a candidate for its block hash. A re-put from
 // the same peer for the same block refreshes that peer's single candidate in
 // place (net-zero slot change). A new peer adds a distinct candidate, subject to
 // (in order) the per-block candidate cap, the per-peer cap, and the global cap
 // (which evicts the oldest entry across all blocks). Each cap drop records a
 // metric. Holding multiple candidates is deliberate — see
 // deferredAnnounceMaxCandidatesPerBlock.
-func (c *deferredAnnounceCache) put(ann wit.SignedWitnessAnnouncement, peerID string) {
+func (c *deferredAnnounceCache) putObserved(ann wit.SignedWitnessAnnouncement, peerID string, observe func(peerpolicy.Reason)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.gcLocked()
@@ -269,7 +271,7 @@ func (c *deferredAnnounceCache) put(ann wit.SignedWitnessAnnouncement, peerID st
 	// One candidate per (blockHash, peerID): refresh this peer's slot in place.
 	for i, e := range cands {
 		if e.peerID == peerID {
-			cands[i] = &deferredAnnounceEntry{announcement: ann, peerID: peerID, receivedAt: time.Now()}
+			cands[i] = &deferredAnnounceEntry{announcement: ann, peerID: peerID, receivedAt: time.Now(), observe: observe}
 			c.entries[ann.BlockHash] = cands
 			return
 		}
@@ -292,6 +294,7 @@ func (c *deferredAnnounceCache) put(ann wit.SignedWitnessAnnouncement, peerID st
 	}
 
 	c.entries[ann.BlockHash] = append(cands, &deferredAnnounceEntry{
+		observe:      observe,
 		announcement: ann,
 		peerID:       peerID,
 		receivedAt:   time.Now(),

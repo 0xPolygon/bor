@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"math/big"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -11,7 +13,9 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
+	"github.com/ethereum/go-ethereum/internal/cli/server/chains"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/miner"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -35,6 +39,23 @@ func TestConfigDefault(t *testing.T) {
 func assertBorDefaultGasPrice(t *testing.T, ethConfig *ethconfig.Config) {
 	assert.NotNil(t, ethConfig)
 	assert.Equal(t, ethConfig.Miner.GasPrice, big.NewInt(params.BorDefaultMinerGasPrice))
+}
+
+// TestPrecompileCacheFlagPlumbing pins the --precompile-cache flag's default and
+// its propagation into the VM config. The default must be OFF (the flag-gated
+// rollout depends on it), and opting in must flow through buildEth into the eth
+// config so the widened caches are actually wired — plumbing that is otherwise
+// only exercised end-to-end at runtime.
+func TestPrecompileCacheFlagPlumbing(t *testing.T) {
+	assert.False(t, DefaultConfig().EnablePrecompileCache, "--precompile-cache must default to off")
+
+	config := DefaultConfig()
+	config.EnablePrecompileCache = true
+	assert.NoError(t, config.loadChain())
+
+	ethConfig, err := config.buildEth(nil, nil)
+	assert.NoError(t, err)
+	assert.True(t, ethConfig.EnablePrecompileCache, "buildEth must propagate EnablePrecompileCache into the eth config")
 }
 
 func TestConfigMerge(t *testing.T) {
@@ -759,4 +780,165 @@ func TestSequencerConfigValidation(t *testing.T) {
 			assert.Equal(t, tc.role, ethConfig.SequencerRole)
 		})
 	}
+}
+
+func TestConfigFilteredAddresses(t *testing.T) {
+	dir := t.TempDir()
+	addrFile := filepath.Join(dir, "filtered.txt")
+	assert.NoError(t, os.WriteFile(addrFile, []byte("0x1111111111111111111111111111111111111111\n"), 0o644))
+	emptyFile := filepath.Join(dir, "empty.txt")
+	assert.NoError(t, os.WriteFile(emptyFile, []byte("\n"), 0o644))
+	invalidFile := filepath.Join(dir, "invalid.txt")
+	assert.NoError(t, os.WriteFile(invalidFile, []byte("garbage\n"), 0o644))
+
+	tests := []struct {
+		name   string
+		reload string
+		want   time.Duration
+	}{
+		{"default", "", time.Minute},
+		{"custom", `filter-reload = "30s"`, 30 * time.Second},
+		{"disabled", `filter-reload = "0s"`, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfgFile := filepath.Join(t.TempDir(), "config.toml")
+			body := fmt.Sprintf("[txpool]\n  filtered-addresses = %q\n  %s\n", addrFile, tt.reload)
+			assert.NoError(t, os.WriteFile(cfgFile, []byte(body), 0o644))
+
+			config, err := readConfigFile(cfgFile)
+			assert.NoError(t, err)
+			assert.NoError(t, config.loadChain())
+
+			ethConfig, err := config.buildEth(nil, nil)
+			assert.NoError(t, err)
+			assert.Equal(t, addrFile, ethConfig.TxPool.FilteredAddressesFile)
+			assert.Equal(t, tt.want, ethConfig.TxPool.FilterReload)
+			assert.Len(t, ethConfig.TxPool.FilteredAddresses, 1)
+		})
+	}
+
+	invalid := []struct {
+		name string
+		set  func(*TxPoolConfig)
+		want string
+	}{
+		{"unreadable file", func(c *TxPoolConfig) { c.FilteredAddressesFile = dir }, "failed to load filtered addresses"},
+		{"missing file", func(c *TxPoolConfig) { c.FilteredAddressesFile = filepath.Join(dir, "missing.txt") }, "failed to load filtered addresses"},
+		{"empty file", func(c *TxPoolConfig) { c.FilteredAddressesFile = emptyFile }, "no entries"},
+		{"invalid file", func(c *TxPoolConfig) { c.FilteredAddressesFile = invalidFile }, `invalid address "garbage" on line 1`},
+	}
+	for _, tt := range invalid {
+		t.Run(tt.name, func(t *testing.T) {
+			config := DefaultConfig()
+			assert.NoError(t, config.loadChain())
+			tt.set(config.TxPool)
+
+			_, err := config.buildEth(nil, nil)
+			assert.ErrorContains(t, err, tt.want)
+		})
+	}
+
+	t.Run("flags", func(t *testing.T) {
+		var c Command
+		assert.NoError(t, c.extractFlags([]string{"--txpool.filter-reload", "5s", "--txpool.filtered-addresses", addrFile}))
+		assert.Equal(t, 5*time.Second, c.config.TxPool.FilterReload)
+		assert.Equal(t, addrFile, c.config.TxPool.FilteredAddressesFile)
+	})
+
+	hcl := []struct {
+		name   string
+		txpool string
+		want   time.Duration
+	}{
+		{"hcl omitted", fmt.Sprintf("txpool {\n  filtered-addresses = %q\n}\n", addrFile), time.Minute},
+		{"hcl custom", fmt.Sprintf("txpool {\n  filtered-addresses = %q\n  filter-reload = \"30s\"\n}\n", addrFile), 30 * time.Second},
+		{"hcl disabled", fmt.Sprintf("txpool {\n  filtered-addresses = %q\n  filter-reload = \"0s\"\n}\n", addrFile), 0},
+	}
+	for _, tt := range hcl {
+		t.Run(tt.name, func(t *testing.T) {
+			const base = "gpo {}\nminer {}\njsonrpc {\nhttp {}\nws {}\ntimeouts {}\n}\n"
+			cfgFile := filepath.Join(t.TempDir(), "config.hcl")
+			assert.NoError(t, os.WriteFile(cfgFile, []byte(base+tt.txpool), 0o644))
+
+			config, err := readConfigFile(cfgFile)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, config.TxPool.FilterReload)
+			assert.Equal(t, addrFile, config.TxPool.FilteredAddressesFile)
+		})
+	}
+}
+
+// TestBaseFeeFloorConfig tests the miner.baseFeeFloor wiring.
+func TestBaseFeeFloorConfig(t *testing.T) {
+	build := func(t *testing.T, config *Config) *ethconfig.Config {
+		t.Helper()
+		assert.NoError(t, config.loadChain())
+		_, err := config.buildNode(log.Root())
+		assert.NoError(t, err)
+		ethConfig, err := config.buildEth(nil, nil)
+		assert.NoError(t, err)
+		return ethConfig
+	}
+
+	t.Run("DisabledByDefault", func(t *testing.T) {
+		config := DefaultConfig()
+		assert.Equal(t, uint64(0), config.Sealer.BaseFeeFloor)
+		ethConfig := build(t, config)
+		assert.Nil(t, ethConfig.Genesis.Config.Bor.BaseFeeFloor)
+		assert.Equal(t, miner.DefaultConfig.TargetBaseFee, ethConfig.Miner.TargetBaseFee)
+	})
+
+	// The floor is also the target base fee, even when miner.targetBaseFee
+	// keeps its 500 gwei default.
+	t.Run("FloorIsTargetBaseFee", func(t *testing.T) {
+		config := DefaultConfig()
+		config.Sealer.BaseFeeFloor = 250_000_000_000
+		ethConfig := build(t, config)
+		assert.True(t, *ethConfig.Genesis.Config.Bor.BaseFeeFloor)
+		assert.Equal(t, uint64(250_000_000_000), *ethConfig.Genesis.Config.Bor.TargetBaseFee)
+		// The miner (dynamic gas limit) must use the same target as the Bor config.
+		assert.Equal(t, uint64(250_000_000_000), ethConfig.Miner.TargetBaseFee)
+	})
+
+	// With the dynamic gas limit on and a floor below targetBaseFee - buffer,
+	// the miner must still target the floor, or the gas limit stays pinned at
+	// GasLimitMin while the fee rests at the floor.
+	t.Run("DynamicGasLimitUsesFloor", func(t *testing.T) {
+		config := DefaultConfig()
+		config.Sealer.EnableDynamicGasLimit = true
+		config.Sealer.BaseFeeFloor = 100_000_000_000
+		ethConfig := build(t, config)
+		assert.Equal(t, uint64(100_000_000_000), ethConfig.Miner.TargetBaseFee)
+		assert.Equal(t, *ethConfig.Genesis.Config.Bor.TargetBaseFee, ethConfig.Miner.TargetBaseFee)
+	})
+
+	t.Run("Flag", func(t *testing.T) {
+		var c Command
+		assert.NoError(t, c.extractFlags([]string{"--miner.baseFeeFloor", "300000000000"}))
+		assert.Equal(t, uint64(300_000_000_000), c.config.Sealer.BaseFeeFloor)
+	})
+
+	// chains.GetChain returns a shared preset: a floor-enabled configuration
+	// must not leak its floor or target into a later one in the same process,
+	// and two enabled configurations must keep their own floor.
+	t.Run("NoLeakBetweenConfigs", func(t *testing.T) {
+		enabled := DefaultConfig()
+		enabled.Sealer.BaseFeeFloor = 250_000_000_000
+		first := build(t, enabled)
+
+		disabled := build(t, DefaultConfig())
+		assert.Nil(t, disabled.Genesis.Config.Bor.BaseFeeFloor)
+		assert.Nil(t, disabled.Genesis.Config.Bor.TargetBaseFee)
+
+		other := DefaultConfig()
+		other.Sealer.BaseFeeFloor = 300_000_000_000
+		second := build(t, other)
+		assert.Equal(t, uint64(300_000_000_000), *second.Genesis.Config.Bor.TargetBaseFee)
+		assert.Equal(t, uint64(250_000_000_000), *first.Genesis.Config.Bor.TargetBaseFee)
+
+		preset, err := chains.GetChain(DefaultConfig().Chain)
+		assert.NoError(t, err)
+		assert.Nil(t, preset.Genesis.Config.Bor.BaseFeeFloor)
+	})
 }

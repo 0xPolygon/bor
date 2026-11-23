@@ -28,6 +28,10 @@ type SpanStore struct {
 	store *lru.ARCCache
 
 	latestSpanCache atomic.Pointer[borTypes.Span]
+	latestSpanAt    atomic.Int64 // unix nanos of the last latest-span fetch that succeeded
+	// latestSpanFetch serializes latest-span fetches, so a slow response can't
+	// overwrite a newer one fetched after it began.
+	latestSpanFetch chan struct{}
 
 	heimdallClient IHeimdallClient
 	spanner        Spanner
@@ -70,11 +74,16 @@ func NewSpanStore(heimdallClient IHeimdallClient, spanner Spanner, chainId strin
 		chainId:         chainId,
 		rioBlock:        rioBlock,
 		latestSpanCache: atomic.Pointer[borTypes.Span]{},
+		latestSpanFetch: make(chan struct{}, 1),
 	}
 	store.lifetime, store.closeLifetime = context.WithCancel(context.Background())
 	store.startPollLoop()
 	return store
 }
+
+// latestSpanFreshness is how old the latest span may be for a lookup to rule out a
+// newer span. The poll loop refreshes it every 200ms; older means Heimdall stopped answering.
+const latestSpanFreshness = 2 * time.Second
 
 // startPollLoop spawns the background goroutine that periodically refreshes
 // latestSpanCache and heimdallStatus. No-op when heimdallClient is nil.
@@ -189,6 +198,13 @@ func (s *SpanStore) updateLatestSpan(ctx context.Context) error {
 		return nil
 	}
 
+	select {
+	case s.latestSpanFetch <- struct{}{}:
+		defer func() { <-s.latestSpanFetch }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
 	latestSpan, err := s.heimdallClient.GetLatestSpan(ctx)
 	if err != nil {
 		return err
@@ -222,6 +238,7 @@ func (s *SpanStore) updateLatestSpan(ctx context.Context) error {
 		ValidatorSet:      span.ConvertBorValSetToHeimdallValSet(valset.NewValidatorSet(validators)),
 		BorChainId:        s.chainId,
 	})
+	s.latestSpanAt.Store(time.Now().UnixNano())
 	return nil
 }
 
@@ -315,18 +332,31 @@ func (s *SpanStore) fetchSpanRecord(ctx context.Context, spanId uint64) (*borTyp
 // so no span below the latest id can be ruled out by its position; every id down to the first
 // match is checked. Blocks before Rio are the exception, see preRioSpanIdContaining.
 func (s *SpanStore) spanByBlockNumber(ctx context.Context, blockNumber uint64) (*borTypes.Span, error) {
+	span, _, err := s.settledSpanByBlockNumber(ctx, blockNumber)
+	return span, err
+}
+
+// settledSpanByBlockNumber is spanByBlockNumber, also reporting whether the lookup settled: the
+// latest span it walked down from was fetched within latestSpanFreshness. If not, Heimdall may
+// hold a newer span containing the block that this node hasn't seen.
+func (s *SpanStore) settledSpanByBlockNumber(ctx context.Context, blockNumber uint64) (*borTypes.Span, bool, error) {
 	s.waitUntilHeimdallIsSynced(ctx)
 
 	latestSpan, err := s.getLatestSpan(ctx)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
+	settled := time.Since(time.Unix(0, s.latestSpanAt.Load())) < latestSpanFreshness
 
 	id, err := s.spanIdContainingRefreshed(ctx, blockNumber, latestSpan)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return s.spanById(ctx, id)
+	span, err := s.spanById(ctx, id)
+	if err != nil {
+		return nil, false, err
+	}
+	return span, settled, nil
 }
 
 // setHeimdallClient sets the underlying heimdall client to be used. It is useful in

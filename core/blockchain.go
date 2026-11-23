@@ -132,6 +132,11 @@ var (
 	blockExecutionSerialTimer          = metrics.NewRegisteredTimer("chain/execution/serial/timer", nil)
 	blockMgaspsMeter                   = metrics.NewRegisteredHistogram("chain/execution/mgasps", nil, metrics.NewUniformSample(10240))
 
+	// Serial re-executions without shared VM result caches (precompile cache
+	// flag on, cached serial run failed), and how many of them then passed.
+	blockSerialNoCacheRetryCounter         = metrics.NewRegisteredCounter("chain/execution/serial/nocache_retry", nil)
+	blockSerialNoCacheRetryAcceptedCounter = metrics.NewRegisteredCounter("chain/execution/serial/nocache_retry/accepted", nil)
+
 	statelessParallelImportTimer           = metrics.NewRegisteredTimer("chain/imports/stateless/parallel", nil)
 	statelessSequentialImportTimer         = metrics.NewRegisteredTimer("chain/imports/stateless/sequential", nil)
 	statelessParallelImportBlocksCounter   = metrics.NewRegisteredCounter("chain/imports/stateless/parallel/blocks", nil)
@@ -278,6 +283,7 @@ var (
 
 	errInsertionInterrupted = errors.New("insertion is interrupted")
 	errChainStopped         = errors.New("blockchain is stopped")
+	errRewindRefused        = errors.New("rewind refused by its guard")
 	errInvalidOldChain      = errors.New("invalid old chain")
 	errInvalidNewChain      = errors.New("invalid new chain")
 	// errWitnessTimeout           = errors.New("timeout waiting for witness computation")     // New error
@@ -695,6 +701,10 @@ type BlockChain struct {
 	lastFlatDiffParentRoot common.Hash // committed root that the FlatDiff is based on
 	lastFlatDiffBlockRoot  common.Hash // the block's own state root (from header)
 	lastFlatDiffMu         sync.RWMutex
+
+	// resultCachesHook, if set, is called on each block's shared VM result
+	// caches right after they are created. Tests only.
+	resultCachesHook func(*vm.SharedResultCaches)
 }
 
 // NewBlockChain returns a fully initialised block chain using information
@@ -1265,44 +1275,39 @@ func reportReaderStats(prefetch, process, parallel state.ReaderWithStats) {
 	accountHitFromPrefetchUniqueMeter.Mark(procPF.AccountHitFromPrefetchUnique + parPF.AccountHitFromPrefetchUnique)
 }
 
-// sharedBlockCaches holds VM-level caches that are shared between the
-// prefetcher goroutine and the V2 BlockSTM workers for a single block.
-type sharedBlockCaches struct {
-	jumpDests vm.JumpDestCache
-	keccak    *vm.Keccak256Cache
-	ecrecover *vm.EcrecoverCache
-}
-
-func newSharedBlockCaches() *sharedBlockCaches {
-	return &sharedBlockCaches{
-		jumpDests: vm.NewSyncJumpDestCache(),
-		keccak:    vm.NewKeccak256Cache(),
-		ecrecover: vm.NewEcrecoverCache(),
+// newSharedBlockCaches returns the VM result caches for one imported block.
+// The legacy caches are always on. The widened keccak store exists only when
+// EnablePrecompileCache is set in the chain's VM config.
+func (bc *BlockChain) newSharedBlockCaches() *vm.SharedResultCaches {
+	caches := vm.NewSharedResultCaches(bc.cfg.VmConfig.EnablePrecompileCache, vm.CacheScopeImport)
+	if bc.resultCachesHook != nil {
+		bc.resultCachesHook(caches)
 	}
-}
-
-// applyTo populates a vm.Config with the shared caches.
-func (c *sharedBlockCaches) applyTo(cfg *vm.Config) {
-	cfg.SharedJumpDestCache = c.jumpDests
-	cfg.Keccak256Cache = c.keccak
-	cfg.EcrecoverCache = c.ecrecover
+	return caches
 }
 
 // startPrefetchGoroutine launches the throwaway-statedb prefetcher in
 // the background. It runs the block with tracing disabled to warm caches
 // for the real processors.
 func (bc *BlockChain) startPrefetchGoroutine(block *types.Block, throwaway *state.StateDB,
-	caches *sharedBlockCaches, followupInterrupt *atomic.Bool) {
-	go func(start time.Time) {
-		vmCfg := bc.cfg.VmConfig
-		vmCfg.Tracer = nil
-		caches.applyTo(&vmCfg)
-		bc.prefetcher.Prefetch(block, throwaway, vmCfg, false, followupInterrupt)
-		blockPrefetchExecuteTimer.Update(time.Since(start))
-		if followupInterrupt.Load() {
-			blockPrefetchInterruptMeter.Mark(1)
-		}
-	}(time.Now())
+	caches *vm.SharedResultCaches, followupInterrupt *atomic.Bool) {
+	go bc.prefetchBlock(block, throwaway, caches, followupInterrupt)
+}
+
+// prefetchBlock runs the block on the throwaway statedb with tracing disabled,
+// filling the shared VM result caches and the state caches. It returns when
+// the block is done or followupInterrupt is set.
+func (bc *BlockChain) prefetchBlock(block *types.Block, throwaway *state.StateDB,
+	caches *vm.SharedResultCaches, followupInterrupt *atomic.Bool) {
+	start := time.Now()
+	vmCfg := bc.cfg.VmConfig
+	vmCfg.Tracer = nil
+	caches.ApplyTo(&vmCfg, vm.CacheConsumerImportPrefetch)
+	bc.prefetcher.Prefetch(block, throwaway, vmCfg, false, followupInterrupt)
+	blockPrefetchExecuteTimer.Update(time.Since(start))
+	if followupInterrupt.Load() {
+		blockPrefetchInterruptMeter.Mark(1)
+	}
 }
 
 func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, witness *stateless.Witness, followupInterrupt *atomic.Bool, pipeOpts *PipelineImportOpts) (_ types.Receipts, _ []*types.Log, _ uint64, _ *state.StateDB, vtime time.Duration, blockEndErr error) {
@@ -1325,7 +1330,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	defer reportReaderStats(prefetch, process, parallel)
 
 	// Shared caches for this block — used by both prefetcher and V2 workers.
-	sharedCaches := newSharedBlockCaches()
+	sharedCaches := bc.newSharedBlockCaches()
 	bc.startPrefetchGoroutine(block, throwaway, sharedCaches, followupInterrupt)
 
 	var resultChanLen int = 2
@@ -1345,7 +1350,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 			pstart := time.Now()
 			parallelStatedb.StartPrefetcher("chain", witness, nil)
 			v2VmCfg := bc.cfg.VmConfig
-			sharedCaches.applyTo(&v2VmCfg)
+			sharedCaches.ApplyTo(&v2VmCfg, vm.CacheConsumerImportParallel)
 			res, err := bc.parallelProcessor.Process(block, parallelStatedb, v2VmCfg, nil, ctx)
 			pend := time.Now()
 			blockExecutionParallelTimer.Update(pend.Sub(pstart))
@@ -1386,7 +1391,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		processorCount++
 
 		go func() {
-			resultChan <- bc.runSerialProcessor(ctx, block, statedb, witness, pipeOpts)
+			resultChan <- bc.runSerialProcessor(ctx, block, statedb, witness, pipeOpts, sharedCaches)
 		}()
 	}
 
@@ -1419,9 +1424,16 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		} else if errors.Is(result.err, errV2WriteBudgetExhausted) && bc.processor != nil {
 			// Says nothing about the block's validity, so even with the
 			// parallel processor enforced the serial result decides.
-			result = bc.runSerialProcessor(ctx, block, statedb, witness, pipeOpts)
+			result = bc.runSerialProcessor(ctx, block, statedb, witness, pipeOpts, sharedCaches)
 			result.statedb.StopPrefetcher()
 		}
+	}
+	// With EnablePrecompileCache, the failed run (serial, or V2 when the
+	// parallel processor is enforced) read the shared caches, so its failure
+	// is not an independent check. Before rejecting the block, run the serial
+	// processor once more without them.
+	if result.err != nil && bc.cfg.VmConfig.EnablePrecompileCache && bc.processor != nil && ctx.Err() == nil {
+		result = bc.retrySerialWithoutSharedCaches(ctx, block, parent, witness, pipeOpts, result)
 	}
 	if result.err == nil {
 		recordPipelinedImportExecutionMetrics(pipeOpts, result.execFrom, result.execTo)
@@ -1482,13 +1494,58 @@ type processorResult struct {
 	execTo   time.Time
 }
 
+// retrySerialWithoutSharedCaches re-executes block with the serial processor
+// on a fresh statedb, with no shared VM result caches and no tracer. It is
+// used only when the precompile cache flag is on and the cached run failed. If the retry
+// succeeds, a shared cache entry was wrong: the block is accepted and the
+// event is logged and counted. If it fails too, the block is invalid and the
+// retry's error is returned. On a setup error the original result is kept.
+func (bc *BlockChain) retrySerialWithoutSharedCaches(ctx context.Context, block *types.Block, parent *types.Header,
+	witness *stateless.Witness, pipeOpts *PipelineImportOpts, failed processorResult) processorResult {
+	blockSerialNoCacheRetryCounter.Inc(1)
+	statedb, err := state.New(pipelineReaderRoot(parent, pipeOpts), bc.statedb)
+	if err != nil {
+		log.Error("Failed to open state for serial retry without shared caches", "number", block.NumberU64(), "hash", block.Hash(), "err", err)
+		return failed
+	}
+	applyFlatDiffOverlayToAll(pipeOpts, statedb)
+	// No tracer on the retry: the failed run already sent this block's
+	// transactions to the tracer inside the same OnBlockStart/OnBlockEnd, and
+	// sending them again would duplicate them.
+	vmCfg := bc.cfg.VmConfig
+	vmCfg.Tracer = nil
+	retry := bc.runSerialProcessorWithConfig(ctx, block, statedb, witness, pipeOpts, nil, vmCfg)
+	if retry.err == nil {
+		blockSerialNoCacheRetryAcceptedCounter.Inc(1)
+		log.Error("Block valid only without shared VM result caches, a cache entry was wrong",
+			"number", block.NumberU64(), "hash", block.Hash(), "cachedErr", failed.err)
+		if bc.cfg.VmConfig.Tracer != nil {
+			log.Warn("Tracer output for this block comes from the failed cached run", "number", block.NumberU64(), "hash", block.Hash())
+		}
+	}
+	return retry
+}
+
 // runSerialProcessor executes and validates block with the serial processor
 // on statedb.
 func (bc *BlockChain) runSerialProcessor(ctx context.Context, block *types.Block, statedb *state.StateDB,
-	witness *stateless.Witness, pipeOpts *PipelineImportOpts) processorResult {
+	witness *stateless.Witness, pipeOpts *PipelineImportOpts, caches *vm.SharedResultCaches) processorResult {
+	return bc.runSerialProcessorWithConfig(ctx, block, statedb, witness, pipeOpts, caches, bc.cfg.VmConfig)
+}
+
+// runSerialProcessorWithConfig is runSerialProcessor with an explicit VM
+// config.
+func (bc *BlockChain) runSerialProcessorWithConfig(ctx context.Context, block *types.Block, statedb *state.StateDB,
+	witness *stateless.Witness, pipeOpts *PipelineImportOpts, caches *vm.SharedResultCaches, vmCfg vm.Config) processorResult {
 	pstart := time.Now()
 	statedb.StartPrefetcher("chain", witness, nil)
-	res, err := bc.processor.Process(block, statedb, bc.cfg.VmConfig, nil, ctx)
+	// With EnablePrecompileCache, the serial processor reads the per-block VM
+	// result caches that the prefetcher and V2 workers fill. Without the flag
+	// (the default), or with caches == nil, it computes every result itself.
+	if vmCfg.EnablePrecompileCache && caches != nil {
+		caches.ApplyTo(&vmCfg, vm.CacheConsumerImportSerial)
+	}
+	res, err := bc.processor.Process(block, statedb, vmCfg, nil, ctx)
 	pend := time.Now()
 	blockExecutionSerialTimer.Update(pend.Sub(pstart))
 	var localVtime time.Duration
@@ -1714,13 +1771,17 @@ func (bc *BlockChain) loadLastState() error {
 
 	// Restore the last known finalized block and safe block
 	// Note: the safe block is not stored on disk and it is set to the last
-	// known finalized block on startup
+	// known finalized block on startup. Bor never tracks a safe block (milestones
+	// only advance finalized), so seeding it here would leave it frozen at the
+	// restart-time block forever.
 	if head := rawdb.ReadFinalizedBlockHash(bc.db); head != (common.Hash{}) {
 		if block := bc.GetBlockByHash(head); block != nil {
 			bc.currentFinalBlock.Store(block.Header())
 			headFinalizedBlockGauge.Update(int64(block.NumberU64()))
-			bc.currentSafeBlock.Store(block.Header())
-			headSafeBlockGauge.Update(int64(block.NumberU64()))
+			if bc.chainConfig.Bor == nil {
+				bc.currentSafeBlock.Store(block.Header())
+				headSafeBlockGauge.Update(int64(block.NumberU64()))
+			}
 		}
 	}
 
@@ -1809,6 +1870,31 @@ func (bc *BlockChain) SetHead(head uint64) error {
 	if _, err := bc.setHeadBeyondRoot(head, 0, common.Hash{}, false); err != nil {
 		return err
 	}
+
+	return bc.announceHead()
+}
+
+// rewindIf rewinds the chain to head only if guard still holds once the chain
+// mutex is taken, and keeps the mutex until the rewind is done. A decision
+// made from an earlier read — a verification pass, a finality lookup — can be
+// stale by the time it is acted on: an import may have replaced the judged
+// chain meanwhile, and rewinding then drops blocks nobody judged. It reports
+// false when the guard refused.
+func (bc *BlockChain) rewindIf(head uint64, guard func() bool) (bool, error) {
+	_, err := bc.setHeadBeyondRoot(head, 0, common.Hash{}, false, guard)
+	if errors.Is(err, errRewindRefused) {
+		return false, nil
+	}
+
+	if err != nil {
+		return false, err
+	}
+
+	return true, bc.announceHead()
+}
+
+// announceHead checks the head block after a rewind and announces it.
+func (bc *BlockChain) announceHead() error {
 	// Send chain head event to update the transaction pool
 	header := bc.CurrentBlock()
 	if block := bc.GetBlock(header.Hash(), header.Number.Uint64()); block == nil {
@@ -2054,11 +2140,19 @@ func (bc *BlockChain) rewindHead(head *types.Header, root common.Hash) (*types.H
 //
 // The method returns the block number where the requested root cap was found.
 // nolint:gocognit
-func (bc *BlockChain) setHeadBeyondRoot(head uint64, time uint64, root common.Hash, repair bool) (uint64, error) {
+func (bc *BlockChain) setHeadBeyondRoot(head uint64, time uint64, root common.Hash, repair bool, guards ...func() bool) (uint64, error) {
 	if !bc.chainmu.TryLock() {
 		return 0, errChainStopped
 	}
 	defer bc.chainmu.Unlock()
+
+	// Each guard rechecks, under the mutex, a decision its caller reached
+	// without it; see rewindIf.
+	for _, guard := range guards {
+		if !guard() {
+			return 0, errRewindRefused
+		}
+	}
 
 	var (
 		// Track the block number of the requested root hash
@@ -6545,7 +6639,8 @@ func (bc *BlockChain) verifyPendingHeaders() {
 
 	headNumber := currentHead.Number.Uint64()
 	if milestoneEndBlock >= headNumber {
-		return // Still syncing or synced to the milestone end block, nothing to verify.
+		bc.verifyStalledTail(headNumber)
+		return
 	}
 
 	startBlock := milestoneEndBlock + 1
@@ -6583,24 +6678,254 @@ func (bc *BlockChain) verifyPendingHeaders() {
 				log.Warn("Invalid header detected during background verification",
 					"number", header.Number.Uint64(), "hash", header.Hash(), "err", err)
 
-				if lastValidNumber < headNumber {
-					dropCount := int64(headNumber - lastValidNumber)
+				log.Warn("Rewinding chain due to an invalid header",
+					"from", headNumber, "to", lastValidNumber, "drop", int64(headNumber-lastValidNumber))
 
-					log.Warn("Rewinding chain due to an invalid header",
-						"from", headNumber, "to", lastValidNumber, "drop", dropCount)
+				bc.rewindOff(header)
 
-					if err := bc.SetHead(lastValidNumber); err != nil {
-						log.Error("Failed to rewind chain to the last valid header", "err", err)
-					} else {
-						blockReorgMeter.Mark(1)
-						blockReorgDropMeter.Mark(dropCount)
-					}
-				}
 				return
 			}
 			lastValidNumber = header.Number.Uint64()
 		}
 	}
+}
+
+// stalledTailMax bounds how many trailing headers verifyStalledTail checks per
+// tick. A longer invalid run is still shed: each tick rewinds below the first
+// unauthorized header it sees, and the next tick looks further back. Var for
+// tests.
+var stalledTailMax uint64 = 256
+
+// verifyStalledTail checks the chain's own trailing headers when the latest
+// milestone is already at or past the head — the case the pending-header
+// check otherwise reads as "still syncing". A rotated-out producer lands here
+// too: its own fork keeps it from importing the canonical chain (on a pruned
+// node an exact rebuild of its block shares the block's state root, which the
+// side-chain import refuses), and milestone handling defers because the node
+// looks out of sync, so nothing else ever moves it.
+//
+// Only a signer the current span does not authorize for its height, a verdict
+// that survives a fresh span fetch, proves the tail invalid. Any other failure — Heimdall unreachable, a span not known yet —
+// leaves the chain alone, since a node that is merely syncing passes through
+// here on every tick. The check never looks at or below the whitelisted
+// milestone, so the rewind cannot cross finality.
+func (bc *BlockChain) verifyStalledTail(headNumber uint64) {
+	headers := bc.stalledTailHeaders(headNumber)
+	if len(headers) == 0 {
+		return
+	}
+
+	header, err := bc.firstUnauthorizedHeader(headers)
+	if header == nil || !bc.confirmUnauthorized(header) {
+		return
+	}
+
+	log.Warn("Rewinding a stalled chain off blocks its span does not authorize",
+		"from", headNumber, "to", header.Number.Uint64()-1, "number", header.Number.Uint64(), "hash", header.Hash(), "err", err)
+
+	bc.rewindOff(header)
+}
+
+// confirmUnauthorized rejudges a rejected header once the engine has refetched
+// what signer authorization rests on. The first verdict can come from a cached
+// span that a rotation committed right after its last refresh has overtaken,
+// and rewinding on it would drop blocks the new span authorizes.
+func (bc *BlockChain) confirmUnauthorized(header *types.Header) bool {
+	refresher, ok := bc.engine.(interface{ RefreshAuthorization() error })
+	if !ok {
+		return true
+	}
+
+	if err := refresher.RefreshAuthorization(); err != nil {
+		log.Debug("Stalled tail check inconclusive", "number", header.Number.Uint64(), "err", err)
+
+		return false
+	}
+
+	rejected, _ := bc.firstUnauthorizedHeader([]*types.Header{header})
+
+	return rejected != nil
+}
+
+// rewindOff rewinds to the parent of a header verification rejected, if it
+// still stands once the chain mutex is held: the rejected header still
+// canonical, and the rewind still landing at or above the finality floor.
+// Either can change between the verification pass and the rewind — a valid
+// chain imported meanwhile, a milestone whitelisted — and acting on the stale
+// verdict would drop blocks it never judged, finalized ones included.
+//
+// Milestone whitelisting does not take the chain mutex, so a milestone can
+// still be whitelisted while the rewind runs. It cannot land above the target:
+// whitelisting needs its end block on our canonical chain, every block there
+// above the target descends from the rejected header, and Heimdall only
+// finalizes blocks its spans authorize.
+func (bc *BlockChain) rewindOff(rejected *types.Header) {
+	number, hash := rejected.Number.Uint64(), rejected.Hash()
+	target := number - 1
+
+	var (
+		dropped    uint64
+		belowFloor bool
+	)
+
+	done, err := bc.rewindIf(target, func() bool {
+		floor := bc.finalityFloor()
+		if bc.GetCanonicalHash(number) != hash || target < floor {
+			return false
+		}
+
+		if !bc.rewindLandsAtOrAbove(floor, target) {
+			belowFloor = true
+			return false
+		}
+
+		dropped = bc.CurrentBlock().Number.Uint64() - target
+
+		return true
+	})
+
+	switch {
+	case err != nil:
+		log.Error("Failed to rewind off an invalid header", "number", number, "err", err)
+	case belowFloor:
+		log.Error("Refused a rewind: it would land below the finality floor", "number", number, "hash", hash, "target", target)
+	case !done:
+		log.Info("Skipped a stale rewind: the chain changed since verification", "number", number, "hash", hash)
+	default:
+		blockReorgMeter.Mark(1)
+		blockReorgDropMeter.Mark(int64(dropped))
+	}
+}
+
+// rewindLandsAtOrAbove reports whether a rewind to target lands at or above
+// floor. rewindHead walks back past blocks without state and resets to genesis
+// past its search limit, so a target above the floor does not by itself keep
+// the new head there. This replays its search without its side effects: the
+// limit first on hash scheme, the pivot only after a block without state on
+// path scheme. Every way the search gives up lands on genesis.
+func (bc *BlockChain) rewindLandsAtOrAbove(floor, target uint64) bool {
+	if bc.cfg.Stateless {
+		return true
+	}
+
+	var (
+		path  = bc.triedb.Scheme() == rawdb.PathScheme
+		pivot = rawdb.ReadLastPivotNumber(bc.db)
+		limit = hashRewindLimit(path, pivot, target)
+	)
+
+	for n := target; ; n-- {
+		if n < limit {
+			return floor == 0
+		}
+
+		if bc.rewindableStateAt(n, path) {
+			return true
+		}
+
+		if n <= floor || (path && pivot != nil && *pivot >= n) {
+			return floor == 0
+		}
+	}
+}
+
+// hashRewindLimit is the lowest block rewindHashHead searches before it
+// resets to genesis. Path scheme has none.
+func hashRewindLimit(path bool, pivot *uint64, target uint64) uint64 {
+	switch {
+	case path:
+		return 0
+	case pivot != nil:
+		return *pivot
+	case target > params.FullImmutabilityThreshold:
+		return target - params.FullImmutabilityThreshold
+	default:
+		return 0
+	}
+}
+
+// rewindableStateAt reports whether rewindHead would stop at canonical block n.
+func (bc *BlockChain) rewindableStateAt(n uint64, path bool) bool {
+	header := bc.GetHeaderByNumber(n)
+	if header == nil {
+		return false
+	}
+
+	return bc.HasState(header.Root) || (path && bc.stateRecoverable(header.Root))
+}
+
+// stalledTailHeaders returns the trailing headers above the finality floor,
+// at most stalledTailMax of them, or nil when one is missing.
+func (bc *BlockChain) stalledTailHeaders(headNumber uint64) []*types.Header {
+	floor := bc.finalityFloor()
+	if headNumber <= floor {
+		return nil
+	}
+
+	start := floor + 1
+	if headNumber-floor > stalledTailMax {
+		start = headNumber - stalledTailMax + 1
+	}
+
+	var headers []*types.Header
+	for i := start; i <= headNumber; i++ {
+		header := bc.GetHeaderByNumber(i)
+		if header == nil {
+			return nil
+		}
+		headers = append(headers, header)
+	}
+
+	return headers
+}
+
+// firstUnauthorizedHeader verifies headers in order and returns the first one
+// sealed by an unauthorized signer, with its error. A verification failure of
+// any other kind ends the scan with nothing found: it proves nothing about the
+// header, and the headers after it cannot be judged without it.
+func (bc *BlockChain) firstUnauthorizedHeader(headers []*types.Header) (*types.Header, error) {
+	abort, results := bc.engine.VerifyHeaders(bc, headers)
+	defer close(abort)
+
+	for _, header := range headers {
+		var err error
+		select {
+		case <-bc.quit:
+			return nil, nil
+		case err = <-results:
+		}
+
+		switch {
+		case err == nil:
+			continue
+		case errors.Is(err, consensus.ErrUnauthorizedSigner):
+			return header, err
+		default:
+			log.Debug("Stalled tail check inconclusive", "number", header.Number.Uint64(), "err", err)
+
+			return nil, nil
+		}
+	}
+
+	return nil, nil
+}
+
+// finalityFloor is the highest block the stalled-tail check must not touch:
+// the whitelisted milestone, or the finalized block when one is set.
+func (bc *BlockChain) finalityFloor() uint64 {
+	var floor uint64
+
+	if final := bc.CurrentFinalBlock(); final != nil {
+		floor = final.Number.Uint64()
+	}
+
+	if bc.forker != nil && bc.forker.validator != nil {
+		if exists, number, _ := bc.forker.validator.GetWhitelistedMilestone(); exists {
+			floor = max(floor, number)
+		}
+	}
+
+	return floor
 }
 
 // StateSizer returns the state size tracker, or nil if it's not initialized

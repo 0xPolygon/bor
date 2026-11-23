@@ -283,6 +283,7 @@ func gatherForks(config *params.ChainConfig, genesis uint64) ([]uint64, []uint64
 			}
 		}
 	}
+	forksByBlock = append(forksByBlock, borForkIDForks(config.Bor)...)
 	slices.Sort(forksByBlock)
 	slices.Sort(forksByTime)
 
@@ -310,6 +311,59 @@ func gatherForks(config *params.ChainConfig, genesis uint64) ([]uint64, []uint64
 	}
 
 	return forksByBlock, forksByTime
+}
+
+// preForkIDBorForks are the Bor forks that released binaries already knew
+// before Bor forks entered the fork ID. Those binaries leave them out of the
+// fork ID, so counting them here would split upgraded nodes from older ones on
+// any chain that activates them (#2237, reverted in #2248). That includes
+// Hampi, which is unscheduled on mainnet and Amoy but set on devnets. Never add
+// a fork to this set.
+var preForkIDBorForks = map[string]bool{
+	"JaipurBlock":       true,
+	"DelhiBlock":        true,
+	"IndoreBlock":       true,
+	"AhmedabadBlock":    true,
+	"BhilaiBlock":       true,
+	"RioBlock":          true,
+	"MadhugiriBlock":    true,
+	"MadhugiriProBlock": true,
+	"DandeliBlock":      true,
+	"LisovoBlock":       true,
+	"LisovoProBlock":    true,
+	"GiuglianoBlock":    true,
+	"ChicagoBlock":      true,
+	"ValenciaBlock":     true,
+	"AustinBlock":       true,
+	"HampiBlock":        true,
+	"UburuBlock":        true,
+}
+
+// borForkIDForks returns the Bor fork blocks that enter the fork ID: every
+// BorConfig *Block field outside preForkIDBorForks, so a peer that missed a
+// later Bor hardfork fails the eth handshake instead of holding a peer slot.
+func borForkIDForks(bor *params.BorConfig) []uint64 {
+	if bor == nil {
+		return nil
+	}
+
+	var forks []uint64
+
+	kind := reflect.TypeFor[params.BorConfig]()
+	conf := reflect.ValueOf(bor).Elem()
+
+	for i := 0; i < kind.NumField(); i++ {
+		field := kind.Field(i)
+		if field.Type != reflect.TypeFor[*big.Int]() || !strings.HasSuffix(field.Name, "Block") || preForkIDBorForks[field.Name] {
+			continue
+		}
+
+		if rule := conf.Field(i).Interface().(*big.Int); rule != nil {
+			forks = append(forks, rule.Uint64())
+		}
+	}
+
+	return forks
 }
 
 // GatherForks gathers all the known forks and creates a sorted list out of them.

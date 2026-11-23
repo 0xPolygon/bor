@@ -199,7 +199,7 @@ func opAddmod(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 
 func opMulmod(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 	x, y, z := scope.Stack.pop(), scope.Stack.pop(), scope.Stack.peek()
-	z.MulMod(&x, &y, z)
+	evm.mulmodMemo.mulmod(&x, &y, z)
 
 	return nil, nil
 }
@@ -256,6 +256,11 @@ func opSAR(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 	return nil, nil
 }
 
+// cacheableKeccakLen reports whether a keccak input of length n is eligible for
+// the widened cache. Bounds retained memory (excludes adversarial large inputs)
+// and excludes the 0-length input, which is trivial to hash.
+func cacheableKeccakLen(n int) bool { return n > 0 && n <= 8192 }
+
 func opKeccak256(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 	offset, size := scope.Stack.pop(), scope.Stack.peek()
 	data := scope.Memory.GetPtr(offset.Uint64(), size.Uint64())
@@ -276,6 +281,15 @@ func opKeccak256(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 		evm.hasher.Write(data)
 		evm.hasher.Read(evm.hasherBuf[:])
 		evm.Config.Keccak256Cache.Store(key, evm.hasherBuf)
+	} else if evm.Config.keccakCache != nil && cacheableKeccakLen(len(data)) {
+		// Widened path for variable-length inputs (every cacheable size except
+		// the legacy 64-byte case above). keccakCache is only set when
+		// EnablePrecompileCache is on. On a hit the helper writes the result
+		// into size and returns true. On a miss it computes into hasherBuf,
+		// stores it and returns false, so we fall through below.
+		if evm.keccakLoadOrCompute(data, size) {
+			return nil, nil
+		}
 	} else {
 		evm.hasher.Reset()
 		evm.hasher.Write(data)
@@ -287,6 +301,31 @@ func opKeccak256(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 	}
 	size.SetBytes(evm.hasherBuf[:])
 	return nil, nil
+}
+
+// keccakLoadOrCompute serves opKeccak256's variable-length cache path. On a
+// hit it records the preimage (when enabled), writes the cached hash into
+// size, and returns true so the caller returns immediately. On a miss it
+// computes the hash into evm.hasherBuf and stores it (by value, as a
+// common.Hash, so the entry never aliases hasherBuf), then returns false so
+// the caller does the shared preimage record and size write. This is the same
+// as the 64-byte miss path.
+func (evm *EVM) keccakLoadOrCompute(data []byte, size *uint256.Int) bool {
+	meters := evm.Config.ResultCacheConsumer.keccakMeters()
+	if h, ok := evm.Config.keccakCache.Load(data); ok {
+		markSampled(meters.hit)
+		if evm.Config.EnablePreimageRecording {
+			evm.StateDB.AddPreimage(h, data)
+		}
+		size.SetBytes32(h[:])
+		return true
+	}
+	markSampled(meters.miss)
+	evm.hasher.Reset()
+	evm.hasher.Write(data)
+	evm.hasher.Read(evm.hasherBuf[:])
+	evm.Config.keccakCache.Store(data, evm.hasherBuf)
+	return false
 }
 
 func opAddress(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {

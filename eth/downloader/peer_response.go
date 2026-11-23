@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/eth/downloader/whitelist"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/eth/protocols/snap"
@@ -106,6 +107,8 @@ func (d *Downloader) handleSyncFailure(peer *peerConnection, id string, err erro
 
 func classifySyncFailure(err error) (peerFailureReason, bool) {
 	switch {
+	case errors.Is(err, core.ErrStateSyncProcessing):
+		return "", false
 	case isPrunedSidechainMismatch(err):
 		return peerFailurePrunedSidechain, true
 	case isTransientFailure(err):
@@ -164,6 +167,7 @@ func (d *Downloader) respondToPeer(peer *peerConnection, reason peerFailureReaso
 		return
 	}
 	decision := peer.responseDecision(reason)
+	d.observeFailure(peer.id, reason)
 
 	switch decision.action {
 	case peerResponseBackoff:
@@ -191,7 +195,7 @@ func (d *Downloader) jailPeer(peer *peerConnection, backoff time.Duration, reaso
 }
 
 func (d *Downloader) backoffPeer(peer *peerConnection, decision peerResponseDecision, err error) {
-	penalized, jailed := d.peers.backoffSoftFailure(peer)
+	penalized, jailed := d.peers.backoffSoftFailure(peer, decision.reason)
 	if !penalized {
 		return
 	}

@@ -59,11 +59,12 @@ func TestRebroadcastSelectionDoesNotRecordSend(t *testing.T) {
 	if tracked {
 		t.Fatal("selecting a batch must not record a rebroadcast")
 	}
-	for i := 0; i < 3; i++ {
-		batch = receiveRebroadcastEvent(t, ch)
-		if len(batch.Txs) != 1 || batch.Txs[0].Hash() != tx.Hash() {
-			t.Fatal("unsent transaction must remain eligible past max age")
-		}
+	pool.mu.RLock()
+	attempted := !pool.lastRebroadcastAttempt[tx.Hash()].IsZero()
+	stillEligible := pool.identifyStuckTransactions()
+	pool.mu.RUnlock()
+	if attempted || len(stillEligible) != 1 {
+		t.Fatal("an unoffered batch must remain eligible")
 	}
 	pool.RebroadcastAcknowledgement(batch.Txs)([]common.Hash{tx.Hash()})
 	pool.mu.RLock()

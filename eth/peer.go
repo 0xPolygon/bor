@@ -29,6 +29,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/protocols/snap"
 	"github.com/ethereum/go-ethereum/eth/protocols/wit"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
@@ -42,7 +43,8 @@ const (
 // ethPeerInfo represents a short summary of the `eth` sub-protocol metadata known
 // about a connected peer.
 type ethPeerInfo struct {
-	Version uint `json:"version"` // Ethereum protocol version negotiated
+	Reputation *peerpolicy.Snapshot `json:"reputation,omitempty"`
+	Version    uint                 `json:"version"` // Ethereum protocol version negotiated
 	*peerBlockRange
 }
 
@@ -85,7 +87,7 @@ func (p *ethPeer) jailPeerForViolation(jailPeer func(string), violation string, 
 		errMsg += fmt.Sprintf("%s=%v", key, value)
 		first = false
 	}
-	return fmt.Errorf("%s", errMsg)
+	return fmt.Errorf("%w: %s", stateless.ErrInvalidWitness, errMsg)
 }
 
 // info gathers and returns some `eth` protocol metadata known about a peer.
@@ -381,8 +383,11 @@ func (p *ethPeer) RequestWitnessesWithVerification(hashes []common.Hash, dlResCh
 		receivedWitPages := make(map[common.Hash][]wit.WitnessPageResponse)
 		reconstructedWitness := make(map[common.Hash]*stateless.Witness)
 		var lastWitRes *wit.Response
+		var witnessErr error
 		for witRes := range witReqResCh {
-			p.receiveWitnessPage(witRes, receivedWitPages, reconstructedWitness, hashes, &witReqs, &witReqsWg, witTotalPages, witTotalRequest, witReqResCh, witReqSem, &mapsMu, &buildRequestMu, failedRequests, downloadPaused, verifyPageCount, jailPeer, cancelCh)
+			if err := p.receiveWitnessPage(witRes, receivedWitPages, reconstructedWitness, hashes, &witReqs, &witReqsWg, witTotalPages, witTotalRequest, witReqResCh, witReqSem, &mapsMu, &buildRequestMu, failedRequests, downloadPaused, verifyPageCount, jailPeer, cancelCh); errors.Is(err, stateless.ErrInvalidWitness) {
+				witnessErr = err
+			}
 			<-witReqSem
 			witReqsWg.Done()
 
@@ -406,7 +411,7 @@ func (p *ethPeer) RequestWitnessesWithVerification(hashes []common.Hash, dlResCh
 			emptyRes := &eth.Response{
 				Req:  wrapperReq.Request,
 				Res:  emptyWitnesses,
-				Meta: nil,
+				Meta: witnessErr,
 				Time: 0,
 				Done: doneCh,
 			}
@@ -635,7 +640,7 @@ func (p *ethPeer) reconstructWitness(pages []wit.WitnessPageResponse) (*stateles
 	wit := new(stateless.Witness)
 	if err := rlp.DecodeBytes(reconstructedWitnessRLPBytes, wit); err != nil {
 		p.witPeer.Peer.Log().Warn("RequestWitnesses adapter failed to decode witness page RLP", "err", err)
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", stateless.ErrInvalidWitness, err)
 	}
 	return wit, nil
 }

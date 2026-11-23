@@ -98,6 +98,8 @@ The ```bor server``` command runs the Bor client.
 
 - ```pprof.port```: pprof HTTP server listening port (default: 6060)
 
+- ```precompile-cache```: Share the per-block VM result caches (keccak/ecrecover) with the serial import processor and the block builder, and cache keccak for variable-length inputs (the prefetcher and parallel workers share these caches either way) (default: false)
+
 - ```rpc.batch-request-limit```: Maximum number of requests in a batch (use 0 for no limits) (default: 1000)
 
 - ```rpc.batch-response-max-size```: Maximum number of response bytes across all requests in a batch (use 0 for no limits) (default: 25000000)
@@ -360,6 +362,8 @@ The ```bor server``` command runs the Bor client.
 
 - ```miner.baseFeeChangeDenominator```: Base fee change rate denominator (must be >0, default 64) for post-Lisovo blocks (default: 0)
 
+- ```miner.baseFeeFloor```: Base fee floor in wei held by this block producer, also used as the target base fee (post-Lisovo, producer policy only, 0 = disabled) (default: 0)
+
 - ```miner.blocktime```: The block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time. (default: 0s)
 
 - ```miner.disable-pending-block```: Disable the pending block creation loop on non block producer nodes. When set, 'pending' block will be unavailable for RPC queries. (default: false)
@@ -437,6 +441,8 @@ The ```bor server``` command runs the Bor client.
 - ```txpool.conditionallifetime```: Maximum amount of time a conditional transaction can stay in the pool (default: 5m0s)
 
 - ```txpool.conditionalslots```: Maximum number of known accounts and slots across all pooled conditional transactions (default: 10000)
+
+- ```txpool.filter-reload```: Interval at which the filtered addresses file is re-read and applied without a restart (0 disables) (default: 1m0s)
 
 - ```txpool.filtered-addresses```: Path to the file containing a newline-separated list of addresses whose transactions will be filtered
 

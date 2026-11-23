@@ -17,7 +17,6 @@ syncmode = "full"
 # gcmode = "full"
 # snapshot = true
 # ethstats = ""
-# witnessprotocol = false
 # devfakeauthor = false
 
 # ["eth.requiredblocks"]
@@ -193,6 +192,10 @@ syncmode = "full"
   # procs = 8
   # enforce = false
 
+# [witness]
+#   enable = false
+
+# [pprof]
 #   pprof = false
 #   port = 6060
 #   addr = "127.0.0.1"

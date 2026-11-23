@@ -20,6 +20,8 @@ import (
 // MarshalTOML marshals as TOML.
 func (c Config) MarshalTOML() (interface{}, error) {
 	type Config struct {
+		PeerReputation                       bool
+		PeerReputationPerPeerMetrics         bool
 		Genesis                              *core.Genesis `toml:",omitempty"`
 		NetworkId                            uint64
 		SyncMode                             downloader.SyncMode
@@ -65,6 +67,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		EnableWitnessStats                   bool
 		StatelessSelfValidation              bool
 		EnableEVMSwitchDispatch              bool
+		EnablePrecompileCache                bool
 		EnableStateSizeTracking              bool
 		VMTrace                              string
 		VMTraceJsonConfig                    string
@@ -110,6 +113,8 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		AcceptPrivateTx                      bool
 	}
 	var enc Config
+	enc.PeerReputation = c.PeerReputation
+	enc.PeerReputationPerPeerMetrics = c.PeerReputationPerPeerMetrics
 	enc.Genesis = c.Genesis
 	enc.NetworkId = c.NetworkId
 	enc.SyncMode = c.SyncMode
@@ -155,6 +160,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.EnableWitnessStats = c.EnableWitnessStats
 	enc.StatelessSelfValidation = c.StatelessSelfValidation
 	enc.EnableEVMSwitchDispatch = c.EnableEVMSwitchDispatch
+	enc.EnablePrecompileCache = c.EnablePrecompileCache
 	enc.EnableStateSizeTracking = c.EnableStateSizeTracking
 	enc.VMTrace = c.VMTrace
 	enc.VMTraceJsonConfig = c.VMTraceJsonConfig
@@ -204,6 +210,8 @@ func (c Config) MarshalTOML() (interface{}, error) {
 // UnmarshalTOML unmarshals from TOML.
 func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	type Config struct {
+		PeerReputation                       *bool
+		PeerReputationPerPeerMetrics         *bool
 		Genesis                              *core.Genesis `toml:",omitempty"`
 		NetworkId                            *uint64
 		SyncMode                             *downloader.SyncMode
@@ -249,6 +257,7 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		EnableWitnessStats                   *bool
 		StatelessSelfValidation              *bool
 		EnableEVMSwitchDispatch              *bool
+		EnablePrecompileCache                *bool
 		EnableStateSizeTracking              *bool
 		VMTrace                              *string
 		VMTraceJsonConfig                    *string
@@ -296,6 +305,12 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	var dec Config
 	if err := unmarshal(&dec); err != nil {
 		return err
+	}
+	if dec.PeerReputation != nil {
+		c.PeerReputation = *dec.PeerReputation
+	}
+	if dec.PeerReputationPerPeerMetrics != nil {
+		c.PeerReputationPerPeerMetrics = *dec.PeerReputationPerPeerMetrics
 	}
 	if dec.Genesis != nil {
 		c.Genesis = dec.Genesis
@@ -431,6 +446,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.EnableEVMSwitchDispatch != nil {
 		c.EnableEVMSwitchDispatch = *dec.EnableEVMSwitchDispatch
+	}
+	if dec.EnablePrecompileCache != nil {
+		c.EnablePrecompileCache = *dec.EnablePrecompileCache
 	}
 	if dec.EnableStateSizeTracking != nil {
 		c.EnableStateSizeTracking = *dec.EnableStateSizeTracking

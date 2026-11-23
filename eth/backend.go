@@ -342,6 +342,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		StatelessSelfValidation: config.StatelessSelfValidation,
 		EnableWitnessStats:      config.EnableWitnessStats,
 		EnableEVMSwitchDispatch: config.EnableEVMSwitchDispatch,
+		EnablePrecompileCache:   config.EnablePrecompileCache,
 	}
 
 	// Setup live tracer if requested
@@ -554,6 +555,8 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		enableBlockTracking:     eth.config.EnableBlockTracking,
 		txAnnouncementOnly:      eth.p2pServer.TxAnnouncementOnly,
 		disableTxPropagation:    eth.p2pServer.DisableTxPropagation,
+		peerReputation:          eth.config.PeerReputation,
+		peerReputationMetrics:   eth.config.PeerReputationPerPeerMetrics,
 		witnessProtocol:         eth.config.WitnessProtocol,
 		syncWithWitnesses:       eth.config.SyncWithWitnesses,
 		syncAndProduceWitnesses: eth.config.SyncAndProduceWitnesses,
@@ -865,7 +868,7 @@ func (s *Ethereum) Start() error {
 	s.shutdownTracker.Start()
 
 	// Start the networking layer
-	s.handler.Start(s.p2pServer.MaxPeers)
+	s.handler.Start(s.p2pServer.GetMaxPeers())
 
 	// Start the connection manager
 	s.dropper.Start(s.p2pServer, func() bool { return !s.Synced() })

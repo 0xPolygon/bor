@@ -60,6 +60,12 @@ type AdoptedWindow struct {
 	GasLimit   uint64
 	BaseFee    *big.Int
 	Txs        []*types.Transaction
+
+	// Complete marks a sealed generation being rebuilt: the block must be
+	// exactly Txs. Pool transactions appended after them would change the
+	// state the store's next sealed height executed on, and those heights
+	// are only recoverable on identical state.
+	Complete bool
 }
 
 // SealVerdict is the store's answer to "may this sealed block be broadcast".

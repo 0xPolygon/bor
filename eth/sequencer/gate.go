@@ -96,7 +96,7 @@ func (p *Publisher) ConfirmSeal(timeout time.Duration) miner.SealVerdict {
 
 	for {
 		p.mu.Lock()
-		g := p.gate
+		g, chain := p.gate, p.chain
 		p.mu.Unlock()
 
 		if v, done := p.storedVerdict(g); done {
@@ -106,10 +106,10 @@ func (p *Publisher) ConfirmSeal(timeout time.Duration) miner.SealVerdict {
 		// The canonical lookup is an uncached database read, and this wait
 		// can now last a whole block period: take it on a coarse tick
 		// rather than every poll.
-		if now := time.Now(); p.chain != nil && now.After(chainCheck) {
+		if now := time.Now(); chain != nil && now.After(chainCheck) {
 			chainCheck = now.Add(50 * time.Millisecond)
 
-			if v, done := p.chainVerdict(g); done {
+			if v, done := p.chainVerdict(chain, g); done {
 				return v
 			}
 		}
@@ -180,15 +180,15 @@ func (p *Publisher) storeDownSkip() *metrics.Counter {
 // against an empty hash and refuses a seal nobody contested.
 func (p *Publisher) storeDownVerdict(skipped *metrics.Counter) miner.SealVerdict {
 	p.mu.Lock()
-	g := p.gate
+	g, chain := p.gate, p.chain
 	p.mu.Unlock()
 
 	if v, done := p.storedVerdict(g); done {
 		return v
 	}
 
-	if p.chain != nil {
-		if v, done := p.chainVerdict(g); done {
+	if chain != nil {
+		if v, done := p.chainVerdict(chain, g); done {
 			return v
 		}
 	}
@@ -231,8 +231,8 @@ func (p *Publisher) storedVerdict(g sealGate) (miner.SealVerdict, bool) {
 // chainVerdict resolves the gate from our own chain: the winner's block
 // importing at our height is the rejection notice, our own hash there is
 // a twin's harmless duplicate broadcast.
-func (p *Publisher) chainVerdict(g sealGate) (miner.SealVerdict, bool) {
-	switch canonical := p.chain.GetCanonicalHash(g.height); {
+func (p *Publisher) chainVerdict(chain chainReader, g sealGate) (miner.SealVerdict, bool) {
+	switch canonical := chain.GetCanonicalHash(g.height); {
 	case canonical == g.hash:
 		return p.settle(miner.SealConfirmed), true
 	case canonical != (common.Hash{}):

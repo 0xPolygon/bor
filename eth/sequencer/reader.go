@@ -3,6 +3,7 @@ package sequencer
 import (
 	"context"
 	"errors"
+	"math"
 	"sync"
 	"time"
 
@@ -54,6 +55,10 @@ type reader struct {
 	// breaker keeps the producer's critical path off a read path that has
 	// gone quiet. Every read below goes through it.
 	breaker readBreaker
+
+	// chainHead is our chain's head height, for the breaker's frozen-tail
+	// rule; nil when the reader has no chain.
+	chainHead func() (uint64, bool)
 }
 
 func newReader(cons pb.ConsumerServiceClient, seed commitment.Head, onRead func()) *reader {
@@ -108,6 +113,11 @@ type tailInfo struct {
 	// open.
 	explained bool
 
+	// bridgedParent is our parent when the window's own parent was proven
+	// to be the same block in everything execution reads (see
+	// bridgeEquivalentParent); zero otherwise.
+	bridgedParent common.Hash
+
 	// suffixOurs is set when the anchor rung's matcher absorbed every walked
 	// entry in lockstep with the unconfirmed journal: the store's tail past
 	// our anchor is a prefix of our own in-flight window, so the store's
@@ -115,6 +125,11 @@ type tailInfo struct {
 	// exactly here — the walk starts past the window's open, so tipOpen and
 	// window stay unset even though the store holds nothing but our sequence.
 	suffixOurs bool
+
+	// anchored is set when the walk started at our acked head: the read path
+	// had applied every entry the store acked to us, so whatever it shows
+	// past that head is not something it has yet to catch up to.
+	anchored bool
 }
 
 // tryWalk runs one ladder rung; done=false falls through to the next rung:
@@ -254,7 +269,7 @@ func (r *reader) walk(ctx context.Context, first *pb.RangeRequest, absorb func(*
 		if resp.GetLive() {
 			info.explained = f.ok
 			if info.s != r.seed {
-				r.breaker.observeLiveTail(resp.GetNext())
+				r.observeLiveTail(resp.GetNext(), info)
 			}
 
 			return info, nil
@@ -265,6 +280,24 @@ func (r *reader) walk(ctx context.Context, first *pb.RangeRequest, absorb func(*
 			Limit: walkLimit,
 		}
 	}
+}
+
+// observeLiveTail feeds the breaker a walk's live tail. An unknown chain head
+// is taken as above every seal, so the frozen-tail rule applies in full.
+func (r *reader) observeLiveTail(tail []byte, info tailInfo) {
+	var seal uint64
+	if info.haveSeal {
+		seal = info.lastSealHeight
+	}
+
+	head := uint64(math.MaxUint64)
+	if r.chainHead != nil {
+		if h, ok := r.chainHead(); ok {
+			head = h
+		}
+	}
+
+	r.breaker.observeLiveTail(tail, seal, head)
 }
 
 // foldPage runs one page's entries through the absorb hook and the folder,
@@ -369,9 +402,9 @@ func (f *folder) reached(s commitment.Head) {
 }
 
 func (r *reader) rangeOnce(ctx context.Context, req *pb.RangeRequest) (*pb.RangeResponse, error) {
-	allowed, probing := r.breaker.allow()
-	if !allowed {
-		return nil, errReadPathDown
+	probing, err := r.admit(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	cctx, cancel := context.WithTimeout(ctx, readBudget(probing))
@@ -403,9 +436,9 @@ func (r *reader) note(err error) {
 // generation fetches the entries of the newest generation standing at a
 // height — open, records, and seal when one closed it.
 func (r *reader) generation(ctx context.Context, height uint64) ([]*pb.Entry, error) {
-	allowed, probing := r.breaker.allow()
-	if !allowed {
-		return nil, errReadPathDown
+	probing, err := r.admit(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	cctx, cancel := context.WithTimeout(ctx, readBudget(probing))

@@ -37,10 +37,12 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/triedb"
 )
 
@@ -364,4 +366,53 @@ func TestGetModifiedAccounts(t *testing.T) {
 
 		assert.Len(t, filtered, len(accounts)+1)
 	})
+}
+
+func TestExecutionWitness(t *testing.T) {
+	t.Parallel()
+
+	accounts := newAccounts(2)
+	genesis := &core.Genesis{
+		Config: params.TestChainConfig,
+		Alloc: types.GenesisAlloc{
+			accounts[0].addr: {Balance: big.NewInt(params.Ether)},
+		},
+	}
+	signer := types.HomesteadSigner{}
+	blockChain := newTestBlockChain(t, 2, genesis, func(i int, b *core.BlockGen) {
+		tx, _ := types.SignTx(types.NewTx(&types.LegacyTx{
+			Nonce:    uint64(i),
+			To:       &accounts[1].addr,
+			Value:    big.NewInt(1000),
+			Gas:      params.TxGas,
+			GasPrice: b.BaseFee(),
+		}), signer, accounts[0].key)
+		b.AddTx(tx)
+	})
+	defer blockChain.Stop()
+
+	eth := &Ethereum{blockchain: blockChain}
+	eth.APIBackend = &EthAPIBackend{eth: eth}
+	api := NewDebugAPI(eth)
+
+	head := blockChain.GetBlockByNumber(2)
+	parent := blockChain.GetHeaderByNumber(1)
+
+	tests := []struct {
+		name string
+		get  func() (*stateless.ExtWitness, error)
+	}{
+		{"ByNumber", func() (*stateless.ExtWitness, error) { return api.ExecutionWitness(rpc.BlockNumber(2)) }},
+		{"ByHash", func() (*stateless.ExtWitness, error) { return api.ExecutionWitnessByHash(head.Hash()) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			witness, err := tt.get()
+			require.NoError(t, err)
+			require.Equal(t, head.Hash(), witness.Context.Hash())
+			require.NotEmpty(t, witness.Headers)
+			require.Equal(t, parent.Hash(), witness.Headers[0].Hash())
+			require.NotEmpty(t, witness.State)
+		})
+	}
 }

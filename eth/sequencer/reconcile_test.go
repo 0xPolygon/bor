@@ -2,6 +2,7 @@ package sequencer
 
 import (
 	"context"
+	"errors"
 	"math/big"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	pb "github.com/0xPolygon/sequence-store-proto/sequencestore/v1"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -20,6 +22,15 @@ type fakeChain struct {
 	known     map[common.Hash]*types.Header
 	current   *types.Header
 	blocks    map[uint64]*types.Block
+	states    state.Database // nil: no state is available
+}
+
+func (f *fakeChain) SealingStateAt(root common.Hash) (*state.StateDB, error) {
+	if f.states == nil {
+		return nil, errors.New("state unavailable")
+	}
+
+	return state.New(root, f.states)
 }
 
 func (f *fakeChain) GetCanonicalHash(number uint64) common.Hash {

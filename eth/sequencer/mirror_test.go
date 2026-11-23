@@ -429,6 +429,211 @@ func TestBarrierStillRefusesWhenStoreExtendsPastOurJournal(t *testing.T) {
 	}
 }
 
+// A gateway applies an entry a little after the ingress acks it, so a
+// producer close to the store can read a tail that still ends at the parent's
+// seal while its own open is acked. When the gateway caught up between the
+// tail read and the parent walk, the walk returned that open and the barrier
+// refused the producer's own block as content it could not explain: a
+// discarded build and a late block on a producer that seals as soon as its
+// open is acked. The block is held to what we published instead.
+func TestBarrierPassesWhenOurOpenAppearsBetweenReads(t *testing.T) {
+	h := startHarness(t)
+	p := newTestPublisher(t, h, &fakeChain{canonical: map[uint64]common.Hash{}})
+
+	sealed := publishBlock(t, p, 1, common.Hash{0xef}, 1)
+	waitHead(t, h, p, 5*time.Second)
+	parent := sealHash(t, sealed)
+	atSeal := h.store.Head()
+
+	p.OpenBlock(2, 1700000002, parent, 30_000_000, fee25())
+	waitDrained(t, p, 5*time.Second)
+
+	lagReads(p, atSeal.Bytes(), 1, 1)
+
+	lagging := publishLaggingRead.Snapshot().Count()
+
+	if !p.AwaitSequenced(150*time.Millisecond, 2, nil) {
+		t.Fatal("barrier refused the producer's own block when the read " +
+			"path caught up to its open between two reads")
+	}
+
+	if p.ResyncNeeded() {
+		t.Fatal("our own open, read late, armed a rebuild")
+	}
+
+	if got := publishLaggingRead.Snapshot().Count(); got != lagging+1 {
+		t.Fatalf("counted %d lagging reads, want 1", got-lagging)
+	}
+}
+
+// A read that is behind our open but ends cleanly at the parent's seal is
+// the common case for a producer close to the store. It stays the boundary's
+// verdict, in one pass of reads, and is not counted as a lagging read.
+func TestBarrierPassesACleanBoundaryOnALaggingRead(t *testing.T) {
+	h := startHarness(t)
+	p := newTestPublisher(t, h, &fakeChain{canonical: map[uint64]common.Hash{}})
+
+	sealed := publishBlock(t, p, 1, common.Hash{0xef}, 1)
+	waitHead(t, h, p, 5*time.Second)
+	parent := sealHash(t, sealed)
+	atSeal := h.store.Head()
+
+	p.OpenBlock(2, 1700000002, parent, 30_000_000, fee25())
+	waitDrained(t, p, 5*time.Second)
+
+	lag := lagReads(p, atSeal.Bytes(), 1, 1<<30)
+	lagging := publishLaggingRead.Snapshot().Count()
+
+	if !p.AwaitSequenced(150*time.Millisecond, 2, nil) {
+		t.Fatal("barrier refused a block over a clean boundary at its parent")
+	}
+
+	// The anchor read, two probes, the tail walk and the parent walk.
+	if reads := lag.served(); reads != 5 {
+		t.Fatalf("the check took %d reads, want one pass of 5", reads)
+	}
+
+	if got := publishLaggingRead.Snapshot().Count(); got != lagging {
+		t.Fatalf("a settled check counted %d lagging reads", got-lagging)
+	}
+}
+
+// The first block a producer sequences has a parent the store never held, so
+// the parent walk cannot prove a clean boundary. A read behind the acked open
+// then had nothing to stand on and refused the block.
+func TestBarrierPassesTheFirstSequencedBlockOnALaggingRead(t *testing.T) {
+	h := startHarness(t)
+	p := newTestPublisher(t, h, &fakeChain{canonical: map[uint64]common.Hash{}})
+	seed := h.store.Head()
+
+	p.OpenBlock(5, 1700000005, common.Hash{0xef}, 30_000_000, fee25())
+	waitDrained(t, p, 5*time.Second)
+
+	lagReads(p, seed.Bytes(), 0, 1)
+
+	if !p.AwaitSequenced(150*time.Millisecond, 5, nil) {
+		t.Fatal("barrier refused the first sequenced block while the read " +
+			"path was behind its open")
+	}
+
+	if p.ResyncNeeded() {
+		t.Fatal("a read behind our own open armed a rebuild")
+	}
+}
+
+// A read path that stays behind our acked open must not refuse the block:
+// nothing such a read shows is content we have not folded, so the block is
+// held to what we published instead.
+func TestBarrierHoldsTheBlockToOurWindowWhenTheReadPathStaysBehind(t *testing.T) {
+	h := startHarness(t)
+	p := newTestPublisher(t, h, &fakeChain{canonical: map[uint64]common.Hash{}})
+	seed := h.store.Head()
+
+	p.OpenBlock(5, 1700000005, common.Hash{0xef}, 30_000_000, fee25())
+	waitDrained(t, p, 5*time.Second)
+
+	lagReads(p, seed.Bytes(), 0, 1<<30)
+
+	if !p.AwaitSequenced(150*time.Millisecond, 5, nil) {
+		t.Fatal("barrier refused our own empty block because the read path was behind")
+	}
+
+	t0 := testTx(t, 0)
+	p.PublishTx(t0)
+	waitDrained(t, p, 5*time.Second)
+
+	if !p.AwaitSequenced(150*time.Millisecond, 5, []*types.Transaction{t0}) {
+		t.Fatal("barrier refused our own block because the read path was behind")
+	}
+
+	if p.ResyncNeeded() {
+		t.Fatal("a read path behind our own open armed a rebuild")
+	}
+
+	if p.AwaitSequenced(150*time.Millisecond, 5, nil) {
+		t.Fatal("barrier passed a block missing a transaction we published")
+	}
+
+	if !p.ResyncNeeded() {
+		t.Fatal("the refusal did not ask for a rebuild")
+	}
+}
+
+// The benefit of the doubt belongs to an open the store acked at this
+// height. Without one a read that cannot place the block may be ahead of us,
+// not behind, and the refusal stands.
+func TestBarrierRefusesBehindAReadWithoutAnAckedOpen(t *testing.T) {
+	tests := []struct {
+		name   string
+		height uint64
+		setup  func(t *testing.T, p *Publisher)
+	}{
+		{"nothing open", 2, func(t *testing.T, p *Publisher) {
+			publishBlock(t, p, 1, common.Hash{0xef}, 1)
+			waitDrained(t, p, 5*time.Second)
+		}},
+		{"open at another height", 6, func(t *testing.T, p *Publisher) {
+			p.OpenBlock(5, 1700000005, common.Hash{0xef}, 30_000_000, fee25())
+			waitDrained(t, p, 5*time.Second)
+		}},
+		{"open not acked", 5, func(t *testing.T, p *Publisher) {
+			p.OpenBlock(5, 1700000005, common.Hash{0xef}, 30_000_000, fee25())
+			waitDrained(t, p, 5*time.Second)
+
+			p.mu.Lock()
+			p.ackedSeq = p.journal.items[p.journal.openStart()].seq - 1
+			p.mu.Unlock()
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := startHarness(t)
+			p := newTestPublisher(t, h, &fakeChain{canonical: map[uint64]common.Hash{}})
+			seed := h.store.Head()
+
+			tt.setup(t, p)
+			lagReads(p, seed.Bytes(), 0, 1<<30)
+
+			resyncs := reconcileResync.Snapshot().Count()
+
+			if p.AwaitSequenced(50*time.Millisecond, tt.height, nil) {
+				t.Fatal("barrier passed a block it could not place against the store")
+			}
+
+			if !p.ResyncNeeded() {
+				t.Fatal("the refusal did not ask for a rebuild")
+			}
+
+			if got := reconcileResync.Snapshot().Count(); got != resyncs+1 {
+				t.Fatalf("refusal counted %d resyncs, want 1", got-resyncs)
+			}
+		})
+	}
+}
+
+// A height the store already sealed has moved on without us: the barrier
+// lets the block through to the gate, which decides whose seal stands.
+func TestBarrierPassesAHeightTheStoreAlreadySealed(t *testing.T) {
+	h := startHarness(t)
+	p := newTestPublisher(t, h, &fakeChain{canonical: map[uint64]common.Hash{}})
+
+	sealed := publishBlock(t, p, 1, common.Hash{0xef}, 1)
+	waitHead(t, h, p, 5*time.Second)
+	parent := sealHash(t, sealed)
+
+	appendForeignOpen(t, h, 2, parent)
+	appendForeignSeal(t, h, testHeader(2, parent))
+
+	if !p.AwaitSequenced(150*time.Millisecond, 2, []*types.Transaction{testTx(t, 0)}) {
+		t.Fatal("barrier refused a block at a height the store already sealed")
+	}
+
+	if p.ResyncNeeded() {
+		t.Fatal("a sealed height armed a rebuild at the barrier")
+	}
+}
+
 // The same deadline path must still pass a block that does carry the
 // promised prefix, or a slow drain would stall production outright.
 func TestBarrierDeadlineStillPassesACoveringBlock(t *testing.T) {

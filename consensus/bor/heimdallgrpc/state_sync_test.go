@@ -35,7 +35,7 @@ func TestStateSyncEvents_SinglePage(t *testing.T) {
 		{Id: 5, Contract: "0x0000000000000000000000000000000000001001", Data: []byte{0x05}, TxHash: "0x02", LogIndex: 3, BorChainId: "137", RecordTime: recordTime},
 		{Id: 6, Contract: "0x0000000000000000000000000000000000001001", Data: []byte{0x06}, TxHash: "0x03", LogIndex: 4, BorChainId: "137", RecordTime: recordTime},
 	}}}
-	client := &HeimdallGRPCClient{clerkQueryClient: fake}
+	client := &HeimdallGRPCClient{clerkQueryClient: fake, timeout: defaultTimeout}
 
 	events, err := client.StateSyncEvents(t.Context(), 5, 1_000)
 	require.NoError(t, err)
@@ -58,7 +58,7 @@ func TestStateSyncEvents_SinglePage(t *testing.T) {
 func TestStateSyncEvents_Error(t *testing.T) {
 	t.Parallel()
 
-	client := &HeimdallGRPCClient{clerkQueryClient: &fakeClerkQueryClient{err: errors.New("unavailable")}}
+	client := &HeimdallGRPCClient{clerkQueryClient: &fakeClerkQueryClient{err: errors.New("unavailable")}, timeout: defaultTimeout}
 
 	events, err := client.StateSyncEvents(t.Context(), 1, 1_000)
 	require.Error(t, err)

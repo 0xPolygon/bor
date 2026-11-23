@@ -13,6 +13,8 @@ import (
 	"github.com/holiman/uint256"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus"
+	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core/blockstm"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
@@ -904,5 +906,27 @@ func TestV2StateProcessor_ApplyMessageErrorFailsBlock(t *testing.T) {
 	}
 	if result.GasUsed != 0 {
 		t.Fatalf("expected 0 gas used after consensus error, got %d", result.GasUsed)
+	}
+}
+
+type receiptMismatchFinalizer struct{ consensus.Engine }
+
+func (*receiptMismatchFinalizer) Finalize(consensus.ChainHeaderReader, *types.Header, vm.StateDB, *types.Body, []*types.Receipt) ([]*types.Receipt, error) {
+	return []*types.Receipt{{}}, nil
+}
+
+func TestV2ReceiptCountMismatch(t *testing.T) {
+	config := *params.TestChainConfig
+	config.Bor = &params.BorConfig{MadhugiriBlock: big.NewInt(0)}
+	chain := &HeaderChain{config: &config, engine: &receiptMismatchFinalizer{ethash.NewFaker()}}
+	statedb, err := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer statedb.StopPrefetcher()
+	block := types.NewBlockWithHeader(&types.Header{Number: big.NewInt(1), Difficulty: big.NewInt(1), BaseFee: big.NewInt(1), GasLimit: 30_000_000})
+	result, err := NewV2StateProcessor(chain, nil, 1).Process(block, statedb, vm.Config{}, nil, t.Context())
+	if result != nil || !errors.Is(err, ErrStateSyncMismatch) || errors.Is(err, ErrStateSyncProcessing) {
+		t.Fatalf("receipt mismatch was not rejected as invalid data: result=%v err=%v", result, err)
 	}
 }

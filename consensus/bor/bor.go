@@ -385,7 +385,7 @@ func New(
 		common.Address{},
 		func(_ accounts.Account, _ string, i []byte) ([]byte, error) {
 			// return an error to prevent panics
-			return nil, &UnauthorizedSignerError{0, common.Address{}.Bytes(), []*valset.Validator{}}
+			return nil, &UnauthorizedSignerError{Number: 0, Signer: common.Address{}.Bytes(), AllowedSigners: []*valset.Validator{}}
 		},
 	})
 
@@ -856,7 +856,7 @@ func (c *Bor) getVeBlopSnapshot(chain consensus.ChainHeaderReader, targetHeader 
 		}
 	}
 
-	span, err := c.spanStore.spanByBlockNumber(c.ctx, number)
+	span, settled, err := c.spanStore.settledSpanByBlockNumber(c.ctx, number)
 	if err != nil {
 		return nil, err
 	}
@@ -873,6 +873,7 @@ func (c *Bor) getVeBlopSnapshot(chain consensus.ChainHeaderReader, targetHeader 
 	sort.Sort(sortedProducers)
 
 	snap := newSnapshot(c.chainConfig, c.signatures, number, targetHeader.Hash(), sortedProducers)
+	snap.spanUnsettled = !settled
 
 	c.recents.Set(snap.Hash, snap, ttlcache.DefaultTTL)
 	return snap, nil
@@ -979,7 +980,7 @@ func (c *Bor) verifySeal(chain consensus.ChainHeaderReader, header *types.Header
 
 	if !snap.ValidatorSet.HasAddress(signer) && !snap.isAllowedByValidatorSetOverride(signer, header.Number.Uint64()) {
 		// Check the UnauthorizedSignerError.Error() msg to see why we pass number-1
-		return &UnauthorizedSignerError{number, signer.Bytes(), snap.ValidatorSet.Validators}
+		return &UnauthorizedSignerError{Number: number, Signer: signer.Bytes(), AllowedSigners: snap.ValidatorSet.Validators, spanUnsettled: snap.spanUnsettled}
 	}
 
 	succession, err := snap.GetSignerSuccessionNumber(signer)
@@ -1630,7 +1631,7 @@ func (c *Bor) SealWithStopHook(chain consensus.ChainHeaderReader, block *types.B
 	// Bail out if we're unauthorized to sign a block
 	if !snap.ValidatorSet.HasAddress(currentSigner.signer) && !snap.isAllowedByValidatorSetOverride(currentSigner.signer, header.Number.Uint64()) {
 		// Check the UnauthorizedSignerError.Error() msg to see why we pass number-1
-		return &UnauthorizedSignerError{number, currentSigner.signer.Bytes(), snap.ValidatorSet.Validators}
+		return &UnauthorizedSignerError{Number: number, Signer: currentSigner.signer.Bytes(), AllowedSigners: snap.ValidatorSet.Validators}
 	}
 
 	successionNumber, err := snap.GetSignerSuccessionNumber(currentSigner.signer)
@@ -2283,6 +2284,20 @@ func (c *Bor) SetHeimdallClient(h IHeimdallClient) {
 	c.HeimdallClient = h
 	// Update the heimdall client in span store
 	c.spanStore.setHeimdallClient(h)
+}
+
+// authorizationRefreshTimeout bounds the latest-span fetch behind
+// RefreshAuthorization.
+const authorizationRefreshTimeout = 5 * time.Second
+
+// RefreshAuthorization fetches the latest span now, so the next verification
+// judges signers against what Heimdall holds rather than the poll loop's last
+// view, which can predate a span committed since.
+func (c *Bor) RefreshAuthorization() error {
+	ctx, cancel := context.WithTimeout(c.ctx, authorizationRefreshTimeout)
+	defer cancel()
+
+	return c.spanStore.updateLatestSpan(ctx)
 }
 
 // PurgeCache clears all cached snapshots and span data. This is useful in tests

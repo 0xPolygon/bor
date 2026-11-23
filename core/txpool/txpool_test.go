@@ -185,3 +185,75 @@ func TestSetSpeculativeState(t *testing.T) {
 		t.Fatal("speculative state was not forwarded to supporting subpool")
 	}
 }
+
+type attemptTestSubPool struct {
+	SubPool
+	txs      []*types.Transaction
+	callback func([]common.Hash)
+}
+
+func (p *attemptTestSubPool) RebroadcastAttempt(txs []*types.Transaction) func([]common.Hash) {
+	p.txs = txs
+	return p.callback
+}
+
+func TestRebroadcastAttemptWithoutCallbacks(t *testing.T) {
+	var absent *TxPool
+	if callback := absent.RebroadcastAttempt(nil); callback != nil {
+		t.Fatal("nil pool returned an acknowledgement callback")
+	}
+	for _, tc := range []struct {
+		name  string
+		pools []SubPool
+	}{
+		{"empty", nil},
+		{"unsupported", []SubPool{new(plainTestSubPool)}},
+		{"nil callback", []SubPool{new(attemptTestSubPool)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pool := &TxPool{subpools: tc.pools}
+			callback := pool.RebroadcastAttempt(nil)
+			if callback == nil {
+				t.Fatal("initialized pool did not return a no-op callback")
+			}
+			callback([]common.Hash{{1}})
+		})
+	}
+}
+
+func TestRebroadcastAttemptForwardsToSubpools(t *testing.T) {
+	txs := []*types.Transaction{
+		types.NewTx(&types.LegacyTx{Nonce: 1}),
+		types.NewTx(&types.LegacyTx{Nonce: 2}),
+	}
+	var received [2][][]common.Hash
+	subpools := []*attemptTestSubPool{{}, {}}
+	for i, subpool := range subpools {
+		subpool.callback = func(hashes []common.Hash) {
+			received[i] = append(received[i], slices.Clone(hashes))
+		}
+	}
+	pool := &TxPool{subpools: []SubPool{subpools[0], new(plainTestSubPool), new(attemptTestSubPool), subpools[1]}}
+	callback := pool.RebroadcastAttempt(txs)
+	for i, subpool := range subpools {
+		if !slices.Equal(subpool.txs, txs) || len(received[i]) != 0 {
+			t.Fatal("creating acknowledgement did not preserve the batch or acknowledged prematurely")
+		}
+	}
+	if callback == nil {
+		t.Fatal("missing acknowledgement callback")
+	}
+	for _, tx := range txs {
+		callback([]common.Hash{tx.Hash()})
+	}
+	for i, batches := range received {
+		if len(batches) != len(txs) {
+			t.Fatalf("subpool %d received %d acknowledgements, want %d", i, len(batches), len(txs))
+		}
+		for j, hashes := range batches {
+			if !slices.Equal(hashes, []common.Hash{txs[j].Hash()}) {
+				t.Fatalf("subpool %d received wrong acknowledged hashes: %v", i, hashes)
+			}
+		}
+	}
+}

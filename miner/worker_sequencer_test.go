@@ -2,6 +2,7 @@ package miner
 
 import (
 	"errors"
+	"fmt"
 	"math/big"
 	"sync"
 	"sync/atomic"
@@ -119,6 +120,7 @@ func TestMutedBuildKeepsSequencerSilent(t *testing.T) {
 
 	w, b, rec := newSequencerTestWorker(t)
 	w.running.Store(true) // the hooks gate on IsRunning; no loops are started
+	w.authorizedSigner = func(*types.Header) bool { return false }
 
 	parent := b.chain.CurrentBlock()
 	number := new(big.Int).Add(parent.Number, big.NewInt(1))
@@ -155,6 +157,46 @@ func TestMutedBuildKeepsSequencerSilent(t *testing.T) {
 
 	if opens != 0 || adopted != 0 {
 		t.Fatalf("muted build touched the store: opens=%d adopted=%d", opens, adopted)
+	}
+}
+
+func TestMutedBuildAuthorizedMidBuildRebuilds(t *testing.T) {
+	cases := []struct {
+		name       string
+		authorized bool
+		want       bool
+	}{
+		{name: "signer still unauthorized", authorized: false, want: true},
+		{name: "signer authorized since build start", authorized: true, want: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w, b, _ := newSequencerTestWorker(t)
+			w.running.Store(true)
+			w.authorizedSigner = func(*types.Header) bool { return tc.authorized }
+
+			parent := b.chain.CurrentBlock()
+			header := &types.Header{
+				Number:     new(big.Int).Add(parent.Number, big.NewInt(1)),
+				ParentHash: parent.Hash(),
+				Time:       parent.Time + 1,
+				GasLimit:   parent.GasLimit,
+				BaseFee:    big.NewInt(1),
+			}
+
+			if got := w.sealBarrier(&environment{header: header, sequencerMuted: true}); got != tc.want {
+				t.Fatalf("sealBarrier = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSignerAuthorizedOutsideBor(t *testing.T) {
+	w, b, _ := newSequencerTestWorker(t)
+
+	if !w.signerAuthorized(b.chain.CurrentBlock()) {
+		t.Fatal("a non-Bor engine never restricts who seals")
 	}
 }
 
@@ -427,6 +469,65 @@ func TestAdoptedWindowSeedsBlock(t *testing.T) {
 		if block.Transactions()[i].Hash() != tx.Hash() {
 			t.Fatalf("tx %d = %s, want adopted %s", i, block.Transactions()[i].Hash(), tx.Hash())
 		}
+	}
+}
+
+// A complete window is a sealed generation being rebuilt: the block is
+// exactly its transactions, even with more waiting in the pool.
+func TestCompleteWindowSkipsPoolFill(t *testing.T) {
+	t.Parallel()
+
+	for _, complete := range []bool{true, false} {
+		t.Run(fmt.Sprintf("complete=%v", complete), func(t *testing.T) {
+			t.Parallel()
+
+			w, b, rec := newSequencerTestWorker(t)
+
+			parent := b.chain.CurrentBlock()
+			adopted := &AdoptedWindow{
+				Number:     parent.Number.Uint64() + 1,
+				Timestamp:  parent.Time + 2,
+				ParentHash: parent.Hash(),
+				GasLimit:   parent.GasLimit,
+				BaseFee:    eip1559.CalcBaseFee(b.chain.Config(), parent),
+				Txs: []*types.Transaction{
+					b.newRandomTxWithNonce(false, 0),
+					b.newRandomTxWithNonce(false, 1),
+				},
+				Complete: complete,
+			}
+
+			for n := uint64(0); n < 4; n++ {
+				b.txPool.Add([]*types.Transaction{b.newRandomTxWithNonce(false, n)}, true)
+			}
+
+			rec.mu.Lock()
+			rec.adoptable = adopted
+			rec.mu.Unlock()
+
+			b.setMilestone(parent.Number.Uint64(), parent.Hash())
+			w.noempty.Store(true)
+
+			w.start()
+			defer w.stop()
+
+			var block *types.Block
+
+			waitFor(t, 10*time.Second, func() bool {
+				block = b.chain.GetBlockByNumber(adopted.Number)
+
+				return block != nil
+			})
+
+			want := 4
+			if complete {
+				want = 2
+			}
+
+			if got := len(block.Transactions()); got != want {
+				t.Fatalf("sealed %d txs, want %d", got, want)
+			}
+		})
 	}
 }
 

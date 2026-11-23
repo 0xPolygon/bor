@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -168,5 +169,136 @@ func TestPeerJailReclaimsExpiredCapacity(t *testing.T) {
 				t.Fatal("replacement did not use reclaimed capacity")
 			}
 		})
+	}
+}
+
+func TestPeerIdleOperatorOverride(t *testing.T) {
+	for _, trusted := range []bool{false, true} {
+		t.Run(fmt.Sprintf("trusted=%v", trusted), func(t *testing.T) {
+			srv, peers, clock := activityTestServer(t, 15, 15)
+			srv.PrivateKey, srv.NoDial, srv.NoDiscovery = newkey(), true, true
+			srv.PeerIdleReconnectCooldown = 24 * time.Hour
+			if err := srv.Start(); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(srv.Stop)
+			peer := peers[uintID(1)]
+			peer.rw.set(trustedConn, false)
+			clock.Run(peerIdleTimeout)
+			srv.doPeerOp(func(map[enode.ID]*Peer) { srv.expireIdlePeer(peers) })
+			if !srv.peerJail.IsJailed(peer.ID()) {
+				t.Fatal("silent peer was not placed in cooldown")
+			}
+			node := newNode(peer.ID(), "127.0.0.1:30303")
+			if trusted {
+				srv.AddTrustedPeer(node)
+			} else {
+				srv.AddPeer(node)
+			}
+			srv.doPeerOp(func(map[enode.ID]*Peer) {})
+			if srv.peerJail.IsJailed(peer.ID()) {
+				t.Fatal("operator peering did not clear the idle cooldown")
+			}
+			dial := &dialScheduler{dialConfig: dialConfig{jailedUntil: srv.peerJail.JailedUntil}}
+			if err := dial.checkDial(node); err != nil {
+				t.Fatalf("manual outbound dial: %v", err)
+			}
+			if err := srv.postHandshakeChecks(nil, 0, &conn{node: node, flags: inboundConn}); err != nil {
+				t.Fatalf("manual inbound connection: %v", err)
+			}
+		})
+	}
+}
+
+func TestPeerJailIdleOverlap(t *testing.T) {
+	for _, tc := range []struct {
+		name                   string
+		idle, penalty, elapsed time.Duration
+	}{
+		{"idle-only", 24 * time.Hour, 0, 0},
+		{"penalty-only", 0, time.Hour, 0},
+		{"longer-idle", 24 * time.Hour, time.Hour, 0},
+		{"longer-penalty", time.Minute, time.Hour, 0},
+		{"expired-penalty", 24 * time.Hour, time.Minute, 2 * time.Minute},
+		{"expired-idle", time.Minute, time.Hour, 2 * time.Minute},
+		{"boundary", 24 * time.Hour, time.Minute, time.Minute},
+		{"unknown", 0, 0, 0},
+	} {
+		for _, idleFirst := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/idle-first=%v", tc.name, idleFirst), func(t *testing.T) {
+				clock := new(mclock.Simulated)
+				jail := newPeerJail(time.Minute, clock)
+				id := enode.ID{1}
+				if idleFirst && tc.idle > 0 {
+					jail.cooldownPeer(id, tc.idle)
+				}
+				if tc.penalty > 0 {
+					jail.JailPeerFor(id, tc.penalty)
+				}
+				if !idleFirst && tc.idle > 0 {
+					jail.cooldownPeer(id, tc.idle)
+				}
+				until, jailed := jail.JailedUntil(id)
+				if until != mclock.AbsTime(max(tc.idle, tc.penalty)) || jailed != (tc.idle > 0 || tc.penalty > 0) {
+					t.Fatalf("combined expiry=%v jailed=%v", until, jailed)
+				}
+				clock.Run(tc.elapsed)
+				jail.clearIdleCooldown(id)
+				until, jailed = jail.JailedUntil(id)
+				want := tc.penalty > 0 && tc.elapsed <= tc.penalty
+				if jailed != want || (want && until != mclock.AbsTime(tc.penalty)) {
+					t.Fatalf("remaining expiry=%v jailed=%v want penalty=%v", until, jailed, tc.penalty)
+				}
+			})
+		}
+	}
+}
+
+func TestPeerJailConcurrentIdleOverride(t *testing.T) {
+	jail := newPeerJail(time.Hour, new(mclock.Simulated))
+	id := enode.ID{1}
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for range 1000 {
+			jail.JailPeer(id)
+		}
+	})
+	wg.Go(func() {
+		for range 1000 {
+			jail.cooldownPeer(id, 24*time.Hour)
+			jail.JailedUntil(id)
+		}
+	})
+	for range 1000 {
+		jail.clearIdleCooldown(id)
+	}
+	wg.Wait()
+	jail.clearIdleCooldown(id)
+	if until, jailed := jail.JailedUntil(id); !jailed || until != mclock.AbsTime(time.Hour) {
+		t.Fatalf("operator override erased or extended the penalty: until=%v jailed=%v", until, jailed)
+	}
+}
+
+func TestPeerJailIdleCapacity(t *testing.T) {
+	clock := new(mclock.Simulated)
+	jail := newPeerJail(time.Minute, clock)
+	for i := range maxPeerJailEntries {
+		jail.cooldownPeer(uintID(uint16(i)), time.Hour)
+	}
+	jail.JailPeer(uintID(0))
+	jail.clearIdleCooldown(uintID(0))
+	jail.cooldownPeer(uintID(maxPeerJailEntries), 24*time.Hour)
+	if len(jail.jailed) != maxPeerJailEntries || jail.IsJailed(uintID(0)) {
+		t.Fatal("mixed jail did not evict the earliest expiry at capacity")
+	}
+	jail.cooldownPeer(uintID(1), 24*time.Hour)
+	jail.cooldownPeer(uintID(1), time.Minute)
+	if until, jailed := jail.JailedUntil(uintID(1)); !jailed || until != mclock.AbsTime(24*time.Hour) {
+		t.Fatalf("shortened repeated cooldown: until=%v jailed=%v", until, jailed)
+	}
+	clock.Run(time.Hour + time.Nanosecond)
+	jail.cooldownPeer(uintID(maxPeerJailEntries+1), time.Minute)
+	if len(jail.jailed) != 3 {
+		t.Fatalf("expired idle entries retained: %d", len(jail.jailed))
 	}
 }

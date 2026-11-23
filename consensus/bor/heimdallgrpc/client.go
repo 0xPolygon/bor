@@ -33,6 +33,7 @@ const (
 
 type HeimdallGRPCClient struct {
 	conn                  *grpc.ClientConn
+	timeout               time.Duration
 	client                *heimdall.HeimdallClient
 	borQueryClient        borTypes.QueryClient
 	checkpointQueryClient checkpointTypes.QueryClient
@@ -142,8 +143,16 @@ func NewHeimdallGRPCClient(grpcAddress string, heimdallURL string, timeout time.
 
 	log.Info("Connected to Heimdall gRPC server", "grpcAddress", grpcAddress, "dialAddr", addr)
 
+	// Bound each request by --bor.heimdalltimeout, falling back to the
+	// default when it is unset.
+	requestTimeout := timeout
+	if requestTimeout <= 0 {
+		requestTimeout = defaultTimeout
+	}
+
 	return &HeimdallGRPCClient{
 		conn:                  conn,
+		timeout:               requestTimeout,
 		client:                heimdall.NewHeimdallClient(heimdallURL, timeout),
 		borQueryClient:        borTypes.NewQueryClient(conn),
 		checkpointQueryClient: checkpointTypes.NewQueryClient(conn),

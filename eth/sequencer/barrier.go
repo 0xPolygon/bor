@@ -2,6 +2,7 @@ package sequencer
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -58,9 +59,18 @@ func (p *Publisher) AwaitSequenced(timeout time.Duration, number uint64, txs []*
 		sticky := p.hold.kind == holdSticky
 		catchingUp := p.pendingFrom != 0
 		muted := p.mode.mutedAt(number)
+		recovering := p.mode.recoveringAt(number)
 		p.mu.Unlock()
 
 		switch {
+		case recovering:
+			if !p.recoveredExactly(number, txs) {
+				continue // now the over-sealed fallback, which the muted case passes
+			}
+
+			coverageSkip(number, "rebuilding the store's sealed generation")
+
+			return true
 		case muted:
 			// The build-start read already resolved this height (sealed
 			// ground, or a window on a displaced parent) and silenced the
@@ -115,6 +125,39 @@ func (p *Publisher) AwaitSequenced(timeout time.Duration, number uint64, txs []*
 
 		time.Sleep(2 * time.Millisecond)
 	}
+}
+
+// recoveredExactly reports whether a recovery build carries the store's
+// sealed generation exactly. One that does not (a transaction failed to
+// apply, or the worker declined the window and filled from the pool) seals
+// content the store's seal does not describe, so it is no recovery: it
+// becomes the over-sealed fallback, whose seal flush and gate account for
+// that block instead of the recovery's silent broadcast.
+func (p *Publisher) recoveredExactly(number uint64, txs []*types.Transaction) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	return p.recoveredExactlyLocked(number, txs)
+}
+
+func (p *Publisher) recoveredExactlyLocked(number uint64, txs []*types.Transaction) bool {
+	got := txHashes(streamTxs(txs))
+
+	if !p.mode.recoveringAt(number) {
+		return false
+	}
+
+	if slices.Equal(p.mode.txs, got) {
+		return true
+	}
+
+	publishRecoverInexact.Inc(1)
+	log.Warn("Recovery build does not carry the store's sealed generation, sealing it as over-sealed",
+		"number", number, "sealed", len(p.mode.txs), "block", len(got))
+
+	p.mode = buildMode{kind: modeOverSealed, height: number}
+
+	return false
 }
 
 // sealedThroughParent reports the clean-boundary proof: nothing stands in
@@ -247,6 +290,10 @@ func (p *Publisher) sealMirror(height uint64, txs []*types.Transaction) bool {
 		return true
 	}
 
+	if ours, behind := p.behindOurOpen(info, height); behind {
+		return p.mirrorVerdict(height, ours, txs, len(ours))
+	}
+
 	// The store holds content this block does not — a record extension of
 	// our window, or a generation we have not absorbed. Either way the
 	// answer is the same: adopt the store's sequence and rebuild on it.
@@ -262,6 +309,37 @@ func (p *Publisher) sealMirror(height uint64, txs []*types.Transaction) bool {
 		"number", height, "ours", ours, "storeWindow", len(info.window))
 
 	return false
+}
+
+// behindOurOpen returns the journal's window at this height when the read
+// never reached our acked head and the store has acked our open here. A
+// gateway applies an entry a little after the ingress acks it, so such a
+// read shows the store's past, and what it could not explain may be our own
+// open, applied midway through it: refusing on that cost a producer close
+// to the store, sealing as soon as its open acked, a rebuild and a late
+// block. An acked open landed on the store's head, so nothing short of it
+// is content we have not folded, and the window at this height is the
+// journal's.
+func (p *Publisher) behindOurOpen(info tailInfo, height uint64) ([]common.Hash, bool) {
+	if info.anchored {
+		return nil, false
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	start := p.journal.openStart()
+	if start < 0 {
+		return nil, false
+	}
+
+	if open := p.journal.items[start]; open.height != height || open.seq > p.ackedSeq {
+		return nil, false
+	}
+
+	publishLaggingRead.Inc(1)
+
+	return p.journalWindowLocked(height), true
 }
 
 // journalMirror compares the block against this publisher's own published

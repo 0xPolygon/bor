@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/bor/clerk"
 	"github.com/ethereum/go-ethereum/consensus/bor/valset"
 )
@@ -56,6 +57,8 @@ func (e *BlockTooSoonError) Error() string {
 type UnauthorizedProposerError struct {
 	Number   uint64
 	Proposer []byte
+
+	spanUnsettled bool // the producer set may come from an older span standing in for a newer one
 }
 
 func (e *UnauthorizedProposerError) Error() string {
@@ -66,11 +69,19 @@ func (e *UnauthorizedProposerError) Error() string {
 	)
 }
 
+// Is makes the error match consensus.ErrUnauthorizedSigner for callers that
+// cannot import this package, unless it rests on an unsettled span.
+func (e *UnauthorizedProposerError) Is(target error) bool {
+	return target == consensus.ErrUnauthorizedSigner && !e.spanUnsettled
+}
+
 // UnauthorizedSignerError is returned if a header is [being] signed by an unauthorized entity.
 type UnauthorizedSignerError struct {
 	Number         uint64
 	Signer         []byte
 	AllowedSigners []*valset.Validator
+
+	spanUnsettled bool // AllowedSigners may come from an older span standing in for a newer one
 }
 
 func (e *UnauthorizedSignerError) Error() string {
@@ -80,6 +91,13 @@ func (e *UnauthorizedSignerError) Error() string {
 		e.Number,
 		e.AllowedSigners,
 	)
+}
+
+// Is makes the error match consensus.ErrUnauthorizedSigner for callers that
+// cannot import this package, unless it rests on an unsettled span: the signer
+// may belong to a newer span Heimdall failed to return.
+func (e *UnauthorizedSignerError) Is(target error) bool {
+	return target == consensus.ErrUnauthorizedSigner && !e.spanUnsettled
 }
 
 // WrongDifficultyError is returned if the difficulty of a block doesn't match the

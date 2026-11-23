@@ -30,6 +30,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/checkpoint"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/state/snapshot"
@@ -42,6 +43,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/triedb"
 )
 
@@ -109,6 +111,9 @@ type headerTask struct {
 }
 
 type Downloader struct {
+	failureObserver         func(string)
+	invalidResponseObserver func(string)
+
 	mode atomic.Uint32  // Synchronisation mode defining the strategy used (per sync cycle), use d.getMode() to get the SyncMode
 	mux  *event.TypeMux // Event multiplexer to announce sync operation events
 
@@ -993,6 +998,8 @@ func (d *Downloader) fetchHead(p *peerConnection) (head *types.Header, pivot *ty
 		return nil, nil, err
 	}
 	// Make sure the peer gave us at least one and at most the requested headers
+	d.observeExcessHeaders(p.id, len(headers), fetch)
+
 	if len(headers) == 0 || len(headers) > fetch {
 		return nil, nil, fmt.Errorf("%w: returned headers %d != requested %d", errBadPeer, len(headers), fetch)
 	}
@@ -1013,6 +1020,7 @@ func (d *Downloader) fetchHead(p *peerConnection) (head *types.Header, pivot *ty
 	// validated head of the chain. Check the pivot number and return,
 	pivot = headers[1]
 	if pivot.Number.Uint64() != head.Number.Uint64()-uint64(fsMinFullBlocks) {
+		d.observeInvalidResponse(p.id, "pivot_number")
 		return nil, nil, fmt.Errorf("%w: remote pivot %d != requested %d", errInvalidChain, pivot.Number, head.Number.Uint64()-uint64(fsMinFullBlocks))
 	}
 
@@ -1207,6 +1215,8 @@ func (d *Downloader) findAncestorStatelessSearch(p *peerConnection, remoteHeight
 			expectNumber := from + int64(i)
 			if number := header.Number.Int64(); number != expectNumber {
 				p.log.Warn("Head headers broke chain ordering", "index", i, "requested", expectNumber, "received", number)
+				d.observeInvalidResponse(p.id, "header_ordering")
+
 				return 0, fmt.Errorf("%w: %v", errInvalidChain, errors.New("head headers broke chain ordering"))
 			}
 		}
@@ -1251,6 +1261,8 @@ func (d *Downloader) findAncestorSpanSearch(p *peerConnection, mode SyncMode, re
 		expectNumber := from + int64(i)*int64(skip+1)
 		if number := header.Number.Int64(); number != expectNumber {
 			p.log.Warn("Head headers broke chain ordering", "index", i, "requested", expectNumber, "received", number)
+			d.observeInvalidResponse(p.id, "header_ordering")
+
 			return 0, fmt.Errorf("%w: %v", errInvalidChain, errors.New("head headers broke chain ordering"))
 		}
 	}
@@ -1317,6 +1329,8 @@ func (d *Downloader) findAncestorBinarySearch(p *peerConnection, mode SyncMode, 
 		// Make sure the peer actually gave something valid
 		if len(headers) != 1 {
 			p.log.Warn("Multiple headers for single request", "headers", len(headers))
+			d.observeExcessHeaders(p.id, len(headers), 1)
+
 			return 0, fmt.Errorf("%w: multiple headers (%d) for single request", errBadPeer, len(headers))
 		}
 		// Modify the search interval based on the response
@@ -1342,6 +1356,8 @@ func (d *Downloader) findAncestorBinarySearch(p *peerConnection, mode SyncMode, 
 		header := d.lightchain.GetHeaderByHash(h) // Independent of sync mode, header surely exists
 		if header.Number.Uint64() != check {
 			p.log.Warn("Received non requested header", "number", header.Number, "hash", header.Hash(), "request", check)
+			d.observeInvalidResponse(p.id, "header_number")
+
 			return 0, fmt.Errorf("%w: non-requested header (%d)", errBadPeer, header.Number)
 		}
 
@@ -1376,6 +1392,8 @@ func (d *Downloader) fetchHeaders(p *peerConnection, from uint64, head uint64) e
 		skeleton = true  // Skeleton assembly phase or finishing up
 		pivoting = false // Whether the next request is pivot verification
 		ancestor = from
+		// Keep request-time provenance if the local pivot moves during the fetch.
+		requestPivot uint64
 	)
 
 	for {
@@ -1394,6 +1412,8 @@ func (d *Downloader) fetchHeaders(p *peerConnection, from uint64, head uint64) e
 			d.pivotLock.RLock()
 			pivot := d.pivotHeader.Number.Uint64()
 			d.pivotLock.RUnlock()
+
+			requestPivot = pivot
 
 			p.log.Trace("Fetching next pivot header", "number", pivot+uint64(fsMinFullBlocks))
 			headers, hashes, err = d.fetchHeadersByNumber(p, pivot+uint64(fsMinFullBlocks), 2, fsMinFullBlocks-9, false) // move +64 when it's 2x64-8 deep
@@ -1449,14 +1469,8 @@ func (d *Downloader) fetchHeaders(p *peerConnection, from uint64, head uint64) e
 
 		if pivoting {
 			if len(headers) == 2 {
-				if have, want := headers[0].Number.Uint64(), pivot+uint64(fsMinFullBlocks); have != want {
-					log.Warn("Peer sent invalid next pivot", "have", have, "want", want)
-					return fmt.Errorf("%w: next pivot number %d != requested %d", errInvalidChain, have, want)
-				}
-
-				if have, want := headers[1].Number.Uint64(), pivot+2*uint64(fsMinFullBlocks)-8; have != want {
-					log.Warn("Peer sent invalid pivot confirmer", "have", have, "want", want)
-					return fmt.Errorf("%w: next pivot confirmer number %d != requested %d", errInvalidChain, have, want)
+				if err := d.verifyNextPivot(p, headers, requestPivot, pivot); err != nil {
+					return err
 				}
 
 				log.Warn("Pivot seemingly stale, moving", "old", pivot, "new", headers[0].Number)
@@ -2007,6 +2021,15 @@ func (d *Downloader) processSnapSyncContent(processResults bool) error {
 				return errCanceled
 			default:
 			}
+			if oldPivot == nil {
+				// Queue closed before a pivot block was held. A real state-sync
+				// failure closed it via closeOnErr; a bare shutdown is cancellation
+				// so spawnSync can still report the fetcher error.
+				if err := sync.Cancel(); err != nil && !isSyncCancellation(err) {
+					return err
+				}
+				return errCanceled
+			}
 		}
 
 		if d.chainInsertHook != nil {
@@ -2412,10 +2435,23 @@ func (d *Downloader) importBlockResultsStateless(results []*fetchResult) error {
 		default:
 		}
 		log.Warn("Stateless block import failed", "index", index, "hash", blocks[index].Hash(), "err", err)
+		if errors.Is(err, core.ErrStateSyncProcessing) && !witnessCausedStatelessFailure(err) {
+			return err
+		}
 		return errInvalidBody
 	}
 
 	return nil
+}
+
+func witnessCausedStatelessFailure(err error) bool {
+	var missingCode *state.MissingCodeError
+	if errors.As(err, &missingCode) {
+		return false
+	}
+	var missingNode *trie.MissingNodeError
+
+	return errors.As(err, &missingNode) || errors.Is(err, stateless.ErrInvalidWitness)
 }
 
 // insertStatelessWithHeal imports the batch and, on a recoverable missing-code

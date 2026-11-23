@@ -106,9 +106,10 @@ func MakeProtocols(backend Backend, network uint64, disc enode.Iterator) []p2p.P
 	protocols := make([]p2p.Protocol, 0, len(ProtocolVersions))
 	for _, version := range ProtocolVersions {
 		protocols = append(protocols, p2p.Protocol{
-			Name:    ProtocolName,
-			Version: version,
-			Length:  protocolLengths[version],
+			Name:          ProtocolName,
+			Version:       version,
+			Length:        protocolLengths[version],
+			CanContribute: canContribute,
 			Run: func(p *p2p.Peer, rw p2p.MsgReadWriter) error {
 				peer := NewPeer(version, p, rw, backend.TxPool())
 				defer peer.Close()
@@ -217,14 +218,17 @@ func handleMessage(backend Backend, peer *Peer) error {
 	}
 	if msg.Code == NewBlockHashesMsg {
 		if err := peer.checkMessageRate(msg.Code, msg.Size, time.Now()); err != nil {
+			peer.observeRateLimit(msg)
 			return err
 		}
 	}
 	if uint64(msg.Size) > maxSize {
+		peer.observeFraming(msg)
 		return fmt.Errorf("%w: %v > %v", errMsgTooLarge, msg.Size, maxSize)
 	}
 	if msg.Code != NewBlockHashesMsg {
 		if err := peer.checkMessageRate(msg.Code, msg.Size, time.Now()); err != nil {
+			peer.observeRateLimit(msg)
 			return err
 		}
 	}
@@ -252,7 +256,8 @@ func handleMessage(backend Backend, peer *Peer) error {
 		}(time.Now())
 	}
 	if handler := handlers[msg.Code]; handler != nil {
-		return handler(backend, msg, peer)
+		return peer.handleObserved(backend, msg, handler)
 	}
+	peer.observeFraming(msg)
 	return fmt.Errorf("%w: %v", errInvalidMsgCode, msg.Code)
 }
