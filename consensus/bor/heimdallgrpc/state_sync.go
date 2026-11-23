@@ -17,6 +17,7 @@ import (
 func (h *HeimdallGRPCClient) StateSyncEvents(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
 	log.Info("Fetching state sync events", "fromID", fromID, "to", to)
 
+	callerCtx := ctx
 	var err error
 
 	// Start the timer and set the request type on the context.
@@ -45,7 +46,7 @@ func (h *HeimdallGRPCClient) StateSyncEvents(ctx context.Context, fromID uint64,
 	res, err = h.clerkQueryClient.GetRecordListWithTime(pageCtx, req)
 	pageCancel()
 	if err != nil {
-		return nil, err
+		return nil, callerCancellation(callerCtx, err)
 	}
 
 	events := res.GetEventRecords()

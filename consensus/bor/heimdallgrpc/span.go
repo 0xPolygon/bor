@@ -14,6 +14,7 @@ import (
 func (h *HeimdallGRPCClient) GetSpan(ctx context.Context, spanID uint64) (*types.Span, error) {
 	log.Info("Fetching span", "spanID", spanID)
 
+	callerCtx := ctx
 	var err error
 
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, h.timeout)
@@ -34,7 +35,7 @@ func (h *HeimdallGRPCClient) GetSpan(ctx context.Context, spanID uint64) (*types
 
 	res, err := h.borQueryClient.GetSpanById(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, callerCancellation(callerCtx, err)
 	}
 
 	resSpan := res.GetSpan()
@@ -47,6 +48,7 @@ func (h *HeimdallGRPCClient) GetSpan(ctx context.Context, spanID uint64) (*types
 func (h *HeimdallGRPCClient) GetLatestSpan(ctx context.Context) (*types.Span, error) {
 	log.Info("Fetching latest span")
 
+	callerCtx := ctx
 	var err error
 
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, h.timeout)
@@ -65,7 +67,7 @@ func (h *HeimdallGRPCClient) GetLatestSpan(ctx context.Context) (*types.Span, er
 
 	res, err := h.borQueryClient.GetLatestSpan(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, callerCancellation(callerCtx, err)
 	}
 
 	resSpan := res.GetSpan()

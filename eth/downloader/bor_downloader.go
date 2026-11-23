@@ -425,7 +425,10 @@ func (d *Downloader) LegacySync(id string, head common.Hash, td, ttd *big.Int, m
 		return err
 	}
 
-	if errors.Is(err, ErrPeerBackedOff) || isSyncCancellation(err) || errors.Is(err, consensus.ErrEngineStopped) {
+	if errors.Is(err, ErrPeerBackedOff) ||
+		isSyncCancellation(err) ||
+		errors.Is(err, consensus.ErrEngineStopped) ||
+		errors.Is(err, core.ErrInsertionInterrupted) {
 		return err
 	}
 
@@ -1668,10 +1671,14 @@ func (d *Downloader) fetchReceipts(from uint64, beaconMode bool) error {
 }
 
 func invalidHeaderChainError(headers []*types.Header, hashes []common.Hash, index int, err error) error {
-	if !errors.Is(err, consensus.ErrEngineStopped) {
+	localInterruption := errors.Is(err, consensus.ErrEngineStopped) || errors.Is(err, core.ErrInsertionInterrupted)
+	if !localInterruption {
 		log.Warn("Invalid header encountered", "number", headers[index].Number, "hash", hashes[index], "parent", headers[index].ParentHash, "err", err)
 	}
-	return fmt.Errorf("%w: %w", errInvalidChain, err)
+	if localInterruption {
+		return fmt.Errorf("%w: %w", errInvalidChain, err)
+	}
+	return fmt.Errorf("%w: %v", errInvalidChain, err)
 }
 
 // processHeaders takes batches of retrieved headers from an input channel and

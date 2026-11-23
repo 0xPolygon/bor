@@ -281,7 +281,10 @@ var (
 	// Apples-to-apples A/B metric between modes.
 	witnessReadyEndToEndTimer = metrics.NewRegisteredTimer("chain/imports/witness_ready_end_to_end", nil)
 
-	errInsertionInterrupted = errors.New("insertion is interrupted")
+	// ErrInsertionInterrupted identifies a locally aborted chain insertion. It
+	// does not identify invalid peer data or a consensus-engine shutdown.
+	ErrInsertionInterrupted = errors.New("insertion is interrupted")
+	errInsertionInterrupted = ErrInsertionInterrupted
 	errChainStopped         = errors.New("blockchain is stopped")
 	errRewindRefused        = errors.New("rewind refused by its guard")
 	errInvalidOldChain      = errors.New("invalid old chain")
