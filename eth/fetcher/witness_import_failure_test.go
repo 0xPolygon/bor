@@ -265,10 +265,18 @@ func TestChargeDivergedWitnessImportFailureIgnoresNonWitnessErrors(t *testing.T)
 // errors that wrap nothing the witness carries — is not.
 func TestIsWitnessAttributableImportError(t *testing.T) {
 	forgedPreState, parentMissing := preStateValidationErrors(t)
+	missingAncestor := fmt.Errorf("%w: %w: ancestor 0", core.ErrStatelessIncompleteState, core.ErrStatelessMissingAncestor)
+	if !isWitnessFaultImportError(missingAncestor) {
+		t.Fatalf("%v is decided by the witness bytes and must strike the server", missingAncestor)
+	}
+	if isWitnessFaultImportError(core.ErrStatelessIncompleteState) {
+		t.Fatal("the incomplete-state sentinel alone must not strike the server")
+	}
 	attributable := []error{
 		fmt.Errorf("witness validation failed: %w", forgedPreState), // forged parent root, as core.ProcessBlockWithWitnesses wraps it
 		&trie.MissingNodeError{NodeHash: common.HexToHash("0x01"), Path: []byte{0x1}},
 		fmt.Errorf("%w: %w", core.ErrStatelessIncompleteState, &trie.MissingNodeError{NodeHash: common.HexToHash("0x02")}), // incomplete witness
+		missingAncestor,
 		core.ErrStatelessStateRootMismatch,
 		fmt.Errorf("%w (remote: 1 local: 2)", core.ErrGasUsedMismatch),
 		fmt.Errorf("%w (remote: 0a local: 0b)", core.ErrReceiptRootMismatch),

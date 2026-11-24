@@ -179,8 +179,17 @@ func GetHashFn(ref *types.Header, chain ChainContext) func(n uint64) common.Hash
 			}
 		}
 
+		if r, ok := chain.(missingAncestorReporter); ok {
+			r.reportMissingAncestor(n)
+		}
 		return common.Hash{}
 	}
+}
+
+// missingAncestorReporter is implemented by chains that can tell GetHashFn
+// that a missing header is an error rather than an unknown hash.
+type missingAncestorReporter interface {
+	reportMissingAncestor(number uint64)
 }
 
 // SpeculativeGetHashFn returns a GetHashFunc for use during pipelined SRC

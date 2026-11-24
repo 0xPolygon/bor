@@ -19,6 +19,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/lru"
@@ -67,11 +68,20 @@ func ExecuteStateless(config *params.ChainConfig, vmconfig vm.Config, block *typ
 		return common.Hash{}, common.Hash{}, nil, nil, err
 	}
 	// Create a blockchain that is idle, but can be used to access headers through
+	var (
+		ancestorMissing   atomic.Bool
+		missingAncestorAt atomic.Uint64
+	)
 	headerChain := &HeaderChain{
 		config:      config,
 		chainDb:     memdb,
 		headerCache: lru.NewCache[common.Hash, *types.Header](256),
 		engine:      consensus,
+		onMissingAncestor: func(number uint64) {
+			if ancestorMissing.CompareAndSwap(false, true) {
+				missingAncestorAt.Store(number)
+			}
+		},
 	}
 	processor := NewStateProcessor(headerChain)
 	validator := NewBlockValidator(config, nil) // No chain, we only validate the state, not the block
@@ -98,6 +108,15 @@ func ExecuteStateless(config *params.ChainConfig, vmconfig vm.Config, block *typ
 		log.Error("stateless execution hit incomplete state or code; rejecting block",
 			"block", block.Number(), "hash", block.Hash(), "err", dbErr, "procErr", err)
 		return common.Hash{}, common.Hash{}, db, res, fmt.Errorf("%w: %w", ErrStatelessIncompleteState, dbErr)
+	}
+	// Same reasoning for a BLOCKHASH lookup the witness headers couldn't
+	// answer: execution went on with a zero hash, so the result can't be used.
+	if ancestorMissing.Load() {
+		statelessIncompleteStateMeter.Mark(1)
+		log.Error("stateless execution needed an ancestor header the witness lacks; rejecting block",
+			"block", block.Number(), "hash", block.Hash(), "ancestor", missingAncestorAt.Load(), "procErr", err)
+		return common.Hash{}, common.Hash{}, db, res, fmt.Errorf("%w: %w: ancestor %d",
+			ErrStatelessIncompleteState, ErrStatelessMissingAncestor, missingAncestorAt.Load())
 	}
 	if err != nil {
 		return common.Hash{}, common.Hash{}, nil, nil, err

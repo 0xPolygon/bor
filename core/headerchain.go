@@ -72,6 +72,12 @@ type HeaderChain struct {
 	engine        consensus.Engine
 
 	stateSyncData []*types.StateSyncData // State sync data
+
+	// onMissingAncestor is set only for stateless execution, where the header
+	// database holds just the witness headers. There an in-range BLOCKHASH
+	// lookup that finds no header means the witness is incomplete, not that
+	// the hash is unknown, so execution must not continue with a zero hash.
+	onMissingAncestor func(number uint64)
 }
 
 // NewHeaderChain creates a new HeaderChain structure. ProcInterrupt points
@@ -787,4 +793,10 @@ func (hc *HeaderChain) SetStateSync(stateData []*types.StateSyncData) {
 
 func (hc *HeaderChain) GetStateSync() []*types.StateSyncData {
 	return hc.stateSyncData
+}
+
+func (hc *HeaderChain) reportMissingAncestor(number uint64) {
+	if hc.onMissingAncestor != nil {
+		hc.onMissingAncestor(number)
+	}
 }

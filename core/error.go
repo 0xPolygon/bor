@@ -49,6 +49,11 @@ var (
 	// explicitly so the block is rejected with its true cause instead.
 	ErrStatelessIncompleteState = errors.New("stateless execution hit incomplete state or code")
 
+	// ErrStatelessMissingAncestor indicates that a BLOCKHASH lookup inside the
+	// 256-block window needed a header the witness did not carry. It is always
+	// wrapped in ErrStatelessIncompleteState.
+	ErrStatelessMissingAncestor = errors.New("witness is missing an ancestor header")
+
 	// ErrGasUsedMismatch indicates a mismatch between locally computed
 	// gas used and the block's gas used during validation.
 	ErrGasUsedMismatch = errors.New("invalid gas used")
