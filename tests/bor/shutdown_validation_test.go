@@ -175,6 +175,7 @@ func TestRootValidationFailuresRemainBadBlocksAfterEngineCancellation(t *testing
 				records:         []*clerk.EventRecordWithTime{getSampleEventRecord(t)},
 			}
 			f.engine.SetHeimdallClient(gate)
+			defer f.engine.Close()
 
 			importDone := make(chan error, 1)
 			go func() {
