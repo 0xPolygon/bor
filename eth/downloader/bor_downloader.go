@@ -1953,8 +1953,8 @@ func (d *Downloader) importBlockResults(results []*fetchResult) error {
 			log.Debug("Downloaded item processing failed", "number", results[index].Header.Number, "hash", results[index].Header.Hash(), "firstnum", first.Number, "firsthash", first.Hash(), "lastnum", last.Number, "lasthash", last.Hash(), "err", err)
 
 			// In post-merge, notify the engine API of encountered bad chains.
-			// A proven engine shutdown abort carries no evidence of invalid peer data.
-			if !errors.Is(err, consensus.ErrEngineStopped) {
+			// Local shutdown and insertion aborts carry no evidence of invalid peer data.
+			if !errors.Is(err, consensus.ErrEngineStopped) && !errors.Is(err, core.ErrInsertionInterrupted) {
 				d.reportBadBlock(blocks[index])
 			}
 		} else {

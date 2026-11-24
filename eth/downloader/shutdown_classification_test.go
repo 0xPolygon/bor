@@ -3,21 +3,183 @@ package downloader
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 )
+
+type gatedHeaderVerifier struct {
+	consensus.Engine
+	enabled atomic.Bool
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (e *gatedHeaderVerifier) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*types.Header) (chan<- struct{}, <-chan error) {
+	if e.enabled.Load() {
+		e.once.Do(func() { close(e.entered) })
+		<-e.release
+	}
+	return e.Engine.VerifyHeaders(chain, headers)
+}
+
+func newShutdownTestSkeleton(t *testing.T, head *types.Header) *skeleton {
+	t.Helper()
+	db := rawdb.NewMemoryDatabase()
+	t.Cleanup(func() { _ = db.Close() })
+	rawdb.WriteSkeletonHeader(db, head)
+	progress, err := json.Marshal(&skeletonProgress{Subchains: []*subchain{{Head: 0, Tail: 0}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawdb.WriteSkeletonSyncStatus(db, progress)
+	return &skeleton{db: db}
+}
+
+func TestFullSyncPrunedSideChainStopInsert(t *testing.T) {
+	engine := ethash.NewFaker()
+	genesis := &core.Genesis{Config: params.AllEthashProtocolChanges, BaseFee: big.NewInt(params.InitialBaseFee)}
+	generationDB, blocks, _ := core.GenerateChainWithGenesis(genesis, engine, 2*state.TriesInMemory, nil)
+	sideBlocks, _ := core.GenerateChain(genesis.Config, blocks[4], engine, generationDB, 3, func(_ int, block *core.BlockGen) {
+		block.SetCoinbase(common.Address{1})
+	})
+	gate := &gatedHeaderVerifier{Engine: engine, entered: make(chan struct{}), release: make(chan struct{})}
+	chain, err := core.NewBlockChain(rawdb.NewMemoryDatabase(), genesis, gate, core.DefaultConfig().WithStateScheme(rawdb.HashScheme))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(chain.Stop)
+	if _, err := chain.InsertChain(blocks, false); err != nil {
+		t.Fatal(err)
+	}
+	if chain.HasBlockAndState(blocks[4].Hash(), blocks[4].NumberU64()) {
+		t.Fatal("test ancestor was not pruned")
+	}
+
+	gate.enabled.Store(true)
+	insertDone := make(chan error, 1)
+	go func() {
+		_, err := chain.InsertChain(sideBlocks, false)
+		insertDone <- err
+	}()
+	select {
+	case <-gate.entered:
+	case <-time.After(time.Second):
+		t.Fatal("sidechain import did not reach header verification")
+	}
+	chain.StopInsert()
+	close(gate.release)
+	if err := <-insertDone; !errors.Is(err, core.ErrInsertionInterrupted) {
+		t.Fatalf("pruned-sidechain interruption = %v, want %v", err, core.ErrInsertionInterrupted)
+	}
+}
+
+type insertErrorChain struct {
+	*core.BlockChain
+	insertErr    error
+	beforeReturn func()
+}
+
+func (c *insertErrorChain) InsertChain(types.Blocks, bool) (int, error) {
+	if c.beforeReturn != nil {
+		c.beforeReturn()
+	}
+	return 0, c.insertErr
+}
+
+func TestFullSyncInsertionInterruptDoesNotReportBadBlock(t *testing.T) {
+	engine := ethash.NewFaker()
+	genesis := &core.Genesis{Config: params.AllEthashProtocolChanges, BaseFee: big.NewInt(params.InitialBaseFee)}
+	_, blocks, _ := core.GenerateChainWithGenesis(genesis, engine, 1, nil)
+	chain, err := core.NewBlockChain(rawdb.NewMemoryDatabase(), genesis, engine, core.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(chain.Stop)
+	reported := make(chan *types.Header, 1)
+	d := &Downloader{
+		blockchain: &insertErrorChain{BlockChain: chain, insertErr: core.ErrInsertionInterrupted},
+		quitCh:     make(chan struct{}),
+		skeleton:   newShutdownTestSkeleton(t, chain.CurrentBlock()),
+		badBlock:   func(invalid *types.Header, _ *types.Header) { reported <- invalid },
+	}
+	err = d.importBlockResults(fetchResultsFor(blocks))
+	if !errors.Is(err, core.ErrInsertionInterrupted) || !errors.Is(err, errInvalidChain) {
+		t.Fatalf("unexpected import error: %v", err)
+	}
+	select {
+	case header := <-reported:
+		t.Fatalf("local insertion interruption reported block %d as BAD BLOCK", header.Number)
+	default:
+	}
+}
+
+func TestFullSyncInvalidDataReportsDuringShutdown(t *testing.T) {
+	engine := ethash.NewFaker()
+	genesis := &core.Genesis{Config: params.AllEthashProtocolChanges, BaseFee: big.NewInt(params.InitialBaseFee)}
+	_, blocks, _ := core.GenerateChainWithGenesis(genesis, engine, 1, nil)
+	chain, err := core.NewBlockChain(rawdb.NewMemoryDatabase(), genesis, engine, core.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(chain.Stop)
+	insertChain := &insertErrorChain{BlockChain: chain, insertErr: core.ErrReceiptRootMismatch}
+	reported := make(chan *types.Header, 1)
+	dropped := make(chan string, 1)
+	d := &Downloader{
+		blockchain: insertChain,
+		quitCh:     make(chan struct{}),
+		skeleton:   newShutdownTestSkeleton(t, chain.CurrentBlock()),
+		badBlock:   func(invalid *types.Header, _ *types.Header) { reported <- invalid },
+		peers:      newPeerSet(),
+		dropPeer:   func(id string) { dropped <- id },
+	}
+	insertChain.beforeReturn = func() { close(d.quitCh) }
+	err = d.importBlockResults(fetchResultsFor(blocks))
+	if !errors.Is(err, core.ErrReceiptRootMismatch) || !errors.Is(err, errInvalidChain) {
+		t.Fatalf("unexpected invalid-data error: %v", err)
+	}
+	select {
+	case header := <-reported:
+		if header.Hash() != blocks[0].Hash() {
+			t.Fatalf("reported wrong block %s", header.Hash())
+		}
+	default:
+		t.Fatal("genuine invalid data was not reported during shutdown")
+	}
+	peer := newPeerConnection("peer", eth.ETH69, nil, log.New())
+	if err := d.peers.Register(peer); err != nil {
+		t.Fatal(err)
+	}
+	if !d.handleSyncFailure(peer, peer.id, err) {
+		t.Fatal("genuine invalid data did not reach peer response handling")
+	}
+	select {
+	case id := <-dropped:
+		if id != peer.id {
+			t.Fatalf("dropped wrong peer %q", id)
+		}
+	default:
+		t.Fatal("genuine invalid data did not drop its supplier")
+	}
+}
 
 func TestEngineShutdownAbortHasNoPeerPenalty(t *testing.T) {
 	dropped := make(chan string, 1)
