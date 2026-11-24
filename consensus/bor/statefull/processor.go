@@ -54,6 +54,15 @@ func (c ChainContext) GetTd(hash common.Hash, number uint64) *big.Int {
 	return c.Chain.GetTd(hash, number)
 }
 
+// ReportMissingAncestor forwards to the wrapped chain, so that during stateless
+// execution a state-sync or span call whose BLOCKHASH lookup misses the witness
+// headers rejects the block like a missed lookup in a regular transaction.
+func (c ChainContext) ReportMissingAncestor(number uint64) {
+	if r, ok := c.Chain.(core.MissingAncestorReporter); ok {
+		r.ReportMissingAncestor(number)
+	}
+}
+
 // callmsg implements core.Message to allow passing it as a transaction simulator.
 type Callmsg struct {
 	ethereum.CallMsg

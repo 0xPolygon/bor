@@ -795,7 +795,8 @@ func (hc *HeaderChain) GetStateSync() []*types.StateSyncData {
 	return hc.stateSyncData
 }
 
-func (hc *HeaderChain) reportMissingAncestor(number uint64) {
+// ReportMissingAncestor implements MissingAncestorReporter.
+func (hc *HeaderChain) ReportMissingAncestor(number uint64) {
 	if hc.onMissingAncestor != nil {
 		hc.onMissingAncestor(number)
 	}
