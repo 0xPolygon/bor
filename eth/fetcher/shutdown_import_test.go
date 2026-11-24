@@ -276,6 +276,176 @@ func TestBlockFetcherStopDrainsRootChainReaders(t *testing.T) {
 	}
 }
 
+func TestBlockFetcherStopDrainsWitnessFetch(t *testing.T) {
+	f := newShutdownTestFetcher(
+		func(types.Blocks, []*stateless.Witness) (int, error) { return 0, nil },
+		func(*types.Header) error { return nil },
+		func(string) {},
+	)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	returned := make(chan struct{})
+	var releaseOnce sync.Once
+	defer func() {
+		releaseOnce.Do(func() { close(release) })
+		f.Stop()
+	}()
+
+	hash := common.Hash{0x42}
+	announce := &blockAnnounce{
+		origin: "peer",
+		hash:   hash,
+		fetchWitness: func(common.Hash, chan *ethproto.Response) (*ethproto.Request, error) {
+			close(entered)
+			<-release
+			close(returned)
+			return nil, errors.New("released by shutdown test")
+		},
+	}
+	f.wm.pending[hash] = &witnessRequestState{
+		op:       &blockOrHeaderInject{origin: "peer"},
+		announce: announce,
+	}
+	f.wm.dispatchPeerFetches("peer", map[common.Hash]*blockAnnounce{hash: announce})
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("witness request did not start")
+	}
+
+	stopped := make(chan struct{})
+	go func() {
+		f.Stop()
+		close(stopped)
+	}()
+	returnedEarly := false
+	select {
+	case <-stopped:
+		returnedEarly = true
+	case <-time.After(100 * time.Millisecond):
+	}
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		t.Fatal("witness request callback did not return")
+	}
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("fetcher Stop did not finish after callback release")
+	}
+	if returnedEarly {
+		t.Fatal("BlockFetcher.Stop returned while a witness request callback was running")
+	}
+	if f.wm.witnessTimer.Stop() {
+		t.Fatal("witness timer was rearmed after Stop")
+	}
+}
+
+func TestBlockFetcherStopRejectsWitnessFetchAdmission(t *testing.T) {
+	f := newShutdownTestFetcher(
+		func(types.Blocks, []*stateless.Witness) (int, error) { return 0, nil },
+		func(*types.Header) error { return nil },
+		func(string) {},
+	)
+	f.Stop()
+	called := make(chan struct{})
+	hash := common.Hash{0x43}
+	f.wm.dispatchPeerFetches("peer", map[common.Hash]*blockAnnounce{
+		hash: {
+			origin: "peer",
+			hash:   hash,
+			fetchWitness: func(common.Hash, chan *ethproto.Response) (*ethproto.Request, error) {
+				close(called)
+				return nil, errors.New("unexpected post-stop request")
+			},
+		},
+	})
+	select {
+	case <-called:
+		t.Fatal("witness request was admitted after Stop")
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestBlockFetcherStopCancelsWitnessRequest(t *testing.T) {
+	f := newShutdownTestFetcher(
+		func(types.Blocks, []*stateless.Witness) (int, error) { return 0, nil },
+		func(*types.Header) error { return nil },
+		func(string) {},
+	)
+	entered := make(chan struct{})
+	request := &ethproto.Request{Peer: "peer", Cancel: make(chan struct{})}
+	hash := common.Hash{0x44}
+	f.wm.dispatchPeerFetches("peer", map[common.Hash]*blockAnnounce{
+		hash: {
+			origin: "peer",
+			hash:   hash,
+			fetchWitness: func(common.Hash, chan *ethproto.Response) (*ethproto.Request, error) {
+				close(entered)
+				return request, nil
+			},
+		},
+	})
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("witness request did not start")
+	}
+	stopped := make(chan struct{})
+	go func() {
+		f.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("Stop did not cancel the dispatched witness request")
+	}
+	select {
+	case <-request.Cancel:
+	default:
+		t.Fatal("dispatched witness request was not canceled")
+	}
+}
+
+func TestBlockFetcherWitnessFetchAdmissionRace(t *testing.T) {
+	for range 100 {
+		f := newShutdownTestFetcher(
+			func(types.Blocks, []*stateless.Witness) (int, error) { return 0, nil },
+			func(*types.Header) error { return nil },
+			func(string) {},
+		)
+		var stopped atomic.Bool
+		var calledAfterStop atomic.Bool
+		hash := common.Hash{0x45}
+		announce := &blockAnnounce{
+			origin: "peer",
+			hash:   hash,
+			fetchWitness: func(common.Hash, chan *ethproto.Response) (*ethproto.Request, error) {
+				calledAfterStop.Store(stopped.Load())
+				return nil, errors.New("request complete")
+			},
+		}
+		stoppedCh := make(chan struct{})
+		go func() {
+			f.Stop()
+			stopped.Store(true)
+			close(stoppedCh)
+		}()
+		f.wm.dispatchPeerFetches("peer", map[common.Hash]*blockAnnounce{hash: announce})
+		select {
+		case <-stoppedCh:
+		case <-time.After(time.Second):
+			t.Fatal("concurrent witness dispatch deadlocked Stop")
+		}
+		if calledAfterStop.Load() {
+			t.Fatal("witness callback crossed the Stop boundary")
+		}
+	}
+}
+
 func TestBlockFetcherStopImmediatelyAfterStart(t *testing.T) {
 	for range 100 {
 		f := newShutdownTestFetcher(

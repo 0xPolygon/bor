@@ -354,6 +354,8 @@ func (f *BlockFetcher) Stop() {
 		f.loopWg.Wait()
 		f.wm.stop()
 		f.wm.workerWg.Wait()
+		f.wm.fetchWg.Wait()
+		f.wm.stop()
 		f.importWg.Wait()
 	})
 }
