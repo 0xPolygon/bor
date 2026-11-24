@@ -5,18 +5,23 @@ package bor
 import (
 	"bytes"
 	"context"
+	"math/big"
+	"net"
 	"sync"
 	"testing"
 	"time"
 
+	borTypes "github.com/0xPolygon/heimdall-v2/x/bor/types"
 	"github.com/stretchr/testify/require"
 	gomock "go.uber.org/mock/gomock"
+	"google.golang.org/grpc"
 
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/bor"
 	"github.com/ethereum/go-ethereum/consensus/bor/clerk"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall"
 	borSpan "github.com/ethereum/go-ethereum/consensus/bor/heimdall/span"
+	"github.com/ethereum/go-ethereum/consensus/bor/heimdallgrpc"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/txpool/legacypool"
@@ -118,6 +123,118 @@ func (c *blockingHeimdallClient) Close() {
 	})
 }
 
+type stalledSpanServer struct {
+	borTypes.UnimplementedQueryServer
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (s *stalledSpanServer) GetSpanById(ctx context.Context, _ *borTypes.QuerySpanByIdRequest) (*borTypes.QuerySpanByIdResponse, error) {
+	s.once.Do(func() { close(s.entered) })
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func newStalledSpanServer(t *testing.T) (string, <-chan struct{}) {
+	t.Helper()
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	server := &stalledSpanServer{entered: make(chan struct{})}
+	grpcServer := grpc.NewServer()
+	borTypes.RegisterQueryServer(grpcServer, server)
+	go func() { _ = grpcServer.Serve(listener) }()
+	t.Cleanup(grpcServer.Stop)
+	return listener.Addr().String(), server.entered
+}
+
+func TestUncachedSpanShutdownAbortDoesNotReportBadBlock(t *testing.T) {
+	var output synchronizedBuffer
+	previousLogger := log.Root()
+	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(&output, log.LevelInfo, true)))
+	defer log.SetDefault(previousLogger)
+
+	genesis := InitGenesis(t, keys, "./testdata/genesis.json", sprintSize)
+	genesis.Config.Bor.RioBlock = big.NewInt(int64(sprintSize + 1))
+	genesis.Config.Bor.StateSyncConfirmationDelay = map[string]uint64{"0": 128}
+	span0 := createMockSpan(addr, genesis.Config.ChainID.String())
+	span1 := loadSpanFromFile(t)
+	heimdallClient := createMockHeimdall(gomock.NewController(t), &span0, span1)
+	heimdallClient.EXPECT().StateSyncEvents(gomock.Any(), gomock.Any(), gomock.Any()).
+		Return([]*clerk.EventRecordWithTime{getSampleEventRecord(t)}, nil).AnyTimes()
+	stack, ethereum, err := initShutdownTestNode(t, genesis, heimdallClient)
+	require.NoError(t, err)
+	closed := false
+	defer func() {
+		if !closed {
+			_ = stack.Close()
+		}
+	}()
+
+	chain := ethereum.BlockChain()
+	engine := ethereum.Engine().(*bor.Bor)
+	validators := borSpan.ConvertHeimdallValSetToBorValSet(span0.ValidatorSet).Validators
+	workingSpanner := getMockedSpanner(t, validators)
+	engine.SetSpanner(workingSpanner)
+	parent := genesis.ToBlock()
+	signer := crypto.FromECDSA(key)
+	for number := uint64(1); number < sprintSize; number++ {
+		parent = buildNextBlock(t, engine, chain, parent, signer, genesis.Config.Bor, nil, validators, true, nil, nil)
+		insertNewBlock(t, chain, parent)
+	}
+	sprintBlock := buildNextBlock(t, engine, chain, parent, signer, genesis.Config.Bor, nil, validators, true, nil, nil)
+
+	address, entered := newStalledSpanServer(t)
+	grpcClient, err := heimdallgrpc.NewHeimdallGRPCClient(address, "http://127.0.0.1:1", 15*time.Second)
+	require.NoError(t, err)
+	defer grpcClient.Close()
+	shutdownSpanner := bor.NewMockSpanner(gomock.NewController(t))
+	shutdownSpanner.EXPECT().GetCurrentSpan(gomock.Any(), gomock.Any(), gomock.Any()).Return(&borTypes.Span{Id: 42}, nil).AnyTimes()
+	shutdownSpanner.EXPECT().GetCurrentValidatorsByHash(gomock.Any(), gomock.Any(), gomock.Any()).Return(validators, nil).AnyTimes()
+	shutdownSpanner.EXPECT().GetCurrentValidatorsByBlockNrOrHash(gomock.Any(), gomock.Any(), gomock.Any()).Return(validators, nil).AnyTimes()
+	engine.SetSpanner(shutdownSpanner)
+	engine.SetHeimdallClient(grpcClient)
+	importDone := make(chan error, 1)
+	go func() {
+		_, err := chain.InsertChain([]*types.Block{sprintBlock}, false)
+		importDone <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(15 * time.Second):
+		t.Fatal("sprint-start import did not reach GetSpan")
+	}
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- stack.Close() }()
+	select {
+	case err := <-shutdownDone:
+		require.NoError(t, err)
+		closed = true
+	case <-time.After(15 * time.Second):
+		t.Fatal("node shutdown remained blocked behind GetSpan")
+	}
+	select {
+	case err := <-importDone:
+		require.ErrorIs(t, err, consensus.ErrEngineStopped)
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(15 * time.Second):
+		t.Fatal("aborted import did not return")
+	}
+	require.NotContains(t, output.String(), "BAD BLOCK")
+	require.Equal(t, parent.Hash(), chain.CurrentBlock().Hash())
+
+	db := reopenValidationDatabase(t, stack)
+	defer db.Close()
+	require.Nil(t, rawdb.ReadBadBlock(db, sprintBlock.Hash()))
+	restartedEngine := bor.New(genesis.Config, db, nil, workingSpanner, heimdallClient, nil, engine.GenesisContractsClient, false, 0, vm.Config{})
+	defer restartedEngine.Close()
+	restartedChain, err := core.NewBlockChain(db, genesis, restartedEngine, core.DefaultConfig().WithStateScheme(rawdb.HashScheme))
+	require.NoError(t, err)
+	defer restartedChain.Stop()
+	_, err = restartedChain.InsertChain([]*types.Block{sprintBlock}, false)
+	require.NoError(t, err)
+	require.Equal(t, sprintBlock.Hash(), restartedChain.CurrentBlock().Hash())
+}
+
 // TestShutdownAbortDoesNotReportBadBlock drives a real sprint-start import into
 // StateSyncEvents, then closes the node while that call is blocked. The block
 // was built and signed with a working Heimdall client, so cancellation is the
@@ -161,6 +278,7 @@ func TestShutdownAbortDoesNotReportBadBlock(t *testing.T) {
 
 	blocked := newBlockingHeimdallClient(heimdallClient)
 	engine.SetHeimdallClient(blocked)
+	defer blocked.Close()
 	importDone := make(chan error, 1)
 	go func() {
 		_, err := chain.InsertChain([]*types.Block{sprintBlock}, false)

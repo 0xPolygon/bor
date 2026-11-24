@@ -1904,7 +1904,7 @@ func (c *Bor) checkAndCommitSpan(
 	header *types.Header,
 	chain core.ChainContext,
 ) error {
-	var ctx = context.Background()
+	ctx := c.ctx
 	headerNumber := header.Number.Uint64()
 
 	tempState := state.Inner().Copy()
