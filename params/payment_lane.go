@@ -93,10 +93,12 @@ func (c *PaymentLaneConfig) Validate() error {
 		return err
 	}
 
-	// Free payment gas behind a gate that never closes would let anyone fill
+	// A free base fee behind a gate that never closes would let anyone fill
 	// every block with payments at no cost, pushing up the base fee everyone
-	// else pays. Either the price or the gate has to bite.
-	if c.BaseFeeDiscountBps == PaymentLaneMaxBps && c.chargesNoTip() && c.ActiveGasPercentage == 100 {
+	// else pays. The tip doesn't count: nothing in consensus sets a minimum,
+	// and a producer filling its own block pays it to itself. Either the base
+	// fee or the gate has to bite.
+	if c.BaseFeeDiscountBps == PaymentLaneMaxBps && c.ActiveGasPercentage == 100 {
 		return fmt.Errorf("%w: payment gas free at any parent usage", errPaymentLaneConfig)
 	}
 
@@ -105,11 +107,6 @@ func (c *PaymentLaneConfig) Validate() error {
 	}
 
 	return c.validateMinAmounts()
-}
-
-// chargesNoTip reports whether payment gas pays no priority fee at all.
-func (c *PaymentLaneConfig) chargesNoTip() bool {
-	return c.TipDiscountBps == PaymentLaneMaxBps || (c.TipCap != nil && c.TipCap.Sign() == 0)
 }
 
 func (c *PaymentLaneConfig) validateGate() error {

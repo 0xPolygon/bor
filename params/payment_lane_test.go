@@ -49,8 +49,13 @@ func TestPaymentLaneConfigValidate(t *testing.T) {
 		{"free behind a gate", func(c *PaymentLaneConfig) {
 			c.BaseFeeDiscountBps, c.TipDiscountBps, c.ActiveGasPercentage = PaymentLaneMaxBps, PaymentLaneMaxBps, 99
 		}, ""},
+		// The tip is no cost to a producer filling its own block, and nothing
+		// in consensus sets a minimum one.
 		{"always on, base free, tip charged", func(c *PaymentLaneConfig) {
 			c.BaseFeeDiscountBps, c.TipCap, c.ActiveGasPercentage = PaymentLaneMaxBps, big.NewInt(1), 100
+		}, "payment gas free at any parent usage"},
+		{"always on, base nearly free", func(c *PaymentLaneConfig) {
+			c.BaseFeeDiscountBps, c.ActiveGasPercentage = PaymentLaneMaxBps-1, 100
 		}, ""},
 		{"always on, tip free, base charged", func(c *PaymentLaneConfig) {
 			c.BaseFeeDiscountBps, c.TipDiscountBps, c.ActiveGasPercentage = PaymentLaneMaxBps-1, PaymentLaneMaxBps, 100
