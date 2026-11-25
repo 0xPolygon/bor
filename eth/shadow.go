@@ -87,7 +87,7 @@ func (s *Ethereum) attachShadow(stack *node.Node, config *ethconfig.Config) erro
 	ch := make(chan core.NewTxsEvent, 4096)
 	sub := s.txPool.SubscribeTransactions(ch, false)
 	warmer := newShadowWarmer(s)
-	s.shadowWatchHeads()
+	s.shadowWatchHeads(warmer)
 
 	go func() {
 		defer sub.Unsubscribe()

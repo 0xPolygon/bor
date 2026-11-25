@@ -1928,6 +1928,22 @@ mainloop:
 			txs.Pop()
 			continue
 		}
+		// Shadow P5 late-tx rule: a heavy tx whose early warm is still queued
+		// or running is skipped for this pass (its sender too, like any Pop),
+		// so a later pass or the next block applies it warm. After DeferMax
+		// the tx is applied cold, so a stuck warm cannot starve it.
+		if shadowtrace.DeferHeavy() && env.prefetchedTxHashes != nil && tx.Gas() >= shadowtrace.HeavyGas() {
+			if running, waited := shadowtrace.WarmInProgress(tx.Hash()); running {
+				if waited < shadowtrace.DeferMax() {
+					shadowtrace.Deferred(env.header.Number.Uint64(), tx.Hash(), waited, false)
+					txs.Pop()
+
+					continue
+				}
+
+				shadowtrace.Deferred(env.header.Number.Uint64(), tx.Hash(), waited, true)
+			}
+		}
 		// Start executing the transaction
 		lastCommitStart = time.Now()
 		lastTxHash = tx.Hash()

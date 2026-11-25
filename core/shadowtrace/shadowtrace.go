@@ -226,8 +226,10 @@ type heavyRec struct {
 	arm         string
 	from, to    string
 	sel         string
+	warmQueued  time.Time
 	warmStart   time.Time
 	warmEnd     time.Time
+	deferrals   int
 	warmOutcome string
 	warmGas     uint64
 	warmHead    uint64
