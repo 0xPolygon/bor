@@ -103,7 +103,7 @@ func (api *BorAPI) simulateNextBlock(ctx context.Context, args TransactionArgs, 
 	sim.GasPrice, sim.MaxFeePerGas, sim.MaxPriorityFeePerGas = nil, nil, nil
 
 	latest := rpc.BlockNumberOrHashWithHash(header.Hash(), false)
-	next := &override.BlockOverrides{Number: (*hexutil.Big)(new(big.Int).Add(header.Number, common.Big1)), BaseFeePerGas: (*hexutil.Big)(baseFee)}
+	next := nextBlockOverrides(api.b.ChainConfig(), header, baseFee)
 
 	res, err := DoCall(ctx, api.b, sim, latest, nil, nil, next, api.b.RPCEVMTimeout(), api.b.RPCGasCap())
 	if err != nil {
@@ -119,6 +119,22 @@ func (api *BorAPI) simulateNextBlock(ctx context.Context, args TransactionArgs, 
 	}
 
 	return res, nil
+}
+
+// nextBlockOverrides describes the block after header: its number, the
+// estimated base fee and its earliest timestamp (parent time plus the Bor
+// period), so time-bound payments (EIP-3009 validAfter / validBefore) are
+// judged as the next block would judge them. A later producer can only move
+// the timestamp forward.
+func nextBlockOverrides(cfg *params.ChainConfig, header *types.Header, baseFee *big.Int) *override.BlockOverrides {
+	number := new(big.Int).Add(header.Number, common.Big1)
+
+	t := header.Time
+	if cfg.Bor != nil {
+		t += cfg.Bor.CalculatePeriod(number.Uint64())
+	}
+
+	return &override.BlockOverrides{Number: (*hexutil.Big)(number), Time: (*hexutil.Uint64)(&t), BaseFeePerGas: (*hexutil.Big)(baseFee)}
 }
 
 // nextBlockLane returns the lane config and discount scale for the block

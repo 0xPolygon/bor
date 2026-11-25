@@ -170,11 +170,12 @@ func paymentLaneAt(config *params.ChainConfig, number *big.Int) *params.PaymentL
 func (evm *EVM) initPaymentLane(config *params.ChainConfig) {
 	evm.lane.cfg = paymentLaneAt(config, evm.Context.BlockNumber)
 	if evm.Context.PaymentLaneScaleBps != 0 && evm.lane.cfg == nil {
-		// The block context was priced with a chain whose lane parameters this
-		// EVM does not have: without them nothing is metered, so the scale is
-		// a caller bug that would otherwise pass unnoticed. Fail safe to full
-		// price rather than trust a scale nothing can apply.
-		log.Error("Payment lane scale without lane parameters, pricing at full price",
+		// The block context was priced for a block whose lane parameters this
+		// EVM does not have (an RPC block-number override, or a caller bug):
+		// without them nothing is metered. Fail safe to full price rather
+		// than trust a scale nothing can apply. Debug only, since any RPC
+		// caller can reach this.
+		log.Debug("Payment lane scale without lane parameters, pricing at full price",
 			"block", evm.Context.BlockNumber)
 		evm.Context.PaymentLaneScaleBps = 0
 	}
@@ -184,6 +185,7 @@ func (evm *EVM) initPaymentLane(config *params.ChainConfig) {
 type laneFrame struct {
 	checkpoint uint64 // laneGas when the frame started, restored if it fails
 	moved      bool   // laneMoved when the frame started, restored if it fails
+	fRefund    int64  // foreignRefund when the frame started, restored if it fails
 	credit     bool   // the frame is a payment frame
 	foreign    bool   // the frame runs code outside the asset, inside a payment frame
 	callLen    int    // canonical calldata length of a payment frame
@@ -193,15 +195,22 @@ type laneFrame struct {
 // laneStart opens the bookkeeping of a frame. Every frame that fails drops
 // the credits taken inside it, because the payments it made were rolled back.
 func (evm *EVM) laneStart() laneFrame {
-	return laneFrame{checkpoint: evm.lane.gas, moved: evm.lane.moved}
+	return laneFrame{checkpoint: evm.lane.gas, moved: evm.lane.moved, fRefund: evm.lane.foreignRefund}
 }
 
 // laneDropOnError settles a DELEGATECALL or CALLCODE frame, which can only
 // contain payments, never be or meter one.
 func (evm *EVM) laneDropOnError(f laneFrame, err error) {
 	if err != nil {
-		evm.lane.gas, evm.lane.moved = f.checkpoint, f.moved
+		evm.laneRollback(f)
 	}
+}
+
+// laneRollback drops what a failed frame added to the bookkeeping. The
+// refunds it earned were rolled back with it, so the foreign refund delta
+// goes too; the foreign gas it consumed stays spent and stays excluded.
+func (evm *EVM) laneRollback(f laneFrame) {
+	evm.lane.gas, evm.lane.moved, evm.lane.foreignRefund = f.checkpoint, f.moved, f.fRefund
 }
 
 // laneOpenCall is called once a CALL frame is about to run code at addr. A
@@ -281,7 +290,7 @@ func (evm *EVM) laneClose(f laneFrame, gasUsed uint64, err error) {
 	}
 
 	if err != nil {
-		evm.lane.gas, evm.lane.moved = f.checkpoint, f.moved
+		evm.laneRollback(f)
 	}
 }
 

@@ -226,6 +226,7 @@ func TestPaymentLaneQuoteErrors(t *testing.T) {
 		reverter  = common.HexToAddress("0x7e7e")
 		invalidOp = common.HexToAddress("0x7e7f")
 		withData  = common.HexToAddress("0x7e80")
+		clock     = common.HexToAddress("0x7e81")
 	)
 
 	cfg := *params.BorUnittestChainConfig
@@ -238,6 +239,8 @@ func TestPaymentLaneQuoteErrors(t *testing.T) {
 			invalidOp: {Code: []byte{byte(vm.INVALID)}},
 			// mstore(0, 0x2a); revert(0, 32)
 			withData: {Code: []byte{byte(vm.PUSH1), 0x2a, byte(vm.PUSH1), 0, byte(vm.MSTORE), byte(vm.PUSH1), 32, byte(vm.PUSH1), 0, byte(vm.REVERT)}},
+			// mstore(0, timestamp); revert(0, 32)
+			clock: {Code: []byte{byte(vm.TIMESTAMP), byte(vm.PUSH1), 0, byte(vm.MSTORE), byte(vm.PUSH1), 32, byte(vm.PUSH1), 0, byte(vm.REVERT)}},
 		},
 	}
 	backend := newTestBackend(t, 1, gspec, ethash.NewFaker(), func(int, *core.BlockGen) {})
@@ -249,6 +252,15 @@ func TestPaymentLaneQuoteErrors(t *testing.T) {
 	var revErr *revertError
 	require.ErrorAs(t, err, &revErr)
 	require.Equal(t, "0x000000000000000000000000000000000000000000000000000000000000002a", revErr.ErrorData())
+
+	// The call runs at the next block's earliest timestamp, so EIP-3009
+	// validAfter / validBefore are judged as that block would judge them.
+	_, err = NewBorAPI(backend).PaymentLaneQuote(context.Background(), TransactionArgs{From: &sender, To: &clock})
+	require.ErrorAs(t, err, &revErr)
+	head := backend.CurrentHeader()
+	wantTime := head.Time + cfg.Bor.CalculatePeriod(head.Number.Uint64()+1)
+	require.NotEqual(t, head.Time, wantTime)
+	require.Equal(t, hexutil.Encode(common.BigToHash(new(big.Int).SetUint64(wantTime)).Bytes()), revErr.ErrorData())
 
 	_, err = NewBorAPI(backend).PaymentLaneQuote(context.Background(), TransactionArgs{From: &sender, To: &invalidOp})
 	require.ErrorContains(t, err, "invalid opcode")

@@ -1044,3 +1044,39 @@ func TestPaymentLaneForeignRefundExcludesOnlyForeignDelta(t *testing.T) {
 	// The asset's own refund (19_900) and the hook's whole frame are excluded.
 	require.Equal(t, frames[token][0]-frames[hook][0]-19_900, laneGas)
 }
+
+// A foreign refund rolled back with a caught DELEGATECALL must leave the
+// foreign refund bookkeeping too, or it would cancel a refund the asset
+// earns later and over-credit the payment.
+func TestPaymentLaneForeignRefundRolledBackWithCaughtDelegatecall(t *testing.T) {
+	t.Parallel()
+
+	var (
+		token = common.HexToAddress("0x70ce0001")
+		impl  = common.HexToAddress("0x70ce1111")
+		hook  = common.HexToAddress("0x3a11e704")
+	)
+
+	// Writes slot 9 then restores it: 0 -> 1 costs, 1 -> 0 refunds 19_900.
+	setThenRestore := []byte{byte(PUSH1), 1, byte(PUSH1), 9, byte(SSTORE), byte(PUSH1), 0, byte(PUSH1), 9, byte(SSTORE)}
+
+	// The asset delegatecalls impl, which calls the foreign hook (earning a
+	// refund) and then reverts; the asset catches it and earns its own refund.
+	assetCode := callOp(append([]byte{}, copyCalldata...), DELEGATECALL, impl)
+	assetCode = append(assetCode, setThenRestore...)
+	assetCode = append(assetCode, byte(STOP))
+
+	implCode := callOp(append([]byte{}, copyCalldata...), CALL, hook)
+	implCode = append(implCode, byte(PUSH1), 0, byte(PUSH1), 0, byte(REVERT))
+
+	laneGas, frames, refund := laneFrameGas(t, token, token, map[common.Address][]byte{
+		token: transferLogged(assetCode),
+		impl:  implCode,
+		hook:  append(append([]byte{}, setThenRestore...), byte(STOP)),
+	}, nil)
+
+	require.Equal(t, uint64(19_900), refund)
+	// The hook's gas stays excluded (it was spent), and the asset's own
+	// refund is excluded in full.
+	require.Equal(t, frames[token][0]-frames[hook][0]-19_900, laneGas)
+}
