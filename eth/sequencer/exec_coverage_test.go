@@ -198,6 +198,21 @@ func TestFinalizeSealRejectsUnavailableAndDivergentResults(t *testing.T) {
 		}
 	})
 
+	// State-sync txs add no gas used and no lane log, so the cap verdict is
+	// final at a sprint start too, before the cached-finalization exit.
+	t.Run("payment lane cap at a sprint start", func(t *testing.T) {
+		h, env, sealed := finalizableEnv(t)
+		h.chain.Config().Bor.Sprint = map[string]uint64{"0": 4}
+		lane := params.DefaultPaymentLaneConfig(nil)
+		lane.NonPaymentGasCapPercentage = 65
+		h.chain.Config().Bor.PaymentLaneBlock = common.Big0
+		h.chain.Config().Bor.PaymentLane = map[string]*params.PaymentLaneConfig{"0": lane}
+		env.header.GasUsed, sealed.GasUsed = sealed.GasLimit*66/100, sealed.GasLimit*66/100
+		if _, _, err := env.finalizeSeal(h.chain, sealed); !errors.Is(err, core.ErrNonPaymentGasCap) {
+			t.Fatalf("error = %v, want %v", err, core.ErrNonPaymentGasCap)
+		}
+	})
+
 	t.Run("assembled mismatch", func(t *testing.T) {
 		h, env, sealed := finalizableEnv(t)
 		sealed.Root[0] ^= 0xff
@@ -259,6 +274,28 @@ func TestSealResultFallbackAndMismatch(t *testing.T) {
 			}
 		})
 	}
+
+	// A state-sync tx at a sprint start makes the sealed root unreproducible,
+	// which defers to canonical import; an over-cap seal must still be
+	// voided, not left pending.
+	t.Run("payment lane cap, sprint start with a divergent root", func(t *testing.T) {
+		h, env, sealed := finalizableEnv(t)
+		h.chain.Config().Bor.Sprint = map[string]uint64{"0": 4}
+		lane := params.DefaultPaymentLaneConfig(nil)
+		lane.NonPaymentGasCapPercentage = 65
+		h.chain.Config().Bor.PaymentLaneBlock = common.Big0
+		h.chain.Config().Bor.PaymentLane = map[string]*params.PaymentLaneConfig{"0": lane}
+		env.header.GasUsed, sealed.GasUsed = sealed.GasLimit*66/100, sealed.GasLimit*66/100
+		sealed.Root = env.statedb.IntermediateRoot(env.evm.ChainConfig().IsEIP158(env.header.Number))
+		sealed.Root[0] ^= 0xff
+		s := &session{consumer: &Consumer{chain: h.chain, index: NewIndex()}, env: env}
+		if _, _, _, ok := s.sealResult(sealed); ok {
+			t.Fatal("over-cap seal was accepted")
+		}
+		if s.deferToCanonical {
+			t.Fatal("over-cap seal was deferred to canonical import instead of voided")
+		}
+	})
 
 	t.Run("cache unavailable with body mismatch", func(t *testing.T) {
 		h, env, sealed := finalizableEnv(t)

@@ -11,7 +11,6 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/internal/ethapi/override"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
 )
@@ -94,7 +93,7 @@ func (api *BorAPI) PaymentLaneQuote(ctx context.Context, args TransactionArgs) (
 	}, nil
 }
 
-// simulateNextBlock runs args on the latest state as the next block (its
+// simulateNextBlock runs args on header's state as the block after it (its
 // number, so the lane fork rules apply at the activation boundary) and
 // without fee fields: pricing is done by the caller, and the call must not
 // fail on a fee cap meant for that block.
@@ -102,10 +101,16 @@ func (api *BorAPI) simulateNextBlock(ctx context.Context, args TransactionArgs, 
 	sim := args
 	sim.GasPrice, sim.MaxFeePerGas, sim.MaxPriorityFeePerGas = nil, nil, nil
 
-	latest := rpc.BlockNumberOrHashWithHash(header.Hash(), false)
-	next := nextBlockOverrides(api.b.ChainConfig(), header, baseFee)
+	state, parent, err := api.b.StateAndHeaderByNumberOrHash(ctx, rpc.BlockNumberOrHashWithHash(header.Hash(), false))
+	if err != nil {
+		return nil, err
+	}
 
-	res, err := DoCall(ctx, api.b, sim, latest, nil, nil, next, api.b.RPCEVMTimeout(), api.b.RPCGasCap())
+	if state == nil {
+		return nil, errors.New("latest state unavailable")
+	}
+
+	res, err := doCall(ctx, api.b, sim, state, nextHeader(api.b.ChainConfig(), parent, baseFee), nil, nil, api.b.RPCEVMTimeout(), api.b.RPCGasCap())
 	if err != nil {
 		return nil, err
 	}
@@ -121,20 +126,23 @@ func (api *BorAPI) simulateNextBlock(ctx context.Context, args TransactionArgs, 
 	return res, nil
 }
 
-// nextBlockOverrides describes the block after header: its number, the
-// estimated base fee and its earliest timestamp (parent time plus the Bor
-// period), so time-bound payments (EIP-3009 validAfter / validBefore) are
-// judged as the next block would judge them. A later producer can only move
-// the timestamp forward.
-func nextBlockOverrides(cfg *params.ChainConfig, header *types.Header, baseFee *big.Int) *override.BlockOverrides {
-	number := new(big.Int).Add(header.Number, common.Big1)
+// nextHeader is the block after parent as far as a call can see it: its
+// number, parent hash (so BLOCKHASH resolves the parent), estimated base fee
+// and earliest timestamp (parent time plus the Bor period), so time-bound
+// payments (EIP-3009 validAfter / validBefore) are judged as the next block
+// would judge them. A later producer can only move the timestamp forward.
+func nextHeader(cfg *params.ChainConfig, parent *types.Header, baseFee *big.Int) *types.Header {
+	next := types.CopyHeader(parent)
+	next.ParentHash = parent.Hash()
+	next.Number = new(big.Int).Add(parent.Number, common.Big1)
+	next.BaseFee = new(big.Int).Set(baseFee)
+	next.GasUsed = 0
 
-	t := header.Time
 	if cfg.Bor != nil {
-		t += cfg.Bor.CalculatePeriod(number.Uint64())
+		next.Time += cfg.Bor.CalculatePeriod(next.Number.Uint64())
 	}
 
-	return &override.BlockOverrides{Number: (*hexutil.Big)(number), Time: (*hexutil.Uint64)(&t), BaseFeePerGas: (*hexutil.Big)(baseFee)}
+	return next
 }
 
 // nextBlockLane returns the lane config and discount scale for the block

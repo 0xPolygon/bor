@@ -205,6 +205,12 @@ func (noStateBackend) StateAndHeaderByNumberOrHash(context.Context, rpc.BlockNum
 	return nil, nil, errors.New("no state")
 }
 
+type nilStateBackend struct{ *testBackend }
+
+func (nilStateBackend) StateAndHeaderByNumberOrHash(context.Context, rpc.BlockNumberOrHash) (*state.StateDB, *types.Header, error) {
+	return nil, nil, nil
+}
+
 type noTipBackend struct{ *testBackend }
 
 func (noTipBackend) SuggestGasTipCap(context.Context) (*big.Int, error) {
@@ -227,6 +233,7 @@ func TestPaymentLaneQuoteErrors(t *testing.T) {
 		invalidOp = common.HexToAddress("0x7e7f")
 		withData  = common.HexToAddress("0x7e80")
 		clock     = common.HexToAddress("0x7e81")
+		prevHash  = common.HexToAddress("0x7e82")
 	)
 
 	cfg := *params.BorUnittestChainConfig
@@ -241,6 +248,8 @@ func TestPaymentLaneQuoteErrors(t *testing.T) {
 			withData: {Code: []byte{byte(vm.PUSH1), 0x2a, byte(vm.PUSH1), 0, byte(vm.MSTORE), byte(vm.PUSH1), 32, byte(vm.PUSH1), 0, byte(vm.REVERT)}},
 			// mstore(0, timestamp); revert(0, 32)
 			clock: {Code: []byte{byte(vm.TIMESTAMP), byte(vm.PUSH1), 0, byte(vm.MSTORE), byte(vm.PUSH1), 32, byte(vm.PUSH1), 0, byte(vm.REVERT)}},
+			// mstore(0, blockhash(number - 1)); revert(0, 32)
+			prevHash: {Code: []byte{byte(vm.PUSH1), 1, byte(vm.NUMBER), byte(vm.SUB), byte(vm.BLOCKHASH), byte(vm.PUSH1), 0, byte(vm.MSTORE), byte(vm.PUSH1), 32, byte(vm.PUSH1), 0, byte(vm.REVERT)}},
 		},
 	}
 	backend := newTestBackend(t, 1, gspec, ethash.NewFaker(), func(int, *core.BlockGen) {})
@@ -262,6 +271,11 @@ func TestPaymentLaneQuoteErrors(t *testing.T) {
 	require.NotEqual(t, head.Time, wantTime)
 	require.Equal(t, hexutil.Encode(common.BigToHash(new(big.Int).SetUint64(wantTime)).Bytes()), revErr.ErrorData())
 
+	// BLOCKHASH(NUMBER-1) is the latest block, the next block's parent.
+	_, err = NewBorAPI(backend).PaymentLaneQuote(context.Background(), TransactionArgs{From: &sender, To: &prevHash})
+	require.ErrorAs(t, err, &revErr)
+	require.Equal(t, head.Hash().Hex(), revErr.ErrorData())
+
 	_, err = NewBorAPI(backend).PaymentLaneQuote(context.Background(), TransactionArgs{From: &sender, To: &invalidOp})
 	require.ErrorContains(t, err, "invalid opcode")
 	require.NotContains(t, err.Error(), "execution reverted")
@@ -274,6 +288,9 @@ func TestPaymentLaneQuoteErrors(t *testing.T) {
 
 	_, err = NewBorAPI(noStateBackend{backend}).PaymentLaneQuote(context.Background(), TransactionArgs{From: &sender, To: &sender})
 	require.ErrorContains(t, err, "no state")
+
+	_, err = NewBorAPI(nilStateBackend{backend}).PaymentLaneQuote(context.Background(), TransactionArgs{From: &sender, To: &sender})
+	require.EqualError(t, err, "latest state unavailable")
 
 	_, err = NewBorAPI(noTipBackend{backend}).PaymentLaneQuote(context.Background(), TransactionArgs{From: &sender, To: &sender})
 	require.EqualError(t, err, "no tip suggestion")
