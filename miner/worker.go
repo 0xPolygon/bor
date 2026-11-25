@@ -957,7 +957,10 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 	// newWorkLoop on the unbuffered newWorkCh. This keeps newWorkLoop alive so it
 	// keeps emitting the stall warning and retrying every tick.
 	commit := func(noempty bool, s int32, nonblocking bool) bool {
-		if interrupt != nil {
+		// Shadow experiment (nodiscard=on): a new head lets the running build
+		// finish. commitWork is synchronous in mainLoop, so the send below
+		// waits for it and the next build starts on the newest head.
+		if interrupt != nil && !(s == commitInterruptNewHead && shadowtrace.NoDiscard()) {
 			interrupt.Store(s)
 		}
 
@@ -1934,14 +1937,14 @@ mainloop:
 
 		// Capture gas pool before execution so we can compute freed gas afterwards.
 		gasPoolBefore := env.gasPool.Gas()
-		var shadowStats state.ReaderStats
-		if shadowtrace.Enabled() && env.processReader != nil {
-			shadowStats = env.processReader.GetStats()
+		var shadowBefore shadowSnap
+		if shadowtrace.Enabled() {
+			shadowBefore = shadowSnapshot(env, gasPoolBefore)
 		}
 		logs, err := w.commitTransaction(env, tx)
 		txDuration := time.Since(lastCommitStart)
 		if shadowtrace.Enabled() && env.prefetchedTxHashes != nil {
-			w.shadowApplied(env, tx, lastCommitStart, txDuration, shadowStats, err)
+			w.shadowApplied(env, tx, from, lastCommitStart, txDuration, shadowBefore, err)
 		}
 
 		// Set mock delay (if any) between transactions for tests
@@ -2801,7 +2804,7 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 	// Fill pending transactions from the txpool into the block: a single
 	// snapshot, or repeated ones until announce time when sequencing.
 	err = w.fillBlock(interrupt, work, genParams)
-	shadowtrace.FillEnd(shadowNumber)
+	shadowtrace.FillEnd(shadowNumber, shadowFillReason(err, work))
 	// Wait for any sendPlan goroutines to finish before closing the channel.
 	// These goroutines do only non-blocking sends so they complete in microseconds.
 	// Waiting here ensures no goroutine sends to a closed channel.

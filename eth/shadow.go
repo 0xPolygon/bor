@@ -86,6 +86,8 @@ func (s *Ethereum) attachShadow(stack *node.Node, config *ethconfig.Config) erro
 	// Pool arrival times for the trace.
 	ch := make(chan core.NewTxsEvent, 4096)
 	sub := s.txPool.SubscribeTransactions(ch, false)
+	warmer := newShadowWarmer(s)
+	s.shadowWatchHeads()
 
 	go func() {
 		defer sub.Unsubscribe()
@@ -96,6 +98,7 @@ func (s *Ethereum) attachShadow(stack *node.Node, config *ethconfig.Config) erro
 				now := time.Now()
 				for _, tx := range ev.Txs {
 					shadowtrace.PoolSeen(tx.Hash(), now)
+					warmer.onPoolTx(tx, now)
 				}
 			case <-sub.Err():
 				return

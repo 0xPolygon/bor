@@ -9,16 +9,22 @@
 // BOR_SHADOW_TOGGLES (default /var/lib/bor/shadow.toggles), one key=value per
 // line, re-read at most once per second:
 //
-//	gap8fix=on      an interrupted prefetch run is not recorded as prefetched
-//	txlog=all|slow  emit every traced tx, or only injected/slow/never-prefetched
+//	gap8fix=on       an interrupted prefetch run is not recorded as prefetched
+//	txlog=all|slow   emit every traced tx, or only injected/slow/heavy/never-prefetched
+//	nodiscard=on     a new head does not discard the running build (it finishes;
+//	                 the next build starts on the newest head, skipping heights)
+//	xbwarm=on        A/B early warm: heavy pool txs of arm A are executed once
+//	                 against the head state when they enter the pool
+//	heavygas=N       gas-limit threshold of a "heavy" tx (default 5000000)
 //
 // Every record is a log.Info line prefixed "SHADOW" so it can be grepped
-// out of the journal.
+// out of the journal. Hashes are printed in full (Hex), never abbreviated.
 package shadowtrace
 
 import (
 	"bufio"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -96,15 +102,83 @@ func toggle(key string) string {
 			f.Close()
 		}
 
+		if !mapsEqual(next, toggleValues) {
+			log.Info("SHADOW toggles", "values", fmtMap(next))
+		}
+
 		toggleValues = next
 	}
 
 	return toggleValues[key]
 }
 
+// SetToggleForTest overrides one toggle value (tests only).
+func SetToggleForTest(key, value string) {
+	toggleMu.Lock()
+	defer toggleMu.Unlock()
+
+	toggleRead = time.Now().Add(time.Hour)
+	toggleValues[key] = value
+}
+
+func mapsEqual(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+
+	return true
+}
+
+func fmtMap(m map[string]string) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+
+	sort.Strings(keys)
+
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+m[k])
+	}
+
+	return strings.Join(parts, ",")
+}
+
 // Gap8Fix reports whether an interrupted prefetch run must be treated as a
 // failure (not added to prefetchedTxHashes).
 func Gap8Fix() bool { return Enabled() && toggle("gap8fix") == "on" }
+
+// NoDiscard reports whether a new head must not interrupt the running build.
+func NoDiscard() bool { return Enabled() && toggle("nodiscard") == "on" }
+
+// XBWarm reports whether the A/B early warm of heavy pool txs is on.
+func XBWarm() bool { return Enabled() && toggle("xbwarm") == "on" }
+
+// HeavyGas is the gas-limit threshold of a heavy tx.
+func HeavyGas() uint64 {
+	if v, err := strconv.ParseUint(toggle("heavygas"), 10, 64); err == nil && v > 0 {
+		return v
+	}
+
+	return 5_000_000
+}
+
+// Arm splits txs into two fixed A/B groups by the last bit of the hash.
+// A = treated (warmed when xbwarm=on), B = control.
+func Arm(hash common.Hash) string {
+	if hash[31]&1 == 0 {
+		return "A"
+	}
+
+	return "B"
+}
 
 // ---------------------------------------------------------------------------
 // Pool arrival + injected set (node-wide, keyed by tx hash)
@@ -143,6 +217,137 @@ func IsInjected(hash common.Hash) bool {
 	return false
 }
 
+// ---------------------------------------------------------------------------
+// Heavy txs: arrival, A/B arm, early warm, inclusion
+
+type heavyRec struct {
+	at          time.Time
+	gas         uint64
+	arm         string
+	from, to    string
+	sel         string
+	warmStart   time.Time
+	warmEnd     time.Time
+	warmOutcome string
+	warmGas     uint64
+	warmHead    uint64
+	warmReadMs  float64
+}
+
+var (
+	heavyMu sync.Mutex
+	heavy   = map[common.Hash]*heavyRec{}
+)
+
+// HeavySeen records a heavy tx entering the pool and returns its A/B arm.
+func HeavySeen(hash common.Hash, at time.Time, gas uint64, from, to, sel string) string {
+	if !Enabled() {
+		return ""
+	}
+
+	arm := Arm(hash)
+
+	heavyMu.Lock()
+	if _, ok := heavy[hash]; ok {
+		heavyMu.Unlock()
+		return arm
+	}
+	heavy[hash] = &heavyRec{at: at, gas: gas, arm: arm, from: from, to: to, sel: sel}
+	heavyMu.Unlock()
+
+	log.Info("SHADOW heavy-arrival", "hash", hash.Hex(), "gasLimit", gas, "arm", arm,
+		"from", from, "to", to, "sel", sel, "buildNumber", Current(),
+		"sinceBuildStartMs", ms(at, currentStart()), "xbwarm", XBWarm())
+
+	return arm
+}
+
+// WarmStart records the start of an early-warm run.
+func WarmStart(hash common.Hash) time.Time {
+	now := time.Now()
+
+	heavyMu.Lock()
+	if r := heavy[hash]; r != nil {
+		r.warmStart = now
+	}
+	heavyMu.Unlock()
+
+	return now
+}
+
+// WarmEnd records the end of an early-warm run.
+func WarmEnd(hash common.Hash, start time.Time, head uint64, outcome string, gas uint64, readDur time.Duration) {
+	now := time.Now()
+
+	heavyMu.Lock()
+	r := heavy[hash]
+	if r != nil {
+		r.warmEnd, r.warmOutcome, r.warmGas, r.warmHead = now, outcome, gas, head
+		r.warmReadMs = durMs(readDur)
+	}
+	heavyMu.Unlock()
+
+	var queuedMs float64 = -1
+	if r != nil {
+		queuedMs = ms(start, r.at)
+	}
+
+	log.Info("SHADOW warm", "hash", hash.Hex(), "head", head, "outcome", outcome, "gas", gas,
+		"queuedMs", queuedMs, "durMs", ms(now, start), "readMs", durMs(readDur),
+		"buildNumber", Current(), "endSinceBuildStartMs", ms(now, currentStart()))
+}
+
+// ---------------------------------------------------------------------------
+// Chain heads (import times) — node-wide
+
+var (
+	headMu sync.Mutex
+	headAt = map[uint64]time.Time{}
+)
+
+// HeadSeen records a new chain head (end of its import) and retires the
+// heavy txs it included.
+func HeadSeen(number uint64, at time.Time, txs []common.Hash, gasUsed uint64, txCount int) {
+	if !Enabled() {
+		return
+	}
+
+	headMu.Lock()
+	headAt[number] = at
+	for n := range headAt {
+		if n+200 < number {
+			delete(headAt, n)
+		}
+	}
+	headMu.Unlock()
+
+	cur := Current()
+	log.Info("SHADOW head", "number", number, "txs", txCount, "gasUsed", gasUsed,
+		"buildNumber", cur, "sinceBuildStartMs", ms(at, currentStart()))
+
+	heavyMu.Lock()
+	defer heavyMu.Unlock()
+
+	for _, h := range txs {
+		r := heavy[h]
+		if r == nil {
+			continue
+		}
+
+		delete(heavy, h)
+		log.Info("SHADOW heavy-included", "hash", h.Hex(), "number", number, "arm", r.arm,
+			"gasLimit", r.gas, "waitMs", ms(at, r.at), "warmed", !r.warmEnd.IsZero(),
+			"warmOutcome", r.warmOutcome, "warmEndBeforeHeadMs", ms(at, r.warmEnd))
+	}
+}
+
+func headTime(number uint64) time.Time {
+	headMu.Lock()
+	defer headMu.Unlock()
+
+	return headAt[number]
+}
+
 func pruneLoop() {
 	for range time.Tick(time.Minute) {
 		cutoff := time.Now().Add(-30 * time.Minute)
@@ -158,6 +363,15 @@ func pruneLoop() {
 
 			return true
 		})
+
+		heavyMu.Lock()
+		for h, r := range heavy {
+			if r.at.Before(cutoff) {
+				delete(heavy, h)
+				log.Info("SHADOW heavy-expired", "hash", h.Hex(), "arm", r.arm, "gasLimit", r.gas)
+			}
+		}
+		heavyMu.Unlock()
 	}
 }
 
@@ -183,28 +397,34 @@ const (
 	OutcomePreAborted  = "pre-aborted" // interrupt already set before start
 )
 
+type runRec struct {
+	start, end time.Time
+	outcome    string
+	marked     bool
+	pass       int
+}
+
+const maxListed = 24 // cap on per-tx send/run entries kept for the log line
+
 type txTrace struct {
-	sendSrc     string // first source that offered it: idle / plan / overflow
-	firstSend   time.Time
-	sends       int
-	drops       map[string]int
-	runs        int
-	firstStart  time.Time
-	lastEnd     time.Time
-	outcome     string // last run outcome
-	markedDone  bool   // added to prefetchedTxHashes
-	intrMarked  int    // interrupted runs that were still marked done (gap 8)
-	pfGas       uint64
-	applied     bool
-	pass        int
-	applyStart  time.Time
-	applyDur    time.Duration
-	prefetched  bool
-	gasUsed     uint64
-	l1Hit       int64
-	l1Miss      int64
-	applyErr    string
-	applyResult string
+	sendSrc    string // first source that offered it: idle / plan / overflow
+	firstSend  time.Time
+	sends      int
+	sendList   []string // "src@pass@ms"
+	drops      map[string]int
+	runs       int
+	firstStart time.Time
+	lastEnd    time.Time
+	outcome    string // last run outcome
+	markedDone bool   // added to prefetchedTxHashes
+	intrMarked int    // interrupted runs that were still marked done (gap 8)
+	pfGas      uint64
+	runList    []runRec
+	applied    bool
+	pass       int
+	apply      ApplyInfo
+	applyErr   string
+	heavy      *heavyRec // snapshot at apply time (nil if not heavy)
 }
 
 type buildTrace struct {
@@ -219,6 +439,7 @@ type buildTrace struct {
 	builderStart time.Time
 	passes       []time.Time
 	fillEnd      time.Time
+	fillReason   string
 	outcome      string
 	sealSkipped  bool
 	emitted      bool // printed once: a same-height rebuild flushes early
@@ -267,10 +488,19 @@ func runEndHooks(number uint64) {
 }
 
 var (
-	buildsMu sync.Mutex
-	builds   = map[uint64]*buildTrace{}
-	current  atomic.Uint64
+	buildsMu   sync.Mutex
+	builds     = map[uint64]*buildTrace{}
+	current    atomic.Uint64
+	curStartNs atomic.Int64
 )
+
+func currentStart() time.Time {
+	if ns := curStartNs.Load(); ns != 0 {
+		return time.Unix(0, ns)
+	}
+
+	return time.Time{}
+}
 
 func (b *buildTrace) tx(hash common.Hash) *txTrace {
 	t := b.txs[hash]
@@ -290,7 +520,8 @@ func get(number uint64) *buildTrace {
 }
 
 // BuildStart opens the trace of a production build at number. A rebuild of
-// the same height flushes the previous trace first.
+// the same height flushes the previous trace first. It also prints the heavy
+// txs waiting in the pool at this moment (the cross-block candidates).
 func BuildStart(number uint64, start, parentActual, actualTime time.Time) {
 	if !Enabled() {
 		return
@@ -306,7 +537,21 @@ func BuildStart(number uint64, start, parentActual, actualTime time.Time) {
 	buildsMu.Unlock()
 
 	current.Store(number)
+	curStartNs.Store(start.UnixNano())
 	runStartHooks(number, start)
+
+	parentHead := headTime(number - 1)
+	log.Info("SHADOW build-start", "number", number, "start", start.UTC().Format(time.RFC3339Nano),
+		"parentHeadMs", ms(parentHead, start), "xbwarm", XBWarm(), "gap8fix", Gap8Fix(),
+		"nodiscard", NoDiscard())
+
+	heavyMu.Lock()
+	for h, r := range heavy {
+		log.Info("SHADOW pool-heavy", "number", number, "hash", h.Hex(), "arm", r.arm,
+			"gasLimit", r.gas, "waitMs", ms(start, r.at), "warmed", !r.warmEnd.IsZero(),
+			"warmEndMs", ms(r.warmEnd, start), "warmHead", r.warmHead, "to", r.to, "sel", r.sel)
+	}
+	heavyMu.Unlock()
 
 	if prev != nil {
 		prev.mu.Lock()
@@ -358,10 +603,14 @@ func PassStart(number uint64) {
 func Sent(number uint64, hash common.Hash, src string) {
 	with(number, func(b *buildTrace) {
 		t := b.tx(hash)
+		now := time.Now()
 		if t.sends == 0 {
-			t.sendSrc, t.firstSend = src, time.Now()
+			t.sendSrc, t.firstSend = src, now
 		}
 		t.sends++
+		if len(t.sendList) < maxListed {
+			t.sendList = append(t.sendList, src+"@"+itoa(len(b.passes))+"@"+ftoa(ms(now, b.start)))
+		}
 	})
 }
 
@@ -376,22 +625,32 @@ func Dropped(number uint64, hash common.Hash, reason string) {
 	})
 }
 
-// RunStart records the start of a prefetch EVM run.
-func RunStart(number uint64, hash common.Hash) {
+// RunStart records the start of a prefetch EVM run and returns its start.
+func RunStart(number uint64, hash common.Hash) time.Time {
+	now := time.Now()
+
 	with(number, func(b *buildTrace) {
 		t := b.tx(hash)
 		t.runs++
 		if t.firstStart.IsZero() {
-			t.firstStart = time.Now()
+			t.firstStart = now
 		}
 	})
+
+	return now
 }
 
-// RunEnd records the end of a prefetch run and whether it was marked done.
-func RunEnd(number uint64, hash common.Hash, outcome string, gas uint64, markedDone bool) {
+// RunEnd records the end of one prefetch run (started at start) and whether
+// it was marked done.
+func RunEnd(number uint64, hash common.Hash, start time.Time, outcome string, gas uint64, markedDone bool) {
+	now := time.Now()
+
 	with(number, func(b *buildTrace) {
 		t := b.tx(hash)
-		t.lastEnd, t.outcome, t.pfGas = time.Now(), outcome, gas
+		t.lastEnd, t.outcome, t.pfGas = now, outcome, gas
+		if len(t.runList) < maxListed {
+			t.runList = append(t.runList, runRec{start: start, end: now, outcome: outcome, marked: markedDone, pass: len(b.passes)})
+		}
 		if markedDone {
 			t.markedDone = true
 			if outcome == OutcomeInterrupted {
@@ -403,9 +662,18 @@ func RunEnd(number uint64, hash common.Hash, outcome string, gas uint64, markedD
 }
 
 // Applied records one builder apply of a tx.
-func Applied(number uint64, hash common.Hash, start time.Time, dur time.Duration,
-	prefetched bool, gasUsed uint64, l1Hit, l1Miss int64, result string, err error,
-) {
+func Applied(number uint64, hash common.Hash, a ApplyInfo) {
+	var hr *heavyRec
+
+	if Enabled() {
+		heavyMu.Lock()
+		if r := heavy[hash]; r != nil {
+			c := *r
+			hr = &c
+		}
+		heavyMu.Unlock()
+	}
+
 	with(number, func(b *buildTrace) {
 		t := b.tx(hash)
 		// Later passes re-meet committed txs (nonce too low); keep the
@@ -415,17 +683,23 @@ func Applied(number uint64, hash common.Hash, start time.Time, dur time.Duration
 		}
 		t.applied = true
 		t.pass = len(b.passes)
-		t.applyStart, t.applyDur, t.prefetched = start, dur, prefetched
-		t.gasUsed, t.l1Hit, t.l1Miss, t.applyResult = gasUsed, l1Hit, l1Miss, result
-		if err != nil {
-			t.applyErr = err.Error()
+		t.apply = a
+		t.applyErr = ""
+		if a.Err != nil {
+			t.applyErr = a.Err.Error()
+		}
+		if hr != nil {
+			t.heavy = hr
 		}
 	})
 }
 
-// FillEnd marks the end of the fill loop.
-func FillEnd(number uint64) {
-	with(number, func(b *buildTrace) { b.fillEnd = time.Now() })
+// FillEnd marks the end of the fill loop and why it ended.
+func FillEnd(number uint64, reason string) {
+	with(number, func(b *buildTrace) {
+		b.fillEnd = time.Now()
+		b.fillReason = reason
+	})
 }
 
 // BuildEnd closes the trace. Emission is delayed so late prefetch-worker
@@ -488,8 +762,23 @@ func ms(t, base time.Time) float64 {
 	return float64(t.Sub(base).Microseconds()) / 1000
 }
 
+func durMs(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 }
+
 // slowApply is the apply time above which a tx is always logged in txlog=slow.
 const slowApply = 20 * time.Millisecond
+
+func runListString(rs []runRec, base time.Time) string {
+	parts := make([]string, 0, len(rs))
+	for _, r := range rs {
+		m := "u"
+		if r.marked {
+			m = "m"
+		}
+		parts = append(parts, ftoa(ms(r.start, base))+"-"+ftoa(ms(r.end, base))+":"+r.outcome+":"+m+":p"+itoa(r.pass))
+	}
+
+	return strings.Join(parts, ";")
+}
 
 func emit(b *buildTrace) {
 	b.mu.Lock()
@@ -501,13 +790,36 @@ func emit(b *buildTrace) {
 	b.emitted = true
 
 	all := toggle("txlog") == "all"
+	heavyGas := HeavyGas()
+	newHead := headTime(b.number) // the canonical block at our height
 
-	var applied, appliedPf, neverPf, gap8Applied int
+	var applied, appliedPf, neverPf, gap8Applied, doneBefore int
+	var gasUsed uint64
 
 	for hash, t := range b.txs {
+		a := t.apply
+
+		// The best evidence of a useful prefetch: a run that was marked done
+		// and had ended before the apply started.
+		doneBeforeApply := false
+		lead := -1.0
+		if t.applied {
+			for _, r := range t.runList {
+				if r.marked && r.outcome != OutcomeInterrupted && !r.end.After(a.Start) {
+					doneBeforeApply = true
+				}
+			}
+			if !t.firstStart.IsZero() {
+				lead = ms(a.Start, t.firstStart)
+			}
+		}
+
 		if t.applied {
 			applied++
-			if t.prefetched {
+			if a.Err == nil {
+				gasUsed += a.GasUsed
+			}
+			if a.Prefetched {
 				appliedPf++
 			}
 			if t.runs == 0 {
@@ -516,10 +828,14 @@ func emit(b *buildTrace) {
 			if t.intrMarked > 0 {
 				gap8Applied++
 			}
+			if doneBeforeApply {
+				doneBefore++
+			}
 		}
 
 		injected := IsInjected(hash)
-		interesting := injected || t.applyDur >= slowApply || (t.applied && t.runs == 0) || t.intrMarked > 0
+		isHeavy := t.heavy != nil || a.GasLimit >= heavyGas
+		interesting := injected || isHeavy || a.Dur >= slowApply || (t.applied && t.runs == 0) || t.intrMarked > 0
 		if !all && !interesting {
 			continue
 		}
@@ -534,16 +850,36 @@ func emit(b *buildTrace) {
 			drops += k + ":" + itoa(v) + ","
 		}
 
-		log.Info("SHADOW tx", "number", b.number, "hash", hash, "injected", injected,
+		to := ""
+		if a.To != nil {
+			to = a.To.Hex()
+		}
+
+		arm, warmEnd, warmOutcome, warmHead := "", -1.0, "", uint64(0)
+		if t.heavy != nil {
+			arm, warmOutcome, warmHead = t.heavy.arm, t.heavy.warmOutcome, t.heavy.warmHead
+			warmEnd = ms(t.heavy.warmEnd, b.start)
+		} else if isHeavy {
+			arm = Arm(hash)
+		}
+
+		log.Info("SHADOW tx", "number", b.number, "hash", hash.Hex(), "injected", injected,
+			"from", a.From.Hex(), "to", to, "sel", a.Selector, "tipGwei", a.TipGwei, "gasLimit", a.GasLimit,
+			"heavy", isHeavy, "arm", arm, "warmEndMs", warmEnd, "warmOutcome", warmOutcome, "warmHead", warmHead,
 			"arrivalMs", ms(arrival, b.start),
 			"sendSrc", t.sendSrc, "sends", t.sends, "firstSendMs", ms(t.firstSend, b.start),
+			"sendList", strings.Join(t.sendList, ","),
 			"drops", strings.TrimSuffix(drops, ","),
 			"runs", t.runs, "pfStartMs", ms(t.firstStart, b.start), "pfEndMs", ms(t.lastEnd, b.start),
+			"runList", runListString(t.runList, b.start),
 			"pfOutcome", t.outcome, "pfGas", t.pfGas, "markedDone", t.markedDone, "gap8", t.intrMarked,
-			"applied", t.applied, "pass", t.pass, "applyStartMs", ms(t.applyStart, b.start),
-			"applyMs", float64(t.applyDur.Microseconds())/1000, "prefetched", t.prefetched,
-			"gasUsed", t.gasUsed, "l1Hit", t.l1Hit, "l1Miss", t.l1Miss,
-			"result", t.applyResult, "applyErr", t.applyErr)
+			"doneBeforeApply", doneBeforeApply, "leadMs", lead,
+			"applied", t.applied, "pass", t.pass, "index", a.Index, "gasBefore", a.GasBefore, "gasLeft", a.GasLeft,
+			"applyStartMs", ms(a.Start, b.start), "applyMs", durMs(a.Dur),
+			"readMs", durMs(a.ReadDur), "prefetched", a.Prefetched,
+			"gasUsed", a.GasUsed, "l1Hit", a.L1Hit, "l1Miss", a.L1Miss, "hitFromPf", a.HitFromPrefetch,
+			"afterNewHead", !newHead.IsZero() && t.applied && a.Start.After(newHead),
+			"result", a.Result, "applyErr", t.applyErr)
 	}
 
 	passMs := make([]string, 0, len(b.passes))
@@ -553,12 +889,14 @@ func emit(b *buildTrace) {
 
 	log.Info("SHADOW build", "number", b.number, "outcome", b.outcome,
 		"start", b.start.UTC().Format(time.RFC3339Nano),
+		"parentHeadMs", ms(headTime(b.number-1), b.start), "newHeadMs", ms(newHead, b.start),
 		"startVsParentActualMs", ms(b.start, b.parentActual),
 		"headerReadyMs", ms(b.headerReady, b.start), "actualTimeMs", ms(b.actualTime, b.start),
 		"idleStartMs", ms(b.idleStart, b.start), "builderStartMs", ms(b.builderStart, b.start),
-		"handoffMs", ms(b.handoff, b.start), "fillEndMs", ms(b.fillEnd, b.start),
+		"handoffMs", ms(b.handoff, b.start), "fillEndMs", ms(b.fillEnd, b.start), "fillReason", b.fillReason,
 		"passes", len(b.passes), "passMs", strings.Join(passMs, ","),
-		"traced", len(b.txs), "applied", applied, "appliedPrefetched", appliedPf,
+		"traced", len(b.txs), "applied", applied, "gasUsed", gasUsed, "appliedPrefetched", appliedPf,
+		"appliedDoneBeforeApply", doneBefore,
 		"appliedNeverRun", neverPf, "gap8Runs", b.gap8, "gap8Applied", gap8Applied,
 		"sealSkipped", b.sealSkipped)
 }

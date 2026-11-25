@@ -194,7 +194,7 @@ func (s *streamCtx) runWorker() {
 func (s *streamCtx) processTx(tx *types.Transaction) {
 	idx := int(s.txIndex.Add(1) - 1)
 	number := s.header.Number.Uint64()
-	shadowtrace.RunStart(number, tx.Hash())
+	runStart := shadowtrace.RunStart(number, tx.Hash())
 	gasUsed, ok, outcome := s.p.prefetchOneTxOutcome(
 		tx, idx, s.header, s.statedb, s.reader, s.signer, s.cfg,
 		s.intermediateRootPrefetch, s.evmInterrupt, &s.fails,
@@ -207,7 +207,7 @@ func (s *streamCtx) processTx(tx *types.Transaction) {
 		s.fails.Add(1)
 		ok = false
 	}
-	shadowtrace.RunEnd(number, tx.Hash(), outcome, gasUsed, ok)
+	shadowtrace.RunEnd(number, tx.Hash(), runStart, outcome, gasUsed, ok)
 	if !ok {
 		return
 	}
