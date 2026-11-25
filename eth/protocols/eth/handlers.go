@@ -735,8 +735,10 @@ func answerGetPooledTransactions(backend Backend, query GetPooledTransactionsReq
 		if len(encoded) == 0 {
 			continue
 		}
-		// Shadow experiment: never serve an injected (fake-signature) tx.
-		if shadowtrace.IsInjected(hash) {
+		// Shadow experiment: never serve pooled txs at all. The node never
+		// announces txs, so honest peers do not ask it; refusing everything
+		// also covers injected (fake-signature) txs of any age.
+		if shadowtrace.Enabled() {
 			continue
 		}
 		hashes = append(hashes, hash)

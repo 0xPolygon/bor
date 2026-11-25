@@ -125,6 +125,10 @@ type injected struct {
 type ShadowAPI struct {
 	eth *Ethereum
 
+	// opMu serializes inject (gen check + pool admission + tracking) with
+	// Clear, so a cleared experiment can never get a late injection.
+	opMu sync.Mutex
+
 	mu       sync.Mutex
 	injected map[common.Hash]*injected
 	pending  []scheduled // replays waiting for the next build start
@@ -204,6 +208,9 @@ func (a *ShadowAPI) Schedule(hashes []common.Hash, offsetsMs []int64) (int, erro
 
 // Clear removes every injected tx still in the pool.
 func (a *ShadowAPI) Clear() int {
+	a.opMu.Lock()
+	defer a.opMu.Unlock()
+
 	a.mu.Lock()
 	hashes := make([]common.Hash, 0, len(a.injected))
 	for h := range a.injected {
@@ -254,15 +261,7 @@ func (a *ShadowAPI) onBuildStart(number uint64, start time.Time) {
 		delay := time.Until(start.Add(sc.offset))
 
 		time.AfterFunc(max(delay, 0), func() {
-			a.mu.Lock()
-			stale := a.gen != gen
-			a.mu.Unlock()
-
-			if stale {
-				return
-			}
-
-			h, err := a.inject(sc.args, number)
+			h, err := a.injectGen(sc.args, number, &gen)
 			if err != nil {
 				log.Info("SHADOW inject failed", "number", number, "orig", sc.hash, "err", err)
 				return
@@ -313,6 +312,27 @@ func (a *ShadowAPI) replayArgs(hash common.Hash) (*ShadowInjectArgs, error) {
 var minShadowTip = big.NewInt(30 * params.GWei)
 
 func (a *ShadowAPI) inject(args *ShadowInjectArgs, target uint64) (common.Hash, error) {
+	return a.injectGen(args, target, nil)
+}
+
+var errShadowStale = errors.New("scheduled injection cancelled by shadow_clear")
+
+// injectGen injects under opMu; with gen set it refuses when Clear ran since
+// the injection was scheduled.
+func (a *ShadowAPI) injectGen(args *ShadowInjectArgs, target uint64, gen *uint64) (common.Hash, error) {
+	a.opMu.Lock()
+	defer a.opMu.Unlock()
+
+	if gen != nil {
+		a.mu.Lock()
+		stale := a.gen != *gen
+		a.mu.Unlock()
+
+		if stale {
+			return common.Hash{}, errShadowStale
+		}
+	}
+
 	cfg := a.eth.blockchain.Config()
 	head := a.eth.blockchain.CurrentHeader()
 
