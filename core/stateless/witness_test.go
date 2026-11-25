@@ -1122,6 +1122,9 @@ func TestValidateWitnessPreState_ParentHeaderMismatch(t *testing.T) {
 	if !containsSubstring(err.Error(), "witness parent header mismatch") {
 		t.Errorf("expected parent header mismatch error, got: %v", err)
 	}
+	if !errors.Is(err, ErrInvalidWitness) {
+		t.Errorf("parent header mismatch must match ErrInvalidWitness, got: %v", err)
+	}
 }
 
 func containsSubstring(s, sub string) bool {

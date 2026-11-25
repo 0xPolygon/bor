@@ -122,7 +122,7 @@ func ValidateWitnessPreState(witness *Witness, headerReader HeaderReader, expect
 // the payment lane).
 func checkWitnessParent(witness *Witness, contextHeader *types.Header) error {
 	if witnessParent := witness.Headers[0].Hash(); witnessParent != contextHeader.ParentHash {
-		return fmt.Errorf("witness parent header mismatch: witness=%x, parent=%x, blockNumber=%d",
+		return invalidWitnessf("witness parent header mismatch: witness=%x, parent=%x, blockNumber=%d",
 			witnessParent, contextHeader.ParentHash, contextHeader.Number.Uint64())
 	}
 

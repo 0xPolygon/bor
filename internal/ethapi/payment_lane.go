@@ -102,7 +102,7 @@ func (api *BorAPI) simulateNextBlock(ctx context.Context, args TransactionArgs, 
 	sim := args
 	sim.GasPrice, sim.MaxFeePerGas, sim.MaxPriorityFeePerGas = nil, nil, nil
 
-	latest := rpc.BlockNumberOrHashWithNumber(rpc.BlockNumber(header.Number.Int64()))
+	latest := rpc.BlockNumberOrHashWithHash(header.Hash(), false)
 	next := &override.BlockOverrides{Number: (*hexutil.Big)(new(big.Int).Add(header.Number, common.Big1)), BaseFeePerGas: (*hexutil.Big)(baseFee)}
 
 	res, err := DoCall(ctx, api.b, sim, latest, nil, nil, next, api.b.RPCEVMTimeout(), api.b.RPCGasCap())
